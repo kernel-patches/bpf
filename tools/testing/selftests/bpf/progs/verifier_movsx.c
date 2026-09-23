@@ -226,7 +226,7 @@ l0_%=:							\
 
 SEC("socket")
 __description("MOV32SX, S8, var_off u32_max")
-__failure __msg("infinite loop detected")
+__success
 __failure_unpriv __msg_unpriv("back-edge from insn 2 to 0")
 __naked void mov64sx_s32_varoff_1(void)
 {

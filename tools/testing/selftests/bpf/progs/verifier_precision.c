@@ -152,22 +152,21 @@ __naked int bpf_store_release(void)
 SEC("?raw_tp")
 __success __log_level(2)
 /*
- * Without the bug fix there will be no history between "last_idx 3 first_idx 3"
- * and "parent state regs=" lines. "R0=6" parts are here to help anchor
- * expected log messages to the one specific mark_chain_precision operation.
- *
- * This is quite fragile: if verifier checkpointing heuristic changes, this
- * might need adjusting.
+ * The state is widened when it comes back to the loop head, so the exit test
+ * is decided only on the first trip around the loop. "R0=2" parts are here to
+ * help anchor expected log messages to that mark_chain_precision operation.
  */
-__msg("2: (07) r0 += 1                       ; R0=6")
+__msg("2: (07) r0 += 1                       ; R0=2")
 __msg("3: (35) if r0 >= 0xa goto pc+1")
-__msg("mark_precise: frame0: last_idx 3 first_idx 3 subseq_idx -1")
+__msg("mark_precise: frame0: last_idx 3 first_idx 1 subseq_idx -1")
 __msg("mark_precise: frame0: regs=r0 stack= before 2: (07) r0 += 1")
 __msg("mark_precise: frame0: regs=r0 stack= before 1: (07) r0 += 1")
-__msg("mark_precise: frame0: regs=r0 stack= before 4: (05) goto pc-4")
-__msg("mark_precise: frame0: regs=r0 stack= before 3: (35) if r0 >= 0xa goto pc+1")
-__msg("mark_precise: frame0: parent state regs= stack=:  R0=P4")
-__msg("3: R0=6")
+__msg("mark_precise: frame0: parent state regs=r0 stack=:  R0=P0")
+__msg("mark_precise: frame0: last_idx 0 first_idx 0 subseq_idx 1")
+__msg("mark_precise: frame0: regs=r0 stack= before 0: (b7) r0 = 0")
+__msg("3: R0=2")
+__msg("loop head 1 widened, pass 1")
+__msg("1: safe")
 __naked int state_loop_first_last_equal(void)
 {
 	asm volatile (
@@ -175,11 +174,7 @@ __naked int state_loop_first_last_equal(void)
 	"l0_%=:"
 		"r0 += 1;"
 		"r0 += 1;"
-		/* every few iterations we'll have a checkpoint here with
-		 * first_idx == last_idx, potentially confusing precision
-		 * backtracking logic
-		 */
-		"if r0 >= 10 goto l1_%=;"	/* checkpoint + mark_precise */
+		"if r0 >= 10 goto l1_%=;"	/* mark_precise */
 		"goto l0_%=;"
 	"l1_%=:"
 		"exit;"

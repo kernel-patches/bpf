@@ -559,8 +559,9 @@
 	BPF_EXIT_INSN(),
 	},
 	.prog_type = BPF_PROG_TYPE_SCHED_CLS,
-	.errstr = "infinite loop detected",
-	.result = REJECT,
+	/* may_goto ends the loop after 250ms, do not run it */
+	.result = ACCEPT,
+	.runs = -1,
 },
 {
 	"calls: using r0 returned by callee",

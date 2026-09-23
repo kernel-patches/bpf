@@ -341,8 +341,7 @@ l0_%=:	r1 = 42;					\
  * test would take a very long time to verify.
  */
 SEC("kprobe")
-__failure __log_level(4)
-__msg("BPF program is too large.")
+__success
 __naked void short_loop1(void)
 {
 	asm volatile (

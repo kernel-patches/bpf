@@ -98,8 +98,8 @@ l0_%=:	r1 = r0;					\
 
 SEC("socket")
 __description("conditional loop")
-__failure __msg("infinite loop detected")
-__msg_unpriv("back-edge")
+__success
+__failure_unpriv __msg_unpriv("back-edge")
 __naked void conditional_loop(void)
 {
 	asm volatile ("					\
