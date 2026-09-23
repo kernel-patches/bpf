@@ -498,6 +498,8 @@ struct bpf_verifier_state {
 	u32 dfs_depth;
 	u32 callback_unroll_depth;
 	u32 may_goto_depth;
+	/* number of times the loop head this state is a checkpoint of was widened */
+	u32 loop_passes;
 };
 
 /* Number of BPF_REG_SIZE stack slots tracked for the frame so far. */
@@ -1075,6 +1077,12 @@ struct bpf_verifier_env {
 	/* array of pointers to bpf_scc_info indexed by SCC id */
 	struct bpf_scc_info **scc_info;
 	u32 scc_cnt;
+	/* per SCC constants that loop counters are compared with, see bpf_widen_loop_head() */
+	struct bpf_widen_thrs **scc_thrs;
+	/* states that come back to a loop head are widened instead of walking every iteration */
+	bool widen_loops;
+	/* the walk did or tried that, so a failure can be due to the lost precision */
+	bool widen_used;
 	struct bpf_iarray *succ;
 	struct bpf_iarray *gotox_tmp_buf;
 };
@@ -1255,6 +1263,9 @@ void bpf_free_kfunc_btf_tab(struct bpf_kfunc_btf_tab *tab);
 int mark_chain_precision(struct bpf_verifier_env *env, int regno);
 
 int bpf_is_state_visited(struct bpf_verifier_env *env, int insn_idx);
+bool bpf_same_loop(struct bpf_verifier_state *old, struct bpf_verifier_state *cur);
+int bpf_widen_loop_head(struct bpf_verifier_env *env, int insn_idx, bool backedge,
+			struct bpf_verifier_state *old, struct bpf_verifier_state *cur);
 int bpf_update_branch_counts(struct bpf_verifier_env *env, struct bpf_verifier_state *st);
 
 void bpf_clear_jmp_history(struct bpf_verifier_state *state);

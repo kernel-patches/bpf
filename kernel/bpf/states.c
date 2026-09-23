@@ -1111,6 +1111,41 @@ static int propagate_backedges(struct bpf_verifier_env *env, struct bpf_scc_visi
 	return 0;
 }
 
+/* Did the walk get to @insn_idx over a back-edge? */
+static bool is_backedge(struct bpf_verifier_env *env, int insn_idx)
+{
+	int prev = env->prev_insn_idx;
+	struct bpf_insn_aux_data *aux;
+	struct bpf_insn *insn;
+
+	if (prev < 0 || prev >= env->prog->len)
+		return false;
+	aux = &env->insn_aux_data[prev];
+	insn = &env->prog->insnsi[prev];
+	/* check_cfg() does not record the edge of an unconditional jump as a jump */
+	if ((BPF_CLASS(insn->code) == BPF_JMP || BPF_CLASS(insn->code) == BPF_JMP32) &&
+	    BPF_OP(insn->code) == BPF_JA)
+		return aux->backedge_ft || aux->backedge_br;
+	return insn_idx == prev + 1 ? aux->backedge_ft : aux->backedge_br;
+}
+
+/* The state of this walk that was the last to get to loop head @insn_idx. */
+static struct bpf_verifier_state *loop_head_state(struct bpf_verifier_env *env, int insn_idx)
+{
+	struct bpf_verifier_state *cur = env->cur_state;
+	struct bpf_verifier_state_list *sl;
+	struct list_head *pos;
+
+	/* states are most recent first */
+	list_for_each(pos, bpf_explored_state(env, insn_idx)) {
+		sl = container_of(pos, struct bpf_verifier_state_list, node);
+		if (sl->state.insn_idx == insn_idx && sl->state.branches &&
+		    bpf_same_loop(&sl->state, cur))
+			return &sl->state;
+	}
+	return NULL;
+}
+
 static bool states_maybe_looping(struct bpf_verifier_state *old,
 				 struct bpf_verifier_state *cur)
 {
@@ -1244,12 +1279,17 @@ int bpf_is_state_visited(struct bpf_verifier_env *env, int insn_idx)
 {
 	struct bpf_verifier_state_list *new_sl;
 	struct bpf_verifier_state_list *sl;
-	struct bpf_verifier_state *cur = env->cur_state, *new;
+	struct bpf_verifier_state *cur = env->cur_state, *new, *widen_from = NULL;
+	bool loop_head = env->widen_loops && env->insn_aux_data[insn_idx].loop_head;
 	bool force_new_state, add_new_state, loop;
 	int n, err, states_cnt = 0;
 	struct list_head *pos, *tmp, *head;
 
+	if (loop_head)
+		widen_from = loop_head_state(env, insn_idx);
+
 	force_new_state = env->test_state_freq || bpf_is_force_checkpoint(env, insn_idx) ||
+			  loop_head ||
 			  /* Avoid accumulating infinitely long jmp history */
 			  cur->jmp_history_cnt > 40;
 
@@ -1372,12 +1412,32 @@ int bpf_is_state_visited(struct bpf_verifier_env *env, int insn_idx)
 				}
 				goto skip_inf_loop_check;
 			}
+			/*
+			 * The state came back to the loop head. If it is within
+			 * the state that went around the loop nothing new can
+			 * happen on the next trip. Otherwise it is widened below
+			 * and goes around instead of all the iterations it stands for.
+			 */
+			if (loop_head && bpf_same_loop(&sl->state, cur)) {
+				if (states_equal(env, &sl->state, cur, RANGE_WITHIN)) {
+					env->widen_used = true;
+					loop = true;
+					goto hit;
+				}
+				goto skip_inf_loop_check;
+			}
 			/* attempt to detect infinite loop to avoid unnecessary doomed work */
 			if (states_maybe_looping(&sl->state, cur) &&
 			    states_equal(env, &sl->state, cur, EXACT) &&
 			    !iter_active_depths_differ(&sl->state, cur) &&
 			    sl->state.may_goto_depth == cur->may_goto_depth &&
 			    sl->state.callback_unroll_depth == cur->callback_unroll_depth) {
+				/* the state repeats, nothing new on the next trip */
+				if (env->widen_loops) {
+					env->widen_used = true;
+					loop = true;
+					goto hit;
+				}
 				verbose_linfo(env, insn_idx, "; ");
 				verbose(env, "infinite loop detected at insn %d\n", insn_idx);
 				verbose(env, "cur state:");
@@ -1530,7 +1590,8 @@ miss:
 		 * Use bigger 'n' for checkpoints because evicting checkpoint states
 		 * too early would hinder iterator convergence.
 		 */
-		n = bpf_is_force_checkpoint(env, insn_idx) && sl->state.branches > 0 ? 64 : 3;
+		n = (bpf_is_force_checkpoint(env, insn_idx) || loop_head) &&
+		    sl->state.branches > 0 ? 64 : 3;
 		if (sl->miss_cnt > sl->hit_cnt * n + n) {
 			/* the state is unlikely to be useful. Remove it to
 			 * speed up verification
@@ -1546,6 +1607,16 @@ miss:
 
 	if (env->max_states_per_insn < states_cnt)
 		env->max_states_per_insn = states_cnt;
+
+	if (loop_head) {
+		cur->loop_passes = 0;
+		if (widen_from) {
+			err = bpf_widen_loop_head(env, insn_idx, is_backedge(env, insn_idx),
+						  widen_from, cur);
+			if (err)
+				return err;
+		}
+	}
 
 	if (!env->bpf_capable && states_cnt > BPF_COMPLEXITY_LIMIT_STATES)
 		return 0;

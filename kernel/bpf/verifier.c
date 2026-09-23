@@ -1739,6 +1739,7 @@ int bpf_copy_verifier_state(struct bpf_verifier_state *dst_state,
 	dst_state->dfs_depth = src->dfs_depth;
 	dst_state->callback_unroll_depth = src->callback_unroll_depth;
 	dst_state->may_goto_depth = src->may_goto_depth;
+	dst_state->loop_passes = src->loop_passes;
 	dst_state->equal_state = src->equal_state;
 	for (i = 0; i <= src->curframe; i++) {
 		dst = dst_state->frame[i];
@@ -8450,6 +8451,287 @@ static struct bpf_verifier_state *find_prev_entry(struct bpf_verifier_env *env,
 	}
 
 	return NULL;
+}
+
+/* A constant that register @regno is compared with, -1 if any register. */
+struct widen_thr {
+	s64 val;
+	int regno;
+};
+
+struct bpf_widen_thrs {
+	u32 cnt;
+	struct widen_thr thr[];
+};
+
+/* passes around a loop that widen to constants the loop compares with */
+#define WIDEN_THR_PASSES	4
+/* passes that widen to S32_MAX and the like, later ones drop the bound */
+#define WIDEN_GEN_PASSES	6
+/* states at the loop head differ in something that can't be widened */
+#define WIDEN_MAX_PASSES	10
+
+static const struct widen_thr widen_generic[] = {
+	{ S32_MIN, -1 }, { 0, -1 }, { S32_MAX, -1 }, { U32_MAX, -1 },
+};
+
+static int cmp_widen_thr(const void *a, const void *b)
+{
+	s64 x = ((const struct widen_thr *)a)->val;
+	s64 y = ((const struct widen_thr *)b)->val;
+
+	return x < y ? -1 : x > y;
+}
+
+static bool is_cmp_imm(const struct bpf_insn *insn)
+{
+	u8 class = BPF_CLASS(insn->code);
+	u8 op = BPF_OP(insn->code);
+
+	if (class != BPF_JMP && class != BPF_JMP32)
+		return false;
+	if (BPF_SRC(insn->code) != BPF_K)
+		return false;
+	return op != BPF_JA && op != BPF_CALL && op != BPF_EXIT && op != BPF_JCOND;
+}
+
+/*
+ * Sorted constants that registers are compared with in the SCC of @insn_idx.
+ * A range that ends at one of them can be cut back by the exit test of
+ * the loop, so that the state at the loop head stops growing.
+ */
+static const struct bpf_widen_thrs *scc_thresholds(struct bpf_verifier_env *env, int insn_idx)
+{
+	struct bpf_insn_aux_data *aux = env->insn_aux_data;
+	struct bpf_insn *insns = env->prog->insnsi;
+	u32 scc = aux[insn_idx].scc;
+	struct bpf_widen_thrs *thrs;
+	int i, d, n = 0;
+
+	if (!scc)
+		return NULL;
+	if (!env->scc_thrs) {
+		env->scc_thrs = kvzalloc_objs(*env->scc_thrs, env->scc_cnt, GFP_KERNEL_ACCOUNT);
+		if (!env->scc_thrs)
+			return NULL;
+	}
+	if (env->scc_thrs[scc])
+		return env->scc_thrs[scc];
+
+	for (i = 0; i < env->prog->len; i++)
+		if (aux[i].scc == scc && is_cmp_imm(&insns[i]))
+			n++;
+	thrs = kvzalloc(struct_size(thrs, thr, 3 * n), GFP_KERNEL_ACCOUNT);
+	if (!thrs)
+		return NULL;
+	for (i = 0; i < env->prog->len; i++) {
+		if (aux[i].scc != scc || !is_cmp_imm(&insns[i]))
+			continue;
+		for (d = -1; d <= 1; d++) {
+			thrs->thr[thrs->cnt].val = (s64)insns[i].imm + d;
+			thrs->thr[thrs->cnt++].regno = insns[i].dst_reg;
+		}
+	}
+	sort(thrs->thr, thrs->cnt, sizeof(thrs->thr[0]), cmp_widen_thr, NULL);
+	env->scc_thrs[scc] = thrs;
+	return thrs;
+}
+
+/*
+ * Nearest constant in sorted @thr that is >= @x if @up, <= @x otherwise.
+ * Constants that another register is compared with are skipped.
+ */
+static bool thr_nearest(const struct widen_thr *thr, u32 cnt, int regno, s64 x, bool up,
+			s64 *res)
+{
+	bool found = false;
+	u32 i;
+
+	for (i = 0; i < cnt; i++) {
+		if (regno >= 0 && thr[i].regno >= 0 && thr[i].regno != regno)
+			continue;
+		if (up && thr[i].val >= x) {
+			*res = thr[i].val;
+			return true;
+		}
+		if (!up && thr[i].val <= x) {
+			*res = thr[i].val;
+			found = true;
+		}
+	}
+	return found;
+}
+
+struct widen_ctx {
+	const struct bpf_widen_thrs *thrs;
+	u32 passes;
+	int regno;
+};
+
+/* Where to move the end @x of a range that keeps moving up or down. */
+static bool widen_pick(const struct widen_ctx *w, s64 x, bool up, s64 *res)
+{
+	bool found = false;
+	s64 t;
+
+	if (w->passes <= WIDEN_THR_PASSES && w->thrs &&
+	    thr_nearest(w->thrs->thr, w->thrs->cnt, w->regno, x, up, &t)) {
+		*res = t;
+		found = true;
+	}
+	if (w->passes <= WIDEN_GEN_PASSES &&
+	    thr_nearest(widen_generic, ARRAY_SIZE(widen_generic), -1, x, up, &t)) {
+		*res = !found ? t : up ? min(*res, t) : max(*res, t);
+		found = true;
+	}
+	return found;
+}
+
+static s64 widen_smax(const struct widen_ctx *w, s64 x, s64 lim)
+{
+	s64 t;
+
+	return widen_pick(w, x, true, &t) && t <= lim ? t : lim;
+}
+
+static s64 widen_smin(const struct widen_ctx *w, s64 x, s64 lim)
+{
+	s64 t;
+
+	return widen_pick(w, x, false, &t) && t >= lim ? t : lim;
+}
+
+static u64 widen_umax(const struct widen_ctx *w, u64 x, u64 lim)
+{
+	s64 t;
+
+	if (x > S64_MAX || !widen_pick(w, x, true, &t) || (u64)t > lim)
+		return lim;
+	return t;
+}
+
+static u64 widen_umin(const struct widen_ctx *w, u64 x)
+{
+	s64 t;
+
+	if (!widen_pick(w, min_t(u64, x, S64_MAX), false, &t) || t < 0)
+		return 0;
+	return t;
+}
+
+/*
+ * @old is the state of a register at the loop head, @cur is its state after
+ * a trip around the loop. If @cur has values that @old doesn't have make @cur
+ * a guess of all the values the register can have at the loop head: both
+ * @old and @cur, and where an end of the range moved it is moved further,
+ * to the nearest constant the loop compares the register with.
+ * Whether the guess is good is seen on the next trip: the state that comes
+ * back has to be within it.
+ */
+static void widen_reg(const struct widen_ctx *w, const struct bpf_reg_state *old,
+		      struct bpf_reg_state *cur)
+{
+	u64 umin, umax, low;
+	u32 u32_min, u32_max;
+	s32 s32_min, s32_max;
+	s64 smin, smax;
+	struct tnum t;
+
+	if (old->type != SCALAR_VALUE || cur->type != SCALAR_VALUE)
+		return;
+	if (cnum64_is_subset(old->r64, cur->r64) && cnum32_is_subset(old->r32, cur->r32) &&
+	    tnum_in(old->var_off, cur->var_off))
+		return;
+
+	umin = min(reg_umin(old), reg_umin(cur));
+	umax = max(reg_umax(old), reg_umax(cur));
+	smin = min(reg_smin(old), reg_smin(cur));
+	smax = max(reg_smax(old), reg_smax(cur));
+	u32_min = min(reg_u32_min(old), reg_u32_min(cur));
+	u32_max = max(reg_u32_max(old), reg_u32_max(cur));
+	s32_min = min(reg_s32_min(old), reg_s32_min(cur));
+	s32_max = max(reg_s32_max(old), reg_s32_max(cur));
+
+	if (reg_umin(cur) < reg_umin(old))
+		umin = widen_umin(w, umin);
+	if (reg_umax(cur) > reg_umax(old))
+		umax = widen_umax(w, umax, U64_MAX);
+	if (reg_smin(cur) < reg_smin(old))
+		smin = widen_smin(w, smin, S64_MIN);
+	if (reg_smax(cur) > reg_smax(old))
+		smax = widen_smax(w, smax, S64_MAX);
+	if (reg_u32_min(cur) < reg_u32_min(old))
+		u32_min = widen_umin(w, u32_min);
+	if (reg_u32_max(cur) > reg_u32_max(old))
+		u32_max = widen_umax(w, u32_max, U32_MAX);
+	if (reg_s32_min(cur) < reg_s32_min(old))
+		s32_min = widen_smin(w, s32_min, S32_MIN);
+	if (reg_s32_max(cur) > reg_s32_max(old))
+		s32_max = widen_smax(w, s32_max, S32_MAX);
+
+	/* low bits that are the same in all values seen so far are kept, e.g. alignment */
+	t = tnum_union(old->var_off, cur->var_off);
+	low = t.mask ? BIT_ULL(__ffs64(t.mask)) - 1 : 0;
+	cur->var_off = (struct tnum){ .value = t.value & low, .mask = ~low };
+	cur->r64 = cnum64_intersect(cnum64_from_urange(umin, umax),
+				    cnum64_from_srange(smin, smax));
+	cur->r32 = cnum32_intersect(cnum32_from_urange(u32_min, u32_max),
+				    cnum32_from_srange(s32_min, s32_max));
+	cur->id = 0;
+	cur->delta = 0;
+	reg_bounds_sync(cur);
+}
+
+bool bpf_same_loop(struct bpf_verifier_state *old, struct bpf_verifier_state *cur)
+{
+	return old->speculative == cur->speculative && same_callsites(old, cur);
+}
+
+/*
+ * @cur came to loop head @insn_idx and is not within @old, the state that
+ * went around the loop. Widen scalars of @cur, so that the walk goes around
+ * the loop with a state that stands for many iterations, see widen_reg().
+ * Everything else is left as is. If that is what differs the states never
+ * converge and the walk is given up after a few trips.
+ */
+int bpf_widen_loop_head(struct bpf_verifier_env *env, int insn_idx, bool backedge,
+			struct bpf_verifier_state *old, struct bpf_verifier_state *cur)
+{
+	/* @old is of an earlier run of the loop if @cur just entered it */
+	u32 passes = backedge ? old->loop_passes + 1 : 1;
+	struct widen_ctx w = { scc_thresholds(env, insn_idx), passes };
+	struct bpf_func_state *fold, *fcur;
+	int i, fr, num_slots;
+
+	env->widen_used = true;
+	if (passes > WIDEN_MAX_PASSES) {
+		verbose(env, "states at loop head %d don't converge\n", insn_idx);
+		return -E2BIG;
+	}
+
+	for (fr = 0; fr <= cur->curframe; fr++) {
+		fold = old->frame[fr];
+		fcur = cur->frame[fr];
+
+		for (i = 0; i < BPF_REG_FP; i++) {
+			/* registers of callers are not the ones the loop compares */
+			w.regno = fr == cur->curframe ? i : -1;
+			widen_reg(&w, &fold->regs[i], &fcur->regs[i]);
+		}
+
+		w.regno = -1;
+		num_slots = min(fold->allocated_stack, fcur->allocated_stack) / BPF_REG_SIZE;
+		for (i = 0; i < num_slots; i++) {
+			if (!bpf_is_spilled_reg(&fold->stack[i]) ||
+			    !bpf_is_spilled_reg(&fcur->stack[i]))
+				continue;
+			widen_reg(&w, &fold->stack[i].spilled_ptr, &fcur->stack[i].spilled_ptr);
+		}
+	}
+	cur->loop_passes = passes;
+	if (env->log.level & BPF_LOG_LEVEL2)
+		verbose(env, "loop head %d widened, pass %u\n", insn_idx, passes);
+	return 0;
 }
 
 /*
@@ -19545,7 +19827,9 @@ static int do_check(struct bpf_verifier_env *env)
 			}
 		}
 
-		if (bpf_is_prune_point(env, env->insn_idx)) {
+		/* loop heads are where states are widened, all of them have to be looked at */
+		if (bpf_is_prune_point(env, env->insn_idx) ||
+		    (env->widen_loops && insn_aux->loop_head)) {
 			err = bpf_is_state_visited(env, env->insn_idx);
 			if (err < 0)
 				return err;
@@ -22817,6 +23101,11 @@ err_free_env:
 	bpf_stack_liveness_free(env);
 	kvfree(env->cfg.insn_postorder);
 	kvfree(env->scc_info);
+	if (env->scc_thrs) {
+		for (i = 0; i < env->scc_cnt; i++)
+			kvfree(env->scc_thrs[i]);
+		kvfree(env->scc_thrs);
+	}
 	kvfree(env->succ);
 	kvfree(env->gotox_tmp_buf);
 	kvfree(env->callx_edges);
