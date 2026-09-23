@@ -2357,8 +2357,8 @@ static int v4l_g_ctrl(const struct v4l2_ioctl_ops *ops, struct file *file,
 	struct video_device *vfd = video_devdata(file);
 	struct v4l2_control *p = arg;
 	struct v4l2_fh *vfh = file_to_v4l2_fh(file);
-	struct v4l2_ext_controls ctrls;
-	struct v4l2_ext_control ctrl;
+	struct v4l2_ext_controls ctrls = {};
+	struct v4l2_ext_control ctrl = {};
 
 	if (vfh && vfh->ctrl_handler)
 		return v4l2_g_ctrl(vfh->ctrl_handler, p);
@@ -2388,8 +2388,8 @@ static int v4l_s_ctrl(const struct v4l2_ioctl_ops *ops, struct file *file,
 	struct video_device *vfd = video_devdata(file);
 	struct v4l2_control *p = arg;
 	struct v4l2_fh *vfh = file_to_v4l2_fh(file);
-	struct v4l2_ext_controls ctrls;
-	struct v4l2_ext_control ctrl;
+	struct v4l2_ext_controls ctrls = {};
+	struct v4l2_ext_control ctrl = {};
 	int ret;
 
 	if (vfh && vfh->ctrl_handler)
