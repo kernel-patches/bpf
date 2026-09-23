@@ -375,7 +375,8 @@ CLANG_TARGET_ARCH = --target=$(notdir $(CROSS_COMPILE:%-=%))
 endif
 
 CLANG_SYS_INCLUDES = $(call get_sys_includes,$(CLANG),$(CLANG_TARGET_ARCH))
-CLANG_CFLAGS = $(CLANG_SYS_INCLUDES)
+CLANG_CFLAGS = $(CLANG_SYS_INCLUDES) -Wno-microsoft-anon-tag \
+	       -Wno-initializer-overrides
 
 # genkey writes both outputs. Pattern rules group them even on make
 # versions before 4.3, preventing concurrent genkey invocations.
@@ -509,7 +510,7 @@ FLAVOR :=
 BINARY := test_progs
 BPF_CC := $(CLANG)
 BPF_CC_MSG := CLNG-BPF
-CLANG_BPF_FLAGS := $(CLANG_SYS_INCLUDES) -O2 $(BPF_TARGET_ENDIAN)
+CLANG_BPF_FLAGS := $(CLANG_CFLAGS) -O2 $(BPF_TARGET_ENDIAN)
 BPF_CC_FLAGS := $(CLANG_BPF_FLAGS) -DENABLE_ATOMICS_TESTS -mcpu=v3
 include Makefile.skel
 
