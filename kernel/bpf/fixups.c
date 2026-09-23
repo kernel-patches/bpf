@@ -256,10 +256,17 @@ static void adjust_insn_aux_data(struct bpf_verifier_env *env,
 			data[i].non_stack_access =
 				data[off + cnt - 1].non_stack_access;
 			data[off + cnt - 1].non_stack_access = false;
+			data[i].cleanup_pad = data[off + cnt - 1].cleanup_pad;
+			data[off + cnt - 1].cleanup_pad = 0;
 		} else if (bpf_is_mem_insn(insn + i)) {
 			data[i].non_stack_access = true;
 		}
 	}
+
+	if (env->cleanup_info_cnt)
+		for (i = 0; i < prog_len; i++)
+			if (data[i].cleanup_pad > off + 1)
+				data[i].cleanup_pad += cnt - 1;
 
 	/*
 	 * Last slot instruction could be a newly generated
@@ -549,6 +556,7 @@ static int verifier_remove_insns(struct bpf_verifier_env *env, u32 off, u32 cnt)
 	struct bpf_insn_aux_data *aux_data = env->insn_aux_data;
 	unsigned int orig_prog_len = env->prog->len;
 	int err;
+	u32 i;
 
 	if (bpf_prog_is_offloaded(env->prog->aux))
 		bpf_prog_offload_remove_insns(env, off, cnt);
@@ -572,6 +580,17 @@ static int verifier_remove_insns(struct bpf_verifier_env *env, u32 off, u32 cnt)
 	memmove(aux_data + off,	aux_data + off + cnt,
 		sizeof(*aux_data) * (orig_prog_len - off - cnt));
 	env->insn_aux_data_len -= cnt;
+
+	if (env->cleanup_info_cnt) {
+		for (i = 0; i < env->insn_aux_data_len; i++) {
+			u32 pad = aux_data[i].cleanup_pad;
+
+			if (pad > off + cnt)
+				aux_data[i].cleanup_pad = pad - cnt;
+			else if (pad > off)
+				aux_data[i].cleanup_pad = 0;
+		}
+	}
 
 	return 0;
 }
@@ -648,7 +667,7 @@ int bpf_opt_remove_nops(struct bpf_verifier_env *env)
 	struct bpf_insn *insn = env->prog->insnsi;
 	int insn_cnt = env->prog->len;
 	bool is_may_goto_0, is_ja;
-	int i, err;
+	int i, j, err;
 
 	for (i = 0; i < insn_cnt; i++) {
 		is_may_goto_0 = !memcmp(&insn[i], &MAY_GOTO_0, sizeof(MAY_GOTO_0));
@@ -656,6 +675,11 @@ int bpf_opt_remove_nops(struct bpf_verifier_env *env)
 
 		if (!is_may_goto_0 && !is_ja)
 			continue;
+
+		if (env->cleanup_info_cnt)
+			for (j = 0; j < insn_cnt; j++)
+				if (env->insn_aux_data[j].cleanup_pad == i + 1)
+					env->insn_aux_data[j].cleanup_pad = i + 2;
 
 		err = verifier_remove_insns(env, i, 1);
 		if (err)
