@@ -189,6 +189,13 @@ config MDIO_REGMAP
 	  regmap. Users willing to use this driver must explicitly select
 	  REGMAP.
 
+config MDIO_SOCE
+	tristate "SoC-e MDIO controller"
+	depends on OF_MDIO && HAS_IOMEM
+	help
+	  This module provides a driver for the MDIO controller integrated
+	  into SoC-e Ethernet switch IP cores.
+
 config MDIO_THUNDER
 	tristate "ThunderX SOCs MDIO buses"
 	depends on 64BIT
