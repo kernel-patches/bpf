@@ -895,7 +895,6 @@
 
 /* M.2 E-KEY */
 &sdio {
-	broken-cd;
 	bus-width = <4>;
 	cap-sdio-irq;
 	keep-power-in-suspend;
