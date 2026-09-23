@@ -36,6 +36,9 @@
 #define RAN_GLOBAL_PAD		0x80000
 #define RAN_PAD_R0		0x100000
 
+/* progs/exceptions_cleanup_light.c: the one pad it has. */
+#define RAN_LIGHT		0x1
+
 #define CLEANUP_REC(begin, end, landing_pad)			\
 	".pushsection .bpf_cleanup,\"a\",@progbits;"		\
 	".long " begin ";"					\
