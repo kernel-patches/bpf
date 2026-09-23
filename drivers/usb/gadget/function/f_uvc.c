@@ -885,6 +885,7 @@ uvc_function_bind(struct usb_configuration *c, struct usb_function *f)
 	return 0;
 
 v4l2_error:
+	uvcg_video_deinit(&uvc->video);
 	v4l2_device_unregister(&uvc->v4l2_dev);
 error:
 	if (uvc->control_req) {
@@ -1034,11 +1035,6 @@ static void uvc_function_unbind(struct usb_configuration *c,
 		connected = uvc->func_connected;
 	}
 
-	kthread_cancel_work_sync(&video->hw_submit);
-
-	if (video->async_wq)
-		destroy_workqueue(video->async_wq);
-
 	/*
 	 * If we know we're connected via v4l2, then there should be a cleanup
 	 * of the device from userspace either via UVC_EVENT_DISCONNECT or
@@ -1054,6 +1050,7 @@ static void uvc_function_unbind(struct usb_configuration *c,
 
 	device_remove_file(&uvc->vdev.dev, &dev_attr_function_name);
 	video_unregister_device(&uvc->vdev);
+	uvcg_video_deinit(video);
 	v4l2_device_unregister(&uvc->v4l2_dev);
 
 	scoped_guard(mutex, &uvc->lock)
