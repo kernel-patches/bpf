@@ -78,14 +78,6 @@ enum {
 	Ndis802_11_EncrypteionWAPI
 };
 
-#define NDIS_802_11_AI_REQFI_CAPABILITIES      1
-#define NDIS_802_11_AI_REQFI_LISTENINTERVAL    2
-#define NDIS_802_11_AI_REQFI_CURRENTAPADDRESS  4
-
-#define NDIS_802_11_AI_RESFI_CAPABILITIES      1
-#define NDIS_802_11_AI_RESFI_STATUSCODE        2
-#define NDIS_802_11_AI_RESFI_ASSOCIATIONID     4
-
 /*  Key mapping keys require a BSSID */
 
 struct ndis_802_11_wep {
@@ -94,13 +86,6 @@ struct ndis_802_11_wep {
 	u32 key_length;     /*  length of key in bytes */
 	u8 key_material[16];/*  variable length depending on above field */
 };
-
-/*  mask for authentication/integrity fields */
-#define NDIS_802_11_AUTH_REQUEST_AUTH_FIELDS        0x0f
-#define NDIS_802_11_AUTH_REQUEST_REAUTH			0x01
-#define NDIS_802_11_AUTH_REQUEST_KEYUPDATE		0x02
-#define NDIS_802_11_AUTH_REQUEST_PAIRWISE_ERROR		0x06
-#define NDIS_802_11_AUTH_REQUEST_GROUP_ERROR		0x0E
 
 /*  MIC check time, 60 seconds. */
 #define MIC_CHECK_TIME	60000000
