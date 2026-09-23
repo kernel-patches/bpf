@@ -2102,9 +2102,71 @@ static struct cnum64 cnum64_from_tnum(struct tnum tnum)
 		return cnum64_from_urange(tnum.value, (tnum.value | tnum.mask));
 }
 
+/* smallest member of @t that is >= @x, wraps around to the smallest member of @t */
+static u64 tnum_member_ge(struct tnum t, u64 x)
+{
+	if ((x & ~t.mask) == t.value)
+		return x;
+	if (x > (t.value | t.mask))
+		return t.value;
+	return tnum_step(t, x);
+}
+
+/* largest member of @t that is <= @x, wraps around to the largest member of @t */
+static u64 tnum_member_le(struct tnum t, u64 x)
+{
+	/* members of 'tc' are bitwise complements of members of 't' */
+	struct tnum tc = { .value = ~(t.value | t.mask), .mask = t.mask };
+
+	return ~tnum_member_ge(tc, ~x);
+}
+
+/*
+ * Move both ends of arc @c inwards to the nearest members of @t.
+ * Values that are dropped are not members of @t.
+ */
+static struct cnum64 cnum64_tighten_by_tnum(struct cnum64 c, struct tnum t)
+{
+	u64 lo, hi, dlo, dhi;
+
+	if (cnum64_is_empty(c) || c.size == U64_MAX || !t.mask)
+		return c;
+	lo = tnum_member_ge(t, c.base);
+	dlo = lo - c.base;
+	if (dlo > c.size)
+		return c;
+	hi = tnum_member_le(t, c.base + c.size);
+	dhi = c.base + c.size - hi;
+	if (dhi > c.size - dlo)
+		return c;
+	return (struct cnum64){ .base = lo, .size = c.size - dlo - dhi };
+}
+
+static struct cnum32 cnum32_tighten_by_tnum(struct cnum32 c, struct tnum t)
+{
+	struct tnum tc;
+	u32 lo, hi, dlo, dhi;
+
+	t = tnum_subreg(t);
+	if (cnum32_is_empty(c) || c.size == U32_MAX || !t.mask)
+		return c;
+	lo = tnum_member_ge(t, c.base);
+	dlo = lo - c.base;
+	if (dlo > c.size)
+		return c;
+	/* complement within 32 bits */
+	tc = (struct tnum){ .value = (u32)~(t.value | t.mask), .mask = t.mask };
+	hi = ~(u32)tnum_member_ge(tc, (u32)~(c.base + c.size));
+	dhi = c.base + c.size - hi;
+	if (dhi > c.size - dlo)
+		return c;
+	return (struct cnum32){ .base = lo, .size = c.size - dlo - dhi };
+}
+
 static void __update_reg32_bounds(struct bpf_reg_state *reg)
 {
 	cnum32_intersect_with(&reg->r32, cnum32_from_tnum(reg->var_off));
+	reg->r32 = cnum32_tighten_by_tnum(reg->r32, reg->var_off);
 }
 
 static void __update_reg64_bounds(struct bpf_reg_state *reg)
@@ -2113,6 +2175,7 @@ static void __update_reg64_bounds(struct bpf_reg_state *reg)
 	bool umin_in_tnum;
 
 	cnum64_intersect_with(&reg->r64, cnum64_from_tnum(reg->var_off));
+	reg->r64 = cnum64_tighten_by_tnum(reg->r64, reg->var_off);
 
 	/* Check if u64 and tnum overlap in a single value */
 	tnum_next = tnum_step(reg->var_off, reg_umin(reg));
