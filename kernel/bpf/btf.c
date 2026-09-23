@@ -6551,6 +6551,8 @@ errout:
 	return ERR_PTR(err);
 }
 
+static void btf_apply_deferred_vmlinux_regs(struct btf *btf);
+
 struct btf *btf_parse_vmlinux(void)
 {
 	struct btf_verifier_env *env = NULL;
@@ -6581,7 +6583,15 @@ struct btf *btf_parse_vmlinux(void)
 	if (err) {
 		btf_free(btf);
 		btf = ERR_PTR(err);
+		goto err_out;
 	}
+
+	/*
+	 * With CONFIG_DEBUG_INFO_BTF=m, kfunc, dtor kfunc and struct_ops
+	 * registrations for vmlinux made before the BTF was available were
+	 * queued; apply them now, before the BTF becomes visible to anyone.
+	 */
+	btf_apply_deferred_vmlinux_regs(btf);
 err_out:
 	btf_verifier_env_free(env);
 	return btf;
@@ -8697,13 +8707,62 @@ enum {
 #define BTF_MODULE_NOTIFIER 1
 #endif
 
+/*
+ * CONFIG_DEBUG_INFO_BTF=m: a kfunc, dtor kfunc or struct_ops registration
+ * made while the BTF it applies to is not available yet.  Kept until the BTF
+ * arrives, see btf_defer_reg() and btf_apply_deferred_regs().
+ */
+enum btf_deferred_reg_kind {
+	BTF_DEFERRED_KFUNC_SET,
+	BTF_DEFERRED_DTOR_KFUNCS,
+	BTF_DEFERRED_STRUCT_OPS,
+};
+
+struct btf_deferred_reg {
+	struct list_head list;
+	enum btf_deferred_reg_kind kind;
+	/* set while the registration is queued for a module BTF */
+	struct btf *btf;
+	struct module *module;
+	union {
+		struct {
+			enum btf_kfunc_hook hook;
+			const struct btf_kfunc_id_set *kset;
+		} kfunc;
+		struct {
+			const struct btf_id_dtor_kfunc *dtors;
+			u32 cnt;
+		} dtor;
+		struct bpf_struct_ops *st_ops;
+	};
+};
+
 #ifdef BTF_MODULE_NOTIFIER
+static void btf_free_deferred_regs(struct list_head *regs);
+#if IS_MODULE(CONFIG_DEBUG_INFO_BTF)
+static void btf_free_deferred_reg(struct btf_deferred_reg *reg);
+static void btf_apply_deferred_regs(struct list_head *regs);
+#endif
+
 struct btf_module {
 	struct list_head list;
 	struct module *module;
 	struct btf *btf;
 	struct bin_attribute *sysfs_attr;
 	int flags;
+	/*
+	 * CONFIG_DEBUG_INFO_BTF=m: a module loaded before the vmlinux BTF is
+	 * available cannot have its BTF parsed yet.  Its .BTF and .BTF.base
+	 * sections are copied here and parsed once the vmlinux BTF arrives
+	 * (btf_parse_deferred_modules()); @btf is NULL until then.
+	 * Registrations of the module's kfuncs, dtor kfuncs and struct_ops
+	 * wait in @deferred_regs.
+	 */
+	void *data;
+	void *base_data;
+	u32 data_size;
+	u32 base_data_size;
+	struct list_head deferred_regs;
 };
 
 static LIST_HEAD(btf_modules);
@@ -8747,8 +8806,14 @@ static void btf_module_free(struct btf_module *btf_mod)
 {
 	if (btf_mod->sysfs_attr)
 		sysfs_remove_bin_file(btf_kobj, btf_mod->sysfs_attr);
-	purge_cand_cache(btf_mod->btf);
-	btf_put(btf_mod->btf);
+	if (btf_mod->btf) {
+		purge_cand_cache(btf_mod->btf);
+		btf_put(btf_mod->btf);
+	} else {
+		kvfree(btf_mod->data);
+		kvfree(btf_mod->base_data);
+	}
+	btf_free_deferred_regs(&btf_mod->deferred_regs);
 	kfree(btf_mod->sysfs_attr);
 	kfree(btf_mod);
 }
@@ -8792,8 +8857,52 @@ static int btf_vmlinux_module_coming(struct module *mod)
 	smp_store_release(&btf_vmlinux_raw, data);
 	return 0;
 }
+
+/*
+ * The vmlinux BTF is not available yet and must not be loaded from the
+ * module notifier (that would nest a module load into a module load).  Keep
+ * the module's BTF for btf_parse_deferred_modules().  The .BTF data can be
+ * exposed in sysfs right away, it needs no parsing.
+ */
+static int btf_module_defer(struct btf_module *btf_mod, struct module *mod)
+{
+	int err;
+
+	btf_mod->data = kvmemdup(mod->btf_data, mod->btf_data_size,
+				 GFP_KERNEL | __GFP_NOWARN);
+	if (!btf_mod->data)
+		return -ENOMEM;
+	btf_mod->data_size = mod->btf_data_size;
+
+	if (mod->btf_base_data) {
+		btf_mod->base_data = kvmemdup(mod->btf_base_data,
+					      mod->btf_base_data_size,
+					      GFP_KERNEL | __GFP_NOWARN);
+		if (!btf_mod->base_data) {
+			kvfree(btf_mod->data);
+			return -ENOMEM;
+		}
+		btf_mod->base_data_size = mod->btf_base_data_size;
+	}
+
+	err = btf_module_sysfs_add(btf_mod, mod->name, btf_mod->data,
+				   btf_mod->data_size);
+	if (err) {
+		kvfree(btf_mod->data);
+		kvfree(btf_mod->base_data);
+		return err;
+	}
+
+	list_add(&btf_mod->list, &btf_modules);
+	return 0;
+}
 #else
 static int btf_vmlinux_module_coming(struct module *mod)
+{
+	return 0;
+}
+
+static int btf_module_defer(struct btf_module *btf_mod, struct module *mod)
 {
 	return 0;
 }
@@ -8828,6 +8937,24 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 			goto out;
 		}
 		btf_mod->module = module;
+		INIT_LIST_HEAD(&btf_mod->deferred_regs);
+
+		if (IS_MODULE(CONFIG_DEBUG_INFO_BTF)) {
+			mutex_lock(&btf_module_mutex);
+			/* Pairs with the publication in bpf_get_btf_vmlinux() */
+			if (!smp_load_acquire(&btf_vmlinux)) {
+				err = btf_module_defer(btf_mod, mod);
+				mutex_unlock(&btf_module_mutex);
+				if (err) {
+					pr_warn("failed to keep module [%s] BTF: %d\n",
+						mod->name, err);
+					kfree(btf_mod);
+					err = 0;
+				}
+				goto out;
+			}
+			mutex_unlock(&btf_module_mutex);
+		}
 
 		btf = btf_parse_module(mod->name, bpf_get_btf_vmlinux(),
 				       mod->btf_data, mod->btf_data_size, false,
@@ -8882,7 +9009,8 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 			 * btf_try_get_module() on such BTFs will fail. This may
 			 * be called again on btf_put(), but it's ok to do so.
 			 */
-			btf_free_id(btf_mod->btf);
+			if (btf_mod->btf)
+				btf_free_id(btf_mod->btf);
 			list_del(&btf_mod->list);
 			btf_module_free(btf_mod);
 			break;
@@ -8905,6 +9033,87 @@ static int __init btf_module_init(void)
 }
 
 fs_initcall(btf_module_init);
+
+#if IS_MODULE(CONFIG_DEBUG_INFO_BTF)
+/*
+ * CONFIG_DEBUG_INFO_BTF=m: the vmlinux BTF has just become available.  Parse
+ * the BTF of the modules that were loaded before it, and apply the
+ * registrations that waited for them.  Called from bpf_get_btf_vmlinux()
+ * once btf_vmlinux is published, with no locks held.
+ */
+void btf_parse_deferred_modules(void)
+{
+	/* Pairs with the publication in bpf_get_btf_vmlinux() */
+	struct btf *vmlinux_btf = smp_load_acquire(&btf_vmlinux);
+	struct btf_deferred_reg *reg, *rtmp;
+	struct btf_module *btf_mod, *tmp;
+	bool parsed = false;
+	LIST_HEAD(regs);
+	struct btf *btf;
+	int err;
+
+	if (IS_ERR_OR_NULL(vmlinux_btf))
+		return;
+
+	mutex_lock(&btf_module_mutex);
+	list_for_each_entry_safe(btf_mod, tmp, &btf_modules, list) {
+		if (btf_mod->btf)
+			continue;
+
+		btf = btf_parse_module(btf_mod->module->name, vmlinux_btf,
+				       btf_mod->data, btf_mod->data_size, true,
+				       btf_mod->base_data, btf_mod->base_data_size);
+		err = PTR_ERR_OR_ZERO(btf);
+		if (!err) {
+			err = btf_alloc_id(btf);
+			if (err) {
+				/* btf owns the data now, btf_free() drops it */
+				btf_mod->data = NULL;
+				btf_free(btf);
+			}
+		}
+		if (err) {
+			/*
+			 * The module is loaded and stays.  Unlike at load time
+			 * there is no way to reject it, so drop its BTF.
+			 */
+			pr_warn("failed to validate module [%s] BTF: %d\n",
+				btf_mod->module->name, err);
+			list_del(&btf_mod->list);
+			btf_module_free(btf_mod);
+			continue;
+		}
+
+		/* btf->data is btf_mod->data now, the sysfs file keeps working */
+		btf_mod->data = NULL;
+		kvfree(btf_mod->base_data);
+		btf_mod->base_data = NULL;
+		btf_mod->btf = btf;
+		parsed = true;
+
+		/*
+		 * Registrations are applied after dropping the mutex (they
+		 * walk btf_modules); pin what they need until then.
+		 */
+		list_for_each_entry_safe(reg, rtmp, &btf_mod->deferred_regs, list) {
+			list_del(&reg->list);
+			if (!try_module_get(btf_mod->module)) {
+				btf_free_deferred_reg(reg);
+				continue;
+			}
+			btf_get(btf);
+			reg->btf = btf;
+			reg->module = btf_mod->module;
+			list_add_tail(&reg->list, &regs);
+		}
+	}
+	mutex_unlock(&btf_module_mutex);
+
+	if (parsed)
+		purge_cand_cache(NULL);
+	btf_apply_deferred_regs(&regs);
+}
+#endif /* IS_MODULE(CONFIG_DEBUG_INFO_BTF) */
 #endif /* BTF_MODULE_NOTIFIER */
 
 struct module *btf_try_get_module(const struct btf *btf)
@@ -8957,8 +9166,11 @@ struct btf *btf_get_module_btf(const struct module *module)
 		if (btf_mod->module != module)
 			continue;
 
-		btf_get(btf_mod->btf);
-		btf = btf_mod->btf;
+		/* NULL while waiting for the vmlinux BTF (CONFIG_DEBUG_INFO_BTF=m) */
+		if (btf_mod->btf) {
+			btf_get(btf_mod->btf);
+			btf = btf_mod->btf;
+		}
 		break;
 	}
 	mutex_unlock(&btf_module_mutex);
@@ -9135,7 +9347,8 @@ static int btf_check_kfunc_name(struct btf *btf, const char *func_name, u32 kind
 #ifdef CONFIG_DEBUG_INFO_BTF_MODULES
 	guard(mutex)(&btf_module_mutex);
 	list_for_each_entry_safe(btf_mod, tmp, &btf_modules, list) {
-		if (btf_mod->btf == btf)
+		/* skip ourselves and, with CONFIG_DEBUG_INFO_BTF=m, unparsed BTF */
+		if (btf_mod->btf == btf || !btf_mod->btf)
 			continue;
 		id = btf_find_by_name_kind(btf_mod->btf, func_name, kind);
 		if (id >= 0) {
@@ -9475,11 +9688,21 @@ static int btf_kfunc_id_set_add(struct btf *btf, enum btf_kfunc_hook hook,
 	return btf_populate_kfunc_set(btf, hook, kset);
 }
 
+static int btf_defer_reg(struct module *owner, const struct btf_deferred_reg *tmpl);
+
 static int __register_btf_kfunc_id_set(enum btf_kfunc_hook hook,
 				       const struct btf_kfunc_id_set *kset)
 {
+	struct btf_deferred_reg tmpl = {
+		.kind = BTF_DEFERRED_KFUNC_SET,
+		.kfunc = { .hook = hook, .kset = kset },
+	};
 	struct btf *btf;
 	int ret;
+
+	ret = btf_defer_reg(kset->owner, &tmpl);
+	if (ret)
+		return ret > 0 ? 0 : ret;
 
 	btf = btf_get_module_btf(kset->owner);
 	if (!btf)
@@ -9649,8 +9872,16 @@ end:
 int register_btf_id_dtor_kfuncs(const struct btf_id_dtor_kfunc *dtors, u32 add_cnt,
 				struct module *owner)
 {
+	struct btf_deferred_reg tmpl = {
+		.kind = BTF_DEFERRED_DTOR_KFUNCS,
+		.dtor = { .dtors = dtors, .cnt = add_cnt },
+	};
 	struct btf *btf;
 	int ret;
+
+	ret = btf_defer_reg(owner, &tmpl);
+	if (ret)
+		return ret > 0 ? 0 : ret;
 
 	btf = btf_get_module_btf(owner);
 	if (!btf)
@@ -10321,8 +10552,16 @@ static int btf_struct_ops_add(struct btf *btf, struct bpf_struct_ops *st_ops)
 
 int __register_bpf_struct_ops(struct bpf_struct_ops *st_ops)
 {
+	struct btf_deferred_reg tmpl = {
+		.kind = BTF_DEFERRED_STRUCT_OPS,
+		.st_ops = st_ops,
+	};
 	struct btf *btf;
 	int err;
+
+	err = btf_defer_reg(st_ops->owner, &tmpl);
+	if (err)
+		return err > 0 ? 0 : err;
 
 	btf = btf_get_module_btf(st_ops->owner);
 	if (!btf)
@@ -10335,7 +10574,182 @@ int __register_bpf_struct_ops(struct bpf_struct_ops *st_ops)
 	return err;
 }
 EXPORT_SYMBOL_GPL(__register_bpf_struct_ops);
+#else
+static int btf_struct_ops_add(struct btf *btf, struct bpf_struct_ops *st_ops)
+{
+	return -EOPNOTSUPP;
+}
 #endif
+
+/*
+ * CONFIG_DEBUG_INFO_BTF=m: registrations made before the BTF they apply to
+ * is available.  Registrations for vmlinux wait in btf_vmlinux_deferred_regs
+ * until btf_parse_vmlinux() applies them; registrations for a module wait in
+ * its struct btf_module until btf_parse_deferred_modules() does.  Both lists
+ * are protected by btf_module_mutex.
+ */
+#ifdef BTF_MODULE_NOTIFIER
+static LIST_HEAD(btf_vmlinux_deferred_regs);
+/* Set when the vmlinux BTF is parsed; new registrations apply directly */
+static bool btf_vmlinux_regs_closed;
+
+/*
+ * Queue @tmpl if the BTF for @owner is not available yet.  Returns 1 if the
+ * registration was queued and is to be considered done, 0 if the caller has
+ * to apply it, or -ENOMEM.
+ */
+static int btf_defer_reg(struct module *owner, const struct btf_deferred_reg *tmpl)
+{
+	struct list_head *head = NULL;
+	struct btf_deferred_reg *reg;
+	struct btf_module *btf_mod;
+
+	if (!IS_MODULE(CONFIG_DEBUG_INFO_BTF))
+		return 0;
+
+	guard(mutex)(&btf_module_mutex);
+	if (!owner) {
+		if (!btf_vmlinux_regs_closed)
+			head = &btf_vmlinux_deferred_regs;
+	} else {
+		list_for_each_entry(btf_mod, &btf_modules, list) {
+			if (btf_mod->module != owner)
+				continue;
+			if (!btf_mod->btf)
+				head = &btf_mod->deferred_regs;
+			break;
+		}
+	}
+	if (!head)
+		return 0;
+
+	reg = kmemdup(tmpl, sizeof(*reg), GFP_KERNEL);
+	if (!reg)
+		return -ENOMEM;
+	/*
+	 * kfunc id sets and struct_ops are static data of their owner, but
+	 * the dtor arrays are commonly built on the stack of the initcall.
+	 */
+	if (reg->kind == BTF_DEFERRED_DTOR_KFUNCS) {
+		reg->dtor.dtors = kmemdup_array(tmpl->dtor.dtors, tmpl->dtor.cnt,
+						sizeof(*tmpl->dtor.dtors), GFP_KERNEL);
+		if (!reg->dtor.dtors) {
+			kfree(reg);
+			return -ENOMEM;
+		}
+	}
+	list_add_tail(&reg->list, head);
+	return 1;
+}
+
+static void btf_free_deferred_reg(struct btf_deferred_reg *reg)
+{
+	if (reg->kind == BTF_DEFERRED_DTOR_KFUNCS)
+		kfree(reg->dtor.dtors);
+	kfree(reg);
+}
+
+static const char *btf_deferred_reg_name(const struct btf_deferred_reg *reg)
+{
+	switch (reg->kind) {
+	case BTF_DEFERRED_KFUNC_SET:	return "kfunc set";
+	case BTF_DEFERRED_DTOR_KFUNCS:	return "dtor kfuncs";
+	case BTF_DEFERRED_STRUCT_OPS:	return "struct_ops";
+	}
+	return "?";
+}
+
+static int btf_apply_deferred_reg(struct btf *btf, const struct btf_deferred_reg *reg)
+{
+	switch (reg->kind) {
+	case BTF_DEFERRED_KFUNC_SET:
+		return btf_kfunc_id_set_add(btf, reg->kfunc.hook, reg->kfunc.kset);
+	case BTF_DEFERRED_DTOR_KFUNCS:
+		return btf_dtor_kfuncs_add(btf, reg->dtor.dtors, reg->dtor.cnt);
+	case BTF_DEFERRED_STRUCT_OPS:
+		return btf_struct_ops_add(btf, reg->st_ops);
+	}
+	return -EINVAL;
+}
+
+#if IS_MODULE(CONFIG_DEBUG_INFO_BTF)
+/* Apply and free the registrations in @regs; each is pinned to its BTF and module. */
+static void btf_apply_deferred_regs(struct list_head *regs)
+{
+	struct btf_deferred_reg *reg, *tmp;
+	int err;
+
+	list_for_each_entry_safe(reg, tmp, regs, list) {
+		err = btf_apply_deferred_reg(reg->btf, reg);
+		if (err)
+			pr_warn("failed to register deferred %s for module [%s] BTF: %d\n",
+				btf_deferred_reg_name(reg), reg->btf->name, err);
+		btf_put(reg->btf);
+		module_put(reg->module);
+		list_del(&reg->list);
+		btf_free_deferred_reg(reg);
+	}
+}
+#endif
+
+static void btf_free_deferred_regs(struct list_head *regs)
+{
+	struct btf_deferred_reg *reg, *tmp;
+
+	list_for_each_entry_safe(reg, tmp, regs, list) {
+		list_del(&reg->list);
+		btf_free_deferred_reg(reg);
+	}
+}
+
+/*
+ * The vmlinux BTF has just been parsed; apply the registrations that waited
+ * for it.  Runs under btf_vmlinux_lock, before @btf is published, so nothing
+ * can observe a vmlinux BTF without its kfuncs and struct_ops.
+ *
+ * Applying a registration can queue further ones: a struct_ops ->init()
+ * registers the kfuncs of its hook.  Those must not go through
+ * bpf_get_btf_vmlinux() (we hold its lock), so the queue stays open until
+ * a pass applies nothing new, and only then are registrations applied directly.
+ */
+static void btf_apply_deferred_vmlinux_regs(struct btf *btf)
+{
+	struct btf_deferred_reg *reg, *tmp;
+	LIST_HEAD(regs);
+	int err;
+
+	if (!IS_MODULE(CONFIG_DEBUG_INFO_BTF))
+		return;
+
+	mutex_lock(&btf_module_mutex);
+	while (!list_empty(&btf_vmlinux_deferred_regs)) {
+		list_splice_init(&btf_vmlinux_deferred_regs, &regs);
+		mutex_unlock(&btf_module_mutex);
+
+		list_for_each_entry_safe(reg, tmp, &regs, list) {
+			err = btf_apply_deferred_reg(btf, reg);
+			if (err)
+				pr_warn("failed to register deferred %s for vmlinux BTF: %d\n",
+					btf_deferred_reg_name(reg), err);
+			list_del(&reg->list);
+			btf_free_deferred_reg(reg);
+		}
+
+		mutex_lock(&btf_module_mutex);
+	}
+	btf_vmlinux_regs_closed = true;
+	mutex_unlock(&btf_module_mutex);
+}
+#else
+static int btf_defer_reg(struct module *owner, const struct btf_deferred_reg *tmpl)
+{
+	return 0;
+}
+
+static void btf_apply_deferred_vmlinux_regs(struct btf *btf)
+{
+}
+#endif /* BTF_MODULE_NOTIFIER */
 
 bool btf_param_match_suffix(const struct btf *btf,
 			    const struct btf_param *arg,

@@ -583,6 +583,11 @@ const char *btf_str_by_offset(const struct btf *btf, u32 offset);
 struct btf *btf_parse_vmlinux(void);
 void *btf_vmlinux_data(u32 *size, bool load);
 u32 btf_vmlinux_size(void);
+#if IS_MODULE(CONFIG_DEBUG_INFO_BTF)
+void btf_parse_deferred_modules(void);
+#else
+static inline void btf_parse_deferred_modules(void) {}
+#endif
 struct btf *bpf_prog_get_target_btf(const struct bpf_prog *prog);
 u32 *btf_kfunc_flags(const struct btf *btf, u32 kfunc_btf_id, const struct bpf_prog *prog);
 int btf_kfunc_check_flag(const struct btf *btf, u32 kfunc_btf_id, u32 flag);
