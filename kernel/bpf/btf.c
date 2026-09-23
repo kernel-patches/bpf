@@ -9313,11 +9313,26 @@ u32 *btf_kfunc_is_modify_return(const struct btf *btf, u32 kfunc_btf_id,
 	return btf_kfunc_id_set_contains(btf, BTF_KFUNC_HOOK_FMODRET, kfunc_btf_id);
 }
 
+static int btf_kfunc_id_set_add(struct btf *btf, enum btf_kfunc_hook hook,
+				const struct btf_kfunc_id_set *kset)
+{
+	int ret, i;
+
+	for (i = 0; i < kset->set->cnt; i++) {
+		ret = btf_check_kfunc_protos(btf, btf_relocate_id(btf, kset->set->pairs[i].id),
+					     kset->set->pairs[i].flags);
+		if (ret)
+			return ret;
+	}
+
+	return btf_populate_kfunc_set(btf, hook, kset);
+}
+
 static int __register_btf_kfunc_id_set(enum btf_kfunc_hook hook,
 				       const struct btf_kfunc_id_set *kset)
 {
 	struct btf *btf;
-	int ret, i;
+	int ret;
 
 	btf = btf_get_module_btf(kset->owner);
 	if (!btf)
@@ -9325,16 +9340,7 @@ static int __register_btf_kfunc_id_set(enum btf_kfunc_hook hook,
 	if (IS_ERR(btf))
 		return PTR_ERR(btf);
 
-	for (i = 0; i < kset->set->cnt; i++) {
-		ret = btf_check_kfunc_protos(btf, btf_relocate_id(btf, kset->set->pairs[i].id),
-					     kset->set->pairs[i].flags);
-		if (ret)
-			goto err_out;
-	}
-
-	ret = btf_populate_kfunc_set(btf, hook, kset);
-
-err_out:
+	ret = btf_kfunc_id_set_add(btf, hook, kset);
 	btf_put(btf);
 	return ret;
 }
@@ -9426,20 +9432,12 @@ static int btf_check_dtor_kfuncs(struct btf *btf, const struct btf_id_dtor_kfunc
 	return 0;
 }
 
-/* This function must be invoked only from initcalls/module init functions */
-int register_btf_id_dtor_kfuncs(const struct btf_id_dtor_kfunc *dtors, u32 add_cnt,
-				struct module *owner)
+static int btf_dtor_kfuncs_add(struct btf *btf, const struct btf_id_dtor_kfunc *dtors,
+			       u32 add_cnt)
 {
 	struct btf_id_dtor_kfunc_tab *tab;
-	struct btf *btf;
 	u32 tab_cnt, i;
 	int ret;
-
-	btf = btf_get_module_btf(owner);
-	if (!btf)
-		return check_btf_kconfigs(owner, "dtor kfuncs");
-	if (IS_ERR(btf))
-		return PTR_ERR(btf);
 
 	if (add_cnt >= BTF_DTOR_KFUNC_MAX_CNT) {
 		pr_err("cannot register more than %d kfunc destructors\n", BTF_DTOR_KFUNC_MAX_CNT);
@@ -9497,6 +9495,23 @@ int register_btf_id_dtor_kfuncs(const struct btf_id_dtor_kfunc *dtors, u32 add_c
 end:
 	if (ret)
 		btf_free_dtor_kfunc_tab(btf);
+	return ret;
+}
+
+/* This function must be invoked only from initcalls/module init functions */
+int register_btf_id_dtor_kfuncs(const struct btf_id_dtor_kfunc *dtors, u32 add_cnt,
+				struct module *owner)
+{
+	struct btf *btf;
+	int ret;
+
+	btf = btf_get_module_btf(owner);
+	if (!btf)
+		return check_btf_kconfigs(owner, "dtor kfuncs");
+	if (IS_ERR(btf))
+		return PTR_ERR(btf);
+
+	ret = btf_dtor_kfuncs_add(btf, dtors, add_cnt);
 	btf_put(btf);
 	return ret;
 }
@@ -10135,11 +10150,27 @@ bpf_struct_ops_find(struct btf *btf, u32 type_id)
 	return NULL;
 }
 
-int __register_bpf_struct_ops(struct bpf_struct_ops *st_ops)
+static int btf_struct_ops_add(struct btf *btf, struct bpf_struct_ops *st_ops)
 {
 	struct bpf_verifier_log *log;
+	int err;
+
+	log = kzalloc_obj(*log, GFP_KERNEL | __GFP_NOWARN);
+	if (!log)
+		return -ENOMEM;
+
+	log->level = BPF_LOG_KERNEL;
+
+	err = btf_add_struct_ops(btf, st_ops, log);
+
+	kfree(log);
+	return err;
+}
+
+int __register_bpf_struct_ops(struct bpf_struct_ops *st_ops)
+{
 	struct btf *btf;
-	int err = 0;
+	int err;
 
 	btf = btf_get_module_btf(st_ops->owner);
 	if (!btf)
@@ -10147,20 +10178,8 @@ int __register_bpf_struct_ops(struct bpf_struct_ops *st_ops)
 	if (IS_ERR(btf))
 		return PTR_ERR(btf);
 
-	log = kzalloc_obj(*log, GFP_KERNEL | __GFP_NOWARN);
-	if (!log) {
-		err = -ENOMEM;
-		goto errout;
-	}
-
-	log->level = BPF_LOG_KERNEL;
-
-	err = btf_add_struct_ops(btf, st_ops, log);
-
-errout:
-	kfree(log);
+	err = btf_struct_ops_add(btf, st_ops);
 	btf_put(btf);
-
 	return err;
 }
 EXPORT_SYMBOL_GPL(__register_bpf_struct_ops);
