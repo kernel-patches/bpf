@@ -1223,8 +1223,8 @@ static int hpre_pre_store_cap_reg(struct hisi_qm *qm)
 		return -EINVAL;
 	}
 
-	qm->cap_tables.dev_cap_table = hpre_cap;
 	qm->cap_tables.dev_cap_size = size;
+	qm->cap_tables.dev_cap_table = hpre_cap;
 
 	return 0;
 }

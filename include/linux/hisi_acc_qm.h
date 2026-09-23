@@ -332,9 +332,9 @@ struct hisi_qm_cap_record {
 
 struct hisi_qm_cap_tables {
 	u32 qm_cap_size;
-	struct hisi_qm_cap_record *qm_cap_table;
+	struct hisi_qm_cap_record *qm_cap_table __counted_by_ptr(qm_cap_size);
 	u32 dev_cap_size;
-	struct hisi_qm_cap_record *dev_cap_table;
+	struct hisi_qm_cap_record *dev_cap_table __counted_by_ptr(dev_cap_size);
 };
 
 struct hisi_qm_list {
