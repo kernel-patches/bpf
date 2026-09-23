@@ -6406,6 +6406,12 @@ static int __sys_bpf(enum bpf_cmd cmd, bpfptr_t uattr, unsigned int size,
 					  &map_idr, &map_idr_lock);
 		break;
 	case BPF_BTF_GET_NEXT_ID:
+		/*
+		 * With CONFIG_DEBUG_INFO_BTF=m the kernel BTFs get ids when the
+		 * vmlinux BTF is loaded; whoever enumerates them wants them.
+		 */
+		if (IS_MODULE(CONFIG_DEBUG_INFO_BTF))
+			bpf_get_btf_vmlinux();
 		err = bpf_obj_get_next_id(&attr, uattr.user,
 					  &btf_idr, &btf_idr_lock);
 		break;

@@ -29,6 +29,7 @@
 #include <linux/string.h>
 #include <linux/sysfs.h>
 #include <linux/overflow.h>
+#include <crypto/sha2.h>
 #include <linux/bitops.h>
 
 #include <net/netfilter/nf_bpf_link.h>
@@ -6092,9 +6093,85 @@ errout_free:
 	return ERR_PTR(err);
 }
 
+#if IS_BUILTIN(CONFIG_DEBUG_INFO_BTF)
 extern char __start_BTF[];
 extern char __stop_BTF[];
+#endif
 extern struct btf *btf_vmlinux;
+
+#if IS_MODULE(CONFIG_DEBUG_INFO_BTF)
+/*
+ * With CONFIG_DEBUG_INFO_BTF=m the vmlinux BTF is not part of the kernel
+ * image.  The btf_vmlinux module carries it in its .BTF section; when the
+ * module loads, btf_module_notify() copies the section here.  The copy is
+ * made with vmalloc_user() so that /sys/kernel/btf/vmlinux can be mmap()ed
+ * as with the built-in BTF.  Set once, never cleared: like the built-in
+ * BTF, once present it stays for the lifetime of the kernel.
+ *
+ * The size and SHA-256 of the BTF are linked into the kernel as .BTF.meta
+ * by scripts/gen-btf.sh: the size makes /sys/kernel/btf/vmlinux report its
+ * size before the BTF is loaded, the hash makes sure only the BTF this
+ * kernel was built with is accepted.
+ */
+struct btf_vmlinux_meta {
+	u32 size;
+	u8 sha256[SHA256_DIGEST_SIZE];
+} __packed;
+
+extern const struct btf_vmlinux_meta __start_BTF_meta[];
+#define btf_vmlinux_meta (__start_BTF_meta[0])
+
+static void *btf_vmlinux_raw;
+#endif
+
+/**
+ * btf_vmlinux_data - get the raw vmlinux BTF
+ * @size: where to store the size of the BTF
+ * @load: with CONFIG_DEBUG_INFO_BTF=m, load the btf_vmlinux module if the
+ *	  BTF is not present yet; may sleep
+ *
+ * Return: the raw BTF, or NULL if it is not available.
+ */
+void *btf_vmlinux_data(u32 *size, bool load)
+{
+#if IS_BUILTIN(CONFIG_DEBUG_INFO_BTF)
+	*size = __stop_BTF - __start_BTF;
+	return __start_BTF;
+#elif IS_MODULE(CONFIG_DEBUG_INFO_BTF)
+	/* Pairs with the smp_store_release() in btf_vmlinux_module_coming() */
+	void *data = smp_load_acquire(&btf_vmlinux_raw);
+
+	if (!data && load) {
+		/*
+		 * The module notifier installs the BTF before init_module()
+		 * returns, so it is either there after this or the module is
+		 * not available (yet).  Not cached: a later call retries,
+		 * e.g. once the module becomes reachable on the root fs.
+		 */
+		request_module("btf_vmlinux");
+		/* Same pairing as above */
+		data = smp_load_acquire(&btf_vmlinux_raw);
+	}
+	*size = btf_vmlinux_meta.size;
+	return data;
+#else
+	return NULL;
+#endif
+}
+
+/**
+ * btf_vmlinux_size - size of the vmlinux BTF, known even before it is loaded
+ */
+u32 btf_vmlinux_size(void)
+{
+#if IS_BUILTIN(CONFIG_DEBUG_INFO_BTF)
+	return __stop_BTF - __start_BTF;
+#elif IS_MODULE(CONFIG_DEBUG_INFO_BTF)
+	return btf_vmlinux_meta.size;
+#else
+	return 0;
+#endif
+}
 
 #define BPF_MAP_TYPE(_id, _ops)
 #define BPF_LINK_TYPE(_id, _name)
@@ -6479,7 +6556,14 @@ struct btf *btf_parse_vmlinux(void)
 	struct btf_verifier_env *env = NULL;
 	struct bpf_verifier_log *log;
 	struct btf *btf;
+	void *data;
+	u32 size;
 	int err;
+
+	/* The caller made sure the BTF is present, see bpf_get_btf_vmlinux() */
+	data = btf_vmlinux_data(&size, false);
+	if (!data)
+		return ERR_PTR(-ENOENT);
 
 	env = kzalloc_obj(*env, GFP_KERNEL | __GFP_NOWARN);
 	if (!env)
@@ -6487,7 +6571,7 @@ struct btf *btf_parse_vmlinux(void)
 
 	log = &env->log;
 	log->level = BPF_LOG_KERNEL;
-	btf = btf_parse_base(env, "vmlinux", __start_BTF, __stop_BTF - __start_BTF);
+	btf = btf_parse_base(env, "vmlinux", data, size);
 	if (IS_ERR(btf))
 		goto err_out;
 
@@ -6514,7 +6598,7 @@ __u32 btf_relocate_id(const struct btf *btf, __u32 id)
 	return btf->base_id_map[id];
 }
 
-#ifdef CONFIG_DEBUG_INFO_BTF_MODULES
+#if IS_ENABLED(CONFIG_DEBUG_INFO_BTF_MODULES) || IS_MODULE(CONFIG_DEBUG_INFO_BTF)
 
 /*
  * Parse split module BTF against @vmlinux_btf.  @data is the module's .BTF
@@ -6620,7 +6704,7 @@ errout:
 	return ERR_PTR(err);
 }
 
-#endif /* CONFIG_DEBUG_INFO_BTF_MODULES */
+#endif /* CONFIG_DEBUG_INFO_BTF_MODULES || CONFIG_DEBUG_INFO_BTF=m */
 
 struct btf *bpf_prog_get_target_btf(const struct bpf_prog *prog)
 {
@@ -8604,7 +8688,16 @@ enum {
 	BTF_MODULE_F_LIVE = (1 << 0),
 };
 
-#ifdef CONFIG_DEBUG_INFO_BTF_MODULES
+/*
+ * The module notifier registers module BTF (CONFIG_DEBUG_INFO_BTF_MODULES)
+ * and picks up the vmlinux BTF from the btf_vmlinux module
+ * (CONFIG_DEBUG_INFO_BTF=m).
+ */
+#if IS_ENABLED(CONFIG_DEBUG_INFO_BTF_MODULES) || IS_MODULE(CONFIG_DEBUG_INFO_BTF)
+#define BTF_MODULE_NOTIFIER 1
+#endif
+
+#ifdef BTF_MODULE_NOTIFIER
 struct btf_module {
 	struct list_head list;
 	struct module *module;
@@ -8660,6 +8753,52 @@ static void btf_module_free(struct btf_module *btf_mod)
 	kfree(btf_mod);
 }
 
+#if IS_MODULE(CONFIG_DEBUG_INFO_BTF)
+/*
+ * The btf_vmlinux module carries the vmlinux BTF in its .BTF section
+ * (scripts/gen-btf.sh).  Keep a copy; the module is only the carrier and
+ * has no BTF of its own.
+ */
+static int btf_vmlinux_module_coming(struct module *mod)
+{
+	u8 sha256sum[SHA256_DIGEST_SIZE];
+	void *data;
+
+	if (btf_vmlinux_raw)
+		return 0;
+
+	/*
+	 * The verifier trusts the BTF as the description of this kernel's
+	 * types, so a BTF from a different build must not get in even if
+	 * the module otherwise loads (same release string, same vermagic).
+	 */
+	if (mod->btf_data_size != btf_vmlinux_meta.size) {
+		pr_err("module [%s]: BTF size %u does not match this kernel (%u)\n",
+		       mod->name, mod->btf_data_size, btf_vmlinux_meta.size);
+		return -EINVAL;
+	}
+	sha256(mod->btf_data, mod->btf_data_size, sha256sum);
+	if (memcmp(sha256sum, btf_vmlinux_meta.sha256, sizeof(sha256sum))) {
+		pr_err("module [%s]: BTF does not match this kernel\n", mod->name);
+		return -EINVAL;
+	}
+
+	data = vmalloc_user(mod->btf_data_size);
+	if (!data)
+		return -ENOMEM;
+	memcpy(data, mod->btf_data, mod->btf_data_size);
+
+	/* Pairs with the smp_load_acquire() in btf_vmlinux_data() */
+	smp_store_release(&btf_vmlinux_raw, data);
+	return 0;
+}
+#else
+static int btf_vmlinux_module_coming(struct module *mod)
+{
+	return 0;
+}
+#endif
+
 static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 			     void *module)
 {
@@ -8668,9 +8807,17 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 	struct btf *btf;
 	int err = 0;
 
-	if (mod->btf_data_size == 0 ||
-	    (op != MODULE_STATE_COMING && op != MODULE_STATE_LIVE &&
-	     op != MODULE_STATE_GOING))
+	if (op != MODULE_STATE_COMING && op != MODULE_STATE_LIVE &&
+	    op != MODULE_STATE_GOING)
+		goto out;
+
+	if (IS_MODULE(CONFIG_DEBUG_INFO_BTF) && !strcmp(mod->name, "btf_vmlinux")) {
+		if (op == MODULE_STATE_COMING)
+			err = btf_vmlinux_module_coming(mod);
+		goto out;
+	}
+
+	if (!IS_ENABLED(CONFIG_DEBUG_INFO_BTF_MODULES) || mod->btf_data_size == 0)
 		goto out;
 
 	switch (op) {
@@ -8758,7 +8905,7 @@ static int __init btf_module_init(void)
 }
 
 fs_initcall(btf_module_init);
-#endif /* CONFIG_DEBUG_INFO_BTF_MODULES */
+#endif /* BTF_MODULE_NOTIFIER */
 
 struct module *btf_try_get_module(const struct btf *btf)
 {
@@ -9714,6 +9861,11 @@ static void purge_cand_cache(struct btf *btf)
 	mutex_lock(&cand_cache_mutex);
 	__purge_cand_cache(btf, module_cand_cache, MODULE_CAND_CACHE_SIZE);
 	mutex_unlock(&cand_cache_mutex);
+}
+#elif defined(BTF_MODULE_NOTIFIER)
+/* CONFIG_DEBUG_INFO_BTF=m without module BTF: nothing is ever cached */
+static void purge_cand_cache(struct btf *btf)
+{
 }
 #endif
 

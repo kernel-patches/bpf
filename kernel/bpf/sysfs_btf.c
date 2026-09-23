@@ -9,8 +9,13 @@
 #include <linux/sysfs.h>
 #include <linux/mm.h>
 #include <linux/io.h>
+#include <linux/bpf.h>
 #include <linux/btf.h>
+#include <linux/vmalloc.h>
 
+struct kobject *btf_kobj;
+
+#if IS_BUILTIN(CONFIG_DEBUG_INFO_BTF)
 /* See scripts/link-vmlinux.sh, gen_btf() func for details */
 extern char __start_BTF[];
 extern char __stop_BTF[];
@@ -49,12 +54,81 @@ static struct bin_attribute bin_attr_btf_vmlinux __ro_after_init = {
 	.mmap = btf_sysfs_vmlinux_mmap,
 };
 
-struct kobject *btf_kobj;
-
-static int __init btf_vmlinux_init(void)
+static void __init btf_sysfs_vmlinux_init(void)
 {
 	bin_attr_btf_vmlinux.private = __start_BTF;
 	bin_attr_btf_vmlinux.size = __stop_BTF - __start_BTF;
+}
+
+#else /* CONFIG_DEBUG_INFO_BTF=m */
+
+/*
+ * The BTF is carried by the btf_vmlinux module and only loaded when
+ * something needs it.  Its size is known from the start, so the file has
+ * its final size from boot; the first read() or mmap() loads the BTF.
+ */
+static ssize_t btf_sysfs_vmlinux_read(struct file *filp, struct kobject *kobj,
+				      const struct bin_attribute *attr,
+				      char *buf, loff_t off, size_t count)
+{
+	void *data;
+	u32 size;
+
+	/* Loads the module, parses the BTF and registers module BTFs. */
+	if (IS_ERR_OR_NULL(bpf_get_btf_vmlinux()))
+		return -ENODEV;
+	data = btf_vmlinux_data(&size, false);
+	if (!data)
+		return -ENODEV;
+
+	/* sysfs clamps @off and @count to attr->size, which is @size */
+	memcpy(buf, data + off, count);
+	return count;
+}
+
+static int btf_sysfs_vmlinux_mmap(struct file *filp, struct kobject *kobj,
+				  const struct bin_attribute *attr,
+				  struct vm_area_struct *vma)
+{
+	size_t vm_size = vma->vm_end - vma->vm_start;
+	void *data;
+	u32 size;
+
+	if (IS_ERR_OR_NULL(bpf_get_btf_vmlinux()))
+		return -ENODEV;
+	data = btf_vmlinux_data(&size, false);
+	if (!data)
+		return -ENODEV;
+
+	if (vma->vm_pgoff)
+		return -EINVAL;
+
+	if (vma->vm_flags & (VM_WRITE | VM_EXEC | VM_MAYSHARE))
+		return -EACCES;
+
+	if (vm_size > PAGE_ALIGN(size))
+		return -EINVAL;
+
+	vm_flags_mod(vma, VM_DONTDUMP, VM_MAYEXEC | VM_MAYWRITE);
+	/* the copy was made with vmalloc_user() for this purpose */
+	return remap_vmalloc_range(vma, data, 0);
+}
+
+static struct bin_attribute bin_attr_btf_vmlinux __ro_after_init = {
+	.attr = { .name = "vmlinux", .mode = 0444, },
+	.read = btf_sysfs_vmlinux_read,
+	.mmap = btf_sysfs_vmlinux_mmap,
+};
+
+static void __init btf_sysfs_vmlinux_init(void)
+{
+	bin_attr_btf_vmlinux.size = btf_vmlinux_size();
+}
+#endif
+
+static int __init btf_vmlinux_init(void)
+{
+	btf_sysfs_vmlinux_init();
 
 	if (bin_attr_btf_vmlinux.size == 0)
 		return 0;
