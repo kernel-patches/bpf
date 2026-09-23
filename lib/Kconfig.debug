@@ -396,7 +396,7 @@ config DEBUG_INFO_SPLIT
 	  Incompatible with older versions of ccache.
 
 config DEBUG_INFO_BTF
-	bool "Generate BTF type information"
+	tristate "Generate BTF type information"
 	depends on !DEBUG_INFO_SPLIT && !DEBUG_INFO_REDUCED
 	depends on !GCC_PLUGIN_RANDSTRUCT || COMPILE_TEST
 	depends on BPF_SYSCALL
@@ -407,6 +407,17 @@ config DEBUG_INFO_BTF
 	  Generate deduplicated BTF type information from DWARF debug info.
 	  Turning this on requires pahole v1.22 or later, which will convert
 	  DWARF type info into equivalent deduplicated BTF type info.
+
+	  If built as a module (=m), the vmlinux BTF is not part of the
+	  kernel image.  It is carried by the btf_vmlinux module, which is
+	  loaded on demand the first time the BTF is needed: when a BPF
+	  program requires kernel type information, or when
+	  /sys/kernel/btf/vmlinux is opened.  Until then, no memory is
+	  spent on it.  The BTF is still emitted into the vmlinux ELF file
+	  (as a non-loadable section) so tooling and module BTF generation
+	  work as before.  Module BTF (DEBUG_INFO_BTF_MODULES) is registered
+	  when the vmlinux BTF becomes available.  Not compatible with
+	  BPF_PRELOAD, whose iterators would load the BTF at every bpffs mount.
 
 config PAHOLE_HAS_BTF_TAG
 	def_bool PAHOLE_VERSION >= 123

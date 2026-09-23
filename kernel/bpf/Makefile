@@ -41,7 +41,11 @@ ifeq ($(CONFIG_INET),y)
 obj-$(CONFIG_BPF_SYSCALL) += reuseport_array.o
 endif
 ifeq ($(CONFIG_SYSFS),y)
-obj-$(CONFIG_DEBUG_INFO_BTF) += sysfs_btf.o
+obj-$(subst m,y,$(CONFIG_DEBUG_INFO_BTF)) += sysfs_btf.o
+endif
+# With CONFIG_DEBUG_INFO_BTF=m the vmlinux BTF is carried by this module
+ifeq ($(CONFIG_DEBUG_INFO_BTF),m)
+obj-m += btf_vmlinux.o
 endif
 ifeq ($(CONFIG_BPF_JIT),y)
 obj-$(CONFIG_BPF_SYSCALL) += bpf_struct_ops.o

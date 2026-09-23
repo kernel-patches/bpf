@@ -1197,6 +1197,41 @@ format.::
             .long   58
             .long   8206                    # Line 8 Col 14
 
+6.1 Kernel BTF
+--------------
+
+With CONFIG_DEBUG_INFO_BTF=y the BTF of the kernel is generated at link time
+from its DWARF and placed in the .BTF section of vmlinux, which is read-only
+data of the kernel image. It is available as /sys/kernel/btf/vmlinux and, if
+CONFIG_DEBUG_INFO_BTF_MODULES is set, module BTF is generated as split BTF
+against it and available as /sys/kernel/btf/<module>.
+
+With CONFIG_DEBUG_INFO_BTF=m the same BTF is generated, but it is not part of
+the kernel image (the vmlinux ELF file still carries it in a non-loadable .BTF
+section for tooling and module BTF generation). It is delivered by the
+btf_vmlinux module, which the kernel loads on demand the first time the BTF is
+needed: when /sys/kernel/btf/vmlinux is read or mmap()ed, when kernel BTF
+objects are enumerated (BPF_BTF_GET_NEXT_ID), or when a BPF program needs
+kernel type information (an attach_btf_id, a kfunc call, a ksym, a map pointer
+or a helper that takes or returns a kernel BTF pointer). Until then no memory
+is used for it, and afterwards nothing differs from =y. In particular:
+
+  * /sys/kernel/btf/vmlinux exists from boot with its final size.
+  * Modules loaded before the vmlinux BTF are exposed in /sys/kernel/btf right
+    away, their BTF is parsed and gets a BTF id once the vmlinux BTF is
+    loaded, together with their kfunc and struct_ops registrations.
+  * kfunc, dtor kfunc and struct_ops registrations of the kernel itself are
+    applied before the BTF becomes visible.
+  * The kernel only accepts the BTF it was built with: the size and SHA-256 of
+    the BTF are linked into the kernel and checked against the module.
+  * Once loaded the BTF stays; the module cannot be unloaded.
+
+If the module is not available (not installed, or the root file system is not
+mounted yet), the kernel behaves as one built without BTF and retries next
+time. CONFIG_BPF_PRELOAD is not available with =m: its iterators attach through
+the vmlinux BTF, so mounting bpffs would load it. bpf_snprintf_btf() and bpf_seq_printf_btf() only use the BTF if it has
+already been parsed, as they run in program context.
+
 7. Testing
 ==========
 

@@ -674,8 +674,17 @@
 
 /*
  * .BTF
+ *
+ * With CONFIG_DEBUG_INFO_BTF=y the vmlinux BTF is loaded as read-only data and
+ * bounded by __start_BTF/__stop_BTF.  With CONFIG_DEBUG_INFO_BTF=m it is still
+ * emitted into the vmlinux ELF file so that module BTF generation and tooling
+ * can read it, but as a non-loadable section (see BTF_NOLOAD in ELF_DETAILS):
+ * the btf_vmlinux module carries a copy and provides it on demand at runtime.
+ * What is loaded instead is .BTF.meta, the size and hash of that BTF (see
+ * scripts/gen-btf.sh), empty in the first link that the BTF is generated
+ * from.  .BTF_ids is needed by the kernel in both cases.
  */
-#ifdef CONFIG_DEBUG_INFO_BTF
+#if IS_BUILTIN(CONFIG_DEBUG_INFO_BTF)
 #define BTF								\
 	. = ALIGN(PAGE_SIZE);						\
 	.BTF : AT(ADDR(.BTF) - LOAD_OFFSET) {				\
@@ -685,8 +694,26 @@
 	.BTF_ids : AT(ADDR(.BTF_ids) - LOAD_OFFSET) {			\
 		*(.BTF_ids)						\
 	}
+#elif IS_MODULE(CONFIG_DEBUG_INFO_BTF)
+#define BTF								\
+	. = ALIGN(8);							\
+	.BTF.meta : AT(ADDR(.BTF.meta) - LOAD_OFFSET) {			\
+		BOUNDED_SECTION_BY(.BTF.meta, _BTF_meta)		\
+	}								\
+	. = ALIGN(PAGE_SIZE);						\
+	.BTF_ids : AT(ADDR(.BTF_ids) - LOAD_OFFSET) {			\
+		*(.BTF_ids)						\
+	}
 #else
 #define BTF
+#endif
+
+#if IS_MODULE(CONFIG_DEBUG_INFO_BTF)
+/* quoted: BTF is a macro, an unquoted .BTF here would expand it */
+#define BTF_NOLOAD							\
+		".BTF" 0 : { *(".BTF") }
+#else
+#define BTF_NOLOAD
 #endif
 
 /*
@@ -849,6 +876,7 @@
 /* Required sections not related to debugging. */
 #define ELF_DETAILS							\
 		.comment 0 : { *(.comment) }				\
+		BTF_NOLOAD						\
 		.symtab 0 : { *(.symtab) }				\
 		.strtab 0 : { *(.strtab) }				\
 		.shstrtab 0 : { *(.shstrtab) }				\
