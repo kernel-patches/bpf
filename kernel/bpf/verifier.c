@@ -4204,7 +4204,6 @@ static int check_stack_read_var_off(struct bpf_verifier_env *env, struct bpf_reg
 				  dst_regno);
 	if (err)
 		return err;
-	check_fastcall_stack_contract(env, ptr_state, env->insn_idx, min_off);
 	return 0;
 }
 
@@ -7401,6 +7400,13 @@ static int check_stack_range_initialized(
 		min_off = reg_smin(reg) + off;
 		max_off = reg_smax(reg) + off;
 	}
+
+	/*
+	 * Helpers and kfuncs can access stack slots without going through the
+	 * regular stack read/write paths, including when raw mode is disabled.
+	 */
+	if (access_size)
+		check_fastcall_stack_contract(env, state, env->insn_idx, min_off);
 
 	/* Unprivileged outputs retain each byte's initialization state. */
 	if (raw_mode) {
