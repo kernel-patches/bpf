@@ -342,16 +342,18 @@ struct sk_buff *hsr_create_tagged_frame(struct hsr_frame_info *frame,
 		/* set the lane id properly */
 		hsr_set_path_id(frame, hsr_ethhdr, port);
 		return skb_clone(frame->skb_hsr, GFP_ATOMIC);
-	} else if (port->dev->features & NETIF_F_HW_HSR_TAG_INS) {
-		return skb_clone(frame->skb_std, GFP_ATOMIC);
 	}
 
-	/* Create the new skb with enough headroom to fit the HSR tag */
-	skb = __pskb_copy(frame->skb_std,
-			  skb_headroom(frame->skb_std) + HSR_HLEN, GFP_ATOMIC);
+	skb = skb_clone(frame->skb_std, GFP_ATOMIC);
 	if (!skb)
 		return NULL;
-	skb_reset_mac_header(skb);
+
+	if (port->dev->features & NETIF_F_HW_HSR_TAG_INS)
+		return skb;
+
+	/* Ensure the cloned skb has enough headroom to fit the HSR tag */
+	if (skb_cow_head(skb, HSR_HLEN))
+		goto err;
 
 	if (skb->ip_summed == CHECKSUM_PARTIAL)
 		skb->csum_start += HSR_HLEN;
@@ -360,15 +362,24 @@ struct sk_buff *hsr_create_tagged_frame(struct hsr_frame_info *frame,
 	if (frame->is_vlan)
 		movelen += VLAN_HLEN;
 
+	/* The entire header area needs to be linear */
+	if (!pskb_may_pull(skb, HSR_HLEN + movelen))
+		goto err;
+
 	src = skb_mac_header(skb);
 	dst = skb_push(skb, HSR_HLEN);
 	memmove(dst, src, movelen);
+	skb_set_network_header(skb, ETH_HLEN + HSR_HLEN);
 	skb_reset_mac_header(skb);
+	skb_reset_mac_len(skb);
 
 	/* skb_put_padto free skb on error and hsr_fill_tag returns NULL in
 	 * that case
 	 */
 	return hsr_fill_tag(skb, frame, port, port->hsr->prot_version);
+err:
+	kfree_skb(skb);
+	return NULL;
 }
 
 struct sk_buff *prp_create_tagged_frame(struct hsr_frame_info *frame,
