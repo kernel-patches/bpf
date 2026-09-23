@@ -3303,7 +3303,7 @@ union bpf_attr {
  * 	Return
  * 		0
  *
- * long bpf_sock_ops_cb_flags_set(struct bpf_sock_ops *bpf_sock, int argval)
+ * long bpf_sock_ops_cb_flags_set(void *bpf_sock, int argval)
  * 	Description
  * 		Attempt to set the value of the **bpf_sock_ops_cb_flags** field
  * 		for the full TCP socket associated to *bpf_sock_ops* to
