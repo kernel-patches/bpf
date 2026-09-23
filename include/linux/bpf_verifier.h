@@ -1094,6 +1094,8 @@ struct bpf_verifier_env {
 	bool widen_loops;
 	/* the walk did or tried that, so a failure can be due to the lost precision */
 	bool widen_used;
+	/* insns processed by a walk that was given up */
+	u32 insn_wasted;
 	struct bpf_iarray *succ;
 	struct bpf_iarray *gotox_tmp_buf;
 };

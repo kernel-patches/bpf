@@ -21248,6 +21248,122 @@ out:
 	return ret;
 }
 
+/* What a walk changes outside of verifier states and per insn data. */
+struct walk_snapshot {
+	struct bpf_insn_aux_data *insn_aux;
+	struct bpf_func_info_aux *func_aux;
+	struct bpf_subprog_info *subprogs;
+	struct bpf_prog *prog;
+	u64 log_pos, diag_pos;
+	u32 insn_processed, prev_insn_processed;
+	u32 jmps_processed, prev_jmps_processed;
+	u32 total_states, peak_states, max_states_per_insn, longest_mark_read_walk;
+	u32 explored_states_size, free_list_size, num_backedges;
+	u32 id_gen, pass_cnt, max_stack_depth;
+	u32 max_ctx_offset, max_pkt_offset, max_tp_access, max_rdonly_access, max_rdwr_access;
+	bool seen_direct_write, seen_exception, explore_alu_limits, tail_call_reachable;
+	void *arena;
+};
+
+static void walk_snapshot_free(struct walk_snapshot *s)
+{
+	kvfree(s->insn_aux);
+	kvfree(s->func_aux);
+	kvfree(s->subprogs);
+	kfree(s->prog);
+}
+
+static size_t func_aux_size(struct bpf_verifier_env *env)
+{
+	return array_size(env->prog->aux->func_info_cnt, sizeof(*env->prog->aux->func_info_aux));
+}
+
+static int walk_snapshot_save(struct bpf_verifier_env *env, struct walk_snapshot *s)
+{
+	struct bpf_prog_aux *aux = env->prog->aux;
+
+	memset(s, 0, sizeof(*s));
+	s->insn_aux = kvmemdup(env->insn_aux_data,
+			       array_size(env->prog->len, sizeof(*env->insn_aux_data)),
+			       GFP_KERNEL_ACCOUNT);
+	s->subprogs = kvmemdup(env->subprog_info, sizeof(env->subprog_info), GFP_KERNEL_ACCOUNT);
+	/* flags of the program, not its insns */
+	s->prog = kmemdup(env->prog, offsetof(struct bpf_prog, insnsi), GFP_KERNEL_ACCOUNT);
+	if (aux->func_info_aux)
+		s->func_aux = kvmemdup(aux->func_info_aux, func_aux_size(env), GFP_KERNEL_ACCOUNT);
+	if (!s->insn_aux || !s->subprogs || !s->prog || (aux->func_info_aux && !s->func_aux)) {
+		walk_snapshot_free(s);
+		return -ENOMEM;
+	}
+	s->log_pos = env->log.end_pos;
+	s->diag_pos = bpf_diag_event_log_save(env);
+	s->insn_processed = env->insn_processed;
+	s->prev_insn_processed = env->prev_insn_processed;
+	s->jmps_processed = env->jmps_processed;
+	s->prev_jmps_processed = env->prev_jmps_processed;
+	s->total_states = env->total_states;
+	s->peak_states = env->peak_states;
+	s->max_states_per_insn = env->max_states_per_insn;
+	s->longest_mark_read_walk = env->longest_mark_read_walk;
+	s->explored_states_size = env->explored_states_size;
+	s->free_list_size = env->free_list_size;
+	s->num_backedges = env->num_backedges;
+	s->id_gen = env->id_gen;
+	s->pass_cnt = env->pass_cnt;
+	s->max_stack_depth = env->max_stack_depth;
+	s->seen_direct_write = env->seen_direct_write;
+	s->seen_exception = env->seen_exception;
+	s->explore_alu_limits = env->explore_alu_limits;
+	s->max_ctx_offset = aux->max_ctx_offset;
+	s->max_pkt_offset = aux->max_pkt_offset;
+	s->max_tp_access = aux->max_tp_access;
+	s->max_rdonly_access = aux->max_rdonly_access;
+	s->max_rdwr_access = aux->max_rdwr_access;
+	s->tail_call_reachable = aux->tail_call_reachable;
+	s->arena = aux->arena;
+	return 0;
+}
+
+static void walk_snapshot_restore(struct bpf_verifier_env *env, struct walk_snapshot *s)
+{
+	struct bpf_prog_aux *aux = env->prog->aux;
+
+	memcpy(env->insn_aux_data, s->insn_aux,
+	       array_size(env->prog->len, sizeof(*env->insn_aux_data)));
+	memcpy(env->subprog_info, s->subprogs, sizeof(env->subprog_info));
+	memcpy(env->prog, s->prog, offsetof(struct bpf_prog, insnsi));
+	if (s->func_aux)
+		memcpy(aux->func_info_aux, s->func_aux, func_aux_size(env));
+	env->insn_wasted += env->insn_processed - s->insn_processed;
+	env->insn_processed = s->insn_processed;
+	env->prev_insn_processed = s->prev_insn_processed;
+	env->jmps_processed = s->jmps_processed;
+	env->prev_jmps_processed = s->prev_jmps_processed;
+	env->total_states = s->total_states;
+	env->peak_states = s->peak_states;
+	env->max_states_per_insn = s->max_states_per_insn;
+	env->longest_mark_read_walk = s->longest_mark_read_walk;
+	env->explored_states_size = s->explored_states_size;
+	env->free_list_size = s->free_list_size;
+	env->num_backedges = s->num_backedges;
+	env->id_gen = s->id_gen;
+	env->pass_cnt = s->pass_cnt;
+	env->max_stack_depth = s->max_stack_depth;
+	env->seen_direct_write = s->seen_direct_write;
+	env->seen_exception = s->seen_exception;
+	env->explore_alu_limits = s->explore_alu_limits;
+	aux->max_ctx_offset = s->max_ctx_offset;
+	aux->max_pkt_offset = s->max_pkt_offset;
+	aux->max_tp_access = s->max_tp_access;
+	aux->max_rdonly_access = s->max_rdonly_access;
+	aux->max_rdwr_access = s->max_rdwr_access;
+	aux->tail_call_reachable = s->tail_call_reachable;
+	aux->arena = s->arena;
+	if (!(env->log.level & BPF_LOG_LEVEL2))
+		bpf_vlog_reset(&env->log, s->log_pos);
+	bpf_diag_event_log_restore(env, s->diag_pos);
+}
+
 /* Lazily verify all global functions based on their BTF, if they are called
  * from main BPF program or any of subprograms transitively.
  * BPF global subprogs called from dead code are not validated.
@@ -21333,6 +21449,51 @@ static int do_check_main(struct bpf_verifier_env *env)
 	return ret;
 }
 
+/*
+ * Walk the program with loops widened first. It is much less work when it
+ * succeeds. If it fails the reason can be the precision that widening gave
+ * up. Then undo everything that walk did, so that the walk of every
+ * iteration that follows can't tell that it is not the first one.
+ * It is all or nothing for the main program and global functions, because
+ * may_goto added to a loop of a static function is there for all callers.
+ */
+static int do_check_prog(struct bpf_verifier_env *env)
+{
+	struct walk_snapshot snap;
+	int ret;
+
+	/* no loops without bpf_capable, the driver of an offloaded prog sees every insn visit */
+	if (!env->bpf_capable || env->scc_cnt <= 1 || bpf_prog_is_offloaded(env->prog->aux)) {
+		ret = do_check_main(env);
+		return ret ?: do_check_subprogs(env);
+	}
+
+	env->scc_converged = kvzalloc_objs(*env->scc_converged, BITS_TO_LONGS(env->scc_cnt),
+					   GFP_KERNEL_ACCOUNT);
+	if (!env->scc_converged)
+		return -ENOMEM;
+	ret = walk_snapshot_save(env, &snap);
+	if (ret)
+		return ret;
+
+	env->widen_loops = true;
+	env->widen_used = false;
+	ret = do_check_main(env);
+	ret = ret ?: do_check_subprogs(env);
+	if (!ret && env->widen_used)
+		ret = bpf_commit_loop_guards(env);
+	env->widen_loops = false;
+	if (ret && ret != -ENOMEM && ret != -EAGAIN && ret != -EFAULT && env->widen_used) {
+		walk_snapshot_restore(env, &snap);
+		if (env->log.level & BPF_LOG_LEVEL)
+			verbose(env, "walk with widened loops failed, walking every iteration\n");
+		ret = do_check_main(env);
+		ret = ret ?: do_check_subprogs(env);
+	}
+	walk_snapshot_free(&snap);
+	return ret;
+}
+
 static void print_verification_stats(struct bpf_verifier_env *env)
 {
 	/* Skip over hidden subprogs which are not verified. */
@@ -21361,6 +21522,9 @@ static void print_verification_stats(struct bpf_verifier_env *env)
 		env->insn_processed, BPF_COMPLEXITY_LIMIT_INSNS,
 		env->max_states_per_insn, env->total_states,
 		env->peak_states, env->longest_mark_read_walk);
+	if (env->insn_wasted)
+		verbose(env, "walks with widened loops that failed processed %d insns\n",
+			env->insn_wasted);
 }
 
 int bpf_prog_ctx_arg_info_init(struct bpf_prog *prog,
@@ -23041,8 +23205,7 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	if (ret < 0)
 		goto skip_full_check;
 
-	ret = do_check_main(env);
-	ret = ret ?: do_check_subprogs(env);
+	ret = do_check_prog(env);
 
 	/* reject recursion through the callx edges found by the main pass */
 	if (ret == 0 && env->callx_edges)
