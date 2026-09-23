@@ -393,6 +393,12 @@ LIBBPF_API bool bpf_program__autoload(const struct bpf_program *prog);
 LIBBPF_API int bpf_program__set_autoload(struct bpf_program *prog, bool autoload);
 LIBBPF_API bool bpf_program__autoattach(const struct bpf_program *prog);
 LIBBPF_API int bpf_program__set_autoattach(struct bpf_program *prog, bool autoattach);
+/* this "specialization" should go away once the deprecation window for
+ * bpf_program__set_autoattach_deprecated() closes
+ */
+LIBBPF_API int bpf_program__set_autoattach_v1_8_0(struct bpf_program *prog, bool autoattach);
+LIBBPF_DEPRECATED_SINCE(1, 8, "use int-returning bpf_program__set_autoattach() instead")
+LIBBPF_API void bpf_program__set_autoattach_deprecated(struct bpf_program *prog, bool autoattach);
 
 struct bpf_insn;
 
