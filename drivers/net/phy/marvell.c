@@ -149,6 +149,9 @@
 #define MII_88E1318S_PHY_LED_FUNC_ON		(0x9)
 #define MII_88E1318S_PHY_LED_FUNC_HI_Z		(0xa)
 #define MII_88E1318S_PHY_LED_FUNC_BLINK		(0xb)
+#define MII_88E1318S_PHY_LED_POL		0x11
+#define MII_88E1318S_PHY_LED_POL_ACT_HIGH(idx)	BIT(2 * (idx))
+#define MII_88E1318S_PHY_LED_POL_HIGH_IMP(idx)	BIT(2 * (idx) + 1)
 #define MII_88E1318S_PHY_LED_TCR		0x12
 #define MII_88E1318S_PHY_LED_TCR_FORCE_INT	BIT(15)
 #define MII_88E1318S_PHY_LED_TCR_INTn_ENABLE	BIT(7)
@@ -303,6 +306,8 @@
 
 #define NB_FIBER_STATS	1
 #define NB_STAT_MAX	3
+
+#define M88E1318S_MAX_LEDS	3
 
 MODULE_DESCRIPTION("Marvell PHY driver");
 MODULE_AUTHOR("Andy Fleming");
@@ -3572,7 +3577,7 @@ static int m88e1318_led_hw_control_get(struct phy_device *phydev, u8 index,
 {
 	int mode, reg;
 
-	if (index > 2)
+	if (index >= M88E1318S_MAX_LEDS)
 		return -EINVAL;
 
 	reg = phy_read_paged(phydev, MII_MARVELL_LED_PAGE,
@@ -3583,6 +3588,36 @@ static int m88e1318_led_hw_control_get(struct phy_device *phydev, u8 index,
 	mode = (reg >> (4 * index)) & 0xf;
 
 	return marvell_get_led_rules(index, rules, mode);
+}
+
+static int m88e1318_led_polarity_set(struct phy_device *phydev, int index,
+				     unsigned long modes)
+{
+	u16 val = 0;
+	u32 mode;
+
+	if (index >= M88E1318S_MAX_LEDS)
+		return -EINVAL;
+
+	for_each_set_bit(mode, &modes, __PHY_LED_MODES_NUM) {
+		switch (mode) {
+		case PHY_LED_ACTIVE_LOW:
+			break;
+		case PHY_LED_ACTIVE_HIGH:
+			val |= MII_88E1318S_PHY_LED_POL_ACT_HIGH(index);
+			break;
+		case PHY_LED_INACTIVE_HIGH_IMPEDANCE:
+			val |= MII_88E1318S_PHY_LED_POL_HIGH_IMP(index);
+			break;
+		default:
+			return -EINVAL;
+		}
+	}
+
+	return phy_modify_paged(phydev, MII_MARVELL_LED_PAGE,
+				MII_88E1318S_PHY_LED_POL,
+				MII_88E1318S_PHY_LED_POL_ACT_HIGH(index) |
+				MII_88E1318S_PHY_LED_POL_HIGH_IMP(index), val);
 }
 
 static int marvell_probe(struct phy_device *phydev)
@@ -3833,6 +3868,7 @@ static struct phy_driver marvell_drivers[] = {
 		.led_hw_is_supported = m88e1318_led_hw_is_supported,
 		.led_hw_control_set = m88e1318_led_hw_control_set,
 		.led_hw_control_get = m88e1318_led_hw_control_get,
+		.led_polarity_set = m88e1318_led_polarity_set,
 	},
 	{
 		.phy_id = MARVELL_PHY_ID_88E1145,
@@ -3947,6 +3983,7 @@ static struct phy_driver marvell_drivers[] = {
 		.led_hw_is_supported = m88e1318_led_hw_is_supported,
 		.led_hw_control_set = m88e1318_led_hw_control_set,
 		.led_hw_control_get = m88e1318_led_hw_control_get,
+		.led_polarity_set = m88e1318_led_polarity_set,
 		.attach_mii_port = m88e1510_attach_mii_port,
 	},
 	{
