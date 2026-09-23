@@ -9,6 +9,7 @@
 #define __SOCE_DSA_H
 
 #include <linux/types.h>
+#include <linux/mutex.h>
 
 #include <net/dsa.h>
 
@@ -18,8 +19,18 @@ struct soce_dsa_local {
 	void __iomem *base_addr;
 };
 
+struct soce_features {
+	u32 num_ports;
+	bool port_vlan;
+};
+
 struct soce_priv {
 	struct soce_dsa_local local;
+	struct soce_features features;
+	struct mutex vlan_lock; /* Serializes selector-based VLAN accesses */
+	u32 *vlan_members;
+	u32 *vlan_untagged;
+	u16 port_pvid[SOCE_MAX_NUM_PORTS];
 	struct dsa_switch ds;
 };
 
