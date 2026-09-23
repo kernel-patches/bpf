@@ -19767,6 +19767,21 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 	return -EFAULT;
 }
 
+/* Did the jump at @prev take the walk out of the loop @prev is in? */
+static bool left_loop(struct bpf_verifier_env *env, int prev, int insn_idx)
+{
+	struct bpf_insn_aux_data *aux = env->insn_aux_data;
+	struct bpf_insn *insn;
+
+	if (prev < 0 || prev >= env->prog->len || !aux[prev].scc ||
+	    aux[prev].scc == aux[insn_idx].scc)
+		return false;
+	/* the callee is not in SCC of the call, the insn after the call is */
+	insn = &env->prog->insnsi[prev];
+	return !((BPF_CLASS(insn->code) == BPF_JMP || BPF_CLASS(insn->code) == BPF_JMP32) &&
+		 BPF_OP(insn->code) == BPF_CALL);
+}
+
 static int do_check(struct bpf_verifier_env *env)
 {
 	bool pop_log = !(env->log.level & BPF_LOG_LEVEL2);
@@ -19805,6 +19820,8 @@ static int do_check(struct bpf_verifier_env *env)
 
 		state->last_insn_idx = env->prev_insn_idx;
 		state->insn_idx = env->insn_idx;
+		if (env->widen_loops && left_loop(env, prev_insn_idx, env->insn_idx))
+			bpf_scc_mark_exit(env, state, prev_insn_idx);
 		/*
 		 * Record the incoming edge so active and queued paths use the same
 		 * branch-recording path. A zero-offset conditional has identical
@@ -19933,6 +19950,9 @@ static int do_check(struct bpf_verifier_env *env)
 		} else if (err < 0) {
 			return err;
 		} else if (err == PROCESS_BPF_EXIT) {
+			/* exit or bpf_throw() inside of a loop */
+			if (env->widen_loops)
+				bpf_scc_mark_exit(env, state, env->insn_idx);
 			goto process_bpf_exit;
 		} else if (err == INSN_IDX_UPDATED) {
 		} else if (err == 0) {

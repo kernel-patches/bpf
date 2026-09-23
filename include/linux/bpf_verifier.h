@@ -910,6 +910,8 @@ struct bpf_scc_visit {
 	struct bpf_verifier_state *entry_state;
 	struct bpf_scc_backedge *backedges; /* list of backedges */
 	u32 num_backedges;
+	/* some state left the SCC since entry_state was set */
+	bool exited;
 };
 
 /* An array of bpf_scc_visit structs sharing tht same bpf_scc_callchain->scc
@@ -1264,6 +1266,7 @@ int mark_chain_precision(struct bpf_verifier_env *env, int regno);
 
 int bpf_is_state_visited(struct bpf_verifier_env *env, int insn_idx);
 bool bpf_same_loop(struct bpf_verifier_state *old, struct bpf_verifier_state *cur);
+void bpf_scc_mark_exit(struct bpf_verifier_env *env, struct bpf_verifier_state *st, int insn_idx);
 int bpf_widen_loop_head(struct bpf_verifier_env *env, int insn_idx, bool backedge,
 			struct bpf_verifier_state *old, struct bpf_verifier_state *cur);
 int bpf_update_branch_counts(struct bpf_verifier_env *env, struct bpf_verifier_state *st);

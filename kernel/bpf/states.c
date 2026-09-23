@@ -170,6 +170,7 @@ static int maybe_enter_scc(struct bpf_verifier_env *env, struct bpf_verifier_sta
 		return -ENOMEM;
 	if (!visit->entry_state) {
 		visit->entry_state = st;
+		visit->exited = false;
 		if (env->log.level & BPF_LOG_LEVEL2)
 			verbose(env, "SCC enter %s\n", format_callchain(env, callchain));
 	}
@@ -212,6 +213,16 @@ static int maybe_exit_scc(struct bpf_verifier_env *env, struct bpf_verifier_stat
 	}
 	if (visit->entry_state != st)
 		return 0;
+	/*
+	 * All states that came from @st are done. If some of them went
+	 * around the loop and none left it, nothing that enters the loop
+	 * the way @st did ever leaves it.
+	 */
+	if (env->widen_loops && !st->speculative && visit->backedges && !visit->exited) {
+		verbose(env, "loop at insn %d never exits\n", st->insn_idx);
+		env->widen_used = true;
+		return -EINVAL;
+	}
 	if (env->log.level & BPF_LOG_LEVEL2)
 		verbose(env, "SCC exit %s\n", format_callchain(env, callchain));
 	visit->entry_state = NULL;
@@ -219,6 +230,32 @@ static int maybe_exit_scc(struct bpf_verifier_env *env, struct bpf_verifier_stat
 	visit->num_backedges = 0;
 	update_peak_states(env);
 	return propagate_backedges(env, visit);
+}
+
+/*
+ * @st left the loop that @insn_idx of its current frame is in. The loop is
+ * left when the frame that bpf_scc_visit is for leaves it. Loops in callees
+ * of that frame are part of one trip around the loop of the caller.
+ */
+void bpf_scc_mark_exit(struct bpf_verifier_env *env, struct bpf_verifier_state *st, int insn_idx)
+{
+	struct bpf_scc_callchain *callchain = &env->callchain_buf;
+	struct bpf_scc_visit *visit;
+	u32 i, callsite;
+
+	if (st->speculative || !env->insn_aux_data[insn_idx].scc)
+		return;
+	memset(callchain, 0, sizeof(*callchain));
+	for (i = 0; i < st->curframe; i++) {
+		callsite = bpf_frame_insn_idx(st, i);
+		if (env->insn_aux_data[callsite].scc)
+			return;
+		callchain->callsites[i] = callsite;
+	}
+	callchain->scc = env->insn_aux_data[insn_idx].scc;
+	visit = scc_visit_lookup(env, callchain);
+	if (visit)
+		visit->exited = true;
 }
 
 /* Lookup an bpf_scc_visit instance corresponding to @st callchain
@@ -1470,6 +1507,9 @@ skip_inf_loop_check:
 		if (states_equal(env, &sl->state, cur, loop ? RANGE_WITHIN : NOT_EXACT)) {
 hit:
 			sl->hit_cnt++;
+			/* what follows the old state was seen, it may leave the loop */
+			if (env->widen_loops && !sl->state.branches)
+				bpf_scc_mark_exit(env, cur, insn_idx);
 
 			/* if previous state reached the exit with precision and
 			 * current state is equivalent to it (except precision marks)
