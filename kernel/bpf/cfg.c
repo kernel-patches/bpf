@@ -137,8 +137,14 @@ static int push_insn(int t, int w, int e, struct bpf_verifier_env *env)
 		insn_stack[env->cfg.cur_stack++] = w;
 		return KEEP_EXPLORING;
 	} else if ((insn_state[w] & 0xF0) == DISCOVERED) {
-		if (env->bpf_capable)
+		if (env->bpf_capable) {
+			env->insn_aux_data[w].loop_head = true;
+			if (e == FALLTHROUGH)
+				env->insn_aux_data[t].backedge_ft = true;
+			else
+				env->insn_aux_data[t].backedge_br = true;
 			return DONE_EXPLORING;
+		}
 		verbose_linfo(env, t, "%d: ", t);
 		verbose_linfo(env, w, "%d: ", w);
 		verbose(env, "back-edge from insn %d to %d\n", t, w);
