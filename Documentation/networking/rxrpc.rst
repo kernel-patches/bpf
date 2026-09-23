@@ -870,7 +870,6 @@ The kernel interface functions are as follows:
 	int rxrpc_kernel_send_data(struct socket *sock,
 				   struct rxrpc_call *call,
 				   struct msghdr *msg,
-				   size_t len,
 				   rxrpc_notify_end_tx_t notify_end_rx);
 
      This is used to supply either the request part of a client call or the
@@ -880,12 +879,15 @@ The kernel interface functions are as follows:
      MSG_MORE if there will be subsequent data sends for this call.
 
      The msg must not specify a destination address, control data or any flags
-     other than MSG_MORE.  len is the total amount of data to transmit.
+     other than MSG_MORE.
 
      notify_end_rx can be NULL or it can be used to specify a function to be
      called when the call changes state to end the Tx phase.  This function is
      called with a spinlock held to prevent the last DATA packet from being
      transmitted until the function returns.
+
+     It returns 0 if all the data is queued and a negative error code on
+     failure.
 
  (#) Receive data from a call::
 
