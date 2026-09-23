@@ -692,6 +692,8 @@ struct bpf_insn_aux_data {
 	 */
 	u64 fastcall_spills_num:3;
 	u64 arg_prog:4;
+	u64 throw_call:1; /* call to bpf_throw() */
+	u64 resume_call:1; /* call to bpf_unwind_resume() */
 
 	/* below flags are initialized once */
 	u64 jmp_point:1;
