@@ -74,7 +74,7 @@ static struct workqueue_struct *rxperf_workqueue;
 static void rxperf_deliver_to_call(struct work_struct *work);
 static int rxperf_deliver_param_block(struct rxperf_call *call);
 static int rxperf_deliver_request(struct rxperf_call *call);
-static int rxperf_process_call(struct rxperf_call *call);
+static void rxperf_process_call(struct rxperf_call *call);
 static void rxperf_charge_preallocation(struct work_struct *work);
 
 static DECLARE_WORK(rxperf_charge_preallocation_work,
@@ -293,18 +293,28 @@ static void rxperf_deliver_to_call(struct work_struct *work)
 	       state == RXPERF_CALL_SV_AWAIT_ACK
 	       ) {
 		if (state == RXPERF_CALL_SV_AWAIT_ACK) {
-			if (!rxrpc_kernel_check_life(rxperf_socket, call->rxcall))
+			size_t len = 0;
+			iov_iter_kvec(&call->iter, ITER_DEST, NULL, 0, 0);
+			ret = rxrpc_kernel_recv_data(rxperf_socket,
+						     call->rxcall, &call->iter,
+						     &len, false, &remote_abort,
+						     &call->service_id);
+
+			if (ret == -EINPROGRESS || ret == -EAGAIN)
+				return;
+			if (ret < 0 || ret == 1) {
+				if (ret == 1)
+					ret = 0;
 				goto call_complete;
+			}
 			return;
 		}
 
 		ret = call->deliver(call);
-		if (ret == 0)
-			ret = rxperf_process_call(call);
-
 		switch (ret) {
 		case 0:
-			continue;
+			rxperf_process_call(call);
+			return;
 		case -EINPROGRESS:
 		case -EAGAIN:
 			return;
@@ -496,7 +506,7 @@ static int rxperf_deliver_request(struct rxperf_call *call)
 /*
  * Process a call for which we've received the request.
  */
-static int rxperf_process_call(struct rxperf_call *call)
+static void rxperf_process_call(struct rxperf_call *call)
 {
 	struct msghdr msg = {};
 	struct bio_vec bv;
@@ -527,11 +537,11 @@ static int rxperf_process_call(struct rxperf_call *call)
 	ret = rxrpc_kernel_send_data(rxperf_socket, call->rxcall, &msg,
 				     rxperf_notify_end_reply_tx);
 	if (ret == 0)
-		return 0;
+		return;
+
 send_error:
 	rxrpc_kernel_abort_call(rxperf_socket, call->rxcall, RXGEN_SS_MARSHAL,
 				ret, rxperf_abort_send_error);
-	return ret;
 }
 
 /*
@@ -684,4 +694,3 @@ static void __exit rxperf_exit(void)
 	rcu_barrier();
 }
 module_exit(rxperf_exit);
-

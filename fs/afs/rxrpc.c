@@ -448,13 +448,14 @@ error_do_abort:
 		return;
 	}
 
-	if (ret == -ECONNABORTED) {
+	if (ret == -ESHUTDOWN) {
 		len = 0;
 		iov_iter_kvec(&msg.msg_iter, ITER_DEST, NULL, 0, 0);
-		rxrpc_kernel_recv_data(call->net->socket, rxcall,
-				       &msg.msg_iter, &len, false,
-				       &call->abort_code, &call->service_id);
-		call->responded = true;
+		ret = rxrpc_kernel_recv_data(call->net->socket, rxcall,
+					     &msg.msg_iter, &len, false,
+					     &call->abort_code, &call->service_id);
+		if (ret == -ECONNABORTED)
+			call->responded = true;
 	}
 	call->error = ret;
 	trace_afs_call_done(call);
