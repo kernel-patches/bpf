@@ -223,8 +223,11 @@ const struct bpf_func_proto bpf_tcp_ops_get_retval_proto = {
 BPF_CALL_2(bpf_tcp_ops_cb_flags_set, struct sock *, sk, int, argval)
 {
 	int val = argval & BPF_SOCK_OPS_ALL_CB_FLAGS;
+	int err;
 
-	tcp_sk(sk)->bpf_sock_ops_cb_flags = val;
+	err = tcp_set_sock_ops_cb_flags(sk, val);
+	if (err)
+		return err;
 
 	return argval & ~BPF_SOCK_OPS_ALL_CB_FLAGS;
 }
