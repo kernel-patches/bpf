@@ -394,8 +394,8 @@ int gem_set_hwtst(struct net_device *netdev,
 	enum macb_bd_control rx_bd_control = TSTAMP_DISABLED;
 	int rx_filter = tstamp_config->rx_filter;
 	struct macb *bp = netdev_priv(netdev);
+	u32 ncr_mask = MACB_BIT(SRTSM);
 	unsigned long flags;
-	u32 ncr_mask = 0;
 	u32 ncr_bits = 0;
 	u32 regval;
 
@@ -432,7 +432,6 @@ int gem_set_hwtst(struct net_device *netdev,
 	case HWTSTAMP_FILTER_PTP_V2_L4_DELAY_REQ:
 		rx_bd_control = TSTAMP_ALL_PTP_FRAMES;
 		rx_filter = HWTSTAMP_FILTER_PTP_V2_EVENT;
-		ncr_mask |= MACB_BIT(SRTSM);
 		ncr_bits |= MACB_BIT(SRTSM);
 		break;
 	case HWTSTAMP_FILTER_PTP_V1_L4_SYNC:
@@ -447,11 +446,9 @@ int gem_set_hwtst(struct net_device *netdev,
 	}
 
 	spin_lock_irqsave(&bp->lock, flags);
-	if (ncr_mask) {
-		regval = macb_readl(bp, NCR);
-		regval = (regval & ~ncr_mask) | ncr_bits;
-		macb_writel(bp, NCR, regval);
-	}
+	regval = macb_readl(bp, NCR);
+	regval = (regval & ~ncr_mask) | ncr_bits;
+	macb_writel(bp, NCR, regval);
 
 	gem_writel(bp, TXBDCTRL, GEM_BF(TXTSMODE, tx_bd_control));
 	gem_writel(bp, RXBDCTRL, GEM_BF(RXTSMODE, rx_bd_control));
