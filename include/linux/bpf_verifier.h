@@ -700,6 +700,7 @@ struct bpf_insn_aux_data {
 	u64 resume_call:1; /* call to bpf_unwind_resume() */
 	u64 in_cleanup_pad:1; /* runs with an exception in flight, in the pad's frame */
 	u64 outside_cleanup_pad:1; /* ... and the other way round */
+	u64 cleanup_pad_head:1; /* first insn of a landing pad */
 
 	/* below flags are initialized once */
 	u64 jmp_point:1;
