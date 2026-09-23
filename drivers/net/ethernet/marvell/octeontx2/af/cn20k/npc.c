@@ -15,6 +15,7 @@
 #include "cn20k/npc.h"
 #include "cn20k/reg.h"
 #include "rvu_npc_fs.h"
+#include <rvu_trace.h>
 
 static struct npc_priv_t *npc_priv;
 
@@ -973,13 +974,15 @@ static void npc_cn20k_config_kw_x2(struct rvu *rvu, struct npc_mcam *mcam,
 				   int blkaddr, int index, u8 intf,
 				   struct cn20k_mcam_entry *entry,
 				   int bank, u8 kw_type, int kw,
-				   u8 req_kw_type)
+				   u8 req_kw_type, u16 actindex)
 {
+	u64 w0_cam0, w0_cam1, w1_cam0, w1_cam1;
+	u64 w2_cam0, w2_cam1, w3_cam0, w3_cam1;
 	u64 intf_ext = 0, intf_ext_mask = 0;
 	u8 tx_intf_mask = ~intf & 0x3;
 	u8 tx_intf = intf, kex_type;
 	u8 kw_type_mask = ~kw_type;
-	u64 cam0, cam1, kex_cfg;
+	u64 kex_cfg;
 
 	if (is_npc_intf_tx(intf)) {
 		/* Last bit must be set and rest don't care
@@ -1018,43 +1021,46 @@ static void npc_cn20k_config_kw_x2(struct rvu *rvu, struct npc_mcam *mcam,
 		    intf_ext_mask);
 
 	/* Set the match key */
-	npc_cn20k_get_keyword(entry, kw, &cam0, &cam1);
+	npc_cn20k_get_keyword(entry, kw, &w0_cam0, &w0_cam1);
 	rvu_write64(rvu, blkaddr,
 		    NPC_AF_CN20K_MCAMEX_BANKX_CAMX_W0_EXT(index, bank, 1),
-		    cam1);
+		    w0_cam1);
 	rvu_write64(rvu, blkaddr,
 		    NPC_AF_CN20K_MCAMEX_BANKX_CAMX_W0_EXT(index, bank, 0),
-		    cam0);
+		    w0_cam0);
 
-	npc_cn20k_get_keyword(entry, kw + 1, &cam0, &cam1);
+	npc_cn20k_get_keyword(entry, kw + 1, &w1_cam0, &w1_cam1);
 	rvu_write64(rvu, blkaddr,
 		    NPC_AF_CN20K_MCAMEX_BANKX_CAMX_W1_EXT(index, bank, 1),
-		    cam1);
+		    w1_cam1);
 	rvu_write64(rvu, blkaddr,
 		    NPC_AF_CN20K_MCAMEX_BANKX_CAMX_W1_EXT(index, bank, 0),
-		    cam0);
+		    w1_cam0);
 
-	npc_cn20k_get_keyword(entry, kw + 2, &cam0, &cam1);
+	npc_cn20k_get_keyword(entry, kw + 2, &w2_cam0, &w2_cam1);
 	rvu_write64(rvu, blkaddr,
 		    NPC_AF_CN20K_MCAMEX_BANKX_CAMX_W2_EXT(index, bank, 1),
-		    cam1);
+		    w2_cam1);
 	rvu_write64(rvu, blkaddr,
 		    NPC_AF_CN20K_MCAMEX_BANKX_CAMX_W2_EXT(index, bank, 0),
-		    cam0);
+		    w2_cam0);
 
-	npc_cn20k_get_keyword(entry, kw + 3, &cam0, &cam1);
+	npc_cn20k_get_keyword(entry, kw + 3, &w3_cam0, &w3_cam1);
 	rvu_write64(rvu, blkaddr,
 		    NPC_AF_CN20K_MCAMEX_BANKX_CAMX_W3_EXT(index, bank, 1),
-		    cam1);
+		    w3_cam1);
 	rvu_write64(rvu, blkaddr,
 		    NPC_AF_CN20K_MCAMEX_BANKX_CAMX_W3_EXT(index, bank, 0),
-		    cam0);
+		    w3_cam0);
+
+	trace_otx2_npc_cam(actindex, bank, w0_cam0, w0_cam1, w1_cam0, w1_cam1);
+	trace_otx2_npc_cam(actindex, bank, w2_cam0, w2_cam1, w3_cam0, w3_cam1);
 }
 
 static void npc_cn20k_config_kw_x4(struct rvu *rvu, struct npc_mcam *mcam,
 				   int blkaddr, int index, u8 intf,
 				   struct cn20k_mcam_entry *entry,
-				   u8 kw_type, u8 req_kw_type)
+				   u8 kw_type, u8 req_kw_type, u16 actindex)
 {
 	int kw = 0, bank;
 
@@ -1062,7 +1068,7 @@ static void npc_cn20k_config_kw_x4(struct rvu *rvu, struct npc_mcam *mcam,
 		npc_cn20k_config_kw_x2(rvu, mcam, blkaddr,
 				       index, intf,
 				       entry, bank, kw_type,
-				       kw, req_kw_type);
+				       kw, req_kw_type, actindex);
 }
 
 int npc_cn20k_config_mcam_entry(struct rvu *rvu, int blkaddr, int index,
@@ -1071,10 +1077,11 @@ int npc_cn20k_config_mcam_entry(struct rvu *rvu, int blkaddr, int index,
 {
 	struct npc_mcam *mcam = &rvu->hw->mcam;
 	int mcam_idx = index % mcam->banksize;
+	int actbank = npc_get_bank(mcam, index);
 	int bank = index / mcam->banksize;
 	u64 bank_cfg = (u64)hw_prio << 24;
+	u8 kw_type, tx_intf = intf;
 	int kw = 0;
-	u8 kw_type;
 
 	if (index < 0 || index >= mcam->total_entries)
 		return -EINVAL;
@@ -1097,7 +1104,7 @@ int npc_cn20k_config_mcam_entry(struct rvu *rvu, int blkaddr, int index,
 		npc_clear_x2_entry(rvu, blkaddr, bank, mcam_idx);
 		npc_cn20k_config_kw_x2(rvu, mcam, blkaddr,
 				       mcam_idx, intf, entry,
-				       bank, kw_type, kw, req_kw_type);
+				       bank, kw_type, kw, req_kw_type, index);
 		/* Set 'action' */
 		rvu_write64(rvu, blkaddr,
 			    NPC_AF_CN20K_MCAMEX_BANKX_ACTIONX_EXT(mcam_idx,
@@ -1128,7 +1135,7 @@ int npc_cn20k_config_mcam_entry(struct rvu *rvu, int blkaddr, int index,
 
 		npc_cn20k_config_kw_x4(rvu, mcam, blkaddr,
 				       mcam_idx, intf, entry,
-				       kw_type, req_kw_type);
+				       kw_type, req_kw_type, index);
 		for (bank = 0; bank < mcam->banks_per_entry; bank++) {
 			/* Set 'action' */
 			rvu_write64(rvu, blkaddr,
@@ -1157,6 +1164,10 @@ int npc_cn20k_config_mcam_entry(struct rvu *rvu, int blkaddr, int index,
 
 	/* TODO: */
 	/* PF installing VF rule */
+	if (is_npc_intf_tx(intf))
+		tx_intf &= 0x1;
+	trace_otx2_npc_action(index, actbank, tx_intf, (u8)enable,
+			      entry->action, entry->vtag_action);
 	if (npc_cn20k_enable_mcam_entry(rvu, blkaddr, index, enable))
 		return -EINVAL;
 
@@ -1434,7 +1445,7 @@ int rvu_mbox_handler_npc_cn20k_mcam_alloc_and_write_entry(struct rvu *rvu,
 {
 	struct rvu_pfvf *pfvf = rvu_get_pfvf(rvu, req->hdr.pcifunc);
 	struct npc_mcam_free_entry_req free_req = { 0 };
-	struct npc_mcam_alloc_entry_req entry_req;
+	struct npc_mcam_alloc_entry_req entry_req = { 0 };
 	struct npc_mcam_alloc_entry_rsp entry_rsp;
 	struct npc_mcam *mcam = &rvu->hw->mcam;
 	u16 entry = NPC_MCAM_ENTRY_INVALID;
