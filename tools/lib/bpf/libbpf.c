@@ -10292,11 +10292,31 @@ int bpf_object__set_kversion(struct bpf_object *obj, __u32 kern_version)
 int bpf_object__gen_loader(struct bpf_object *obj, struct gen_loader_opts *opts)
 {
 	struct bpf_gen *gen;
+	size_t i;
 
 	if (!opts)
 		return libbpf_err(-EFAULT);
 	if (!OPTS_VALID(opts, gen_loader_opts))
 		return libbpf_err(-EINVAL);
+
+	/*
+	 * Manually-loaded programs are not visible to gen_loader (see
+	 * bpf_program__set_load_strategy()'s MANUAL case), and marking a
+	 * program MANUAL happens during bpf_object__open(), before this
+	 * function can ever run, so that guard can never catch it here.
+	 * Reject any pre-existing MANUAL program now, since this is the
+	 * earliest point where both are known.
+	 */
+	for (i = 0; i < obj->nr_programs; i++) {
+		struct bpf_program *prog = &obj->programs[i];
+
+		if (prog->load_strategy == BPF_PROG_LOAD_STRATEGY_MANUAL) {
+			pr_warn("prog '%s': gen_loader does not support manually-loaded programs\n",
+				prog->name);
+			return libbpf_err(-EOPNOTSUPP);
+		}
+	}
+
 	gen = calloc(1, sizeof(*gen));
 	if (!gen)
 		return libbpf_err(-ENOMEM);
@@ -15903,16 +15923,10 @@ int bpf_program__set_load_strategy(struct bpf_program *prog, enum bpf_prog_load_
 		break;
 	case BPF_PROG_LOAD_STRATEGY_MANUAL:
 		/*
-		 * Manually-loaded programs are not supported for gen_loader.
-		 * This is because bpf_object_load_prog is not called for
-		 * manually-loaded programs, so such programs are not visible
-		 * to gen_loader. For this reason, prevent calling
-		 * bpf_program__set_load_strategy(MANUAL) when gen_loader was
-		 * used to generate a BPF object loader.
-		 * A gen_loader implementation is being called for autoloaded
-		 * programs and defines its own model for loading BPF programs.
-		 * To pass a BPF program to gen_loader, set the program's load strategy
-		 * to BPF_PROG_LOAD_STRATEGY_AUTO.
+		 * Manually-loaded programs are not visible to gen_loader,
+		 * since bpf_object__load_progs() skips them during the bulk
+		 * load pass; see bpf_object__gen_loader()'s own guard for
+		 * the full explanation.
 		 */
 		if (obj->gen_loader)
 			return libbpf_err(-EOPNOTSUPP);
