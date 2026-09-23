@@ -3,6 +3,7 @@
 #define _LINUX_IF_HSR_H_
 
 #include <linux/types.h>
+#include <linux/skbuff.h>
 
 struct net_device;
 
@@ -21,6 +22,16 @@ enum hsr_port_type {
 	HSR_PT_MASTER,
 	HSR_PT_PORTS,	/* This must be the last item in the enum */
 };
+
+#define HSR_INLINE_HDR	0xaf485352
+struct hsr_inline_header {
+	uint8_t tx_port;
+	uint8_t hsr_hdr;
+	uint8_t __pad0[4];
+	__be32 magic;
+	uint8_t __pad1[2];
+	__be16 eth_type;
+} __packed;
 
 /* HSR Tag.
  * As defined in IEC-62439-3:2010, the HSR tag is really { ethertype = 0x88FB,
