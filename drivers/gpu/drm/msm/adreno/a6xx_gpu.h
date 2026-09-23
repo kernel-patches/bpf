@@ -55,6 +55,7 @@ static const struct a6xx_limits_tbl name = {	\
  * @hwcg: hw clock gating register sequence
  * @protect: CP_PROTECT settings
  * @pwrup_reglist pwrup reglist for preemption
+ * @thinmem_config: GMU thinmem configuration
  */
 struct a6xx_info {
 	const struct adreno_reglist *hwcg;
@@ -71,6 +72,7 @@ struct a6xx_info {
 	const struct a6xx_bcm *bcms;
 	const struct a6xx_hfi_clx_table_v2_cmd *clx_tbl;
 	const struct a6xx_limits_tbl *limits_tbl;
+	u32 thinmem_config;
 };
 
 struct a6xx_gpu {

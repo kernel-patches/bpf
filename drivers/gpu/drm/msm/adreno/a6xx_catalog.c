@@ -3396,6 +3396,7 @@ static const struct adreno_info a8xx_gpus[] = {
 			.gbif_cx = a850_gbif,
 			.max_slices = 3,
 			.gmu_chipid = 0x80b0100,
+			.thinmem_config = 14,
 			.bcms = (const struct a6xx_bcm[]) {
 				{ .name = "SH0", .buswidth = 32 },
 				{ .name = "MC0", .buswidth = 4 },
