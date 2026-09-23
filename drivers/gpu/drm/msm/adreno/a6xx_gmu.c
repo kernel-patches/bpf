@@ -145,6 +145,19 @@ bool a8xx_gmu_gx_is_on(struct adreno_gpu *adreno_gpu)
 	if (!gmu->initialized)
 		return false;
 
+	/*
+	 * Use the CX_MISC_GFX_PWR_CLK_STATUS register instead of the GMUCX
+	 * register to ensure correct GDSC and clock status reporting even
+	 * when the GMU MX domain is powered off
+	 */
+	if (adreno_is_a850(adreno_gpu)) {
+		val = a6xx_cx_misc_read(a6xx_gpu, REG_A8XX_CX_MISC_GFX_PWR_CLK_STATUS);
+
+		return !(val &
+			(A8XX_CX_MISC_GFX_PWR_CLK_STATUS_GX_GDSC_POWER_OFF |
+			 A8XX_CX_MISC_GFX_PWR_CLK_STATUS_GX_CLK_OFF));
+	}
+
 	val = gmu_read(gmu, REG_A8XX_GMU_PWR_CLK_STATUS);
 
 	return !(val &
@@ -645,7 +658,7 @@ static void a6xx_rpmh_stop(struct a6xx_gmu *gmu)
 	if (!test_and_clear_bit(GMU_STATUS_FW_START, &gmu->status))
 		return;
 
-	if (adreno_is_a840(adreno_gpu))
+	if (adreno_is_a840(adreno_gpu) || adreno_is_a850(adreno_gpu))
 		bitmask = BIT(30);
 
 	gmu_write(gmu, REG_A6XX_GMU_RSCC_CONTROL_REQ, 1);
@@ -2170,6 +2183,9 @@ void a6xx_gmu_remove(struct a6xx_gpu *a6xx_gpu)
 		dev_pm_domain_detach(gmu->gxpd, false);
 	}
 
+	if (!IS_ERR_OR_NULL(gmu->gmu_mxpd))
+		dev_pm_domain_detach(gmu->gmu_mxpd, false);
+
 	if (!IS_ERR_OR_NULL(gmu->qmp))
 		qmp_put(gmu->qmp);
 
@@ -2314,7 +2330,8 @@ int a6xx_gmu_init(struct a6xx_gpu *a6xx_gpu, struct device_node *node)
 	struct adreno_gpu *adreno_gpu = &a6xx_gpu->base;
 	struct msm_gpu *gpu = &adreno_gpu->base;
 	struct a6xx_gmu *gmu = &a6xx_gpu->gmu;
-	struct device_link *link;
+	struct device_link *gmu_mx_link = NULL;
+	struct device_link *cx_link;
 	resource_size_t start;
 	struct resource *res;
 	int ret;
@@ -2461,10 +2478,25 @@ int a6xx_gmu_init(struct a6xx_gpu *a6xx_gpu, struct device_node *node)
 		goto err_mmio;
 	}
 
-	link = device_link_add(gmu->dev, gmu->cxpd, DL_FLAG_PM_RUNTIME);
-	if (!link) {
+	cx_link = device_link_add(gmu->dev, gmu->cxpd, DL_FLAG_PM_RUNTIME);
+	if (!cx_link) {
 		ret = -ENODEV;
 		goto detach_cxpd;
+	}
+
+	/* Optionally attach the GMU MX power domain */
+	gmu->gmu_mxpd = dev_pm_domain_attach_by_name(gmu->dev, "gmu_mx");
+	if (IS_ERR(gmu->gmu_mxpd)) {
+		ret = PTR_ERR(gmu->gmu_mxpd);
+		goto detach_cxpd_link;
+	}
+
+	if (gmu->gmu_mxpd) {
+		gmu_mx_link = device_link_add(gmu->dev, gmu->gmu_mxpd, DL_FLAG_PM_RUNTIME);
+		if (!gmu_mx_link) {
+			ret = -ENODEV;
+			goto detach_gmu_mxpd;
+		}
 	}
 
 	/* Other errors are handled during GPU ACD probe */
@@ -2508,7 +2540,15 @@ detach_gxpd:
 	if (!IS_ERR_OR_NULL(gmu->qmp))
 		qmp_put(gmu->qmp);
 
-	device_link_del(link);
+	if (!IS_ERR_OR_NULL(gmu_mx_link))
+		device_link_del(gmu_mx_link);
+
+detach_gmu_mxpd:
+	if (gmu->gmu_mxpd)
+		dev_pm_domain_detach(gmu->gmu_mxpd, false);
+
+detach_cxpd_link:
+	device_link_del(cx_link);
 
 detach_cxpd:
 	dev_pm_domain_detach(gmu->cxpd, false);
