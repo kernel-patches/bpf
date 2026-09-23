@@ -2600,8 +2600,7 @@
 			interconnects = <&mc TEGRA194_MEMORY_CLIENT_PCIE4R &emc>,
 					<&mc TEGRA194_MEMORY_CLIENT_PCIE4W &emc>;
 			interconnect-names = "dma-mem", "write";
-			iommu-map = <0x0 &smmu TEGRA194_SID_PCIE4 0x1000>;
-			iommu-map-mask = <0x0>;
+			iommus = <&smmu TEGRA194_SID_PCIE4>;
 			dma-coherent;
 		};
 
@@ -2693,8 +2692,7 @@
 			interconnects = <&mc TEGRA194_MEMORY_CLIENT_PCIE0R &emc>,
 					<&mc TEGRA194_MEMORY_CLIENT_PCIE0W &emc>;
 			interconnect-names = "dma-mem", "write";
-			iommu-map = <0x0 &smmu TEGRA194_SID_PCIE0 0x1000>;
-			iommu-map-mask = <0x0>;
+			iommus = <&smmu TEGRA194_SID_PCIE0>;
 			dma-coherent;
 		};
 
@@ -2792,8 +2790,7 @@
 			interconnects = <&mc TEGRA194_MEMORY_CLIENT_PCIE5R &emc>,
 					<&mc TEGRA194_MEMORY_CLIENT_PCIE5W &emc>;
 			interconnect-names = "dma-mem", "write";
-			iommu-map = <0x0 &smmu TEGRA194_SID_PCIE5 0x1000>;
-			iommu-map-mask = <0x0>;
+			iommus = <&smmu TEGRA194_SID_PCIE5>;
 			dma-coherent;
 		};
 

@@ -4694,8 +4694,7 @@
 			interconnects = <&mc TEGRA234_MEMORY_CLIENT_PCIE10AR &emc>,
 					<&mc TEGRA234_MEMORY_CLIENT_PCIE10AW &emc>;
 			interconnect-names = "dma-mem", "write";
-			iommu-map = <0x0 &smmu_niso1 TEGRA234_SID_PCIE10 0x1000>;
-			iommu-map-mask = <0x0>;
+			iommus = <&smmu_niso1 TEGRA234_SID_PCIE10>;
 			dma-coherent;
 
 			status = "disabled";
@@ -5099,8 +5098,7 @@
 			interconnects = <&mc TEGRA234_MEMORY_CLIENT_PCIE5R &emc>,
 					<&mc TEGRA234_MEMORY_CLIENT_PCIE5W &emc>;
 			interconnect-names = "dma-mem", "write";
-			iommu-map = <0x0 &smmu_niso0 TEGRA234_SID_PCIE5 0x1000>;
-			iommu-map-mask = <0x0>;
+			iommus = <&smmu_niso0 TEGRA234_SID_PCIE5>;
 			dma-coherent;
 
 			status = "disabled";
@@ -5195,8 +5193,7 @@
 			interconnects = <&mc TEGRA234_MEMORY_CLIENT_PCIE6AR &emc>,
 					<&mc TEGRA234_MEMORY_CLIENT_PCIE6AW &emc>;
 			interconnect-names = "dma-mem", "write";
-			iommu-map = <0x0 &smmu_niso0 TEGRA234_SID_PCIE6 0x1000>;
-			iommu-map-mask = <0x0>;
+			iommus = <&smmu_niso0 TEGRA234_SID_PCIE6>;
 			dma-coherent;
 
 			status = "disabled";
@@ -5291,8 +5288,7 @@
 			interconnects = <&mc TEGRA234_MEMORY_CLIENT_PCIE7AR &emc>,
 					<&mc TEGRA234_MEMORY_CLIENT_PCIE7AW &emc>;
 			interconnect-names = "dma-mem", "write";
-			iommu-map = <0x0 &smmu_niso1 TEGRA234_SID_PCIE7 0x1000>;
-			iommu-map-mask = <0x0>;
+			iommus = <&smmu_niso1 TEGRA234_SID_PCIE7>;
 			dma-coherent;
 
 			status = "disabled";
