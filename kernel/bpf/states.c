@@ -281,6 +281,8 @@ static int add_scc_backedge(struct bpf_verifier_env *env,
 	}
 	if (env->log.level & BPF_LOG_LEVEL2)
 		verbose(env, "SCC backedge %s\n", format_callchain(env, callchain));
+	if (env->scc_converged)
+		__set_bit(callchain->scc, env->scc_converged);
 	backedge->next = visit->backedges;
 	visit->backedges = backedge;
 	visit->num_backedges++;
@@ -1166,6 +1168,9 @@ static bool is_backedge(struct bpf_verifier_env *env, int insn_idx)
 	return insn_idx == prev + 1 ? aux->backedge_ft : aux->backedge_br;
 }
 
+static bool iter_active_depths_differ(struct bpf_verifier_state *old,
+				      struct bpf_verifier_state *cur);
+
 /* The state of this walk that was the last to get to loop head @insn_idx. */
 static struct bpf_verifier_state *loop_head_state(struct bpf_verifier_env *env, int insn_idx)
 {
@@ -1181,6 +1186,24 @@ static struct bpf_verifier_state *loop_head_state(struct bpf_verifier_env *env, 
 			return &sl->state;
 	}
 	return NULL;
+}
+
+/*
+ * @cur got to loop head @insn_idx, @old is the state that started this trip
+ * around the loop if there is one. The trip is bounded at run time if it
+ * took from the budget of may_goto or got an element from an iterator.
+ * Otherwise may_goto has to be added to the back-edge if the loop is not
+ * walked to the end. Returns false if that is not possible.
+ */
+static bool loop_head_guard(struct bpf_verifier_env *env, int insn_idx,
+			    struct bpf_verifier_state *old, struct bpf_verifier_state *cur)
+{
+	if (!is_backedge(env, insn_idx))
+		return true;
+	if (old && (old->may_goto_depth != cur->may_goto_depth ||
+		    iter_active_depths_differ(old, cur)))
+		return true;
+	return bpf_mark_loop_guard(env, cur);
 }
 
 static bool states_maybe_looping(struct bpf_verifier_state *old,
@@ -1322,8 +1345,14 @@ int bpf_is_state_visited(struct bpf_verifier_env *env, int insn_idx)
 	int n, err, states_cnt = 0;
 	struct list_head *pos, *tmp, *head;
 
-	if (loop_head)
+	if (loop_head) {
 		widen_from = loop_head_state(env, insn_idx);
+		/* the loop cannot be bounded at run time, walk all of it */
+		if (!loop_head_guard(env, insn_idx, widen_from, cur)) {
+			loop_head = false;
+			widen_from = NULL;
+		}
+	}
 
 	force_new_state = env->test_state_freq || bpf_is_force_checkpoint(env, insn_idx) ||
 			  loop_head ||

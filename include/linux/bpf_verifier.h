@@ -706,6 +706,13 @@ struct bpf_insn_aux_data {
 	u32 backedge_ft:1; /* the edge to the next insn is a back-edge */
 	u32 backedge_br:1; /* the jump is a back-edge */
 	/*
+	 * The walk went over the back-edge of this insn with nothing to bound
+	 * the number of trips, in a state where bpf_throw() can and cannot be called.
+	 */
+	u32 guard_pending:1;
+	u32 guard_impossible:1;
+	u32 loop_guard:1; /* may_goto has to be added to the back-edge of this insn */
+	/*
 	 * CFG strongly connected component this instruction belongs to,
 	 * zero if it is a singleton SCC.
 	 */
@@ -1081,6 +1088,8 @@ struct bpf_verifier_env {
 	u32 scc_cnt;
 	/* per SCC constants that loop counters are compared with, see bpf_widen_loop_head() */
 	struct bpf_widen_thrs **scc_thrs;
+	/* SCCs where some state came back to a state that is still walked */
+	unsigned long *scc_converged;
 	/* states that come back to a loop head are widened instead of walking every iteration */
 	bool widen_loops;
 	/* the walk did or tried that, so a failure can be due to the lost precision */
@@ -1266,6 +1275,9 @@ int mark_chain_precision(struct bpf_verifier_env *env, int regno);
 
 int bpf_is_state_visited(struct bpf_verifier_env *env, int insn_idx);
 bool bpf_same_loop(struct bpf_verifier_state *old, struct bpf_verifier_state *cur);
+bool bpf_mark_loop_guard(struct bpf_verifier_env *env, struct bpf_verifier_state *cur);
+int bpf_commit_loop_guards(struct bpf_verifier_env *env);
+void bpf_throw(u64 cookie);
 void bpf_scc_mark_exit(struct bpf_verifier_env *env, struct bpf_verifier_state *st, int insn_idx);
 int bpf_widen_loop_head(struct bpf_verifier_env *env, int insn_idx, bool backedge,
 			struct bpf_verifier_state *old, struct bpf_verifier_state *cur);

@@ -1649,6 +1649,143 @@ static int add_hidden_subprog(struct bpf_verifier_env *env, struct bpf_insn *pat
 /* Do various post-verification rewrites in a single program pass.
  * These rewrites simplify JIT and interpreter implementations.
  */
+/*
+ * The walk with widened loops is done. Loops where some state came back to
+ * a state that was still walked were not walked to the end and have to be
+ * bounded at run time.
+ */
+int bpf_commit_loop_guards(struct bpf_verifier_env *env)
+{
+	struct bpf_insn_aux_data *aux = env->insn_aux_data;
+	int i;
+
+	for (i = 0; i < env->prog->len; i++) {
+		if (!aux[i].scc || !test_bit(aux[i].scc, env->scc_converged))
+			continue;
+		if (aux[i].guard_impossible) {
+			verbose(env, "loop with back-edge at insn %d cannot be bounded\n", i);
+			return -E2BIG;
+		}
+		if (aux[i].guard_pending) {
+			aux[i].loop_guard = true;
+			env->seen_exception = true;
+		}
+	}
+	return 0;
+}
+
+/* Jump from insn @from of the patch that replaces insn @idx to insn @target of the program. */
+static int guard_jump(struct bpf_insn *insn, int idx, int from, int cnt, int target)
+{
+	int off;
+
+	/* insns after @idx move by the size of the patch */
+	if (target > idx)
+		target += cnt - 1;
+	off = target - (idx + from) - 1;
+	if (BPF_OP(insn->code) == BPF_JA && BPF_CLASS(insn->code) == BPF_JMP32) {
+		insn->imm = off;
+		return 0;
+	}
+	if (off < S16_MIN || off > S16_MAX) {
+		if (BPF_OP(insn->code) != BPF_JA)
+			return -ERANGE;
+		*insn = BPF_JMP32_A(off);
+		return 0;
+	}
+	insn->off = off;
+	return 0;
+}
+
+/*
+ * The main pass went over the back-edge of jump @insn at @idx with a state
+ * that stands for any number of iterations. Nothing bounds the loop at run
+ * time, so add may_goto to the back-edge. The program cannot go on when
+ * may_goto is out of budget: nothing but the loop was verified for the state
+ * in the loop. Call bpf_throw(). The main pass made sure it can be called.
+ *
+ * back-edge is the jump:             back-edge is the edge to the next insn:
+ *   if cond goto guard                 if cond goto target
+ *   goto next                        guard:
+ * guard:                               may_goto throw
+ *   may_goto throw                     goto next
+ *   goto head                        throw:
+ * throw:                               r1 = 0
+ *   r1 = 0                             call bpf_throw
+ *   call bpf_throw                   next:
+ * next:
+ *
+ * Returns the number of insns in @buf.
+ */
+static int add_loop_guard(struct bpf_verifier_env *env, int idx, struct bpf_insn *buf,
+			  int stack_depth, u16 *stack_depth_extra)
+{
+	struct bpf_insn_aux_data *aux = &env->insn_aux_data[idx];
+	struct bpf_insn orig = env->prog->insnsi[idx];
+	bool ja = BPF_OP(orig.code) == BPF_JA;
+	bool gotol = ja && BPF_CLASS(orig.code) == BPF_JMP32;
+	int target = idx + 1 + (gotol ? orig.imm : orig.off);
+	bool guard_jump_edge = ja || aux->backedge_br;
+	struct bpf_insn *p = buf, *jeq, *skip = NULL, *back = NULL;
+	int stack_off, cnt, err = 0;
+
+	if (guard_jump_edge && !ja) {
+		*p = orig;
+		p->off = 1;
+		p++;
+		skip = p;
+		*p++ = BPF_JMP_A(0);
+	} else if (!guard_jump_edge) {
+		*p++ = orig;
+	}
+
+	/* the same insns may_goto is replaced with, see bpf_do_misc_fixups() */
+	if (bpf_jit_supports_timed_may_goto()) {
+		stack_off = -stack_depth - 16;
+		*stack_depth_extra = 16;
+		*p++ = BPF_LDX_MEM(BPF_DW, BPF_REG_AX, BPF_REG_10, stack_off);
+		jeq = p;
+		*p++ = BPF_JMP_IMM(BPF_JEQ, BPF_REG_AX, 0, 0);
+		*p++ = BPF_ALU64_IMM(BPF_SUB, BPF_REG_AX, 1);
+		*p++ = BPF_JMP_IMM(BPF_JNE, BPF_REG_AX, 0, 2);
+		*p++ = BPF_MOV64_IMM(BPF_REG_AX, stack_off);
+		*p++ = BPF_EMIT_CALL(arch_bpf_timed_may_goto);
+		*p++ = BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_AX, stack_off);
+	} else {
+		stack_off = -stack_depth - 8;
+		*stack_depth_extra = max_t(u16, *stack_depth_extra, 8);
+		*p++ = BPF_LDX_MEM(BPF_DW, BPF_REG_AX, BPF_REG_10, stack_off);
+		jeq = p;
+		*p++ = BPF_JMP_IMM(BPF_JEQ, BPF_REG_AX, 0, 0);
+		*p++ = BPF_ALU64_IMM(BPF_SUB, BPF_REG_AX, 1);
+		*p++ = BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_AX, stack_off);
+	}
+
+	if (guard_jump_edge) {
+		back = p;
+		*p++ = gotol ? orig : BPF_JMP_A(0);
+	} else {
+		/* over bpf_throw() to the loop head that follows */
+		*p++ = BPF_JMP_A(2);
+	}
+	jeq->off = p - jeq - 1;
+	*p++ = BPF_MOV64_IMM(BPF_REG_1, 0);
+	*p++ = BPF_EMIT_CALL(bpf_throw);
+	cnt = p - buf;
+
+	if (skip)
+		skip->off = cnt - (skip - buf) - 1;
+	if (back)
+		err = guard_jump(back, idx, back - buf, cnt, target);
+	else
+		err = guard_jump(&buf[0], idx, 0, cnt, target);
+	if (err) {
+		verbose(env, "insn %d: jump is out of range after may_goto is added\n", idx);
+		return err;
+	}
+	return cnt;
+}
+
 int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 {
 	struct bpf_prog *prog = env->prog;
@@ -1685,6 +1822,22 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 	}
 
 	for (i = 0; i < insn_cnt;) {
+		if (env->insn_aux_data[i + delta].loop_guard) {
+			cnt = add_loop_guard(env, i + delta, insn_buf, stack_depth,
+					     &stack_depth_extra);
+			if (cnt < 0)
+				return cnt;
+
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			if (!new_prog)
+				return -ENOMEM;
+
+			delta    += cnt - 1;
+			env->prog = prog = new_prog;
+			insn      = new_prog->insnsi + i + delta;
+			goto next_insn;
+		}
+
 		if (is_addr_space_cast32(env->prog, insn)) {
 			/* convert to 32-bit mov that clears upper 32-bit */
 			insn->code = BPF_ALU | BPF_MOV | BPF_X;

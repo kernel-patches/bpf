@@ -8734,6 +8734,73 @@ int bpf_widen_loop_head(struct bpf_verifier_env *env, int insn_idx, bool backedg
 	return 0;
 }
 
+static bool program_returns_void(struct bpf_verifier_env *env);
+static bool return_retval_range(struct bpf_verifier_env *env, struct bpf_retval_range *range);
+
+/* Why bpf_throw() cannot be called in @st, NULL if it can. */
+static const char *cannot_throw(struct bpf_verifier_env *env, struct bpf_verifier_state *st)
+{
+	struct bpf_retval_range range;
+	struct bpf_func_state *frame;
+	int i;
+
+	if (!env->prog->jit_requested || !bpf_jit_supports_exceptions())
+		return "JIT does not support exceptions";
+	for (i = 0; i < st->acquired_refs; i++)
+		if (st->refs[i].type == REF_TYPE_PTR)
+			return "reference is held";
+	if (st->active_locks || st->active_irq_id || st->active_rcu_locks ||
+	    st->active_preempt_locks)
+		return "lock is held";
+	for (i = 0; i <= st->curframe; i++) {
+		frame = st->frame[i];
+		if (frame->in_callback_fn || frame->in_async_callback_fn ||
+		    frame->in_exception_callback_fn)
+			return "in callback";
+	}
+	/* callers of the global function were not told that it can throw */
+	if (st->frame[0]->subprogno && !subprog_info(env, st->frame[0]->subprogno)->might_throw)
+		return "in global function";
+	/* default exception callback returns the cookie, that is 0 */
+	if (!env->exception_callback_subprog && !program_returns_void(env) &&
+	    resolve_prog_type(env->prog) != BPF_PROG_TYPE_STRUCT_OPS &&
+	    return_retval_range(env, &range) && (range.minval > 0 || range.maxval < 0))
+		return "0 is not a valid return value";
+	return NULL;
+}
+
+/*
+ * The walk went over the back-edge of env->prev_insn_idx and nothing bounds
+ * the number of trips. If the loop is not walked to the end may_goto that
+ * ends in bpf_throw() is added to the back-edge, see commit_loop_guards().
+ * Returns false when that cannot be done in state @cur.
+ */
+bool bpf_mark_loop_guard(struct bpf_verifier_env *env, struct bpf_verifier_state *cur)
+{
+	struct bpf_insn_aux_data *aux = &env->insn_aux_data[env->prev_insn_idx];
+	struct bpf_insn *insn = &env->prog->insnsi[env->prev_insn_idx];
+	u8 class = BPF_CLASS(insn->code);
+	u8 op = BPF_OP(insn->code);
+	const char *why;
+
+	why = cannot_throw(env, cur);
+	if ((class != BPF_JMP && class != BPF_JMP32) ||
+	    op == BPF_CALL || op == BPF_EXIT || op == BPF_JCOND ||
+	    (op == BPF_JA && BPF_SRC(insn->code) == BPF_X))
+		why = "not a jump";
+	else if (op != BPF_JA && aux->backedge_ft && aux->backedge_br)
+		why = "both edges are back-edges";
+	if (why) {
+		if (env->log.level & BPF_LOG_LEVEL2)
+			verbose(env, "cannot add may_goto to back-edge of insn %d: %s\n",
+				env->prev_insn_idx, why);
+		aux->guard_impossible = true;
+		return false;
+	}
+	aux->guard_pending = true;
+	return true;
+}
+
 /*
  * Check if scalar registers are exact for the purpose of not widening.
  * More lenient than regs_exact()
@@ -23121,6 +23188,7 @@ err_free_env:
 	bpf_stack_liveness_free(env);
 	kvfree(env->cfg.insn_postorder);
 	kvfree(env->scc_info);
+	kvfree(env->scc_converged);
 	if (env->scc_thrs) {
 		for (i = 0; i < env->scc_cnt; i++)
 			kvfree(env->scc_thrs[i]);
