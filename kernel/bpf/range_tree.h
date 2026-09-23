@@ -19,6 +19,7 @@ int range_tree_clear(struct range_tree *rt, u32 start, u32 len);
 int range_tree_set_avail(struct range_tree *rt, u32 start, u32 len);
 struct range_node *range_tree_set_unavail(struct range_tree *rt, u32 start, u32 len);
 void range_node_mark_available(struct range_node *rn);
+int range_tree_remove_unavail(struct range_tree *rt, u32 start, u32 len);
 int range_tree_make_avail(struct range_tree *rt, u32 start, u32 len);
 int is_range_tree_set(struct range_tree *rt, u32 start, u32 len);
 s64 range_tree_find(struct range_tree *rt, u32 len);

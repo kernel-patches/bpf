@@ -489,8 +489,9 @@ static vm_fault_t arena_vm_fault(struct vm_fault *vmf)
 	struct bpf_map *map = vmf->vma->vm_file->private_data;
 	struct bpf_arena *arena = container_of(map, struct bpf_arena, map);
 	struct mem_cgroup *new_memcg, *old_memcg;
-	struct page *page, *new_page = NULL;
 	vm_fault_t fault_ret;
+	struct range_node *unavail_node;
+	struct page *page, *new_page = NULL;
 	long kbase, kaddr;
 	unsigned long flags;
 	int ret;
@@ -512,15 +513,17 @@ static vm_fault_t arena_vm_fault(struct vm_fault *vmf)
 		bpf_map_memcg_exit(old_memcg, new_memcg);
 	}
 
-	if (raw_res_spin_lock_irqsave(&arena->spinlock, flags)) {
-		/*
-		 * A failed lock means a possible deadlock was detected. Don't
-		 * return VM_FAULT_RETRY: this handler never took mmap_lock, but
-		 * the fault path would re-take it on retry and deadlock. Fail.
-		 */
-		if (new_page)
-			free_pages_nolock(new_page, 0);
-		return VM_FAULT_SIGBUS;
+	ret = raw_res_spin_lock_irqsave(&arena->spinlock, flags);
+	if (ret) {
+		/* If we are deadlocking somehow, no way to ensure forward progress. */
+		if (ret == -EDEADLK) {
+			if (new_page)
+				free_pages_nolock(new_page, 0);
+			return VM_FAULT_SIGBUS;
+		}
+
+		if (ret)
+			goto retry;
 	}
 
 	page = vmalloc_to_page((void *)kaddr);
@@ -562,7 +565,7 @@ static vm_fault_t arena_vm_fault(struct vm_fault *vmf)
 	/* If a range is unavailable, try again. */
 	if (ret == -EAGAIN) {
 		raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
-		goto retry;
+		goto retry_memcg;
 	} else if (ret) {
 		fault_ret = VM_FAULT_SIGBUS;
 		goto out_err_locked_memcg;
@@ -583,12 +586,40 @@ static vm_fault_t arena_vm_fault(struct vm_fault *vmf)
 	page = new_page;
 	new_page = NULL;
 out:
-	page_ref_add(page, 1);
+	/* Reserve the page while installing its user PTE without the arena lock. */
+	bpf_map_memcg_enter(&arena->map, &old_memcg, &new_memcg);
+	unavail_node = range_tree_set_unavail(&arena->rt, vmf->pgoff, 1);
+	bpf_map_memcg_exit(old_memcg, new_memcg);
 	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
-	if (new_page)
+
+	if (new_page) {
 		free_pages_nolock(new_page, 0);
-	vmf->page = page;
-	return 0;
+		new_page = NULL;
+	}
+
+	/* If we couldn't mark the page unavailable, retry. */
+	if (IS_ERR(unavail_node)) {
+		ret = PTR_ERR(unavail_node);
+		if (ret == -EAGAIN)
+			goto retry;
+		return VM_FAULT_SIGBUS;
+	}
+
+	fault_ret = vmf_insert_page(vmf->vma, vmf->address, page);
+	while ((ret = raw_res_spin_lock_irqsave(&arena->spinlock, flags))) {
+		/* If we somehow deadlocked stop trying to take the lock. */
+		if (ret == -EDEADLK) {
+			range_node_mark_available(unavail_node);
+			return VM_FAULT_SIGBUS;
+		}
+
+		cond_resched();
+	}
+
+	ret = range_tree_remove_unavail(&arena->rt, vmf->pgoff, 1);
+	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
+	WARN_ON_ONCE(ret);
+	return fault_ret;
 
 out_err_locked_memcg:
 	bpf_map_memcg_exit(old_memcg, new_memcg);
@@ -598,8 +629,9 @@ out_err_locked:
 		free_pages_nolock(new_page, 0);
 	return fault_ret;
 
-retry:
+retry_memcg:
 	bpf_map_memcg_exit(old_memcg, new_memcg);
+retry:
 	if (new_page)
 		free_pages_nolock(new_page, 0);
 
@@ -689,7 +721,7 @@ static int arena_map_mmap(struct bpf_map *map, struct vm_area_struct *vma)
 	 * of user_vm_start. Set VM_DONTCOPY to prevent arena VMA from
 	 * being copied into the child process on fork.
 	 */
-	vm_flags_set(vma, VM_DONTEXPAND | VM_DONTCOPY);
+	vm_flags_set(vma, VM_DONTEXPAND | VM_DONTCOPY | VM_MIXEDMAP);
 	vma->vm_ops = &arena_vm_ops;
 	return 0;
 }

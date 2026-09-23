@@ -404,6 +404,20 @@ struct range_node *range_tree_set_unavail(struct range_tree *rt, u32 start, u32 
 	return rn;
 }
 
+int range_tree_remove_unavail(struct range_tree *rt, u32 start, u32 len)
+{
+	u32 last = start + len - 1;
+	struct range_node *rn;
+
+	rn = range_it_iter_first(rt, start, last);
+	if (!rn || rn->available || rn->rn_start != start || rn->rn_last != last)
+		return -EINVAL;
+
+	range_it_remove(rn, rt);
+	kfree_nolock(rn);
+	return 0;
+}
+
 void range_tree_destroy(struct range_tree *rt)
 {
 	struct range_node *rn;
