@@ -698,6 +698,8 @@ struct bpf_insn_aux_data {
 	u64 arg_prog:4;
 	u64 throw_call:1; /* call to bpf_throw() */
 	u64 resume_call:1; /* call to bpf_unwind_resume() */
+	u64 in_cleanup_pad:1; /* runs with an exception in flight, in the pad's frame */
+	u64 outside_cleanup_pad:1; /* ... and the other way round */
 
 	/* below flags are initialized once */
 	u64 jmp_point:1;

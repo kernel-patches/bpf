@@ -26,6 +26,15 @@ static void mark_kfunc_sites(struct bpf_verifier_env *env)
 	}
 }
 
+int bpf_exc_check_callback(struct bpf_verifier_env *env, int subprog)
+{
+	if (!env->cleanup_info_cnt || !env->subprog_info[subprog].might_throw)
+		return 0;
+
+	verbose(env, "subprog %d may unwind and is used as a callback\n", subprog);
+	return -EINVAL;
+}
+
 static void mark_call_sites(struct bpf_verifier_env *env)
 {
 	u32 i, j;
@@ -69,6 +78,98 @@ int bpf_prepare_cleanup_exceptions(struct bpf_verifier_env *env)
 
 	mark_kfunc_sites(env);
 	mark_call_sites(env);
+	return 0;
+}
+
+int bpf_exc_check_insn(struct bpf_verifier_env *env, struct bpf_insn *insn)
+{
+	struct bpf_verifier_state *state = env->cur_state;
+	struct bpf_insn_aux_data *aux;
+	u32 i = env->insn_idx;
+	bool in_pad;
+
+	aux = &env->insn_aux_data[i];
+	in_pad = state->unwinding && state->curframe == state->unwind_frameno;
+
+	if (in_pad ? aux->outside_cleanup_pad : aux->in_cleanup_pad) {
+		verbose(env,
+			"insn %u runs both inside and outside an exception cleanup landing pad\n",
+			i);
+		return -EINVAL;
+	}
+	if (in_pad)
+		aux->in_cleanup_pad = true;
+	else
+		aux->outside_cleanup_pad = true;
+
+	if (!state->unwinding)
+		return 0;
+
+	if (bpf_is_throw_kfunc(insn)) {
+		verbose(env,
+			"bpf_throw() at insn %u throws while an exception is in flight\n",
+			i);
+		return -EINVAL;
+	}
+	if (bpf_pseudo_call(insn)) {
+		int subprog = bpf_find_subprog(env, i + insn->imm + 1);
+
+		if (subprog >= 0 && bpf_subprog_is_global(env, subprog) &&
+		    env->subprog_info[subprog].might_throw) {
+			verbose(env,
+				"insn %u calls global subprog %d, which can throw while an exception is in flight\n",
+				i, subprog);
+			return -EINVAL;
+		}
+	}
+
+	if (!in_pad)
+		return 0;
+
+	if (insn->code == (BPF_JMP | BPF_EXIT)) {
+		verbose(env,
+			"exit at insn %u ends an exception cleanup landing pad: a catch pad is not supported yet, only cleanup pads that resume\n",
+			i);
+		return -EOPNOTSUPP;
+	}
+	if (bpf_helper_call(insn) && insn->imm == BPF_FUNC_tail_call) {
+		verbose(env,
+			"bpf_tail_call() at insn %u is in an exception cleanup landing pad\n",
+			i);
+		return -EINVAL;
+	}
+	if (insn->code == (BPF_JMP | BPF_JA | BPF_X) ||
+	    insn->code == (BPF_JMP32 | BPF_JA | BPF_X)) {
+		verbose(env,
+			"indirect jump at insn %u is in an exception cleanup landing pad\n",
+			i);
+		return -EINVAL;
+	}
+	/* A BPF_LD_[ABS|IND] can leave the frame through its epilogue. */
+	if (BPF_CLASS(insn->code) == BPF_LD &&
+	    (BPF_MODE(insn->code) == BPF_ABS || BPF_MODE(insn->code) == BPF_IND)) {
+		verbose(env,
+			"BPF_LD_[ABS|IND] at insn %u is in an exception cleanup landing pad\n",
+			i);
+		return -EINVAL;
+	}
+	if (is_stack_arg_st(insn) || is_stack_arg_stx(insn)) {
+		verbose(env,
+			"insn %u stages an on-stack call argument in an exception cleanup landing pad\n",
+			i);
+		return -EINVAL;
+	}
+	if (bpf_pseudo_kfunc_call(insn)) {
+		struct bpf_call_summary cs;
+
+		if (bpf_get_call_summary(env, insn, &cs) &&
+		    cs.arg_slot_cnt > MAX_BPF_FUNC_REG_ARGS) {
+			verbose(env,
+				"insn %u calls a kfunc with an on-stack argument in an exception cleanup landing pad\n",
+				i);
+			return -EINVAL;
+		}
+	}
 	return 0;
 }
 

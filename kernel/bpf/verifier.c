@@ -10549,6 +10549,10 @@ static int push_callback_call(struct bpf_verifier_env *env, struct bpf_insn *ins
 	 * callbacks
 	 */
 	env->subprog_info[subprog].is_cb = true;
+	err = bpf_exc_check_callback(env, subprog);
+	if (err)
+		return err;
+
 	if (bpf_pseudo_kfunc_call(insn) &&
 	    !is_callback_calling_kfunc(insn->imm)) {
 		verifier_bug(env, "kfunc %s#%d not marked as callback-calling",
@@ -19037,6 +19041,12 @@ static int do_check(struct bpf_verifier_env *env)
 		if (bpf_prog_is_offloaded(env->prog->aux)) {
 			err = bpf_prog_offload_verify_insn(env, env->insn_idx,
 							   env->prev_insn_idx);
+			if (err)
+				return err;
+		}
+
+		if (unlikely(env->cleanup_info_cnt)) {
+			err = bpf_exc_check_insn(env, insn);
 			if (err)
 				return err;
 		}

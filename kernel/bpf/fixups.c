@@ -252,6 +252,7 @@ static void adjust_insn_aux_data(struct bpf_verifier_env *env,
 		/* Expand insni[off]'s seen count to the patched range. */
 		data[i].seen = old_seen;
 		data[i].zext_dst = bpf_insn_def32(new_prog, insn + i) >= 0;
+		data[i].in_cleanup_pad = data[off + cnt - 1].in_cleanup_pad;
 		if (!memcmp(insn + i, original_insn, sizeof(struct bpf_insn))) {
 			data[i].non_stack_access =
 				data[off + cnt - 1].non_stack_access;
