@@ -10136,8 +10136,9 @@ static int idstack_push(struct bpf_idmap *idmap, u32 id)
 		if (idmap->map[i].old == id)
 			return 0;
 
-	if (WARN_ON_ONCE(idmap->cnt >= BPF_ID_MAP_SIZE))
-		return -EFAULT;
+	if (!bpf_id_scratch_reserve((void **)&idmap->map, &idmap->cap, idmap->cnt,
+				    sizeof(*idmap->map)))
+		return -ENOMEM;
 
 	idmap->map[idmap->cnt++].old = id;
 	return 0;
@@ -18438,12 +18439,13 @@ static void idset_cnt_inc(struct bpf_idset *idset, u32 id)
 			return;
 		}
 	}
-	/* New id */
-	if (idset->num_ids < BPF_ID_MAP_SIZE) {
-		idset->entries[idset->num_ids].id = id;
-		idset->entries[idset->num_ids].cnt = 1;
-		idset->num_ids++;
-	}
+	/* New id; one that cannot be recorded counts as shared and is kept */
+	if (!bpf_id_scratch_reserve((void **)&idset->entries, &idset->cap, idset->num_ids,
+				    sizeof(*idset->entries)))
+		return;
+	idset->entries[idset->num_ids].id = id;
+	idset->entries[idset->num_ids].cnt = 1;
+	idset->num_ids++;
 }
 
 /* Find id in idset and return its count, or 0 if not found */
@@ -22003,6 +22005,8 @@ err_free_env:
 	kvfree(env->scc_info);
 	kvfree(env->succ);
 	kvfree(env->gotox_tmp_buf);
+	kfree(env->idmap_scratch.map);
+	kfree(env->idset_scratch.entries);
 	bpf_diag_free(env);
 	kvfree(env);
 	return ret;
