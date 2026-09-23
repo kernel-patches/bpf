@@ -36,6 +36,7 @@
 #define SOCE_IMPL_FEATURES0_OFFSET		0x000c
 #define SOCE_IMPL_FEATURES0_NUM_PORTS_MASK	GENMASK(31, 27)
 #define SOCE_IMPL_FEATURES0_PORT_VLAN		BIT(9)
+#define SOCE_IMPL_FEATURES0_STP			BIT(20)
 #define SOCE_IMPL_FEATURES0_DSA			BIT(23)
 
 #define SOCE_DSA_REGS_BASE			0x1200
@@ -50,6 +51,10 @@
 #define SOCE_PORTS_CTRL_OFFSET			(SOCE_PORTS_REGS_BASE + 0x0004)
 #define SOCE_PORTS_CTRL_INGR_EN			BIT(0)
 #define SOCE_PORTS_CTRL_EGR_EN			BIT(1)
+
+#define SOCE_STP_REGS_BASE			0x0f00
+#define SOCE_STP_CTRL_OFFSET			SOCE_STP_REGS_BASE
+#define SOCE_STP_CTRL_ENABLE			BIT(0)
 
 #define SOCE_VLAN_REGS_BASE			0x0d00
 #define SOCE_VLAN_CTRL_OFFSET			SOCE_VLAN_REGS_BASE
@@ -160,6 +165,7 @@ static int soce_sw_detect_features(struct soce_dsa_local *local,
 		return -ENODEV;
 
 	features->port_vlan = regval & SOCE_IMPL_FEATURES0_PORT_VLAN;
+	features->stp = regval & SOCE_IMPL_FEATURES0_STP;
 
 	implemented_numports =
 		FIELD_GET(SOCE_IMPL_FEATURES0_NUM_PORTS_MASK, regval);
@@ -198,6 +204,16 @@ static void soce_sw_disable_tagging(struct soce_dsa_local *local)
 	regval = readl(base + SOCE_CUSTOM_RULES_TAGGING_OFFSET);
 	regval &= ~SOCE_CUSTOM_RULES_TAGGING_ENABLE;
 	writel(regval, base + SOCE_CUSTOM_RULES_TAGGING_OFFSET);
+}
+
+static void soce_stp_disable(struct soce_dsa_local *local)
+{
+	void __iomem *base = local->base_addr;
+	u32 regval;
+
+	regval = readl(base + SOCE_STP_CTRL_OFFSET);
+	regval &= ~SOCE_STP_CTRL_ENABLE;
+	writel(regval, base + SOCE_STP_CTRL_OFFSET);
 }
 
 static void soce_vlan_set_enabled(struct soce_dsa_local *local, bool enabled)
@@ -419,6 +435,10 @@ static int soce_setup(struct dsa_switch *ds)
 	ret = soce_vlan_setup(ds);
 	if (ret)
 		return ret;
+
+	/* Unconfigured hardware STP blocks frame forwarding. */
+	if (priv->features.stp)
+		soce_stp_disable(&priv->local);
 
 	soce_sw_enable_tagging(&priv->local);
 

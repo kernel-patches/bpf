@@ -22,6 +22,7 @@ struct soce_dsa_local {
 struct soce_features {
 	u32 num_ports;
 	bool port_vlan;
+	bool stp;
 };
 
 struct soce_priv {
