@@ -150,7 +150,7 @@ bool a8xx_gmu_gx_is_on(struct adreno_gpu *adreno_gpu)
 	 * register to ensure correct GDSC and clock status reporting even
 	 * when the GMU MX domain is powered off
 	 */
-	if (adreno_is_a850(adreno_gpu)) {
+	if (adreno_is_a850_family(adreno_gpu)) {
 		val = a6xx_cx_misc_read(a6xx_gpu, REG_A8XX_CX_MISC_GFX_PWR_CLK_STATUS);
 
 		return !(val &
@@ -658,7 +658,7 @@ static void a6xx_rpmh_stop(struct a6xx_gmu *gmu)
 	if (!test_and_clear_bit(GMU_STATUS_FW_START, &gmu->status))
 		return;
 
-	if (adreno_is_a840(adreno_gpu) || adreno_is_a850(adreno_gpu))
+	if (adreno_is_a840(adreno_gpu) || adreno_is_a850_family(adreno_gpu))
 		bitmask = BIT(30);
 
 	gmu_write(gmu, REG_A6XX_GMU_RSCC_CONTROL_REQ, 1);

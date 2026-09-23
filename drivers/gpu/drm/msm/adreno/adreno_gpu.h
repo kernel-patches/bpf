@@ -620,9 +620,20 @@ static inline int adreno_is_a840(struct adreno_gpu *gpu)
 	return gpu->info->chip_ids[0] == 0x44050a01;
 }
 
+static inline int adreno_is_a845(struct adreno_gpu *gpu)
+{
+	return gpu->info->chip_ids[0] == 0x44041400;
+}
+
 static inline int adreno_is_a850(struct adreno_gpu *gpu)
 {
 	return gpu->info->chip_ids[0] == 0x44051401;
+}
+
+static inline int adreno_is_a850_family(struct adreno_gpu *gpu)
+{
+	return adreno_is_a845(gpu) ||
+	       adreno_is_a850(gpu);
 }
 
 /* Put vm_start above 32b to catch issues with not setting xyz_BASE_HI */

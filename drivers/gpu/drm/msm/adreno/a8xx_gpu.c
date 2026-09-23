@@ -737,10 +737,10 @@ static int hw_init(struct msm_gpu *gpu)
 			apriv_mask = A8XX_BR_APRIV_MASK;
 
 		/*
-		 * A850's BV pipe raises a spurious RTWROVF fault interrupt;
+		 * A845/A850's BV pipe raises a spurious RTWROVF fault interrupt;
 		 * mask it off to avoid false fault recovery.
 		 */
-		if (adreno_is_a850(adreno_gpu) && pipe_id == PIPE_BV)
+		if (adreno_is_a850_family(adreno_gpu) && pipe_id == PIPE_BV)
 			int_mask &= ~A8XX_CP_INTERRUPT_STATUS_MASK_PIPE_RTWROVF;
 
 		a8xx_aperture_acquire(gpu, pipe_id, &flags);
