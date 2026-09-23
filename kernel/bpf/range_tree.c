@@ -3,6 +3,7 @@
 #include <linux/interval_tree_generic.h>
 #include <linux/slab.h>
 #include <linux/bpf.h>
+#include <linux/err.h>
 #include "range_tree.h"
 
 /*
@@ -45,7 +46,21 @@ struct range_node {
 /* Is the range available for merging? */
 static inline bool range_available(struct range_node *rn)
 {
-	return rn && rn->available;
+	/* Pairs with smp_store_release() in range_node_mark_available(). */
+	return rn && smp_load_acquire(&rn->available);
+}
+
+/*
+ * Mark a node as available. Designed to be used locklessly
+ * as a last-ditch effort to avoid leaking unavailable range
+ * tree nodes when all attempts to directly or indirectly
+ * free an arena region has failed. See arena_free_pages()
+ * for more info.
+ */
+void range_node_mark_available(struct range_node *rn)
+{
+	/* Pairs with smp_load_acquire() in range_available(). */
+	smp_store_release(&rn->available, true);
 }
 
 static struct range_node *rb_to_range_node(struct rb_node *rb)
@@ -321,7 +336,8 @@ int range_tree_make_avail(struct range_tree *rt, u32 start, u32 len)
 }
 
 /* Set the range in this range tree */
-static int range_tree_set(struct range_tree *rt, u32 start, u32 len, bool available)
+static int range_tree_set(struct range_tree *rt, u32 start, u32 len, bool available,
+			  struct range_node **new_rn)
 {
 	u32 last = start + len - 1;
 	struct range_node *right;
@@ -364,18 +380,28 @@ static int range_tree_set(struct range_tree *rt, u32 start, u32 len, bool availa
 	left->rn_start = start;
 	left->rn_last = last;
 	range_it_insert(left, rt);
+	if (new_rn)
+		*new_rn = left;
 
 	return 0;
 }
 
 int range_tree_set_avail(struct range_tree *rt, u32 start, u32 len)
 {
-	return range_tree_set(rt, start, len, true);
+	return range_tree_set(rt, start, len, true, NULL);
 }
 
-int range_tree_set_unavail(struct range_tree *rt, u32 start, u32 len)
+struct range_node *range_tree_set_unavail(struct range_tree *rt, u32 start, u32 len)
 {
-	return range_tree_set(rt, start, len, false);
+	struct range_node *rn = NULL;
+	int err;
+
+	err = range_tree_set(rt, start, len, false, &rn);
+	if (err)
+		return ERR_PTR(err);
+	if (WARN_ON_ONCE(!rn))
+		return ERR_PTR(-EINVAL);
+	return rn;
 }
 
 void range_tree_destroy(struct range_tree *rt)
