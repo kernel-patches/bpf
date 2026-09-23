@@ -258,6 +258,9 @@ bpf_insn_successors(struct bpf_verifier_env *env, u32 idx)
 	succ = env->succ;
 	succ->cnt = 0;
 
+	if (unlikely(bpf_is_unwind_resume_kfunc(insn)))
+		return succ;
+
 	opcode_info = &opcode_info_tbl[BPF_CLASS(insn->code) | BPF_OP(insn->code)];
 	insn_sz = bpf_is_ldimm64(insn) ? 2 : 1;
 	if (opcode_info->can_fallthrough)
