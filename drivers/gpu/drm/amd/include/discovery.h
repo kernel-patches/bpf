@@ -45,8 +45,9 @@ typedef enum {
 	VCN_INFO,
 	MALL_INFO,
 	NPS_INFO,
+	RSV_TABLE,
 	MEM_RESERVED_INFO,
-	TOTAL_TABLES = 7
+	TOTAL_TABLES = 8
 } table;
 
 #pragma pack(1)
@@ -56,7 +57,7 @@ typedef struct table_info
 	uint16_t offset;   /* Byte offset */
 	uint16_t checksum; /* Byte sum of the table */
 	uint16_t size;     /* Table size */
-	uint16_t padding;
+	uint16_t table_id; /* Table id for v2, padding for v1 */
 } table_info;
 
 typedef struct binary_header
