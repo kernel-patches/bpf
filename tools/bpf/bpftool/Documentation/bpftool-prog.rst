@@ -186,6 +186,11 @@ bpftool prog tracelog { stdout | stderr } *PROG*
     error messages to the standard error stream. This facility should be used
     only for debugging purposes.
 
+    On kernels that support opening a stream as a file descriptor, bpftool
+    keeps printing new output as the program produces it, until the program is
+    unloaded or <Ctrl+C> is hit. Older kernels only allow dumping the output
+    buffered so far, after which bpftool exits.
+
 bpftool prog run *PROG* data_in *FILE* [data_out *FILE* [data_size_out *L*]] [ctx_in *FILE* [ctx_out *FILE* [ctx_size_out *M*]]] [repeat *N*]
     Run BPF program *PROG* in the kernel testing infrastructure for BPF,
     meaning that the program works on the data and context provided by the

@@ -1119,21 +1119,69 @@ enum prog_tracelog_mode {
 	TRACE_STDERR,
 };
 
+static volatile sig_atomic_t stream_stop;
+
+static void stop_stream(int signo)
+{
+	stream_stop = 1;
+}
+
+/* Consumes prog_fd. */
 static int
 prog_tracelog_stream(int prog_fd, enum prog_tracelog_mode mode)
 {
+	/* No SA_RESTART: an interrupted read() must return EINTR to end the loop. */
+	const struct sigaction act = { .sa_handler = stop_stream };
+	const int signals[] = { SIGHUP, SIGINT, SIGTERM };
+	struct sigaction old[ARRAY_SIZE(signals)];
 	FILE *file = mode == TRACE_STDOUT ? stdout : stderr;
 	int stream_id = mode == TRACE_STDOUT ? 1 : 2;
 	char buf[512];
-	int ret;
+	unsigned int i;
+	int fd, ret;
 
+	fd = bpf_prog_stream_open(prog_fd, stream_id, NULL);
+	if (fd == -EINVAL) {
+		/* Kernel predates BPF_PROG_STREAM_OPEN: dump buffered output and exit. */
+		do {
+			ret = bpf_prog_stream_read(prog_fd, stream_id, buf, sizeof(buf), NULL);
+			if (ret > 0)
+				fwrite(buf, sizeof(buf[0]), ret, file);
+		} while (ret > 0);
+		if (ret < 0)
+			p_err("failed to read stream: %s", strerror(-ret));
+		close(prog_fd);
+		goto out;
+	}
+	/*
+	 * The stream descriptor does not keep the program alive. Drop the
+	 * program reference so that reads return EOF once the program is gone.
+	 */
+	close(prog_fd);
+	if (fd < 0) {
+		p_err("failed to open stream: %s", strerror(-fd));
+		return -1;
+	}
+
+	stream_stop = 0;
+	for (i = 0; i < ARRAY_SIZE(signals); i++)
+		sigaction(signals[i], &act, &old[i]);
 	ret = 0;
-	do {
-		ret = bpf_prog_stream_read(prog_fd, stream_id, buf, sizeof(buf), NULL);
-		if (ret > 0)
-			fwrite(buf, sizeof(buf[0]), ret, file);
-	} while (ret > 0);
-
+	while (!stream_stop) {
+		ret = read(fd, buf, sizeof(buf));
+		if (ret <= 0)
+			break;
+		fwrite(buf, sizeof(buf[0]), ret, file);
+		fflush(file);
+	}
+	if (ret < 0 && !(stream_stop && errno == EINTR))
+		p_err("failed to read stream: %s", strerror(errno));
+	else
+		ret = 0;
+	for (i = 0; i < ARRAY_SIZE(signals); i++)
+		sigaction(signals[i], &old[i], NULL);
+	close(fd);
+out:
 	fflush(file);
 	return ret ? -1 : 0;
 }
