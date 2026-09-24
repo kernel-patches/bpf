@@ -31,8 +31,7 @@ definitions:
       -
         name: unlocked
         doc: |
-          dpll was not yet locked to any valid input (or forced by setting
-          DPLL_A_MODE to DPLL_MODE_DETACHED)
+          dpll was not yet locked to any valid input
         value: 1
       -
         name: locked
