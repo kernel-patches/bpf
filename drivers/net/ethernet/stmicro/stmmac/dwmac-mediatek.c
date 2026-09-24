@@ -96,6 +96,9 @@ struct mediatek_dwmac_variant {
 				       u8 phy_intf_sel);
 	int (*dwmac_set_delay)(struct mediatek_dwmac_plat_data *plat);
 
+	void (*dwmac_fix_mac_speed)(void *priv, phy_interface_t interface,
+				    int speed, unsigned int mode);
+
 	/* clock ids to be requested */
 	const char * const *clk_list;
 	int num_clks;
@@ -433,9 +436,62 @@ static int mt8195_set_delay(struct mediatek_dwmac_plat_data *plat)
 	return 0;
 }
 
+static void mt8195_fix_mac_speed(void *priv, phy_interface_t interface,
+				 int speed, unsigned int mode)
+{
+	struct mediatek_dwmac_plat_data *priv_plat = priv;
+	const struct mediatek_dwmac_variant *variant;
+	struct mac_delay_struct *mac_delay;
+	u32 tx_delay_stage_val, reg_offset;
+	u32 reg_val = 0;
+
+	if (!priv_plat)
+		return;
+
+	mac_delay = &priv_plat->mac_delay;
+	variant = priv_plat->variant;
+
+	if (!mac_delay->tx_delay ||
+	    (interface != PHY_INTERFACE_MODE_RGMII &&
+	     interface != PHY_INTERFACE_MODE_RGMII_RXID))
+		return;
+
+	/*
+	 * When link speed is 1Gbps with RGMII interface, and a TX internal
+	 * delay needs to be applied on MAC, prefer to override the delay
+	 * settings with a 2ns fixed delay which is controlled by
+	 * RGMII_TXC_PHASE_CTRL. Otherwise, fallback to HW delay macro circuit
+	 * for 10/100Mbps link speeds.
+	 */
+	if (speed == SPEED_1000) {
+		reg_val = MT8195_RGMII_TXC_PHASE_CTRL;
+	} else {
+		if (variant->tx_delay_stage_div)
+			tx_delay_stage_val = mac_delay->tx_delay /
+					     variant->tx_delay_stage_div;
+
+		reg_val |= FIELD_PREP(MT8195_DLY_GTXC_ENABLE,
+				      !!mac_delay->tx_delay);
+		reg_val |= FIELD_PREP(MT8195_DLY_GTXC_STAGES,
+				      tx_delay_stage_val);
+		reg_val |= FIELD_PREP(MT8195_DLY_GTXC_INV,
+				      mac_delay->tx_inv);
+	}
+
+	reg_offset = variant->peri_eth_ctrl_offset + MT8195_PERI_ETH_CTRL0;
+	regmap_update_bits(priv_plat->peri_regmap,
+			   reg_offset,
+			   MT8195_RGMII_TXC_PHASE_CTRL |
+			   MT8195_DLY_GTXC_ENABLE |
+			   MT8195_DLY_GTXC_INV |
+			   MT8195_DLY_GTXC_STAGES,
+			   reg_val);
+}
+
 static const struct mediatek_dwmac_variant mt8195_gmac_variant = {
 	.dwmac_set_phy_interface = mt8195_set_interface,
 	.dwmac_set_delay = mt8195_set_delay,
+	.dwmac_fix_mac_speed = mt8195_fix_mac_speed,
 	.clk_list = mt8195_dwmac_clk_l,
 	.num_clks = ARRAY_SIZE(mt8195_dwmac_clk_l),
 	.rx_delay_max = MT8195_DLY_RXC_MAX,
@@ -593,6 +649,9 @@ static int mediatek_dwmac_common_data(struct platform_device *pdev,
 	plat->bsp_priv = priv_plat;
 	plat->resume = mediatek_dwmac_init;
 	plat->clks_config = mediatek_dwmac_clks_config;
+
+	if (priv_plat->variant->dwmac_fix_mac_speed)
+		plat->fix_mac_speed = priv_plat->variant->dwmac_fix_mac_speed;
 
 	plat->safety_feat_cfg = devm_kzalloc(&pdev->dev,
 					     sizeof(*plat->safety_feat_cfg),
