@@ -37,7 +37,14 @@
 #define ETH_FINE_DLY_RXC	BIT(0)
 
 /* Peri Configuration register for mt8189 */
+#define MT8189_PERI_ETH_CTRL_OFFSET	0x270
+
 #define MT8189_CTRL0_TXC_OUT_OP_EN	BIT(20)
+
+#define MT8189_DLY_RXC_STAGE_DIV	180  /* 180ps per stage */
+#define MT8189_DLY_RXC_MAX		5760 /* 32 * 180ps */
+#define MT8189_DLY_TXC_STAGE_DIV	180  /* 180ps per stage */
+#define MT8189_DLY_TXC_MAX		5760 /* 32 * 180ps */
 
 /* Peri Configuration register for mt8195 */
 #define MT8195_PERI_ETH_CTRL_OFFSET	0xFD0
@@ -122,6 +129,10 @@ static const char * const mt2712_dwmac_clk_l[] = {
 
 static const char * const mt8195_dwmac_clk_l[] = {
 	"axi", "apb", "mac_cg", "mac_main", "ptp_ref"
+};
+
+static const char * const mt8189_dwmac_clk_l[] = {
+	"mac_main", "ptp_ref"
 };
 
 static int mt2712_set_interface(struct mediatek_dwmac_plat_data *plat,
@@ -495,6 +506,21 @@ static void mt8195_fix_mac_speed(void *priv, phy_interface_t interface,
 			   reg_val);
 }
 
+static const struct mediatek_dwmac_variant mt8189_gmac_variant = {
+	.dwmac_set_phy_interface = mt8195_set_interface,
+	.dwmac_set_delay = mt8195_set_delay,
+	.dwmac_fix_mac_speed = mt8195_fix_mac_speed,
+	.clk_list = mt8189_dwmac_clk_l,
+	.num_clks = ARRAY_SIZE(mt8189_dwmac_clk_l),
+	.dma_bit_mask = 35,
+	.rx_delay_max = MT8189_DLY_RXC_MAX,
+	.tx_delay_max = MT8189_DLY_TXC_MAX,
+	.rx_delay_stage_div = MT8189_DLY_RXC_STAGE_DIV,
+	.tx_delay_stage_div = MT8189_DLY_TXC_STAGE_DIV,
+	.peri_eth_ctrl_offset = MT8189_PERI_ETH_CTRL_OFFSET,
+	.mac_txclk_out_en = true,
+};
+
 static const struct mediatek_dwmac_variant mt8195_gmac_variant = {
 	.dwmac_set_phy_interface = mt8195_set_interface,
 	.dwmac_set_delay = mt8195_set_delay,
@@ -751,6 +777,8 @@ static void mediatek_dwmac_remove(struct platform_device *pdev)
 static const struct of_device_id mediatek_dwmac_match[] = {
 	{ .compatible = "mediatek,mt2712-gmac",
 	  .data = &mt2712_gmac_variant },
+	{ .compatible = "mediatek,mt8189-gmac",
+	  .data = &mt8189_gmac_variant },
 	{ .compatible = "mediatek,mt8195-gmac",
 	  .data = &mt8195_gmac_variant },
 	{ }
