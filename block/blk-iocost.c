@@ -177,6 +177,7 @@
 #include <linux/timer.h>
 #include <linux/time64.h>
 #include <linux/parser.h>
+#include <linux/blk-iocost.h>
 #include <linux/sched/signal.h>
 #include <asm/local.h>
 #include <asm/local64.h>
@@ -445,6 +446,11 @@ struct ioc {
 	int				autop_idx;
 	bool				user_qos_params:1;
 	bool				user_cost_model:1;
+
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+	/* attached BPF cost model, NULL = builtin linear model */
+	const struct iocost_model_ops	__rcu *model;
+#endif
 };
 
 struct iocg_pcpu_stat {
@@ -803,8 +809,16 @@ static int ioc_autop_idx(struct ioc *ioc, struct gendisk *disk)
 	if (idx < AUTOP_SSD_DFL)
 		return AUTOP_SSD_DFL;
 
-	/* if user is overriding anything, maintain what was there */
-	if (ioc->user_qos_params || ioc->user_cost_model)
+	/* if user is overriding anything, maintain what was there; the
+	 * same while a BPF model is attached: the builtin coefficients
+	 * are inert then, so stepping the profile is pointless
+	 */
+	if (ioc->user_qos_params || ioc->user_cost_model
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+	    || rcu_dereference_protected(ioc->model,
+					 lockdep_is_held(&ioc->lock))
+#endif
+	   )
 		return idx;
 
 	/* step up/down based on the vrate */
@@ -2572,7 +2586,19 @@ out:
 static u64 calc_vtime_cost(struct bio *bio, struct ioc_gq *iocg, bool is_merge)
 {
 	u64 cost;
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+	const struct iocost_model_ops *model;
 
+	rcu_read_lock();
+	model = rcu_dereference(iocg->ioc->model);
+	if (model) {
+		cost = model->calc_cost(bio,
+				is_merge ? IOCOST_COST_F_MERGE : 0);
+		rcu_read_unlock();
+		return min(cost, VTIME_PER_SEC);
+	}
+	rcu_read_unlock();
+#endif
 	calc_vtime_cost_builtin(bio, iocg, is_merge, &cost);
 	return cost;
 }
@@ -2594,10 +2620,41 @@ static void calc_size_vtime_cost_builtin(struct request *rq, struct ioc *ioc,
 	}
 }
 
+/*
+ * Called from the request completion path, where no ioc->lock is
+ * held; the model pointer is read under RCU, matching the bio-side
+ * calc_vtime_cost().
+ */
 static u64 calc_size_vtime_cost(struct request *rq, struct ioc *ioc)
 {
 	u64 cost;
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+	const struct iocost_model_ops *model;
 
+	rcu_read_lock();
+	model = rcu_dereference(ioc->model);
+	if (model && (req_op(rq) == REQ_OP_READ ||
+		      req_op(rq) == REQ_OP_WRITE)) {
+		unsigned int pages =
+			blk_rq_stats_sectors(rq) >> IOC_SECT_TO_PAGE_SHIFT;
+		u64 coeff = req_op(rq) == REQ_OP_READ ?
+			model->read_vtime_per_page :
+			model->write_vtime_per_page;
+
+		rcu_read_unlock();
+		/* sub-page IO: nothing to transfer-price */
+		if (!pages)
+			return 0;
+		/* zero transfer cost is a legal model; guard the division */
+		if (!coeff)
+			return 0;
+		/* pages * coeff can wrap and dodge the clamp below */
+		if (coeff > VTIME_PER_SEC || pages > VTIME_PER_SEC / coeff)
+			return VTIME_PER_SEC;
+		return min(pages * coeff, VTIME_PER_SEC);
+	}
+	rcu_read_unlock();
+#endif
 	calc_size_vtime_cost_builtin(rq, ioc, &cost);
 	return cost;
 }
@@ -2891,6 +2948,9 @@ static void ioc_rqos_queue_depth_changed(struct rq_qos *rqos)
 static void ioc_rqos_exit(struct rq_qos *rqos)
 {
 	struct ioc *ioc = rqos_to_ioc(rqos);
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+	const struct iocost_model_ops *model;
+#endif
 
 	blkcg_deactivate_policy(rqos->disk, &blkcg_policy_iocost);
 
@@ -2900,6 +2960,15 @@ static void ioc_rqos_exit(struct rq_qos *rqos)
 
 	timer_shutdown_sync(&ioc->timer);
 	free_percpu(ioc->pcpu_stat);
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+	spin_lock_irq(&ioc->lock);
+	model = rcu_dereference_protected(ioc->model,
+				lockdep_is_held(&ioc->lock));
+	rcu_assign_pointer(ioc->model, NULL);
+	spin_unlock_irq(&ioc->lock);
+	if (model)
+		ioc_bpf_detach((struct iocost_model_ops *)model);
+#endif
 	kfree(ioc);
 }
 
@@ -3022,6 +3091,9 @@ static void ioc_pd_init(struct blkg_policy_data *pd)
 	struct ioc_now now;
 	struct blkcg_gq *tblkg;
 	unsigned long flags;
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+	const struct iocost_model_ops *model;
+#endif
 
 	ioc_now(ioc, &now);
 
@@ -3048,6 +3120,19 @@ static void ioc_pd_init(struct blkg_policy_data *pd)
 	spin_lock_irqsave(&ioc->lock, flags);
 	weight_updated(iocg, &now);
 	spin_unlock_irqrestore(&ioc->lock, flags);
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+	/*
+	 * the model pointer and the ops behind it are RCU-protected:
+	 * a concurrent detach publishes NULL and the struct_ops image
+	 * survives it by a grace period, so the callback is safe
+	 * inside the read-side critical section
+	 */
+	rcu_read_lock();
+	model = rcu_dereference(ioc->model);
+	if (model && model->iocg_init)
+		model->iocg_init(blkg->blkcg, ioc->rqos.disk->queue);
+	rcu_read_unlock();
+#endif
 }
 
 static void iocg_release(struct rcu_head *rcu)
@@ -3066,8 +3151,18 @@ static void ioc_pd_free(struct blkg_policy_data *pd)
 	struct blkcg_gq *blkg = pd_to_blkg(pd);
 	struct ioc *ioc = iocg->ioc;
 	unsigned long flags;
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+	const struct iocost_model_ops *model;
+#endif
 
 	if (ioc) {
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+		rcu_read_lock();
+		model = rcu_dereference(ioc->model);
+		if (model && model->iocg_free)
+			model->iocg_free(blkg->blkcg, ioc->rqos.disk->queue);
+		rcu_read_unlock();
+#endif
 		spin_lock_irqsave(&ioc->lock, flags);
 
 		if (!list_empty(&iocg->active_list)) {
@@ -3433,17 +3528,34 @@ static u64 ioc_cost_model_prfill(struct seq_file *sf,
 	const char *dname = blkg_dev_name(pd->blkg);
 	struct ioc *ioc = pd_to_iocg(pd)->ioc;
 	u64 *u = ioc->params.i_lcoefs;
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+	const struct iocost_model_ops *model;
+#endif
 
 	if (!dname)
 		return 0;
 
 	spin_lock_irq(&ioc->lock);
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+	model = rcu_dereference_protected(ioc->model,
+			lockdep_is_held(&ioc->lock));
+
+	seq_printf(sf, "%s ctrl=%s model=%s "
+		   "rbps=%llu rseqiops=%llu rrandiops=%llu "
+		   "wbps=%llu wseqiops=%llu wrandiops=%llu\n",
+		   dname, ioc->user_cost_model ? "user" : "auto",
+		   model ? "bpf" : "linear",
+		   u[I_LCOEF_RBPS], u[I_LCOEF_RSEQIOPS],
+		   u[I_LCOEF_RRANDIOPS], u[I_LCOEF_WBPS],
+		   u[I_LCOEF_WSEQIOPS], u[I_LCOEF_WRANDIOPS]);
+#else
 	seq_printf(sf, "%s ctrl=%s model=linear "
 		   "rbps=%llu rseqiops=%llu rrandiops=%llu "
 		   "wbps=%llu wseqiops=%llu wrandiops=%llu\n",
 		   dname, ioc->user_cost_model ? "user" : "auto",
 		   u[I_LCOEF_RBPS], u[I_LCOEF_RSEQIOPS], u[I_LCOEF_RRANDIOPS],
 		   u[I_LCOEF_WBPS], u[I_LCOEF_WSEQIOPS], u[I_LCOEF_WRANDIOPS]);
+#endif
 	spin_unlock_irq(&ioc->lock);
 	return 0;
 }
@@ -3456,6 +3568,141 @@ static int ioc_cost_model_show(struct seq_file *sf, void *v)
 			  &blkcg_policy_iocost, seq_cft(sf)->private, false);
 	return 0;
 }
+
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+/*
+ * Attach a BPF cost model to the device named by ops->dev: resolve the
+ * queue, make sure iocost is on it, and publish the model.  Attaching
+ * switches the device away from the builtin linear model; detaching
+ * restores it.  The struct_ops core holds the program alive for the
+ * whole registered period, so no extra reference is taken on the ops.
+ */
+int ioc_bpf_attach(struct iocost_model_ops *ops)
+{
+	struct block_device *bdev;
+	struct request_queue *q;
+	struct ioc *ioc;
+	const struct iocost_model_ops *old;
+	struct file *bdevf;
+	int ret;
+
+	bdevf = bdev_file_open_by_dev(new_decode_dev(ops->dev),
+				      BLK_OPEN_READ, NULL, NULL);
+	if (IS_ERR(bdevf))
+		return PTR_ERR(bdevf);
+	bdev = file_bdev(bdevf);
+
+	if (bdev_is_partition(bdev)) {
+		fput(bdevf);
+		return -EINVAL;
+	}
+
+	q = bdev->bd_queue;
+	if (!queue_is_mq(q)) {
+		fput(bdevf);
+		return -EOPNOTSUPP;
+	}
+
+	mutex_lock(&q->rq_qos_mutex);
+	ioc = q_to_ioc(q);
+	if (!ioc) {
+		ret = blk_iocost_init(bdev->bd_disk);
+		if (ret) {
+			mutex_unlock(&q->rq_qos_mutex);
+			fput(bdevf);
+			return ret;
+		}
+		ioc = q_to_ioc(q);
+	}
+
+	/*
+	 * Stay under rq_qos_mutex until the model is published:
+	 * ioc_rqos_exit() frees the ioc under this mutex, so holding
+	 * it keeps the ioc alive through the publish below.  The open
+	 * bdev file pins the queue for as long as the model is
+	 * attached; it is released by the .unreg side of the detach.
+	 */
+	spin_lock_irq(&ioc->lock);
+	old = rcu_dereference_protected(ioc->model,
+					lockdep_is_held(&ioc->lock));
+	if (old) {
+		spin_unlock_irq(&ioc->lock);
+		mutex_unlock(&q->rq_qos_mutex);
+		fput(bdevf);
+		return -EBUSY;
+	}
+	if (!ioc->enabled) {
+		/*
+		 * the controller must run for the model to be consulted:
+		 * enable it like io.cost.qos enable=1 does
+		 */
+		blk_stat_enable_accounting(q);
+		blk_queue_flag_set(QUEUE_FLAG_RQ_ALLOC_TIME, q);
+		ioc->enabled = true;
+		ioc_refresh_params(ioc, true);
+	}
+	rcu_assign_pointer(ioc->model, ops);
+	ops->q = q;
+	ops->bdev_file = bdevf;
+	spin_unlock_irq(&ioc->lock);
+	/* match io.cost.qos: running iocost disables wbt */
+	wbt_disable_default(bdev->bd_disk);
+	mutex_unlock(&q->rq_qos_mutex);
+
+	return 0;
+}
+
+/*
+ * Detach a model.  The caller holds q->rq_qos_mutex, which serializes
+ * this against ioc_bpf_attach(), against ioc_rqos_exit() freeing the
+ * ioc, and against a concurrent .unreg, so the ops->q/model clearing
+ * is idempotent.  The bdev file is not released here: it pins the
+ * queue for the .unreg side, which may still be about to lock it.
+ */
+void ioc_bpf_detach(struct iocost_model_ops *ops)
+{
+	struct request_queue *q = ops->q;
+	struct ioc *ioc;
+
+	if (!q)
+		return;
+
+	ioc = q_to_ioc(q);
+	/* pairs with the lockless READ_ONCE() in ioc_bpf_unreg() */
+	WRITE_ONCE(ops->q, NULL);
+
+	if (!ioc)
+		return;
+
+	spin_lock_irq(&ioc->lock);
+	if (rcu_dereference_protected(ioc->model,
+				      lockdep_is_held(&ioc->lock)) == ops)
+		rcu_assign_pointer(ioc->model, NULL);
+	spin_unlock_irq(&ioc->lock);
+}
+
+/*
+ * The .unreg side of the detach: serialize against the queue
+ * teardown, then drop the bdev file pinning the queue.  ops->q is
+ * stable here: only ioc_bpf_detach() clears it, the file pin keeps
+ * the queue alive until it is dropped below, and .unreg runs once.
+ */
+void ioc_bpf_unreg(struct iocost_model_ops *ops)
+{
+	struct request_queue *q = READ_ONCE(ops->q);
+	struct file *bdevf = ops->bdev_file;
+
+	ops->bdev_file = NULL;
+	if (q)
+		mutex_lock(&q->rq_qos_mutex);
+	ioc_bpf_detach(ops);
+	if (q)
+		mutex_unlock(&q->rq_qos_mutex);
+	if (bdevf)
+		fput(bdevf);
+}
+
+#endif
 
 static const match_table_t cost_ctrl_tokens = {
 	{ COST_CTRL,		"ctrl=%s"	},
@@ -3531,11 +3778,31 @@ static ssize_t ioc_cost_model_write(struct kernfs_open_file *of, char *input,
 				user = false;
 			else if (!strcmp(buf, "user"))
 				user = true;
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+			else if (!strcmp(buf, "bpf")) {
+				/*
+				 * readback value while a BPF model is
+				 * attached; attaching is done by loading
+				 * the struct_ops, not through this file
+				 */
+				continue;
+			}
+#endif
 			else
 				goto unlock;
 			continue;
 		case COST_MODEL:
 			match_strlcpy(buf, &args[0], sizeof(buf));
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+			if (!strcmp(buf, "bpf")) {
+				/*
+				 * readback value while a BPF model is
+				 * attached; attaching is done by loading
+				 * the struct_ops, not through this file
+				 */
+				continue;
+			}
+#endif
 			if (strcmp(buf, "linear"))
 				goto unlock;
 			continue;
