@@ -593,13 +593,23 @@ static inline void rht_assign_unlock(struct bucket_table *tbl,
 	for (pos = list; pos && rht_entry(tpos, pos, member);		\
 	     pos = rcu_dereference_all(pos->next))
 
-static inline int rhashtable_compare(struct rhashtable_compare_arg *arg,
-				     const void *obj)
+/*
+ * Use constant params from inlined callers to specialize memcmp(). If params
+ * isn't constant, it must be equal to ht->p.
+ */
+static __always_inline int rhashtable_compare(struct rhashtable_compare_arg *arg,
+					      const void *obj,
+					      const struct rhashtable_params params)
 {
 	struct rhashtable *ht = arg->ht;
 	const char *ptr = obj;
 
-	return memcmp(ptr + ht->p.key_offset, arg->key, ht->p.key_len);
+	if (!__builtin_constant_p(params.key_len))
+		return memcmp(ptr + ht->p.key_offset, arg->key,
+			      ht->p.key_len);
+
+	return memcmp(ptr + params.key_offset, arg->key,
+		      params.key_len ? : ht->p.key_len);
 }
 
 /* Internal function, do not use. */
@@ -627,7 +637,7 @@ restart:
 		rht_for_each_rcu_from(he, __rht_ptr_rcu(bkt, freq), tbl, hash) {
 			if (params.obj_cmpfn ?
 			    params.obj_cmpfn(&arg, rht_obj(ht, he)) :
-			    rhashtable_compare(&arg, rht_obj(ht, he)))
+			    rhashtable_compare(&arg, rht_obj(ht, he), params))
 				continue;
 			return he;
 		}
@@ -792,7 +802,7 @@ slow_path:
 		if (!key ||
 		    (params.obj_cmpfn ?
 		     params.obj_cmpfn(&arg, rht_obj(ht, head)) :
-		     rhashtable_compare(&arg, rht_obj(ht, head)))) {
+		     rhashtable_compare(&arg, rht_obj(ht, head), params))) {
 			pprev = &head->next;
 			continue;
 		}
