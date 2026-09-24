@@ -1106,6 +1106,19 @@
 			firmware-gpios = <&gpio TEGRA_GPIO(R, 0) GPIO_ACTIVE_HIGH>;
 		};
 
+		light-sensor@39 {
+			compatible = "avago,apds9900";
+			reg = <0x39>;
+
+			interrupt-parent = <&gpio>;
+			interrupts = <TEGRA_GPIO(K, 2) IRQ_TYPE_EDGE_RISING>;
+
+			vdd-supply = <&vdd_3v0_proxi>;
+			vddio-supply = <&vdd_1v8_sen>;
+
+			led-max-microamp = <100000>;
+		};
+
 		imu@68 {
 			compatible = "invensense,mpu6050";
 			reg = <0x68>;
