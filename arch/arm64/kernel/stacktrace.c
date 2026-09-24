@@ -445,6 +445,137 @@ noinline noinstr void arch_bpf_stack_walk(bool (*consume_entry)(void *cookie, u6
 	kunwind_stack_walk(arch_bpf_unwind_consume_entry, &data, current, NULL);
 }
 
+struct bpf_unwind_ra_consume_entry_data {
+	bool (*consume_entry)(void *cookie, u64 ip, u64 sp, u64 fp, u64 *ra);
+	void *cookie;
+	unsigned long record;
+	bool seen_first;
+};
+
+#ifdef CONFIG_ARM64_PTR_AUTH_KERNEL
+/*
+ * How far above a frame record the stack pointer that signed its link
+ * register can sit. A frame that large is already far past anything on an
+ * unwind path; the search below gives up rather than guess beyond it.
+ */
+#define BPF_UNWIND_MAX_FRAME	512
+
+static u64 bpf_unwind_sign_ra(u64 ra, u64 modifier)
+{
+	asm volatile(ARM64_ASM_PREAMBLE
+		     ".arch_extension pauth\n"
+		     "	pacia %0, %1"
+		     : "+r" (ra) : "r" (modifier));
+	return ra;
+}
+
+/*
+ * Recover the modifier the owner of a frame record signed its link register
+ * with. PACIASP and the matching AUTIASP both use the stack pointer the
+ * function was entered with, which sits a whole number of sixteen-byte units
+ * above the record the function went on to push -- how many depends on the
+ * frame, so it cannot be assumed. A BPF prologue pushes the record straight
+ * away and lands on record + 16, but the record holding the innermost BPF
+ * frame's return address belongs to bpf_unwind() itself, an ordinary C
+ * function with a frame of its own below it.
+ *
+ * @stored is the signature sitting in the slot and @pc the return address the
+ * unwinder stripped out of it, so re-signing @pc is enough to recognise the
+ * modifier that produced it.
+ */
+static bool bpf_unwind_ra_modifier(unsigned long record, u64 stored, u64 pc,
+				   u64 *modifier)
+{
+	u64 m;
+
+	for (m = record + sizeof(struct frame_record);
+	     m - record <= BPF_UNWIND_MAX_FRAME; m += 16) {
+		if (bpf_unwind_sign_ra(pc, m) == stored) {
+			*modifier = m;
+			return true;
+		}
+	}
+	return false;
+}
+#endif /* CONFIG_ARM64_PTR_AUTH_KERNEL */
+
+/*
+ * Store a return address back into the frame record that holds it. An address
+ * written here has to carry the same signature the one it replaces did, or the
+ * epilogue's AUTIASP faults on the way out. A slot still holding @pc unchanged
+ * was never signed, and the address replacing it must not be either.
+ *
+ * Returns false if the slot was left alone, which leaves the frame returning
+ * where it already was and so has to stop the walk.
+ */
+static bool bpf_unwind_store_ra(unsigned long record, u64 pc, u64 ra)
+{
+	struct frame_record *rec = (struct frame_record *)record;
+	u64 stored = READ_ONCE(rec->lr);
+
+#ifdef CONFIG_ARM64_PTR_AUTH_KERNEL
+	if (system_supports_address_auth() && stored != pc) {
+		u64 modifier;
+
+		if (WARN_ON_ONCE(!bpf_unwind_ra_modifier(record, stored, pc,
+							 &modifier)))
+			return false;
+		ra = bpf_unwind_sign_ra(ra, modifier);
+	}
+#endif
+	WRITE_ONCE(rec->lr, ra);
+	return true;
+}
+
+static bool
+arch_bpf_unwind_ra_consume_entry(const struct kunwind_state *state, void *cookie)
+{
+	struct bpf_unwind_ra_consume_entry_data *data = cookie;
+	unsigned long record = data->record;
+	bool seen_first = data->seen_first;
+	u64 ra = state->common.pc;
+
+	/* The record this frame's return address will have come out of. */
+	data->record = state->common.fp;
+	data->seen_first = true;
+
+	/*
+	 * The walk starts at its own caller, whose pc is where it is running
+	 * rather than an address it will return to. No frame record holds it,
+	 * so there is nothing to hand out for the first entry.
+	 */
+	if (!seen_first)
+		return true;
+	/*
+	 * A traced return: the slot holds the tracer's trampoline and
+	 * common.pc is the address the tracer recovered from its own stack.
+	 * Redirecting the frame would lose the trampoline, so stop here and
+	 * leave the remaining frames alone.
+	 */
+	if (state->flags.fgraph || state->flags.kretprobe)
+		return false;
+
+	if (!data->consume_entry(data->cookie, state->common.pc, 0,
+				 state->common.fp, &ra))
+		return false;
+	if (ra != state->common.pc &&
+	    !bpf_unwind_store_ra(record, state->common.pc, ra))
+		return false;
+	return true;
+}
+
+noinline noinstr void arch_bpf_stack_walk_ra(bool (*consume_entry)(void *cookie, u64 ip, u64 sp,
+								   u64 fp, u64 *ra),
+					     void *cookie)
+{
+	struct bpf_unwind_ra_consume_entry_data data = {
+		.consume_entry = consume_entry,
+		.cookie = cookie,
+	};
+
+	kunwind_stack_walk(arch_bpf_unwind_ra_consume_entry, &data, current, NULL);
+}
+
 static const char *state_source_string(const struct kunwind_state *state)
 {
 	switch (state->source) {

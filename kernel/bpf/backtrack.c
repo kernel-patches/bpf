@@ -4,6 +4,7 @@
 #include <linux/bpf_verifier.h>
 #include <linux/filter.h>
 #include <linux/bitmap.h>
+#include "exception.h"
 
 #define verbose(env, fmt, args...) bpf_verifier_log_write(env, fmt, ##args)
 
@@ -434,8 +435,24 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 					return -EFAULT;
 			}
 
+			if (bpf_exc_pad_of_call(env, idx) == subseq_idx) {
+				/*
+				 * We came from this call's landing pad, which
+				 * runs in the caller's frame: on that path the
+				 * callee's frame was never entered, so there is
+				 * no frame to leave. The call clobbered r0-r5;
+				 * r6-r9 and the stack are the caller's own and
+				 * keep going back from here.
+				 */
+				bt_clear_reg(bt, BPF_REG_0);
+				if (bt_reg_mask(bt) & BPF_REGMASK_ARGS) {
+					verifier_bug(env, "landing pad unexpected regs %x",
+						     bt_reg_mask(bt));
+					return -EFAULT;
+				}
+				return 0;
 			/* callx calls static subprogs only */
-			if (subprog >= 0 && bpf_subprog_is_global(env, subprog)) {
+			} else if (subprog >= 0 && bpf_subprog_is_global(env, subprog)) {
 				/* check that jump history doesn't have any
 				 * extra instructions from subprog; the next
 				 * instruction after call to global subprog
@@ -955,6 +972,11 @@ int bpf_mark_chain_precision(struct bpf_verifier_env *env,
 		st = st->parent;
 		if (!st)
 			break;
+
+		if (verifier_bug_if(bt->frame > st->curframe, env,
+				    "backtrack frame %d, state curframe %d",
+				    bt->frame, st->curframe))
+			return -EFAULT;
 
 		for (fr = bt->frame; fr >= 0; fr--) {
 			func = st->frame[fr];
