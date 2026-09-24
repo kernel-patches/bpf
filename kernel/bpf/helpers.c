@@ -4807,14 +4807,29 @@ __bpf_kfunc int bpf_task_work_schedule_resume(struct task_struct *task, struct b
 
 typedef int (*bpf_rcu_callback_t)(struct bpf_map *map, void *key, void *value);
 
+/* ARMED covers the head, RUNNING the element; a re-arming callback holds both. */
+#define RCU_HEAD_DEAD		BIT(0)		/* element is being released */
+#define RCU_HEAD_ARMED		BIT(1)		/* head is queued */
+#define RCU_HEAD_RUNNING	BIT(2)		/* callback has not returned */
+#define RCU_HEAD_BUSY		(RCU_HEAD_ARMED | RCU_HEAD_RUNNING)
+
 /* Actual type for struct bpf_rcu_head */
 struct bpf_rcu_head_kern {
 	struct rcu_head rcu;
 	bpf_callback_t callback_fn;
 	struct bpf_map *map;
 	struct bpf_prog *prog;
-	u32 armed;
+	atomic_t state;
 } __aligned(8);
+
+/* The record test also keeps the offset off a percpu map's pointer slot. */
+static struct bpf_rcu_head_kern *bpf_rcu_head_of(struct bpf_map *map, void *value)
+{
+	if (!btf_record_has_field(map->record, BPF_RCU_HEAD))
+		return NULL;
+
+	return value + map->record->rcu_head_off;
+}
 
 static void bpf_rcu_run_callback(struct rcu_head *rcu)
 {
@@ -4823,19 +4838,88 @@ static void bpf_rcu_run_callback(struct rcu_head *rcu)
 	struct bpf_prog *prog = rh->prog;
 	struct bpf_map *map = rh->map;
 	void *value, *key;
+	int old, state;
 	u32 idx;
 
 	value = (void *)rh - map->record->rcu_head_off;
 	key = map_key_from_value(map, value, &idx);
 
-	/* Pairs with the arming cmpxchg(): rh may be re-armed as soon as this store lands. */
-	smp_store_release(&rh->armed, 0);
+	/*
+	 * Take RUNNING first, so a claim racing this always sees one of the two.
+	 * rh may be re-armed, and its fields overwritten, once ARMED is dropped.
+	 */
+	old = atomic_fetch_or(RCU_HEAD_RUNNING, &rh->state);
+	WARN_ON_ONCE(old & RCU_HEAD_RUNNING);
+	atomic_andnot(RCU_HEAD_ARMED, &rh->state);
 
+	/*
+	 * Drop RUNNING under the read locks, or a re-arm could be invoked while
+	 * this callback is still on the element. The callback picks the flavour,
+	 * so both locks are needed.
+	 */
+	rcu_read_lock_trace();
 	rcu_read_lock_dont_migrate();
 	callback_fn((u64)(long)map, (u64)(long)key, (u64)(long)value, 0, 0);
+	state = atomic_fetch_andnot(RCU_HEAD_RUNNING, &rh->state) & ~RCU_HEAD_RUNNING;
 	rcu_read_unlock_migrate();
+	rcu_read_unlock_trace();
+
+	/* A live element is never dead, so this only fires after a claim. */
+	if (!(state & RCU_HEAD_BUSY) && (state & RCU_HEAD_DEAD))
+		map->ops->map_release_elem(map, value);
 
 	bpf_prog_put(prog);
+}
+
+/**
+ * bpf_rcu_head_claim - hand an element over to a queued callback, if any
+ * @map: map owning @value
+ * @value: the element being released
+ *
+ * An RCU callback cannot be cancelled, so an element with one outstanding has
+ * to stay alive until it has run; the callback releases it through
+ * map_release_elem(). Marking it dead also stops it being armed again.
+ *
+ * Return: true when a callback owns @value and the caller must not release it.
+ */
+bool bpf_rcu_head_claim(struct bpf_map *map, void *value)
+{
+	struct bpf_rcu_head_kern *rhk = bpf_rcu_head_of(map, value);
+
+	return rhk && (atomic_fetch_or(RCU_HEAD_DEAD, &rhk->state) & RCU_HEAD_BUSY);
+}
+
+/**
+ * bpf_rcu_head_busy - is a callback still using @value?
+ * @map: map owning @value
+ * @value: the element being looked at
+ *
+ * Unlike bpf_rcu_head_claim() this takes nothing, so a caller that can leave
+ * the element alone asks with this first.
+ *
+ * Return: true when a callback is queued on @value or running on it.
+ */
+bool bpf_rcu_head_busy(struct bpf_map *map, void *value)
+{
+	struct bpf_rcu_head_kern *rhk = bpf_rcu_head_of(map, value);
+
+	return rhk && (atomic_read(&rhk->state) & RCU_HEAD_BUSY);
+}
+
+/**
+ * bpf_rcu_head_reset - give a recycled element a clean head
+ * @map: map owning @value
+ * @value: the element being handed out again
+ *
+ * The dead bit lives in the element, so it outlasts the callback that set it.
+ * Without this a recycled element would refuse every later bpf_call_rcu().
+ */
+void bpf_rcu_head_reset(struct bpf_map *map, void *value)
+{
+	struct bpf_rcu_head_kern *rhk = bpf_rcu_head_of(map, value);
+
+	if (rhk)
+		atomic_set(&rhk->state, 0);
 }
 
 static int __bpf_call_rcu(struct bpf_rcu_head *rh, struct bpf_map *map, void *callback,
@@ -4843,6 +4927,7 @@ static int __bpf_call_rcu(struct bpf_rcu_head *rh, struct bpf_map *map, void *ca
 {
 	struct bpf_rcu_head_kern *rhk = (void *)rh;
 	struct bpf_prog *prog;
+	int old;
 
 	BUILD_BUG_ON(sizeof(struct bpf_rcu_head_kern) > sizeof(struct bpf_rcu_head));
 	BUILD_BUG_ON(__alignof__(struct bpf_rcu_head_kern) != __alignof__(struct bpf_rcu_head));
@@ -4852,14 +4937,18 @@ static int __bpf_call_rcu(struct bpf_rcu_head *rh, struct bpf_map *map, void *ca
 	if (!atomic64_read(&map->usercnt))
 		return -EPERM;
 
-	if (cmpxchg(&rhk->armed, 0, 1))
-		return -EBUSY;
-
+	/* Before arming, so a failure here leaves the head alone. */
 	prog = bpf_prog_inc_not_zero(aux->prog);
-	if (IS_ERR(prog)) {
-		WRITE_ONCE(rhk->armed, 0);
+	if (IS_ERR(prog))
 		return -EBADF;
-	}
+
+	old = atomic_read(&rhk->state);
+	do {
+		if (old & (RCU_HEAD_ARMED | RCU_HEAD_DEAD)) {
+			bpf_prog_put(prog);
+			return -EBUSY;
+		}
+	} while (!atomic_try_cmpxchg(&rhk->state, &old, old | RCU_HEAD_ARMED));
 
 	rhk->callback_fn = (bpf_callback_t)callback;
 	rhk->map = map;
@@ -4878,8 +4967,9 @@ static int __bpf_call_rcu(struct bpf_rcu_head *rh, struct bpf_map *map, void *ca
  * @callback: BPF subprogram, invoked as callback(map, key, value) for the value holding @rh
  * @aux: bpf_prog_aux of the caller, implicitly set by the verifier
  *
- * Return: 0, -EBUSY if @rh is already queued, -EPERM if @map is held by neither a process
- * nor bpffs, or -EBADF if the calling program is going away.
+ * Return: 0, -EBUSY if @rh is already queued or its element is being released,
+ * -EPERM if @map is held by neither a process nor bpffs, or -EBADF if the
+ * calling program is going away.
  */
 __bpf_kfunc int bpf_call_rcu(struct bpf_rcu_head *rh, void *map__const_map,
 			     bpf_rcu_callback_t callback, struct bpf_prog_aux *aux)
@@ -4896,8 +4986,9 @@ __bpf_kfunc int bpf_call_rcu(struct bpf_rcu_head *rh, void *map__const_map,
  *
  * Waits for sleepable BPF programs too.  The callback itself is not sleepable either way.
  *
- * Return: 0, -EBUSY if @rh is already queued, -EPERM if @map is held by neither a process
- * nor bpffs, or -EBADF if the calling program is going away.
+ * Return: 0, -EBUSY if @rh is already queued or its element is being released,
+ * -EPERM if @map is held by neither a process nor bpffs, or -EBADF if the
+ * calling program is going away.
  */
 __bpf_kfunc int bpf_call_rcu_tasks_trace(struct bpf_rcu_head *rh, void *map__const_map,
 					 bpf_rcu_callback_t callback, struct bpf_prog_aux *aux)

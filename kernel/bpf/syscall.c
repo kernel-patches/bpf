@@ -1326,7 +1326,19 @@ static int map_check_btf(struct bpf_map *map, struct bpf_token *token,
 				}
 				break;
 			case BPF_RCU_HEAD:
-				if (map->map_type != BPF_MAP_TYPE_ARRAY) {
+				if (map->map_type != BPF_MAP_TYPE_HASH &&
+				    map->map_type != BPF_MAP_TYPE_LRU_HASH &&
+				    map->map_type != BPF_MAP_TYPE_ARRAY) {
+					ret = -EOPNOTSUPP;
+					goto free_map_tab;
+				}
+				/*
+				 * Array elements are never released, so they are never
+				 * claimed either. Any other map has to be able to take
+				 * one back from a callback.
+				 */
+				if (map->map_type != BPF_MAP_TYPE_ARRAY &&
+				    !map->ops->map_release_elem) {
 					ret = -EOPNOTSUPP;
 					goto free_map_tab;
 				}

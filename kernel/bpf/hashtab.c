@@ -188,6 +188,11 @@ static inline void *htab_elem_value(struct htab_elem *l, u32 key_size)
 	return l->key + round_up(key_size, 8);
 }
 
+static inline struct htab_elem *htab_elem_from_value(void *value, u32 key_size)
+{
+	return value - round_up(key_size, 8) - offsetof(struct htab_elem, key);
+}
+
 static inline void htab_elem_set_ptr(struct htab_elem *l, u32 key_size,
 				     void __percpu *pptr)
 {
@@ -310,6 +315,7 @@ static struct htab_elem *prealloc_lru_pop(struct bpf_htab *htab, void *key,
 		bpf_map_inc_elem_count(&htab->map);
 		l = container_of(node, struct htab_elem, lru_node);
 		memcpy(l->key, key, htab->map.key_size);
+		bpf_rcu_head_reset(&htab->map, htab_elem_value(l, htab->map.key_size));
 		return l;
 	}
 
@@ -904,6 +910,11 @@ static bool htab_lru_map_delete_node(void *arg, struct bpf_lru_node *node)
 	int ret;
 
 	tgt_l = container_of(node, struct htab_elem, lru_node);
+
+	/* An element a callback still needs cannot be evicted. */
+	if (bpf_rcu_head_busy(&htab->map, htab_elem_value(tgt_l, htab->map.key_size)))
+		return false;
+
 	b = __select_bucket(htab, tgt_l->hash);
 	head = &b->head;
 
@@ -914,15 +925,24 @@ static bool htab_lru_map_delete_node(void *arg, struct bpf_lru_node *node)
 	hlist_nulls_for_each_entry_rcu(l, n, head, hash_node)
 		if (l == tgt_l) {
 			hlist_nulls_del_rcu(&l->hash_node);
-			bpf_map_dec_elem_count(&htab->map);
 			break;
 		}
 
 	htab_unlock_bucket(b, flags);
 
-	if (l == tgt_l)
-		check_and_cancel_fields(htab, l);
-	return l == tgt_l;
+	if (l != tgt_l)
+		return false;
+
+	/*
+	 * An arm can land after the check above. The element is already unlinked
+	 * by now, so map_release_elem() finishes the handoff to the free list.
+	 */
+	if (bpf_rcu_head_claim(&htab->map, htab_elem_value(l, htab->map.key_size)))
+		return false;
+
+	bpf_map_dec_elem_count(&htab->map);
+	check_and_cancel_fields(htab, l);
+	return true;
 }
 
 /* Called from syscall */
@@ -1032,7 +1052,7 @@ static void dec_elem_count(struct bpf_htab *htab)
 		atomic_dec(&htab->count);
 }
 
-static void free_htab_elem(struct bpf_htab *htab, struct htab_elem *l)
+static void __free_htab_elem(struct bpf_htab *htab, struct htab_elem *l)
 {
 	htab_put_fd_value(htab, l);
 
@@ -1044,6 +1064,25 @@ static void free_htab_elem(struct bpf_htab *htab, struct htab_elem *l)
 		dec_elem_count(htab);
 		htab_elem_free(htab, l);
 	}
+}
+
+/* The element is already unlinked; only the return to the allocator is left. */
+static void htab_map_release_elem(struct bpf_map *map, void *value)
+{
+	struct bpf_htab *htab = container_of(map, struct bpf_htab, map);
+
+	__free_htab_elem(htab, htab_elem_from_value(value, htab->map.key_size));
+}
+
+static void free_htab_elem(struct bpf_htab *htab, struct htab_elem *l)
+{
+	if (bpf_rcu_head_claim(&htab->map, htab_elem_value(l, htab->map.key_size))) {
+		/* The element outlives the delete; its timer and friends do not. */
+		check_and_cancel_fields(htab, l);
+		return;
+	}
+
+	__free_htab_elem(htab, l);
 }
 
 static void pcpu_copy_value(struct bpf_htab *htab, void __percpu *pptr,
@@ -1110,6 +1149,17 @@ static bool fd_htab_map_needs_adjust(const struct bpf_htab *htab)
 	return is_fd_htab(htab) && BITS_PER_LONG == 64;
 }
 
+/*
+ * On update a preallocated htab stashes the old element in this CPU's spare
+ * instead of freeing it. An element with a queued callback cannot be reused
+ * that way, so those maps release it through free_htab_elem() instead.
+ */
+static bool htab_stashes_old_elem(const struct bpf_htab *htab)
+{
+	return htab_is_prealloc(htab) &&
+	       !btf_record_has_field(htab->map.record, BPF_RCU_HEAD);
+}
+
 static struct htab_elem *alloc_htab_elem(struct bpf_htab *htab, void *key,
 					 void *value, u32 key_size, u32 hash,
 					 bool percpu, bool onallcpus,
@@ -1121,7 +1171,7 @@ static struct htab_elem *alloc_htab_elem(struct bpf_htab *htab, void *key,
 	void __percpu *pptr;
 
 	if (prealloc) {
-		if (old_elem) {
+		if (old_elem && htab_stashes_old_elem(htab)) {
 			/* if we're updating the existing element,
 			 * use per-cpu extra elems to avoid freelist_pop/push
 			 */
@@ -1132,9 +1182,18 @@ static struct htab_elem *alloc_htab_elem(struct bpf_htab *htab, void *key,
 			struct pcpu_freelist_node *l;
 
 			l = __pcpu_freelist_pop(&htab->freelist);
-			if (!l)
-				return ERR_PTR(-E2BIG);
-			l_new = container_of(l, struct htab_elem, fnode);
+			if (l) {
+				l_new = container_of(l, struct htab_elem, fnode);
+			} else {
+				/* Spend the spare; freeing old_elem refills the freelist. */
+				if (!old_elem)
+					return ERR_PTR(-E2BIG);
+				pl_new = this_cpu_ptr(htab->extra_elems);
+				l_new = *pl_new;
+				if (!l_new)
+					return ERR_PTR(-E2BIG);
+				*pl_new = NULL;
+			}
 			bpf_map_inc_elem_count(&htab->map);
 		}
 	} else {
@@ -1155,6 +1214,7 @@ static struct htab_elem *alloc_htab_elem(struct bpf_htab *htab, void *key,
 	}
 
 	memcpy(l_new->key, key, key_size);
+	bpf_rcu_head_reset(&htab->map, htab_elem_value(l_new, key_size));
 	if (percpu) {
 		if (prealloc) {
 			pptr = htab_elem_get_ptr(l_new, key_size);
@@ -1296,11 +1356,11 @@ static long htab_map_update_elem(struct bpf_map *map, void *key, void *value,
 		/* l_old has already been stashed in htab->extra_elems, cancel
 		 * its reusable special fields before it is available for reuse.
 		 */
-		if (htab_is_prealloc(htab))
+		if (htab_stashes_old_elem(htab))
 			check_and_cancel_fields(htab, l_old);
 	}
 	htab_unlock_bucket(b, flags);
-	if (l_old && !htab_is_prealloc(htab))
+	if (l_old && !htab_stashes_old_elem(htab))
 		free_htab_elem(htab, l_old);
 	return 0;
 err:
@@ -1308,11 +1368,29 @@ err:
 	return ret;
 }
 
-static void htab_lru_push_free(struct bpf_htab *htab, struct htab_elem *elem)
+static void __htab_lru_push_free(struct bpf_htab *htab, struct htab_elem *elem)
 {
 	check_and_cancel_fields(htab, elem);
 	bpf_map_dec_elem_count(&htab->map);
 	bpf_lru_push_free(&htab->lru, &elem->lru_node);
+}
+
+static void htab_lru_map_release_elem(struct bpf_map *map, void *value)
+{
+	struct bpf_htab *htab = container_of(map, struct bpf_htab, map);
+
+	__htab_lru_push_free(htab, htab_elem_from_value(value, htab->map.key_size));
+}
+
+static void htab_lru_push_free(struct bpf_htab *htab, struct htab_elem *elem)
+{
+	if (bpf_rcu_head_claim(&htab->map, htab_elem_value(elem, htab->map.key_size))) {
+		/* The element outlives the delete; its timer and friends do not. */
+		check_and_cancel_fields(htab, elem);
+		return;
+	}
+
+	__htab_lru_push_free(htab, elem);
 }
 
 static long htab_lru_map_update_elem(struct bpf_map *map, void *key, void *value,
@@ -2420,6 +2498,7 @@ const struct bpf_map_ops htab_map_ops = {
 	.map_lookup_elem = htab_map_lookup_elem,
 	.map_lookup_and_delete_elem = htab_map_lookup_and_delete_elem,
 	.map_update_elem = htab_map_update_elem,
+	.map_release_elem = htab_map_release_elem,
 	.map_delete_elem = htab_map_delete_elem,
 	.map_gen_lookup = htab_map_gen_lookup,
 	.map_seq_show_elem = htab_map_seq_show_elem,
@@ -2443,6 +2522,7 @@ const struct bpf_map_ops htab_lru_map_ops = {
 	.map_lookup_and_delete_elem = htab_lru_map_lookup_and_delete_elem,
 	.map_lookup_elem_sys_only = htab_lru_map_lookup_elem_sys,
 	.map_update_elem = htab_lru_map_update_elem,
+	.map_release_elem = htab_lru_map_release_elem,
 	.map_delete_elem = htab_lru_map_delete_elem,
 	.map_gen_lookup = htab_lru_map_gen_lookup,
 	.map_seq_show_elem = htab_map_seq_show_elem,

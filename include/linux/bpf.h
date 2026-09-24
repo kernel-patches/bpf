@@ -111,6 +111,8 @@ struct bpf_map_ops {
 	void *(*map_lookup_elem)(struct bpf_map *map, void *key);
 	long (*map_update_elem)(struct bpf_map *map, void *key, void *value, u64 flags);
 	long (*map_delete_elem)(struct bpf_map *map, void *key);
+	/* Release an element a bpf_rcu_head callback was holding. */
+	void (*map_release_elem)(struct bpf_map *map, void *value);
 	long (*map_push_elem)(struct bpf_map *map, void *value, u64 flags);
 	long (*map_pop_elem)(struct bpf_map *map, void *value);
 	long (*map_peek_elem)(struct bpf_map *map, void *value);
@@ -665,6 +667,9 @@ void copy_map_value_locked(struct bpf_map *map, void *dst, void *src,
 void bpf_timer_cancel_and_free(void *timer);
 void bpf_wq_cancel_and_free(void *timer);
 void bpf_task_work_cancel_and_free(void *timer);
+bool bpf_rcu_head_claim(struct bpf_map *map, void *value);
+bool bpf_rcu_head_busy(struct bpf_map *map, void *value);
+void bpf_rcu_head_reset(struct bpf_map *map, void *value);
 void bpf_list_head_free(const struct btf_field *field, void *list_head,
 			struct bpf_spin_lock *spin_lock);
 void bpf_rb_root_free(const struct btf_field *field, void *rb_root,
