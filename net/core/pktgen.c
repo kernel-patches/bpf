@@ -818,6 +818,25 @@ static ssize_t num_arg(const char __user *user_buffer, size_t maxlen,
 	return i;
 }
 
+/* The node command's ten-digit argument also fits in u64 on 32-bit. */
+static ssize_t num_arg_u64(const char __user *user_buffer, size_t maxlen,
+			   u64 *num)
+{
+	size_t i;
+
+	*num = 0;
+	for (i = 0; i < maxlen; i++) {
+		char c;
+
+		if (get_user(c, &user_buffer[i]))
+			return -EFAULT;
+		if (c < '0' || c > '9')
+			break;
+		*num = *num * 10 + c - '0';
+	}
+	return i;
+}
+
 static ssize_t strn_len(const char __user *user_buffer, size_t maxlen)
 {
 	size_t i;
@@ -1304,13 +1323,15 @@ static ssize_t pktgen_if_write(struct file *file,
 		return count;
 	}
 	if (!strcmp(name, "node")) {
+		u64 node;
+
 		max = min(10, count - i);
-		len = num_arg(&user_buffer[i], max, &value);
+		len = num_arg_u64(&user_buffer[i], max, &node);
 		if (len < 0)
 			return len;
 
-		if (node_possible(value)) {
-			pkt_dev->node = value;
+		if (node < MAX_NUMNODES && node_possible((int)node)) {
+			pkt_dev->node = (int)node;
 			sprintf(pg_result, "OK: node=%d", pkt_dev->node);
 			if (pkt_dev->page) {
 				put_page(pkt_dev->page);
