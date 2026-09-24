@@ -10,6 +10,7 @@
 #include <linux/arm-smccc.h>
 #include <linux/bitfield.h>
 #include <linux/bpf.h>
+#include <linux/bpf_verifier.h>
 #include <linux/cfi.h>
 #include <linux/filter.h>
 #include <linux/memory.h>
@@ -693,6 +694,7 @@ static int emit_bpf_tail_call(struct jit_ctx *ctx)
 	if (ctx->stack_size && !ctx->priv_sp_used)
 		emit(A64_ADD_I(1, A64_SP, A64_SP, ctx->stack_size), ctx);
 
+
 	pop_callee_regs(ctx);
 
 	/* goto *(prog->bpf_func + prologue_offset); */
@@ -1057,6 +1059,7 @@ static void build_epilogue(struct jit_ctx *ctx, bool was_classic)
 	if (ctx->stack_size && !ctx->priv_sp_used)
 		emit(A64_ADD_I(1, A64_SP, A64_SP, ctx->stack_size), ctx);
 
+
 	pop_callee_regs(ctx);
 
 	emit(A64_POP(A64_ZR, ptr, A64_SP), ctx);
@@ -1369,6 +1372,7 @@ static int build_insn(const struct bpf_verifier_env *env, const struct bpf_insn 
 	const s16 off = insn->off;
 	const s32 imm = insn->imm;
 	const int i = insn - ctx->prog->insnsi;
+	const bool pad_head = bpf_exc_insn_is_pad(env, ctx->prog, i);
 	const bool is64 = BPF_CLASS(code) == BPF_ALU64 ||
 			  BPF_CLASS(code) == BPF_JMP;
 	u8 jmp_cond;
@@ -1380,7 +1384,7 @@ static int build_insn(const struct bpf_verifier_env *env, const struct bpf_insn 
 	int ret;
 	bool sign_extend;
 
-	if (bpf_insn_is_indirect_target(env, ctx->prog, i))
+	if (bpf_insn_is_indirect_target(env, ctx->prog, i) || pad_head)
 		emit_bti(A64_BTI_J, ctx);
 
 	switch (code) {
@@ -1745,6 +1749,7 @@ emit_cond_jmp:
 		u64 func_addr;
 		u32 cpu_offset;
 
+
 		/* Implement helper call to bpf_get_smp_processor_id() inline */
 		if (insn->src_reg == 0 && insn->imm == BPF_FUNC_get_smp_processor_id) {
 			cpu_offset = offsetof(struct thread_info, cpu);
@@ -1867,7 +1872,8 @@ emit_cond_jmp:
 			src = tmp2;
 		}
 		if (src == fp) {
-			src_adj = ctx->priv_sp_used ? priv_sp : A64_SP;
+			src_adj = ctx->priv_sp_used ? priv_sp :
+				  A64_SP;
 			off_adj = off + ctx->stack_size;
 			if (!ctx->priv_sp_used)
 				off_adj += ctx->stack_arg_size;
@@ -1965,7 +1971,8 @@ emit_cond_jmp:
 			dst = tmp3;
 		}
 		if (dst == fp) {
-			dst_adj = ctx->priv_sp_used ? priv_sp : A64_SP;
+			dst_adj = ctx->priv_sp_used ? priv_sp :
+				  A64_SP;
 			off_adj = off + ctx->stack_size;
 			if (!ctx->priv_sp_used)
 				off_adj += ctx->stack_arg_size;
@@ -2034,7 +2041,8 @@ emit_cond_jmp:
 			dst = tmp2;
 		}
 		if (dst == fp) {
-			dst_adj = ctx->priv_sp_used ? priv_sp : A64_SP;
+			dst_adj = ctx->priv_sp_used ? priv_sp :
+				  A64_SP;
 			off_adj = off + ctx->stack_size;
 			if (!ctx->priv_sp_used)
 				off_adj += ctx->stack_arg_size;
@@ -2423,6 +2431,21 @@ skip_init_ctx:
 		 * reasons, expects to point to the next instruction)
 		 */
 		bpf_prog_update_insn_ptrs(prog, ctx.offset, ctx.ro_image);
+
+		/*
+		 * Same byte offsets, consumed by the bpf_unwind() walk:
+		 * turn the cleanup records into native address ranges now that
+		 * the image is final.
+		 */
+		bpf_exc_fill_native_ranges(prog, ctx.offset, ctx.ro_image);
+
+		/*
+		 * Where a frame the unwind passes over but has no pad in
+		 * returns to: the one epilogue, which restores its caller's
+		 * registers and returns straight on.
+		 */
+		prog->aux->epilogue_ip = (u64)ctx.ro_image +
+					 ctx.epilogue_offset * AARCH64_INSN_SIZE;
 out_off:
 		if (!ro_header && priv_stack_ptr) {
 			free_percpu(priv_stack_ptr);
@@ -3405,6 +3428,11 @@ bool bpf_jit_supports_exceptions(void)
 	 * to walk kernel frames and reach BPF frames in the stack trace.
 	 * ARM64 kernel is always compiled with CONFIG_FRAME_POINTER=y
 	 */
+	return true;
+}
+
+bool bpf_jit_supports_cleanup_pads(void)
+{
 	return true;
 }
 
