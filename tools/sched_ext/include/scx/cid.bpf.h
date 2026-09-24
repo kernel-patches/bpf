@@ -130,10 +130,10 @@ static __always_inline bool cmask_test(u32 cid, const struct scx_cmask __arena *
 }
 
 /*
- * x86 BPF JIT rejects BPF_OR | BPF_FETCH and BPF_AND | BPF_FETCH on arena
- * pointers (see bpf_jit_supports_insn() in arch/x86/net/bpf_jit_comp.c). Only
- * BPF_CMPXCHG / BPF_XCHG / BPF_ADD with FETCH are allowed. Implement
- * test_and_{set,clear} and the atomic set/clear via a cmpxchg loop.
+ * Not every BPF JIT accepts BPF_OR | BPF_FETCH and BPF_AND | BPF_FETCH on
+ * arena pointers: arm64 without LSE rejects every arena read-modify-write
+ * atomic. Implement test_and_{set,clear} and the atomic set/clear via a
+ * cmpxchg loop so this works everywhere.
  *
  * CMASK_CAS_TRIES is sized so exhausting it means seconds of real spinning
  * on one word - past any plausible contention. Abort hard.
