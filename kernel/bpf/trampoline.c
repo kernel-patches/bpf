@@ -565,6 +565,7 @@ static void bpf_tramp_image_free(struct bpf_tramp_image *im)
 	arch_free_bpf_trampoline(im->image, im->size);
 	bpf_jit_uncharge_modmem(im->size);
 	percpu_ref_exit(&im->pcref);
+	kfree(im->skips);
 	kfree_rcu(im, rcu);
 }
 
@@ -601,7 +602,7 @@ static void __bpf_tramp_image_put_rcu_tasks(struct rcu_head *rcu)
 	struct bpf_tramp_image *im;
 
 	im = container_of(rcu, struct bpf_tramp_image, rcu);
-	if (im->ip_after_call)
+	if (im->call_orig)
 		/* the case of fmod_ret/fexit trampoline and CONFIG_PREEMPTION=y */
 		percpu_ref_kill(&im->pcref);
 	else
@@ -611,6 +612,8 @@ static void __bpf_tramp_image_put_rcu_tasks(struct rcu_head *rcu)
 
 static void bpf_tramp_image_put(struct bpf_tramp_image *im)
 {
+	int i, err;
+
 	/* The trampoline image that calls original function is using:
 	 * rcu_read_lock_trace to protect sleepable bpf progs
 	 * rcu_read_lock to protect normal bpf progs
@@ -621,10 +624,17 @@ static void bpf_tramp_image_put(struct bpf_tramp_image *im)
 	 *
 	 * The trampoline is unreachable before bpf_tramp_image_put().
 	 *
-	 * First, patch the trampoline to avoid calling into fexit progs.
-	 * The progs will be freed even if the original function is still
-	 * executing or sleeping.
-	 * In case of CONFIG_PREEMPT=y use call_rcu_tasks() to wait on
+	 * First, patch the trampoline to avoid calling into progs. The progs
+	 * will be freed even if a task is still in the trampoline, e.g.
+	 * sleeping in the original function or in a sleepable prog.
+	 */
+	for (i = 0; i < im->nr_skips; i++) {
+		err = bpf_arch_text_poke(im->skips[i].nop, BPF_MOD_NOP,
+					 BPF_MOD_JUMP, NULL, im->skips[i].target);
+		WARN_ON_ONCE(err);
+	}
+
+	/* In case of CONFIG_PREEMPT=y use call_rcu_tasks() to wait on
 	 * first few asm instructions to execute and call into
 	 * __bpf_tramp_enter->percpu_ref_get.
 	 * Then use percpu_ref_kill to wait for the trampoline and the original
@@ -637,11 +647,7 @@ static void bpf_tramp_image_put(struct bpf_tramp_image *im)
 	 * percpu_ref_kill will be waiting for. Hence the first
 	 * call_rcu_tasks() is not necessary.
 	 */
-	if (im->ip_after_call) {
-		int err = bpf_arch_text_poke(im->ip_after_call, BPF_MOD_NOP,
-					     BPF_MOD_JUMP, NULL,
-					     im->ip_epilogue);
-		WARN_ON(err);
+	if (im->call_orig) {
 		if (IS_ENABLED(CONFIG_TASKS_RCU))
 			call_rcu_tasks(&im->rcu, __bpf_tramp_image_put_rcu_tasks);
 		else
@@ -658,7 +664,7 @@ static void bpf_tramp_image_put(struct bpf_tramp_image *im)
 	call_rcu_tasks_trace(&im->rcu, __bpf_tramp_image_put_rcu_tasks);
 }
 
-static struct bpf_tramp_image *bpf_tramp_image_alloc(u64 key, int size)
+static struct bpf_tramp_image *bpf_tramp_image_alloc(u64 key, int size, int nr_progs)
 {
 	struct bpf_tramp_image *im;
 	struct bpf_ksym *ksym;
@@ -668,6 +674,10 @@ static struct bpf_tramp_image *bpf_tramp_image_alloc(u64 key, int size)
 	im = kzalloc_obj(*im);
 	if (!im)
 		goto out;
+
+	im->skips = kzalloc_objs(*im->skips, nr_progs);
+	if (!im->skips)
+		goto out_free_im;
 
 	err = bpf_jit_charge_modmem(size);
 	if (err)
@@ -695,6 +705,7 @@ out_free_image:
 out_uncharge:
 	bpf_jit_uncharge_modmem(size);
 out_free_im:
+	kfree(im->skips);
 	kfree(im);
 out:
 	return ERR_PTR(err);
@@ -771,11 +782,12 @@ again:
 		goto out;
 	}
 
-	im = bpf_tramp_image_alloc(tr->key, size);
+	im = bpf_tramp_image_alloc(tr->key, size, total);
 	if (IS_ERR(im)) {
 		err = PTR_ERR(im);
 		goto out;
 	}
+	im->call_orig = tr->flags & BPF_TRAMP_F_CALL_ORIG;
 
 	err = arch_prepare_bpf_trampoline(im, im->image, im->image + size,
 					  &tr->func.model, tr->flags, tnodes,

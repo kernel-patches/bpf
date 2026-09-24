@@ -1258,11 +1258,15 @@ struct btf_func_model {
 #define BPF_TRAMP_F_INDIRECT		BIT(8)
 
 /* Each call __bpf_prog_enter + call bpf_func + call __bpf_prog_exit is ~50
- * bytes on x86.
+ * bytes on x86. The trampoline image has to fit in PAGE_SIZE.
  */
 enum {
-#if defined(__s390x__)
+#if defined(__s390x__) || defined(__powerpc64__)
 	BPF_MAX_TRAMP_LINKS = 27,
+#elif defined(__loongarch__)
+	BPF_MAX_TRAMP_LINKS = 33,
+#elif defined(__aarch64__)
+	BPF_MAX_TRAMP_LINKS = 37,
 #else
 	BPF_MAX_TRAMP_LINKS = 38,
 #endif
@@ -1363,18 +1367,41 @@ enum bpf_tramp_prog_type {
 	BPF_TRAMP_FSESSION,
 };
 
+/*
+ * Each prog call in a trampoline image is preceded by a nop. When the image is
+ * put, the nops are patched to jumps to target, right after each call, so that
+ * tasks still running in the image skip the progs, which can be freed by then.
+ */
+struct bpf_tramp_skip {
+	void *nop;
+	void *target;
+};
+
 struct bpf_tramp_image {
 	void *image;
 	int size;
 	struct bpf_ksym ksym;
 	struct percpu_ref pcref;
-	void *ip_after_call;
-	void *ip_epilogue;
+	bool call_orig;
+	int nr_skips;
+	struct bpf_tramp_skip *skips;
 	union {
 		struct rcu_head rcu;
 		struct work_struct work;
 	};
 };
+
+static inline void bpf_tramp_image_add_skip(struct bpf_tramp_image *im, void *nop, void *target)
+{
+	struct bpf_tramp_skip *skip;
+
+	/* struct_ops trampolines and arch_bpf_trampoline_size() have no image */
+	if (!im || !im->skips)
+		return;
+	skip = &im->skips[im->nr_skips++];
+	skip->nop = nop;
+	skip->target = target;
+}
 
 struct bpf_trampoline {
 	/* hlist for trampoline_key_table */
