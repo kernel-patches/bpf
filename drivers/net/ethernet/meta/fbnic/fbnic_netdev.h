@@ -41,6 +41,8 @@ struct fbnic_net {
 	u32 rx_max_frames;
 
 	u16 num_napi;
+	/* Configured count, retained while suspend clears num_napi */
+	u16 num_napi_cfg;
 
 	struct phylink *phylink;
 	struct phylink_config phylink_config;
@@ -86,8 +88,6 @@ struct net_device *fbnic_netdev_alloc(struct fbnic_dev *fbd);
 void fbnic_netdev_free(struct fbnic_dev *fbd);
 int fbnic_netdev_register(struct net_device *netdev);
 void fbnic_netdev_unregister(struct net_device *netdev);
-void fbnic_reset_queues(struct fbnic_net *fbn,
-			unsigned int tx, unsigned int rx);
 
 void fbnic_set_ethtool_ops(struct net_device *dev);
 

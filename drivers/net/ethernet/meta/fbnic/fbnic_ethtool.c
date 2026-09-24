@@ -189,6 +189,7 @@ static void fbnic_clone_swap_cfg(struct fbnic_net *orig,
 	swap(clone->num_rx_queues, orig->num_rx_queues);
 	swap(clone->num_tx_queues, orig->num_tx_queues);
 	swap(clone->num_napi, orig->num_napi);
+	swap(clone->num_napi_cfg, orig->num_napi_cfg);
 	swap(clone->hds_thresh, orig->hds_thresh);
 }
 
@@ -1598,13 +1599,14 @@ static void fbnic_get_channels(struct net_device *netdev,
 	ch->max_combined = min(ch->max_rx, ch->max_tx);
 	ch->max_other =	FBNIC_NON_NAPI_VECTORS;
 
-	if (fbn->num_rx_queues > fbn->num_napi ||
-	    fbn->num_tx_queues > fbn->num_napi)
+	if (fbn->num_rx_queues > fbn->num_napi_cfg ||
+	    fbn->num_tx_queues > fbn->num_napi_cfg)
 		ch->combined_count = min(fbn->num_rx_queues,
 					 fbn->num_tx_queues);
 	else
 		ch->combined_count =
-			fbn->num_rx_queues + fbn->num_tx_queues - fbn->num_napi;
+			fbn->num_rx_queues + fbn->num_tx_queues -
+			fbn->num_napi_cfg;
 	ch->rx_count = fbn->num_rx_queues - ch->combined_count;
 	ch->tx_count = fbn->num_tx_queues - ch->combined_count;
 	ch->other_count = FBNIC_NON_NAPI_VECTORS;
@@ -1617,6 +1619,7 @@ static void fbnic_set_queues(struct fbnic_net *fbn, struct ethtool_channels *ch,
 	fbn->num_tx_queues = ch->tx_count + ch->combined_count;
 	fbn->num_napi = min(ch->rx_count + ch->tx_count + ch->combined_count,
 			    max_napis);
+	fbn->num_napi_cfg = fbn->num_napi;
 }
 
 static int fbnic_set_channels(struct net_device *netdev,
@@ -1643,6 +1646,13 @@ static int fbnic_set_channels(struct net_device *netdev,
 		return -EINVAL;
 
 	if (!netif_running(netdev)) {
+		unsigned int rxq = ch->rx_count + ch->combined_count;
+		unsigned int txq = ch->tx_count + ch->combined_count;
+
+		err = netif_set_real_num_queues(netdev, txq, rxq);
+		if (err)
+			return err;
+
 		fbnic_set_queues(fbn, ch, max_napis);
 		fbnic_reset_indir_tbl(fbn);
 		return 0;

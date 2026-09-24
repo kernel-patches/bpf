@@ -477,6 +477,7 @@ static int __fbnic_pm_resume(struct device *dev)
 	struct fbnic_dev *fbd = dev_get_drvdata(dev);
 	struct net_device *netdev = fbd->netdev;
 	void __iomem * const *iomap_table;
+	unsigned int max_napis;
 	struct fbnic_net *fbn;
 	int err;
 
@@ -517,8 +518,16 @@ static int __fbnic_pm_resume(struct device *dev)
 
 	fbn = netdev_priv(netdev);
 
-	/* Reset the queues if needed */
-	fbnic_reset_queues(fbn, fbn->num_tx_queues, fbn->num_rx_queues);
+	max_napis = fbd->num_irqs - FBNIC_NON_NAPI_VECTORS;
+	if (fbn->num_napi_cfg > max_napis) {
+		netdev_err(netdev,
+			   "Unable to restore channel configuration: %u NAPI vectors required, only %u available\n",
+			   fbn->num_napi_cfg, max_napis);
+		err = -ENOSPC;
+		goto unlock;
+	}
+
+	fbn->num_napi = fbn->num_napi_cfg;
 
 	if (netif_running(netdev)) {
 		err = __fbnic_open(fbn);
@@ -527,6 +536,7 @@ static int __fbnic_pm_resume(struct device *dev)
 			fbn->num_napi = 0;
 	}
 
+unlock:
 	netdev_unlock(netdev);
 	rtnl_unlock();
 	if (err)
