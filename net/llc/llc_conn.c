@@ -32,6 +32,7 @@ static int llc_exec_conn_trans_actions(struct sock *sk,
 				       struct sk_buff *ev);
 static const struct llc_conn_state_trans *llc_qualify_conn_ev(struct sock *sk,
 							      struct sk_buff *skb);
+static void __llc_sk_free(struct sock *sk, bool sync);
 
 /* Offset table on connection states transition diagram */
 static int llc_offset_table[NBR_CONN_STATES][NBR_CONN_EV];
@@ -90,6 +91,8 @@ int llc_conn_state_process(struct sock *sk, struct sk_buff *skb)
 		 */
 		skb_get(skb);
 		skb_queue_tail(&sk->sk_receive_queue, skb);
+		if (sk->sk_state == TCP_LISTEN)
+			sk_acceptq_added(sk);
 		sk->sk_state_change(sk);
 		break;
 	case LLC_DISC_PRIM:
@@ -765,14 +768,124 @@ static struct sock *llc_create_incoming_sock(struct sock *sk,
 	memcpy(&newllc->laddr, daddr, sizeof(newllc->laddr));
 	memcpy(&newllc->daddr, saddr, sizeof(newllc->daddr));
 	newllc->dev = dev;
-	dev_hold(dev);
+	netdev_hold(dev, &newllc->dev_tracker, GFP_ATOMIC);
+	/* Serialize packets that can find the child after it is hashed. */
+	bh_lock_sock_nested(newsk);
 	llc_sap_add_socket(llc->sap, newsk);
 out:
 	return newsk;
 }
 
+static bool llc_sk_unhashed(const struct sock *sk)
+{
+	return hlist_nulls_unhashed_lockless(&sk->sk_nulls_node);
+}
+
+static void llc_free_incoming_sock(struct sock *sk, bool bh_locked)
+{
+	struct llc_sock *llc = llc_sk(sk);
+	struct llc_sap *sap = llc->sap;
+	struct net_device *dev = llc->dev;
+
+	if (!bh_locked) {
+		local_bh_disable();
+		bh_lock_sock_nested(sk);
+	}
+	llc->state = LLC_CONN_OUT_OF_SVC;
+	/* Keep both objects alive through timer teardown. */
+	llc_sap_hold(sap);
+	netdev_hold(dev, NULL, GFP_ATOMIC);
+	llc_sap_remove_socket(sap, sk);
+	bh_unlock_sock(sk);
+	if (!bh_locked)
+		local_bh_enable();
+	netdev_put(dev, &llc->dev_tracker);
+	sock_orphan(sk);
+	/* Initial SABME setup arms no timers before it can fail. */
+	__llc_sk_free(sk, !bh_locked);
+	netdev_put(dev, NULL);
+	llc_sap_put(sap);
+}
+
+static void llc_conn_ind_rfree(struct sk_buff *skb)
+{
+	struct sock *sk = skb->sk;
+
+	sock_rfree(skb);
+	if (!sk->sk_socket)
+		llc_free_incoming_sock(sk, false);
+}
+
+static void llc_conn_send_dm_rsp(struct llc_sap *sap, struct sk_buff *skb,
+				 const struct llc_addr *saddr, u8 f_bit)
+{
+	struct sk_buff *nskb;
+	int rc;
+
+	nskb = llc_alloc_frame(NULL, skb->dev, LLC_PDU_TYPE_U, 0);
+	if (!nskb)
+		return;
+
+	llc_pdu_header_init(nskb, LLC_PDU_TYPE_U, sap->laddr.lsap,
+			    saddr->lsap, LLC_PDU_RSP);
+	llc_pdu_init_as_dm_rsp(nskb, f_bit);
+	rc = llc_mac_hdr_init(nskb, skb->dev->dev_addr, saddr->mac);
+	if (unlikely(rc))
+		kfree_skb(nskb);
+	else
+		dev_queue_xmit(nskb);
+}
+
+static void llc_listener_send_dm(struct llc_sap *sap, struct sock *sk,
+				 struct sk_buff *skb, const struct llc_addr *saddr)
+{
+	if (!llc_conn_ev_rx_disc_cmd_pbit_set_x(sk, skb)) {
+		u8 f_bit;
+
+		llc_pdu_decode_pf_bit(skb, &f_bit);
+		llc_conn_send_dm_rsp(sap, skb, saddr, f_bit);
+	} else if (!llc_conn_ev_rx_xxx_cmd_pbit_set_1(sk, skb)) {
+		llc_conn_send_dm_rsp(sap, skb, saddr, 1);
+	}
+}
+
+static int llc_conn_rcv_sabme(struct sock *sk, struct sk_buff *skb,
+			      struct llc_addr *saddr,
+			      struct llc_addr *daddr)
+{
+	struct sock *newsk;
+	int rc;
+
+	if (sk_acceptq_is_full(sk))
+		goto drop;
+
+	local_bh_disable();
+	newsk = llc_create_incoming_sock(sk, skb->dev, saddr, daddr);
+	if (!newsk) {
+		local_bh_enable();
+		goto drop;
+	}
+	skb_set_owner_r(skb, newsk);
+	rc = llc_conn_rcv(sk, skb);
+	if (unlikely(rc || llc_sk(newsk)->state != LLC_CONN_STATE_NORMAL)) {
+		if (!rc)
+			rc = -EINVAL;
+		llc_free_incoming_sock(newsk, true);
+	} else {
+		/* The indication owns the child until accept() grafts it. */
+		skb->destructor = llc_conn_ind_rfree;
+		bh_unlock_sock(newsk);
+	}
+	local_bh_enable();
+	return rc;
+drop:
+	kfree_skb(skb);
+	return 0;
+}
+
 void llc_conn_handler(struct llc_sap *sap, struct sk_buff *skb)
 {
+	struct net_device *backlog_dev = NULL;
 	struct llc_addr saddr, daddr;
 	struct sock *sk;
 
@@ -786,6 +899,10 @@ void llc_conn_handler(struct llc_sap *sap, struct sk_buff *skb)
 		goto drop;
 
 	bh_lock_sock(sk);
+	if (unlikely(llc_sk_unhashed(sk)))
+		goto drop_unlock;
+	if (unlikely(llc_sk(sk)->state == LLC_CONN_OUT_OF_SVC))
+		goto drop_unlock;
 	/*
 	 * This has to be done here and not at the upper layer ->accept
 	 * method because of the way the PROCOM state machine works:
@@ -795,11 +912,14 @@ void llc_conn_handler(struct llc_sap *sap, struct sk_buff *skb)
 	 * in the newly created struct sock private area. -acme
 	 */
 	if (unlikely(sk->sk_state == TCP_LISTEN)) {
-		struct sock *newsk = llc_create_incoming_sock(sk, skb->dev,
-							      &saddr, &daddr);
-		if (!newsk)
+		if (llc_conn_ev_rx_sabme_cmd_pbit_set_x(sk, skb)) {
+			llc_listener_send_dm(sap, sk, skb, &saddr);
 			goto drop_unlock;
-		skb_set_owner_r(skb, newsk);
+		}
+		if (!sock_owned_by_user(sk)) {
+			llc_conn_rcv_sabme(sk, skb, &saddr, &daddr);
+			goto out;
+		}
 	} else {
 		/*
 		 * Can't be skb_set_owner_r, this will be done at the
@@ -813,13 +933,16 @@ void llc_conn_handler(struct llc_sap *sap, struct sk_buff *skb)
 		skb->sk = sk;
 		skb->destructor = sock_efree;
 	}
-	if (!sock_owned_by_user(sk))
-		llc_conn_rcv(sk, skb);
-	else {
+	if (sock_owned_by_user(sk)) {
 		dprintk("%s: adding to backlog...\n", __func__);
 		llc_set_backlog_type(skb, LLC_PACKET);
+		/* The backlog can outlive the RCU protection of skb->dev. */
+		backlog_dev = skb->dev;
+		netdev_hold(backlog_dev, NULL, GFP_ATOMIC);
 		if (sk_add_backlog(sk, skb, READ_ONCE(sk->sk_rcvbuf)))
 			goto drop_unlock;
+	} else {
+		llc_conn_rcv(sk, skb);
 	}
 out:
 	bh_unlock_sock(sk);
@@ -830,6 +953,7 @@ drop:
 	return;
 drop_unlock:
 	kfree_skb(skb);
+	netdev_put(backlog_dev, NULL);
 	goto out;
 }
 
@@ -852,12 +976,33 @@ static int llc_backlog_rcv(struct sock *sk, struct sk_buff *skb)
 {
 	int rc = 0;
 	struct llc_sock *llc = llc_sk(sk);
+	struct net_device *dev = NULL;
 
 	if (likely(llc_backlog_type(skb) == LLC_PACKET)) {
-		if (likely(llc->state > 1)) /* not closed */
-			rc = llc_conn_rcv(sk, skb);
-		else
+		/* Drop the reference acquired before the skb entered the backlog. */
+		dev = skb->dev;
+		if (unlikely(sk->sk_state == TCP_LISTEN)) {
+			struct llc_addr saddr, daddr;
+
+			if (llc_sk_unhashed(sk) ||
+			    llc->state == LLC_CONN_OUT_OF_SVC)
+				goto out_kfree_skb;
+			if (llc_conn_ev_rx_sabme_cmd_pbit_set_x(sk, skb)) {
+				llc_pdu_decode_sa(skb, saddr.mac);
+				llc_pdu_decode_ssap(skb, &saddr.lsap);
+				llc_listener_send_dm(llc->sap, sk, skb, &saddr);
+				goto out_kfree_skb;
+			}
+			llc_pdu_decode_sa(skb, saddr.mac);
+			llc_pdu_decode_ssap(skb, &saddr.lsap);
+			llc_pdu_decode_da(skb, daddr.mac);
+			llc_pdu_decode_dsap(skb, &daddr.lsap);
+			rc = llc_conn_rcv_sabme(sk, skb, &saddr, &daddr);
+			goto out;
+		} else if (unlikely(llc->state <= 1 || !skb->sk)) {
 			goto out_kfree_skb;
+		}
+		rc = llc_conn_rcv(sk, skb);
 	} else if (llc_backlog_type(skb) == LLC_EVENT) {
 		/* timer expiration event */
 		if (likely(llc->state > 1))  /* not closed */
@@ -869,6 +1014,7 @@ static int llc_backlog_rcv(struct sock *sk, struct sk_buff *skb)
 		goto out_kfree_skb;
 	}
 out:
+	netdev_put(dev, NULL);
 	return rc;
 out_kfree_skb:
 	kfree_skb(skb);
@@ -965,11 +1111,16 @@ void llc_sk_stop_all_timers(struct sock *sk, bool sync)
  */
 void llc_sk_free(struct sock *sk)
 {
+	__llc_sk_free(sk, true);
+}
+
+static void __llc_sk_free(struct sock *sk, bool sync)
+{
 	struct llc_sock *llc = llc_sk(sk);
 
 	llc->state = LLC_CONN_OUT_OF_SVC;
 	/* Stop all (possibly) running timers */
-	llc_sk_stop_all_timers(sk, true);
+	llc_sk_stop_all_timers(sk, sync);
 #ifdef DEBUG_LLC_CONN_ALLOC
 	printk(KERN_INFO "%s: unackq=%d, txq=%d\n", __func__,
 		skb_queue_len(&llc->pdu_unack_q),
