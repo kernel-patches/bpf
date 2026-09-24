@@ -3774,7 +3774,7 @@ static int stmmac_hw_setup(struct net_device *dev)
 
 	/* Configure real RX and TX queues */
 	netif_set_real_num_rx_queues(dev, priv->plat->rx_queues_to_use);
-	netif_set_real_num_tx_queues(dev, priv->plat->tx_queues_to_use);
+	netif_set_real_num_tx_queues(dev, priv->xmit_qdisc.num_tx_queues);
 
 	/* Start the ball rolling... */
 	stmmac_start_all_dma(priv);
@@ -7941,6 +7941,7 @@ static int __stmmac_dvr_probe(struct device *device,
 		priv->xmit_qdisc.prio[i] = priv->plat->tx_queues_cfg[i].prio;
 	}
 	priv->xmit_qdisc.algo = priv->plat->tx_sched_algorithm;
+	priv->xmit_qdisc.num_tx_queues = priv->plat->tx_queues_to_use;
 
 	if (priv->plat->flags & STMMAC_FLAG_MULTI_MSI_EN) {
 		ret = stmmac_msi_init(priv, res);

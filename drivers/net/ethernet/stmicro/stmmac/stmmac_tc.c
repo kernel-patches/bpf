@@ -1285,6 +1285,7 @@ static int stmmac_reset_tc_mqprio(struct net_device *ndev,
 	stmmac_prog_mtl_tx_algorithms(priv, priv->hw,
 				      priv->plat->tx_sched_algorithm);
 	priv->xmit_qdisc.algo = priv->plat->tx_sched_algorithm;
+	priv->xmit_qdisc.num_tx_queues = priv->plat->tx_queues_to_use;
 
 	netdev_reset_tc(ndev);
 	netif_set_real_num_tx_queues(ndev, priv->plat->tx_queues_to_use);
@@ -1426,6 +1427,8 @@ static int tc_setup_dwmac510_mqprio(struct stmmac_priv *priv,
 
 	if (mode == TC_MQPRIO_MODE_CHANNEL)
 		tc_mqprio_config_queue_prio(priv, qopt);
+
+	priv->xmit_qdisc.num_tx_queues = num_tx_queues;
 
 	return 0;
 

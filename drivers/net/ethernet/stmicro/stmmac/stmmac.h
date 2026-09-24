@@ -302,6 +302,7 @@ struct stmmac_priv {
 
 	struct {
 		u32 prio[MTL_MAX_TX_QUEUES];
+		u32 num_tx_queues;
 		u8 algo;
 	} xmit_qdisc;
 
