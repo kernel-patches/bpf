@@ -1767,6 +1767,14 @@ static int axienet_stop(struct net_device *ndev)
 
 		napi_disable(&lp->napi_tx);
 		napi_disable(&lp->napi_rx);
+
+		/* Nothing can wake the queue now: the error work returns early
+		 * once lp->stopping is set, and TX NAPI is disabled.  Stop it and
+		 * wait out any transmit in progress before the ring goes away.
+		 * dev_close() has already done this, but axienet_suspend() calls
+		 * us directly.
+		 */
+		netif_tx_disable(ndev);
 	}
 
 	cancel_work_sync(&lp->rx_dim.work);
