@@ -1728,6 +1728,11 @@ static int axienet_open(struct net_device *ndev)
 			goto err_phy;
 	}
 
+	/* Nothing else clears a stop left over from before the last close:
+	 * the ring is empty, so no TX completion will wake the queue.
+	 */
+	netif_start_queue(ndev);
+
 	return 0;
 
 err_free_eth_irq:
