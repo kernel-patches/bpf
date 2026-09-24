@@ -36,6 +36,12 @@
 #define __LIBBPF_MARK_DEPRECATED_1_0(X)
 #endif
 
+#if __LIBBPF_CURRENT_VERSION_GEQ(1, 8)
+#define __LIBBPF_MARK_DEPRECATED_1_8(X) X
+#else
+#define __LIBBPF_MARK_DEPRECATED_1_8(X)
+#endif
+
 /* This set of internal macros allows to do "function overloading" based on
  * number of arguments provided by used in backwards-compatible way during the
  * transition to libbpf 1.0

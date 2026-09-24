@@ -392,7 +392,13 @@ LIBBPF_API const char *bpf_program__section_name(const struct bpf_program *prog)
 LIBBPF_API bool bpf_program__autoload(const struct bpf_program *prog);
 LIBBPF_API int bpf_program__set_autoload(struct bpf_program *prog, bool autoload);
 LIBBPF_API bool bpf_program__autoattach(const struct bpf_program *prog);
-LIBBPF_API void bpf_program__set_autoattach(struct bpf_program *prog, bool autoattach);
+LIBBPF_API int bpf_program__set_autoattach(struct bpf_program *prog, bool autoattach);
+/* this "specialization" should go away once the deprecation window for
+ * bpf_program__set_autoattach_deprecated() closes
+ */
+LIBBPF_API int bpf_program__set_autoattach_v1_8_0(struct bpf_program *prog, bool autoattach);
+LIBBPF_DEPRECATED_SINCE(1, 8, "use int-returning bpf_program__set_autoattach() instead")
+LIBBPF_API void bpf_program__set_autoattach_deprecated(struct bpf_program *prog, bool autoattach);
 
 struct bpf_insn;
 
@@ -473,6 +479,16 @@ LIBBPF_API int bpf_program__pin(struct bpf_program *prog, const char *path);
  * @return 0, on success; negative error code, otherwise
  */
 LIBBPF_API int bpf_program__unpin(struct bpf_program *prog, const char *path);
+/**
+ * @brief **bpf_program__unload()** unloads a BPF program, closing its fd.
+ *
+ * If the program's load strategy is BPF_PROG_LOAD_STRATEGY_MANUAL, only the
+ * fd is closed and the program's data is retained so it can be reloaded
+ * later via bpf_program__load(). For any other load strategy, the program's
+ * data is also freed and it cannot be reloaded.
+ *
+ * @param prog BPF program to unload
+ */
 LIBBPF_API void bpf_program__unload(struct bpf_program *prog);
 
 struct bpf_link;
@@ -2116,6 +2132,57 @@ LIBBPF_API int libbpf_unregister_prog_handler(int handler_id);
  * @return program FD (>= 0) on success; negative error code on failure
  */
 LIBBPF_API int bpf_program__clone(struct bpf_program *prog, const struct bpf_prog_load_opts *opts);
+
+/**
+ * The program load strategy:
+ *
+ * - BPF_PROG_LOAD_STRATEGY_DISABLED: the program is not loaded.
+ * - BPF_PROG_LOAD_STRATEGY_AUTO: the program is autoloaded when the bpf_object is loaded.
+ * - BPF_PROG_LOAD_STRATEGY_MANUAL: the program is loaded and attached manually.
+ */
+enum bpf_prog_load_strategy {
+	BPF_PROG_LOAD_STRATEGY_DISABLED = 0,
+	BPF_PROG_LOAD_STRATEGY_AUTO,
+	BPF_PROG_LOAD_STRATEGY_MANUAL,
+};
+
+/**
+ * @brief **bpf_program__set_load_strategy()** sets the load strategy of a
+ * BPF program, controlling whether and when it gets loaded into the kernel.
+ *
+ * Can only be called before the enclosing bpf_object is loaded, except when
+ * the program's current or new strategy is BPF_PROG_LOAD_STRATEGY_MANUAL, in
+ * which case it can only be called before the enclosing bpf_object is
+ * prepared.
+ *
+ * @param prog BPF program to update
+ * @param strategy new load strategy for the program
+ * @return 0 on success; negative error code if the object was already loaded
+ * (or, if the program's current or new strategy is
+ * BPF_PROG_LOAD_STRATEGY_MANUAL, already prepared)
+ */
+LIBBPF_API int bpf_program__set_load_strategy(struct bpf_program *prog,
+					      enum bpf_prog_load_strategy strategy);
+
+/**
+ * @brief **bpf_program__load_strategy()** returns the current load strategy
+ * of a BPF program.
+ *
+ * @param prog BPF program to query
+ * @return current load strategy of the program
+ */
+LIBBPF_API enum bpf_prog_load_strategy bpf_program__load_strategy(const struct bpf_program *prog);
+
+/**
+ * @brief **bpf_program__load()** loads a BPF program whose load strategy is
+ * BPF_PROG_LOAD_STRATEGY_MANUAL. The enclosing bpf_object must already be
+ * prepared.
+ *
+ * @param prog BPF program to load; must not be a subprogram, must have load
+ * strategy BPF_PROG_LOAD_STRATEGY_MANUAL, and must not already be loaded
+ * @return 0 on success; negative error code otherwise
+ */
+LIBBPF_API int bpf_program__load(struct bpf_program *prog);
 
 #ifdef __cplusplus
 } /* extern "C" */

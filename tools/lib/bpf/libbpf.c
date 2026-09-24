@@ -494,8 +494,9 @@ struct bpf_program {
 	struct bpf_object *obj;
 
 	int fd;
-	bool autoload;
+	enum bpf_prog_load_strategy load_strategy;
 	bool autoattach;
+	bool saved_autoattach;
 	bool sym_global;
 	/* the program or a function that it calls has callx */
 	bool has_callx;
@@ -731,6 +732,7 @@ struct bpf_object {
 
 	bool has_subcalls;
 	bool has_rodata;
+	bool has_manual_progs;
 
 	struct bpf_gen *gen_loader;
 
@@ -826,7 +828,7 @@ static Elf_Data *elf_sec_data(const struct bpf_object *obj, Elf_Scn *scn);
 static Elf64_Sym *elf_sym_by_idx(const struct bpf_object *obj, size_t idx);
 static Elf64_Rel *elf_rel_by_idx(Elf_Data *data, size_t idx);
 
-void bpf_program__unload(struct bpf_program *prog)
+static void bpf_program_unload_full(struct bpf_program *prog)
 {
 	if (!prog)
 		return;
@@ -838,12 +840,30 @@ void bpf_program__unload(struct bpf_program *prog)
 	zfree(&prog->subprogs);
 }
 
+void bpf_program__unload(struct bpf_program *prog)
+{
+	if (!prog)
+		return;
+
+	/*
+	 * MANUAL programs retain their data here so bpf_program__load()
+	 * can reload them later; object teardown paths call
+	 * bpf_program_unload_full() instead to always release it fully.
+	 */
+	if (prog->load_strategy == BPF_PROG_LOAD_STRATEGY_MANUAL) {
+		zclose(prog->fd);
+		return;
+	}
+
+	bpf_program_unload_full(prog);
+}
+
 static void bpf_program__exit(struct bpf_program *prog)
 {
 	if (!prog)
 		return;
 
-	bpf_program__unload(prog);
+	bpf_program_unload_full(prog);
 	zfree(&prog->name);
 	zfree(&prog->sec_name);
 	zfree(&prog->insns);
@@ -908,19 +928,29 @@ bpf_object__init_prog(struct bpf_object *obj, struct bpf_program *prog,
 	prog->fd = -1;
 	prog->exception_cb_idx = -1;
 
-	/* libbpf's convention for SEC("?abc...") is that it's just like
+	/*
+	 * libbpf's convention for SEC("?abc...") is that it's just like
 	 * SEC("abc...") but the corresponding bpf_program starts out with
 	 * autoload set to false.
+	 *
+	 * Similarly, SEC("!abc...") marks the program for manual loading:
+	 * it is skipped by the bulk auto-load pass and must be explicitly
+	 * loaded later via bpf_program__load().
 	 */
 	if (sec_name[0] == '?') {
-		prog->autoload = false;
+		prog->load_strategy = BPF_PROG_LOAD_STRATEGY_DISABLED;
 		/* from now on forget there was ? in section name */
 		sec_name++;
+	} else if (sec_name[0] == '!') {
+		prog->load_strategy = BPF_PROG_LOAD_STRATEGY_MANUAL;
+		/* from now on forget there was ! in section name */
+		sec_name++;
 	} else {
-		prog->autoload = true;
+		prog->load_strategy = BPF_PROG_LOAD_STRATEGY_AUTO;
 	}
 
-	prog->autoattach = true;
+	prog->saved_autoattach = true;
+	prog->autoattach = prog->load_strategy != BPF_PROG_LOAD_STRATEGY_MANUAL;
 
 	/* inherit object's log_level */
 	prog->log_level = obj->log_level;
@@ -1183,6 +1213,9 @@ static int bpf_object_adjust_struct_ops_autoload(struct bpf_object *obj)
 		prog = &obj->programs[i];
 		if (prog->type != BPF_PROG_TYPE_STRUCT_OPS)
 			continue;
+		/* an explicit MANUAL choice is never overridden by map autocreate */
+		if (prog->load_strategy == BPF_PROG_LOAD_STRATEGY_MANUAL)
+			continue;
 
 		for (j = 0; j < obj->nr_maps; ++j) {
 			const struct btf_type *type;
@@ -1204,7 +1237,8 @@ static int bpf_object_adjust_struct_ops_autoload(struct bpf_object *obj)
 			}
 		}
 		if (use_cnt)
-			prog->autoload = should_load;
+			prog->load_strategy = should_load ? BPF_PROG_LOAD_STRATEGY_AUTO
+				: BPF_PROG_LOAD_STRATEGY_DISABLED;
 	}
 
 	return 0;
@@ -1295,7 +1329,7 @@ static int bpf_map__init_kern_struct_ops(struct bpf_map *map)
 				 * then bpf_object_adjust_struct_ops_autoload() will update its
 				 * autoload accordingly.
 				 */
-				st_ops->progs[i]->autoload = false;
+				st_ops->progs[i]->load_strategy = BPF_PROG_LOAD_STRATEGY_DISABLED;
 				st_ops->progs[i] = NULL;
 			}
 
@@ -1333,7 +1367,7 @@ static int bpf_map__init_kern_struct_ops(struct bpf_map *map)
 			 * if user replaced it with another program or NULL
 			 */
 			if (st_ops->progs[i] && st_ops->progs[i] != prog)
-				st_ops->progs[i]->autoload = false;
+				st_ops->progs[i]->load_strategy = BPF_PROG_LOAD_STRATEGY_DISABLED;
 
 			/* Update the value from the shadow type */
 			st_ops->progs[i] = prog;
@@ -3636,7 +3670,7 @@ static bool obj_needs_vmlinux_btf(const struct bpf_object *obj)
 	}
 
 	bpf_object__for_each_program(prog, obj) {
-		if (!prog->autoload)
+		if (prog->load_strategy == BPF_PROG_LOAD_STRATEGY_DISABLED)
 			continue;
 		if (prog_needs_vmlinux_btf(prog))
 			return true;
@@ -6275,7 +6309,7 @@ bpf_object__relocate_core(struct bpf_object *obj, const char *targ_btf_path)
 			/* no need to apply CO-RE relocation if the program is
 			 * not going to be loaded
 			 */
-			if (!prog->autoload)
+			if (prog->load_strategy == BPF_PROG_LOAD_STRATEGY_DISABLED)
 				continue;
 
 			/* adjust insn_idx from section frame of reference to the local
@@ -7863,7 +7897,7 @@ static int bpf_object__relocate(struct bpf_object *obj, const char *targ_btf_pat
 		 */
 		if (prog_is_subprog(obj, prog))
 			continue;
-		if (!prog->autoload)
+		if (prog->load_strategy == BPF_PROG_LOAD_STRATEGY_DISABLED)
 			continue;
 
 		err = bpf_object__relocate_calls(obj, prog);
@@ -7899,7 +7933,7 @@ static int bpf_object__relocate(struct bpf_object *obj, const char *targ_btf_pat
 		prog = &obj->programs[i];
 		if (prog_is_subprog(obj, prog))
 			continue;
-		if (!prog->autoload)
+		if (prog->load_strategy == BPF_PROG_LOAD_STRATEGY_DISABLED)
 			continue;
 
 		/* Process data relos for main programs */
@@ -8851,10 +8885,11 @@ bpf_object__load_progs(struct bpf_object *obj, int log_level)
 		prog = &obj->programs[i];
 		if (prog_is_subprog(obj, prog))
 			continue;
-		if (!prog->autoload) {
-			pr_debug("prog '%s': skipped loading\n", prog->name);
+		if (prog->load_strategy != BPF_PROG_LOAD_STRATEGY_AUTO) {
+			pr_debug("prog '%s': skipped auto-loading\n", prog->name);
 			continue;
 		}
+
 		prog->log_level |= log_level;
 
 		if (obj->gen_loader)
@@ -8880,6 +8915,8 @@ static int bpf_object_prepare_progs(struct bpf_object *obj)
 
 	for (i = 0; i < obj->nr_programs; i++) {
 		prog = &obj->programs[i];
+		if (prog->load_strategy == BPF_PROG_LOAD_STRATEGY_MANUAL)
+			obj->has_manual_progs = true;
 		err = bpf_object__sanitize_prog(obj, prog);
 		if (err)
 			return err;
@@ -8905,6 +8942,24 @@ static int bpf_object_init_progs(struct bpf_object *obj, const struct bpf_object
 
 		prog->type = prog->sec_def->prog_type;
 		prog->expected_attach_type = prog->sec_def->expected_attach_type;
+
+		/*
+		 * struct_ops programs declared SEC("!...") are still rejected
+		 * here at declarative parse time. bpf_program__set_load_strategy()
+		 * does allow MANUAL for struct_ops via its imperative API, but
+		 * only as a narrow accommodation for tools (e.g. veristat) that
+		 * need to verify each program in isolation without ever calling
+		 * bpf_object__load(); it does not make struct_ops programs
+		 * generally usable through the MANUAL load/attach lifecycle
+		 * (see bpf_map_prepare_vdata()'s one-shot kern_vdata bake-in).
+		 * SEC("!...") has no such narrow use case, so it stays rejected.
+		 */
+		if (prog->type == BPF_PROG_TYPE_STRUCT_OPS &&
+		    prog->load_strategy == BPF_PROG_LOAD_STRATEGY_MANUAL) {
+			pr_warn("prog '%s': struct_ops programs do not support manual loading\n",
+				prog->name);
+			return -EINVAL;
+		}
 
 		/* sec_def can have custom callback which should be called
 		 * after bpf_program is initialized to adjust its properties
@@ -9106,7 +9161,7 @@ static int bpf_object_unload(struct bpf_object *obj)
 	}
 
 	for (i = 0; i < obj->nr_programs; i++)
-		bpf_program__unload(&obj->programs[i]);
+		bpf_program_unload_full(&obj->programs[i]);
 
 	return 0;
 }
@@ -9497,7 +9552,7 @@ static int bpf_object__resolve_externs(struct bpf_object *obj,
 	return 0;
 }
 
-static void bpf_map_prepare_vdata(const struct bpf_map *map)
+static int bpf_map_prepare_vdata(const struct bpf_map *map)
 {
 	const struct btf_type *type;
 	struct bpf_struct_ops *st_ops;
@@ -9513,16 +9568,30 @@ static void bpf_map_prepare_vdata(const struct bpf_map *map)
 		if (!prog)
 			continue;
 
+		/*
+		 * a MANUAL member must be loaded with bpf_program__load()
+		 * before this runs; nothing re-bakes kern_vdata afterwards,
+		 * so an as-yet-unloaded MANUAL member is a hard error here
+		 * rather than a bogus fd silently baked into the map.
+		 */
+		if (prog->load_strategy == BPF_PROG_LOAD_STRATEGY_MANUAL && prog->fd < 0) {
+			pr_warn("map '%s': struct_ops member prog '%s' is MANUAL but not loaded\n",
+				map->name, prog->name);
+			return -EINVAL;
+		}
+
 		prog_fd = bpf_program__fd(prog);
 		kern_data = st_ops->kern_vdata + st_ops->kern_func_off[i];
 		*(unsigned long *)kern_data = prog_fd;
 	}
+
+	return 0;
 }
 
 static int bpf_object_prepare_struct_ops(struct bpf_object *obj)
 {
 	struct bpf_map *map;
-	int i;
+	int i, err;
 
 	for (i = 0; i < obj->nr_maps; i++) {
 		map = &obj->maps[i];
@@ -9533,7 +9602,9 @@ static int bpf_object_prepare_struct_ops(struct bpf_object *obj)
 		if (!map->autocreate)
 			continue;
 
-		bpf_map_prepare_vdata(map);
+		err = bpf_map_prepare_vdata(map);
+		if (err)
+			return err;
 	}
 
 	return 0;
@@ -9549,33 +9620,50 @@ static void bpf_object_unpin(struct bpf_object *obj)
 			bpf_map__unpin(&obj->maps[i], NULL);
 }
 
-static void bpf_object_cleanup_btf(struct bpf_object *obj)
+static void bpf_object_cleanup_btf(struct bpf_object *obj, bool force)
 {
 	int i;
 
-	/* clean up module BTFs */
-	for (i = 0; i < obj->btf_module_cnt; i++) {
-		close(obj->btf_modules[i].fd);
-		btf__free(obj->btf_modules[i].btf);
-		free(obj->btf_modules[i].name);
+	/*
+	 * Module BTF fds may still be borrowed (via fd_array,
+	 * attach_btf_obj_fd, or baked into relocated instructions) by
+	 * programs that have not been manually loaded yet, so defer
+	 * closing them in that case to the end of the object lifetime,
+	 * unless the caller forces immediate cleanup.
+	 */
+	if (force || !obj->has_manual_progs) {
+		for (i = 0; i < obj->btf_module_cnt; i++) {
+			close(obj->btf_modules[i].fd);
+			btf__free(obj->btf_modules[i].btf);
+			free(obj->btf_modules[i].name);
+		}
+		obj->btf_module_cnt = 0;
+		obj->btf_module_cap = 0;
+		obj->btf_modules_loaded = false;
+		zfree(&obj->btf_modules);
 	}
-	obj->btf_module_cnt = 0;
-	obj->btf_module_cap = 0;
-	obj->btf_modules_loaded = false;
-	zfree(&obj->btf_modules);
 
-	/* clean up vmlinux BTF */
-	btf__free(obj->btf_vmlinux);
-	obj->btf_vmlinux = NULL;
+	/*
+	 * The btf_vmlinux data is needed for manually loaded programs,
+	 * so defer freeing it in that case to the end of the object lifetime.
+	 */
+	if (force || !obj->has_manual_progs) {
+		btf__free(obj->btf_vmlinux);
+		obj->btf_vmlinux = NULL;
+	}
 }
 
-static void bpf_object_post_load_cleanup(struct bpf_object *obj)
+static void bpf_object_post_load_cleanup(struct bpf_object *obj, bool force)
 {
-	/* clean up fd_array */
-	zfree(&obj->fd_array);
+	/*
+	 * The fd array is needed for manually loaded programs,
+	 * so defer freeing it in that case to the end of the object lifetime.
+	 */
+	if (force || !obj->has_manual_progs)
+		zfree(&obj->fd_array);
 
 	/* clean up BTF */
-	bpf_object_cleanup_btf(obj);
+	bpf_object_cleanup_btf(obj, force);
 }
 
 static int bpf_object_prepare(struct bpf_object *obj, const char *target_btf_path)
@@ -9642,7 +9730,8 @@ static int bpf_object_load(struct bpf_object *obj, int extra_log_level, const ch
 			    prog_has_callx(&obj->programs[i]))
 				text_has_callx = true;
 		for (i = 0; i < obj->nr_programs; i++)
-			if (obj->programs[i].autoload && !prog_is_subprog(obj, &obj->programs[i]) &&
+			if (obj->programs[i].load_strategy != BPF_PROG_LOAD_STRATEGY_DISABLED &&
+			    !prog_is_subprog(obj, &obj->programs[i]) &&
 			    (text_has_callx || prog_has_callx(&obj->programs[i])))
 				nr_progs++;
 		bpf_gen__init(obj->gen_loader, obj->log_level | extra_log_level,
@@ -9669,7 +9758,7 @@ static int bpf_object_load(struct bpf_object *obj, int extra_log_level, const ch
 			err = bpf_gen__finish(obj->gen_loader, obj->nr_programs, obj->nr_maps);
 	}
 
-	bpf_object_post_load_cleanup(obj);
+	bpf_object_post_load_cleanup(obj, false);
 	obj->state = OBJ_LOADED; /* doesn't matter if successfully or not */
 
 	if (err) {
@@ -10137,7 +10226,7 @@ void bpf_object__close(struct bpf_object *obj)
 	 * bpf_object__load(), we need to clean up stuff that is normally
 	 * cleaned up at the end of loading step
 	 */
-	bpf_object_post_load_cleanup(obj);
+	bpf_object_post_load_cleanup(obj, true);
 
 	usdt_manager_free(obj->usdt_man);
 	obj->usdt_man = NULL;
@@ -10146,7 +10235,6 @@ void bpf_object__close(struct bpf_object *obj)
 	bpf_object__elf_finish(obj);
 	bpf_object_unload(obj);
 	btf__free(obj->btf);
-	btf__free(obj->btf_vmlinux);
 	btf_ext__free(obj->btf_ext);
 
 	for (i = 0; i < obj->nr_maps; i++)
@@ -10239,11 +10327,31 @@ int bpf_object__set_kversion(struct bpf_object *obj, __u32 kern_version)
 int bpf_object__gen_loader(struct bpf_object *obj, struct gen_loader_opts *opts)
 {
 	struct bpf_gen *gen;
+	size_t i;
 
 	if (!opts)
 		return libbpf_err(-EFAULT);
 	if (!OPTS_VALID(opts, gen_loader_opts))
 		return libbpf_err(-EINVAL);
+
+	/*
+	 * Manually-loaded programs are not visible to gen_loader (see
+	 * bpf_program__set_load_strategy()'s MANUAL case), and marking a
+	 * program MANUAL happens during bpf_object__open(), before this
+	 * function can ever run, so that guard can never catch it here.
+	 * Reject any pre-existing MANUAL program now, since this is the
+	 * earliest point where both are known.
+	 */
+	for (i = 0; i < obj->nr_programs; i++) {
+		struct bpf_program *prog = &obj->programs[i];
+
+		if (prog->load_strategy == BPF_PROG_LOAD_STRATEGY_MANUAL) {
+			pr_warn("prog '%s': gen_loader does not support manually-loaded programs\n",
+				prog->name);
+			return libbpf_err(-EOPNOTSUPP);
+		}
+	}
+
 	gen = calloc(1, sizeof(*gen));
 	if (!gen)
 		return libbpf_err(-ENOMEM);
@@ -10320,16 +10428,13 @@ const char *bpf_program__section_name(const struct bpf_program *prog)
 
 bool bpf_program__autoload(const struct bpf_program *prog)
 {
-	return prog->autoload;
+	return prog->load_strategy == BPF_PROG_LOAD_STRATEGY_AUTO;
 }
 
 int bpf_program__set_autoload(struct bpf_program *prog, bool autoload)
 {
-	if (prog->obj->state >= OBJ_LOADED)
-		return libbpf_err(-EINVAL);
-
-	prog->autoload = autoload;
-	return 0;
+	return bpf_program__set_load_strategy(prog,
+		autoload ? BPF_PROG_LOAD_STRATEGY_AUTO : BPF_PROG_LOAD_STRATEGY_DISABLED);
 }
 
 bool bpf_program__autoattach(const struct bpf_program *prog)
@@ -10337,9 +10442,20 @@ bool bpf_program__autoattach(const struct bpf_program *prog)
 	return prog->autoattach;
 }
 
-void bpf_program__set_autoattach(struct bpf_program *prog, bool autoattach)
+COMPAT_VERSION(bpf_program__set_autoattach_deprecated, bpf_program__set_autoattach, LIBBPF_1.0.0)
+void bpf_program__set_autoattach_deprecated(struct bpf_program *prog, bool autoattach)
 {
 	prog->autoattach = autoattach;
+}
+
+DEFAULT_VERSION(bpf_program__set_autoattach_v1_8_0, bpf_program__set_autoattach, LIBBPF_1.8.0)
+int bpf_program__set_autoattach_v1_8_0(struct bpf_program *prog, bool autoattach)
+{
+	if (prog->load_strategy == BPF_PROG_LOAD_STRATEGY_MANUAL)
+		return libbpf_err(-EINVAL);
+
+	prog->autoattach = autoattach;
+	return 0;
 }
 
 const struct bpf_insn *bpf_program__insns(const struct bpf_program *prog)
@@ -13263,7 +13379,7 @@ static int collect_func_ids_by_glob(const struct bpf_program *prog, const char *
 	err = collect_btf_func_ids_by_glob(btf, pattern, ids);
 
 cleanup:
-	bpf_object_cleanup_btf(obj);
+	bpf_object_cleanup_btf(obj, false);
 	return err;
 }
 
@@ -15707,7 +15823,7 @@ int bpf_object__attach_skeleton(struct bpf_object_skeleton *s)
 		struct bpf_program *prog = *prog_skel->prog;
 		struct bpf_link **link = prog_skel->link;
 
-		if (!prog->autoload || !prog->autoattach)
+		if (prog->load_strategy != BPF_PROG_LOAD_STRATEGY_AUTO || !prog->autoattach)
 			continue;
 
 		/* auto-attaching not supported for this program */
@@ -15816,4 +15932,93 @@ void bpf_object__destroy_skeleton(struct bpf_object_skeleton *s)
 	free(s->maps);
 	free(s->progs);
 	free(s);
+}
+
+int bpf_program__set_load_strategy(struct bpf_program *prog, enum bpf_prog_load_strategy strategy)
+{
+	struct bpf_object *obj = prog->obj;
+
+	/*
+	 * has_manual_progs is snapshotted once in bpf_object_prepare_progs()
+	 * and never recomputed; once the object is prepared, no transition
+	 * into or out of MANUAL may change which programs are MANUAL,
+	 * regardless of direction. AUTO<->DISABLED transitions never touch
+	 * MANUAL and keep the looser, pre-existing OBJ_LOADED gate.
+	 */
+	if (strategy == BPF_PROG_LOAD_STRATEGY_MANUAL ||
+	    prog->load_strategy == BPF_PROG_LOAD_STRATEGY_MANUAL) {
+		if (obj->state >= OBJ_PREPARED)
+			return libbpf_err(-EINVAL);
+	} else if (obj->state >= OBJ_LOADED) {
+		return libbpf_err(-EINVAL);
+	}
+
+	if (strategy == prog->load_strategy)
+		return 0;
+
+	switch (strategy) {
+	case BPF_PROG_LOAD_STRATEGY_DISABLED:
+	case BPF_PROG_LOAD_STRATEGY_AUTO:
+		if (prog->load_strategy == BPF_PROG_LOAD_STRATEGY_MANUAL)
+			prog->autoattach = prog->saved_autoattach;
+		prog->load_strategy = strategy;
+		break;
+	case BPF_PROG_LOAD_STRATEGY_MANUAL:
+		/*
+		 * Manually-loaded programs are not visible to gen_loader,
+		 * since bpf_object__load_progs() skips them during the bulk
+		 * load pass; see bpf_object__gen_loader()'s own guard for
+		 * the full explanation.
+		 */
+		if (obj->gen_loader)
+			return libbpf_err(-EOPNOTSUPP);
+
+		if (prog_is_subprog(obj, prog))
+			return libbpf_err(-EINVAL);
+
+		prog->saved_autoattach = prog->autoattach;
+		prog->load_strategy = BPF_PROG_LOAD_STRATEGY_MANUAL;
+		prog->autoattach = false;
+		break;
+	default:
+		return libbpf_err(-EINVAL);
+	}
+
+	return 0;
+}
+
+enum bpf_prog_load_strategy bpf_program__load_strategy(const struct bpf_program *prog)
+{
+	return prog->load_strategy;
+}
+
+/*
+ * This function must be called after bpf_object__prepare (or
+ * bpf_object__load, which calls bpf_object__prepare internally).
+ * Manually-loaded program data is initialized on object prepare.
+ * Post-prepare initialization is not supported.
+ */
+int
+bpf_program__load(struct bpf_program *prog)
+{
+	int err;
+	struct bpf_object *obj = prog->obj;
+
+	if (obj->state < OBJ_PREPARED)
+		return libbpf_err(-EINVAL);
+
+	if (prog_is_subprog(obj, prog) || prog->load_strategy != BPF_PROG_LOAD_STRATEGY_MANUAL)
+		return libbpf_err(-EINVAL);
+
+	if (prog->fd >= 0)
+		return libbpf_err(-EBUSY);
+
+	err = bpf_object_load_prog(obj, prog, prog->insns, prog->insns_cnt,
+				   obj->license, obj->kern_version, &prog->fd);
+	if (err) {
+		pr_warn("prog '%s': failed to load: %s\n", prog->name, errstr(err));
+		return libbpf_err(err);
+	}
+
+	return 0;
 }
