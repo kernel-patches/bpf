@@ -2113,7 +2113,29 @@ IO Interface Files
 	  =====		================================
 	  ctrl		"auto" or "user"
 	  model		The cost model in use - "linear"
+			or "bpf" while a BPF model is
+			attached
 	  =====		================================
+
+	When CONFIG_BLK_CGROUP_IOCOST_BPF is enabled, a BPF cost model
+	can be attached to a device by loading an "iocost_model_ops"
+	struct_ops with the whole disk's major:minor in its "dev" member
+	(a partition's major:minor is rejected);
+	attaching switches the device's pricing to the model, detaching
+	the struct_ops restores the builtin linear model.  While a model
+	is attached, "model" reads back "bpf"; "ctrl" keeps describing
+	the builtin coefficients, which are inert while the model is
+	attached: coefficient writes are stored and take effect again
+	after the struct_ops is detached, and the automatic profile
+	stepping does not switch profiles.  Writing "ctrl=bpf" or
+	"model=bpf" is accepted as a no-op so a saved configuration
+	still parses, but re-attaching the model requires loading the
+	struct_ops again, not writing to this file.  Attaching
+	implicitly enables the controller if needed (disabling wbt
+	like io.cost.qos does); detaching does not disable it again,
+	and writing "enable=0" to io.cost.qos suspends the model's
+	pricing until the controller is re-enabled, while it stays
+	attached.
 
 	When "ctrl" is "auto", the kernel may change all parameters
 	dynamically.  When "ctrl" is set to "user" or any other
