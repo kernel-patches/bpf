@@ -2774,6 +2774,11 @@ static void axienet_dma_err_handler(struct work_struct *work)
 	napi_disable(&lp->napi_tx);
 	napi_disable(&lp->napi_rx);
 
+	/* With TX NAPI disabled nothing else can wake the queue.  Stop it and
+	 * wait out any transmit in progress, so the ring can be torn down.
+	 */
+	netif_tx_disable(ndev);
+
 	axienet_setoptions(ndev, lp->options &
 			   ~(XAE_OPTION_TXEN | XAE_OPTION_RXEN));
 
@@ -2841,6 +2846,13 @@ static void axienet_dma_err_handler(struct work_struct *work)
 	napi_enable(&lp->napi_rx);
 	napi_enable(&lp->napi_tx);
 	axienet_setoptions(ndev, lp->options);
+
+	/* Leave the queue stopped if the interface is going down or the
+	 * device was detached for suspend: axienet_stop() and axienet_open()
+	 * own the queue state then.
+	 */
+	if (!READ_ONCE(lp->stopping) && netif_device_present(ndev))
+		netif_wake_queue(ndev);
 }
 
 /**
