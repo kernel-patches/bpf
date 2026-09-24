@@ -579,8 +579,11 @@ static void emit_prologue(u8 **pprog, u8 *ip, u32 stack_depth, bool ebpf_from_cb
 		if (tail_call_reachable && !is_subprog)
 			/* When it's the entry of the whole tailcall context,
 			 * zeroing rax means initialising tail_call_cnt.
+			 *
+			 * xor eax, eax
+			 * equivalent to 'xor rax, rax', but one byte less
 			 */
-			EMIT3(0x48, 0x31, 0xC0); /* xor rax, rax */
+			EMIT2(0x31, 0xC0);
 		else
 			/* Keep the same instruction layout. */
 			emit_nops(&prog, 3);     /* nop3 */
