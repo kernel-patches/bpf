@@ -6,6 +6,7 @@ ibumad
 lathist
 lwt_len_hist
 map_perf_test
+memcg_async_reclaim
 offwaketime
 per_socket_stats_example
 sampleip
