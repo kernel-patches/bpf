@@ -62,6 +62,12 @@ struct test_subspec {
 	int retval;
 	bool execute;
 	__u64 caps;
+	char *bss_set_var;
+	__u64 bss_set_val;
+	bool has_bss_set;
+	char *bss_want_var;
+	__u64 bss_want_val;
+	bool has_bss_want;
 };
 
 struct test_spec {
@@ -128,6 +134,15 @@ static void free_test_spec(struct test_spec *spec)
 	free_msgs(&spec->priv.stderr);
 	free_msgs(&spec->unpriv.stdout);
 	free_msgs(&spec->priv.stdout);
+
+	free(spec->priv.bss_set_var);
+	free(spec->unpriv.bss_set_var);
+	free(spec->priv.bss_want_var);
+	free(spec->unpriv.bss_want_var);
+	spec->priv.bss_set_var = NULL;
+	spec->unpriv.bss_set_var = NULL;
+	spec->priv.bss_want_var = NULL;
+	spec->unpriv.bss_want_var = NULL;
 
 	free(spec->priv.name);
 	free(spec->priv.description);
@@ -309,6 +324,148 @@ static int parse_caps(const char *str, __u64 *val, const char *name)
 
 	free(str_cpy);
 	return 0;
+}
+
+/*
+ * Parse "<variable>:<value>", the argument of __setbss() and __retbss().
+ * The value is taken as unsigned, so that a bitmask with the top bit set
+ * reads the same here as it does in the program.
+ */
+static int parse_bss_var(const char *str, char **var, __u64 *val, const char *name)
+{
+	const char *colon = strrchr(str, ':');
+	char *end;
+
+	if (!colon || colon == str) {
+		PRINT_FAIL("expecting '<variable>:<value>' for %s, got '%s'\n", name, str);
+		return -EINVAL;
+	}
+	/* The value may be a '|' separated list of terms, as a bitmask is. */
+	*val = 0;
+	for (const char *term = colon + 1;;) {
+		__u64 v;
+
+		errno = 0;
+		v = strtoull(term, &end, 0);
+		if (errno || end == term) {
+			PRINT_FAIL("failed to parse %s value '%s'\n", name, colon + 1);
+			return -EINVAL;
+		}
+		*val |= v;
+		while (*end == ' ')
+			end++;
+		if (!*end)
+			break;
+		if (*end != '|') {
+			PRINT_FAIL("failed to parse %s value '%s'\n", name, colon + 1);
+			return -EINVAL;
+		}
+		term = end + 1;
+	}
+	free(*var);
+	*var = strndup(str, colon - str);
+	if (!*var) {
+		PRINT_FAIL("failed to allocate %s variable name\n", name);
+		return -ENOMEM;
+	}
+	return 0;
+}
+
+/*
+ * Locate a variable in an object's .bss, the way veristat does: find the map
+ * whose name ends in ".bss" (libbpf truncates the object-name prefix), then
+ * the datasec of that name in the object's BTF, and the variable within it.
+ */
+static int find_bss_var(struct bpf_object *obj, const char *name,
+			struct bpf_map **map, __u32 *off, __u32 *sz)
+{
+	const struct btf_var_secinfo *vsi;
+	const struct btf_type *sec;
+	struct btf *btf = bpf_object__btf(obj);
+	struct bpf_map *m = NULL, *iter;
+	int i, id;
+
+	bpf_object__for_each_map(iter, obj) {
+		const char *mname = bpf_map__name(iter);
+		size_t len = mname ? strlen(mname) : 0;
+
+		if (len >= 4 && strcmp(mname + len - 4, ".bss") == 0) {
+			m = iter;
+			break;
+		}
+	}
+	if (!m) {
+		PRINT_FAIL("no .bss map in object\n");
+		return -ENOENT;
+	}
+	if (!btf) {
+		PRINT_FAIL("no BTF for object\n");
+		return -ENOENT;
+	}
+	id = btf__find_by_name_kind(btf, ".bss", BTF_KIND_DATASEC);
+	if (id < 0) {
+		PRINT_FAIL("no .bss datasec in BTF\n");
+		return -ENOENT;
+	}
+	sec = btf__type_by_id(btf, id);
+	vsi = btf_var_secinfos(sec);
+	for (i = 0; i < btf_vlen(sec); i++, vsi++) {
+		const struct btf_type *var = btf__type_by_id(btf, vsi->type);
+
+		if (strcmp(btf__name_by_offset(btf, var->name_off), name))
+			continue;
+		if (vsi->size != 4 && vsi->size != 8) {
+			PRINT_FAIL("'%s' is %u bytes, only 4 and 8 are supported\n",
+				   name, vsi->size);
+			return -EINVAL;
+		}
+		*map = m;
+		*off = vsi->offset;
+		*sz = vsi->size;
+		return 0;
+	}
+	PRINT_FAIL("no variable '%s' in .bss\n", name);
+	return -ENOENT;
+}
+
+/* Read a .bss variable, or write one when 'set' is given. */
+static int access_bss_var(struct bpf_object *obj, const char *name,
+			  __u64 *val, bool set)
+{
+	__u32 off, sz, zero = 0;
+	struct bpf_map *map;
+	size_t vsz;
+	void *buf;
+	int err;
+
+	err = find_bss_var(obj, name, &map, &off, &sz);
+	if (err)
+		return err;
+
+	vsz = bpf_map__value_size(map);
+	buf = calloc(1, vsz);
+	if (!buf)
+		return -ENOMEM;
+
+	err = bpf_map__lookup_elem(map, &zero, sizeof(zero), buf, vsz, 0);
+	if (err) {
+		PRINT_FAIL("failed to read .bss: %d\n", err);
+		goto out;
+	}
+	if (!set) {
+		*val = sz == 4 ? *(__u32 *)(buf + off) : *(__u64 *)(buf + off);
+		goto out;
+	}
+	if (sz == 4)
+		*(__u32 *)(buf + off) = *val;
+	else
+		*(__u64 *)(buf + off) = *val;
+	err = bpf_map__update_elem(map, &zero, sizeof(zero), buf, vsz, 0);
+	if (err)
+		PRINT_FAIL("failed to write .bss: %d\n", err);
+out:
+	free(buf);
+	return err;
 }
 
 static int parse_retval(const char *str, int *val, const char *name)
@@ -557,6 +714,22 @@ static int parse_test_spec(struct test_loader *tester,
 			spec->mode_mask |= UNPRIV;
 			spec->unpriv.execute = true;
 			has_unpriv_retval = true;
+		} else if ((val = str_has_pfx(s, "test_bss_set="))) {
+			err = parse_bss_var(val, &spec->priv.bss_set_var,
+					    &spec->priv.bss_set_val, "__setbss");
+			if (err)
+				goto cleanup;
+			spec->priv.has_bss_set = true;
+			spec->priv.execute = true;
+			spec->mode_mask |= PRIV;
+		} else if ((val = str_has_pfx(s, "test_bss_want="))) {
+			err = parse_bss_var(val, &spec->priv.bss_want_var,
+					    &spec->priv.bss_want_val, "__retbss");
+			if (err)
+				goto cleanup;
+			spec->priv.has_bss_want = true;
+			spec->priv.execute = true;
+			spec->mode_mask |= PRIV;
 		} else if ((val = str_has_pfx(s, "test_log_level="))) {
 			err = parse_int(val, &spec->log_level, "test log level");
 			if (err)
@@ -740,6 +913,25 @@ static int parse_test_spec(struct test_loader *tester,
 		if (!has_unpriv_retval) {
 			spec->unpriv.retval = spec->priv.retval;
 			spec->unpriv.execute = spec->priv.execute;
+		}
+
+		if (spec->priv.has_bss_set && !spec->unpriv.has_bss_set) {
+			spec->unpriv.bss_set_var = strdup(spec->priv.bss_set_var);
+			if (!spec->unpriv.bss_set_var) {
+				err = -ENOMEM;
+				goto cleanup;
+			}
+			spec->unpriv.bss_set_val = spec->priv.bss_set_val;
+			spec->unpriv.has_bss_set = true;
+		}
+		if (spec->priv.has_bss_want && !spec->unpriv.has_bss_want) {
+			spec->unpriv.bss_want_var = strdup(spec->priv.bss_want_var);
+			if (!spec->unpriv.bss_want_var) {
+				err = -ENOMEM;
+				goto cleanup;
+			}
+			spec->unpriv.bss_want_val = spec->priv.bss_want_val;
+			spec->unpriv.has_bss_want = true;
 		}
 
 		if (spec->unpriv.expect_msgs.cnt == 0)
@@ -1532,12 +1724,31 @@ void run_subtest(struct test_loader *tester,
 			}
 		}
 
+		if (subspec->has_bss_set) {
+			__u64 v = subspec->bss_set_val;
+
+			if (access_bss_var(tobj, subspec->bss_set_var, &v, true))
+				goto tobj_cleanup;
+		}
+
 		err = do_prog_test_run(bpf_program__fd(tprog), &retval,
 				       bpf_program__type(tprog) == BPF_PROG_TYPE_SYSCALL ? true : false,
 				       spec->linear_sz);
 		if (!err && retval != subspec->retval && subspec->retval != POINTER_VALUE) {
 			PRINT_FAIL("Unexpected retval: %d != %d\n", retval, subspec->retval);
 			goto tobj_cleanup;
+		}
+
+		if (!err && subspec->has_bss_want) {
+			__u64 v = 0;
+
+			if (access_bss_var(tobj, subspec->bss_want_var, &v, false))
+				goto tobj_cleanup;
+			if (v != subspec->bss_want_val) {
+				PRINT_FAIL("Unexpected %s: 0x%llx != 0x%llx\n",
+					   subspec->bss_want_var, v, subspec->bss_want_val);
+				goto tobj_cleanup;
+			}
 		}
 
 		verify_stderr(bpf_program__fd(tprog), &subspec->stderr);

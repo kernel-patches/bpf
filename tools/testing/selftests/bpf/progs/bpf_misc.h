@@ -93,6 +93,11 @@
  * __failure         Expect program load failure in privileged mode.
  * __failure_unpriv  Expect program load failure in unprivileged mode.
  *
+ * __setbss          Set a variable in the program's .bss to a value before
+ *                   executing it. Implies __retval()'s execution.
+ * __retbss          Execute the program and check that a variable in its
+ *                   .bss holds the given value afterwards. The variable has
+ *                   to be four or eight bytes wide.
  * __retval          Execute the program using BPF_PROG_TEST_RUN command,
  *                   expect return value to match passed parameter:
  *                   - a decimal number
@@ -160,6 +165,8 @@
 #define __log_level(lvl)	__test_tag("test_log_level=" #lvl)
 #define __flag(flag)		__test_tag("test_prog_flags=" #flag)
 #define __retval(val)		__test_tag("test_retval=" XSTR(val))
+#define __setbss(var, val)	__test_tag("test_bss_set=" #var ":" XSTR(val))
+#define __retbss(var, val)	__test_tag("test_bss_want=" #var ":" XSTR(val))
 #define __retval_unpriv(val)	__test_tag("test_retval_unpriv=" XSTR(val))
 #define __auxiliary		__test_tag("test_auxiliary")
 #define __auxiliary_unpriv	__test_tag("test_auxiliary_unpriv")
