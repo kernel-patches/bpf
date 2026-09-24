@@ -179,7 +179,7 @@ do {\
 		if (bmcst)\
 			encry_algo = (u8)psecuritypriv->dot118021XGrpPrivacy;\
 		else\
-			encry_algo = (u8)psta->dot118021XPrivacy;\
+			encry_algo = (u8)psta->dot118021_x_privacy;\
 		break;\
 	case dot11_auth_algrthm_wapi:\
 		encry_algo = (u8)psecuritypriv->dot11_privacy_algrthm;\

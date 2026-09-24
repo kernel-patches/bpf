@@ -982,7 +982,7 @@ static struct sta_info *rtw_joinbss_update_stainfo(struct adapter *adapter, stru
 			adapter->securitypriv.bgrpkey_handshake = false;
 
 			psta->ieee8021x_blocked = true;
-			psta->dot118021XPrivacy = adapter->securitypriv.dot11_privacy_algrthm;
+			psta->dot118021_x_privacy = adapter->securitypriv.dot11_privacy_algrthm;
 
 			memset((u8 *)&psta->dot118021x_UncstKey, 0, sizeof(union Keytype));
 
@@ -1336,7 +1336,7 @@ void rtw_stassoc_event_callback(struct adapter *adapter, u8 *buf)
 	rtw_sta_media_status_rpt(adapter, psta, 1);
 
 	if (adapter->securitypriv.dot11_auth_algrthm == dot11_auth_algrthm_8021x)
-		psta->dot118021XPrivacy = adapter->securitypriv.dot11_privacy_algrthm;
+		psta->dot118021_x_privacy = adapter->securitypriv.dot11_privacy_algrthm;
 
 	psta->ieee8021x_blocked = false;
 
