@@ -260,6 +260,7 @@ static int tipc_enable_bearer(struct net *net, const char *name,
 	int bearer_id = 0;
 	int res = -EINVAL;
 	char *errstr = "";
+	char *if_name;
 	u32 i;
 
 	if (!bearer_name_validate(name, &b_names)) {
@@ -298,6 +299,21 @@ static int tipc_enable_bearer(struct net *net, const char *name,
 			goto rejected;
 		}
 
+		if (b->media->type_id == TIPC_MEDIA_TYPE_UDP ||
+		    !strcmp(b_names.media_name, "udp"))
+			goto priority;
+
+		/* Not allow eth and ib to attach to the same device */
+		if_name = strchr((const char *)b->name, ':') + 1;
+		if (!strcmp(if_name, b_names.if_name) &&
+		    strcmp(b->media->name, b_names.media_name)) {
+			errstr = "same device for different media";
+			NL_SET_ERR_MSG(extack,
+				       "Same device for different media");
+			goto rejected;
+		}
+
+priority:
 		if (b->priority == prio &&
 		    (++with_this_prio > 2)) {
 			pr_warn("Bearer <%s>: already 2 bearers with priority %u\n",
