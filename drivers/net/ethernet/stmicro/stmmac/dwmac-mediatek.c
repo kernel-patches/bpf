@@ -100,6 +100,8 @@ struct mediatek_dwmac_variant {
 
 	u32 rx_delay_max;
 	u32 tx_delay_max;
+	u16 rx_delay_stage_div;
+	u16 tx_delay_stage_div;
 	u8 dma_bit_mask;
 };
 
@@ -300,12 +302,24 @@ static int mt8195_set_interface(struct mediatek_dwmac_plat_data *plat,
 
 static int mt8195_set_delay(struct mediatek_dwmac_plat_data *plat)
 {
+	u16 rx_delay_stage_div = plat->variant->rx_delay_stage_div;
+	u16 tx_delay_stage_div = plat->variant->tx_delay_stage_div;
 	struct mac_delay_struct *mac_delay = &plat->mac_delay;
-	u32 rx_delay_stage_val = mac_delay->rx_delay / MT8195_DLY_RXC_STAGE_DIV;
-	u32 tx_delay_stage_val = mac_delay->tx_delay / MT8195_DLY_TXC_STAGE_DIV;
+	u32 rx_delay_stage_val;
+	u32 tx_delay_stage_val;
 	u32 gtxc_delay_val = 0;
 	u32 rmii_delay_val = 0;
 	u32 delay_val = 0;
+
+	if (rx_delay_stage_div)
+		rx_delay_stage_val = mac_delay->rx_delay / rx_delay_stage_div;
+	else
+		rx_delay_stage_val = 0;
+
+	if (tx_delay_stage_div)
+		tx_delay_stage_val = mac_delay->tx_delay / tx_delay_stage_div;
+	else
+		tx_delay_stage_val = 0;
 
 	switch (plat->phy_mode) {
 	case PHY_INTERFACE_MODE_MII:
@@ -415,6 +429,8 @@ static const struct mediatek_dwmac_variant mt8195_gmac_variant = {
 	.num_clks = ARRAY_SIZE(mt8195_dwmac_clk_l),
 	.rx_delay_max = MT8195_DLY_RXC_MAX,
 	.tx_delay_max = MT8195_DLY_TXC_MAX,
+	.rx_delay_stage_div = MT8195_DLY_RXC_STAGE_DIV,
+	.tx_delay_stage_div = MT8195_DLY_TXC_STAGE_DIV,
 	.dma_bit_mask = 35,
 };
 
