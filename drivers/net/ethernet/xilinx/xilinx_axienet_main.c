@@ -2851,8 +2851,15 @@ static void axienet_dma_err_handler(struct work_struct *work)
 	 * device was detached for suspend: axienet_stop() and axienet_open()
 	 * own the queue state then.
 	 */
-	if (!READ_ONCE(lp->stopping) && netif_device_present(ndev))
+	if (!READ_ONCE(lp->stopping) && netif_device_present(ndev)) {
+		/* The reset also cleared the link speed and pause settings,
+		 * which only axienet_mac_link_up() programs.  Have phylink take
+		 * the link down and up again so that it is called.  This must
+		 * follow the axienet_setoptions() above, which writes XAE_FCC.
+		 */
+		phylink_mac_change(lp->phylink, false);
 		netif_wake_queue(ndev);
+	}
 }
 
 /**
