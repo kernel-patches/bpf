@@ -710,6 +710,12 @@ void bpf_map_free_internal_structs(struct bpf_map *map, void *obj);
 int bpf_dynptr_from_file_sleepable(struct file *file, u32 flags,
 				   struct bpf_dynptr *ptr__uninit);
 
+static inline bool is_bpf_alloc_nonsleepable(void)
+{
+	return preempt_count() > 0 || irqs_disabled() ||
+		IS_ENABLED(CONFIG_PREEMPT_RT);
+}
+
 #if defined(CONFIG_MMU) && defined(CONFIG_64BIT)
 void *bpf_arena_alloc_pages_non_sleepable(void *p__map, void *addr__ign, u32 page_cnt, int node_id,
 					  u64 flags);
