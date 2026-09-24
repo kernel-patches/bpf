@@ -249,7 +249,7 @@ DEFINE_ALE_FIELD_SET(mcast_state,	62,	2)
 DEFINE_ALE_FIELD1(port_mask,		66)
 DEFINE_ALE_FIELD(super,			65,	1)
 DEFINE_ALE_FIELD(ucast_type,		62,     2)
-DEFINE_ALE_FIELD1_SET(port_num,		66)
+DEFINE_ALE_FIELD1(port_num,		66)
 DEFINE_ALE_FIELD_SET(blocked,		65,     1)
 DEFINE_ALE_FIELD_SET(secure,		64,     1)
 DEFINE_ALE_FIELD_GET(mcast,		40,	1)
@@ -440,6 +440,48 @@ static int cpsw_ale_find_ageable(struct cpsw_ale *ale)
 	}
 	return -ENOENT;
 }
+
+int cpsw_ale_del_ucast_dynamic_by_port(struct cpsw_ale *ale, const u8 *addr,
+				       int port, u16 vid)
+{
+	u32 ale_entry[ALE_ENTRY_WORDS];
+	int type, ucast_type, idx;
+	u8 entry_addr[6];
+	int deleted = 0;
+	int entry_vid;
+
+	for (idx = 0; idx < ale->params.ale_entries; idx++) {
+		cpsw_ale_read(ale, idx, ale_entry);
+		type = cpsw_ale_get_entry_type(ale_entry);
+		if (type != ALE_TYPE_ADDR && type != ALE_TYPE_VLAN_ADDR)
+			continue;
+		if (cpsw_ale_get_mcast(ale_entry))
+			continue;
+		ucast_type = cpsw_ale_get_ucast_type(ale_entry);
+		if (ucast_type == ALE_UCAST_PERSISTANT ||
+		    ucast_type == ALE_UCAST_OUI)
+			continue;
+		if (cpsw_ale_get_port_num(ale_entry, ale->port_num_bits) != port)
+			continue;
+		cpsw_ale_get_addr(ale_entry, entry_addr);
+		if (!ether_addr_equal(entry_addr, addr))
+			continue;
+		entry_vid = cpsw_ale_get_vlan_id(ale_entry);
+		if (vid && entry_vid != vid)
+			continue;
+
+		memset(ale_entry, 0, sizeof(ale_entry));
+		cpsw_ale_set_entry_type(ale_entry, ALE_TYPE_FREE);
+		cpsw_ale_write(ale, idx, ale_entry);
+		deleted++;
+
+		if (vid)
+			return 0;
+	}
+
+	return deleted ? 0 : -ENOENT;
+}
+EXPORT_SYMBOL_GPL(cpsw_ale_del_ucast_dynamic_by_port);
 
 static void cpsw_ale_flush_mcast(struct cpsw_ale *ale, u32 *ale_entry,
 				 int port_mask)
