@@ -16,6 +16,19 @@
 
 #include "dev.h"
 
+/**
+ * __hw_addr_changed - account a change of a tracked address list
+ * @list: the address list an entry was added to or removed from
+ *
+ * Bumps the netns generation counter RTM_GETMULTICAST dumps use to detect
+ * changes of dev->mc between dump rounds. Untracked lists have no owner.
+ */
+static void __hw_addr_changed(struct netdev_hw_addr_list *list)
+{
+	if (list->owner)
+		atomic_inc(&dev_net(list->owner)->dev_mc_genid);
+}
+
 /*
  * General list handling functions
  */
@@ -126,6 +139,7 @@ static int __hw_addr_add_ex(struct netdev_hw_addr_list *list,
 
 	list_add_tail_rcu(&ha->list, &list->list);
 	list->count++;
+	__hw_addr_changed(list);
 
 	return 0;
 }
@@ -162,6 +176,7 @@ static int __hw_addr_del_entry(struct netdev_hw_addr_list *list,
 	list_del_rcu(&ha->list);
 	kfree_rcu(ha, rcu_head);
 	list->count--;
+	__hw_addr_changed(list);
 	return 0;
 }
 
@@ -487,6 +502,8 @@ void __hw_addr_flush(struct netdev_hw_addr_list *list)
 {
 	struct netdev_hw_addr *ha, *tmp;
 
+	if (list->count)
+		__hw_addr_changed(list);
 	list->tree = RB_ROOT;
 	list_for_each_entry_safe(ha, tmp, &list->list, list) {
 		list_del_rcu(&ha->list);
@@ -501,6 +518,7 @@ void __hw_addr_init(struct netdev_hw_addr_list *list)
 	INIT_LIST_HEAD(&list->list);
 	list->count = 0;
 	list->tree = RB_ROOT;
+	list->owner = NULL;
 }
 EXPORT_SYMBOL(__hw_addr_init);
 
@@ -612,6 +630,7 @@ void __hw_addr_list_reconcile(struct netdev_hw_addr_list *real_list,
 				__hw_addr_insert(real_list, ref_ha,
 						 addr_len);
 				real_list->count++;
+				__hw_addr_changed(real_list);
 			}
 			continue;
 		}
@@ -623,6 +642,7 @@ void __hw_addr_list_reconcile(struct netdev_hw_addr_list *real_list,
 			list_del_rcu(&real_ha->list);
 			kfree_rcu(real_ha, rcu_head);
 			real_list->count--;
+			__hw_addr_changed(real_list);
 		}
 	}
 
@@ -1177,6 +1197,7 @@ EXPORT_SYMBOL(dev_mc_flush);
 void dev_mc_init(struct net_device *dev)
 {
 	__hw_addr_init(&dev->mc);
+	dev->mc.owner = dev;
 }
 EXPORT_SYMBOL(dev_mc_init);
 
