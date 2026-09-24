@@ -1894,13 +1894,22 @@ EXPORT_SYMBOL_GPL(serial8250_handle_irq);
 
 static int serial8250_default_handle_irq(struct uart_port *port)
 {
-	struct uart_8250_port *up = up_to_u8250p(port);
 	unsigned int iir;
+	int pm_status;
+	int ret;
 
-	guard(serial8250_rpm)(up);
+	/* if driver suspended, return, probably shared interrupt */
+	pm_status = pm_runtime_get_if_active(port->dev);
+	if (!pm_status)
+		return 0;
 
 	iir = serial_port_in(port, UART_IIR);
-	return serial8250_handle_irq(port, iir);
+	ret = serial8250_handle_irq(port, iir);
+
+	if (pm_status > 0)
+		pm_runtime_put_autosuspend(port->dev);
+
+	return ret;
 }
 
 /*
