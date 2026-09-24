@@ -373,6 +373,8 @@ static int check_core_relo(struct bpf_verifier_env *env,
 	 * relocation record one at a time.
 	 */
 	for (i = 0; i < nr_core_relo; i++) {
+		u32 insn_idx;
+
 		/* future proofing when sizeof(bpf_core_relo) changes */
 		err = bpf_check_uarg_tail_zero(u_core_relo, expected_size, rec_size);
 		if (err) {
@@ -391,15 +393,22 @@ static int check_core_relo(struct bpf_verifier_env *env,
 			break;
 		}
 
-		if (core_relo.insn_off % 8 || core_relo.insn_off / 8 >= prog->len) {
+		insn_idx = core_relo.insn_off / 8;
+		if (core_relo.insn_off % 8 || insn_idx >= prog->len) {
 			verbose(env, "Invalid core_relo[%u].insn_off:%u prog->len:%u\n",
 				i, core_relo.insn_off, prog->len);
 			err = -EINVAL;
 			break;
 		}
+		if (insn_idx == prog->len - 1 &&
+		    prog->insnsi[insn_idx].code == (BPF_LD | BPF_IMM | BPF_DW)) {
+			verbose(env, "Invalid core_relo[%u] targets truncated bpf_ld_imm64 insn\n",
+				i);
+			err = -EINVAL;
+			break;
+		}
 
-		err = bpf_core_apply(&ctx, &core_relo, i,
-				     &prog->insnsi[core_relo.insn_off / 8]);
+		err = bpf_core_apply(&ctx, &core_relo, i, &prog->insnsi[insn_idx]);
 		if (err)
 			break;
 		bpfptr_add(&u_core_relo, rec_size);
