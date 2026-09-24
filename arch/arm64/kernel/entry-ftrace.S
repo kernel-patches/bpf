@@ -39,17 +39,17 @@ SYM_CODE_START(ftrace_caller)
 #ifdef CONFIG_DYNAMIC_FTRACE_WITH_CALL_OPS
 	/*
 	 * The literal pointer to the ops is at an 8-byte aligned boundary
-	 * which is either 12 or 16 bytes before the BL instruction in the call
-	 * site. See ftrace_call_adjust() for details.
+	 * before the BL instruction in the call site. See ftrace_call_adjust()
+	 * and <asm/ftrace.h> for details.
 	 *
-	 * Therefore here the LR points at `literal + 16` or `literal + 20`,
-	 * and we can find the address of the literal in either case by
-	 * aligning to an 8-byte boundary and subtracting 16. We do the
-	 * alignment first as this allows us to fold the subtraction into the
-	 * LDR.
+	 * Therefore here the LR points at `literal + FTRACE_CALL_OPS_BIAS` or
+	 * `literal + FTRACE_CALL_OPS_BIAS + 4`, and we can find the address of
+	 * the literal in either case by aligning to an 8-byte boundary and
+	 * subtracting FTRACE_CALL_OPS_BIAS. We do the alignment first as this
+	 * allows us to fold the subtraction into the LDR.
 	 */
 	bic	x11, x30, 0x7
-	ldr	x11, [x11, #-(4 * AARCH64_INSN_SIZE)]		// op
+	ldr	x11, [x11, #-FTRACE_CALL_OPS_BIAS]		// op
 
 #ifdef CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
 	/*

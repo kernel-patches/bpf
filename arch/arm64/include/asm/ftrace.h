@@ -24,6 +24,22 @@
 #define FTRACE_PLT_IDX		0
 #define NR_FTRACE_PLTS		1
 
+#ifdef CONFIG_DYNAMIC_FTRACE_WITH_CALL_OPS
+/*
+ * ftrace_caller reads the callsite's ftrace_ops literal at
+ * ALIGN_DOWN(LR, 8) - FTRACE_CALL_OPS_BIAS. See ftrace_call_ops_adjust()
+ * for the layouts this serves.
+ */
+#define FTRACE_PREFIX_NOPS	CONFIG_ARM64_FUNCTION_PREFIX_NOPS
+#if FTRACE_PREFIX_NOPS == 2 || FTRACE_PREFIX_NOPS == 3
+#define FTRACE_CALL_OPS_BIAS	16
+#elif FTRACE_PREFIX_NOPS == 5
+#define FTRACE_CALL_OPS_BIAS	24
+#else
+#error "Unsupported number of function prefix NOPs"
+#endif
+#endif /* CONFIG_DYNAMIC_FTRACE_WITH_CALL_OPS */
+
 /*
  * Currently, gcc tends to save the link register after the local variables
  * on the stack. This causes the max stack tracer to report the function
