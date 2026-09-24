@@ -142,7 +142,17 @@ CHECKFLAGS	+= -D__aarch64__
 
 ifeq ($(CONFIG_DYNAMIC_FTRACE_WITH_CALL_OPS),y)
   KBUILD_CPPFLAGS += -DCC_USING_PATCHABLE_FUNCTION_ENTRY
-  CC_FLAGS_FTRACE := -fpatchable-function-entry=4,2
+  prefix_nops := $(CONFIG_ARM64_FUNCTION_PREFIX_NOPS)
+  CC_FLAGS_FTRACE := -fpatchable-function-entry=$(shell expr $(prefix_nops) + 2),$(prefix_nops)
+  ifeq ($(CONFIG_CFI),y)
+    # Every object gets the prefix NOPs and no ftrace entry by default.
+    # CC_FLAGS_FTRACE comes later for traced objects and overrides the
+    # -fpatchable-function-entry.
+    CFI_PREFIX_CFLAGS := -fpatchable-function-entry=$(prefix_nops),$(prefix_nops),.discard.patchable_function_entries \
+			 -DCC_USING_PATCHABLE_FUNCTION_PREFIX=$(prefix_nops)
+    KBUILD_CFLAGS += $(CFI_PREFIX_CFLAGS)
+    export CFI_PREFIX_CFLAGS
+  endif
 else ifeq ($(CONFIG_DYNAMIC_FTRACE_WITH_ARGS),y)
   KBUILD_CPPFLAGS += -DCC_USING_PATCHABLE_FUNCTION_ENTRY
   CC_FLAGS_FTRACE := -fpatchable-function-entry=2
