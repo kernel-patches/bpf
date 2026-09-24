@@ -2646,23 +2646,24 @@ static int __init console_setup(char *str)
 	if (_braille_console_setup(&str, &brl_options))
 		return 1;
 
+	/*
+	 * Decode str into name, index and options. Start with options, since
+	 * it might also contain a ':' used for DEVNAME.
+	 */
+	options = strchr(str, ',');
+	if (options)
+		*(options++) = 0;
+
 	/* For a DEVNAME:0.0 style console the character device is unknown early */
 	if (strchr(str, ':'))
 		devname = buf;
 	else
 		ttyname = buf;
 
-	/*
-	 * Decode str into name, index, options.
-	 */
 	if (ttyname && isdigit(str[0]))
 		scnprintf(buf, sizeof(buf), "ttyS%s", str);
 	else
 		strscpy(buf, str);
-
-	options = strchr(str, ',');
-	if (options)
-		*(options++) = 0;
 
 #ifdef __sparc__
 	if (!strcmp(str, "ttya"))
@@ -2671,17 +2672,18 @@ static int __init console_setup(char *str)
 		strscpy(buf, "ttyS1");
 #endif
 
-	for (s = buf; *s; s++)
-		if ((ttyname && isdigit(*s)) || *s == ',')
-			break;
-
-	/* @idx will get defined when devname matches. */
-	if (devname)
-		idx = -1;
-	else
+	if (ttyname) {
+		/* Detect @idx in ttyname and remove it. */
+		for (s = ttyname; *s; s++) {
+			if (isdigit(*s))
+				break;
+		}
 		idx = simple_strtoul(s, NULL, 10);
-
-	*s = 0;
+		*s = 0;
+	} else {
+		/* @idx will get defined when devname matches. */
+		idx = -1;
+	}
 
 	__add_preferred_console(ttyname, idx, devname, options, brl_options, true);
 	return 1;
