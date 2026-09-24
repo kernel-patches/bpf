@@ -2363,12 +2363,14 @@ static int nix_check_txschq_alloc_req(struct rvu *rvu, int lvl, u16 pcifunc,
 	return 0;
 }
 
-static void nix_txsch_alloc(struct rvu *rvu, struct nix_txsch *txsch,
-			    struct nix_txsch_alloc_rsp *rsp,
-			    int lvl, int start, int end)
+static int nix_txsch_alloc(struct rvu *rvu, struct nix_txsch *txsch,
+			   struct nix_txsch_alloc_rsp *rsp,
+			   int lvl, int start, int end)
 {
+	int want_contig = rsp->schq_contig[lvl];
 	struct rvu_hwinfo *hw = rvu->hw;
 	u16 pcifunc = rsp->hdr.pcifunc;
+	int want = rsp->schq[lvl];
 	int idx, schq;
 
 	/* For traffic aggregating levels, queue alloc is based
@@ -2389,7 +2391,7 @@ static void nix_txsch_alloc(struct rvu *rvu, struct nix_txsch *txsch,
 			rsp->schq[lvl] = 1;
 			rsp->schq_list[lvl][0] = start;
 		}
-		return;
+		return 0;
 	}
 
 	/* Adjust the queue request count if HW supports
@@ -2401,7 +2403,7 @@ static void nix_txsch_alloc(struct rvu *rvu, struct nix_txsch *txsch,
 		if (idx >= (end - start) || test_bit(schq, txsch->schq.bmap)) {
 			rsp->schq_contig[lvl] = 0;
 			rsp->schq[lvl] = 0;
-			return;
+			return -ENOMEM;
 		}
 
 		if (rsp->schq_contig[lvl]) {
@@ -2414,7 +2416,7 @@ static void nix_txsch_alloc(struct rvu *rvu, struct nix_txsch *txsch,
 			set_bit(schq, txsch->schq.bmap);
 			rsp->schq_list[lvl][0] = schq;
 		}
-		return;
+		return 0;
 	}
 
 	/* Allocate contiguous queue indices requesty first */
@@ -2445,6 +2447,22 @@ static void nix_txsch_alloc(struct rvu *rvu, struct nix_txsch *txsch,
 		/* Update how many were allocated */
 		rsp->schq[lvl] = idx;
 	}
+
+	if ((want_contig && !rsp->schq_contig[lvl]) || (want && !rsp->schq[lvl]))
+		goto err;
+
+	return 0;
+
+err:
+	for (idx = 0; idx < rsp->schq_contig[lvl]; idx++)
+		clear_bit(rsp->schq_contig_list[lvl][idx], txsch->schq.bmap);
+
+	for (idx = 0; idx < rsp->schq[lvl]; idx++)
+		clear_bit(rsp->schq_list[lvl][idx], txsch->schq.bmap);
+
+	rsp->schq_contig[lvl] = 0;
+	rsp->schq[lvl] = 0;
+	return -ENOMEM;
 }
 
 int rvu_mbox_handler_nix_txsch_alloc(struct rvu *rvu,
@@ -2503,7 +2521,8 @@ int rvu_mbox_handler_nix_txsch_alloc(struct rvu *rvu,
 			end = txsch->schq.max;
 		}
 
-		nix_txsch_alloc(rvu, txsch, rsp, lvl, start, end);
+		if (nix_txsch_alloc(rvu, txsch, rsp, lvl, start, end))
+			goto err;
 
 		/* Reset queue config */
 		for (idx = 0; idx < req->schq_contig[lvl]; idx++) {
