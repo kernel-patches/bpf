@@ -571,6 +571,7 @@ struct npc_kpu_profile_adapter {
 };
 
 #define RVU_SWITCH_LBK_CHAN	63
+#define RVU_SW_INVALID_PORT_ID	((u32)~0U)
 
 struct rvu_switch {
 	struct mutex switch_lock; /* Serialize flow installation */
@@ -578,6 +579,11 @@ struct rvu_switch {
 	u16 *entry2pcifunc;
 	u16 mode;
 	u16 start_entry;
+	unsigned char switch_id[MAX_PHYS_ITEM_ID_LEN];
+	u8 switch_id_len;
+#define RVU_SWITCH_FLAG_FW_READY BIT_ULL(0)
+	u64 flags;
+	u16 pcifunc;
 };
 
 struct rep_evtq_ent {
@@ -1196,9 +1202,12 @@ void rvu_mcs_ptp_cfg(struct rvu *rvu, u8 rpm_id, u8 lmac_id, bool ena);
 void rvu_mcs_exit(struct rvu *rvu);
 
 /* Representor APIs */
+void rvu_rep_cache_reset(struct rvu *rvu);
 int rvu_rep_pf_init(struct rvu *rvu);
 int rvu_rep_install_mcam_rules(struct rvu *rvu);
 void rvu_rep_update_rules(struct rvu *rvu, u16 pcifunc, bool ena);
 int rvu_rep_notify_pfvf_state(struct rvu *rvu, u16 pcifunc, bool enable);
 int npc_mcam_verify_entry(struct npc_mcam *mcam, u16 pcifunc, int entry);
+u16 rvu_rep_get_vlan_id(struct rvu *rvu, u16 pcifunc);
+u32 rvu_sw_port_id(struct rvu *rvu, u16 pcifunc);
 #endif /* RVU_H */

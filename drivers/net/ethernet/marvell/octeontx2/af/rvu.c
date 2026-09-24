@@ -3083,6 +3083,9 @@ static void __rvu_flr_handler(struct rvu *rvu, u16 pcifunc)
 	if (rvu->mcs_blk_cnt)
 		rvu_mcs_flr_handler(rvu, pcifunc);
 
+	if (is_rep_dev(rvu, pcifunc))
+		rvu_rep_cache_reset(rvu);
+
 	mutex_unlock(&rvu->flr_lock);
 }
 

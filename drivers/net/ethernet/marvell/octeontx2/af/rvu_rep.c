@@ -6,6 +6,7 @@
  */
 
 #include <linux/bitfield.h>
+#include <linux/stddef.h>
 #include <linux/types.h>
 #include <linux/device.h>
 #include <linux/module.h>
@@ -189,14 +190,47 @@ int rvu_mbox_handler_nix_lf_stats(struct rvu *rvu,
 	return 0;
 }
 
-static u16 rvu_rep_get_vlan_id(struct rvu *rvu, u16 pcifunc)
+static bool rvu_rep_lookup_id(struct rvu *rvu, u16 pcifunc, u16 *rep_id)
 {
-	int id;
+	u16 *map;
+	int id, cnt;
+	bool found = false;
 
-	for (id = 0; id < rvu->rep_cnt; id++)
-		if (rvu->rep2pfvf_map[id] == pcifunc)
-			return id;
-	return 0;
+	mutex_lock(&rvu->rsrc_lock);
+	map = rvu->rep2pfvf_map;
+	cnt = rvu->rep_cnt;
+	if (map && cnt) {
+		for (id = 0; id < cnt; id++) {
+			if (map[id] == pcifunc) {
+				*rep_id = id;
+				found = true;
+				break;
+			}
+		}
+	}
+	mutex_unlock(&rvu->rsrc_lock);
+
+	return found;
+}
+
+u16 rvu_rep_get_vlan_id(struct rvu *rvu, u16 pcifunc)
+{
+	u16 rep_id;
+
+	if (!rvu_rep_lookup_id(rvu, pcifunc, &rep_id))
+		return 0;
+	return rep_id;
+}
+
+u32 rvu_sw_port_id(struct rvu *rvu, u16 pcifunc)
+{
+	u16 rep_id;
+
+	if (!rvu_rep_lookup_id(rvu, pcifunc, &rep_id))
+		return RVU_SW_INVALID_PORT_ID;
+
+	return FIELD_PREP(GENMASK_ULL(31, 16), rep_id) |
+	       FIELD_PREP(GENMASK_ULL(15, 0), pcifunc);
 }
 
 static int rvu_rep_tx_vlan_cfg(struct rvu *rvu,  u16 pcifunc,
@@ -429,16 +463,48 @@ int rvu_rep_pf_init(struct rvu *rvu)
 	return 0;
 }
 
+void rvu_rep_cache_reset(struct rvu *rvu)
+{
+	u16 *map;
+
+	mutex_lock(&rvu->rsrc_lock);
+	rvu->rep_mode = 0;
+	rvu->rep_pcifunc = 0;
+	map = rvu->rep2pfvf_map;
+	rvu->rep_cnt = 0;
+	rvu->rep2pfvf_map = NULL;
+	memset(rvu->rswitch.switch_id, 0, sizeof(rvu->rswitch.switch_id));
+	rvu->rswitch.switch_id_len = 0;
+	mutex_unlock(&rvu->rsrc_lock);
+
+	devm_kfree(rvu->dev, map);
+}
+
 int rvu_mbox_handler_esw_cfg(struct rvu *rvu, struct esw_cfg_req *req,
 			     struct msg_rsp *rsp)
 {
 	if (req->hdr.pcifunc != rvu->rep_pcifunc)
 		return 0;
 
-	rvu->rep_mode = req->ena;
+	if (rvu->rep_mode && req->ena)
+		return 0;
 
-	if (!rvu->rep_mode)
+	if (!rvu->rep_mode && !req->ena)
+		return 0;
+
+	rvu->rep_mode = req->ena;
+	memset(rvu->rswitch.switch_id, 0, sizeof(rvu->rswitch.switch_id));
+	rvu->rswitch.switch_id_len = 0;
+	if (req->switch_id_len && req->switch_id_len <= MAX_PHYS_ITEM_ID_LEN) {
+		memcpy(rvu->rswitch.switch_id, req->switch_id,
+		       req->switch_id_len);
+		rvu->rswitch.switch_id_len = req->switch_id_len;
+	}
+
+	if (!rvu->rep_mode) {
 		rvu_npc_free_mcam_entries(rvu, req->hdr.pcifunc, -1);
+		rvu_rep_cache_reset(rvu);
+	}
 
 	return 0;
 }
@@ -447,31 +513,48 @@ int rvu_mbox_handler_get_rep_cnt(struct rvu *rvu, struct msg_req *req,
 				 struct get_rep_cnt_rsp *rsp)
 {
 	int pf, vf, numvfs, hwvf, rep = 0;
-	u16 pcifunc;
+	u16 pcifunc, rep_cnt;
+	u16 *map;
+
+	mutex_lock(&rvu->rsrc_lock);
 
 	rvu->rep_pcifunc = req->hdr.pcifunc;
-	rsp->rep_cnt = rvu->cgx_mapped_pfs + rvu->cgx_mapped_vfs;
-	rvu->rep_cnt = rsp->rep_cnt;
 
-	rvu->rep2pfvf_map = devm_kzalloc(rvu->dev, rvu->rep_cnt *
-					 sizeof(u16), GFP_KERNEL);
-	if (!rvu->rep2pfvf_map)
+	if (rvu->rep2pfvf_map) {
+		rsp->rep_cnt = rvu->rep_cnt;
+		for (rep = 0; rep < rvu->rep_cnt; rep++)
+			rsp->rep_pf_map[rep] = rvu->rep2pfvf_map[rep];
+		mutex_unlock(&rvu->rsrc_lock);
+		return 0;
+	}
+
+	rep_cnt = rvu->cgx_mapped_pfs + rvu->cgx_mapped_vfs;
+	map = devm_kzalloc(rvu->dev, rep_cnt * sizeof(u16), GFP_KERNEL);
+	if (!map) {
+		mutex_unlock(&rvu->rsrc_lock);
 		return -ENOMEM;
+	}
 
 	for (pf = 0; pf < rvu->hw->total_pfs; pf++) {
 		if (!is_pf_cgxmapped(rvu, pf))
 			continue;
 		pcifunc = rvu_make_pcifunc(rvu->pdev, pf, 0);
-		rvu->rep2pfvf_map[rep] = pcifunc;
+		map[rep] = pcifunc;
 		rsp->rep_pf_map[rep] = pcifunc;
 		rep++;
 		rvu_get_pf_numvfs(rvu, pf, &numvfs, &hwvf);
 		for (vf = 0; vf < numvfs; vf++) {
-			rvu->rep2pfvf_map[rep] = pcifunc |
-				((vf + 1) & RVU_PFVF_FUNC_MASK);
-			rsp->rep_pf_map[rep] = rvu->rep2pfvf_map[rep];
+			map[rep] = pcifunc | ((vf + 1) & RVU_PFVF_FUNC_MASK);
+			rsp->rep_pf_map[rep] = map[rep];
 			rep++;
 		}
 	}
+
+	rvu->rep_cnt = rep_cnt;
+	rvu->rep2pfvf_map = map;
+	rsp->rep_cnt = rep_cnt;
+
+	mutex_unlock(&rvu->rsrc_lock);
+
 	return 0;
 }
