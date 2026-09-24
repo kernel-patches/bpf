@@ -2017,6 +2017,7 @@ static int do_jit(struct bpf_verifier_env *env, struct bpf_prog *bpf_prog, int *
 	u8 *ip, *prog = temp;
 	u32 stack_depth;
 	int callee_saved_size;
+	u32 prologue_depth;
 	s32 outgoing_arg_base;
 	int err;
 
@@ -2055,7 +2056,9 @@ static int do_jit(struct bpf_verifier_env *env, struct bpf_prog *bpf_prog, int *
 
 	detect_reg_usage(insn, insn_cnt, callee_regs_used);
 
-	emit_prologue(&prog, image, stack_depth,
+	prologue_depth = stack_depth;
+
+	emit_prologue(&prog, image, prologue_depth,
 		      bpf_prog_was_classic(bpf_prog), tail_call_reachable,
 		      bpf_is_subprog(bpf_prog), bpf_prog->aux->exception_cb);
 
@@ -2150,7 +2153,8 @@ static int do_jit(struct bpf_verifier_env *env, struct bpf_prog *bpf_prog, int *
 				dst_reg = X86_REG_R9;
 		}
 
-		if (bpf_insn_is_indirect_target(env, bpf_prog, i - 1))
+		if (bpf_insn_is_indirect_target(env, bpf_prog, i - 1) ||
+		    bpf_exc_insn_is_pad(env, bpf_prog, i - 1))
 			EMIT_ENDBR();
 
 		ip = image + addrs[i - 1] + (prog - temp);
@@ -2945,7 +2949,7 @@ populate_extable:
 
 			func = (u8 *) __bpf_call_base + imm32;
 			if (src_reg == BPF_PSEUDO_CALL && tail_call_reachable) {
-				LOAD_TAIL_CALL_CNT_PTR(stack_depth);
+				LOAD_TAIL_CALL_CNT_PTR(prologue_depth);
 				ip += 7;
 			}
 			if (!imm32)
@@ -3006,13 +3010,13 @@ populate_extable:
 							  &prog,
 							  ip,
 							  callee_regs_used,
-							  stack_depth,
+							  prologue_depth,
 							  ctx);
 			else
 				emit_bpf_tail_call_indirect(bpf_prog,
 							    &prog,
 							    callee_regs_used,
-							    stack_depth,
+							    prologue_depth,
 							    ip,
 							    ctx);
 			break;
@@ -3266,6 +3270,13 @@ emit_jmp:
 			seen_exit = true;
 			/* Update cleanup_addr */
 			ctx->cleanup_addr = proglen;
+			/*
+			 * The one epilogue every exit jumps to, which is also
+			 * where an unwind sends a frame no cleanup record
+			 * covers. Unrelated to the cleanup pads despite the
+			 * name cleanup_addr has always had.
+			 */
+			bpf_prog->aux->epilogue_ip = (u64)image + proglen;
 			if (bpf_prog_was_classic(bpf_prog) &&
 			    !ns_capable_noaudit(&init_user_ns, CAP_SYS_ADMIN)) {
 				if (emit_spectre_bhb_barrier(&prog, ip, bpf_prog))
@@ -4444,6 +4455,13 @@ out_image:
 		bpf_prog_update_insn_ptrs(prog, addrs, image);
 
 		/*
+		 * Same mapping, consumed by the bpf_unwind() walk:
+		 * turn the cleanup records into native address ranges now
+		 * that the image is final.
+		 */
+		bpf_exc_fill_native_ranges(prog, addrs, image);
+
+		/*
 		 * ctx.prog_offset is used when CFI preambles put code *before*
 		 * the function. See emit_cfi(). For FineIBT specifically this code
 		 * can also be executed and bpf_prog_kallsyms_add() will
@@ -4581,6 +4599,11 @@ bool bpf_jit_supports_exceptions(void)
 	return IS_ENABLED(CONFIG_UNWINDER_ORC);
 }
 
+bool bpf_jit_supports_cleanup_pads(void)
+{
+	return IS_ENABLED(CONFIG_UNWINDER_ORC);
+}
+
 bool bpf_jit_supports_private_stack(void)
 {
 	return true;
@@ -4599,6 +4622,24 @@ void arch_bpf_stack_walk(bool (*consume_fn)(void *cookie, u64 ip, u64 sp, u64 bp
 			break;
 	}
 	return;
+#endif
+}
+
+void arch_bpf_stack_walk_ra(bool (*consume_fn)(void *cookie, u64 ip, u64 sp, u64 bp, u64 *ra),
+			    void *cookie)
+{
+#if defined(CONFIG_UNWINDER_ORC)
+	struct unwind_state state;
+	unsigned long addr, *ra;
+
+	for (unwind_start(&state, current, NULL, NULL); !unwind_done(&state);
+	     unwind_next_frame(&state)) {
+		addr = unwind_get_return_address(&state);
+		ra = unwind_get_return_address_ptr(&state);
+		if (!addr || !ra ||
+		    !consume_fn(cookie, (u64)addr, (u64)state.sp, (u64)state.bp, (u64 *)ra))
+			break;
+	}
 #endif
 }
 

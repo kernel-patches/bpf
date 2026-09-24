@@ -31,6 +31,7 @@
 #include <linux/buildid.h>
 
 #include "../../lib/kstrtox.h"
+#include "exception.h"
 
 /* If kernel subsystem is allowing eBPF programs to call this function,
  * inside its own verifier_ops->get_func_proto() callback it should return
@@ -3416,12 +3417,68 @@ static bool bpf_stack_walker(void *cookie, u64 ip, u64 sp, u64 bp)
 	if (!prog)
 		return !ctx->cnt;
 	ctx->cnt++;
+
 	if (bpf_is_subprog(prog))
 		return true;
 	ctx->aux = prog->aux;
 	ctx->sp = sp;
 	ctx->bp = bp;
 	return false;
+}
+
+struct bpf_unwind_ctx {
+	u32 cnt;
+};
+
+/*
+ * Send @ra's frame where the unwind needs it next: to the landing pad of the
+ * record covering the call it is suspended at, or, when no record covers it,
+ * to its epilogue, so that it returns at once. Either way the frame runs its
+ * own epilogue on the way out, which is what restores its caller's registers
+ * -- the walk itself never touches a register.
+ */
+static bool bpf_unwind_rewrite(void *cookie, u64 ip, u64 sp, u64 bp, u64 *ra)
+{
+	const struct bpf_cleanup_range *rec;
+	struct bpf_unwind_ctx *ctx = cookie;
+	struct bpf_exception_info *exc;
+	struct bpf_prog *prog;
+
+	rcu_read_lock();
+	prog = bpf_prog_ksym_find(ip);
+	rcu_read_unlock();
+	if (!prog)
+		return !ctx->cnt;
+	ctx->cnt++;
+
+	exc = prog->aux->exc;
+	rec = (exc && exc->nr_ranges) ? bpf_exc_pad_for_ip(prog, ip) : NULL;
+	if (rec) {
+		*ra = rec->pad;
+	} else if (ctx->cnt == 1) {
+		/*
+		 * The frame that called bpf_unwind(), with no record over the
+		 * call. Its return address already names the 'r0 = 0; exit'
+		 * put there for exactly this, so leave it alone: the frame
+		 * returns zero, and since no epilogue touches r0 that is what
+		 * the whole unwind ends up returning.
+		 */
+	} else if (prog->aux->epilogue_ip) {
+		*ra = prog->aux->epilogue_ip;
+	} else {
+		WARN_ON_ONCE(1);
+		return false;
+	}
+
+	/* The main program is the last frame the unwind can reach. */
+	return bpf_is_subprog(prog);
+}
+
+__bpf_kfunc void bpf_unwind(void)
+{
+	struct bpf_unwind_ctx ctx = {};
+
+	arch_bpf_stack_walk_ra(bpf_unwind_rewrite, &ctx);
 }
 
 __bpf_kfunc void bpf_throw(u64 cookie)
@@ -3443,6 +3500,23 @@ __bpf_kfunc void bpf_throw(u64 cookie)
 	kasan_unpoison_task_stack_below((void *)(long)(ctx.sp ?: ctx.bp));
 	ctx.aux->bpf_exception_cb(cookie, ctx.sp + ctx.aux->stack_arg_sp_adjust, ctx.bp, 0, 0);
 	WARN(1, "A call to BPF exception callback should never return\n");
+}
+
+/*
+ * Terminator of a compiler-emitted cleanup landing pad. The compiler names
+ * this _Unwind_Resume, the base unwind ABI's entry point for carrying an
+ * unwind on once a frame's cleanups have run. To match kernel kfunc
+ * convention, the kernel calls it bpf_unwind_resume and libbpf maps the
+ * compiler's name onto it.
+ */
+__bpf_kfunc void bpf_unwind_resume(void *ptr__ign)
+{
+	/*
+	 * Never reached: the verifier accepts this call only as a frame
+	 * terminator and do_misc_fixups() lowers every one of them to
+	 * 'r0 = 0; exit', so no call to this body survives to run.
+	 */
+	WARN_ONCE(1, "exception cleanup resume was not lowered to a return\n");
 }
 
 __bpf_kfunc int bpf_wq_init(struct bpf_wq *wq, void *p__const_map, unsigned int flags)
@@ -5081,6 +5155,8 @@ BTF_ID_FLAGS(func, bpf_task_get_cgroup1, KF_ACQUIRE | KF_RCU | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_task_from_pid, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_task_from_vpid, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_throw)
+BTF_ID_FLAGS(func, bpf_unwind)
+BTF_ID_FLAGS(func, bpf_unwind_resume)
 #ifdef CONFIG_BPF_EVENTS
 BTF_ID_FLAGS(func, bpf_send_signal_task)
 #endif
