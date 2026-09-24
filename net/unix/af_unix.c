@@ -2885,6 +2885,7 @@ static int unix_stream_read_skb(struct sock *sk, skb_read_actor_t recv_actor)
 		return err;
 
 	mutex_lock(&u->iolock);
+again:
 	spin_lock(&queue->lock);
 
 	skb = __skb_dequeue(queue);
@@ -2892,6 +2893,13 @@ static int unix_stream_read_skb(struct sock *sk, skb_read_actor_t recv_actor)
 		spin_unlock(&queue->lock);
 		mutex_unlock(&u->iolock);
 		return -EAGAIN;
+	}
+
+	if (!unix_skb_len(skb)) {
+		spin_unlock(&queue->lock);
+		unix_orphan_scm(sk, skb);
+		consume_skb(skb);
+		goto again;
 	}
 
 	WRITE_ONCE(u->inq_len, u->inq_len - unix_skb_len(skb));
@@ -2912,6 +2920,14 @@ static int unix_stream_read_skb(struct sock *sk, skb_read_actor_t recv_actor)
 	unix_orphan_scm(sk, skb);
 
 	mutex_unlock(&u->iolock);
+
+	if (UNIXCB(skb).consumed) {
+		if (!pskb_pull(skb, UNIXCB(skb).consumed)) {
+			kfree_skb(skb);
+			return -ENOMEM;
+		}
+		UNIXCB(skb).consumed = 0;
+	}
 
 	return recv_actor(sk, skb);
 }
