@@ -873,4 +873,47 @@ out:
 	return ctx->len;
 }
 
+/* Write skb_ext from cgroup/skb egress */
+SEC("cgroup_skb/egress")
+int cgrp_meta_write(struct __sk_buff *ctx)
+{
+	if (!is_test_packet_tc(ctx))
+		return 1;
+
+	write_meta(ctx, &meta_map);
+
+	return 1;
+}
+
+bool write_once_done;
+
+/* Write skb_ext from cgroup/skb egress -- only the first matching packet */
+SEC("cgroup_skb/egress")
+int cgrp_meta_write_once(struct __sk_buff *ctx)
+{
+	if (write_once_done || !is_test_packet_tc(ctx))
+		return 1;
+
+	write_meta(ctx, &meta_map);
+	write_once_done = true;
+
+	return 1;
+}
+
+/* Read skb_ext from tp_btf/kfree_skb -- tests survival until skb free */
+SEC("tp_btf/kfree_skb")
+int BPF_PROG(tp_kfree_meta_read, struct sk_buff *skb)
+{
+	__u8 *meta_have;
+
+	meta_have = bpf_map_lookup_elem(&meta_map, &skb);
+	if (!meta_have)
+		return 0;
+	if (!check_metadata(meta_have))
+		return 0;
+
+	test_pass = true;
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";
