@@ -1024,9 +1024,11 @@ static void sock_release_reserved_memory(struct sock *sk, int bytes)
 	/* Round down bytes to multiple of pages */
 	bytes = round_down(bytes, PAGE_SIZE);
 
+	spin_lock_bh(&sk->sk_receive_queue.lock);
 	WARN_ON(bytes > sk->sk_reserved_mem);
 	WRITE_ONCE(sk->sk_reserved_mem, sk->sk_reserved_mem - bytes);
 	sk_mem_reclaim(sk);
+	spin_unlock_bh(&sk->sk_receive_queue.lock);
 }
 
 static int sock_reserve_memory(struct sock *sk, int bytes)
@@ -1066,10 +1068,12 @@ static int sock_reserve_memory(struct sock *sk, int bytes)
 	}
 
 success:
+	spin_lock_bh(&sk->sk_receive_queue.lock);
 	sk_forward_alloc_add(sk, pages << PAGE_SHIFT);
 
 	WRITE_ONCE(sk->sk_reserved_mem,
 		   sk->sk_reserved_mem + (pages << PAGE_SHIFT));
+	spin_unlock_bh(&sk->sk_receive_queue.lock);
 
 	return 0;
 }
