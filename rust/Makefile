@@ -511,7 +511,12 @@ endif
 # prototypes for functions like `memcpy` -- if this flag is not passed,
 # `bindgen`-generated prototypes use `c_ulong` or `c_uint` depending on
 # architecture instead of generating `usize`.
-bindgen_c_flags_final = $(bindgen_c_flags_lto) -fno-builtin -D__BINDGEN__
+#
+# Do not pass -fpatchable-function-entry to bindgen: its libclang may not
+# support the section argument (Clang >= 21), and removing the flag does not
+# change the ABI.
+bindgen_c_flags_final = $(filter-out -fpatchable-function-entry=%, \
+	$(bindgen_c_flags_lto)) -fno-builtin -D__BINDGEN__
 
 # `--rust-target` points to our minimum supported Rust version.
 quiet_cmd_bindgen = BINDGEN $@
