@@ -1213,6 +1213,9 @@ static int bpf_object_adjust_struct_ops_autoload(struct bpf_object *obj)
 		prog = &obj->programs[i];
 		if (prog->type != BPF_PROG_TYPE_STRUCT_OPS)
 			continue;
+		/* an explicit MANUAL choice is never overridden by map autocreate */
+		if (prog->load_strategy == BPF_PROG_LOAD_STRATEGY_MANUAL)
+			continue;
 
 		for (j = 0; j < obj->nr_maps; ++j) {
 			const struct btf_type *type;
@@ -8941,10 +8944,15 @@ static int bpf_object_init_progs(struct bpf_object *obj, const struct bpf_object
 		prog->expected_attach_type = prog->sec_def->expected_attach_type;
 
 		/*
-		 * struct_ops programs are incompatible with manual loading
-		 * (see bpf_program__set_load_strategy()); reject SEC("!...")
-		 * here too, at declarative parse time, since that check only
-		 * runs on the imperative bpf_program__set_load_strategy() path.
+		 * struct_ops programs declared SEC("!...") are still rejected
+		 * here at declarative parse time. bpf_program__set_load_strategy()
+		 * does allow MANUAL for struct_ops via its imperative API, but
+		 * only as a narrow accommodation for tools (e.g. veristat) that
+		 * need to verify each program in isolation without ever calling
+		 * bpf_object__load(); it does not make struct_ops programs
+		 * generally usable through the MANUAL load/attach lifecycle
+		 * (see bpf_map_prepare_vdata()'s one-shot kern_vdata bake-in).
+		 * SEC("!...") has no such narrow use case, so it stays rejected.
 		 */
 		if (prog->type == BPF_PROG_TYPE_STRUCT_OPS &&
 		    prog->load_strategy == BPF_PROG_LOAD_STRATEGY_MANUAL) {
@@ -9544,7 +9552,7 @@ static int bpf_object__resolve_externs(struct bpf_object *obj,
 	return 0;
 }
 
-static void bpf_map_prepare_vdata(const struct bpf_map *map)
+static int bpf_map_prepare_vdata(const struct bpf_map *map)
 {
 	const struct btf_type *type;
 	struct bpf_struct_ops *st_ops;
@@ -9560,16 +9568,30 @@ static void bpf_map_prepare_vdata(const struct bpf_map *map)
 		if (!prog)
 			continue;
 
+		/*
+		 * a MANUAL member must be loaded with bpf_program__load()
+		 * before this runs; nothing re-bakes kern_vdata afterwards,
+		 * so an as-yet-unloaded MANUAL member is a hard error here
+		 * rather than a bogus fd silently baked into the map.
+		 */
+		if (prog->load_strategy == BPF_PROG_LOAD_STRATEGY_MANUAL && prog->fd < 0) {
+			pr_warn("map '%s': struct_ops member prog '%s' is MANUAL but not loaded\n",
+				map->name, prog->name);
+			return -EINVAL;
+		}
+
 		prog_fd = bpf_program__fd(prog);
 		kern_data = st_ops->kern_vdata + st_ops->kern_func_off[i];
 		*(unsigned long *)kern_data = prog_fd;
 	}
+
+	return 0;
 }
 
 static int bpf_object_prepare_struct_ops(struct bpf_object *obj)
 {
 	struct bpf_map *map;
-	int i;
+	int i, err;
 
 	for (i = 0; i < obj->nr_maps; i++) {
 		map = &obj->maps[i];
@@ -9580,7 +9602,9 @@ static int bpf_object_prepare_struct_ops(struct bpf_object *obj)
 		if (!map->autocreate)
 			continue;
 
-		bpf_map_prepare_vdata(map);
+		err = bpf_map_prepare_vdata(map);
+		if (err)
+			return err;
 	}
 
 	return 0;
@@ -15948,15 +15972,6 @@ int bpf_program__set_load_strategy(struct bpf_program *prog, enum bpf_prog_load_
 		 */
 		if (obj->gen_loader)
 			return libbpf_err(-EOPNOTSUPP);
-
-		/*
-		 * struct_ops programs are incompatible with manual loading:
-		 * bpf_map_prepare_vdata() bakes each member's fd into kern_vdata
-		 * automatically during bpf_object__load(), before a MANUAL member
-		 * could ever be loaded, and nothing re-bakes it afterwards.
-		 */
-		if (prog->type == BPF_PROG_TYPE_STRUCT_OPS)
-			return libbpf_err(-EINVAL);
 
 		if (prog_is_subprog(obj, prog))
 			return libbpf_err(-EINVAL);
