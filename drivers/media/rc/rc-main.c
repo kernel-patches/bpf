@@ -2071,10 +2071,12 @@ void rc_unregister_device(struct rc_dev *dev)
 	if (dev->driver_type == RC_DRIVER_IR_RAW)
 		ir_raw_event_unregister(dev);
 
-	timer_delete_sync(&dev->timer_keyup);
-	timer_delete_sync(&dev->timer_repeat);
+	if (dev->driver_type != RC_DRIVER_IR_RAW_TX) {
+		timer_delete_sync(&dev->timer_keyup);
+		timer_delete_sync(&dev->timer_repeat);
 
-	rc_free_rx_device(dev);
+		rc_free_rx_device(dev);
+	}
 
 	/*
 	 * lirc device should be freed with dev->registered = false, so
