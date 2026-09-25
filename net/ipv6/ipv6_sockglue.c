@@ -1002,6 +1002,8 @@ int do_ipv6_getsockopt(struct sock *sk, int level, int optname,
 
 	if (copy_from_sockptr(&len, optlen, sizeof(int)))
 		return -EFAULT;
+	if (len < 0)
+		return -EINVAL;
 	switch (optname) {
 	case MCAST_MSFILTER:
 		if (in_compat_syscall())
