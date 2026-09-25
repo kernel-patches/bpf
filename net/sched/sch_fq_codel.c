@@ -51,7 +51,7 @@ struct fq_codel_sched_data {
 	struct tcf_proto __rcu *filter_list; /* optional external classifier */
 	struct tcf_block *block;
 	struct fq_codel_flow *flows;	/* Flows table [flows_cnt] */
-	u32		*backlogs;	/* backlog table [flows_cnt] */
+	u64		*backlogs;	/* backlog table [flows_cnt] */
 	u32		flows_cnt;	/* number of flows */
 	u32		quantum;	/* psched_mtu(qdisc_dev(sch)); */
 	u32		drop_batch_size;
@@ -138,22 +138,25 @@ static unsigned int fq_codel_drop(struct Qdisc *sch, unsigned int max_packets,
 				  struct sk_buff **to_free)
 {
 	struct fq_codel_sched_data *q = qdisc_priv(sch);
+	u64 maxbacklog = 0, len = 0;
 	struct sk_buff *skb;
-	unsigned int maxbacklog = 0, idx = 0, i, len;
 	struct fq_codel_flow *flow;
-	unsigned int threshold;
+	unsigned int idx = 0, i;
 	unsigned int mem = 0;
+	u64 threshold;
 
 	/* Queue is full! Find the fat flow and drop packet(s) from it.
 	 * This might sound expensive, but with 1024 flows, we scan
-	 * 4KB of memory, and we dont need to handle a complex tree
+	 * 8KB of memory, and we dont need to handle a complex tree
 	 * in fast path (packet queue/enqueue) with many cache misses.
 	 * In stress mode, we'll try to drop 64 packets from the flow,
 	 * amortizing this linear lookup to one cache line per drop.
 	 */
 	for (i = 0; i < q->flows_cnt; i++) {
-		if (q->backlogs[i] > maxbacklog) {
-			maxbacklog = q->backlogs[i];
+		u64 backlog = READ_ONCE(q->backlogs[i]);
+
+		if (backlog > maxbacklog) {
+			maxbacklog = backlog;
 			idx = i;
 		}
 	}
@@ -162,7 +165,6 @@ static unsigned int fq_codel_drop(struct Qdisc *sch, unsigned int max_packets,
 	threshold = maxbacklog >> 1;
 
 	flow = &q->flows[idx];
-	len = 0;
 	i = 0;
 	do {
 		skb = dequeue_head(flow);
@@ -384,7 +386,7 @@ static void fq_codel_reset(struct Qdisc *sch)
 		INIT_LIST_HEAD(&flow->flowchain);
 		codel_vars_init(&flow->cvars);
 	}
-	memset(q->backlogs, 0, q->flows_cnt * sizeof(u32));
+	memset(q->backlogs, 0, q->flows_cnt * sizeof(u64));
 	q->memory_usage = 0;
 }
 
@@ -542,7 +544,7 @@ static int fq_codel_init(struct Qdisc *sch, struct nlattr *opt,
 			err = -ENOMEM;
 			goto init_failure;
 		}
-		q->backlogs = kvcalloc(q->flows_cnt, sizeof(u32), GFP_KERNEL);
+		q->backlogs = kvcalloc(q->flows_cnt, sizeof(u64), GFP_KERNEL);
 		if (!q->backlogs) {
 			err = -ENOMEM;
 			goto alloc_failure;
@@ -720,7 +722,7 @@ static int fq_codel_dump_class_stats(struct Qdisc *sch, unsigned long cl,
 			}
 			sch_tree_unlock(sch);
 		}
-		qs.backlog = READ_ONCE(q->backlogs[idx]);
+		qs.backlog = (u32)READ_ONCE(q->backlogs[idx]);
 		qs.drops = 0;
 	}
 	if (gnet_stats_copy_queue(d, NULL, &qs, qs.qlen) < 0)
