@@ -1306,6 +1306,7 @@ int bpf_split_cur_state(struct bpf_verifier_env *env)
 	}
 
 	cur->parent = new;
+	cur->last_insn_idx = -1;
 	cur->first_insn_idx = insn_idx;
 	cur->dfs_depth = new->dfs_depth + 1;
 	bpf_clear_jmp_history(cur);
