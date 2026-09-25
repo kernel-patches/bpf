@@ -1877,6 +1877,13 @@ int build_insn(const struct bpf_insn *insn, struct jit_context *ctx)
 		if (finish_jmp(ctx, jmp, off) < 0)
 			goto toofar;
 		break;
+	/* PC += imm */
+	case BPF_JMP32 | BPF_JA:
+		if (imm == 0)
+			break;
+		if (emit_ja(ctx, imm) < 0)
+			goto toofar;
+		break;
 	/* PC += off if dst == src */
 	/* PC += off if dst != src */
 	/* PC += off if dst & src */
