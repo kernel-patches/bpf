@@ -19259,10 +19259,25 @@ static int indirect_jump_min_max_index(struct bpf_verifier_env *env,
 	return 0;
 }
 
+static int reject_gotox_out_of_subprog(struct bpf_verifier_env *env, u32 target,
+				       u32 subprog_start, u32 subprog_end)
+{
+	verbose(env, "indirect jump from insn %d to %u leaves the subprog [%u,%u)\n",
+		env->insn_idx, target, subprog_start, subprog_end);
+	bpf_diag_program_structure(
+		env, env->insn_idx, "indirect jump leaves subprogram",
+		"Keep every reachable jump-table target inside the subprogram of the indirect jump.",
+		"Instruction %d can jump indirectly to instruction %u, which is outside its own subprogram [%u,%u).",
+		env->insn_idx, target, subprog_start, subprog_end);
+	return -EINVAL;
+}
+
 /* gotox *dst_reg */
 static int check_indirect_jump(struct bpf_verifier_env *env, struct bpf_insn *insn)
 {
 	struct bpf_verifier_state *other_branch;
+	struct bpf_subprog_info *subprog;
+	u32 subprog_start, subprog_end;
 	struct bpf_reg_state *dst_reg;
 	struct bpf_map *map;
 	u32 min_index, max_index;
@@ -19305,6 +19320,24 @@ static int check_indirect_jump(struct bpf_verifier_env *env, struct bpf_insn *in
 			     insn->dst_reg, map->id);
 		return -EINVAL;
 	}
+
+	subprog = bpf_find_containing_subprog(env, env->insn_idx);
+	if (verifier_bug_if(!subprog, env, "no subprog contains insn %d", env->insn_idx))
+		return -EFAULT;
+	subprog_start = subprog->start;
+	subprog_end = (subprog + 1)->start;
+
+	/*
+	 * Maps are confined to a subprog, see compute_subprog_jts(), and the
+	 * targets are sorted and free of duplicates, see sort_insn_array_uniq(),
+	 * so either all of them belong to this subprog or none of them does.
+	 */
+	if (env->gotox_tmp_buf->items[0] < subprog_start)
+		return reject_gotox_out_of_subprog(env, env->gotox_tmp_buf->items[0],
+						   subprog_start, subprog_end);
+	if (env->gotox_tmp_buf->items[n - 1] >= subprog_end)
+		return reject_gotox_out_of_subprog(env, env->gotox_tmp_buf->items[n - 1],
+						   subprog_start, subprog_end);
 
 	for (i = 0; i < n - 1; i++) {
 		mark_indirect_target(env, env->gotox_tmp_buf->items[i]);
