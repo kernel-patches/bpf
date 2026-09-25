@@ -204,7 +204,7 @@ void emit_jmp_i(struct jit_context *ctx, u8 dst, s32 imm, s32 off, u8 op);
 void emit_jmp_r(struct jit_context *ctx, u8 dst, u8 src, s32 off, u8 op);
 
 /* Jump always */
-int emit_ja(struct jit_context *ctx, s16 off);
+int emit_ja(struct jit_context *ctx, s32 off);
 
 /* Jump to epilogue */
 int emit_exit(struct jit_context *ctx);

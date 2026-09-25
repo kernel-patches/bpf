@@ -823,7 +823,7 @@ void emit_jmp_r(struct jit_context *ctx, u8 dst, u8 src, s32 off, u8 op)
 }
 
 /* Jump always */
-int emit_ja(struct jit_context *ctx, s16 off)
+int emit_ja(struct jit_context *ctx, s32 off)
 {
 	int target = get_target(ctx, ctx->bpf_index + off + 1);
 
