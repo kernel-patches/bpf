@@ -551,6 +551,35 @@ __naked void gotox_edges_across_subprogs(void)
 		: : GOTOX_OPERAND : __clobber_all);
 }
 
+/*
+ * The gotox target is a ja +0, which the nop removal pass must keep as the
+ * jump table still names it.
+ */
+SEC("socket")
+__success __retval(0)
+__xlated("goto pc+0")
+__naked void jump_table_target_nop(void)
+{
+	asm volatile ("						\
+	.pushsection .jumptables,\"\",@progbits;		\
+jt0_%=:								\
+	.quad nop_%= - socket;					\
+	.size jt0_%=, 8;					\
+	.global jt0_%=;						\
+	.popsection;						\
+								\
+	r0 = jt0_%= ll;						\
+	r0 = *(u64 *)(r0 + 0);					\
+	.8byte %[gotox_r0];					\
+nop_%=:								\
+	goto +0;						\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm_insn(gotox_r0, BPF_RAW_INSN(BPF_JMP | BPF_JA | BPF_X, BPF_REG_0, 0, 0, 0))
+	: __clobber_all);
+}
+
 #endif /* __TARGET_ARCH_x86 || __TARGET_ARCH_arm64 || __TARGET_ARCH_powerpc*/
 
 char _license[] SEC("license") = "GPL";
