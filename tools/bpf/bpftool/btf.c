@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <linux/err.h>
 #include <stdbool.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -234,8 +235,10 @@ static void btf_loc_param_str(const struct btf_type *t, char *str, size_t sz)
 						(1ULL << bits) - value;
 			}
 		}
-		snprintf(num, sizeof(num), "0x%llx%s", (unsigned long long)value,
-			 p->flags & BTF_LOC_PARAM_ADDR ? " (addr)" : "");
+		snprintf(num, sizeof(num), "%s0x%llx",
+			 p->flags & BTF_LOC_PARAM_ADDR ? "address " :
+			 p->flags & BTF_LOC_PARAM_CONST ? "const " : "",
+			 (unsigned long long)value);
 	}
 	if (i != vlen) {
 		btf_loc_param_raw_str(p, vlen, str, sz);
@@ -250,6 +253,87 @@ static void btf_loc_param_str(const struct btf_type *t, char *str, size_t sz)
 		 op,
 		 num,
 		 p->flags & BTF_LOC_PARAM_DEREF ? ")" : "");
+}
+
+static int btf_locsec_append(char *str, size_t sz, size_t *off,
+			      const char *fmt, ...)
+{
+	va_list args;
+	int ret;
+
+	if (!sz || *off >= sz - 1)
+		return -ENOSPC;
+
+	va_start(args, fmt);
+	ret = vsnprintf(str + *off, sz - *off, fmt, args);
+	va_end(args);
+	if (ret < 0 || (size_t)ret >= sz - *off) {
+		*off = sz - 1;
+		return -ENOSPC;
+	}
+	*off += ret;
+	return 0;
+}
+
+static void btf_locsec_func_str(const struct btf *btf,
+				const struct btf_loc *loc, char *str, size_t sz)
+{
+	const struct btf_type *func, *func_proto, *loc_proto;
+	const struct btf_param *params;
+	const __u32 *loc_params;
+	const char *name;
+	__u32 i, vlen;
+	size_t off = 0;
+
+	if (!sz)
+		return;
+
+	str[0] = '\0';
+	func = btf__type_by_id(btf, loc->func);
+	if (!func || !btf_is_func(func))
+		goto invalid;
+
+	name = btf_str(btf, func->name_off);
+	func_proto = btf__type_by_id(btf, func->type);
+	loc_proto = btf__type_by_id(btf, loc->loc_proto);
+	if (!func_proto || !btf_is_func_proto(func_proto) ||
+	    !loc_proto || !btf_is_loc_proto(loc_proto) ||
+	    btf_vlen(func_proto) != btf_vlen(loc_proto))
+		goto invalid;
+
+	params = (const void *)(func_proto + 1);
+	loc_params = btf_loc_proto_params(loc_proto);
+	vlen = btf_vlen(func_proto);
+	if (btf_locsec_append(str, sz, &off, "%s(", name))
+		return;
+	for (i = 0; i < vlen; i++) {
+		const struct btf_type *param_loc;
+		char param_str[256] = {};
+
+		if (!params[i].type) {
+			/* Handle varargs func proto, must be last parameter */
+			if (i != vlen - 1)
+				goto invalid;
+			if (btf_locsec_append(str, sz, &off, "%s...", i ? ", " : ""))
+				return;
+			break;
+		} else if (loc_params[i]) {
+			param_loc = btf__type_by_id(btf, loc_params[i]);
+			btf_loc_param_str(param_loc, param_str, sizeof(param_str));
+		} else {
+			snprintf(param_str, sizeof(param_str), "<unavailable>");
+		}
+
+		if (btf_locsec_append(str, sz, &off, "%s%s [%s]",
+				      i ? ", " : "", btf_str(btf, params[i].name_off),
+				      param_str))
+			return;
+	}
+	(void) btf_locsec_append(str, sz, &off, ")");
+	return;
+
+invalid:
+	snprintf(str, sz, "<invalid>");
 }
 
 static int dump_btf_type(const struct btf *btf, __u32 id,
@@ -617,22 +701,20 @@ static int dump_btf_type(const struct btf *btf, __u32 id,
 		}
 
 		for (i = 0; i < vlen; i++, locs++) {
-			const struct btf_type *f = btf__type_by_id(btf, locs->func);
-			const char *name = "<invalid>";
+			char func_str[1024] = {};
 
-			if (f && btf_is_func(f))
-				name = btf_str(btf, f->name_off);
+			btf_locsec_func_str(btf, locs, func_str, sizeof(func_str));
 
 			if (json_output) {
 				jsonw_start_object(w);
 				jsonw_uint_field(w, "func_type_id", locs->func);
-				jsonw_string_field(w, "name", name);
+				jsonw_string_field(w, "func", func_str);
 				jsonw_uint_field(w, "loc_proto_type_id", locs->loc_proto);
 				jsonw_uint_field(w, "offset", locs->offset);
 				jsonw_end_object(w);
 			} else {
-				printf("\n\tname='%s' func_type_id=%u loc_proto_type_id=%u offset=%u",
-				       name, locs->func, locs->loc_proto, locs->offset);
+				printf("\n\tfunc='%s' func_type_id=%u loc_proto_type_id=%u offset=%u",
+				       func_str, locs->func, locs->loc_proto, locs->offset);
 			}
 		}
 		if (json_output)
