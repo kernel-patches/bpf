@@ -819,6 +819,8 @@ struct rxrpc_call {
 	u16			cong_dup_acks;	/* Count of ACKs showing missing packets */
 	u16			cong_cumul_acks; /* Cumulative ACK count */
 	ktime_t			cong_tstamp;	/* Last time cwnd was changed */
+	bool			cong_in_recovery:1;		/* If we're in Fast/RTO recovery */
+	bool			cong_exiting_recovery:1;	/* If we're leaving Fast/RTO recovery */
 
 	/* RACK-TLP [RFC8985] state. */
 	ktime_t			rack_xmit_ts;	/* Latest transmission timestamp */
@@ -897,8 +899,6 @@ struct rxrpc_ack_summary {
 	bool		retrans_timeo:1;	/* T if reTx due to timeout happened */
 	bool		need_retransmit:1;	/* T if we need transmission */
 	bool		rtt_sample_avail:1;	/* T if RTT sample available */
-	bool		in_fast_or_rto_recovery:1;
-	bool		exiting_fast_or_rto_recovery:1;
 	bool		tlp_probe_acked:1;	/* T if the TLP probe seq was acked */
 	u8 /*enum rxrpc_congest_change*/ change;
 };
