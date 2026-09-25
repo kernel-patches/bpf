@@ -1107,8 +1107,7 @@ static void xe_lrc_finish(struct xe_lrc *lrc)
 #define CONTEXT_ACTIVE XE_LRC_CTX_TIMESTAMP_ACTIVE
 static ssize_t setup_utilization_wa(struct xe_lrc *lrc,
 				    struct xe_hw_engine *hwe,
-				    u32 *batch,
-				    size_t max_len)
+				    u32 *batch, size_t max_len, bool indirect)
 {
 	u32 *cmd = batch;
 
@@ -1139,17 +1138,23 @@ static ssize_t setup_utilization_wa(struct xe_lrc *lrc,
 }
 
 static ssize_t setup_timestamp_wa(struct xe_lrc *lrc, struct xe_hw_engine *hwe,
-				  u32 *batch, size_t max_len)
+				  u32 *batch, size_t max_len, bool indirect)
 {
 	const u32 ts_addr = __xe_lrc_ctx_timestamp_ggtt_addr(lrc);
 	u32 *cmd = batch;
 
-	if (!XE_GT_WA(lrc->gt, 16010904313) ||
-	    !(hwe->class == XE_ENGINE_CLASS_RENDER ||
-	      hwe->class == XE_ENGINE_CLASS_COMPUTE ||
-	      hwe->class == XE_ENGINE_CLASS_COPY ||
+	if (!XE_GT_WA(lrc->gt, 16010904313))
+		return 0;
+
+	if (!indirect &&
+	    !(hwe->class == XE_ENGINE_CLASS_COPY ||
 	      hwe->class == XE_ENGINE_CLASS_VIDEO_DECODE ||
 	      hwe->class == XE_ENGINE_CLASS_VIDEO_ENHANCE))
+		return 0;
+
+	if (indirect &&
+	    !(hwe->class == XE_ENGINE_CLASS_RENDER ||
+	      hwe->class == XE_ENGINE_CLASS_COMPUTE))
 		return 0;
 
 	if (xe_gt_WARN_ON(lrc->gt, max_len < 12))
@@ -1177,7 +1182,8 @@ static ssize_t setup_timestamp_wa(struct xe_lrc *lrc, struct xe_hw_engine *hwe,
 
 static ssize_t setup_configfs_post_ctx_restore_bb(struct xe_lrc *lrc,
 						  struct xe_hw_engine *hwe,
-						  u32 *batch, size_t max_len)
+						  u32 *batch, size_t max_len,
+						  bool indirect)
 {
 	struct xe_device *xe = gt_to_xe(lrc->gt);
 	const u32 *user_batch;
@@ -1206,7 +1212,8 @@ static ssize_t setup_configfs_post_ctx_restore_bb(struct xe_lrc *lrc,
 
 static ssize_t setup_configfs_mid_ctx_restore_bb(struct xe_lrc *lrc,
 						 struct xe_hw_engine *hwe,
-						 u32 *batch, size_t max_len)
+						 u32 *batch, size_t max_len,
+						 bool indirect)
 {
 	struct xe_device *xe = gt_to_xe(lrc->gt);
 	const u32 *user_batch;
@@ -1235,7 +1242,8 @@ static ssize_t setup_configfs_mid_ctx_restore_bb(struct xe_lrc *lrc,
 
 static ssize_t setup_invalidate_state_cache_wa(struct xe_lrc *lrc,
 					       struct xe_hw_engine *hwe,
-					       u32 *batch, size_t max_len)
+					       u32 *batch, size_t max_len,
+					       bool indirect)
 {
 	u32 *cmd = batch;
 
@@ -1255,7 +1263,8 @@ static ssize_t setup_invalidate_state_cache_wa(struct xe_lrc *lrc,
 
 static ssize_t setup_invalidate_auxccs_wa(struct xe_lrc *lrc,
 					  struct xe_hw_engine *hwe,
-					  u32 *batch, size_t max_len)
+					  u32 *batch, size_t max_len,
+					  bool indirect)
 {
 	struct xe_gt *gt = lrc->gt;
 	u32 *(*emit)(struct xe_gt *gt, u32 *cmd) =
@@ -1272,7 +1281,7 @@ static ssize_t setup_invalidate_auxccs_wa(struct xe_lrc *lrc,
 
 struct bo_setup {
 	ssize_t (*setup)(struct xe_lrc *lrc, struct xe_hw_engine *hwe,
-			 u32 *batch, size_t max_size);
+			 u32 *batch, size_t max_size, bool indirect);
 };
 
 struct bo_setup_state {
@@ -1281,6 +1290,7 @@ struct bo_setup_state {
 	struct xe_hw_engine	*hwe;
 	size_t			max_size;
 	size_t                  reserve_dw;
+	bool			indirect;
 	unsigned int		offset;
 	const struct bo_setup	*funcs;
 	unsigned int		num_funcs;
@@ -1306,7 +1316,8 @@ static int setup_bo(struct bo_setup_state *state)
 
 	for (size_t i = 0; i < state->num_funcs; i++) {
 		ssize_t len = state->funcs[i].setup(state->lrc, state->hwe,
-						    state->ptr, remain);
+						    state->ptr, remain,
+						    state->indirect);
 
 		remain -= len;
 
@@ -1412,6 +1423,7 @@ setup_indirect_ctx(struct xe_lrc *lrc, struct xe_hw_engine *hwe)
 	struct bo_setup_state state = {
 		.lrc = lrc,
 		.hwe = hwe,
+		.indirect = true,
 		.max_size = (63 * 64) /* max 63 cachelines */,
 		.buffer = NULL,
 		.offset = __xe_lrc_indirect_ctx_offset(lrc),
