@@ -21925,12 +21925,14 @@ int bpf_check_attach_btf_id_multi(struct btf *btf, struct bpf_prog *prog, u32 bt
 /*
  * Returns the parsed vmlinux BTF, NULL if the kernel has none, or an ERR_PTR
  * if it is malformed.  With CONFIG_DEBUG_INFO_BTF=m the BTF lives in the
- * btf_vmlinux module; the first caller loads it and parses it.  May sleep.
+ * btf_vmlinux module; the first caller loads it, parses it and then registers
+ * the BTF of the modules that were loaded before it.  May sleep.
  */
 struct btf *bpf_get_btf_vmlinux(void)
 {
 	/* Pairs with the smp_store_release() on the parse path below. */
 	struct btf *btf = smp_load_acquire(&btf_vmlinux);
+	bool parsed = false;
 	u32 size;
 
 	if (btf || !IS_ENABLED(CONFIG_DEBUG_INFO_BTF))
@@ -21965,8 +21967,13 @@ struct btf *bpf_get_btf_vmlinux(void)
 		 * on the lockless fast path above.
 		 */
 		smp_store_release(&btf_vmlinux, btf);
+		parsed = true;
 	}
 	mutex_unlock(&btf_vmlinux_lock);
+
+	if (parsed && IS_MODULE(CONFIG_DEBUG_INFO_BTF))
+		btf_parse_deferred_modules();
+
 	return btf;
 }
 
