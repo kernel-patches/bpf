@@ -313,17 +313,34 @@ static inline int ip_vs_conn_hash(struct ip_vs_conn *cp)
 /* Try to unlink ip_vs_conn from conn_tab.
  * returns bool success.
  */
-static inline bool ip_vs_conn_unlink(struct ip_vs_conn *cp)
+static inline bool ip_vs_conn_unlink(struct ip_vs_conn *cp, bool my_cb)
 {
 	struct netns_ipvs *ipvs = cp->ipvs;
 	struct hlist_bl_head *head, *head2;
 	u32 hash_key, hash_key2;
 	struct ip_vs_rht *t;
-	bool ret = false;
 	bool use2;
 
+	if (!refcount_dec_if_one(&cp->refcnt))
+		return false;
+
 	if (cp->flags & IP_VS_CONN_F_ONE_PACKET)
-		return refcount_dec_if_one(&cp->refcnt);
+		return true;
+
+	/* Revalidate after conn is excluded from traffic:
+	 * - not controlling other conns
+	 * - no pending/running timer callback
+	 *
+	 * And the winner is ...
+	 */
+	if (atomic_read(&cp->n_control) ||
+	    (!timer_delete(&cp->timer) && !my_cb)) {
+		/* Not me? Give the timer callback another chance, even
+		 * if one is concurrently running during the conn deletion.
+		 */
+		refcount_set(&cp->refcnt, 1);
+		return false;
+	}
 
 	rcu_read_lock();
 	local_bh_disable();
@@ -337,15 +354,11 @@ static inline bool ip_vs_conn_unlink(struct ip_vs_conn *cp)
 		      false /* new_hash2 */, &head, &head2);
 
 	if (cp->flags & IP_VS_CONN_F_HASHED) {
-		/* Decrease refcnt and unlink conn only if we are last user */
-		if (use2 == ip_vs_conn_use_hash2(cp) &&
-		    refcount_dec_if_one(&cp->refcnt)) {
-			hlist_bl_del_rcu(&cp->hn0.node);
-			if (use2)
-				hlist_bl_del_rcu(&cp->hn1.node);
-			cp->flags &= ~IP_VS_CONN_F_HASHED;
-			ret = true;
-		}
+		/* Unlink conn as we are the last user */
+		hlist_bl_del_rcu(&cp->hn0.node);
+		if (use2)
+			hlist_bl_del_rcu(&cp->hn1.node);
+		cp->flags &= ~IP_VS_CONN_F_HASHED;
 	}
 
 	conn_tab_unlock(head, head2);
@@ -353,7 +366,7 @@ static inline bool ip_vs_conn_unlink(struct ip_vs_conn *cp)
 	local_bh_enable();
 	rcu_read_unlock();
 
-	return ret;
+	return true;
 }
 
 
@@ -1320,34 +1333,29 @@ static void ip_vs_conn_rcu_free(struct rcu_head *head)
 	kmem_cache_free(ip_vs_conn_cachep, cp);
 }
 
-/* Try to delete connection while not holding reference */
+/* Try to delete connection while not holding reference.
+ * It can be called concurrently and always under RCU lock.
+ */
 static void ip_vs_conn_del(struct ip_vs_conn *cp)
 {
-	if (timer_delete(&cp->timer)) {
-		/* Drop cp->control chain too */
-		if (cp->control)
-			cp->timeout = 0;
-		ip_vs_conn_expire(&cp->timer);
-	}
+	struct timer_list *t = (void *)((unsigned long)(&cp->timer) | 1UL);
+
+	/* Drop cp->control chain too */
+	if (cp->control)
+		cp->timeout = 0;
+	ip_vs_conn_expire(t);
 }
 
-/* Try to delete connection while holding reference */
-static void ip_vs_conn_del_put(struct ip_vs_conn *cp)
-{
-	if (timer_delete(&cp->timer)) {
-		/* Drop cp->control chain too */
-		if (cp->control)
-			cp->timeout = 0;
-		__ip_vs_conn_put(cp);
-		ip_vs_conn_expire(&cp->timer);
-	} else {
-		__ip_vs_conn_put(cp);
-	}
-}
-
+/* Connection is removed in the following steps:
+ * - timer expires or connection is deleted
+ * - there should be no more references (n_control>0 and refcnt>1)
+ * - there should be no pending timer or a running timer callback (on deletion)
+ */
 static void ip_vs_conn_expire(struct timer_list *t)
 {
-	struct ip_vs_conn *cp = timer_container_of(cp, t, timer);
+	bool my_cb = !((unsigned long)t & 1);
+	struct timer_list *t2 = (void *)((unsigned long)t & ~1UL);
+	struct ip_vs_conn *cp = timer_container_of(cp, t2, timer);
 	struct netns_ipvs *ipvs = cp->ipvs;
 
 	/*
@@ -1357,26 +1365,21 @@ static void ip_vs_conn_expire(struct timer_list *t)
 		goto expire_later;
 
 	/* Unlink conn if not referenced anymore */
-	if (likely(ip_vs_conn_unlink(cp))) {
+	if (likely(ip_vs_conn_unlink(cp, my_cb))) {
 		struct ip_vs_conn *ct = cp->control;
-
-		/* delete the timer if it is activated by other users */
-		timer_delete(&cp->timer);
 
 		/* does anybody control me? */
 		if (ct) {
-			bool has_ref = !cp->timeout && __ip_vs_conn_get(ct);
-
+			rcu_read_lock();
 			ip_vs_control_del(cp);
 			/* Drop CTL or non-assured TPL if not used anymore */
-			if (has_ref && !atomic_read(&ct->n_control) &&
+			if (!cp->timeout && !atomic_read(&ct->n_control) &&
 			    (!(ct->flags & IP_VS_CONN_F_TEMPLATE) ||
 			     !(ct->state & IP_VS_CTPL_S_ASSURED))) {
 				IP_VS_DBG(4, "drop controlling connection\n");
-				ip_vs_conn_del_put(ct);
-			} else if (has_ref) {
-				__ip_vs_conn_put(ct);
+				ip_vs_conn_del(ct);
 			}
+			rcu_read_unlock();
 		}
 
 		if ((cp->flags & IP_VS_CONN_F_NFCT) &&
@@ -1411,13 +1414,15 @@ static void ip_vs_conn_expire(struct timer_list *t)
 		  refcount_read(&cp->refcnt),
 		  atomic_read(&cp->n_control));
 
-	refcount_inc(&cp->refcnt);
-	cp->timeout = 60*HZ;
+	if (__ip_vs_conn_get(cp)) {
+		if (cp->timeout || atomic_read(&cp->n_control))
+			cp->timeout = 60 * HZ;
 
-	if (ipvs->sync_state & IP_VS_STATE_MASTER)
-		ip_vs_sync_conn(ipvs, cp, sysctl_sync_threshold(ipvs));
+		if (ipvs->sync_state & IP_VS_STATE_MASTER)
+			ip_vs_sync_conn(ipvs, cp, sysctl_sync_threshold(ipvs));
 
-	__ip_vs_conn_put_timer(cp);
+		__ip_vs_conn_put_timer(cp);
+	}
 }
 
 /* Modify timer, so that it expires as soon as possible.
