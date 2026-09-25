@@ -21922,26 +21922,51 @@ int bpf_check_attach_btf_id_multi(struct btf *btf, struct bpf_prog *prog, u32 bt
 	return 0;
 }
 
+/*
+ * Returns the parsed vmlinux BTF, NULL if the kernel has none, or an ERR_PTR
+ * if it is malformed.  With CONFIG_DEBUG_INFO_BTF=m the BTF lives in the
+ * btf_vmlinux module; the first caller loads it and parses it.  May sleep.
+ */
 struct btf *bpf_get_btf_vmlinux(void)
 {
 	/* Pairs with the smp_store_release() on the parse path below. */
 	struct btf *btf = smp_load_acquire(&btf_vmlinux);
+	u32 size;
 
-	if (!btf && IS_ENABLED(CONFIG_DEBUG_INFO_BTF)) {
-		mutex_lock(&btf_vmlinux_lock);
-		btf = btf_vmlinux;
-		if (!btf) {
-			btf = btf_parse_vmlinux();
-			/*
-			 * Order the parsed BTF contents and the globals the
-			 * parse populated (e.g. bpf_ctx_convert.t) before
-			 * the pointer publication. Pairs with the acquire
-			 * on the lockless fast path above.
-			 */
-			smp_store_release(&btf_vmlinux, btf);
+	if (btf || !IS_ENABLED(CONFIG_DEBUG_INFO_BTF))
+		return btf;
+
+	/*
+	 * Loading the module may take a while and its notifier must not be
+	 * blocked by us, so do it outside btf_vmlinux_lock.  Not available:
+	 * behave like a kernel without BTF, and retry next time.
+	 */
+	if (!btf_vmlinux_data(&size, true))
+		return NULL;
+
+	mutex_lock(&btf_vmlinux_lock);
+	btf = btf_vmlinux;
+	if (!btf) {
+		btf = btf_parse_vmlinux();
+		/*
+		 * With =m the BTF was checked against the kernel when the
+		 * module loaded, so a failure here is a resource problem
+		 * (-ENOMEM) rather than a broken BTF: do not remember it,
+		 * the next caller retries.
+		 */
+		if (IS_MODULE(CONFIG_DEBUG_INFO_BTF) && IS_ERR(btf)) {
+			mutex_unlock(&btf_vmlinux_lock);
+			return btf;
 		}
-		mutex_unlock(&btf_vmlinux_lock);
+		/*
+		 * Order the parsed BTF contents and the globals the
+		 * parse populated (e.g. bpf_ctx_convert.t) before
+		 * the pointer publication. Pairs with the acquire
+		 * on the lockless fast path above.
+		 */
+		smp_store_release(&btf_vmlinux, btf);
 	}
+	mutex_unlock(&btf_vmlinux_lock);
 	return btf;
 }
 
