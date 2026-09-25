@@ -103,7 +103,8 @@ static bool is_valid_value_type(struct btf *btf, s32 value_id,
 	}
 	member = btf_type_member(vt);
 	mt = btf_type_by_id(btf, member->type);
-	common_value_type = btf_type_by_id(btf_vmlinux,
+	/* a vmlinux id resolves through the base BTF of a module BTF too */
+	common_value_type = btf_type_by_id(btf,
 					   st_ops_ids[IDX_ST_OPS_COMMON_VALUE_ID]);
 	if (mt != common_value_type) {
 		pr_warn("The first member of %s should be bpf_struct_ops_common_value\n",
