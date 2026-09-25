@@ -9124,17 +9124,27 @@ struct btf_module {
 	u32 data_size;
 	u32 base_data_size;
 	struct list_head deferred_regs;
-	/* the kept BTF turned out unusable; the entry stays until the module goes */
+	/*
+	 * For the sysfs reader of a module whose data is only final once its
+	 * BTF is relocated: @ready once @btf is published, @gone once the
+	 * entry is dead (parse failed or module going).  Both only ever go
+	 * from false to true; waiters sleep on btf_module_wq.
+	 */
+	bool ready;
 	bool gone;
 };
 
 static LIST_HEAD(btf_modules);
 static DEFINE_MUTEX(btf_module_mutex);
+static DECLARE_WAIT_QUEUE_HEAD(btf_module_wq);
 
 static void purge_cand_cache(struct btf *btf);
 
 static int btf_module_sysfs_add(struct btf_module *btf_mod, const char *name,
-				void *data, size_t data_size)
+				void *private, size_t size,
+				ssize_t (*read)(struct file *, struct kobject *,
+						const struct bin_attribute *,
+						char *, loff_t, size_t))
 {
 	struct bin_attribute *attr;
 	int err;
@@ -9149,9 +9159,9 @@ static int btf_module_sysfs_add(struct btf_module *btf_mod, const char *name,
 	sysfs_bin_attr_init(attr);
 	attr->attr.name = name;
 	attr->attr.mode = 0444;
-	attr->size = data_size;
-	attr->private = data;
-	attr->read = sysfs_bin_attr_simple_read;
+	attr->size = size;
+	attr->private = private;
+	attr->read = read;
 
 	err = sysfs_create_bin_file(btf_kobj, attr);
 	if (err) {
@@ -9165,8 +9175,14 @@ static int btf_module_sysfs_add(struct btf_module *btf_mod, const char *name,
 	return 0;
 }
 
+/*
+ * Called with btf_module_mutex NOT held: removing the sysfs file waits for
+ * readers to leave, and a deferred reader may need the mutex to get there.
+ */
 static void btf_module_free(struct btf_module *btf_mod)
 {
+	WRITE_ONCE(btf_mod->gone, true);
+	wake_up_all(&btf_module_wq);
 	if (btf_mod->sysfs_attr)
 		sysfs_remove_bin_file(btf_kobj, btf_mod->sysfs_attr);
 	if (btf_mod->btf) {
@@ -9222,14 +9238,56 @@ static int btf_vmlinux_module_coming(struct module *mod)
 }
 
 /*
+ * sysfs reader for a module kept aside with a .BTF.base section: its .BTF is
+ * split against the distilled base and only becomes valid split BTF against
+ * the vmlinux BTF once relocated, which rewrites the buffer in place.  So
+ * first make sure the vmlinux BTF is loaded (which parses and relocates the
+ * kept modules), then wait until this module's BTF is published.  The size
+ * does not change: relocation only rewrites ids and string offsets.
+ */
+static bool btf_module_published(struct btf_module *btf_mod)
+{
+	/* Pairs with the smp_store_release() of @ready after btf_mod->btf is set */
+	return smp_load_acquire(&btf_mod->ready);
+}
+
+static ssize_t btf_module_sysfs_read_deferred(struct file *filp, struct kobject *kobj,
+					      const struct bin_attribute *attr,
+					      char *buf, loff_t off, size_t count)
+{
+	struct btf_module *btf_mod = attr->private;
+	int err;
+
+	if (IS_ERR_OR_NULL(bpf_get_btf_vmlinux()))
+		return -ENODEV;
+
+	/*
+	 * Another thread may still be relocating and publishing it; if the
+	 * module goes away or its BTF turns out unusable, btf_module_free()
+	 * or btf_parse_deferred_modules() set @gone and wake us.
+	 */
+	err = wait_event_interruptible(btf_module_wq,
+				       btf_module_published(btf_mod) ||
+				       READ_ONCE(btf_mod->gone));
+	if (err)
+		return err;
+	if (!btf_module_published(btf_mod))
+		return -ENODEV;
+
+	/* sysfs clamps @off and @count to attr->size == btf->data_size */
+	memcpy(buf, btf_mod->btf->data + off, count);
+	return count;
+}
+
+/*
  * The vmlinux BTF is not available yet and must not be loaded from the
  * module notifier (that would nest a module load into a module load).  Keep
  * the module's BTF for btf_parse_deferred_modules().
  *
- * Without a .BTF.base section the .BTF data is final and can be exposed in
- * sysfs right away, it needs no parsing.  With one, parsing relocates the
- * data in place against the vmlinux BTF, so the file is created afterwards,
- * as with =y where it also only appears once the BTF is parsed.
+ * The sysfs file is created right away with its final size, as with =y.
+ * Without a .BTF.base section the .BTF data is final and is served as is;
+ * with one, it is only valid once relocated, so its reader waits for that
+ * (btf_module_sysfs_read_deferred()).
  */
 static int btf_module_defer(struct btf_module *btf_mod, struct module *mod)
 {
@@ -9248,10 +9306,12 @@ static int btf_module_defer(struct btf_module *btf_mod, struct module *mod)
 			return -ENOMEM;
 		}
 		btf_mod->base_data_size = mod->btf_base_data_size;
-	} else {
 		/* not fatal, the module BTF is usable without the sysfs file */
+		btf_module_sysfs_add(btf_mod, mod->name, btf_mod, btf_mod->data_size,
+				     btf_module_sysfs_read_deferred);
+	} else {
 		btf_module_sysfs_add(btf_mod, mod->name, btf_mod->data,
-				     btf_mod->data_size);
+				     btf_mod->data_size, sysfs_bin_attr_simple_read);
 	}
 
 	list_add(&btf_mod->list, &btf_modules);
@@ -9345,7 +9405,8 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 		mutex_unlock(&btf_module_mutex);
 
 		/* not fatal, the module BTF is usable without the sysfs file */
-		btf_module_sysfs_add(btf_mod, btf->name, btf->data, btf->data_size);
+		btf_module_sysfs_add(btf_mod, btf->name, btf->data, btf->data_size,
+				     sysfs_bin_attr_simple_read);
 		break;
 	case MODULE_STATE_LIVE:
 		mutex_lock(&btf_module_mutex);
@@ -9393,8 +9454,10 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 			if (btf_mod->btf)
 				btf_free_id(btf_mod->btf);
 			list_del(&btf_mod->list);
+			mutex_unlock(&btf_module_mutex);
+			/* off the list, nobody else can find it now */
 			btf_module_free(btf_mod);
-			break;
+			goto out;
 		}
 		mutex_unlock(&btf_module_mutex);
 		break;
@@ -9419,8 +9482,10 @@ fs_initcall(btf_module_init);
 /*
  * A kept module whose BTF cannot be used after all.  The module is loaded
  * and stays, so there is no way to reject it: the entry stays on the list,
- * dead, until the module goes.  A sysfs file it has keeps serving the raw
- * data, which is kept for that.
+ * dead, until the module goes.  Its sysfs file stays too, its reader, or
+ * the caller of this function, may be inside it right now: a .BTF.base
+ * reader wakes up and fails, a plain one keeps serving the raw data, which
+ * is kept for that.
  */
 static void btf_module_dead(struct btf_module *btf_mod, const char *what, int err)
 {
@@ -9428,14 +9493,17 @@ static void btf_module_dead(struct btf_module *btf_mod, const char *what, int er
 	kvfree(btf_mod->base_data);
 	btf_mod->base_data = NULL;
 	btf_free_deferred_regs(&btf_mod->deferred_regs);
-	btf_mod->gone = true;
+	WRITE_ONCE(btf_mod->gone, true);
+	wake_up_all(&btf_module_wq);
 }
 
 /*
  * CONFIG_DEBUG_INFO_BTF=m: the vmlinux BTF has just become available.  Parse
  * the BTF of the modules that were loaded before it, and apply the
  * registrations that waited for them.  Called from bpf_get_btf_vmlinux()
- * once btf_vmlinux is published, with no locks held.
+ * once btf_vmlinux is published, with no locks held -- possibly from the
+ * sysfs reader of one of these modules, which is why no sysfs file is
+ * removed here.
  *
  * A module's BTF is published (btf_mod->btf set, id allocated) only after
  * its queued registrations are applied, so nobody sees a module BTF without
@@ -9494,11 +9562,11 @@ restart:
 			goto restart;
 		}
 
-		/* modules with .BTF.base get their sysfs file now, the data is relocated */
-		if (!btf_mod->sysfs_attr)
-			btf_module_sysfs_add(btf_mod, btf->name, btf->data, btf->data_size);
 		btf_mod->data = NULL;
 		btf_mod->btf = btf;
+		/* Pairs with the smp_load_acquire() in btf_module_sysfs_read_deferred() */
+		smp_store_release(&btf_mod->ready, true);
+		wake_up_all(&btf_module_wq);
 		parsed = true;
 		/* the list may have changed while the mutex was dropped */
 		goto restart;
