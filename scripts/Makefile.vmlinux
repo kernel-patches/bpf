@@ -86,6 +86,11 @@ remove-section-$(CONFIG_ARCH_VMLINUX_NEEDS_RELOCS) += '.rel*' '!.rel*.dyn'
 # for compatibility with binutils < 2.32
 # https://sourceware.org/git/?p=binutils-gdb.git;a=commit;h=c12d9fa2afe7abcbe407a00e15719e1a1350c2a7
 remove-section-$(CONFIG_ARCH_VMLINUX_NEEDS_RELOCS) += '.rel.*'
+# With CONFIG_DEBUG_INFO_BTF=m the btf_vmlinux module carries the vmlinux BTF;
+# only vmlinux.unstripped keeps it, for module BTF generation.
+ifeq ($(CONFIG_DEBUG_INFO_BTF),m)
+remove-section-y += .BTF
+endif
 
 remove-symbols := -w --strip-unneeded-symbol='__mod_device_table__*'
 
