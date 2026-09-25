@@ -441,8 +441,15 @@ static void test_lru_sanity3(int map_type, int map_flags, unsigned int tgt_free)
 	assert(sched_next_online(0, &next_cpu) != -1);
 
 	batch_size = __tgt_size(tgt_free);
+	if (!batch_size) {
+		/* More cpus than this tgt_free gives a refill for */
+		printf("Skip\n");
+		return;
+	}
 
-	map_size = tgt_free * 2;
+	/* A partial refill shrinks the LRU and evicts live elements */
+	map_size = __map_size(batch_size);
+
 	lru_map_fd = create_map(map_type, map_flags, map_size);
 	assert(lru_map_fd != -1);
 
@@ -466,7 +473,7 @@ static void test_lru_sanity3(int map_type, int map_flags, unsigned int tgt_free)
 	}
 
 	/* Insert new batch_size: replaces the non-referenced elements */
-	key = 2 * tgt_free + 1;
+	key = 1 + map_size;
 	end_key = key + batch_size;
 	for (; key < end_key; key++) {
 		assert(!bpf_map_update_elem(lru_map_fd, &key, value,
