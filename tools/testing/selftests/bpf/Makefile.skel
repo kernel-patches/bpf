@@ -23,7 +23,7 @@ BPF_OBJS := $(patsubst %.c,$(RDIR)/%.bpf.o,$(BPF_SRCS))
 SKEL_BLACKLIST := btf__% test_pinning_invalid.c test_sk_assign.c
 
 LINKED_SKELS := test_static_linked.skel.h linked_funcs.skel.h		\
-		linked_vars.skel.h linked_maps.skel.h 			\
+		linked_vars.skel.h linked_maps.skel.h linked_arena.skel.h \
 		test_subskeleton.skel.h test_subskeleton_lib.skel.h	\
 		test_usdt.skel.h tracing_multi.skel.h			\
 		tracing_multi_module.skel.h				\
@@ -46,6 +46,7 @@ test_static_linked.skel.h-deps := test_static_linked1.bpf.o test_static_linked2.
 linked_funcs.skel.h-deps := linked_funcs1.bpf.o linked_funcs2.bpf.o
 linked_vars.skel.h-deps := linked_vars1.bpf.o linked_vars2.bpf.o
 linked_maps.skel.h-deps := linked_maps1.bpf.o linked_maps2.bpf.o
+linked_arena.skel.h-deps := linked_arena1.bpf.o linked_arena2.bpf.o
 # In the subskeleton case, we want the test_subskeleton_lib.subskel.h file
 # but that's created as a side-effect of the skel.h generation.
 test_subskeleton.skel.h-deps := test_subskeleton_lib2.bpf.o test_subskeleton_lib.bpf.o test_subskeleton.bpf.o
