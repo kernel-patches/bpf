@@ -1640,6 +1640,7 @@ struct bpf_call_arg_meta {
 	u32 func_id;
 	const struct bpf_func_proto *fn;
 	const struct btf_type *func_proto;
+	bool pkt_changed;
 	u8 release_regno;
 	u32 ret_btf_id;
 	u32 subprogno;

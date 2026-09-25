@@ -10827,22 +10827,22 @@ static void gen_subprog_arg_proto(const struct bpf_subprog_info *sub, const stru
 }
 
 static int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog,
-				    struct btf *btf,
-				    struct bpf_reg_state *regs)
+				    struct btf *btf, struct bpf_reg_state *regs,
+				    struct bpf_call_arg_meta *meta)
 {
 	struct bpf_subprog_info *sub = subprog_info(env, subprog);
 	struct bpf_func_state *caller = cur_func(env);
 	struct bpf_verifier_log *log = &env->log;
 	const struct btf_param *args, *stack_args;
 	const struct btf_type *func, *func_proto;
-	struct bpf_call_arg_meta meta;
 	struct bpf_func_proto *fn;
 	u32 arg, slot, nslots;
 	int ret, err;
 
-	memset(&meta, 0, sizeof(meta));
-	meta.btf = btf;
-	meta.func_name = bpf_subprog_name(env, subprog);
+	memset(meta, 0, sizeof(*meta));
+	meta->btf = btf;
+	meta->pkt_changed = sub->changes_pkt_data;
+	meta->func_name = bpf_subprog_name(env, subprog);
 
 	ret = btf_prepare_func_args(env, subprog);
 	if (ret) {
@@ -10867,8 +10867,8 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog,
 
 	fn = &env->bpf_subprog_scratch;
 	gen_subprog_arg_proto(sub, btf, func_proto, fn);
-	meta.fn = fn;
-	meta.func_proto = func_proto;
+	meta->fn = fn;
+	meta->func_proto = func_proto;
 
 	/* check that BTF function arguments match actual types that the
 	 * verifier sees.
@@ -10887,7 +10887,7 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog,
 		    arg_type == ARG_PTR_TO_CTX || arg_type == ARG_PTR_TO_DYNPTR ||
 		    base_type(arg_type) == ARG_PTR_TO_ARENA ||
 		    base_type(arg_type) == ARG_PTR_TO_BTF_ID) {
-			ret = check_func_arg(env, arg, slot, 0, &meta, env->insn_idx);
+			ret = check_func_arg(env, arg, slot, 0, meta, env->insn_idx);
 			if (ret)
 				return ret;
 		} else if (base_type(arg_type) == ARG_PTR_TO_MEM) {
@@ -10921,7 +10921,7 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog,
 		}
 
 		for (k = 1; k < nslots; k++) {
-			ret = check_arg_extra_slot(env, caller, slot + k, &meta);
+			ret = check_arg_extra_slot(env, caller, slot + k, meta);
 			if (ret)
 				return ret;
 		}
@@ -10938,7 +10938,8 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog,
  * Only PTR_TO_CTX and SCALAR_VALUE states are recognized.
  */
 static int btf_check_subprog_call(struct bpf_verifier_env *env, int subprog,
-				  struct bpf_reg_state *regs)
+				  struct bpf_reg_state *regs,
+				  struct bpf_call_arg_meta *meta)
 {
 	struct bpf_prog *prog = env->prog;
 	struct btf *btf = prog->aux->btf;
@@ -10955,7 +10956,7 @@ static int btf_check_subprog_call(struct bpf_verifier_env *env, int subprog,
 	if (prog->aux->func_info_aux[subprog].unreliable)
 		return -EINVAL;
 
-	err = btf_check_func_arg_match(env, subprog, btf, regs);
+	err = btf_check_func_arg_match(env, subprog, btf, regs, meta);
 	/* Compiler optimizations can remove arguments from static functions
 	 * or mismatched type can be passed into a global function.
 	 * In such cases mark the function as unreliable from BTF point of view.
@@ -10970,11 +10971,12 @@ static int push_callback_call(struct bpf_verifier_env *env, struct bpf_insn *ins
 			      set_callee_state_fn set_callee_state_cb)
 {
 	struct bpf_verifier_state *state = env->cur_state, *callback_state;
+	struct bpf_call_arg_meta meta;
 	struct bpf_func_state *caller, *callee;
 	int err;
 
 	caller = state->frame[state->curframe];
-	err = btf_check_subprog_call(env, subprog, caller->regs);
+	err = btf_check_subprog_call(env, subprog, caller->regs, &meta);
 	if (err == -EFAULT)
 		return err;
 
@@ -11100,6 +11102,7 @@ static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			   int *insn_idx)
 {
 	struct bpf_verifier_state *state = env->cur_state;
+	struct bpf_call_arg_meta meta;
 	struct bpf_func_state *caller;
 	int err, subprog, target_insn;
 	u32 i, nregs;
@@ -11111,7 +11114,7 @@ static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		return -EFAULT;
 
 	caller = state->frame[state->curframe];
-	err = btf_check_subprog_call(env, subprog, caller->regs);
+	err = btf_check_subprog_call(env, subprog, caller->regs, &meta);
 	if (err == -EFAULT)
 		return err;
 	if (bpf_subprog_is_global(env, subprog)) {
@@ -11154,7 +11157,7 @@ static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 				subprog, sub_name);
 		sub_aux->called[in_sleepable_context(env)] = true;
 		returns_void = subprog_returns_void(env, subprog);
-		if (env->subprog_info[subprog].changes_pkt_data)
+		if (meta.pkt_changed)
 			clear_all_pkt_pointers(env);
 		if (returns_void)
 			bpf_diag_record_scrub(env, &caller->regs[BPF_REG_0], BPF_DIAG_MOD_CALLER_SAVED);
@@ -11212,6 +11215,7 @@ static int check_func_callx(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			    int *insn_idx)
 {
 	struct bpf_func_state *caller = cur_func(env);
+	struct bpf_call_arg_meta meta;
 	struct bpf_reg_state *reg;
 	const char *reason;
 	int err, subprog;
@@ -11247,7 +11251,7 @@ static int check_func_callx(struct bpf_verifier_env *env, struct bpf_insn *insn,
 
 	/* PTR_TO_FUNC is a pointer to a static subprog */
 	subprog = reg->subprogno;
-	err = btf_check_subprog_call(env, subprog, caller->regs);
+	err = btf_check_subprog_call(env, subprog, caller->regs, &meta);
 	if (err == -EFAULT)
 		return err;
 
@@ -12111,7 +12115,6 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	struct bpf_call_arg_meta meta;
 	const char *operation;
 	int insn_idx = *insn_idx_p;
-	bool changes_data;
 	int i, err, func_id;
 
 	/* find function prototype */
@@ -12153,14 +12156,14 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		return -EINVAL;
 	}
 
+	memset(&meta, 0, sizeof(meta));
+	meta.pkt_changed = bpf_helper_changes_pkt_data(func_id);
+
 	/* With LD_ABS/IND some JITs save/restore skb from r1. */
-	changes_data = bpf_helper_changes_pkt_data(func_id);
-	if (changes_data && fn->arg1_type != ARG_PTR_TO_CTX) {
+	if (meta.pkt_changed && fn->arg1_type != ARG_PTR_TO_CTX) {
 		verifier_bug(env, "func %s#%d: r1 != ctx", func_id_name(func_id), func_id);
 		return -EFAULT;
 	}
-
-	memset(&meta, 0, sizeof(meta));
 
 	err = check_func_proto(env, fn, &meta);
 	if (err) {
@@ -12332,7 +12335,7 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 			/* this will trigger clear_all_pkt_pointers(), which will
 			 * invalidate all dynptr slices associated with the skb
 			 */
-			changes_data = true;
+			meta.pkt_changed = true;
 
 		break;
 	}
@@ -12617,11 +12620,11 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 				return err;
 			env->insn_idx--;
 		} else {
-			changes_data = false;
+			meta.pkt_changed = false;
 		}
 	}
 
-	if (changes_data)
+	if (meta.pkt_changed)
 		clear_all_pkt_pointers(env);
 	return 0;
 }
@@ -14753,6 +14756,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	}
 	if (err)
 		return err;
+	meta.pkt_changed = bpf_is_kfunc_pkt_changing(&meta);
 	desc_btf = meta.btf;
 	func_name = meta.func_name;
 	insn_aux = &env->insn_aux_data[insn_idx];
@@ -15180,7 +15184,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		}
 	}
 
-	if (bpf_is_kfunc_pkt_changing(&meta))
+	if (meta.pkt_changed)
 		clear_all_pkt_pointers(env);
 
 	proto_slots = kfunc_abi_slots(&desc->func_model);
