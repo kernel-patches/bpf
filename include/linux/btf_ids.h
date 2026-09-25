@@ -22,7 +22,7 @@ struct btf_id_set8 {
 	} pairs[];
 };
 
-#ifdef CONFIG_DEBUG_INFO_BTF
+#if IS_ENABLED(CONFIG_DEBUG_INFO_BTF)
 
 #include <linux/compiler.h> /* for __PASTE */
 #include <linux/compiler_attributes.h> /* for __maybe_unused */
