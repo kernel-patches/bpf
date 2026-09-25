@@ -287,7 +287,7 @@ err_free:
 
 /*
  * Collect the jump table of every subprogram that has one, as the combined
- * table of all maps whose first target lands inside that subprogram. All gotox
+ * table of all maps whose targets land inside that subprogram. All gotox
  * instructions of a subprogram share the same table, so this is done in a
  * single pass over the maps rather than once per gotox.
  */
@@ -310,15 +310,22 @@ static int __compute_subprog_jts(struct bpf_verifier_env *env)
 		if (IS_ERR(jt_cur))
 			return PTR_ERR(jt_cur);
 
-		/*
-		 * This is enough to check one element. The full table is
-		 * checked to fit inside the subprog later in subprog_jt()
-		 */
 		subprog = bpf_find_containing_subprog(env, jt_cur->items[0]);
 		if (verifier_bug_if(!subprog, env, "no subprog contains insn %u of an insn array map",
 				    jt_cur->items[0])) {
 			kvfree(jt_cur);
 			return -EFAULT;
+		}
+		if (jt_cur->items[jt_cur->cnt - 1] >= (subprog + 1)->start) {
+			verbose(env, "jump table of subprog starting at %u spans multiple subprogs, map id=%d\n",
+				subprog->start, map->id);
+			bpf_diag_program_structure(
+				env, subprog->start, "jump table spans subprograms",
+				"Keep every entry of a jump table inside one subprogram.",
+				"The jump table in map id %d for the subprogram that starts at instruction %u reaches past its end at instruction %u.",
+				map->id, subprog->start, (subprog + 1)->start);
+			kvfree(jt_cur);
+			return -EINVAL;
 		}
 
 		old_cnt = subprog->jt ? subprog->jt->cnt : 0;
@@ -370,9 +377,7 @@ static struct bpf_iarray *
 subprog_jt(int t, struct bpf_verifier_env *env)
 {
 	struct bpf_subprog_info *subprog;
-	int subprog_start, subprog_end;
-	struct bpf_iarray *jt;
-	int i, err;
+	int subprog_start, err;
 
 	if (!env->cfg.subprog_jts_ready) {
 		err = compute_subprog_jts(env);
@@ -384,7 +389,6 @@ subprog_jt(int t, struct bpf_verifier_env *env)
 	if (verifier_bug_if(!subprog, env, "no subprog contains insn %d", t))
 		return ERR_PTR(-EFAULT);
 	subprog_start = subprog->start;
-	subprog_end = (subprog + 1)->start;
 
 	if (!subprog->jt) {
 		verbose(env, "no jump tables found for subprog starting at %u\n", subprog_start);
@@ -396,23 +400,7 @@ subprog_jt(int t, struct bpf_verifier_env *env)
 		return ERR_PTR(-EINVAL);
 	}
 
-	jt = subprog->jt;
-
-	/* Check that the every element of the jump table fits within the given subprogram */
-	for (i = 0; i < jt->cnt; i++) {
-		if (jt->items[i] < subprog_start || jt->items[i] >= subprog_end) {
-			verbose(env, "jump table for insn %d points outside of the subprog [%u,%u]\n",
-					t, subprog_start, subprog_end);
-			bpf_diag_program_structure(
-				env, t, "jump table target out of range",
-				"Keep every jump-table target inside the same subprogram.",
-				"The jump table for instruction %d points outside subprogram range [%u,%u).",
-				t, subprog_start, subprog_end);
-			return ERR_PTR(-EINVAL);
-		}
-	}
-
-	return jt;
+	return subprog->jt;
 }
 
 /* "conditional jump with N edges" */
@@ -454,15 +442,9 @@ static int visit_gotox_insn(int t, struct bpf_verifier_env *env)
 	mark_prune_point(env, t);
 	for (i = 0; i < jt->cnt; i++) {
 		w = jt->items[i];
-		if (w < 0 || w >= env->prog->len) {
-			verbose(env, "indirect jump out of range from insn %d to %d\n", t, w);
-			bpf_diag_program_structure(
-				env, t, "indirect jump out of range",
-				"Keep indirect jump targets inside the program.",
-				"Instruction %d can jump indirectly to instruction %d, but the program only contains instructions 0 through %d.",
-				t, w, env->prog->len - 1);
-			return -EINVAL;
-		}
+		if (verifier_bug_if(w < 0 || w >= env->prog->len, env,
+				    "indirect jump from insn %d to %d out of range", t, w))
+			return -EFAULT;
 
 		mark_jmp_point(env, w);
 		mark_jump_target(env, w);
