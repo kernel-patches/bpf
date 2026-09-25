@@ -272,7 +272,7 @@ static int esp_xmit(struct xfrm_state *x, struct sk_buff *skb,  netdev_features_
 	struct crypto_aead *aead;
 	struct esp_info esp;
 	bool hw_offload = true;
-	__u32 seq;
+	__u32 seq, seq_hi;
 	int encap_type = 0;
 
 	esp.inplace = true;
@@ -315,7 +315,9 @@ static int esp_xmit(struct xfrm_state *x, struct sk_buff *skb,  netdev_features_
 			return esp.nfrags;
 	}
 
+	/* Keep the sequence used by this packet before advancing GSO state. */
 	seq = xo->seq.low;
+	seq_hi = xo->seq.hi;
 
 	esph = esp.esph;
 	esph->spi = x->id.spi;
@@ -334,7 +336,7 @@ static int esp_xmit(struct xfrm_state *x, struct sk_buff *skb,  netdev_features_
 	if (xo->seq.low < seq)
 		xo->seq.hi++;
 
-	esp.seqno = cpu_to_be64(seq + ((u64)xo->seq.hi << 32));
+	esp.seqno = cpu_to_be64(seq + ((u64)seq_hi << 32));
 
 	if (hw_offload && encap_type == UDP_ENCAP_ESPINUDP) {
 		/* In the XFRM stack, the encapsulation protocol is set to iphdr->protocol by
