@@ -579,7 +579,8 @@ struct ip_vs_conn *ip_vs_conn_out_get(const struct ip_vs_conn_param *p)
 				    ip_vs_addr_equal(p->af, p->vaddr,
 						     &cp->caddr) &&
 				    ip_vs_addr_equal(p->af, p->caddr, saddr) &&
-				    p->protocol == cp->protocol) {
+				    p->protocol == cp->protocol &&
+				    cp->cport) {
 					if (__ip_vs_conn_get(cp))
 						goto out;
 				}
