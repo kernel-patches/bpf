@@ -37,6 +37,7 @@
 
 #include "diagnostics.h"
 #include "disasm.h"
+#include "exception.h"
 
 static const struct bpf_verifier_ops * const bpf_verifier_ops[] = {
 #define BPF_PROG_TYPE(_id, _name, prog_ctx_type, kern_ctx_type) \
@@ -5749,6 +5750,19 @@ static int check_max_stack_depth(struct bpf_verifier_env *env)
 		}
 	}
 
+	/*
+	 * An unwind resumes a frame at its landing pad rather than at the
+	 * instruction after the call, and on x86-64 that skips the pop which
+	 * restores r9 -- where a private stack keeps its frame pointer. The
+	 * pad would address its frame through a stale one. Refused on every
+	 * arch rather than just that one. The subprograms
+	 * below are then checked against MAX_BPF_STACK together rather than
+	 * one at a time, so this can turn a program that would have loaded
+	 * with a private stack into one that is too deep.
+	 */
+	if (env->cleanup_info_cnt)
+		priv_stack_mode = NO_PRIV_STACK;
+
 	if (priv_stack_mode == PRIV_STACK_UNKNOWN)
 		priv_stack_mode = bpf_enable_priv_stack(env->prog);
 
@@ -10983,6 +10997,10 @@ static int push_callback_call(struct bpf_verifier_env *env, struct bpf_insn *ins
 	 * callbacks
 	 */
 	env->subprog_info[subprog].is_cb = true;
+	err = bpf_exc_check_callback(env, subprog);
+	if (err)
+		return err;
+
 	if (bpf_pseudo_kfunc_call(insn) &&
 	    !is_callback_calling_kfunc(insn->imm)) {
 		verifier_bug(env, "kfunc %s#%d not marked as callback-calling",
@@ -19165,6 +19183,42 @@ enum {
 	INSN_IDX_UPDATED = 2,
 };
 
+static int push_cleanup_pad_branch(struct bpf_verifier_env *env, int insn_idx)
+{
+	struct bpf_verifier_state *branch;
+	struct bpf_func_state *frame;
+	int pad = bpf_exc_pad_of_call(env, insn_idx);
+
+	if (pad < 0)
+		return 0;
+	branch = push_stack(env, pad, insn_idx, false);
+	if (IS_ERR(branch))
+		return PTR_ERR(branch);
+	frame = branch->frame[branch->curframe];
+	/*
+	 * The state at that call with the caller-saved registers gone: the
+	 * callee's epilogue put r6-r9 and the stack back on the way out.
+	 */
+	clear_caller_saved_regs(env, frame->regs);
+	mark_reg_unknown(env, frame->regs, BPF_REG_0);
+	frame->in_pad = true;
+	return 0;
+}
+
+static int process_bpf_unwind(struct bpf_verifier_env *env, int *insn_idx)
+{
+	struct bpf_func_state *frame = cur_func(env);
+	int pad = bpf_exc_pad_of_call(env, *insn_idx);
+
+	if (pad < 0)
+		return PROCESS_BPF_EXIT;
+	clear_caller_saved_regs(env, frame->regs);
+	mark_reg_unknown(env, frame->regs, BPF_REG_0);
+	frame->in_pad = true;
+	*insn_idx = pad;
+	return INSN_IDX_UPDATED;
+}
+
 static int process_bpf_exit_full(struct bpf_verifier_env *env,
 				 bool *do_print_state,
 				 bool exception_exit)
@@ -19369,6 +19423,26 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 
 		env->jmps_processed++;
 		if (opcode == BPF_CALL) {
+			if (bpf_is_unwind_kfunc(insn))
+				return process_bpf_unwind(env, &env->insn_idx);
+			if (bpf_is_unwind_resume_kfunc(insn)) {
+				if (!cur_func(env)->in_pad) {
+					verbose(env, "bpf_unwind_resume() at insn %d is not in a landing pad\n",
+						env->insn_idx);
+					return -EINVAL;
+				}
+				/*
+				 * Mark r0 a known zero -- unknown first, as
+				 * the known-zero helper keeps the type it
+				 * finds, which here is NOT_INIT. The fixups
+				 * lower this to 'r0 = 0; exit', so the frame
+				 * returns a real zero.
+				 */
+				mark_reg_unknown(env, cur_regs(env), BPF_REG_0);
+				mark_reg_known_zero(env, cur_regs(env), BPF_REG_0);
+				cur_func(env)->in_pad = false;
+				return process_bpf_exit_full(env, do_print_state, false);
+			}
 			if (env->cur_state->active_locks) {
 				/* similar to static subprog calls callx is allowed under a lock */
 				if (!bpf_is_callx(insn) &&
@@ -19387,6 +19461,10 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 				}
 			}
 			mark_reg_scratched(env, BPF_REG_0);
+			/* An unwind out of this call resumes at the pad. */
+			err = push_cleanup_pad_branch(env, env->insn_idx);
+			if (err)
+				return err;
 			if (bpf_in_stack_arg_cnt(&env->subprog_info[cur_func(env)->subprogno]))
 				cur_func(env)->no_stack_arg_load = true;
 			if (bpf_is_callx(insn))
@@ -19489,6 +19567,12 @@ static int do_check(struct bpf_verifier_env *env)
 				else if (env->insn_idx == fallthrough_idx)
 					bpf_diag_record_branch(env, prev_insn_idx, false);
 			}
+		}
+
+		if (unlikely(env->cleanup_info_cnt)) {
+			err = bpf_exc_check_insn(env, insn);
+			if (err)
+				return err;
 		}
 
 		if (bpf_is_prune_point(env, env->insn_idx)) {
@@ -22550,6 +22634,11 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	if (ret < 0)
 		goto skip_full_check;
 
+	/* The CFG needs an edge from a call in a cleanup range to its pad. */
+	ret = bpf_prepare_cleanup_exceptions(env);
+	if (ret < 0)
+		goto skip_full_check;
+
 	/* Validate instructions and resolve the program's referenced resources. */
 	ret = check_and_resolve_insns(env);
 	if (ret < 0)
@@ -22657,6 +22746,9 @@ skip_full_check:
 	if (ret == 0)
 		/* program is valid, convert *(u32*)(ctx + off) accesses */
 		ret = bpf_convert_ctx_accesses(env);
+
+	if (ret == 0)
+		ret = bpf_exc_keep_exits(env);
 
 	if (ret == 0)
 		ret = bpf_do_misc_fixups(env);
@@ -22768,6 +22860,7 @@ err_free_env:
 	kvfree(env->callx_edges);
 	kvfree(env->func_ptrs);
 	bpf_diag_free(env);
+	kvfree(env->cleanup_info);
 	kvfree(env);
 	return ret;
 }
