@@ -6,6 +6,7 @@
 #include <linux/bitmap.h>
 #include <linux/clk.h>
 #include <linux/delay.h>
+#include <linux/find.h>
 #include <linux/host1x.h>
 #include <linux/lcm.h>
 #include <linux/list.h>
@@ -393,19 +394,17 @@ static int tegra_channel_enum_format(struct file *file, void *fh,
 				     struct v4l2_fmtdesc *f)
 {
 	struct tegra_vi_channel *chan = video_drvdata(file);
-	unsigned int index = 0, i;
+	unsigned int index;
 	unsigned long *fmts_bitmap = chan->tpg_fmts_bitmap;
 
 	if (!IS_ENABLED(CONFIG_VIDEO_TEGRA_TPG))
 		fmts_bitmap = chan->fmts_bitmap;
 
-	if (f->index >= bitmap_weight(fmts_bitmap, MAX_FORMAT_NUM))
+	index = find_nth_bit(fmts_bitmap, MAX_FORMAT_NUM, f->index);
+	if (index >= MAX_FORMAT_NUM)
 		return -EINVAL;
 
-	for (i = 0; i < f->index + 1; i++, index++)
-		index = find_next_bit(fmts_bitmap, MAX_FORMAT_NUM, index);
-
-	f->pixelformat = tegra_get_format_fourcc_by_idx(chan->vi, index - 1);
+	f->pixelformat = tegra_get_format_fourcc_by_idx(chan->vi, index);
 
 	return 0;
 }
