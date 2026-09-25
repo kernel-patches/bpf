@@ -214,13 +214,19 @@ static int get_callee_stack_depth(struct bpf_verifier_env *env,
 }
 #endif
 
+enum bpf_patch_mode {
+	BPF_PATCH_KEEP_TARGET,	/* targets of 'off' keep naming 'off', the first new insn */
+	BPF_PATCH_MOVE_TARGET,	/* targets of 'off' follow the original insn to 'off + len - 1' */
+};
+
 /* single env->prog->insni[off] instruction was replaced with the range
  * insni[off, off + cnt).  Adjust corresponding insn_aux_data by copying
  * [0, off) and [off, end) to new locations, so the patched range stays zero
  */
 static void adjust_insn_aux_data(struct bpf_verifier_env *env,
 				 struct bpf_prog *new_prog, u32 off, u32 cnt,
-				 struct bpf_insn *original_insn)
+				 struct bpf_insn *original_insn,
+				 enum bpf_patch_mode mode)
 {
 	struct bpf_insn_aux_data *data = env->insn_aux_data;
 	struct bpf_insn *insn = new_prog->insnsi;
@@ -253,7 +259,12 @@ static void adjust_insn_aux_data(struct bpf_verifier_env *env,
 		/* Expand insni[off]'s seen count to the patched range. */
 		data[i].seen = old_seen;
 		data[i].zext_dst = bpf_insn_def32(new_prog, insn + i) >= 0;
-		if (!memcmp(insn + i, original_insn, sizeof(struct bpf_insn))) {
+		/*
+		 * In BPF_PATCH_MOVE_TARGET mode the original insn is the last
+		 * slot by construction.
+		 */
+		if (mode == BPF_PATCH_KEEP_TARGET &&
+		    !memcmp(insn + i, original_insn, sizeof(struct bpf_insn))) {
 			data[i].non_stack_access =
 				data[off + cnt - 1].non_stack_access;
 			data[off + cnt - 1].non_stack_access = false;
@@ -277,9 +288,10 @@ static void adjust_insn_aux_data(struct bpf_verifier_env *env,
 	 * new instructions by the above memmove and memset, but the indirect jump target is
 	 * actually the first instruction, so move it back. This also matches with the behavior
 	 * of bpf_insn_array_adjust(), which preserves xlated_off to point to the first new
-	 * instruction.
+	 * instruction. For BPF_PATCH_MOVE_TARGET the original instruction is the last one,
+	 * so the flag already sits where needed.
 	 */
-	if (data[off + cnt - 1].indirect_target) {
+	if (mode == BPF_PATCH_KEEP_TARGET && data[off + cnt - 1].indirect_target) {
 		data[off].indirect_target = 1;
 		data[off + cnt - 1].indirect_target = 0;
 	}
@@ -299,7 +311,7 @@ static void adjust_subprog_starts(struct bpf_verifier_env *env, u32 off, u32 len
 	}
 }
 
-static void adjust_insn_arrays(struct bpf_verifier_env *env, u32 off, u32 len)
+static void adjust_insn_arrays(struct bpf_verifier_env *env, u32 first, u32 len)
 {
 	int i;
 
@@ -307,7 +319,7 @@ static void adjust_insn_arrays(struct bpf_verifier_env *env, u32 off, u32 len)
 		return;
 
 	for (i = 0; i < env->insn_array_map_cnt; i++)
-		bpf_insn_array_adjust(env->insn_array_maps[i], off, len);
+		bpf_insn_array_adjust(env->insn_array_maps[i], first, len);
 }
 
 static void adjust_insn_arrays_after_remove(struct bpf_verifier_env *env, u32 off, u32 len)
@@ -318,7 +330,7 @@ static void adjust_insn_arrays_after_remove(struct bpf_verifier_env *env, u32 of
 		bpf_insn_array_adjust_after_remove(env->insn_array_maps[i], off, len);
 }
 
-static void adjust_poke_descs(struct bpf_prog *prog, u32 off, u32 len)
+static void adjust_poke_descs(struct bpf_prog *prog, u32 first, u32 len)
 {
 	struct bpf_jit_poke_descriptor *tab = prog->aux->poke_tab;
 	int i, sz = prog->aux->size_poke_tab;
@@ -326,7 +338,7 @@ static void adjust_poke_descs(struct bpf_prog *prog, u32 off, u32 len)
 
 	for (i = 0; i < sz; i++) {
 		desc = &tab[i];
-		if (desc->insn_idx <= off)
+		if (desc->insn_idx < first)
 			continue;
 		desc->insn_idx += len - 1;
 	}
@@ -345,11 +357,14 @@ static bool bpf_rewrite_must_abort(void)
 	return false;
 }
 
-struct bpf_prog *bpf_patch_insn_data(struct bpf_verifier_env *env, u32 off,
-				     const struct bpf_insn *patch, u32 len)
+static struct bpf_prog *__bpf_patch_insn_data(struct bpf_verifier_env *env, u32 off,
+					      const struct bpf_insn *patch, u32 len,
+					      enum bpf_patch_mode mode)
 {
 	struct bpf_prog *new_prog;
 	struct bpf_insn_aux_data *new_data = NULL;
+	/* The first slot whose targets move. */
+	u32 first = mode == BPF_PATCH_MOVE_TARGET ? off : off + 1;
 	struct bpf_insn original_insn;
 
 	if (bpf_rewrite_must_abort())
@@ -375,12 +390,18 @@ struct bpf_prog *bpf_patch_insn_data(struct bpf_verifier_env *env, u32 off,
 				env->insn_aux_data[off].orig_idx);
 		return NULL;
 	}
-	adjust_insn_aux_data(env, new_prog, off, len, &original_insn);
+	adjust_insn_aux_data(env, new_prog, off, len, &original_insn, mode);
 	adjust_subprog_starts(env, off, len);
-	adjust_insn_arrays(env, off, len);
+	adjust_insn_arrays(env, first, len);
 	bpf_adjust_func_ptrs(env, off, len);
-	adjust_poke_descs(new_prog, off, len);
+	adjust_poke_descs(new_prog, first, len);
 	return new_prog;
+}
+
+struct bpf_prog *bpf_patch_insn_data(struct bpf_verifier_env *env, u32 off,
+				     const struct bpf_insn *patch, u32 len)
+{
+	return __bpf_patch_insn_data(env, off, patch, len, BPF_PATCH_KEEP_TARGET);
 }
 
 /*
@@ -480,7 +501,11 @@ static int adjust_subprog_starts_after_remove(struct bpf_verifier_env *env,
 
 	if (j > i) {
 		struct bpf_prog_aux *aux = env->prog->aux;
-		int move;
+		int move, k;
+
+		/* The removed subprogs own their jump tables. */
+		for (k = i; k < j; k++)
+			kvfree(env->subprog_info[k].jt);
 
 		/* move fake 'exit' subprog as well */
 		move = env->subprog_cnt + 1 - j;
@@ -488,6 +513,9 @@ static int adjust_subprog_starts_after_remove(struct bpf_verifier_env *env,
 		memmove(env->subprog_info + i,
 			env->subprog_info + j,
 			sizeof(*env->subprog_info) * move);
+		/* The vacated tail still holds copies of the moved entries. */
+		memset(env->subprog_info + i + move, 0,
+		       sizeof(*env->subprog_info) * (j - i));
 		env->subprog_cnt -= j - i;
 
 		/* remove func_info and its aux */
@@ -506,6 +534,9 @@ static int adjust_subprog_starts_after_remove(struct bpf_verifier_env *env,
 			 * in adjust_btf_func() - no need to adjust
 			 */
 		}
+		/* The exception callback is live, so it cannot sit inside the removed range. */
+		if (env->exception_callback_subprog >= j)
+			env->exception_callback_subprog -= j - i;
 	} else {
 		/* convert i from "first prog to remove" to "first to adjust" */
 		if (env->subprog_info[i].start == off)
@@ -583,23 +614,6 @@ static int bpf_adj_linfo_after_remove(struct bpf_verifier_env *env, u32 off,
 	return 0;
 }
 
-/*
- * Clean up dynamically allocated fields of aux data for instructions [start, ...]
- */
-void bpf_clear_insn_aux_data(struct bpf_verifier_env *env, int start, int len)
-{
-	struct bpf_insn_aux_data *aux_data = env->insn_aux_data;
-	int end = start + len;
-	int i;
-
-	for (i = start; i < end; i++) {
-		if (aux_data[i].jt) {
-			kvfree(aux_data[i].jt);
-			aux_data[i].jt = NULL;
-		}
-	}
-}
-
 static int verifier_remove_insns(struct bpf_verifier_env *env, u32 off, u32 cnt)
 {
 	struct bpf_insn_aux_data *aux_data = env->insn_aux_data;
@@ -611,8 +625,6 @@ static int verifier_remove_insns(struct bpf_verifier_env *env, u32 off, u32 cnt)
 
 	if (bpf_prog_is_offloaded(env->prog->aux))
 		bpf_prog_offload_remove_insns(env, off, cnt);
-
-	bpf_clear_insn_aux_data(env, off, cnt);
 
 	err = bpf_remove_insns(env->prog, off, cnt);
 	if (err)
@@ -736,6 +748,7 @@ int bpf_opt_remove_dead_code(struct bpf_verifier_env *env)
 
 int bpf_opt_remove_nops(struct bpf_verifier_env *env)
 {
+	struct bpf_insn_aux_data *aux = env->insn_aux_data;
 	struct bpf_insn *insn = env->prog->insnsi;
 	int insn_cnt = env->prog->len;
 	bool is_may_goto_0, is_ja;
@@ -746,6 +759,8 @@ int bpf_opt_remove_nops(struct bpf_verifier_env *env)
 		is_ja = !memcmp(&insn[i], &NOP, sizeof(NOP));
 
 		if (!is_may_goto_0 && !is_ja)
+			continue;
+		if (aux[i].indirect_target)
 			continue;
 
 		err = verifier_remove_insns(env, i, 1);
@@ -889,7 +904,8 @@ int bpf_convert_ctx_accesses(struct bpf_verifier_env *env)
 			insn_buf[cnt++] = BPF_STX_MEM(BPF_DW, BPF_REG_FP, BPF_REG_1,
 						      -subprogs[0].stack_depth);
 			insn_buf[cnt++] = env->prog->insnsi[0];
-			new_prog = bpf_patch_insn_data(env, 0, insn_buf, cnt);
+			new_prog = __bpf_patch_insn_data(env, 0, insn_buf, cnt,
+							 BPF_PATCH_MOVE_TARGET);
 			if (!new_prog)
 				return -ENOMEM;
 			env->prog = new_prog;
@@ -912,7 +928,8 @@ int bpf_convert_ctx_accesses(struct bpf_verifier_env *env)
 			verifier_bug(env, "prologue is too long");
 			return -EFAULT;
 		} else if (cnt) {
-			new_prog = bpf_patch_insn_data(env, 0, insn_buf, cnt);
+			new_prog = __bpf_patch_insn_data(env, 0, insn_buf, cnt,
+							 BPF_PATCH_MOVE_TARGET);
 			if (!new_prog)
 				return -ENOMEM;
 
@@ -1685,6 +1702,8 @@ static int add_hidden_subprog(struct bpf_verifier_env *env, struct bpf_insn *pat
 	env->prog = prog;
 	info[cnt + 1].start = info[cnt].start;
 	info[cnt].start = prog->len - len + 1;
+	/* The patch ends with the exit. */
+	info[cnt].exit_idx = prog->len - 1;
 	env->subprog_cnt++;
 	env->hidden_subprog_cnt++;
 	return 0;
@@ -2670,7 +2689,8 @@ next_insn:
 		}
 		cnt++;
 
-		new_prog = bpf_patch_insn_data(env, subprog_start, insn_buf, cnt);
+		new_prog = __bpf_patch_insn_data(env, subprog_start, insn_buf, cnt,
+						 BPF_PATCH_MOVE_TARGET);
 		if (!new_prog)
 			return -ENOMEM;
 		env->prog = prog = new_prog;
