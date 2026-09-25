@@ -2345,14 +2345,21 @@ skip_init_ctx:
 		/* offset[prog->len] is the size of program */
 		for (i = 0; i <= prog->len; i++)
 			ctx.offset[i] *= AARCH64_INSN_SIZE;
-		bpf_prog_fill_jited_linfo(prog, ctx.offset + 1);
 		/*
 		 * The bpf_prog_update_insn_ptrs function expects offsets to
 		 * point to the first byte of the jitted instruction (unlike
-		 * the bpf_prog_fill_jited_linfo above, which, for historical
+		 * the bpf_prog_fill_jited_linfo below, which, for historical
 		 * reasons, expects to point to the next instruction)
 		 */
 		bpf_prog_update_insn_ptrs(prog, ctx.offset, ctx.ro_image);
+		/*
+		 * Line info is relative to prog->bpf_func, which starts
+		 * cfi_get_offset() bytes into ro_image. Shift the offsets here,
+		 * after bpf_prog_update_insn_ptrs(), which needs them unshifted.
+		 */
+		for (i = 0; i <= prog->len; i++)
+			ctx.offset[i] -= cfi_get_offset();
+		bpf_prog_fill_jited_linfo(prog, ctx.offset + 1);
 out_off:
 		if (!ro_header && priv_stack_ptr) {
 			free_percpu(priv_stack_ptr);
