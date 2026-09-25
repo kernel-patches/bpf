@@ -457,6 +457,100 @@ __naked void spill_fill_ptr_to_insn(void)
 	: __clobber_all);
 }
 
+/*
+ * Emit each table entry next to the instruction it targets. Numeric labels
+ * can be reused by .rept, while %= keeps table symbols unique per asm block.
+ * BASE is the code section: libbpf relocates section-relative byte offsets
+ * to instruction offsets in the loaded program.
+ */
+#define GOTOX_TABLE_BEGIN(COUNT) \
+	".pushsection .jumptables,\"\",@progbits;" \
+	"jt_%=:;" \
+	".global jt_%=;" \
+	".size jt_%=, 8 * (" #COUNT ");" \
+	".popsection;" \
+	"r1 = jt_%= ll;"
+
+#define GOTOX_TABLE_ENTRY(LABEL, BASE) \
+	".pushsection .jumptables,\"\",@progbits;" \
+	".quad " LABEL " - " BASE ";" \
+	".popsection;"
+
+/* N gotox instructions, each targeting all N gotox plus the final block. */
+#define GOTOX_SELF_TARGETS(N, BASE) \
+	GOTOX_TABLE_BEGIN(N + 1) \
+	"r0 = 0;" \
+	".rept " #N ";" \
+		GOTOX_TABLE_ENTRY("1f", BASE) \
+		"1:; .8byte %[gotox];" \
+	".endr;" \
+	GOTOX_TABLE_ENTRY("2f", BASE) \
+	"2:;"
+
+#define GOTOX_OPERAND \
+	__imm_insn(gotox, BPF_RAW_INSN(BPF_JMP | BPF_JA | BPF_X, BPF_REG_0, 0, 0, 0))
+
+/*
+ * Count edges even when their targets are already discovered. These
+ * programs deliberately use a scalar: the CFG edge limit must reject them
+ * before symbolic verification reaches the invalid gotox operand.
+ */
+SEC("socket")
+__description("too-many-gotox-edges")
+__failure __msg("number of indirect jump edges in the program exceeds")
+__naked void too_many_gotox_edges(void)
+{
+	asm volatile (
+		/* 1000 * 1001 = 1,001,000 edges. */
+		GOTOX_SELF_TARGETS(1000, "socket")
+		"r0 = 0; exit;"
+		: : GOTOX_OPERAND : __clobber_all);
+}
+
+SEC("socket")
+__description("gotox-edges-at-limit")
+__success __retval(0)
+__naked void gotox_edges_at_limit(void)
+{
+	asm volatile (
+		/*
+		 * 1000 gotox * 1000 targets = 1,000,000 CFG edges. At run
+		 * time, each block loads the next table entry and jumps to
+		 * the following block, so the program terminates.
+		 */
+		GOTOX_TABLE_BEGIN(1000)
+		".rept 1000;"
+			GOTOX_TABLE_ENTRY("1f", "socket")
+			"r0 = *(u64 *)(r1 + 0);"
+			"r1 += 8;"
+			".8byte %[gotox];"
+			"1:;"
+		".endr;"
+		"r0 = 0; exit;"
+		: : GOTOX_OPERAND : __clobber_all);
+}
+
+static __noinline __used __naked void gotox_edges_subprog(void)
+{
+	asm volatile (
+		GOTOX_SELF_TARGETS(750, ".text")
+		"r0 = 0; exit;"
+		: : GOTOX_OPERAND : __clobber_all);
+}
+
+SEC("socket")
+__description("gotox-edges-across-subprogs")
+__failure __msg("number of indirect jump edges in the program exceeds")
+__naked void gotox_edges_across_subprogs(void)
+{
+	asm volatile (
+		/* Each subprog has 563,250 edges; together, 1,126,500. */
+		GOTOX_SELF_TARGETS(750, "socket")
+		"call gotox_edges_subprog;"
+		"exit;"
+		: : GOTOX_OPERAND : __clobber_all);
+}
+
 #endif /* __TARGET_ARCH_x86 || __TARGET_ARCH_arm64 || __TARGET_ARCH_powerpc*/
 
 char _license[] SEC("license") = "GPL";
