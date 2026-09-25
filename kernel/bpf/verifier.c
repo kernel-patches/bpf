@@ -11216,10 +11216,6 @@ static int check_func_callx(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	const char *reason;
 	int err, subprog;
 
-	err = require_callx_jit(env);
-	if (err)
-		return err;
-
 	err = check_reg_arg(env, insn->dst_reg, SRC_OP);
 	if (err)
 		return err;
@@ -11242,6 +11238,11 @@ static int check_func_callx(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	 * of a subprog can be called.
 	 */
 	err = check_ptr_off_reg(env, reg, insn->dst_reg);
+	if (err)
+		return err;
+
+	/* the callx is valid, but only a JIT can execute it */
+	err = require_callx_jit(env);
 	if (err)
 		return err;
 
