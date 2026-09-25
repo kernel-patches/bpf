@@ -1761,7 +1761,7 @@ static int enqueue_reorder_recvframe(struct recv_reorder_ctrl *preorder_ctrl, un
 			break;
 	}
 
-	list_del_init(&(prframe->u.hdr.list));
+	list_del_init(&prframe->u.hdr.list);
 
 	list_add_tail(&(prframe->u.hdr.list), plist);
 
