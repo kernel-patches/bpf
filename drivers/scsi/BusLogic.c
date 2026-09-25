@@ -277,6 +277,7 @@ static void blogic_create_addlccbs(struct blogic_adapter *adapter,
 */
 
 static struct blogic_ccb *blogic_alloc_ccb(struct Scsi_Host *host)
+	__must_hold(&host->host_lock)
 {
 	struct blogic_adapter *adapter = (void *)host->hostdata;
 	static unsigned long serial;
@@ -310,6 +311,7 @@ static struct blogic_ccb *blogic_alloc_ccb(struct Scsi_Host *host)
 
 static void blogic_dealloc_ccb(struct Scsi_Host *host, struct blogic_ccb *ccb,
 			       int dma_unmap)
+	__must_hold(&host->host_lock)
 {
 	struct blogic_adapter *adapter = ccb->adapter;
 
@@ -2599,6 +2601,7 @@ static void blogic_scan_inbox(struct blogic_adapter *adapter)
 */
 
 static void blogic_process_ccbs(struct Scsi_Host *host)
+	__must_hold(&host->host_lock)
 {
 	struct blogic_adapter *adapter = (void *)host->hostdata;
 
@@ -2830,6 +2833,7 @@ static irqreturn_t blogic_inthandler(int irq_ch, void *devid)
 
 static bool blogic_write_outbox(struct Scsi_Host *host,
 		enum blogic_action action, struct blogic_ccb *ccb)
+	__must_hold(&host->host_lock)
 {
 	struct blogic_adapter *adapter = (void *)host->hostdata;
 	struct blogic_outbox *next_outbox;
@@ -2884,6 +2888,7 @@ static int blogic_hostreset(struct scsi_cmnd *SCpnt)
 */
 
 static enum scsi_qc_status blogic_qcmd_lck(struct Scsi_Host *shost, struct scsi_cmnd *command)
+	__must_hold(&shost->host_lock)
 {
 	void (*comp_cb)(struct scsi_cmnd *) = scsi_done;
 	struct blogic_adapter *adapter =
@@ -3194,6 +3199,7 @@ static int blogic_abort(struct scsi_cmnd *command)
 */
 
 static int blogic_resetadapter(struct Scsi_Host *host, bool hard_reset)
+	__must_hold(&host->host_lock)
 {
 	struct blogic_adapter *adapter = (void *)host->hostdata;
 	struct blogic_ccb *ccb;
