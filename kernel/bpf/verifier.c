@@ -2882,7 +2882,8 @@ int bpf_add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, u16 offset)
 	tab = prog_aux->kfunc_tab;
 	btf_tab = prog_aux->kfunc_btf_tab;
 	if (!tab) {
-		if (!btf_vmlinux) {
+		/* with CONFIG_DEBUG_INFO_BTF=m this is where the vmlinux BTF gets loaded */
+		if (IS_ERR_OR_NULL(bpf_get_btf_vmlinux())) {
 			verbose(env, "calling kernel function is not supported without CONFIG_DEBUG_INFO_BTF\n");
 			return -ENOTSUPP;
 		}
@@ -6512,7 +6513,8 @@ static int check_ptr_to_map_access(struct bpf_verifier_env *env,
 	u32 btf_id;
 	int ret;
 
-	if (!btf_vmlinux) {
+	/* with CONFIG_DEBUG_INFO_BTF=m this is where the vmlinux BTF gets loaded */
+	if (IS_ERR_OR_NULL(bpf_get_btf_vmlinux())) {
 		verbose(env, "map_ptr access not supported without CONFIG_DEBUG_INFO_BTF\n");
 		return -ENOTSUPP;
 	}
@@ -12101,6 +12103,24 @@ static int release_reg(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
 	return err;
 }
 
+/* Does calling helper @func_id bring kernel BTF types into the program? */
+static bool helper_uses_vmlinux_btf(enum bpf_func_id func_id,
+				    const struct bpf_func_proto *fn)
+{
+	int i;
+
+	/* these take the kernel type id in a struct btf_ptr, not in a register */
+	if (func_id == BPF_FUNC_snprintf_btf || func_id == BPF_FUNC_seq_printf_btf)
+		return true;
+	if (base_type(fn->ret_type) == RET_PTR_TO_BTF_ID)
+		return true;
+	for (i = 0; i < MAX_BPF_FUNC_ARGS; i++) {
+		if (base_type(fn->arg_type[i]) == ARG_PTR_TO_BTF_ID)
+			return true;
+	}
+	return false;
+}
+
 static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			     int *insn_idx_p)
 {
@@ -12168,6 +12188,18 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	if (err) {
 		verifier_bug(env, "incorrect func proto %s#%d", func_id_name(func_id), func_id);
 		return err;
+	}
+
+	/*
+	 * Helpers that take or return kernel BTF pointers need the vmlinux
+	 * BTF; with CONFIG_DEBUG_INFO_BTF=m this is where it gets loaded.
+	 * Without CONFIG_DEBUG_INFO_BTF they keep failing as they always did.
+	 */
+	if (IS_ENABLED(CONFIG_DEBUG_INFO_BTF) && helper_uses_vmlinux_btf(func_id, fn) &&
+	    IS_ERR_OR_NULL(bpf_get_btf_vmlinux())) {
+		verbose(env, "helper %s#%d is not supported without vmlinux BTF\n",
+			func_id_name(func_id), func_id);
+		return -ENOTSUPP;
 	}
 
 	if (fn->might_sleep && !in_sleepable_context(env)) {
@@ -19853,12 +19885,13 @@ static int check_pseudo_btf_id(struct bpf_verifier_env *env,
 			return -EINVAL;
 		}
 	} else {
-		if (!btf_vmlinux) {
+		/* with CONFIG_DEBUG_INFO_BTF=m this is where the vmlinux BTF gets loaded */
+		btf = bpf_get_btf_vmlinux();
+		if (IS_ERR_OR_NULL(btf)) {
 			verbose(env, "kernel is missing BTF, make sure CONFIG_DEBUG_INFO_BTF=y is specified in Kconfig.\n");
 			return -EINVAL;
 		}
-		btf_get(btf_vmlinux);
-		btf = btf_vmlinux;
+		btf_get(btf);
 	}
 
 	err = __check_pseudo_btf_id(env, insn, aux, btf);
@@ -21913,6 +21946,17 @@ struct btf *bpf_get_btf_vmlinux(void)
 }
 
 /*
+ * The vmlinux BTF if it has been parsed already, else NULL.  Unlike
+ * bpf_get_btf_vmlinux() this never loads or parses anything, so it is safe
+ * to call from a running BPF program.
+ */
+struct btf *bpf_peek_btf_vmlinux(void)
+{
+	/* Pairs with the smp_store_release() in bpf_get_btf_vmlinux() */
+	return smp_load_acquire(&btf_vmlinux);
+}
+
+/*
  * The add_fd_from_fd_array() is executed only if fd_array_cnt is non-zero. In
  * this case expect that every file descriptor in the array is either a map or
  * a BTF. Everything else is considered to be trash.
@@ -22511,7 +22555,11 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	if (ret)
 		goto err_prep;
 
-	bpf_get_btf_vmlinux();
+	/*
+	 * The vmlinux BTF is not fetched up front: with CONFIG_DEBUG_INFO_BTF=m
+	 * it is loaded on demand, at the points where kernel types enter the
+	 * program (attach_btf, kfuncs, ksyms, map pointers, BTF-typed helpers).
+	 */
 
 	/* Serialize verification of unprivileged programs. */
 	if (!is_priv)
@@ -22532,10 +22580,10 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 
 	mark_verifier_state_clean(env);
 
-	if (IS_ERR(btf_vmlinux)) {
+	if (IS_ERR(bpf_peek_btf_vmlinux())) {
 		/* Either gcc or pahole or kernel are broken. */
 		verbose(env, "in-kernel BTF is malformed\n");
-		ret = PTR_ERR(btf_vmlinux);
+		ret = PTR_ERR(bpf_peek_btf_vmlinux());
 		goto skip_full_check;
 	}
 

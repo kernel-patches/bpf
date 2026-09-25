@@ -6478,12 +6478,25 @@ static u8 bpf_ctx_convert_map[] = {
 #undef BPF_MAP_TYPE
 #undef BPF_LINK_TYPE
 
+/*
+ * bpf_ctx_convert.t is filled in by btf_parse_vmlinux().  With
+ * CONFIG_DEBUG_INFO_BTF=m that may not have run yet: the program context
+ * types are kernel types too, so this is one of the places that loads the
+ * vmlinux BTF.  Only called from the verifier, which may sleep.
+ */
+static const struct btf_type *bpf_ctx_convert_type(void)
+{
+	if (IS_ERR_OR_NULL(bpf_get_btf_vmlinux()))
+		return NULL;
+	return bpf_ctx_convert.t;
+}
+
 static const struct btf_type *find_canonical_prog_ctx_type(enum bpf_prog_type prog_type)
 {
 	const struct btf_type *conv_struct;
 	const struct btf_member *ctx_type;
 
-	conv_struct = bpf_ctx_convert.t;
+	conv_struct = bpf_ctx_convert_type();
 	if (!conv_struct)
 		return NULL;
 	/* prog_type is valid bpf program type. No need for bounds check. */
@@ -6499,7 +6512,7 @@ static int find_kern_ctx_type_id(enum bpf_prog_type prog_type)
 	const struct btf_type *conv_struct;
 	const struct btf_member *ctx_type;
 
-	conv_struct = bpf_ctx_convert.t;
+	conv_struct = bpf_ctx_convert_type();
 	if (!conv_struct)
 		return -EFAULT;
 	/* prog_type is valid bpf program type. No need for bounds check. */
@@ -6758,7 +6771,11 @@ int get_kern_ctx_btf_id(struct bpf_verifier_log *log, enum bpf_prog_type prog_ty
 	const struct btf_type *kctx_type;
 	u32 kctx_type_id;
 
-	conv_struct = bpf_ctx_convert.t;
+	conv_struct = bpf_ctx_convert_type();
+	if (!conv_struct) {
+		bpf_log(log, "btf_vmlinux is malformed\n");
+		return -EINVAL;
+	}
 	/* get member for kernel ctx type */
 	kctx_member = btf_type_member(conv_struct) + bpf_ctx_convert_map[prog_type] * 2 + 1;
 	kctx_type_id = kctx_member->type;
@@ -8236,6 +8253,13 @@ static int btf_get_ptr_to_btf_id(struct bpf_verifier_log *log, int arg_idx,
 		t = btf_type_by_id(btf, t->type);
 	}
 
+	/* candidates are kernel types: load the vmlinux BTF, outside the mutex */
+	if (IS_ERR_OR_NULL(bpf_get_btf_vmlinux())) {
+		bpf_log(log, "arg#%d reference type('%s %s') needs the vmlinux BTF\n",
+			arg_idx, btf_type_str(t), __btf_name_by_offset(btf, t->name_off));
+		return -EINVAL;
+	}
+
 	mutex_lock(&cand_cache_mutex);
 	cc = bpf_core_find_cands(&ctx, type_id);
 	if (IS_ERR(cc)) {
@@ -8587,7 +8611,10 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 			if (kern_type_id < 0)
 				return kern_type_id;
 
+			/* present: btf_get_ptr_to_btf_id() found the candidate in it */
 			vmlinux_btf = bpf_get_btf_vmlinux();
+			if (IS_ERR_OR_NULL(vmlinux_btf))
+				return -EINVAL;
 			ref_t = btf_type_by_id(vmlinux_btf, kern_type_id);
 			if (!btf_type_is_struct(ref_t)) {
 				tname = __btf_name_by_offset(vmlinux_btf, t->name_off);
@@ -9325,12 +9352,18 @@ static int btf_check_kfunc_name(struct btf *btf, const char *func_name, u32 kind
 #ifdef CONFIG_DEBUG_INFO_BTF_MODULES
 	struct btf_module *btf_mod, *tmp;
 #endif
+	struct btf *vmlinux_btf;
 	s32 id;
 
 	if (!btf_is_module(btf))
 		return 0;
 
-	id = btf_find_by_name_kind(bpf_get_btf_vmlinux(), func_name, kind);
+	/* a module BTF only exists once the vmlinux BTF is parsed */
+	vmlinux_btf = bpf_get_btf_vmlinux();
+	if (IS_ERR_OR_NULL(vmlinux_btf))
+		return -EINVAL;
+
+	id = btf_find_by_name_kind(vmlinux_btf, func_name, kind);
 	if (id >= 0) {
 		pr_err("kfunc %s (id: %d) is already present in vmlinux.\n",
 		       func_name, id);
@@ -10130,9 +10163,11 @@ bpf_core_find_cands(struct bpf_core_ctx *ctx, u32 local_type_id)
 	const char *name;
 	int id;
 
-	main_btf = bpf_get_btf_vmlinux();
-	if (IS_ERR(main_btf))
-		return ERR_CAST(main_btf);
+	/*
+	 * Callers fetch the vmlinux BTF before taking cand_cache_mutex, so
+	 * that loading it (CONFIG_DEBUG_INFO_BTF=m) happens outside the lock.
+	 */
+	main_btf = bpf_peek_btf_vmlinux();
 	if (!main_btf)
 		return ERR_PTR(-EINVAL);
 
@@ -10234,6 +10269,13 @@ int bpf_core_apply(struct bpf_core_ctx *ctx, const struct bpf_core_relo *relo,
 	if (need_cands) {
 		struct bpf_cand_cache *cc;
 		int i;
+
+		/* candidates are kernel types: load the vmlinux BTF, outside the mutex */
+		if (IS_ERR_OR_NULL(bpf_get_btf_vmlinux())) {
+			bpf_log(ctx->log, "relo #%u: needs the vmlinux BTF\n", relo_idx);
+			kfree(specs);
+			return -EINVAL;
+		}
 
 		mutex_lock(&cand_cache_mutex);
 		cc = bpf_core_find_cands(ctx, relo->type_id);
