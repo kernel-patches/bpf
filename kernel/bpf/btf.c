@@ -4823,6 +4823,18 @@ static s32 btf_loc_param_check_meta(struct btf_verifier_env *env,
 		btf_verifier_log_type(env, t, "Invalid btf_info kind_flag");
 		return -EINVAL;
 	}
+	/* All LOC_PARAMs have vlen of at least 1, none have vlen > 8 */
+	if (vlen < 1 || vlen > 8) {
+		btf_verifier_log_type(env, t, "Invalid vlen");
+		return -EINVAL;
+	}
+	if (p->flags & ~(BTF_LOC_PARAM_SIGNED | BTF_LOC_PARAM_CONST |
+			 BTF_LOC_PARAM_ADDR | BTF_LOC_PARAM_REG |
+			 BTF_LOC_PARAM_DEREF | BTF_LOC_PARAM_OFFSET) ||
+	    !p->flags) {
+		btf_verifier_log_type(env, t, "Invalid flags");
+		return -EINVAL;
+	}
 
 	btf_verifier_log_type(env, t, NULL);
 
