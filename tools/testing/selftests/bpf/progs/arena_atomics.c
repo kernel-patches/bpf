@@ -91,13 +91,22 @@ int sub(const void *ctx)
 	return 0;
 }
 
-#ifdef __BPF_FEATURE_ATOMIC_MEM_ORDERING
-_Atomic __u64 __arena_global and64_value = (0x110ull << 32);
-_Atomic __u32 __arena_global and32_value = 0x110;
-#else
+/*
+ * Discarding the result of an atomic RMW is what selects the non-fetching
+ * insn, so keep one of each width per operation to cover that lowering too.
+ * Declared together rather than per operation to keep them in one place.
+ */
+_Atomic __u64 __arena_global and64_noreturn_value = (0x110ull << 32);
+_Atomic __u64 __arena_global or64_noreturn_value = (0x110ull << 32);
+_Atomic __u64 __arena_global xor64_noreturn_value = (0x110ull << 32);
+_Atomic __u32 __arena_global and32_noreturn_value = 0x110;
+_Atomic __u32 __arena_global or32_noreturn_value = 0x110;
+_Atomic __u32 __arena_global xor32_noreturn_value = 0x110;
+
 __u64 __arena_global and64_value = (0x110ull << 32);
+__u64 __arena_global and64_result = 0;
 __u32 __arena_global and32_value = 0x110;
-#endif
+__u32 __arena_global and32_result = 0;
 
 SEC("raw_tp/sys_enter")
 int and(const void *ctx)
@@ -105,25 +114,19 @@ int and(const void *ctx)
 	if (pid != (bpf_get_current_pid_tgid() >> 32))
 		return 0;
 #ifdef ENABLE_ATOMICS_TESTS
-#ifdef __BPF_FEATURE_ATOMIC_MEM_ORDERING
-	__c11_atomic_fetch_and(&and64_value, 0x011ull << 32, memory_order_relaxed);
-	__c11_atomic_fetch_and(&and32_value, 0x011, memory_order_relaxed);
-#else
-	__sync_fetch_and_and(&and64_value, 0x011ull << 32);
-	__sync_fetch_and_and(&and32_value, 0x011);
-#endif
+	and64_result = __sync_fetch_and_and(&and64_value, 0x011ull << 32);
+	and32_result = __sync_fetch_and_and(&and32_value, 0x011);
+	__c11_atomic_fetch_and(&and64_noreturn_value, 0x011ull << 32, memory_order_relaxed);
+	__c11_atomic_fetch_and(&and32_noreturn_value, 0x011, memory_order_relaxed);
 #endif
 
 	return 0;
 }
 
-#ifdef __BPF_FEATURE_ATOMIC_MEM_ORDERING
-_Atomic __u32 __arena_global or32_value = 0x110;
-_Atomic __u64 __arena_global or64_value = (0x110ull << 32);
-#else
-__u32 __arena_global or32_value = 0x110;
 __u64 __arena_global or64_value = (0x110ull << 32);
-#endif
+__u64 __arena_global or64_result = 0;
+__u32 __arena_global or32_value = 0x110;
+__u32 __arena_global or32_result = 0;
 
 SEC("raw_tp/sys_enter")
 int or(const void *ctx)
@@ -131,25 +134,19 @@ int or(const void *ctx)
 	if (pid != (bpf_get_current_pid_tgid() >> 32))
 		return 0;
 #ifdef ENABLE_ATOMICS_TESTS
-#ifdef __BPF_FEATURE_ATOMIC_MEM_ORDERING
-	__c11_atomic_fetch_or(&or64_value, 0x011ull << 32, memory_order_relaxed);
-	__c11_atomic_fetch_or(&or32_value, 0x011, memory_order_relaxed);
-#else
-	__sync_fetch_and_or(&or64_value, 0x011ull << 32);
-	__sync_fetch_and_or(&or32_value, 0x011);
-#endif
+	or64_result = __sync_fetch_and_or(&or64_value, 0x011ull << 32);
+	or32_result = __sync_fetch_and_or(&or32_value, 0x011);
+	__c11_atomic_fetch_or(&or64_noreturn_value, 0x011ull << 32, memory_order_relaxed);
+	__c11_atomic_fetch_or(&or32_noreturn_value, 0x011, memory_order_relaxed);
 #endif
 
 	return 0;
 }
 
-#ifdef __BPF_FEATURE_ATOMIC_MEM_ORDERING
-_Atomic __u64 __arena_global xor64_value = (0x110ull << 32);
-_Atomic __u32 __arena_global xor32_value = 0x110;
-#else
 __u64 __arena_global xor64_value = (0x110ull << 32);
+__u64 __arena_global xor64_result = 0;
 __u32 __arena_global xor32_value = 0x110;
-#endif
+__u32 __arena_global xor32_result = 0;
 
 SEC("raw_tp/sys_enter")
 int xor(const void *ctx)
@@ -157,13 +154,10 @@ int xor(const void *ctx)
 	if (pid != (bpf_get_current_pid_tgid() >> 32))
 		return 0;
 #ifdef ENABLE_ATOMICS_TESTS
-#ifdef __BPF_FEATURE_ATOMIC_MEM_ORDERING
-	__c11_atomic_fetch_xor(&xor64_value, 0x011ull << 32, memory_order_relaxed);
-	__c11_atomic_fetch_xor(&xor32_value, 0x011, memory_order_relaxed);
-#else
-	__sync_fetch_and_xor(&xor64_value, 0x011ull << 32);
-	__sync_fetch_and_xor(&xor32_value, 0x011);
-#endif
+	xor64_result = __sync_fetch_and_xor(&xor64_value, 0x011ull << 32);
+	xor32_result = __sync_fetch_and_xor(&xor32_value, 0x011);
+	__c11_atomic_fetch_xor(&xor64_noreturn_value, 0x011ull << 32, memory_order_relaxed);
+	__c11_atomic_fetch_xor(&xor32_noreturn_value, 0x011, memory_order_relaxed);
 #endif
 
 	return 0;
@@ -213,6 +207,64 @@ int xchg(const void *ctx)
 	return 0;
 }
 
+__u64 __arena_global fetch_src_r0_value = 0x110;
+__u64 __arena_global fetch_src_r0_result = 0;
+__u64 __arena_global fetch_dst_r0_value = 0x110;
+__u64 __arena_global fetch_dst_r0_result = 0;
+__u64 __arena_global fetch_dst_r0_readback = 0;
+
+/*
+ * A fetching OR with the operand in r0, and one with the arena pointer in r0.
+ * The x86 JIT needs RAX for its CMPXCHG loop and substitutes BPF_REG_AX for
+ * whichever of the two is r0, so both have to keep working. Hand-written
+ * because clang picks its own registers and will not reliably emit either.
+ */
+SEC("raw_tp/sys_enter")
+int fetch_r0(const void *ctx)
+{
+	if (pid != (bpf_get_current_pid_tgid() >> 32))
+		return 0;
+#if defined(ENABLE_ATOMICS_TESTS) && defined(__BPF_FEATURE_ADDR_SPACE_CAST)
+	asm volatile (
+	"r1 = %[fetch_src_r0_value] ll;"
+	"r1 = addr_space_cast(r1, 0x0, 0x1);"
+	"r0 = 0x011;"
+	".8byte %[fetch_src_r0_insn];"
+	"r2 = %[fetch_src_r0_result] ll;"
+	"r2 = addr_space_cast(r2, 0x0, 0x1);"
+	"*(u64 *)(r2 + 0) = r0;"
+	:
+	: __imm_addr(fetch_src_r0_value),
+	  __imm_insn(fetch_src_r0_insn,
+		     BPF_ATOMIC_OP(BPF_DW, BPF_OR | BPF_FETCH, BPF_REG_1, BPF_REG_0, 0)),
+	  __imm_addr(fetch_src_r0_result)
+	: __clobber_all);
+
+	asm volatile (
+	"r0 = %[fetch_dst_r0_value] ll;"
+	"r0 = addr_space_cast(r0, 0x0, 0x1);"
+	"r1 = 0x011;"
+	".8byte %[fetch_dst_r0_insn];"
+	"r2 = %[fetch_dst_r0_result] ll;"
+	"r2 = addr_space_cast(r2, 0x0, 0x1);"
+	"*(u64 *)(r2 + 0) = r1;"
+	/* r0 is only read by the atomic, so it must still be the pointer. */
+	"r3 = *(u64 *)(r0 + 0);"
+	"r2 = %[fetch_dst_r0_readback] ll;"
+	"r2 = addr_space_cast(r2, 0x0, 0x1);"
+	"*(u64 *)(r2 + 0) = r3;"
+	:
+	: __imm_addr(fetch_dst_r0_value),
+	  __imm_insn(fetch_dst_r0_insn,
+		     BPF_ATOMIC_OP(BPF_DW, BPF_OR | BPF_FETCH, BPF_REG_0, BPF_REG_1, 0)),
+	  __imm_addr(fetch_dst_r0_result),
+	  __imm_addr(fetch_dst_r0_readback)
+	: __clobber_all);
+#endif
+
+	return 0;
+}
+
 __u64 __arena_global uaf_sink;
 volatile __u64 __arena_global uaf_recovery_fails;
 
@@ -221,15 +273,24 @@ int uaf(const void *ctx)
 {
 	if (pid != (bpf_get_current_pid_tgid() >> 32))
 		return 0;
+/*
+ * arm64 stays excluded as it has been since this test was added: its JIT only
+ * accepts arena RMW atomics when LSE is present, which is a run-time property.
+ * The rest of the file shares that dependency without a guard, so on a non-LSE
+ * arm64 the whole skeleton already fails to load.
+ *
+ * __BPF_FEATURE_ADDR_SPACE_CAST is required by the asm below, which spells
+ * addr_space_cast textually. That and the mnemonic both arrived in LLVM 19.
+ */
 #if defined(ENABLE_ATOMICS_TESTS) && !defined(__TARGET_ARCH_arm64) && \
-    !defined(__TARGET_ARCH_x86)
+	defined(__BPF_FEATURE_ADDR_SPACE_CAST)
 	__u32 __arena *page32;
 	__u64 __arena *page64;
 	void __arena *page;
 
 	page = bpf_arena_alloc_pages(&arena, NULL, 1, NUMA_NO_NODE, 0);
 	bpf_arena_free_pages(&arena, page, 1);
-	uaf_recovery_fails = 24;
+	uaf_recovery_fails = 26;
 
 	page32 = (__u32 __arena *)page;
 	uaf_sink += __sync_fetch_and_add(page32, 1);
@@ -281,6 +342,34 @@ int uaf(const void *ctx)
 	uaf_sink += __sync_val_compare_and_swap(page64, 0, 1);
 	uaf_recovery_fails -= 1;
 	uaf_sink += __sync_lock_test_and_set(page64, 1);
+	uaf_recovery_fails -= 1;
+
+	/*
+	 * The x86 JIT needs RAX for the CMPXCHG loop it lowers a fetching
+	 * AND/OR/XOR into, and substitutes BPF_REG_AX for r0 when r0 is either
+	 * operand. Only then does the fault fixup have to name that register,
+	 * so spell both forms out: clang picks its own and never produces them.
+	 */
+	asm volatile (
+	"r0 = %[page];"
+	"r0 = addr_space_cast(r0, 0x0, 0x1);"
+	"r1 = 1;"
+	".8byte %[fetch_dst_r0];"
+	: : [page]"r"(page64),
+	    __imm_insn(fetch_dst_r0,
+		       BPF_ATOMIC_OP(BPF_DW, BPF_OR | BPF_FETCH, BPF_REG_0, BPF_REG_1, 0))
+	: "r0", "r1", "memory");
+	uaf_recovery_fails -= 1;
+
+	asm volatile (
+	"r1 = %[page];"
+	"r1 = addr_space_cast(r1, 0x0, 0x1);"
+	"r0 = 1;"
+	".8byte %[fetch_src_r0];"
+	: : [page]"r"(page64),
+	    __imm_insn(fetch_src_r0,
+		       BPF_ATOMIC_OP(BPF_DW, BPF_OR | BPF_FETCH, BPF_REG_1, BPF_REG_0, 0))
+	: "r0", "r1", "memory");
 	uaf_recovery_fails -= 1;
 #endif
 
