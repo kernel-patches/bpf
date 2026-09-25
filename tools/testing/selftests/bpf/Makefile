@@ -77,9 +77,9 @@ override define CLEAN
 	$(Q)$(RM) -r $(TEST_GEN_FILES)
 	$(Q)$(RM) -r $(TEST_KMODS)
 	$(Q)$(RM) -r $(EXTRA_CLEAN)
-	$(Q)$(MAKE) -C test_kmods clean
-	$(Q)$(MAKE) -C libarena clean
-	$(Q)$(MAKE) docs-clean
+	+$(Q)$(MAKE) -C test_kmods clean
+	+$(Q)$(MAKE) -C libarena clean
+	+$(Q)$(MAKE) docs-clean
 endef
 
 # Append build flags before lib.mk's user flags. References to
@@ -342,13 +342,14 @@ else
 	$(Q)cp "$(VMLINUX_H)" $@
 endif
 
-$(RESOLVE_BTFIDS): $(HOST_BPFOBJ) | $(HOST_BUILD_DIR)/resolve_btfids	\
+$(RESOLVE_BTFIDS): $(HOST_BPFOBJ)				\
 		       $(TOOLSDIR)/bpf/resolve_btfids/main.c	\
 		       $(TOOLSDIR)/lib/rbtree.c			\
 		       $(TOOLSDIR)/lib/zalloc.c			\
 		       $(TOOLSDIR)/lib/string.c			\
 		       $(TOOLSDIR)/lib/ctype.c			\
-		       $(TOOLSDIR)/lib/str_error_r.c
+		       $(TOOLSDIR)/lib/str_error_r.c		\
+		       | $(HOST_BUILD_DIR)/resolve_btfids
 	$(Q)$(MAKE) $(submake_extras) -C $(TOOLSDIR)/bpf/resolve_btfids	\
 		CC="$(HOSTCC)" LD="$(HOSTLD)" AR="$(HOSTAR)" \
 		LIBBPF_INCLUDE=$(HOST_INCLUDE_DIR) \
@@ -375,7 +376,8 @@ CLANG_TARGET_ARCH = --target=$(notdir $(CROSS_COMPILE:%-=%))
 endif
 
 CLANG_SYS_INCLUDES = $(call get_sys_includes,$(CLANG),$(CLANG_TARGET_ARCH))
-CLANG_CFLAGS = $(CLANG_SYS_INCLUDES)
+CLANG_CFLAGS = $(CLANG_SYS_INCLUDES) -Wno-microsoft-anon-tag \
+	       -Wno-initializer-overrides
 
 # genkey writes both outputs. Pattern rules group them even on make
 # versions before 4.3, preventing concurrent genkey invocations.
@@ -412,14 +414,14 @@ LIBARENA_BENCH_BPF_DEPS := $(LIBARENA_COMMON_DEPS) $(wildcard libarena/benchs/*)
 LIBARENA_BENCH_SKEL := libarena/libarena_bench.skel.h
 
 $(LIBARENA_SKEL): $(INCLUDE_DIR)/vmlinux.h $(BPFOBJ) $(LIBARENA_BPF_DEPS)
-	+$(MAKE) -C libarena libarena.skel.h $(LIBARENA_MAKE_ARGS)
+	+$(Q)$(MAKE) -C libarena libarena.skel.h $(LIBARENA_MAKE_ARGS)
 
 $(LIBARENA_BENCH_SKEL): $(INCLUDE_DIR)/vmlinux.h $(BPFOBJ) $(LIBARENA_BENCH_BPF_DEPS) | $(LIBARENA_SKEL)
-	+$(MAKE) -C libarena benchmarks $(LIBARENA_MAKE_ARGS)
+	+$(Q)$(MAKE) -C libarena benchmarks $(LIBARENA_MAKE_ARGS)
 
 ifneq ($(CLANG_HAS_ARENA_ASAN),)
 $(LIBARENA_ASAN_SKEL): $(INCLUDE_DIR)/vmlinux.h $(BPFOBJ) $(LIBARENA_BPF_DEPS)
-	+$(MAKE) -C libarena libarena_asan.skel.h $(LIBARENA_MAKE_ARGS)
+	+$(Q)$(MAKE) -C libarena libarena_asan.skel.h $(LIBARENA_MAKE_ARGS)
 endif
 
 # Generated test list headers
@@ -509,42 +511,39 @@ FLAVOR :=
 BINARY := test_progs
 BPF_CC := $(CLANG)
 BPF_CC_MSG := CLNG-BPF
-BPF_SYS_INCLUDES := $(CLANG_SYS_INCLUDES)
-BPF_CC_FLAGS := -O2 $(BPF_TARGET_ENDIAN) -mcpu=v3
-BPF_DEFINES := -DENABLE_ATOMICS_TESTS
+CLANG_BPF_FLAGS := $(CLANG_CFLAGS) -O2 $(BPF_TARGET_ENDIAN)
+BPF_CC_FLAGS := $(CLANG_BPF_FLAGS) -DENABLE_ATOMICS_TESTS -mcpu=v3
 include Makefile.skel
 
 DEFAULT_RUNNER_ARGS := RUNNER=test_progs FLAVOR= TESTS_DIR=prog_tests	\
 	BPF_CC='$(BPF_CC)' BPF_CC_MSG=$(BPF_CC_MSG)			\
-	BPF_SYS_INCLUDES='$(BPF_SYS_INCLUDES)'				\
-	BPF_CC_FLAGS='$(BPF_CC_FLAGS)' BPF_DEFINES=$(BPF_DEFINES)
-CLANG_RUNNER_ARGS := BPF_CC='$(CLANG)' BPF_CC_MSG=CLNG-BPF		\
-	BPF_SYS_INCLUDES='$(CLANG_SYS_INCLUDES)'
+	BPF_CC_FLAGS='$(BPF_CC_FLAGS)'
+CLANG_RUNNER_ARGS := BPF_CC='$(CLANG)' BPF_CC_MSG=CLNG-BPF
 
 $(OUTPUT)/test_progs: $(RUNNER_PREREQS) $(BPF_OBJS) $(ALL_SKELS) FORCE
 	+$(Q)$(RUNNER_MAKE) $(DEFAULT_RUNNER_ARGS)
 
 $(OUTPUT)/test_progs-no_alu32: $(RUNNER_PREREQS) FORCE
 	+$(Q)$(RUNNER_MAKE) RUNNER=test_progs FLAVOR=no_alu32 TESTS_DIR=prog_tests \
-		$(CLANG_RUNNER_ARGS) BPF_CC_FLAGS='-O2 $(BPF_TARGET_ENDIAN) -mcpu=v2'
+		$(CLANG_RUNNER_ARGS) BPF_CC_FLAGS='$(CLANG_BPF_FLAGS) -mcpu=v2'
 
 ifneq ($(CLANG_CPUV4),)
 $(OUTPUT)/test_progs-cpuv4: $(RUNNER_PREREQS) FORCE
 	+$(Q)$(RUNNER_MAKE) RUNNER=test_progs FLAVOR=cpuv4 TESTS_DIR=prog_tests \
-		$(CLANG_RUNNER_ARGS) BPF_CC_FLAGS='-O2 $(BPF_TARGET_ENDIAN) -mcpu=v4' \
-		BPF_DEFINES=-DENABLE_ATOMICS_TESTS
+		$(CLANG_RUNNER_ARGS) \
+		BPF_CC_FLAGS='$(CLANG_BPF_FLAGS) -DENABLE_ATOMICS_TESTS -mcpu=v4'
 endif
 
 ifneq ($(BPF_GCC),)
 # Sys includes come from the *host* gcc, not $(BPF_GCC), as the rule
 # this replaces had it.
-GCC_SYS_INCLUDES := $(call get_sys_includes,gcc,)
+GCC_BPF_FLAGS := $(call get_sys_includes,gcc,) \
+		 -DBPF_NO_PRESERVE_ACCESS_INDEX -Wno-attributes -O2
 
 $(OUTPUT)/test_progs-bpf_gcc: $(RUNNER_PREREQS) FORCE
 	+$(Q)$(RUNNER_MAKE) RUNNER=test_progs FLAVOR=bpf_gcc TESTS_DIR=prog_tests \
 		BPF_CC='$(BPF_GCC)' BPF_CC_MSG=GCC-BPF				\
-		BPF_SYS_INCLUDES='$(GCC_SYS_INCLUDES)'				\
-		BPF_CC_FLAGS='-DBPF_NO_PRESERVE_ACCESS_INDEX -Wno-attributes -O2'
+		BPF_CC_FLAGS='$(GCC_BPF_FLAGS)'
 endif
 
 # test_maps compiles map_tests/*.c against the default flavor's skeletons
@@ -559,12 +558,15 @@ TEST_GEN_FILES += $(BPF_OBJS)
 # them (e.g., test.h is using completely pattern), that it's worth just
 # explicitly defining all the rules explicitly.
 verifier/tests.h: verifier/*.c
-	$(Q)( cd verifier/; \
+	$(Q)( set -e; cd verifier/; \
 		  echo '/* Generated header, do not edit */'; \
 		  echo '#ifdef FILL_ARRAY'; \
-		  ls *.c 2> /dev/null | sed -e 's@\(.*\)@#include \"\1\"@'; \
+		  for file in *.c; do \
+			  test -f "$$file"; \
+			  printf '#include "%s"\n' "$$file"; \
+		  done; \
 		  echo '#endif' \
-		) > verifier/tests.h
+		) > $@
 $(OUTPUT)/test_verifier: test_verifier.c verifier/tests.h $(BPFOBJ) | $(OUTPUT)
 	$(call msg,BINARY,,$@)
 	$(Q)$(CC) $(CFLAGS) $(filter %.a %.o %.c,$^) $(LDLIBS) -o $@
@@ -664,7 +666,7 @@ EXTRA_CLEAN := $(SCRATCH_DIR) $(HOST_SCRATCH_DIR)			\
 			       liburandom_read.so)			\
 	$(OUTPUT)/FEATURE-DUMP.selftests
 
-.PHONY: docs docs-clean
+.PHONY: docs docs-clean libarena
 
 # Delete partially updated (corrupted) files on error
 .DELETE_ON_ERROR:
@@ -695,5 +697,6 @@ endef
 libarena: $(LIBARENA_SKEL)
 
 ifneq ($(CLANG_HAS_ARENA_ASAN),)
+.PHONY: libarena_asan
 libarena_asan: $(LIBARENA_ASAN_SKEL)
 endif
