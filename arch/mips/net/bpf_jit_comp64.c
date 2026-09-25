@@ -801,6 +801,10 @@ int build_insn(const struct bpf_insn *insn, struct jit_context *ctx)
 	case BPF_ALU64 | BPF_MOD | BPF_X:
 		emit_alu_r64(ctx, dst, src, BPF_OP(code));
 		break;
+	/* dst = bswap(dst) */
+	case BPF_ALU64 | BPF_END:
+		emit_bswap_r64(ctx, dst, imm);
+		break;
 	/* dst = htole(dst) */
 	/* dst = htobe(dst) */
 	case BPF_ALU | BPF_END | BPF_FROM_LE:
