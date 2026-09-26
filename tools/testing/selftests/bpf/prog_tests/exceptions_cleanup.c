@@ -5,6 +5,7 @@
 #include "exceptions_cleanup.skel.h"
 #include "exceptions_cleanup_fail.skel.h"
 #include "exceptions_cleanup_shapes.skel.h"
+#include "exceptions_cleanup_light.lskel.h"
 
 /* foo3 unwound: every frame that has a pad ran it. */
 #define PADS_FOO3_UNWOUND \
@@ -35,6 +36,30 @@ static void run(struct exceptions_cleanup *skel, __u64 input, __u32 retval,
 	ASSERT_EQ(topts.retval, retval, "retval");
 	/* bump() is not a landing pad; it sets its bit on every run. */
 	ASSERT_EQ(skel->bss->pads_ran, pads | RAN_BUMP, "pads_ran");
+}
+
+static void test_light_skeleton(void)
+{
+	struct exceptions_cleanup_light_lskel *skel;
+	__u64 ctx = 0;
+	int err;
+
+	LIBBPF_OPTS(bpf_test_run_opts, topts,
+		    .ctx_in = &ctx,
+		    .ctx_size_in = sizeof(ctx),
+	);
+
+	skel = exceptions_cleanup_light_lskel__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "light open_and_load"))
+		return;
+
+	err = bpf_prog_test_run_opts(skel->progs.entry_light.prog_fd, &topts);
+	if (!ASSERT_OK(err, "run"))
+		goto out;
+	ASSERT_EQ(topts.retval, 0, "retval");
+	ASSERT_EQ(skel->bss->pads_ran, RAN_LIGHT, "pads_ran");
+out:
+	exceptions_cleanup_light_lskel__destroy(skel);
 }
 
 void test_exceptions_cleanup(void)
@@ -81,6 +106,9 @@ void test_exceptions_cleanup(void)
 		run(skel, 2, 0, PADS_FOO2_UNWOUND);
 
 	exceptions_cleanup__destroy(skel);
+
+	if (test__start_subtest("light_skeleton"))
+		test_light_skeleton();
 
 	RUN_TESTS(exceptions_cleanup_fail);
 	RUN_TESTS(exceptions_cleanup_shapes);

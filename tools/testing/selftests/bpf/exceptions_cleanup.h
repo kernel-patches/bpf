@@ -27,6 +27,9 @@
 #define RAN_GAP_INNER		0x2000
 #define RAN_GAP_OUTER		0x4000
 
+/* progs/exceptions_cleanup_light.c: the one pad it has. */
+#define RAN_LIGHT		0x1
+
 #define CLEANUP_REC(begin, end, landing_pad)			\
 	".pushsection .bpf_cleanup,\"a\",@progbits;"		\
 	".long " begin ";"					\
