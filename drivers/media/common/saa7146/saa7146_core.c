@@ -18,17 +18,6 @@ unsigned int saa7146_debug;
 module_param(saa7146_debug, uint, 0644);
 MODULE_PARM_DESC(saa7146_debug, "debug level (default: 0)");
 
-#if 0
-static void dump_registers(struct saa7146_dev* dev)
-{
-	int i = 0;
-
-	pr_info(" @ %li jiffies:\n", jiffies);
-	for (i = 0; i <= 0x148; i += 4)
-		pr_info("0x%03x: 0x%08x\n", i, saa7146_read(dev, i));
-}
-#endif
-
 /****************************************************************************
  * gpio and debi helper functions
  ****************************************************************************/
