@@ -4,7 +4,9 @@
 #define __MXL862XX_H
 
 #include <asm/byteorder.h>
+#include <linux/bitops.h>
 #include <linux/mdio.h>
+#include <linux/mutex.h>
 #include <linux/workqueue.h>
 #include <net/dsa.h>
 
@@ -13,6 +15,10 @@ struct mxl862xx_priv;
 #define MXL862XX_MAX_PORTS		17
 #define MXL862XX_FIRST_SERDES_PORT	9
 #define MXL862XX_SERDES_SLOTS		4
+
+/* mxl862xx_rescue_mode_detect() return codes (negative values are errors) */
+#define MXL862XX_NOT_RESCUE		0
+#define MXL862XX_IN_RESCUE		1
 
 #define MXL862XX_DEFAULT_BRIDGE		0
 #define MXL862XX_MAX_BRIDGES		48
@@ -303,6 +309,10 @@ struct mxl862xx_fw_version {
  *                      flooding)
  * @fw_version:         cached firmware version, populated at probe and
  *                      compared with MXL862XX_FW_VER_MIN()
+ * @asic_id:            chip part number read from the CHIP ID registers,
+ *                      reported as the devlink "asic.id" fixed version
+ * @asic_rev:           chip version read from the CHIP ID registers,
+ *                      reported as the devlink "asic.rev" fixed version
  * @serdes_ports:       SerDes interfaces incl. sub-interfaces in case of
  *                      10G_QXGMII or QSGMII
  * @serdes_refcount:    per-XPCS count of sub-ports enabled by phylink;
@@ -319,6 +329,30 @@ struct mxl862xx_fw_version {
  * @evlan_ingress_size: per-port ingress Extended VLAN block size
  * @evlan_egress_size:  per-port egress Extended VLAN block size
  * @vf_block_size:      per-port VLAN Filter block size
+ * @block_host:         during a firmware flash, a host firmware read fails
+ *                      with -EBUSY and a write reports success without
+ *                      touching the bus, so a teardown racing the flash
+ *                      does not fail; FW_UPDATE and the flash owner's own
+ *                      reads still reach the bus
+ * @flash_owner:        task running the post-flash readiness poll; only its
+ *                      own firmware reads pass block_host
+ * @skip_teardown:      during the post-flash reprobe teardown, a host
+ *                      firmware read fails with -ENODEV and a write reports
+ *                      success without touching the bus
+ * @shutting_down:      set under the devlink instance lock once ->shutdown()
+ *                      or .remove() has begun, so no flash starts while the
+ *                      switch is going away
+ * @rescue_mode:        switch is in MCUboot; firmware API commands fail fast,
+ *                      only clause-22 SMDIO works. Set from setup() before the
+ *                      switch is registered and cleared with WRITE_ONCE() under
+ *                      the MDIO bus lock for the benefit of mxl862xx_api_wrap();
+ *                      readers outside that lock use READ_ONCE().
+ * @rescue_ready:       (rescue_mode) loader is at a clean READY and will accept
+ *                      a flash; false while rescue_heal_work is draining
+ * @rescue_failed:      (rescue_mode) the loader cannot accept a flash; the
+ *                      remedy depends on the cause and is described in
+ *                      Documentation/networking/devlink/mxl862xx.rst
+ * @rescue_heal_work:   background self-heal draining a wedged download to READY
  * @stats_work:         periodic work item that polls RMON hardware counters
  *                      and accumulates them into 64-bit per-port stats
  */
@@ -326,9 +360,12 @@ struct mxl862xx_priv {
 	struct dsa_switch *ds;
 	struct mdio_device *mdiodev;
 	struct work_struct crc_err_work;
+	struct work_struct rescue_heal_work;
 	unsigned long flags;
 	u16 drop_meter;
 	struct mxl862xx_fw_version fw_version;
+	u16 asic_id;
+	u8 asic_rev;
 	struct mxl862xx_pcs serdes_ports[8];
 	int serdes_refcount[2];
 	struct mutex serdes_lock;
@@ -337,7 +374,16 @@ struct mxl862xx_priv {
 	u16 evlan_ingress_size;
 	u16 evlan_egress_size;
 	u16 vf_block_size;
+	struct task_struct *flash_owner;
+	bool block_host;
+	bool skip_teardown;
+	bool shutting_down;
+	bool rescue_mode;
+	bool rescue_ready;
+	bool rescue_failed;
 	struct delayed_work stats_work;
 };
+
+int mxl862xx_wait_ready(struct dsa_switch *ds);
 
 #endif /* __MXL862XX_H */

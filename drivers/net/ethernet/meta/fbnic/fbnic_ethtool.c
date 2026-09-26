@@ -189,6 +189,7 @@ static void fbnic_clone_swap_cfg(struct fbnic_net *orig,
 	swap(clone->num_rx_queues, orig->num_rx_queues);
 	swap(clone->num_tx_queues, orig->num_tx_queues);
 	swap(clone->num_napi, orig->num_napi);
+	swap(clone->num_napi_cfg, orig->num_napi_cfg);
 	swap(clone->hds_thresh, orig->hds_thresh);
 }
 
@@ -246,6 +247,7 @@ static int fbnic_get_coalesce(struct net_device *netdev,
 	ec->tx_coalesce_usecs = fbn->tx_usecs;
 	ec->rx_coalesce_usecs = fbn->rx_usecs;
 	ec->rx_max_coalesced_frames = fbn->rx_max_frames;
+	kernel_coal->rx_cqe_nsecs = fbn->fbd->rx_cqe_nsecs;
 
 	return 0;
 }
@@ -256,6 +258,7 @@ static int fbnic_set_coalesce(struct net_device *netdev,
 			      struct netlink_ext_ack *extack)
 {
 	struct fbnic_net *fbn = netdev_priv(netdev);
+	struct fbnic_dev *fbd = fbn->fbd;
 
 	/* Verify against hardware limits */
 	if (ec->rx_coalesce_usecs > FIELD_MAX(FBNIC_INTR_CQ_REARM_RCQ_TIMEOUT)) {
@@ -272,10 +275,20 @@ static int fbnic_set_coalesce(struct net_device *netdev,
 		NL_SET_ERR_MSG_MOD(extack, "rx_frames is above device max");
 		return -EINVAL;
 	}
+	if (kernel_coal->rx_cqe_nsecs < FBNIC_RX_CQE_NSECS_MIN ||
+	    kernel_coal->rx_cqe_nsecs > FBNIC_RX_CQE_NSECS_MAX) {
+		NL_SET_ERR_MSG_FMT_MOD(extack,
+				       "rx-cqe-nsecs must be between %u and %u",
+				       FBNIC_RX_CQE_NSECS_MIN,
+				       FBNIC_RX_CQE_NSECS_MAX);
+		return -EINVAL;
+	}
 
 	fbn->tx_usecs = ec->tx_coalesce_usecs;
 	fbn->rx_usecs = ec->rx_coalesce_usecs;
 	fbn->rx_max_frames = ec->rx_max_coalesced_frames;
+	fbd->rx_cqe_nsecs = kernel_coal->rx_cqe_nsecs;
+	fbnic_config_rx_cqe_nsecs(fbd);
 
 	if (netif_running(netdev)) {
 		int i;
@@ -313,6 +326,11 @@ fbnic_get_ringparam(struct net_device *netdev, struct ethtool_ringparam *ring,
 	kernel_ring->hds_thresh = fbn->hds_thresh;
 }
 
+static u32 fbnic_ring_size_pow2(u32 size)
+{
+	return size ? roundup_pow_of_two(size) : 0;
+}
+
 static void fbnic_set_rings(struct fbnic_net *fbn,
 			    struct ethtool_ringparam *ring,
 			    struct kernel_ethtool_ringparam *kernel_ring)
@@ -334,10 +352,10 @@ fbnic_set_ringparam(struct net_device *netdev, struct ethtool_ringparam *ring,
 	struct fbnic_net *clone;
 	int err;
 
-	ring->rx_pending	= roundup_pow_of_two(ring->rx_pending);
-	ring->rx_mini_pending	= roundup_pow_of_two(ring->rx_mini_pending);
-	ring->rx_jumbo_pending	= roundup_pow_of_two(ring->rx_jumbo_pending);
-	ring->tx_pending	= roundup_pow_of_two(ring->tx_pending);
+	ring->rx_pending	= fbnic_ring_size_pow2(ring->rx_pending);
+	ring->rx_mini_pending	= fbnic_ring_size_pow2(ring->rx_mini_pending);
+	ring->rx_jumbo_pending	= fbnic_ring_size_pow2(ring->rx_jumbo_pending);
+	ring->tx_pending	= fbnic_ring_size_pow2(ring->tx_pending);
 
 	/* These are absolute minimums allowing the device and driver to operate
 	 * but not necessarily guarantee reasonable performance. Settings below
@@ -1581,13 +1599,14 @@ static void fbnic_get_channels(struct net_device *netdev,
 	ch->max_combined = min(ch->max_rx, ch->max_tx);
 	ch->max_other =	FBNIC_NON_NAPI_VECTORS;
 
-	if (fbn->num_rx_queues > fbn->num_napi ||
-	    fbn->num_tx_queues > fbn->num_napi)
+	if (fbn->num_rx_queues > fbn->num_napi_cfg ||
+	    fbn->num_tx_queues > fbn->num_napi_cfg)
 		ch->combined_count = min(fbn->num_rx_queues,
 					 fbn->num_tx_queues);
 	else
 		ch->combined_count =
-			fbn->num_rx_queues + fbn->num_tx_queues - fbn->num_napi;
+			fbn->num_rx_queues + fbn->num_tx_queues -
+			fbn->num_napi_cfg;
 	ch->rx_count = fbn->num_rx_queues - ch->combined_count;
 	ch->tx_count = fbn->num_tx_queues - ch->combined_count;
 	ch->other_count = FBNIC_NON_NAPI_VECTORS;
@@ -1600,6 +1619,7 @@ static void fbnic_set_queues(struct fbnic_net *fbn, struct ethtool_channels *ch,
 	fbn->num_tx_queues = ch->tx_count + ch->combined_count;
 	fbn->num_napi = min(ch->rx_count + ch->tx_count + ch->combined_count,
 			    max_napis);
+	fbn->num_napi_cfg = fbn->num_napi;
 }
 
 static int fbnic_set_channels(struct net_device *netdev,
@@ -1626,6 +1646,13 @@ static int fbnic_set_channels(struct net_device *netdev,
 		return -EINVAL;
 
 	if (!netif_running(netdev)) {
+		unsigned int rxq = ch->rx_count + ch->combined_count;
+		unsigned int txq = ch->tx_count + ch->combined_count;
+
+		err = netif_set_real_num_queues(netdev, txq, rxq);
+		if (err)
+			return err;
+
 		fbnic_set_queues(fbn, ch, max_napis);
 		fbnic_reset_indir_tbl(fbn);
 		return 0;
@@ -2016,7 +2043,8 @@ static void fbnic_get_link_ext_stats(struct net_device *netdev,
 static const struct ethtool_ops fbnic_ethtool_ops = {
 	.cap_link_lanes_supported	= true,
 	.supported_coalesce_params	= ETHTOOL_COALESCE_USECS |
-					  ETHTOOL_COALESCE_RX_MAX_FRAMES,
+					  ETHTOOL_COALESCE_RX_MAX_FRAMES |
+					  ETHTOOL_COALESCE_RX_CQE_NSECS,
 	.supported_ring_params		= ETHTOOL_RING_USE_TCP_DATA_SPLIT |
 					  ETHTOOL_RING_USE_HDS_THRS,
 	.rxfh_max_num_contexts		= FBNIC_RPC_RSS_TBL_COUNT,
@@ -2025,7 +2053,8 @@ static const struct ethtool_ops fbnic_ethtool_ops = {
 					  ETHTOOL_OP_NEEDS_RTNL_SPAUSEPARAM |
 					  ETHTOOL_OP_NEEDS_RTNL_SCHANNELS |
 					  ETHTOOL_OP_NEEDS_RTNL_SRINGPARAM |
-					  ETHTOOL_OP_NEEDS_RTNL_GLINK,
+					  ETHTOOL_OP_NEEDS_RTNL_GLINK |
+					  ETHTOOL_OP_NEEDS_RTNL_TEST,
 	.get_drvinfo			= fbnic_get_drvinfo,
 	.get_regs_len			= fbnic_get_regs_len,
 	.get_regs			= fbnic_get_regs,

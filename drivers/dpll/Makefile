@@ -8,4 +8,5 @@ dpll-y                  += dpll_core.o
 dpll-y                  += dpll_netlink.o
 dpll-y                  += dpll_nl.o
 
+obj-$(CONFIG_SIT9531X_DPLL)	+= sit9531x/
 obj-$(CONFIG_ZL3073X)	+= zl3073x/

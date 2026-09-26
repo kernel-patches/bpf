@@ -3,6 +3,7 @@
 #define _LINUX_IF_HSR_H_
 
 #include <linux/types.h>
+#include <linux/skbuff.h>
 
 struct net_device;
 
@@ -22,6 +23,16 @@ enum hsr_port_type {
 	HSR_PT_PORTS,	/* This must be the last item in the enum */
 };
 
+#define HSR_INLINE_HDR	0xaf485352
+struct hsr_inline_header {
+	uint8_t tx_port;
+	uint8_t hsr_hdr;
+	uint8_t __pad0[4];
+	__be32 magic;
+	uint8_t __pad1[2];
+	__be16 eth_type;
+} __packed;
+
 /* HSR Tag.
  * As defined in IEC-62439-3:2010, the HSR tag is really { ethertype = 0x88FB,
  * path, LSDU_size, sequence Nr }. But we let eth_header() create { h_dest,
@@ -37,6 +48,11 @@ struct hsr_tag {
 } __packed;
 
 #define HSR_HLEN	6
+
+struct hsr_ethhdr {
+	struct ethhdr	ethhdr;
+	struct hsr_tag	hsr_tag;
+} __packed;
 
 #if IS_ENABLED(CONFIG_HSR)
 extern bool is_hsr_master(struct net_device *dev);

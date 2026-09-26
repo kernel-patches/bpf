@@ -2849,6 +2849,7 @@ static struct sk_buff *manage_oob(struct sk_buff *skb, struct sk_buff **last,
 		WRITE_ONCE(u->oob_skb, NULL);
 
 		if (!sock_flag(sk, SOCK_URGINLINE)) {
+			WRITE_ONCE(u->inq_len, u->inq_len - 1);
 			__skb_unlink(skb, &sk->sk_receive_queue);
 			unread_skb = skb;
 			skb = skb_peek(&sk->sk_receive_queue);
@@ -2884,6 +2885,7 @@ static int unix_stream_read_skb(struct sock *sk, skb_read_actor_t recv_actor)
 		return err;
 
 	mutex_lock(&u->iolock);
+again:
 	spin_lock(&queue->lock);
 
 	skb = __skb_dequeue(queue);
@@ -2891,6 +2893,13 @@ static int unix_stream_read_skb(struct sock *sk, skb_read_actor_t recv_actor)
 		spin_unlock(&queue->lock);
 		mutex_unlock(&u->iolock);
 		return -EAGAIN;
+	}
+
+	if (!unix_skb_len(skb)) {
+		spin_unlock(&queue->lock);
+		unix_orphan_scm(sk, skb);
+		consume_skb(skb);
+		goto again;
 	}
 
 	WRITE_ONCE(u->inq_len, u->inq_len - unix_skb_len(skb));
@@ -2911,6 +2920,14 @@ static int unix_stream_read_skb(struct sock *sk, skb_read_actor_t recv_actor)
 	unix_orphan_scm(sk, skb);
 
 	mutex_unlock(&u->iolock);
+
+	if (UNIXCB(skb).consumed) {
+		if (!pskb_pull(skb, UNIXCB(skb).consumed)) {
+			kfree_skb(skb);
+			return -ENOMEM;
+		}
+		UNIXCB(skb).consumed = 0;
+	}
 
 	return recv_actor(sk, skb);
 }
@@ -3566,8 +3583,7 @@ static int unix_seq_show(struct seq_file *seq, void *v)
 		struct unix_sock *u = unix_sk(s);
 		unix_state_lock(s);
 
-		seq_printf(seq, "%pK: %08X %08X %08X %04X %02X %5llu",
-			s,
+		seq_printf(seq, "%08u: %08X %08X %08X %04X %02X %5llu", 0,
 			refcount_read(&s->sk_refcnt),
 			0,
 			s->sk_state == TCP_LISTEN ? __SO_ACCEPTCON : 0,

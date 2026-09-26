@@ -791,6 +791,18 @@ out:
 	rcu_read_unlock();
 }
 
+static struct amt_tunnel_list *amt_lookup_tunnel(struct amt_dev *amt,
+						 __be32 ip4, __be16 source_port)
+{
+	struct amt_tunnel_list *tunnel;
+
+	list_for_each_entry_rcu(tunnel, &amt->tunnel_list, list)
+		if (tunnel->ip4 == ip4 && tunnel->source_port == source_port)
+			return tunnel;
+
+	return NULL;
+}
+
 static void amt_send_igmp_gq(struct amt_dev *amt,
 			     struct amt_tunnel_list *tunnel)
 {
@@ -800,7 +812,8 @@ static void amt_send_igmp_gq(struct amt_dev *amt,
 	if (!skb)
 		return;
 
-	amt_skb_cb(skb)->tunnel = tunnel;
+	amt_skb_cb(skb)->tunnel_ip4 = tunnel->ip4;
+	amt_skb_cb(skb)->tunnel_port = tunnel->source_port;
 	dev_queue_xmit(skb);
 }
 
@@ -885,7 +898,8 @@ static void amt_send_mld_gq(struct amt_dev *amt, struct amt_tunnel_list *tunnel)
 	if (!skb)
 		return;
 
-	amt_skb_cb(skb)->tunnel = tunnel;
+	amt_skb_cb(skb)->tunnel_ip4 = tunnel->ip4;
+	amt_skb_cb(skb)->tunnel_port = tunnel->source_port;
 	dev_queue_xmit(skb);
 }
 #else
@@ -1262,15 +1276,17 @@ static netdev_tx_t amt_dev_xmit(struct sk_buff *skb, struct net_device *dev)
 		goto unlock;
 	} else if (amt->mode == AMT_MODE_RELAY) {
 		if (query) {
-			tunnel = amt_skb_cb(skb)->tunnel;
-			if (!tunnel) {
-				WARN_ON(1);
+			rcu_read_lock();
+			tunnel = amt_lookup_tunnel(amt,
+						   amt_skb_cb(skb)->tunnel_ip4,
+						   amt_skb_cb(skb)->tunnel_port);
+			/* Do not forward unexpected query */
+			if (!tunnel ||
+			    amt_send_membership_query(amt, skb, tunnel, v6)) {
+				rcu_read_unlock();
 				goto free;
 			}
-
-			/* Do not forward unexpected query */
-			if (amt_send_membership_query(amt, skb, tunnel, v6))
-				goto free;
+			rcu_read_unlock();
 			goto unlock;
 		}
 

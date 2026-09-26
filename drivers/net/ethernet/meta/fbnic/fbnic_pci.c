@@ -276,8 +276,6 @@ static int fbnic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	}
 
 	err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(46));
-	if (err)
-		err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
 	if (err) {
 		dev_err(&pdev->dev, "DMA configuration failed: %d\n", err);
 		return err;
@@ -434,6 +432,7 @@ static int fbnic_pm_suspend(struct device *dev)
 {
 	struct fbnic_dev *fbd = dev_get_drvdata(dev);
 	struct net_device *netdev = fbd->netdev;
+	struct fbnic_net *fbn;
 
 	if (fbnic_init_failure(fbd))
 		goto null_uc_addr;
@@ -441,10 +440,15 @@ static int fbnic_pm_suspend(struct device *dev)
 	rtnl_lock();
 	netdev_lock(netdev);
 
+	fbn = netdev_priv(netdev);
+
 	netif_device_detach(netdev);
 
 	if (netif_running(netdev))
 		netdev->netdev_ops->ndo_stop(netdev);
+
+	/* The IRQs are about to be freed, so drop the napi vector count */
+	fbn->num_napi = 0;
 
 	netdev_unlock(netdev);
 	rtnl_unlock();
@@ -473,6 +477,7 @@ static int __fbnic_pm_resume(struct device *dev)
 	struct fbnic_dev *fbd = dev_get_drvdata(dev);
 	struct net_device *netdev = fbd->netdev;
 	void __iomem * const *iomap_table;
+	unsigned int max_napis;
 	struct fbnic_net *fbn;
 	int err;
 
@@ -508,17 +513,30 @@ static int __fbnic_pm_resume(struct device *dev)
 	if (fbnic_init_failure(fbd))
 		return 0;
 
-	fbn = netdev_priv(netdev);
-
-	/* Reset the queues if needed */
-	fbnic_reset_queues(fbn, fbn->num_tx_queues, fbn->num_rx_queues);
-
 	rtnl_lock();
 	netdev_lock(netdev);
 
-	if (netif_running(netdev))
-		err = __fbnic_open(fbn);
+	fbn = netdev_priv(netdev);
 
+	max_napis = fbd->num_irqs - FBNIC_NON_NAPI_VECTORS;
+	if (fbn->num_napi_cfg > max_napis) {
+		netdev_err(netdev,
+			   "Unable to restore channel configuration: %u NAPI vectors required, only %u available\n",
+			   fbn->num_napi_cfg, max_napis);
+		err = -ENOSPC;
+		goto unlock;
+	}
+
+	fbn->num_napi = fbn->num_napi_cfg;
+
+	if (netif_running(netdev)) {
+		err = __fbnic_open(fbn);
+		/* On failure the vectors are freed, so drop the count */
+		if (err)
+			fbn->num_napi = 0;
+	}
+
+unlock:
 	netdev_unlock(netdev);
 	rtnl_unlock();
 	if (err)

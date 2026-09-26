@@ -362,6 +362,7 @@ struct vmxnet3_intr {
 	enum vmxnet3_intr_type       type;	/* MSI-X, MSI, or INTx? */
 	u8  num_intrs;			/* # of intr vectors */
 	u8  event_intr_idx;		/* idx of the intr vector for event */
+	bool irq_requested[VMXNET3_LINUX_MAX_MSIX_VECT];
 	u8  mod_levels[VMXNET3_LINUX_MAX_MSIX_VECT]; /* moderation level */
 	char	event_msi_vector_name[IFNAMSIZ+17];
 #ifdef CONFIG_PCI_MSI

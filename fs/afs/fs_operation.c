@@ -297,6 +297,7 @@ void afs_wait_for_operation(struct afs_operation *op)
 			op->call_error = op->call->error;
 			op->call_responded = op->call->responded;
 			afs_put_call(op->call);
+			op->call = NULL;
 		}
 	}
 

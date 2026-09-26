@@ -150,7 +150,7 @@ struct cake_heap_entry {
 
 struct cake_tin_data {
 	struct cake_flow flows[CAKE_QUEUES];
-	u32	backlogs[CAKE_QUEUES];
+	u64	backlogs[CAKE_QUEUES];
 	u32	tags[CAKE_QUEUES]; /* for set association */
 	u16	overflow_idx[CAKE_QUEUES];
 	struct cake_host hosts[CAKE_QUEUES]; /* for triple isolation */
@@ -177,7 +177,7 @@ struct cake_tin_data {
 
 	u16	tin_quantum;
 	s32	tin_deficit;
-	u32	tin_backlog;
+	u64	tin_backlog;
 	u32	tin_dropped;
 	u32	tin_ecn_mark;
 
@@ -1413,21 +1413,28 @@ static u32 cake_calc_overhead(struct cake_sched_data *qd, u32 len, u32 off)
 static u32 cake_overhead(struct cake_sched_data *q, const struct sk_buff *skb)
 {
 	const struct skb_shared_info *shinfo = skb_shinfo(skb);
-	unsigned int hdr_len, last_len = 0;
+	unsigned int last_len = 0;
 	u32 off = skb_network_offset(skb);
 	u16 segs = qdisc_pkt_segs(skb);
 	u32 len = qdisc_pkt_len(skb);
+	int hdr_len;
 
 	WRITE_ONCE(q->avg_netoff, cake_ewma(q->avg_netoff, off << 16, 8));
 
-	if (segs == 1)
+	if (segs <= 1)
 		return cake_calc_overhead(q, len, off);
 
 	/* borrowed from qdisc_pkt_len_segs_init() */
-	if (!skb->encapsulation)
+	if (!skb->encapsulation) {
+		if (unlikely(!skb_transport_header_was_set(skb)))
+			return cake_calc_overhead(q, len, off);
 		hdr_len = skb_transport_offset(skb);
-	else
+	} else {
 		hdr_len = skb_inner_transport_offset(skb);
+	}
+
+	if (unlikely(hdr_len < 0))
+		return cake_calc_overhead(q, len, off);
 
 	/* + transport layer */
 	if (likely(shinfo->gso_type & (SKB_GSO_TCPV4 |
@@ -1466,17 +1473,17 @@ static void cake_heap_swap(struct cake_sched_data *q, u16 i, u16 j)
 	q->tins[jj.t].overflow_idx[jj.b] = i;
 }
 
-static u32 cake_heap_get_backlog(const struct cake_sched_data *q, u16 i)
+static u64 cake_heap_get_backlog(const struct cake_sched_data *q, u16 i)
 {
 	struct cake_heap_entry ii = q->overflow_heap[i];
 
-	return q->tins[ii.t].backlogs[ii.b];
+	return READ_ONCE(q->tins[ii.t].backlogs[ii.b]);
 }
 
 static void cake_heapify(struct cake_sched_data *q, u16 i)
 {
 	static const u32 a = CAKE_MAX_TINS * CAKE_QUEUES;
-	u32 mb = cake_heap_get_backlog(q, i);
+	u64 mb = cake_heap_get_backlog(q, i);
 	u32 m = i;
 
 	while (m < a) {
@@ -1484,7 +1491,7 @@ static void cake_heapify(struct cake_sched_data *q, u16 i)
 		u32 r = l + 1;
 
 		if (l < a) {
-			u32 lb = cake_heap_get_backlog(q, l);
+			u64 lb = cake_heap_get_backlog(q, l);
 
 			if (lb > mb) {
 				m  = l;
@@ -1493,7 +1500,7 @@ static void cake_heapify(struct cake_sched_data *q, u16 i)
 		}
 
 		if (r < a) {
-			u32 rb = cake_heap_get_backlog(q, r);
+			u64 rb = cake_heap_get_backlog(q, r);
 
 			if (rb > mb) {
 				m  = r;
@@ -1514,8 +1521,8 @@ static void cake_heapify_up(struct cake_sched_data *q, u16 i)
 {
 	while (i > 0 && i < CAKE_MAX_TINS * CAKE_QUEUES) {
 		u16 p = (i - 1) >> 1;
-		u32 ib = cake_heap_get_backlog(q, i);
-		u32 pb = cake_heap_get_backlog(q, p);
+		u64 ib = cake_heap_get_backlog(q, i);
+		u64 pb = cake_heap_get_backlog(q, p);
 
 		if (ib > pb) {
 			cake_heap_swap(q, i, p);
@@ -3046,7 +3053,8 @@ static int cake_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 
 		PUT_TSTAT_U64(THRESHOLD_RATE64, READ_ONCE(b->tin_rate_bps));
 		PUT_TSTAT_U64(SENT_BYTES64, READ_ONCE(b->bytes));
-		PUT_TSTAT_U32(BACKLOG_BYTES, READ_ONCE(b->tin_backlog));
+		PUT_TSTAT_U32(BACKLOG_BYTES,
+			      (u32)READ_ONCE(b->tin_backlog));
 
 		PUT_TSTAT_U32(TARGET_US,
 			      ktime_to_us(ns_to_ktime(READ_ONCE(b->cparams.target))));
@@ -3152,7 +3160,7 @@ static int cake_dump_class_stats(struct Qdisc *sch, unsigned long cl,
 			}
 			sch_tree_unlock(sch);
 		}
-		qs.backlog = READ_ONCE(b->backlogs[idx % CAKE_QUEUES]);
+		qs.backlog = (u32)READ_ONCE(b->backlogs[idx % CAKE_QUEUES]);
 		qs.drops = READ_ONCE(flow->dropped);
 	}
 	if (gnet_stats_copy_queue(d, NULL, &qs, qs.qlen) < 0)

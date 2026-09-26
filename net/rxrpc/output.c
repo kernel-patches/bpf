@@ -576,8 +576,8 @@ static size_t rxrpc_prepare_data_packet(struct rxrpc_call *call,
 			call->tx_nr_lost--;
 		if (req->retrans) {
 			__set_bit(ix, &tq->ever_retransmitted);
-			__set_bit(ix, &tq->segment_retransmitted);
-			call->tx_nr_resent++;
+			if (!__test_and_set_bit(ix, &tq->segment_retransmitted))
+				call->tx_nr_resent++;
 		} else {
 			call->tx_nr_sent++;
 			start_tlp = true;

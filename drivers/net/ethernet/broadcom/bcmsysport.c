@@ -391,8 +391,10 @@ static void bcm_sysport_update_mib_counters(struct bcm_sysport_priv *priv)
 			if (priv->is_lite)
 				continue;
 
-			if (s->type != BCM_SYSPORT_STAT_MIB_RX)
+			if (s->type == BCM_SYSPORT_STAT_MIB_TX)
 				offset = UMAC_MIB_STAT_OFFSET;
+			else if (s->type == BCM_SYSPORT_STAT_RUNT)
+				offset = 2 * UMAC_MIB_STAT_OFFSET;
 			val = umac_readl(priv, UMAC_MIB_START + j + offset);
 			break;
 		case BCM_SYSPORT_STAT_RXCHK:
@@ -482,10 +484,10 @@ static void bcm_sysport_get_stats(struct net_device *dev,
 		    s->type == BCM_SYSPORT_STAT_NETDEV64) {
 			do {
 				start = u64_stats_fetch_begin(syncp);
-				data[i] = *(u64 *)p;
+				data[j] = *(u64 *)p;
 			} while (u64_stats_fetch_retry(syncp, start));
 		} else
-			data[i] = *(u32 *)p;
+			data[j] = *(u32 *)p;
 		j++;
 	}
 
@@ -779,8 +781,9 @@ static unsigned int bcm_sysport_desc_rx(struct bcm_sysport_priv *priv,
 			  p_index, priv->rx_c_index, priv->rx_read_ptr,
 			  len, status);
 
-		if (unlikely(len > RX_BUF_LENGTH)) {
-			netif_err(priv, rx_status, ndev, "oversized packet\n");
+		if (unlikely(len > RX_BUF_LENGTH ||
+			     len < sizeof(*rsb) + 2 + (priv->crc_fwd ? ETH_FCS_LEN : 0))) {
+			netif_err(priv, rx_status, ndev, "invalid packet size: %d\n", len);
 			ndev->stats.rx_length_errors++;
 			ndev->stats.rx_errors++;
 			dev_kfree_skb_any(skb);
@@ -1198,12 +1201,12 @@ static void bcm_sysport_poll_controller(struct net_device *dev)
 	struct bcm_sysport_priv *priv = netdev_priv(dev);
 
 	disable_irq(priv->irq0);
-	bcm_sysport_rx_isr(priv->irq0, priv);
+	bcm_sysport_rx_isr(priv->irq0, dev);
 	enable_irq(priv->irq0);
 
 	if (!priv->is_lite) {
 		disable_irq(priv->irq1);
-		bcm_sysport_tx_isr(priv->irq1, priv);
+		bcm_sysport_tx_isr(priv->irq1, dev);
 		enable_irq(priv->irq1);
 	}
 }
@@ -1717,6 +1720,9 @@ static void bcm_sysport_fini_rx_ring(struct bcm_sysport_priv *priv)
 	if (!(reg & RDMA_DISABLED))
 		netdev_warn(priv->netdev, "RDMA not stopped!\n");
 
+	if (!priv->rx_cbs)
+		return;
+
 	for (i = 0; i < priv->num_rx_bds; i++) {
 		cb = &priv->rx_cbs[i];
 		if (dma_unmap_addr(cb, dma_addr))
@@ -2083,7 +2089,7 @@ static int bcm_sysport_stop(struct net_device *dev)
 
 	ret = tdma_enable_set(priv, 0);
 	if (ret) {
-		netdev_err(dev, "timeout disabling RDMA\n");
+		netdev_err(dev, "timeout disabling TDMA\n");
 		return ret;
 	}
 
@@ -2092,7 +2098,7 @@ static int bcm_sysport_stop(struct net_device *dev)
 
 	ret = rdma_enable_set(priv, 0);
 	if (ret) {
-		netdev_err(dev, "timeout disabling TDMA\n");
+		netdev_err(dev, "timeout disabling RDMA\n");
 		return ret;
 	}
 
@@ -2267,7 +2273,7 @@ static u16 bcm_sysport_select_queue(struct net_device *dev, struct sk_buff *skb,
 	struct bcm_sysport_priv *priv = netdev_priv(dev);
 	u16 queue = skb_get_queue_mapping(skb);
 	struct bcm_sysport_tx_ring *tx_ring;
-	unsigned int q, port;
+	unsigned int q, port, index;
 
 	if (!netdev_uses_dsa(dev))
 		return netdev_pick_tx(dev, skb, NULL);
@@ -2275,8 +2281,11 @@ static u16 bcm_sysport_select_queue(struct net_device *dev, struct sk_buff *skb,
 	/* DSA tagging layer will have configured the correct queue */
 	q = BRCM_TAG_GET_QUEUE(queue);
 	port = BRCM_TAG_GET_PORT(queue);
-	tx_ring = priv->ring_map[q + port * priv->per_port_num_tx_queues];
+	index = q + port * priv->per_port_num_tx_queues;
+	if (unlikely(index >= ARRAY_SIZE(priv->ring_map)))
+		return netdev_pick_tx(dev, skb, NULL);
 
+	tx_ring = priv->ring_map[index];
 	if (unlikely(!tx_ring))
 		return netdev_pick_tx(dev, skb, NULL);
 
@@ -2306,6 +2315,7 @@ static int bcm_sysport_map_queues(struct net_device *dev,
 	struct bcm_sysport_tx_ring *ring;
 	unsigned int num_tx_queues;
 	unsigned int q, qp, port;
+	u32 reg;
 
 	/* We can't be setting up queue inspection for non directly attached
 	 * switches
@@ -2323,7 +2333,8 @@ static int bcm_sysport_map_queues(struct net_device *dev,
 	 */
 	if (priv->is_lite)
 		netif_set_real_num_tx_queues(slave_dev,
-					     slave_dev->num_tx_queues / 2);
+					     max_t(unsigned int, 1,
+						   slave_dev->num_tx_queues / 2));
 
 	num_tx_queues = slave_dev->real_num_tx_queues;
 
@@ -2340,13 +2351,21 @@ static int bcm_sysport_map_queues(struct net_device *dev,
 		if (ring->inspect)
 			continue;
 
-		/* Just remember the mapping actual programming done
-		 * during bcm_sysport_init_tx_ring
-		 */
 		ring->switch_queue = qp;
 		ring->switch_port = port;
 		ring->inspect = true;
-		priv->ring_map[qp + port * num_tx_queues] = ring;
+		if (qp + port * num_tx_queues < ARRAY_SIZE(priv->ring_map))
+			priv->ring_map[qp + port * num_tx_queues] = ring;
+
+		if (netif_running(dev)) {
+			reg = tdma_readl(priv, TDMA_DESC_RING_MAPPING(q));
+			reg &= ~(RING_QID_MASK |
+				 RING_PORT_ID_MASK << RING_PORT_ID_SHIFT |
+				 RING_IGNORE_STATUS);
+			reg |= (qp & RING_QID_MASK);
+			reg |= (port << RING_PORT_ID_SHIFT);
+			tdma_writel(priv, reg, TDMA_DESC_RING_MAPPING(q));
+		}
 		qp++;
 	}
 
@@ -2361,6 +2380,7 @@ static int bcm_sysport_unmap_queues(struct net_device *dev,
 	struct bcm_sysport_tx_ring *ring;
 	unsigned int num_tx_queues;
 	unsigned int q, qp, port;
+	u32 reg;
 
 	port = dp->index;
 
@@ -2377,7 +2397,16 @@ static int bcm_sysport_unmap_queues(struct net_device *dev,
 
 		ring->inspect = false;
 		qp = ring->switch_queue;
-		priv->ring_map[qp + port * num_tx_queues] = NULL;
+		if (qp + port * num_tx_queues < ARRAY_SIZE(priv->ring_map))
+			priv->ring_map[qp + port * num_tx_queues] = NULL;
+
+		if (netif_running(dev)) {
+			reg = tdma_readl(priv, TDMA_DESC_RING_MAPPING(q));
+			reg &= ~(RING_QID_MASK |
+				 RING_PORT_ID_MASK << RING_PORT_ID_SHIFT);
+			reg |= RING_IGNORE_STATUS;
+			tdma_writel(priv, reg, TDMA_DESC_RING_MAPPING(q));
+		}
 	}
 
 	return 0;
@@ -2453,8 +2482,6 @@ static int bcm_sysport_probe(struct platform_device *pdev)
 		return -EINVAL;
 
 	ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(40));
-	if (ret)
-		ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
 	if (ret) {
 		dev_err(&pdev->dev, "unable to set DMA mask: %d\n", ret);
 		return ret;
@@ -2524,17 +2551,19 @@ static int bcm_sysport_probe(struct platform_device *pdev)
 	if (ret)
 		priv->phy_interface = PHY_INTERFACE_MODE_GMII;
 
+	priv->phy_dn = of_parse_phandle(dn, "phy-handle", 0);
+
 	/* In the case of a fixed PHY, the DT node associated
 	 * to the PHY is the Ethernet MAC DT node.
 	 */
-	if (of_phy_is_fixed_link(dn)) {
+	if (!priv->phy_dn && of_phy_is_fixed_link(dn)) {
 		ret = of_phy_register_fixed_link(dn);
 		if (ret) {
 			dev_err(&pdev->dev, "failed to register fixed PHY\n");
 			goto err_free_netdev;
 		}
 
-		priv->phy_dn = dn;
+		priv->phy_dn = of_node_get(dn);
 	}
 
 	/* Initialize netdevice members */
@@ -2619,6 +2648,7 @@ err_deregister_notifier:
 err_deregister_fixed_link:
 	if (of_phy_is_fixed_link(dn))
 		of_phy_deregister_fixed_link(dn);
+	of_node_put(priv->phy_dn);
 err_free_netdev:
 	free_netdev(dev);
 	return ret;
@@ -2637,6 +2667,7 @@ static void bcm_sysport_remove(struct platform_device *pdev)
 	unregister_netdev(dev);
 	if (of_phy_is_fixed_link(dn))
 		of_phy_deregister_fixed_link(dn);
+	of_node_put(priv->phy_dn);
 	free_netdev(dev);
 	dev_set_drvdata(&pdev->dev, NULL);
 }
@@ -2645,7 +2676,7 @@ static int bcm_sysport_suspend_to_wol(struct bcm_sysport_priv *priv)
 {
 	struct net_device *ndev = priv->netdev;
 	unsigned int timeout = 1000;
-	unsigned int index, i = 0;
+	unsigned int index;
 	u32 reg;
 
 	reg = umac_readl(priv, UMAC_MPD_CTRL);
@@ -2675,10 +2706,8 @@ static int bcm_sysport_suspend_to_wol(struct bcm_sysport_priv *priv)
 		reg = rxchk_readl(priv, RXCHK_CONTROL);
 		reg &= ~(RXCHK_BRCM_TAG_MATCH_MASK <<
 			 RXCHK_BRCM_TAG_MATCH_SHIFT);
-		for_each_set_bit(index, priv->filters, RXCHK_BRCM_TAG_MAX) {
-			reg |= BIT(RXCHK_BRCM_TAG_MATCH_SHIFT + i);
-			i++;
-		}
+		for_each_set_bit(index, priv->filters, RXCHK_BRCM_TAG_MAX)
+			reg |= BIT(RXCHK_BRCM_TAG_MATCH_SHIFT + index);
 		reg |= RXCHK_EN | RXCHK_BRCM_TAG_EN;
 		rxchk_writel(priv, reg, RXCHK_CONTROL);
 	}
@@ -2789,7 +2818,7 @@ static int __maybe_unused bcm_sysport_resume(struct device *d)
 		return ret;
 	}
 
-	if (priv->wolopts)
+	if (device_may_wakeup(d) && priv->wolopts)
 		clk_disable_unprepare(priv->wol_clk);
 
 	umac_reset(priv);

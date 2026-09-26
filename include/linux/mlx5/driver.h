@@ -855,6 +855,7 @@ struct mlx5_cmd_work_ent {
 	u64			ts2;
 	u16			op;
 	bool			polling;
+	bool			own_msgs;
 	/* Track the max comp handlers */
 	refcount_t              refcnt;
 };

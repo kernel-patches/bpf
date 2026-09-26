@@ -42,7 +42,6 @@
 /* PCI device IDs */
 #define PCI_DEVID_OCTEONTX2_RVU_PF              0xA063
 #define PCI_DEVID_OCTEONTX2_RVU_VF		0xA064
-#define PCI_DEVID_OCTEONTX2_RVU_AFVF		0xA0F8
 
 #define PCI_SUBSYS_DEVID_96XX_RVU_PFVF		0xB200
 #define PCI_SUBSYS_DEVID_CN10K_A_RVU_PFVF	0xB900
@@ -1027,6 +1026,15 @@ static inline int otx2_tc_flower_rule_cnt(struct otx2_nic *pfvf)
 		return 0;
 
 	return pfvf->flow_cfg->nr_flows;
+}
+
+static inline u8 otx2_get_bpid_idx(struct otx2_nic *pfvf, int qidx)
+{
+#ifdef CONFIG_DCB
+	if (pfvf->queue_to_pfc_map)
+		return pfvf->queue_to_pfc_map[qidx];
+#endif
+	return 0;
 }
 
 /* MSI-X APIs */

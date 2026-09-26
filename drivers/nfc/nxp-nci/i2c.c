@@ -346,8 +346,8 @@ static void nxp_nci_i2c_remove(struct i2c_client *client)
 {
 	struct nxp_nci_i2c_phy *phy = i2c_get_clientdata(client);
 
-	nxp_nci_remove(phy->ndev);
 	free_irq(client->irq, phy);
+	nxp_nci_remove(phy->ndev);
 }
 
 static const struct i2c_device_id nxp_nci_i2c_id_table[] = {

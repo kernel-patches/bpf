@@ -7172,8 +7172,8 @@ static int igc_probe(struct pci_dev *pdev,
 	hw->subsystem_vendor_id = pdev->subsystem_vendor;
 	hw->subsystem_device_id = pdev->subsystem_device;
 
-	/* Disable ASPM L1.2 on I226 devices to avoid packet loss */
-	if (igc_is_device_id_i226(hw))
+	/* Disable ASPM L1.2 on I226 and I225-LMvP devices to avoid packet loss */
+	if (igc_is_device_id_i226(hw) || hw->device_id == IGC_DEV_ID_I225_LMVP)
 		pci_disable_link_state(pdev, PCIE_LINK_STATE_L1_2);
 
 	err = pci_save_state(pdev);
@@ -7559,7 +7559,7 @@ static int __igc_resume(struct device *dev, bool rpm)
 	pci_enable_wake(pdev, PCI_D3hot, 0);
 	pci_enable_wake(pdev, PCI_D3cold, 0);
 
-	if (igc_is_device_id_i226(hw))
+	if (igc_is_device_id_i226(hw) || hw->device_id == IGC_DEV_ID_I225_LMVP)
 		pci_disable_link_state(pdev, PCIE_LINK_STATE_L1_2);
 
 	if (igc_init_interrupt_scheme(adapter, true)) {
@@ -7688,7 +7688,7 @@ static pci_ers_result_t igc_io_slot_reset(struct pci_dev *pdev)
 		pci_enable_wake(pdev, PCI_D3hot, 0);
 		pci_enable_wake(pdev, PCI_D3cold, 0);
 
-		if (igc_is_device_id_i226(hw))
+		if (igc_is_device_id_i226(hw) || hw->device_id == IGC_DEV_ID_I225_LMVP)
 			pci_disable_link_state_locked(pdev, PCIE_LINK_STATE_L1_2);
 
 		/* In case of PCI error, adapter loses its HW address

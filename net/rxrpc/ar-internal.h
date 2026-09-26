@@ -642,6 +642,7 @@ enum rxrpc_call_flag {
 	RXRPC_CALL_TX_LAST,		/* Last packet in Tx buffer (at rxtx_top) */
 	RXRPC_CALL_TX_ALL_ACKED,	/* Last packet has been hard-acked */
 	RXRPC_CALL_TX_NO_MORE,		/* No more data to transmit (MSG_MORE deasserted) */
+	RXRPC_CALL_TX_ERROR,		/* Terminal error; call needs abort */
 	RXRPC_CALL_SEND_PING,		/* A ping will need to be sent */
 	RXRPC_CALL_RETRANS_TIMEOUT,	/* Retransmission due to timeout occurred */
 	RXRPC_CALL_BEGAN_RX_TIMER,	/* We began the expect_rx_by timer */
@@ -818,6 +819,8 @@ struct rxrpc_call {
 	u16			cong_dup_acks;	/* Count of ACKs showing missing packets */
 	u16			cong_cumul_acks; /* Cumulative ACK count */
 	ktime_t			cong_tstamp;	/* Last time cwnd was changed */
+	bool			cong_in_recovery:1;		/* If we're in Fast/RTO recovery */
+	bool			cong_exiting_recovery:1;	/* If we're leaving Fast/RTO recovery */
 
 	/* RACK-TLP [RFC8985] state. */
 	ktime_t			rack_xmit_ts;	/* Latest transmission timestamp */
@@ -896,8 +899,6 @@ struct rxrpc_ack_summary {
 	bool		retrans_timeo:1;	/* T if reTx due to timeout happened */
 	bool		need_retransmit:1;	/* T if we need transmission */
 	bool		rtt_sample_avail:1;	/* T if RTT sample available */
-	bool		in_fast_or_rto_recovery:1;
-	bool		exiting_fast_or_rto_recovery:1;
 	bool		tlp_probe_acked:1;	/* T if the TLP probe seq was acked */
 	u8 /*enum rxrpc_congest_change*/ change;
 };
@@ -1109,6 +1110,7 @@ static inline bool rxrpc_is_client_call(const struct rxrpc_call *call)
 /*
  * call_state.c
  */
+void rxrpc_notify_socket(struct rxrpc_call *call);
 bool rxrpc_set_call_completion(struct rxrpc_call *call,
 			       enum rxrpc_call_completion compl,
 			       u32 abort_code,
@@ -1264,7 +1266,7 @@ void rxrpc_tlp_send_probe(struct rxrpc_call *call);
 void rxrpc_tlp_process_ack(struct rxrpc_call *call, struct rxrpc_ack_summary *summary);
 void rxrpc_rack_timer_expired(struct rxrpc_call *call, ktime_t overran_by);
 
-/* Initialise TLP state [RFC8958 7.1]. */
+/* Initialise TLP state [RFC8985 7.1]. */
 static inline void rxrpc_tlp_init(struct rxrpc_call *call)
 {
 	call->tlp_serial = 0;
@@ -1441,7 +1443,6 @@ extern const struct seq_operations rxrpc_local_seq_ops;
 /*
  * recvmsg.c
  */
-void rxrpc_notify_socket(struct rxrpc_call *);
 int rxrpc_recvmsg(struct socket *, struct msghdr *, size_t, int);
 
 /*

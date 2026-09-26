@@ -758,6 +758,36 @@ static void *mana_get_rxbuf_pre(struct mana_rxq *rxq, dma_addr_t *da)
 	return va;
 }
 
+/* RX buffers must be allocated with enough headroom for the TX path:
+ * mana_start_xmit() stores the SGE DMA mappings in struct mana_skb_head at
+ * skb->head, which is why the port advertises ndev->needed_headroom =
+ * MANA_HEADROOM.
+ *
+ * An skb that is forwarded out of a MANA port has to satisfy
+ * skb_cow(skb, LL_RESERVED_SPACE(dev) + ...) in ip_forward(), so reserve
+ * LL_RESERVED_SPACE() here rather than just MANA_HEADROOM - it rounds
+ * hard_header_len + needed_headroom up to HH_DATA_MOD and is therefore
+ * larger. Reserving less makes every forwarded packet get reallocated and
+ * copied by pskb_expand_head().
+ */
+static u32 mana_get_rxbuf_headroom(struct mana_port_context *apc)
+{
+	u32 headroom = LL_RESERVED_SPACE(apc->ndev);
+
+	if (mana_xdp_get(apc))
+		return max_t(u32, headroom, XDP_PACKET_HEADROOM);
+
+	return headroom;
+}
+
+static u32 mana_get_rxbuf_size(struct mana_port_context *apc, u32 mtu)
+{
+	u32 len = SKB_DATA_ALIGN(mtu + MANA_RXBUF_PAD +
+				 mana_get_rxbuf_headroom(apc));
+
+	return ALIGN(len, MANA_RX_FRAG_ALIGNMENT);
+}
+
 static bool
 mana_use_single_rxbuf_per_page(struct mana_port_context *apc, u32 mtu)
 {
@@ -770,11 +800,16 @@ mana_use_single_rxbuf_per_page(struct mana_port_context *apc, u32 mtu)
 	if (apc->priv_flags & BIT(MANA_PRIV_FLAG_USE_FULL_PAGE_RXBUF))
 		return true;
 
-	/* For xdp and jumbo frames make sure only one packet fits per page. */
-	if (mtu + MANA_RXBUF_PAD > PAGE_SIZE / 2 || mana_xdp_get(apc))
+	/* For xdp make sure only one packet fits per page. */
+	if (mana_xdp_get(apc))
 		return true;
 
-	return false;
+	/* Only use the page_pool fragment path when at least two buffers,
+	 * including the headroom each of them has to reserve, actually fit
+	 * into one page. Otherwise the fragment path degenerates into one
+	 * buffer per page while still paying the fragment accounting cost.
+	 */
+	return PAGE_SIZE / mana_get_rxbuf_size(apc, mtu) < 2;
 }
 
 /* Get RX buffer's data size, alloc size, XDP headroom based on MTU */
@@ -782,20 +817,19 @@ static void mana_get_rxbuf_cfg(struct mana_port_context *apc,
 			       int mtu, u32 *datasize, u32 *alloc_size,
 			       u32 *headroom, u32 *frag_count)
 {
-	u32 len, buf_size;
+	u32 buf_size;
 
 	/* Calculate datasize first (consistent across all cases) */
 	*datasize = mtu + ETH_HLEN;
 
+	*headroom = mana_get_rxbuf_headroom(apc);
+
 	if (mana_use_single_rxbuf_per_page(apc, mtu)) {
-		if (mana_xdp_get(apc)) {
-			*headroom = XDP_PACKET_HEADROOM;
+		if (mana_xdp_get(apc))
 			*alloc_size = PAGE_SIZE;
-		} else {
-			*headroom = 0; /* no support for XDP */
+		else
 			*alloc_size = SKB_DATA_ALIGN(mtu + MANA_RXBUF_PAD +
 						     *headroom);
-		}
 
 		*frag_count = 1;
 
@@ -809,11 +843,7 @@ static void mana_get_rxbuf_cfg(struct mana_port_context *apc,
 	}
 
 	/* Standard MTU case - optimize for multiple packets per page */
-	*headroom = 0;
-
-	/* Calculate base buffer size needed */
-	len = SKB_DATA_ALIGN(mtu + MANA_RXBUF_PAD + *headroom);
-	buf_size = ALIGN(len, MANA_RX_FRAG_ALIGNMENT);
+	buf_size = mana_get_rxbuf_size(apc, mtu);
 
 	/* Calculate how many packets can fit in a page */
 	*frag_count = PAGE_SIZE / buf_size;
@@ -924,8 +954,8 @@ static void mana_tx_timeout(struct net_device *netdev, unsigned int txqueue)
 		return;
 	}
 
-	/* Already in service, hence tx queue reset is not required.*/
-	if (test_bit(GC_IN_SERVICE, &gc->flags))
+	/* Skip while a service cycle may still touch gc. */
+	if (mana_service_active(gc))
 		return;
 
 	/* Note: If there are pending queue reset work for this port(apc),
@@ -4060,10 +4090,13 @@ static void mana_gf_stats_work_handler(struct work_struct *work)
 		memset(&ac->hc_stats, 0, sizeof(ac->hc_stats));
 		dev_warn(gc->dev,
 			 "Gf stats wk handler: gf stats query timed out.\n");
-		/* As HWC timed out, indicating a faulty HW state and needs a
-		 * reset.
+		/* As HWC timed out, indicating a faulty HW state and
+		 * needs a reset.  Never admit service work before the probe
+		 * has completed: a probe that is failing unwinds netdevs and
+		 * the HWC channel itself and cannot drain a cycle.
 		 */
-		mana_schedule_serv_work(gc, GDMA_EQE_HWC_RESET_REQUEST);
+		if (mana_service_probe_done(gc))
+			mana_schedule_serv_work(gc, GDMA_EQE_HWC_RESET_REQUEST);
 		return;
 	}
 	schedule_delayed_work(&ac->gf_stats_work, MANA_GF_STATS_PERIOD);

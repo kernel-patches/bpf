@@ -34,6 +34,8 @@ static void rxrpc_congestion_management(struct rxrpc_call *call,
 {
 	summary->change = rxrpc_cong_no_change;
 	summary->in_flight = rxrpc_tx_in_flight(call);
+	call->cong_in_recovery = false;
+	call->cong_exiting_recovery = false;
 
 	if (test_and_clear_bit(RXRPC_CALL_RETRANS_TIMEOUT, &call->flags)) {
 		summary->retrans_timeo = true;
@@ -106,12 +108,12 @@ static void rxrpc_congestion_management(struct rxrpc_call *call,
 		call->cong_extra = 0;
 		call->cong_dup_acks = 0;
 		summary->need_retransmit = true;
-		summary->in_fast_or_rto_recovery = true;
+		call->cong_in_recovery = true;
+		rxrpc_tlp_init(call);
 		goto out;
 
 	case RXRPC_CA_FAST_RETRANSMIT:
-		rxrpc_tlp_init(call);
-		summary->in_fast_or_rto_recovery = true;
+		call->cong_in_recovery = true;
 		if (!summary->new_low_snack) {
 			if (summary->nr_new_sacks == 0)
 				call->cong_cwnd += 1;
@@ -125,7 +127,7 @@ static void rxrpc_congestion_management(struct rxrpc_call *call,
 			summary->change = rxrpc_cong_progress;
 			call->cong_cwnd = call->cong_ssthresh;
 			if (call->acks_nr_snacks == 0) {
-				summary->exiting_fast_or_rto_recovery = true;
+				call->cong_exiting_recovery = true;
 				goto resume_normality;
 			}
 		}

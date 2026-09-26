@@ -356,7 +356,7 @@ static ssize_t adsl_state_store(struct device *dev,
 	if (!strcmp(str_cmd, "stop") || !strcmp(str_cmd, "restart")) {
 		ret = cxacru_cm(instance, CM_REQUEST_CHIP_ADSL_LINE_STOP, NULL, 0, NULL, 0);
 		if (ret < 0) {
-			atm_err(instance->usbatm, "change adsl state:"
+			usb_err(instance->usbatm, "change adsl state:"
 				" CHIP_ADSL_LINE_STOP returned %d\n", ret);
 
 			ret = -EIO;
@@ -376,7 +376,7 @@ static ssize_t adsl_state_store(struct device *dev,
 	if (!strcmp(str_cmd, "start") || !strcmp(str_cmd, "restart")) {
 		ret = cxacru_cm(instance, CM_REQUEST_CHIP_ADSL_LINE_START, NULL, 0, NULL, 0);
 		if (ret < 0) {
-			atm_err(instance->usbatm, "change adsl state:"
+			usb_err(instance->usbatm, "change adsl state:"
 				" CHIP_ADSL_LINE_START returned %d\n", ret);
 
 			ret = -EIO;
@@ -393,6 +393,15 @@ static ssize_t adsl_state_store(struct device *dev,
 
 	if (ret == 0) {
 		ret = -EINVAL;
+		poll = -1;
+	}
+
+	/* cxacru_poll_status() below dereferences atm_dev, which may not be
+	 * set up yet; reject before poll_state is advanced so that
+	 * cxacru_atm_start() can still start polling once it is.
+	 */
+	if (poll == CXPOLL_POLLING && !instance->usbatm->atm_dev) {
+		ret = -ENODEV;
 		poll = -1;
 	}
 
@@ -481,7 +490,7 @@ static ssize_t adsl_config_store(struct device *dev,
 			ret = cxacru_cm(instance, CM_REQUEST_CARD_DATA_SET,
 				(u8 *) data, 4 + num * 8, NULL, 0);
 			if (ret < 0) {
-				atm_err(instance->usbatm,
+				usb_err(instance->usbatm,
 					"set card data returned %d\n", ret);
 				return -EIO;
 			}
@@ -490,7 +499,7 @@ static ssize_t adsl_config_store(struct device *dev,
 				snprintf(log + tmp*12, 13, " %02x=%08x",
 					le32_to_cpu(data[tmp * 2 + 1]),
 					le32_to_cpu(data[tmp * 2 + 2]));
-			atm_info(instance->usbatm, "config%s\n", log);
+			usb_info(instance->usbatm, "config%s\n", log);
 			num = 0;
 		}
 	}
@@ -942,7 +951,7 @@ static int cxacru_fw(struct usb_device *usb_dev, enum cxacru_fw_request fw,
 	int offd, offb;
 	const int stride = CMD_PACKET_SIZE - 8;
 
-	buf = (u8 *) __get_free_page(GFP_KERNEL);
+	buf = kmalloc(PAGE_SIZE, GFP_KERNEL);
 	if (!buf)
 		return -ENOMEM;
 
@@ -978,7 +987,7 @@ static int cxacru_fw(struct usb_device *usb_dev, enum cxacru_fw_request fw,
 	ret = 0;
 
 cleanup:
-	free_page((unsigned long) buf);
+	kfree(buf);
 	return ret;
 }
 
@@ -993,7 +1002,7 @@ static int cxacru_find_firmware(struct cxacru_data *instance,
 	sprintf(buf, "cxacru-%s.bin", phase);
 	usb_dbg(usbatm, "cxacru_find_firmware: looking for %s\n", buf);
 
-	if (request_firmware(fw_p, buf, dev)) {
+	if (request_firmware_direct(fw_p, buf, dev)) {
 		usb_dbg(usbatm, "no stage %s firmware found\n", phase);
 		return -ENOENT;
 	}
@@ -1146,13 +1155,13 @@ static int cxacru_bind(struct usbatm_data *usbatm_instance,
 
 	mutex_init(&instance->adsl_state_serialize);
 
-	instance->rcv_buf = (u8 *) __get_free_page(GFP_KERNEL);
+	instance->rcv_buf = kmalloc(PAGE_SIZE, GFP_KERNEL);
 	if (!instance->rcv_buf) {
 		usb_dbg(usbatm_instance, "cxacru_bind: no memory for rcv_buf\n");
 		ret = -ENOMEM;
 		goto fail;
 	}
-	instance->snd_buf = (u8 *) __get_free_page(GFP_KERNEL);
+	instance->snd_buf = kmalloc(PAGE_SIZE, GFP_KERNEL);
 	if (!instance->snd_buf) {
 		usb_dbg(usbatm_instance, "cxacru_bind: no memory for snd_buf\n");
 		ret = -ENOMEM;
@@ -1220,8 +1229,8 @@ static int cxacru_bind(struct usbatm_data *usbatm_instance,
 	return 0;
 
  fail:
-	free_page((unsigned long) instance->snd_buf);
-	free_page((unsigned long) instance->rcv_buf);
+	kfree(instance->snd_buf);
+	kfree(instance->rcv_buf);
 	usb_free_urb(instance->snd_urb);
 	usb_free_urb(instance->rcv_urb);
 	kfree(instance);
@@ -1254,8 +1263,8 @@ static void cxacru_unbind(struct usbatm_data *usbatm_instance,
 	usb_free_urb(instance->snd_urb);
 	usb_free_urb(instance->rcv_urb);
 
-	free_page((unsigned long) instance->snd_buf);
-	free_page((unsigned long) instance->rcv_buf);
+	kfree(instance->snd_buf);
+	kfree(instance->rcv_buf);
 
 	kfree(instance);
 

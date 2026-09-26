@@ -659,42 +659,130 @@ EXPORT_SYMBOL_NS(mana_gd_ring_dim, "NET_MANA");
 
 #define MANA_SERVICE_PERIOD 10
 
-static void mana_serv_rescan(struct pci_dev *pdev)
+/* Retire one service cycle: serv_waitq is embedded in gc, so the wake
+ * must happen before the lock is dropped - a drainer that observes
+ * idle cannot free gc until the wake has stopped touching gc.
+ */
+static void mana_service_retire(struct gdma_context *gc)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&gc->serv_lock, flags);
+	gc->serv_in_flight = false;
+	wake_up(&gc->serv_waitq);
+	spin_unlock_irqrestore(&gc->serv_lock, flags);
+}
+
+/* Close admission atomically with the retire itself. */
+static void mana_service_retire_removing(struct gdma_context *gc)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&gc->serv_lock, flags);
+	gc->serv_removing = true;
+	gc->serv_in_flight = false;
+	wake_up(&gc->serv_waitq);
+	spin_unlock_irqrestore(&gc->serv_lock, flags);
+}
+
+static bool mana_service_idle(struct gdma_context *gc)
+{
+	unsigned long flags;
+	bool idle;
+
+	spin_lock_irqsave(&gc->serv_lock, flags);
+	idle = !gc->serv_in_flight;
+	spin_unlock_irqrestore(&gc->serv_lock, flags);
+	return idle;
+}
+
+/* Close admission and wait until an in-flight cycle has stopped touching
+ * gc.  The cycle retires before taking the PCI rescan/remove lock, so
+ * this wait completes even when the caller holds that lock; serv_lock is
+ * never held across a sleep.
+ */
+static void mana_service_quiesce(struct gdma_context *gc)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&gc->serv_lock, flags);
+	gc->serv_removing = true;
+	spin_unlock_irqrestore(&gc->serv_lock, flags);
+
+	wait_event(gc->serv_waitq, mana_service_idle(gc));
+}
+
+/* May run in softirq context (tx timeout). */
+bool mana_service_active(struct gdma_context *gc)
+{
+	unsigned long flags;
+	bool active;
+
+	spin_lock_irqsave(&gc->serv_lock, flags);
+	active = gc->serv_in_flight || gc->serv_removing;
+	spin_unlock_irqrestore(&gc->serv_lock, flags);
+	return active;
+}
+
+bool mana_service_probe_done(struct gdma_context *gc)
+{
+	unsigned long flags;
+	bool done;
+
+	spin_lock_irqsave(&gc->serv_lock, flags);
+	done = gc->serv_probe_done;
+	spin_unlock_irqrestore(&gc->serv_lock, flags);
+	return done;
+}
+
+static void mana_serv_rescan(struct pci_dev *pdev, struct gdma_context *gc)
 {
 	struct pci_bus *parent;
-
-	pci_lock_rescan_remove();
 
 	parent = pdev->bus;
 	if (!parent) {
 		dev_err(&pdev->dev, "MANA service: no parent bus\n");
-		goto out;
+		/* Still bound: keep admission open for later events. */
+		if (gc)
+			mana_service_retire(gc);
+		return;
 	}
+
+	if (gc)
+		mana_service_retire_removing(gc);
+
+	pci_lock_rescan_remove();
 
 	pci_stop_and_remove_bus_device(pdev);
 	pci_rescan_bus(parent);
 
-out:
 	pci_unlock_rescan_remove();
 }
 
-static void mana_serv_fpga(struct pci_dev *pdev)
+static void mana_serv_fpga(struct pci_dev *pdev, struct gdma_context *gc)
 {
 	struct pci_bus *bus, *parent;
-
-	pci_lock_rescan_remove();
 
 	bus = pdev->bus;
 	if (!bus) {
 		dev_err(&pdev->dev, "MANA service: no bus\n");
-		goto out;
+		if (gc)
+			mana_service_retire(gc);
+		return;
 	}
 
 	parent = bus->parent;
 	if (!parent) {
 		dev_err(&pdev->dev, "MANA service: no parent bus\n");
-		goto out;
+		if (gc)
+			mana_service_retire(gc);
+		return;
 	}
+
+	if (gc)
+		mana_service_retire_removing(gc);
+
+	pci_lock_rescan_remove();
 
 	pci_stop_and_remove_bus_device(bus->self);
 
@@ -702,20 +790,18 @@ static void mana_serv_fpga(struct pci_dev *pdev)
 
 	pci_rescan_bus(parent);
 
-out:
 	pci_unlock_rescan_remove();
 }
 
-static void mana_serv_reset(struct pci_dev *pdev)
+static void mana_serv_reset(struct pci_dev *pdev, struct gdma_context *gc)
 {
-	struct gdma_context *gc = pci_get_drvdata(pdev);
 	struct hw_channel_context *hwc;
 	int ret;
 
 	if (!gc) {
 		/* Perform PCI rescan on device if GC is not set up */
 		dev_err(&pdev->dev, "MANA service: GC not setup, rescanning\n");
-		mana_serv_rescan(pdev);
+		mana_serv_rescan(pdev, NULL);
 		return;
 	}
 
@@ -738,7 +824,7 @@ static void mana_serv_reset(struct pci_dev *pdev)
 	if (ret == -ETIMEDOUT || ret == -EPROTO) {
 		/* Perform PCI rescan on device if we failed on HWC */
 		dev_err(&pdev->dev, "MANA service: resume failed, rescanning\n");
-		mana_serv_rescan(pdev);
+		mana_serv_rescan(pdev, gc);
 		return;
 	}
 
@@ -748,22 +834,25 @@ static void mana_serv_reset(struct pci_dev *pdev)
 		dev_info(&pdev->dev, "MANA reset cycle completed\n");
 
 out:
-	clear_bit(GC_IN_SERVICE, &gc->flags);
+	mana_service_retire(gc);
 }
 
-static void mana_do_service(enum gdma_eqe_type type, struct pci_dev *pdev)
+static void mana_do_service(enum gdma_eqe_type type, struct pci_dev *pdev,
+			    struct gdma_context *gc)
 {
 	switch (type) {
 	case GDMA_EQE_HWC_FPGA_RECONFIG:
-		mana_serv_fpga(pdev);
+		mana_serv_fpga(pdev, gc);
 		break;
 
 	case GDMA_EQE_HWC_RESET_REQUEST:
-		mana_serv_reset(pdev);
+		mana_serv_reset(pdev, gc);
 		break;
 
 	default:
 		dev_err(&pdev->dev, "MANA service: unknown type %d\n", type);
+		if (gc)
+			mana_service_retire(gc);
 		break;
 	}
 }
@@ -779,12 +868,26 @@ static void mana_recovery_delayed_func(struct work_struct *w)
 	spin_lock_irqsave(&work->lock, flags);
 
 	while (!list_empty(&work->dev_list)) {
+		struct gdma_context *gc;
+
 		dev = list_first_entry(&work->dev_list,
 				       struct mana_dev_recovery, list);
 		list_del(&dev->list);
 		spin_unlock_irqrestore(&work->lock, flags);
 
-		mana_do_service(dev->type, dev->pdev);
+		/* Serialize the drvdata lookup and admission against
+		 * probe/remove.  Do not call sleeping functions while
+		 * holding the device lock.
+		 */
+		device_lock(&dev->pdev->dev);
+		gc = pci_get_drvdata(dev->pdev);
+		if (gc)
+			mana_schedule_serv_work(gc, dev->type);
+		device_unlock(&dev->pdev->dev);
+
+		if (!gc)
+			mana_do_service(dev->type, dev->pdev, NULL);
+
 		pci_dev_put(dev->pdev);
 		kfree(dev);
 
@@ -796,49 +899,92 @@ static void mana_recovery_delayed_func(struct work_struct *w)
 
 static void mana_serv_func(struct work_struct *w)
 {
-	struct mana_serv_work *mns_wk;
-	struct pci_dev *pdev;
+	struct gdma_context *gc = container_of(w, struct gdma_context, serv_work);
+	struct pci_dev *pdev = to_pci_dev(gc->dev);
 
-	mns_wk = container_of(w, struct mana_serv_work, serv_work);
-	pdev = mns_wk->pdev;
+	mana_do_service(gc->serv_type, pdev, gc);
 
-	if (pdev)
-		mana_do_service(mns_wk->type, pdev);
-
+	/* The rescan exits of mana_do_service() remove the device, which
+	 * frees gc before returning.  Only touch the pdev and the module
+	 * reference from here on; both are held until this point drops them.
+	 */
 	pci_dev_put(pdev);
-	kfree(mns_wk);
 	module_put(THIS_MODULE);
 }
 
+/* Serialize admission with retirement.  Called in hard IRQ context, so
+ * serv_lock is taken with interrupts disabled and nothing that may
+ * sleep runs under it.
+ */
 int mana_schedule_serv_work(struct gdma_context *gc, enum gdma_eqe_type type)
 {
-	struct mana_serv_work *mns_wk;
+	unsigned long flags;
+	bool busy;
 
-	if (test_and_set_bit(GC_IN_SERVICE, &gc->flags)) {
+	spin_lock_irqsave(&gc->serv_lock, flags);
+	busy = gc->serv_removing || gc->serv_in_flight;
+	if (!busy)
+		gc->serv_in_flight = true;
+	spin_unlock_irqrestore(&gc->serv_lock, flags);
+
+	if (busy) {
 		dev_info(gc->dev, "Already in service\n");
 		return -EBUSY;
 	}
 
 	if (!try_module_get(THIS_MODULE)) {
 		dev_info(gc->dev, "Module is unloading\n");
-		clear_bit(GC_IN_SERVICE, &gc->flags);
+		mana_service_retire(gc);
 		return -ENODEV;
 	}
 
-	mns_wk = kzalloc_obj(*mns_wk, GFP_ATOMIC);
-	if (!mns_wk) {
-		module_put(THIS_MODULE);
-		clear_bit(GC_IN_SERVICE, &gc->flags);
-		return -ENOMEM;
-	}
-
 	dev_info(gc->dev, "Start MANA service type:%d\n", type);
-	mns_wk->pdev = to_pci_dev(gc->dev);
-	mns_wk->type = type;
-	pci_dev_get(mns_wk->pdev);
-	INIT_WORK(&mns_wk->serv_work, mana_serv_func);
-	schedule_work(&mns_wk->serv_work);
+
+	gc->serv_type = type;
+	pci_dev_get(to_pci_dev(gc->dev));
+	queue_work(system_wq, &gc->serv_work);
 	return 0;
+}
+
+/* EQ-event side of the probe boundary: latch the event while the probe
+ * is still running and let the probe roll back (the recovery path will
+ * rescan), or admit the cycle once the probe has completed.  The probe
+ * tail stores probe_done and reads the latch under the same lock, so an
+ * event racing probe completion is admitted rather than lost.
+ */
+static void mana_service_event(struct gdma_context *gc,
+			       enum gdma_eqe_type type)
+{
+	unsigned long flags;
+	bool admit, first;
+
+	spin_lock_irqsave(&gc->serv_lock, flags);
+	admit = gc->serv_probe_done;
+	first = !gc->serv_during_probe;
+	if (!admit)
+		gc->serv_during_probe = true;
+	spin_unlock_irqrestore(&gc->serv_lock, flags);
+
+	if (admit)
+		mana_schedule_serv_work(gc, type);
+	else if (first)
+		dev_info(gc->dev, "Service is to be processed in probe\n");
+}
+
+/* Probe-tail side of the probe boundary: record probe completion and
+ * return whether an event was latched meanwhile; the same-lock pairing
+ * with mana_service_event() keeps a racing event from being lost.
+ */
+static bool mana_service_probe_complete(struct gdma_context *gc)
+{
+	unsigned long flags;
+	bool rollback;
+
+	spin_lock_irqsave(&gc->serv_lock, flags);
+	gc->serv_probe_done = true;
+	rollback = gc->serv_during_probe;
+	spin_unlock_irqrestore(&gc->serv_lock, flags);
+	return rollback;
 }
 
 /* Return the CPU address of byte @offset within a queue's ring buffer. */
@@ -956,18 +1102,7 @@ static void mana_gd_process_eqe(struct gdma_queue *eq)
 	case GDMA_EQE_HWC_FPGA_RECONFIG:
 	case GDMA_EQE_HWC_RESET_REQUEST:
 		dev_info(gc->dev, "Recv MANA service type:%d\n", type);
-
-		if (!test_and_set_bit(GC_PROBE_SUCCEEDED, &gc->flags)) {
-			/*
-			 * Device is in probe and we received a hardware reset
-			 * event, the probe function will detect that the flag
-			 * has changed and perform service procedure.
-			 */
-			dev_info(gc->dev,
-				 "Service is to be processed in probe\n");
-			break;
-		}
-		mana_schedule_serv_work(gc, type);
+		mana_service_event(gc, type);
 		break;
 
 	default:
@@ -2502,6 +2637,7 @@ static int mana_gd_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	void __iomem *bar0_va;
 	int bar = 0;
 	int err;
+	bool rollback;
 
 	/* Each port has 2 CQs, each CQ has at most 1 EQE at a time */
 	BUILD_BUG_ON(2 * MAX_PORTS_IN_MANA_DEV * GDMA_EQE_SIZE > EQ_SIZE);
@@ -2532,6 +2668,9 @@ static int mana_gd_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	mutex_init(&gc->eq_test_event_mutex);
 	mutex_init(&gc->gic_mutex);
+	INIT_WORK(&gc->serv_work, mana_serv_func);
+	spin_lock_init(&gc->serv_lock);
+	init_waitqueue_head(&gc->serv_waitq);
 	pci_set_drvdata(pdev, gc);
 	gc->bar0_pa = pci_resource_start(pdev, 0);
 	gc->bar0_size = pci_resource_len(pdev, 0);
@@ -2558,22 +2697,26 @@ static int mana_gd_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	err = mana_rdma_probe(&gc->mana_ib);
 	if (err)
-		goto cleanup_mana;
+		goto service_quiesce;
 
 	/*
 	 * If a hardware reset event has occurred over HWC during probe,
 	 * rollback and perform hardware reset procedure.
 	 */
-	if (test_and_set_bit(GC_PROBE_SUCCEEDED, &gc->flags)) {
+	rollback = mana_service_probe_complete(gc);
+	if (rollback) {
 		err = -EPROTO;
-		goto cleanup_mana_rdma;
+		goto service_quiesce;
 	}
 
 	return 0;
 
-cleanup_mana_rdma:
+service_quiesce:
+	/* The stats work can admit service once mana_probe() has run:
+	 * retire an in-flight cycle before any teardown.
+	 */
+	mana_service_quiesce(gc);
 	mana_rdma_remove(&gc->mana_ib);
-cleanup_mana:
 	mana_remove(&gc->mana, false);
 cleanup_gd:
 	mana_gd_cleanup_device(pdev);
@@ -2581,6 +2724,8 @@ unmap_bar:
 	xa_destroy(&gc->irq_contexts);
 	pci_iounmap(pdev, bar0_va);
 free_gc:
+	/* Backstop: drain before every vfree(). */
+	mana_service_quiesce(gc);
 	pci_set_drvdata(pdev, NULL);
 	vfree(gc);
 release_region:
@@ -2624,6 +2769,9 @@ static void mana_gd_remove(struct pci_dev *pdev)
 {
 	struct gdma_context *gc = pci_get_drvdata(pdev);
 
+	/* Drain the only gc user remove() does not synchronise with. */
+	mana_service_quiesce(gc);
+
 	pci_disable_sriov(pdev);
 
 	mana_rdma_remove(&gc->mana_ib);
@@ -2635,6 +2783,8 @@ static void mana_gd_remove(struct pci_dev *pdev)
 
 	pci_iounmap(pdev, gc->bar0_va);
 
+	/* Prevent late recovery work from using freed gc. */
+	pci_set_drvdata(pdev, NULL);
 	vfree(gc);
 
 	pci_release_regions(pdev);
@@ -2686,6 +2836,9 @@ static void mana_gd_shutdown(struct pci_dev *pdev)
 	struct gdma_context *gc = pci_get_drvdata(pdev);
 
 	dev_info(&pdev->dev, "Shutdown was called\n");
+
+	/* Shutdown tears down the same HW paths as remove(). */
+	mana_service_quiesce(gc);
 
 	mana_rdma_remove(&gc->mana_ib);
 	mana_remove(&gc->mana, true);
