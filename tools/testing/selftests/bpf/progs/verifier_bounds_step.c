@@ -121,4 +121,187 @@ l_bad_%=:						\
 	: __clobber_all);
 }
 
+struct step_val {
+	__u8 data[1024];
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, struct step_val);
+} step_map SEC(".maps");
+
+/* Old register [4..130, step 2] should prune cur register [8..64, step 4]. */
+SEC("socket")
+__success __log_level(2)
+__msg("7: (27) r6 *= 4                       ; R6=scalar({{.*}}umin32=8,{{.*}}umax32=68,{{.*}},step=0+4)")
+__msg("10: (27) r7 *= 2                      ; R7=scalar({{.*}}umin32=4,{{.*}}umax32=130,{{.*}},step=0+2)")
+__msg("11: (25) if r0 > 0x2a goto pc+1")
+__msg("from 11 to 13: safe")
+__flag(BPF_F_TEST_STATE_FREQ)
+__naked void step_prune_hit_multiple(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r6 = r0;					\
+	call %[bpf_get_prandom_u32];			\
+	r7 = r0;					\
+	call %[bpf_get_prandom_u32];			\
+	r6 &= 0x0f;					\
+	r6 += 2;					\
+	r6 *= 4;					\
+	r7 &= 0x3f;					\
+	r7 += 2;					\
+	r7 *= 2;					\
+	if r0 > 42 goto 1f;	/* can't predict */	\
+	r6 = r7;		/* step=2 explored first, step=4 explored next */ \
+1:	r0 = r10;					\
+	r6 = -r6;					\
+	r0 += r6;					\
+	*(u8 *)(r0 + 0) = 7;	/* force r6 precise */	\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32),
+	  __imm(bpf_map_lookup_elem),
+	  __imm_addr(step_map)
+	: __clobber_all);
+}
+
+/* Old register [0..126, step 2] should not prune cur register [0..45, step 3]. */
+SEC("socket")
+__failure __log_level(2)
+__msg("6: (27) r6 *= 3                       ; R6=scalar({{.*}}smin32=0,{{.*}}umax32=45,{{.*}},step=0+3)")
+__msg("8: (27) r7 *= 2                       ; R7=scalar({{.*}}smin32=0,{{.*}}umax32=126,{{.*}},step=0+2)")
+__msg("9: (25) if r0 > 0x2a goto pc+1")
+__msg("11: (15) if r6 == 0x3 goto pc+2")
+__msg("11: R6=scalar({{.*}},step=0+2)")
+__msg("13: (95) exit")
+__msg("from 9 to 11: {{.*}} R6=scalar({{.*}},step=0+3)")
+__msg("from 11 to 14")
+__msg("div by zero")
+__flag(BPF_F_TEST_STATE_FREQ)
+__naked void step_prune_miss_non_multiple(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r6 = r0;					\
+	call %[bpf_get_prandom_u32];			\
+	r7 = r0;					\
+	call %[bpf_get_prandom_u32];			\
+	r6 &= 0x0f;					\
+	r6 *= 3;					\
+	r7 &= 0x3f;					\
+	r7 *= 2;					\
+	if r0 > 42 goto 1f;	/* can't predict */	\
+	r6 = r7;		/* step=2 explored first, step=3 explored next */ \
+1:							\
+	if r6 == 3 goto 2f;	/* false if step=2, should not prune step=3 */ \
+	r0 = 0;						\
+	exit;						\
+2:							\
+	r0 /= 0;		/* trap */		\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * Constant current register lying on the cached line: cached is {0,3,6,...}
+ * (step 3, base 0), current is the constant 6. range_within() takes the
+ * constant branch: imod(6, 3) == base 0, so cur is on the line and the
+ * (precise) state is pruned -> "safe".
+ */
+SEC("socket")
+__success __log_level(2)
+__flag(BPF_F_TEST_STATE_FREQ)
+__msg("14: (27) r1 *= 3")		/* cached path: step 3 line */
+__msg("16: (b7) r1 = 6")		/* current path: const 6, on the line */
+__msg("17: safe")			/* pruned at join: imod(6, 3) == 0 */
+__naked void step_prune_hit_const_on_line(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r6 = r0;					\
+	r1 = 0;						\
+	*(u32*)(r10 - 4) = r1;				\
+	r2 = r10;					\
+	r2 += -4;					\
+	r1 = %[step_map] ll;				\
+	call %[bpf_map_lookup_elem];			\
+	if r0 == 0 goto l_out_%=;			\
+	r7 = r0;					\
+	r1 = r6;					\
+	r1 &= 0xff;					\
+	if r6 > 0 goto l_cur_%=;			\
+	r1 *= 3;			/* old: step 3 */	\
+	goto l_join_%=;					\
+l_cur_%=:						\
+	r1 = 6;				/* cur: const on line */	\
+l_join_%=:						\
+	r0 = r7;					\
+	r0 += r1;			/* r1 forced precise */	\
+	r2 = *(u8 *)(r0 + 0);				\
+l_out_%=:						\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32),
+	  __imm(bpf_map_lookup_elem),
+	  __imm_addr(step_map)
+	: __clobber_all);
+}
+
+/*
+ * Constant current register NOT on the cached line: cached is {0,3,6,...}
+ * (step 3, base 0), current is the constant 7. imod(7, 3) == 1 != base 0,
+ * so range_within() fails and the join is traversed again. A power-of-two
+ * step is avoided on purpose: with step 3 the tnum is loose enough to admit
+ * 7, so imod() is
+ * the sole check that rejects it. No failure shape is possible here: 7 is
+ * within the line's bounds and tnum, and the cached line path already
+ * verifies the whole outro, so an eager prune could not miss an error.
+ */
+SEC("socket")
+__success __log_level(2)
+__flag(BPF_F_TEST_STATE_FREQ)
+__msg("14: (27) r1 *= 3")		/* cached path: step 3 line */
+__msg("16: (b7) r1 = 7")		/* current path: const 7, off the line */
+/* not pruned: current continues past the join with the constant offset 7 */
+__msg("19: R0=map_value({{.*}}imm=7) R1=7")
+__naked void step_prune_miss_const_off_line(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r6 = r0;					\
+	r1 = 0;						\
+	*(u32*)(r10 - 4) = r1;				\
+	r2 = r10;					\
+	r2 += -4;					\
+	r1 = %[step_map] ll;				\
+	call %[bpf_map_lookup_elem];			\
+	if r0 == 0 goto l_out_%=;			\
+	r7 = r0;					\
+	r1 = r6;					\
+	r1 &= 0xff;					\
+	if r6 > 0 goto l_cur_%=;			\
+	r1 *= 3;			/* old: step 3 */	\
+	goto l_join_%=;					\
+l_cur_%=:						\
+	r1 = 7;				/* cur: const off line */	\
+l_join_%=:						\
+	r0 = r7;					\
+	r0 += r1;			/* r1 forced precise */	\
+	r2 = *(u8 *)(r0 + 0);				\
+l_out_%=:						\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32),
+	  __imm(bpf_map_lookup_elem),
+	  __imm_addr(step_map)
+	: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";
