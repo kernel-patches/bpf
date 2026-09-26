@@ -396,8 +396,13 @@ static int bcma_hcd_probe(struct bcma_device *core)
 {
 	int err;
 	struct bcma_hcd_device *usb_dev;
+	struct bcma_device *usb3;
 
-	/* TODO: Probably need checks here; is the core connected? */
+	if (core->id.id == BCMA_CORE_NS_USB20) {
+		usb3 = bcma_find_core(core->bus, BCMA_CORE_NS_USB30);
+		if (usb3 && !bcma_get_drvdata(usb3))
+			return -EPROBE_DEFER;
+	}
 
 	usb_dev = devm_kzalloc_obj(&core->dev, struct bcma_hcd_device);
 	if (!usb_dev)
