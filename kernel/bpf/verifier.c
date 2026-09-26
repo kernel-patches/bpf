@@ -37,6 +37,7 @@
 
 #include "diagnostics.h"
 #include "disasm.h"
+#include "exception.h"
 
 static const struct bpf_verifier_ops * const bpf_verifier_ops[] = {
 #define BPF_PROG_TYPE(_id, _name, prog_ctx_type, kern_ctx_type) \
@@ -22581,6 +22582,11 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 
 	/* Validate BTF against the complete subprogram layout. */
 	ret = bpf_check_btf_info(env, attr, uattr);
+	if (ret < 0)
+		goto skip_full_check;
+
+	/* The CFG needs an edge from a call in a cleanup range to its pad. */
+	ret = bpf_prepare_cleanup_exceptions(env);
 	if (ret < 0)
 		goto skip_full_check;
 
