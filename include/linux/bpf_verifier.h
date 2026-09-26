@@ -702,6 +702,7 @@ struct bpf_insn_aux_data {
 	u64 jump_target:1;
 	u64 in_cleanup_pad:1; /* reached with a landing pad running */
 	u64 outside_cleanup_pad:1; /* ... and the other way round */
+	u64 cleanup_pad_head:1; /* first insn of a landing pad */
 
 	unsigned int orig_idx; /* original instruction index, initialized once */
 	/*
@@ -1843,6 +1844,7 @@ int bpf_opt_subreg_zext_lo32_rnd_hi32(struct bpf_verifier_env *env, const union 
 int bpf_convert_ctx_accesses(struct bpf_verifier_env *env);
 int bpf_jit_subprogs(struct bpf_verifier_env *env);
 int bpf_fixup_call_args(struct bpf_verifier_env *env);
+int bpf_exc_keep_exits(struct bpf_verifier_env *env);
 int bpf_do_misc_fixups(struct bpf_verifier_env *env);
 int bpf_insn_def32(struct bpf_prog *prog, struct bpf_insn *insn);
 

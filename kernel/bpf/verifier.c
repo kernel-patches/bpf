@@ -22782,6 +22782,9 @@ skip_full_check:
 		ret = bpf_convert_ctx_accesses(env);
 
 	if (ret == 0)
+		ret = bpf_exc_keep_exits(env);
+
+	if (ret == 0)
 		ret = bpf_do_misc_fixups(env);
 
 	/* do 32-bit optimization after insn patching has done so those patched

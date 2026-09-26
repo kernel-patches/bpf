@@ -31,6 +31,7 @@
 #include <linux/buildid.h>
 
 #include "../../lib/kstrtox.h"
+#include "exception.h"
 
 /* If kernel subsystem is allowing eBPF programs to call this function,
  * inside its own verifier_ops->get_func_proto() callback it should return
@@ -3416,6 +3417,7 @@ static bool bpf_stack_walker(void *cookie, u64 ip, u64 sp, u64 bp)
 	if (!prog)
 		return !ctx->cnt;
 	ctx->cnt++;
+
 	if (bpf_is_subprog(prog))
 		return true;
 	ctx->aux = prog->aux;
@@ -3424,8 +3426,51 @@ static bool bpf_stack_walker(void *cookie, u64 ip, u64 sp, u64 bp)
 	return false;
 }
 
+struct bpf_unwind_ctx {
+	u32 cnt;
+};
+
+static bool bpf_unwind_rewrite(void *cookie, u64 ip, u64 sp, u64 bp, u64 *ra)
+{
+	const struct bpf_cleanup_range *rec;
+	struct bpf_unwind_ctx *ctx = cookie;
+	struct bpf_exception_info *exc;
+	struct bpf_prog *prog;
+
+	rcu_read_lock();
+	prog = bpf_prog_ksym_find(ip);
+	rcu_read_unlock();
+	if (!prog)
+		return !ctx->cnt;
+	ctx->cnt++;
+
+	exc = prog->aux->exc;
+	rec = (exc && exc->nr_ranges) ? bpf_exc_pad_for_ip(prog, ip) : NULL;
+	if (rec) {
+		*ra = rec->pad;
+	} else if (ctx->cnt == 1) {
+		/*
+		 * The frame that called bpf_unwind(). Its return address
+		 * always names the 'r0 = 0; exit' that bpf_exc_keep_exits()
+		 * put after the call, so leave it alone and let the frame
+		 * return through that: running it is what sets the value
+		 * the unwind returns.
+		 */
+	} else if (prog->aux->epilogue_ip) {
+		*ra = prog->aux->epilogue_ip;
+	} else {
+		WARN_ON_ONCE(1);
+		return false;
+	}
+
+	return bpf_is_subprog(prog);
+}
+
 __bpf_kfunc void bpf_unwind(void)
 {
+	struct bpf_unwind_ctx ctx = {};
+
+	arch_bpf_stack_walk_ra(bpf_unwind_rewrite, &ctx);
 }
 
 __bpf_kfunc void bpf_throw(u64 cookie)

@@ -5,6 +5,7 @@
 #include <linux/btf.h>
 #include <linux/btf_ids.h>
 #include <linux/filter.h>
+#include <linux/slab.h>
 #include "exception.h"
 
 #define verbose(env, fmt, args...) bpf_verifier_log_write(env, fmt, ##args)
@@ -155,4 +156,105 @@ int bpf_exc_pad_of_call(struct bpf_verifier_env *env, u32 idx)
 	u32 pad = env->insn_aux_data[idx].cleanup_pad;
 
 	return pad ? (int)pad - 1 : -1;
+}
+
+/*
+ * The record covering @ip, which is a return address: the call it belongs to
+ * is the instruction before it, so a range matches on begin < ip <= end.
+ */
+const struct bpf_cleanup_range *bpf_exc_pad_for_ip(const struct bpf_prog *prog, u64 ip)
+{
+	const struct bpf_exception_info *exc = prog->aux->exc;
+	u32 l = 0, r = exc ? exc->nr_ranges : 0;
+
+	while (l < r) {
+		u32 m = l + (r - l) / 2;
+		const struct bpf_cleanup_range *rec = &exc->ranges[m];
+
+		if (ip <= rec->begin)
+			r = m;
+		else if (ip > rec->end)
+			l = m + 1;
+		else
+			return rec;
+	}
+	return NULL;
+}
+
+int bpf_exc_alloc_info(struct bpf_prog_aux *aux)
+{
+	if (aux->exc)
+		return 0;
+	aux->exc = kzalloc_obj(struct bpf_exception_info, GFP_KERNEL_ACCOUNT | __GFP_NOWARN);
+	return aux->exc ? 0 : -ENOMEM;
+}
+
+int bpf_exc_attach_info(struct bpf_prog_aux *aux, struct bpf_cleanup_info *recs, u32 cnt)
+{
+	struct bpf_exception_info *exc = aux->exc;
+	struct bpf_cleanup_range *ranges;
+
+	ranges = kvcalloc(cnt, sizeof(*ranges), GFP_KERNEL_ACCOUNT | __GFP_NOWARN);
+	if (!ranges) {
+		kvfree(recs);
+		return -ENOMEM;
+	}
+
+	exc->info = recs;
+	exc->nr_info = cnt;
+	exc->ranges = ranges;
+	/* Withheld until the JIT has filled the table in. */
+	exc->nr_ranges = 0;
+	return 0;
+}
+
+void bpf_exc_fill_native_ranges(struct bpf_prog *prog, u32 *addrs, void *image)
+{
+	struct bpf_exception_info *exc = prog->aux->exc;
+	u32 i, n;
+
+	if (!exc || !exc->nr_info || !exc->ranges)
+		return;
+
+	n = exc->nr_info;
+	for (i = 0; i < n; i++) {
+		const struct bpf_cleanup_info *rec = &exc->info[i];
+
+		if (WARN_ON_ONCE(rec->begin_off >= prog->len ||
+				 rec->end_off > prog->len ||
+				 rec->landing_pad_off >= prog->len))
+			return;
+		exc->ranges[i].begin = (u64)(long)image + addrs[rec->begin_off];
+		exc->ranges[i].end = (u64)(long)image + addrs[rec->end_off];
+		exc->ranges[i].pad = (u64)(long)image + addrs[rec->landing_pad_off];
+	}
+	exc->nr_ranges = n;
+}
+
+void bpf_exc_free_info(struct bpf_prog_aux *aux)
+{
+	struct bpf_exception_info *exc = aux->exc;
+
+	if (!exc)
+		return;
+	kvfree(exc->ranges);
+	kvfree(exc->info);
+	kfree(exc);
+	aux->exc = NULL;
+}
+
+static const struct bpf_insn_aux_data *subprog_insn_aux(const struct bpf_verifier_env *env,
+							const struct bpf_prog *prog, u32 idx)
+{
+	if (!env || !prog->aux->exc)
+		return NULL;
+	return &env->insn_aux_data[idx + prog->aux->subprog_start];
+}
+
+bool bpf_exc_insn_is_pad(const struct bpf_verifier_env *env,
+			 const struct bpf_prog *prog, u32 idx)
+{
+	const struct bpf_insn_aux_data *aux = subprog_insn_aux(env, prog, idx);
+
+	return aux && aux->cleanup_pad_head;
 }
