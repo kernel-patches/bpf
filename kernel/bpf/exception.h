@@ -6,8 +6,11 @@
 #include <linux/types.h>
 
 struct bpf_verifier_env;
+struct bpf_insn;
 
 int bpf_prepare_cleanup_exceptions(struct bpf_verifier_env *env);
 int bpf_exc_pad_of_call(struct bpf_verifier_env *env, u32 idx);
+int bpf_exc_check_callback(struct bpf_verifier_env *env, int subprog);
+int bpf_exc_check_insn(struct bpf_verifier_env *env, struct bpf_insn *insn);
 
 #endif /* _LINUX_BPF_EXCEPTION_H */

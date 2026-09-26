@@ -339,6 +339,8 @@ struct bpf_func_state {
 	bool in_async_callback_fn;
 	bool in_exception_callback_fn;
 	bool no_stack_arg_load;
+	/* an unwind reached this frame and its landing pad is running */
+	bool in_pad;
 	/* For callback calling functions that limit number of possible
 	 * callback executions (e.g. bpf_loop) keeps track of current
 	 * simulated iteration number.
@@ -698,6 +700,8 @@ struct bpf_insn_aux_data {
 	u64 non_stack_access:1; /* instruction can access non-stack memory */
 	/* true if some jump or call instruction targets this instruction */
 	u64 jump_target:1;
+	u64 in_cleanup_pad:1; /* reached with a landing pad running */
+	u64 outside_cleanup_pad:1; /* ... and the other way round */
 
 	unsigned int orig_idx; /* original instruction index, initialized once */
 	/*

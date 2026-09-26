@@ -10985,6 +10985,10 @@ static int push_callback_call(struct bpf_verifier_env *env, struct bpf_insn *ins
 	 * callbacks
 	 */
 	env->subprog_info[subprog].is_cb = true;
+	err = bpf_exc_check_callback(env, subprog);
+	if (err)
+		return err;
+
 	if (bpf_pseudo_kfunc_call(insn) &&
 	    !is_callback_calling_kfunc(insn->imm)) {
 		verifier_bug(env, "kfunc %s#%d not marked as callback-calling",
@@ -19185,6 +19189,7 @@ static int push_cleanup_pad_branch(struct bpf_verifier_env *env, int insn_idx)
 	 */
 	clear_caller_saved_regs(env, frame->regs);
 	mark_reg_unknown(env, frame->regs, BPF_REG_0);
+	frame->in_pad = true;
 	return 0;
 }
 
@@ -19197,6 +19202,7 @@ static int process_bpf_unwind(struct bpf_verifier_env *env, int *insn_idx)
 		return PROCESS_BPF_EXIT;
 	clear_caller_saved_regs(env, frame->regs);
 	mark_reg_unknown(env, frame->regs, BPF_REG_0);
+	frame->in_pad = true;
 	*insn_idx = pad;
 	return INSN_IDX_UPDATED;
 }
@@ -19441,6 +19447,11 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 			if (bpf_is_unwind_kfunc(insn))
 				return process_bpf_unwind(env, &env->insn_idx);
 			if (bpf_is_unwind_resume_kfunc(insn)) {
+				if (!cur_func(env)->in_pad) {
+					verbose(env, "resume at insn %d is not in a landing pad\n",
+						env->insn_idx);
+					return -EINVAL;
+				}
 				/*
 				 * Mark r0 a known zero -- unknown first, as
 				 * the known-zero helper keeps the type it
@@ -19450,6 +19461,7 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 				 */
 				mark_reg_unknown(env, cur_regs(env), BPF_REG_0);
 				mark_reg_known_zero(env, cur_regs(env), BPF_REG_0);
+				cur_func(env)->in_pad = false;
 				return process_bpf_exit_full(env, do_print_state, false);
 			}
 			if (env->cur_state->active_locks) {
@@ -19576,6 +19588,12 @@ static int do_check(struct bpf_verifier_env *env)
 				else if (env->insn_idx == fallthrough_idx)
 					bpf_diag_record_branch(env, prev_insn_idx, false);
 			}
+		}
+
+		if (unlikely(env->cleanup_info_cnt)) {
+			err = bpf_exc_check_insn(env, insn);
+			if (err)
+				return err;
 		}
 
 		if (bpf_is_prune_point(env, env->insn_idx)) {

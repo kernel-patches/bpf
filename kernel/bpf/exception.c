@@ -12,6 +12,15 @@
 BTF_ID_LIST_SINGLE(bpf_unwind_id, func, bpf_unwind)
 BTF_ID_LIST_SINGLE(bpf_unwind_resume_id, func, bpf_unwind_resume)
 
+int bpf_exc_check_callback(struct bpf_verifier_env *env, int subprog)
+{
+	if (!env->subprog_info[subprog].might_unwind)
+		return 0;
+
+	verbose(env, "subprog %d may unwind and is used as a callback\n", subprog);
+	return -EINVAL;
+}
+
 static void mark_call_sites(struct bpf_verifier_env *env)
 {
 	u32 i, j;
@@ -67,6 +76,78 @@ bool bpf_is_unwind_resume_kfunc(const struct bpf_insn *insn)
 {
 	return bpf_pseudo_kfunc_call(insn) && insn->off == 0 &&
 	       insn->imm == bpf_unwind_resume_id[0];
+}
+
+/* Is an unwind in flight: is this frame a landing pad, or below one? */
+static bool unwinding(const struct bpf_verifier_state *state)
+{
+	u32 i;
+
+	for (i = 0; i <= state->curframe; i++)
+		if (state->frame[i]->in_pad)
+			return true;
+	return false;
+}
+
+int bpf_exc_check_insn(struct bpf_verifier_env *env, struct bpf_insn *insn)
+{
+	bool in_pad = cur_func(env)->in_pad;
+	struct bpf_insn_aux_data *aux;
+	u32 i = env->insn_idx;
+	const char *why = NULL;
+
+	if (unwinding(env->cur_state)) {
+		if (bpf_is_unwind_kfunc(insn)) {
+			verbose(env, "insn %u starts a second unwind while one is in flight\n", i);
+			return -EINVAL;
+		}
+		if (bpf_pseudo_call(insn)) {
+			int subprog = bpf_find_subprog(env, i + insn->imm + 1);
+
+			if (subprog >= 0 && bpf_subprog_is_global(env, subprog) &&
+			    env->subprog_info[subprog].might_unwind) {
+				verbose(env,
+					"insn %u calls global subprog %d, which can unwind while an unwind is in flight\n",
+					i, subprog);
+				return -EINVAL;
+			}
+		}
+	}
+
+	aux = &env->insn_aux_data[i];
+
+	if (in_pad ? aux->outside_cleanup_pad : aux->in_cleanup_pad) {
+		verbose(env, "insn %u runs both inside and outside a landing pad\n", i);
+		return -EINVAL;
+	}
+	if (in_pad)
+		aux->in_cleanup_pad = true;
+	else
+		aux->outside_cleanup_pad = true;
+
+	if (!in_pad)
+		return 0;
+
+	if (insn->code == (BPF_JMP | BPF_EXIT)) {
+		verbose(env,
+			"exit at insn %u ends a landing pad: a catch pad is not supported yet, only cleanup pads that resume\n",
+			i);
+		return -EOPNOTSUPP;
+	}
+	if (bpf_helper_call(insn) && insn->imm == BPF_FUNC_tail_call)
+		why = "is a tail call, which replaces the frame";
+	else if (BPF_CLASS(insn->code) == BPF_LD &&
+		 (BPF_MODE(insn->code) == BPF_ABS || BPF_MODE(insn->code) == BPF_IND))
+		why = "is a BPF_LD_[ABS|IND], which can leave through the epilogue";
+	else if (insn->code == (BPF_JMP | BPF_JA | BPF_X) ||
+		 insn->code == (BPF_JMP32 | BPF_JA | BPF_X))
+		why = "is an indirect jump";
+
+	if (!why)
+		return 0;
+
+	verbose(env, "insn %u %s, and is in a landing pad\n", i, why);
+	return -EINVAL;
 }
 
 int bpf_exc_pad_of_call(struct bpf_verifier_env *env, u32 idx)
