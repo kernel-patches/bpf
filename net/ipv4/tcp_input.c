@@ -69,6 +69,7 @@
 #include <linux/module.h>
 #include <linux/sysctl.h>
 #include <linux/kernel.h>
+#include <linux/list_sort.h>
 #include <linux/prefetch.h>
 #include <linux/bitops.h>
 #include <net/dst.h>
@@ -2840,15 +2841,47 @@ static void DBGUNDO(struct sock *sk, const char *msg)
 #endif
 }
 
+static int tcp_rack_skb_cmp(void *priv, const struct list_head *a,
+			    const struct list_head *b)
+{
+	const struct sk_buff *skb_a = list_entry(a, struct sk_buff,
+					       tcp_tsorted_anchor);
+	const struct sk_buff *skb_b = list_entry(b, struct sk_buff,
+					       tcp_tsorted_anchor);
+
+	return tcp_skb_sent_after(tcp_skb_timestamp_us(skb_a),
+				  tcp_skb_timestamp_us(skb_b),
+				  TCP_SKB_CB(skb_a)->end_seq,
+				  TCP_SKB_CB(skb_b)->end_seq);
+}
+
 static void tcp_undo_cwnd_reduction(struct sock *sk, bool unmark_loss)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 
 	if (unmark_loss) {
+		LIST_HEAD(restored);
 		struct sk_buff *skb;
 
 		skb_rbtree_walk(skb, &sk->tcp_rtx_queue) {
+			if ((TCP_SKB_CB(skb)->sacked & TCPCB_LOST) == TCPCB_LOST)
+				list_move_tail(&skb->tcp_tsorted_anchor, &restored);
 			TCP_SKB_CB(skb)->sacked &= ~TCPCB_LOST;
+		}
+		if (!list_empty(&restored)) {
+			struct list_head *pos = &tp->tsorted_sent_queue;
+
+			/* Ensure lost skbs are added in transmission order */
+			list_sort(NULL, &restored, tcp_rack_skb_cmp);
+			while (!list_empty(&restored)) {
+				struct list_head *entry = restored.next;
+
+				while (pos->next != &tp->tsorted_sent_queue &&
+				       !tcp_rack_skb_cmp(NULL, pos->next, entry))
+					pos = pos->next;
+				list_move(entry, pos);
+				pos = entry;
+			}
 		}
 		tp->lost_out = 0;
 		tcp_clear_all_retrans_hints(tp);
