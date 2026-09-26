@@ -1701,6 +1701,10 @@ int build_insn(const struct bpf_insn *insn, struct jit_context *ctx)
 	case BPF_ALU64 | BPF_MOD | BPF_X:
 		emit_divmod_r64(ctx, dst, src, BPF_OP(code), off);
 		break;
+	/* dst = bswap(dst) */
+	case BPF_ALU64 | BPF_END:
+		emit_bswap_r64(ctx, dst, imm);
+		break;
 	/* dst = htole(dst) */
 	/* dst = htobe(dst) */
 	case BPF_ALU | BPF_END | BPF_FROM_LE:
@@ -1871,6 +1875,13 @@ int build_insn(const struct bpf_insn *insn, struct jit_context *ctx)
 			emit_jmp_r(ctx, lo(dst), MIPS_R_T6, rel, jmp);
 		}
 		if (finish_jmp(ctx, jmp, off) < 0)
+			goto toofar;
+		break;
+	/* PC += imm */
+	case BPF_JMP32 | BPF_JA:
+		if (imm == 0)
+			break;
+		if (emit_ja(ctx, imm) < 0)
 			goto toofar;
 		break;
 	/* PC += off if dst == src */
