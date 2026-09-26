@@ -509,7 +509,7 @@ __naked void too_many_gotox_edges(void)
 
 SEC("socket")
 __description("gotox-edges-at-limit")
-__success __retval(0)
+__failure __msg("Too many nested loops")
 __naked void gotox_edges_at_limit(void)
 {
 	asm volatile (
@@ -517,6 +517,10 @@ __naked void gotox_edges_at_limit(void)
 		 * 1000 gotox * 1000 targets = 1,000,000 CFG edges. At run
 		 * time, each block loads the next table entry and jumps to
 		 * the following block, so the program terminates.
+		 *
+		 * Every block can jump to every later block, so the CFG is
+		 * a nest of ~1000 irreducible loops, deeper than the
+		 * verifier's loop stack; the program is rejected.
 		 */
 		GOTOX_TABLE_BEGIN(1000)
 		".rept 1000;"

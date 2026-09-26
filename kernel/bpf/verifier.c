@@ -19545,6 +19545,204 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 	return -EFAULT;
 }
 
+static bool has_entered_loop(struct bpf_verifier_env *env)
+{
+	struct bpf_insn_aux_data *aux = env->insn_aux_data;
+	int prev_insn_idx = env->prev_insn_idx;
+	int insn_idx = env->insn_idx;
+
+	return aux[insn_idx].loop_entry &&
+	       (prev_insn_idx == -1 ||
+		bpf_loop_at_index(env, prev_insn_idx) != bpf_loop_at_index(env, insn_idx));
+}
+
+static bool is_next_loop_iteration(struct bpf_verifier_env *env)
+{
+	struct bpf_insn_aux_data *aux = env->insn_aux_data;
+	int prev_insn_idx = env->prev_insn_idx;
+	int insn_idx = env->insn_idx;
+
+	return aux[insn_idx].loop_entry &&
+	       (prev_insn_idx != -1 &&
+		bpf_loop_at_index(env, prev_insn_idx) == bpf_loop_at_index(env, insn_idx));
+}
+
+static bool has_exited_loop(struct bpf_verifier_env *env)
+{
+	struct bpf_insn_aux_data *aux = env->insn_aux_data;
+	int prev_insn_idx = env->prev_insn_idx;
+	int insn_idx = env->insn_idx;
+	int prev_loop_idx, h;
+
+	if (prev_insn_idx == -1)
+		return false;
+
+	prev_loop_idx = bpf_loop_at_index(env, prev_insn_idx);
+	if (prev_loop_idx < 0)
+		return false;
+
+	/* Still inside the previous instruction's loop if that loop encloses insn_idx */
+	for (h = bpf_loop_at_index(env, insn_idx); h >= 0; h = aux[h].loop_header)
+		if (h == prev_loop_idx)
+			return false;
+
+	return true;
+}
+
+/*
+ * Push the loop entered at insn_idx onto the stack. Usually this adds a single
+ * entry on top of its enclosing loop. However, an edge may enter an inner loop
+ * directly, bypassing the header(s) of its enclosing loop(s), e.g.:
+ *
+ *   1: for (...):       // enclosing loop, header at 1
+ *   2:   for (...):     // inner loop, header at 2
+ *        ...
+ *   3: if ...:
+ *        goto 2b;       // enters loop 2 without going through header 1
+ *
+ * Such a bypass makes the enclosing loop irreducible, so its header is missing
+ * from the stack and both headers (1) and (2) need to be pushed onto stack.
+ * Only the innermost loop (the one actually entered at insn_idx) carries SCEV bounds;
+ * the bypassed ancestors are irreducible and pushed as non-terminating.
+ *
+ * Assumes loop_stack_pop() has already truncated the stack to the common ancestor
+ * of the bpf_loop_at_index(env->prev_insn_idx) and bpf_loop_at_index(env->insn_idx).
+ */
+static int loop_stack_push(struct bpf_verifier_env *env,
+			   struct bpf_verifier_state *entry_state,
+			   bool terminates,
+			   struct bpf_loop_iters *iters)
+{
+	struct bpf_insn_aux_data *aux = env->insn_aux_data;
+	struct bpf_func_state *frame = cur_func(env);
+	struct loop_stack_entry *loop_stack = frame->loop_stack;
+	u32 missing_headers[LOOP_STACK_SIZE];
+	u32 cnt = frame->loop_stack_cnt;
+	u32 num_missing = 0;
+	int h;
+
+	for (h = bpf_loop_at_index(env, env->insn_idx); h >= 0; h = aux[h].loop_header, num_missing++) {
+		if (cnt && loop_stack[cnt - 1].loop_id == h)
+			break;
+		if (num_missing == LOOP_STACK_SIZE)
+			goto e2big;
+		missing_headers[num_missing] = h;
+	}
+
+	for (; num_missing; num_missing--, cnt++) {
+		if (cnt == LOOP_STACK_SIZE)
+			goto e2big;
+		loop_stack[cnt].loop_id = missing_headers[num_missing - 1];
+		if (num_missing == 1) {
+			loop_stack[cnt].iters = terminates ? *iters : (struct bpf_loop_iters){};
+			loop_stack[cnt].terminates = terminates;
+			loop_stack[cnt].entry_state = entry_state;
+		} else {
+			loop_stack[cnt].iters = (struct bpf_loop_iters){};
+			loop_stack[cnt].terminates = false;
+			loop_stack[cnt].entry_state = NULL;
+		}
+	}
+	frame->loop_stack_cnt = cnt;
+	return 0;
+
+e2big:
+	verbose(env, "Too many nested loops (%d/%d) at %d\n", cnt, num_missing, env->insn_idx);
+	return -E2BIG;
+}
+
+/*
+ * An exit from a loop can cross several nested loops, e.g.:
+ *
+ *   1: for (...):
+ *   2:   for (...):
+ *   3:     for (...):
+ *            if ...:    // before goto the loop stack is [1, 2, 3 <top>]
+ *              goto 1b; // after goto it should become [1]
+ */
+static int loop_stack_pop(struct bpf_verifier_env *env)
+{
+	struct bpf_insn_aux_data *aux = env->insn_aux_data;
+	struct bpf_func_state *frame = cur_func(env);
+	int h, i;
+
+	/*
+	 * Walk the loop nest of insn_idx outwards (innermost first) and stop at
+	 * the first loop that is present on the stack - that loop is the common
+	 * ancestor and becomes the new top. If no enclosing loop is on the
+	 * stack, drop all loops.
+	 */
+	for (h = bpf_loop_at_index(env, env->insn_idx); h >= 0; h = aux[h].loop_header) {
+		for (i = frame->loop_stack_cnt - 1; i >= 0; i--) {
+			if (frame->loop_stack[i].loop_id == h) {
+				frame->loop_stack_cnt = i + 1;
+				return 0;
+			}
+		}
+	}
+
+	frame->loop_stack_cnt = 0;
+	return 0;
+}
+
+static int maybe_clamp_scev_regs(struct bpf_verifier_env *env)
+{
+	struct bpf_func_state *frame = cur_func(env);
+	struct loop_stack_entry *entry;
+
+	if (frame->loop_stack_cnt == 0) {
+		verifier_bug(env, "%s: loop stack empty at %d", __FUNCTION__, env->insn_idx);
+		return -EFAULT;
+	}
+
+	entry = &frame->loop_stack[frame->loop_stack_cnt - 1];
+	if (!entry->terminates)
+		return 0;
+
+	return bpf_clamp_scev_regs(env, frame, env->insn_idx, entry->entry_state, &entry->iters);
+}
+
+static int handle_loop_entry_exit(struct bpf_verifier_env *env)
+{
+	struct bpf_verifier_state *cur = env->cur_state;
+	struct bpf_loop_iters iters;
+	bool terminates;
+	int err;
+
+	if (is_next_loop_iteration(env)) {
+		err = maybe_clamp_scev_regs(env);
+		if (err)
+			return err;
+	}
+	if (has_exited_loop(env)) {
+		if (env->log.level & BPF_LOG_LEVEL2)
+			verbose(env, "exiting loop %d\n", bpf_loop_at_index(env, env->prev_insn_idx));
+		err = loop_stack_pop(env);
+		if (err)
+			return err;
+	}
+	if (has_entered_loop(env)) {
+		if (env->log.level & BPF_LOG_LEVEL2)
+			verbose(env, "entering loop %d\n", bpf_loop_at_index(env, env->insn_idx));
+		err = bpf_compute_loop_iters(env, env->cur_state, &iters);
+		if (err < 0)
+			return err;
+		terminates = err == 1;
+		if (terminates) {
+			err = bpf_split_cur_state(env);
+			if (err)
+				return err;
+			err = bpf_widen_scev_regs(env, cur, cur->parent, &iters);
+			if (err < 0)
+				return err;
+		}
+		err = loop_stack_push(env, env->cur_state->parent, terminates, &iters);
+		if (err)
+			return err;
+	}
+	return 0;
+}
+
 static int do_check(struct bpf_verifier_env *env)
 {
 	bool pop_log = !(env->log.level & BPF_LOG_LEVEL2);
@@ -19558,6 +19756,12 @@ static int do_check(struct bpf_verifier_env *env)
 		struct bpf_insn *insn;
 		struct bpf_insn_aux_data *insn_aux;
 		int err;
+
+		if (signal_pending(current))
+			return -EAGAIN;
+
+		if (need_resched())
+			cond_resched();
 
 		/* reset current history entry on each new instruction */
 		env->cur_hist_ent = NULL;
@@ -19605,6 +19809,15 @@ static int do_check(struct bpf_verifier_env *env)
 			}
 		}
 
+		/*
+		 * Possibly widen the registers before creating a checkpoint
+		 * in bpf_is_state_visited(). The next loop iteration will
+		 * have a chance to hit this checkpoint and converge.
+		 */
+		err = handle_loop_entry_exit(env);
+		if (err)
+			return err;
+
 		if (bpf_is_prune_point(env, env->insn_idx)) {
 			err = bpf_is_state_visited(env, env->insn_idx);
 			if (err < 0)
@@ -19630,12 +19843,6 @@ static int do_check(struct bpf_verifier_env *env)
 				return err;
 		}
 
-		if (signal_pending(current))
-			return -EAGAIN;
-
-		if (need_resched())
-			cond_resched();
-
 		if (env->log.level & BPF_LOG_LEVEL2 && do_print_state) {
 			verbose(env, "\nfrom %d to %d%s:",
 				env->prev_insn_idx, env->insn_idx,
@@ -19643,6 +19850,13 @@ static int do_check(struct bpf_verifier_env *env)
 				" (speculative execution)" : "");
 			print_verifier_state(env, state, state->curframe, true);
 			do_print_state = false;
+		}
+
+		if (bpf_loop_at_index(env, env->insn_idx) >= 0 &&
+		    cur_func(env)->loop_stack_cnt == 0) {
+			verifier_bug(env, "loop stack empty at %d, while inside the loop %d\n",
+				     env->insn_idx, bpf_loop_at_index(env, env->insn_idx));
+			return -EFAULT;
 		}
 
 		if (env->log.level & BPF_LOG_LEVEL) {
