@@ -502,7 +502,9 @@ struct bpf_verifier_state {
 	bool speculative;
 	bool in_sleepable;
 
-	/* first and last insn idx of this verifier state */
+	/* First and last insn idx of this verifier state.
+	 * last_insn_idx is -1 if no instructions have been executed yet.
+	 */
 	u32 first_insn_idx;
 	u32 last_insn_idx;
 	/* if this state is a backedge state then equal_state
