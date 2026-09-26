@@ -3424,6 +3424,10 @@ static bool bpf_stack_walker(void *cookie, u64 ip, u64 sp, u64 bp)
 	return false;
 }
 
+__bpf_kfunc void bpf_unwind(void)
+{
+}
+
 __bpf_kfunc void bpf_throw(u64 cookie)
 {
 	struct bpf_throw_ctx ctx = {};
@@ -3443,6 +3447,16 @@ __bpf_kfunc void bpf_throw(u64 cookie)
 	kasan_unpoison_task_stack_below((void *)(long)(ctx.sp ?: ctx.bp));
 	ctx.aux->bpf_exception_cb(cookie, ctx.sp + ctx.aux->stack_arg_sp_adjust, ctx.bp, 0, 0);
 	WARN(1, "A call to BPF exception callback should never return\n");
+}
+
+__bpf_kfunc void bpf_unwind_resume(void *ptr__ign)
+{
+	/*
+	 * Never reached: the verifier accepts this kfunc only as a frame
+	 * terminator and do_misc_fixups() lowers every one of them to
+	 * 'r0 = 0; exit', so no call to this body survives to run.
+	 */
+	WARN_ONCE(1, "exception cleanup resume was not lowered to a return\n");
 }
 
 __bpf_kfunc int bpf_wq_init(struct bpf_wq *wq, void *p__const_map, unsigned int flags)
