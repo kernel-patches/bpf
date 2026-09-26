@@ -1555,9 +1555,10 @@ static int record_stack_access_off(struct func_instance *instance, const struct 
  * 'arg' is FP-derived argument to helper/kfunc or load/store that
  * reads (positive) or writes (negative) 'access_bytes' into 'use' or 'def'.
  */
-static int record_stack_access(struct bpf_verifier_env *env, struct func_instance *instance,
-			       const struct arg_track *arg,
-			       s64 access_bytes, u32 frame, u32 insn_idx)
+static int record_precise(struct bpf_verifier_env *env,
+			  struct func_instance *instance,
+			  const struct arg_track *arg,
+			  s64 access_bytes, u32 frame, u32 insn_idx)
 {
 	int i, err;
 
@@ -1615,17 +1616,30 @@ static int record_imprecise(struct bpf_verifier_env *env, struct func_instance *
 	return 0;
 }
 
+static int record_stack_access(struct bpf_verifier_env *env,
+			       struct func_instance *instance,
+			       const struct arg_track *ptr,
+			       s64 access_bytes, u32 insn_idx)
+{
+	if (ptr->frame >= 0 && ptr->frame <= instance->depth)
+		return record_precise(env, instance, ptr, access_bytes, ptr->frame, insn_idx);
+	if (ptr->frame == ARG_IMPRECISE)
+		return record_imprecise(env, instance, access_bytes, ptr->mask, insn_idx);
+	/* ARG_NONE: not derived from any frame pointer, skip */
+	return 0;
+}
+
 /* Record load/store access for a given 'at' state of 'insn'. */
 static int record_load_store_access(struct bpf_verifier_env *env,
 				    struct func_instance *instance,
 				    struct arg_track *at, int insn_idx)
 {
 	struct bpf_insn *insn = &env->prog->insnsi[insn_idx];
-	int depth = instance->depth;
 	s32 sz = bpf_size_to_bytes(BPF_SIZE(insn->code));
 	u8 class = BPF_CLASS(insn->code);
 	struct arg_track resolved, *ptr;
-	int oi;
+	bool rmw = false; /* atomic read-modify-write: both read and write */
+	int oi, err;
 
 	/*
 	 * Stack arg insns use dst_reg/src_reg=BPF_REG_PARAMS(11). Since at[]
@@ -1643,12 +1657,20 @@ static int record_load_store_access(struct bpf_verifier_env *env,
 		break;
 	case BPF_STX:
 		if (BPF_MODE(insn->code) == BPF_ATOMIC) {
-			if (insn->imm == BPF_STORE_REL)
-				sz = -sz;
-			if (insn->imm == BPF_LOAD_ACQ)
+			switch (insn->imm) {
+			case BPF_LOAD_ACQ:
 				ptr = &at[insn->src_reg];
-			else
+				break;
+			case BPF_STORE_REL:
 				ptr = &at[insn->dst_reg];
+				sz = -sz;
+				break;
+			default:
+				/* ADD/AND/OR/XOR(+FETCH), XCHG, CMPXCHG */
+				ptr = &at[insn->dst_reg];
+				rmw = true;
+				break;
+			}
 		} else {
 			ptr = &at[insn->dst_reg];
 			sz = -sz;
@@ -1675,12 +1697,10 @@ static int record_load_store_access(struct bpf_verifier_env *env,
 		ptr = &resolved;
 	}
 
-	if (ptr->frame >= 0 && ptr->frame <= depth)
-		return record_stack_access(env, instance, ptr, sz, ptr->frame, insn_idx);
-	if (ptr->frame == ARG_IMPRECISE)
-		return record_imprecise(env, instance, sz, ptr->mask, insn_idx);
-	/* ARG_NONE: not derived from any frame pointer, skip */
-	return 0;
+	err = record_stack_access(env, instance, ptr, sz, insn_idx);
+	if (!err && rmw) /* also record the write half */
+		err = record_stack_access(env, instance, ptr, -sz, insn_idx);
+	return err;
 }
 
 static int record_arg_access(struct bpf_verifier_env *env,
@@ -1690,7 +1710,6 @@ static int record_arg_access(struct bpf_verifier_env *env,
 			     int insn_idx)
 {
 	int depth = instance->depth;
-	int frame = at->frame;
 	int err = 0;
 	s64 bytes;
 
@@ -1715,11 +1734,7 @@ static int record_arg_access(struct bpf_verifier_env *env,
 	if (bytes == 0)
 		return 0;
 
-	if (frame >= 0 && frame <= depth)
-		err = record_stack_access(env, instance, at, bytes, frame, insn_idx);
-	else if (frame == ARG_IMPRECISE)
-		err = record_imprecise(env, instance, bytes, at->mask, insn_idx);
-	return err;
+	return record_stack_access(env, instance, at, bytes, insn_idx);
 }
 
 /* Record stack access for a given 'at' state of helper/kfunc 'insn' */
