@@ -271,20 +271,15 @@ static void esp_output_restore_header(struct sk_buff *skb)
 static struct ip_esp_hdr *esp_output_set_extra(struct sk_buff *skb,
 					       struct xfrm_state *x,
 					       struct ip_esp_hdr *esph,
-					       struct esp_output_extra *extra)
+					       struct esp_output_extra *extra,
+					       __be64 seqno)
 {
 	/* For ESN we move the header forward by 4 bytes to
 	 * accommodate the high bits.  We will move it back after
 	 * encryption.
 	 */
 	if ((x->props.flags & XFRM_STATE_ESN)) {
-		__u32 seqhi;
-		struct xfrm_offload *xo = xfrm_offload(skb);
-
-		if (xo)
-			seqhi = xo->seq.hi;
-		else
-			seqhi = XFRM_SKB_CB(skb)->seq.output.hi;
+		__u32 seqhi = upper_32_bits(be64_to_cpu(seqno));
 
 		extra->esphoff = (unsigned char *)esph -
 				 skb_transport_header(skb);
@@ -543,7 +538,7 @@ int esp_output_tail(struct xfrm_state *x, struct sk_buff *skb, struct esp_info *
 	else
 		dsg = &sg[esp->nfrags];
 
-	esph = esp_output_set_extra(skb, x, esp->esph, extra);
+	esph = esp_output_set_extra(skb, x, esp->esph, extra, esp->seqno);
 	esp->esph = esph;
 
 	sg_init_table(sg, esp->nfrags);

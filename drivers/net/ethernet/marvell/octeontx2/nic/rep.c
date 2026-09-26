@@ -399,7 +399,12 @@ static void rvu_rep_get_stats64(struct net_device *dev,
 
 static int rvu_eswitch_config(struct otx2_nic *priv, u8 ena)
 {
+	struct devlink_port_attrs attrs = {};
 	struct esw_cfg_req *req;
+
+	rvu_rep_devlink_set_switch_id(priv, &attrs.switch_id);
+	if (attrs.switch_id.id_len > MAX_PHYS_ITEM_ID_LEN)
+		return -EINVAL;
 
 	mutex_lock(&priv->mbox.lock);
 	req = otx2_mbox_alloc_msg_esw_cfg(&priv->mbox);
@@ -408,6 +413,8 @@ static int rvu_eswitch_config(struct otx2_nic *priv, u8 ena)
 		return -ENOMEM;
 	}
 	req->ena = ena;
+	req->switch_id_len = attrs.switch_id.id_len;
+	memcpy(req->switch_id, attrs.switch_id.id, req->switch_id_len);
 	otx2_sync_mbox_msg(&priv->mbox);
 	mutex_unlock(&priv->mbox.lock);
 	return 0;
@@ -645,6 +652,41 @@ void rvu_rep_destroy(struct otx2_nic *priv)
 	rvu_rep_rsrc_free(priv);
 }
 
+static int rvu_get_rep_cnt(struct otx2_nic *priv)
+{
+	struct get_rep_cnt_rsp *rsp;
+	struct mbox_msghdr *msghdr;
+	struct msg_req *req;
+	int err, rep;
+
+	mutex_lock(&priv->mbox.lock);
+	req = otx2_mbox_alloc_msg_get_rep_cnt(&priv->mbox);
+	if (!req) {
+		mutex_unlock(&priv->mbox.lock);
+		return -ENOMEM;
+	}
+	err = otx2_sync_mbox_msg(&priv->mbox);
+	if (err)
+		goto exit;
+
+	msghdr = otx2_mbox_get_rsp(&priv->mbox.mbox, 0, &req->hdr);
+	if (IS_ERR(msghdr)) {
+		err = PTR_ERR(msghdr);
+		goto exit;
+	}
+
+	rsp = (struct get_rep_cnt_rsp *)msghdr;
+	priv->hw.tx_queues = rsp->rep_cnt;
+	priv->hw.rx_queues = rsp->rep_cnt;
+	priv->rep_cnt = rsp->rep_cnt;
+	for (rep = 0; rep < priv->rep_cnt; rep++)
+		priv->rep_pf_map[rep] = rsp->rep_pf_map[rep];
+
+exit:
+	mutex_unlock(&priv->mbox.lock);
+	return err;
+}
+
 int rvu_rep_create(struct otx2_nic *priv, struct netlink_ext_ack *extack)
 {
 	int rep_cnt = priv->rep_cnt;
@@ -652,6 +694,10 @@ int rvu_rep_create(struct otx2_nic *priv, struct netlink_ext_ack *extack)
 	struct rep_dev *rep;
 	int rep_id, err;
 	u16 pcifunc;
+
+	err = rvu_get_rep_cnt(priv);
+	if (err)
+		return err;
 
 	err = rvu_rep_rsrc_init(priv);
 	if (err)
@@ -727,41 +773,6 @@ exit:
 	}
 	kfree(priv->reps);
 	rvu_rep_rsrc_free(priv);
-	return err;
-}
-
-static int rvu_get_rep_cnt(struct otx2_nic *priv)
-{
-	struct get_rep_cnt_rsp *rsp;
-	struct mbox_msghdr *msghdr;
-	struct msg_req *req;
-	int err, rep;
-
-	mutex_lock(&priv->mbox.lock);
-	req = otx2_mbox_alloc_msg_get_rep_cnt(&priv->mbox);
-	if (!req) {
-		mutex_unlock(&priv->mbox.lock);
-		return -ENOMEM;
-	}
-	err = otx2_sync_mbox_msg(&priv->mbox);
-	if (err)
-		goto exit;
-
-	msghdr = otx2_mbox_get_rsp(&priv->mbox.mbox, 0, &req->hdr);
-	if (IS_ERR(msghdr)) {
-		err = PTR_ERR(msghdr);
-		goto exit;
-	}
-
-	rsp = (struct get_rep_cnt_rsp *)msghdr;
-	priv->hw.tx_queues = rsp->rep_cnt;
-	priv->hw.rx_queues = rsp->rep_cnt;
-	priv->rep_cnt = rsp->rep_cnt;
-	for (rep = 0; rep < priv->rep_cnt; rep++)
-		priv->rep_pf_map[rep] = rsp->rep_pf_map[rep];
-
-exit:
-	mutex_unlock(&priv->mbox.lock);
 	return err;
 }
 

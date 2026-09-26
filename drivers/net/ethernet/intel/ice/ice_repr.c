@@ -305,6 +305,7 @@ ice_repr_reg_netdev(struct net_device *netdev, const struct net_device_ops *ops)
 	eth_hw_addr_random(netdev);
 	netdev->netdev_ops = ops;
 	ice_set_ethtool_repr_ops(netdev);
+	netdev->priv_flags &= ~IFF_TX_SKB_SHARING;
 
 	netdev->hw_features |= NETIF_F_HW_TC;
 

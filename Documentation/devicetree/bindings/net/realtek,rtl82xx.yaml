@@ -27,6 +27,9 @@ properties:
       - ethernet-phy-id001c.c862
       - ethernet-phy-id001c.c878
       - ethernet-phy-id001c.c880
+      - ethernet-phy-id001c.c898
+      - ethernet-phy-id001c.c899
+      - ethernet-phy-id001c.c89a
       - ethernet-phy-id001c.c910
       - ethernet-phy-id001c.c912
       - ethernet-phy-id001c.c913
@@ -74,15 +77,35 @@ unevaluatedProperties: false
 
 allOf:
   - $ref: ethernet-phy.yaml#
+  - $ref: /schemas/phy/phy-common-props.yaml#
   - if:
       not:
         properties:
           compatible:
             contains:
-              const: ethernet-phy-id001c.c916
+              enum:
+                - ethernet-phy-id001c.c898
+                - ethernet-phy-id001c.c899
+                - ethernet-phy-id001c.c89a
+                - ethernet-phy-id001c.c916
     then:
       properties:
         leds: false
+  - if:
+      not:
+        properties:
+          compatible:
+            contains:
+              enum:
+                - ethernet-phy-id001c.c898
+                - ethernet-phy-id001c.c899
+                - ethernet-phy-id001c.c89a
+    then:
+      properties:
+        rx-polarity: false
+        rx-polarity-names: false
+        tx-polarity: false
+        tx-polarity-names: false
 
 examples:
   - |
@@ -91,8 +114,35 @@ examples:
         #size-cells = <0>;
 
         ethphy1: ethernet-phy@1 {
-                reg = <1>;
-                realtek,clkout-disable;
-                realtek,aldps-enable;
+            reg = <1>;
+            realtek,clkout-disable;
+            realtek,aldps-enable;
+        };
+    };
+
+  - |
+    #include <dt-bindings/leds/common.h>
+    #include <dt-bindings/phy/phy.h>
+
+    mdio {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        ethernet-phy@0 {
+            compatible = "ethernet-phy-id001c.c899";
+            reg = <0>;
+            tx-polarity = <PHY_POL_INVERT>;
+            rx-polarity = <PHY_POL_INVERT>;
+
+            leds {
+                #address-cells = <1>;
+                #size-cells = <0>;
+
+                led@3 {
+                    reg = <3>;
+                    color = <LED_COLOR_ID_GREEN>;
+                    function = LED_FUNCTION_LAN;
+                };
+            };
         };
     };

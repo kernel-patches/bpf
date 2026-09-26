@@ -55,6 +55,13 @@
 #ifndef TCP_ULP
 #define TCP_ULP 31
 #endif
+/* linux/mroute.h does not coexist with netinet/in.h here. */
+#ifndef MRT_VERSION
+#define MRT_VERSION 206
+#endif
+#ifndef MRT6_VERSION
+#define MRT6_VERSION 206
+#endif
 
 /* ---------- netlink ---------- */
 
@@ -490,6 +497,301 @@ TEST_F(rawv6, bad_optname)
 	ASSERT_EQ(-1, getsockopt(self->fd, SOL_RAW, 0x7fff, &val, &optlen));
 	ASSERT_EQ(ENOPROTOOPT, errno);
 	ASSERT_EQ(sizeof(val), optlen);
+}
+
+/* ---------- ip (SOL_IP) ---------- */
+
+FIXTURE(ip)
+{
+	int fd;
+};
+
+FIXTURE_SETUP(ip)
+{
+	/* a router alert option, so IP_OPTIONS has something to answer with */
+	static const unsigned char ipopts[4] = { 0x94, 0x04, 0x00, 0x00 };
+	int ttl = 42;
+
+	self->fd = socket(AF_INET, SOCK_DGRAM, 0);
+	if (self->fd < 0)
+		SKIP(return, "AF_INET dgram socket: %s", strerror(errno));
+
+	if (setsockopt(self->fd, SOL_IP, IP_TTL, &ttl, sizeof(ttl)) < 0)
+		SKIP(return, "set IP_TTL: %s", strerror(errno));
+
+	if (setsockopt(self->fd, SOL_IP, IP_OPTIONS, ipopts,
+		       sizeof(ipopts)) < 0)
+		SKIP(return, "set IP_OPTIONS: %s", strerror(errno));
+}
+
+FIXTURE_TEARDOWN(ip)
+{
+	if (self->fd >= 0)
+		close(self->fd);
+}
+
+TEST_F(ip, ttl_exact)
+{
+	socklen_t optlen = sizeof(int);
+	int val = 0;
+
+	ASSERT_EQ(0, getsockopt(self->fd, SOL_IP, IP_TTL, &val, &optlen));
+	ASSERT_EQ(sizeof(int), optlen);
+	ASSERT_EQ(42, val);
+}
+
+TEST_F(ip, ttl_oversize_clamped)
+{
+	socklen_t optlen = 64;
+	char buf[64] = {};
+
+	ASSERT_EQ(0, getsockopt(self->fd, SOL_IP, IP_TTL, buf, &optlen));
+	ASSERT_EQ(sizeof(int), optlen);
+}
+
+/* SOL_IP answers a sub-int buffer with a single byte when the value fits
+ * in one, rather than clamping the int down.
+ */
+TEST_F(ip, ttl_single_byte)
+{
+	unsigned char buf[3] = {};
+	socklen_t optlen = sizeof(buf);
+
+	ASSERT_EQ(0, getsockopt(self->fd, SOL_IP, IP_TTL, buf, &optlen));
+	ASSERT_EQ(1, optlen);
+	ASSERT_EQ(42, buf[0]);
+}
+
+TEST_F(ip, ttl_zero_len)
+{
+	socklen_t optlen = 0;
+	int val;
+
+	ASSERT_EQ(0, getsockopt(self->fd, SOL_IP, IP_TTL, &val, &optlen));
+	ASSERT_EQ(0, optlen);
+}
+
+TEST_F(ip, negative_optlen)
+{
+	socklen_t optlen = (socklen_t)-1;
+	int val;
+
+	ASSERT_EQ(-1, getsockopt(self->fd, SOL_IP, IP_TTL, &val, &optlen));
+	ASSERT_EQ(EINVAL, errno);
+}
+
+TEST_F(ip, options_roundtrip)
+{
+	unsigned char buf[40] = {};
+	socklen_t optlen = sizeof(buf);
+
+	ASSERT_EQ(0, getsockopt(self->fd, SOL_IP, IP_OPTIONS, buf, &optlen));
+	ASSERT_EQ(4, optlen);
+	ASSERT_EQ(0x94, buf[0]);
+}
+
+TEST_F(ip, options_undersize_clamped)
+{
+	unsigned char buf[2] = {};
+	socklen_t optlen = sizeof(buf);
+
+	ASSERT_EQ(0, getsockopt(self->fd, SOL_IP, IP_OPTIONS, buf, &optlen));
+	ASSERT_EQ(sizeof(buf), optlen);
+}
+
+/* With no option set the reply is empty and the call still succeeds. */
+TEST_F(ip, options_absent)
+{
+	unsigned char buf[40] = {};
+	socklen_t optlen = sizeof(buf);
+	int fd;
+
+	fd = socket(AF_INET, SOCK_DGRAM, 0);
+	if (fd < 0)
+		SKIP(return, "AF_INET dgram socket: %s", strerror(errno));
+
+	ASSERT_EQ(0, getsockopt(fd, SOL_IP, IP_OPTIONS, buf, &optlen));
+	ASSERT_EQ(0, optlen);
+	close(fd);
+}
+
+TEST_F(ip, multicast_if_oversize_clamped)
+{
+	socklen_t optlen = 64;
+	char buf[64] = {};
+
+	ASSERT_EQ(0, getsockopt(self->fd, SOL_IP, IP_MULTICAST_IF, buf,
+				&optlen));
+	ASSERT_EQ(sizeof(struct in_addr), optlen);
+}
+
+/* IP_PKTOPTIONS only answers on a stream socket. */
+TEST_F(ip, pktoptions_wrong_type)
+{
+	socklen_t optlen = 64;
+	char buf[64];
+
+	ASSERT_EQ(-1, getsockopt(self->fd, SOL_IP, IP_PKTOPTIONS, buf,
+				 &optlen));
+	ASSERT_EQ(ENOPROTOOPT, errno);
+}
+
+/* The MRT_* options are dispatched ahead of the rest of the switch and
+ * want a raw IGMP socket. Without CONFIG_IP_MROUTE they are not
+ * dispatched at all and the switch answers ENOPROTOOPT instead.
+ */
+TEST_F(ip, mroute_wrong_type)
+{
+	socklen_t optlen = sizeof(int);
+	int val;
+
+	ASSERT_EQ(-1, getsockopt(self->fd, SOL_IP, MRT_VERSION, &val,
+				 &optlen));
+	if (errno == ENOPROTOOPT)
+		SKIP(return, "CONFIG_IP_MROUTE disabled");
+	ASSERT_EQ(EOPNOTSUPP, errno);
+}
+
+TEST_F(ip, bad_optname)
+{
+	socklen_t optlen = sizeof(int);
+	int val;
+
+	ASSERT_EQ(-1, getsockopt(self->fd, SOL_IP, 0x7fff, &val, &optlen));
+	ASSERT_EQ(ENOPROTOOPT, errno);
+	ASSERT_EQ(sizeof(int), optlen);
+}
+
+/* ---------- ipv6 (SOL_IPV6) ---------- */
+
+FIXTURE(ipv6)
+{
+	int fd;
+};
+
+FIXTURE_SETUP(ipv6)
+{
+	/* an 8 byte hop-by-hop header, so the sticky options answer */
+	static const unsigned char hopopt[8] = { 0, 0, 1, 4, 0, 0, 0, 0 };
+	int hops = 42;
+
+	self->fd = socket(AF_INET6, SOCK_DGRAM, 0);
+	if (self->fd < 0)
+		SKIP(return, "AF_INET6 dgram socket: %s", strerror(errno));
+
+	if (setsockopt(self->fd, SOL_IPV6, IPV6_UNICAST_HOPS, &hops,
+		       sizeof(hops)) < 0)
+		SKIP(return, "set IPV6_UNICAST_HOPS: %s", strerror(errno));
+
+	if (setsockopt(self->fd, SOL_IPV6, IPV6_HOPOPTS, hopopt,
+		       sizeof(hopopt)) < 0)
+		SKIP(return, "set IPV6_HOPOPTS: %s", strerror(errno));
+}
+
+FIXTURE_TEARDOWN(ipv6)
+{
+	if (self->fd >= 0)
+		close(self->fd);
+}
+
+TEST_F(ipv6, hops_exact)
+{
+	socklen_t optlen = sizeof(int);
+	int val = 0;
+
+	ASSERT_EQ(0, getsockopt(self->fd, SOL_IPV6, IPV6_UNICAST_HOPS, &val,
+				&optlen));
+	ASSERT_EQ(sizeof(int), optlen);
+	ASSERT_EQ(42, val);
+}
+
+TEST_F(ipv6, hops_oversize_clamped)
+{
+	socklen_t optlen = 64;
+	char buf[64] = {};
+
+	ASSERT_EQ(0, getsockopt(self->fd, SOL_IPV6, IPV6_UNICAST_HOPS, buf,
+				&optlen));
+	ASSERT_EQ(sizeof(int), optlen);
+}
+
+TEST_F(ipv6, hopopts_roundtrip)
+{
+	unsigned char buf[64] = {};
+	socklen_t optlen = sizeof(buf);
+
+	ASSERT_EQ(0, getsockopt(self->fd, SOL_IPV6, IPV6_HOPOPTS, buf,
+				&optlen));
+	ASSERT_EQ(8, optlen);
+}
+
+TEST_F(ipv6, hopopts_undersize_clamped)
+{
+	unsigned char buf[4] = {};
+	socklen_t optlen = sizeof(buf);
+
+	ASSERT_EQ(0, getsockopt(self->fd, SOL_IPV6, IPV6_HOPOPTS, buf,
+				&optlen));
+	ASSERT_EQ(sizeof(buf), optlen);
+}
+
+/* With no header set the reply is empty and the call still succeeds. */
+TEST_F(ipv6, hopopts_absent)
+{
+	unsigned char buf[64] = {};
+	socklen_t optlen = sizeof(buf);
+	int fd;
+
+	fd = socket(AF_INET6, SOCK_DGRAM, 0);
+	if (fd < 0)
+		SKIP(return, "AF_INET6 dgram socket: %s", strerror(errno));
+
+	ASSERT_EQ(0, getsockopt(fd, SOL_IPV6, IPV6_HOPOPTS, buf, &optlen));
+	ASSERT_EQ(0, optlen);
+	close(fd);
+}
+
+/* IPV6_PATHMTU wants room for the whole struct ip6_mtuinfo. */
+TEST_F(ipv6, pathmtu_undersize)
+{
+	socklen_t optlen = 8;
+	char buf[8];
+
+	ASSERT_EQ(-1, getsockopt(self->fd, SOL_IPV6, IPV6_PATHMTU, buf,
+				 &optlen));
+	ASSERT_EQ(EINVAL, errno);
+}
+
+TEST_F(ipv6, pktoptions_wrong_type)
+{
+	socklen_t optlen = 64;
+	char buf[64];
+
+	ASSERT_EQ(-1, getsockopt(self->fd, SOL_IPV6, IPV6_2292PKTOPTIONS, buf,
+				 &optlen));
+	ASSERT_EQ(ENOPROTOOPT, errno);
+}
+
+TEST_F(ipv6, mroute_wrong_type)
+{
+	socklen_t optlen = sizeof(int);
+	int val;
+
+	ASSERT_EQ(-1, getsockopt(self->fd, SOL_IPV6, MRT6_VERSION, &val,
+				 &optlen));
+	if (errno == ENOPROTOOPT)
+		SKIP(return, "CONFIG_IPV6_MROUTE disabled");
+	ASSERT_EQ(EOPNOTSUPP, errno);
+}
+
+TEST_F(ipv6, bad_optname)
+{
+	socklen_t optlen = sizeof(int);
+	int val;
+
+	ASSERT_EQ(-1, getsockopt(self->fd, SOL_IPV6, 0x7fff, &val, &optlen));
+	ASSERT_EQ(ENOPROTOOPT, errno);
+	ASSERT_EQ(sizeof(int), optlen);
 }
 
 /* ---------- tls ---------- */

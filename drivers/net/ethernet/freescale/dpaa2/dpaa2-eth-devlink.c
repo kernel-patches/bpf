@@ -213,14 +213,47 @@ void dpaa2_eth_dl_unregister(struct dpaa2_eth_priv *priv)
 	devlink_unregister(priv->devlink);
 }
 
+static u32 dpaa2_eth_dl_port_number(struct dpaa2_eth_priv *priv)
+{
+	u32 port_number = 0;
+
+	mutex_lock(&priv->mac_lock);
+	if (priv->mac)
+		port_number = priv->mac->mc_dev->obj_desc.id;
+	mutex_unlock(&priv->mac_lock);
+
+	return port_number;
+}
+
 int dpaa2_eth_dl_port_add(struct dpaa2_eth_priv *priv)
 {
 	struct devlink_port *devlink_port = &priv->devlink_port;
 	struct devlink_port_attrs attrs = {};
 
-	attrs.flavour = DEVLINK_PORT_FLAVOUR_PHYSICAL;
+	attrs.phys.port_number = dpaa2_eth_dl_port_number(priv);
+	if (attrs.phys.port_number)
+		attrs.flavour = DEVLINK_PORT_FLAVOUR_PHYSICAL;
+	else
+		attrs.flavour = DEVLINK_PORT_FLAVOUR_VIRTUAL;
 	devlink_port_attrs_set(devlink_port, &attrs);
 	return devlink_port_register(priv->devlink, devlink_port, 0);
+}
+
+void dpaa2_eth_dl_port_check(struct dpaa2_eth_priv *priv)
+{
+	const struct devlink_port_attrs *attrs = &priv->devlink_port.attrs;
+	u32 current_number = dpaa2_eth_dl_port_number(priv);
+	u32 registered = 0;
+
+	if (attrs->flavour == DEVLINK_PORT_FLAVOUR_PHYSICAL)
+		registered = attrs->phys.port_number;
+
+	if (registered == current_number)
+		return;
+
+	netdev_warn(priv->net_dev,
+		    "devlink port number %u is stale, the DPMAC endpoint is now %u (0: none); rebind the DPNI to update it\n",
+		    registered, current_number);
 }
 
 void dpaa2_eth_dl_port_del(struct dpaa2_eth_priv *priv)

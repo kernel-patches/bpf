@@ -13,8 +13,6 @@ description:
   This binding describes the Altera SOCFPGA SoC implementation of the
   Synopsys DWMAC for the Cyclone5, Arria5, Stratix10, Agilex5 and Agilex7
   families of chips.
-  # TODO: Determine how to handle the Arria10 reset-name, stmmaceth-ocp, that
-  # does not validate against net/snps,dwmac.yaml.
 
 select:
   properties:
@@ -24,6 +22,7 @@ select:
           - altr,socfpga-stmmac
           - altr,socfpga-stmmac-a10-s10
           - altr,socfpga-stmmac-agilex5
+          - altr,socfpga-stmmac-agilex5-tsn
 
   required:
     - compatible
@@ -44,7 +43,9 @@ properties:
           - const: snps,dwmac-3.74a
           - const: snps,dwmac
       - items:
-          - const: altr,socfpga-stmmac-agilex5
+          - enum:
+              - altr,socfpga-stmmac-agilex5
+              - altr,socfpga-stmmac-agilex5-tsn
           - const: snps,dwxgmac-2.10
 
   clocks:
@@ -157,6 +158,9 @@ properties:
           - description: phandle to the system manager node
           - description: offset of the control register
           - description: shift within the control register
+
+  power-domains:
+    maxItems: 1
 
 patternProperties:
   "^mdio[0-9]$":

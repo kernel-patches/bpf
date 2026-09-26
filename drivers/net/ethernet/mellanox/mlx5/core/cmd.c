@@ -185,6 +185,10 @@ static void cmd_free_index(struct mlx5_cmd *cmd, int idx)
 	set_bit(idx, &cmd->vars.bitmask);
 }
 
+static void free_msg(struct mlx5_core_dev *dev, struct mlx5_cmd_msg *msg);
+static void mlx5_free_cmd_msg(struct mlx5_core_dev *dev,
+			      struct mlx5_cmd_msg *msg);
+
 static void cmd_ent_get(struct mlx5_cmd_work_ent *ent)
 {
 	refcount_inc(&ent->refcnt);
@@ -193,7 +197,10 @@ static void cmd_ent_get(struct mlx5_cmd_work_ent *ent)
 static void cmd_ent_put(struct mlx5_cmd_work_ent *ent)
 {
 	struct mlx5_cmd *cmd = ent->cmd;
+	struct mlx5_core_dev *dev;
 	unsigned long flags;
+
+	dev = container_of(cmd, struct mlx5_core_dev, cmd);
 
 	spin_lock_irqsave(&cmd->alloc_lock, flags);
 	if (!refcount_dec_and_test(&ent->refcnt)) {
@@ -206,6 +213,11 @@ static void cmd_ent_put(struct mlx5_cmd_work_ent *ent)
 		up(ent->page_queue ? &cmd->vars.pages_sem : &cmd->vars.sem);
 	}
 	spin_unlock_irqrestore(&cmd->alloc_lock, flags);
+
+	if (ent->own_msgs) {
+		mlx5_free_cmd_msg(dev, ent->out);
+		free_msg(dev, ent->in);
+	}
 
 	cmd_free_ent(ent);
 }
@@ -958,10 +970,6 @@ out:
 	cmd_ent_put(ent); /* for the cmd_ent_get() took on schedule delayed work */
 }
 
-static void free_msg(struct mlx5_core_dev *dev, struct mlx5_cmd_msg *msg);
-static void mlx5_free_cmd_msg(struct mlx5_core_dev *dev,
-			      struct mlx5_cmd_msg *msg);
-
 static bool opcode_allowed(struct mlx5_cmd *cmd, u16 opcode)
 {
 	if (cmd->allowed_opcode == CMD_ALLOWED_OPCODE_ALL)
@@ -1313,7 +1321,12 @@ static int mlx5_cmd_invoke(struct mlx5_core_dev *dev, struct mlx5_cmd_msg *in,
 		return 0; /* mlx5_cmd_comp_handler() will put(ent) */
 
 	err = wait_func(dev, ent);
-	if (err == -ETIMEDOUT || err == -ECANCELED || err == -EBUSY)
+	if (err == -ETIMEDOUT) {
+		/* firmware may still DMA into the mailboxes; keep them */
+		ent->own_msgs = true;
+		goto out_free;
+	}
+	if (err == -ECANCELED || err == -EBUSY)
 		goto out_free;
 
 	ds = ent->ts2 - ent->ts1;
@@ -1816,8 +1829,10 @@ static void mlx5_cmd_comp_handler(struct mlx5_core_dev *dev, u64 vec, bool force
 								 ent->out,
 								 ent->uout_size);
 
-				mlx5_free_cmd_msg(dev, ent->out);
-				free_msg(dev, ent->in);
+				/* firmware may still DMA into the mailboxes;
+				 * keep them
+				 */
+				ent->own_msgs = true;
 
 				/* final consumer is done, release ent */
 				cmd_ent_put(ent);
@@ -2011,6 +2026,9 @@ static int cmd_exec(struct mlx5_core_dev *dev, void *in, int in_size, void *out,
 			      pages_queue, token, force_polling);
 	if (callback && !err)
 		return 0;
+
+	if (err == -ETIMEDOUT) /* the command entry owns the mailboxes now */
+		goto out_up;
 
 	if (err > 0) /* Failed in FW, command didn't execute */
 		err = deliv_status_to_err(err);

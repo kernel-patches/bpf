@@ -228,12 +228,6 @@ enum gdma_page_type {
 
 #define GDMA_INVALID_DMA_REGION 0
 
-struct mana_serv_work {
-	struct work_struct serv_work;
-	struct pci_dev *pdev;
-	enum gdma_eqe_type type;
-};
-
 struct gdma_mem_info {
 	struct device *dev;
 
@@ -417,11 +411,6 @@ struct gdma_irq_context {
 	bool dyn_msix;
 };
 
-enum gdma_context_flags {
-	GC_PROBE_SUCCEEDED	= 0,
-	GC_IN_SERVICE		= 1,
-};
-
 struct gdma_context {
 	struct device		*dev;
 	struct dentry		*mana_pci_debugfs;
@@ -479,7 +468,21 @@ struct gdma_context {
 
 	struct workqueue_struct *service_wq;
 
-	unsigned long		flags;
+	/* The in-flight MANA service cycle, queued on the system workqueue:
+	 * a reset cycle destroys and re-creates @service_wq.
+	 */
+	struct work_struct	serv_work;
+	enum gdma_eqe_type	serv_type;
+
+	/* Service-cycle admission/retirement; taken irqsave (the EQ
+	 * event path is hard IRQ) and never held across a sleep.
+	 */
+	spinlock_t		serv_lock;
+	wait_queue_head_t	serv_waitq;
+	bool			serv_in_flight;
+	bool			serv_removing;
+	bool			serv_during_probe;
+	bool			serv_probe_done;
 
 	/* Protect access to GIC context */
 	struct mutex		gic_mutex;
@@ -528,6 +531,8 @@ ssize_t mana_gd_read_ring(struct gdma_queue *q, char __user *buf,
 			  size_t count, loff_t *pos);
 
 int mana_schedule_serv_work(struct gdma_context *gc, enum gdma_eqe_type type);
+bool mana_service_active(struct gdma_context *gc);
+bool mana_service_probe_done(struct gdma_context *gc);
 
 void mana_gd_ring_dim(struct gdma_queue *cq, u32 mod_usec, bool mod_usec_vld,
 		      u32 mod_comps, bool mod_comps_vld);

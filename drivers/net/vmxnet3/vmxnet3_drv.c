@@ -53,6 +53,9 @@ static int enable_mq = 1;
 static void
 vmxnet3_write_mac_addr(struct vmxnet3_adapter *adapter, const u8 *mac);
 
+static void
+vmxnet3_free_irqs(struct vmxnet3_adapter *adapter);
+
 /*
  *    Enable/Disable the given intr
  */
@@ -2585,8 +2588,11 @@ vmxnet3_request_irqs(struct vmxnet3_adapter *adapter)
 					"Failed to request irq for MSIX, %s, "
 					"error %d\n",
 					adapter->tx_queue[i].name, err);
+				vmxnet3_free_irqs(adapter);
 				return err;
 			}
+			if (adapter->share_intr != VMXNET3_INTR_BUDDYSHARE)
+				intr->irq_requested[vector] = true;
 
 			/* Handle the case where only 1 MSIx was allocated for
 			 * all tx queues */
@@ -2620,8 +2626,10 @@ vmxnet3_request_irqs(struct vmxnet3_adapter *adapter)
 					   "Failed to request irq for MSIX, "
 					   "%s, error %d\n",
 					   adapter->rx_queue[i].name, err);
+				vmxnet3_free_irqs(adapter);
 				return err;
 			}
+			intr->irq_requested[vector] = true;
 
 			adapter->rx_queue[i].comp_ring.intr_idx = vector++;
 		}
@@ -2631,6 +2639,8 @@ vmxnet3_request_irqs(struct vmxnet3_adapter *adapter)
 		err = request_irq(intr->msix_entries[vector].vector,
 				  vmxnet3_msix_event, 0,
 				  intr->event_msi_vector_name, adapter->netdev);
+		if (!err)
+			intr->irq_requested[vector] = true;
 		intr->event_intr_idx = vector;
 
 	} else if (intr->type == VMXNET3_IT_MSI) {
@@ -2646,11 +2656,14 @@ vmxnet3_request_irqs(struct vmxnet3_adapter *adapter)
 #ifdef CONFIG_PCI_MSI
 	}
 #endif
+	if (intr->type != VMXNET3_IT_MSIX && !err)
+		intr->irq_requested[0] = true;
 	intr->num_intrs = vector + 1;
 	if (err) {
 		netdev_err(adapter->netdev,
 			   "Failed to request irq (intr type:%d), error %d\n",
 			   intr->type, err);
+		vmxnet3_free_irqs(adapter);
 	} else {
 		/* Number of rx queues will not change after this */
 		for (i = 0; i < adapter->num_rx_queues; i++) {
@@ -2693,29 +2706,38 @@ vmxnet3_free_irqs(struct vmxnet3_adapter *adapter)
 
 		if (adapter->share_intr != VMXNET3_INTR_BUDDYSHARE) {
 			for (i = 0; i < adapter->num_tx_queues; i++) {
-				free_irq(intr->msix_entries[vector++].vector,
-					 &(adapter->tx_queue[i]));
+				if (intr->irq_requested[vector])
+					free_irq(intr->msix_entries[vector].vector,
+						 &adapter->tx_queue[i]);
+				intr->irq_requested[vector++] = false;
 				if (adapter->share_intr == VMXNET3_INTR_TXSHARE)
 					break;
 			}
 		}
 
 		for (i = 0; i < adapter->num_rx_queues; i++) {
-			free_irq(intr->msix_entries[vector++].vector,
-				 &(adapter->rx_queue[i]));
+			if (intr->irq_requested[vector])
+				free_irq(intr->msix_entries[vector].vector,
+					 &adapter->rx_queue[i]);
+			intr->irq_requested[vector++] = false;
 		}
 
-		free_irq(intr->msix_entries[vector].vector,
-			 adapter->netdev);
+		if (intr->irq_requested[vector])
+			free_irq(intr->msix_entries[vector].vector, adapter->netdev);
+		intr->irq_requested[vector] = false;
 		BUG_ON(vector >= intr->num_intrs);
 		break;
 	}
 #endif
 	case VMXNET3_IT_MSI:
-		free_irq(adapter->pdev->irq, adapter->netdev);
+		if (intr->irq_requested[0])
+			free_irq(adapter->pdev->irq, adapter->netdev);
+		intr->irq_requested[0] = false;
 		break;
 	case VMXNET3_IT_INTX:
-		free_irq(adapter->pdev->irq, adapter->netdev);
+		if (intr->irq_requested[0])
+			free_irq(adapter->pdev->irq, adapter->netdev);
+		intr->irq_requested[0] = false;
 		break;
 	default:
 		BUG();

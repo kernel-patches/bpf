@@ -132,6 +132,19 @@ numbers in a way that deletes a prefix of the PSP protected part of
 the TCP stream. If userspace cares to mitigate this type of attack, a
 special "start of PSP" message should be exchanged after ``tx-assoc``.
 
+Upgrade to PSP must be done on established TCP connections.
+``rx-assoc`` and ``tx-assoc`` will return ``-ENOTCONN`` if
+``sk_state`` is not ``TCP_ESTABLISHED``.
+
+Disconnecting a socket with PSP assoc state (``connect()`` with a
+family of ``AF_UNSPEC``) will succeed, but should be considered
+unsupported. Disconnect does not reset the PSP assoc state of a
+socket to avoid potential for clear text leak. Disconnect on a socket
+after ``rx-assoc`` will leave a socket that can be reconnected, but
+with potentially stale PSP assoc state present and a reduced MSS.
+Disconnect after ``tx-assoc`` will likely result in a dead socket, as
+the subsequent ``connect()`` will send a PSP encapsulated SYN.
+
 Rotation notifications
 ----------------------
 

@@ -215,6 +215,12 @@ properties:
       used. The absence of this property indicates the muxers
       should be configured so that the external PHY is used.
 
+  needs-host-firmware:
+    $ref: /schemas/types.yaml#/definitions/flag
+    description:
+      This PHY runs firmware that the host must load before it can be
+      driven, and is not usable until then.
+
   resets:
     maxItems: 1
 
@@ -268,6 +274,22 @@ properties:
       supported by the builtin resistors of the PHY, otherwise the resistors may
       have to be placed on board. When omitted, the PHYs default will be left as
       is.
+
+  marvell,reg-init:
+    $ref: /schemas/types.yaml#/definitions/uint32-matrix
+    deprecated: true
+    description:
+      Register initialization tuples for Marvell PHYs.
+    items:
+      items:
+        - description: register page
+          maximum: 0xffff
+        - description: register number
+          maximum: 31
+        - description: mask of bits to preserve
+          maximum: 0xffff
+        - description: value to apply
+          maximum: 0xffff
 
   leds:
     type: object

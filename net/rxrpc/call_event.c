@@ -440,6 +440,19 @@ bool rxrpc_input_call_event(struct rxrpc_call *call)
 				       rxrpc_propose_ack_input_data);
 	}
 
+	/* Need to rearm the RTO timer if we don't start the TLP-PTO
+	 * timer [RFC8985 7.3].
+	 */
+	if (call->rack_timer_mode == RXRPC_CALL_RACKTIMER_OFF &&
+	    rxrpc_tx_in_flight(call) > 0) {
+		ktime_t rto = rxrpc_get_rto_backoff(call, true);
+
+		call->rack_timer_mode = RXRPC_CALL_RACKTIMER_RTO;
+		call->rack_timo_at = ktime_add(ktime_get_real(), rto);
+		trace_rxrpc_rack_timer(call, rto, false);
+		trace_rxrpc_timer_set(call, rto, rxrpc_timer_trace_rack_rto);
+	}
+
 	/* Make sure the timer is restarted */
 	if (!__rxrpc_call_is_complete(call)) {
 		ktime_t next = READ_ONCE(call->expect_term_by), delay;

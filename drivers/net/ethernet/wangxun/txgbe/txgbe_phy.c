@@ -182,7 +182,8 @@ static void txgbe_mac_link_down(struct phylink_config *config,
 {
 	struct wx *wx = phylink_to_wx(config);
 
-	wr32m(wx, WX_MAC_TX_CFG, WX_MAC_TX_CFG_TE, 0);
+	if (!((wx->subsystem_device_id & WX_NCSI_MASK) == WX_NCSI_SUP))
+		wr32m(wx, WX_MAC_TX_CFG, WX_MAC_TX_CFG_TE, 0);
 
 	wx->speed = SPEED_UNKNOWN;
 	if (test_bit(WX_STATE_PTP_RUNNING, wx->state))
@@ -434,7 +435,7 @@ static int txgbe_clock_register(struct txgbe *txgbe)
 
 	clock = clkdev_create(clk, NULL, "%s", clk_name);
 	if (!clock) {
-		clk_unregister(clk);
+		clk_unregister_fixed_rate(clk);
 		return -ENOMEM;
 	}
 
@@ -637,7 +638,7 @@ err_unregister_i2c:
 	platform_device_unregister(txgbe->i2c_dev);
 err_unregister_clk:
 	clkdev_drop(txgbe->clock);
-	clk_unregister(txgbe->clk);
+	clk_unregister_fixed_rate(txgbe->clk);
 err_destroy_phylink:
 	phylink_destroy(wx->phylink);
 err_destroy_xpcs:
@@ -671,7 +672,7 @@ void txgbe_remove_phy(struct txgbe *txgbe)
 	platform_device_unregister(txgbe->sfp_dev);
 	platform_device_unregister(txgbe->i2c_dev);
 	clkdev_drop(txgbe->clock);
-	clk_unregister(txgbe->clk);
+	clk_unregister_fixed_rate(txgbe->clk);
 	phylink_destroy(txgbe->wx->phylink);
 	xpcs_destroy_pcs(txgbe->pcs);
 	software_node_unregister_node_group(txgbe->nodes.group);

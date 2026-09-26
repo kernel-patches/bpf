@@ -82,6 +82,7 @@
 #define L2TP_SL_SEQ_MASK   0x00ffffff
 
 #define L2TP_HDR_SIZE_MAX		14
+#define L2TP_REORDER_MAX_QUEUE	64
 
 /* Default trace flags */
 #define L2TP_DEFAULT_DEBUG_FLAGS	0
@@ -637,7 +638,22 @@ static void l2tp_recv_queue_skb(struct l2tp_session *session, struct sk_buff *sk
 	u32 ns = L2TP_SKB_CB(skb)->ns;
 
 	spin_lock_bh(&session->reorder_q.lock);
+	if (skb_queue_len(&session->reorder_q) >= L2TP_REORDER_MAX_QUEUE &&
+	    ns != session->nr) {
+		atomic_long_inc(&session->stats.rx_seq_discards);
+		atomic_long_inc(&session->stats.rx_errors);
+		kfree_skb(skb);
+		goto out;
+	}
+
 	skb_queue_walk_safe(&session->reorder_q, skbp, tmp) {
+		if (unlikely(L2TP_SKB_CB(skbp)->has_seq &&
+			     L2TP_SKB_CB(skbp)->ns == ns)) {
+			atomic_long_inc(&session->stats.rx_seq_discards);
+			atomic_long_inc(&session->stats.rx_errors);
+			kfree_skb(skb);
+			goto out;
+		}
 		if (L2TP_SKB_CB(skbp)->ns > ns) {
 			__skb_queue_before(&session->reorder_q, skbp, skb);
 			atomic_long_inc(&session->stats.rx_oos_packets);
@@ -649,6 +665,20 @@ static void l2tp_recv_queue_skb(struct l2tp_session *session, struct sk_buff *sk
 
 out:
 	spin_unlock_bh(&session->reorder_q.lock);
+}
+
+static bool l2tp_recv_queue_tail_skb(struct l2tp_session *session,
+				     struct sk_buff *skb)
+{
+	spin_lock_bh(&session->reorder_q.lock);
+	if (skb_queue_len(&session->reorder_q) >= L2TP_REORDER_MAX_QUEUE) {
+		spin_unlock_bh(&session->reorder_q.lock);
+		return false;
+	}
+	__skb_queue_tail(&session->reorder_q, skb);
+	spin_unlock_bh(&session->reorder_q.lock);
+
+	return true;
 }
 
 /* Dequeue a single skb.
@@ -687,6 +717,7 @@ static void l2tp_recv_dequeue_skb(struct l2tp_session *session, struct sk_buff *
  */
 static void l2tp_recv_dequeue(struct l2tp_session *session)
 {
+	bool dequeued = false;
 	struct sk_buff *skb;
 	struct sk_buff *tmp;
 
@@ -706,6 +737,7 @@ start:
 			trace_session_pkt_expired(session, cb->ns);
 			session->reorder_skip = 1;
 			__skb_unlink(skb, &session->reorder_q);
+			dequeued = true;
 			kfree_skb(skb);
 			continue;
 		}
@@ -720,6 +752,7 @@ start:
 				goto out;
 		}
 		__skb_unlink(skb, &session->reorder_q);
+		dequeued = true;
 
 		/* Process the skb. We release the queue lock while we
 		 * do so to let other contexts process the queue.
@@ -730,7 +763,20 @@ start:
 	}
 
 out:
+	if (skb_queue_empty(&session->reorder_q))
+		timer_delete(&session->reorder_timer);
+	else if (dequeued || !timer_pending(&session->reorder_timer))
+		timer_reduce(&session->reorder_timer,
+			     L2TP_SKB_CB(skb_peek(&session->reorder_q))->expires);
 	spin_unlock_bh(&session->reorder_q.lock);
+}
+
+static void l2tp_recv_dequeue_timer(struct timer_list *timer)
+{
+	struct l2tp_session *session = timer_container_of(session, timer,
+							 reorder_timer);
+
+	l2tp_recv_dequeue(session);
 }
 
 static int l2tp_seq_check_rx_window(struct l2tp_session *session, u32 nr)
@@ -774,7 +820,8 @@ static int l2tp_recv_data_seq(struct l2tp_session *session, struct sk_buff *skb)
 	 * sequence number to re-enable packet reception.
 	 */
 	if (cb->ns == session->nr) {
-		skb_queue_tail(&session->reorder_q, skb);
+		if (!l2tp_recv_queue_tail_skb(session, skb))
+			goto discard;
 	} else {
 		u32 nr_oos = cb->ns;
 		u32 nr_next = (session->nr_oos + 1) & session->nr_max;
@@ -793,7 +840,8 @@ static int l2tp_recv_data_seq(struct l2tp_session *session, struct sk_buff *skb)
 			trace_session_pkt_oos(session, cb->ns);
 			goto discard;
 		}
-		skb_queue_tail(&session->reorder_q, skb);
+		if (!l2tp_recv_queue_tail_skb(session, skb))
+			goto discard;
 	}
 
 out:
@@ -986,7 +1034,8 @@ void l2tp_recv_common(struct l2tp_session *session, struct sk_buff *skb,
 		 * reorder queue. This ensures that it will be
 		 * delivered after all previous sequenced skbs.
 		 */
-		skb_queue_tail(&session->reorder_q, skb);
+		if (!l2tp_recv_queue_tail_skb(session, skb))
+			goto discard;
 	}
 
 	/* Try to dequeue as many skbs from reorder_q as we can. */
@@ -1748,6 +1797,7 @@ static void l2tp_session_del_work(struct work_struct *work)
 						    del_work);
 
 	l2tp_session_unhash(session);
+	timer_shutdown_sync(&session->reorder_timer);
 	l2tp_session_queue_purge(session);
 	if (session->session_close)
 		(*session->session_close)(session);
@@ -1804,6 +1854,7 @@ struct l2tp_session *l2tp_session_create(int priv_size, struct l2tp_tunnel *tunn
 			tunnel->tunnel_id, session->session_id);
 
 		skb_queue_head_init(&session->reorder_q);
+		timer_setup(&session->reorder_timer, l2tp_recv_dequeue_timer, 0);
 
 		session->hlist_key = l2tp_v3_session_hashkey(tunnel->sock, session->session_id);
 		INIT_HLIST_NODE(&session->hlist);
