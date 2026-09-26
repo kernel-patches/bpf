@@ -1482,6 +1482,7 @@ static pm_message_t resume_event(pm_message_t sleep_state)
 	case PM_EVENT_QUIESCE:
 		return PMSG_RECOVER;
 	case PM_EVENT_HIBERNATE:
+	case PM_EVENT_POWEROFF:
 		return PMSG_RESTORE;
 	}
 	return PMSG_ON;
