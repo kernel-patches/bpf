@@ -5751,6 +5751,19 @@ static int check_max_stack_depth(struct bpf_verifier_env *env)
 		}
 	}
 
+	/*
+	 * An unwind resumes a frame at its landing pad rather than at the
+	 * instruction after the call, and on x86-64 that skips the pop which
+	 * restores r9 -- where a private stack keeps its frame pointer. The
+	 * pad would address its frame through a stale one. Refused on every
+	 * arch rather than just that one. The subprograms
+	 * below are then checked against MAX_BPF_STACK together rather than
+	 * one at a time, so this can turn a program that would have loaded
+	 * with a private stack into one that is too deep.
+	 */
+	if (env->cleanup_info_cnt)
+		priv_stack_mode = NO_PRIV_STACK;
+
 	if (priv_stack_mode == PRIV_STACK_UNKNOWN)
 		priv_stack_mode = bpf_enable_priv_stack(env->prog);
 
