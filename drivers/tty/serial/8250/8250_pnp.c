@@ -531,7 +531,7 @@ int __init serial8250_pnp_init(void)
 	return pnp_register_driver(&serial_pnp_driver);
 }
 
-void __init_or_module serial8250_pnp_exit(void)
+void serial8250_pnp_exit(void)
 {
 	pnp_unregister_driver(&serial_pnp_driver);
 }
