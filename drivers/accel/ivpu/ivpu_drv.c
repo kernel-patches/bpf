@@ -205,6 +205,7 @@ bool ivpu_is_capable(struct ivpu_device *vdev, u32 capability)
 	case DRM_IVPU_CAP_BO_CREATE_FROM_USERPTR:
 		return true;
 	case DRM_IVPU_CAP_MANAGE_CMDQ:
+	case DRM_IVPU_CAP_CMDQ_SET_PRIORITY:
 		return vdev->fw->sched_mode == VPU_SCHEDULING_MODE_HW;
 	default:
 		return false;
@@ -273,6 +274,9 @@ static int ivpu_get_param_ioctl(struct drm_device *dev, void *data, struct drm_f
 	case DRM_IVPU_PARAM_PREEMPT_BUFFER_SIZE:
 		args->value = ivpu_fw_preempt_buf_size(vdev);
 		break;
+	case DRM_IVPU_PARAM_CMDQ_PRIORITY:
+		ret = ivpu_cmdq_get_priority(file_priv, args->index, &args->value);
+		break;
 	default:
 		ret = -EINVAL;
 		break;
@@ -284,14 +288,23 @@ static int ivpu_get_param_ioctl(struct drm_device *dev, void *data, struct drm_f
 
 static int ivpu_set_param_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 {
+	struct ivpu_file_priv *file_priv = file->driver_priv;
 	struct drm_ivpu_param *args = data;
 	int ret = 0;
+	int idx;
+
+	if (!drm_dev_enter(dev, &idx))
+		return -ENODEV;
 
 	switch (args->param) {
+	case DRM_IVPU_PARAM_CMDQ_PRIORITY:
+		ret = ivpu_cmdq_set_priority(file_priv, args->index, args->value);
+		break;
 	default:
 		ret = -EINVAL;
 	}
 
+	drm_dev_exit(idx);
 	return ret;
 }
 
@@ -515,6 +528,7 @@ void ivpu_prepare_for_reset(struct ivpu_device *vdev)
 {
 	ivpu_hw_irq_disable(vdev);
 	disable_irq(vdev->irq);
+	atomic_set(&vdev->job_timeout_detected, 0);
 	flush_work(&vdev->irq_dct_work);
 	flush_work(&vdev->context_abort_work);
 	flush_work(&vdev->job_destroy_work);
@@ -710,7 +724,7 @@ static int ivpu_dev_init(struct ivpu_device *vdev)
 	vdev->context_xa_limit.max = IVPU_USER_CONTEXT_MAX_SSID;
 	atomic64_set(&vdev->unique_id_counter, 0);
 	atomic_set(&vdev->job_timeout_counter, 0);
-	atomic_set(&vdev->faults_detected, 0);
+	atomic_set(&vdev->job_timeout_detected, 0);
 	xa_init_flags(&vdev->context_xa, XA_FLAGS_ALLOC | XA_FLAGS_LOCK_IRQ);
 	xa_init_flags(&vdev->submitted_jobs_xa, XA_FLAGS_ALLOC1);
 	xa_init_flags(&vdev->db_xa, XA_FLAGS_ALLOC1);

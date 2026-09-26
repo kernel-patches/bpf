@@ -24,6 +24,7 @@ config ERRATA_ANDES_CMO
 config ERRATA_MIPS
 	bool "MIPS errata"
 	depends on RISCV_ALTERNATIVE
+	select RISCV_ALTERNATIVE_EARLY
 	help
 	  All MIPS errata Kconfig depend on this Kconfig. Disabling
 	  this Kconfig will disable all MIPS errata. Please say "Y"
@@ -46,7 +47,7 @@ config ERRATA_MIPS_P8700_PAUSE_OPCODE
 
 config ERRATA_SIFIVE
 	bool "SiFive errata"
-	depends on RISCV_ALTERNATIVE
+	depends on RISCV_ALTERNATIVE && 64BIT
 	help
 	  All SiFive errata Kconfig depend on this Kconfig. Disabling
 	  this Kconfig will disable all SiFive errata. Please say "Y"

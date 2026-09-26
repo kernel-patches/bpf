@@ -41,12 +41,14 @@
 #include <linux/fs.h>
 #include <linux/hex.h>
 #include <linux/module.h>
+#include <linux/umh.h>
 #include <net/net_namespace.h>
 #include <linux/sunrpc/rpc_pipe_fs.h>
 #include <linux/sunrpc/clnt.h>
 #include <linux/nfsd/cld.h>
 
 #include "nfsd.h"
+#include "nfs4ctl.h"
 #include "state.h"
 #include "vfs.h"
 #include "netns.h"

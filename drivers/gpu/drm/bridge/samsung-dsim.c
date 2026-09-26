@@ -1862,7 +1862,7 @@ static int samsung_dsim_register_te_irq(struct samsung_dsim *dsi, struct device 
 	int te_gpio_irq;
 	int ret;
 
-	dsi->te_gpio = devm_gpiod_get_optional(dev, "te", GPIOD_IN);
+	dsi->te_gpio = gpiod_get_optional(dev, "te", GPIOD_IN);
 	if (!dsi->te_gpio)
 		return 0;
 	else if (IS_ERR(dsi->te_gpio))
@@ -2184,10 +2184,8 @@ int samsung_dsim_probe(struct platform_device *pdev)
 					samsung_dsim_irq,
 					IRQF_ONESHOT | IRQF_NO_AUTOEN,
 					dev_name(dev), dsi);
-	if (ret) {
-		dev_err(dev, "failed to request dsi irq\n");
+	if (ret)
 		return ret;
-	}
 
 	ret = samsung_dsim_parse_dt(dsi);
 	if (ret)

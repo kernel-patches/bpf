@@ -43,6 +43,7 @@ fi
 configs_rcutorture=
 configs_locktorture=
 configs_scftorture=
+configs_hazptr=
 kcsan_kmake_args=
 
 # Default compression, duration, and apportionment.
@@ -68,7 +69,9 @@ do_clocksourcewd="${ifnotaarch64}"
 do_rt=yes
 do_rcutasksflavors="${ifnotaarch64}" # FIXME: Back to "yes" when SMP=n auto-avoided
 do_srcu_lockdep=yes
+do_atomic_srcu=yes
 do_rcu_rust=no
+do_hazptr=yes
 
 # doyesno - Helper function for yes/no arguments
 function doyesno () {
@@ -89,6 +92,7 @@ usage () {
 	echo "       --do-all"
 	echo "       --do-allmodconfig / --do-no-allmodconfig / --no-allmodconfig"
 	echo "       --do-clocksourcewd / --do-no-clocksourcewd / --no-clocksourcewd"
+	echo "       --do-hazptr / --do-no-hazptr / --no-hazptr"
 	echo "       --do-kasan / --do-no-kasan / --no-kasan"
 	echo "       --do-kcsan / --do-no-kcsan / --no-kcsan"
 	echo "       --do-kvfree / --do-no-kvfree / --no-kvfree"
@@ -103,6 +107,7 @@ usage () {
 	echo "       --do-rcu-rust / --do-no-rcu-rust / --no-rcu-rust"
 	echo "       --do-scftorture / --do-no-scftorture / --no-scftorture"
 	echo "       --do-srcu-lockdep / --do-no-srcu-lockdep / --no-srcu-lockdep"
+	echo "       --do-atomic-srcu / --do-no-atomic-srcu / --no-atomic-srcu"
 	echo "       --duration [ <minutes> | <hours>h | <days>d ]"
 	echo "       --guest-cpu-limit N"
 	echo "       --kcsan-kmake-arg kernel-make-arguments"
@@ -115,6 +120,11 @@ do
 	--compress-concurrency)
 		checkarg --compress-concurrency "(concurrency level)" $# "$2" '^[0-9][0-9]*$' '^error'
 		compress_concurrency=$2
+		shift
+		;;
+	--config-hazptr|--configs-hazptr)
+		checkarg --configs-hazptr "(list of config files)" "$#" "$2" '^[^/]\+$' '^--'
+		configs_hazptr="$configs_hazptr $2"
 		shift
 		;;
 	--config-rcutorture|--configs-rcutorture)
@@ -147,13 +157,18 @@ do
 		do_kasan=yes
 		do_kcsan=yes
 		do_clocksourcewd="${ifnotaarch64}"
+		do_hazptr=yes
 		do_srcu_lockdep=yes
+		do_atomic_srcu=yes
 		;;
 	--do-allmodconfig|--do-no-allmodconfig|--no-allmodconfig)
 		do_allmodconfig=`doyesno "$1" --do-allmodconfig`
 		;;
 	--do-clocksourcewd|--do-no-clocksourcewd|--no-clocksourcewd)
 		do_clocksourcewd=`doyesno "$1" --do-clocksourcewd`
+		;;
+	--do-hazptr|--do-no-hazptr|--no-hazptr)
+		do_hazptr=`doyesno "$1" --do-hazptr`
 		;;
 	--do-kasan|--do-no-kasan|--no-kasan)
 		do_kasan=`doyesno "$1" --do-kasan`
@@ -182,7 +197,9 @@ do
 		do_kasan=no
 		do_kcsan=no
 		do_clocksourcewd=no
+		do_hazptr=no
 		do_srcu_lockdep=no
+		do_atomic_srcu=no
 		;;
 	--do-normal|--do-norm|--do-no-normal|--do-no-norm|--no-normal|--no-norm)
 		do_normal=`doyesno "$1" --do-normal`
@@ -211,6 +228,9 @@ do
 		;;
 	--do-srcu-lockdep|--do-no-srcu-lockdep|--no-srcu-lockdep)
 		do_srcu_lockdep=`doyesno "$1" --do-srcu-lockdep`
+		;;
+	--do-atomic-srcu|--do-no-atomic-srcu|--no-atomic-srcu)
+		do_atomic_srcu=`doyesno "$1" --do-atomic-srcu`
 		;;
 	--duration)
 		checkarg --duration "(minutes)" $# "$2" '^[0-9][0-9]*\(m\|h\|d\|\)$' '^error'
@@ -343,7 +363,7 @@ function torture_one {
 		boottag="--bootargs"
 		cur_bootargs="$torture_bootargs"
 	fi
-	"$@" $boottag "$cur_bootargs" --datestamp "$ds/results-$curflavor" > $T/$curflavor.out 2>&1
+	"$@" "${boottag}" "$cur_bootargs" --datestamp "$ds/results-$curflavor" > $T/$curflavor.out 2>&1
 	retcode=$?
 	resdir="`grep '^Results directory: ' $T/$curflavor.out | tail -1 | sed -e 's/^Results directory: //'`"
 	if test -z "$resdir"
@@ -495,6 +515,23 @@ if test "$do_rcutorture" = "yes"
 then
 	torture_bootargs="rcupdate.rcu_cpu_stall_suppress_at_boot=1 torture.disable_onoff_at_boot rcupdate.rcu_task_stall_timeout=30000"
 	torture_set "rcutorture" tools/testing/selftests/rcutorture/bin/kvm.sh --allcpus --duration "$duration_rcutorture" --configs "$configs_rcutorture" --trust-make
+fi
+
+# Test atomic SRCU across Tree SRCU (SRCU-N and SRCU-P) and Tiny SRCU
+# (SRCU-T).  The reader flavor selects srcu_read_lock_atomic() and
+# synchronize_srcu_atomic().  Tiny SRCU requires SMP=n, which aarch64
+# does not support.
+if test "$do_atomic_srcu" = "yes"
+then
+	torture_bootargs="rcutorture.reader_flavor=0x10"
+	configs_atomic_srcu="SRCU-N SRCU-P"
+	if test "$ifnotaarch64" = yes
+	then
+		configs_atomic_srcu="$configs_atomic_srcu SRCU-T"
+	fi
+	torture_set "atomic-srcu" tools/testing/selftests/rcutorture/bin/kvm.sh \
+		--allcpus --duration "$duration_rcutorture" \
+		--configs "$configs_atomic_srcu" --trust-make
 fi
 
 if test "$do_locktorture" = "yes"
@@ -702,6 +739,17 @@ then
 		torture_bootargs="rcupdate.rcu_cpu_stall_suppress_at_boot=1 torture.disable_onoff_at_boot rcupdate.rcu_task_stall_timeout=30000 tsc=watchdog"
 		torture_set "clocksourcewd-3" tools/testing/selftests/rcutorture/bin/kvm.sh --allcpus --duration 45s --configs TREE03 --trust-make
 	fi
+fi
+
+# Calculate hazptr defaults and apportion time
+if test -z "$configs_hazptr"
+then
+	configs_hazptr=CFLIST
+fi
+if test "$do_hazptr" = "yes"
+then
+	torture_bootargs=""
+	torture_set "hazptr" tools/testing/selftests/rcutorture/bin/kvm.sh --torture hazptr --allcpus --duration "$duration_rcutorture" --configs "$configs_hazptr" --trust-make
 fi
 
 echo " --- " $scriptname $args

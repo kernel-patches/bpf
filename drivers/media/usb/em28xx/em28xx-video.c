@@ -431,6 +431,7 @@ static void em2828X_decoder_set_std(struct em28xx *dev, v4l2_std_id norm)
 		} else if (INPUT(dev->ctl_input)->vmux == EM2828X_TELEVISION) {
 			em28xx_write_reg(dev, 0x7A00, 0x32);
 			em28xx_write_reg(dev, 0x7A03, 0x09);
+			em28xx_write_reg(dev, 0x7A07, 0x2f);
 			em28xx_write_reg(dev, 0x7A30, 0x2a);
 			em28xx_write_reg(dev, 0x7A80, 0x03);
 			em28xx_write_reg(dev, 0x7A20, 0x35);
@@ -1409,6 +1410,9 @@ static int em28xx_vb2_setup(struct em28xx *dev)
 	rc = vb2_queue_init(q);
 	if (rc < 0)
 		return rc;
+
+	if (!em28xx_vbi_supported(dev))
+		return 0;
 
 	/* Setup Videobuf2 for VBI capture */
 	q = &v4l2->vb_vbiq;
@@ -2416,7 +2420,7 @@ static int em28xx_v4l2_fini(struct em28xx *dev)
 	if (video_is_registered(&v4l2->radio_dev)) {
 		dev_info(&dev->intf->dev, "V4L2 device %s deregistered\n",
 			 video_device_node_name(&v4l2->radio_dev));
-		vb2_video_unregister_device(&v4l2->radio_dev);
+		video_unregister_device(&v4l2->radio_dev);
 	}
 	if (video_is_registered(&v4l2->vbi_dev)) {
 		dev_info(&dev->intf->dev, "V4L2 device %s deregistered\n",
@@ -3082,7 +3086,7 @@ unregister_dev:
 		dev_info(&dev->intf->dev,
 			 "V4L2 device %s deregistered\n",
 			 video_device_node_name(&v4l2->radio_dev));
-		vb2_video_unregister_device(&v4l2->radio_dev);
+		video_unregister_device(&v4l2->radio_dev);
 	}
 	if (video_is_registered(&v4l2->vbi_dev)) {
 		dev_info(&dev->intf->dev,

@@ -3,12 +3,13 @@
  * Copyright (c) 2014 Christoph Hellwig.
  */
 #include <linux/exportfs_block.h>
-#include <linux/kmod.h>
+#include <linux/umh.h>
 #include <linux/file.h>
 #include <linux/jhash.h>
 #include <linux/sched.h>
 #include <linux/sunrpc/addr.h>
 
+#include "nfserr.h"
 #include "pnfs.h"
 #include "netns.h"
 #include "trace.h"

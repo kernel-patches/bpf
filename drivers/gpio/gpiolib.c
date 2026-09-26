@@ -1029,6 +1029,13 @@ int gpiochip_add_hog(struct gpio_chip *gc, struct fwnode_handle *fwnode)
 			ret = of_gpiochip_get_lflags(gc, &gpiospec, &lflags);
 			if (ret)
 				return ret;
+
+			/*
+			 * If no line-name property is present, fall back to the OF
+			 * node name as in the previous implementation.
+			 */
+			if (!name)
+				name = to_of_node(fwnode)->name;
 		} else {
 			/*
 			 * GPIO_ACTIVE_LOW is currently the only lookup flag
@@ -2439,6 +2446,27 @@ int gpiochip_generic_config(struct gpio_chip *gc, unsigned int offset,
 	return pinctrl_gpio_set_config(gc, offset, config);
 }
 EXPORT_SYMBOL_GPL(gpiochip_generic_config);
+
+/**
+ * gpiochip_generic_get_config() - read back the configuration of a pin
+ * @gc: the gpiochip owning the GPIO
+ * @offset: the offset of the GPIO to query
+ * @config: the packed parameter to query, replaced by its bare argument
+ *
+ * Returns:
+ * 0 on success, or negative errno on failure.
+ */
+int gpiochip_generic_get_config(struct gpio_chip *gc, unsigned int offset,
+				unsigned long *config)
+{
+#ifdef CONFIG_PINCTRL
+	if (list_empty(&gc->gpiodev->pin_ranges))
+		return -ENOTSUPP;
+#endif
+
+	return pinctrl_gpio_get_config(gc, offset, config);
+}
+EXPORT_SYMBOL_GPL(gpiochip_generic_get_config);
 
 #ifdef CONFIG_PINCTRL
 

@@ -496,6 +496,7 @@ static int iso_connect_cis(struct sock *sk)
 	struct hci_dev  *hdev;
 	bdaddr_t src, dst;
 	u8 src_type;
+	bool already_attached;
 	int err;
 
 	lock_sock(sk);
@@ -568,8 +569,14 @@ static int iso_connect_cis(struct sock *sk)
 		goto unlock;
 	}
 
+	iso_conn_lock(conn);
+	already_attached = iso_pi(sk)->conn == conn && conn->sk == sk;
+	iso_conn_unlock(conn);
+
 	err = iso_chan_add(conn, sk, NULL);
 	iso_conn_put(conn);
+	if (already_attached || err == -EBUSY)
+		hci_conn_drop(hcon);
 	if (err)
 		goto unlock;
 
@@ -1935,10 +1942,7 @@ static int iso_sock_setsockopt(struct socket *sock, int level, int optname,
 		if (err)
 			break;
 
-		if (opt)
-			set_bit(BT_SK_DEFER_SETUP, &bt_sk(sk)->flags);
-		else
-			clear_bit(BT_SK_DEFER_SETUP, &bt_sk(sk)->flags);
+		assign_bit(BT_SK_DEFER_SETUP, &bt_sk(sk)->flags, opt);
 		break;
 
 	case BT_PKT_STATUS:
@@ -1946,10 +1950,7 @@ static int iso_sock_setsockopt(struct socket *sock, int level, int optname,
 		if (err)
 			break;
 
-		if (opt)
-			set_bit(BT_SK_PKT_STATUS, &bt_sk(sk)->flags);
-		else
-			clear_bit(BT_SK_PKT_STATUS, &bt_sk(sk)->flags);
+		assign_bit(BT_SK_PKT_STATUS, &bt_sk(sk)->flags, opt);
 		break;
 
 	case BT_PKT_SEQNUM:
@@ -1957,10 +1958,7 @@ static int iso_sock_setsockopt(struct socket *sock, int level, int optname,
 		if (err)
 			break;
 
-		if (opt)
-			set_bit(BT_SK_PKT_SEQNUM, &bt_sk(sk)->flags);
-		else
-			clear_bit(BT_SK_PKT_SEQNUM, &bt_sk(sk)->flags);
+		assign_bit(BT_SK_PKT_SEQNUM, &bt_sk(sk)->flags, opt);
 		break;
 
 	case BT_ISO_QOS:
