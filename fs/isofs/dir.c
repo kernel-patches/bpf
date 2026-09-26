@@ -240,7 +240,12 @@ static int isofs_readdir(struct file *file, struct dir_context *ctx)
 	char *tmpname;
 	struct inode *inode = file_inode(file);
 
-	tmpname = kmalloc(1024, GFP_KERNEL);
+	/*
+	 * Rockridge can produce names of NAME_MAX size, Acorn extensions at
+	 * most 227 chars.
+	 */
+	BUILD_BUG_ON(JOLIET_NAME_MAX < NAME_MAX || JOLIET_NAME_MAX < 227);
+	tmpname = kmalloc(JOLIET_NAME_MAX + 1, GFP_KERNEL);
 	if (tmpname == NULL)
 		return -ENOMEM;
 

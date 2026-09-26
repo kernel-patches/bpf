@@ -155,7 +155,7 @@ struct dentry *isofs_lookup(struct inode *dir, struct dentry *dentry, unsigned i
 	struct inode *inode;
 	char *tmpname;
 
-	tmpname = kmalloc(1024, GFP_USER);
+	tmpname = kmalloc(JOLIET_NAME_MAX + 1, GFP_USER);
 	if (!tmpname)
 		return ERR_PTR(-ENOMEM);
 
