@@ -632,6 +632,7 @@ static bool regsafe(struct bpf_verifier_env *env, struct bpf_reg_state *rold,
 	case PTR_TO_MEM:
 	case PTR_TO_BUF:
 	case PTR_TO_TP_BUFFER:
+	case PTR_TO_BTF_ID:
 		/* If the new min/max/var_off satisfy the old ones and
 		 * everything else matches, we are OK.
 		 */
