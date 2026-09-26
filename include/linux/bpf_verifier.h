@@ -732,6 +732,7 @@ struct bpf_insn_aux_data {
 	bool is_iter_next; /* bpf_iter_<type>_next() kfunc call */
 	bool call_with_percpu_alloc_ptr; /* {this,per}_cpu_ptr() with prog percpu alloc */
 	bool bb_end;
+	bool need_scev;
 	u8 alu_state; /* used in combination with alu_limit */
 	/* true if STX or LDX instruction is a part of a spill/fill
 	 * pattern for a bpf_fastcall call.
@@ -991,6 +992,7 @@ struct bpf_scc_info {
 };
 
 struct bpf_liveness;
+struct scev;
 
 struct bpf_fd_array {
 	union {
@@ -1154,6 +1156,7 @@ struct bpf_verifier_env {
 	struct bpf_iarray *succ;
 	struct bpf_iarray *gotox_tmp_buf;
 	int *idoms;
+	struct scev *scev;
 };
 
 static inline struct bpf_func_info_aux *subprog_aux(struct bpf_verifier_env *env, int subprog)
@@ -1940,5 +1943,9 @@ void bpf_min_heap_init(struct bpf_min_heap *heap, int (*compare)(int, int, void 
 void bpf_min_heap_free(struct bpf_min_heap *heap);
 int bpf_min_heap_push(struct bpf_min_heap *heap, int elt);
 bool bpf_min_heap_pop(struct bpf_min_heap *heap, int *elt);
+
+int bpf_init_scev(struct bpf_verifier_env *env);
+void bpf_free_scev(struct bpf_verifier_env *env);
+int bpf_compute_scev(struct bpf_verifier_env *env);
 
 #endif /* _LINUX_BPF_VERIFIER_H */
