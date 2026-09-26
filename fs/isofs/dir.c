@@ -190,7 +190,8 @@ static int do_isofs_readdir(struct inode *inode, struct file *file,
 
 		map = 1;
 		if (sbi->s_rock) {
-			len = get_rock_ridge_filename(de, tmpname, inode);
+			len = get_rock_ridge_filename(de, tmpname, NAME_MAX + 1,
+						      inode);
 			if (len != 0) {		/* may be -1 */
 				p = tmpname;
 				map = 0;

@@ -209,10 +209,14 @@ static int rock_check_overflow(struct rock_state *rs, int sig)
 }
 
 /*
+ * Build the Rock Ridge name of @de in @retname, a buffer of @retnamesize
+ * bytes.  From the first NM entry that does not fit along with the
+ * terminator, the rest of the name is dropped.
+ *
  * return length of name field; 0: not found, -1: to be ignored
  */
 int get_rock_ridge_filename(struct iso_directory_record *de,
-			    char *retname, struct inode *inode)
+			    char *retname, int retnamesize, struct inode *inode)
 {
 	struct rock_state rs;
 	struct rock_ridge *rr;
@@ -287,7 +291,7 @@ repeat:
 				break;
 			}
 			len = rr->len - 5;
-			if (retnamlen + len > NAME_MAX) {
+			if (retnamlen + len >= retnamesize) {
 				truncate = 1;
 				break;
 			}

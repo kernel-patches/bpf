@@ -115,7 +115,8 @@ struct timespec64 iso_date(u8 *p, int flags);
 struct inode;		/* To make gcc happy */
 
 extern int parse_rock_ridge_inode(struct iso_directory_record *, struct inode *, int relocated);
-extern int get_rock_ridge_filename(struct iso_directory_record *, char *, struct inode *);
+int get_rock_ridge_filename(struct iso_directory_record *de, char *retname,
+			    int retnamesize, struct inode *inode);
 extern int isofs_name_translate(struct iso_directory_record *, char *, struct inode *);
 bool isofs_dir_record_valid(struct iso_directory_record *de,
 			    unsigned long offset,

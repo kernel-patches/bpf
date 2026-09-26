@@ -102,7 +102,8 @@ isofs_find_entry(struct inode *dir, struct dentry *dentry,
 		dpnt = de->name;
 
 		if (sbi->s_rock &&
-		    ((i = get_rock_ridge_filename(de, tmpname, dir)))) {
+		    ((i = get_rock_ridge_filename(de, tmpname, NAME_MAX + 1,
+						  dir)))) {
 			dlen = i;	/* possibly -1 */
 			dpnt = tmpname;
 #ifdef CONFIG_JOLIET
