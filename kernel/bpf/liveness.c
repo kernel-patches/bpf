@@ -718,6 +718,45 @@ static int cmp_instances(const void *pa, const void *pb)
 	return 0;
 }
 
+/* OR the 8-byte slots touched by a half-slot (4-byte) mask into @slots. */
+static void half_spis_to_slots(unsigned long *slots, const unsigned long *mask, u32 nbits)
+{
+	u32 slot;
+
+	for (slot = 0; slot < MAX_BPF_STACK_SLOTS && slot * 2 + 1 < nbits; slot++)
+		if (test_bit(slot * 2, mask) || test_bit(slot * 2 + 1, mask))
+			__set_bit(slot, slots);
+}
+
+/*
+ * Precompute, for each instruction, the OR of may_write masks over its top
+ * frame across all func_instances reaching it, stash it in the insn_aux_data.
+ */
+static void compute_may_write_masks(struct bpf_verifier_env *env)
+{
+	struct bpf_insn_aux_data *aux = env->insn_aux_data;
+	struct bpf_liveness *liveness = env->liveness;
+	struct func_instance *instance;
+	struct frame_masks *fm;
+	u32 nbits;
+	int bkt, i;
+
+	hash_for_each(liveness->func_instances, bkt, instance, hl_node) {
+		fm = instance->frames[instance->depth];
+		if (!fm)
+			continue;
+		nbits = frame_mask_bits(fm);
+		for (i = 0; i < instance->insn_cnt; i++)
+			half_spis_to_slots(aux[instance->subprog_start + i].may_write_mask,
+					   rel_mask(fm, i, FM_MAY_WRITE), nbits);
+	}
+}
+
+const unsigned long *bpf_may_write_mask(struct bpf_verifier_env *env, u32 insn_idx)
+{
+	return env->insn_aux_data[insn_idx].may_write_mask;
+}
+
 /* print use/def slots for all instances ordered by callsite first, then by depth */
 static int print_instances(struct bpf_verifier_env *env)
 {
@@ -2351,6 +2390,8 @@ int bpf_compute_subprog_arg_access(struct bpf_verifier_env *env)
 		if (err)
 			goto out;
 	}
+
+	compute_may_write_masks(env);
 
 	if (env->log.level & BPF_LOG_LEVEL2)
 		err = print_instances(env);
