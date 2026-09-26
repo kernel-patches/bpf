@@ -1012,7 +1012,8 @@ static int isofs_statfs (struct dentry *dentry, struct kstatfs *buf)
 	buf->f_files = ISOFS_SB(sb)->s_ninodes;
 	buf->f_ffree = 0;
 	buf->f_fsid = u64_to_fsid(id);
-	buf->f_namelen = NAME_MAX;
+	buf->f_namelen = ISOFS_SB(sb)->s_joliet_level ?
+			 JOLIET_NAME_MAX : NAME_MAX;
 	return 0;
 }
 
