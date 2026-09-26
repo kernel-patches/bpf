@@ -61,7 +61,11 @@ __naked void read_write_join(void)
 SEC("socket")
 __log_level(2)
 __msg("stack use/def subprog#0 must_write_not_same_slot (d0,cs0):")
-__msg("6: (7b) *(u64 *)(r2 +0) = r0{{$}}")
+/*
+ * 'r2 += r1' adds a scalar, so the offset is lost (off_cnt == 0): no def,
+ * but the write conservatively marks the whole frame as may_def.
+ */
+__msg("6: (7b) *(u64 *)(r2 +0) = r0         ; may_def: fp0-8..-{{(512|2048)}}")
 __msg("Live regs before insn:")
 __naked void must_write_not_same_slot(void)
 {
@@ -106,9 +110,9 @@ __naked void must_write_not_same_type(void)
 
 SEC("socket")
 __log_level(2)
-/* Callee writes fp[0]-8: stack_use at call site has slots 0,1 live */
+/* Callee writes fp[0]-8: the def is summarized as may_def at the call site */
 __msg("stack use/def subprog#0 caller_stack_write (d0,cs0):")
-__msg("2: (85) call pc+1{{$}}")
+__msg("2: (85) call pc+1                    ; may_def: fp0-8")
 __msg("stack use/def subprog#1 write_first_param (d1,cs2):")
 __msg("4: (7a) *(u64 *)(r1 +0) = 7          ; def: fp0-8")
 __naked void caller_stack_write(void)
@@ -804,7 +808,7 @@ void __kfunc_btf_root(void)
  */
 SEC("socket")
 __success __log_level(2)
-__msg(" 6: (85) call bpf_iter_num_new{{.*}}          ; def: fp0-24{{$}}")
+__msg(" 6: (85) call bpf_iter_num_new{{.*}}          ; def: fp0-24 may_def: fp0-24{{$}}")
 __msg(" 9: (85) call bpf_iter_num_next{{.*}}         ; use: fp0-24{{$}}")
 __msg("14: (85) call bpf_iter_num_destroy{{.*}}      ; use: fp0-24{{$}}")
 __naked void kfunc_iter_stack_liveness(void)
@@ -1008,7 +1012,8 @@ __naked void four_byte_read_upper_half(void)
 SEC("socket")
 __log_level(2)
 __msg("0: (7a) *(u64 *)(r10 -8) = 0         ; def: fp0-8")
-__msg("1: (6a) *(u16 *)(r10 -4) = 0{{$}}")
+/* 2-byte write only partially covers the upper half: may_def, but no def. */
+__msg("1: (6a) *(u16 *)(r10 -4) = 0         ; may_def: fp0-4h")
 __msg("2: (61) r0 = *(u32 *)(r10 -4)        ; use: fp0-4h")
 __naked void two_byte_write_no_kill(void)
 {
@@ -1355,9 +1360,12 @@ __naked void fp_spill_loses_precision_kills_liveness(void)
  */
 SEC("socket")
 __log_level(2)
-/* fp-8 live at call (callee conditionally writes → slot not killed) */
+/*
+ * fp-8 live at call: callee conditionally writes it, so the slot is not killed
+ * (no def), but the conditional write surfaces as may_def at the call site.
+ */
 __msg("1: (7b) *(u64 *)(r10 -8) = r1        ; def: fp0-8")
-__msg("4: (85) call pc+2{{$}}")
+__msg("4: (85) call pc+2                    ; may_def: fp0-8")
 __msg("5: (79) r0 = *(u64 *)(r10 -8)        ; use: fp0-8")
 __naked void conditional_stx_in_subprog(void)
 {
@@ -2386,7 +2394,12 @@ __msg("subprog#2 write_first_read_second:")
 __msg("17: (7a) *(u64 *)(r1 +0) = 42{{$}}")
 __msg("18: (79) r0 = *(u64 *)(r2 +0) // r1=fp0-8 r2=fp0-16{{$}}")
 __msg("stack use/def subprog#2 write_first_read_second (d2,cs15):")
-__msg("17: (7a) *(u64 *)(r1 +0) = 42{{$}}")
+/*
+ * Shared across two callsites with swapped args (r1 is fp-8 on one pass,
+ * fp-16 on the other): must_write intersects to empty (no def), may_write
+ * unions to both slots.
+ */
+__msg("17: (7a) *(u64 *)(r1 +0) = 42         ; may_def: fp0-8 fp0-16")
 __msg("18: (79) r0 = *(u64 *)(r2 +0)         ; use: fp0-8 fp0-16")
 __naked void shared_instance_must_write_overwrite(void)
 {
@@ -2848,8 +2861,9 @@ static __used __naked void imprecise_dst_spill_join_sub(void)
 SEC("socket")
 __log_level(2)
 __msg("0: (79) r0 = *(u64 *)(r10 -8)        ; use: fp0-8")
-__msg("1: (73) *(u8 *)(r10 -1) = r0{{$}}")
-__msg("2: (6b) *(u16 *)(r10 -4) = r0{{$}}")
+/* narrow stores define nothing, but they may write the half-slot they touch */
+__msg("1: (73) *(u8 *)(r10 -1) = r0         ; may_def: fp0-4h")
+__msg("2: (6b) *(u16 *)(r10 -4) = r0        ; may_def: fp0-4h")
 __msg("3: (79) r0 = *(u64 *)(r10 -8)        ; use: fp0-8")
 __naked void narrow_store_defines_nothing(void)
 {
