@@ -10,6 +10,23 @@
 #define RAN_FOO2_DROP		0x8
 #define RAN_BUMP		0x10
 
+/* progs/exceptions_cleanup_shapes.c: one bit per shape. */
+#define RAN_SWEEP		0x1
+#define RAN_SHARED		0x2
+#define RAN_REGS		0x4
+#define RAN_MAIN_PAD		0x8
+#define RAN_PAD_FIRST		0x10
+#define RAN_WIDE_REC		0x20
+#define RAN_PAD_STACK		0x40
+#define RAN_RESUME_ALIAS	0x80
+#define RAN_NOP_PAD		0x100
+#define RAN_VAR_STACK		0x200
+#define RAN_GLOBAL_PAD		0x400
+#define RAN_PAD_R0		0x800
+#define RAN_MULTI_CALL		0x1000
+#define RAN_GAP_INNER		0x2000
+#define RAN_GAP_OUTER		0x4000
+
 #define CLEANUP_REC(begin, end, landing_pad)			\
 	".pushsection .bpf_cleanup,\"a\",@progbits;"		\
 	".long " begin ";"					\
