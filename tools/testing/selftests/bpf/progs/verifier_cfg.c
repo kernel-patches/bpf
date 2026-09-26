@@ -196,6 +196,7 @@ static int tail_call_or_throw_subprog(void *ctx)
 	bpf_tail_call(ctx, &map_array, idx);
 	bpf_throw(0);
 	for (;;) {}
+	return 0;
 }
 
 SEC("tc")
