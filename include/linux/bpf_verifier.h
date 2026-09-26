@@ -655,6 +655,30 @@ struct bpf_iarray {
 	     ___idx < (arr)->cnt && ({ item = (arr)->items[___idx]; 1; });	\
 	     ___idx++)
 
+#define MAX_BACKEDGES 16
+#define MAX_LOOP_EXITS 256
+
+struct bpf_backedge {
+	int from;
+	int latch; /* -1 if no latch can be found */
+};
+
+struct bpf_loop_exit {
+	int from; /* instruction inside the loop */
+	int to; /* instruction outside the loop */
+};
+
+struct bpf_loop {
+	struct bpf_backedge backedges[MAX_BACKEDGES];
+	/* edges exiting from this loop, includes edges from nested loops */
+	struct bpf_loop_exit *exits;
+	int backedges_cnt;
+	int exits_cnt;
+	bool irreducible;
+	bool backedges_overflow;
+	bool exits_overflow;
+};
+
 struct bpf_insn_aux_data {
 	union {
 		enum bpf_reg_type ptr_type;	/* pointer type for load/store insns */
@@ -733,6 +757,13 @@ struct bpf_insn_aux_data {
 	/* true if some jump or call instruction targets this instruction */
 	u32 jump_target:1;
 	/*
+	 * True if this instruction is a loop entry. For loops with a single entry
+	 * this bit will coincide with 'loop' pointer being non-NULL.
+	 * Irreducible loops have multiple entries, all of them will be marked as 'loop_entry',
+	 * but only the one at 'loop_header' will have a non-NULL 'loop' pointer.
+	 */
+	u32 loop_entry:1;
+	/*
 	 * CFG strongly connected component this instruction belongs to,
 	 * zero if it is a singleton SCC.
 	 */
@@ -751,6 +782,10 @@ struct bpf_insn_aux_data {
 	u16 const_reg_map_mask;
 	u16 const_reg_subprog_mask;
 	u32 const_reg_vals[10];
+	/* index of a loop header of the innermost loop containing this instruction, -1 if none */
+	s32 loop_header;
+	/* additional information about the loop if this instruction is a loop header */
+	struct bpf_loop *loop;
 };
 
 #define MAX_USED_MAPS 64 /* max number of maps accessed by one eBPF program */
@@ -1864,6 +1899,7 @@ int bpf_check_attach_btf_id_multi(struct btf *btf, struct bpf_prog *prog, u32 bt
 				  struct bpf_attach_target_info *tgt_info);
 
 /* Functions in fixups.c, called from bpf_check() */
+void bpf_clear_insn_aux_data(struct bpf_verifier_env *env, int start, int len);
 int bpf_remove_fastcall_spills_fills(struct bpf_verifier_env *env);
 int bpf_optimize_bpf_loop(struct bpf_verifier_env *env);
 void bpf_opt_hard_wire_dead_code_branches(struct bpf_verifier_env *env);
@@ -1880,5 +1916,8 @@ int bpf_flip_opcode(u32 opcode);
 u8 bpf_rev_opcode(u8 opcode);
 
 int bpf_compute_idoms(struct bpf_verifier_env *env);
+int bpf_compute_loops(struct bpf_verifier_env *env);
+int bpf_loop_at_index(struct bpf_verifier_env *env, u32 idx);
+bool bpf_is_nested_loop(struct bpf_verifier_env *env, int inner_header, int outer_header);
 
 #endif /* _LINUX_BPF_VERIFIER_H */

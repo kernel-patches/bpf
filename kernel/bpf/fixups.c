@@ -614,6 +614,22 @@ static int bpf_adj_linfo_after_remove(struct bpf_verifier_env *env, u32 off,
 	return 0;
 }
 
+/* Clean up dynamically allocated fields of aux data for instructions [start, ...] */
+void bpf_clear_insn_aux_data(struct bpf_verifier_env *env, int start, int len)
+{
+	struct bpf_insn_aux_data *aux_data = env->insn_aux_data;
+	int end = start + len;
+	int i;
+
+	for (i = start; i < end; i++) {
+		if (aux_data[i].loop) {
+			kvfree(aux_data[i].loop->exits);
+			kvfree(aux_data[i].loop);
+			aux_data[i].loop = NULL;
+		}
+	}
+}
+
 static int verifier_remove_insns(struct bpf_verifier_env *env, u32 off, u32 cnt)
 {
 	struct bpf_insn_aux_data *aux_data = env->insn_aux_data;
@@ -625,6 +641,8 @@ static int verifier_remove_insns(struct bpf_verifier_env *env, u32 off, u32 cnt)
 
 	if (bpf_prog_is_offloaded(env->prog->aux))
 		bpf_prog_offload_remove_insns(env, off, cnt);
+
+	bpf_clear_insn_aux_data(env, off, cnt);
 
 	err = bpf_remove_insns(env->prog, off, cnt);
 	if (err)
