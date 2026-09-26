@@ -62,6 +62,12 @@ struct test_subspec {
 	int retval;
 	bool execute;
 	__u64 caps;
+	char *set_global_var;
+	__u64 set_global_val;
+	bool has_set_global;
+	char *ret_global_var;
+	__u64 ret_global_val;
+	bool has_ret_global;
 };
 
 struct test_spec {
@@ -128,6 +134,15 @@ static void free_test_spec(struct test_spec *spec)
 	free_msgs(&spec->priv.stderr);
 	free_msgs(&spec->unpriv.stdout);
 	free_msgs(&spec->priv.stdout);
+
+	free(spec->priv.set_global_var);
+	free(spec->priv.ret_global_var);
+	free(spec->unpriv.set_global_var);
+	free(spec->unpriv.ret_global_var);
+	spec->priv.set_global_var = NULL;
+	spec->priv.ret_global_var = NULL;
+	spec->unpriv.set_global_var = NULL;
+	spec->unpriv.ret_global_var = NULL;
 
 	free(spec->priv.name);
 	free(spec->priv.description);
@@ -309,6 +324,142 @@ static int parse_caps(const char *str, __u64 *val, const char *name)
 
 	free(str_cpy);
 	return 0;
+}
+
+static int parse_global_var(const char *str, char **var, __u64 *val, const char *name)
+{
+	const char *colon = strrchr(str, ':');
+	char *end;
+
+	if (!colon || colon == str) {
+		PRINT_FAIL("expecting '<variable>:<value>' for %s, got '%s'\n", name, str);
+		return -EINVAL;
+	}
+
+	*val = 0;
+	for (const char *term = colon + 1;;) {
+		__u64 v;
+
+		errno = 0;
+		v = strtoull(term, &end, 0);
+		if (errno || end == term) {
+			PRINT_FAIL("failed to parse %s value '%s'\n", name, colon + 1);
+			return -EINVAL;
+		}
+		*val |= v;
+		while (*end == ' ')
+			end++;
+		if (!*end)
+			break;
+		if (*end != '|') {
+			PRINT_FAIL("failed to parse %s value '%s'\n", name, colon + 1);
+			return -EINVAL;
+		}
+		term = end + 1;
+	}
+
+	free(*var);
+	*var = strndup(str, colon - str);
+	if (!*var) {
+		PRINT_FAIL("failed to allocate %s variable name\n", name);
+		return -ENOMEM;
+	}
+
+	return 0;
+}
+
+static int find_global_var(struct bpf_object *obj, const char *name,
+			   struct bpf_map **map, __u32 *off, __u32 *sz)
+{
+	static const char * const secs[] = { ".bss", ".data" };
+	struct btf *btf = bpf_object__btf(obj);
+	int i, s;
+
+	if (!btf) {
+		PRINT_FAIL("no BTF for object\n");
+		return -ENOENT;
+	}
+
+	for (s = 0; s < ARRAY_SIZE(secs); s++) {
+		const struct btf_var_secinfo *vsi;
+		struct bpf_map *m = NULL, *iter;
+		const struct btf_type *sec;
+		size_t slen = strlen(secs[s]);
+		int id;
+
+		bpf_object__for_each_map(iter, obj) {
+			const char *mname = bpf_map__name(iter);
+			size_t len = mname ? strlen(mname) : 0;
+
+			if (len >= slen && strcmp(mname + len - slen, secs[s]) == 0) {
+				m = iter;
+				break;
+			}
+		}
+		id = btf__find_by_name_kind(btf, secs[s], BTF_KIND_DATASEC);
+		if (!m || id < 0)
+			continue;
+
+		sec = btf__type_by_id(btf, id);
+		vsi = btf_var_secinfos(sec);
+		for (i = 0; i < btf_vlen(sec); i++, vsi++) {
+			const struct btf_type *var = btf__type_by_id(btf, vsi->type);
+
+			if (strcmp(btf__name_by_offset(btf, var->name_off), name))
+				continue;
+			if (vsi->size != 4 && vsi->size != 8) {
+				PRINT_FAIL("'%s' is %u bytes, only 4 and 8 are supported\n",
+					   name, vsi->size);
+				return -EINVAL;
+			}
+			*map = m;
+			*off = vsi->offset;
+			*sz = vsi->size;
+			return 0;
+		}
+	}
+
+	PRINT_FAIL("no global variable '%s'\n", name);
+	return -ENOENT;
+}
+
+static int access_global_var(struct bpf_object *obj, const char *name,
+			     __u64 *val, bool set)
+{
+	__u32 off, sz, zero = 0;
+	struct bpf_map *map;
+	size_t vsz;
+	void *buf;
+	int err;
+
+	err = find_global_var(obj, name, &map, &off, &sz);
+	if (err)
+		return err;
+
+	vsz = bpf_map__value_size(map);
+	buf = calloc(1, vsz);
+	if (!buf)
+		return -ENOMEM;
+
+	err = bpf_map__lookup_elem(map, &zero, sizeof(zero), buf, vsz, 0);
+	if (err) {
+		PRINT_FAIL("failed to read '%s': %d\n", name, err);
+		goto out;
+	}
+	if (!set) {
+		*val = sz == 4 ? *(__u32 *)(buf + off) : *(__u64 *)(buf + off);
+		goto out;
+	}
+	if (sz == 4)
+		*(__u32 *)(buf + off) = *val;
+	else
+		*(__u64 *)(buf + off) = *val;
+	err = bpf_map__update_elem(map, &zero, sizeof(zero), buf, vsz, 0);
+	if (err)
+		PRINT_FAIL("failed to write '%s': %d\n", name, err);
+out:
+	free(buf);
+	return err;
 }
 
 static int parse_retval(const char *str, int *val, const char *name)
@@ -557,6 +708,24 @@ static int parse_test_spec(struct test_loader *tester,
 			spec->mode_mask |= UNPRIV;
 			spec->unpriv.execute = true;
 			has_unpriv_retval = true;
+		} else if ((val = str_has_pfx(s, "test_global_set="))) {
+			err = parse_global_var(val, &spec->priv.set_global_var,
+					       &spec->priv.set_global_val,
+					       "__set_global");
+			if (err)
+				goto cleanup;
+			spec->priv.has_set_global = true;
+			spec->priv.execute = true;
+			spec->mode_mask |= PRIV;
+		} else if ((val = str_has_pfx(s, "test_global_ret="))) {
+			err = parse_global_var(val, &spec->priv.ret_global_var,
+					       &spec->priv.ret_global_val,
+					       "__ret_global");
+			if (err)
+				goto cleanup;
+			spec->priv.has_ret_global = true;
+			spec->priv.execute = true;
+			spec->mode_mask |= PRIV;
 		} else if ((val = str_has_pfx(s, "test_log_level="))) {
 			err = parse_int(val, &spec->log_level, "test log level");
 			if (err)
@@ -740,6 +909,25 @@ static int parse_test_spec(struct test_loader *tester,
 		if (!has_unpriv_retval) {
 			spec->unpriv.retval = spec->priv.retval;
 			spec->unpriv.execute = spec->priv.execute;
+		}
+
+		if (spec->priv.has_set_global && !spec->unpriv.has_set_global) {
+			spec->unpriv.set_global_var = strdup(spec->priv.set_global_var);
+			if (!spec->unpriv.set_global_var) {
+				err = -ENOMEM;
+				goto cleanup;
+			}
+			spec->unpriv.set_global_val = spec->priv.set_global_val;
+			spec->unpriv.has_set_global = true;
+		}
+		if (spec->priv.has_ret_global && !spec->unpriv.has_ret_global) {
+			spec->unpriv.ret_global_var = strdup(spec->priv.ret_global_var);
+			if (!spec->unpriv.ret_global_var) {
+				err = -ENOMEM;
+				goto cleanup;
+			}
+			spec->unpriv.ret_global_val = spec->priv.ret_global_val;
+			spec->unpriv.has_ret_global = true;
 		}
 
 		if (spec->unpriv.expect_msgs.cnt == 0)
@@ -1532,12 +1720,31 @@ void run_subtest(struct test_loader *tester,
 			}
 		}
 
+		if (subspec->has_set_global) {
+			__u64 v = subspec->set_global_val;
+
+			if (access_global_var(tobj, subspec->set_global_var, &v, true))
+				goto tobj_cleanup;
+		}
+
 		err = do_prog_test_run(bpf_program__fd(tprog), &retval,
 				       bpf_program__type(tprog) == BPF_PROG_TYPE_SYSCALL ? true : false,
 				       spec->linear_sz);
 		if (!err && retval != subspec->retval && subspec->retval != POINTER_VALUE) {
 			PRINT_FAIL("Unexpected retval: %d != %d\n", retval, subspec->retval);
 			goto tobj_cleanup;
+		}
+
+		if (subspec->has_ret_global) {
+			__u64 v = 0;
+
+			if (access_global_var(tobj, subspec->ret_global_var, &v, false))
+				goto tobj_cleanup;
+			if (v != subspec->ret_global_val) {
+				PRINT_FAIL("Unexpected %s: 0x%llx != 0x%llx\n",
+					   subspec->ret_global_var, v, subspec->ret_global_val);
+				goto tobj_cleanup;
+			}
 		}
 
 		verify_stderr(bpf_program__fd(tprog), &subspec->stderr);

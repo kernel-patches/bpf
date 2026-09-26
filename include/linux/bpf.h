@@ -1805,6 +1805,49 @@ enum bpf_sig_keyring {
 	BPF_SIG_KEYRING_BPF,
 };
 
+/* One cleanup region of a JITed (sub)program. */
+struct bpf_cleanup_range {
+	u64 begin;
+	u64 end;
+	u64 pad;
+};
+
+struct bpf_exception_info {
+	struct bpf_cleanup_info *info;
+	struct bpf_cleanup_range *ranges;
+	u32 nr_info;
+	u32 nr_ranges;
+};
+
+#ifdef CONFIG_BPF_SYSCALL
+bool bpf_exc_insn_is_pad(const struct bpf_verifier_env *env,
+			 const struct bpf_prog *prog, u32 idx);
+int bpf_exc_attach_main_prog(struct bpf_verifier_env *env, struct bpf_prog *prog);
+void bpf_exc_fill_native_ranges(struct bpf_prog *prog, u32 *addrs, void *image);
+void bpf_exc_free_info(struct bpf_prog_aux *aux);
+#else
+
+static inline bool bpf_exc_insn_is_pad(const struct bpf_verifier_env *env,
+				       const struct bpf_prog *prog, u32 idx)
+{
+	return false;
+}
+
+static inline int bpf_exc_attach_main_prog(struct bpf_verifier_env *env,
+					   struct bpf_prog *prog)
+{
+	return 0;
+}
+
+static inline void bpf_exc_fill_native_ranges(struct bpf_prog *prog, u32 *addrs, void *image)
+{
+}
+
+static inline void bpf_exc_free_info(struct bpf_prog_aux *aux)
+{
+}
+#endif
+
 struct bpf_prog_aux {
 	atomic64_t refcnt;
 	u32 used_map_cnt;
@@ -1885,6 +1928,8 @@ struct bpf_prog_aux {
 	u64 (*bpf_exception_cb)(u64 cookie, u64 sp, u64 bp, u64, u64);
 	u16 stack_arg_sp_adjust;
 	u16 freplace_link_cnt; /* counts freplace links extending this prog */
+	struct bpf_exception_info *exc;
+	u64 epilogue_ip; /* native address of this (sub)program's epilogue */
 #ifdef CONFIG_SECURITY
 	void *security;
 #endif

@@ -8,6 +8,8 @@
 #include <linux/slab.h>
 #include <linux/sort.h>
 
+#include "exception.h"
+
 #define verbose(env, fmt, args...) bpf_verifier_log_write(env, fmt, ##args)
 
 /*
@@ -362,6 +364,9 @@ bpf_insn_successors(struct bpf_verifier_env *env, u32 idx)
 		return jt;
 	}
 
+	if (unlikely(bpf_is_unwind_resume_kfunc(insn)))
+		return succ;
+
 	opcode_info = &opcode_info_tbl[BPF_CLASS(insn->code) | BPF_OP(insn->code)];
 	insn_sz = bpf_is_ldimm64(insn) ? 2 : 1;
 	if (opcode_info->can_fallthrough)
@@ -382,6 +387,18 @@ bpf_insn_successors(struct bpf_verifier_env *env, u32 idx)
 
 		if (exit_idx != U32_MAX)
 			succ->items[succ->cnt++] = exit_idx;
+	}
+
+	/*
+	 * A call a cleanup record covers can leave through its landing pad.
+	 * Only a call to a subprogram or to bpf_unwind() is marked, neither of
+	 * which is an edge the block above adds, so succ still holds two.
+	 */
+	if (unlikely(env->cleanup_info_cnt)) {
+		int pad = bpf_exc_pad_of_call(env, idx);
+
+		if (pad >= 0)
+			succ->items[succ->cnt++] = pad;
 	}
 
 	return succ;
@@ -545,6 +562,13 @@ bool bpf_stack_slot_alive(struct bpf_verifier_env *env, u32 frameno, u32 half_sp
 		alive = callee_stack_access_at_callsite(env, callsite)
 			? is_live_before(instance, callsite, rel, half_spi)
 			: is_live_before(instance, callsite + 1, rel, half_spi);
+
+		if (!alive && unlikely(env->cleanup_info_cnt)) {
+			int pad = bpf_exc_pad_of_call(env, callsite);
+
+			if (pad >= 0)
+				alive = is_live_before(instance, pad, rel, half_spi);
+		}
 		if (alive)
 			return true;
 	}
