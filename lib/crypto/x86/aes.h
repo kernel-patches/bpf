@@ -205,6 +205,60 @@ static bool aes_cbc_cts_decrypt_arch(u8 *dst, const u8 *src, size_t len,
 }
 #endif /* CONFIG_CRYPTO_LIB_AES_CBC */
 
+#if IS_ENABLED(CONFIG_CRYPTO_LIB_AES_CTR) && IS_ENABLED(CONFIG_X86_64)
+void aes_ctr64_crypt_aesni(u8 *dst, const u8 *src, s64 len, const u64 le_ctr[2],
+			   const struct aes_enckey *key);
+
+static void aes_ctr64_x86(u8 *dst, const u8 *src, size_t len,
+			  const u64 le_ctr[2], const struct aes_enckey *key)
+{
+	aes_ctr64_crypt_aesni(dst, src, len, le_ctr, key);
+}
+
+#define aes_ctr_arch aes_ctr_arch
+static bool aes_ctr_arch(u8 *dst, const u8 *src, size_t len,
+			 u8 ctr[AES_BLOCK_SIZE], const struct aes_enckey *key)
+{
+	u64 le_ctr[2];
+	u64 ctr64;
+	size_t nblocks;
+	size_t part1_len;
+
+	if (!static_branch_likely(&have_aesni) || unlikely(!irq_fpu_usable()))
+		return false;
+
+	ctr64 = le_ctr[0] = get_unaligned_be64(&ctr[8]);
+	le_ctr[1] = get_unaligned_be64(&ctr[0]);
+
+	kernel_fpu_begin();
+
+	nblocks = DIV_ROUND_UP(len, AES_BLOCK_SIZE);
+	ctr64 += nblocks;
+
+	if (likely(ctr64 >= nblocks)) {
+		/* The low 64 bits of the counter won't overflow. */
+		aes_ctr64_x86(dst, src, len, le_ctr, key);
+	} else {
+		/*
+		 * The low 64 bits of the counter will overflow.  The
+		 * assembly doesn't handle this case, so split the
+		 * operation into two at the point where the overflow
+		 * will occur.  After the first part, add the carry bit.
+		 */
+		part1_len = min(len, (nblocks - ctr64) * AES_BLOCK_SIZE);
+		aes_ctr64_x86(dst, src, part1_len, le_ctr, key);
+		le_ctr[0] = 0;
+		le_ctr[1]++;
+		aes_ctr64_x86(dst + part1_len, src + part1_len, len - part1_len,
+			      le_ctr, key);
+	}
+	kernel_fpu_end();
+	put_unaligned_be64(ctr64, &ctr[8]);
+	put_unaligned_be64(le_ctr[1], &ctr[0]);
+	return true;
+}
+#endif /* CONFIG_CRYPTO_LIB_AES_CTR && CONFIG_X86_64 */
+
 #define aes_mod_init_arch aes_mod_init_arch
 static void aes_mod_init_arch(void)
 {
