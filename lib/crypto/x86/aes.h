@@ -116,6 +116,95 @@ static bool aes_ecb_decrypt_arch(u8 *dst, const u8 *src, size_t len,
 }
 #endif /* CONFIG_CRYPTO_LIB_AES_ECB */
 
+#if IS_ENABLED(CONFIG_CRYPTO_LIB_AES_CBC)
+void aes_cbc_encrypt_aesni(u8 *dst, const u8 *src, long nblocks,
+			   u8 iv[AES_BLOCK_SIZE], const struct aes_enckey *key);
+void aes_cbc_decrypt_aesni(u8 *dst, const u8 *src, long nblocks,
+			   u8 iv[AES_BLOCK_SIZE], const struct aes_key *key);
+void aes_cbc_cts_encrypt_aesni(u8 *dst, const u8 *src, long pn_len,
+			       const u8 iv[AES_BLOCK_SIZE],
+			       const struct aes_enckey *key);
+void aes_cbc_cts_decrypt_aesni(u8 *dst, const u8 *src, long pn_len,
+			       const u8 iv[AES_BLOCK_SIZE],
+			       const struct aes_key *key);
+
+/* len is always a positive multiple of AES_BLOCK_SIZE here. */
+#define aes_cbc_encrypt_arch aes_cbc_encrypt_arch
+static bool aes_cbc_encrypt_arch(u8 *dst, const u8 *src, size_t len,
+				 u8 iv[AES_BLOCK_SIZE],
+				 const struct aes_enckey *key)
+{
+	if (!static_branch_likely(&have_aesni) || unlikely(!irq_fpu_usable()))
+		return false;
+	kernel_fpu_begin();
+	aes_cbc_encrypt_aesni(dst, src, len / AES_BLOCK_SIZE, iv, key);
+	kernel_fpu_end();
+	return true;
+}
+
+/* len is always a positive multiple of AES_BLOCK_SIZE here. */
+#define aes_cbc_decrypt_arch aes_cbc_decrypt_arch
+static bool aes_cbc_decrypt_arch(u8 *dst, const u8 *src, size_t len,
+				 u8 iv[AES_BLOCK_SIZE],
+				 const struct aes_key *key)
+{
+	if (!static_branch_likely(&have_aesni) || unlikely(!irq_fpu_usable()))
+		return false;
+	kernel_fpu_begin();
+	aes_cbc_decrypt_aesni(dst, src, len / AES_BLOCK_SIZE, iv, key);
+	kernel_fpu_end();
+	return true;
+}
+
+/* len can be any value greater than AES_BLOCK_SIZE here. */
+#define aes_cbc_cts_encrypt_arch aes_cbc_cts_encrypt_arch
+static bool aes_cbc_cts_encrypt_arch(u8 *dst, const u8 *src, size_t len,
+				     u8 iv[AES_BLOCK_SIZE],
+				     const struct aes_enckey *key)
+{
+	const size_t cbc_blocks = (len - AES_BLOCK_SIZE - 1) / AES_BLOCK_SIZE;
+	const size_t pn_len = ((len - 1) % AES_BLOCK_SIZE) + 1;
+
+	if (!static_branch_likely(&have_aesni) || unlikely(!irq_fpu_usable()))
+		return false;
+
+	kernel_fpu_begin();
+	if (cbc_blocks) {
+		aes_cbc_encrypt_aesni(dst, src, cbc_blocks, iv, key);
+		dst += cbc_blocks * AES_BLOCK_SIZE;
+		src += cbc_blocks * AES_BLOCK_SIZE;
+	}
+	/* Encrypt the last 17 to 32 bytes. */
+	aes_cbc_cts_encrypt_aesni(dst, src, pn_len, iv, key);
+	kernel_fpu_end();
+	return true;
+}
+
+/* len can be any value greater than AES_BLOCK_SIZE here. */
+#define aes_cbc_cts_decrypt_arch aes_cbc_cts_decrypt_arch
+static bool aes_cbc_cts_decrypt_arch(u8 *dst, const u8 *src, size_t len,
+				     u8 iv[AES_BLOCK_SIZE],
+				     const struct aes_key *key)
+{
+	const size_t cbc_blocks = (len - AES_BLOCK_SIZE - 1) / AES_BLOCK_SIZE;
+	const size_t pn_len = ((len - 1) % AES_BLOCK_SIZE) + 1;
+
+	if (!static_branch_likely(&have_aesni) || unlikely(!irq_fpu_usable()))
+		return false;
+
+	kernel_fpu_begin();
+	if (cbc_blocks) {
+		aes_cbc_decrypt_aesni(dst, src, cbc_blocks, iv, key);
+		dst += cbc_blocks * AES_BLOCK_SIZE;
+		src += cbc_blocks * AES_BLOCK_SIZE;
+	}
+	/* Decrypt the last 17 to 32 bytes. */
+	aes_cbc_cts_decrypt_aesni(dst, src, pn_len, iv, key);
+	kernel_fpu_end();
+	return true;
+}
+#endif /* CONFIG_CRYPTO_LIB_AES_CBC */
+
 #define aes_mod_init_arch aes_mod_init_arch
 static void aes_mod_init_arch(void)
 {
