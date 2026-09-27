@@ -54,6 +54,9 @@ libaes-$(CONFIG_RISCV) += riscv/aes-riscv64-zvkned.o
 ifneq ($(CONFIG_CRYPTO_LIB_AES_CTR),)
 libaes-$(CONFIG_RISCV) += riscv/aes-riscv64-zvkned-zvkb.o
 endif
+ifneq ($(CONFIG_CRYPTO_LIB_AES_XTS),)
+libaes-$(CONFIG_RISCV) += riscv/aes-riscv64-zvkned-zvbb-zvkg.o
+endif
 
 libaes-$(CONFIG_SPARC) += sparc/aes_asm.o
 

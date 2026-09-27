@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
+ * AES using the RISC-V vector crypto extensions
+ *
  * Copyright (C) 2023 VRULL GmbH
  * Copyright (C) 2023 SiFive, Inc.
  * Copyright 2024 Google LLC
@@ -10,6 +12,7 @@
 
 static __ro_after_init DEFINE_STATIC_KEY_FALSE(have_zvkned);
 static __ro_after_init DEFINE_STATIC_KEY_FALSE(have_zvkned_zvkb);
+static __ro_after_init DEFINE_STATIC_KEY_FALSE(have_xts);
 
 /* The assembly code assumes the following offsets. */
 static_assert(offsetof(struct aes_enckey, len) == 0);
@@ -228,6 +231,52 @@ static bool aes_ctr_arch(u8 *dst, const u8 *src, size_t len,
 }
 #endif /* CONFIG_CRYPTO_LIB_AES_CTR */
 
+#if IS_ENABLED(CONFIG_CRYPTO_LIB_AES_XTS)
+void aes_xts_encrypt_zvkned_zvbb_zvkg(u8 *dst, const u8 *src, size_t len,
+				      u8 tweak[AES_BLOCK_SIZE],
+				      const struct aes_key *key);
+void aes_xts_decrypt_zvkned_zvbb_zvkg(u8 *dst, const u8 *src, size_t len,
+				      u8 tweak[AES_BLOCK_SIZE],
+				      const struct aes_key *key);
+
+/* len is always a positive multiple of AES_BLOCK_SIZE here. */
+static __always_inline bool
+aes_xts_crypt_riscv(u8 *dst, const u8 *src, size_t len,
+		    u8 tweak[AES_BLOCK_SIZE],
+		    const struct aes_xts_key *key, bool cont, bool enc)
+{
+	if (!static_branch_likely(&have_xts) || unlikely(!may_use_simd()))
+		return false;
+	kernel_vector_begin();
+	if (!cont)
+		aes_encrypt_zvkned(&key->tweak_key, tweak, tweak);
+	if (enc)
+		aes_xts_encrypt_zvkned_zvbb_zvkg(dst, src, len, tweak,
+						 &key->main_key);
+	else
+		aes_xts_decrypt_zvkned_zvbb_zvkg(dst, src, len, tweak,
+						 &key->main_key);
+	kernel_vector_end();
+	return true;
+}
+
+#define aes_xts_encrypt_arch aes_xts_encrypt_arch
+static bool aes_xts_encrypt_arch(u8 *dst, const u8 *src, size_t len,
+				 u8 tweak[AES_BLOCK_SIZE],
+				 const struct aes_xts_key *key, bool cont)
+{
+	return aes_xts_crypt_riscv(dst, src, len, tweak, key, cont, true);
+}
+
+#define aes_xts_decrypt_arch aes_xts_decrypt_arch
+static bool aes_xts_decrypt_arch(u8 *dst, const u8 *src, size_t len,
+				 u8 tweak[AES_BLOCK_SIZE],
+				 const struct aes_xts_key *key, bool cont)
+{
+	return aes_xts_crypt_riscv(dst, src, len, tweak, key, cont, false);
+}
+#endif /* CONFIG_CRYPTO_LIB_AES_XTS */
+
 #define aes_mod_init_arch aes_mod_init_arch
 static void aes_mod_init_arch(void)
 {
@@ -236,5 +285,9 @@ static void aes_mod_init_arch(void)
 		static_branch_enable(&have_zvkned);
 		if (riscv_isa_extension_available(NULL, ZVKB))
 			static_branch_enable(&have_zvkned_zvkb);
+		if (riscv_isa_extension_available(NULL, ZVBB) &&
+		    riscv_isa_extension_available(NULL, ZVKG) &&
+		    riscv_vector_vlen() < 2048 /* Implementation limitation */)
+			static_branch_enable(&have_xts);
 	}
 }
