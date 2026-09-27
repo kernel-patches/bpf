@@ -30,6 +30,7 @@ use crate::{
     process::{GetWorkOrRegister, Process},
     ptr_align,
     stats::GLOBAL_STATS,
+    trace::{trace_transaction_alloc_buf, trace_transaction_buffer_release},
     transaction::{Transaction, TransactionFlag, TransactionFlags, TransactionInfo},
     BinderReturnWriter, DArc, DLArc, DTRWrap, DeliverCode, DeliverToRead,
 };
@@ -1076,6 +1077,8 @@ impl Thread {
             }
         };
 
+        trace_transaction_alloc_buf(debug_id, data_size, offsets_size, buffers_size);
+
         let mut buffer_reader = UserSlice::new(info.data_ptr, data_size).reader();
         let mut end_of_previous_object = 0;
         let mut sg_state = None;
@@ -1522,6 +1525,7 @@ impl Thread {
                         if buffer.looper_need_return_on_free() {
                             self.inner.lock().looper_need_return = true;
                         }
+                        trace_transaction_buffer_release(buffer.debug_id);
                         drop(buffer);
                     }
                 }
