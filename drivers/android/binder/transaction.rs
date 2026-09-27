@@ -24,6 +24,7 @@ use crate::{
     process::{Process, ProcessInner},
     ptr_align,
     thread::{PushWorkRes, Thread},
+    trace::trace_transaction_update_buffer_release,
     BinderReturnWriter, DArc, DLArc, DTRWrap, DeliverToRead,
 };
 
@@ -356,6 +357,7 @@ impl Transaction {
                         if let Some(t_outdated) =
                             target_node.take_outdated_transaction(&self, &mut process_inner)
                         {
+                            trace_transaction_update_buffer_release(t_outdated.debug_id);
                             let mut alloc_guard = t_outdated.allocation.lock();
                             if let Some(alloc) = (*alloc_guard).as_mut() {
                                 // Take the oneway node to prevent `Allocation::drop` from calling
