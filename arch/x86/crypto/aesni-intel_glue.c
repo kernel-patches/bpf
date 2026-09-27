@@ -80,10 +80,8 @@ asmlinkage void aesni_xts_enc(const struct crypto_aes_ctx *ctx, u8 *out,
 asmlinkage void aesni_xts_dec(const struct crypto_aes_ctx *ctx, u8 *out,
 			      const u8 *in, unsigned int len, u8 *iv);
 
-#ifdef CONFIG_X86_64
 asmlinkage void aesni_ctr_enc(struct crypto_aes_ctx *ctx, u8 *out,
 			      const u8 *in, unsigned int len, u8 *iv);
-#endif
 
 static inline struct crypto_aes_ctx *aes_ctx(void *raw_ctx)
 {
@@ -319,7 +317,6 @@ static int cts_cbc_decrypt(struct skcipher_request *req)
 	return skcipher_walk_done(&walk, 0);
 }
 
-#ifdef CONFIG_X86_64
 /* This is the non-AVX version. */
 static int ctr_crypt_aesni(struct skcipher_request *req)
 {
@@ -353,7 +350,6 @@ static int ctr_crypt_aesni(struct skcipher_request *req)
 	}
 	return err;
 }
-#endif
 
 static int xts_setkey_aesni(struct crypto_skcipher *tfm, const u8 *key,
 			    unsigned int keylen)
@@ -469,8 +465,7 @@ xts_crypt(struct skcipher_request *req, xts_encrypt_iv_func encrypt_iv,
 	 * single-scatterlist-element messages as efficiently as possible.  The
 	 * code is 64-bit specific, as it assumes no page mapping is needed.
 	 */
-	if (IS_ENABLED(CONFIG_X86_64) &&
-	    likely(req->src->length >= req->cryptlen &&
+	if (likely(req->src->length >= req->cryptlen &&
 		   req->dst->length >= req->cryptlen)) {
 		(*crypt_func)(&ctx->crypt_ctx, sg_virt(req->src),
 			      sg_virt(req->dst), req->cryptlen, req->iv);
@@ -557,7 +552,6 @@ static struct skcipher_alg aesni_skciphers[] = {
 		.setkey		= aesni_skcipher_setkey,
 		.encrypt	= cts_cbc_encrypt,
 		.decrypt	= cts_cbc_decrypt,
-#ifdef CONFIG_X86_64
 	}, {
 		.base = {
 			.cra_name		= "ctr(aes)",
@@ -574,7 +568,6 @@ static struct skcipher_alg aesni_skciphers[] = {
 		.setkey		= aesni_skcipher_setkey,
 		.encrypt	= ctr_crypt_aesni,
 		.decrypt	= ctr_crypt_aesni,
-#endif
 	}, {
 		.base = {
 			.cra_name		= "xts(aes)",
@@ -594,7 +587,6 @@ static struct skcipher_alg aesni_skciphers[] = {
 	}
 };
 
-#ifdef CONFIG_X86_64
 asmlinkage void aes_xts_encrypt_iv(const struct crypto_aes_ctx *tweak_key,
 				   u8 iv[AES_BLOCK_SIZE]);
 
@@ -1604,18 +1596,6 @@ static void unregister_avx_algs(void)
 	unregister_aeads(aes_gcm_algs_vaes_avx2);
 	unregister_aeads(aes_gcm_algs_vaes_avx512);
 }
-#else /* CONFIG_X86_64 */
-static struct aead_alg aes_gcm_algs_aesni[0];
-
-static int __init register_avx_algs(void)
-{
-	return 0;
-}
-
-static void unregister_avx_algs(void)
-{
-}
-#endif /* !CONFIG_X86_64 */
 
 static const struct x86_cpu_id aesni_cpu_id[] = {
 	X86_MATCH_FEATURE(X86_FEATURE_AES, NULL),
