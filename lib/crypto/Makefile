@@ -51,6 +51,10 @@ endif # !CONFIG_SPE
 endif # CONFIG_PPC
 
 libaes-$(CONFIG_RISCV) += riscv/aes-riscv64-zvkned.o
+ifneq ($(CONFIG_CRYPTO_LIB_AES_CTR),)
+libaes-$(CONFIG_RISCV) += riscv/aes-riscv64-zvkned-zvkb.o
+endif
+
 libaes-$(CONFIG_SPARC) += sparc/aes_asm.o
 
 libaes-$(CONFIG_X86) += x86/aes-aesni.o

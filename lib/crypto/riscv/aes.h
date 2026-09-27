@@ -9,6 +9,7 @@
 #include <asm/vector.h>
 
 static __ro_after_init DEFINE_STATIC_KEY_FALSE(have_zvkned);
+static __ro_after_init DEFINE_STATIC_KEY_FALSE(have_zvkned_zvkb);
 
 /* The assembly code assumes the following offsets. */
 static_assert(offsetof(struct aes_enckey, len) == 0);
@@ -161,10 +162,79 @@ static bool aes_cbc_cts_decrypt_arch(u8 *dst, const u8 *src, size_t len,
 }
 #endif /* CONFIG_CRYPTO_LIB_AES_CBC */
 
+#if IS_ENABLED(CONFIG_CRYPTO_LIB_AES_CTR)
+void aes_ctr32_crypt_zvkned_zvkb(u8 *dst, const u8 *src, size_t len, u8 iv[16],
+				 const struct aes_enckey *key);
+
+static void aes_ctr_riscv(u8 *dst, const u8 *src, size_t len,
+			  u8 ctr[AES_BLOCK_SIZE], const struct aes_enckey *key)
+{
+	u32 ctr32 = get_unaligned_be32(&ctr[12]);
+	u32 nblocks;
+	size_t part1_len;
+
+	/* This assumes len <= U32_MAX * AES_BLOCK_SIZE. */
+	nblocks = DIV_ROUND_UP(len, AES_BLOCK_SIZE);
+	ctr32 += nblocks;
+
+	if (likely(ctr32 >= nblocks)) {
+		/* The low 32 bits of the counter won't overflow. */
+		aes_ctr32_crypt_zvkned_zvkb(dst, src, len, ctr, key);
+	} else {
+		/*
+		 * The low 32 bits of the counter will overflow.  The
+		 * assembly doesn't handle this case, so split the
+		 * operation into two at the point where the overflow
+		 * will occur.  After the first part, add the carry bit.
+		 */
+		part1_len =
+			min(len, (size_t)(nblocks - ctr32) * AES_BLOCK_SIZE);
+		aes_ctr32_crypt_zvkned_zvkb(dst, src, part1_len, ctr, key);
+		for (int i = AES_BLOCK_SIZE - 5; i >= 0; i--) {
+			if (++ctr[i] != 0)
+				break;
+		}
+		if (part1_len < len)
+			aes_ctr32_crypt_zvkned_zvkb(dst + part1_len,
+						    src + part1_len,
+						    len - part1_len, ctr, key);
+	}
+}
+
+#define aes_ctr_arch aes_ctr_arch
+static bool aes_ctr_arch(u8 *dst, const u8 *src, size_t len,
+			 u8 ctr[AES_BLOCK_SIZE], const struct aes_enckey *key)
+{
+	if (!static_branch_likely(&have_zvkned_zvkb) ||
+	    unlikely(!may_use_simd()))
+		return false;
+	kernel_vector_begin();
+	while (len) {
+		/*
+		 * Split super long messages into chunks that each need at most
+		 * 1 carry bit out of the low 32-bit word of the counter.  Up to
+		 * U32_MAX * AES_BLOCK_SIZE bytes could be allowed per chunk,
+		 * but use a lower limit to guard against other errors.
+		 */
+		size_t n = min(len, round_down(S32_MAX, 32 * AES_BLOCK_SIZE));
+
+		aes_ctr_riscv(dst, src, n, ctr, key);
+		dst += n;
+		src += n;
+		len -= n;
+	}
+	kernel_vector_end();
+	return true;
+}
+#endif /* CONFIG_CRYPTO_LIB_AES_CTR */
+
 #define aes_mod_init_arch aes_mod_init_arch
 static void aes_mod_init_arch(void)
 {
 	if (riscv_isa_extension_available(NULL, ZVKNED) &&
-	    riscv_vector_vlen() >= 128)
+	    riscv_vector_vlen() >= 128) {
 		static_branch_enable(&have_zvkned);
+		if (riscv_isa_extension_available(NULL, ZVKB))
+			static_branch_enable(&have_zvkned_zvkb);
+	}
 }

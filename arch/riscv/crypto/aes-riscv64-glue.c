@@ -22,10 +22,6 @@
 #include <linux/minmax.h>
 #include <linux/module.h>
 
-asmlinkage void aes_ctr32_crypt_zvkned_zvkb(const struct crypto_aes_ctx *key,
-					    const u8 *in, u8 *out, size_t len,
-					    u8 iv[AES_BLOCK_SIZE]);
-
 asmlinkage void aes_xts_encrypt_zvkned_zvbb_zvkg(
 			const struct crypto_aes_ctx *key,
 			const u8 *in, u8 *out, size_t len,
@@ -60,75 +56,6 @@ static int riscv64_aes_setkey(struct crypto_aes_ctx *ctx,
 	 *   struct crypto_aes_ctx and aes_expandkey() everywhere.
 	 */
 	return aes_expandkey(ctx, key, keylen);
-}
-
-static int riscv64_aes_setkey_skcipher(struct crypto_skcipher *tfm,
-				       const u8 *key, unsigned int keylen)
-{
-	struct crypto_aes_ctx *ctx = crypto_skcipher_ctx(tfm);
-
-	return riscv64_aes_setkey(ctx, key, keylen);
-}
-
-/* AES-CTR */
-
-static int riscv64_aes_ctr_crypt(struct skcipher_request *req)
-{
-	struct crypto_skcipher *tfm = crypto_skcipher_reqtfm(req);
-	const struct crypto_aes_ctx *ctx = crypto_skcipher_ctx(tfm);
-	unsigned int nbytes, p1_nbytes;
-	struct skcipher_walk walk;
-	u32 ctr32, nblocks;
-	int err;
-
-	/* Get the low 32-bit word of the 128-bit big endian counter. */
-	ctr32 = get_unaligned_be32(req->iv + 12);
-
-	err = skcipher_walk_virt(&walk, req, false);
-	while ((nbytes = walk.nbytes) != 0) {
-		if (nbytes < walk.total) {
-			/* Not the end yet, so keep the length block-aligned. */
-			nbytes = round_down(nbytes, AES_BLOCK_SIZE);
-			nblocks = nbytes / AES_BLOCK_SIZE;
-		} else {
-			/* It's the end, so include any final partial block. */
-			nblocks = DIV_ROUND_UP(nbytes, AES_BLOCK_SIZE);
-		}
-		ctr32 += nblocks;
-
-		kernel_vector_begin();
-		if (ctr32 >= nblocks) {
-			/* The low 32-bit word of the counter won't overflow. */
-			aes_ctr32_crypt_zvkned_zvkb(ctx, walk.src.virt.addr,
-						    walk.dst.virt.addr, nbytes,
-						    req->iv);
-		} else {
-			/*
-			 * The low 32-bit word of the counter will overflow.
-			 * The assembly doesn't handle this case, so split the
-			 * operation into two at the point where the overflow
-			 * will occur.  After the first part, add the carry bit.
-			 */
-			p1_nbytes = min(nbytes, (nblocks - ctr32) * AES_BLOCK_SIZE);
-			aes_ctr32_crypt_zvkned_zvkb(ctx, walk.src.virt.addr,
-						    walk.dst.virt.addr,
-						    p1_nbytes, req->iv);
-			crypto_inc(req->iv, 12);
-
-			if (ctr32) {
-				aes_ctr32_crypt_zvkned_zvkb(
-					ctx,
-					walk.src.virt.addr + p1_nbytes,
-					walk.dst.virt.addr + p1_nbytes,
-					nbytes - p1_nbytes, req->iv);
-			}
-		}
-		kernel_vector_end();
-
-		err = skcipher_walk_done(&walk, walk.nbytes - nbytes);
-	}
-
-	return err;
 }
 
 /* AES-XTS */
@@ -251,25 +178,6 @@ static int riscv64_aes_xts_decrypt(struct skcipher_request *req)
 
 /* Algorithm definitions */
 
-static struct skcipher_alg riscv64_zvkned_zvkb_aes_skcipher_alg = {
-	.setkey = riscv64_aes_setkey_skcipher,
-	.encrypt = riscv64_aes_ctr_crypt,
-	.decrypt = riscv64_aes_ctr_crypt,
-	.min_keysize = AES_MIN_KEY_SIZE,
-	.max_keysize = AES_MAX_KEY_SIZE,
-	.ivsize = AES_BLOCK_SIZE,
-	.chunksize = AES_BLOCK_SIZE,
-	.walksize = 4 * AES_BLOCK_SIZE, /* matches LMUL=4 */
-	.base = {
-		.cra_blocksize = 1,
-		.cra_ctxsize = sizeof(struct crypto_aes_ctx),
-		.cra_priority = 300,
-		.cra_name = "ctr(aes)",
-		.cra_driver_name = "ctr-aes-riscv64-zvkned-zvkb",
-		.cra_module = THIS_MODULE,
-	},
-};
-
 static struct skcipher_alg riscv64_zvkned_zvbb_zvkg_aes_skcipher_alg = {
 	.setkey = riscv64_aes_xts_setkey,
 	.encrypt = riscv64_aes_xts_encrypt,
@@ -302,43 +210,27 @@ static int __init riscv64_aes_mod_init(void)
 
 	if (riscv_isa_extension_available(NULL, ZVKNED) &&
 	    riscv_vector_vlen() >= 128) {
-		if (riscv_isa_extension_available(NULL, ZVKB)) {
-			err = crypto_register_skcipher(
-				&riscv64_zvkned_zvkb_aes_skcipher_alg);
-			if (err)
-				return err;
-		}
-
 		if (riscv64_aes_xts_supported()) {
 			err = crypto_register_skcipher(
 				&riscv64_zvkned_zvbb_zvkg_aes_skcipher_alg);
 			if (err)
-				goto unregister_zvkned_zvkb_skcipher_alg;
+				return err;
 		}
 	}
 
-	return err;
-
-unregister_zvkned_zvkb_skcipher_alg:
-	if (riscv_isa_extension_available(NULL, ZVKB))
-		crypto_unregister_skcipher(&riscv64_zvkned_zvkb_aes_skcipher_alg);
 	return err;
 }
 
 static void __exit riscv64_aes_mod_exit(void)
 {
-	if (riscv64_aes_xts_supported())
-		crypto_unregister_skcipher(&riscv64_zvkned_zvbb_zvkg_aes_skcipher_alg);
-	if (riscv_isa_extension_available(NULL, ZVKB))
-		crypto_unregister_skcipher(&riscv64_zvkned_zvkb_aes_skcipher_alg);
+	crypto_unregister_skcipher(&riscv64_zvkned_zvbb_zvkg_aes_skcipher_alg);
 }
 
 module_init(riscv64_aes_mod_init);
 module_exit(riscv64_aes_mod_exit);
 
-MODULE_DESCRIPTION("AES-CTR/XTS (RISC-V accelerated)");
+MODULE_DESCRIPTION("AES-XTS (RISC-V accelerated)");
 MODULE_AUTHOR("Jerry Shih <jerry.shih@sifive.com>");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS_CRYPTO("aes");
-MODULE_ALIAS_CRYPTO("ctr(aes)");
 MODULE_ALIAS_CRYPTO("xts(aes)");
