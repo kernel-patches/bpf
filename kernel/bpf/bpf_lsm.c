@@ -188,6 +188,7 @@ static const struct bpf_func_proto bpf_bprm_opts_set_proto = {
 
 BPF_CALL_3(bpf_ima_inode_hash, struct inode *, inode, void *, dst, u32, size)
 {
+	memset(dst, 0, size);
 	return ima_inode_hash(inode, dst, size);
 }
 
@@ -212,6 +213,7 @@ static const struct bpf_func_proto bpf_ima_inode_hash_proto = {
 
 BPF_CALL_3(bpf_ima_file_hash, struct file *, file, void *, dst, u32, size)
 {
+	memset(dst, 0, size);
 	return ima_file_hash(file, dst, size);
 }
 
