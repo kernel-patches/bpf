@@ -49,6 +49,17 @@
 
 .section .rodata
 .p2align 4
+.Lxts_gf_poly:
+	// For XTS: a constant used when advancing the tweak by one block by
+	// multiplying by the polynomial 'x' in GF(2^128).  The low 64 bits of
+	// this value represent the polynomial x^7 + x^2 + x + 1; it is the
+	// value that must be XOR'd into the low 64 bits of the tweak each time
+	// a 1 is carried out of the high 64 bits.
+	//
+	// The high 64 bits of this value is just the internal carry bit that
+	// exists when there's a carry out of the low 64 bits of the tweak.
+	.quad	0x87, 1
+
 #ifdef __x86_64__
 .Lbswap_mask:
 	// A mask for pshufb that byte-reflects the value.
@@ -762,3 +773,151 @@ SYM_FUNC_START(aes_ctr64_crypt_aesni)
 	RET
 SYM_FUNC_END(aes_ctr64_crypt_aesni)
 #endif // __x86_64__
+
+// Given a 128-bit XTS tweak in the xmm register \tweak, compute the next tweak
+// (by multiplying by the polynomial 'x') and write it back to \tweak.
+.macro	_next_tweak	tweak, tmp
+	pshufd		$0x13, \tweak, \tmp
+	paddq		\tweak, \tweak
+	psrad		$31, \tmp
+	pand		GF_POLY, \tmp
+	pxor		\tmp, \tweak
+.endm
+
+.macro	_aes_xts_crypt	enc
+	// Arguments
+	.set	DST,		ARG0
+	.set	SRC,		ARG1
+	.set	NBLOCKS,	ARG2
+	.set	NBLOCKS32,	ARG2_32	// Used for improved code density
+	.set	TWEAK_PTR,	ARG3
+	.set	KEY,		ARG4
+
+	// Other local variables
+#ifdef __x86_64__
+	.set	RNDKEY_PTR,	%r9
+#else
+	.set	RNDKEY_PTR,	TWEAK_PTR // TWEAK_PTR is clobbered and reloaded later.
+#endif
+	.set	NROUNDS,	TMP_32
+	.set	AESDATA0,	%xmm0
+	.set	AESDATA1,	%xmm1
+	.set	AESDATA2,	%xmm2
+	.set	AESDATA3,	%xmm3
+	.set	GF_POLY,	%xmm4
+	.set	RNDKEY,		%xmm5
+	.set	TWEAK,		%xmm6
+	.set	SAVED_TWEAK0,	%xmm7
+#ifdef __x86_64__
+	.set	SAVED_TWEAK1,	%xmm8
+	.set	SAVED_TWEAK2,	%xmm9
+#endif
+
+	_prologue	uses_arg3=2, uses_arg4=2
+#ifdef __i386__
+	// Reserve 16-byte aligned space to spill two tweaks.
+	push		%ebp
+	mov		%esp, %ebp
+	and		$~15, %esp
+	sub		$32, %esp
+#endif
+
+	movdqu		(TWEAK_PTR), TWEAK
+	movdqa		RODATA(.Lxts_gf_poly), GF_POLY
+
+	sub		$4, NBLOCKS
+	jl		.Lxts_loop4_done\@
+.p2align 5
+.Lxts_loop4\@:
+	// Load the next four source blocks into AESDATA[0-3] and XOR them with
+	// their tweaks, advancing the tweak three times in order to do so.
+	// Save the four tweaks for later; on 64-bit they all fit into
+	// registers, while on 32-bit two tweaks are spilled to the stack.
+.irp i, 0,1,2,3
+	movdqu		\i*16(SRC), AESDATA\i
+	pxor		TWEAK, AESDATA\i
+  .if \i != 3
+#ifdef __x86_64__
+	movdqa		TWEAK, SAVED_TWEAK\i
+#else
+    .if \i == 0
+	movdqa		TWEAK, SAVED_TWEAK0
+    .else
+	movdqa		TWEAK, (\i-1)*16(%esp)
+    .endif
+#endif
+	_next_tweak	TWEAK, RNDKEY
+  .endif
+.endr
+
+	// Encrypt or decrypt the blocks.
+	_do_aes		\enc, 0,1,2,3
+
+	// XOR the blocks with the saved tweaks.
+	pxor		SAVED_TWEAK0, AESDATA0
+#ifdef __x86_64__
+	pxor		SAVED_TWEAK1, AESDATA1
+	pxor		SAVED_TWEAK2, AESDATA2
+#else
+	pxor		(%esp), AESDATA1
+	pxor		16(%esp), AESDATA2
+#endif
+	pxor		TWEAK, AESDATA3
+
+	// Store the encrypted or decrypted blocks.
+.irp i, 0,1,2,3
+	movdqu		AESDATA\i, \i*16(DST)
+.endr
+
+	_next_tweak	TWEAK, RNDKEY
+	add		$64, SRC
+	add		$64, DST
+	sub		$4, NBLOCKS
+	jge		.Lxts_loop4\@
+.Lxts_loop4_done\@:
+	add		$4, NBLOCKS32
+	jz		.Lxts_done\@
+
+.Lxts_loop1\@:
+	movdqu		(SRC), AESDATA0
+	pxor		TWEAK, AESDATA0
+	_do_aes		\enc, 0
+	pxor		TWEAK, AESDATA0
+	movdqu		AESDATA0, (DST)
+	_next_tweak	TWEAK, RNDKEY
+	add		$16, SRC
+	add		$16, DST
+	dec		NBLOCKS32
+	jnz		.Lxts_loop1\@
+
+.Lxts_done\@:
+#ifdef __i386__
+	// Zeroize the stack buffer that tweaks were spilled to.
+	pxor		AESDATA0, AESDATA0
+	movdqa		AESDATA0, (%esp)
+	movdqa		AESDATA0, 16(%esp)
+	mov		%ebp, %esp
+	pop		%ebp
+#endif
+	// Store the next tweak.  On 32-bit, reload TWEAK_PTR from stack first.
+	_reload_arg3
+	movdqu		TWEAK, (TWEAK_PTR)
+	_epilogue
+.endm
+
+// void aes_xts_encrypt_aesni(u8 *dst, const u8 *src, long nblocks,
+//			      u8 tweak[AES_BLOCK_SIZE],
+//			      const struct aes_key *key);
+// void aes_xts_decrypt_aesni(u8 *dst, const u8 *src, long nblocks,
+//			      u8 tweak[AES_BLOCK_SIZE],
+//			      const struct aes_key *key);
+//
+// `tweak` must have already been encrypted by the tweak key; `key` is just the
+// main key.  To allow incremental computation, `tweak` is updated to contain
+// the next tweak.
+SYM_FUNC_START(aes_xts_encrypt_aesni)
+	_aes_xts_crypt	1
+SYM_FUNC_END(aes_xts_encrypt_aesni)
+SYM_FUNC_START(aes_xts_decrypt_aesni)
+	_aes_xts_crypt	0
+SYM_FUNC_END(aes_xts_decrypt_aesni)

@@ -259,6 +259,50 @@ static bool aes_ctr_arch(u8 *dst, const u8 *src, size_t len,
 }
 #endif /* CONFIG_CRYPTO_LIB_AES_CTR && CONFIG_X86_64 */
 
+#if IS_ENABLED(CONFIG_CRYPTO_LIB_AES_XTS)
+void aes_xts_encrypt_aesni(u8 *dst, const u8 *src, long nblocks,
+			   u8 tweak[AES_BLOCK_SIZE], const struct aes_key *key);
+void aes_xts_decrypt_aesni(u8 *dst, const u8 *src, long nblocks,
+			   u8 tweak[AES_BLOCK_SIZE], const struct aes_key *key);
+
+/* len is always a positive multiple of AES_BLOCK_SIZE here. */
+static __always_inline bool
+aes_xts_crypt_x86(u8 *dst, const u8 *src, size_t len, u8 tweak[AES_BLOCK_SIZE],
+		  const struct aes_xts_key *key, bool cont, bool enc)
+{
+	const long nblocks = len / AES_BLOCK_SIZE;
+
+	if (!static_branch_likely(&have_aesni) || unlikely(!irq_fpu_usable()))
+		return false;
+
+	kernel_fpu_begin();
+	if (!cont)
+		aes_encrypt_aesni(tweak, tweak, &key->tweak_key);
+	if (enc)
+		aes_xts_encrypt_aesni(dst, src, nblocks, tweak, &key->main_key);
+	else
+		aes_xts_decrypt_aesni(dst, src, nblocks, tweak, &key->main_key);
+	kernel_fpu_end();
+	return true;
+}
+
+#define aes_xts_encrypt_arch aes_xts_encrypt_arch
+static bool aes_xts_encrypt_arch(u8 *dst, const u8 *src, size_t len,
+				 u8 tweak[AES_BLOCK_SIZE],
+				 const struct aes_xts_key *key, bool cont)
+{
+	return aes_xts_crypt_x86(dst, src, len, tweak, key, cont, true);
+}
+
+#define aes_xts_decrypt_arch aes_xts_decrypt_arch
+static bool aes_xts_decrypt_arch(u8 *dst, const u8 *src, size_t len,
+				 u8 tweak[AES_BLOCK_SIZE],
+				 const struct aes_xts_key *key, bool cont)
+{
+	return aes_xts_crypt_x86(dst, src, len, tweak, key, cont, false);
+}
+#endif /* CONFIG_CRYPTO_LIB_AES_XTS */
+
 #define aes_mod_init_arch aes_mod_init_arch
 static void aes_mod_init_arch(void)
 {
