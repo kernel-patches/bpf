@@ -30,6 +30,7 @@
 #include <linux/libfdt.h>
 #include <linux/kexec.h>
 
+#include <asm/machine.h>
 #include <asm/processor.h>
 #include <asm/reboot.h>
 #include <asm/smp-ops.h>
@@ -1159,7 +1160,7 @@ void __init octeon_fill_mac_addresses(void);
 
 void __init device_tree_init(void)
 {
-	const void *fdt;
+	const void *fdt = NULL;
 	bool do_prune;
 	bool fill_mac;
 
@@ -1178,12 +1179,28 @@ void __init device_tree_init(void)
 		do_prune = false;
 		fill_mac = false;
 		pr_info("Using passed Device Tree.\n");
-	} else if (OCTEON_IS_MODEL(OCTEON_CN68XX)) {
-		fdt = &__dtb_octeon_68xx_begin;
-		do_prune = true;
-		fill_mac = true;
 	} else {
-		fdt = &__dtb_octeon_3xxx_begin;
+		const struct mips_machine *check_mach;
+
+		for_each_mips_machine(check_mach) {
+			if (!check_mach->detect)
+				continue;
+			if (!check_mach->detect())
+				continue;
+
+			fdt = check_mach->fdt;
+			do_prune = false;
+			fill_mac = true;
+			pr_info("Using compiled-in Device Tree.\n");
+			break;
+		}
+	}
+
+	if (!fdt) {
+		if (OCTEON_IS_MODEL(OCTEON_CN68XX))
+			fdt = &__dtb_octeon_68xx_begin;
+		else
+			fdt = &__dtb_octeon_3xxx_begin;
 		do_prune = true;
 		fill_mac = true;
 	}
