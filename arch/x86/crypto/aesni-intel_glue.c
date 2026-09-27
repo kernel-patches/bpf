@@ -59,13 +59,6 @@ static inline void *aes_align_addr(void *addr)
 
 asmlinkage void aesni_set_key(struct crypto_aes_ctx *ctx, const u8 *in_key,
 			      unsigned int key_len);
-asmlinkage void aesni_enc(const void *ctx, u8 *out, const u8 *in);
-
-asmlinkage void aesni_xts_enc(const struct crypto_aes_ctx *ctx, u8 *out,
-			      const u8 *in, unsigned int len, u8 *iv);
-
-asmlinkage void aesni_xts_dec(const struct crypto_aes_ctx *ctx, u8 *out,
-			      const u8 *in, unsigned int len, u8 *iv);
 
 static inline struct crypto_aes_ctx *aes_ctx(void *raw_ctx)
 {
@@ -225,56 +218,6 @@ xts_crypt(struct skcipher_request *req, xts_encrypt_iv_func encrypt_iv,
 	kernel_fpu_end();
 	return xts_crypt_slowpath(req, crypt_func);
 }
-
-static void aesni_xts_encrypt_iv(const struct crypto_aes_ctx *tweak_key,
-				 u8 iv[AES_BLOCK_SIZE])
-{
-	aesni_enc(tweak_key, iv, iv);
-}
-
-static void aesni_xts_encrypt(const struct crypto_aes_ctx *key,
-			      const u8 *src, u8 *dst, int len,
-			      u8 tweak[AES_BLOCK_SIZE])
-{
-	aesni_xts_enc(key, dst, src, len, tweak);
-}
-
-static void aesni_xts_decrypt(const struct crypto_aes_ctx *key,
-			      const u8 *src, u8 *dst, int len,
-			      u8 tweak[AES_BLOCK_SIZE])
-{
-	aesni_xts_dec(key, dst, src, len, tweak);
-}
-
-static int xts_encrypt_aesni(struct skcipher_request *req)
-{
-	return xts_crypt(req, aesni_xts_encrypt_iv, aesni_xts_encrypt);
-}
-
-static int xts_decrypt_aesni(struct skcipher_request *req)
-{
-	return xts_crypt(req, aesni_xts_encrypt_iv, aesni_xts_decrypt);
-}
-
-static struct skcipher_alg aesni_skciphers[] = {
-	{
-		.base = {
-			.cra_name		= "xts(aes)",
-			.cra_driver_name	= "xts-aes-aesni",
-			.cra_priority		= 401,
-			.cra_blocksize		= AES_BLOCK_SIZE,
-			.cra_ctxsize		= XTS_AES_CTX_SIZE,
-			.cra_module		= THIS_MODULE,
-		},
-		.min_keysize	= 2 * AES_MIN_KEY_SIZE,
-		.max_keysize	= 2 * AES_MAX_KEY_SIZE,
-		.ivsize		= AES_BLOCK_SIZE,
-		.walksize	= 2 * AES_BLOCK_SIZE,
-		.setkey		= xts_setkey_aesni,
-		.encrypt	= xts_encrypt_aesni,
-		.decrypt	= xts_decrypt_aesni,
-	}
-};
 
 asmlinkage void aes_xts_encrypt_iv(const struct crypto_aes_ctx *tweak_key,
 				   u8 iv[AES_BLOCK_SIZE]);
@@ -1299,15 +1242,10 @@ static int __init aesni_init(void)
 	if (!x86_match_cpu(aesni_cpu_id))
 		return -ENODEV;
 
-	err = crypto_register_skciphers(aesni_skciphers,
-					ARRAY_SIZE(aesni_skciphers));
-	if (err)
-		return err;
-
 	err = crypto_register_aeads(aes_gcm_algs_aesni,
 				    ARRAY_SIZE(aes_gcm_algs_aesni));
 	if (err)
-		goto unregister_skciphers;
+		return err;
 
 	err = register_avx_algs();
 	if (err)
@@ -1319,9 +1257,6 @@ unregister_avx:
 	unregister_avx_algs();
 	crypto_unregister_aeads(aes_gcm_algs_aesni,
 				ARRAY_SIZE(aes_gcm_algs_aesni));
-unregister_skciphers:
-	crypto_unregister_skciphers(aesni_skciphers,
-				    ARRAY_SIZE(aesni_skciphers));
 	return err;
 }
 
@@ -1329,8 +1264,6 @@ static void __exit aesni_exit(void)
 {
 	crypto_unregister_aeads(aes_gcm_algs_aesni,
 				ARRAY_SIZE(aes_gcm_algs_aesni));
-	crypto_unregister_skciphers(aesni_skciphers,
-				    ARRAY_SIZE(aesni_skciphers));
 	unregister_avx_algs();
 }
 
