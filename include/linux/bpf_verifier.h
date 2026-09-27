@@ -1731,9 +1731,9 @@ struct arg_access_info {
 	u8 must_write:1;	/* Prior verifier state is destroyed throughout size. */
 };
 
-s64 bpf_helper_stack_access_bytes(struct bpf_verifier_env *env,
-				  struct bpf_insn *insn, int arg,
-				  int insn_idx);
+struct arg_access_info
+bpf_helper_stack_access_bytes(struct bpf_verifier_env *env,
+			      struct bpf_insn *insn, int arg, int insn_idx);
 s64 bpf_kfunc_stack_access_bytes(struct bpf_verifier_env *env,
 				 struct bpf_insn *insn, int arg,
 				 int insn_idx);
