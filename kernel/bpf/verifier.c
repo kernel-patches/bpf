@@ -12263,7 +12263,7 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 		err = mark_chain_precision(env, BPF_REG_1);
 		if (err)
 			return err;
-		if (cur_func(env)->callback_depth < reg_umax(&regs[BPF_REG_1])) {
+		if (cur_func(env)->callback_depth < reg_u32_max(&regs[BPF_REG_1])) {
 			err = push_callback_call(env, insn, insn_idx, meta.subprogno,
 						 set_loop_callback_state);
 		} else {
