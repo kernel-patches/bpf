@@ -10,6 +10,7 @@
 #include <linux/perf_event.h>
 #include <linux/sched/signal.h>
 #include <net/xdp.h>
+#include "diagnostics.h"
 #include "disasm.h"
 
 #define verbose(env, fmt, args...) bpf_verifier_log_write(env, fmt, ##args)
@@ -1072,6 +1073,11 @@ int bpf_convert_ctx_accesses(struct bpf_verifier_env *env)
 			if (BPF_MODE(insn->code) == BPF_MEMSX) {
 				if (!bpf_jit_supports_insn(insn, true)) {
 					verbose(env, "sign extending loads from arena are not supported yet\n");
+					bpf_diag_policy(
+						env, i + delta,
+						"sign-extending arena load",
+						"this JIT backend doesn't support it yet",
+						"Recompile the BPF program with Clang's -mcpu=v3 to avoid generating sign-extending load instructions.");
 					return -EOPNOTSUPP;
 				}
 				insn->code = BPF_CLASS(insn->code) | BPF_PROBE_MEM32SX | BPF_SIZE(insn->code);

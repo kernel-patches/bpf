@@ -4473,12 +4473,22 @@ static int check_map_access_type(struct bpf_verifier_env *env, struct bpf_reg_st
 	if (type == BPF_WRITE && !(cap & BPF_MAP_CAN_WRITE)) {
 		verbose(env, "write into map forbidden, value_size=%d off=%lld size=%d\n",
 			map->value_size, reg_smin(reg) + off, size);
+		bpf_diag_policy(env, env->insn_idx,
+				bpf_diag_fmt(env, "write to map '%s'",
+					map->name[0] ? map->name : "unnamed"),
+				"this map was created with BPF_F_RDONLY_PROG, which allows BPF programs to only read it",
+				"Remove the write, or create the map without BPF_F_RDONLY_PROG if BPF programs need to write to it.");
 		return -EACCES;
 	}
 
 	if (type == BPF_READ && !(cap & BPF_MAP_CAN_READ)) {
 		verbose(env, "read from map forbidden, value_size=%d off=%lld size=%d\n",
 			map->value_size, reg_smin(reg) + off, size);
+		bpf_diag_policy(env, env->insn_idx,
+				bpf_diag_fmt(env, "read from map '%s'",
+					map->name[0] ? map->name : "unnamed"),
+				"this map was created with BPF_F_WRONLY_PROG, which allows BPF programs to only write it",
+				"Remove the read, or create the map without BPF_F_WRONLY_PROG if BPF programs need to read from it.");
 		return -EACCES;
 	}
 
@@ -6945,6 +6955,10 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, struct b
 		if (t == BPF_WRITE && rdonly_mem) {
 			verbose(env, "%s cannot write into %s\n",
 				reg_arg_name(env, argno), reg_type_str(env, reg->type));
+			bpf_diag_policy(env, insn_idx, "memory write",
+					bpf_diag_fmt(env, "%s points to read-only memory",
+						reg_arg_name(env, argno)),
+					"Use a writable destination, or copy the data into a writable buffer before modifying it.");
 			return -EACCES;
 		}
 
@@ -7033,6 +7047,10 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, struct b
 	} else if (reg_is_pkt_pointer(reg)) {
 		if (t == BPF_WRITE && !may_access_direct_pkt_data(env, NULL, t)) {
 			verbose(env, "cannot write into packet\n");
+			bpf_diag_policy(env, insn_idx,
+					"direct packet write",
+					"packet data is read-only through direct access for this program type",
+					"Remove the direct write, or perform the modification in a program type and hook that support packet writes.");
 			return -EACCES;
 		}
 		if (t == BPF_WRITE && value_regno >= 0 &&
@@ -11807,6 +11825,12 @@ record_func_map(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 	     func_id == BPF_FUNC_map_push_elem ||
 	     func_id == BPF_FUNC_map_pop_elem)) {
 		verbose(env, "write into map forbidden\n");
+		bpf_diag_policy(env, insn_idx,
+				bpf_diag_fmt(env, "call to %s on map '%s'",
+					func_id_name(func_id),
+					map->name[0] ? map->name : "unnamed"),
+				"the map was created with BPF_F_RDONLY_PROG, which blocks modifications from BPF programs",
+				"Remove the modifying helper call, or use a map created without BPF_F_RDONLY_PROG if BPF programs need to modify it.");
 		return -EACCES;
 	}
 
