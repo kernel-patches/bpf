@@ -48,7 +48,7 @@
 .text
 .option arch, +zvkned
 
-#include "../../arch/riscv/crypto/aes-macros.S"
+#include "aes-macros.S"
 
 #define RNDKEYS		a0
 #define KEY_LEN		a1
