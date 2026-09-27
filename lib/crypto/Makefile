@@ -57,6 +57,9 @@ libaes-$(CONFIG_X86) += x86/aes-aesni.o
 ifneq ($(CONFIG_CRYPTO_LIB_AES_CTR),)
 libaes-$(CONFIG_X86_64) += x86/aes-ctr-avx-x86_64.o
 endif
+ifneq ($(CONFIG_CRYPTO_LIB_AES_XTS),)
+libaes-$(CONFIG_X86_64) += x86/aes-xts-avx-x86_64.o
+endif
 endif # CONFIG_CRYPTO_LIB_AES_ARCH
 
 # clean-files must be defined unconditionally
