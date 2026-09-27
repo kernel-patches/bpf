@@ -42,7 +42,6 @@ aegis128-aesni-y := aegis128-aesni-asm.o aegis128-aesni-glue.o
 obj-$(CONFIG_CRYPTO_AES_NI_INTEL) += aesni-intel.o
 aesni-intel-y := aesni-intel_asm.o \
 		 aesni-intel_glue.o \
-		 aes-ctr-avx-x86_64.o \
 		 aes-gcm-aesni-x86_64.o \
 		 aes-gcm-vaes-avx2.o \
 		 aes-gcm-vaes-avx512.o \

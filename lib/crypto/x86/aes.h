@@ -8,8 +8,12 @@
 #include <asm/fpu/api.h>
 
 static __ro_after_init DEFINE_STATIC_KEY_FALSE(have_aesni);
+static __ro_after_init DEFINE_STATIC_KEY_FALSE(have_aesni_avx);
+static __ro_after_init DEFINE_STATIC_KEY_FALSE(have_vaes_avx2);
+static __ro_after_init DEFINE_STATIC_KEY_FALSE(have_vaes_avx512);
 
 /* The assembly code assumes the following offsets. */
+static_assert(offsetof(struct aes_enckey, len) == 0);
 static_assert(offsetof(struct aes_enckey, nrounds) == 4);
 static_assert(offsetof(struct aes_enckey, k.rndkeys) == 16);
 static_assert(offsetof(struct aes_key, nrounds) == 4);
@@ -208,11 +212,36 @@ static bool aes_cbc_cts_decrypt_arch(u8 *dst, const u8 *src, size_t len,
 #if IS_ENABLED(CONFIG_CRYPTO_LIB_AES_CTR) && IS_ENABLED(CONFIG_X86_64)
 void aes_ctr64_crypt_aesni(u8 *dst, const u8 *src, s64 len, const u64 le_ctr[2],
 			   const struct aes_enckey *key);
+void aes_ctr64_crypt_aesni_avx(u8 *dst, const u8 *src, s64 len,
+			       const u64 le_ctr[2],
+			       const struct aes_enckey *key);
+void aes_ctr64_crypt_vaes_avx2(u8 *dst, const u8 *src, s64 len,
+			       const u64 le_ctr[2],
+			       const struct aes_enckey *key);
+void aes_ctr64_crypt_vaes_avx512(u8 *dst, const u8 *src, s64 len,
+				 const u64 le_ctr[2],
+				 const struct aes_enckey *key);
+void aes_xctr_crypt_aesni_avx(u8 *dst, const u8 *src, s64 len, u64 ctr,
+			      const u8 iv[AES_BLOCK_SIZE],
+			      const struct aes_enckey *key);
+void aes_xctr_crypt_vaes_avx2(u8 *dst, const u8 *src, s64 len, u64 ctr,
+			      const u8 iv[AES_BLOCK_SIZE],
+			      const struct aes_enckey *key);
+void aes_xctr_crypt_vaes_avx512(u8 *dst, const u8 *src, s64 len, u64 ctr,
+				const u8 iv[AES_BLOCK_SIZE],
+				const struct aes_enckey *key);
 
 static void aes_ctr64_x86(u8 *dst, const u8 *src, size_t len,
 			  const u64 le_ctr[2], const struct aes_enckey *key)
 {
-	aes_ctr64_crypt_aesni(dst, src, len, le_ctr, key);
+	if (static_branch_likely(&have_vaes_avx512))
+		aes_ctr64_crypt_vaes_avx512(dst, src, len, le_ctr, key);
+	else if (static_branch_likely(&have_vaes_avx2))
+		aes_ctr64_crypt_vaes_avx2(dst, src, len, le_ctr, key);
+	else if (static_branch_likely(&have_aesni_avx))
+		aes_ctr64_crypt_aesni_avx(dst, src, len, le_ctr, key);
+	else
+		aes_ctr64_crypt_aesni(dst, src, len, le_ctr, key);
 }
 
 #define aes_ctr_arch aes_ctr_arch
@@ -255,6 +284,25 @@ static bool aes_ctr_arch(u8 *dst, const u8 *src, size_t len,
 	kernel_fpu_end();
 	put_unaligned_be64(ctr64, &ctr[8]);
 	put_unaligned_be64(le_ctr[1], &ctr[0]);
+	return true;
+}
+
+#define aes_xctr_arch aes_xctr_arch
+static bool aes_xctr_arch(u8 *dst, const u8 *src, size_t len, u64 ctr,
+			  const u8 iv[AES_BLOCK_SIZE],
+			  const struct aes_enckey *key)
+{
+	if (!static_branch_likely(&have_aesni_avx) ||
+	    unlikely(!irq_fpu_usable()))
+		return false;
+	kernel_fpu_begin();
+	if (static_branch_likely(&have_vaes_avx512))
+		aes_xctr_crypt_vaes_avx512(dst, src, len, ctr, iv, key);
+	else if (static_branch_likely(&have_vaes_avx2))
+		aes_xctr_crypt_vaes_avx2(dst, src, len, ctr, iv, key);
+	else
+		aes_xctr_crypt_aesni_avx(dst, src, len, ctr, iv, key);
+	kernel_fpu_end();
 	return true;
 }
 #endif /* CONFIG_CRYPTO_LIB_AES_CTR && CONFIG_X86_64 */
@@ -306,6 +354,32 @@ static bool aes_xts_decrypt_arch(u8 *dst, const u8 *src, size_t len,
 #define aes_mod_init_arch aes_mod_init_arch
 static void aes_mod_init_arch(void)
 {
-	if (boot_cpu_has(X86_FEATURE_AES))
-		static_branch_enable(&have_aesni);
+	/* Everything below requires AES-NI. */
+	if (!boot_cpu_has(X86_FEATURE_AES))
+		return;
+	static_branch_enable(&have_aesni);
+
+	/* Everything below requires AVX and is also 64-bit only. */
+	if (!boot_cpu_has(X86_FEATURE_AVX) || !IS_ENABLED(CONFIG_X86_64))
+		return;
+	static_branch_enable(&have_aesni_avx);
+
+	/*
+	 * Everything below requires VAES, and also sometimes AVX2, VPCLMULQDQ,
+	 * and PCLMULQDQ.  Use a single static key for all of them, since in
+	 * practice every CPU with VAES also has the others.
+	 */
+	if (!boot_cpu_has(X86_FEATURE_VAES) ||
+	    !boot_cpu_has(X86_FEATURE_AVX2) ||
+	    !boot_cpu_has(X86_FEATURE_VPCLMULQDQ) ||
+	    !boot_cpu_has(X86_FEATURE_PCLMULQDQ))
+		return;
+	static_branch_enable(&have_vaes_avx2);
+
+	if (!boot_cpu_has(X86_FEATURE_AVX512BW) ||
+	    !boot_cpu_has(X86_FEATURE_AVX512VL) ||
+	    !boot_cpu_has(X86_FEATURE_BMI2) ||
+	    boot_cpu_has(X86_FEATURE_PREFER_YMM))
+		return;
+	static_branch_enable(&have_vaes_avx512);
 }
