@@ -20,6 +20,7 @@ use crate::{
     defs::*,
     node::{Node, NodeRef},
     process::Process,
+    trace::trace_transaction_failed_buffer_release,
     DArc,
 };
 
@@ -322,6 +323,12 @@ impl core::ops::Deref for NewAllocation {
 impl core::ops::DerefMut for NewAllocation {
     fn deref_mut(&mut self) -> &mut Allocation {
         &mut self.0
+    }
+}
+
+impl Drop for NewAllocation {
+    fn drop(&mut self) {
+        trace_transaction_failed_buffer_release(self.debug_id);
     }
 }
 
