@@ -8,24 +8,125 @@
 // AVX.  It does use up to SSE4.1, which all CPUs with AES-NI have.
 #include <linux/linkage.h>
 
-.section .rodata
 #ifdef __x86_64__
 #define RODATA(label)	label(%rip)
-#else
-#define RODATA(label)	label
-#endif
 
+#define ARG0		%rdi
+#define ARG1		%rsi
+#define ARG2		%rdx
+#define ARG2_32		%edx
+#define ARG3		%rcx
+#define ARG4		%r8
+#define TMP		%rax
+#define TMP_32		%eax
+#define TMP_16		%ax
+#define TMP_8		%al
+
+#else // __x86_64__
+
+#define RODATA(label)	label
+
+// Caller-save GPRs and the first 3 function arguments, assuming -mregparm=3
+#define ARG0		%eax
+#define ARG1		%edx
+#define ARG2		%ecx
+#define ARG2_32		%ecx
+
+// *Callee*-save GPRs.
+#define ARG3		%edi
+#define ARG4		%esi
+#define TMP		%ebx
+#define TMP_32		%ebx
+#define TMP_16		%bx
+#define TMP_8		%bl
+#endif // !__x86_64__
+
+// Offsets in struct aes_key
+#define OFFSETOF_NROUNDS	4
+#define OFFSETOF_ROUNDKEYS	16
+#define OFFSETOF_INVROUNDKEYS	256
+
+.section .rodata
+.p2align 4
+.Lexpandkey_mask:
 	// A mask for pshufb that extracts the last dword, rotates it right by 8
 	// bits, and copies the result to all four dwords.
-.p2align 4
-.Lmask:
 	.byte	13, 14, 15, 12, 13, 14, 15, 12, 13, 14, 15, 12, 13, 14, 15, 12
 
-	// The AES round constants, used during key expansion
 .Lrcon:
+	// The AES round constants, used during key expansion
 	.long	0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36
 
 .text
+
+// In 32-bit mode, push certain callee-saved GPRs and optionally load function
+// arguments from the stack into them.  Do nothing in 64-bit mode.
+//
+// TMP is always made available as a temporary register.
+//
+// \uses_arg3 is 0 to not touch ARG3, 1 to make it available as a temporary
+// register only, or 2 to actually load it as an argument from the stack.
+// Likewise for \uses_arg4 and ARG4.  It's assumed the -mregparm=3 convention is
+// being used and %esp hasn't been modified since function entry.
+.macro _prologue	uses_arg3=0, uses_arg4=0
+#ifdef __i386__
+	.set	ARG3_OFFSET, 4	// Assuming -mregparm=3
+	.set	ARG3_PUSHED, \uses_arg3
+	.set	ARG4_PUSHED, \uses_arg4
+.if \uses_arg3
+	push	ARG3
+	.set	ARG3_OFFSET, ARG3_OFFSET + 4
+  .if \uses_arg3 == 2
+	mov	ARG3_OFFSET(%esp), ARG3
+  .endif
+.endif
+.if \uses_arg4
+	push	ARG4
+	.set	ARG3_OFFSET, ARG3_OFFSET + 4
+  .if \uses_arg4 == 2
+	mov	ARG3_OFFSET+4(%esp), ARG4
+  .endif
+.endif
+	push	TMP
+	.set	ARG3_OFFSET, ARG3_OFFSET + 4
+#endif // __i386__
+.endm
+
+.macro _reload_arg3
+#ifdef __i386__
+	mov	ARG3_OFFSET(%esp), ARG3
+#endif
+.endm
+
+// Undo any pushes that _prologue did, then return.
+.macro _epilogue
+#ifdef __i386__
+	pop	TMP
+.if ARG4_PUSHED
+	pop	ARG4
+.endif
+.if ARG3_PUSHED
+	pop	ARG3
+.endif
+#endif
+	RET
+.endm
+
+.macro	_aesenc		enc, rndkey, data
+.if \enc
+	aesenc		\rndkey, \data
+.else
+	aesdec		\rndkey, \data
+.endif
+.endm
+
+.macro	_aesenclast	enc, rndkeylast, data
+.if \enc
+	aesenclast	\rndkeylast, \data
+.else
+	aesdeclast	\rndkeylast, \data
+.endif
+.endm
 
 // Transform four dwords [a0, a1, a2, a3] in \a into
 // [a0, a0^a1, a0^a1^a2, a0^a1^a2^a3].  \tmp is a temporary xmm register.
@@ -71,32 +172,18 @@
 .endm
 
 .macro	_aes_expandkey_aesni	is_aes128
-#ifdef __x86_64__
 	// Arguments
-	.set	RNDKEYS,	%rdi
-	.set	INV_RNDKEYS,	%rsi
-	.set	IN_KEY,		%rdx
+	.set	RNDKEYS,	ARG0
+	.set	INV_RNDKEYS,	ARG1
+	.set	IN_KEY,		ARG2
 
 	// Other local variables
-	.set	RCON_PTR,	%rcx
-	.set	COUNTER,	%eax
-#else
-	// Arguments, assuming -mregparm=3
-	.set	RNDKEYS,	%eax
-	.set	INV_RNDKEYS,	%edx
-	.set	IN_KEY,		%ecx
-
-	// Other local variables
-	.set	RCON_PTR,	%ebx
-	.set	COUNTER,	%esi
-#endif
+	.set	RCON_PTR,	ARG3
+	.set	COUNTER,	TMP_32
 	.set	RCON,		%xmm6
 	.set	MASK,		%xmm7
 
-#ifdef __i386__
-	push		%ebx
-	push		%esi
-#endif
+	_prologue	uses_arg3=1
 
 .if \is_aes128
 	// AES-128: the first round key is simply a copy of the raw key.
@@ -112,7 +199,7 @@
 .endif
 
 	// Generate the remaining round keys.
-	movdqa		RODATA(.Lmask), MASK
+	movdqa		RODATA(.Lexpandkey_mask), MASK
 .if \is_aes128
 	lea		RODATA(.Lrcon), RCON_PTR
 	mov		$10, COUNTER
@@ -176,11 +263,7 @@
 	movdqu		%xmm0, 16(INV_RNDKEYS)	// => Last inverse round key
 
 .Ldone\@:
-#ifdef __i386__
-	pop		%esi
-	pop		%ebx
-#endif
-	RET
+	_epilogue
 .endm
 
 // void aes128_expandkey_aesni(u32 rndkeys[], u32 *inv_rndkeys,
@@ -195,67 +278,73 @@ SYM_FUNC_START(aes256_expandkey_aesni)
 	_aes_expandkey_aesni	0
 SYM_FUNC_END(aes256_expandkey_aesni)
 
-.macro	_aes_crypt_aesni	enc
-#ifdef __x86_64__
-	.set	RNDKEYS,	%rdi
-	.set	NROUNDS,	%esi
-	.set	OUT,		%rdx
-	.set	IN,		%rcx
-#else
-	// Assuming -mregparm=3
-	.set	RNDKEYS,	%eax
-	.set	NROUNDS,	%edx
-	.set	OUT,		%ecx
-	.set	IN,		%ebx	// Passed on stack
-#endif
-
-#ifdef __i386__
-	push		%ebx
-	mov		8(%esp), %ebx
-#endif
-
-	// Zero-th round
-	movdqu		(IN), %xmm0
-	movdqu		(RNDKEYS), %xmm1
-	pxor		%xmm1, %xmm0
-
-	// Normal rounds
-	add		$16, RNDKEYS
+// AES-encrypt (\enc=1) or AES-decrypt (\enc=0) the AESDATA registers specified
+// in \vecs using the aes_enckey or aes_key pointed to by KEY.  RNDKEY must be
+// set to a temporary XMM register, NROUNDS to a temporary 32-bit GPR, and
+// RNDKEY_PTR to a temporary full-size GPR.
+.macro	_do_aes		enc, vecs:vararg
+	movl		OFFSETOF_NROUNDS(KEY), NROUNDS
 	dec		NROUNDS
+.if \enc
+	.set		rndkey0_offs, OFFSETOF_ROUNDKEYS
+.else
+	.set		rndkey0_offs, OFFSETOF_INVROUNDKEYS
+.endif
+
+	// Do the zero-th AES round.
+	movdqu		rndkey0_offs(KEY), RNDKEY
+.irp i, \vecs
+	pxor		RNDKEY, AESDATA\i
+.endr
+	// Do the regular AES rounds.
+	lea		rndkey0_offs+16(KEY), RNDKEY_PTR
 .Lnext_round\@:
-	movdqu		(RNDKEYS), %xmm1
-.if \enc
-	aesenc		%xmm1, %xmm0
-.else
-	aesdec		%xmm1, %xmm0
-.endif
-	add		$16, RNDKEYS
+	movdqu		(RNDKEY_PTR), RNDKEY
+	add		$16, RNDKEY_PTR
+.irp i, \vecs
+	_aesenc		\enc, RNDKEY, AESDATA\i
+.endr
 	dec		NROUNDS
-	jne		.Lnext_round\@
-
-	// Last round
-	movdqu		(RNDKEYS), %xmm1
-.if \enc
-	aesenclast	%xmm1, %xmm0
-.else
-	aesdeclast	%xmm1, %xmm0
-.endif
-	movdqu		%xmm0, (OUT)
-
-#ifdef __i386__
-	pop		%ebx
-#endif
-	RET
+	jnz		.Lnext_round\@
+	// Do the last AES round.
+	movdqu		(RNDKEY_PTR), RNDKEY
+.irp i, \vecs
+	_aesenclast	\enc, RNDKEY, AESDATA\i
+.endr
 .endm
 
-// void aes_encrypt_aesni(const u32 rndkeys[], int nrounds,
-//			  u8 out[AES_BLOCK_SIZE], const u8 in[AES_BLOCK_SIZE]);
+.macro	_do_aes_ecb	enc, vecs:vararg
+.irp i, \vecs
+	movdqu		\i*16(SRC), AESDATA\i
+.endr
+	_do_aes		\enc, \vecs
+.irp i, \vecs
+	movdqu		AESDATA\i, \i*16(DST)
+.endr
+.endm
+
+.macro	_aes_crypt_aesni	enc
+	.set	DST,		ARG0
+	.set	SRC,		ARG1
+	.set	KEY,		ARG2
+	.set	RNDKEY_PTR,	ARG3	// Temporary register for _do_aes
+	.set	NROUNDS,	TMP_32	// Temporary register for _do_aes
+	.set	AESDATA0,	%xmm0
+	.set	RNDKEY,		%xmm1	// Temporary register for _do_aes
+
+	_prologue	uses_arg3=1
+	_do_aes_ecb	\enc, 0
+	_epilogue
+.endm
+
+// void aes_encrypt_aesni(u8 dst[AES_BLOCK_SIZE], const u8 src[AES_BLOCK_SIZE],
+//			  const struct aes_enckey *key);
 SYM_FUNC_START(aes_encrypt_aesni)
 	_aes_crypt_aesni	1
 SYM_FUNC_END(aes_encrypt_aesni)
 
-// void aes_decrypt_aesni(const u32 inv_rndkeys[], int nrounds,
-//			  u8 out[AES_BLOCK_SIZE], const u8 in[AES_BLOCK_SIZE]);
+// void aes_decrypt_aesni(u8 dst[AES_BLOCK_SIZE], const u8 src[AES_BLOCK_SIZE],
+//			  const struct aes_key *key);
 SYM_FUNC_START(aes_decrypt_aesni)
 	_aes_crypt_aesni	0
 SYM_FUNC_END(aes_decrypt_aesni)

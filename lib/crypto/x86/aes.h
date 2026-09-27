@@ -7,16 +7,21 @@
 
 #include <asm/fpu/api.h>
 
-static __ro_after_init DEFINE_STATIC_KEY_FALSE(have_aes);
+static __ro_after_init DEFINE_STATIC_KEY_FALSE(have_aesni);
+
+/* The assembly code assumes the following offsets. */
+static_assert(offsetof(struct aes_enckey, nrounds) == 4);
+static_assert(offsetof(struct aes_enckey, k.rndkeys) == 16);
+static_assert(offsetof(struct aes_key, inv_k.inv_rndkeys) == 256);
 
 void aes128_expandkey_aesni(u32 rndkeys[], u32 *inv_rndkeys,
 			    const u8 in_key[AES_KEYSIZE_128]);
 void aes256_expandkey_aesni(u32 rndkeys[], u32 *inv_rndkeys,
 			    const u8 in_key[AES_KEYSIZE_256]);
-void aes_encrypt_aesni(const u32 rndkeys[], int nrounds,
-		       u8 out[AES_BLOCK_SIZE], const u8 in[AES_BLOCK_SIZE]);
-void aes_decrypt_aesni(const u32 inv_rndkeys[], int nrounds,
-		       u8 out[AES_BLOCK_SIZE], const u8 in[AES_BLOCK_SIZE]);
+void aes_encrypt_aesni(u8 dst[AES_BLOCK_SIZE], const u8 src[AES_BLOCK_SIZE],
+		       const struct aes_enckey *key);
+void aes_decrypt_aesni(u8 dst[AES_BLOCK_SIZE], const u8 src[AES_BLOCK_SIZE],
+		       const struct aes_key *key);
 
 /*
  * Expand an AES key using AES-NI if supported and usable or generic code
@@ -36,7 +41,7 @@ static void aes_preparekey_arch(union aes_enckey_arch *k,
 	u32 *rndkeys = k->rndkeys;
 	u32 *inv_rndkeys = inv_k ? inv_k->inv_rndkeys : NULL;
 
-	if (static_branch_likely(&have_aes) && key_len != AES_KEYSIZE_192 &&
+	if (static_branch_likely(&have_aesni) && key_len != AES_KEYSIZE_192 &&
 	    irq_fpu_usable()) {
 		kernel_fpu_begin();
 		if (key_len == AES_KEYSIZE_128)
@@ -53,9 +58,9 @@ static void aes_encrypt_arch(const struct aes_enckey *key,
 			     u8 out[AES_BLOCK_SIZE],
 			     const u8 in[AES_BLOCK_SIZE])
 {
-	if (static_branch_likely(&have_aes) && irq_fpu_usable()) {
+	if (static_branch_likely(&have_aesni) && irq_fpu_usable()) {
 		kernel_fpu_begin();
-		aes_encrypt_aesni(key->k.rndkeys, key->nrounds, out, in);
+		aes_encrypt_aesni(out, in, key);
 		kernel_fpu_end();
 	} else {
 		aes_encrypt_generic(key->k.rndkeys, key->nrounds, out, in);
@@ -66,10 +71,9 @@ static void aes_decrypt_arch(const struct aes_key *key,
 			     u8 out[AES_BLOCK_SIZE],
 			     const u8 in[AES_BLOCK_SIZE])
 {
-	if (static_branch_likely(&have_aes) && irq_fpu_usable()) {
+	if (static_branch_likely(&have_aesni) && irq_fpu_usable()) {
 		kernel_fpu_begin();
-		aes_decrypt_aesni(key->inv_k.inv_rndkeys, key->nrounds,
-				  out, in);
+		aes_decrypt_aesni(out, in, key);
 		kernel_fpu_end();
 	} else {
 		aes_decrypt_generic(key->inv_k.inv_rndkeys, key->nrounds,
@@ -81,5 +85,5 @@ static void aes_decrypt_arch(const struct aes_key *key,
 static void aes_mod_init_arch(void)
 {
 	if (boot_cpu_has(X86_FEATURE_AES))
-		static_branch_enable(&have_aes);
+		static_branch_enable(&have_aesni);
 }
