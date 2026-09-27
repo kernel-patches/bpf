@@ -1094,7 +1094,7 @@ static bool aes_ctr_arch(u8 *dst, const u8 *src, size_t len,
 }
 #endif
 #ifndef aes_xctr_arch
-static bool aes_xctr_arch(u8 *dst, const u8 *src, size_t len, u64 *ctr,
+static bool aes_xctr_arch(u8 *dst, const u8 *src, size_t len, u64 ctr,
 			  const u8 iv[AES_BLOCK_SIZE],
 			  const struct aes_enckey *key)
 {
@@ -1150,8 +1150,10 @@ void aes_xctr(u8 *dst, const u8 *src, size_t len, u64 *ctr,
 	__le64 aes_input[2];
 	u8 keystream[AES_BLOCK_SIZE] __aligned(__alignof__(long));
 
-	if (likely(aes_xctr_arch(dst, src, len, ctr, iv, key.enc_key)))
+	if (likely(aes_xctr_arch(dst, src, len, *ctr, iv, key.enc_key))) {
+		*ctr += DIV_ROUND_UP(len, AES_BLOCK_SIZE);
 		return;
+	}
 
 	aes_input[1] = get_unaligned((const __le64 *)&iv[8]);
 	/* Handle the full blocks. */
