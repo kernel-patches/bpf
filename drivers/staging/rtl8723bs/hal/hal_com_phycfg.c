@@ -739,7 +739,7 @@ s8 phy_get_tx_pwr_lmt(struct adapter *adapter, u32 reg_pwr_tbl_sel,
 	return pwr_lmt;
 }
 
-void PHY_ConvertTxPowerLimitToPowerIndex(struct adapter *Adapter)
+void phy_tx_power_limit_to_index(struct adapter *Adapter)
 {
 	struct hal_com_data	*pHalData = GET_HAL_DATA(Adapter);
 	struct registry_priv *r = &Adapter->registrypriv;

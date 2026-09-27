@@ -338,7 +338,7 @@ static int phy_BB8723b_Config_ParaFile(struct adapter *Adapter)
 		if (Adapter->registrypriv.reg_enable_tx_power_limit == 1 ||
 		    (Adapter->registrypriv.reg_enable_tx_power_limit == 2 &&
 		   pHalData->EEPROMRegulatory == 1))
-			PHY_ConvertTxPowerLimitToPowerIndex(Adapter);
+			phy_tx_power_limit_to_index(Adapter);
 	}
 
 	/*  2. Read BB AGC table Initialization */
