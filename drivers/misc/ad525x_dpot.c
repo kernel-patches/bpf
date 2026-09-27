@@ -697,9 +697,6 @@ static umode_t ad525x_is_visible(struct kobject *kobj, struct attribute *attr,
 	struct dpot_data *data = dev_get_drvdata(dev);
 	int rdac;
 
-	if (!data)
-		return 0;
-
 	rdac = ad525x_attr_index(attr, dpot_attrib_wipers);
 	if (rdac >= 0)
 		return data->wipers & BIT(rdac) ? attr->mode : 0;
