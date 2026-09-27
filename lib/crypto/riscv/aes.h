@@ -10,10 +10,16 @@
 
 static __ro_after_init DEFINE_STATIC_KEY_FALSE(have_zvkned);
 
-void aes_encrypt_zvkned(const u32 rndkeys[], int key_len,
-			u8 out[AES_BLOCK_SIZE], const u8 in[AES_BLOCK_SIZE]);
-void aes_decrypt_zvkned(const u32 rndkeys[], int key_len,
-			u8 out[AES_BLOCK_SIZE], const u8 in[AES_BLOCK_SIZE]);
+/* The assembly code assumes the following offsets. */
+static_assert(offsetof(struct aes_enckey, len) == 0);
+static_assert(offsetof(struct aes_enckey, k.rndkeys) == 16);
+static_assert(offsetof(struct aes_key, len) == 0);
+static_assert(offsetof(struct aes_key, k.rndkeys) == 16);
+
+void aes_encrypt_zvkned(const struct aes_enckey *key, u8 out[AES_BLOCK_SIZE],
+			const u8 in[AES_BLOCK_SIZE]);
+void aes_decrypt_zvkned(const struct aes_key *key, u8 out[AES_BLOCK_SIZE],
+			const u8 in[AES_BLOCK_SIZE]);
 
 static void aes_preparekey_arch(union aes_enckey_arch *k,
 				union aes_invkey_arch *inv_k,
@@ -29,7 +35,7 @@ static void aes_encrypt_arch(const struct aes_enckey *key,
 {
 	if (static_branch_likely(&have_zvkned) && likely(may_use_simd())) {
 		kernel_vector_begin();
-		aes_encrypt_zvkned(key->k.rndkeys, key->len, out, in);
+		aes_encrypt_zvkned(key, out, in);
 		kernel_vector_end();
 	} else {
 		aes_encrypt_generic(key->k.rndkeys, key->nrounds, out, in);
@@ -46,7 +52,7 @@ static void aes_decrypt_arch(const struct aes_key *key,
 	 */
 	if (static_branch_likely(&have_zvkned) && likely(may_use_simd())) {
 		kernel_vector_begin();
-		aes_decrypt_zvkned(key->k.rndkeys, key->len, out, in);
+		aes_decrypt_zvkned(key, out, in);
 		kernel_vector_end();
 	} else {
 		aes_decrypt_generic(key->inv_k.inv_rndkeys, key->nrounds,

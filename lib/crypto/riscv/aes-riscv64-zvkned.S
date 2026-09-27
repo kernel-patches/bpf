@@ -50,10 +50,9 @@
 
 #include "aes-macros.S"
 
-#define RNDKEYS		a0
-#define KEY_LEN		a1
-#define OUTP		a2
-#define INP		a3
+#define KEYP		a0
+#define OUTP		a1
+#define INP		a2
 
 .macro	__aes_crypt_zvkned	enc, keybits
 	vle32.v		v16, (INP)
@@ -63,7 +62,7 @@
 .endm
 
 .macro	aes_crypt_zvkned	enc
-	aes_begin	RNDKEYS, 128f, 192f, KEY_LEN
+	aes_begin	KEYP, 128f, 192f
 	__aes_crypt_zvkned	\enc, 256
 128:
 	__aes_crypt_zvkned	\enc, 128
@@ -71,14 +70,14 @@
 	__aes_crypt_zvkned	\enc, 192
 .endm
 
-// void aes_encrypt_zvkned(const u32 rndkeys[], int key_len,
-//			   u8 out[AES_BLOCK_SIZE], const u8 in[AES_BLOCK_SIZE]);
+// void aes_encrypt_zvkned(const struct aes_enckey *key, u8 out[AES_BLOCK_SIZE],
+//			   const u8 in[AES_BLOCK_SIZE]);
 SYM_FUNC_START(aes_encrypt_zvkned)
 	aes_crypt_zvkned	1
 SYM_FUNC_END(aes_encrypt_zvkned)
 
-// void aes_decrypt_zvkned(const u32 rndkeys[], int key_len,
-//			   u8 out[AES_BLOCK_SIZE], const u8 in[AES_BLOCK_SIZE]);
+// void aes_decrypt_zvkned(const struct aes_key *key, u8 out[AES_BLOCK_SIZE],
+//			   const u8 in[AES_BLOCK_SIZE]);
 SYM_FUNC_START(aes_decrypt_zvkned)
 	aes_crypt_zvkned	0
 SYM_FUNC_END(aes_decrypt_zvkned)
