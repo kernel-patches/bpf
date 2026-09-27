@@ -18,6 +18,9 @@ void __kfunc_btf_root(void)
 
 SEC("tc")
 __success __retval(10)
+__log_level(2)
+__msg("call bpf_kfunc_test_uninit_struct{{.*}}; def: fp0-8 fp0-16")
+__msg_unpriv("call bpf_kfunc_test_uninit_struct{{.*}}; use: fp0-8 fp0-16")
 __flag(BPF_F_TEST_STATE_FREQ)
 __caps_unpriv(CAP_BPF | CAP_NET_ADMIN)
 __prepare_priv
@@ -44,6 +47,9 @@ __naked void struct_poisoned_at_checkpoint(void)
 
 SEC("tc")
 __success __retval(0x2a2a2a2a)
+__log_level(2)
+__msg("call bpf_kfunc_test_uninit_mem{{.*}}; def: fp0-8")
+__msg_unpriv("call bpf_kfunc_test_uninit_mem{{.*}}; use: fp0-8")
 __flag(BPF_F_TEST_STATE_FREQ)
 __caps_unpriv(CAP_BPF | CAP_NET_ADMIN)
 __prepare_priv
