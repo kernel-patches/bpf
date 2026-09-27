@@ -348,3 +348,57 @@ SYM_FUNC_END(aes_encrypt_aesni)
 SYM_FUNC_START(aes_decrypt_aesni)
 	_aes_crypt_aesni	0
 SYM_FUNC_END(aes_decrypt_aesni)
+
+.macro	_ecb_crypt	enc
+	// Arguments
+	.set	DST,		ARG0
+	.set	SRC,		ARG1
+	.set	NBLOCKS,	ARG2
+	.set	NBLOCKS32,	ARG2_32	// Used for improved code density
+	.set	KEY,		ARG3
+
+	// Other local variables
+	.set	RNDKEY_PTR,	ARG4	// Temporary register for _do_aes
+	.set	NROUNDS,	TMP_32	// Temporary register for _do_aes
+	.set	AESDATA0,	%xmm0
+	.set	AESDATA1,	%xmm1
+	.set	AESDATA2,	%xmm2
+	.set	AESDATA3,	%xmm3
+	.set	RNDKEY,		%xmm4	// Temporary register for _do_aes
+	_prologue	uses_arg3=2, uses_arg4=1
+
+	sub		$4, NBLOCKS
+	jl		.Lecb_loop4_done\@
+.p2align 5
+.Lecb_loop4\@:
+	_do_aes_ecb	\enc, 0,1,2,3
+	add		$64, SRC
+	add		$64, DST
+	sub		$4, NBLOCKS
+	jge		.Lecb_loop4\@
+.Lecb_loop4_done\@:
+	add		$4, NBLOCKS32
+	jz		.Lecb_done\@
+
+.Lecb_loop1\@:
+	_do_aes_ecb	\enc, 0
+	add		$16, SRC
+	add		$16, DST
+	dec		NBLOCKS32
+	jnz		.Lecb_loop1\@
+
+.Lecb_done\@:
+	_epilogue
+.endm
+
+// void aes_ecb_encrypt_aesni(u8 *dst, const u8 *src, long nblocks,
+//			      const struct aes_enckey *key);
+SYM_FUNC_START(aes_ecb_encrypt_aesni)
+	_ecb_crypt	1
+SYM_FUNC_END(aes_ecb_encrypt_aesni)
+
+// void aes_ecb_decrypt_aesni(u8 *dst, const u8 *src, long nblocks,
+//			      const struct aes_key *key);
+SYM_FUNC_START(aes_ecb_decrypt_aesni)
+	_ecb_crypt	0
+SYM_FUNC_END(aes_ecb_decrypt_aesni)
