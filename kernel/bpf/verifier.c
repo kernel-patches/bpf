@@ -3852,9 +3852,14 @@ static int check_stack_write_var_off(struct bpf_verifier_env *env,
 		writing_zero = true;
 
 	for (i = min_off; i < max_off; i++) {
-		int spi;
+		int spi = bpf_get_spi(i);
 
-		spi = bpf_get_spi(i);
+		/*
+		 * bpf_get_spi() maps 8 consecutive byte offsets to the same
+		 * slot index; skip redundant calls for the same slot.
+		 */
+		if (i != min_off && spi == bpf_get_spi(i - 1))
+			continue;
 		err = destroy_if_dynptr_stack_slot(env, state, spi);
 		if (err)
 			return err;
