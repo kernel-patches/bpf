@@ -22,17 +22,6 @@
 #include <linux/minmax.h>
 #include <linux/module.h>
 
-asmlinkage void aes_cbc_encrypt_zvkned(const struct crypto_aes_ctx *key,
-				       const u8 *in, u8 *out, size_t len,
-				       u8 iv[AES_BLOCK_SIZE]);
-asmlinkage void aes_cbc_decrypt_zvkned(const struct crypto_aes_ctx *key,
-				       const u8 *in, u8 *out, size_t len,
-				       u8 iv[AES_BLOCK_SIZE]);
-
-asmlinkage void aes_cbc_cts_crypt_zvkned(const struct crypto_aes_ctx *key,
-					 const u8 *in, u8 *out, size_t len,
-					 const u8 iv[AES_BLOCK_SIZE], bool enc);
-
 asmlinkage void aes_ctr32_crypt_zvkned_zvkb(const struct crypto_aes_ctx *key,
 					    const u8 *in, u8 *out, size_t len,
 					    u8 iv[AES_BLOCK_SIZE]);
@@ -79,110 +68,6 @@ static int riscv64_aes_setkey_skcipher(struct crypto_skcipher *tfm,
 	struct crypto_aes_ctx *ctx = crypto_skcipher_ctx(tfm);
 
 	return riscv64_aes_setkey(ctx, key, keylen);
-}
-
-/* AES-CBC */
-
-static int riscv64_aes_cbc_crypt(struct skcipher_request *req, bool enc)
-{
-	struct crypto_skcipher *tfm = crypto_skcipher_reqtfm(req);
-	const struct crypto_aes_ctx *ctx = crypto_skcipher_ctx(tfm);
-	struct skcipher_walk walk;
-	unsigned int nbytes;
-	int err;
-
-	err = skcipher_walk_virt(&walk, req, false);
-	while ((nbytes = walk.nbytes) != 0) {
-		kernel_vector_begin();
-		if (enc)
-			aes_cbc_encrypt_zvkned(ctx, walk.src.virt.addr,
-					       walk.dst.virt.addr,
-					       nbytes & ~(AES_BLOCK_SIZE - 1),
-					       walk.iv);
-		else
-			aes_cbc_decrypt_zvkned(ctx, walk.src.virt.addr,
-					       walk.dst.virt.addr,
-					       nbytes & ~(AES_BLOCK_SIZE - 1),
-					       walk.iv);
-		kernel_vector_end();
-		err = skcipher_walk_done(&walk, nbytes & (AES_BLOCK_SIZE - 1));
-	}
-
-	return err;
-}
-
-static int riscv64_aes_cbc_encrypt(struct skcipher_request *req)
-{
-	return riscv64_aes_cbc_crypt(req, true);
-}
-
-static int riscv64_aes_cbc_decrypt(struct skcipher_request *req)
-{
-	return riscv64_aes_cbc_crypt(req, false);
-}
-
-/* AES-CBC-CTS */
-
-static int riscv64_aes_cbc_cts_crypt(struct skcipher_request *req, bool enc)
-{
-	struct crypto_skcipher *tfm = crypto_skcipher_reqtfm(req);
-	const struct crypto_aes_ctx *ctx = crypto_skcipher_ctx(tfm);
-	struct scatterlist sg_src[2], sg_dst[2];
-	struct skcipher_request subreq;
-	struct scatterlist *src, *dst;
-	struct skcipher_walk walk;
-	unsigned int cbc_len;
-	int err;
-
-	if (req->cryptlen < AES_BLOCK_SIZE)
-		return -EINVAL;
-
-	err = skcipher_walk_virt(&walk, req, false);
-	if (err)
-		return err;
-	/*
-	 * If the full message is available in one step, decrypt it in one call
-	 * to the CBC-CTS assembly function.  This reduces overhead, especially
-	 * on short messages.  Otherwise, fall back to doing CBC up to the last
-	 * two blocks, then invoke CTS just for the ciphertext stealing.
-	 */
-	if (unlikely(walk.nbytes != req->cryptlen)) {
-		cbc_len = round_down(req->cryptlen - AES_BLOCK_SIZE - 1,
-				     AES_BLOCK_SIZE);
-		skcipher_walk_abort(&walk);
-		skcipher_request_set_tfm(&subreq, tfm);
-		skcipher_request_set_callback(&subreq,
-					      skcipher_request_flags(req),
-					      NULL, NULL);
-		skcipher_request_set_crypt(&subreq, req->src, req->dst,
-					   cbc_len, req->iv);
-		err = riscv64_aes_cbc_crypt(&subreq, enc);
-		if (err)
-			return err;
-		dst = src = scatterwalk_ffwd(sg_src, req->src, cbc_len);
-		if (req->dst != req->src)
-			dst = scatterwalk_ffwd(sg_dst, req->dst, cbc_len);
-		skcipher_request_set_crypt(&subreq, src, dst,
-					   req->cryptlen - cbc_len, req->iv);
-		err = skcipher_walk_virt(&walk, &subreq, false);
-		if (err)
-			return err;
-	}
-	kernel_vector_begin();
-	aes_cbc_cts_crypt_zvkned(ctx, walk.src.virt.addr, walk.dst.virt.addr,
-				 walk.nbytes, req->iv, enc);
-	kernel_vector_end();
-	return skcipher_walk_done(&walk, 0);
-}
-
-static int riscv64_aes_cbc_cts_encrypt(struct skcipher_request *req)
-{
-	return riscv64_aes_cbc_cts_crypt(req, true);
-}
-
-static int riscv64_aes_cbc_cts_decrypt(struct skcipher_request *req)
-{
-	return riscv64_aes_cbc_cts_crypt(req, false);
 }
 
 /* AES-CTR */
@@ -366,41 +251,6 @@ static int riscv64_aes_xts_decrypt(struct skcipher_request *req)
 
 /* Algorithm definitions */
 
-static struct skcipher_alg riscv64_zvkned_aes_skcipher_algs[] = {
-	{
-		.setkey = riscv64_aes_setkey_skcipher,
-		.encrypt = riscv64_aes_cbc_encrypt,
-		.decrypt = riscv64_aes_cbc_decrypt,
-		.min_keysize = AES_MIN_KEY_SIZE,
-		.max_keysize = AES_MAX_KEY_SIZE,
-		.ivsize = AES_BLOCK_SIZE,
-		.base = {
-			.cra_blocksize = AES_BLOCK_SIZE,
-			.cra_ctxsize = sizeof(struct crypto_aes_ctx),
-			.cra_priority = 300,
-			.cra_name = "cbc(aes)",
-			.cra_driver_name = "cbc-aes-riscv64-zvkned",
-			.cra_module = THIS_MODULE,
-		},
-	}, {
-		.setkey = riscv64_aes_setkey_skcipher,
-		.encrypt = riscv64_aes_cbc_cts_encrypt,
-		.decrypt = riscv64_aes_cbc_cts_decrypt,
-		.min_keysize = AES_MIN_KEY_SIZE,
-		.max_keysize = AES_MAX_KEY_SIZE,
-		.ivsize = AES_BLOCK_SIZE,
-		.walksize = 4 * AES_BLOCK_SIZE, /* matches LMUL=4 */
-		.base = {
-			.cra_blocksize = AES_BLOCK_SIZE,
-			.cra_ctxsize = sizeof(struct crypto_aes_ctx),
-			.cra_priority = 300,
-			.cra_name = "cts(cbc(aes))",
-			.cra_driver_name = "cts-cbc-aes-riscv64-zvkned",
-			.cra_module = THIS_MODULE,
-		},
-	}
-};
-
 static struct skcipher_alg riscv64_zvkned_zvkb_aes_skcipher_alg = {
 	.setkey = riscv64_aes_setkey_skcipher,
 	.encrypt = riscv64_aes_ctr_crypt,
@@ -452,17 +302,11 @@ static int __init riscv64_aes_mod_init(void)
 
 	if (riscv_isa_extension_available(NULL, ZVKNED) &&
 	    riscv_vector_vlen() >= 128) {
-		err = crypto_register_skciphers(
-			riscv64_zvkned_aes_skcipher_algs,
-			ARRAY_SIZE(riscv64_zvkned_aes_skcipher_algs));
-		if (err)
-			return err;
-
 		if (riscv_isa_extension_available(NULL, ZVKB)) {
 			err = crypto_register_skcipher(
 				&riscv64_zvkned_zvkb_aes_skcipher_alg);
 			if (err)
-				goto unregister_zvkned_skcipher_algs;
+				return err;
 		}
 
 		if (riscv64_aes_xts_supported()) {
@@ -478,9 +322,6 @@ static int __init riscv64_aes_mod_init(void)
 unregister_zvkned_zvkb_skcipher_alg:
 	if (riscv_isa_extension_available(NULL, ZVKB))
 		crypto_unregister_skcipher(&riscv64_zvkned_zvkb_aes_skcipher_alg);
-unregister_zvkned_skcipher_algs:
-	crypto_unregister_skciphers(riscv64_zvkned_aes_skcipher_algs,
-				    ARRAY_SIZE(riscv64_zvkned_aes_skcipher_algs));
 	return err;
 }
 
@@ -490,18 +331,14 @@ static void __exit riscv64_aes_mod_exit(void)
 		crypto_unregister_skcipher(&riscv64_zvkned_zvbb_zvkg_aes_skcipher_alg);
 	if (riscv_isa_extension_available(NULL, ZVKB))
 		crypto_unregister_skcipher(&riscv64_zvkned_zvkb_aes_skcipher_alg);
-	crypto_unregister_skciphers(riscv64_zvkned_aes_skcipher_algs,
-				    ARRAY_SIZE(riscv64_zvkned_aes_skcipher_algs));
 }
 
 module_init(riscv64_aes_mod_init);
 module_exit(riscv64_aes_mod_exit);
 
-MODULE_DESCRIPTION("AES-CBC/CTS/CTR/XTS (RISC-V accelerated)");
+MODULE_DESCRIPTION("AES-CTR/XTS (RISC-V accelerated)");
 MODULE_AUTHOR("Jerry Shih <jerry.shih@sifive.com>");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS_CRYPTO("aes");
-MODULE_ALIAS_CRYPTO("cbc(aes)");
-MODULE_ALIAS_CRYPTO("cts(cbc(aes))");
 MODULE_ALIAS_CRYPTO("ctr(aes)");
 MODULE_ALIAS_CRYPTO("xts(aes)");

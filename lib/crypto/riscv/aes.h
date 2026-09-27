@@ -93,6 +93,74 @@ static bool aes_ecb_decrypt_arch(u8 *dst, const u8 *src, size_t len,
 }
 #endif /* CONFIG_CRYPTO_LIB_AES_ECB */
 
+#if IS_ENABLED(CONFIG_CRYPTO_LIB_AES_CBC)
+void aes_cbc_encrypt_zvkned(u8 *dst, const u8 *src, size_t len,
+			    u8 iv[AES_BLOCK_SIZE], const struct aes_enckey *key);
+void aes_cbc_decrypt_zvkned(u8 *dst, const u8 *src, size_t len,
+			    u8 iv[AES_BLOCK_SIZE], const struct aes_key *key);
+void aes_cbc_cts_crypt_zvkned(u8 *dst, const u8 *src, size_t len,
+			      const u8 iv[AES_BLOCK_SIZE],
+			      aes_encrypt_arg key, bool enc);
+
+/* len is always a positive multiple of AES_BLOCK_SIZE here. */
+#define aes_cbc_encrypt_arch aes_cbc_encrypt_arch
+static bool aes_cbc_encrypt_arch(u8 *dst, const u8 *src, size_t len,
+				 u8 iv[AES_BLOCK_SIZE],
+				 const struct aes_enckey *key)
+{
+	if (!static_branch_likely(&have_zvkned) || unlikely(!may_use_simd()))
+		return false;
+	kernel_vector_begin();
+	aes_cbc_encrypt_zvkned(dst, src, len, iv, key);
+	kernel_vector_end();
+	return true;
+}
+
+/* len is always a positive multiple of AES_BLOCK_SIZE here. */
+#define aes_cbc_decrypt_arch aes_cbc_decrypt_arch
+static bool aes_cbc_decrypt_arch(u8 *dst, const u8 *src, size_t len,
+				 u8 iv[AES_BLOCK_SIZE],
+				 const struct aes_key *key)
+{
+	if (!static_branch_likely(&have_zvkned) || unlikely(!may_use_simd()))
+		return false;
+	kernel_vector_begin();
+	aes_cbc_decrypt_zvkned(dst, src, len, iv, key);
+	kernel_vector_end();
+	return true;
+}
+
+/* len can be any value greater than AES_BLOCK_SIZE here. */
+#define aes_cbc_cts_encrypt_arch aes_cbc_cts_encrypt_arch
+static bool aes_cbc_cts_encrypt_arch(u8 *dst, const u8 *src, size_t len,
+				     u8 iv[AES_BLOCK_SIZE],
+				     const struct aes_enckey *key)
+{
+	if (!static_branch_likely(&have_zvkned) || unlikely(!may_use_simd()))
+		return false;
+
+	kernel_vector_begin();
+	aes_cbc_cts_crypt_zvkned(dst, src, len, iv, key, true);
+	kernel_vector_end();
+	return true;
+}
+
+/* len can be any value greater than AES_BLOCK_SIZE here. */
+#define aes_cbc_cts_decrypt_arch aes_cbc_cts_decrypt_arch
+static bool aes_cbc_cts_decrypt_arch(u8 *dst, const u8 *src, size_t len,
+				     u8 iv[AES_BLOCK_SIZE],
+				     const struct aes_key *key)
+{
+	if (!static_branch_likely(&have_zvkned) || unlikely(!may_use_simd()))
+		return false;
+
+	kernel_vector_begin();
+	aes_cbc_cts_crypt_zvkned(dst, src, len, iv, key, false);
+	kernel_vector_end();
+	return true;
+}
+#endif /* CONFIG_CRYPTO_LIB_AES_CBC */
+
 #define aes_mod_init_arch aes_mod_init_arch
 static void aes_mod_init_arch(void)
 {
