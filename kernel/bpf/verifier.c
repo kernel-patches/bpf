@@ -7191,8 +7191,11 @@ static int check_mem_reg(struct bpf_verifier_env *env, struct bpf_reg_state *reg
 {
 	int size, err = 0;
 
-	if (bpf_register_is_null(reg))
+	if (bpf_register_is_null(reg)) {
+		if (known_memory)
+			*known_memory = false;
 		return mark_arg_precision(env, argno);
+	}
 	if (known_memory)
 		*known_memory = true;
 
