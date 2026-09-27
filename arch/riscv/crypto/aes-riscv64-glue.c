@@ -22,11 +22,6 @@
 #include <linux/minmax.h>
 #include <linux/module.h>
 
-asmlinkage void aes_ecb_encrypt_zvkned(const struct crypto_aes_ctx *key,
-				       const u8 *in, u8 *out, size_t len);
-asmlinkage void aes_ecb_decrypt_zvkned(const struct crypto_aes_ctx *key,
-				       const u8 *in, u8 *out, size_t len);
-
 asmlinkage void aes_cbc_encrypt_zvkned(const struct crypto_aes_ctx *key,
 				       const u8 *in, u8 *out, size_t len,
 				       u8 iv[AES_BLOCK_SIZE]);
@@ -84,44 +79,6 @@ static int riscv64_aes_setkey_skcipher(struct crypto_skcipher *tfm,
 	struct crypto_aes_ctx *ctx = crypto_skcipher_ctx(tfm);
 
 	return riscv64_aes_setkey(ctx, key, keylen);
-}
-
-/* AES-ECB */
-
-static inline int riscv64_aes_ecb_crypt(struct skcipher_request *req, bool enc)
-{
-	struct crypto_skcipher *tfm = crypto_skcipher_reqtfm(req);
-	const struct crypto_aes_ctx *ctx = crypto_skcipher_ctx(tfm);
-	struct skcipher_walk walk;
-	unsigned int nbytes;
-	int err;
-
-	err = skcipher_walk_virt(&walk, req, false);
-	while ((nbytes = walk.nbytes) != 0) {
-		kernel_vector_begin();
-		if (enc)
-			aes_ecb_encrypt_zvkned(ctx, walk.src.virt.addr,
-					       walk.dst.virt.addr,
-					       nbytes & ~(AES_BLOCK_SIZE - 1));
-		else
-			aes_ecb_decrypt_zvkned(ctx, walk.src.virt.addr,
-					       walk.dst.virt.addr,
-					       nbytes & ~(AES_BLOCK_SIZE - 1));
-		kernel_vector_end();
-		err = skcipher_walk_done(&walk, nbytes & (AES_BLOCK_SIZE - 1));
-	}
-
-	return err;
-}
-
-static int riscv64_aes_ecb_encrypt(struct skcipher_request *req)
-{
-	return riscv64_aes_ecb_crypt(req, true);
-}
-
-static int riscv64_aes_ecb_decrypt(struct skcipher_request *req)
-{
-	return riscv64_aes_ecb_crypt(req, false);
 }
 
 /* AES-CBC */
@@ -412,21 +369,6 @@ static int riscv64_aes_xts_decrypt(struct skcipher_request *req)
 static struct skcipher_alg riscv64_zvkned_aes_skcipher_algs[] = {
 	{
 		.setkey = riscv64_aes_setkey_skcipher,
-		.encrypt = riscv64_aes_ecb_encrypt,
-		.decrypt = riscv64_aes_ecb_decrypt,
-		.min_keysize = AES_MIN_KEY_SIZE,
-		.max_keysize = AES_MAX_KEY_SIZE,
-		.walksize = 8 * AES_BLOCK_SIZE, /* matches LMUL=8 */
-		.base = {
-			.cra_blocksize = AES_BLOCK_SIZE,
-			.cra_ctxsize = sizeof(struct crypto_aes_ctx),
-			.cra_priority = 300,
-			.cra_name = "ecb(aes)",
-			.cra_driver_name = "ecb-aes-riscv64-zvkned",
-			.cra_module = THIS_MODULE,
-		},
-	}, {
-		.setkey = riscv64_aes_setkey_skcipher,
 		.encrypt = riscv64_aes_cbc_encrypt,
 		.decrypt = riscv64_aes_cbc_decrypt,
 		.min_keysize = AES_MIN_KEY_SIZE,
@@ -555,11 +497,10 @@ static void __exit riscv64_aes_mod_exit(void)
 module_init(riscv64_aes_mod_init);
 module_exit(riscv64_aes_mod_exit);
 
-MODULE_DESCRIPTION("AES-ECB/CBC/CTS/CTR/XTS (RISC-V accelerated)");
+MODULE_DESCRIPTION("AES-CBC/CTS/CTR/XTS (RISC-V accelerated)");
 MODULE_AUTHOR("Jerry Shih <jerry.shih@sifive.com>");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS_CRYPTO("aes");
-MODULE_ALIAS_CRYPTO("ecb(aes)");
 MODULE_ALIAS_CRYPTO("cbc(aes)");
 MODULE_ALIAS_CRYPTO("cts(cbc(aes))");
 MODULE_ALIAS_CRYPTO("ctr(aes)");

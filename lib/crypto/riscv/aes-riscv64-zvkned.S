@@ -81,3 +81,54 @@ SYM_FUNC_END(aes_encrypt_zvkned)
 SYM_FUNC_START(aes_decrypt_zvkned)
 	aes_crypt_zvkned	0
 SYM_FUNC_END(aes_decrypt_zvkned)
+
+#undef KEYP
+#undef OUTP
+#undef INP
+
+#define DST	a0
+#define SRC	a1
+#define LEN	a2
+#define KEYP	a3
+
+.macro	__aes_ecb_crypt	enc, keylen
+	srli		t0, LEN, 2
+	// t0 is the remaining length in 32-bit words.  It's a multiple of 4.
+1:
+	vsetvli		t1, t0, e32, m8, ta, ma
+	sub		t0, t0, t1	// Subtract number of words processed
+	slli		t1, t1, 2	// Words to bytes
+	vle32.v		v16, (SRC)
+	aes_crypt	v16, \enc, \keylen
+	vse32.v		v16, (DST)
+	add		SRC, SRC, t1
+	add		DST, DST, t1
+	bnez		t0, 1b
+
+	ret
+.endm
+
+.macro	aes_ecb_crypt	enc
+	aes_begin	KEYP, 128f, 192f
+	__aes_ecb_crypt	\enc, 256
+128:
+	__aes_ecb_crypt	\enc, 128
+192:
+	__aes_ecb_crypt	\enc, 192
+.endm
+
+// void aes_ecb_encrypt_zvkned(u8 *dst, const u8 *src, size_t len,
+//			       const struct aes_enckey *key);
+//
+// |len| must be nonzero and a multiple of 16 (AES_BLOCK_SIZE).
+SYM_FUNC_START(aes_ecb_encrypt_zvkned)
+	aes_ecb_crypt	1
+SYM_FUNC_END(aes_ecb_encrypt_zvkned)
+
+// void aes_ecb_decrypt_zvkned(u8 *dst, const u8 *src, size_t len,
+//			       const struct aes_key *key);
+//
+// |len| must be nonzero and a multiple of 16 (AES_BLOCK_SIZE).
+SYM_FUNC_START(aes_ecb_decrypt_zvkned)
+	aes_ecb_crypt	0
+SYM_FUNC_END(aes_ecb_decrypt_zvkned)

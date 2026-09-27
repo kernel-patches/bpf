@@ -60,6 +60,39 @@ static void aes_decrypt_arch(const struct aes_key *key,
 	}
 }
 
+#if IS_ENABLED(CONFIG_CRYPTO_LIB_AES_ECB)
+void aes_ecb_encrypt_zvkned(u8 *dst, const u8 *src, size_t len,
+			    const struct aes_enckey *key);
+void aes_ecb_decrypt_zvkned(u8 *dst, const u8 *src, size_t len,
+			    const struct aes_key *key);
+
+/* len is always a positive multiple of AES_BLOCK_SIZE here. */
+#define aes_ecb_encrypt_arch aes_ecb_encrypt_arch
+static bool aes_ecb_encrypt_arch(u8 *dst, const u8 *src, size_t len,
+				 const struct aes_enckey *key)
+{
+	if (!static_branch_likely(&have_zvkned) || unlikely(!may_use_simd()))
+		return false;
+	kernel_vector_begin();
+	aes_ecb_encrypt_zvkned(dst, src, len, key);
+	kernel_vector_end();
+	return true;
+}
+
+/* len is always a positive multiple of AES_BLOCK_SIZE here. */
+#define aes_ecb_decrypt_arch aes_ecb_decrypt_arch
+static bool aes_ecb_decrypt_arch(u8 *dst, const u8 *src, size_t len,
+				 const struct aes_key *key)
+{
+	if (!static_branch_likely(&have_zvkned) || unlikely(!may_use_simd()))
+		return false;
+	kernel_vector_begin();
+	aes_ecb_decrypt_zvkned(dst, src, len, key);
+	kernel_vector_end();
+	return true;
+}
+#endif /* CONFIG_CRYPTO_LIB_AES_ECB */
+
 #define aes_mod_init_arch aes_mod_init_arch
 static void aes_mod_init_arch(void)
 {

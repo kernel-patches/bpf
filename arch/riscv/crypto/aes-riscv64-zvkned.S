@@ -56,45 +56,6 @@
 #define LEN		a3
 #define IVP		a4
 
-.macro	__aes_ecb_crypt	enc, keylen
-	srli		t0, LEN, 2
-	// t0 is the remaining length in 32-bit words.  It's a multiple of 4.
-1:
-	vsetvli		t1, t0, e32, m8, ta, ma
-	sub		t0, t0, t1	// Subtract number of words processed
-	slli		t1, t1, 2	// Words to bytes
-	vle32.v		v16, (INP)
-	aes_crypt	v16, \enc, \keylen
-	vse32.v		v16, (OUTP)
-	add		INP, INP, t1
-	add		OUTP, OUTP, t1
-	bnez		t0, 1b
-
-	ret
-.endm
-
-.macro	aes_ecb_crypt	enc
-	aes_begin	KEYP, 128f, 192f
-	__aes_ecb_crypt	\enc, 256
-128:
-	__aes_ecb_crypt	\enc, 128
-192:
-	__aes_ecb_crypt	\enc, 192
-.endm
-
-// void aes_ecb_encrypt_zvkned(const struct crypto_aes_ctx *key,
-//			       const u8 *in, u8 *out, size_t len);
-//
-// |len| must be nonzero and a multiple of 16 (AES_BLOCK_SIZE).
-SYM_FUNC_START(aes_ecb_encrypt_zvkned)
-	aes_ecb_crypt	1
-SYM_FUNC_END(aes_ecb_encrypt_zvkned)
-
-// Same prototype and calling convention as the encryption function
-SYM_FUNC_START(aes_ecb_decrypt_zvkned)
-	aes_ecb_crypt	0
-SYM_FUNC_END(aes_ecb_decrypt_zvkned)
-
 .macro	aes_cbc_encrypt	keylen
 	vle32.v		v16, (IVP)	// Load IV
 1:
