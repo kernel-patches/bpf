@@ -2282,13 +2282,13 @@ static bool field_is_ptr_sized(const struct tep_format_field *field)
 }
 
 static struct tep_format_field *
-syscall_arg_fmt__init_array(struct syscall_arg_fmt *arg, struct tep_format_field *field,
+syscall_arg_fmt__init_array(struct syscall_arg_fmt *arg, int nr, struct tep_format_field *field,
 			    bool *use_btf)
 {
 	struct tep_format_field *last_field = NULL;
 	int len;
 
-	for (; field; field = field->next, ++arg) {
+	for (; field && nr > 0; field = field->next, ++arg, --nr) {
 		/* assume it's the last argument */
 		if (is_internal_field(field))
 			continue;
@@ -2360,8 +2360,8 @@ syscall_arg_fmt__init_array(struct syscall_arg_fmt *arg, struct tep_format_field
 
 static int syscall__set_arg_fmts(struct syscall *sc)
 {
-	struct tep_format_field *last_field = syscall_arg_fmt__init_array(sc->arg_fmt, sc->args,
-									  &sc->use_btf);
+	struct tep_format_field *last_field = syscall_arg_fmt__init_array(sc->arg_fmt, sc->nr_args,
+									  sc->args, &sc->use_btf);
 
 	if (last_field)
 		sc->args_size = last_field->offset + last_field->size;
@@ -2373,7 +2373,8 @@ static int syscall__read_info(struct syscall *sc, struct trace *trace)
 {
 	char tp_name[128];
 	const char *name;
-	struct tep_format_field *field;
+	struct tep_format_field *args, *field;
+	int nr_args = 0;
 	int err;
 
 	if (sc->nonexistent)
@@ -2410,30 +2411,23 @@ static int syscall__read_info(struct syscall *sc, struct trace *trace)
 		return -errno;
 	}
 
-	/*
-	 * The tracepoint format contains __syscall_nr field, so it's one more
-	 * than the actual number of syscall arguments.
-	 */
-	if (syscall__alloc_arg_fmts(sc, sc->tp_format->format.nr_fields - 1))
-		return -ENOMEM;
-
-	sc->args = sc->tp_format->format.fields;
+	args = sc->tp_format->format.fields;
 	/*
 	 * We need to check and discard the first variable '__syscall_nr'
 	 * or 'nr' that mean the syscall number. It is needless here.
 	 * So drop '__syscall_nr' or 'nr' field but does not exist on older kernels.
 	 */
-	if (sc->args && (!strcmp(sc->args->name, "__syscall_nr") || !strcmp(sc->args->name, "nr"))) {
-		sc->args = sc->args->next;
-		--sc->nr_args;
-	}
+	if (args && (!strcmp(args->name, "__syscall_nr") || !strcmp(args->name, "nr")))
+		args = args->next;
 
-	field = sc->args;
-	while (field) {
-		if (is_internal_field(field))
-			--sc->nr_args;
-		field = field->next;
-	}
+	/* Internal fields follow the syscall arguments. */
+	for (field = args; field && !is_internal_field(field); field = field->next)
+		nr_args++;
+
+	if (syscall__alloc_arg_fmts(sc, nr_args))
+		return -ENOMEM;
+
+	sc->args = args;
 
 	sc->is_exit = !strcmp(name, "exit_group") || !strcmp(name, "exit");
 	sc->is_open = !strcmp(name, "open") || !strcmp(name, "openat");
@@ -2455,7 +2449,8 @@ static int evsel__init_tp_arg_scnprintf(struct evsel *evsel, bool *use_btf)
 		const struct tep_event *tp_format = evsel__tp_format(evsel);
 
 		if (tp_format) {
-			syscall_arg_fmt__init_array(fmt, tp_format->format.fields, use_btf);
+			syscall_arg_fmt__init_array(fmt, tp_format->format.nr_fields,
+						    tp_format->format.fields, use_btf);
 			return 0;
 		}
 	}
