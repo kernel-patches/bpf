@@ -210,6 +210,7 @@ int sys_enter_connect(struct syscall_enter_args *args)
 	const void *sockaddr_arg = (const void *)args->args[1];
 	unsigned int socklen = args->args[2];
 	unsigned int len = sizeof(u64) + sizeof(augmented_args->args); // the size + err in all 'augmented_arg' structs
+	int err;
 
         if (augmented_args == NULL)
                 return 1; /* Failure: don't filter */
@@ -217,9 +218,11 @@ int sys_enter_connect(struct syscall_enter_args *args)
 	_Static_assert(is_power_of_2(sizeof(augmented_args->arg.saddr)), "sizeof(augmented_args->arg.saddr) needs to be a power of two");
 	socklen &= sizeof(augmented_args->arg.saddr) - 1;
 
-	bpf_probe_read_user(&augmented_args->arg.saddr, socklen, sockaddr_arg);
+	err = bpf_probe_read_user(&augmented_args->arg.saddr, socklen, sockaddr_arg);
+	if (err)
+		socklen = 0;
 	augmented_args->arg.size = socklen;
-	augmented_args->arg.err = 0;
+	augmented_args->arg.err = err;
 
 	return augmented__output(args, augmented_args, len + socklen);
 }
@@ -231,13 +234,18 @@ int sys_enter_sendto(struct syscall_enter_args *args)
 	const void *sockaddr_arg = (const void *)args->args[4];
 	unsigned int socklen = args->args[5];
 	unsigned int len = sizeof(u64) + sizeof(augmented_args->args); // the size + err in all 'augmented_arg' structs
+	int err;
 
         if (augmented_args == NULL)
                 return 1; /* Failure: don't filter */
 
 	socklen &= sizeof(augmented_args->arg.saddr) - 1;
 
-	bpf_probe_read_user(&augmented_args->arg.saddr, socklen, sockaddr_arg);
+	err = bpf_probe_read_user(&augmented_args->arg.saddr, socklen, sockaddr_arg);
+	if (err)
+		socklen = 0;
+	augmented_args->arg.size = socklen;
+	augmented_args->arg.err = err;
 
 	return augmented__output(args, augmented_args, len + socklen);
 }
@@ -372,6 +380,9 @@ int sys_enter_perf_event_open(struct syscall_enter_args *args)
 	if (bpf_probe_read_user(&augmented_args->arg.value, size, attr) < 0)
 		goto failure;
 
+	augmented_args->arg.size = size;
+	augmented_args->arg.err = 0;
+
 	return augmented__output(args, augmented_args, len + size);
 failure:
 	return 1; /* Failure: don't filter */
@@ -384,6 +395,7 @@ int sys_enter_clock_nanosleep(struct syscall_enter_args *args)
 	const void *rqtp_arg = (const void *)args->args[2];
 	unsigned int len = sizeof(u64) + sizeof(augmented_args->args); // the size + err in all 'augmented_arg' structs
 	__u32 size = sizeof(struct timespec64);
+	int err;
 
         if (augmented_args == NULL)
 		goto failure;
@@ -391,7 +403,11 @@ int sys_enter_clock_nanosleep(struct syscall_enter_args *args)
 	if (size > sizeof(augmented_args->arg.value))
                 goto failure;
 
-	bpf_probe_read_user(&augmented_args->arg.value, size, rqtp_arg);
+	err = bpf_probe_read_user(&augmented_args->arg.value, size, rqtp_arg);
+	if (err)
+		size = 0;
+	augmented_args->arg.size = size;
+	augmented_args->arg.err = err;
 
 	return augmented__output(args, augmented_args, len + size);
 failure:
@@ -405,6 +421,7 @@ int sys_enter_nanosleep(struct syscall_enter_args *args)
 	const void *req_arg = (const void *)args->args[0];
 	unsigned int len = sizeof(augmented_args->args);
 	__u32 size = sizeof(struct timespec64);
+	int err;
 
         if (augmented_args == NULL)
 		goto failure;
@@ -412,7 +429,11 @@ int sys_enter_nanosleep(struct syscall_enter_args *args)
 	if (size > sizeof(augmented_args->arg.value))
                 goto failure;
 
-	bpf_probe_read_user(&augmented_args->arg.value, size, req_arg);
+	err = bpf_probe_read_user(&augmented_args->arg.value, size, req_arg);
+	if (err)
+		size = 0;
+	augmented_args->arg.size = size;
+	augmented_args->arg.err = err;
 
 	return augmented__output(args, augmented_args, len + size);
 failure:
@@ -445,6 +466,7 @@ static inline int augment_arg(struct syscall_enter_args *args, int i,
 			      struct beauty_payload_enter *payload, u64 offset)
 {
 	int index, value_size = sizeof(struct augmented_arg) - offsetof(struct augmented_arg, value);
+	int read_err = 0;
 	struct augmented_arg *payload_offset;
 	s64 aug_size, size;
 	bool augmented;
@@ -467,8 +489,10 @@ static inline int augment_arg(struct syscall_enter_args *args, int i,
 	if (size == 1) { /* string */
 		aug_size = bpf_probe_read_user_str(payload_offset->value, value_size, arg);
 		/* minimum of 0 to pass the verifier */
-		if (aug_size < 0)
+		if (aug_size < 0) {
+			read_err = aug_size;
 			aug_size = 0;
+		}
 
 		augmented = true;
 	} else if (size > 0 && size <= value_size) { /* struct */
@@ -498,6 +522,7 @@ static inline int augment_arg(struct syscall_enter_args *args, int i,
 			return -1;
 
 		payload_offset->size = aug_size;
+		payload_offset->err = read_err;
 		return written;
 	}
 
