@@ -900,10 +900,17 @@ static ssize_t remote_ip_show(struct config_item *item, char *buf)
 
 static ssize_t local_mac_show(struct config_item *item, char *buf)
 {
-	struct net_device *dev = to_target(item)->np.dev;
 	static const u8 bcast[ETH_ALEN] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+	struct netconsole_target *nt = to_target(item);
+	int ret;
 
-	return sysfs_emit(buf, "%pM\n", dev ? dev->dev_addr : bcast);
+	/* Hold RTNL here so netconsole_netdev_event() doesn't tear down np.dev
+	 * from under us.
+	 */
+	rtnl_lock();
+	ret = sysfs_emit(buf, "%pM\n", nt->np.dev ? nt->np.dev->dev_addr : bcast);
+	rtnl_unlock();
+	return ret;
 }
 
 static ssize_t remote_mac_show(struct config_item *item, char *buf)
