@@ -1,0 +1,65 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Common DSI infrastructure for Raspberry Pi ILI9881C panels
+ * (backlight, i2c mux, display MCU, DSI1 port wiring)
+ *
+ * Each panel overlay includes this and extends &panel with its own
+ * compatible, dimensions, and panel-timing.
+ */
+
+#include <dt-bindings/gpio/gpio.h>
+
+&{/} {
+	panel_backlight: panel_backlight {
+		compatible = "pwm-backlight";
+		brightness-levels = <0 31>;
+		num-interpolated-steps = <31>;
+		default-brightness-level = <15>;
+		pwms = <&display_mcu 0 200000 0>;
+	};
+};
+
+&i2c0 {
+	status = "okay";
+};
+
+&i2c0mux {
+	status = "okay";
+};
+
+&i2c0_1 {
+	status = "okay";
+
+	display_mcu: display_mcu@45 {
+		compatible = "raspberrypi,touchscreen-panel-regulator-v2";
+		reg = <0x45>;
+		gpio-controller;
+		#gpio-cells = <2>;
+		#pwm-cells = <3>;
+	};
+};
+
+&dsi1 {
+	status = "okay";
+
+	panel: panel@0 {
+		reg = <0>;
+		reset-gpios = <&display_mcu 0 GPIO_ACTIVE_LOW>;
+		backlight = <&panel_backlight>;
+		dsi-lanes = <2>;
+		mode-video;
+		mode-lpm;
+
+		port {
+			panel_in: endpoint {
+				remote-endpoint = <&dsi1_out>;
+			};
+		};
+	};
+
+	port {
+		dsi1_out: endpoint {
+			remote-endpoint = <&panel_in>;
+		};
+	};
+};

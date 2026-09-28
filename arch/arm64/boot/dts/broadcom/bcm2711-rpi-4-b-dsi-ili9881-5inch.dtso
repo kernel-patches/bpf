@@ -1,0 +1,22 @@
+/dts-v1/;
+/plugin/;
+
+#include "bcm2711-rpi-4-b-dsi-ili9881.dtsi"
+
+&panel {
+	compatible = "raspberrypi,dsi-5inch", "panel-mipi-dsi-bpf";
+	width-mm = <62>;
+	height-mm = <110>;
+
+	panel-timing {
+		clock-frequency = <83333000>;
+		hactive = <720>;
+		vactive = <1280>;
+		hfront-porch = <110>;
+		hsync-len = <12>;
+		hback-porch = <95>;
+		vfront-porch = <100>;
+		vsync-len = <2>;
+		vback-porch = <100>;
+	};
+};
