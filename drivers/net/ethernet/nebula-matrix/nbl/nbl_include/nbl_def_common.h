@@ -12,6 +12,7 @@
 #include "nbl_include.h"
 
 struct nbl_common_info {
+	struct workqueue_struct *wq;
 	struct pci_dev *pdev;
 	struct device *dev;
 	u16 vsi_id;
@@ -27,5 +28,8 @@ struct nbl_common_info {
 	u8 has_ctrl;
 	u8 has_net;
 };
+
+void nbl_common_destroy_wq(struct nbl_common_info *common);
+int nbl_common_create_wq(struct nbl_common_info *common);
 
 #endif
