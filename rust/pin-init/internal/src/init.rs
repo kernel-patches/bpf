@@ -478,42 +478,61 @@ fn make_field_check(
     init_kind: InitKind,
     path: &Path,
 ) -> TokenStream {
-    let field_attrs: Vec<_> = fields
+    let align_checks: TokenStream = fields
         .iter()
-        .filter_map(|f| f.kind.member().map(|_| &f.attrs))
+        .filter_map(|f| {
+            let member = f.kind.member()?;
+            let span = member.span().resolved_at(Span::mixed_site());
+            let attrs = &f.attrs;
+
+            Some(quote_spanned! {span =>
+                // Create references to ensure that the initialized field is properly aligned.
+                // Unaligned fields will cause the compiler to emit E0793. We do not support
+                // unaligned fields since `Init::__init` requires an aligned pointer; the call to
+                // `ptr::write` for value-initialization case has the same requirement.
+                #(#attrs)*
+                let _ = &(*slot).#member;
+            })
+        })
         .collect();
-    let field_name: Vec<_> = fields.iter().filter_map(|f| f.kind.member()).collect();
+
+    let fake_field_init: TokenStream = fields
+        .iter()
+        .filter_map(|f| {
+            let member = f.kind.member()?;
+            let span = member.span().resolved_at(Span::mixed_site());
+            let attrs = &f.attrs;
+
+            Some(quote_spanned! {span =>
+                #(#attrs)*
+                #member: loop {},
+            })
+        })
+        .collect();
     let zeroing_trailer = match init_kind {
         InitKind::Normal => None,
         InitKind::Zeroing => Some(quote! {
             ..::core::mem::zeroed()
         }),
     };
+    let field_dup_checks = quote_spanned! { Span::mixed_site() =>
+        // If the zeroing trailer is not present, this checks that all fields have been
+        // mentioned exactly once. If the zeroing trailer is present, all missing fields will be
+        // zeroed, so this checks that all fields have been mentioned at most once. The use of
+        // struct initializer will still generate very natural error messages for any misuse.
+        ::core::ptr::write(slot, #path {
+            #fake_field_init
+            #zeroing_trailer
+        })
+    };
+
     quote_spanned! { Span::mixed_site() =>
         #[allow(unreachable_code)]
         // We use unreachable code to perform field checks. They're still checked by the compiler.
         // SAFETY: this code is never executed.
         let _ = || unsafe {
-            // Create references to ensure that the initialized field is properly aligned.
-            // Unaligned fields will cause the compiler to emit E0793. We do not support
-            // unaligned fields since `Init::__init` requires an aligned pointer; the call to
-            // `ptr::write` for value-initialization case has the same requirement.
-            #(
-                #(#field_attrs)*
-                let _ = &(*slot).#field_name;
-            )*
-
-            // If the zeroing trailer is not present, this checks that all fields have been
-            // mentioned exactly once. If the zeroing trailer is present, all missing fields will be
-            // zeroed, so this checks that all fields have been mentioned at most once. The use of
-            // struct initializer will still generate very natural error messages for any misuse.
-            ::core::ptr::write(slot, #path {
-                #(
-                    #(#field_attrs)*
-                    #field_name: loop {},
-                )*
-                #zeroing_trailer
-            })
+            #align_checks
+            #field_dup_checks
         };
     }
 }
