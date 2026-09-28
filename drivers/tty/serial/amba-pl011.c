@@ -721,7 +721,7 @@ static int pl011_dma_tx_refill(struct uart_amba_port *uap)
 	dmaengine_submit(desc);
 
 	/* Fire the DMA transaction */
-	dma_dev->device_issue_pending(chan);
+	dma_async_issue_pending(chan);
 
 	uap->dmacr |= UART011_TXDMAE;
 	pl011_write(uap->dmacr, uap, REG_DMACR);
@@ -1011,8 +1011,7 @@ static void pl011_dma_rx_irq(struct uart_amba_port *uap)
 	 */
 	if (dmaengine_pause(rxchan))
 		dev_err(uap->port.dev, "unable to pause DMA transfer\n");
-	dmastat = rxchan->device->device_tx_status(rxchan,
-						   dmarx->cookie, &state);
+	dmastat = dmaengine_tx_status(rxchan, dmarx->cookie, &state);
 	if (dmastat != DMA_PAUSED)
 		dev_err(uap->port.dev, "unable to pause DMA transfer\n");
 
@@ -1066,7 +1065,7 @@ static void pl011_dma_rx_callback(void *data)
 	 * Rx data can be taken by the UART interrupts during
 	 * the DMA irq handler. So we check the residue here.
 	 */
-	rxchan->device->device_tx_status(rxchan, dmarx->cookie, &state);
+	dmaengine_tx_status(rxchan, dmarx->cookie, &state);
 	pending = dbuf->len - state.residue;
 	BUG_ON(pending > PL011_DMA_BUFFER_SIZE);
 	/* Then we terminate the transfer - we now know our residue */
@@ -1124,7 +1123,7 @@ static void pl011_dma_rx_poll(struct timer_list *t)
 	struct dma_tx_state state;
 
 	dbuf = dmarx->use_buf_b ? &uap->dmarx.dbuf_b : &uap->dmarx.dbuf_a;
-	rxchan->device->device_tx_status(rxchan, dmarx->cookie, &state);
+	dmaengine_tx_status(rxchan, dmarx->cookie, &state);
 	if (likely(state.residue < dmarx->last_residue)) {
 		dmataken = dbuf->len - dmarx->last_residue;
 		size = dmarx->last_residue - state.residue;
