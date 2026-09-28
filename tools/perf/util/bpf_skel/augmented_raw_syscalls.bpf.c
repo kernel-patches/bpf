@@ -7,6 +7,7 @@
  */
 
 #include "vmlinux.h"
+#include "perf_trace_u.h"
 
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
@@ -62,13 +63,19 @@ struct syscalls_sys_exit {
 } syscalls_sys_exit SEC(".maps");
 
 struct syscall_enter_args {
-	unsigned long long common_tp_fields;
+	union {
+		unsigned long long common_tp_fields;
+		unsigned short	   common_type;
+	};
 	long		   syscall_nr;
 	unsigned long	   args[6];
 };
 
 struct syscall_exit_args {
-	unsigned long long common_tp_fields;
+	union {
+		unsigned long long common_tp_fields;
+		unsigned short	   common_type;
+	};
 	long		   syscall_nr;
 	long		   ret;
 };
@@ -169,10 +176,11 @@ static inline struct augmented_args_payload *augmented_args_payload(void)
 	return bpf_map_lookup_elem(&augmented_args_tmp, &key);
 }
 
-static inline int augmented__output(void *ctx, struct augmented_args_payload *args, int len)
+/* Returning 0 would drop the tracepoint for other perf sessions. */
+static inline int augmented__output(void *ctx, void *args, int len)
 {
-	/* If perf_event_output fails, return non-zero so that it gets recorded unaugmented */
-	return bpf_perf_event_output(ctx, &__augmented_syscalls__, BPF_F_CURRENT_CPU, args, len);
+	bpf_perf_event_output(ctx, &__augmented_syscalls__, BPF_F_CURRENT_CPU, args, len);
+	return 1;
 }
 
 static inline int augmented__beauty_output(void *ctx, void *data, int len)
@@ -211,12 +219,20 @@ unsigned int augmented_arg__read_str(struct augmented_arg *augmented_arg, const 
 SEC("tp/raw_syscalls/sys_enter")
 int sys_enter_unaugmented(struct syscall_enter_args *args)
 {
+	struct augmented_args_payload *augmented_args = augmented_args_payload();
+
+	if (augmented_args)
+		augmented__output(args, &augmented_args->args, sizeof(augmented_args->args));
 	return 1;
 }
 
 SEC("tp/raw_syscalls/sys_exit")
 int sys_exit_unaugmented(struct syscall_exit_args *args)
 {
+	struct augmented_args_payload *augmented_args = augmented_args_payload();
+
+	if (augmented_args)
+		augmented__output(args, &augmented_args->args, sizeof(struct syscall_exit_args));
 	return 1;
 }
 
@@ -408,7 +424,9 @@ int sys_enter_perf_event_open(struct syscall_enter_args *args)
 
 	return augmented__output(args, augmented_args, len + size);
 failure:
-	return 1; /* Failure: don't filter */
+	if (augmented_args)
+		augmented__output(args, augmented_args, sizeof(augmented_args->args));
+	return 1;
 }
 
 SEC("tp/syscalls/sys_enter_clock_nanosleep")
@@ -590,6 +608,7 @@ static int augment_sys_enter(void *ctx, struct syscall_enter_args *args)
 
 	/* copy the sys_enter header, which has the syscall_nr */
 	__builtin_memcpy(&payload->args, args, sizeof(struct syscall_enter_args));
+	payload->args.common_type = SYSCALL_TRACE_ENTER;
 
 	if (bpf_ksym_exists(bpf_iter_num_new)) {
 		bpf_for(i, 0, 6) {
@@ -642,48 +661,55 @@ int sys_enter(struct syscall_enter_args *args)
 		return 1;
 
 	if (pid_filter__has(&pids_filtered, getpid()))
-		return 0;
+		return 1;
 
 	augmented_args = augmented_args_payload();
 	if (augmented_args == NULL)
 		return 1;
 
 	bpf_probe_read_kernel(&augmented_args->args, sizeof(augmented_args->args), args);
+	augmented_args->args.common_type = SYSCALL_TRACE_ENTER;
 
 	/*
 	 * Jump to syscall specific augmenter, even if the default one,
-	 * "!raw_syscalls:unaugmented" that will just return 1 to return the
-	 * unaugmented tracepoint payload.
+	 * "!raw_syscalls:unaugmented" that will just output the unaugmented
+	 * payload.
 	 */
 	if (augment_sys_enter(args, &augmented_args->args))
 		bpf_tail_call(args, &syscalls_sys_enter, augmented_args->args.syscall_nr);
 
-	// If not found on the PROG_ARRAY syscalls map, then we're filtering it:
-	return 0;
+	return 1;
 }
 
 SEC("tp/raw_syscalls/sys_exit")
 int sys_exit(struct syscall_exit_args *args)
 {
-	struct syscall_exit_args exit_args;
+	struct augmented_args_payload *augmented_args;
 
 	if (!task_traced())
 		return 1;
 
 	if (pid_filter__has(&pids_filtered, getpid()))
-		return 0;
+		return 1;
 
-	bpf_probe_read_kernel(&exit_args, sizeof(exit_args), args);
+	augmented_args = augmented_args_payload();
+	if (augmented_args == NULL)
+		return 1;
+
+	bpf_probe_read_kernel(&augmented_args->args, sizeof(*args), args);
+	augmented_args->args.common_type = SYSCALL_TRACE_EXIT;
+
 	/*
 	 * Jump to syscall specific return augmenter, even if the default one,
-	 * "!raw_syscalls:unaugmented" that will just return 1 to return the
-	 * unaugmented tracepoint payload.
+	 * "!raw_syscalls:unaugmented" that will just output the unaugmented
+	 * payload.
 	 */
-	bpf_tail_call(args, &syscalls_sys_exit, exit_args.syscall_nr);
+	bpf_tail_call(args, &syscalls_sys_exit, augmented_args->args.syscall_nr);
 	/*
-	 * If not found on the PROG_ARRAY syscalls map, then we're filtering it:
+	 * If not found on the PROG_ARRAY syscalls map, then we're filtering it
+	 * by not emitting bpf-output event.
 	 */
-	return 0;
+	return 1;
 }
 
 /* Trace the children of traced tasks, added before they can run. */

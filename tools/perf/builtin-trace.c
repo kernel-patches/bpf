@@ -21,6 +21,7 @@
 #include <bpf/libbpf.h>
 #include <bpf/btf.h>
 #endif
+#include "util/bpf_skel/perf_trace_u.h"
 #include "util/rlimit.h"
 #include "builtin.h"
 #include "util/cgroup.h"
@@ -553,6 +554,57 @@ static struct evsel *perf_evsel__raw_syscall_newtp(const char *direction, void *
 out_delete:
 	evsel__put_and_free_priv(evsel);
 	return NULL;
+}
+
+static struct syscall_tp sys_enter_tp;
+static struct syscall_tp sys_exit_tp;
+
+static int evsel__init_bpf_output_tp(struct evsel *evsel)
+{
+	struct tep_event *event;
+	struct tep_format_field *field;
+	struct syscall_tp *sc;
+
+	if (evsel == NULL)
+		return 0;
+
+	event = trace_event__tp_format("raw_syscalls", "sys_enter");
+	if (event == NULL)
+		event = trace_event__tp_format("syscalls", "sys_enter");
+	if (event == NULL)
+		return -errno;
+
+	field = tep_find_field(event, "id");
+	if (field == NULL || tp_field__init_uint(&sys_enter_tp.id, field, evsel->needs_swap))
+		return -EINVAL;
+
+	__tp_field__init_ptr(&sys_enter_tp.args, sys_enter_tp.id.offset + sizeof(u64));
+
+	/* ID is at the same offset, use evsel sc for convenience */
+	sc = evsel__syscall_tp(evsel);
+	if (sc == NULL)
+		return -ENOMEM;
+
+	event = trace_event__tp_format("raw_syscalls", "sys_exit");
+	if (event == NULL)
+		event = trace_event__tp_format("syscalls", "sys_exit");
+	if (event == NULL)
+		return -errno;
+
+	field = tep_find_field(event, "id");
+	if (field == NULL || tp_field__init_uint(&sys_exit_tp.id, field, evsel->needs_swap))
+		return -EINVAL;
+
+	field = tep_find_field(event, "ret");
+	if (field == NULL || tp_field__init_uint(&sys_exit_tp.ret, field, evsel->needs_swap))
+		return -EINVAL;
+
+	/* Save the common part to the evsel sc */
+	if (sys_enter_tp.id.offset != sys_exit_tp.id.offset)
+		return -EINVAL;
+	sc->id = sys_enter_tp.id;
+
+	return 0;
 }
 
 #define perf_evsel__sc_tp_uint(name, sample) \
@@ -3021,7 +3073,10 @@ static int trace__sys_enter(struct trace *trace,
 
 	trace__fprintf_sample(trace, sample, thread);
 
-	args = perf_evsel__sc_tp_ptr(args, sample);
+	if (evsel == trace->syscalls.events.bpf_output)
+		args = sys_enter_tp.args.pointer(&sys_enter_tp.args, sample);
+	else
+		args = perf_evsel__sc_tp_ptr(args, sample);
 
 	if (ttrace->entry_str == NULL) {
 		ttrace->entry_str = malloc(trace__entry_str_size);
@@ -3159,7 +3214,10 @@ static int trace__sys_exit(struct trace *trace,
 
 	trace__fprintf_sample(trace, sample, thread);
 
-	ret = perf_evsel__sc_tp_uint(ret, sample);
+	if (evsel == trace->syscalls.events.bpf_output)
+		ret = sys_exit_tp.ret.integer(&sys_exit_tp.ret, sample);
+	else
+		ret = perf_evsel__sc_tp_uint(ret, sample);
 
 	if (trace->summary)
 		thread__update_stats(thread, ttrace, id, sample, ret, trace);
@@ -3272,6 +3330,18 @@ out:
 out_put:
 	thread__put(thread);
 	return err;
+}
+
+/* The BPF output event carries both entry and exit, tagged in common_type. */
+static int trace__bpf_output(struct trace *trace, union perf_event *event,
+			     struct perf_sample *sample)
+{
+	u16 type = *(u16 *)sample->raw_data;
+
+	if (type == SYSCALL_TRACE_ENTER)
+		return trace__sys_enter(trace, event, sample);
+
+	return trace__sys_exit(trace, event, sample);
 }
 
 static int trace__vfs_getname(struct trace *trace,
@@ -3585,27 +3655,6 @@ static int trace__event_handler(struct trace *trace,
 	if (thread)
 		trace__fprintf_comm_tid(trace, thread, trace->output);
 
-	if (evsel == trace->syscalls.events.bpf_output) {
-		int id = perf_evsel__sc_tp_uint(id, sample);
-		int e_machine = thread
-			? thread__e_machine(thread, trace->host, /*e_flags=*/NULL)
-			: EM_HOST;
-		struct syscall *sc = trace__syscall_info(trace, evsel, e_machine, id);
-
-		if (sc) {
-			fprintf(trace->output, "%s(", sc->name);
-			trace__fprintf_sys_enter(trace, sample);
-			fputc(')', trace->output);
-			goto newline;
-		}
-
-		/*
-		 * XXX: Not having the associated syscall info or not finding/adding
-		 * 	the thread should never happen, but if it does...
-		 * 	fall thru and print it as a bpf_output event.
-		 */
-	}
-
 	fprintf(trace->output, "%s(", evsel->name);
 
 	if (evsel__is_bpf_output(evsel)) {
@@ -3625,7 +3674,6 @@ static int trace__event_handler(struct trace *trace,
 		}
 	}
 
-newline:
 	fprintf(trace->output, ")\n");
 
 	if (callchain_ret > 0)
@@ -4791,6 +4839,16 @@ static int trace__run(struct trace *trace, int argc, const char **argv)
 		bpf_output->core.system_wide = true;
 		/* Exec doesn't enable a CPU event, BPF waits for the exec instead. */
 		bpf_output->immediate = target__enable_on_exec(&trace->opts.target);
+		/* Track the target, and see it exit, with a per-task event. */
+		if (evlist__get_tracking_event(evlist) == bpf_output) {
+			struct evsel *tracking =
+				evlist__findnew_tracking_event(evlist, /*system_wide=*/false);
+
+			if (!tracking)
+				goto out_error_mem;
+			/* --sort-events can't queue events without a timestamp. */
+			evsel__set_sample_bit(tracking, TIME);
+		}
 	}
 
 create_maps:
@@ -4902,7 +4960,7 @@ create_maps:
 
 	trace->multiple_threads = perf_thread_map__pid(evlist__core(evlist)->threads, 0) == -1 ||
 		perf_thread_map__nr(evlist__core(evlist)->threads) > 1 ||
-		evlist__first(evlist)->core.attr.inherit;
+		!trace->opts.no_inherit;
 
 	/*
 	 * Now that we already used evsel->core.attr to ask the kernel to setup the
@@ -5961,8 +6019,6 @@ int cmd_trace(int argc, const char **argv)
 	if (err < 0)
 		goto skip_augmentation;
 
-	trace__add_syscall_newtp(&trace);
-
 	err = augmented_syscalls__create_bpf_output(trace.evlist);
 	if (err == 0)
 		trace.syscalls.events.bpf_output = evlist__last(trace.evlist);
@@ -5998,6 +6054,7 @@ skip_augmentation:
 
 	if (evlist__nr_entries(trace.evlist) > 0) {
 		bool use_btf = false;
+		struct evsel *augmented = trace.syscalls.events.bpf_output;
 
 		evlist__set_default_evsel_handler(trace.evlist, trace__event_handler);
 		if (evlist__set_syscall_tp_fields(trace.evlist, &use_btf)) {
@@ -6007,6 +6064,20 @@ skip_augmentation:
 
 		if (use_btf)
 			trace__load_vmlinux_btf(&trace);
+
+		if (augmented) {
+			if (evsel__init_bpf_output_tp(augmented) < 0) {
+				pr_err("Failed to initialize the BPF output event fields\n");
+				goto out;
+			}
+			augmented->handler = trace__bpf_output;
+			/* Just the user space callchain leading to the syscall. */
+			if (callchain_param.enabled && !trace.kernel_syscallchains)
+				augmented->core.attr.exclude_callchain_kernel = 1;
+			trace.raw_augmented_syscalls_args_size = sys_enter_tp.id.offset;
+			trace.raw_augmented_syscalls_args_size += (6 + 1) * sizeof(long);
+			trace.raw_augmented_syscalls = true;
+		}
 	}
 
 	/*
