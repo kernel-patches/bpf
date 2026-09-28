@@ -356,6 +356,7 @@ struct sk_filter;
   *	@sk_scm_security: flagged by SO_PASSSEC to recv SCM_SECURITY
   *	@sk_scm_pidfd: flagged by SO_PASSPIDFD to recv SCM_PIDFD
   *	@sk_scm_rights: flagged by SO_PASSRIGHTS to recv SCM_RIGHTS
+  *	@sk_scm_pidfd_thread: flagged by SO_PASSPIDFD_THREAD to recv a thread SCM_PIDFD
   *	@sk_scm_unused: unused flags for scm_recv()
   *	@ns_tracker: tracker for netns reference
   *	@sk_user_frags: xarray of pages the user is holding a reference on.
@@ -562,7 +563,8 @@ struct sock {
 				sk_scm_security : 1,
 				sk_scm_pidfd : 1,
 				sk_scm_rights : 1,
-				sk_scm_unused : 4;
+				sk_scm_pidfd_thread : 1,
+				sk_scm_unused : 3;
 		};
 	};
 	u8			sk_clockid;
@@ -2986,6 +2988,16 @@ static inline bool sk_is_unix(const struct sock *sk)
 static inline bool sk_is_stream_unix(const struct sock *sk)
 {
 	return sk_is_unix(sk) && sk->sk_type == SOCK_STREAM;
+}
+
+static inline bool sk_scm_pidfd_wanted(const struct sock *sk)
+{
+	return sk->sk_scm_pidfd;
+}
+
+static inline bool sk_scm_pidfd_thread_wanted(const struct sock *sk)
+{
+	return sk->sk_scm_pidfd_thread;
 }
 
 static inline bool sk_is_vsock(const struct sock *sk)
