@@ -83,6 +83,87 @@ static void nbl_get_func_param(struct pci_dev *pdev, kernel_ulong_t driver_data,
 		param->caps.has_ctrl = 1;
 }
 
+/*
+ * Establish chip-wide dependencies for this PF:
+ *  - for every non-management PF, add a consumer->management PF device
+ *    link. The driver core then guarantees (sysfs unbind, driver
+ *    unregister, hot-unplug alike) that this consumer is released
+ *    BEFORE the func 0 supplier, which is the only teardown order in
+ *    which the chip-global firmware deinit is safe.
+ *
+ * The management PF is addressed by the deterministic identity
+ * (domain, bus, slot, func 0) instead of any name-based scan: hardware
+ * guarantees PFs are contiguous from func 0 in the same slot.
+ *
+ * The func 0 driver must already be fully bound. A managed link created
+ * from inside this probe while the supplier has no driver starts DORMANT
+ * and is force-promoted (with a WARN backtrace) when the probe ends, so
+ * it never delivers the unbind-order guarantee; a link created while
+ * func 0 is still probing can race its chip-global init and is not
+ * unwound if func 0's probe fails. Probing is deferred until func 0 is
+ * bound, per the consumer responsibility rule in
+ * Documentation/driver-api/device_link.rst.
+ *
+ * The link uses DL_FLAG_AUTOREMOVE_CONSUMER, so it is purged by the
+ * driver core when this PF fails to probe or later detaches; it must
+ * not be removed manually.
+ *
+ * Return: 0 on success, negative errno on failure.
+ */
+static int nbl_probe_chip_deps(struct pci_dev *pdev, bool has_ctrl)
+{
+	struct device_link *link;
+	struct pci_dev *mgt;
+
+	if (has_ctrl)
+		return 0;
+
+	mgt = pci_get_domain_bus_and_slot(pci_domain_nr(pdev->bus),
+					  pdev->bus->number,
+					  PCI_DEVFN(PCI_SLOT(pdev->devfn), 0));
+	if (!mgt) {
+		dev_err(&pdev->dev,
+			"management PF (func 0) not found on this chip\n");
+		return -ENODEV;
+	}
+
+	/*
+	 * The management PF must have COMPLETED probing, not merely
+	 * have a driver assigned.  While func 0 is still PROBING, its
+	 * chip-global init (mailbox QINFO map programming) can race a
+	 * sibling's mailbox setup, and if func 0 then fails its probe,
+	 * the core only downgrades an already-ACTIVE sibling link to
+	 * DORMANT without unbinding it, leaving an orphaned consumer.
+	 * Defer until func 0 is bound; this also covers the unbound
+	 * (DORMANT-link) case.
+	 */
+	if (READ_ONCE(mgt->dev.links.status) != DL_DEV_DRIVER_BOUND) {
+		pci_dev_put(mgt);
+		return -EPROBE_DEFER;
+	}
+
+	link = device_link_add(&pdev->dev, &mgt->dev,
+			       DL_FLAG_AUTOREMOVE_CONSUMER);
+	pci_dev_put(mgt);
+	if (!link) {
+		dev_err(&pdev->dev,
+			"failed to create device link to management PF\n");
+		return -ENOMEM;
+	}
+
+	/*
+	 * If func 0 began unbinding between the driver check above and
+	 * link creation, the core's unbind-consumers pass has already
+	 * run and missed this new link, which starts SUPPLIER_UNBIND.
+	 * Fail the probe: the managed link is auto-purged and the core
+	 * retries after func 0 is bound again.
+	 */
+	if (READ_ONCE(link->status) == DL_STATE_SUPPLIER_UNBIND)
+		return -EPROBE_DEFER;
+
+	return 0;
+}
+
 static int nbl_probe(struct pci_dev *pdev,
 		     const struct pci_device_id *id)
 {
@@ -103,6 +184,10 @@ static int nbl_probe(struct pci_dev *pdev,
 
 	pci_set_master(pdev);
 
+	err = nbl_probe_chip_deps(pdev, param.caps.has_ctrl);
+	if (err)
+		goto chip_deps_err;
+
 	adapter = nbl_core_init(pdev, &param);
 	if (IS_ERR(adapter)) {
 		dev_err(dev, "Nbl adapter init fail: %pe\n", adapter);
@@ -112,6 +197,7 @@ static int nbl_probe(struct pci_dev *pdev,
 	pci_set_drvdata(pdev, adapter);
 	return 0;
 adapter_init_err:
+chip_deps_err:
 	pci_clear_master(pdev);
 	return err;
 }
@@ -122,6 +208,7 @@ static void nbl_remove(struct pci_dev *pdev)
 
 	if (!adapter)
 		return;
+
 	pci_set_drvdata(pdev, NULL);
 	nbl_core_remove(adapter);
 
