@@ -6,7 +6,6 @@
 #include <linux/init.h>
 #include <linux/io.h>
 #include <linux/platform_device.h>
-#include <linux/pm_clock.h>
 #include <linux/pm_runtime.h>
 #include <linux/clk.h>
 #include <sound/soc.h>
@@ -669,6 +668,53 @@ struct rx_macro {
 	struct clk_hw hw;
 };
 #define to_rx_macro(_hw) container_of(_hw, struct rx_macro, hw)
+
+static void rx_macro_disable_clocks(struct rx_macro *rx)
+{
+	clk_disable_unprepare(rx->fsgen);
+	clk_disable_unprepare(rx->npl);
+	clk_disable_unprepare(rx->mclk);
+	clk_disable_unprepare(rx->dcodec);
+	clk_disable_unprepare(rx->macro);
+}
+
+static int rx_macro_enable_clocks(struct rx_macro *rx)
+{
+	int ret;
+
+	ret = clk_prepare_enable(rx->macro);
+	if (ret)
+		return ret;
+
+	ret = clk_prepare_enable(rx->dcodec);
+	if (ret)
+		goto err_dcodec;
+
+	ret = clk_prepare_enable(rx->mclk);
+	if (ret)
+		goto err_mclk;
+
+	ret = clk_prepare_enable(rx->npl);
+	if (ret)
+		goto err_npl;
+
+	ret = clk_prepare_enable(rx->fsgen);
+	if (ret)
+		goto err_fsgen;
+
+	return 0;
+
+err_fsgen:
+	clk_disable_unprepare(rx->npl);
+err_npl:
+	clk_disable_unprepare(rx->mclk);
+err_mclk:
+	clk_disable_unprepare(rx->dcodec);
+err_dcodec:
+	clk_disable_unprepare(rx->macro);
+
+	return ret;
+}
 
 struct wcd_iir_filter_ctl {
 	unsigned int iir_idx;
@@ -3880,14 +3926,6 @@ static int rx_macro_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	ret = devm_pm_clk_create(dev);
-	if (ret)
-		return ret;
-
-	ret = of_pm_clk_add_clks(dev);
-	if (ret < 0)
-		return ret;
-
 	pm_runtime_set_autosuspend_delay(dev, 100);
 	pm_runtime_use_autosuspend(dev);
 	ret = devm_pm_runtime_enable(dev);
@@ -3959,16 +3997,9 @@ MODULE_DEVICE_TABLE(of, rx_macro_dt_match);
 static int rx_macro_runtime_suspend(struct device *dev)
 {
 	struct rx_macro *rx = dev_get_drvdata(dev);
-	int ret;
 
 	regcache_cache_only(rx->regmap, true);
-
-	ret = pm_clk_suspend(dev);
-	if (ret) {
-		regcache_cache_only(rx->regmap, false);
-		return ret;
-	}
-
+	rx_macro_disable_clocks(rx);
 	regcache_mark_dirty(rx->regmap);
 
 	return 0;
@@ -3979,7 +4010,7 @@ static int rx_macro_runtime_resume(struct device *dev)
 	struct rx_macro *rx = dev_get_drvdata(dev);
 	int ret;
 
-	ret = pm_clk_resume(dev);
+	ret = rx_macro_enable_clocks(rx);
 	if (ret) {
 		regcache_cache_only(rx->regmap, true);
 		regcache_mark_dirty(rx->regmap);
@@ -3991,16 +4022,15 @@ static int rx_macro_runtime_resume(struct device *dev)
 	if (ret) {
 		regcache_cache_only(rx->regmap, true);
 		regcache_mark_dirty(rx->regmap);
-		pm_clk_suspend(dev);
+		rx_macro_disable_clocks(rx);
 		return ret;
 	}
 
 	return 0;
 }
 
-static const struct dev_pm_ops rx_macro_pm_ops = {
-	RUNTIME_PM_OPS(rx_macro_runtime_suspend, rx_macro_runtime_resume, NULL)
-};
+static DEFINE_RUNTIME_DEV_PM_OPS(rx_macro_pm_ops, rx_macro_runtime_suspend,
+				 rx_macro_runtime_resume, NULL);
 
 static struct platform_driver rx_macro_driver = {
 	.driver = {
