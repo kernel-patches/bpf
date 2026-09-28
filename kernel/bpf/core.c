@@ -292,6 +292,7 @@ void __bpf_prog_free(struct bpf_prog *fp)
 		mutex_destroy(&fp->aux->dst_mutex);
 		mutex_destroy(&fp->aux->st_ops_assoc_mutex);
 		kfree(fp->aux->poke_tab);
+		bpf_exc_free_info(fp->aux);
 		kfree(fp->aux);
 	}
 	free_percpu(fp->stats);
@@ -2632,9 +2633,14 @@ static struct bpf_prog *bpf_prog_jit_compile(struct bpf_verifier_env *env, struc
 {
 #ifdef CONFIG_BPF_JIT
 	struct bpf_prog *orig_prog;
+	int ret;
 
-	if (!bpf_prog_need_blind(prog))
+	if (!bpf_prog_need_blind(prog)) {
+		ret = bpf_exc_attach_main_prog(env, prog);
+		if (ret)
+			return ERR_PTR(ret);
 		return bpf_int_jit_compile(env, prog);
+	}
 
 	orig_prog = prog;
 	prog = bpf_jit_blind_constants(env, prog);
@@ -2646,6 +2652,12 @@ static struct bpf_prog *bpf_prog_jit_compile(struct bpf_verifier_env *env, struc
 		if (PTR_ERR(prog) == -EINTR)
 			return prog;
 		goto out_restore;
+	}
+
+	ret = bpf_exc_attach_main_prog(env, prog);
+	if (ret) {
+		bpf_jit_prog_release_other(orig_prog, prog);
+		return ERR_PTR(ret);
 	}
 
 	prog = bpf_int_jit_compile(env, prog);
@@ -3509,6 +3521,17 @@ bool __weak bpf_jit_supports_large_stack(void)
 
 void __weak arch_bpf_stack_walk(bool (*consume_fn)(void *cookie, u64 ip, u64 sp, u64 bp), void *cookie)
 {
+}
+
+void __weak arch_bpf_stack_walk_ra(bool (*consume_fn)(void *cookie, u64 ip, u64 sp, u64 bp,
+						      u64 *ra),
+				   void *cookie)
+{
+}
+
+bool __weak bpf_jit_supports_cleanup_pads(void)
+{
+	return false;
 }
 
 bool __weak bpf_jit_supports_timed_may_goto(void)
