@@ -2984,19 +2984,18 @@ static int rhtab_delete_elem(struct bpf_rhtab *rhtab, struct rhtab_elem *elem, v
 	else
 		err = rhashtable_remove_fast(&rhtab->ht, &elem->node, rhtab_params);
 
-	bpf_enable_instrumentation();
-
-	if (err)
-		return err;
-
-	if (copy) {
-		rhtab_read_elem_value(&rhtab->map, copy, elem, flags);
-		check_and_init_map_value(&rhtab->map, copy);
+	if (!err) {
+		if (copy) {
+			rhtab_read_elem_value(&rhtab->map, copy, elem, flags);
+			check_and_init_map_value(&rhtab->map, copy);
+		}
+		bpf_obj_cancel_fields(&rhtab->map,
+				      rhtab_elem_value(elem, rhtab->map.key_size));
+		bpf_mem_cache_free_rcu(&rhtab->ma, elem);
 	}
-	bpf_obj_cancel_fields(&rhtab->map,
-			      rhtab_elem_value(elem, rhtab->map.key_size));
-	bpf_mem_cache_free_rcu(&rhtab->ma, elem);
-	return 0;
+
+	bpf_enable_instrumentation();
+	return err;
 }
 
 static long rhtab_map_delete_elem(struct bpf_map *map, void *key)
