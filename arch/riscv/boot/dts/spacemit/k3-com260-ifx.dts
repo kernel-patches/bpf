@@ -39,6 +39,20 @@
 		gpio = <&gpio K3_GPIO(67) GPIO_ACTIVE_HIGH>;
 		enable-active-high;
 	};
+
+	rfkill-pcie-wlan {
+		compatible = "rfkill-gpio";
+		label = "rfkill-pcie-wlan";
+		radio-type = "wlan";
+		shutdown-gpios = <&gpio K3_GPIO(73) GPIO_ACTIVE_LOW>;
+	};
+
+	rfkill-usb-bt {
+		compatible = "rfkill-gpio";
+		label = "rfkill-usb-bt";
+		radio-type = "bluetooth";
+		shutdown-gpios = <&gpio K3_GPIO(57) GPIO_ACTIVE_LOW>;
+	};
 };
 
 &combophy {
