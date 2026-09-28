@@ -198,7 +198,11 @@ void rcu_tasks_torture_stats_print(char *tt, char *tf);
 
 # ifdef CONFIG_TASKS_RUDE_RCU
 void synchronize_rcu_tasks_rude(void);
+void call_rcu_tasks_rude(struct rcu_head *rhp, rcu_callback_t func);
 void rcu_tasks_rude_torture_stats_print(char *tt, char *tf);
+# else
+# define call_rcu_tasks_rude call_rcu
+# define synchronize_rcu_tasks_rude synchronize_rcu
 # endif
 
 #define rcu_note_voluntary_context_switch(t) rcu_tasks_qs(t, false)
@@ -210,6 +214,8 @@ void exit_tasks_rcu_finish(void);
 #define rcu_note_voluntary_context_switch(t) do { } while (0)
 #define call_rcu_tasks call_rcu
 #define synchronize_rcu_tasks synchronize_rcu
+#define call_rcu_tasks_rude call_rcu
+#define synchronize_rcu_tasks_rude synchronize_rcu
 static inline void exit_tasks_rcu_start(void) { }
 static inline void exit_tasks_rcu_finish(void) { }
 #endif /* #else #ifdef CONFIG_TASKS_RCU_GENERIC */

@@ -1355,7 +1355,7 @@ static void rcu_tasks_rude_wait_gp(struct rcu_tasks *rtp)
 	schedule_on_each_cpu(rcu_tasks_be_rude);
 }
 
-static void call_rcu_tasks_rude(struct rcu_head *rhp, rcu_callback_t func);
+void call_rcu_tasks_rude(struct rcu_head *rhp, rcu_callback_t func);
 DEFINE_RCU_TASKS(rcu_tasks_rude, rcu_tasks_rude_wait_gp, call_rcu_tasks_rude,
 		 "RCU Tasks Rude");
 
@@ -1376,14 +1376,12 @@ DEFINE_RCU_TASKS(rcu_tasks_rude, rcu_tasks_rude_wait_gp, call_rcu_tasks_rude,
  *
  * See the description of call_rcu() for more detailed information on
  * memory ordering guarantees.
- *
- * This is no longer exported, and is instead reserved for use by
- * synchronize_rcu_tasks_rude().
  */
-static void call_rcu_tasks_rude(struct rcu_head *rhp, rcu_callback_t func)
+void call_rcu_tasks_rude(struct rcu_head *rhp, rcu_callback_t func)
 {
 	call_rcu_tasks_generic(rhp, func, &rcu_tasks_rude);
 }
+EXPORT_SYMBOL_GPL(call_rcu_tasks_rude);
 
 /**
  * synchronize_rcu_tasks_rude - wait for a rude rcu-tasks grace period
