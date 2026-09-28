@@ -4784,6 +4784,15 @@ static int trace__run(struct trace *trace, int argc, const char **argv)
 	if (trace->cgroup)
 		evlist__set_default_cgroup(trace->evlist, trace->cgroup);
 
+	/* BPF picks the target's tasks, so take their output on every CPU. */
+	if (trace->syscalls.events.bpf_output && !target__has_cpu(&trace->opts.target)) {
+		struct evsel *bpf_output = trace->syscalls.events.bpf_output;
+
+		bpf_output->core.system_wide = true;
+		/* Exec doesn't enable a CPU event, BPF waits for the exec instead. */
+		bpf_output->immediate = target__enable_on_exec(&trace->opts.target);
+	}
+
 create_maps:
 	err = evlist__create_maps(evlist, &trace->opts.target);
 	if (err < 0) {
