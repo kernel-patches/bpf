@@ -38,11 +38,11 @@
 
 #include <linux/pci.h>
 #include <linux/pm_runtime.h>
+#include <drm/clients/drm_fbdev_helper.h>
 #include <drm/drm_crtc_helper.h>
 #include <drm/drm_damage_helper.h>
 #include <drm/drm_drv.h>
 #include <drm/drm_edid.h>
-#include <drm/drm_fb_helper.h>
 #include <drm/drm_gem_framebuffer_helper.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_modeset_helper.h>

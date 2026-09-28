@@ -158,7 +158,6 @@ drm_kms_helper-y := \
 	drm_vblank_helper.o
 drm_kms_helper-$(CONFIG_DRM_PANIC_HELPER) += drm_panic_helper.o
 drm_kms_helper-$(CONFIG_DRM_PANIC_SCREEN_QR_CODE) += drm_panic_helper_qr.o
-drm_kms_helper-$(CONFIG_DRM_FBDEV_EMULATION) += drm_fb_helper.o
 obj-$(CONFIG_DRM_KMS_HELPER) += drm_kms_helper.o
 
 #

@@ -27,8 +27,8 @@
  *      Dave Airlie <airlied@linux.ie>
  *      Jesse Barnes <jesse.barnes@intel.com>
  */
-#ifndef DRM_FB_HELPER_H
-#define DRM_FB_HELPER_H
+#ifndef DRM_FBDEV_HELPER_H
+#define DRM_FBDEV_HELPER_H
 
 struct drm_clip_rect;
 struct drm_fb_helper;
