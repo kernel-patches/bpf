@@ -490,38 +490,6 @@ static int evsel__init_syscall_tp(struct evsel *evsel)
 	return -ENOMEM;
 }
 
-static int evsel__init_augmented_syscall_tp(struct evsel *evsel, struct evsel *tp)
-{
-	struct syscall_tp *sc = evsel__syscall_tp(evsel);
-
-	if (sc != NULL) {
-		struct tep_format_field *syscall_id = evsel__field(tp, "id");
-		if (syscall_id == NULL)
-			syscall_id = evsel__field(tp, "__syscall_nr");
-		if (syscall_id == NULL ||
-		    __tp_field__init_uint(&sc->id, syscall_id->size, syscall_id->offset, evsel->needs_swap))
-			return -EINVAL;
-
-		return 0;
-	}
-
-	return -ENOMEM;
-}
-
-static int evsel__init_augmented_syscall_tp_args(struct evsel *evsel)
-{
-	struct syscall_tp *sc = __evsel__syscall_tp(evsel);
-
-	return __tp_field__init_ptr(&sc->args, sc->id.offset + sizeof(u64));
-}
-
-static int evsel__init_augmented_syscall_tp_ret(struct evsel *evsel)
-{
-	struct syscall_tp *sc = __evsel__syscall_tp(evsel);
-
-	return __tp_field__init_uint(&sc->ret, sizeof(u64), sc->id.offset + sizeof(u64), evsel->needs_swap);
-}
-
 static int evsel__init_raw_syscall_tp(struct evsel *evsel, void *handler)
 {
 	if (evsel__syscall_tp(evsel) != NULL) {
@@ -5914,7 +5882,6 @@ int cmd_trace(int argc, const char **argv)
 	};
 	bool __maybe_unused max_stack_user_set = true;
 	bool mmap_pages_user_set = true;
-	struct evsel *evsel;
 	const char * const trace_subcommands[] = { "record", NULL };
 	int err = -1;
 	char bf[BUFSIZ];
@@ -6077,83 +6044,6 @@ skip_augmentation:
 			trace.raw_augmented_syscalls_args_size = sys_enter_tp.id.offset;
 			trace.raw_augmented_syscalls_args_size += (6 + 1) * sizeof(long);
 			trace.raw_augmented_syscalls = true;
-		}
-	}
-
-	/*
-	 * If we are augmenting syscalls, then combine what we put in the
-	 * __augmented_syscalls__ BPF map with what is in the
-	 * syscalls:sys_exit_FOO tracepoints, i.e. just like we do without BPF,
-	 * combining raw_syscalls:sys_enter with raw_syscalls:sys_exit.
-	 *
-	 * We'll switch to look at two BPF maps, one for sys_enter and the
-	 * other for sys_exit when we start augmenting the sys_exit paths with
-	 * buffers that are being copied from kernel to userspace, think 'read'
-	 * syscall.
-	 */
-	if (trace.syscalls.events.bpf_output) {
-		evlist__for_each_entry(trace.evlist, evsel) {
-			bool raw_syscalls_sys_exit = evsel__name_is(evsel, "raw_syscalls:sys_exit");
-
-			if (raw_syscalls_sys_exit) {
-				trace.raw_augmented_syscalls = true;
-				goto init_augmented_syscall_tp;
-			}
-
-			if (trace.syscalls.events.bpf_output->priv == NULL &&
-			    strstr(evsel__name(evsel), "syscalls:sys_enter")) {
-				struct evsel *augmented = trace.syscalls.events.bpf_output;
-				if (evsel__init_augmented_syscall_tp(augmented, evsel) ||
-				    evsel__init_augmented_syscall_tp_args(augmented))
-					goto out;
-				/*
-				 * Augmented is __augmented_syscalls__ BPF_OUTPUT event
-				 * Above we made sure we can get from the payload the tp fields
-				 * that we get from syscalls:sys_enter tracefs format file.
-				 */
-				augmented->handler = trace__sys_enter;
-				/*
-				 * Now we do the same for the *syscalls:sys_enter event so that
-				 * if we handle it directly, i.e. if the BPF prog returns 0 so
-				 * as not to filter it, then we'll handle it just like we would
-				 * for the BPF_OUTPUT one:
-				 */
-				if (evsel__init_augmented_syscall_tp(evsel, evsel) ||
-				    evsel__init_augmented_syscall_tp_args(evsel))
-					goto out;
-				evsel->handler = trace__sys_enter;
-			}
-
-			if (strstarts(evsel__name(evsel), "syscalls:sys_exit_")) {
-				struct syscall_tp *sc;
-init_augmented_syscall_tp:
-				if (evsel__init_augmented_syscall_tp(evsel, evsel))
-					goto out;
-				sc = __evsel__syscall_tp(evsel);
-				/*
-				 * For now with BPF raw_augmented we hook into
-				 * raw_syscalls:sys_enter and there we get all
-				 * 6 syscall args plus the tracepoint common
-				 * fields and the syscall_nr (another long).
-				 * So we check if that is the case and if so
-				 * don't look after the sc->args_size but
-				 * always after the full raw_syscalls:sys_enter
-				 * payload, which is fixed.
-				 *
-				 * We'll revisit this later to pass
-				 * s->args_size to the BPF augmenter (now
-				 * tools/perf/examples/bpf/augmented_raw_syscalls.c,
-				 * so that it copies only what we need for each
-				 * syscall, like what happens when we use
-				 * syscalls:sys_enter_NAME, so that we reduce
-				 * the kernel/userspace traffic to just what is
-				 * needed for each syscall.
-				 */
-				if (trace.raw_augmented_syscalls)
-					trace.raw_augmented_syscalls_args_size = (6 + 1) * sizeof(long) + sc->id.offset;
-				evsel__init_augmented_syscall_tp_ret(evsel);
-				evsel->handler = trace__sys_exit;
-			}
 		}
 	}
 
