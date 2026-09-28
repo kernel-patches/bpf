@@ -17,6 +17,7 @@
 #define NBL_MAILBOX_BAR				2
 #define NBL_RDMA_NOTIFY_LEN			(8ULL << 10)
 #define NBL_REG_NET_ONLY_LEN			(8ULL << 10)
+#define NBL_HW_DUMMY_REG			0x1300904
 /*
  * PCI MEMORY BAR total size: 64MiB.
  */
