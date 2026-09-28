@@ -456,12 +456,6 @@ struct dsc_enable_with_opp_params {
 	int opp_inst;
 };
 
-struct program_tg_params {
-	struct dc *dc;
-	struct pipe_ctx *pipe_ctx;
-	struct dc_state *context;
-};
-
 struct tg_program_global_sync_params {
 	struct timing_generator *tg;
 	int vready_offset;
@@ -504,11 +498,6 @@ struct pipe_control_lock_params {
 	struct tg_3dlut_wa_unlock_params tg_3dlut_wa_unlock_params;
 };
 
-struct setup_vupdate_interrupt_params {
-	struct dc *dc;
-	struct pipe_ctx *pipe_ctx;
-};
-
 struct tg_setup_vertical_interrupt2_params {
 	struct timing_generator *tg;
 	int start_line;
@@ -529,12 +518,6 @@ struct program_det_segments_params {
 	struct hubbub *hubbub;
 	unsigned int hubp_inst;
 	unsigned int det_size;
-};
-
-struct update_dchubp_dpp_params {
-	struct dc *dc;
-	struct pipe_ctx *pipe_ctx;
-	struct dc_state *context;
 };
 
 struct opp_set_dyn_expansion_params {
@@ -581,18 +564,6 @@ struct set_abm_level_params {
 struct set_abm_immediate_disable_params {
 	struct dc *dc;
 	struct pipe_ctx *pipe_ctx;
-};
-
-struct set_disp_pattern_generator_params {
-	struct dc *dc;
-	struct pipe_ctx *pipe_ctx;
-	enum controller_dp_test_pattern test_pattern;
-	enum controller_dp_color_space color_space;
-	enum dc_color_depth color_depth;
-	const struct tg_color *solid_color;
-	int width;
-	int height;
-	int offset;
 };
 
 struct mpc_update_blending_params {
@@ -935,11 +906,6 @@ struct dpp_set_cursor_matrix_params {
 	struct dc_csc_transform *cursor_csc_color_matrix;
 };
 
-struct mpc_update_mpcc_params {
-	struct dc *dc;
-	struct pipe_ctx *pipe_ctx;
-};
-
 struct dpp_set_scaler_params {
 	struct dpp *dpp;
 	const struct scaler_data *scl_data;
@@ -949,11 +915,6 @@ struct hubp_mem_program_viewport_params {
 	struct hubp *hubp;
 	const struct rect *viewport;
 	const struct rect *viewport_c;
-};
-
-struct hubp_program_mcache_id_and_split_coordinate_params {
-	struct hubp *hubp;
-	struct mcache_regs_struct *mcache_regs;
 };
 
 struct cursor_lock_params {
@@ -1237,7 +1198,6 @@ union block_sequence_params {
 	struct dsc_disconnect_params dsc_disconnect_params;
 	struct dsc_read_state_params dsc_read_state_params;
 	struct dsc_enable_with_opp_params dsc_enable_with_opp_params;
-	struct program_tg_params program_tg_params;
 	struct tg_program_global_sync_params tg_program_global_sync_params;
 	struct tg_wait_for_state_params tg_wait_for_state_params;
 	struct tg_set_vtg_params_params tg_set_vtg_params_params;
@@ -1245,10 +1205,8 @@ union block_sequence_params {
 	struct dpp_set_hdr_multiplier_params dpp_set_hdr_multiplier_params;
 	struct tg_set_gsl_params tg_set_gsl_params;
 	struct tg_set_gsl_source_select_params tg_set_gsl_source_select_params;
-	struct setup_vupdate_interrupt_params setup_vupdate_interrupt_params;
 	struct program_det_size_params program_det_size_params;
 	struct program_det_segments_params program_det_segments_params;
-	struct update_dchubp_dpp_params update_dchubp_dpp_params;
 	struct opp_set_dyn_expansion_params opp_set_dyn_expansion_params;
 	struct opp_program_fmt_params opp_program_fmt_params;
 	struct opp_program_bit_depth_reduction_params opp_program_bit_depth_reduction_params;
@@ -1256,7 +1214,6 @@ union block_sequence_params {
 	struct set_abm_pipe_params set_abm_pipe_params;
 	struct set_abm_level_params set_abm_level_params;
 	struct set_abm_immediate_disable_params set_abm_immediate_disable_params;
-	struct set_disp_pattern_generator_params set_disp_pattern_generator_params;
 	struct mpc_remove_mpcc_params mpc_remove_mpcc_params;
 	struct dc_set_optimized_required_params dc_set_optimized_required_params;
 	struct hubp_disconnect_params hubp_disconnect_params;
@@ -1318,7 +1275,6 @@ union block_sequence_params {
 	struct hubp_setup_interdependent2_params hubp_setup_interdependent2_params;
 	struct hubp_setup_interdependent_params hubp_setup_interdependent_params;
 	struct dpp_set_cursor_matrix_params dpp_set_cursor_matrix_params;
-	struct mpc_update_mpcc_params mpc_update_mpcc_params;
 	struct mpc_update_blending_params mpc_update_blending_params;
 	struct mpc_assert_idle_mpcc_params mpc_assert_idle_mpcc_params;
 	struct mpc_insert_plane_params mpc_insert_plane_params;
@@ -1467,7 +1423,6 @@ enum block_sequence_func {
 	HUBP_WAIT_FLIP_PENDING,
 	TG_WAIT_DOUBLE_BUFFER_PENDING,
 	UPDATE_FORCE_PSTATE,
-	PROGRAM_MALL_PIPE_CONFIG,
 	HUBBUB_APPLY_DEDCN21_147_WA,
 	MPC_SET_DWB_MUX,
 	MPC_DISABLE_DWB_MUX,
@@ -2112,8 +2067,6 @@ void hwss_opp_pipe_clock_control(union block_sequence_params *params);
 
 void hwss_opp_program_left_edge_extra_pixel(union block_sequence_params *params);
 
-void hwss_blank_pixel_data(union block_sequence_params *params);
-
 void hwss_dccg_set_dto_dscclk(union block_sequence_params *params);
 
 void hwss_dsc_set_config(union block_sequence_params *params);
@@ -2163,8 +2116,6 @@ void hwss_link_set_dpms_off(union block_sequence_params *params);
 void hwss_prepare_bandwidth(struct dc *dc, union block_sequence_params *params);
 
 void hwss_link_set_dpms_on(union block_sequence_params *params);
-
-void hwss_program_tg(union block_sequence_params *params);
 
 void hwss_tg_program_global_sync(union block_sequence_params *params);
 
@@ -2326,8 +2277,6 @@ void hwss_hubp_setup_interdependent2(union block_sequence_params *params);
 void hwss_hubp_setup_interdependent(union block_sequence_params *params);
 
 void hwss_dpp_set_cursor_matrix(union block_sequence_params *params);
-
-void hwss_mpc_update_mpcc(union block_sequence_params *params);
 
 void hwss_mpc_update_blending(union block_sequence_params *params);
 

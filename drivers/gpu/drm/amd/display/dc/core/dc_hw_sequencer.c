@@ -4191,16 +4191,6 @@ void hwss_dpp_set_cursor_matrix(union block_sequence_params *params)
 		dpp->funcs->set_cursor_matrix(dpp, color_space, *cursor_csc_color_matrix);
 }
 
-void hwss_mpc_update_mpcc(union block_sequence_params *params)
-{
-	struct dc *dc = params->mpc_update_mpcc_params.dc;
-	struct pipe_ctx *pipe_ctx = params->mpc_update_mpcc_params.pipe_ctx;
-	struct dce_hwseq *hws = dc->hwseq;
-
-	if (hws->funcs.update_mpcc)
-		hws->funcs.update_mpcc(dc, pipe_ctx);
-}
-
 void hwss_mpc_update_blending(union block_sequence_params *params)
 {
 	struct mpc *mpc = params->mpc_update_blending_params.mpc;
