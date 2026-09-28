@@ -218,7 +218,7 @@ Bridge Connector Helper Reference
 Panel-Bridge Helper Reference
 -----------------------------
 
-.. kernel-doc:: drivers/gpu/drm/bridge/panel.c
+.. kernel-doc:: drivers/gpu/drm/drm_panel.c
    :export:
 
 .. _drm_panel_helper:
