@@ -446,7 +446,8 @@ fn init_fields(fields: &Punctuated<InitializerField, Token![,]>, pinned: bool) -
                 // Allow `non_snake_case` since the same warning is going to be reported for the
                 // struct field.
                 #[allow(unused_variables, non_snake_case)]
-                let #ident = #guard.let_binding();
+                // Include `mut` so that `Pin<&mut T>` bindings can be reborrowed via `.as_mut()`.
+                let mut #ident = #guard.let_binding();
             },
             Member::Unnamed(_) => quote!(),
         };
