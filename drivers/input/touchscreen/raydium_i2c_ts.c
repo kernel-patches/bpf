@@ -21,6 +21,7 @@
 #include <linux/interrupt.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/overflow.h>
 #include <linux/pm_wakeirq.h>
 #include <linux/regulator/consumer.h>
 #include <linux/slab.h>
@@ -64,6 +65,7 @@
 #define RM_CONTACT_PRESSURE_POS	5
 #define RM_CONTACT_WIDTH_X_POS	6
 #define RM_CONTACT_WIDTH_Y_POS	7
+#define RM_MIN_CONTACT_SIZE	(RM_CONTACT_WIDTH_Y_POS + 1)
 
 /* Bootloader relative info */
 #define RM_BL_WRT_CMD_SIZE	3	/* bl flash wrt cmd size */
@@ -332,6 +334,7 @@ static int raydium_i2c_query_ts_info(struct raydium_data *ts)
 	struct i2c_client *client = ts->client;
 	struct raydium_data_info data_info;
 	__le32 query_bank_addr;
+	u8 report_size;
 
 	int error, retry_cnt;
 
@@ -340,6 +343,17 @@ static int raydium_i2c_query_ts_info(struct raydium_data *ts)
 					 &data_info, sizeof(data_info));
 		if (error)
 			continue;
+
+		if (check_sub_overflow(data_info.pkg_size, RM_PACKET_CRC_SIZE,
+				       &report_size) ||
+		    data_info.tp_info_size < RM_MIN_CONTACT_SIZE ||
+		    data_info.tp_info_size > report_size ||
+		    report_size / data_info.tp_info_size > RM_MAX_TOUCH_NUM) {
+			dev_err(&client->dev,
+				"invalid report sizes: packet=%u contact=%u\n",
+				data_info.pkg_size, data_info.tp_info_size);
+			return -EINVAL;
+		}
 
 		/*
 		 * Warn user if we already allocated memory for reports and
@@ -352,7 +366,7 @@ static int raydium_i2c_query_ts_info(struct raydium_data *ts)
 				 ts->pkg_size, data_info.pkg_size);
 		} else {
 			ts->pkg_size = data_info.pkg_size;
-			ts->report_size = ts->pkg_size - RM_PACKET_CRC_SIZE;
+			ts->report_size = report_size;
 		}
 
 		ts->contact_size = data_info.tp_info_size;
@@ -428,7 +442,7 @@ static int raydium_i2c_initialize(struct raydium_data *ts)
 	if (ts->boot_mode == RAYDIUM_TS_BLDR)
 		raydium_i2c_query_ts_bootloader_info(ts);
 	else
-		raydium_i2c_query_ts_info(ts);
+		error = raydium_i2c_query_ts_info(ts);
 
 	return error;
 }
