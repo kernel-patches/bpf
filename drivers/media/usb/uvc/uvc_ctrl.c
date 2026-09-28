@@ -2841,49 +2841,9 @@ int uvc_ctrl_set(struct uvc_fh *handle, struct v4l2_ext_control *xctrl)
  * Dynamic controls
  */
 
-/*
- * Retrieve flags for a given control
- */
-static int uvc_ctrl_get_flags(struct uvc_device *dev,
-			      const struct uvc_control *ctrl,
-			      struct uvc_control_info *info)
-{
-	u8 *data;
-	int ret;
-
-	data = kmalloc(1, GFP_KERNEL);
-	if (data == NULL)
-		return -ENOMEM;
-
-	if (ctrl->entity->get_info)
-		ret = ctrl->entity->get_info(dev, ctrl->entity,
-					     ctrl->info.selector, data);
-	else
-		ret = uvc_query_ctrl(dev, UVC_GET_INFO, ctrl->entity->id,
-				     dev->intfnum, info->selector, data, 1);
-
-	if (!ret) {
-		info->flags &= ~(UVC_CTRL_FLAG_GET_CUR |
-				 UVC_CTRL_FLAG_SET_CUR |
-				 UVC_CTRL_FLAG_AUTO_UPDATE |
-				 UVC_CTRL_FLAG_ASYNCHRONOUS);
-
-		info->flags |= (data[0] & UVC_CONTROL_CAP_GET ?
-				UVC_CTRL_FLAG_GET_CUR : 0)
-			    |  (data[0] & UVC_CONTROL_CAP_SET ?
-				UVC_CTRL_FLAG_SET_CUR : 0)
-			    |  (data[0] & UVC_CONTROL_CAP_AUTOUPDATE ?
-				UVC_CTRL_FLAG_AUTO_UPDATE : 0)
-			    |  (data[0] & UVC_CONTROL_CAP_ASYNCHRONOUS ?
-				UVC_CTRL_FLAG_ASYNCHRONOUS : 0);
-	}
-
-	kfree(data);
-	return ret;
-}
-
-static void uvc_ctrl_fixup_xu_info(struct uvc_device *dev,
-	const struct uvc_control *ctrl, struct uvc_control_info *info)
+static bool uvc_ctrl_fixup_flags(struct uvc_device *dev,
+				 const struct uvc_control *ctrl,
+				 struct uvc_control_info *info)
 {
 	struct uvc_ctrl_fixup {
 		struct usb_device_id id;
@@ -2916,9 +2876,60 @@ static void uvc_ctrl_fixup_xu_info(struct uvc_device *dev,
 		if (fixups[i].entity == ctrl->entity->id &&
 		    fixups[i].selector == info->selector) {
 			info->flags = fixups[i].flags;
-			return;
+			return true;
 		}
 	}
+
+	return false;
+}
+
+/*
+ * Retrieve flags for a given control
+ */
+static int uvc_ctrl_get_flags(struct uvc_device *dev,
+			      const struct uvc_control *ctrl,
+			      struct uvc_control_info *info)
+{
+	u8 *data;
+	int ret;
+
+	/*
+	 * Some devices report bogus capabilities through GET_INFO. If the
+	 * fixup table covers this control, take the flags from the table and
+	 * skip the query altogether.
+	 */
+	if (uvc_ctrl_fixup_flags(dev, ctrl, info))
+		return 0;
+
+	data = kmalloc(1, GFP_KERNEL);
+	if (data == NULL)
+		return -ENOMEM;
+
+	if (ctrl->entity->get_info)
+		ret = ctrl->entity->get_info(dev, ctrl->entity,
+					     ctrl->info.selector, data);
+	else
+		ret = uvc_query_ctrl(dev, UVC_GET_INFO, ctrl->entity->id,
+				     dev->intfnum, info->selector, data, 1);
+
+	if (!ret) {
+		info->flags &= ~(UVC_CTRL_FLAG_GET_CUR |
+				 UVC_CTRL_FLAG_SET_CUR |
+				 UVC_CTRL_FLAG_AUTO_UPDATE |
+				 UVC_CTRL_FLAG_ASYNCHRONOUS);
+
+		info->flags |= (data[0] & UVC_CONTROL_CAP_GET ?
+				UVC_CTRL_FLAG_GET_CUR : 0)
+			    |  (data[0] & UVC_CONTROL_CAP_SET ?
+				UVC_CTRL_FLAG_SET_CUR : 0)
+			    |  (data[0] & UVC_CONTROL_CAP_AUTOUPDATE ?
+				UVC_CTRL_FLAG_AUTO_UPDATE : 0)
+			    |  (data[0] & UVC_CONTROL_CAP_ASYNCHRONOUS ?
+				UVC_CTRL_FLAG_ASYNCHRONOUS : 0);
+	}
+
+	kfree(data);
+	return ret;
 }
 
 /*
@@ -2960,8 +2971,6 @@ static int uvc_ctrl_fill_xu_info(struct uvc_device *dev,
 			info->entity, info->selector, ret);
 		goto done;
 	}
-
-	uvc_ctrl_fixup_xu_info(dev, ctrl, info);
 
 	uvc_dbg(dev, CONTROL,
 		"XU control %pUl/%u queried: len %u, flags { get %u set %u auto %u }\n",
