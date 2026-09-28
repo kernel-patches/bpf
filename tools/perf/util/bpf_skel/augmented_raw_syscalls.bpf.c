@@ -9,6 +9,7 @@
 #include "vmlinux.h"
 
 #include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
 #include <linux/limits.h>
 
 #define PERF_ALIGN(x, a)        __PERF_ALIGN_MASK(x, (typeof(x))(a)-1)
@@ -113,6 +114,22 @@ struct pids_filtered {
 	__type(value, bool);
 	__uint(max_entries, 64);
 } pids_filtered SEC(".maps");
+
+/* With a target only its tasks are traced, those set false from their next exec. */
+struct pids_to_trace {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__type(key, pid_t);
+	__type(value, bool);
+	__uint(max_entries, 16384);
+} pids_to_trace SEC(".maps");
+
+bool has_pids_to_trace;
+/* Also trace the children of traced tasks. */
+bool inherit;
+/* Key pids_to_trace by tgid, so a process's threads share an entry. */
+bool uses_tgid;
+/* Tasks not traced as pids_to_trace was full. */
+int lost_tasks;
 
 struct augmented_args_payload {
 	struct syscall_enter_args args;
@@ -457,6 +474,19 @@ static bool pid_filter__has(struct pids_filtered *pids, pid_t pid)
 	return bpf_map_lookup_elem(pids, &pid) != NULL;
 }
 
+static bool task_traced(void)
+{
+	u64 pid_tgid = bpf_get_current_pid_tgid();
+	pid_t pid = uses_tgid ? pid_tgid >> 32 : (pid_t)pid_tgid;
+	bool *traced;
+
+	if (!has_pids_to_trace)
+		return true;
+
+	traced = bpf_map_lookup_elem(&pids_to_trace, &pid);
+	return traced && *traced;
+}
+
 u64 ZERO = 0;
 
 /*
@@ -608,6 +638,9 @@ int sys_enter(struct syscall_enter_args *args)
 	 * initial, non-augmented raw_syscalls:sys_enter payload.
 	 */
 
+	if (!task_traced())
+		return 1;
+
 	if (pid_filter__has(&pids_filtered, getpid()))
 		return 0;
 
@@ -634,6 +667,9 @@ int sys_exit(struct syscall_exit_args *args)
 {
 	struct syscall_exit_args exit_args;
 
+	if (!task_traced())
+		return 1;
+
 	if (pid_filter__has(&pids_filtered, getpid()))
 		return 0;
 
@@ -647,6 +683,70 @@ int sys_exit(struct syscall_exit_args *args)
 	/*
 	 * If not found on the PROG_ARRAY syscalls map, then we're filtering it:
 	 */
+	return 0;
+}
+
+/* Trace the children of traced tasks, added before they can run. */
+SEC("tp_btf/sched_process_fork")
+int BPF_PROG(sched_process_fork, struct task_struct *parent, struct task_struct *child)
+{
+	pid_t parent_pid = parent->pid, child_pid = child->pid;
+	bool *traced = NULL, val;
+
+	if (uses_tgid) {
+		/* A new thread is traced with its process. */
+		if (child->tgid != child_pid)
+			return 0;
+		parent_pid = parent->tgid;
+	}
+	if (inherit)
+		traced = bpf_map_lookup_elem(&pids_to_trace, &parent_pid);
+	if (traced) {
+		val = *traced;
+		/* Not __sync_fetch_and_add(), as its fetch needs a 5.12 kernel. */
+		if (bpf_map_update_elem(&pids_to_trace, &child_pid, &val, BPF_ANY))
+			__atomic_fetch_add(&lost_tasks, 1, __ATOMIC_RELAXED);
+	} else {
+		/* A new pid, so any entry was seeded for an exited task, e.g. a zombie. */
+		bpf_map_delete_elem(&pids_to_trace, &child_pid);
+	}
+	return 0;
+}
+
+/* Forget exited tasks, as their pid may be reused. */
+SEC("tp_btf/sched_process_exit")
+int BPF_PROG(sched_process_exit, struct task_struct *task)
+{
+	pid_t pid = task->pid;
+
+	if (uses_tgid) {
+		/* A process exits with its last thread. */
+		if (task->signal->live.counter)
+			return 0;
+		pid = task->tgid;
+	}
+	bpf_map_delete_elem(&pids_to_trace, &pid);
+	return 0;
+}
+
+/* Start tracing waiting tasks, and follow a thread given the leader's pid by exec. */
+SEC("tp_btf/sched_process_exec")
+int BPF_PROG(sched_process_exec, struct task_struct *task, pid_t old_pid)
+{
+	pid_t pid = task->pid;
+	bool traced = true;
+
+	/* A process keeps its tgid, which pid now is. */
+	if (uses_tgid)
+		old_pid = pid;
+	if (!bpf_map_lookup_elem(&pids_to_trace, &old_pid))
+		return 0;
+
+	if (pid != old_pid)
+		bpf_map_delete_elem(&pids_to_trace, &old_pid);
+	/* A fork may have taken old_pid's entry, leaving the map full. */
+	if (bpf_map_update_elem(&pids_to_trace, &pid, &traced, BPF_ANY))
+		__atomic_fetch_add(&lost_tasks, 1, __ATOMIC_RELAXED);
 	return 0;
 }
 

@@ -4488,6 +4488,22 @@ static int trace__set_filter_pids(struct trace *trace)
 	return err;
 }
 
+/* The BPF programs see every task, tell them which are the target's. */
+static void trace__set_target_pids(struct trace *trace)
+{
+	struct perf_thread_map *threads = evlist__core(trace->evlist)->threads;
+	struct target *target = &trace->opts.target;
+	bool inherit = !trace->opts.no_inherit;
+	/* Key by process when inheriting, unless given threads, noting -p also sets tid. */
+	bool uses_tgid = inherit && (target->pid || !target->tid);
+
+	if (perf_thread_map__pid(threads, 0) == -1)
+		return;
+
+	augmented_syscalls__set_target_pids(threads, inherit, uses_tgid,
+					    target__enable_on_exec(target));
+}
+
 static int __trace__deliver_event(struct trace *trace, union perf_event *event)
 {
 	struct evlist *evlist = trace->evlist;
@@ -4695,7 +4711,7 @@ static int trace__run(struct trace *trace, int argc, const char **argv)
 {
 	struct evlist *evlist = trace->evlist;
 	struct evsel *evsel, *pgfault_maj = NULL, *pgfault_min = NULL;
-	int err = -1, i;
+	int err = -1, i, lost_tasks;
 	unsigned long before;
 	const bool forks = argc > 0;
 	bool draining = false;
@@ -4798,6 +4814,9 @@ create_maps:
 		workload_pid = evlist__workload_pid(evlist);
 	}
 
+	/* Seed before opening, so BPF follows new tasks as inherit would. */
+	trace__set_target_pids(trace);
+
 	err = evlist__open(evlist);
 	if (err < 0)
 		goto out_error_open;
@@ -4824,6 +4843,10 @@ create_maps:
 				 trace->syscalls.events.sys_exit->filter);
 		}
 	}
+
+	err = augmented_syscalls__attach();
+	if (err < 0)
+		goto out_error_bpf;
 
 	/*
 	 * If the "close" syscall is not traced, then we will not have the
@@ -4941,6 +4964,12 @@ out_disable:
 	if (trace->sort_events)
 		ordered_events__flush(&trace->oe.data, OE_FLUSH__FINAL);
 
+	lost_tasks = augmented_syscalls__lost_tasks();
+	if (lost_tasks)
+		color_fprintf(trace->output, PERF_COLOR_RED,
+			      "LOST the syscalls of %d tasks, too many to trace at once!\n",
+			      lost_tasks);
+
 	if (!err) {
 		if (trace->summary) {
 			if (trace->summary_bpf)
@@ -4996,6 +5025,11 @@ out_error_apply_filters:
 	fprintf(trace->output,
 		"Failed to set filter \"%s\" on event %s: %m\n",
 		evsel->filter, evsel__name(evsel));
+	goto out_put_evlist;
+
+out_error_bpf:
+	fprintf(trace->output, "Failed to set up the augmented syscalls BPF programs: %s\n",
+		str_error_r(-err, errbuf, sizeof(errbuf)));
 	goto out_put_evlist;
 }
 out_error_mem:
