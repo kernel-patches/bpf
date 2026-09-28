@@ -634,7 +634,7 @@ void hubbub2_read_state(struct hubbub *hubbub, struct dcn_hubbub_state *hubbub_s
 		hubbub_state->vm_fault_addr_msb = REG_READ(DCN_VM_FAULT_ADDR_MSB);
 
 	if (REG(DCN_VM_FAULT_ADDR_LSB))
-		hubbub_state->vm_fault_addr_msb = REG_READ(DCN_VM_FAULT_ADDR_LSB);
+		hubbub_state->vm_fault_addr_lsb = REG_READ(DCN_VM_FAULT_ADDR_LSB);
 
 	if (REG(DCN_VM_FAULT_CNTL))
 		REG_GET(DCN_VM_FAULT_CNTL, DCN_VM_ERROR_STATUS_MODE, &hubbub_state->vm_error_mode);
