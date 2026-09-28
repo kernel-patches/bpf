@@ -15,7 +15,8 @@ void augmented_syscalls__setup_bpf_output(void);
 int augmented_syscalls__set_filter_pids(unsigned int nr, pid_t *pids);
 int augmented_syscalls__get_map_fds(int *enter_fd, int *exit_fd, int *beauty_fd);
 struct bpf_program *augmented_syscalls__find_by_title(const char *name);
-struct bpf_program *augmented_syscalls__unaugmented(void);
+struct bpf_program *augmented_syscalls__unaugmented_enter(void);
+struct bpf_program *augmented_syscalls__unaugmented_exit(void);
 void augmented_syscalls__cleanup(void);
 
 #else /* !HAVE_BPF_SKEL */
@@ -53,7 +54,12 @@ augmented_syscalls__find_by_title(const char *name __maybe_unused)
 	return NULL;
 }
 
-static inline struct bpf_program *augmented_syscalls__unaugmented(void)
+static inline struct bpf_program *augmented_syscalls__unaugmented_enter(void)
+{
+	return NULL;
+}
+
+static inline struct bpf_program *augmented_syscalls__unaugmented_exit(void)
 {
 	return NULL;
 }

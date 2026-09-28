@@ -192,7 +192,13 @@ unsigned int augmented_arg__read_str(struct augmented_arg *augmented_arg, const 
 }
 
 SEC("tp/raw_syscalls/sys_enter")
-int syscall_unaugmented(struct syscall_enter_args *args)
+int sys_enter_unaugmented(struct syscall_enter_args *args)
+{
+	return 1;
+}
+
+SEC("tp/raw_syscalls/sys_exit")
+int sys_exit_unaugmented(struct syscall_exit_args *args)
 {
 	return 1;
 }

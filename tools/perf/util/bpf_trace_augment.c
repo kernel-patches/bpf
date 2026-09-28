@@ -117,9 +117,14 @@ int augmented_syscalls__get_map_fds(int *enter_fd, int *exit_fd, int *beauty_fd)
 	return 0;
 }
 
-struct bpf_program *augmented_syscalls__unaugmented(void)
+struct bpf_program *augmented_syscalls__unaugmented_enter(void)
 {
-	return skel->progs.syscall_unaugmented;
+	return skel->progs.sys_enter_unaugmented;
+}
+
+struct bpf_program *augmented_syscalls__unaugmented_exit(void)
+{
+	return skel->progs.sys_exit_unaugmented;
 }
 
 struct bpf_program *augmented_syscalls__find_by_title(const char *name)
