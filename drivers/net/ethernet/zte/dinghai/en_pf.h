@@ -9,6 +9,7 @@
 
 #include <linux/types.h>
 
+#include "zxdh_eq.h"
 #include "zxdh_irq.h"
 
 #define ZXDH_PF_VENDOR_ID	0x1cf2
@@ -81,6 +82,7 @@ struct zxdh_core_dev {
 	struct pci_dev *pdev;
 	struct devlink *devlink;
 	struct zxdh_irq_table irq_table;
+	struct zxdh_eq_table eq_table;
 	void *priv;
 };
 

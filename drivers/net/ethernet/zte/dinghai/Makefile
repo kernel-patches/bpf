@@ -4,4 +4,4 @@
 #
 
 obj-$(CONFIG_DINGHAI_PF) += dinghai10e.o
-dinghai10e-y := en_pf.o zxdh_irq.o
+dinghai10e-y := en_pf.o zxdh_irq.o zxdh_eq.o
