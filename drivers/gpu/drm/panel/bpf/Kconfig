@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: GPL-2.0
+
+config DRM_PANEL_BPF
+	tristate "eBPF-backed panels"
+	depends on DRM && DRM_PANEL
+	depends on BPF_SYSCALL
+	help
+	  TODO
+
+menu "eBPF Display Panels"
+	depends on DRM_PANEL_BPF
+
+config DRM_PANEL_BPF_MIPI_DSI
+	tristate "Generic BPF-based MIPI-DSI panel"
+	depends on BACKLIGHT_CLASS_DEVICE
+	depends on BPF_SYSCALL
+	depends on DRM_MIPI_DSI
+	depends on OF
+	select VIDEOMODE_HELPERS
+	help
+	  Generic MIPI-DSI panel driver that delegates panel-specific
+	  power sequencing and DSI init commands to BPF programs loaded
+	  from userspace.
+
+	  Enable this if you want to support MIPI-DSI panels without
+	  panel-specific kernel drivers.
+
+endmenu
