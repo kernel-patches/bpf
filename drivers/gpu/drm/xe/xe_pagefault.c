@@ -13,7 +13,6 @@
 #include "xe_gt_printk.h"
 #include "xe_gt_types.h"
 #include "xe_gt_stats.h"
-#include "xe_hw_engine.h"
 #include "xe_log.h"
 #include "xe_migrate.h"
 #include "xe_pagefault.h"
@@ -610,36 +609,12 @@ static const char *xe_pagefault_error_to_str(enum xe_pagefault_error error)
 
 static void xe_pagefault_print(struct xe_pagefault *pf)
 {
-	u8 engine_class = FIELD_GET(XE_PAGEFAULT_ENGINE_CLASS_MASK,
-				    pf->consumer.engine_class_instance);
-	u64 addr = xe_pagefault_addr(pf);
+	enum xe_pagefault_error err = xe_pagefault_get_error(pf);
 
-	xe_gt_info(pf->gt, "\n\tASID: %lu\n"
-		   "\tFaulted Address: 0x%08x%08x\n"
-		   "\tFaultType: %lu\n"
-		   "\tAccessType: %lu\n"
-		   "\tFaultLevel: %lu\n"
-		   "\tEngineClass: %d %s\n"
-		   "\tEngineInstance: %lu\n"
-		   "\tSRCID: 0x%02lx\n"
-		   "\tError: %s\n",
-		   FIELD_GET(XE_PAGEFAULT_ASID_MASK,
-			     pf->consumer.id),
-		   upper_32_bits(addr),
-		   lower_32_bits(addr),
-		   FIELD_GET(XE_PAGEFAULT_TYPE_MASK,
-			     pf->consumer.fault_type_level),
-		   FIELD_GET(XE_PAGEFAULT_ACCESS_TYPE_MASK,
-			     pf->consumer.access_type),
-		   FIELD_GET(XE_PAGEFAULT_LEVEL_MASK,
-			     pf->consumer.fault_type_level),
-		   engine_class,
-		   xe_hw_engine_class_to_str(engine_class),
-		   FIELD_GET(XE_PAGEFAULT_ENGINE_INSTANCE_MASK,
-			     pf->consumer.engine_class_instance),
-		   FIELD_GET(XE_PAGEFAULT_SRCID_MASK,
-			     pf->consumer.id),
-		   xe_pagefault_error_to_str(xe_pagefault_get_error(pf)));
+	if (WARN_ON_ONCE(!pf->producer.ops->print))
+		return;
+
+	pf->producer.ops->print(pf, xe_pagefault_error_to_str(err));
 }
 
 static void xe_pagefault_save_to_vm(struct xe_device *xe, struct xe_pagefault *pf)
