@@ -101,7 +101,7 @@ enum InitializerKind {
     },
     Init {
         member: Member,
-        _left_arrow_token: Token![<-],
+        left_arrow_token: Token![<-],
         value: Expr,
     },
     Code {
@@ -415,24 +415,40 @@ fn init_fields(fields: &Punctuated<InitializerField, Token![,]>, pinned: bool) -
 
         // `mixed_site` ensures that the guard is not accessible to the user-controlled code.
         let guard = format_ident!("__{ident}_guard", span = Span::mixed_site());
-        let full_span = kind.span();
+        let full_span = kind.span().resolved_at(Span::mixed_site());
 
         let init = match kind {
             InitializerKind::Value { value, .. } => {
-                let value = value
+                let (colon_span, value) = value
                     .as_ref()
-                    .map(|(_, value)| quote!(#value))
-                    .unwrap_or_else(|| quote!(#member));
+                    .map(|(colon_token, value)| (colon_token.span(), quote!(#value)))
+                    .unwrap_or_else(|| (member.span(), quote!(#member)));
+
+                // Use `:` as the span of the method name, so the type requirement appears to come
+                // from `:`.
+                let write =
+                    format_ident!("write", span = colon_span.resolved_at(Span::mixed_site()));
 
                 quote_spanned! { full_span =>
                     #(#attrs)*
-                    let mut #guard = #slot.write(#value);
+                    let mut #guard = #slot.#write(#value);
                 }
             }
-            InitializerKind::Init { value, .. } => {
+            InitializerKind::Init {
+                value,
+                left_arrow_token,
+                ..
+            } => {
+                // Use `<-` as the span of the method name, so the trait bound appears to come from
+                // `<-`.
+                let init = format_ident!(
+                    "init",
+                    span = left_arrow_token.span().resolved_at(Span::mixed_site())
+                );
+
                 quote_spanned! { full_span =>
                     #(#attrs)*
-                    let mut #guard = #slot.init(#value)?;
+                    let mut #guard = #slot.#init(#value)?;
                 }
             }
             InitializerKind::Code { .. } => unreachable!(),
@@ -690,7 +706,7 @@ impl Parse for InitializerKind {
         if lh.peek(Token![<-]) {
             Ok(Self::Init {
                 member,
-                _left_arrow_token: input.parse()?,
+                left_arrow_token: input.parse()?,
                 value: input.parse()?,
             })
         } else if lh.peek(Token![:]) {
@@ -819,11 +835,11 @@ impl ToTokens for InitializerKind {
             }
             Self::Init {
                 member,
-                _left_arrow_token,
+                left_arrow_token,
                 value,
             } => {
                 member.to_tokens(tokens);
-                _left_arrow_token.to_tokens(tokens);
+                left_arrow_token.to_tokens(tokens);
                 value.to_tokens(tokens);
             }
             Self::Code {
