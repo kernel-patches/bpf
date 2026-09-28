@@ -216,6 +216,7 @@ struct trace {
 	bool			print_sample;
 	bool			show_tool_stats;
 	bool			trace_syscalls;
+	bool			syscall_augment;
 	bool			libtraceevent_print;
 	bool			kernel_syscallchains;
 	s16			args_alignment;
@@ -5002,7 +5003,8 @@ out_disable:
 	lost_tasks = augmented_syscalls__lost_tasks();
 	if (lost_tasks)
 		color_fprintf(trace->output, PERF_COLOR_RED,
-			      "LOST the syscalls of %d tasks, too many to trace at once!\n",
+			      "LOST the syscalls of %d tasks, too many to trace at once!\n"
+			      "Use --no-syscall-augment to trace them without augmentation.\n",
 			      lost_tasks);
 
 	if (!err) {
@@ -5788,6 +5790,7 @@ int cmd_trace(int argc, const char **argv)
 		.show_arg_names = true,
 		.args_alignment = 70,
 		.trace_syscalls = false,
+		.syscall_augment = true,
 		.kernel_syscallchains = false,
 		.max_stack = UINT_MAX,
 		.max_events = ULONG_MAX,
@@ -5843,6 +5846,8 @@ int cmd_trace(int argc, const char **argv)
 	OPT_CALLBACK_DEFAULT('F', "pf", &trace.trace_pgfaults, "all|maj|min",
 		     "Trace pagefaults", parse_pagefaults, "maj"),
 	OPT_BOOLEAN(0, "syscalls", &trace.trace_syscalls, "Trace syscalls"),
+	OPT_BOOLEAN(0, "syscall-augment", &trace.syscall_augment,
+		    "Augment syscalls using BPF"),
 	OPT_BOOLEAN('f', "force", &trace.force, "don't complain, do it"),
 	OPT_CALLBACK(0, "call-graph", &trace.opts,
 		     "record_mode[,record_size]", record_callchain_help,
@@ -5981,6 +5986,9 @@ int cmd_trace(int argc, const char **argv)
 		if (trace.summary_only)
 			goto skip_augmentation;
 	}
+
+	if (!trace.syscall_augment)
+		goto skip_augmentation;
 
 	err = augmented_syscalls__prepare();
 	if (err < 0)
