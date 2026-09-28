@@ -76,8 +76,7 @@ void augmented_syscalls__setup_bpf_output(void)
 
 		bpf_map__update_elem(skel->maps.__augmented_syscalls__,
 				     &mycpu, sizeof(mycpu),
-				     xyarray__entry(bpf_output->core.fd,
-						    mycpu, 0),
+				     xyarray__entry(bpf_output->core.fd, i, 0),
 				     sizeof(__u32), BPF_ANY);
 	}
 }
