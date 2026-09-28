@@ -262,23 +262,6 @@ static void __exit dynamic_netconsole_exit(void)
 	configfs_unregister_subsystem(&netconsole_subsys);
 }
 
-/*
- * Targets that were created by parsing the boot/module option string
- * do not exist in the configfs hierarchy (and have NULL names) and will
- * never go away, so make these a no-op for them.
- */
-static void netconsole_target_get(struct netconsole_target *nt)
-{
-	if (config_item_name(&nt->group.cg_item))
-		config_group_get(&nt->group);
-}
-
-static void netconsole_target_put(struct netconsole_target *nt)
-{
-	if (config_item_name(&nt->group.cg_item))
-		config_group_put(&nt->group);
-}
-
 static void dynamic_netconsole_mutex_lock(void)
 {
 	mutex_lock(&dynamic_netconsole_mutex);
@@ -297,18 +280,6 @@ static int __init dynamic_netconsole_init(void)
 }
 
 static void __exit dynamic_netconsole_exit(void)
-{
-}
-
-/*
- * No danger of targets going away from under us when dynamic
- * reconfigurability is off.
- */
-static void netconsole_target_get(struct netconsole_target *nt)
-{
-}
-
-static void netconsole_target_put(struct netconsole_target *nt)
 {
 }
 
@@ -1982,7 +1953,6 @@ static int netconsole_netdev_event(struct notifier_block *this,
 	mutex_lock(&target_cleanup_list_lock);
 	spin_lock_irqsave(&target_list_lock, flags);
 	list_for_each_entry_safe(nt, tmp, &target_list, list) {
-		netconsole_target_get(nt);
 		if (nt->np.dev == dev) {
 			switch (event) {
 			case NETDEV_CHANGENAME:
@@ -2012,7 +1982,6 @@ static int netconsole_netdev_event(struct notifier_block *this,
 			 * notifier.
 			 */
 			queue_work(netconsole_wq, &nt->resume_wq);
-		netconsole_target_put(nt);
 	}
 	spin_unlock_irqrestore(&target_list_lock, flags);
 	mutex_unlock(&target_cleanup_list_lock);
