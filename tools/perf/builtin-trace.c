@@ -2647,6 +2647,9 @@ static size_t syscall__scnprintf_args(struct syscall *sc, char *bf, size_t size,
 
 		for (field = sc->args; field;
 		     field = field->next, ++arg.idx, bit <<= 1) {
+			if (is_internal_field(field))
+				break;
+
 			if (arg.mask & bit)
 				continue;
 
@@ -4134,6 +4137,9 @@ static int trace__bpf_sys_enter_beauty_map(struct trace *trace, int e_machine, i
 		return -1;
 
 	for (i = 0, field = sc->args; field; ++i, field = field->next) {
+		if (is_internal_field(field))
+			break;
+
 		// XXX We're only collecting pointer payloads _from_ user space
 		if (!sc->arg_fmt[i].from_user)
 			continue;
@@ -4188,6 +4194,8 @@ static int trace__bpf_sys_enter_beauty_map(struct trace *trace, int e_machine, i
 
 			/* find the size of the buffer that appears in pairs with buf */
 			for (j = 0, field_tmp = sc->args; field_tmp; ++j, field_tmp = field_tmp->next) {
+				if (is_internal_field(field_tmp))
+					break;
 				if (!(field_tmp->flags & TEP_FIELD_IS_POINTER) && /* only integers */
 				    (strstr(field_tmp->name, "count") ||
 				     strstr(field_tmp->name, "siz") ||  /* size, bufsiz */
