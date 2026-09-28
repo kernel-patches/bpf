@@ -3366,6 +3366,8 @@ static void bpf_link_free(struct bpf_link *link)
 		/* We need to do a SRCU grace period wait for non-faultable tracepoint BPF links. */
 		else if (bpf_link_is_tracepoint(link))
 			call_tracepoint_unregister_atomic(&link->rcu, bpf_link_defer_dealloc_rcu_gp);
+		else if (link->type == BPF_LINK_TYPE_KPROBE_MULTI)
+			call_rcu_tasks_rude(&link->rcu, bpf_link_defer_dealloc_rcu_gp);
 		else
 			call_rcu(&link->rcu, bpf_link_defer_dealloc_rcu_gp);
 	} else if (ops->dealloc) {

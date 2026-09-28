@@ -36,11 +36,11 @@
  *
  * When unregistering the fprobe, fprobe_hlist::fp and fprobe_hlist::array[*].fp
  * are set NULL and delete those from both hash tables (by hlist_del_rcu).
- * After an RCU grace period, the fprobe_hlist itself will be released.
+ * After a Tasks-Rude RCU grace period, the fprobe_hlist itself will be released.
  *
  * fprobe_table and fprobe_ip_table can be accessed from either
  *  - Normal hlist traversal and RCU add/del under 'fprobe_mutex' is held.
- *  - RCU hlist traversal under disabling preempt
+ *  - Tasks-Rude RCU / preempt-disabled hlist traversal
  */
 static struct hlist_head fprobe_table[FPROBE_TABLE_SIZE];
 static struct rhltable fprobe_ip_table;
@@ -76,7 +76,13 @@ static const struct rhashtable_params fprobe_rht_params = {
 	.obj_hashfn		= fprobe_node_obj_hashfn,
 	.obj_cmpfn		= fprobe_node_cmp,
 	.automatic_shrinking	= true,
+	.use_tasks_rude		= true,
 };
+
+DEFINE_LOCK_GUARD_0(rcu_sched_notrace, rcu_read_lock_sched_notrace(),
+		    rcu_read_unlock_sched_notrace())
+DECLARE_LOCK_GUARD_0_ATTRS(rcu_sched_notrace, __acquires_shared(RCU),
+			   __releases_shared(RCU))
 
 /* Node insertion and deletion requires the fprobe_mutex */
 static int __insert_fprobe_node(struct fprobe_hlist_node *node, struct fprobe *fp)
@@ -322,27 +328,22 @@ static void fprobe_ftrace_entry(unsigned long ip, unsigned long parent_ip,
 	if (bit < 0)
 		return;
 
-	/*
-	 * ftrace_test_recursion_trylock() disables preemption, but
-	 * rhltable_lookup() checks whether rcu_read_lcok is held.
-	 * So we take rcu_read_lock() here.
-	 */
-	rcu_read_lock();
-	head = rhltable_lookup(&fprobe_ip_table, &ip, fprobe_rht_params);
+	scoped_guard(rcu_sched_notrace) {
+		head = rhltable_lookup(&fprobe_ip_table, &ip, fprobe_rht_params);
 
-	rhl_for_each_entry_rcu(node, pos, head, hlist) {
-		if (node->addr != ip)
-			break;
-		fp = READ_ONCE(node->fp);
-		if (unlikely(!fp || fprobe_disabled(fp) || fp->exit_handler))
-			continue;
+		rhl_for_each_entry_rcu(node, pos, head, hlist) {
+			if (node->addr != ip)
+				break;
+			fp = READ_ONCE(node->fp);
+			if (unlikely(!fp || fprobe_disabled(fp) || fp->exit_handler))
+				continue;
 
-		if (fprobe_shared_with_kprobes(fp))
-			__fprobe_kprobe_handler(ip, parent_ip, fp, fregs, NULL);
-		else
-			__fprobe_handler(ip, parent_ip, fp, fregs, NULL);
+			if (fprobe_shared_with_kprobes(fp))
+				__fprobe_kprobe_handler(ip, parent_ip, fp, fregs, NULL);
+			else
+				__fprobe_handler(ip, parent_ip, fp, fregs, NULL);
+		}
 	}
-	rcu_read_unlock();
 	ftrace_test_recursion_unlock(bit);
 }
 NOKPROBE_SYMBOL(fprobe_ftrace_entry);
@@ -441,7 +442,7 @@ static bool fprobe_exists_on_hash(unsigned long ip, bool ftrace)
 	struct fprobe_hlist_node *node;
 	struct fprobe *fp;
 
-	guard(rcu)();
+	guard(rcu_sched_notrace)();
 	head = rhltable_lookup(&fprobe_ip_table, &ip,
 				fprobe_rht_params);
 	if (!head)
@@ -515,7 +516,7 @@ static bool fprobe_exists_on_hash(unsigned long ip, bool ftrace __maybe_unused)
 	struct fprobe_hlist_node *node;
 	struct fprobe *fp;
 
-	guard(rcu)();
+	guard(rcu_sched_notrace)();
 	head = rhltable_lookup(&fprobe_ip_table, &ip,
 				fprobe_rht_params);
 	if (!head)
@@ -559,7 +560,7 @@ static int fprobe_fgraph_entry(struct ftrace_graph_ent *trace, struct fgraph_ops
 	if (WARN_ON_ONCE(!fregs))
 		return 0;
 
-	guard(rcu)();
+	guard(rcu_sched_notrace)();
 	head = rhltable_lookup(&fprobe_ip_table, &func, fprobe_rht_params);
 	reserved_words = 0;
 	rhl_for_each_entry_rcu(node, pos, head, hlist) {
@@ -656,7 +657,7 @@ static void fprobe_return(struct ftrace_graph_ret *trace,
 	size_words = SIZE_IN_LONG(size);
 	ret_ip = ftrace_regs_get_instruction_pointer(fregs);
 
-	preempt_disable_notrace();
+	guard(rcu_sched_notrace)();
 
 	curr = 0;
 	while (size_words > curr) {
@@ -672,7 +673,6 @@ static void fprobe_return(struct ftrace_graph_ret *trace,
 		}
 		curr += size;
 	}
-	preempt_enable_notrace();
 }
 NOKPROBE_SYMBOL(fprobe_return);
 
@@ -1010,7 +1010,7 @@ int register_fprobe_ips(struct fprobe *fp, unsigned long *addrs, int num)
 	if (ret) {
 		unregister_fprobe_nolock(fp);
 		/* In error case, wait for clean up safely. */
-		synchronize_rcu();
+		synchronize_rcu_tasks_rude();
 	}
 
 	return ret;
@@ -1055,6 +1055,14 @@ bool fprobe_is_registered(struct fprobe *fp)
 	return true;
 }
 
+static void free_fprobe_hlist_array(struct rcu_head *head)
+{
+	struct fprobe_hlist *hlist_array;
+
+	hlist_array = container_of(head, struct fprobe_hlist, rcu);
+	kfree(hlist_array);
+}
+
 static int unregister_fprobe_nolock(struct fprobe *fp)
 {
 	struct fprobe_hlist *hlist_array = fp->hlist_array;
@@ -1086,7 +1094,7 @@ static int unregister_fprobe_nolock(struct fprobe *fp)
 	else
 		fprobe_graph_remove_ips(addrs, count);
 
-	kfree_rcu(hlist_array, rcu);
+	call_rcu_tasks_rude(&hlist_array->rcu, free_fprobe_hlist_array);
 	fp->hlist_array = NULL;
 	kfree(addrs);
 
@@ -1125,7 +1133,7 @@ int unregister_fprobe(struct fprobe *fp)
 	int ret = unregister_fprobe_async(fp);
 
 	if (!ret)
-		synchronize_rcu();
+		synchronize_rcu_tasks_rude();
 	return ret;
 }
 EXPORT_SYMBOL_GPL(unregister_fprobe);
