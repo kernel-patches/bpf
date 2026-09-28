@@ -359,7 +359,10 @@ static int rhashtable_rehash_table(struct rhashtable *ht)
 	 * rhashtable_walk_stop() can use rcu_head_after_call_rcu()
 	 * to check if it should not re-link the table.
 	 */
-	call_rcu(&old_tbl->rcu, bucket_table_free_rcu);
+	if (ht->p.use_tasks_rude)
+		call_rcu_tasks_rude(&old_tbl->rcu, bucket_table_free_rcu);
+	else
+		call_rcu(&old_tbl->rcu, bucket_table_free_rcu);
 	spin_unlock(&ht->lock);
 
 	return rht_dereference(new_tbl->future_tbl, ht) ? -EAGAIN : 0;
