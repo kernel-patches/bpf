@@ -467,7 +467,8 @@ __naked void subprog_ret_reg_pair(void)
 		::: __clobber_all);
 }
 
-#if defined(__TARGET_ARCH_x86) || defined(__TARGET_ARCH_arm64)
+#if defined(__TARGET_ARCH_x86) || defined(__TARGET_ARCH_arm64) || \
+	(defined(__TARGET_ARCH_riscv) && __riscv_xlen == 64)
 
 SEC("socket")
 __log_level(2)
@@ -506,7 +507,7 @@ void gotox(void)
 	: __clobber_all);
 }
 
-#endif /* __TARGET_ARCH_x86 || __TARGET_ARCH_arm64 */
+#endif /* gotox: x86, arm64, riscv64 */
 
 /* to retain debug info for BTF generation */
 void kfunc_root(void)
