@@ -1788,7 +1788,9 @@ enum bpf_reg_arg_type {
 };
 
 #define MAX_KFUNC_DESCS 256
-static_assert(MAX_KFUNC_DESCS <= S16_MAX + 1);
+/* Each kfunc can have its canonical and one specialized call target. */
+#define MAX_KFUNC_CALL_DESCS (MAX_KFUNC_DESCS * 2)
+static_assert(MAX_KFUNC_CALL_DESCS <= S16_MAX + 1);
 
 struct bpf_kfunc_desc {
 	struct btf_func_model func_model;
@@ -1800,11 +1802,15 @@ struct bpf_kfunc_desc {
 
 struct bpf_kfunc_desc_tab {
 	u32 nr_descs;
+	u32 nr_base_descs;
 	/* Sorted by func_id (BTF ID) and offset (fd_array offset) during
 	 * verification. JITs use the descriptor index stored in the finalized
-	 * call's off field.
+	 * call's off field. The first nr_base_descs entries are the canonical
+	 * descriptors used for verifier lookups. Call specialization may append
+	 * immutable descriptors for additional targets.
 	 *
-	 * Grown one entry at a time by bpf_add_kfunc_call().
+	 * Grown one entry at a time by bpf_add_kfunc_call() and during
+	 * call specialization.
 	 */
 	struct bpf_kfunc_desc descs[];
 };
