@@ -334,6 +334,7 @@ void amdgpu_reg_state_sysfs_fini(struct amdgpu_device *adev)
  *
  * - "cem"		- PCIE CEM card
  * - "oam"		- Open Compute Accelerator Module
+ * - "eam"		- Enhanced Accelerator Module
  * - "unknown"	- Not known
  *
  */
@@ -356,6 +357,9 @@ static ssize_t amdgpu_device_get_board_info(struct device *dev,
 		break;
 	case AMDGPU_PKG_TYPE_OAM:
 		pkg = "oam";
+		break;
+	case AMDGPU_PKG_TYPE_BB:
+		pkg = "eam";
 		break;
 	default:
 		pkg = "unknown";
