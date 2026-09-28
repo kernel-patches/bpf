@@ -419,7 +419,8 @@ int sys_enter_nanosleep(struct syscall_enter_args *args)
 {
 	struct augmented_args_payload *augmented_args = augmented_args_payload();
 	const void *req_arg = (const void *)args->args[0];
-	unsigned int len = sizeof(augmented_args->args);
+	/* the size + err in all 'augmented_arg' structs */
+	unsigned int len = sizeof(u64) + sizeof(augmented_args->args);
 	__u32 size = sizeof(struct timespec64);
 	int err;
 
