@@ -60,6 +60,22 @@ static void trampoline_unlock(struct bpf_trampoline *tr)
 	mutex_unlock(select_trampoline_lock(tr));
 }
 
+static void trampoline_lock_all(void)
+{
+	int i;
+
+	for (i = 0; i < TRAMPOLINE_LOCKS_TABLE_SIZE; i++)
+		mutex_lock(&trampoline_locks[i].mutex);
+}
+
+static void trampoline_unlock_all(void)
+{
+	int i;
+
+	for (i = 0; i < TRAMPOLINE_LOCKS_TABLE_SIZE; i++)
+		mutex_unlock(&trampoline_locks[i].mutex);
+}
+
 struct bpf_trampoline_ops {
 	int (*register_fentry)(struct bpf_trampoline *tr, struct bpf_tramp_image *im, void *data);
 	int (*unregister_fentry)(struct bpf_trampoline *tr, u32 orig_flags, void *data);
@@ -1515,22 +1531,6 @@ int __weak arch_bpf_trampoline_size(const struct btf_func_model *m, u32 flags,
 #if defined(CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS) && \
     defined(CONFIG_HAVE_SINGLE_FTRACE_DIRECT_OPS) && \
     defined(CONFIG_BPF_SYSCALL)
-
-static void trampoline_lock_all(void)
-{
-	int i;
-
-	for (i = 0; i < TRAMPOLINE_LOCKS_TABLE_SIZE; i++)
-		mutex_lock(&trampoline_locks[i].mutex);
-}
-
-static void trampoline_unlock_all(void)
-{
-	int i;
-
-	for (i = 0; i < TRAMPOLINE_LOCKS_TABLE_SIZE; i++)
-		mutex_unlock(&trampoline_locks[i].mutex);
-}
 
 static void remove_tracing_multi_data(struct bpf_tracing_multi_data *data)
 {
