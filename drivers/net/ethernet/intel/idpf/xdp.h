@@ -8,6 +8,10 @@
 
 #include "idpf_txrx.h"
 
+struct idpf_q_vec_rsrc;
+
+DECLARE_STATIC_KEY_FALSE(idpf_xdp_fb);
+
 int idpf_xdp_rxq_info_init(struct idpf_rx_queue *rxq);
 int idpf_xdp_rxq_info_init_all(const struct idpf_q_vec_rsrc *rsrc);
 void idpf_xdp_rxq_info_deinit(struct idpf_rx_queue *rxq, u32 model);
@@ -15,11 +19,39 @@ void idpf_xdp_rxq_info_deinit_all(const struct idpf_q_vec_rsrc *rsrc);
 void idpf_xdp_copy_prog_to_rqs(const struct idpf_q_vec_rsrc *rsrc,
 			       struct bpf_prog *xdp_prog);
 
-int idpf_xdpsqs_get(const struct idpf_vport *vport);
-void idpf_xdpsqs_put(const struct idpf_vport *vport);
+int idpf_xdpsqs_get(struct idpf_vport *vport);
+void idpf_xdpsqs_put(struct idpf_vport *vport);
 
 u32 idpf_xdpsq_poll(struct idpf_tx_queue *xdpsq, u32 budget);
 bool idpf_xdp_tx_flush_bulk(struct libeth_xdp_tx_bulk *bq, u32 flags);
+
+static inline void idpf_xdp_tx_xmit_fb(struct libeth_xdp_tx_desc desc, u32 i,
+				       const struct libeth_xdpsq *sq, u64 priv)
+{
+	struct idpf_flex_tx_sched_desc *tx_desc = sq->descs;
+	u32 cmd;
+
+	cmd = FIELD_PREP(IDPF_TXD_FLEX_FLOW_DTYPE_M,
+			 IDPF_TX_DESC_DTYPE_FLEX_FLOW_SCHE);
+	if (desc.flags & LIBETH_XDP_TX_LAST)
+		cmd |= IDPF_TXD_FLEX_FLOW_CMD_EOP;
+	if (priv && (desc.flags & LIBETH_XDP_TX_CSUM))
+		cmd |= IDPF_TXD_FLEX_FLOW_CMD_CS_EN;
+
+	tx_desc = &tx_desc[i];
+	tx_desc->buf_addr = cpu_to_le64(desc.addr);
+
+#ifdef __LIBETH_WORD_ACCESS
+	*(u64 *)&tx_desc->qw1 = ((u64)desc.len << 48) | ((u64)i << 32) | cmd;
+#else
+	tx_desc->qw1.rxr_bufsize = cpu_to_le16(desc.len);
+	tx_desc->qw1.compl_tag = cpu_to_le16(i);
+	tx_desc->qw1.ts[0] = 0;
+	tx_desc->qw1.ts[1] = 0;
+	tx_desc->qw1.ts[2] = 0;
+	tx_desc->qw1.cmd_dtype = cmd;
+#endif
+}
 
 /**
  * idpf_xdp_tx_xmit - produce a single HW Tx descriptor out of XDP desc
@@ -33,6 +65,14 @@ static inline void idpf_xdp_tx_xmit(struct libeth_xdp_tx_desc desc, u32 i,
 {
 	struct idpf_flex_tx_desc *tx_desc = sq->descs;
 	u32 cmd;
+
+	if (static_branch_unlikely(&idpf_xdp_fb) &&
+	    idpf_queue_has(FLOW_SCH_EN,
+			   libeth_xdpsq_to_sq(sq, struct idpf_tx_queue,
+					      next_to_use))) {
+		idpf_xdp_tx_xmit_fb(desc, i, sq, priv);
+		return;
+	}
 
 	cmd = FIELD_PREP(IDPF_FLEX_TXD_QW1_DTYPE_M,
 			 IDPF_TX_DESC_DTYPE_FLEX_L2TAG1_L2TAG2);
@@ -53,12 +93,34 @@ static inline void idpf_xdp_tx_xmit(struct libeth_xdp_tx_desc desc, u32 i,
 #endif
 }
 
-static inline void idpf_xdpsq_set_rs(const struct idpf_tx_queue *xdpsq)
+static inline void idpf_xdpsq_set_rs_fb(struct idpf_tx_queue *xdpsq)
+{
+	u32 ntu = xdpsq->next_to_use;
+	u32 old = xdpsq->last_ntu;
+
+	if (old > ntu) {
+		bitmap_set(xdpsq->pending_mask, old, xdpsq->desc_count - old);
+		if (ntu)
+			bitmap_set(xdpsq->pending_mask, 0, ntu);
+	} else {
+		bitmap_set(xdpsq->pending_mask, old, ntu - old);
+	}
+
+	xdpsq->last_ntu = ntu;
+}
+
+static __always_inline void idpf_xdpsq_set_rs(struct idpf_tx_queue *xdpsq)
 {
 	u32 ntu, cmd;
 
+	if (static_branch_unlikely(&idpf_xdp_fb) &&
+	    idpf_queue_has(FLOW_SCH_EN, xdpsq)) {
+		idpf_xdpsq_set_rs_fb(xdpsq);
+		return;
+	}
+
 	ntu = xdpsq->next_to_use;
-	if (unlikely(!ntu))
+	if (!ntu)
 		ntu = xdpsq->desc_count;
 
 	cmd = FIELD_PREP(IDPF_FLEX_TXD_QW1_CMD_M, IDPF_TX_DESC_CMD_RS);
@@ -84,7 +146,8 @@ static inline void idpf_xdpsq_update_tail(const struct idpf_tx_queue *xdpsq)
  * Set the RS bit ("end of batch"), bump the tail, and queue the cleanup timer.
  * To be called after a NAPI polling loop, at the end of .ndo_xdp_xmit() etc.
  */
-static inline void idpf_xdp_tx_finalize(void *_xdpsq, bool sent, bool flush)
+static __always_inline void idpf_xdp_tx_finalize(void *_xdpsq, bool sent,
+						 bool flush)
 {
 	struct idpf_tx_queue *xdpsq = _xdpsq;
 
