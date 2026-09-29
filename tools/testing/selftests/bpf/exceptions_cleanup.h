@@ -22,6 +22,9 @@
 #define RAN_CALLX		0x100
 #define RAN_HELD_REF		0x200
 
+/* progs/exceptions_cleanup_light.c: the one pad it has. */
+#define RAN_LIGHT		0x1
+
 #define CLEANUP_REC(begin, end, landing_pad)			\
 	".pushsection .bpf_cleanup,\"a\",@progbits;"		\
 	".long " begin ";"					\
