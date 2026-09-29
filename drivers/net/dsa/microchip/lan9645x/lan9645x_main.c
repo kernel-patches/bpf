@@ -5,6 +5,7 @@
 #include <linux/platform_device.h>
 
 #include "lan9645x_main.h"
+#include "lan9645x_stats.h"
 
 static const char *lan9645x_resource_names[NUM_TARGETS] = {
 	[TARGET_GCB]          = "gcb",
@@ -74,6 +75,7 @@ static void lan9645x_teardown(struct dsa_switch *ds)
 {
 	struct lan9645x *lan9645x = ds->priv;
 
+	lan9645x_stats_deinit(lan9645x);
 	lan9645x_mdb_deinit(lan9645x);
 	lan9645x_mac_deinit(lan9645x);
 	mutex_destroy(&lan9645x->fwd_domain_lock);
@@ -296,6 +298,8 @@ static int lan9645x_setup(struct dsa_switch *ds)
 	/* Broadcast to cpu and all front ports */
 	lan_wr(BIT(lan9645x->num_phys_ports) | front_ports, lan9645x,
 	       ANA_PGID(PGID_BC));
+
+	lan9645x_stats_init(lan9645x);
 
 	ds->mtu_enforcement_ingress = true;
 	ds->assisted_learning_on_cpu_port = true;
@@ -767,6 +771,62 @@ static int lan9645x_port_mdb_del(struct dsa_switch *ds, int port,
 	return err;
 }
 
+static void lan9645x_get_strings(struct dsa_switch *ds, int port, u32 stringset,
+				 uint8_t *data)
+{
+	lan9645x_stats_get_strings(ds->priv, port, stringset, data);
+}
+
+static void lan9645x_get_ethtool_stats(struct dsa_switch *ds, int port,
+				       uint64_t *data)
+{
+	lan9645x_stats_get_ethtool_stats(ds->priv, port, data);
+}
+
+static int lan9645x_get_sset_count(struct dsa_switch *ds, int port, int sset)
+{
+	return lan9645x_stats_get_sset_count(ds->priv, port, sset);
+}
+
+static void lan9645x_get_eth_mac_stats(struct dsa_switch *ds, int port,
+				       struct ethtool_eth_mac_stats *mac_stats)
+{
+	lan9645x_stats_get_eth_mac_stats(ds->priv, port, mac_stats);
+}
+
+static void
+lan9645x_get_rmon_stats(struct dsa_switch *ds, int port,
+			struct ethtool_rmon_stats *rmon_stats,
+			const struct ethtool_rmon_hist_range **ranges)
+{
+	lan9645x_stats_get_rmon_stats(ds->priv, port, rmon_stats, ranges);
+}
+
+static void lan9645x_get_stats64(struct dsa_switch *ds, int port,
+				 struct rtnl_link_stats64 *s)
+{
+	lan9645x_stats_get_stats64(ds->priv, port, s);
+}
+
+static void lan9645x_get_pause_stats(struct dsa_switch *ds, int port,
+				     struct ethtool_pause_stats *pause_stats)
+{
+	lan9645x_stats_get_pause_stats(ds->priv, port, pause_stats);
+}
+
+static void lan9645x_get_eth_phy_stats(struct dsa_switch *ds, int port,
+				       struct ethtool_eth_phy_stats *phy_stats)
+{
+	lan9645x_stats_get_eth_phy_stats(ds->priv, port, phy_stats);
+}
+
+static void
+lan9645x_get_eth_ctrl_stats(struct dsa_switch *ds, int port,
+			    struct ethtool_eth_ctrl_stats *ctrl_stats)
+{
+	lan9645x_stats_get_eth_ctrl_stats(ds->priv, port, ctrl_stats);
+}
+
 static const struct dsa_switch_ops lan9645x_switch_ops = {
 	.get_tag_protocol		= lan9645x_get_tag_protocol,
 
@@ -804,6 +864,17 @@ static const struct dsa_switch_ops lan9645x_switch_ops = {
 	/* Multicast database */
 	.port_mdb_add			= lan9645x_port_mdb_add,
 	.port_mdb_del			= lan9645x_port_mdb_del,
+
+	/* Port statistics counters. */
+	.get_strings			= lan9645x_get_strings,
+	.get_ethtool_stats		= lan9645x_get_ethtool_stats,
+	.get_sset_count			= lan9645x_get_sset_count,
+	.get_eth_mac_stats		= lan9645x_get_eth_mac_stats,
+	.get_rmon_stats			= lan9645x_get_rmon_stats,
+	.get_stats64			= lan9645x_get_stats64,
+	.get_pause_stats		= lan9645x_get_pause_stats,
+	.get_eth_phy_stats		= lan9645x_get_eth_phy_stats,
+	.get_eth_ctrl_stats		= lan9645x_get_eth_ctrl_stats,
 };
 
 static int lan9645x_request_target_regmaps(struct lan9645x *lan9645x)
@@ -898,9 +969,15 @@ static int lan9645x_probe(struct platform_device *pdev)
 
 	lan9645x_set_feat_dis(lan9645x);
 
-	err = dsa_register_switch(ds);
+	err = lan9645x_stats_alloc(lan9645x);
 	if (err)
+		return dev_err_probe(dev, err, "Failed to allocate stats\n");
+
+	err = dsa_register_switch(ds);
+	if (err) {
+		lan9645x_stats_free(lan9645x);
 		return dev_err_probe(dev, err, "Failed to register DSA switch\n");
+	}
 
 	return 0;
 }
@@ -914,6 +991,7 @@ static void lan9645x_remove(struct platform_device *pdev)
 
 	/* Calls lan9645x DSA .teardown */
 	dsa_unregister_switch(lan9645x->ds);
+	lan9645x_stats_free(lan9645x);
 	dev_set_drvdata(&pdev->dev, NULL);
 }
 
@@ -923,6 +1001,8 @@ static void lan9645x_shutdown(struct platform_device *pdev)
 
 	if (!lan9645x)
 		return;
+
+	lan9645x_stats_deinit(lan9645x);
 
 	dsa_switch_shutdown(lan9645x->ds);
 
