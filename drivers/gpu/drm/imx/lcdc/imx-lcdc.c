@@ -464,7 +464,6 @@ static int imx_lcdc_probe(struct platform_device *pdev)
 {
 	struct imx_lcdc *lcdc;
 	struct drm_device *drm;
-	struct drm_bridge *bridge;
 	struct drm_plane *plane;
 	struct drm_crtc *crtc;
 	struct drm_encoder *encoder;
@@ -483,7 +482,8 @@ static int imx_lcdc_probe(struct platform_device *pdev)
 	if (IS_ERR(lcdc->base))
 		return dev_err_probe(dev, PTR_ERR(lcdc->base), "Cannot get IO memory\n");
 
-	bridge = devm_drm_of_get_bridge(dev, dev->of_node, 0, 0);
+	struct drm_bridge *bridge __free(drm_bridge_put) =
+		of_drm_get_bridge_by_endpoint(dev->of_node, 0, 0);
 	if (IS_ERR(bridge))
 		return dev_err_probe(dev, PTR_ERR(bridge), "Failed to find bridge\n");
 
@@ -542,7 +542,7 @@ static int imx_lcdc_probe(struct platform_device *pdev)
 	if (ret)
 		return dev_err_probe(drm->dev, ret, "Cannot attach bridge\n");
 
-	lcdc->connector = drm_bridge_connector_init(drm, encoder);
+lcdc->connector = drm_bridge_connector_init(drm, encoder);
 	if (IS_ERR(lcdc->connector))
 		return dev_err_probe(drm->dev, PTR_ERR(lcdc->connector), "Cannot init bridge connector\n");
 
