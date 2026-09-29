@@ -1,2 +1,4 @@
 # riscv64 deny list for BPF CI and local vmtest
 exceptions					# JIT does not support exceptions
+probe_user					# kprobe hit in trap
+stacktrace_build_id				# kprobe hit in trap
