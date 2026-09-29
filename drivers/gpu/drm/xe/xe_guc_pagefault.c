@@ -55,7 +55,8 @@ static void guc_ack_fault(struct xe_pagefault *pf, int err)
 	bool write_only = guc->pagefault_ack_counter++ &
 		(XE_GUC_PAGEFAULT_FLUSH_PERIOD - 1);
 
-	xe_guc_ct_send_locked(&guc->ct, action, ARRAY_SIZE(action),
+	/* Pagefault acks are fire-and-forget, no G2H reply expected. */
+	xe_guc_ct_send_locked(&guc->ct, action, ARRAY_SIZE(action), 0, 0,
 			      write_only);
 }
 
