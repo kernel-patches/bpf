@@ -10,6 +10,7 @@
 
 struct tegra_bpmp_ops {
 	int (*init)(struct tegra_bpmp *bpmp);
+	int (*init_providers)(struct tegra_bpmp *bpmp);
 	void (*deinit)(struct tegra_bpmp *bpmp);
 	bool (*is_response_ready)(struct tegra_bpmp_channel *channel);
 	bool (*is_request_ready)(struct tegra_bpmp_channel *channel);
@@ -25,5 +26,10 @@ struct tegra_bpmp_ops {
 
 extern const struct tegra_bpmp_ops tegra186_bpmp_ops;
 extern const struct tegra_bpmp_ops tegra210_bpmp_ops;
+
+int tegra_bpmp_init_channels(struct tegra_bpmp *bpmp);
+int tegra_bpmp_init_ping(struct tegra_bpmp *bpmp);
+void tegra_bpmp_deinit_ping(struct tegra_bpmp *bpmp);
+int tegra_bpmp_init_dt_providers(struct tegra_bpmp *bpmp);
 
 #endif

@@ -166,6 +166,10 @@ static int tegra210_bpmp_init(struct tegra_bpmp *bpmp)
 	unsigned int i;
 	int err;
 
+	err = tegra_bpmp_init_channels(bpmp);
+	if (err < 0)
+		return err;
+
 	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
 	if (!priv)
 		return -ENOMEM;
@@ -220,11 +224,18 @@ static int tegra210_bpmp_init(struct tegra_bpmp *bpmp)
 		return err;
 	}
 
-	return 0;
+	return tegra_bpmp_init_ping(bpmp);
+}
+
+static void tegra210_bpmp_deinit(struct tegra_bpmp *bpmp)
+{
+	tegra_bpmp_deinit_ping(bpmp);
 }
 
 const struct tegra_bpmp_ops tegra210_bpmp_ops = {
 	.init = tegra210_bpmp_init,
+	.init_providers = tegra_bpmp_init_dt_providers,
+	.deinit = tegra210_bpmp_deinit,
 	.is_response_ready = tegra210_bpmp_is_response_ready,
 	.is_request_ready = tegra210_bpmp_is_request_ready,
 	.ack_response = tegra210_bpmp_ack_response,
