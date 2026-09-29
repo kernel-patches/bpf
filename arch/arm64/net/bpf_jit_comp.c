@@ -10,10 +10,12 @@
 #include <linux/arm-smccc.h>
 #include <linux/bitfield.h>
 #include <linux/bpf.h>
+#include <linux/bpf_verifier.h>
 #include <linux/cfi.h>
 #include <linux/filter.h>
 #include <linux/memory.h>
 #include <linux/printk.h>
+#include <linux/scs.h>
 #include <linux/slab.h>
 
 #include <asm/asm-extable.h>
@@ -2423,6 +2425,17 @@ skip_init_ctx:
 		 * reasons, expects to point to the next instruction)
 		 */
 		bpf_prog_update_insn_ptrs(prog, ctx.offset, ctx.ro_image);
+
+		/*
+		 * Same byte offsets, consumed by the bpf_unwind() walk:
+		 * turn the cleanup records into native address ranges now that
+		 * the image is final.
+		 */
+		bpf_exc_fill_native_ranges(prog, ctx.offset, ctx.ro_image);
+
+		/* Where an unwind sends a frame with no pad. */
+		prog->aux->epilogue_ip = (u64)ctx.ro_image +
+					 ctx.epilogue_offset * AARCH64_INSN_SIZE;
 out_off:
 		if (!ro_header && priv_stack_ptr) {
 			free_percpu(priv_stack_ptr);
@@ -3406,6 +3419,19 @@ bool bpf_jit_supports_exceptions(void)
 	 * ARM64 kernel is always compiled with CONFIG_FRAME_POINTER=y
 	 */
 	return true;
+}
+
+bool bpf_jit_supports_cleanup_pads(void)
+{
+	/*
+	 * An unwind redirects a frame by rewriting the frame record its
+	 * callee's return address came out of. JITed code restores x30 from
+	 * there, but bpf_unwind() is C: with a shadow call stack it returns
+	 * from the x18 copy instead, so the frame that called it would keep
+	 * going as if nothing had happened while the frames above it resumed
+	 * at their pads.
+	 */
+	return !scs_is_enabled();
 }
 
 bool bpf_jit_supports_arena(void)
