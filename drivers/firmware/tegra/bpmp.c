@@ -1085,6 +1085,10 @@ static int tegra_bpmp_probe(struct platform_device *pdev)
 			goto deinit;
 	}
 
+	err = tegra_bpmp_init_sysfs(bpmp);
+	if (err < 0)
+		dev_err(&pdev->dev, "failed to initialize sysfs: %d\n", err);
+
 	err = tegra_bpmp_init_debugfs(bpmp);
 	if (err < 0)
 		dev_err(&pdev->dev, "debugfs initialization failed: %d\n", err);
@@ -1186,6 +1190,55 @@ static const struct of_device_id tegra_bpmp_match[] = {
 };
 
 #ifdef CONFIG_ACPI
+#define TEGRA_BPMP_MBWT_VC_PCIE_READ	0
+#define TEGRA_BPMP_MBWT_VC_PCIE_WRITE	1
+#define TEGRA_BPMP_MBWT_VC_NVCLINK	2
+
+static const struct tegra_bpmp_mbwt_vc tegra_bpmp_acpi_mbwt_vcs[] = {
+	{ .name = "pcie_read", .type = TEGRA_BPMP_MBWT_VC_PCIE_READ },
+	{ .name = "pcie_write", .type = TEGRA_BPMP_MBWT_VC_PCIE_WRITE },
+	{ .name = "nvclink", .type = TEGRA_BPMP_MBWT_VC_NVCLINK },
+};
+
+static const struct tegra_bpmp_mbwt_group tegra_bpmp_acpi_mbwt_groups[] = {
+	{
+		.name = "pcie0",
+		.id = 0,
+		.vcs = tegra_bpmp_acpi_mbwt_vcs,
+		.num_vcs = ARRAY_SIZE(tegra_bpmp_acpi_mbwt_vcs)
+	}, {
+		.name = "pcie1",
+		.id = 1,
+		.vcs = tegra_bpmp_acpi_mbwt_vcs,
+		.num_vcs = ARRAY_SIZE(tegra_bpmp_acpi_mbwt_vcs)
+	}, {
+		.name = "pcie2",
+		.id = 2,
+		.vcs = tegra_bpmp_acpi_mbwt_vcs,
+		.num_vcs = ARRAY_SIZE(tegra_bpmp_acpi_mbwt_vcs)
+	}, {
+		.name = "pcie3",
+		.id = 3,
+		.vcs = tegra_bpmp_acpi_mbwt_vcs,
+		.num_vcs = ARRAY_SIZE(tegra_bpmp_acpi_mbwt_vcs)
+	}, {
+		.name = "pcie4",
+		.id = 4,
+		.vcs = tegra_bpmp_acpi_mbwt_vcs,
+		.num_vcs = ARRAY_SIZE(tegra_bpmp_acpi_mbwt_vcs)
+	}, {
+		.name = "pcie5",
+		.id = 5,
+		.vcs = tegra_bpmp_acpi_mbwt_vcs,
+		.num_vcs = ARRAY_SIZE(tegra_bpmp_acpi_mbwt_vcs)
+	},
+};
+
+static const struct tegra_bpmp_mbwt_soc tegra_bpmp_acpi_mbwt_soc = {
+	.groups = tegra_bpmp_acpi_mbwt_groups,
+	.num_groups = ARRAY_SIZE(tegra_bpmp_acpi_mbwt_groups),
+};
+
 static int tegra_bpmp_acpi_init(struct tegra_bpmp *bpmp)
 {
 	return tegra_bpmp_ping(bpmp);
@@ -1197,6 +1250,7 @@ static const struct tegra_bpmp_ops tegra_bpmp_acpi_ops = {
 
 static const struct tegra_bpmp_soc tegra_bpmp_acpi_soc = {
 	.ops = &tegra_bpmp_acpi_ops,
+	.mbwt = &tegra_bpmp_acpi_mbwt_soc,
 };
 
 static const struct acpi_device_id tegra_bpmp_acpi_match[] = {
