@@ -18,14 +18,29 @@
 /* Both Rev.B0 and B1 clause 22 PHYID's are same due to B1 chip limitation */
 #define PHY_ID_LAN865X_REVB 0x0007C1B3
 
+/* PHY interrupt status 2 register */
 #define LAN867X_REG_STS2 0x0019
-
 #define LAN867x_RESET_COMPLETE_STS BIT(11)
 
 #define LAN865X_REG_CFGPARAM_ADDR 0x00D8
 #define LAN865X_REG_CFGPARAM_DATA 0x00D9
 #define LAN865X_REG_CFGPARAM_CTRL 0x00DA
 #define LAN865X_REG_STS2 0x0019
+
+/* PHY interrupt status 1 register */
+#define LAN86XX_REG_STS1		0x0018
+#define LAN86XX_STS1_PLCA_STS_CHANGED	BIT(11)
+
+/* PHY interrupt mask 1 register */
+#define LAN86XX_REG_IMSK1		0x001C
+
+/* PLCA Reconciliation Sublayer Control 1 Register (PRSCTL1). Bit 10 controls
+ * whether the PHY autonomously falls back to CSMA/CD mode when no BEACON is
+ * observed while PLCA is enabled, versus staying pinned to PLCA mode regardless
+ * of BEACON presence.
+ */
+#define LAN86XX_REG_PRSCTL1               0x0035
+#define PRSCTL1_PLCA_FALLB_TO_CSMACD_EN   BIT(10)
 
 /* Collision Detector Control 0 Register */
 #define LAN86XX_REG_COL_DET_CTRL0	0x0087
@@ -135,6 +150,30 @@ static const u16 lan867x_revd0_fixup_values[8] = {
 	0x0800, 0xBFC0, 0x029C, 0x1001,
 	0x001C, 0x0C0B, 0x8C07, 0x9660,
 };
+
+struct lan86xx_priv {
+	/* Serializes CDEN state synchronization. */
+	struct mutex cden_lock;
+	int plca_enabled;
+};
+
+static int lan86xx_probe(struct phy_device *phydev)
+{
+	struct lan86xx_priv *priv;
+	int ret;
+
+	priv = devm_kzalloc(&phydev->mdio.dev, sizeof(*priv), GFP_KERNEL);
+	if (!priv)
+		return -ENOMEM;
+
+	ret = devm_mutex_init(&phydev->mdio.dev, &priv->cden_lock);
+	if (ret)
+		return ret;
+
+	phydev->priv = priv;
+
+	return 0;
+}
 
 /* Pulled from AN1760 describing 'indirect read'
  *
@@ -430,6 +469,57 @@ static int lan867x_revd0_link_active_selection(struct phy_device *phydev,
 			     LAN867X_REG_LINK_STATUS_CTRL, value);
 }
 
+static int lan86xx_fallback_to_csmacd(struct phy_device *phydev)
+{
+	int ret;
+
+	ret = phy_read_mmd(phydev, MDIO_MMD_VEND2, LAN86XX_REG_PRSCTL1);
+	if (ret < 0)
+		return ret;
+
+	return !!(ret & PRSCTL1_PLCA_FALLB_TO_CSMACD_EN);
+}
+
+/* Collision detection must stay disabled while the device is actually operating
+ * in PLCA mode, and enabled while it is actually operating in CSMA/CD.
+ * A missing BEACON (pst == 0) only means the device is running CSMA/CD if
+ * autonomous fallback is enabled (PRSCTL1 bit 10); if fallback is disabled,
+ * the device stays pinned to PLCA mode regardless of BEACON presence,
+ * so collision detection must remain disabled.
+ */
+static int lan86xx_update_cden(struct phy_device *phydev)
+{
+	struct lan86xx_priv *priv = phydev->priv;
+	struct phy_plca_status plca_st;
+	int fallback, ret;
+	u16 cden;
+
+	fallback = lan86xx_fallback_to_csmacd(phydev);
+	if (fallback < 0)
+		return fallback;
+
+	ret = genphy_c45_plca_get_status(phydev, &plca_st);
+	if (ret < 0)
+		return ret;
+
+	/* PLCA disabled                          -> CDEN enabled
+	 * PLCA enabled + BEACON                  -> CDEN disabled
+	 * PLCA enabled + no BEACON + fallback    -> CDEN enabled
+	 * PLCA enabled + no BEACON + no fallback -> CDEN disabled
+	 */
+	if (!priv->plca_enabled)
+		cden = COL_DET_ENABLE;
+	else if (plca_st.pst)
+		cden = COL_DET_DISABLE;
+	else if (fallback)
+		cden = COL_DET_ENABLE;
+	else
+		cden = COL_DET_DISABLE;
+
+	return phy_modify_mmd(phydev, MDIO_MMD_VEND2, LAN86XX_REG_COL_DET_CTRL0,
+			      COL_DET_CTRL0_ENABLE_BIT_MASK, cden);
+}
+
 /* As per LAN8650/1 Rev.B0/B1 AN1760 (Revision F (DS60001760G - June 2024)) and
  * LAN8670/1/2 Rev.C1/C2 AN1699 (Revision E (DS60001699F - June 2024)), under
  * normal operation, the device should be operated in PLCA mode. Disabling
@@ -444,10 +534,14 @@ static int lan867x_revd0_link_active_selection(struct phy_device *phydev,
 static int lan86xx_plca_set_cfg(struct phy_device *phydev,
 				const struct phy_plca_cfg *plca_cfg)
 {
+	struct lan86xx_priv *priv = phydev->priv;
 	int ret;
 
-	/* Link status selection must be configured for LAN8670/1/2 Rev.D0 */
-	if (phydev->phy_id == PHY_ID_LAN867X_REVD0) {
+	/* Link status selection must be configured for LAN8670/1/2 Rev.D0.
+	 * Only update link status selection if enabled is explicitly specified
+	 * (not -1, which means "don't change").
+	 */
+	if (phydev->phy_id == PHY_ID_LAN867X_REVD0 && plca_cfg->enabled != -1) {
 		ret = lan867x_revd0_link_active_selection(phydev,
 							  plca_cfg->enabled);
 		if (ret)
@@ -458,14 +552,18 @@ static int lan86xx_plca_set_cfg(struct phy_device *phydev,
 	if (ret)
 		return ret;
 
-	if (plca_cfg->enabled)
-		return phy_modify_mmd(phydev, MDIO_MMD_VEND2,
-				      LAN86XX_REG_COL_DET_CTRL0,
-				      COL_DET_CTRL0_ENABLE_BIT_MASK,
-				      COL_DET_DISABLE);
+	if (plca_cfg->enabled != -1)
+		priv->plca_enabled = plca_cfg->enabled;
 
-	return phy_modify_mmd(phydev, MDIO_MMD_VEND2, LAN86XX_REG_COL_DET_CTRL0,
-			      COL_DET_CTRL0_ENABLE_BIT_MASK, COL_DET_ENABLE);
+	if (plca_cfg->enabled != -1) {
+		mutex_lock(&priv->cden_lock);
+		ret = lan86xx_update_cden(phydev);
+		mutex_unlock(&priv->cden_lock);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
 }
 
 static int lan867x_revd0_config_init(struct phy_device *phydev)
@@ -493,6 +591,9 @@ static int lan867x_revd0_config_init(struct phy_device *phydev)
 
 static int lan86xx_read_status(struct phy_device *phydev)
 {
+	struct lan86xx_priv *priv = phydev->priv;
+	int ret;
+
 	/* The phy has some limitations, namely:
 	 *  - always reports link up
 	 *  - only supports 10MBit half duplex
@@ -503,7 +604,112 @@ static int lan86xx_read_status(struct phy_device *phydev)
 	phydev->speed = SPEED_10;
 	phydev->autoneg = AUTONEG_DISABLE;
 
-	return 0;
+	/* LAN867X Rev.B1 is unsupported/undocumented silicon (absent from the
+	 * current AN1699 and datasheet) and is kept out of scope for the CDEN
+	 * tracking below.
+	 */
+	if (phydev->phy_id == PHY_ID_LAN867X_REVB1)
+		return 0;
+
+	/* When no PHY interrupt is available, phylib polls read_status().
+	 * Use the PLCA status from that poll to resync CDEN.
+	 */
+	mutex_lock(&priv->cden_lock);
+	ret = lan86xx_update_cden(phydev);
+	mutex_unlock(&priv->cden_lock);
+	return ret;
+}
+
+/* Read LAN86XX_REG_STS1, which clears the latched status bits on read. */
+static int lan86xx_read_clear_sts1(struct phy_device *phydev)
+{
+	return phy_read_mmd(phydev, MDIO_MMD_VEND2, LAN86XX_REG_STS1);
+}
+
+/* Mask (mask bit = 1) or unmask (mask bit = 0) the given STS1 bits in
+ * IMSK1.
+ */
+static int lan86xx_set_intr_mask(struct phy_device *phydev, u16 mask,
+				 bool enable)
+{
+	if (enable)
+		/* A mask bit of 0 enables the corresponding interrupt. */
+		return phy_clear_bits_mmd(phydev, MDIO_MMD_VEND2,
+					  LAN86XX_REG_IMSK1, mask);
+
+	return phy_set_bits_mmd(phydev, MDIO_MMD_VEND2, LAN86XX_REG_IMSK1,
+				mask);
+}
+
+static int lan86xx_config_intr(struct phy_device *phydev)
+{
+	struct lan86xx_priv *priv = phydev->priv;
+	int ret;
+
+	if (phydev->interrupts == PHY_INTERRUPT_ENABLED) {
+		/* Read to clear any pending status before enabling. */
+		ret = lan86xx_read_clear_sts1(phydev);
+		if (ret < 0)
+			return ret;
+
+		/* STS1 may have cleared a PSTC event that occurred while the
+		 * interrupt was masked, so synchronize CDEN with the current
+		 * PLCA state before enabling PSTC.
+		 */
+		mutex_lock(&priv->cden_lock);
+		ret = lan86xx_update_cden(phydev);
+		mutex_unlock(&priv->cden_lock);
+		if (ret)
+			return ret;
+
+		return lan86xx_set_intr_mask(phydev,
+					     LAN86XX_STS1_PLCA_STS_CHANGED,
+					     true);
+	}
+
+	ret = lan86xx_set_intr_mask(phydev, LAN86XX_STS1_PLCA_STS_CHANGED,
+				    false);
+	if (ret)
+		return ret;
+
+	/* Read to clear any pending status after disabling. */
+	ret = lan86xx_read_clear_sts1(phydev);
+	return ret < 0 ? ret : 0;
+}
+
+static irqreturn_t lan86xx_handle_interrupt(struct phy_device *phydev)
+{
+	struct lan86xx_priv *priv = phydev->priv;
+	irqreturn_t ret_irq = IRQ_NONE;
+	int sts1, ret;
+
+	/* Reading the status register clears the latched event bits. */
+	sts1 = lan86xx_read_clear_sts1(phydev);
+	if (sts1 < 0) {
+		phy_error(phydev);
+		return IRQ_NONE;
+	}
+
+	if (sts1 & LAN86XX_STS1_PLCA_STS_CHANGED) {
+		/* AN1760/AN1699: disable collision detection while actually
+		 * operating in PLCA mode; re-enable it only once actually
+		 * operating in CSMA/CD (see lan86xx_update_cden()).
+		 *
+		 * https://www.microchip.com/en-us/application-notes/an1760
+		 * https://www.microchip.com/en-us/application-notes/an1699
+		 */
+		mutex_lock(&priv->cden_lock);
+		ret = lan86xx_update_cden(phydev);
+		mutex_unlock(&priv->cden_lock);
+		if (ret < 0) {
+			phy_error(phydev);
+			return IRQ_NONE;
+		}
+
+		ret_irq = IRQ_HANDLED;
+	}
+
+	return ret_irq;
 }
 
 static struct phy_driver microchip_t1s_driver[] = {
@@ -521,8 +727,11 @@ static struct phy_driver microchip_t1s_driver[] = {
 		PHY_ID_MATCH_EXACT(PHY_ID_LAN867X_REVC1),
 		.name               = "LAN867X Rev.C1",
 		.features           = PHY_BASIC_T1S_P2MP_FEATURES,
+		.probe              = lan86xx_probe,
 		.config_init        = lan867x_revc_config_init,
 		.read_status        = lan86xx_read_status,
+		.config_intr        = lan86xx_config_intr,
+		.handle_interrupt   = lan86xx_handle_interrupt,
 		.get_plca_cfg	    = genphy_c45_plca_get_cfg,
 		.set_plca_cfg	    = lan86xx_plca_set_cfg,
 		.get_plca_status    = genphy_c45_plca_get_status,
@@ -531,8 +740,11 @@ static struct phy_driver microchip_t1s_driver[] = {
 		PHY_ID_MATCH_EXACT(PHY_ID_LAN867X_REVC2),
 		.name               = "LAN867X Rev.C2",
 		.features           = PHY_BASIC_T1S_P2MP_FEATURES,
+		.probe              = lan86xx_probe,
 		.config_init        = lan867x_revc_config_init,
 		.read_status        = lan86xx_read_status,
+		.config_intr        = lan86xx_config_intr,
+		.handle_interrupt   = lan86xx_handle_interrupt,
 		.get_plca_cfg	    = genphy_c45_plca_get_cfg,
 		.set_plca_cfg	    = lan86xx_plca_set_cfg,
 		.get_plca_status    = genphy_c45_plca_get_status,
@@ -541,6 +753,7 @@ static struct phy_driver microchip_t1s_driver[] = {
 		PHY_ID_MATCH_EXACT(PHY_ID_LAN867X_REVD0),
 		.name               = "LAN867X Rev.D0",
 		.features           = PHY_BASIC_T1S_P2MP_FEATURES,
+		.probe              = lan86xx_probe,
 		.config_init        = lan867x_revd0_config_init,
 		.get_plca_cfg	    = genphy_c45_plca_get_cfg,
 		.set_plca_cfg	    = lan86xx_plca_set_cfg,
@@ -554,8 +767,11 @@ static struct phy_driver microchip_t1s_driver[] = {
 		PHY_ID_MATCH_EXACT(PHY_ID_LAN865X_REVB),
 		.name               = "LAN865X Rev.B0/B1 Internal Phy",
 		.features           = PHY_BASIC_T1S_P2MP_FEATURES,
+		.probe              = lan86xx_probe,
 		.config_init        = lan865x_revb_config_init,
 		.read_status        = lan86xx_read_status,
+		.config_intr        = lan86xx_config_intr,
+		.handle_interrupt   = lan86xx_handle_interrupt,
 		.read_mmd           = genphy_read_mmd_c45,
 		.write_mmd          = genphy_write_mmd_c45,
 		.get_plca_cfg	    = genphy_c45_plca_get_cfg,
