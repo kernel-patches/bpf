@@ -71,6 +71,8 @@
 #define PCI_DEVICE_ID_CISCO_VIC_ENET_VF_V2   0x02b7  /* enet SRIOV V2 VF */
 #define PCI_DEVICE_ID_CISCO_VIC_ENET_VF_USNIC 0x00cf /* enet USNIC VF */
 
+static int __enic_stop(struct net_device *netdev, bool remove_vf_station);
+
 /* Supported devices */
 static const struct pci_device_id enic_id_table[] = {
 	{ PCI_VDEVICE(CISCO, PCI_DEVICE_ID_CISCO_VIC_ENET) },
@@ -1718,6 +1720,8 @@ static void enic_notify_timer_start(struct enic *enic)
 	}
 }
 
+static int enic_admin_chan_reopen(struct enic *enic);
+
 /* rtnl lock is held, process context */
 static int enic_open(struct net_device *netdev)
 {
@@ -1735,6 +1739,30 @@ static int enic_open(struct net_device *netdev)
 		.netdev = netdev,
 		.flags = PP_FLAG_DMA_MAP | PP_FLAG_DMA_SYNC_DEV,
 	};
+
+	/* A reply timeout invalidates the current request generation.  Rebuild
+	 * and re-register the channel before allocating datapath resources so a
+	 * later userspace down/up can recover a failed open or reset handshake.
+	 * A send timeout is intentionally not recoverable here because its WQ
+	 * descriptor may still be hardware-owned.
+	 */
+	if (enic_is_sriov_vf_v2(enic) &&
+	    READ_ONCE(enic->mbox_tx_poisoned))
+		return -EIO;
+	if (enic_is_sriov_vf_v2(enic) &&
+	    (!enic->admin_chan_up || !READ_ONCE(enic->vf_registered) ||
+	     READ_ONCE(enic->vf_mbox_reconnect_required))) {
+		/* Re-registration makes the PF discard the old VF-requested
+		 * filters.  Clear the netdev-core synchronization state so the
+		 * receive-mode callback replays the current address lists.
+		 */
+		enic_reset_addr_lists(enic);
+		if (enic->admin_chan_up)
+			enic_admin_channel_close(enic);
+		err = enic_admin_chan_reopen(enic);
+		if (err)
+			return err;
+	}
 
 	err = enic_request_intr(enic);
 	if (err) {
@@ -1794,17 +1822,41 @@ static int enic_open(struct net_device *netdev)
 		netdev_err(netdev, "Failed to enable device: %d\n", err);
 		goto err_out_dev_enable;
 	}
+	if (enic_is_sriov_vf_v2(enic)) {
+		/* Commit the replay only if no mailbox fault arrived while station
+		 * and receive policy were being programmed.  Keep the state lock
+		 * through the carrier transition so a later fault necessarily wins
+		 * and turns carrier back off.
+		 */
+		spin_lock_bh(&enic->mbox_state_lock);
+		if (!READ_ONCE(enic->vf_registered) ||
+		    READ_ONCE(enic->mbox_send_disabled) ||
+		    READ_ONCE(enic->mbox_tx_poisoned) ||
+		    READ_ONCE(enic->vf_mbox_reconnect_required)) {
+			err = -EIO;
+		} else {
+			WRITE_ONCE(enic->vf_rx_quarantined, false);
+			enic_mbox_vf_link_state_set_running(enic, true);
+		}
+		spin_unlock_bh(&enic->mbox_state_lock);
+		if (err) {
+			netdev_err(netdev,
+				   "MBOX state changed during VF datapath open\n");
+			goto err_out_dev_disable;
+		}
+	}
 
 	for (i = 0; i < enic->intr_count; i++)
 		vnic_intr_unmask(&enic->intr[i]);
-
 	enic_notify_timer_start(enic);
 	enic_rfs_timer_start(enic);
 	if (enic_is_sriov_vf_v2(enic))
-		enic_mbox_vf_link_state_set_running(enic, true);
+		enic->vf_datapath_open = true;
 
 	return 0;
 
+err_out_dev_disable:
+	enic_dev_disable(enic);
 err_out_dev_enable:
 	for (i = 0; i < enic->rq_count; i++)
 		napi_disable(&enic->napi[i]);
@@ -1834,11 +1886,19 @@ err_out_free_intr:
 }
 
 /* rtnl lock is held, process context */
-static int enic_stop(struct net_device *netdev)
+static int __enic_stop(struct net_device *netdev, bool remove_vf_station)
 {
 	struct enic *enic = netdev_priv(netdev);
 	unsigned int i;
 	int err;
+
+	/* Internal reset leaves netif_running() set while the datapath is down.
+	 * If re-registration or reopen then fails, a later administrative close
+	 * must not disable NAPI a second time.
+	 */
+	if (enic_is_sriov_vf_v2(enic) && !enic->vf_datapath_open)
+		return 0;
+	(void)remove_vf_station;
 
 	for (i = 0; i < enic->intr_count; i++) {
 		vnic_intr_mask(&enic->intr[i]);
@@ -1893,8 +1953,15 @@ static int enic_stop(struct net_device *netdev)
 		vnic_cq_clean(&enic->cq[i]);
 	for (i = 0; i < enic->intr_count; i++)
 		vnic_intr_clean(&enic->intr[i]);
+	if (enic_is_sriov_vf_v2(enic))
+		enic->vf_datapath_open = false;
 
 	return 0;
+}
+
+static int enic_stop(struct net_device *netdev)
+{
+	return __enic_stop(netdev, true);
 }
 
 static int _enic_change_mtu(struct net_device *netdev, int new_mtu)
@@ -2196,14 +2263,15 @@ static bool enic_has_admin_chan(struct enic *enic)
 	       (enic_sriov_enabled(enic) && enic->vf_type == ENIC_VF_TYPE_V2);
 }
 
-/* Re-establish the admin/MBOX channel after a reset has re-created the data
- * path.  Mirrors the relevant part of the probe / SR-IOV-enable sequence:
+/* Re-establish the admin/MBOX channel after a reset has re-created the vNIC
+ * resources.  Mirrors the relevant part of the probe / SR-IOV-enable sequence:
  * reinitialise MBOX and reopen the channel, then for a VF re-run the PF
  * handshake (the reset wiped the VF's admin QP, so the VF must register
  * again), or for a PF re-push the current link state to registered VFs.
  */
-static void enic_admin_chan_reopen(struct enic *enic)
+static int enic_admin_chan_reopen(struct enic *enic)
 {
+	u32 recovery_generation = 0;
 	int err;
 
 	/* Install the MBOX receive handler and clear pending reply state before
@@ -2222,12 +2290,17 @@ static void enic_admin_chan_reopen(struct enic *enic)
 	 */
 	if (enic_is_sriov_vf_v2(enic))
 		WRITE_ONCE(enic->vf_registered, false);
+	if (enic_is_sriov_vf_v2(enic)) {
+		spin_lock_bh(&enic->mbox_state_lock);
+		recovery_generation = enic->vf_mbox_fault_generation;
+		spin_unlock_bh(&enic->mbox_state_lock);
+	}
 
 	err = enic_admin_channel_open(enic);
 	if (err) {
 		netdev_err(enic->netdev,
 			   "admin channel reopen after reset failed: %d\n", err);
-		return;
+		return err;
 	}
 
 	if (enic_is_sriov_vf_v2(enic)) {
@@ -2237,7 +2310,7 @@ static void enic_admin_chan_reopen(struct enic *enic)
 				   "MBOX capability check after reset failed: %d\n",
 				   err);
 			enic_admin_channel_close(enic);
-			return;
+			return err;
 		}
 		err = enic_mbox_vf_register(enic);
 		if (err) {
@@ -2245,6 +2318,26 @@ static void enic_admin_chan_reopen(struct enic *enic)
 				   "MBOX VF re-registration after reset failed: %d\n",
 				   err);
 			enic_admin_channel_close(enic);
+			return err;
+		}
+		enic_reset_addr_lists(enic);
+		/* Capability negotiation and registration establish a new protocol
+		 * generation. RX remains quarantined until enic_open() replays the
+		 * station and receive policy.
+		 */
+		spin_lock_bh(&enic->mbox_state_lock);
+		if (enic->vf_mbox_fault_generation != recovery_generation ||
+		    READ_ONCE(enic->mbox_tx_poisoned)) {
+			err = -EAGAIN;
+		} else {
+			WRITE_ONCE(enic->vf_mbox_reconnect_required, false);
+		}
+		spin_unlock_bh(&enic->mbox_state_lock);
+		if (err) {
+			netdev_warn(enic->netdev,
+				    "MBOX state changed during VF re-registration\n");
+			enic_admin_channel_close(enic);
+			return err;
 		}
 	} else {
 		/* The link came back up during enic_open() above while MBOX
@@ -2253,79 +2346,128 @@ static void enic_admin_chan_reopen(struct enic *enic)
 		 */
 		schedule_work(&enic->link_notify_work);
 	}
+
+	return 0;
 }
 
 static void enic_reset(struct work_struct *work)
 {
 	struct enic *enic = container_of(work, struct enic, reset);
+	bool vf_recovery = enic_is_sriov_vf_v2(enic);
+	int err;
 
 	if (!netif_running(enic->netdev))
 		return;
+	if (vf_recovery)
+		WRITE_ONCE(enic->vf_mbox_recovery_active, true);
 
 	rtnl_lock();
+	/* V2 protocol recovery can be queued immediately before ndo_stop()
+	 * acquires RTNL.  Recheck under RTNL so that new recovery path cannot
+	 * reopen a device userspace just closed.  Preserve the existing reset
+	 * behavior for every other ENIC device.
+	 */
+	if (enic_is_sriov_vf_v2(enic) && !netif_running(enic->netdev))
+		goto unlock;
 
 	/* Stop any activity from infiniband */
 	enic_set_api_busy(enic, true);
 
-	/* Fully tear down the V2 admin/MBOX channel before the soft reset.
-	 * The reset wipes all hardware queues including the admin WQ/RQ;
-	 * closing first tells firmware to stop the admin QP (so it no longer
-	 * DMAs from the about-to-be-reset rings) and frees the admin resources
-	 * so they are cleanly re-allocated afterwards.
+	/* Stop the datapath and existing admin/MBOX channel before the soft
+	 * reset. Do not send DEL_MAC from this path: a timeout would poison the
+	 * channel while reset and fresh registration already discard the old
+	 * VF-requested protocol state before the station address is replayed.
+	 * Reopen allocates fresh admin resources after reset recreates the vNIC.
 	 */
+	__enic_stop(enic->netdev, false);
 	if (enic_has_admin_chan(enic))
 		enic_admin_channel_close(enic);
 
-	enic_stop(enic->netdev);
 	if (enic_is_sriov_vf_v2(enic))
 		enic_mbox_vf_link_state_reset(enic);
+	err = enic_dev_soft_reset(enic);
+	if (err)
+		goto reset_out;
 
-	enic_dev_soft_reset(enic);
+	if (!enic_is_dynamic(enic)) {
+		err = vnic_dev_init(enic->vdev, 0);
+		if (err) {
+			netdev_err(enic->netdev,
+				   "vNIC init after soft reset failed: %d\n",
+				   err);
+			goto reset_out;
+		}
+	}
+
 	enic_reset_addr_lists(enic);
 	enic_init_vnic_resources(enic);
 	enic_set_rss_nic_cfg(enic);
 	enic_dev_set_ig_vlan_rewrite_mode(enic);
 	enic_ext_cq(enic);
 
-	enic_open(enic->netdev);
-
-	/* Re-establish the admin/MBOX channel after the data path is back up.
-	 * It was fully torn down by enic_admin_channel_close() above;
-	 * enic_admin_chan_reopen() reopens it and, for a PF re-pushes link
-	 * state, or for a VF re-runs the probe-time PF handshake.
+	/* A V2 VF needs PF registration before enic_open() can install its
+	 * station address.  A V2 PF reopens afterwards and replays carrier.
 	 */
-	if (enic_has_admin_chan(enic))
+	if (enic_is_sriov_vf_v2(enic)) {
+		err = enic_admin_chan_reopen(enic);
+		if (err)
+			goto reset_out;
+	}
+
+	err = enic_open(enic->netdev);
+	if (err)
+		netdev_err(enic->netdev,
+			   "Failed to reopen datapath after reset: %d\n", err);
+
+	/* A PF reopens its admin channel after the datapath and re-pushes link
+	 * state.  The VF handshake, which open depends on, completed above.
+	 */
+	if (enic_has_admin_chan(enic) && !enic_is_sriov_vf_v2(enic))
 		enic_admin_chan_reopen(enic);
 
+reset_out:
 	/* Allow infiniband to fiddle with the device again */
 	enic_set_api_busy(enic, false);
 
 	call_netdevice_notifiers(NETDEV_REBOOT, enic->netdev);
 
+unlock:
+	if (vf_recovery)
+		WRITE_ONCE(enic->vf_mbox_recovery_active, false);
 	rtnl_unlock();
 }
 
 static void enic_tx_hang_reset(struct work_struct *work)
 {
 	struct enic *enic = container_of(work, struct enic, tx_hang_reset);
+	bool vf_recovery = enic_is_sriov_vf_v2(enic);
+	int err;
+
+	if (vf_recovery)
+		WRITE_ONCE(enic->vf_mbox_recovery_active, true);
 
 	rtnl_lock();
+	/* The V2 changes below add admin-channel recovery to this worker.  Do not
+	 * let that new path reopen a VF after userspace completed ndo_stop();
+	 * leave the existing behavior for other ENIC devices unchanged.
+	 */
+	if (enic_is_sriov_vf_v2(enic) && !netif_running(enic->netdev))
+		goto unlock;
 
 	/* Stop any activity from infiniband */
 	enic_set_api_busy(enic, true);
 
-	/* Fully tear down the V2 admin/MBOX channel before the hang reset, for
-	 * the same reason as the soft reset path: stop the admin QP and free
-	 * the admin resources before the hardware queues are wiped.
+	/* Preserve the firmware hang-notification contract by reporting the hung
+	 * queue before stopping and cleaning it. As in the soft-reset path, skip
+	 * DEL_MAC because reset and fresh registration are the cleanup boundary.
 	 */
+	enic_dev_hang_notify(enic);
+	__enic_stop(enic->netdev, false);
 	if (enic_has_admin_chan(enic))
 		enic_admin_channel_close(enic);
 
-	enic_dev_hang_notify(enic);
-	enic_stop(enic->netdev);
 	if (enic_is_sriov_vf_v2(enic))
 		enic_mbox_vf_link_state_reset(enic);
-
 	enic_dev_hang_reset(enic);
 	enic_reset_addr_lists(enic);
 	enic_init_vnic_resources(enic);
@@ -2333,21 +2475,32 @@ static void enic_tx_hang_reset(struct work_struct *work)
 	enic_dev_set_ig_vlan_rewrite_mode(enic);
 	enic_ext_cq(enic);
 
-	enic_open(enic->netdev);
+	if (enic_is_sriov_vf_v2(enic)) {
+		err = enic_admin_chan_reopen(enic);
+		if (err)
+			goto hang_reset_out;
+	}
 
-	/* Re-establish the admin/MBOX channel after the data path is back up.
-	 * It was fully torn down by enic_admin_channel_close() above;
-	 * enic_admin_chan_reopen() reopens it and, for a PF re-pushes link
-	 * state, or for a VF re-runs the probe-time PF handshake.
+	err = enic_open(enic->netdev);
+	if (err)
+		netdev_err(enic->netdev,
+			   "Failed to reopen datapath after hang reset: %d\n", err);
+
+	/* A PF reopens its admin channel after the datapath and re-pushes link
+	 * state.  The VF handshake, which open depends on, completed above.
 	 */
-	if (enic_has_admin_chan(enic))
+	if (enic_has_admin_chan(enic) && !enic_is_sriov_vf_v2(enic))
 		enic_admin_chan_reopen(enic);
 
+hang_reset_out:
 	/* Allow infiniband to fiddle with the device again */
 	enic_set_api_busy(enic, false);
 
 	call_netdevice_notifiers(NETDEV_REBOOT, enic->netdev);
 
+unlock:
+	if (vf_recovery)
+		WRITE_ONCE(enic->vf_mbox_recovery_active, false);
 	rtnl_unlock();
 }
 

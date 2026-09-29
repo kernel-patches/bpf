@@ -149,7 +149,20 @@ static int enic_mbox_send_msg_id(struct enic *enic, u8 msg_type,
 		 * or free the buffer: the device may still DMA from dma_addr.
 		 * Mark the channel unusable so no further sends are attempted.
 		 */
+		spin_lock_bh(&enic->mbox_state_lock);
 		WRITE_ONCE(enic->mbox_send_disabled, true);
+		WRITE_ONCE(enic->mbox_tx_poisoned, true);
+		if (enic_is_sriov_vf_v2(enic)) {
+			/* The request may have changed PF receive policy even though
+			 * local descriptor ownership is still uncertain. Fail the VF
+			 * closed and do not turn this into an ordinary protocol
+			 * reconnect; the admin-channel lifecycle owns final reclamation.
+			 */
+			WRITE_ONCE(enic->vf_rx_quarantined, true);
+		}
+		spin_unlock_bh(&enic->mbox_state_lock);
+		if (enic_is_sriov_vf_v2(enic))
+			enic_mbox_vf_link_state_set_running(enic, false);
 	}
 
 	netdev_dbg(enic->netdev,
@@ -184,6 +197,105 @@ static int enic_mbox_send_reply(struct enic *enic, u8 msg_type,
 				     payload_len, msg_num, true, 0);
 }
 
+struct enic_mbox_vf_ack {
+	struct list_head list;
+	u64 msg_num;
+	u16 ret_major;
+	u8 msg_type;
+};
+
+static void enic_mbox_vf_ack_work(struct work_struct *work)
+{
+	struct enic *enic = container_of(work, struct enic, vf_ack_work);
+	struct enic_mbox_vf_ack *pending;
+
+	for (;;) {
+		struct enic_mbox_generic_reply ack = {};
+		u8 msg_type;
+		int err;
+
+		spin_lock_bh(&enic->vf_ack_lock);
+		if (list_empty(&enic->vf_ack_list)) {
+			spin_unlock_bh(&enic->vf_ack_lock);
+			break;
+		}
+		pending = list_first_entry(&enic->vf_ack_list,
+					   struct enic_mbox_vf_ack, list);
+		list_del(&pending->list);
+		enic->vf_ack_count--;
+		spin_unlock_bh(&enic->vf_ack_lock);
+
+		if (READ_ONCE(enic->mbox_send_disabled)) {
+			kfree(pending);
+			continue;
+		}
+
+		msg_type = pending->msg_type;
+		ack.ret_major = cpu_to_le16(pending->ret_major);
+		err = enic_mbox_send_reply(enic, msg_type, ENIC_MBOX_DST_PF,
+					   &ack, sizeof(ack), pending->msg_num);
+		kfree(pending);
+		if (err && net_ratelimit())
+			netdev_warn(enic->netdev,
+				    "MBOX: failed to send ACK type %u: %d\n",
+				    msg_type, err);
+	}
+}
+
+static void enic_mbox_vf_queue_ack(struct enic *enic, u8 msg_type,
+				   u64 msg_num, u16 ret_major)
+{
+	struct enic_mbox_vf_ack *pending;
+
+	if (READ_ONCE(enic->mbox_send_disabled))
+		return;
+	pending = kmalloc_obj(*pending, GFP_ATOMIC);
+	if (!pending) {
+		if (net_ratelimit())
+			netdev_warn(enic->netdev,
+				    "MBOX: dropping ACK type %u: no memory\n",
+				    msg_type);
+		return;
+	}
+	pending->msg_num = msg_num;
+	pending->ret_major = ret_major;
+	pending->msg_type = msg_type;
+
+	spin_lock_bh(&enic->vf_ack_lock);
+	if (READ_ONCE(enic->mbox_send_disabled) ||
+	    enic->vf_ack_count >= ENIC_ADMIN_DESC_COUNT) {
+		spin_unlock_bh(&enic->vf_ack_lock);
+		kfree(pending);
+		if (net_ratelimit())
+			netdev_warn(enic->netdev,
+				    "MBOX: dropping ACK type %u: queue unavailable\n",
+				    msg_type);
+		return;
+	}
+	list_add_tail(&pending->list, &enic->vf_ack_list);
+	enic->vf_ack_count++;
+	spin_unlock_bh(&enic->vf_ack_lock);
+	schedule_work(&enic->vf_ack_work);
+}
+
+void enic_mbox_vf_ack_cancel(struct enic *enic)
+{
+	struct enic_mbox_vf_ack *pending, *tmp;
+	LIST_HEAD(discard);
+
+	if (!enic->mbox_initialized)
+		return;
+	cancel_work_sync(&enic->vf_ack_work);
+	spin_lock_bh(&enic->vf_ack_lock);
+	list_splice_init(&enic->vf_ack_list, &discard);
+	enic->vf_ack_count = 0;
+	spin_unlock_bh(&enic->vf_ack_lock);
+	list_for_each_entry_safe(pending, tmp, &discard, list) {
+		list_del(&pending->list);
+		kfree(pending);
+	}
+}
+
 static int enic_mbox_vf_send_request(struct enic *enic, u8 request_type,
 				     u8 expected_reply, void *payload,
 				     u16 payload_len)
@@ -191,6 +303,27 @@ static int enic_mbox_vf_send_request(struct enic *enic, u8 request_type,
 	return enic_mbox_send_msg_id(enic, request_type, ENIC_MBOX_DST_PF,
 				     payload, payload_len, 0, false,
 				     expected_reply);
+}
+
+static void enic_mbox_vf_mark_reconnect_locked(struct enic *enic,
+					       bool registration_lost)
+{
+	lockdep_assert_held(&enic->mbox_state_lock);
+
+	if (registration_lost)
+		WRITE_ONCE(enic->vf_registered, false);
+	enic->vf_mbox_fault_generation++;
+	WRITE_ONCE(enic->vf_mbox_reconnect_required, true);
+	WRITE_ONCE(enic->mbox_send_disabled, true);
+	WRITE_ONCE(enic->vf_rx_quarantined, true);
+}
+
+static void enic_mbox_vf_kick_recovery(struct enic *enic)
+{
+	enic_mbox_vf_link_state_set_running(enic, false);
+	if (netif_running(enic->netdev) &&
+	    !READ_ONCE(enic->vf_mbox_recovery_active))
+		schedule_work(&enic->reset);
 }
 
 static int enic_mbox_wait_reply(struct enic *enic, unsigned long timeout_ms)
@@ -203,9 +336,9 @@ static int enic_mbox_wait_reply(struct enic *enic, unsigned long timeout_ms)
 	if (left)
 		return 0;
 
-	/* Invalidate a request that the handler has not already accepted.  A
-	 * delayed reply cannot match a later request because message numbers are
-	 * monotonic across channel reopen.
+	/* Invalidate a request that the handler has not already accepted. Whether
+	 * losing the reply invalidates the current protocol generation is an
+	 * operation-specific decision made by the caller.
 	 */
 	spin_lock_bh(&enic->mbox_state_lock);
 	if (enic->mbox_expected_reply) {
@@ -468,9 +601,8 @@ static void enic_mbox_vf_handle_link_state(struct enic *enic, void *payload,
 					   u64 msg_num)
 {
 	struct enic_mbox_pf_link_state_notif_msg *notif = payload;
-	struct enic_mbox_pf_link_state_ack_msg ack = {};
 	u32 link_state = le32_to_cpu(notif->link_state);
-	int err;
+	u16 ret_major = 0;
 
 	spin_lock_bh(&enic->vf_link_state_lock);
 	switch (link_state) {
@@ -491,16 +623,16 @@ static void enic_mbox_vf_handle_link_state(struct enic *enic, void *payload,
 	default:
 		netdev_warn(enic->netdev, "MBOX: unknown link state %u\n",
 			    link_state);
-		ack.ack.ret_major = cpu_to_le16(ENIC_MBOX_ERR_GENERIC);
+		ret_major = ENIC_MBOX_ERR_GENERIC;
 		break;
 	}
 	spin_unlock_bh(&enic->vf_link_state_lock);
 
-	err = enic_mbox_send_reply(enic, ENIC_MBOX_PF_LINK_STATE_ACK,
-				   ENIC_MBOX_DST_PF, &ack, sizeof(ack), msg_num);
-	if (err && net_ratelimit())
-		netdev_warn(enic->netdev,
-			    "MBOX: failed to send link state ACK: %d\n", err);
+	/* Notification dispatch must not wait behind a synchronous request send:
+	 * its matching reply may be queued behind this notification.
+	 */
+	enic_mbox_vf_queue_ack(enic, ENIC_MBOX_PF_LINK_STATE_ACK, msg_num,
+			       ret_major);
 }
 
 void enic_mbox_vf_link_state_reset(struct enic *enic)
@@ -523,6 +655,17 @@ void enic_mbox_vf_link_state_set_running(struct enic *enic, bool running)
 		netif_carrier_off(enic->netdev);
 	}
 	spin_unlock_bh(&enic->vf_link_state_lock);
+}
+
+void enic_mbox_vf_require_reconnect(struct enic *enic)
+{
+	/* A fresh REGISTER transaction lets the PF discard any VF-requested
+	 * configuration whose final state became uncertain.
+	 */
+	spin_lock_bh(&enic->mbox_state_lock);
+	enic_mbox_vf_mark_reconnect_locked(enic, false);
+	spin_unlock_bh(&enic->mbox_state_lock);
+	enic_mbox_vf_kick_recovery(enic);
 }
 
 static bool enic_mbox_vf_payload_ok(struct enic *enic, u8 msg_type,
@@ -600,6 +743,8 @@ static void enic_mbox_recv_handler(struct enic *enic, void *buf,
 			netdev_warn(enic->netdev,
 				    "MBOX: truncated message (len %u < %zu)\n",
 				    len, sizeof(*hdr));
+		if (!enic->vf_state)
+			enic_mbox_vf_require_reconnect(enic);
 		return;
 	}
 
@@ -756,7 +901,12 @@ void enic_mbox_init(struct enic *enic)
 		mutex_init(&enic->vf_mbox_request_lock);
 		init_completion(&enic->mbox_comp);
 		spin_lock_init(&enic->mbox_state_lock);
+		spin_lock_init(&enic->vf_ack_lock);
+		INIT_LIST_HEAD(&enic->vf_ack_list);
+		INIT_WORK(&enic->vf_ack_work, enic_mbox_vf_ack_work);
 		enic->mbox_msg_num = 0;
+		if (enic_is_sriov_vf_v2(enic))
+			WRITE_ONCE(enic->vf_rx_quarantined, true);
 		enic->mbox_initialized = true;
 	} else {
 		reinit_completion(&enic->mbox_comp);
