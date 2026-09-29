@@ -757,17 +757,17 @@ static ssize_t threaded_show(struct device *dev,
 
 static int modify_napi_threaded(struct net_device *dev, unsigned long val)
 {
-	int ret;
-
-	if (list_empty(&dev->napi_list))
-		return -EOPNOTSUPP;
+	struct napi_struct *napi;
 
 	if (val != 0 && val != 1)
 		return -EOPNOTSUPP;
 
-	ret = netif_set_threaded(dev, val);
+	list_for_each_entry(napi, &dev->napi_list, dev_list) {
+		if (!test_bit(NAPI_STATE_NO_BUSY_POLL, &napi->state))
+			return netif_set_threaded(dev, val);
+	}
 
-	return ret;
+	return -EOPNOTSUPP;
 }
 
 static ssize_t threaded_store(struct device *dev,
