@@ -32,4 +32,11 @@ int tegra_bpmp_init_ping(struct tegra_bpmp *bpmp);
 void tegra_bpmp_deinit_ping(struct tegra_bpmp *bpmp);
 int tegra_bpmp_init_dt_providers(struct tegra_bpmp *bpmp);
 
+bool tegra_bpmp_mbwt_cmd_is_supported(struct tegra_bpmp *bpmp,
+				      unsigned int cmd_code);
+int tegra_bpmp_mbwt_get(struct tegra_bpmp *bpmp, unsigned int instance,
+			unsigned int vc_type, unsigned int *bandwidth);
+int tegra_bpmp_mbwt_set(struct tegra_bpmp *bpmp, unsigned int instance,
+			unsigned int vc_type, unsigned int bandwidth);
+
 #endif
