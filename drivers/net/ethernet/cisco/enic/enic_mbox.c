@@ -860,6 +860,25 @@ static void enic_mbox_vf_handle_link_state(struct enic *enic, void *payload,
 			       ret_major);
 }
 
+static void enic_mbox_vf_handle_admin_mac(struct enic *enic, void *payload,
+					  u64 msg_num)
+{
+	struct enic_mbox_pf_set_admin_mac_notif_msg *notif = payload;
+	u16 ret_major = 0;
+
+	if (is_multicast_ether_addr(notif->mac_addr)) {
+		netdev_warn(enic->netdev,
+			    "MBOX: rejecting multicast admin MAC %pM\n",
+			    notif->mac_addr);
+		ret_major = ENIC_MBOX_ERR_GENERIC;
+	} else {
+		enic_vf_admin_mac_notify(enic, notif->mac_addr);
+	}
+
+	enic_mbox_vf_queue_ack(enic, ENIC_MBOX_PF_SET_ADMIN_MAC_ACK,
+			       msg_num, ret_major);
+}
+
 void enic_mbox_vf_link_state_reset(struct enic *enic)
 {
 	spin_lock_bh(&enic->vf_link_state_lock);
@@ -982,6 +1001,17 @@ static void enic_mbox_vf_process_msg(struct enic *enic,
 			return;
 		}
 		enic_mbox_vf_handle_link_state(enic, payload, msg_num);
+		break;
+	}
+	case ENIC_MBOX_PF_SET_ADMIN_MAC_NOTIF: {
+		size_t exp = sizeof(struct enic_mbox_pf_set_admin_mac_notif_msg);
+
+		if (!enic_mbox_vf_payload_ok(enic, hdr->msg_type,
+					     payload_len, exp)) {
+			enic_mbox_vf_malformed_msg(enic, hdr->msg_type, msg_num);
+			return;
+		}
+		enic_mbox_vf_handle_admin_mac(enic, payload, msg_num);
 		break;
 	}
 	case ENIC_MBOX_VF_ADD_DEL_MAC_REPLY:

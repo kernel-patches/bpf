@@ -641,6 +641,8 @@ void enic_admin_channel_close(struct enic *enic)
 {
 	int err;
 
+	if (enic_is_sriov_vf_v2(enic))
+		enic_vf_admin_mac_quiesce(enic);
 	if (!enic->has_admin_channel)
 		return;
 
