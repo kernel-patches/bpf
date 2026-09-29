@@ -109,8 +109,12 @@ def config_and_build_tests(linux: kunit_kernel.LinuxSourceTree,
 
 	return build_tests(linux, request)
 
-def _list_tests(linux: kunit_kernel.LinuxSourceTree, request: KunitExecRequest) -> List[str]:
-	args = ['kunit.action=list']
+class ListError(Exception):
+	"""Represents an error from the kernel while listing tests."""
+
+
+def _run_list_action(linux: kunit_kernel.LinuxSourceTree, request: KunitExecRequest, action: str) -> List[str]:
+	args = ['kunit.action=' + action]
 
 	if request.kernel_args:
 		args.extend(request.kernel_args)
@@ -121,31 +125,34 @@ def _list_tests(linux: kunit_kernel.LinuxSourceTree, request: KunitExecRequest) 
 			   filter=request.filter,
 			   filter_action=request.filter_action,
 			   build_dir=request.build_dir)
-	lines = kunit_parser.extract_tap_lines(output)
+	stream = kunit_parser.extract_tap_lines(output)
+	lines = []  # type: List[str]
+	errors = []  # type: List[str]
+	while stream:
+		line = stream.pop()
+		match = kunit_parser.EXECUTOR_ERROR.search(line)
+		if match:
+			errors.append(match.group(0).strip())
+		else:
+			lines.append(line)
+
+	# The executor reports a bad filter or action instead of listing.
+	if errors:
+		raise ListError('\n'.join(errors))
+	if not lines:
+		raise ListError('Could not find any KTAP output. Did any KUnit tests run?')
+
 	# Hack! Drop the dummy TAP version header that the executor prints out.
-	lines.pop()
+	return lines[1:]
+
+def _list_tests(linux: kunit_kernel.LinuxSourceTree, request: KunitExecRequest) -> List[str]:
+	lines = _run_list_action(linux, request, 'list')
 
 	# Filter out any extraneous non-test output that might have gotten mixed in.
 	return [l for l in lines if re.match(r'^[^\s.]+\.[^\s.]+$', l)]
 
 def _list_tests_attr(linux: kunit_kernel.LinuxSourceTree, request: KunitExecRequest) -> Iterable[str]:
-	args = ['kunit.action=list_attr']
-
-	if request.kernel_args:
-		args.extend(request.kernel_args)
-
-	output = linux.run_kernel(args=args,
-			   timeout=request.timeout,
-			   filter_glob=request.filter_glob,
-			   filter=request.filter,
-			   filter_action=request.filter_action,
-			   build_dir=request.build_dir)
-	lines = kunit_parser.extract_tap_lines(output)
-	# Hack! Drop the dummy TAP version header that the executor prints out.
-	lines.pop()
-
-	# Filter out any extraneous non-test output that might have gotten mixed in.
-	return lines
+	return _run_list_action(linux, request, 'list_attr')
 
 def _suites_from_test_list(tests: List[str]) -> List[str]:
 	"""Extracts all the suites from an ordered list of tests."""
@@ -160,6 +167,14 @@ def _suites_from_test_list(tests: List[str]) -> List[str]:
 	return suites
 
 def exec_tests(linux: kunit_kernel.LinuxSourceTree, request: KunitExecRequest) -> KunitResult:
+	try:
+		return _exec_tests(linux, request)
+	except ListError as e:
+		for line in str(e).splitlines():
+			stdout.print_with_timestamp(stdout.red('[ERROR] ') + line)
+		return KunitResult(status=KunitStatus.TEST_FAILURE, elapsed_time=0.0)
+
+def _exec_tests(linux: kunit_kernel.LinuxSourceTree, request: KunitExecRequest) -> KunitResult:
 	filter_globs = [request.filter_glob]
 	if request.list_tests:
 		output = _list_tests(linux, request)
