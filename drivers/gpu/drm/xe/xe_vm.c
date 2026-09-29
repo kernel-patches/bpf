@@ -3575,8 +3575,6 @@ static struct dma_fence *ops_execute(struct xe_vm *vm,
 
 err_out:
 	xe_pt_update_ops_abort(xe, vops);
-	while (current_fence)
-		dma_fence_put(fences[--current_fence]);
 	kfree(fences);
 	kfree(cf);
 
