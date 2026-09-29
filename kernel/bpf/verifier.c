@@ -5751,6 +5751,17 @@ static int check_max_stack_depth(struct bpf_verifier_env *env)
 		}
 	}
 
+	/*
+	 * x86-64 has no register to spare for this: a private stack keeps its
+	 * frame pointer in r9, restored by a pop after the call that an unwind
+	 * skips. A frame resumed at a pad then addresses its stack through a
+	 * stale pointer, and a frame sent to its epilogue instead pops its
+	 * callee-saved registers one slot off. Refuse a private stack for any
+	 * program that can unwind, on every arch for now.
+	 */
+	if (env->cleanup_info_cnt || bpf_prog_may_unwind(env))
+		priv_stack_mode = NO_PRIV_STACK;
+
 	if (priv_stack_mode == PRIV_STACK_UNKNOWN)
 		priv_stack_mode = bpf_enable_priv_stack(env->prog);
 
