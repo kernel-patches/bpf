@@ -950,6 +950,8 @@ static long tap_ioctl(struct file *file, unsigned int cmd,
 
 		ret = 0;
 		u = q->flags;
+		if (!q->enabled)
+			u |= IFF_DETACH_QUEUE;
 		if (copy_to_user(&ifr->ifr_name, tap->dev->name, IFNAMSIZ) ||
 		    put_user(u, &ifr->ifr_flags))
 			ret = -EFAULT;
