@@ -9039,6 +9039,11 @@ static void perf_iterate_sb_cpu(perf_iterate_f output, void *data)
  *
  * For new callers; ensure that account_pmu_sb_event() includes
  * your event, otherwise it might not get delivered.
+ *
+ * Note: @data is shared across all @output calls, so any fields modified
+ * incrementally or conditionally (e.g. header.size via
+ * perf_event_header__init_id()) must be saved and restored by @output,
+ * or unconditionally re-initialized on each call.
  */
 static void
 perf_iterate_sb(perf_iterate_f output, void *data,
@@ -9733,6 +9738,7 @@ static void perf_event_mmap_output(struct perf_event *event,
 	struct perf_sample_data sample;
 	int size = mmap_event->event_id.header.size;
 	u32 type = mmap_event->event_id.header.type;
+	u16 misc = mmap_event->event_id.header.misc;
 	bool use_build_id;
 	int ret;
 
@@ -9790,6 +9796,7 @@ static void perf_event_mmap_output(struct perf_event *event,
 out:
 	mmap_event->event_id.header.size = size;
 	mmap_event->event_id.header.type = type;
+	mmap_event->event_id.header.misc = misc;
 }
 
 static void perf_event_mmap_event(struct perf_mmap_event *mmap_event)
@@ -10254,6 +10261,7 @@ static void perf_event_ksymbol_output(struct perf_event *event, void *data)
 	struct perf_ksymbol_event *ksymbol_event = data;
 	struct perf_output_handle handle;
 	struct perf_sample_data sample;
+	u16 header_size = ksymbol_event->event_id.header.size;
 	int ret;
 
 	if (!perf_event_ksymbol_match(event))
@@ -10264,13 +10272,15 @@ static void perf_event_ksymbol_output(struct perf_event *event, void *data)
 	ret = perf_output_begin(&handle, &sample, event,
 				ksymbol_event->event_id.header.size);
 	if (ret)
-		return;
+		goto out;
 
 	perf_output_put(&handle, ksymbol_event->event_id);
 	__output_copy(&handle, ksymbol_event->name, ksymbol_event->name_len);
 	perf_event__output_id_sample(event, &handle, &sample);
 
 	perf_output_end(&handle);
+out:
+	ksymbol_event->event_id.header.size = header_size;
 }
 
 void perf_event_ksymbol(u16 ksym_type, u64 addr, u32 len, bool unregister,
@@ -10344,6 +10354,7 @@ static void perf_event_bpf_output(struct perf_event *event, void *data)
 	struct perf_bpf_event *bpf_event = data;
 	struct perf_output_handle handle;
 	struct perf_sample_data sample;
+	u16 header_size = bpf_event->event_id.header.size;
 	int ret;
 
 	if (!perf_event_bpf_match(event))
@@ -10354,12 +10365,14 @@ static void perf_event_bpf_output(struct perf_event *event, void *data)
 	ret = perf_output_begin(&handle, &sample, event,
 				bpf_event->event_id.header.size);
 	if (ret)
-		return;
+		goto out;
 
 	perf_output_put(&handle, bpf_event->event_id);
 	perf_event__output_id_sample(event, &handle, &sample);
 
 	perf_output_end(&handle);
+out:
+	bpf_event->event_id.header.size = header_size;
 }
 
 static void perf_event_bpf_emit_ksymbols(struct bpf_prog *prog,
@@ -10506,6 +10519,7 @@ static void perf_event_text_poke_output(struct perf_event *event, void *data)
 	struct perf_text_poke_event *text_poke_event = data;
 	struct perf_output_handle handle;
 	struct perf_sample_data sample;
+	u16 header_size = text_poke_event->event_id.header.size;
 	u64 padding = 0;
 	int ret;
 
@@ -10517,7 +10531,7 @@ static void perf_event_text_poke_output(struct perf_event *event, void *data)
 	ret = perf_output_begin(&handle, &sample, event,
 				text_poke_event->event_id.header.size);
 	if (ret)
-		return;
+		goto out;
 
 	perf_output_put(&handle, text_poke_event->event_id);
 	perf_output_put(&handle, text_poke_event->old_len);
@@ -10532,6 +10546,8 @@ static void perf_event_text_poke_output(struct perf_event *event, void *data)
 	perf_event__output_id_sample(event, &handle, &sample);
 
 	perf_output_end(&handle);
+out:
+	text_poke_event->event_id.header.size = header_size;
 }
 
 void perf_event_text_poke(const void *addr, const void *old_bytes,
