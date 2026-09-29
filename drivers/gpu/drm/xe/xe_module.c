@@ -114,8 +114,10 @@ static void xe_destroy_wq_module_exit(void)
  * xe_destroy_wq_queue() - Queue work on the destroy workqueue
  * @work: work item to queue
  *
- * The destroy workqueue has module lifetime and is used for GuC exec queue
- * teardown that can outlive a single xe_device. SVM pagemap destroy uses the
+ * The destroy workqueue has module lifetime, and is guaranteed to outlive
+ * any xe_device, and to be drained before the module is unloaded. It is used
+ * for GuC exec queue and xe_vm/xe_vma teardown that can be deferred past the
+ * lifetime of the xe_device that triggered it. SVM pagemap destroy uses the
  * per-device xe->destroy_wq instead.
  *
  * Return: %true if @work was queued, %false if it was already pending.
