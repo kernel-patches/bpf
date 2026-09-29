@@ -10,6 +10,8 @@
 #include <linux/gpio/consumer.h>
 #include <linux/iopoll.h>
 #include <linux/interrupt.h>
+#include <linux/irq.h>
+#include <linux/irqdomain.h>
 #include <linux/mdio.h>
 #include <linux/phy.h>
 #include <linux/oa_tc6.h>
@@ -72,6 +74,11 @@ struct oa_tc6 {
 	struct phy_device *phydev;
 	struct mii_bus *mdiobus;
 	struct spi_device *spi;
+	struct mutex phy_irq_lock; /* Serialises irq_bus_lock/sync_unlock */
+	bool phy_irq_masked; /* Shadow of OA_TC6_INT_MASK0_PHY_INT_MASK */
+	struct irq_domain *phy_irq_domain;
+	int phy_virq;
+	struct work_struct phy_irq_work;
 	struct mutex spi_ctrl_lock; /* Protects spi control transfer */
 	spinlock_t tx_skb_lock; /* Protects tx skb handling */
 	void *spi_ctrl_tx_buf;
@@ -531,6 +538,178 @@ int oa_tc6_mdiobus_write_c45(struct mii_bus *bus, int addr, int devnum,
 }
 EXPORT_SYMBOL_GPL(oa_tc6_mdiobus_write_c45);
 
+static int oa_tc6_phy_irq_unmask_hw(struct oa_tc6 *tc6)
+{
+	u32 regval;
+	int ret;
+
+	mutex_lock(&tc6->phy_irq_lock);
+
+	if (READ_ONCE(tc6->phy_irq_masked)) {
+		ret = 0;
+		goto unlock;
+	}
+
+	ret = oa_tc6_read_register(tc6, OA_TC6_REG_INT_MASK0, &regval);
+	if (ret)
+		goto unlock;
+
+	regval &= ~OA_TC6_INT_MASK0_PHY_INT_MASK;
+	ret = oa_tc6_write_register(tc6, OA_TC6_REG_INT_MASK0, regval);
+
+unlock:
+	mutex_unlock(&tc6->phy_irq_lock);
+
+	return ret;
+}
+
+static void oa_tc6_phy_irq_work(struct work_struct *work)
+{
+	struct oa_tc6 *tc6 = container_of(work, struct oa_tc6, phy_irq_work);
+	int ret;
+
+	/* Dispatched off the SPI chunk-processing thread so that
+	 * phy_interrupt() taking phydev->lock and issuing synchronous SPI
+	 * control transfers from PHY handle_interrupt() cannot stall the single
+	 * thread pumping TX/RX data chunks.
+	 */
+	handle_nested_irq(tc6->phy_virq);
+
+	ret = oa_tc6_phy_irq_unmask_hw(tc6);
+	if (ret)
+		dev_err(&tc6->spi->dev, "Failed to unmask PHY interrupt: %d\n",
+			ret);
+}
+
+static int oa_tc6_phy_irq_mask_hw(struct oa_tc6 *tc6)
+{
+	u32 regval;
+	int ret;
+
+	mutex_lock(&tc6->phy_irq_lock);
+
+	ret = oa_tc6_read_register(tc6, OA_TC6_REG_INT_MASK0, &regval);
+	if (ret)
+		goto unlock;
+
+	regval |= OA_TC6_INT_MASK0_PHY_INT_MASK;
+	ret = oa_tc6_write_register(tc6, OA_TC6_REG_INT_MASK0, regval);
+
+unlock:
+	mutex_unlock(&tc6->phy_irq_lock);
+
+	return ret;
+}
+
+static void oa_tc6_phy_irq_mask(struct irq_data *irqd)
+{
+	struct oa_tc6 *tc6 = irq_data_get_irq_chip_data(irqd);
+
+	WRITE_ONCE(tc6->phy_irq_masked, true);
+}
+
+static void oa_tc6_phy_irq_unmask(struct irq_data *irqd)
+{
+	struct oa_tc6 *tc6 = irq_data_get_irq_chip_data(irqd);
+
+	WRITE_ONCE(tc6->phy_irq_masked, false);
+}
+
+static void oa_tc6_phy_irq_disable(struct irq_data *irqd)
+{
+	struct oa_tc6 *tc6 = irq_data_get_irq_chip_data(irqd);
+
+	WRITE_ONCE(tc6->phy_irq_masked, true);
+}
+
+static void oa_tc6_phy_irq_bus_lock(struct irq_data *irqd)
+{
+	struct oa_tc6 *tc6 = irq_data_get_irq_chip_data(irqd);
+
+	mutex_lock(&tc6->phy_irq_lock);
+}
+
+static void oa_tc6_phy_irq_bus_sync_unlock(struct irq_data *irqd)
+{
+	struct oa_tc6 *tc6 = irq_data_get_irq_chip_data(irqd);
+	u32 regval;
+	int ret;
+
+	ret = oa_tc6_read_register(tc6, OA_TC6_REG_INT_MASK0, &regval);
+	if (ret) {
+		dev_err(&tc6->spi->dev, "Failed to read INT_MASK0: %d\n", ret);
+		goto unlock;
+	}
+
+	if (READ_ONCE(tc6->phy_irq_masked))
+		regval |= OA_TC6_INT_MASK0_PHY_INT_MASK;
+	else
+		regval &= ~OA_TC6_INT_MASK0_PHY_INT_MASK;
+
+	ret = oa_tc6_write_register(tc6, OA_TC6_REG_INT_MASK0, regval);
+	if (ret) {
+		dev_err(&tc6->spi->dev, "Failed to write INT_MASK0: %d\n", ret);
+		/* Note: on SPI failure, mask state is undefined until next
+		 * sync. This follows genirq's regmap_irq_sync_unlock() pattern
+		 * since the callback returns void and has nowhere to propagate
+		 * errors.
+		 */
+	}
+
+unlock:
+	mutex_unlock(&tc6->phy_irq_lock);
+}
+
+static struct irq_chip oa_tc6_phy_irq_chip = {
+	.name                   = "oa_tc6_phy",
+	.irq_mask               = oa_tc6_phy_irq_mask,
+	.irq_unmask             = oa_tc6_phy_irq_unmask,
+	.irq_disable            = oa_tc6_phy_irq_disable,
+	.irq_bus_lock           = oa_tc6_phy_irq_bus_lock,
+	.irq_bus_sync_unlock    = oa_tc6_phy_irq_bus_sync_unlock,
+};
+
+static int oa_tc6_phy_irq_map(struct irq_domain *domain, unsigned int irq,
+			      irq_hw_number_t hwirq)
+{
+	irq_set_chip_data(irq, domain->host_data);
+	irq_set_chip_and_handler(irq, &oa_tc6_phy_irq_chip, handle_simple_irq);
+	irq_set_nested_thread(irq, true);
+	irq_set_noprobe(irq);
+
+	return 0;
+}
+
+static const struct irq_domain_ops oa_tc6_phy_irq_domain_ops = {
+	.map = oa_tc6_phy_irq_map,
+};
+
+static int oa_tc6_phy_irq_setup(struct oa_tc6 *tc6)
+{
+	INIT_WORK(&tc6->phy_irq_work, oa_tc6_phy_irq_work);
+
+	tc6->phy_irq_domain =
+		irq_domain_create_linear(NULL, 1,
+					 &oa_tc6_phy_irq_domain_ops, tc6);
+	if (!tc6->phy_irq_domain)
+		return -ENOMEM;
+
+	tc6->phy_virq = irq_create_mapping(tc6->phy_irq_domain, 0);
+	WRITE_ONCE(tc6->phy_irq_masked, true);
+	if (!tc6->phy_virq) {
+		irq_domain_remove(tc6->phy_irq_domain);
+		return -ENOMEM;
+	}
+
+	return 0;
+}
+
+static void oa_tc6_phy_irq_teardown(struct oa_tc6 *tc6)
+{
+	irq_dispose_mapping(tc6->phy_virq);
+	irq_domain_remove(tc6->phy_irq_domain);
+}
+
 static int oa_tc6_mdiobus_register(struct oa_tc6 *tc6)
 {
 	int ret;
@@ -562,9 +741,25 @@ static int oa_tc6_mdiobus_register(struct oa_tc6 *tc6)
 	snprintf(tc6->mdiobus->id, ARRAY_SIZE(tc6->mdiobus->id), "%s",
 		 dev_name(&tc6->spi->dev));
 
+	if (tc6->quirk_flags & OA_TC6_PHY_INT) {
+		ret = oa_tc6_phy_irq_setup(tc6);
+		if (ret) {
+			mdiobus_free(tc6->mdiobus);
+			return ret;
+		}
+		/* Populate all irq[] entries before registration so
+		 * phy_device_create() picks up the virtual IRQ regardless of
+		 * the PHY's MDIO address.
+		 */
+		for (int i = 0; i < PHY_MAX_ADDR; i++)
+			tc6->mdiobus->irq[i] = tc6->phy_virq;
+	}
+
 	ret = mdiobus_register(tc6->mdiobus);
 	if (ret) {
 		netdev_err(tc6->netdev, "Could not register MDIO bus\n");
+		if (tc6->quirk_flags & OA_TC6_PHY_INT)
+			oa_tc6_phy_irq_teardown(tc6);
 		mdiobus_free(tc6->mdiobus);
 		return ret;
 	}
@@ -575,6 +770,8 @@ static int oa_tc6_mdiobus_register(struct oa_tc6 *tc6)
 static void oa_tc6_mdiobus_unregister(struct oa_tc6 *tc6)
 {
 	mdiobus_unregister(tc6->mdiobus);
+	if (tc6->quirk_flags & OA_TC6_PHY_INT)
+		oa_tc6_phy_irq_teardown(tc6);
 	mdiobus_free(tc6->mdiobus);
 }
 
@@ -624,6 +821,7 @@ static void oa_tc6_phy_exit(struct oa_tc6 *tc6)
 	if (tc6->quirk_flags & OA_TC6_BROKEN_PHY)
 		return;
 
+	cancel_work_sync(&tc6->phy_irq_work);
 	phy_disconnect(tc6->phydev);
 	oa_tc6_mdiobus_unregister(tc6);
 }
@@ -780,7 +978,12 @@ static void oa_tc6_disable_traffic(struct oa_tc6 *tc6)
 	netif_tx_disable(tc6->netdev);
 	oa_tc6_drop_tx_skb(tc6, skb);
 	oa_tc6_free_ongoing_skbs(tc6);
+	/* Serialize INT_MASK0 write with phylib's mask/unmask to prevent
+	 * read-modify-write races in oa_tc6_phy_irq_bus_sync_unlock().
+	 */
+	mutex_lock(&tc6->phy_irq_lock);
 	oa_tc6_write_register(tc6, OA_TC6_REG_INT_MASK0, regval);
+	mutex_unlock(&tc6->phy_irq_lock);
 	oa_tc6_read_register(tc6, OA_TC6_REG_STATUS0, &regval);
 	oa_tc6_write_register(tc6, OA_TC6_REG_STATUS0, regval);
 	dev_err(&tc6->spi->dev, "Device interrupt disabled to avoid interrupt storm");
@@ -811,6 +1014,29 @@ static int oa_tc6_process_extended_status(struct oa_tc6 *tc6)
 		netdev_err(tc6->netdev, "STATUS0 register write failed: %d\n",
 			   ret);
 		return ret;
+	}
+
+	/* Dispatch the PHY interrupt to phylib via the nested virtual IRQ so
+	 * the PHY driver reads and acknowledges its status. This is deferred
+	 * to a workqueue rather than dispatched synchronously here, since
+	 * phy_interrupt() takes phydev->lock and PHY handle_interrupt() issues
+	 * synchronous SPI control transfers, which would otherwise block this
+	 * thread.
+	 *
+	 * Mask the hardware interrupt immediately to avoid wasting SPI cycles
+	 * on redundant STATUS0 reads until the worker runs and phylib acks it.
+	 * PHYINT is level triggered and stays asserted until acked, so every
+	 * RX chunk footer would re-read STATUS0 until the worker schedules.
+	 * Gate on phy_virq (the actual resource) rather than just the flag to
+	 * be self-consistent if OA_TC6_BROKEN_PHY skips initialization.
+	 */
+	if (tc6->phy_virq && FIELD_GET(OA_TC6_STATUS0_PHY_INT, value)) {
+		ret = oa_tc6_phy_irq_mask_hw(tc6);
+		if (ret)
+			dev_err(&tc6->spi->dev,
+				"Failed to mask PHY interrupt: %d\n", ret);
+		else
+			schedule_work(&tc6->phy_irq_work);
 	}
 
 	if (FIELD_GET(OA_TC6_STATUS0_RX_BUFFER_OVERFLOW_ERROR, value)) {
@@ -1471,6 +1697,7 @@ struct oa_tc6 *oa_tc6_init(struct spi_device *spi, struct net_device *netdev,
 	tc6->spi = spi;
 	tc6->netdev = netdev;
 	SET_NETDEV_DEV(netdev, &spi->dev);
+	mutex_init(&tc6->phy_irq_lock);
 	mutex_init(&tc6->spi_ctrl_lock);
 	spin_lock_init(&tc6->tx_skb_lock);
 
