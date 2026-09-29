@@ -2,6 +2,7 @@
 config DRM_PANEL
 	tristate
 	depends on DRM
+	select DRM_KMS_HELPER
 	help
 	  Panel registration and lookup framework.
 
