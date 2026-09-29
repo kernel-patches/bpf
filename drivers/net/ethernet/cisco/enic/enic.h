@@ -335,6 +335,7 @@ struct enic {
 	 * the requester.
 	 */
 	struct completion mbox_comp;
+	struct mutex vf_mbox_request_lock; /* serializes VF request lifetimes */
 	spinlock_t mbox_state_lock;	/* protects expected reply state */
 	u64 mbox_expected_msg_num;
 	u8 mbox_expected_reply;

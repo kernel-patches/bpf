@@ -218,6 +218,32 @@ static int enic_mbox_wait_reply(struct enic *enic, unsigned long timeout_ms)
 	return err;
 }
 
+static void enic_mbox_vf_request_start(struct enic *enic)
+{
+	mutex_lock(&enic->vf_mbox_request_lock);
+	reinit_completion(&enic->mbox_comp);
+	spin_lock_bh(&enic->mbox_state_lock);
+	enic->mbox_expected_msg_num = 0;
+	enic->mbox_expected_reply = 0;
+	spin_unlock_bh(&enic->mbox_state_lock);
+}
+
+static void enic_mbox_vf_request_abort(struct enic *enic)
+{
+	lockdep_assert_held(&enic->vf_mbox_request_lock);
+	spin_lock_bh(&enic->mbox_state_lock);
+	enic->mbox_expected_reply = 0;
+	enic->mbox_expected_msg_num = 0;
+	spin_unlock_bh(&enic->mbox_state_lock);
+	mutex_unlock(&enic->vf_mbox_request_lock);
+}
+
+static void enic_mbox_vf_request_finish(struct enic *enic)
+{
+	lockdep_assert_held(&enic->vf_mbox_request_lock);
+	mutex_unlock(&enic->vf_mbox_request_lock);
+}
+
 int enic_mbox_send_link_state(struct enic *enic, u16 vf_id, u32 link_state)
 {
 	struct enic_mbox_pf_link_state_notif_msg notif = {};
@@ -623,6 +649,7 @@ int enic_mbox_vf_capability_check(struct enic *enic)
 	u32 version;
 	int err;
 
+	enic_mbox_vf_request_start(enic);
 	WRITE_ONCE(enic->pf_cap_version, 0);
 	req.version = cpu_to_le32(ENIC_MBOX_CAP_VERSION_1);
 
@@ -630,11 +657,14 @@ int enic_mbox_vf_capability_check(struct enic *enic)
 					ENIC_MBOX_VF_CAPABILITY_REQUEST,
 					ENIC_MBOX_VF_CAPABILITY_REPLY,
 					&req, sizeof(req));
-	if (err)
+	if (err) {
+		enic_mbox_vf_request_abort(enic);
 		return err;
+	}
 
 	err = enic_mbox_wait_reply(enic, 3000);
 	version = READ_ONCE(enic->pf_cap_version);
+	enic_mbox_vf_request_finish(enic);
 	if (err) {
 		netdev_warn(enic->netdev,
 			    "MBOX: no capability reply from PF\n");
@@ -656,15 +686,19 @@ int enic_mbox_vf_register(struct enic *enic)
 	bool registered;
 	int err;
 
+	enic_mbox_vf_request_start(enic);
 	WRITE_ONCE(enic->vf_registered, false);
 
 	err = enic_mbox_vf_send_request(enic, ENIC_MBOX_VF_REGISTER_REQUEST,
 					ENIC_MBOX_VF_REGISTER_REPLY, NULL, 0);
-	if (err)
+	if (err) {
+		enic_mbox_vf_request_abort(enic);
 		return err;
+	}
 
 	err = enic_mbox_wait_reply(enic, 3000);
 	registered = READ_ONCE(enic->vf_registered);
+	enic_mbox_vf_request_finish(enic);
 	if (err) {
 		netdev_warn(enic->netdev,
 			    "MBOX: VF registration with PF timed out\n");
@@ -684,16 +718,24 @@ int enic_mbox_vf_unregister(struct enic *enic)
 
 	if (!READ_ONCE(enic->vf_registered))
 		return 0;
+	enic_mbox_vf_request_start(enic);
+	if (!READ_ONCE(enic->vf_registered)) {
+		enic_mbox_vf_request_finish(enic);
+		return 0;
+	}
 
 	err = enic_mbox_vf_send_request(enic,
 					ENIC_MBOX_VF_UNREGISTER_REQUEST,
 					ENIC_MBOX_VF_UNREGISTER_REPLY,
 					NULL, 0);
-	if (err)
+	if (err) {
+		enic_mbox_vf_request_abort(enic);
 		return err;
+	}
 
 	err = enic_mbox_wait_reply(enic, 3000);
 	registered = READ_ONCE(enic->vf_registered);
+	enic_mbox_vf_request_finish(enic);
 	if (err)
 		return err;
 	if (registered)
@@ -711,6 +753,7 @@ void enic_mbox_init(struct enic *enic)
 	 */
 	if (!reinit) {
 		mutex_init(&enic->mbox_lock);
+		mutex_init(&enic->vf_mbox_request_lock);
 		init_completion(&enic->mbox_comp);
 		spin_lock_init(&enic->mbox_state_lock);
 		enic->mbox_msg_num = 0;
