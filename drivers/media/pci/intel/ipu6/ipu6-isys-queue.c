@@ -467,6 +467,8 @@ static void return_buffers(struct ipu6_isys_queue *aq,
 		mutex_lock(&av->isys->mutex);
 		av->isys->need_reset = true;
 		mutex_unlock(&av->isys->mutex);
+		dev_warn(&av->isys->adev->auxdev.dev,
+			 "buffer list not empty, needs isys reset\n");
 	}
 }
 
