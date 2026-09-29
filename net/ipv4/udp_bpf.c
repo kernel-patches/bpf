@@ -91,7 +91,7 @@ msg_bytes_ready:
 		timeo = sock_rcvtimeo(sk, flags & MSG_DONTWAIT);
 		data = udp_msg_wait_data(sk, psock, timeo);
 		if (data) {
-			if (psock_has_data(psock))
+			if (!sk_psock_queue_empty(psock))
 				goto msg_bytes_ready;
 
 			release_sock(sk);
