@@ -207,6 +207,14 @@ struct lan9645x {
 	struct mutex fwd_domain_lock;
 	struct mutex mact_lock; /* serialize mac table register access */
 
+	/* Multicast Forwarding Database */
+	struct list_head mdb_entries;
+	struct list_head pgid_entries;
+	/* lock for mdb_entries and pgid_entries. Must be taken before mact_lock
+	 * if both are taken.
+	 */
+	struct mutex mdb_lock;
+
 	int num_port_dis;
 
 	/* VLAN entries */
@@ -403,5 +411,15 @@ int lan9645x_mac_init(struct lan9645x *lan9645x);
 void lan9645x_mac_deinit(struct lan9645x *lan9645x);
 int lan9645x_mact_dsa_dump(struct lan9645x *lan9645x, int port,
 			   dsa_fdb_dump_cb_t *cb, void *data);
+
+/* Multicast Database lan9645x_mdb.c */
+int lan9645x_mdb_add(struct lan9645x *lan9645x, int port,
+		     const struct switchdev_obj_port_mdb *mdb,
+		     struct net_device *bridge);
+int lan9645x_mdb_del(struct lan9645x *lan9645x, int port,
+		     const struct switchdev_obj_port_mdb *mdb,
+		     struct net_device *bridge);
+void lan9645x_mdb_init(struct lan9645x *lan9645x);
+void lan9645x_mdb_deinit(struct lan9645x *lan9645x);
 
 #endif /* __LAN9645X_MAIN_H__ */

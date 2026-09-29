@@ -74,6 +74,7 @@ static void lan9645x_teardown(struct dsa_switch *ds)
 {
 	struct lan9645x *lan9645x = ds->priv;
 
+	lan9645x_mdb_deinit(lan9645x);
 	lan9645x_mac_deinit(lan9645x);
 	mutex_destroy(&lan9645x->fwd_domain_lock);
 	lan9645x_npi_port_deinit(lan9645x, lan9645x->npi);
@@ -166,6 +167,7 @@ static int lan9645x_setup(struct dsa_switch *ds)
 	err = lan9645x_mac_init(lan9645x);
 	if (err)
 		goto err_mutex;
+	lan9645x_mdb_init(lan9645x);
 
 	/* Link Aggregation Mode: NETDEV_LAG_HASH_L2 */
 	lan_wr(ANA_AGGR_CFG_AC_SMAC_ENA |
@@ -252,6 +254,17 @@ static int lan9645x_setup(struct dsa_switch *ds)
 			ANA_CPUQ_8021_CFG_CPUQ_BPDU_VAL,
 			lan9645x, ANA_CPUQ_8021_CFG(i));
 	}
+
+	/* Use CPU queues to communicate frame classification to the CPU */
+	lan_rmw(ANA_CPUQ_CFG_CPUQ_MAC_COPY_SET(LAN9645X_CPUQ_DEF) |
+		ANA_CPUQ_CFG_CPUQ_IGMP_SET(LAN9645X_CPUQ_TRAP) |
+		ANA_CPUQ_CFG_CPUQ_MLD_SET(LAN9645X_CPUQ_TRAP) |
+		ANA_CPUQ_CFG_CPUQ_IPMC_CTRL_SET(LAN9645X_CPUQ_COPY),
+		ANA_CPUQ_CFG_CPUQ_MAC_COPY |
+		ANA_CPUQ_CFG_CPUQ_IGMP |
+		ANA_CPUQ_CFG_CPUQ_MLD |
+		ANA_CPUQ_CFG_CPUQ_IPMC_CTRL,
+		lan9645x, ANA_CPUQ_CFG);
 
 	/* Reserve 1664 bytes, 26 buffer cells, per (port, prio) for source
 	 * tracking (resource 0, indices 0..95) and destination tracking
@@ -439,6 +452,61 @@ static int lan9645x_fdb_del(struct dsa_switch *ds, int port,
 	return lan9645x_mact_forget(lan9645x, addr, vid, ENTRYTYPE_LOCKED);
 }
 
+static int lan9645x_port_mdb_add(struct dsa_switch *ds, int port,
+				 const struct switchdev_obj_port_mdb *mdb,
+				 struct dsa_db db)
+{
+	struct net_device *bridge_dev = lan9645x_db2bridge(db);
+	struct lan9645x *lan9645x = ds->priv;
+
+	dev_dbg(lan9645x->dev, "port=%d addr=%pM vid=%u\n", port, mdb->addr,
+		mdb->vid);
+
+	if (IS_ERR(bridge_dev))
+		return PTR_ERR(bridge_dev);
+
+	if (dsa_is_cpu_port(ds, port) && !bridge_dev &&
+	    dsa_mdb_present_in_other_db(ds, port, mdb, db))
+		return 0;
+
+	if (port == lan9645x->npi)
+		port = lan9645x->num_phys_ports;
+
+	return lan9645x_mdb_add(lan9645x, port, mdb, bridge_dev);
+}
+
+static int lan9645x_port_mdb_del(struct dsa_switch *ds, int port,
+				 const struct switchdev_obj_port_mdb *mdb,
+				 struct dsa_db db)
+{
+	struct net_device *bridge_dev = lan9645x_db2bridge(db);
+	struct lan9645x *lan9645x = ds->priv;
+	int err;
+
+	dev_dbg(lan9645x->dev, "port=%d addr=%pM vid=%u\n", port, mdb->addr,
+		mdb->vid);
+
+	if (IS_ERR(bridge_dev))
+		return PTR_ERR(bridge_dev);
+
+	if (dsa_is_cpu_port(ds, port) && !bridge_dev &&
+	    dsa_mdb_present_in_other_db(ds, port, mdb, db))
+		return 0;
+
+	if (port == lan9645x->npi)
+		port = lan9645x->num_phys_ports;
+
+	err = lan9645x_mdb_del(lan9645x, port, mdb, bridge_dev);
+	if (err == -ENOENT) {
+		dev_dbg(lan9645x->dev,
+			"mdb not found port=%d addr=%pM vid=%u\n", port,
+			mdb->addr, mdb->vid);
+		return 0;
+	}
+
+	return err;
+}
+
 static const struct dsa_switch_ops lan9645x_switch_ops = {
 	.get_tag_protocol		= lan9645x_get_tag_protocol,
 
@@ -463,6 +531,10 @@ static const struct dsa_switch_ops lan9645x_switch_ops = {
 	.port_fdb_dump			= lan9645x_fdb_dump,
 	.port_fdb_add			= lan9645x_fdb_add,
 	.port_fdb_del			= lan9645x_fdb_del,
+
+	/* Multicast database */
+	.port_mdb_add			= lan9645x_port_mdb_add,
+	.port_mdb_del			= lan9645x_port_mdb_del,
 };
 
 static int lan9645x_request_target_regmaps(struct lan9645x *lan9645x)

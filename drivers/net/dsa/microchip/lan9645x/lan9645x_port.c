@@ -166,6 +166,14 @@ int lan9645x_port_setup(struct dsa_switch *ds, int port)
 		mutex_lock(&lan9645x->fwd_domain_lock);
 		lan9645x_vlan_set_hostmode(p);
 		mutex_unlock(&lan9645x->fwd_domain_lock);
+
+		lan_rmw(ANA_CPU_FWD_CFG_IGMP_REDIR_ENA_SET(1) |
+			ANA_CPU_FWD_CFG_MLD_REDIR_ENA_SET(1) |
+			ANA_CPU_FWD_CFG_IPMC_CTRL_COPY_ENA_SET(1),
+			ANA_CPU_FWD_CFG_IGMP_REDIR_ENA |
+			ANA_CPU_FWD_CFG_MLD_REDIR_ENA |
+			ANA_CPU_FWD_CFG_IPMC_CTRL_COPY_ENA,
+			lan9645x, ANA_CPU_FWD_CFG(p->chip_port));
 	}
 
 	return 0;
