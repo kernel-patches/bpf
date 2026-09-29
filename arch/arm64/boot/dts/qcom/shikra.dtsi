@@ -1470,8 +1470,8 @@
 			compatible = "qcom,shikra-sdhci", "qcom,sdhci-msm-v5";
 			reg = <0x0 0x04784000 0x0 0x1000>;
 
-			interrupts = <GIC_SPI 350 IRQ_TYPE_LEVEL_HIGH>,
-				     <GIC_SPI 353 IRQ_TYPE_LEVEL_HIGH>;
+			interrupts = <GIC_SPI 350 IRQ_TYPE_LEVEL_HIGH 0>,
+				     <GIC_SPI 353 IRQ_TYPE_LEVEL_HIGH 0>;
 			interrupt-names = "hc_irq",
 					  "pwr_irq";
 
