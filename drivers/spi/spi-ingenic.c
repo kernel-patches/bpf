@@ -164,10 +164,8 @@ spi_ingenic_prepare_dma(struct spi_controller *ctlr, struct dma_chan *chan,
 	cookie = dmaengine_submit(desc);
 
 	ret = dma_submit_error(cookie);
-	if (ret) {
-		dmaengine_desc_free(desc);
+	if (ret)
 		return ERR_PTR(ret);
-	}
 
 	return desc;
 }
@@ -186,7 +184,6 @@ static int spi_ingenic_dma_tx(struct spi_controller *ctlr,
 					  &xfer->tx_sg, DMA_MEM_TO_DEV, bits);
 	if (IS_ERR(tx_desc)) {
 		dmaengine_terminate_async(ctlr->dma_rx);
-		dmaengine_desc_free(rx_desc);
 		return PTR_ERR(tx_desc);
 	}
 
