@@ -10789,6 +10789,7 @@ static int setup_func_entry(struct bpf_verifier_env *env, int subprog, int calls
 			callsite,
 			state->curframe + 1 /* frameno within this callchain */,
 			subprog /* subprog number within this prog */);
+	bpf_exc_record_frame_entry(state, callee, env->id_gen);
 	err = set_callee_state_cb(env, caller, callee, callsite);
 	if (err)
 		goto err_out;
@@ -19148,6 +19149,32 @@ static int push_cleanup_pad_branch(struct bpf_verifier_env *env, int insn_idx)
 	return 0;
 }
 
+/* Can an unwind come back out of this call? */
+static bool call_may_unwind(struct bpf_verifier_env *env, const struct bpf_insn *insn,
+			    int insn_idx)
+{
+	int subprog;
+
+	/* Which subprog a callx lands in is not known here, so any may be it. */
+	if (bpf_is_callx(insn))
+		return bpf_prog_may_unwind(env);
+	if (insn->src_reg != BPF_PSEUDO_CALL)
+		return false;
+	subprog = bpf_find_subprog(env, insn_idx + insn->imm + 1);
+	return subprog >= 0 && env->subprog_info[subprog].might_unwind;
+}
+
+static int check_unwind_through_call(struct bpf_verifier_env *env, int insn_idx)
+{
+	const struct bpf_insn *insn = &env->prog->insnsi[insn_idx];
+
+	if (bpf_exc_pad_of_call(env, insn_idx) >= 0)
+		return 0;
+	if (!call_may_unwind(env, insn, insn_idx))
+		return 0;
+	return bpf_exc_check_frame_balance(env, "an unwind through this call");
+}
+
 static int process_bpf_unwind(struct bpf_verifier_env *env, int *insn_idx,
 			      bool *do_print_state)
 {
@@ -19156,8 +19183,13 @@ static int process_bpf_unwind(struct bpf_verifier_env *env, int *insn_idx,
 	int err;
 
 	if (pad < 0) {
-		err = check_resource_leak(env, false, !env->cur_state->curframe,
-					  "an unwind with no landing pad");
+		if (!env->cur_state->curframe) {
+			err = check_resource_leak(env, false, true,
+						  "an unwind with no landing pad");
+			if (err)
+				return err;
+		}
+		err = bpf_exc_check_frame_balance(env, "an unwind with no landing pad");
 		if (err)
 			return err;
 		if (env->cur_state->curframe)
@@ -19439,6 +19471,16 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 				if (bpf_is_unwind_kfunc(insn))
 					return process_bpf_unwind(env, &env->insn_idx,
 								  do_print_state);
+				err = bpf_exc_check_frame_balance(env, "a resume");
+				if (err)
+					return err;
+				/*
+				 * No need to walk into the caller: its pad was
+				 * pushed as a branch at its call, and with no
+				 * pad nothing of it runs.
+				 */
+				if (env->cur_state->curframe)
+					return PROCESS_BPF_EXIT;
 				/*
 				 * Mark r0 a known zero -- unknown first, as
 				 * the known-zero helper keeps the type it
@@ -19453,6 +19495,10 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 			mark_reg_scratched(env, BPF_REG_0);
 			/* An unwind out of this call resumes at the pad. */
 			err = push_cleanup_pad_branch(env, env->insn_idx);
+			if (err)
+				return err;
+			/* Or, with no pad, leaves the frame for good. */
+			err = check_unwind_through_call(env, env->insn_idx);
 			if (err)
 				return err;
 			if (bpf_in_stack_arg_cnt(&env->subprog_info[cur_func(env)->subprogno]))

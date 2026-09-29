@@ -339,6 +339,18 @@ struct bpf_func_state {
 	bool in_async_callback_fn;
 	bool in_exception_callback_fn;
 	bool no_stack_arg_load;
+	/*
+	 * What the program held when this frame was entered. An unwind leaves
+	 * the frame without running anything below it, so the frame has to put
+	 * these back to what it found before it goes -- otherwise a caller's
+	 * landing pad, whose state was taken at the call, is wrong about them.
+	 */
+	u32 entry_active_locks;
+	u32 entry_preempt_locks;
+	u32 entry_rcu_locks;
+	u32 entry_irq_id;
+	u32 entry_id_gen;
+	u32 entry_acquired_refs;
 	/* For callback calling functions that limit number of possible
 	 * callback executions (e.g. bpf_loop) keeps track of current
 	 * simulated iteration number.
