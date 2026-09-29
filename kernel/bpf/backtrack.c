@@ -4,6 +4,7 @@
 #include <linux/bpf_verifier.h>
 #include <linux/filter.h>
 #include <linux/bitmap.h>
+#include "exception.h"
 
 #define verbose(env, fmt, args...) bpf_verifier_log_write(env, fmt, ##args)
 
@@ -434,6 +435,24 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 					return -EFAULT;
 			}
 
+			if (bpf_exc_pad_of_call(env, idx) == subseq_idx) {
+				/*
+				 * We came from this call's landing pad, which
+				 * runs in the caller's frame: on that path the
+				 * callee's frame was never entered, so there is
+				 * no frame to leave. The call clobbered r0-r5;
+				 * r6-r9 and the stack are the caller's own and
+				 * keep going back from here.
+				 */
+				bt_clear_reg(bt, BPF_REG_0);
+				if (bt_reg_mask(bt) & BPF_REGMASK_ARGS) {
+					verifier_bug(env, "landing pad unexpected regs %x",
+						     bt_reg_mask(bt));
+					return -EFAULT;
+				}
+				return 0;
+			}
+
 			/* callx calls static subprogs only */
 			if (subprog >= 0 && bpf_subprog_is_global(env, subprog)) {
 				/* check that jump history doesn't have any
@@ -521,6 +540,24 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 			for (i = BPF_REG_1; i <= BPF_REG_5; i++)
 				bt_clear_reg(bt, i);
 			if (bt_subprog_exit(bt))
+				return -EFAULT;
+			return 0;
+		} else if (bpf_is_unwind_resume_kfunc(insn)) {
+			/*
+			 * A resume leaves its frame the way an exit does, so
+			 * the walk is crossing from the caller into the callee
+			 * here and has a frame to enter. The zero the resume
+			 * returns is its own: nothing further back defines r0,
+			 * and r1-r5 the call clobbered.
+			 */
+			bt_clear_reg(bt, BPF_REG_0);
+			bt_clear_reg(bt, BPF_REG_2);
+			if (bt_reg_mask(bt) & BPF_REGMASK_ARGS) {
+				verifier_bug(env, "backtracking resume unexpected regs %x",
+					     bt_reg_mask(bt));
+				return -EFAULT;
+			}
+			if (bt_subprog_enter(bt))
 				return -EFAULT;
 			return 0;
 		} else if (opcode == BPF_CALL) {
@@ -955,6 +992,11 @@ int bpf_mark_chain_precision(struct bpf_verifier_env *env,
 		st = st->parent;
 		if (!st)
 			break;
+
+		if (verifier_bug_if(bt->frame > st->curframe, env,
+				    "backtrack frame %d, state curframe %d",
+				    bt->frame, st->curframe))
+			return -EFAULT;
 
 		for (fr = bt->frame; fr >= 0; fr--) {
 			func = st->frame[fr];

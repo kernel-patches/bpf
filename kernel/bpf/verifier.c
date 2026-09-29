@@ -14666,6 +14666,32 @@ static int check_special_kfunc(struct bpf_verifier_env *env, struct bpf_call_arg
 
 static int check_return_code(struct bpf_verifier_env *env, int regno, const char *reg_name);
 
+static int check_kfunc_allowed(struct bpf_verifier_env *env, struct bpf_insn *insn,
+			       int insn_idx, struct bpf_call_arg_meta *meta)
+{
+	const char *operation;
+	int err;
+
+	err = bpf_fetch_kfunc_arg_meta(env, insn->imm, insn->off, meta);
+	if (err == -EACCES && meta->func_name) {
+		verbose(env, "calling kernel function %s is not allowed\n", meta->func_name);
+		operation = bpf_diag_fmt(env, "kfunc %s", meta->func_name);
+		bpf_diag_policy(
+			env, insn_idx, operation, "this program cannot call the kfunc",
+			"Use a kfunc allowed for this program type and attach point, or change the program context.");
+	}
+	return err;
+}
+
+/* noinline saves the caller a 200-byte struct bpf_call_arg_meta on its frame. */
+static noinline int check_kfunc_allowed_only(struct bpf_verifier_env *env,
+					     struct bpf_insn *insn, int insn_idx)
+{
+	struct bpf_call_arg_meta meta;
+
+	return check_kfunc_allowed(env, insn, insn_idx, &meta);
+}
+
 static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			    int *insn_idx_p)
 {
@@ -14687,14 +14713,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	if (!insn->imm)
 		return 0;
 
-	err = bpf_fetch_kfunc_arg_meta(env, insn->imm, insn->off, &meta);
-	if (err == -EACCES && meta.func_name) {
-		verbose(env, "calling kernel function %s is not allowed\n", meta.func_name);
-		operation = bpf_diag_fmt(env, "kfunc %s", meta.func_name);
-		bpf_diag_policy(
-			env, insn_idx, operation, "this program cannot call the kfunc",
-			"Use a kfunc allowed for this program type and attach point, or change the program context.");
-	}
+	err = check_kfunc_allowed(env, insn, insn_idx, &meta);
 	if (err)
 		return err;
 	desc_btf = meta.btf;
@@ -19108,6 +19127,57 @@ enum {
 	INSN_IDX_UPDATED = 2,
 };
 
+static int push_cleanup_pad_branch(struct bpf_verifier_env *env, int insn_idx)
+{
+	struct bpf_verifier_state *branch;
+	struct bpf_func_state *frame;
+	int pad = bpf_exc_pad_of_call(env, insn_idx);
+
+	if (pad < 0)
+		return 0;
+	branch = push_stack(env, pad, insn_idx, false);
+	if (IS_ERR(branch))
+		return PTR_ERR(branch);
+	frame = branch->frame[branch->curframe];
+	/*
+	 * The state at that call with the caller-saved registers gone: the
+	 * callee's epilogue put r6-r9 and the stack back on the way out.
+	 */
+	clear_caller_saved_regs(env, frame->regs);
+	mark_reg_unknown(env, frame->regs, BPF_REG_0);
+	return 0;
+}
+
+static int process_bpf_unwind(struct bpf_verifier_env *env, int *insn_idx,
+			      bool *do_print_state)
+{
+	struct bpf_func_state *frame = cur_func(env);
+	int pad = bpf_exc_pad_of_call(env, *insn_idx);
+	int err;
+
+	if (pad < 0) {
+		err = check_resource_leak(env, false, !env->cur_state->curframe,
+					  "an unwind with no landing pad");
+		if (err)
+			return err;
+		if (env->cur_state->curframe)
+			return PROCESS_BPF_EXIT;
+		/*
+		 * The main program's frame returns at once, which is the
+		 * program returning. Mark r0 the zero the fixups leave after
+		 * the call, and leave through the exit, which is what holds
+		 * that zero to the program type.
+		 */
+		mark_reg_unknown(env, cur_regs(env), BPF_REG_0);
+		mark_reg_known_zero(env, cur_regs(env), BPF_REG_0);
+		return process_bpf_exit_full(env, do_print_state, false);
+	}
+	clear_caller_saved_regs(env, frame->regs);
+	mark_reg_unknown(env, frame->regs, BPF_REG_0);
+	*insn_idx = pad;
+	return INSN_IDX_UPDATED;
+}
+
 static int process_bpf_exit_full(struct bpf_verifier_env *env,
 				 bool *do_print_state,
 				 bool exception_exit)
@@ -19362,7 +19432,29 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 					return -EINVAL;
 				}
 			}
+			if (bpf_is_unwind_kfunc(insn) || bpf_is_unwind_resume_kfunc(insn)) {
+				err = check_kfunc_allowed_only(env, insn, env->insn_idx);
+				if (err)
+					return err;
+				if (bpf_is_unwind_kfunc(insn))
+					return process_bpf_unwind(env, &env->insn_idx,
+								  do_print_state);
+				/*
+				 * Mark r0 a known zero -- unknown first, as
+				 * the known-zero helper keeps the type it
+				 * finds, which here is NOT_INIT. The fixups
+				 * lower this to 'r0 = 0; exit', so the frame
+				 * returns a real zero.
+				 */
+				mark_reg_unknown(env, cur_regs(env), BPF_REG_0);
+				mark_reg_known_zero(env, cur_regs(env), BPF_REG_0);
+				return process_bpf_exit_full(env, do_print_state, false);
+			}
 			mark_reg_scratched(env, BPF_REG_0);
+			/* An unwind out of this call resumes at the pad. */
+			err = push_cleanup_pad_branch(env, env->insn_idx);
+			if (err)
+				return err;
 			if (bpf_in_stack_arg_cnt(&env->subprog_info[cur_func(env)->subprogno]))
 				cur_func(env)->no_stack_arg_load = true;
 			if (bpf_is_callx(insn))
