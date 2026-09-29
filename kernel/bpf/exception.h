@@ -9,6 +9,10 @@ struct bpf_verifier_env;
 struct bpf_verifier_state;
 struct bpf_func_state;
 struct bpf_insn;
+struct bpf_cleanup_info;
+struct bpf_cleanup_range;
+struct bpf_prog;
+struct bpf_prog_aux;
 
 int bpf_prepare_cleanup_exceptions(struct bpf_verifier_env *env);
 int bpf_exc_check_prog(struct bpf_verifier_env *env);
@@ -19,5 +23,8 @@ int bpf_exc_check_frame_balance(struct bpf_verifier_env *env, const char *prefix
 int bpf_exc_pad_of_call(struct bpf_verifier_env *env, u32 idx);
 int bpf_exc_check_callback(struct bpf_verifier_env *env, int subprog);
 int bpf_exc_check_insn(struct bpf_verifier_env *env, struct bpf_insn *insn);
+int bpf_exc_alloc_info(struct bpf_prog_aux *aux);
+int bpf_exc_attach_info(struct bpf_prog_aux *aux, struct bpf_cleanup_info *recs, u32 cnt);
+const struct bpf_cleanup_range *bpf_exc_pad_for_ip(const struct bpf_prog *prog, u64 ip);
 
 #endif /* _LINUX_BPF_EXCEPTION_H */
