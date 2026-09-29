@@ -93,6 +93,11 @@
  * __failure         Expect program load failure in privileged mode.
  * __failure_unpriv  Expect program load failure in unprivileged mode.
  *
+ * __set_global      Set a global variable of the program to a value before
+ *                   executing it.
+ * __ret_global      Execute the program and check that a global variable
+ *                   holds the given value afterwards. The variable has to
+ *                   live in .bss or .data and be four or eight bytes wide.
  * __retval          Execute the program using BPF_PROG_TEST_RUN command,
  *                   expect return value to match passed parameter:
  *                   - a decimal number
@@ -160,6 +165,8 @@
 #define __log_level(lvl)	__test_tag("test_log_level=" #lvl)
 #define __flag(flag)		__test_tag("test_prog_flags=" #flag)
 #define __retval(val)		__test_tag("test_retval=" XSTR(val))
+#define __set_global(var, val)	__test_tag("test_global_set=" #var ":" XSTR(val))
+#define __ret_global(var, val)	__test_tag("test_global_ret=" #var ":" XSTR(val))
 #define __retval_unpriv(val)	__test_tag("test_retval_unpriv=" XSTR(val))
 #define __auxiliary		__test_tag("test_auxiliary")
 #define __auxiliary_unpriv	__test_tag("test_auxiliary_unpriv")
