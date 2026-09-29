@@ -1337,6 +1337,27 @@ static void netif_rx_mode_queue(struct net_device *dev)
 	__netdev_work_core_sched(dev, NETDEV_WORK_RX_MODE);
 }
 
+/**
+ * netif_rx_mode_schedule_update() - schedule a new receive-mode update
+ * @dev: network device
+ *
+ * Cancel any pending retry and reset its backoff before scheduling an
+ * immediate receive-mode update. This does not reset address-list
+ * synchronization state. Callers which need to replay lost device state must
+ * unsynchronize the affected address lists before scheduling the update.
+ *
+ * Context: sleepable. The caller must hold the device operations lock, or
+ * RTNL for a device which still uses RTNL-compatible operations.
+ */
+void netif_rx_mode_schedule_update(struct net_device *dev)
+{
+	might_sleep();
+	netdev_assert_locked_ops_compat(dev);
+	netif_rx_mode_cancel_retry(dev);
+	netif_rx_mode_queue(dev);
+}
+EXPORT_SYMBOL_GPL(netif_rx_mode_schedule_update);
+
 static void netif_rx_mode_retry(struct timer_list *t)
 {
 	struct net_device *dev =
