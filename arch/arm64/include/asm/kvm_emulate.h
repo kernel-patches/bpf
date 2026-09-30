@@ -44,6 +44,7 @@ enum exception_type {
 bool kvm_condition_valid32(const struct kvm_vcpu *vcpu);
 void kvm_skip_instr32(struct kvm_vcpu *vcpu);
 
+#if ARM64_S390_COMMON == 1
 void kvm_inject_undefined(struct kvm_vcpu *vcpu);
 void kvm_inject_sync(struct kvm_vcpu *vcpu, u64 esr);
 int kvm_inject_serror_esr(struct kvm_vcpu *vcpu, u64 esr);
@@ -74,6 +75,8 @@ static inline int kvm_inject_serror(struct kvm_vcpu *vcpu)
 }
 
 void kvm_vcpu_wfi(struct kvm_vcpu *vcpu);
+
+#endif /* ARM64_S390_COMMON == 1 */
 
 void kvm_emulate_nested_eret(struct kvm_vcpu *vcpu);
 int kvm_inject_nested_sync(struct kvm_vcpu *vcpu, u64 esr_el2);
@@ -184,6 +187,7 @@ static inline void vcpu_set_thumb(struct kvm_vcpu *vcpu)
 	*vcpu_cpsr(vcpu) |= PSR_AA32_T_BIT;
 }
 
+#if ARM64_S390_COMMON == 1
 /*
  * vcpu_get_reg and vcpu_set_reg should always be passed a register number
  * coming from a read of ESR_EL2. Otherwise, it may give the wrong result on
@@ -201,6 +205,8 @@ static __always_inline void vcpu_set_reg(struct kvm_vcpu *vcpu, u8 reg_num,
 	if (reg_num != 31)
 		vcpu_gp_regs(vcpu)[reg_num] = val;
 }
+
+#endif /* ARM64_S390_COMMON == 1 */
 
 static inline bool vcpu_is_el2_ctxt(const struct kvm_cpu_context *ctxt)
 {
@@ -404,6 +410,7 @@ static inline u64 kvm_vcpu_get_disr(const struct kvm_vcpu *vcpu)
 	return vcpu->arch.fault.disr_el1;
 }
 
+#if ARM64_S390_COMMON == 1
 static inline u32 kvm_vcpu_hvc_get_imm(const struct kvm_vcpu *vcpu)
 {
 	return kvm_vcpu_get_esr(vcpu) & ESR_ELx_xVC_IMM_MASK;
@@ -481,6 +488,8 @@ static __always_inline u8 kvm_vcpu_trap_get_fault(const struct kvm_vcpu *vcpu)
 	return kvm_vcpu_get_esr(vcpu) & ESR_ELx_FSC;
 }
 
+#endif /* ARM64_S390_COMMON == 1 */
+
 static inline
 bool kvm_vcpu_trap_is_permission_fault(const struct kvm_vcpu *vcpu)
 {
@@ -521,6 +530,7 @@ static __always_inline int kvm_vcpu_sys_get_rt(struct kvm_vcpu *vcpu)
 	return ESR_ELx_SYS64_ISS_RT(esr);
 }
 
+#if ARM64_S390_COMMON == 1
 static inline bool kvm_is_write_fault(struct kvm_vcpu *vcpu)
 {
 	if (kvm_vcpu_abt_iss1tw(vcpu)) {
@@ -544,6 +554,8 @@ static inline bool kvm_is_write_fault(struct kvm_vcpu *vcpu)
 
 	return kvm_vcpu_dabt_iswrite(vcpu);
 }
+
+#endif /* ARM64_S390_COMMON == 1 */
 
 static inline unsigned long kvm_vcpu_get_mpidr_aff(struct kvm_vcpu *vcpu)
 {
@@ -586,6 +598,7 @@ static inline bool kvm_vcpu_is_be(struct kvm_vcpu *vcpu)
 	return vcpu_read_sys_reg(vcpu, r) & bit;
 }
 
+#if ARM64_S390_COMMON == 1
 static inline unsigned long vcpu_data_guest_to_host(struct kvm_vcpu *vcpu,
 						    unsigned long data,
 						    unsigned int len)
@@ -660,6 +673,8 @@ static __always_inline void kvm_incr_pc(struct kvm_vcpu *vcpu)
 		vcpu_set_flag((v), PENDING_EXCEPTION);			\
 		vcpu_set_flag((v), e);					\
 	} while (0)
+
+#endif /* ARM64_S390_COMMON == 1 */
 
 /*
  * Returns a 'sanitised' view of CPTR_EL2, translating from nVHE to the VHE
@@ -767,6 +782,7 @@ static inline void kvm_reset_fpsimd(struct kvm_vcpu *vcpu)
 	memset(&vcpu->arch.ctxt.fp_regs, 0, sizeof(vcpu->arch.ctxt.fp_regs));
 }
 
+#if ARM64_S390_COMMON == 1
 /* Reset a vcpu's core registers. */
 static inline void kvm_reset_vcpu_core(struct kvm_vcpu *vcpu)
 {
@@ -790,6 +806,8 @@ static inline void kvm_reset_vcpu_core(struct kvm_vcpu *vcpu)
 	vcpu->arch.ctxt.spsr_fiq = 0;
 	*vcpu_cpsr(vcpu) = pstate;
 }
+
+#endif /* ARM64_S390_COMMON == 1 */
 
 /* PSCI reset handling for a vcpu. */
 static inline void kvm_reset_vcpu_psci(struct kvm_vcpu *vcpu,
