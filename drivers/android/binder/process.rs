@@ -1071,7 +1071,10 @@ impl Process {
 
         let (new_alloc, addr) = loop {
             let mut inner = self.inner.lock();
-            let mapping = inner.mapping.as_mut().ok_or_else(BinderError::new_dead)?;
+            let mapping = inner
+                .mapping
+                .as_mut()
+                .ok_or_else(|| BinderError::new_dead())?;
             let alloc_request = match mapping.alloc.reserve_new(reserve_new_args)? {
                 ReserveNew::Success(new_alloc) => break (new_alloc, mapping.address),
                 ReserveNew::NeedAlloc(request) => request,
