@@ -90,7 +90,8 @@ static int __smc_diag_dump(struct sock *sk, struct sk_buff *skb,
 	r->diag_state = sk->sk_state;
 	if (smc->use_fallback)
 		r->diag_mode = SMC_DIAG_MODE_FALLBACK_TCP;
-	else if (smc_conn_lgr_valid(&smc->conn) && smc->conn.lgr->is_smcd)
+	else if (sk->sk_state != SMC_INIT &&
+		 smc_conn_lgr_valid(&smc->conn) && smc->conn.lgr->is_smcd)
 		r->diag_mode = SMC_DIAG_MODE_SMCD;
 	else
 		r->diag_mode = SMC_DIAG_MODE_SMCR;
@@ -102,6 +103,9 @@ static int __smc_diag_dump(struct sock *sk, struct sk_buff *skb,
 	fallback.peer_diagnosis = smc->peer_diagnosis;
 	if (nla_put(skb, SMC_DIAG_FALLBACK, sizeof(fallback), &fallback) < 0)
 		goto errout;
+
+	if (sk->sk_state == SMC_INIT || sk->sk_state == SMC_CLOSED)
+		goto out;
 
 	if ((req->diag_ext & (1 << (SMC_DIAG_CONNINFO - 1))) &&
 	    smc->conn.alert_token_local) {
@@ -185,6 +189,7 @@ static int __smc_diag_dump(struct sock *sk, struct sk_buff *skb,
 			goto errout;
 	}
 
+out:
 	nlmsg_end(skb, nlh);
 	return 0;
 
