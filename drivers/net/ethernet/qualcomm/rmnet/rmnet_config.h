@@ -80,6 +80,26 @@ struct rmnet_priv_stats {
 	u64 csum_skipped;
 	u64 csum_sw;
 	u64 csum_hw;
+	/* DL coalescing */
+	u64 coal_rx;
+	u64 coal_pkts;
+	u64 coal_hdr_nlo_err;
+	u64 coal_hdr_pkt_err;
+	u64 coal_csum_err;
+	u64 coal_csum_drop;
+	u64 coal_reconstruct;
+	u64 coal_ip_invalid;
+	u64 coal_trans_invalid;
+	/* close-reason sub-counters */
+	u64 coal_close_non_coal;
+	u64 coal_close_ip_miss;
+	u64 coal_close_trans_miss;
+	u64 coal_close_hw_nl;
+	u64 coal_close_hw_pkt;
+	u64 coal_close_hw_byte;
+	u64 coal_close_hw_time;
+	u64 coal_close_hw_evict;
+	u64 coal_close_coal;
 };
 
 struct rmnet_priv {

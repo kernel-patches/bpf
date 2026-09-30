@@ -183,6 +183,26 @@ static const char rmnet_gstrings_stats[][ETH_GSTRING_LEN] = {
 	"Checksum skipped",
 	"Checksum computed in software",
 	"Checksum computed in hardware",
+	/* DL coalescing */
+	"Coal frames received",
+	"Packets in coal frames",
+	"Coal hdr NLO errors",
+	"Coal hdr pkt count errors",
+	"Coal checksum errors",
+	"Coal packets dropped on csum err",
+	"Coal segments reconstructed",
+	"Coal invalid IP version",
+	"Coal invalid transport",
+	/* close reasons */
+	"Coal closed: non-coal",
+	"Coal closed: IP miss",
+	"Coal closed: transport miss",
+	"Coal closed: hw NL limit",
+	"Coal closed: hw pkt limit",
+	"Coal closed: hw byte limit",
+	"Coal closed: hw time limit",
+	"Coal closed: hw evict",
+	"Coal closed: FIN/PSH",
 };
 
 static void rmnet_get_strings(struct net_device *dev, u32 stringset, u8 *buf)
