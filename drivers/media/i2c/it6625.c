@@ -938,12 +938,6 @@ static int it6625_enable_stream_locked(struct it6625 *it6625, bool enable)
 	return it6625_update_config(it6625);
 }
 
-static int it6625_enable_stream(struct it6625 *it6625, bool enable)
-{
-	guard(mutex)(&it6625->it6625_lock);
-	return it6625_enable_stream_locked(it6625, enable);
-}
-
 static int it6625_set_mipi_config_locked(struct it6625 *it6625, u32 cfg_val)
 {
 	u8 mipi_data_type;
@@ -1541,11 +1535,24 @@ static int it6625_dv_timings_cap(struct v4l2_subdev *sd,
 	return 0;
 }
 
-static int it6625_s_stream(struct v4l2_subdev *sd, int enable)
+static int it6625_enable_streams(struct v4l2_subdev *sd,
+				 struct v4l2_subdev_state *state,
+				 u32 pad, u64 streams_mask)
 {
 	struct it6625 *it6625 = sd_to_6625(sd);
 
-	return it6625_enable_stream(it6625, enable);
+	guard(mutex)(&it6625->it6625_lock);
+	return it6625_enable_stream_locked(it6625, true);
+}
+
+static int it6625_disable_streams(struct v4l2_subdev *sd,
+				  struct v4l2_subdev_state *state,
+				  u32 pad, u64 streams_mask)
+{
+	struct it6625 *it6625 = sd_to_6625(sd);
+
+	guard(mutex)(&it6625->it6625_lock);
+	return it6625_enable_stream_locked(it6625, false);
 }
 
 static int it6625_enum_mbus_code(struct v4l2_subdev *sd,
@@ -1836,7 +1843,7 @@ static const struct v4l2_subdev_core_ops it6625_core_ops = {
 
 static const struct v4l2_subdev_video_ops it6625_video_ops = {
 	.g_input_status = it6625_g_input_status,
-	.s_stream = it6625_s_stream,
+	.s_stream = v4l2_subdev_s_stream_helper,
 };
 
 static const struct v4l2_subdev_pad_ops it6625_pad_ops = {
@@ -1851,6 +1858,8 @@ static const struct v4l2_subdev_pad_ops it6625_pad_ops = {
 	.s_dv_timings = it6625_pad_s_dv_timings,
 	.g_dv_timings = it6625_pad_g_dv_timings,
 	.query_dv_timings = it6625_pad_query_dv_timings,
+	.enable_streams = it6625_enable_streams,
+	.disable_streams = it6625_disable_streams,
 };
 
 static const struct v4l2_subdev_ops it6625_ops = {
