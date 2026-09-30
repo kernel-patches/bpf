@@ -20,6 +20,7 @@ struct port_ops {
 	void (*enable)(struct mtk_port *port);
 	void (*disable)(struct mtk_port *port);
 	int (*recv)(struct mtk_port *port, struct sk_buff *skb);
+	void (*tx_complete)(struct mtk_port *port);
 };
 
 void *mtk_port_internal_open(struct mtk_md_dev *mdev, char *name, int flag);
