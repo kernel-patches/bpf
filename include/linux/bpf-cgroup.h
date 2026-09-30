@@ -76,6 +76,14 @@ to_cgroup_bpf_attach_type(enum bpf_attach_type attach_type)
 
 extern struct static_key_false cgroup_bpf_enabled_key[MAX_CGROUP_BPF_ATTACH_TYPE];
 #define cgroup_bpf_enabled(atype) static_branch_unlikely(&cgroup_bpf_enabled_key[atype])
+/*
+ * Same test when @atype is not a constant.  cgroup_bpf_enabled() uses
+ * static_branch_unlikely which creates jump-label site and requires statically
+ * selected key. Since key is selected dynamically, use static_key_enabled here
+ * and keep it off fast paths.
+ */
+#define cgroup_bpf_enabled_runtime(atype) \
+	static_key_enabled(&cgroup_bpf_enabled_key[atype])
 
 struct bpf_cgroup_storage_map;
 
@@ -508,6 +516,7 @@ static inline int cgroup_bpf_struct_ops_attach(struct bpf_map *map,
 }
 
 #define cgroup_bpf_enabled(atype) (0)
+#define cgroup_bpf_enabled_runtime(atype) (0)
 #define BPF_CGROUP_RUN_SA_PROG_LOCK(sk, uaddr, uaddrlen, atype, t_ctx) ({ 0; })
 #define BPF_CGROUP_RUN_SA_PROG(sk, uaddr, uaddrlen, atype) ({ 0; })
 #define BPF_CGROUP_PRE_CONNECT_ENABLED(sk) (0)
