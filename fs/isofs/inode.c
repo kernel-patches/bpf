@@ -1012,7 +1012,8 @@ static int isofs_statfs (struct dentry *dentry, struct kstatfs *buf)
 	buf->f_files = ISOFS_SB(sb)->s_ninodes;
 	buf->f_ffree = 0;
 	buf->f_fsid = u64_to_fsid(id);
-	buf->f_namelen = NAME_MAX;
+	buf->f_namelen = ISOFS_SB(sb)->s_joliet_level ?
+			 JOLIET_NAME_MAX : NAME_MAX;
 	return 0;
 }
 
@@ -1173,7 +1174,7 @@ static int isofs_read_level3_size(struct inode *inode)
 	unsigned long bufsize = ISOFS_BUFFER_SIZE(inode);
 	int high_sierra = ISOFS_SB(inode->i_sb)->s_high_sierra;
 	struct buffer_head *bh = NULL;
-	unsigned long block, offset, block_saved, offset_saved;
+	unsigned long block, offset;
 	int i = 0;
 	int more_entries = 0;
 	struct iso_inode_info *ei = ISOFS_I(inode);
@@ -1202,9 +1203,14 @@ static int isofs_read_level3_size(struct inode *inode)
 
 		/*
 		 * If we are at the end of a block (or at its zero-padded
-		 * tail), move on to the next block.
+		 * tail), move on to the next block.  A zero length byte at
+		 * the start of a block means the whole block is empty;
+		 * count that towards the same limit as sections below, or a
+		 * chain of empty blocks could be walked without bound.
 		 */
 		if (offset >= bufsize || de->length[0] == 0) {
+			if (offset == 0 && ++i > 100)
+				goto out_toomany;
 			brelse(bh);
 			bh = NULL;
 			++block;
@@ -1219,21 +1225,17 @@ static int isofs_read_level3_size(struct inode *inode)
 			return -EIO;
 		}
 
-		de_len = de->length[0];
-		block_saved = block;
-		offset_saved = offset;
-		offset += de_len;
-
-		inode->i_size += isonum_733(de->size);
-		if (i == 1) {
-			ei->i_next_section_block = block_saved;
-			ei->i_next_section_offset = offset_saved;
+		/* Save the first continuation directory entry in the inode */
+		if (more_entries && !ei->i_next_section_block) {
+			ei->i_next_section_block = block;
+			ei->i_next_section_offset = offset;
 		}
-
+		de_len = de->length[0];
+		offset += de_len;
+		inode->i_size += isonum_733(de->size);
 		more_entries = de->flags[-high_sierra] & 0x80;
 
-		i++;
-		if (i > 100)
+		if (++i > 100)
 			goto out_toomany;
 	} while (more_entries);
 out:
@@ -1245,7 +1247,7 @@ out_noread:
 	return -EIO;
 
 out_toomany:
-	printk(KERN_INFO "%s: More than 100 file sections ?!?, aborting...\n"
+	printk(KERN_INFO "%s: More than 100 file sections/empty blocks ?!?, aborting...\n"
 		"isofs_read_level3_size: inode=%llu\n",
 		__func__, inode->i_ino);
 	goto out;
