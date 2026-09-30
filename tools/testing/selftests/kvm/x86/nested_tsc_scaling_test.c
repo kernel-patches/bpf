@@ -75,6 +75,7 @@ static void l1_svm_code(struct svm_test_data *svm)
 	guest_check_tsc_freq(UCHECK_L1);
 
 	generic_svm_setup(svm, l2_guest_code);
+	svm->vmcb->control.tsc_offset = TSC_OFFSET_L2;
 
 	/* enable TSC scaling for L2 */
 	wrmsr(MSR_AMD64_TSC_RATIO, l2_multiplier);
