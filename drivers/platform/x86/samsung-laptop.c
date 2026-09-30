@@ -1142,8 +1142,8 @@ static int __init samsung_battery_hook_init(struct samsung_laptop *samsung)
 		samsung->battery_hook.add_battery = samsung_battery_add;
 		samsung->battery_hook.remove_battery = samsung_battery_remove;
 		samsung->battery_hook.name = "Samsung Battery Extension";
-		retval = devm_battery_hook_register(&samsung->platform_device->dev,
-						    &samsung->battery_hook);
+		retval = devm_acpi_battery_hook_register(&samsung->platform_device->dev,
+							 &samsung->battery_hook);
 	}
 
 	return retval;

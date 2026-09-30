@@ -2224,7 +2224,7 @@ static int uniwill_battery_init(struct uniwill_data *data)
 	data->hook.add_battery = uniwill_add_battery;
 	data->hook.remove_battery = uniwill_remove_battery;
 
-	return devm_battery_hook_register(data->dev, &data->hook);
+	return devm_acpi_battery_hook_register(data->dev, &data->hook);
 }
 
 static int uniwill_notifier_call(struct notifier_block *nb, unsigned long action, void *dummy)

@@ -513,7 +513,7 @@ static void huawei_wmi_battery_setup(struct device *dev)
 		return;
 	}
 
-	battery_hook_register(&huawei_wmi_battery_hook);
+	acpi_battery_hook_register(&huawei_wmi_battery_hook);
 	device_create_file(dev, &dev_attr_charge_control_thresholds);
 }
 
@@ -522,7 +522,7 @@ static void huawei_wmi_battery_exit(struct device *dev)
 	struct huawei_wmi *huawei = dev_get_drvdata(dev);
 
 	if (huawei->battery_available) {
-		battery_hook_unregister(&huawei_wmi_battery_hook);
+		acpi_battery_hook_unregister(&huawei_wmi_battery_hook);
 		device_remove_file(dev, &dev_attr_charge_control_thresholds);
 	}
 }

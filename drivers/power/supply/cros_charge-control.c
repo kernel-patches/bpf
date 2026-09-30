@@ -438,7 +438,7 @@ static int cros_chctl_probe(struct platform_device *pdev)
 	if (ret < 0)
 		return ret;
 
-	return devm_battery_hook_register(dev, &priv->battery_hook);
+	return devm_acpi_battery_hook_register(dev, &priv->battery_hook);
 }
 
 static int cros_chctl_resume(struct device *dev)

@@ -819,7 +819,7 @@ static LIST_HEAD(acpi_battery_list);
 static LIST_HEAD(battery_hook_list);
 static DEFINE_MUTEX(hook_mutex);
 
-static void battery_hook_unregister_unlocked(struct acpi_battery_hook *hook)
+static void acpi_battery_hook_unregister_unlocked(struct acpi_battery_hook *hook)
 {
 	struct acpi_battery *battery;
 
@@ -836,7 +836,7 @@ static void battery_hook_unregister_unlocked(struct acpi_battery_hook *hook)
 	pr_info("hook unregistered: %s\n", hook->name);
 }
 
-void battery_hook_unregister(struct acpi_battery_hook *hook)
+void acpi_battery_hook_unregister(struct acpi_battery_hook *hook)
 {
 	mutex_lock(&hook_mutex);
 	/*
@@ -845,13 +845,13 @@ void battery_hook_unregister(struct acpi_battery_hook *hook)
 	 * adding a new battery.
 	 */
 	if (!list_empty(&hook->list))
-		battery_hook_unregister_unlocked(hook);
+		acpi_battery_hook_unregister_unlocked(hook);
 
 	mutex_unlock(&hook_mutex);
 }
-EXPORT_SYMBOL_GPL(battery_hook_unregister);
+EXPORT_SYMBOL_GPL(acpi_battery_hook_unregister);
 
-void battery_hook_register(struct acpi_battery_hook *hook)
+void acpi_battery_hook_register(struct acpi_battery_hook *hook)
 {
 	struct acpi_battery *battery;
 
@@ -872,7 +872,7 @@ void battery_hook_register(struct acpi_battery_hook *hook)
 			 * hooks.
 			 */
 			pr_err("hook failed to load: %s", hook->name);
-			battery_hook_unregister_unlocked(hook);
+			acpi_battery_hook_unregister_unlocked(hook);
 			goto end;
 		}
 
@@ -882,22 +882,22 @@ void battery_hook_register(struct acpi_battery_hook *hook)
 end:
 	mutex_unlock(&hook_mutex);
 }
-EXPORT_SYMBOL_GPL(battery_hook_register);
+EXPORT_SYMBOL_GPL(acpi_battery_hook_register);
 
-static void devm_battery_hook_unregister(void *data)
+static void devm_acpi_battery_hook_unregister(void *data)
 {
 	struct acpi_battery_hook *hook = data;
 
-	battery_hook_unregister(hook);
+	acpi_battery_hook_unregister(hook);
 }
 
-int devm_battery_hook_register(struct device *dev, struct acpi_battery_hook *hook)
+int devm_acpi_battery_hook_register(struct device *dev, struct acpi_battery_hook *hook)
 {
-	battery_hook_register(hook);
+	acpi_battery_hook_register(hook);
 
-	return devm_add_action_or_reset(dev, devm_battery_hook_unregister, hook);
+	return devm_add_action_or_reset(dev, devm_acpi_battery_hook_unregister, hook);
 }
-EXPORT_SYMBOL_GPL(devm_battery_hook_register);
+EXPORT_SYMBOL_GPL(devm_acpi_battery_hook_register);
 
 /*
  * This function gets called right after the battery sysfs
@@ -926,7 +926,7 @@ static void battery_hook_add_battery(struct acpi_battery *battery)
 			 */
 			pr_err("error in hook, unloading: %s",
 					hook_node->name);
-			battery_hook_unregister_unlocked(hook_node);
+			acpi_battery_hook_unregister_unlocked(hook_node);
 		}
 	}
 	mutex_unlock(&hook_mutex);
@@ -959,7 +959,7 @@ static void __exit battery_hook_exit(void)
 	 * need to remove the hooks.
 	 */
 	list_for_each_entry_safe(hook, ptr, &battery_hook_list, list) {
-		battery_hook_unregister(hook);
+		acpi_battery_hook_unregister(hook);
 	}
 	mutex_destroy(&hook_mutex);
 }
