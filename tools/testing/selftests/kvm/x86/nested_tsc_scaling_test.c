@@ -13,10 +13,9 @@
 #include "svm_util.h"
 #include "kselftest.h"
 
-/* L2's TSC multiplier, relative to L1. */
+/* L2's TSC multiplier and offset, relative to L1. */
 static u64 l2_multiplier;
-
-#define TSC_OFFSET_L2 ((u64)-33125236320908)
+static u64 l2_offset;
 
 enum { USLEEP, UCHECK_L1, UCHECK_L2 };
 #define GUEST_SLEEP(sec)         ucall(UCALL_SYNC, 2, USLEEP, sec)
@@ -75,7 +74,7 @@ static void l1_svm_code(struct svm_test_data *svm)
 	guest_check_tsc_freq(UCHECK_L1);
 
 	generic_svm_setup(svm, l2_guest_code);
-	svm->vmcb->control.tsc_offset = TSC_OFFSET_L2;
+	svm->vmcb->control.tsc_offset = l2_offset;
 
 	/* enable TSC scaling for L2 */
 	wrmsr(MSR_AMD64_TSC_RATIO, l2_multiplier);
@@ -112,7 +111,7 @@ static void l1_vmx_code(struct vmx_pages *vmx_pages)
 	control |= SECONDARY_EXEC_TSC_SCALING;
 	vmwrite(SECONDARY_VM_EXEC_CONTROL, control);
 
-	vmwrite(TSC_OFFSET, TSC_OFFSET_L2);
+	vmwrite(TSC_OFFSET, l2_offset);
 	vmwrite(TSC_MULTIPLIER, l2_multiplier);
 
 	/* launch L2 */
@@ -144,6 +143,9 @@ static void test_tsc_scaling(u64 l0_tsc_freq, u64 l1_tsc_freq, u64 l2_tsc_freq,
 	       l0_tsc_freq, l1_tsc_freq, l2_tsc_freq, __l2_multiplier);
 
 	vm = vm_create_with_one_vcpu(&vcpu, l1_guest_code);
+
+	l2_offset = kvm_random_u64(&kvm_rng);
+	sync_global_to_guest(vm, l2_offset);
 
 	l2_multiplier = __l2_multiplier;
 	sync_global_to_guest(vm, l2_multiplier);
