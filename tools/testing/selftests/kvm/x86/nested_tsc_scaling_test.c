@@ -32,7 +32,7 @@ enum { USLEEP, UCHECK_L1, UCHECK_L2 };
  * measurements, a difference of 1% between the actual and the expected value
  * is tolerated.
  */
-static void compare_tsc_freq(u64 actual, u64 expected)
+static void host_check_tsc_freq(u64 actual, u64 expected)
 {
 	u64 tolerance, thresh_low, thresh_high;
 
@@ -45,7 +45,7 @@ static void compare_tsc_freq(u64 actual, u64 expected)
 		    actual, thresh_low, thresh_high);
 }
 
-static void check_tsc_freq(int level)
+static void guest_check_tsc_freq(int level)
 {
 	u64 tsc_start, tsc_end, tsc_freq;
 
@@ -66,7 +66,7 @@ static void check_tsc_freq(int level)
 
 static void l2_guest_code(void)
 {
-	check_tsc_freq(UCHECK_L2);
+	guest_check_tsc_freq(UCHECK_L2);
 
 	/* exit to L1 */
 	__asm__ __volatile__("vmcall");
@@ -75,7 +75,7 @@ static void l2_guest_code(void)
 static void l1_svm_code(struct svm_test_data *svm)
 {
 	/* check that L1's frequency looks alright before launching L2 */
-	check_tsc_freq(UCHECK_L1);
+	guest_check_tsc_freq(UCHECK_L1);
 
 	generic_svm_setup(svm, l2_guest_code);
 
@@ -87,7 +87,7 @@ static void l1_svm_code(struct svm_test_data *svm)
 	GUEST_ASSERT(svm->vmcb->control.exit_code == SVM_EXIT_VMMCALL);
 
 	/* check that L1's frequency still looks good */
-	check_tsc_freq(UCHECK_L1);
+	guest_check_tsc_freq(UCHECK_L1);
 
 	GUEST_DONE();
 }
@@ -97,7 +97,7 @@ static void l1_vmx_code(struct vmx_pages *vmx_pages)
 	u32 control;
 
 	/* check that L1's frequency looks alright before launching L2 */
-	check_tsc_freq(UCHECK_L1);
+	guest_check_tsc_freq(UCHECK_L1);
 
 	prepare_for_vmx_operation(vmx_pages);
 	load_vmcs(vmx_pages);
@@ -122,7 +122,7 @@ static void l1_vmx_code(struct vmx_pages *vmx_pages)
 	GUEST_ASSERT(vmread(VM_EXIT_REASON) == EXIT_REASON_VMCALL);
 
 	/* check that L1's frequency still looks good */
-	check_tsc_freq(UCHECK_L1);
+	guest_check_tsc_freq(UCHECK_L1);
 
 	GUEST_DONE();
 }
@@ -201,14 +201,14 @@ int main(int argc, char *argv[])
 				l1_tsc_freq = uc.args[1];
 				printf("L1's TSC frequency is around: %lu\n", l1_tsc_freq);
 
-				compare_tsc_freq(l1_tsc_freq,
+				host_check_tsc_freq(l1_tsc_freq,
 						 l0_tsc_freq / l1_scale_factor);
 				break;
 			case UCHECK_L2:
 				l2_tsc_freq = uc.args[1];
 				printf("L2's TSC frequency is around: %lu\n", l2_tsc_freq);
 
-				compare_tsc_freq(l2_tsc_freq,
+				host_check_tsc_freq(l2_tsc_freq,
 						 l1_tsc_freq * l2_scale_factor);
 				break;
 			}
