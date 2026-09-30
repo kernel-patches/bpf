@@ -193,6 +193,7 @@ done:
 
 int main(int argc, char *argv[])
 {
+	u64 min_freq, min_multiplier, max_freq, max_multiplier, l1_max_freq, l1_min_freq;
 	u64 l0_tsc_freq, tsc_start, tsc_end, l1_scale, l2_scale;
 	u8 frac_bits = kvm_cpu_has(X86_FEATURE_VMX) ? 48 : 32;
 	struct kvm_vm *vm;
@@ -256,6 +257,40 @@ int main(int argc, char *argv[])
 	test_tsc_scaling(l0_tsc_freq, l0_tsc_freq * l1_scale,
 			 l0_tsc_freq * l1_scale * l2_scale,
 			 (l2_scale << frac_bits));
+
+	/*
+	 * Test that KVM saturates L2's frequency on both ends if the resulting
+	 * L2 TSC frequency would be below or above what hardware can support.
+	 * Because L2 = L0 * (L1_mult >> frac) * (L2_mult >> frac) needs to be
+	 * distilled down to a single multiplier, very small/large multipliers
+	 * will underflow/overflow the minimum/maximum multiplier supported by
+	 * hardware when L1 and L2 multipliers are combined.  KVM's behavior is
+	 * saturate on {under,over}flow, i.e. to run at the min/max frequency.
+	 *
+	 * Note, userspace can only program L1's frequency in KHz, i.e. can't
+	 * specify an exact multiplier.  As a result, the minimum and maximum
+	 * frequencies are different for L1 vs L2, because L1 is constrained by
+	 * hardware *and* KVM, whereas L2 is constrained only by hardware.
+	 */
+	min_multiplier = 1;
+	min_freq = mul_u64_u64_div64(l0_tsc_freq, min_multiplier, BIT_ULL(frac_bits));
+	min_freq = max(min_freq, (u64)1);
+	l1_min_freq = max(min_freq, (u64)1 * 1000);
+	test_tsc_scaling(l0_tsc_freq, l1_min_freq, min_freq, 1);
+
+	/*
+	 * SVM takes a 40-bit value (right shifted by 32), while VMX takes a
+	 * 64-bit value (right shifted by 48).  mul_u64_u64_shr() isn't (yet)
+	 * available in selftests, but mul_u64_u64_div64() does nicely since,
+	 * albeit more slowly (performance is obviously not a concern).  Note,
+	 * because KVM_GET_TSC_KHZ returns a signed 32-bit integer, KVM limits
+	 * KVM_SET_TSC_KHZ to INT_MAX, even though hardware (both SVM and VMX)
+	 * supports much higher frequencies.
+	 */
+	max_multiplier = kvm_cpu_has(X86_FEATURE_VMX) ? -1ull : GENMASK_U64(39, 0);
+	max_freq = mul_u64_u64_div64(l0_tsc_freq, max_multiplier, BIT_ULL(frac_bits));
+	l1_max_freq = min(max_freq, (u64)INT32_MAX * 1000);
+	test_tsc_scaling(l0_tsc_freq, l1_max_freq, max_freq, max_multiplier);
 
 	return 0;
 }
