@@ -393,7 +393,7 @@ subprog_jt(int t, struct bpf_verifier_env *env)
 	if (!subprog->jt) {
 		verbose(env, "no jump tables found for subprog starting at %u\n", subprog_start);
 		bpf_diag_program_structure(
-			env, subprog_start, "missing jump table",
+			env, t, "missing jump table",
 			"Make sure subprograms containing gotox instructions are accompanied by jump tables referencing these subprograms.",
 			"No jump table was found for the subprogram that starts at instruction %u.",
 			subprog_start);
