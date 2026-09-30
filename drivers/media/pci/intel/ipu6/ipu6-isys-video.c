@@ -543,25 +543,31 @@ int ipu6_isys_start_stream_firmware(struct ipu6_isys_stream *stream,
 out_stream_close:
 	reinit_completion(&stream->stream_close_completion);
 
+	scoped_guard(mutex, &stream->isys->mutex)
+		stream->isys->need_reset = true;
+
 	retout = fw_ops->stream_close(stream->isys, stream->stream_handle);
 	if (retout < 0) {
 		dev_dbg(dev, "can't close stream (%d)\n", retout);
-		return retout;
+		return ret;
 	}
 
 	tout = wait_for_completion_timeout(&stream->stream_close_completion,
 					   IPU6_FW_CALL_TIMEOUT_JIFFIES);
-	if (!tout)
+	if (!tout) {
 		dev_err(dev, "stream close time out\n");
-	else if (stream->error)
+		ret = -ETIMEDOUT;
+	} else if (stream->error) {
 		dev_err(dev, "stream close error: %d\n", stream->error);
-	else
+		ret = -EINVAL;
+	} else {
 		dev_dbg(dev, "stream close complete\n");
+	}
 
 	return ret;
 }
 
-void ipu6_isys_stop_stream_firmware(struct ipu6_isys_stream *stream)
+int ipu6_isys_stop_stream_firmware(struct ipu6_isys_stream *stream)
 {
 	struct ipu6_bus_device *adev = stream->asd->isys->adev;
 	const struct ipu6_fw_isys_ops *fw_ops = adev->auxdrv_data->fw_ops;
@@ -573,20 +579,30 @@ void ipu6_isys_stop_stream_firmware(struct ipu6_isys_stream *stream)
 	ret = fw_ops->stream_flush(stream->isys, stream->stream_handle);
 	if (ret < 0) {
 		dev_err(dev, "can't stop stream (%d)\n", ret);
-		return;
+		return -EBUSY;
 	}
 
 	tout = wait_for_completion_timeout(&stream->stream_stop_completion,
 					   IPU6_FW_CALL_TIMEOUT_JIFFIES);
-	if (!tout)
+	if (!tout) {
 		dev_warn(dev, "stream stop time out\n");
-	else if (stream->error)
+		ret = -ETIMEDOUT;
+	} else if (stream->error) {
 		dev_warn(dev, "stream stop error: %d\n", stream->error);
-	else
+		ret = -EINVAL;
+	} else {
 		dev_dbg(dev, "stop stream: complete\n");
+	}
+
+	if (ret) {
+		scoped_guard(mutex, &stream->isys->mutex)
+			stream->isys->need_reset = true;
+	}
+
+	return ret;
 }
 
-void ipu6_isys_close_stream_firmware(struct ipu6_isys_stream *stream)
+int ipu6_isys_close_stream_firmware(struct ipu6_isys_stream *stream)
 {
 	struct ipu6_bus_device *adev = stream->asd->isys->adev;
 	const struct ipu6_fw_isys_ops *fw_ops = adev->auxdrv_data->fw_ops;
@@ -599,22 +615,33 @@ void ipu6_isys_close_stream_firmware(struct ipu6_isys_stream *stream)
 	ret = fw_ops->stream_close(stream->isys, stream->stream_handle);
 	if (ret < 0) {
 		dev_err(dev, "can't close stream (%d)\n", ret);
-		return;
+		goto out_cleanup;
 	}
 
 	tout = wait_for_completion_timeout(&stream->stream_close_completion,
 					   IPU6_FW_CALL_TIMEOUT_JIFFIES);
-	if (!tout)
+	if (!tout) {
 		dev_warn(dev, "stream close time out\n");
-	else if (stream->error)
+		ret = -ETIMEDOUT;
+	} else if (stream->error) {
 		dev_warn(dev, "stream close error: %d\n", stream->error);
-	else
+		ret = -EINVAL;
+	} else {
 		dev_dbg(dev, "close stream: complete\n");
+	}
 
+out_cleanup:
 	scoped_guard(spinlock_irqsave, &stream->isys->streams_lock) {
 		stream->isys->streams_by_handle[stream->stream_handle] = NULL;
 		csi2->streams_by_vc[stream->vc] = NULL;
 	}
+
+	if (ret) {
+		scoped_guard(mutex, &stream->isys->mutex)
+			stream->isys->need_reset = true;
+	}
+
+	return ret;
 }
 
 struct ipu6_isys_stream *

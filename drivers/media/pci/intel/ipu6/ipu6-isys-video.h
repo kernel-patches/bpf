@@ -99,8 +99,8 @@ int ipu6_isys_fw_pins_prepare(struct ipu6_isys_stream *stream,
 int ipu6_isys_start_stream_firmware(struct ipu6_isys_stream *stream,
 				    struct ipu6_isys_buffer_list *bl,
 				    struct v4l2_mbus_frame_desc *desc);
-void ipu6_isys_stop_stream_firmware(struct ipu6_isys_stream *stream);
-void ipu6_isys_close_stream_firmware(struct ipu6_isys_stream *stream);
+int ipu6_isys_stop_stream_firmware(struct ipu6_isys_stream *stream);
+int ipu6_isys_close_stream_firmware(struct ipu6_isys_stream *stream);
 struct ipu6_isys_stream *
 ipu6_isys_find_stream_firmware(struct ipu6_isys_csi2 *csi2, u8 vc);
 void ipu6_isys_free_stream_firmware(struct ipu6_isys_stream *stream);
