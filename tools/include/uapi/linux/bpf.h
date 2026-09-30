@@ -4568,6 +4568,10 @@ union bpf_attr {
  *		**-EOPNOTSUPP** if the operation is not supported, for example
  *		a call from outside of TC ingress.
  *
+ *		**-EAFNOSUPPORT** if the socket family is not compatible with
+ *		the network layer of the packet, for example an **AF_INET**
+ *		socket and an IPv6 packet.
+ *
  * long bpf_sk_assign(struct bpf_sk_lookup *ctx, struct bpf_sock *sk, u64 flags)
  *	Description
  *		Helper is overloaded depending on BPF program type. This
