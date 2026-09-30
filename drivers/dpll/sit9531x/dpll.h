@@ -31,7 +31,9 @@ struct sit9531x_dpll_pin {
 	u8				id;		/* hardware index */
 	u8				prio;
 	enum dpll_pin_state		pin_state;
+	enum dpll_pin_operstate		operstate;
 	bool				seen;	/* baseline taken by the poll */
+	bool				ntf_pending;
 };
 
 /* Per-PLL DPLL device state. */

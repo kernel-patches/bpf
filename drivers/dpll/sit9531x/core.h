@@ -250,6 +250,8 @@ bool sit9531x_input_prio_present(struct sit9531x_dev *sitdev,
 				 u8 pll_idx, u8 input_idx);
 int sit9531x_input_prio_set(struct sit9531x_dev *sitdev, u8 pll_idx,
 			    u8 input_idx, u8 prio);
+int sit9531x_input_prio_get(struct sit9531x_dev *sitdev, u8 pll_idx,
+			    u8 input_idx, u8 *prio);
 int sit9531x_input_prio_remove(struct sit9531x_dev *sitdev, u8 pll_idx,
 			       u8 input_idx);
 int sit9531x_input_prio_add(struct sit9531x_dev *sitdev, u8 pll_idx,
