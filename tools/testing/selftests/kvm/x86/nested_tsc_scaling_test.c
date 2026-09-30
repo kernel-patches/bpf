@@ -17,7 +17,7 @@
 static u64 l2_multiplier;
 static u64 l2_offset;
 
-enum { USLEEP, UCHECK_L1, UCHECK_L2 };
+enum ucall_cmd { UCALL_SLEEP, UCALL_CHECK_L1, UCALL_CHECK_L2 };
 
 /*
  * This function checks whether the "actual" TSC frequency of a guest matches
@@ -38,7 +38,7 @@ static void host_check_tsc_freq(int level, u64 actual, u64 expected)
 		    level, actual, thresh_low, thresh_high);
 }
 
-static void guest_check_tsc_freq(int level)
+static void guest_check_tsc_freq(enum ucall_cmd check_level)
 {
 	u64 tsc_start, tsc_end, tsc_freq;
 
@@ -49,17 +49,17 @@ static void guest_check_tsc_freq(int level)
 	 * be good enough for the purposes of this test.
 	 */
 	tsc_start = rdmsr(MSR_IA32_TSC);
-	GUEST_SYNC2(USLEEP, 1);
+	GUEST_SYNC2(UCALL_SLEEP, 1);
 	tsc_end = rdmsr(MSR_IA32_TSC);
 
 	tsc_freq = tsc_end - tsc_start;
 
-	GUEST_SYNC2(level, tsc_freq);
+	GUEST_SYNC2(check_level, tsc_freq);
 }
 
 static void l2_guest_code(void)
 {
-	guest_check_tsc_freq(UCHECK_L2);
+	guest_check_tsc_freq(UCALL_CHECK_L2);
 
 	/* exit to L1 */
 	__asm__ __volatile__("vmcall");
@@ -68,7 +68,7 @@ static void l2_guest_code(void)
 static void l1_svm_code(struct svm_test_data *svm)
 {
 	/* check that L1's frequency looks alright before launching L2 */
-	guest_check_tsc_freq(UCHECK_L1);
+	guest_check_tsc_freq(UCALL_CHECK_L1);
 
 	generic_svm_setup(svm, l2_guest_code);
 	svm->vmcb->control.tsc_offset = l2_offset;
@@ -81,7 +81,7 @@ static void l1_svm_code(struct svm_test_data *svm)
 	GUEST_ASSERT(svm->vmcb->control.exit_code == SVM_EXIT_VMMCALL);
 
 	/* check that L1's frequency still looks good */
-	guest_check_tsc_freq(UCHECK_L1);
+	guest_check_tsc_freq(UCALL_CHECK_L1);
 
 	GUEST_DONE();
 }
@@ -91,7 +91,7 @@ static void l1_vmx_code(struct vmx_pages *vmx_pages)
 	u32 control;
 
 	/* check that L1's frequency looks alright before launching L2 */
-	guest_check_tsc_freq(UCHECK_L1);
+	guest_check_tsc_freq(UCALL_CHECK_L1);
 
 	prepare_for_vmx_operation(vmx_pages);
 	load_vmcs(vmx_pages);
@@ -116,7 +116,7 @@ static void l1_vmx_code(struct vmx_pages *vmx_pages)
 	GUEST_ASSERT(vmread(VM_EXIT_REASON) == EXIT_REASON_VMCALL);
 
 	/* check that L1's frequency still looks good */
-	guest_check_tsc_freq(UCHECK_L1);
+	guest_check_tsc_freq(UCALL_CHECK_L1);
 
 	GUEST_DONE();
 }
@@ -167,14 +167,14 @@ static void test_tsc_scaling(u64 l0_tsc_freq, u64 l1_tsc_freq, u64 l2_tsc_freq,
 			REPORT_GUEST_ASSERT(uc);
 		case UCALL_SYNC:
 			switch (uc.args[0]) {
-			case USLEEP:
+			case UCALL_SLEEP:
 				sleep(uc.args[1]);
 				break;
-			case UCHECK_L1:
+			case UCALL_CHECK_L1:
 				printf("L1's observed TSC frequency: %lu\n", uc.args[1]);
 				host_check_tsc_freq(1, uc.args[1], l1_tsc_freq);
 				break;
-			case UCHECK_L2:
+			case UCALL_CHECK_L2:
 				printf("L2's observed TSC frequency: %lu\n", uc.args[1]);
 				host_check_tsc_freq(2, uc.args[1], l2_tsc_freq);
 				break;
