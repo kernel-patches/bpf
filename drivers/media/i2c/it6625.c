@@ -1457,20 +1457,17 @@ static int
 it6625_update_timings_if_changed(struct it6625 *it6625,
 				 const struct v4l2_dv_timings *timings)
 {
-	int ret;
-
 	guard(mutex)(&it6625->it6625_lock);
-	if (v4l2_match_dv_timings(&it6625->timings, timings, 0, false)) {
-		ret = 0;
-	} else if (!v4l2_valid_dv_timings(timings, it6625_get_timings_cap(it6625),
-					  NULL, NULL)) {
-		ret = -ERANGE;
-	} else {
-		it6625->timings = *timings;
-		ret = 1;
-	}
 
-	return ret;
+	if (v4l2_match_dv_timings(&it6625->timings, timings, 0, false))
+		return 0;
+
+	if (!v4l2_valid_dv_timings(timings, it6625_get_timings_cap(it6625), NULL, NULL))
+		return -ERANGE;
+
+	it6625->timings = *timings;
+
+	return 1;
 }
 
 static int it6625_enum_dv_timings(struct v4l2_subdev *sd,
