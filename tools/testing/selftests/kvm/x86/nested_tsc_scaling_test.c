@@ -8,7 +8,7 @@
  * both L1 and L2 are scaled using different ratios. For this test we scale
  * L1 down and scale L2 up.
  */
-
+#include <linux/math64.h>
 #include <time.h>
 
 #include "kvm_util.h"
@@ -135,21 +135,19 @@ static void l1_guest_code(void *data)
 		l1_svm_code(data);
 }
 
-static void test_tsc_scaling(u64 l0_tsc_freq, u64 l1_scale_factor, u64 l2_scale_factor)
+static void test_tsc_scaling(u64 l0_tsc_freq, u64 l1_tsc_freq, u64 l2_tsc_freq,
+			     u64 __l2_multiplier)
 {
-	u64 l1_tsc_freq, l2_tsc_freq;
 	struct kvm_vcpu *vcpu;
 	struct kvm_vm *vm;
 	gva_t guest_gva;
-	u8 frac_bits;
 
-	printf("L1's scale down factor is: %lu\n", l1_scale_factor);
-	printf("L2's scale up factor is: %lu\n", l2_scale_factor);
-
-	frac_bits = kvm_cpu_has(X86_FEATURE_VMX) ? 48 : 32;
-	l2_multiplier = l2_scale_factor << frac_bits;
+	printf("Testing L0 freq = %lu, L1 freq = %lu, L2 freq = %lu, L2 mult = 0x%lx\n",
+	       l0_tsc_freq, l1_tsc_freq, l2_tsc_freq, __l2_multiplier);
 
 	vm = vm_create_with_one_vcpu(&vcpu, l1_guest_code);
+
+	l2_multiplier = __l2_multiplier;
 	sync_global_to_guest(vm, l2_multiplier);
 
 	if (kvm_cpu_has(X86_FEATURE_VMX))
@@ -159,11 +157,7 @@ static void test_tsc_scaling(u64 l0_tsc_freq, u64 l1_scale_factor, u64 l2_scale_
 
 	vcpu_args_set(vcpu, 1, guest_gva);
 
-	/* scale down L1's TSC frequency */
-	vcpu_ioctl(vcpu, KVM_SET_TSC_KHZ, (void *) (l0_tsc_freq / l1_scale_factor));
-
-	/* L1 will communicate its frequency before the L2 check.*/
-	l1_tsc_freq = 0;
+	vcpu_ioctl(vcpu, KVM_SET_TSC_KHZ, (void *)(l1_tsc_freq / 1000));
 
 	for (;;) {
 		struct ucall uc;
@@ -180,18 +174,12 @@ static void test_tsc_scaling(u64 l0_tsc_freq, u64 l1_scale_factor, u64 l2_scale_
 				sleep(uc.args[1]);
 				break;
 			case UCHECK_L1:
-				l1_tsc_freq = uc.args[1];
-				printf("L1's TSC frequency is around: %lu\n", l1_tsc_freq);
-
-				host_check_tsc_freq(1, l1_tsc_freq,
-						 l0_tsc_freq / l1_scale_factor);
+				printf("L1's observed TSC frequency: %lu\n", uc.args[1]);
+				host_check_tsc_freq(1, uc.args[1], l1_tsc_freq);
 				break;
 			case UCHECK_L2:
-				l2_tsc_freq = uc.args[1];
-				printf("L2's TSC frequency is around: %lu\n", l2_tsc_freq);
-
-				host_check_tsc_freq(2, l2_tsc_freq,
-						 l1_tsc_freq * l2_scale_factor);
+				printf("L2's observed TSC frequency: %lu\n", uc.args[1]);
+				host_check_tsc_freq(2, uc.args[1], l2_tsc_freq);
 				break;
 			}
 			break;
@@ -209,6 +197,7 @@ done:
 int main(int argc, char *argv[])
 {
 	u64 l0_tsc_freq, tsc_start, tsc_end, l1_scale, l2_scale;
+	u8 frac_bits = kvm_cpu_has(X86_FEATURE_VMX) ? 48 : 32;
 	struct kvm_vm *vm;
 
 	TEST_REQUIRE(kvm_cpu_has(X86_FEATURE_VMX) ||
@@ -237,7 +226,10 @@ int main(int argc, char *argv[])
 	/* Scale L1 "down" and L2 "up" at a random factor from 2 to 10. */
 	l1_scale = (kvm_random_u32(&kvm_rng) % 9) + 2;
 	l2_scale = (kvm_random_u32(&kvm_rng) % 9) + 2;
-	test_tsc_scaling(l0_tsc_freq, l1_scale, l2_scale);
+
+	test_tsc_scaling(l0_tsc_freq, l0_tsc_freq / l1_scale,
+			 mul_u64_u64_div64(l0_tsc_freq, l2_scale, l1_scale),
+			 (l2_scale << frac_bits));
 
 	return 0;
 }
