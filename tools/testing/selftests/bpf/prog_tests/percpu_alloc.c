@@ -537,6 +537,34 @@ static void test_hash_cpu_flag(void)
 	test_map_op_cpu_flag(BPF_MAP_TYPE_HASH);
 }
 
+static void test_percpu_map_flags_combination(enum bpf_map_type map_type)
+{
+	u32 max_entries = 1;
+	u64 flags, val = 0;
+	int err, map_fd, key = 0;
+
+	map_fd = bpf_map_create(map_type, "test_flags_combo",
+				sizeof(int), sizeof(u64), max_entries, NULL);
+	if (!ASSERT_GE(map_fd, 0, "bpf_map_create"))
+		return;
+
+	flags = BPF_F_CPU | BPF_EXIST;
+	err = bpf_map_update_elem(map_fd, &key, &val, flags);
+	ASSERT_EQ(err, -ENOENT, "bpf_map_update_elem flags_combo");
+
+	close(map_fd);
+}
+
+static void test_percpu_hash_flags_combination(void)
+{
+	test_percpu_map_flags_combination(BPF_MAP_TYPE_PERCPU_HASH);
+}
+
+static void test_percpu_lru_hash_flags_combination(void)
+{
+	test_percpu_map_flags_combination(BPF_MAP_TYPE_LRU_PERCPU_HASH);
+}
+
 void test_percpu_alloc(void)
 {
 	if (test__start_subtest("array"))
@@ -565,4 +593,8 @@ void test_percpu_alloc(void)
 		test_array_cpu_flag();
 	if (test__start_subtest("cpu_flag_hash"))
 		test_hash_cpu_flag();
+	if (test__start_subtest("percpu_hash_flags_combination"))
+		test_percpu_hash_flags_combination();
+	if (test__start_subtest("percpu_lru_hash_flags_combination"))
+		test_percpu_lru_hash_flags_combination();
 }
