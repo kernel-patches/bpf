@@ -14521,7 +14521,8 @@ static void bnxt_timer(struct timer_list *t)
 		bnxt_queue_sp_work(bp, BNXT_RING_COAL_NOW_SP_EVENT);
 
 bnxt_restart_timer:
-	mod_timer(&bp->timer, jiffies + bp->current_interval);
+	if (test_bit(BNXT_STATE_OPEN, &bp->state))
+		mod_timer(&bp->timer, jiffies + bp->current_interval);
 }
 
 static void bnxt_lock_sp(struct bnxt *bp)
