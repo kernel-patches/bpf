@@ -317,11 +317,18 @@ struct it6625 {
 };
 
 /*
- * Index 0: D-PHY (4-lane). Index 1: C-PHY (3-trio) -- the confirmed
- * hardware max C-PHY capability, tested single-port/three-trio.
+ * Reported link frequency for every topology except the reference
+ * exception below: D-PHY (any lane count) and one-/two-trio C-PHY.
  */
-static const s64 it6625_link_freq[] = {
+static const s64 it6625_link_freq_default[] = {
 	445500000,
+};
+
+/*
+ * IT6626 C-PHY, three trios: the confirmed hardware max C-PHY
+ * capability, tested single-port/three-trio.
+ */
+static const s64 it6626_cphy_3trio_link_freq[] = {
 	2500000000LL,
 };
 
@@ -1877,6 +1884,8 @@ static int it6625_v4l2_init_controls(struct v4l2_subdev *sd)
 {
 	struct it6625 *it6625 = sd_to_6625(sd);
 	struct v4l2_ctrl_handler *hdl = &it6625->hdl;
+	bool cphy_3trio = it6625->bus_type == V4L2_MBUS_CSI2_CPHY &&
+			   it6625->csi_lanes == 3;
 
 	v4l2_ctrl_handler_init(hdl, 4);
 	it6625->ctrl_5v_detect =
@@ -1890,10 +1899,9 @@ static int it6625_v4l2_init_controls(struct v4l2_subdev *sd)
 	it6625->ctrl_audio_present =
 		v4l2_ctrl_new_custom(hdl, &it6625_ctrl_audio_present, NULL);
 	it6625->ctrl_link_freq =
-		v4l2_ctrl_new_int_menu(hdl, NULL, V4L2_CID_LINK_FREQ,
-				       ARRAY_SIZE(it6625_link_freq) - 1,
-				       it6625->bus_type == V4L2_MBUS_CSI2_CPHY ? 1 : 0,
-				       it6625_link_freq);
+		v4l2_ctrl_new_int_menu(hdl, NULL, V4L2_CID_LINK_FREQ, 0, 0,
+				       cphy_3trio ? it6626_cphy_3trio_link_freq :
+						    it6625_link_freq_default);
 	if (hdl->error) {
 		v4l2_err(sd, "Failed to initialize controls");
 		v4l2_ctrl_handler_free(hdl);
