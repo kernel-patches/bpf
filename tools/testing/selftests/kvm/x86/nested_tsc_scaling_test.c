@@ -137,7 +137,7 @@ static void l1_guest_code(void *data)
 
 static void test_tsc_scaling(u64 l0_tsc_freq, u64 l1_scale_factor, u64 l2_scale_factor)
 {
-	u64 tsc_khz, l1_tsc_freq, l2_tsc_freq;
+	u64 l1_tsc_freq, l2_tsc_freq;
 	struct kvm_vcpu *vcpu;
 	struct kvm_vm *vm;
 	gva_t guest_gva;
@@ -159,11 +159,8 @@ static void test_tsc_scaling(u64 l0_tsc_freq, u64 l1_scale_factor, u64 l2_scale_
 
 	vcpu_args_set(vcpu, 1, guest_gva);
 
-	tsc_khz = __vcpu_ioctl(vcpu, KVM_GET_TSC_KHZ, NULL);
-	TEST_ASSERT(tsc_khz != -1, "vcpu ioctl KVM_GET_TSC_KHZ failed");
-
 	/* scale down L1's TSC frequency */
-	vcpu_ioctl(vcpu, KVM_SET_TSC_KHZ, (void *) (tsc_khz / l1_scale_factor));
+	vcpu_ioctl(vcpu, KVM_SET_TSC_KHZ, (void *) (l0_tsc_freq / l1_scale_factor));
 
 	/* L1 will communicate its frequency before the L2 check.*/
 	l1_tsc_freq = 0;
@@ -212,18 +209,30 @@ done:
 int main(int argc, char *argv[])
 {
 	u64 l0_tsc_freq, tsc_start, tsc_end, l1_scale, l2_scale;
+	struct kvm_vm *vm;
 
 	TEST_REQUIRE(kvm_cpu_has(X86_FEATURE_VMX) ||
 		     kvm_cpu_has(X86_FEATURE_SVM));
 	TEST_REQUIRE(kvm_has_cap(KVM_CAP_TSC_CONTROL));
 	TEST_REQUIRE(sys_clocksource_is_based_on_tsc());
 
+	/*
+	 * Create a dummy VM to get KVM's default TSC frequency.  All CPUs that
+	 * support TSC scaling should have a constant TSC, i.e. there's no need
+	 * to calibrate the "real" TSC.  But do sanity check that the observed
+	 * TSC is within range of KVM's reported TSC frequency.
+	 */
+	vm = vm_create_barebones();
+	l0_tsc_freq = (u64)__vm_ioctl(vm, KVM_GET_TSC_KHZ, NULL) * 1000;
+	TEST_ASSERT(l0_tsc_freq, "vcpu ioctl KVM_GET_TSC_KHZ failed");
+	kvm_vm_free(vm);
+
+	printf("L0 TSC frequency is: %lu\n", l0_tsc_freq);
+
 	tsc_start = rdtsc();
 	sleep(1);
 	tsc_end = rdtsc();
-
-	l0_tsc_freq = tsc_end - tsc_start;
-	printf("real TSC frequency is around: %lu\n", l0_tsc_freq);
+	host_check_tsc_freq(0, tsc_end - tsc_start, l0_tsc_freq);
 
 	/* Scale L1 "down" and L2 "up" at a random factor from 2 to 10. */
 	l1_scale = (kvm_random_u32(&kvm_rng) % 9) + 2;
