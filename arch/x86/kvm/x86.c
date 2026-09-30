@@ -438,7 +438,7 @@ void kvm_deliver_exception_payload(struct kvm_vcpu *vcpu,
 		 * breakpoint), it is reserved and must be zero in DR6.
 		 */
 		vcpu->arch.dr6 &= ~BIT(12);
-		vcpu->arch.dr6 |= DR6_FIXED_1;
+		vcpu->arch.dr6 |= kvm_get_dr6_fixed_1(vcpu);
 		break;
 	case PF_VECTOR:
 		vcpu->arch.cr2 = ex->payload;
