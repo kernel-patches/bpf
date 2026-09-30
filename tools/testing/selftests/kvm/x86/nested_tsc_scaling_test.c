@@ -36,11 +36,11 @@ static void host_check_tsc_freq(int level, u64 actual, u64 expected)
 {
 	u64 tolerance, thresh_low, thresh_high;
 
-	tolerance = expected / 100;
+	tolerance = max(expected / 100, (u64)1);
 	thresh_low = expected - tolerance;
 	thresh_high = expected + tolerance;
 
-	TEST_ASSERT(thresh_low < actual && thresh_high > actual,
+	TEST_ASSERT(thresh_low <= actual && thresh_high >= actual,
 		    "L%u TSC freq is '%lu', expected to be between %lu and %lu",
 		    level, actual, thresh_low, thresh_high);
 }
