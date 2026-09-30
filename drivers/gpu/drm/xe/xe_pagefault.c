@@ -267,6 +267,7 @@ static struct xe_vm *xe_pagefault_asid_to_vm(struct xe_pagefault *pf, u32 asid)
 static int xe_pagefault_service(struct xe_pagefault *pf)
 {
 	struct xe_gt *gt = pf->gt;
+	struct xe_device *xe = gt_to_xe(gt);
 	struct xe_vm *vm;
 	struct xe_vma *vma = NULL;
 	int err;
@@ -278,8 +279,13 @@ static int xe_pagefault_service(struct xe_pagefault *pf)
 		return -EFAULT;
 
 	vm = xe_pagefault_asid_to_vm(pf, asid);
-	if (IS_ERR(vm))
-		return PTR_ERR(vm);
+	if (IS_ERR(vm)) {
+		err = PTR_ERR(vm);
+		trace_xe_pagefault_fail(xe, NULL, NULL, asid,
+					xe_pagefault_addr(pf),
+					xe_pagefault_get_error(pf), err);
+		return err;
+	}
 
 	xe_migrate_ulls_enter(gt_to_tile(gt)->migrate);
 
@@ -314,6 +320,11 @@ static int xe_pagefault_service(struct xe_pagefault *pf)
 		err = xe_pagefault_handle_vma(gt, vma, pf, atomic);
 
 unlock_vm:
+	if (err)
+		trace_xe_pagefault_fail(xe, vm, vma, asid,
+					xe_pagefault_addr(pf),
+					xe_pagefault_get_error(pf), err);
+
 	up_read(&vm->lock);
 	xe_vm_put(vm);
 

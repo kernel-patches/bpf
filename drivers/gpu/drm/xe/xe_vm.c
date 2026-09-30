@@ -1915,6 +1915,8 @@ void xe_vm_close_and_put(struct xe_vm *vm)
 
 	xe_assert(xe, !vm->preempt.num_exec_queues);
 
+	trace_xe_vm_close_and_put(vm);
+
 	xe_vm_close(vm);
 	if (xe_vm_in_preempt_fence_mode(vm)) {
 		mutex_lock(&xe->rebind_resume_lock);
@@ -1992,6 +1994,8 @@ void xe_vm_close_and_put(struct xe_vm *vm)
 
 		xe_assert(xe, xe->info.has_asid);
 		xe_assert(xe, !(vm->flags & XE_VM_FLAG_MIGRATION));
+
+		trace_xe_vm_asid_release(vm);
 
 		lookup = xa_erase(&xe->usm.asid_to_vm, vm->usm.asid);
 		xe_assert(xe, lookup == vm);
