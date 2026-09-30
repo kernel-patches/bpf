@@ -605,6 +605,135 @@ sit9531x_dpll_input_pin_prio_set(const struct dpll_pin *pin, void *pin_priv,
 	return 0;
 }
 
+/*
+ * sit9531x_dpll_input_pin_phase_offset_get - phase offset of a reference
+ *
+ * What this reports, and what it deliberately does not:
+ *
+ * The ABI defines the attribute as the phase difference between the signal
+ * on a pin and its parent DPLL device, so this is the loop's own residual
+ * error, sampled with the loop closed.  On a locked DPLL it therefore
+ * trends small -- that is the measurement, not an artefact of it.  The
+ * documentation describes the reported value as one that may be averaged
+ * over prior measurements, which suits a closed-loop residual and not a
+ * one-shot open-loop capture; the core publishes whatever this callback
+ * returns, so the averaging, if any, would be this driver's to do.
+ *
+ * The chip can also measure the reference against the local oscillator
+ * with the outer loop's correction frozen, which is a different quantity
+ * and the one the documented phase-difference procedure produces.  That
+ * needs the digital loop filter held (and, on the 1PPS PLL, the automatic
+ * phase- and frequency-lock helpers held off), which leaves the PLL
+ * undisciplined until it is released.  A netlink read must not do that,
+ * so that measurement is not offered here at all; it belongs to a caller
+ * that can own the freeze and restore it.
+ *
+ * Precondition, which this callback cannot create: the TDC compares
+ * against a signal the PLL drives, so a PLL driving no output with its
+ * zero-delay buffer off has nothing to measure.  SiTime clock
+ * engineering confirms this is a property of the hardware, not of
+ * SiTime's TDC measurement procedure, which satisfies it by mapping a
+ * spare output and restarting the PLL -- side effects that do not belong
+ * in a getter, so a reading taken in that state is simply not meaningful.
+ *
+ * Non-selected pins and a PLL with no programmed divider report zero
+ * rather than an error: the DPLL core propagates any error from this
+ * callback and fails the whole pin dump with it.  The core has no per-pin
+ * "no data" for phase offset, as it has -ENODATA for the fractional
+ * frequency offset, so it is a value or no callback at all.
+ */
+static int
+sit9531x_dpll_input_pin_phase_offset_get(const struct dpll_pin *pin,
+					 void *pin_priv,
+					 const struct dpll_device *dpll,
+					 void *dpll_priv, s64 *phase_offset,
+					 struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll_pin *dpin = pin_priv;
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+	bool drives = false;
+	s64 offset;
+	u8 selected, i;
+	int rc;
+
+	mutex_lock(&sitdev->multiop_lock);
+
+	/*
+	 * The on-chip TDC is a per-PLL resource that always measures the
+	 * phase difference between the VCO and the PLL's currently
+	 * selected reference; it cannot be pointed at an arbitrary input,
+	 * so an input that is not the active reference reports 0 rather
+	 * than the active reference's value.
+	 *
+	 * The sample needs both: the PLL tracking this pin as the poll last
+	 * saw it (locked, outer loop running, not frozen), and the device
+	 * still naming this pin, read now -- the device selects on its own,
+	 * and a cache up to a poll period old could attribute a live
+	 * measurement to the pin that used to be selected.  The device is
+	 * read again after the sample for the same reason: it can switch
+	 * during the dozen transfers the sample takes.
+	 *
+	 * The TDC also compares against a signal the PLL drives, so a PLL
+	 * with no routed, driving output has nothing to measure and reports
+	 * 0 like any other pin without a reading.
+	 */
+	for (i = 0; i < sitdev->info->num_outputs; i++)
+		if (sitdev->out[i].routed && sitdev->out[i].enabled &&
+		    sitdev->out[i].pll_idx == sitdpll->id)
+			drives = true;
+
+	if (!drives ||
+	    !sit9531x_dpll_selection_active(sitdev, sitdpll, dpin->id)) {
+		mutex_unlock(&sitdev->multiop_lock);
+		*phase_offset = 0;
+		return 0;
+	}
+
+	rc = sit9531x_chan_selected_ref_read(sitdev, sitdpll->id,
+					     &selected);
+	if (!rc && selected == dpin->id) {
+		rc = sit9531x_phase_offset_read(sitdev, sitdpll->id, &offset);
+		if (!rc)
+			rc = sit9531x_chan_selected_ref_read(sitdev,
+							     sitdpll->id,
+							     &selected);
+		if (!rc && selected != dpin->id)
+			rc = -ENODATA;
+	} else if (!rc) {
+		rc = -ENODATA;
+	}
+	mutex_unlock(&sitdev->multiop_lock);
+
+	/*
+	 * -ENODATA means no reading: the PLL has no known VCO rate, or the
+	 * selection moved off this pin around the sample.  Report 0 so a
+	 * full pin-get dump does not fail over it.  Every other errno,
+	 * -ENODEV from a vanished adapter included, is a failure.
+	 */
+	if (rc == -ENODATA) {
+		*phase_offset = 0;
+		return 0;
+	}
+	if (rc) {
+		NL_SET_ERR_MSG(extack, "TDC phase readback failed");
+		return rc;
+	}
+
+	/*
+	 * The ABI reports phase offset in units of 1/DPLL_PHASE_OFFSET_DIVIDER
+	 * picoseconds: the integer part of the attribute is the value divided
+	 * by the divider, the remainder is the fraction.  The TDC resolves one
+	 * VCO period (hundreds of picoseconds), so the fractional digits are
+	 * always zero here, but the magnitude still has to be scaled or every
+	 * reading would be reported a thousand times too small.
+	 */
+	offset *= DPLL_PHASE_OFFSET_DIVIDER;
+
+	*phase_offset = offset;
+	return 0;
+}
+
 static const struct dpll_pin_ops sit9531x_dpll_input_pin_ops = {
 	.direction_get		= sit9531x_dpll_input_pin_direction_get,
 	.frequency_get		= sit9531x_dpll_input_pin_frequency_get,
@@ -613,6 +742,7 @@ static const struct dpll_pin_ops sit9531x_dpll_input_pin_ops = {
 	.operstate_on_dpll_get	= sit9531x_dpll_input_pin_operstate_on_dpll_get,
 	.prio_get		= sit9531x_dpll_input_pin_prio_get,
 	.prio_set		= sit9531x_dpll_input_pin_prio_set,
+	.phase_offset_get	= sit9531x_dpll_input_pin_phase_offset_get,
 };
 
 /*
