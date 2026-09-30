@@ -1796,6 +1796,11 @@ void bpf_trampoline_multi_detach(struct bpf_prog *prog,
 #undef for_each_mnode_cnt
 #undef for_each_mnode
 
+#else
+
+void bpf_trampoline_multi_detach(struct bpf_prog *prog,
+				 struct bpf_tracing_multi_link *link) {}
+
 #endif /* CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS &&
 	  CONFIG_HAVE_SINGLE_FTRACE_DIRECT_OPS &&
 	  CONFIG_BPF_SYSCALL */

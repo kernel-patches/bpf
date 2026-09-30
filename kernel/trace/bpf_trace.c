@@ -3679,9 +3679,6 @@ __bpf_kfunc int bpf_copy_from_user_task_str_dynptr(const struct bpf_dynptr *dptr
 
 __bpf_kfunc_end_defs();
 
-#if defined(CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS) && \
-    defined(CONFIG_HAVE_SINGLE_FTRACE_DIRECT_OPS)
-
 static void bpf_tracing_multi_link_release(struct bpf_link *link)
 {
 	struct bpf_tracing_multi_link *tr_link =
@@ -3858,6 +3855,9 @@ int bpf_tracing_multi_attach(struct bpf_prog *prog, const union bpf_attr *attr)
 	if (attr->link_create.flags || attr->link_create.target_fd)
 		return -EINVAL;
 
+	if (!IS_ENABLED(CONFIG_HAVE_SINGLE_FTRACE_DIRECT_OPS))
+		return -EOPNOTSUPP;
+
 	ids = kvmalloc_objs(*ids, cnt);
 	if (!ids)
 		return -ENOMEM;
@@ -3924,12 +3924,3 @@ error:
 	kvfree(link);
 	return err;
 }
-
-#else
-
-int bpf_tracing_multi_attach(struct bpf_prog *prog, const union bpf_attr *attr)
-{
-	return -EOPNOTSUPP;
-}
-
-#endif /* CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS && CONFIG_HAVE_SINGLE_FTRACE_DIRECT_OPS */
