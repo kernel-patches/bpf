@@ -7164,7 +7164,7 @@ static noinline int uncompress_inline(struct btrfs_path *path,
 	compress_type = btrfs_file_extent_compression(leaf, item);
 	max_size = btrfs_file_extent_ram_bytes(leaf, item);
 	inline_size = btrfs_file_extent_inline_item_len(leaf, path->slots[0]);
-	tmp = kmalloc(inline_size, GFP_NOFS);
+	tmp = kvmalloc(inline_size, GFP_NOFS);
 	if (!tmp)
 		return -ENOMEM;
 	ptr = btrfs_file_extent_inline_start(item);
@@ -7185,7 +7185,7 @@ static noinline int uncompress_inline(struct btrfs_path *path,
 
 	if (max_size < blocksize)
 		folio_zero_range(folio, max_size, blocksize - max_size);
-	kfree(tmp);
+	kvfree(tmp);
 	return ret;
 }
 
@@ -9623,7 +9623,6 @@ int btrfs_encoded_read_regular_fill_pages(struct btrfs_inode *inode,
 	struct completion sync_reads;
 	unsigned long i = 0;
 	struct btrfs_bio *bbio;
-	int ret;
 
 	/*
 	 * Fast path for synchronous reads which completes in this call, io_uring
@@ -9670,10 +9669,10 @@ int btrfs_encoded_read_regular_fill_pages(struct btrfs_inode *inode,
 
 	if (uring_ctx) {
 		if (refcount_dec_and_test(&priv->pending_refs)) {
-			ret = blk_status_to_errno(READ_ONCE(priv->status));
-			btrfs_uring_read_extent_endio(uring_ctx, ret);
+			int error = blk_status_to_errno(READ_ONCE(priv->status));
+
+			btrfs_uring_read_extent_endio(uring_ctx, error);
 			kfree(priv);
-			return ret;
 		}
 
 		return -EIOCBQUEUED;
