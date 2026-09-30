@@ -62,6 +62,7 @@ const struct kvm_stats_header kvm_vcpu_stats_header = {
 		       sizeof(kvm_vcpu_stats_desc),
 };
 
+#if ARM64_S390_COMMON == 1
 static bool core_reg_offset_is_vreg(u64 off)
 {
 	return off >= KVM_REG_ARM_CORE_REG(fp_regs.vregs) &&
@@ -306,6 +307,8 @@ out:
 	return err;
 }
 
+#endif /* ARM64_S390_COMMON == 1 */
+
 #define vq_word(vq) (((vq) - SVE_VQ_MIN) / 64)
 #define vq_mask(vq) ((u64)1 << ((vq) - SVE_VQ_MIN) % 64)
 #define vq_present(vqs, vq) (!!((vqs)[vq_word(vq)] & vq_mask(vq)))
@@ -543,6 +546,7 @@ int kvm_arch_vcpu_ioctl_set_regs(struct kvm_vcpu *vcpu, struct kvm_regs *regs)
 	return -EINVAL;
 }
 
+#if ARM64_S390_COMMON == 1
 static int copy_core_reg_indices(const struct kvm_vcpu *vcpu,
 				 u64 __user *uindices)
 {
@@ -590,6 +594,8 @@ static unsigned long num_core_regs(const struct kvm_vcpu *vcpu)
 {
 	return copy_core_reg_indices(vcpu, NULL);
 }
+
+#endif /* ARM64_S390_COMMON == 1 */
 
 static unsigned long num_sve_regs(const struct kvm_vcpu *vcpu)
 {
