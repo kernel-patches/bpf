@@ -18,9 +18,6 @@ static u64 l2_multiplier;
 static u64 l2_offset;
 
 enum { USLEEP, UCHECK_L1, UCHECK_L2 };
-#define GUEST_SLEEP(sec)         ucall(UCALL_SYNC, 2, USLEEP, sec)
-#define GUEST_CHECK(level, freq) ucall(UCALL_SYNC, 2, level, freq)
-
 
 /*
  * This function checks whether the "actual" TSC frequency of a guest matches
@@ -52,12 +49,12 @@ static void guest_check_tsc_freq(int level)
 	 * be good enough for the purposes of this test.
 	 */
 	tsc_start = rdmsr(MSR_IA32_TSC);
-	GUEST_SLEEP(1);
+	GUEST_SYNC2(USLEEP, 1);
 	tsc_end = rdmsr(MSR_IA32_TSC);
 
 	tsc_freq = tsc_end - tsc_start;
 
-	GUEST_CHECK(level, tsc_freq);
+	GUEST_SYNC2(level, tsc_freq);
 }
 
 static void l2_guest_code(void)
