@@ -593,6 +593,61 @@ static void rmnet_map_partial_csum(struct sk_buff *skb,
 	skb->csum_start = skb->data + coal_meta->ip_len - skb->head;
 }
 
+/* On some hardware, num_nlos in the coalescing header can be reported
+ * incorrectly under certain conditions even though the per-NLO num_packets
+ * fields it is meant to summarize are correct. Recompute the true NLO count
+ * directly from the nl_pairs[] content rather than trusting the declared
+ * value, so that rmnet_map_v5_csum_fixup()'s single NLO, single packet check
+ * is reliable.
+ */
+static void rmnet_map_v5_fixup_num_nlos(struct rmnet_map_v5_coal_header *coal_hdr)
+{
+	u8 nlos = 0;
+	int i;
+
+	for (i = 0; i < RMNET_MAP_V5_MAX_NLOS; i++) {
+		if (coal_hdr->nl_pairs[i].num_packets)
+			nlos++;
+	}
+
+	coal_hdr->coal_info = u8_encode_bits(nlos, MAPV5_COALINFO_NUM_NLOS_FMASK) |
+			      (coal_hdr->coal_info & MAPV5_COALINFO_CSUM_VALID_FLAG);
+}
+
+/* The checksum valid indication for a single NLO, single packet coalescing
+ * frame cannot be trusted when the close reason is a TCP FIN/PSH, a packet
+ * count limit, a byte count limit or a time limit.
+ */
+static bool rmnet_map_v5_csum_fixup(struct rmnet_map_v5_coal_header *coal_hdr)
+{
+	u8 close_value = u8_get_bits(coal_hdr->close_info,
+				     MAPV5_CLOSEINFO_CLOSE_VALUE_FMASK);
+	u8 close_type = u8_get_bits(coal_hdr->close_info,
+				    MAPV5_CLOSEINFO_CLOSE_TYPE_FMASK);
+	u8 num_nlos = u8_get_bits(coal_hdr->coal_info,
+				  MAPV5_COALINFO_NUM_NLOS_FMASK);
+
+	/* Only applies to single NLO, single packet frames */
+	if (num_nlos != 1 || coal_hdr->nl_pairs[0].num_packets != 1)
+		return false;
+
+	/* TCP FIN or PSH triggered the close */
+	if (close_type == RMNET_MAP_COAL_CLOSE_COAL)
+		return true;
+
+	/* Hit a hardware limit */
+	if (close_type == RMNET_MAP_COAL_CLOSE_HW) {
+		switch (close_value) {
+		case RMNET_MAP_COAL_CLOSE_HW_PKT:
+		case RMNET_MAP_COAL_CLOSE_HW_BYTE:
+		case RMNET_MAP_COAL_CLOSE_HW_TIME:
+			return true;
+		}
+	}
+
+	return false;
+}
+
 /* Carve one logical segment from a coalesced SKB and append it to the list.
  * Adjusts TCP sequence numbers, IP IDs/lengths, and checksum state.
  */
@@ -913,6 +968,7 @@ static int rmnet_map_segment_coal_skb(struct sk_buff *coal_skb,
 	skb_pull(coal_skb, sizeof(struct rmnet_map_header));
 	skb_trim(coal_skb, len);
 	coal_hdr = (struct rmnet_map_v5_coal_header *)coal_skb->data;
+	rmnet_map_v5_fixup_num_nlos(coal_hdr);
 	num_nlos = u8_get_bits(coal_hdr->coal_info, MAPV5_COALINFO_NUM_NLOS_FMASK);
 	skb_pull(coal_skb, sizeof(*coal_hdr));
 
@@ -926,6 +982,12 @@ static int rmnet_map_segment_coal_skb(struct sk_buff *coal_skb,
 
 	if (!rmnet_map_coal_validate_bounds(coal_skb, coal_hdr, num_nlos, hlen))
 		return -EINVAL;
+
+	if (rmnet_map_v5_csum_fixup(coal_hdr) && !coal_meta.zero_csum) {
+		coal_skb->ip_summed = CHECKSUM_NONE;
+		__skb_queue_tail(list, coal_skb);
+		return 0;
+	}
 
 	if (rmnet_map_coal_gro_fast_path(coal_skb, coal_hdr, &coal_meta, list,
 					 num_nlos, gro))
