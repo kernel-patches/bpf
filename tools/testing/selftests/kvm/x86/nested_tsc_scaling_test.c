@@ -122,7 +122,6 @@ static void l1_vmx_code(struct vmx_pages *vmx_pages)
 
 	vmwrite(TSC_OFFSET, TSC_OFFSET_L2);
 	vmwrite(TSC_MULTIPLIER, TSC_MULTIPLIER_L2);
-	vmwrite(TSC_MULTIPLIER_HIGH, TSC_MULTIPLIER_L2 >> 32);
 
 	/* launch L2 */
 	vmlaunch();
