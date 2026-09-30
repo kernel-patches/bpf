@@ -17,10 +17,9 @@
 #include "kselftest.h"
 
 /* L2 is scaled up (from L1's perspective) by this factor */
-#define L2_SCALE_FACTOR 4ULL
+static u64 l2_scale_factor;
 
 #define TSC_OFFSET_L2 ((u64)-33125236320908)
-#define TSC_MULTIPLIER_L2 (L2_SCALE_FACTOR << 48)
 
 enum { USLEEP, UCHECK_L1, UCHECK_L2 };
 #define GUEST_SLEEP(sec)         ucall(UCALL_SYNC, 2, USLEEP, sec)
@@ -81,7 +80,7 @@ static void l1_svm_code(struct svm_test_data *svm)
 	generic_svm_setup(svm, l2_guest_code);
 
 	/* enable TSC scaling for L2 */
-	wrmsr(MSR_AMD64_TSC_RATIO, L2_SCALE_FACTOR << 32);
+	wrmsr(MSR_AMD64_TSC_RATIO, l2_scale_factor << 32);
 
 	/* launch L2 */
 	run_guest(svm->vmcb, svm->vmcb_gpa);
@@ -116,7 +115,7 @@ static void l1_vmx_code(struct vmx_pages *vmx_pages)
 	vmwrite(SECONDARY_VM_EXEC_CONTROL, control);
 
 	vmwrite(TSC_OFFSET, TSC_OFFSET_L2);
-	vmwrite(TSC_MULTIPLIER, TSC_MULTIPLIER_L2);
+	vmwrite(TSC_MULTIPLIER, l2_scale_factor << 48);
 
 	/* launch L2 */
 	vmlaunch();
@@ -154,15 +153,12 @@ int main(int argc, char *argv[])
 	TEST_REQUIRE(kvm_has_cap(KVM_CAP_TSC_CONTROL));
 	TEST_REQUIRE(sys_clocksource_is_based_on_tsc());
 
-	/*
-	 * We set L1's scale factor to be a random number from 2 to 10.
-	 * Ideally we would do the same for L2's factor but that one is
-	 * referenced by both main() and l1_guest_code() and using a global
-	 * variable does not work.
-	 */
+	/* Scale L1 "down" and L2 "up" at a random factor from 2 to 10. */
 	l1_scale_factor = (kvm_random_u32(&kvm_rng) % 9) + 2;
 	printf("L1's scale down factor is: %lu\n", l1_scale_factor);
-	printf("L2's scale up factor is: %llu\n", L2_SCALE_FACTOR);
+
+	l2_scale_factor = (kvm_random_u32(&kvm_rng) % 9) + 2;
+	printf("L2's scale up factor is: %lu\n", l2_scale_factor);
 
 	tsc_start = rdtsc();
 	sleep(1);
@@ -172,6 +168,7 @@ int main(int argc, char *argv[])
 	printf("real TSC frequency is around: %lu\n", l0_tsc_freq);
 
 	vm = vm_create_with_one_vcpu(&vcpu, l1_guest_code);
+	sync_global_to_guest(vm, l2_scale_factor);
 
 	if (kvm_cpu_has(X86_FEATURE_VMX))
 		vcpu_alloc_vmx(vm, &guest_gva);
@@ -212,7 +209,7 @@ int main(int argc, char *argv[])
 				printf("L2's TSC frequency is around: %lu\n", l2_tsc_freq);
 
 				compare_tsc_freq(l2_tsc_freq,
-						 l1_tsc_freq * L2_SCALE_FACTOR);
+						 l1_tsc_freq * l2_scale_factor);
 				break;
 			}
 			break;
