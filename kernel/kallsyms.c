@@ -177,6 +177,36 @@ static unsigned int get_symbol_offset(unsigned long pos)
 	return name - kallsyms_names;
 }
 
+/*
+ * Find the value of a symbol givem the offset in the compressed stream.
+ */
+static unsigned long get_name_address(unsigned int name_offset)
+{
+	unsigned int low, pos, high;
+
+	low = 0;
+	high = kallsyms_num_syms >> 8;
+
+	while (high - low > 1) {
+		pos = low + (high - low) / 2;
+		if (name_offset >= kallsyms_markers[pos])
+			low = pos;
+		else
+			high = pos;
+	}
+
+	pos = kallsyms_markers[low];
+	for (low <<= 8; pos < name_offset; low++) {
+		unsigned int len = kallsyms_names[pos];
+		if (len & 0x80)
+			len += (kallsyms_names[pos + 1] << 7) - 0x7f;
+		pos += 1 + len;
+	}
+
+	return kallsyms_sym_address(low);
+}
+
+
 unsigned long kallsyms_sym_address(int idx)
 {
 	/* non-relocatable 32-bit kernels just embed the value directly */
@@ -185,14 +215,11 @@ unsigned long kallsyms_sym_address(int idx)
 	return (unsigned long)offset_to_ptr(kallsyms_offsets + idx);
 }
 
-static unsigned int get_symbol_seq(int index)
+static unsigned int get_symbol_name(int index)
 {
-	unsigned int i, seq = 0;
-
-	for (i = 0; i < 3; i++)
-		seq = (seq << 8) | kallsyms_seqs_of_names[3 * index + i];
-
-	return seq;
+	if (kallsyms_off24_of_names)
+		return kallsyms_off24_of_names[index].v;
+	return kallsyms_off32_of_names[index];
 }
 
 static int kallsyms_lookup_names(const char *name,
@@ -201,15 +228,14 @@ static int kallsyms_lookup_names(const char *name,
 {
 	int ret;
 	int low, mid, high;
-	unsigned int seq, off;
+	unsigned int off;
 
 	low = 0;
 	high = kallsyms_num_syms - 1;
 
 	while (low <= high) {
 		mid = low + (high - low) / 2;
-		seq = get_symbol_seq(mid);
-		off = get_symbol_offset(seq);
+		off = get_symbol_name(mid);
 		ret = kallsyms_strcmp_symbol(off, name);
 		if (ret > 0)
 			low = mid + 1;
@@ -220,23 +246,24 @@ static int kallsyms_lookup_names(const char *name,
 	}
 
 	if (low > high)
-		return -ESRCH;
+		return -1;
+
+	ret = off;
 
 	low = mid;
 	while (low) {
-		seq = get_symbol_seq(low - 1);
-		off = get_symbol_offset(seq);
+		off = get_symbol_name(low - 1);
 		if (kallsyms_strcmp_symbol(off, name) != 0)
 			break;
 		low--;
+		ret = off;
 	}
 	*start = low;
 
 	if (end) {
 		high = mid;
 		while (high < kallsyms_num_syms - 1) {
-			seq = get_symbol_seq(high + 1);
-			off = get_symbol_offset(seq);
+			off = get_symbol_name(high + 1);
 			if (kallsyms_strcmp_symbol(off, name) != 0)
 				break;
 			high++;
@@ -244,7 +271,7 @@ static int kallsyms_lookup_names(const char *name,
 		*end = high;
 	}
 
-	return 0;
+	return ret;
 }
 
 /* Lookup the address for this symbol. Returns 0 if not found. */
@@ -258,8 +285,8 @@ unsigned long kallsyms_lookup_name(const char *name)
 		return 0;
 
 	ret = kallsyms_lookup_names(name, &i, NULL);
-	if (!ret)
-		return kallsyms_sym_address(get_symbol_seq(i));
+	if (ret >= 0)
+		return get_name_address(ret);
 
 	return module_kallsyms_lookup_name(name);
 }
@@ -289,15 +316,17 @@ int kallsyms_on_each_symbol(int (*fn)(void *, const char *, unsigned long),
 int kallsyms_on_each_match_symbol(int (*fn)(void *, unsigned long),
 				  const char *name, void *data)
 {
-	int ret;
-	unsigned int i, start, end;
+	int name_offset, ret;
+	unsigned int sym_number, last;
 
-	ret = kallsyms_lookup_names(name, &start, &end);
-	if (ret)
+	name_offset = kallsyms_lookup_names(name, &sym_number, &last);
+	if (name_offset < 0)
 		return 0;
 
-	for (i = start; !ret && i <= end; i++) {
-		ret = fn(data, kallsyms_sym_address(get_symbol_seq(i)));
+	for (;; name_offset = get_symbol_name(sym_number)) {
+		ret = fn(data, get_name_address(name_offset));
+		if (ret || ++sym_number > last)
+			break;
 		cond_resched();
 	}
 
