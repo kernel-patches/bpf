@@ -1173,9 +1173,8 @@ static int isofs_read_level3_size(struct inode *inode)
 	unsigned long bufsize = ISOFS_BUFFER_SIZE(inode);
 	int high_sierra = ISOFS_SB(inode->i_sb)->s_high_sierra;
 	struct buffer_head *bh = NULL;
-	unsigned long block, offset, block_saved, offset_saved;
+	unsigned long block, offset;
 	int i = 0;
-	int empty_blocks = 0;
 	int more_entries = 0;
 	struct iso_inode_info *ei = ISOFS_I(inode);
 
@@ -1209,7 +1208,7 @@ static int isofs_read_level3_size(struct inode *inode)
 		 * chain of empty blocks could be walked without bound.
 		 */
 		if (offset >= bufsize || de->length[0] == 0) {
-			if (offset == 0 && ++empty_blocks + i > 100)
+			if (offset == 0 && ++i > 100)
 				goto out_toomany;
 			brelse(bh);
 			bh = NULL;
@@ -1225,21 +1224,17 @@ static int isofs_read_level3_size(struct inode *inode)
 			return -EIO;
 		}
 
-		de_len = de->length[0];
-		block_saved = block;
-		offset_saved = offset;
-		offset += de_len;
-
-		inode->i_size += isonum_733(de->size);
-		if (i == 1) {
-			ei->i_next_section_block = block_saved;
-			ei->i_next_section_offset = offset_saved;
+		/* Save the first continuation directory entry in the inode */
+		if (more_entries && !ei->i_next_section_block) {
+			ei->i_next_section_block = block;
+			ei->i_next_section_offset = offset;
 		}
-
+		de_len = de->length[0];
+		offset += de_len;
+		inode->i_size += isonum_733(de->size);
 		more_entries = de->flags[-high_sierra] & 0x80;
 
-		i++;
-		if (i + empty_blocks > 100)
+		if (++i > 100)
 			goto out_toomany;
 	} while (more_entries);
 out:
