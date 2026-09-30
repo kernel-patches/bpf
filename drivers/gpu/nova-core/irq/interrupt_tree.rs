@@ -124,10 +124,12 @@ impl LeafMask {
         Self(u32::MAX)
     }
 
+    #[cfg_attr(not(CONFIG_NOVA_CORE_SELFTESTS), expect(dead_code))]
     pub(super) const fn from_raw(raw: u32) -> Self {
         Self(raw)
     }
 
+    #[cfg_attr(not(CONFIG_NOVA_CORE_SELFTESTS), expect(dead_code))]
     pub(super) const fn into_raw(self) -> u32 {
         self.0
     }
@@ -160,7 +162,7 @@ impl From<LeafMask> for Bounded<u32, 32> {
 ///
 /// Exactly one bit is set.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct Subtree(u32);
+pub(crate) struct Subtree(u32);
 
 impl Subtree {
     /// Returns the subtree at index `idx`.
@@ -240,6 +242,7 @@ impl GinVector {
         Self(Bounded::<u32, VECTOR_BITS>::new::<VECTOR>())
     }
 
+    #[cfg_attr(not(CONFIG_NOVA_CORE_SELFTESTS), expect(dead_code))]
     pub(super) const fn into_raw(self) -> u32 {
         self.0.get()
     }

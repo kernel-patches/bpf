@@ -11,6 +11,7 @@
 
 #[cfg(CONFIG_NOVA_CORE_SELFTESTS)]
 pub(crate) mod doorbell_test;
+pub(crate) mod gsp;
 mod hal;
 pub(crate) mod interrupt_tree;
 mod regs;
