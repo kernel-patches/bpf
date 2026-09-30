@@ -3021,9 +3021,9 @@ void mlx5_esw_put(struct mlx5_core_dev *mdev)
  * Should be called by esw mode change routine.
  *
  * Return:
- * * 0       - esw mode if successfully locked and refcount is 0.
- * * -EBUSY  - refcount is not 0.
- * * -EINVAL - In the middle of switching mode or lock is already held.
+ * * >= 0    - esw mode if successfully locked.
+ * * -EBUSY  - mode change in progress or users exist.
+ * * -EINVAL - lock is already held.
  */
 int mlx5_esw_try_lock(struct mlx5_eswitch *esw)
 {
@@ -3039,11 +3039,12 @@ int mlx5_esw_try_lock(struct mlx5_eswitch *esw)
 	return esw->mode;
 }
 
-int mlx5_esw_lock(struct mlx5_eswitch *esw)
+int mlx5_esw_lock(struct mlx5_eswitch *esw, bool check_users)
 {
 	down_write(&esw->mode_lock);
 
-	if (esw->eswitch_operation_in_progress) {
+	if (esw->eswitch_operation_in_progress ||
+	    (check_users && atomic64_read(&esw->user_count) > 0)) {
 		up_write(&esw->mode_lock);
 		return -EBUSY;
 	}
