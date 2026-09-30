@@ -967,6 +967,16 @@ config SPI_RSPI
 	help
 	  SPI driver for Renesas RSPI and QSPI blocks.
 
+config SPI_RTK_NOR
+	tristate "Realtek SPI-NOR flash controller"
+	depends on ARCH_REALTEK || COMPILE_TEST
+	depends on SPI_MEM
+	help
+	  This enables support for the SPI NOR Flash Controller found on
+	  Realtek DHC SoCs. The controller supports single and dual I/O
+	  transfers and offloads the payload to an integrated DMA engine.
+	  Say Y or M here if you are building a kernel for a Realtek DHC SoC
+
 config SPI_RZV2H_RSPI
 	tristate "Renesas RZ/V2H RSPI controller"
 	depends on ARCH_RENESAS || COMPILE_TEST
