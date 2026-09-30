@@ -889,11 +889,19 @@ static int it6625_s_ctrl_audio_present(struct v4l2_subdev *sd)
 				audio_present(it6625));
 }
 
-static void it6625_v4l2_sd_ctrl_update(struct v4l2_subdev *sd)
+static int it6625_v4l2_sd_ctrl_update(struct v4l2_subdev *sd)
 {
-	it6625_s_ctrl_detect_hdmi_5v(sd);
-	it6625_s_ctrl_audio_sampling_rate(sd);
-	it6625_s_ctrl_audio_present(sd);
+	int ret;
+
+	ret = it6625_s_ctrl_detect_hdmi_5v(sd);
+	if (ret)
+		return ret;
+
+	ret = it6625_s_ctrl_audio_sampling_rate(sd);
+	if (ret)
+		return ret;
+
+	return it6625_s_ctrl_audio_present(sd);
 }
 
 static void it6625_enable_stream_locked(struct it6625 *it6625, bool enable)
@@ -940,9 +948,10 @@ static inline unsigned int fps_from_bt_timings(const struct v4l2_bt_timings *t)
 				 V4L2_DV_BT_FRAME_WIDTH(t));
 }
 
-static void it6625_initial_setup(struct it6625 *it6625)
+static int it6625_initial_setup(struct it6625 *it6625)
 {
 	int val = 0;
+	int err;
 
 	guard(mutex)(&it6625->it6625_lock);
 
@@ -968,13 +977,28 @@ static void it6625_initial_setup(struct it6625 *it6625)
 	if (it6625->port_num == 2)
 		val |= FIELD_PREP(B_MIPI_SPLIT, 1);
 
-	it6625_write_byte(it6625, REG_MIPI_CFG, val);
-	it6625_write_byte(it6625, REG_MIPI_DATA_TYPE, it6625->csi_format);
-	it6625_write_byte(it6625, REG_MIPI_CONTROL, 0x00);
-	it6625_write_byte(it6625, REG_RX_CFG, 0x00);
+	err = it6625_write_byte(it6625, REG_MIPI_CFG, val);
+	if (err)
+		return err;
 
-	it6625_set_bits(it6625, REG_HOST_CTRL_INT, B_CONFIG_UPDATE, B_CONFIG_UPDATE);
-	it6625_wait_for_status(it6625, REG_HOST_CTRL_INT, 0x00, 25);
+	err = it6625_write_byte(it6625, REG_MIPI_DATA_TYPE, it6625->csi_format);
+	if (err)
+		return err;
+
+	err = it6625_write_byte(it6625, REG_MIPI_CONTROL, 0x00);
+	if (err)
+		return err;
+
+	err = it6625_write_byte(it6625, REG_RX_CFG, 0x00);
+	if (err)
+		return err;
+
+	err = it6625_set_bits(it6625, REG_HOST_CTRL_INT, B_CONFIG_UPDATE,
+			      B_CONFIG_UPDATE);
+	if (err)
+		return err;
+
+	return it6625_wait_for_status(it6625, REG_HOST_CTRL_INT, 0x00, 25);
 }
 
 static int it6625_cec_adap_enable(struct cec_adapter *adap, bool enable)
@@ -1136,9 +1160,12 @@ static void it6625_clear_timings(struct it6625 *it6625)
 static void it6625_irq_hdmi_5v_change(struct it6625 *it6625)
 {
 	struct v4l2_subdev *sd = &it6625->sd;
+	int ret;
 
 	it6625_clear_timings(it6625);
-	it6625_v4l2_sd_ctrl_update(sd);
+	ret = it6625_v4l2_sd_ctrl_update(sd);
+	if (ret)
+		dev_err(it6625->dev, "%s: failed to update controls: %d", __func__, ret);
 }
 
 static void it6625_irq_hdcp_change(struct it6625 *it6625)
@@ -2297,8 +2324,17 @@ static int it6625_probe(struct i2c_client *client)
 
 	it6625_debugfs_init(it6625, client);
 
-	it6625_initial_setup(it6625);
-	it6625_v4l2_sd_ctrl_update(sd);
+	err = it6625_initial_setup(it6625);
+	if (err) {
+		dev_err_probe(it6625->dev, err, "failed initial hardware setup");
+		goto err_clean_debugfs;
+	}
+
+	err = it6625_v4l2_sd_ctrl_update(sd);
+	if (err) {
+		dev_err_probe(it6625->dev, err, "failed to update controls");
+		goto err_clean_debugfs;
+	}
 
 	err = v4l2_async_register_subdev(sd);
 	if (err < 0) {
