@@ -32,7 +32,7 @@ enum { USLEEP, UCHECK_L1, UCHECK_L2 };
  * measurements, a difference of 1% between the actual and the expected value
  * is tolerated.
  */
-static void host_check_tsc_freq(u64 actual, u64 expected)
+static void host_check_tsc_freq(int level, u64 actual, u64 expected)
 {
 	u64 tolerance, thresh_low, thresh_high;
 
@@ -41,8 +41,8 @@ static void host_check_tsc_freq(u64 actual, u64 expected)
 	thresh_high = expected + tolerance;
 
 	TEST_ASSERT(thresh_low < actual && thresh_high > actual,
-		    "TSC freq is '%lu', expected to be between %lu and %lu",
-		    actual, thresh_low, thresh_high);
+		    "L%u TSC freq is '%lu', expected to be between %lu and %lu",
+		    level, actual, thresh_low, thresh_high);
 }
 
 static void guest_check_tsc_freq(int level)
@@ -186,14 +186,14 @@ static void test_tsc_scaling(u64 l0_tsc_freq, u64 l1_scale_factor, u64 l2_scale_
 				l1_tsc_freq = uc.args[1];
 				printf("L1's TSC frequency is around: %lu\n", l1_tsc_freq);
 
-				host_check_tsc_freq(l1_tsc_freq,
+				host_check_tsc_freq(1, l1_tsc_freq,
 						 l0_tsc_freq / l1_scale_factor);
 				break;
 			case UCHECK_L2:
 				l2_tsc_freq = uc.args[1];
 				printf("L2's TSC frequency is around: %lu\n", l2_tsc_freq);
 
-				host_check_tsc_freq(l2_tsc_freq,
+				host_check_tsc_freq(2, l2_tsc_freq,
 						 l1_tsc_freq * l2_scale_factor);
 				break;
 			}
