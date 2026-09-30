@@ -1,12 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * vmx_nested_tsc_scaling_test
- *
  * Copyright 2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
  *
  * This test case verifies that nested TSC scaling behaves as expected when
- * both L1 and L2 are scaled using different ratios. For this test we scale
- * L1 down and scale L2 up.
+ * both L1 and L2 are scaled using different ratios.
  */
 #include <linux/math64.h>
 #include <time.h>
@@ -226,12 +223,38 @@ int main(int argc, char *argv[])
 	/* Sanity check the frequency reported by KVM_GET_TSC_KHZ. */
 	test_tsc_scaling(l0_tsc_freq, l0_tsc_freq, l0_tsc_freq, BIT_ULL(frac_bits));
 
-	/* Scale L1 "down" and L2 "up" at a random factor from 2 to 10. */
+	/*
+	 * Scale L1 and L2 up and down at random factors from 2 to 10.  Current
+	 * CPUs have two full orders of magnitude of "breathing room" before an
+	 * ultrafast L0 TSC frequency multiplied by 10x will encounter KVM's
+	 * signed 32-bit limit on L1's frequency, and it's highly unlikely a
+	 * CPU that supports TSC scaling will show up running at 100MHz, i.e.
+	 * underflowing KVM's minimum 1KHz frequency is extremely unlikely.
+	 *
+	 * For L2, the frequency is limited only by what hardware can support,
+	 * not by KVM's limits.  SVM provides 8 bits of integer scale up, and
+	 * 32 bits of fractional scale down, i.e. can scale up 255x and down a
+	 * comical amount, so scaling up 100x and down 1/100 is well within
+	 * hardware's capabilities (VMX provides 16 bits of "up" and 48 bits of
+	 * "down").
+	 */
 	l1_scale = (kvm_random_u32(&kvm_rng) % 9) + 2;
 	l2_scale = (kvm_random_u32(&kvm_rng) % 9) + 2;
 
 	test_tsc_scaling(l0_tsc_freq, l0_tsc_freq / l1_scale,
 			 mul_u64_u64_div64(l0_tsc_freq, l2_scale, l1_scale),
+			 (l2_scale << frac_bits));
+
+	test_tsc_scaling(l0_tsc_freq, l0_tsc_freq * l1_scale,
+			 mul_u64_u64_div64(l0_tsc_freq, l1_scale, l2_scale),
+			 (1ull << frac_bits) / l2_scale);
+
+	test_tsc_scaling(l0_tsc_freq, l0_tsc_freq / l1_scale,
+			 l0_tsc_freq / l1_scale / l2_scale,
+			 (1ull << frac_bits) / l2_scale);
+
+	test_tsc_scaling(l0_tsc_freq, l0_tsc_freq * l1_scale,
+			 l0_tsc_freq * l1_scale * l2_scale,
 			 (l2_scale << frac_bits));
 
 	return 0;
