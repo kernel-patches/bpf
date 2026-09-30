@@ -286,19 +286,27 @@ static inline bool dw_spi_dma_tx_busy(struct dw_spi *dws)
 		(DW_SPI_SR_BUSY | DW_SPI_SR_TF_EMPT)) != DW_SPI_SR_TF_EMPT;
 }
 
-static int dw_spi_dma_wait_tx_done(struct dw_spi *dws,
-				   struct spi_transfer *xfer)
+static int dw_spi_dma_wait_tx_done(struct dw_spi *dws, u32 speed_hz)
 {
 	int retry = DW_SPI_WAIT_RETRIES;
 	struct spi_delay delay;
+	unsigned long ns, us;
 	u32 nents;
 
 	nents = dw_readl(dws, DW_SPI_TXFLR);
-	delay.unit = SPI_DELAY_UNIT_SCK;
-	delay.value = nents * dws->n_bytes * BITS_PER_BYTE;
+	ns = DIV_ROUND_UP(NSEC_PER_SEC, speed_hz) * nents *
+	     dws->n_bytes * BITS_PER_BYTE;
+	if (ns <= NSEC_PER_USEC) {
+		delay.unit = SPI_DELAY_UNIT_NSECS;
+		delay.value = ns;
+	} else {
+		us = DIV_ROUND_UP(ns, NSEC_PER_USEC);
+		delay.unit = SPI_DELAY_UNIT_USECS;
+		delay.value = clamp_val(us, 0, USHRT_MAX);
+	}
 
 	while (dw_spi_dma_tx_busy(dws) && retry--)
-		spi_delay_exec(&delay, xfer);
+		spi_delay_exec(&delay, NULL);
 
 	if (retry < 0) {
 		dev_err(&dws->ctlr->dev, "Tx hanged up\n");
@@ -659,7 +667,7 @@ static int dw_spi_dma_transfer(struct dw_spi *dws, struct spi_transfer *xfer)
 		return ret;
 
 	if (dws->ctlr->cur_msg->status == -EINPROGRESS) {
-		ret = dw_spi_dma_wait_tx_done(dws, xfer);
+		ret = dw_spi_dma_wait_tx_done(dws, xfer->effective_speed_hz);
 		if (ret)
 			return ret;
 	}
