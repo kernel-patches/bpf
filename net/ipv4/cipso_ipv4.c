@@ -2272,6 +2272,14 @@ int cipso_v4_skbuff_delattr(struct sk_buff *skb)
 	new_hdr_len_actual = hdr_len_actual - cipso_len;
 	new_hdr_len = (new_hdr_len_actual + 3) & ~3;
 	hdr_len_delta = (iph->ihl << 2) - new_hdr_len;
+	if (opt->srr > opt->cipso)
+		opt->srr -= cipso_len;
+	if (opt->rr > opt->cipso)
+		opt->rr -= cipso_len;
+	if (opt->ts > opt->cipso)
+		opt->ts -= cipso_len;
+	if (opt->router_alert > opt->cipso)
+		opt->router_alert -= cipso_len;
 
 	/* 1. shift any options after CIPSO to the left */
 	memmove(cipso_ptr, cipso_ptr + cipso_len,
