@@ -436,9 +436,9 @@ static int it6625_regmap_i2c_init(struct i2c_client *client,
 
 static int it6625_read_byte(struct it6625 *it6625, u8 reg)
 {
+	struct device *dev = it6625->dev;
 	unsigned int val;
 	int err;
-	struct device *dev = it6625->dev;
 
 	err = regmap_read(it6625->it6625_regmap, reg, &val);
 	if (err < 0) {
@@ -451,8 +451,8 @@ static int it6625_read_byte(struct it6625 *it6625, u8 reg)
 
 static int it6625_write_byte(struct it6625 *it6625, u8 reg, u8 val)
 {
-	int err;
 	struct device *dev = it6625->dev;
+	int err;
 
 	err = regmap_write(it6625->it6625_regmap, reg, val);
 	if (err < 0) {
@@ -465,8 +465,8 @@ static int it6625_write_byte(struct it6625 *it6625, u8 reg, u8 val)
 
 static int it6625_set_bits(struct it6625 *it6625, u8 reg, u8 mask, u8 val)
 {
-	int err;
 	struct device *dev = it6625->dev;
+	int err;
 
 	err = regmap_update_bits(it6625->it6625_regmap, reg, mask, val);
 	if (err < 0) {
@@ -479,8 +479,8 @@ static int it6625_set_bits(struct it6625 *it6625, u8 reg, u8 mask, u8 val)
 
 static int it6625_read_bytes(struct it6625 *it6625, u8 reg, u8 *buf, int len)
 {
-	int err;
 	struct device *dev = it6625->dev;
+	int err;
 
 	err = regmap_bulk_read(it6625->it6625_regmap, reg, buf, len);
 	if (err < 0) {
@@ -493,8 +493,8 @@ static int it6625_read_bytes(struct it6625 *it6625, u8 reg, u8 *buf, int len)
 
 static int it6625_write_bytes(struct it6625 *it6625, u8 reg, u8 *buf, int len)
 {
-	int err;
 	struct device *dev = it6625->dev;
+	int err;
 
 	err = regmap_bulk_write(it6625->it6625_regmap, reg, buf, len);
 	if (err < 0) {
@@ -1651,8 +1651,8 @@ static int it6625_set_fmt(struct v4l2_subdev *sd,
 			  struct v4l2_subdev_format *format)
 {
 	struct it6625 *it6625 = sd_to_6625(sd);
-	int ret;
 	u32 mbus_fmt_code = format->format.code;
+	int ret;
 
 	ret = it6625_get_fmt(sd, sd_state, format);
 	format->format.code = mbus_fmt_code;
@@ -1732,8 +1732,8 @@ static int it6625_s_edid(struct v4l2_subdev *sd,
 			 struct v4l2_subdev_edid *edid)
 {
 	struct it6625 *it6625 = sd_to_6625(sd);
-	int err;
 	u16 parent_pa = CEC_PHYS_ADDR_INVALID;
+	int err;
 
 	if (edid->pad != 0) {
 		v4l2_err(sd, "invalid pad %d", edid->pad);
