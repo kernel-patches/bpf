@@ -109,23 +109,6 @@ const struct ipu6_isys_pixelformat ipu6_isys_pfmts[] = {
 	  IPU6_FW_ISYS_FRAME_FORMAT_RAW16, true },
 };
 
-static int video_open(struct file *file)
-{
-	struct ipu6_isys_video *av = video_drvdata(file);
-	struct ipu6_isys *isys = av->isys;
-	struct ipu6_bus_device *adev = isys->adev;
-
-	mutex_lock(&isys->mutex);
-	if (isys->need_reset) {
-		mutex_unlock(&isys->mutex);
-		dev_warn(&adev->auxdev.dev, "isys power cycle required\n");
-		return -EIO;
-	}
-	mutex_unlock(&isys->mutex);
-
-	return v4l2_fh_open(file);
-}
-
 const struct ipu6_isys_pixelformat *
 ipu6_isys_get_isys_format(u32 pixelformat, u32 type)
 {
@@ -809,7 +792,7 @@ static const struct v4l2_file_operations isys_fops = {
 	.poll = vb2_fop_poll,
 	.unlocked_ioctl = video_ioctl2,
 	.mmap = vb2_fop_mmap,
-	.open = video_open,
+	.open = v4l2_fh_open,
 	.release = vb2_fop_release,
 };
 
