@@ -913,7 +913,7 @@ i915_gem_object_ggtt_pin_ww(struct drm_i915_gem_object *obj,
 	GEM_WARN_ON(!ww);
 
 	if (flags & PIN_MAPPABLE &&
-	    (!view || view->type == I915_GTT_VIEW_NORMAL)) {
+	    (!view || intel_gtt_view_is_normal(view))) {
 		/*
 		 * If the required space is larger than the available
 		 * aperture, we will not able to find a slot for the

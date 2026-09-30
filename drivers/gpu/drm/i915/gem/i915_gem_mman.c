@@ -396,7 +396,7 @@ retry:
 		unsigned int flags;
 
 		flags = PIN_MAPPABLE | PIN_NOSEARCH;
-		if (view.type == I915_GTT_VIEW_NORMAL)
+		if (intel_gtt_view_is_normal(&view))
 			flags |= PIN_NONBLOCK; /* avoid warnings for pinned */
 
 		/*
