@@ -9,5 +9,18 @@
 //!
 //! See `Documentation/gpu/nova/core/interrupts.rst`.
 
+mod hal;
 mod interrupt_tree;
 mod regs;
+
+/// The message-signaled interrupt type that Linux granted.
+///
+/// nova-core never requests INTx, so this has no variant for it, unlike [`kernel::pci::IrqType`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MsiType {
+    /// A single message, which every subtree raises.
+    Msi,
+
+    /// One table entry per subtree.
+    MsiX,
+}
