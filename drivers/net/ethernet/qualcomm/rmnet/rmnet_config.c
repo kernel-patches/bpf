@@ -30,7 +30,8 @@ static int rmnet_is_real_dev_registered(const struct net_device *real_dev)
  * offload), MAPv4 (v4 checksum offload) and MAPv5 (v5 checksum
  * offload). QMAP command support is orthogonal and permitted with
  * any of the three. Mixing v4 and v5 checksum offload flags together
- * is not a supported configuration.
+ * is not a supported configuration. DL packet coalescing additionally
+ * requires a MAPv5 configuration.
  */
 static bool rmnet_config_data_format_valid(u32 data_format)
 {
@@ -39,7 +40,14 @@ static bool rmnet_config_data_format_valid(u32 data_format)
 	u32 v5_mask = RMNET_FLAGS_INGRESS_MAP_CKSUMV5 |
 		      RMNET_FLAGS_EGRESS_MAP_CKSUMV5;
 
-	return !(data_format & v4_mask) || !(data_format & v5_mask);
+	if ((data_format & v4_mask) && (data_format & v5_mask))
+		return false;
+
+	if ((data_format & RMNET_FLAGS_INGRESS_COALESCE) &&
+	    !(data_format & RMNET_FLAGS_INGRESS_MAP_CKSUMV5))
+		return false;
+
+	return true;
 }
 
 /* Needs rtnl lock */

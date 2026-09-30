@@ -96,9 +96,10 @@ __rmnet_map_ingress_handler(struct sk_buff *skb,
 
 	__skb_queue_head_init(&list);
 
-	if ((data_format & RMNET_FLAGS_INGRESS_MAP_CKSUMV5) &&
+	if ((data_format &
+	     (RMNET_FLAGS_INGRESS_MAP_CKSUMV5 | RMNET_FLAGS_INGRESS_COALESCE)) &&
 	    (map_header->flags & MAP_NEXT_HEADER_FLAG)) {
-		if (rmnet_map_process_next_hdr_packet(skb, &list, len))
+		if (rmnet_map_process_next_hdr_packet(skb, &list, len, data_format))
 			goto free_skb;
 	} else {
 		/* Subtract MAP header */
