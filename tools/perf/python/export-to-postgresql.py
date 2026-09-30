@@ -316,9 +316,9 @@ class PostgresExporter:
             # SQL identifiers are double-quoted; escape embedded double quotes by doubling them.
             db_name = self.dbname.replace('"', '""')
             self.do_query(f'CREATE DATABASE "{db_name}"')
-        except Exception as e:
+        except Exception as db_error:
             shutil.rmtree(self.output_dir_name, ignore_errors=True)
-            raise e
+            raise db_error
         self.disconnect()
 
         self.connect(self.dbname)
