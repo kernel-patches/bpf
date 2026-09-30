@@ -1190,10 +1190,15 @@ static void submit_exec_queue(struct xe_exec_queue *q, struct xe_sched_job *job)
 	xe_gt_assert(guc_to_gt(guc), exec_queue_registered(q));
 
 	if (!job->restore_replay || job->last_replay) {
-		/* A ULLS job past the first publishes its own ring tail */
+		/*
+		 * A chained ULLS job relies on its predecessor's postamble to
+		 * publish its ring tail. After a reset the context comes back
+		 * disabled with that postamble gone, so publish it here.
+		 */
 		if (xe_exec_queue_is_parallel(q))
 			wq_item_append(q);
-		else if (!xe_sched_job_ulls_is_chained(job))
+		else if (!xe_sched_job_ulls_is_chained(job) ||
+			 !exec_queue_enabled(q))
 			xe_lrc_set_ring_tail(lrc, lrc->ring.tail);
 		job->last_replay = false;
 	}
