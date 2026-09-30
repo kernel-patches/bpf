@@ -27,6 +27,8 @@
 #define SIT9531X_MAX_INPUTS		8
 #define SIT9531X_NUM_INPUT_PAIRS	(SIT9531X_MAX_INPUTS / 2)
 #define SIT9531X_MAX_OUTPUTS		12
+/* Output phase-adjust range advertised to the core, +/-1 ms in ps */
+#define SIT9531X_OUT_PHASE_ADJ_MAX_PS	1000000000
 /*
  * INTSYNC (the inter-PLL sync net) is modeled as two pins.  The
  * destination PLL that locks to INTSYNC sees an input pin
@@ -104,6 +106,13 @@ struct sit9531x_ref {
  * @routed:		output is mapped to @pll_idx by the initial
  *			configuration; an unrouted output has no DPLL pin
  * @pll_idx:		PLL driving this output (0-3)
+ * @phase_stale:	the programmed delay may differ from @phase_adj
+ * @phase_armed:	a phase adjust has been programmed, so a rate
+ *			change has to re-time it even when it quantized
+ *			to zero
+ * @phase_adj:		phase adjust the delay registers actually realize,
+ *			i.e. the last request quantized to whole VCO cycles
+ *			plus 30 ps fine steps, in the request's sign
  */
 struct sit9531x_out {
 	u64		freq;
@@ -112,6 +121,9 @@ struct sit9531x_out {
 	bool		state_stale;
 	bool		routed;
 	u8		pll_idx;
+	s32		phase_adj;
+	bool		phase_armed;
+	bool		phase_stale;
 };
 
 /*
@@ -273,6 +285,10 @@ int sit9531x_output_freq_get(struct sit9531x_dev *sitdev, u8 out_idx,
 			     u64 *frequency);
 
 /* ---- Output phase adjust (PRG_RST_DELAY register-based) ---- */
+int sit9531x_output_phase_read(struct sit9531x_dev *sitdev, u8 out_idx,
+			       s32 *phase_ps);
+int sit9531x_output_phase_adjust_set(struct sit9531x_dev *sitdev,
+				     u8 out_idx, s32 phase_ps);
 
 /* ---- Notification clear ---- */
 int sit9531x_clear_notifications(struct sit9531x_dev *sitdev);
