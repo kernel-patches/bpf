@@ -3764,7 +3764,7 @@ long kvm_arch_vcpu_ioctl(struct file *filp,
 		user_tsc_khz = (u32)arg;
 
 		if (kvm_caps.has_tsc_control &&
-		    user_tsc_khz >= kvm_caps.max_guest_tsc_khz)
+		    user_tsc_khz > kvm_caps.max_guest_tsc_khz)
 			goto out;
 
 		if (user_tsc_khz == 0)
@@ -4700,7 +4700,7 @@ set_pit2_out:
 		user_tsc_khz = (u32)arg;
 
 		if (kvm_caps.has_tsc_control &&
-		    user_tsc_khz >= kvm_caps.max_guest_tsc_khz)
+		    user_tsc_khz > kvm_caps.max_guest_tsc_khz)
 			goto out;
 
 		if (user_tsc_khz == 0)
@@ -7178,7 +7178,8 @@ int kvm_x86_vendor_init(struct kvm_x86_init_ops *ops)
 	if (kvm_caps.has_tsc_control) {
 		/*
 		 * Make sure the user can only configure tsc_khz values that
-		 * fit into a signed integer.
+		 * fit into a signed integer, otherwise KVM_GET_TSC_KHZ would
+		 * return a negative value and confuse userspace.
 		 * A min value is not calculated because it will always
 		 * be 1 on all machines.
 		 */
