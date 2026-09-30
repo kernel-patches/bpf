@@ -240,6 +240,99 @@ static void sit9531x_input_get_regs(const struct sit9531x_dev *sitdev,
 }
 
 /*
+ * sit9531x_input_disable - disable an input reference
+ * @index:	logical input index (0-N)
+ *
+ * Sets the force mask bit and clears the state bit for the given
+ * input, effectively disabling it.  Register selection depends on
+ * the pair's signal mode (SE/DE) and the lane (P/N); the bit within
+ * each register addresses the input pair.
+ *
+ * Both writes are attempted even when the first fails, and the first
+ * error is returned.  Neither is rolled back: the force and state bits
+ * only mean something together, so a transient bus error can leave the
+ * force bit asserted over a state bit that was never programmed, and the
+ * error is what says the override is not to be trusted.
+ *
+ * Caller must hold sitdev->multiop_lock.
+ */
+int sit9531x_input_disable(struct sit9531x_dev *sitdev, u8 index)
+{
+	unsigned int force_reg, state_reg;
+	struct sit9531x_ref *ref;
+	u8 pair, val;
+	int rc, ret;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (index >= SIT9531X_MAX_INPUTS)
+		return -EINVAL;
+
+	ref = &sitdev->ref[index];
+	pair = sit9531x_input_pair(index);
+	sit9531x_input_get_regs(sitdev, index, &force_reg, &state_reg);
+
+	rc = sit9531x_read_u8(sitdev, force_reg, &val);
+	if (!rc)
+		rc = sit9531x_write_u8(sitdev, force_reg, val | BIT(pair));
+
+	ret = sit9531x_read_u8(sitdev, state_reg, &val);
+	if (!ret)
+		ret = sit9531x_write_u8(sitdev, state_reg, val & ~BIT(pair));
+	if (ret && !rc)
+		rc = ret;
+
+	/*
+	 * Drop the claim even when the pair could not be programmed.  The
+	 * force bit may be asserted over a state bit that never reached the
+	 * device, so the receiver cannot be relied on; leaving the cache
+	 * saying it is on makes the next enable skip itself and report a
+	 * success the signal does not back.  Clearing the force bit again
+	 * is harmless, so the worst this costs is one redundant write.
+	 */
+	ref->enabled = false;
+
+	return rc;
+}
+
+/*
+ * sit9531x_input_enable - enable an input reference
+ * @index:	logical input index (0-N)
+ *
+ * Clears the force mask bit for the given input, returning it to
+ * hardware default (enabled).
+ *
+ * Caller must hold sitdev->multiop_lock.
+ */
+int sit9531x_input_enable(struct sit9531x_dev *sitdev, u8 index)
+{
+	unsigned int force_reg, state_reg;
+	struct sit9531x_ref *ref;
+	u8 pair, val;
+	int rc;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (index >= SIT9531X_MAX_INPUTS)
+		return -EINVAL;
+
+	ref = &sitdev->ref[index];
+	pair = sit9531x_input_pair(index);
+	sit9531x_input_get_regs(sitdev, index, &force_reg, &state_reg);
+
+	rc = sit9531x_read_u8(sitdev, force_reg, &val);
+	if (rc)
+		return rc;
+	rc = sit9531x_write_u8(sitdev, force_reg, val & ~BIT(pair));
+	if (rc)
+		return rc;
+
+	ref->enabled = true;
+
+	return 0;
+}
+
+/*
  * Output enable / disable (Hi-Z control)
  *
  * SiT9531x outputs can be configured as differential (DIFF) or
@@ -433,26 +526,537 @@ static u8 sit9531x_prio_slot_get(u8 val, u8 slot)
 	return val >> SIT9531X_PRIO_HI_SHIFT;
 }
 
+/* Place source @src in priority slot @slot of a register value. */
+static u8 sit9531x_prio_slot_set(u8 val, u8 slot, u8 src)
+{
+	if (slot & 1)
+		return (val & (SIT9531X_PRIO_NIBBLE_MASK <<
+			       SIT9531X_PRIO_HI_SHIFT)) |
+		       (src & SIT9531X_PRIO_NIBBLE_MASK);
+
+	return (val & SIT9531X_PRIO_NIBBLE_MASK) |
+	       ((src & SIT9531X_PRIO_NIBBLE_MASK) <<
+		SIT9531X_PRIO_HI_SHIFT);
+}
+
 /*
- * Rebuild a PLL's membership mask from the source codes of its priority
- * table.  The mask is what the pin state getters test, so it is refreshed
- * from exactly the values the table holds -- here after a write, and once
- * per poll from the read-back in sit9531x_chan_state_fetch().
+ * Commit a priority-table programming sequence through the Page-0
+ * programming directive register.
+ *
+ * A small change update is all the table needs.  The NVM-bank and
+ * loop-lock directives that the output system issues do not belong
+ * here: the former programs non-volatile storage from the efuse and
+ * the latter only means anything after an escape to the PRG_CMD
+ * state.  This matches the documented input_priority_sel() procedure.
+ */
+static int sit9531x_prio_prg_commit(struct sit9531x_dev *sitdev)
+{
+	int rc;
+
+	rc = sit9531x_write_u8(sitdev, SIT9531X_REG_GLOBAL_UPDATE,
+			       SIT9531X_SMALL_UPDATE_CMD);
+	if (rc)
+		return rc;
+
+	usleep_range(1000, 2000);
+
+	return 0;
+}
+
+/*
+ * sit9531x_input_mon_fetch - read the clock monitor status of every lane
+ *
+ * Four registers carry a nibble per lane.  Loss of signal and frequency
+ * drift are what separate an input the device could lock to from one it
+ * could not, which the priority commit uses to choose the active
+ * selection and the pins report as their operational state.
+ *
+ * Caller must hold sitdev->multiop_lock, or run before registration.
+ */
+static int sit9531x_input_mon_fetch(struct sit9531x_dev *sitdev)
+{
+	static const unsigned int regs[] = {
+		SIT9531X_CLKMON_P_STATUS_01, SIT9531X_CLKMON_P_STATUS_23,
+		SIT9531X_CLKMON_N_STATUS_01, SIT9531X_CLKMON_N_STATUS_23,
+	};
+	u8 val[ARRAY_SIZE(regs)], i, pair, nib;
+	int rc;
+
+	for (i = 0; i < ARRAY_SIZE(regs); i++) {
+		rc = sit9531x_read_u8(sitdev, regs[i], &val[i]);
+		if (rc)
+			return rc;
+	}
+
+	for (i = 0; i < sitdev->info->num_inputs; i++) {
+		struct sit9531x_ref *ref = &sitdev->ref[i];
+
+		/* Lane 2k is INkP, 2k + 1 INkN; a register holds two pairs. */
+		pair = sit9531x_input_pair(i);
+		nib = val[(sit9531x_input_is_n(i) ? 2 : 0) + pair / 2];
+		nib = (pair & 1) ? nib >> 4 : nib & 0x0F;
+
+		ref->los = !!(nib & SIT9531X_CLKMON_LOSS);
+		ref->qual_fail = !ref->los &&
+				 !!(nib & (SIT9531X_CLKMON_FINE_DRIFT |
+					   SIT9531X_CLKMON_COARSE_DRIFT));
+	}
+
+	return 0;
+}
+
+/*
+ * Can the device lock to this source now?  Only the input lanes have a
+ * monitor; the on-chip oscillator and the inter-PLL net are taken as
+ * present.  A differential pair is watched through its P lane, which is
+ * the one its table entries are canonicalised to.
+ */
+static bool sit9531x_prio_src_live(const struct sit9531x_dev *sitdev, u8 src)
+{
+	u8 index = sit9531x_hw_src_input(src);
+
+	if (index >= sitdev->info->num_inputs)
+		return true;
+
+	return !sitdev->ref[index].los;
+}
+
+/*
+ * Fold a source code to the lane a DPLL pin actually represents.
+ *
+ * Differential input pairs expose only the P lane as a DPLL pin.  A
+ * priority table entry encoded as an N lane for such a pair must map to
+ * the P-lane source for pin-facing operations (membership, priority slots,
+ * add/remove/set lookups), matching sit9531x_ref_pll_mask_fetch().
+ */
+static u8 sit9531x_prio_src_canon(const struct sit9531x_dev *sitdev, u8 src)
+{
+	u8 index = sit9531x_hw_src_input(src);
+
+	if (index >= sitdev->info->num_inputs)
+		return src;
+
+	if (sit9531x_input_is_n(index) &&
+	    sitdev->ref[index].sig_mode == SIT9531X_MODE_DE)
+		return sit9531x_input_hw_src(index - 1);
+
+	return src;
+}
+
+/*
+ * sit9531x_input_prio_present - is a source listed in a PLL's priority table
+ * @input_idx:	input source in hardware encoding (see
+ *		sit9531x_input_hw_src())
+ *
+ * Answers from the membership mask that every table write and every poll
+ * refreshes, which is what the pin state getters test.  The priority slot
+ * cannot answer this: a source that is not in the table reports the lowest
+ * slot, so the slot value alone does not separate absent from last.
+ *
+ * Caller must hold sitdev->multiop_lock.
+ */
+bool sit9531x_input_prio_present(struct sit9531x_dev *sitdev, u8 pll_idx,
+				 u8 input_idx)
+{
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (pll_idx >= SIT9531X_NUM_PLLS)
+		return false;
+
+	input_idx = sit9531x_prio_src_canon(sitdev, input_idx);
+	if (input_idx >= SIT9531X_PRIO_NUM_SRC)
+		return false;
+
+	return !!(sitdev->chan[pll_idx].prio_mask & BIT(input_idx));
+}
+
+/*
+ * Take the configured priorities from a table the hardware holds: each
+ * listed source gets the first slot it occupies.  A source the table does
+ * not list keeps whatever it had, so a disconnected input comes back with
+ * its old priority.
+ */
+static void sit9531x_prio_cfg_seed(struct sit9531x_dev *sitdev, u8 pll_idx,
+				   const u8 *srcs)
+{
+	struct sit9531x_chan *chan = &sitdev->chan[pll_idx];
+	u16 seeded = 0;
+	u8 slot, src;
+
+	for (slot = 0; slot < SIT9531X_PRIO_MAX_SLOTS; slot++) {
+		src = srcs[slot] & SIT9531X_PRIO_NIBBLE_MASK;
+		if (!sit9531x_prio_src_usable(src))
+			continue;
+		src = sit9531x_prio_src_canon(sitdev, src);
+		if (seeded & BIT(src))
+			continue;
+		seeded |= BIT(src);
+		chan->cfg_prio[src] = slot;
+		chan->cfg_known |= BIT(src);
+	}
+
+	/*
+	 * A source this PLL has never listed gets the lowest slot, the value
+	 * it reports and the one it is connected at, so its priority does not
+	 * change when its state does.
+	 */
+	for (src = 0; src < SIT9531X_PRIO_NUM_SRC; src++) {
+		if (chan->cfg_known & BIT(src))
+			continue;
+		chan->cfg_prio[src] = SIT9531X_PRIO_MAX_SLOTS - 1;
+		chan->cfg_known |= BIT(src);
+	}
+
+	memcpy(chan->seen_srcs, srcs, sizeof(chan->seen_srcs));
+	chan->seen_valid = true;
+}
+
+/*
+ * Build the table for a set of member sources: ordered by configured
+ * priority, ties kept in the order the hardware table has them, the slots
+ * past the last member naming no source.  Filling them with the code for
+ * no source rather than with copies of the last member keeps every
+ * source in exactly one slot, so the order the table encodes is the
+ * order the priorities say.
+ */
+static void sit9531x_prio_table_build(struct sit9531x_dev *sitdev, u8 pll_idx,
+				      u16 members, u8 *srcs)
+{
+	const struct sit9531x_chan *chan = &sitdev->chan[pll_idx];
+	u8 order[SIT9531X_PRIO_NUM_SRC], n = 0, i, j, src;
+
+	for (src = 0; src < SIT9531X_PRIO_NUM_SRC; src++)
+		if (members & BIT(src))
+			order[n++] = src;
+
+	/* Insertion sort: at most a dozen entries. */
+	for (i = 1; i < n; i++) {
+		u8 cur = order[i];
+
+		for (j = i; j > 0; j--) {
+			u8 prev = order[j - 1];
+			u16 kc, kp;
+
+			kc = (chan->cfg_known & BIT(cur)) ?
+			     chan->cfg_prio[cur] : U8_MAX;
+			kp = (chan->cfg_known & BIT(prev)) ?
+			     chan->cfg_prio[prev] : U8_MAX;
+			if (kc == kp) {
+				/* Keep the hardware order among equals. */
+				kc = chan->prio_last[cur] ?: U8_MAX;
+				kp = chan->prio_last[prev] ?: U8_MAX;
+			}
+			if (kp <= kc)
+				break;
+			order[j] = prev;
+		}
+		order[j] = cur;
+	}
+
+	for (i = 0; i < SIT9531X_PRIO_MAX_SLOTS; i++)
+		srcs[i] = i < n ? order[i] : SIT9531X_PRIO_SRC_NONE;
+}
+
+/*
+ * Refresh a PLL's cached view of its priority table from the source codes
+ * the table holds -- here after a write, and once per poll from the
+ * read-back in sit9531x_chan_state_fetch().
+ *
+ * The membership mask is what the pin state getters test, the per-slot
+ * copy is what a rewrite compares against, and the first-slot array
+ * orders sources of equal priority, so none of them costs a register read
+ * per pin.
  */
 static void sit9531x_prio_mask_build(struct sit9531x_dev *sitdev, u8 pll_idx,
 				     const u8 *srcs)
 {
+	struct sit9531x_chan *chan = &sitdev->chan[pll_idx];
+	u8 first[SIT9531X_PRIO_NUM_SRC] = { 0 };
 	u16 mask = 0;
-	u8 slot;
+	u8 slot, src, src_canon;
 
 	for (slot = 0; slot < SIT9531X_PRIO_MAX_SLOTS; slot++) {
-		u8 src = srcs[slot] & SIT9531X_PRIO_NIBBLE_MASK;
+		src = srcs[slot];
+		src &= SIT9531X_PRIO_NIBBLE_MASK;
+		chan->prio_srcs[slot] = src;
+		src_canon = sit9531x_prio_src_canon(sitdev, src);
+		if (!sit9531x_prio_src_usable(src))
+			continue;
 
-		if (sit9531x_prio_src_usable(src))
-			mask |= BIT(src);
+		mask |= BIT(src_canon);
+		if (!first[src_canon])
+			first[src_canon] = slot + 1;
 	}
 
-	sitdev->chan[pll_idx].prio_mask = mask;
+	/*
+	 * Assign unconditionally: a source that has left the table has no
+	 * slot, and leaving its old one behind would keep reporting it as
+	 * listed for as long as the device runs.
+	 */
+	for (src = 0; src < SIT9531X_PRIO_NUM_SRC; src++)
+		chan->prio_last[src] = first[src];
+
+	chan->prio_mask = mask;
+}
+
+/* Attempts to release a forced holdover before reporting it stuck. */
+#define SIT9531X_HO_CLEAR_TRIES		3
+
+static int sit9531x_prio_table_read(struct sit9531x_dev *sitdev, u8 pll_idx,
+				    u8 *srcs);
+
+/*
+ * First source in a table that the device could lock to now, compared as
+ * canonical codes, or SIT9531X_PRIO_SRC_NONE when no listed source has a
+ * signal.
+ */
+static u8 sit9531x_prio_top_live(const struct sit9531x_dev *sitdev,
+				 const u8 *srcs)
+{
+	u8 i, src;
+
+	for (i = 0; i < SIT9531X_PRIO_MAX_SLOTS; i++) {
+		src = srcs[i] & SIT9531X_PRIO_NIBBLE_MASK;
+		src = sit9531x_prio_src_canon(sitdev, src);
+		if (sit9531x_prio_src_usable(src) &&
+		    sit9531x_prio_src_live(sitdev, src))
+			return src;
+	}
+
+	return SIT9531X_PRIO_SRC_NONE;
+}
+
+/*
+ * Choose the active selection for a table about to be latched.  After a
+ * table write the PLL goes to the source the selection names; it moves to
+ * another on its own only when that source loses its signal, which is an
+ * event, not a state.  So the selection has to name a source the PLL can
+ * use, and it follows the priorities the way the DPLL interface defines
+ * automatic mode -- the highest-priority valid input:
+ *
+ * - When the highest-priority source with signal is not the one the
+ *   table held before, the priorities now put another source first, and
+ *   the selection goes to it.
+ * - Otherwise the write only reorders sources below it, or removes one
+ *   the PLL is not on, and the selection stays where it is while that
+ *   source is still listed and has signal: a change further down the
+ *   table must not pull a PLL off a healthy reference.
+ * - Otherwise the first listed source with signal; with none alive the
+ *   first listed one is as good as any.
+ *
+ * A selection that is still listed but has lost its signal is moved too.
+ * The PLL has then fallen back on its own, and this driver does not read
+ * which source; left alone, the next table write sends it back to the
+ * dead one and it unlocks.  The device falls back to the best listed
+ * source that has signal, which is the one chosen here, so moving the
+ * selection there does not move the PLL.
+ *
+ * @old is the table the device holds before this write.
+ */
+static u8 sit9531x_prio_activesel_pick(struct sit9531x_dev *sitdev,
+				       const u8 *old, const u8 *srcs, u8 cur)
+{
+	u8 top, i;
+
+	top = sit9531x_prio_top_live(sitdev, srcs);
+	if (top != SIT9531X_PRIO_SRC_NONE &&
+	    top != sit9531x_prio_top_live(sitdev, old))
+		return top;
+
+	/*
+	 * The table is built from canonical codes, so compare in the same
+	 * terms: a differential pair selected through its N-lane code is the
+	 * P-lane entry.
+	 */
+	cur = sit9531x_prio_src_canon(sitdev, cur & SIT9531X_PRIO_NIBBLE_MASK);
+
+	if (sit9531x_prio_src_usable(cur) &&
+	    sit9531x_prio_src_live(sitdev, cur))
+		for (i = 0; i < SIT9531X_PRIO_MAX_SLOTS; i++)
+			if (srcs[i] == cur)
+				return cur;
+
+	if (top != SIT9531X_PRIO_SRC_NONE)
+		return top;
+
+	return srcs[0];
+}
+
+static int sit9531x_prio_table_commit(struct sit9531x_dev *sitdev, u8 pll_idx,
+				      const u8 *srcs)
+{
+	struct sit9531x_chan *chan = &sitdev->chan[pll_idx];
+	u8 val, slot, attempt, written = 0, restored = 0;
+	u8 now[SIT9531X_PRIO_MAX_SLOTS];
+	int rc = 0, prg_rc, ho_rc = 0;
+	bool empty;
+	u16 reg;
+
+	empty = !sit9531x_prio_src_usable(srcs[0]);
+
+	rc = sit9531x_update_pll_u8(sitdev, pll_idx, SIT9531X_PLL_REG_HO_CTRL,
+				    BIT(SIT9531X_PLL_HO_FORCE_BIT),
+				    BIT(SIT9531X_PLL_HO_FORCE_BIT));
+	if (rc)
+		return rc;
+
+	usleep_range(10000, 12000);
+
+	/*
+	 * Two slots share a register, and this writes every slot, so both
+	 * nibbles are known for every register but the last -- build those
+	 * bytes outright.  Reading first would raise the question of what a
+	 * read returns between the write and the latch, and the answer does
+	 * not matter if nothing is read.
+	 */
+	for (slot = 0; slot + 1 < SIT9531X_PRIO_MAX_SLOTS; slot += 2) {
+		reg = sit9531x_prio_reg(pll_idx, slot);
+
+		val = sit9531x_prio_slot_set(0, slot, srcs[slot]);
+		val = sit9531x_prio_slot_set(val, slot + 1, srcs[slot + 1]);
+
+		rc = sit9531x_write_u8(sitdev, reg, val);
+		if (rc)
+			goto rollback;
+
+		written = slot + 2;
+	}
+
+	/*
+	 * The last register carries slot 10 in its high nibble and the
+	 * device's active selection in its low one; see
+	 * sit9531x_prio_activesel_pick() for how the selection is chosen.
+	 * It needs the signal state now, not as of the last poll.
+	 *
+	 * The slot setter picks its nibble by parity, so the selection is
+	 * addressed as the slot past the last one.  This register has not
+	 * been written yet in this sequence, so the read returns what the
+	 * device is running with.
+	 *
+	 * A table naming no source at all is what removing the last one
+	 * asks for.  There is nothing to point the selection at -- the code
+	 * for no source is not one the selection takes -- so the nibble is
+	 * left alone and the PLL is kept in holdover below instead.
+	 */
+	reg = sit9531x_prio_reg(pll_idx, slot);
+
+	rc = sit9531x_read_u8(sitdev, reg, &val);
+	if (rc)
+		goto rollback;
+
+	val = sit9531x_prio_slot_set(val, slot, srcs[slot]);
+
+	if (!empty) {
+		u8 sel = sit9531x_prio_slot_get(val, slot + 1);
+
+		if (sit9531x_input_mon_fetch(sitdev))
+			dev_warn_ratelimited(sitdev->dev,
+					     "PLL%c: input monitor not read; choosing the selection without it\n",
+					     'A' + pll_idx);
+		sel = sit9531x_prio_activesel_pick(sitdev, chan->prio_srcs,
+						   srcs, sel);
+		val = sit9531x_prio_slot_set(val, slot + 1, sel);
+	}
+
+	rc = sit9531x_write_u8(sitdev, reg, val);
+	if (rc)
+		goto rollback;
+
+	written = SIT9531X_PRIO_MAX_SLOTS;
+
+rollback:
+	if (rc && written) {
+		/*
+		 * Put the slots that did reach the device back the way they
+		 * were.  Latching a table that is neither the previous order
+		 * nor the requested one hands the reference selection loop
+		 * a priority list nobody asked for.  The cache is the table
+		 * as last read, which is what those slots held.
+		 */
+		for (slot = 0; slot < written; slot += 2) {
+			u8 old;
+
+			old = sit9531x_prio_slot_set(0, slot,
+						     chan->prio_srcs[slot]);
+			old = sit9531x_prio_slot_set(old, slot + 1,
+						     chan->prio_srcs[slot + 1]);
+			if (sit9531x_write_u8(sitdev,
+					      sit9531x_prio_reg(pll_idx, slot),
+					      old))
+				break;
+
+			restored = slot + 2;
+		}
+		written = restored;
+	}
+
+	/*
+	 * Latch unconditionally: the slots that reached the device are in
+	 * the table regardless, so the latch keeps hardware and the cache
+	 * refresh below consistent with what was actually written.
+	 */
+	prg_rc = sit9531x_prio_prg_commit(sitdev);
+	if (prg_rc && !rc)
+		rc = prg_rc;
+
+	/*
+	 * Refresh the cache so a get that follows a set does not have to
+	 * wait for the next poll.  After a complete write that is the table
+	 * just written.  After a failure it is whatever the device holds
+	 * now -- part request, part restore -- so read it back rather than
+	 * piece it together: the membership test decides what a failed
+	 * request rolls back, and it must not answer for writes that did not
+	 * land.  A read-back that fails too leaves the next poll to do it.
+	 */
+	if (!rc) {
+		sit9531x_prio_mask_build(sitdev, pll_idx, srcs);
+		memcpy(chan->seen_srcs, srcs, sizeof(chan->seen_srcs));
+		chan->seen_valid = true;
+	} else if (!sit9531x_prio_table_read(sitdev, pll_idx, now)) {
+		sit9531x_prio_mask_build(sitdev, pll_idx, now);
+		memcpy(chan->seen_srcs, now, sizeof(chan->seen_srcs));
+		chan->seen_valid = true;
+	}
+
+	/*
+	 * A table that names no source keeps the PLL in the holdover forced
+	 * above: that is the one state in which it follows no input, which
+	 * is what disconnecting every input asks for.  The selection nibble
+	 * alone would not do it -- it still names the old source, and the
+	 * PLL keeps following that one for as long as it has signal.  The
+	 * next table write that lists a source releases it.
+	 */
+	if (empty && !rc) {
+		dev_dbg(sitdev->dev,
+			"PLL%c: no source listed, holdover kept\n",
+			'A' + pll_idx);
+		return 0;
+	}
+
+	/*
+	 * Release the forced holdover.  Apart from an empty table, nothing
+	 * in the driver keeps this bit set, so a PLL left with it reports
+	 * holdover until the next table write on the same PLL clears it,
+	 * which may never come.  Retry before giving up, and say so if it
+	 * stays set.
+	 */
+	for (attempt = 0; attempt < SIT9531X_HO_CLEAR_TRIES; attempt++) {
+		ho_rc = sit9531x_update_pll_u8(sitdev, pll_idx,
+					       SIT9531X_PLL_REG_HO_CTRL,
+					       BIT(SIT9531X_PLL_HO_FORCE_BIT),
+					       0);
+		if (!ho_rc)
+			break;
+		usleep_range(1000, 2000);
+	}
+	if (ho_rc) {
+		dev_err(sitdev->dev, "PLL%c left in forced holdover: %d\n",
+			'A' + pll_idx, ho_rc);
+		if (!rc)
+			rc = ho_rc;
+	}
+
+	return rc;
 }
 
 /*
@@ -477,6 +1081,137 @@ static int sit9531x_prio_table_read(struct sit9531x_dev *sitdev, u8 pll_idx,
 	}
 
 	return 0;
+}
+
+/*
+ * Rewrite a PLL's table for a new member set, unless it would come out as
+ * the table already holds: every write forces the PLL into holdover for
+ * the length of the sequence, so one that changes nothing is a
+ * disturbance nobody asked for.
+ */
+static int sit9531x_prio_table_apply(struct sit9531x_dev *sitdev, u8 pll_idx,
+				     u16 members)
+{
+	u8 srcs[SIT9531X_PRIO_MAX_SLOTS];
+
+	if (hweight16(members) > SIT9531X_PRIO_MAX_SLOTS)
+		return -ENOSPC;
+
+	sit9531x_prio_table_build(sitdev, pll_idx, members, srcs);
+	if (!memcmp(srcs, sitdev->chan[pll_idx].prio_srcs, sizeof(srcs)))
+		return 0;
+
+	return sit9531x_prio_table_commit(sitdev, pll_idx, srcs);
+}
+
+/*
+ * sit9531x_input_prio_set - set an input's priority on a PLL
+ * @input_idx:	input source in hardware encoding (0-11, see
+ *		sit9531x_input_hw_src())
+ * @prio:	priority, lower is preferred
+ *
+ * Records the priority and, when the source is in the PLL's table,
+ * rebuilds the table from the configured priorities.  A source that is
+ * not in the table keeps the priority for when it is connected: that is
+ * the pin's state, and it belongs to the state setter.  Other sources
+ * keep theirs either way, so no sibling's priority moves.
+ *
+ * Caller must hold sitdev->multiop_lock.
+ *
+ * Return: 0 on success, -EINVAL for a bad PLL or source, <0 on error
+ */
+int sit9531x_input_prio_set(struct sit9531x_dev *sitdev, u8 pll_idx,
+			    u8 input_idx, u8 prio)
+{
+	struct sit9531x_chan *chan;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (pll_idx >= SIT9531X_NUM_PLLS)
+		return -EINVAL;
+	input_idx = sit9531x_prio_src_canon(sitdev, input_idx);
+	if (input_idx >= SIT9531X_PRIO_NUM_SRC)
+		return -EINVAL;
+
+	chan = &sitdev->chan[pll_idx];
+	chan->cfg_prio[input_idx] = prio;
+	chan->cfg_known |= BIT(input_idx);
+
+	if (!(chan->prio_mask & BIT(input_idx)))
+		return 0;
+
+	return sit9531x_prio_table_apply(sitdev, pll_idx, chan->prio_mask);
+}
+
+/*
+ * sit9531x_input_prio_remove - drop an input from a PLL's priority table
+ * @input_idx:	input source in hardware encoding
+ *
+ * Rebuilds the table without the source, which makes a disconnected
+ * input ineligible for automatic reference selection, not just gated at
+ * the input buffer.  The source keeps its configured priority for when it
+ * comes back.  Removing a source that is absent succeeds without touching
+ * the table.  Removing the last one leaves a table that names no source;
+ * the commit then keeps the PLL in holdover, which is what disconnecting
+ * every input asks for.
+ *
+ * Caller must hold sitdev->multiop_lock.
+ *
+ * Return: 0 on success, <0 on error
+ */
+int sit9531x_input_prio_remove(struct sit9531x_dev *sitdev, u8 pll_idx,
+			       u8 input_idx)
+{
+	struct sit9531x_chan *chan;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (pll_idx >= SIT9531X_NUM_PLLS)
+		return -EINVAL;
+	input_idx = sit9531x_prio_src_canon(sitdev, input_idx);
+	if (input_idx >= SIT9531X_PRIO_NUM_SRC)
+		return -EINVAL;
+
+	chan = &sitdev->chan[pll_idx];
+	if (!(chan->prio_mask & BIT(input_idx)))
+		return 0;
+
+	return sit9531x_prio_table_apply(sitdev, pll_idx,
+					 chan->prio_mask & ~BIT(input_idx));
+}
+
+/*
+ * sit9531x_input_prio_add - make an input eligible in a PLL's table
+ * @input_idx:	input source in hardware encoding
+ *
+ * Puts the source back into the table at its configured priority; one the
+ * PLL never listed has the lowest slot (see sit9531x_prio_cfg_seed()).  A
+ * source that is already listed leaves the table untouched.
+ *
+ * Caller must hold sitdev->multiop_lock.
+ *
+ * Return: 0 on success, -ENOSPC when the table cannot hold another
+ * source, <0 on error
+ */
+int sit9531x_input_prio_add(struct sit9531x_dev *sitdev, u8 pll_idx,
+			    u8 input_idx)
+{
+	struct sit9531x_chan *chan;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (pll_idx >= SIT9531X_NUM_PLLS)
+		return -EINVAL;
+	input_idx = sit9531x_prio_src_canon(sitdev, input_idx);
+	if (input_idx >= SIT9531X_PRIO_NUM_SRC)
+		return -EINVAL;
+
+	chan = &sitdev->chan[pll_idx];
+	if (chan->prio_mask & BIT(input_idx))
+		return 0;
+
+	return sit9531x_prio_table_apply(sitdev, pll_idx,
+					 chan->prio_mask | BIT(input_idx));
 }
 
 /* XO doubler register */
@@ -569,7 +1304,8 @@ int sit9531x_clear_notifications(struct sit9531x_dev *sitdev)
  * @index:	logical input index
  *
  * Reads whether the lane's receiver is on, from the Page 0x02 force and
- * state bits.
+ * state bits.  Signal status comes from sit9531x_input_mon_fetch(),
+ * which reads every lane's clock monitor in one pass.
  */
 static int sit9531x_ref_state_fetch(struct sit9531x_dev *sitdev, u8 index)
 {
@@ -739,12 +1475,27 @@ static int sit9531x_chan_state_fetch(struct sit9531x_dev *sitdev, u8 pll_idx)
 
 	sit9531x_prio_mask_build(sitdev, pll_idx, srcs);
 
+	/*
+	 * The configured priorities come from the table the first time it
+	 * is read, and again whenever it no longer matches what the driver
+	 * last wrote: something else -- a profile reload, a direct I2C
+	 * tool -- rewrote it, and that table is now the configuration.
+	 */
+	if (!chan->seen_valid ||
+	    memcmp(srcs, chan->seen_srcs, sizeof(chan->seen_srcs)))
+		sit9531x_prio_cfg_seed(sitdev, pll_idx, srcs);
+
 	/* STATUS_1_GENERIC reports loss of lock, so invert it. */
 	chan->active = active;
 	chan->locked = active && !(outer_lol & BIT(pll_idx));
 	chan->mode = !!(status & SIT9531X_PLL_STATUS_OUTER_DIS);
-	chan->selected_ref =
-		sit9531x_hw_src_input(input_sel & SIT9531X_PRIO_NIBBLE_MASK);
+	/*
+	 * Canonicalise like the table entries: a differential pair selected
+	 * through its N-lane code is the P-lane pin.
+	 */
+	input_sel &= SIT9531X_PRIO_NIBBLE_MASK;
+	input_sel = sit9531x_prio_src_canon(sitdev, input_sel);
+	chan->selected_ref = sit9531x_hw_src_input(input_sel);
 	chan->inner_lol = !!(inner_lol & BIT(pll_idx));
 	chan->ho_freeze = !!(ho_freeze & BIT(pll_idx));
 	chan->ho_valid = !!(pll_status_1 & SIT9531X_PLL_STATUS_1_HO_VALID);
@@ -913,6 +1664,13 @@ static int sit9531x_dev_state_fetch(struct sit9531x_dev *sitdev)
 		}
 	}
 
+	rc = sit9531x_input_mon_fetch(sitdev);
+	if (rc) {
+		dev_err(sitdev->dev,
+			"Failed to read the input clock monitors: %d\n", rc);
+		return rc;
+	}
+
 	/*
 	 * The priority-table read walks the Page-1 registers, so it runs
 	 * with multiop_lock held like every other multi-register sequence.
@@ -961,6 +1719,46 @@ static void sit9531x_dev_ref_states_update(struct sit9531x_dev *sitdev)
 			dev_warn(sitdev->dev,
 				 "Failed to get REF%u status: %d\n", i, rc);
 	}
+
+	rc = sit9531x_input_mon_fetch(sitdev);
+	if (rc)
+		dev_warn(sitdev->dev,
+			 "Failed to read the input clock monitors: %d\n", rc);
+}
+
+/*
+ * sit9531x_ref_pll_mask_rebuild - re-derive the input receiver refcounts
+ *
+ * ref->pll_mask decides when an input receiver may be powered down, and
+ * the connect and disconnect paths maintain it by hand.  A request that
+ * failed part way through leaves it describing a table the device does
+ * not hold, and nothing else corrected it: a later disconnect could then
+ * drop the count to zero and gate an input another PLL is still locked
+ * to.  Re-derive every mask from the tables the poll has just read.  No
+ * extra bus traffic -- sit9531x_chan_state_fetch() refreshed the masks
+ * this reads immediately before.
+ *
+ * Caller must hold sitdev->multiop_lock.
+ */
+static void sit9531x_ref_pll_mask_rebuild(struct sit9531x_dev *sitdev)
+{
+	u8 pll_idx, src, index;
+
+	for (index = 0; index < sitdev->info->num_inputs; index++)
+		sitdev->ref[index].pll_mask = 0;
+
+	for (pll_idx = 0; pll_idx < SIT9531X_NUM_PLLS; pll_idx++) {
+		u16 mask = sitdev->chan[pll_idx].prio_mask;
+
+		for (src = 0; src < SIT9531X_PRIO_NUM_SRC; src++) {
+			if (!(mask & BIT(src)))
+				continue;
+
+			index = sit9531x_hw_src_input(src);
+			if (index < sitdev->info->num_inputs)
+				sitdev->ref[index].pll_mask |= BIT(pll_idx);
+		}
+	}
 }
 
 static void sit9531x_dev_chan_states_update(struct sit9531x_dev *sitdev)
@@ -974,6 +1772,8 @@ static void sit9531x_dev_chan_states_update(struct sit9531x_dev *sitdev)
 				 "Failed to get PLL%c state: %d\n",
 				 'A' + i, rc);
 	}
+
+	sit9531x_ref_pll_mask_rebuild(sitdev);
 }
 
 /*
@@ -1266,6 +2066,84 @@ static void sit9531x_pll_states_report(struct sit9531x_dev *sitdev)
 }
 
 /*
+ * sit9531x_input_pin_is_registrable - check if an input pin is registrable
+ *
+ * Split out so input-model changes stay local to this helper.
+ *
+ * Return: true if the input pin should be registered, false otherwise
+ */
+static bool sit9531x_input_pin_is_registrable(struct sit9531x_dev *sitdev,
+					      u8 index)
+{
+	if (index >= sitdev->info->num_inputs)
+		return false;
+
+	/*
+	 * The N lane of a differentially-configured pair is not a
+	 * standalone input and is skipped (zl3073x model).
+	 */
+	if (sit9531x_input_is_n(index) &&
+	    sitdev->ref[index].sig_mode == SIT9531X_MODE_DE)
+		return false;
+
+	return true;
+}
+
+/*
+ * Warn about a pin node in the firmware description whose reg names no
+ * pin this device can have: an input lane or an output the variant does
+ * not have, or the N lane of a pair the configuration runs differential.
+ * Nodes are looked up from the pins (sit9531x_pin_props_get()), so such a
+ * node would otherwise have its label and frequencies dropped without a
+ * word.  The binding bounds reg per variant; this catches what reaches
+ * the driver unvalidated, and the pair mode, which only the loaded
+ * configuration decides.  An output that exists but that no PLL drives
+ * gets no pin either and is not reported: which outputs a configuration
+ * uses is not a fault in the description.
+ */
+static void sit9531x_pin_nodes_check(struct sit9531x_dev *sitdev)
+{
+	struct fwnode_handle *pins, *node;
+	bool found;
+	u32 reg;
+	u8 i;
+
+	pins = device_get_named_child_node(sitdev->dev, "input-pins");
+	fwnode_for_each_child_node(pins, node) {
+		if (fwnode_property_read_u32(node, "reg", &reg))
+			continue;
+		if (reg < sitdev->info->num_inputs &&
+		    sit9531x_input_pin_is_registrable(sitdev, reg))
+			continue;
+		dev_warn(sitdev->dev,
+			 "input-pins/%pfwP: reg %u is %s, node ignored\n",
+			 node, reg,
+			 reg < sitdev->info->num_inputs ?
+			 "the N lane of a differential pair" :
+			 "not an input lane");
+	}
+	fwnode_handle_put(pins);
+
+	pins = device_get_named_child_node(sitdev->dev, "output-pins");
+	fwnode_for_each_child_node(pins, node) {
+		if (fwnode_property_read_u32(node, "reg", &reg))
+			continue;
+		found = false;
+		for (i = 0; i < sitdev->info->num_outputs; i++) {
+			if (sitdev->info->clkout_map[i] == reg) {
+				found = true;
+				break;
+			}
+		}
+		if (!found)
+			dev_warn(sitdev->dev,
+				 "output-pins/%pfwP: reg %u is not an output of %s, node ignored\n",
+				 node, reg, sitdev->info->name);
+	}
+	fwnode_handle_put(pins);
+}
+
+/*
  * sit9531x_dev_start - start normal operation
  *
  * Fetches initial hardware state, registers all DPLL devices and
@@ -1286,6 +2164,8 @@ int sit9531x_dev_start(struct sit9531x_dev *sitdev)
 	sit9531x_manual_sel_report(sitdev);
 	sit9531x_pll_states_report(sitdev);
 	mutex_unlock(&sitdev->multiop_lock);
+
+	sit9531x_pin_nodes_check(sitdev);
 
 	list_for_each_entry(sitdpll, &sitdev->dplls, list) {
 		rc = sit9531x_dpll_register(sitdpll);
@@ -1468,9 +2348,9 @@ static void sit9531x_dpll_pins_unregister(struct sit9531x_dpll *sitdpll)
  * @dir:	pin direction
  * @index:	pin hardware index
  *
- * Only the XO pin has a complete pin-op table in this patch, so only
- * the XO pin is registrable here.  Other pin classes are registered
- * once their state callbacks land in the following patches.
+ * For input pins: delegate to sit9531x_input_pin_is_registrable().
+ * A pin class whose state callback the tree does not have yet is not
+ * registrable: the core refuses a pin without one.
  *
  * Return: true if pin should be registered, false otherwise
  */
@@ -1478,15 +2358,15 @@ static bool sit9531x_dpll_pin_is_registrable(struct sit9531x_dpll *sitdpll,
 					     enum dpll_pin_direction dir,
 					     u8 index)
 {
-	/*
-	 * Only the XO pin has a complete pin-op table in this patch.
-	 * Other pin classes are registered once their state callbacks
-	 * land in the following patches.
-	 */
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+
 	if (dir != DPLL_PIN_DIRECTION_INPUT)
 		return false;
 
-	return index == SIT9531X_MAX_INPUTS;
+	if (index == SIT9531X_MAX_INPUTS)
+		return true;
+
+	return sit9531x_input_pin_is_registrable(sitdev, index);
 }
 
 /*
