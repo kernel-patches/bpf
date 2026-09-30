@@ -1360,6 +1360,9 @@ int dw_spi_add_controller(struct device *dev, struct dw_spi *dws)
 			goto err_free_irq;
 		} else if (ret) {
 			dev_warn(dev, "DMA init failed\n");
+		} else if (dws->dma_nr_chans == 1) {
+			/* Full-duplex DMA transfers need both channels */
+			dev_info(dev, "Single DMA channel, full-duplex DMA disabled\n");
 		} else {
 			ctlr->can_dma = dws->dma_ops->can_dma;
 			ctlr->flags |= SPI_CONTROLLER_MUST_TX;

@@ -42,14 +42,19 @@ static void dw_spi_dma_maxburst_init(struct dw_spi *dws)
 
 	def_burst = dws->fifo_len / 2;
 
-	ret = dma_get_slave_caps(dws->rxchan, &caps);
-	if (!ret && caps.max_burst)
-		max_burst = caps.max_burst;
-	else
-		max_burst = DW_SPI_RX_BURST_LEVEL;
+	if (dws->rxchan) {
+		ret = dma_get_slave_caps(dws->rxchan, &caps);
+		if (!ret && caps.max_burst)
+			max_burst = caps.max_burst;
+		else
+			max_burst = DW_SPI_RX_BURST_LEVEL;
 
-	dws->rxburst = min(max_burst, def_burst);
-	dw_writel(dws, DW_SPI_DMARDLR, dws->rxburst - 1);
+		dws->rxburst = min(max_burst, def_burst);
+		dw_writel(dws, DW_SPI_DMARDLR, dws->rxburst - 1);
+	}
+
+	if (!dws->txchan)
+		return;
 
 	ret = dma_get_slave_caps(dws->txchan, &caps);
 	if (!ret && caps.max_burst)
@@ -74,20 +79,39 @@ static void dw_spi_dma_maxburst_init(struct dw_spi *dws)
 
 static int dw_spi_dma_caps_init(struct dw_spi *dws)
 {
-	struct dma_slave_caps tx, rx;
+	struct dma_slave_caps tx = {}, rx = {};
 	int ret;
 
-	ret = dma_get_slave_caps(dws->txchan, &tx);
-	if (ret)
-		return ret;
+	if (dws->txchan) {
+		ret = dma_get_slave_caps(dws->txchan, &tx);
+		if (ret)
+			return ret;
 
-	ret = dma_get_slave_caps(dws->rxchan, &rx);
-	if (ret)
-		return ret;
+		if (!(tx.directions & BIT(DMA_MEM_TO_DEV)))
+			return -ENXIO;
+	}
 
-	if (!(tx.directions & BIT(DMA_MEM_TO_DEV) &&
-	      rx.directions & BIT(DMA_DEV_TO_MEM)))
-		return -ENXIO;
+	if (dws->rxchan) {
+		ret = dma_get_slave_caps(dws->rxchan, &rx);
+		if (ret)
+			return ret;
+
+		if (!(rx.directions & BIT(DMA_DEV_TO_MEM)))
+			return -ENXIO;
+	}
+
+	/* With a single channel only one direction is available at a time */
+	if (!dws->rxchan) {
+		dws->dma_sg_burst = tx.max_sg_burst;
+		dws->dma_addr_widths = tx.dst_addr_widths;
+		return 0;
+	}
+
+	if (!dws->txchan) {
+		dws->dma_sg_burst = rx.max_sg_burst;
+		dws->dma_addr_widths = rx.src_addr_widths;
+		return 0;
+	}
 
 	if (tx.max_sg_burst > 0 && rx.max_sg_burst > 0)
 		dws->dma_sg_burst = min(tx.max_sg_burst, rx.max_sg_burst);
@@ -169,24 +193,30 @@ static int dw_spi_dma_init_generic(struct device *dev, struct dw_spi *dws)
 {
 	int ret;
 
+	dws->dma_nr_chans = 0;
+
 	dws->rxchan = dma_request_chan(dev, "rx");
 	if (IS_ERR(dws->rxchan)) {
 		ret = PTR_ERR(dws->rxchan);
 		dws->rxchan = NULL;
 		goto err_exit;
 	}
+	dws->dma_nr_chans++;
 
+	/*
+	 * Some platforms have only one DMA channel for the controller. Keep
+	 * the Rx channel in that case, it can still serve half-duplex
+	 * transfers.
+	 */
 	dws->txchan = dma_request_chan(dev, "tx");
 	if (IS_ERR(dws->txchan)) {
 		ret = PTR_ERR(dws->txchan);
 		dws->txchan = NULL;
-		goto free_rxchan;
+		if (ret == -EPROBE_DEFER)
+			goto free_rxchan;
+	} else {
+		dws->dma_nr_chans++;
 	}
-
-	dws->ctlr->dma_rx = dws->rxchan;
-	dws->ctlr->dma_tx = dws->txchan;
-
-	init_completion(&dws->dma_completion);
 
 	ret = dw_spi_dma_caps_init(dws);
 	if (ret)
@@ -194,15 +224,23 @@ static int dw_spi_dma_init_generic(struct device *dev, struct dw_spi *dws)
 
 	dw_spi_dma_maxburst_init(dws);
 
+	init_completion(&dws->dma_completion);
+
+	dws->ctlr->dma_rx = dws->rxchan;
+	dws->ctlr->dma_tx = dws->txchan;
+
 	return 0;
 
 free_txchan:
-	dma_release_channel(dws->txchan);
-	dws->txchan = NULL;
+	if (dws->txchan) {
+		dma_release_channel(dws->txchan);
+		dws->txchan = NULL;
+	}
 free_rxchan:
 	dma_release_channel(dws->rxchan);
 	dws->rxchan = NULL;
 err_exit:
+	dws->dma_nr_chans = 0;
 	return ret;
 }
 
