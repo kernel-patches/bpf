@@ -24458,6 +24458,7 @@ M:	Wenmeng Liu <wenmeng.liu@oss.qualcomm.com>
 L:	linux-media@vger.kernel.org
 S:	Supported
 F:	Documentation/devicetree/bindings/media/i2c/samsung,s5kjn5.yaml
+F:	drivers/media/i2c/s5kjn5.c
 
 SAMSUNG S5P Security SubSystem (SSS) DRIVER
 M:	Krzysztof Kozlowski <krzk@kernel.org>
