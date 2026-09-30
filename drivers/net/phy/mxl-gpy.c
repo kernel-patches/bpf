@@ -115,6 +115,7 @@
 /* Packet Manager Control */
 #define VSPEC1_PM_CTRL		0x0c
 #define VSPEC1_PM_CTRL_MDIO_VOL	BIT(14)
+#define VSPEC1_PM_CTRL_SI	BIT(12)		/* Super Isolate */
 
 /* Temperature sensor */
 #define VSPEC1_TEMP_STA	0x0E
@@ -446,10 +447,6 @@ static int mxl86211c_probe(struct phy_device *phydev)
 	struct regulator_dev *rdev;
 	int ret;
 
-	ret = gpy_probe(phydev);
-	if (ret)
-		return ret;
-
 	config.dev = dev;
 	config.driver_data = phydev;
 
@@ -459,7 +456,15 @@ static int mxl86211c_probe(struct phy_device *phydev)
 		return PTR_ERR(rdev);
 	}
 
-	return 0;
+	ret = phy_modify_mmd(phydev, MDIO_MMD_VEND1, VSPEC1_PM_CTRL,
+			     VSPEC1_PM_CTRL_SI,
+			     0);
+	if (ret)
+		return ret;
+
+	ret = gpy_probe(phydev);
+
+	return ret;
 }
 
 static bool gpy_sgmii_need_reaneg(struct phy_device *phydev)
