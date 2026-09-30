@@ -146,6 +146,10 @@ struct txq {
 	u32 wr_idx;
 	u32 free_idx;
 	bool tx_started;
+	/* Set by err_work while it stops and flushes this queue; read under
+	 * ring_lock by the producer so no request is submitted in between.
+	 */
+	bool is_stopping;
 	u32 nr_bds;
 };
 

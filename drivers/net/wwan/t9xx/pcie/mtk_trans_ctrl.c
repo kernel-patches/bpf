@@ -473,19 +473,23 @@ int mtk_pcie_hif_exit(struct mtk_md_dev *mdev)
 
 	trans = ctrl_blk->ctrl_hw_priv;
 
+	/* Hold submit_lock across the whole teardown: late submitters either
+	 * see available and finish before the teardown starts, or block here
+	 * and then bail out on !available. Also makes this exit idempotent,
+	 * so both the FSM listener and device removal may call it.
+	 */
 	mutex_lock(&trans->submit_lock);
+	if (!atomic_read(&trans->available)) {
+		mutex_unlock(&trans->submit_lock);
+		return 0;
+	}
 	atomic_set(&trans->available, 0);
-	mutex_unlock(&trans->submit_lock);
-
 	/* Join the service threads before freeing what they dereference: they
 	 * read trans->dev without a lock, so clearing it cannot stop a
 	 * consumer that has already loaded the pointer.
 	 */
 	mtk_ctrl_trb_srv_exit(trans);
 	mtk_cldma_exit(trans);
-
-	/* Late submitters may still hold the lock and walk the tree. */
-	mutex_lock(&trans->submit_lock);
 	mtk_ctrl_remove_radix_tree(trans);
 	mutex_unlock(&trans->submit_lock);
 
@@ -565,6 +569,15 @@ unlock:
 	return ret;
 }
 
+void mtk_pcie_hif_fsm_indication(struct mtk_md_dev *mdev, struct mtk_fsm_param *param)
+{
+	struct mtk_ctrl_blk *ctrl_blk = mdev->ctrl_blk;
+	struct mtk_ctrl_trans *trans;
+
+	trans = ctrl_blk->ctrl_hw_priv;
+	mtk_cldma_fsm_state_listener(param, trans);
+}
+
 int mtk_pcie_hif_cmd_func(struct mtk_md_dev *mdev, int cmd, void *data)
 {
 	struct mtk_ctrl_blk *ctrl_blk = mdev->ctrl_blk;
@@ -627,6 +640,13 @@ int mtk_trans_ctrl_init(struct mtk_md_dev *mdev)
 
 int mtk_trans_ctrl_exit(struct mtk_md_dev *mdev)
 {
+	/* FSM_STATE_OFF normally tears the HIF down. If that never ran, the
+	 * trb kthreads and the CLDMA irq callback would outlive the devm
+	 * allocations they point at, so do it here. mtk_pcie_hif_exit() is
+	 * idempotent under trans->submit_lock, so calling it again is safe.
+	 */
+	mtk_pcie_hif_exit(mdev);
+
 	mtk_ctrl_exit(mdev);
 
 	return 0;
