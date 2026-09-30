@@ -16,6 +16,7 @@
 #include <linux/of_graph.h>
 #include <linux/regmap.h>
 #include <linux/slab.h>
+#include <linux/time64.h>
 #include <linux/timer.h>
 #include <linux/v4l2-dv-timings.h>
 #include <linux/videodev2.h>
@@ -505,11 +506,11 @@ static int it6625_wait_for_status(struct it6625 *it6625, u8 reg, u8 val,
 	int timeout_round_ms = DIV_ROUND_UP(timeout_ms, sleep_ms) * sleep_ms;
 
 	status = read_poll_timeout(it6625_read_byte, rval, rval == val,
-				   sleep_ms * 1000,
-				   timeout_round_ms * 1000,
+				   sleep_ms * USEC_PER_MSEC,
+				   timeout_round_ms * USEC_PER_MSEC,
 				   false, it6625, reg);
 
-	dev_info(dev, "%s status = %d %d", __func__, status, (int)rval);
+	dev_dbg(dev, "%s status = %d %d", __func__, status, rval);
 	if (status < 0) {
 		dev_err(dev, "%s err status = %d", __func__, status);
 		return -ETIMEDOUT;
