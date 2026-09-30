@@ -2820,6 +2820,30 @@ static struct btf_raw_test raw_tests[] = {
 },
 
 {
+	.descr = "func (Some arg of static func has no name)",
+	.raw_types = {
+		BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4),	/* [1] */
+		BTF_TYPE_INT_ENC(0, 0, 0, 32, 4),		/* [2] */
+		/* void (*)(int a, unsigned int) */
+		BTF_FUNC_PROTO_ENC(0, 2),			/* [3] */
+			BTF_FUNC_PROTO_ARG_ENC(NAME_TBD, 1),
+			BTF_FUNC_PROTO_ARG_ENC(0, 2),
+		/* static void func(int a, unsigned int) */
+		BTF_FUNC_ENC(NAME_TBD, 3),			/* [4] */
+		BTF_END_RAW,
+	},
+	.str_sec = "\0a\0func",
+	.str_sec_size = sizeof("\0a\0func"),
+	.map_type = BPF_MAP_TYPE_ARRAY,
+	.map_name = "func_type_check_btf",
+	.key_size = sizeof(int),
+	.value_size = sizeof(int),
+	.key_type_id = 1,
+	.value_type_id = 1,
+	.max_entries = 4,
+},
+
+{
 	.descr = "func (Non zero vlen)",
 	.raw_types = {
 		BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4),	/* [1] */
