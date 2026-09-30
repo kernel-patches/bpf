@@ -36,6 +36,7 @@
 MODULE_AUTHOR("Alexey Starikovskiy <astarikovskiy@suse.de>");
 MODULE_DESCRIPTION("Smart Battery System ACPI interface driver");
 MODULE_LICENSE("GPL");
+MODULE_IMPORT_NS("ACPI_BATTERY_HOOKS");
 
 static unsigned int cache_time = 1000;
 module_param(cache_time, uint, 0644);
@@ -54,6 +55,7 @@ struct acpi_battery {
 	struct power_supply *bat;
 	struct power_supply_desc bat_desc;
 	struct acpi_sbs *sbs;
+	struct acpi_battery_hooks_list_entry hooks_list_entry;
 	unsigned long update_time;
 	char name[8];
 	char manufacturer_name[ACPI_SBS_BLOCK_MAX];
@@ -555,6 +557,8 @@ static int acpi_battery_add(struct acpi_sbs *sbs, int id)
 		goto end;
 	}
 
+	acpi_battery_add_hooks(&battery->hooks_list_entry, battery->bat);
+
       end:
 	pr_info("%s [%s]: Battery Slot [%s] (battery %s)\n",
 	       ACPI_SBS_DEVICE_NAME, acpi_device_bid(sbs->device),
@@ -566,8 +570,10 @@ static void acpi_battery_remove(struct acpi_sbs *sbs, int id)
 {
 	struct acpi_battery *battery = &sbs->battery[id];
 
-	if (battery->bat)
+	if (battery->bat) {
+		acpi_battery_remove_hooks(&battery->hooks_list_entry);
 		power_supply_unregister(battery->bat);
+	}
 }
 
 static int acpi_charger_add(struct acpi_sbs *sbs)
