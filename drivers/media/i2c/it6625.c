@@ -29,7 +29,7 @@
 #include <media/v4l2-fwnode.h>
 #include <uapi/linux/it6625.h>
 
-static int debug = 3;
+static int debug;
 module_param(debug, int, 0644);
 MODULE_PARM_DESC(debug, "debug level (0-3)");
 
