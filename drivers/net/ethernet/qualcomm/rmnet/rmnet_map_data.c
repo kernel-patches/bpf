@@ -497,34 +497,53 @@ void rmnet_map_checksum_uplink_packet(struct sk_buff *skb,
 	}
 }
 
-/* Process a MAPv5 packet header */
+static struct rmnet_map_v5_csum_header *
+rmnet_map_get_next_hdr(struct sk_buff *skb)
+{
+	return (struct rmnet_map_v5_csum_header *)(skb->data +
+						   sizeof(struct rmnet_map_header));
+}
+
+static u8 rmnet_map_get_next_hdr_type(struct sk_buff *skb)
+{
+	struct rmnet_map_v5_csum_header *hdr = rmnet_map_get_next_hdr(skb);
+
+	return u8_get_bits(hdr->header_info, MAPV5_HDRINFO_HDR_TYPE_FMASK);
+}
+
+static bool rmnet_map_get_csum_valid(struct sk_buff *skb)
+{
+	struct rmnet_map_v5_csum_header *hdr = rmnet_map_get_next_hdr(skb);
+
+	return !!(hdr->csum_info & MAPV5_CSUMINFO_VALID_FLAG);
+}
+
 int rmnet_map_process_next_hdr_packet(struct sk_buff *skb,
+				      struct sk_buff_head *list,
 				      u16 len)
 {
 	struct rmnet_priv *priv = netdev_priv(skb->dev);
-	struct rmnet_map_v5_csum_header *next_hdr;
-	u8 nexthdr_type;
 
-	next_hdr = (struct rmnet_map_v5_csum_header *)(skb->data +
-			sizeof(struct rmnet_map_header));
+	switch (rmnet_map_get_next_hdr_type(skb)) {
+	case RMNET_MAP_HEADER_TYPE_CSUM_OFFLOAD:
+		if (unlikely(!(skb->dev->features & NETIF_F_RXCSUM))) {
+			priv->stats.csum_sw++;
+		} else if (rmnet_map_get_csum_valid(skb)) {
+			priv->stats.csum_ok++;
+			skb->ip_summed = CHECKSUM_UNNECESSARY;
+		} else {
+			priv->stats.csum_valid_unset++;
+		}
 
-	nexthdr_type = u8_get_bits(next_hdr->header_info,
-				   MAPV5_HDRINFO_HDR_TYPE_FMASK);
+		skb_pull(skb, sizeof(struct rmnet_map_header) +
+			      sizeof(struct rmnet_map_v5_csum_header));
+		skb_trim(skb, len);
+		__skb_queue_tail(list, skb);
+		break;
 
-	if (nexthdr_type != RMNET_MAP_HEADER_TYPE_CSUM_OFFLOAD)
+	default:
 		return -EINVAL;
-
-	if (unlikely(!(skb->dev->features & NETIF_F_RXCSUM))) {
-		priv->stats.csum_sw++;
-	} else if (next_hdr->csum_info & MAPV5_CSUMINFO_VALID_FLAG) {
-		priv->stats.csum_ok++;
-		skb->ip_summed = CHECKSUM_UNNECESSARY;
-	} else {
-		priv->stats.csum_valid_unset++;
 	}
-
-	/* Pull csum v5 header */
-	skb_pull(skb, sizeof(*next_hdr));
 
 	return 0;
 }
