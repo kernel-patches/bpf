@@ -71,4 +71,9 @@ static inline bool intel_gtt_view_is_rotated(const struct intel_gtt_view *view)
 	return view->type == I915_GTT_VIEW_ROTATED;
 }
 
+static inline bool intel_gtt_view_is_partial(const struct intel_gtt_view *view)
+{
+	return view->type == I915_GTT_VIEW_PARTIAL;
+}
+
 #endif /* __DRM_INTEL_GTT_VIEW_TYPES_H__ */
