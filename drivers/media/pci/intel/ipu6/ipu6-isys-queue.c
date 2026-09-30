@@ -420,9 +420,7 @@ static int ipu6_isys_link_fmt_validate(struct ipu6_isys_queue *aq)
 static void return_buffers(struct ipu6_isys_queue *aq,
 			   enum vb2_buffer_state state)
 {
-	struct ipu6_isys_video *av = ipu6_isys_queue_to_video(aq);
 	struct ipu6_isys_buffer *ib;
-	bool need_reset = false;
 	unsigned long flags;
 
 	spin_lock_irqsave(&aq->lock, flags);
@@ -458,18 +456,9 @@ static void return_buffers(struct ipu6_isys_queue *aq,
 		vb2_buffer_done(vb, state);
 
 		spin_lock_irqsave(&aq->lock, flags);
-		need_reset = true;
 	}
 
 	spin_unlock_irqrestore(&aq->lock, flags);
-
-	if (need_reset) {
-		mutex_lock(&av->isys->mutex);
-		av->isys->need_reset = true;
-		mutex_unlock(&av->isys->mutex);
-		dev_warn(&av->isys->adev->auxdev.dev,
-			 "buffer list not empty, needs isys reset\n");
-	}
 }
 
 static void ipu6_isys_stream_cleanup(struct ipu6_isys_video *av)
