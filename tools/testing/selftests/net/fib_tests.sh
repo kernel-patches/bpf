@@ -14,7 +14,7 @@ TESTS="unregister down carrier nexthop suppress ipv6_notify ipv4_notify \
        ipv4_mpath_list ipv6_mpath_list ipv4_mpath_balance ipv6_mpath_balance \
        ipv4_mpath_balance_preferred ipv4_mpath_oif ipv4_mpath_oif_nh \
        ipv4_mpath_oif_vrf ipv6_mpath_oif ipv6_mpath_oif_nh ipv6_mpath_oif_vrf \
-       fib6_ra_to_static fib6_temp_addr_renewal"
+       fib6_ra_to_static fib6_temp_addr_renewal ipv6_route_lo"
 
 VERBOSE=0
 PAUSE_ON_FAIL=no
@@ -2440,6 +2440,34 @@ ipv4_route_v6_gw_test()
 	route_cleanup
 }
 
+ipv6_route_lo_test()
+{
+	echo
+	echo "IPv6 routes via loopback device tests"
+
+	setup_ns ns1
+	IP="$(which ip) -netns $ns1"
+
+	# Routes via the loopback device are promoted to reject routes, so
+	# their nexthop is not validated.
+	run_cmd "$IP link set dev lo down"
+	run_cmd "$IP -6 ro add 2001:db8:101::/64 dev lo"
+	log_test $? 0 "Route via loopback device that is down"
+
+	run_cmd "$IP link set dev lo up"
+	run_cmd "$IP -6 ro add 2001:db8:102::/64 via 2001:db8:1::2 dev lo"
+	log_test $? 0 "Route via loopback device with gateway"
+
+	run_cmd "$IP -6 ro add 2001:db8:103::/64 via ::ffff:192.0.2.2 dev lo"
+	log_test $? 0 "Route via loopback device with IPv4-mapped gateway"
+
+	run_cmd "ip netns exec $ns1 sysctl -qw net.ipv6.conf.lo.disable_ipv6=1"
+	run_cmd "$IP -6 ro add 2001:db8:104::/64 dev lo"
+	log_test $? 0 "Route via loopback device with IPv6 disabled"
+
+	cleanup_ns "$ns1"
+}
+
 socat_check()
 {
 	if [ ! -x "$(command -v socat)" ]; then
@@ -3265,6 +3293,7 @@ do
 	ipv6_route_metrics)		ipv6_route_metrics_test;;
 	ipv4_route_metrics)		ipv4_route_metrics_test;;
 	ipv4_route_v6_gw)		ipv4_route_v6_gw_test;;
+	ipv6_route_lo)			ipv6_route_lo_test;;
 	ipv4_mangle)			ipv4_mangle_test;;
 	ipv6_mangle)			ipv6_mangle_test;;
 	ipv4_bcast_neigh)		ipv4_bcast_neigh_test;;
