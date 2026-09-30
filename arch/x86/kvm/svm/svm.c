@@ -2800,10 +2800,19 @@ static int efer_trap(struct kvm_vcpu *vcpu)
 	 * bit in svm_set_efer(), but __kvm_valid_efer() checks it against
 	 * whether the guest has X86_FEATURE_SVM - this avoids a failure if
 	 * the guest doesn't have X86_FEATURE_SVM.
+	 *
+	 * Clear EFER_LMSLE for a related reason: EFER writes are *trapped*,
+	 * not intercepted, i.e. hardware has already committed the write by
+	 * the time KVM gains control, and the trap is enabled if and only if
+	 * the guest is SEV-ES, whose EFER lives in the encrypted VMSA and so
+	 * can't be fixed up by KVM.  Rejecting EFER.LMSLE=1 would inject a #GP
+	 * *and* leave EFER.LMSLE set in the guest, which is strictly worse
+	 * than honoring a write that hardware itself allowed.
 	 */
 	msr_info.host_initiated = false;
 	msr_info.index = MSR_EFER;
-	msr_info.data = to_svm(vcpu)->vmcb->control.exit_info_1 & ~EFER_SVME;
+	msr_info.data = to_svm(vcpu)->vmcb->control.exit_info_1 &
+			~(EFER_SVME | EFER_LMSLE);
 	ret = kvm_set_msr_common(vcpu, &msr_info);
 
 	return kvm_complete_insn_gp(vcpu, ret);

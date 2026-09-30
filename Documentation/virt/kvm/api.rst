@@ -9646,6 +9646,20 @@ mode segment limits, or if nested SVM is unsupported.  KVM therefore reports
 the bit on all Intel hosts, as KVM allows EFER.LMSLE only when nested SVM is
 enabled.
 
+KVM never reports the bit via ``KVM_GET_EMULATED_CPUID``, but userspace may set
+it via ``KVM_SET_CPUID2`` even on a host where KVM doesn't report it.  KVM
+honors the guest's enumeration and rejects EFER.LMSLE=1 accordingly.  That lets
+userspace defeature a vCPU on a host that *does* support long mode segment
+limits, so that the vCPU can later be migrated to a host that doesn't, e.g. so
+that a vCPU created on AMD Rome can be migrated to Milan and later, which
+dropped support for long mode segment limits.  The opposite direction needs no
+emulation, as a host that lacks long mode segment limits already enumerates the
+defeature.
+
+Note, ``KVM_SET_MSRS`` is exempt from the check, as host-initiated MSR writes
+skip guest CPUID checks so that userspace can set MSRs before it sets guest
+CPUID.  ``KVM_SET_SREGS`` and nested VMRUN are not exempt.
+
 CPU topology
 ~~~~~~~~~~~~
 
