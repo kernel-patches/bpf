@@ -1369,26 +1369,12 @@ static void it6625_polling_work(struct work_struct *work)
 	it6625_interrupt_handler(it6625);
 }
 
-static const char *it6625_csi_format_name(u8 csi_format)
-{
-	switch (csi_format) {
-	case CSI_YUV422_8b:
-		return "YUV422 8bit";
-	case CSI_RGB888:
-		return "RGB888 8bit";
-	case CSI_YUV444_8b:
-		return "YUV444 8bit";
-	default:
-		return "unknown";
-	}
-}
-
 static int it6625_log_status(struct v4l2_subdev *sd)
 {
 	struct it6625 *it6625 = sd_to_6625(sd);
 	struct v4l2_dv_timings timings, configured_timings;
 	struct v4l2_bt_timings bt;
-	u8 csi_format;
+	u32 mbus_fmt_code;
 
 	if (it6625_get_detected_timings(it6625, &timings))
 		v4l2_info(sd, "No video detected");
@@ -1402,13 +1388,11 @@ static int it6625_log_status(struct v4l2_subdev *sd)
 
 	/* snapshot together so the reported pair was actually configured together */
 	scoped_guard(mutex, &it6625->it6625_lock) {
-		csi_format = it6625->csi_format;
+		mbus_fmt_code = it6625->mbus_fmt_code;
 		bt = it6625->timings.bt;
 	}
 
-	v4l2_info(sd, "CSI format: %s @ %uHz",
-		  it6625_csi_format_name(csi_format),
-		  fps_from_bt_timings(&bt));
+	v4l2_info(sd, "CSI format: %#x @ %uHz", mbus_fmt_code, fps_from_bt_timings(&bt));
 
 	it6625_show_avi_infoframe(it6625);
 
