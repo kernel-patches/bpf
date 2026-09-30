@@ -179,9 +179,9 @@ vma_create(struct drm_i915_gem_object *obj,
 	INIT_LIST_HEAD(&vma->obj_link);
 	RB_CLEAR_NODE(&vma->obj_node);
 
-	if (view && view->type != I915_GTT_VIEW_NORMAL) {
+	if (view && !intel_gtt_view_is_normal(view)) {
 		vma->gtt_view = *view;
-		if (view->type == I915_GTT_VIEW_PARTIAL) {
+		if (intel_gtt_view_is_partial(view)) {
 			GEM_BUG_ON(range_overflows_t(u64,
 						     view->partial.offset,
 						     view->partial.size,
@@ -189,10 +189,10 @@ vma_create(struct drm_i915_gem_object *obj,
 			vma->size = view->partial.size;
 			vma->size <<= PAGE_SHIFT;
 			GEM_BUG_ON(vma->size > obj->base.size);
-		} else if (view->type == I915_GTT_VIEW_ROTATED) {
+		} else if (intel_gtt_view_is_rotated(view)) {
 			vma->size = intel_rotation_info_size(&view->rotated);
 			vma->size <<= PAGE_SHIFT;
-		} else if (view->type == I915_GTT_VIEW_REMAPPED) {
+		} else if (intel_gtt_view_is_remapped(view)) {
 			vma->size = intel_remapped_info_size(&view->remapped);
 			vma->size <<= PAGE_SHIFT;
 		}
@@ -1311,27 +1311,15 @@ __i915_vma_get_pages(struct i915_vma *vma)
 	 */
 	GEM_BUG_ON(!i915_gem_object_has_pinned_pages(vma->obj));
 
-	switch (vma->gtt_view.type) {
-	default:
-		GEM_BUG_ON(vma->gtt_view.type);
-		fallthrough;
-	case I915_GTT_VIEW_NORMAL:
-		pages = vma->obj->mm.pages;
-		break;
-
-	case I915_GTT_VIEW_ROTATED:
-		pages =
-			intel_rotate_pages(&vma->gtt_view.rotated, vma->obj);
-		break;
-
-	case I915_GTT_VIEW_REMAPPED:
-		pages =
-			intel_remap_pages(&vma->gtt_view.remapped, vma->obj);
-		break;
-
-	case I915_GTT_VIEW_PARTIAL:
+	if (intel_gtt_view_is_rotated(&vma->gtt_view)) {
+		pages = intel_rotate_pages(&vma->gtt_view.rotated, vma->obj);
+	} else if (intel_gtt_view_is_remapped(&vma->gtt_view)) {
+		pages = intel_remap_pages(&vma->gtt_view.remapped, vma->obj);
+	} else if (intel_gtt_view_is_partial(&vma->gtt_view)) {
 		pages = intel_partial_pages(&vma->gtt_view, vma->obj);
-		break;
+	} else {
+		GEM_BUG_ON(!intel_gtt_view_is_normal(&vma->gtt_view));
+		pages = vma->obj->mm.pages;
 	}
 
 	if (IS_ERR(pages)) {
