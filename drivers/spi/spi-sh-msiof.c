@@ -674,7 +674,7 @@ static int sh_msiof_dma_once(struct sh_msiof_spi_priv *p, const void *tx,
 
 	if (tx) {
 		ier_bits |= SIIER_TDREQE | SIIER_TDMAE;
-		dma_sync_single_for_device(p->ctlr->dma_tx->device->dev,
+		dma_sync_single_for_device(dmaengine_get_dma_device(p->ctlr->dma_tx),
 					   p->tx_dma_addr, len, DMA_TO_DEVICE);
 		desc_tx = dmaengine_prep_slave_single(p->ctlr->dma_tx,
 					p->tx_dma_addr, len, DMA_MEM_TO_DEV,
@@ -754,7 +754,7 @@ static int sh_msiof_dma_once(struct sh_msiof_spi_priv *p, const void *tx,
 	}
 
 	if (rx)
-		dma_sync_single_for_cpu(p->ctlr->dma_rx->device->dev,
+		dma_sync_single_for_cpu(dmaengine_get_dma_device(p->ctlr->dma_rx),
 					p->rx_dma_addr, len, DMA_FROM_DEVICE);
 
 	return 0;
@@ -1142,13 +1142,13 @@ static int sh_msiof_request_dma(struct sh_msiof_spi_priv *p)
 	if (!p->rx_dma_page)
 		goto free_tx_page;
 
-	tx_dev = ctlr->dma_tx->device->dev;
+	tx_dev = dmaengine_get_dma_device(ctlr->dma_tx);
 	p->tx_dma_addr = dma_map_single(tx_dev, p->tx_dma_page, PAGE_SIZE,
 					DMA_TO_DEVICE);
 	if (dma_mapping_error(tx_dev, p->tx_dma_addr))
 		goto free_rx_page;
 
-	rx_dev = ctlr->dma_rx->device->dev;
+	rx_dev = dmaengine_get_dma_device(ctlr->dma_rx);
 	p->rx_dma_addr = dma_map_single(rx_dev, p->rx_dma_page, PAGE_SIZE,
 					DMA_FROM_DEVICE);
 	if (dma_mapping_error(rx_dev, p->rx_dma_addr))
@@ -1178,9 +1178,9 @@ static void sh_msiof_release_dma(struct sh_msiof_spi_priv *p)
 	if (!ctlr->dma_tx)
 		return;
 
-	dma_unmap_single(ctlr->dma_rx->device->dev, p->rx_dma_addr, PAGE_SIZE,
+	dma_unmap_single(dmaengine_get_dma_device(ctlr->dma_rx), p->rx_dma_addr, PAGE_SIZE,
 			 DMA_FROM_DEVICE);
-	dma_unmap_single(ctlr->dma_tx->device->dev, p->tx_dma_addr, PAGE_SIZE,
+	dma_unmap_single(dmaengine_get_dma_device(ctlr->dma_tx), p->tx_dma_addr, PAGE_SIZE,
 			 DMA_TO_DEVICE);
 	free_page((unsigned long)p->rx_dma_page);
 	free_page((unsigned long)p->tx_dma_page);
