@@ -99,6 +99,8 @@ struct sit9531x_ref {
  * @cmos:		output is wired single-ended; the Hi-Z pairs that
  *			speak for it are the two CMOS pad ones, not the
  *			differential
+ * @state_stale:	the cached mute state could not be confirmed against
+ *			hardware and has to be read back before it is reported
  * @routed:		output is mapped to @pll_idx by the initial
  *			configuration; an unrouted output has no DPLL pin
  * @pll_idx:		PLL driving this output (0-3)
@@ -107,6 +109,7 @@ struct sit9531x_out {
 	u64		freq;
 	bool		enabled;
 	bool		cmos;
+	bool		state_stale;
 	bool		routed;
 	u8		pll_idx;
 };
@@ -258,6 +261,10 @@ int sit9531x_input_prio_add(struct sit9531x_dev *sitdev, u8 pll_idx,
 			    u8 input_idx);
 
 /* ---- Output enable/disable (Hi-Z control) ---- */
+int sit9531x_output_disable(struct sit9531x_dev *sitdev, u8 index);
+int sit9531x_output_enable(struct sit9531x_dev *sitdev, u8 index);
+int sit9531x_output_state_refresh(struct sit9531x_dev *sitdev,
+				  u8 out_idx);
 
 /* ---- Output frequency ---- */
 int sit9531x_output_freq_set(struct sit9531x_dev *sitdev, u8 out_idx,
