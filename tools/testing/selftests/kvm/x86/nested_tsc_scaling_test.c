@@ -223,6 +223,9 @@ int main(int argc, char *argv[])
 	tsc_end = rdtsc();
 	host_check_tsc_freq(0, tsc_end - tsc_start, l0_tsc_freq);
 
+	/* Sanity check the frequency reported by KVM_GET_TSC_KHZ. */
+	test_tsc_scaling(l0_tsc_freq, l0_tsc_freq, l0_tsc_freq, BIT_ULL(frac_bits));
+
 	/* Scale L1 "down" and L2 "up" at a random factor from 2 to 10. */
 	l1_scale = (kvm_random_u32(&kvm_rng) % 9) + 2;
 	l2_scale = (kvm_random_u32(&kvm_rng) % 9) + 2;
