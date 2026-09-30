@@ -4,10 +4,8 @@
  */
 
 #include <drm/intel/display_parent_interface.h>
+#include <drm/intel/gtt_view_types.h>
 #include <drm/ttm/ttm_bo.h>
-
-/* FIXME move the types to parent interface? */
-#include "i915_gtt_view_types.h"
 
 /* FIXME move intel_remapped_info_size() & co. to parent interface? */
 #include "intel_fb.h"

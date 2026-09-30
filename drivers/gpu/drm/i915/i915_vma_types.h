@@ -29,10 +29,9 @@
 #include <linux/rbtree.h>
 
 #include <drm/drm_mm.h>
+#include <drm/intel/gtt_view_types.h>
 
 #include "gem/i915_gem_object_types.h"
-
-#include "i915_gtt_view_types.h"
 
 /**
  * DOC: Global GTT views

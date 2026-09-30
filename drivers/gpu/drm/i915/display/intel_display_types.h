@@ -41,10 +41,10 @@
 #include <drm/drm_panel.h>
 #include <drm/drm_rect.h>
 #include <drm/drm_vblank_work.h>
+#include <drm/intel/gtt_view_types.h>
 #include <drm/intel/i915_hdcp_interface.h>
 #include <uapi/drm/i915_drm.h>
 
-#include "i915_gtt_view_types.h"
 #include "intel_bios.h"
 #include "intel_display.h"
 #include "intel_display_conversion.h"

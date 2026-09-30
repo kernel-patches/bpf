@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 /* Copyright © 2025 Intel Corporation */
 
-#ifndef __I915_GTT_VIEW_TYPES_H__
-#define __I915_GTT_VIEW_TYPES_H__
+#ifndef __DRM_INTEL_GTT_VIEW_TYPES_H__
+#define __DRM_INTEL_GTT_VIEW_TYPES_H__
 
 #include <linux/types.h>
 
@@ -71,4 +71,4 @@ static inline bool i915_gtt_view_is_rotated(const struct i915_gtt_view *view)
 	return view->type == I915_GTT_VIEW_ROTATED;
 }
 
-#endif /* __I915_GTT_VIEW_TYPES_H__ */
+#endif /* __DRM_INTEL_GTT_VIEW_TYPES_H__ */
