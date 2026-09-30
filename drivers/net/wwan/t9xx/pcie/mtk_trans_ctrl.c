@@ -16,6 +16,7 @@
 #include "mtk_ctrl_plane.h"
 #include "mtk_dev.h"
 #include "mtk_pci.h"
+#include "mtk_port.h"
 #include "mtk_trans_ctrl.h"
 
 #define QUEUE_CHL_MASK	0xFFFF
@@ -32,6 +33,18 @@ static const struct queue_info mtk_queue_info[] = {
 	 Q_MTU_3_5K, Q_MTU_3_5K, TX_GPD_NUM, RX_GPD_NUM, Q_FRAG_3_5K, Q_FRAG_3_5K, 0},
 	{CCCI_SAP_CONTROL_TX, CCCI_SAP_CONTROL_RX, CLDMA0, TXQ(0), RXQ(0),
 	 Q_MTU_3_5K, Q_MTU_3_5K, TX_GPD_NUM, RX_GPD_NUM, Q_FRAG_3_5K, Q_FRAG_3_5K, 0},
+};
+
+static const struct mtk_port_cfg mtk_port_cfg_tbl[] = {
+	{CCCI_CONTROL_TX, CCCI_CONTROL_RX, PORT_TYPE_INTERNAL, "MDCTRL",
+		PORT_F_DFLT},
+	{CCCI_SAP_CONTROL_TX, CCCI_SAP_CONTROL_RX, PORT_TYPE_INTERNAL, "SAPCTRL",
+		PORT_F_DFLT},
+};
+
+static struct mtk_port_layer_cfg mtk_port_layer_cfg = {
+	.port_cfg = (struct mtk_port_cfg *)mtk_port_cfg_tbl,
+	.port_cnt = ARRAY_SIZE(mtk_port_cfg_tbl),
 };
 
 static bool mtk_queue_list_is_full(struct mtk_ctrl_trans *trans, struct queue_info *que)
@@ -164,6 +177,7 @@ static void mtk_ctrl_trb_handler(struct trb_srv *srv, struct trans_list *trans_l
 			break;
 		}
 		trb = (struct trb *)skb->cb;
+		kref_get(&trb->kref);
 
 		switch (trb->cmd) {
 		case TRB_CMD_ENABLE:
@@ -185,8 +199,10 @@ static void mtk_ctrl_trb_handler(struct trb_srv *srv, struct trans_list *trans_l
 					kick = true;
 					break;
 				}
-				if (err == -EAGAIN)
+				if (err == -EAGAIN) {
+					kref_put(&trb->kref, mtk_port_trb_free);
 					return;
+				}
 
 				skb_unlink(skb, skb_list);
 				trb->status = err;
@@ -226,6 +242,8 @@ static void mtk_ctrl_trb_handler(struct trb_srv *srv, struct trans_list *trans_l
 			trans_list->tx_burst_cnt[qno] = 0;
 			kick = false;
 		}
+
+		kref_put(&trb->kref, mtk_port_trb_free);
 
 		loop++;
 	} while (loop < TRB_NUM_PER_ROUND);
@@ -597,7 +615,7 @@ int mtk_trans_ctrl_init(struct mtk_md_dev *mdev)
 	trans->queue_info_num = ARRAY_SIZE(mtk_queue_info);
 	trans->trb_srv_num = TRB_SRV_NUM;
 
-	err = mtk_ctrl_init(mdev);
+	err = mtk_ctrl_init(mdev, &mtk_port_layer_cfg);
 	if (err)
 		return err;
 

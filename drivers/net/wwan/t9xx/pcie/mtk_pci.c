@@ -15,6 +15,8 @@
 #include "mtk_trans_ctrl.h"
 #include "mtk_pci.h"
 #include "mtk_pci_reg.h"
+#include "mtk_port.h"
+#include "mtk_port_io.h"
 
 #define MTK_MHCCIF_RC_BASE_ADDR		0x1000A000
 
@@ -1069,7 +1071,28 @@ static struct pci_driver mtk_pci_drv = {
 	.err_handler = &mtk_pci_err_handler
 };
 
-module_pci_driver(mtk_pci_drv);
+static int __init mtk_drv_init(void)
+{
+	int ret;
+
+	ret = mtk_port_io_init();
+	if (ret)
+		return ret;
+
+	ret = pci_register_driver(&mtk_pci_drv);
+	if (ret)
+		mtk_port_io_exit();
+
+	return ret;
+}
+module_init(mtk_drv_init);
+
+static void __exit mtk_drv_exit(void)
+{
+	pci_unregister_driver(&mtk_pci_drv);
+	mtk_port_io_exit();
+}
+module_exit(mtk_drv_exit);
 
 MODULE_DESCRIPTION("MediaTek T9xx PCIe WWAN driver");
 MODULE_LICENSE("GPL");

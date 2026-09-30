@@ -13,6 +13,7 @@
 #include <linux/types.h>
 
 #include "mtk_dev.h"
+#include "mtk_port.h"
 
 #define TRB_SRV_MAX_NUM			(1)
 #define HW_QUE_NUM			(8)

@@ -11,8 +11,8 @@
 
 #include "mtk_dev.h"
 
-#define Q_MTU_3_5K	(0xE00)
-#define Q_FRAG_3_5K	(0xE00)
+#define Q_MTU_3_5K			(0xE00)
+#define Q_FRAG_3_5K			(0xE00)
 
 enum mtk_ccci_ch {
 	/* to sAP */
@@ -59,12 +59,16 @@ union ctrl_hif_cmd_data {
 	u32 rx_ch;
 };
 
+struct mtk_port_layer_cfg;
+struct mtk_port_mngr;
+
 struct mtk_ctrl_blk {
 	struct mtk_md_dev *mdev;
+	struct mtk_port_mngr *port_mngr;
 	void *ctrl_hw_priv;
 };
 
-int mtk_ctrl_init(struct mtk_md_dev *mdev);
+int mtk_ctrl_init(struct mtk_md_dev *mdev, struct mtk_port_layer_cfg *port_layer_cfg);
 void mtk_ctrl_exit(struct mtk_md_dev *mdev);
 
 #endif /* __MTK_CTRL_PLANE_H__ */
