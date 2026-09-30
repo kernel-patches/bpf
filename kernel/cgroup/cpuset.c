@@ -162,7 +162,6 @@ static cpumask_var_t	isolated_hk_cpus;	/* T */
  * It can be set in
  *  - update_partition_sd_lb()
  *  - update_cpumasks_hier()
- *  - cpuset_update_flag()
  *  - cpuset_hotplug_update_tasks()
  *  - cpuset_handle_hotplug()
  *
@@ -608,7 +607,7 @@ static inline void free_tmpmasks(struct tmpmasks *tmp)
  *
  * Return: Pointer to newly allocated cpuset on success, NULL on failure
  */
-static struct cpuset *dup_or_alloc_cpuset(struct cpuset *cs)
+struct cpuset *dup_or_alloc_cpuset(struct cpuset *cs)
 {
 	struct cpuset *trial;
 
@@ -649,7 +648,7 @@ static struct cpuset *dup_or_alloc_cpuset(struct cpuset *cs)
  * free_cpuset - free the cpuset
  * @cs: the cpuset to be freed
  */
-static inline void free_cpuset(struct cpuset *cs)
+void free_cpuset(struct cpuset *cs)
 {
 	free_cpumask_var(cs->cpus_allowed);
 	free_cpumask_var(cs->effective_cpus);
@@ -743,7 +742,7 @@ static inline bool mems_excl_conflict(struct cpuset *cs1, struct cpuset *cs2)
  * Return 0 if valid, -errno if not.
  */
 
-static int validate_change(struct cpuset *cur, struct cpuset *trial)
+int validate_change(struct cpuset *cur, struct cpuset *trial)
 {
 	struct cgroup_subsys_state *css;
 	struct cpuset *c, *par;
@@ -2828,56 +2827,6 @@ bool current_cpuset_is_being_rebound(void)
 	return ret;
 }
 
-/*
- * cpuset_update_flag - read a 0 or a 1 in a file and update associated flag
- * bit:		the bit to update (see cpuset_flagbits_t)
- * cs:		the cpuset to update
- * turning_on: 	whether the flag is being set or cleared
- *
- * Call with cpuset_mutex held.
- */
-
-int cpuset_update_flag(cpuset_flagbits_t bit, struct cpuset *cs,
-		       int turning_on)
-{
-	struct cpuset *trialcs;
-	int balance_flag_changed;
-	int spread_page_changed;
-	int err;
-
-	trialcs = dup_or_alloc_cpuset(cs);
-	if (!trialcs)
-		return -ENOMEM;
-
-	assign_bit(bit, &trialcs->flags, turning_on);
-
-	err = validate_change(cs, trialcs);
-	if (err < 0)
-		goto out;
-
-	balance_flag_changed = (is_sched_load_balance(cs) !=
-				is_sched_load_balance(trialcs));
-
-	spread_page_changed = is_spread_page(cs) != is_spread_page(trialcs);
-
-	spin_lock_irq(&callback_lock);
-	cs->flags = trialcs->flags;
-	spin_unlock_irq(&callback_lock);
-
-	if (!cpumask_empty(trialcs->cpus_allowed) && balance_flag_changed) {
-		if (cpuset_v2())
-			cpuset_force_rebuild();
-		else
-			rebuild_sched_domains_locked();
-	}
-
-	if (spread_page_changed)
-		cpuset1_update_tasks_flags(cs);
-out:
-	free_cpuset(trialcs);
-	return err;
-}
-
 /**
  * update_prstate - update partition_root_state
  * @cs: the cpuset to update
@@ -3631,21 +3580,12 @@ static int cpuset_css_online(struct cgroup_subsys_state *css)
 	return 0;
 }
 
-/*
- * If the cpuset being removed has its flag 'sched_load_balance'
- * enabled, then simulate turning sched_load_balance off, which
- * will call rebuild_sched_domains_locked(). That is not needed
- * in the default hierarchy where only changes in partition
- * will cause repartitioning.
- */
 static void cpuset_css_offline(struct cgroup_subsys_state *css)
 {
 	struct cpuset *cs = css_cs(css);
 
 	cpuset_full_lock();
-	if (!cpuset_v2() && is_sched_load_balance(cs))
-		cpuset_update_flag(CS_SCHED_LOAD_BALANCE, cs, 0);
-
+	cpuset1_offline_css(cs);
 	cpuset_dec();
 	cpuset_full_unlock();
 }
