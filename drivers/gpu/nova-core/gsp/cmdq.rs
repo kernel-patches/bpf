@@ -585,7 +585,7 @@ impl<'cmdq> Cmdq<'cmdq> {
         loop {
             match inner.receive_msg::<M::Reply>(Self::RECEIVE_TIMEOUT) {
                 Ok(reply) => break Ok(reply),
-                Err(ERANGE) => continue,
+                Err(ENOMSG) => continue,
                 Err(e) => break Err(e),
             }
         }
@@ -828,7 +828,7 @@ impl CmdqInner<'_> {
     /// - `ETIMEDOUT` if `timeout` has elapsed before any message becomes available.
     /// - `EIO` if there was some inconsistency (e.g. message shorter than advertised) on the
     ///   message queue.
-    /// - `ERANGE` if the message was not the awaited reply.
+    /// - `ENOMSG` if the message was not the awaited reply.
     ///
     /// Error codes returned by [`MessageFromGsp::read`] are propagated as-is.
     fn receive_msg<M: MessageFromGsp>(&mut self, timeout: Delta) -> Result<M>
@@ -859,7 +859,7 @@ impl CmdqInner<'_> {
         } else {
             self.log_event(function, seq);
 
-            Err(ERANGE)
+            Err(ENOMSG)
         };
 
         // Advance the read pointer past this message.

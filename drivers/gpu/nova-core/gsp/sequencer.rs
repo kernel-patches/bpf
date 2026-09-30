@@ -346,7 +346,7 @@ impl<'a> GspSequencer<'a> {
         let seq_info = loop {
             match cmdq.receive_msg::<GspSequence>(Cmdq::RECEIVE_TIMEOUT) {
                 Ok(seq_info) => break seq_info,
-                Err(ERANGE) => continue,
+                Err(ENOMSG) => continue,
                 Err(e) => return Err(e),
             }
         };
