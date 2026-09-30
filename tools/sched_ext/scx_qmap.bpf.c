@@ -1473,7 +1473,8 @@ __noinline void compute_partition(void)
 	/* find out the cids we hold */
 	scx_bpf_sub_caps(0, SCX_CAP_ENQ, &qa.held_excl.mask);
 	scx_bpf_sub_caps(0, SCX_CAP_ENQ_IMMED, &qa.held_shared.mask);
-	cmask_andnot(&qa.held_shared.mask, &qa.held_excl.mask);	/* held only as ENQ_IMMED */
+	/* held only as ENQ_IMMED */
+	cmask_andnot(&qa.held_shared.mask, &qa.held_shared.mask, &qa.held_excl.mask);
 
 	qa.part.nr_shared = 0;
 	qa.part.nr_rr = 0;
@@ -1628,8 +1629,7 @@ static __noinline void account_alloc(void)
  */
 static void refresh_usable(void)
 {
-	cmask_copy(&qa.usable_scratch.mask, &qa.self_cids.mask);
-	cmask_and(&qa.usable_scratch.mask, &qa.avail_cids.mask);
+	cmask_and(&qa.usable_scratch.mask, &qa.self_cids.mask, &qa.avail_cids.mask);
 	cmask_copy(&qa.usable_cids.mask, &qa.usable_scratch.mask);
 }
 
@@ -1708,10 +1708,8 @@ __noinline void apply_partition(void)
 		if (!cgid)
 			continue;
 
-		cmask_copy(&qa.to_revoke_cids.mask, &ssc->prev_granted.mask);
-		cmask_andnot(&qa.to_revoke_cids.mask, &ssc->granted_cids.mask);
-		cmask_copy(&qa.to_grant_cids.mask, &ssc->granted_cids.mask);
-		cmask_andnot(&qa.to_grant_cids.mask, &ssc->prev_granted.mask);
+		cmask_andnot(&qa.to_revoke_cids.mask, &ssc->prev_granted.mask, &ssc->granted_cids.mask);
+		cmask_andnot(&qa.to_grant_cids.mask, &ssc->granted_cids.mask, &ssc->prev_granted.mask);
 
 		scx_bpf_sub_revoke(cgid, SCX_CAP_ENQ_IMMED | SCX_CAP_PERF,
 				   &qa.prev_rr_cids.mask);
@@ -1957,7 +1955,7 @@ s32 BPF_STRUCT_OPS_SLEEPABLE(qmap_init)
 
 	scx_bpf_sub_caps(0, SCX_CAP_ENQ, &qa.held_excl.mask);
 	scx_bpf_sub_caps(0, SCX_CAP_ENQ_IMMED, &qa.held_shared.mask);
-	cmask_andnot(&qa.held_shared.mask, &qa.held_excl.mask);
+	cmask_andnot(&qa.held_shared.mask, &qa.held_shared.mask, &qa.held_excl.mask);
 
 	bpf_for(i, 0, MAX_SUB_SCHEDS) {
 		cmask_init(&qa.sub_sched_ctxs[i].granted_cids.mask, 0, nr_cids);
