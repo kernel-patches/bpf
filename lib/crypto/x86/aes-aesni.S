@@ -444,13 +444,14 @@ SYM_FUNC_START(aes_cbc_encrypt_aesni)
 
 	// Other local variables
 #ifdef __x86_64__
-	.set	RNDKEY_PTR,	%r9
+	.set	RNDKEY_PTR,	%r9	// Temporary register for _do_aes
 #else
-	.set	RNDKEY_PTR,	IV_PTR // IV_PTR is clobbered and reloaded later
+	.set	RNDKEY_PTR,	IV_PTR	// IV_PTR is clobbered and reloaded later
 #endif
-	.set	NROUNDS,	TMP_32
+	.set	NROUNDS,	TMP_32	// Temporary register for _do_aes
 	.set	AESDATA0,	%xmm0
 	.set	PTEXT,		%xmm1
+	.set	RNDKEY,		%xmm2	// Temporary register for _do_aes
 	_prologue	uses_arg3=2, uses_arg4=2
 
 	movdqu		(IV_PTR), AESDATA0
@@ -484,16 +485,16 @@ SYM_FUNC_START(aes_cbc_decrypt_aesni)
 
 	// Other local variables
 #ifdef __x86_64__
-	.set	RNDKEY_PTR,	%r9
+	.set	RNDKEY_PTR,	%r9	// Temporary register for _do_aes
 #else
-	.set	RNDKEY_PTR,	IV_PTR // IV_PTR is clobbered and reloaded later
+	.set	RNDKEY_PTR,	IV_PTR	// IV_PTR is clobbered and reloaded later
 #endif
-	.set	NROUNDS,	TMP_32
+	.set	NROUNDS,	TMP_32	// Temporary register for _do_aes
 	.set	AESDATA0,	%xmm0
 	.set	AESDATA1,	%xmm1
 	.set	AESDATA2,	%xmm2
 	.set	AESDATA3,	%xmm3
-	.set	RNDKEY,		%xmm4
+	.set	RNDKEY,		%xmm4	// Temporary register for _do_aes
 	.set	IV,		%xmm5
 	.set	CTEXT0,		%xmm6
 	.set	CTEXT1,		%xmm7
@@ -575,7 +576,7 @@ SYM_FUNC_END(aes_cbc_decrypt_aesni)
 	.set	LSHIFT_MASK,	%xmm1 // [0x80, 0x80, ...] + range(PN_LEN)
 	.set	AESDATA0,	%xmm2
 	.set	AESDATA1,	%xmm3
-	.set	RNDKEY,		%xmm4 // Temporary register for _do_aes
+	.set	RNDKEY,		%xmm4	// Temporary register for _do_aes
 	.set	IV,		%xmm5
 
 	_prologue	uses_arg3=2, uses_arg4=2
@@ -674,7 +675,7 @@ SYM_FUNC_START(aes_ctr64_crypt_aesni)
 	.set	LE_CTR,		%xmm4	// Current 128-bit little endian counter
 	.set	LE_CTR_INC,	%xmm5	// Initialized to (u64[])[1, 0]
 	.set	BSWAP_MASK,	%xmm6
-	.set	RNDKEY,		%xmm7
+	.set	RNDKEY,		%xmm7	// Temporary register for _do_aes
 	.set	RNDKEY_PTR,	LE_CTR_PTR  // Temporary register for _do_aes
 	.set	NROUNDS,	TMP_32	// Temporary register for _do_aes
 
@@ -795,17 +796,17 @@ SYM_FUNC_END(aes_ctr64_crypt_aesni)
 
 	// Other local variables
 #ifdef __x86_64__
-	.set	RNDKEY_PTR,	%r9
+	.set	RNDKEY_PTR,	%r9	// Temporary register for _do_aes
 #else
 	.set	RNDKEY_PTR,	TWEAK_PTR // TWEAK_PTR is clobbered and reloaded later.
 #endif
-	.set	NROUNDS,	TMP_32
+	.set	NROUNDS,	TMP_32	// Temporary register for _do_aes
 	.set	AESDATA0,	%xmm0
 	.set	AESDATA1,	%xmm1
 	.set	AESDATA2,	%xmm2
 	.set	AESDATA3,	%xmm3
 	.set	GF_POLY,	%xmm4
-	.set	RNDKEY,		%xmm5
+	.set	RNDKEY,		%xmm5	// Temporary register for _do_aes
 	.set	TWEAK,		%xmm6
 	.set	SAVED_TWEAK0,	%xmm7
 #ifdef __x86_64__
