@@ -3549,6 +3549,12 @@ static bool bpf_sk_assign_family_ok(const struct sk_buff *skb,
 	return bpf_sk_assign_family_ok_proto(sk, skb_protocol(skb, true));
 }
 
+static bool bpf_skb_proto_change_sk_ok(struct sk_buff *skb, __be16 proto)
+{
+	return !skb_sk_is_prefetched(skb) ||
+	       bpf_sk_assign_family_ok_proto(skb->sk, proto);
+}
+
 BPF_CALL_3(bpf_skb_change_proto, struct sk_buff *, skb, __be16, proto,
 	   u64, flags)
 {
@@ -3556,6 +3562,12 @@ BPF_CALL_3(bpf_skb_change_proto, struct sk_buff *, skb, __be16, proto,
 
 	if (unlikely(flags))
 		return -EINVAL;
+	if (((skb->protocol == htons(ETH_P_IP) &&
+	      proto == htons(ETH_P_IPV6)) ||
+	     (skb->protocol == htons(ETH_P_IPV6) &&
+	      proto == htons(ETH_P_IP))) &&
+	    !bpf_skb_proto_change_sk_ok(skb, proto))
+		return -EAFNOSUPPORT;
 
 	/* General idea is that this helper does the basic groundwork
 	 * needed for changing the protocol, and eBPF program fills the
@@ -3699,6 +3711,11 @@ static int bpf_skb_net_grow(struct sk_buff *skb, u32 off, u32 len_diff,
 		if (inner_mac_len > len_diff)
 			return -EINVAL;
 		inner_trans = skb->transport_header;
+
+		if (!bpf_skb_proto_change_sk_ok(skb,
+						flags & BPF_F_ADJ_ROOM_ENCAP_L3_IPV6 ?
+						htons(ETH_P_IPV6) : htons(ETH_P_IP)))
+			return -EAFNOSUPPORT;
 	}
 
 	ret = bpf_skb_net_hdr_push(skb, off, len_diff);
@@ -3785,6 +3802,12 @@ static int bpf_skb_net_shrink(struct sk_buff *skb, u32 off, u32 len_diff,
 		    !(flags & BPF_F_ADJ_ROOM_FIXED_GSO))
 			return -ENOTSUPP;
 	}
+
+	if (decap &&
+	    !bpf_skb_proto_change_sk_ok(skb,
+					flags & BPF_F_ADJ_ROOM_DECAP_L3_IPV6 ?
+					htons(ETH_P_IPV6) : htons(ETH_P_IP)))
+		return -EAFNOSUPPORT;
 
 	ret = skb_unclone(skb, GFP_ATOMIC);
 	if (unlikely(ret < 0))
