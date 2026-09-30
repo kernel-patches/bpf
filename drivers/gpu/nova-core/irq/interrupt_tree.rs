@@ -1,22 +1,47 @@
 // SPDX-License-Identifier: GPL-2.0
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 
-//! Vector addressing in the GIN CPU interrupt tree.
+//! The GIN CPU interrupt tree for one PCIe function.
 //!
 //! A [`GinVector`] names an interrupt source, a [`LeafIndex`] the leaf register that latches it,
 //! a [`LeafMask`] a set of vectors within one leaf, and a [`Subtree`] one `TOP` bit. The types
 //! keep the four from being confused with one another.
 //!
+//! Servicing a leaf requires reading its pending bits before clearing them. Only
+//! [`Tree::read_pending`] produces a [`LeafPending`], and only a [`LeafPending`] clears a leaf,
+//! so that the wrong order does not compile. This module does not serialize access to the tree.
+//!
 //! See `Documentation/gpu/nova/core/interrupts.rst`.
 
 use kernel::{
+    device::Bound,
+    io::{
+        register::Array,
+        Io, //
+    },
+    irq,
     num::Bounded,
+    pci::{
+        self,
+        IrqType, //
+    },
     prelude::*, //
 };
 
-use crate::num;
+use crate::{
+    driver::Bar0,
+    gpu::Chipset,
+    num, //
+};
 
-use super::regs::*;
+use super::{
+    hal::{
+        cpu_interrupt_hal,
+        CpuInterruptHal, //
+    },
+    regs::*,
+    MsiType, //
+};
 
 /// Number of vectors one leaf register carries, one per bit.
 const VECTORS_PER_LEAF: u32 = u32::BITS;
@@ -77,6 +102,11 @@ impl LeafCount {
     /// Returns the number of vectors a tree of this size carries.
     pub(super) const fn vector_count(self) -> u32 {
         self.into_u32() * VECTORS_PER_LEAF
+    }
+
+    /// Returns every leaf a tree of this size implements.
+    pub(super) fn iter(self) -> impl Iterator<Item = LeafIndex> {
+        (0..self.into_raw()).filter_map(LeafIndex::try_new)
     }
 }
 
@@ -151,7 +181,7 @@ impl Subtree {
 
 /// Set of subtrees, one bit per subtree, in the layout of the `TOP` registers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct SubtreeSet(u32);
+pub(crate) struct SubtreeSet(u32);
 
 impl SubtreeSet {
     pub(super) const fn contains(self, subtree: Subtree) -> bool {
@@ -173,7 +203,6 @@ impl SubtreeSet {
     }
 
     /// Returns the subtrees of this set, lowest index first.
-    #[expect(dead_code)]
     pub(super) fn iter(self) -> impl Iterator<Item = Subtree> {
         (0..u32::BITS)
             .map(Subtree::new)
@@ -248,5 +277,262 @@ impl GinVector {
 impl From<GinVector> for Bounded<u32, TRIGGER_VECTOR_BITS> {
     fn from(vector: GinVector) -> Self {
         vector.0.extend()
+    }
+}
+
+/// Disables `vectors` in `leaf`.
+fn clear_leaf_enables(bar: Bar0<'_>, leaf: LeafIndex, vectors: LeafMask) {
+    bar.write(
+        Array::at(*leaf),
+        NV_VIRTUAL_FUNCTION_PRIV_CPU_INTR_LEAF_EN_CLEAR::zeroed().with_vectors(vectors),
+    );
+}
+
+/// Disables the subtrees in `serviced` at `TOP`.
+fn clear_top_enables(bar: Bar0<'_>, serviced: SubtreeSet) {
+    bar.write_reg(NV_VIRTUAL_FUNCTION_PRIV_CPU_INTR_TOP_EN_CLEAR::zeroed().with_subtrees(serviced));
+}
+
+/// The CPU tree of one PCIe function, the subtrees that nova-core services, and the PCI vectors
+/// that deliver them.
+///
+/// A subtree may be enabled at `TOP` only once a handler is registered on the PCI vector that
+/// delivers it. See "The serviced-subtree invariant" in
+/// `Documentation/gpu/nova/core/interrupts.rst`.
+pub(crate) struct Tree<'a> {
+    bar: Bar0<'a>,
+    hal: &'static dyn CpuInterruptHal,
+    serviced: SubtreeSet,
+    /// The interrupt type that Linux granted for `vectors`.
+    pub(super) msi_type: MsiType,
+    vectors: pci::IrqVectorRegistration<'a>,
+}
+
+impl<'a> Tree<'a> {
+    /// Creates the tree of `chipset` and allocates the PCI vectors for the subtrees in `serviced`.
+    ///
+    /// Requests MSI-X entries `0` through the highest subtree in `serviced`, since an allocation
+    /// cannot be sparse, and falls back to a single MSI message for the whole tree.
+    ///
+    /// # Errors
+    ///
+    /// `EINVAL` if `serviced` is empty or names a subtree that `chipset` does not implement.
+    /// Otherwise, when neither interrupt type could be allocated, the error from the MSI request.
+    pub(crate) fn new(
+        pdev: &'a pci::Device<Bound>,
+        bar: Bar0<'a>,
+        chipset: Chipset,
+        serviced: SubtreeSet,
+    ) -> Result<Self> {
+        let hal = cpu_interrupt_hal(chipset);
+        let num_leaves = hal.leaf_count();
+
+        if serviced.is_empty() || serviced.intersection(num_leaves.subtree_set()) != serviced {
+            return Err(EINVAL);
+        }
+
+        let entries = serviced.span();
+        let (vectors, msi_type) = pdev
+            .alloc_irq_vectors(entries, entries, IrqType::MsiX.into())
+            .map(|vectors| (vectors, MsiType::MsiX))
+            // Every subtree raises the one MSI message, so one MSI vector serves the whole tree.
+            // See "Delivery over PCI" in `Documentation/gpu/nova/core/interrupts.rst`.
+            .or_else(|_| {
+                pdev.alloc_irq_vectors(1, 1, IrqType::Msi.into())
+                    .map(|vectors| (vectors, MsiType::Msi))
+            })?;
+
+        Ok(Self {
+            bar,
+            hal,
+            serviced,
+            msi_type,
+            vectors,
+        })
+    }
+
+    /// Returns the [`irq::IrqRequest`] for the PCI vector that delivers `subtree`.
+    ///
+    /// # Errors
+    ///
+    /// `EINVAL` if `subtree` is not one of the serviced subtrees.
+    pub(super) fn request_for(&self, subtree: Subtree) -> Result<irq::IrqRequest<'_>> {
+        if !self.serviced.contains(subtree) {
+            return Err(EINVAL);
+        }
+
+        let entry = match self.msi_type {
+            MsiType::MsiX => num::u32_as_usize(subtree.index()),
+            MsiType::Msi => 0,
+        };
+
+        self.vectors.index(entry).map(Into::into)
+    }
+
+    /// Rearms PCI interrupt delivery to the CPU after servicing `subtree`, the one subtree that
+    /// the calling handler serves.
+    ///
+    /// A handler must call this before returning, or it receives no further interrupts.
+    pub(super) fn rearm_pci_irq(&self, subtree: Subtree) {
+        self.hal
+            .rearm_pci_irq(self.bar, self.msi_type, self.serviced, subtree);
+    }
+
+    /// Enables the serviced subtrees at `TOP`.
+    ///
+    /// Each of them must have a handler registered on its PCI vector.
+    pub(super) fn enable_top(&self) {
+        self.bar.write_reg(
+            NV_VIRTUAL_FUNCTION_PRIV_CPU_INTR_TOP_EN_SET::zeroed().with_subtrees(self.serviced),
+        );
+    }
+
+    /// Disables the serviced subtrees at `TOP`.
+    pub(super) fn disable_top(&self) {
+        clear_top_enables(self.bar, self.serviced);
+    }
+
+    /// Enables the serviced subtrees at `TOP` until the returned guard drops.
+    pub(crate) fn enable_top_guarded(&self) -> TopEnableGuard<'a> {
+        self.enable_top();
+
+        TopEnableGuard {
+            bar: self.bar,
+            serviced: self.serviced,
+        }
+    }
+
+    /// Enables `vectors` in `leaf`.
+    pub(super) fn enable_leaf(&self, leaf: LeafIndex, vectors: LeafMask) {
+        self.bar.write(
+            Array::at(*leaf),
+            NV_VIRTUAL_FUNCTION_PRIV_CPU_INTR_LEAF_EN_SET::zeroed().with_vectors(vectors),
+        );
+    }
+
+    /// Disables `vectors` in `leaf`.
+    pub(super) fn disable_leaf(&self, leaf: LeafIndex, vectors: LeafMask) {
+        clear_leaf_enables(self.bar, leaf, vectors);
+    }
+
+    /// Enables `vectors` in `leaf` until the returned guard drops.
+    pub(super) fn enable_leaf_guarded(
+        &self,
+        leaf: LeafIndex,
+        vectors: LeafMask,
+    ) -> LeafEnableGuard<'a> {
+        self.enable_leaf(leaf, vectors);
+
+        LeafEnableGuard {
+            bar: self.bar,
+            leaf,
+            vectors,
+        }
+    }
+
+    /// Reads the pending bits of `leaf`, and returns the handle that clears them.
+    pub(super) fn read_pending(&self, leaf: LeafIndex) -> LeafPending<'a> {
+        let pending = self
+            .bar
+            .read(NV_VIRTUAL_FUNCTION_PRIV_CPU_INTR_LEAF::at(*leaf))
+            .vectors();
+
+        LeafPending {
+            bar: self.bar,
+            leaf,
+            pending,
+        }
+    }
+
+    /// Disables every vector in every implemented leaf, including the subtrees that nova-core does
+    /// not service. Call this only during probe.
+    pub(super) fn disable_all_leaves(&self) {
+        for leaf in self.hal.leaf_count().iter() {
+            self.disable_leaf(leaf, LeafMask::all());
+        }
+    }
+
+    /// Clears every pending bit in every implemented leaf, including the subtrees that nova-core
+    /// does not service.
+    ///
+    /// The serviced subtrees are disabled at `TOP` on return. Call this only during probe, with no
+    /// interrupt handler registered.
+    pub(super) fn drain(&self) {
+        self.disable_top();
+
+        // A vector that latched while disabled does not show in `TOP`, so read every leaf rather
+        // than descending from it.
+        for leaf in self.hal.leaf_count().iter() {
+            self.read_pending(leaf).clear();
+        }
+    }
+
+    /// Disables every vector, clears every pending bit, and rearms PCI interrupt delivery.
+    ///
+    /// The serviced subtrees are disabled at `TOP` on return. Call this only during probe, with
+    /// no interrupt handler registered.
+    pub(super) fn reset(&self) {
+        self.disable_all_leaves();
+        self.drain();
+        for subtree in self.serviced.iter() {
+            self.rearm_pci_irq(subtree);
+        }
+
+        // A `TOP`-enable rearm leaves the subtrees that it cycles enabled, and a subtree may be
+        // enabled only once a handler is registered on its vector.
+        self.disable_top();
+    }
+}
+
+/// The pending bits of one leaf as they were read, and the handle that clears them.
+pub(super) struct LeafPending<'a> {
+    bar: Bar0<'a>,
+    leaf: LeafIndex,
+    pending: LeafMask,
+}
+
+impl LeafPending<'_> {
+    pub(super) fn vectors(&self) -> LeafMask {
+        self.pending
+    }
+
+    /// Clears the vectors that were pending at the read. A vector that latched since stays pending.
+    pub(super) fn clear(&self) {
+        self.clear_vectors(self.pending);
+    }
+
+    /// Clears `vectors` and no other bit.
+    pub(super) fn clear_vectors(&self, vectors: LeafMask) {
+        if !vectors.is_empty() {
+            self.bar.write(
+                Array::at(*self.leaf),
+                NV_VIRTUAL_FUNCTION_PRIV_CPU_INTR_LEAF::zeroed().with_vectors(vectors),
+            );
+        }
+    }
+}
+
+/// Disables a set of vectors in one leaf when dropped.
+pub(super) struct LeafEnableGuard<'a> {
+    bar: Bar0<'a>,
+    leaf: LeafIndex,
+    vectors: LeafMask,
+}
+
+impl Drop for LeafEnableGuard<'_> {
+    fn drop(&mut self) {
+        clear_leaf_enables(self.bar, self.leaf, self.vectors);
+    }
+}
+
+/// Disables the serviced subtrees at `TOP` when dropped.
+pub(crate) struct TopEnableGuard<'a> {
+    bar: Bar0<'a>,
+    serviced: SubtreeSet,
+}
+
+impl Drop for TopEnableGuard<'_> {
+    fn drop(&mut self) {
+        clear_top_enables(self.bar, self.serviced);
     }
 }

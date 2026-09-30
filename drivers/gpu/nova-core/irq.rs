@@ -10,7 +10,7 @@
 //! See `Documentation/gpu/nova/core/interrupts.rst`.
 
 mod hal;
-mod interrupt_tree;
+pub(crate) mod interrupt_tree;
 mod regs;
 
 /// The message-signaled interrupt type that Linux granted.
