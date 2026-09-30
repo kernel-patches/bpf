@@ -2077,9 +2077,6 @@ static void it6625_init_data(struct it6625 *it6625)
 	static struct v4l2_dv_timings default_timing =
 			V4L2_DV_BT_CEA_1920X1080P60;
 
-	it6625->csi_lanes = 4;
-	it6625->port_num = 1;
-	it6625->bus_type = V4L2_MBUS_CSI2_DPHY;
 	it6625->csi_format = it6625_formats[0].csi_format;
 	it6625->mbus_fmt_code = it6625_formats[0].mbus_fmt_code;
 	it6625->timings = default_timing;
@@ -2125,33 +2122,24 @@ static int it6625_parse_endpoint(struct it6625 *it6625)
 			of_node_put(port_ep);
 	}
 
-	if (!ep) {
-		it6625->port_num = 1;
-		dev_dbg(dev, "no CSI-2 endpoint node found, using default %u CSI lanes",
-			it6625->csi_lanes);
-		return 0;
-	}
-
 	ret = v4l2_fwnode_endpoint_alloc_parse(of_fwnode_handle(ep), &endpoint);
 	of_node_put(ep);
-	if (ret) {
-		dev_err(dev, "failed to parse endpoint: %d", ret);
-		return ret;
-	}
+	if (ret)
+		return dev_err_probe(dev, ret, "failed to parse endpoint");
 
 	if (endpoint.bus_type != V4L2_MBUS_CSI2_DPHY &&
 	    endpoint.bus_type != V4L2_MBUS_CSI2_CPHY) {
 		dev_err(dev, "unsupported bus type %d, expected CSI-2 D-PHY or C-PHY",
 			endpoint.bus_type);
-		v4l2_fwnode_endpoint_free(&endpoint);
-		return -EINVAL;
+		ret = -EINVAL;
+		goto out_free_endpoint;
 	}
 
 	if (endpoint.bus_type == V4L2_MBUS_CSI2_CPHY &&
 	    it6625->chip_type != IT6626_CHIP) {
 		dev_err(dev, "IT6625 does not support C-PHY, only IT6626 does");
-		v4l2_fwnode_endpoint_free(&endpoint);
-		return -EINVAL;
+		ret = -EINVAL;
+		goto out_free_endpoint;
 	}
 
 	max_lanes = (endpoint.bus_type == V4L2_MBUS_CSI2_CPHY) ? 3 : 4;
@@ -2161,15 +2149,17 @@ static int it6625_parse_endpoint(struct it6625 *it6625)
 		dev_err(dev,
 			"invalid number of CSI data lanes: %u (max %u for this bus type)",
 			endpoint.bus.mipi_csi2.num_data_lanes, max_lanes);
-		v4l2_fwnode_endpoint_free(&endpoint);
-		return -EINVAL;
+		ret = -EINVAL;
+		goto out_free_endpoint;
 	}
 
 	it6625->csi_lanes = endpoint.bus.mipi_csi2.num_data_lanes;
 	it6625->bus_type = endpoint.bus_type;
+
+out_free_endpoint:
 	v4l2_fwnode_endpoint_free(&endpoint);
 
-	return 0;
+	return ret;
 }
 
 static int it6625_parse_dt(struct it6625 *it6625)
