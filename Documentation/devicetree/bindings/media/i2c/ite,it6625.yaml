@@ -65,6 +65,7 @@ properties:
                 enum:
                   - 1 # MEDIA_BUS_TYPE_CSI2_CPHY
                   - 4 # MEDIA_BUS_TYPE_CSI2_DPHY
+                default: 4 # MEDIA_BUS_TYPE_CSI2_DPHY
 
             required:
               - data-lanes
@@ -88,6 +89,7 @@ properties:
                 enum:
                   - 1 # MEDIA_BUS_TYPE_CSI2_CPHY
                   - 4 # MEDIA_BUS_TYPE_CSI2_DPHY
+                default: 4 # MEDIA_BUS_TYPE_CSI2_DPHY
 
             required:
               - data-lanes
