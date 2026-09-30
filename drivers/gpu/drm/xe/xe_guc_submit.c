@@ -3058,6 +3058,15 @@ static void guc_exec_queue_start(struct xe_exec_queue *q)
 				 * increasing as jobs are written out.
 				 */
 				q->lrc[i]->ring.tail = job->ptrs[i].head;
+				/*
+				 * A ULLS job's slot can have been consumed by
+				 * the CS without the job running, leaving the
+				 * saved head past it. Rewind so the re-emitted
+				 * job is ahead of the head, not behind it.
+				 */
+				if (xe_sched_job_is_ulls(job))
+					xe_lrc_set_ring_head(q->lrc[i],
+							     job->ptrs[i].head);
 				xe_lrc_set_ring_tail(q->lrc[i],
 						     xe_lrc_ring_head(q->lrc[i]));
 			}
