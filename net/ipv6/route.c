@@ -3547,13 +3547,14 @@ static bool fib6_is_reject(u32 flags, struct net_device *dev, int addr_type)
 	return false;
 }
 
-int fib6_nh_init(struct net *net, struct fib6_nh *fib6_nh,
-		 struct fib6_config *cfg, gfp_t gfp_flags,
-		 struct netlink_ext_ack *extack)
+static int __fib6_nh_init(struct net *net, struct fib6_nh *fib6_nh,
+			  struct fib6_config *cfg, bool lo_reject,
+			  gfp_t gfp_flags, struct netlink_ext_ack *extack)
 {
 	netdevice_tracker *dev_tracker = &fib6_nh->fib_nh_dev_tracker;
 	struct net_device *dev = NULL;
 	struct inet6_dev *idev = NULL;
+	bool reject;
 	int err;
 
 	if (!ipv6_mod_enabled()) {
@@ -3601,9 +3602,17 @@ int fib6_nh_init(struct net *net, struct fib6_nh *fib6_nh,
 	fib6_nh->fib_nh_weight = 1;
 
 	/* Reset the nexthop device to the loopback device in case of reject
-	 * routes.
+	 * routes. If requested, also treat routes via the loopback device as
+	 * reject routes, as ip6_route_info_create_nh() promotes them to reject
+	 * routes and their nexthop does not need to be validated.
 	 */
-	if (cfg->fc_flags & RTF_REJECT) {
+	if (lo_reject)
+		reject = fib6_is_reject(cfg->fc_flags, dev,
+					ipv6_addr_type(&cfg->fc_dst));
+	else
+		reject = cfg->fc_flags & RTF_REJECT;
+
+	if (reject) {
 		/* hold loopback dev/idev if we haven't done so. */
 		if (dev != net->loopback_dev) {
 			if (dev) {
@@ -3678,6 +3687,13 @@ out:
 	}
 
 	return err;
+}
+
+int fib6_nh_init(struct net *net, struct fib6_nh *fib6_nh,
+		 struct fib6_config *cfg, gfp_t gfp_flags,
+		 struct netlink_ext_ack *extack)
+{
+	return __fib6_nh_init(net, fib6_nh, cfg, false, gfp_flags, extack);
 }
 
 void fib6_nh_release(struct fib6_nh *fib6_nh)
@@ -3872,7 +3888,8 @@ static int ip6_route_info_create_nh(struct fib6_info *rt,
 	} else {
 		int addr_type;
 
-		err = fib6_nh_init(net, rt->fib6_nh, cfg, gfp_flags, extack);
+		err = __fib6_nh_init(net, rt->fib6_nh, cfg, true, gfp_flags,
+				     extack);
 		if (err)
 			goto out_release;
 
