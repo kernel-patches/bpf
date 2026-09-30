@@ -166,8 +166,7 @@ int main(int argc, char *argv[])
 	 * referenced by both main() and l1_guest_code() and using a global
 	 * variable does not work.
 	 */
-	srand(time(NULL));
-	l1_scale_factor = (rand() % 9) + 2;
+	l1_scale_factor = (kvm_random_u32(&kvm_rng) % 9) + 2;
 	printf("L1's scale down factor is: %"PRIu64"\n", l1_scale_factor);
 	printf("L2's scale up factor is: %llu\n", L2_SCALE_FACTOR);
 
