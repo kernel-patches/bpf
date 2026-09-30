@@ -1198,6 +1198,7 @@ static int load_compressed_image(struct swap_map_handle *handle,
 {
 	unsigned int m;
 	int ret = 0;
+	int err2;
 	int eof = 0;
 	struct hib_bio_batch hb;
 	ktime_t start;
@@ -1478,6 +1479,10 @@ static int load_compressed_image(struct swap_map_handle *handle,
 	}
 
 out_finish:
+	/* Error exits may leave reads in flight into page[]. */
+	err2 = hib_wait_io(&hb);
+	if (!ret)
+		ret = err2;
 	if (crc->run_threads) {
 		wait_event(crc->done, atomic_read_acquire(&crc->stop));
 		atomic_set(&crc->stop, 0);
