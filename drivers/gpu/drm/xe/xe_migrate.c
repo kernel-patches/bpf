@@ -116,19 +116,19 @@
  *	<copy timestamp, start seqno store>
  *	<batch buffer start(s)>			(skipped on first/last job)
  *	<seqno write + user interrupt>
- *	postamble:	SDI saved ring tail = end of next job
+ *	postamble:	wait on semaphore[seqno + 1]
+ *			SDI saved ring tail = end of next job
  *			LRI RING_TAIL = end of next job
- *			wait on semaphore[seqno + 1]
  *						(skipped on the last job)
  *	pad:		MI_NOOP up to ULLS_JOB_SIZE_DW
  *
  * The preamble clears the current job's semaphore so it can be reused once
  * the seqno space wraps. The postamble is what keeps the engine busy: it
- * advances the ring tail over the next job and then blocks on that job's
- * semaphore, which is only signaled when the job is actually submitted. It
- * advances the saved tail as well as the tail register, keeping the two in
- * step without any help from the CPU, so a context save and restore can not
- * rewind the tail behind work which has already been published.
+ * blocks on the next job's semaphore, which is only signaled when that job is
+ * actually submitted, and then advances the ring tail over it. It advances
+ * the saved tail as well as the tail register, keeping the two in step
+ * without any help from the CPU, so a context save and restore can not rewind
+ * the tail behind work which has already been published.
  *
  * The tail register write must be non-posted, i.e. it must not carry
  * MI_LRI_FORCE_POSTED. Posted, the new tail is free to land after the command
@@ -137,10 +137,12 @@
  * A parked context can be switched off the hardware, and the fast path below
  * has no H2G with which to ask GuC to bring it back.
  *
- * The tail is published ahead of the semaphore wait rather than after it so
- * that the non-posted write drains while the engine is parked anyway, keeping
- * a register round trip off the path between the semaphore being signaled and
- * the next job running.
+ * The tail must be published after the semaphore wait, not before it. The
+ * command streamer fetches ring contents up to the tail while it is parked,
+ * so a tail published ahead of the wait lets it fetch the next job's slot
+ * before the CPU has written the job there. Once released it then executes
+ * the MI_NOOPs it fetched instead of the job, that job's fence never signals,
+ * and the engine drains and idles with nothing left to wake it.
  *
  * Submission fast path
  * --------------------
@@ -151,10 +153,10 @@
  *	xe_lrc_set_ulls_semaphore(lrc, seqno);		release previous job
  *
  * The XE_GUC_ACTION_SCHED_CONTEXT H2G is suppressed, and so is the write of
- * the saved ring tail: the previous job's postamble has already published
- * this job's tail both in the tail register and in the context image, so the
- * semaphore signal is all that is left. The previous job's semaphore wait is
- * satisfied and the engine walks straight into this job.
+ * the saved ring tail: the previous job's postamble is parked on this job's
+ * semaphore and publishes this job's tail, both in the tail register and in
+ * the context image, as soon as it is released. The semaphore signal is all
+ * that is left, and the engine walks straight into this job.
  *
  * This does assume the context stays resident for as long as ULLS mode is
  * active. Nothing else is scheduled on the reserved engine, so the only ways

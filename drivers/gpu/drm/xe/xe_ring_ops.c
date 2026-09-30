@@ -537,12 +537,18 @@ static int emit_ulls_ring_tail(struct xe_gt *gt, struct xe_lrc *lrc, u32 *dw,
 	return i;
 }
 
-/* Publish the next job's tail, then park the engine on its semaphore */
+/*
+ * Park the engine on the next job's semaphore, then publish its tail.
+ *
+ * The tail must not be published before the wait. The command streamer
+ * fetches ring contents up to the tail while parked, so it would fetch the
+ * next job's slot while it still holds MI_NOOPs and execute those once
+ * released, rather than the job the CPU writes there later. Publishing after
+ * the wait keeps the slot beyond the tail until the job is in place.
+ */
 static int emit_ulls_postamble(struct xe_gt *gt, struct xe_lrc *lrc, u32 *dw,
 			       int i, u32 seqno, u32 head)
 {
-	i = emit_ulls_ring_tail(gt, lrc, dw, i, head);
-
 	dw[i++] = MI_SEMAPHORE_WAIT |
 		MI_SEMW_GGTT |
 		MI_SEMW_POLL |
@@ -552,7 +558,7 @@ static int emit_ulls_postamble(struct xe_gt *gt, struct xe_lrc *lrc, u32 *dw,
 	dw[i++] = 0;
 	dw[i++] = 0;
 
-	return i;
+	return emit_ulls_ring_tail(gt, lrc, dw, i, head);
 }
 
 /* Pad out to the fixed ULLS job size */
