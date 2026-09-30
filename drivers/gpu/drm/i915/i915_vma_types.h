@@ -112,10 +112,10 @@ static inline void assert_i915_gem_gtt_types(void)
 	 * we have to be careful that each branch has a unique size.
 	 */
 	switch ((enum intel_gtt_view_type)0) {
-	case I915_GTT_VIEW_NORMAL:
-	case I915_GTT_VIEW_PARTIAL:
-	case I915_GTT_VIEW_ROTATED:
-	case I915_GTT_VIEW_REMAPPED:
+	case INTEL_GTT_VIEW_NORMAL:
+	case INTEL_GTT_VIEW_PARTIAL:
+	case INTEL_GTT_VIEW_ROTATED:
+	case INTEL_GTT_VIEW_REMAPPED:
 		/* gcc complains if these are identical cases */
 		break;
 	}
@@ -231,7 +231,7 @@ struct i915_vma {
 	 * Support different GGTT views into the same object.
 	 * This means there can be multiple VMA mappings per object and per VM.
 	 * intel_gtt_view_type is used to distinguish between those entries.
-	 * The default one of zero (I915_GTT_VIEW_NORMAL) is default and also
+	 * The default one of zero (INTEL_GTT_VIEW_NORMAL) is default and also
 	 * assumed in GEM functions which take no ggtt view parameter.
 	 */
 	struct intel_gtt_view gtt_view;

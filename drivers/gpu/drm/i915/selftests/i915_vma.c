@@ -573,8 +573,8 @@ static int igt_vma_rotate_remap(void *arg)
 		{ }
 	}, *a, *b;
 	enum intel_gtt_view_type types[] = {
-		I915_GTT_VIEW_ROTATED,
-		I915_GTT_VIEW_REMAPPED,
+		INTEL_GTT_VIEW_ROTATED,
+		INTEL_GTT_VIEW_REMAPPED,
 		0,
 	}, *t;
 	const unsigned int max_pages = 64;
@@ -825,12 +825,12 @@ static int igt_vma_partial(void *arg)
 			for_each_prime_number_from(offset, 0, npages - sz) {
 				struct intel_gtt_view view;
 
-				view.type = I915_GTT_VIEW_PARTIAL;
+				view.type = INTEL_GTT_VIEW_PARTIAL;
 				view.partial.offset = offset;
 				view.partial.size = sz;
 
 				if (sz == npages)
-					view.type = I915_GTT_VIEW_NORMAL;
+					view.type = INTEL_GTT_VIEW_NORMAL;
 
 				vma = checked_vma_instance(obj, vm, &view);
 				if (IS_ERR(vma)) {
@@ -982,8 +982,8 @@ static int igt_vma_remapped_gtt(void *arg)
 		{ }
 	}, *p;
 	enum intel_gtt_view_type types[] = {
-		I915_GTT_VIEW_ROTATED,
-		I915_GTT_VIEW_REMAPPED,
+		INTEL_GTT_VIEW_ROTATED,
+		INTEL_GTT_VIEW_REMAPPED,
 		0,
 	}, *t;
 	struct drm_i915_gem_object *obj;

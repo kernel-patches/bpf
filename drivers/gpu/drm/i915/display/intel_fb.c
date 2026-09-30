@@ -1706,7 +1706,7 @@ int intel_fill_fb_info(struct intel_display *display, struct intel_framebuffer *
 	unsigned int tile_size = intel_tile_size(display);
 
 	intel_fb_view_init(display, &fb->normal_view,
-			   I915_GTT_VIEW_NORMAL, fb);
+			   INTEL_GTT_VIEW_NORMAL, fb);
 
 	drm_WARN_ON(display->drm,
 		    intel_fb_supports_90_270_rotation(fb) &&
@@ -1714,10 +1714,10 @@ int intel_fill_fb_info(struct intel_display *display, struct intel_framebuffer *
 
 	if (intel_fb_supports_90_270_rotation(fb))
 		intel_fb_view_init(display, &fb->rotated_view,
-				   I915_GTT_VIEW_ROTATED, fb);
+				   INTEL_GTT_VIEW_ROTATED, fb);
 	if (intel_fb_needs_pot_stride_remap(fb))
 		intel_fb_view_init(display, &fb->remapped_view,
-				   I915_GTT_VIEW_REMAPPED, fb);
+				   INTEL_GTT_VIEW_REMAPPED, fb);
 
 	for (i = 0; i < num_planes; i++) {
 		struct fb_plane_view_dims view_dims;
@@ -1845,7 +1845,7 @@ static void intel_plane_remap_gtt(struct intel_plane_state *plane_state)
 
 	intel_fb_view_init(display, &plane_state->view,
 			   drm_rotation_90_or_270(rotation) ?
-			   I915_GTT_VIEW_ROTATED : I915_GTT_VIEW_REMAPPED,
+			   INTEL_GTT_VIEW_ROTATED : INTEL_GTT_VIEW_REMAPPED,
 			   intel_fb);
 
 	src_x = plane_state->uapi.src.x1 >> 16;

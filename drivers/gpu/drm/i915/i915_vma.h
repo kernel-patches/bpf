@@ -217,7 +217,7 @@ i915_vma_compare(struct i915_vma *vma,
 	if (cmp)
 		return cmp;
 
-	BUILD_BUG_ON(I915_GTT_VIEW_NORMAL != 0);
+	BUILD_BUG_ON(INTEL_GTT_VIEW_NORMAL != 0);
 	cmp = vma->gtt_view.type;
 	if (!view)
 		return cmp;
@@ -238,9 +238,9 @@ i915_vma_compare(struct i915_vma *vma,
 	 * we assert above that all branches have the same address, and that
 	 * each branch has a unique type/size.
 	 */
-	BUILD_BUG_ON(I915_GTT_VIEW_NORMAL >= I915_GTT_VIEW_PARTIAL);
-	BUILD_BUG_ON(I915_GTT_VIEW_PARTIAL >= I915_GTT_VIEW_ROTATED);
-	BUILD_BUG_ON(I915_GTT_VIEW_ROTATED >= I915_GTT_VIEW_REMAPPED);
+	BUILD_BUG_ON(INTEL_GTT_VIEW_NORMAL >= INTEL_GTT_VIEW_PARTIAL);
+	BUILD_BUG_ON(INTEL_GTT_VIEW_PARTIAL >= INTEL_GTT_VIEW_ROTATED);
+	BUILD_BUG_ON(INTEL_GTT_VIEW_ROTATED >= INTEL_GTT_VIEW_REMAPPED);
 	BUILD_BUG_ON(offsetof(typeof(*view), rotated) !=
 		     offsetof(typeof(*view), partial));
 	BUILD_BUG_ON(offsetof(typeof(*view), rotated) !=

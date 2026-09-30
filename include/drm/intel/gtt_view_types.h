@@ -40,10 +40,10 @@ struct intel_remapped_info {
 } __packed;
 
 enum intel_gtt_view_type {
-	I915_GTT_VIEW_NORMAL = 0,
-	I915_GTT_VIEW_ROTATED = sizeof(struct intel_rotation_info),
-	I915_GTT_VIEW_PARTIAL = sizeof(struct intel_partial_info),
-	I915_GTT_VIEW_REMAPPED = sizeof(struct intel_remapped_info),
+	INTEL_GTT_VIEW_NORMAL = 0,
+	INTEL_GTT_VIEW_ROTATED = sizeof(struct intel_rotation_info),
+	INTEL_GTT_VIEW_PARTIAL = sizeof(struct intel_partial_info),
+	INTEL_GTT_VIEW_REMAPPED = sizeof(struct intel_remapped_info),
 };
 
 struct intel_gtt_view {
@@ -58,22 +58,22 @@ struct intel_gtt_view {
 
 static inline bool intel_gtt_view_is_normal(const struct intel_gtt_view *view)
 {
-	return view->type == I915_GTT_VIEW_NORMAL;
+	return view->type == INTEL_GTT_VIEW_NORMAL;
 }
 
 static inline bool intel_gtt_view_is_remapped(const struct intel_gtt_view *view)
 {
-	return view->type == I915_GTT_VIEW_REMAPPED;
+	return view->type == INTEL_GTT_VIEW_REMAPPED;
 }
 
 static inline bool intel_gtt_view_is_rotated(const struct intel_gtt_view *view)
 {
-	return view->type == I915_GTT_VIEW_ROTATED;
+	return view->type == INTEL_GTT_VIEW_ROTATED;
 }
 
 static inline bool intel_gtt_view_is_partial(const struct intel_gtt_view *view)
 {
-	return view->type == I915_GTT_VIEW_PARTIAL;
+	return view->type == INTEL_GTT_VIEW_PARTIAL;
 }
 
 #endif /* __DRM_INTEL_GTT_VIEW_TYPES_H__ */
