@@ -41,14 +41,9 @@ static void compare_tsc_freq(u64 actual, u64 expected)
 	thresh_low = expected - tolerance;
 	thresh_high = expected + tolerance;
 
-	TEST_ASSERT(thresh_low < actual,
-		"TSC freq is expected to be between %"PRIu64" and %"PRIu64
-		" but it actually is %"PRIu64,
-		thresh_low, thresh_high, actual);
-	TEST_ASSERT(thresh_high > actual,
-		"TSC freq is expected to be between %"PRIu64" and %"PRIu64
-		" but it actually is %"PRIu64,
-		thresh_low, thresh_high, actual);
+	TEST_ASSERT(thresh_low < actual && thresh_high > actual,
+		    "TSC freq is '%lu', expected to be between %lu and %lu",
+		    actual, thresh_low, thresh_high);
 }
 
 static void check_tsc_freq(int level)
@@ -166,7 +161,7 @@ int main(int argc, char *argv[])
 	 * variable does not work.
 	 */
 	l1_scale_factor = (kvm_random_u32(&kvm_rng) % 9) + 2;
-	printf("L1's scale down factor is: %"PRIu64"\n", l1_scale_factor);
+	printf("L1's scale down factor is: %lu\n", l1_scale_factor);
 	printf("L2's scale up factor is: %llu\n", L2_SCALE_FACTOR);
 
 	tsc_start = rdtsc();
@@ -174,7 +169,7 @@ int main(int argc, char *argv[])
 	tsc_end = rdtsc();
 
 	l0_tsc_freq = tsc_end - tsc_start;
-	printf("real TSC frequency is around: %"PRIu64"\n", l0_tsc_freq);
+	printf("real TSC frequency is around: %lu\n", l0_tsc_freq);
 
 	vm = vm_create_with_one_vcpu(&vcpu, l1_guest_code);
 
@@ -207,16 +202,14 @@ int main(int argc, char *argv[])
 				break;
 			case UCHECK_L1:
 				l1_tsc_freq = uc.args[1];
-				printf("L1's TSC frequency is around: %"PRIu64
-				       "\n", l1_tsc_freq);
+				printf("L1's TSC frequency is around: %lu\n", l1_tsc_freq);
 
 				compare_tsc_freq(l1_tsc_freq,
 						 l0_tsc_freq / l1_scale_factor);
 				break;
 			case UCHECK_L2:
 				l2_tsc_freq = uc.args[1];
-				printf("L2's TSC frequency is around: %"PRIu64
-				       "\n", l2_tsc_freq);
+				printf("L2's TSC frequency is around: %lu\n", l2_tsc_freq);
 
 				compare_tsc_freq(l2_tsc_freq,
 						 l1_tsc_freq * L2_SCALE_FACTOR);
