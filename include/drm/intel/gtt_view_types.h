@@ -56,17 +56,17 @@ struct i915_gtt_view {
 	};
 };
 
-static inline bool i915_gtt_view_is_normal(const struct i915_gtt_view *view)
+static inline bool intel_gtt_view_is_normal(const struct i915_gtt_view *view)
 {
 	return view->type == I915_GTT_VIEW_NORMAL;
 }
 
-static inline bool i915_gtt_view_is_remapped(const struct i915_gtt_view *view)
+static inline bool intel_gtt_view_is_remapped(const struct i915_gtt_view *view)
 {
 	return view->type == I915_GTT_VIEW_REMAPPED;
 }
 
-static inline bool i915_gtt_view_is_rotated(const struct i915_gtt_view *view)
+static inline bool intel_gtt_view_is_rotated(const struct i915_gtt_view *view)
 {
 	return view->type == I915_GTT_VIEW_ROTATED;
 }
