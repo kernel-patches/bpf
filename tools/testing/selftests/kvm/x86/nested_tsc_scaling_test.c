@@ -16,8 +16,8 @@
 #include "svm_util.h"
 #include "kselftest.h"
 
-/* L2 is scaled up (from L1's perspective) by this factor */
-static u64 l2_scale_factor;
+/* L2's TSC multiplier, relative to L1. */
+static u64 l2_multiplier;
 
 #define TSC_OFFSET_L2 ((u64)-33125236320908)
 
@@ -80,7 +80,7 @@ static void l1_svm_code(struct svm_test_data *svm)
 	generic_svm_setup(svm, l2_guest_code);
 
 	/* enable TSC scaling for L2 */
-	wrmsr(MSR_AMD64_TSC_RATIO, l2_scale_factor << 32);
+	wrmsr(MSR_AMD64_TSC_RATIO, l2_multiplier);
 
 	/* launch L2 */
 	run_guest(svm->vmcb, svm->vmcb_gpa);
@@ -115,7 +115,7 @@ static void l1_vmx_code(struct vmx_pages *vmx_pages)
 	vmwrite(SECONDARY_VM_EXEC_CONTROL, control);
 
 	vmwrite(TSC_OFFSET, TSC_OFFSET_L2);
-	vmwrite(TSC_MULTIPLIER, l2_scale_factor << 48);
+	vmwrite(TSC_MULTIPLIER, l2_multiplier);
 
 	/* launch L2 */
 	vmlaunch();
@@ -135,20 +135,22 @@ static void l1_guest_code(void *data)
 		l1_svm_code(data);
 }
 
-static void test_tsc_scaling(u64 l0_tsc_freq, u64 l1_scale_factor, u64 l2_scale)
+static void test_tsc_scaling(u64 l0_tsc_freq, u64 l1_scale_factor, u64 l2_scale_factor)
 {
 	u64 tsc_khz, l1_tsc_freq, l2_tsc_freq;
 	struct kvm_vcpu *vcpu;
 	struct kvm_vm *vm;
 	gva_t guest_gva;
-
-	l2_scale_factor = l2_scale;
+	u8 frac_bits;
 
 	printf("L1's scale down factor is: %lu\n", l1_scale_factor);
 	printf("L2's scale up factor is: %lu\n", l2_scale_factor);
 
+	frac_bits = kvm_cpu_has(X86_FEATURE_VMX) ? 48 : 32;
+	l2_multiplier = l2_scale_factor << frac_bits;
+
 	vm = vm_create_with_one_vcpu(&vcpu, l1_guest_code);
-	sync_global_to_guest(vm, l2_scale_factor);
+	sync_global_to_guest(vm, l2_multiplier);
 
 	if (kvm_cpu_has(X86_FEATURE_VMX))
 		vcpu_alloc_vmx(vm, &guest_gva);
