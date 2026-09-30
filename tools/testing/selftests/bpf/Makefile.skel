@@ -138,4 +138,18 @@ $(LINKED_SKELS_H): $(RDIR)/%.skel.h: $$(addprefix $(RDIR)/,$$($$*.skel.h-deps)) 
 		   $(BPFTOOL) $(GEN_SKEL) | $(RDIR)
 	$(Q)$(cmd_bpf_link_skel)
 
+# Programs in Rust, see Makefile.buildvars. No skeletons: the objects may be absent.
+ifneq ($(RUST_CORE),)
+ifeq ($(BPF_CC),$(CLANG))
+RUST_OBJS := $(patsubst progs/%.rs,$(RDIR)/%.bpf.o,$(wildcard progs/*.rs))
+BPF_OBJS += $(RUST_OBJS)
+
+$(RUST_OBJS): $(RDIR)/%.bpf.o: progs/%.rs $(RUST_CORE) | $(RDIR)
+	$(call msg,RUSTC,$(BINARY),$@)
+	+$(Q)$(RUSTC_BPF) --edition 2021 -C debuginfo=2 --emit=llvm-bc -o -	\
+		$(patsubst -mcpu=%,-C target-cpu=%,$(filter -mcpu=%,$(BPF_CC_FLAGS))) $< | \
+		$(BPF_CC) $(BPF_CC_FLAGS) -x ir -c - -o $@
+endif
+endif
+
 endif # BPF_CC

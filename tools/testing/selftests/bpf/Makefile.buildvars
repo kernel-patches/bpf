@@ -109,6 +109,25 @@ HOST_INCLUDE_DIR	:= $(INCLUDE_DIR)
 endif
 RESOLVE_BTFIDS := $(HOST_BUILD_DIR)/resolve_btfids/resolve_btfids
 
+# Programs in Rust are built by upstream rustc. It has no prebuilt core for
+# the bpf target, so it has to come with the source of core:
+#   rustup component add rust-src
+# rustc emits LLVM bitcode, clang 23 or newer makes the object of it.
+# Without any of them RUST_CORE is empty and the tests are skipped.
+RUSTC ?= rustc
+RUST_CORE_SRC := $(wildcard $(shell $(RUSTC) --print sysroot 2>/dev/null)$\
+			    /lib/rustlib/src/rust/library/core/src/lib.rs)
+ifneq ($(RUST_CORE_SRC),)
+ifeq ($(shell [ 0$(shell echo __clang_major__ | $(CLANG) -E -P -x c - 2>/dev/null) -ge 23 ] && echo y),y)
+RUST_CORE := $(BUILD_DIR)/rust/libcore.rlib
+endif
+endif
+# RUSTC_BOOTSTRAP=1 is to build core with a stable rustc, like the kernel does.
+# panic=abort is a stop gap until panic=unwind is supported.
+RUSTC_BPF = RUSTC_BOOTSTRAP=1 $(RUSTC) -O -C panic=abort --crate-type rlib	\
+	    --target $(if $(IS_LITTLE_ENDIAN),bpfel,bpfeb)-unknown-none		\
+	    -L $(dir $(RUST_CORE))
+
 DEFAULT_BPFTOOL := $(HOST_SCRATCH_DIR)/sbin/bpftool
 ifneq ($(CROSS_COMPILE),)
 CROSS_BPFTOOL := $(SCRATCH_DIR)/sbin/bpftool

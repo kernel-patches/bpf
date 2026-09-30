@@ -128,6 +128,29 @@ static void test_ptr_to_extern(void)
 		bpf_object__close(obj);
 }
 
+/* The object is there if rustc and clang can build it, see Makefile.buildvars */
+static void test_rust(void)
+{
+	const char *file = "./data_in_arena_rust.bpf.o";
+	struct bpf_object *obj;
+
+	if (access(file, R_OK)) {
+		test__skip();
+		return;
+	}
+	obj = bpf_object__open_file(file, NULL);
+	if (!ASSERT_OK_PTR(obj, "open"))
+		return;
+	if (!ASSERT_OK(bpf_object__load(obj), "load"))
+		goto out;
+	/* libbpf goes on without BTF when the kernel doesn't take it */
+	ASSERT_GE(bpf_object__btf_fd(obj), 0, "btf_fd");
+	ASSERT_EQ(run_prog(bpf_object__find_program_by_name(obj, "list_in_data")),
+		  100 + 20 + 3, "retval");
+out:
+	bpf_object__close(obj);
+}
+
 void test_data_in_arena(void)
 {
 #if !defined(__x86_64__) && !defined(__aarch64__)
@@ -143,4 +166,6 @@ void test_data_in_arena(void)
 		test_ptr_to_map();
 	if (test__start_subtest("ptr_to_extern"))
 		test_ptr_to_extern();
+	if (test__start_subtest("rust"))
+		test_rust();
 }
