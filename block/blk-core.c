@@ -536,6 +536,23 @@ bool blk_get_queue(struct request_queue *q)
 }
 EXPORT_SYMBOL(blk_get_queue);
 
+/**
+ * blk_get_queue_rcu - get a queue reference regardless of the dying flag
+ * @q: the request_queue to reference
+ *
+ * Unlike blk_get_queue(), this succeeds on a dying queue, so a caller
+ * which holds the queue only through RCU (e.g. a detach path which
+ * read the pointer locklessly) can still take a reference and touch
+ * the queue under its own lifetime.  The caller must hold
+ * rcu_read_lock() so the memory is valid.  Fails only when the
+ * refcount already dropped to zero.
+ */
+bool blk_get_queue_rcu(struct request_queue *q)
+{
+	return refcount_inc_not_zero(&q->refs);
+}
+EXPORT_SYMBOL(blk_get_queue_rcu);
+
 #ifdef CONFIG_FAIL_MAKE_REQUEST
 
 static DECLARE_FAULT_ATTR(fail_make_request);
