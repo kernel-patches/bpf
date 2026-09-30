@@ -302,6 +302,7 @@ config MAXLINEAR_GPHY
 	tristate "Maxlinear Ethernet PHYs"
 	select POLYNOMIAL if HWMON
 	depends on HWMON || HWMON=n
+	depends on REGULATOR
 	help
 	  Support for the Maxlinear GPY115, GPY211, GPY212, GPY215,
 	  GPY241, GPY245 PHYs.

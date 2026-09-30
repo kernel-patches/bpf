@@ -14,6 +14,8 @@
 #include <linux/polynomial.h>
 #include <linux/property.h>
 #include <linux/netdevice.h>
+#include <linux/regulator/driver.h>
+#include <linux/of.h>
 
 /* PHY ID */
 #define PHY_ID_GPYx15B_MASK	0xFFFFFFFC
@@ -109,6 +111,10 @@
 #define VSPEC1_SGMII_CTRL_ANRS	BIT(9)		/* Restart Aneg */
 #define VSPEC1_SGMII_ANEN_ANRS	(VSPEC1_SGMII_CTRL_ANEN | \
 				 VSPEC1_SGMII_CTRL_ANRS)
+
+/* Packet Manager Control */
+#define VSPEC1_PM_CTRL		0x0c
+#define VSPEC1_PM_CTRL_MDIO_VOL	BIT(14)
 
 /* Temperature sensor */
 #define VSPEC1_TEMP_STA	0x0E
@@ -386,6 +392,72 @@ static int gpy_probe(struct phy_device *phydev)
 	phydev_info(phydev, "Firmware Version: %d.%d (0x%04X%s)\n",
 		    priv->fw_major, priv->fw_minor, fw_version,
 		    fw_version & PHY_FWV_REL_MASK ? "" : " test version");
+
+	return 0;
+}
+
+static int mxl86211c_mdio_reg_set_voltage_sel(struct regulator_dev *rdev,
+					      unsigned int selector)
+{
+	struct phy_device *phydev = rdev_get_drvdata(rdev);
+
+	return phy_modify_mmd(phydev, MDIO_MMD_VEND1, VSPEC1_PM_CTRL,
+			      VSPEC1_PM_CTRL_MDIO_VOL,
+			      selector ? 0 : VSPEC1_PM_CTRL_MDIO_VOL);
+}
+
+static int mxl86211c_mdio_reg_get_voltage_sel(struct regulator_dev *rdev)
+{
+	struct phy_device *phydev = rdev_get_drvdata(rdev);
+	int val;
+
+	val = phy_read_mmd(phydev, MDIO_MMD_VEND1, VSPEC1_PM_CTRL);
+	if (val < 0)
+		return val;
+
+	return (val & VSPEC1_PM_CTRL_MDIO_VOL) ? 0 : 1;
+}
+
+static const struct regulator_ops mxl86211c_mdio_regulator_ops = {
+	.list_voltage = regulator_list_voltage_table,
+	.set_voltage_sel = mxl86211c_mdio_reg_set_voltage_sel,
+	.get_voltage_sel = mxl86211c_mdio_reg_get_voltage_sel,
+};
+
+static const unsigned int mxl86211c_mdio_voltage_table[] = {
+	1800000,
+	3300000,
+};
+
+static const struct regulator_desc mxl86211c_mdio_desc = {
+	.name = "mdio",
+	.of_match = of_match_ptr("mdio-regulator"),
+	.n_voltages = ARRAY_SIZE(mxl86211c_mdio_voltage_table),
+	.volt_table = mxl86211c_mdio_voltage_table,
+	.ops = &mxl86211c_mdio_regulator_ops,
+	.type = REGULATOR_VOLTAGE,
+	.owner = THIS_MODULE,
+};
+
+static int mxl86211c_probe(struct phy_device *phydev)
+{
+	struct device *dev = &phydev->mdio.dev;
+	struct regulator_config config = { };
+	struct regulator_dev *rdev;
+	int ret;
+
+	ret = gpy_probe(phydev);
+	if (ret)
+		return ret;
+
+	config.dev = dev;
+	config.driver_data = phydev;
+
+	rdev = devm_regulator_register(dev, &mxl86211c_mdio_desc, &config);
+	if (IS_ERR(rdev)) {
+		phydev_err(phydev, "failed to register MDIO regulator\n");
+		return PTR_ERR(rdev);
+	}
 
 	return 0;
 }
@@ -1406,7 +1478,7 @@ static struct phy_driver gpy_drivers[] = {
 		.name		= "Maxlinear Ethernet MxL86211C",
 		.get_features	= genphy_c45_pma_read_abilities,
 		.config_init	= gpy21x_config_init,
-		.probe		= gpy_probe,
+		.probe		= mxl86211c_probe,
 		.inband_caps	= gpy_inband_caps,
 		.config_inband	= gpy_config_inband,
 		.suspend	= genphy_suspend,
