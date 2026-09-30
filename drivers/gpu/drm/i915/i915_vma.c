@@ -147,7 +147,7 @@ static void __i915_vma_retire(struct i915_active *ref)
 static struct i915_vma *
 vma_create(struct drm_i915_gem_object *obj,
 	   struct i915_address_space *vm,
-	   const struct i915_gtt_view *view)
+	   const struct intel_gtt_view *view)
 {
 	struct i915_vma *pos = ERR_PTR(-E2BIG);
 	struct i915_vma *vma;
@@ -286,7 +286,7 @@ err_vma:
 static struct i915_vma *
 i915_vma_lookup(struct drm_i915_gem_object *obj,
 	   struct i915_address_space *vm,
-	   const struct i915_gtt_view *view)
+	   const struct intel_gtt_view *view)
 {
 	struct rb_node *rb;
 
@@ -324,7 +324,7 @@ i915_vma_lookup(struct drm_i915_gem_object *obj,
 struct i915_vma *
 i915_vma_instance(struct drm_i915_gem_object *obj,
 		  struct i915_address_space *vm,
-		  const struct i915_gtt_view *view)
+		  const struct intel_gtt_view *view)
 {
 	struct i915_vma *vma;
 
@@ -1267,7 +1267,7 @@ err_st_alloc:
 }
 
 static noinline struct sg_table *
-intel_partial_pages(const struct i915_gtt_view *view,
+intel_partial_pages(const struct intel_gtt_view *view,
 		    struct drm_i915_gem_object *obj)
 {
 	struct sg_table *st;

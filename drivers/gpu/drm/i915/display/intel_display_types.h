@@ -111,7 +111,7 @@ struct intel_fb_view {
 	 * In the normal view the FB object's backing store sg list is used
 	 * directly and hence the remap information here is not used.
 	 */
-	struct i915_gtt_view gtt;
+	struct intel_gtt_view gtt;
 
 	/*
 	 * The GTT view (gtt.type) specific information for each FB color

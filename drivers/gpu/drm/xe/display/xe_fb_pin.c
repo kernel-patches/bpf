@@ -148,7 +148,7 @@ static int __xe_pin_fb_vma_dpt(struct drm_gem_object *obj,
 	struct xe_device *xe = to_xe_device(obj->dev);
 	struct xe_tile *tile0 = xe_device_get_root_tile(xe);
 	struct xe_ggtt *ggtt = tile0->mem.ggtt;
-	const struct i915_gtt_view *view = pin_params->view;
+	const struct intel_gtt_view *view = pin_params->view;
 	struct xe_bo *bo = gem_to_xe_bo(obj), *dpt;
 	u32 dpt_size, size = bo->ttm.base.size;
 
@@ -231,7 +231,7 @@ write_ggtt_rotated(struct xe_ggtt *ggtt, u32 *ggtt_ofs,
 }
 
 struct fb_rotate_args {
-	const struct i915_gtt_view *view;
+	const struct intel_gtt_view *view;
 	struct xe_bo *bo;
 };
 
@@ -256,7 +256,7 @@ static int __xe_pin_fb_vma_ggtt(struct drm_gem_object *obj,
 				const struct intel_fb_pin_params *pin_params,
 				struct i915_vma *vma)
 {
-	const struct i915_gtt_view *view = pin_params->view;
+	const struct intel_gtt_view *view = pin_params->view;
 	struct xe_bo *bo = gem_to_xe_bo(obj);
 	struct xe_device *xe = to_xe_device(obj->dev);
 	struct xe_tile *tile0 = xe_device_get_root_tile(xe);
@@ -457,9 +457,9 @@ static void xe_fb_pin_dpt_unpin(struct intel_dpt *dpt,
 static struct i915_vma *
 xe_fb_pin_reuse_vma(struct i915_vma *old_ggtt_vma,
 		    struct drm_gem_object *old_obj,
-		    const struct i915_gtt_view *old_view,
+		    const struct intel_gtt_view *old_view,
 		    struct drm_gem_object *new_obj,
-		    const struct i915_gtt_view *new_view,
+		    const struct intel_gtt_view *new_view,
 		    u32 *out_offset)
 {
 	if (old_ggtt_vma && old_obj == new_obj &&

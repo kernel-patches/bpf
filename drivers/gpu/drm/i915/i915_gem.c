@@ -902,7 +902,7 @@ static void discard_ggtt_vma(struct i915_vma *vma)
 struct i915_vma *
 i915_gem_object_ggtt_pin_ww(struct drm_i915_gem_object *obj,
 			    struct i915_gem_ww_ctx *ww,
-			    const struct i915_gtt_view *view,
+			    const struct intel_gtt_view *view,
 			    u64 size, u64 alignment, u64 flags)
 {
 	struct drm_i915_private *i915 = to_i915(obj->base.dev);
@@ -1004,7 +1004,7 @@ new_vma:
 
 struct i915_vma * __must_check
 i915_gem_object_ggtt_pin(struct drm_i915_gem_object *obj,
-			 const struct i915_gtt_view *view,
+			 const struct intel_gtt_view *view,
 			 u64 size, u64 alignment, u64 flags)
 {
 	struct i915_gem_ww_ctx ww;

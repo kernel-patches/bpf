@@ -1632,7 +1632,7 @@ calc_plane_normal_size(const struct intel_framebuffer *fb, int color_plane,
 
 static void intel_fb_view_init(struct intel_display *display,
 			       struct intel_fb_view *view,
-			       enum i915_gtt_view_type view_type,
+			       enum intel_gtt_view_type view_type,
 			       const struct intel_framebuffer *fb)
 {
 	memset(view, 0, sizeof(*view));

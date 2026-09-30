@@ -196,12 +196,12 @@ int i915_gem_mmap_gtt_version(void)
 	return 5;
 }
 
-static inline struct i915_gtt_view
+static inline struct intel_gtt_view
 compute_partial_view(const struct drm_i915_gem_object *obj,
 		     pgoff_t page_offset,
 		     unsigned int chunk)
 {
-	struct i915_gtt_view view;
+	struct intel_gtt_view view;
 
 	if (i915_gem_object_is_tiled(obj))
 		chunk = roundup(chunk, tile_row_pages(obj) ?: 1);
@@ -391,7 +391,7 @@ retry:
 					  PIN_NOEVICT);
 	if (IS_ERR(vma) && vma != ERR_PTR(-EDEADLK)) {
 		/* Use a partial view if it is bigger than available space */
-		struct i915_gtt_view view =
+		struct intel_gtt_view view =
 			compute_partial_view(obj, page_offset, MIN_CHUNK_PAGES);
 		unsigned int flags;
 

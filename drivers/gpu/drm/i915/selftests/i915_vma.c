@@ -63,7 +63,7 @@ static bool assert_vma(struct i915_vma *vma,
 static struct i915_vma *
 checked_vma_instance(struct drm_i915_gem_object *obj,
 		     struct i915_address_space *vm,
-		     const struct i915_gtt_view *view)
+		     const struct intel_gtt_view *view)
 {
 	struct i915_vma *vma;
 	bool ok = true;
@@ -533,7 +533,7 @@ assert_remapped(struct drm_i915_gem_object *obj,
 	return sg;
 }
 
-static unsigned int remapped_size(enum i915_gtt_view_type view_type,
+static unsigned int remapped_size(enum intel_gtt_view_type view_type,
 				  const struct intel_remapped_plane_info *a,
 				  const struct intel_remapped_plane_info *b)
 {
@@ -572,7 +572,7 @@ static int igt_vma_rotate_remap(void *arg)
 
 		{ }
 	}, *a, *b;
-	enum i915_gtt_view_type types[] = {
+	enum intel_gtt_view_type types[] = {
 		I915_GTT_VIEW_ROTATED,
 		I915_GTT_VIEW_REMAPPED,
 		0,
@@ -592,7 +592,7 @@ static int igt_vma_rotate_remap(void *arg)
 	for (t = types; *t; t++) {
 	for (a = planes; a->width; a++) {
 		for (b = planes + ARRAY_SIZE(planes); b-- != planes; ) {
-			struct i915_gtt_view view = {
+			struct intel_gtt_view view = {
 				.type = *t,
 				.remapped.plane[0] = *a,
 				.remapped.plane[1] = *b,
@@ -745,7 +745,7 @@ static bool assert_partial(struct drm_i915_gem_object *obj,
 }
 
 static bool assert_pin(struct i915_vma *vma,
-		       struct i915_gtt_view *view,
+		       struct intel_gtt_view *view,
 		       u64 size,
 		       const char *name)
 {
@@ -823,7 +823,7 @@ static int igt_vma_partial(void *arg)
 		nvma = 0;
 		for_each_prime_number_from(sz, 1, npages) {
 			for_each_prime_number_from(offset, 0, npages - sz) {
-				struct i915_gtt_view view;
+				struct intel_gtt_view view;
 
 				view.type = I915_GTT_VIEW_PARTIAL;
 				view.partial.offset = offset;
@@ -981,7 +981,7 @@ static int igt_vma_remapped_gtt(void *arg)
 
 		{ }
 	}, *p;
-	enum i915_gtt_view_type types[] = {
+	enum intel_gtt_view_type types[] = {
 		I915_GTT_VIEW_ROTATED,
 		I915_GTT_VIEW_REMAPPED,
 		0,
@@ -1001,7 +1001,7 @@ static int igt_vma_remapped_gtt(void *arg)
 
 	for (t = types; *t; t++) {
 		for (p = planes; p->width; p++) {
-			struct i915_gtt_view view = {
+			struct intel_gtt_view view = {
 				.type = *t,
 				.rotated.plane[0] = *p,
 			};

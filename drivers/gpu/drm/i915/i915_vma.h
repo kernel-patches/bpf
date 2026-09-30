@@ -43,7 +43,7 @@
 struct i915_vma *
 i915_vma_instance(struct drm_i915_gem_object *obj,
 		  struct i915_address_space *vm,
-		  const struct i915_gtt_view *view);
+		  const struct intel_gtt_view *view);
 
 void i915_vma_unpin_and_release(struct i915_vma **p_vma, unsigned int flags);
 #define I915_VMA_RELEASE_MAP BIT(0)
@@ -207,7 +207,7 @@ static inline void i915_vma_put(struct i915_vma *vma)
 static inline long
 i915_vma_compare(struct i915_vma *vma,
 		 struct i915_address_space *vm,
-		 const struct i915_gtt_view *view)
+		 const struct intel_gtt_view *view)
 {
 	ptrdiff_t cmp;
 
