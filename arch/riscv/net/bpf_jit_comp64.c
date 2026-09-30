@@ -1921,6 +1921,13 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 			emit_mv(bpf_to_rv_reg(BPF_REG_0, ctx), RV_REG_A0, ctx);
 		break;
 	}
+
+	/* indirect call to a bpf subprog via the address in rd */
+	case BPF_JMP | BPF_CALL | BPF_X:
+		mark_call(ctx);
+		emit_jalr(RV_REG_RA, rd, 0, ctx);
+		break;
+
 	/* tail call */
 	case BPF_JMP | BPF_TAIL_CALL:
 		if (emit_bpf_tail_call(i, ctx))
@@ -2277,6 +2284,11 @@ bool bpf_jit_supports_timed_may_goto(void)
 }
 
 bool bpf_jit_supports_stack_args(void)
+{
+	return true;
+}
+
+bool bpf_jit_supports_callx(void)
 {
 	return true;
 }
