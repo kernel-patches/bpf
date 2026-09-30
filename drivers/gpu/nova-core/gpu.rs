@@ -397,10 +397,8 @@ impl<'gpu> Gpu<'gpu> {
                 dev_info!(dev,"NVIDIA ({})\n", spec);
             })?,
 
-            // We must wait for GFW_BOOT completion before doing any significant setup on the GPU.
             _: {
-                let hal = hal::gpu_hal(spec.chipset);
-                let dma_mask = hal.dma_mask();
+                let dma_mask = hal::gpu_hal(spec.chipset).dma_mask();
 
                 // SAFETY: `Gpu` owns all DMA allocations for this device, and we are
                 // still constructing it, so no concurrent DMA allocations can exist.
@@ -413,8 +411,8 @@ impl<'gpu> Gpu<'gpu> {
                 // still constructing it, so no concurrent DMA allocations can exist.
                 unsafe { pdev.dma_set_max_seg_size(u32::MAX) };
 
-                hal.wait_gfw_boot_completion(bar)
-                    .inspect_err(|_| dev_err!(dev, "GFW boot did not complete\n"))?;
+                // We must wait for GFW_BOOT completion before doing any significant setup on the GPU.
+                Self::wait_gfw_boot_completion(dev, bar, spec.chipset)?;
             },
 
             // Initialize this early because `gsp_resources` depends on it.
@@ -511,6 +509,23 @@ impl<'gpu> Gpu<'gpu> {
                 )
             },
         })
+    }
+
+    /// Waits for GFW, the GPU's boot firmware, to report completion.
+    ///
+    /// The driver must not program the GPU before then.
+    ///
+    /// # Errors
+    ///
+    /// `ETIMEDOUT` if GFW does not report completion in time.
+    pub(crate) fn wait_gfw_boot_completion(
+        dev: &device::Device<device::Bound>,
+        bar: Bar0<'_>,
+        chipset: Chipset,
+    ) -> Result {
+        hal::gpu_hal(chipset)
+            .wait_gfw_boot_completion(bar)
+            .inspect_err(|_| dev_err!(dev, "GFW boot did not complete\n"))
     }
 
     /// Runs self-tests on the constructed [`Gpu`], logging failures without failing probe.
