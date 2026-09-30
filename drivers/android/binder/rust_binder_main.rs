@@ -98,7 +98,12 @@ static RUST_BINDER_LAYOUT: rust_binder_layout = rust_binder_layout {
 fn next_debug_id() -> usize {
     static NEXT_DEBUG_ID: Atomic<usize> = Atomic::new(0);
 
-    NEXT_DEBUG_ID.fetch_add(1, Relaxed)
+    loop {
+        let id = NEXT_DEBUG_ID.fetch_add(1, Relaxed);
+        if id != 0 {
+            return id;
+        }
+    }
 }
 
 /// Provides a single place to write Binder return values via the
