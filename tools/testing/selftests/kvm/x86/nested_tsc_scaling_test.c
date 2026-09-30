@@ -135,37 +135,17 @@ static void l1_guest_code(void *data)
 		l1_svm_code(data);
 }
 
-int main(int argc, char *argv[])
+static void test_tsc_scaling(u64 l0_tsc_freq, u64 l1_scale_factor, u64 l2_scale)
 {
+	u64 tsc_khz, l1_tsc_freq, l2_tsc_freq;
 	struct kvm_vcpu *vcpu;
 	struct kvm_vm *vm;
-	gva_t guest_gva = 0;
+	gva_t guest_gva;
 
-	u64 tsc_start, tsc_end;
-	u64 tsc_khz;
-	u64 l1_scale_factor;
-	u64 l0_tsc_freq = 0;
-	u64 l1_tsc_freq = 0;
-	u64 l2_tsc_freq = 0;
+	l2_scale_factor = l2_scale;
 
-	TEST_REQUIRE(kvm_cpu_has(X86_FEATURE_VMX) ||
-		     kvm_cpu_has(X86_FEATURE_SVM));
-	TEST_REQUIRE(kvm_has_cap(KVM_CAP_TSC_CONTROL));
-	TEST_REQUIRE(sys_clocksource_is_based_on_tsc());
-
-	/* Scale L1 "down" and L2 "up" at a random factor from 2 to 10. */
-	l1_scale_factor = (kvm_random_u32(&kvm_rng) % 9) + 2;
 	printf("L1's scale down factor is: %lu\n", l1_scale_factor);
-
-	l2_scale_factor = (kvm_random_u32(&kvm_rng) % 9) + 2;
 	printf("L2's scale up factor is: %lu\n", l2_scale_factor);
-
-	tsc_start = rdtsc();
-	sleep(1);
-	tsc_end = rdtsc();
-
-	l0_tsc_freq = tsc_end - tsc_start;
-	printf("real TSC frequency is around: %lu\n", l0_tsc_freq);
 
 	vm = vm_create_with_one_vcpu(&vcpu, l1_guest_code);
 	sync_global_to_guest(vm, l2_scale_factor);
@@ -182,6 +162,9 @@ int main(int argc, char *argv[])
 
 	/* scale down L1's TSC frequency */
 	vcpu_ioctl(vcpu, KVM_SET_TSC_KHZ, (void *) (tsc_khz / l1_scale_factor));
+
+	/* L1 will communicate its frequency before the L2 check.*/
+	l1_tsc_freq = 0;
 
 	for (;;) {
 		struct ucall uc;
@@ -222,5 +205,28 @@ int main(int argc, char *argv[])
 
 done:
 	kvm_vm_free(vm);
+}
+
+int main(int argc, char *argv[])
+{
+	u64 l0_tsc_freq, tsc_start, tsc_end, l1_scale, l2_scale;
+
+	TEST_REQUIRE(kvm_cpu_has(X86_FEATURE_VMX) ||
+		     kvm_cpu_has(X86_FEATURE_SVM));
+	TEST_REQUIRE(kvm_has_cap(KVM_CAP_TSC_CONTROL));
+	TEST_REQUIRE(sys_clocksource_is_based_on_tsc());
+
+	tsc_start = rdtsc();
+	sleep(1);
+	tsc_end = rdtsc();
+
+	l0_tsc_freq = tsc_end - tsc_start;
+	printf("real TSC frequency is around: %lu\n", l0_tsc_freq);
+
+	/* Scale L1 "down" and L2 "up" at a random factor from 2 to 10. */
+	l1_scale = (kvm_random_u32(&kvm_rng) % 9) + 2;
+	l2_scale = (kvm_random_u32(&kvm_rng) % 9) + 2;
+	test_tsc_scaling(l0_tsc_freq, l1_scale, l2_scale);
+
 	return 0;
 }
