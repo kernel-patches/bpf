@@ -10,6 +10,7 @@ TEST_GEN_MODS_DIR := test_modules
 # override lib.mk's default rules
 OVERRIDE_TARGETS := 1
 include ../lib.mk
+include ../cgroup/lib/libcgroup.mk
 
 CURDIR := $(abspath .)
 REPOROOT := $(abspath ../../../..)
@@ -154,7 +155,7 @@ $(INCLUDE_DIR)/%.bpf.skel.h: $(SCXOBJ_DIR)/%.bpf.o $(INCLUDE_DIR)/vmlinux.h $(BP
 
 override define CLEAN
 	rm -rf $(OUTPUT_DIR)
-	rm -f $(TEST_GEN_PROGS)
+	rm -f $(TEST_GEN_PROGS) $(EXTRA_CLEAN)
 endef
 
 # Every testcase takes all of the BPF progs are dependencies by default. This
@@ -163,6 +164,7 @@ endef
 all_test_bpfprogs := $(foreach prog,$(wildcard *.bpf.c),$(INCLUDE_DIR)/$(patsubst %.c,%.skel.h,$(prog)))
 
 auto-test-targets :=			\
+	cgroup_nr_cpus			\
 	create_dsq			\
 	dequeue				\
 	dequeue_iter			\
@@ -217,7 +219,7 @@ $(testcase-targets): $(SCXOBJ_DIR)/%.o: %.c $(SCXOBJ_DIR)/runner.o $(all_test_bp
 $(SCXOBJ_DIR)/util.o: util.c | $(SCXOBJ_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(OUTPUT)/runner: $(SCXOBJ_DIR)/runner.o $(SCXOBJ_DIR)/util.o $(BPFOBJ) $(testcase-targets)
+$(OUTPUT)/runner: $(SCXOBJ_DIR)/runner.o $(SCXOBJ_DIR)/util.o $(BPFOBJ) $(LIBCGROUP_O) $(testcase-targets)
 	@echo "$(testcase-targets)"
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
