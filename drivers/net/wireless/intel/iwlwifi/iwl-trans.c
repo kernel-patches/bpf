@@ -268,6 +268,7 @@ static void iwl_trans_restart_wk(struct work_struct *wk)
 
 struct iwl_trans *iwl_trans_alloc(unsigned int priv_size,
 				  struct device *dev,
+				  const struct iwl_trans_ops *ops,
 				  const struct iwl_mac_cfg *mac_cfg)
 {
 	struct iwl_trans *trans;
@@ -279,6 +280,7 @@ struct iwl_trans *iwl_trans_alloc(unsigned int priv_size,
 	if (!trans)
 		return NULL;
 
+	trans->ops = ops;
 	trans->mac_cfg = mac_cfg;
 
 #ifdef CONFIG_LOCKDEP
@@ -932,7 +934,14 @@ IWL_EXPORT_SYMBOL(iwl_trans_activate_nic);
 
 void iwl_trans_reset(struct iwl_trans *trans, enum iwl_reset_mode mode)
 {
-	iwl_trans_pcie_reset(trans, mode);
+	if (!WARN_ON_ONCE(!trans->ops->reset))
+		trans->ops->reset(trans, mode);
 }
 IWL_EXPORT_SYMBOL(iwl_trans_reset);
+
+void iwl_trans_fw_reset_handshake(struct iwl_trans *trans)
+{
+	if (!WARN_ON_ONCE(!trans->ops->fw_reset_handshake))
+		trans->ops->fw_reset_handshake(trans);
+}
 
