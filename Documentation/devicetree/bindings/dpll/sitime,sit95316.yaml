@@ -1,0 +1,175 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/dpll/sitime,sit95316.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: SiTime SiT95316/SiT95317 DPLL Clock Generator
+
+maintainers:
+  - Ali Rouhi <arouhi@sitime.com>
+
+description: |
+  SiTime SiT95316 and SiT95317 are I2C-controlled programmable clock
+  generators with integrated DPLL for synchronization applications.  Both
+  variants contain four PLLs with automatic/manual reference selection,
+  DCO frequency adjustment, and phase offset measurement via an on-chip
+  TDC (Time-to-Digital Converter).
+
+  Both parts have 4 differential input pairs whose lanes can also be
+  driven independently as single-ended references, so 8 inputs are
+  individually selectable.  SiT95317 drives 8 outputs, SiT95316
+  drives 12.
+
+  Pin numbering.  An input pin's reg is its lane: 2k is INkP and 2k + 1
+  is INkN, 0 to 7.  A pair the loaded configuration runs differential is
+  one input, described at 2k.  An output pin's reg is its physical output
+  OUTn, 0 to 11; the SiT95317 bonds out OUT0, OUT3, OUT4, OUT5, OUT7, OUT8,
+  OUT9 and OUT11.
+
+properties:
+  compatible:
+    enum:
+      - sitime,sit95316
+      - sitime,sit95317
+
+  reg:
+    maxItems: 1
+
+  clocks:
+    maxItems: 1
+
+  clock-names:
+    items:
+      - const: xtal
+
+  clock-frequency:
+    description:
+      XO rate in Hz feeding XIN/XO_CLK, for firmware that describes the
+      oscillator as a property rather than as a clock provider, such as
+      ACPI.  Use either this or "clocks", not both.
+
+  reset-gpios:
+    maxItems: 1
+    description:
+      GPIO connected to the chip's active-low reset pin (RESETB).
+
+  interrupts:
+    maxItems: 1
+    description:
+      Interrupt from the chip's active-low INTRB output.  Asserted when
+      the device detects a status change such as lock acquisition or loss.
+
+  dpll-types:
+    maxItems: 4
+
+  input-pins:
+    type: object
+    patternProperties:
+      "^pin@[0-9a-f]+$":
+        type: object
+        properties:
+          reg:
+            maximum: 7
+
+required:
+  - compatible
+  - reg
+
+dependencies:
+  clocks: [ clock-names ]
+
+oneOf:
+  - required:
+      - clocks
+  - required:
+      - clock-frequency
+
+allOf:
+  - $ref: /schemas/dpll/dpll-device.yaml#
+  - if:
+      properties:
+        compatible:
+          const: sitime,sit95317
+    then:
+      properties:
+        output-pins:
+          patternProperties:
+            "^pin@[0-9a-f]+$":
+              properties:
+                reg:
+                  enum: [0, 3, 4, 5, 7, 8, 9, 11]
+    else:
+      properties:
+        output-pins:
+          patternProperties:
+            "^pin@[0-9a-f]+$":
+              properties:
+                reg:
+                  maximum: 11
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/gpio/gpio.h>
+    #include <dt-bindings/interrupt-controller/irq.h>
+
+    i2c {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        dpll@68 {
+            compatible = "sitime,sit95316";
+            reg = <0x68>;
+            clocks = <&xo2>;
+            clock-names = "xtal";
+            reset-gpios = <&gpio 78 GPIO_ACTIVE_LOW>;
+            interrupts = <12 IRQ_TYPE_LEVEL_LOW>;
+            dpll-types = "eec", "eec", "eec", "eec";
+
+            input-pins {
+                #address-cells = <1>;
+                #size-cells = <0>;
+
+                /* IN0P and IN0N: pair 0 runs single-ended */
+                pin@0 {
+                    reg = <0>;
+                    label = "clkin0";
+                    connection-type = "ext";
+                    supported-frequencies-hz = /bits/ 64 <10000000>;
+                };
+
+                pin@1 {
+                    reg = <1>;
+                    label = "clkin1";
+                    connection-type = "synce";
+                    supported-frequencies-hz = /bits/ 64 <156250000>;
+                };
+            };
+
+            output-pins {
+                #address-cells = <1>;
+                #size-cells = <0>;
+
+                pin@0 {
+                    reg = <0>;
+                    label = "clkout0";
+                    supported-frequencies-hz = /bits/ 64 <156250000>;
+                };
+
+                pin@1 {
+                    reg = <1>;
+                    label = "clkout1";
+                    supported-frequencies-hz = /bits/ 64 <25000000>;
+                };
+
+                pin@a {
+                    reg = <10>;
+                    label = "clkout10";
+                    supported-frequencies-hz = /bits/ 64 <10000000>;
+                };
+            };
+        };
+    };
+...
