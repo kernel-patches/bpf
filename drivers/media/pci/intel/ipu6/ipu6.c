@@ -140,6 +140,28 @@ static const struct ipu6_buttress_ctrl ipu7_psys_buttress_ctrl = {
 	.pwr_sts_off = IPU6_BUTTRESS_PWR_STATE_DN_DONE,
 };
 
+static const struct ipu6_buttress_ctrl ipu8_isys_buttress_ctrl = {
+	.subsys_id = IPU_ISYS,
+	.ratio = IPU8_IS_FREQ_CTL_DEFAULT_RATIO,
+	.qos_floor = 0,
+	.freq_ctl = IPU7_BUTTRESS_REG_IS_WORKPOINT_REQ,
+	.pwr_sts_shift = IPU7_BUTTRESS_PWR_STATE_IS_PWR_SHIFT,
+	.pwr_sts_mask = IPU7_BUTTRESS_PWR_STATE_IS_PWR_MASK,
+	.pwr_sts_on = IPU6_BUTTRESS_PWR_STATE_UP_DONE,
+	.pwr_sts_off = IPU6_BUTTRESS_PWR_STATE_DN_DONE,
+};
+
+static const struct ipu6_buttress_ctrl ipu8_psys_buttress_ctrl = {
+	.subsys_id = IPU_PSYS,
+	.ratio = IPU8_PS_FREQ_CTL_DEFAULT_RATIO,
+	.qos_floor = 0,
+	.freq_ctl = IPU7_BUTTRESS_REG_PS_WORKPOINT_REQ,
+	.pwr_sts_shift = IPU7_BUTTRESS_PWR_STATE_PS_PWR_SHIFT,
+	.pwr_sts_mask = IPU7_BUTTRESS_PWR_STATE_PS_PWR_MASK,
+	.pwr_sts_on = IPU6_BUTTRESS_PWR_STATE_UP_DONE,
+	.pwr_sts_off = IPU6_BUTTRESS_PWR_STATE_DN_DONE,
+};
+
 static const struct ipu6_buttress_registers ipu6_buttress_regs = {
 	/* Registers */
 	.irq_status	= BUTTRESS_REG_ISR_STATUS,
@@ -676,6 +698,21 @@ static int ipu6_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		isp->buttress.regs = &ipu7p5_buttress_regs;
 		isys_ctrl = &ipu7_isys_buttress_ctrl;
 		psys_ctrl = &ipu7_psys_buttress_ctrl;
+		break;
+	case PCI_DEVICE_ID_INTEL_IPU8:
+		/*
+		 * IPU8 reuses the IPU7P5 buttress register map,
+		 * matching staging ipu7 (no dedicated ipu8_buttress_regs
+		 * there either). isys/psys control ratios use IPU8's own
+		 * 0x10 default, unlike IPU7/IPU7P5.
+		 * TODO: confirm buttress register map against IPU8 hw spec.
+		 */
+		isp->hw_ver = IPU_VERSION_8;
+		isp->cpd_fw_name = IPU8_FIRMWARE_NAME;
+		isp->model_name = IPU8_MEDIA_DEV_MODEL_NAME;
+		isp->buttress.regs = &ipu7p5_buttress_regs;
+		isys_ctrl = &ipu8_isys_buttress_ctrl;
+		psys_ctrl = &ipu8_psys_buttress_ctrl;
 		break;
 	default:
 		return dev_err_probe(dev, -ENODEV,
