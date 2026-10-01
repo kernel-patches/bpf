@@ -29,6 +29,12 @@ struct pkvm_hyp_vcpu {
 
 	/* The previous exit's ARM_EXCEPTION_* code. */
 	u32 exit_code;
+
+	/*
+	 * PSCI_0_2_AFFINITY_LEVEL_{OFF, ON_PENDING, ON}. A non-protected
+	 * vCPU is always ON.
+	 */
+	int power_state;
 };
 
 /*
@@ -45,6 +51,12 @@ struct pkvm_hyp_vm {
 	struct kvm_pgtable_mm_ops mm_ops;
 	struct hyp_pool pool;
 	hyp_spinlock_t lock;
+
+	/*
+	 * The vCPU initialised RUNNABLE: claimed under vm_table_lock,
+	 * released only if its own init fails.
+	 */
+	struct pkvm_hyp_vcpu *primary_vcpu;
 
 	/* Array of the hyp vCPU structures for this VM. */
 	struct pkvm_hyp_vcpu *vcpus[];
@@ -100,4 +112,6 @@ void kvm_init_pvm_id_regs(struct kvm_vcpu *vcpu);
 void kvm_reset_pvm_sys_regs(struct kvm_vcpu *vcpu);
 int kvm_check_pvm_sysreg_table(void);
 
+int pkvm_reset_vcpu(struct pkvm_hyp_vcpu *hyp_vcpu);
+struct pkvm_hyp_vcpu *pkvm_mpidr_to_hyp_vcpu(struct pkvm_hyp_vm *vm, unsigned long mpidr);
 #endif /* __ARM64_KVM_NVHE_PKVM_H__ */
