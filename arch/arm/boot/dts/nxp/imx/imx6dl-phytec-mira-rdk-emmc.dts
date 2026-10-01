@@ -5,17 +5,17 @@
  */
 
 /dts-v1/;
-#include "imx6q.dtsi"
-#include "imx6q-phytec-phycore-som.dtsi"
+#include "imx6dl.dtsi"
+#include "imx6dl-phytec-phycore-som.dtsi"
 #include "imx6qdl-phytec-mira.dtsi"
 #include "imx6qdl-phytec-mira-peb-eval-01.dtsi"
 #include "imx6qdl-phytec-mira-peb-av-02.dtsi"
 #include "imx6qdl-phytec-mira-peb-wlbt-05.dtsi"
 
 / {
-	model = "PHYTEC phyBOARD-Mira Quad Carrier-Board with eMMC";
-	compatible = "phytec,imx6q-pbac06-emmc", "phytec,imx6q-pbac06",
-		     "phytec,imx6qdl-pcm058", "fsl,imx6q";
+	model = "PHYTEC phyBOARD-Mira DualLite/Solo Carrier-Board with eMMC";
+	compatible = "phytec,imx6dl-pbac06-emmc", "phytec,imx6dl-pbac06",
+		     "phytec,imx6qdl-pcm058", "fsl,imx6dl";
 
 	chosen {
 		stdout-path = &uart2;
