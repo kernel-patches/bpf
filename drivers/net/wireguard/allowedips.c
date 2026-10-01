@@ -42,8 +42,10 @@ static void push_rcu(struct allowedips_node **stack,
 		     struct allowedips_node __rcu *p, unsigned int *len)
 {
 	if (rcu_access_pointer(p)) {
-		if (WARN_ON(IS_ENABLED(DEBUG) && *len >= MAX_ALLOWEDIPS_DEPTH))
+		if (unlikely(*len >= MAX_ALLOWEDIPS_DEPTH)) {
+			WARN_ON(IS_ENABLED(DEBUG));
 			return;
+		}
 		stack[(*len)++] = rcu_dereference_raw(p);
 	}
 }
