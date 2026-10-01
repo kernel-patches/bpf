@@ -7,6 +7,7 @@
 /dts-v1/;
 
 #include "th1520.dtsi"
+#include <dt-bindings/gpio/gpio.h>
 
 / {
 	model = "Milk-V Meles";
@@ -22,11 +23,19 @@
 		gpio5 = &aogpio;
 		mmc0 = &emmc;
 		mmc1 = &sdio0;
+		mmc2 = &sdio1;
 		serial0 = &uart0;
 	};
 
 	chosen {
 		stdout-path = "serial0:115200n8";
+	};
+
+	wifi_32k: clock-wifi-32k {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <32768>;
+		/* The module LPO input is supplied by PMIC_32K_OUT. */
 	};
 
 	memory@0 {
@@ -41,6 +50,30 @@
 		pwms = <&pwm 2 10000000 0>;
 		cooling-levels = <0 64 192 255>;
 		#cooling-cells = <2>;
+	};
+
+	wifi_vbat: regulator-wifi-vbat {
+		compatible = "regulator-fixed";
+		regulator-name = "WIFI_3V3";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		regulator-always-on;
+	};
+
+	wifi_vddio: regulator-wifi-vddio {
+		compatible = "regulator-fixed";
+		regulator-name = "WIFI_VDDIO";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+		regulator-always-on;
+	};
+
+	wifi_pwrseq: wifi-pwrseq {
+		compatible = "mmc-pwrseq-simple";
+		pinctrl-names = "default";
+		pinctrl-0 = <&wifi_enable_pins>;
+		reset-gpios = <&gpio0 20 GPIO_ACTIVE_LOW>;
+		post-power-on-delay-ms = <50>;
 	};
 };
 
@@ -75,6 +108,16 @@
 	gpio-line-names = "", "", "", "", "", "", "", "", "GPIO0_8",
 			  "GPIO0_9", "GPIO0_10", "GPIO0_11", "", "", "",
 			  "", "GPIO0_16", "GPIO0_17";
+};
+
+&gpio1 {
+	/* GPIO1_24 low selects the external antenna through U39. */
+	wifi-antenna-select-hog {
+		gpio-hog;
+		gpios = <24 GPIO_ACTIVE_HIGH>;
+		output-low;
+		line-name = "wifi-external-antenna";
+	};
 };
 
 &gpio2 {
@@ -206,6 +249,27 @@
 	};
 };
 
+&padctrl1_apsys {
+	wifi_enable_pins: wifi-enable-0 {
+		gpio-pins {
+			pins = "GPIO0_20";
+			bias-disable;
+			drive-strength = <7>;
+			input-disable;
+		};
+	};
+
+	wifi_host_wake_pins: wifi-host-wake-0 {
+		gpio-pins {
+			pins = "GPIO0_21";
+			function = "gpio";
+			bias-disable;
+			input-enable;
+			input-schmitt-enable;
+		};
+	};
+};
+
 &sdio0 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&sdio0_pins>;
@@ -217,6 +281,36 @@
 	no-sdio;
 
 	status = "okay";
+};
+
+&sdio1 {
+	bus-width = <4>;
+	max-frequency = <198000000>;
+	cap-sd-highspeed;
+	cap-sdio-irq;
+	non-removable;
+	no-sd;
+	no-mmc;
+	keep-power-in-suspend;
+	vmmc-supply = <&wifi_vbat>;
+	vqmmc-supply = <&wifi_vddio>;
+	mmc-pwrseq = <&wifi_pwrseq>;
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	status = "okay";
+
+	wifi@1 {
+		compatible = "brcm,bcm43456-fmac", "brcm,bcm4329-fmac";
+		reg = <1>;
+		clocks = <&wifi_32k>;
+		clock-names = "lpo";
+		pinctrl-names = "default";
+		pinctrl-0 = <&wifi_host_wake_pins>;
+		interrupt-parent = <&gpio0>;
+		interrupts = <21 IRQ_TYPE_LEVEL_HIGH>;
+		interrupt-names = "host-wake";
+	};
 };
 
 &uart0 {
