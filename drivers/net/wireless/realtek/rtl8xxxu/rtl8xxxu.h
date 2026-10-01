@@ -1948,15 +1948,17 @@ struct rtl8xxxu_vif {
 };
 
 struct rtl8xxxu_rx_urb {
-	struct urb urb;
+	struct urb *urb;
 	struct ieee80211_hw *hw;
 	struct list_head list;
+	struct sk_buff *skb;
 };
 
 struct rtl8xxxu_tx_urb {
-	struct urb urb;
+	struct urb *urb;
 	struct ieee80211_hw *hw;
 	struct list_head list;
+	struct sk_buff *skb;
 };
 
 struct rtl8xxxu_fileops {
