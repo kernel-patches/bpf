@@ -327,9 +327,17 @@ export HOSTCC HOSTLD HOSTAR HOSTCFLAGS SHELLCHECK MYPY PYLINT CONFIG_PERF_BPF_SK
 include $(srctree)/tools/build/Makefile.include
 
 ifeq ($(force_fixdep),1)
-goals := $(filter-out all sub-make, $(MAKECMDGOALS))
+goals := $(filter-out all sub-make clean, $(MAKECMDGOALS))
 
-$(goals) all: sub-make
+ifneq ($(filter clean,$(MAKECMDGOALS)),)
+clean-make:
+	$(Q)$(MAKE) -f Makefile.perf -j1 clean
+
+fixdep: clean-make
+.PHONY: clean-make
+endif
+
+$(goals) all clean: sub-make
 
 sub-make: fixdep
 	$(Q)$(MAKE) FIXDEP_BUILT=1 -f Makefile.perf $(goals)
@@ -565,6 +573,7 @@ $(OUTPUT)python/perf$(PYTHON_EXTENSION_SUFFIX): util/python.c util/setup.py pyth
         CFLAGS='$(CFLAGS)' LDFLAGS='$(LDFLAGS) $(LIBS_PY)' \
 	  $(PYTHON_WORD) util/setup.py \
 	  $(python_setup_quiet) build_ext; \
+	$(MKDIR) -p $(OUTPUT)python; \
 	cp $(PYTHON_EXTBUILD_LIB)perf*.so $(OUTPUT)python/; \
 	if [ "$(abspath python/perf.pyi)" != "$(abspath $(OUTPUT)python/perf.pyi)" ]; then \
 		cp python/perf.pyi $(OUTPUT)python/; \
@@ -994,7 +1003,7 @@ install: install-bin try-install-man
 install-build-deps:
 	$(Q)$(SHELL) $(srctree)/tools/perf/scripts/install-build-deps.sh $(INSTALL_BUILD_DEPS_ARGS)
 
-install-python_ext:
+install-python_ext: $(LANG_BINDINGS)
 	$(PYTHON_WORD) util/setup.py $(python_setup_quiet) \
 		$(if $(OUTPUT),egg_info --egg-base $(OUTPUT)) \
 		install --root='/$(DESTDIR_SQ)'
@@ -1070,7 +1079,9 @@ endif
 
 FORCE:
 
-.PHONY: all install install-build-deps clean config-clean strip install-gtk
+.PHONY: all install install-bin install-tools install-tests install-build-deps
+.PHONY: install-gtk install-python_ext $(DOC_TARGETS) $(INSTALL_DOC_TARGETS)
+.PHONY: clean config-clean strip
 .PHONY: shell_compatibility_test please_set_SHELL_PATH_to_a_more_modern_shell
 .PHONY: .FORCE-PERF-VERSION-FILE TAGS tags cscope FORCE prepare bpf-skel-prepare
 .PHONY: python_perf_target
