@@ -4,6 +4,8 @@
 #ifndef IPU7_FW_ISYS_H
 #define IPU7_FW_ISYS_H
 
+#include <linux/limits.h>
+
 #define IPU7_FWLOG_MAX_LOGGER_SOURCES		(64U)
 #define IPU7_INSYS_MAX_OUTPUT_QUEUES		3U
 #define IPU7_INSYS_STREAM_ID_MAX		16U
@@ -23,6 +25,9 @@
 #define IPU7_ISYS_SIZE_SEND_QUEUE		40U
 #define IPU7_ISYS_NUM_RECV_QUEUE		1U
 #define IPU7_INSYS_SEND_QUEUE_TOKEN_FLAG_NONE	0U
+
+/* Value of mipi_fn below when firmware ABI < 1.2.1 does not report it. */
+#define IPU7_INSYS_MIPI_FRAME_NUMBER_DONT_CARE	U16_MAX
 
 #define IPU7_LOGGER_CFG_CHANNEL_ENABLE_SYSCOM	BIT(1)
 
@@ -107,7 +112,6 @@ enum ipu7_insys_resp_type {
 	IPU7_INSYS_RESP_TYPE_FRAME_EOF = 8,
 	IPU7_INSYS_RESP_TYPE_STREAM_START_AND_CAPTURE_DONE = 9,
 	IPU7_INSYS_RESP_TYPE_STREAM_CAPTURE_DONE = 10,
-	IPU7_INSYS_RESP_TYPE_PWM_IRQ = 11,
 	N_IPU7_INSYS_RESP_TYPE
 };
 
@@ -198,7 +202,7 @@ struct ipu7_insys_resp {
 	u8 pin_id;
 	u8 frame_id;
 	u8 skip_frame;
-	u8 pad[2];
+	u16 mipi_fn;
 };
 
 struct ipu7_insys_resp_queue_token {
