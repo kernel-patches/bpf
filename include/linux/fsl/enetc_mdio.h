@@ -33,6 +33,7 @@ struct enetc_hw;
 struct enetc_mdio_priv {
 	struct enetc_hw *hw;
 	int mdio_base;
+	int mdc_div;
 };
 
 #if IS_REACHABLE(CONFIG_FSL_ENETC_MDIO)

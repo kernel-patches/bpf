@@ -71,6 +71,7 @@ static int enetc_pci_mdio_probe(struct pci_dev *pdev,
 	mdio_priv = bus->priv;
 	mdio_priv->hw = hw;
 	mdio_priv->mdio_base = ENETC_EMDIO_BASE;
+	mdio_priv->mdc_div = ent->driver_data;
 	snprintf(bus->id, MII_BUS_ID_SIZE, "%s", dev_name(dev));
 
 	pcie_flr(pdev);
@@ -125,8 +126,8 @@ static void enetc_pci_mdio_remove(struct pci_dev *pdev)
 }
 
 static const struct pci_device_id enetc_pci_mdio_id_table[] = {
-	{ PCI_DEVICE(PCI_VENDOR_ID_FREESCALE, ENETC_MDIO_DEV_ID) },
-	{ PCI_DEVICE(NETC_EMDIO_VEN_ID, NETC_EMDIO_DEV_ID) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_FREESCALE, ENETC_MDIO_DEV_ID), 0, 0, 258 },
+	{ PCI_DEVICE(NETC_EMDIO_VEN_ID, NETC_EMDIO_DEV_ID), 0, 0, 66 },
 	{ 0, } /* End of table. */
 };
 MODULE_DEVICE_TABLE(pci, enetc_pci_mdio_id_table);
