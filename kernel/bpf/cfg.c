@@ -76,6 +76,14 @@ static void mark_subprog_might_throw(struct bpf_verifier_env *env, int off)
 	subprog->might_throw = true;
 }
 
+static void mark_subprog_might_unwind(struct bpf_verifier_env *env, int off)
+{
+	struct bpf_subprog_info *subprog;
+
+	subprog = bpf_find_containing_subprog(env, off);
+	subprog->might_unwind = true;
+}
+
 /* 't' is an index of a call-site.
  * 'w' is a callee entry point.
  * Eventually this function would be called when env->cfg.insn_state[w] == EXPLORED.
@@ -91,6 +99,7 @@ static void merge_callee_effects(struct bpf_verifier_env *env, int t, int w)
 	caller->changes_pkt_data |= callee->changes_pkt_data;
 	caller->might_sleep |= callee->might_sleep;
 	caller->might_throw |= callee->might_throw;
+	caller->might_unwind |= callee->might_unwind;
 }
 
 enum {
@@ -668,6 +677,8 @@ static int visit_insn(int t, struct bpf_verifier_env *env)
 				mark_subprog_changes_pkt_data(env, t);
 			if (ret == 0 && bpf_is_throw_kfunc(insn))
 				mark_subprog_might_throw(env, t);
+			if (ret == 0 && bpf_is_unwind_kfunc(insn))
+				mark_subprog_might_unwind(env, t);
 		}
 		return visit_func_call_insn(t, insns, env, insn->src_reg == BPF_PSEUDO_CALL);
 
@@ -703,6 +714,57 @@ static int visit_insn(int t, struct bpf_verifier_env *env)
 
 		return push_insn(t, t + insn->off + 1, BRANCH, env);
 	}
+}
+
+/*
+ * merge_callee_effects() carries might_unwind to where a subprog is called or
+ * has its address taken, but not to a subprog that calls it through a pointer
+ * it was handed. So where the program can unwind at all, take every subprog
+ * with a callx to be able to, and carry that up to its callers.
+ */
+static void mark_callx_might_unwind(struct bpf_verifier_env *env)
+{
+	struct bpf_insn *insns = env->prog->insnsi;
+	struct bpf_subprog_info *caller, *callee;
+	int i, j, len = env->prog->len;
+	struct bpf_func_ptr *ptrs;
+	bool changed;
+	u32 cnt;
+
+	for (i = 0; i < env->subprog_cnt; i++)
+		if (env->subprog_info[i].might_unwind)
+			break;
+	if (i == env->subprog_cnt)
+		return;
+
+	for (i = 0; i < len; i++)
+		if (bpf_is_callx(&insns[i]))
+			bpf_find_containing_subprog(env, i)->might_unwind = true;
+
+	do {
+		changed = false;
+		for (i = 0; i < len; i++) {
+			caller = bpf_find_containing_subprog(env, i);
+			if (caller->might_unwind)
+				continue;
+			if (bpf_pseudo_call(&insns[i]) || bpf_pseudo_func(&insns[i])) {
+				callee = bpf_find_containing_subprog(env, i + insns[i].imm + 1);
+				if (!callee->might_unwind)
+					continue;
+				caller->might_unwind = true;
+				changed = true;
+				continue;
+			}
+			ptrs = insn_func_ptrs(env, i, &cnt);
+			for (j = 0; j < cnt; j++) {
+				callee = bpf_find_containing_subprog(env, ptrs[j].xlated_off);
+				if (!callee->might_unwind)
+					continue;
+				caller->might_unwind = true;
+				changed = true;
+			}
+		}
+	} while (changed);
 }
 
 /* non-recursive depth-first-search to detect loops in BPF program
@@ -795,6 +857,7 @@ walk_cfg:
 		}
 	}
 	ret = 0; /* cfg looks good */
+	mark_callx_might_unwind(env);
 	env->prog->aux->changes_pkt_data = env->subprog_info[0].changes_pkt_data;
 	env->prog->aux->might_sleep = env->subprog_info[0].might_sleep;
 

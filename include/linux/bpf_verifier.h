@@ -383,6 +383,13 @@ enum {
 	INSN_F_SRC_REG_STACK = BIT(2), /* src_reg is PTR_TO_STACK */
 
 	INSN_F_STACK_ARG_ACCESS = BIT(3),
+
+	/*
+	 * A bpf_unwind(), a resume or an unwinding global call that left frame
+	 * 'frame' for a landing pad in one of its callers; backtracking jumps
+	 * back into that frame here.
+	 */
+	INSN_F_UNWIND = BIT(4),
 };
 
 /* Registers linked to one jump condition that a history entry can record */
@@ -393,8 +400,8 @@ struct bpf_jmp_history_entry {
 	u32 idx : 20;
 	u32 frame : 4;	/* stack access frame number */
 	/* special INSN_F_xxx flags */
-	u32 flags : 4;
-	u32 : 4;
+	u32 flags : 5;
+	u32 : 3;
 	u32 prev_idx : 20;
 	u32 spi : 12;	/* stack slot index */
 	/*
@@ -836,6 +843,7 @@ struct bpf_subprog_info {
 	s16 fastcall_stack_off;
 	bool has_tail_call: 1;
 	bool might_throw: 1;
+	bool might_unwind: 1;
 	bool tail_call_reachable: 1;
 	bool has_ld_abs: 1;
 	bool is_cb: 1;

@@ -4,6 +4,7 @@
 #include <linux/bpf_verifier.h>
 #include <linux/filter.h>
 #include <linux/bitmap.h>
+#include "exception.h"
 
 #define verbose(env, fmt, args...) bpf_verifier_log_write(env, fmt, ##args)
 
@@ -424,7 +425,30 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 		if (class == BPF_STX)
 			bt_set_reg(bt, sreg);
 	} else if (class == BPF_JMP || class == BPF_JMP32) {
-		if (bpf_pseudo_call(insn) || bpf_is_callx(insn)) {
+		if (hist && (hist->flags & INSN_F_UNWIND)) {
+			/*
+			 * A bpf_unwind(), a resume or an unwinding global call
+			 * left frame hist->frame here, for a landing pad in
+			 * this one. The walk crosses back into that frame,
+			 * past any frames between, which were entered and
+			 * never returned from. The pad found r0 unknown and
+			 * r1-r5 clobbered; r6-r9 and the stack are this
+			 * frame's own and stay marked in its masks until the
+			 * walk comes back out.
+			 */
+			bt_clear_reg(bt, BPF_REG_0);
+			if (bt_reg_mask(bt) & BPF_REGMASK_ARGS) {
+				verifier_bug(env, "backtracking unwind unexpected regs %x",
+					     bt_reg_mask(bt));
+				return -EFAULT;
+			}
+			if (verifier_bug_if(hist->frame <= bt->frame, env,
+					    "unwind from frame %d to frame %d",
+					    hist->frame, bt->frame))
+				return -EFAULT;
+			bt->frame = hist->frame;
+			return 0;
+		} else if (bpf_pseudo_call(insn) || bpf_is_callx(insn)) {
 			int subprog_insn_idx, subprog = -1;
 
 			if (bpf_pseudo_call(insn)) {
@@ -432,6 +456,24 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 				subprog = bpf_find_subprog(env, subprog_insn_idx);
 				if (subprog < 0)
 					return -EFAULT;
+			}
+
+			if (bpf_exc_pad_of_call(env, idx) == subseq_idx) {
+				/*
+				 * We came from the landing pad of a call to a
+				 * global subprog, branched to from the state
+				 * the call returns in: as on its return, no
+				 * frame was entered here. The call clobbered
+				 * r0-r5; r6-r9 and the stack are the caller's
+				 * own and keep going back from here.
+				 */
+				bt_clear_reg(bt, BPF_REG_0);
+				if (bt_reg_mask(bt) & BPF_REGMASK_ARGS) {
+					verifier_bug(env, "landing pad unexpected regs %x",
+						     bt_reg_mask(bt));
+					return -EFAULT;
+				}
+				return 0;
 			}
 
 			/* callx calls static subprogs only */
@@ -955,6 +997,11 @@ int bpf_mark_chain_precision(struct bpf_verifier_env *env,
 		st = st->parent;
 		if (!st)
 			break;
+
+		if (verifier_bug_if(bt->frame > st->curframe, env,
+				    "backtrack frame %d, state curframe %d",
+				    bt->frame, st->curframe))
+			return -EFAULT;
 
 		for (fr = bt->frame; fr >= 0; fr--) {
 			func = st->frame[fr];

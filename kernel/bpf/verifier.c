@@ -14694,6 +14694,32 @@ static int check_special_kfunc(struct bpf_verifier_env *env, struct bpf_call_arg
 
 static int check_return_code(struct bpf_verifier_env *env, int regno, const char *reg_name);
 
+static int check_kfunc_allowed(struct bpf_verifier_env *env, struct bpf_insn *insn,
+			       int insn_idx, struct bpf_call_arg_meta *meta)
+{
+	const char *operation;
+	int err;
+
+	err = bpf_fetch_kfunc_arg_meta(env, insn->imm, insn->off, meta);
+	if (err == -EACCES && meta->func_name) {
+		verbose(env, "calling kernel function %s is not allowed\n", meta->func_name);
+		operation = bpf_diag_fmt(env, "kfunc %s", meta->func_name);
+		bpf_diag_policy(
+			env, insn_idx, operation, "this program cannot call the kfunc",
+			"Use a kfunc allowed for this program type and attach point, or change the program context.");
+	}
+	return err;
+}
+
+/* noinline keeps a struct bpf_call_arg_meta off the caller's frame. */
+static noinline int check_kfunc_allowed_only(struct bpf_verifier_env *env,
+					     struct bpf_insn *insn, int insn_idx)
+{
+	struct bpf_call_arg_meta meta;
+
+	return check_kfunc_allowed(env, insn, insn_idx, &meta);
+}
+
 static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			    int *insn_idx_p)
 {
@@ -14715,14 +14741,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	if (!insn->imm)
 		return 0;
 
-	err = bpf_fetch_kfunc_arg_meta(env, insn->imm, insn->off, &meta);
-	if (err == -EACCES && meta.func_name) {
-		verbose(env, "calling kernel function %s is not allowed\n", meta.func_name);
-		operation = bpf_diag_fmt(env, "kfunc %s", meta.func_name);
-		bpf_diag_policy(
-			env, insn_idx, operation, "this program cannot call the kfunc",
-			"Use a kfunc allowed for this program type and attach point, or change the program context.");
-	}
+	err = check_kfunc_allowed(env, insn, insn_idx, &meta);
 	if (err)
 		return err;
 	desc_btf = meta.btf;
@@ -19144,6 +19163,127 @@ enum {
 	INSN_IDX_UPDATED = 2,
 };
 
+/*
+ * The current frame is leaving through an unwind. Its caller's saved return
+ * address now points at the pad covering the call, or, with none, at the
+ * caller's epilogue, and so on down. Follow that from the state the frame
+ * leaves in -- anything it wrote into its callers' stacks included -- to the
+ * first pad, or to the main program's frame returning.
+ */
+static int unwind_frames(struct bpf_verifier_env *env, bool *do_print_state)
+{
+	struct bpf_verifier_state *state = env->cur_state;
+	u32 frameno = state->curframe;
+	struct bpf_func_state *callee, *caller;
+	int err, pad;
+
+	while (state->curframe) {
+		callee = cur_func(env);
+		caller = state->frame[state->curframe - 1];
+		pad = bpf_exc_pad_of_call(env, callee->callsite);
+		/* The caller is at its call now, not at this frame's insn. */
+		state->insn_idx = callee->callsite;
+		account_processed_insns(env, callee, caller);
+		free_func_state(callee);
+		state->frame[state->curframe--] = NULL;
+		invalidate_outgoing_stack_args(env, caller);
+		if (pad < 0)
+			continue;
+
+		/*
+		 * The frames between were entered and never returned from,
+		 * so tell precision backtracking which one this left.
+		 */
+		err = bpf_push_jmp_history(env, state, INSN_F_UNWIND, 0, frameno, NULL, 0);
+		if (err)
+			return err;
+		clear_caller_saved_regs(env, caller->regs);
+		mark_reg_unknown(env, caller->regs, BPF_REG_0);
+		env->insn_idx = pad;
+		*do_print_state = true;
+		return INSN_IDX_UPDATED;
+	}
+
+	/*
+	 * The main frame returning ends the program, from its call if frames
+	 * were popped, else from the unwinding insn. Link that to the unwinding
+	 * insn, so that backtracking from the exit starts where r0 is set and
+	 * not in code the unwind skipped.
+	 */
+	env->cur_hist_ent = NULL;
+	env->prev_insn_idx = env->insn_idx;
+	env->insn_idx = state->insn_idx;
+	err = bpf_push_jmp_history(env, state, 0, 0, 0, NULL, 0);
+	if (err)
+		return err;
+
+	/*
+	 * The call clobbered r1-r5, and r0 holds the zero the fixups put
+	 * there. Mark r0 unknown first: the known-zero helper keeps a NOT_INIT
+	 * type.
+	 */
+	clear_caller_saved_regs(env, cur_regs(env));
+	mark_reg_unknown(env, cur_regs(env), BPF_REG_0);
+	mark_reg_known_zero(env, cur_regs(env), BPF_REG_0);
+	return process_bpf_exit_full(env, do_print_state, false);
+}
+
+/*
+ * A global subprog is verified on its own, so an unwind out of one is not
+ * walked. Its call has a second successor instead: the unwind, taken from
+ * the state the call returns in, to this frame's pad or on out of it.
+ */
+static int unwind_out_of_global_call(struct bpf_verifier_env *env, int call_idx,
+				     bool *do_print_state)
+{
+	const struct bpf_insn *insn = &env->prog->insnsi[call_idx];
+	int subprog = bpf_find_subprog(env, call_idx + insn->imm + 1);
+	struct bpf_verifier_state *branch;
+	struct bpf_func_state *frame;
+	int pad;
+
+	if (!bpf_subprog_is_global(env, subprog) ||
+	    !env->subprog_info[subprog].might_unwind)
+		return 0;
+
+	/* The call returning normally is walked later. */
+	branch = push_stack(env, call_idx + 1, call_idx, false);
+	if (IS_ERR(branch))
+		return PTR_ERR(branch);
+
+	pad = bpf_exc_pad_of_call(env, call_idx);
+	if (pad < 0)
+		return unwind_frames(env, do_print_state);
+	frame = cur_func(env);
+	clear_caller_saved_regs(env, frame->regs);
+	mark_reg_unknown(env, frame->regs, BPF_REG_0);
+	env->insn_idx = pad;
+	*do_print_state = true;
+	return INSN_IDX_UPDATED;
+}
+
+static int process_bpf_unwind(struct bpf_verifier_env *env, int *insn_idx,
+			      bool *do_print_state)
+{
+	struct bpf_func_state *frame = cur_func(env);
+	int pad = bpf_exc_pad_of_call(env, *insn_idx);
+	int err;
+
+	if (pad < 0) {
+		if (!env->cur_state->curframe) {
+			err = check_resource_leak(env, false, true,
+						  "an unwind with no landing pad");
+			if (err)
+				return err;
+		}
+		return unwind_frames(env, do_print_state);
+	}
+	clear_caller_saved_regs(env, frame->regs);
+	mark_reg_unknown(env, frame->regs, BPF_REG_0);
+	*insn_idx = pad;
+	return INSN_IDX_UPDATED;
+}
+
 static int process_bpf_exit_full(struct bpf_verifier_env *env,
 				 bool *do_print_state,
 				 bool exception_exit)
@@ -19398,13 +19538,32 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 					return -EINVAL;
 				}
 			}
+			if (bpf_is_unwind_kfunc(insn) || bpf_is_unwind_resume_kfunc(insn)) {
+				err = check_kfunc_allowed_only(env, insn, env->insn_idx);
+				if (err)
+					return err;
+				if (bpf_is_unwind_kfunc(insn))
+					return process_bpf_unwind(env, &env->insn_idx,
+								  do_print_state);
+				/*
+				 * The fixups lower this to 'r0 = 0; exit', and
+				 * the unwind goes on below this frame.
+				 */
+				return unwind_frames(env, do_print_state);
+			}
 			mark_reg_scratched(env, BPF_REG_0);
 			if (bpf_in_stack_arg_cnt(&env->subprog_info[cur_func(env)->subprogno]))
 				cur_func(env)->no_stack_arg_load = true;
 			if (bpf_is_callx(insn))
 				return check_func_callx(env, insn, &env->insn_idx);
-			if (insn->src_reg == BPF_PSEUDO_CALL)
-				return check_func_call(env, insn, &env->insn_idx);
+			if (insn->src_reg == BPF_PSEUDO_CALL) {
+				int call_idx = env->insn_idx;
+
+				err = check_func_call(env, insn, &env->insn_idx);
+				if (err)
+					return err;
+				return unwind_out_of_global_call(env, call_idx, do_print_state);
+			}
 			if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL)
 				return check_kfunc_call(env, insn, &env->insn_idx);
 			return check_helper_call(env, insn, &env->insn_idx);
