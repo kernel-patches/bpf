@@ -169,7 +169,7 @@ static void pm_runtime_cancel_pending(struct device *dev)
  * Compute the autosuspend-delay expiration time based on the device's
  * power.last_busy time.  If the delay has already expired or is disabled
  * (negative) or the power.use_autosuspend flag isn't set, return 0.
- * Otherwise return the expiration time in nanoseconds (adjusted to be nonzero).
+ * Otherwise return the expiration time in nanoseconds.
  *
  * This function may be called either with or without dev->power.lock held.
  * Either way it can be racy, since power.last_busy may be updated at any time.
@@ -1254,12 +1254,11 @@ static int pm_runtime_get_conditional(struct device *dev, bool ign_usage_count)
 }
 
 /**
- * pm_runtime_get_if_active - Bump up runtime PM usage counter if the device is
- *			      in active state
+ * pm_runtime_get_if_active - Conditionally bump up runtime PM usage counter.
  * @dev: Target device.
  *
  * Increment the runtime PM usage counter of @dev if its runtime PM status is
- * already %RPM_ACTIVE
+ * already %RPM_ACTIVE.
  *
  * Return:
  * * %-EINVAL: Runtime PM is disabled for @dev. The usage counter is not incremented.
@@ -1607,7 +1606,6 @@ static void pm_runtime_set_suspended_action(void *data)
 
 /**
  * devm_pm_runtime_set_active_enabled - set_active version of devm_pm_runtime_enable.
- *
  * @dev: Device to handle.
  */
 int devm_pm_runtime_set_active_enabled(struct device *dev)
@@ -1634,11 +1632,10 @@ static void pm_runtime_disable_action(void *data)
 
 /**
  * devm_pm_runtime_enable - devres-enabled version of pm_runtime_enable.
+ * @dev: Device to handle.
  *
  * NOTE: this will also handle calling pm_runtime_dont_use_autosuspend() for
  * you at driver exit time if needed.
- *
- * @dev: Device to handle.
  */
 int devm_pm_runtime_enable(struct device *dev)
 {
@@ -1655,7 +1652,6 @@ static void pm_runtime_put_noidle_action(void *data)
 
 /**
  * devm_pm_runtime_get_noresume - devres-enabled version of pm_runtime_get_noresume.
- *
  * @dev: Device to handle.
  */
 int devm_pm_runtime_get_noresume(struct device *dev)
