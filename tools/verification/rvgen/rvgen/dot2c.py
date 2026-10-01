@@ -111,10 +111,17 @@ class Dot2c(Automata):
         min_type = self.get_minimun_type()
         buff = []
         buff.append(f"struct {self.struct_automaton_def} {{")
-        buff.append(f"\tchar *state_names[state_max{self.enum_suffix}];")
-        buff.append(f"\tchar *event_names[event_max{self.enum_suffix}];")
-        if self.is_hybrid_automata():
-            buff.append(f"\tchar *env_names[env_max{self.enum_suffix}];")
+        if self.bpf:
+            # BPF struggles with non-fixed string pointers
+            buff.append(f"\tchar state_names[state_max{self.enum_suffix}][32];")
+            buff.append(f"\tchar event_names[event_max{self.enum_suffix}][32];")
+            if self.is_hybrid_automata():
+                buff.append(f"\tchar env_names[env_max{self.enum_suffix}][32];")
+        else:
+            buff.append(f"\tchar *state_names[state_max{self.enum_suffix}];")
+            buff.append(f"\tchar *event_names[event_max{self.enum_suffix}];")
+            if self.is_hybrid_automata():
+                buff.append(f"\tchar *env_names[env_max{self.enum_suffix}];")
         buff.append(f"\t{min_type} function[state_max{self.enum_suffix}][event_max{self.enum_suffix}];")
         buff.append(f"\t{min_type} initial_state;")
         buff.append(f"\tbool final_states[state_max{self.enum_suffix}];")
