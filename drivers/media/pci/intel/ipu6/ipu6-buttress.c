@@ -512,6 +512,17 @@ static int __ipu7_power_on(struct device *dev,
 		ipu7_nde_control(isp, true);
 	}
 
+	/* IPU8 psys needs its PLL running above 400MHz. */
+	if (!is_isys && IS_IPU8(isp) && ctrl->ratio > IPU8_PS_FREQ_CTL_DEFAULT_RATIO) {
+		writel(1, isp->base + IPU7_BUTTRESS_REG_PS_PLL_ENABLE);
+		ret = readl_poll_timeout(isp->base + IPU7_BUTTRESS_REG_SLEEP_LEVEL_STS,
+					 val, (val & IPU7_BUTTRESS_OWN_ACK_PS_CLK),
+					 100, BUTTRESS_POWER_TIMEOUT_US);
+		if (ret)
+			dev_warn(&isp->pdev->dev,
+				 "ps_pll req ack timeout: 0x%x\n", val);
+	}
+
 	/* Request clock ownership. */
 	ovrd_clk = is_isys ? IPU7_BUTTRESS_OVERRIDE_IS_CLK :
 			     IPU7_BUTTRESS_OVERRIDE_PS_CLK;
@@ -567,6 +578,12 @@ static int __ipu7_power_off(struct device *dev,
 	if (ctrl->subsys_id == IPU_ISYS) {
 		ipu7_isys_d2d_power(isp, false);
 		ipu7_nde_control(isp, false);
+	}
+
+	if (ctrl->subsys_id == IPU_PSYS && IS_IPU8(isp)) {
+		val = readl(isp->base + IPU7_BUTTRESS_REG_SLEEP_LEVEL_STS);
+		if (val & IPU7_BUTTRESS_OWN_ACK_PS_CLK)
+			writel(0, isp->base + IPU7_BUTTRESS_REG_PS_PLL_ENABLE);
 	}
 
 	return 0;
