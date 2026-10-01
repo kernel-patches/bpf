@@ -18,7 +18,7 @@ nf_conntrack-$(CONFIG_NF_CT_PROTO_GRE) += nf_conntrack_proto_gre.o
 ifeq ($(CONFIG_NF_CONNTRACK),m)
 nf_conntrack-$(CONFIG_DEBUG_INFO_BTF_MODULES) += nf_conntrack_bpf.o
 else ifeq ($(CONFIG_NF_CONNTRACK),y)
-nf_conntrack-$(CONFIG_DEBUG_INFO_BTF) += nf_conntrack_bpf.o
+nf_conntrack-$(subst m,y,$(CONFIG_DEBUG_INFO_BTF)) += nf_conntrack_bpf.o
 endif
 
 obj-$(CONFIG_NETFILTER) = netfilter.o
@@ -65,7 +65,7 @@ nf_nat-$(CONFIG_NF_NAT_OVS) += nf_nat_ovs.o
 ifeq ($(CONFIG_NF_NAT),m)
 nf_nat-$(CONFIG_DEBUG_INFO_BTF_MODULES) += nf_nat_bpf.o
 else ifeq ($(CONFIG_NF_NAT),y)
-nf_nat-$(CONFIG_DEBUG_INFO_BTF) += nf_nat_bpf.o
+nf_nat-$(subst m,y,$(CONFIG_DEBUG_INFO_BTF)) += nf_nat_bpf.o
 endif
 
 # NAT helpers
@@ -147,7 +147,7 @@ nf_flow_table-$(CONFIG_NF_FLOW_TABLE_PROCFS) += nf_flow_table_procfs.o
 ifeq ($(CONFIG_NF_FLOW_TABLE),m)
 nf_flow_table-$(CONFIG_DEBUG_INFO_BTF_MODULES) += nf_flow_table_bpf.o
 else ifeq ($(CONFIG_NF_FLOW_TABLE),y)
-nf_flow_table-$(CONFIG_DEBUG_INFO_BTF) += nf_flow_table_bpf.o
+nf_flow_table-$(subst m,y,$(CONFIG_DEBUG_INFO_BTF)) += nf_flow_table_bpf.o
 endif
 
 obj-$(CONFIG_NF_FLOW_TABLE_INET) += nf_flow_table_inet.o
