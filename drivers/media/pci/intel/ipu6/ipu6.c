@@ -274,7 +274,7 @@ void ipu6_configure_spc(struct ipu6_device *isp,
 	void __iomem *spc_regs_base;
 	u32 val;
 
-	if (IS_IPU7(isp))
+	if (IS_IPU7(isp) || IS_IPU8(isp))
 		return;
 
 	dmem_base = base + hw_variant->dmem_offset;
@@ -505,7 +505,7 @@ static void ipu6_configure_vc_mechanism(struct ipu6_device *isp)
 {
 	u32 val;
 
-	if (IS_IPU7(isp))
+	if (IS_IPU7(isp) || IS_IPU8(isp))
 		return;
 
 	val = readl(isp->base + BUTTRESS_REG_BTRS_CTRL);
@@ -698,7 +698,7 @@ static int ipu6_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		return dev_err_probe(dev, PTR_ERR(isp->base),
 				     "Failed to I/O mem remapping\n");
 
-	if (IS_IPU7(isp)) {
+	if (IS_IPU7(isp) || IS_IPU8(isp)) {
 		isp->pb_base = pcim_iomap_region(pdev, IPU7_PCI_PBBAR,
 						 IPU6_NAME);
 		if (IS_ERR(isp->pb_base))
@@ -770,7 +770,7 @@ static int ipu6_pci_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		goto out_ipu6_rpm_put;
 	}
 
-	ret = IS_IPU7(isp) ? ipu7_map_fw(isp) : ipu6_map_fw(isp);
+	ret = (IS_IPU7(isp) || IS_IPU8(isp)) ? ipu7_map_fw(isp) : ipu6_map_fw(isp);
 	if (ret)
 		goto out_ipu6_rpm_put;
 
@@ -813,7 +813,7 @@ out_free_irq:
 out_ipu6_rpm_put:
 	pm_runtime_put_sync(&isp->psys->auxdev.dev);
 out_ipu6_bus_del_devices:
-	dir = IS_IPU7(isp) ? DMA_BIDIRECTIONAL : DMA_TO_DEVICE;
+	dir = (IS_IPU7(isp) || IS_IPU8(isp)) ? DMA_BIDIRECTIONAL : DMA_TO_DEVICE;
 	if (!IS_ERR_OR_NULL(isp->psys)) {
 		ipu6_cpd_free_pkg_dir(isp->psys);
 		if (isp->psys->fw_sgt.nents)
@@ -847,7 +847,7 @@ static void ipu6_pci_remove(struct pci_dev *pdev)
 
 	devm_free_irq(&pdev->dev, pdev->irq, isp);
 
-	dir = IS_IPU7(isp) ? DMA_BIDIRECTIONAL : DMA_TO_DEVICE;
+	dir = (IS_IPU7(isp) || IS_IPU8(isp)) ? DMA_BIDIRECTIONAL : DMA_TO_DEVICE;
 	ipu6_cpd_free_pkg_dir(isp->psys);
 	ipu6_unmap_fw_region(isp->psys, dir);
 

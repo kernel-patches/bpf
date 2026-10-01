@@ -454,7 +454,7 @@ int ipu6_cpd_validate_cpd_file(struct ipu6_device *isp, const void *cpd_file,
 		return -EINVAL;
 	}
 
-	if (IS_IPU7(isp))
+	if (IS_IPU7(isp) || IS_IPU8(isp))
 		return __ipu7_validate_cpd_file(isp, cpd_file, cpd_file_size);
 
 	return __ipu6_validate_cpd_file(isp, cpd_file, cpd_file_size);

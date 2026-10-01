@@ -473,7 +473,7 @@ static struct ipu6_mmu_info *ipu6_mmu_alloc(struct ipu6_device *isp)
 	if (!mmu_info)
 		return NULL;
 
-	if (IS_IPU7(isp))
+	if (IS_IPU7(isp) || IS_IPU8(isp))
 		mmu_info->aperture_start = isp->secure_mode ?
 			IPU7_FW_CODE_REGION_END : IPU7_FW_CODE_REGION_START;
 	else
@@ -684,7 +684,7 @@ struct ipu6_mmu *ipu6_mmu_init(struct device *dev,
 	if (!mmu)
 		return ERR_PTR(-ENOMEM);
 
-	mmu->ops = IS_IPU7(isp) ? &ipu7_mmu_ops : &ipu6_mmu_ops;
+	mmu->ops = (IS_IPU7(isp) || IS_IPU8(isp)) ? &ipu7_mmu_ops : &ipu6_mmu_ops;
 	mmu->mmid = mmid;
 	mmu->ready = false;
 	INIT_LIST_HEAD(&mmu->vma_list);

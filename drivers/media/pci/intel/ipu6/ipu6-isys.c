@@ -186,7 +186,7 @@ static int isys_csi2_register_subdevices(struct ipu6_isys *isys)
 	for (i = 0; i < csi2_pdata->nports; i++) {
 		void __iomem *base = isys->pdata->base;
 
-		if (IS_IPU7(isys->adev->isp)) {
+		if (IS_IPU7(isys->adev->isp) || IS_IPU8(isys->adev->isp)) {
 			u32 mask = IS_IPU7_MTL(isys->adev->isp) ?
 					IPU7_CSI_LEGACY_IRQ_MASK(i) :
 					IPU7P5_CSI_LEGACY_IRQ_MASK(i);
@@ -633,7 +633,7 @@ static int isys_notifier_init(struct ipu6_isys *isys)
 			continue;
 
 		ret = v4l2_fwnode_endpoint_parse(ep, &vep);
-		if (ret && IS_IPU7(isp)) {
+		if (ret && (IS_IPU7(isp) || IS_IPU8(isp))) {
 			vep.bus_type = V4L2_MBUS_CSI2_CPHY;
 			ret = v4l2_fwnode_endpoint_parse(ep, &vep);
 		}
@@ -771,7 +771,7 @@ static int isys_runtime_pm_resume(struct device *dev)
 	if (ret)
 		goto err_mmu_hw_cleanup;
 
-	if (IS_IPU7(isp)) {
+	if (IS_IPU7(isp) || IS_IPU8(isp)) {
 		ipu7_isys_setup_hw(isys);
 	} else {
 		ipu6_isys_setup_hw(isys);
@@ -804,7 +804,7 @@ static int isys_runtime_pm_resume(struct device *dev)
 	isys->phy_termcal_val = 0;
 	cpu_latency_qos_update_request(&isys->pm_qos, PM_QOS_DEFAULT_VALUE);
 
-	if (!IS_IPU7(isp))
+	if (!IS_IPU7(isp) && !IS_IPU8(isp))
 		set_iwake_ltrdid(isys, 0, 0, LTR_ISYS_OFF);
 
 err_mmu_hw_cleanup:
@@ -833,7 +833,7 @@ static int isys_runtime_pm_suspend(struct device *dev)
 	isys->phy_termcal_val = 0;
 	cpu_latency_qos_update_request(&isys->pm_qos, PM_QOS_DEFAULT_VALUE);
 
-	if (!IS_IPU7(isp))
+	if (!IS_IPU7(isp) && !IS_IPU8(isp))
 		set_iwake_ltrdid(isys, 0, 0, LTR_ISYS_OFF);
 
 	ipu6_mmu_hw_cleanup(adev->mmu);
@@ -990,7 +990,7 @@ static int isys_probe(struct auxiliary_device *auxdev,
 	if (!isys)
 		return -ENOMEM;
 
-	adev->auxdrv_data = IS_IPU7(isp) ? &ipu7_isys_auxdrv_data :
+	adev->auxdrv_data = (IS_IPU7(isp) || IS_IPU8(isp)) ? &ipu7_isys_auxdrv_data :
 					   &ipu6_isys_auxdrv_data;
 	adev->auxdrv = to_auxiliary_drv(auxdev->dev.driver);
 	isys->adev = adev;
@@ -1027,7 +1027,7 @@ static int isys_probe(struct auxiliary_device *auxdev,
 	if (ret < 0)
 		goto out_remove_pkg_dir_shared_buffer;
 
-	if (IS_IPU7(adev->isp))
+	if (IS_IPU7(adev->isp) || IS_IPU8(adev->isp))
 		isys->phy_set_power = ipu7_isys_csi_phy_set_power;
 	else if (IS_IPU6SE(adev->isp))
 		isys->phy_set_power = ipu6_isys_jsl_phy_set_power;

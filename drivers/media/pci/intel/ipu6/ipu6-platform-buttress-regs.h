@@ -295,6 +295,7 @@ enum {
 
 /* NDE */
 #define IPU7_BUTTRESS_REG_NDE_CONTROL		0x21a4
+#define IPU8_BUTTRESS_REG_NDE_CONTROL		0x21a8
 #define IPU7_NDE_VAL_MASK			GENMASK(9, 0)
 #define IPU7_NDE_SCALE_MASK			GENMASK(12, 10)
 #define IPU7_NDE_VALID_MASK			BIT(13)
@@ -306,6 +307,7 @@ enum {
 #define IPU7_NDE_SCALE_DEFAULT			2
 #define IPU7_NDE_VALID_DEFAULT			0
 #define IPU7_NDE_RESVEC				0xe
+#define IPU8_NDE_RESVEC				0x2
 
 /* IS UCX control */
 #define IPU7_UCX_CTL_RESET			BIT(0)

@@ -538,6 +538,127 @@ static struct ipu7_mmu_hw ipu7p5_isys_mmu_hwdata[] = {
 	},
 };
 
+static struct ipu7_mmu_hw ipu8_isys_mmu_hwdata[] = {
+	{
+		.name = "IS_FW_RD",
+		.offset = IPU8_IS_MMU_FW_RD_OFFSET,
+		.zlx_offset = IPU8_IS_ZLX_UC_RD_OFFSET,
+		.uao_offset = IPU8_IS_UAO_UC_RD_OFFSET,
+		.info_bits = 0x20005101,
+		.refill = 0x00002726,
+		.collapse_en_bitmap = 0x1,
+		.at_sp_arb_cfg = 0x1,
+		.l1_block = IPU8_IS_MMU_FW_RD_L1_BLOCKNR_REG,
+		.l2_block = IPU8_IS_MMU_FW_RD_L2_BLOCKNR_REG,
+		.nr_l1streams = IPU8_IS_MMU_FW_RD_STREAM_NUM,
+		.nr_l2streams = IPU8_IS_MMU_FW_RD_STREAM_NUM,
+		.l1_block_sz = { 0x0, 0x8, 0xa },
+		.l2_block_sz = { 0x0, 0x2, 0x4 },
+		.zlx_nr = IPU8_IS_ZLX_UC_RD_NUM,
+		.zlx_axi_pool = { 0x00000f30 },
+		.zlx_en = { 0, 1, 0, 0 },
+		.zlx_conf = { 0, 2, 0, 0 },
+		.uao_p_num = IPU8_IS_UAO_UC_RD_PLANENUM,
+		.uao_p2tlb = { 0x00000049, 0x0000004c, 0x0000004d, 0x00000000 },
+	},
+	{
+		.name = "IS_FW_WR",
+		.offset = IPU8_IS_MMU_FW_WR_OFFSET,
+		.zlx_offset = IPU8_IS_ZLX_UC_WR_OFFSET,
+		.uao_offset = IPU8_IS_UAO_UC_WR_OFFSET,
+		.info_bits = 0x20005001,
+		.refill = 0x00002524,
+		.collapse_en_bitmap = 0x1,
+		.at_sp_arb_cfg = 0x1,
+		.l1_block = IPU8_IS_MMU_FW_WR_L1_BLOCKNR_REG,
+		.l2_block = IPU8_IS_MMU_FW_WR_L2_BLOCKNR_REG,
+		.nr_l1streams = IPU8_IS_MMU_FW_WR_STREAM_NUM,
+		.nr_l2streams = IPU8_IS_MMU_FW_WR_STREAM_NUM,
+		.l1_block_sz = { 0x0, 0x8, 0xa },
+		.l2_block_sz = { 0x0, 0x2, 0x4 },
+		.zlx_nr = IPU8_IS_ZLX_UC_WR_NUM,
+		.zlx_axi_pool = { 0x00000f20 },
+		.zlx_en = { 0, 1, 1, 0 },
+		.zlx_conf = { 0x0, 0x2, 0x2, 0x0 },
+		.uao_p_num = IPU8_IS_UAO_UC_WR_PLANENUM,
+		.uao_p2tlb = { 0x00000049, 0x0000004a, 0x0000004b, 0x00000000 },
+	},
+	{
+		.name = "IS_DATA_WR_ISOC",
+		.offset = IPU8_IS_MMU_M0_OFFSET,
+		.zlx_offset = IPU8_IS_ZLX_M0_OFFSET,
+		.uao_offset = IPU8_IS_UAO_M0_WR_OFFSET,
+		.info_bits = 0x20004e01,
+		.refill = 0x00002120,
+		.collapse_en_bitmap = 0x1,
+		.at_sp_arb_cfg = 0x1,
+		.l1_block = IPU8_IS_MMU_M0_L1_BLOCKNR_REG,
+		.l2_block = IPU8_IS_MMU_M0_L2_BLOCKNR_REG,
+		.nr_l1streams = IPU8_IS_MMU_M0_STREAM_NUM,
+		.nr_l2streams = IPU8_IS_MMU_M0_STREAM_NUM,
+		.l1_block_sz = { 0x00, 0x02, 0x04, 0x06, 0x08, 0x0a, 0x0c, 0x0e,
+				 0x10, 0x12, 0x14, 0x16, 0x18, 0x1a, 0x1c, 0x1e },
+		.l2_block_sz = { 0x00, 0x02, 0x04, 0x06, 0x08, 0x0a, 0x0c, 0x0e,
+				 0x10, 0x12, 0x14, 0x16, 0x18, 0x1a, 0x1c, 0x1e },
+		.zlx_nr = IPU8_IS_ZLX_M0_NUM,
+		.zlx_axi_pool = { 0x00000f10 },
+		.zlx_en = { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 },
+		.zlx_conf = { 0x3, 0x3, 0x3, 0x3, 0x3, 0x3, 0x3, 0x3,
+			      0x3, 0x3, 0x3, 0x3, 0x3, 0x3, 0x3, 0x3 },
+		.uao_p_num = IPU8_IS_UAO_M0_WR_PLANENUM,
+		.uao_p2tlb = { 0x3b, 0x3c, 0x3d, 0x3e, 0x3b, 0x3c, 0x3d, 0x3e,
+			       0x3b, 0x3c, 0x3d, 0x3e, 0x3b, 0x3c, 0x3d, 0x3e },
+	},
+	{
+		.name = "IS_DATA_WR_SNOOP",
+		.offset = IPU8_IS_MMU_M1_OFFSET,
+		.zlx_offset = IPU8_IS_ZLX_M1_OFFSET,
+		.uao_offset = IPU8_IS_UAO_M1_WR_OFFSET,
+		.info_bits = 0x20004f01,
+		.refill = 0x00002322,
+		.collapse_en_bitmap = 0x1,
+		.at_sp_arb_cfg = 0x1,
+		.l1_block = IPU8_IS_MMU_M1_L1_BLOCKNR_REG,
+		.l2_block = IPU8_IS_MMU_M1_L2_BLOCKNR_REG,
+		.nr_l1streams = IPU8_IS_MMU_M1_STREAM_NUM,
+		.nr_l2streams = IPU8_IS_MMU_M1_STREAM_NUM,
+		.l1_block_sz = { 0x00, 0x02, 0x04, 0x06, 0x08, 0x0a, 0x0c, 0x0e,
+				 0x10, 0x12, 0x14, 0x16, 0x18, 0x1a, 0x1c, 0x1e },
+		.l2_block_sz = { 0x00, 0x02, 0x04, 0x06, 0x08, 0x0a, 0x0c, 0x0e,
+				 0x10, 0x12, 0x14, 0x16, 0x18, 0x1a, 0x1c, 0x1e },
+		.zlx_nr = IPU8_IS_ZLX_M1_NUM,
+		.zlx_axi_pool = { 0x00000f20 },
+		.zlx_en = { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 },
+		.zlx_conf = { 0x3, 0x3, 0x3, 0x3, 0x3, 0x3, 0x3, 0x3,
+			      0x3, 0x3, 0x3, 0x3, 0x3, 0x3, 0x3, 0x3 },
+		.uao_p_num = IPU8_IS_UAO_M1_WR_PLANENUM,
+		.uao_p2tlb = { 0x3f, 0x40, 0x41, 0x42, 0x3f, 0x40, 0x41, 0x42,
+			       0x3f, 0x40, 0x41, 0x42, 0x3f, 0x40, 0x41, 0x42 },
+	},
+	{
+		.name = "IS_UPIPE",
+		.offset = IPU8_IS_MMU_UPIPE_OFFSET,
+		.zlx_offset = IPU8_IS_ZLX_UPIPE_OFFSET,
+		.uao_offset = IPU8_IS_UAO_UPIPE_OFFSET,
+		.info_bits = 0x20005201,
+		.refill = 0x00002928,
+		.collapse_en_bitmap = 0x1,
+		.at_sp_arb_cfg = 0x1,
+		.l1_block = IPU8_IS_MMU_UPIPE_L1_BLOCKNR_REG,
+		.l2_block = IPU8_IS_MMU_UPIPE_L2_BLOCKNR_REG,
+		.nr_l1streams = IPU8_IS_MMU_UPIPE_STREAM_NUM,
+		.nr_l2streams = IPU8_IS_MMU_UPIPE_STREAM_NUM,
+		.l1_block_sz = { 0x0, 0x2, 0x4, 0x6, 0x8, 0xa },
+		.l2_block_sz = { 0x0, 0x2, 0x4, 0x6, 0x8, 0xa },
+		.zlx_nr = IPU8_IS_ZLX_UPIPE_NUM,
+		.zlx_axi_pool = { 0x00000f20 },
+		.zlx_en = { 1, 1, 1, 1, 1, 1 },
+		.zlx_conf = { 0x3, 0x3, 0x3, 0x3, 0x3, 0x3 },
+		.uao_p_num = IPU8_IS_UAO_UPIPE_PLANENUM,
+		.uao_p2tlb = { 0x43, 0x44, 0x45, 0x46, 0x47, 0x48 },
+	},
+};
+
 static struct ipu7_mmu_hw ipu7p5_psys_mmu_hwdata[] = {
 	{
 		.name = "PS_FW_RD",
@@ -697,6 +818,22 @@ static const struct ipu7_mmu_hwdata ipu7p5_mmu_hwdata_lookup[IPU_SUBSYS_NUM] = {
 	},
 };
 
+/*
+ * IPU8 has no dedicated psys MMU table upstream (psys pipeline
+ * support is not targeted for this driver); reuse the IPU7P5 psys
+ * table as a placeholder so the psys bus device still initialises.
+ */
+static const struct ipu7_mmu_hwdata ipu8_mmu_hwdata_lookup[IPU_SUBSYS_NUM] = {
+	[IPU_PSYS] = {
+		.hwdata = ipu7p5_psys_mmu_hwdata,
+		.nr_mmus = ARRAY_SIZE(ipu7p5_psys_mmu_hwdata),
+	},
+	[IPU_ISYS] = {
+		.hwdata = ipu8_isys_mmu_hwdata,
+		.nr_mmus = ARRAY_SIZE(ipu8_isys_mmu_hwdata),
+	},
+};
+
 static void __ipu7_tlb_invalidate(struct ipu6_mmu *mmu)
 {
 	struct ipu7_mmu_hw *mmu_hw = mmu->ipu7_mmu_hw;
@@ -824,8 +961,12 @@ static int __ipu7_mmu_init_hw_data(struct ipu6_mmu *mmu, struct device *dev,
 	if (mmu->mmid >= IPU_SUBSYS_NUM)
 		return -EINVAL;
 
-	lookup = IS_IPU7P5(isp) ? ipu7p5_mmu_hwdata_lookup :
-				  ipu7_mmu_hwdata_lookup;
+	if (IS_IPU8(isp))
+		lookup = ipu8_mmu_hwdata_lookup;
+	else if (IS_IPU7P5(isp))
+		lookup = ipu7p5_mmu_hwdata_lookup;
+	else
+		lookup = ipu7_mmu_hwdata_lookup;
 
 	src = lookup[mmu->mmid].hwdata;
 	nr_mmus = lookup[mmu->mmid].nr_mmus;
