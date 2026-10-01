@@ -204,6 +204,12 @@ int netvsc_bpf(struct net_device *dev, struct netdev_bpf *bpf)
 	int ret;
 
 	if (!nvdev || nvdev->destroy) {
+		/* The channels and the VF are gone, and so is the program,
+		 * unless suspend parked it for netvsc_resume() to put back.
+		 */
+		if (bpf->command == XDP_SETUP_PROG && !bpf->prog && !vf_netdev &&
+		    !ndevctx->saved_netvsc_dev_info)
+			return 0;
 		return -ENODEV;
 	}
 
