@@ -2820,15 +2820,16 @@ FIXTURE_TEARDOWN(zero_len_splice)
  * A control record behind the run reports EINVAL, the error splice
  * already reports for a control record it meets first.
  */
-TEST_F(zero_len_splice, test)
+static void
+zero_len_do_splice(struct __test_metadata *_metadata,
+		   FIXTURE_DATA(zero_len_splice) *self,
+		   const FIXTURE_VARIANT(zero_len_splice) *variant,
+		   unsigned int splice_flags)
 {
 	const struct raw_rec *payload;
 	unsigned char buf[128];
 	ssize_t ret;
 	int p[2];
-
-	if (self->notls)
-		SKIP(return, "no TLS support");
 
 	ASSERT_GE(pipe(p), 0);
 
@@ -2836,7 +2837,7 @@ TEST_F(zero_len_splice, test)
 
 	if (variant->splice_ret < 0) {
 		ret = splice(self->cfd, NULL, p[1], NULL, sizeof(buf),
-			     SPLICE_F_NONBLOCK);
+			     splice_flags);
 		EXPECT_EQ(ret, -1);
 		EXPECT_EQ(errno, -variant->splice_ret);
 	} else {
@@ -2844,7 +2845,7 @@ TEST_F(zero_len_splice, test)
 		 * below would block until the harness timeout.
 		 */
 		ASSERT_EQ(splice(self->cfd, NULL, p[1], NULL, sizeof(buf),
-				 SPLICE_F_NONBLOCK), variant->splice_ret);
+				 splice_flags), variant->splice_ret);
 		ret = read(p[0], buf, sizeof(buf));
 		EXPECT_EQ(ret, variant->splice_ret);
 		if (ret == variant->splice_ret)
@@ -2859,6 +2860,33 @@ TEST_F(zero_len_splice, test)
 
 	close(p[0]);
 	close(p[1]);
+}
+
+TEST_F(zero_len_splice, test)
+{
+	if (self->notls)
+		SKIP(return, "no TLS support");
+
+	zero_len_do_splice(_metadata, self, variant, SPLICE_F_NONBLOCK);
+}
+
+/* The socket's O_NONBLOCK governs the record wait, as on a plain TCP
+ * socket, so a splice without SPLICE_F_NONBLOCK behaves like one that
+ * sets it. Deriving the wait from SPLICE_F_NONBLOCK alone sleeps here
+ * until the harness timeout.
+ */
+TEST_F(zero_len_splice, nonblock_socket)
+{
+	int sflags;
+
+	if (self->notls)
+		SKIP(return, "no TLS support");
+
+	sflags = fcntl(self->cfd, F_GETFL, 0);
+	ASSERT_GE(sflags, 0);
+	ASSERT_EQ(fcntl(self->cfd, F_SETFL, sflags | O_NONBLOCK), 0);
+
+	zero_len_do_splice(_metadata, self, variant, 0);
 }
 
 FIXTURE(tls_err)
