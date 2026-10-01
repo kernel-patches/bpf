@@ -2456,6 +2456,7 @@ static int stm32_adc_dma_request(struct device *dev, struct iio_dev *indio_dev)
 {
 	struct stm32_adc *adc = iio_priv(indio_dev);
 	struct dma_slave_config config = { };
+	struct device *dma_dev;
 	int ret;
 
 	adc->dma_chan = dma_request_chan(dev, "rx");
@@ -2470,7 +2471,8 @@ static int stm32_adc_dma_request(struct device *dev, struct iio_dev *indio_dev)
 		return 0;
 	}
 
-	adc->rx_buf = dma_alloc_coherent(adc->dma_chan->device->dev,
+	dma_dev = dmaengine_get_dma_device(adc->dma_chan);
+	adc->rx_buf = dma_alloc_coherent(dma_dev,
 					 STM32_DMA_BUFFER_SIZE,
 					 &adc->rx_dma_buf, GFP_KERNEL);
 	if (!adc->rx_buf) {
@@ -2490,7 +2492,7 @@ static int stm32_adc_dma_request(struct device *dev, struct iio_dev *indio_dev)
 	return 0;
 
 err_free:
-	dma_free_coherent(adc->dma_chan->device->dev, STM32_DMA_BUFFER_SIZE,
+	dma_free_coherent(dma_dev, STM32_DMA_BUFFER_SIZE,
 			  adc->rx_buf, adc->rx_dma_buf);
 err_release:
 	dma_release_channel(adc->dma_chan);
@@ -2617,7 +2619,7 @@ err_buffer_cleanup:
 
 err_dma_disable:
 	if (adc->dma_chan) {
-		dma_free_coherent(adc->dma_chan->device->dev,
+		dma_free_coherent(dmaengine_get_dma_device(adc->dma_chan),
 				  STM32_DMA_BUFFER_SIZE,
 				  adc->rx_buf, adc->rx_dma_buf);
 		dma_release_channel(adc->dma_chan);
@@ -2640,7 +2642,7 @@ static void stm32_adc_remove(struct platform_device *pdev)
 	pm_runtime_put_noidle(&pdev->dev);
 	iio_triggered_buffer_cleanup(indio_dev);
 	if (adc->dma_chan) {
-		dma_free_coherent(adc->dma_chan->device->dev,
+		dma_free_coherent(dmaengine_get_dma_device(adc->dma_chan),
 				  STM32_DMA_BUFFER_SIZE,
 				  adc->rx_buf, adc->rx_dma_buf);
 		dma_release_channel(adc->dma_chan);
@@ -2725,7 +2727,7 @@ static const struct stm32_adc_cfg stm32h7_adc_cfg = {
 	.set_ovs = stm32h7_adc_set_ovs,
 };
 
-static const unsigned int stm32_adc_min_ts_mp1[] = { 100, 100, 100, 4300, 9800 };
+static const unsigned int stm32_adc_min_ts_mp1[] = { 100, 0, 0, 4300, 9800 };
 static_assert(ARRAY_SIZE(stm32_adc_min_ts_mp1) == STM32_ADC_INT_CH_NB);
 
 static const struct stm32_adc_cfg stm32mp1_adc_cfg = {
@@ -2747,7 +2749,7 @@ static const struct stm32_adc_cfg stm32mp1_adc_cfg = {
 	.set_ovs = stm32h7_adc_set_ovs,
 };
 
-static const unsigned int stm32_adc_min_ts_mp13[] = { 100, 0, 0, 4300, 9800 };
+static const unsigned int stm32_adc_min_ts_mp13[] = { 1000, 1000, 1000, 4300, 9800 };
 static_assert(ARRAY_SIZE(stm32_adc_min_ts_mp13) == STM32_ADC_INT_CH_NB);
 
 static const struct stm32_adc_cfg stm32mp13_adc_cfg = {
