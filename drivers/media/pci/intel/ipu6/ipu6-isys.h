@@ -139,6 +139,9 @@ struct isys_fw_msgs {
 		union {
 			struct ipu7_fw_isys_frame_buff_set frame;
 			struct ipu7_fw_isys_stream_cfg stream;
+			/* sizes the union for the larger IPU8 (ABI 1.0.14) layout */
+			struct ipu7_fw_isys_frame_buff_set_ipu8 frame_ipu8;
+			struct ipu7_fw_isys_stream_cfg_ipu8 stream_ipu8;
 		} ipu7;
 	};
 	struct list_head head;

@@ -133,8 +133,10 @@ static int ipu7_fw_isys_init(struct ipu6_isys *isys, unsigned int num_streams)
 
 	isys->fwctx = fwctx;
 
+	/* IPU8 firmware expects boot-message major version 2, not 1 */
 	ret = ipu6_ipu7_init_boot_config(adev, queue_configs, num_queues,
-					 freq, fw_config_dma_addr, 1U);
+					 freq, fw_config_dma_addr,
+					 IS_IPU8(adev->isp) ? 2U : 1U);
 	if (ret) {
 		ipu7_fw_isys_cleanup(isys);
 		return ret;
@@ -419,10 +421,60 @@ ipu7_fw_isys_prepare_buf_set(struct isys_fw_msgs *msg,
 		set->output_pins[0].addr, set->output_pins[0].user_token);
 }
 
+static void isys_stream_cfg_to_ipu8(struct ipu7_fw_isys_stream_cfg_ipu8 *dst,
+				    const struct ipu7_fw_isys_stream_cfg *src)
+{
+	memset(dst, 0, sizeof(*dst));
+	memcpy(dst->input_pins, src->input_pins, sizeof(dst->input_pins));
+	dst->stream_msg_map = src->stream_msg_map;
+	dst->port_id = src->port_id;
+	dst->vc = src->vc;
+	dst->nof_input_pins = src->nof_input_pins;
+	dst->nof_output_pins = src->nof_output_pins;
+	for (unsigned int i = 0; i < ARRAY_SIZE(src->output_pins); i++) {
+		dst->output_pins[i].link = src->output_pins[i].link;
+		dst->output_pins[i].crop.line_top =
+			src->output_pins[i].crop.line_top;
+		dst->output_pins[i].crop.line_bottom =
+			src->output_pins[i].crop.line_bottom;
+		dst->output_pins[i].dpcm = src->output_pins[i].dpcm;
+		dst->output_pins[i].stride = src->output_pins[i].stride;
+		dst->output_pins[i].ft = src->output_pins[i].ft;
+		dst->output_pins[i].send_irq = src->output_pins[i].send_irq;
+		dst->output_pins[i].input_pin_id =
+			src->output_pins[i].input_pin_id;
+		dst->output_pins[i].early_ack_en =
+			src->output_pins[i].early_ack_en;
+	}
+}
+
+static void isys_buffset_to_ipu8(struct ipu7_fw_isys_frame_buff_set_ipu8 *dst,
+				 const struct ipu7_fw_isys_frame_buff_set *src)
+{
+	memset(dst, 0, sizeof(*dst));
+	for (unsigned int i = 0; i < ARRAY_SIZE(src->output_pins); i++)
+		dst->output_pins[i].pin_payload = src->output_pins[i];
+	dst->capture_msg_map = src->capture_msg_map;
+	dst->frame_id = src->frame_id;
+	dst->skip_frame = src->skip_frame;
+}
+
 static int ipu7_fw_isys_stream_open(struct ipu6_isys *isys,
 				    const unsigned int stream_handle,
 				    struct isys_fw_msgs *msg)
 {
+	if (IS_IPU8(isys->adev->isp)) {
+		struct ipu7_fw_isys_stream_cfg cfg = msg->ipu7.stream;
+
+		isys_stream_cfg_to_ipu8(&msg->ipu7.stream_ipu8, &cfg);
+
+		return ipu7_fw_isys_send_cmd(isys, stream_handle,
+					     &msg->ipu7.stream_ipu8,
+					     msg->dma_addr,
+					     sizeof(msg->ipu7.stream_ipu8),
+					     IPU7_INSYS_SEND_TYPE_STREAM_OPEN);
+	}
+
 	return ipu7_fw_isys_send_cmd(isys, stream_handle, &msg->ipu7.stream,
 				     msg->dma_addr, sizeof(msg->ipu7.stream),
 				     IPU7_INSYS_SEND_TYPE_STREAM_OPEN);
@@ -442,22 +494,41 @@ static int ipu7_fw_isys_stream_flush(struct ipu6_isys *isys,
 				     IPU7_INSYS_SEND_TYPE_STREAM_FLUSH);
 }
 
+static int ipu7_fw_isys_send_frame_buff_set(struct ipu6_isys *isys,
+					    const unsigned int stream_handle,
+					    struct isys_fw_msgs *msg, u16 send_type)
+{
+	if (IS_IPU8(isys->adev->isp)) {
+		struct ipu7_fw_isys_frame_buff_set set = msg->ipu7.frame;
+
+		isys_buffset_to_ipu8(&msg->ipu7.frame_ipu8, &set);
+
+		return ipu7_fw_isys_send_cmd(isys, stream_handle,
+					     &msg->ipu7.frame_ipu8,
+					     msg->dma_addr,
+					     sizeof(msg->ipu7.frame_ipu8),
+					     send_type);
+	}
+
+	return ipu7_fw_isys_send_cmd(isys, stream_handle, &msg->ipu7.frame,
+				     msg->dma_addr, sizeof(msg->ipu7.frame),
+				     send_type);
+}
+
 static int ipu7_fw_isys_stream_start(struct ipu6_isys *isys,
 				     const unsigned int stream_handle,
 				     struct isys_fw_msgs *msg, bool capture)
 {
-	return ipu7_fw_isys_send_cmd(isys, stream_handle, &msg->ipu7.frame,
-				     msg->dma_addr, sizeof(msg->ipu7.frame),
-				     IPU7_INSYS_SEND_TYPE_STREAM_START_AND_CAPTURE);
+	return ipu7_fw_isys_send_frame_buff_set(isys, stream_handle, msg,
+						 IPU7_INSYS_SEND_TYPE_STREAM_START_AND_CAPTURE);
 }
 
 static int ipu7_fw_isys_stream_capture(struct ipu6_isys *isys,
 				       const unsigned int stream_handle,
 				       struct isys_fw_msgs *msg)
 {
-	return ipu7_fw_isys_send_cmd(isys, stream_handle, &msg->ipu7.frame,
-				     msg->dma_addr, sizeof(msg->ipu7.frame),
-				     IPU7_INSYS_SEND_TYPE_STREAM_CAPTURE);
+	return ipu7_fw_isys_send_frame_buff_set(isys, stream_handle, msg,
+						 IPU7_INSYS_SEND_TYPE_STREAM_CAPTURE);
 }
 
 const struct ipu6_fw_isys_ops ipu7_fw_isys_ops = {
