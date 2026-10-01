@@ -167,7 +167,8 @@ static void gpreg_write(struct ipu6_isys *isys, u32 id, u32 addr, u32 data)
 {
 	void __iomem *isys_base = isys->pdata->base;
 	u32 gpreg = isys->pdata->ipdata->csi2.gpreg;
-	void __iomem *base = isys_base + gpreg + 0x1000 * id;
+	void __iomem *base = isys_base + gpreg +
+				     isys->pdata->ipdata->csi2.gpreg_stride * id;
 	struct device *dev = &isys->adev->auxdev.dev;
 
 	dev_dbg(dev, "gpreg write: reg 0x%lx = data 0x%08x",
@@ -344,7 +345,8 @@ static int ipu7_isys_phy_ready(struct ipu6_isys *isys, u32 id)
 {
 	void __iomem *isys_base = isys->pdata->base;
 	u32 gpreg_offset = isys->pdata->ipdata->csi2.gpreg;
-	void __iomem *gpreg = isys_base + gpreg_offset + 0x1000 * id;
+	void __iomem *gpreg = isys_base + gpreg_offset +
+				      isys->pdata->ipdata->csi2.gpreg_stride * id;
 	struct device *dev = &isys->adev->auxdev.dev;
 	u32 phy_ready;
 	u32 reg, rext;

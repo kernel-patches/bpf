@@ -373,6 +373,13 @@ static void ipu6_internal_pdata_init(struct ipu6_device *isp)
 
 	if (IS_IPU7(isp)) {
 		isys_ipdata.csi2.gpreg = IPU7_IS_IO_CSI2_GPREGS_BASE;
+		isys_ipdata.csi2.gpreg_stride = IPU7_IS_IO_CSI2_GPREGS_STRIDE;
+		isys_ipdata.csi2.nports = 4;
+	}
+
+	if (IS_IPU8(isp)) {
+		isys_ipdata.csi2.gpreg = IPU8_IS_IO_CSI2_GPREGS_BASE;
+		isys_ipdata.csi2.gpreg_stride = IPU8_IS_IO_CSI2_GPREGS_STRIDE;
 		isys_ipdata.csi2.nports = 4;
 	}
 }

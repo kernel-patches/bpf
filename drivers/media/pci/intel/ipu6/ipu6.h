@@ -147,6 +147,7 @@ struct ipu6_isys_internal_csi2_pdata {
 	u32 fw_access_port_ofs;
 	/* IPU7-specific field */
 	u32 gpreg;
+	u32 gpreg_stride;
 };
 
 struct ipu6_isys_internal_tpg_pdata {
