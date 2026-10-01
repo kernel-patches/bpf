@@ -1,10 +1,34 @@
 soc/arm
 
 soc/dt
+	renesas/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-dts-for-v7.4-tag1
+	rockchip/dt64
+		ssh://gitolite.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v7.4-rockchip-dts64-1
+	qcom/dt64
+		ssh://gitolite.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-arm64-for-7.4
+	mediatek/dt64
+		ssh://gitolite.kernel.org/pub/scm/linux/kernel/git/mediatek/linux tags/mtk-dts64-for-v7.4
+	mediatek/dt32
+		ssh://gitolite.kernel.org/pub/scm/linux/kernel/git/mediatek/linux tags/mtk-dts32-for-v7.4
+	arm-juno/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/sudeep.holla/linux tags/juno-updates-7.4
 
 soc/drivers
+	renesas/drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-drivers-for-v7.4-tag1
+	patch
+		platform: cznic: turris-omnia-mcu: Add missing MODULE_DEVICE_TABLE()
+	mediatek/drivers
+		ssh://gitolite.kernel.org/pub/scm/linux/kernel/git/mediatek/linux tags/mtk-soc-for-v7.4
+	scmi/drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/sudeep.holla/linux tags/scmi-updates-7.4
 
 soc/defconfig
+	renesas/defconfig
+		https://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-arm-defconfig-for-v7.4-tag1
+	qcom/defconfig
+		ssh://gitolite.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-arm64-defconfig-for-7.4
 
 soc/late
 
