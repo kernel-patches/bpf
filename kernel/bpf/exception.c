@@ -141,6 +141,72 @@ err_free:
 BTF_ID_LIST_SINGLE(bpf_unwind_id, func, bpf_unwind)
 BTF_ID_LIST_SINGLE(bpf_unwind_resume_id, func, bpf_unwind_resume)
 
+void bpf_exc_record_frame_entry(const struct bpf_verifier_state *state,
+				struct bpf_func_state *frame, u32 id_gen)
+{
+	u32 i;
+
+	frame->entry_active_locks = state->active_locks;
+	frame->entry_preempt_locks = state->active_preempt_locks;
+	frame->entry_rcu_locks = state->active_rcu_locks;
+	frame->entry_irq_id = state->active_irq_id;
+
+	/* Ids only ever go up, so this one tells the frame's own apart. */
+	frame->entry_id_gen = id_gen;
+	frame->entry_acquired_refs = 0;
+	for (i = 0; i < state->acquired_refs; i++)
+		if (state->refs[i].type == REF_TYPE_PTR)
+			frame->entry_acquired_refs++;
+}
+
+int bpf_exc_check_frame_balance(struct bpf_verifier_env *env, const char *prefix)
+{
+	const struct bpf_verifier_state *state = env->cur_state;
+	const struct bpf_func_state *frame = cur_func(env);
+	u32 i, held;
+	const char *what;
+
+	if (state->active_rcu_locks != frame->entry_rcu_locks)
+		what = "bpf_rcu_read_lock";
+	else if (state->active_preempt_locks != frame->entry_preempt_locks)
+		what = "bpf_preempt_disable";
+	else if (state->active_irq_id != frame->entry_irq_id)
+		what = "bpf_local_irq_save";
+	else if (state->active_locks != frame->entry_active_locks)
+		what = "bpf_spin_lock";
+	else
+		what = NULL;
+
+	if (what) {
+		verbose(env, "%s does not leave the frame's %s state as it found it\n",
+			prefix, what);
+		return -EINVAL;
+	}
+
+	/*
+	 * References the same way. ids only go up, so entry_id_gen splits
+	 * refs[] in two at frame entry: nothing above that line may still be
+	 * held, and the count below it has to be what it was.
+	 */
+	for (i = 0, held = 0; i < state->acquired_refs; i++) {
+		if (state->refs[i].type != REF_TYPE_PTR)
+			continue;
+		if (state->refs[i].id > frame->entry_id_gen) {
+			verbose(env, "%s keeps the reference id=%d the frame acquired\n",
+				prefix, state->refs[i].id);
+			return -EINVAL;
+		}
+		held++;
+	}
+	if (held != frame->entry_acquired_refs) {
+		verbose(env, "%s does not leave the frame's references as it found it\n",
+			prefix);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 static int reject_throw(struct bpf_verifier_env *env)
 {
 	u32 i;
@@ -172,6 +238,16 @@ static void mark_call_sites(struct bpf_verifier_env *env)
 			env->insn_aux_data[j].cleanup_pad = rec->landing_pad_off + 1;
 		}
 	}
+}
+
+bool bpf_prog_may_unwind(const struct bpf_verifier_env *env)
+{
+	u32 i;
+
+	for (i = 0; i < env->subprog_cnt; i++)
+		if (env->subprog_info[i].might_unwind)
+			return true;
+	return false;
 }
 
 int bpf_exc_check_prog(struct bpf_verifier_env *env)
