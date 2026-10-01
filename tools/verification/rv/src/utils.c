@@ -81,7 +81,10 @@ void mon_usage(int exit_val, char *monitor_name, const char *fmt, ...)
 	for (i = 0; usage[i]; i++)
 		fprintf(stderr, "%s\n", usage[i]);
 
-	ikm_usage_print_reactors();
+	if (config.is_bpf)
+		bpf_usage_print_reactors();
+	else
+		ikm_usage_print_reactors();
 	exit(exit_val);
 }
 
