@@ -141,6 +141,85 @@ err_free:
 BTF_ID_LIST_SINGLE(bpf_unwind_id, func, bpf_unwind)
 BTF_ID_LIST_SINGLE(bpf_unwind_resume_id, func, bpf_unwind_resume)
 
+static int reject_throw(struct bpf_verifier_env *env)
+{
+	u32 i;
+
+	for (i = 0; i < env->prog->len; i++) {
+		if (!bpf_is_throw_kfunc(&env->prog->insnsi[i]))
+			continue;
+		verbose(env,
+			"exception cleanup cannot be combined with bpf_throw at insn %u\n",
+			i);
+		return -EINVAL;
+	}
+	return 0;
+}
+
+static void mark_call_sites(struct bpf_verifier_env *env)
+{
+	u32 i, j;
+
+	for (i = 0; i < env->cleanup_info_cnt; i++) {
+		struct bpf_cleanup_info *rec = &env->cleanup_info[i];
+
+		for (j = rec->begin_off; j < rec->end_off; j++) {
+			struct bpf_insn *insn = &env->prog->insnsi[j];
+
+			if (!bpf_pseudo_call(insn) && !bpf_is_callx(insn) &&
+			    !bpf_is_unwind_kfunc(insn))
+				continue;
+			env->insn_aux_data[j].cleanup_pad = rec->landing_pad_off + 1;
+		}
+	}
+}
+
+int bpf_exc_check_prog(struct bpf_verifier_env *env)
+{
+	int err;
+
+	if (bpf_prog_is_offloaded(env->prog->aux)) {
+		verbose(env,
+			"exception cleanup is not supported for offloaded programs\n");
+		return -EINVAL;
+	}
+	if (!bpf_jit_supports_cleanup_pads() || !env->prog->jit_requested) {
+		verbose(env,
+			"exception cleanup needs a JIT that can dispatch landing pads\n");
+		return -EOPNOTSUPP;
+	}
+	if (env->ops->gen_epilogue) {
+		verbose(env,
+			"exception cleanup is not supported for a program with an epilogue\n");
+		return -EOPNOTSUPP;
+	}
+	if (env->exception_callback_subprog) {
+		verbose(env,
+			"exception cleanup cannot be combined with an exception callback\n");
+		return -EINVAL;
+	}
+	err = reject_throw(env);
+	if (err)
+		return err;
+	env->prog->jit_required = 1;
+	return 0;
+}
+
+int bpf_exc_prepare(struct bpf_verifier_env *env)
+{
+	int err;
+
+	if (!env->cleanup_info_cnt)
+		return 0;
+
+	err = bpf_exc_check_prog(env);
+	if (err)
+		return err;
+
+	mark_call_sites(env);
+	return 0;
+}
+
 bool bpf_is_unwind_kfunc(const struct bpf_insn *insn)
 {
 	return bpf_pseudo_kfunc_call(insn) && insn->off == 0 &&
