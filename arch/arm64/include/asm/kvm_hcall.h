@@ -22,6 +22,10 @@
 
 typedef u16 pkvm_handle_t;
 
+enum pkvm_topup_id {
+	PKVM_TOPUP_HYP_ALLOC,
+};
+
 struct kvm;
 struct kvm_s2_mmu;
 struct kvm_vcpu;
@@ -193,6 +197,8 @@ DECLARE_KVM_HOST_HCALL(void, __vgic_v5_save_apr,
 	struct vgic_v5_cpu_if __kern *, cpu_if)
 DECLARE_KVM_HOST_HCALL(void, __vgic_v5_restore_vmcr_apr,
 	struct vgic_v5_cpu_if __kern *, cpu_if)
+DECLARE_KVM_HOST_HCALL(int, __pkvm_hyp_topup,
+	enum pkvm_topup_id, id, phys_addr_t, head, unsigned long, nr_pages)
 
 /* Hypercalls that are available only when pKVM has finalised. */
 DECLARE_KVM_HOST_HCALL(int, __pkvm_host_share_hyp,
