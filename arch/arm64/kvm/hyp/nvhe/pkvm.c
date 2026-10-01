@@ -774,7 +774,7 @@ struct pkvm_hyp_vcpu *init_selftest_vm(void *virt)
 			continue;
 		p[i].refcount = 1;
 		if (seeded < min_pages) {
-			push_hyp_memcache(&selftest_vcpu.vcpu.arch.pkvm_memcache,
+			push_hyp_memcache(&selftest_vcpu.vcpu.arch.stage2_mc,
 					  hyp_page_to_virt(&p[i]), hyp_virt_to_phys);
 			seeded++;
 		} else {
@@ -1009,7 +1009,7 @@ int __pkvm_finalize_teardown_vm(pkvm_handle_t handle)
 	reclaim_pgtable_pages(hyp_vm, stage2_mc);
 	unpin_host_vcpus(hyp_vm->vcpus, hyp_vm->kvm.created_vcpus);
 
-	/* Push the metadata pages to the teardown memcache */
+	/* Push the stage-2 pages to the teardown memcache */
 	for (idx = 0; idx < hyp_vm->kvm.created_vcpus; ++idx) {
 		struct pkvm_hyp_vcpu *hyp_vcpu = hyp_vm->vcpus[idx];
 		struct kvm_hyp_memcache *vcpu_mc;
@@ -1017,7 +1017,7 @@ int __pkvm_finalize_teardown_vm(pkvm_handle_t handle)
 		if (!hyp_vcpu)
 			continue;
 
-		vcpu_mc = &hyp_vcpu->vcpu.arch.pkvm_memcache;
+		vcpu_mc = &hyp_vcpu->vcpu.arch.stage2_mc;
 
 		while (vcpu_mc->nr_pages) {
 			void *addr = pop_hyp_memcache(vcpu_mc, hyp_phys_to_virt);

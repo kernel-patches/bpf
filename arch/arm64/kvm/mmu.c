@@ -1553,7 +1553,7 @@ static void *get_mmu_memcache(struct kvm_vcpu *vcpu)
 	if (!is_protected_kvm_enabled())
 		return &vcpu->arch.mmu_page_cache;
 	else
-		return &vcpu->arch.pkvm_memcache;
+		return &vcpu->arch.stage2_mc;
 }
 
 static int topup_mmu_memcache(struct kvm_vcpu *vcpu, void *memcache)

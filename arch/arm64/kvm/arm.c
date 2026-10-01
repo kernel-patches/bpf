@@ -591,7 +591,7 @@ void kvm_arch_vcpu_destroy(struct kvm_vcpu *vcpu)
 	if (!is_protected_kvm_enabled())
 		kvm_mmu_free_memory_cache(&vcpu->arch.mmu_page_cache);
 	else
-		free_hyp_memcache(&vcpu->arch.pkvm_memcache);
+		free_hyp_memcache(&vcpu->arch.stage2_mc);
 	kvm_timer_vcpu_terminate(vcpu);
 	kvm_pmu_vcpu_destroy(vcpu);
 	kvm_vgic_vcpu_destroy(vcpu);

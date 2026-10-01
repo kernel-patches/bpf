@@ -182,7 +182,7 @@ static int __pkvm_create_hyp_vcpu(struct kvm_vcpu *vcpu)
 	pkvm_handle_t handle = vcpu->kvm->arch.pkvm.handle;
 	int ret;
 
-	init_hyp_stage2_memcache(&vcpu->arch.pkvm_memcache);
+	init_hyp_stage2_memcache(&vcpu->arch.stage2_mc);
 
 	ret = pkvm_call_hyp_req(__pkvm_init_vcpu, handle, vcpu);
 	if (!ret)
