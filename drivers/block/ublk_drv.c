@@ -4901,10 +4901,15 @@ static int ublk_ctrl_del_dev(struct ublk_device **p_ub, bool wait)
 		set_bit(UB_STATE_DELETED, &ub->state);
 	}
 
-	/* Mark the reference as consumed */
+	mutex_unlock(&ublk_ctl_mutex);
+
+	/*
+	 * Drop the reference outside ublk_ctl_mutex: if it is the last one,
+	 * the release frees the tag set, which waits for an SRCU grace period,
+	 * and holding the mutex would serialize concurrent deletions on it.
+	 */
 	*p_ub = NULL;
 	ublk_put_device(ub);
-	mutex_unlock(&ublk_ctl_mutex);
 
 	/*
 	 * Wait until the idr is removed, then it can be reused after
