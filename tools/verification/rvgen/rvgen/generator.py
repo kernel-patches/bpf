@@ -11,18 +11,22 @@ from pathlib import Path
 
 class RVGenerator:
     rv_dir = "kernel/trace/rv"
+    rv_tool_dir = "../../../tools/verification/rv/bpf_monitors/"
 
     def __init__(self, extra_params={}):
         self.name = extra_params.get("model_name")
         self.parent = extra_params.get("parent")
+        self.bpf = extra_params.get("bpf")
         self.abs_template_dir = \
             Path(__file__).resolve().parent / "templates" / self.template_dir
-        self.main_c = self._read_template_file("main.c")
+        self.main_c = self._read_template_file("main.c" if not self.bpf
+                                               else "main_bpf.c")
         self.kconfig = self._read_template_file("Kconfig")
         self.description = extra_params.get("description", self.name) or "auto-generated"
         self.auto_patch = extra_params.get("auto_patch")
         if self.auto_patch:
             self._fill_rv_kernel_dir()
+            self.rv_tool_dir = (Path(self.rv_dir) / self.rv_tool_dir).resolve()
 
     def _fill_rv_kernel_dir(self):
         # find the kernel tree root relative to this file's location
@@ -191,6 +195,9 @@ obj-$(CONFIG_RV_MON_{name_up}) += monitors/{name}/{name}.o
     def __create_directory(self):
         path = Path(self.name)
         if self.auto_patch:
+            if self.bpf:
+                # no directory for BPF monitors
+                return
             path = Path(self.rv_dir) / "monitors" / path
         path.mkdir(exist_ok=True)
 
@@ -202,6 +209,8 @@ obj-$(CONFIG_RV_MON_{name_up}) += monitors/{name}/{name}.o
         path = Path(self.name) / file_name
         if self.auto_patch:
             path = Path(self.rv_dir) / "monitors" / self.name / file_name
+            if self.bpf:
+                path = Path(self.rv_tool_dir) / file_name
         self.__write_file(path, content)
 
     def print_files(self):
@@ -216,8 +225,9 @@ obj-$(CONFIG_RV_MON_{name_up}) += monitors/{name}/{name}.o
         path = f"{self.name}.h"
         self._create_file(path, model_h)
 
-        kconfig = self.fill_kconfig()
-        self._create_file("Kconfig", kconfig)
+        if not self.bpf:
+            kconfig = self.fill_kconfig()
+            self._create_file("Kconfig", kconfig)
 
 
 class Monitor(RVGenerator):
@@ -225,7 +235,8 @@ class Monitor(RVGenerator):
 
     def __init__(self, extra_params={}):
         super().__init__(extra_params)
-        self.trace_h = self._read_template_file("trace.h")
+        if not self.bpf:
+            self.trace_h = self._read_template_file("trace.h")
 
     def fill_trace_h(self):
         trace_h = self.trace_h
@@ -245,6 +256,7 @@ class Monitor(RVGenerator):
 
     def print_files(self):
         super().print_files()
-        trace_h = self.fill_trace_h()
-        path = f"{self.name}_trace.h"
-        self._create_file(path, trace_h)
+        if not self.bpf:
+            trace_h = self.fill_trace_h()
+            path = f"{self.name}_trace.h"
+            self._create_file(path, trace_h)
