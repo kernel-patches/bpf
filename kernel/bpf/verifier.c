@@ -10955,6 +10955,10 @@ static int push_callback_call(struct bpf_verifier_env *env, struct bpf_insn *ins
 	 * callbacks
 	 */
 	env->subprog_info[subprog].is_cb = true;
+	err = bpf_exc_check_callback(env, subprog);
+	if (err)
+		return err;
+
 	if (bpf_pseudo_kfunc_call(insn) &&
 	    !is_callback_calling_kfunc(insn->imm)) {
 		verifier_bug(env, "kfunc %s#%d not marked as callback-calling",
@@ -19181,6 +19185,10 @@ static int unwind_frames(struct bpf_verifier_env *env, bool *do_print_state)
 	while (state->curframe) {
 		callee = cur_func(env);
 		caller = state->frame[state->curframe - 1];
+		/* A subprog that can unwind is refused as a callback. */
+		if (verifier_bug_if(callee->in_callback_fn, env,
+				    "unwind out of callback frame %d", state->curframe))
+			return -EFAULT;
 		pad = bpf_exc_pad_of_call(env, callee->callsite);
 		/* The caller is at its call now, not at this frame's insn. */
 		state->insn_idx = callee->callsite;
@@ -19200,6 +19208,7 @@ static int unwind_frames(struct bpf_verifier_env *env, bool *do_print_state)
 			return err;
 		clear_caller_saved_regs(env, caller->regs);
 		mark_reg_unknown(env, caller->regs, BPF_REG_0);
+		caller->in_pad = true;
 		env->insn_idx = pad;
 		*do_print_state = true;
 		return INSN_IDX_UPDATED;
@@ -19258,6 +19267,7 @@ static int unwind_out_of_global_call(struct bpf_verifier_env *env, int call_idx,
 	frame = cur_func(env);
 	clear_caller_saved_regs(env, frame->regs);
 	mark_reg_unknown(env, frame->regs, BPF_REG_0);
+	frame->in_pad = true;
 	env->insn_idx = pad;
 	*do_print_state = true;
 	return INSN_IDX_UPDATED;
@@ -19310,6 +19320,7 @@ static int process_bpf_unwind(struct bpf_verifier_env *env, int *insn_idx,
 	}
 	clear_caller_saved_regs(env, frame->regs);
 	mark_reg_unknown(env, frame->regs, BPF_REG_0);
+	frame->in_pad = true;
 	*insn_idx = pad;
 	return INSN_IDX_UPDATED;
 }
@@ -19575,6 +19586,11 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 				if (bpf_is_unwind_kfunc(insn))
 					return process_bpf_unwind(env, &env->insn_idx,
 								  do_print_state);
+				if (!cur_func(env)->in_pad) {
+					verbose(env, "resume at insn %d is not in a landing pad\n",
+						env->insn_idx);
+					return -EINVAL;
+				}
 				err = bpf_exc_check_frame_balance(env, "a resume");
 				if (err)
 					return err;
@@ -19697,6 +19713,18 @@ static int do_check(struct bpf_verifier_env *env)
 				else if (env->insn_idx == fallthrough_idx)
 					bpf_diag_record_branch(env, prev_insn_idx, false);
 			}
+		}
+
+		if (unlikely(env->cleanup_info_cnt)) {
+			err = bpf_exc_check_insn(env, insn);
+			/* An exit in a pad is refused as unsupported, not invalid. */
+			if ((error_recoverable_with_nospec(err) || err == -EOPNOTSUPP) &&
+			    state->speculative) {
+				insn_aux->nospec = true;
+				goto process_bpf_exit;
+			}
+			if (err)
+				return err;
 		}
 
 		if (bpf_is_prune_point(env, env->insn_idx)) {

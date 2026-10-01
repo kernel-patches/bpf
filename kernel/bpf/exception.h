@@ -23,5 +23,7 @@ int bpf_exc_check_frame_balance(struct bpf_verifier_env *env, const char *prefix
 int bpf_exc_pad_of_call(struct bpf_verifier_env *env, u32 idx);
 bool bpf_is_unwind_kfunc(const struct bpf_insn *insn);
 bool bpf_is_unwind_resume_kfunc(const struct bpf_insn *insn);
+int bpf_exc_check_callback(struct bpf_verifier_env *env, int subprog);
+int bpf_exc_check_insn(struct bpf_verifier_env *env, struct bpf_insn *insn);
 
 #endif /* __BPF_EXCEPTION_H */
