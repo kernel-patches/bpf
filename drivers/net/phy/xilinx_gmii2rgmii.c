@@ -128,8 +128,27 @@ static int xgmiitorgmii_probe(struct mdio_device *mdiodev)
 	priv->conv_phy_drv.read_status = xgmiitorgmii_read_status;
 	priv->conv_phy_drv.set_loopback = xgmiitorgmii_set_loopback;
 	priv->phy_dev->drv = &priv->conv_phy_drv;
+	mdiodev_set_drvdata(mdiodev, priv);
 
 	return 0;
+}
+
+static void xgmiitorgmii_remove(struct mdio_device *mdiodev)
+{
+	struct gmii2rgmii *priv = mdiodev_get_drvdata(mdiodev);
+
+	/*
+	 * The attached PHY is a separate, still-bound device whose state
+	 * machine keeps running and dispatches ->read_status / ->set_loopback
+	 * under phydev->lock. Restore its original driver under that lock so
+	 * the swap cannot race an in-flight dispatch; the restored driver is
+	 * the PHY's own static phy_driver, not the devres-freed conv_phy_drv.
+	 */
+	mutex_lock(&priv->phy_dev->lock);
+	priv->phy_dev->drv = priv->phy_drv;
+	mutex_unlock(&priv->phy_dev->lock);
+
+	put_device(&priv->phy_dev->mdio.dev);
 }
 
 static const struct of_device_id xgmiitorgmii_of_match[] = {
@@ -140,6 +159,7 @@ MODULE_DEVICE_TABLE(of, xgmiitorgmii_of_match);
 
 static struct mdio_driver xgmiitorgmii_driver = {
 	.probe	= xgmiitorgmii_probe,
+	.remove	= xgmiitorgmii_remove,
 	.mdiodrv.driver = {
 		.name = "xgmiitorgmii",
 		.of_match_table = xgmiitorgmii_of_match,
