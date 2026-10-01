@@ -24,6 +24,7 @@ typedef u16 pkvm_handle_t;
 
 enum pkvm_topup_id {
 	PKVM_TOPUP_HYP_ALLOC,
+	PKVM_TOPUP_HYP_ALLOC_SELFTEST,
 };
 
 struct kvm;
@@ -153,6 +154,7 @@ DECLARE_KVM_HOST_HCALL(int, __pkvm_cpu_set_vector,
 DECLARE_KVM_HOST_HCALL0(void, __kvm_enable_ssbs)
 DECLARE_KVM_HOST_HCALL0(void, __vgic_v3_init_lrs)
 DECLARE_KVM_HOST_HCALL0(u64, __vgic_v3_get_gic_config)
+DECLARE_KVM_HOST_HCALL0(int, __pkvm_hyp_alloc_selftest)
 
 DECLARE_KVM_HOST_HCALL0(int, __pkvm_prot_finalize)
 

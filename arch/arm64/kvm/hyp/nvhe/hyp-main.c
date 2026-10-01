@@ -800,6 +800,23 @@ DEFINE_KVM_HOST_HCALL(int, __pkvm_finalize_teardown_vm,
 	return __pkvm_finalize_teardown_vm(handle);
 }
 
+DEFINE_KVM_HOST_HCALL0(int, __pkvm_hyp_alloc_selftest)
+{
+	struct pkvm_hyp_req req = { .type = PKVM_HYP_NO_REQ };
+	int ret = -EPERM;
+
+#ifdef CONFIG_NVHE_EL2_DEBUG
+	ret = hyp_allocator_selftest();
+	if (ret == -ENOMEM) {
+		req.type = PKVM_HYP_REQ_HYP_ALLOC_SELFTEST;
+		req.mem.nr_pages = hyp_alloc_selftest_topup_needed();
+	}
+#endif
+	pkvm_hyp_req_to_smccc(host_data_ptr(host_ctxt), &req);
+
+	return ret;
+}
+
 DEFINE_KVM_HOST_HCALL(int, __pkvm_hyp_topup,
 	enum pkvm_topup_id, id, phys_addr_t, head, unsigned long, nr_pages)
 {
@@ -813,6 +830,9 @@ DEFINE_KVM_HOST_HCALL(int, __pkvm_hyp_topup,
 	switch (id) {
 	case PKVM_TOPUP_HYP_ALLOC:
 		ret = hyp_alloc_topup(&host_mc);
+		break;
+	case PKVM_TOPUP_HYP_ALLOC_SELFTEST:
+		ret = hyp_alloc_selftest_topup(&host_mc);
 		break;
 	default:
 		ret = -EINVAL;
@@ -834,6 +854,9 @@ DEFINE_KVM_HOST_HCALL(int, __pkvm_hyp_reclaim,
 	switch (id) {
 	case PKVM_TOPUP_HYP_ALLOC:
 		hyp_alloc_reclaim(&host_mc, target);
+		break;
+	case PKVM_TOPUP_HYP_ALLOC_SELFTEST:
+		hyp_alloc_selftest_reclaim(&host_mc, target);
 		break;
 	default:
 		ret = -EINVAL;
@@ -927,6 +950,7 @@ static const hcall_t host_hcall[] = {
 	HANDLE_FUNC(__kvm_enable_ssbs),
 	HANDLE_FUNC(__vgic_v3_init_lrs),
 	HANDLE_FUNC(__vgic_v3_get_gic_config),
+	HANDLE_FUNC(__pkvm_hyp_alloc_selftest),
 	HANDLE_FUNC(__pkvm_prot_finalize),
 
 	HANDLE_FUNC(__kvm_adjust_pc),
