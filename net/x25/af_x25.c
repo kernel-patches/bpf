@@ -201,6 +201,32 @@ static void x25_remove_socket(struct sock *sk)
 }
 
 /*
+ * Process context only: wait for owners that x25_kill_by_neigh() deferred,
+ * so no socket still uses nb once the device goes away.
+ */
+static void x25_kill_by_neigh_sync(struct x25_neigh *nb)
+{
+	struct sock *s;
+
+again:
+	write_lock_bh(&x25_list_lock);
+
+	sk_for_each(s, &x25_list) {
+		if (x25_sk(s)->neighbour == nb) {
+			sock_hold(s);
+			write_unlock_bh(&x25_list_lock);
+			lock_sock(s);
+			if (x25_sk(s)->neighbour == nb)
+				x25_disconnect(s, ENETUNREACH, 0, 0);
+			release_sock(s);
+			sock_put(s);
+			goto again;
+		}
+	}
+	write_unlock_bh(&x25_list_lock);
+}
+
+/*
  *	Handle device status changes.
  */
 static int x25_device_event(struct notifier_block *this, unsigned long event,
@@ -222,6 +248,7 @@ static int x25_device_event(struct notifier_block *this, unsigned long event,
 			nb = x25_get_neigh(dev);
 			if (nb) {
 				x25_link_terminated(nb);
+				x25_kill_by_neigh_sync(nb);
 				x25_neigh_put(nb);
 			}
 			x25_route_device_down(dev);
@@ -492,10 +519,20 @@ static int x25_listen(struct socket *sock, int backlog)
 	return rc;
 }
 
+/* Finish a link teardown that hit while the socket was owned by user. */
+static void x25_release_cb(struct sock *sk)
+{
+	struct x25_sock *x25 = x25_sk(sk);
+
+	if (test_and_clear_bit(X25_KILL_FLAG, &x25->flags) && x25->neighbour)
+		x25_disconnect(sk, ENETUNREACH, 0, 0);
+}
+
 static struct proto x25_proto = {
 	.name	  = "X25",
 	.owner	  = THIS_MODULE,
 	.obj_size = sizeof(struct x25_sock),
+	.release_cb = x25_release_cb,
 };
 
 static struct sock *x25_alloc_socket(struct net *net, int kern)
@@ -1761,6 +1798,23 @@ static struct notifier_block x25_dev_notifier = {
 	.notifier_call = x25_device_event,
 };
 
+/* May run in softirq, so lock_sock() is not an option. */
+static void x25_kill_sock(struct sock *sk, struct x25_neigh *nb)
+{
+	struct x25_sock *x25 = x25_sk(sk);
+
+	local_bh_disable();
+	bh_lock_sock(sk);
+	if (x25->neighbour == nb) {
+		if (sock_owned_by_user(sk))
+			set_bit(X25_KILL_FLAG, &x25->flags);
+		else
+			x25_disconnect(sk, ENETUNREACH, 0, 0);
+	}
+	bh_unlock_sock(sk);
+	local_bh_enable();
+}
+
 void x25_kill_by_neigh(struct x25_neigh *nb)
 {
 	struct sock *s;
@@ -1769,13 +1823,11 @@ again:
 	write_lock_bh(&x25_list_lock);
 
 	sk_for_each(s, &x25_list) {
-		if (x25_sk(s)->neighbour == nb) {
+		if (x25_sk(s)->neighbour == nb &&
+		    !test_bit(X25_KILL_FLAG, &x25_sk(s)->flags)) {
 			sock_hold(s);
 			write_unlock_bh(&x25_list_lock);
-			lock_sock(s);
-			if (x25_sk(s)->neighbour == nb)
-				x25_disconnect(s, ENETUNREACH, 0, 0);
-			release_sock(s);
+			x25_kill_sock(s, nb);
 			sock_put(s);
 			goto again;
 		}
