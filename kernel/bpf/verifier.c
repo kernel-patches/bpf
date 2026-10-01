@@ -10821,32 +10821,25 @@ typedef int (*set_callee_state_fn)(struct bpf_verifier_env *env,
 				   struct bpf_func_state *callee,
 				   int insn_idx);
 
-static int set_callee_state(struct bpf_verifier_env *env,
-			    struct bpf_func_state *caller,
-			    struct bpf_func_state *callee, int insn_idx);
-
-static int setup_func_entry(struct bpf_verifier_env *env, int subprog, int callsite,
-			    set_callee_state_fn set_callee_state_cb,
-			    struct bpf_verifier_state *state)
+static struct bpf_func_state *setup_func_entry(struct bpf_verifier_env *env, int subprog,
+					       int callsite, struct bpf_verifier_state *state)
 {
-	struct bpf_func_state *caller, *callee;
-	int err;
+	struct bpf_func_state *callee;
 
 	if (state->curframe + 1 >= MAX_CALL_FRAMES) {
 		verbose(env, "the call stack of %d frames is too deep\n",
 			state->curframe + 2);
-		return -E2BIG;
+		return ERR_PTR(-E2BIG);
 	}
 
 	if (state->frame[state->curframe + 1]) {
 		verifier_bug(env, "Frame %d already allocated", state->curframe + 1);
-		return -EFAULT;
+		return ERR_PTR(-EFAULT);
 	}
 
-	caller = state->frame[state->curframe];
 	callee = kzalloc_obj(*callee, GFP_KERNEL_ACCOUNT);
 	if (!callee)
-		return -ENOMEM;
+		return ERR_PTR(-ENOMEM);
 	state->frame[state->curframe + 1] = callee;
 
 	/* callee cannot access r0, r6 - r9 for reading and has to write
@@ -10858,19 +10851,9 @@ static int setup_func_entry(struct bpf_verifier_env *env, int subprog, int calls
 			callsite,
 			state->curframe + 1 /* frameno within this callchain */,
 			subprog /* subprog number within this prog */);
-	err = set_callee_state_cb(env, caller, callee, callsite);
-	if (err)
-		goto err_out;
-
-	/* only increment it after check_reg_arg() finished */
 	state->curframe++;
 
-	return 0;
-
-err_out:
-	free_func_state(callee);
-	state->frame[state->curframe + 1] = NULL;
-	return err;
+	return callee;
 }
 
 static void gen_subprog_arg_proto(const struct bpf_subprog_info *sub, const struct btf *btf,
@@ -10990,10 +10973,6 @@ static int push_callback_call(struct bpf_verifier_env *env, struct bpf_insn *ins
 	if (err == -EFAULT)
 		return err;
 
-	/* set_callee_state is used for direct subprog calls, but we are
-	 * interested in validating only BPF helpers that can call subprogs as
-	 * callbacks
-	 */
 	env->subprog_info[subprog].is_cb = true;
 	if (bpf_pseudo_kfunc_call(insn) &&
 	    !is_callback_calling_kfunc(insn->imm)) {
@@ -11044,8 +11023,11 @@ static int push_callback_call(struct bpf_verifier_env *env, struct bpf_insn *ins
 	if (IS_ERR(callback_state))
 		return PTR_ERR(callback_state);
 
-	err = setup_func_entry(env, subprog, insn_idx, set_callee_state_cb,
-			       callback_state);
+	callee = setup_func_entry(env, subprog, insn_idx, callback_state);
+	if (IS_ERR(callee))
+		return PTR_ERR(callee);
+
+	err = set_callee_state_cb(env, caller, callee, insn_idx);
 	if (err)
 		return err;
 
@@ -11069,8 +11051,8 @@ static int check_static_func_call(struct bpf_verifier_env *env, int subprog,
 	struct bpf_verifier_state *state = env->cur_state;
 	struct bpf_subprog_info *caller_info;
 	u16 callee_incoming, stack_arg_cnt;
-	struct bpf_func_state *caller;
-	int err;
+	struct bpf_func_state *caller, *callee;
+	int i;
 
 	caller = state->frame[state->curframe];
 
@@ -11088,9 +11070,12 @@ static int check_static_func_call(struct bpf_verifier_env *env, int subprog,
 	 * For regular function entry setup new frame and continue
 	 * from that frame.
 	 */
-	err = setup_func_entry(env, subprog, *insn_idx, set_callee_state, state);
-	if (err)
-		return err;
+	callee = setup_func_entry(env, subprog, *insn_idx, state);
+	if (IS_ERR(callee))
+		return PTR_ERR(callee);
+
+	for (i = BPF_REG_1; i <= BPF_REG_5; i++)
+		callee->regs[i] = caller->regs[i];
 
 	bpf_diag_record_scrub(env, &caller->regs[BPF_REG_0], BPF_DIAG_MOD_CALLER_SAVED);
 	clear_caller_saved_regs(env, caller->regs);
@@ -11298,20 +11283,6 @@ int map_set_for_each_callback_args(struct bpf_verifier_env *env,
 
 	/* unused */
 	bpf_mark_reg_not_init(env, &callee->regs[BPF_REG_5]);
-	return 0;
-}
-
-static int set_callee_state(struct bpf_verifier_env *env,
-			    struct bpf_func_state *caller,
-			    struct bpf_func_state *callee, int insn_idx)
-{
-	int i;
-
-	/* copy r1 - r5 args that callee can access.  The copy includes parent
-	 * pointers, which connects us up to the liveness chain
-	 */
-	for (i = BPF_REG_1; i <= BPF_REG_5; i++)
-		callee->regs[i] = caller->regs[i];
 	return 0;
 }
 
