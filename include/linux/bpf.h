@@ -3187,10 +3187,15 @@ struct btf *bpf_peek_btf_vmlinux(void);
 struct btf *bpf_load_btf_vmlinux(void);
 #if IS_MODULE(CONFIG_DEBUG_INFO_BTF)
 unsigned int bpf_btf_vmlinux_misses(void);
+void bpf_btf_vmlinux_miss(void);
 #else
 static inline unsigned int bpf_btf_vmlinux_misses(void)
 {
 	return 0;
+}
+
+static inline void bpf_btf_vmlinux_miss(void)
+{
 }
 #endif
 

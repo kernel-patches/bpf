@@ -21935,18 +21935,22 @@ struct btf *bpf_peek_btf_vmlinux(void)
  * bpf_load_btf_vmlinux - get the vmlinux BTF, loading it if necessary
  *
  * Like bpf_get_btf_vmlinux(), but with CONFIG_DEBUG_INFO_BTF=m it loads the
- * btf_vmlinux module if the BTF is not there yet and parses it.  Loading the
- * module waits for user space (modprobe), and the notifiers of the module
- * load take locks of their own, event_mutex among them.  So this is only
- * called at the start of a request from user space, in process context,
- * holding no lock that loading a module may need; everything else uses
- * bpf_get_btf_vmlinux() or bpf_peek_btf_vmlinux().
+ * btf_vmlinux module if the BTF is not there yet, parses it, and registers
+ * the BTF of the modules that were loaded before it; it returns once all of
+ * that is done, also to a caller that comes while another one is doing it.
+ * Loading the module waits for user space (modprobe), and the notifiers of
+ * the module load take locks of their own, event_mutex among them.  So this
+ * is only called at the start of a request from user space, in process
+ * context, holding no lock that loading a module may need; everything else
+ * uses bpf_get_btf_vmlinux() or bpf_peek_btf_vmlinux().
  *
  * If the module cannot be loaded, returns NULL like a kernel without BTF;
  * the next call tries again.
  */
 struct btf *bpf_load_btf_vmlinux(void)
 {
+	/* Held from loading until the module BTF kept aside is registered */
+	static DEFINE_MUTEX(load_mutex);
 	struct btf *btf;
 	u32 size;
 
@@ -21956,13 +21960,14 @@ struct btf *bpf_load_btf_vmlinux(void)
 
 	/* Pairs with the smp_store_release() below */
 	btf = smp_load_acquire(&btf_vmlinux);
-	if (btf)
+	if (btf && !btf_deferred_modules_pending())
 		return btf;
 
-	/* Outside btf_vmlinux_lock, the module's notifier must not wait for us */
-	if (!btf_vmlinux_data(&size, true))
+	/* Outside the locks, the module's notifier must not wait for us */
+	if (!btf && !btf_vmlinux_data(&size, true))
 		return NULL;
 
+	mutex_lock(&load_mutex);
 	mutex_lock(&btf_vmlinux_lock);
 	btf = btf_vmlinux;
 	if (!btf) {
@@ -21974,12 +21979,22 @@ struct btf *bpf_load_btf_vmlinux(void)
 		 */
 		if (IS_ERR(btf) && PTR_ERR(btf) == -ENOMEM) {
 			mutex_unlock(&btf_vmlinux_lock);
+			mutex_unlock(&load_mutex);
 			return btf;
 		}
 		/* As in bpf_get_btf_vmlinux(): publish after the parse */
 		smp_store_release(&btf_vmlinux, btf);
 	}
 	mutex_unlock(&btf_vmlinux_lock);
+
+	/*
+	 * Until this is done, the module BTFs may lack a module, which
+	 * btf_deferred_modules_pending() tells the searches of module BTFs,
+	 * and which is why concurrent callers wait for it on the mutex.
+	 */
+	btf_parse_deferred_modules();
+	mutex_unlock(&load_mutex);
+
 	return btf;
 }
 
@@ -21993,6 +22008,12 @@ struct btf *bpf_load_btf_vmlinux(void)
 unsigned int bpf_btf_vmlinux_misses(void)
 {
 	return atomic_read(&btf_vmlinux_misses);
+}
+
+/* A lookup that needs the BTF of a module that is not registered yet */
+void bpf_btf_vmlinux_miss(void)
+{
+	atomic_inc(&btf_vmlinux_misses);
 }
 #endif
 
