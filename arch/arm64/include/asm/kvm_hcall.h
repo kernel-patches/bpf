@@ -24,6 +24,7 @@ typedef u16 pkvm_handle_t;
 
 enum pkvm_topup_id {
 	PKVM_TOPUP_HYP_ALLOC,
+	NR_PKVM_TOPUP_HYP_IDS,
 	PKVM_TOPUP_HYP_ALLOC_SELFTEST,
 };
 
