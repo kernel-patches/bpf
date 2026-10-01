@@ -425,7 +425,9 @@ $(OUTPUT)%.mypy_log: %
 	$(call rule_mkdir)
 	$(Q)$(call echo-cmd,test)$(MYPY) "$<" > $@ || (cat $@ && rm $@ && false)
 
-perf-util-y += $(MYPY_TEST_LOGS)
+.PHONY: mypy
+mypy: $(addprefix $(OUTPUT)util/,$(MYPY_TEST_LOGS))
+	@:
 
 ifdef PYLINT
   PYLINT_TEST_LOGS := $(PY_TESTS:%=%.pylint_log)
@@ -437,7 +439,9 @@ $(OUTPUT)%.pylint_log: %
 	$(call rule_mkdir)
 	$(Q)$(call echo-cmd,test)$(PYLINT) "$<" > $@ || (cat $@ && rm $@ && false)
 
-perf-util-y += $(PYLINT_TEST_LOGS)
+.PHONY: pylint
+pylint: $(addprefix $(OUTPUT)util/,$(PYLINT_TEST_LOGS))
+	@:
 
 ifeq ($(CONFIG_PERF_BPF_SKEL),y)
 include $(srctree)/tools/perf/bpf_skel.mak

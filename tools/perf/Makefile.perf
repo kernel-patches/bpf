@@ -283,8 +283,12 @@ ifneq ($(force_fixdep),1)
 endif
 
 # Runs pylint on perf python files.
-# Require pylint >= 2.16.0 (which introduced W0718 broad-exception-caught and
-# astroid .pyi stub support for perf.pyi).
+# Require pylint >= 2.16.0 (which introduced W0718 broad-exception-caught).
+# Note: astroid's ImportlibFinder only resolves .pyi stubs for package
+# directories (__init__.pyi), not single-file stubs like perf.pyi, and does not
+# introspect C extensions by default. Pass 'perf' in --ignored-modules (leaving
+# perf module type-checking to mypy via perf.pyi) so pylint does not depend on
+# building the perf Python C extension first.
 # Disabled warnings:
 #   W0123 (eval-used): Use of eval()
 #   W0311 (bad-indentation): Non-4-space indentation
@@ -310,9 +314,9 @@ ifneq ($(force_fixdep),1)
       $(warning Warning: pylint version is older than 2.16.0, skipping pylint checks.)
       override PYLINT :=
     else
-      override PYLINT := PYTHONPATH=$(abspath $(OUTPUT)python):$(srctree)/tools/perf/python:$(srctree)/tools/perf/pmu-events \
+      override PYLINT := PYTHONPATH=$(srctree)/tools/perf/python:$(srctree)/tools/perf/pmu-events \
         $(PYLINT) --disable=all --enable=E,W --disable=W0123,W0311,W0511,W0603,W0622,W0718 \
-        --ignored-modules=textual,setproctitle
+        --ignored-modules=perf,textual,setproctitle
     endif
   endif
 endif
@@ -634,18 +638,52 @@ $(SCRIPTS) : $(OUTPUT)% : %.sh
 $(OUTPUT)PERF-VERSION-FILE: .FORCE-PERF-VERSION-FILE
 	$(Q)$(SHELL_PATH) util/PERF-VERSION-GEN $(OUTPUT)
 
-ifdef PYLINT
-# Run Python checks after the extension is ready, independently of C builds.
-all: pylint-perf pylint-tests
-.PHONY: pylint-perf pylint-tests
+ifdef SHELLCHECK
+# Run shellcheck independently of C builds.
+all: shellcheck-perf shellcheck-tests
+.PHONY: shellcheck-perf shellcheck-tests
 
-pylint-perf pylint-tests: | $(LANG_BINDINGS)
+shellcheck-perf:
+	$(Q)$(MAKE) $(build)=perf shellcheck
+
+shellcheck-tests:
+	$(Q)$(MAKE) $(build)=perf-test dir=tests shellcheck
+endif
+
+ifdef MYPY
+# Run mypy independently of C builds.
+all: mypy-perf mypy-tests mypy-util mypy-pmu-events
+.PHONY: mypy-perf mypy-tests mypy-util mypy-pmu-events
+
+mypy-perf:
+	$(Q)$(MAKE) $(build)=perf mypy
+
+mypy-tests:
+	$(Q)$(MAKE) $(build)=perf-test dir=tests mypy
+
+mypy-util:
+	$(Q)$(MAKE) $(build)=perf-util dir=util mypy
+
+mypy-pmu-events:
+	$(Q)$(MAKE) $(build)=pmu-events dir=pmu-events mypy
+endif
+
+ifdef PYLINT
+# Run pylint independently of C builds.
+all: pylint-perf pylint-tests pylint-util pylint-pmu-events
+.PHONY: pylint-perf pylint-tests pylint-util pylint-pmu-events
 
 pylint-perf:
 	$(Q)$(MAKE) $(build)=perf pylint
 
 pylint-tests:
 	$(Q)$(MAKE) $(build)=perf-test dir=tests pylint
+
+pylint-util:
+	$(Q)$(MAKE) $(build)=perf-util dir=util pylint
+
+pylint-pmu-events:
+	$(Q)$(MAKE) $(build)=pmu-events dir=pmu-events pylint
 endif
 
 # These can record PERF_VERSION
