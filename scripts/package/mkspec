@@ -65,6 +65,13 @@ fi
 echo "%define with_debuginfo_manual $with_debuginfo_manual"
 echo "%define with_debuginfo_rpm $with_debuginfo_rpm"
 
+# the btf_vmlinux module must keep its .BTF section (see kernel.spec)
+if grep -q CONFIG_DEBUG_INFO_BTF=m include/config/auto.conf; then
+echo '%define with_btf_vmlinux_module 1'
+else
+echo '%define with_btf_vmlinux_module 0'
+fi
+
 cat<<EOF
 %define ARCH ${ARCH}
 %define KERNELRELEASE ${KERNELRELEASE}

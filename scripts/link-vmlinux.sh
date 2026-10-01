@@ -37,6 +37,15 @@ is_enabled() {
 	grep -q "^$1=y" include/config/auto.conf
 }
 
+is_module() {
+	grep -q "^$1=m" include/config/auto.conf
+}
+
+# =y or =m
+is_set() {
+	grep -q "^$1=[ym]" include/config/auto.conf
+}
+
 # Nice output in kbuild format
 # Will be suppressed by "make -s"
 info()
@@ -195,6 +204,7 @@ fi
 
 btf_vmlinux_bin_o=
 btfids_vmlinux=
+btf_link=
 kallsymso=
 strip_debug=
 generate_map=
@@ -211,17 +221,17 @@ if is_enabled CONFIG_KALLSYMS; then
 	kallsyms .tmp_vmlinux0.syms .tmp_vmlinux0.kallsyms
 fi
 
-if is_enabled CONFIG_KALLSYMS || is_enabled CONFIG_DEBUG_INFO_BTF; then
+if is_enabled CONFIG_KALLSYMS || is_set CONFIG_DEBUG_INFO_BTF; then
 
 	# The kallsyms linking does not need debug symbols, but the BTF does.
-	if ! is_enabled CONFIG_DEBUG_INFO_BTF; then
+	if ! is_set CONFIG_DEBUG_INFO_BTF; then
 		strip_debug=1
 	fi
 
 	vmlinux_link .tmp_vmlinux1
 fi
 
-if is_enabled CONFIG_DEBUG_INFO_BTF; then
+if is_set CONFIG_DEBUG_INFO_BTF; then
 	info BTF .tmp_vmlinux1
 	if ! ${CONFIG_SHELL} ${srctree}/scripts/gen-btf.sh .tmp_vmlinux1; then
 		echo >&2 "Failed to generate BTF for vmlinux"
@@ -230,6 +240,11 @@ if is_enabled CONFIG_DEBUG_INFO_BTF; then
 	fi
 	btf_vmlinux_bin_o=.tmp_vmlinux1.btf.o
 	btfids_vmlinux=.tmp_vmlinux1.BTF_ids
+	if is_module CONFIG_DEBUG_INFO_BTF; then
+		# The btf_vmlinux module carries the BTF; .BTF.link names it and
+		# holds the size and SHA-256 of the BTF (struct btf_link).
+		btf_link="--btf_link .BTF:btf_vmlinux:.tmp_vmlinux1.BTF"
+	fi
 fi
 
 if is_enabled CONFIG_KALLSYMS; then
@@ -287,9 +302,9 @@ fi
 
 vmlinux_link "${VMLINUX}"
 
-if is_enabled CONFIG_DEBUG_INFO_BTF; then
+if is_set CONFIG_DEBUG_INFO_BTF; then
 	info BTFIDS ${VMLINUX}
-	${RESOLVE_BTFIDS} --patch_btfids ${btfids_vmlinux} ${VMLINUX}
+	${RESOLVE_BTFIDS} --patch_btfids ${btfids_vmlinux} ${btf_link} ${VMLINUX}
 fi
 
 mksysmap "${VMLINUX}" System.map

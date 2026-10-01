@@ -76,6 +76,10 @@ This package provides debug information for the kernel image and modules from th
 %if %{with_keep_section}
 %global _find_debuginfo_opts -r --keep-section .BTF --keep-section .BTF.base
 %else
+%if %{with_btf_vmlinux_module}
+# With CONFIG_DEBUG_INFO_BTF=m, btf_vmlinux.ko carries the vmlinux BTF in .BTF
+%{error:find-debuginfo cannot keep .BTF, which btf_vmlinux.ko needs; build without debuginfo (--without debuginfo)}
+%endif
 %global _find_debuginfo_opts -r
 %endif
 

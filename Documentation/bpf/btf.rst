@@ -1276,6 +1276,74 @@ format.::
             .long   58
             .long   8206                    # Line 8 Col 14
 
+6.1 Kernel BTF
+--------------
+
+With CONFIG_DEBUG_INFO_BTF=y the BTF of the kernel is generated at link time
+from its DWARF and placed in the .BTF section of vmlinux, which is read-only
+data of the kernel image. It is available as /sys/kernel/btf/vmlinux and, if
+CONFIG_DEBUG_INFO_BTF_MODULES is set, module BTF is generated as split BTF
+against it and available as /sys/kernel/btf/<module>.
+
+With CONFIG_DEBUG_INFO_BTF=m the same BTF is generated, but it is not part of
+the kernel image or of the vmlinux ELF file (vmlinux.unstripped in the build
+tree keeps it, for module BTF generation). It is delivered by the
+btf_vmlinux module, which the kernel loads the first time user space asks for
+something that needs the BTF: reading /sys/kernel/btf/vmlinux, enumerating
+kernel BTF objects (BPF_BTF_GET_NEXT_ID, with CAP_SYS_ADMIN), a BPF program,
+map or BTF object that uses kernel types (an attach_btf_id, a kfunc call, a
+ksym, a map pointer, a helper that takes or returns a kernel BTF pointer, a
+struct_ops map, a kptr to a kernel type), loading a light skeleton loader (a
+syscall program), a kprobe or fprobe event with BTF arguments, a tracepoint's
+btf_ids file, or mounting bpffs with delegate_* options that name commands or
+types. mmap() of /sys/kernel/btf/vmlinux does not load it and fails until it
+is loaded; libbpf then reads the file instead.
+
+Loading the module waits for user space (modprobe), so it only happens at the
+start of such a request, holding no lock that loading a module needs. The code
+that uses the BTF never loads it: bpf_get_btf_vmlinux() and bpf_find_btf_id()
+return nothing while it is not loaded, as on a kernel without BTF, and a bpf()
+command that fails because of that is run once more after the system call has
+loaded the BTF. Until then no memory is used for it; afterwards it behaves as
+with =y, except as described below. In particular:
+
+  * /sys/kernel/btf/vmlinux exists from boot with its final size.
+  * Modules loaded before the vmlinux BTF are exposed in /sys/kernel/btf right
+    away, their BTF is parsed and gets a BTF id once the vmlinux BTF is
+    loaded, together with their kfunc and struct_ops registrations. A request
+    that loads the vmlinux BTF returns once that is done.
+  * kfunc, dtor kfunc and struct_ops registrations of the kernel itself are
+    applied before the BTF becomes visible.
+  * The kernel only accepts the BTF it was built with: the name of the module,
+    and the size and SHA-256 of the BTF, are recorded in the kernel when it is
+    linked (.BTF.link), and the module is checked against them.
+  * Once loaded the BTF stays; the module cannot be unloaded.
+
+If the module is not available (not installed, or the root file system is not
+mounted yet), the kernel behaves as one built without BTF and tries again next
+time; probe events defined on the kernel command line or in the boot
+configuration cannot use BTF arguments for that reason. The module is also not
+loaded where the system does not let the task that needs the BTF load modules:
+with kernel.modules_disabled set, when the security policy does not allow the
+module request, or when modprobe is configured not to load it. Such systems can
+load btf_vmlinux at boot instead, e.g. through modules-load.d.
+
+CONFIG_BPF_PRELOAD is not available with =m: its iterators attach through the
+vmlinux BTF, so mounting bpffs would load it. Some users only use the BTF if it
+is already loaded: bpf_snprintf_btf() and bpf_seq_printf_btf(), which run in
+program context, the ftrace function argument printer (func-args,
+funcgraph-args), which can run with interrupts disabled, and the names of bpffs
+delegate_* options in ``/proc/*/mountinfo``. The vmlinux BTF gets its BTF id
+when it is loaded, so it is not necessarily id 1. Tools that look for the BTF
+in kernel memory, or in a crash dump, through the __start_BTF and __stop_BTF
+symbols do not find it.
+
+A module loaded before the vmlinux BTF is loaded cannot have its BTF checked
+against it yet. Its BTF is checked when the vmlinux BTF arrives, and if it
+does not match, the module keeps running without BTF, with a warning: without
+CONFIG_MODULE_ALLOW_BTF_MISMATCH such a module is only refused if it loads
+after the vmlinux BTF.
+
 7. Testing
 ==========
 

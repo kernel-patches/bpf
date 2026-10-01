@@ -22,6 +22,14 @@
 #   - ${1}.btf.o ready for linking into vmlinux
 #   - ${1}.BTF_ids with .BTF_ids data blob
 # This output is consumed by scripts/link-vmlinux.sh
+#
+# With CONFIG_DEBUG_INFO_BTF=m the .BTF section in ${1}.btf.o is not
+# allocatable, so the kernel image does not carry the BTF; vmlinux.unstripped
+# does, for module BTF generation, and scripts/Makefile.vmlinux strips it from
+# vmlinux.  ${1}.BTF is kept too: scripts/link-vmlinux.sh has resolve_btfids
+# record its size and SHA-256 in .BTF.link (struct btf_link).  The
+# btf_vmlinux module gets no BTF of its own; its .BTF section is a copy of the
+# vmlinux BTF, extracted from --btf_base.
 
 set -e
 
@@ -60,6 +68,10 @@ is_enabled() {
 	grep -q "^$1=y" ${objtree}/include/config/auto.conf
 }
 
+is_module() {
+	grep -q "^$1=m" ${objtree}/include/config/auto.conf
+}
+
 case "${KBUILD_VERBOSE}" in
 *1*)
 	set -x
@@ -83,13 +95,21 @@ gen_btf_o()
 {
 	btf_data=${ELF_FILE}.btf.o
 
+	# CONFIG_DEBUG_INFO_BTF=m: .BTF stays non-allocatable, kept in
+	# vmlinux.unstripped for module BTF but not loaded; the btf_vmlinux
+	# module provides it at runtime.
+	btf_flags=alloc,readonly
+	if is_module CONFIG_DEBUG_INFO_BTF; then
+		btf_flags=readonly
+	fi
+
 	# Create ${btf_data} which contains just .BTF section but no symbols. Add
-	# SHF_ALLOC because .BTF will be part of the vmlinux image. --strip-all
+	# SHF_ALLOC (=y) because .BTF will be part of the vmlinux image. --strip-all
 	# deletes all symbols including __start_BTF and __stop_BTF, which will
 	# be redefined in the linker script.
 	echo "" | ${CC} ${CLANG_FLAGS} ${KBUILD_CPPFLAGS} ${KBUILD_CFLAGS} -fno-lto -c -x c -o ${btf_data} -
 	${OBJCOPY} --add-section .BTF=${ELF_FILE}.BTF \
-		--set-section-flags .BTF=alloc,readonly ${btf_data}
+		--set-section-flags .BTF=${btf_flags} ${btf_data}
 	${OBJCOPY} --only-section=.BTF --strip-all ${btf_data}
 
 	# Change e_type to ET_REL so that it can be used to link final vmlinux.
@@ -120,7 +140,10 @@ embed_btf_data()
 cleanup()
 {
 	rm -f "${ELF_FILE}.BTF.1"
-	rm -f "${ELF_FILE}.BTF"
+	# CONFIG_DEBUG_INFO_BTF=m: vmlinux's .BTF is needed for .BTF.link
+	if [ "${BTFGEN_MODE}" = "module" ] || ! is_module CONFIG_DEBUG_INFO_BTF; then
+		rm -f "${ELF_FILE}.BTF"
+	fi
 	if [ "${BTFGEN_MODE}" = "module" ]; then
 		rm -f "${ELF_FILE}.BTF.base"
 		rm -f "${ELF_FILE}.BTF_ids"
@@ -132,6 +155,30 @@ BTFGEN_MODE="vmlinux"
 if [ -n "${BTF_BASE}" ]; then
 	BTFGEN_MODE="module"
 fi
+
+# CONFIG_DEBUG_INFO_BTF=m: the btf_vmlinux module carries the vmlinux BTF
+# itself.  Its own types are of no interest, so instead of generating split
+# BTF for it, copy the (non-loadable) .BTF section of --btf_base
+# (vmlinux.unstripped) into the module.
+# The kernel recognizes the module by name and treats its .BTF as base BTF.
+case "${BTFGEN_MODE}:${ELF_FILE}" in
+module:*/btf_vmlinux.ko)
+	if is_module CONFIG_DEBUG_INFO_BTF; then
+		# -O binary only emits allocatable sections; make .BTF one for
+		# the extraction.  ${BTF_BASE} itself is not modified.
+		${OBJCOPY} -O binary --only-section=.BTF			\
+			--set-section-flags .BTF=alloc,load,readonly	\
+			"${BTF_BASE}" "${ELF_FILE}.BTF"
+		# objcopy succeeds with an empty file if there is no .BTF
+		if [ ! -s "${ELF_FILE}.BTF" ]; then
+			echo >&2 "error: no .BTF section in ${BTF_BASE}"
+			exit 1
+		fi
+		${OBJCOPY} --add-section .BTF="${ELF_FILE}.BTF" "${ELF_FILE}"
+		exit 0
+	fi
+	;;
+esac
 
 gen_btf_data
 

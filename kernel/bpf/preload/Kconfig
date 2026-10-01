@@ -6,6 +6,10 @@ menuconfig BPF_PRELOAD
 	# The dependency on !COMPILE_TEST prevents it from being enabled
 	# in allmodconfig or allyesconfig configurations
 	depends on !COMPILE_TEST
+	# The preloaded iterators attach through the vmlinux BTF, so with
+	# CONFIG_DEBUG_INFO_BTF=m every bpffs mount would load the BTF, which
+	# defeats the point of =m on any system that mounts bpffs at boot.
+	depends on DEBUG_INFO_BTF!=m
 	help
 	  This builds kernel module with several embedded BPF programs that are
 	  pinned into BPF FS mount point as human readable files that are

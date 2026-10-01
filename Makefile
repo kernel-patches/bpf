@@ -1745,8 +1745,9 @@ endif
 #
 
 # *.ko are usually independent of vmlinux, but CONFIG_DEBUG_INFO_BTF_MODULES
-# is an exception.
-ifdef CONFIG_DEBUG_INFO_BTF_MODULES
+# is an exception, and so is the btf_vmlinux module with CONFIG_DEBUG_INFO_BTF=m,
+# which carries the vmlinux BTF.
+ifneq ($(CONFIG_DEBUG_INFO_BTF_MODULES)$(filter m,$(CONFIG_DEBUG_INFO_BTF)),)
 KBUILD_BUILTIN := y
 modules: vmlinux
 endif

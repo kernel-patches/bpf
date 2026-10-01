@@ -122,6 +122,13 @@ _package-debug(){
 	mkdir -p "${builddir}"
 	ln -sr "${debugdir}/vmlinux" "${builddir}/vmlinux"
 
+	# With CONFIG_DEBUG_INFO_BTF=m only vmlinux.unstripped has the BTF, which
+	# external modules need for theirs (scripts/Makefile.modfinal)
+	if grep -q CONFIG_DEBUG_INFO_BTF=m include/config/auto.conf; then
+		install -Dt "${debugdir}" -m644 vmlinux.unstripped
+		ln -sr "${debugdir}/vmlinux.unstripped" "${builddir}/vmlinux.unstripped"
+	fi
+
 	echo "Installing unstripped vDSO(s)..."
 	${MAKE} INSTALL_MOD_PATH="${pkgdir}/usr" vdso_install
 }
