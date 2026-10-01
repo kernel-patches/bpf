@@ -1,4 +1,19 @@
 soc/arm
+	patch
+		ARM: remove sa1100 platform
+		ARM: remove footbridge
+		ARM: remove legacy pxa board files
+		ARM: orion/dove/mv78xx0: remove all board files
+		ARM: orion5x: fold plat-orion/pcie.c and hw_pci into pci.c
+		ARM: omap2: remove omap24xx support
+		ARM: imx: remove i.MX31 SoC support
+		ARM: versatile: remove Integrator/CM1136JF-S option
+		ARM: imx: remove nommu support
+		ARM: lpc18xx: remove entire platform
+		ARM: stm32: remove stm32f4/f7/h7 MCU support
+		ARM: versatile: remove mps2 support
+		ARM: at91: remove samv7 support
+		ARM: axxia: remove entire platform
 
 soc/dt
 	renesas/dt
