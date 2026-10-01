@@ -310,6 +310,9 @@ impl kernel::Module for BinderModule {
         // SAFETY: The module initializer never runs twice, so we only call this once.
         unsafe { crate::context::CONTEXTS.init() };
 
+        crate::transaction::TRANSACTION_LOG.init()?;
+        crate::transaction::FAILED_TRANSACTION_LOG.init()?;
+
         let netlink = crate::netlink::BINDER_NL_FAMILY.register()?;
         BINDER_SHRINKER.register(c"android-binder")?;
 
@@ -547,6 +550,27 @@ unsafe extern "C" fn rust_binder_transactions_show(
     if let Err(err) = rust_binder_transactions_show_impl(m) {
         seq_print!(m, "failed to generate state: {:?}\n", err);
     }
+    0
+}
+
+/// # Safety
+/// Only called by binderfs.
+#[no_mangle]
+unsafe extern "C" fn rust_binder_transaction_log_show(
+    ptr: *mut seq_file,
+    _: *mut kernel::ffi::c_void,
+) -> kernel::ffi::c_int {
+    // SAFETY: Accessing the private field of `seq_file` is okay.
+    let is_failed = !unsafe { (*ptr).private }.is_null();
+    // SAFETY: The caller ensures that the pointer is valid and exclusive for the duration in which
+    // this method is called.
+    let m = unsafe { SeqFile::from_raw(ptr) };
+    let log = if is_failed {
+        &transaction::FAILED_TRANSACTION_LOG
+    } else {
+        &transaction::TRANSACTION_LOG
+    };
+    log.debug_print(m);
     0
 }
 
