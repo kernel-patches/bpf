@@ -714,8 +714,15 @@ static int virtio_vsock_vqs_init(struct virtio_vsock *vsock)
 	atomic_set(&vsock->queued_replies, 0);
 
 	ret = virtio_find_vqs(vdev, VSOCK_VQ_MAX, vsock->vqs, vqs_info, NULL);
-	if (ret < 0)
+	if (ret < 0) {
+		/*
+		 * On a partial failure virtio_find_vqs() can leave freed
+		 * virtqueue pointers in vsock->vqs[]; clear them so a later
+		 * virtio_vsock_vqs_del() does not detach a freed virtqueue.
+		 */
+		memset(vsock->vqs, 0, sizeof(vsock->vqs));
 		return ret;
+	}
 
 	virtio_vsock_update_guest_cid(vsock);
 
@@ -782,19 +789,30 @@ static void virtio_vsock_vqs_del(struct virtio_vsock *vsock)
 	virtio_reset_device(vdev);
 
 	mutex_lock(&vsock->rx_lock);
-	while ((skb = virtqueue_detach_unused_buf(vsock->vqs[VSOCK_VQ_RX])))
-		kfree_skb(skb);
+	if (vsock->vqs[VSOCK_VQ_RX])
+		while ((skb = virtqueue_detach_unused_buf(vsock->vqs[VSOCK_VQ_RX])))
+			kfree_skb(skb);
 	mutex_unlock(&vsock->rx_lock);
 
 	mutex_lock(&vsock->tx_lock);
-	while ((skb = virtqueue_detach_unused_buf(vsock->vqs[VSOCK_VQ_TX])))
-		kfree_skb(skb);
+	if (vsock->vqs[VSOCK_VQ_TX])
+		while ((skb = virtqueue_detach_unused_buf(vsock->vqs[VSOCK_VQ_TX])))
+			kfree_skb(skb);
 	mutex_unlock(&vsock->tx_lock);
 
 	virtio_vsock_skb_queue_purge(&vsock->send_pkt_queue);
 
 	/* Delete virtqueues and flush outstanding callbacks if any */
 	vdev->config->del_vqs(vdev);
+
+	/*
+	 * del_vqs() has freed the virtqueues. Clear the stale pointers: if a
+	 * later virtio_vsock_restore() fails to allocate new ones, the driver
+	 * stays bound with a dangling vqs[] and the next virtio_vsock_vqs_del()
+	 * would detach a freed virtqueue (use-after-free). Mirrors virtio_blk
+	 * commit 0739c2c6a015.
+	 */
+	memset(vsock->vqs, 0, sizeof(vsock->vqs));
 }
 
 static int virtio_vsock_probe(struct virtio_device *vdev)
