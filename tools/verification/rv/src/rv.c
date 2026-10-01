@@ -128,6 +128,9 @@ static void rv_mon(int argc, char **argv)
 	run += ikm_run_monitor(monitor_name, argc-1, &argv[1]);
 
 	if (!run)
+		run += bpf_run_monitor(monitor_name, argc-1, &argv[1]);
+
+	if (!run)
 		err_msg("rv: monitor %s does not exist\n", monitor_name);
 	exit(run > 0 ? EXIT_SUCCESS : EXIT_FAILURE);
 }
