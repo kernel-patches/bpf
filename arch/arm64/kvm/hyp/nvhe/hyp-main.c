@@ -824,6 +824,38 @@ DEFINE_KVM_HOST_HCALL(int, __pkvm_hyp_topup,
 	return ret;
 }
 
+DEFINE_KVM_HOST_HCALL(int, __pkvm_hyp_reclaim,
+	enum pkvm_topup_id, id, unsigned long, target)
+{
+	struct kvm_cpu_context *host_ctxt = host_data_ptr(host_ctxt);
+	struct kvm_hyp_memcache host_mc = {};
+	int ret = 0;
+
+	switch (id) {
+	case PKVM_TOPUP_HYP_ALLOC:
+		hyp_alloc_reclaim(&host_mc, target);
+		break;
+	default:
+		ret = -EINVAL;
+	}
+
+	cpu_reg(host_ctxt, 2) = host_mc.head;
+	cpu_reg(host_ctxt, 3) = host_mc.nr_pages;
+
+	return ret;
+}
+
+DEFINE_KVM_HOST_HCALL(ulong, __pkvm_hyp_reclaimable,
+	enum pkvm_topup_id, id)
+{
+	switch (id) {
+	case PKVM_TOPUP_HYP_ALLOC:
+		return hyp_alloc_reclaimable();
+	default:
+		return 0;
+	}
+}
+
 DEFINE_KVM_HOST_HCALL(int, __tracing_load,
 	void __kern *, desc_hva, size_t, desc_size)
 {
@@ -919,6 +951,8 @@ static const hcall_t host_hcall[] = {
 	HANDLE_FUNC(__vgic_v5_save_apr),
 	HANDLE_FUNC(__vgic_v5_restore_vmcr_apr),
 	HANDLE_FUNC(__pkvm_hyp_topup),
+	HANDLE_FUNC(__pkvm_hyp_reclaim),
+	HANDLE_FUNC(__pkvm_hyp_reclaimable),
 
 	HANDLE_FUNC(__pkvm_host_share_hyp),
 	HANDLE_FUNC(__pkvm_host_unshare_hyp),
