@@ -37,6 +37,23 @@ config DEBUG_PINCTRL
 	help
 	  Say Y here to add some extra checks and diagnostics to PINCTRL calls.
 
+config PINCTRL_AMB
+	bool "Ambarella pin controller support"
+	depends on ARCH_AMBARELLA || COMPILE_TEST
+	depends on HAS_IOMEM
+	default y if ARCH_AMBARELLA
+	select GENERIC_PINCONF
+	select GENERIC_PINCTRL_GROUPS
+	select GENERIC_PINMUX_FUNCTIONS
+	select GPIOLIB
+	select GPIO_PL061
+	select MFD_SYSCON
+	select PINCONF
+	select PINMUX
+	help
+	  Say Y here to enable the Ambarella pinmux/pinconf controller.
+	  GPIO is provided by the PL061 driver.
+
 config PINCTRL_AMD
 	bool "AMD GPIO pin control"
 	depends on HAS_IOMEM
