@@ -87,7 +87,13 @@ static int rb070d30_panel_disable(struct drm_panel *panel)
 	struct mipi_dsi_multi_context dsi_ctx = { .dsi = ctx->dsi };
 
 	mipi_dsi_dcs_enter_sleep_mode_multi(&dsi_ctx);
-	return dsi_ctx.accum_err;
+
+	/*
+	 * Returning an error would leave panel->enabled set, causing the
+	 * next enable to be skipped even after unprepare powers off the panel.
+	 * The helper above already logs any command failure.
+	 */
+	return 0;
 }
 
 /* Default timings */
