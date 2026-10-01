@@ -22753,6 +22753,7 @@ err_prep:
 err_free_env:
 	bpf_free_subprog_jts(env);
 	vfree(env->insn_aux_data);
+	bpf_patch_list_free(env);
 	kvfree(env->fd_array);
 	bpf_stack_liveness_free(env);
 	kvfree(env->cfg.insn_postorder);

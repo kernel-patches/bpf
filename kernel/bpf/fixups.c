@@ -405,6 +405,301 @@ struct bpf_prog *bpf_patch_insn_data(struct bpf_verifier_env *env, u32 off,
 }
 
 /*
+ * Queue the replacement of insn 'off' by 'patch[0..len)'. Nothing moves until
+ * bpf_patch_list_commit(), so a pass keeps addressing insns and their aux data
+ * by their index in env->prog. Patches must be queued in increasing order of
+ * 'off'. Jumps in the patch that leave it are relative to the patch placed at
+ * 'off', the same way as for bpf_patch_insn_data().
+ *
+ * Return the copy of the last insn of the patch, which stays valid until the
+ * next call.
+ */
+struct bpf_insn *bpf_patch_list_add(struct bpf_verifier_env *env, u32 off,
+				    const struct bpf_insn *patch, u32 len)
+{
+	struct bpf_patch_list *pl = &env->patch_list;
+	struct bpf_insn_patch *p;
+	struct bpf_insn *insns;
+	u32 cap;
+
+	if (bpf_rewrite_must_abort())
+		return ERR_PTR(-EINTR);
+
+	if (verifier_bug_if(!len || off >= env->prog->len ||
+			    (pl->cnt && off <= pl->patches[pl->cnt - 1].off),
+			    env, "insn %u patched out of order", off))
+		return ERR_PTR(-EFAULT);
+
+	/* Replacing one insn by one moves nothing, do it right away. */
+	if (len == 1) {
+		env->prog->insnsi[off] = *patch;
+		adjust_insn_aux_data(env, env->prog, off, 1, NULL,
+				     BPF_PATCH_KEEP_TARGET);
+		return &env->prog->insnsi[off];
+	}
+
+	if (pl->cnt == pl->cap) {
+		cap = max(pl->cap * 2, 16U);
+		p = kvrealloc(pl->patches, array_size(cap, sizeof(*p)),
+			      GFP_KERNEL_ACCOUNT);
+		if (!p)
+			return ERR_PTR(-ENOMEM);
+		pl->patches = p;
+		pl->cap = cap;
+	}
+
+	if (pl->insn_cnt + len > pl->insn_cap) {
+		cap = max3(pl->insn_cap * 2, pl->insn_cnt + len, 64U);
+		insns = kvrealloc(pl->insns, array_size(cap, sizeof(*insns)),
+				  GFP_KERNEL_ACCOUNT);
+		if (!insns)
+			return ERR_PTR(-ENOMEM);
+		pl->insns = insns;
+		pl->insn_cap = cap;
+	}
+
+	p = &pl->patches[pl->cnt++];
+	p->off = off;
+	p->len = len;
+	p->start = pl->insn_cnt;
+	p->orig = env->prog->insnsi[off];
+	memcpy(pl->insns + p->start, patch, len * sizeof(*patch));
+	pl->insn_cnt += len;
+
+	return &pl->insns[p->start + len - 1];
+}
+
+void bpf_patch_list_free(struct bpf_verifier_env *env)
+{
+	struct bpf_patch_list *pl = &env->patch_list;
+
+	kvfree(pl->patches);
+	kvfree(pl->insns);
+	memset(pl, 0, sizeof(*pl));
+}
+
+/* Extract the pc-relative operand of a jump, a subprog call or a ld_imm64 of a subprog. */
+static bool insn_get_rel(const struct bpf_insn *insn, s64 *rel, bool *is_imm)
+{
+	u8 code = insn->code;
+
+	if (bpf_pseudo_func(insn) || bpf_pseudo_call(insn)) {
+		*rel = insn->imm;
+		*is_imm = true;
+		return true;
+	}
+	if ((BPF_CLASS(code) != BPF_JMP && BPF_CLASS(code) != BPF_JMP32) ||
+	    BPF_OP(code) == BPF_CALL || BPF_OP(code) == BPF_EXIT)
+		return false;
+
+	*is_imm = code == (BPF_JMP32 | BPF_JA);
+	*rel = *is_imm ? insn->imm : insn->off;
+	return true;
+}
+
+/*
+ * insn is number 'idx' of the 'len' insns that replace insn 'off' of the old
+ * image (an insn that isn't patched is its own patch of length 1). It lands
+ * at 'pos' of the new image. 'new_off' maps the old image to the new one.
+ */
+static int patch_list_adj_insn(struct bpf_insn *insn, const u32 *new_off,
+			       u32 cnt, u32 off, u32 idx, u32 len, u32 pos)
+{
+	bool is_imm;
+	s64 rel, tgt;
+
+	if (!insn_get_rel(insn, &rel, &is_imm))
+		return 0;
+
+	/* relative to the first insn of the patch */
+	tgt = (s64)idx + rel + 1;
+	if (tgt >= 0 && tgt < len)
+		return 0;
+
+	/* the patch pushed what follows 'off' down by len - 1 */
+	tgt = tgt < 0 ? off + tgt : off + tgt - len + 1;
+	if (tgt < 0 || tgt > cnt)
+		return -EFAULT;
+
+	rel = (s64)new_off[tgt] - pos - 1;
+	if (is_imm) {
+		if (rel < S32_MIN || rel > S32_MAX)
+			return -ERANGE;
+		insn->imm = rel;
+	} else {
+		if (rel < S16_MIN || rel > S16_MAX)
+			return -ERANGE;
+		insn->off = rel;
+	}
+	return 0;
+}
+
+/*
+ * Fill the aux data of the 'p->len' insns at 'slot' from the aux data 'old'
+ * of the insn they replace, the same way as adjust_insn_aux_data() does.
+ */
+static void patch_list_adj_aux(struct bpf_prog *prog, struct bpf_insn_patch *p,
+			       struct bpf_insn *patch,
+			       const struct bpf_insn_aux_data *old,
+			       struct bpf_insn_aux_data *slot)
+{
+	struct bpf_insn_aux_data *last = slot + p->len - 1;
+	struct bpf_insn *orig = &p->orig;
+	u32 i;
+
+	*last = *old;
+	last->zext_dst = bpf_insn_def32(prog, &patch[p->len - 1]) >= 0;
+	memset(slot, 0, sizeof(*slot) * (p->len - 1));
+
+	for (i = 0; i < p->len - 1; i++) {
+		slot[i].seen = last->seen;
+		slot[i].zext_dst = bpf_insn_def32(prog, &patch[i]) >= 0;
+		if (!memcmp(&patch[i], orig, sizeof(*orig))) {
+			slot[i].non_stack_access = last->non_stack_access;
+			last->non_stack_access = false;
+		} else if (bpf_is_mem_insn(&patch[i])) {
+			slot[i].non_stack_access = true;
+		}
+	}
+
+	if (bpf_is_mem_insn(&patch[p->len - 1]) &&
+	    memcmp(&patch[p->len - 1], orig, sizeof(*orig)))
+		last->non_stack_access = true;
+
+	/* indirect jumps to the replaced insn land on the first new one */
+	if (last->indirect_target) {
+		slot[0].indirect_target = 1;
+		last->indirect_target = 0;
+	}
+}
+
+static u32 patch_list_remap(const u32 *new_off, u32 cnt, u32 grow, u32 off)
+{
+	return off <= cnt ? new_off[off] : off + grow;
+}
+
+/*
+ * Apply all queued patches in one go. Everything that names an insn of the
+ * old image follows it to the new one, a patched insn is named by the first
+ * insn of its patch, like with bpf_patch_insn_data().
+ */
+int bpf_patch_list_commit(struct bpf_verifier_env *env)
+{
+	struct bpf_patch_list *pl = &env->patch_list;
+	struct bpf_prog *prog = env->prog;
+	u32 cnt = prog->len, new_cnt, grow = 0, end, i, k, n;
+	struct bpf_insn_aux_data *data;
+	struct bpf_insn *insns = NULL;
+	struct bpf_insn_patch *p;
+	u32 *new_off = NULL;
+	int err = 0;
+
+	if (!pl->cnt)
+		goto out;
+
+	err = -ENOMEM;
+	new_off = kvmalloc_array(cnt + 1, sizeof(*new_off), GFP_KERNEL_ACCOUNT);
+	if (!new_off)
+		goto out;
+
+	for (i = 0, k = 0; i <= cnt; i++) {
+		new_off[i] = i + grow;
+		if (k < pl->cnt && pl->patches[k].off == i)
+			grow += pl->patches[k++].len - 1;
+	}
+	new_cnt = cnt + grow;
+
+	/*
+	 * Build the new image aside first, so that a jump that goes out of
+	 * range leaves the program untouched.
+	 */
+	insns = kvmalloc_array(new_cnt, sizeof(*insns), GFP_KERNEL_ACCOUNT);
+	if (!insns)
+		goto out;
+
+	for (i = 0, k = 0; i < cnt; i++) {
+		const struct bpf_insn *src = &prog->insnsi[i];
+		u32 len = 1;
+
+		if (k < pl->cnt && pl->patches[k].off == i) {
+			src = &pl->insns[pl->patches[k].start];
+			len = pl->patches[k++].len;
+		}
+
+		for (n = 0; n < len; n++) {
+			insns[new_off[i] + n] = src[n];
+			err = patch_list_adj_insn(&insns[new_off[i] + n], new_off,
+						  cnt, i, n, len, new_off[i] + n);
+			if (err == -ERANGE) {
+				verbose(env, "insn %d cannot be patched due to 16-bit range\n",
+					env->insn_aux_data[i].orig_idx);
+				goto out;
+			}
+			if (verifier_bug_if(err, env, "insn %u jumps out of the program", i))
+				goto out;
+		}
+	}
+
+	err = -ENOMEM;
+	data = vrealloc(env->insn_aux_data,
+			array_size(new_cnt, sizeof(*data)),
+			GFP_KERNEL_ACCOUNT | __GFP_ZERO);
+	if (!data)
+		goto out;
+	env->insn_aux_data = data;
+
+	prog = bpf_prog_realloc(prog, bpf_prog_size(new_cnt), GFP_USER);
+	if (!prog)
+		goto out;
+	env->prog = prog;
+
+	memcpy(prog->insnsi, insns, sizeof(*insns) * new_cnt);
+	prog->len = new_cnt;
+
+	/* Move aux data from the end, an insn never moves to a lower index. */
+	end = cnt;
+	for (k = pl->cnt; k-- > 0;) {
+		p = &pl->patches[k];
+		memmove(data + new_off[p->off + 1], data + p->off + 1,
+			sizeof(*data) * (end - p->off - 1));
+		patch_list_adj_aux(prog, p, &pl->insns[p->start], &data[p->off],
+				   &data[new_off[p->off]]);
+		end = p->off;
+	}
+	env->insn_aux_data_len = new_cnt;
+
+	/* NOTE: fake 'exit' subprog should be updated as well. */
+	for (i = 0; i <= env->subprog_cnt; i++)
+		env->subprog_info[i].start =
+			patch_list_remap(new_off, cnt, grow, env->subprog_info[i].start);
+
+	for (i = 0; i < prog->aux->nr_linfo; i++)
+		prog->aux->linfo[i].insn_off =
+			patch_list_remap(new_off, cnt, grow, prog->aux->linfo[i].insn_off);
+
+	for (i = 0; i < env->insn_array_map_cnt; i++)
+		bpf_insn_array_remap(env->insn_array_maps[i], new_off, cnt, grow);
+
+	for (i = 0; i < env->func_ptr_cnt; i++) {
+		if (env->func_ptrs[i].xlated_off == BPF_FUNC_PTR_DELETED)
+			continue;
+		env->func_ptrs[i].xlated_off =
+			patch_list_remap(new_off, cnt, grow, env->func_ptrs[i].xlated_off);
+	}
+
+	for (i = 0; i < prog->aux->size_poke_tab; i++)
+		prog->aux->poke_tab[i].insn_idx =
+			patch_list_remap(new_off, cnt, grow, prog->aux->poke_tab[i].insn_idx);
+
+	err = 0;
+out:
+	kvfree(insns);
+	kvfree(new_off);
+	bpf_patch_list_free(env);
+	return err;
+}
+
+/*
  * insn was moved down by delta insns inside its own patch. Operands relative
  * to the pc that point in front of the old position did not move with it.
  */
