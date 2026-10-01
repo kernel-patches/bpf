@@ -8,6 +8,8 @@
 #include <linux/slab.h>
 #include <linux/sort.h>
 
+#include "exception.h"
+
 #define verbose(env, fmt, args...) bpf_verifier_log_write(env, fmt, ##args)
 
 /*
@@ -384,6 +386,20 @@ bpf_insn_successors(struct bpf_verifier_env *env, u32 idx)
 			succ->items[succ->cnt++] = exit_idx;
 	}
 
+	/*
+	 * A call a cleanup record covers can leave through its landing pad.
+	 * Only a call to a subprogram, direct or through callx, or to
+	 * bpf_unwind() is marked, none of which is an edge the block above
+	 * adds, so there are at most two successors, which env->succ is sized
+	 * for.
+	 */
+	if (unlikely(env->cleanup_info_cnt)) {
+		int pad = bpf_exc_pad_of_call(env, idx);
+
+		if (pad >= 0)
+			succ->items[succ->cnt++] = pad;
+	}
+
 	return succ;
 }
 
@@ -510,7 +526,8 @@ bool bpf_stack_slot_alive(struct bpf_verifier_env *env, u32 frameno, u32 half_sp
 	 * Slot is alive if it is read before q->insn_idx in current func instance,
 	 * or if for some outer func instance:
 	 * - alive before callsite if callsite calls callback or is callx, otherwise
-	 * - alive after callsite
+	 * - alive after callsite,
+	 * - or alive at the landing pad a cleanup record gives the callsite
 	 */
 	struct live_stack_query *q = &env->liveness->live_stack_query;
 	struct func_instance *instance, *curframe_instance;
@@ -545,6 +562,13 @@ bool bpf_stack_slot_alive(struct bpf_verifier_env *env, u32 frameno, u32 half_sp
 		alive = callee_stack_access_at_callsite(env, callsite)
 			? is_live_before(instance, callsite, rel, half_spi)
 			: is_live_before(instance, callsite + 1, rel, half_spi);
+
+		if (!alive && unlikely(env->cleanup_info_cnt)) {
+			int pad = bpf_exc_pad_of_call(env, callsite);
+
+			if (pad >= 0)
+				alive = is_live_before(instance, pad, rel, half_spi);
+		}
 		if (alive)
 			return true;
 	}

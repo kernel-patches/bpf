@@ -50,6 +50,13 @@ enum stack_mode {
 	SMALL_STACK	= 1 << 1,
 };
 
+#define MAX_GLOBAL_VARS 8
+
+struct global_var {
+	char *name;
+	__u64 val;
+};
+
 struct test_subspec {
 	char *name;
 	char *description;
@@ -62,6 +69,10 @@ struct test_subspec {
 	int retval;
 	bool execute;
 	__u64 caps;
+	struct global_var set_globals[MAX_GLOBAL_VARS];
+	int set_global_cnt;
+	struct global_var ret_globals[MAX_GLOBAL_VARS];
+	int ret_global_cnt;
 };
 
 struct test_spec {
@@ -115,6 +126,34 @@ void free_msgs(struct expected_msgs *msgs)
 	msgs->cnt = 0;
 }
 
+static void free_global_vars(struct global_var *vars, int *cnt)
+{
+	int i;
+
+	for (i = 0; i < *cnt; i++) {
+		free(vars[i].name);
+		vars[i].name = NULL;
+	}
+	*cnt = 0;
+}
+
+static int clone_global_vars(struct global_var *dst, int *dst_cnt,
+			     const struct global_var *src, int src_cnt)
+{
+	int i;
+
+	for (i = 0; i < src_cnt; i++) {
+		dst[i].name = strdup(src[i].name);
+		if (!dst[i].name) {
+			free_global_vars(dst, dst_cnt);
+			return -ENOMEM;
+		}
+		dst[i].val = src[i].val;
+		(*dst_cnt)++;
+	}
+	return 0;
+}
+
 static void free_test_spec(struct test_spec *spec)
 {
 	/* Deallocate expect_msgs arrays. */
@@ -128,6 +167,11 @@ static void free_test_spec(struct test_spec *spec)
 	free_msgs(&spec->priv.stderr);
 	free_msgs(&spec->unpriv.stdout);
 	free_msgs(&spec->priv.stdout);
+
+	free_global_vars(spec->priv.set_globals, &spec->priv.set_global_cnt);
+	free_global_vars(spec->priv.ret_globals, &spec->priv.ret_global_cnt);
+	free_global_vars(spec->unpriv.set_globals, &spec->unpriv.set_global_cnt);
+	free_global_vars(spec->unpriv.ret_globals, &spec->unpriv.ret_global_cnt);
 
 	free(spec->priv.name);
 	free(spec->priv.description);
@@ -308,6 +352,236 @@ static int parse_caps(const char *str, __u64 *val, const char *name)
 	}
 
 	free(str_cpy);
+	return 0;
+}
+
+static int parse_global_var(const char *str, struct global_var *vars, int *cnt,
+			    const char *name)
+{
+	const char *colon = strrchr(str, ':');
+	struct global_var *var;
+	char *end;
+	__u64 *val;
+
+	if (!colon || colon == str) {
+		PRINT_FAIL("expecting '<variable>:<value>' for %s, got '%s'\n", name, str);
+		return -EINVAL;
+	}
+	if (*cnt >= MAX_GLOBAL_VARS) {
+		PRINT_FAIL("too many %s tags, at most %d are supported\n",
+			   name, MAX_GLOBAL_VARS);
+		return -E2BIG;
+	}
+
+	var = &vars[*cnt];
+	val = &var->val;
+	*val = 0;
+	for (const char *term = colon + 1;;) {
+		__u64 v;
+
+		errno = 0;
+		v = strtoull(term, &end, 0);
+		if (errno || end == term) {
+			PRINT_FAIL("failed to parse %s value '%s'\n", name, colon + 1);
+			return -EINVAL;
+		}
+		*val |= v;
+		while (*end == ' ')
+			end++;
+		if (!*end)
+			break;
+		if (*end != '|') {
+			PRINT_FAIL("failed to parse %s value '%s'\n", name, colon + 1);
+			return -EINVAL;
+		}
+		term = end + 1;
+	}
+
+	var->name = strndup(str, colon - str);
+	if (!var->name) {
+		PRINT_FAIL("failed to allocate %s variable name\n", name);
+		return -ENOMEM;
+	}
+	(*cnt)++;
+
+	return 0;
+}
+
+/* As veristat's is_signed_type(): anything not plainly unsigned is signed. */
+static bool global_var_is_signed(const struct btf_type *t)
+{
+	if (btf_is_int(t))
+		return btf_int_encoding(t) & BTF_INT_SIGNED;
+	if (btf_is_any_enum(t))
+		return btf_kflag(t);
+	return true;
+}
+
+static int find_global_var(struct bpf_object *obj, const char *name,
+			   struct bpf_map **map, __u32 *off, __u32 *sz,
+			   bool *is_signed)
+{
+	static const char * const secs[] = { ".bss", ".data" };
+	struct btf *btf = bpf_object__btf(obj);
+	int i, s;
+
+	if (!btf) {
+		PRINT_FAIL("no BTF for object\n");
+		return -ENOENT;
+	}
+
+	for (s = 0; s < ARRAY_SIZE(secs); s++) {
+		const struct btf_type *sec, *vt;
+		const struct btf_var_secinfo *vsi;
+		struct bpf_map *m = bpf_object__find_map_by_name(obj, secs[s]);
+		int id;
+
+		id = btf__find_by_name_kind(btf, secs[s], BTF_KIND_DATASEC);
+		if (!m || id < 0)
+			continue;
+
+		sec = btf__type_by_id(btf, id);
+		vsi = btf_var_secinfos(sec);
+		for (i = 0; i < btf_vlen(sec); i++, vsi++) {
+			const struct btf_type *var = btf__type_by_id(btf, vsi->type);
+
+			if (strcmp(btf__name_by_offset(btf, var->name_off), name))
+				continue;
+			if (vsi->size != 4 && vsi->size != 8) {
+				PRINT_FAIL("'%s' is %u bytes, only 4 and 8 are supported\n",
+					   name, vsi->size);
+				return -EINVAL;
+			}
+			vt = btf__type_by_id(btf, btf__resolve_type(btf, var->type));
+			if (!vt || !(btf_is_int(vt) || btf_is_any_enum(vt))) {
+				PRINT_FAIL("'%s' is not an int or an enum\n", name);
+				return -EINVAL;
+			}
+			*is_signed = global_var_is_signed(vt);
+			*map = m;
+			*off = vsi->offset;
+			*sz = vsi->size;
+			return 0;
+		}
+	}
+
+	PRINT_FAIL("no global variable '%s'\n", name);
+	return -ENOENT;
+}
+
+/*
+ * A tag's value is parsed as 64 bits, but the variable may be narrower and
+ * may be signed. Hold it to the range the variable can represent, the way
+ * veristat's set_global_var() does, and narrow it to what is stored.
+ */
+static int fit_global_var(const char *name, __u32 sz, bool is_signed, __u64 *val)
+{
+	long long v = (long long)*val;
+	long long max_val;
+	__u32 bits;
+
+	if (sz >= sizeof(*val))
+		return 0;
+	bits = sz * 8 - (is_signed ? 1 : 0);
+	max_val = 1ll << bits;
+	if (v >= max_val || v < (is_signed ? -max_val : 0)) {
+		PRINT_FAIL("value %lld for '%s' is out of range [%lld; %lld]\n",
+			   v, name, is_signed ? -max_val : 0, max_val - 1);
+		return -EINVAL;
+	}
+	*val = (__u32)*val;
+	return 0;
+}
+
+/* The value of @map's single element, which the caller frees. */
+static void *global_data(struct bpf_map *map, const char *name, size_t *vsz)
+{
+	__u32 zero = 0;
+	void *buf;
+	int err;
+
+	*vsz = bpf_map__value_size(map);
+	buf = calloc(1, *vsz);
+	if (!buf) {
+		PRINT_FAIL("failed to allocate %zu bytes for '%s'\n", *vsz, name);
+		return NULL;
+	}
+	err = bpf_map__lookup_elem(map, &zero, sizeof(zero), buf, *vsz, 0);
+	if (err) {
+		PRINT_FAIL("failed to read '%s': %d\n", name, err);
+		free(buf);
+		return NULL;
+	}
+	return buf;
+}
+
+static int read_global_var(struct bpf_map *map, const char *name, __u32 off,
+			   __u32 sz, __u64 *val)
+{
+	size_t vsz;
+	void *buf;
+
+	buf = global_data(map, name, &vsz);
+	if (!buf)
+		return -EINVAL;
+	*val = sz == 4 ? *(__u32 *)(buf + off) : *(__u64 *)(buf + off);
+	free(buf);
+	return 0;
+}
+
+static int write_global_var(struct bpf_map *map, const char *name, __u32 off,
+			    __u32 sz, __u64 val)
+{
+	__u32 zero = 0;
+	size_t vsz;
+	void *buf;
+	int err;
+
+	buf = global_data(map, name, &vsz);
+	if (!buf)
+		return -EINVAL;
+	if (sz == 4)
+		*(__u32 *)(buf + off) = val;
+	else
+		*(__u64 *)(buf + off) = val;
+	err = bpf_map__update_elem(map, &zero, sizeof(zero), buf, vsz, 0);
+	if (err)
+		PRINT_FAIL("failed to write '%s': %d\n", name, err);
+	free(buf);
+	return err;
+}
+
+/* Write a __set_global() value into the program's global variable. */
+static int set_global_var(struct bpf_object *obj, const struct global_var *var)
+{
+	__u64 val = var->val;
+	struct bpf_map *map;
+	__u32 off, sz;
+	bool is_signed;
+
+	if (find_global_var(obj, var->name, &map, &off, &sz, &is_signed) ||
+	    fit_global_var(var->name, sz, is_signed, &val))
+		return -EINVAL;
+	return write_global_var(map, var->name, off, sz, val);
+}
+
+/* Check the program's global variable against a __ret_global() value. */
+static int check_global_var(struct bpf_object *obj, const struct global_var *var)
+{
+	__u64 want = var->val, val;
+	struct bpf_map *map;
+	__u32 off, sz;
+	bool is_signed;
+
+	if (find_global_var(obj, var->name, &map, &off, &sz, &is_signed) ||
+	    fit_global_var(var->name, sz, is_signed, &want) ||
+	    read_global_var(map, var->name, off, sz, &val))
+		return -EINVAL;
+	if (val != want) {
+		PRINT_FAIL("Unexpected %s: 0x%llx != 0x%llx\n", var->name,
+			   (unsigned long long)val, (unsigned long long)want);
+		return -EINVAL;
+	}
 	return 0;
 }
 
@@ -557,6 +831,22 @@ static int parse_test_spec(struct test_loader *tester,
 			spec->mode_mask |= UNPRIV;
 			spec->unpriv.execute = true;
 			has_unpriv_retval = true;
+		} else if ((val = str_has_pfx(s, "test_global_set="))) {
+			err = parse_global_var(val, spec->priv.set_globals,
+					       &spec->priv.set_global_cnt,
+					       "__set_global");
+			if (err)
+				goto cleanup;
+			spec->priv.execute = true;
+			spec->mode_mask |= PRIV;
+		} else if ((val = str_has_pfx(s, "test_global_ret="))) {
+			err = parse_global_var(val, spec->priv.ret_globals,
+					       &spec->priv.ret_global_cnt,
+					       "__ret_global");
+			if (err)
+				goto cleanup;
+			spec->priv.execute = true;
+			spec->mode_mask |= PRIV;
 		} else if ((val = str_has_pfx(s, "test_log_level="))) {
 			err = parse_int(val, &spec->log_level, "test log level");
 			if (err)
@@ -740,6 +1030,23 @@ static int parse_test_spec(struct test_loader *tester,
 		if (!has_unpriv_retval) {
 			spec->unpriv.retval = spec->priv.retval;
 			spec->unpriv.execute = spec->priv.execute;
+		}
+
+		if (spec->priv.set_global_cnt && !spec->unpriv.set_global_cnt) {
+			err = clone_global_vars(spec->unpriv.set_globals,
+						&spec->unpriv.set_global_cnt,
+						spec->priv.set_globals,
+						spec->priv.set_global_cnt);
+			if (err)
+				goto cleanup;
+		}
+		if (spec->priv.ret_global_cnt && !spec->unpriv.ret_global_cnt) {
+			err = clone_global_vars(spec->unpriv.ret_globals,
+						&spec->unpriv.ret_global_cnt,
+						spec->priv.ret_globals,
+						spec->priv.ret_global_cnt);
+			if (err)
+				goto cleanup;
 		}
 
 		if (spec->unpriv.expect_msgs.cnt == 0)
@@ -1356,7 +1663,7 @@ void run_subtest(struct test_loader *tester,
 	struct cap_state caps = {};
 	struct bpf_object *tobj;
 	struct bpf_map *map;
-	int retval, err, i;
+	int retval, err, i, j;
 	int links_cnt = 0;
 	bool should_load;
 
@@ -1532,12 +1839,22 @@ void run_subtest(struct test_loader *tester,
 			}
 		}
 
+		for (j = 0; j < subspec->set_global_cnt; j++) {
+			if (set_global_var(tobj, &subspec->set_globals[j]))
+				goto tobj_cleanup;
+		}
+
 		err = do_prog_test_run(bpf_program__fd(tprog), &retval,
 				       bpf_program__type(tprog) == BPF_PROG_TYPE_SYSCALL ? true : false,
 				       spec->linear_sz);
 		if (!err && retval != subspec->retval && subspec->retval != POINTER_VALUE) {
 			PRINT_FAIL("Unexpected retval: %d != %d\n", retval, subspec->retval);
 			goto tobj_cleanup;
+		}
+
+		for (j = 0; j < subspec->ret_global_cnt; j++) {
+			if (check_global_var(tobj, &subspec->ret_globals[j]))
+				goto tobj_cleanup;
 		}
 
 		verify_stderr(bpf_program__fd(tprog), &subspec->stderr);
