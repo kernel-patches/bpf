@@ -1,0 +1,15 @@
+digraph state_automaton {
+	{node [shape = circle] "enqueued"};
+	{node [shape = plaintext, style=invis, label=""] "__init_dequeued"};
+	{node [shape = doublecircle] "dequeued"};
+	{node [shape = circle] "dequeued"};
+	"__init_dequeued" -> "dequeued";
+	"enqueued" [label = "enqueued"];
+	"enqueued" -> "dequeued" [ label = "sched_dequeue" ];
+	"dequeued" [label = "dequeued"];
+	"dequeued" -> "enqueued" [ label = "sched_enqueue" ];
+	{ rank = min ;
+		"__init_dequeued";
+		"dequeued";
+	}
+}
