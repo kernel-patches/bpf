@@ -4,7 +4,6 @@
  *
  * Copyright (C) 2022 Red Hat Inc, Daniel Bristot de Oliveira <bristot@kernel.org>
  */
-#include <getopt.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -15,14 +14,6 @@
 #include <trace.h>
 #include <utils.h>
 #include <rv.h>
-
-static int config_has_id;
-static int config_is_container;
-static int config_my_pid;
-static int config_trace;
-
-static char *config_initial_reactor;
-static char *config_reactor;
 
 /*
  * __ikm_read_enable - reads monitor's enable status
@@ -66,7 +57,7 @@ static int __ikm_find_monitor_name(char *monitor_name, char *out_name)
 	if (!available_monitors)
 		return -1;
 
-	config_is_container = 0;
+	config.is_container = 0;
 	cursor = available_monitors;
 	while ((line = strsep(&cursor, "\n"))) {
 		char *colon = strchr(line, ':');
@@ -83,7 +74,7 @@ static int __ikm_find_monitor_name(char *monitor_name, char *out_name)
 			/* If there are children, they are on the next line. */
 			line = strsep(&cursor, "\n");
 			if (line && !strncmp(line, monitor_name, len) && line[len] == ':')
-				config_is_container = 1;
+				config.is_container = 1;
 		}
 
 		found = 1;
@@ -391,7 +382,7 @@ int ikm_list_monitors(char *container)
 static void ikm_print_header(struct trace_seq *s)
 {
 	trace_seq_printf(s, "%16s-%-8s %5s %5s ", "<TASK>", "PID", "[CPU]", "TYPE");
-	if (config_has_id)
+	if (config.has_id)
 		trace_seq_printf(s, "%8s ", "ID");
 
 	trace_seq_printf(s, "%24s x %-24s -> %-24s %s\n",
@@ -402,7 +393,7 @@ static void ikm_print_header(struct trace_seq *s)
 
 	trace_seq_printf(s, "%16s %-8s %5s %5s ", " | ", " | ", " | ", " | ");
 
-	if (config_has_id)
+	if (config.has_id)
 		trace_seq_printf(s, "%8s ", " | ");
 
 	trace_seq_printf(s, "%24s   %-24s    %-24s %s\n",
@@ -431,25 +422,25 @@ ikm_event_handler(struct trace_seq *s, struct tep_record *record,
 	int val;
 	bool missing_id;
 
-	if (config_has_id)
+	if (config.has_id)
 		missing_id = tep_get_field_val(s, trace_event, "id", record, &id, 1);
 
 	tep_get_common_field_val(s, trace_event, "common_pid", record, &pid, 1);
 
-	if (config_has_id && (config_my_pid == id))
+	if (config.has_id && (config.my_pid == id))
 		return 0;
-	else if (config_my_pid == pid)
+	else if (config.my_pid == pid)
 		return 0;
 
 	tep_print_event(trace_event->tep, s, record, "%16s-%-8d [%.3d] ",
 			TEP_PRINT_COMM, TEP_PRINT_PID, TEP_PRINT_CPU);
 
-	if (config_is_container)
+	if (config.is_container)
 		tep_print_event(trace_event->tep, s, record, "%s ", TEP_PRINT_NAME);
 	else
 		trace_seq_printf(s, "event ");
 
-	if (config_has_id) {
+	if (config.has_id) {
 		if (missing_id)
 			/* placeholder if we are dealing with a mixed-type container*/
 			trace_seq_printf(s, "        ");
@@ -490,24 +481,24 @@ ikm_error_handler(struct trace_seq *s, struct tep_record *record,
 	int val;
 	bool missing_id;
 
-	if (config_has_id)
+	if (config.has_id)
 		missing_id = tep_get_field_val(s, trace_event, "id", record, &id, 1);
 
 	tep_get_common_field_val(s, trace_event, "common_pid", record, &pid, 1);
 
-	if (config_has_id && config_my_pid == id)
+	if (config.has_id && config.my_pid == id)
 		return 0;
-	else if (config_my_pid == pid)
+	else if (config.my_pid == pid)
 		return 0;
 
 	trace_seq_printf(s, "%8lld [%03d] ", pid, cpu);
 
-	if (config_is_container)
+	if (config.is_container)
 		tep_print_event(trace_event->tep, s, record, "%s ", TEP_PRINT_NAME);
 	else
 		trace_seq_printf(s, "error ");
 
-	if (config_has_id) {
+	if (config.has_id) {
 		if (missing_id)
 			/* placeholder if we are dealing with a mixed-type container*/
 			trace_seq_printf(s, "        ");
@@ -548,8 +539,8 @@ static int ikm_enable_trace_events(char *monitor_name, struct trace_instance *in
 				   ikm_error_handler, NULL);
 
 	/* set if at least 1 monitor has id in case of a container */
-	config_has_id = ikm_has_id(monitor_name);
-	if (config_has_id < 0)
+	config.has_id = ikm_has_id(monitor_name);
+	if (config.has_id < 0)
 		return -1;
 
 
@@ -596,7 +587,7 @@ static struct trace_instance *ikm_setup_trace_instance(char *monitor_name)
 	struct trace_instance *inst;
 	int retval;
 
-	if (!config_trace)
+	if (!config.trace)
 		return NULL;
 
 	/* alloc data */
@@ -610,7 +601,7 @@ static struct trace_instance *ikm_setup_trace_instance(char *monitor_name)
 	if (retval)
 		goto out_free;
 
-	if (config_is_container)
+	if (config.is_container)
 		retval = ikm_enable_trace_container(monitor_name, inst);
 	else
 		retval = ikm_enable_trace_events(monitor_name, inst);
@@ -645,7 +636,7 @@ static void ikm_destroy_trace_instance(struct trace_instance *inst)
 /*
  * ikm_usage_print_reactors - print all available reactors, one per line.
  */
-static void ikm_usage_print_reactors(void)
+void ikm_usage_print_reactors(void)
 {
 	char *reactors = tracefs_instance_file_read(NULL, "rv/available_reactors", NULL);
 	char *start, *end;
@@ -668,106 +659,6 @@ static void ikm_usage_print_reactors(void)
 	}
 
 	fprintf(stderr, "\n");
-}
-/*
- * ikm_usage - print usage
- */
-static void ikm_usage(int exit_val, char *monitor_name, const char *fmt, ...)
-{
-
-	char message[1024];
-	va_list ap;
-	int i;
-
-	static const char *const usage[] = {
-		"",
-		"	-h/--help: print this menu and the reactor list",
-		"	-r/--reactor 'reactor': enables the 'reactor'",
-		"	-s/--self: when tracing (-t), also trace rv command",
-		"	-t/--trace: trace monitor's event",
-		"	-v/--verbose: print debug messages",
-		"",
-		NULL,
-	};
-
-	va_start(ap, fmt);
-	vsnprintf(message, sizeof(message), fmt, ap);
-	va_end(ap);
-
-	fprintf(stderr, "  %s\n", message);
-
-	fprintf(stderr, "\n  usage: rv mon %s [-h] [-q] [-r reactor] [-s] [-v]", monitor_name);
-
-	for (i = 0; usage[i]; i++)
-		fprintf(stderr, "%s\n", usage[i]);
-
-	ikm_usage_print_reactors();
-	exit(exit_val);
-}
-
-/*
- * parse_arguments - parse arguments and set config
- */
-static int parse_arguments(char *monitor_name, int argc, char **argv)
-{
-	int c, retval;
-
-	config_my_pid = getpid();
-
-	while (1) {
-		static struct option long_options[] = {
-			{"help",		no_argument,		0, 'h'},
-			{"reactor",		required_argument,	0, 'r'},
-			{"self",		no_argument,		0, 's'},
-			{"trace",		no_argument,		0, 't'},
-			{"verbose",		no_argument,		0, 'v'},
-			{0, 0, 0, 0}
-		};
-
-		/* getopt_long stores the option index here. */
-		int option_index = 0;
-
-		c = getopt_long(argc, argv, "hr:stv", long_options, &option_index);
-
-		/* detect the end of the options. */
-		if (c == -1)
-			break;
-
-		switch (c) {
-		case 'h':
-			ikm_usage(0, monitor_name, "help:");
-			break;
-		case 'r':
-			config_reactor = optarg;
-			break;
-		case 's':
-			config_my_pid = -1;
-			break;
-		case 't':
-			config_trace = 1;
-			break;
-		case 'v':
-			config_debug = 1;
-			break;
-		}
-	}
-
-	if (config_reactor) {
-		config_initial_reactor = ikm_get_current_reactor(monitor_name);
-		if (!config_initial_reactor)
-			ikm_usage(1, monitor_name,
-				  "ikm: failed to read current reactor, are reactors enabled?");
-
-		retval = ikm_write_reactor(monitor_name, config_reactor);
-		if (retval <= 0)
-			ikm_usage(1, monitor_name,
-				  "ikm: failed to set %s reactor, is it available?",
-				  config_reactor);
-	}
-
-	debug_msg("ikm: my pid is %d\n", config_my_pid);
-
-	return 0;
 }
 
 /**
@@ -805,9 +696,22 @@ int ikm_run_monitor(char *monitor_name, int argc, char **argv)
 	/* we should be good to go */
 	retval = parse_arguments(full_name, argc, argv);
 	if (retval)
-		ikm_usage(1, nested_name, "ikm: failed parsing arguments");
+		mon_usage(1, nested_name, "ikm: failed parsing arguments");
 
-	if (config_trace) {
+	if (config.reactor) {
+		config.initial_reactor = ikm_get_current_reactor(full_name);
+		if (!config.initial_reactor)
+			mon_usage(1, full_name,
+				  "ikm: failed to read current reactor, are reactors enabled?");
+
+		retval = ikm_write_reactor(full_name, config.reactor);
+		if (retval <= 0)
+			mon_usage(1, full_name,
+				  "ikm: failed to set %s reactor, is it available?",
+				  config.reactor);
+	}
+
+	if (config.trace) {
 		inst = ikm_setup_trace_instance(nested_name);
 		if (!inst)
 			goto out_free_instance;
@@ -817,11 +721,11 @@ int ikm_run_monitor(char *monitor_name, int argc, char **argv)
 	if (retval < 0)
 		goto out_free_instance;
 
-	if (config_trace)
+	if (config.trace)
 		ikm_print_header(inst->seq);
 
 	while (!should_stop()) {
-		if (config_trace) {
+		if (config.trace) {
 			retval = tracefs_iterate_raw_events(inst->tep,
 							    inst->inst,
 							    NULL,
@@ -840,14 +744,14 @@ int ikm_run_monitor(char *monitor_name, int argc, char **argv)
 	ikm_disable(full_name);
 	ikm_destroy_trace_instance(inst);
 
-	if (config_reactor && config_initial_reactor)
-		ikm_write_reactor(full_name, config_initial_reactor);
+	if (config.reactor && config.initial_reactor)
+		ikm_write_reactor(full_name, config.initial_reactor);
 
 	return 1;
 
 out_free_instance:
 	ikm_destroy_trace_instance(inst);
-	if (config_reactor && config_initial_reactor)
-		ikm_write_reactor(full_name, config_initial_reactor);
+	if (config.reactor && config.initial_reactor)
+		ikm_write_reactor(full_name, config.initial_reactor);
 	return -1;
 }
