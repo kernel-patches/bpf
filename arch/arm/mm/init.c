@@ -226,11 +226,6 @@ void __init arch_mm_preinit(void)
 	swiotlb_init(max_pfn > arm_dma_pfn_limit, SWIOTLB_VERBOSE);
 #endif
 
-#ifdef CONFIG_SA1111
-	/* now that our DMA memory is actually so designated, we can free it */
-	memblock_phys_free(PHYS_OFFSET, __pa(swapper_pg_dir) - PHYS_OFFSET);
-#endif
-
 	/*
 	 * Check boundaries twice: Some fundamental inconsistencies can
 	 * be detected at build time already.

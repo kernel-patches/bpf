@@ -952,11 +952,6 @@ static int mvebu_pci_bridge_emul_init(struct mvebu_pcie_port *port)
 	return pci_bridge_emul_init(bridge, bridge_flags);
 }
 
-static inline struct mvebu_pcie *sys_to_pcie(struct pci_sys_data *sys)
-{
-	return sys->private_data;
-}
-
 static struct mvebu_pcie_port *mvebu_pcie_find_port(struct mvebu_pcie *pcie,
 						    struct pci_bus *bus,
 						    int devfn)
