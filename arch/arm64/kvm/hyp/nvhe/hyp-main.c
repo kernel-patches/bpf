@@ -907,7 +907,7 @@ DEFINE_KVM_HOST_HCALL(ulong, __pkvm_hyp_reclaimable,
 DEFINE_KVM_HOST_HCALL(int, __tracing_load,
 	void __kern *, desc_hva, size_t, desc_size)
 {
-	return __tracing_load(desc_hva, desc_size);
+	return errno_to_smccc(__tracing_load(desc_hva, desc_size));
 }
 
 DEFINE_KVM_HOST_HCALL0(void, __tracing_unload)
