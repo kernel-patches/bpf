@@ -38,6 +38,17 @@
 		/* The module LPO input is supplied by PMIC_32K_OUT. */
 	};
 
+	hdmi-connector {
+		compatible = "hdmi-connector";
+		type = "a";
+
+		port {
+			hdmi_con_in: endpoint {
+				remote-endpoint = <&hdmi_out_con>;
+			};
+		};
+	};
+
 	memory@0 {
 		device_type = "memory";
 		reg = <0x0 0x0 0x2 0x0>;
@@ -81,6 +92,10 @@
 &aogpio {
 	gpio-line-names = "", "", "", "", "", "", "", "AOGPIO_7",
 			  "AOGPIO_8", "", "AOGPIO_10", "AOGPIO_11";
+};
+
+&dpu {
+	status = "okay";
 };
 
 &emmc {
@@ -131,6 +146,16 @@
 
 &gpio3 {
 	gpio-line-names = "GPIO3_0", "GPIO3_1", "GPIO3_2", "GPIO3_3";
+};
+
+&hdmi {
+	status = "okay";
+};
+
+&hdmi_out_port {
+	hdmi_out_con: endpoint {
+		remote-endpoint = <&hdmi_con_in>;
+	};
 };
 
 &mdio0 {
