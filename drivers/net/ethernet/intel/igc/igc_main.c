@@ -2658,7 +2658,8 @@ static int igc_clean_rx_irq(struct igc_q_vector *q_vector, const int budget)
 
 		pktbuf = page_address(rx_buffer->page) + rx_buffer->page_offset;
 
-		if (igc_test_staterr(rx_desc, IGC_RXDADV_STAT_TSIP)) {
+		if (!skb &&
+		    igc_test_staterr(rx_desc, IGC_RXDADV_STAT_TSIP)) {
 			ctx.rx_ts = pktbuf;
 			pkt_offset = IGC_TS_HDR_LEN;
 			size -= IGC_TS_HDR_LEN;
