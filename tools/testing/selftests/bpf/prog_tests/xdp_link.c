@@ -150,3 +150,135 @@ cleanup:
 	test_xdp_link__destroy(skel1);
 	test_xdp_link__destroy(skel2);
 }
+
+static void test_link_create_invalid_prog_fd(void)
+{
+	const char *msg = "Invalid prog_fd.\n";
+	char log_buf[128] = {};
+	int fd;
+	LIBBPF_OPTS(bpf_log_opts, log_opts,
+		.buf = log_buf,
+		.size = sizeof(log_buf),
+		.level = 1,
+	);
+
+	fd = bpf_link_create_log(-1, IFINDEX_LO, BPF_XDP, NULL, &log_opts);
+	if (!ASSERT_LT(fd, 0, "bpf_link_create_log")) {
+		close(fd);
+		return;
+	}
+
+	ASSERT_EQ(fd, -EBADF, "fd");
+	ASSERT_STREQ(log_buf, msg, "log_buf");
+	ASSERT_EQ(log_opts.true_size, strlen(msg) + 1, "log_size");
+}
+
+static void test_link_create_invalid_attach_type(void)
+{
+	const char *msg = "Invalid attach_type.\n";
+	struct test_xdp_link *skel;
+	char log_buf[128] = {};
+	int fd;
+	LIBBPF_OPTS(bpf_log_opts, log_opts,
+		.buf = log_buf,
+		.size = sizeof(log_buf),
+		.level = 1,
+	);
+
+	skel = test_xdp_link__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "test_xdp_link__open_and_load"))
+		return;
+
+	log_opts.true_size = 0;
+	fd = bpf_link_create_log(bpf_program__fd(skel->progs.xdp_handler), IFINDEX_LO,
+				 BPF_CGROUP_INET_INGRESS, NULL, &log_opts);
+	if (!ASSERT_LT(fd, 0, "bpf_link_create_log")) {
+		close(fd);
+		goto cleanup;
+	}
+
+	ASSERT_EQ(fd, -EINVAL, "fd");
+	ASSERT_STREQ(log_buf, msg, "log_buf");
+	ASSERT_EQ(log_opts.true_size, strlen(msg) + 1, "log_size");
+
+cleanup:
+	test_xdp_link__destroy(skel);
+}
+
+static void test_link_create_xdp_invalid_target_ifindex(void)
+{
+	const char *msg = "Invalid target_ifindex.\n";
+	struct test_xdp_link *skel;
+	char log_buf[128] = {};
+	int fd;
+	LIBBPF_OPTS(bpf_log_opts, log_opts,
+		.buf = log_buf,
+		.size = sizeof(log_buf),
+		.level = 1,
+	);
+
+	skel = test_xdp_link__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "test_xdp_link__open_and_load"))
+		return;
+
+	/* Interface indices are positive; zero cannot identify a device. */
+	fd = bpf_link_create_log(bpf_program__fd(skel->progs.xdp_handler), 0,
+				 BPF_XDP, NULL, &log_opts);
+	if (!ASSERT_LT(fd, 0, "bpf_link_create_log")) {
+		close(fd);
+		goto cleanup;
+	}
+
+	ASSERT_EQ(fd, -EINVAL, "fd");
+	ASSERT_STREQ(log_buf, msg, "log_buf");
+	ASSERT_EQ(log_opts.true_size, strlen(msg) + 1, "log_size");
+
+cleanup:
+	test_xdp_link__destroy(skel);
+}
+
+static void test_link_create_xdp_extack(void)
+{
+	const char *msg = "Invalid XDP flags for BPF link attachment";
+	struct test_xdp_link *skel;
+	char log_buf[128] = {};
+	int fd;
+	LIBBPF_OPTS(bpf_link_create_opts, opts,
+		.flags = XDP_FLAGS_REPLACE,
+	);
+	LIBBPF_OPTS(bpf_log_opts, log_opts,
+		.buf = log_buf,
+		.size = sizeof(log_buf),
+		.level = 1,
+	);
+
+	skel = test_xdp_link__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "test_xdp_link__open_and_load"))
+		return;
+
+	fd = bpf_link_create_log(bpf_program__fd(skel->progs.xdp_handler), IFINDEX_LO,
+				 BPF_XDP, &opts, &log_opts);
+	if (!ASSERT_LT(fd, 0, "bpf_link_create_log")) {
+		close(fd);
+		goto cleanup;
+	}
+
+	ASSERT_EQ(fd, -EINVAL, "fd");
+	ASSERT_STREQ(log_buf, msg, "log_buf");
+	ASSERT_EQ(log_opts.true_size, strlen(msg) + 1, "log_size");
+
+cleanup:
+	test_xdp_link__destroy(skel);
+}
+
+void test_link_create_log(void)
+{
+	if (test__start_subtest("invalid_prog_fd"))
+		test_link_create_invalid_prog_fd();
+	if (test__start_subtest("invalid_attach_type"))
+		test_link_create_invalid_attach_type();
+	if (test__start_subtest("xdp/invalid_target_ifindex"))
+		test_link_create_xdp_invalid_target_ifindex();
+	if (test__start_subtest("xdp/extack"))
+		test_link_create_xdp_extack();
+}
