@@ -44,8 +44,12 @@ $(BPFTOOL):
 	$(Q)CFLAGS= $(MAKE) -C ../bpf/bpftool OUTPUT=$(SKEL_TOOL_TMP_OUT)/ bootstrap
 
 # Paths to search for a kernel to generate vmlinux.h from.
-VMLINUX_BTF_ELF_PATHS ?= $(if $(O),$(O)/vmlinux)			\
+# With CONFIG_DEBUG_INFO_BTF=m only vmlinux.unstripped has the BTF
+VMLINUX_BTF_ELF_PATHS ?= $(if $(O),$(O)/vmlinux.unstripped)		\
+		     $(if $(O),$(O)/vmlinux)				\
+		     $(if $(KBUILD_OUTPUT),$(KBUILD_OUTPUT)/vmlinux.unstripped)	\
 		     $(if $(KBUILD_OUTPUT),$(KBUILD_OUTPUT)/vmlinux)	\
+		     ../../vmlinux.unstripped				\
 		     ../../vmlinux					\
 		     /boot/vmlinux-$(shell uname -r)
 
@@ -56,7 +60,7 @@ VMLINUX_BTF_BTF_PATHS ?= /sys/kernel/btf/vmlinux
 VMLINUX_BTF_ELF_ABSPATHS ?= $(abspath $(wildcard $(VMLINUX_BTF_ELF_PATHS)))
 VMLINUX_BTF_PATHS ?= $(shell for file in $(VMLINUX_BTF_ELF_ABSPATHS); \
 			do \
-				if [ -f $$file ] && ($(READELF) -S "$$file" | grep -q .BTF); \
+				if [ -f $$file ] && ($(READELF) -SW "$$file" | grep -q "[[:space:]]\.BTF[[:space:]]"); \
 				then \
 					echo "$$file"; \
 				fi; \

@@ -73,8 +73,12 @@ HOST_BPFOBJ := $(HOST_BUILD_DIR)/libbpf/libbpf.a
 RESOLVE_BTFIDS := $(HOST_BUILD_DIR)/resolve_btfids/resolve_btfids
 DEFAULT_BPFTOOL := $(HOST_OUTPUT_DIR)/sbin/bpftool
 
-VMLINUX_BTF_PATHS ?= $(if $(O),$(O)/vmlinux)					\
+# With CONFIG_DEBUG_INFO_BTF=m only vmlinux.unstripped has the BTF
+VMLINUX_BTF_PATHS ?= $(if $(O),$(O)/vmlinux.unstripped)				\
+		     $(if $(O),$(O)/vmlinux)					\
+		     $(if $(KBUILD_OUTPUT),$(KBUILD_OUTPUT)/vmlinux.unstripped)	\
 		     $(if $(KBUILD_OUTPUT),$(KBUILD_OUTPUT)/vmlinux)		\
+		     ../../vmlinux.unstripped					\
 		     ../../vmlinux						\
 		     /sys/kernel/btf/vmlinux					\
 		     /boot/vmlinux-$(shell uname -r)

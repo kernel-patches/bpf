@@ -37,8 +37,12 @@ HOST_LIBBPF_OUTPUT := $(OBJ_DIR)/host/libbpf/
 HOST_LIBBPF_DESTDIR := $(OUTPUT_DIR)/host/
 HOST_DESTDIR := $(OUTPUT_DIR)/host/
 
-VMLINUX_BTF_PATHS ?= $(if $(O),$(O)/vmlinux)					\
+# With CONFIG_DEBUG_INFO_BTF=m only vmlinux.unstripped has the BTF
+VMLINUX_BTF_PATHS ?= $(if $(O),$(O)/vmlinux.unstripped)				\
+		     $(if $(O),$(O)/vmlinux)					\
+		     $(if $(KBUILD_OUTPUT),$(KBUILD_OUTPUT)/vmlinux.unstripped)	\
 		     $(if $(KBUILD_OUTPUT),$(KBUILD_OUTPUT)/vmlinux)		\
+		     ../../../../vmlinux.unstripped				\
 		     ../../../../vmlinux					\
 		     /sys/kernel/btf/vmlinux					\
 		     /boot/vmlinux-$(shell uname -r)
