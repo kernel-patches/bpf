@@ -701,6 +701,11 @@ struct bpf_insn_aux_data {
 
 	unsigned int orig_idx; /* original instruction index, initialized once */
 	/*
+	 * 1 + the instruction index of the exception cleanup landing pad
+	 * this call site unwinds to, or 0 for none.
+	 */
+	u32 cleanup_pad;
+	/*
 	 * CFG strongly connected component this instruction belongs to,
 	 * zero if it is a singleton SCC.
 	 */
