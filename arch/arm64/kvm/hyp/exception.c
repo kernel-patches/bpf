@@ -353,12 +353,19 @@ static void kvm_inject_exception(struct kvm_vcpu *vcpu)
  */
 void __kvm_adjust_pc(struct kvm_vcpu *vcpu)
 {
-	if (vcpu_get_flag(vcpu, PENDING_EXCEPTION)) {
-		kvm_inject_exception(vcpu);
-		vcpu_clear_flag(vcpu, PENDING_EXCEPTION);
-		vcpu_clear_flag(vcpu, EXCEPT_MASK);
-	} else if (vcpu_get_flag(vcpu, INCREMENT_PC)) {
-		kvm_skip_instr(vcpu);
-		vcpu_clear_flag(vcpu, INCREMENT_PC);
+	struct kvm_vcpu *target = kvm_adjust_pc_get(vcpu);
+
+	if (!target)
+		return;
+
+	if (vcpu_get_flag(target, PENDING_EXCEPTION)) {
+		kvm_inject_exception(target);
+		vcpu_clear_flag(target, PENDING_EXCEPTION);
+		vcpu_clear_flag(target, EXCEPT_MASK);
+	} else if (vcpu_get_flag(target, INCREMENT_PC)) {
+		kvm_skip_instr(target);
+		vcpu_clear_flag(target, INCREMENT_PC);
 	}
+
+	kvm_adjust_pc_put(vcpu, target);
 }

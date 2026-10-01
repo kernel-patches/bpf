@@ -644,6 +644,38 @@ out:
 	cpu_reg(host_ctxt, 1) =  ret;
 }
 
+/*
+ * PKVM_HOST_STATE_DIRTY names the authoritative copy, the host's when set.
+ * A loaded protected vCPU takes the request at its next entry instead.
+ */
+struct kvm_vcpu *kvm_adjust_pc_get(struct kvm_vcpu *vcpu)
+{
+	struct pkvm_hyp_vcpu *hyp_vcpu;
+
+	if (!is_protected_kvm_enabled())
+		return vcpu;
+
+	hyp_vcpu = pkvm_get_loaded_hyp_vcpu();
+	if (!hyp_vcpu || vcpu == &hyp_vcpu->vcpu)
+		return vcpu;
+
+	if (pkvm_hyp_vcpu_is_protected(hyp_vcpu))
+		return NULL;
+
+	if (vcpu_get_flag(vcpu, PKVM_HOST_STATE_DIRTY))
+		return vcpu;
+
+	vcpu_copy_flag(&hyp_vcpu->vcpu, vcpu, PC_UPDATE_REQ);
+	return &hyp_vcpu->vcpu;
+}
+
+/* Reflect the consumed request back, otherwise it stays pending. */
+void kvm_adjust_pc_put(struct kvm_vcpu *vcpu, struct kvm_vcpu *target)
+{
+	if (target != vcpu)
+		vcpu_copy_flag(vcpu, target, PC_UPDATE_REQ);
+}
+
 static void handle___kvm_adjust_pc(struct kvm_cpu_context *host_ctxt)
 {
 	DECLARE_REG(struct kvm_vcpu *, vcpu, host_ctxt, 1);

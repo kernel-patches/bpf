@@ -78,4 +78,24 @@ static inline void kvm_skip_host_instr(void)
 	write_sysreg_el2(read_sysreg_el2(SYS_ELR) + 4, SYS_ELR);
 }
 
+/*
+ * Under pKVM, the vCPU __kvm_adjust_pc() adjusts for @vcpu (NULL leaves the
+ * request on @vcpu for its next entry), and the copy of the consumed
+ * PC_UPDATE_REQ back to @vcpu.
+ */
+#ifdef __KVM_NVHE_HYPERVISOR__
+struct kvm_vcpu *kvm_adjust_pc_get(struct kvm_vcpu *vcpu);
+void kvm_adjust_pc_put(struct kvm_vcpu *vcpu, struct kvm_vcpu *target);
+#else
+static inline struct kvm_vcpu *kvm_adjust_pc_get(struct kvm_vcpu *vcpu)
+{
+	return vcpu;
+}
+
+static inline void kvm_adjust_pc_put(struct kvm_vcpu *vcpu,
+				     struct kvm_vcpu *target)
+{
+}
+#endif
+
 #endif
