@@ -548,6 +548,17 @@ looped_back:
 		return -1;
 	}
 
+	if (skb_cloned(skb)) {
+		if (pskb_expand_head(skb, 0, 0, GFP_ATOMIC)) {
+			__IP6_INC_STATS(net, ip6_dst_idev(skb_dst(skb)),
+					IPSTATS_MIB_OUTDISCARDS);
+			kfree_skb_reason(skb, SKB_DROP_REASON_NOMEM);
+			return -1;
+		}
+
+		hdr = (struct ipv6_rpl_sr_hdr *)skb_transport_header(skb);
+	}
+
 	hdr->segments_left--;
 	i = n - hdr->segments_left;
 
