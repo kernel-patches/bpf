@@ -230,20 +230,16 @@ void tipc_named_node_up(struct net *net, u32 dnode, u16 capabilities)
  *
  * Invoked for each publication issued by a newly failed node.
  * Removes publication structure from name table & deletes it.
+ * The caller must hold nametbl_lock and unlink the node subscription.
  */
 static void tipc_publ_purge(struct net *net, struct publication *p)
 {
-	struct tipc_net *tn = tipc_net(net);
 	struct publication *_p;
 	struct tipc_uaddr ua;
 
 	tipc_uaddr(&ua, TIPC_SERVICE_RANGE, p->scope, p->sr.type,
 		   p->sr.lower, p->sr.upper);
-	spin_lock_bh(&tn->nametbl_lock);
 	_p = tipc_nametbl_remove_publ(net, &ua, &p->sk, p->key);
-	if (_p)
-		list_del_init(&_p->binding_node);
-	spin_unlock_bh(&tn->nametbl_lock);
 	if (_p)
 		kfree_rcu(_p, rcu);
 }
@@ -254,10 +250,27 @@ void tipc_publ_notify(struct net *net, struct list_head *nsub_list,
 	struct name_table *nt = tipc_name_table(net);
 	struct tipc_net *tn = tipc_net(net);
 
-	struct publication *publ, *tmp;
+	struct publication *publ;
+	LIST_HEAD(purge_list);
 
-	list_for_each_entry_safe(publ, tmp, nsub_list, binding_node)
+	spin_lock_bh(&tn->nametbl_lock);
+	/* Preserve publications learned after this node-down snapshot. */
+	list_splice_init(nsub_list, &purge_list);
+	spin_unlock_bh(&tn->nametbl_lock);
+
+	for (;;) {
+		spin_lock_bh(&tn->nametbl_lock);
+		if (list_empty(&purge_list)) {
+			spin_unlock_bh(&tn->nametbl_lock);
+			break;
+		}
+		publ = list_first_entry(&purge_list, struct publication,
+					binding_node);
+		list_del_init(&publ->binding_node);
 		tipc_publ_purge(net, publ);
+		spin_unlock_bh(&tn->nametbl_lock);
+	}
+
 	spin_lock_bh(&tn->nametbl_lock);
 	if (!(capabilities & TIPC_NAMED_BCAST))
 		nt->rc_dests--;
