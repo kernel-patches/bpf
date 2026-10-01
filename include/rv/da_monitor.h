@@ -84,7 +84,8 @@ static struct rv_monitor rv_this;
 
 #ifdef __BPF__
 #include "da_monitor_bpf.h"
-#else
+#endif
+
 static void react(enum states curr_state, enum events event)
 {
 	rv_react(&rv_this,
@@ -93,7 +94,6 @@ static void react(enum states curr_state, enum events event)
 		 model_get_event_name(event),
 		 model_get_state_name(curr_state));
 }
-#endif
 
 /*
  * da_monitor_reset_state - reset a monitor and setting it to init state
