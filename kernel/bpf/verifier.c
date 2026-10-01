@@ -37,6 +37,7 @@
 
 #include "diagnostics.h"
 #include "disasm.h"
+#include "exception.h"
 
 static const struct bpf_verifier_ops * const bpf_verifier_ops[] = {
 #define BPF_PROG_TYPE(_id, _name, prog_ctx_type, kern_ctx_type) \
@@ -22644,6 +22645,10 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	if (ret < 0)
 		goto skip_full_check;
 
+	ret = bpf_exc_check_info(env, attr, uattr);
+	if (ret < 0)
+		goto skip_full_check;
+
 	/* Validate instructions and resolve the program's referenced resources. */
 	ret = check_and_resolve_insns(env);
 	if (ret < 0)
@@ -22861,6 +22866,7 @@ err_free_env:
 	kvfree(env->callx_edges);
 	kvfree(env->func_ptrs);
 	bpf_diag_free(env);
+	kvfree(env->cleanup_info);
 	kvfree(env);
 	return ret;
 }
