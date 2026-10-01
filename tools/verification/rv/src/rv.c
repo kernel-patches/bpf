@@ -13,6 +13,7 @@
 #include <trace.h>
 #include <utils.h>
 #include <in_kernel.h>
+#include <bpf_monitor.h>
 
 static int stop_session;
 
@@ -76,6 +77,7 @@ static void rv_list(int argc, char **argv)
 	}
 
 	ikm_list_monitors(container);
+	bpf_list_monitors(container);
 
 	exit(EXIT_SUCCESS);
 }
