@@ -69,6 +69,11 @@
  *   - rewrites the prototype of KF_IMPLICIT_ARGS kfuncs.
  *
  * These kfunc annotations were historically produced by pahole.
+ *
+ * With --patch_btfids, --btf_link <section>:<module>:<raw BTF file> also fills
+ * in the <section>.link section of the ELF file, for BTF that a module carries
+ * (struct btf_link in kernel/bpf/btf.c): the module name, and the size and
+ * SHA-256 of the raw BTF.
  */
 
 #define  _GNU_SOURCE
@@ -92,7 +97,13 @@
 #include <subcmd/parse-options.h>
 
 #define BTF_IDS_SECTION	".BTF_ids"
+#define BTF_LINK_MODULE_NAME_MAX	64
+#define LIBBPF_SHA256_DIGEST_LENGTH	32
 #define BTF_ID_PREFIX	"__BTF_ID__"
+
+/* from libbpf, which this tool is statically linked with */
+void libbpf_sha256(const void *data, size_t len,
+		   __u8 out[LIBBPF_SHA256_DIGEST_LENGTH]);
 
 #define BTF_STRUCT	"struct"
 #define BTF_UNION	"union"
@@ -170,6 +181,19 @@ struct object {
 	struct addr_sym *addr_syms;
 	u32 addr_syms_cnt;
 	u32 addr_syms_cap;
+};
+
+struct btf_link {
+	char *value;
+	char *section;
+	char *module;
+	char *btf_path;
+};
+
+struct btf_links {
+	struct btf_link *links;
+	u32 cnt;
+	u32 cap;
 };
 
 #define DECL_TAG_FASTCALL "bpf_fastcall"
@@ -258,6 +282,48 @@ static int __ensure_mem(void **data, u32 *cap, u32 cnt, size_t elem_sz)
 
 #define ensure_mem(arr_ptr, cap_ptr, cnt) \
 	__ensure_mem((void **)(arr_ptr), (cap_ptr), (cnt), sizeof(**(arr_ptr)))
+
+static int parse_btf_link(const struct option *opt, const char *arg, int unset)
+{
+	struct btf_links *links = opt->value;
+	struct btf_link *link;
+	char *separator;
+
+	if (unset)
+		return -EINVAL;
+	if (ensure_mem(&links->links, &links->cap, links->cnt + 1))
+		return -ENOMEM;
+	link = &links->links[links->cnt];
+	memset(link, 0, sizeof(*link));
+	link->value = strdup(arg);
+	if (!link->value)
+		return -ENOMEM;
+	link->section = link->value;
+	separator = strchr(link->section, ':');
+	if (!separator || separator == link->section)
+		goto err_value;
+	*separator++ = '\0';
+	link->module = separator;
+	separator = strchr(link->module, ':');
+	if (!separator || separator == link->module || !separator[1])
+		goto err_value;
+	*separator++ = '\0';
+	link->btf_path = separator;
+	links->cnt++;
+	return 0;
+err_value:
+	free(link->value);
+	return -EINVAL;
+}
+
+static void free_btf_links(struct btf_links *links)
+{
+	u32 i;
+
+	for (i = 0; i < links->cnt; i++)
+		free(links->links[i].value);
+	free(links->links);
+}
 
 static bool is_btf_id(const char *name)
 {
@@ -1738,9 +1804,143 @@ out:
 	return err;
 }
 
+/*
+ * Fill in the <section>.link record of an ELF file: the name of the module
+ * that carries <section>, NUL-padded to __MODULE_NAME_LEN of the target, the
+ * SHA-256 of the raw BTF in link->btf_path, and its size in the byte order of
+ * the target.  The record must already be there, with exactly that size.
+ */
+static int patch_btf_link(const char *elf_path, const struct btf_link *link)
+{
+	size_t shdrstrndx, module_name_len, link_size;
+	void *raw_btf_data;
+	Elf_Scn *scn = NULL;
+	char section[128];
+	int fd, err = -1;
+	FILE *btf_file;
+	u32 raw_btf_size, btf_size;
+	Elf_Data *data;
+	GElf_Ehdr ehdr;
+	struct stat st;
+	GElf_Shdr sh;
+	char *name;
+	Elf *elf;
+
+	if (stat(link->btf_path, &st) < 0) {
+		pr_err("FAILED to stat %s: %s\n", link->btf_path, strerror(errno));
+		return -1;
+	}
+	if (!st.st_size || st.st_size > UINT_MAX) {
+		pr_err("FAILED: %s has an unexpected size\n", link->btf_path);
+		return -1;
+	}
+	raw_btf_size = st.st_size;
+	raw_btf_data = malloc(raw_btf_size);
+	if (!raw_btf_data) {
+		pr_err("FAILED to allocate %u bytes for %s\n", raw_btf_size, link->btf_path);
+		return -ENOMEM;
+	}
+	btf_file = fopen(link->btf_path, "rb");
+	if (!btf_file) {
+		pr_err("FAILED to open %s: %s\n", link->btf_path, strerror(errno));
+		goto out_data;
+	}
+	if (fread(raw_btf_data, raw_btf_size, 1, btf_file) != 1) {
+		pr_err("FAILED to read %s\n", link->btf_path);
+		fclose(btf_file);
+		goto out_data;
+	}
+	fclose(btf_file);
+
+	if (snprintf(section, sizeof(section), "%s.link", link->section) >= (int)sizeof(section)) {
+		pr_err("FAILED: section name %s.link is too long\n", link->section);
+		goto out_data;
+	}
+
+	elf_version(EV_CURRENT);
+	fd = open(elf_path, O_RDWR);
+	if (fd < 0) {
+		pr_err("FAILED to open %s: %s\n", elf_path, strerror(errno));
+		goto out_data;
+	}
+	elf = elf_begin(fd, ELF_C_RDWR_MMAP, NULL);
+	if (!elf) {
+		pr_err("FAILED cannot create ELF descriptor: %s\n", elf_errmsg(-1));
+		goto out_close;
+	}
+	elf_flagelf(elf, ELF_C_SET, ELF_F_LAYOUT);
+	if (!gelf_getehdr(elf, &ehdr)) {
+		pr_err("FAILED cannot get ELF header: %s\n", elf_errmsg(-1));
+		goto out_elf;
+	}
+	/* __MODULE_NAME_LEN is 64 - sizeof(unsigned long) */
+	if (ehdr.e_ident[EI_CLASS] == ELFCLASS32) {
+		module_name_len = BTF_LINK_MODULE_NAME_MAX - 4;
+	} else if (ehdr.e_ident[EI_CLASS] == ELFCLASS64) {
+		module_name_len = BTF_LINK_MODULE_NAME_MAX - 8;
+	} else {
+		pr_err("FAILED: unknown ELF class of %s\n", elf_path);
+		goto out_elf;
+	}
+	if (strlen(link->module) >= module_name_len) {
+		pr_err("FAILED: module name %s is too long\n", link->module);
+		goto out_elf;
+	}
+
+	if (elf_getshdrstrndx(elf, &shdrstrndx)) {
+		pr_err("FAILED cannot get shdr str ndx\n");
+		goto out_elf;
+	}
+	while ((scn = elf_nextscn(elf, scn))) {
+		if (gelf_getshdr(scn, &sh) != &sh) {
+			pr_err("FAILED to get section header\n");
+			goto out_elf;
+		}
+		name = elf_strptr(elf, shdrstrndx, sh.sh_name);
+		if (name && !strcmp(name, section))
+			break;
+	}
+	if (!scn) {
+		pr_err("FAILED: section %s not found in %s\n", section, elf_path);
+		goto out_elf;
+	}
+	link_size = module_name_len + LIBBPF_SHA256_DIGEST_LENGTH + sizeof(u32);
+	data = elf_getdata(scn, NULL);
+	if (!data || !data->d_buf || data->d_size != link_size) {
+		pr_err("FAILED: section %s in %s is not %zu bytes of data\n",
+		       section, elf_path, link_size);
+		goto out_elf;
+	}
+
+	memset(data->d_buf, 0, data->d_size);
+	memcpy(data->d_buf, link->module, strlen(link->module) + 1);
+	libbpf_sha256(raw_btf_data, raw_btf_size,
+		      (u8 *)data->d_buf + module_name_len);
+	btf_size = ehdr.e_ident[EI_DATA] == ELFDATANATIVE ? raw_btf_size :
+							     bswap_32(raw_btf_size);
+	memcpy((u8 *)data->d_buf + module_name_len + LIBBPF_SHA256_DIGEST_LENGTH,
+	       &btf_size, sizeof(btf_size));
+
+	pr_debug("Filled in %s of %s for module %s\n", section, elf_path, link->module);
+
+	elf_flagdata(data, ELF_C_SET, ELF_F_DIRTY);
+	if (elf_update(elf, ELF_C_WRITE) < 0) {
+		pr_err("FAILED to update ELF file %s: %s\n", elf_path, elf_errmsg(-1));
+		goto out_elf;
+	}
+	err = 0;
+out_elf:
+	elf_end(elf);
+out_close:
+	close(fd);
+out_data:
+	free(raw_btf_data);
+	return err;
+}
+
 static const char * const resolve_btfids_usage[] = {
 	"resolve_btfids [<options>] <ELF object>",
-	"resolve_btfids --patch_btfids <.BTF_ids file> <ELF object>",
+	"resolve_btfids --patch_btfids <.BTF_ids file> [--btf_link <section>:<module>:<BTF file>]... <ELF object>",
 	NULL
 };
 
@@ -1758,6 +1958,7 @@ int main(int argc, const char **argv)
 		.sets     = RB_ROOT,
 	};
 	const char *btfids_path = NULL;
+	struct btf_links btf_links = {};
 	bool fatal_warnings = false;
 	bool resolve_btfids = true;
 	char out_path[PATH_MAX];
@@ -1773,21 +1974,28 @@ int main(int argc, const char **argv)
 			    "turn warnings into errors"),
 		OPT_BOOLEAN(0, "distill_base", &obj.distill_base,
 			    "distill --btf_base and emit .BTF.base section data"),
+		OPT_CALLBACK(0, "btf_link", &btf_links, "section:module:btf-file",
+			     "patch a BTF link (with --patch_btfids)", parse_btf_link),
 		OPT_STRING(0, "patch_btfids", &btfids_path, "file",
 			   "path to .BTF_ids section data blob to patch into ELF file"),
 		OPT_END()
 	};
 	int err = -1;
+	u32 i;
 
 	argc = parse_options(argc, argv, btfid_options, resolve_btfids_usage,
 			     PARSE_OPT_STOP_AT_NON_OPTION);
-	if (argc != 1)
+	if (argc != 1 || (btf_links.cnt && !btfids_path))
 		usage_with_options(resolve_btfids_usage, btfid_options);
 
 	obj.path = argv[0];
 
-	if (btfids_path)
-		return patch_btfids(btfids_path, obj.path);
+	if (btfids_path) {
+		err = patch_btfids(btfids_path, obj.path);
+		for (i = 0; !err && i < btf_links.cnt; i++)
+			err = patch_btf_link(obj.path, &btf_links.links[i]);
+		goto out;
+	}
 
 	if (elf_collect(&obj))
 		goto out;
@@ -1845,6 +2053,7 @@ dump_btf:
 	if (!(fatal_warnings && warnings))
 		err = 0;
 out:
+	free_btf_links(&btf_links);
 	btf__free(obj.base_btf);
 	btf__free(obj.btf);
 	btf_id__free_all(&obj.structs);
