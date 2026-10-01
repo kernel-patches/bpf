@@ -10816,7 +10816,6 @@ int bpf_xdp_link_attach(const union bpf_attr *attr, struct bpf_prog *prog,
 		link->dev = NULL;
 		bpf_link_cleanup(&link_primer);
 		bpf_log(log, extack._msg);
-		trace_bpf_xdp_link_attach_failed(extack._msg);
 		goto out_put_dev;
 	}
 
