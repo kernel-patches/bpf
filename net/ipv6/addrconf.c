@@ -1050,8 +1050,9 @@ static bool ipv6_chk_same_addr(struct net *net, const struct in6_addr *addr,
 	return false;
 }
 
-static int ipv6_add_addr_hash(struct net_device *dev, struct inet6_ifaddr *ifa)
+static int ipv6_add_addr_hash(struct inet6_dev *idev, struct inet6_ifaddr *ifa)
 {
+	struct net_device *dev = idev->dev;
 	struct net *net = dev_net(dev);
 	unsigned int hash = inet6_addr_hash(net, &ifa->addr);
 	int err = 0;
@@ -1063,7 +1064,23 @@ static int ipv6_add_addr_hash(struct net_device *dev, struct inet6_ifaddr *ifa)
 		netdev_dbg(dev, "ipv6_add_addr: already assigned\n");
 		err = -EEXIST;
 	} else {
-		hlist_add_head_rcu(&ifa->addr_lst, &net->ipv6.inet6_addr_lst[hash]);
+		write_lock(&idev->lock);
+		if (idev->dead || idev->cnf.disable_ipv6) {
+			err = idev->dead ? -ENODEV : -EACCES;
+		} else {
+			hlist_add_head_rcu(&ifa->addr_lst,
+					   &net->ipv6.inet6_addr_lst[hash]);
+			ipv6_link_dev_addr(idev, ifa);
+
+			if (ifa->flags & IFA_F_TEMPORARY) {
+				/* manage_tempaddrs() relies on addresses being added to the head */
+				list_add(&ifa->tmp_list, &idev->tempaddr_list);
+				in6_ifa_hold(ifa);
+			}
+
+			in6_ifa_hold(ifa);
+		}
+		write_unlock(&idev->lock);
 	}
 
 	spin_unlock_bh(&net->ipv6.addrconf_hash_lock);
@@ -1171,25 +1188,11 @@ ipv6_add_addr(struct inet6_dev *idev, struct ifa6_config *cfg,
 
 	rcu_read_lock();
 
-	err = ipv6_add_addr_hash(idev->dev, ifa);
+	err = ipv6_add_addr_hash(idev, ifa);
 	if (err < 0) {
 		rcu_read_unlock();
 		goto out;
 	}
-
-	write_lock_bh(&idev->lock);
-
-	/* Add to inet6_dev unicast addr list. */
-	ipv6_link_dev_addr(idev, ifa);
-
-	if (ifa->flags&IFA_F_TEMPORARY) {
-		/* manage_tempaddrs() relies on addresses being added to the head */
-		list_add(&ifa->tmp_list, &idev->tempaddr_list);
-		in6_ifa_hold(ifa);
-	}
-
-	in6_ifa_hold(ifa);
-	write_unlock_bh(&idev->lock);
 
 	rcu_read_unlock();
 
