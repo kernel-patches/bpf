@@ -49,6 +49,13 @@
 #define TASDEVICE_REG(book, page, reg)	(((book * 256 * 128) + \
 					(page * 128)) + reg)
 
+#define TAS_REG_ERR_LOG(dev, chn, reg, ret) \
+	dev_err((dev), "%s, C%uBx%02xPx%02xRx%02x E=%d\n", \
+		__func__, chn, TASDEVICE_BOOK_ID(reg), \
+		TASDEVICE_PAGE_ID(reg), \
+		TASDEVICE_PAGE_REG(reg), \
+		(ret))
+
 /* Software Reset, compatble with new device (TAS5825). */
 #define TASDEVICE_REG_SWRESET		TASDEVICE_REG(0x0, 0x0, 0x01)
 #define TASDEVICE_REG_SWRESET_RESET	BIT(0)

@@ -34,10 +34,7 @@ int tasdevice_dev_read(struct tasdevice_priv *tas_priv,
 
 		ret = regmap_read(map, TASDEVICE_PGRG(reg), val);
 		if (ret < 0)
-			dev_err(tas_priv->dev, "%s, Bx%02xPx%02xRx%02x E=%d\n",
-				__func__, TASDEVICE_BOOK_ID(reg),
-				TASDEVICE_PAGE_ID(reg),
-				TASDEVICE_PAGE_REG(reg), ret);
+			TAS_REG_ERR_LOG(tas_priv->dev, chn, reg, ret);
 	} else {
 		ret = -EINVAL;
 		dev_err(tas_priv->dev, "%s, no such channel(%d)\n", __func__,
@@ -65,10 +62,7 @@ int tasdevice_dev_bulk_read(struct tasdevice_priv *tas_priv,
 
 		ret = regmap_bulk_read(map, TASDEVICE_PGRG(reg), data, len);
 		if (ret < 0)
-			dev_err(tas_priv->dev, "%s, Bx%02xPx%02xRx%02x E=%d\n",
-				__func__, TASDEVICE_BOOK_ID(reg),
-				TASDEVICE_PAGE_ID(reg),
-				TASDEVICE_PAGE_REG(reg), ret);
+			TAS_REG_ERR_LOG(tas_priv->dev, chn, reg, ret);
 	} else
 		dev_err(tas_priv->dev, "%s, no such channel(%d)\n", __func__,
 			chn);
@@ -94,10 +88,7 @@ int tasdevice_dev_write(struct tasdevice_priv *tas_priv,
 		ret = regmap_write(map, TASDEVICE_PGRG(reg),
 			value);
 		if (ret < 0)
-			dev_err(tas_priv->dev, "%s, Bx%02xPx%02xRx%02x E=%d\n",
-				__func__, TASDEVICE_BOOK_ID(reg),
-				TASDEVICE_PAGE_ID(reg),
-				TASDEVICE_PAGE_REG(reg), ret);
+			TAS_REG_ERR_LOG(tas_priv->dev, chn, reg, ret);
 	} else {
 		ret = -EINVAL;
 		dev_err(tas_priv->dev, "%s, no such channel(%d)\n", __func__,
@@ -127,10 +118,7 @@ int tasdevice_dev_bulk_write(
 		ret = regmap_bulk_write(map, TASDEVICE_PGRG(reg),
 			data, len);
 		if (ret < 0)
-			dev_err(tas_priv->dev, "%s, Bx%02xPx%02xRx%02x E=%d\n",
-				__func__, TASDEVICE_BOOK_ID(reg),
-				TASDEVICE_PAGE_ID(reg),
-				TASDEVICE_PAGE_REG(reg), ret);
+			TAS_REG_ERR_LOG(tas_priv->dev, chn, reg, ret);
 	} else {
 		ret = -EINVAL;
 		dev_err(tas_priv->dev, "%s, no such channel(%d)\n", __func__,

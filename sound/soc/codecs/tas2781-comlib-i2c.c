@@ -131,10 +131,7 @@ int tasdevice_dev_update_bits(
 		ret = regmap_update_bits(map, TASDEVICE_PGRG(reg),
 			mask, value);
 		if (ret < 0)
-			dev_err(tas_priv->dev, "%s, Bx%02xPx%02xRx%02x E=%d\n",
-				__func__, TASDEVICE_BOOK_ID(reg),
-				TASDEVICE_PAGE_ID(reg),
-				TASDEVICE_PAGE_REG(reg), ret);
+			TAS_REG_ERR_LOG(tas_priv->dev, chn, reg, ret);
 	} else {
 		dev_err(tas_priv->dev, "%s, no such channel(%d)\n", __func__,
 			chn);
