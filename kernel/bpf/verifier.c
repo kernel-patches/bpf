@@ -19847,7 +19847,7 @@ static int check_pseudo_btf_id(struct bpf_verifier_env *env,
 		/* kernel types enter the program here, see bpf_check() */
 		btf = bpf_get_btf_vmlinux();
 		if (IS_ERR_OR_NULL(btf)) {
-			verbose(env, "kernel is missing BTF, make sure CONFIG_DEBUG_INFO_BTF=y is specified in Kconfig.\n");
+			verbose(env, "kernel is missing BTF, make sure CONFIG_DEBUG_INFO_BTF is specified in Kconfig (with =m, that btf_vmlinux can be loaded).\n");
 			return -EINVAL;
 		}
 		btf_get(btf);
@@ -21881,11 +21881,26 @@ int bpf_check_attach_btf_id_multi(struct btf *btf, struct bpf_prog *prog, u32 bt
 	return 0;
 }
 
+/* CONFIG_DEBUG_INFO_BTF=m: lookups that found the vmlinux BTF not loaded */
+static atomic_t btf_vmlinux_misses = ATOMIC_INIT(0);
+
+/*
+ * Returns the parsed vmlinux BTF, NULL if the kernel has none, or an ERR_PTR
+ * if it is malformed.  Never waits for user space.
+ *
+ * With CONFIG_DEBUG_INFO_BTF=m the BTF is in the btf_vmlinux module, and
+ * this does not load it: until bpf_load_btf_vmlinux() has, it returns NULL,
+ * as without BTF, and counts the miss for bpf_btf_vmlinux_misses().
+ */
 struct btf *bpf_get_btf_vmlinux(void)
 {
-	/* Pairs with the smp_store_release() on the parse path below. */
+	/* Pairs with the smp_store_release() on the parse paths. */
 	struct btf *btf = smp_load_acquire(&btf_vmlinux);
 
+	if (!btf && IS_MODULE(CONFIG_DEBUG_INFO_BTF)) {
+		atomic_inc(&btf_vmlinux_misses);
+		return NULL;
+	}
 	if (!btf && IS_ENABLED(CONFIG_DEBUG_INFO_BTF)) {
 		mutex_lock(&btf_vmlinux_lock);
 		btf = btf_vmlinux;
@@ -21906,14 +21921,80 @@ struct btf *bpf_get_btf_vmlinux(void)
 
 /*
  * The vmlinux BTF if it has been parsed already, else NULL.  Unlike
- * bpf_get_btf_vmlinux() this never parses anything: for a running BPF
- * program, and for code that only uses the BTF if it happens to be there.
+ * bpf_get_btf_vmlinux() this never parses anything and, with
+ * CONFIG_DEBUG_INFO_BTF=m, does not count a miss: for a running BPF program,
+ * and for code that only uses the BTF if it happens to be there.
  */
 struct btf *bpf_peek_btf_vmlinux(void)
 {
-	/* Pairs with the smp_store_release() in bpf_get_btf_vmlinux() */
+	/* Pairs with the smp_store_release() on the parse paths */
 	return smp_load_acquire(&btf_vmlinux);
 }
+
+/**
+ * bpf_load_btf_vmlinux - get the vmlinux BTF, loading it if necessary
+ *
+ * Like bpf_get_btf_vmlinux(), but with CONFIG_DEBUG_INFO_BTF=m it loads the
+ * btf_vmlinux module if the BTF is not there yet and parses it.  Loading the
+ * module waits for user space (modprobe), and the notifiers of the module
+ * load take locks of their own, event_mutex among them.  So this is only
+ * called at the start of a request from user space, in process context,
+ * holding no lock that loading a module may need; everything else uses
+ * bpf_get_btf_vmlinux() or bpf_peek_btf_vmlinux().
+ *
+ * If the module cannot be loaded, returns NULL like a kernel without BTF;
+ * the next call tries again.
+ */
+struct btf *bpf_load_btf_vmlinux(void)
+{
+	struct btf *btf;
+	u32 size;
+
+	might_sleep();
+	if (!IS_MODULE(CONFIG_DEBUG_INFO_BTF))
+		return bpf_get_btf_vmlinux();
+
+	/* Pairs with the smp_store_release() below */
+	btf = smp_load_acquire(&btf_vmlinux);
+	if (btf)
+		return btf;
+
+	/* Outside btf_vmlinux_lock, the module's notifier must not wait for us */
+	if (!btf_vmlinux_data(&size, true))
+		return NULL;
+
+	mutex_lock(&btf_vmlinux_lock);
+	btf = btf_vmlinux;
+	if (!btf) {
+		btf = btf_parse_vmlinux();
+		/*
+		 * An allocation failure is not remembered, the next caller
+		 * retries.  Anything else is a broken BTF, the same one with
+		 * every attempt, and is remembered as with =y.
+		 */
+		if (IS_ERR(btf) && PTR_ERR(btf) == -ENOMEM) {
+			mutex_unlock(&btf_vmlinux_lock);
+			return btf;
+		}
+		/* As in bpf_get_btf_vmlinux(): publish after the parse */
+		smp_store_release(&btf_vmlinux, btf);
+	}
+	mutex_unlock(&btf_vmlinux_lock);
+	return btf;
+}
+
+#if IS_MODULE(CONFIG_DEBUG_INFO_BTF)
+/*
+ * bpf(2) samples this before a command and, if the command failed and the
+ * count moved, loads the vmlinux BTF and runs the command once more.  The
+ * count is global: a command that failed for another reason while a
+ * concurrent one missed the BTF is run again as well, and fails the same way.
+ */
+unsigned int bpf_btf_vmlinux_misses(void)
+{
+	return atomic_read(&btf_vmlinux_misses);
+}
+#endif
 
 /*
  * The add_fd_from_fd_array() is executed only if fd_array_cnt is non-zero. In

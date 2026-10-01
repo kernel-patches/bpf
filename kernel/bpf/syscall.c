@@ -3002,6 +3002,17 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, struct bpf_log_at
 	if (is_perfmon_prog_type(type) && !bpf_token_capable(token, CAP_PERFMON))
 		goto put_token;
 
+	/*
+	 * CONFIG_DEBUG_INFO_BTF=m: a light skeleton loader is a syscall
+	 * program that loads programs while it runs (bpf_sys_bpf()), and
+	 * those may need the vmlinux BTF, which cannot be loaded from within
+	 * a running program.  Load it now, while user space loads the loader;
+	 * if that fails, the loader works as on a kernel without BTF.
+	 */
+	if (IS_MODULE(CONFIG_DEBUG_INFO_BTF) && type == BPF_PROG_TYPE_SYSCALL &&
+	    !uattr.is_kernel)
+		bpf_load_btf_vmlinux();
+
 	multi_func = is_tracing_multi(attr->expected_attach_type);
 
 	/* attach_prog_fd/attach_btf_obj_fd can specify fd of either bpf_prog
@@ -6435,6 +6446,14 @@ static int __sys_bpf(enum bpf_cmd cmd, bpfptr_t uattr, unsigned int size,
 					  &map_idr, &map_idr_lock);
 		break;
 	case BPF_BTF_GET_NEXT_ID:
+		/*
+		 * With CONFIG_DEBUG_INFO_BTF=m the kernel BTFs get ids when the
+		 * vmlinux BTF is loaded; whoever enumerates them wants them.
+		 * Only for callers bpf_obj_get_next_id() lets through.
+		 */
+		if (IS_MODULE(CONFIG_DEBUG_INFO_BTF) &&
+		    ns_capable_noaudit(&init_user_ns, CAP_SYS_ADMIN))
+			bpf_load_btf_vmlinux();
 		err = bpf_obj_get_next_id(&attr, uattr.user,
 					  &btf_idr, &btf_idr_lock);
 		break;
@@ -6525,10 +6544,40 @@ static int __sys_bpf(enum bpf_cmd cmd, bpfptr_t uattr, unsigned int size,
 	return err;
 }
 
+/*
+ * With CONFIG_DEBUG_INFO_BTF=m the vmlinux BTF is loaded on demand, but never
+ * from within a command: loading waits for user space, and a command may hold
+ * locks or run from a BPF program (bpf_sys_bpf()).  A command that needs the
+ * BTF while it is not loaded fails as it would without BTF.  If the command
+ * is one whose failure leaves nothing behind, load the BTF here, on entry
+ * from user space with nothing held, and run the command once more.
+ */
+static bool bpf_btf_vmlinux_retry(int cmd, unsigned int misses)
+{
+	switch (cmd & ~BPF_COMMON_ATTRS) {
+	case BPF_PROG_LOAD:
+	case BPF_MAP_CREATE:
+	case BPF_BTF_LOAD:
+		break;
+	default:
+		return false;
+	}
+	if (bpf_btf_vmlinux_misses() == misses)
+		return false;
+	return !IS_ERR_OR_NULL(bpf_load_btf_vmlinux());
+}
+
 SYSCALL_DEFINE5(bpf, int, cmd, union bpf_attr __user *, uattr, unsigned int, size,
 		struct bpf_common_attr __user *, uattr_common, unsigned int, size_common)
 {
-	return __sys_bpf(cmd, USER_BPFPTR(uattr), size, USER_BPFPTR(uattr_common), size_common);
+	unsigned int misses = bpf_btf_vmlinux_misses();
+	int err;
+
+	err = __sys_bpf(cmd, USER_BPFPTR(uattr), size, USER_BPFPTR(uattr_common), size_common);
+	if (IS_MODULE(CONFIG_DEBUG_INFO_BTF) && err < 0 && bpf_btf_vmlinux_retry(cmd, misses))
+		err = __sys_bpf(cmd, USER_BPFPTR(uattr), size, USER_BPFPTR(uattr_common),
+				size_common);
+	return err;
 }
 
 static bool syscall_prog_is_valid_access(int off, int size,

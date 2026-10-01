@@ -3184,6 +3184,15 @@ static inline s32 bpf_call_args_imm(s16 idx)
 
 struct btf *bpf_get_btf_vmlinux(void);
 struct btf *bpf_peek_btf_vmlinux(void);
+struct btf *bpf_load_btf_vmlinux(void);
+#if IS_MODULE(CONFIG_DEBUG_INFO_BTF)
+unsigned int bpf_btf_vmlinux_misses(void);
+#else
+static inline unsigned int bpf_btf_vmlinux_misses(void)
+{
+	return 0;
+}
+#endif
 
 /* Map specifics */
 struct xdp_frame;
