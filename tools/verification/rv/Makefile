@@ -73,8 +73,11 @@ static: $(RV_IN)
 	$(QUIET_LINK)$(CC) $(LDFLAGS) -o $(RV)-static $(RV_IN) $(EXTLIBS)
 
 BPF_DIR		:= bpf_monitors
+BPF_REACT_DIR   := bpf_reactors
 BPF_SOURCES	:= $(wildcard $(BPF_DIR)/*.c)
 BPF_OBJECTS	:= $(BPF_SOURCES:.c=.o)
+BPF_REACT_SOURCES := $(wildcard $(BPF_REACT_DIR)/*.c)
+BPF_REACT_OBJECTS := $(BPF_REACT_SOURCES:.c=.o)
 VMLINUX_H	:= $(BPF_DIR)/vmlinux.h
 
 BPF_INCLUDES	:= -I$(srctree)/include/uapi
@@ -95,9 +98,14 @@ $(BPF_DIR)/%.o: $(BPF_DIR)/%.c $(VMLINUX_H)
 	$(Q)$(LLVM_STRIP) -g $@
 	$(Q)$(LLVM_OBJCOPY) --remove-section=.rel.rodata $@
 
--include $(BPF_SOURCES:.c=.d)
+$(BPF_REACT_DIR)/%.o: $(BPF_REACT_DIR)/%.c $(VMLINUX_H)
+	$(QUIET_CLANG)$(CLANG) $(BPF_CFLAGS) -c $< -o $@
+	$(Q)$(LLVM_STRIP) -g $@
+	$(Q)$(LLVM_OBJCOPY) --remove-section=.rel.rodata $@
 
-bpf: $(BPF_OBJECTS)
+-include $(BPF_SOURCES:.c=.d) $(BPF_REACT_SOURCES:.c=.d)
+
+bpf: $(BPF_OBJECTS) $(BPF_REACT_OBJECTS)
 
 rv.%: fixdep FORCE
 	make -f $(srctree)/tools/build/Makefile.build dir=. $@
