@@ -711,6 +711,7 @@ struct phy_device *phy_device_create(struct mii_bus *bus, int addr, u32 phy_id,
 	dev->max_n_ports = 1;
 
 	mutex_init(&dev->lock);
+	mutex_init(&dev->bind_lock);
 	INIT_DELAYED_WORK(&dev->state_queue, phy_state_machine);
 
 	/* Request the appropriate module unconditionally; don't
@@ -1668,6 +1669,8 @@ static void phy_sfp_release(struct phy_device *phydev)
 	}
 }
 
+static int __phy_probe(struct device *dev);
+
 static bool phy_drv_supports_irq(const struct phy_driver *phydrv)
 {
 	return phydrv->config_intr && phydrv->handle_interrupt;
@@ -1702,7 +1705,10 @@ static void phy_detach_internal(struct phy_device *phydev, bool notify_bus)
 		sysfs_remove_file(&phydev->mdio.dev.kobj,
 				  &dev_attr_phy_standalone.attr);
 
-	phy_suspend(phydev);
+	mutex_lock(&phydev->bind_lock);
+	if (phydev->bound)
+		phy_suspend(phydev);
+	mutex_unlock(&phydev->bind_lock);
 
 	if (notify_bus && phydev->mdio.bus->notify_phy_detach)
 		phydev->mdio.bus->notify_phy_detach(phydev);
@@ -1780,11 +1786,15 @@ EXPORT_SYMBOL(phy_detach);
  *
  * Description: Called by drivers to attach to a particular PHY
  *     device. The phy_device is found, and properly hooked up
- *     to the phy_driver.  If no driver is attached, then a
+ *     to the phy_driver.  If no driver is bound, then a
  *     generic driver is used.  The phy_device is given a ptr to
  *     the attaching device, and given a callback for link status
  *     change.  The phy_device is returned to the attaching driver.
  *     This function takes a reference on the phy device.
+ *
+ * Return: 0 on success, -EAGAIN if a driver is being bound to or
+ * unbound from the PHY, -EBUSY if the PHY is already attached, or
+ * another negative error code.
  */
 int phy_attach_direct(struct net_device *dev, struct phy_device *phydev,
 		      u32 flags, phy_interface_t interface)
@@ -1814,6 +1824,8 @@ int phy_attach_direct(struct net_device *dev, struct phy_device *phydev,
 
 	get_device(d);
 
+	mutex_lock(&phydev->bind_lock);
+
 	/* Assume that if there is no driver, that it doesn't
 	 * exist, and we should use the genphy driver.
 	 */
@@ -1824,22 +1836,28 @@ int phy_attach_direct(struct net_device *dev, struct phy_device *phydev,
 			d->driver = &genphy_driver.mdiodrv.driver;
 
 		phydev->is_genphy_driven = 1;
+	} else if (!phydev->bound) {
+		phydev_err(phydev, "driver is binding or unbinding\n");
+		err = -EAGAIN;
+		goto error_unlock;
 	}
 
 	if (!try_module_get(d->driver->owner)) {
 		phydev_err(phydev, "failed to get the device driver module\n");
 		err = -EIO;
-		goto error_put_device;
+		goto error_unlock;
 	}
 	phydev->drv_owner = d->driver->owner;
 
 	if (phydev->is_genphy_driven) {
-		err = d->driver->probe(d);
+		err = __phy_probe(d);
 		if (err >= 0)
 			err = device_bind_driver(d);
 
 		if (err)
 			goto error_module_put;
+
+		phydev->bound = true;
 	}
 
 	phydev->phy_link_change = phy_link_change;
@@ -1922,6 +1940,8 @@ int phy_attach_direct(struct net_device *dev, struct phy_device *phydev,
 
 	phy_resume(phydev);
 
+	mutex_unlock(&phydev->bind_lock);
+
 	/**
 	 * If the external phy used by current mac interface is managed by
 	 * another mac interface, so we should create a device link between
@@ -1934,6 +1954,7 @@ int phy_attach_direct(struct net_device *dev, struct phy_device *phydev,
 	return err;
 
 error:
+	mutex_unlock(&phydev->bind_lock);
 	/* phy_detach_internal() does all of the cleanup below */
 	phy_detach_internal(phydev, false);
 	return err;
@@ -1943,7 +1964,8 @@ error_module_put:
 	phydev->drv_owner = NULL;
 	phydev->is_genphy_driven = 0;
 	d->driver = NULL;
-error_put_device:
+error_unlock:
+	mutex_unlock(&phydev->bind_lock);
 	put_device(d);
 	if (ndev_owner != bus->owner)
 		module_put(bus->owner);
@@ -3647,12 +3669,14 @@ struct fwnode_handle *fwnode_get_phy_node(const struct fwnode_handle *fwnode)
 EXPORT_SYMBOL_GPL(fwnode_get_phy_node);
 
 /**
- * phy_probe - probe and init a PHY device
+ * __phy_probe - probe and init a PHY device
  * @dev: device to probe and init
  *
  * Take care of setting up the phy_device structure, set the state to READY.
+ *
+ * Return: 0 on success or a negative error code.
  */
-static int phy_probe(struct device *dev)
+static int __phy_probe(struct device *dev)
 {
 	struct phy_device *phydev = to_phy_device(dev);
 	struct device_driver *drv = phydev->mdio.dev.driver;
@@ -3800,9 +3824,29 @@ out_reset:
 	return err;
 }
 
+static int phy_probe(struct device *dev)
+{
+	struct phy_device *phydev = to_phy_device(dev);
+	int err;
+
+	err = __phy_probe(dev);
+	if (err)
+		return err;
+
+	mutex_lock(&phydev->bind_lock);
+	phydev->bound = true;
+	mutex_unlock(&phydev->bind_lock);
+
+	return 0;
+}
+
 static int phy_remove(struct device *dev)
 {
 	struct phy_device *phydev = to_phy_device(dev);
+
+	mutex_lock(&phydev->bind_lock);
+	phydev->bound = false;
+	mutex_unlock(&phydev->bind_lock);
 
 	cancel_delayed_work_sync(&phydev->state_queue);
 

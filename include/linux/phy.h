@@ -671,6 +671,8 @@ struct phy_oatc14_sqi_capability {
  * @n_ports: Number of ports currently attached to the PHY
  * @max_n_ports: Max number of ports this PHY can expose
  * @lock:  Mutex for serialization access to PHY
+ * @bind_lock: Serialises attach and detach with driver bind and unbind
+ * @bound: A driver has finished probing and is not being removed
  * @state_queue: Work queue for state machine
  * @link_down_events: Number of times link was lost
  * @shared: Pointer to private data shared by phys in one package
@@ -801,6 +803,10 @@ struct phy_device {
 	struct delayed_work state_queue;
 
 	struct mutex lock;
+
+	/* Protects bound */
+	struct mutex bind_lock;
+	bool bound;
 
 	/* This may be modified under the rtnl lock */
 	bool sfp_bus_attached;
