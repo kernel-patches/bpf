@@ -6,6 +6,8 @@ test_begin
 set_timeout 30s
 
 RVDIR=/sys/kernel/tracing/rv/
+# only works when running in the kernel tree
+RVTOOL=$(dirname "$RV")
 
 # Help and basic tests
 check "verify help page" \
@@ -17,13 +19,15 @@ check "verify list subcommand help" \
 all_nested=$(grep : $RVDIR/available_monitors | cut -d: -f2 | paste -s | sed 's/\t/\\|/g')
 all_non_nested=$(grep -v : $RVDIR/available_monitors | cut -d: -f2 | paste -s | sed 's/\t/\\|/g')
 sched_monitors=$(grep sched: $RVDIR/available_monitors | cut -d: -f2 | paste -s | sed 's/\t/\\|/g')
+all_bpf=$(find "$RVTOOL/bpf_monitors" -name "*.o" -exec basename \{} .o \; | paste -s | sed 's/\t/\\|/g')
 description_state="[[:space:]]\+[[:print:]]\+\[\(OFF\|ON\)\]"
 line_nested=" - \($all_nested\)${description_state}"
 line_non_nested="\($all_non_nested\)${description_state}"
+line_bpf="\($all_bpf\)${description_state}"
 
 # List monitors and containers
 check "list all monitors" \
-	"$RV list" 0 "" "" "^\($line_nested\|$line_non_nested\)$"
+	"$RV list" 0 "" "" "^\($line_nested\|$line_non_nested\|$line_bpf\)$"
 
 check_if_exists "list container" \
 	"$RV list sched" "$RVDIR/monitors/sched" \
