@@ -130,6 +130,10 @@ int xe_svm_range_get_pages(struct xe_vm *vm, struct xe_svm_range *range,
 
 void xe_svm_devmem_lru_bump(struct drm_pagemap_devmem *devmem_allocation);
 
+void xe_svm_range_prefetch_lru_bump(struct xe_vm *vm, struct xe_vma *vma,
+				    struct xe_svm_range *range,
+				    struct drm_pagemap *dpagemap);
+
 bool xe_svm_range_needs_migrate_to_vram(struct xe_svm_range *range, struct xe_vma *vma,
 					const struct drm_pagemap *dpagemap);
 
@@ -360,6 +364,13 @@ int xe_svm_range_get_pages(struct xe_vm *vm, struct xe_svm_range *range,
 
 static inline
 void xe_svm_devmem_lru_bump(struct drm_pagemap_devmem *devmem_allocation)
+{
+}
+
+static inline
+void xe_svm_range_prefetch_lru_bump(struct xe_vm *vm, struct xe_vma *vma,
+				    struct xe_svm_range *range,
+				    struct drm_pagemap *dpagemap)
 {
 }
 

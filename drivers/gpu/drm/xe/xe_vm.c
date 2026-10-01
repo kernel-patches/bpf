@@ -2570,6 +2570,11 @@ alloc_next_range:
 						  dpagemap, &valid_pages)) {
 				xe_svm_range_debug(svm_range, "PREFETCH - RANGE IS VALID");
 				xe_assert(vm->xe, valid_pages);
+
+				if (dpagemap)
+					xe_svm_range_prefetch_lru_bump(vm, vma, svm_range,
+								       dpagemap);
+
 				need_put = true;
 				goto check_next_range;
 			}
