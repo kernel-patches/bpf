@@ -719,7 +719,16 @@ static struct bpf_object *open_bpf_monitor(const char *path, struct bpf_monitor_
 	struct bpf_object *obj = NULL;
 	int res;
 
-	obj = bpf_object__open_file(path, NULL);
+	LIBBPF_OPTS(bpf_object_open_opts, opts,
+		/* Define statically as arch is known, Kconfig may not be available */
+#ifdef __x86_64__
+		.kconfig = "CONFIG_X86_64=y\n",
+#else
+		.kconfig = "CONFIG_X86_64=n\n",
+#endif
+	);
+
+	obj = bpf_object__open_file(path, &opts);
 	if (!obj) {
 		err_msg("bpf: error opening object: %s\n", strerror(errno));
 		return NULL;
