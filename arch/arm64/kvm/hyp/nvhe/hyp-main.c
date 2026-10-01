@@ -69,6 +69,33 @@ DEFINE_PER_CPU(struct kvm_nvhe_init_params, kvm_init_params);
 	}								\
 	static ret __do_##name(void)
 
+/*
+ * Encode a hypervisor request in the host SMCCC return registers for known
+ * error numbers.
+ *
+ * Must be paired with pkvm_call_hyp_req() on the host side.
+ */
+static int errno_to_smccc(int ret)
+{
+	struct pkvm_hyp_req req = { .type = PKVM_HYP_NO_REQ };
+
+	switch (ret) {
+	case -ENOMEM: {
+		u32 nr_pages = hyp_alloc_topup_needed();
+
+		if (nr_pages) {
+			req.type = PKVM_HYP_REQ_HYP_ALLOC;
+			req.mem.nr_pages = nr_pages;
+		}
+		break;
+	}
+	}
+
+	pkvm_hyp_req_to_smccc(host_data_ptr(host_ctxt), &req);
+
+	return ret;
+}
+
 /* Number of implemented GICv3 LRs. Used by flush_hyp_vcpu(). */
 unsigned int hyp_gicv3_nr_lr;
 
@@ -756,10 +783,9 @@ DEFINE_KVM_HOST_HCALL(void, __pkvm_unreserve_vm,
 }
 
 DEFINE_KVM_HOST_HCALL(int, __pkvm_init_vm,
-	struct kvm __kern *, host_kvm, void __kern *, vm_hva,
-	void __kern *, pgd_hva)
+	struct kvm __kern *, host_kvm, void __kern *, pgd_hva)
 {
-	return __pkvm_init_vm(kern_hyp_va_host(host_kvm), vm_hva, pgd_hva);
+	return errno_to_smccc(__pkvm_init_vm(kern_hyp_va_host(host_kvm), pgd_hva));
 }
 
 DEFINE_KVM_HOST_HCALL(int, __pkvm_init_vcpu,
