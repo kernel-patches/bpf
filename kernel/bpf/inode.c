@@ -658,7 +658,11 @@ struct bpffs_btf_enums {
 	const struct btf_type *attach_t;
 };
 
-static int find_bpffs_btf_enums(struct bpffs_btf_enums *info)
+/*
+ * @load: load the vmlinux BTF if necessary (CONFIG_DEBUG_INFO_BTF=m), see
+ * bpf_load_btf_vmlinux(); otherwise only use it if it is already parsed.
+ */
+static int find_bpffs_btf_enums(struct bpffs_btf_enums *info, bool load)
 {
 	struct {
 		const struct btf_type **type;
@@ -674,7 +678,7 @@ static int find_bpffs_btf_enums(struct bpffs_btf_enums *info)
 
 	memset(info, 0, sizeof(*info));
 
-	btf = bpf_get_btf_vmlinux();
+	btf = load ? bpf_load_btf_vmlinux() : bpf_peek_btf_vmlinux();
 	if (IS_ERR(btf))
 		return PTR_ERR(btf);
 	if (!btf)
@@ -795,8 +799,11 @@ static int bpf_show_options(struct seq_file *m, struct dentry *root)
 	    opts->delegate_progs || opts->delegate_attachs) {
 		struct bpffs_btf_enums info;
 
-		/* ignore errors, fallback to hex */
-		(void)find_bpffs_btf_enums(&info);
+		/*
+		 * ignore errors, fallback to hex; this runs under
+		 * namespace_sem, so do not load the BTF from here
+		 */
+		(void)find_bpffs_btf_enums(&info, false);
 
 		mask = (1ULL << __MAX_BPF_CMD) - 1;
 		seq_print_delegate_opts(m, "delegate_cmds",
@@ -1052,35 +1059,33 @@ static int bpf_parse_param(struct fs_context *fc, struct fs_parameter *param)
 	case OPT_DELEGATE_MAPS:
 	case OPT_DELEGATE_PROGS:
 	case OPT_DELEGATE_ATTACHS: {
-		struct bpffs_btf_enums info;
-		const struct btf_type *enum_t;
+		struct bpffs_btf_enums info = {};
+		const struct btf_type **enum_t;
+		bool enums_tried = false;
 		const char *enum_pfx;
-		u64 *delegate_msk, msk = 0;
+		u64 *delegate_msk, msk = 0, num;
 		char *p, *str;
 		int val;
-
-		/* ignore errors, fallback to hex */
-		(void)find_bpffs_btf_enums(&info);
 
 		switch (opt) {
 		case OPT_DELEGATE_CMDS:
 			delegate_msk = &opts->delegate_cmds;
-			enum_t = info.cmd_t;
+			enum_t = &info.cmd_t;
 			enum_pfx = "BPF_";
 			break;
 		case OPT_DELEGATE_MAPS:
 			delegate_msk = &opts->delegate_maps;
-			enum_t = info.map_t;
+			enum_t = &info.map_t;
 			enum_pfx = "BPF_MAP_TYPE_";
 			break;
 		case OPT_DELEGATE_PROGS:
 			delegate_msk = &opts->delegate_progs;
-			enum_t = info.prog_t;
+			enum_t = &info.prog_t;
 			enum_pfx = "BPF_PROG_TYPE_";
 			break;
 		case OPT_DELEGATE_ATTACHS:
 			delegate_msk = &opts->delegate_attachs;
-			enum_t = info.attach_t;
+			enum_t = &info.attach_t;
 			enum_pfx = "BPF_";
 			break;
 		default:
@@ -1089,9 +1094,18 @@ static int bpf_parse_param(struct fs_context *fc, struct fs_parameter *param)
 
 		str = param->string;
 		while ((p = strsep(&str, ":"))) {
+			/*
+			 * Only names need the vmlinux BTF: "any" and numbers do
+			 * not load it.  Ignore errors, fallback to hex.
+			 */
+			if (strcmp(p, "any") && kstrtou64(p, 0, &num) && !enums_tried) {
+				(void)find_bpffs_btf_enums(&info, true);
+				enums_tried = true;
+			}
+
 			if (strcmp(p, "any") == 0) {
 				msk |= ~0ULL;
-			} else if (find_btf_enum_const(info.btf, enum_t, enum_pfx, p, &val)) {
+			} else if (find_btf_enum_const(info.btf, *enum_t, enum_pfx, p, &val)) {
 				msk |= 1ULL << val;
 			} else {
 				err = kstrtou64(p, 0, &msk);

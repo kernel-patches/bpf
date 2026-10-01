@@ -531,6 +531,19 @@ static const char *fetch_type_from_btf_type(struct btf *btf,
 	return NULL;
 }
 
+/*
+ * Arguments described by BTF need the vmlinux BTF.  With
+ * CONFIG_DEBUG_INFO_BTF=m it may not be loaded yet, so load it before looking
+ * anything up.  Parsing holds dyn_event_ops_mutex, which loading a module
+ * never takes: besides event creation, only dyn_event_register() takes it,
+ * from built-in init code.
+ */
+static void trace_probe_load_btf(void)
+{
+	lockdep_assert_held(&dyn_event_ops_mutex);
+	bpf_load_btf_vmlinux();
+}
+
 static int query_btf_context(struct traceprobe_parse_context *ctx)
 {
 	const struct btf_param *param;
@@ -544,6 +557,7 @@ static int query_btf_context(struct traceprobe_parse_context *ctx)
 	if (!ctx->funcname)
 		return -EINVAL;
 
+	trace_probe_load_btf();
 	type = btf_find_func_proto(ctx->funcname, &btf);
 	if (!type)
 		return -ENOENT;
@@ -762,6 +776,7 @@ static int parse_btf_arg(char *varname,
 	if (!strcmp(varname, "$current")) {
 		code->op = FETCH_OP_CURRENT;
 		/* If no typecast is specified for $current, use task_struct by default */
+		trace_probe_load_btf();
 		ret = bpf_find_btf_id("task_struct", BTF_KIND_STRUCT, &ctx->struct_btf);
 		if (ret < 0) {
 			trace_probe_log_err(ctx->offset, NO_BTF_ENTRY);
@@ -890,6 +905,7 @@ static int query_btf_struct(const char *sname, struct traceprobe_parse_context *
 		ctx->struct_btf = NULL;
 	}
 
+	trace_probe_load_btf();
 	id = bpf_find_btf_id(sname, BTF_KIND_STRUCT, &btf);
 	if (id < 0)
 		return id;

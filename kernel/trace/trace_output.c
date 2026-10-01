@@ -739,6 +739,13 @@ void print_function_args(struct trace_seq *s, unsigned long *args,
 	if (lookup_symbol_name(func, name))
 		goto out;
 
+	/*
+	 * This can run with interrupts disabled (ftrace_dump()): only use
+	 * the vmlinux BTF if it is parsed, never load it from here.
+	 */
+	if (IS_ERR_OR_NULL(bpf_peek_btf_vmlinux()))
+		goto out;
+
 	/* TODO: Pass module name here too */
 	t = btf_find_func_proto(name, &btf);
 	if (IS_ERR_OR_NULL(t))
