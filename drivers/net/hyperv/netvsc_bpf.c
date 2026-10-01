@@ -216,6 +216,13 @@ int netvsc_bpf(struct net_device *dev, struct netdev_bpf *bpf)
 			netdev_err(dev, "vf_setxdp failed:%d\n", ret);
 			NL_SET_ERR_MSG_MOD(extack, "vf_setxdp failed");
 
+			/* Since we haven't completed the installation
+			 * of bpf->prog the reference core implicitly
+			 * transfers to us on success isn't ours.
+			 * Take a reference to balance the accounting.
+			 */
+			if (bpf->prog)
+				bpf_prog_inc(bpf->prog);
 			netvsc_xdp_set(dev, NULL, extack, nvdev);
 		}
 
