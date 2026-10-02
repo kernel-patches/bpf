@@ -89,7 +89,7 @@ union vcp_reply {
 	unsigned char raw[11];
 };
 
-VISIBLE_IF_KUNIT u32 edid_extract_panel_id(struct edid *edid)
+STATIC_IFN_KUNIT u32 edid_extract_panel_id(struct edid *edid)
 {
 	return (u32)edid->mfg_id[0] << 24   |
 	       (u32)edid->mfg_id[1] << 16   |
@@ -97,7 +97,7 @@ VISIBLE_IF_KUNIT u32 edid_extract_panel_id(struct edid *edid)
 }
 EXPORT_IF_KUNIT(edid_extract_panel_id);
 
-VISIBLE_IF_KUNIT void apply_edid_quirks(struct dc_link *link, struct edid *edid,
+STATIC_IFN_KUNIT void apply_edid_quirks(struct dc_link *link, struct edid *edid,
 			      struct dc_edid_caps *edid_caps)
 {
 	struct amdgpu_dm_connector *aconnector = link->priv;
@@ -277,7 +277,7 @@ enum dc_edid_status dm_helpers_parse_edid_caps(
 }
 EXPORT_IF_KUNIT(dm_helpers_parse_edid_caps);
 
-VISIBLE_IF_KUNIT void
+STATIC_IFN_KUNIT void
 fill_dc_mst_payload_table_from_drm(struct dc_link *link,
 				   bool enable,
 				   struct drm_dp_mst_atomic_payload *target_payload,
@@ -335,7 +335,7 @@ void dm_helpers_dp_update_branch_info(
 {}
 EXPORT_IF_KUNIT(dm_helpers_dp_update_branch_info);
 
-VISIBLE_IF_KUNIT void dm_helpers_construct_old_payload(
+STATIC_IFN_KUNIT void dm_helpers_construct_old_payload(
 			struct drm_dp_mst_topology_mgr *mgr,
 			struct drm_dp_mst_topology_state *mst_state,
 			struct drm_dp_mst_atomic_payload *new_payload,
@@ -768,7 +768,7 @@ bool dm_helpers_execute_fused_io(
 }
 EXPORT_IF_KUNIT(dm_helpers_execute_fused_io);
 
-VISIBLE_IF_KUNIT bool execute_synaptics_rc_command(struct drm_dp_aux *aux,
+STATIC_IFN_KUNIT bool execute_synaptics_rc_command(struct drm_dp_aux *aux,
 		bool is_write_cmd,
 		unsigned char cmd,
 		unsigned int length,
@@ -842,7 +842,7 @@ err:
 }
 EXPORT_IF_KUNIT(execute_synaptics_rc_command);
 
-VISIBLE_IF_KUNIT void apply_synaptics_fifo_reset_wa(struct drm_dp_aux *aux)
+STATIC_IFN_KUNIT void apply_synaptics_fifo_reset_wa(struct drm_dp_aux *aux)
 {
 	unsigned char data[16] = {0};
 
@@ -911,7 +911,7 @@ EXPORT_IF_KUNIT(apply_synaptics_fifo_reset_wa);
 /* MST Dock */
 static const uint8_t SYNAPTICS_DEVICE_ID[] = "SYNA";
 
-VISIBLE_IF_KUNIT uint8_t write_dsc_enable_synaptics_non_virtual_dpcd_mst(
+STATIC_IFN_KUNIT uint8_t write_dsc_enable_synaptics_non_virtual_dpcd_mst(
 		struct drm_dp_aux *aux,
 		const struct dc_stream_state *stream,
 		bool enable)
@@ -1071,7 +1071,7 @@ bool dm_helpers_is_dp_sink_present(struct dc_link *link)
 }
 EXPORT_IF_KUNIT(dm_helpers_is_dp_sink_present);
 
-VISIBLE_IF_KUNIT int
+STATIC_IFN_KUNIT int
 dm_helpers_probe_acpi_edid(void *data, u8 *buf, unsigned int block, size_t len)
 {
 	struct drm_connector *connector = data;
@@ -1111,7 +1111,7 @@ cleanup:
 }
 EXPORT_IF_KUNIT(dm_helpers_probe_acpi_edid);
 
-VISIBLE_IF_KUNIT const struct drm_edid *
+STATIC_IFN_KUNIT const struct drm_edid *
 dm_helpers_read_acpi_edid(struct amdgpu_dm_connector *aconnector)
 {
 	struct drm_connector *connector = &aconnector->base;
@@ -1134,7 +1134,7 @@ dm_helpers_read_acpi_edid(struct amdgpu_dm_connector *aconnector)
 }
 EXPORT_IF_KUNIT(dm_helpers_read_acpi_edid);
 
-VISIBLE_IF_KUNIT const struct drm_edid *
+STATIC_IFN_KUNIT const struct drm_edid *
 dm_helpers_read_vbios_hardcoded_edid(struct dc_link *link, struct amdgpu_dm_connector *aconnector)
 {
 	struct dc_bios *bios = link->ctx->dc_bios;
@@ -1174,7 +1174,7 @@ dm_helpers_read_vbios_hardcoded_edid(struct dc_link *link, struct amdgpu_dm_conn
 }
 EXPORT_IF_KUNIT(dm_helpers_read_vbios_hardcoded_edid);
 
-VISIBLE_IF_KUNIT uint8_t get_max_frl_rate(uint8_t max_lanes, uint8_t max_rate_per_lane)
+STATIC_IFN_KUNIT uint8_t get_max_frl_rate(uint8_t max_lanes, uint8_t max_rate_per_lane)
 {
 	uint8_t max_frl_rate;
 
@@ -1197,7 +1197,7 @@ VISIBLE_IF_KUNIT uint8_t get_max_frl_rate(uint8_t max_lanes, uint8_t max_rate_pe
 }
 EXPORT_IF_KUNIT(get_max_frl_rate);
 
-VISIBLE_IF_KUNIT uint8_t get_dsc_max_slices(uint8_t max_slices, int clk_per_slice)
+STATIC_IFN_KUNIT uint8_t get_dsc_max_slices(uint8_t max_slices, int clk_per_slice)
 {
 	uint8_t dsc_max_slices;
 
@@ -1675,7 +1675,7 @@ void dm_helpers_dp_mst_update_branch_bandwidth(
 }
 EXPORT_IF_KUNIT(dm_helpers_dp_mst_update_branch_bandwidth);
 
-VISIBLE_IF_KUNIT const uint32_t dm_freesync_pcon_whitelist[] = {
+STATIC_IFN_KUNIT const uint32_t dm_freesync_pcon_whitelist[] = {
 	DP_BRANCH_DEVICE_ID_0060AD,
 	DP_BRANCH_DEVICE_ID_00E04C,
 	DP_BRANCH_DEVICE_ID_90CC24,
@@ -1684,13 +1684,13 @@ VISIBLE_IF_KUNIT const uint32_t dm_freesync_pcon_whitelist[] = {
 };
 EXPORT_IF_KUNIT(dm_freesync_pcon_whitelist);
 
-VISIBLE_IF_KUNIT uint32_t dm_freesync_pcon_whitelist_count(void)
+STATIC_IFN_KUNIT uint32_t dm_freesync_pcon_whitelist_count(void)
 {
 	return ARRAY_SIZE(dm_freesync_pcon_whitelist);
 }
 EXPORT_IF_KUNIT(dm_freesync_pcon_whitelist_count);
 
-VISIBLE_IF_KUNIT bool dm_is_freesync_pcon_whitelist(const uint32_t branch_dev_id)
+STATIC_IFN_KUNIT bool dm_is_freesync_pcon_whitelist(const uint32_t branch_dev_id)
 {
 	u32 i;
 
