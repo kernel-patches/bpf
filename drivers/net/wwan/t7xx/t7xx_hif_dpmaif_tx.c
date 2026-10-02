@@ -160,11 +160,15 @@ static void t7xx_dpmaif_tx_done(struct work_struct *work)
 	struct dpmaif_tx_queue *txq = container_of(work, struct dpmaif_tx_queue, dpmaif_tx_work);
 	struct dpmaif_ctrl *dpmaif_ctrl = txq->dpmaif_ctrl;
 	struct dpmaif_hw_info *hw_info;
+	bool pm_ref;
 	int ret;
 
 	ret = pm_runtime_resume_and_get(dpmaif_ctrl->dev);
 	if (ret < 0 && ret != -EACCES)
 		return;
+
+	/* -EACCES means no reference was taken; only balance a real one. */
+	pm_ref = !ret;
 
 	/* The device may be in low power state. Disable sleep if needed */
 	t7xx_pci_disable_sleep(dpmaif_ctrl->t7xx_dev);
@@ -185,7 +189,8 @@ static void t7xx_dpmaif_tx_done(struct work_struct *work)
 	}
 
 	t7xx_pci_enable_sleep(dpmaif_ctrl->t7xx_dev);
-	pm_runtime_put_autosuspend(dpmaif_ctrl->dev);
+	if (pm_ref)
+		pm_runtime_put_autosuspend(dpmaif_ctrl->dev);
 }
 
 static void t7xx_setup_msg_drb(struct dpmaif_ctrl *dpmaif_ctrl, unsigned int q_num,
@@ -467,7 +472,8 @@ static int t7xx_dpmaif_tx_hw_push_thread(void *arg)
 		t7xx_pci_disable_sleep(dpmaif_ctrl->t7xx_dev);
 		t7xx_do_tx_hw_push(dpmaif_ctrl);
 		t7xx_pci_enable_sleep(dpmaif_ctrl->t7xx_dev);
-		pm_runtime_put_autosuspend(dpmaif_ctrl->dev);
+		if (ret != -EACCES)
+			pm_runtime_put_autosuspend(dpmaif_ctrl->dev);
 	}
 
 	return 0;
