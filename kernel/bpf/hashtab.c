@@ -1086,6 +1086,16 @@ static void pcpu_init_value(struct bpf_htab *htab, void __percpu *pptr,
 		}
 	} else {
 		pcpu_copy_value(htab, pptr, value, onallcpus, map_flags);
+		if (map_flags & BPF_F_CPU) {
+			int target = map_flags >> 32;
+			int cpu;
+
+			for_each_possible_cpu(cpu) {
+				if (cpu != target)
+					zero_map_value(&htab->map,
+						       per_cpu_ptr(pptr, cpu));
+			}
+		}
 	}
 }
 
