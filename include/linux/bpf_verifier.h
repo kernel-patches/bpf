@@ -1788,12 +1788,12 @@ enum bpf_reg_arg_type {
 };
 
 #define MAX_KFUNC_DESCS 256
+static_assert(MAX_KFUNC_DESCS <= S16_MAX + 1);
 
 struct bpf_kfunc_desc {
 	struct btf_func_model func_model;
 	struct bpf_func_proto proto;
 	u32 func_id;
-	s32 imm;
 	u16 offset;
 	unsigned long addr;
 };
@@ -1801,9 +1801,8 @@ struct bpf_kfunc_desc {
 struct bpf_kfunc_desc_tab {
 	u32 nr_descs;
 	/* Sorted by func_id (BTF ID) and offset (fd_array offset) during
-	 * verification. JITs do lookups by bpf_insn, where func_id may not be
-	 * available, therefore at the end of verification do_misc_fixups()
-	 * sorts this by imm and offset.
+	 * verification. JITs use the descriptor index stored in the finalized
+	 * call's off field.
 	 *
 	 * Grown one entry at a time by bpf_add_kfunc_call().
 	 */
