@@ -186,7 +186,7 @@ VISIBLE_IF_KUNIT u32 dm_vblank_get_counter(struct amdgpu_device *adev, int crtc)
 
 	return dc_stream_get_vblank_counter(acrtc->dm_irq_params.stream);
 }
-EXPORT_SYMBOL_IF_KUNIT(dm_vblank_get_counter);
+EXPORT_IF_KUNIT(dm_vblank_get_counter);
 
 VISIBLE_IF_KUNIT int dm_crtc_get_scanoutpos(struct amdgpu_device *adev, int crtc,
 					    u32 *vbl, u32 *position)
@@ -224,14 +224,14 @@ VISIBLE_IF_KUNIT int dm_crtc_get_scanoutpos(struct amdgpu_device *adev, int crtc
 
 	return 0;
 }
-EXPORT_SYMBOL_IF_KUNIT(dm_crtc_get_scanoutpos);
+EXPORT_IF_KUNIT(dm_crtc_get_scanoutpos);
 
 VISIBLE_IF_KUNIT int dm_wait_for_idle(struct amdgpu_ip_block *ip_block)
 {
 	/* XXX todo */
 	return 0;
 }
-EXPORT_SYMBOL_IF_KUNIT(dm_wait_for_idle);
+EXPORT_IF_KUNIT(dm_wait_for_idle);
 
 /*
  * DC will program planes with their z-order determined by their ordering
@@ -246,7 +246,7 @@ VISIBLE_IF_KUNIT int dm_plane_layer_index_cmp(const void *a, const void *b)
 	/* Sort by descending dc_plane layer_index (i.e. normalized_zpos) */
 	return sb->surface->layer_index - sa->surface->layer_index;
 }
-EXPORT_SYMBOL_IF_KUNIT(dm_plane_layer_index_cmp);
+EXPORT_IF_KUNIT(dm_plane_layer_index_cmp);
 
 #if IS_ENABLED(CONFIG_DRM_AMD_DC_KUNIT_TEST)
 static const struct amdgpu_dm_kunit_ops *amdgpu_dm_ops;
@@ -295,21 +295,21 @@ bool update_planes_and_stream_adapter(struct dc *dc,
 					   stream,
 					   stream_update);
 }
-EXPORT_SYMBOL_IF_KUNIT(update_planes_and_stream_adapter);
+EXPORT_IF_KUNIT(update_planes_and_stream_adapter);
 
 VISIBLE_IF_KUNIT int dm_set_clockgating_state(struct amdgpu_ip_block *ip_block,
 					      enum amd_clockgating_state state)
 {
 	return 0;
 }
-EXPORT_SYMBOL_IF_KUNIT(dm_set_clockgating_state);
+EXPORT_IF_KUNIT(dm_set_clockgating_state);
 
 VISIBLE_IF_KUNIT int dm_set_powergating_state(struct amdgpu_ip_block *ip_block,
 					      enum amd_powergating_state state)
 {
 	return 0;
 }
-EXPORT_SYMBOL_IF_KUNIT(dm_set_powergating_state);
+EXPORT_IF_KUNIT(dm_set_powergating_state);
 
 /* Prototypes of private functions */
 VISIBLE_IF_KUNIT int dm_early_init(struct amdgpu_ip_block *ip_block);
@@ -328,7 +328,7 @@ void amdgpu_dm_kunit_set_ops(const struct amdgpu_dm_kunit_ops *ops)
 {
 	amdgpu_dm_ops = ops ? ops : &amdgpu_dm_default_ops;
 }
-EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_kunit_set_ops);
+EXPORT_IF_KUNIT(amdgpu_dm_kunit_set_ops);
 
 #define dm_gmc_pd_addr			amdgpu_dm_ops->gmc_pd_addr
 #define dm_atomic_helper_suspend	amdgpu_dm_ops->atomic_helper_suspend
@@ -415,7 +415,7 @@ VISIBLE_IF_KUNIT void mmhub_read_system_context(struct amdgpu_device *adev,
 	pa_config->is_hvm_enabled = adev->mode_info.gpu_vm_support;
 
 }
-EXPORT_SYMBOL_IF_KUNIT(mmhub_read_system_context);
+EXPORT_IF_KUNIT(mmhub_read_system_context);
 
 VISIBLE_IF_KUNIT int amdgpu_dm_init_power_module(struct amdgpu_display_manager *dm)
 {
@@ -482,7 +482,7 @@ VISIBLE_IF_KUNIT int amdgpu_dm_init_power_module(struct amdgpu_display_manager *
 
 	return 0;
 }
-EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_init_power_module);
+EXPORT_IF_KUNIT(amdgpu_dm_init_power_module);
 
 static int amdgpu_dm_init(struct amdgpu_device *adev)
 {
@@ -877,7 +877,7 @@ VISIBLE_IF_KUNIT int amdgpu_dm_early_fini(struct amdgpu_ip_block *ip_block)
 
 	return 0;
 }
-EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_early_fini);
+EXPORT_IF_KUNIT(amdgpu_dm_early_fini);
 
 static void amdgpu_dm_fini(struct amdgpu_device *adev)
 {
@@ -1095,7 +1095,7 @@ VISIBLE_IF_KUNIT int load_dmcu_fw(struct amdgpu_device *adev)
 
 	return 0;
 }
-EXPORT_SYMBOL_IF_KUNIT(load_dmcu_fw);
+EXPORT_IF_KUNIT(load_dmcu_fw);
 
 VISIBLE_IF_KUNIT int dm_sw_init(struct amdgpu_ip_block *ip_block)
 {
@@ -1118,7 +1118,7 @@ VISIBLE_IF_KUNIT int dm_sw_init(struct amdgpu_ip_block *ip_block)
 
 	return load_dmcu_fw(adev);
 }
-EXPORT_SYMBOL_IF_KUNIT(dm_sw_init);
+EXPORT_IF_KUNIT(dm_sw_init);
 
 VISIBLE_IF_KUNIT int dm_sw_fini(struct amdgpu_ip_block *ip_block)
 {
@@ -1150,7 +1150,7 @@ VISIBLE_IF_KUNIT int dm_sw_fini(struct amdgpu_ip_block *ip_block)
 
 	return 0;
 }
-EXPORT_SYMBOL_IF_KUNIT(dm_sw_fini);
+EXPORT_IF_KUNIT(dm_sw_fini);
 
 
 static void amdgpu_dm_boot_time_crc_init(struct amdgpu_device *adev)
@@ -1251,7 +1251,7 @@ VISIBLE_IF_KUNIT int dm_late_init(struct amdgpu_ip_block *ip_block)
 
 	return amdgpu_dm_detect_mst_link_for_all_connectors(adev_to_drm(adev));
 }
-EXPORT_SYMBOL_IF_KUNIT(dm_late_init);
+EXPORT_IF_KUNIT(dm_late_init);
 
 VISIBLE_IF_KUNIT void resume_mst_branch_status(struct drm_dp_mst_topology_mgr *mgr)
 {
@@ -1303,7 +1303,7 @@ VISIBLE_IF_KUNIT void resume_mst_branch_status(struct drm_dp_mst_topology_mgr *m
 out_fail:
 	mutex_unlock(&mgr->lock);
 }
-EXPORT_SYMBOL_IF_KUNIT(resume_mst_branch_status);
+EXPORT_IF_KUNIT(resume_mst_branch_status);
 
 VISIBLE_IF_KUNIT void s3_handle_mst(struct drm_device *dev, bool suspend)
 {
@@ -1346,7 +1346,7 @@ VISIBLE_IF_KUNIT void s3_handle_mst(struct drm_device *dev, bool suspend)
 	}
 	drm_connector_list_iter_end(&iter);
 }
-EXPORT_SYMBOL_IF_KUNIT(s3_handle_mst);
+EXPORT_IF_KUNIT(s3_handle_mst);
 
 VISIBLE_IF_KUNIT int dm_oem_i2c_hw_init(struct amdgpu_device *adev)
 {
@@ -1374,7 +1374,7 @@ VISIBLE_IF_KUNIT int dm_oem_i2c_hw_init(struct amdgpu_device *adev)
 
 	return 0;
 }
-EXPORT_SYMBOL_IF_KUNIT(dm_oem_i2c_hw_init);
+EXPORT_IF_KUNIT(dm_oem_i2c_hw_init);
 
 /**
  * dm_hw_init() - Initialize DC device
@@ -1497,7 +1497,7 @@ VISIBLE_IF_KUNIT void dm_gpureset_toggle_interrupts(struct amdgpu_device *adev,
 	}
 
 }
-EXPORT_SYMBOL_IF_KUNIT(dm_gpureset_toggle_interrupts);
+EXPORT_IF_KUNIT(dm_gpureset_toggle_interrupts);
 
 DEFINE_FREE(state_release, struct dc_state *, dc_state_release(_T))
 
@@ -1539,7 +1539,7 @@ VISIBLE_IF_KUNIT enum dc_status amdgpu_dm_commit_zero_streams(struct dc *dc)
 
 	return dc_commit_streams(dc, &params);
 }
-EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_commit_zero_streams);
+EXPORT_IF_KUNIT(amdgpu_dm_commit_zero_streams);
 
 VISIBLE_IF_KUNIT int dm_cache_state(struct amdgpu_device *adev)
 {
@@ -1553,7 +1553,7 @@ VISIBLE_IF_KUNIT int dm_cache_state(struct amdgpu_device *adev)
 
 	return adev->dm.cached_state ? 0 : r;
 }
-EXPORT_SYMBOL_IF_KUNIT(dm_cache_state);
+EXPORT_IF_KUNIT(dm_cache_state);
 
 VISIBLE_IF_KUNIT void dm_destroy_cached_state(struct amdgpu_device *adev)
 {
@@ -1605,7 +1605,7 @@ VISIBLE_IF_KUNIT void dm_destroy_cached_state(struct amdgpu_device *adev)
 
 	dm->cached_state = NULL;
 }
-EXPORT_SYMBOL_IF_KUNIT(dm_destroy_cached_state);
+EXPORT_IF_KUNIT(dm_destroy_cached_state);
 
 static int dm_suspend(struct amdgpu_ip_block *ip_block)
 {
@@ -1766,7 +1766,7 @@ void amdgpu_dm_emulated_link_detect(struct dc_link *link)
 		drm_err(dev, "Failed to read EDID\n");
 
 }
-EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_emulated_link_detect);
+EXPORT_IF_KUNIT(amdgpu_dm_emulated_link_detect);
 
 VISIBLE_IF_KUNIT void dm_gpureset_commit_state(struct dc_state *dc_state,
 					       struct amdgpu_display_manager *dm)
@@ -1804,7 +1804,7 @@ VISIBLE_IF_KUNIT void dm_gpureset_commit_state(struct dc_state *dc_state,
 					 bundle->surface_updates);
 	}
 }
-EXPORT_SYMBOL_IF_KUNIT(dm_gpureset_commit_state);
+EXPORT_IF_KUNIT(dm_gpureset_commit_state);
 
 void amdgpu_dm_apply_delay_after_dpcd_poweroff(struct amdgpu_device *adev,
 											   struct dc_sink *sink)
@@ -1823,7 +1823,7 @@ void amdgpu_dm_apply_delay_after_dpcd_poweroff(struct amdgpu_device *adev,
 			       ppatch->wait_after_dpcd_poweroff_ms / 1000);
 	}
 }
-EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_apply_delay_after_dpcd_poweroff);
+EXPORT_IF_KUNIT(amdgpu_dm_apply_delay_after_dpcd_poweroff);
 
 /**
  * amdgpu_dm_dump_links_and_sinks - Debug dump of all DC links and their sinks
@@ -1885,7 +1885,7 @@ VISIBLE_IF_KUNIT void amdgpu_dm_dump_links_and_sinks(struct amdgpu_device *adev)
 		}
 	}
 }
-EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_dump_links_and_sinks);
+EXPORT_IF_KUNIT(amdgpu_dm_dump_links_and_sinks);
 
 static int dm_resume(struct amdgpu_ip_block *ip_block)
 {
@@ -2197,7 +2197,7 @@ int dm_atomic_get_state(struct drm_atomic_commit *state,
 
 	return 0;
 }
-EXPORT_SYMBOL_IF_KUNIT(dm_atomic_get_state);
+EXPORT_IF_KUNIT(dm_atomic_get_state);
 
 VISIBLE_IF_KUNIT struct dm_atomic_state *
 dm_atomic_get_new_state(struct drm_atomic_commit *state)
@@ -2216,7 +2216,7 @@ dm_atomic_get_new_state(struct drm_atomic_commit *state)
 
 	return NULL;
 }
-EXPORT_SYMBOL_IF_KUNIT(dm_atomic_get_new_state);
+EXPORT_IF_KUNIT(dm_atomic_get_new_state);
 
 VISIBLE_IF_KUNIT struct drm_private_state *
 dm_atomic_duplicate_state(struct drm_private_obj *obj)
@@ -2241,7 +2241,7 @@ dm_atomic_duplicate_state(struct drm_private_obj *obj)
 
 	return &new_state->base;
 }
-EXPORT_SYMBOL_IF_KUNIT(dm_atomic_duplicate_state);
+EXPORT_IF_KUNIT(dm_atomic_duplicate_state);
 
 VISIBLE_IF_KUNIT void dm_atomic_destroy_state(struct drm_private_obj *obj,
 					      struct drm_private_state *state)
@@ -2253,7 +2253,7 @@ VISIBLE_IF_KUNIT void dm_atomic_destroy_state(struct drm_private_obj *obj,
 
 	kfree(dm_state);
 }
-EXPORT_SYMBOL_IF_KUNIT(dm_atomic_destroy_state);
+EXPORT_IF_KUNIT(dm_atomic_destroy_state);
 
 static struct drm_private_state *
 dm_atomic_create_state(struct drm_private_obj *obj)
@@ -2324,7 +2324,7 @@ VISIBLE_IF_KUNIT int amdgpu_dm_mode_config_init(struct amdgpu_device *adev)
 
 	return 0;
 }
-EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_mode_config_init);
+EXPORT_IF_KUNIT(amdgpu_dm_mode_config_init);
 
 VISIBLE_IF_KUNIT int initialize_plane(struct amdgpu_display_manager *dm,
 				      struct amdgpu_mode_info *mode_info, int plane_id,
@@ -2365,7 +2365,7 @@ VISIBLE_IF_KUNIT int initialize_plane(struct amdgpu_display_manager *dm,
 
 	return ret;
 }
-EXPORT_SYMBOL_IF_KUNIT(initialize_plane);
+EXPORT_IF_KUNIT(initialize_plane);
 
 
 /*
@@ -2732,7 +2732,7 @@ VISIBLE_IF_KUNIT void dm_bandwidth_update(struct amdgpu_device *adev)
 {
 	/* TODO: implement later */
 }
-EXPORT_SYMBOL_IF_KUNIT(dm_bandwidth_update);
+EXPORT_IF_KUNIT(dm_bandwidth_update);
 
 static const struct amdgpu_display_funcs dm_display_funcs = {
 	.bandwidth_update = dm_bandwidth_update, /* called unconditionally */
@@ -2932,13 +2932,13 @@ VISIBLE_IF_KUNIT int dm_early_init(struct amdgpu_ip_block *ip_block)
 
 	return dm_init_microcode(adev);
 }
-EXPORT_SYMBOL_IF_KUNIT(dm_early_init);
+EXPORT_IF_KUNIT(dm_early_init);
 
 VISIBLE_IF_KUNIT bool modereset_required(struct drm_crtc_state *crtc_state)
 {
 	return !crtc_state->active && drm_atomic_crtc_needs_modeset(crtc_state);
 }
-EXPORT_SYMBOL_IF_KUNIT(modereset_required);
+EXPORT_IF_KUNIT(modereset_required);
 
 VISIBLE_IF_KUNIT int
 fill_plane_color_attributes(struct drm_atomic_commit *state,
@@ -2988,7 +2988,7 @@ fill_plane_color_attributes(struct drm_atomic_commit *state,
 
 	return 0;
 }
-EXPORT_SYMBOL_IF_KUNIT(fill_plane_color_attributes);
+EXPORT_IF_KUNIT(fill_plane_color_attributes);
 
 VISIBLE_IF_KUNIT int
 fill_dc_plane_info_and_addr(struct amdgpu_device *adev,
@@ -3105,7 +3105,7 @@ fill_dc_plane_info_and_addr(struct amdgpu_device *adev,
 
 	return 0;
 }
-EXPORT_SYMBOL_IF_KUNIT(fill_dc_plane_info_and_addr);
+EXPORT_IF_KUNIT(fill_dc_plane_info_and_addr);
 
 VISIBLE_IF_KUNIT int fill_dc_plane_attributes(struct amdgpu_device *adev,
 					      struct dc_plane_state *dc_plane_state,
@@ -3163,7 +3163,7 @@ VISIBLE_IF_KUNIT int fill_dc_plane_attributes(struct amdgpu_device *adev,
 
 	return 0;
 }
-EXPORT_SYMBOL_IF_KUNIT(fill_dc_plane_attributes);
+EXPORT_IF_KUNIT(fill_dc_plane_attributes);
 
 static inline void fill_dc_dirty_rect(struct drm_plane *plane,
 				      struct rect *dirty_rect, int32_t x,
@@ -3327,7 +3327,7 @@ ffu:
 			   dm_crtc_state->base.mode.crtc_vdisplay,
 			   &flip_addrs->dirty_rect_count, true);
 }
-EXPORT_SYMBOL_IF_KUNIT(fill_dc_dirty_rects);
+EXPORT_IF_KUNIT(fill_dc_dirty_rects);
 
 VISIBLE_IF_KUNIT int dm_update_mst_vcpi_slots_for_dsc(struct drm_atomic_commit *state,
 						      struct dc_state *dc_state,
@@ -3405,7 +3405,7 @@ VISIBLE_IF_KUNIT int dm_update_mst_vcpi_slots_for_dsc(struct drm_atomic_commit *
 	}
 	return 0;
 }
-EXPORT_SYMBOL_IF_KUNIT(dm_update_mst_vcpi_slots_for_dsc);
+EXPORT_IF_KUNIT(dm_update_mst_vcpi_slots_for_dsc);
 
 VISIBLE_IF_KUNIT void manage_dm_interrupts(struct amdgpu_device *adev,
 					   struct amdgpu_crtc *acrtc,
@@ -3488,7 +3488,7 @@ VISIBLE_IF_KUNIT void manage_dm_interrupts(struct amdgpu_device *adev,
 		drm_crtc_vblank_off(&acrtc->base);
 	}
 }
-EXPORT_SYMBOL_IF_KUNIT(manage_dm_interrupts);
+EXPORT_IF_KUNIT(manage_dm_interrupts);
 
 VISIBLE_IF_KUNIT void dm_update_pflip_irq_state(struct amdgpu_device *adev,
 						struct amdgpu_crtc *acrtc)
@@ -3506,7 +3506,7 @@ VISIBLE_IF_KUNIT void dm_update_pflip_irq_state(struct amdgpu_device *adev,
 	 */
 	amdgpu_irq_update(adev, &adev->pageflip_irq, irq_type);
 }
-EXPORT_SYMBOL_IF_KUNIT(dm_update_pflip_irq_state);
+EXPORT_IF_KUNIT(dm_update_pflip_irq_state);
 
 VISIBLE_IF_KUNIT bool
 is_scaling_state_different(const struct dm_connector_state *dm_state,
@@ -3525,7 +3525,7 @@ is_scaling_state_different(const struct dm_connector_state *dm_state,
 		return true;
 	return false;
 }
-EXPORT_SYMBOL_IF_KUNIT(is_scaling_state_different);
+EXPORT_IF_KUNIT(is_scaling_state_different);
 
 VISIBLE_IF_KUNIT bool
 is_content_protection_different(struct drm_crtc_state *new_crtc_state,
@@ -3647,7 +3647,7 @@ is_content_protection_different(struct drm_crtc_state *new_crtc_state,
 	pr_debug("[HDCP_DM] DESIRED->ENABLED %s :false\n", __func__);
 	return false;
 }
-EXPORT_SYMBOL_IF_KUNIT(is_content_protection_different);
+EXPORT_IF_KUNIT(is_content_protection_different);
 
 static void remove_stream(struct amdgpu_device *adev,
 			  struct amdgpu_crtc *acrtc,
@@ -3673,7 +3673,7 @@ VISIBLE_IF_KUNIT void amdgpu_dm_commit_cursors(struct drm_atomic_commit *state)
 		if (plane->type == DRM_PLANE_TYPE_CURSOR)
 			amdgpu_dm_plane_handle_cursor_update(plane, old_plane_state);
 }
-EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_commit_cursors);
+EXPORT_IF_KUNIT(amdgpu_dm_commit_cursors);
 
 static inline uint32_t get_mem_type(struct drm_framebuffer *fb)
 {
@@ -3753,7 +3753,7 @@ VISIBLE_IF_KUNIT void amdgpu_dm_update_cursor(struct drm_plane *plane,
 		update->cursor_position = &crtc_state->stream->cursor_position;
 	}
 }
-EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_update_cursor);
+EXPORT_IF_KUNIT(amdgpu_dm_update_cursor);
 
 VISIBLE_IF_KUNIT void amdgpu_dm_enable_self_refresh(struct amdgpu_display_manager *dm,
 						    struct amdgpu_crtc *acrtc_attach,
@@ -3794,7 +3794,7 @@ VISIBLE_IF_KUNIT void amdgpu_dm_enable_self_refresh(struct amdgpu_display_manage
 		acrtc_attach->dm_irq_params.allow_sr_entry = false;
 	}
 }
-EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_enable_self_refresh);
+EXPORT_IF_KUNIT(amdgpu_dm_enable_self_refresh);
 
 VISIBLE_IF_KUNIT void dm_arm_vblank_event(struct amdgpu_crtc *acrtc,
 					  struct dm_crtc_state *acrtc_state,
@@ -3822,7 +3822,7 @@ VISIBLE_IF_KUNIT void dm_arm_vblank_event(struct amdgpu_crtc *acrtc,
 		acrtc->base.state->event = NULL;
 	}
 }
-EXPORT_SYMBOL_IF_KUNIT(dm_arm_vblank_event);
+EXPORT_IF_KUNIT(dm_arm_vblank_event);
 
 /**
  * dm_arm_vblank_event_pre_programming - Prepare for programming
@@ -3848,7 +3848,7 @@ VISIBLE_IF_KUNIT void dm_arm_vblank_event_pre_programming(struct amdgpu_crtc *ac
 	if (pflip_update || cursor_update)
 		drm_crtc_vblank_get(&acrtc->base);
 }
-EXPORT_SYMBOL_IF_KUNIT(dm_arm_vblank_event_pre_programming);
+EXPORT_IF_KUNIT(dm_arm_vblank_event_pre_programming);
 
 static void amdgpu_dm_commit_planes(struct drm_atomic_commit *state,
 				    struct drm_device *dev,
@@ -4422,7 +4422,7 @@ bool amdgpu_dm_crtc_complete_writeback(struct amdgpu_crtc *acrtc)
 
 	return true;
 }
-EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_crtc_complete_writeback);
+EXPORT_IF_KUNIT(amdgpu_dm_crtc_complete_writeback);
 
 VISIBLE_IF_KUNIT void dm_clear_writeback(struct amdgpu_display_manager *dm,
 					 struct amdgpu_crtc *acrtc,
@@ -4438,7 +4438,7 @@ VISIBLE_IF_KUNIT void dm_clear_writeback(struct amdgpu_display_manager *dm,
 	 */
 	amdgpu_dm_crtc_complete_writeback(acrtc);
 }
-EXPORT_SYMBOL_IF_KUNIT(dm_clear_writeback);
+EXPORT_IF_KUNIT(dm_clear_writeback);
 
 /**
  * amdgpu_dm_mod_power_update_streams - update mod_power stream state on modeset
@@ -4503,7 +4503,7 @@ VISIBLE_IF_KUNIT void amdgpu_dm_mod_power_update_streams(struct drm_atomic_commi
 		}
 	}
 }
-EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_mod_power_update_streams);
+EXPORT_IF_KUNIT(amdgpu_dm_mod_power_update_streams);
 
 /**
  * amdgpu_dm_mod_power_setup_streams - setup mod_power stream state post modeset
@@ -4551,7 +4551,7 @@ VISIBLE_IF_KUNIT void amdgpu_dm_mod_power_setup_streams(struct drm_atomic_commit
 	}
 
 }
-EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_mod_power_setup_streams);
+EXPORT_IF_KUNIT(amdgpu_dm_mod_power_setup_streams);
 
 static void amdgpu_dm_commit_streams(struct drm_atomic_commit *state,
 					struct dc_state *dc_state)
@@ -4900,7 +4900,7 @@ dm_set_writeback(struct amdgpu_display_manager *dm,
 cleanup:
 	kfree(wb_info);
 }
-EXPORT_SYMBOL_IF_KUNIT(dm_set_writeback);
+EXPORT_IF_KUNIT(dm_set_writeback);
 
 VISIBLE_IF_KUNIT void amdgpu_dm_update_hdcp(struct drm_atomic_commit *state)
 {
@@ -5016,7 +5016,7 @@ VISIBLE_IF_KUNIT void amdgpu_dm_update_hdcp(struct drm_atomic_commit *state)
 		}
 	}
 }
-EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_update_hdcp);
+EXPORT_IF_KUNIT(amdgpu_dm_update_hdcp);
 
 VISIBLE_IF_KUNIT int amdgpu_dm_atomic_setup_commit(struct drm_atomic_commit *state)
 {
@@ -5050,7 +5050,7 @@ VISIBLE_IF_KUNIT int amdgpu_dm_atomic_setup_commit(struct drm_atomic_commit *sta
 
 	return 0;
 }
-EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_atomic_setup_commit);
+EXPORT_IF_KUNIT(amdgpu_dm_atomic_setup_commit);
 
 VISIBLE_IF_KUNIT void set_multisync_trigger_params(
 		struct dc_stream_state *stream)
@@ -5065,7 +5065,7 @@ VISIBLE_IF_KUNIT void set_multisync_trigger_params(
 		stream->triggered_crtc_reset.delay = TRIGGER_DELAY_NEXT_PIXEL;
 	}
 }
-EXPORT_SYMBOL_IF_KUNIT(set_multisync_trigger_params);
+EXPORT_IF_KUNIT(set_multisync_trigger_params);
 
 VISIBLE_IF_KUNIT void set_master_stream(struct dc_stream_state *stream_set[],
 					int stream_count)
@@ -5089,7 +5089,7 @@ VISIBLE_IF_KUNIT void set_master_stream(struct dc_stream_state *stream_set[],
 			stream_set[j]->triggered_crtc_reset.event_source = stream_set[master_stream];
 	}
 }
-EXPORT_SYMBOL_IF_KUNIT(set_master_stream);
+EXPORT_IF_KUNIT(set_master_stream);
 
 VISIBLE_IF_KUNIT void dm_enable_per_frame_crtc_master_sync(struct dc_state *context)
 {
@@ -5119,7 +5119,7 @@ VISIBLE_IF_KUNIT void dm_enable_per_frame_crtc_master_sync(struct dc_state *cont
 		set_multisync_trigger_params(stream);
 	}
 }
-EXPORT_SYMBOL_IF_KUNIT(dm_enable_per_frame_crtc_master_sync);
+EXPORT_IF_KUNIT(dm_enable_per_frame_crtc_master_sync);
 
 /**
  * amdgpu_dm_atomic_commit_tail() - AMDgpu DM's commit tail implementation.
@@ -5482,7 +5482,7 @@ VISIBLE_IF_KUNIT int do_aquire_global_lock(struct drm_device *dev,
 
 	return ret < 0 ? ret : 0;
 }
-EXPORT_SYMBOL_IF_KUNIT(do_aquire_global_lock);
+EXPORT_IF_KUNIT(do_aquire_global_lock);
 
 VISIBLE_IF_KUNIT int dm_update_crtc_state(struct amdgpu_display_manager *dm,
 					  struct drm_atomic_commit *state,
@@ -5761,7 +5761,7 @@ fail:
 		dc_stream_release(new_stream);
 	return ret;
 }
-EXPORT_SYMBOL_IF_KUNIT(dm_update_crtc_state);
+EXPORT_IF_KUNIT(dm_update_crtc_state);
 
 VISIBLE_IF_KUNIT bool should_reset_plane(struct drm_atomic_commit *state,
 					 struct drm_plane *plane,
@@ -5926,7 +5926,7 @@ VISIBLE_IF_KUNIT bool should_reset_plane(struct drm_atomic_commit *state,
 
 	return false;
 }
-EXPORT_SYMBOL_IF_KUNIT(should_reset_plane);
+EXPORT_IF_KUNIT(should_reset_plane);
 
 VISIBLE_IF_KUNIT int
 dm_update_plane_state(struct dc *dc,
@@ -6113,7 +6113,7 @@ out:
 
 	return ret;
 }
-EXPORT_SYMBOL_IF_KUNIT(dm_update_plane_state);
+EXPORT_IF_KUNIT(dm_update_plane_state);
 
 /*
  * The normalized_zpos value cannot be used by this iterator directly. It's only
@@ -6190,7 +6190,7 @@ VISIBLE_IF_KUNIT int add_affected_mst_dsc_crtcs(struct drm_atomic_commit *state,
 
 	return drm_dp_mst_add_affected_dsc_crtcs(state, &aconnector->mst_root->mst_mgr);
 }
-EXPORT_SYMBOL_IF_KUNIT(add_affected_mst_dsc_crtcs);
+EXPORT_IF_KUNIT(add_affected_mst_dsc_crtcs);
 
 VISIBLE_IF_KUNIT bool amdgpu_dm_crtc_mem_type_changed(struct drm_device *dev,
 						      struct drm_atomic_commit *state,
@@ -6213,7 +6213,7 @@ VISIBLE_IF_KUNIT bool amdgpu_dm_crtc_mem_type_changed(struct drm_device *dev,
 
 	return false;
 }
-EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_crtc_mem_type_changed);
+EXPORT_IF_KUNIT(amdgpu_dm_crtc_mem_type_changed);
 
 /**
  * amdgpu_dm_atomic_check() - Atomic check implementation for AMDgpu DM.
@@ -6752,7 +6752,7 @@ fail:
 
 	return ret;
 }
-EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_atomic_check);
+EXPORT_IF_KUNIT(amdgpu_dm_atomic_check);
 
 void amdgpu_dm_trigger_timing_sync(struct drm_device *dev)
 {
@@ -6772,7 +6772,7 @@ void amdgpu_dm_trigger_timing_sync(struct drm_device *dev)
 	}
 	mutex_unlock(&adev->dm.dc_lock);
 }
-EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_trigger_timing_sync);
+EXPORT_IF_KUNIT(amdgpu_dm_trigger_timing_sync);
 
 void dm_write_reg_func(const struct dc_context *ctx, uint32_t address,
 		       u32 value, const char *func_name)
@@ -6817,4 +6817,4 @@ void dm_acpi_process_phy_transition_interlock(
 {
 	// Not yet implemented
 }
-EXPORT_SYMBOL_IF_KUNIT(dm_acpi_process_phy_transition_interlock);
+EXPORT_IF_KUNIT(dm_acpi_process_phy_transition_interlock);

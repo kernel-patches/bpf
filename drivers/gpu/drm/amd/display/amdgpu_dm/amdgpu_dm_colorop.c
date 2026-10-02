@@ -39,21 +39,21 @@ const u64 amdgpu_dm_supported_degam_tfs =
 	BIT(DRM_COLOROP_1D_CURVE_PQ_125_EOTF) |
 	BIT(DRM_COLOROP_1D_CURVE_BT2020_INV_OETF) |
 	BIT(DRM_COLOROP_1D_CURVE_GAMMA22);
-EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_supported_degam_tfs);
+EXPORT_IF_KUNIT(amdgpu_dm_supported_degam_tfs);
 
 const u64 amdgpu_dm_supported_shaper_tfs =
 	BIT(DRM_COLOROP_1D_CURVE_SRGB_INV_EOTF) |
 	BIT(DRM_COLOROP_1D_CURVE_PQ_125_INV_EOTF) |
 	BIT(DRM_COLOROP_1D_CURVE_BT2020_OETF) |
 	BIT(DRM_COLOROP_1D_CURVE_GAMMA22_INV);
-EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_supported_shaper_tfs);
+EXPORT_IF_KUNIT(amdgpu_dm_supported_shaper_tfs);
 
 const u64 amdgpu_dm_supported_blnd_tfs =
 	BIT(DRM_COLOROP_1D_CURVE_SRGB_EOTF) |
 	BIT(DRM_COLOROP_1D_CURVE_PQ_125_EOTF) |
 	BIT(DRM_COLOROP_1D_CURVE_BT2020_INV_OETF) |
 	BIT(DRM_COLOROP_1D_CURVE_GAMMA22);
-EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_supported_blnd_tfs);
+EXPORT_IF_KUNIT(amdgpu_dm_supported_blnd_tfs);
 
 const u64 amdgpu_dm_supported_fm =
 	BIT(DRM_COLOROP_FM_YCBCR601_FULL_RGB) |
@@ -93,7 +93,7 @@ void amdgpu_dm_colorop_kunit_set_ops(const struct amdgpu_dm_colorop_kunit_ops *o
 {
 	amdgpu_dm_colorop_ops = ops ? ops : &amdgpu_dm_colorop_default_ops;
 }
-EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_colorop_kunit_set_ops);
+EXPORT_IF_KUNIT(amdgpu_dm_colorop_kunit_set_ops);
 
 #define colorop_kzalloc_obj		amdgpu_dm_colorop_ops->colorop_kzalloc_obj
 #define colorop_curve_1d_init		amdgpu_dm_colorop_ops->curve_1d_init
@@ -289,7 +289,7 @@ cleanup:
 
 	return ret;
 }
-EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_build_default_pipeline);
+EXPORT_IF_KUNIT(amdgpu_dm_build_default_pipeline);
 
 int amdgpu_dm_initialize_default_pipeline(struct drm_plane *plane, struct drm_prop_enum_list *list)
 {
@@ -300,4 +300,4 @@ int amdgpu_dm_initialize_default_pipeline(struct drm_plane *plane, struct drm_pr
 
 	return amdgpu_dm_build_default_pipeline(dev, plane, hw_3d_lut, list);
 }
-EXPORT_SYMBOL_IF_KUNIT(amdgpu_dm_initialize_default_pipeline);
+EXPORT_IF_KUNIT(amdgpu_dm_initialize_default_pipeline);
