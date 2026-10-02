@@ -2370,6 +2370,11 @@ ctnetlink_create_conntrack(struct net *net,
 			goto err2;
 		}
 		master_ct = nf_ct_tuplehash_to_ctrack(master_h);
+		if (master_ct->master) {
+			nf_ct_put(master_ct);
+			err = -EOPNOTSUPP;
+			goto err2;
+		}
 		__set_bit(IPS_EXPECTED_BIT, &ct->status);
 		ct->master = master_ct;
 	}
@@ -2874,6 +2879,9 @@ ctnetlink_glue_attach_expect(const struct nlattr *attr, struct nf_conn *ct,
 	struct nf_conntrack_tuple tuple, mask;
 	struct nf_conntrack_expect *exp;
 	int err;
+
+	if (ct->master)
+		return -EOPNOTSUPP;
 
 	err = nla_parse_nested_deprecated(cda, CTA_EXPECT_MAX, attr,
 					  exp_nla_policy, NULL);
