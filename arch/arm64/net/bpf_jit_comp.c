@@ -3338,12 +3338,20 @@ int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type old_t,
 		 */
 		plt_target = (u64)&dummy_tramp;
 
+	/* pages of the bpf prog pack are shared between progs, so the
+	 * set_memory_rw()/set_memory_ro() window below must be serialized
+	 * against other pokers too.
+	 */
+	mutex_lock(&text_mutex);
+
 	if (plt_target) {
 		/* non-zero plt_target indicates we're patching a bpf prog,
 		 * which is read only.
 		 */
-		if (set_memory_rw(PAGE_MASK & ((uintptr_t)&plt->target), 1))
-			return -EFAULT;
+		if (set_memory_rw(PAGE_MASK & ((uintptr_t)&plt->target), 1)) {
+			ret = -EFAULT;
+			goto out;
+		}
 		WRITE_ONCE(plt->target, plt_target);
 		set_memory_ro(PAGE_MASK & ((uintptr_t)&plt->target), 1);
 		/* since plt target points to either the new trampoline
@@ -3357,10 +3365,11 @@ int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type old_t,
 	/* if the old target and the new target are both long jumps, no
 	 * patching is required
 	 */
-	if (old_insn == new_insn)
-		return 0;
+	if (old_insn == new_insn) {
+		ret = 0;
+		goto out;
+	}
 
-	mutex_lock(&text_mutex);
 	if (aarch64_insn_read(ip, &replaced)) {
 		ret = -EFAULT;
 		goto out;
