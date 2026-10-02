@@ -22,6 +22,7 @@
 #include <linux/dma-direction.h>
 #include <linux/dma-mapping.h>
 #include <linux/err.h>
+#include <linux/freezer.h>
 #include <linux/gfp.h>
 #include <linux/kernel.h>
 #include <linux/kthread.h>
@@ -426,6 +427,12 @@ static void t7xx_do_tx_hw_push(struct dpmaif_ctrl *dpmaif_ctrl)
 
 		drb_send_cnt = t7xx_txq_burst_send_skb(txq);
 		if (drb_send_cnt <= 0) {
+			/* Bail out promptly on a pending freeze so the caller can
+			 * drop its runtime-PM reference and this thread can reach
+			 * the freeze point instead of looping here under load.
+			 */
+			if (freezing(current))
+				return;
 			usleep_range(10, 20);
 			cond_resched();
 			continue;
@@ -457,18 +464,29 @@ static int t7xx_dpmaif_tx_hw_push_thread(void *arg)
 	struct dpmaif_ctrl *dpmaif_ctrl = arg;
 	int ret;
 
+	set_freezable();
+
 	while (!kthread_should_stop()) {
 		if (t7xx_tx_lists_are_all_empty(dpmaif_ctrl) ||
 		    dpmaif_ctrl->state != DPMAIF_STATE_PWRON) {
-			if (wait_event_interruptible(dpmaif_ctrl->tx_wq,
-						     (!t7xx_tx_lists_are_all_empty(dpmaif_ctrl) &&
-						     dpmaif_ctrl->state == DPMAIF_STATE_PWRON) ||
-						     kthread_should_stop()))
+			if (wait_event_freezable(dpmaif_ctrl->tx_wq,
+						 (!t7xx_tx_lists_are_all_empty(dpmaif_ctrl) &&
+						  dpmaif_ctrl->state == DPMAIF_STATE_PWRON) ||
+						 kthread_should_stop()))
 				continue;
 
 			if (kthread_should_stop())
 				break;
 		}
+
+		/* Park on a pending freeze here, outside the runtime-PM and MMIO
+		 * section below, so the PM freezer quiesces this thread before
+		 * dpm_suspend() runs the device suspend callbacks.
+		 * kthread_freezable_should_stop() also honours a concurrent
+		 * kthread_stop() while the thread is frozen.
+		 */
+		if (kthread_freezable_should_stop(NULL))
+			break;
 
 		ret = pm_runtime_resume_and_get(dpmaif_ctrl->dev);
 		if (ret < 0 && ret != -EACCES) {
@@ -478,7 +496,9 @@ static int t7xx_dpmaif_tx_hw_push_thread(void *arg)
 			 */
 			dev_err_ratelimited(dpmaif_ctrl->dev,
 					    "Failed to resume for TX push: %d\n", ret);
-			msleep_interruptible(DPMAIF_TX_RESUME_RETRY_MS);
+			wait_event_freezable_timeout(dpmaif_ctrl->tx_wq,
+						     kthread_should_stop(),
+						     msecs_to_jiffies(DPMAIF_TX_RESUME_RETRY_MS));
 			continue;
 		}
 

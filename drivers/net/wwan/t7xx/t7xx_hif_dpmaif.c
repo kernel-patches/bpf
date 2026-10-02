@@ -410,12 +410,32 @@ static int t7xx_dpmaif_stop(struct dpmaif_ctrl *dpmaif_ctrl)
 static int t7xx_dpmaif_suspend(struct t7xx_pci_dev *t7xx_dev, void *param)
 {
 	struct dpmaif_ctrl *dpmaif_ctrl = param;
+	unsigned int i;
 
+	/* Stop new TX and mask interrupts first, so nothing re-arms the
+	 * contexts drained below.
+	 */
 	t7xx_dpmaif_tx_stop(dpmaif_ctrl);
+	t7xx_dpmaif_disable_irq(dpmaif_ctrl);
+
+	/* irq_tx_done is masked now and cancel_work_sync() also blocks a
+	 * self-requeue, so the TX-done workers can be drained here.
+	 */
+	for (i = 0; i < DPMAIF_TXQ_NUM; i++)
+		cancel_work_sync(&dpmaif_ctrl->txq[i].dpmaif_tx_work);
+
+	/* t7xx_dpmaif_rx_stop() clears que_started and waits for the
+	 * in-flight NAPI poll (rx_processing) to finish, so no poll issues
+	 * MMIO after this point. It is also the sole producer of
+	 * bat_release_work, so cancel that work only after rx_stop();
+	 * otherwise a residual poll re-queues it and it runs against
+	 * torn-down hardware.
+	 */
+	t7xx_dpmaif_rx_stop(dpmaif_ctrl);
+	cancel_work_sync(&dpmaif_ctrl->bat_release_work);
+
 	t7xx_dpmaif_hw_stop_all_txq(&dpmaif_ctrl->hw_info);
 	t7xx_dpmaif_hw_stop_all_rxq(&dpmaif_ctrl->hw_info);
-	t7xx_dpmaif_disable_irq(dpmaif_ctrl);
-	t7xx_dpmaif_rx_stop(dpmaif_ctrl);
 	return 0;
 }
 
