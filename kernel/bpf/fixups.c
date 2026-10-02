@@ -5,8 +5,6 @@
 #include <linux/bpf_verifier.h>
 #include <linux/filter.h>
 #include <linux/vmalloc.h>
-#include <linux/bsearch.h>
-#include <linux/sort.h>
 #include <linux/perf_event.h>
 #include <linux/sched/signal.h>
 #include <net/xdp.h>
@@ -117,73 +115,26 @@ int bpf_insn_def32(struct bpf_prog *prog, struct bpf_insn *insn)
 	return dst_reg;
 }
 
-static int kfunc_desc_cmp_by_imm_off(const void *a, const void *b)
-{
-	const struct bpf_kfunc_desc *d0 = a;
-	const struct bpf_kfunc_desc *d1 = b;
-
-	if (d0->imm != d1->imm)
-		return d0->imm < d1->imm ? -1 : 1;
-	if (d0->offset != d1->offset)
-		return d0->offset < d1->offset ? -1 : 1;
-	return 0;
-}
-
 const struct btf_func_model *
 bpf_jit_find_kfunc_model(const struct bpf_prog *prog,
 			 const struct bpf_insn *insn)
 {
-	const struct bpf_kfunc_desc desc = {
-		.imm = insn->imm,
-		.offset = insn->off,
-	};
 	const struct bpf_kfunc_desc *res;
 	struct bpf_kfunc_desc_tab *tab;
 
 	tab = prog->aux->kfunc_tab;
-	res = bsearch(&desc, tab->descs, tab->nr_descs,
-		      sizeof(tab->descs[0]), kfunc_desc_cmp_by_imm_off);
+	if (insn->off < 0 || insn->off >= tab->nr_descs)
+		return NULL;
 
-	return res ? &res->func_model : NULL;
-}
-
-static int set_kfunc_desc_imm(struct bpf_verifier_env *env, struct bpf_kfunc_desc *desc)
-{
-	unsigned long call_imm;
-
+	res = &tab->descs[insn->off];
 	if (bpf_jit_supports_far_kfunc_call()) {
-		call_imm = desc->func_id;
-	} else {
-		call_imm = BPF_CALL_IMM(desc->addr);
-		/* Check whether the relative offset overflows desc->imm */
-		if ((unsigned long)(s32)call_imm != call_imm) {
-			verbose(env, "address of kernel func_id %u is out of range\n",
-				desc->func_id);
-			return -EINVAL;
-		}
-	}
-	desc->imm = call_imm;
-	return 0;
-}
-
-static int sort_kfunc_descs_by_imm_off(struct bpf_verifier_env *env)
-{
-	struct bpf_kfunc_desc_tab *tab;
-	int i, err;
-
-	tab = env->prog->aux->kfunc_tab;
-	if (!tab)
-		return 0;
-
-	for (i = 0; i < tab->nr_descs; i++) {
-		err = set_kfunc_desc_imm(env, &tab->descs[i]);
-		if (err)
-			return err;
+		if (res->func_id != insn->imm)
+			return NULL;
+	} else if ((s32)BPF_CALL_IMM(res->addr) != insn->imm) {
+		return NULL;
 	}
 
-	sort(tab->descs, tab->nr_descs, sizeof(tab->descs[0]),
-	     kfunc_desc_cmp_by_imm_off, NULL);
-	return 0;
+	return &res->func_model;
 }
 
 static int add_kfunc_in_insns(struct bpf_verifier_env *env,
@@ -2720,10 +2671,6 @@ next_insn:
 		}
 	}
 
-	ret = sort_kfunc_descs_by_imm_off(env);
-	if (ret)
-		return ret;
-
 	return 0;
 }
 
@@ -2897,4 +2844,3 @@ int bpf_remove_fastcall_spills_fills(struct bpf_verifier_env *env)
 
 	return 0;
 }
-
