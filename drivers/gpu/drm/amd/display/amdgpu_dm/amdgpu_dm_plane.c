@@ -2226,21 +2226,6 @@ static const struct drm_plane_funcs dm_plane_funcs = {
 	DRM_PANIC_PLANE_FUNCS,
 };
 
-static bool amdgpu_dm_plane_exposes_alpha_format(const struct drm_plane *plane)
-{
-	unsigned int i;
-
-	for (i = 0; i < plane->format_count; i++) {
-		const struct drm_format_info *fmt =
-			drm_format_info(plane->format_types[i]);
-
-		if (fmt && fmt->has_alpha)
-			return true;
-	}
-
-	return false;
-}
-
 int amdgpu_dm_plane_init(struct amdgpu_display_manager *dm,
 				struct drm_plane *plane,
 				unsigned long possible_crtcs,
@@ -2321,21 +2306,6 @@ int amdgpu_dm_plane_init(struct amdgpu_display_manager *dm,
 		drm_plane_create_zpos_property(plane, zpos, 0, 254);
 	} else if (plane->type == DRM_PLANE_TYPE_CURSOR) {
 		drm_plane_create_zpos_immutable_property(plane, 255);
-	}
-
-	/*
-	 * drm_mode_config_validate() warns about planes exposing a pixel format
-	 * with alpha but no blend mode property, so attach one to every plane
-	 * advertising such a format.
-	 */
-	if (amdgpu_dm_plane_exposes_alpha_format(plane)) {
-		unsigned int blend_caps = BIT(DRM_MODE_BLEND_PREMULTI);
-
-		if (plane->type != DRM_PLANE_TYPE_CURSOR)
-			blend_caps |= BIT(DRM_MODE_BLEND_PIXEL_NONE) |
-				      BIT(DRM_MODE_BLEND_COVERAGE);
-
-		drm_plane_create_blend_mode_property(plane, blend_caps);
 	}
 
 	if ((plane->type == DRM_PLANE_TYPE_PRIMARY ||
