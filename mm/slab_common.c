@@ -410,9 +410,15 @@ EXPORT_SYMBOL(__kmem_cache_create_args);
 
 static struct kmem_cache *kmem_buckets_cache __ro_after_init;
 
+static int kmem_buckets_create_row(kmem_buckets *b,
+				   enum kmalloc_cache_type type,
+				   const char *name, unsigned int align,
+				   slab_flags_t flags, unsigned int useroffset,
+				   unsigned int usersize, void (*ctor)(void *));
+
 /**
- * kmem_buckets_create - Create a set of caches that handle dynamic sized
- *			 allocations via kmem_buckets_alloc()
+ * kmem_buckets_create_types - Create a set of caches that handle dynamic sized
+ *			       allocations via kmem_buckets_alloc()
  * @name: A prefix string which is used in /proc/slabinfo to identify this
  *	  cache. The individual caches with have their sizes as the suffix.
  * @align: The required alignment for the objects, or 0 to give each cache
@@ -424,6 +430,11 @@ static struct kmem_cache *kmem_buckets_cache __ro_after_init;
  * @usersize: How many bytes, starting at @useroffset, may be copied
  *		to/from userspace.
  * @ctor: A constructor for the objects, run when new allocations are made.
+ * @type_mask: Which kmalloc types to hold caches for, as a mask of
+ *	       BIT(KMEM_BUCKET_*). KMEM_BUCKET_NORMAL is always included.
+ *	       Allocations of a type that is not covered are served by the
+ *	       general caches instead, so a caller need not know in advance
+ *	       which types its own callers will ask for.
  *
  * Context: Cannot be called within an interrupt, but can be interrupted.
  *
@@ -432,13 +443,14 @@ static struct kmem_cache *kmem_buckets_cache __ro_after_init;
  * subsequent calls to kmem_buckets_alloc() will fall back to kmalloc().
  * (i.e. callers only need to check for NULL on failure.)
  */
-kmem_buckets *kmem_buckets_create(const char *name, unsigned int align,
-				  slab_flags_t flags,
-				  unsigned int useroffset,
-				  unsigned int usersize,
-				  void (*ctor)(void *))
+kmem_buckets *kmem_buckets_create_types(const char *name, unsigned int align,
+					slab_flags_t flags,
+					unsigned int useroffset,
+					unsigned int usersize,
+					void (*ctor)(void *),
+					unsigned int type_mask)
 {
-	unsigned int idx;
+	enum kmem_bucket_type btype;
 	kmem_buckets *b;
 
 	/*
@@ -457,20 +469,87 @@ kmem_buckets *kmem_buckets_create(const char *name, unsigned int align,
 		return NULL;
 
 	flags |= SLAB_NO_MERGE;
+	type_mask |= BIT(KMEM_BUCKET_NORMAL);
+
+	for (btype = 0; btype < NR_KMEM_BUCKET_TYPES; btype++) {
+		enum kmalloc_cache_type src = KMALLOC_NORMAL;
+		slab_flags_t type_flags = 0;
+
+		if (!(type_mask & BIT(btype)))
+			continue;
+
+		/*
+		 * Under CONFIG_MEMCG=n the two types are the same value, so
+		 * the IS_ENABLED() is what keeps the normal row out of here.
+		 */
+		if (IS_ENABLED(CONFIG_MEMCG) && btype == KMEM_BUCKET_CGROUP) {
+			/*
+			 * Aliasing below reads the normal row, so this loop
+			 * must have built it already. That holds only while
+			 * the normal type sorts first.
+			 */
+			BUILD_BUG_ON(KMEM_BUCKET_CGROUP <= KMEM_BUCKET_NORMAL);
+
+			/*
+			 * Nothing anywhere is creating accounted caches, as
+			 * with "cgroup.memory=nokmem". Point this row's
+			 * entries at the normal row's caches, the way
+			 * new_kmalloc_cache() aliases kmalloc_caches[] for
+			 * the same reason. Leaving the row empty instead
+			 * would send every accounted allocation out of the
+			 * set and into the general caches.
+			 */
+			if (mem_cgroup_kmem_disabled()) {
+				memcpy(b[btype], b[KMEM_BUCKET_NORMAL],
+				       sizeof(b[btype]));
+				continue;
+			}
+
+			type_flags = SLAB_ACCOUNT;
+			src = KMALLOC_CGROUP;
+		}
+
+		if (kmem_buckets_create_row(&b[btype], src, name, align,
+					    flags | type_flags, useroffset,
+					    usersize, ctor))
+			goto fail;
+	}
+
+	return b;
+
+fail:
+	kmem_buckets_destroy(b);
+
+	return NULL;
+}
+EXPORT_SYMBOL(kmem_buckets_create_types);
+
+/*
+ * Build one row of @b by mirroring the general caches of @type: a cache per
+ * kmalloc size, each named "@name-" followed by that cache's own suffix, so
+ * a row of KMALLOC_CGROUP ("kmalloc-cg-96") gets "@name-cg-96".
+ */
+static int kmem_buckets_create_row(kmem_buckets *b,
+				   enum kmalloc_cache_type type,
+				   const char *name, unsigned int align,
+				   slab_flags_t flags, unsigned int useroffset,
+				   unsigned int usersize, void (*ctor)(void *))
+{
+	unsigned int idx;
 
 	for (idx = 0; idx < ARRAY_SIZE(kmalloc_caches[KMALLOC_NORMAL]); idx++) {
 		char *short_size, *cache_name;
 		unsigned int cache_useroffset, cache_usersize;
 		unsigned int size, aligned_idx;
 
-		if (!kmalloc_caches[KMALLOC_NORMAL][idx])
+		if (!kmalloc_caches[type][idx])
 			continue;
 
-		size = kmalloc_caches[KMALLOC_NORMAL][idx]->object_size;
+		size = kmalloc_caches[type][idx]->object_size;
 		if (!size)
 			continue;
 
-		short_size = strchr(kmalloc_caches[KMALLOC_NORMAL][idx]->name, '-');
+		short_size = strchr(kmalloc_caches[type][idx]->name, '-');
 		if (WARN_ON(!short_size))
 			goto fail;
 
@@ -488,7 +567,7 @@ kmem_buckets *kmem_buckets_create(const char *name, unsigned int align,
 			if (WARN_ON(!cache_name))
 				goto fail;
 			(*b)[aligned_idx] = kmem_cache_create_usercopy(cache_name, size,
-					align ?: kmalloc_caches[KMALLOC_NORMAL][idx]->align,
+					align ?: kmalloc_caches[type][idx]->align,
 					flags, cache_useroffset,
 					cache_usersize, ctor);
 			kfree(cache_name);
@@ -499,14 +578,11 @@ kmem_buckets *kmem_buckets_create(const char *name, unsigned int align,
 			(*b)[idx] = (*b)[aligned_idx];
 	}
 
-	return b;
+	return 0;
 
 fail:
-	kmem_buckets_destroy(b);
-
-	return NULL;
+	return -ENOMEM;
 }
-EXPORT_SYMBOL(kmem_buckets_create);
 
 /**
  * kmem_buckets_destroy - Destroy a set of caches made by kmem_buckets_create()
@@ -521,28 +597,35 @@ EXPORT_SYMBOL(kmem_buckets_create);
  */
 void kmem_buckets_destroy(kmem_buckets *bucket)
 {
+	enum kmem_bucket_type btype, t;
 	unsigned int idx, i;
 
 	if (!IS_ENABLED(CONFIG_SLAB_BUCKETS) || ZERO_OR_NULL_PTR(bucket))
 		return;
 
-	for (idx = 0; idx < ARRAY_SIZE(kmalloc_caches[KMALLOC_NORMAL]); idx++) {
-		struct kmem_cache *cache = (*bucket)[idx];
+	for (btype = 0; btype < NR_KMEM_BUCKET_TYPES; btype++) {
+		for (idx = 0; idx < ARRAY_SIZE(bucket[btype]); idx++) {
+			struct kmem_cache *cache = bucket[btype][idx];
 
-		if (!cache)
-			continue;
+			if (!cache)
+				continue;
 
-		/*
-		 * Sizes below arch_slab_minalign() share one cache, which
-		 * kmem_buckets_create() then stores at each of their indices.
-		 * Drop every reference to it before destroying it, so that no
-		 * later pass reads a pointer to a cache that is already gone.
-		 */
-		for (i = idx; i < ARRAY_SIZE(kmalloc_caches[KMALLOC_NORMAL]); i++)
-			if ((*bucket)[i] == cache)
-				(*bucket)[i] = NULL;
+			/*
+			 * A cache is reachable from more than one entry: sizes
+			 * below arch_slab_minalign() share one, and a row that
+			 * kmem_buckets_create_types() aliased onto the normal
+			 * one under "cgroup.memory=nokmem" holds all of them a
+			 * second time. Drop every reference before destroying
+			 * it, so that no later pass reads a pointer to a cache
+			 * that is already gone.
+			 */
+			for (t = 0; t < NR_KMEM_BUCKET_TYPES; t++)
+				for (i = 0; i < ARRAY_SIZE(bucket[t]); i++)
+					if (bucket[t][i] == cache)
+						bucket[t][i] = NULL;
 
-		kmem_cache_destroy(cache);
+			kmem_cache_destroy(cache);
+		}
 	}
 
 	kmem_cache_free(kmem_buckets_cache, bucket);
@@ -1092,7 +1175,7 @@ void __init create_kmalloc_caches(void)
 
 	if (IS_ENABLED(CONFIG_SLAB_BUCKETS))
 		kmem_buckets_cache = kmem_cache_create("kmalloc_buckets",
-						       sizeof(kmem_buckets),
+						       sizeof(kmem_buckets) * NR_KMEM_BUCKET_TYPES,
 						       0, SLAB_NO_MERGE, NULL);
 }
 

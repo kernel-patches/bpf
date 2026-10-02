@@ -435,10 +435,31 @@ kmalloc_choose_bucket(kmem_buckets *bucket, enum kmalloc_cache_type type)
 
 	if (type <= KMALLOC_PARTITION_END)
 		btype = KMEM_BUCKET_NORMAL;
+	else if (IS_ENABLED(CONFIG_MEMCG) && type == KMALLOC_CGROUP)
+		btype = KMEM_BUCKET_CGROUP;
 	else
 		return &kmalloc_caches[type];	/* No set holds a row for it. */
 
-	return &bucket[btype];
+	/*
+	 * Either this row was created, and holds a cache everywhere the
+	 * general caches hold one, or it was never created and holds nothing.
+	 * Test with the KMALLOC_SHIFT_LOW which exists in every configuration.
+	 */
+	if (likely(bucket[btype][KMALLOC_SHIFT_LOW]))
+		return &bucket[btype];
+
+	/*
+	 * A row this set _could_ have held, but was not created with: the type
+	 * mask passed to kmem_buckets_create_types() did not cover what its
+	 * callers actually tried to allocate. Report the mismatch but still
+	 * fall back to the general caches.
+	 *
+	 * At present, only __GFP_ACCOUNT can be missing.
+	 */
+	WARN_ONCE(1,
+		  "kmem_buckets: __GFP_ACCOUNT needs BIT(KMEM_BUCKET_CGROUP) in create mask\n");
+
+	return &kmalloc_caches[type];
 }
 
 /*
