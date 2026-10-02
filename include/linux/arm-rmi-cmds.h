@@ -86,4 +86,22 @@ long rmi_sro_execute(struct arm_smccc_1_2_regs *regs);
 	__ret;								\
 })
 
+#ifdef CONFIG_ARM_RMM_RMI
+
+bool is_rmm_active(void);
+bool is_rmi_available(void);
+
+#else
+
+static inline bool is_rmm_active(void)
+{
+	return false;
+}
+
+static inline bool is_rmi_available(void)
+{
+	return false;
+}
+#endif	/* CONFIG_ARM_RMM_RMI */
+
 #endif	/* __LINUX_ARM_RMI_CMDS_H_ */

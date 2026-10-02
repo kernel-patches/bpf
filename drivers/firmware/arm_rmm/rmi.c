@@ -6,6 +6,7 @@
 #include <linux/arm-rmi-cmds.h>
 #include <linux/cpufeature.h>
 #include <linux/memblock.h>
+#include <linux/memory.h>
 #include <linux/mmzone.h>
 #include <linux/slab.h>
 
@@ -14,6 +15,25 @@
 
 /* RMM v2.0 defines RmiFeatureRegister0 to RmiFeatureRegister4. */
 static unsigned long rmi_feat_reg_cache[5] __ro_after_init;
+static bool arm64_rmm_active;
+static bool arm64_rmi_is_available;
+
+/* is_rmm_active: Returns if the RMM is ACTIVE */
+bool is_rmm_active(void)
+{
+	return READ_ONCE(arm64_rmm_active);
+}
+EXPORT_SYMBOL_GPL(is_rmm_active);
+
+/*
+ * is_rmi_available: Returns if the RMM is ACTIVE and is configured with static
+ * carveout for metadata nad L1GPTs.
+ */
+bool is_rmi_available(void)
+{
+	return READ_ONCE(arm64_rmi_is_available);
+}
+EXPORT_SYMBOL_GPL(is_rmi_available);
 
 /*
  * rmi_granule_range_delegate() - Delegate granules
@@ -840,6 +860,216 @@ static int rmi_configure(void)
 	return 0;
 }
 
+/**
+ * rmi_granule_tracking_get() - Get configuration of a Granule tracking region
+ * @start: Base PA of the tracking region
+ * @end: End of the PA region
+ * @out_category: Memory category
+ * @out_state: Tracking region state
+ * @out_top: Top of the memory region
+ *
+ * Return: RMI return code
+ */
+static int rmi_granule_tracking_get(unsigned long start,
+				    unsigned long end,
+				    unsigned long *out_category,
+				    unsigned long *out_state,
+				    unsigned long *out_top)
+{
+	struct arm_smccc_1_2_regs regs = {
+		SMC_RMI_GRANULE_TRACKING_GET, start, end,
+	};
+
+	rmi_smccc_invoke(&regs);
+
+	if (regs.a0 != RMI_SUCCESS)
+		return regs.a0;
+
+	if (out_category)
+		*out_category = regs.a1;
+	if (out_state)
+		*out_state = regs.a2;
+	if (out_top)
+		*out_top = regs.a3;
+
+	return RMI_SUCCESS;
+}
+
+/*
+ * Make sure the area is tracked by RMM at FINE granularity.
+ * We do not support changing the tracking yet.
+ */
+static int rmi_verify_memory_tracking(phys_addr_t start, phys_addr_t end)
+{
+	while (start < end) {
+		unsigned long ret, category, state, next;
+
+		ret = rmi_granule_tracking_get(start, end, &category, &state, &next);
+		if (ret != RMI_SUCCESS) {
+			pr_err("RMI_GRANULE_TRACKING_GET failed for %llx-%llx: (%lu)\n",
+			       start, end, ret);
+			return -ENXIO;
+		}
+
+		if (WARN_ON(next <= start))
+			return -ENXIO;
+
+		if (state != RMI_TRACKING_FINE ||
+		    category != RMI_MEM_CATEGORY_CONVENTIONAL) {
+			/* TODO: Set granule tracking in this case */
+			pr_err("Granule tracking for region isn't fine/conventional: %llx-%lx\n",
+			       start, next);
+			return -ENODEV;
+		}
+		start = next;
+	}
+
+	return 0;
+}
+
+/*
+ * rmi_gpt_info - Query the GPT info for the given PAR.
+ * @start: Base of the physical address region
+ * @end: Top of the physical address region
+ * @out_top: Top of the physical address region for which the GPT @out_gpt_par_state
+ *		is valid
+ * @out_gpt_par_state: State of the GPT covered by [start, out_top)
+ */
+static long rmi_gpt_info(unsigned long start, unsigned long end,
+			 unsigned long *out_top,
+			 unsigned long *out_gpt_par_state)
+{
+	struct arm_smccc_1_2_regs regs = {
+		SMC_RMI_GPT_INFO, start, end,
+	};
+
+	rmi_smccc_invoke(&regs);
+	if (regs.a0 != RMI_SUCCESS)
+		return regs.a0;
+
+	if (out_top)
+		*out_top = regs.a1;
+	if (out_gpt_par_state)
+		*out_gpt_par_state = regs.a2;
+
+	return RMI_SUCCESS;
+}
+
+/*
+ * We do not support creating L1 GPTs yet. So, make sure that all the regions
+ * are managed by the firmware.
+ */
+static int rmi_verify_gpt_firmware_managed(phys_addr_t start, phys_addr_t end)
+{
+	unsigned long l0gpt_sz;
+	unsigned long next, par_state;
+
+	l0gpt_sz = 1UL << (30 + FIELD_GET(RMI_FEATURE_REGISTER_1_L0GPTSZ,
+					  rmi_feat_reg(1)));
+	start = ALIGN_DOWN(start, l0gpt_sz);
+	end = ALIGN(end, l0gpt_sz);
+
+	while (start < end) {
+		long ret = rmi_gpt_info(start, end, &next, &par_state);
+
+		if (ret != RMI_SUCCESS) {
+			pr_err("RMI_GPT_INFO failed for %llx-%llx: (%ld)\n",
+			       start, end, ret);
+			return -ENXIO;
+		}
+
+		if (WARN_ON(next <= start))
+			return -ENXIO;
+
+		if (par_state != RMI_GPT_PAR_PLAT) {
+			pr_err("GPT for the region is not managed by firmware %llx-%lx\n",
+			       start, next);
+			return -ENODEV;
+		}
+		start = next;
+	}
+
+	return 0;
+}
+
+static int rmi_prepare_memory(phys_addr_t start, phys_addr_t end)
+{
+	int ret;
+
+	if (start >= end)
+		return -EINVAL;
+
+	ret = rmi_verify_memory_tracking(start, end);
+	if (ret)
+		return ret;
+
+	return rmi_verify_gpt_firmware_managed(start, end);
+}
+
+static int rmi_init_metadata(void)
+{
+	phys_addr_t start, end;
+	struct memblock_region *r;
+
+	for_each_mem_region(r) {
+		int ret;
+
+		/* Firmware-reserved NOMAP regions are not usable system RAM */
+		if (memblock_is_nomap(r))
+			continue;
+
+		start = PAGE_ALIGN(r->base);
+		/*
+		 * We always deal with PAGE_SIZE and if in the odd case this
+		 * region boundary is not PAGE aligned, we stick to the page
+		 * that we can use from the region.
+		 */
+		end = PAGE_ALIGN_DOWN(r->base + r->size);
+		/* Too small ? */
+		if (start >= end)
+			continue;
+
+		ret = rmi_prepare_memory(start, end);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
+static int rmi_memory_notifier(struct notifier_block *nb,
+			       unsigned long action, void *data)
+{
+	struct memory_notify *arg = data;
+	phys_addr_t start, end;
+	int ret;
+
+	if (action != MEM_GOING_ONLINE)
+		return NOTIFY_DONE;
+
+	start = PFN_PHYS(arg->start_pfn);
+	end = PFN_PHYS(arg->start_pfn + arg->nr_pages);
+
+	ret = rmi_prepare_memory(start, end);
+
+	return notifier_from_errno(ret);
+}
+
+static struct notifier_block rmi_memory_nb = {
+	.notifier_call = rmi_memory_notifier,
+};
+
+static int rmi_init_memory(void)
+{
+	int ret;
+
+	ret = rmi_init_metadata();
+	if (ret)
+		return ret;
+
+	return register_memory_notifier(&rmi_memory_nb);
+}
+
 static int __init arm64_init_rmi(void)
 {
 	int ret;
@@ -866,9 +1096,24 @@ static int __init arm64_init_rmi(void)
 	if (ret) {
 		pr_err("RMM activate failed (%d)\n", ret);
 		ret = ret < 0 ? ret : -ENXIO;
+		return ret;
 	}
 
-	return ret;
+	WRITE_ONCE(arm64_rmm_active, true);
+
+	ret = rmi_init_memory();
+	if (ret) {
+		/* Deactivate the RMM */
+		if (!WARN_ON(rmi_sro_memxfer_cmd(sro, GFP_KERNEL, SMC_RMI_RMM_DEACTIVATE)))
+			WRITE_ONCE(arm64_rmm_active, false);
+		return ret;
+	}
+
+	/* Mark the RMM is usable */
+	WRITE_ONCE(arm64_rmi_is_available, true);
+	pr_info("RMI configured\n");
+
+	return 0;
 }
 
 /*
