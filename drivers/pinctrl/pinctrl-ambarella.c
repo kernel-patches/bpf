@@ -426,8 +426,8 @@ static int amb_pinctrl_register(struct amb_pinctrl *ipc)
 		return -ENOMEM;
 
 	names = devm_kasprintf_strarray(ipc->dev, "io", ipc->data->npins);
-	if (!names)
-		return -ENOMEM;
+	if (IS_ERR(names))
+		return PTR_ERR(names);
 
 	for (unsigned int pin = 0; pin < ipc->data->npins; pin++) {
 		pindesc[pin].number = pin;
