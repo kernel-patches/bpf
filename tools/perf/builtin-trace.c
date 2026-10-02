@@ -4174,7 +4174,12 @@ static int trace__bpf_sys_enter_beauty_map(struct trace *trace, int e_machine, i
 				continue;
 
 			bt = sc->arg_fmt[i].type;
-			/* Copy a sockaddr as a buffer sized by the next argument, e.g. addrlen. */
+			/*
+			 * Copy a sockaddr as a buffer sized by the next
+			 * argument (i + 1), e.g. addrlen. A negative entry
+			 * -(j + 1) encodes the 0-based length argument index j
+			 * as 1-based so arg 0 is -1 rather than 0.
+			 */
 			if (strcmp(name, "sockaddr") == 0 && field->next &&
 			    strstr(field->next->name, "len"))
 				beauty_array[i] = -((i + 1) + 1);
@@ -4210,6 +4215,7 @@ static int trace__bpf_sys_enter_beauty_map(struct trace *trace, int e_machine, i
 				     strstr(field_tmp->name, "siz") ||  /* size, bufsiz */
 				     (strstr(field_tmp->name, "len") && strcmp(field_tmp->name, "filename")))) {
 					 /* filename's got 'len' in it, we don't want that */
+					/* 1-based negative index of length arg j. */
 					beauty_array[i] = -(j + 1);
 					can_augment = true;
 					break;

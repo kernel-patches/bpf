@@ -28,7 +28,7 @@
 
 #define MAX_CPUS  4096
 
-#define TRACE_AUG_MAX_BUF 32 /* for buffer augmentation in perf trace */
+#define TRACE_AUG_MAX_BUF 128 /* for buffer augmentation in perf trace */
 
 /* bpf-output associated map */
 struct __augmented_syscalls__ {
@@ -514,9 +514,9 @@ u64 ZERO = 0;
  * value in the beauty_map. This is the relation of parameter type and its corresponding
  * value in the beauty map, and how many bytes we read eventually:
  *
- * string: 1			      -> size of string
- * struct: size of struct	      -> size of struct
- * buffer: -1 * (index of paired len) -> value of paired len (maximum: TRACE_AUG_MAX_BUF)
+ * string: 1			          -> size of string
+ * struct: size of struct	          -> size of struct
+ * buffer: -(0-based index of paired len + 1) -> value of paired len (maximum: TRACE_AUG_MAX_BUF)
  */
 static inline int augment_arg(struct syscall_enter_args *args, int i,
 			      unsigned int *beauty_map,
