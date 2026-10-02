@@ -502,12 +502,13 @@ static int fealnx_init_one(struct pci_dev *pdev,
 	if (len < MIN_REGION_SIZE) {
 		dev_err(&pdev->dev,
 			   "region size %ld too small, aborting\n", len);
-		return -ENODEV;
+		err = -ENODEV;
+		goto err_out_disable;
 	}
 
-	i = pci_request_regions(pdev, boardname);
-	if (i)
-		return i;
+	err = pci_request_regions(pdev, boardname);
+	if (err)
+		goto err_out_disable;
 
 	irq = pdev->irq;
 
@@ -671,6 +672,8 @@ err_out_unmap:
 	pci_iounmap(pdev, ioaddr);
 err_out_res:
 	pci_release_regions(pdev);
+err_out_disable:
+	pci_disable_device(pdev);
 	return err;
 }
 
@@ -690,6 +693,7 @@ static void fealnx_remove_one(struct pci_dev *pdev)
 		pci_iounmap(pdev, np->mem);
 		free_netdev(dev);
 		pci_release_regions(pdev);
+		pci_disable_device(pdev);
 	} else
 		printk(KERN_ERR "fealnx: remove for unknown device\n");
 }
