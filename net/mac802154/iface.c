@@ -313,8 +313,12 @@ static int mac802154_slave_close(struct net_device *dev)
 
 	clear_bit(SDATA_STATE_RUNNING, &sdata->state);
 
-	if (!local->open_count)
+	if (!local->open_count) {
+		ieee802154_sync_and_hold_queue(local);
+		synchronize_net();
 		ieee802154_stop_device(local);
+		ieee802154_release_queue(local);
+	}
 
 	return 0;
 }
