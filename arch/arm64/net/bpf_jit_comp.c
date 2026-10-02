@@ -3342,13 +3342,15 @@ int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type old_t,
 		plt_target = (u64)&dummy_tramp;
 
 	if (plt_target) {
-		/* non-zero plt_target indicates we're patching a bpf prog,
-		 * which is read only.
+		/*
+		 * non-zero plt_target indicates we're patching a bpf prog,
+		 * which is read only. The prog shares its page in the bpf
+		 * prog pack with other progs, so write the aligned target
+		 * through the text patching fixmap without flipping the
+		 * page permissions to avoid racing with concurrent pokers.
 		 */
-		if (set_memory_rw(PAGE_MASK & ((uintptr_t)&plt->target), 1))
+		if (aarch64_insn_write_literal_u64(&plt->target, plt_target))
 			return -EFAULT;
-		WRITE_ONCE(plt->target, plt_target);
-		set_memory_ro(PAGE_MASK & ((uintptr_t)&plt->target), 1);
 		/* since plt target points to either the new trampoline
 		 * or dummy_tramp, even if another CPU reads the old plt
 		 * target value before fetching the bl instruction to plt,
