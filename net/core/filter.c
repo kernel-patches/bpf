@@ -3491,6 +3491,70 @@ static int bpf_skb_proto_xlat(struct sk_buff *skb, __be16 to_proto)
 	return -ENOTSUPP;
 }
 
+static bool bpf_sk_assign_family_ok_proto(const struct sock *sk, __be16 proto)
+{
+	const struct inet_connection_sock_af_ops *af_ops;
+	unsigned short family;
+
+	switch (proto) {
+	case htons(ETH_P_IP):
+		family = AF_INET;
+		break;
+	case htons(ETH_P_IPV6):
+		family = AF_INET6;
+		break;
+	default:
+		return true;
+	}
+
+	/* Requests inherit the listener family, but have family-specific ops. */
+	if (sk->sk_state == TCP_NEW_SYN_RECV)
+		return inet_reqsk(sk)->rsk_ops->family == family;
+
+	/* A dual-stack listener accepts both packet families. */
+	if (sk->sk_state == TCP_LISTEN && sk->sk_family == AF_INET6)
+		return family == AF_INET6 || !ipv6_only_sock(sk);
+
+#if IS_ENABLED(CONFIG_IPV6)
+	/* IPv4-mapped and pure IPv6 time-wait sockets retain AF_INET6. */
+	if (sk->sk_state == TCP_TIME_WAIT && sk->sk_family == AF_INET6) {
+		const struct inet_timewait_sock *tw = inet_twsk(sk);
+		bool mapped;
+
+		mapped = ipv6_addr_v4mapped(&tw->tw_v6_daddr) &&
+			 ipv6_addr_v4mapped(&tw->tw_v6_rcv_saddr);
+		return family == (mapped ? AF_INET : AF_INET6);
+	}
+#endif
+
+	/* IPv4-mapped and pure IPv6 TCP children keep AF_INET6 in sk_family. */
+	if (sk_fullsock(sk) && sk->sk_family == AF_INET6 && sk_is_tcp(sk)) {
+		af_ops = READ_ONCE(inet_csk(sk)->icsk_af_ops);
+		if ((family == AF_INET6 &&
+		     af_ops->net_header_len == sizeof(struct iphdr)) ||
+		    (family == AF_INET &&
+		     af_ops->net_header_len == sizeof(struct ipv6hdr)))
+			return false;
+	}
+
+	return sk->sk_family == family ||
+	       (family == AF_INET &&
+		sk->sk_family == AF_INET6 &&
+		!ipv6_only_sock(sk));
+}
+
+static bool bpf_sk_assign_family_ok(const struct sk_buff *skb,
+				    const struct sock *sk)
+{
+	return bpf_sk_assign_family_ok_proto(sk, skb_protocol(skb, true));
+}
+
+static bool bpf_skb_proto_change_sk_ok(struct sk_buff *skb, __be16 proto)
+{
+	return !skb_sk_is_prefetched(skb) ||
+	       bpf_sk_assign_family_ok_proto(skb->sk, proto);
+}
+
 BPF_CALL_3(bpf_skb_change_proto, struct sk_buff *, skb, __be16, proto,
 	   u64, flags)
 {
@@ -3498,6 +3562,12 @@ BPF_CALL_3(bpf_skb_change_proto, struct sk_buff *, skb, __be16, proto,
 
 	if (unlikely(flags))
 		return -EINVAL;
+	if (((skb->protocol == htons(ETH_P_IP) &&
+	      proto == htons(ETH_P_IPV6)) ||
+	     (skb->protocol == htons(ETH_P_IPV6) &&
+	      proto == htons(ETH_P_IP))) &&
+	    !bpf_skb_proto_change_sk_ok(skb, proto))
+		return -EAFNOSUPPORT;
 
 	/* General idea is that this helper does the basic groundwork
 	 * needed for changing the protocol, and eBPF program fills the
@@ -3641,6 +3711,11 @@ static int bpf_skb_net_grow(struct sk_buff *skb, u32 off, u32 len_diff,
 		if (inner_mac_len > len_diff)
 			return -EINVAL;
 		inner_trans = skb->transport_header;
+
+		if (!bpf_skb_proto_change_sk_ok(skb,
+						flags & BPF_F_ADJ_ROOM_ENCAP_L3_IPV6 ?
+						htons(ETH_P_IPV6) : htons(ETH_P_IP)))
+			return -EAFNOSUPPORT;
 	}
 
 	ret = bpf_skb_net_hdr_push(skb, off, len_diff);
@@ -3727,6 +3802,12 @@ static int bpf_skb_net_shrink(struct sk_buff *skb, u32 off, u32 len_diff,
 		    !(flags & BPF_F_ADJ_ROOM_FIXED_GSO))
 			return -ENOTSUPP;
 	}
+
+	if (decap &&
+	    !bpf_skb_proto_change_sk_ok(skb,
+					flags & BPF_F_ADJ_ROOM_DECAP_L3_IPV6 ?
+					htons(ETH_P_IPV6) : htons(ETH_P_IP)))
+		return -EAFNOSUPPORT;
 
 	ret = skb_unclone(skb, GFP_ATOMIC);
 	if (unlikely(ret < 0))
@@ -7988,6 +8069,8 @@ BPF_CALL_3(bpf_sk_assign, struct sk_buff *, skb, struct sock *, sk, u64, flags)
 		return -ENETUNREACH;
 	if (sk_unhashed(sk))
 		return -EOPNOTSUPP;
+	if (!bpf_sk_assign_family_ok(skb, sk))
+		return -EAFNOSUPPORT;
 	if (sk_is_refcounted(sk) &&
 	    unlikely(!refcount_inc_not_zero(&sk->sk_refcnt)))
 		return -ENOENT;
@@ -12516,6 +12599,9 @@ __bpf_kfunc int bpf_sk_assign_tcp_reqsk(struct __sk_buff *s, struct sock *sk,
 	net = dev_net(skb->dev);
 	if (net != sock_net(sk))
 		return -ENETUNREACH;
+
+	if (!bpf_sk_assign_family_ok(skb, sk))
+		return -EAFNOSUPPORT;
 
 	switch (skb->protocol) {
 	case htons(ETH_P_IP):

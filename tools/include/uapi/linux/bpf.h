@@ -2659,6 +2659,11 @@ union bpf_attr {
  * 		checked and segments are recalculated by the GSO/GRO engine.
  * 		The size for GSO target is adapted as well.
  *
+ *		If the skb was assigned to a socket by **bpf_sk_assign** and
+ *		the requested protocol is incompatible with that socket, the
+ *		helper returns **-EAFNOSUPPORT** before translating the packet.
+ *		The skb assignment is preserved.
+ *
  * 		All values for *flags* are reserved for future usage, and must
  * 		be left at zero.
  *
@@ -3066,6 +3071,11 @@ union bpf_attr {
  *		SKB_GSO_GRE_CSUM, SKB_GSO_IPXIP4, SKB_GSO_IPXIP6) have been
  *		removed from the packet. This handles cases where all tunnel
  *		layers have been decapsulated.
+ *
+ *		If an L3 encapsulation or decapsulation would produce a
+ *		protocol incompatible with a socket assigned by
+ *		**bpf_sk_assign**, the helper returns **-EAFNOSUPPORT** before
+ *		changing the packet. The skb assignment is preserved.
  *
  * 		A call to this helper is susceptible to change the underlying
  * 		packet buffer. Therefore, at load time, all checks on pointers
@@ -4567,6 +4577,10 @@ union bpf_attr {
  *
  *		**-EOPNOTSUPP** if the operation is not supported, for example
  *		a call from outside of TC ingress.
+ *
+ *		**-EAFNOSUPPORT** if the socket family is not compatible with
+ *		the network layer of the packet, for example an **AF_INET**
+ *		socket and an IPv6 packet.
  *
  * long bpf_sk_assign(struct bpf_sk_lookup *ctx, struct bpf_sock *sk, u64 flags)
  *	Description
