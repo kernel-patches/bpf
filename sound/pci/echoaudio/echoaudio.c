@@ -1934,11 +1934,11 @@ static int snd_echo_create(struct snd_card *card,
 }
 
 /* constructor */
-static int __snd_echo_probe(struct pci_dev *pci,
-			    const struct pci_device_id *pci_id)
+static int snd_echo_probe(struct pci_dev *pci,
+			  const struct pci_device_id *pci_id)
 {
 	static int dev;
-	struct snd_card *card;
+	struct snd_card *card __free(snd_card_free) = NULL;
 	struct echoaudio *chip;
 	char *dsp;
 	int err;
@@ -2097,16 +2097,10 @@ static int __snd_echo_probe(struct pci_dev *pci,
 	dev_info(card->dev, "Card registered: %s\n", card->longname);
 
 	pci_set_drvdata(pci, chip);
+	card = NULL; /* probe succeeded, don't release as error */
 	dev++;
 	return 0;
 }
-
-static int snd_echo_probe(struct pci_dev *pci,
-			  const struct pci_device_id *pci_id)
-{
-	return snd_card_free_on_error(&pci->dev, __snd_echo_probe(pci, pci_id));
-}
-
 
 static int snd_echo_suspend(struct device *dev)
 {
