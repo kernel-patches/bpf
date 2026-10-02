@@ -142,8 +142,19 @@ cmd_alloc_ent(struct mlx5_cmd *cmd, struct mlx5_cmd_msg *in,
 	return ent;
 }
 
+static void free_msg(struct mlx5_core_dev *dev, struct mlx5_cmd_msg *msg);
+static void mlx5_free_cmd_msg(struct mlx5_core_dev *dev,
+			      struct mlx5_cmd_msg *msg);
+
 static void cmd_free_ent(struct mlx5_cmd_work_ent *ent)
 {
+	if (test_bit(MLX5_CMD_ENT_STATE_RETAIN_MSGS, &ent->state)) {
+		struct mlx5_core_dev *dev = container_of(ent->cmd,
+							  struct mlx5_core_dev, cmd);
+
+		mlx5_free_cmd_msg(dev, ent->out);
+		free_msg(dev, ent->in);
+	}
 	kfree(ent);
 }
 
@@ -958,10 +969,6 @@ out:
 	cmd_ent_put(ent); /* for the cmd_ent_get() took on schedule delayed work */
 }
 
-static void free_msg(struct mlx5_core_dev *dev, struct mlx5_cmd_msg *msg);
-static void mlx5_free_cmd_msg(struct mlx5_core_dev *dev,
-			      struct mlx5_cmd_msg *msg);
-
 static bool opcode_allowed(struct mlx5_cmd *cmd, u16 opcode)
 {
 	if (cmd->allowed_opcode == CMD_ALLOWED_OPCODE_ALL)
@@ -1163,6 +1170,10 @@ static void wait_func_handle_exec_timeout(struct mlx5_core_dev *dev,
 		       mlx5_command_str(ent->op), ent->op);
 
 	ent->ret = -ETIMEDOUT;
+	/* The real handler may have claimed the completion but still be using
+	 * the mailboxes. Keep them with the entry until its last reference.
+	 */
+	set_bit(MLX5_CMD_ENT_STATE_RETAIN_MSGS, &ent->state);
 	mlx5_cmd_comp_handler(dev, 1ULL << ent->idx, true);
 }
 
@@ -1260,7 +1271,7 @@ static int mlx5_cmd_invoke(struct mlx5_core_dev *dev, struct mlx5_cmd_msg *in,
 			   struct mlx5_cmd_msg *out, void *uout, int uout_size,
 			   mlx5_cmd_cbk_t callback,
 			   void *context, int page_queue,
-			   u8 token, bool force_polling)
+			   u8 token, bool force_polling, bool *retain_msgs)
 {
 	struct mlx5_cmd *cmd = &dev->cmd;
 	struct mlx5_cmd_work_ent *ent;
@@ -1313,6 +1324,7 @@ static int mlx5_cmd_invoke(struct mlx5_core_dev *dev, struct mlx5_cmd_msg *in,
 		return 0; /* mlx5_cmd_comp_handler() will put(ent) */
 
 	err = wait_func(dev, ent);
+	*retain_msgs = test_bit(MLX5_CMD_ENT_STATE_RETAIN_MSGS, &ent->state);
 	if (err == -ETIMEDOUT || err == -ECANCELED || err == -EBUSY)
 		goto out_free;
 
@@ -1732,6 +1744,66 @@ static void free_msg(struct mlx5_core_dev *dev, struct mlx5_cmd_msg *msg)
 	}
 }
 
+/*
+ * cmd_work_handler() takes an entry reference for the firmware event and
+ * sets PENDING_COMP before ringing the command doorbell. Firmware can still
+ * use the input and output DMA mailboxes after the caller times out.
+ *
+ * Claim PENDING_COMP under alloc_lock so exactly one handler makes the
+ * mailbox and firmware-reference decisions:
+ *
+ * - A timeout that wins retains the mailboxes in the entry. If the command
+ *   interface is still up and the opcode is allowed, firmware can still
+ *   generate a real completion, so TIMEDOUT retains the firmware-event ref.
+ * - A real completion that wins consumes its firmware-event ref normally.
+ * - A real completion that loses is the late event after a timeout. It drops
+ *   the ref retained by TIMEDOUT; RETAIN_MSGS stays set until entry teardown.
+ * - A reset completion cannot be followed by a real firmware event. It drops
+ *   a ref only when TIMEDOUT says the timeout retained one.
+ *
+ * A blocking timeout retains the mailboxes even when a real completion has
+ * claimed PENDING_COMP. That handler keeps its firmware-event reference until
+ * it finishes using the mailboxes. Keeping the reference transitions under
+ * alloc_lock prevents timeout, firmware, and reset from consuming the same
+ * reference.
+ */
+static bool mlx5_cmd_claim_completion(struct mlx5_core_dev *dev,
+				      struct mlx5_cmd_work_ent *ent, u64 vec,
+				      bool forced, bool *drop_fw_ref)
+{
+	struct mlx5_cmd *cmd = &dev->cmd;
+	unsigned long flags;
+	bool timed_out = forced && ent->ret == -ETIMEDOUT;
+	bool pending;
+
+	*drop_fw_ref = false;
+	spin_lock_irqsave(&cmd->alloc_lock, flags);
+	pending = test_and_clear_bit(MLX5_CMD_ENT_STATE_PENDING_COMP,
+				     &ent->state);
+	if (pending) {
+		if (timed_out)
+			set_bit(MLX5_CMD_ENT_STATE_RETAIN_MSGS, &ent->state);
+
+		if (timed_out && !mlx5_cmd_is_down(dev) &&
+		    opcode_allowed(cmd, ent->op)) {
+			set_bit(MLX5_CMD_ENT_STATE_TIMEDOUT, &ent->state);
+		} else {
+			clear_bit(MLX5_CMD_ENT_STATE_TIMEDOUT, &ent->state);
+			*drop_fw_ref = true;
+		}
+	} else if (!forced) {
+		clear_bit(MLX5_CMD_ENT_STATE_TIMEDOUT, &ent->state);
+		*drop_fw_ref = true;
+	} else if (vec & MLX5_TRIGGERED_CMD_COMP) {
+		/* Reset cannot receive a late firmware completion. */
+		*drop_fw_ref = test_and_clear_bit(MLX5_CMD_ENT_STATE_TIMEDOUT,
+						  &ent->state);
+	}
+	spin_unlock_irqrestore(&cmd->alloc_lock, flags);
+
+	return pending;
+}
+
 static void mlx5_cmd_comp_handler(struct mlx5_core_dev *dev, u64 vec, bool forced)
 {
 	struct mlx5_cmd *cmd = &dev->cmd;
@@ -1744,38 +1816,33 @@ static void mlx5_cmd_comp_handler(struct mlx5_core_dev *dev, u64 vec, bool force
 	struct mlx5_cmd_stats *stats;
 	unsigned long flags;
 	unsigned long vector;
+	bool pending;
+	bool drop_fw_ref;
 
 	/* there can be at most 32 command queues */
 	vector = vec & 0xffffffff;
 	for (i = 0; i < (1 << cmd->vars.log_sz); i++) {
 		if (test_bit(i, &vector)) {
 			ent = cmd->ent_arr[i];
-
-			if (forced && ent->ret == -ETIMEDOUT)
-				set_bit(MLX5_CMD_ENT_STATE_TIMEDOUT,
-					&ent->state);
-			else if (!forced) /* real FW completion */
-				clear_bit(MLX5_CMD_ENT_STATE_TIMEDOUT,
-					  &ent->state);
+			pending = mlx5_cmd_claim_completion(dev, ent, vec, forced,
+							    &drop_fw_ref);
 
 			/* if we already completed the command, ignore it */
-			if (!test_and_clear_bit(MLX5_CMD_ENT_STATE_PENDING_COMP,
-						&ent->state)) {
-				/* only real completion can free the cmd slot */
+			if (!pending) {
 				if (!forced) {
-					mlx5_core_err(dev, "Command completion arrived after timeout (entry idx = %d).\n",
+					mlx5_core_err(dev,
+						      "Command completion arrived after timeout (entry idx = %d).\n",
 						      ent->idx);
-					cmd_ent_put(ent);
 				}
+				if (drop_fw_ref)
+					cmd_ent_put(ent);
 				continue;
 			}
 
 			if (ent->callback && cancel_delayed_work(&ent->cb_timeout_work))
 				cmd_ent_put(ent); /* timeout work was canceled */
 
-			if (!forced || /* Real FW completion */
-			     mlx5_cmd_is_down(dev) || /* No real FW completion is expected */
-			     !opcode_allowed(cmd, ent->op))
+			if (drop_fw_ref && ent->callback)
 				cmd_ent_put(ent);
 
 			ent->ts2 = ktime_get_ns();
@@ -1816,17 +1883,23 @@ static void mlx5_cmd_comp_handler(struct mlx5_core_dev *dev, u64 vec, bool force
 								 ent->out,
 								 ent->uout_size);
 
-				mlx5_free_cmd_msg(dev, ent->out);
-				free_msg(dev, ent->in);
+				if (!test_bit(MLX5_CMD_ENT_STATE_RETAIN_MSGS,
+					      &ent->state)) {
+					mlx5_free_cmd_msg(dev, ent->out);
+					free_msg(dev, ent->in);
+				}
 
 				/* final consumer is done, release ent */
 				cmd_ent_put(ent);
 				callback(err, context);
 			} else {
-				/* release wait_func() so mlx5_cmd_invoke()
-				 * can make the final ent_put()
+				/* No mailbox accesses after done. If the caller timed out,
+				 * the firmware reference keeps ent and its mailboxes alive
+				 * until this handler has finished.
 				 */
 				complete(&ent->done);
+				if (drop_fw_ref)
+					cmd_ent_put(ent);
 			}
 		}
 	}
@@ -1965,6 +2038,7 @@ static int cmd_exec(struct mlx5_core_dev *dev, void *in, int in_size, void *out,
 	gfp_t gfp;
 	u8 token;
 	int err;
+	bool retain_msgs = false;
 
 	if (mlx5_cmd_is_down(dev) || !opcode_allowed(&dev->cmd, opcode))
 		return -ENXIO;
@@ -2008,9 +2082,12 @@ static int cmd_exec(struct mlx5_core_dev *dev, void *in, int in_size, void *out,
 	}
 
 	err = mlx5_cmd_invoke(dev, inb, outb, out, out_size, callback, context,
-			      pages_queue, token, force_polling);
+			      pages_queue, token, force_polling, &retain_msgs);
 	if (callback && !err)
 		return 0;
+	/* The entry releases retained DMA mailboxes with its final reference. */
+	if (retain_msgs)
+		goto out_up;
 
 	if (err > 0) /* Failed in FW, command didn't execute */
 		err = deliv_status_to_err(err);

@@ -832,6 +832,7 @@ typedef void (*mlx5_cmd_cbk_t)(int status, void *context);
 enum {
 	MLX5_CMD_ENT_STATE_PENDING_COMP,
 	MLX5_CMD_ENT_STATE_TIMEDOUT,
+	MLX5_CMD_ENT_STATE_RETAIN_MSGS,
 };
 
 struct mlx5_cmd_work_ent {
