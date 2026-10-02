@@ -108,6 +108,7 @@
 #include "realtek-smi.h"
 #include "realtek-mdio.h"
 #include "rtl83xx.h"
+#include "rtl8365mb_dcb.h"
 #include "rtl8365mb_l2.h"
 #include "rtl8365mb_vlan.h"
 
@@ -3187,6 +3188,11 @@ static int rtl8365mb_setup(struct dsa_switch *ds)
 		if (ret)
 			goto out_teardown_irq;
 
+		/* Default the port QoS (default priority = Best Effort) */
+		ret = rtl8365mb_dcb_init_port(ds, dp->index);
+		if (ret)
+			goto out_teardown_irq;
+
 		/* Set up per-port private data */
 		p->priv = priv;
 		p->index = dp->index;
@@ -3273,6 +3279,13 @@ static int rtl8365mb_setup(struct dsa_switch *ds)
 	 * programs the priority-to-queue map for the right number of queues.
 	 */
 	ds->num_tx_queues = mb->chip_info->num_tx_queues;
+
+	/* Establish a defined QoS baseline: program the priority-to-queue map
+	 * for the chip's queue count and trust only the port default priority.
+	 */
+	ret = rtl8365mb_dcb_init(ds);
+	if (ret)
+		goto out_teardown_irq;
 
 	/* Start statistics counter polling */
 	ret = rtl8365mb_stats_setup(priv);
@@ -3435,6 +3448,8 @@ static const struct dsa_switch_ops rtl8365mb_switch_ops = {
 	.port_bridge_leave = rtl83xx_port_bridge_leave,
 	.port_pre_bridge_flags = rtl8365mb_port_pre_bridge_flags,
 	.port_bridge_flags = rtl83xx_port_bridge_flags,
+	.port_get_default_prio = rtl8365mb_port_get_default_prio,
+	.port_set_default_prio = rtl8365mb_port_set_default_prio,
 	.port_stp_state_set = rtl8365mb_port_stp_state_set,
 	.port_fast_age = rtl83xx_port_fast_age,
 	.port_fdb_add = rtl83xx_port_fdb_add,

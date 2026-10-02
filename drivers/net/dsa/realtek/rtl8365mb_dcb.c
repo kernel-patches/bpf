@@ -1,0 +1,287 @@
+// SPDX-License-Identifier: GPL-2.0
+/* QoS and DCB configuration for the rtl8365mb switch family
+ *
+ * The internal priority is the common rail: every classifier writes onto it,
+ * and it is the 802.1Q traffic type.
+ *
+ * A queue is a traffic class. Priority is not the same as traffic class: the
+ * mapping is policy (Table 8-5 for non-CBS) and collapses 8 priorities onto nq
+ * queues when nq < 8; they only line up here because this is a non-CBS switch
+ * at 8 queues. The code therefore always maps through ieee8021q_tt_to_tc(), never
+ * assuming priority == queue.
+ */
+
+#include <linux/bitops.h>
+#include <linux/build_bug.h>
+#include <linux/regmap.h>
+#include <net/dsa.h>
+#include <net/ieee8021q.h>
+
+#include "realtek.h"
+#include "rtl8365mb_dcb.h"
+
+/* The chip's eight internal priorities carry 802.1Q traffic types, so the
+ * two axes must have the same cardinality.
+ */
+static_assert(RTL8365MB_NUM_IPMS == IEEE8021Q_TT_MAX);
+
+/* Per-port output-queue mapping index (selects the queue count). Four ports
+ * per register, 3-bit field. An N-queue configuration selects index N, except
+ * the full eight-queue configuration, which is encoded as index 0 (the field
+ * wraps modulo eight).
+ */
+#define RTL8365MB_QOS_PORT_QUEUE_NUMBER_REG(_p)		(0x0900 + ((_p) >> 2))
+#define RTL8365MB_QOS_PORT_QUEUE_NUMBER_OFFSET(_p)	(((_p) & 0x3) << 2)
+#define RTL8365MB_QOS_QMAP_IDX(_nq)			((_nq) & 0x7)
+
+/* Internal priority -> queue-id map. Eight tables (one per queue count),
+ * indexed [table][prio]; four priorities per register, 3-bit qid. An N-queue
+ * configuration uses table N-1 (1Q is table 0 at 0x0904, 8Q is table 7).
+ */
+#define RTL8365MB_QOS_PRI_TO_QID_TABLE(_nq)		((_nq) - 1)
+#define RTL8365MB_QOS_PRI_TO_QID_REG(_t, _pri) \
+	(0x0904 + ((_t) << 1) + ((_pri) >> 2))
+#define RTL8365MB_QOS_PRI_TO_QID_OFFSET(_pri)		(((_pri) & 0x3) << 2)
+
+/* 802.1p (PCP) -> internal priority remap. Four priorities per register. */
+#define RTL8365MB_QOS_1Q_REMAP_REG(_pri)		(0x0865 + ((_pri) >> 2))
+#define RTL8365MB_QOS_1Q_REMAP_OFFSET(_pri)		(((_pri) & 0x3) << 2)
+
+/* Port-based (default) priority. Four ports per register, 3-bit. */
+#define RTL8365MB_QOS_PORT_PRI_REG(_p)			(0x0877 + ((_p) >> 2))
+#define RTL8365MB_QOS_PORT_PRI_OFFSET(_p)		(((_p) & 0x3) << 2)
+
+/* Default internal priority for unmarked traffic. Best Effort, to match what
+ * an untagged (PCP 0) frame resolves to via ieee8021q_pcp_to_tt().
+ */
+#define RTL8365MB_QOS_DEFAULT_PRIO			IEEE8021Q_TT_BE
+
+/* Priority-decision weight tables. Two tables (each port selects one), eight
+ * sources, one 8-bit weight each, two sources per register. Higher weight
+ * wins; a weight of zero disables the source.
+ */
+#define RTL8365MB_QOS_PRIDEC_TBL0_REG(_s)		(0x087B + ((_s) >> 1))
+#define RTL8365MB_QOS_PRIDEC_TBL1_REG(_s)		(0x0885 + ((_s) >> 1))
+#define RTL8365MB_QOS_PRIDEC_OFFSET(_s)			(((_s) & 0x1) << 3)
+
+/* Each port selects one of the two decision tables; one bit per port. */
+#define RTL8365MB_QOS_PRIDEC_IDX_REG			0x0889
+
+/* Priority-decision sources. The hardware numbers eight sources; this driver
+ * programs the three it uses by name and explicitly disables the rest. The
+ * hardware assigns these source ordinals: PORT=0, ACL=1 (unused), DSCP=2,
+ * 1Q=3, SVLAN=4 (unused), CVLAN=5 (unused), DA=6 (unused), SA=7 (unused).
+ */
+#define RTL8365MB_QOS_PRIDEC_PORT			0
+#define RTL8365MB_QOS_PRIDEC_DSCP			2
+#define RTL8365MB_QOS_PRIDEC_1Q				3
+#define RTL8365MB_QOS_PRIDEC_NUM_SRC			8
+
+/* Priority-decision weights. The baseline trusts only the port-based
+ * priority; every other source is disabled (weight 0). apptrust raises a
+ * trusted source's weight above the port default so that it wins.
+ */
+#define RTL8365MB_QOS_WEIGHT_UNTRUSTED			0
+#define RTL8365MB_QOS_WEIGHT_PORT			1
+
+/* The QoS priority and queue selectors are 3-bit register fields; derive a
+ * field's mask from its bit offset.
+ */
+static inline u32 rtl8365mb_qos_sel_field_mask(unsigned int off)
+{
+	return GENMASK(off + 2, off);
+}
+
+/* The priority-decision weight is an 8-bit register field; derive its mask
+ * from the field's bit offset, mirroring rtl8365mb_qos_sel_field_mask().
+ */
+static inline u32 rtl8365mb_qos_weight_field_mask(unsigned int off)
+{
+	return GENMASK(off + 7, off);
+}
+
+static int rtl8365mb_set_field(struct realtek_priv *priv, u32 reg, u32 mask,
+			       u32 val)
+{
+	return regmap_update_bits(priv->map, reg, mask,
+				  (val << __ffs(mask)) & mask);
+}
+
+static int rtl8365mb_get_field(struct realtek_priv *priv, u32 reg, u32 mask,
+			       u32 *val)
+{
+	int ret;
+
+	ret = regmap_read(priv->map, reg, val);
+	if (ret)
+		return ret;
+
+	*val = (*val & mask) >> __ffs(mask);
+	return 0;
+}
+
+static u32 rtl8365mb_qos_pridec_reg(int table, int src)
+{
+	return table ? RTL8365MB_QOS_PRIDEC_TBL1_REG(src) :
+		       RTL8365MB_QOS_PRIDEC_TBL0_REG(src);
+}
+
+static int rtl8365mb_qos_set_pridec(struct realtek_priv *priv, int table,
+				    int src, u8 weight)
+{
+	int off = RTL8365MB_QOS_PRIDEC_OFFSET(src);
+
+	return rtl8365mb_set_field(priv, rtl8365mb_qos_pridec_reg(table, src),
+				   rtl8365mb_qos_weight_field_mask(off), weight);
+}
+
+static int rtl8365mb_qos_setup_queues(struct realtek_priv *priv,
+				      unsigned int nq)
+{
+	int table = RTL8365MB_QOS_PRI_TO_QID_TABLE(nq);
+	struct dsa_switch *ds = &priv->ds;
+	struct dsa_port *dp;
+	int tt, ret;
+
+	dsa_switch_for_each_port(dp, ds) {
+		u32 reg = RTL8365MB_QOS_PORT_QUEUE_NUMBER_REG(dp->index);
+		int off = RTL8365MB_QOS_PORT_QUEUE_NUMBER_OFFSET(dp->index);
+
+		ret = rtl8365mb_set_field(priv, reg,
+					  rtl8365mb_qos_sel_field_mask(off),
+					  RTL8365MB_QOS_QMAP_IDX(nq));
+		if (ret)
+			return ret;
+	}
+
+	for (tt = 0; tt < IEEE8021Q_TT_MAX; tt++) {
+		u32 reg = RTL8365MB_QOS_PRI_TO_QID_REG(table, tt);
+		int off = RTL8365MB_QOS_PRI_TO_QID_OFFSET(tt);
+		int tc = ieee8021q_tt_to_tc(tt, nq);
+
+		if (tc < 0)
+			return tc;
+
+		/* QID field holds the traffic class */
+		ret = rtl8365mb_set_field(priv, reg,
+					  rtl8365mb_qos_sel_field_mask(off), tc);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
+/* Map ingress PCP to the internal priority via its 802.1Q traffic type, so
+ * Best Effort (PCP 0) correctly outranks Background (PCP 1).
+ */
+static int rtl8365mb_qos_setup_pcp(struct realtek_priv *priv)
+{
+	int pcp, ret;
+
+	for (pcp = 0; pcp < IEEE_8021Q_MAX_PRIORITIES; pcp++) {
+		u32 reg = RTL8365MB_QOS_1Q_REMAP_REG(pcp);
+		int off = RTL8365MB_QOS_1Q_REMAP_OFFSET(pcp);
+		int tt = ieee8021q_pcp_to_tt(pcp);
+
+		if (tt < 0)
+			return tt;
+
+		ret = rtl8365mb_set_field(priv, reg,
+					  rtl8365mb_qos_sel_field_mask(off), tt);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
+int rtl8365mb_dcb_init(struct dsa_switch *ds)
+{
+	struct realtek_priv *priv = ds->priv;
+	int table, ret;
+
+	/* The priority->queue table is a single switch-wide resource, shared by
+	 * all ports (not per-port).
+	 */
+	ret = rtl8365mb_qos_setup_queues(priv, ds->num_tx_queues);
+	if (ret)
+		return ret;
+
+	ret = rtl8365mb_qos_setup_pcp(priv);
+	if (ret)
+		return ret;
+
+	/* Program every decision source in both tables rather than relying on
+	 * the reset state: only the port default carries weight, the other
+	 * seven sources are disabled. apptrust later raises the weights in the
+	 * trusted table and steers ports to it on demand.
+	 */
+	for (table = 0; table <= 1; table++) {
+		int src;
+
+		for (src = 0; src < RTL8365MB_QOS_PRIDEC_NUM_SRC; src++) {
+			u8 weight = src == RTL8365MB_QOS_PRIDEC_PORT ?
+				    RTL8365MB_QOS_WEIGHT_PORT :
+				    RTL8365MB_QOS_WEIGHT_UNTRUSTED;
+
+			ret = rtl8365mb_qos_set_pridec(priv, table, src, weight);
+			if (ret)
+				return ret;
+		}
+	}
+
+	return regmap_write(priv->map, RTL8365MB_QOS_PRIDEC_IDX_REG, 0);
+}
+
+int rtl8365mb_dcb_init_port(struct dsa_switch *ds, int port)
+{
+	int off = RTL8365MB_QOS_PORT_PRI_OFFSET(port);
+	struct realtek_priv *priv = ds->priv;
+
+	/* All ports default to Best Effort: with no source trusted, every port
+	 * treats its traffic as unmarked, matching the default PCP result
+	 * so classification stays consistent once the admin opts a source in.
+	 */
+	return rtl8365mb_set_field(priv, RTL8365MB_QOS_PORT_PRI_REG(port),
+				   rtl8365mb_qos_sel_field_mask(off),
+				   RTL8365MB_QOS_DEFAULT_PRIO);
+}
+
+int rtl8365mb_port_get_default_prio(struct dsa_switch *ds, int port)
+{
+	int off = RTL8365MB_QOS_PORT_PRI_OFFSET(port);
+	struct realtek_priv *priv = ds->priv;
+	u32 val;
+	int ret;
+
+	ret = rtl8365mb_get_field(priv, RTL8365MB_QOS_PORT_PRI_REG(port),
+				  rtl8365mb_qos_sel_field_mask(off), &val);
+	if (ret)
+		return ret;
+
+	/* The register holds the internal priority (an 802.1Q traffic type);
+	 * dcbnl expects an 802.1p priority.
+	 */
+	return ieee8021q_tt_to_pcp(val);
+}
+
+int rtl8365mb_port_set_default_prio(struct dsa_switch *ds, int port, u8 prio)
+{
+	int off = RTL8365MB_QOS_PORT_PRI_OFFSET(port);
+	struct realtek_priv *priv = ds->priv;
+	int tt;
+
+	if (prio >= IEEE_8021Q_MAX_PRIORITIES)
+		return -ERANGE;
+
+	/* dcbnl passes an 802.1p priority; the register holds the internal
+	 * priority (an 802.1Q traffic type).
+	 */
+	tt = ieee8021q_pcp_to_tt(prio);
+	if (tt < 0)
+		return tt;
+
+	return rtl8365mb_set_field(priv, RTL8365MB_QOS_PORT_PRI_REG(port),
+				   rtl8365mb_qos_sel_field_mask(off), tt);
+}
