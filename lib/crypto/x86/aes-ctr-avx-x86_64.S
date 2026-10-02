@@ -419,10 +419,12 @@
 	cmp		$3*VL-1, LEN32
 	jle		.Lxor_tail_partial_vec_2\@
 	_xor_data	2
-	cmp		$4*VL-1, LEN32
-	jle		.Lxor_tail_partial_vec_3\@
-	_xor_data	3
-	jmp		.Ldone\@
+	add		$-3*VL, LEN32
+	jz		.Ldone\@
+	sub		$-3*VL, SRC
+	sub		$-3*VL, DST
+	_vmovdqa	AESDATA3, AESDATA0
+	jmp		.Lxor_tail_partial_vec_0\@
 
 .Lenc_tail_atmost4vecs\@:
 	cmp		$2*VL, LEN32
@@ -469,14 +471,6 @@
 	sub		$-2*VL, SRC
 	sub		$-2*VL, DST
 	_vmovdqa	AESDATA2, AESDATA0
-	jmp		.Lxor_tail_partial_vec_0\@
-
-.Lxor_tail_partial_vec_3\@:
-	add		$-3*VL, LEN32
-	jz		.Ldone\@
-	sub		$-3*VL, SRC
-	sub		$-3*VL, DST
-	_vmovdqa	AESDATA3, AESDATA0
 
 .Lxor_tail_partial_vec_0\@:
 	// XOR the remaining 1 <= LEN < VL bytes.  It's easy if masked
