@@ -1048,10 +1048,15 @@ static int geth_resize_freeq(struct gemini_ethernet_port *port)
 	u32 en;
 	int ret;
 
+	/* The software free queue interrupt is routed through port 1. */
+	if (!geth->port1)
+		return -ENODEV;
+
 	if (netdev->dev_id == 0)
-		other_netdev = geth->port1->netdev;
+		other_port = geth->port1;
 	else
-		other_netdev = geth->port0->netdev;
+		other_port = geth->port0;
+	other_netdev = other_port ? other_port->netdev : NULL;
 
 	if (other_netdev && netif_running(other_netdev))
 		return -EBUSY;
@@ -1062,7 +1067,6 @@ static int geth_resize_freeq(struct gemini_ethernet_port *port)
 		   new_size,
 		   port->rxq_order);
 	if (other_netdev) {
-		other_port = netdev_priv(other_netdev);
 		new_size += 1 << (other_port->rxq_order + 1);
 		netdev_dbg(other_netdev, "port %d size: %d order %d\n",
 			   other_netdev->dev_id,
@@ -2384,6 +2388,16 @@ static irqreturn_t gemini_port_irq(int irq, void *data)
 	return ret;
 }
 
+static void gemini_port_clear(struct gemini_ethernet_port *port)
+{
+	struct gemini_ethernet *geth = port->geth;
+
+	if (!port->id && geth->port0 == port)
+		geth->port0 = NULL;
+	else if (port->id && geth->port1 == port)
+		geth->port1 = NULL;
+}
+
 static void gemini_port_remove(struct gemini_ethernet_port *port)
 {
 	if (port->netdev) {
@@ -2392,6 +2406,7 @@ static void gemini_port_remove(struct gemini_ethernet_port *port)
 	}
 	clk_disable_unprepare(port->pclk);
 	geth_cleanup_freeq(port->geth);
+	gemini_port_clear(port);
 }
 
 static void gemini_ethernet_init(struct gemini_ethernet *geth)
@@ -2598,6 +2613,13 @@ static int gemini_ethernet_port_probe(struct platform_device *pdev)
 	if (ret)
 		goto unprepare;
 
+	if (!of_property_present(np, "phy-handle") &&
+	    !of_phy_is_fixed_link(np)) {
+		dev_info(dev, "no PHY, keeping port for shared IRQ\n");
+		port->netdev = NULL;
+		return 0;
+	}
+
 	ret = gmac_setup_phy(netdev);
 	if (ret) {
 		netdev_err(netdev,
@@ -2612,6 +2634,7 @@ static int gemini_ethernet_port_probe(struct platform_device *pdev)
 	return 0;
 
 unprepare:
+	gemini_port_clear(port);
 	clk_disable_unprepare(port->pclk);
 	return ret;
 }
