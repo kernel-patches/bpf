@@ -83,6 +83,7 @@ static int full_duplex[MAX_UNITS] = { -1, -1, -1, -1, -1, -1, -1, -1 };
 #include <linux/crc32.h>
 #include <linux/delay.h>
 #include <linux/bitops.h>
+#include <linux/idr.h>
 
 #include <asm/processor.h>	/* Processor type for cache alignment. */
 #include <asm/io.h>
@@ -142,6 +143,8 @@ struct chip_info {
 	char *chip_name;
 	int flags;
 };
+
+static DEFINE_IDA(fealnx_ida);
 
 static const struct chip_info skel_netdrv_tbl[] = {
 	{ "100/10M Ethernet PCI Adapter",	HAS_MII_XCVR },
@@ -411,6 +414,8 @@ struct netdev_private {
 	unsigned char phys[2];	/* MII device addresses. */
 	struct mii_if_info mii;
 	void __iomem *mem;
+
+	int card_idx;
 };
 
 
@@ -473,9 +478,8 @@ static int fealnx_init_one(struct pci_dev *pdev,
 			   const struct pci_device_id *ent)
 {
 	struct netdev_private *np;
-	int i, option, err, irq;
-	static int card_idx = -1;
-	char boardname[12];
+	int option, err, irq, i;
+	char boardname[18];
 	void __iomem *ioaddr;
 	unsigned long len;
 	unsigned int chip_id = ent->driver_data;
@@ -483,19 +487,24 @@ static int fealnx_init_one(struct pci_dev *pdev,
 	void *ring_space;
 	dma_addr_t ring_dma;
 	u8 addr[ETH_ALEN];
+	int card_idx;
 #ifdef USE_IO_OPS
 	int bar = 0;
 #else
 	int bar = 1;
 #endif
 
-	card_idx++;
+	card_idx = ida_alloc(&fealnx_ida, GFP_KERNEL);
+	if (card_idx < 0)
+		return card_idx;
+
 	sprintf(boardname, "fealnx%d", card_idx);
 
 	option = card_idx < MAX_UNITS ? options[card_idx] : 0;
 
-	i = pci_enable_device(pdev);
-	if (i) return i;
+	err = pci_enable_device(pdev);
+	if (err)
+		goto err_out_ida;
 	pci_set_master(pdev);
 
 	len = pci_resource_len(pdev, bar);
@@ -535,6 +544,7 @@ static int fealnx_init_one(struct pci_dev *pdev,
 
 	/* Make certain the descriptor lists are aligned. */
 	np = netdev_priv(dev);
+	np->card_idx = card_idx;
 	np->mem = ioaddr;
 	spin_lock_init(&np->lock);
 	np->pci_dev = pdev;
@@ -674,6 +684,8 @@ err_out_res:
 	pci_release_regions(pdev);
 err_out_disable:
 	pci_disable_device(pdev);
+err_out_ida:
+	ida_free(&fealnx_ida, card_idx);
 	return err;
 }
 
@@ -691,6 +703,7 @@ static void fealnx_remove_one(struct pci_dev *pdev)
 		dma_free_coherent(&pdev->dev, RX_TOTAL_SIZE, np->rx_ring,
 				  np->rx_ring_dma);
 		pci_iounmap(pdev, np->mem);
+		ida_free(&fealnx_ida, np->card_idx);
 		free_netdev(dev);
 		pci_release_regions(pdev);
 		pci_disable_device(pdev);
