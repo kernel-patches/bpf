@@ -118,7 +118,7 @@ static bool ux500_configure_channel(struct dma_channel *channel,
 
 	dma_desc->callback = ux500_dma_callback;
 	dma_desc->callback_param = channel;
-	ux500_channel->cookie = dma_desc->tx_submit(dma_desc);
+	ux500_channel->cookie = dmaengine_submit(dma_desc);
 
 	dma_async_issue_pending(dma_chan);
 
