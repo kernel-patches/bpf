@@ -1634,9 +1634,9 @@ static void hdmi_lpe_audio_free(struct snd_card *card)
  * This function is called when the i915 driver creates the
  * hdmi-lpe-audio platform device.
  */
-static int __hdmi_lpe_audio_probe(struct platform_device *pdev)
+static int hdmi_lpe_audio_probe(struct platform_device *pdev)
 {
-	struct snd_card *card;
+	struct snd_card *card __free(snd_card_free) = NULL;
 	struct snd_intelhad_card *card_ctx;
 	struct snd_intelhad *ctx;
 	struct snd_pcm *pcm;
@@ -1797,12 +1797,8 @@ static int __hdmi_lpe_audio_probe(struct platform_device *pdev)
 		schedule_work(&ctx->hdmi_audio_wq);
 	}
 
+	card = NULL; /* probe succeeded, don't release as error */
 	return 0;
-}
-
-static int hdmi_lpe_audio_probe(struct platform_device *pdev)
-{
-	return snd_card_free_on_error(&pdev->dev, __hdmi_lpe_audio_probe(pdev));
 }
 
 static const struct dev_pm_ops hdmi_lpe_audio_pm = {
