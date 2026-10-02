@@ -454,6 +454,9 @@ static int cmd_attr_cpumask(struct genl_info *info, int attr,
 	cpumask_var_t mask __free(free_cpumask_var) = CPUMASK_VAR_NULL;
 	int rc;
 
+	if (!net_eq(genl_info_net(info), &init_net))
+		return -EINVAL;
+
 	if (!alloc_cpumask_var(&mask, GFP_KERNEL))
 		return -ENOMEM;
 	rc = parse(info->attrs[attr], mask);
