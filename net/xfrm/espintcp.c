@@ -251,6 +251,8 @@ static int espintcp_push_msgs(struct sock *sk, int flags)
 	struct espintcp_msg *emsg = &ctx->partial;
 	int err;
 
+	if (emsg->owned)
+		return -EAGAIN;
 	if (!emsg->len)
 		return 0;
 
@@ -274,6 +276,12 @@ static int espintcp_push_msgs(struct sock *sk, int flags)
 	return err;
 }
 
+static void espintcp_unreserve_msg(struct sock *sk, struct espintcp_msg *emsg)
+{
+	WRITE_ONCE(emsg->owned, false);
+	sk->sk_write_space(sk);
+}
+
 int espintcp_push_skb(struct sock *sk, struct sk_buff *skb)
 {
 	struct espintcp_ctx *ctx = espintcp_getctx(sk);
@@ -291,7 +299,7 @@ int espintcp_push_skb(struct sock *sk, struct sk_buff *skb)
 
 	espintcp_push_msgs(sk, 0);
 
-	if (emsg->len) {
+	if (emsg->owned || emsg->len) {
 		kfree_skb(skb);
 		return -ENOBUFS;
 	}
@@ -336,10 +344,11 @@ static int espintcp_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
 			err = -ENOBUFS;
 		goto unlock;
 	}
-	if (emsg->len) {
+	if (emsg->owned || emsg->len) {
 		err = -ENOBUFS;
 		goto unlock;
 	}
+	WRITE_ONCE(emsg->owned, true);
 
 	sk_msg_init(&emsg->skmsg);
 	while (1) {
@@ -368,9 +377,10 @@ static int espintcp_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
 		goto fail;
 
 	end = emsg->skmsg.sg.end;
-	emsg->len = size;
 	sk_msg_iter_var_prev(end);
 	sg_mark_end(sk_msg_elem(&emsg->skmsg, end));
+	emsg->len = size;
+	espintcp_unreserve_msg(sk, emsg);
 
 	tcp_rate_check_app_limited(sk);
 
@@ -383,7 +393,7 @@ static int espintcp_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
 
 fail:
 	sk_msg_free(sk, &emsg->skmsg);
-	memset(emsg, 0, sizeof(*emsg));
+	espintcp_unreserve_msg(sk, emsg);
 unlock:
 	release_sock(sk);
 	return err;
@@ -549,8 +559,13 @@ static __poll_t espintcp_poll(struct file *file, struct socket *sock,
 {
 	struct sock *sk = sock->sk;
 	struct espintcp_ctx *ctx = espintcp_getctx(sk);
+	__poll_t mask;
 
-	return datagram_poll_queue(file, sock, wait, &ctx->ike_queue);
+	mask = datagram_poll_queue(file, sock, wait, &ctx->ike_queue);
+	if (READ_ONCE(ctx->partial.owned))
+		mask &= ~(EPOLLOUT | EPOLLWRNORM | EPOLLWRBAND);
+
+	return mask;
 }
 
 static void build_protos(struct proto *espintcp_prot,
