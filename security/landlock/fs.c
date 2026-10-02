@@ -751,6 +751,107 @@ static void test_is_eacces_with_write(struct kunit *const test)
 #undef IE_TRUE
 #undef IE_FALSE
 
+struct landlock_walk_state {
+	const struct landlock_domain *domain;
+	struct layer_masks *layer_masks_parent1, *layer_masks_parent2;
+	const struct layer_masks *layer_masks_child1, *layer_masks_child2;
+	access_mask_t access_request_parent1, access_request_parent2;
+	access_mask_t access_masked_parent1, access_masked_parent2;
+	bool child1_is_directory, child2_is_directory;
+	bool allowed_parent1, allowed_parent2, is_dom_check;
+};
+
+static int check_access_path_walk(const struct path *const ancestor,
+				  const unsigned int pos_flags,
+				  void *const data)
+{
+	struct landlock_walk_state *const state = data;
+	struct landlock_id id = {
+		.type = LANDLOCK_KEY_INODE,
+	};
+
+	if (unlikely(pos_flags & VFS_WALK_POS_DISCONNECTED)) {
+		if (likely(ancestor->mnt->mnt_flags & MNT_INTERNAL)) {
+			/*
+			 * Stops and allows access when reaching disconnected
+			 * root directories that are part of internal
+			 * filesystems (e.g. nsfs, which is reachable through
+			 * /proc/<pid>/ns/<namespace>).
+			 */
+			state->allowed_parent1 = true;
+			state->allowed_parent2 = true;
+			return VFS_WALK_STOP;
+		}
+		/*
+		 * The old loop never visited the mountpoints a mount
+		 * crossing lands on: don't match them against rules.  Other
+		 * disconnected roots keep being matched below, as before.
+		 */
+		if (pos_flags & VFS_WALK_POS_MOUNTPOINT)
+			return VFS_WALK_CONTINUE;
+	}
+
+	/*
+	 * If at least all accesses allowed on the destination are already
+	 * allowed on the source, respectively if there is at least as much as
+	 * restrictions on the destination than on the source, then we can
+	 * safely refer files from the source to the destination without
+	 * risking a privilege escalation.  This also applies in the case of
+	 * RENAME_EXCHANGE, which implies checks on both direction.  This is
+	 * crucial for standalone multilayered security policies.  Furthermore,
+	 * this helps avoid policy writers to shoot themselves in the foot.
+	 */
+	if (unlikely(state->is_dom_check &&
+		     no_more_access(state->layer_masks_parent1,
+				    state->layer_masks_child1,
+				    state->child1_is_directory,
+				    state->layer_masks_parent2,
+				    state->layer_masks_child2,
+				    state->child2_is_directory))) {
+		/*
+		 * Now, downgrades the remaining checks from domain handled
+		 * accesses to requested accesses.
+		 */
+		state->is_dom_check = false;
+		state->access_masked_parent1 = state->access_request_parent1;
+		state->access_masked_parent2 = state->access_request_parent2;
+
+		state->allowed_parent1 =
+			state->allowed_parent1 ||
+			scope_to_request(state->access_masked_parent1,
+					 state->layer_masks_parent1);
+		state->allowed_parent2 =
+			state->allowed_parent2 ||
+			scope_to_request(state->access_masked_parent2,
+					 state->layer_masks_parent2);
+
+		/* Stops when all accesses are granted. */
+		if (state->allowed_parent1 && state->allowed_parent2)
+			return VFS_WALK_STOP;
+	}
+
+	if (get_inode_id(ancestor->dentry, &id)) {
+		state->allowed_parent1 =
+			state->allowed_parent1 ||
+			unmask_layers_fs(state->domain, id,
+					 state->access_masked_parent1,
+					 state->layer_masks_parent1,
+					 ancestor->dentry);
+		state->allowed_parent2 =
+			state->allowed_parent2 ||
+			unmask_layers_fs(state->domain, id,
+					 state->access_masked_parent2,
+					 state->layer_masks_parent2,
+					 ancestor->dentry);
+	}
+
+	/* Stops when a rule from each layer grants access. */
+	if (state->allowed_parent1 && state->allowed_parent2)
+		return VFS_WALK_STOP;
+
+	return VFS_WALK_CONTINUE;
+}
+
 /**
  * is_access_to_paths_allowed - Check accesses for requests with a common path
  *
@@ -803,16 +904,16 @@ is_access_to_paths_allowed(const struct landlock_domain *const domain,
 			   struct landlock_request *const log_request_parent2,
 			   struct dentry *const dentry_child2)
 {
-	bool allowed_parent1 = false, allowed_parent2 = false, is_dom_check,
-	     child1_is_directory = true, child2_is_directory = true;
-	struct path walker_path;
-	struct landlock_id id = {
-		.type = LANDLOCK_KEY_INODE,
-	};
-	access_mask_t access_masked_parent1, access_masked_parent2;
 	struct layer_masks _layer_masks_child1, _layer_masks_child2;
-	struct layer_masks *layer_masks_child1 = NULL,
-			   *layer_masks_child2 = NULL;
+	struct landlock_walk_state state = {
+		.domain = domain,
+		.layer_masks_parent1 = layer_masks_parent1,
+		.layer_masks_parent2 = layer_masks_parent2,
+		.access_request_parent1 = access_request_parent1,
+		.access_request_parent2 = access_request_parent2,
+		.child1_is_directory = true,
+		.child2_is_directory = true,
+	};
 
 	if (!access_request_parent1 && !access_request_parent2)
 		return true;
@@ -826,37 +927,39 @@ is_access_to_paths_allowed(const struct landlock_domain *const domain,
 	if (WARN_ON_ONCE(!layer_masks_parent1))
 		return false;
 
-	allowed_parent1 = is_layer_masks_allowed(layer_masks_parent1);
+	state.allowed_parent1 = is_layer_masks_allowed(layer_masks_parent1);
 
 	if (unlikely(layer_masks_parent2)) {
 		if (WARN_ON_ONCE(!dentry_child1))
 			return false;
 
-		allowed_parent2 = is_layer_masks_allowed(layer_masks_parent2);
+		state.allowed_parent2 =
+			is_layer_masks_allowed(layer_masks_parent2);
 
 		/*
 		 * For a double request, first check for potential privilege
 		 * escalation by looking at domain handled accesses (which are
 		 * a superset of the meaningful requested accesses).
 		 */
-		access_masked_parent1 = access_masked_parent2 =
+		state.access_masked_parent1 =
 			landlock_union_access_masks(domain).fs;
-		is_dom_check = true;
+		state.access_masked_parent2 = state.access_masked_parent1;
+		state.is_dom_check = true;
 	} else {
 		if (WARN_ON_ONCE(dentry_child1 || dentry_child2))
 			return false;
 		/* For a simple request, only check for requested accesses. */
-		access_masked_parent1 = access_request_parent1;
-		access_masked_parent2 = access_request_parent2;
+		state.access_masked_parent1 = access_request_parent1;
+		state.access_masked_parent2 = access_request_parent2;
 		/*
 		 * Simple requests have no parent2 to check, so parent2 is
 		 * trivially allowed.  This must be set explicitly because the
-		 * get_inode_id() gate in the pathwalk loop may prevent
+		 * get_inode_id() gate in the walk callback may prevent
 		 * landlock_unmask_layers() from being called (which would
 		 * otherwise return true for NULL masks as a side effect).
 		 */
-		allowed_parent2 = true;
-		is_dom_check = false;
+		state.allowed_parent2 = true;
+		state.is_dom_check = false;
 	}
 
 	if (unlikely(dentry_child1)) {
@@ -872,8 +975,8 @@ is_access_to_paths_allowed(const struct landlock_domain *const domain,
 		if (handled && get_inode_id(dentry_child1, &id))
 			unmask_layers_fs(domain, id, handled,
 					 &_layer_masks_child1, dentry_child1);
-		layer_masks_child1 = &_layer_masks_child1;
-		child1_is_directory = d_is_dir(dentry_child1);
+		state.layer_masks_child1 = &_layer_masks_child1;
+		state.child1_is_directory = d_is_dir(dentry_child1);
 	}
 	if (unlikely(dentry_child2)) {
 		struct landlock_id id = {
@@ -888,118 +991,16 @@ is_access_to_paths_allowed(const struct landlock_domain *const domain,
 		if (handled && get_inode_id(dentry_child2, &id))
 			unmask_layers_fs(domain, id, handled,
 					 &_layer_masks_child2, dentry_child2);
-		layer_masks_child2 = &_layer_masks_child2;
-		child2_is_directory = d_is_dir(dentry_child2);
+		state.layer_masks_child2 = &_layer_masks_child2;
+		state.child2_is_directory = d_is_dir(dentry_child2);
 	}
 
-	walker_path = *path;
-	path_get(&walker_path);
 	/*
 	 * We need to walk through all the hierarchy to not miss any relevant
-	 * restriction.
+	 * restriction.  Reaching the real root without a grant from each
+	 * layer denies access.
 	 */
-	while (true) {
-		/*
-		 * If at least all accesses allowed on the destination are
-		 * already allowed on the source, respectively if there is at
-		 * least as much as restrictions on the destination than on the
-		 * source, then we can safely refer files from the source to
-		 * the destination without risking a privilege escalation.
-		 * This also applies in the case of RENAME_EXCHANGE, which
-		 * implies checks on both direction.  This is crucial for
-		 * standalone multilayered security policies.  Furthermore,
-		 * this helps avoid policy writers to shoot themselves in the
-		 * foot.
-		 */
-		if (unlikely(is_dom_check &&
-			     no_more_access(
-				     layer_masks_parent1, layer_masks_child1,
-				     child1_is_directory, layer_masks_parent2,
-				     layer_masks_child2,
-				     child2_is_directory))) {
-			/*
-			 * Now, downgrades the remaining checks from domain
-			 * handled accesses to requested accesses.
-			 */
-			is_dom_check = false;
-			access_masked_parent1 = access_request_parent1;
-			access_masked_parent2 = access_request_parent2;
-
-			allowed_parent1 =
-				allowed_parent1 ||
-				scope_to_request(access_masked_parent1,
-						 layer_masks_parent1);
-			allowed_parent2 =
-				allowed_parent2 ||
-				scope_to_request(access_masked_parent2,
-						 layer_masks_parent2);
-
-			/* Stops when all accesses are granted. */
-			if (allowed_parent1 && allowed_parent2)
-				break;
-		}
-
-		if (get_inode_id(walker_path.dentry, &id)) {
-			allowed_parent1 =
-				allowed_parent1 ||
-				unmask_layers_fs(domain, id,
-						 access_masked_parent1,
-						 layer_masks_parent1,
-						 walker_path.dentry);
-			allowed_parent2 =
-				allowed_parent2 ||
-				unmask_layers_fs(domain, id,
-						 access_masked_parent2,
-						 layer_masks_parent2,
-						 walker_path.dentry);
-		}
-
-		/* Stops when a rule from each layer grants access. */
-		if (allowed_parent1 && allowed_parent2)
-			break;
-
-jump_up:
-		if (walker_path.dentry == walker_path.mnt->mnt_root) {
-			if (follow_up(&walker_path)) {
-				/* Ignores hidden mount points. */
-				goto jump_up;
-			} else {
-				/*
-				 * Stops at the real root.  Denies access
-				 * because not all layers have granted access.
-				 */
-				break;
-			}
-		}
-
-		if (unlikely(IS_ROOT(walker_path.dentry))) {
-			if (likely(walker_path.mnt->mnt_flags & MNT_INTERNAL)) {
-				/*
-				 * Stops and allows access when reaching disconnected root
-				 * directories that are part of internal filesystems (e.g. nsfs,
-				 * which is reachable through /proc/<pid>/ns/<namespace>).
-				 */
-				allowed_parent1 = true;
-				allowed_parent2 = true;
-				break;
-			}
-
-			/*
-			 * We reached a disconnected root directory from a bind mount.
-			 * Let's continue the walk with the mount point we missed.
-			 */
-			dput(walker_path.dentry);
-			walker_path.dentry = walker_path.mnt->mnt_root;
-			dget(walker_path.dentry);
-		} else {
-			struct dentry *const parent_dentry =
-				dget_parent(walker_path.dentry);
-
-			dput(walker_path.dentry);
-			walker_path.dentry = parent_dentry;
-		}
-	}
-	path_put(&walker_path);
+	vfs_walk_ancestors(path, check_access_path_walk, &state, 0);
 
 	/*
 	 * Check CONFIG_SECURITY_LANDLOCK_LOG to enable elision of
@@ -1007,24 +1008,24 @@ jump_up:
 	 * dead code elimination.
 	 */
 #ifdef CONFIG_SECURITY_LANDLOCK_LOG
-	if (!allowed_parent1 && log_request_parent1) {
+	if (!state.allowed_parent1 && log_request_parent1) {
 		log_request_parent1->type = LANDLOCK_REQUEST_FS_ACCESS;
 		log_request_parent1->audit.type = LSM_AUDIT_DATA_PATH;
 		log_request_parent1->audit.u.path = *path;
-		log_request_parent1->access = access_masked_parent1;
+		log_request_parent1->access = state.access_masked_parent1;
 		log_request_parent1->layer_masks = layer_masks_parent1;
 	}
 
-	if (!allowed_parent2 && log_request_parent2) {
+	if (!state.allowed_parent2 && log_request_parent2) {
 		log_request_parent2->type = LANDLOCK_REQUEST_FS_ACCESS;
 		log_request_parent2->audit.type = LSM_AUDIT_DATA_PATH;
 		log_request_parent2->audit.u.path = *path;
-		log_request_parent2->access = access_masked_parent2;
+		log_request_parent2->access = state.access_masked_parent2;
 		log_request_parent2->layer_masks = layer_masks_parent2;
 	}
 #endif /* CONFIG_SECURITY_LANDLOCK_LOG */
 
-	return allowed_parent1 && allowed_parent2;
+	return state.allowed_parent1 && state.allowed_parent2;
 }
 
 static int current_check_access_path(const struct path *const path,
