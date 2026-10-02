@@ -894,6 +894,7 @@ kmem_buckets *kmem_buckets_create(const char *name, unsigned int align,
 				  slab_flags_t flags,
 				  unsigned int useroffset, unsigned int usersize,
 				  void (*ctor)(void *));
+void kmem_buckets_destroy(kmem_buckets *bucket);
 
 /*
  * Bulk allocation and freeing operations. These are accelerated in an
