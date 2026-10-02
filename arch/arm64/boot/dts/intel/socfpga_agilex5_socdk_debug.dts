@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (C) 2023, Intel Corporation
+ * Copyright (C) 2026, Altera Corporation
  */
 #include "socfpga_agilex5.dtsi"
 
 / {
-	model = "SoCFPGA Agilex5 SoCDK";
-	compatible = "intel,socfpga-agilex5-socdk", "intel,socfpga-agilex5";
+	model = "SoCFPGA Agilex5 SoCDK - debug daughter card";
+	compatible = "intel,socfpga-agilex5-socdk-debug", "intel,socfpga-agilex5";
 
 	aliases {
 		serial0 = &uart0;
@@ -26,9 +26,9 @@
 
 		led-0 {
 			label = "hps_led0";
-			gpios = <&porta 11 GPIO_ACTIVE_HIGH>;
+			/* gpio0 is unrouted on the debug daughter card; LED is on gpio1 */
+			gpios = <&portb 12 GPIO_ACTIVE_HIGH>;
 		};
-
 	};
 
 	memory@80000000 {
@@ -36,59 +36,21 @@
 		/* We expect the bootloader to fill in the reg */
 		reg = <0x0 0x80000000 0x0 0x0>;
 	};
-
-	vqmmc_io_reg: regulator-1p8v {
-		compatible = "regulator-gpio";
-		gpios = <&portb 3 GPIO_ACTIVE_HIGH>;
-		gpios-states = <0>;
-		regulator-max-microvolt = <3300000>;
-		regulator-min-microvolt = <1800000>;
-		regulator-name = "vqmmc-io";
-		states = <1800000 0x1>,
-			 <3300000 0x0>;
-	};
-
-	vmmc_reg: regulator-fixed-3p3v {
-		compatible = "regulator-fixed";
-		regulator-always-on;
-		regulator-max-microvolt = <3300000>;
-		regulator-min-microvolt = <3300000>;
-		regulator-name = "vcc-sd";
-	};
 };
 
-&sdmmc {
-	bus-width = <4>;
-	cap-sd-highspeed;
-	disable-wp;
-	max-frequency = <200000000>;
-	no-mmc;
-	sd-uhs-sdr104;
-	vmmc-supply = <&vmmc_reg>;
-	vqmmc-supply = <&vqmmc_io_reg>;
-
-	status = "okay";
-};
-
-&gmac2 {
+&gmac0 {
 	status = "okay";
 	phy-mode = "rgmii"; /* TX/RX clock delays provided by Agilex5 I/O hardware */
-	phy-handle = <&emac2_phy0>;
+	phy-handle = <&emac0_phy0>;
 	max-frame-size = <9000>;
-
 	mdio0 {
 		#address-cells = <1>;
 		#size-cells = <0>;
 		compatible = "snps,dwmac-mdio";
-
-		emac2_phy0: ethernet-phy@0 {
+		emac0_phy0: ethernet-phy@0 {
 			reg = <0>;
 		};
 	};
-};
-
-&gpio0 {
-	status = "okay";
 };
 
 &gpio1 {
@@ -129,6 +91,19 @@
 				reg = <0x04200000 0x0be00000>;
 			};
 		};
+	};
+};
+
+&spi0 {
+	status = "okay";
+
+	eeprom@0 {
+		compatible = "microchip,25aa128", "atmel,at25";
+		reg = <0>;
+		spi-max-frequency = <500000>;
+		size = <16384>;
+		pagesize = <64>;
+		address-width = <16>;
 	};
 };
 
