@@ -267,3 +267,43 @@ int ieee8021q_pcp_to_tt(u8 pcp)
 	return -EINVAL;
 }
 EXPORT_SYMBOL_GPL(ieee8021q_pcp_to_tt);
+
+/**
+ * ieee8021q_tt_to_pcp - Map an IEEE 802.1Q traffic type to a PCP
+ * @tt: IEEE 802.1Q traffic type
+ *
+ * Encode @tt back to its IEEE 802.1Q Priority Code Point per Table I-7
+ * ("Priority Code Point decoding") for the 8P0D encoding, the inverse of
+ * ieee8021q_pcp_to_tt(). It is nearly the identity, except traffic types Best
+ * Effort and Background map to swapped PCP values: Best Effort is the default
+ * (PCP 0) despite being higher priority than Background (PCP 1) (Table I-2:
+ * BE = priority 0, BK = priority 1).
+ *
+ * Return: the PCP value, or a negative value on error.
+ */
+int ieee8021q_tt_to_pcp(enum ieee8021q_traffic_type tt)
+{
+	switch (tt) {
+	case IEEE8021Q_TT_BK:
+		return 1;
+	case IEEE8021Q_TT_BE:
+		return 0;
+	case IEEE8021Q_TT_EE:
+		return 2;
+	case IEEE8021Q_TT_CA:
+		return 3;
+	case IEEE8021Q_TT_VI:
+		return 4;
+	case IEEE8021Q_TT_VO:
+		return 5;
+	case IEEE8021Q_TT_IC:
+		return 6;
+	case IEEE8021Q_TT_NC:
+		return 7;
+	case IEEE8021Q_TT_MAX:
+		break;
+	}
+
+	return -EINVAL;
+}
+EXPORT_SYMBOL_GPL(ieee8021q_tt_to_pcp);
