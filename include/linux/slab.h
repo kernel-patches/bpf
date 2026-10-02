@@ -743,6 +743,19 @@ typedef struct kmem_cache * kmem_buckets[KMALLOC_SHIFT_HIGH + 1];
 extern kmem_buckets kmalloc_caches[NR_KMALLOC_TYPES];
 
 /*
+ * The kmalloc types a bucket set can hold a copy of. This is deliberately not
+ * enum kmalloc_cache_type: the KMALLOC_PARTITION copies are all "normal" to a
+ * bucket set, which already separates what they were there to separate, so
+ * indexing by those would mean up to KMALLOC_PARTITION_CACHES_NR unusable
+ * rows per set. Allocations of any type not listed here are served by the
+ * general caches.
+ */
+enum kmem_bucket_type {
+	KMEM_BUCKET_NORMAL = 0,
+	NR_KMEM_BUCKET_TYPES
+};
+
+/*
  * Define gfp bits that should not be set for KMALLOC_NORMAL.
  */
 #define KMALLOC_NOT_NORMAL_BITS					\

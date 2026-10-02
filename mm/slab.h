@@ -422,6 +422,26 @@ static inline unsigned int size_index_elem(unsigned int bytes)
 }
 
 /*
+ * Which set of buckets to use for the given kmalloc_cache_type. If not
+ * handled by the kmem_buckets, fall back to general caches.
+ */
+static inline kmem_buckets *
+kmalloc_choose_bucket(kmem_buckets *bucket, enum kmalloc_cache_type type)
+{
+	enum kmem_bucket_type btype;
+
+	if (!bucket)
+		return &kmalloc_caches[type];
+
+	if (type <= KMALLOC_PARTITION_END)
+		btype = KMEM_BUCKET_NORMAL;
+	else
+		return &kmalloc_caches[type];	/* No set holds a row for it. */
+
+	return &bucket[btype];
+}
+
+/*
  * Find the kmem_cache structure that serves a given size of
  * allocation
  *
@@ -438,8 +458,7 @@ kmalloc_slab(size_t size, kmem_buckets *b, gfp_t flags, kmalloc_token_t token,
 	if (alloc_flags & SLAB_ALLOC_NO_OBJ_EXT)
 		type = KMALLOC_NO_OBJ_EXT;
 
-	if (!b)
-		b = &kmalloc_caches[type];
+	b = kmalloc_choose_bucket(b, type);
 	if (size <= 192)
 		index = kmalloc_size_index[size_index_elem(size)];
 	else
