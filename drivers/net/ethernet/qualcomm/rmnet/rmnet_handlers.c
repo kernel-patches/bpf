@@ -127,9 +127,11 @@ rmnet_map_ingress_handler(struct sk_buff *skb,
 	u32 data_format;
 
 	if (skb->dev->type == ARPHRD_ETHER) {
-		if (pskb_expand_head(skb, ETH_HLEN, 0, GFP_ATOMIC)) {
-			kfree_skb(skb);
-			return;
+		if (skb_headroom(skb) < ETH_HLEN) {
+			if (pskb_expand_head(skb, ETH_HLEN, 0, GFP_ATOMIC)) {
+				kfree_skb(skb);
+				return;
+			}
 		}
 
 		skb_push(skb, ETH_HLEN);
