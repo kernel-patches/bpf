@@ -54,6 +54,7 @@ struct mtk_devapc_context {
 	void __iomem *infra_base;
 	struct clk *infra_clk;
 	const struct mtk_devapc_data *data;
+	unsigned int irq;
 };
 
 static void clear_vio_status(struct mtk_devapc_context *ctx)
@@ -289,6 +290,7 @@ static int mtk_devapc_probe(struct platform_device *pdev)
 	if (ret)
 		goto err;
 
+	ctx->irq = devapc_irq;
 	platform_set_drvdata(pdev, ctx);
 
 	start_devapc(ctx);
@@ -305,6 +307,7 @@ static void mtk_devapc_remove(struct platform_device *pdev)
 	struct mtk_devapc_context *ctx = platform_get_drvdata(pdev);
 
 	stop_devapc(ctx);
+	devm_free_irq(&pdev->dev, ctx->irq, ctx);
 	iounmap(ctx->infra_base);
 }
 
