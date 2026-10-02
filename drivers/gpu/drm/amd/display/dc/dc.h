@@ -51,6 +51,7 @@
 #include "dml/dml1_frl_cap_chk.h"
 
 #include "sspl/dc_spl_types.h"
+#include "inc/dc_core_interface.h"
 
 struct abm_save_restore;
 
@@ -67,7 +68,7 @@ struct dcn_dsc_reg_state;
 struct dcn_optc_reg_state;
 struct dcn_dccg_reg_state;
 
-#define DC_VER "3.2.399"
+#define DC_VER "3.2.400"
 
 /**
  * MAX_SURFACES - representative of the upper bound of surfaces that can be piped to a single CRTC
@@ -1313,6 +1314,7 @@ struct dc_debug_options {
 	unsigned int auxless_alpm_lfps_t1t2_us;
 	short auxless_alpm_lfps_t1t2_offset_us;
 	bool disable_stutter_for_wm_program;
+	unsigned int urgent_watermark_override;
 	bool enable_block_sequence_programming;
 	uint32_t custom_psp_footer_size;
 	bool disable_deferred_minimal_transitions;
@@ -1389,6 +1391,7 @@ struct dc_init_data {
 	uint32_t *nbio_reg_offsets;
 	uint32_t *clk_reg_offsets;
 	void *bb_from_dmub;
+	enum dc2_selection dc2_selection;
 };
 
 struct dc_callback_init {
@@ -1909,6 +1912,7 @@ struct dc_scratch_space {
 	struct ddc_service *ddc;
 
 	enum dp_panel_mode panel_mode;
+	bool panel_mode_initialized;
 	bool aux_mode;
 
 	/* Private to DC core */

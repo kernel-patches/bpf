@@ -30,7 +30,6 @@
 
 #include "dce/dmub_hw_lock_mgr.h"
 #include "dcn10/dcn10_cm_common.h"
-#include "dcn10/dcn10_hubbub.h"
 #include "dcn20/dcn20_optc.h"
 #include "dcn20/dcn20_hwseq.h"
 #include "dcn30/dcn30_cm_common.h"
@@ -1740,6 +1739,22 @@ void dcn401_update_odm(struct dc *dc, struct dc_state *context,
 				opp_heads[i]->stream_res.opp,
 				opp_heads[i]->stream->timing.pixel_encoding,
 				resource_is_pipe_type(opp_heads[i], OTG_MASTER));
+
+		// Plane-less OPP heads are skipped by program_pipe, where the OPP
+		// formatter is normally configured, so set it up for them here.
+		if (!opp_heads[i]->plane_state &&
+				opp_heads[i]->stream_res.opp->funcs->opp_set_dyn_expansion &&
+				opp_heads[i]->stream_res.opp->funcs->opp_program_fmt) {
+			opp_heads[i]->stream_res.opp->funcs->opp_set_dyn_expansion(
+					opp_heads[i]->stream_res.opp,
+					COLOR_SPACE_YCBCR601,
+					opp_heads[i]->stream->timing.display_color_depth,
+					opp_heads[i]->stream->signal);
+			opp_heads[i]->stream_res.opp->funcs->opp_program_fmt(
+					opp_heads[i]->stream_res.opp,
+					&opp_heads[i]->stream->bit_depth_params,
+					&opp_heads[i]->stream->clamping);
+		}
 	}
 
 	update_dsc_for_odm_change(dc, context, otg_master);
@@ -1876,6 +1891,20 @@ void dcn401_update_odm_sequence(struct dc *dc, struct dc_state *context,
 		/* Add OPP program left edge extra pixel operation */
 		hwss_add_opp_program_left_edge_extra_pixel(seq_state, opp_heads[i]->stream_res.opp,
 			opp_heads[i]->stream->timing.pixel_encoding, resource_is_pipe_type(opp_heads[i], OTG_MASTER));
+
+		//Plane-less OPP heads are skipped by program_pipe, where the OPP
+		// formatter is normally configured, so set it up for them here.
+		if (!opp_heads[i]->plane_state &&
+				opp_heads[i]->stream_res.opp->funcs->opp_set_dyn_expansion &&
+				opp_heads[i]->stream_res.opp->funcs->opp_program_fmt) {
+			hwss_add_opp_set_dyn_expansion(seq_state, opp_heads[i]->stream_res.opp,
+				COLOR_SPACE_YCBCR601,
+				opp_heads[i]->stream->timing.display_color_depth,
+				opp_heads[i]->stream->signal);
+			hwss_add_opp_program_fmt(seq_state, opp_heads[i]->stream_res.opp,
+				&opp_heads[i]->stream->bit_depth_params,
+				&opp_heads[i]->stream->clamping);
+		}
 	}
 
 	/* Add DSC update operations to sequence */
@@ -2545,7 +2574,8 @@ void dcn401_program_pipe_sequence(
 			false,
 			pipe_ctx->stream_res.test_pattern_params.width,
 			pipe_ctx->stream_res.test_pattern_params.height,
-			pipe_ctx->stream_res.test_pattern_params.offset);
+			pipe_ctx->stream_res.test_pattern_params.offset,
+			dc->debug.disable_dynamic_expansion_for_test_pattern);
 	}
 
 	if (pipe_ctx->plane_state
@@ -3270,8 +3300,10 @@ void dcn401_plane_atomic_disconnect_sequence(struct dc *dc,
 	// Phantom pipes have OTG disabled by default, so MPCC_STATUS will never assert idle,
 	// so don't wait for MPCC_IDLE in the programming sequence
 	if (dc_state_get_pipe_subvp_type(state, pipe_ctx) != SUBVP_PHANTOM) {
-		/* Step 2: Set MPCC disconnect pending flag */
-		hwss_add_opp_set_mpcc_disconnect_pending(seq_state, opp, pipe_ctx->plane_res.mpcc_inst, true);
+		/* Step 2: Set MPCC disconnect pending flag. Set here rather than as a sequence step
+		 * because the post-unlock build phase reads it to decide what to emit.
+		 */
+		opp->mpcc_disconnect_pending[pipe_ctx->plane_res.mpcc_inst] = true;
 	}
 
 	/* Step 3: Set optimized required flag */
@@ -3334,7 +3366,8 @@ void dcn401_blank_pixel_data_sequence(
 			true,
 			odm_slice_src.width,
 			odm_slice_src.height,
-			odm_slice_src.x);
+			odm_slice_src.x,
+			dc->debug.disable_dynamic_expansion_for_test_pattern);
 
 		odm_pipe = odm_pipe->next_odm_pipe;
 	}
@@ -3351,7 +3384,8 @@ void dcn401_blank_pixel_data_sequence(
 		true,
 		odm_slice_src.width,
 		odm_slice_src.height,
-		odm_slice_src.x);
+		odm_slice_src.x,
+		dc->debug.disable_dynamic_expansion_for_test_pattern);
 
 	/* Handle ABM level setting when not blanking */
 	if (!blank) {
@@ -4126,7 +4160,7 @@ bool dcn401_hw_wa_force_recovery_sequence(struct dc *dc,
 	}
 
 	/* Step 2: DCHUBBUB_GLOBAL_SOFT_RESET=1 */
-	hwss_add_hubbub_soft_reset(seq_state, dc->res_pool->hubbub, hubbub1_soft_reset, true);
+	hwss_add_hubbub_soft_reset(seq_state, dc->res_pool->hubbub, true);
 
 	/* Step 3: Set HUBP_DISABLE=1 for all active pipes */
 	for (i = 0; i < dc->res_pool->pipe_count; i++) {
@@ -4151,7 +4185,7 @@ bool dcn401_hw_wa_force_recovery_sequence(struct dc *dc,
 	}
 
 	/* Step 5: DCHUBBUB_GLOBAL_SOFT_RESET=0 */
-	hwss_add_hubbub_soft_reset(seq_state, dc->res_pool->hubbub, hubbub1_soft_reset, false);
+	hwss_add_hubbub_soft_reset(seq_state, dc->res_pool->hubbub, false);
 
 	/* Step 6: Set HUBP_BLANK_EN=0 for all active pipes */
 	for (i = 0; i < dc->res_pool->pipe_count; i++) {

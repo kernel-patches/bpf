@@ -227,7 +227,9 @@ uint amdgpu_dc_visual_confirm;
 int amdgpu_async_gfx_ring = 1;
 int amdgpu_mcbp = -1;
 int amdgpu_discovery = -1;
-int amdgpu_mes_log_enable = 0;
+int amdgpu_mes_log_enable;
+int amdgpu_mes_dbgext_buffer_size;
+int amdgpu_mes_dbgext_options = 1;
 int amdgpu_uni_mes = 1;
 int amdgpu_noretry = -1;
 int amdgpu_force_asic_type = -1;
@@ -701,6 +703,33 @@ MODULE_PARM_DESC(mes_log_enable,
 module_param_named(mes_log_enable, amdgpu_mes_log_enable, int, 0444);
 
 /**
+ * DOC: mes_dbgext_buffer_size (int)
+ * Size in KB of the MES firmware debug-extension log buffer. The MES firmware
+ * writes log messages into this buffer and the driver drains and prints them to
+ * dmesg. Requires an MES firmware image built with debug extension support.
+ * (0 = disabled at boot (default))
+ *
+ * The feature can also be toggled at runtime via the per-device debugfs file
+ * <debugfs>/dri/N/amdgpu_mes_dbgext (echo 1/0 to enable/disable); when enabled
+ * at runtime with this parameter left at 0, a small default buffer is used.
+ */
+MODULE_PARM_DESC(mes_dbgext_buffer_size,
+	"MES firmware debug-extension log buffer size in KB (0 = disabled (default))");
+module_param_named(mes_dbgext_buffer_size, amdgpu_mes_dbgext_buffer_size, int, 0444);
+
+/**
+ * DOC: mes_dbgext_options (int)
+ * MES firmware debug-extension option bits sent to the firmware (u64_all).
+ * bit0 = trigger_interrupt_per_new_msg: when set, the firmware raises an
+ * interrupt per message and the driver collects them via the interrupt path;
+ * when clear, the driver polls the log buffer with a kthread instead.
+ * (default 1 = interrupt driven)
+ */
+MODULE_PARM_DESC(mes_dbgext_options,
+	"MES debug-extension option bits (bit0: 1 = interrupt (default), 0 = polling)");
+module_param_named(mes_dbgext_options, amdgpu_mes_dbgext_options, int, 0444);
+
+/**
  * DOC: uni_mes (int)
  * Enable Unified Micro Engine Scheduler. This is a new engine pipe for unified scheduler.
  * (0 = disabled (default), 1 = enabled)
@@ -762,11 +791,11 @@ MODULE_PARM_DESC(hws_max_conc_proc,
  * DOC: cwsr_enable (int)
  * CWSR(compute wave store and resume) allows the GPU to preempt shader execution in
  * the middle of a compute wave. Default is 1 to enable this feature. Setting 0
- * disables it.
+ * disables it as only in non-HWS mode.
  */
 int cwsr_enable = 1;
 module_param(cwsr_enable, int, 0444);
-MODULE_PARM_DESC(cwsr_enable, "CWSR enable (0 = Off, 1 = On (Default))");
+MODULE_PARM_DESC(cwsr_enable, "CWSR enable (0 = Off (debugging only), 1 = On (Default))");
 
 /**
  * DOC: max_num_of_queues_per_device (int)
@@ -2679,6 +2708,14 @@ static int amdgpu_pmops_suspend_noirq(struct device *dev)
 	struct drm_device *drm_dev = dev_get_drvdata(dev);
 	struct amdgpu_device *adev = drm_to_adev(drm_dev);
 	int r;
+
+	/*
+	 * A GPU parked by vga_switcheroo has no power and no PCIe link, so the
+	 * ASIC reset below would fail and abort the whole noirq suspend phase.
+	 * Bail out like amdgpu_device_prepare/suspend/resume() already do.
+	 */
+	if (drm_dev->switch_power_state == DRM_SWITCH_POWER_OFF)
+		return 0;
 
 	if (amdgpu_acpi_should_gpu_reset(adev)) {
 		amdgpu_device_lock_reset_domain(adev->reset_domain);

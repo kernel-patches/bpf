@@ -429,6 +429,7 @@ struct opp_set_disp_pattern_generator_params {
 	int width;
 	int height;
 	int offset;
+	bool disable_dyn_exp_for_test_pattern;
 };
 
 struct set_abm_pipe_params {
@@ -485,12 +486,6 @@ struct mpc_remove_mpcc_params {
 	struct mpcc *mpcc_to_remove;
 };
 
-struct opp_set_mpcc_disconnect_pending_params {
-	struct output_pixel_processor *opp;
-	int mpcc_inst;
-	bool pending;
-};
-
 struct dc_set_optimized_required_params {
 	struct dc *dc;
 	bool optimized_required;
@@ -503,7 +498,7 @@ struct hubp_disconnect_params {
 struct hubbub_force_pstate_change_control_params {
 	struct hubbub *hubbub;
 	bool enable;
-	bool wait;
+	bool allow;
 };
 
 struct tg_enable_crtc_params {
@@ -528,17 +523,6 @@ struct update_force_pstate_params {
 
 struct hubbub_apply_dedcn21_147_wa_params {
 	struct hubbub *hubbub;
-};
-
-struct hubbub_allow_self_refresh_control_params {
-	struct hubbub *hubbub;
-	bool allow;
-	bool *disallow_self_refresh_applied;
-};
-
-struct tg_get_frame_count_params {
-	struct timing_generator *tg;
-	unsigned int *frame_count;
 };
 
 struct mpc_set_dwb_mux_params {
@@ -608,7 +592,6 @@ struct hubp_disable_control_params {
 
 struct hubbub_soft_reset_params {
 	struct hubbub *hubbub;
-	void (*hubbub_soft_reset)(struct hubbub *hubbub, bool reset);
 	bool reset;
 };
 
@@ -1127,7 +1110,6 @@ union block_sequence_params {
 	struct set_abm_immediate_disable_params set_abm_immediate_disable_params;
 	struct set_disp_pattern_generator_params set_disp_pattern_generator_params;
 	struct mpc_remove_mpcc_params mpc_remove_mpcc_params;
-	struct opp_set_mpcc_disconnect_pending_params opp_set_mpcc_disconnect_pending_params;
 	struct dc_set_optimized_required_params dc_set_optimized_required_params;
 	struct hubp_disconnect_params hubp_disconnect_params;
 	struct hubbub_force_pstate_change_control_params hubbub_force_pstate_change_control_params;
@@ -1136,8 +1118,6 @@ union block_sequence_params {
 	struct tg_wait_double_buffer_pending_params tg_wait_double_buffer_pending_params;
 	struct update_force_pstate_params update_force_pstate_params;
 	struct hubbub_apply_dedcn21_147_wa_params hubbub_apply_dedcn21_147_wa_params;
-	struct hubbub_allow_self_refresh_control_params hubbub_allow_self_refresh_control_params;
-	struct tg_get_frame_count_params tg_get_frame_count_params;
 	struct mpc_set_dwb_mux_params mpc_set_dwb_mux_params;
 	struct mpc_disable_dwb_mux_params mpc_disable_dwb_mux_params;
 	struct mcif_wb_config_buf_params mcif_wb_config_buf_params;
@@ -1298,7 +1278,6 @@ enum block_sequence_func {
 	ABM_SET_LEVEL,
 	ABM_SET_IMMEDIATE_DISABLE,
 	MPC_REMOVE_MPCC,
-	OPP_SET_MPCC_DISCONNECT_PENDING,
 	DC_SET_OPTIMIZED_REQUIRED,
 	HUBP_DISCONNECT,
 	HUBBUB_FORCE_PSTATE_CHANGE_CONTROL,
@@ -1310,8 +1289,6 @@ enum block_sequence_func {
 	UPDATE_FORCE_PSTATE,
 	PROGRAM_MALL_PIPE_CONFIG,
 	HUBBUB_APPLY_DEDCN21_147_WA,
-	HUBBUB_ALLOW_SELF_REFRESH_CONTROL,
-	TG_GET_FRAME_COUNT,
 	MPC_SET_DWB_MUX,
 	MPC_DISABLE_DWB_MUX,
 	MCIF_WB_CONFIG_BUF,
@@ -2006,8 +1983,6 @@ void hwss_set_abm_immediate_disable(union block_sequence_params *params);
 
 void hwss_mpc_remove_mpcc(union block_sequence_params *params);
 
-void hwss_opp_set_mpcc_disconnect_pending(union block_sequence_params *params);
-
 void hwss_dc_set_optimized_required(union block_sequence_params *params);
 
 void hwss_hubp_disconnect(union block_sequence_params *params);
@@ -2028,10 +2003,6 @@ void hwss_tg_wait_double_buffer_pending(union block_sequence_params *params);
 void hwss_update_force_pstate(union block_sequence_params *params);
 
 void hwss_hubbub_apply_dedcn21_147_wa(union block_sequence_params *params);
-
-void hwss_hubbub_allow_self_refresh_control(union block_sequence_params *params);
-
-void hwss_tg_get_frame_count(union block_sequence_params *params);
 
 void hwss_mpc_set_dwb_mux(union block_sequence_params *params);
 
@@ -2285,7 +2256,7 @@ void hwss_add_hubp_program_mcache_id(struct block_sequence_state *seq_state,
 		struct hubp *hubp, struct dml2_hubp_pipe_mcache_regs *mcache_regs);
 
 void hwss_add_hubbub_force_pstate_change_control(struct block_sequence_state *seq_state,
-		struct hubbub *hubbub, bool enable, bool wait);
+		struct hubbub *hubbub, bool enable, bool allow);
 
 void hwss_add_hubp_program_det_segments(struct block_sequence_state *seq_state,
 		struct hubbub *hubbub, unsigned int hubp_inst, unsigned int det_size);
@@ -2322,9 +2293,6 @@ void hwss_add_dsc_calculate_and_set_config(struct block_sequence_state *seq_stat
 void hwss_add_mpc_remove_mpcc(struct block_sequence_state *seq_state,
 		struct mpc *mpc, struct mpc_tree *mpc_tree_params, struct mpcc *mpcc_to_remove);
 
-void hwss_add_opp_set_mpcc_disconnect_pending(struct block_sequence_state *seq_state,
-		struct output_pixel_processor *opp, int mpcc_inst, bool pending);
-
 void hwss_add_hubp_disconnect(struct block_sequence_state *seq_state,
 		struct hubp *hubp);
 
@@ -2349,7 +2317,8 @@ void hwss_add_opp_set_disp_pattern_generator(struct block_sequence_state *seq_st
 		bool use_solid_color,
 		int width,
 		int height,
-		int offset);
+		int offset,
+		bool disable_dyn_exp_for_test_pattern);
 
 void hwss_add_opp_program_bit_depth_reduction(struct block_sequence_state *seq_state,
 		struct output_pixel_processor *opp,
@@ -2428,7 +2397,6 @@ void hwss_add_hubp_disable_control(struct block_sequence_state *seq_state,
 
 void hwss_add_hubbub_soft_reset(struct block_sequence_state *seq_state,
 		struct hubbub *hubbub,
-		void (*hubbub_soft_reset)(struct hubbub *hubbub, bool reset),
 		bool reset);
 
 void hwss_add_hubbub_perfmon_reset(struct block_sequence_state *seq_state,
@@ -2673,15 +2641,6 @@ void hwss_add_update_force_pstate(struct block_sequence_state *seq_state,
 
 void hwss_add_hubbub_apply_dedcn21_147_wa(struct block_sequence_state *seq_state,
 		struct hubbub *hubbub);
-
-void hwss_add_hubbub_allow_self_refresh_control(struct block_sequence_state *seq_state,
-		struct hubbub *hubbub,
-		bool allow,
-		bool *disallow_self_refresh_applied);
-
-void hwss_add_tg_get_frame_count(struct block_sequence_state *seq_state,
-		struct timing_generator *tg,
-		unsigned int *frame_count);
 
 void hwss_add_tg_set_dsc_config(struct block_sequence_state *seq_state,
 		struct timing_generator *tg,

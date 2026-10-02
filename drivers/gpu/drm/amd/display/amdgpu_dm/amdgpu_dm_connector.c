@@ -732,6 +732,24 @@ get_aspect_ratio(const struct drm_display_mode *mode_in)
 }
 EXPORT_IF_KUNIT(get_aspect_ratio);
 
+/*
+ * CTA-861 5.1: RGB video formats default to limited range except 640x480 (VIC 1).
+ * With Broadcast RGB left at Automatic follow that default, as i915 does.
+ */
+static bool rgb_output_is_limited_range(const struct dc_crtc_timing *dc_crtc_timing,
+					const struct drm_connector_state *connector_state)
+{
+	switch (connector_state->hdmi.broadcast_rgb) {
+	case DRM_HDMI_BROADCAST_RGB_FULL:
+		return false;
+	case DRM_HDMI_BROADCAST_RGB_LIMITED:
+		return true;
+	default:
+		return connector_state->connector->display_info.is_hdmi &&
+		       dc_crtc_timing->vic > 1;
+	}
+}
+
 enum dc_color_space
 amdgpu_dm_get_output_color_space(const struct dc_crtc_timing *dc_crtc_timing,
 				 const struct drm_connector_state *connector_state)
@@ -757,7 +775,7 @@ amdgpu_dm_get_output_color_space(const struct dc_crtc_timing *dc_crtc_timing,
 	case DRM_MODE_COLORIMETRY_BT2020_RGB:
 	case DRM_MODE_COLORIMETRY_BT2020_YCC:
 		if (dc_crtc_timing->pixel_encoding == PIXEL_ENCODING_RGB) {
-			if (connector_state->hdmi.broadcast_rgb == DRM_HDMI_BROADCAST_RGB_LIMITED)
+			if (rgb_output_is_limited_range(dc_crtc_timing, connector_state))
 				color_space = COLOR_SPACE_2020_RGB_LIMITEDRANGE;
 			else
 				color_space = COLOR_SPACE_2020_RGB_FULLRANGE;
@@ -769,7 +787,7 @@ amdgpu_dm_get_output_color_space(const struct dc_crtc_timing *dc_crtc_timing,
 	default:
 		if (dc_crtc_timing->pixel_encoding == PIXEL_ENCODING_RGB) {
 			color_space = COLOR_SPACE_SRGB;
-			if (connector_state->hdmi.broadcast_rgb == DRM_HDMI_BROADCAST_RGB_LIMITED)
+			if (rgb_output_is_limited_range(dc_crtc_timing, connector_state))
 				color_space = COLOR_SPACE_SRGB_LIMITED;
 		/*
 		 * 27030khz is the separation point between HDTV and SDTV
@@ -2262,8 +2280,8 @@ amdgpu_dm_create_validate_stream_for_sink(struct drm_connector *connector,
 	 * below gate which of these entries are actually attempted.
 	 */
 	static const enum dc_pixel_encoding encoding_order[] = {
-		PIXEL_ENCODING_YCBCR444,
 		PIXEL_ENCODING_RGB,
+		PIXEL_ENCODING_YCBCR444,
 		PIXEL_ENCODING_YCBCR422,
 		PIXEL_ENCODING_YCBCR420,
 	};
@@ -3159,26 +3177,35 @@ void hdmi_frl_status_polling_work(struct work_struct *work)
 	struct dc *dc = dm->dc;
 	struct dc_link *dc_link;
 	bool link_update = false;
+	bool link_detected;
 
-	for (int i = 0; i < MAX_LINKS; i++) {
-		dc_link = dc->links[i];
+	/* Defer to the next cycle rather than block on a busy dc_lock. */
+	if (mutex_trylock(&dm->dc_lock)) {
+		for (int i = 0; i < MAX_LINKS; i++) {
+			dc_link = dc->links[i];
 
+			if (!dc_link || !dc_link->local_sink)
+				continue;
 
-		if (!dc_link || !dc_link->local_sink)
-			continue;
+			if (!dc_is_hdmi_signal(dc_link->connector_signal))
+				continue;
 
-		if (!dc_is_hdmi_signal(dc_link->connector_signal))
-			continue;
+			if (dc_link->frl_link_settings.frl_link_rate == 0)
+				continue;
 
-		if (dc_link->frl_link_settings.frl_link_rate == 0)
-			continue;
+			if (!dc_link->link_status.link_active)
+				continue;
 
-		link_update = dc_link_frl_poll_status_flag(dc_link);
-		if (link_update) {
-			mutex_lock(&dm->dc_lock);
-			dc_link_detect(dc_link, DETECT_REASON_RETRAIN);
-			mutex_unlock(&dm->dc_lock);
+			link_update = dc_link_frl_poll_status_flag(dc_link);
+			if (link_update) {
+				link_detected =
+					dc_link_detect(
+						dc_link, DETECT_REASON_RETRAIN);
+				if (!link_detected)
+					DRM_ERROR("HDMI FRL retrain failed\n");
+			}
 		}
+		mutex_unlock(&dm->dc_lock);
 	}
 
 	queue_delayed_work(dm->hdmi_frl_status_polling_wq,

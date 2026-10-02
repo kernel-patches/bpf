@@ -1160,20 +1160,6 @@ void hwss_build_post_unlock_full_sequence(struct dc *dc,
 	if (hwseq && hwseq->wa.DEGVIDCN21)
 		hwss_add_hubbub_apply_dedcn21_147_wa(&seq_state, dc->res_pool->hubbub);
 
-	/* Handle stutter underflow WA during MPO transitions */
-	if (hwseq && hwseq->wa.disallow_self_refresh_during_multi_plane_transition &&
-			dc->current_state->stream_status[0].plane_count == 1 &&
-			context->stream_status[0].plane_count > 1) {
-
-		hwss_add_hubbub_allow_self_refresh_control(&seq_state, dc->res_pool->hubbub, false,
-			&hwseq->wa_state.disallow_self_refresh_during_multi_plane_transition_applied);
-
-		/* Get frame count for WA state tracking - this needs to be done immediately after the above call */
-		if (dc->res_pool->timing_generators[0]->funcs->get_frame_count) {
-			hwss_add_tg_get_frame_count(&seq_state, dc->res_pool->timing_generators[0],
-				&hwseq->wa_state.disallow_self_refresh_during_multi_plane_transition_applied_on_frame);
-		}
-	}
 }
 
 static uint32_t get_dcc_meta_propagation_delay(struct dc *dc, struct pipe_ctx *pipe_ctx)
@@ -1888,9 +1874,6 @@ void hwss_execute_sequence(struct dc *dc,
 		case MPC_REMOVE_MPCC:
 			hwss_mpc_remove_mpcc(params);
 			break;
-		case OPP_SET_MPCC_DISCONNECT_PENDING:
-			hwss_opp_set_mpcc_disconnect_pending(params);
-			break;
 		case DC_SET_OPTIMIZED_REQUIRED:
 			hwss_dc_set_optimized_required(params);
 			break;
@@ -1921,12 +1904,6 @@ void hwss_execute_sequence(struct dc *dc,
 			break;
 		case HUBBUB_APPLY_DEDCN21_147_WA:
 			hwss_hubbub_apply_dedcn21_147_wa(params);
-			break;
-		case HUBBUB_ALLOW_SELF_REFRESH_CONTROL:
-			hwss_hubbub_allow_self_refresh_control(params);
-			break;
-		case TG_GET_FRAME_COUNT:
-			hwss_tg_get_frame_count(params);
 			break;
 		case MPC_SET_DWB_MUX:
 			hwss_mpc_set_dwb_mux(params);
@@ -2778,13 +2755,16 @@ void hwss_add_hubp_program_mcache_id(struct block_sequence_state *seq_state,
 void hwss_add_hubbub_force_pstate_change_control(struct block_sequence_state *seq_state,
 		struct hubbub *hubbub,
 		bool enable,
-		bool wait)
+		bool allow)
 {
 	if (*seq_state->num_steps < MAX_HWSS_BLOCK_SEQUENCE_SIZE) {
-		seq_state->steps[*seq_state->num_steps].params.hubbub_force_pstate_change_control_params.hubbub = hubbub;
-		seq_state->steps[*seq_state->num_steps].params.hubbub_force_pstate_change_control_params.enable = enable;
-		seq_state->steps[*seq_state->num_steps].params.hubbub_force_pstate_change_control_params.wait = wait;
-		seq_state->steps[*seq_state->num_steps].func = HUBBUB_FORCE_PSTATE_CHANGE_CONTROL;
+		struct block_sequence *step = &seq_state->steps[*seq_state->num_steps];
+		union block_sequence_params *step_params = &step->params;
+
+		step_params->hubbub_force_pstate_change_control_params.hubbub = hubbub;
+		step_params->hubbub_force_pstate_change_control_params.enable = enable;
+		step_params->hubbub_force_pstate_change_control_params.allow = allow;
+		step->func = HUBBUB_FORCE_PSTATE_CHANGE_CONTROL;
 		(*seq_state->num_steps)++;
 	}
 }
@@ -3537,10 +3517,12 @@ void hwss_opp_set_disp_pattern_generator(union block_sequence_params *params)
 	int width = params->opp_set_disp_pattern_generator_params.width;
 	int height = params->opp_set_disp_pattern_generator_params.height;
 	int offset = params->opp_set_disp_pattern_generator_params.offset;
+	bool disable_dyn_exp =
+		params->opp_set_disp_pattern_generator_params.disable_dyn_exp_for_test_pattern;
 
 	if (opp && opp->funcs->opp_set_disp_pattern_generator) {
 		opp->funcs->opp_set_disp_pattern_generator(opp, test_pattern, color_space,
-			color_depth, solid_color, width, height, offset);
+			color_depth, solid_color, width, height, offset, disable_dyn_exp);
 	}
 }
 
@@ -3579,15 +3561,6 @@ void hwss_mpc_remove_mpcc(union block_sequence_params *params)
 	mpc->funcs->remove_mpcc(mpc, mpc_tree_params, mpcc_to_remove);
 }
 
-void hwss_opp_set_mpcc_disconnect_pending(union block_sequence_params *params)
-{
-	struct output_pixel_processor *opp = params->opp_set_mpcc_disconnect_pending_params.opp;
-	int mpcc_inst = params->opp_set_mpcc_disconnect_pending_params.mpcc_inst;
-	bool pending = params->opp_set_mpcc_disconnect_pending_params.pending;
-
-	opp->mpcc_disconnect_pending[mpcc_inst] = pending;
-}
-
 void hwss_dc_set_optimized_required(union block_sequence_params *params)
 {
 	struct dc *dc = params->dc_set_optimized_required_params.dc;
@@ -3608,10 +3581,10 @@ void hwss_hubbub_force_pstate_change_control(union block_sequence_params *params
 {
 	struct hubbub *hubbub = params->hubbub_force_pstate_change_control_params.hubbub;
 	bool enable = params->hubbub_force_pstate_change_control_params.enable;
-	bool wait = params->hubbub_force_pstate_change_control_params.wait;
+	bool allow = params->hubbub_force_pstate_change_control_params.allow;
 
 	if (hubbub->funcs->force_pstate_change_control) {
-		hubbub->funcs->force_pstate_change_control(hubbub, enable, wait);
+		hubbub->funcs->force_pstate_change_control(hubbub, enable, allow);
 		/* Add delay when enabling pstate change control */
 		if (enable)
 			udelay(500);
@@ -3684,25 +3657,6 @@ void hwss_hubbub_apply_dedcn21_147_wa(union block_sequence_params *params)
 	struct hubbub *hubbub = params->hubbub_apply_dedcn21_147_wa_params.hubbub;
 
 	hubbub->funcs->apply_DEDCN21_147_wa(hubbub);
-}
-
-void hwss_hubbub_allow_self_refresh_control(union block_sequence_params *params)
-{
-	struct hubbub *hubbub = params->hubbub_allow_self_refresh_control_params.hubbub;
-	bool allow = params->hubbub_allow_self_refresh_control_params.allow;
-
-	hubbub->funcs->allow_self_refresh_control(hubbub, allow);
-
-	if (!allow && params->hubbub_allow_self_refresh_control_params.disallow_self_refresh_applied)
-		*params->hubbub_allow_self_refresh_control_params.disallow_self_refresh_applied = true;
-}
-
-void hwss_tg_get_frame_count(union block_sequence_params *params)
-{
-	struct timing_generator *tg = params->tg_get_frame_count_params.tg;
-	unsigned int *frame_count = params->tg_get_frame_count_params.frame_count;
-
-	*frame_count = tg->funcs->get_frame_count(tg);
 }
 
 void hwss_mpc_set_dwb_mux(union block_sequence_params *params)
@@ -3827,8 +3781,8 @@ void hwss_hubbub_soft_reset(union block_sequence_params *params)
 	struct hubbub *hubbub = params->hubbub_soft_reset_params.hubbub;
 	bool reset = params->hubbub_soft_reset_params.reset;
 
-	if (hubbub)
-		params->hubbub_soft_reset_params.hubbub_soft_reset(hubbub, reset);
+	if (hubbub->funcs->soft_reset)
+		hubbub->funcs->soft_reset(hubbub, reset);
 }
 
 void hwss_hubbub_perfmon_reset(union block_sequence_params *params)
@@ -4771,18 +4725,6 @@ void hwss_add_mpc_remove_mpcc(struct block_sequence_state *seq_state,
 	}
 }
 
-void hwss_add_opp_set_mpcc_disconnect_pending(struct block_sequence_state *seq_state,
-		struct output_pixel_processor *opp, int mpcc_inst, bool pending)
-{
-	if (*seq_state->num_steps < MAX_HWSS_BLOCK_SEQUENCE_SIZE) {
-		seq_state->steps[*seq_state->num_steps].func = OPP_SET_MPCC_DISCONNECT_PENDING;
-		seq_state->steps[*seq_state->num_steps].params.opp_set_mpcc_disconnect_pending_params.opp = opp;
-		seq_state->steps[*seq_state->num_steps].params.opp_set_mpcc_disconnect_pending_params.mpcc_inst = mpcc_inst;
-		seq_state->steps[*seq_state->num_steps].params.opp_set_mpcc_disconnect_pending_params.pending = pending;
-		(*seq_state->num_steps)++;
-	}
-}
-
 void hwss_add_hubp_disconnect(struct block_sequence_state *seq_state,
 		struct hubp *hubp)
 {
@@ -4862,19 +4804,27 @@ void hwss_add_opp_set_disp_pattern_generator(struct block_sequence_state *seq_st
 		bool use_solid_color,
 		int width,
 		int height,
-		int offset)
+		int offset,
+		bool disable_dyn_exp_for_test_pattern)
 {
 	if (*seq_state->num_steps < MAX_HWSS_BLOCK_SEQUENCE_SIZE) {
-		seq_state->steps[*seq_state->num_steps].func = OPP_SET_DISP_PATTERN_GENERATOR;
-		seq_state->steps[*seq_state->num_steps].params.opp_set_disp_pattern_generator_params.opp = opp;
-		seq_state->steps[*seq_state->num_steps].params.opp_set_disp_pattern_generator_params.test_pattern = test_pattern;
-		seq_state->steps[*seq_state->num_steps].params.opp_set_disp_pattern_generator_params.color_space = color_space;
-		seq_state->steps[*seq_state->num_steps].params.opp_set_disp_pattern_generator_params.color_depth = color_depth;
-		seq_state->steps[*seq_state->num_steps].params.opp_set_disp_pattern_generator_params.solid_color = solid_color;
-		seq_state->steps[*seq_state->num_steps].params.opp_set_disp_pattern_generator_params.use_solid_color = use_solid_color;
-		seq_state->steps[*seq_state->num_steps].params.opp_set_disp_pattern_generator_params.width = width;
-		seq_state->steps[*seq_state->num_steps].params.opp_set_disp_pattern_generator_params.height = height;
-		seq_state->steps[*seq_state->num_steps].params.opp_set_disp_pattern_generator_params.offset = offset;
+		struct block_sequence *step = &seq_state->steps[*seq_state->num_steps];
+		union block_sequence_params *step_params = &step->params;
+		struct opp_set_disp_pattern_generator_params *pattern_params =
+			&step_params->opp_set_disp_pattern_generator_params;
+
+		step->func = OPP_SET_DISP_PATTERN_GENERATOR;
+		pattern_params->opp = opp;
+		pattern_params->test_pattern = test_pattern;
+		pattern_params->color_space = color_space;
+		pattern_params->color_depth = color_depth;
+		pattern_params->solid_color = solid_color;
+		pattern_params->use_solid_color = use_solid_color;
+		pattern_params->width = width;
+		pattern_params->height = height;
+		pattern_params->offset = offset;
+		pattern_params->disable_dyn_exp_for_test_pattern =
+				disable_dyn_exp_for_test_pattern;
 		(*seq_state->num_steps)++;
 	}
 }
@@ -5185,13 +5135,11 @@ void hwss_add_hubp_disable_control(struct block_sequence_state *seq_state,
 
 void hwss_add_hubbub_soft_reset(struct block_sequence_state *seq_state,
 		struct hubbub *hubbub,
-		void (*hubbub_soft_reset)(struct hubbub *hubbub, bool reset),
 		bool reset)
 {
 	if (*seq_state->num_steps < MAX_HWSS_BLOCK_SEQUENCE_SIZE) {
 		seq_state->steps[*seq_state->num_steps].func = HUBBUB_SOFT_RESET;
 		seq_state->steps[*seq_state->num_steps].params.hubbub_soft_reset_params.hubbub = hubbub;
-		seq_state->steps[*seq_state->num_steps].params.hubbub_soft_reset_params.hubbub_soft_reset = hubbub_soft_reset;
 		seq_state->steps[*seq_state->num_steps].params.hubbub_soft_reset_params.reset = reset;
 		(*seq_state->num_steps)++;
 	}
@@ -5886,32 +5834,6 @@ void hwss_add_hubbub_apply_dedcn21_147_wa(struct block_sequence_state *seq_state
 	if (*seq_state->num_steps < MAX_HWSS_BLOCK_SEQUENCE_SIZE) {
 		seq_state->steps[*seq_state->num_steps].func = HUBBUB_APPLY_DEDCN21_147_WA;
 		seq_state->steps[*seq_state->num_steps].params.hubbub_apply_dedcn21_147_wa_params.hubbub = hubbub;
-		(*seq_state->num_steps)++;
-	}
-}
-
-void hwss_add_hubbub_allow_self_refresh_control(struct block_sequence_state *seq_state,
-		struct hubbub *hubbub,
-		bool allow,
-		bool *disallow_self_refresh_applied)
-{
-	if (*seq_state->num_steps < MAX_HWSS_BLOCK_SEQUENCE_SIZE) {
-		seq_state->steps[*seq_state->num_steps].func = HUBBUB_ALLOW_SELF_REFRESH_CONTROL;
-		seq_state->steps[*seq_state->num_steps].params.hubbub_allow_self_refresh_control_params.hubbub = hubbub;
-		seq_state->steps[*seq_state->num_steps].params.hubbub_allow_self_refresh_control_params.allow = allow;
-		seq_state->steps[*seq_state->num_steps].params.hubbub_allow_self_refresh_control_params.disallow_self_refresh_applied = disallow_self_refresh_applied;
-		(*seq_state->num_steps)++;
-	}
-}
-
-void hwss_add_tg_get_frame_count(struct block_sequence_state *seq_state,
-		struct timing_generator *tg,
-		unsigned int *frame_count)
-{
-	if (*seq_state->num_steps < MAX_HWSS_BLOCK_SEQUENCE_SIZE) {
-		seq_state->steps[*seq_state->num_steps].func = TG_GET_FRAME_COUNT;
-		seq_state->steps[*seq_state->num_steps].params.tg_get_frame_count_params.tg = tg;
-		seq_state->steps[*seq_state->num_steps].params.tg_get_frame_count_params.frame_count = frame_count;
 		(*seq_state->num_steps)++;
 	}
 }

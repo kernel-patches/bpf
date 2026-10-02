@@ -131,7 +131,7 @@ static int gmc_v12_1_process_interrupt(struct amdgpu_device *adev,
 	struct amdgpu_vmhub *hub;
 	uint32_t cam_index = 0;
 	const char *hub_name;
-	int ret, xcc_id = 0;
+	int xcc_id = 0;
 	uint32_t status = 0, status_hi = 0;
 	const char *die_name;
 	char die_name_buf[32];
@@ -164,44 +164,13 @@ static int gmc_v12_1_process_interrupt(struct amdgpu_device *adev,
 	hub = &adev->vmhub[vmhub];
 
 	if (retry_fault) {
-		if (adev->irq.retry_cam_enabled) {
-			/* Delegate it to a different ring if the hardware hasn't
-			 * already done it.
-			 */
-			if (entry->ih == &adev->irq.ih) {
-				amdgpu_irq_delegate(adev, entry, 8);
-				return 1;
-			}
+		cam_index = entry->src_data[3] & 0x3ff;
 
-			cam_index = entry->src_data[3] & 0x3ff;
-
-			ret = amdgpu_vm_handle_fault(adev, entry->pasid, entry->vmid, node_id,
-							addr, entry->timestamp, write_fault);
-			WDOORBELL32(adev->irq.retry_cam_doorbell_index, cam_index);
-			if (ret)
-				return 1;
-		} else {
-			/* Process it onyl if it's the first fault for this address */
-			if (entry->ih != &adev->irq.ih_soft &&
-				amdgpu_gmc_filter_faults(adev, entry->ih, addr, entry->pasid,
-							 entry->timestamp))
-				return 1;
-
-			/* Delegate it to a different ring if the hardware hasn't
-			 * already done it.
-			 */
-			if (entry->ih == &adev->irq.ih) {
-				amdgpu_irq_delegate(adev, entry, 8);
-				return 1;
-			}
-
-			/* Try to handle the recoverable page faults by filling page
-			 * tables
-			 */
-			if (amdgpu_vm_handle_fault(adev, entry->pasid, entry->vmid, node_id,
-						   addr, entry->timestamp, write_fault))
-				return 1;
-		}
+		int ret = amdgpu_gmc_handle_retry_fault(adev, entry, addr, cam_index, node_id,
+							write_fault);
+		/* Returning 1 here also prevents sending the IV to the KFD */
+		if (ret == 1)
+			return 1;
 	}
 
 	if (kgd2kfd_vmfault_fast_path(adev, entry, retry_fault))
@@ -323,17 +292,25 @@ static void gmc_v12_1_flush_vm_hub(struct amdgpu_device *adev, uint32_t vmid,
 	/* Use register 17 for GART */
 	const unsigned eng = 17;
 	unsigned int i;
-	unsigned char hub_ip = 0;
+	u32 inst;
 
-	hub_ip = (AMDGPU_IS_GFXHUB(vmhub)) ?
-		   GC_HWIP : MMHUB_HWIP;
+	inst = AMDGPU_IS_GFXHUB(vmhub) ? vmhub - AMDGPU_GFXHUB_START : 0;
 
 	spin_lock(&adev->gmc.invalidate_lock);
 
 	if (use_semaphore) {
 		for (i = 0; i < adev->usec_timeout; i++) {
 			/* a read return value of 1 means semaphore acuqire */
-			tmp = RREG32_RLC_NO_KIQ(hub->vm_inv_eng0_sem + hub->eng_distance * eng, hub_ip);
+			if (AMDGPU_IS_GFXHUB(vmhub))
+				tmp = RREG32_SOC15_IP_NO_KIQ(GC,
+							     hub->vm_inv_eng0_sem +
+							     hub->eng_distance * eng,
+							     inst);
+			else
+				tmp = RREG32_SOC15_IP_NO_KIQ(MMHUB,
+							     hub->vm_inv_eng0_sem +
+							     hub->eng_distance * eng,
+							     inst);
 			if (tmp & 0x1)
 				break;
 			udelay(1);
@@ -343,12 +320,27 @@ static void gmc_v12_1_flush_vm_hub(struct amdgpu_device *adev, uint32_t vmid,
 			DRM_ERROR("Timeout waiting for sem acquire in VM flush!\n");
 	}
 
-	WREG32_RLC_NO_KIQ(hub->vm_inv_eng0_req + hub->eng_distance * eng, inv_req, hub_ip);
+	if (AMDGPU_IS_GFXHUB(vmhub))
+		WREG32_SOC15_IP_NO_KIQ(GC,
+				       hub->vm_inv_eng0_req + hub->eng_distance * eng,
+				       inv_req, inst);
+	else
+		WREG32_SOC15_IP_NO_KIQ(MMHUB,
+				       hub->vm_inv_eng0_req + hub->eng_distance * eng,
+				       inv_req, inst);
 
 	/* Wait for ACK with a delay.*/
 	for (i = 0; i < adev->usec_timeout; i++) {
-		tmp = RREG32_RLC_NO_KIQ(hub->vm_inv_eng0_ack +
-				    hub->eng_distance * eng, hub_ip);
+		if (AMDGPU_IS_GFXHUB(vmhub))
+			tmp = RREG32_SOC15_IP_NO_KIQ(GC,
+						     hub->vm_inv_eng0_ack +
+						     hub->eng_distance * eng,
+						     inst);
+		else
+			tmp = RREG32_SOC15_IP_NO_KIQ(MMHUB,
+						     hub->vm_inv_eng0_ack +
+						     hub->eng_distance * eng,
+						     inst);
 		tmp &= 1 << vmid;
 		if (tmp)
 			break;
@@ -356,8 +348,16 @@ static void gmc_v12_1_flush_vm_hub(struct amdgpu_device *adev, uint32_t vmid,
 		udelay(1);
 	}
 
-	if (use_semaphore)
-		WREG32_RLC_NO_KIQ(hub->vm_inv_eng0_sem + hub->eng_distance * eng, 0, hub_ip);
+	if (use_semaphore) {
+		if (AMDGPU_IS_GFXHUB(vmhub))
+			WREG32_SOC15_IP_NO_KIQ(GC,
+					       hub->vm_inv_eng0_sem + hub->eng_distance * eng,
+					       0, inst);
+		else
+			WREG32_SOC15_IP_NO_KIQ(MMHUB,
+					       hub->vm_inv_eng0_sem + hub->eng_distance * eng,
+					       0, inst);
+	}
 
 	/* Issue additional private vm invalidation to MMHUB */
 	if (!AMDGPU_IS_GFXHUB(vmhub) &&
@@ -420,7 +420,7 @@ static void gmc_v12_1_flush_gpu_tlb(struct amdgpu_device *adev, uint32_t vmid,
 		return;
 	}
 
-	gmc_v12_1_flush_vm_hub(adev, vmid, vmhub, 0);
+	gmc_v12_1_flush_vm_hub(adev, vmid, vmhub, flush_type);
 	return;
 }
 
