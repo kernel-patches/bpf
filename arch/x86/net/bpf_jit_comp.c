@@ -236,6 +236,7 @@ static const int reg2pt_regs[] = {
 	[BPF_REG_7] = offsetof(struct pt_regs, r13),
 	[BPF_REG_8] = offsetof(struct pt_regs, r14),
 	[BPF_REG_9] = offsetof(struct pt_regs, r15),
+	[BPF_REG_AX] = offsetof(struct pt_regs, r10),
 };
 
 /*
@@ -4669,6 +4670,11 @@ void bpf_arch_poke_desc_update(struct bpf_jit_poke_descriptor *poke,
 }
 
 bool bpf_jit_supports_arena(void)
+{
+	return true;
+}
+
+bool bpf_jit_supports_arena_scalar(void)
 {
 	return true;
 }
