@@ -447,6 +447,11 @@ static void t7xx_do_tx_hw_push(struct dpmaif_ctrl *dpmaif_ctrl)
 		 (dpmaif_ctrl->state == DPMAIF_STATE_PWRON));
 }
 
+/* Back-off before retrying a failed runtime PM resume in the TX push
+ * kthread, so a persistent error does not busy-loop.
+ */
+#define DPMAIF_TX_RESUME_RETRY_MS	20
+
 static int t7xx_dpmaif_tx_hw_push_thread(void *arg)
 {
 	struct dpmaif_ctrl *dpmaif_ctrl = arg;
@@ -466,8 +471,16 @@ static int t7xx_dpmaif_tx_hw_push_thread(void *arg)
 		}
 
 		ret = pm_runtime_resume_and_get(dpmaif_ctrl->dev);
-		if (ret < 0 && ret != -EACCES)
-			return ret;
+		if (ret < 0 && ret != -EACCES) {
+			/* Do not exit the thread: dpmaif_ctrl->tx_thread still
+			 * points at this task and t7xx_dpmaif_tx_thread_rel()
+			 * will call kthread_stop() on it. Back off and retry.
+			 */
+			dev_err_ratelimited(dpmaif_ctrl->dev,
+					    "Failed to resume for TX push: %d\n", ret);
+			msleep_interruptible(DPMAIF_TX_RESUME_RETRY_MS);
+			continue;
+		}
 
 		t7xx_pci_disable_sleep(dpmaif_ctrl->t7xx_dev);
 		t7xx_do_tx_hw_push(dpmaif_ctrl);
