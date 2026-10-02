@@ -16,5 +16,9 @@ int rtl8365mb_dcb_init(struct dsa_switch *ds);
 int rtl8365mb_dcb_init_port(struct dsa_switch *ds, int port);
 int rtl8365mb_port_get_default_prio(struct dsa_switch *ds, int port);
 int rtl8365mb_port_set_default_prio(struct dsa_switch *ds, int port, u8 prio);
+int rtl8365mb_port_get_apptrust(struct dsa_switch *ds, int port, u8 *sel,
+				int *nsel);
+int rtl8365mb_port_set_apptrust(struct dsa_switch *ds, int port, const u8 *sel,
+				int nsel);
 
 #endif /* _REALTEK_RTL8365MB_DCB_H */

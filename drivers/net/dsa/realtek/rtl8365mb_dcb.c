@@ -13,7 +13,9 @@
 
 #include <linux/bitops.h>
 #include <linux/build_bug.h>
+#include <linux/dcbnl.h>
 #include <linux/regmap.h>
+#include <linux/string.h>
 #include <net/dsa.h>
 #include <net/ieee8021q.h>
 
@@ -66,6 +68,8 @@ static_assert(RTL8365MB_NUM_IPMS == IEEE8021Q_TT_MAX);
 
 /* Each port selects one of the two decision tables; one bit per port. */
 #define RTL8365MB_QOS_PRIDEC_IDX_REG			0x0889
+#define RTL8365MB_QOS_PRIDEC_TABLE_UNTRUSTED		0
+#define RTL8365MB_QOS_PRIDEC_TABLE_TRUSTED		1
 
 /* Priority-decision sources. The hardware numbers eight sources; this driver
  * programs the three it uses by name and explicitly disables the rest. The
@@ -83,6 +87,24 @@ static_assert(RTL8365MB_NUM_IPMS == IEEE8021Q_TT_MAX);
  */
 #define RTL8365MB_QOS_WEIGHT_UNTRUSTED			0
 #define RTL8365MB_QOS_WEIGHT_PORT			1
+
+/* apptrust selectors this driver supports, in descending precedence. Each
+ * entry binds a dcbnl selector to the priority-decision source it enables, so
+ * this ordered table is the one place the fixed precedence lives.
+ */
+static const struct rtl8365mb_apptrust_map {
+	u8 sel;		/* dcbnl apptrust selector */
+	u8 src;		/* priority-decision source it enables */
+} rtl8365mb_apptrust_map[] = {
+	{ DCB_APP_SEL_PCP,	     RTL8365MB_QOS_PRIDEC_1Q },
+	{ IEEE_8021QAZ_APP_SEL_DSCP, RTL8365MB_QOS_PRIDEC_DSCP },
+};
+
+/* rtl8365mb_apptrust_weight() gives the first entry the top weight,
+ * RTL8365MB_QOS_WEIGHT_PORT + ARRAY_SIZE(rtl8365mb_apptrust_map); fail the
+ * build if adding a selector would raise it past the decision weight range.
+ */
+static_assert(RTL8365MB_QOS_WEIGHT_PORT + ARRAY_SIZE(rtl8365mb_apptrust_map) <= 7);
 
 /* The QoS priority and queue selectors are 3-bit register fields; derive a
  * field's mask from its bit offset.
@@ -133,6 +155,22 @@ static int rtl8365mb_qos_set_pridec(struct realtek_priv *priv, int table,
 
 	return rtl8365mb_set_field(priv, rtl8365mb_qos_pridec_reg(table, src),
 				   rtl8365mb_qos_weight_field_mask(off), weight);
+}
+
+static int rtl8365mb_qos_get_pridec(struct realtek_priv *priv, int table,
+				    int src, u8 *weight)
+{
+	int off = RTL8365MB_QOS_PRIDEC_OFFSET(src);
+	u32 val;
+	int ret;
+
+	ret = rtl8365mb_get_field(priv, rtl8365mb_qos_pridec_reg(table, src),
+				  rtl8365mb_qos_weight_field_mask(off), &val);
+	if (ret)
+		return ret;
+
+	*weight = val;
+	return 0;
 }
 
 static int rtl8365mb_qos_setup_queues(struct realtek_priv *priv,
@@ -284,4 +322,159 @@ int rtl8365mb_port_set_default_prio(struct dsa_switch *ds, int port, u8 prio)
 
 	return rtl8365mb_set_field(priv, RTL8365MB_QOS_PORT_PRI_REG(port),
 				   rtl8365mb_qos_sel_field_mask(off), tt);
+}
+
+/* Read which sources a decision table trusts (weight != 0), indexed like
+ * rtl8365mb_apptrust_map[].
+ */
+static int rtl8365mb_apptrust_read(struct realtek_priv *priv, int table,
+				   bool *trust)
+{
+	int i, ret;
+
+	for (i = 0; i < ARRAY_SIZE(rtl8365mb_apptrust_map); i++) {
+		u8 weight;
+
+		ret = rtl8365mb_qos_get_pridec(priv, table,
+					       rtl8365mb_apptrust_map[i].src,
+					       &weight);
+		if (ret)
+			return ret;
+
+		trust[i] = weight != RTL8365MB_QOS_WEIGHT_UNTRUSTED;
+	}
+
+	return 0;
+}
+
+/* Validate the selector list and mark which table entries it trusts. This
+ * driver fixes the precedence via the decision weights, so the list must be in
+ * rtl8365mb_apptrust_map[] order.
+ */
+static int rtl8365mb_apptrust_parse(struct realtek_priv *priv, const u8 *sel,
+				    int nsel, bool *trust)
+{
+	int i, prev = -1;
+
+	for (i = 0; i < ARRAY_SIZE(rtl8365mb_apptrust_map); i++)
+		trust[i] = false;
+
+	for (i = 0; i < nsel; i++) {
+		int idx;
+
+		for (idx = 0; idx < ARRAY_SIZE(rtl8365mb_apptrust_map); idx++)
+			if (sel[i] == rtl8365mb_apptrust_map[idx].sel)
+				break;
+
+		if (idx == ARRAY_SIZE(rtl8365mb_apptrust_map) || idx <= prev) {
+			dev_err(priv->dev,
+				"unsupported apptrust selector, or not in the driver's fixed precedence order\n");
+			return -EINVAL;
+		}
+		prev = idx;
+		trust[idx] = true;
+	}
+
+	return 0;
+}
+
+/* Trusted sources outrank the port default, and earlier entries in
+ * rtl8365mb_apptrust_map[] outrank later ones. Deriving the weight from the
+ * entry's position makes the table order the sole expression of precedence,
+ * so the order and the hardware weights cannot drift apart.
+ */
+static u8 rtl8365mb_apptrust_weight(unsigned int entry)
+{
+	return RTL8365MB_QOS_WEIGHT_PORT +
+	       ARRAY_SIZE(rtl8365mb_apptrust_map) - entry;
+}
+
+int rtl8365mb_port_get_apptrust(struct dsa_switch *ds, int port, u8 *sel,
+				int *nsel)
+{
+	bool trust[ARRAY_SIZE(rtl8365mb_apptrust_map)];
+	struct realtek_priv *priv = ds->priv;
+	int ret, i;
+	u32 idx;
+
+	*nsel = 0;
+
+	ret = regmap_read(priv->map, RTL8365MB_QOS_PRIDEC_IDX_REG, &idx);
+	if (ret)
+		return ret;
+
+	/* On the untrusted table nothing but the port default is trusted. */
+	if (!(idx & BIT(port)))
+		return 0;
+
+	ret = rtl8365mb_apptrust_read(priv, RTL8365MB_QOS_PRIDEC_TABLE_TRUSTED,
+				      trust);
+	if (ret)
+		return ret;
+
+	for (i = 0; i < ARRAY_SIZE(rtl8365mb_apptrust_map); i++)
+		if (trust[i])
+			sel[(*nsel)++] = rtl8365mb_apptrust_map[i].sel;
+
+	return 0;
+}
+
+int rtl8365mb_port_set_apptrust(struct dsa_switch *ds, int port, const u8 *sel,
+				int nsel)
+{
+	bool trust[ARRAY_SIZE(rtl8365mb_apptrust_map)];
+	struct realtek_priv *priv = ds->priv;
+	bool any = false;
+	int ret, i;
+	u32 idx;
+
+	ret = rtl8365mb_apptrust_parse(priv, sel, nsel, trust);
+	if (ret)
+		return ret;
+
+	for (i = 0; i < ARRAY_SIZE(rtl8365mb_apptrust_map); i++)
+		any |= trust[i];
+
+	ret = regmap_read(priv->map, RTL8365MB_QOS_PRIDEC_IDX_REG, &idx);
+	if (ret)
+		return ret;
+
+	/* Nothing trusted: point the port at the untrusted table. */
+	if (!any)
+		return rtl8365mb_set_field(priv, RTL8365MB_QOS_PRIDEC_IDX_REG,
+					   BIT(port), 0);
+
+	/* The trusted table is a single switch-wide resource. If another port
+	 * already uses it, this request must trust the same selectors.
+	 */
+	if (idx & ~BIT(port)) {
+		bool other[ARRAY_SIZE(rtl8365mb_apptrust_map)];
+
+		ret = rtl8365mb_apptrust_read(priv,
+					      RTL8365MB_QOS_PRIDEC_TABLE_TRUSTED,
+					      other);
+		if (ret)
+			return ret;
+
+		if (memcmp(trust, other, sizeof(trust))) {
+			dev_err(priv->dev,
+				"trust profile is switch-wide; another port already trusts different sources\n");
+			return -EBUSY;
+		}
+	}
+
+	for (i = 0; i < ARRAY_SIZE(rtl8365mb_apptrust_map); i++) {
+		u8 weight = trust[i] ? rtl8365mb_apptrust_weight(i) :
+				       RTL8365MB_QOS_WEIGHT_UNTRUSTED;
+
+		ret = rtl8365mb_qos_set_pridec(priv,
+					       RTL8365MB_QOS_PRIDEC_TABLE_TRUSTED,
+					       rtl8365mb_apptrust_map[i].src,
+					       weight);
+		if (ret)
+			return ret;
+	}
+
+	return rtl8365mb_set_field(priv, RTL8365MB_QOS_PRIDEC_IDX_REG,
+				   BIT(port), 1);
 }
