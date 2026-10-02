@@ -48,6 +48,18 @@ properties:
       Should be a gpio specifier for a reset line.
     maxItems: 1
 
+  reset-assert-us:
+    description:
+      How long the reset line is held asserted, in microseconds.
+    default: 10000
+
+  reset-deassert-us:
+    description:
+      How long to wait after the reset line is released before the switch is
+      accessed, in microseconds. Boards whose switch needs longer than the
+      default to answer on the management bus state their own value here.
+    default: 100000
+
   wakeup-source: true
 
   microchip,synclko-125:
