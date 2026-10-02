@@ -3025,47 +3025,22 @@ static int disarm_all_kprobes(void)
 	return ret;
 }
 
-/*
- * XXX: The debugfs bool file interface doesn't allow for callbacks
- * when the bool state is switched. We can reuse that facility when
- * available
- */
-static ssize_t read_enabled_file_bool(struct file *file,
-	       char __user *user_buf, size_t count, loff_t *ppos)
+static int kprobes_enabled_set(void *data, u64 val)
 {
-	char buf[3];
+	if (val)
+		return arm_all_kprobes();
 
-	if (!kprobes_all_disarmed)
-		buf[0] = '1';
-	else
-		buf[0] = '0';
-	buf[1] = '\n';
-	buf[2] = 0x00;
-	return simple_read_from_buffer(user_buf, count, ppos, buf, 2);
+	return disarm_all_kprobes();
 }
 
-static ssize_t write_enabled_file_bool(struct file *file,
-	       const char __user *user_buf, size_t count, loff_t *ppos)
+static int kprobes_enabled_get(void *data, u64 *val)
 {
-	bool enable;
-	int ret;
-
-	ret = kstrtobool_from_user(user_buf, count, &enable);
-	if (ret)
-		return ret;
-
-	ret = enable ? arm_all_kprobes() : disarm_all_kprobes();
-	if (ret)
-		return ret;
-
-	return count;
+	*val = !kprobes_all_disarmed;
+	return 0;
 }
 
-static const struct file_operations fops_kp = {
-	.read =         read_enabled_file_bool,
-	.write =        write_enabled_file_bool,
-	.llseek =	default_llseek,
-};
+DEFINE_DEBUGFS_ATTRIBUTE(fops_kp, kprobes_enabled_get,
+			 kprobes_enabled_set, "%llu\n");
 
 static int __init debugfs_kprobe_init(void)
 {
