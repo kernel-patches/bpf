@@ -285,6 +285,9 @@ void virtio_transport_recv_pkt(struct virtio_transport *t,
 
 struct virtio_transport_rx_batch {
 	struct sock *sk;
+	struct net *net;
+	struct sockaddr_vm src;
+	struct sockaddr_vm dst;
 };
 
 void virtio_transport_recv_pkt_batch(struct virtio_transport *t,
