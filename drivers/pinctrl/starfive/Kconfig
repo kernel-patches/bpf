@@ -50,11 +50,9 @@ config PINCTRL_STARFIVE_JH7110_AON
 
 config PINCTRL_STARFIVE_JHB100
 	bool
-	depends on OF
 	select GENERIC_PINCTRL
 	select GPIOLIB
 	select GPIOLIB_IRQCHIP
-	select OF_GPIO
 
 config PINCTRL_STARFIVE_JHB100_PER0
 	tristate "StarFive JHB100 SoC Peripheral-0 pinctrl and GPIO driver"
