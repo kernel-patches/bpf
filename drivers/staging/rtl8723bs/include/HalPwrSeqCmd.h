@@ -98,9 +98,7 @@ struct wlan_pwr_cfg {
 #define GET_PWR_CFG_VALUE(__PWR_CMD)		__PWR_CMD.value
 
 
-/*  */
 /* 	Prototype of protected function. */
-/*  */
 u8 HalPwrSeqCmdParsing(
 	struct adapter *padapter,
 	u8 		CutVersion,

@@ -9,11 +9,7 @@
 
 #define HAL_NAV_UPPER_UNIT_8723B		128		/*  micro-second */
 
-/*  */
-/*  */
 /*	0x0000h ~ 0x00FFh	System Configuration */
-/*  */
-/*  */
 #define REG_RSV_CTRL_8723B				0x001C	/*  3 Byte */
 #define REG_BT_WIFI_ANTENNA_SWITCH_8723B	0x0038
 #define REG_HSISR_8723B					0x005c
@@ -29,11 +25,7 @@
 #define REG_HISR1_8723B					0x00BC
 #define REG_PMC_DBG_CTRL2_8723B			0x00CC
 
-/*  */
-/*  */
 /*	0x0100h ~ 0x01FFh	MACTOP General Configuration */
-/*  */
-/*  */
 #define REG_C2HEVT_CMD_ID_8723B	0x01A0
 #define REG_C2HEVT_CMD_LEN_8723B	0x01AE
 #define REG_WOWLAN_WAKE_REASON 0x01C7
@@ -45,25 +37,14 @@
 #define REG_HMEBOX_EXT2_8723B			0x01F8
 #define REG_HMEBOX_EXT3_8723B			0x01FC
 
-/*  */
-/*  */
 /*	0x0200h ~ 0x027Fh	TXDMA Configuration */
-/*  */
-/*  */
 
-/*  */
-/*  */
 /*	0x0280h ~ 0x02FFh	RXDMA Configuration */
-/*  */
-/*  */
+
 #define REG_RXDMA_CONTROL_8723B		0x0286 /*  Control the RX DMA. */
 #define REG_RXDMA_MODE_CTRL_8723B		0x0290
 
-/*  */
-/*  */
 /*	0x0300h ~ 0x03FFh	PCIe */
-/*  */
-/*  */
 #define	REG_PCIE_CTRL_REG_8723B		0x0300
 #define	REG_INT_MIG_8723B				0x0304	/*  Interrupt Migration */
 #define	REG_BCNQ_DESA_8723B			0x0308	/*  TX Beacon Descriptor Address */
@@ -86,49 +67,27 @@
 #define	REG_PCIE_HCPWM_8723B			0x0363	/* PCIe CPWM */
 #define	REG_PCIE_MULTIFET_CTRL_8723B	0x036A	/* PCIE Multi-Fethc Control */
 
-/*  */
-/*  */
 /*	0x0400h ~ 0x047Fh	Protocol Configuration */
-/*  */
-/*  */
 #define REG_TXPKTBUF_BCNQ_BDNY_8723B	0x0424
 #define REG_TXPKTBUF_MGQ_BDNY_8723B	0x0425
 #define REG_TXPKTBUF_WMAC_LBK_BF_HD_8723B	0x045D
 #define REG_AMPDU_BURST_MODE_8723B	0x04BC
 
-/*  */
-/*  */
 /*	0x0500h ~ 0x05FFh	EDCA Configuration */
-/*  */
-/*  */
 #define REG_SECONDARY_CCA_CTRL_8723B	0x0577
 
-/*  */
-/*  */
 /*	0x0600h ~ 0x07FFh	WMAC Configuration */
-/*  */
-/*  */
 
-/*  */
 /*  SDIO Bus Specification */
-/*  */
 
-/*  */
 /*  SDIO CMD Address Mapping */
-/*  */
 
-/*  */
 /*  I/O bus domain (Host) */
-/*  */
 
-/*  */
 /*  SDIO register */
-/*  */
 #define SDIO_REG_HCPWM1_8723B	0x025 /*  HCI Current Power Mode 1 */
 
-/*  */
 /*	8723 Register Bit and Content definition */
-/*  */
 
 /* 2 HSISR */
 /*  interrupt mask which needs to clear */
@@ -138,54 +97,27 @@
 								HSISR_PDNINT |\
 								HSISR_GPIO9_INT)
 
-/*  */
-/*  */
 /*	0x0100h ~ 0x01FFh	MACTOP General Configuration */
-/*  */
-/*  */
 
-/*  */
-/*  */
 /*	0x0200h ~ 0x027Fh	TXDMA Configuration */
-/*  */
-/*  */
 
-/*  */
-/*  */
 /*	0x0280h ~ 0x02FFh	RXDMA Configuration */
-/*  */
-/*  */
 #define BIT_USB_RXDMA_AGG_EN	BIT(31)
 #define RXDMA_AGG_MODE_EN		BIT(1)
 
-/*  */
-/*  */
 /*	0x0400h ~ 0x047Fh	Protocol Configuration */
-/*  */
-/*  */
 
-/*  */
 /*        8723B REG_CCK_CHECK						(offset 0x454) */
-/*  */
+
 #define BIT_BCN_PORT_SEL		BIT(5)
 
-/*  */
-/*  */
 /*	0x0500h ~ 0x05FFh	EDCA Configuration */
-/*  */
-/*  */
 
-/*  */
-/*  */
 /*	0x0600h ~ 0x07FFh	WMAC Configuration */
-/*  */
-/*  */
 #define EEPROM_RF_GAIN_OFFSET			0xC1
 #define EEPROM_RF_GAIN_VAL			0x1F6
 
-/*  */
 /*        8195 IMR/ISR bits						(offset 0xB0,  8bits) */
-/*  */
 #define	IMR_DISABLED_8723B					0
 /*  IMR DW0(0x00B0-00B3) Bit 0-31 */
 #define	IMR_TIMER2_8723B					BIT(31)		/*  Timeout interrupt 2 */

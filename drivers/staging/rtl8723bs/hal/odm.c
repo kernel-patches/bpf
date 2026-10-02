@@ -358,8 +358,6 @@ bool ODM_RAStateCheck(
 	return false;
 }
 
-/*  */
-
 /* 3 ============================================================ */
 /* 3 RSSI Monitor */
 /* 3 ============================================================ */
@@ -456,8 +454,7 @@ static void odm_RSSIMonitorCheck(struct dm_odm_t *pDM_Odm)
 		return;
 
 	odm_RSSIMonitorCheckCE(pDM_Odm);
-
-}	/*  odm_RSSIMonitorCheck */
+}
 
 /* 3 ============================================================ */
 /* 3 SW Antenna Diversity */
@@ -552,19 +549,14 @@ void ODM_TXPowerTrackingCheck(struct dm_odm_t *pDM_Odm)
 
 		pDM_Odm->RFCalibrateInfo.TM_Trigger = 1;
 		return;
-	} else {
-		ODM_TXPowerTrackingCallback_ThermalMeter(Adapter);
-		pDM_Odm->RFCalibrateInfo.TM_Trigger = 0;
 	}
+	ODM_TXPowerTrackingCallback_ThermalMeter(Adapter);
+	pDM_Odm->RFCalibrateInfo.TM_Trigger = 0;
 }
 
-/*  */
 /* 3 Export Interface */
-/*  */
 
-/*  */
 /*  2011/09/21 MH Add to describe different team necessary resource allocate?? */
-/*  */
 void ODM_DMInit(struct dm_odm_t *pDM_Odm)
 {
 
@@ -586,11 +578,9 @@ void ODM_DMInit(struct dm_odm_t *pDM_Odm)
 	odm_SwAntDetectInit(pDM_Odm);
 }
 
-/*  */
 /*  2011/09/20 MH This is the entry pointer for all team to execute HW out source DM. */
 /*  You can not add any dummy function here, be care, you can only use DM structure */
 /*  to perform any new ODM_DM. */
-/*  */
 void ODM_DMWatchdog(struct dm_odm_t *pDM_Odm)
 {
 	odm_CommonInfoSelfUpdate(pDM_Odm);
@@ -633,18 +623,12 @@ void ODM_DMWatchdog(struct dm_odm_t *pDM_Odm)
 	pDM_Odm->PhyDbgInfo.NumQryBeaconPkt = 0;
 }
 
-/*  */
 /*  Init /.. Fixed HW value. Only init time. */
-/*  */
 void ODM_CmnInfoInit(struct dm_odm_t *pDM_Odm, enum odm_cmninfo_e CmnInfo, u32 Value)
 {
-	/*  */
 	/*  This section is used for init value */
-	/*  */
 	switch (CmnInfo) {
-	/*  */
 	/*  Fixed ODM value. */
-	/*  */
 	case ODM_CMNINFO_ABILITY:
 		pDM_Odm->SupportAbility = (u32)Value;
 		break;
@@ -729,13 +713,9 @@ void ODM_CmnInfoInit(struct dm_odm_t *pDM_Odm, enum odm_cmninfo_e CmnInfo, u32 V
 
 void ODM_CmnInfoHook(struct dm_odm_t *pDM_Odm, enum odm_cmninfo_e CmnInfo, void *pValue)
 {
-	/*  */
 	/*  Hook call by reference pointer. */
-	/*  */
 	switch (CmnInfo) {
-	/*  */
 	/*  Dynamic call by reference pointer. */
-	/*  */
 	case ODM_CMNINFO_MAC_PHY_MODE:
 		pDM_Odm->pMacPhyMode = pValue;
 		break;
@@ -857,13 +837,9 @@ void ODM_CmnInfoPtrArrayHook(
 	void *pValue
 )
 {
-	/*  */
 	/*  Hook call by reference pointer. */
-	/*  */
 	switch (CmnInfo) {
-	/*  */
 	/*  Dynamic call by reference pointer. */
-	/*  */
 	case ODM_CMNINFO_STA_STATUS:
 		pDM_Odm->pODM_StaInfo[Index] = (PSTA_INFO_T)pValue;
 		break;
@@ -875,14 +851,10 @@ void ODM_CmnInfoPtrArrayHook(
 
 }
 
-/*  */
 /*  Update Band/CHannel/.. The values are dynamic but non-per-packet. */
-/*  */
 void ODM_CmnInfoUpdate(struct dm_odm_t *pDM_Odm, u32 CmnInfo, u64 Value)
 {
-	/*  */
 	/*  This init variable may be changed in run time. */
-	/*  */
 	switch (CmnInfo) {
 	case ODM_CMNINFO_LINK_IN_PROGRESS:
 		pDM_Odm->bLinkInProcess = (bool)Value;

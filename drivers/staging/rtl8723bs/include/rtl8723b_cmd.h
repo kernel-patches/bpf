@@ -7,9 +7,7 @@
 #ifndef __RTL8723B_CMD_H__
 #define __RTL8723B_CMD_H__
 
-/*  */
 /*     H2C CMD DEFINITION    ------------------------------------------------ */
-/*  */
 
 enum {
 	/* Common Class: 000 */
@@ -71,9 +69,9 @@ enum {
 	H2C_8723B_RESET_TSF = 0xC0,
 	H2C_8723B_MAXID,
 };
-/*  */
+
 /*     H2C CMD CONTENT    -------------------------------------------------- */
-/*  */
+
 /* _RSVDPAGE_LOC_CMD_0x00 */
 #define SET_8723B_H2CCMD_RSVDPAGE_LOC_PROBE_RSP(__pH2CCmd, __Value)			SET_BITS_TO_LE_1BYTE_8BIT(__pH2CCmd, 0, 8, __Value)
 #define SET_8723B_H2CCMD_RSVDPAGE_LOC_PSPOLL(__pH2CCmd, __Value)				SET_BITS_TO_LE_1BYTE_8BIT((__pH2CCmd)+1, 0, 8, __Value)
@@ -158,9 +156,7 @@ enum {
 #define SET_8723B_H2CCMD_BT_FW_PATCH_ADDR2(__pH2CCmd, __Value)					SET_BITS_TO_LE_1BYTE((__pH2CCmd)+4, 0, 8, __Value)
 #define SET_8723B_H2CCMD_BT_FW_PATCH_ADDR3(__pH2CCmd, __Value)					SET_BITS_TO_LE_1BYTE((__pH2CCmd)+5, 0, 8, __Value)
 
-/*  */
 /*     Function Statement     -------------------------------------------------- */
-/*  */
 
 /*  host message to firmware cmd */
 void rtl8723b_set_FwPwrMode_cmd(struct adapter *padapter, u8 Mode);
@@ -168,7 +164,6 @@ void rtl8723b_set_FwJoinBssRpt_cmd(struct adapter *padapter, u8 mstatus);
 void rtl8723b_set_rssi_cmd(struct adapter *padapter, u8 *param);
 void rtl8723b_Add_RateATid(struct adapter *padapter, u32 bitmap, u8 *arg, u8 rssi_level);
 void rtl8723b_fw_try_ap_cmd(struct adapter *padapter, u32 need_ack);
-/* s32 rtl8723b_set_lowpwr_lps_cmd(struct adapter *padapter, u8 enable); */
 void rtl8723b_set_FwPsTuneParam_cmd(struct adapter *padapter);
 void rtl8723b_set_FwMacIdConfig_cmd(struct adapter *padapter, u8 mac_id, u8 raid, u8 bw, u8 sgi, u32 mask);
 void rtl8723b_set_FwMediaStatusRpt_cmd(struct adapter *padapter, u8 mstatus, u8 macid);

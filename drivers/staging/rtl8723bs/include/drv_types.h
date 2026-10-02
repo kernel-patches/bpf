@@ -151,8 +151,6 @@ struct registry_priv {
 
 	u8 enable80211d;
 
-	u8 ifname[16];
-
 	u8 notch_filter;
 
 	/* define for tx power adjust */
@@ -209,7 +207,6 @@ struct dvobj_priv {
 	s32	processing_dev_remove;
 
 	/* for local/global synchronization */
-	/*  */
 	spinlock_t	lock;
 	int macid[NUM_STA];
 
@@ -277,7 +274,6 @@ struct adapter {
 	struct	mlme_ext_priv mlmeextpriv;
 	struct	cmd_priv cmdpriv;
 	struct	evt_priv evtpriv;
-	/* struct	io_queue	*pio_queue; */
 	struct	io_priv iopriv;
 	struct	xmit_priv xmitpriv;
 	struct	recv_priv recvpriv;
@@ -377,9 +373,7 @@ struct adapter {
 #define adapter_to_pwrctl(adapter) (dvobj_to_pwrctl(adapter->dvobj))
 #define adapter_wdev_data(adapter) (&((adapter)->wdev_data))
 
-/*  */
 /*  Function disabled. */
-/*  */
 #define DF_TX_BIT		BIT(0)
 #define DF_RX_BIT		BIT(1)
 #define DF_IO_BIT		BIT(2)

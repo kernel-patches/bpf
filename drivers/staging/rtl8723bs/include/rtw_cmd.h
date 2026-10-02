@@ -49,7 +49,6 @@
 		u32 cmd_done_cnt;
 		u32 rsp_cnt;
 		atomic_t cmdthd_running;
-		/* u8 cmdthd_running; */
 		u8 stop_req;
 		struct adapter *padapter;
 		struct mutex sctx_mutex;
@@ -107,16 +106,16 @@ struct c2h_evt_hdr_88xx {
 #define c2h_evt_valid(c2h_evt) ((c2h_evt)->id || (c2h_evt)->plen)
 
 int rtw_enqueue_cmd(struct cmd_priv *pcmdpriv, struct cmd_obj *obj);
-extern struct cmd_obj *rtw_dequeue_cmd(struct cmd_priv *pcmdpriv);
-extern void rtw_free_cmd_obj(struct cmd_obj *pcmd);
+struct cmd_obj *rtw_dequeue_cmd(struct cmd_priv *pcmdpriv);
+void rtw_free_cmd_obj(struct cmd_obj *pcmd);
 
 void rtw_stop_cmd_thread(struct adapter *adapter);
 int rtw_cmd_thread(void *context);
 
-extern void rtw_free_cmd_priv(struct cmd_priv *pcmdpriv);
+void rtw_free_cmd_priv(struct cmd_priv *pcmdpriv);
 
-extern void rtw_free_evt_priv(struct evt_priv *pevtpriv);
-extern void rtw_evt_notify_isr(struct evt_priv *pevtpriv);
+void rtw_free_evt_priv(struct evt_priv *pevtpriv);
+void rtw_evt_notify_isr(struct evt_priv *pevtpriv);
 
 enum {
 	NONE_WK_CID,
@@ -159,80 +158,75 @@ enum {
 };
 
 /*
-Caller Mode: Infra, Ad-HoC
-
-Notes: To join a known BSS.
-
-Command-Event Mode
-
-*/
+ * Caller Mode: Infra, Ad-HoC
+ *
+ * Notes: To join a known BSS.
+ *
+ * Command-Event Mode
+ */
 
 /*
-Caller Mode: Infra, Ad-Hoc
-
-Notes: To join the specified bss
-
-Command Event Mode
-
-*/
+ * Caller Mode: Infra, Ad-Hoc
+ *
+ * Notes: To join the specified bss
+ *
+ * Command Event Mode
+ */
 struct joinbss_parm {
 	struct wlan_bssid_ex network;
 };
 
 /*
-Caller Mode: Infra, Ad-HoC(C)
-
-Notes: To disconnect the current associated BSS
-
-Command Mode
-
-*/
+ * Caller Mode: Infra, Ad-HoC(C)
+ *
+ * Notes: To disconnect the current associated BSS
+ *
+ * Command Mode
+ */
 struct disconnect_parm {
 	u32 deauth_timeout_ms;
 };
 
 /*
-Caller Mode: AP, Ad-HoC(M)
-
-Notes: To create a BSS
-
-Command Mode
-*/
+ * Caller Mode: AP, Ad-HoC(M)
+ *
+ * Notes: To create a BSS
+ *
+ * Command Mode
+ */
 struct createbss_parm {
 	struct wlan_bssid_ex network;
 };
 
 /*
-Caller Mode: AP, Ad-HoC, Infra
-
-Notes: To set the NIC mode of RTL8711
-
-Command Mode
-
-The definition of mode:
-
-#define IW_MODE_AUTO	0	 Let the driver decides which AP to join
-#define IW_MODE_ADHOC	1	 Single cell network (Ad-Hoc Clients)
-#define IW_MODE_INFRA	2	 Multi cell network, roaming, ..
-#define IW_MODE_MASTER	3	 Synchronisation master or Access Point
-#define IW_MODE_REPEAT	4	 Wireless Repeater (forwarder)
-#define IW_MODE_SECOND	5	 Secondary master/repeater (backup)
-#define IW_MODE_MONITOR	6	 Passive monitor (listen only)
-
-*/
+ * Caller Mode: AP, Ad-HoC, Infra
+ *
+ * Notes: To set the NIC mode of RTL8711
+ *
+ * Command Mode
+ *
+ * The definition of mode:
+ *
+ * #define IW_MODE_AUTO	0	 Let the driver decides which AP to join
+ * #define IW_MODE_ADHOC	1	 Single cell network (Ad-Hoc Clients)
+ * #define IW_MODE_INFRA	2	 Multi cell network, roaming, ..
+ * #define IW_MODE_MASTER	3	 Synchronisation master or Access Point
+ * #define IW_MODE_REPEAT	4	 Wireless Repeater (forwarder)
+ * #define IW_MODE_SECOND	5	 Secondary master/repeater (backup)
+ * #define IW_MODE_MONITOR	6	 Passive monitor (listen only)
+ */
 struct	setopmode_parm {
 	u8 mode;
 	u8 rsvd[3];
 };
 
 /*
-Caller Mode: AP, Ad-HoC, Infra
-
-Notes: To ask RTL8711 performing site-survey
-
-Command-Event Mode
-
-*/
+ * Caller Mode: AP, Ad-HoC, Infra
+ *
+ * Notes: To ask RTL8711 performing site-survey
+ *
+ * Command-Event Mode
+ */
 
 #define RTW_SSID_SCAN_AMOUNT 9 /*  for WEXT_CSCAN_AMOUNT 9 */
 #define RTW_CHANNEL_SCAN_AMOUNT (14+37)
@@ -245,13 +239,12 @@ struct sitesurvey_parm {
 };
 
 /*
-Caller Mode: Any
-
-Notes: To set the auth type of RTL8711. open/shared/802.1x
-
-Command Mode
-
-*/
+ * Caller Mode: Any
+ *
+ * Notes: To set the auth type of RTL8711. open/shared/802.1x
+ *
+ * Command Mode
+ */
 struct setauth_parm {
 	u8 mode;  /* 0: legacy open, 1: legacy shared 2: 802.1x */
 	u8 _1x;   /* 0: PSK, 1: TLS */
@@ -259,17 +252,16 @@ struct setauth_parm {
 };
 
 /*
-Caller Mode: Infra
-
-a. algorithm: wep40, wep104, tkip & aes
-b. keytype: grp key/unicast key
-c. key contents
-
-when shared key ==> keyid is the camid
-when 802.1x ==> keyid [0:1] ==> grp key
-when 802.1x ==> keyid > 2 ==> unicast key
-
-*/
+ * Caller Mode: Infra
+ *
+ * a. algorithm: wep40, wep104, tkip & aes
+ * b. keytype: grp key/unicast key
+ * c. key contents
+ *
+ * when shared key ==> keyid is the camid
+ * when 802.1x ==> keyid [0:1] ==> grp key
+ * when 802.1x ==> keyid > 2 ==> unicast key
+ */
 struct setkey_parm {
 	u8 algorithm;	/*  encryption algorithm, could be none, wep40, TKIP, CCMP, wep104 */
 	u8 keyid;
@@ -279,14 +271,13 @@ struct setkey_parm {
 };
 
 /*
-When in AP or Ad-Hoc mode, this is used to
-allocate an sw/hw entry for a newly associated sta.
-
-Command
-
-when shared key ==> algorithm/keyid
-
-*/
+ * When in AP or Ad-Hoc mode, this is used to
+ * allocate an sw/hw entry for a newly associated sta.
+ *
+ * Command
+ *
+ * when shared key ==> algorithm/keyid
+ */
 struct set_stakey_parm {
 	u8 addr[ETH_ALEN];
 	u8 algorithm;
@@ -301,15 +292,14 @@ struct set_stakey_rsp {
 };
 
 /*
-Caller Ad-Hoc/AP
-
-Command -Rsp(AID == CAMID) mode
-
-This is to force fw to add an sta_data entry per driver's request.
-
-FW will write an cam entry associated with it.
-
-*/
+ * Caller Ad-Hoc/AP
+ *
+ * Command -Rsp(AID == CAMID) mode
+ *
+ * This is to force fw to add an sta_data entry per driver's request.
+ *
+ * FW will write an cam entry associated with it.
+ */
 struct set_assocsta_parm {
 	u8 addr[ETH_ALEN];
 };
@@ -320,27 +310,25 @@ struct set_assocsta_rsp {
 };
 
 /*
-	Caller Ad-Hoc/AP
+ *	Caller Ad-Hoc/AP
 
-	Command mode
+ *	Command mode
 
-	This is to force fw to del an sta_data entry per driver's request
+ *	This is to force fw to del an sta_data entry per driver's request
 
-	FW will invalidate the cam entry associated with it.
-
-*/
+ *	FW will invalidate the cam entry associated with it.
+ */
 struct del_assocsta_parm {
 	u8 addr[ETH_ALEN];
 };
 
 /*
-Caller Mode: AP/Ad-HoC(M)
-
-Notes: To notify fw that given staid has changed its power state
-
-Command Mode
-
-*/
+ * Caller Mode: AP/Ad-HoC(M)
+ *
+ * Notes: To notify fw that given staid has changed its power state
+ *
+ * Command Mode
+ */
 struct setstapwrstate_parm {
 	u8 staid;
 	u8 status;
@@ -348,68 +336,63 @@ struct setstapwrstate_parm {
 };
 
 /*
-Caller Mode: Any
-
-Notes: To setup the basic rate of RTL8711
-
-Command Mode
-
-*/
+ * Caller Mode: Any
+ *
+ * Notes: To setup the basic rate of RTL8711
+ *
+ * Command Mode
+ */
 struct	setbasicrate_parm {
 	u8 basicrates[NumRates];
 };
 
 /*
-Caller Mode: Any
-
-Notes: To read the current basic rate
-
-Command-Rsp Mode
-
-*/
+ * Caller Mode: Any
+ *
+ * Notes: To read the current basic rate
+ *
+ * Command-Rsp Mode
+ */
 struct getbasicrate_parm {
 	u32 rsvd;
 };
 
 /*
-Caller Mode: Any
-
-Notes: To setup the data rate of RTL8711
-
-Command Mode
-
-*/
+ * Caller Mode: Any
+ *
+ * Notes: To setup the data rate of RTL8711
+ *
+ * Command Mode
+ */
 struct setdatarate_parm {
 	u8 mac_id;
 	u8 datarates[NumRates];
 };
 
 /*
-Caller Mode: Any
-
-Notes: To read the current data rate
-
-Command-Rsp Mode
-
-*/
+ * Caller Mode: Any
+ *
+ * Notes: To read the current data rate
+ *
+ * Command-Rsp Mode
+ */
 struct getdatarate_parm {
 	u32 rsvd;
 
 };
 
 /*
-Caller Mode: Any
-AP: AP can use the info for the contents of beacon frame
-Infra: STA can use the info when sitesurveying
-Ad-HoC(M): Like AP
-Ad-HoC(C): Like STA
+ * Caller Mode: Any
+ * AP: AP can use the info for the contents of beacon frame
+ * Infra: STA can use the info when sitesurveying
+ * Ad-HoC(M): Like AP
+ * Ad-HoC(C): Like STA
 
 
-Notes: To set the phy capability of the NIC
+ * Notes: To set the phy capability of the NIC
 
-Command Mode
-
-*/
+ * Command Mode
+ */
 
 struct	setphyinfo_parm {
 	struct regulatory_class class_sets[NUM_REGULATORYS];
@@ -421,27 +404,25 @@ struct	getphyinfo_parm {
 };
 
 /*
-Caller Mode: Any
-
-Notes: To set the channel/modem/band
-This command will be used when channel/modem/band is changed.
-
-Command Mode
-
-*/
+ * Caller Mode: Any
+ *
+ * Notes: To set the channel/modem/band
+ * This command will be used when channel/modem/band is changed.
+ *
+ * Command Mode
+ */
 struct	setphy_parm {
 	u8 rfchannel;
 	u8 modem;
 };
 
 /*
-Caller Mode: Any
-
-Notes: To get the current setting of channel/modem/band
-
-Command-Rsp Mode
-
-*/
+ * Caller Mode: Any
+ *
+ * Notes: To get the current setting of channel/modem/band
+ *
+ * Command-Rsp Mode
+ */
 struct	getphy_parm {
 	u32 rsvd;
 
@@ -452,58 +433,57 @@ struct Tx_Beacon_param {
 };
 
 /*
-	Notes: This command is used for H2C/C2H loopback testing
-
-	mac[0] == 0
-	==> CMD mode, return H2C_SUCCESS.
-	The following condition must be true under CMD mode
-		mac[1] == mac[4], mac[2] == mac[3], mac[0]=mac[5]= 0;
-		s0 == 0x1234, s1 == 0xabcd, w0 == 0x78563412, w1 == 0x5aa5def7;
-		s2 == (b1 << 8 | b0);
-
-	mac[0] == 1
-	==> CMD_RSP mode, return H2C_SUCCESS_RSP
-
-	The rsp layout shall be:
-	rsp:			parm:
-		mac[0]  =   mac[5];
-		mac[1]  =   mac[4];
-		mac[2]  =   mac[3];
-		mac[3]  =   mac[2];
-		mac[4]  =   mac[1];
-		mac[5]  =   mac[0];
-		s0		=   s1;
-		s1		=   swap16(s0);
-		w0		=	swap32(w1);
-		b0		=	b1
-		s2		=	s0 + s1
-		b1		=	b0
-		w1		=	w0
-
-	mac[0] ==	2
-	==> CMD_EVENT mode, return	H2C_SUCCESS
-	The event layout shall be:
-	event:			parm:
-		mac[0]  =   mac[5];
-		mac[1]  =   mac[4];
-		mac[2]  =   event's sequence number, starting from 1 to parm's marc[3]
-		mac[3]  =   mac[2];
-		mac[4]  =   mac[1];
-		mac[5]  =   mac[0];
-		s0		=   swap16(s0) - event.mac[2];
-		s1		=   s1 + event.mac[2];
-		w0		=	swap32(w0);
-		b0		=	b1
-		s2		=	s0 + event.mac[2]
-		b1		=	b0
-		w1		=	swap32(w1) - event.mac[2];
-
-		parm->mac[3] is the total event counts that host requested.
-
-
-	event will be the same with the cmd's param.
-
-*/
+ *	Notes: This command is used for H2C/C2H loopback testing
+ *
+ *	mac[0] == 0
+ *	==> CMD mode, return H2C_SUCCESS.
+ *	The following condition must be true under CMD mode
+ *		mac[1] == mac[4], mac[2] == mac[3], mac[0]=mac[5]= 0;
+ *		s0 == 0x1234, s1 == 0xabcd, w0 == 0x78563412, w1 == 0x5aa5def7;
+ *		s2 == (b1 << 8 | b0);
+ *
+ *	mac[0] == 1
+ *	==> CMD_RSP mode, return H2C_SUCCESS_RSP
+ *
+ *	The rsp layout shall be:
+ *	rsp:			parm:
+ *		mac[0]  =   mac[5];
+ *		mac[1]  =   mac[4];
+ *		mac[2]  =   mac[3];
+ *		mac[3]  =   mac[2];
+ *		mac[4]  =   mac[1];
+ *		mac[5]  =   mac[0];
+ *		s0		=   s1;
+ *		s1		=   swap16(s0);
+ *		w0		=	swap32(w1);
+ *		b0		=	b1
+ *		s2		=	s0 + s1
+ *		b1		=	b0
+ *		w1		=	w0
+ *
+ *	mac[0] ==	2
+ *	==> CMD_EVENT mode, return	H2C_SUCCESS
+ *	The event layout shall be:
+ *	event:			parm:
+ *		mac[0]  =   mac[5];
+ *		mac[1]  =   mac[4];
+ *		mac[2]  =   event's sequence number, starting from 1 to parm's marc[3]
+ *		mac[3]  =   mac[2];
+ *		mac[4]  =   mac[1];
+ *		mac[5]  =   mac[0];
+ *		s0		=   swap16(s0) - event.mac[2];
+ *		s1		=   s1 + event.mac[2];
+ *		w0		=	swap32(w0);
+ *		b0		=	b1
+ *		s2		=	s0 + event.mac[2]
+ *		b1		=	b0
+ *		w1		=	swap32(w1) - event.mac[2];
+ *
+ *		parm->mac[3] is the total event counts that host requested.
+ *
+ *
+ *	event will be the same with the cmd's param.
+ */
 
 /*  CMD param Formart for driver extra cmd handler */
 struct drvextra_cmd_parm {
@@ -551,15 +531,14 @@ struct RunInThread_param {
 
 
 /*
-
-Result:
-0x00: success
-0x01: success, and check Response.
-0x02: cmd ignored due to duplicated sequence number
-0x03: cmd dropped due to invalid cmd code
-0x04: reserved.
-
-*/
+ *
+ * Result:
+ * 0x00: success
+ * 0x01: success, and check Response.
+ * 0x02: cmd ignored due to duplicated sequence number
+ * 0x03: cmd dropped due to invalid cmd code
+ * 0x04: reserved.
+ */
 
 #define H2C_RSP_OFFSET			512
 
@@ -573,50 +552,50 @@ Result:
 #define H2C_RESERVED			0x07
 
 u8 rtw_sitesurvey_cmd(struct adapter  *padapter, struct ndis_802_11_ssid *ssid, int ssid_num, struct rtw_ieee80211_channel *ch, int ch_num);
-extern u8 rtw_createbss_cmd(struct adapter  *padapter);
+u8 rtw_createbss_cmd(struct adapter  *padapter);
 int rtw_startbss_cmd(struct adapter  *padapter, int flags);
 
 struct sta_info;
-extern u8 rtw_setstakey_cmd(struct adapter  *padapter, struct sta_info *sta, u8 unicast_key, bool enqueue);
-extern u8 rtw_clearstakey_cmd(struct adapter *padapter, struct sta_info *sta, u8 enqueue);
+u8 rtw_setstakey_cmd(struct adapter  *padapter, struct sta_info *sta, u8 unicast_key, bool enqueue);
+u8 rtw_clearstakey_cmd(struct adapter *padapter, struct sta_info *sta, u8 enqueue);
 
-extern u8 rtw_joinbss_cmd(struct adapter *padapter, struct wlan_network *pnetwork);
+u8 rtw_joinbss_cmd(struct adapter *padapter, struct wlan_network *pnetwork);
 u8 rtw_disassoc_cmd(struct adapter *padapter, u32 deauth_timeout_ms, bool enqueue);
-extern u8 rtw_setopmode_cmd(struct adapter  *padapter, enum nl80211_iftype networktype, bool enqueue);
-extern u8 rtw_setrfintfs_cmd(struct adapter  *padapter, u8 mode);
+u8 rtw_setopmode_cmd(struct adapter  *padapter, enum nl80211_iftype networktype, bool enqueue);
+u8 rtw_setrfintfs_cmd(struct adapter  *padapter, u8 mode);
 
-extern u8 rtw_gettssi_cmd(struct adapter  *padapter, u8 offset, u8 *pval);
-extern u8 rtw_setfwdig_cmd(struct adapter *padapter, u8 type);
-extern u8 rtw_setfwra_cmd(struct adapter *padapter, u8 type);
+u8 rtw_gettssi_cmd(struct adapter  *padapter, u8 offset, u8 *pval);
+u8 rtw_setfwdig_cmd(struct adapter *padapter, u8 type);
+u8 rtw_setfwra_cmd(struct adapter *padapter, u8 type);
 
-extern u8 rtw_addbareq_cmd(struct adapter *padapter, u8 tid, u8 *addr);
-extern u8 rtw_reset_securitypriv_cmd(struct adapter *padapter);
-extern u8 rtw_free_assoc_resources_cmd(struct adapter *padapter);
-extern u8 rtw_dynamic_chk_wk_cmd(struct adapter *adapter);
+u8 rtw_addbareq_cmd(struct adapter *padapter, u8 tid, u8 *addr);
+u8 rtw_reset_securitypriv_cmd(struct adapter *padapter);
+u8 rtw_free_assoc_resources_cmd(struct adapter *padapter);
+u8 rtw_dynamic_chk_wk_cmd(struct adapter *adapter);
 
 u8 rtw_lps_ctrl_wk_cmd(struct adapter *padapter, u8 lps_ctrl_type, u8 enqueue);
 u8 rtw_dm_in_lps_wk_cmd(struct adapter *padapter);
 
 u8 rtw_dm_ra_mask_wk_cmd(struct adapter *padapter, u8 *psta);
 
-extern u8 rtw_ps_cmd(struct adapter *padapter);
+u8 rtw_ps_cmd(struct adapter *padapter);
 
 u8 rtw_chk_hi_queue_cmd(struct adapter *padapter);
 
-extern u8 rtw_c2h_packet_wk_cmd(struct adapter *padapter, u8 *pbuf, u16 length);
-extern u8 rtw_c2h_wk_cmd(struct adapter *padapter, u8 *c2h_evt);
+u8 rtw_c2h_packet_wk_cmd(struct adapter *padapter, u8 *pbuf, u16 length);
+u8 rtw_c2h_wk_cmd(struct adapter *padapter, u8 *c2h_evt);
 
 u8 rtw_drvextra_cmd_hdl(struct adapter *padapter, unsigned char *pbuf);
 
-extern void rtw_survey_cmd_callback(struct adapter  *padapter, struct cmd_obj *pcmd);
-extern void rtw_disassoc_cmd_callback(struct adapter  *padapter, struct cmd_obj *pcmd);
-extern void rtw_joinbss_cmd_callback(struct adapter  *padapter, struct cmd_obj *pcmd);
-extern void rtw_createbss_cmd_callback(struct adapter  *padapter, struct cmd_obj *pcmd);
-extern void rtw_getbbrfreg_cmdrsp_callback(struct adapter  *padapter, struct cmd_obj *pcmd);
+void rtw_survey_cmd_callback(struct adapter  *padapter, struct cmd_obj *pcmd);
+void rtw_disassoc_cmd_callback(struct adapter  *padapter, struct cmd_obj *pcmd);
+void rtw_joinbss_cmd_callback(struct adapter  *padapter, struct cmd_obj *pcmd);
+void rtw_createbss_cmd_callback(struct adapter  *padapter, struct cmd_obj *pcmd);
+void rtw_getbbrfreg_cmdrsp_callback(struct adapter  *padapter, struct cmd_obj *pcmd);
 
-extern void rtw_setstaKey_cmdrsp_callback(struct adapter  *padapter,  struct cmd_obj *pcmd);
-extern void rtw_setassocsta_cmdrsp_callback(struct adapter  *padapter,  struct cmd_obj *pcmd);
-extern void rtw_getrttbl_cmdrsp_callback(struct adapter  *padapter,  struct cmd_obj *pcmd);
+void rtw_setstaKey_cmdrsp_callback(struct adapter  *padapter,  struct cmd_obj *pcmd);
+void rtw_setassocsta_cmdrsp_callback(struct adapter  *padapter,  struct cmd_obj *pcmd);
+void rtw_getrttbl_cmdrsp_callback(struct adapter  *padapter,  struct cmd_obj *pcmd);
 
 
 struct _cmd_callback {

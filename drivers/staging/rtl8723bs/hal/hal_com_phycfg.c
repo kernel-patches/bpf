@@ -77,7 +77,7 @@ static void phy_StoreTxPowerByRateBase(struct adapter *padapter)
 }
 
 u8 PHY_GetRateSectionIndexOfTxPowerByRate(
-	struct adapter *padapter, u32 RegAddr, u32 BitMask
+	struct adapter *padapter, u32 reg_addr, u32 bit_mask
 )
 {
 	struct hal_com_data	*pHalData = GET_HAL_DATA(padapter);
@@ -85,7 +85,7 @@ u8 PHY_GetRateSectionIndexOfTxPowerByRate(
 	u8	index = 0;
 
 	if (pDM_Odm->PhyRegPgVersion == 0) {
-		switch (RegAddr) {
+		switch (reg_addr) {
 		case rTxAGC_A_Rate18_06:
 			index = 0;
 			break;
@@ -96,9 +96,9 @@ u8 PHY_GetRateSectionIndexOfTxPowerByRate(
 			index = 6;
 			break;
 		case rTxAGC_B_CCK11_A_CCK2_11:
-			if (BitMask == bMaskH3Bytes)
+			if (bit_mask == bMaskH3Bytes)
 				index = 7;
-			else if (BitMask == 0x000000ff)
+			else if (bit_mask == 0x000000ff)
 				index = 15;
 			break;
 
@@ -739,7 +739,7 @@ s8 phy_get_tx_pwr_lmt(struct adapter *adapter, u32 reg_pwr_tbl_sel,
 	return pwr_lmt;
 }
 
-void PHY_ConvertTxPowerLimitToPowerIndex(struct adapter *Adapter)
+void phy_tx_power_limit_to_index(struct adapter *Adapter)
 {
 	struct hal_com_data	*pHalData = GET_HAL_DATA(Adapter);
 	struct registry_priv *r = &Adapter->registrypriv;

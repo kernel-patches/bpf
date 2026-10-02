@@ -14,7 +14,6 @@
 #include <linux/stddef.h>
 
 #define SIZE_PTR __kernel_size_t
-#define SSIZE_PTR __kernel_ssize_t
 
 /* port from fw by thomas */
 /*  TODO: Belows are Sync from SD7-Driver. It is necessary to check correctness */
@@ -26,12 +25,8 @@
  *	3. After read integer from IO.
  */
 
-/*  */
 /*  Byte Swapping routine. */
-/*  */
 #define EF1Byte	(u8)
-#define EF2Byte		le16_to_cpu
-#define EF4Byte	le32_to_cpu
 
 /* Convert little data endian to host ordering */
 #define EF1BYTE(_val)		\
@@ -162,9 +157,6 @@
 			((u8)__Value) \
 		); \
 }
-
-/*  Get the N-bytes alignent offset from the current length */
-#define N_BYTE_ALIGMENT(__Value, __Aligment) ((__Aligment == 1) ? (__Value) : (((__Value + __Aligment - 1) / __Aligment) * __Aligment))
 
 #define TEST_FLAG(__Flag, __testFlag)		(((__Flag) & (__testFlag)) != 0)
 #define SET_FLAG(__Flag, __setFlag)			((__Flag) |= __setFlag)

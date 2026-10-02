@@ -13,7 +13,7 @@
 #define IQK_DEFERRED_TIME_8723B		4
 #define	index_mapping_NUM_8723B		15
 #define AVG_THERMAL_NUM_8723B		4
-#define	RF_T_METER_8723B					0x42	/*  */
+#define	RF_T_METER_8723B					0x42
 
 void ConfigureTxpowerTrack_8723B(struct txpwrtrack_cfg *pConfig);
 
@@ -35,14 +35,10 @@ void PHY_IQCalibrate_8723B(
 
 void ODM_SetIQCbyRFpath(struct dm_odm_t *pDM_Odm, u32 RFpath);
 
-/*  */
 /*  LC calibrate */
-/*  */
 void PHY_LCCalibrate_8723B(struct dm_odm_t *pDM_Odm);
 
-/*  */
 /*  AP calibrate */
-/*  */
 void PHY_DigitalPredistortion_8723B(struct adapter *padapter);
 
 void _PHY_SaveADDARegisters_8723B(

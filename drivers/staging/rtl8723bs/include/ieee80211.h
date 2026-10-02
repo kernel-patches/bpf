@@ -22,7 +22,6 @@ enum {
 	RTL871X_HOSTAPD_ADD_STA = 2,
 	RTL871X_HOSTAPD_REMOVE_STA = 3,
 	RTL871X_HOSTAPD_GET_INFO_STA = 4,
-	/* REMOVED: PRISM2_HOSTAPD_RESET_TXEXC_STA = 5, */
 	RTL871X_HOSTAPD_GET_WPAIE_STA = 5,
 	RTL871X_SET_ENCRYPTION = 6,
 	RTL871X_GET_ENCRYPTION = 7,
@@ -610,17 +609,8 @@ enum rtw_ieee80211_channel_flags {
 
 /* Represent channel details, subset of ieee80211_channel */
 struct rtw_ieee80211_channel {
-	/* enum nl80211_band band; */
-	/* u16 center_freq; */
 	u16 hw_value;
 	u32 flags;
-	/* int max_antenna_gain; */
-	/* int max_power; */
-	/* int max_reg_power; */
-	/* bool beacon_found; */
-	/* u32 orig_flags; */
-	/* int orig_mag; */
-	/* int orig_mpwr; */
 };
 
 /* Parsed Information Elements */

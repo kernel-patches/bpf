@@ -46,9 +46,7 @@ s32 odm_signal_scale_mapping(struct dm_odm_t *dm_odm, s32 curr_sig)
 
 static u8 odm_evm_db_to_percentage(s8 value)
 {
-	/*  */
 	/*  -33dB~0dB to 0%~99% */
-	/*  */
 	s8 ret_val;
 
 	ret_val = value;
@@ -383,9 +381,7 @@ static void odm_Process_RSSIForDM(
 	}
 }
 
-/*  */
 /*  Endianness before calling this API */
-/*  */
 void odm_phy_status_query(struct dm_odm_t *dm_odm, struct odm_phy_info *phy_info,
 			  u8 *phy_status, struct odm_packet_info *pkt_info)
 {
@@ -396,10 +392,7 @@ void odm_phy_status_query(struct dm_odm_t *dm_odm, struct odm_phy_info *phy_info
 		odm_Process_RSSIForDM(dm_odm, phy_info, pkt_info);
 }
 
-/*  */
 /*  If you want to add a new IC, Please follow below template and generate a new one. */
-/*  */
-/*  */
 
 enum hal_status ODM_ConfigRFWithHeaderFile(
 	struct dm_odm_t *pDM_Odm,

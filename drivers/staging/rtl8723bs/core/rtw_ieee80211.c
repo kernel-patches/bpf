@@ -31,9 +31,7 @@ u8 RSN_CIPHER_SUITE_TKIP[] = { 0x00, 0x0f, 0xac, 2 };
 u8 RSN_CIPHER_SUITE_WRAP[] = { 0x00, 0x0f, 0xac, 3 };
 u8 RSN_CIPHER_SUITE_CCMP[] = { 0x00, 0x0f, 0xac, 4 };
 u8 RSN_CIPHER_SUITE_WEP104[] = { 0x00, 0x0f, 0xac, 5 };
-/*  */
 /*  for adhoc-master to generate ie and provide supported-rate to fw */
-/*  */
 
 static u8 WIFI_CCKRATES[] = {
 		(IEEE80211_CCK_RATE_1MB | IEEE80211_BASIC_RATE_MASK),
@@ -330,7 +328,6 @@ int rtw_generate_ie(struct registry_priv *pregistrypriv)
 
 	if (rate_len > 8) {
 		ie = rtw_set_ie(ie, WLAN_EID_SUPP_RATES, 8, pdev_network->supported_rates, &sz);
-		/* ie = rtw_set_ie(ie, WLAN_EID_EXT_SUPP_RATES, (rate_len - 8), (pdev_network->supported_rates + 8), &sz); */
 	} else {
 		ie = rtw_set_ie(ie, WLAN_EID_SUPP_RATES, rate_len, pdev_network->supported_rates, &sz);
 	}
@@ -350,10 +347,6 @@ int rtw_generate_ie(struct registry_priv *pregistrypriv)
 	    pregistrypriv->ht_enable) {
 		/* todo: */
 	}
-
-	/* pdev_network->ie_length =  sz; update ie_length */
-
-	/* return _SUCCESS; */
 
 	return sz;
 }
@@ -481,7 +474,6 @@ int rtw_parse_wpa_ie(u8 *wpa_ie, int wpa_ie_len, int *group_cipher, int *pairwis
 
 	/* pairwise_cipher */
 	if (left >= 2) {
-		/* count = le16_to_cpu(*(u16*)pos); */
 		count = get_unaligned_le16(pos);
 		pos += 2;
 		left -= 2;
@@ -543,7 +535,6 @@ int rtw_parse_wpa2_ie(u8 *rsn_ie, int rsn_ie_len, int *group_cipher, int *pairwi
 
 	/* pairwise_cipher */
 	if (left >= 2) {
-	  /* count = le16_to_cpu(*(u16*)pos); */
 		count = get_unaligned_le16(pos);
 		pos += 2;
 		left -= 2;
@@ -1074,7 +1065,6 @@ void rtw_get_bcn_info(struct wlan_network *pnetwork)
 {
 	unsigned short cap = 0;
 	u8 bencrypt = 0;
-	/* u8 wpa_ie[255], rsn_ie[255]; */
 	u16 wpa_len = 0, rsn_len = 0;
 	struct HT_info_element *pht_info = NULL;
 	struct ieee80211_ht_cap *pht_cap = NULL;

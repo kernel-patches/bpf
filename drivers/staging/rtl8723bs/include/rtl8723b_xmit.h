@@ -7,9 +7,7 @@
 #ifndef __RTL8723B_XMIT_H__
 #define __RTL8723B_XMIT_H__
 
-/*  */
 /*  Queue Select Value in TxDesc */
-/*  */
 #define QSLT_BK							0x2/* 0x01 */
 #define QSLT_BE							0x0
 #define QSLT_VI							0x5/* 0x4 */
@@ -56,9 +54,7 @@
 /* OFFSET 20 */
 #define SGI		BIT(6)
 
-/*  */
 /* defined for TX DESC Operation */
-/*  */
 struct txdesc_8723b {
 	/*  Offset 0 */
 	u32 pktlen:16;
@@ -364,11 +360,9 @@ struct txdesc_8723b {
 #define SET_EARLYMODE_LEN3_8723B(__pAddr, __Value)					SET_BITS_TO_LE_4BYTE(__pAddr+4, 17, 15, __Value)
 
 #endif
-/*  */
-/*  */
+
 /* 	Rate */
-/*  */
-/*  */
+
 /*  CCK Rates, TxHT = 0 */
 #define DESC8723B_RATE1M				0x00
 #define DESC8723B_RATE2M				0x01

@@ -6,10 +6,9 @@
  ******************************************************************************/
 #ifndef __HAL_PHY_H__
 #define __HAL_PHY_H__
-/*  */
+
 /*  Antenna detection method, i.e., using single tone detection or RSSI reported from each antenna detected. */
 /*  Added by Roger, 2013.05.22. */
-/*  */
 #define ANT_DETECT_BY_SINGLE_TONE	BIT(0)
 #define ANT_DETECT_BY_RSSI				BIT(1)
 #define IS_ANT_DETECT_SUPPORT_SINGLE_TONE(__Adapter)		((GET_HAL_DATA(__Adapter)->AntDetection) & ANT_DETECT_BY_SINGLE_TONE)
@@ -17,16 +16,6 @@
 
 
 /*--------------------------Define Parameters-------------------------------*/
-enum {
-	RF_TYPE_MIN = 0,	/*  0 */
-	RF_8225 = 1,		/*  1 11b/g RF for verification only */
-	RF_8256 = 2,		/*  2 11b/g/n */
-	RF_8258 = 3,		/*  3 11a/b/g/n RF */
-	RF_6052 = 4,		/*  4 11b/g/n RF */
-	RF_PSEUDO_11N = 5,	/*  5, It is a temporality RF. */
-	RF_TYPE_MAX
-};
-
 enum rf_path {
 	RF_PATH_A = 0,
 	RF_PATH_B,
@@ -34,12 +23,6 @@ enum rf_path {
 };
 
 #define	TX_1S			0
-#define	TX_2S			1
-#define	TX_3S			2
-#define	TX_4S			3
-
-#define	RF_PATH_MAX_92C_88E		2
-#define	RF_PATH_MAX_90_8812		4	/* Max RF number 90 support */
 
 enum wireless_mode {
 	WIRELESS_MODE_UNKNOWN = 0x00,

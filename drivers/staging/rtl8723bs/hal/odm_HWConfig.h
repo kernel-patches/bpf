@@ -8,9 +8,7 @@
 #ifndef __HALHWOUTSRC_H__
 #define __HALHWOUTSRC_H__
 
-/*  */
 /*  structure and define */
-/*  */
 
 struct phy_rx_agc_info_t {
 	#if (ODM_ENDIAN_TYPE == ODM_ENDIAN_LITTLE)

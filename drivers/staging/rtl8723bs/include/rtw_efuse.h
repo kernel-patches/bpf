@@ -30,13 +30,11 @@ enum {
 
 #define		EFUSE_REPEAT_THRESHOLD_			3
 
-/*  */
 /*	The following is for BT Efuse definition */
-/*  */
 #define		EFUSE_BT_MAX_MAP_LEN		1024
 #define		EFUSE_MAX_BANK			4
 #define		EFUSE_MAX_BT_BANK		(EFUSE_MAX_BANK-1)
-/*  */
+
 /*--------------------------Define Parameters-------------------------------*/
 #define		EFUSE_MAX_WORD_UNIT			4
 
@@ -71,8 +69,7 @@ struct efuse_hal {
 u8 rtw_efuse_calculate_word_counts(u8 word_en);
 u8 rtw_efuse_one_byte_read(struct adapter *padapter, u16 addr, u8 *data);
 
-u8 rtw_efuse_read_1_byte(struct adapter *padapter, u16 Address);
-void rtw_efuse_shadow_map_update(struct adapter *padapter, u8 efuseType);
-void rtw_efuse_shadow_read(struct adapter *padapter, u8 Type, u16 Offset, u32 *Value);
+u8 rtw_efuse_read_1_byte(struct adapter *padapter, u16 address);
+void rtw_efuse_shadow_map_update(struct adapter *padapter, u8 efuse_type);
 
 #endif

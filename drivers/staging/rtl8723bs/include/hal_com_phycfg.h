@@ -97,7 +97,7 @@ s8 phy_get_tx_pwr_lmt(struct adapter *adapter, u32 RegPwrTblSel,
 void PHY_SetTxPowerLimit(struct adapter *Adapter, u8 *Regulation, u8 *Bandwidth,
 			 u8 *RateSection, u8 *RfPath, u8 *Channel, u8 *PowerLimit);
 
-void PHY_ConvertTxPowerLimitToPowerIndex(struct adapter *Adapter);
+void phy_tx_power_limit_to_index(struct adapter *Adapter);
 
 void PHY_InitTxPowerLimit(struct adapter *Adapter);
 

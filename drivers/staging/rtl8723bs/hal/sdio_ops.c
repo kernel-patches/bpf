@@ -7,12 +7,9 @@
 #include <drv_types.h>
 #include <rtl8723b_hal.h>
 
-/*  */
 /*  Description: */
 /*	The following mapping is for SDIO host local register space. */
-/*  */
 /*  Creadted by Roger, 2011.01.31. */
-/*  */
 static void hal_sdio_get_cmd_addr_8723b(struct adapter *adapter, u8 device_id,
 					u32 addr, u32 *cmdaddr)
 {
@@ -562,15 +559,11 @@ static s32 read_interrupt_8723b_sdio(struct adapter *adapter, u32 *phisr)
 	return true;
 }
 
-/*  */
 /*	Description: */
 /*		Initialize SDIO Host Interrupt Mask configuration variables for future use. */
-/*  */
 /*	Assumption: */
 /*		Using SDIO Local register ONLY for configuration. */
-/*  */
 /*	Created by Roger, 2011.02.11. */
-/*  */
 void InitInterrupt8723BSdio(struct adapter *adapter)
 {
 	struct hal_com_data *haldata;
@@ -598,11 +591,9 @@ void rtw_sdio_enable_interrupt(struct adapter *adapter)
 	himr = cpu_to_le32(haldata->sdio_himr);
 	sdio_local_write(adapter, SDIO_REG_HIMR, 4, (u8 *)&himr);
 
-	/*  */
 	/*  <Roger_Notes> There are some C2H CMDs have been sent before system interrupt is enabled, e.g., C2H, CPWM. */
 	/*  So we need to clear all C2H events that FW has notified, otherwise FW won't schedule any commands anymore. */
 	/*  2011.10.19. */
-	/*  */
 	rtw_write8(adapter, REG_C2HEVT_CLEAR, C2H_EVT_HOST_CLOSE);
 }
 
@@ -620,15 +611,11 @@ void rtw_sdio_disable_interrupt(struct adapter *adapter)
 	sdio_local_write(adapter, SDIO_REG_HIMR, 4, (u8 *)&himr);
 }
 
-/*  */
 /*	Description: */
 /*		Using 0x100 to check the power status of FW. */
-/*  */
 /*	Assumption: */
 /*		Using SDIO Local register ONLY for configuration. */
-/*  */
 /*	Created by Isaac, 2013.09.10. */
-/*  */
 u8 CheckIPSStatus(struct adapter *adapter)
 {
 	if (rtw_read8(adapter, 0x100) == 0xEA)
@@ -643,6 +630,13 @@ static struct recv_buf *sd_recv_rxfifo(struct adapter *adapter, u32 size)
 	u8 *readbuf;
 	struct recv_priv *recv_priv;
 	struct recv_buf	*recvbuf;
+
+	/* RX0_REQ_LEN is device-reported; the skb buffer is only
+	 * MAX_RECVBUF_SZ bytes, reject bogus lengths instead of
+	 * overflowing past it.
+	 */
+	if (size > MAX_RECVBUF_SZ)
+		return NULL;
 
 	/*  Patch for some SDIO Host 4 bytes issue */
 	/*  ex. RK3188 */
@@ -826,16 +820,12 @@ void sd_int_hdl(struct adapter *adapter)
 	}
 }
 
-/*  */
 /*	Description: */
 /*		Query SDIO Local register to query current the number of Free TxPacketBuffer page. */
-/*  */
 /*	Assumption: */
 /*		1. Running at PASSIVE_LEVEL */
 /*		2. RT_TX_SPINLOCK is NOT acquired. */
-/*  */
 /*	Created by Roger, 2011.01.28. */
-/*  */
 u8 HalQueryTxBufferStatus8723BSdio(struct adapter *adapter)
 {
 	struct hal_com_data *hal;

@@ -12,9 +12,7 @@
 
 /*  Global var */
 
-/*  */
 /*  functions */
-/*  */
 static void Init_ODM_ComInfo_8723b(struct adapter *Adapter)
 {
 
@@ -23,9 +21,7 @@ static void Init_ODM_ComInfo_8723b(struct adapter *Adapter)
 	struct dm_priv *pdmpriv = &pHalData->dmpriv;
 	u8 cut_ver, fab_ver;
 
-	/*  */
 	/*  Init Value */
-	/*  */
 	memset(pDM_Odm, 0, sizeof(*pDM_Odm));
 
 	pDM_Odm->Adapter = Adapter;
@@ -75,12 +71,6 @@ static void Update_ODM_ComInfo_8723b(struct adapter *Adapter)
 		| ODM_RF_TX_PWR_TRACK
 		| ODM_RF_CALIBRATION
 		;
-
-	/*  */
-	/*  Pointer reference */
-	/*  */
-	/* ODM_CMNINFO_MAC_PHY_MODE pHalData->MacPhyMode92D */
-	/* ODM_CmnInfoHook(pDM_Odm, ODM_CMNINFO_MAC_PHY_MODE,&(pDM_Odm->u8_temp)); */
 
 	ODM_CmnInfoUpdate(pDM_Odm, ODM_CMNINFO_ABILITY, pdmpriv->InitODMFlag);
 
@@ -155,8 +145,6 @@ void rtl8723b_HalDmWatchDog(struct adapter *Adapter)
 		ODM_CmnInfoUpdate(&pHalData->odmpriv, ODM_CMNINFO_LINK, bLinked);
 		ODM_CmnInfoUpdate(&pHalData->odmpriv, ODM_CMNINFO_STATION_STATE, bsta_state);
 
-		/* ODM_CmnInfoUpdate(&pHalData->odmpriv , ODM_CMNINFO_RSSI_MIN, pdmpriv->MinUndecoratedPWDBForDM); */
-
 		bBtDisabled = hal_btcoex_IsBtDisabled(Adapter);
 
 		ODM_CmnInfoUpdate(&pHalData->odmpriv, ODM_CMNINFO_BT_ENABLED,
@@ -216,7 +204,6 @@ void rtl8723b_HalDmWatchDog_in_LPS(struct adapter *Adapter)
 	if (!(pDM_Odm->SupportAbility & ODM_BB_RSSI_MONITOR))
 		goto skip_lps_dm;
 
-	/* ODM_DMWatchdog(&pHalData->odmpriv); */
 	/* Do DIG by RSSI In LPS-32K */
 
       /* 1 Find MIN-RSSI */
@@ -233,7 +220,6 @@ void rtl8723b_HalDmWatchDog_in_LPS(struct adapter *Adapter)
 
 	pDM_Odm->RSSI_Min = pdmpriv->MinUndecoratedPWDBForDM;
 
-	/* if (pDM_DigTable->CurIGValue != pDM_Odm->RSSI_Min) */
 	if (
 		(pDM_DigTable->CurIGValue > pDM_Odm->RSSI_Min + 5) ||
 		(pDM_DigTable->CurIGValue < pDM_Odm->RSSI_Min - 5)

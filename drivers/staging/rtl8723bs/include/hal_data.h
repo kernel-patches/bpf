@@ -12,17 +12,6 @@
 
 #include <hal_sdio.h>
 
-enum rt_ampdu_burst {
-	RT_AMPDU_BURST_NONE	= 0,
-	RT_AMPDU_BURST_92D	= 1,
-	RT_AMPDU_BURST_88E	= 2,
-	RT_AMPDU_BURST_8812_4	= 3,
-	RT_AMPDU_BURST_8812_8	= 4,
-	RT_AMPDU_BURST_8812_12	= 5,
-	RT_AMPDU_BURST_8812_15	= 6,
-	RT_AMPDU_BURST_8723B	= 7,
-};
-
 #define CHANNEL_MAX_NUMBER		(14)	/*  14 is the max channel number */
 #define CHANNEL_MAX_NUMBER_2G		14
 #define MAX_PG_GROUP			13
@@ -58,7 +47,6 @@ struct dm_priv {
 
 	u8 DMFlag;
 	u8 InitDMFlag;
-	/* u8   RSVD_1; */
 
 	u32 InitODMFlag;
 	/*  Upper and Lower Signal threshold for Rate Adaptive */
@@ -90,7 +78,6 @@ struct dm_priv {
 	u8 ThermalValue_IQK;
 	u8 ThermalValue_DPK;
 	u8 bRfPiEnable;
-	/* u8   RSVD_2; */
 
 	/* for APK */
 	u32 APKoutput[2][2];	/* path A/B; output1_1a/output1_2a */
@@ -99,9 +86,6 @@ struct dm_priv {
 	u8 bDPdone;
 	u8 bDPPathAOK;
 	u8 bDPPathBOK;
-	/* u8   RSVD_3; */
-	/* u8   RSVD_4; */
-	/* u8   RSVD_5; */
 
 	/* for IQK */
 	u32 ADDA_backup[IQK_ADDA_REG_NUM];
@@ -120,7 +104,6 @@ struct dm_priv {
 	u8 OFDM_index_HP[2];
 	u8 ThermalValue_HP[HP_THERMAL_NUM];
 	u8 ThermalValue_HP_index;
-	/* u8   RSVD_6; */
 
 	/* for TxPwrTracking2 */
 	s32	RegE94;
@@ -185,7 +168,6 @@ struct hal_com_data {
 	/*  RF: at most 2 = AB = 0/1 */
 	/*  CCK = 0 OFDM = 1 HT-MCS 0-7 = 2 */
 	s8 TxPwrByRateOffset[MAX_RF_PATH_NUM][TX_PWR_BY_RATE_NUM_RATE];
-	/*  */
 
 	/*  Power Limit Table for 2.4G */
 	s8	TxPwrLimit_2_4G[MAX_REGULATION_NUM]
@@ -234,16 +216,11 @@ struct hal_com_data {
 
 	u8 u1ForcedIgiLb;			/*  forced IGI lower bound */
 
-	/*  2010/08/09 MH Add CU power down mode. */
-	bool		pwrdown;
-
 	u8 OutEpQueueSel;
 	u8 OutEpNumber;
 
 	/*  Auto FSM to Turn On, include clock, isolation, power control for MAC only */
 	u8 bMacPwrCtrlOn;
-
-	enum rt_ampdu_burst	AMPDUBurstMode; /* 92C maybe not use, but for compile successfully */
 
 	u32 		sdio_himr;
 	u32 		sdio_hisr;

@@ -37,7 +37,7 @@ void ODM_EdcaTurboInit(void *pDM_VOID)
 	pDM_Odm->DM_EDCA_Table.bCurrentTurboEDCA = false;
 	pDM_Odm->DM_EDCA_Table.bIsCurRDLState = false;
 	Adapter->recvpriv.bIsAnyNonBEPkts = false;
-}	/*  ODM_InitEdcaTurbo */
+}
 
 void odm_EdcaTurboCheck(void *pDM_VOID)
 {
@@ -51,7 +51,7 @@ void odm_EdcaTurboCheck(void *pDM_VOID)
 		return;
 
 	odm_EdcaTurboCheckCE(pDM_Odm);
-}	/*  odm_CheckEdcaTurbo */
+}
 
 void odm_EdcaTurboCheckCE(void *pDM_VOID)
 {

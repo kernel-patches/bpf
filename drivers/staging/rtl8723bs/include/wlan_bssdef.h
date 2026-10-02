@@ -12,11 +12,7 @@
 
 
 #define NDIS_802_11_LENGTH_SSID         32
-#define NDIS_802_11_LENGTH_RATES        8
 #define NDIS_802_11_LENGTH_RATES_EX     16
-
-typedef unsigned char   NDIS_802_11_RATES[NDIS_802_11_LENGTH_RATES];        /*  Set of 8 data rates */
-typedef unsigned char   NDIS_802_11_RATES_EX[NDIS_802_11_LENGTH_RATES_EX];  /*  Set of 16 data rates */
 
 struct ndis_802_11_ssid {
 	u32 ssid_length;
@@ -50,7 +46,7 @@ struct ndis_80211_var_ie {
  * ETH_ALEN + 2 +
  * sizeof (struct ndis_802_11_ssid) + sizeof (u32) +
  * sizeof (long) +
- * sizeof (struct ndis_802_11_conf) + sizeof (NDIS_802_11_RATES_EX) + ie_length
+ * sizeof (struct ndis_802_11_conf) + NDIS_802_11_LENGTH_RATES_EX + ie_length
  *
  * Except for ie_length, all other fields are fixed length. Therefore, we can
  * define a macro to present the partial sum.
@@ -82,14 +78,6 @@ enum {
 	Ndis802_11_EncrypteionWAPI
 };
 
-#define NDIS_802_11_AI_REQFI_CAPABILITIES      1
-#define NDIS_802_11_AI_REQFI_LISTENINTERVAL    2
-#define NDIS_802_11_AI_REQFI_CURRENTAPADDRESS  4
-
-#define NDIS_802_11_AI_RESFI_CAPABILITIES      1
-#define NDIS_802_11_AI_RESFI_STATUSCODE        2
-#define NDIS_802_11_AI_RESFI_ASSOCIATIONID     4
-
 /*  Key mapping keys require a BSSID */
 
 struct ndis_802_11_wep {
@@ -98,13 +86,6 @@ struct ndis_802_11_wep {
 	u32 key_length;     /*  length of key in bytes */
 	u8 key_material[16];/*  variable length depending on above field */
 };
-
-/*  mask for authentication/integrity fields */
-#define NDIS_802_11_AUTH_REQUEST_AUTH_FIELDS        0x0f
-#define NDIS_802_11_AUTH_REQUEST_REAUTH			0x01
-#define NDIS_802_11_AUTH_REQUEST_KEYUPDATE		0x02
-#define NDIS_802_11_AUTH_REQUEST_PAIRWISE_ERROR		0x06
-#define NDIS_802_11_AUTH_REQUEST_GROUP_ERROR		0x0E
 
 /*  MIC check time, 60 seconds. */
 #define MIC_CHECK_TIME	60000000
@@ -142,7 +123,7 @@ struct wlan_bssid_ex {
 	long rssi;/* in dBM, raw data , get from PHY) */
 	struct ndis_802_11_conf configuration;
 	enum nl80211_iftype infrastructure_mode;
-	NDIS_802_11_RATES_EX supported_rates;
+	u8 supported_rates[NDIS_802_11_LENGTH_RATES_EX];
 	struct wlan_phy_info phy_info;
 	u32 ie_length;
 	u8 ies[MAX_IE_SZ];	/* timestamp, beacon interval, and capability information) */
