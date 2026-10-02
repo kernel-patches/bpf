@@ -3283,6 +3283,7 @@ static int rtl8365mb_setup(struct dsa_switch *ds)
 	/* Establish a defined QoS baseline: program the priority-to-queue map
 	 * for the chip's queue count and trust only the port default priority.
 	 */
+	ds->dscp_prio_mapping_is_global = true;
 	ret = rtl8365mb_dcb_init(ds);
 	if (ret)
 		goto out_teardown_irq;
@@ -3452,6 +3453,9 @@ static const struct dsa_switch_ops rtl8365mb_switch_ops = {
 	.port_set_default_prio = rtl8365mb_port_set_default_prio,
 	.port_get_apptrust = rtl8365mb_port_get_apptrust,
 	.port_set_apptrust = rtl8365mb_port_set_apptrust,
+	.port_get_dscp_prio = rtl8365mb_port_get_dscp_prio,
+	.port_add_dscp_prio = rtl8365mb_port_add_dscp_prio,
+	.port_del_dscp_prio = rtl8365mb_port_del_dscp_prio,
 	.port_stp_state_set = rtl8365mb_port_stp_state_set,
 	.port_fast_age = rtl83xx_port_fast_age,
 	.port_fdb_add = rtl83xx_port_fdb_add,

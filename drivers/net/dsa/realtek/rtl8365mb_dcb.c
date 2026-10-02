@@ -54,9 +54,15 @@ static_assert(RTL8365MB_NUM_IPMS == IEEE8021Q_TT_MAX);
 #define RTL8365MB_QOS_PORT_PRI_OFFSET(_p)		(((_p) & 0x3) << 2)
 
 /* Default internal priority for unmarked traffic. Best Effort, to match what
- * an untagged (PCP 0) frame resolves to via ieee8021q_pcp_to_tt().
+ * an untagged (PCP 0) frame and a default-marked (DSCP CS0) frame resolve to
+ * via ieee8021q_pcp_to_tt() and ietf_dscp_to_ieee8021q_tt().
  */
 #define RTL8365MB_QOS_DEFAULT_PRIO			IEEE8021Q_TT_BE
+
+/* DSCP -> internal priority. Global table, four DSCP per register, 3-bit. */
+#define RTL8365MB_QOS_DSCP_PRI_REG(_d)			(0x0867 + ((_d) >> 2))
+#define RTL8365MB_QOS_DSCP_PRI_OFFSET(_d)		(((_d) & 0x3) << 2)
+#define RTL8365MB_DSCP_MAX				64
 
 /* Priority-decision weight tables. Two tables (each port selects one), eight
  * sources, one 8-bit weight each, two sources per register. Higher weight
@@ -140,6 +146,15 @@ static int rtl8365mb_get_field(struct realtek_priv *priv, u32 reg, u32 mask,
 
 	*val = (*val & mask) >> __ffs(mask);
 	return 0;
+}
+
+static int rtl8365mb_qos_set_dscp_prio(struct realtek_priv *priv, u8 dscp,
+				       u8 prio)
+{
+	int off = RTL8365MB_QOS_DSCP_PRI_OFFSET(dscp);
+
+	return rtl8365mb_set_field(priv, RTL8365MB_QOS_DSCP_PRI_REG(dscp),
+				   rtl8365mb_qos_sel_field_mask(off), prio);
 }
 
 static u32 rtl8365mb_qos_pridec_reg(int table, int src)
@@ -234,6 +249,27 @@ static int rtl8365mb_qos_setup_pcp(struct realtek_priv *priv)
 	return 0;
 }
 
+/* Seed the DSCP -> priority table with the standard IETF mapping, so it is
+ * meaningful once a port opts in to trusting DSCP via apptrust.
+ */
+static int rtl8365mb_qos_setup_dscp(struct realtek_priv *priv)
+{
+	int dscp, ret;
+
+	for (dscp = 0; dscp < RTL8365MB_DSCP_MAX; dscp++) {
+		int tt = ietf_dscp_to_ieee8021q_tt(dscp);
+
+		if (tt < 0)
+			return tt;
+
+		ret = rtl8365mb_qos_set_dscp_prio(priv, dscp, tt);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
 int rtl8365mb_dcb_init(struct dsa_switch *ds)
 {
 	struct realtek_priv *priv = ds->priv;
@@ -247,6 +283,10 @@ int rtl8365mb_dcb_init(struct dsa_switch *ds)
 		return ret;
 
 	ret = rtl8365mb_qos_setup_pcp(priv);
+	if (ret)
+		return ret;
+
+	ret = rtl8365mb_qos_setup_dscp(priv);
 	if (ret)
 		return ret;
 
@@ -278,7 +318,7 @@ int rtl8365mb_dcb_init_port(struct dsa_switch *ds, int port)
 	struct realtek_priv *priv = ds->priv;
 
 	/* All ports default to Best Effort: with no source trusted, every port
-	 * treats its traffic as unmarked, matching the default PCP result
+	 * treats its traffic as unmarked, matching the default PCP/DSCP result
 	 * so classification stays consistent once the admin opts a source in.
 	 */
 	return rtl8365mb_set_field(priv, RTL8365MB_QOS_PORT_PRI_REG(port),
@@ -322,6 +362,75 @@ int rtl8365mb_port_set_default_prio(struct dsa_switch *ds, int port, u8 prio)
 
 	return rtl8365mb_set_field(priv, RTL8365MB_QOS_PORT_PRI_REG(port),
 				   rtl8365mb_qos_sel_field_mask(off), tt);
+}
+
+int rtl8365mb_port_get_dscp_prio(struct dsa_switch *ds, int port, u8 dscp)
+{
+	int off = RTL8365MB_QOS_DSCP_PRI_OFFSET(dscp);
+	struct realtek_priv *priv = ds->priv;
+	u32 val;
+	int ret;
+
+	if (dscp >= RTL8365MB_DSCP_MAX)
+		return -EINVAL;
+
+	ret = rtl8365mb_get_field(priv, RTL8365MB_QOS_DSCP_PRI_REG(dscp),
+				  rtl8365mb_qos_sel_field_mask(off), &val);
+	if (ret)
+		return ret;
+
+	/* The register holds the internal priority (an 802.1Q traffic type);
+	 * dcbnl expects an 802.1p priority.
+	 */
+	return ieee8021q_tt_to_pcp(val);
+}
+
+int rtl8365mb_port_add_dscp_prio(struct dsa_switch *ds, int port, u8 dscp,
+				 u8 prio)
+{
+	struct realtek_priv *priv = ds->priv;
+	int tt;
+
+	if (dscp >= RTL8365MB_DSCP_MAX)
+		return -EINVAL;
+
+	if (prio >= IEEE_8021Q_MAX_PRIORITIES)
+		return -ERANGE;
+
+	/* dcbnl passes an 802.1p priority; the register holds the internal
+	 * priority (an 802.1Q traffic type).
+	 */
+	tt = ieee8021q_pcp_to_tt(prio);
+	if (tt < 0)
+		return tt;
+
+	return rtl8365mb_qos_set_dscp_prio(priv, dscp, tt);
+}
+
+int rtl8365mb_port_del_dscp_prio(struct dsa_switch *ds, int port, u8 dscp,
+				 u8 prio)
+{
+	struct realtek_priv *priv = ds->priv;
+	int tt, ret;
+
+	if (dscp >= RTL8365MB_DSCP_MAX)
+		return -EINVAL;
+
+	/* dcbnl replaces an entry by adding the new one before deleting the
+	 * old, so only revert if the table still holds the removed priority.
+	 */
+	ret = rtl8365mb_port_get_dscp_prio(ds, port, dscp);
+	if (ret < 0)
+		return ret;
+	if (ret != prio)
+		return 0;
+
+	/* Revert to the standard IETF default mapping for this DSCP. */
+	tt = ietf_dscp_to_ieee8021q_tt(dscp);
+	if (tt < 0)
+		return tt;
+
+	return rtl8365mb_qos_set_dscp_prio(priv, dscp, tt);
 }
 
 /* Read which sources a decision table trusts (weight != 0), indexed like
