@@ -410,6 +410,7 @@ int kvm_vm_ioctl_check_extension(struct kvm *kvm, long ext)
 	case KVM_CAP_COUNTER_OFFSET:
 	case KVM_CAP_ARM_WRITABLE_IMP_ID_REGS:
 	case KVM_CAP_ARM_SEA_TO_USER:
+	case KVM_CAP_PRE_FAULT_MEMORY:
 		r = 1;
 		break;
 	case KVM_CAP_SET_GUEST_DEBUG2:
@@ -451,7 +452,7 @@ int kvm_vm_ioctl_check_extension(struct kvm *kvm, long ext)
 		r = system_supports_mte();
 		break;
 	case KVM_CAP_STEAL_TIME:
-		r = kvm_arm_pvtime_supported();
+		r = kvm_arm_pvtime_supported(kvm);
 		break;
 	case KVM_CAP_ARM_EL1_32BIT:
 		r = cpus_have_final_cap(ARM64_HAS_32BIT_EL1);
@@ -595,7 +596,7 @@ void kvm_arch_vcpu_destroy(struct kvm_vcpu *vcpu)
 	if (!is_protected_kvm_enabled())
 		kvm_mmu_free_memory_cache(&vcpu->arch.mmu_page_cache);
 	else
-		free_hyp_memcache(&vcpu->arch.pkvm_memcache);
+		free_hyp_memcache(&vcpu->arch.stage2_mc);
 	kvm_timer_vcpu_terminate(vcpu);
 	kvm_pmu_vcpu_destroy(vcpu);
 	kvm_vgic_vcpu_destroy(vcpu);
@@ -774,23 +775,28 @@ void kvm_arch_vcpu_put(struct kvm_vcpu *vcpu)
 	vcpu->cpu = -1;
 }
 
-static void __kvm_arm_vcpu_power_off(struct kvm_vcpu *vcpu)
+static void __kvm_arm_vcpu_power_off(struct kvm_vcpu *vcpu, u32 mp_state)
 {
-	WRITE_ONCE(vcpu->arch.mp_state.mp_state, KVM_MP_STATE_STOPPED);
+	WRITE_ONCE(vcpu->arch.mp_state.mp_state, mp_state);
 	kvm_make_request(KVM_REQ_SLEEP, vcpu);
 	kvm_vcpu_kick(vcpu);
 }
 
+/* The guest's own CPU_OFF: EL2 has already powered the vCPU off. */
 void kvm_arm_vcpu_power_off(struct kvm_vcpu *vcpu)
 {
+	u32 mp_state = vcpu_is_protected(vcpu) ? KVM_MP_STATE_UNINITIALIZED : KVM_MP_STATE_STOPPED;
+
 	spin_lock(&vcpu->arch.mp_state_lock);
-	__kvm_arm_vcpu_power_off(vcpu);
+	__kvm_arm_vcpu_power_off(vcpu, mp_state);
 	spin_unlock(&vcpu->arch.mp_state_lock);
 }
 
 bool kvm_arm_vcpu_stopped(struct kvm_vcpu *vcpu)
 {
-	return READ_ONCE(vcpu->arch.mp_state.mp_state) == KVM_MP_STATE_STOPPED;
+	u32 mp_state = READ_ONCE(vcpu->arch.mp_state.mp_state);
+
+	return mp_state == KVM_MP_STATE_STOPPED || mp_state == KVM_MP_STATE_UNINITIALIZED;
 }
 
 static void kvm_arm_vcpu_suspend(struct kvm_vcpu *vcpu)
@@ -803,6 +809,12 @@ static void kvm_arm_vcpu_suspend(struct kvm_vcpu *vcpu)
 static bool kvm_arm_vcpu_suspended(struct kvm_vcpu *vcpu)
 {
 	return READ_ONCE(vcpu->arch.mp_state.mp_state) == KVM_MP_STATE_SUSPENDED;
+}
+
+/* Only the guest's CPU_ON may start a vCPU EL2 holds powered off. */
+bool kvm_pkvm_vcpu_is_powered_off(struct kvm_vcpu *vcpu)
+{
+	return READ_ONCE(vcpu->arch.mp_state.mp_state) == KVM_MP_STATE_UNINITIALIZED;
 }
 
 int kvm_arch_vcpu_ioctl_get_mpstate(struct kvm_vcpu *vcpu,
@@ -822,12 +834,24 @@ int kvm_arch_vcpu_ioctl_set_mpstate(struct kvm_vcpu *vcpu,
 
 	switch (mp_state->mp_state) {
 	case KVM_MP_STATE_RUNNABLE:
+		if (kvm_pkvm_vcpu_is_powered_off(vcpu)) {
+			ret = -EPERM;
+			break;
+		}
+
 		WRITE_ONCE(vcpu->arch.mp_state, *mp_state);
 		break;
 	case KVM_MP_STATE_STOPPED:
-		__kvm_arm_vcpu_power_off(vcpu);
+		/* Keep EL2's off record: STOPPED over it would let RUNNABLE through. */
+		if (!kvm_pkvm_vcpu_is_powered_off(vcpu))
+			__kvm_arm_vcpu_power_off(vcpu, KVM_MP_STATE_STOPPED);
 		break;
 	case KVM_MP_STATE_SUSPENDED:
+		if (kvm_pkvm_vcpu_is_powered_off(vcpu)) {
+			ret = -EPERM;
+			break;
+		}
+
 		kvm_arm_vcpu_suspend(vcpu);
 		break;
 	default:
@@ -953,7 +977,7 @@ int kvm_arch_vcpu_run_pid_change(struct kvm_vcpu *vcpu)
 			return ret;
 	}
 
-	ret = kvm_finalize_sys_regs(vcpu);
+	ret = kvm_vcpu_finalize_sys_regs(vcpu);
 	if (ret)
 		return ret;
 
@@ -983,7 +1007,7 @@ int kvm_arch_vcpu_run_pid_change(struct kvm_vcpu *vcpu)
 			return ret;
 	}
 
-	ret = vgic_v5_finalize_ppi_state(kvm);
+	ret = vgic_v5_finalize_ppi_state(vcpu);
 	if (ret)
 		return ret;
 
@@ -1160,6 +1184,14 @@ static int check_vcpu_requests(struct kvm_vcpu *vcpu)
 			preempt_disable();
 			vgic_v4_put(vcpu);
 			vgic_v4_load(vcpu);
+			preempt_enable();
+		}
+
+		if (kvm_check_request(KVM_REQ_RELOAD_GICv5, vcpu)) {
+			/* The IRS enable bit was changed */
+			preempt_disable();
+			vgic_v5_put(vcpu);
+			vgic_v5_load(vcpu);
 			preempt_enable();
 		}
 
@@ -1607,6 +1639,7 @@ static unsigned long system_supported_vcpu_features(void)
 	return features;
 }
 
+#if ARM64_S390_COMMON == 1
 static int kvm_vcpu_init_check_features(struct kvm_vcpu *vcpu,
 					const struct kvm_vcpu_init *init)
 {
@@ -1623,6 +1656,19 @@ static int kvm_vcpu_init_check_features(struct kvm_vcpu *vcpu,
 
 	if (features & ~system_supported_vcpu_features())
 		return -EINVAL;
+
+	/* Reject features EL2 would drop when it creates the hyp VM. */
+	if (vcpu_is_protected(vcpu)) {
+		DECLARE_BITMAP(allowed, KVM_VCPU_MAX_FEATURES);
+
+		kvm_pkvm_vcpu_allowed_features(vcpu->kvm, allowed);
+		if (!bitmap_subset(&features, allowed, KVM_VCPU_MAX_FEATURES))
+			return -EINVAL;
+
+		/* EL2 implements PSCI 1.1; the host must not dispatch as 0.1. */
+		if (!test_bit(KVM_ARM_VCPU_PSCI_0_2, &features))
+			return -EINVAL;
+	}
 
 	/*
 	 * For now make sure that both address/generic pointer authentication
@@ -1659,6 +1705,8 @@ static bool kvm_vcpu_init_changed(struct kvm_vcpu *vcpu,
 	return !bitmap_equal(vcpu->kvm->arch.vcpu_features, &features,
 			     KVM_VCPU_MAX_FEATURES);
 }
+
+#endif /* ARM64_S390_COMMON == 1 */
 
 static int kvm_setup_vcpu(struct kvm_vcpu *vcpu)
 {
@@ -1779,7 +1827,7 @@ static int kvm_arch_vcpu_ioctl_vcpu_init(struct kvm_vcpu *vcpu,
 	spin_lock(&vcpu->arch.mp_state_lock);
 
 	if (power_off)
-		__kvm_arm_vcpu_power_off(vcpu);
+		__kvm_arm_vcpu_power_off(vcpu, KVM_MP_STATE_STOPPED);
 	else
 		WRITE_ONCE(vcpu->arch.mp_state.mp_state, KVM_MP_STATE_RUNNABLE);
 
@@ -1856,6 +1904,24 @@ static int kvm_arm_vcpu_set_events(struct kvm_vcpu *vcpu,
 	return __kvm_arm_vcpu_set_events(vcpu, events);
 }
 
+/*
+ * Once a protected vCPU has run, the host copy holds the boot state the VMM
+ * wrote plus what the exit handlers copy out, and EL2 has read mp_state,
+ * which it does only at hyp vCPU creation.
+ */
+static long pkvm_filter_vcpu_ioctl(struct kvm_vcpu *vcpu, unsigned int ioctl)
+{
+	switch (ioctl) {
+	case KVM_ARM_VCPU_INIT:
+	case KVM_SET_ONE_REG:
+	case KVM_GET_ONE_REG:
+		if (vcpu_is_protected(vcpu) && vcpu_has_run_once(vcpu))
+			return -EPERM;
+	}
+
+	return 0;
+}
+
 long kvm_arch_vcpu_ioctl(struct file *filp,
 			 unsigned int ioctl, unsigned long arg)
 {
@@ -1863,6 +1929,10 @@ long kvm_arch_vcpu_ioctl(struct file *filp,
 	void __user *argp = (void __user *)arg;
 	struct kvm_device_attr attr;
 	long r;
+
+	r = pkvm_filter_vcpu_ioctl(vcpu, ioctl);
+	if (r)
+		return r;
 
 	switch (ioctl) {
 	case KVM_ARM_VCPU_INIT: {
@@ -2626,6 +2696,10 @@ static void kvm_hyp_init_symbols(void)
 	kvm_nvhe_sym(__icache_flags) = __icache_flags;
 	kvm_nvhe_sym(kvm_arm_vmid_bits) = kvm_arm_vmid_bits;
 
+	kvm_nvhe_sym(spectre_v2_state) = arm64_get_spectre_v2_state();
+	kvm_nvhe_sym(spectre_v4_state) = arm64_get_spectre_v4_state();
+	kvm_nvhe_sym(spectre_bhb_state) = arm64_get_spectre_bhb_state();
+
 	/* Propagate the FGT state to the nVHE side */
 	kvm_nvhe_sym(hfgrtr_masks)  = hfgrtr_masks;
 	kvm_nvhe_sym(hfgwtr_masks)  = hfgwtr_masks;
@@ -2918,6 +2992,8 @@ static int __init init_hyp_mode(void)
 			kvm_err("Failed to init hyp memory protection\n");
 			goto out_err;
 		}
+
+		pkvm_selftests();
 	}
 
 	return 0;
