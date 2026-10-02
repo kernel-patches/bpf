@@ -41,6 +41,7 @@ config PINCTRL_AMB
 	bool "Ambarella pin controller support"
 	depends on ARCH_AMBARELLA || COMPILE_TEST
 	depends on HAS_IOMEM
+	depends on OF
 	default y if ARCH_AMBARELLA
 	select GENERIC_PINCONF
 	select GENERIC_PINCTRL_GROUPS
