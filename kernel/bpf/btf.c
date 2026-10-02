@@ -5752,6 +5752,10 @@ static int btf_func_check(struct btf_verifier_env *env,
 		return -EINVAL;
 	}
 
+	/* Rust leaves out names of some arguments of static functions */
+	if (btf_func_linkage(t) == BTF_FUNC_STATIC)
+		return 0;
+
 	args = (const struct btf_param *)(proto_type + 1);
 	nr_args = btf_type_vlen(proto_type);
 	for (i = 0; i < nr_args; i++) {

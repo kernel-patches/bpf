@@ -2793,7 +2793,7 @@ static struct btf_raw_test raw_tests[] = {
 },
 
 {
-	.descr = "func (Some arg has no name)",
+	.descr = "func (Some arg of global func has no name)",
 	.raw_types = {
 		BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4),	/* [1] */
 		BTF_TYPE_INT_ENC(0, 0, 0, 32, 4),		/* [2] */
@@ -2802,7 +2802,8 @@ static struct btf_raw_test raw_tests[] = {
 			BTF_FUNC_PROTO_ARG_ENC(NAME_TBD, 1),
 			BTF_FUNC_PROTO_ARG_ENC(0, 2),
 		/* void func(int a, unsigned int) */
-		BTF_FUNC_ENC(NAME_TBD, 3),			/* [4] */
+		BTF_TYPE_ENC(NAME_TBD,				/* [4] */
+			     BTF_INFO_ENC(BTF_KIND_FUNC, 0, BTF_FUNC_GLOBAL), 3),
 		BTF_END_RAW,
 	},
 	.str_sec = "\0a\0func",
