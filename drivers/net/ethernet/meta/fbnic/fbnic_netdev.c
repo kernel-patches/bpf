@@ -86,6 +86,13 @@ static int fbnic_stop(struct net_device *netdev)
 {
 	struct fbnic_net *fbn = netdev_priv(netdev);
 
+	/* Suspend frees NAPI vectors but keeps num_napi for resume.
+	 * If recovery fails, netif_running() remains set; a later stop
+	 * must not walk the freed vectors again.
+	 */
+	if (!fbn->napi[0])
+		return 0;
+
 	fbnic_mac_free_irq(fbn->fbd);
 	phylink_suspend(fbn->phylink, fbnic_bmc_present(fbn->fbd));
 
@@ -702,8 +709,8 @@ static const struct netdev_stat_ops fbnic_stat_ops = {
 	.get_base_stats		= fbnic_get_base_stats,
 };
 
-void fbnic_reset_queues(struct fbnic_net *fbn,
-			unsigned int tx, unsigned int rx)
+static void fbnic_reset_queues(struct fbnic_net *fbn,
+			       unsigned int tx, unsigned int rx)
 {
 	struct fbnic_dev *fbd = fbn->fbd;
 	unsigned int max_napis;
