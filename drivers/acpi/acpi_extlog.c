@@ -156,19 +156,7 @@ static void extlog_print_pcie(struct cper_sec_pcie *pcie_err,
 
 	aer_severity = cper_severity_to_aer(severity);
 
-	/*
-	 * struct pcie_tlp_log is larger than the hardware layout, so aer_info
-	 * only maps onto the struct up to the four Header Log DWORDs. Copy that
-	 * much, then place the TLP Prefix Log from where the hardware keeps it.
-	 * Everything else stays zero: nothing reads root_command, root_status or
-	 * the error source IDs, and header_len and flit are software-only.
-	 */
-	memcpy(&aer_regs, pcie_err->aer_info,
-	       offsetof(struct aer_capability_regs, header_log) +
-	       PCIE_STD_NUM_TLP_HEADERLOG * sizeof(u32));
-	memcpy(aer_regs.header_log.prefix,
-	       pcie_err->aer_info + PCI_ERR_PREFIX_LOG,
-	       sizeof(aer_regs.header_log.prefix));
+	aer_cap_regs_unpack(&aer_regs, pcie_err->aer_info, sizeof(pcie_err->aer_info));
 
 	domain = pcie_err->device_id.segment;
 	bus = pcie_err->device_id.bus;

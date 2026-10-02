@@ -668,20 +668,7 @@ static void ghes_handle_aer(struct acpi_hest_generic_data *gdata)
 		if (!aer_info)
 			return;
 
-		/*
-		 * Map aer_info onto the struct as extlog_print_pcie() does:
-		 * copy up to the four Header Log DWORDs, then place the TLP
-		 * Prefix Log from where the hardware keeps it. The rest stays
-		 * zero, so firmware cannot drive the pcie_print_tlp_log() loop
-		 * over dw[] out of bounds.
-		 */
-		memset(aer_info, 0, sizeof(struct aer_capability_regs));
-		memcpy(aer_info, pcie_err->aer_info,
-		       offsetof(struct aer_capability_regs, header_log) +
-		       PCIE_STD_NUM_TLP_HEADERLOG * sizeof(u32));
-		memcpy(aer_info->header_log.prefix,
-		       pcie_err->aer_info + PCI_ERR_PREFIX_LOG,
-		       sizeof(aer_info->header_log.prefix));
+		aer_cap_regs_unpack(aer_info, pcie_err->aer_info, sizeof(pcie_err->aer_info));
 
 		aer_recover_queue(pcie_err->device_id.segment,
 				  pcie_err->device_id.bus,
