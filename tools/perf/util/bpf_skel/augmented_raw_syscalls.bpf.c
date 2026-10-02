@@ -494,13 +494,15 @@ static bool pid_filter__has(struct pids_filtered *pids, pid_t pid)
 
 static bool task_traced(void)
 {
-	u64 pid_tgid = bpf_get_current_pid_tgid();
-	pid_t pid = uses_tgid ? pid_tgid >> 32 : (pid_t)pid_tgid;
+	u64 pid_tgid;
+	pid_t pid;
 	bool *traced;
 
 	if (!has_pids_to_trace)
 		return true;
 
+	pid_tgid = bpf_get_current_pid_tgid();
+	pid = uses_tgid ? pid_tgid >> 32 : (pid_t)pid_tgid;
 	traced = bpf_map_lookup_elem(&pids_to_trace, &pid);
 	return traced && *traced;
 }
