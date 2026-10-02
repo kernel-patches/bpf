@@ -927,12 +927,18 @@ static u32 stmmac_get_rxfh_key_size(struct net_device *dev)
 {
 	struct stmmac_priv *priv = netdev_priv(dev);
 
+	if (!stmmac_rss_is_supported(priv))
+		return 0;
+
 	return sizeof(priv->rss.key);
 }
 
 static u32 stmmac_get_rxfh_indir_size(struct net_device *dev)
 {
 	struct stmmac_priv *priv = netdev_priv(dev);
+
+	if (!stmmac_rss_is_supported(priv))
+		return 0;
 
 	return ARRAY_SIZE(priv->rss.table);
 }
