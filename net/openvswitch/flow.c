@@ -189,6 +189,7 @@ static bool arphdr_ok(struct sk_buff *skb)
 static int check_iphdr(struct sk_buff *skb)
 {
 	unsigned int nh_ofs = skb_network_offset(skb);
+	const struct iphdr *nh;
 	unsigned int ip_len;
 	int err;
 
@@ -201,7 +202,11 @@ static int check_iphdr(struct sk_buff *skb)
 		     skb->len < nh_ofs + ip_len))
 		return -EINVAL;
 
-	skb_set_transport_header(skb, nh_ofs + ip_len);
+	nh = ip_hdr(skb);
+
+	if (!(nh->frag_off & htons(IP_OFFSET)))
+		skb_set_transport_header(skb, nh_ofs + ip_len);
+
 	return 0;
 }
 

@@ -322,10 +322,12 @@ static int pop_nsh(struct sk_buff *skb, struct sw_flow_key *key)
 static void update_ip_l4_checksum(struct sk_buff *skb, struct iphdr *nh,
 				  __be32 addr, __be32 new_addr)
 {
-	int transport_len = skb->len - skb_transport_offset(skb);
+	int transport_len;
 
 	if (nh->frag_off & htons(IP_OFFSET))
 		return;
+
+	transport_len = skb->len - skb_transport_offset(skb);
 
 	if (nh->protocol == IPPROTO_TCP) {
 		if (likely(transport_len >= sizeof(struct tcphdr)))
