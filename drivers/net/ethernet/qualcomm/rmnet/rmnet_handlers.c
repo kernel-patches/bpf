@@ -230,7 +230,7 @@ rx_handler_result_t rmnet_rx_handler(struct sk_buff **pskb)
 	if (!skb)
 		goto done;
 
-	if (skb_linearize(skb)) {
+	if (!pskb_may_pull(skb, sizeof(struct rmnet_map_header))) {
 		kfree_skb(skb);
 		goto done;
 	}
