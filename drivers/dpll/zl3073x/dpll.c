@@ -852,7 +852,7 @@ zl3073x_dpll_output_pin_esync_get(const struct dpll_pin *dpll_pin,
 	struct zl3073x_dpll_pin *pin = pin_priv;
 	const struct zl3073x_synth *synth;
 	const struct zl3073x_out *out;
-	u32 synth_freq, out_freq;
+	u32 synth_freq;
 	u8 out_id;
 
 	guard(mutex)(&zldpll->lock);
@@ -864,37 +864,27 @@ zl3073x_dpll_output_pin_esync_get(const struct dpll_pin *dpll_pin,
 	 * for N-division is also used for the esync divider so both cannot
 	 * be used.
 	 */
-	if (zl3073x_out_is_ndiv(out))
+	if (zl3073x_out_is_ndiv(out) || !pin->esync_control)
 		return -EOPNOTSUPP;
 
 	/* Get attached synth frequency */
 	synth = zl3073x_synth_state_get(zldev, zl3073x_out_synth_get(out));
 	synth_freq = zl3073x_synth_freq_get(synth);
-	out_freq = synth_freq / out->div;
 
-	if (!pin->esync_control || out_freq <= 1)
+	/* The esync is not supported for 1 Hz base frequency */
+	if (synth_freq / out->div <= 1)
 		return -EOPNOTSUPP;
 
 	esync->range = esync_freq_ranges;
 	esync->range_num = ARRAY_SIZE(esync_freq_ranges);
 
-	if (zl3073x_out_clock_type_get(out) != ZL_OUTPUT_MODE_CLOCK_TYPE_ESYNC) {
-		/* No need to read esync data if it is not enabled */
+	if (zl3073x_out_esync_is_enabled(out)) {
+		esync->freq = 1;
+		esync->pulse = 25;
+	} else {
 		esync->freq = 0;
 		esync->pulse = 0;
-
-		return 0;
 	}
-
-	/* Compute esync frequency */
-	esync->freq = out_freq / out->esync_n_period;
-
-	/* By comparing the esync_pulse_width to the half of the pulse width
-	 * the esync pulse percentage can be determined.
-	 * Note that half pulse width is in units of half synth cycles, which
-	 * is why it reduces down to be output_div.
-	 */
-	esync->pulse = (50 * out->esync_n_width) / out->div;
 
 	return 0;
 }
@@ -926,32 +916,17 @@ zl3073x_dpll_output_pin_esync_set(const struct dpll_pin *dpll_pin,
 	if (zl3073x_out_is_ndiv(&out))
 		return -EOPNOTSUPP;
 
-	/* Update clock type in output mode */
-	if (freq)
-		zl3073x_out_clock_type_set(&out,
-					   ZL_OUTPUT_MODE_CLOCK_TYPE_ESYNC);
-	else
-		zl3073x_out_clock_type_set(&out,
-					   ZL_OUTPUT_MODE_CLOCK_TYPE_NORMAL);
-
-	/* If esync is being disabled just write mailbox and finish */
-	if (!freq)
+	if (!freq) {
+		zl3073x_out_esync_disable(&out);
 		return zl3073x_out_state_set(zldev, out_id, &out);
+	}
 
 	/* Get attached synth frequency */
 	synth = zl3073x_synth_state_get(zldev, zl3073x_out_synth_get(&out));
 	synth_freq = zl3073x_synth_freq_get(synth);
 
-	/* Compute and update esync period */
-	out.esync_n_period = synth_freq / (u32)freq / out.div;
-
-	/* Half of the period in units of 1/2 synth cycle can be represented by
-	 * the output_div. To get the supported esync pulse width of 25% of the
-	 * period the output_div can just be divided by 2. Note that this
-	 * assumes that output_div is even, otherwise some resolution will be
-	 * lost.
-	 */
-	out.esync_n_width = out.div / 2;
+	/* Enable 1PPS eSync for this pin frequency */
+	zl3073x_out_esync_enable(&out, synth_freq / out.div);
 
 	/* Commit output configuration */
 	return zl3073x_out_state_set(zldev, out_id, &out);
@@ -1008,6 +983,22 @@ zl3073x_dpll_output_pin_frequency_set(const struct dpll_pin *dpll_pin,
 
 		/* For 50/50 duty cycle the divisor is equal to width */
 		out.width = new_div;
+
+		/* The embedded sync period and width are computed relative to
+		 * the output carrier so they have to be adjusted to follow the
+		 * new frequency.
+		 */
+		if (zl3073x_out_esync_is_enabled(&out)) {
+			if (frequency == 1) {
+				/* Disable eSync if the new frequency is 1 Hz */
+				zl3073x_out_esync_disable(&out);
+			} else {
+				/* Update esync period and width according to
+				 * the new frequency.
+				 */
+				zl3073x_out_esync_enable(&out, synth_freq / out.div);
+			}
+		}
 
 		/* Commit output configuration */
 		return zl3073x_out_state_set(zldev, out_id, &out);
