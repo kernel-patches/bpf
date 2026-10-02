@@ -43,11 +43,6 @@ extern void pm_dbg_update_time(struct powerdomain *pwrdm, int prev);
 #define pm_dbg_update_time(pwrdm, prev) do {} while (0);
 #endif /* CONFIG_PM_DEBUG */
 
-/* 24xx */
-extern void omap24xx_cpu_suspend(u32 dll_ctrl, void __iomem *sdrc_dlla_ctrl,
-					void __iomem *sdrc_power);
-extern unsigned int omap24xx_cpu_suspend_sz;
-
 /* 3xxx */
 extern void omap34xx_cpu_suspend(int save_state);
 

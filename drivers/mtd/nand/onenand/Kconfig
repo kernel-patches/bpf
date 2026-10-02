@@ -23,8 +23,8 @@ config MTD_ONENAND_GENERIC
 	  Support for OneNAND flash via platform device driver.
 
 config MTD_ONENAND_OMAP2
-	tristate "OneNAND on OMAP2/OMAP3 support"
-	depends on ARCH_OMAP2 || ARCH_OMAP3 || (COMPILE_TEST && ARM)
+	tristate "OneNAND on OMAP3 support"
+	depends on ARCH_OMAP3 || (COMPILE_TEST && ARM)
 	depends on OF
 	depends on OMAP_GPMC
 	help

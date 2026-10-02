@@ -69,49 +69,6 @@ static void __iomem *imx3_ioremap_caller(phys_addr_t phys_addr, size_t size,
 	return __arm_ioremap_caller(phys_addr, size, mtype, caller);
 }
 
-#ifdef CONFIG_SOC_IMX31
-static struct map_desc mx31_io_desc[] __initdata = {
-	imx_map_entry(MX31, X_MEMC, MT_DEVICE),
-	imx_map_entry(MX31, AVIC, MT_DEVICE_NONSHARED),
-	imx_map_entry(MX31, AIPS1, MT_DEVICE_NONSHARED),
-	imx_map_entry(MX31, AIPS2, MT_DEVICE_NONSHARED),
-	imx_map_entry(MX31, SPBA0, MT_DEVICE_NONSHARED),
-};
-
-/*
- * This function initializes the memory map. It is called during the
- * system startup to create static physical to virtual memory mappings
- * for the IO modules.
- */
-void __init mx31_map_io(void)
-{
-	iotable_init(mx31_io_desc, ARRAY_SIZE(mx31_io_desc));
-}
-
-static void imx31_idle(void)
-{
-	int reg = imx_readl(mx3_ccm_base + MXC_CCM_CCMR);
-	reg &= ~MXC_CCM_CCMR_LPM_MASK;
-	imx_writel(reg, mx3_ccm_base + MXC_CCM_CCMR);
-
-	imx3_idle();
-}
-
-void __init imx31_init_early(void)
-{
-	struct device_node *np;
-
-	mxc_set_cpu_type(MXC_CPU_MX31);
-	arch_ioremap_caller = imx3_ioremap_caller;
-	arm_pm_idle = imx31_idle;
-	np = of_find_compatible_node(NULL, NULL, "fsl,imx31-ccm");
-	mx3_ccm_base = of_iomap(np, 0);
-	of_node_put(np);
-	BUG_ON(!mx3_ccm_base);
-}
-#endif /* ifdef CONFIG_SOC_IMX31 */
-
-#ifdef CONFIG_SOC_IMX35
 static struct map_desc mx35_io_desc[] __initdata = {
 	imx_map_entry(MX35, X_MEMC, MT_DEVICE),
 	imx_map_entry(MX35, AVIC, MT_DEVICE_NONSHARED),
@@ -147,4 +104,3 @@ void __init imx35_init_early(void)
 	of_node_put(np);
 	BUG_ON(!mx3_ccm_base);
 }
-#endif /* ifdef CONFIG_SOC_IMX35 */
