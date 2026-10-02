@@ -3593,6 +3593,21 @@ static struct btf_raw_test raw_tests[] = {
 	},
 	BTF_STR_SEC("\0?foo"),
 },
+{
+	.descr = "names of Rust types and functions are ok",
+	.raw_types = {
+		BTF_TYPE_INT_ENC(NAME_NTH(1), 0, 0, 32, 4),	/* [1] */
+		BTF_STRUCT_ENC(NAME_NTH(2), 1, 4),		/* [2] */
+		BTF_MEMBER_ENC(NAME_NTH(3), 1, 0),
+		BTF_FWD_ENC(NAME_NTH(4), 0),			/* [3] */
+		BTF_TYPEDEF_ENC(NAME_NTH(5), 2),		/* [4] */
+		BTF_FUNC_PROTO_ENC(0, 1),			/* [5] */
+			BTF_FUNC_PROTO_ARG_ENC(NAME_NTH(6), 1),
+		BTF_FUNC_ENC(NAME_NTH(7), 5),			/* [6] */
+		BTF_END_RAW,
+	},
+	BTF_STR_SEC("\0u32\0Option<&str>\0__0\0*const str\0{impl#9}<[u8; 4]>\0self\0fmt<str>"),
+},
 
 {
 	.descr = "float test #1, well-formed",
