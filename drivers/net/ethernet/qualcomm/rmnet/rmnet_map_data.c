@@ -411,7 +411,7 @@ struct sk_buff *rmnet_map_deaggregate(struct sk_buff *skb,
 	if (!packet_len)
 		return NULL;
 
-	skbn = alloc_skb(packet_len + RMNET_MAP_DEAGGR_SPACING, GFP_ATOMIC);
+	skbn = netdev_alloc_skb(skb->dev, packet_len + RMNET_MAP_DEAGGR_SPACING);
 	if (!skbn)
 		return NULL;
 
