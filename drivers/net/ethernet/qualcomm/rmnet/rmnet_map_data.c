@@ -1193,7 +1193,7 @@ static void reset_aggr_params(struct rmnet_port *port)
 	port->skbagg_head = NULL;
 	port->agg_count = 0;
 	port->agg_state = 0;
-	memset(&port->agg_time, 0, sizeof(struct timespec64));
+	port->agg_time = 0;
 }
 
 static void rmnet_send_skb(struct rmnet_port *port, struct sk_buff *skb)
@@ -1248,21 +1248,23 @@ static enum hrtimer_restart rmnet_map_flush_tx_packet_queue(struct hrtimer *t)
 unsigned int rmnet_map_tx_aggregate(struct sk_buff *skb, struct rmnet_port *port,
 				    struct net_device *orig_dev)
 {
-	struct timespec64 diff, last;
+	u64 diff, last, now;
 	unsigned int len = skb->len;
 	struct sk_buff *agg_skb;
 	int size;
 
 	spin_lock_bh(&port->agg_lock);
-	memcpy(&last, &port->agg_last, sizeof(struct timespec64));
-	ktime_get_real_ts64(&port->agg_last);
+	last = port->agg_last;
+
+	now = ktime_get_mono_fast_ns();
+	port->agg_last = now;
 
 	if (!port->skbagg_head) {
 		/* Check to see if we should agg first. If the traffic is very
 		 * sparse, don't aggregate.
 		 */
 new_packet:
-		diff = timespec64_sub(port->agg_last, last);
+		diff = now - last;
 		size = port->egress_agg_params.bytes - skb->len;
 
 		if (size < 0) {
@@ -1271,8 +1273,7 @@ new_packet:
 			return 0;
 		}
 
-		if (diff.tv_sec > 0 || diff.tv_nsec > RMNET_AGG_BYPASS_TIME_NSEC ||
-		    size == 0)
+		if (diff > RMNET_AGG_BYPASS_TIME_NSEC || size == 0)
 			goto no_aggr;
 
 		port->skbagg_head = skb_copy_expand(skb, 0, size, GFP_ATOMIC);
@@ -1282,11 +1283,12 @@ new_packet:
 		dev_kfree_skb_any(skb);
 		port->skbagg_head->protocol = htons(ETH_P_MAP);
 		port->agg_count = 1;
-		ktime_get_real_ts64(&port->agg_time);
+		port->agg_time = now;
 		skb_frag_list_init(port->skbagg_head);
 		goto schedule;
 	}
-	diff = timespec64_sub(port->agg_last, port->agg_time);
+
+	diff = now - port->agg_time;
 	size = port->egress_agg_params.bytes - port->skbagg_head->len;
 
 	if (skb->len > size) {
@@ -1310,7 +1312,7 @@ new_packet:
 	port->skbagg_tail = skb;
 	port->agg_count++;
 
-	if (diff.tv_sec > 0 || diff.tv_nsec > port->egress_agg_params.time_nsec ||
+	if (diff > port->egress_agg_params.time_nsec ||
 	    port->agg_count >= port->egress_agg_params.count ||
 	    port->skbagg_head->len == port->egress_agg_params.bytes) {
 		agg_skb = port->skbagg_head;

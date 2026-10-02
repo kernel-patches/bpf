@@ -47,8 +47,8 @@ struct rmnet_port {
 	struct sk_buff *skbagg_tail;
 	int agg_state;
 	u8 agg_count;
-	struct timespec64 agg_time;
-	struct timespec64 agg_last;
+	u64 agg_time;
+	u64 agg_last;
 	struct hrtimer hrtimer;
 	struct work_struct agg_wq;
 };
