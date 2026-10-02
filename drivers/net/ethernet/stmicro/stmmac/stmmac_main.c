@@ -3669,7 +3669,7 @@ static void stmmac_mac_config_rx_queues_routing(struct stmmac_priv *priv)
 
 static void stmmac_mac_config_rss(struct stmmac_priv *priv)
 {
-	if (!priv->dma_cap.rssen || !priv->plat->rss_en) {
+	if (!stmmac_rss_is_supported(priv)) {
 		priv->rss.enable = false;
 		return;
 	}
@@ -8244,7 +8244,7 @@ static int __stmmac_dvr_probe(struct device *device,
 	for (i = 0; i < ARRAY_SIZE(priv->rss.table); i++)
 		priv->rss.table[i] = ethtool_rxfh_indir_default(i, rxq);
 
-	if (priv->dma_cap.rssen && priv->plat->rss_en)
+	if (stmmac_rss_is_supported(priv))
 		ndev->features |= NETIF_F_RXHASH;
 
 	ndev->vlan_features |= ndev->features;

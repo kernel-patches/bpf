@@ -440,6 +440,11 @@ struct timespec64 stmmac_calc_tas_basetime(ktime_t old_base_time,
 					   ktime_t current_time,
 					   u64 cycle_time);
 
+static inline bool stmmac_rss_is_supported(const struct stmmac_priv *priv)
+{
+	return priv->dma_cap.rssen && priv->plat->rss_en;
+}
+
 #if IS_ENABLED(CONFIG_STMMAC_SELFTESTS)
 void stmmac_selftest_run(struct net_device *dev,
 			 struct ethtool_test *etest, u64 *buf);
