@@ -1130,9 +1130,9 @@ policy and the underlying scheduler. From the point of view of the cpu controlle
 processes can be categorized as follows:
 
 * Processes under the fair-class scheduler
-* Processes under a BPF scheduler with the ``cgroup_set_weight`` callback
+* Processes under a BPF scheduler with the corresponding ``cgroup_set_*`` callback
 * Everything else: ``SCHED_{FIFO,RR,DEADLINE}`` and processes under a BPF scheduler
-  without the ``cgroup_set_weight`` callback
+  without the corresponding ``cgroup_set_*`` callback
 
 For details on when a process is under the fair-class scheduler or a BPF scheduler,
 check out :ref:`Documentation/scheduler/sched-ext.rst <sched-ext>`.
@@ -1223,7 +1223,9 @@ will be referred to. All time durations are in microseconds.
 	$PERIOD duration.  "max" for $MAX indicates no limit.  If only
 	one number is written, $MAX is updated.
 
-	This file affects only processes under the fair-class scheduler.
+	This file affects only processes under the fair-class scheduler and a BPF
+	scheduler with the ``cgroup_set_bandwidth`` callback depending on what
+	the callback actually does.
 
   cpu.max.burst
 	A read-write single value file which exists on non-root
@@ -1231,7 +1233,9 @@ will be referred to. All time durations are in microseconds.
 
 	The burst in the range [0, $MAX].
 
-	This file affects only processes under the fair-class scheduler.
+	This file affects only processes under the fair-class scheduler and a BPF
+	scheduler with the ``cgroup_set_bandwidth`` callback depending on what
+	the callback actually does.
 
   cpu.pressure
 	A read-write nested-keyed file.
@@ -1283,7 +1287,9 @@ will be referred to. All time durations are in microseconds.
 	own relative priorities, but the cgroup itself will be treated as
 	very low priority relative to its peers.
 
-	This file affects only processes under the fair-class scheduler.
+	This file affects only processes under the fair-class scheduler and a BPF
+	scheduler with the ``cgroup_set_idle`` callback depending on what the
+	callback actually does.
 
 Memory
 ------
@@ -2809,6 +2815,11 @@ RDMA
 The "rdma" controller regulates the distribution and accounting of
 RDMA resources.
 
+RDMA devices from all network namespaces are listed. Each line starts with
+the device name. If more than one device has the same name, ``index=N``
+follows the name, where ``N`` is the system-wide RDMA device index, unique
+among registered devices.
+
 RDMA Interface Files
 ~~~~~~~~~~~~~~~~~~~~
 
@@ -2817,7 +2828,11 @@ RDMA Interface Files
 	except root that describes current configured resource limit
 	for a RDMA/IB device.
 
-	Lines are keyed by device name and are not ordered.
+	Lines are keyed by device name and are not ordered. A write may
+	include ``index=N`` after the device name. The index is optional
+	when the name is globally unique. If multiple devices have that
+	name, the index is required and a write without it fails with
+	``-ENOTUNIQ``.
 	Each line contains space separated resource name and its configured
 	limit that can be distributed.
 
@@ -2832,6 +2847,10 @@ RDMA Interface Files
 
 	  mlx4_0 hca_handle=2 hca_object=2000
 	  ocrdma1 hca_handle=3 hca_object=max
+
+	For devices with duplicate names, select the device by index::
+
+	  echo "rxe0 index=5 hca_handle=2" > rdma.max
 
   rdma.current
 	A read-only file that describes current resource usage.
@@ -2917,6 +2936,12 @@ DMEM Interface Files
 
 	The semantics are the same as for the memory cgroup controller, and are
 	calculated in the same way.
+
+  dmem.peak
+	A read-only nested-keyed file that exists on non-root cgroups.
+
+	The max device memory usage recorded for the cgroup and its
+	descendants since the creation of the cgroup for each region.
 
   dmem.capacity
 	A read-only file that describes maximum region capacity.
@@ -3045,7 +3070,7 @@ resources (res_a and res_b) are registered then:
 	change in this file generates a file modified event. All fields in
 	this file are hierarchical.
 
-	  max
+	  <res>.max
 		The number of times the cgroup's resource usage was
 		about to go over the max boundary.
 
