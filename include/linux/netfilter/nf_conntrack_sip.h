@@ -143,7 +143,7 @@ struct nf_nat_sip_hooks {
 				 unsigned int *datalen,
 				 unsigned int matchoff,
 				 unsigned int matchlen,
-				 u_int16_t port);
+				 u16 port);
 
 	unsigned int (*sdp_session)(struct sk_buff *skb,
 				    unsigned int protoff,

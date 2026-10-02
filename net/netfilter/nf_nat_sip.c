@@ -410,7 +410,7 @@ static unsigned int nf_nat_sip_expect(struct sk_buff *skb, unsigned int protoff,
 	enum ip_conntrack_dir dir = CTINFO2DIR(ctinfo);
 	struct nf_ct_sip_master *ct_sip_info = nfct_help_data(ct);
 	union nf_inet_addr newaddr;
-	u_int16_t port;
+	u16 port;
 	__be16 srcport;
 	char buffer[INET6_ADDRSTRLEN + sizeof("[]:nnnnn")];
 	unsigned int buflen;
@@ -536,7 +536,7 @@ static unsigned int nf_nat_sdp_port(struct sk_buff *skb, unsigned int protoff,
 				    const char **dptr, unsigned int *datalen,
 				    unsigned int matchoff,
 				    unsigned int matchlen,
-				    u_int16_t port)
+				    u16 port)
 {
 	char buffer[sizeof("nnnnn")];
 	unsigned int buflen;
@@ -601,7 +601,7 @@ static unsigned int nf_nat_sdp_media(struct sk_buff *skb, unsigned int protoff,
 	enum ip_conntrack_info ctinfo;
 	struct nf_conn *ct = nf_ct_get(skb, &ctinfo);
 	enum ip_conntrack_dir dir = CTINFO2DIR(ctinfo);
-	u_int16_t port;
+	u16 port;
 
 	/* Connection will come from reply */
 	if (nf_inet_addr_cmp(&ct->tuplehash[dir].tuple.src.u3,

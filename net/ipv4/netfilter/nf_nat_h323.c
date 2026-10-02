@@ -186,7 +186,7 @@ static int nat_rtp_rtcp(struct sk_buff *skb, struct nf_conn *ct,
 	struct nf_ct_h323_master *info = nfct_help_data(ct);
 	int dir = CTINFO2DIR(ctinfo);
 	int i;
-	u_int16_t nated_port;
+	u16 nated_port;
 
 	if (!info)
 		return -1;
@@ -282,7 +282,7 @@ static int nat_t120(struct sk_buff *skb, struct nf_conn *ct,
 		    struct nf_conntrack_expect *exp)
 {
 	int dir = CTINFO2DIR(ctinfo);
-	u_int16_t nated_port = ntohs(port);
+	u16 nated_port = ntohs(port);
 
 	/* Set expectations for NAT */
 	exp->saved_proto.tcp.port = exp->tuple.dst.u.tcp.port;
@@ -321,7 +321,7 @@ static int nat_h245(struct sk_buff *skb, struct nf_conn *ct,
 {
 	struct nf_ct_h323_master *info = nfct_help_data(ct);
 	int dir = CTINFO2DIR(ctinfo);
-	u_int16_t nated_port = ntohs(port);
+	u16 nated_port = ntohs(port);
 
 	if (!info)
 		return -1;
@@ -402,7 +402,7 @@ static int nat_q931(struct sk_buff *skb, struct nf_conn *ct,
 {
 	struct nf_ct_h323_master *info = nfct_help_data(ct);
 	int dir = CTINFO2DIR(ctinfo);
-	u_int16_t nated_port = ntohs(port);
+	u16 nated_port = ntohs(port);
 	union nf_inet_addr addr;
 
 	if (!info)
@@ -488,7 +488,7 @@ static int nat_callforwarding(struct sk_buff *skb, struct nf_conn *ct,
 			      struct nf_conntrack_expect *exp)
 {
 	int dir = CTINFO2DIR(ctinfo);
-	u_int16_t nated_port;
+	u16 nated_port;
 
 	/* Set expectations for NAT */
 	exp->saved_addr = exp->tuple.dst.u3;

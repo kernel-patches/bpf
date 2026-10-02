@@ -130,7 +130,7 @@ pptp_outbound_pkt(struct sk_buff *skb,
 	struct nf_ct_pptp_master *ct_pptp_info;
 	struct nf_conn_nat *nat = nfct_nat(ct);
 	struct nf_nat_pptp *nat_pptp_info;
-	u_int16_t msg;
+	u16 msg;
 	__be16 new_callid;
 	unsigned int cid_off;
 
@@ -243,7 +243,7 @@ pptp_inbound_pkt(struct sk_buff *skb,
 {
 	const struct nf_nat_pptp *nat_pptp_info;
 	struct nf_conn_nat *nat = nfct_nat(ct);
-	u_int16_t msg;
+	u16 msg;
 	__be16 new_pcid;
 	unsigned int pcid_off;
 
