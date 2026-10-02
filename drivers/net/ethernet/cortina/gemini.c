@@ -1066,21 +1066,31 @@ static void geth_freeq_release_pages(struct gemini_ethernet *geth)
 	xa_destroy(&geth->freeq_mappings);
 }
 
+static unsigned int
+geth_freeq_page_slots(struct gemini_ethernet *geth, unsigned int order)
+{
+	unsigned int fpp_order = PAGE_SHIFT - geth->freeq_frag_order;
+	unsigned int slots = 1 << (order - fpp_order);
+
+	if (geth->port0 && geth->port0->netdev)
+		slots += 1 << geth->port0->rxq_order;
+	if (geth->port1 && geth->port1->netdev)
+		slots += 1 << geth->port1->rxq_order;
+
+	return slots;
+}
+
 static int geth_setup_freeq(struct gemini_ethernet *geth)
 {
 	unsigned int fpp_order = PAGE_SHIFT - geth->freeq_frag_order;
 	unsigned int len = 1 << geth->freeq_order;
-	unsigned int pages = len >> fpp_order;
-	unsigned int page_slots = pages;
+	unsigned int page_slots;
 	unsigned int expected;
 	union queue_threshold qt;
 	union dma_skb_size skbsz;
 	unsigned int filled;
 
-	if (geth->port0)
-		page_slots += 1 << geth->port0->rxq_order;
-	if (geth->port1)
-		page_slots += 1 << geth->port1->rxq_order;
+	page_slots = geth_freeq_page_slots(geth, geth->freeq_order);
 
 	geth->freeq_ring = dma_alloc_coherent(geth->dev,
 		sizeof(*geth->freeq_ring) << geth->freeq_order,
@@ -1193,6 +1203,7 @@ static int geth_resize_freeq(struct gemini_ethernet_port *port)
 	struct gemini_ethernet_port *other_port;
 	struct net_device *other_netdev;
 	unsigned int new_size = 0;
+	unsigned int page_slots;
 	unsigned int new_order;
 	int ret;
 
@@ -1205,9 +1216,6 @@ static int geth_resize_freeq(struct gemini_ethernet_port *port)
 	else
 		other_port = geth->port0;
 	other_netdev = other_port ? other_port->netdev : NULL;
-
-	if (other_netdev && netif_running(other_netdev))
-		return -EBUSY;
 
 	new_size = 1 << (port->rxq_order + 1);
 	netdev_dbg(netdev, "port %d size: %d order %d\n",
@@ -1225,8 +1233,15 @@ static int geth_resize_freeq(struct gemini_ethernet_port *port)
 	new_order = min(15, ilog2(new_size - 1) + 1);
 	dev_dbg(geth->dev, "set shared queue to size %d order %d\n",
 		new_size, new_order);
-	if (geth->freeq_ring && geth->freeq_order == new_order)
-		return 0;
+	if (geth->freeq_ring) {
+		page_slots = geth_freeq_page_slots(geth, geth->freeq_order);
+		if (geth->freeq_order >= new_order &&
+		    geth->num_freeq_pages >= page_slots)
+			return 0;
+	}
+
+	if (other_netdev && netif_running(other_netdev))
+		return -EBUSY;
 
 	disable_irq(geth->port1->irq);
 	geth_set_freeq_irq(geth, false);
@@ -2008,10 +2023,7 @@ static int gmac_open(struct net_device *netdev)
 	phy_start(netdev->phydev);
 
 	err = geth_resize_freeq(port);
-	/* It's fine if it's just busy, the other port has set up
-	 * the freeq in that case.
-	 */
-	if (err && (err != -EBUSY)) {
+	if (err) {
 		netdev_err(netdev, "could not resize freeq\n");
 		goto err_stop_phy;
 	}
@@ -2370,14 +2382,20 @@ static int gmac_set_ringparam(struct net_device *netdev,
 			      struct netlink_ext_ack *extack)
 {
 	struct gemini_ethernet_port *port = netdev_priv(netdev);
+	unsigned int old_rxq_order;
 	int err = 0;
 
 	if (netif_running(netdev))
 		return -EBUSY;
 
 	if (rp->rx_pending) {
+		old_rxq_order = port->rxq_order;
 		port->rxq_order = min(15, ilog2(rp->rx_pending - 1) + 1);
 		err = geth_resize_freeq(port);
+		if (err) {
+			port->rxq_order = old_rxq_order;
+			return err;
+		}
 	}
 	if (rp->tx_pending) {
 		port->txq_order = min(15, ilog2(rp->tx_pending - 1) + 1);
