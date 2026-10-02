@@ -1848,6 +1848,11 @@ static int sctp_sendmsg_to_asoc(struct sctp_association *asoc,
 				err = -ESRCH;
 				goto err;
 			}
+			if (unlikely(sinfo->sinfo_stream >=
+				     asoc->stream.outcnt)) {
+				err = -EINVAL;
+				goto err;
+			}
 		} else {
 			wait_connect = true;
 		}
