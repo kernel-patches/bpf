@@ -12,9 +12,23 @@ menuconfig MCTP
 	  devices, you'll want to enable a driver for a specific hardware
 	  channel.
 
+config MCTP_ENABLE_ALL_FOR_KUNIT
+	bool "Enable all optional MCTP features for KUnit tests"
+	depends on MCTP=y && KUNIT=y
+	select MCTP_FLOWS
+	help
+	  Enable all optional MCTP features covered by KUnit tests, even
+	  when no transport needs them. Currently this selects MCTP_FLOWS
+	  so the two flow cases can run.
+
+	  Without this option, the core suite remains available; the flow
+	  cases skip unless a transport enables flow support.
+
+	  You still need to enable MCTP_TEST, either individually or through
+	  KUNIT_ALL_TESTS.
+
 config MCTP_TEST
         bool "MCTP core tests" if !KUNIT_ALL_TESTS
-        select MCTP_FLOWS
         depends on MCTP=y && KUNIT=y
         default KUNIT_ALL_TESTS
 
