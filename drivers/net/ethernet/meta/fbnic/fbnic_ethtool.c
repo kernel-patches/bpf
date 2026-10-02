@@ -1643,6 +1643,13 @@ static int fbnic_set_channels(struct net_device *netdev,
 		return -EINVAL;
 
 	if (!netif_running(netdev)) {
+		unsigned int rxq = ch->rx_count + ch->combined_count;
+		unsigned int txq = ch->tx_count + ch->combined_count;
+
+		err = netif_set_real_num_queues(netdev, txq, rxq);
+		if (err)
+			return err;
+
 		fbnic_set_queues(fbn, ch, max_napis);
 		fbnic_reset_indir_tbl(fbn);
 		return 0;
