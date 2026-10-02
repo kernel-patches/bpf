@@ -18,7 +18,7 @@
 #include "am33xx.h"
 #include "omap54xx.h"
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 #include <linux/bitops.h>
 #include <linux/of.h>
@@ -442,4 +442,4 @@ level(__##fn);
 #define cpu_is_ti816x()		soc_is_ti816x()
 #define cpu_is_ti81xx()		soc_is_ti81xx()
 
-#endif	/* __ASSEMBLY__ */
+#endif	/* __ASSEMBLER__ */

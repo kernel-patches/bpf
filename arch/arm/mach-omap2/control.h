@@ -18,7 +18,7 @@
 
 #include "am33xx.h"
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 #define OMAP343X_CTRL_REGADDR(reg)					\
 		OMAP2_L4_IO_ADDRESS(OMAP343X_CTRL_BASE + (reg))
 #define AM33XX_CTRL_REGADDR(reg)					\
@@ -28,7 +28,7 @@
 		OMAP2_L4_IO_ADDRESS(OMAP343X_CTRL_BASE + (reg))
 #define AM33XX_CTRL_REGADDR(reg)					\
 		AM33XX_L4_WK_IO_ADDRESS(AM33XX_SCM_BASE + (reg))
-#endif /* __ASSEMBLY__ */
+#endif /* __ASSEMBLER__ */
 
 /*
  * As elsewhere, the "OMAP2_" prefix indicates that the macro is valid for
@@ -447,7 +447,7 @@
 #define		FEAT_NEON_NONE		1
 
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 #ifdef CONFIG_ARCH_OMAP2PLUS
 extern u8 omap_ctrl_readb(u16 offset);
 extern u16 omap_ctrl_readw(u16 offset);
@@ -478,7 +478,7 @@ int omap_control_init(void);
 #define omap_ctrl_writel(x, y)		WARN_ON(1)
 #define omap4_ctrl_pad_writel(x, y)	WARN_ON(1)
 #endif
-#endif	/* __ASSEMBLY__ */
+#endif	/* __ASSEMBLER__ */
 
 #endif /* __ARCH_ARM_MACH_OMAP2_CONTROL_H */
 

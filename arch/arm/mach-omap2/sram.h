@@ -3,7 +3,7 @@
  * Interface for functions that need to be run in internal SRAM
  */
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 extern void omap3_sram_restore_context(void);
 
@@ -17,7 +17,7 @@ extern void omap_push_sram_idle(void);
 static inline void omap_push_sram_idle(void) {}
 #endif /* CONFIG_PM */
 
-#endif /* __ASSEMBLY__ */
+#endif /* __ASSEMBLER__ */
 
 /*
  * OMAP2+: define the SRAM PA addresses.
