@@ -1444,6 +1444,9 @@ static noinline_for_stack int ethtool_get_rxfh(struct net_device *dev,
 	if (ops->get_rxfh_key_size)
 		rxfh_dev.key_size = ops->get_rxfh_key_size(dev);
 
+	if (!rxfh_dev.indir_size && !rxfh_dev.key_size)
+		return -EOPNOTSUPP;
+
 	if (copy_from_user(&rxfh, useraddr, sizeof(rxfh)))
 		return -EFAULT;
 	user_indir_size = rxfh.indir_size;
@@ -1553,6 +1556,9 @@ static noinline_for_stack int ethtool_set_rxfh(struct net_device *dev,
 		dev_indir_size = ops->get_rxfh_indir_size(dev);
 	if (ops->get_rxfh_key_size)
 		dev_key_size = ops->get_rxfh_key_size(dev);
+
+	if (!dev_indir_size && !dev_key_size)
+		return -EOPNOTSUPP;
 
 	if (copy_from_user(&rxfh, useraddr, sizeof(rxfh)))
 		return -EFAULT;

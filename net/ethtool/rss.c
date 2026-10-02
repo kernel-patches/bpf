@@ -129,6 +129,9 @@ rss_get_data_alloc(struct net_device *dev, struct rss_reply_data *data)
 	if (ops->get_rxfh_key_size)
 		data->hkey_size = ops->get_rxfh_key_size(dev);
 
+	if (!data->indir_size && !data->hkey_size)
+		return -EOPNOTSUPP;
+
 	indir_bytes = data->indir_size * sizeof(u32);
 	total_size = indir_bytes + data->hkey_size;
 	rss_config = kzalloc(total_size, GFP_KERNEL);
@@ -449,7 +452,7 @@ rss_dump_one_dev(struct sk_buff *skb, struct netlink_callback *cb,
 
 	if (!ctx->ctx_idx) {
 		ret = rss_dump_one_ctx(skb, cb, dev, 0);
-		if (ret)
+		if (ret && ret != -EOPNOTSUPP)
 			return ret;
 		ctx->ctx_idx++;
 	}
@@ -457,7 +460,7 @@ rss_dump_one_dev(struct sk_buff *skb, struct netlink_callback *cb,
 	for (; xa_find(&dev->ethtool->rss_ctx, &ctx->ctx_idx,
 		       ULONG_MAX, XA_PRESENT); ctx->ctx_idx++) {
 		ret = rss_dump_one_ctx(skb, cb, dev, ctx->ctx_idx);
-		if (ret)
+		if (ret && ret != -EOPNOTSUPP)
 			return ret;
 	}
 	ctx->ctx_idx = ctx->start_ctx;
