@@ -901,16 +901,6 @@ static bool btf_name_offset_valid(const struct btf *btf, u32 offset)
 	return offset < btf->hdr.str_len;
 }
 
-static bool __btf_name_char_ok(char c, bool first)
-{
-	if ((first ? !isalpha(c) :
-		     !isalnum(c)) &&
-	    c != '_' &&
-	    c != '.')
-		return false;
-	return true;
-}
-
 const char *btf_str_by_offset(const struct btf *btf, u32 offset)
 {
 	while (offset < btf->start_str_off)
@@ -923,20 +913,21 @@ const char *btf_str_by_offset(const struct btf *btf, u32 offset)
 	return NULL;
 }
 
+/* Names in BTF of Rust are not C identifiers. Allow any printable character */
 static bool btf_name_valid_identifier(const struct btf *btf, u32 offset)
 {
 	/* offset must be valid */
 	const char *src = btf_str_by_offset(btf, offset);
 	const char *src_limit;
 
-	if (!__btf_name_char_ok(*src, true))
+	if (!isprint(*src))
 		return false;
 
 	/* set a limit on identifier length */
 	src_limit = src + KSYM_NAME_LEN;
 	src++;
 	while (*src && src < src_limit) {
-		if (!__btf_name_char_ok(*src, false))
+		if (!isprint(*src))
 			return false;
 		src++;
 	}
