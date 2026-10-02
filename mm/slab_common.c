@@ -415,6 +415,9 @@ static struct kmem_cache *kmem_buckets_cache __ro_after_init;
  *			 allocations via kmem_buckets_alloc()
  * @name: A prefix string which is used in /proc/slabinfo to identify this
  *	  cache. The individual caches with have their sizes as the suffix.
+ * @align: The required alignment for the objects, or 0 to give each cache
+ *	   the alignment of the kmalloc cache of the same size, as a caller
+ *	   moving from kmalloc() may depend on.
  * @flags: SLAB flags (see kmem_cache_create() for details).
  * @useroffset: Starting offset within an allocation that may be copied
  *		to/from userspace.
@@ -429,7 +432,8 @@ static struct kmem_cache *kmem_buckets_cache __ro_after_init;
  * subsequent calls to kmem_buckets_alloc() will fall back to kmalloc().
  * (i.e. callers only need to check for NULL on failure.)
  */
-kmem_buckets *kmem_buckets_create(const char *name, slab_flags_t flags,
+kmem_buckets *kmem_buckets_create(const char *name, unsigned int align,
+				  slab_flags_t flags,
 				  unsigned int useroffset,
 				  unsigned int usersize,
 				  void (*ctor)(void *))
@@ -487,7 +491,8 @@ kmem_buckets *kmem_buckets_create(const char *name, slab_flags_t flags,
 			if (WARN_ON(!cache_name))
 				goto fail;
 			(*b)[aligned_idx] = kmem_cache_create_usercopy(cache_name, size,
-					0, flags, cache_useroffset,
+					align ?: kmalloc_caches[KMALLOC_NORMAL][idx]->align,
+					flags, cache_useroffset,
 					cache_usersize, ctor);
 			kfree(cache_name);
 			if (WARN_ON(!(*b)[aligned_idx]))

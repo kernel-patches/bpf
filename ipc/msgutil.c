@@ -43,7 +43,7 @@ static kmem_buckets *msg_buckets __ro_after_init;
 
 static int __init init_msg_buckets(void)
 {
-	msg_buckets = kmem_buckets_create("msg_msg", SLAB_ACCOUNT,
+	msg_buckets = kmem_buckets_create("msg_msg", 0, SLAB_ACCOUNT,
 					  sizeof(struct msg_msg),
 					  DATALEN_MSG, NULL);
 

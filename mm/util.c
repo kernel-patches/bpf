@@ -199,7 +199,7 @@ static kmem_buckets *user_buckets __ro_after_init;
 
 static int __init init_user_buckets(void)
 {
-	user_buckets = kmem_buckets_create("memdup_user", 0, 0, INT_MAX, NULL);
+	user_buckets = kmem_buckets_create("memdup_user", 0, 0, 0, INT_MAX, NULL);
 
 	return 0;
 }
