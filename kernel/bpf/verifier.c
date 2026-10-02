@@ -15571,8 +15571,14 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env, struct bpf_insn
 	u32 dst = insn->dst_reg;
 	const char *reason;
 	int ret, bounds_ret;
+	bool to_scalar;
 
 	dst_reg = &regs[dst];
+	/*
+	 * Only += and -= keep a pointer. Any other op makes a number of it,
+	 * which is fine when the program may see values of pointers anyway.
+	 */
+	to_scalar = opcode != BPF_ADD && opcode != BPF_SUB && env->allow_ptr_leaks;
 
 	if ((known && (smin_val != smax_val || umin_val != umax_val)) ||
 	    smin_val > smax_val || umin_val > umax_val) {
@@ -15583,7 +15589,7 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env, struct bpf_insn
 		return 0;
 	}
 
-	if (BPF_CLASS(insn->code) != BPF_ALU64) {
+	if (BPF_CLASS(insn->code) != BPF_ALU64 && !to_scalar) {
 		/* 32-bit ALU ops on pointers produce (meaningless) scalars */
 		if (opcode == BPF_SUB && env->allow_ptr_leaks) {
 			__mark_reg_unknown(env, dst_reg);
@@ -15647,6 +15653,11 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env, struct bpf_insn
 			env, env->insn_idx, ptr_regno, "pointer arithmetic is not allowed", reason,
 			"Do not change this pointer's offset; use it only in operations accepted for its kind.");
 		return -EACCES;
+	}
+
+	if (to_scalar) {
+		__mark_reg_unknown(env, dst_reg);
+		return 0;
 	}
 
 	/* For 'scalar += pointer', dst_reg inherits the complete pointer

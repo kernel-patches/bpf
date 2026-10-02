@@ -22,8 +22,8 @@ struct {
 
 SEC("socket")
 __description("map element value illegal alu op, 1")
-__failure __msg("R0 bitwise operator &= on pointer")
-__failure_unpriv
+__failure __msg("R0 invalid mem access 'scalar'")
+__failure_unpriv __msg_unpriv("R0 bitwise operator &= on pointer")
 __naked void value_illegal_alu_op_1(void)
 {
 	asm volatile ("					\
@@ -70,8 +70,8 @@ l0_%=:	exit;						\
 
 SEC("socket")
 __description("map element value illegal alu op, 3")
-__failure __msg("R0 pointer arithmetic with /= operator")
-__failure_unpriv
+__failure __msg("R0 invalid mem access 'scalar'")
+__failure_unpriv __msg_unpriv("R0 pointer arithmetic with /= operator")
 __naked void value_illegal_alu_op_3(void)
 {
 	asm volatile ("					\
