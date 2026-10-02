@@ -238,7 +238,7 @@ Options
 			any
 				v9fs does single attach and performs all
 				operations as one user
-			clien
+			client
 				 ACL based access check on the 9p client
 			         side for access validation
 
