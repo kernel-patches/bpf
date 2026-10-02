@@ -7829,6 +7829,13 @@ Kernel parameters
 
 			NB: Both the mapped address and size must be page aligned for the architecture.
 
+			Multiple trace_instance= options can be specified to
+			create multiple instances. If the same instance name is
+			specified more than once, the latter one will override
+			any earlier definitions for that instance. This allows
+			overriding an instance configuration that was defined
+			earlier on the command line or via bootconfig.
+
 			See also Documentation/trace/debugging.rst
 
 

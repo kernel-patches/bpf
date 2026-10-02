@@ -178,3 +178,18 @@ instance without stopping the trace.
 Note that this "backup" instance is readonly, and will be removed automatically
 if you clear the trace data or read out all trace data from the "trace_pipe"
 or the "trace_pipe_raw" files.
+
+Overriding trace instances
+--------------------------
+
+Multiple ``trace_instance=`` options can be specified on the kernel command
+line to create multiple instances. If the same instance name is specified
+more than once, the latter definition will override any previous definitions
+for that instance.
+
+This is useful when an instance configuration is defined in bootconfig, but
+needs to be overridden or modified from the bootloader command line (for
+example, to change the enabled events or add flags like ``traceoff``)::
+
+  trace_instance=boot_map^traceoff@trace
+
