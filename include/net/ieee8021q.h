@@ -10,8 +10,8 @@
  * enum ieee8021q_traffic_type - 802.1Q traffic type priority values (802.1Q-2022)
  *
  * @IEEE8021Q_TT_BK: Background
- * @IEEE8021Q_TT_BE: Best Effort (default). According to 802.1Q-2022, BE is 0
- * but has higher priority than BK which is 1.
+ * @IEEE8021Q_TT_BE: Best Effort (default). According to 802.1Q-2022 (Annex I,
+ * Table I-2), BE is 0 but has higher priority than BK which is 1.
  * @IEEE8021Q_TT_EE: Excellent Effort
  * @IEEE8021Q_TT_CA: Critical Applications
  * @IEEE8021Q_TT_VI: Video, < 100 ms latency and jitter
@@ -38,11 +38,17 @@ enum ieee8021q_traffic_type {
 #if IS_ENABLED(CONFIG_NET_IEEE8021Q_HELPERS)
 
 int ietf_dscp_to_ieee8021q_tt(u8 dscp);
+int ieee8021q_pcp_to_tt(u8 pcp);
 int ieee8021q_tt_to_tc(enum ieee8021q_traffic_type tt, unsigned int num_queues);
 
 #else
 
 static inline int ietf_dscp_to_ieee8021q_tt(u8 dscp)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int ieee8021q_pcp_to_tt(u8 pcp)
 {
 	return -EOPNOTSUPP;
 }

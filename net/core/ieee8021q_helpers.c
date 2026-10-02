@@ -222,3 +222,44 @@ int ietf_dscp_to_ieee8021q_tt(u8 dscp)
 	return SIMPLE_IETF_DSCP_TO_IEEE8021Q_TT(dscp);
 }
 EXPORT_SYMBOL_GPL(ietf_dscp_to_ieee8021q_tt);
+
+/**
+ * ieee8021q_pcp_to_tt - Map an IEEE 802.1Q PCP to a traffic type
+ * @pcp: IEEE 802.1Q Priority Code Point value
+ *
+ * Decode @pcp to its IEEE 802.1Q traffic type per Table I-7 ("Priority Code
+ * Point decoding") for the 8P0D encoding, where all eight PCP values are
+ * priorities and none carries drop eligibility. It is nearly the identity,
+ * except PCP 0 (Best Effort) and PCP 1 (Background) map to swapped traffic
+ * types: Background is lower priority than Best Effort despite the higher PCP
+ * value (Table I-2: BE = priority 0, BK = priority 1).
+ *
+ * The 7P1D/6P2D/5P3D encodings, whose lower PCP values carry drop eligibility,
+ * are the other rows of Table I-7 and are not decoded here.
+ *
+ * Return: the traffic type, or a negative value on error.
+ */
+int ieee8021q_pcp_to_tt(u8 pcp)
+{
+	switch (pcp) {
+	case 0:
+		return IEEE8021Q_TT_BE;
+	case 1:
+		return IEEE8021Q_TT_BK;
+	case 2:
+		return IEEE8021Q_TT_EE;
+	case 3:
+		return IEEE8021Q_TT_CA;
+	case 4:
+		return IEEE8021Q_TT_VI;
+	case 5:
+		return IEEE8021Q_TT_VO;
+	case 6:
+		return IEEE8021Q_TT_IC;
+	case 7:
+		return IEEE8021Q_TT_NC;
+	}
+
+	return -EINVAL;
+}
+EXPORT_SYMBOL_GPL(ieee8021q_pcp_to_tt);
