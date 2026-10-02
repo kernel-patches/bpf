@@ -629,11 +629,21 @@ virtio_transport_seqpacket_allow(struct vsock_sock *vsk, u32 remote_cid)
 	return seqpacket_allow;
 }
 
+/*
+ * Keep a bounded run of packets for one socket under a single socket lock.
+ * Limit packet count and payload size to bound the work done while locked.
+ */
+#define VIRTIO_TRANSPORT_RX_BATCH_MAX_PKTS	64
+#define VIRTIO_TRANSPORT_RX_BATCH_MAX_BYTES	(64 * 1024)
+
 static void virtio_transport_rx_work(struct work_struct *work)
 {
 	struct virtio_vsock *vsock =
 		container_of(work, struct virtio_vsock, rx_work);
 	struct virtqueue *vq;
+	struct virtio_transport_rx_batch batch = {};
+	unsigned int batch_pkts = 0;
+	size_t batch_bytes = 0;
 
 	mutex_lock(&vsock->rx_lock);
 
@@ -648,6 +658,7 @@ static void virtio_transport_rx_work(struct work_struct *work)
 			unsigned int len, payload_len;
 			struct virtio_vsock_hdr *hdr;
 			struct sk_buff *skb;
+			struct sock *old_batch_sk;
 
 			if (!virtio_transport_more_replies(vsock)) {
 				/* Stop rx until the device processes already
@@ -666,6 +677,9 @@ static void virtio_transport_rx_work(struct work_struct *work)
 			/* Drop short/long packets */
 			if (unlikely(len < sizeof(*hdr) ||
 				     len > virtio_vsock_skb_len(skb))) {
+				virtio_transport_rx_batch_finish(&batch);
+				batch_pkts = 0;
+				batch_bytes = 0;
 				kfree_skb(skb);
 				continue;
 			}
@@ -673,6 +687,9 @@ static void virtio_transport_rx_work(struct work_struct *work)
 			hdr = virtio_vsock_hdr(skb);
 			payload_len = le32_to_cpu(hdr->len);
 			if (unlikely(payload_len > len - sizeof(*hdr))) {
+				virtio_transport_rx_batch_finish(&batch);
+				batch_pkts = 0;
+				batch_bytes = 0;
 				kfree_skb(skb);
 				continue;
 			}
@@ -680,16 +697,45 @@ static void virtio_transport_rx_work(struct work_struct *work)
 			if (payload_len)
 				virtio_vsock_skb_put(skb, payload_len);
 
+			if (batch.sk &&
+			    payload_len > VIRTIO_TRANSPORT_RX_BATCH_MAX_BYTES -
+					  batch_bytes) {
+				virtio_transport_rx_batch_finish(&batch);
+				batch_pkts = 0;
+				batch_bytes = 0;
+			}
+
 			virtio_transport_deliver_tap_pkt(skb);
 
 			/* Force virtio-transport into global mode since it
 			 * does not yet support local-mode namespacing.
 			 */
-			virtio_transport_recv_pkt(&virtio_transport, skb, NULL);
+			old_batch_sk = batch.sk;
+			virtio_transport_recv_pkt_batch(&virtio_transport, skb, NULL,
+							&batch);
+
+			if (batch.sk) {
+				if (batch.sk != old_batch_sk) {
+					batch_pkts = 0;
+					batch_bytes = 0;
+				}
+				batch_pkts++;
+				batch_bytes += payload_len;
+				if (batch_pkts >= VIRTIO_TRANSPORT_RX_BATCH_MAX_PKTS ||
+				    batch_bytes >= VIRTIO_TRANSPORT_RX_BATCH_MAX_BYTES) {
+					virtio_transport_rx_batch_finish(&batch);
+					batch_pkts = 0;
+					batch_bytes = 0;
+				}
+			} else {
+				batch_pkts = 0;
+				batch_bytes = 0;
+			}
 		}
 	} while (!virtqueue_enable_cb(vq));
 
 out:
+	virtio_transport_rx_batch_finish(&batch);
 	if (vsock->rx_buf_nr < vsock->rx_buf_max_nr / 2)
 		virtio_vsock_rx_fill(vsock);
 out_nofill:
