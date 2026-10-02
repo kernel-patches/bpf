@@ -23,6 +23,7 @@
 #include <linux/of_net.h>
 #include <linux/micrel_phy.h>
 #include <linux/pinctrl/consumer.h>
+#include <linux/property.h>
 #include <net/dsa.h>
 #include <net/ieee8021q.h>
 #include <net/pkt_cls.h>
@@ -3990,6 +3991,8 @@ int ksz_switch_register(struct ksz_device *dev)
 	const struct ksz_chip_data *info;
 	struct device_node *ports;
 	phy_interface_t interface;
+	u32 deassert_us = 100000;
+	u32 assert_us = 10000;
 	unsigned int port_num;
 	u32 lookup_chip_id;
 	int ret;
@@ -4001,6 +4004,19 @@ int ksz_switch_register(struct ksz_device *dev)
 		return PTR_ERR(dev->reset_gpio);
 
 	if (dev->reset_gpio) {
+		/*
+		 * How long the switch takes to answer on the management bus
+		 * after the reset is released is a property of the board, not
+		 * of the driver: about 160ms has been measured on one of
+		 * them. The values above are only the historical default,
+		 * so a board that needs more states its own timing with the
+		 * properties MDIO devices already use for the same purpose.
+		 */
+		device_property_read_u32(dev->dev, "reset-assert-us",
+					 &assert_us);
+		device_property_read_u32(dev->dev, "reset-deassert-us",
+					 &deassert_us);
+
 		if (of_device_is_compatible(dev->dev->of_node, "microchip,ksz8463")) {
 			ret = ksz8463_configure_straps_spi(dev);
 			if (ret)
@@ -4008,9 +4024,9 @@ int ksz_switch_register(struct ksz_device *dev)
 		}
 
 		gpiod_set_value_cansleep(dev->reset_gpio, 1);
-		usleep_range(10000, 12000);
+		fsleep(assert_us);
 		gpiod_set_value_cansleep(dev->reset_gpio, 0);
-		msleep(100);
+		fsleep(deassert_us);
 
 		if (of_device_is_compatible(dev->dev->of_node, "microchip,ksz8463")) {
 			ret = ksz8463_release_straps_spi(dev);
