@@ -424,7 +424,7 @@ static struct btf_raw_test raw_tests[] = {
 	.err_str = "Invalid type",
 },
 {
-	.descr = "global data test #8, invalid var size",
+	.descr = "global data test #8, var is smaller than its type",
 	.raw_types = {
 		/* int */
 		BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4),	/* [1] */
@@ -457,8 +457,6 @@ static struct btf_raw_test raw_tests[] = {
 	.key_type_id = 0,
 	.value_type_id = 7,
 	.max_entries = 1,
-	.btf_load_err = true,
-	.err_str = "Invalid size",
 },
 {
 	.descr = "global data test #9, invalid var size",
@@ -498,7 +496,7 @@ static struct btf_raw_test raw_tests[] = {
 	.err_str = "Invalid size",
 },
 {
-	.descr = "global data test #10, invalid var size",
+	.descr = "global data test #10, section is smaller than map value",
 	.raw_types = {
 		/* int */
 		BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4),	/* [1] */
@@ -531,8 +529,7 @@ static struct btf_raw_test raw_tests[] = {
 	.key_type_id = 0,
 	.value_type_id = 7,
 	.max_entries = 1,
-	.btf_load_err = true,
-	.err_str = "Invalid size",
+	.map_create_err = true,
 },
 {
 	.descr = "global data test #11, multiple section members",
