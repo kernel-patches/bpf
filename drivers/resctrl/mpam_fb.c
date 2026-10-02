@@ -20,10 +20,15 @@
 #define MPAM_FB_PROTOCOL_ID		0x1a
 
 #define MPAM_PROTOCOL_VERSION_CMD	0x0
+#define MPAM_FB_VERSION_MAJOR_MASK		GENMASK_U32(31, 16)
+#define MPAM_FB_VERSION_MINOR_MASK		GENMASK_U32(15, 0)
+
 #define MPAM_MSC_READ_CMD		0x4
 #define MPAM_MSC_WRITE_CMD		0x5
 
 #define MPAM_FB_PROT_HEADER_LEN		sizeof(u32)
+/* The longest message is MPAM_MSC_WRITE, with 4 parameters. */
+#define MPAM_FB_MAX_MSG_SIZE		(4 * sizeof(u32))
 
 #define MPAM_FB_SUCCESS		 0
 #define MPAM_FB_ERR_NOT_SUPPORTED	-1
@@ -214,4 +219,40 @@ int mpam_fb_send_write_request(struct mpam_msc *msc, u16 reg, u32 value)
 {
 	return mpam_fb_send_request(msc, msc->fb_id, reg, &value,
 				    MPAM_MSC_WRITE_CMD);
+}
+
+/* We only support MPAM-Fb protocol version 1.x */
+int mpam_fb_check_protocol_version(struct mpam_msc *msc)
+{
+	u32 version;
+	int ret;
+
+	ret = mpam_fb_send_request(msc, 0, 0, &version,
+				   MPAM_PROTOCOL_VERSION_CMD);
+	if (ret)
+		return ret;
+
+	if (FIELD_GET(MPAM_FB_VERSION_MAJOR_MASK, version) != 1) {
+		pr_err("Incompatible MPAM-Fb protocol version %d.%d\n",
+		       FIELD_GET(MPAM_FB_VERSION_MAJOR_MASK, version),
+		       FIELD_GET(MPAM_FB_VERSION_MINOR_MASK, version));
+
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+int mpam_fb_check_shared_buffer_size(struct mpam_msc *msc)
+{
+	int min_buffer_size = MPAM_FB_MAX_MSG_SIZE +
+			      sizeof(struct acpi_pcct_ext_pcc_shared_memory);
+
+	if (msc->pcc_chan->pcc_chan->shmem_size < min_buffer_size) {
+		pr_err("MPAM-Fb PCC channel size too small.\n");
+
+		return -ENOMEM;
+	}
+
+	return 0;
 }
