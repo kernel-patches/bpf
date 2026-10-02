@@ -24,4 +24,9 @@ config NOVA_CORE_SELFTESTS
 	help
 	  Build the driver self-tests and run them when the GPU is probed.
 
+	  If the interrupt delivery test fails, the probe fails and the driver
+	  does not bind to the GPU. A broken interrupt path would otherwise
+	  show up later as a hang, far from its cause. Every other self-test
+	  logs its failure and lets the probe continue.
+
 	  If unsure, say N.

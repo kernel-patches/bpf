@@ -251,7 +251,7 @@ pub struct Spec {
 }
 
 impl Spec {
-    fn new(dev: &device::Device, bar: Bar0<'_>) -> Result<Spec> {
+    pub(crate) fn new(dev: &device::Device, bar: Bar0<'_>) -> Result<Spec> {
         // Some brief notes about boot0 and boot42, in chronological order:
         //
         // NV04 through NV50:

@@ -444,6 +444,21 @@ impl<'a> Tree<'a> {
         }
     }
 
+    /// Sets the pending bit of `vector` in its leaf, as if the vector's source had raised it.
+    ///
+    /// # Errors
+    ///
+    /// `EINVAL` if this tree does not implement `vector`.
+    #[cfg_attr(not(CONFIG_NOVA_CORE_SELFTESTS), expect(dead_code))]
+    pub(super) fn trigger(&self, vector: GinVector) -> Result {
+        vector.validate(self.hal.leaf_count())?;
+        self.bar.write_reg(
+            NV_VIRTUAL_FUNCTION_PRIV_CPU_INTR_LEAF_TRIGGER::zeroed().with_vector(vector),
+        );
+
+        Ok(())
+    }
+
     /// Disables every vector in every implemented leaf, including the subtrees that nova-core does
     /// not service. Call this only during probe.
     pub(super) fn disable_all_leaves(&self) {

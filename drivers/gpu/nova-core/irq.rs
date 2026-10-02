@@ -9,6 +9,8 @@
 //!
 //! See `Documentation/gpu/nova/core/interrupts.rst`.
 
+#[cfg(CONFIG_NOVA_CORE_SELFTESTS)]
+pub(crate) mod doorbell_test;
 mod hal;
 pub(crate) mod interrupt_tree;
 mod regs;
