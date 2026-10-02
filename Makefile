@@ -302,7 +302,7 @@ no-dot-config-targets := $(clean-targets) \
 			 run-command
 no-sync-config-targets := $(no-dot-config-targets) %install modules_sign kernelrelease \
 			  image_name
-single-targets := %.a %.i %.ko %.lds %.ll %.lst %.mod %.o %.rsi %.s %/
+single-targets := %.a %.i %.ko %.lds %.ll %.lst %.mod %.o %.rsi %.s %.header-check %/
 
 config-build	:=
 mixed-build	:=
@@ -1550,6 +1550,26 @@ scripts_gen_packed_field_checks: scripts_basic
 	$(Q)$(MAKE) $(build)=scripts scripts/gen_packed_field_checks
 
 # ---------------------------------------------------------------------------
+# Header check
+
+# Check the headers in HEADER_CHECK=(headers|dirs)
+PHONY += headercheck
+
+ifneq ($(HEADER_CHECK),)
+
+header-check-dirs := $(filter-out %.h,$(HEADER_CHECK))
+header-check-files := $(filter %.h,$(HEADER_CHECK)) $(if $(header-check-dirs),$(shell cd $(srctree) && find $(header-check-dirs) -name '*.h' 2>/dev/null))
+header-check-targets := $(patsubst %.h,%.header-check,$(sort $(header-check-files)))
+
+headercheck:
+	$(if $(header-check-targets),,$(error $@ found no headers in HEADER_CHECK="$(HEADER_CHECK)"))
+	$(Q)$(MAKE) $(header-check-targets)
+else
+headercheck:
+	$(error $@ requires HEADER_CHECK=(headers|dirs))
+endif
+
+# ---------------------------------------------------------------------------
 # Install
 
 # Many distributions have the custom install script, /sbin/installkernel.
@@ -1895,6 +1915,8 @@ help:
 	@echo  '  versioncheck      - Sanity check on version.h usage'
 	@echo  '  includecheck      - Check for duplicate included header files'
 	@echo  '  headerdep         - Detect inclusion cycles in headers'
+	@echo  '  headercheck       - Check headers in HEADER_CHECK=(headers|dirs) are'
+	@echo  '                      self-contained, have header guards, and pass kernel-doc.'
 	@echo  '  coccicheck        - Check with Coccinelle'
 	@echo  '  kconfig-sym-check - Check for dangling Kconfig symbol references'
 	@echo  '  clang-analyzer    - Check with clang static analyzer'
@@ -2260,6 +2282,7 @@ clean: $(clean-dirs)
 		-o -name '*.ll' \
 		-o -name '*.gcno' \
 		-o -name '*.long-type-*.txt' \
+		-o -name '*.header-check' \
 		\) -type f -print \
 		-o -name '.tmp_*' -print \
 		| xargs rm -rf
