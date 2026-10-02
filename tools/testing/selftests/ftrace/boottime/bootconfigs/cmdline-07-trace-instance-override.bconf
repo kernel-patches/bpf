@@ -1,0 +1,4 @@
+kernel.trace_instance = "boot_map@trace,sched:sched_switch",
+			"bak_to_norm=boot_map",
+			"bak_from_norm,sched:sched_switch",
+			"foo,sched:sched_switch"
