@@ -41,7 +41,7 @@
 #include <linux/backlight.h>
 #include <linux/power_supply.h>
 #include <drm/drm_edid.h>
-#include <drm/drm_utils.h>
+#include <drm/drm_panel_quirks.h>
 
 #include <acpi/video.h>
 

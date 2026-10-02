@@ -109,13 +109,13 @@ VBLANK Helper Reference
 fbdev Helper Functions Reference
 ================================
 
-.. kernel-doc:: drivers/gpu/drm/drm_fb_helper.c
+.. kernel-doc:: drivers/gpu/drm/clients/drm_fbdev_helper.c
    :doc: fbdev helpers
 
-.. kernel-doc:: include/drm/drm_fb_helper.h
+.. kernel-doc:: include/drm/clients/drm_fbdev_helper.h
    :internal:
 
-.. kernel-doc:: drivers/gpu/drm/drm_fb_helper.c
+.. kernel-doc:: drivers/gpu/drm/clients/drm_fbdev_helper.c
    :export:
 
 Draw Helper Functions Reference
@@ -218,7 +218,7 @@ Bridge Connector Helper Reference
 Panel-Bridge Helper Reference
 -----------------------------
 
-.. kernel-doc:: drivers/gpu/drm/bridge/panel.c
+.. kernel-doc:: drivers/gpu/drm/drm_panel.c
    :export:
 
 .. _drm_panel_helper:

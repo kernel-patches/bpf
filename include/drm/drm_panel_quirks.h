@@ -1,14 +1,12 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * Function prototypes for misc. drm utility functions.
- * Specifically this file is for function prototypes for functions which
- * may also be used outside of drm code (e.g. in fbdev drivers).
+ * Function prototypes for panel-related quirks.
  *
  * Copyright (C) 2017 Hans de Goede <hdegoede@redhat.com>
  */
 
-#ifndef __DRM_UTILS_H__
-#define __DRM_UTILS_H__
+#ifndef __DRM_PANEL_QUIRKS_H__
+#define __DRM_PANEL_QUIRKS_H__
 
 #include <linux/types.h>
 
@@ -24,7 +22,5 @@ struct drm_panel_backlight_quirk {
 
 const struct drm_panel_backlight_quirk *
 drm_get_panel_backlight_quirk(const struct drm_edid *edid);
-
-signed long drm_timeout_abs_to_jiffies(int64_t timeout_nsec);
 
 #endif

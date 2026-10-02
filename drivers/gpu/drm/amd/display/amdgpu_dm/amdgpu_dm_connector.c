@@ -62,7 +62,6 @@
 #include <drm/drm_fixed.h>
 #include <drm/drm_mode.h>
 #include <drm/drm_probe_helper.h>
-#include <drm/drm_utils.h>
 #include <drm/display/drm_dp_mst_helper.h>
 #include <drm/display/drm_hdmi_helper.h>
 #include <drm/drm_privacy_screen_consumer.h>

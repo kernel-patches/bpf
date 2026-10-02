@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 
+#include <drm/clients/drm_fbdev_helper.h>
 #include <drm/drm_client.h>
 #include <drm/drm_crtc_helper.h>
 #include <drm/drm_drv.h>
-#include <drm/drm_fb_helper.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_print.h>
 
