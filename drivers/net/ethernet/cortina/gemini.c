@@ -173,6 +173,7 @@ struct gemini_ethernet {
 	unsigned int	num_freeq_pages;
 	unsigned long	*freeq_page_bitmap;
 	unsigned int	freeq_page_cursor;
+	unsigned int	freeq_recycle_pending;
 	spinlock_t	freeq_lock; /* Locks queue from reentrance */
 };
 
@@ -762,6 +763,35 @@ static int geth_freeq_alloc_slot(struct gemini_ethernet *geth)
 	return slot;
 }
 
+static int geth_freeq_recycle_slot(struct gemini_ethernet *geth)
+{
+	unsigned int slot = geth->freeq_page_cursor;
+	unsigned int scanned;
+
+	lockdep_assert_held(&geth->freeq_lock);
+
+	if (!geth->freeq_recycle_pending)
+		return -ENOSPC;
+
+	for (scanned = 0; scanned < geth->num_freeq_pages; scanned++) {
+		struct gmac_queue_page *gpage = &geth->freeq_pages[slot];
+
+		if (gpage->page && !gpage->fragments &&
+		    page_ref_count(gpage->page) == 1) {
+			geth->freeq_page_cursor = slot + 1;
+			if (geth->freeq_page_cursor == geth->num_freeq_pages)
+				geth->freeq_page_cursor = 0;
+			geth->freeq_recycle_pending--;
+			return slot;
+		}
+
+		if (++slot == geth->num_freeq_pages)
+			slot = 0;
+	}
+
+	return -ENOSPC;
+}
+
 static struct page *geth_freeq_claim(struct gemini_ethernet *geth,
 				     dma_addr_t mapping,
 				     unsigned int *page_offs)
@@ -771,7 +801,6 @@ static struct page *geth_freeq_claim(struct gemini_ethernet *geth,
 	unsigned long index;
 	unsigned long flags;
 	dma_addr_t page_mapping;
-	unsigned int slot;
 	struct page *page;
 	bool valid;
 
@@ -794,16 +823,8 @@ static struct page *geth_freeq_claim(struct gemini_ethernet *geth,
 				      mapping - page_mapping, frag_len,
 				      DMA_FROM_DEVICE);
 	xa_erase(&geth->freeq_mappings, index);
-	if (!--gpage->fragments) {
-		slot = gpage - geth->freeq_pages;
-		dma_unmap_single_attrs(geth->dev, page_mapping, PAGE_SIZE,
-				       DMA_FROM_DEVICE,
-				       DMA_ATTR_SKIP_CPU_SYNC);
-		gpage->page = NULL;
-		gpage->mapping = 0;
-		__clear_bit(slot, geth->freeq_page_bitmap);
-		put_page(page);
-	}
+	if (!--gpage->fragments)
+		geth->freeq_recycle_pending++;
 
 	*page_offs = mapping - page_mapping;
 	spin_unlock_irqrestore(&geth->freeq_lock, flags);
@@ -896,24 +917,20 @@ static int geth_freeq_map_page(struct gemini_ethernet *geth,
 	return 0;
 }
 
-static int geth_freeq_add_page(struct gemini_ethernet *geth, unsigned int pn,
-			       struct page *page, dma_addr_t page_mapping)
+static int geth_freeq_post_page(struct gemini_ethernet *geth, unsigned int pn,
+				struct gmac_queue_page *gpage, bool recycle)
 {
 	struct gmac_rxdesc *freeq_entry;
-	struct gmac_queue_page *gpage;
 	unsigned int fpp_order;
 	unsigned int fragments;
 	unsigned int frag_len;
+	dma_addr_t page_mapping = gpage->mapping;
 	dma_addr_t mapping;
+	struct page *page = gpage->page;
 	int ret;
-	int slot;
 	int i;
 
 	lockdep_assert_held(&geth->freeq_lock);
-
-	slot = geth_freeq_alloc_slot(geth);
-	if (slot < 0)
-		return slot;
 
 	/* The assign the page mapping (physical address) to the buffer address
 	 * in the hardware queue. PAGE_SHIFT on ARM is 12 (1 page is 4096 bytes,
@@ -925,9 +942,6 @@ static int geth_freeq_add_page(struct gemini_ethernet *geth, unsigned int pn,
 	fpp_order = PAGE_SHIFT - geth->freeq_frag_order;
 	fragments = 1 << fpp_order;
 
-	gpage = &geth->freeq_pages[slot];
-	gpage->page = page;
-	gpage->mapping = page_mapping;
 	for (i = 0; i < fragments; i++) {
 		mapping = page_mapping + i * frag_len;
 		ret = xa_insert(&geth->freeq_mappings,
@@ -936,11 +950,14 @@ static int geth_freeq_add_page(struct gemini_ethernet *geth, unsigned int pn,
 		if (ret)
 			goto err_mappings;
 	}
+	if (recycle)
+		dma_sync_single_for_device(geth->dev, page_mapping, PAGE_SIZE,
+					   DMA_FROM_DEVICE);
 	gpage->fragments = fragments;
 	page_ref_add(page, fragments);
 
 	freeq_entry = geth->freeq_ring + (pn << fpp_order);
-	dev_dbg(geth->dev, "allocate page %d fragment length %d fragments per page %d, freeq entry %p\n",
+	dev_dbg(geth->dev, "post page %d fragment length %d fragments per page %d, freeq entry %p\n",
 		pn, frag_len, (1 << fpp_order), freeq_entry);
 	mapping = page_mapping;
 	for (i = (1 << fpp_order); i > 0; i--) {
@@ -959,9 +976,51 @@ err_mappings:
 		xa_erase(&geth->freeq_mappings,
 			 geth_freeq_mapping_index(geth, mapping));
 	}
-	gpage->page = NULL;
-	gpage->mapping = 0;
-	__clear_bit(slot, geth->freeq_page_bitmap);
+	return ret;
+}
+
+static int geth_freeq_add_page(struct gemini_ethernet *geth, unsigned int pn,
+			       struct page *page, dma_addr_t page_mapping)
+{
+	struct gmac_queue_page *gpage;
+	int ret;
+	int slot;
+
+	lockdep_assert_held(&geth->freeq_lock);
+
+	slot = geth_freeq_alloc_slot(geth);
+	if (slot < 0)
+		return slot;
+
+	gpage = &geth->freeq_pages[slot];
+	gpage->page = page;
+	gpage->mapping = page_mapping;
+	ret = geth_freeq_post_page(geth, pn, gpage, false);
+	if (ret) {
+		gpage->page = NULL;
+		gpage->mapping = 0;
+		__clear_bit(slot, geth->freeq_page_bitmap);
+	}
+
+	return ret;
+}
+
+static int geth_freeq_recycle_page(struct gemini_ethernet *geth,
+				   unsigned int pn)
+{
+	int ret;
+	int slot;
+
+	lockdep_assert_held(&geth->freeq_lock);
+
+	slot = geth_freeq_recycle_slot(geth);
+	if (slot < 0)
+		return slot;
+
+	ret = geth_freeq_post_page(geth, pn, &geth->freeq_pages[slot], true);
+	if (ret)
+		geth->freeq_recycle_pending++;
+
 	return ret;
 }
 
@@ -980,6 +1039,7 @@ static unsigned int geth_fill_freeq(struct gemini_ethernet *geth)
 	unsigned long flags;
 	union dma_rwptr rw;
 	unsigned int m_pn;
+	bool recycle = true;
 
 	/* Mask for page */
 	m_pn = (1 << (geth->freeq_order - fpp_order)) - 1;
@@ -995,8 +1055,25 @@ static unsigned int geth_fill_freeq(struct gemini_ethernet *geth)
 		pn = rw.bits.wptr >> fpp_order;
 		epn = (rw.bits.rptr >> fpp_order) - 1;
 		epn &= m_pn;
+		ret = -ENOSPC;
+		if (pn != epn && recycle) {
+			ret = geth_freeq_recycle_page(geth, pn);
+			if (!ret) {
+				count += 1 << fpp_order;
+				pn++;
+				pn &= m_pn;
+				writew(pn << fpp_order,
+				       geth->base + GLOBAL_SWFQ_RWPTR_REG + 2);
+			}
+			if (ret == -ENOSPC)
+				recycle = false;
+		}
 		spin_unlock_irqrestore(&geth->freeq_lock, flags);
 		if (pn == epn)
+			break;
+		if (!ret)
+			continue;
+		if (ret != -ENOSPC)
 			break;
 
 		ret = geth_freeq_map_page(geth, &page, &page_mapping);
@@ -1073,6 +1150,7 @@ static void geth_freeq_release_pages(struct gemini_ethernet *geth)
 		put_page(page);
 	}
 	xa_destroy(&geth->freeq_mappings);
+	geth->freeq_recycle_pending = 0;
 }
 
 static unsigned int
