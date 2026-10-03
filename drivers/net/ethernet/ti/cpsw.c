@@ -1550,6 +1550,7 @@ static int cpsw_probe(struct platform_device *pdev)
 	struct gpio_descs		*mode;
 	const struct soc_device_attribute *soc;
 	struct cpsw_common		*cpsw;
+	bool secondary_registered = false;
 	int ret = 0, ch;
 	int irq;
 
@@ -1717,6 +1718,7 @@ static int cpsw_probe(struct platform_device *pdev)
 			cpsw_err(priv, probe, "error probe slave 2 emac interface\n");
 			goto clean_unregister_netdev_ret;
 		}
+		secondary_registered = true;
 	}
 
 	/* Grab RX and TX IRQs. Note that we also have RX_THRESHOLD and
@@ -1764,6 +1766,8 @@ skip_cpts:
 	return 0;
 
 clean_unregister_netdev_ret:
+	if (secondary_registered)
+		unregister_netdev(cpsw->slaves[1].ndev);
 	unregister_netdev(ndev);
 clean_cpts:
 	cpts_release(cpsw->cpts);
