@@ -3,8 +3,8 @@
  * BPF-side helpers for cids and cmasks. See kernel/sched/ext/cid.h for the
  * authoritative layout and semantics. The BPF-side helpers use the cmask_*
  * naming (no scx_ prefix); cmask is the SCX bitmap type so the prefix is
- * redundant in BPF code. Atomics use __sync_val_compare_and_swap and every
- * helper is inline (no .c counterpart).
+ * redundant in BPF code. Atomics use the __sync_* builtins and every helper
+ * is inline (no .c counterpart).
  *
  * Included by scx/common.bpf.h; don't include directly.
  *
@@ -129,101 +129,38 @@ static __always_inline bool cmask_test(u32 cid, const struct scx_cmask __arena *
 	return *__cmask_word(cid, m) & BIT_U64(cid & 63);
 }
 
-/*
- * x86 BPF JIT rejects BPF_OR | BPF_FETCH and BPF_AND | BPF_FETCH on arena
- * pointers (see bpf_jit_supports_insn() in arch/x86/net/bpf_jit_comp.c). Only
- * BPF_CMPXCHG / BPF_XCHG / BPF_ADD with FETCH are allowed. Implement
- * test_and_{set,clear} and the atomic set/clear via a cmpxchg loop.
- *
- * CMASK_CAS_TRIES is sized so exhausting it means seconds of real spinning
- * on one word - past any plausible contention. Abort hard.
- */
-#define CMASK_CAS_TRIES		(1U << 23)
-
 static __always_inline void cmask_set(u32 cid, struct scx_cmask __arena *m)
 {
-	u64 __arena *w;
-	u64 bit, old, new;
-	u32 i;
-
 	if (!__cmask_contains(cid, m))
 		return;
-	w = __cmask_word(cid, m);
-	bit = BIT_U64(cid & 63);
-	bpf_for(i, 0, CMASK_CAS_TRIES) {
-		old = *w;
-		if (old & bit)
-			return;
-		new = old | bit;
-		if (__sync_val_compare_and_swap(w, old, new) == old)
-			return;
-	}
-	scx_bpf_error("cmask_set CAS exhausted at cid %u", cid);
+	__sync_fetch_and_or(__cmask_word(cid, m), BIT_U64(cid & 63));
 }
 
 static __always_inline void cmask_clear(u32 cid, struct scx_cmask __arena *m)
 {
-	u64 __arena *w;
-	u64 bit, old, new;
-	u32 i;
-
 	if (!__cmask_contains(cid, m))
 		return;
-	w = __cmask_word(cid, m);
-	bit = BIT_U64(cid & 63);
-	bpf_for(i, 0, CMASK_CAS_TRIES) {
-		old = *w;
-		if (!(old & bit))
-			return;
-		new = old & ~bit;
-		if (__sync_val_compare_and_swap(w, old, new) == old)
-			return;
-	}
-	scx_bpf_error("cmask_clear CAS exhausted at cid %u", cid);
+	__sync_fetch_and_and(__cmask_word(cid, m), ~BIT_U64(cid & 63));
 }
 
 static __always_inline bool cmask_test_and_set(u32 cid, struct scx_cmask __arena *m)
 {
-	u64 __arena *w;
-	u64 bit, old, new;
-	u32 i;
+	u64 bit;
 
 	if (!__cmask_contains(cid, m))
 		return false;
-	w = __cmask_word(cid, m);
 	bit = BIT_U64(cid & 63);
-	bpf_for(i, 0, CMASK_CAS_TRIES) {
-		old = *w;
-		if (old & bit)
-			return true;
-		new = old | bit;
-		if (__sync_val_compare_and_swap(w, old, new) == old)
-			return false;
-	}
-	scx_bpf_error("cmask_test_and_set CAS exhausted at cid %u", cid);
-	return false;
+	return __sync_fetch_and_or(__cmask_word(cid, m), bit) & bit;
 }
 
 static __always_inline bool cmask_test_and_clear(u32 cid, struct scx_cmask __arena *m)
 {
-	u64 __arena *w;
-	u64 bit, old, new;
-	u32 i;
+	u64 bit;
 
 	if (!__cmask_contains(cid, m))
 		return false;
-	w = __cmask_word(cid, m);
 	bit = BIT_U64(cid & 63);
-	bpf_for(i, 0, CMASK_CAS_TRIES) {
-		old = *w;
-		if (!(old & bit))
-			return false;
-		new = old & ~bit;
-		if (__sync_val_compare_and_swap(w, old, new) == old)
-			return true;
-	}
-	scx_bpf_error("cmask_test_and_clear CAS exhausted at cid %u", cid);
-	return false;
+	return __sync_fetch_and_and(__cmask_word(cid, m), ~bit) & bit;
 }
 
 static __always_inline void __cmask_set(u32 cid, struct scx_cmask __arena *m)
