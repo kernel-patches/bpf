@@ -3927,6 +3927,7 @@ void device_del(struct device *dev)
 	device_lock(dev);
 	kill_device(dev);
 	device_unlock(dev);
+	device_reprobe_cancel(dev);
 
 	if (dev->fwnode && dev->fwnode->dev == dev)
 		dev->fwnode->dev = NULL;
