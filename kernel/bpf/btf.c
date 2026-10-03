@@ -901,16 +901,6 @@ static bool btf_name_offset_valid(const struct btf *btf, u32 offset)
 	return offset < btf->hdr.str_len;
 }
 
-static bool __btf_name_char_ok(char c, bool first)
-{
-	if ((first ? !isalpha(c) :
-		     !isalnum(c)) &&
-	    c != '_' &&
-	    c != '.')
-		return false;
-	return true;
-}
-
 const char *btf_str_by_offset(const struct btf *btf, u32 offset)
 {
 	while (offset < btf->start_str_off)
@@ -923,20 +913,21 @@ const char *btf_str_by_offset(const struct btf *btf, u32 offset)
 	return NULL;
 }
 
+/* Names in BTF of Rust are not C identifiers. Allow any printable character */
 static bool btf_name_valid_identifier(const struct btf *btf, u32 offset)
 {
 	/* offset must be valid */
 	const char *src = btf_str_by_offset(btf, offset);
 	const char *src_limit;
 
-	if (!__btf_name_char_ok(*src, true))
+	if (!isprint(*src))
 		return false;
 
 	/* set a limit on identifier length */
 	src_limit = src + KSYM_NAME_LEN;
 	src++;
 	while (*src && src < src_limit) {
-		if (!__btf_name_char_ok(*src, false))
+		if (!isprint(*src))
 			return false;
 		src++;
 	}
@@ -5406,7 +5397,7 @@ static int btf_datasec_resolve(struct btf_verifier_env *env,
 
 	env->resolve_mode = RESOLVE_TBD;
 	for_each_vsi_from(i, v->next_member, v->t, vsi) {
-		u32 var_type_id = vsi->type, type_id, type_size = 0;
+		u32 var_type_id = vsi->type, type_id;
 		const struct btf_type *var_type = btf_type_by_id(env->btf,
 								 var_type_id);
 		if (!var_type || !btf_type_is_var(var_type)) {
@@ -5421,14 +5412,14 @@ static int btf_datasec_resolve(struct btf_verifier_env *env,
 			return env_stack_push(env, var_type, var_type_id);
 		}
 
+		/*
+		 * The variable can be smaller than its type. It's a piece of
+		 * a variable that the compiler split then, with the type of
+		 * the whole variable.
+		 */
 		type_id = var_type->type;
-		if (!btf_type_id_size(btf, &type_id, &type_size)) {
+		if (!btf_type_id_size(btf, &type_id, NULL)) {
 			btf_verifier_log_vsi(env, v->t, vsi, "Invalid type");
-			return -EINVAL;
-		}
-
-		if (vsi->size < type_size) {
-			btf_verifier_log_vsi(env, v->t, vsi, "Invalid size");
 			return -EINVAL;
 		}
 	}
@@ -5443,6 +5434,16 @@ static void btf_datasec_log(struct btf_verifier_env *env,
 	btf_verifier_log(env, "size=%u vlen=%u", t->size, btf_type_vlen(t));
 }
 
+/* A piece of a variable is smaller than its type, which is the one of the whole variable */
+static bool btf_var_is_piece(const struct btf *btf, const struct btf_type *var,
+			     const struct btf_var_secinfo *vsi)
+{
+	u32 size;
+
+	return IS_ERR(btf_resolve_size(btf, btf_type_by_id(btf, var->type), &size)) ||
+	       vsi->size < size;
+}
+
 static void btf_datasec_show(const struct btf *btf,
 			     const struct btf_type *t, u32 type_id,
 			     void *data, u8 bits_offset,
@@ -5450,6 +5451,7 @@ static void btf_datasec_show(const struct btf *btf,
 {
 	const struct btf_var_secinfo *vsi;
 	const struct btf_type *var;
+	bool comma = false;
 	u32 i;
 
 	if (!btf_show_start_type(show, t, type_id, data))
@@ -5459,8 +5461,12 @@ static void btf_datasec_show(const struct btf *btf,
 			    __btf_name_by_offset(btf, t->name_off));
 	for_each_vsi(i, t, vsi) {
 		var = btf_type_by_id(btf, vsi->type);
-		if (i)
+		/* there is less data than the type takes */
+		if (btf_var_is_piece(btf, var, vsi))
+			continue;
+		if (comma)
 			btf_show(show, ",");
+		comma = true;
 		btf_type_ops(var)->show(btf, var, vsi->type,
 					data + vsi->offset, bits_offset, show);
 	}
@@ -5760,6 +5766,10 @@ static int btf_func_check(struct btf_verifier_env *env,
 		btf_verifier_log_type(env, t, "Invalid type_id");
 		return -EINVAL;
 	}
+
+	/* Rust leaves out names of some arguments of static functions */
+	if (btf_func_linkage(t) == BTF_FUNC_STATIC)
+		return 0;
 
 	args = (const struct btf_param *)(proto_type + 1);
 	nr_args = btf_type_vlen(proto_type);
