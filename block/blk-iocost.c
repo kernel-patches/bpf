@@ -2276,6 +2276,7 @@ static void ioc_timer_fn(struct timer_list *timer)
 	struct ioc_now now;
 	LIST_HEAD(surpluses);
 	int nr_debtors, nr_shortages = 0, nr_lagging = 0;
+	int nr_active = 0;
 	u64 usage_us_sum = 0;
 	u32 ppm_rthr;
 	u32 ppm_wthr;
@@ -2311,6 +2312,8 @@ static void ioc_timer_fn(struct timer_list *timer)
 	list_for_each_entry(iocg, &ioc->active_iocgs, active_list) {
 		u64 vdone, vtime, usage_us;
 		u32 hw_active, hw_inuse;
+
+		nr_active++;
 
 		/*
 		 * Collect unused and wind vtime closer to vnow to prevent
@@ -2472,6 +2475,17 @@ static void ioc_timer_fn(struct timer_list *timer)
 	}
 
 	ioc->busy_level = clamp(ioc->busy_level, -1000, 1000);
+
+	/*
+	 * Everything the tick reports is final here: busy_level was just
+	 * computed, cur_period hasn't changed, nr_active and usage_us_sum
+	 * are complete, and vrate and period_us still hold the values
+	 * this period ran in.  Emit before the refresh below so the
+	 * event reads the completed period directly; ioc->running has
+	 * not transitioned to IOC_IDLE yet, so the running field reports
+	 * the active iocg list instead.
+	 */
+	trace_iocost_ioc_tick(ioc, &now, nr_active, usage_us_sum);
 
 	ioc_adjust_base_vrate(ioc, rq_wait_pct, nr_lagging, nr_shortages,
 			      prev_busy_level, missed_ppm);
