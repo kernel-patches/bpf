@@ -1291,9 +1291,12 @@ void rds_ib_conn_free(void *arg)
 	rdsdebug("ic %p\n", ic);
 
 	/*
-	 * Conn is either on a dev's list or on the nodev list.
-	 * A race with shutdown() or connect() would cause problems
-	 * (since rds_ibdev would change) but that should never happen.
+	 * Conn is on a dev's list or on the nodev list - or, once a
+	 * transport teardown has claimed it (i_ib_node_detached), on
+	 * neither, in which case the lock chosen here only guards the
+	 * test below.  A connect or shutdown still running for a
+	 * claimed conn leaves the node alone, see rds_ib_add_conn() and
+	 * rds_ib_remove_conn().
 	 *
 	 * Callers may hold rds_conn_lock with interrupts disabled
 	 * (__rds_conn_create() undoing a lost creation race), so do not
@@ -1302,7 +1305,9 @@ void rds_ib_conn_free(void *arg)
 	lock_ptr = ic->rds_ibdev ? &ic->rds_ibdev->spinlock : &ib_nodev_conns_lock;
 
 	spin_lock_irqsave(lock_ptr, flags);
-	list_del(&ic->ib_node);
+	/* a transport teardown that gathered us first owns the node */
+	if (!ic->i_ib_node_detached)
+		list_del(&ic->ib_node);
 	spin_unlock_irqrestore(lock_ptr, flags);
 
 	rds_ib_recv_free_caches(ic);
