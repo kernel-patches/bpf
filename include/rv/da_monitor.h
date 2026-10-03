@@ -14,14 +14,19 @@
 #ifndef _RV_DA_MONITOR_H
 #define _RV_DA_MONITOR_H
 
-#include <rv/automata.h>
-#include <linux/rv.h>
+#ifndef __BPF__
+/* Kernel includes */
 #include <rv/kunit.h>
-#include <linux/stringify.h>
 #include <linux/bug.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/hashtable.h>
+#endif /* __BPF__ */
+
+#include <linux/args.h>
+#include <rv/automata.h>
+#include <linux/rv.h>
+#include <linux/stringify.h>
 
 /*
  * Per-cpu variables require a unique name although static in some
@@ -75,6 +80,10 @@ static struct rv_monitor rv_this;
  */
 #ifndef da_id_type
 #define da_id_type int
+#endif
+
+#ifdef __BPF__
+#include "da_monitor_bpf.h"
 #endif
 
 static void react(enum states curr_state, enum events event)
@@ -159,6 +168,7 @@ static inline bool da_monitor_handling_event(struct da_monitor *da_mon)
 	return 1;
 }
 
+#ifndef __BPF__
 #if RV_MON_TYPE == RV_MON_GLOBAL
 /*
  * Functions to define, init and get a global monitor.
@@ -633,19 +643,22 @@ static inline void da_monitor_destroy(void)
  */
 
 static inline void da_trace_event(struct da_monitor *da_mon,
-				  char *curr_state, char *event,
-				  char *next_state, bool is_final,
+				  enum states curr_state, enum events event,
+				  enum states next_state,
 				  da_id_type id)
 {
-	CONCATENATE(trace_event_, MONITOR_NAME)(curr_state, event, next_state,
-						is_final);
+	CONCATENATE(trace_event_, MONITOR_NAME)(model_get_state_name(curr_state),
+						model_get_event_name(event),
+						model_get_state_name(next_state),
+						model_is_final_state(next_state));
 }
 
 static inline void da_trace_error(struct da_monitor *da_mon,
-				  char *curr_state, char *event,
+				  enum states curr_state, enum events event,
 				  da_id_type id)
 {
-	CONCATENATE(trace_error_, MONITOR_NAME)(curr_state, event);
+	CONCATENATE(trace_error_, MONITOR_NAME)(model_get_state_name(curr_state),
+						model_get_event_name(event));
 }
 
 /*
@@ -662,21 +675,27 @@ static inline da_id_type da_get_id(struct da_monitor *da_mon)
  */
 
 static inline void da_trace_event(struct da_monitor *da_mon,
-				  char *curr_state, char *event,
-				  char *next_state, bool is_final,
+				  enum states curr_state, enum events event,
+				  enum states next_state,
 				  da_id_type id)
 {
-	CONCATENATE(trace_event_, MONITOR_NAME)(id, curr_state, event,
-						next_state, is_final);
+	CONCATENATE(trace_event_, MONITOR_NAME)(id,
+						model_get_state_name(curr_state),
+						model_get_event_name(event),
+						model_get_state_name(next_state),
+						model_is_final_state(next_state));
 }
 
 static inline void da_trace_error(struct da_monitor *da_mon,
-				  char *curr_state, char *event,
+				  enum states curr_state, enum events event,
 				  da_id_type id)
 {
-	CONCATENATE(trace_error_, MONITOR_NAME)(id, curr_state, event);
+	CONCATENATE(trace_error_, MONITOR_NAME)(id,
+						model_get_state_name(curr_state),
+						model_get_event_name(event));
 }
 #endif /* RV_MON_TYPE */
+#endif /* __BPF__ */
 
 /*
  * da_event - handle an event for the da_mon
@@ -695,17 +714,13 @@ static inline bool da_event(struct da_monitor *da_mon, enum events event, da_id_
 		next_state = model_get_next_state(curr_state, event);
 		if (next_state == INVALID_STATE) {
 			react(curr_state, event);
-			da_trace_error(da_mon, model_get_state_name(curr_state),
-				       model_get_event_name(event), id);
+			da_trace_error(da_mon, curr_state, event, id);
 			return false;
 		}
 		if (likely(try_cmpxchg(&da_mon->curr_state, &curr_state, next_state))) {
 			if (!da_monitor_event_hook(da_mon, curr_state, event, next_state, id))
 				return false;
-			da_trace_event(da_mon, model_get_state_name(curr_state),
-				       model_get_event_name(event),
-				       model_get_state_name(next_state),
-				       model_is_final_state(next_state), id);
+			da_trace_event(da_mon, curr_state, event, next_state, id);
 			return true;
 		}
 	}
@@ -802,7 +817,7 @@ static inline bool da_handle_start_run_event(enum events event)
 	return __da_handle_start_run_event(da_get_monitor(), event, 0);
 }
 
-#elif RV_MON_TYPE == RV_MON_PER_TASK
+#elif !defined(__BPF__) && RV_MON_TYPE == RV_MON_PER_TASK
 /*
  * Handle event for per task.
  */
@@ -843,7 +858,7 @@ static inline bool da_handle_start_run_event(struct task_struct *tsk,
 	return __da_handle_start_run_event(da_get_monitor(tsk), event, tsk->pid);
 }
 
-#elif RV_MON_TYPE == RV_MON_PER_OBJ
+#elif !defined(__BPF__) && RV_MON_TYPE == RV_MON_PER_OBJ
 /*
  * Handle event for per object.
  */

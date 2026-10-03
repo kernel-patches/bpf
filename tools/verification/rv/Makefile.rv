@@ -33,12 +33,22 @@ INSTALL		:= install
 MKDIR		:= mkdir
 STRIP		:= strip
 BINDIR		:= /usr/bin
+BPF_MON_DIR	:= /usr/share/rv/bpf_monitors
+BPF_REACT_DIR	:= /usr/share/rv/bpf_reactors
 
 .PHONY: install
 install: doc_install
 	$(Q)$(MKDIR) -p $(DESTDIR)$(BINDIR)
 	$(call QUIET_INSTALL,rv)$(INSTALL) $(OUTPUT)rv -m 755 $(DESTDIR)$(BINDIR)
 	$(Q)@$(STRIP) $(DESTDIR)$(BINDIR)/rv
+ifneq ($(wildcard bpf_monitors/*.o),)
+	$(Q)$(MKDIR) -p $(DESTDIR)$(BPF_MON_DIR)
+	$(call QUIET_INSTALL,bpf_monitors)$(INSTALL) bpf_monitors/*.o -m 644 $(DESTDIR)$(BPF_MON_DIR)
+endif
+ifneq ($(wildcard bpf_reactors/*.o),)
+	$(Q)$(MKDIR) -p $(DESTDIR)$(BPF_REACT_DIR)
+	$(call QUIET_INSTALL,bpf_reactors)$(INSTALL) bpf_reactors/*.o -m 644 $(DESTDIR)$(BPF_REACT_DIR)
+endif
 
 .PHONY: doc doc_clean doc_install
 doc:

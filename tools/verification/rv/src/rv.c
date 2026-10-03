@@ -13,6 +13,7 @@
 #include <trace.h>
 #include <utils.h>
 #include <in_kernel.h>
+#include <bpf_monitor.h>
 
 static int stop_session;
 
@@ -76,6 +77,7 @@ static void rv_list(int argc, char **argv)
 	}
 
 	ikm_list_monitors(container);
+	bpf_list_monitors(container);
 
 	exit(EXIT_SUCCESS);
 }
@@ -124,6 +126,9 @@ static void rv_mon(int argc, char **argv)
 	 * for the [monitor].
 	 */
 	run += ikm_run_monitor(monitor_name, argc-1, &argv[1]);
+
+	if (!run)
+		run += bpf_run_monitor(monitor_name, argc-1, &argv[1]);
 
 	if (!run)
 		err_msg("rv: monitor %s does not exist\n", monitor_name);

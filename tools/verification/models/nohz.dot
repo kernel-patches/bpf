@@ -1,0 +1,16 @@
+digraph state_automaton {
+	{node [shape = circle] "stopped"};
+	{node [shape = plaintext, style=invis, label=""] "__init_running"};
+	{node [shape = doublecircle] "running"};
+	{node [shape = circle] "running"};
+	"__init_running" -> "running";
+	"stopped" [label = "stopped"];
+	"stopped" -> "running" [ label = "tick_restart" ];
+	"running" [label = "running"];
+	"running" -> "running" [ label = "sched_tick" ];
+	"running" -> "stopped" [ label = "tick_stop" ];
+	{ rank = min ;
+		"__init_running";
+		"running";
+	}
+}

@@ -30,14 +30,19 @@ class dot2k(Monitor, Dot2c):
         buff = [ self.monitor_type.upper() ]
         buff += self._fill_timer_type()
         if self.monitor_type == "per_obj":
-            buff.append("typedef /* XXX: define the target type */ *monitor_target;")
+            pad = "_bpf" if self.bpf else ""
+            buff.append(f"typedef /* XXX: define the target type */ *monitor_target{pad};")
         return "\n".join(buff)
 
     def fill_tracepoint_handlers_skel(self) -> str:
         buff = []
         buff += self._fill_hybrid_definitions()
         for event in self.events:
-            buff.append(f"static void handle_{event}(void *data, /* XXX: fill header */)")
+            if self.bpf:
+                buff.append("SEC(/* XXX: tracepoint or other probe */)")
+                buff.append(f"int BPF_PROG(handle_{event}, /* XXX: fill header */)")
+            else:
+                buff.append(f"static void handle_{event}(void *data, /* XXX: fill header */)")
             buff.append("{")
             handle = "handle_event"
             if self.is_start_event(event):
@@ -50,19 +55,28 @@ class dot2k(Monitor, Dot2c):
                 buff.append("\tstruct task_struct *p = /* XXX: how do I get p? */;")
                 buff.append(f"\tda_{handle}(p, {event}{self.enum_suffix});")
             elif self.monitor_type == "per_obj":
+                pad = "_bpf" if self.bpf else ""
                 buff.append("\tint id = /* XXX: how do I get the id? */;")
-                buff.append("\tmonitor_target t = /* XXX: how do I get t? */;")
+                buff.append(f"\tmonitor_target{pad} t = /* XXX: how do I get t? */;")
                 buff.append(f"\tda_{handle}(id, t, {event}{self.enum_suffix});")
             else:
                 buff.append(f"\tda_{handle}({event}{self.enum_suffix});")
+            if self.bpf:
+                buff.append("\treturn 0;")
             buff.append("}")
             buff.append("")
         if self.monitor_type == "per_obj":
             buff.append("/* XXX: obj is being destroyed, remove if not required (e.g. obj is static) */")
-            buff.append(f"static void handle_{self.cleanup_marker}(void *data, /* XXX: fill header */)")
+            if self.bpf:
+                buff.append("SEC(/* XXX: tracepoint or other probe */)")
+                buff.append(f"int BPF_PROG(handle_{self.cleanup_marker}, /* XXX: fill header */)")
+            else:
+                buff.append(f"static void handle_{self.cleanup_marker}(void *data, /* XXX: fill header */)")
             buff.append("{")
             buff.append("\tint id = /* XXX: how do I get the id? */;")
             buff.append("\tda_destroy_storage(id);")
+            if self.bpf:
+                buff.append("\treturn 0;")
             buff.append("}")
             buff.append("")
         return '\n'.join(buff)
