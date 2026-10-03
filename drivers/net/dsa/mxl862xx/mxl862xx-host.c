@@ -17,6 +17,7 @@
 #include <net/dsa.h>
 #include "mxl862xx.h"
 #include "mxl862xx-cmd.h"
+#include "mxl862xx-fw.h"
 #include "mxl862xx-host.h"
 
 #define CTRL_BUSY_MASK			BIT(15)
@@ -55,9 +56,14 @@ static void mxl862xx_crc_err_work_fn(struct work_struct *work)
 	clear_bit(MXL862XX_FLAG_CRC_ERR, &priv->flags);
 }
 
-/* Firmware CRC error codes (outside normal Zephyr errno range). */
+/* The firmware reports a CRC-6 mismatch on ctrl/len_ret and a CRC-16 mismatch
+ * on the data payload with codes outside the Zephyr errno range. The host's
+ * own verdict lies outside the 11-bit result range, so no firmware result
+ * can be mistaken for it.
+ */
 #define MXL862XX_FW_CRC6_ERR		(-1024)
 #define MXL862XX_FW_CRC16_ERR		(-1023)
+#define MXL862XX_HOST_CRC_ERR		(-1025)
 
 /* 3GPP CRC-6 lookup table (polynomial 0x6F).
  * Matches the firmware's default CRC-6 implementation.
@@ -216,7 +222,9 @@ static int mxl862xx_busy_wait(struct mxl862xx_priv *priv)
 /* Issue a firmware command with CRC-6 protection on the ctrl and len_ret
  * registers, wait for completion, and verify the response CRC-6.
  *
- * Return: firmware result value (>= 0) on success, or negative errno.
+ * Return: firmware result value (>= 0) on success, a negative firmware
+ * errno or CRC code, %MXL862XX_HOST_CRC_ERR for a response failing its
+ * CRC-6 check here, or a negative bus errno.
  */
 static int mxl862xx_issue_cmd(struct mxl862xx_priv *priv, u16 cmd, u16 len)
 {
@@ -250,13 +258,16 @@ static int mxl862xx_issue_cmd(struct mxl862xx_priv *priv, u16 cmd, u16 len)
 	len_enc = ret;
 
 	ret = mxl862xx_crc6_verify(ctrl_enc, len_enc, &fw_result);
-	if (ret) {
-		if (!test_and_set_bit(MXL862XX_FLAG_CRC_ERR, &priv->flags))
-			schedule_work(&priv->crc_err_work);
-		return -EIO;
-	}
+	if (ret)
+		return MXL862XX_HOST_CRC_ERR;
 
 	return fw_result;
+}
+
+static bool mxl862xx_crc_failed(int ret)
+{
+	return ret == MXL862XX_HOST_CRC_ERR || ret == MXL862XX_FW_CRC6_ERR ||
+	       ret == MXL862XX_FW_CRC16_ERR;
 }
 
 static int mxl862xx_set_data(struct mxl862xx_priv *priv, u16 words)
@@ -305,26 +316,20 @@ static int mxl862xx_send_cmd(struct mxl862xx_priv *priv, u16 cmd, u16 size,
 
 	ret = mxl862xx_issue_cmd(priv, cmd, size);
 
-	/* Handle errors returned by the firmware as -EIO.
+	/* Handle errors returned by the firmware as -EIO; a CRC code passes
+	 * through for mxl862xx_api_wrap() to act on.
 	 * The firmware is based on Zephyr OS and uses the errors as
 	 * defined in errno.h of Zephyr OS. See
 	 * https://github.com/zephyrproject-rtos/zephyr/blob/v3.7.0/lib/libc/minimal/include/errno.h
-	 *
-	 * The firmware signals CRC validation failures with dedicated
-	 * error codes outside the normal Zephyr errno range:
-	 *   -1024: CRC-6 mismatch on ctrl/len_ret registers
-	 *   -1023: CRC-16 mismatch on data payload
 	 */
-	if (ret < 0) {
-		if ((ret == MXL862XX_FW_CRC6_ERR ||
-		     ret == MXL862XX_FW_CRC16_ERR) &&
-		    !test_and_set_bit(MXL862XX_FLAG_CRC_ERR, &priv->flags))
-			schedule_work(&priv->crc_err_work);
-		if (!quiet)
-			dev_err(&priv->mdiodev->dev,
-				"CMD %04x returned error %d\n", cmd, ret);
-		return -EIO;
-	}
+	if (ret == MXL862XX_HOST_CRC_ERR && !quiet)
+		dev_err(&priv->mdiodev->dev,
+			"CMD %04x response failed its CRC check\n", cmd);
+	else if (ret < 0 && !quiet)
+		dev_err(&priv->mdiodev->dev,
+			"CMD %04x returned error %d\n", cmd, ret);
+	if (ret < 0)
+		return mxl862xx_crc_failed(ret) ? ret : -EIO;
 
 	return ret;
 }
@@ -334,7 +339,7 @@ bool mxl862xx_api_gated(struct mxl862xx_priv *priv)
 	bool gated;
 
 	mutex_lock_nested(&priv->mdiodev->bus->mdio_lock, MDIO_MUTEX_NESTED);
-	gated = priv->block_host || priv->skip_teardown;
+	gated = priv->block_host || priv->skip_teardown || priv->rescue_mode;
 	mutex_unlock(&priv->mdiodev->bus->mdio_lock);
 
 	return gated;
@@ -355,6 +360,11 @@ int mxl862xx_api_wrap(struct mxl862xx_priv *priv, u16 cmd, void *_data,
 
 	if (priv->skip_teardown) {
 		ret = read ? -ENODEV : 0;
+		goto out;
+	}
+
+	if (priv->rescue_mode) {
+		ret = -ENODEV;
 		goto out;
 	}
 
@@ -491,9 +501,7 @@ int mxl862xx_api_wrap(struct mxl862xx_priv *priv, u16 cmd, void *_data,
 	}
 
 	if (crc16(0xffff, (const u8 *)data, size) != crc) {
-		if (!test_and_set_bit(MXL862XX_FLAG_CRC_ERR, &priv->flags))
-			schedule_work(&priv->crc_err_work);
-		ret = -EIO;
+		ret = MXL862XX_HOST_CRC_ERR;
 		goto out;
 	}
 
@@ -503,6 +511,15 @@ int mxl862xx_api_wrap(struct mxl862xx_priv *priv, u16 cmd, void *_data,
 	dev_dbg(&priv->mdiodev->dev, "RET %d DATA %*ph\n", ret, size, data);
 
 out:
+	/* A quiet command is expected to go unanswered by a switch still
+	 * booting or sitting in its loader, so it does not arm the shutdown.
+	 */
+	if (mxl862xx_crc_failed(ret)) {
+		if (!quiet &&
+		    !test_and_set_bit(MXL862XX_FLAG_CRC_ERR, &priv->flags))
+			schedule_work(&priv->crc_err_work);
+		ret = -EIO;
+	}
 	mutex_unlock(&priv->mdiodev->bus->mdio_lock);
 
 	return ret;
@@ -570,9 +587,11 @@ int mxl862xx_smdio_write(struct mxl862xx_priv *priv, u32 addr, u16 val)
 void mxl862xx_host_init(struct mxl862xx_priv *priv)
 {
 	INIT_WORK(&priv->crc_err_work, mxl862xx_crc_err_work_fn);
+	INIT_WORK(&priv->rescue_heal_work, mxl862xx_rescue_heal_work_fn);
 }
 
 void mxl862xx_host_shutdown(struct mxl862xx_priv *priv)
 {
 	cancel_work_sync(&priv->crc_err_work);
+	cancel_work_sync(&priv->rescue_heal_work);
 }
