@@ -876,6 +876,13 @@ int rds_ib_cm_handle_connect(struct rdma_cm_id *cm_id,
 	 * see the comment above rds_queue_reconnect()
 	 */
 	mutex_lock(&conn->c_cm_lock);
+	/* A destroy that has already quiesced this conn leaves it in
+	 * RDS_CONN_DOWN with no cm_id, exactly what the transition
+	 * below would happily claim; nothing would tear the new cm_id
+	 * and QP down again before the conn is freed.  Reject instead.
+	 */
+	if (rds_destroy_pending(conn))
+		goto out;
 	if (!rds_conn_transition(conn, RDS_CONN_DOWN, RDS_CONN_CONNECTING)) {
 		if (rds_conn_state(conn) == RDS_CONN_UP) {
 			rdsdebug("incoming connect while connecting\n");
@@ -930,8 +937,8 @@ out:
 		mutex_unlock(&conn->c_cm_lock);
 		/* Drop the reference rds_conn_create() handed us.  The
 		 * conn stays reachable through cm_id->context without a
-		 * reference of its own for now; the CM event handler is
-		 * given one of its own by a following patch.
+		 * reference of its own; rds_rdma_cm_event_handler_cmn()
+		 * takes one for the duration of each event it handles.
 		 */
 		rds_conn_put(conn);
 	}
@@ -949,6 +956,17 @@ int rds_ib_cm_initiate_connect(struct rdma_cm_id *cm_id, bool isv6)
 	struct rdma_conn_param conn_param;
 	union rds_ib_conn_priv dp;
 	int ret;
+
+	/* A destroy that began while the address and route were being
+	 * resolved has already quiesced this conn, or is waiting on
+	 * c_cm_lock to do so.  Setting up a QP now would leave it - and
+	 * the device reference rds_ib_add_conn() takes - with no
+	 * shutdown pass left to tear them down.  The id we were handed
+	 * is still ic->i_cm_id, so return success and let that shutdown
+	 * destroy it, rather than have the rdma_cm destroy it on error.
+	 */
+	if (rds_destroy_pending(conn))
+		return 0;
 
 	/* If the peer doesn't do protocol negotiation, we must
 	 * default to RDSv3.0 */
