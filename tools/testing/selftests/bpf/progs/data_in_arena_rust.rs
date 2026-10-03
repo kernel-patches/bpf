@@ -42,7 +42,10 @@ pub struct Node {
 #[no_mangle]
 static IN_RODATA: Node = Node { val: 3, next: None };
 #[no_mangle]
-static mut IN_DATA: Node = Node { val: 20, next: Some(&IN_RODATA) };
+static mut IN_DATA: Node = Node {
+    val: 20,
+    next: Some(&IN_RODATA),
+};
 #[no_mangle]
 static mut IN_BSS: Node = Node { val: 0, next: None };
 
