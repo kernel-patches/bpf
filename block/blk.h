@@ -112,6 +112,7 @@ static inline void blk_wait_io(struct completion *done)
 }
 
 struct block_device *blkdev_get_no_open(dev_t dev, bool autoload);
+bool blk_get_queue_rcu(struct request_queue *q);
 void blkdev_put_no_open(struct block_device *bdev);
 
 bool bvec_try_merge_hw_page(struct request_queue *q, struct bio_vec *bv,
