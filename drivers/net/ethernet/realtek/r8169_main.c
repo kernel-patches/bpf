@@ -5196,7 +5196,7 @@ static netdev_features_t rtl8169_features_check(struct sk_buff *skb,
 		if (skb->len < ETH_ZLEN)
 			features &= ~NETIF_F_CSUM_MASK;
 
-		if (rtl_quirk_packet_padto(tp, skb))
+		if (skb->len < rtl_quirk_packet_padto(tp, skb))
 			features &= ~NETIF_F_CSUM_MASK;
 
 		if (skb_transport_offset(skb) > TCPHO_MAX &&
