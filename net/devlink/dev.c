@@ -460,8 +460,13 @@ int devlink_reload(struct devlink *devlink, struct net *dest_net,
 	       sizeof(remote_reload_stats));
 
 	err = devlink->ops->reload_down(devlink, !!dest_net, action, limit, extack);
-	if (err)
+	if (err) {
+		curr_net = devlink_net(devlink);
+		if (dest_net && curr_net->is_dying &&
+		    !net_eq(dest_net, curr_net))
+			devlink_reload_netns_change(devlink, curr_net, dest_net);
 		return err;
+	}
 
 	curr_net = devlink_net(devlink);
 	if (dest_net && !net_eq(dest_net, curr_net))
