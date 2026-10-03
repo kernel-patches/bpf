@@ -89,9 +89,11 @@
 #include <linux/limits.h>
 #include <bpf/btf.h>
 #include <bpf/libbpf.h>
+#include "btf_colors.h"
 #include <subcmd/parse-options.h>
 
 #define BTF_IDS_SECTION	".BTF_ids"
+#define BTF_LINK_MODULE_NAME_MAX	64
 #define BTF_ID_PREFIX	"__BTF_ID__"
 
 #define BTF_STRUCT	"struct"
@@ -142,7 +144,9 @@ struct object {
 
 	struct btf *btf;
 	struct btf *base_btf;
+	struct btf *inline_btf;
 	bool distill_base;
+	bool extract_inline;
 
 	struct {
 		int		 fd;
@@ -154,6 +158,11 @@ struct object {
 		size_t		 strtabidx;
 		unsigned long	 idlist_addr;
 		int		 encoding;
+		int		 elf_class;
+		const char	**func_symbols;
+		u32		 func_symbols_cnt;
+		u32		 func_symbols_cap;
+		bool		 func_symbols_collected;
 	} efile;
 
 	struct rb_root	sets;
@@ -170,6 +179,19 @@ struct object {
 	struct addr_sym *addr_syms;
 	u32 addr_syms_cnt;
 	u32 addr_syms_cap;
+};
+
+struct btf_link {
+	char *value;
+	char *section;
+	char *module;
+	char *btf_path;
+};
+
+struct btf_links {
+	struct btf_link *links;
+	u32 cnt;
+	u32 cap;
 };
 
 #define DECL_TAG_FASTCALL "bpf_fastcall"
@@ -258,6 +280,49 @@ static int __ensure_mem(void **data, u32 *cap, u32 cnt, size_t elem_sz)
 
 #define ensure_mem(arr_ptr, cap_ptr, cnt) \
 	__ensure_mem((void **)(arr_ptr), (cap_ptr), (cnt), sizeof(**(arr_ptr)))
+
+static int parse_btf_link(const struct option *opt, const char *arg, int unset)
+{
+	struct btf_links *links = opt->value;
+	struct btf_link *link;
+	char *separator;
+
+	if (unset)
+		return -EINVAL;
+	if (__ensure_mem((void **)&links->links, &links->cap, links->cnt + 1,
+			 sizeof(*links->links)))
+		return -ENOMEM;
+	link = &links->links[links->cnt];
+	memset(link, 0, sizeof(*link));
+	link->value = strdup(arg);
+	if (!link->value)
+		return -ENOMEM;
+	link->section = link->value;
+	separator = strchr(link->section, ':');
+	if (!separator || separator == link->section)
+		goto err_value;
+	*separator++ = '\0';
+	link->module = separator;
+	separator = strchr(link->module, ':');
+	if (!separator || separator == link->module || !separator[1])
+		goto err_value;
+	*separator++ = '\0';
+	link->btf_path = separator;
+	links->cnt++;
+	return 0;
+err_value:
+	free(link->value);
+	return -EINVAL;
+}
+
+static void free_btf_links(struct btf_links *links)
+{
+	u32 i;
+
+	for (i = 0; i < links->cnt; i++)
+		free(links->links[i].value);
+	free(links->links);
+}
 
 static bool is_btf_id(const char *name)
 {
@@ -480,6 +545,7 @@ static int elf_collect(struct object *obj)
 		return -1;
 	}
 	obj->efile.encoding = ehdr.e_ident[EI_DATA];
+	obj->efile.elf_class = ehdr.e_ident[EI_CLASS];
 
 	/*
 	 * Scan all the elf sections and look for save data
@@ -570,6 +636,58 @@ static const char *find_name_by_addr(struct object *obj, Elf64_Addr addr)
 	res = bsearch(&key, obj->addr_syms, obj->addr_syms_cnt,
 		      sizeof(*obj->addr_syms), cmp_addr_sym);
 	return res ? res->name : NULL;
+}
+
+static int cmp_func_symbol(const void *a, const void *b)
+{
+	const char * const *name = a;
+	const char * const *other = b;
+
+	return strcmp(*name, *other);
+}
+
+static int collect_func_symbols(struct object *obj)
+{
+	Elf_Scn *scn;
+	GElf_Shdr sh;
+	int n, i;
+
+	if (obj->efile.symbols_shndx == -1)
+		return 0;
+
+	scn = elf_getscn(obj->efile.elf, obj->efile.symbols_shndx);
+	if (!scn || gelf_getshdr(scn, &sh) != &sh || !sh.sh_entsize)
+		return -EINVAL;
+	n = sh.sh_size / sh.sh_entsize;
+
+	for (i = 0; i < n; i++) {
+		GElf_Sym sym;
+		const char *name;
+
+		if (!gelf_getsym(obj->efile.symbols, i, &sym))
+			return -EINVAL;
+		if (GELF_ST_TYPE(sym.st_info) != STT_FUNC ||
+		    sym.st_shndx == SHN_UNDEF || !sym.st_name)
+			continue;
+		name = elf_strptr(obj->efile.elf, obj->efile.strtabidx, sym.st_name);
+		if (!name)
+			return -EINVAL;
+		if (ensure_mem(&obj->efile.func_symbols, &obj->efile.func_symbols_cap,
+			       obj->efile.func_symbols_cnt + 1))
+			return -ENOMEM;
+		obj->efile.func_symbols[obj->efile.func_symbols_cnt++] = name;
+	}
+
+	qsort(obj->efile.func_symbols, obj->efile.func_symbols_cnt,
+	      sizeof(*obj->efile.func_symbols), cmp_func_symbol);
+	obj->efile.func_symbols_collected = true;
+	return 0;
+}
+
+static bool has_func_symbol(const struct object *obj, const char *name)
+{
+	return bsearch(&name, obj->efile.func_symbols, obj->efile.func_symbols_cnt,
+		       sizeof(*obj->efile.func_symbols), cmp_func_symbol) != NULL;
 }
 
 static int symbols_collect(struct object *obj)
@@ -975,6 +1093,110 @@ static int dump_raw_btf(struct btf *btf, const char *out_path)
 		return -1;
 
 	return 0;
+}
+
+static int patch_btf_link(struct object *obj, const struct btf_link *link)
+{
+	void *raw_btf_data;
+	Elf_Scn *scn = NULL;
+	Elf_Data *data;
+	GElf_Shdr sh;
+	char section[128];
+	char *name;
+	size_t shdrstrndx, module_name_len;
+	int fd, len, err = -1;
+	struct stat st;
+	FILE *btf_file;
+	u32 raw_btf_size;
+	Elf *elf;
+	u8 *size;
+
+	if (stat(link->btf_path, &st) || !S_ISREG(st.st_mode) ||
+	    st.st_size <= 0 || st.st_size > UINT_MAX)
+		return -EINVAL;
+	raw_btf_size = st.st_size;
+	raw_btf_data = malloc(raw_btf_size);
+	if (!raw_btf_data)
+		return -ENOMEM;
+	btf_file = fopen(link->btf_path, "rb");
+	if (!btf_file)
+		goto out_data;
+	if (fread(raw_btf_data, raw_btf_size, 1, btf_file) != 1)
+		goto out_file;
+	fclose(btf_file);
+	if (obj->efile.elf_class == ELFCLASS32)
+		module_name_len = BTF_LINK_MODULE_NAME_MAX - 4;
+	else if (obj->efile.elf_class == ELFCLASS64)
+		module_name_len = BTF_LINK_MODULE_NAME_MAX - 8;
+	else
+		goto out_data;
+	if (strlen(link->module) >= module_name_len)
+		goto out_data;
+	len = snprintf(section, sizeof(section), "%s.link", link->section);
+	if (len < 0 || len >= sizeof(section))
+		goto out_data;
+
+	fd = open(obj->path, O_RDWR);
+	if (fd < 0)
+		goto out_data;
+	elf = elf_begin(fd, ELF_C_RDWR_MMAP, NULL);
+	if (!elf) {
+		err = -EINVAL;
+		goto out_close;
+	}
+	elf_flagelf(elf, ELF_C_SET, ELF_F_LAYOUT);
+	if (elf_getshdrstrndx(elf, &shdrstrndx))
+		goto out_elf;
+	while ((scn = elf_nextscn(elf, scn))) {
+		if (gelf_getshdr(scn, &sh) != &sh)
+			goto out_elf;
+		name = elf_strptr(elf, shdrstrndx, sh.sh_name);
+		if (name && !strcmp(name, section))
+			break;
+	}
+	if (!scn) {
+		pr_err("FAILED: section %s not found in %s\n", section, obj->path);
+		goto out_elf;
+	}
+	data = elf_getdata(scn, NULL);
+	if (sh.sh_type != SHT_PROGBITS || !data || !data->d_buf ||
+	    data->d_size != module_name_len +
+		BTF_SHA256_DIGEST_LENGTH + sizeof(u32)) {
+		pr_err("FAILED: section %s is not a writable BTF link\n", section);
+		goto out_elf;
+	}
+	memset(data->d_buf, 0, data->d_size);
+	memcpy(data->d_buf, link->module, strlen(link->module) + 1);
+	btf_sha256(raw_btf_data, raw_btf_size,
+		   (u8 *)data->d_buf + module_name_len);
+	size = (u8 *)data->d_buf + module_name_len + BTF_SHA256_DIGEST_LENGTH;
+	if (obj->efile.encoding == ELFDATA2LSB) {
+		size[0] = raw_btf_size;
+		size[1] = raw_btf_size >> 8;
+		size[2] = raw_btf_size >> 16;
+		size[3] = raw_btf_size >> 24;
+	} else if (obj->efile.encoding == ELFDATA2MSB) {
+		size[0] = raw_btf_size >> 24;
+		size[1] = raw_btf_size >> 16;
+		size[2] = raw_btf_size >> 8;
+		size[3] = raw_btf_size;
+	} else {
+		goto out_elf;
+	}
+	elf_flagdata(data, ELF_C_SET, ELF_F_DIRTY);
+	if (elf_update(elf, ELF_C_WRITE) >= 0)
+		err = 0;
+out_elf:
+	elf_end(elf);
+out_close:
+	close(fd);
+	free(raw_btf_data);
+	return err;
+out_file:
+	fclose(btf_file);
+out_data:
+	free(raw_btf_data);
+	return err;
 }
 
 static const struct btf_type *btf_type_skip_qualifiers(const struct btf *btf, s32 type_id)
@@ -1510,6 +1732,85 @@ out:
 	return err;
 }
 
+static bool keep_in_base_btf(struct object *obj, const struct btf_type *t)
+{
+	const char *name;
+
+	switch (btf_kind(t)) {
+	case BTF_KIND_FUNC:
+		name = btf__name_by_offset(obj->btf, t->name_off);
+		return !obj->efile.func_symbols_collected || has_func_symbol(obj, name) ||
+		       btf_id__find(&obj->funcs, name);
+	case BTF_KIND_FUNC_PROTO:
+	case BTF_KIND_LOC_PARAM:
+	case BTF_KIND_LOC_PROTO:
+	case BTF_KIND_LOCSEC:
+		return false;
+	default:
+		/*
+		 * Ordinary types stay in base btf even if only inline records use them.
+		 * Should we relax this?
+		 */
+		return true;
+	}
+}
+
+/* Mark which types should go to .BTF.inline */
+static int color_btf(struct object *obj, __u8 *colors)
+{
+	struct btf *btf = obj->btf;
+	const struct btf *base = btf__base_btf(btf);
+	__u32 start_id = base ? btf__type_cnt(base) : 1;
+	__u32 type_cnt = btf__type_cnt(btf), i;
+	__u32 *worklist;
+
+	worklist = malloc((type_cnt - start_id ?: 1) * sizeof(*worklist));
+	if (!worklist)
+		return -ENOMEM;
+	/* First, mark all types reachable from LOC BTF entries. */
+	for (i = start_id; i < type_cnt; i++) {
+		const struct btf_type *t = btf__type_by_id(btf, i);
+
+		if (!btf_is_locsec(t) && !btf_is_loc_proto(t) && !btf_is_loc_param(t))
+			continue;
+		btf_mark_reachable(btf, i, BTF_COLOR_LOC, colors, worklist);
+	}
+	/* Next, traverse non-marked types converting some LOC markings to SHARED. */
+	for (i = start_id; i < type_cnt; i++) {
+		const struct btf_type *t = btf__type_by_id(btf, i);
+
+		if (colors[i] == BTF_COLOR_LOC && !keep_in_base_btf(obj, t))
+			continue;
+		btf_mark_reachable(btf, i, BTF_COLOR_MAIN, colors, worklist);
+	}
+	free(worklist);
+	return 0;
+}
+
+static int extract_inline_btf(struct object *obj)
+{
+	struct btf *btf = obj->btf, *main_btf, *inline_btf;
+	__u32 type_cnt = btf__type_cnt(btf);
+	__u8 *colors;
+	int err;
+
+	colors = calloc(type_cnt, sizeof(*colors));
+	if (!colors)
+		return -ENOMEM;
+	err = color_btf(obj, colors);
+	if (err)
+		goto out;
+	err = btf_split_by_color(btf, colors, &main_btf, &inline_btf);
+	if (!err) {
+		obj->btf = main_btf;
+		obj->inline_btf = inline_btf;
+		btf__free(btf);
+	}
+out:
+	free(colors);
+	return err;
+}
+
 /*
  * Sort types by name in ascending order resulting in all
  * anonymous types being placed before named types.
@@ -1603,6 +1904,14 @@ static int finalize_btf(struct object *obj)
 	if (err) {
 		pr_err("FAILED to sort BTF: %s\n", strerror(errno));
 		goto out_err;
+	}
+
+	if (obj->extract_inline) {
+		err = extract_inline_btf(obj);
+		if (err) {
+			pr_err("FAILED to extract inline BTF: %s\n", strerror(-err));
+			goto out_err;
+		}
 	}
 
 	return 0;
@@ -1740,7 +2049,7 @@ out:
 
 static const char * const resolve_btfids_usage[] = {
 	"resolve_btfids [<options>] <ELF object>",
-	"resolve_btfids --patch_btfids <.BTF_ids file> <ELF object>",
+	"resolve_btfids --patch_btfids <.BTF_ids file> [--btf_link <section:module:btf-file>] <ELF object>",
 	NULL
 };
 
@@ -1758,6 +2067,7 @@ int main(int argc, const char **argv)
 		.sets     = RB_ROOT,
 	};
 	const char *btfids_path = NULL;
+	struct btf_links btf_links = {};
 	bool fatal_warnings = false;
 	bool resolve_btfids = true;
 	char out_path[PATH_MAX];
@@ -1773,6 +2083,10 @@ int main(int argc, const char **argv)
 			    "turn warnings into errors"),
 		OPT_BOOLEAN(0, "distill_base", &obj.distill_base,
 			    "distill --btf_base and emit .BTF.base section data"),
+		OPT_BOOLEAN(0, "inline", &obj.extract_inline,
+			    "extract location BTF into a .BTF.inline file"),
+		OPT_CALLBACK(0, "btf_link", &btf_links, "section:module:btf-file",
+			     "patch a BTF link with --patch_btfids", parse_btf_link),
 		OPT_STRING(0, "patch_btfids", &btfids_path, "file",
 			   "path to .BTF_ids section data blob to patch into ELF file"),
 		OPT_END()
@@ -1783,13 +2097,33 @@ int main(int argc, const char **argv)
 			     PARSE_OPT_STOP_AT_NON_OPTION);
 	if (argc != 1)
 		usage_with_options(resolve_btfids_usage, btfid_options);
+	if (btf_links.cnt && !btfids_path) {
+		pr_err("--btf_link requires --patch_btfids\n");
+		goto out;
+	}
 
 	obj.path = argv[0];
 
-	if (btfids_path)
-		return patch_btfids(btfids_path, obj.path);
+	if (btfids_path) {
+		err = patch_btfids(btfids_path, obj.path);
+		if (err || !btf_links.cnt)
+			goto out;
+		if (elf_collect(&obj)) {
+			err = -EINVAL;
+			goto out;
+		}
+		for (u32 i = 0; i < btf_links.cnt; i++) {
+			struct btf_link *link = &btf_links.links[i];
 
+			err = patch_btf_link(&obj, link);
+			if (err)
+				break;
+		}
+		goto out;
+	}
 	if (elf_collect(&obj))
+		goto out;
+	if (obj.extract_inline && collect_func_symbols(&obj))
 		goto out;
 
 	/*
@@ -1841,18 +2175,26 @@ dump_btf:
 		if (err)
 			goto out;
 	}
-
+	if (obj.inline_btf) {
+		err = make_out_path(out_path, sizeof(out_path), obj.path, BTF_ELF_SEC ".inline");
+		err = err ?: dump_raw_btf(obj.inline_btf, out_path);
+		if (err)
+			goto out;
+	}
 	if (!(fatal_warnings && warnings))
 		err = 0;
 out:
-	btf__free(obj.base_btf);
+	free_btf_links(&btf_links);
+	btf__free(obj.inline_btf);
 	btf__free(obj.btf);
+	btf__free(obj.base_btf);
 	btf_id__free_all(&obj.structs);
 	btf_id__free_all(&obj.unions);
 	btf_id__free_all(&obj.typedefs);
 	btf_id__free_all(&obj.funcs);
 	btf_id__free_all(&obj.sets);
 	free(obj.addr_syms);
+	free(obj.efile.func_symbols);
 	if (obj.efile.elf) {
 		elf_end(obj.efile.elf);
 		close(obj.efile.fd);
