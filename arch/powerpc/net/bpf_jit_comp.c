@@ -539,7 +539,7 @@ bool bpf_jit_supports_fsession(void)
 	 * for fsession and trampoline on ppc32.
 	 */
 	if (IS_ENABLED(CONFIG_PPC32))
-		return -EOPNOTSUPP;
+		return false;
 	return true;
 }
 
