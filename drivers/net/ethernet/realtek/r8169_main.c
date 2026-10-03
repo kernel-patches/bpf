@@ -5144,6 +5144,8 @@ err_dma_1:
 err_dma_0:
 	dev_kfree_skb_any(skb);
 	dev->stats.tx_dropped++;
+	/* Flush packets queued with xmit_more before this failure. */
+	rtl8169_doorbell(tp);
 	return NETDEV_TX_OK;
 }
 
