@@ -48,6 +48,7 @@
 #include <linux/seccomp.h>
 #include <linux/if_vlan.h>
 #include <linux/if_pppox.h>
+#include <linux/ppp_defs.h>
 #include <linux/bpf.h>
 #include <linux/btf.h>
 #include <net/sch_generic.h>
@@ -3590,7 +3591,8 @@ static u32 bpf_skb_net_base_len(const struct sk_buff *skb)
 
 #define BPF_F_ADJ_ROOM_DECAP_MASK	(BPF_F_ADJ_ROOM_DECAP_L3_MASK | \
 					 BPF_F_ADJ_ROOM_DECAP_L4_MASK | \
-					 BPF_F_ADJ_ROOM_DECAP_IPXIP_MASK)
+					 BPF_F_ADJ_ROOM_DECAP_IPXIP_MASK | \
+					 BPF_F_ADJ_ROOM_DECAP_PPPOE)
 
 #define BPF_F_ADJ_ROOM_MASK		(BPF_F_ADJ_ROOM_FIXED_GSO | \
 					 BPF_F_ADJ_ROOM_ENCAP_MASK | \
@@ -3724,6 +3726,8 @@ static int bpf_skb_net_shrink(struct sk_buff *skb, u32 off, u32 len_diff,
 			      u64 flags)
 {
 	bool decap = flags & BPF_F_ADJ_ROOM_DECAP_L3_MASK;
+	__be16 inner_proto = 0;
+	u32 inner_len = 0;
 	int ret;
 
 	if (unlikely(flags & ~(BPF_F_ADJ_ROOM_DECAP_MASK |
@@ -3742,6 +3746,33 @@ static int bpf_skb_net_shrink(struct sk_buff *skb, u32 off, u32 len_diff,
 	if (unlikely(ret < 0))
 		return ret;
 
+	if (flags & BPF_F_ADJ_ROOM_DECAP_PPPOE) {
+		u16 ppp_proto;
+
+		if (unlikely(!pskb_may_pull(skb, off + PPPOE_SES_HLEN)))
+			return -ENOMEM;
+
+		/* PPP protocol field follows the PPPoE session header. */
+		ppp_proto = get_unaligned_be16(skb->data + off +
+					       sizeof(struct pppoe_hdr));
+		switch (ppp_proto) {
+		case PPP_IP:
+			inner_proto = htons(ETH_P_IP);
+			inner_len = sizeof(struct iphdr);
+			break;
+		case PPP_IPV6:
+			inner_proto = htons(ETH_P_IPV6);
+			inner_len = sizeof(struct ipv6hdr);
+			break;
+		default:
+			return -ENOTSUPP;
+		}
+
+		/* A full inner L3 header must remain after decapsulation. */
+		if (skb->len - off - PPPOE_SES_HLEN < inner_len)
+			return -EINVAL;
+	}
+
 	ret = bpf_skb_net_hdr_pop(skb, off, len_diff);
 	if (unlikely(ret < 0))
 		return ret;
@@ -3753,6 +3784,13 @@ static int bpf_skb_net_shrink(struct sk_buff *skb, u32 off, u32 len_diff,
 		else if (flags & BPF_F_ADJ_ROOM_DECAP_L3_IPV4)
 			skb->protocol = htons(ETH_P_IP);
 
+		if (skb_valid_dst(skb))
+			skb_dst_drop(skb);
+	}
+
+	if (flags & BPF_F_ADJ_ROOM_DECAP_PPPOE) {
+		skb->protocol = inner_proto;
+		skb_reset_mac_len(skb);
 		if (skb_valid_dst(skb))
 			skb_dst_drop(skb);
 	}
@@ -3869,9 +3907,13 @@ BPF_CALL_4(bpf_skb_adjust_room, struct sk_buff *, skb, s32, len_diff,
 		return -EINVAL;
 	if (unlikely(len_diff_abs > 0xfffU))
 		return -EFAULT;
-	if (unlikely(proto != htons(ETH_P_IP) &&
-		     proto != htons(ETH_P_IPV6)))
+	if (unlikely(flags & BPF_F_ADJ_ROOM_DECAP_PPPOE)) {
+		if (proto != htons(ETH_P_PPP_SES))
+			return -ENOTSUPP;
+	} else if (unlikely(proto != htons(ETH_P_IP) &&
+			    proto != htons(ETH_P_IPV6))) {
 		return -ENOTSUPP;
+	}
 
 	off = skb_mac_header_len(skb);
 	switch (mode) {
@@ -3885,9 +3927,7 @@ BPF_CALL_4(bpf_skb_adjust_room, struct sk_buff *, skb, s32, len_diff,
 	}
 
 	if (flags & BPF_F_ADJ_ROOM_ENCAP_PPPOE) {
-		/* The PPPoE session header has a fixed size and is
-		 * inserted directly after the MAC header.
-		 */
+		/* Fixed-size header, inserted after the MAC header. */
 		if (shrink || mode != BPF_ADJ_ROOM_MAC ||
 		    len_diff != PPPOE_SES_HLEN ||
 		    flags & ((BPF_F_ADJ_ROOM_ENCAP_MASK |
@@ -3919,6 +3959,23 @@ BPF_CALL_4(bpf_skb_adjust_room, struct sk_buff *, skb, s32, len_diff,
 		if ((flags & BPF_F_ADJ_ROOM_DECAP_L4_MASK) &&
 		    (flags & BPF_F_ADJ_ROOM_DECAP_IPXIP_MASK))
 			return -EINVAL;
+
+		/* PPPoE decapsulation is mutually exclusive with the
+		 * other decapsulation types.
+		 */
+		if ((flags & BPF_F_ADJ_ROOM_DECAP_PPPOE) &&
+		    (flags & (BPF_F_ADJ_ROOM_DECAP_MASK &
+			      ~BPF_F_ADJ_ROOM_DECAP_PPPOE)))
+			return -EINVAL;
+
+		if (flags & BPF_F_ADJ_ROOM_DECAP_PPPOE) {
+			/* Fixed-size header; require a full inner L3 header. */
+			if (mode != BPF_ADJ_ROOM_MAC ||
+			    len_diff_abs != PPPOE_SES_HLEN)
+				return -EINVAL;
+
+			len_min = sizeof(struct iphdr);
+		}
 
 		if (flags & BPF_F_ADJ_ROOM_DECAP_L4_MASK)
 			len_decap_min += bpf_skb_net_base_len(skb);

@@ -3116,6 +3116,15 @@ union bpf_attr {
  *		  decapsulating a tunnel with an outer IPv6 header (IPv6-in-IPv6
  *		  or IPv4-in-IPv6).
  *
+ *		* **BPF_F_ADJ_ROOM_DECAP_PPPOE**:
+ *		  Decapsulate a PPPoE session header. Must be used with
+ *		  **BPF_ADJ_ROOM_MAC** mode and a negative *len_diff* equal to
+ *		  the size of the PPPoE session header plus the PPP protocol
+ *		  field (8 bytes in total). The PPP protocol field determines
+ *		  the new *skb->protocol* (**ETH_P_IP** or **ETH_P_IPV6**);
+ *		  a payload with any other PPP protocol is rejected. The Ethernet
+ *		  type in the MAC header is left for the BPF program to restore.
+ *
  *		When using the decapsulation flags above, the skb->encapsulation
  *		flag is automatically cleared if all tunnel-specific GSO flags
  *		(SKB_GSO_UDP_TUNNEL, SKB_GSO_UDP_TUNNEL_CSUM, SKB_GSO_GRE,
@@ -6389,6 +6398,7 @@ enum bpf_adj_room_flags {
 	BPF_F_ADJ_ROOM_DECAP_IPXIP4	= (1ULL << 11),
 	BPF_F_ADJ_ROOM_DECAP_IPXIP6	= (1ULL << 12),
 	BPF_F_ADJ_ROOM_ENCAP_PPPOE	= (1ULL << 13),
+	BPF_F_ADJ_ROOM_DECAP_PPPOE	= (1ULL << 14),
 };
 
 enum {
