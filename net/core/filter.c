@@ -47,6 +47,7 @@
 #include <linux/ratelimit.h>
 #include <linux/seccomp.h>
 #include <linux/if_vlan.h>
+#include <linux/if_pppox.h>
 #include <linux/bpf.h>
 #include <linux/btf.h>
 #include <net/sch_generic.h>
@@ -3583,6 +3584,7 @@ static u32 bpf_skb_net_base_len(const struct sk_buff *skb)
 					 BPF_F_ADJ_ROOM_ENCAP_L4_GRE | \
 					 BPF_F_ADJ_ROOM_ENCAP_L4_UDP | \
 					 BPF_F_ADJ_ROOM_ENCAP_L2_ETH | \
+					 BPF_F_ADJ_ROOM_ENCAP_PPPOE | \
 					 BPF_F_ADJ_ROOM_ENCAP_L2( \
 					  BPF_ADJ_ROOM_ENCAP_L2_MASK))
 
@@ -3684,6 +3686,14 @@ static int bpf_skb_net_grow(struct sk_buff *skb, u32 off, u32 len_diff,
 		else if (flags & BPF_F_ADJ_ROOM_ENCAP_L3_IPV4)
 			skb->protocol = htons(ETH_P_IP);
 
+		if (skb_valid_dst(skb))
+			skb_dst_drop(skb);
+	}
+
+	if (flags & BPF_F_ADJ_ROOM_ENCAP_PPPOE) {
+		/* Network header points at the inserted PPPoE header. */
+		skb->protocol = htons(ETH_P_PPP_SES);
+		skb_reset_mac_len(skb);
 		if (skb_valid_dst(skb))
 			skb_dst_drop(skb);
 	}
@@ -3872,6 +3882,18 @@ BPF_CALL_4(bpf_skb_adjust_room, struct sk_buff *, skb, s32, len_diff,
 		break;
 	default:
 		return -ENOTSUPP;
+	}
+
+	if (flags & BPF_F_ADJ_ROOM_ENCAP_PPPOE) {
+		/* The PPPoE session header has a fixed size and is
+		 * inserted directly after the MAC header.
+		 */
+		if (shrink || mode != BPF_ADJ_ROOM_MAC ||
+		    len_diff != PPPOE_SES_HLEN ||
+		    flags & ((BPF_F_ADJ_ROOM_ENCAP_MASK |
+			      BPF_F_ADJ_ROOM_DECAP_MASK) &
+			     ~BPF_F_ADJ_ROOM_ENCAP_PPPOE))
+			return -EINVAL;
 	}
 
 	if (flags & BPF_F_ADJ_ROOM_DECAP_MASK) {

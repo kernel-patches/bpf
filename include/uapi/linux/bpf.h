@@ -3081,6 +3081,17 @@ union bpf_attr {
  *		  Use with BPF_F_ADJ_ROOM_ENCAP_L2 flag to further specify the
  *		  L2 type as Ethernet.
  *
+ *		* **BPF_F_ADJ_ROOM_ENCAP_PPPOE**:
+ *		  Encapsulate the packet in a PPPoE session header. Must be
+ *		  used with **BPF_ADJ_ROOM_MAC** mode and *len_diff* equal to
+ *		  the size of the PPPoE session header plus the PPP protocol
+ *		  field (8 bytes in total). The room is inserted between the
+ *		  MAC header and the network header, *skb->protocol* is set
+ *		  to **ETH_P_PPP_SES** and *skb->mac_len* is updated
+ *		  accordingly. The PPPoE header itself and the ethertype of
+ *		  the MAC header are filled in by the BPF program, e.g. via
+ *		  **bpf_skb_store_bytes**.
+ *
  *		* **BPF_F_ADJ_ROOM_DECAP_L3_IPV4**,
  *		  **BPF_F_ADJ_ROOM_DECAP_L3_IPV6**:
  *		  Indicate the new IP header version after decapsulating the
@@ -6377,6 +6388,7 @@ enum bpf_adj_room_flags {
 	BPF_F_ADJ_ROOM_DECAP_L4_UDP	= (1ULL << 10),
 	BPF_F_ADJ_ROOM_DECAP_IPXIP4	= (1ULL << 11),
 	BPF_F_ADJ_ROOM_DECAP_IPXIP6	= (1ULL << 12),
+	BPF_F_ADJ_ROOM_ENCAP_PPPOE	= (1ULL << 13),
 };
 
 enum {
