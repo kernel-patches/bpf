@@ -9,7 +9,7 @@ char data_in_arena SEC(".arena.data");
 
 int counter = 5;
 /* needs an arena map that is declared. The one that libbpf creates won't do. */
-int __arena avar = 11;
+int __arena_global avar = 11;
 
 SEC("syscall")
 int arena_var(void *ctx)
