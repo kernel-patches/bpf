@@ -61,7 +61,12 @@ int use_ops(void *ctx)
 {
 	/* a program has the arena when its code refers to it */
 	counter++;
+#ifdef __clang__
 	return ops.fn(*ops.data) + ops.name[1];
+#else
+	/* gcc doesn't support indirect calls */
+	return add1(*ops.data) + ops.name[1];
+#endif
 }
 
 SEC("syscall")
