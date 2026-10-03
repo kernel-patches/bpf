@@ -414,8 +414,10 @@ static void smc_cdc_msg_recv_action(struct smc_sock *smc,
 	}
 	if (smc_cdc_rxed_any_close_or_senddone(conn)) {
 		smc->sk.sk_shutdown |= RCV_SHUTDOWN;
+		spin_lock_bh(&smc->clcsock_lock);
 		if (smc->clcsock && smc->clcsock->sk)
 			smc->clcsock->sk->sk_shutdown |= RCV_SHUTDOWN;
+		spin_unlock_bh(&smc->clcsock_lock);
 		smc_sock_set_flag(&smc->sk, SOCK_DONE);
 		sock_hold(&smc->sk); /* sock_put in close_work */
 		if (!queue_work(smc_close_wq, &conn->close_work))

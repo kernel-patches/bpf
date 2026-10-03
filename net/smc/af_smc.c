@@ -116,7 +116,10 @@ static void smc_set_keepalive(struct sock *sk, int val)
 {
 	struct smc_sock *smc = smc_sk(sk);
 
-	smc->clcsock->sk->sk_prot->keepalive(smc->clcsock->sk, val);
+	spin_lock_bh(&smc->clcsock_lock);
+	if (smc->clcsock)
+		smc->clcsock->sk->sk_prot->keepalive(smc->clcsock->sk, val);
+	spin_unlock_bh(&smc->clcsock_lock);
 }
 
 static struct sock *smc_tcp_syn_recv_sock(const struct sock *sk,
@@ -340,8 +343,12 @@ int smc_release(struct socket *sock)
 	old_state = sk->sk_state;
 
 	/* cleanup for a dangling non-blocking connect */
-	if (smc->connect_nonblock && old_state == SMC_INIT)
-		tcp_abort(smc->clcsock->sk, ECONNABORTED);
+	if (smc->connect_nonblock && old_state == SMC_INIT) {
+		mutex_lock(&smc->clcsock_release_lock);
+		if (smc->clcsock)
+			tcp_abort(smc->clcsock->sk, ECONNABORTED);
+		mutex_unlock(&smc->clcsock_release_lock);
+	}
 
 	if (cancel_work_sync(&smc->connect_work))
 		sock_put(&smc->sk); /* sock_hold in smc_connect for passive closing */
@@ -409,6 +416,7 @@ void smc_sk_init(struct net *net, struct sock *sk, int protocol)
 				      "sk_lock-AF_SMC", &smc_key);
 	spin_lock_init(&smc->accept_q_lock);
 	spin_lock_init(&smc->conn.send_lock);
+	spin_lock_init(&smc->clcsock_lock);
 	mutex_init(&smc->clcsock_release_lock);
 	smc_init_saved_callbacks(smc);
 	smc->limit_smc_hs = net->smc.limit_smc_hs;
@@ -1795,7 +1803,9 @@ static int smc_clcsock_accept(struct smc_sock *lsmc, struct smc_sock **new_smc)
 			new_clcsock->sk->sk_error_report = lsmc->clcsk_error_report;
 	}
 
+	spin_lock_bh(&(*new_smc)->clcsock_lock);
 	(*new_smc)->clcsock = new_clcsock;
+	spin_unlock_bh(&(*new_smc)->clcsock_lock);
 out:
 	return rc;
 }
@@ -1833,6 +1843,7 @@ struct sock *smc_accept_dequeue(struct sock *parent,
 				struct socket *new_sock)
 {
 	struct smc_sock *isk, *n;
+	struct socket *clcsock;
 	struct sock *new_sk;
 
 	list_for_each_entry_safe(isk, n, &smc_sk(parent)->accept_q, accept_q) {
@@ -1841,10 +1852,14 @@ struct sock *smc_accept_dequeue(struct sock *parent,
 		smc_accept_unlink(new_sk);
 		if (new_sk->sk_state == SMC_CLOSED) {
 			new_sk->sk_prot->unhash(new_sk);
-			if (isk->clcsock) {
-				sock_release(isk->clcsock);
-				isk->clcsock = NULL;
-			}
+			mutex_lock(&isk->clcsock_release_lock);
+			spin_lock_bh(&isk->clcsock_lock);
+			clcsock = isk->clcsock;
+			isk->clcsock = NULL;
+			spin_unlock_bh(&isk->clcsock_lock);
+			if (clcsock)
+				sock_release(clcsock);
+			mutex_unlock(&isk->clcsock_release_lock);
 			sock_put(new_sk); /* final */
 			continue;
 		}
@@ -2794,6 +2809,7 @@ int smc_getname(struct socket *sock, struct sockaddr *addr,
 		int peer)
 {
 	struct smc_sock *smc;
+	int rc = -EBADF;
 
 	if (peer && (sock->sk->sk_state != SMC_ACTIVE) &&
 	    (sock->sk->sk_state != SMC_APPCLOSEWAIT1))
@@ -2801,7 +2817,11 @@ int smc_getname(struct socket *sock, struct sockaddr *addr,
 
 	smc = smc_sk(sock->sk);
 
-	return smc->clcsock->ops->getname(smc->clcsock, addr, peer);
+	mutex_lock(&smc->clcsock_release_lock);
+	if (smc->clcsock)
+		rc = smc->clcsock->ops->getname(smc->clcsock, addr, peer);
+	mutex_unlock(&smc->clcsock_release_lock);
+	return rc;
 }
 
 int smc_sendmsg(struct socket *sock, struct msghdr *msg, size_t len)
@@ -3013,8 +3033,10 @@ int smc_shutdown(struct socket *sock, int how)
 		/* nothing more to do because peer is not involved */
 		break;
 	}
+	mutex_lock(&smc->clcsock_release_lock);
 	if (do_shutdown && smc->clcsock)
 		rc1 = kernel_sock_shutdown(smc->clcsock, how);
+	mutex_unlock(&smc->clcsock_release_lock);
 	/* map sock_shutdown_cmd constants to sk_shutdown value range */
 	sk->sk_shutdown |= how + 1;
 
@@ -3365,10 +3387,11 @@ static const struct proto_ops smc_sock_ops = {
 int smc_create_clcsk(struct net *net, struct sock *sk, int family)
 {
 	struct smc_sock *smc = smc_sk(sk);
+	struct socket *clcsock;
 	int rc;
 
 	rc = sock_create_kern(net, family, SOCK_STREAM, IPPROTO_TCP,
-			      &smc->clcsock);
+			      &clcsock);
 	if (rc)
 		return rc;
 
@@ -3377,8 +3400,11 @@ int smc_create_clcsk(struct net *net, struct sock *sk, int family)
 	 * smc->sk is close()d, and TCP timers can be fired later,
 	 * which need net ref.
 	 */
-	sk = smc->clcsock->sk;
+	sk = clcsock->sk;
 	sk_net_refcnt_upgrade(sk);
+	spin_lock_bh(&smc->clcsock_lock);
+	smc->clcsock = clcsock;
+	spin_unlock_bh(&smc->clcsock_lock);
 	return 0;
 }
 

@@ -28,11 +28,12 @@ void smc_clcsock_release(struct smc_sock *smc)
 	if (smc->listen_smc && current_work() != &smc->smc_listen_work)
 		cancel_work_sync(&smc->smc_listen_work);
 	mutex_lock(&smc->clcsock_release_lock);
-	if (smc->clcsock) {
-		tcp = smc->clcsock;
-		smc->clcsock = NULL;
+	spin_lock_bh(&smc->clcsock_lock);
+	tcp = smc->clcsock;
+	smc->clcsock = NULL;
+	spin_unlock_bh(&smc->clcsock_lock);
+	if (tcp)
 		sock_release(tcp);
-	}
 	mutex_unlock(&smc->clcsock_release_lock);
 }
 
@@ -131,11 +132,13 @@ void smc_close_active_abort(struct smc_sock *smc)
 	struct sock *sk = &smc->sk;
 	bool release_clcsock = false;
 
+	mutex_lock(&smc->clcsock_release_lock);
 	if (sk->sk_state != SMC_INIT && smc->clcsock && smc->clcsock->sk) {
 		sk->sk_err = ECONNABORTED;
 		if (smc->clcsock && smc->clcsock->sk)
 			tcp_abort(smc->clcsock->sk, ECONNABORTED);
 	}
+	mutex_unlock(&smc->clcsock_release_lock);
 	switch (sk->sk_state) {
 	case SMC_ACTIVE:
 	case SMC_APPCLOSEWAIT1:

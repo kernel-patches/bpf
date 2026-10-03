@@ -288,6 +288,7 @@ struct smc_sock {				/* smc sock container */
 		struct inet_sock	icsk_inet;
 	};
 	struct socket		*clcsock;	/* internal tcp socket */
+	spinlock_t		clcsock_lock;	/* protects non-sleeping users */
 	void			(*clcsk_state_change)(struct sock *sk);
 						/* original stat_change fct. */
 	void			(*clcsk_data_ready)(struct sock *sk);
@@ -325,9 +326,9 @@ struct smc_sock {				/* smc sock container */
 						 * flight
 						 */
 	struct mutex            clcsock_release_lock;
-						/* protects clcsock of a listen
-						 * socket
-						 * */
+						/* protects sleeping clcsock
+						 * users and serializes release
+						 */
 };
 
 #define smc_sk(ptr) container_of_const(ptr, struct smc_sock, sk)
