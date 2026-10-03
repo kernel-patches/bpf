@@ -265,6 +265,7 @@ struct asus_wmi {
 	struct led_classdev micmute_led;
 	struct led_classdev mute_led;
 	struct led_classdev camera_led;
+	struct led_classdev user_status_led;
 	struct workqueue_struct *led_workqueue;
 	struct work_struct tpd_led_work;
 	struct work_struct wlan_led_work;
@@ -2105,6 +2106,24 @@ static int camera_led_set(struct led_classdev *led_cdev,
 	return err < 0 ? err : 0;
 }
 
+static enum led_brightness user_status_led_get(struct led_classdev *led_cdev)
+{
+	struct asus_wmi *asus;
+
+	asus = container_of(led_cdev, struct asus_wmi, user_status_led);
+	return asus_wmi_get_devstate_simple(asus, ASUS_WMI_DEVID_USER_STATUS_LED);
+}
+
+static int user_status_led_set(struct led_classdev *led_cdev,
+			       enum led_brightness brightness)
+{
+	int state = brightness != LED_OFF;
+	int err;
+
+	err = asus_wmi_set_devstate(ASUS_WMI_DEVID_USER_STATUS_LED, state, NULL);
+	return err < 0 ? err : 0;
+}
+
 static void asus_wmi_led_exit(struct asus_wmi *asus)
 {
 	scoped_guard(spinlock_irqsave, &asus_ref.lock)
@@ -2116,6 +2135,7 @@ static void asus_wmi_led_exit(struct asus_wmi *asus)
 	led_classdev_unregister(&asus->micmute_led);
 	led_classdev_unregister(&asus->mute_led);
 	led_classdev_unregister(&asus->camera_led);
+	led_classdev_unregister(&asus->user_status_led);
 
 	if (asus->led_workqueue)
 		destroy_workqueue(asus->led_workqueue);
@@ -2244,6 +2264,23 @@ static int asus_wmi_led_init(struct asus_wmi *asus)
 
 		rv = led_classdev_register(&asus->platform_device->dev,
 						&asus->camera_led);
+		if (rv)
+			goto error;
+	}
+
+	/*
+	 * Gate on a successful state read rather than asus_wmi_dev_is_present():
+	 * some firmware returns ASUS_WMI_UNSUPPORTED_METHOD (0xFFFFFFFE) for
+	 * this DEVID, which still has the DSTS presence bit set.
+	 */
+	if (asus_wmi_get_devstate_simple(asus, ASUS_WMI_DEVID_USER_STATUS_LED) >= 0) {
+		asus->user_status_led.name = ":" LED_FUNCTION_STATUS;
+		asus->user_status_led.max_brightness = 1;
+		asus->user_status_led.brightness_get = user_status_led_get;
+		asus->user_status_led.brightness_set_blocking = user_status_led_set;
+
+		rv = led_classdev_register(&asus->platform_device->dev,
+					   &asus->user_status_led);
 		if (rv)
 			goto error;
 	}
