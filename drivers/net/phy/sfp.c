@@ -472,6 +472,20 @@ static void sfp_fixup_potron(struct sfp *sfp)
 	sfp_fixup_ignore_hw(sfp, SFP_F_TX_FAULT | SFP_F_LOS);
 }
 
+static void sfp_fixup_potron_ignore_los(struct sfp *sfp)
+{
+	/*
+	 * In addition to the potron fixup, this module implements soft LOS
+	 * (enhanced options 0xf6), so masking the hardware pins is not enough:
+	 * the state machine would fall back to the LOS bit polled from the
+	 * diagnostics page, which the module asserts whenever there is no PON
+	 * light. Ignore LOS entirely so the host link, and thus the module's
+	 * management interface, stays up without fibre.
+	 */
+	sfp_fixup_potron(sfp);
+	sfp_fixup_ignore_los(sfp);
+}
+
 static void sfp_fixup_rollball_cc(struct sfp *sfp)
 {
 	sfp_fixup_rollball(sfp);
@@ -572,10 +586,11 @@ static const struct sfp_quirk sfp_quirks[] = {
 
 	// Fiberstore XGS-SFP-ONT-MACI is a MAC-mode XGS-PON ONT stick with
 	// ONT-class serial-passthrough TX_FAULT/LOS wiring and slow startup;
-	// mask both signals and extend T_START_UP via the potron fixup. The
+	// mask both signals and extend T_START_UP via the potron fixup. It
+	// also implements soft LOS, so ignore LOS entirely (see fixup). The
 	// PN is the product name (XGS-SFP-ONT-MAC-I) truncated at the 16-byte
 	// field width, so the field is fully occupied and matches exactly.
-	SFP_QUIRK_F("FS", "XGS-SFP-ONT-MACI", sfp_fixup_potron),
+	SFP_QUIRK_F("FS", "XGS-SFP-ONT-MACI", sfp_fixup_potron_ignore_los),
 
 	SFP_QUIRK_F("HALNy", "HL-GSFP", sfp_fixup_halny_gsfp),
 
