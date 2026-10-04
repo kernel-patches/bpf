@@ -1613,17 +1613,21 @@ static void mlx5_lag_modify_device_vports_speed(struct mlx5_core_dev *mdev,
 		if (vport->vport == MLX5_VPORT_UPLINK)
 			continue;
 
-		vport->agg_max_tx_speed = speed;
-
-		if (!vport->enabled)
+		if (!vport->enabled) {
+			vport->agg_max_tx_speed = speed;
 			continue;
+		}
 
 		ret = mlx5_modify_vport_max_tx_speed(mdev, op_mod,
 						     vport->vport, true, speed);
-		if (ret)
+		if (ret) {
 			mlx5_core_dbg(mdev,
 				      "Failed to set vport %d speed %d, err=%d\n",
 				      vport->vport, speed, ret);
+			vport->agg_max_tx_speed = speed;
+		} else {
+			vport->agg_max_tx_speed = 0;
+		}
 	}
 	mutex_unlock(&esw->state_lock);
 }

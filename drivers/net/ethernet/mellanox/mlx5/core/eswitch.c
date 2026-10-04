@@ -951,6 +951,8 @@ static void mlx5_esw_vport_set_max_tx_speed(struct mlx5_eswitch *esw,
 		mlx5_core_dbg(esw->dev,
 			      "Failed to set vport %d speed %d, err=%d\n",
 			      vport->vport, vport->agg_max_tx_speed, ret);
+	else
+		vport->agg_max_tx_speed = 0;
 }
 
 int mlx5_esw_vport_enable(struct mlx5_eswitch *esw, struct mlx5_vport *vport,
