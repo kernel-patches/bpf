@@ -5,8 +5,23 @@
 #include <linux/sched/signal.h>
 #include <linux/bpf_verifier.h>
 
+static bool is_cfg_jump(struct bpf_insn *insn)
+{
+	u8 class = BPF_CLASS(insn->code);
+	u8 opcode = BPF_OP(insn->code);
+
+	switch (class) {
+	case BPF_JMP:
+	case BPF_JMP32:
+		return opcode != BPF_CALL;
+	default:
+		return false;
+	}
+}
+
 static struct bpf_iarray **compute_predecessors(struct bpf_verifier_env *env)
 {
+	struct bpf_insn_aux_data *aux = env->insn_aux_data;
 	struct bpf_iarray *succ, *preds, **result;
 	struct bpf_prog *prog = env->prog;
 	u32 *num_preds, i, s, sz, len = prog->len;
@@ -55,6 +70,10 @@ static struct bpf_iarray **compute_predecessors(struct bpf_verifier_env *env)
 			preds = result[s];
 			preds->items[preds->cnt++] = i;
 		}
+		if (succ->cnt > 1 ||
+		    (succ->cnt == 1 && num_preds[succ->items[0]] > 1) ||
+		    is_cfg_jump(insn))
+			aux[i].bb_end = true;
 		if (bpf_is_ldimm64(insn))
 			i++;
 	}
