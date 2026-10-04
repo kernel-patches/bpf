@@ -26,6 +26,7 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/netdevice.h>
+#include <linux/notifier.h>
 #include <linux/phy.h>
 #include <linux/phylib_stubs.h>
 #include <linux/phy_led_triggers.h>
@@ -1012,9 +1013,116 @@ struct phy_device *get_phy_device(struct mii_bus *bus, int addr, bool is_c45)
 }
 EXPORT_SYMBOL(get_phy_device);
 
+/* Best-effort attach of phydev->psec from a DT `pses = <&...>` phandle.
+ * Caller must hold pse_phy_lock(). A missing phandle (-ENOENT) is silent,
+ * and so is -EPROBE_DEFER. That mostly means the controller is not
+ * registered yet, which the notifier retries at PSE_REGISTERED time, but
+ * a registered controller returns it too while its vpwr provider is
+ * registered and not yet bound, and that is not retried until the next
+ * PSE_REGISTERED. Anything else is warned about and left non-fatal, so
+ * the phy still registers - it is not necessarily a broken binding, it
+ * can equally be -ENOMEM or the PI already being held, and nothing
+ * retries it until the next PSE_REGISTERED.
+ *
+ * A phy with psec_detached set is skipped: it is either not registered yet
+ * or on its way out, and nothing would release a handle attached now.
+ */
+static void phy_try_attach_pse(struct phy_device *phydev)
+{
+	struct pse_control *psec;
+	struct device_node *np;
+
+	pse_phy_lock_assert_held();
+
+	np = phydev->mdio.dev.of_node;
+	if (!np)
+		return;
+
+	if (phydev->psec || phydev->psec_detached)
+		return;
+
+	psec = of_pse_control_get(np, phydev);
+	if (IS_ERR(psec)) {
+		if (PTR_ERR(psec) != -EPROBE_DEFER && PTR_ERR(psec) != -ENOENT)
+			phydev_warn(phydev, "failed to get PSE control: %pe\n",
+				    psec);
+		return;
+	}
+
+	phydev->psec = psec;
+}
+
+static int phy_pse_attach_one(struct device *dev, void *data)
+{
+	pse_phy_lock_assert_held();
+
+	if (dev->type != &mdio_bus_phy_type)
+		return 0;
+
+	phy_try_attach_pse(to_phy_device(dev));
+	return 0;
+}
+
+static int phy_pse_detach_one(struct device *dev, void *data)
+{
+	struct pse_controller_dev *pcdev = data;
+	struct phy_device *phydev;
+	struct pse_control *psec;
+
+	pse_phy_lock_assert_held();
+
+	if (dev->type != &mdio_bus_phy_type)
+		return 0;
+
+	phydev = to_phy_device(dev);
+	psec = phydev->psec;
+	if (!psec || !pse_control_matches_pcdev(psec, pcdev))
+		return 0;
+
+	phydev->psec = NULL;
+	pse_control_put(psec);
+	return 0;
+}
+
+static int phy_pse_notifier_event(struct notifier_block *nb,
+				  unsigned long event, void *data)
+{
+	switch (event) {
+	case PSE_REGISTERED:
+		pse_phy_lock();
+		bus_for_each_dev(&mdio_bus_type, NULL, NULL,
+				 phy_pse_attach_one);
+		pse_phy_unlock();
+		return NOTIFY_OK;
+	case PSE_UNREGISTERED:
+		pse_phy_lock();
+		bus_for_each_dev(&mdio_bus_type, NULL, data,
+				 phy_pse_detach_one);
+		pse_phy_unlock();
+		return NOTIFY_OK;
+	default:
+		return NOTIFY_DONE;
+	}
+}
+
+static struct notifier_block phy_pse_notifier __read_mostly = {
+	.notifier_call = phy_pse_notifier_event,
+};
+
 /**
  * phy_device_register - Register the phy device on the MDIO bus
  * @phydev: phy_device structure to be added to the MDIO bus
+ *
+ * phydev->psec is attached after device_add() has made the phy visible on
+ * mdio_bus_type, so that a concurrent PSE notifier walk and the attach can
+ * never leave the phy unattached. Neither step takes rtnl: keeping
+ * device_add() out of rtnl avoids deadlocking when binding a phy that itself
+ * provides an SFP cage (phy_probe() -> phy_sfp_probe() ->
+ * sfp_bus_add_upstream() takes rtnl), and pse_phy_lock() rather than rtnl
+ * guards the attach so a bus registered from ndo_init (which already holds
+ * rtnl) does not recurse on it.
+ *
+ * Return: 0 on success, negative error code on failure.
  */
 int phy_device_register(struct phy_device *phydev)
 {
@@ -1034,11 +1142,24 @@ int phy_device_register(struct phy_device *phydev)
 		goto out;
 	}
 
+	/* Keep the PSE_REGISTERED walk off this phy until registration has
+	 * actually succeeded. device_add() puts the phy on the bus before its
+	 * own later failure points, and its unwind takes it back off, so a
+	 * handle attached in that window would be missed by the
+	 * PSE_UNREGISTERED walk as well and left with no owner.
+	 */
+	phydev->psec_detached = true;
+
 	err = device_add(&phydev->mdio.dev);
 	if (err) {
 		phydev_err(phydev, "failed to add\n");
 		goto out;
 	}
+
+	pse_phy_lock();
+	phydev->psec_detached = false;
+	phy_try_attach_pse(phydev);
+	pse_phy_unlock();
 
 	return 0;
 
@@ -1061,8 +1182,22 @@ EXPORT_SYMBOL(phy_device_register);
  */
 void phy_device_remove(struct phy_device *phydev)
 {
+	struct pse_control *psec;
+
 	unregister_mii_timestamper(phydev->mii_ts);
-	pse_control_put(phydev->psec);
+
+	/* Detach synchronously, before the phy leaves the bus, so the put cannot
+	 * outlive the PSE controller: an off-bus but still-pinned phy is missed
+	 * by the PSE_UNREGISTERED walk. pse_phy_lock() serialises against that
+	 * walk, and psec_detached keeps the PSE_REGISTERED walk from attaching a
+	 * new handle in the window before device_del() takes the phy off the bus.
+	 */
+	pse_phy_lock();
+	psec = phydev->psec;
+	phydev->psec = NULL;
+	phydev->psec_detached = true;
+	pse_control_put(psec);
+	pse_phy_unlock();
 
 	device_del(&phydev->mdio.dev);
 
@@ -3980,8 +4115,14 @@ static int __init phy_init(void)
 	if (rc)
 		goto err_c45;
 
+	rc = pse_register_notifier(&phy_pse_notifier);
+	if (rc)
+		goto err_genphy;
+
 	return 0;
 
+err_genphy:
+	phy_driver_unregister(&genphy_driver);
 err_c45:
 	phy_driver_unregister(&genphy_c45_driver);
 err_ethtool_phy_ops:
@@ -3998,6 +4139,7 @@ err_class:
 
 static void __exit phy_exit(void)
 {
+	pse_unregister_notifier(&phy_pse_notifier);
 	phy_driver_unregister(&genphy_c45_driver);
 	phy_driver_unregister(&genphy_driver);
 	rtnl_lock();

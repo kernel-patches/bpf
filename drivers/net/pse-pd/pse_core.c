@@ -25,7 +25,54 @@ static LIST_HEAD(pse_controller_list);
 static DEFINE_XARRAY_ALLOC(pse_pw_d_map);
 static DEFINE_MUTEX(pse_pw_d_mutex);
 
+/* Serialises phydev->psec against the PSE controller lifecycle notifier and
+ * the ethtool PSE paths, in place of rtnl. The attach must not take rtnl: an
+ * MDIO bus registered from ndo_init (e.g. lantiq_etop) calls
+ * phy_device_register() with rtnl already held, so taking rtnl for the attach
+ * would deadlock. It lives here rather than in phylib because PSE_CONTROLLER
+ * is bool, so pse_core is always built into vmlinux and net/ethtool can call
+ * these directly; phylib is tristate and must not be linked against from
+ * built-in code. Lock order: rtnl -> pse_phy_mutex -> pse_list_mutex ->
+ * pcdev->lock.
+ */
+static DEFINE_MUTEX(pse_phy_mutex);
+
 static BLOCKING_NOTIFIER_HEAD(pse_controller_notifier);
+
+/**
+ * pse_phy_lock - serialise access to phydev->psec
+ *
+ * Held by the PSE controller lifecycle notifier, by the phy attach and detach
+ * paths and by the ethtool PSE paths. The PSE_UNREGISTERED walk clears
+ * phydev->psec and drops the phy's reference under this lock, so anything that
+ * attaches, detaches or dereferences phydev->psec must hold it across the
+ * whole access.
+ */
+void pse_phy_lock(void)
+{
+	mutex_lock(&pse_phy_mutex);
+}
+EXPORT_SYMBOL_GPL(pse_phy_lock);
+
+/**
+ * pse_phy_unlock - release the lock taken by pse_phy_lock()
+ */
+void pse_phy_unlock(void)
+{
+	mutex_unlock(&pse_phy_mutex);
+}
+EXPORT_SYMBOL_GPL(pse_phy_unlock);
+
+#ifdef CONFIG_LOCKDEP
+/**
+ * pse_phy_lock_assert_held - assert that pse_phy_lock() is held
+ */
+void pse_phy_lock_assert_held(void)
+{
+	lockdep_assert_held(&pse_phy_mutex);
+}
+EXPORT_SYMBOL_GPL(pse_phy_lock_assert_held);
+#endif
 
 /**
  * pse_register_notifier - register a callback for PSE controller events
@@ -1345,6 +1392,13 @@ void pse_controller_unregister(struct pse_controller_dev *pcdev)
 	 */
 	cancel_work_sync(&pcdev->ntf_work);
 
+	/* Every handle should be gone here: subscribers drop theirs in the
+	 * event above, and the worker's transient one goes with the drain.
+	 * The controller is off the list and the irq is off, so nothing can
+	 * add one. Anything left is a holder nobody accounted for.
+	 */
+	WARN_ON(!list_empty(&pcdev->pse_control_head));
+
 	pse_flush_pw_ds(pcdev);
 	pse_release_pis(pcdev);
 	kfifo_free(&pcdev->ntf_fifo);
@@ -2206,3 +2260,17 @@ bool pse_has_c33(struct pse_control *psec)
 	return psec->pcdev->types & ETHTOOL_PSE_C33;
 }
 EXPORT_SYMBOL_GPL(pse_has_c33);
+
+/**
+ * pse_control_matches_pcdev - Test whether a pse_control targets a controller
+ * @psec: pse_control obtained from of_pse_control_get()
+ * @pcdev: PSE controller to compare against
+ *
+ * Return: %true if @psec was obtained from @pcdev, %false otherwise.
+ */
+bool pse_control_matches_pcdev(struct pse_control *psec,
+			       struct pse_controller_dev *pcdev)
+{
+	return psec->pcdev == pcdev;
+}
+EXPORT_SYMBOL_GPL(pse_control_matches_pcdev);

@@ -71,7 +71,9 @@ static int pse_prepare_data(const struct ethnl_req_info *req_base,
 	if (ret < 0)
 		return ret;
 
+	pse_phy_lock();
 	ret = pse_get_pse_attributes(phydev, info->extack, data);
+	pse_phy_unlock();
 
 	ethnl_ops_complete(dev);
 
@@ -281,9 +283,12 @@ ethnl_set_pse(struct ethnl_req_info *req_info, struct genl_info *info)
 
 	phydev = ethnl_req_get_phydev(req_info, tb, ETHTOOL_A_PSE_HEADER,
 				      info->extack);
+
+	pse_phy_lock();
+
 	ret = ethnl_set_pse_validate(phydev, info);
 	if (ret)
-		return ret;
+		goto out;
 
 	if (tb[ETHTOOL_A_PSE_PRIO]) {
 		unsigned int prio;
@@ -291,7 +296,7 @@ ethnl_set_pse(struct ethnl_req_info *req_info, struct genl_info *info)
 		prio = nla_get_u32(tb[ETHTOOL_A_PSE_PRIO]);
 		ret = pse_ethtool_set_prio(phydev->psec, info->extack, prio);
 		if (ret)
-			return ret;
+			goto out;
 	}
 
 	if (tb[ETHTOOL_A_C33_PSE_AVAIL_PW_LIMIT]) {
@@ -301,7 +306,7 @@ ethnl_set_pse(struct ethnl_req_info *req_info, struct genl_info *info)
 		ret = pse_ethtool_set_pw_limit(phydev->psec, info->extack,
 					       pw_limit);
 		if (ret)
-			return ret;
+			goto out;
 	}
 
 	/* These values are already validated by the ethnl_pse_set_policy */
@@ -319,9 +324,10 @@ ethnl_set_pse(struct ethnl_req_info *req_info, struct genl_info *info)
 		 */
 		ret = pse_ethtool_set_config(phydev->psec, info->extack,
 					     &config);
-		if (ret)
-			return ret;
 	}
+
+out:
+	pse_phy_unlock();
 
 	/* Return errno or zero - PSE has no notification */
 	return ret;

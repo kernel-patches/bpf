@@ -666,6 +666,12 @@ struct phy_oatc14_sqi_capability {
  * @master_slave_state: Current master/slave configuration
  * @mii_ts: Pointer to time stamper callbacks
  * @psec: Pointer to Power Sourcing Equipment control struct
+ * @psec_detached: Set while phylib will not accept a PSE handle for this
+ *	phy, either because registration has not completed or because it has
+ *	already released @psec, so the PSE_REGISTERED notifier walk skips it.
+ *	Not a bitfield: once the phy is on the bus it is written under
+ *	pse_phy_lock() while other flags are written under phydev->lock or
+ *	rtnl, and they must not share a storage unit
  * @ports: List of PHY ports structures
  * @n_ports: Number of ports currently attached to the PHY
  * @max_n_ports: Max number of ports this PHY can expose
@@ -807,6 +813,7 @@ struct phy_device {
 	struct net_device *attached_dev;
 	struct mii_timestamper *mii_ts;
 	struct pse_control *psec;
+	bool psec_detached;
 
 	struct list_head ports;
 	int n_ports;

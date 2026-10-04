@@ -386,8 +386,22 @@ int pse_ethtool_set_prio(struct pse_control *psec,
 bool pse_has_podl(struct pse_control *psec);
 bool pse_has_c33(struct pse_control *psec);
 
+bool pse_control_matches_pcdev(struct pse_control *psec,
+			       struct pse_controller_dev *pcdev);
+
 int pse_register_notifier(struct notifier_block *nb);
 int pse_unregister_notifier(struct notifier_block *nb);
+
+void pse_phy_lock(void);
+void pse_phy_unlock(void);
+
+#ifdef CONFIG_LOCKDEP
+void pse_phy_lock_assert_held(void);
+#else
+static inline void pse_phy_lock_assert_held(void)
+{
+}
+#endif
 
 #else
 
@@ -439,6 +453,12 @@ static inline bool pse_has_c33(struct pse_control *psec)
 	return false;
 }
 
+static inline bool pse_control_matches_pcdev(struct pse_control *psec,
+					     struct pse_controller_dev *pcdev)
+{
+	return false;
+}
+
 static inline int pse_register_notifier(struct notifier_block *nb)
 {
 	return 0;
@@ -447,6 +467,18 @@ static inline int pse_register_notifier(struct notifier_block *nb)
 static inline int pse_unregister_notifier(struct notifier_block *nb)
 {
 	return 0;
+}
+
+static inline void pse_phy_lock(void)
+{
+}
+
+static inline void pse_phy_unlock(void)
+{
+}
+
+static inline void pse_phy_lock_assert_held(void)
+{
 }
 
 #endif
