@@ -1604,7 +1604,7 @@ static int record_load_store_access(struct bpf_verifier_env *env,
 	return 0;
 }
 
-/* Adapt the signed helper/kfunc access size until both producers are converted. */
+/* Adapt the signed kfunc access size until its producer is converted. */
 static struct arg_access_info stack_access_info(s64 bytes)
 {
 	bool write = bytes < 0 && bytes != S64_MIN && -bytes < U32_MAX;
@@ -1634,8 +1634,7 @@ static int record_arg_access(struct bpf_verifier_env *env,
 		return 0;
 
 	if (bpf_helper_call(insn)) {
-		info = stack_access_info(bpf_helper_stack_access_bytes(env, insn,
-								       arg_idx, insn_idx));
+		info = bpf_helper_stack_access_bytes(env, insn, arg_idx, insn_idx);
 	} else if (bpf_pseudo_kfunc_call(insn)) {
 		info = stack_access_info(bpf_kfunc_stack_access_bytes(env, insn,
 								      arg_idx, insn_idx));
