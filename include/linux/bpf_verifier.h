@@ -1938,4 +1938,21 @@ int bpf_compute_loops(struct bpf_verifier_env *env);
 int bpf_loop_at_index(struct bpf_verifier_env *env, u32 idx);
 bool bpf_is_nested_loop(struct bpf_verifier_env *env, int inner_header, int outer_header);
 
+/*
+ * Simple binary heap implementation as described by
+ * https://en.wikipedia.org/wiki/Binary_heap
+ */
+struct bpf_min_heap {
+	int (*compare)(int, int, void *); /* ordering function for @elements */
+	int *elements; /* min-heap ordered by @compare */
+	void *arg; /* 3rd argument passed to @compare */
+	int capacity;
+	int count;
+};
+
+void bpf_min_heap_init(struct bpf_min_heap *heap, int (*compare)(int, int, void *), void *arg);
+void bpf_min_heap_free(struct bpf_min_heap *heap);
+int bpf_min_heap_push(struct bpf_min_heap *heap, int elt);
+bool bpf_min_heap_pop(struct bpf_min_heap *heap, int *elt);
+
 #endif /* _LINUX_BPF_VERIFIER_H */
