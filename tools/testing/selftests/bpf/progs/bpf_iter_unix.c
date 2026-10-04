@@ -70,7 +70,7 @@ int dump_unix(struct bpf_iter__unix *ctx)
 
 			for (i = 1; i < len; i++) {
 				/* unix_validate_addr() tests this upper bound. */
-				if (i >= sizeof(struct sockaddr_un))
+				if (i >= sizeof(unix_sk->addr->name->sun_path))
 					break;
 
 				BPF_SEQ_PRINTF(seq, "%c",
