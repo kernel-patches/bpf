@@ -51,7 +51,7 @@ struct clk_omap_reg {
  * @autoidle_mask: mask of the DPLL autoidle mode bitfield in @autoidle_reg
  * @freqsel_mask: mask of the DPLL jitter correction bitfield in @control_reg
  * @dcc_mask: mask of the DPLL DCC correction bitfield @mult_div1_reg
- * @dcc_rate: rate atleast which DCC @dcc_mask must be set
+ * @dcc_rate: rate at least which DCC @dcc_mask must be set
  * @idlest_mask: mask of the DPLL idle status bitfield in @idlest_reg
  * @lpmode_mask: mask of the DPLL low-power mode bitfield in @control_reg
  * @m4xen_mask: mask of the DPLL M4X multiplier bitfield in @control_reg
@@ -265,12 +265,6 @@ int omap2_clk_disable_autoidle_all(void);
 int omap2_clk_enable_autoidle_all(void);
 int omap2_clk_allow_idle(struct clk *clk);
 int omap2_clk_deny_idle(struct clk *clk);
-unsigned long omap2_dpllcore_recalc(struct clk_hw *hw,
-				    unsigned long parent_rate);
-int omap2_reprogram_dpllcore(struct clk_hw *clk, unsigned long rate,
-			     unsigned long parent_rate);
-void omap2xxx_clkt_dpllcore_init(struct clk_hw *hw);
-void omap2xxx_clkt_vps_init(void);
 unsigned long omap2_get_dpll_rate(struct clk_hw_omap *clk);
 
 void ti_dt_clk_init_retry_clks(void);
@@ -321,8 +315,6 @@ void omap3_noncore_dpll_restore_context(struct clk_hw *hw);
 
 int omap3_core_dpll_save_context(struct clk_hw *hw);
 void omap3_core_dpll_restore_context(struct clk_hw *hw);
-
-extern const struct clk_hw_omap_ops clkhwops_omap2xxx_dpll;
 
 #ifdef CONFIG_ATAGS
 int omap3430_clk_legacy_init(void);

@@ -3,7 +3,6 @@
 #define ASMARM_PCI_H
 
 #ifdef __KERNEL__
-#include <asm/mach/pci.h> /* for pci_sys_data */
 
 extern unsigned long pcibios_min_io;
 #define PCIBIOS_MIN_IO pcibios_min_io
@@ -21,8 +20,6 @@ static inline int pci_proc_domain(struct pci_bus *bus)
 
 #define HAVE_PCI_MMAP
 #define ARCH_GENERIC_PCI_MMAP_RESOURCE
-
-extern void pcibios_report_status(unsigned int status_mask, int warn);
 
 #endif /* __KERNEL__ */
 #endif

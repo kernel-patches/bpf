@@ -15,10 +15,9 @@
 
 /*------------------------------ Tx Desc definition Macro ------------------------*/
 /* pragma mark -- Tx Desc related definition. -- */
-/*  */
-/*  */
+
 /* 	Rate */
-/*  */
+
 /*  CCK Rates, TxHT = 0 */
 #define DESC_RATE1M					0x00
 #define DESC_RATE2M					0x01
@@ -112,7 +111,7 @@ u8 HwRateToMRate(u8 rate);
 
 void HalSetBrateCfg(
 	struct adapter *Adapter,
-	u8 *mBratesOS,
+	u8 *basic_rates,
 	u16	*pBrateCfg);
 
 bool

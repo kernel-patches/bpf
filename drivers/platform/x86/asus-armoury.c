@@ -21,6 +21,7 @@
 #include <linux/dmi.h>
 #include <linux/err.h>
 #include <linux/errno.h>
+#include <linux/firmware_attributes.h>
 #include <linux/fs.h>
 #include <linux/kernel.h>
 #include <linux/kmod.h>
@@ -35,7 +36,6 @@
 #include <linux/sysfs.h>
 
 #include "asus-armoury.h"
-#include "firmware_attributes_class.h"
 
 #define ASUS_NB_WMI_EVENT_GUID "0B3CBB35-E3C2-45ED-91C2-4C5A6D195D1C"
 
@@ -515,13 +515,25 @@ static ssize_t dgpu_disable_current_value_store(struct kobject *kobj,
 	if (err)
 		return err;
 
-	if (asus_armoury.gpu_mux_dev_id) {
-		err = armoury_get_devstate(NULL, &result, asus_armoury.gpu_mux_dev_id);
-		if (err)
-			return err;
-		if (!result && disable) {
-			pr_warn("Cannot disable dGPU when the MUX is in dGPU mode\n");
-			return -EBUSY;
+	if (disable) {
+		if (asus_armoury.gpu_mux_dev_id) {
+			err = armoury_get_devstate(NULL, &result, asus_armoury.gpu_mux_dev_id);
+			if (err)
+				return err;
+			if (!result) {
+				pr_warn("Cannot disable dGPU when the MUX is in dGPU mode\n");
+				return -EBUSY;
+			}
+		}
+
+		if (armoury_has_devstate(ASUS_WMI_DEVID_DGPU_POWER_STATE)) {
+			err = armoury_get_devstate(NULL, &result, ASUS_WMI_DEVID_DGPU_POWER_STATE);
+			if (err)
+				return err;
+			if (result) {
+				pr_warn("Cannot disable dGPU when it is in use\n");
+				return -EBUSY;
+			}
 		}
 	}
 
@@ -786,6 +798,8 @@ ASUS_ATTR_GROUP_BOOL_RW(screen_auto_brightness, "screen_auto_brightness",
 			"Set the panel brightness to Off<0> or On<1>");
 ASUS_ATTR_GROUP_BOOL_RO(egpu_connected, "egpu_connected", ASUS_WMI_DEVID_EGPU_CONNECTED,
 			"Show the eGPU connection status");
+ASUS_ATTR_GROUP_BOOL_RO(dgpu_power_state, "dgpu_power_state", ASUS_WMI_DEVID_DGPU_POWER_STATE,
+			"Show the dGPU power state (0: D3 cold, 1: D0 active)");
 ASUS_ATTR_GROUP_ROG_TUNABLE(ppt_pl1_spl, ATTR_PPT_PL1_SPL, ASUS_WMI_DEVID_PPT_PL1_SPL,
 			    "Set the CPU slow package limit");
 ASUS_ATTR_GROUP_ROG_TUNABLE(ppt_pl2_sppt, ATTR_PPT_PL2_SPPT, ASUS_WMI_DEVID_PPT_PL2_SPPT,
@@ -810,6 +824,7 @@ static const struct asus_attr_group armoury_attr_groups[] = {
 	{ &egpu_connected_attr_group, ASUS_WMI_DEVID_EGPU_CONNECTED },
 	{ &egpu_enable_attr_group, ASUS_WMI_DEVID_EGPU },
 	{ &dgpu_disable_attr_group, ASUS_WMI_DEVID_DGPU },
+	{ &dgpu_power_state_attr_group, ASUS_WMI_DEVID_DGPU_POWER_STATE },
 	{ &apu_mem_attr_group, ASUS_WMI_DEVID_APU_MEM },
 
 	{ &ppt_pl1_spl_attr_group, ASUS_WMI_DEVID_PPT_PL1_SPL },

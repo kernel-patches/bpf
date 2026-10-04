@@ -16,7 +16,6 @@ struct rtw_wdev_priv {
 	spinlock_t scan_req_lock;
 
 	struct net_device *pmon_ndev;/* for monitor interface */
-	char ifname_mon[IFNAMSIZ + 1]; /* interface name for monitor interface */
 
 	bool block;
 	bool power_mgmt;

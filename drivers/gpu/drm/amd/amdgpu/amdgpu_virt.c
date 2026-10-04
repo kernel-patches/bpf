@@ -47,6 +47,7 @@
 	} while (0)
 
 #define mmRCC_CONFIG_MEMSIZE    0xde3
+#define mmRCC_HW_DEBUG          0x10c01
 
 const char *amdgpu_virt_dynamic_crit_table_name[] = {
 	"IP DISCOVERY",
@@ -339,6 +340,41 @@ static int amdgpu_virt_ras_realloc_eh_data_space(struct amdgpu_device *adev,
 	return 0;
 }
 
+int amdgpu_virt_get_uniras_ras_caps(struct amdgpu_device *adev,
+				    struct amd_sriov_uniras_caps *caps)
+{
+	struct amd_sriov_msg_pf2vf_info *pf2vf_msg;
+
+	if (!adev || !caps)
+		return -EINVAL;
+
+	if (!adev->virt.fw_reserve.p_pf2vf)
+		return -EINVAL;
+
+	if (adev->virt.fw_reserve.p_pf2vf->version != AMD_SRIOV_MSG_FW_VRAM_PF2VF_VER)
+		return -EINVAL;
+
+	pf2vf_msg = (struct amd_sriov_msg_pf2vf_info *)adev->virt.fw_reserve.p_pf2vf;
+
+	if (pf2vf_msg->header.size > (AMD_SRIOV_MSG_SIZE_KB << 10) ||
+	    pf2vf_msg->header.size <
+	    offsetof(struct amd_sriov_msg_pf2vf_info, pf2vf_ras_caps) +
+	    sizeof(pf2vf_msg->pf2vf_ras_caps))
+		return -EINVAL;
+
+	if (!pf2vf_msg->feature_flags.flags.uniras_support)
+		return -EOPNOTSUPP;
+
+	*caps = pf2vf_msg->pf2vf_ras_caps.uniras_caps;
+
+	dev_dbg(adev->dev,
+		"uniras caps: ras_ext_ecc_type=0x%x ras_int_ecc_attributes=0x%x ras_en_block_mask=0x%llx\n",
+		caps->ras_ext_ecc_type, caps->ras_int_ecc_attributes,
+		caps->ras_en_block_mask);
+
+	return 0;
+}
+
 static int amdgpu_virt_init_ras_err_handler_data(struct amdgpu_device *adev)
 {
 	struct amdgpu_virt *virt = &adev->virt;
@@ -614,9 +650,12 @@ static int amdgpu_virt_read_pf2vf_data(struct amdgpu_device *adev)
 		if (amdgpu_sriov_is_unitid_support(adev))
 			adev->unitid = pf2vf->unitid;
 
-		adev->virt.ras_en_caps.all = pf2vf->ras_en_caps.all;
+		adev->virt.ras_en_caps.all = pf2vf->pf2vf_ras_caps.ras_en_caps.all;
 		adev->virt.ras_telemetry_en_caps.all =
-			pf2vf->ras_telemetry_en_caps.all;
+			pf2vf->pf2vf_ras_caps.ras_telemetry_en_caps.all;
+
+		adev->have_atomics_support = pf2vf->pcie_atomic_ops_support_flags ==
+			(PCI_EXP_DEVCAP2_ATOMIC_COMP32 | PCI_EXP_DEVCAP2_ATOMIC_COMP64);
 		break;
 	default:
 		dev_err(adev->dev, "invalid pf2vf version: 0x%x\n", pf2vf_info->version);
@@ -1030,6 +1069,9 @@ int amdgpu_virt_init_critical_region(struct amdgpu_device *adev)
 		return 0;
 
 	vram_size = RREG32(mmRCC_CONFIG_MEMSIZE);
+	/* Fall back to RCC_HW_DEBUG when RCC_CONFIG_MEMSIZE reads 0 on a VF. */
+	if (!vram_size)
+		vram_size = RREG32(mmRCC_HW_DEBUG);
 	if (!vram_size || vram_size == U32_MAX)
 		return -EINVAL;
 	vram_size <<= 20;
@@ -1327,6 +1369,31 @@ bool amdgpu_virt_fw_load_skip_check(struct amdgpu_device *adev, uint32_t ucode_i
 			return false;
 		else
 			return true;
+	case IP_VERSION(15, 0, 3):
+		if (ucode_id == AMDGPU_UCODE_ID_CP_RS64_PFP
+			|| ucode_id == AMDGPU_UCODE_ID_CP_RS64_ME
+			|| ucode_id == AMDGPU_UCODE_ID_CP_RS64_MEC
+			|| ucode_id == AMDGPU_UCODE_ID_CP_RS64_PFP_P0_STACK
+			|| ucode_id == AMDGPU_UCODE_ID_CP_RS64_PFP_P1_STACK
+			|| ucode_id == AMDGPU_UCODE_ID_CP_RS64_ME_P0_STACK
+			|| ucode_id == AMDGPU_UCODE_ID_CP_RS64_ME_P1_STACK
+			|| ucode_id == AMDGPU_UCODE_ID_CP_RS64_MEC_P0_STACK
+			|| ucode_id == AMDGPU_UCODE_ID_CP_RS64_MEC_P1_STACK
+			|| ucode_id == AMDGPU_UCODE_ID_CP_RS64_MEC_P2_STACK
+			|| ucode_id == AMDGPU_UCODE_ID_CP_RS64_MEC_P3_STACK
+			|| ucode_id == AMDGPU_UCODE_ID_CP_RS64_MEC_P4_STACK
+			|| ucode_id == AMDGPU_UCODE_ID_CP_RS64_MEC_P5_STACK
+			|| ucode_id == AMDGPU_UCODE_ID_CP_RS64_MEC_P6_STACK
+			|| ucode_id == AMDGPU_UCODE_ID_CP_RS64_MEC_P7_STACK
+			|| ucode_id == AMDGPU_UCODE_ID_CP_MES
+			|| ucode_id == AMDGPU_UCODE_ID_CP_MES_DATA
+			|| ucode_id == AMDGPU_UCODE_ID_CP_MES1
+			|| ucode_id == AMDGPU_UCODE_ID_CP_MES1_DATA
+			|| ucode_id == AMDGPU_UCODE_ID_VPE_CTX
+			|| ucode_id == AMDGPU_UCODE_ID_VPE_CTL)
+			return false;
+		else
+			return true;
 	default:
 		/* lagacy black list */
 		if (ucode_id == AMDGPU_UCODE_ID_SDMA0
@@ -1530,12 +1597,12 @@ static u32 amdgpu_virt_rlcg_vfi_reg_rw(struct amdgpu_device *adev, u32 offset, u
 	spin_unlock_irqrestore(&adev->virt.rlcg_reg_lock, flags);
 
 	if (is_err)
-		dev_err(adev->dev, "VFi: [grbm_cntl=0x%x grbm_idx=0x%x] addr=0x%x (byte addr 0x%x), data=0x%x, cmd=0x%x\n",
-			grbm_cntl_data, grbm_idx_data,
+		dev_err(adev->dev, "VFi: xcc%u [grbm_cntl=0x%x grbm_idx=0x%x] addr=0x%x (byte addr 0x%x), data=0x%x, cmd=0x%x\n",
+			xcc_id, grbm_cntl_data, grbm_idx_data,
 			addr, addr * 4, data, cmd);
 	else
-		dev_dbg(adev->dev, "VFi: [grbm_cntl=0x%x grbm_idx=0x%x] addr=0x%x (byte addr 0x%x), data=0x%x, cmd=0x%x\n",
-			grbm_cntl_data, grbm_idx_data,
+		dev_dbg(adev->dev, "VFi: xcc%u [grbm_cntl=0x%x grbm_idx=0x%x] addr=0x%x (byte addr 0x%x), data=0x%x, cmd=0x%x\n",
+			xcc_id, grbm_cntl_data, grbm_idx_data,
 			addr, addr * 4, data, cmd);
 
 	return data;

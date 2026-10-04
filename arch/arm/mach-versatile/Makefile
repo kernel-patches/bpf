@@ -22,9 +22,6 @@ obj-$(CONFIG_ARCH_VEXPRESS_TC2_PM)	+= tc2_pm.o
 CFLAGS_tc2_pm.o				+= -march=armv7-a
 CFLAGS_REMOVE_tc2_pm.o			= -pg
 
-# mps2
-obj-$(CONFIG_ARCH_MPS2)			+= v2m-mps2.o
-
 ifdef CONFIG_SMP
 obj-y					+= headsmp.o platsmp.o
 obj-$(CONFIG_ARCH_REALVIEW)		+= platsmp-realview.o

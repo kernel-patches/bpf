@@ -106,11 +106,7 @@ union txdesc {
 };
 
 struct	hw_xmit	{
-	/* spinlock_t xmit_lock; */
-	/* struct list_head	pending; */
 	struct __queue *sta_queue;
-	/* struct hw_txqueue *phwtxqueue; */
-	/* signed int	txcmdcnt; */
 	int	accnt;
 };
 
@@ -166,7 +162,6 @@ struct pkt_attrib {
 	u8 rtsen;
 	u8 cts2self;
 	union Keytype	dot11tkiptxmickey;
-	/* union Keytype	dot11tkiprxmickey; */
 	union Keytype	dot118021x_UncstKey;
 
 	u8 icmp_pkt;
@@ -281,7 +276,6 @@ struct sta_xmit_priv {
 	signed int	apsd_setting;	/* When bit mask is on, the associated edca queue supports APSD. */
 
 
-	/* struct tx_servq blk_q[MAX_NUMBLKS]; */
 	struct tx_servq	be_q;			/* priority == 0, 3 */
 	struct tx_servq	bk_q;			/* priority == 1, 2 */
 	struct tx_servq	vi_q;			/* priority == 4, 5 */
@@ -290,12 +284,6 @@ struct sta_xmit_priv {
 	struct list_head  apsd;
 
 	u16 txseq_tid[16];
-
-	/* uint	sta_tx_bytes; */
-	/* u64	sta_tx_pkts; */
-	/* uint	sta_tx_fail; */
-
-
 };
 
 
@@ -323,34 +311,21 @@ struct	xmit_priv {
 	struct completion xmit_comp;
 	struct completion terminate_xmitthread_comp;
 
-	/* struct __queue	blk_strms[MAX_NUMBLKS]; */
 	struct __queue	be_pending;
 	struct __queue	bk_pending;
 	struct __queue	vi_pending;
 	struct __queue	vo_pending;
 	struct __queue	bm_pending;
 
-	/* struct __queue	legacy_dz_queue; */
-	/* struct __queue	apsd_queue; */
-
 	u8 *pallocated_frame_buf;
 	u8 *pxmit_frame_buf;
 	uint free_xmitframe_cnt;
 	struct __queue	free_xmit_queue;
 
-	/* uint mapping_addr; */
-	/* uint pkt_sz; */
-
 	u8 *xframe_ext_alloc_addr;
 	u8 *xframe_ext;
 	uint free_xframe_ext_cnt;
 	struct __queue free_xframe_ext_queue;
-
-	/* struct	hw_txqueue	be_txqueue; */
-	/* struct	hw_txqueue	bk_txqueue; */
-	/* struct	hw_txqueue	vi_txqueue; */
-	/* struct	hw_txqueue	vo_txqueue; */
-	/* struct	hw_txqueue	bmc_txqueue; */
 
 	uint	frag_len;
 
@@ -359,7 +334,6 @@ struct	xmit_priv {
 	u8   vcs_setting;
 	u8 vcs;
 	u8 vcs_type;
-	/* u16  rts_thresh; */
 
 	u64	tx_bytes;
 	u64	tx_pkts;
@@ -397,34 +371,36 @@ struct	xmit_priv {
 	spinlock_t lock_sctx;
 };
 
-extern struct xmit_frame *__rtw_alloc_cmdxmitframe(struct xmit_priv *pxmitpriv,
-		enum cmdbuf_type buf_type);
+struct xmit_frame *__rtw_alloc_cmdxmitframe(struct xmit_priv *pxmitpriv,
+					    enum cmdbuf_type buf_type);
 #define rtw_alloc_cmdxmitframe(p) __rtw_alloc_cmdxmitframe(p, CMDBUF_RSVD)
 #define rtw_alloc_bcnxmitframe(p) __rtw_alloc_cmdxmitframe(p, CMDBUF_BEACON)
 
-extern struct xmit_buf *rtw_alloc_xmitbuf_ext(struct xmit_priv *pxmitpriv);
-extern s32 rtw_free_xmitbuf_ext(struct xmit_priv *pxmitpriv, struct xmit_buf *pxmitbuf);
+struct xmit_buf *rtw_alloc_xmitbuf_ext(struct xmit_priv *pxmitpriv);
+void rtw_free_xmitbuf_ext(struct xmit_priv *pxmitpriv, struct xmit_buf *pxmitbuf);
 
-extern struct xmit_buf *rtw_alloc_xmitbuf(struct xmit_priv *pxmitpriv);
-extern s32 rtw_free_xmitbuf(struct xmit_priv *pxmitpriv, struct xmit_buf *pxmitbuf);
+struct xmit_buf *rtw_alloc_xmitbuf(struct xmit_priv *pxmitpriv);
+void rtw_free_xmitbuf(struct xmit_priv *pxmitpriv, struct xmit_buf *pxmitbuf);
 
 void rtw_count_tx_stats(struct adapter *padapter, struct xmit_frame *pxmitframe, int sz);
-extern void rtw_update_protection(struct adapter *padapter, u8 *ie, uint ie_len);
-extern int rtw_make_wlanhdr(struct adapter *padapter, u8 *hdr, struct pkt_attrib *pattrib);
-extern s32 rtw_put_snap(u8 *data, u16 h_proto);
+void rtw_update_protection(struct adapter *padapter, u8 *ie, uint ie_len);
+int rtw_make_wlanhdr(struct adapter *padapter, u8 *hdr, struct pkt_attrib *pattrib);
+s32 rtw_put_snap(u8 *data, u16 h_proto);
 
-extern struct xmit_frame *rtw_alloc_xmitframe(struct xmit_priv *pxmitpriv);
+struct xmit_frame *rtw_alloc_xmitframe(struct xmit_priv *pxmitpriv);
 struct xmit_frame *rtw_alloc_xmitframe_ext(struct xmit_priv *pxmitpriv);
 struct xmit_frame *rtw_alloc_xmitframe_once(struct xmit_priv *pxmitpriv);
-extern s32 rtw_free_xmitframe(struct xmit_priv *pxmitpriv, struct xmit_frame *pxmitframe);
-extern void rtw_free_xmitframe_queue(struct xmit_priv *pxmitpriv, struct __queue *pframequeue);
+void rtw_free_xmitframe(struct xmit_priv *pxmitpriv, struct xmit_frame *pxmitframe);
+void rtw_free_xmitframe_queue(struct xmit_priv *pxmitpriv, struct __queue *pframequeue);
 struct tx_servq *rtw_get_sta_pending(struct adapter *padapter, struct sta_info *psta, signed int up, u8 *ac);
 int rtw_xmitframe_enqueue(struct adapter *padapter, struct xmit_frame *pxmitframe);
 
-extern u32 rtw_calculate_wlan_pkt_size_by_attribue(struct pkt_attrib *pattrib);
+u32 rtw_calculate_wlan_pkt_size_by_attribue(struct pkt_attrib *pattrib);
 #define rtw_wlan_pkt_size(f) rtw_calculate_wlan_pkt_size_by_attribue(&f->attrib)
-extern int rtw_xmitframe_coalesce(struct adapter *padapter, struct sk_buff *pkt, struct xmit_frame *pxmitframe);
-extern s32 rtw_mgmt_xmitframe_coalesce(struct adapter *padapter, struct sk_buff *pkt, struct xmit_frame *pxmitframe);
+int rtw_xmitframe_coalesce(struct adapter *padapter, struct sk_buff *pkt,
+			   struct xmit_frame *pxmitframe);
+int rtw_mgmt_xmitframe_coalesce(struct adapter *padapter, struct sk_buff *pkt,
+				struct xmit_frame *pxmitframe);
 s32 _rtw_init_hw_txqueue(struct hw_txqueue *phw_txqueue, u8 ac_tag);
 void _rtw_init_sta_xmit_priv(struct sta_xmit_priv *psta_xmitpriv);
 

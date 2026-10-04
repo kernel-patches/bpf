@@ -7,6 +7,7 @@
 
 #include <drv_types.h>
 #include <rtl8723b_hal.h>
+#include <linux/align.h>
 
 static void initrecvbuf(struct recv_buf *precvbuf, struct adapter *padapter)
 {
@@ -95,7 +96,6 @@ static void update_recvframe_phyinfo(union recv_frame *precvframe,
 		.is_beacon   = false,
 	};
 
-	/* unsigned long		irqL; */
 	struct sta_priv *pstapriv;
 	struct sta_info *psta;
 
@@ -124,13 +124,10 @@ static void update_recvframe_phyinfo(union recv_frame *precvframe,
 
 	pkt_info.data_rate = pattrib->data_rate;
 
-	/* rtl8723b_query_rx_phy_status(precvframe, pphy_status); */
-	/* spin_lock_bh(&p_hal_data->odm_stainfo_lock); */
 	odm_phy_status_query(&p_hal_data->odmpriv, p_phy_info,
 			   (u8 *)pphy_status, &(pkt_info));
 	if (psta)
 		psta->rssi = pattrib->phy_info.RecvSignalPower;
-	/* spin_unlock_bh(&p_hal_data->odm_stainfo_lock); */
 	precvframe->u.hdr.psta = NULL;
 	if (
 		pkt_info.bssid_match &&
@@ -306,7 +303,6 @@ static void rtl8723bs_recv_tasklet(struct tasklet_struct *t)
 				precvframe->u.hdr.rx_end = skb_end_pointer(pkt_copy);
 
 				recvframe_put(precvframe, skb_len);
-				/* recvframe_pull(precvframe, drvinfo_sz + RXDESC_SIZE); */
 
 				if (p_hal_data->ReceiveConfig & RCR_APPFCS)
 					recvframe_pull_tail(precvframe, IEEE80211_FCS_LEN);
@@ -316,7 +312,6 @@ static void rtl8723bs_recv_tasklet(struct tasklet_struct *t)
 
 				/*  update drv info */
 				if (p_hal_data->ReceiveConfig & RCR_APP_BA_SSN) {
-					/* rtl8723s_update_bassn(padapter, pdrvinfo); */
 					ptr += 4;
 				}
 
@@ -386,7 +381,7 @@ s32 rtl8723bs_init_recv_priv(struct adapter *padapter)
 		goto exit;
 	}
 
-	precvpriv->precv_buf = (u8 *)N_BYTE_ALIGMENT((SIZE_PTR)(precvpriv->pallocated_recv_buf), 4);
+	precvpriv->precv_buf = PTR_ALIGN(precvpriv->pallocated_recv_buf, 4);
 
 	/*  init each recv buffer */
 	precvbuf = (struct recv_buf *)precvpriv->precv_buf;

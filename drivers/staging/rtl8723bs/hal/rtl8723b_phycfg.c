@@ -67,7 +67,6 @@ void PHY_SetBBReg_8723B(
 	u32 Data
 )
 {
-	/* u16 BBWaitCounter	= 0; */
 	u32 OriginalValue, BitShift;
 
 	if (BitMask != bMaskDWord) { /* if not "double word" write */
@@ -79,9 +78,7 @@ void PHY_SetBBReg_8723B(
 	rtw_write32(Adapter, RegAddr, Data);
 }
 
-/*  */
 /*  2. RF register R/W API */
-/*  */
 
 static u32 phy_RFSerialRead_8723B(
 	struct adapter *Adapter, enum rf_path eRFPath, u32 Offset
@@ -96,9 +93,7 @@ static u32 phy_RFSerialRead_8723B(
 	u32 MaskforPhySet = 0;
 	int i = 0;
 
-	/*  */
 	/*  Make sure RF register offset is correct */
-	/*  */
 	Offset &= 0xff;
 
 	NewOffset = Offset;
@@ -189,18 +184,13 @@ static void phy_RFSerialWrite_8723B(
 
 	Offset &= 0xff;
 
-	/*  */
 	/*  Switch page for 8256 RF IC */
-	/*  */
 	NewOffset = Offset;
 
-	/*  */
 	/*  Put write addr in [5:0]  and write data in [31:16] */
-	/*  */
 	DataAndAddr = ((NewOffset << 20) | (Data & 0x000fffff)) & 0x0fffffff;	/*  T65 RF */
-	/*  */
+
 	/*  Write Operation */
-	/*  */
 	PHY_SetBBReg(Adapter, pPhyReg->rf3wireOffset, bMaskDWord, DataAndAddr);
 }
 
@@ -265,9 +255,7 @@ void PHY_SetRFReg_8723B(
 	phy_RFSerialWrite_8723B(Adapter, eRFPath, RegAddr, Data);
 }
 
-/*  */
 /*  3. Initial MAC/BB/RF config by reading MAC/BB/RF txt. */
-/*  */
 
 /*-----------------------------------------------------------------------------
  * PHY_MACConfig8192C - Config MAC by header file or parameter file.
@@ -333,9 +321,7 @@ static int phy_BB8723b_Config_ParaFile(struct adapter *Adapter)
 	   pHalData->EEPROMRegulatory == 1))
 		ODM_ConfigRFWithHeaderFile(&pHalData->odmpriv, CONFIG_RF_TXPWR_LMT, 0);
 
-	/*  */
 	/*  1. Read PHY_REG.TXT BB INIT!! */
-	/*  */
 	ODM_ConfigBBWithHeaderFile(&pHalData->odmpriv, CONFIG_BB_PHY_REG);
 
 	/*  If EEPROM or EFUSE autoload OK, We must config by PHY_REG_PG.txt */
@@ -352,12 +338,10 @@ static int phy_BB8723b_Config_ParaFile(struct adapter *Adapter)
 		if (Adapter->registrypriv.reg_enable_tx_power_limit == 1 ||
 		    (Adapter->registrypriv.reg_enable_tx_power_limit == 2 &&
 		   pHalData->EEPROMRegulatory == 1))
-			PHY_ConvertTxPowerLimitToPowerIndex(Adapter);
+			phy_tx_power_limit_to_index(Adapter);
 	}
 
-	/*  */
 	/*  2. Read BB AGC table Initialization */
-	/*  */
 	ODM_ConfigBBWithHeaderFile(&pHalData->odmpriv, CONFIG_BB_AGC_TAB);
 
 	return _SUCCESS;
@@ -389,9 +373,7 @@ int PHY_BBConfig8723B(struct adapter *Adapter)
 
 	rtw_write8(Adapter, REG_AFE_XTAL_CTRL + 1, 0x80);
 
-	/*  */
 	/*  Config BB and AGC */
-	/*  */
 	rtStatus = phy_BB8723b_Config_ParaFile(Adapter);
 
 	/*  0x2C[23:18] = 0x2C[17:12] = CrystalCap */
@@ -413,9 +395,7 @@ int PHY_RFConfig8723B(struct adapter *Adapter)
 {
 	int rtStatus = _SUCCESS;
 
-	/*  */
 	/*  RF config */
-	/*  */
 	rtStatus = PHY_RF6052_Config8723B(Adapter);
 
 	phy_LCK_8723B(Adapter);
@@ -685,7 +665,6 @@ static void PHY_HandleSwChnlAndSetBW8723B(
 	u8 CenterFrequencyIndex1
 )
 {
-	/* static bool		bInitialzed = false; */
 	struct hal_com_data *pHalData = GET_HAL_DATA(Adapter);
 	u8 tmpChannel = pHalData->CurrentChannel;
 	enum channel_width tmpBW = pHalData->CurrentChannelBW;

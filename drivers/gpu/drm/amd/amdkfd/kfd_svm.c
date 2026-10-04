@@ -1348,7 +1348,12 @@ svm_range_get_pte_flags(struct kfd_node *node, struct amdgpu_vm *vm,
 		mtype_local = amdgpu_mtype_local == 0 ? AMDGPU_VM_MTYPE_RW :
 				amdgpu_mtype_local == 1 ? AMDGPU_VM_MTYPE_NC :
 				is_aid_a1 ? AMDGPU_VM_MTYPE_RW : AMDGPU_VM_MTYPE_NC;
-		mtype_remote = is_aid_a1 ? AMDGPU_VM_MTYPE_NC : AMDGPU_VM_MTYPE_UC;
+		/* Remote memory defaults to MTYPE_UC on GFX 12.1 and can be
+		 * overridden through the amdgpu_mtype_remote module parameter
+		 * (0 = MTYPE_NC, 1 = MTYPE_UC).
+		 */
+		mtype_remote = amdgpu_mtype_remote == 0 ? AMDGPU_VM_MTYPE_NC :
+				AMDGPU_VM_MTYPE_UC;
 		snoop = true;
 
 		if (is_local) /* local HBM  */ {
@@ -1752,12 +1757,15 @@ static int svm_range_validate_and_map(struct mm_struct *mm,
 		}
 
 		/*
-		 * If prange with always mapped flag, update mapping on GPUs with
-		 * ACCESS attribute
+		 * If prange with always mapped flag is not mapped or migrated
+		 * yet, update mapping on GPUs with ACCESS attribute. Don't add
+		 * them otherwise, ACCESS GPUs may be on different XGMI hives,
+		 * that would force hmm_range_fault to migrate VRAM back to ram.
 		 */
-		if (prange->flags & KFD_IOCTL_SVM_FLAG_GPU_ALWAYS_MAPPED)
-			bitmap_or(ctx->bitmap, ctx->bitmap, prange->bitmap_access,
-				  MAX_GPU_INSTANCE);
+		if (bitmap_empty(ctx->bitmap, MAX_GPU_INSTANCE) &&
+		    prange->flags & KFD_IOCTL_SVM_FLAG_GPU_ALWAYS_MAPPED)
+			bitmap_copy(ctx->bitmap, prange->bitmap_access,
+				    MAX_GPU_INSTANCE);
 	} else {
 		bitmap_or(ctx->bitmap, prange->bitmap_access,
 			  prange->bitmap_aip, MAX_GPU_INSTANCE);

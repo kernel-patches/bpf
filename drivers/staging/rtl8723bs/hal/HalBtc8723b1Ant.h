@@ -164,9 +164,7 @@ struct coex_sta_8723b_1ant {
 	bool bForceLpsOn;
 };
 
-/*  */
 /*  The following is interface which will notify coex module. */
-/*  */
 void EXhalbtc8723b1ant_PowerOnSetting(struct btc_coexist *pBtCoexist);
 void EXhalbtc8723b1ant_InitHwConfig(struct btc_coexist *pBtCoexist, bool bWifiOnly);
 void EXhalbtc8723b1ant_InitCoexDm(struct btc_coexist *pBtCoexist);

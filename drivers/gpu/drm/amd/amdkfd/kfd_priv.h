@@ -45,7 +45,6 @@
 #include <drm/drm_device.h>
 #include <drm/drm_ioctl.h>
 #include <kgd_kfd_interface.h>
-#include <linux/swap.h>
 
 #include "amd_shared.h"
 #include "amdgpu.h"
@@ -429,8 +428,6 @@ enum kfd_unmap_queues_filter {
  * @KFD_QUEUE_TYPE_SDMA: SDMA user mode queue type.
  *
  * @KFD_QUEUE_TYPE_HIQ: HIQ queue type.
- *
- * @KFD_QUEUE_TYPE_DIQ: DIQ queue type.
  *
  * @KFD_QUEUE_TYPE_SDMA_XGMI: Special SDMA queue for XGMI interface.
  *

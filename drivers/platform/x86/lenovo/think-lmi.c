@@ -14,13 +14,13 @@
 #include <linux/acpi.h>
 #include <linux/array_size.h>
 #include <linux/errno.h>
+#include <linux/firmware_attributes.h>
 #include <linux/fs.h>
 #include <linux/mutex.h>
 #include <linux/string_helpers.h>
 #include <linux/types.h>
 #include <linux/dmi.h>
 #include <linux/wmi.h>
-#include "../firmware_attributes_class.h"
 #include "think-lmi.h"
 
 static bool debug_support;
@@ -249,7 +249,7 @@ static int tlmi_errstr_to_err(const char *errstr)
 {
 	int i;
 
-	for (i = 0; i < sizeof(tlmi_errs)/sizeof(struct tlmi_err_codes); i++) {
+	for (i = 0; i < ARRAY_SIZE(tlmi_errs); i++) {
 		if (!strcmp(tlmi_errs[i].err_str, errstr))
 			return tlmi_errs[i].err_code;
 	}

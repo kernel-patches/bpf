@@ -70,14 +70,12 @@ extern unsigned char WMM_INFO_OUI[];
 extern unsigned char WMM_PARA_OUI[];
 
 
-/*  */
 /*  Channel Plan Type. */
 /*  Note: */
 /* 	We just add new channel plan when the new channel plan is different from any of the following */
 /* 	channel plan. */
 /* 	If you just want to customize the actions(scan period or join actions) about one of the channel plan, */
 /* 	customize them in rt_channel_info in the RT_CHANNEL_LIST. */
-/*  */
 enum {
 	/*  old channel plan mapping ===== */
 	RT_CHANNEL_DOMAIN_FCC = 0x00,
@@ -207,22 +205,22 @@ enum {
 };
 
 struct mlme_handler {
-	unsigned int   num;
+	unsigned int num;
 	char *str;
 	unsigned int (*func)(struct adapter *padapter, union recv_frame *precv_frame);
 };
 
 struct action_handler {
-	unsigned int   num;
+	unsigned int num;
 	char *str;
 	unsigned int (*func)(struct adapter *padapter, union recv_frame *precv_frame);
 };
 
 struct	ss_res {
-	int	state;
-	int	bss_cnt;
-	int	channel_idx;
-	int	scan_mode;
+	int state;
+	int bss_cnt;
+	int channel_idx;
+	int scan_mode;
 	u8 ssid_num;
 	u8 ch_num;
 	struct ndis_802_11_ssid ssid[RTW_SSID_SCAN_AMOUNT];
@@ -253,7 +251,7 @@ struct FW_Sta_Info {
 	u32 status;
 	u32 rx_pkt;
 	u32 retry;
-	NDIS_802_11_RATES_EX  SupportedRates;
+	u8  SupportedRates[NDIS_802_11_LENGTH_RATES_EX];
 };
 
 /*
@@ -369,7 +367,6 @@ struct mlme_ext_priv {
 	u16 sa_query_seq;
 	u64 mgnt_80211w_IPN;
 	u64 mgnt_80211w_IPN_rx;
-	/* struct fw_priv fwpriv; */
 
 	unsigned char cur_channel;
 	unsigned char cur_bwmode;
@@ -389,7 +386,6 @@ struct mlme_ext_priv {
 	struct timer_list		survey_timer;
 	struct timer_list		link_timer;
 	struct timer_list		sa_query_timer;
-	/* struct timer_list		ADDBA_timer; */
 	u16 		chan_scan_time;
 	unsigned long last_scan_time;
 	u8 scan_abort;
@@ -422,15 +418,13 @@ void init_mlme_default_rate_set(struct adapter *padapter);
 void init_mlme_ext_priv(struct adapter *padapter);
 void init_hw_mlme_ext(struct adapter *padapter);
 void free_mlme_ext_priv(struct mlme_ext_priv *pmlmeext);
-extern struct xmit_frame *alloc_mgtxmitframe(struct xmit_priv *pxmitpriv);
-
-/* void fill_fwpriv(struct adapter *padapter, struct fw_priv *pfwpriv); */
+struct xmit_frame *alloc_mgtxmitframe(struct xmit_priv *pxmitpriv);
 
 u8 networktype_to_raid_ex(struct adapter *adapter, struct sta_info *psta);
 
 void get_rate_set(struct adapter *padapter, unsigned char *pbssrate, int *bssrate_len);
 void set_mcs_rate_by_mask(u8 *mcs_set, u32 mask);
-void update_basic_rate_table(struct adapter *padapter, u8 *mBratesOS);
+void update_basic_rate_table(struct adapter *padapter, u8 *basic_rates);
 void update_basic_rate_table_soft_ap(u8 *bssrateset, u32 bssratelen);
 
 void save_dm_func_flag(struct adapter *padapter);
@@ -516,8 +510,8 @@ s16 rtw_camid_search(struct adapter *adapter, u8 *addr, s16 kid);
 s16 rtw_camid_alloc(struct adapter *adapter, struct sta_info *sta, u8 kid);
 void rtw_camid_free(struct adapter *adapter, u8 cam_id);
 
-extern void rtw_alloc_macid(struct adapter *padapter, struct sta_info *psta);
-extern void rtw_release_macid(struct adapter *padapter, struct sta_info *psta);
+void rtw_alloc_macid(struct adapter *padapter, struct sta_info *psta);
+void rtw_release_macid(struct adapter *padapter, struct sta_info *psta);
 
 void report_join_res(struct adapter *padapter, int res);
 void report_survey_event(struct adapter *padapter, union recv_frame *precv_frame);
@@ -527,13 +521,13 @@ void report_add_sta_event(struct adapter *padapter, unsigned char *MacAddr, int 
 void report_wmm_edca_update(struct adapter *padapter);
 
 u8 chk_bmc_sleepq_cmd(struct adapter *padapter);
-extern u8 set_tx_beacon_cmd(struct adapter *padapter);
+u8 set_tx_beacon_cmd(struct adapter *padapter);
 unsigned int setup_beacon_frame(struct adapter *padapter, unsigned char *beacon_frame);
 void update_mgnt_tx_rate(struct adapter *padapter, u8 rate);
 void update_mgntframe_attrib(struct adapter *padapter, struct pkt_attrib *pattrib);
 void update_mgntframe_attrib_addr(struct adapter *padapter, struct xmit_frame *pmgntframe);
 void dump_mgntframe(struct adapter *padapter, struct xmit_frame *pmgntframe);
-s32 dump_mgntframe_and_wait(struct adapter *padapter, struct xmit_frame *pmgntframe, int timeout_ms);
+void dump_mgntframe_and_wait(struct adapter *padapter, struct xmit_frame *pmgntframe, int timeout_ms);
 s32 dump_mgntframe_and_wait_ack(struct adapter *padapter, struct xmit_frame *pmgntframe);
 
 void issue_beacon(struct adapter *padapter, int timeout_ms);
@@ -541,8 +535,6 @@ void issue_probersp(struct adapter *padapter, unsigned char *da, u8 is_valid_p2p
 void issue_assocreq(struct adapter *padapter);
 void issue_asocrsp(struct adapter *padapter, unsigned short status, struct sta_info *pstat, int pkt_type);
 void issue_auth(struct adapter *padapter, struct sta_info *psta, unsigned short status);
-void issue_probereq(struct adapter *padapter, struct ndis_802_11_ssid *pssid, u8 *da);
-s32 issue_probereq_ex(struct adapter *padapter, struct ndis_802_11_ssid *pssid, u8 *da, u8 ch, bool append_wps, int try_cnt, int wait_ms);
 int issue_nulldata(struct adapter *padapter, unsigned char *da, unsigned int power_mode, int try_cnt, int wait_ms);
 s32 issue_nulldata_in_interrupt(struct adapter *padapter, u8 *da);
 int issue_qos_nulldata(struct adapter *padapter, unsigned char *da, u16 tid, int try_cnt, int wait_ms);
@@ -589,8 +581,6 @@ void survey_timer_hdl(struct timer_list *t);
 void link_timer_hdl(struct timer_list *t);
 void addba_timer_hdl(struct timer_list *t);
 void sa_query_timer_hdl(struct timer_list *t);
-/* void reauth_timer_hdl(struct adapter *padapter); */
-/* void reassoc_timer_hdl(struct adapter *padapter); */
 
 #define set_survey_timer(mlmeext, ms) \
 	do { \
@@ -606,12 +596,12 @@ void sa_query_timer_hdl(struct timer_list *t);
 		_set_timer(&(mlmeext)->sa_query_timer, (ms)); \
 	} while (0)
 
-extern void process_addba_req(struct adapter *padapter, u8 *paddba_req, u8 *addr);
+void process_addba_req(struct adapter *padapter, u8 *paddba_req, u8 *addr);
 
-extern void update_TSF(struct mlme_ext_priv *pmlmeext, u8 *pframe, uint len);
-extern void correct_TSF(struct adapter *padapter, struct mlme_ext_priv *pmlmeext);
-extern void adaptive_early_32k(struct mlme_ext_priv *pmlmeext, u8 *pframe, uint len);
-extern bool traffic_status_watchdog(struct adapter *padapter, bool from_timer);
+void update_TSF(struct mlme_ext_priv *pmlmeext, u8 *pframe, uint len);
+void correct_TSF(struct adapter *padapter, struct mlme_ext_priv *pmlmeext);
+void adaptive_early_32k(struct mlme_ext_priv *pmlmeext, u8 *pframe, uint len);
+bool traffic_status_watchdog(struct adapter *padapter, bool from_timer);
 
 int rtw_chk_start_clnt_join(struct adapter *padapter, u8 *ch, u8 *bw, u8 *offset);
 

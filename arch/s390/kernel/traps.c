@@ -26,6 +26,7 @@
 #include <linux/entry-common.h>
 #include <linux/kmsan.h>
 #include <linux/bug.h>
+#include <linux/panic.h>
 #include <asm/entry-percpu.h>
 #include <asm/asm-extable.h>
 #include <asm/irqflags.h>
@@ -33,6 +34,7 @@
 #include <asm/vtime.h>
 #include <asm/fpu.h>
 #include <asm/fault.h>
+#include <asm/processor.h>
 #include "entry.h"
 
 struct pgm_stat {
@@ -283,6 +285,11 @@ static void monitor_event_exception(struct pt_regs *regs)
 	}
 }
 
+void arch_do_panic(void)
+{
+	disabled_wait();
+}
+
 void kernel_stack_invalid(struct pt_regs *regs)
 {
 	/*
@@ -338,7 +345,6 @@ static void (*pgm_check_table[128])(struct pt_regs *regs);
 void noinstr __do_pgm_check(struct pt_regs *regs, unsigned long flags)
 {
 	struct lowcore *lc = get_lowcore();
-	bool percpu_needs_fixup;
 	irqentry_state_t state;
 	struct pgm_stat *stat;
 	unsigned int trapnr;
@@ -400,9 +406,8 @@ void noinstr __do_pgm_check(struct pt_regs *regs, unsigned long flags)
 		pgm_check_table[trapnr](regs);
 out:
 	local_irq_disable();
-	percpu_needs_fixup = percpu_code_check(regs);
 	irqentry_exit(regs, state);
-	percpu_exit(regs, percpu_needs_fixup);
+	percpu_exit(regs);
 }
 
 static int pgm_check_stat_show(struct seq_file *p, void *v)

@@ -167,9 +167,7 @@ static void halbtc8723b2ant_LimitedRx(
 	bool bBtCtrlRxAggSize = bBtCtrlAggBufSize;
 	u8 rxAggSize = aggBufSize;
 
-	/*  */
 	/*	Rx Aggregation related setting */
-	/*  */
 	pBtCoexist->fBtcSet(pBtCoexist, BTC_SET_BL_TO_REJ_AP_AGG_PKT, &bRejectRxAgg);
 	/*  decide BT control aggregation buf size or not */
 	pBtCoexist->fBtcSet(pBtCoexist, BTC_SET_BL_BT_CTRL_AGG_SIZE, &bBtCtrlRxAggSize);
@@ -1209,7 +1207,6 @@ static void halbtc8723b2ant_TdmaDurationAdjust(
 				}
 			}
 		}
-		/*  */
 		up = 0;
 		dn = 0;
 		m = 1;
@@ -2315,12 +2312,8 @@ static void halbtc8723b2ant_InitHwConfig(struct btc_coexist *pBtCoexist, bool bB
 	pBtCoexist->fBtcWrite1ByteBitMask(pBtCoexist, 0x40, 0x20, 0x1);
 }
 
-/*  */
 /*  work around function start with wa_halbtc8723b2ant_ */
-/*  */
-/*  */
 /*  extern function start with EXhalbtc8723b2ant_ */
-/*  */
 void EXhalbtc8723b2ant_PowerOnSetting(struct btc_coexist *pBtCoexist)
 {
 	struct btc_board_info *pBoardInfo = &pBtCoexist->boardInfo;
@@ -2338,7 +2331,6 @@ void EXhalbtc8723b2ant_PowerOnSetting(struct btc_coexist *pBtCoexist)
 	/*  set WLAN_ACT = 0 */
 	pBtCoexist->fBtcWrite1Byte(pBtCoexist, 0x76e, 0x4);
 
-	/*  */
 	/*  S0 or S1 setting and Local register setting(By the setting fw can get ant number, S0/S1, ... info) */
 	/*  Local setting bit define */
 	/*	BIT0: "0" for no antenna inverse; "1" for antenna inverse */

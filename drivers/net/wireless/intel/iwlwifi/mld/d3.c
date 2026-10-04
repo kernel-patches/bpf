@@ -5,6 +5,7 @@
 #include "mld.h"
 
 #include "d3.h"
+#include "tx.h"
 #include "power.h"
 #include "hcmd.h"
 #include "iface.h"
@@ -1138,7 +1139,8 @@ iwl_mld_add_mcast_rekey(struct ieee80211_vif *vif,
 		return;
 
 	key_config = ieee80211_gtk_rekey_add(vif, key_data->id, key_data->key,
-					     sizeof(key_data->key), link_id);
+					     sizeof(key_data->key), link_id,
+					     false);
 	if (IS_ERR(key_config))
 		return;
 
@@ -1220,7 +1222,8 @@ static void iwl_mld_mlo_rekey(struct iwl_mld *mld,
 				 mlo_key->idx, link_id);
 
 		key = ieee80211_gtk_rekey_add(vif, mlo_key->idx, mlo_key->key,
-					      sizeof(mlo_key->key), link_id);
+					      sizeof(mlo_key->key), link_id,
+					      false);
 
 		if (IS_ERR(key))
 			continue;
@@ -1608,6 +1611,8 @@ int iwl_mld_no_wowlan_suspend(struct iwl_mld *mld)
 
 	iwl_mld_low_latency_stop(mld);
 
+	iwl_mld_tx_gp2_stop(mld);
+
 	ret = iwl_mld_update_device_power(mld, true);
 	if (ret) {
 		IWL_ERR(mld,
@@ -1660,6 +1665,8 @@ int iwl_mld_no_wowlan_resume(struct iwl_mld *mld)
 		return -ENODEV;
 
 	iwl_mld_low_latency_restart(mld);
+
+	iwl_mld_tx_gp2_start(mld);
 
 	return iwl_mld_update_device_power(mld, false);
 }

@@ -880,6 +880,7 @@
 	MACRO__(0xB08F, ## __VA_ARGS__), \
 	MACRO__(0xB090, ## __VA_ARGS__), \
 	MACRO__(0xB0A0, ## __VA_ARGS__), \
+	MACRO__(0xB0A1, ## __VA_ARGS__), \
 	MACRO__(0xB0B0, ## __VA_ARGS__)
 
 /* WCL */
@@ -903,7 +904,8 @@
 	MACRO__(0x674D, ## __VA_ARGS__), \
 	MACRO__(0x674E, ## __VA_ARGS__), \
 	MACRO__(0x674F, ## __VA_ARGS__), \
-	MACRO__(0x6750, ## __VA_ARGS__)
+	MACRO__(0x6750, ## __VA_ARGS__), \
+	MACRO__(0x6751, ## __VA_ARGS__)
 
 /* NVL-P */
 #define INTEL_NVLP_IDS(MACRO__, ...) \

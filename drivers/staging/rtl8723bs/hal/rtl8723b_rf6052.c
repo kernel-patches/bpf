@@ -7,15 +7,9 @@
 /******************************************************************************
  *
  *
- * Module:	rtl8192c_rf6052.c	(Source C File)
+ * Module:	rtl8723b_rf6052.c	(Source C File)
  *
  * Note:	Provide RF 6052 series relative API.
- *
- * Function:
- *
- * Export:
- *
- * Abbrev:
  *
  * History:
  * Data			Who		Remark
@@ -27,16 +21,6 @@
  ******************************************************************************/
 
 #include <rtl8723b_hal.h>
-
-/*---------------------------Define Local Constant---------------------------*/
-/*---------------------------Define Local Constant---------------------------*/
-
-/*------------------------Define global variable-----------------------------*/
-/*------------------------Define global variable-----------------------------*/
-
-/*------------------------Define local variable------------------------------*/
-/*  2008/11/20 MH For Debug only, RF */
-/*------------------------Define local variable------------------------------*/
 
 /*-----------------------------------------------------------------------------
  * Function:    PHY_RF6052SetBandwidth()
@@ -95,18 +79,18 @@ static int phy_RF6052_Config_ParaFile(struct adapter *Adapter)
 
 	/*----Set RF_ENV enable----*/
 	PHY_SetBBReg(Adapter, pPhyReg->rfintfe, bRFSI_RFENV << 16, 0x1);
-	udelay(1);/* PlatformStallExecution(1); */
+	udelay(1);
 
 	/*----Set RF_ENV output high----*/
 	PHY_SetBBReg(Adapter, pPhyReg->rfintfo, bRFSI_RFENV, 0x1);
-	udelay(1);/* PlatformStallExecution(1); */
+	udelay(1);
 
 	/* Set bit number of Address and Data for RF register */
 	PHY_SetBBReg(Adapter, pPhyReg->rfHSSIPara2, b3WireAddressLength, 0x0);	/*  Set 1 to 4 bits for 8255 */
-	udelay(1);/* PlatformStallExecution(1); */
+	udelay(1);
 
 	PHY_SetBBReg(Adapter, pPhyReg->rfHSSIPara2, b3WireDataLength, 0x0);	/*  Set 0 to 12  bits for 8255 */
-	udelay(1);/* PlatformStallExecution(1); */
+	udelay(1);
 
 	/*----Initialize RF fom connfiguration file----*/
 	ODM_ConfigRFWithHeaderFile(&pHalData->odmpriv, CONFIG_RF_RADIO, RF_PATH_A);
@@ -125,11 +109,7 @@ static int phy_RF6052_Config_ParaFile(struct adapter *Adapter)
 
 int PHY_RF6052_Config8723B(struct adapter *Adapter)
 {
-	/*  */
 	/*  Config BB and RF */
-	/*  */
 	return phy_RF6052_Config_ParaFile(Adapter);
 
 }
-
-/* End of HalRf6052.c */

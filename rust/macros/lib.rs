@@ -19,6 +19,7 @@ mod export;
 mod fmt;
 mod for_lt;
 mod helpers;
+mod io;
 mod kunit;
 mod module;
 mod paste;
@@ -129,7 +130,7 @@ use syn::parse_macro_input;
 /// # Supported argument types
 ///   - `type`: type which implements the [`Module`] trait (required).
 ///   - `name`: ASCII string literal of the name of the kernel module (required).
-///   - `authors`: array of ASCII string literals of the authors of the kernel module.
+///   - `authors`: array of string literals of the authors of the kernel module.
 ///   - `description`: string literal of the description of the kernel module.
 ///   - `license`: ASCII string literal of the license of the kernel module (required).
 ///   - `alias`: array of ASCII string literals of the alias names of the kernel module.
@@ -478,6 +479,14 @@ pub fn paste(input: TokenStream) -> TokenStream {
     tokens
         .into_iter()
         .collect::<proc_macro2::TokenStream>()
+        .into()
+}
+
+#[doc(hidden)] // Documented in `kernel` crate.
+#[proc_macro]
+pub fn register(input: TokenStream) -> TokenStream {
+    io::register::register(parse_macro_input!(input))
+        .unwrap_or_else(|e| e.into_compile_error())
         .into()
 }
 

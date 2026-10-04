@@ -14,7 +14,6 @@ struct ht_priv {
 	u8 tx_amsdu_enable;/* for enable Tx A-MSDU */
 	u8 bss_coexist;/* for 20/40 Bss coexist */
 
-	/* u8 baddbareq_issued[16]; */
 	u32 tx_amsdu_maxlen; /*  1: 8k, 0:4k ; default:8k, for tx */
 	u32 rx_ampdu_maxlen; /* for rx reordering ctrl win_sz, updated when join_callback. */
 
@@ -26,7 +25,6 @@ struct ht_priv {
 
 	/* for processing Tx A-MPDU */
 	u8 agg_enable_bitmap;
-	/* u8 ADDBA_retry_count; */
 	u8 candidate_tid_bitmap;
 
 	u8 ldpc_cap;

@@ -322,15 +322,12 @@ u8 rtw_set_802_11_infrastructure_mode(struct adapter *padapter,
 		case NL80211_IFTYPE_AP:
 			set_fwstate(pmlmepriv, WIFI_AP_STATE);
 			start_ap_mode(padapter);
-			/* rtw_indicate_connect(padapter); */
 
 			break;
 
 		default:
 			break;
 		}
-
-		/* SecClearAllKeys(adapter); */
 
 		spin_unlock_bh(&pmlmepriv->lock);
 	}

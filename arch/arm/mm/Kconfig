@@ -980,7 +980,7 @@ config CACHE_B15_RAC
 
 config CACHE_FEROCEON_L2
 	bool "Enable the Feroceon L2 cache controller"
-	depends on ARCH_MV78XX0 || ARCH_MVEBU
+	depends on ARCH_MVEBU
 	default y
 	select OUTER_CACHE
 	help

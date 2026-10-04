@@ -205,7 +205,7 @@ u64 xe_device_uncanonicalize_addr(struct xe_device *xe, u64 address);
 
 bool xe_device_is_l2_flush_optimized(struct xe_device *xe);
 void xe_device_td_flush(struct xe_device *xe);
-void xe_device_l2_flush(struct xe_device *xe);
+void xe_device_l2_flush(struct xe_device *xe, bool force);
 
 static inline bool xe_device_wedged(struct xe_device *xe)
 {
@@ -282,6 +282,8 @@ static inline bool xe_device_is_admin_only(const struct xe_device *xe)
 	return false;
 }
 #endif
+
+void xe_device_exit(void);
 
 /*
  * Occasionally it is seen that the G2H worker starts running after a delay of more than
