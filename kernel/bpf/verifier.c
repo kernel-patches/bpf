@@ -2049,6 +2049,12 @@ static void __mark_reg_known(struct bpf_reg_state *reg, u64 imm)
 	___mark_reg_known(reg, imm);
 }
 
+void bpf_mark_reg_known_scalar(struct bpf_reg_state *reg, u64 imm)
+{
+	__mark_reg_known(reg, imm);
+	reg->type = SCALAR_VALUE;
+}
+
 static void __mark_reg32_known(struct bpf_reg_state *reg, u64 imm)
 {
 	reg->var_off = tnum_const_subreg(reg->var_off, imm);
