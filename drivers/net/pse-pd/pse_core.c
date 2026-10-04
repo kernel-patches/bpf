@@ -12,6 +12,7 @@
 #include <linux/of.h>
 #include <linux/phy.h>
 #include <linux/pse-pd/pse.h>
+#include <linux/regulator/consumer.h>
 #include <linux/regulator/driver.h>
 #include <linux/regulator/machine.h>
 #include <linux/rtnetlink.h>
@@ -860,6 +861,98 @@ static const struct regulator_ops pse_pi_ops = {
 	.set_current_limit = pse_pi_set_current_limit,
 };
 
+/* The regulator core treats an unresolved "vpwr" supply as non-fatal and
+ * retries it on its own later, which would leave this controller able to
+ * register while of_pse_control_get() still fails with -EPROBE_DEFER for
+ * this PI. A consumer that is not itself retried by deferred probe -
+ * phylib, once it attaches from the PSE notifier - would never get it.
+ * Check the supply up front so the PSE driver's own probe defers instead.
+ *
+ * This is the first of the two stages the core uses, the PI's own node.
+ * pse_controller_check_supply() is the second, the controller device.
+ * Neither get falls back to the dummy regulator, so a PI that names no supply
+ * anywhere still reports -ENODEV and keeps its existing behaviour - the
+ * core resolves it to the dummy when the PI regulator is registered.
+ *
+ * The PI node is consulted only once its own phandle is known to resolve.
+ * of_regulator_get_optional() falls back to of_get_child_regulator() on
+ * the *device* node, which walks every descendant of the controller, so a
+ * PI that does not name a supply itself would otherwise be answered from
+ * a sibling PI's and pass before the controller node is ever consulted.
+ * The core reaches the same sibling walk, but only at its second stage
+ * and only after the controller's own vpwr-supply has had its turn - so
+ * the gate is what keeps a controller-level supply from being masked.
+ *
+ * Return: 0 if this PI needs nothing more, 1 if the controller device has
+ *	   to answer for it, or a negative error.
+ */
+static int pse_pi_check_supply(struct pse_controller_dev *pcdev, int id)
+{
+	struct device_node *np;
+	struct regulator *supply;
+	int ret;
+
+	/* Skip exactly the PIs the registration loop below skips, so every
+	 * regulator that will be created is covered.
+	 */
+	if (!pcdev->no_of_pse_pi && !pcdev->pi[id].np)
+		return 0;
+
+	np = pcdev->pi[id].np ?
+	     of_parse_phandle(pcdev->pi[id].np, "vpwr-supply", 0) : NULL;
+	if (!np)
+		return 1;
+
+	of_node_put(np);
+	supply = of_regulator_get_optional(pcdev->dev, pcdev->pi[id].np,
+					   "vpwr");
+	if (!IS_ERR(supply)) {
+		regulator_put(supply);
+		return 0;
+	}
+
+	ret = PTR_ERR(supply);
+	/* -EPERM only says someone holds this provider exclusively, which
+	 * the core's own resolution never asks about. The provider is
+	 * there, so this PI is fine.
+	 */
+	if (ret == -EPERM)
+		return 0;
+	/* Only -ENODEV moves on to the second stage; a provider that has
+	 * not registered yet gives -EPROBE_DEFER, which is the case worth
+	 * catching here.
+	 */
+	if (ret == -ENODEV)
+		return 1;
+
+	return dev_err_probe(pcdev->dev, ret,
+			     "PI %d: failed to get vpwr supply\n", id);
+}
+
+/* Second stage of pse_pi_check_supply(). A vpwr-supply on the controller
+ * node covers every PI, and is where a PI without a node of its own
+ * resolves too, so the answer is the same for all of them - ask it once,
+ * and only if some PI needs it.
+ */
+static int pse_controller_check_supply(struct pse_controller_dev *pcdev)
+{
+	struct regulator *supply;
+	int ret;
+
+	supply = regulator_get_optional(pcdev->dev, "vpwr");
+	if (!IS_ERR(supply)) {
+		regulator_put(supply);
+		return 0;
+	}
+
+	ret = PTR_ERR(supply);
+	if (ret == -ENODEV || ret == -EPERM)
+		return 0;
+
+	return dev_err_probe(pcdev->dev, ret,
+			     "failed to get vpwr supply\n");
+}
+
 static int
 devm_pse_pi_regulator_register(struct pse_controller_dev *pcdev,
 			       char *name, int id)
@@ -1082,6 +1175,7 @@ static void pse_send_ntf_worker(struct work_struct *work)
  */
 int pse_controller_register(struct pse_controller_dev *pcdev)
 {
+	bool ctrl_supply_ok = false;
 	size_t reg_name_len;
 	int ret, i;
 
@@ -1114,6 +1208,38 @@ int pse_controller_register(struct pse_controller_dev *pcdev)
 		ret = pcdev->ops->setup_pi_matrix(pcdev);
 		if (ret)
 			goto release_pis;
+	}
+
+	/* Check every PI supply before any regulator of ours is registered:
+	 * a provider that has not probed yet is the ordinary -EPROBE_DEFER
+	 * case, and unwinding it must still be able to release the PI array,
+	 * which it cannot once a PI regulator exists.
+	 *
+	 * This has to stay after setup_pi_matrix(). A PI's vpwr-supply can
+	 * name a regulator the controller itself creates there - pd692x0's
+	 * pse-pi nodes point at its manager regulators - so checking any
+	 * earlier would defer on a supply that only this driver can bring
+	 * up, and it would never probe.
+	 */
+	for (i = 0; i < pcdev->nr_lines; i++) {
+		ret = pse_pi_check_supply(pcdev, i);
+		if (ret < 0)
+			goto release_pis;
+
+		/* The controller device answers for every PI that its own
+		 * node cannot, so it is asked at the first such PI and not
+		 * again. Asking it here rather than after the loop keeps
+		 * the order the core resolves in, so the first PI to fail
+		 * is still the one reported.
+		 */
+		if (!ret || ctrl_supply_ok)
+			continue;
+
+		ret = pse_controller_check_supply(pcdev);
+		if (ret)
+			goto release_pis;
+
+		ctrl_supply_ok = true;
 	}
 
 	/* Each regulator name len is pcdev dev name + 7 char +
