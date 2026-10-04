@@ -2675,6 +2675,32 @@ __naked void load_acquire_dont_clear_dst(void)
 #endif /* CAN_USE_LOAD_ACQ_STORE_REL */
 
 SEC("socket")
+__log_level(2)
+__success
+__msg("lock *(u64 *)(r10 -8) += r1{{.*}}use: fp0-8{{.*}}may_def: fp0-8")
+__msg("r1 = atomic64_fetch_add((u64 *)(r10 -8), r1){{.*}}use: fp0-8{{.*}}may_def: fp0-8")
+__msg("r1 = atomic64_xchg((u64 *)(r10 -8), r1){{.*}}use: fp0-8{{.*}}may_def: fp0-8")
+__msg("r0 = atomic64_cmpxchg((u64 *)(r10 -8), r0, r1){{.*}}use: fp0-8{{.*}}may_def: fp0-8")
+__naked void atomic_rmw(void)
+{
+	asm volatile (
+	"r1 = 0;"
+	"*(u64 *)(r10 - 8) = r1;"
+	".8byte %[atomic_add];"
+	".8byte %[atomic_fetch_add];"
+	".8byte %[atomic_xchg];"
+	"r0 = 0;"
+	".8byte %[atomic_cmpxchg];"
+	"exit;"
+	:
+	: __imm_insn(atomic_add, BPF_ATOMIC_OP(BPF_DW, BPF_ADD, BPF_REG_10, BPF_REG_1, -8)),
+	  __imm_insn(atomic_fetch_add, BPF_ATOMIC_OP(BPF_DW, BPF_ADD | BPF_FETCH, BPF_REG_10, BPF_REG_1, -8)),
+	  __imm_insn(atomic_xchg, BPF_ATOMIC_OP(BPF_DW, BPF_XCHG, BPF_REG_10, BPF_REG_1, -8)),
+	  __imm_insn(atomic_cmpxchg, BPF_ATOMIC_OP(BPF_DW, BPF_CMPXCHG, BPF_REG_10, BPF_REG_1, -8))
+	: __clobber_all);
+}
+
+SEC("socket")
 __success
 __naked void imprecise_fill_loses_cross_frame(void)
 {
