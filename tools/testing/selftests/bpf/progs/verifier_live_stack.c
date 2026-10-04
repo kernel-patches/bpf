@@ -3145,3 +3145,79 @@ __naked void helper_output_unknown_size(void)
 	:: __imm(bpf_get_prandom_u32), __imm(bpf_probe_read_kernel)
 	: __clobber_all);
 }
+
+struct {
+	__uint(type, BPF_MAP_TYPE_QUEUE);
+	__uint(max_entries, 1);
+	__type(value, __u64);
+} queue_8b SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_QUEUE);
+	__uint(max_entries, 1);
+	__type(value, __u64[2]);
+} queue_16b SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_BLOOM_FILTER);
+	__uint(max_entries, 16);
+	__type(value, __u64);
+} bloom_8b SEC(".maps");
+
+SEC("socket")
+__success __log_level(2)
+__msg("call bpf_map_pop_elem{{.*}}; def: fp0-16")
+__naked void helper_map_output_known_size(void)
+{
+	asm volatile (
+	"r1 = %[queue_8b] ll;"
+	"r2 = r10;"
+	"r2 += -16;"
+	"call %[bpf_map_pop_elem];"
+	"r0 = 0;"
+	"exit;"
+	:: __imm_addr(queue_8b), __imm(bpf_map_pop_elem)
+	: __clobber_all);
+}
+
+/* The maximum map value size is not a guaranteed output extent. */
+SEC("socket")
+__success __log_level(2)
+__msg("call bpf_map_pop_elem{{.*}}; use: fp0-16 fp0-24 may_def: fp0-16 fp0-24{{$}}")
+__naked void helper_map_output_merged_sizes(void)
+{
+	asm volatile (
+	"*(u64 *)(r10 - 16) = 0;"
+	"*(u64 *)(r10 - 24) = 0;"
+	"call %[bpf_get_prandom_u32];"
+	"r1 = %[queue_8b] ll;"
+	"if r0 == 0 goto 1f;"
+	"r1 = %[queue_16b] ll;"
+"1:"
+	"r2 = r10;"
+	"r2 += -24;"
+	"call %[bpf_map_pop_elem];"
+	"r0 = 0;"
+	"exit;"
+	:: __imm_addr(queue_8b), __imm_addr(queue_16b),
+	   __imm(bpf_get_prandom_u32), __imm(bpf_map_pop_elem)
+	: __clobber_all);
+}
+
+/* Bloom-filter peek treats buffer as an input despite the helper's output annotation. */
+SEC("socket")
+__success __log_level(2)
+__msg("call bpf_map_peek_elem{{.*}}; use: fp0-8{{$}}")
+__naked void helper_bloom_peek_input(void)
+{
+	asm volatile (
+	"*(u64 *)(r10 - 8) = 0;"
+	"r1 = %[bloom_8b] ll;"
+	"r2 = r10;"
+	"r2 += -8;"
+	"call %[bpf_map_peek_elem];"
+	"r0 = 0;"
+	"exit;"
+	:: __imm_addr(bloom_8b), __imm(bpf_map_peek_elem)
+	: __clobber_all);
+}
