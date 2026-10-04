@@ -17146,6 +17146,18 @@ clear_id:
 	return 0;
 }
 
+int bpf_set_reg_range(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
+		      struct cnum64 range, u16 base, u16 step)
+{
+	reg->r64 = range;
+	reg->r32 = CNUM32_UNBOUNDED;
+	reg->step = step;
+	reg->base = base;
+	reg->var_off = tnum_unknown;
+	reg_bounds_sync(reg); /* this should infer the tnum alignment */
+	return reg_bounds_sanity_check(env, reg, "bpf_set_reg_range");
+}
+
 /* check validity of 32-bit and 64-bit arithmetic operations */
 static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 {
