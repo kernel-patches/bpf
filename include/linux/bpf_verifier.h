@@ -173,20 +173,20 @@ struct bpf_reg_state {
 	 */
 	u32 parent_id;
 	/*
-	 * Distinguishes inner-map lookups and their keys and values. Zero for
-	 * other registers. Kept outside the metadata union for ID remapping
-	 * during state comparisons.
-	 */
-	u32 map_uid;
-	/*
 	 * The value described by this register, interpreted as s64, lies on
 	 * a line described by a linear equation base + step * k.
 	 * Invariant: base < step.
 	 */
 	u16 base;
 	u16 step;
+	/*
+	 * Distinguishes inner-map lookups and their keys and values. Zero for
+	 * other registers. Kept outside the metadata union for ID remapping
+	 * during state comparisons.
+	 */
+	u32 map_uid:31;
 	/* if (!precise && SCALAR_VALUE) min/max/tnum don't affect safety */
-	bool precise;
+	u32 precise:1;
 };
 
 static inline s64 reg_smin(const struct bpf_reg_state *reg)
