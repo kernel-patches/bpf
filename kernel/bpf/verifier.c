@@ -14344,35 +14344,32 @@ int bpf_fetch_kfunc_arg_meta(struct bpf_verifier_env *env,
 }
 
 /*
- * Determine how many bytes a helper accesses through a stack pointer at
- * argument position @arg (0-based, corresponding to R1-R5).
- *
- * Returns:
- *   > 0   known read access size in bytes
- *     0   doesn't read anything directly
- * S64_MIN unknown
- *   < 0   known write access of (-return) bytes
+ * Describe a helper's stack access through argument @arg (0-based, R1-R5).
+ * must_write means the verifier destroys prior state throughout size bytes.
+ * In other words, must_write follows the verifier's model of the
+ * function's behaviour, which is safe to use for is_state_visited() pruning.
  */
-s64 bpf_helper_stack_access_bytes(struct bpf_verifier_env *env, struct bpf_insn *insn,
-				  int arg, int insn_idx)
+struct arg_access_info
+bpf_helper_stack_access_bytes(struct bpf_verifier_env *env, struct bpf_insn *insn,
+			      int arg, int insn_idx)
 {
 	struct bpf_insn_aux_data *aux = &env->insn_aux_data[insn_idx];
+	struct arg_access_info info = {
+		.size = U32_MAX,
+		.may_read = true,
+		.may_write = true,
+	};
 	const struct bpf_func_proto *fn;
+	enum bpf_access_type access_type;
 	enum bpf_arg_type at;
-	bool full_write;
-	s64 size;
+	bool exact_size = true;
+	u64 size = U32_MAX;
 
 	if (bpf_get_helper_proto(env, insn->imm, &fn) < 0)
-		return S64_MIN;
+		return info;
 
 	at = fn->arg_type[arg];
-	/*
-	 * Generic outputs may leave bytes untouched. Keep prior initialization
-	 * live when the caller cannot read uninitialized bytes. Constructors of
-	 * special objects, such as dynptrs, still define their storage.
-	 */
-	full_write = (at & MEM_UNINIT) &&
-		     (!arg_type_is_raw_mem(at) || env->allow_uninit_stack);
+	access_type = func_arg_access_type(at);
 
 	switch (base_type(at)) {
 	case ARG_PTR_TO_MAP_KEY:
@@ -14395,6 +14392,10 @@ s64 bpf_helper_stack_access_bytes(struct bpf_verifier_env *env, struct bpf_insn 
 
 		i = aux->const_reg_vals[map_reg];
 		if (i < env->used_map_cnt) {
+			/* Bloom-filter peek reads the value buffer. */
+			if (!is_key && insn->imm == BPF_FUNC_map_peek_elem &&
+			    env->used_maps[i]->map_type == BPF_MAP_TYPE_BLOOM_FILTER)
+				access_type = BPF_READ;
 			size = is_key ? env->used_maps[i]->key_size
 				      : env->used_maps[i]->value_size;
 			goto out;
@@ -14404,7 +14405,12 @@ scan_all_maps:
 		 * Map pointer is not known at this call site (e.g. different
 		 * maps on merged paths).  Conservatively return the largest
 		 * key_size or value_size across all maps used by the program.
+		 * This is only an upper bound, so it cannot establish a definite
+		 * write. Map-dependent argument types can also turn an output
+		 * into an input, so conservatively retain a read dependency.
 		 */
+		exact_size = false;
+		access_type |= BPF_READ;
 		val = 0;
 		for (i = 0; i < env->used_map_cnt; i++) {
 			struct bpf_map *map = env->used_maps[i];
@@ -14420,7 +14426,7 @@ scan_all_maps:
 			}
 		}
 		if (!val)
-			return S64_MIN;
+			return info;
 		size = val;
 		goto out;
 	}
@@ -14434,18 +14440,12 @@ scan_all_maps:
 			int size_reg = BPF_REG_1 + arg + 1;
 
 			if (aux->const_reg_mask & BIT(size_reg)) {
-				size = (s64)aux->const_reg_vals[size_reg];
+				size = aux->const_reg_vals[size_reg];
 				goto out;
 			}
-			/*
-			 * Size arg is const on each path but differs across merged
-			 * paths. Reads may extend anywhere up to the frame top.
-			 */
-			if (full_write)
-				return 0;
-			return S64_MIN;
 		}
-		return S64_MIN;
+		/* Preserve access directions even when the extent is unknown. */
+		goto out;
 	case ARG_PTR_TO_DYNPTR:
 		size = BPF_DYNPTR_SIZE;
 		break;
@@ -14455,18 +14455,21 @@ scan_all_maps:
 		 * doesn't access stack. The callback subprog does and it's
 		 * analyzed separately.
 		 */
-		return 0;
+		return (struct arg_access_info) {};
 	default:
-		return S64_MIN;
+		return info;
 	}
 out:
-	/*
-	 * Other accesses keep the previous state live, including untouched bytes
-	 * of an unprivileged generic output.
-	 */
-	if (full_write)
-		return -size;
-	return size;
+	info.size = min_t(u64, size, U32_MAX);
+	info.may_read = !!(access_type & BPF_READ);
+	info.may_write = !!(access_type & BPF_WRITE);
+	info.must_write = info.may_write && exact_size && info.size != U32_MAX;
+	/* Generic unprivileged outputs retain prior initialization state. */
+	if (!env->allow_uninit_stack && arg_type_is_raw_mem(at)) {
+		info.may_read = true;
+		info.must_write = false;
+	}
+	return info;
 }
 
 /*
