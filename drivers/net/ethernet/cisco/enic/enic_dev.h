@@ -26,6 +26,7 @@
 
 int enic_dev_fw_info(struct enic *enic, struct vnic_devcmd_fw_info **fw_info);
 int enic_dev_stats_dump(struct enic *enic, struct vnic_stats **vstats);
+int enic_dev_get_mac_addr(struct enic *enic, u8 *mac_addr);
 int enic_dev_add_station_addr(struct enic *enic);
 int enic_dev_del_station_addr(struct enic *enic);
 int enic_dev_packet_filter(struct enic *enic, int directed, int multicast,

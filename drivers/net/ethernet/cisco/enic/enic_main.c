@@ -71,6 +71,8 @@
 #define PCI_DEVICE_ID_CISCO_VIC_ENET_VF_V2   0x02b7  /* enet SRIOV V2 VF */
 #define PCI_DEVICE_ID_CISCO_VIC_ENET_VF_USNIC 0x00cf /* enet USNIC VF */
 
+static int __enic_stop(struct net_device *netdev, bool remove_vf_station);
+
 /* Supported devices */
 static const struct pci_device_id enic_id_table[] = {
 	{ PCI_VDEVICE(CISCO, PCI_DEVICE_ID_CISCO_VIC_ENET) },
@@ -87,6 +89,9 @@ MODULE_DEVICE_TABLE(pci, enic_id_table);
 
 #define ENIC_LARGE_PKT_THRESHOLD		1000
 #define ENIC_MAX_COALESCE_TIMERS		10
+#define ENIC_VF_ADMIN_MAC_MAX_RETRIES		4
+#define ENIC_VF_ADMIN_MAC_RETRY_MS		100
+#define ENIC_VF_ADMIN_MAC_REFRESH_RETRIES	3
 /*  Interrupt moderation table, which will be used to decide the
  *  coalescing timer values
  *  {rx_rate in Mbps, mapping percentage of the range}
@@ -1038,12 +1043,15 @@ void enic_reset_addr_lists(struct enic *enic)
 {
 	struct net_device *netdev = enic->netdev;
 
+	netif_addr_lock_bh(netdev);
 	__dev_uc_unsync(netdev, NULL);
 	__dev_mc_unsync(netdev, NULL);
+	netif_addr_unlock_bh(netdev);
 
 	enic->mc_count = 0;
 	enic->uc_count = 0;
 	enic->flags = 0;
+	enic->vf_pkt_filter_valid = false;
 }
 
 static int enic_set_mac_addr(struct net_device *netdev, char *addr)
@@ -1063,12 +1071,518 @@ static int enic_set_mac_addr(struct net_device *netdev, char *addr)
 	return 0;
 }
 
+static void enic_vf_station_recovery_required(struct enic *enic)
+{
+	enic_mbox_vf_require_reconnect(enic);
+}
+
+static void enic_vf_station_addr_set(struct enic *enic, const u8 *addr)
+{
+	ether_addr_copy(enic->vf_station_addr, addr);
+	enic->vf_station_addr_valid = true;
+}
+
+static int enic_vf_keep_nonstation_sync(struct net_device *netdev,
+					const u8 *addr)
+{
+	struct enic *enic = netdev_priv(netdev);
+
+	if (!ether_addr_equal(addr, enic->vf_station_addr))
+		return -ENOENT;
+	if (WARN_ON_ONCE(!enic->uc_count))
+		return 0;
+	enic->uc_count--;
+
+	return 0;
+}
+
+static void enic_vf_station_sync_reset(struct enic *enic)
+{
+	if (!enic->vf_station_addr_valid)
+		return;
+
+	/* The PF keys its MAC ledger by address. A station entry is also the
+	 * receive filter for that address and must not retain a second core
+	 * synchronization reference which could later delete the station.
+	 */
+	netif_addr_lock_bh(enic->netdev);
+	__dev_uc_unsync(enic->netdev, enic_vf_keep_nonstation_sync);
+	netif_addr_unlock_bh(enic->netdev);
+}
+
+static int enic_vf_station_addr_del(struct enic *enic)
+{
+	int err;
+
+	if (!enic->vf_station_addr_valid)
+		return 0;
+
+	err = enic_mbox_vf_add_del_mac(enic, enic->vf_station_addr,
+				       false, true);
+	if (!err) {
+		enic->vf_station_addr_valid = false;
+	} else if (READ_ONCE(enic->mbox_tx_poisoned)) {
+		enic_mbox_vf_link_state_set_running(enic, false);
+	} else if (err == -EACCES) {
+		/* A definitive rejected DELETE leaves an unrequested station
+		 * filter installed. Fresh registration is the cleanup boundary.
+		 */
+		enic_vf_station_recovery_required(enic);
+	}
+
+	return err;
+}
+
+/* End every replacement with an equal-address DEL+ADD pair. A bare ADD could
+ * report DUPLICATE for a secondary exact filter without applying the current
+ * station-address policy. If another station is tracked, delete it first in
+ * the same compound request.
+ */
+static int enic_vf_station_addr_replace(struct enic *enic, const u8 *addr)
+{
+	struct enic_mac_addr macs[3] = {};
+	bool all_deletes_skipped = true;
+	bool deletes_converged = true;
+	u16 num_macs = 0;
+	unsigned int i;
+	u16 result;
+	int err;
+
+	if (enic->vf_station_addr_valid &&
+	    !ether_addr_equal(enic->vf_station_addr, addr)) {
+		ether_addr_copy(macs[num_macs].addr, enic->vf_station_addr);
+		macs[num_macs++].flags =
+			cpu_to_le16(ENIC_MAC_ADDR_FLAG_STATION);
+	}
+	ether_addr_copy(macs[num_macs].addr, addr);
+	macs[num_macs++].flags = cpu_to_le16(ENIC_MAC_ADDR_FLAG_STATION);
+	ether_addr_copy(macs[num_macs].addr, addr);
+	macs[num_macs++].flags = cpu_to_le16(ENIC_MAC_ADDR_FLAG_ADD |
+					    ENIC_MAC_ADDR_FLAG_STATION);
+
+	err = enic_mbox_vf_add_del_macs(enic, macs, num_macs);
+	if (err) {
+		if (READ_ONCE(enic->mbox_tx_poisoned))
+			enic_mbox_vf_link_state_set_running(enic, false);
+		return err;
+	}
+
+	for (i = 0; i < num_macs - 1; i++) {
+		result = le16_to_cpu(macs[i].flags) &
+			 ENIC_MAC_ADDR_FLAG_REPLY_MASK;
+		if (result != ENIC_MAC_ADDR_FLAG_SKIPPED)
+			all_deletes_skipped = false;
+		if (result && result != ENIC_MAC_ADDR_FLAG_NOT_FOUND)
+			deletes_converged = false;
+	}
+	result = le16_to_cpu(macs[num_macs - 1].flags) &
+		 ENIC_MAC_ADDR_FLAG_REPLY_MASK;
+	if (deletes_converged && !result)
+		return 0;
+
+	/* A policy-rejected ADD can be reported with all preceding DELETEs
+	 * skipped. No operation changed state in that coherent result tuple.
+	 */
+	if (all_deletes_skipped && result) {
+		if (result & (ENIC_MAC_ADDR_FLAG_DUPLICATE |
+			      ENIC_MAC_ADDR_FLAG_PERMANENT_MASK))
+			return -EACCES;
+		return -EIO;
+	}
+
+	/* After any other partial or contradictory result, the VF does not know
+	 * which station address the PF kept. Re-register before accepting traffic.
+	 */
+	enic_vf_station_recovery_required(enic);
+	for (i = 0; i < num_macs; i++)
+		if (le16_to_cpu(macs[i].flags) &
+		    ENIC_MAC_ADDR_FLAG_PERMANENT_MASK)
+			return -EACCES;
+
+	return -EIO;
+}
+
+static void enic_vf_admin_mac_cache_selected(struct enic *enic,
+					     const u8 *addr)
+{
+	/* A zero administrative policy delegates the operational address to
+	 * the VF. Preserve a successful user selection across reconnects.
+	 */
+	spin_lock_bh(&enic->vf_admin_mac_lock);
+	if (is_zero_ether_addr(enic->vf_admin_mac)) {
+		ether_addr_copy(enic->vf_admin_mac_random_addr, addr);
+		enic->vf_admin_mac_random_valid = true;
+	}
+	spin_unlock_bh(&enic->vf_admin_mac_lock);
+}
+
+static void enic_vf_admin_mac_work(struct work_struct *work)
+{
+	struct enic *enic = container_of(to_delayed_work(work), struct enic,
+					 vf_admin_mac_work);
+	u8 policy[ETH_ALEN];
+	u8 selected[ETH_ALEN];
+	unsigned long delay = 0;
+	u32 generation = 0;
+	bool changed;
+	bool mutated = false;
+	bool reschedule = false;
+	bool station_installed = false;
+	bool stale = false;
+	bool zero_policy;
+	bool pending;
+	int err = 0;
+
+	spin_lock_bh(&enic->vf_admin_mac_lock);
+	pending = enic->vf_admin_mac_pending &&
+		enic->vf_admin_mac_work_enabled;
+	spin_unlock_bh(&enic->vf_admin_mac_lock);
+	if (!pending)
+		return;
+
+	/* Teardown owns RTNL while synchronously cancelling this work. Do not
+	 * block that owner.
+	 */
+	if (!rtnl_trylock()) {
+		spin_lock_bh(&enic->vf_admin_mac_lock);
+		if (enic->vf_admin_mac_pending &&
+		    enic->vf_admin_mac_work_enabled)
+			mod_delayed_work(system_wq, &enic->vf_admin_mac_work,
+					 msecs_to_jiffies(10));
+		spin_unlock_bh(&enic->vf_admin_mac_lock);
+		return;
+	}
+
+	spin_lock_bh(&enic->vf_admin_mac_lock);
+	pending = enic->vf_admin_mac_pending &&
+		enic->vf_admin_mac_work_enabled;
+	if (pending) {
+		ether_addr_copy(policy, enic->vf_admin_mac);
+		generation = enic->vf_admin_mac_generation;
+		zero_policy = is_zero_ether_addr(policy);
+		if (zero_policy && enic->vf_admin_mac_random_valid)
+			ether_addr_copy(selected,
+					enic->vf_admin_mac_random_addr);
+	}
+	spin_unlock_bh(&enic->vf_admin_mac_lock);
+	if (!pending)
+		goto unlock;
+
+	if (zero_policy && !READ_ONCE(enic->vf_admin_mac_random_valid)) {
+		eth_random_addr(selected);
+		spin_lock_bh(&enic->vf_admin_mac_lock);
+		if (!enic->vf_admin_mac_pending ||
+		    !enic->vf_admin_mac_work_enabled ||
+		    enic->vf_admin_mac_generation != generation ||
+		    !is_zero_ether_addr(enic->vf_admin_mac)) {
+			stale = true;
+		} else if (enic->vf_admin_mac_random_valid) {
+			ether_addr_copy(selected,
+					enic->vf_admin_mac_random_addr);
+		} else {
+			ether_addr_copy(enic->vf_admin_mac_random_addr, selected);
+			enic->vf_admin_mac_random_valid = true;
+		}
+		spin_unlock_bh(&enic->vf_admin_mac_lock);
+		if (stale)
+			goto unlock;
+	} else if (!zero_policy) {
+		ether_addr_copy(selected, policy);
+	}
+
+	if (!netif_device_present(enic->netdev) ||
+	    !READ_ONCE(enic->vf_registered)) {
+		err = -EAGAIN;
+		goto unlock;
+	}
+
+	/* A nonzero notification describes a station address the PF has already
+	 * installed. Zero delegates selection to the VF, which registers the
+	 * selected random address through the policy-safe replacement request.
+	 */
+	if (!READ_ONCE(enic->vf_datapath_open)) {
+		station_installed = !zero_policy &&
+			(!enic->vf_station_addr_valid ||
+			 ether_addr_equal(enic->vf_station_addr, selected));
+	} else if (zero_policy) {
+		mutated = true;
+		err = enic_vf_station_addr_replace(enic, selected);
+		station_installed = !err;
+	} else if (enic->vf_station_addr_valid &&
+		   !ether_addr_equal(enic->vf_station_addr, selected)) {
+		mutated = true;
+		err = enic_vf_station_addr_del(enic);
+		station_installed = !err;
+	} else {
+		station_installed = true;
+	}
+	if (err)
+		goto unlock;
+
+	spin_lock_bh(&enic->vf_admin_mac_lock);
+	if (!enic->vf_admin_mac_pending ||
+	    !enic->vf_admin_mac_work_enabled ||
+	    enic->vf_admin_mac_generation != generation) {
+		stale = true;
+		/* If policy changed while the request was running, the completed
+		 * station change may no longer match it. Record recovery while holding
+		 * vf_admin_mac_lock, which also protects VF worker shutdown. Teardown
+		 * therefore either suppresses the update or sees it first, and already
+		 * uses unregister/register to clear old state.
+		 */
+		if (mutated && enic->vf_admin_mac_work_enabled)
+			enic_vf_station_recovery_required(enic);
+	} else {
+		enic->vf_admin_mac_pending = false;
+		enic->vf_admin_mac_retries = 0;
+		enic->vf_admin_mac_recovery_attempted = false;
+		if (!zero_policy)
+			enic->vf_admin_mac_random_valid = false;
+	}
+	spin_unlock_bh(&enic->vf_admin_mac_lock);
+	if (stale)
+		goto unlock;
+
+	changed = !ether_addr_equal(enic->netdev->dev_addr, selected);
+	enic_vf_station_sync_reset(enic);
+	eth_hw_addr_set(enic->netdev, selected);
+	if (!zero_policy || changed)
+		enic->netdev->addr_assign_type = zero_policy ?
+			NET_ADDR_RANDOM : NET_ADDR_SET;
+	ether_addr_copy(enic->mac_addr, selected);
+	if (station_installed)
+		enic_vf_station_addr_set(enic, selected);
+	enic_vf_station_sync_reset(enic);
+	if (enic->netdev->reg_state == NETREG_REGISTERED) {
+		if (changed)
+			call_netdevice_notifiers(NETDEV_CHANGEADDR,
+						 enic->netdev);
+		netif_rx_mode_schedule_update(enic->netdev);
+	}
+	netdev_info(enic->netdev, "MBOX: admin MAC set to %pM\n", selected);
+
+unlock:
+	rtnl_unlock();
+
+	spin_lock_bh(&enic->vf_admin_mac_lock);
+	if (err && enic->vf_admin_mac_pending &&
+	    enic->vf_admin_mac_work_enabled &&
+	    generation == enic->vf_admin_mac_generation &&
+	    !READ_ONCE(enic->mbox_send_disabled)) {
+		if (enic->vf_admin_mac_retries <
+		    ENIC_VF_ADMIN_MAC_MAX_RETRIES) {
+			enic->vf_admin_mac_retries++;
+			reschedule = true;
+			delay = msecs_to_jiffies(ENIC_VF_ADMIN_MAC_RETRY_MS);
+		} else if (!enic->vf_admin_mac_recovery_attempted) {
+			enic->vf_admin_mac_recovery_attempted = true;
+			/* vf_admin_mac_lock also protects VF worker shutdown. */
+			enic_vf_station_recovery_required(enic);
+		}
+	}
+	if (enic->vf_admin_mac_pending &&
+	    enic->vf_admin_mac_work_enabled &&
+	    generation != enic->vf_admin_mac_generation) {
+		reschedule = true;
+		delay = 0;
+	}
+	if (enic->vf_admin_mac_pending && reschedule)
+		mod_delayed_work(system_wq, &enic->vf_admin_mac_work, delay);
+	spin_unlock_bh(&enic->vf_admin_mac_lock);
+}
+
+void enic_vf_admin_mac_notify(struct enic *enic, const u8 *addr)
+{
+	bool new_policy;
+
+	spin_lock_bh(&enic->vf_admin_mac_lock);
+	new_policy = !enic->vf_admin_mac_pending ||
+		!ether_addr_equal(enic->vf_admin_mac, addr);
+	if (new_policy) {
+		ether_addr_copy(enic->vf_admin_mac, addr);
+		if (!is_zero_ether_addr(addr))
+			enic->vf_admin_mac_random_valid = false;
+		enic->vf_admin_mac_pending = true;
+		enic->vf_admin_mac_generation++;
+		enic->vf_admin_mac_retries = 0;
+		enic->vf_admin_mac_recovery_attempted = false;
+	}
+	if (new_policy && enic->vf_admin_mac_work_enabled)
+		mod_delayed_work(system_wq, &enic->vf_admin_mac_work, 0);
+	spin_unlock_bh(&enic->vf_admin_mac_lock);
+}
+
+void enic_vf_admin_mac_quiesce(struct enic *enic)
+{
+	spin_lock_bh(&enic->vf_admin_mac_lock);
+	enic->vf_admin_mac_work_enabled = false;
+	enic->vf_admin_mac_generation++;
+	spin_unlock_bh(&enic->vf_admin_mac_lock);
+	cancel_delayed_work_sync(&enic->vf_admin_mac_work);
+}
+
+void enic_vf_admin_mac_rearm(struct enic *enic)
+{
+	spin_lock_bh(&enic->vf_admin_mac_lock);
+	enic->vf_admin_mac_work_enabled = true;
+	if (enic->vf_admin_mac_pending)
+		mod_delayed_work(system_wq, &enic->vf_admin_mac_work, 0);
+	spin_unlock_bh(&enic->vf_admin_mac_lock);
+}
+
+void enic_vf_admin_mac_purge(struct enic *enic)
+{
+	enic_vf_admin_mac_quiesce(enic);
+	spin_lock_bh(&enic->vf_admin_mac_lock);
+	enic->vf_admin_mac_pending = false;
+	enic->vf_admin_mac_random_valid = false;
+	enic->vf_admin_mac_recovery_attempted = false;
+	enic->vf_admin_mac_retries = 0;
+	enic->vf_admin_mac_generation++;
+	spin_unlock_bh(&enic->vf_admin_mac_lock);
+}
+
+/* CMD_GET_MAC_ADDR is the PF-owned policy store. Re-read it after REGISTER so
+ * a lost notification cannot leave the VF using stale administrative policy.
+ */
+static int enic_vf_admin_mac_refresh(struct enic *enic)
+{
+	u8 previous_policy[ETH_ALEN];
+	u8 random_addr[ETH_ALEN];
+	u8 selected[ETH_ALEN];
+	u8 policy[ETH_ALEN];
+	u32 generation;
+	bool apply_policy;
+	bool changed;
+	bool pending;
+	bool policy_changed;
+	bool zero_policy;
+	unsigned int attempt;
+	int err;
+
+	for (attempt = 0; attempt < ENIC_VF_ADMIN_MAC_REFRESH_RETRIES;
+	     attempt++) {
+		spin_lock_bh(&enic->vf_admin_mac_lock);
+		generation = enic->vf_admin_mac_generation;
+		pending = enic->vf_admin_mac_pending;
+		ether_addr_copy(previous_policy, enic->vf_admin_mac);
+		spin_unlock_bh(&enic->vf_admin_mac_lock);
+
+		err = enic_dev_get_mac_addr(enic, policy);
+		if (err)
+			return err;
+		if (is_multicast_ether_addr(policy))
+			return -EADDRNOTAVAIL;
+
+		zero_policy = is_zero_ether_addr(policy);
+		if (zero_policy)
+			eth_random_addr(random_addr);
+
+		spin_lock_bh(&enic->vf_admin_mac_lock);
+		if (enic->vf_admin_mac_generation != generation) {
+			spin_unlock_bh(&enic->vf_admin_mac_lock);
+			continue;
+		}
+
+		policy_changed = !ether_addr_equal(previous_policy, policy);
+		apply_policy = pending || policy_changed ||
+			!is_valid_ether_addr(enic->netdev->dev_addr) ||
+			(!zero_policy &&
+			 !ether_addr_equal(enic->netdev->dev_addr, policy));
+		if (!apply_policy) {
+			ether_addr_copy(selected, enic->netdev->dev_addr);
+			if (zero_policy) {
+				ether_addr_copy(enic->vf_admin_mac_random_addr,
+						selected);
+				enic->vf_admin_mac_random_valid = true;
+			}
+		} else if (zero_policy && enic->vf_admin_mac_random_valid) {
+			ether_addr_copy(selected,
+					enic->vf_admin_mac_random_addr);
+		} else if (zero_policy) {
+			ether_addr_copy(selected, random_addr);
+			ether_addr_copy(enic->vf_admin_mac_random_addr, selected);
+			enic->vf_admin_mac_random_valid = true;
+		} else {
+			ether_addr_copy(selected, policy);
+			enic->vf_admin_mac_random_valid = false;
+		}
+		ether_addr_copy(enic->vf_admin_mac, policy);
+		enic->vf_admin_mac_pending = false;
+		enic->vf_admin_mac_recovery_attempted = false;
+		enic->vf_admin_mac_retries = 0;
+		enic->vf_admin_mac_generation++;
+		spin_unlock_bh(&enic->vf_admin_mac_lock);
+
+		changed = !ether_addr_equal(enic->netdev->dev_addr, selected);
+		eth_hw_addr_set(enic->netdev, selected);
+		if (!zero_policy || changed)
+			enic->netdev->addr_assign_type = zero_policy ?
+				NET_ADDR_RANDOM : NET_ADDR_SET;
+		ether_addr_copy(enic->mac_addr, selected);
+		if (changed && enic->netdev->reg_state == NETREG_REGISTERED)
+			call_netdevice_notifiers(NETDEV_CHANGEADDR,
+						 enic->netdev);
+
+		return 0;
+	}
+
+	return -EAGAIN;
+}
+
 static int enic_set_mac_address_dynamic(struct net_device *netdev, void *p)
 {
 	struct enic *enic = netdev_priv(netdev);
 	struct sockaddr *saddr = p;
 	char *addr = saddr->sa_data;
 	int err;
+
+	if (enic_is_sriov_vf_v2(enic)) {
+		if (!is_valid_ether_addr(addr))
+			return -EADDRNOTAVAIL;
+
+		spin_lock_bh(&enic->vf_admin_mac_lock);
+		err = is_valid_ether_addr(enic->vf_admin_mac) &&
+		      !ether_addr_equal(enic->vf_admin_mac, addr);
+		spin_unlock_bh(&enic->vf_admin_mac_lock);
+		if (err)
+			return -EPERM;
+		if (ether_addr_equal(addr, netdev->dev_addr))
+			return 0;
+
+		if (enic->vf_datapath_open &&
+		    !READ_ONCE(enic->vf_registered))
+			return -ENODEV;
+
+		/* An internal reset keeps IFF_UP set while its failed reopen leaves
+		 * the datapath closed. Cache the requested address in that state; the
+		 * next successful open installs it together with the datapath.
+		 */
+		if (!enic->vf_datapath_open) {
+			err = enic_set_mac_addr(netdev, addr);
+			if (!err)
+				enic_vf_admin_mac_cache_selected(enic, addr);
+			return err;
+		}
+
+		/* Keep the old software address visible until the complete station
+		 * replacement proves convergence.
+		 */
+		err = enic_vf_station_addr_replace(enic, addr);
+		if (err)
+			return err;
+
+		enic_vf_station_sync_reset(enic);
+		err = enic_set_mac_addr(netdev, addr);
+		if (!err) {
+			enic_vf_station_addr_set(enic, addr);
+			enic_vf_station_sync_reset(enic);
+			enic_vf_admin_mac_cache_selected(enic, addr);
+			netif_rx_mode_schedule_update(netdev);
+		}
+
+		return err;
+	}
 
 	if (netif_running(enic->netdev)) {
 		err = enic_dev_del_station_addr(enic);
@@ -1107,17 +1621,380 @@ static int enic_set_mac_address(struct net_device *netdev, void *p)
 	return enic_dev_add_station_addr(enic);
 }
 
+static u16 enic_rx_mode_to_pkt_filter(struct net_device *netdev,
+				      unsigned int uc_count,
+				      unsigned int mc_count)
+{
+	u16 flags = CMD_PFILTER_DIRECTED;
+
+	if (netdev->flags & IFF_MULTICAST)
+		flags |= CMD_PFILTER_MULTICAST;
+	if (netdev->flags & IFF_BROADCAST)
+		flags |= CMD_PFILTER_BROADCAST;
+	if ((netdev->flags & IFF_PROMISC) ||
+	    uc_count > ENIC_UNICAST_PERFECT_FILTERS)
+		flags |= CMD_PFILTER_PROMISCUOUS;
+	if ((netdev->flags & IFF_ALLMULTI) ||
+	    mc_count > ENIC_MULTICAST_PERFECT_FILTERS)
+		flags |= CMD_PFILTER_ALL_MULTICAST;
+
+	return flags;
+}
+
+/* Deployed async PFs count the station MAC in the 32-entry UC table. */
+static bool enic_vf_uc_needs_promisc(unsigned int uc_count)
+{
+	return uc_count >= ENIC_UNICAST_PERFECT_FILTERS;
+}
+
+static int enic_vf_set_pkt_filter(struct enic *enic, u16 flags,
+				  u16 *applied_flags)
+{
+	u16 applied;
+	int err;
+
+	/* The PF can change trust policy independently and thereby withdraw
+	 * broad modes. Always refresh those requests so the returned applied
+	 * flags remain authoritative. The other modes are not trust-gated and
+	 * can be reused for ordinary address-list churn.
+	 */
+	if (!(flags & (CMD_PFILTER_PROMISCUOUS |
+		       CMD_PFILTER_ALL_MULTICAST)) &&
+	    enic->vf_pkt_filter_valid &&
+	    enic->vf_pkt_filter_requested == flags) {
+		if (applied_flags)
+			*applied_flags = enic->vf_pkt_filter_applied;
+		return 0;
+	}
+
+	err = enic_mbox_vf_set_pkt_filter(enic,
+					  !!(flags & CMD_PFILTER_DIRECTED),
+					  !!(flags & CMD_PFILTER_MULTICAST),
+					  !!(flags & CMD_PFILTER_BROADCAST),
+					  !!(flags & CMD_PFILTER_PROMISCUOUS),
+					  !!(flags & CMD_PFILTER_ALL_MULTICAST),
+					  &applied);
+	if (err)
+		return err;
+
+	enic->vf_pkt_filter_requested = flags;
+	enic->vf_pkt_filter_applied = applied;
+	enic->vf_pkt_filter_valid = true;
+	if (applied_flags)
+		*applied_flags = applied;
+
+	return 0;
+}
+
+static void enic_vf_report_pkt_filter_denial(struct net_device *netdev,
+					     u16 requested, u16 applied)
+{
+	if ((requested & CMD_PFILTER_PROMISCUOUS) &&
+	    !(applied & CMD_PFILTER_PROMISCUOUS))
+		netdev_dbg(netdev, "PF policy denied promiscuous receive mode\n");
+	if ((requested & CMD_PFILTER_ALL_MULTICAST) &&
+	    !(applied & CMD_PFILTER_ALL_MULTICAST))
+		netdev_dbg(netdev,
+			   "PF policy denied all-multicast receive mode\n");
+}
+
+struct enic_vf_mac_op {
+	struct netdev_hw_addr *ha;
+	unsigned int *filter_count;
+};
+
+static unsigned int
+enic_vf_addr_list_count(const struct enic *enic,
+			const struct netdev_hw_addr_list *list)
+{
+	const struct netdev_hw_addr *ha;
+	unsigned int count = 0;
+
+	netdev_hw_addr_list_for_each(ha, list)
+		if (ha->refcount > ha->sync_cnt &&
+		    !(enic->vf_station_addr_valid &&
+		      ether_addr_equal(ha->addr, enic->vf_station_addr)))
+			count++;
+
+	return count;
+}
+
+static int enic_vf_collect_mac_ops(struct enic *enic,
+				   struct netdev_hw_addr_list *list,
+				   bool install_new,
+				   unsigned int *filter_count,
+				   struct enic_mac_addr *macs,
+				   struct enic_vf_mac_op *ops,
+				   u16 *num_ops)
+{
+	struct netdev_hw_addr *ha;
+	u16 pos = *num_ops;
+
+	/* Deletes precede adds so a full perfect-filter table has room for a
+	 * replacement address in the same transaction.
+	 */
+	netdev_hw_addr_list_for_each(ha, list) {
+		if (enic->vf_station_addr_valid &&
+		    ether_addr_equal(ha->addr, enic->vf_station_addr))
+			continue;
+		if (!ha->sync_cnt ||
+		    ha->refcount != ha->sync_cnt)
+			continue;
+		if (pos == ENIC_MBOX_MAX_MAC_OPS)
+			return -E2BIG;
+
+		ether_addr_copy(macs[pos].addr, ha->addr);
+		macs[pos].flags = 0;
+		ops[pos].ha = ha;
+		ops[pos].filter_count = filter_count;
+		pos++;
+	}
+
+	if (!install_new)
+		goto done;
+
+	netdev_hw_addr_list_for_each(ha, list) {
+		if (enic->vf_station_addr_valid &&
+		    ether_addr_equal(ha->addr, enic->vf_station_addr))
+			continue;
+		if (ha->sync_cnt)
+			continue;
+		if (pos == ENIC_MBOX_MAX_MAC_OPS)
+			return -E2BIG;
+
+		ether_addr_copy(macs[pos].addr, ha->addr);
+		macs[pos].flags = cpu_to_le16(ENIC_MAC_ADDR_FLAG_ADD);
+		ops[pos].ha = ha;
+		ops[pos].filter_count = filter_count;
+		pos++;
+	}
+
+done:
+	*num_ops = pos;
+	return 0;
+}
+
+static int enic_vf_sync_mac_filters(struct enic *enic,
+				    struct netdev_hw_addr_list *uc,
+				    struct netdev_hw_addr_list *mc,
+				    bool install_uc, bool install_mc)
+{
+	struct enic_vf_mac_op *ops;
+	struct enic_mac_addr *macs;
+	bool permanent_add = false;
+	bool reconnect = false;
+	bool retryable_add = false;
+	u16 num_ops = 0;
+	unsigned int i;
+	int err = 0;
+
+	/* A class can contribute at most its installed perfect filters as
+	 * deletes and its finite perfect-filter limit as adds. Keep the wire
+	 * batch large enough for both classes so an update always fits in one
+	 * transaction and -E2BIG remains only a defensive state-corruption
+	 * check.
+	 */
+	BUILD_BUG_ON(ENIC_MBOX_MAX_MAC_OPS <
+		     2 * (ENIC_UNICAST_PERFECT_FILTERS +
+			  ENIC_MULTICAST_PERFECT_FILTERS));
+
+	macs = kcalloc(ENIC_MBOX_MAX_MAC_OPS, sizeof(*macs), GFP_KERNEL);
+	if (!macs)
+		return -ENOMEM;
+	ops = kcalloc(ENIC_MBOX_MAX_MAC_OPS, sizeof(*ops), GFP_KERNEL);
+	if (!ops) {
+		err = -ENOMEM;
+		goto free_macs;
+	}
+
+	err = enic_vf_collect_mac_ops(enic, uc, install_uc,
+				      &enic->uc_count,
+				      macs, ops, &num_ops);
+	if (err)
+		goto free_ops;
+	err = enic_vf_collect_mac_ops(enic, mc, install_mc,
+				      &enic->mc_count,
+				      macs, ops, &num_ops);
+	if (err || !num_ops)
+		goto free_ops;
+
+	/* The protocol carries all changed unicast and multicast addresses in
+	 * one request.  Besides matching the native ABI, this bounds time spent
+	 * in the RTNL-held asynchronous receive-mode callback to one MAC reply.
+	 */
+	err = enic_mbox_vf_add_del_macs(enic, macs, num_ops);
+	if (err)
+		goto free_ops;
+
+	for (i = 0; i < num_ops; i++) {
+		u16 flags = le16_to_cpu(macs[i].flags);
+		bool add = flags & ENIC_MAC_ADDR_FLAG_ADD;
+
+		if (flags & ENIC_MAC_ADDR_FLAG_SKIPPED) {
+			if (add)
+				retryable_add = true;
+			else
+				reconnect = true;
+			continue;
+		}
+		if (flags & ENIC_MAC_ADDR_FLAG_PERMANENT_MASK) {
+			if (add)
+				permanent_add = true;
+			else
+				reconnect = true;
+			continue;
+		}
+
+		if (add) {
+			ops[i].ha->sync_cnt++;
+			ops[i].ha->refcount++;
+			(*ops[i].filter_count)++;
+		} else {
+			ops[i].ha->sync_cnt--;
+			ops[i].ha->refcount--;
+			if (WARN_ON_ONCE(!*ops[i].filter_count))
+				err = -EIO;
+			else
+				(*ops[i].filter_count)--;
+		}
+	}
+
+	/* A failed DELETE can leave hardware accepting an address no longer in
+	 * the requested list.  Registration is the fail-closed cleanup boundary.
+	 * A skipped ADD changes no acceptance state and can use the bounded core
+	 * retry path.  Permanent ADD denials remain stable policy results.
+	 */
+	if (reconnect) {
+		enic_mbox_vf_require_reconnect(enic);
+		err = -EIO;
+	} else if (retryable_add) {
+		err = -EAGAIN;
+	} else if (permanent_add) {
+		err = -EACCES;
+	}
+
+free_ops:
+	kfree(ops);
+free_macs:
+	kfree(macs);
+	return err;
+}
+
+static int enic_set_vf_rx_mode(struct net_device *netdev,
+			       struct netdev_hw_addr_list *uc,
+			       struct netdev_hw_addr_list *mc)
+{
+	struct enic *enic = netdev_priv(netdev);
+	unsigned int uc_count = enic_vf_addr_list_count(enic, uc);
+	unsigned int mc_count = enic_vf_addr_list_count(enic, mc);
+	u16 flags = enic_rx_mode_to_pkt_filter(netdev, uc_count, mc_count);
+	bool uc_overflow = enic_vf_uc_needs_promisc(uc_count);
+	bool mc_overflow = mc_count > ENIC_MULTICAST_PERFECT_FILTERS;
+	u16 broad_modes = CMD_PFILTER_PROMISCUOUS |
+			  CMD_PFILTER_ALL_MULTICAST;
+	bool broad_enable_needed;
+	bool broad_withdrawal;
+	bool filter_needed;
+	bool target_filter_updated = false;
+	u16 prefilter_flags;
+	u16 applied_flags;
+	int err;
+
+	if (uc_overflow)
+		flags |= CMD_PFILTER_PROMISCUOUS;
+
+	if (!READ_ONCE(enic->vf_registered))
+		return -ENODEV;
+
+	filter_needed = !enic->vf_pkt_filter_valid ||
+			 enic->vf_pkt_filter_requested != flags ||
+			 (flags & broad_modes);
+	broad_enable_needed =
+		(!enic->vf_pkt_filter_valid && (flags & broad_modes)) ||
+		(flags & broad_modes & ~enic->vf_pkt_filter_requested);
+	broad_withdrawal = enic->vf_pkt_filter_valid &&
+		(enic->vf_pkt_filter_applied & broad_modes & ~flags);
+	if (broad_enable_needed) {
+		/* Establish newly required broad coverage before an independent
+		 * exact-address rejection can block it. Retain any broad mode that
+		 * is currently applied until its finite replacement is installed.
+		 */
+		prefilter_flags = flags;
+		if (enic->vf_pkt_filter_valid)
+			prefilter_flags |= enic->vf_pkt_filter_applied & broad_modes;
+		err = enic_vf_set_pkt_filter(enic, prefilter_flags,
+					     &applied_flags);
+		if (err)
+			return err;
+		target_filter_updated = prefilter_flags == flags;
+		enic_vf_report_pkt_filter_denial(netdev, flags, applied_flags);
+	}
+
+	if (broad_withdrawal) {
+		/* Withdraw stale broad acceptance before installing its finite
+		 * replacement. Complete both phases in this callback so a synchronous
+		 * receive-mode operation cannot return between them.
+		 */
+		err = enic_vf_set_pkt_filter(enic, flags, &applied_flags);
+		if (err) {
+			/* The previously applied broad mode may still be active.  Do
+			 * not rely on the core's bounded retry budget to narrow it.
+			 * Fresh registration is the fail-closed policy boundary.  A
+			 * local send timeout is already terminal and cannot use ordinary
+			 * reconnect recovery.
+			 */
+			if (!READ_ONCE(enic->mbox_tx_poisoned) &&
+			    !READ_ONCE(enic->vf_mbox_reconnect_required))
+				enic_mbox_vf_require_reconnect(enic);
+			return err;
+		}
+		target_filter_updated = true;
+		enic_vf_report_pkt_filter_denial(netdev, flags, applied_flags);
+	}
+
+	/* Keep the finite subset of exact filters already installed for an
+	 * overflowing class. Broad mode covers the remaining addresses when PF
+	 * policy permits it, while the independent finite class can still make
+	 * progress. When a class becomes finite again, stale broad acceptance was
+	 * withdrawn above before this exact-filter reconciliation.
+	 */
+	err = enic_vf_sync_mac_filters(enic, uc, mc, !uc_overflow,
+				       !mc_overflow);
+	if (err == -EACCES) {
+		/* Do not spend the core retry budget repeating an exact operation
+		 * that the PF rejected permanently. Finish any independent packet
+		 * policy change below before returning success.
+		 */
+		err = 0;
+	}
+	if (err)
+		return err;
+
+	if (!target_filter_updated && filter_needed) {
+		err = enic_vf_set_pkt_filter(enic, flags, &applied_flags);
+		if (err)
+			return err;
+	} else if (!target_filter_updated) {
+		applied_flags = enic->vf_pkt_filter_applied;
+	}
+
+	enic_vf_report_pkt_filter_denial(netdev, flags, applied_flags);
+
+	return 0;
+}
+
 /* netif_tx_lock held, BHs disabled */
 static void enic_set_rx_mode(struct net_device *netdev)
 {
 	struct enic *enic = netdev_priv(netdev);
-	int directed = 1;
-	int multicast = (netdev->flags & IFF_MULTICAST) ? 1 : 0;
-	int broadcast = (netdev->flags & IFF_BROADCAST) ? 1 : 0;
-	int promisc = (netdev->flags & IFF_PROMISC) ||
-		netdev_uc_count(netdev) > ENIC_UNICAST_PERFECT_FILTERS;
-	int allmulti = (netdev->flags & IFF_ALLMULTI) ||
-		netdev_mc_count(netdev) > ENIC_MULTICAST_PERFECT_FILTERS;
+	u16 filter_flags = enic_rx_mode_to_pkt_filter(netdev,
+					       netdev_uc_count(netdev),
+					       netdev_mc_count(netdev));
+	int directed = !!(filter_flags & CMD_PFILTER_DIRECTED);
+	int multicast = !!(filter_flags & CMD_PFILTER_MULTICAST);
+	int broadcast = !!(filter_flags & CMD_PFILTER_BROADCAST);
+	int promisc = !!(filter_flags & CMD_PFILTER_PROMISCUOUS);
+	int allmulti = !!(filter_flags & CMD_PFILTER_ALL_MULTICAST);
 	unsigned int flags = netdev->flags |
 		(allmulti ? IFF_ALLMULTI : 0) |
 		(promisc ? IFF_PROMISC : 0);
@@ -1718,10 +2595,17 @@ static void enic_notify_timer_start(struct enic *enic)
 	}
 }
 
+static int enic_admin_chan_reopen(struct enic *enic);
+
 /* rtnl lock is held, process context */
 static int enic_open(struct net_device *netdev)
 {
 	struct enic *enic = netdev_priv(netdev);
+	bool vf_mac_added = false;
+	u16 vf_filter_applied;
+	u16 vf_filter_flags;
+	unsigned int vf_mc_count;
+	unsigned int vf_uc_count;
 	unsigned int i;
 	int err, ret;
 	unsigned int max_pkt_len = netdev->mtu + VLAN_ETH_HLEN;
@@ -1735,6 +2619,30 @@ static int enic_open(struct net_device *netdev)
 		.netdev = netdev,
 		.flags = PP_FLAG_DMA_MAP | PP_FLAG_DMA_SYNC_DEV,
 	};
+
+	/* A reply timeout invalidates the current request generation.  Rebuild
+	 * and re-register the channel before allocating datapath resources so a
+	 * later userspace down/up can recover a failed open or reset handshake.
+	 * A send timeout is intentionally not recoverable here because its WQ
+	 * descriptor may still be hardware-owned.
+	 */
+	if (enic_is_sriov_vf_v2(enic) &&
+	    READ_ONCE(enic->mbox_tx_poisoned))
+		return -EIO;
+	if (enic_is_sriov_vf_v2(enic) &&
+	    (!enic->admin_chan_up || !READ_ONCE(enic->vf_registered) ||
+	     READ_ONCE(enic->vf_mbox_reconnect_required))) {
+		/* Re-registration makes the PF discard the old VF-requested
+		 * filters.  Clear the netdev-core synchronization state so the
+		 * receive-mode callback replays the current address lists.
+		 */
+		enic_reset_addr_lists(enic);
+		if (enic->admin_chan_up)
+			enic_admin_channel_close(enic);
+		err = enic_admin_chan_reopen(enic);
+		if (err)
+			return err;
+	}
 
 	err = enic_request_intr(enic);
 	if (err) {
@@ -1778,8 +2686,55 @@ static int enic_open(struct net_device *netdev)
 
 	if (!enic_is_dynamic(enic) && !enic_is_sriov_vf(enic))
 		enic_dev_add_station_addr(enic);
+	if (enic_is_sriov_vf_v2(enic)) {
+		if (!READ_ONCE(enic->vf_registered)) {
+			netdev_err(netdev, "VF is not registered with its PF\n");
+			err = -ENODEV;
+			goto err_out_disable_wq;
+		}
 
-	enic_set_rx_mode(netdev);
+		err = enic_vf_station_addr_replace(enic, netdev->dev_addr);
+		if (err) {
+			netdev_err(netdev,
+				   "Failed to register VF station address: %d\n",
+				   err);
+			goto err_out_disable_wq;
+		}
+		enic_vf_station_addr_set(enic, netdev->dev_addr);
+		enic_vf_station_sync_reset(enic);
+		vf_mac_added = true;
+
+		netif_addr_lock_bh(netdev);
+		vf_uc_count = enic_vf_addr_list_count(enic, &netdev->uc);
+		vf_mc_count = enic_vf_addr_list_count(enic, &netdev->mc);
+		netif_addr_unlock_bh(netdev);
+
+		vf_filter_flags = enic_rx_mode_to_pkt_filter(netdev,
+							     vf_uc_count,
+							     vf_mc_count);
+		if (enic_vf_uc_needs_promisc(vf_uc_count))
+			vf_filter_flags |= CMD_PFILTER_PROMISCUOUS;
+		err = enic_vf_set_pkt_filter(enic, vf_filter_flags,
+					     &vf_filter_applied);
+		if (err) {
+			netdev_err(netdev,
+				   "Failed to configure VF packet filter: %d\n",
+				   err);
+			goto err_out_disable_wq;
+		}
+		if ((enic_vf_uc_needs_promisc(vf_uc_count) &&
+		     !(vf_filter_applied & CMD_PFILTER_PROMISCUOUS)) ||
+		    (vf_mc_count > ENIC_MULTICAST_PERFECT_FILTERS &&
+		     !(vf_filter_applied & CMD_PFILTER_ALL_MULTICAST))) {
+			netdev_err(netdev,
+				   "PF denied receive mode required by VF address lists\n");
+			err = -EACCES;
+			goto err_out_disable_wq;
+		}
+	}
+
+	if (!enic_is_sriov_vf_v2(enic))
+		enic_set_rx_mode(netdev);
 
 	netif_tx_wake_all_queues(netdev);
 
@@ -1794,17 +2749,41 @@ static int enic_open(struct net_device *netdev)
 		netdev_err(netdev, "Failed to enable device: %d\n", err);
 		goto err_out_dev_enable;
 	}
+	if (enic_is_sriov_vf_v2(enic)) {
+		/* Commit the replay only if no mailbox fault arrived while station
+		 * and receive policy were being programmed.  Keep the state lock
+		 * through the carrier transition so a later fault necessarily wins
+		 * and turns carrier back off.
+		 */
+		spin_lock_bh(&enic->mbox_state_lock);
+		if (!READ_ONCE(enic->vf_registered) ||
+		    READ_ONCE(enic->mbox_send_disabled) ||
+		    READ_ONCE(enic->mbox_tx_poisoned) ||
+		    READ_ONCE(enic->vf_mbox_reconnect_required)) {
+			err = -EIO;
+		} else {
+			WRITE_ONCE(enic->vf_rx_quarantined, false);
+			enic_mbox_vf_link_state_set_running(enic, true);
+		}
+		spin_unlock_bh(&enic->mbox_state_lock);
+		if (err) {
+			netdev_err(netdev,
+				   "MBOX state changed during VF datapath open\n");
+			goto err_out_dev_disable;
+		}
+	}
 
 	for (i = 0; i < enic->intr_count; i++)
 		vnic_intr_unmask(&enic->intr[i]);
-
 	enic_notify_timer_start(enic);
 	enic_rfs_timer_start(enic);
 	if (enic_is_sriov_vf_v2(enic))
-		enic_mbox_vf_link_state_set_running(enic, true);
+		enic->vf_datapath_open = true;
 
 	return 0;
 
+err_out_dev_disable:
+	enic_dev_disable(enic);
 err_out_dev_enable:
 	for (i = 0; i < enic->rq_count; i++)
 		napi_disable(&enic->napi[i]);
@@ -1812,6 +2791,15 @@ err_out_dev_enable:
 		for (i = 0; i < enic->wq_count; i++)
 			napi_disable(&enic->napi[enic_cq_wq(enic, i)]);
 	netif_tx_disable(netdev);
+err_out_disable_wq:
+	if (vf_mac_added) {
+		ret = enic_vf_station_addr_del(enic);
+		if (ret) {
+			netdev_warn(netdev,
+				    "Failed to remove VF station address during open rollback: %d\n",
+				    ret);
+		}
+	}
 	if (!enic_is_dynamic(enic) && !enic_is_sriov_vf(enic))
 		enic_dev_del_station_addr(enic);
 	for (i = 0; i < enic->wq_count; i++)
@@ -1834,11 +2822,18 @@ err_out_free_intr:
 }
 
 /* rtnl lock is held, process context */
-static int enic_stop(struct net_device *netdev)
+static int __enic_stop(struct net_device *netdev, bool remove_vf_station)
 {
 	struct enic *enic = netdev_priv(netdev);
 	unsigned int i;
 	int err;
+
+	/* Internal reset leaves netif_running() set while the datapath is down.
+	 * If re-registration or reopen then fails, a later administrative close
+	 * must not disable NAPI a second time.
+	 */
+	if (enic_is_sriov_vf_v2(enic) && !enic->vf_datapath_open)
+		return 0;
 
 	for (i = 0; i < enic->intr_count; i++) {
 		vnic_intr_mask(&enic->intr[i]);
@@ -1863,6 +2858,15 @@ static int enic_stop(struct net_device *netdev)
 		for (i = 0; i < enic->wq_count; i++)
 			napi_disable(&enic->napi[enic_cq_wq(enic, i)]);
 	netif_tx_disable(netdev);
+	if (remove_vf_station && enic_is_sriov_vf_v2(enic) &&
+	    READ_ONCE(enic->vf_registered)) {
+		err = enic_vf_station_addr_del(enic);
+		if (err) {
+			netdev_warn(netdev,
+				    "Failed to remove VF station address: %d\n",
+				    err);
+		}
+	}
 
 	if (!enic_is_dynamic(enic) && !enic_is_sriov_vf(enic))
 		enic_dev_del_station_addr(enic);
@@ -1893,8 +2897,15 @@ static int enic_stop(struct net_device *netdev)
 		vnic_cq_clean(&enic->cq[i]);
 	for (i = 0; i < enic->intr_count; i++)
 		vnic_intr_clean(&enic->intr[i]);
+	if (enic_is_sriov_vf_v2(enic))
+		enic->vf_datapath_open = false;
 
 	return 0;
+}
+
+static int enic_stop(struct net_device *netdev)
+{
+	return __enic_stop(netdev, true);
 }
 
 static int _enic_change_mtu(struct net_device *netdev, int new_mtu)
@@ -2196,14 +3207,15 @@ static bool enic_has_admin_chan(struct enic *enic)
 	       (enic_sriov_enabled(enic) && enic->vf_type == ENIC_VF_TYPE_V2);
 }
 
-/* Re-establish the admin/MBOX channel after a reset has re-created the data
- * path.  Mirrors the relevant part of the probe / SR-IOV-enable sequence:
+/* Re-establish the admin/MBOX channel after a reset has re-created the vNIC
+ * resources.  Mirrors the relevant part of the probe / SR-IOV-enable sequence:
  * reinitialise MBOX and reopen the channel, then for a VF re-run the PF
  * handshake (the reset wiped the VF's admin QP, so the VF must register
  * again), or for a PF re-push the current link state to registered VFs.
  */
-static void enic_admin_chan_reopen(struct enic *enic)
+static int enic_admin_chan_reopen(struct enic *enic)
 {
+	u32 recovery_generation = 0;
 	int err;
 
 	/* Install the MBOX receive handler and clear pending reply state before
@@ -2222,12 +3234,17 @@ static void enic_admin_chan_reopen(struct enic *enic)
 	 */
 	if (enic_is_sriov_vf_v2(enic))
 		WRITE_ONCE(enic->vf_registered, false);
+	if (enic_is_sriov_vf_v2(enic)) {
+		spin_lock_bh(&enic->mbox_state_lock);
+		recovery_generation = enic->vf_mbox_fault_generation;
+		spin_unlock_bh(&enic->mbox_state_lock);
+	}
 
 	err = enic_admin_channel_open(enic);
 	if (err) {
 		netdev_err(enic->netdev,
 			   "admin channel reopen after reset failed: %d\n", err);
-		return;
+		return err;
 	}
 
 	if (enic_is_sriov_vf_v2(enic)) {
@@ -2237,7 +3254,7 @@ static void enic_admin_chan_reopen(struct enic *enic)
 				   "MBOX capability check after reset failed: %d\n",
 				   err);
 			enic_admin_channel_close(enic);
-			return;
+			return err;
 		}
 		err = enic_mbox_vf_register(enic);
 		if (err) {
@@ -2245,7 +3262,37 @@ static void enic_admin_chan_reopen(struct enic *enic)
 				   "MBOX VF re-registration after reset failed: %d\n",
 				   err);
 			enic_admin_channel_close(enic);
+			return err;
 		}
+		enic_reset_addr_lists(enic);
+		enic->vf_station_addr_valid = false;
+		err = enic_vf_admin_mac_refresh(enic);
+		if (err) {
+			netdev_err(enic->netdev,
+				   "Failed to refresh VF admin MAC after reset: %d\n",
+				   err);
+			enic_admin_channel_close(enic);
+			return err;
+		}
+		/* Capability negotiation and registration establish a new protocol
+		 * generation after authoritative MAC policy is refreshed. RX remains
+		 * quarantined until enic_open() replays station and receive policy.
+		 */
+		spin_lock_bh(&enic->mbox_state_lock);
+		if (enic->vf_mbox_fault_generation != recovery_generation ||
+		    READ_ONCE(enic->mbox_tx_poisoned)) {
+			err = -EAGAIN;
+		} else {
+			WRITE_ONCE(enic->vf_mbox_reconnect_required, false);
+		}
+		spin_unlock_bh(&enic->mbox_state_lock);
+		if (err) {
+			netdev_warn(enic->netdev,
+				    "MBOX state changed during VF re-registration\n");
+			enic_admin_channel_close(enic);
+			return err;
+		}
+		enic_vf_admin_mac_rearm(enic);
 	} else {
 		/* The link came back up during enic_open() above while MBOX
 		 * sends were still disabled (channel not yet reopened), so that
@@ -2253,79 +3300,135 @@ static void enic_admin_chan_reopen(struct enic *enic)
 		 */
 		schedule_work(&enic->link_notify_work);
 	}
+
+	return 0;
 }
 
 static void enic_reset(struct work_struct *work)
 {
 	struct enic *enic = container_of(work, struct enic, reset);
+	bool vf_recovery = enic_is_sriov_vf_v2(enic);
+	int err;
 
 	if (!netif_running(enic->netdev))
 		return;
+	if (vf_recovery)
+		WRITE_ONCE(enic->vf_mbox_recovery_active, true);
 
 	rtnl_lock();
+	/* V2 protocol recovery can be queued immediately before ndo_stop()
+	 * acquires RTNL.  Recheck under RTNL so that new recovery path cannot
+	 * reopen a device userspace just closed.  Preserve the existing reset
+	 * behavior for every other ENIC device.
+	 */
+	if (enic_is_sriov_vf_v2(enic) && !netif_running(enic->netdev))
+		goto unlock;
 
 	/* Stop any activity from infiniband */
 	enic_set_api_busy(enic, true);
 
-	/* Fully tear down the V2 admin/MBOX channel before the soft reset.
-	 * The reset wipes all hardware queues including the admin WQ/RQ;
-	 * closing first tells firmware to stop the admin QP (so it no longer
-	 * DMAs from the about-to-be-reset rings) and frees the admin resources
-	 * so they are cleanly re-allocated afterwards.
+	/* Stop the datapath and existing admin/MBOX channel before the soft
+	 * reset. Do not send DEL_MAC from this path: a timeout would poison the
+	 * channel while reset and fresh registration already discard the old
+	 * VF-requested protocol state before the station address is replayed.
+	 * Reopen allocates fresh admin resources after reset recreates the vNIC.
 	 */
+	__enic_stop(enic->netdev, false);
 	if (enic_has_admin_chan(enic))
 		enic_admin_channel_close(enic);
 
-	enic_stop(enic->netdev);
 	if (enic_is_sriov_vf_v2(enic))
 		enic_mbox_vf_link_state_reset(enic);
+	err = enic_dev_soft_reset(enic);
+	if (err)
+		goto reset_out;
 
-	enic_dev_soft_reset(enic);
+	if (!enic_is_dynamic(enic)) {
+		err = vnic_dev_init(enic->vdev, 0);
+		if (err) {
+			netdev_err(enic->netdev,
+				   "vNIC init after soft reset failed: %d\n",
+				   err);
+			goto reset_out;
+		}
+	}
+
 	enic_reset_addr_lists(enic);
 	enic_init_vnic_resources(enic);
 	enic_set_rss_nic_cfg(enic);
 	enic_dev_set_ig_vlan_rewrite_mode(enic);
 	enic_ext_cq(enic);
 
-	enic_open(enic->netdev);
-
-	/* Re-establish the admin/MBOX channel after the data path is back up.
-	 * It was fully torn down by enic_admin_channel_close() above;
-	 * enic_admin_chan_reopen() reopens it and, for a PF re-pushes link
-	 * state, or for a VF re-runs the probe-time PF handshake.
+	/* A V2 VF needs PF registration before enic_open() can install its
+	 * station address.  A V2 PF reopens afterwards and replays carrier.
 	 */
-	if (enic_has_admin_chan(enic))
+	if (enic_is_sriov_vf_v2(enic)) {
+		err = enic_admin_chan_reopen(enic);
+		if (err)
+			goto reset_out;
+	}
+
+	err = enic_open(enic->netdev);
+	if (err)
+		netdev_err(enic->netdev,
+			   "Failed to reopen datapath after reset: %d\n", err);
+	else if (enic_is_sriov_vf_v2(enic)) {
+		/* Internal reset bypasses __dev_open(), which normally schedules the
+		 * asynchronous receive-mode upload after ndo_open. Schedule an update
+		 * after enic_reset_addr_lists() marked the lists unsynchronized.
+		 */
+		netif_rx_mode_schedule_update(enic->netdev);
+	}
+
+	/* A PF reopens its admin channel after the datapath and re-pushes link
+	 * state.  The VF handshake, which open depends on, completed above.
+	 */
+	if (enic_has_admin_chan(enic) && !enic_is_sriov_vf_v2(enic))
 		enic_admin_chan_reopen(enic);
 
+reset_out:
 	/* Allow infiniband to fiddle with the device again */
 	enic_set_api_busy(enic, false);
 
 	call_netdevice_notifiers(NETDEV_REBOOT, enic->netdev);
 
+unlock:
+	if (vf_recovery)
+		WRITE_ONCE(enic->vf_mbox_recovery_active, false);
 	rtnl_unlock();
 }
 
 static void enic_tx_hang_reset(struct work_struct *work)
 {
 	struct enic *enic = container_of(work, struct enic, tx_hang_reset);
+	bool vf_recovery = enic_is_sriov_vf_v2(enic);
+	int err;
+
+	if (vf_recovery)
+		WRITE_ONCE(enic->vf_mbox_recovery_active, true);
 
 	rtnl_lock();
+	/* The V2 changes below add admin-channel recovery to this worker.  Do not
+	 * let that new path reopen a VF after userspace completed ndo_stop();
+	 * leave the existing behavior for other ENIC devices unchanged.
+	 */
+	if (enic_is_sriov_vf_v2(enic) && !netif_running(enic->netdev))
+		goto unlock;
 
 	/* Stop any activity from infiniband */
 	enic_set_api_busy(enic, true);
 
-	/* Fully tear down the V2 admin/MBOX channel before the hang reset, for
-	 * the same reason as the soft reset path: stop the admin QP and free
-	 * the admin resources before the hardware queues are wiped.
+	/* Preserve the firmware hang-notification contract by reporting the hung
+	 * queue before stopping and cleaning it. As in the soft-reset path, skip
+	 * DEL_MAC because reset and fresh registration are the cleanup boundary.
 	 */
+	enic_dev_hang_notify(enic);
+	__enic_stop(enic->netdev, false);
 	if (enic_has_admin_chan(enic))
 		enic_admin_channel_close(enic);
 
-	enic_dev_hang_notify(enic);
-	enic_stop(enic->netdev);
 	if (enic_is_sriov_vf_v2(enic))
 		enic_mbox_vf_link_state_reset(enic);
-
 	enic_dev_hang_reset(enic);
 	enic_reset_addr_lists(enic);
 	enic_init_vnic_resources(enic);
@@ -2333,21 +3436,34 @@ static void enic_tx_hang_reset(struct work_struct *work)
 	enic_dev_set_ig_vlan_rewrite_mode(enic);
 	enic_ext_cq(enic);
 
-	enic_open(enic->netdev);
+	if (enic_is_sriov_vf_v2(enic)) {
+		err = enic_admin_chan_reopen(enic);
+		if (err)
+			goto hang_reset_out;
+	}
 
-	/* Re-establish the admin/MBOX channel after the data path is back up.
-	 * It was fully torn down by enic_admin_channel_close() above;
-	 * enic_admin_chan_reopen() reopens it and, for a PF re-pushes link
-	 * state, or for a VF re-runs the probe-time PF handshake.
+	err = enic_open(enic->netdev);
+	if (err)
+		netdev_err(enic->netdev,
+			   "Failed to reopen datapath after hang reset: %d\n", err);
+	else if (enic_is_sriov_vf_v2(enic))
+		netif_rx_mode_schedule_update(enic->netdev);
+
+	/* A PF reopens its admin channel after the datapath and re-pushes link
+	 * state.  The VF handshake, which open depends on, completed above.
 	 */
-	if (enic_has_admin_chan(enic))
+	if (enic_has_admin_chan(enic) && !enic_is_sriov_vf_v2(enic))
 		enic_admin_chan_reopen(enic);
 
+hang_reset_out:
 	/* Allow infiniband to fiddle with the device again */
 	enic_set_api_busy(enic, false);
 
 	call_netdevice_notifiers(NETDEV_REBOOT, enic->netdev);
 
+unlock:
+	if (vf_recovery)
+		WRITE_ONCE(enic->vf_mbox_recovery_active, false);
 	rtnl_unlock();
 }
 
@@ -2569,6 +3685,30 @@ static const struct net_device_ops enic_netdev_dynamic_ops = {
 	.ndo_get_stats64	= enic_get_stats,
 	.ndo_validate_addr	= eth_validate_addr,
 	.ndo_set_rx_mode	= enic_set_rx_mode,
+	.ndo_set_mac_address	= enic_set_mac_address_dynamic,
+	.ndo_change_mtu		= enic_change_mtu,
+	.ndo_vlan_rx_add_vid	= enic_vlan_rx_add_vid,
+	.ndo_vlan_rx_kill_vid	= enic_vlan_rx_kill_vid,
+	.ndo_tx_timeout		= enic_tx_timeout,
+	.ndo_set_vf_port	= enic_set_vf_port,
+	.ndo_get_vf_port	= enic_get_vf_port,
+	.ndo_set_vf_mac		= enic_set_vf_mac,
+#ifdef CONFIG_NET_POLL_CONTROLLER
+	.ndo_poll_controller	= enic_poll_controller,
+#endif
+#ifdef CONFIG_RFS_ACCEL
+	.ndo_rx_flow_steer	= enic_rx_flow_steer,
+#endif
+	.ndo_features_check	= enic_features_check,
+};
+
+static const struct net_device_ops enic_netdev_vf_v2_ops = {
+	.ndo_open		= enic_open,
+	.ndo_stop		= enic_stop,
+	.ndo_start_xmit		= enic_hard_start_xmit,
+	.ndo_get_stats64	= enic_get_stats,
+	.ndo_validate_addr	= eth_validate_addr,
+	.ndo_set_rx_mode_async	= enic_set_vf_rx_mode,
 	.ndo_set_mac_address	= enic_set_mac_address_dynamic,
 	.ndo_change_mtu		= enic_change_mtu,
 	.ndo_vlan_rx_add_vid	= enic_vlan_rx_add_vid,
@@ -3001,7 +4141,6 @@ static int enic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	struct device *dev = &pdev->dev;
 	struct net_device *netdev;
 	struct enic *enic;
-	int using_dac = 0;
 	unsigned int i;
 	int err;
 #ifdef CONFIG_PCI_IOV
@@ -3044,20 +4183,11 @@ static int enic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	pci_set_master(pdev);
 
-	/* Query PCI controller on system for DMA addressing
-	 * limitation for the device.  Try 47-bit first, and
-	 * fail to 32-bit.
-	 */
-
+	/* The device supports DMA addresses up to 47 bits. */
 	err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(47));
 	if (err) {
-		err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
-		if (err) {
-			dev_err(dev, "No usable DMA configuration, aborting\n");
-			goto err_out_release_regions;
-		}
-	} else {
-		using_dac = 1;
+		dev_err(dev, "No usable DMA configuration, aborting\n");
+		goto err_out_release_regions;
 	}
 
 	/* Map vNIC resources from BAR0-5
@@ -3190,6 +4320,9 @@ static int enic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	 * cancel_work_sync()) would otherwise act on an uninitialised work.
 	 */
 	INIT_WORK(&enic->link_notify_work, enic_link_notify_work_handler);
+	spin_lock_init(&enic->vf_admin_mac_lock);
+	INIT_DELAYED_WORK(&enic->vf_admin_mac_work,
+			  enic_vf_admin_mac_work);
 
 	/* V2 VF: open admin channel and register with PF.
 	 * Must happen before register_netdev so the VF is fully
@@ -3217,6 +4350,12 @@ static int enic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		if (err) {
 			dev_err(dev,
 				"MBOX VF registration failed: %d\n", err);
+			goto err_out_admin_close;
+		}
+		err = enic_vf_admin_mac_refresh(enic);
+		if (err) {
+			dev_err(dev,
+				"MBOX VF admin MAC refresh failed: %d\n", err);
 			goto err_out_admin_close;
 		}
 	}
@@ -3254,7 +4393,9 @@ static int enic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	 */
 	enic->rx_coalesce_usecs = enic->tx_coalesce_usecs;
 
-	if (enic_is_dynamic(enic) || enic_is_sriov_vf(enic))
+	if (enic_is_sriov_vf_v2(enic))
+		netdev->netdev_ops = &enic_netdev_vf_v2_ops;
+	else if (enic_is_dynamic(enic) || enic_is_sriov_vf(enic))
 		netdev->netdev_ops = &enic_netdev_dynamic_ops;
 	else
 		netdev->netdev_ops = &enic_netdev_ops;
@@ -3330,8 +4471,7 @@ static int enic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	netdev->hw_features |= NETIF_F_NTUPLE;
 #endif
 
-	if (using_dac)
-		netdev->features |= NETIF_F_HIGHDMA;
+	netdev->features |= NETIF_F_HIGHDMA;
 
 	netdev->priv_flags |= IFF_UNICAST_FLT;
 
@@ -3345,6 +4485,8 @@ static int enic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		dev_err(dev, "Cannot register net device, aborting\n");
 		goto err_out_admin_close;
 	}
+	if (enic_is_sriov_vf_v2(enic))
+		enic_vf_admin_mac_rearm(enic);
 
 	return 0;
 
@@ -3400,9 +4542,19 @@ static void enic_remove(struct pci_dev *pdev)
 
 		/* Close the admin channel and unregister from the PF before
 		 * unregister_netdev() to prevent a late PF notification from
-		 * touching a netdev that is being torn down.
+		 * touching a netdev that is being torn down.  VF_UNREGISTER is the
+		 * protocol teardown operation: the PF removes all VF-requested
+		 * configuration, including the station address, before replying.
+		 * Detach first while holding RTNL so any running asynchronous
+		 * receive-mode update has completed and queued updates cannot enter
+		 * the mailbox callback.
 		 */
 		if (enic_is_sriov_vf_v2(enic)) {
+			enic_vf_admin_mac_quiesce(enic);
+			rtnl_lock();
+			netif_device_detach(netdev);
+			rtnl_unlock();
+
 			if (READ_ONCE(enic->vf_registered)) {
 				int unreg_err = enic_mbox_vf_unregister(enic);
 
@@ -3421,6 +4573,8 @@ static void enic_remove(struct pci_dev *pdev)
 		 * enic_link_check() scheduled it just as SR-IOV was disabled.
 		 */
 		cancel_work_sync(&enic->link_notify_work);
+		if (enic_is_sriov_vf_v2(enic))
+			enic_vf_admin_mac_purge(enic);
 #ifdef CONFIG_PCI_IOV
 		if (enic_sriov_enabled(enic)) {
 			if (enic->vf_type == ENIC_VF_TYPE_V2)

@@ -42,6 +42,12 @@ static void dwxgmac2_irq_modify(struct mac_device_info *hw, u32 disable,
 	spin_unlock_irqrestore(&hw->irq_ctrl_lock, flags);
 }
 
+static void dwxgmac2_timestamp_interrupt_cfg(struct stmmac_priv *priv, bool en)
+{
+	stmmac_mac_irq_modify(priv, en ? 0 : XGMAC_TSIE,
+			      en ? XGMAC_TSIE : 0);
+}
+
 static void dwxgmac2_update_caps(struct stmmac_priv *priv)
 {
 	if (!priv->dma_cap.mbps_10_100)
@@ -1154,6 +1160,57 @@ static int dwxgmac2_get_mac_tx_timestamp(struct mac_device_info *hw, u64 *ts)
 	return 0;
 }
 
+void dwxgmac2_timestamp_interrupt(struct stmmac_priv *priv)
+{
+	u32 ts_status, pending_snapshots, acr_value, channel;
+	struct ptp_clock_event event;
+	unsigned long flags;
+	u64 ptp_time;
+	int i;
+
+	if (priv->plat->flags & STMMAC_FLAG_INT_SNAPSHOT_EN) {
+		/* Read the status to clear the timestamp interrupt source;
+		 * the FIFO belongs to the cross-timestamp path.
+		 */
+		readl(priv->ioaddr + XGMAC_TIMESTAMP_STATUS);
+		return;
+	}
+
+	/* Reading XGMAC_TIMESTAMP_STATUS clears the TSIS and AUXTSTRIG
+	 * bits, so the ATSNS count is the only reliable indication of
+	 * pending auxiliary snapshots.  TXTSC is cleared by
+	 * XGMAC_TXTIMESTAMP_SEC and is not affected by this read.
+	 */
+	ts_status = readl(priv->ioaddr + XGMAC_TIMESTAMP_STATUS);
+
+	if (!(priv->plat->flags & STMMAC_FLAG_EXT_SNAPSHOT_EN) || !priv->ptp_clock)
+		return;
+
+	pending_snapshots = FIELD_GET(XGMAC_TIMESTAMP_ATSNS_MASK, ts_status);
+	if (!pending_snapshots)
+		return;
+
+	acr_value = readl(priv->ptpaddr + PTP_ACR);
+	/* Entries observed while the FIFO is being flushed are stale. */
+	if (acr_value & PTP_ACR_ATSFC)
+		return;
+	channel = FIELD_GET(PTP_ACR_MASK, acr_value);
+	if (!channel)
+		return;
+	channel = ilog2(channel);
+
+	for (i = 0; i < pending_snapshots; i++) {
+		read_lock_irqsave(&priv->ptp_lock, flags);
+		stmmac_get_ptptime(priv, priv->ptpaddr, &ptp_time);
+		read_unlock_irqrestore(&priv->ptp_lock, flags);
+
+		event.type = PTP_CLOCK_EXTTS;
+		event.index = channel;
+		event.timestamp = ptp_time;
+		ptp_clock_event(priv->ptp_clock, &event);
+	}
+}
+
 static int dwxgmac2_flex_pps_config(void __iomem *ioaddr, int index,
 				    struct stmmac_pps_cfg *cfg, bool enable,
 				    u32 sub_second_inc, u32 systime_flags)
@@ -1410,25 +1467,10 @@ static int dwxgmac2_config_l4_filter(struct mac_device_info *hw, u32 filter_no,
 	return 0;
 }
 
-static void dwxgmac2_set_arp_offload(struct mac_device_info *hw, bool en,
-				     u32 addr)
-{
-	void __iomem *ioaddr = hw->pcsr;
-	u32 value;
-
-	writel(addr, ioaddr + XGMAC_ARP_ADDR);
-
-	value = readl(ioaddr + XGMAC_RX_CONFIG);
-	if (en)
-		value |= XGMAC_CONFIG_ARPEN;
-	else
-		value &= ~XGMAC_CONFIG_ARPEN;
-	writel(value, ioaddr + XGMAC_RX_CONFIG);
-}
-
 const struct stmmac_ops dwxgmac210_ops = {
 	.core_init = dwxgmac2_core_init,
 	.irq_modify = dwxgmac2_irq_modify,
+	.timestamp_interrupt_cfg = dwxgmac2_timestamp_interrupt_cfg,
 	.update_caps = dwxgmac2_update_caps,
 	.set_mac = dwxgmac2_set_mac,
 	.rx_ipc = dwxgmac2_rx_ipc,
@@ -1464,7 +1506,6 @@ const struct stmmac_ops dwxgmac210_ops = {
 	.sarc_configure = dwxgmac2_sarc_configure,
 	.config_l3_filter = dwxgmac2_config_l3_filter,
 	.config_l4_filter = dwxgmac2_config_l4_filter,
-	.set_arp_offload = dwxgmac2_set_arp_offload,
 	.fpe_map_preemption_class = dwxgmac3_fpe_map_preemption_class,
 };
 
@@ -1485,6 +1526,7 @@ static void dwxlgmac2_rx_queue_enable(struct mac_device_info *hw, u8 mode,
 const struct stmmac_ops dwxlgmac2_ops = {
 	.core_init = dwxgmac2_core_init,
 	.irq_modify = dwxgmac2_irq_modify,
+	.timestamp_interrupt_cfg = dwxgmac2_timestamp_interrupt_cfg,
 	.set_mac = dwxgmac2_set_mac,
 	.rx_ipc = dwxgmac2_rx_ipc,
 	.rx_queue_enable = dwxlgmac2_rx_queue_enable,
@@ -1519,7 +1561,6 @@ const struct stmmac_ops dwxlgmac2_ops = {
 	.sarc_configure = dwxgmac2_sarc_configure,
 	.config_l3_filter = dwxgmac2_config_l3_filter,
 	.config_l4_filter = dwxgmac2_config_l4_filter,
-	.set_arp_offload = dwxgmac2_set_arp_offload,
 	.fpe_map_preemption_class = dwxgmac3_fpe_map_preemption_class,
 };
 

@@ -253,7 +253,7 @@ static void rds_ib_cq_comp_handler_recv(struct ib_cq *cq, void *context)
 
 	rds_ib_stats_inc(s_ib_evt_handler_call);
 
-	tasklet_schedule(&ic->i_recv_tasklet);
+	queue_work(system_bh_wq, &ic->i_recv_work);
 }
 
 static void poll_scq(struct rds_ib_connection *ic, struct ib_cq *cq,
@@ -279,9 +279,9 @@ static void poll_scq(struct rds_ib_connection *ic, struct ib_cq *cq,
 	}
 }
 
-static void rds_ib_tasklet_fn_send(unsigned long data)
+static void rds_ib_send_worker(struct work_struct *work)
 {
-	struct rds_ib_connection *ic = (struct rds_ib_connection *)data;
+	struct rds_ib_connection *ic = from_work(ic, work, i_send_work);
 	struct rds_connection *conn = ic->conn;
 
 	rds_ib_stats_inc(s_ib_tasklet_call);
@@ -319,9 +319,9 @@ static void poll_rcq(struct rds_ib_connection *ic, struct ib_cq *cq,
 	}
 }
 
-static void rds_ib_tasklet_fn_recv(unsigned long data)
+static void rds_ib_recv_worker(struct work_struct *work)
 {
-	struct rds_ib_connection *ic = (struct rds_ib_connection *)data;
+	struct rds_ib_connection *ic = from_work(ic, work, i_recv_work);
 	struct rds_connection *conn = ic->conn;
 	struct rds_ib_device *rds_ibdev = ic->rds_ibdev;
 	struct rds_ib_ack_state state;
@@ -381,7 +381,7 @@ static void rds_ib_cq_comp_handler_send(struct ib_cq *cq, void *context)
 
 	rds_ib_stats_inc(s_ib_evt_handler_call);
 
-	tasklet_schedule(&ic->i_send_tasklet);
+	queue_work(system_bh_wq, &ic->i_send_work);
 }
 
 static inline int ibdev_get_unused_vector(struct rds_ib_device *rds_ibdev)
@@ -524,7 +524,9 @@ static int rds_ib_setup_qp(struct rds_connection *conn)
 	fr_queue_space = RDS_IB_DEFAULT_FR_WR;
 
 	/* add the conn now so that connection establishment has the dev */
-	rds_ib_add_conn(rds_ibdev, conn);
+	ret = rds_ib_add_conn(rds_ibdev, conn);
+	if (ret)
+		goto out;
 
 	max_wrs = rds_ibdev->max_wrs < rds_ib_sysctl_max_send_wr + 1 ?
 		rds_ibdev->max_wrs - 1 : rds_ib_sysctl_max_send_wr;
@@ -874,6 +876,13 @@ int rds_ib_cm_handle_connect(struct rdma_cm_id *cm_id,
 	 * see the comment above rds_queue_reconnect()
 	 */
 	mutex_lock(&conn->c_cm_lock);
+	/* A destroy that has already quiesced this conn leaves it in
+	 * RDS_CONN_DOWN with no cm_id, exactly what the transition
+	 * below would happily claim; nothing would tear the new cm_id
+	 * and QP down again before the conn is freed.  Reject instead.
+	 */
+	if (rds_destroy_pending(conn))
+		goto out;
 	if (!rds_conn_transition(conn, RDS_CONN_DOWN, RDS_CONN_CONNECTING)) {
 		if (rds_conn_state(conn) == RDS_CONN_UP) {
 			rdsdebug("incoming connect while connecting\n");
@@ -924,8 +933,15 @@ int rds_ib_cm_handle_connect(struct rdma_cm_id *cm_id,
 		rds_ib_conn_error(conn, "rdma_accept failed\n");
 
 out:
-	if (conn)
+	if (conn) {
 		mutex_unlock(&conn->c_cm_lock);
+		/* Drop the reference rds_conn_create() handed us.  The
+		 * conn stays reachable through cm_id->context without a
+		 * reference of its own; rds_rdma_cm_event_handler_cmn()
+		 * takes one for the duration of each event it handles.
+		 */
+		rds_conn_put(conn);
+	}
 	if (err)
 		rdma_reject(cm_id, &err, sizeof(int),
 			    IB_CM_REJ_CONSUMER_DEFINED);
@@ -940,6 +956,17 @@ int rds_ib_cm_initiate_connect(struct rdma_cm_id *cm_id, bool isv6)
 	struct rdma_conn_param conn_param;
 	union rds_ib_conn_priv dp;
 	int ret;
+
+	/* A destroy that began while the address and route were being
+	 * resolved has already quiesced this conn, or is waiting on
+	 * c_cm_lock to do so.  Setting up a QP now would leave it - and
+	 * the device reference rds_ib_add_conn() takes - with no
+	 * shutdown pass left to tear them down.  The id we were handed
+	 * is still ic->i_cm_id, so return success and let that shutdown
+	 * destroy it, rather than have the rdma_cm destroy it on error.
+	 */
+	if (rds_destroy_pending(conn))
+		return 0;
 
 	/* If the peer doesn't do protocol negotiation, we must
 	 * default to RDSv3.0 */
@@ -996,6 +1023,18 @@ int rds_ib_conn_path_connect(struct rds_conn_path *cp)
 		ret = PTR_ERR(ic->i_cm_id);
 		ic->i_cm_id = NULL;
 		rdsdebug("rdma_create_id() failed: %d\n", ret);
+		goto out;
+	}
+
+	/* rds_ib_laddr_check() only vouched for the local address being
+	 * on an IB device; the address resolution below picks the device
+	 * on its own, so restrict it to the same kind.
+	 */
+	ret = rdma_restrict_node_type(ic->i_cm_id, RDMA_NODE_IB_CA);
+	if (ret) {
+		rdsdebug("rdma_restrict_node_type() failed: %d\n", ret);
+		rdma_destroy_id(ic->i_cm_id);
+		ic->i_cm_id = NULL;
 		goto out;
 	}
 
@@ -1099,12 +1138,12 @@ void rds_ib_conn_path_shutdown(struct rds_conn_path *cp)
 		while (!wait_event_timeout(rds_ib_ring_empty_wait,
 					   rds_ib_conn_path_shutdown_check_wait(cp) == 0,
 					   msecs_to_jiffies(1000))) {
-			tasklet_schedule(&ic->i_send_tasklet);
-			tasklet_schedule(&ic->i_recv_tasklet);
+			queue_work(system_bh_wq, &ic->i_send_work);
+			queue_work(system_bh_wq, &ic->i_recv_work);
 		}
 
-		tasklet_kill(&ic->i_send_tasklet);
-		tasklet_kill(&ic->i_recv_tasklet);
+		disable_work_sync(&ic->i_send_work);
+		disable_work_sync(&ic->i_recv_work);
 
 		atomic_set(&ic->i_cq_quiesce, 1);
 
@@ -1122,6 +1161,9 @@ void rds_ib_conn_path_shutdown(struct rds_conn_path *cp)
 				ibdev_put_vector(ic->rds_ibdev, ic->i_rcq_vector);
 			ib_destroy_cq(ic->i_recv_cq);
 		}
+
+		enable_work(&ic->i_send_work);
+		enable_work(&ic->i_recv_work);
 
 		if (ic->rds_ibdev) {
 			/* then free the resources that ib callbacks use */
@@ -1234,10 +1276,8 @@ int rds_ib_conn_alloc(struct rds_connection *conn, gfp_t gfp)
 	}
 
 	INIT_LIST_HEAD(&ic->ib_node);
-	tasklet_init(&ic->i_send_tasklet, rds_ib_tasklet_fn_send,
-		     (unsigned long)ic);
-	tasklet_init(&ic->i_recv_tasklet, rds_ib_tasklet_fn_recv,
-		     (unsigned long)ic);
+	INIT_WORK(&ic->i_send_work, rds_ib_send_worker);
+	INIT_WORK(&ic->i_recv_work, rds_ib_recv_worker);
 	mutex_init(&ic->i_recv_mutex);
 #ifndef KERNEL_HAS_ATOMIC64
 	spin_lock_init(&ic->i_ack_lock);
@@ -1271,19 +1311,29 @@ void rds_ib_conn_free(void *arg)
 {
 	struct rds_ib_connection *ic = arg;
 	spinlock_t	*lock_ptr;
+	unsigned long flags;
 
 	rdsdebug("ic %p\n", ic);
 
 	/*
-	 * Conn is either on a dev's list or on the nodev list.
-	 * A race with shutdown() or connect() would cause problems
-	 * (since rds_ibdev would change) but that should never happen.
+	 * Conn is on a dev's list or on the nodev list - or, once a
+	 * transport teardown has claimed it (i_ib_node_detached), on
+	 * neither, in which case the lock chosen here only guards the
+	 * test below.  A connect or shutdown still running for a
+	 * claimed conn leaves the node alone, see rds_ib_add_conn() and
+	 * rds_ib_remove_conn().
+	 *
+	 * Callers may hold rds_conn_lock with interrupts disabled
+	 * (__rds_conn_create() undoing a lost creation race), so do not
+	 * re-enable interrupts unconditionally here.
 	 */
 	lock_ptr = ic->rds_ibdev ? &ic->rds_ibdev->spinlock : &ib_nodev_conns_lock;
 
-	spin_lock_irq(lock_ptr);
-	list_del(&ic->ib_node);
-	spin_unlock_irq(lock_ptr);
+	spin_lock_irqsave(lock_ptr, flags);
+	/* a transport teardown that gathered us first owns the node */
+	if (!ic->i_ib_node_detached)
+		list_del(&ic->ib_node);
+	spin_unlock_irqrestore(lock_ptr, flags);
 
 	rds_ib_recv_free_caches(ic);
 

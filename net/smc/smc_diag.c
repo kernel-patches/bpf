@@ -39,8 +39,9 @@ static void smc_diag_msg_common_fill(struct smc_diag_msg *r, struct sock *sk)
 	memset(r, 0, sizeof(*r));
 	r->diag_family = sk->sk_family;
 	sock_diag_save_cookie(sk, r->id.idiag_cookie);
+	spin_lock_bh(&smc->clcsock_lock);
 	if (!smc->clcsock)
-		return;
+		goto out;
 	r->id.idiag_sport = htons(smc->clcsock->sk->sk_num);
 	r->id.idiag_dport = smc->clcsock->sk->sk_dport;
 	r->id.idiag_if = smc->clcsock->sk->sk_bound_dev_if;
@@ -55,6 +56,8 @@ static void smc_diag_msg_common_fill(struct smc_diag_msg *r, struct sock *sk)
 		       sizeof(smc->clcsock->sk->sk_v6_daddr));
 #endif
 	}
+out:
+	spin_unlock_bh(&smc->clcsock_lock);
 }
 
 static int smc_diag_msg_attrs_fill(struct sock *sk, struct sk_buff *skb,
@@ -90,7 +93,8 @@ static int __smc_diag_dump(struct sock *sk, struct sk_buff *skb,
 	r->diag_state = sk->sk_state;
 	if (smc->use_fallback)
 		r->diag_mode = SMC_DIAG_MODE_FALLBACK_TCP;
-	else if (smc_conn_lgr_valid(&smc->conn) && smc->conn.lgr->is_smcd)
+	else if (sk->sk_state != SMC_INIT &&
+		 smc_conn_lgr_valid(&smc->conn) && smc->conn.lgr->is_smcd)
 		r->diag_mode = SMC_DIAG_MODE_SMCD;
 	else
 		r->diag_mode = SMC_DIAG_MODE_SMCR;
@@ -102,6 +106,9 @@ static int __smc_diag_dump(struct sock *sk, struct sk_buff *skb,
 	fallback.peer_diagnosis = smc->peer_diagnosis;
 	if (nla_put(skb, SMC_DIAG_FALLBACK, sizeof(fallback), &fallback) < 0)
 		goto errout;
+
+	if (sk->sk_state == SMC_INIT || sk->sk_state == SMC_CLOSED)
+		goto out;
 
 	if ((req->diag_ext & (1 << (SMC_DIAG_CONNINFO - 1))) &&
 	    smc->conn.alert_token_local) {
@@ -185,6 +192,7 @@ static int __smc_diag_dump(struct sock *sk, struct sk_buff *skb,
 			goto errout;
 	}
 
+out:
 	nlmsg_end(skb, nlh);
 	return 0;
 

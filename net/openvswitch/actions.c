@@ -322,10 +322,12 @@ static int pop_nsh(struct sk_buff *skb, struct sw_flow_key *key)
 static void update_ip_l4_checksum(struct sk_buff *skb, struct iphdr *nh,
 				  __be32 addr, __be32 new_addr)
 {
-	int transport_len = skb->len - skb_transport_offset(skb);
+	int transport_len;
 
 	if (nh->frag_off & htons(IP_OFFSET))
 		return;
+
+	transport_len = skb->len - skb_transport_offset(skb);
 
 	if (nh->protocol == IPPROTO_TCP) {
 		if (likely(transport_len >= sizeof(struct tcphdr)))
@@ -358,7 +360,15 @@ static void set_ip_addr(struct sk_buff *skb, struct iphdr *nh,
 static void update_ipv6_checksum(struct sk_buff *skb, u8 l4_proto,
 				 __be32 addr[4], const __be32 new_addr[4])
 {
-	int transport_len = skb->len - skb_transport_offset(skb);
+	int transport_len;
+
+	/* avoid reading the transport header offset if it isn't set,
+	 * as it triggers a warning
+	 */
+	if (l4_proto == NEXTHDR_FRAGMENT)
+		return;
+
+	transport_len = skb->len - skb_transport_offset(skb);
 
 	if (l4_proto == NEXTHDR_TCP) {
 		if (likely(transport_len >= sizeof(struct tcphdr)))

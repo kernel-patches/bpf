@@ -33,6 +33,8 @@ config NET_DSA_REALTEK_RTL8365MB
 	tristate "Realtek RTL8365MB switch driver"
 	depends on NET_DSA_REALTEK_SMI || NET_DSA_REALTEK_MDIO
 	select NET_DSA_TAG_RTL8_4
+	select NET_IEEE8021Q_HELPERS
+	select DCB
 	help
 	  Select to enable support for Realtek RTL8365MB-VC and RTL8367S.
 

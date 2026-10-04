@@ -10,6 +10,7 @@
 #include <linux/if_bridge.h>
 #include <linux/netdevice.h>
 #include <linux/workqueue.h>
+#include <linux/pm_runtime.h>
 #include <net/switchdev.h>
 
 #include "cpsw.h"
@@ -381,6 +382,7 @@ static void cpsw_switchdev_event_work(struct work_struct *work)
 	struct switchdev_notifier_fdb_info *fdb;
 	struct cpsw_common *cpsw = priv->cpsw;
 	int port = priv->emac_port;
+	int ret;
 
 	rtnl_lock();
 	switch (switchdev_work->event) {
@@ -393,12 +395,20 @@ static void cpsw_switchdev_event_work(struct work_struct *work)
 
 		if (!fdb->added_by_user || fdb->is_local)
 			break;
+
+		ret = pm_runtime_resume_and_get(cpsw->dev);
+		if (ret < 0) {
+			dev_err(cpsw->dev, "%s: failed to resume device: %d\n", __func__, ret);
+			break;
+		}
+
 		if (memcmp(priv->mac_addr, (u8 *)fdb->addr, ETH_ALEN) == 0)
 			port = HOST_PORT_NUM;
 
 		cpsw_ale_add_ucast(cpsw->ale, (u8 *)fdb->addr, port,
 				   fdb->vid ? ALE_VLAN : 0, fdb->vid);
 		cpsw_fdb_offload_notify(priv->ndev, fdb);
+		pm_runtime_put(cpsw->dev);
 		break;
 	case SWITCHDEV_FDB_DEL_TO_DEVICE:
 		fdb = &switchdev_work->fdb_info;
@@ -407,13 +417,27 @@ static void cpsw_switchdev_event_work(struct work_struct *work)
 			fdb->addr, fdb->vid, fdb->added_by_user,
 			fdb->offloaded, port);
 
-		if (!fdb->added_by_user || fdb->is_local)
+		if (fdb->is_local)
 			break;
-		if (memcmp(priv->mac_addr, (u8 *)fdb->addr, ETH_ALEN) == 0)
-			port = HOST_PORT_NUM;
 
-		cpsw_ale_del_ucast(cpsw->ale, (u8 *)fdb->addr, port,
-				   fdb->vid ? ALE_VLAN : 0, fdb->vid);
+		ret = pm_runtime_resume_and_get(cpsw->dev);
+		if (ret < 0) {
+			dev_err(cpsw->dev, "%s: failed to resume device: %d\n", __func__, ret);
+			break;
+		}
+
+		if (!fdb->added_by_user) {
+			cpsw_ale_del_ucast_dynamic_by_port(cpsw->ale,
+							   (u8 *)fdb->addr,
+							   port,
+							   fdb->vid);
+		} else {
+			if (memcmp(priv->mac_addr, (u8 *)fdb->addr, ETH_ALEN) == 0)
+				port = HOST_PORT_NUM;
+			cpsw_ale_del_ucast(cpsw->ale, (u8 *)fdb->addr, port,
+					   fdb->vid ? ALE_VLAN : 0, fdb->vid);
+		}
+		pm_runtime_put(cpsw->dev);
 		break;
 	default:
 		break;

@@ -259,6 +259,9 @@ int skb_gro_receive_list(struct sk_buff *p, struct sk_buff *skb)
 	skb_shinfo(p)->flags |= skb_shinfo(skb)->flags & SKBFL_SHARED_FRAG;
 
 	NAPI_GRO_CB(skb)->same_flow = 1;
+	/* frag_list element larger than gso_size (already coalesced before list-append) */
+	if (skb_shinfo(p)->gso_size && skb->len > skb_shinfo(p)->gso_size)
+		skb_shinfo(p)->gso_type |= SKB_GSO_DODGY;
 
 	return 0;
 }

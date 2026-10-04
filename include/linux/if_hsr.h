@@ -3,6 +3,8 @@
 #define _LINUX_IF_HSR_H_
 
 #include <linux/types.h>
+#include <linux/if_ether.h>
+#include <uapi/linux/hsr_ptp.h>
 
 struct net_device;
 
@@ -37,6 +39,11 @@ struct hsr_tag {
 } __packed;
 
 #define HSR_HLEN	6
+
+struct hsr_ethhdr {
+	struct ethhdr	ethhdr;
+	struct hsr_tag	hsr_tag;
+} __packed;
 
 #if IS_ENABLED(CONFIG_HSR)
 extern bool is_hsr_master(struct net_device *dev);

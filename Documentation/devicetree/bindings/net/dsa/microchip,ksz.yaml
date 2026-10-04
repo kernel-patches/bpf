@@ -23,6 +23,7 @@ properties:
       - microchip,ksz8864  # 4-port version of KSZ8895 family switch
       - microchip,ksz8873
       - microchip,ksz8895  # 5-port version of KSZ8895 family switch
+      - microchip,ksz8995xa
       - microchip,ksz9477
       - microchip,ksz9897
       - microchip,ksz9896
@@ -46,6 +47,18 @@ properties:
     description:
       Should be a gpio specifier for a reset line.
     maxItems: 1
+
+  reset-assert-us:
+    description:
+      How long the reset line is held asserted, in microseconds.
+    default: 10000
+
+  reset-deassert-us:
+    description:
+      How long to wait after the reset line is released before the switch is
+      accessed, in microseconds. Boards whose switch needs longer than the
+      default to answer on the management bus state their own value here.
+    default: 100000
 
   wakeup-source: true
 

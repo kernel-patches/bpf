@@ -1064,6 +1064,9 @@ struct net_device_context {
 	struct netvsc_vf_pcpu_stats __percpu *vf_stats;
 	struct delayed_work vf_takeover;
 	struct delayed_work vfns_work;
+	/* VF for vfns_work to move to our netns, see netvsc_register_vf() */
+	struct net_device *vfns_dev;
+	netdevice_tracker vfns_dev_tracker;
 
 	/* 1: allocated, serial number is valid. 0: not allocated */
 	u32 vf_alloc;

@@ -9,6 +9,7 @@
 #include <linux/if_bridge.h>
 #include <linux/netdevice.h>
 #include <linux/workqueue.h>
+#include <linux/pm_runtime.h>
 #include <net/switchdev.h>
 
 #include "am65-cpsw-nuss.h"
@@ -371,6 +372,7 @@ static void am65_cpsw_switchdev_event_work(struct work_struct *work)
 	struct switchdev_notifier_fdb_info *fdb;
 	struct am65_cpsw_common *cpsw = port->common;
 	int port_id = port->port_id;
+	int ret;
 
 	rtnl_lock();
 	switch (switchdev_work->event) {
@@ -383,12 +385,20 @@ static void am65_cpsw_switchdev_event_work(struct work_struct *work)
 
 		if (!fdb->added_by_user || fdb->is_local)
 			break;
+
+		ret = pm_runtime_resume_and_get(cpsw->dev);
+		if (ret < 0) {
+			netdev_err(port->ndev, "%s: failed to resume device: %d\n", __func__, ret);
+			break;
+		}
+
 		if (memcmp(port->slave.mac_addr, (u8 *)fdb->addr, ETH_ALEN) == 0)
 			port_id = HOST_PORT_NUM;
 
 		cpsw_ale_add_ucast(cpsw->ale, (u8 *)fdb->addr, port_id,
 				   fdb->vid ? ALE_VLAN : 0, fdb->vid);
 		am65_cpsw_fdb_offload_notify(port->ndev, fdb);
+		pm_runtime_put(cpsw->dev);
 		break;
 	case SWITCHDEV_FDB_DEL_TO_DEVICE:
 		fdb = &switchdev_work->fdb_info;
@@ -397,13 +407,27 @@ static void am65_cpsw_switchdev_event_work(struct work_struct *work)
 			   fdb->addr, fdb->vid, fdb->added_by_user,
 			   fdb->offloaded, port_id);
 
-		if (!fdb->added_by_user || fdb->is_local)
+		if (fdb->is_local)
 			break;
-		if (memcmp(port->slave.mac_addr, (u8 *)fdb->addr, ETH_ALEN) == 0)
-			port_id = HOST_PORT_NUM;
 
-		cpsw_ale_del_ucast(cpsw->ale, (u8 *)fdb->addr, port_id,
-				   fdb->vid ? ALE_VLAN : 0, fdb->vid);
+		ret = pm_runtime_resume_and_get(cpsw->dev);
+		if (ret < 0) {
+			netdev_err(port->ndev, "%s: failed to resume device: %d\n", __func__, ret);
+			break;
+		}
+
+		if (!fdb->added_by_user) {
+			cpsw_ale_del_ucast_dynamic_by_port(cpsw->ale,
+							   (u8 *)fdb->addr,
+							   port_id,
+							   fdb->vid);
+		} else {
+			if (memcmp(port->slave.mac_addr, (u8 *)fdb->addr, ETH_ALEN) == 0)
+				port_id = HOST_PORT_NUM;
+			cpsw_ale_del_ucast(cpsw->ale, (u8 *)fdb->addr, port_id,
+					   fdb->vid ? ALE_VLAN : 0, fdb->vid);
+		}
+		pm_runtime_put(cpsw->dev);
 		break;
 	default:
 		break;

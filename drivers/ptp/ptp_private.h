@@ -75,6 +75,7 @@ struct ptp_clock {
 #define dw_to_vclock(d) container_of((d), struct ptp_vclock, refresh_work)
 
 struct ptp_vclock {
+	u64 cycles;
 	struct ptp_clock *pclock;
 	struct ptp_clock_info info;
 	struct ptp_clock *clock;

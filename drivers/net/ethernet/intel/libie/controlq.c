@@ -835,6 +835,13 @@ libie_ctlq_xn_process_recv(struct libie_ctlq_xn_recv_params *params,
 		return false;
 	}
 
+	if (ctlq_msg->chnl_retval) {
+		dev_err_ratelimited(params->ctlq->dev,
+				    "Non-zero virtchnl ret val %u (msg op: %u, data_len: %u); xn id: %u, cookie: %u\n",
+				    ctlq_msg->chnl_retval, ctlq_msg->chnl_opcode,
+				    ctlq_msg->data_len, xn->index, xn->cookie);
+	}
+
 	if (xn->state != LIBIE_CTLQ_XN_ASYNC &&
 	    xn->state != LIBIE_CTLQ_XN_WAITING) {
 		spin_unlock(&xn->xn_lock);
@@ -1088,6 +1095,10 @@ int libie_ctlq_xn_send(struct libie_ctlq_xn_send_params *params)
 		params->recv_mem = xn->recv_mem;
 		break;
 	default:
+		dev_err_ratelimited(params->ctlq->dev,
+				    "Transaction failed (op %u, xn state: %u, id: %u, cookie: %u, size: %zu)\n",
+				    params->chnl_opcode, xn->state, xn->index,
+				    xn->cookie, xn->recv_mem.iov_len);
 		ret = -EBADMSG;
 		break;
 	}

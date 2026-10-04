@@ -376,6 +376,8 @@ err_ip:
 
 static struct inet6_dev *ipv6_add_dev(struct net_device *dev)
 {
+	struct net *net = dev_net(dev);
+	struct neigh_table *tbl;
 	struct inet6_dev *ndev;
 	int err = -ENOMEM;
 
@@ -393,14 +395,15 @@ static struct inet6_dev *ipv6_add_dev(struct net_device *dev)
 	ndev->dev = dev;
 	INIT_LIST_HEAD(&ndev->addr_list);
 	timer_setup(&ndev->rs_timer, addrconf_rs_timer, 0);
-	memcpy(&ndev->cnf, dev_net(dev)->ipv6.devconf_dflt, sizeof(ndev->cnf));
+	memcpy(&ndev->cnf, net->ipv6.devconf_dflt, sizeof(ndev->cnf));
 
 	if (ndev->cnf.stable_secret.initialized)
 		ndev->cnf.addr_gen_mode = IN6_ADDR_GEN_MODE_STABLE_PRIVACY;
 
+	tbl = nd_table(net);
 	ndev->cnf.mtu6 = dev->mtu;
 	ndev->ra_mtu = 0;
-	ndev->nd_parms = neigh_parms_alloc(dev, &nd_tbl);
+	ndev->nd_parms = neigh_parms_alloc(dev, tbl);
 	if (!ndev->nd_parms) {
 		kfree(ndev);
 		return ERR_PTR(err);
@@ -413,7 +416,7 @@ static struct inet6_dev *ipv6_add_dev(struct net_device *dev)
 	if (snmp6_alloc_dev(ndev) < 0) {
 		netdev_dbg(dev, "%s: cannot allocate memory for statistics\n",
 			   __func__);
-		neigh_parms_release(&nd_tbl, ndev->nd_parms);
+		neigh_parms_release(tbl, ndev->nd_parms);
 		netdev_put(dev, &ndev->dev_tracker);
 		kfree(ndev);
 		return ERR_PTR(err);
@@ -481,7 +484,7 @@ static struct inet6_dev *ipv6_add_dev(struct net_device *dev)
 	return ndev;
 
 err_release:
-	neigh_parms_release(&nd_tbl, ndev->nd_parms);
+	neigh_parms_release(tbl, ndev->nd_parms);
 	ndev->dead = 1;
 	in6_dev_finish_destroy(ndev);
 	return ERR_PTR(err);
@@ -1047,8 +1050,9 @@ static bool ipv6_chk_same_addr(struct net *net, const struct in6_addr *addr,
 	return false;
 }
 
-static int ipv6_add_addr_hash(struct net_device *dev, struct inet6_ifaddr *ifa)
+static int ipv6_add_addr_hash(struct inet6_dev *idev, struct inet6_ifaddr *ifa)
 {
+	struct net_device *dev = idev->dev;
 	struct net *net = dev_net(dev);
 	unsigned int hash = inet6_addr_hash(net, &ifa->addr);
 	int err = 0;
@@ -1060,7 +1064,23 @@ static int ipv6_add_addr_hash(struct net_device *dev, struct inet6_ifaddr *ifa)
 		netdev_dbg(dev, "ipv6_add_addr: already assigned\n");
 		err = -EEXIST;
 	} else {
-		hlist_add_head_rcu(&ifa->addr_lst, &net->ipv6.inet6_addr_lst[hash]);
+		write_lock(&idev->lock);
+		if (idev->dead || idev->cnf.disable_ipv6) {
+			err = idev->dead ? -ENODEV : -EACCES;
+		} else {
+			hlist_add_head_rcu(&ifa->addr_lst,
+					   &net->ipv6.inet6_addr_lst[hash]);
+			ipv6_link_dev_addr(idev, ifa);
+
+			if (ifa->flags & IFA_F_TEMPORARY) {
+				/* manage_tempaddrs() relies on addresses being added to the head */
+				list_add(&ifa->tmp_list, &idev->tempaddr_list);
+				in6_ifa_hold(ifa);
+			}
+
+			in6_ifa_hold(ifa);
+		}
+		write_unlock(&idev->lock);
 	}
 
 	spin_unlock_bh(&net->ipv6.addrconf_hash_lock);
@@ -1168,25 +1188,11 @@ ipv6_add_addr(struct inet6_dev *idev, struct ifa6_config *cfg,
 
 	rcu_read_lock();
 
-	err = ipv6_add_addr_hash(idev->dev, ifa);
+	err = ipv6_add_addr_hash(idev, ifa);
 	if (err < 0) {
 		rcu_read_unlock();
 		goto out;
 	}
-
-	write_lock_bh(&idev->lock);
-
-	/* Add to inet6_dev unicast addr list. */
-	ipv6_link_dev_addr(idev, ifa);
-
-	if (ifa->flags&IFA_F_TEMPORARY) {
-		/* manage_tempaddrs() relies on addresses being added to the head */
-		list_add(&ifa->tmp_list, &idev->tempaddr_list);
-		in6_ifa_hold(ifa);
-	}
-
-	in6_ifa_hold(ifa);
-	write_unlock_bh(&idev->lock);
 
 	rcu_read_unlock();
 
@@ -4039,9 +4045,11 @@ restart:
 
 	/* Last: Shot the device (if unregistered) */
 	if (unregister) {
+		struct neigh_table *tbl = nd_table(net);
+
 		addrconf_sysctl_unregister(idev);
-		neigh_parms_release(&nd_tbl, idev->nd_parms);
-		neigh_ifdown(&nd_tbl, dev);
+		neigh_parms_release(tbl, idev->nd_parms);
+		neigh_ifdown(tbl, dev);
 		in6_dev_put(idev);
 	}
 	return 0;

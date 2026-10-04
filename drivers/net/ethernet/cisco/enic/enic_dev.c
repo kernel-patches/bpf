@@ -32,6 +32,17 @@ int enic_dev_stats_dump(struct enic *enic, struct vnic_stats **vstats)
 	return err;
 }
 
+int enic_dev_get_mac_addr(struct enic *enic, u8 *mac_addr)
+{
+	int err;
+
+	spin_lock_bh(&enic->devcmd_lock);
+	err = vnic_dev_get_mac_addr(enic->vdev, mac_addr);
+	spin_unlock_bh(&enic->devcmd_lock);
+
+	return err;
+}
+
 int enic_dev_add_station_addr(struct enic *enic)
 {
 	int err;

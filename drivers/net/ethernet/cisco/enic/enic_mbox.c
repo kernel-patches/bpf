@@ -6,6 +6,7 @@
 #include <linux/dma-mapping.h>
 #include <linux/delay.h>
 #include <linux/completion.h>
+#include <linux/etherdevice.h>
 
 #include "vnic_dev.h"
 #include "vnic_wq.h"
@@ -149,7 +150,20 @@ static int enic_mbox_send_msg_id(struct enic *enic, u8 msg_type,
 		 * or free the buffer: the device may still DMA from dma_addr.
 		 * Mark the channel unusable so no further sends are attempted.
 		 */
+		spin_lock_bh(&enic->mbox_state_lock);
 		WRITE_ONCE(enic->mbox_send_disabled, true);
+		WRITE_ONCE(enic->mbox_tx_poisoned, true);
+		if (enic_is_sriov_vf_v2(enic)) {
+			/* The request may have changed PF receive policy even though
+			 * local descriptor ownership is still uncertain. Fail the VF
+			 * closed and do not turn this into an ordinary protocol
+			 * reconnect; the admin-channel lifecycle owns final reclamation.
+			 */
+			WRITE_ONCE(enic->vf_rx_quarantined, true);
+		}
+		spin_unlock_bh(&enic->mbox_state_lock);
+		if (enic_is_sriov_vf_v2(enic))
+			enic_mbox_vf_link_state_set_running(enic, false);
 	}
 
 	netdev_dbg(enic->netdev,
@@ -184,6 +198,105 @@ static int enic_mbox_send_reply(struct enic *enic, u8 msg_type,
 				     payload_len, msg_num, true, 0);
 }
 
+struct enic_mbox_vf_ack {
+	struct list_head list;
+	u64 msg_num;
+	u16 ret_major;
+	u8 msg_type;
+};
+
+static void enic_mbox_vf_ack_work(struct work_struct *work)
+{
+	struct enic *enic = container_of(work, struct enic, vf_ack_work);
+	struct enic_mbox_vf_ack *pending;
+
+	for (;;) {
+		struct enic_mbox_generic_reply ack = {};
+		u8 msg_type;
+		int err;
+
+		spin_lock_bh(&enic->vf_ack_lock);
+		if (list_empty(&enic->vf_ack_list)) {
+			spin_unlock_bh(&enic->vf_ack_lock);
+			break;
+		}
+		pending = list_first_entry(&enic->vf_ack_list,
+					   struct enic_mbox_vf_ack, list);
+		list_del(&pending->list);
+		enic->vf_ack_count--;
+		spin_unlock_bh(&enic->vf_ack_lock);
+
+		if (READ_ONCE(enic->mbox_send_disabled)) {
+			kfree(pending);
+			continue;
+		}
+
+		msg_type = pending->msg_type;
+		ack.ret_major = cpu_to_le16(pending->ret_major);
+		err = enic_mbox_send_reply(enic, msg_type, ENIC_MBOX_DST_PF,
+					   &ack, sizeof(ack), pending->msg_num);
+		kfree(pending);
+		if (err && net_ratelimit())
+			netdev_warn(enic->netdev,
+				    "MBOX: failed to send ACK type %u: %d\n",
+				    msg_type, err);
+	}
+}
+
+static void enic_mbox_vf_queue_ack(struct enic *enic, u8 msg_type,
+				   u64 msg_num, u16 ret_major)
+{
+	struct enic_mbox_vf_ack *pending;
+
+	if (READ_ONCE(enic->mbox_send_disabled))
+		return;
+	pending = kmalloc_obj(*pending, GFP_ATOMIC);
+	if (!pending) {
+		if (net_ratelimit())
+			netdev_warn(enic->netdev,
+				    "MBOX: dropping ACK type %u: no memory\n",
+				    msg_type);
+		return;
+	}
+	pending->msg_num = msg_num;
+	pending->ret_major = ret_major;
+	pending->msg_type = msg_type;
+
+	spin_lock_bh(&enic->vf_ack_lock);
+	if (READ_ONCE(enic->mbox_send_disabled) ||
+	    enic->vf_ack_count >= ENIC_ADMIN_DESC_COUNT) {
+		spin_unlock_bh(&enic->vf_ack_lock);
+		kfree(pending);
+		if (net_ratelimit())
+			netdev_warn(enic->netdev,
+				    "MBOX: dropping ACK type %u: queue unavailable\n",
+				    msg_type);
+		return;
+	}
+	list_add_tail(&pending->list, &enic->vf_ack_list);
+	enic->vf_ack_count++;
+	spin_unlock_bh(&enic->vf_ack_lock);
+	schedule_work(&enic->vf_ack_work);
+}
+
+void enic_mbox_vf_ack_cancel(struct enic *enic)
+{
+	struct enic_mbox_vf_ack *pending, *tmp;
+	LIST_HEAD(discard);
+
+	if (!enic->mbox_initialized)
+		return;
+	cancel_work_sync(&enic->vf_ack_work);
+	spin_lock_bh(&enic->vf_ack_lock);
+	list_splice_init(&enic->vf_ack_list, &discard);
+	enic->vf_ack_count = 0;
+	spin_unlock_bh(&enic->vf_ack_lock);
+	list_for_each_entry_safe(pending, tmp, &discard, list) {
+		list_del(&pending->list);
+		kfree(pending);
+	}
+}
+
 static int enic_mbox_vf_send_request(struct enic *enic, u8 request_type,
 				     u8 expected_reply, void *payload,
 				     u16 payload_len)
@@ -191,6 +304,27 @@ static int enic_mbox_vf_send_request(struct enic *enic, u8 request_type,
 	return enic_mbox_send_msg_id(enic, request_type, ENIC_MBOX_DST_PF,
 				     payload, payload_len, 0, false,
 				     expected_reply);
+}
+
+static void enic_mbox_vf_mark_reconnect_locked(struct enic *enic,
+					       bool registration_lost)
+{
+	lockdep_assert_held(&enic->mbox_state_lock);
+
+	if (registration_lost)
+		WRITE_ONCE(enic->vf_registered, false);
+	enic->vf_mbox_fault_generation++;
+	WRITE_ONCE(enic->vf_mbox_reconnect_required, true);
+	WRITE_ONCE(enic->mbox_send_disabled, true);
+	WRITE_ONCE(enic->vf_rx_quarantined, true);
+}
+
+static void enic_mbox_vf_kick_recovery(struct enic *enic)
+{
+	enic_mbox_vf_link_state_set_running(enic, false);
+	if (netif_running(enic->netdev) &&
+	    !READ_ONCE(enic->vf_mbox_recovery_active))
+		schedule_work(&enic->reset);
 }
 
 static int enic_mbox_wait_reply(struct enic *enic, unsigned long timeout_ms)
@@ -203,9 +337,9 @@ static int enic_mbox_wait_reply(struct enic *enic, unsigned long timeout_ms)
 	if (left)
 		return 0;
 
-	/* Invalidate a request that the handler has not already accepted.  A
-	 * delayed reply cannot match a later request because message numbers are
-	 * monotonic across channel reopen.
+	/* Invalidate a request that the handler has not already accepted. Whether
+	 * losing the reply invalidates the current protocol generation is an
+	 * operation-specific decision made by the caller.
 	 */
 	spin_lock_bh(&enic->mbox_state_lock);
 	if (enic->mbox_expected_reply) {
@@ -216,6 +350,108 @@ static int enic_mbox_wait_reply(struct enic *enic, unsigned long timeout_ms)
 	spin_unlock_bh(&enic->mbox_state_lock);
 
 	return err;
+}
+
+static void enic_mbox_vf_request_start(struct enic *enic)
+{
+	mutex_lock(&enic->vf_mbox_request_lock);
+	reinit_completion(&enic->mbox_comp);
+	spin_lock_bh(&enic->mbox_state_lock);
+	enic->mbox_expected_msg_num = 0;
+	enic->mbox_expected_reply = 0;
+	spin_unlock_bh(&enic->mbox_state_lock);
+}
+
+static void enic_mbox_vf_request_abort(struct enic *enic)
+{
+	lockdep_assert_held(&enic->vf_mbox_request_lock);
+	spin_lock_bh(&enic->mbox_state_lock);
+	enic->mbox_expected_reply = 0;
+	enic->mbox_expected_msg_num = 0;
+	spin_unlock_bh(&enic->mbox_state_lock);
+	mutex_unlock(&enic->vf_mbox_request_lock);
+}
+
+static void enic_mbox_vf_request_finish(struct enic *enic)
+{
+	lockdep_assert_held(&enic->vf_mbox_request_lock);
+	mutex_unlock(&enic->vf_mbox_request_lock);
+}
+
+/* Return with mbox_state_lock held when this handler owns the reply. */
+static bool enic_mbox_vf_reply_claim(struct enic *enic, u8 reply_type,
+				     u64 msg_num, u8 *expected)
+{
+	spin_lock_bh(&enic->mbox_state_lock);
+	*expected = enic->mbox_expected_reply;
+	if (*expected == reply_type &&
+	    enic->mbox_expected_msg_num == msg_num)
+		return true;
+	spin_unlock_bh(&enic->mbox_state_lock);
+
+	return false;
+}
+
+enum enic_mbox_vf_reply_recovery {
+	ENIC_MBOX_VF_REPLY_OK,
+	ENIC_MBOX_VF_REPLY_RECONNECT,
+	ENIC_MBOX_VF_REPLY_REGISTRATION_LOST,
+};
+
+static int
+enic_mbox_vf_classify_reply(bool malformed, u16 ret_major,
+			    enum enic_mbox_vf_reply_recovery *recovery)
+{
+	*recovery = ENIC_MBOX_VF_REPLY_OK;
+	if (malformed) {
+		*recovery = ENIC_MBOX_VF_REPLY_RECONNECT;
+		return -EIO;
+	}
+	/* Some deployed peers return a negative errno in this 16-bit field.
+	 * Interpret protocol bits only when no unknown bits are present; otherwise
+	 * an errno such as -EINVAL could accidentally look like registration loss.
+	 */
+	if (!(ret_major & ~ENIC_MBOX_ERR_MASK) &&
+	    (ret_major & ENIC_MBOX_ERR_VF_NOT_REGISTERED)) {
+		*recovery = ENIC_MBOX_VF_REPLY_REGISTRATION_LOST;
+		return -ENODEV;
+	}
+	if (!(ret_major & ~ENIC_MBOX_ERR_MASK) &&
+	    (ret_major & ENIC_MBOX_ERR_MSG_NOT_SUPPORTED))
+		return -EOPNOTSUPP;
+	if (ret_major)
+		return -EIO;
+
+	return 0;
+}
+
+static void
+enic_mbox_vf_recover_reply_locked(struct enic *enic,
+				  enum enic_mbox_vf_reply_recovery recovery)
+{
+	bool registration_lost;
+
+	lockdep_assert_held(&enic->mbox_state_lock);
+
+	if (recovery != ENIC_MBOX_VF_REPLY_OK) {
+		registration_lost =
+			recovery == ENIC_MBOX_VF_REPLY_REGISTRATION_LOST;
+		enic_mbox_vf_mark_reconnect_locked(enic, registration_lost);
+	}
+}
+
+static void enic_mbox_vf_reply_complete(struct enic *enic)
+{
+	lockdep_assert_held(&enic->mbox_state_lock);
+	enic->mbox_expected_reply = 0;
+	enic->mbox_expected_msg_num = 0;
+	/* Publish completion before releasing the state lock.  A waiter that
+	 * hit the timeout boundary may otherwise see the claimed state, finish the
+	 * request, and let a new request reinitialize this completion before the
+	 * old handler signals it.
+	 */
+	complete(&enic->mbox_comp);
+	spin_unlock_bh(&enic->mbox_state_lock);
 }
 
 int enic_mbox_send_link_state(struct enic *enic, u16 vf_id, u32 link_state)
@@ -393,23 +629,21 @@ static void enic_mbox_vf_handle_reply(struct enic *enic, u8 reply_type,
 				      void *payload, u64 msg_num)
 {
 	struct enic_mbox_generic_reply *reply = payload;
+	enum enic_mbox_vf_reply_recovery recovery;
 	u16 ret_major = le16_to_cpu(reply->ret_major);
-	u64 expected_msg_num;
-	u8 expected_type;
+	u8 expected;
+	int status;
 
-	spin_lock_bh(&enic->mbox_state_lock);
-	expected_type = enic->mbox_expected_reply;
-	expected_msg_num = enic->mbox_expected_msg_num;
-	if (expected_type != reply_type || expected_msg_num != msg_num) {
-		spin_unlock_bh(&enic->mbox_state_lock);
+	status = enic_mbox_vf_classify_reply(false, ret_major, &recovery);
+	if (!enic_mbox_vf_reply_claim(enic, reply_type, msg_num, &expected)) {
 		netdev_warn(enic->netdev,
-			    "MBOX: stale reply %u/%llu (expected %u/%llu), drop\n",
+			    "MBOX: stale reply %u/%llu (expected %u), drop\n",
 			    reply_type, (unsigned long long)msg_num,
-			    expected_type, (unsigned long long)expected_msg_num);
+			    expected);
 		return;
 	}
 
-	if (!ret_major) {
+	if (!status) {
 		switch (reply_type) {
 		case ENIC_MBOX_VF_CAPABILITY_REPLY: {
 			struct enic_mbox_vf_capability_reply_msg *cap = payload;
@@ -426,25 +660,174 @@ static void enic_mbox_vf_handle_reply(struct enic *enic, u8 reply_type,
 			break;
 		}
 	}
-	enic->mbox_expected_reply = 0;
-	enic->mbox_expected_msg_num = 0;
-	complete(&enic->mbox_comp);
-	spin_unlock_bh(&enic->mbox_state_lock);
+	enic_mbox_vf_recover_reply_locked(enic, recovery);
+	WRITE_ONCE(enic->mbox_reply_status, status);
+	enic_mbox_vf_reply_complete(enic);
 
 	if (ret_major)
 		netdev_warn(enic->netdev,
 			    "MBOX: PF rejected reply type %u: %u/%u\n",
 			    reply_type, ret_major,
 			    le16_to_cpu(reply->ret_minor));
+	if (recovery != ENIC_MBOX_VF_REPLY_OK)
+		enic_mbox_vf_kick_recovery(enic);
+}
+
+static bool enic_mbox_vf_mac_reply_matches(const struct enic_mac_addr *request,
+					   const struct enic_mac_addr *reply)
+{
+	u16 request_flags = le16_to_cpu(request->flags);
+	u16 reply_flags = le16_to_cpu(reply->flags);
+	u16 idempotent_result = reply_flags &
+		(ENIC_MAC_ADDR_FLAG_DUPLICATE |
+		 ENIC_MAC_ADDR_FLAG_NOT_FOUND);
+	u16 result = reply_flags & ENIC_MAC_ADDR_FLAG_REPLY_MASK;
+	u16 expected_result;
+
+	if (!ether_addr_equal(request->addr, reply->addr) ||
+	    (request_flags & ENIC_MAC_ADDR_FLAG_REQUEST_MASK) !=
+	    (reply_flags & ENIC_MAC_ADDR_FLAG_REQUEST_MASK))
+		return false;
+	if (hweight16(result) > 1)
+		return false;
+
+	/* DUPLICATE is a successful ADD result and NOT_FOUND is a successful
+	 * DELETE result.  Neither is valid for the opposite operation, and a
+	 * reply cannot report both outcomes for one entry.
+	 */
+	expected_result = request_flags & ENIC_MAC_ADDR_FLAG_ADD ?
+		ENIC_MAC_ADDR_FLAG_DUPLICATE :
+		ENIC_MAC_ADDR_FLAG_NOT_FOUND;
+
+	return !idempotent_result || idempotent_result == expected_result;
+}
+
+static void enic_mbox_vf_handle_add_del_mac_reply(struct enic *enic,
+						  void *payload, u16 msg_len,
+						  u64 msg_num)
+{
+	struct enic_mbox_vf_add_del_mac_reply_msg *reply = payload;
+	enum enic_mbox_vf_reply_recovery recovery;
+	u16 reported_errors = 0;
+	u16 num_addrs = 0;
+	u16 ret_minor = 0;
+	u16 ret_major = 0;
+	u8 expected;
+	unsigned int i;
+	int status;
+
+	if (msg_len < sizeof(*reply)) {
+		status = enic_mbox_vf_classify_reply(true, 0, &recovery);
+	} else {
+		ret_major = le16_to_cpu(reply->reply.ret_major);
+		ret_minor = le16_to_cpu(reply->reply.ret_minor);
+		status = enic_mbox_vf_classify_reply(false, ret_major,
+						     &recovery);
+	}
+	if (status)
+		goto claim;
+
+	num_addrs = le16_to_cpu(reply->num_addrs);
+	if (!num_addrs || num_addrs > ENIC_MBOX_MAX_MAC_OPS ||
+	    struct_size(reply, mac_addr, num_addrs) > msg_len) {
+		status = enic_mbox_vf_classify_reply(true, 0, &recovery);
+		goto claim;
+	}
+
+claim:
+	if (!enic_mbox_vf_reply_claim(enic, ENIC_MBOX_VF_ADD_DEL_MAC_REPLY,
+				      msg_num, &expected))
+		return;
+	if (!status &&
+	    (num_addrs != enic->mbox_reply_mac_count ||
+	     !enic->mbox_reply_mac_addrs)) {
+		status = enic_mbox_vf_classify_reply(true, 0, &recovery);
+	} else if (!status) {
+		/* A detailed reply corresponds entry-for-entry with the request.
+		 * Validate the echoed request fields and operation-specific results
+		 * before exposing result flags to the waiting caller.
+		 */
+		for (i = 0; i < num_addrs; i++) {
+			struct enic_mac_addr *request =
+				&enic->mbox_reply_mac_addrs[i];
+			u16 flags = le16_to_cpu(reply->mac_addr[i].flags);
+
+			if (!enic_mbox_vf_mac_reply_matches(request,
+							    &reply->mac_addr[i])) {
+				status = enic_mbox_vf_classify_reply(true, 0,
+								     &recovery);
+				break;
+			}
+			if (flags & ENIC_MAC_ADDR_FLAG_INDETERMINATE_MASK) {
+				status = -EIO;
+				recovery = ENIC_MBOX_VF_REPLY_RECONNECT;
+				break;
+			}
+			if ((flags & ENIC_MAC_ADDR_FLAG_REPLY_MASK) &&
+			    !(flags & ENIC_MAC_ADDR_FLAG_SKIPPED))
+				reported_errors++;
+		}
+		if (!status && reported_errors != ret_minor)
+			status = enic_mbox_vf_classify_reply(true, 0,
+							     &recovery);
+
+		if (!status)
+			for (i = 0; i < num_addrs; i++)
+				enic->mbox_reply_mac_addrs[i].flags =
+					reply->mac_addr[i].flags;
+	}
+	/* After a malformed reply, the VF cannot trust that its state matches the
+	 * PF. VF_NOT_REGISTERED means the PF removed all VF state. Both require a
+	 * new registration; an ordinary policy rejection does not.
+	 */
+	enic_mbox_vf_recover_reply_locked(enic, recovery);
+	WRITE_ONCE(enic->mbox_reply_status, status);
+	enic_mbox_vf_reply_complete(enic);
+	if (recovery != ENIC_MBOX_VF_REPLY_OK)
+		enic_mbox_vf_kick_recovery(enic);
+}
+
+static void enic_mbox_vf_handle_set_pkt_filter_reply(struct enic *enic,
+						     void *payload, u16 msg_len,
+						     u64 msg_num)
+{
+	struct enic_mbox_vf_set_pkt_filter_reply_msg *reply = payload;
+	enum enic_mbox_vf_reply_recovery recovery;
+	u16 applied = 0;
+	u16 ret_major = 0;
+	u8 expected;
+	int status;
+
+	if (msg_len < sizeof(*reply)) {
+		status = enic_mbox_vf_classify_reply(true, 0, &recovery);
+	} else {
+		ret_major = le16_to_cpu(reply->reply.ret_major);
+		status = enic_mbox_vf_classify_reply(false, ret_major,
+						     &recovery);
+		if (status && (ret_major & ~ENIC_MBOX_ERR_MASK))
+			recovery = ENIC_MBOX_VF_REPLY_RECONNECT;
+	}
+	if (!status)
+		applied = le16_to_cpu(reply->reply.ret_minor);
+
+	if (!enic_mbox_vf_reply_claim(enic,
+				      ENIC_MBOX_VF_SET_PKT_FILTER_REPLY,
+				      msg_num, &expected))
+		return;
+	enic_mbox_vf_recover_reply_locked(enic, recovery);
+	WRITE_ONCE(enic->mbox_reply_status, status);
+	WRITE_ONCE(enic->mbox_reply_filter_flags, applied);
+	enic_mbox_vf_reply_complete(enic);
+	if (recovery != ENIC_MBOX_VF_REPLY_OK)
+		enic_mbox_vf_kick_recovery(enic);
 }
 
 static void enic_mbox_vf_handle_link_state(struct enic *enic, void *payload,
 					   u64 msg_num)
 {
 	struct enic_mbox_pf_link_state_notif_msg *notif = payload;
-	struct enic_mbox_pf_link_state_ack_msg ack = {};
 	u32 link_state = le32_to_cpu(notif->link_state);
-	int err;
+	u16 ret_major = 0;
 
 	spin_lock_bh(&enic->vf_link_state_lock);
 	switch (link_state) {
@@ -465,16 +848,35 @@ static void enic_mbox_vf_handle_link_state(struct enic *enic, void *payload,
 	default:
 		netdev_warn(enic->netdev, "MBOX: unknown link state %u\n",
 			    link_state);
-		ack.ack.ret_major = cpu_to_le16(ENIC_MBOX_ERR_GENERIC);
+		ret_major = ENIC_MBOX_ERR_GENERIC;
 		break;
 	}
 	spin_unlock_bh(&enic->vf_link_state_lock);
 
-	err = enic_mbox_send_reply(enic, ENIC_MBOX_PF_LINK_STATE_ACK,
-				   ENIC_MBOX_DST_PF, &ack, sizeof(ack), msg_num);
-	if (err && net_ratelimit())
+	/* Notification dispatch must not wait behind a synchronous request send:
+	 * its matching reply may be queued behind this notification.
+	 */
+	enic_mbox_vf_queue_ack(enic, ENIC_MBOX_PF_LINK_STATE_ACK, msg_num,
+			       ret_major);
+}
+
+static void enic_mbox_vf_handle_admin_mac(struct enic *enic, void *payload,
+					  u64 msg_num)
+{
+	struct enic_mbox_pf_set_admin_mac_notif_msg *notif = payload;
+	u16 ret_major = 0;
+
+	if (is_multicast_ether_addr(notif->mac_addr)) {
 		netdev_warn(enic->netdev,
-			    "MBOX: failed to send link state ACK: %d\n", err);
+			    "MBOX: rejecting multicast admin MAC %pM\n",
+			    notif->mac_addr);
+		ret_major = ENIC_MBOX_ERR_GENERIC;
+	} else {
+		enic_vf_admin_mac_notify(enic, notif->mac_addr);
+	}
+
+	enic_mbox_vf_queue_ack(enic, ENIC_MBOX_PF_SET_ADMIN_MAC_ACK,
+			       msg_num, ret_major);
 }
 
 void enic_mbox_vf_link_state_reset(struct enic *enic)
@@ -499,6 +901,17 @@ void enic_mbox_vf_link_state_set_running(struct enic *enic, bool running)
 	spin_unlock_bh(&enic->vf_link_state_lock);
 }
 
+void enic_mbox_vf_require_reconnect(struct enic *enic)
+{
+	/* A fresh REGISTER transaction lets the PF discard any VF-requested
+	 * configuration whose final state became uncertain.
+	 */
+	spin_lock_bh(&enic->mbox_state_lock);
+	enic_mbox_vf_mark_reconnect_locked(enic, false);
+	spin_unlock_bh(&enic->mbox_state_lock);
+	enic_mbox_vf_kick_recovery(enic);
+}
+
 static bool enic_mbox_vf_payload_ok(struct enic *enic, u8 msg_type,
 				    u16 payload_len, size_t min_len)
 {
@@ -509,6 +922,34 @@ static bool enic_mbox_vf_payload_ok(struct enic *enic, u8 msg_type,
 		return false;
 	}
 	return true;
+}
+
+static void enic_mbox_vf_malformed_msg(struct enic *enic, u8 msg_type,
+				       u64 msg_num)
+{
+	u8 expected;
+
+	switch (msg_type) {
+	case ENIC_MBOX_PF_LINK_STATE_NOTIF:
+	case ENIC_MBOX_PF_SET_ADMIN_MAC_NOTIF:
+		enic_mbox_vf_require_reconnect(enic);
+		return;
+	case ENIC_MBOX_VF_CAPABILITY_REPLY:
+	case ENIC_MBOX_VF_REGISTER_REPLY:
+	case ENIC_MBOX_VF_UNREGISTER_REPLY:
+	case ENIC_MBOX_VF_ADD_DEL_MAC_REPLY:
+	case ENIC_MBOX_VF_SET_PKT_FILTER_REPLY:
+		break;
+	default:
+		return;
+	}
+
+	if (!enic_mbox_vf_reply_claim(enic, msg_type, msg_num, &expected))
+		return;
+	enic_mbox_vf_mark_reconnect_locked(enic, false);
+	WRITE_ONCE(enic->mbox_reply_status, -EIO);
+	enic_mbox_vf_reply_complete(enic);
+	enic_mbox_vf_kick_recovery(enic);
 }
 
 static void enic_mbox_vf_process_msg(struct enic *enic,
@@ -522,8 +963,10 @@ static void enic_mbox_vf_process_msg(struct enic *enic,
 		size_t exp = sizeof(struct enic_mbox_vf_capability_reply_msg);
 
 		if (!enic_mbox_vf_payload_ok(enic, hdr->msg_type,
-					     payload_len, exp))
+					     payload_len, exp)) {
+			enic_mbox_vf_malformed_msg(enic, hdr->msg_type, msg_num);
 			return;
+		}
 		enic_mbox_vf_handle_reply(enic, hdr->msg_type, payload, msg_num);
 		break;
 	}
@@ -531,8 +974,10 @@ static void enic_mbox_vf_process_msg(struct enic *enic,
 		size_t exp = sizeof(struct enic_mbox_vf_register_reply_msg);
 
 		if (!enic_mbox_vf_payload_ok(enic, hdr->msg_type,
-					     payload_len, exp))
+					     payload_len, exp)) {
+			enic_mbox_vf_malformed_msg(enic, hdr->msg_type, msg_num);
 			return;
+		}
 		enic_mbox_vf_handle_reply(enic, hdr->msg_type, payload, msg_num);
 		break;
 	}
@@ -540,8 +985,10 @@ static void enic_mbox_vf_process_msg(struct enic *enic,
 		size_t exp = sizeof(struct enic_mbox_vf_register_reply_msg);
 
 		if (!enic_mbox_vf_payload_ok(enic, hdr->msg_type,
-					     payload_len, exp))
+					     payload_len, exp)) {
+			enic_mbox_vf_malformed_msg(enic, hdr->msg_type, msg_num);
 			return;
+		}
 		enic_mbox_vf_handle_reply(enic, hdr->msg_type, payload, msg_num);
 		break;
 	}
@@ -549,11 +996,32 @@ static void enic_mbox_vf_process_msg(struct enic *enic,
 		size_t exp = sizeof(struct enic_mbox_pf_link_state_notif_msg);
 
 		if (!enic_mbox_vf_payload_ok(enic, hdr->msg_type,
-					     payload_len, exp))
+					     payload_len, exp)) {
+			enic_mbox_vf_malformed_msg(enic, hdr->msg_type, msg_num);
 			return;
+		}
 		enic_mbox_vf_handle_link_state(enic, payload, msg_num);
 		break;
 	}
+	case ENIC_MBOX_PF_SET_ADMIN_MAC_NOTIF: {
+		size_t exp = sizeof(struct enic_mbox_pf_set_admin_mac_notif_msg);
+
+		if (!enic_mbox_vf_payload_ok(enic, hdr->msg_type,
+					     payload_len, exp)) {
+			enic_mbox_vf_malformed_msg(enic, hdr->msg_type, msg_num);
+			return;
+		}
+		enic_mbox_vf_handle_admin_mac(enic, payload, msg_num);
+		break;
+	}
+	case ENIC_MBOX_VF_ADD_DEL_MAC_REPLY:
+		enic_mbox_vf_handle_add_del_mac_reply(enic, payload,
+						      payload_len, msg_num);
+		break;
+	case ENIC_MBOX_VF_SET_PKT_FILTER_REPLY:
+		enic_mbox_vf_handle_set_pkt_filter_reply(enic, payload,
+							 payload_len, msg_num);
+		break;
 	default:
 		netdev_dbg(enic->netdev,
 			   "MBOX: VF unhandled msg type %u\n",
@@ -574,6 +1042,8 @@ static void enic_mbox_recv_handler(struct enic *enic, void *buf,
 			netdev_warn(enic->netdev,
 				    "MBOX: truncated message (len %u < %zu)\n",
 				    len, sizeof(*hdr));
+		if (!enic->vf_state)
+			enic_mbox_vf_require_reconnect(enic);
 		return;
 	}
 
@@ -591,6 +1061,10 @@ static void enic_mbox_recv_handler(struct enic *enic, void *buf,
 			netdev_warn(enic->netdev,
 				    "MBOX: invalid msg_len %u (buf len %u)\n",
 				    msg_len, len);
+		if (!enic->vf_state &&
+		    le16_to_cpu(hdr->src_vnic_id) == ENIC_MBOX_DST_PF)
+			enic_mbox_vf_malformed_msg(enic, hdr->msg_type,
+						   le64_to_cpu(hdr->msg_num));
 		return;
 	}
 
@@ -621,25 +1095,34 @@ int enic_mbox_vf_capability_check(struct enic *enic)
 {
 	struct enic_mbox_vf_capability_msg req = {};
 	u32 version;
+	int status;
 	int err;
 
+	enic_mbox_vf_request_start(enic);
 	WRITE_ONCE(enic->pf_cap_version, 0);
+	WRITE_ONCE(enic->mbox_reply_status, 0);
 	req.version = cpu_to_le32(ENIC_MBOX_CAP_VERSION_1);
 
 	err = enic_mbox_vf_send_request(enic,
 					ENIC_MBOX_VF_CAPABILITY_REQUEST,
 					ENIC_MBOX_VF_CAPABILITY_REPLY,
 					&req, sizeof(req));
-	if (err)
+	if (err) {
+		enic_mbox_vf_request_abort(enic);
 		return err;
+	}
 
 	err = enic_mbox_wait_reply(enic, 3000);
 	version = READ_ONCE(enic->pf_cap_version);
+	status = READ_ONCE(enic->mbox_reply_status);
+	enic_mbox_vf_request_finish(enic);
 	if (err) {
 		netdev_warn(enic->netdev,
 			    "MBOX: no capability reply from PF\n");
 		return err;
 	}
+	if (status)
+		return status;
 
 	if (version < ENIC_MBOX_CAP_VERSION_1) {
 		netdev_warn(enic->netdev,
@@ -654,22 +1137,31 @@ int enic_mbox_vf_capability_check(struct enic *enic)
 int enic_mbox_vf_register(struct enic *enic)
 {
 	bool registered;
+	int status;
 	int err;
 
+	enic_mbox_vf_request_start(enic);
 	WRITE_ONCE(enic->vf_registered, false);
+	WRITE_ONCE(enic->mbox_reply_status, 0);
 
 	err = enic_mbox_vf_send_request(enic, ENIC_MBOX_VF_REGISTER_REQUEST,
 					ENIC_MBOX_VF_REGISTER_REPLY, NULL, 0);
-	if (err)
+	if (err) {
+		enic_mbox_vf_request_abort(enic);
 		return err;
+	}
 
 	err = enic_mbox_wait_reply(enic, 3000);
 	registered = READ_ONCE(enic->vf_registered);
+	status = READ_ONCE(enic->mbox_reply_status);
+	enic_mbox_vf_request_finish(enic);
 	if (err) {
 		netdev_warn(enic->netdev,
 			    "MBOX: VF registration with PF timed out\n");
 		return err;
 	}
+	if (status)
+		return status;
 
 	if (!registered)
 		return -ENODEV;
@@ -680,25 +1172,204 @@ int enic_mbox_vf_register(struct enic *enic)
 int enic_mbox_vf_unregister(struct enic *enic)
 {
 	bool registered;
+	int status;
 	int err;
 
 	if (!READ_ONCE(enic->vf_registered))
 		return 0;
 
+	enic_mbox_vf_request_start(enic);
+	if (!READ_ONCE(enic->vf_registered)) {
+		enic_mbox_vf_request_finish(enic);
+		return 0;
+	}
+	WRITE_ONCE(enic->mbox_reply_status, 0);
+
 	err = enic_mbox_vf_send_request(enic,
 					ENIC_MBOX_VF_UNREGISTER_REQUEST,
 					ENIC_MBOX_VF_UNREGISTER_REPLY,
 					NULL, 0);
-	if (err)
+	if (err) {
+		enic_mbox_vf_request_abort(enic);
 		return err;
+	}
 
 	err = enic_mbox_wait_reply(enic, 3000);
 	registered = READ_ONCE(enic->vf_registered);
+	status = READ_ONCE(enic->mbox_reply_status);
+	enic_mbox_vf_request_finish(enic);
 	if (err)
 		return err;
+	if (status)
+		return status;
 	if (registered)
 		return -EACCES;
 	return 0;
+}
+
+int enic_mbox_vf_add_del_macs(struct enic *enic,
+			      struct enic_mac_addr *macs, u16 num_macs)
+{
+	struct enic_mbox_vf_add_del_mac_msg *req;
+	unsigned int i;
+	int status;
+	int err;
+
+	if (!READ_ONCE(enic->vf_registered) || !enic->has_admin_channel)
+		return -ENODEV;
+	if (!num_macs || num_macs > ENIC_MBOX_MAX_MAC_OPS)
+		return -EINVAL;
+
+	req = kzalloc_flex(*req, mac_addr, num_macs);
+	if (!req)
+		return -ENOMEM;
+
+	req->num_addrs = cpu_to_le16(num_macs);
+	for (i = 0; i < num_macs; i++)
+		req->mac_addr[i] = macs[i];
+
+	enic_mbox_vf_request_start(enic);
+	if (!READ_ONCE(enic->vf_registered) || !enic->has_admin_channel) {
+		err = -ENODEV;
+	} else {
+		spin_lock_bh(&enic->mbox_state_lock);
+		enic->mbox_reply_mac_addrs = macs;
+		enic->mbox_reply_mac_count = num_macs;
+		spin_unlock_bh(&enic->mbox_state_lock);
+		WRITE_ONCE(enic->mbox_reply_status, 0);
+		err = enic_mbox_vf_send_request(enic,
+						ENIC_MBOX_VF_ADD_DEL_MAC_REQUEST,
+						ENIC_MBOX_VF_ADD_DEL_MAC_REPLY,
+						req,
+						struct_size(req, mac_addr,
+							    num_macs));
+	}
+	kfree(req);
+	if (err) {
+		spin_lock_bh(&enic->mbox_state_lock);
+		enic->mbox_reply_mac_addrs = NULL;
+		enic->mbox_reply_mac_count = 0;
+		spin_unlock_bh(&enic->mbox_state_lock);
+		enic_mbox_vf_request_abort(enic);
+		return err;
+	}
+
+	err = enic_mbox_wait_reply(enic, 3000);
+	status = READ_ONCE(enic->mbox_reply_status);
+	spin_lock_bh(&enic->mbox_state_lock);
+	enic->mbox_reply_mac_addrs = NULL;
+	enic->mbox_reply_mac_count = 0;
+	spin_unlock_bh(&enic->mbox_state_lock);
+	if (err) {
+		/* The PF may have updated its software ledger before a hardware
+		 * failure whose reply was lost. A repeated idempotent operation could
+		 * then appear converged while hardware state is stale, so replay from
+		 * a fresh registration generation.
+		 */
+		enic_mbox_vf_require_reconnect(enic);
+		enic_mbox_vf_request_finish(enic);
+		return err;
+	}
+	enic_mbox_vf_request_finish(enic);
+
+	return status;
+}
+
+int enic_mbox_vf_add_del_mac(struct enic *enic, const u8 *addr, bool add,
+			     bool station)
+{
+	struct enic_mac_addr mac = {};
+	u16 flags = 0;
+	int err;
+
+	ether_addr_copy(mac.addr, addr);
+	if (add)
+		flags |= ENIC_MAC_ADDR_FLAG_ADD;
+	if (station)
+		flags |= ENIC_MAC_ADDR_FLAG_STATION;
+	mac.flags = cpu_to_le16(flags);
+
+	err = enic_mbox_vf_add_del_macs(enic, &mac, 1);
+	if (err)
+		return err;
+	if (le16_to_cpu(mac.flags) & ENIC_MAC_ADDR_FLAG_ERROR_MASK)
+		return -EACCES;
+
+	return 0;
+}
+
+int enic_mbox_vf_set_pkt_filter(struct enic *enic, int directed,
+				int multicast, int broadcast,
+				int promisc, int allmulti, u16 *applied_flags)
+{
+	struct enic_mbox_vf_set_pkt_filter_msg req = {};
+	u16 applied;
+	u16 flags = 0;
+	u16 required;
+	int status;
+	int err;
+
+	if (!READ_ONCE(enic->vf_registered) || !enic->has_admin_channel)
+		return -ENODEV;
+
+	if (directed)
+		flags |= CMD_PFILTER_DIRECTED;
+	if (multicast)
+		flags |= CMD_PFILTER_MULTICAST;
+	if (broadcast)
+		flags |= CMD_PFILTER_BROADCAST;
+	if (promisc)
+		flags |= CMD_PFILTER_PROMISCUOUS;
+	if (allmulti)
+		flags |= CMD_PFILTER_ALL_MULTICAST;
+	req.flags = cpu_to_le16(flags);
+
+	enic_mbox_vf_request_start(enic);
+	if (!READ_ONCE(enic->vf_registered) || !enic->has_admin_channel) {
+		enic_mbox_vf_request_abort(enic);
+		return -ENODEV;
+	}
+	WRITE_ONCE(enic->mbox_reply_status, 0);
+	WRITE_ONCE(enic->mbox_reply_filter_flags, 0);
+
+	err = enic_mbox_vf_send_request(enic,
+					ENIC_MBOX_VF_SET_PKT_FILTER_REQUEST,
+					ENIC_MBOX_VF_SET_PKT_FILTER_REPLY,
+					&req, sizeof(req));
+	if (err) {
+		enic_mbox_vf_request_abort(enic);
+		return err;
+	}
+
+	err = enic_mbox_wait_reply(enic, 3000);
+	status = READ_ONCE(enic->mbox_reply_status);
+	if (!err && !status) {
+		applied = READ_ONCE(enic->mbox_reply_filter_flags);
+		/* Directed, multicast, and broadcast are not policy-gated.  The PF
+		 * may only withhold the two broad receive modes, and may add directed
+		 * reception because it is mandatory for a usable VF.
+		 */
+		required = (flags | CMD_PFILTER_DIRECTED) &
+			   ~(CMD_PFILTER_PROMISCUOUS |
+			     CMD_PFILTER_ALL_MULTICAST);
+		if ((applied & ~(flags | CMD_PFILTER_DIRECTED)) ||
+		    (applied & required) != required) {
+			netdev_warn(enic->netdev,
+				    "MBOX: invalid packet filter reply %#x for request %#x\n",
+				    applied, flags);
+			enic_mbox_vf_require_reconnect(enic);
+			status = -EIO;
+		} else if (applied_flags) {
+			*applied_flags = applied;
+		}
+	}
+	if (err)
+		enic_mbox_vf_require_reconnect(enic);
+	enic_mbox_vf_request_finish(enic);
+	if (err)
+		return err;
+
+	return status;
 }
 
 void enic_mbox_init(struct enic *enic)
@@ -711,9 +1382,15 @@ void enic_mbox_init(struct enic *enic)
 	 */
 	if (!reinit) {
 		mutex_init(&enic->mbox_lock);
+		mutex_init(&enic->vf_mbox_request_lock);
 		init_completion(&enic->mbox_comp);
 		spin_lock_init(&enic->mbox_state_lock);
+		spin_lock_init(&enic->vf_ack_lock);
+		INIT_LIST_HEAD(&enic->vf_ack_list);
+		INIT_WORK(&enic->vf_ack_work, enic_mbox_vf_ack_work);
 		enic->mbox_msg_num = 0;
+		if (enic_is_sriov_vf_v2(enic))
+			WRITE_ONCE(enic->vf_rx_quarantined, true);
 		enic->mbox_initialized = true;
 	} else {
 		reinit_completion(&enic->mbox_comp);

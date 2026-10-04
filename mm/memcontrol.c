@@ -62,6 +62,7 @@
 #include <linux/seq_buf.h>
 #include <linux/sched/isolation.h>
 #include <linux/kmemleak.h>
+#include <kunit/visibility.h>
 #include "internal.h"
 #include "swap.h"
 #include "swap_table.h"
@@ -135,6 +136,7 @@ bool mem_cgroup_kmem_disabled(void)
 {
 	return cgroup_memory_nokmem;
 }
+EXPORT_SYMBOL_IF_KUNIT(mem_cgroup_kmem_disabled);
 
 static void memcg_uncharge(struct mem_cgroup *memcg, unsigned int nr_pages);
 

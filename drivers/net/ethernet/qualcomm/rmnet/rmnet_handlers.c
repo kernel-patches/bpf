@@ -50,21 +50,33 @@ rmnet_deliver_skb(struct sk_buff *skb)
 	gro_cells_receive(&priv->gro_cells, skb);
 }
 
+static void rmnet_deliver_skb_list(struct sk_buff_head *head)
+{
+	struct sk_buff *skb;
+
+	while ((skb = __skb_dequeue(head))) {
+		rmnet_set_skb_proto(skb);
+		rmnet_deliver_skb(skb);
+	}
+}
+
 /* MAP handler */
 
 static void
 __rmnet_map_ingress_handler(struct sk_buff *skb,
-			    struct rmnet_port *port)
+			    struct rmnet_port *port,
+			    u32 data_format)
 {
 	struct rmnet_map_header *map_header = (void *)skb->data;
 	struct rmnet_endpoint *ep;
+	struct sk_buff_head list;
 	u16 len, pad;
 	u8 mux_id;
 
 	if (map_header->flags & MAP_CMD_FLAG) {
 		/* Packet contains a MAP command (not data) */
-		if (port->data_format & RMNET_FLAGS_INGRESS_MAP_COMMANDS)
-			return rmnet_map_command(skb, port);
+		if (data_format & RMNET_FLAGS_INGRESS_MAP_COMMANDS)
+			return rmnet_map_command(skb, port, data_format);
 
 		goto free_skb;
 	}
@@ -82,23 +94,25 @@ __rmnet_map_ingress_handler(struct sk_buff *skb,
 
 	skb->dev = ep->egress_dev;
 
-	if ((port->data_format & RMNET_FLAGS_INGRESS_MAP_CKSUMV5) &&
+	__skb_queue_head_init(&list);
+
+	if ((data_format &
+	     (RMNET_FLAGS_INGRESS_MAP_CKSUMV5 | RMNET_FLAGS_INGRESS_COALESCE)) &&
 	    (map_header->flags & MAP_NEXT_HEADER_FLAG)) {
-		if (rmnet_map_process_next_hdr_packet(skb, len))
+		if (rmnet_map_process_next_hdr_packet(skb, &list, len, data_format))
 			goto free_skb;
-		skb_pull(skb, sizeof(*map_header));
-		rmnet_set_skb_proto(skb);
 	} else {
 		/* Subtract MAP header */
 		skb_pull(skb, sizeof(*map_header));
 		rmnet_set_skb_proto(skb);
-		if (port->data_format & RMNET_FLAGS_INGRESS_MAP_CKSUMV4 &&
+		if (data_format & RMNET_FLAGS_INGRESS_MAP_CKSUMV4 &&
 		    !rmnet_map_checksum_downlink_packet(skb, len + pad))
 			skb->ip_summed = CHECKSUM_UNNECESSARY;
+		skb_trim(skb, len);
+		__skb_queue_tail(&list, skb);
 	}
 
-	skb_trim(skb, len);
-	rmnet_deliver_skb(skb);
+	rmnet_deliver_skb_list(&list);
 	return;
 
 free_skb:
@@ -110,24 +124,29 @@ rmnet_map_ingress_handler(struct sk_buff *skb,
 			  struct rmnet_port *port)
 {
 	struct sk_buff *skbn;
+	u32 data_format;
 
 	if (skb->dev->type == ARPHRD_ETHER) {
-		if (pskb_expand_head(skb, ETH_HLEN, 0, GFP_ATOMIC)) {
-			kfree_skb(skb);
-			return;
+		if (skb_headroom(skb) < ETH_HLEN) {
+			if (pskb_expand_head(skb, ETH_HLEN, 0, GFP_ATOMIC)) {
+				kfree_skb(skb);
+				return;
+			}
 		}
 
 		skb_push(skb, ETH_HLEN);
 	}
 
-	if (port->data_format & RMNET_FLAGS_INGRESS_DEAGGREGATION) {
-		while ((skbn = rmnet_map_deaggregate(skb, port)) != NULL)
-			__rmnet_map_ingress_handler(skbn, port);
+	data_format = READ_ONCE(port->data_format);
+
+	if (data_format & RMNET_FLAGS_INGRESS_DEAGGREGATION) {
+		while ((skbn = rmnet_map_deaggregate(skb, data_format)) != NULL)
+			__rmnet_map_ingress_handler(skbn, port, data_format);
 
 		consume_skb(skb);
 	} else {
-		if (rmnet_map_validate_packet_len(skb, port))
-			__rmnet_map_ingress_handler(skb, port);
+		if (rmnet_map_validate_packet_len(skb, data_format))
+			__rmnet_map_ingress_handler(skb, port, data_format);
 		else
 			kfree_skb(skb);
 	}
@@ -139,14 +158,16 @@ static int rmnet_map_egress_handler(struct sk_buff *skb,
 {
 	int required_headroom, additional_header_len, csum_type = 0;
 	struct rmnet_map_header *map_header;
+	u32 data_format;
 
 	additional_header_len = 0;
 	required_headroom = sizeof(struct rmnet_map_header);
 
-	if (port->data_format & RMNET_FLAGS_EGRESS_MAP_CKSUMV4) {
+	data_format = READ_ONCE(port->data_format);
+	if (data_format & RMNET_FLAGS_EGRESS_MAP_CKSUMV4) {
 		additional_header_len = sizeof(struct rmnet_map_ul_csum_header);
 		csum_type = RMNET_FLAGS_EGRESS_MAP_CKSUMV4;
-	} else if (port->data_format & RMNET_FLAGS_EGRESS_MAP_CKSUMV5) {
+	} else if (data_format & RMNET_FLAGS_EGRESS_MAP_CKSUMV5) {
 		additional_header_len = sizeof(struct rmnet_map_v5_csum_header);
 		csum_type = RMNET_FLAGS_EGRESS_MAP_CKSUMV5;
 	}
@@ -161,7 +182,7 @@ static int rmnet_map_egress_handler(struct sk_buff *skb,
 						 csum_type);
 
 	map_header = rmnet_map_add_map_header(skb, additional_header_len,
-					      port, 0);
+					      data_format, 0);
 	if (!map_header)
 		return -ENOMEM;
 
@@ -209,7 +230,7 @@ rx_handler_result_t rmnet_rx_handler(struct sk_buff **pskb)
 	if (!skb)
 		goto done;
 
-	if (skb_linearize(skb)) {
+	if (!pskb_may_pull(skb, sizeof(struct rmnet_map_header))) {
 		kfree_skb(skb);
 		goto done;
 	}
@@ -255,7 +276,7 @@ void rmnet_egress_handler(struct sk_buff *skb)
 	orig_dev = skb->dev;
 	priv = netdev_priv(orig_dev);
 	skb->dev = priv->real_dev;
-	mux_id = priv->mux_id;
+	mux_id = READ_ONCE(priv->mux_id);
 
 	port = rmnet_get_port_rcu(skb->dev);
 	if (!port)

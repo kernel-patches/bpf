@@ -63,6 +63,8 @@ static int vti_input(struct sk_buff *skb, int nexthdr, __be32 spi,
 
 		XFRM_TUNNEL_SKB_CB(skb)->tunnel.ip4 = tunnel;
 
+		dev_hold(tunnel->dev);
+
 		if (update_skb_dev)
 			skb->dev = tunnel->dev;
 
@@ -109,10 +111,14 @@ static int vti_rcv_cb(struct sk_buff *skb, int err)
 
 	dev = tunnel->dev;
 
+	/* Drop the reference taken in vti_input().  -EINVAL/-EPERM make
+	 * xfrm_input() re-invoke us with err = -1 and drop it then.
+	 */
 	if (err) {
 		DEV_STATS_INC(dev, rx_errors);
 		DEV_STATS_INC(dev, rx_dropped);
 
+		dev_put(dev);
 		return 0;
 	}
 
@@ -141,6 +147,7 @@ static int vti_rcv_cb(struct sk_buff *skb, int err)
 	skb_scrub_packet(skb, !net_eq(tunnel->net, dev_net(skb->dev)));
 	skb->dev = dev;
 	dev_sw_netstats_rx_add(dev, skb->len);
+	dev_put(dev);
 
 	return 0;
 }
@@ -526,7 +533,7 @@ static int __net_init vti_init_net(struct net *net)
 static void __net_exit vti_exit_rtnl(struct net *net,
 				     struct list_head *dev_to_kill)
 {
-	ip_tunnel_delete_net(net, vti_net_id, &vti_link_ops, dev_to_kill);
+	ip_tunnel_delete_net(net, vti_net_id, dev_to_kill);
 }
 
 static struct pernet_operations vti_net_ops = {

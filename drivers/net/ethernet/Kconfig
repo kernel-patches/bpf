@@ -130,6 +130,7 @@ config FEALNX
 
 source "drivers/net/ethernet/ni/Kconfig"
 source "drivers/net/ethernet/natsemi/Kconfig"
+source "drivers/net/ethernet/nebula-matrix/Kconfig"
 source "drivers/net/ethernet/netronome/Kconfig"
 source "drivers/net/ethernet/8390/Kconfig"
 source "drivers/net/ethernet/nvidia/Kconfig"
@@ -150,6 +151,7 @@ config OA_TC6
 	tristate "OPEN Alliance TC6 10BASE-T1x MAC-PHY support" if COMPILE_TEST
 	depends on SPI
 	select PHYLIB
+	select IRQ_DOMAIN
 	help
 	  This library implements OPEN Alliance TC6 10BASE-T1x MAC-PHY
 	  Serial Interface protocol for supporting 10BASE-T1x MAC-PHYs.

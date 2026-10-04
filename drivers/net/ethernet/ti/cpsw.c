@@ -1529,7 +1529,7 @@ static const struct of_device_id cpsw_of_mtable[] = {
 	{ .compatible = "ti,am335x-cpsw"},
 	{ .compatible = "ti,am4372-cpsw"},
 	{ .compatible = "ti,dra7-cpsw"},
-	{ /* sentinel */ },
+	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, cpsw_of_mtable);
 
@@ -1550,6 +1550,7 @@ static int cpsw_probe(struct platform_device *pdev)
 	struct gpio_descs		*mode;
 	const struct soc_device_attribute *soc;
 	struct cpsw_common		*cpsw;
+	bool secondary_registered = false;
 	int ret = 0, ch;
 	int irq;
 
@@ -1717,6 +1718,7 @@ static int cpsw_probe(struct platform_device *pdev)
 			cpsw_err(priv, probe, "error probe slave 2 emac interface\n");
 			goto clean_unregister_netdev_ret;
 		}
+		secondary_registered = true;
 	}
 
 	/* Grab RX and TX IRQs. Note that we also have RX_THRESHOLD and
@@ -1764,7 +1766,15 @@ skip_cpts:
 	return 0;
 
 clean_unregister_netdev_ret:
+	if (secondary_registered) {
+		struct cpsw_priv *priv_sl2;
+
+		priv_sl2 = netdev_priv(cpsw->slaves[1].ndev);
+		unregister_netdev(cpsw->slaves[1].ndev);
+		disable_work_sync(&priv_sl2->rx_mode_work);
+	}
 	unregister_netdev(ndev);
+	disable_work_sync(&priv->rx_mode_work);
 clean_cpts:
 	cpts_release(cpsw->cpts);
 	cpdma_ctlr_destroy(cpsw->dma);

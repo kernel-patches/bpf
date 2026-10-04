@@ -133,7 +133,7 @@ static int eea_adminq_submit(struct eea_net *enet, u16 cmd,
 {
 	struct eea_aq_cdesc *cdesc;
 	struct eea_aq_desc *desc;
-	int ret;
+	int err;
 
 	if (enet->adminq.broken)
 		return -EIO;
@@ -163,9 +163,9 @@ static int eea_adminq_submit(struct eea_net *enet, u16 cmd,
 	if ((enet->adminq.num % enet->adminq.ring->num) == 0)
 		enet->adminq.phase ^= EEA_RING_DESC_F_AQ_PHASE;
 
-	ret = read_poll_timeout(eea_ering_cq_get_desc, cdesc, cdesc, 10,
+	err = read_poll_timeout(eea_ering_cq_get_desc, cdesc, cdesc, 10,
 				EEA_AQ_TIMEOUT_US, false, enet->adminq.ring);
-	if (ret) {
+	if (err) {
 		netdev_err(enet->netdev,
 			   "adminq exec timeout. cmd: %d reset device.\n",
 			   cmd);
@@ -173,21 +173,21 @@ static int eea_adminq_submit(struct eea_net *enet, u16 cmd,
 		 * potential DMA writes after the memory is freed.
 		 */
 		eea_device_broken(enet);
-		return ret;
+		return err;
 	}
 
 	/* Returns 0 on success, or a negative error code on failure. */
-	ret = le32_to_cpu(cdesc->status);
+	err = le32_to_cpu(cdesc->status);
 
 	eea_ering_cq_ack_desc(enet->adminq.ring, 1);
 
-	if (ret)
+	if (err)
 		netdev_err(enet->netdev,
-			   "adminq exec failed. cmd: %d ret %d\n", cmd, ret);
+			   "adminq exec failed. cmd: %d ret %d\n", cmd, err);
 	else
 		*reply_len = le32_to_cpu(cdesc->reply_len);
 
-	return ret;
+	return err;
 }
 
 static int eea_adminq_exec(struct eea_net *enet, u16 cmd,
@@ -198,7 +198,7 @@ static int eea_adminq_exec(struct eea_net *enet, u16 cmd,
 	dma_addr_t req_addr = 0, res_addr = 0;
 	struct device *dma;
 	u32 reply_len = 0;
-	int ret;
+	int err;
 
 	if (reply)
 		*reply = 0;
@@ -214,19 +214,19 @@ static int eea_adminq_exec(struct eea_net *enet, u16 cmd,
 	if (res) {
 		res_addr = dma_map_single(dma, res, res_size, DMA_FROM_DEVICE);
 		if (unlikely(dma_mapping_error(dma, res_addr))) {
-			ret = -ENOMEM;
+			err = -ENOMEM;
 			goto err_unmap_req;
 		}
 	}
 
 	mutex_lock(&enet->adminq.lock);
-	ret = eea_adminq_submit(enet, cmd, req_addr, res_addr,
+	err = eea_adminq_submit(enet, cmd, req_addr, res_addr,
 				req_size, res_size, &reply_len);
 	mutex_unlock(&enet->adminq.lock);
 	if (res) {
 		dma_unmap_single(dma, res_addr, res_size, DMA_FROM_DEVICE);
 
-		if (ret)
+		if (err)
 			memset(res, 0, res_size);
 		else if (res_size > reply_len)
 			memset(res + reply_len, 0, res_size - reply_len);
@@ -239,7 +239,7 @@ err_unmap_req:
 	if (req)
 		dma_unmap_single(dma, req_addr, req_size, DMA_TO_DEVICE);
 
-	return ret;
+	return err;
 }
 
 void eea_destroy_adminq(struct eea_net *enet)
@@ -266,7 +266,7 @@ int eea_create_adminq(struct eea_net *enet, u32 qid)
 	u32 db_size, q_size, num;
 	struct eea_ring *ering;
 	struct eea_aq *aq;
-	int err = -ENOMEM;
+	int err;
 
 	num = enet->edev->rx_num + enet->edev->tx_num;
 	aq = &enet->adminq;
@@ -347,11 +347,12 @@ static void qcfg_fill(struct eea_aq_create *qcfg, struct eea_ring *ering,
 
 int eea_adminq_create_q(struct eea_net *enet, u32 num, u32 flags)
 {
-	int i, db_size, q_size, err = -ENOMEM;
 	struct eea_net_cfg *cfg;
 	struct eea_ring *ering;
+	int i, db_size, q_size;
 	struct eea_aq *aq;
 	u32 reply_len;
+	int err;
 
 	cfg = &enet->cfg;
 	aq = &enet->adminq;
@@ -483,7 +484,7 @@ void eea_adminq_config_host_info(struct eea_net *enet)
 	struct device *dev = enet->edev->dma_dev;
 	struct eea_aq_host_info_cfg *cfg;
 	struct eea_aq_host_info_rep *rep;
-	int rc = -ENOMEM;
+	int err;
 
 	cfg = kzalloc_obj(*cfg);
 	if (!cfg)
@@ -511,30 +512,24 @@ void eea_adminq_config_host_info(struct eea_net *enet)
 	cfg->pci_bdf            = cpu_to_le16(eea_pci_bdf(enet->edev));
 	cfg->pci_domain         = cpu_to_le32(eea_pci_domain_nr(enet->edev));
 
-	strscpy(cfg->os_ver_str, utsname()->release, sizeof(cfg->os_ver_str));
-	strscpy(cfg->isa_str, utsname()->machine, sizeof(cfg->isa_str));
+	strscpy(cfg->os_ver_str, utsname()->release);
+	strscpy(cfg->isa_str, utsname()->machine);
 
-	rc = eea_adminq_exec(enet, EEA_AQ_CMD_HOST_INFO,
-			     cfg, sizeof(*cfg), rep, sizeof(*rep), NULL);
+	err = eea_adminq_exec(enet, EEA_AQ_CMD_HOST_INFO,
+			      cfg, sizeof(*cfg), rep, sizeof(*rep), NULL);
+	if (err)
+		goto err_free_rep;
 
-	if (!rc) {
-		if (rep->op_code == EEA_HINFO_REP_BAD)
-			dev_warn(dev, "The hardware-driven state validation may be abnormal.\n");
+	if (rep->op_code == EEA_HINFO_REP_BAD)
+		dev_warn(dev, "The hardware-driven state validation may be abnormal.\n");
 
-		if (rep->has_reply) {
-			char buf[EEA_HINFO_MAX_REP_LEN] = {0};
-
-			rep->reply_str[EEA_HINFO_MAX_REP_LEN - 1] = '\0';
-
-			string_escape_str(rep->reply_str, buf, sizeof(buf),
-					  ESCAPE_NP, NULL);
-
-			buf[EEA_HINFO_MAX_REP_LEN - 1] = '\0';
-
-			dev_warn(dev, "Device replied: %s\n", buf);
-		}
+	if (rep->has_reply) {
+		rep->reply_str[EEA_HINFO_MAX_REP_LEN - 1] = '\0';
+		dev_warn(dev, "Device replied: %*pEhp\n",
+			 (int)strlen(rep->reply_str), rep->reply_str);
 	}
 
+err_free_rep:
 	kfree(rep);
 err_free_cfg:
 	kfree(cfg);

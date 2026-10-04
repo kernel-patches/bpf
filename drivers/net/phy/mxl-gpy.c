@@ -14,6 +14,8 @@
 #include <linux/polynomial.h>
 #include <linux/property.h>
 #include <linux/netdevice.h>
+#include <linux/regulator/driver.h>
+#include <linux/of.h>
 
 /* PHY ID */
 #define PHY_ID_GPYx15B_MASK	0xFFFFFFFC
@@ -109,6 +111,18 @@
 #define VSPEC1_SGMII_CTRL_ANRS	BIT(9)		/* Restart Aneg */
 #define VSPEC1_SGMII_ANEN_ANRS	(VSPEC1_SGMII_CTRL_ANEN | \
 				 VSPEC1_SGMII_CTRL_ANRS)
+
+/* Packet Manager Control */
+#define VSPEC1_PM_CTRL		0x0c
+#define VSPEC1_PM_CTRL_MDIO_VOL	BIT(14)
+#define VSPEC1_PM_CTRL_SI	BIT(12)		/* Super Isolate */
+
+/* TPI lane to ASP map */
+#define VSPEC1_LANE_ASP_MAP	0x14
+#define VSPEC1_LANE_ASP_MAP_A	GENMASK(1, 0)
+#define VSPEC1_LANE_ASP_MAP_B	GENMASK(3, 2)
+#define VSPEC1_LANE_ASP_MAP_C	GENMASK(5, 4)
+#define VSPEC1_LANE_ASP_MAP_D	GENMASK(7, 6)
 
 /* Temperature sensor */
 #define VSPEC1_TEMP_STA	0x0E
@@ -388,6 +402,120 @@ static int gpy_probe(struct phy_device *phydev)
 		    fw_version & PHY_FWV_REL_MASK ? "" : " test version");
 
 	return 0;
+}
+
+static int mxl86211c_mdio_reg_set_voltage_sel(struct regulator_dev *rdev,
+					      unsigned int selector)
+{
+	struct phy_device *phydev = rdev_get_drvdata(rdev);
+
+	return phy_modify_mmd(phydev, MDIO_MMD_VEND1, VSPEC1_PM_CTRL,
+			      VSPEC1_PM_CTRL_MDIO_VOL,
+			      selector ? 0 : VSPEC1_PM_CTRL_MDIO_VOL);
+}
+
+static int mxl86211c_mdio_reg_get_voltage_sel(struct regulator_dev *rdev)
+{
+	struct phy_device *phydev = rdev_get_drvdata(rdev);
+	int val;
+
+	val = phy_read_mmd(phydev, MDIO_MMD_VEND1, VSPEC1_PM_CTRL);
+	if (val < 0)
+		return val;
+
+	return (val & VSPEC1_PM_CTRL_MDIO_VOL) ? 0 : 1;
+}
+
+static const struct regulator_ops mxl86211c_mdio_regulator_ops = {
+	.list_voltage = regulator_list_voltage_table,
+	.set_voltage_sel = mxl86211c_mdio_reg_set_voltage_sel,
+	.get_voltage_sel = mxl86211c_mdio_reg_get_voltage_sel,
+};
+
+static const unsigned int mxl86211c_mdio_voltage_table[] = {
+	1800000,
+	3300000,
+};
+
+static const struct regulator_desc mxl86211c_mdio_desc = {
+	.name = "mdio",
+	.of_match = of_match_ptr("mdio-regulator"),
+	.n_voltages = ARRAY_SIZE(mxl86211c_mdio_voltage_table),
+	.volt_table = mxl86211c_mdio_voltage_table,
+	.ops = &mxl86211c_mdio_regulator_ops,
+	.type = REGULATOR_VOLTAGE,
+	.owner = THIS_MODULE,
+};
+
+static int mxl86211c_configure_lane_asp_map(struct phy_device *phydev)
+{
+	struct device *dev = &phydev->mdio.dev;
+	u32 lane_asp_map[4];
+	u16 val;
+	unsigned int seen = 0;
+	int i, ret;
+
+	if (!device_property_present(dev, "maxlinear,lane-asp-map"))
+		return 0;
+
+	ret = device_property_read_u32_array(dev, "maxlinear,lane-asp-map",
+					     lane_asp_map,
+					     ARRAY_SIZE(lane_asp_map));
+	if (ret)
+		return ret;
+
+	for (i = 0; i < ARRAY_SIZE(lane_asp_map); i++) {
+		if (lane_asp_map[i] > 3 || seen & BIT(lane_asp_map[i]))
+			return -EINVAL;
+
+		seen |= BIT(lane_asp_map[i]);
+	}
+
+	val = FIELD_PREP(VSPEC1_LANE_ASP_MAP_A, lane_asp_map[0]) |
+	      FIELD_PREP(VSPEC1_LANE_ASP_MAP_B, lane_asp_map[1]) |
+	      FIELD_PREP(VSPEC1_LANE_ASP_MAP_C, lane_asp_map[2]) |
+	      FIELD_PREP(VSPEC1_LANE_ASP_MAP_D, lane_asp_map[3]);
+
+	return phy_write_mmd(phydev, MDIO_MMD_VEND1, VSPEC1_LANE_ASP_MAP,
+			     val);
+}
+
+static int mxl86211c_config_init(struct phy_device *phydev)
+{
+	int ret;
+
+	ret = mxl86211c_configure_lane_asp_map(phydev);
+	if (ret)
+		return ret;
+
+	return gpy21x_config_init(phydev);
+}
+
+static int mxl86211c_probe(struct phy_device *phydev)
+{
+	struct device *dev = &phydev->mdio.dev;
+	struct regulator_config config = { };
+	struct regulator_dev *rdev;
+	int ret;
+
+	config.dev = dev;
+	config.driver_data = phydev;
+
+	rdev = devm_regulator_register(dev, &mxl86211c_mdio_desc, &config);
+	if (IS_ERR(rdev)) {
+		phydev_err(phydev, "failed to register MDIO regulator\n");
+		return PTR_ERR(rdev);
+	}
+
+	ret = phy_modify_mmd(phydev, MDIO_MMD_VEND1, VSPEC1_PM_CTRL,
+			     VSPEC1_PM_CTRL_SI,
+			     0);
+	if (ret)
+		return ret;
+
+	ret = gpy_probe(phydev);
+
+	return ret;
 }
 
 static bool gpy_sgmii_need_reaneg(struct phy_device *phydev)
@@ -1405,8 +1533,8 @@ static struct phy_driver gpy_drivers[] = {
 		PHY_ID_MATCH_MODEL(PHY_ID_MXL86211C),
 		.name		= "Maxlinear Ethernet MxL86211C",
 		.get_features	= genphy_c45_pma_read_abilities,
-		.config_init	= gpy_config_init,
-		.probe		= gpy_probe,
+		.config_init	= mxl86211c_config_init,
+		.probe		= mxl86211c_probe,
 		.inband_caps	= gpy_inband_caps,
 		.config_inband	= gpy_config_inband,
 		.suspend	= genphy_suspend,

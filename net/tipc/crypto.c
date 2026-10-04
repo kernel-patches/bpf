@@ -184,6 +184,7 @@ struct tipc_crypto_stats {
  * @key: the key states
  * @skey_mode: session key's mode
  * @skey: received session key
+ * @skey_in_use: received session key owned by the RX worker
  * @wq: common workqueue on TX crypto
  * @work: delayed work sched for TX/RX
  * @key_distr: key distributing state
@@ -208,6 +209,7 @@ struct tipc_crypto {
 	struct tipc_key key;
 	u8 skey_mode;
 	struct tipc_aead_key *skey;
+	struct tipc_aead_key *skey_in_use;
 	struct workqueue_struct *wq;
 	struct delayed_work work;
 #define KEY_DISTR_SCHED		1
@@ -1131,7 +1133,12 @@ int tipc_crypto_key_init(struct tipc_crypto *c, struct tipc_aead_key *ukey,
 
 	/* Attach it to the crypto */
 	if (likely(!rc)) {
-		rc = tipc_crypto_key_attach(c, aead, 0, master_key);
+		spin_lock_bh(&c->lock);
+		if (ukey == c->skey_in_use && c->skey != ukey)
+			rc = -ECANCELED;
+		else
+			rc = tipc_crypto_key_attach(c, aead, 0, master_key);
+		spin_unlock_bh(&c->lock);
 		if (rc < 0)
 			tipc_aead_free(&aead->rcu);
 	}
@@ -1146,6 +1153,8 @@ int tipc_crypto_key_init(struct tipc_crypto *c, struct tipc_aead_key *ukey,
  * @pos: desired slot in the crypto key array, = 0 if any!
  * @master_key: specify this is a cluster master key
  *
+ * The caller must hold c->lock.
+ *
  * Return: new key id in case of success, otherwise: -EBUSY
  */
 static int tipc_crypto_key_attach(struct tipc_crypto *c,
@@ -1153,20 +1162,19 @@ static int tipc_crypto_key_attach(struct tipc_crypto *c,
 				  bool master_key)
 {
 	struct tipc_key key;
-	int rc = -EBUSY;
 	u8 new_key;
 
-	spin_lock_bh(&c->lock);
+	lockdep_assert_held(&c->lock);
 	key = c->key;
 	if (master_key) {
 		new_key = KEY_MASTER;
 		goto attach;
 	}
 	if (key.active && key.passive)
-		goto exit;
+		return -EBUSY;
 	if (key.pending) {
 		if (tipc_aead_users(c->aead[key.pending]) > 0)
-			goto exit;
+			return -EBUSY;
 		/* if (pos): ok with replacing, will be aligned when needed */
 		/* Replace it */
 		new_key = key.pending;
@@ -1196,11 +1204,7 @@ attach:
 	c->working = 1;
 	c->nokey = 0;
 	c->key_master |= master_key;
-	rc = new_key;
-
-exit:
-	spin_unlock_bh(&c->lock);
-	return rc;
+	return new_key;
 }
 
 void tipc_crypto_key_flush(struct tipc_crypto *c)
@@ -1214,11 +1218,13 @@ void tipc_crypto_key_flush(struct tipc_crypto *c)
 		rx = c;
 		tx = tipc_net(rx->net)->crypto_tx;
 		if (cancel_delayed_work(&rx->work)) {
-			kfree_sensitive(rx->skey);
-			rx->skey = NULL;
 			atomic_xchg(&rx->key_distr, 0);
 			tipc_node_put(rx->node);
 		}
+		/* Leave an in-flight key to its worker, but revoke it now. */
+		if (rx->skey != rx->skey_in_use)
+			kfree_sensitive(rx->skey);
+		rx->skey = NULL;
 		/* RX stopping => decrease TX key users if any */
 		k = atomic_xchg(&rx->peer_rx_active, 0);
 		if (k) {
@@ -1930,10 +1936,13 @@ static void tipc_crypto_rcv_complete(struct net *net, struct tipc_aead *aead,
 		if (tipc_aead_clone(&tmp, aead) < 0)
 			goto rcv;
 		WARN_ON(!refcount_inc_not_zero(&tmp->refcnt));
+		spin_lock_bh(&rx->lock);
 		if (tipc_crypto_key_attach(rx, tmp, ehdr->tx_key, false) < 0) {
+			spin_unlock_bh(&rx->lock);
 			tipc_aead_free(&tmp->rcu);
 			goto rcv;
 		}
+		spin_unlock_bh(&rx->lock);
 		tipc_aead_put(aead);
 		aead = tmp;
 	}
@@ -2371,27 +2380,35 @@ static void tipc_crypto_work_rx(struct work_struct *work)
 	}
 
 	/* Case 2: Attach a pending received session key from peer if any */
+	spin_lock_bh(&rx->lock);
 	if (rx->skey) {
-		rc = tipc_crypto_key_init(rx, rx->skey, rx->skey_mode, false);
-		if (unlikely(rc < 0))
+		rx->skey_in_use = rx->skey;
+		spin_unlock_bh(&rx->lock);
+		rc = tipc_crypto_key_init(rx, rx->skey_in_use,
+					  READ_ONCE(rx->skey_mode), false);
+		if (unlikely(rc < 0 && rc != -ECANCELED))
 			pr_warn("%s: unable to attach received skey, err %d\n",
 				rx->name, rc);
-		switch (rc) {
-		case -EBUSY:
-		case -ENOMEM:
+		if (rc != -EBUSY && rc != -ENOMEM)
+			synchronize_rcu();
+		spin_lock_bh(&rx->lock);
+		if (rx->skey == rx->skey_in_use &&
+		    (rc == -EBUSY || rc == -ENOMEM)) {
 			/* Resched the key attaching */
 			resched = true;
-			break;
-		default:
-			synchronize_rcu();
-			kfree_sensitive(rx->skey);
-			rx->skey = NULL;
-			break;
+		} else {
+			if (rx->skey == rx->skey_in_use)
+				rx->skey = NULL;
+			kfree_sensitive(rx->skey_in_use);
 		}
+		rx->skey_in_use = NULL;
 	}
 
-	if (resched && queue_delayed_work(tx->wq, &rx->work, delay))
+	if (resched && queue_delayed_work(tx->wq, &rx->work, delay)) {
+		spin_unlock_bh(&rx->lock);
 		return;
+	}
+	spin_unlock_bh(&rx->lock);
 
 	tipc_node_put(rx->node);
 }

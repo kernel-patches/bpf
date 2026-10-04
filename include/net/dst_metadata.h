@@ -115,10 +115,30 @@ static inline int skb_metadata_dst_cmp(const struct sk_buff *skb_a,
 	case METADATA_HW_PORT_MUX:
 		return memcmp(&a->u.port_info, &b->u.port_info,
 			      sizeof(a->u.port_info));
-	case METADATA_IP_TUNNEL:
-		return memcmp(&a->u.tun_info, &b->u.tun_info,
-			      sizeof(a->u.tun_info) +
-					 a->u.tun_info.options_len);
+	case METADATA_IP_TUNNEL: {
+		int ret;
+
+		/* Options lengths must match, or the options memcmp below
+		 * would read past b's allocation when b carries fewer
+		 * options than a.
+		 */
+		if (a->u.tun_info.options_len != b->u.tun_info.options_len)
+			return 1;
+		ret = memcmp(&a->u.tun_info, &b->u.tun_info,
+			     sizeof(a->u.tun_info));
+		if (ret)
+			return ret;
+		/* Compare the options through the flex-array member so the
+		 * compiler's __counted_by(options_len) view stays consistent
+		 * with the read length (same shape as the tun_dst_unclone
+		 * fix); a single memcmp of struct+options trips
+		 * CONFIG_FORTIFY_SOURCE when options_len is still 0 from
+		 * allocation time.
+		 */
+		return memcmp(ip_tunnel_info_opts(&a->u.tun_info),
+			      ip_tunnel_info_opts(&b->u.tun_info),
+			      a->u.tun_info.options_len);
+	}
 	case METADATA_MACSEC:
 		return memcmp(&a->u.macsec_info, &b->u.macsec_info,
 			      sizeof(a->u.macsec_info));

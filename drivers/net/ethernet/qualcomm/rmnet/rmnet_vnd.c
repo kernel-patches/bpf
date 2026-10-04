@@ -4,9 +4,11 @@
  * RMNET Data virtual network driver
  */
 
+#include <linux/capability.h>
 #include <linux/etherdevice.h>
 #include <linux/ethtool.h>
 #include <linux/if_arp.h>
+#include <linux/netlink.h>
 #include <net/pkt_sched.h>
 #include "rmnet_config.h"
 #include "rmnet_handlers.h"
@@ -181,6 +183,26 @@ static const char rmnet_gstrings_stats[][ETH_GSTRING_LEN] = {
 	"Checksum skipped",
 	"Checksum computed in software",
 	"Checksum computed in hardware",
+	/* DL coalescing */
+	"Coal frames received",
+	"Packets in coal frames",
+	"Coal hdr NLO errors",
+	"Coal hdr pkt count errors",
+	"Coal checksum errors",
+	"Coal packets dropped on csum err",
+	"Coal segments reconstructed",
+	"Coal invalid IP version",
+	"Coal invalid transport",
+	/* close reasons */
+	"Coal closed: non-coal",
+	"Coal closed: IP miss",
+	"Coal closed: transport miss",
+	"Coal closed: hw NL limit",
+	"Coal closed: hw pkt limit",
+	"Coal closed: hw byte limit",
+	"Coal closed: hw time limit",
+	"Coal closed: hw evict",
+	"Coal closed: FIN/PSH",
 };
 
 static void rmnet_get_strings(struct net_device *dev, u32 stringset, u8 *buf)
@@ -240,9 +262,16 @@ static int rmnet_set_coalesce(struct net_device *dev,
 			      struct netlink_ext_ack *extack)
 {
 	struct rmnet_priv *priv = netdev_priv(dev);
+	struct net_device *real_dev = priv->real_dev;
 	struct rmnet_port *port;
 
-	port = rmnet_get_port_rtnl(priv->real_dev);
+	if (!ns_capable(dev_net(real_dev)->user_ns, CAP_NET_ADMIN)) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "request modifies device in another netns");
+		return -EPERM;
+	}
+
+	port = rmnet_get_port_rtnl(real_dev);
 
 	if (kernel_coal->tx_aggr_max_frames < 1 || kernel_coal->tx_aggr_max_frames > 64)
 		return -EINVAL;
@@ -314,6 +343,7 @@ int rmnet_vnd_newlink(u8 id, struct net_device *rmnet_dev,
 	rmnet_dev->hw_features = NETIF_F_RXCSUM;
 	rmnet_dev->hw_features |= NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM;
 	rmnet_dev->hw_features |= NETIF_F_SG;
+	rmnet_dev->hw_features |= NETIF_F_GRO_HW;
 
 	priv->real_dev = real_dev;
 
@@ -332,7 +362,7 @@ int rmnet_vnd_newlink(u8 id, struct net_device *rmnet_dev,
 
 		rmnet_dev->rtnl_link_ops = &rmnet_link_ops;
 
-		priv->mux_id = id;
+		WRITE_ONCE(priv->mux_id, id);
 
 		netdev_dbg(rmnet_dev, "rmnet dev created\n");
 	}

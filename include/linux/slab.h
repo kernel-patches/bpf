@@ -743,6 +743,24 @@ typedef struct kmem_cache * kmem_buckets[KMALLOC_SHIFT_HIGH + 1];
 extern kmem_buckets kmalloc_caches[NR_KMALLOC_TYPES];
 
 /*
+ * The kmalloc types a bucket set can hold a copy of. This is deliberately not
+ * enum kmalloc_cache_type: the KMALLOC_PARTITION copies are all "normal" to a
+ * bucket set, which already separates what they were there to separate, so
+ * indexing by those would mean up to KMALLOC_PARTITION_CACHES_NR unusable
+ * rows per set. Allocations of any type not listed here are served by the
+ * general caches.
+ */
+enum kmem_bucket_type {
+	KMEM_BUCKET_NORMAL = 0,
+#ifdef CONFIG_MEMCG
+	KMEM_BUCKET_CGROUP,
+#else
+	KMEM_BUCKET_CGROUP = KMEM_BUCKET_NORMAL,
+#endif
+	NR_KMEM_BUCKET_TYPES
+};
+
+/*
  * Define gfp bits that should not be set for KMALLOC_NORMAL.
  */
 #define KMALLOC_NOT_NORMAL_BITS					\
@@ -890,9 +908,51 @@ void *kmem_cache_alloc_lru_noprof(struct kmem_cache *s, struct list_lru *lru,
 bool kmem_cache_charge(void *objp, gfp_t gfpflags);
 void kmem_cache_free(struct kmem_cache *s, void *objp);
 
-kmem_buckets *kmem_buckets_create(const char *name, slab_flags_t flags,
-				  unsigned int useroffset, unsigned int usersize,
-				  void (*ctor)(void *));
+kmem_buckets *kmem_buckets_create_types(const char *name, unsigned int align,
+					slab_flags_t flags,
+					unsigned int useroffset, unsigned int usersize,
+					void (*ctor)(void *),
+					unsigned int type_mask);
+
+/**
+ * kmem_buckets_create - Create a set of caches that handle dynamic sized
+ *			 allocations via kmem_buckets_alloc()
+ * @name: A prefix string which is used in /proc/slabinfo to identify this
+ *	  cache. The individual caches with have their sizes as the suffix.
+ * @align: The required alignment for the objects, or 0 to give each cache
+ *	   the alignment of the kmalloc cache of the same size, as a caller
+ *	   moving from kmalloc() may depend on.
+ * @flags: SLAB flags (see kmem_cache_create() for details).
+ * @useroffset: Starting offset within an allocation that may be copied
+ *		to/from userspace.
+ * @usersize: How many bytes, starting at @useroffset, may be copied
+ *		to/from userspace.
+ * @ctor: A constructor for the objects, run when new allocations are made.
+ *
+ * Covers KMEM_BUCKET_NORMAL only. Allocations needing another kmalloc type
+ * are served by the general caches, keeping the type they asked for and
+ * losing only the isolation. Use kmem_buckets_create_types() to cover more.
+ *
+ * Context: Cannot be called within an interrupt, but can be interrupted.
+ *
+ * Return: a pointer to the cache on success, NULL on failure. When
+ * CONFIG_SLAB_BUCKETS is not enabled, ZERO_SIZE_PTR is returned, and
+ * subsequent calls to kmem_buckets_alloc() will fall back to kmalloc().
+ * (i.e. callers only need to check for NULL on failure.)
+ */
+static inline kmem_buckets *kmem_buckets_create(const char *name,
+						unsigned int align,
+						slab_flags_t flags,
+						unsigned int useroffset,
+						unsigned int usersize,
+						void (*ctor)(void *))
+{
+	return kmem_buckets_create_types(name, align, flags, useroffset,
+					 usersize, ctor,
+					 BIT(KMEM_BUCKET_NORMAL));
+}
+
+void kmem_buckets_destroy(kmem_buckets *bucket);
 
 /*
  * Bulk allocation and freeing operations. These are accelerated in an

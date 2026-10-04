@@ -7,7 +7,11 @@
 #include <linux/netdevice.h>
 #include <linux/ip.h>
 #include <linux/ipv6.h>
+#include <linux/tcp.h>
+#include <linux/udp.h>
+#include <net/ip.h>
 #include <net/ip6_checksum.h>
+#include <net/ipv6.h>
 #include <linux/bitfield.h>
 #include "rmnet_config.h"
 #include "rmnet_map.h"
@@ -16,6 +20,19 @@
 
 #define RMNET_MAP_DEAGGR_SPACING  64
 #define RMNET_MAP_DEAGGR_HEADROOM (RMNET_MAP_DEAGGR_SPACING / 2)
+
+struct rmnet_map_coal_metadata {
+	void *ip_header;
+	void *trans_header;
+	u16 ip_len;
+	u16 trans_len;
+	u16 data_offset;
+	u16 data_len;
+	u8 ip_proto;
+	u8 trans_proto;
+	u8 pkt_count;
+	bool zero_csum;
+};
 
 static __sum16 *rmnet_map_get_csum_field(unsigned char protocol,
 					 const void *txporthdr)
@@ -294,7 +311,7 @@ sw_csum:
  */
 struct rmnet_map_header *rmnet_map_add_map_header(struct sk_buff *skb,
 						  int hdrlen,
-						  struct rmnet_port *port,
+						  u32 data_format,
 						  int pad)
 {
 	struct rmnet_map_header *map_header;
@@ -306,7 +323,7 @@ struct rmnet_map_header *rmnet_map_add_map_header(struct sk_buff *skb,
 	memset(map_header, 0, sizeof(struct rmnet_map_header));
 
 	/* Set next_hdr bit for csum offload packets */
-	if (port->data_format & RMNET_FLAGS_EGRESS_MAP_CKSUMV5)
+	if (data_format & RMNET_FLAGS_EGRESS_MAP_CKSUMV5)
 		map_header->flags |= MAP_NEXT_HEADER_FLAG;
 
 	if (pad == RMNET_MAP_NO_PAD_BYTES) {
@@ -333,12 +350,12 @@ done:
 	return map_header;
 }
 
-u32 rmnet_map_validate_packet_len(struct sk_buff *skb, struct rmnet_port *port)
+u32 rmnet_map_validate_packet_len(struct sk_buff *skb, u32 data_format)
 {
 	struct rmnet_map_v5_csum_header *next_hdr = NULL;
 	struct rmnet_map_header *maph;
-	void *data = skb->data;
 	u32 packet_len;
+	u8 hdr_type;
 
 	if (skb->len < sizeof(*maph))
 		return 0;
@@ -351,24 +368,28 @@ u32 rmnet_map_validate_packet_len(struct sk_buff *skb, struct rmnet_port *port)
 
 	packet_len = ntohs(maph->pkt_len) + sizeof(*maph);
 
-	if (port->data_format & RMNET_FLAGS_INGRESS_MAP_CKSUMV4) {
+	if (data_format & RMNET_FLAGS_INGRESS_MAP_CKSUMV4) {
 		packet_len += sizeof(struct rmnet_map_dl_csum_trailer);
-	} else if ((port->data_format & RMNET_FLAGS_INGRESS_MAP_CKSUMV5) &&
+	} else if ((data_format &
+		    (RMNET_FLAGS_INGRESS_MAP_CKSUMV5 | RMNET_FLAGS_INGRESS_COALESCE)) &&
 		   !(maph->flags & MAP_CMD_FLAG)) {
-		/* Mapv5 data pkt without csum hdr is invalid */
 		if (!(maph->flags & MAP_NEXT_HEADER_FLAG))
 			return 0;
 
-		packet_len += sizeof(*next_hdr);
-		next_hdr = data + sizeof(*maph);
+		if (skb->len < sizeof(*maph) + sizeof(*next_hdr))
+			return 0;
+
+		next_hdr = (struct rmnet_map_v5_csum_header *)(skb->data + sizeof(*maph));
+		hdr_type = u8_get_bits(next_hdr->header_info,
+				       MAPV5_HDRINFO_HDR_TYPE_FMASK);
+
+		if (hdr_type == RMNET_MAP_HEADER_TYPE_CSUM_OFFLOAD)
+			packet_len += sizeof(*next_hdr);
+		else if (hdr_type != RMNET_MAP_HEADER_TYPE_COALESCING)
+			return 0;
 	}
 
 	if (skb->len < packet_len)
-		return 0;
-
-	if (next_hdr &&
-	    u8_get_bits(next_hdr->header_info, MAPV5_HDRINFO_HDR_TYPE_FMASK) !=
-	    RMNET_MAP_HEADER_TYPE_CSUM_OFFLOAD)
 		return 0;
 
 	return packet_len;
@@ -381,16 +402,16 @@ u32 rmnet_map_validate_packet_len(struct sk_buff *skb, struct rmnet_port *port)
  * is responsible for freeing the original skb.
  */
 struct sk_buff *rmnet_map_deaggregate(struct sk_buff *skb,
-				      struct rmnet_port *port)
+				      u32 data_format)
 {
 	struct sk_buff *skbn;
 	u32 packet_len;
 
-	packet_len = rmnet_map_validate_packet_len(skb, port);
+	packet_len = rmnet_map_validate_packet_len(skb, data_format);
 	if (!packet_len)
 		return NULL;
 
-	skbn = alloc_skb(packet_len + RMNET_MAP_DEAGGR_SPACING, GFP_ATOMIC);
+	skbn = netdev_alloc_skb(skb->dev, packet_len + RMNET_MAP_DEAGGR_SPACING);
 	if (!skbn)
 		return NULL;
 
@@ -497,34 +518,670 @@ void rmnet_map_checksum_uplink_packet(struct sk_buff *skb,
 	}
 }
 
-/* Process a MAPv5 packet header */
-int rmnet_map_process_next_hdr_packet(struct sk_buff *skb,
-				      u16 len)
+static struct rmnet_map_v5_csum_header *
+rmnet_map_get_next_hdr(struct sk_buff *skb)
 {
-	struct rmnet_priv *priv = netdev_priv(skb->dev);
-	struct rmnet_map_v5_csum_header *next_hdr;
-	u8 nexthdr_type;
+	return (struct rmnet_map_v5_csum_header *)(skb->data +
+						   sizeof(struct rmnet_map_header));
+}
 
-	next_hdr = (struct rmnet_map_v5_csum_header *)(skb->data +
-			sizeof(struct rmnet_map_header));
+static u8 rmnet_map_get_next_hdr_type(struct sk_buff *skb)
+{
+	struct rmnet_map_v5_csum_header *hdr = rmnet_map_get_next_hdr(skb);
 
-	nexthdr_type = u8_get_bits(next_hdr->header_info,
-				   MAPV5_HDRINFO_HDR_TYPE_FMASK);
+	return u8_get_bits(hdr->header_info, MAPV5_HDRINFO_HDR_TYPE_FMASK);
+}
 
-	if (nexthdr_type != RMNET_MAP_HEADER_TYPE_CSUM_OFFLOAD)
-		return -EINVAL;
+static bool rmnet_map_get_csum_valid(struct sk_buff *skb)
+{
+	struct rmnet_map_v5_csum_header *hdr = rmnet_map_get_next_hdr(skb);
 
-	if (unlikely(!(skb->dev->features & NETIF_F_RXCSUM))) {
-		priv->stats.csum_sw++;
-	} else if (next_hdr->csum_info & MAPV5_CSUMINFO_VALID_FLAG) {
-		priv->stats.csum_ok++;
-		skb->ip_summed = CHECKSUM_UNNECESSARY;
+	return !!(hdr->csum_info & MAPV5_CSUMINFO_VALID_FLAG);
+}
+
+/* Stamp GSO metadata so the network stack can segment a coalesced SKB. */
+static void rmnet_map_gso_stamp(struct sk_buff *skb,
+				struct rmnet_map_coal_metadata *coal_meta)
+{
+	struct skb_shared_info *shinfo = skb_shinfo(skb);
+
+	if (coal_meta->trans_proto == IPPROTO_TCP)
+		shinfo->gso_type = (coal_meta->ip_proto == 4) ?
+				   SKB_GSO_TCPV4 : SKB_GSO_TCPV6;
+	else
+		shinfo->gso_type = SKB_GSO_UDP_L4;
+
+	shinfo->gso_size = coal_meta->data_len;
+	shinfo->gso_segs = coal_meta->pkt_count;
+}
+
+/* Set the transport checksum to the pseudo-header checksum and request
+ * partial checksum offload, letting the NIC or stack finish it.
+ */
+static void rmnet_map_partial_csum(struct sk_buff *skb,
+				   struct rmnet_map_coal_metadata *coal_meta)
+{
+	u16 pkt_len = skb->len - coal_meta->ip_len;
+	unsigned char *data = skb->data;
+	__sum16 pseudo;
+
+	if (coal_meta->ip_proto == 4) {
+		struct iphdr *iph = (struct iphdr *)data;
+
+		pseudo = ~csum_tcpudp_magic(iph->saddr, iph->daddr,
+					    pkt_len, coal_meta->trans_proto, 0);
 	} else {
-		priv->stats.csum_valid_unset++;
+		struct ipv6hdr *ip6h = (struct ipv6hdr *)data;
+
+		pseudo = ~csum_ipv6_magic(&ip6h->saddr, &ip6h->daddr,
+					  pkt_len, coal_meta->trans_proto, 0);
 	}
 
-	/* Pull csum v5 header */
-	skb_pull(skb, sizeof(*next_hdr));
+	if (coal_meta->trans_proto == IPPROTO_TCP) {
+		struct tcphdr *tp = (struct tcphdr *)(data + coal_meta->ip_len);
+
+		tp->check = pseudo;
+		skb->csum_offset = offsetof(struct tcphdr, check);
+	} else {
+		struct udphdr *up = (struct udphdr *)(data + coal_meta->ip_len);
+
+		up->check = pseudo;
+		skb->csum_offset = offsetof(struct udphdr, check);
+	}
+
+	skb->ip_summed = CHECKSUM_PARTIAL;
+	skb->csum_start = skb->data + coal_meta->ip_len - skb->head;
+}
+
+/* On some hardware, num_nlos in the coalescing header can be reported
+ * incorrectly under certain conditions even though the per-NLO num_packets
+ * fields it is meant to summarize are correct. Recompute the true NLO count
+ * directly from the nl_pairs[] content rather than trusting the declared
+ * value, so that rmnet_map_v5_csum_fixup()'s single NLO, single packet check
+ * is reliable.
+ */
+static void rmnet_map_v5_fixup_num_nlos(struct rmnet_map_v5_coal_header *coal_hdr)
+{
+	u8 nlos = 0;
+	int i;
+
+	for (i = 0; i < RMNET_MAP_V5_MAX_NLOS; i++) {
+		if (coal_hdr->nl_pairs[i].num_packets)
+			nlos++;
+	}
+
+	coal_hdr->coal_info = u8_encode_bits(nlos, MAPV5_COALINFO_NUM_NLOS_FMASK) |
+			      (coal_hdr->coal_info & MAPV5_COALINFO_CSUM_VALID_FLAG);
+}
+
+/* The checksum valid indication for a single NLO, single packet coalescing
+ * frame cannot be trusted when the close reason is a TCP FIN/PSH, a packet
+ * count limit, a byte count limit or a time limit.
+ */
+static bool rmnet_map_v5_csum_fixup(struct rmnet_map_v5_coal_header *coal_hdr)
+{
+	u8 close_value = u8_get_bits(coal_hdr->close_info,
+				     MAPV5_CLOSEINFO_CLOSE_VALUE_FMASK);
+	u8 close_type = u8_get_bits(coal_hdr->close_info,
+				    MAPV5_CLOSEINFO_CLOSE_TYPE_FMASK);
+	u8 num_nlos = u8_get_bits(coal_hdr->coal_info,
+				  MAPV5_COALINFO_NUM_NLOS_FMASK);
+
+	/* Only applies to single NLO, single packet frames */
+	if (num_nlos != 1 || coal_hdr->nl_pairs[0].num_packets != 1)
+		return false;
+
+	/* TCP FIN or PSH triggered the close */
+	if (close_type == RMNET_MAP_COAL_CLOSE_COAL)
+		return true;
+
+	/* Hit a hardware limit */
+	if (close_type == RMNET_MAP_COAL_CLOSE_HW) {
+		switch (close_value) {
+		case RMNET_MAP_COAL_CLOSE_HW_PKT:
+		case RMNET_MAP_COAL_CLOSE_HW_BYTE:
+		case RMNET_MAP_COAL_CLOSE_HW_TIME:
+			return true;
+		}
+	}
+
+	return false;
+}
+
+/* Carve one logical segment from a coalesced SKB and append it to the list.
+ * Adjusts TCP sequence numbers, IP IDs/lengths, and checksum state.
+ */
+static void
+__rmnet_map_segment_coal_skb(struct sk_buff *coal_skb,
+			     struct rmnet_map_coal_metadata *coal_meta,
+			     struct sk_buff_head *list, u8 pkt_id,
+			     bool csum_valid)
+{
+	u32 dlen = coal_meta->data_len * coal_meta->pkt_count;
+	struct rmnet_priv *priv = netdev_priv(coal_skb->dev);
+	u32 hlen = coal_meta->ip_len + coal_meta->trans_len;
+	struct sk_buff *skbn;
+
+	/* RFC 768: UDP checksum is optional for IPv4, and is 0 if unused.
+	 * Such packets are never actually bad, regardless of what the
+	 * checksum bitmap says.
+	 */
+	if (!csum_valid && coal_meta->zero_csum)
+		csum_valid = true;
+
+	if (!csum_valid) {
+		priv->stats.coal_csum_drop++;
+		goto next_pkt;
+	}
+
+	skbn = alloc_skb(hlen + dlen + RMNET_MAP_DEAGGR_HEADROOM, GFP_ATOMIC);
+	if (!skbn)
+		goto next_pkt;
+
+	skb_reserve(skbn, hlen + RMNET_MAP_DEAGGR_HEADROOM);
+	skb_put_data(skbn,
+		     coal_skb->data + coal_meta->ip_len + coal_meta->trans_len +
+		     coal_meta->data_offset,
+		     dlen);
+
+	/* Restore transport header */
+	skb_push(skbn, coal_meta->trans_len);
+	memcpy(skbn->data, coal_meta->trans_header, coal_meta->trans_len);
+	skb_reset_transport_header(skbn);
+
+	if (coal_meta->trans_proto == IPPROTO_TCP) {
+		struct tcphdr *th = tcp_hdr(skbn);
+
+		th->seq = htonl(ntohl(th->seq) + coal_meta->data_offset);
+		/* Strip dangerous flags from non-final segments */
+		if ((th->fin || th->psh) &&
+		    hlen + coal_meta->data_offset + dlen < coal_skb->len) {
+			th->fin = 0;
+			th->psh = 0;
+		}
+	} else if (coal_meta->trans_proto == IPPROTO_UDP) {
+		struct udphdr *uh = udp_hdr(skbn);
+
+		uh->len = htons(skbn->len);
+	}
+
+	/* Restore IP header */
+	skb_push(skbn, coal_meta->ip_len);
+	memcpy(skbn->data, coal_meta->ip_header, coal_meta->ip_len);
+	skb_reset_network_header(skbn);
+
+	if (coal_meta->ip_proto == 4) {
+		struct iphdr *iph = ip_hdr(skbn);
+
+		iph->id = htons(ntohs(iph->id) + pkt_id);
+		iph->tot_len = htons(skbn->len);
+		iph->check = 0;
+		iph->check = ip_fast_csum(iph, iph->ihl);
+	} else {
+		ipv6_hdr(skbn)->payload_len =
+			htons(skbn->len - sizeof(struct ipv6hdr));
+	}
+
+	rmnet_map_partial_csum(skbn, coal_meta);
+
+	skbn->dev = coal_skb->dev;
+	priv->stats.coal_reconstruct++;
+
+	if (coal_meta->pkt_count > 1)
+		rmnet_map_gso_stamp(skbn, coal_meta);
+
+	__skb_queue_tail(list, skbn);
+
+next_pkt:
+	coal_meta->data_offset += dlen;
+	coal_meta->pkt_count = 0;
+}
+
+/* Parse the IP header of the coalesced frame and perform basic
+ * validation of header fields.
+ */
+static bool rmnet_map_coal_parse_ip_hdr(struct sk_buff *coal_skb,
+					struct rmnet_map_coal_metadata *meta,
+					bool *gro)
+{
+	struct rmnet_priv *priv = netdev_priv(coal_skb->dev);
+	struct ipv6hdr *ip6h;
+	struct iphdr *iph;
+	__be16 frag_off;
+	u8 protocol;
+	int ret;
+
+	if (coal_skb->len < sizeof(*iph)) {
+		priv->stats.coal_ip_invalid++;
+		return false;
+	}
+
+	iph = (struct iphdr *)coal_skb->data;
+
+	if (iph->version == 4) {
+		meta->ip_proto = 4;
+		meta->ip_len = iph->ihl * 4;
+		meta->trans_proto = iph->protocol;
+		meta->ip_header = iph;
+		if (meta->ip_len < sizeof(*iph) || coal_skb->len < meta->ip_len) {
+			priv->stats.coal_ip_invalid++;
+			return false;
+		}
+
+		if (ip_is_fragment(iph)) {
+			priv->stats.coal_ip_invalid++;
+			return false;
+		}
+
+		if (iph->ihl != 5)
+			*gro = false;
+	} else if (iph->version == 6) {
+		if (coal_skb->len < sizeof(*ip6h)) {
+			priv->stats.coal_ip_invalid++;
+			return false;
+		}
+
+		ip6h = (struct ipv6hdr *)iph;
+		protocol = ip6h->nexthdr;
+		meta->ip_proto = 6;
+		ret = ipv6_skip_exthdr(coal_skb, sizeof(*ip6h), &protocol,
+				       &frag_off);
+		if (ret < 0 || frag_off) {
+			priv->stats.coal_ip_invalid++;
+			return false;
+		}
+
+		meta->ip_len = (u16)ret;
+		meta->trans_proto = protocol;
+		meta->ip_header = ip6h;
+		if (meta->ip_len > sizeof(*ip6h))
+			*gro = false;
+	} else {
+		priv->stats.coal_ip_invalid++;
+		return false;
+	}
+
+	return true;
+}
+
+/* Parse the transport header following the IP header into coal_meta. The
+ * available length is checked before any field is read.
+ */
+static bool rmnet_map_coal_parse_trans_hdr(struct sk_buff *coal_skb,
+					   struct rmnet_map_coal_metadata *meta)
+{
+	struct rmnet_priv *priv = netdev_priv(coal_skb->dev);
+	struct udphdr *uh;
+	struct tcphdr *th;
+	u32 avail;
+	u8 *base;
+
+	base = (u8 *)meta->ip_header + meta->ip_len;
+	avail = coal_skb->len - meta->ip_len;
+
+	if (meta->trans_proto == IPPROTO_TCP) {
+		if (avail < sizeof(*th)) {
+			priv->stats.coal_trans_invalid++;
+			return false;
+		}
+
+		th = (struct tcphdr *)base;
+		meta->trans_len = th->doff * 4;
+		meta->trans_header = th;
+		if (meta->trans_len < sizeof(*th) || avail < meta->trans_len) {
+			priv->stats.coal_trans_invalid++;
+			return false;
+		}
+	} else if (meta->trans_proto == IPPROTO_UDP) {
+		if (avail < sizeof(*uh)) {
+			priv->stats.coal_trans_invalid++;
+			return false;
+		}
+
+		uh = (struct udphdr *)base;
+		meta->trans_len = sizeof(*uh);
+		meta->trans_header = uh;
+		if (meta->ip_proto == 4 && !uh->check)
+			meta->zero_csum = true;
+	} else {
+		priv->stats.coal_trans_invalid++;
+		return false;
+	}
+
+	return true;
+}
+
+/* Reject the frame if the total data bytes claimed by all NLOs exceed
+ * the actual payload in the SKB.  Each pkt_len covers IP+transport
+ * headers plus per-packet data. Headers appear once, so subtract hlen
+ * per packet and check the running sum against available data.
+ */
+static bool rmnet_map_coal_validate_bounds(struct sk_buff *coal_skb,
+					   struct rmnet_map_v5_coal_header *coal_hdr,
+					   u8 num_nlos, u32 hlen)
+{
+	u32 total_data = 0;
+	u32 nlo_len;
+	u16 plen;
+	u8 i;
+
+	for (i = 0; i < num_nlos; i++) {
+		plen = ntohs(coal_hdr->nl_pairs[i].pkt_len);
+
+		if (plen < hlen)
+			return false;
+
+		nlo_len = (u32)(plen - hlen) * coal_hdr->nl_pairs[i].num_packets;
+		if (total_data + nlo_len > coal_skb->len - hlen)
+			return false;
+
+		total_data += nlo_len;
+	}
+
+	return true;
+}
+
+/* Attempt the GRO-friendly fast path for a single-NLO, checksum-valid frame
+ * by reusing the original SKB and stamping GSO metadata instead of copying
+ * out each segment.  Returns true if the frame was consumed via the fast
+ * path, or false if the caller should fall back to full segmentation.
+ */
+static bool rmnet_map_coal_gro_fast_path(struct sk_buff *coal_skb,
+					 struct rmnet_map_v5_coal_header *coal_hdr,
+					 struct rmnet_map_coal_metadata *coal_meta,
+					 struct sk_buff_head *list,
+					 u8 num_nlos, bool gro)
+{
+	u32 hlen = coal_meta->ip_len + coal_meta->trans_len;
+
+	if (!gro || num_nlos != 1 ||
+	    !(coal_hdr->coal_info & MAPV5_COALINFO_CSUM_VALID_FLAG))
+		return false;
+
+	coal_meta->data_len = ntohs(coal_hdr->nl_pairs[0].pkt_len) - hlen;
+	coal_meta->pkt_count = coal_hdr->nl_pairs[0].num_packets;
+
+	coal_skb->ip_summed = CHECKSUM_UNNECESSARY;
+	if (coal_meta->pkt_count > 1) {
+		rmnet_map_partial_csum(coal_skb, coal_meta);
+		rmnet_map_gso_stamp(coal_skb, coal_meta);
+	}
+
+	__skb_queue_tail(list, coal_skb);
+	return true;
+}
+
+/* NLO packet lengths are already bounds-checked by
+ * rmnet_map_coal_validate_bounds() so no further validation is needed here.
+ */
+static void rmnet_map_coal_segment_loop(struct sk_buff *coal_skb,
+					struct rmnet_map_v5_coal_header *coal_hdr,
+					struct rmnet_map_coal_metadata *coal_meta,
+					struct sk_buff_head *list,
+					u64 nlo_err_mask, bool gro, u8 num_nlos)
+{
+	struct rmnet_priv *priv = netdev_priv(coal_skb->dev);
+	u32 hlen = coal_meta->ip_len + coal_meta->trans_len;
+	u8 pkt, total_pkt = 0;
+	bool csum_err;
+	u16 pkt_len;
+	u8 nlo;
+
+	for (nlo = 0; nlo < num_nlos; nlo++) {
+		pkt_len = ntohs(coal_hdr->nl_pairs[nlo].pkt_len);
+		pkt_len -= hlen;
+		coal_meta->data_len = pkt_len;
+
+		/* nlo_err_mask is one flat bitstream across all NLOs. Shift
+		 * it once per packet in absolute frame order and do not
+		 * re-align at the NLO boundary above. See the comment on
+		 * rmnet_map_data_check_coal_header() for why.
+		 */
+		for (pkt = 0; pkt < coal_hdr->nl_pairs[nlo].num_packets;
+		     pkt++, total_pkt++, nlo_err_mask >>= 1) {
+			csum_err = nlo_err_mask & 1;
+
+			if (csum_err)
+				priv->stats.coal_csum_err++;
+
+			if (!gro) {
+				coal_meta->pkt_count = 1;
+				__rmnet_map_segment_coal_skb(coal_skb, coal_meta,
+							     list, total_pkt,
+							     !csum_err);
+				continue;
+			}
+
+			if (csum_err) {
+				if (coal_meta->pkt_count)
+					__rmnet_map_segment_coal_skb(coal_skb,
+								     coal_meta,
+								     list,
+								     total_pkt,
+								     true);
+				coal_meta->pkt_count = 1;
+				__rmnet_map_segment_coal_skb(coal_skb, coal_meta,
+							     list, total_pkt,
+							     false);
+			} else {
+				coal_meta->pkt_count++;
+			}
+		}
+
+		/* Flush remaining packets from this NLO */
+		if (coal_meta->pkt_count)
+			__rmnet_map_segment_coal_skb(coal_skb, coal_meta, list,
+						     total_pkt, true);
+	}
+}
+
+/* Expand a coalesced SKB into individual IP packets placed on the list.
+ * NLOs with checksum errors are dropped. __rmnet_map_ingress_handler will
+ * free the SKB in the error case.
+ */
+static int rmnet_map_segment_coal_skb(struct sk_buff *coal_skb,
+				      u64 nlo_err_mask,
+				      struct sk_buff_head *list,
+				      u16 len)
+{
+	bool gro = coal_skb->dev->features & NETIF_F_GRO_HW;
+	struct rmnet_map_v5_coal_header *coal_hdr;
+	struct rmnet_map_coal_metadata coal_meta;
+	u8 num_nlos;
+	u32 hlen;
+
+	memset(&coal_meta, 0, sizeof(coal_meta));
+
+	/* Drop any MAP frame padding. The coal header is counted in len */
+	skb_pull(coal_skb, sizeof(struct rmnet_map_header));
+	skb_trim(coal_skb, len);
+	coal_hdr = (struct rmnet_map_v5_coal_header *)coal_skb->data;
+	rmnet_map_v5_fixup_num_nlos(coal_hdr);
+	num_nlos = u8_get_bits(coal_hdr->coal_info, MAPV5_COALINFO_NUM_NLOS_FMASK);
+	skb_pull(coal_skb, sizeof(*coal_hdr));
+
+	if (!rmnet_map_coal_parse_ip_hdr(coal_skb, &coal_meta, &gro))
+		return -EINVAL;
+
+	if (!rmnet_map_coal_parse_trans_hdr(coal_skb, &coal_meta))
+		return -EINVAL;
+
+	hlen = coal_meta.ip_len + coal_meta.trans_len;
+
+	if (!rmnet_map_coal_validate_bounds(coal_skb, coal_hdr, num_nlos, hlen))
+		return -EINVAL;
+
+	if (rmnet_map_v5_csum_fixup(coal_hdr) && !coal_meta.zero_csum) {
+		coal_skb->ip_summed = CHECKSUM_NONE;
+		__skb_queue_tail(list, coal_skb);
+		return 0;
+	}
+
+	if (rmnet_map_coal_gro_fast_path(coal_skb, coal_hdr, &coal_meta, list,
+					 num_nlos, gro))
+		return 0;
+
+	rmnet_map_coal_segment_loop(coal_skb, coal_hdr, &coal_meta, list,
+				    nlo_err_mask, gro, num_nlos);
+
+	return 0;
+}
+
+/* Log the hardware close-reason counter for a coalescing header. */
+static void rmnet_map_data_log_close_stats(struct rmnet_priv *priv,
+					   u8 type, u8 code)
+{
+	switch (type) {
+	case RMNET_MAP_COAL_CLOSE_NON_COAL:
+		priv->stats.coal_close_non_coal++;
+		break;
+	case RMNET_MAP_COAL_CLOSE_IP_MISS:
+		priv->stats.coal_close_ip_miss++;
+		break;
+	case RMNET_MAP_COAL_CLOSE_TRANS_MISS:
+		priv->stats.coal_close_trans_miss++;
+		break;
+	case RMNET_MAP_COAL_CLOSE_HW:
+		switch (code) {
+		case RMNET_MAP_COAL_CLOSE_HW_NL:
+			priv->stats.coal_close_hw_nl++;
+			break;
+		case RMNET_MAP_COAL_CLOSE_HW_PKT:
+			priv->stats.coal_close_hw_pkt++;
+			break;
+		case RMNET_MAP_COAL_CLOSE_HW_BYTE:
+			priv->stats.coal_close_hw_byte++;
+			break;
+		case RMNET_MAP_COAL_CLOSE_HW_TIME:
+			priv->stats.coal_close_hw_time++;
+			break;
+		case RMNET_MAP_COAL_CLOSE_HW_EVICT:
+			priv->stats.coal_close_hw_evict++;
+			break;
+		default:
+			break;
+		}
+		break;
+	case RMNET_MAP_COAL_CLOSE_COAL:
+		priv->stats.coal_close_coal++;
+		break;
+	default:
+		break;
+	}
+}
+
+/* Validate the coalescing header and build the checksum error mask.
+ *
+ * Checks performed:
+ *  - MAP pkt_len accommodates the coal header (coal header is counted in
+ *    pkt_len. pkt_len < sizeof(*coal_hdr) means no payload is possible).
+ *  - num_nlos is in [1, RMNET_MAP_V5_MAX_NLOS].
+ *  - Total packet count does not exceed RMNET_MAP_V5_MAX_PACKETS.
+ *
+ * nlo_err_mask is NOT six independent per-NLO bitmaps. Each nl_pairs
+ * slot only has room for an 8 bit csum_error_bitmap, but a single NLO
+ * can carry more than 8 packets (up to RMNET_MAP_V5_MAX_PACKETS), so
+ * hardware spills a wide NLO's error bits into the csum_error_bitmap
+ * bytes of the following slots rather than truncating them. The
+ * six bitmap bytes are therefore always concatenated in slot order
+ * into one flat RMNET_MAP_V5_MAX_NLOS * 8 = RMNET_MAP_V5_MAX_PACKETS
+ * bit value, addressed by a packet's absolute position in the frame,
+ * regardless of how many NLOs are actually in use. Receivers must
+ * walk it as a single contiguous stream and must not expect it to
+ * align it at NLO boundaries.
+ */
+static int rmnet_map_data_check_coal_header(struct sk_buff *skb,
+					    u64 *nlo_err_mask)
+{
+	struct rmnet_map_header *maph = (struct rmnet_map_header *)skb->data;
+	struct rmnet_priv *priv = netdev_priv(skb->dev);
+	struct rmnet_map_v5_coal_header *coal_hdr;
+	u8 num_nlos, pkts = 0;
+	u64 mask = 0;
+	int i;
+
+	/* coal header is counted in pkt_len */
+	if (ntohs(maph->pkt_len) < sizeof(*coal_hdr)) {
+		priv->stats.coal_hdr_nlo_err++;
+		return -EINVAL;
+	}
+
+	coal_hdr = (struct rmnet_map_v5_coal_header *)(skb->data + sizeof(*maph));
+	num_nlos = u8_get_bits(coal_hdr->coal_info, MAPV5_COALINFO_NUM_NLOS_FMASK);
+
+	if (num_nlos == 0 || num_nlos > RMNET_MAP_V5_MAX_NLOS) {
+		priv->stats.coal_hdr_nlo_err++;
+		return -EINVAL;
+	}
+
+	for (i = 0; i < RMNET_MAP_V5_MAX_NLOS; i++) {
+		u8 err = coal_hdr->nl_pairs[i].csum_error_bitmap;
+		u8 pkt = coal_hdr->nl_pairs[i].num_packets;
+
+		mask |= ((u64)err) << (8 * i);
+		pkts += pkt;
+		if (pkts > RMNET_MAP_V5_MAX_PACKETS) {
+			priv->stats.coal_hdr_pkt_err++;
+			return -EINVAL;
+		}
+	}
+
+	priv->stats.coal_pkts += pkts;
+	rmnet_map_data_log_close_stats(priv,
+				       u8_get_bits(coal_hdr->close_info,
+						   MAPV5_CLOSEINFO_CLOSE_TYPE_FMASK),
+				       u8_get_bits(coal_hdr->close_info,
+						   MAPV5_CLOSEINFO_CLOSE_VALUE_FMASK));
+
+	*nlo_err_mask = mask;
+	return 0;
+}
+
+int rmnet_map_process_next_hdr_packet(struct sk_buff *skb,
+				      struct sk_buff_head *list,
+				      u16 len, u32 data_format)
+{
+	struct rmnet_priv *priv = netdev_priv(skb->dev);
+	u64 nlo_err_mask;
+	int rc;
+
+	switch (rmnet_map_get_next_hdr_type(skb)) {
+	case RMNET_MAP_HEADER_TYPE_COALESCING:
+		if (!(data_format & RMNET_FLAGS_INGRESS_COALESCE))
+			return -EINVAL;
+
+		priv->stats.coal_rx++;
+		rc = rmnet_map_data_check_coal_header(skb, &nlo_err_mask);
+		if (rc)
+			return rc;
+
+		rc = rmnet_map_segment_coal_skb(skb, nlo_err_mask, list, len);
+		if (rc)
+			return rc;
+
+		if (skb_peek(list) != skb)
+			consume_skb(skb);
+		break;
+
+	case RMNET_MAP_HEADER_TYPE_CSUM_OFFLOAD:
+		if (unlikely(!(skb->dev->features & NETIF_F_RXCSUM))) {
+			priv->stats.csum_sw++;
+		} else if (rmnet_map_get_csum_valid(skb)) {
+			priv->stats.csum_ok++;
+			skb->ip_summed = CHECKSUM_UNNECESSARY;
+		} else {
+			priv->stats.csum_valid_unset++;
+		}
+
+		skb_pull(skb, sizeof(struct rmnet_map_header) +
+			      sizeof(struct rmnet_map_v5_csum_header));
+		skb_trim(skb, len);
+		__skb_queue_tail(list, skb);
+		break;
+
+	default:
+		return -EINVAL;
+	}
 
 	return 0;
 }
@@ -536,7 +1193,7 @@ static void reset_aggr_params(struct rmnet_port *port)
 	port->skbagg_head = NULL;
 	port->agg_count = 0;
 	port->agg_state = 0;
-	memset(&port->agg_time, 0, sizeof(struct timespec64));
+	port->agg_time = 0;
 }
 
 static void rmnet_send_skb(struct rmnet_port *port, struct sk_buff *skb)
@@ -591,21 +1248,23 @@ static enum hrtimer_restart rmnet_map_flush_tx_packet_queue(struct hrtimer *t)
 unsigned int rmnet_map_tx_aggregate(struct sk_buff *skb, struct rmnet_port *port,
 				    struct net_device *orig_dev)
 {
-	struct timespec64 diff, last;
+	u64 diff, last, now;
 	unsigned int len = skb->len;
 	struct sk_buff *agg_skb;
 	int size;
 
 	spin_lock_bh(&port->agg_lock);
-	memcpy(&last, &port->agg_last, sizeof(struct timespec64));
-	ktime_get_real_ts64(&port->agg_last);
+	last = port->agg_last;
+
+	now = ktime_get_mono_fast_ns();
+	port->agg_last = now;
 
 	if (!port->skbagg_head) {
 		/* Check to see if we should agg first. If the traffic is very
 		 * sparse, don't aggregate.
 		 */
 new_packet:
-		diff = timespec64_sub(port->agg_last, last);
+		diff = now - last;
 		size = port->egress_agg_params.bytes - skb->len;
 
 		if (size < 0) {
@@ -614,8 +1273,7 @@ new_packet:
 			return 0;
 		}
 
-		if (diff.tv_sec > 0 || diff.tv_nsec > RMNET_AGG_BYPASS_TIME_NSEC ||
-		    size == 0)
+		if (diff > RMNET_AGG_BYPASS_TIME_NSEC || size == 0)
 			goto no_aggr;
 
 		port->skbagg_head = skb_copy_expand(skb, 0, size, GFP_ATOMIC);
@@ -625,11 +1283,12 @@ new_packet:
 		dev_kfree_skb_any(skb);
 		port->skbagg_head->protocol = htons(ETH_P_MAP);
 		port->agg_count = 1;
-		ktime_get_real_ts64(&port->agg_time);
+		port->agg_time = now;
 		skb_frag_list_init(port->skbagg_head);
 		goto schedule;
 	}
-	diff = timespec64_sub(port->agg_last, port->agg_time);
+
+	diff = now - port->agg_time;
 	size = port->egress_agg_params.bytes - port->skbagg_head->len;
 
 	if (skb->len > size) {
@@ -653,7 +1312,7 @@ new_packet:
 	port->skbagg_tail = skb;
 	port->agg_count++;
 
-	if (diff.tv_sec > 0 || diff.tv_nsec > port->egress_agg_params.time_nsec ||
+	if (diff > port->egress_agg_params.time_nsec ||
 	    port->agg_count >= port->egress_agg_params.count ||
 	    port->skbagg_head->len == port->egress_agg_params.bytes) {
 		agg_skb = port->skbagg_head;

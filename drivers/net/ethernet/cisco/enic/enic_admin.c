@@ -132,14 +132,22 @@ unsigned int enic_admin_wq_cq_service(struct enic *enic)
  */
 #define ENIC_ADMIN_MSG_MAX	256
 
+static void enic_admin_rx_lost(struct enic *enic)
+{
+	if (enic_is_sriov_vf_v2(enic))
+		enic_mbox_vf_require_reconnect(enic);
+}
+
 static void enic_admin_msg_enqueue(struct enic *enic, void *buf,
 				   unsigned int len)
 {
 	struct enic_admin_msg *msg;
 
 	msg = kmalloc_flex(*msg, data, len);
-	if (!msg)
+	if (!msg) {
+		enic_admin_rx_lost(enic);
 		return;
+	}
 
 	msg->len = len;
 	memcpy(msg->data, buf, len);
@@ -152,6 +160,7 @@ static void enic_admin_msg_enqueue(struct enic *enic, void *buf,
 			netdev_warn(enic->netdev,
 				    "admin msg backlog full (%u); dropping\n",
 				    ENIC_ADMIN_MSG_MAX);
+		enic_admin_rx_lost(enic);
 		return;
 	}
 	list_add_tail(&msg->list, &enic->admin_msg_list);
@@ -194,8 +203,10 @@ unsigned int enic_admin_rq_cq_service(struct enic *enic)
 		rq_desc = desc;
 		bwf = le16_to_cpu(rq_desc->bytes_written_flags);
 		bytes_written = bwf & CQ_ENET_RQ_DESC_BYTES_WRITTEN_MASK;
-		if (bytes_written > buf->len)
+		if (bytes_written > buf->len) {
+			enic_admin_rx_lost(enic);
 			goto next_desc;
+		}
 
 		dma_sync_single_for_cpu(&enic->pdev->dev,
 					buf->dma_addr, buf->len,
@@ -210,11 +221,13 @@ unsigned int enic_admin_rq_cq_service(struct enic *enic)
 		if (bwf & CQ_ENET_RQ_DESC_FLAGS_TRUNCATED) {
 			netdev_warn_once(enic->netdev,
 					 "admin RQ: truncated message dropped\n");
+			enic_admin_rx_lost(enic);
 			goto next_desc;
 		}
 		if (!(rq_desc->flags & CQ_ENET_RQ_DESC_FLAGS_FCS_OK)) {
 			netdev_warn_once(enic->netdev,
 					 "admin RQ: bad FCS, dropping message\n");
+			enic_admin_rx_lost(enic);
 			goto next_desc;
 		}
 
@@ -534,6 +547,11 @@ int enic_admin_channel_open(struct enic *enic)
 
 	if (!enic->has_admin_channel)
 		return -ENODEV;
+	if (READ_ONCE(enic->mbox_tx_poisoned)) {
+		netdev_err(enic->netdev,
+			   "Refusing to reopen admin channel after send timeout\n");
+		return -EIO;
+	}
 
 	/* Keep MBOX sends disabled for the entire open sequence.  It is
 	 * cleared only after every resource is allocated and enabled below,
@@ -623,6 +641,8 @@ void enic_admin_channel_close(struct enic *enic)
 {
 	int err;
 
+	if (enic_is_sriov_vf_v2(enic))
+		enic_vf_admin_mac_quiesce(enic);
 	if (!enic->has_admin_channel)
 		return;
 
@@ -641,6 +661,11 @@ void enic_admin_channel_close(struct enic *enic)
 	enic_admin_teardown_intr(enic);
 	cancel_work_sync(&enic->link_notify_work);
 	cancel_work_sync(&enic->admin_msg_work);
+	/* admin_msg_work is the sole VF ACK producer.  Drain it before the ACK
+	 * worker so an enqueue cannot race the final cancel and queue purge.
+	 */
+	if (enic_is_sriov_vf_v2(enic))
+		enic_mbox_vf_ack_cancel(enic);
 	enic_admin_msg_drain(enic);
 
 	enic_admin_qp_type_set(enic, QP_DISABLE);

@@ -467,8 +467,6 @@ enum efx_sync_events_state {
  * @irq_moderation_us: IRQ moderation value (in microseconds)
  * @napi_dev: Net device used with NAPI
  * @napi_str: NAPI control structure
- * @state: state for NAPI vs busy polling
- * @state_lock: lock protecting @state
  * @eventq: Event queue buffer
  * @eventq_mask: Event queue pointer mask
  * @eventq_read_ptr: Event queue read pointer
@@ -788,7 +786,7 @@ struct efx_rss_context_priv {
  * struct efx_rss_context - an RSS context
  * @priv: hardware-specific state
  * @rx_hash_key: Toeplitz hash key for this RSS context
- * @indir_table: Indirection table for this RSS context
+ * @rx_indir_table: Indirection table for this RSS context
  */
 struct efx_rss_context {
 	struct efx_rss_context_priv priv;
@@ -881,16 +879,14 @@ struct efx_mae;
  * @timer_max_ns: Interrupt timer maximum value, in nanoseconds
  * @irq_rx_adaptive: Adaptive IRQ moderation enabled for RX event queues
  * @irqs_hooked: Channel interrupts are hooked
- * @irq_rx_mod_step_us: Step size for IRQ moderation for RX event queues
+ * @irq_mod_step_us: Step size for IRQ moderation for RX event queues
  * @irq_rx_moderation_us: IRQ moderation time for RX event queues
  * @msg_enable: Log message enable flags
  * @state: Device state number (%STATE_*). Serialised by the rtnl_lock.
  * @reset_pending: Bitmask for pending resets
- * @tx_queue: TX DMA queues
- * @rx_queue: RX DMA queues
  * @channel: Channels
  * @msi_context: Context for each MSI
- * @extra_channel_types: Types of extra (non-traffic) channels that
+ * @extra_channel_type: Types of extra (non-traffic) channels that
  *	should be allocated for this NIC
  * @mae: Details of the Match Action Engine
  * @xdp_tx_queue_count: Number of entries in %xdp_tx_queues.
@@ -1711,8 +1707,11 @@ efx_rx_buf_next(struct efx_rx_queue *rx_queue, struct efx_rx_buffer *rx_buf)
 		return rx_buf + 1;
 }
 
+#define EFX_FRAME_PAD	16
+
 /**
  * EFX_MAX_FRAME_LEN - calculate maximum frame length
+ * @mtu: MTU to calculate the maximum frame length for
  *
  * This calculates the maximum frame length that will be used for a
  * given MTU.  The frame length will be equal to the MTU plus a
@@ -1726,9 +1725,8 @@ efx_rx_buf_next(struct efx_rx_queue *rx_queue, struct efx_rx_buffer *rx_buf)
  * Re-clocking by the XGXS on RX can reduce an IPG to 32 bits (half an
  * XGMII cycle).  If the frame length reaches the maximum value in the
  * same cycle, the XMAC can miss the IPG altogether.  We work around
- * this by adding a further 16 bytes.
+ * this by adding a further 16 bytes (EFX_FRAME_PAD).
  */
-#define EFX_FRAME_PAD	16
 #define EFX_MAX_FRAME_LEN(mtu) \
 	(ALIGN(((mtu) + ETH_HLEN + VLAN_HLEN + ETH_FCS_LEN + EFX_FRAME_PAD), 8))
 

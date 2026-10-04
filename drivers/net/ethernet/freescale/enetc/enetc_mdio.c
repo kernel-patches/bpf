@@ -22,9 +22,9 @@
  /* external MDIO only - driven on neg MDC edge */
 #define MDIO_CFG_NEG		BIT(23)
 
-#define ENETC_EMDIO_CFG \
+#define ENETC_EMDIO_CFG(mdc_div) \
 	(MDIO_CFG_HOLD(2) | \
-	 MDIO_CFG_CLKDIV(258) | \
+	 MDIO_CFG_CLKDIV(mdc_div) | \
 	 MDIO_CFG_NEG)
 
 #define MDIO_CTL_DEV_ADDR(x)	((x) & 0x1f)
@@ -63,7 +63,7 @@ int enetc_mdio_write_c22(struct mii_bus *bus, int phy_id, int regnum,
 	u16 dev_addr;
 	int ret;
 
-	mdio_cfg = ENETC_EMDIO_CFG;
+	mdio_cfg = ENETC_EMDIO_CFG(mdio_priv->mdc_div);
 	dev_addr = regnum & 0x1f;
 	mdio_cfg &= ~MDIO_CFG_ENC45;
 
@@ -95,7 +95,7 @@ int enetc_mdio_write_c45(struct mii_bus *bus, int phy_id, int dev_addr,
 	u32 mdio_ctl, mdio_cfg;
 	int ret;
 
-	mdio_cfg = ENETC_EMDIO_CFG;
+	mdio_cfg = ENETC_EMDIO_CFG(mdio_priv->mdc_div);
 	mdio_cfg |= MDIO_CFG_ENC45;
 
 	enetc_mdio_wr(mdio_priv, ENETC_MDIO_CFG, mdio_cfg);
@@ -133,7 +133,7 @@ int enetc_mdio_read_c22(struct mii_bus *bus, int phy_id, int regnum)
 	u16 dev_addr, value;
 	int ret;
 
-	mdio_cfg = ENETC_EMDIO_CFG;
+	mdio_cfg = ENETC_EMDIO_CFG(mdio_priv->mdc_div);
 	dev_addr = regnum & 0x1f;
 	mdio_cfg &= ~MDIO_CFG_ENC45;
 
@@ -176,7 +176,7 @@ int enetc_mdio_read_c45(struct mii_bus *bus, int phy_id, int dev_addr,
 	u16 value;
 	int ret;
 
-	mdio_cfg = ENETC_EMDIO_CFG;
+	mdio_cfg = ENETC_EMDIO_CFG(mdio_priv->mdc_div);
 	mdio_cfg |= MDIO_CFG_ENC45;
 
 	enetc_mdio_wr(mdio_priv, ENETC_MDIO_CFG, mdio_cfg);

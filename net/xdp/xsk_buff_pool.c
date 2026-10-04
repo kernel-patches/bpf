@@ -12,6 +12,11 @@
 
 #define ETH_PAD_LEN (ETH_HLEN + 2 * VLAN_HLEN  + ETH_FCS_LEN)
 
+/* Socket removal precedes the final pool put. Keep assigned pools visible to
+ * NETDEV_UNREGISTER even while their release work is waiting for process thaw.
+ */
+static LIST_HEAD(xsk_dev_pools);
+
 void xp_add_xsk(struct xsk_buff_pool *pool, struct xdp_sock *xs)
 {
 	if (!xs->tx)
@@ -204,6 +209,7 @@ int xp_assign_dev(struct xsk_buff_pool *pool,
 	pool->cached_need_wakeup = XDP_WAKEUP_TX;
 
 	dev_hold(netdev);
+	list_add_tail(&pool->dev_list, &xsk_dev_pools);
 
 	if (force_copy)
 		/* For copy-mode, we are done. */
@@ -265,6 +271,8 @@ err_unreg_pool:
 		err = 0; /* fallback to copy mode */
 	if (err) {
 		xsk_clear_pool_at_qid(netdev, queue_id);
+		list_del(&pool->dev_list);
+		pool->netdev = NULL;
 		dev_put(netdev);
 	}
 	return err;
@@ -291,15 +299,27 @@ void xp_clear_dev(struct xsk_buff_pool *pool)
 {
 	struct net_device *netdev = pool->netdev;
 
+	ASSERT_RTNL();
 	if (!pool->netdev)
 		return;
 
 	netdev_lock_ops(netdev);
 	xp_disable_drv_zc(pool);
 	xsk_clear_pool_at_qid(pool->netdev, pool->queue_id);
+	list_del(&pool->dev_list);
 	pool->netdev = NULL;
 	netdev_unlock_ops(netdev);
 	dev_put(netdev);
+}
+
+void xp_clear_dev_all(struct net_device *dev)
+{
+	struct xsk_buff_pool *pool, *next;
+
+	ASSERT_RTNL();
+	list_for_each_entry_safe(pool, next, &xsk_dev_pools, dev_list)
+		if (pool->netdev == dev)
+			xp_clear_dev(pool);
 }
 
 static void xp_release_deferred(struct work_struct *work)
@@ -337,7 +357,10 @@ bool xp_put_pool(struct xsk_buff_pool *pool)
 
 	if (refcount_dec_and_test(&pool->users)) {
 		INIT_WORK(&pool->work, xp_release_deferred);
-		schedule_work(&pool->work);
+		/* Teardown calls ndo_bpf(), which may need powered hardware.
+		 * RTNL alone does not exclude the device's system PM callbacks.
+		 */
+		queue_work(system_freezable_wq, &pool->work);
 		return true;
 	}
 
