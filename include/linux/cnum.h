@@ -80,5 +80,6 @@ bool cnum64_is_subset(struct cnum64 outer, struct cnum64 inner);
 
 struct cnum32 cnum32_from_cnum64(struct cnum64 cnum);
 struct cnum64 cnum64_cnum32_intersect(struct cnum64 a, struct cnum32 b);
+struct cnum64 cnum64_intersect_linear(struct cnum64 in, u16 base, u16 step);
 
 #endif /* _LINUX_CNUM_H */
