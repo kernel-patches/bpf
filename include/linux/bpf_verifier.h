@@ -1814,6 +1814,8 @@ struct arg_access_info
 bpf_kfunc_stack_access_bytes(struct bpf_verifier_env *env,
 			     struct bpf_insn *insn, int arg, int insn_idx);
 int bpf_compute_subprog_arg_access(struct bpf_verifier_env *env);
+bool bpf_same_memory_origin(const struct bpf_reg_state *reg_a,
+			    const struct bpf_reg_state *reg_b);
 int bpf_set_reg_range(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
 		      struct cnum64 range, u16 base, u16 step);
 int bpf_reg_union(struct bpf_verifier_env *env, struct bpf_reg_state *acc,
