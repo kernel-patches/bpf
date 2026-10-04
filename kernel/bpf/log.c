@@ -692,6 +692,8 @@ static void print_reg_state(struct bpf_verifier_env *env,
 
 			tnum_strn(tn_buf, sizeof(tn_buf), reg->var_off);
 			verbose_a("var_off=%s", tn_buf);
+			if (reg->base != 0 || reg->step != 1)
+				verbose_a("step=%d+%d", reg->base, reg->step);
 		}
 	}
 	verbose(env, ")");
