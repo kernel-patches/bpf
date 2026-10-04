@@ -223,30 +223,73 @@ static netdev_features_t hsr_fix_features(struct net_device *dev,
 
 static netdev_tx_t hsr_dev_xmit(struct sk_buff *skb, struct net_device *dev)
 {
+	enum hsr_port_type tx_port = HSR_PT_NONE;
 	struct hsr_priv *hsr = netdev_priv(dev);
 	struct hsr_port *master;
+	bool has_header = false;
 
 	rcu_read_lock();
 	master = hsr_port_get_hsr(hsr, HSR_PT_MASTER);
-	if (master) {
-		skb->dev = master->dev;
-		skb_reset_mac_header(skb);
-		skb_reset_mac_len(skb);
-		spin_lock_bh(&hsr->seqnr_lock);
-		hsr_forward_skb(skb, master);
-		spin_unlock_bh(&hsr->seqnr_lock);
-	} else {
-		dev_core_stats_tx_dropped_inc(dev);
-		dev_kfree_skb_any(skb);
+	if (!master)
+		goto drop;
+
+	skb->dev = master->dev;
+	if (skb->protocol == htons(ETH_P_1588)) {
+		struct hsr_inline_header *hsr_opt;
+		struct ethhdr *eth_hdr;
+		unsigned int hdr_len;
+
+		BUILD_BUG_ON(sizeof(struct hsr_inline_header) != sizeof(struct ethhdr));
+
+		/* need to access the magic header */
+		if (!pskb_may_pull(skb, sizeof(struct hsr_inline_header)))
+			goto drop;
+
+		hsr_opt = (struct hsr_inline_header *)skb_mac_header(skb);
+		if (hsr_opt->magic != htonl(HSR_INLINE_HDR))
+			goto drop;
+
+		has_header = hsr_opt->hsr_hdr;
+		tx_port = hsr_opt->tx_port;
+		if (tx_port != HSR_PT_SLAVE_A && tx_port != HSR_PT_SLAVE_B)
+			goto drop;
+
+		if (has_header)
+			hdr_len = ETH_HLEN + HSR_HLEN;
+		else
+			hdr_len = ETH_HLEN;
+
+		/* Ensure the real header after the stripped one can be
+		 * accessed
+		 */
+		if (!pskb_may_pull(skb, sizeof(struct hsr_inline_header) +
+				   hdr_len))
+			goto drop;
+
+		eth_hdr = skb_pull(skb, sizeof(struct hsr_inline_header));
+		skb_set_network_header(skb, hdr_len);
+		skb->protocol = eth_hdr->h_proto;
 	}
+
+	skb_reset_mac_header(skb);
+	skb_reset_mac_len(skb);
+	spin_lock_bh(&hsr->seqnr_lock);
+	hsr_forward_skb(skb, master, tx_port, has_header);
+	spin_unlock_bh(&hsr->seqnr_lock);
 	rcu_read_unlock();
 
+	return NETDEV_TX_OK;
+drop:
+	rcu_read_unlock();
+	dev_core_stats_tx_dropped_inc(dev);
+	dev_kfree_skb_any(skb);
 	return NETDEV_TX_OK;
 }
 
 static const struct header_ops hsr_header_ops = {
 	.create	 = eth_header,
 	.parse	 = eth_header_parse,
+	.parse_protocol = eth_header_parse_protocol,
 };
 
 static struct sk_buff *hsr_init_skb(struct hsr_port *master, int extra)
@@ -333,7 +376,7 @@ static void send_hsr_supervision_frame(struct hsr_port *port,
 		hsr->sup_sequence_nr++;
 	} else {
 		hsr_stag->sequence_nr = htons(hsr->sequence_nr);
-		hsr->sequence_nr++;
+		WRITE_ONCE(hsr->sequence_nr, hsr->sequence_nr + 1);
 	}
 
 	hsr_stag->tlv.HSR_TLV_type = type;
@@ -361,7 +404,7 @@ static void send_hsr_supervision_frame(struct hsr_port *port,
 		return;
 	}
 
-	hsr_forward_skb(skb, port);
+	hsr_forward_skb(skb, port, HSR_PT_NONE, false);
 	spin_unlock_bh(&hsr->seqnr_lock);
 	return;
 }
@@ -429,7 +472,7 @@ static void send_prp_supervision_frame(struct hsr_port *master,
 		return;
 	}
 
-	hsr_forward_skb(skb, master);
+	hsr_forward_skb(skb, master, HSR_PT_NONE, false);
 	spin_unlock_bh(&hsr->seqnr_lock);
 }
 

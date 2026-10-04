@@ -252,13 +252,19 @@ struct netdev_hw_addr {
 
 struct netdev_hw_addr_list {
 	struct list_head	list;
-	int			count;
+	/* Only changed through the __hw_addr_count_* helpers */
+	int			_count;
 
 	/* Auxiliary tree for faster lookup on addition and deletion */
 	struct rb_root		tree;
+
+	/* The device a list belongs to, NULL for snapshots and other
+	 * standalone lists
+	 */
+	struct net_device	*owner;
 };
 
-#define netdev_hw_addr_list_count(l) ((l)->count)
+#define netdev_hw_addr_list_count(l) ((l)->_count)
 #define netdev_hw_addr_list_empty(l) (netdev_hw_addr_list_count(l) == 0)
 #define netdev_hw_addr_list_for_each(ha, l) \
 	list_for_each_entry(ha, &(l)->list, list)
@@ -1138,13 +1144,16 @@ struct netdev_net_notifier {
  *				struct netdev_hw_addr_list *uc,
  *				struct netdev_hw_addr_list *mc);
  *	Async version of ndo_set_rx_mode which runs in process context
- *	with rtnl_lock and netdev_lock_ops(dev) held. The uc/mc parameters
+ *	under the netdev instance lock for "ops locked" drivers, or
+ *	rtnl_lock for all other drivers. The uc/mc parameters
  *	are snapshots of the address lists - iterate with
  *	netdev_hw_addr_list_for_each(ha, uc). Return 0 on success or a
  *	negative errno to request a retry via the core backoff.
  *
  * void (*ndo_work)(struct net_device *dev, unsigned long events);
  *	Run deferred work scheduled with netdev_work_sched(@events).
+ *	Runs in process context under the netdev instance lock for "ops
+ *	locked" drivers, or rtnl_lock for all other drivers.
  *
  * int (*ndo_set_mac_address)(struct net_device *dev, void *addr);
  *	This function  is called when the Media Access Control address
@@ -1153,11 +1162,6 @@ struct netdev_net_notifier {
  *
  * int (*ndo_validate_addr)(struct net_device *dev);
  *	Test if Media Access Control address is valid for the device.
- *
- * int (*ndo_do_ioctl)(struct net_device *dev, struct ifreq *ifr, int cmd);
- *	Old-style ioctl entry point. This is used internally by the
- *	ieee802154 subsystem but is no longer called by the device
- *	ioctl handler.
  *
  * int (*ndo_siocbond)(struct net_device *dev, struct ifreq *ifr, int cmd);
  *	Used by the bonding driver for its device specific ioctls:
@@ -1480,8 +1484,6 @@ struct net_device_ops {
 	int			(*ndo_set_mac_address)(struct net_device *dev,
 						       void *addr);
 	int			(*ndo_validate_addr)(struct net_device *dev);
-	int			(*ndo_do_ioctl)(struct net_device *dev,
-					        struct ifreq *ifr, int cmd);
 	int			(*ndo_eth_ioctl)(struct net_device *dev,
 						 struct ifreq *ifr, int cmd);
 	int			(*ndo_siocbond)(struct net_device *dev,
@@ -1840,6 +1842,7 @@ enum netdev_reg_state {
  *			drivers. Mainly used by logical interfaces, such as
  *			bonding and tunnels
  *	@netmem_tx:	device netmem TX mode
+ *	@pacing_offload: enable EDT pacing offload.
  *
  *	@name:	This is the first field of the "visible" part of this structure
  *		(i.e. as seen by users in the "Space.c" file).  It is the name
@@ -2170,6 +2173,7 @@ struct net_device {
 		unsigned long		priv_flags:32;
 		unsigned long		lltx:1;
 		unsigned long		netmem_tx:2;
+		unsigned long		pacing_offload:1;
 	);
 	const struct net_device_ops *netdev_ops;
 	const struct header_ops *header_ops;
@@ -3672,7 +3676,11 @@ struct page_pool_bh {
 };
 DECLARE_PER_CPU(struct page_pool_bh, system_page_pool);
 
+#ifdef CONFIG_KASAN
+#define XMIT_RECURSION_LIMIT	4
+#else
 #define XMIT_RECURSION_LIMIT	8
+#endif
 
 #ifndef CONFIG_PREEMPT_RT
 static inline int dev_recursion_level(void)
@@ -5163,6 +5171,7 @@ int dev_mc_sync_multiple(struct net_device *to, struct net_device *from);
 void dev_mc_unsync(struct net_device *to, struct net_device *from);
 void dev_mc_flush(struct net_device *dev);
 void dev_mc_init(struct net_device *dev);
+int dev_mc_dump(struct sk_buff *skb, struct netlink_callback *cb);
 
 /**
  *  __dev_mc_sync - Synchronize device's multicast list
@@ -5198,6 +5207,7 @@ static inline void __dev_mc_unsync(struct net_device *dev,
 
 /* Functions used for secondary unicast and multicast support */
 void dev_set_rx_mode(struct net_device *dev);
+void netif_rx_mode_schedule_update(struct net_device *dev);
 void netif_rx_mode_schedule_retry(struct net_device *dev);
 int netif_set_promiscuity(struct net_device *dev, int inc);
 int dev_set_promiscuity(struct net_device *dev, int inc);
@@ -5324,7 +5334,6 @@ void netdev_lower_state_changed(struct net_device *lower_dev,
 				void *lower_state_info);
 
 #define NETDEV_RSS_KEY_LEN 256
-extern u8 netdev_rss_key[NETDEV_RSS_KEY_LEN] __read_mostly;
 void netdev_rss_key_fill(void *buffer, size_t len);
 
 int skb_checksum_help(struct sk_buff *skb);
@@ -5609,12 +5618,12 @@ static inline bool netif_has_l3_rx_handler(const struct net_device *dev)
 
 static inline bool netif_is_l3_master(const struct net_device *dev)
 {
-	return dev->priv_flags & IFF_L3MDEV_MASTER;
+	return IS_ENABLED(CONFIG_NET_VRF) && (dev->priv_flags & IFF_L3MDEV_MASTER);
 }
 
 static inline bool netif_is_l3_slave(const struct net_device *dev)
 {
-	return dev->priv_flags & IFF_L3MDEV_SLAVE;
+	return IS_ENABLED(CONFIG_NET_VRF) && (dev->priv_flags & IFF_L3MDEV_SLAVE);
 }
 
 static inline int dev_sdif(const struct net_device *dev)
@@ -5712,6 +5721,12 @@ static inline const char *netdev_name(const struct net_device *dev)
 	if (!dev->name[0] || strchr(dev->name, '%'))
 		return "(unnamed net_device)";
 	return dev->name;
+}
+
+/* Caller holds RTNL, netdev->lock or RCU */
+static inline bool netif_is_alive(const struct net_device *dev)
+{
+	return READ_ONCE(dev->reg_state) <= NETREG_REGISTERED;
 }
 
 static inline const char *netdev_reg_state(const struct net_device *dev)

@@ -460,8 +460,13 @@ int devlink_reload(struct devlink *devlink, struct net *dest_net,
 	       sizeof(remote_reload_stats));
 
 	err = devlink->ops->reload_down(devlink, !!dest_net, action, limit, extack);
-	if (err)
+	if (err) {
+		curr_net = devlink_net(devlink);
+		if (dest_net && curr_net->is_dying &&
+		    !net_eq(dest_net, curr_net))
+			devlink_reload_netns_change(devlink, curr_net, dest_net);
 		return err;
+	}
 
 	curr_net = devlink_net(devlink);
 	if (dest_net && !net_eq(dest_net, curr_net))
@@ -1169,7 +1174,7 @@ int devlink_nl_flash_update_doit(struct sk_buff *skb, struct genl_info *info)
 
 	nla_file_name = info->attrs[DEVLINK_ATTR_FLASH_UPDATE_FILE_NAME];
 	file_name = nla_data(nla_file_name);
-	ret = request_firmware(&params.fw, file_name, devlink->dev);
+	ret = request_firmware_direct(&params.fw, file_name, devlink->dev);
 	if (ret) {
 		NL_SET_ERR_MSG_ATTR(info->extack, nla_file_name,
 				    "failed to locate the requested firmware file");
@@ -1245,7 +1250,7 @@ int devlink_compat_flash_update(struct devlink *devlink, const char *file_name)
 		goto out_unlock;
 	}
 
-	ret = request_firmware(&params.fw, file_name, devlink->dev);
+	ret = request_firmware_direct(&params.fw, file_name, devlink->dev);
 	if (ret)
 		goto out_unlock;
 

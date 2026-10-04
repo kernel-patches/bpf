@@ -848,6 +848,12 @@ int t7xx_dpmaif_napi_rx_poll(struct napi_struct *napi, const int budget)
 		atomic_set(&rxq->rx_processing, 0);
 		pm_runtime_put_autosuspend(rxq->dpmaif_ctrl->dev);
 		dev_err(rxq->dpmaif_ctrl->dev, "Work RXQ: %d has not been started\n", rxq->index);
+		/* Returning work_done < budget without completing the NAPI would
+		 * leave NAPI_STATE_SCHED set, hanging a later napi_synchronize()
+		 * in t7xx_ccmni_disable_napi() (which holds rtnl_lock). Complete
+		 * it here so the queue is cleanly unscheduled after rx_stop().
+		 */
+		napi_complete_done(napi, work_done);
 		return work_done;
 	}
 
@@ -1082,7 +1088,8 @@ static void t7xx_dpmaif_bat_release_work(struct work_struct *work)
 	}
 
 	t7xx_pci_enable_sleep(dpmaif_ctrl->t7xx_dev);
-	pm_runtime_put_autosuspend(dpmaif_ctrl->dev);
+	if (ret != -EACCES)
+		pm_runtime_put_autosuspend(dpmaif_ctrl->dev);
 }
 
 int t7xx_dpmaif_bat_rel_wq_alloc(struct dpmaif_ctrl *dpmaif_ctrl)

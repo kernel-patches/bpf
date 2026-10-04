@@ -14,6 +14,7 @@ bool tcp_is_ulp_esp(struct sock *sk);
 struct espintcp_msg {
 	struct sk_buff *skb;
 	struct sk_msg skmsg;
+	bool owned;
 	int offset;
 	int len;
 };

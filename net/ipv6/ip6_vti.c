@@ -322,6 +322,9 @@ static int vti6_input_proto(struct sk_buff *skb, int nexthdr, __be32 spi,
 		rcu_read_unlock();
 
 		XFRM_TUNNEL_SKB_CB(skb)->tunnel.ip6 = t;
+
+		dev_hold(t->dev);
+
 		XFRM_SPI_SKB_CB(skb)->family = AF_INET6;
 		XFRM_SPI_SKB_CB(skb)->daddroff = offsetof(struct ipv6hdr, daddr);
 		return xfrm_input(skb, nexthdr, spi, encap_type);
@@ -355,10 +358,14 @@ static int vti6_rcv_cb(struct sk_buff *skb, int err)
 
 	dev = t->dev;
 
+	/* Drop the reference taken in vti6_input_proto().  -EINVAL/-EPERM
+	 * make xfrm_input() re-invoke us with err = -1 and drop it then.
+	 */
 	if (err) {
 		DEV_STATS_INC(dev, rx_errors);
 		DEV_STATS_INC(dev, rx_dropped);
 
+		dev_put(dev);
 		return 0;
 	}
 
@@ -387,6 +394,7 @@ static int vti6_rcv_cb(struct sk_buff *skb, int err)
 	skb_scrub_packet(skb, !net_eq(t->net, dev_net(skb->dev)));
 	skb->dev = dev;
 	dev_sw_netstats_rx_add(dev, skb->len);
+	dev_put(dev);
 
 	return 0;
 }
@@ -437,7 +445,7 @@ static bool vti6_state_check(const struct xfrm_state *x,
  * vti6_xmit - send a packet
  *   @skb: the outgoing socket buffer
  *   @dev: the outgoing tunnel device
- *   @fl: the flow informations for the xfrm_lookup
+ *   @fl: the flow information for the xfrm_lookup
  **/
 static int
 vti6_xmit(struct sk_buff *skb, struct net_device *dev, struct flowi *fl)

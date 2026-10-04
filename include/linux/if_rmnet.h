@@ -70,5 +70,36 @@ struct rmnet_map_v5_csum_header {
 #define MAPV5_HDRINFO_HDR_TYPE_FMASK	GENMASK(7, 1)
 #define MAPV5_CSUMINFO_VALID_FLAG	BIT(7)
 
+#define RMNET_MAP_HEADER_TYPE_COALESCING   1
 #define RMNET_MAP_HEADER_TYPE_CSUM_OFFLOAD 2
+
+/* MAPv5 coalescing header */
+#define RMNET_MAP_V5_MAX_NLOS		6
+#define RMNET_MAP_V5_MAX_PACKETS	48
+
+/* One Number-Length Object pair: per-NLO packet count and length. */
+struct rmnet_map_v5_nl_pair {
+	__be16 pkt_len;
+	u8  csum_error_bitmap;
+	u8  num_packets;
+} __aligned(1);
+
+/* MAPv5 coalescing header: describes up to RMNET_MAP_V5_MAX_NLOS NLOs.
+ * The header immediately follows the MAP header in the frame and is
+ * included in the MAP pkt_len field.
+ */
+struct rmnet_map_v5_coal_header {
+	u8  header_info;	/* MAPV5_HDRINFO_NXT_HDR_FLAG, MAPV5_HDRINFO_HDR_TYPE_FMASK */
+	u8  coal_info;		/* MAPV5_COALINFO_* */
+	u8  close_info;		/* MAPV5_CLOSEINFO_* */
+	u8  veid_info;		/* MAPV5_VEIDINFO_* */
+	struct rmnet_map_v5_nl_pair nl_pairs[RMNET_MAP_V5_MAX_NLOS];
+} __aligned(1);
+
+#define MAPV5_COALINFO_NUM_NLOS_FMASK		GENMASK(6, 4)
+#define MAPV5_COALINFO_CSUM_VALID_FLAG		BIT(7)
+#define MAPV5_CLOSEINFO_CLOSE_TYPE_FMASK	GENMASK(3, 0)
+#define MAPV5_CLOSEINFO_CLOSE_VALUE_FMASK	GENMASK(7, 4)
+#define MAPV5_VEIDINFO_VEID_FMASK		GENMASK(3, 0)
+
 #endif /* !(_LINUX_IF_RMNET_H_) */

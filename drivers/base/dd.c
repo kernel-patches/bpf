@@ -599,6 +599,7 @@ static void device_unbind_cleanup(struct device *dev)
 	kfree(dev->dma_range_map);
 	dev->dma_range_map = NULL;
 	device_set_driver(dev, NULL);
+	device_reprobe_cancel(dev);
 	dev_set_drvdata(dev, NULL);
 	dev_pm_domain_detach(dev, dev->power.detach_power_off);
 	if (dev->pm_domain && dev->pm_domain->dismiss)
@@ -1436,3 +1437,174 @@ void driver_detach(const struct device_driver *drv)
 		put_device(dev);
 	}
 }
+
+struct device_reprobe {
+	struct delayed_work work;
+	struct device *dev;
+};
+
+/* Retry interval while probing is blocked; the caller's delay may be 0. */
+#define DEVICE_REPROBE_BLOCKED_RETRY	HZ
+
+/* Ties the slot in struct device_private to the queueing of its work. */
+static DEFINE_SPINLOCK(device_reprobe_lock);
+
+static void device_reprobe_free(struct device_reprobe *rp)
+{
+	put_device(rp->dev);
+	kfree(rp);
+}
+
+/*
+ * The slot holds a request from its scheduling until its work has released
+ * the driver. A pending work is freed here; a running one finds the slot no
+ * longer its own and frees itself.
+ */
+void device_reprobe_cancel(struct device *dev)
+{
+	struct device_reprobe *rp;
+	bool pending = false;
+
+	if (!dev->p)
+		return;
+	spin_lock(&device_reprobe_lock);
+	rp = dev->p->reprobe;
+	WRITE_ONCE(dev->p->reprobe, NULL);
+	if (rp)
+		pending = cancel_delayed_work(&rp->work);
+	spin_unlock(&device_reprobe_lock);
+	if (pending)
+		device_reprobe_free(rp);
+}
+
+static void device_reprobe_work_fn(struct work_struct *work)
+{
+	struct device_reprobe *rp = container_of(work, struct device_reprobe,
+						 work.work);
+	struct device *dev = rp->dev;
+	bool rearm;
+	int ret;
+
+	device_lock(dev);
+	/* The slot still holding rp means the binding that scheduled it does. */
+	if (dev->p->dead || READ_ONCE(dev->p->reprobe) != rp) {
+		device_unlock(dev);
+		goto out;
+	}
+	if (defer_all_probes) {
+		device_unlock(dev);
+		spin_lock(&device_reprobe_lock);
+		rearm = dev->p->reprobe == rp &&
+			(system_state < SYSTEM_HALT ||
+			 system_state == SYSTEM_SUSPEND) &&
+			queue_delayed_work(system_freezable_wq, &rp->work,
+					   DEVICE_REPROBE_BLOCKED_RETRY);
+		spin_unlock(&device_reprobe_lock);
+		if (rearm)
+			return;
+		goto out;
+	}
+	/* Releasing the driver clears the slot, which was this request. */
+	__device_release_driver(dev, NULL);
+	device_unlock(dev);
+
+	/* A failed probe is logged by the probe path, as for a first probe. */
+	ret = device_attach(dev);
+	dev_dbg(dev, "re-probe: device_attach() returned %d\n", ret);
+out:
+	spin_lock(&device_reprobe_lock);
+	if (dev->p->reprobe == rp)
+		WRITE_ONCE(dev->p->reprobe, NULL);
+	spin_unlock(&device_reprobe_lock);
+	device_reprobe_free(rp);
+}
+
+/**
+ * device_schedule_reprobe - schedule a deferred detach and re-probe
+ * @dev: device to detach and re-probe
+ * @delay_ms: delay in milliseconds before the re-probe runs
+ *
+ * Schedule a detach and re-probe of @dev after @delay_ms milliseconds,
+ * from built-in driver-core work rather than a driver-owned work item,
+ * so the bound driver may call it without pinning its own module.
+ *
+ * At most one request exists per device, from its scheduling until its
+ * work has released the driver, and the request identifies the binding
+ * that scheduled it. It is cancelled when @dev is deleted or when that
+ * binding ends, whether by a release or by a failed probe, so neither an
+ * unbind followed by a rebind nor a module reload within the delay gets a
+ * re-probe it did not ask for; its reference on @dev is dropped with it,
+ * or once a work already running has finished. A request that fires
+ * while probing is blocked for a system suspend or a hibernation restore
+ * re-arms itself every second and runs once the system has resumed; one
+ * that fires while probing is blocked for a halt, power-off or restart is
+ * dropped. A failed re-probe leaves @dev unbound, as a failed initial
+ * probe would, and is logged by the probe path like one.
+ *
+ * This is device_reprobe() deferred, and shares its limitations; the
+ * release path of __device_release_driver() is untouched. The detach and
+ * the re-attach are not one locked operation, so an administrative unbind
+ * arriving between them may be undone. If @dev has managed consumers,
+ * detaching it unbinds them as any driver release does, so a re-probe a
+ * concurrent device_shutdown() overtakes may run ->remove() after
+ * ->shutdown(). None of this is specific to this helper.
+ *
+ * Buses that take the parent lock to bind (only usb_bus_type) are refused
+ * with -EINVAL: the parent would have to be recorded before either lock
+ * is held, where device_move() can replace it.
+ *
+ * Context: May sleep (allocates with %GFP_KERNEL). Must be called by the
+ * driver bound to @dev, from a process context its ->remove() waits for,
+ * so that the binding outlives the call; @dev's own device lock may be
+ * held. A request from ->probe() runs once the probe has returned and is
+ * cancelled if the probe fails.
+ *
+ * Returns: 0 on success, -EINVAL if @dev is not a registered device
+ * bound to a driver or sits on a bus which takes the parent lock to
+ * bind, -EBUSY if a re-probe of @dev is pending or has not yet released
+ * the driver, -ENOMEM on allocation failure.
+ */
+int device_schedule_reprobe(struct device *dev, unsigned int delay_ms)
+{
+	const struct device_driver *drv;
+	struct device_reprobe *rp;
+	int ret = 0;
+
+	drv = READ_ONCE(dev->driver);
+	/*
+	 * A bus taking the parent lock would need @dev's parent pinned until
+	 * the work runs, which device_move() can invalidate.
+	 */
+	if (!drv || !dev->bus || dev->bus->need_parent_lock || !dev->p ||
+	    dev->p->dead || !device_is_registered(dev))
+		return -EINVAL;
+
+	rp = kzalloc_obj(*rp);
+	if (!rp)
+		return -ENOMEM;
+
+	rp->dev = get_device(dev);
+	INIT_DELAYED_WORK(&rp->work, device_reprobe_work_fn);
+
+	/*
+	 * A release or deletion that got here first has cleared the driver or
+	 * set dead before cancelling, so a request published after its cancel
+	 * is refused here; one published before is cancelled by it.
+	 */
+	spin_lock(&device_reprobe_lock);
+	if (dev->p->reprobe)
+		ret = -EBUSY;
+	else if (dev->p->dead || READ_ONCE(dev->driver) != drv)
+		ret = -EINVAL;
+	else
+		WRITE_ONCE(dev->p->reprobe, rp);
+	if (!ret)
+		queue_delayed_work(system_freezable_wq, &rp->work,
+				   msecs_to_jiffies(delay_ms));
+	spin_unlock(&device_reprobe_lock);
+	if (ret)
+		device_reprobe_free(rp);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(device_schedule_reprobe);

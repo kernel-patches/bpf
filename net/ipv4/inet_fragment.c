@@ -652,7 +652,10 @@ void inet_frag_reasm_finish(struct inet_frag_queue *q, struct sk_buff *head,
 			} else {
 				fp->prev = NULL;
 				memset(&fp->rbnode, 0, sizeof(fp->rbnode));
-				fp->sk = NULL;
+				if (fp->destructor && !is_skb_wmem(fp))
+					skb_orphan(fp);
+				else
+					fp->sk = NULL;
 
 				head->data_len += fp->len;
 				head->len += fp->len;

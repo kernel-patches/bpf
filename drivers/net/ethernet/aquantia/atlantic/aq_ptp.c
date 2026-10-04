@@ -84,6 +84,7 @@ struct aq_ptp_s {
 	struct ptp_tx_timeout ptp_tx_timeout;
 
 	unsigned int idx_ptp_vector;
+	bool irq_allocated;
 	struct napi_struct napi;
 
 	struct aq_ring_s ptp_tx;
@@ -1033,6 +1034,8 @@ int aq_ptp_irq_alloc(struct aq_nic_s *aq_nic)
 	if (pdev->msix_enabled || pdev->msi_enabled) {
 		err = request_irq(pci_irq_vector(pdev, aq_ptp->idx_ptp_vector),
 				  aq_ptp_isr, 0, aq_nic->ndev->name, aq_ptp);
+		if (!err)
+			aq_ptp->irq_allocated = true;
 	} else {
 		err = -EINVAL;
 		goto err_exit;
@@ -1050,7 +1053,11 @@ void aq_ptp_irq_free(struct aq_nic_s *aq_nic)
 	if (!aq_ptp)
 		return;
 
+	if (!aq_ptp->irq_allocated)
+		return;
+
 	free_irq(pci_irq_vector(pdev, aq_ptp->idx_ptp_vector), aq_ptp);
+	aq_ptp->irq_allocated = false;
 }
 
 int aq_ptp_ring_init(struct aq_nic_s *aq_nic)

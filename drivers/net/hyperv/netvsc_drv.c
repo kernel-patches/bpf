@@ -2311,6 +2311,12 @@ static int netvsc_prepare_bonding(struct net_device *vf_netdev)
 	return NOTIFY_DONE;
 }
 
+static void netvsc_vfns_dev_put(struct net_device_context *ndev_ctx)
+{
+	netdev_put(ndev_ctx->vfns_dev, &ndev_ctx->vfns_dev_tracker);
+	ndev_ctx->vfns_dev = NULL;
+}
+
 static int netvsc_register_vf(struct net_device *vf_netdev, int context)
 {
 	struct net_device_context *net_device_ctx;
@@ -2331,28 +2337,52 @@ static int netvsc_register_vf(struct net_device *vf_netdev, int context)
 	if (!netvsc_dev || rtnl_dereference(net_device_ctx->vf_netdev))
 		return NOTIFY_DONE;
 
+	prog = netvsc_xdp_get(netvsc_dev);
+	if (prog && dev_xdp_prog_count(vf_netdev)) {
+		netdev_warn(ndev, "not using VF %s, it has an XDP program attached\n",
+			    vf_netdev->name);
+		return NOTIFY_DONE;
+	}
+
 	/* if synthetic interface is a different namespace,
 	 * then move the VF to that namespace; join will be
-	 * done again in that context.
+	 * done again in that context. The VF's lock is held
+	 * for its registration, so leave the move to vfns_work.
 	 */
 	if (!net_eq(dev_net(ndev), dev_net(vf_netdev))) {
-		ret = dev_change_net_namespace(vf_netdev,
-					       dev_net(ndev), "eth%d");
-		if (ret)
-			netdev_err(vf_netdev,
-				   "could not move to same namespace as %s: %d\n",
-				   ndev->name, ret);
-		else
-			netdev_info(vf_netdev,
-				    "VF moved to namespace with: %s\n",
-				    ndev->name);
+		if (net_device_ctx->vfns_dev != vf_netdev) {
+			netvsc_vfns_dev_put(net_device_ctx);
+			netdev_hold(vf_netdev, &net_device_ctx->vfns_dev_tracker,
+				    GFP_KERNEL);
+			net_device_ctx->vfns_dev = vf_netdev;
+		}
+		schedule_delayed_work(&net_device_ctx->vfns_work, 0);
 		return NOTIFY_DONE;
+	}
+
+	/* Install netvsc's program before joining, so that a VF which
+	 * refuses it never gets used. Syncing the features first turns
+	 * off LRO, which the VF may not run XDP with.
+	 */
+	if (prog) {
+		vf_netdev->wanted_features = ndev->features;
+		netdev_update_features(vf_netdev);
+
+		ret = netvsc_vf_setxdp(vf_netdev, prog);
+		if (ret) {
+			netdev_warn(ndev, "not using VF %s, it refused netvsc's XDP program: %d\n",
+				    vf_netdev->name, ret);
+			return NOTIFY_DONE;
+		}
 	}
 
 	netdev_info(ndev, "VF registering: %s\n", vf_netdev->name);
 
-	if (netvsc_vf_join(vf_netdev, ndev, context) != 0)
+	if (netvsc_vf_join(vf_netdev, ndev, context) != 0) {
+		if (prog)
+			netvsc_vf_setxdp(vf_netdev, NULL);
 		return NOTIFY_DONE;
+	}
 
 	dev_hold(vf_netdev);
 	rcu_assign_pointer(net_device_ctx->vf_netdev, vf_netdev);
@@ -2362,9 +2392,6 @@ static int netvsc_register_vf(struct net_device *vf_netdev, int context)
 
 	vf_netdev->wanted_features = ndev->features;
 	netdev_update_features(vf_netdev);
-
-	prog = netvsc_xdp_get(netvsc_dev);
-	netvsc_vf_setxdp(vf_netdev, prog);
 
 	return NOTIFY_OK;
 }
@@ -2441,6 +2468,7 @@ static int netvsc_unregister_vf(struct net_device *vf_netdev)
 {
 	struct net_device *ndev;
 	struct net_device_context *net_device_ctx;
+	struct netvsc_device *nvdev;
 
 	ndev = get_netvsc_byref(vf_netdev);
 	if (!ndev)
@@ -2453,6 +2481,15 @@ static int netvsc_unregister_vf(struct net_device *vf_netdev)
 
 	reinit_completion(&net_device_ctx->vf_add);
 	netdev_rx_handler_unregister(vf_netdev);
+
+	/* Only once frames from the VF no longer reach netvsc */
+	nvdev = rtnl_dereference(net_device_ctx->nvdev);
+	if (nvdev && netvsc_xdp_get(nvdev)) {
+		netdev_lock_ops(vf_netdev);
+		netvsc_vf_setxdp(vf_netdev, NULL);
+		netdev_unlock_ops(vf_netdev);
+	}
+
 	netdev_upper_dev_unlink(vf_netdev, ndev);
 	RCU_INIT_POINTER(net_device_ctx->vf_netdev, NULL);
 	dev_put(vf_netdev);
@@ -2662,23 +2699,24 @@ static void netvsc_remove(struct hv_device *dev)
 
 	rtnl_lock();
 	cancel_delayed_work_sync(&ndev_ctx->vfns_work);
+	netvsc_vfns_dev_put(ndev_ctx);
 
 	nvdev = rtnl_dereference(ndev_ctx->nvdev);
-	if (nvdev) {
+	if (nvdev)
 		cancel_work_sync(&nvdev->subchan_work);
-		netvsc_xdp_set(net, NULL, NULL, nvdev);
-	}
+
+	vf_netdev = rtnl_dereference(ndev_ctx->vf_netdev);
+	if (vf_netdev)
+		netvsc_unregister_vf(vf_netdev);
 
 	/*
 	 * Call to the vsc driver to let it know that the device is being
 	 * removed. Also blocks mtu and channel changes.
 	 */
-	vf_netdev = rtnl_dereference(ndev_ctx->vf_netdev);
-	if (vf_netdev)
-		netvsc_unregister_vf(vf_netdev);
-
-	if (nvdev)
+	if (nvdev) {
+		netvsc_xdp_set(net, NULL, NULL, nvdev);
 		rndis_filter_device_remove(dev, nvdev);
+	}
 
 	unregister_netdevice(net);
 	list_del(&ndev_ctx->list);
@@ -2705,6 +2743,7 @@ static int netvsc_suspend(struct hv_device *dev)
 
 	rtnl_lock();
 	cancel_delayed_work_sync(&ndev_ctx->vfns_work);
+	netvsc_vfns_dev_put(ndev_ctx);
 
 	nvdev = rtnl_dereference(ndev_ctx->nvdev);
 	if (nvdev == NULL) {
@@ -2782,7 +2821,9 @@ static void netvsc_event_set_vf_ns(struct net_device *ndev)
 
 	vf_netdev = rtnl_dereference(ndev_ctx->vf_netdev);
 	if (!vf_netdev)
-		return;
+		vf_netdev = ndev_ctx->vfns_dev;
+	if (!vf_netdev || vf_netdev->reg_state != NETREG_REGISTERED)
+		goto out;
 
 	if (!net_eq(dev_net(ndev), dev_net(vf_netdev))) {
 		ret = dev_change_net_namespace(vf_netdev, dev_net(ndev),
@@ -2795,7 +2836,16 @@ static void netvsc_event_set_vf_ns(struct net_device *ndev)
 			netdev_info(vf_netdev,
 				    "Moved VF to namespace with: %s\n",
 				    ndev->name);
+	} else if (!rtnl_dereference(ndev_ctx->vf_netdev)) {
+		/* netvsc got to the VF's netns first, so no move will
+		 * register the VF again, take it over from here
+		 */
+		netdev_lock_ops(vf_netdev);
+		netvsc_register_vf(vf_netdev, VF_REG_IN_NOTIFIER);
+		netdev_unlock_ops(vf_netdev);
 	}
+out:
+	netvsc_vfns_dev_put(ndev_ctx);
 }
 
 void netvsc_vfns_work(struct work_struct *w)

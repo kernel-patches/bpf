@@ -14,6 +14,7 @@
 #include <linux/bpf.h>
 #include <linux/bpf_trace.h>
 #include <linux/kernel.h>
+#include <net/netdev_lock.h>
 #include <net/xdp.h>
 
 #include <linux/mutex.h>
@@ -162,6 +163,7 @@ int netvsc_xdp_set(struct net_device *dev, struct bpf_prog *prog,
 	return 0;
 }
 
+/* Caller holds the VF's lock, see netdev_lock_ops() */
 int netvsc_vf_setxdp(struct net_device *vf_netdev, struct bpf_prog *prog)
 {
 	struct netdev_bpf xdp;
@@ -171,6 +173,8 @@ int netvsc_vf_setxdp(struct net_device *vf_netdev, struct bpf_prog *prog)
 
 	if (!vf_netdev)
 		return 0;
+
+	netdev_assert_locked_ops_compat(vf_netdev);
 
 	if (!vf_netdev->netdev_ops->ndo_bpf)
 		return 0;
@@ -200,6 +204,12 @@ int netvsc_bpf(struct net_device *dev, struct netdev_bpf *bpf)
 	int ret;
 
 	if (!nvdev || nvdev->destroy) {
+		/* The channels and the VF are gone, and so is the program,
+		 * unless suspend parked it for netvsc_resume() to put back.
+		 */
+		if (bpf->command == XDP_SETUP_PROG && !bpf->prog && !vf_netdev &&
+		    !ndevctx->saved_netvsc_dev_info)
+			return 0;
 		return -ENODEV;
 	}
 
@@ -210,12 +220,27 @@ int netvsc_bpf(struct net_device *dev, struct netdev_bpf *bpf)
 		if (ret)
 			return ret;
 
-		ret = netvsc_vf_setxdp(vf_netdev, bpf->prog);
+		/* Unlike netvsc_register_vf() we don't get the VF's lock
+		 * handed to us here.
+		 */
+		ret = 0;
+		if (vf_netdev) {
+			netdev_lock_ops(vf_netdev);
+			ret = netvsc_vf_setxdp(vf_netdev, bpf->prog);
+			netdev_unlock_ops(vf_netdev);
+		}
 
 		if (ret) {
 			netdev_err(dev, "vf_setxdp failed:%d\n", ret);
 			NL_SET_ERR_MSG_MOD(extack, "vf_setxdp failed");
 
+			/* Since we haven't completed the installation
+			 * of bpf->prog the reference core implicitly
+			 * transfers to us on success isn't ours.
+			 * Take a reference to balance the accounting.
+			 */
+			if (bpf->prog)
+				bpf_prog_inc(bpf->prog);
 			netvsc_xdp_set(dev, NULL, extack, nvdev);
 		}
 

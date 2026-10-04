@@ -14521,7 +14521,8 @@ static void bnxt_timer(struct timer_list *t)
 		bnxt_queue_sp_work(bp, BNXT_RING_COAL_NOW_SP_EVENT);
 
 bnxt_restart_timer:
-	mod_timer(&bp->timer, jiffies + bp->current_interval);
+	if (test_bit(BNXT_STATE_OPEN, &bp->state))
+		mod_timer(&bp->timer, jiffies + bp->current_interval);
 }
 
 static void bnxt_lock_sp(struct bnxt *bp)
@@ -15654,8 +15655,8 @@ static int bnxt_init_board(struct pci_dev *pdev, struct net_device *dev)
 		goto init_err_disable;
 	}
 
-	if (dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64)) != 0 &&
-	    dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32)) != 0) {
+	rc = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
+	if (rc) {
 		dev_err(&pdev->dev, "System does not support DMA, aborting\n");
 		rc = -EIO;
 		goto init_err_release;

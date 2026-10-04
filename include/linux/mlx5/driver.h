@@ -707,6 +707,7 @@ struct mlx5_rsvd_gids {
 
 struct mlx5_clock;
 struct mlx5_clock_dev_state;
+struct mlx5_data_direct;
 struct mlx5_dm;
 struct mlx5_fw_tracer;
 struct mlx5_vxlan;
@@ -788,8 +789,11 @@ struct mlx5_core_dev {
 	u32                      vsc_addr;
 	struct mlx5_hv_vhca	*hv_vhca;
 	struct mlx5_hwmon	*hwmon;
-	u64			num_block_tc;
-	u64			num_block_ipsec;
+	struct {
+		struct mutex lock;
+		u64 num_block_tc;
+		u64 num_block_ipsec;
+	} offload_block;
 #ifdef CONFIG_MLX5_MACSEC
 	struct mlx5_macsec_fs *macsec_fs;
 	/* MACsec notifier chain to sync MACsec core and IB database */
@@ -801,6 +805,7 @@ struct mlx5_core_dev {
 	/* sync write combining state */
 	struct mutex wc_state_lock;
 	struct devlink *shd;
+	struct mlx5_data_direct *data_direct;
 };
 
 struct mlx5_db {
@@ -829,6 +834,7 @@ typedef void (*mlx5_cmd_cbk_t)(int status, void *context);
 enum {
 	MLX5_CMD_ENT_STATE_PENDING_COMP,
 	MLX5_CMD_ENT_STATE_TIMEDOUT,
+	MLX5_CMD_ENT_STATE_RETAIN_MSGS,
 };
 
 struct mlx5_cmd_work_ent {
@@ -1394,5 +1400,11 @@ static inline struct net *mlx5_core_net(struct mlx5_core_dev *dev)
 }
 
 #define MLX5_SW_IMAGE_GUID_MAX_BYTES 9
+
+static inline bool mlx5_data_direct_supported(struct mlx5_core_dev *mdev)
+{
+	return MLX5_CAP_GEN(mdev, data_direct) &&
+	       MLX5_CAP_GEN_2(mdev, query_vuid);
+}
 
 #endif /* MLX5_DRIVER_H */

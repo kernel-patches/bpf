@@ -39,7 +39,7 @@ static unsigned int help(struct sk_buff *skb,
 {
 	char buffer[sizeof("4294967296 65635")];
 	union nf_inet_addr newaddr;
-	u_int16_t port;
+	u16 port;
 
 	/* Reply comes from server. */
 	newaddr = ct->tuplehash[IP_CT_DIR_REPLY].tuple.dst.u3;

@@ -2111,8 +2111,6 @@ static int fm10k_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	}
 
 	err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(48));
-	if (err)
-		err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
 	if (err) {
 		dev_err(&pdev->dev,
 			"DMA configuration failed: %d\n", err);
@@ -2245,7 +2243,7 @@ static void fm10k_remove(struct pci_dev *pdev)
 	struct fm10k_intfc *interface = pci_get_drvdata(pdev);
 	struct net_device *netdev = interface->netdev;
 
-	timer_delete_sync(&interface->service_timer);
+	timer_shutdown_sync(&interface->service_timer);
 
 	fm10k_stop_service_event(interface);
 	fm10k_stop_macvlan_task(interface);

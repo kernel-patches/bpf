@@ -1306,15 +1306,18 @@ static int tipc_link_input(struct tipc_link *l, struct sk_buff *skb,
 		skb_queue_head_init(&tmpq);
 		l->stats.recv_bundles++;
 		l->stats.recv_bundled += msg_msgcnt(hdr);
-		while (tipc_msg_extract(skb, &iskb, &pos))
-			tipc_data_input(l, iskb, &tmpq);
+		while (tipc_msg_extract(skb, &iskb, &pos)) {
+			if (unlikely(!tipc_data_input(l, iskb, &tmpq)))
+				kfree_skb(iskb);
+		}
 		tipc_skb_queue_splice_tail(&tmpq, inputq);
 		return 0;
 	} else if (usr == MSG_FRAGMENTER) {
 		l->stats.recv_fragments++;
 		if (tipc_buf_append(reasm_skb, &skb)) {
 			l->stats.recv_fragmented++;
-			tipc_data_input(l, skb, inputq);
+			if (unlikely(!tipc_data_input(l, skb, inputq)))
+				kfree_skb(skb);
 		} else if (!*reasm_skb && !link_is_bc_rcvlink(l)) {
 			pr_warn_ratelimited("Unable to build fragment list\n");
 			return tipc_link_fsm_evt(l, LINK_FAILURE_EVT);

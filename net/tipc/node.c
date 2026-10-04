@@ -422,7 +422,7 @@ static void tipc_node_write_unlock(struct tipc_node *n)
 	write_unlock_bh(&n->lock);
 
 	if (flags & TIPC_NOTIFY_NODE_DOWN)
-		tipc_publ_notify(net, publ_list, node, n->capabilities);
+		tipc_publ_notify(net, publ_list, n->capabilities);
 
 	if (flags & TIPC_NOTIFY_NODE_UP)
 		tipc_named_node_up(net, node, n->capabilities);
@@ -667,24 +667,6 @@ void tipc_node_subscribe(struct net *net, struct list_head *subscr, u32 addr)
 	}
 	tipc_node_write_lock(n);
 	list_add_tail(subscr, &n->publ_list);
-	tipc_node_write_unlock_fast(n);
-	tipc_node_put(n);
-}
-
-void tipc_node_unsubscribe(struct net *net, struct list_head *subscr, u32 addr)
-{
-	struct tipc_node *n;
-
-	if (in_own_node(net, addr))
-		return;
-
-	n = tipc_node_find(net, addr);
-	if (!n) {
-		pr_warn("Node unsubscribe rejected, unknown node 0x%x\n", addr);
-		return;
-	}
-	tipc_node_write_lock(n);
-	list_del_init(subscr);
 	tipc_node_write_unlock_fast(n);
 	tipc_node_put(n);
 }
@@ -2421,8 +2403,11 @@ static struct tipc_node *tipc_node_find_by_name(struct net *net,
 			}
 		}
 		tipc_node_read_unlock(n);
-		if (found_node)
+		if (found_node) {
+			if (!kref_get_unless_zero(&found_node->kref))
+				found_node = NULL;
 			break;
+		}
 	}
 	rcu_read_unlock();
 
@@ -2507,6 +2492,7 @@ out:
 	tipc_node_read_unlock(node);
 	tipc_bearer_xmit(net, bearer_id, &xmitq, &node->links[bearer_id].maddr,
 			 NULL);
+	tipc_node_put(node);
 	return res;
 }
 
@@ -2558,12 +2544,14 @@ int tipc_nl_node_get_link(struct sk_buff *skb, struct genl_info *info)
 		link = node->links[bearer_id].link;
 		if (!link) {
 			tipc_node_read_unlock(node);
+			tipc_node_put(node);
 			err = -EINVAL;
 			goto err_free;
 		}
 
 		err = __tipc_nl_add_link(net, &msg, link, 0);
 		tipc_node_read_unlock(node);
+		tipc_node_put(node);
 		if (err)
 			goto err_free;
 	}
@@ -2634,11 +2622,13 @@ int tipc_nl_node_reset_link_stats(struct sk_buff *skb, struct genl_info *info)
 	if (!link) {
 		spin_unlock_bh(&le->lock);
 		tipc_node_read_unlock(node);
+		tipc_node_put(node);
 		return -EINVAL;
 	}
 	tipc_link_reset_stats(link);
 	spin_unlock_bh(&le->lock);
 	tipc_node_read_unlock(node);
+	tipc_node_put(node);
 	return 0;
 }
 

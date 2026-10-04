@@ -951,6 +951,8 @@ static void mlx5_esw_vport_set_max_tx_speed(struct mlx5_eswitch *esw,
 		mlx5_core_dbg(esw->dev,
 			      "Failed to set vport %d speed %d, err=%d\n",
 			      vport->vport, vport->agg_max_tx_speed, ret);
+	else
+		vport->agg_max_tx_speed = 0;
 }
 
 int mlx5_esw_vport_enable(struct mlx5_eswitch *esw, struct mlx5_vport *vport,
@@ -1240,6 +1242,11 @@ static int mlx5_esw_host_functions_enabled_query(struct mlx5_eswitch *esw)
 {
 	struct mlx5_esw_pf_info host_pf_info;
 	const u32 *query_host_out;
+
+	if (!mlx5_core_is_pf(esw->dev)) {
+		esw->esw_funcs.host_funcs_disabled = true;
+		return 0;
+	}
 
 	if (!mlx5_core_is_ecpf_esw_manager(esw->dev))
 		return 0;
@@ -2460,13 +2467,20 @@ static int mlx5_esw_vports_init(struct mlx5_eswitch *esw)
 		}
 	}
 
-	if (mlx5_ecpf_vport_exists(dev) ||
-	    mlx5_core_is_ecpf_esw_manager(dev)) {
+	if (mlx5_ecpf_vport_exists(dev)) {
 		err = mlx5_esw_vport_alloc(esw, idx, MLX5_VPORT_ECPF);
 		if (err)
 			goto err;
 		idx++;
 	}
+
+	if (!xa_load(&esw->vports, esw->manager_vport)) {
+		err = mlx5_esw_vport_alloc(esw, idx, esw->manager_vport);
+		if (err)
+			goto err;
+		idx++;
+	}
+
 	err = mlx5_esw_vport_alloc(esw, idx, MLX5_VPORT_UPLINK);
 	if (err)
 		goto err;
@@ -2951,7 +2965,7 @@ bool mlx5_esw_hold(struct mlx5_core_dev *mdev)
 {
 	struct mlx5_eswitch *esw = mdev->priv.eswitch;
 
-	/* e.g. VF doesn't have eswitch so nothing to do */
+	/* Not an eswitch manager, so there is no mode lock to take */
 	if (!mlx5_esw_allowed(esw))
 		return true;
 
@@ -3009,9 +3023,9 @@ void mlx5_esw_put(struct mlx5_core_dev *mdev)
  * Should be called by esw mode change routine.
  *
  * Return:
- * * 0       - esw mode if successfully locked and refcount is 0.
- * * -EBUSY  - refcount is not 0.
- * * -EINVAL - In the middle of switching mode or lock is already held.
+ * * >= 0    - esw mode if successfully locked.
+ * * -EBUSY  - mode change in progress or users exist.
+ * * -EINVAL - lock is already held.
  */
 int mlx5_esw_try_lock(struct mlx5_eswitch *esw)
 {
@@ -3027,11 +3041,12 @@ int mlx5_esw_try_lock(struct mlx5_eswitch *esw)
 	return esw->mode;
 }
 
-int mlx5_esw_lock(struct mlx5_eswitch *esw)
+int mlx5_esw_lock(struct mlx5_eswitch *esw, bool check_users)
 {
 	down_write(&esw->mode_lock);
 
-	if (esw->eswitch_operation_in_progress) {
+	if (esw->eswitch_operation_in_progress ||
+	    (check_users && atomic64_read(&esw->user_count) > 0)) {
 		up_write(&esw->mode_lock);
 		return -EBUSY;
 	}
@@ -3099,7 +3114,7 @@ void mlx5_eswitch_unblock_ipsec(struct mlx5_core_dev *dev)
 	struct mlx5_eswitch *esw = dev->priv.eswitch;
 
 	if (!mlx5_esw_allowed(esw))
-		/* Failure means no eswitch => core dev is not a PF */
+		/* Not an eswitch manager, so nothing was blocked */
 		return;
 
 	mutex_lock(&esw->state_lock);
