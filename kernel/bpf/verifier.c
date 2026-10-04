@@ -14473,28 +14473,29 @@ out:
 }
 
 /*
- * Determine how many bytes a kfunc accesses through a stack pointer at
- * argument position @arg (0-based, corresponding to R1-R5).
- *
- * Returns:
- *   > 0      known read access size in bytes
- *     0      doesn't access memory through that argument (ex: not a pointer)
- *   S64_MIN  unknown
- *   < 0      known write access of (-return) bytes
+ * Describe a kfunc's stack access through argument slot @arg (0-based).
+ * As for helpers, must_write describes destruction of prior verifier state,
+ * rather than a guarantee that the callee writes every byte at runtime.
  */
-s64 bpf_kfunc_stack_access_bytes(struct bpf_verifier_env *env, struct bpf_insn *insn,
-				 int arg, int insn_idx)
+struct arg_access_info
+bpf_kfunc_stack_access_bytes(struct bpf_verifier_env *env, struct bpf_insn *insn,
+			     int arg, int insn_idx)
 {
 	struct bpf_insn_aux_data *aux = &env->insn_aux_data[insn_idx];
+	struct arg_access_info info = {
+		.size = U32_MAX,
+		.may_read = true,
+		.may_write = true,
+	};
 	struct bpf_call_arg_meta meta;
 	const struct btf_param *args;
 	const struct btf_type *t, *ref_t;
 	const struct btf *btf;
 	u32 i, slot, nargs, type_size;
-	s64 size;
+	u64 size;
 
 	if (bpf_fetch_kfunc_arg_meta(env, insn->imm, insn->off, &meta) < 0)
-		return S64_MIN;
+		return info;
 
 	btf = meta.btf;
 	args = btf_params(meta.func_proto);
@@ -14509,11 +14510,11 @@ s64 bpf_kfunc_stack_access_bytes(struct bpf_verifier_env *env, struct bpf_insn *
 	for (i = 0, slot = 0; i < nargs && slot < arg; i++)
 		slot += btf_arg_slots(btf_type_skip_modifiers(btf, args[i].type, NULL));
 	if (i >= nargs || slot != arg)
-		return 0;
+		return (struct arg_access_info) {};
 
 	t = btf_type_skip_modifiers(btf, args[i].type, NULL);
 	if (!btf_type_is_ptr(t))
-		return 0;
+		return (struct arg_access_info) {};
 
 	/* dynptr: fixed 16-byte on-stack representation */
 	if (is_kfunc_arg_dynptr(btf, &args[i])) {
@@ -14529,11 +14530,11 @@ s64 bpf_kfunc_stack_access_bytes(struct bpf_verifier_env *env, struct bpf_insn *
 
 		if (size_reg <= MAX_BPF_FUNC_REG_ARGS &&
 		    (aux->const_reg_mask & BIT(size_reg))) {
-			size = (s64)aux->const_reg_vals[size_reg];
+			size = aux->const_reg_vals[size_reg];
 			goto out;
 		}
 		/* Unknown size: the read may extend anywhere up to the frame top. */
-		return S64_MIN;
+		return info;
 	}
 
 	/* fixed-size pointed-to type: resolve via BTF */
@@ -14543,15 +14544,17 @@ s64 bpf_kfunc_stack_access_bytes(struct bpf_verifier_env *env, struct bpf_insn *
 		goto out;
 	}
 
-	return S64_MIN;
+	return info;
 out:
+	info.size = min_t(u64, size, U32_MAX);
 	/* KF_ITER_NEW kfuncs initialize the iterator state at arg 0 */
 	if (arg == 0 && meta.kfunc_flags & KF_ITER_NEW)
-		return -size;
+		info.may_read = false;
 	if (is_kfunc_arg_uninit(btf, &args[i]) &&
 	    (is_kfunc_arg_dynptr(btf, &args[i]) || env->allow_uninit_stack))
-		return -size;
-	return size;
+		info.may_read = false;
+	info.must_write = !info.may_read && info.size != U32_MAX;
+	return info;
 }
 
 /* check special kfuncs and return:
