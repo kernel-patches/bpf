@@ -18,6 +18,7 @@
 #include <linux/clk.h>
 #include <linux/kernel.h>
 #include <linux/interrupt.h>
+#include <linux/iopoll.h>
 #include <linux/ip.h>
 #include <linux/tcp.h>
 #include <linux/skbuff.h>
@@ -933,6 +934,54 @@ static int stmmac_init_ptp_clk_freq(struct stmmac_priv *priv)
 	}
 
 	return 0;
+}
+
+/**
+ * stmmac_rearm_timestamp_irq - re-arm the timestamp interrupt
+ * @priv: driver private structure
+ * Description: this re-arms the on-demand timestamp interrupt if an
+ * auxiliary snapshot channel was left enabled.
+ */
+static void stmmac_rearm_timestamp_irq(struct stmmac_priv *priv)
+{
+	u32 acr_value;
+	int ret, num;
+
+	if (!(priv->plat->flags & STMMAC_FLAG_EXT_SNAPSHOT_EN) ||
+	    !priv->ptp_clock)
+		return;
+
+	/* Flush the FIFO, re-program the enabled auxiliary snapshot
+	 * trigger and re-arm the interrupt only if the flush completed.
+	 */
+	if (priv->plat->core_type != DWMAC_CORE_XGMAC)
+		return;
+
+	mutex_lock(&priv->aux_ts_lock);
+	/* Snapshot the channel under the lock: a concurrent disable may
+	 * have dropped it since the gate check above.
+	 */
+	num = priv->plat->ext_snapshot_num;
+	if (num < 0) {
+		mutex_unlock(&priv->aux_ts_lock);
+		return;
+	}
+	acr_value = readl(priv->ptpaddr + PTP_ACR);
+	acr_value &= ~PTP_ACR_MASK;
+	acr_value |= PTP_ACR_ATSFC;
+	writel(acr_value, priv->ptpaddr + PTP_ACR);
+	ret = readl_poll_timeout(priv->ptpaddr + PTP_ACR, acr_value,
+				 !(acr_value & PTP_ACR_ATSFC), 10, 10000);
+	if (!ret) {
+		acr_value |= PTP_ACR_ATSEN(num);
+		writel(acr_value, priv->ptpaddr + PTP_ACR);
+		stmmac_mac_timestamp_interrupt_cfg(priv, true);
+	} else {
+		netdev_err(priv->dev,
+			   "%s: Failed to restore auxiliary snapshot channel\n",
+			   __func__);
+	}
+	mutex_unlock(&priv->aux_ts_lock);
 }
 
 /**
@@ -8589,6 +8638,8 @@ int stmmac_resume(struct device *dev)
 		ret = stmmac_init_timestamping(priv);
 		if (ret)
 			goto error_stop_dma;
+
+		stmmac_rearm_timestamp_irq(priv);
 	}
 
 init_coalesce:
