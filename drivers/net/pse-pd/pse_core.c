@@ -1138,6 +1138,9 @@ int pse_controller_register(struct pse_controller_dev *pcdev)
 	list_add(&pcdev->list, &pse_controller_list);
 	mutex_unlock(&pse_list_mutex);
 
+	blocking_notifier_call_chain(&pse_controller_notifier,
+				     PSE_REGISTERED, pcdev);
+
 	return 0;
 }
 EXPORT_SYMBOL_GPL(pse_controller_register);
@@ -1148,15 +1151,41 @@ EXPORT_SYMBOL_GPL(pse_controller_register);
  */
 void pse_controller_unregister(struct pse_controller_dev *pcdev)
 {
-	pse_flush_pw_ds(pcdev);
-	pse_release_pis(pcdev);
+	/* Raise the interrupt's disable depth before anything is freed.
+	 * pse_isr() queues notifications and reaches pcdev->pi, and nothing
+	 * below re-enables it. For a driver that requests its irq after
+	 * devm_pse_controller_register(), devres has already run free_irq()
+	 * by the time we get here and this only bumps the depth - the
+	 * ordering does not rely on that, so a driver requesting the irq
+	 * earlier is covered too.
+	 */
 	if (pcdev->irq)
 		disable_irq(pcdev->irq);
-	cancel_work_sync(&pcdev->ntf_work);
-	kfifo_free(&pcdev->ntf_fifo);
+
+	/* Unlink before the event: of_pse_control_get() walks
+	 * pse_controller_list and dereferences pcdev->pi[] through
+	 * of_pse_match_pi(), so no lookup may still reach this controller
+	 * once its teardown starts. Subscribers are handed pcdev as the
+	 * event data, so the notifier does not need it on the list.
+	 */
 	mutex_lock(&pse_list_mutex);
 	list_del(&pcdev->list);
 	mutex_unlock(&pse_list_mutex);
+
+	blocking_notifier_call_chain(&pse_controller_notifier,
+				     PSE_UNREGISTERED, pcdev);
+
+	/* After the event, not before. A subscriber dropping the last
+	 * pse_control reference reaches __pse_control_release() ->
+	 * regulator_disable() -> _pse_pi_disable(), which can end up in
+	 * pse_disable_pi_pol() and queue a notification of its own, so a
+	 * cancel_work_sync() placed above the walk would not stay drained.
+	 */
+	cancel_work_sync(&pcdev->ntf_work);
+
+	pse_flush_pw_ds(pcdev);
+	pse_release_pis(pcdev);
+	kfifo_free(&pcdev->ntf_fifo);
 }
 EXPORT_SYMBOL_GPL(pse_controller_unregister);
 
