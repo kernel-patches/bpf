@@ -1723,6 +1723,14 @@ bool bpf_is_may_goto_insn(struct bpf_insn *insn);
 void bpf_verbose_insn(struct bpf_verifier_env *env, struct bpf_insn *insn);
 bool bpf_get_call_summary(struct bpf_verifier_env *env, struct bpf_insn *call,
 			  struct bpf_call_summary *cs);
+/* Stack effects used for state pruning; must_write implies may_write. */
+struct arg_access_info {
+	u32 size;		/* Maximum extent; U32_MAX if unknown. */
+	u8 may_read:1;		/* Incoming contents or initialization may be needed. */
+	u8 may_write:1;
+	u8 must_write:1;	/* Prior verifier state is destroyed throughout size. */
+};
+
 s64 bpf_helper_stack_access_bytes(struct bpf_verifier_env *env,
 				  struct bpf_insn *insn, int arg,
 				  int insn_idx);

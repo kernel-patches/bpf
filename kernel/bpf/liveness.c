@@ -1437,17 +1437,14 @@ static void arg_track_xfer(struct bpf_verifier_env *env, struct bpf_insn *insn,
 }
 
 /*
- * Record access_bytes from helper/kfunc or load/store insn.
- *   access_bytes > 0:      stack read
- *   access_bytes < 0:      stack write
- *   access_bytes == S64_MIN: unknown   — conservative, mark [0..slot] as read
- *   access_bytes == 0:      no access
- *
+ * Record reads for every touched half-slot. A definite
+ * write requires full coverage, a known size, and a single possible offset.
  */
 static int record_stack_access_off(struct func_instance *instance, s64 fp_off,
-				   s64 access_bytes, u32 frame, u32 insn_idx)
+				   struct arg_access_info info, u32 frame, u32 insn_idx)
 {
 	s32 slot_hi, slot_lo;
+	int err;
 
 	if (fp_off >= 0)
 		/*
@@ -1456,49 +1453,53 @@ static int record_stack_access_off(struct func_instance *instance, s64 fp_off,
 		 * by the main verifier pass later.
 		 */
 		return 0;
-	if (access_bytes == S64_MIN) {
+
+	if (info.may_read && info.size == U32_MAX) {
 		/* helper/kfunc read unknown amount of bytes from fp_off until fp+0 */
 		slot_hi = (-fp_off - 1) / STACK_SLOT_SZ;
 		return mark_stack_read(instance, frame, insn_idx, 0, slot_hi);
 	}
-	if (access_bytes > 0) {
+	if (info.may_read) {
 		/* Mark any touched slot as use */
 		slot_hi = (-fp_off - 1) / STACK_SLOT_SZ;
-		slot_lo = max_t(s32, (-fp_off - access_bytes) / STACK_SLOT_SZ, 0);
-		return mark_stack_read(instance, frame, insn_idx, slot_lo, slot_hi);
-	} else if (access_bytes < 0) {
+		slot_lo = max_t(s32, (-fp_off - info.size) / STACK_SLOT_SZ, 0);
+		err = mark_stack_read(instance, frame, insn_idx, slot_lo, slot_hi);
+		if (err)
+			return err;
+	}
+	if (info.must_write && info.size != U32_MAX) {
 		/* Mark only fully covered slots as def */
-		access_bytes = -access_bytes;
 		slot_hi = (-fp_off) / STACK_SLOT_SZ - 1;
-		slot_lo = max_t(s32, (-fp_off - access_bytes + STACK_SLOT_SZ - 1) / STACK_SLOT_SZ, 0);
+		slot_lo = max_t(s32, (-fp_off - info.size + STACK_SLOT_SZ - 1) / STACK_SLOT_SZ, 0);
 		return mark_stack_write(instance, frame, insn_idx, slot_lo, slot_hi);
 	}
 	return 0;
 }
 
-/*
- * 'arg' is FP-derived argument to helper/kfunc or load/store that
- * reads (positive) or writes (negative) 'access_bytes' into 'use' or 'def'.
- */
-static int record_stack_access(struct bpf_verifier_env *env, struct func_instance *instance,
+/* Record access through a pointer with a known frame and possibly known offsets. */
+static int record_stack_access(struct bpf_verifier_env *env,
+			       struct func_instance *instance,
 			       const struct arg_track *arg,
-			       s64 access_bytes, u32 frame, u32 insn_idx)
+			       struct arg_access_info info, u32 frame, u32 insn_idx)
 {
 	int i, err;
 
-	if (access_bytes == 0)
+	if (!info.size)
 		return 0;
 	if (arg->off_cnt == 0) {
-		if (access_bytes > 0 || access_bytes == S64_MIN)
-			return mark_stack_read_all(env, instance, frame, insn_idx);
+		if (info.may_read) {
+			err = mark_stack_read_all(env, instance, frame, insn_idx);
+			if (err)
+				return err;
+		}
 		return 0;
 	}
-	if (access_bytes != S64_MIN && access_bytes < 0 && arg->off_cnt != 1)
+	if (info.size != U32_MAX && info.must_write && arg->off_cnt != 1)
 		/* multi-offset write cannot set stack_def */
 		return 0;
 
 	for (i = 0; i < arg->off_cnt; i++) {
-		err = record_stack_access_off(instance, arg->off[i], access_bytes, frame, insn_idx);
+		err = record_stack_access_off(instance, arg->off[i], info, frame, insn_idx);
 		if (err)
 			return err;
 	}
@@ -1533,9 +1534,10 @@ static int record_load_store_access(struct bpf_verifier_env *env,
 				    struct arg_track *at, int insn_idx)
 {
 	struct bpf_insn *insn = &env->prog->insnsi[insn_idx];
+	struct arg_access_info info = {};
 	int depth = instance->depth;
-	s32 sz = bpf_size_to_bytes(BPF_SIZE(insn->code));
 	u8 class = BPF_CLASS(insn->code);
+	bool read = false, write = false;
 	struct arg_track resolved, *ptr;
 	int oi;
 
@@ -1552,23 +1554,26 @@ static int record_load_store_access(struct bpf_verifier_env *env,
 	switch (class) {
 	case BPF_LDX:
 		ptr = &at[insn->src_reg];
+		read = true;
 		break;
 	case BPF_STX:
 		if (BPF_MODE(insn->code) == BPF_ATOMIC) {
 			if (insn->imm == BPF_STORE_REL)
-				sz = -sz;
+				write = true;
+			else
+				read = true;
 			if (insn->imm == BPF_LOAD_ACQ)
 				ptr = &at[insn->src_reg];
 			else
 				ptr = &at[insn->dst_reg];
 		} else {
 			ptr = &at[insn->dst_reg];
-			sz = -sz;
+			write = true;
 		}
 		break;
 	case BPF_ST:
 		ptr = &at[insn->dst_reg];
-		sz = -sz;
+		write = true;
 		break;
 	default:
 		return 0;
@@ -1587,12 +1592,31 @@ static int record_load_store_access(struct bpf_verifier_env *env,
 		ptr = &resolved;
 	}
 
+	info.may_read = read;
+	info.may_write = write;
+	info.must_write = write;
+	info.size = bpf_size_to_bytes(BPF_SIZE(insn->code));
 	if (ptr->frame >= 0 && ptr->frame <= depth)
-		return record_stack_access(env, instance, ptr, sz, ptr->frame, insn_idx);
+		return record_stack_access(env, instance, ptr, info, ptr->frame, insn_idx);
 	if (ptr->frame == ARG_IMPRECISE)
 		return record_imprecise(env, instance, ptr->mask, insn_idx);
 	/* ARG_NONE: not derived from any frame pointer, skip */
 	return 0;
+}
+
+/* Adapt the signed helper/kfunc access size until both producers are converted. */
+static struct arg_access_info stack_access_info(s64 bytes)
+{
+	bool write = bytes < 0 && bytes != S64_MIN && -bytes < U32_MAX;
+
+	return (struct arg_access_info) {
+		.size = bytes == S64_MIN
+			? U32_MAX
+			: min_t(u64, bytes < 0 ? -bytes : bytes, U32_MAX),
+		.may_read = bytes > 0 || bytes == S64_MIN,
+		.may_write = write,
+		.must_write = write,
+	};
 }
 
 static int record_arg_access(struct bpf_verifier_env *env,
@@ -1601,18 +1625,20 @@ static int record_arg_access(struct bpf_verifier_env *env,
 			     struct arg_track *at, int arg_idx,
 			     int insn_idx)
 {
+	struct arg_access_info info;
 	int depth = instance->depth;
 	int frame = at->frame;
 	int err = 0;
-	s64 bytes;
 
 	if (!arg_is_fp(at))
 		return 0;
 
 	if (bpf_helper_call(insn)) {
-		bytes = bpf_helper_stack_access_bytes(env, insn, arg_idx, insn_idx);
+		info = stack_access_info(bpf_helper_stack_access_bytes(env, insn,
+								       arg_idx, insn_idx));
 	} else if (bpf_pseudo_kfunc_call(insn)) {
-		bytes = bpf_kfunc_stack_access_bytes(env, insn, arg_idx, insn_idx);
+		info = stack_access_info(bpf_kfunc_stack_access_bytes(env, insn,
+								      arg_idx, insn_idx));
 	} else {
 		for (int f = 0; f <= depth; f++) {
 			err = mark_stack_read_all(env, instance, f, insn_idx);
@@ -1621,11 +1647,11 @@ static int record_arg_access(struct bpf_verifier_env *env,
 		}
 		return 0;
 	}
-	if (bytes == 0)
+	if (!info.size)
 		return 0;
 
 	if (frame >= 0 && frame <= depth)
-		err = record_stack_access(env, instance, at, bytes, frame, insn_idx);
+		err = record_stack_access(env, instance, at, info, frame, insn_idx);
 	else if (frame == ARG_IMPRECISE)
 		err = record_imprecise(env, instance, at->mask, insn_idx);
 	return err;
