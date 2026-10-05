@@ -69,13 +69,16 @@ bool dim_calc_stats(const struct dim_sample *start,
 	if (!delta_us)
 		return false;
 
-	/* u32 * USEC_PER_MSEC overflows a 32-bit long */
+	/*
+	 * u32 * USEC_PER_MSEC overflows a 32-bit long, and so does the
+	 * rounded-up epms dividend 64000 + delta_us - 1 for large delta_us
+	 */
 	curr_stats->ppms = DIV_ROUND_UP_ULL((u64)npkts * USEC_PER_MSEC,
 					    delta_us);
 	curr_stats->bpms = DIV_ROUND_UP_ULL((u64)nbytes * USEC_PER_MSEC,
 					    delta_us);
-	curr_stats->epms = DIV_ROUND_UP(DIM_NEVENTS * USEC_PER_MSEC,
-					delta_us);
+	curr_stats->epms = DIV_ROUND_UP_ULL((u64)DIM_NEVENTS * USEC_PER_MSEC,
+					    delta_us);
 	curr_stats->cpms = DIV_ROUND_UP_ULL((u64)ncomps * USEC_PER_MSEC,
 					    delta_us);
 	if (curr_stats->epms != 0)
