@@ -81,6 +81,11 @@ struct vfs_ancestor_walk {
 	unsigned int flags;	/* VFS_WALK_* */
 };
 
+void vfs_walk_start(struct vfs_ancestor_walk *aw, const struct path *path,
+		    unsigned int flags);
+int vfs_walk_next(struct vfs_ancestor_walk *aw);
+void vfs_walk_end(struct vfs_ancestor_walk *aw);
+
 void __init filename_init(void);
 
 /*
