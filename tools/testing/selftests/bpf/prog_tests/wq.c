@@ -7,7 +7,7 @@
 void serial_test_wq(void)
 {
 	struct wq *wq_skel = NULL;
-	int err, prog_fd;
+	int err, prog_fd, tries;
 
 	LIBBPF_OPTS(bpf_test_run_opts, topts);
 
@@ -28,7 +28,13 @@ void serial_test_wq(void)
 	ASSERT_OK(err, "test_run");
 	ASSERT_EQ(topts.retval, 0, "test_run");
 
-	usleep(50); /* 10 usecs should be enough, but give it extra */
+	/* loop check over 1 sec to make sure it doesn't fail early when busy */
+	for (tries = 1000; tries >= 0; tries--) {
+		if (wq_skel->bss->ok_sleepable == (1 << 1))
+			break;
+
+		usleep(1000);
+	}
 
 	ASSERT_EQ(wq_skel->bss->ok_sleepable, (1 << 1), "ok_sleepable");
 clean_up:
