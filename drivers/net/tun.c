@@ -1848,6 +1848,10 @@ static ssize_t tun_get_user(struct tun_struct *tun, struct tun_file *tfile,
 			zerocopy = true;
 	}
 
+	/* The NAPI frags path copies the complete iterator. */
+	if (frags)
+		zerocopy = false;
+
 	if (!frags && tun_can_build_skb(tun, tfile, len, noblock, zerocopy)) {
 		/* For the packet that is not easy to be processed
 		 * (e.g gso or jumbo packet), we will do it at after
@@ -1868,11 +1872,6 @@ static ssize_t tun_get_user(struct tun_struct *tun, struct tun_file *tfile,
 		if (frags) {
 			mutex_lock(&tfile->napi_mutex);
 			skb = tun_napi_alloc_frags(tfile, copylen, from);
-			/* tun_napi_alloc_frags() enforces a layout for the skb.
-			 * If zerocopy is enabled, then this layout will be
-			 * overwritten by zerocopy_sg_from_iter().
-			 */
-			zerocopy = false;
 		} else {
 			if (!linear)
 				linear = min_t(size_t, good_linear, copylen);
