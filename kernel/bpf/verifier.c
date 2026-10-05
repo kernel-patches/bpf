@@ -9806,6 +9806,30 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog,
 			err = err ?: check_func_arg_reg_off(env, reg, argno, arg->arg_type);
 			if (err)
 				return err;
+
+			/* A __arg_trusted argument requires a referenced or trusted
+			 * pointer. btf_ptr_types also matches a bare PTR_TO_BTF_ID and
+			 * an MEM_RCU one, but neither is referenced or trusted, so the
+			 * callee would be verified with PTR_TRUSTED while the caller
+			 * passed something that is not. PTR_MAYBE_NULL is not counted
+			 * as unsafe when __arg_nullable declares it, because
+			 * bpf_type_has_unsafe_modifiers() treats that flag as unsafe.
+			 *
+			 * Checked after the type/offset match so that type and offset
+			 * diagnostics keep their current wording.
+			 */
+			if (arg->arg_type & PTR_TRUSTED) {
+				u32 flags = type_flag(reg->type);
+
+				if (!reg_is_referenced(env, reg) &&
+				    (!(flags & BPF_REG_TRUSTED_MODIFIERS) ||
+				     (flags & ~(BPF_REG_TRUSTED_MODIFIERS |
+						(arg->arg_type & PTR_MAYBE_NULL))))) {
+					bpf_log(log, "%s must be referenced or trusted\n",
+						reg_arg_name(env, argno));
+					return -EINVAL;
+				}
+			}
 		} else {
 			verifier_bug(env, "unrecognized %s type %d",
 				     reg_arg_name(env, argno), arg->arg_type);
