@@ -268,6 +268,10 @@ redo:
 		memcpy(ci_out, ci, sizeof(ci_out));
 
 		const_reg_xfer(env, ci_out, insn, insns, idx);
+		/* the body of a kfunc call leaves R0-R5 unknown, like the call */
+		if (insn_aux[idx].kfunc_body)
+			for (r = BPF_REG_0; r <= BPF_REG_5; r++)
+				ci_out[r] = unknown;
 
 		succ = bpf_insn_successors(env, idx);
 		for (int s = 0; s < succ->cnt; s++)
