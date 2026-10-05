@@ -2569,8 +2569,8 @@ static int kfunc_btf_cmp_by_off(const void *a, const void *b)
 	return d0->offset - d1->offset;
 }
 
-static struct bpf_kfunc_desc *
-find_kfunc_desc(const struct bpf_prog *prog, u32 func_id, u16 offset)
+struct bpf_kfunc_desc *
+bpf_find_kfunc_desc(const struct bpf_prog *prog, u32 func_id, u16 offset)
 {
 	struct bpf_kfunc_desc desc = {
 		.func_id = func_id,
@@ -2877,10 +2877,11 @@ int bpf_add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, u16 offset)
 	struct btf_func_model func_model;
 	struct bpf_kfunc_desc_tab *tab;
 	struct bpf_prog_aux *prog_aux;
+	const struct bpf_kfunc_body *body;
 	struct bpf_kfunc_meta kfunc;
 	struct bpf_kfunc_desc *desc;
 	unsigned long addr;
-	int err;
+	int err, i;
 
 	prog_aux = env->prog->aux;
 	tab = prog_aux->kfunc_tab;
@@ -2930,7 +2931,7 @@ int bpf_add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, u16 offset)
 		prog_aux->kfunc_btf_tab = btf_tab;
 	}
 
-	if (find_kfunc_desc(env->prog, func_id, offset))
+	if (bpf_find_kfunc_desc(env->prog, func_id, offset))
 		return 0;
 
 	if (tab->nr_base_descs == MAX_KFUNC_DESCS) {
@@ -2990,7 +2991,10 @@ int bpf_add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, u16 offset)
 	desc = &tab->descs[tab->nr_descs];
 	memset(desc, 0, sizeof(*desc));
 
-	err = gen_kfunc_arg_proto(env, &meta, &func_model, &desc->proto);
+	/* the body of a kfunc that the program may call checks its arguments */
+	body = kfunc.flags && btf_kfunc_is_allowed(kfunc.btf, func_id, env->prog) ?
+	       btf_find_kfunc_body(kfunc.btf, func_id) : NULL;
+	err = body ? 0 : gen_kfunc_arg_proto(env, &meta, &func_model, &desc->proto);
 	if (err)
 		return err;
 
@@ -2998,6 +3002,10 @@ int bpf_add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, u16 offset)
 	desc->offset = offset;
 	desc->addr = addr;
 	desc->func_model = func_model;
+	desc->body = body;
+	for (i = 0; body && i < func_model.nr_args; i++)
+		if (btf_param_match_suffix(kfunc.btf, &btf_params(kfunc.proto)[i], "__k"))
+			desc->body_imm |= BIT(BPF_REG_1 + i);
 	tab->nr_descs++;
 	tab->nr_base_descs++;
 	sort(tab->descs, tab->nr_base_descs, sizeof(tab->descs[0]),
@@ -14762,7 +14770,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	func_name = meta.func_name;
 	insn_aux = &env->insn_aux_data[insn_idx];
 
-	desc = find_kfunc_desc(env->prog, insn->imm, insn->off);
+	desc = bpf_find_kfunc_desc(env->prog, insn->imm, insn->off);
 	if (!desc) {
 		verifier_bug(env, "kfunc descriptor not found for func_id %u", insn->imm);
 		return -EFAULT;
@@ -19527,6 +19535,9 @@ static int do_check(struct bpf_verifier_env *env)
 
 		state->last_insn_idx = env->prev_insn_idx;
 		state->insn_idx = env->insn_idx;
+		err = bpf_mark_kfunc_body_regs(env, prev_insn_idx, insn_aux);
+		if (err)
+			return err;
 		/*
 		 * Record the incoming edge so active and queued paths use the same
 		 * branch-recording path. A zero-offset conditional has identical
@@ -22180,7 +22191,7 @@ int bpf_fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	 * __bpf_call_base, unless the JIT needs to call functions that are
 	 * further than 32 bits away (bpf_jit_supports_far_kfunc_call()).
 	 */
-	desc = find_kfunc_desc(env->prog, insn->imm, insn->off);
+	desc = bpf_find_kfunc_desc(env->prog, insn->imm, insn->off);
 	if (!desc) {
 		verifier_bug(env, "kernel function descriptor not found for func_id %u",
 			     insn->imm);
@@ -22655,15 +22666,6 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	env->test_reg_invariants = attr->prog_flags & BPF_F_TEST_REG_INVARIANTS;
 	env->arena_scalar = attr->prog_flags & BPF_F_ARENA_SCALAR;
 
-	env->explored_states = kvzalloc_objs(struct list_head,
-					     state_htab_size(env),
-					     GFP_KERNEL_ACCOUNT);
-	ret = -ENOMEM;
-	if (!env->explored_states)
-		goto skip_full_check;
-
-	for (i = 0; i < state_htab_size(env); i++)
-		INIT_LIST_HEAD(&env->explored_states[i]);
 	INIT_LIST_HEAD(&env->free_list);
 
 	/* Prepare BTF and func_info needed to discover all subprograms. */
@@ -22706,6 +22708,21 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	ret = add_kfuncs(env);
 	if (ret < 0)
 		goto skip_full_check;
+
+	ret = bpf_inline_kfunc_bodies(env);
+	if (ret < 0)
+		goto skip_full_check;
+
+	/* sized by the program length, so after the lowering */
+	env->explored_states = kvzalloc_objs(struct list_head,
+					     state_htab_size(env),
+					     GFP_KERNEL_ACCOUNT);
+	ret = -ENOMEM;
+	if (!env->explored_states)
+		goto skip_full_check;
+
+	for (i = 0; i < state_htab_size(env); i++)
+		INIT_LIST_HEAD(&env->explored_states[i]);
 
 	if (bpf_prog_is_offloaded(env->prog->aux)) {
 		ret = bpf_prog_offload_verifier_prep(env->prog);
@@ -22770,6 +22787,9 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 
 skip_full_check:
 	kvfree(env->explored_states);
+
+	if (ret == 0)
+		bpf_restore_kfunc_calls(env);
 
 	/* might decrease stack depth, keep it before passes that
 	 * allocate additional slots.
@@ -22900,6 +22920,7 @@ err_prep:
 err_free_env:
 	bpf_free_subprog_jts(env);
 	vfree(env->insn_aux_data);
+	bpf_free_kfunc_inlines(env);
 	kvfree(env->fd_array);
 	bpf_stack_liveness_free(env);
 	kvfree(env->cfg.insn_postorder);

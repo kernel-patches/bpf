@@ -634,6 +634,7 @@ struct bpf_insn_aux_data {
 		enum bpf_reg_type ptr_type;	/* pointer type for load/store insns */
 		struct bpf_map_ptr_state map_ptr_state;
 		s32 call_imm;			/* saved imm field of call insn */
+		u32 kfunc_inline;		/* 1 + index into env->kfunc_inlines, at a call */
 		u32 alu_limit;			/* limit for add/sub register with pointer */
 		struct {
 			u32 map_index;		/* index into used_maps[] */
@@ -683,6 +684,9 @@ struct bpf_insn_aux_data {
 	 */
 	u8 fastcall_spills_num:3;
 	u8 arg_prog:4;
+	/* insn belongs to the body of a kfunc call, see bpf_inline_kfunc_bodies() */
+	u8 kfunc_body:1;
+	u8 kfunc_body_entry:1;
 
 	/* below fields are initialized once */
 	unsigned int orig_idx; /* original instruction index */
@@ -1083,6 +1087,8 @@ struct bpf_verifier_env {
 	u32 scc_cnt;
 	struct bpf_iarray *succ;
 	struct bpf_iarray *gotox_tmp_buf;
+	struct bpf_kfunc_inline *kfunc_inlines;
+	u32 kfunc_inline_cnt;
 };
 
 static inline struct bpf_func_info_aux *subprog_aux(struct bpf_verifier_env *env, int subprog)
@@ -1794,13 +1800,41 @@ enum bpf_reg_arg_type {
 #define MAX_KFUNC_CALL_DESCS (MAX_KFUNC_DESCS * 2)
 static_assert(MAX_KFUNC_CALL_DESCS <= S16_MAX + 1);
 
+/* A call of a kfunc with a body, which the verifier replaced by the body */
+struct bpf_kfunc_inline {
+	struct bpf_insn call;
+	const struct bpf_kfunc_body *body;
+	unsigned long addr;		/* of the compiled kfunc */
+	u8 *image;			/* native code for the JIT */
+	u32 start;
+	/* the BPF registers that R0-R5 are bound to, and the constant arguments */
+	u8 reg[MAX_BPF_FUNC_REG_ARGS + 1];
+	s32 imm[MAX_BPF_FUNC_REG_ARGS + 1];
+	u8 image_len;
+	u8 nargs;
+	u8 imm_mask;	/* R1-R5 that hold constant (__k) arguments */
+	bool entered;	/* the verifier reached the body */
+	bool ret;	/* the kfunc returns a value */
+	bool copy;	/* the native code is a copy of the compiled kfunc */
+};
+
 struct bpf_kfunc_desc {
 	struct btf_func_model func_model;
 	struct bpf_func_proto proto;
+	const struct bpf_kfunc_body *body;
 	u32 func_id;
 	u16 offset;
+	u8 body_imm;	/* R1-R5 that are constant (__k) arguments of the body */
 	unsigned long addr;
 };
+
+struct bpf_kfunc_desc *bpf_find_kfunc_desc(const struct bpf_prog *prog, u32 func_id, u16 offset);
+int bpf_inline_kfunc_bodies(struct bpf_verifier_env *env);
+int bpf_mark_kfunc_body_regs(struct bpf_verifier_env *env, int prev_insn_idx,
+			     const struct bpf_insn_aux_data *aux);
+void bpf_restore_kfunc_calls(struct bpf_verifier_env *env);
+void bpf_free_kfunc_inlines(struct bpf_verifier_env *env);
+const struct bpf_kfunc_inline *bpf_kfunc_native(const struct bpf_verifier_env *env, int idx);
 
 struct bpf_kfunc_desc_tab {
 	u32 nr_descs;
