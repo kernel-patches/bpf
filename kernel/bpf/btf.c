@@ -246,6 +246,14 @@ struct btf_id_dtor_kfunc_tab {
 	struct btf_id_dtor_kfunc dtors[];
 };
 
+struct btf_kfunc_body_tab {
+	u32 cnt;
+	struct {
+		u32 id;
+		const struct bpf_kfunc_body *body;
+	} bodies[];
+};
+
 struct btf_struct_ops_tab {
 	u32 cnt;
 	u32 capacity;
@@ -269,6 +277,7 @@ struct btf {
 	struct rcu_head rcu;
 	struct btf_kfunc_set_tab *kfunc_set_tab;
 	struct btf_id_dtor_kfunc_tab *dtor_kfunc_tab;
+	struct btf_kfunc_body_tab *kfunc_body_tab;
 	struct btf_struct_metas *struct_meta_tab;
 	struct btf_struct_ops_tab *struct_ops_tab;
 	struct btf_layout *layout;
@@ -1883,6 +1892,7 @@ static void btf_free(struct btf *btf)
 	btf_free_struct_meta_tab(btf);
 	btf_free_dtor_kfunc_tab(btf);
 	btf_free_kfunc_set_tab(btf);
+	kfree(btf->kfunc_body_tab);
 	btf_free_struct_ops_tab(btf);
 	kvfree(btf->types);
 	kvfree(btf->resolved_sizes);
@@ -9695,6 +9705,118 @@ u32 *btf_kfunc_is_modify_return(const struct btf *btf, u32 kfunc_btf_id,
 	return btf_kfunc_id_set_contains(btf, BTF_KFUNC_HOOK_FMODRET, kfunc_btf_id);
 }
 
+const struct bpf_kfunc_body *btf_find_kfunc_body(const struct btf *btf, u32 kfunc_btf_id)
+{
+	const struct btf_kfunc_body_tab *tab = btf->kfunc_body_tab;
+	u32 i;
+
+	for (i = 0; tab && i < tab->cnt; i++)
+		if (tab->bodies[i].id == kfunc_btf_id)
+			return tab->bodies[i].body;
+	return NULL;
+}
+
+/* a scalar or a pointer of one register */
+static bool btf_kfunc_reg_type(const struct btf *btf, u32 id)
+{
+	const struct btf_type *t = btf_type_skip_modifiers(btf, id, NULL);
+
+	return btf_type_is_ptr(t) ||
+	       ((btf_type_is_int(t) || btf_is_any_enum(t)) && t->size <= sizeof(u64));
+}
+
+/*
+ * A kfunc with a body takes each argument in one of R1-R5, constant (__k)
+ * ones in 32 bits for native code, and returns in R0. Its body uses R0-R5,
+ * no instruction of cpu v4, which not every JIT has, and jumps only forward
+ * within it, so that it ends by falling through the last instruction. The
+ * verifier checks the rest.
+ */
+static bool btf_check_kfunc_body(const struct btf *btf, const struct btf_type *func,
+				 const struct bpf_kfunc_body *b)
+{
+	const struct btf_type *proto = btf_type_by_id(btf, func->type);
+	const struct btf_param *args = btf_params(proto);
+	int i, n = btf_type_vlen(proto), len = b->len;
+	const struct bpf_insn *insn;
+	u8 op;
+
+	if (n > MAX_BPF_FUNC_REG_ARGS || !b->insns || !len || len > BPF_KFUNC_BODY_MAX_INSNS ||
+	    (proto->type && !btf_kfunc_reg_type(btf, proto->type)))
+		return false;
+	for (i = 0; i < n; i++)
+		if (!btf_kfunc_reg_type(btf, args[i].type) ||
+		    (btf_param_match_suffix(btf, &args[i], "__k") &&
+		     btf_type_skip_modifiers(btf, args[i].type, NULL)->size > sizeof(s32)))
+			return false;
+	for (i = 0; i < len; i++) {
+		insn = &b->insns[i];
+		op = BPF_OP(insn->code);
+		if (insn->dst_reg > BPF_REG_5 || insn->src_reg > BPF_REG_5)
+			return false;
+		switch (BPF_CLASS(insn->code)) {
+		case BPF_ALU:
+		case BPF_ALU64:		/* not movsx, sdiv, smod or bswap */
+			if (insn->off || (BPF_CLASS(insn->code) == BPF_ALU64 && op == BPF_END))
+				return false;
+			break;
+		case BPF_LDX:
+		case BPF_ST:
+		case BPF_STX:		/* not ldsx or atomics */
+			if (BPF_MODE(insn->code) != BPF_MEM)
+				return false;
+			break;
+		case BPF_JMP:
+		case BPF_JMP32:		/* forward jumps within the body, not gotol */
+			if (op == BPF_CALL || op == BPF_EXIT || op == BPF_JCOND ||
+			    (op == BPF_JA && insn->code != (BPF_JMP | BPF_JA)) ||
+			    insn->off < 0 || insn->off >= len - i - 1)
+				return false;
+			break;
+		default:		/* not ld_imm64 */
+			return false;
+		}
+	}
+	return true;
+}
+
+static int btf_add_kfunc_bodies(struct btf *btf, const struct btf_kfunc_id_set *kset)
+{
+	u32 i, id, cnt = btf->kfunc_body_tab ? btf->kfunc_body_tab->cnt : 0;
+	struct btf_kfunc_body_tab *tab;
+	const struct bpf_kfunc_body *b;
+	const struct btf_type *t;
+	u32 *pair;
+
+	if (!kset->body_cnt)
+		return 0;
+	tab = krealloc(btf->kfunc_body_tab, struct_size(tab, bodies, cnt + kset->body_cnt),
+		       GFP_KERNEL | __GFP_NOWARN);
+	if (!tab)
+		return -ENOMEM;
+	tab->cnt = cnt;
+	btf->kfunc_body_tab = tab;
+	for (i = 0; i < kset->body_cnt; i++) {
+		b = &kset->bodies[i];
+		id = btf_relocate_id(btf, *b->id);
+		t = btf_type_by_id(btf, id);
+		pair = btf_id_set8_contains(kset->set, *b->id);
+		/* the body stands for the call, so no kfunc flags apply */
+		if (!pair || pair[1] || !t || !btf_type_is_func(t) ||
+		    !btf_check_kfunc_body(btf, t, b)) {
+			/* a set that fails to register leaves no bodies */
+			tab->cnt = cnt;
+			return -EINVAL;
+		}
+		/* a set registered for several hooks adds its bodies once */
+		if (!btf_find_kfunc_body(btf, id)) {
+			tab->bodies[tab->cnt].id = id;
+			tab->bodies[tab->cnt++].body = b;
+		}
+	}
+	return 0;
+}
+
 static int __register_btf_kfunc_id_set(enum btf_kfunc_hook hook,
 				       const struct btf_kfunc_id_set *kset)
 {
@@ -9713,6 +9835,10 @@ static int __register_btf_kfunc_id_set(enum btf_kfunc_hook hook,
 		if (ret)
 			goto err_out;
 	}
+
+	ret = btf_add_kfunc_bodies(btf, kset);
+	if (ret)
+		goto err_out;
 
 	ret = btf_populate_kfunc_set(btf, hook, kset);
 

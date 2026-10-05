@@ -120,10 +120,36 @@ struct bpf_prog;
 
 typedef int (*btf_kfunc_filter_t)(const struct bpf_prog *prog, u32 kfunc_id);
 
+#define BPF_KFUNC_BODY_MAX_INSNS	32
+#define BPF_KFUNC_INLINE_MAX		128
+
+/*
+ * The body of a kfunc: len BPF instructions that compute the kfunc from its
+ * arguments in R1-R5 into R0. The verifier analyzes each call of the kfunc as
+ * the body, and the body runs in place of the call unless the JIT has native
+ * code for it, see kernel/bpf/kfunc_inline.c.
+ *
+ * emit, if set, writes native code for a call to buf, at most
+ * BPF_KFUNC_INLINE_MAX bytes, and returns its length, or an error if it has
+ * no code, for example because the CPU lacks a feature; the JIT then copies
+ * the compiled kfunc. reg[i] is the native register that the verifier bound
+ * Ri to, for R0-R5, and those of R1-R5 that are not arguments are free to
+ * use. imm[i] is the value of Ri if it is a constant (__k) argument. Like the
+ * rest of the JIT, native code is trusted to compute what the body computes.
+ */
+struct bpf_kfunc_body {
+	const u32 *id;
+	const struct bpf_insn *insns;
+	u32 len;
+	int (*emit)(const u8 *reg, const s32 *imm, u8 *buf);
+};
+
 struct btf_kfunc_id_set {
 	struct module *owner;
 	struct btf_id_set8 *set;
 	btf_kfunc_filter_t filter;
+	const struct bpf_kfunc_body *bodies;
+	u32 body_cnt;
 };
 
 struct btf_id_dtor_kfunc {
@@ -604,6 +630,7 @@ const char *btf_str_by_offset(const struct btf *btf, u32 offset);
 struct btf *btf_parse_vmlinux(void);
 struct btf *bpf_prog_get_target_btf(const struct bpf_prog *prog);
 u32 *btf_kfunc_flags(const struct btf *btf, u32 kfunc_btf_id, const struct bpf_prog *prog);
+const struct bpf_kfunc_body *btf_find_kfunc_body(const struct btf *btf, u32 kfunc_btf_id);
 int btf_kfunc_check_flag(const struct btf *btf, u32 kfunc_btf_id, u32 flag);
 bool btf_kfunc_is_allowed(const struct btf *btf, u32 kfunc_btf_id, const struct bpf_prog *prog);
 u32 *btf_kfunc_is_modify_return(const struct btf *btf, u32 kfunc_btf_id,
