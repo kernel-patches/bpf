@@ -162,6 +162,9 @@ extern int follow_down_one(struct path *);
 extern int follow_down(struct path *path, unsigned int flags);
 extern int follow_up(struct path *);
 
+/* vfs_walk_ancestors() flags */
+#define VFS_WALK_RCU			BIT(0)
+
 /* per-position flags passed to the vfs_walk_ancestors() callback */
 #define VFS_WALK_POS_DISCONNECTED	BIT(0)
 /* the position is a mountpoint landed on by a mount crossing */
