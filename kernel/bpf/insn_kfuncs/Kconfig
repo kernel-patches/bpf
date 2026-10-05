@@ -9,3 +9,8 @@ config BPF_INSN_KFUNCS
 	  puts native code in its place where it can.
 
 	  If unsure, say N.
+
+config BPF_INSN_KFUNCS_ARCH
+	bool
+	depends on BPF_INSN_KFUNCS
+	default y if X86_64
