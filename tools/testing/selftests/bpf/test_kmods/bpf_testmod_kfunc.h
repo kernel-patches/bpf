@@ -357,4 +357,8 @@ void bpf_testmod_test_hardirq_fn(void);
 void bpf_testmod_test_softirq_fn(void);
 void bpf_kfunc_trigger_ctx_check(void) __ksym;
 
+u64 bpf_testmod_inline_mov(u64 x) __ksym;
+u64 bpf_testmod_inline_xor(u64 a, u64 b) __ksym;
+u64 bpf_testmod_inline_div(u64 a, u64 b) __ksym;
+
 #endif /* _BPF_TESTMOD_KFUNC_H */
