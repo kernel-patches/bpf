@@ -118,6 +118,16 @@ static const struct bpf_insn lea64_body[] = {
 	BPF_ALU64_REG(BPF_ADD, BPF_REG_0, BPF_REG_4),
 };
 
+#ifdef CONFIG_BPF_INSN_KFUNCS_ARCH
+#include "insn_kfuncs.h" /* $(SRCARCH)/insn_kfuncs.h */
+#else
+#define rol64_emit	NULL
+#define select64_emit	NULL
+#define extract64_emit	NULL
+#define load_be64_emit	NULL
+#define lea64_emit	NULL
+#endif
+
 BTF_KFUNCS_START(insn_kfunc_ids)
 BTF_ID_FLAGS(func, bpf_rol64)
 BTF_ID_FLAGS(func, bpf_select64)
@@ -139,14 +149,15 @@ BTF_ID(func, bpf_lea64)
 
 #define BODY(i, op, emit)	{ &body_ids[i], op##_body, ARRAY_SIZE(op##_body), emit }
 
+/* without emit, the JIT copies the kfunc, whose code is the instruction itself */
 static const struct bpf_kfunc_body bodies[] = {
-	BODY(0, rol64, NULL),
-	BODY(1, select64, NULL),
-	BODY(2, extract64, NULL),
-	BODY(3, load_be64, NULL),
+	BODY(0, rol64, rol64_emit),
+	BODY(1, select64, select64_emit),
+	BODY(2, extract64, extract64_emit),
+	BODY(3, load_be64, load_be64_emit),
 	BODY(4, prefetch, NULL),
 	BODY(5, copy16, NULL),
-	BODY(6, lea64, NULL),
+	BODY(6, lea64, lea64_emit),
 };
 
 static const struct btf_kfunc_id_set insn_kfunc_set = {
