@@ -931,6 +931,78 @@ BTF_ID_LIST(bpf_testmod_dtor_ids)
 BTF_ID(struct, bpf_testmod_ctx)
 BTF_ID(func, bpf_testmod_ctx_release_dtor)
 
+/*
+ * Kfuncs with a body, in a set that XDP programs may not use: the JIT copies
+ * the first, the second has native code from this module, and the third,
+ * which divides, keeps its body.
+ */
+__bpf_kfunc u64 bpf_testmod_inline_mov(u64 x)
+{
+	return x;
+}
+
+__bpf_kfunc u64 bpf_testmod_inline_xor(u64 a, u64 b)
+{
+	return a ^ b;
+}
+
+__bpf_kfunc u64 bpf_testmod_inline_div(u64 a, u64 b)
+{
+	return b ? a / b : 0;
+}
+
+BTF_ID_LIST(bpf_testmod_body_ids)
+BTF_ID(func, bpf_testmod_inline_mov)
+BTF_ID(func, bpf_testmod_inline_xor)
+BTF_ID(func, bpf_testmod_inline_div)
+
+static const struct bpf_insn mov_body[] = {
+	BPF_MOV64_REG(BPF_REG_0, BPF_REG_1),
+};
+
+static const struct bpf_insn xor_body[] = {
+	BPF_MOV64_REG(BPF_REG_0, BPF_REG_1),
+	BPF_ALU64_REG(BPF_XOR, BPF_REG_0, BPF_REG_2),
+};
+
+static const struct bpf_insn div_body[] = {
+	BPF_MOV64_REG(BPF_REG_0, BPF_REG_1),
+	BPF_ALU64_REG(BPF_DIV, BPF_REG_0, BPF_REG_2),
+};
+
+#ifdef CONFIG_X86_64
+/* op %src, %dst on 64-bit registers */
+static u8 *x86_op(u8 *p, u8 op, u8 src, u8 dst)
+{
+	*p++ = 0x48 | (src & 8 ? 4 : 0) | (dst & 8 ? 1 : 0);
+	*p++ = op;
+	*p++ = 0xc0 | (src & 7) << 3 | (dst & 7);
+	return p;
+}
+
+/* the result can take the register of an argument, which a copy cannot */
+static int xor_emit(const u8 *reg, const s32 *imm, u8 *buf)
+{
+	u8 dst = reg[0], a = reg[1], b = reg[2], *p = buf;
+
+	if (dst == b)
+		swap(a, b);
+	if (dst != a)
+		p = x86_op(p, 0x89, a, dst);	/* mov %a, %dst */
+	return x86_op(p, 0x31, b, dst) - buf;	/* xor %b, %dst */
+}
+#else
+#define xor_emit	NULL
+#endif
+
+#define BODY(i, op, emit)	{ &bpf_testmod_body_ids[i], op##_body, ARRAY_SIZE(op##_body), emit }
+
+static const struct bpf_kfunc_body bpf_testmod_bodies[] = {
+	BODY(0, mov, NULL),
+	BODY(1, xor, xor_emit),
+	BODY(2, div, NULL),
+};
+
 static const struct btf_kfunc_id_set bpf_testmod_common_kfunc_set = {
 	.owner = THIS_MODULE,
 	.set   = &bpf_testmod_common_kfunc_ids,
@@ -1827,6 +1899,9 @@ BTF_ID_FLAGS(func, bpf_kfunc_implicit_arg, KF_IMPLICIT_ARGS)
 BTF_ID_FLAGS(func, bpf_kfunc_implicit_arg_legacy, KF_IMPLICIT_ARGS)
 BTF_ID_FLAGS(func, bpf_kfunc_implicit_arg_legacy_impl)
 BTF_ID_FLAGS(func, bpf_kfunc_trigger_ctx_check)
+BTF_ID_FLAGS(func, bpf_testmod_inline_mov)
+BTF_ID_FLAGS(func, bpf_testmod_inline_xor)
+BTF_ID_FLAGS(func, bpf_testmod_inline_div)
 BTF_KFUNCS_END(bpf_testmod_check_kfunc_ids)
 
 static int bpf_testmod_ops_init(struct btf *btf)
@@ -1861,6 +1936,8 @@ static int bpf_testmod_ops_init_member(const struct btf_type *t,
 static const struct btf_kfunc_id_set bpf_testmod_kfunc_set = {
 	.owner = THIS_MODULE,
 	.set   = &bpf_testmod_check_kfunc_ids,
+	.bodies = bpf_testmod_bodies,
+	.body_cnt = ARRAY_SIZE(bpf_testmod_bodies),
 };
 
 static const struct bpf_verifier_ops bpf_testmod_verifier_ops = {
