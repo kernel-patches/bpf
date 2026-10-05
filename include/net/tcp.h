@@ -3054,6 +3054,12 @@ struct bpf_tcp_ops {
 			      struct request_sock *req, struct sk_buff *syn_skb,
 			      enum tcp_synack_type synack_type,
 			      u32 opt_off);
+
+	/* Called when an incoming skb is enqueued to sk->sk_receive_queue. */
+	void (*enqueue_rcvq)(struct sock *sk, struct sk_buff *skb);
+
+	/* Called after data is dequeued from sk->sk_receive_queue. */
+	void (*dequeue_rcvq)(struct sock *sk);
 };
 
 #define bpf_tcp_ops_call(op, sk, ...)					\
@@ -3144,6 +3150,18 @@ static inline void tcp_bpf_rtt(struct sock *sk, long mrtt, u32 srtt)
 		tcp_call_bpf_2arg(sk, BPF_SOCK_OPS_RTT_CB, mrtt, srtt);
 	if (BPF_TCP_OPS_TEST_FLAG(tcp_sk(sk), RTT))
 		bpf_tcp_ops_call(rtt, sk, mrtt, srtt);
+}
+
+static inline void bpf_tcp_ops_enqueue_rcvq(struct sock *sk, struct sk_buff *skb)
+{
+	if (BPF_TCP_OPS_TEST_FLAG(tcp_sk(sk), RCVQ))
+		bpf_tcp_ops_call(enqueue_rcvq, sk, skb);
+}
+
+static inline void bpf_tcp_ops_dequeue_rcvq(struct sock *sk)
+{
+	if (BPF_TCP_OPS_TEST_FLAG(tcp_sk(sk), RCVQ))
+		bpf_tcp_ops_call(dequeue_rcvq, sk);
 }
 
 #if IS_ENABLED(CONFIG_SMC)
