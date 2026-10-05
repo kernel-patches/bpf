@@ -1636,18 +1636,27 @@ static inline void mm_prepare_for_swap_entries(struct mm_struct *mm)
 	}
 }
 
+/*
+ * On PREEMPT_RT, local_trylock() uses a regular rtmutex-backed spinlock.
+ * Its slow path can take current->pi_lock. Skip these caches when a no-lock
+ * caller is already non-preemptible.
+ */
+#define mm_local_trylock_nolock(lock)					\
+({									\
+	bool __locked = false;						\
+									\
+	if (!IS_ENABLED(CONFIG_PREEMPT_RT) || preemptible())		\
+		__locked = local_trylock(lock);				\
+	__locked;							\
+})
+
 static inline bool can_spin_trylock(void)
 {
 	/*
-	 * In PREEMPT_RT spin_trylock() will call raw_spin_lock() which is
-	 * unsafe in NMI. If spin_trylock() is called from hard IRQ the current
-	 * task may be waiting for one rt_spin_lock, but rt_spin_trylock() will
-	 * mark the task as the owner of another rt_spin_lock which will
-	 * confuse PI logic, so return immediately if called from hard IRQ or
-	 * NMI.
-	 *
-	 * Note, irqs_disabled() case is ok. spin_trylock() can be called
-	 * from raw_spin_lock_irqsave region.
+	 * PREEMPT_RT no-lock allocation has not been validated in NMI or hard
+	 * IRQ context. Other atomic contexts use
+	 * spin_trylock_nolock_irqsave(), which does not enter the rtmutex PI
+	 * machinery.
 	 */
 	if (IS_ENABLED(CONFIG_PREEMPT_RT) && (in_nmi() || in_hardirq()))
 		return false;

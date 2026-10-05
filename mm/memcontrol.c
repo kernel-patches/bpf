@@ -2129,7 +2129,7 @@ static bool consume_stock(struct mem_cgroup *memcg, unsigned int nr_pages)
 	int i;
 
 	if (nr_pages > MEMCG_CHARGE_BATCH ||
-	    !local_trylock(&memcg_stock.lock))
+	    !mm_local_trylock_nolock(&memcg_stock.lock))
 		return ret;
 
 	stock = this_cpu_ptr(&memcg_stock);
@@ -2243,7 +2243,7 @@ static void refill_stock(struct mem_cgroup *memcg, unsigned int nr_pages)
 	VM_WARN_ON_ONCE(mem_cgroup_is_root(memcg));
 
 	if (nr_pages > MEMCG_CHARGE_BATCH ||
-	    !local_trylock(&memcg_stock.lock)) {
+	    !mm_local_trylock_nolock(&memcg_stock.lock)) {
 		/*
 		 * In case of larger than batch refill or unlikely failure to
 		 * lock the percpu memcg_stock.lock, uncharge memcg directly.
@@ -3232,7 +3232,7 @@ void __memcg_kmem_uncharge_page(struct page *page, int order)
 
 static struct obj_stock_pcp *trylock_stock(void)
 {
-	if (local_trylock(&obj_stock.lock))
+	if (mm_local_trylock_nolock(&obj_stock.lock))
 		return this_cpu_ptr(&obj_stock);
 
 	return NULL;
@@ -3336,14 +3336,64 @@ static bool __consume_obj_stock(struct obj_cgroup *objcg,
 	return false;
 }
 
-static bool consume_obj_stock(struct obj_cgroup *objcg, unsigned int nr_bytes)
+/*
+ * A failed per-CPU stock trylock normally falls back to charging another
+ * page. No-lock callers can fail that trylock on every allocation, so reuse
+ * the centralized prepaid bytes before charging again. Paired frees return
+ * the bytes here and keep the retained charge bounded instead of adding one
+ * page per allocation.
+ */
+static bool consume_obj_stock_shared(struct obj_cgroup *objcg,
+				     unsigned int nr_bytes)
+{
+	int old = atomic_read(&objcg->nr_charged_bytes);
+
+	do {
+		if (old < 0 || (unsigned int)old < nr_bytes)
+			return false;
+	} while (!atomic_try_cmpxchg(&objcg->nr_charged_bytes, &old,
+				     old - nr_bytes));
+
+	return true;
+}
+
+static unsigned int refill_obj_stock_shared(struct obj_cgroup *objcg,
+					    unsigned int nr_bytes,
+					    bool allow_uncharge)
+{
+	int old = atomic_read(&objcg->nr_charged_bytes);
+	unsigned int new, nr_pages;
+	u64 total;
+
+	do {
+		if (WARN_ON_ONCE(old < 0))
+			return 0;
+
+		total = (unsigned int)old + (u64)nr_bytes;
+		nr_pages = 0;
+		if ((allow_uncharge && total > PAGE_SIZE) || total > U16_MAX) {
+			nr_pages = total >> PAGE_SHIFT;
+			new = total & (PAGE_SIZE - 1);
+		} else {
+			new = total;
+		}
+	} while (!atomic_try_cmpxchg(&objcg->nr_charged_bytes, &old, new));
+
+	return nr_pages;
+}
+
+static bool consume_obj_stock(struct obj_cgroup *objcg, unsigned int nr_bytes,
+			      gfp_t gfp)
 {
 	struct obj_stock_pcp *stock;
 	bool ret = false;
 
 	stock = trylock_stock();
-	if (!stock)
+	if (!stock) {
+		if (!gfpflags_allow_spinning(gfp))
+			ret = consume_obj_stock_shared(objcg, nr_bytes);
 		return ret;
+	}
 
 	ret = __consume_obj_stock(objcg, stock, nr_bytes);
 	unlock_stock(stock);
@@ -3462,9 +3512,8 @@ static void __refill_obj_stock(struct obj_cgroup *objcg,
 	int i, slot = -1, empty_slot = -1;
 
 	if (!stock) {
-		nr_pages = nr_bytes >> PAGE_SHIFT;
-		nr_bytes = nr_bytes & (PAGE_SIZE - 1);
-		atomic_add(nr_bytes, &objcg->nr_charged_bytes);
+		nr_pages = refill_obj_stock_shared(objcg, nr_bytes,
+						   allow_uncharge);
 		goto out;
 	}
 
@@ -3548,18 +3597,18 @@ int obj_cgroup_charge(struct obj_cgroup *objcg, gfp_t gfp, size_t size)
 	size_t remainder;
 	int ret;
 
-	if (likely(consume_obj_stock(objcg, size)))
+	if (likely(consume_obj_stock(objcg, size, gfp)))
 		return 0;
 
 	/*
-	 * In theory, objcg->nr_charged_bytes can have enough
-	 * pre-charged bytes to satisfy the allocation. However,
+	 * For callers which allow spinning, objcg->nr_charged_bytes can have
+	 * enough pre-charged bytes to satisfy the allocation. However,
 	 * flushing objcg->nr_charged_bytes requires two atomic
 	 * operations, and objcg->nr_charged_bytes can't be big.
 	 * The shared objcg->nr_charged_bytes can also become a
 	 * performance bottleneck if all tasks of the same memcg are
-	 * trying to update it. So it's better to ignore it and try
-	 * grab some new pages. The stock's nr_bytes will be flushed to
+	 * trying to update it. So it's better for those callers to ignore it
+	 * and try to grab some new pages. The stock's nr_bytes will be flushed to
 	 * objcg->nr_charged_bytes later on when objcg changes.
 	 *
 	 * The stock's nr_bytes may contain enough pre-charged bytes
@@ -3570,9 +3619,9 @@ int obj_cgroup_charge(struct obj_cgroup *objcg, gfp_t gfp, size_t size)
 	 * page uncharge right after a page charge, we set the
 	 * allow_uncharge flag to false when calling refill_obj_stock()
 	 * to temporarily allow the pre-charged bytes to exceed the page
-	 * size limit. The maximum reachable value of the pre-charged
-	 * bytes is (sizeof(object) + PAGE_SIZE - 2) if there is no data
-	 * race.
+	 * size limit. No-lock callers already tried the centralized bytes
+	 * above. The maximum reachable value of the pre-charged bytes is
+	 * (sizeof(object) + PAGE_SIZE - 2) if there is no data race.
 	 */
 	ret = __obj_cgroup_charge(objcg, gfp, size, &remainder);
 	if (!ret && remainder)
@@ -3640,6 +3689,7 @@ bool __memcg_slab_post_alloc_hook(struct kmem_cache *s, struct list_lru *lru,
 		unsigned long obj_exts;
 		struct slabobj_ext *obj_ext;
 		struct obj_stock_pcp *stock;
+		bool consumed;
 
 		slab = virt_to_slab(p[i]);
 
@@ -3662,7 +3712,13 @@ bool __memcg_slab_post_alloc_hook(struct kmem_cache *s, struct list_lru *lru,
 		 * between iterations, with a more complicated undo
 		 */
 		stock = trylock_stock();
-		if (!stock || !__consume_obj_stock(objcg, stock, obj_size)) {
+		if (stock)
+			consumed = __consume_obj_stock(objcg, stock, obj_size);
+		else
+			consumed = !gfpflags_allow_spinning(flags) &&
+				   consume_obj_stock_shared(objcg, obj_size);
+
+		if (!consumed) {
 			size_t remainder;
 
 			unlock_stock(stock);
