@@ -140,6 +140,7 @@ static inline int is_mounted(struct vfsmount *mnt)
 extern struct mount *__lookup_mnt(struct vfsmount *, struct dentry *);
 
 extern int __legitimize_mnt(struct vfsmount *, unsigned);
+void mnt_undo_legitimize(struct mount *mnt);
 
 static inline bool __path_is_mountpoint(const struct path *path)
 {
