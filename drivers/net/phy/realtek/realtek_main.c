@@ -355,6 +355,10 @@ struct rtl821x_priv {
 	u16 iner;
 };
 
+struct rtl8224_priv {
+	u8 port_offset;
+};
+
 struct rtl8261x_priv {
 	const char *fw_name;
 	u32 fw_sub_magic;
@@ -2723,7 +2727,8 @@ exit:
 static int rtl8224_mdi_config_order(struct phy_device *phydev)
 {
 	struct device_node *np = phydev->mdio.dev.of_node;
-	u8 port_offset = phydev->mdio.addr & 3;
+	struct rtl8224_priv *priv = phydev->priv;
+	u8 port_offset = priv->port_offset;
 	u32 order = 0;
 	int ret;
 
@@ -2748,7 +2753,8 @@ static int rtl8224_mdi_config_order(struct phy_device *phydev)
 static int rtl8224_mdi_config_polarity(struct phy_device *phydev)
 {
 	struct device_node *np = phydev->mdio.dev.of_node;
-	u8 offset = (phydev->mdio.addr & 3) * 4;
+	struct rtl8224_priv *priv = phydev->priv;
+	u8 offset = priv->port_offset * 4;
 	u32 polarity = 0;
 	int ret;
 
@@ -2783,9 +2789,42 @@ static int rtl8224_config_init(struct phy_device *phydev)
 
 static int rtl8224_probe(struct phy_device *phydev)
 {
-	/* Chip exposes 4 ports, join all of them in the same package */
-	return devm_phy_package_join(&phydev->mdio.dev, phydev,
-				     phydev->mdio.addr & ~3, 0);
+	struct device *dev = &phydev->mdio.dev;
+	u32 base_addr = phydev->mdio.addr & ~3;
+	struct rtl8224_priv *priv;
+	struct device_node *np;
+	int ret;
+
+	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
+	if (!priv)
+		return -ENOMEM;
+
+	np = of_get_parent(dev->of_node);
+	if (of_node_name_eq(np, "ethernet-phy-package")) {
+		ret = of_property_read_u32(np, "reg", &base_addr);
+		of_node_put(np);
+		if (ret)
+			return dev_err_probe(dev, ret,
+					     "Missing or invalid PHY package reg\n");
+
+		if (phydev->mdio.addr < base_addr ||
+		    phydev->mdio.addr - base_addr >= 4)
+			return dev_err_probe(dev, -EINVAL,
+					     "PHY address outside RTL8224 package\n");
+
+		ret = devm_of_phy_package_join(dev, phydev, 0);
+	} else {
+		of_node_put(np);
+		/* Without a package node, assume four aligned PHY addresses. */
+		ret = devm_phy_package_join(dev, phydev, base_addr, 0);
+	}
+	if (ret)
+		return dev_err_probe(dev, ret, "Failed to join PHY package\n");
+
+	priv->port_offset = phydev->mdio.addr - base_addr;
+	phydev->priv = priv;
+
+	return 0;
 }
 
 static bool rtlgen_supports_2_5gbps(struct phy_device *phydev)
