@@ -576,13 +576,14 @@ static void bpf_skops_write_hdr_opt(struct sock *sk, struct sk_buff *skb,
 		memset(skb->data + first_opt_off + nr_written, TCPOPT_NOP,
 		       max_opt_len - nr_written);
 
-	/*
-	 * bpf_tcp_ops portion is NOP-filled (everything past the sockops
-	 * writer's bytes). The writer finds the append point by scanning from
-	 * first_opt_off + nr_written to the first NOP.
-	 */
-	bpf_tcp_ops_call(write_hdr_opt, sk, skb, req, syn_skb, synack_type,
-			 first_opt_off + nr_written);
+	if (BPF_TCP_OPS_TEST_FLAG(tcp_sk(sk), WRITE_HDR_OPT)) {
+		/* bpf_tcp_ops portion is NOP-filled (everything past the sockops
+		 * writer's bytes). The writer finds the append point by scanning from
+		 * first_opt_off + nr_written to the first NOP.
+		 */
+		bpf_tcp_ops_call(write_hdr_opt, sk, skb, req, syn_skb, synack_type,
+				 first_opt_off + nr_written);
+	}
 }
 #else
 static u32 bpf_skops_hdr_opt_len(struct sock *sk, struct sk_buff *skb,
@@ -613,8 +614,9 @@ static u32 bpf_tcp_ops_hdr_opt_len(struct sock *sk, struct sk_buff *skb,
 {
 	unsigned int remaining_out = remaining, reserved;
 
-	if (!remaining)
-		return 0;
+	if (!BPF_TCP_OPS_TEST_FLAG(tcp_sk(sk), WRITE_HDR_OPT) ||
+	    !remaining)
+		return remaining;
 
 	/* bpf_tcp_ops_reserve_hdr_opt() reserves space via remaining_out */
 	bpf_tcp_ops_call(hdr_opt_len, sk, skb, req, syn_skb, synack_type, &remaining_out);

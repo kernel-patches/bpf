@@ -3142,7 +3142,8 @@ static inline void tcp_bpf_rtt(struct sock *sk, long mrtt, u32 srtt)
 {
 	if (BPF_SOCK_OPS_TEST_FLAG(tcp_sk(sk), BPF_SOCK_OPS_RTT_CB_FLAG))
 		tcp_call_bpf_2arg(sk, BPF_SOCK_OPS_RTT_CB, mrtt, srtt);
-	bpf_tcp_ops_call(rtt, sk, mrtt, srtt);
+	if (BPF_TCP_OPS_TEST_FLAG(tcp_sk(sk), RTT))
+		bpf_tcp_ops_call(rtt, sk, mrtt, srtt);
 }
 
 #if IS_ENABLED(CONFIG_SMC)
