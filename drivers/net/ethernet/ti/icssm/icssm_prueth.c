@@ -44,6 +44,21 @@
 #define NETIF_PRUETH_LRE_OFFLOAD_FEATURES       (NETIF_F_HW_HSR_FWD | \
 						 NETIF_F_HW_HSR_TAG_RM)
 
+/* ICSSM (v2.1) - supports 64-bit IEP counter.
+ * Firmware stores packet timestamps using lower 32 bits
+ * which wraps at 0xffffffff.
+ */
+static const struct prueth_fw_offsets fw_offsets_v2_1 = {
+	.iep_wrap = 0xffffffff,
+};
+
+/* ICSSM (v1.0) - supports 32-bit IEP counter, which resets the
+ * counter every one second (nanosecond resolution).
+ */
+static const struct prueth_fw_offsets fw_offsets_v1_0 = {
+	.iep_wrap = NSEC_PER_SEC,
+};
+
 static void icssm_prueth_set_fw_offsets(struct prueth *prueth)
 {
 	/* Set Multicast filter control and table offsets */
@@ -342,6 +357,8 @@ static void icssm_prueth_init_ethernet_mode(struct prueth *prueth)
 	icssm_prueth_hostinit(prueth);
 	if (prueth_is_lre(prueth))
 		icssm_prueth_lre_config(prueth);
+	else if (PRUETH_IS_SWITCH(prueth))
+		icssm_prueth_sw_config_packet_timestamping(prueth);
 }
 
 static void icssm_prueth_port_enable(struct prueth_emac *emac, bool enable)
@@ -464,7 +481,8 @@ static void icssm_emac_adjust_link(struct net_device *ndev)
 
 	if (emac->link) {
 	       /* reactivate the transmit queue if it is stopped */
-		if (netif_running(ndev) && netif_queue_stopped(ndev))
+		if (netif_running(ndev) && netif_queue_stopped(ndev) &&
+		    (prueth->emac_configured & BIT(emac->port_id)))
 			netif_wake_queue(ndev);
 	} else {
 		if (!netif_queue_stopped(ndev))
@@ -801,8 +819,8 @@ int icssm_emac_rx_packet(struct prueth_emac *emac, u16 *bd_rd_ptr,
 	local_bh_enable();
 
 	/* update stats */
-	emac->stats.rx_bytes += actual_pkt_len;
-	emac->stats.rx_packets++;
+	atomic64_add(actual_pkt_len, &emac->stats.rx_bytes);
+	atomic64_inc(&emac->stats.rx_packets);
 
 	return 0;
 }
@@ -824,7 +842,6 @@ static int icssm_emac_rx_packets(struct prueth_emac *emac, int budget)
 
 	shared_ram = emac->prueth->mem[PRUETH_MEM_SHARED_RAM].va;
 
-	/* Start and end queue is made common for EMAC, RSTP */
 	start_queue = emac->rx_queue_start;
 	end_queue = emac->rx_queue_end;
 
@@ -835,13 +852,10 @@ static int icssm_emac_rx_packets(struct prueth_emac *emac, int budget)
 	/* search host queues for packets */
 	for (i = start_queue; i <= end_queue; i++) {
 		queue_desc = emac->rx_queue_descs + i;
-		if (PRUETH_IS_SWITCH(emac->prueth))
-			rxqueue = &sw_queue_infos[PRUETH_PORT_HOST][i];
-		else
-			rxqueue = &queue_infos[PRUETH_PORT_HOST][i];
+		rxqueue = &queue_infos[PRUETH_PORT_HOST][i];
 		overflow_cnt = readb(&queue_desc->overflow_cnt);
 		if (overflow_cnt > 0) {
-			emac->stats.rx_over_errors += overflow_cnt;
+			atomic64_add(overflow_cnt, &emac->stats.rx_over_errors);
 			/* reset to zero */
 			writeb(0, &queue_desc->overflow_cnt);
 		}
@@ -863,7 +877,7 @@ static int icssm_emac_rx_packets(struct prueth_emac *emac, int budget)
 				 * these packets
 				 */
 				update_rd_ptr = bd_wr_ptr;
-				emac->stats.rx_length_errors++;
+				atomic64_inc(&emac->stats.rx_length_errors);
 			} else if (pkt_info.length > EMAC_MAX_FRM_SUPPORT) {
 				/* if the packet is too large we skip it but we
 				 * still need to move the read pointer ahead
@@ -872,7 +886,7 @@ static int icssm_emac_rx_packets(struct prueth_emac *emac, int budget)
 				 * these packets
 				 */
 				update_rd_ptr = bd_wr_ptr;
-				emac->stats.rx_length_errors++;
+				atomic64_inc(&emac->stats.rx_length_errors);
 			} else {
 				update_rd_ptr = bd_rd_ptr;
 				ret = icssm_emac_rx_packet(emac, &update_rd_ptr,
@@ -1070,19 +1084,33 @@ static int icssm_emac_ndo_open(struct net_device *ndev)
 			goto iep_exit;
 	}
 
-	ret = icssm_emac_request_irqs(emac);
+	if (PRUETH_IS_EMAC(prueth)) {
+		napi_enable(&emac->napi);
+	} else {
+		if (!prueth->emac_configured &&
+		    (PRUETH_IS_SWITCH(prueth) || prueth_is_lre(prueth))) {
+			napi_enable(&prueth->napi_hpq);
+			napi_enable(&prueth->napi_lpq);
+		}
+	}
+
+	/* In switch and LRE modes the shared HPQ/LPQ IRQs are used,
+	 * register them here and reuse for both modes.
+	 */
+	if (PRUETH_IS_EMAC(prueth))
+		ret = icssm_emac_request_irqs(emac);
+	else
+		ret = icssm_prueth_common_request_irqs(emac);
 	if (ret)
-		goto rproc_shutdown;
+		goto disable_napi;
 
-	napi_enable(&emac->napi);
-
+	prueth->emac_configured |= BIT(emac->port_id);
 	/* start PHY */
 	phy_start(emac->phydev);
 
 	/* enable the port and vlan */
 	icssm_prueth_port_enable(emac, true);
 
-	prueth->emac_configured |= BIT(emac->port_id);
 	if (PRUETH_IS_SWITCH(prueth))
 		icssm_prueth_sw_set_stp_state(prueth, emac->port_id,
 					      BR_STATE_LEARNING);
@@ -1091,7 +1119,10 @@ static int icssm_emac_ndo_open(struct net_device *ndev)
 
 	return 0;
 
-rproc_shutdown:
+disable_napi:
+	if (PRUETH_IS_EMAC(prueth))
+		napi_disable(&emac->napi);
+
 	if (!PRUETH_IS_EMAC(prueth))
 		icssm_prueth_sw_shutdown_prus(emac, ndev);
 	else
@@ -1126,11 +1157,28 @@ static int icssm_emac_ndo_stop(struct net_device *ndev)
 	/* disable the mac port */
 	icssm_prueth_port_enable(emac, false);
 
+	/* Stop TX first. netif_tx_disable() also waits for an xmit that is
+	 * already running. Then cancel any tx_hrtimer that xmit may have
+	 * armed.
+	 */
+	netif_tx_disable(ndev);
+	hrtimer_cancel(&emac->tx_hrtimer);
+
 	/* stop PHY */
 	phy_stop(emac->phydev);
 
-	napi_disable(&emac->napi);
-	hrtimer_cancel(&emac->tx_hrtimer);
+	if (PRUETH_IS_EMAC(prueth)) {
+		napi_disable(&emac->napi);
+		free_irq(emac->rx_irq, ndev);
+	} else {
+		if (!prueth->emac_configured &&
+		    (PRUETH_IS_SWITCH(prueth) || prueth_is_lre(prueth))) {
+			napi_disable(&prueth->napi_lpq);
+			napi_disable(&prueth->napi_hpq);
+		}
+		/* Free IRQs on last port before halting PRU */
+		icssm_prueth_common_free_irqs(emac);
+	}
 
 	/* stop the PRU */
 	if (!PRUETH_IS_EMAC(prueth))
@@ -1140,9 +1188,6 @@ static int icssm_emac_ndo_stop(struct net_device *ndev)
 
 	if (prueth_is_lre(prueth) && !prueth->emac_configured)
 		icssm_prueth_lre_cleanup(prueth);
-
-	/* free rx interrupts */
-	free_irq(emac->rx_irq, ndev);
 
 	/* free memory related to sw */
 	icssm_prueth_free_memory(emac->prueth);
@@ -1280,8 +1325,8 @@ static enum netdev_tx icssm_emac_ndo_start_xmit(struct sk_buff *skb,
 		goto fail_tx;
 	}
 
-	emac->stats.tx_packets++;
-	emac->stats.tx_bytes += skb->len;
+	atomic64_inc(&emac->stats.tx_packets);
+	atomic64_add(skb->len, &emac->stats.tx_bytes);
 	dev_kfree_skb_any(skb);
 
 	return NETDEV_TX_OK;
@@ -1295,7 +1340,7 @@ fail_tx:
 		ret = NETDEV_TX_BUSY;
 	} else {
 		/* error */
-		emac->stats.tx_dropped++;
+		atomic64_inc(&emac->stats.tx_dropped);
 		ret = NET_XMIT_DROP;
 	}
 
@@ -1315,13 +1360,13 @@ static void icssm_emac_ndo_get_stats64(struct net_device *ndev,
 {
 	struct prueth_emac *emac = netdev_priv(ndev);
 
-	stats->rx_packets = emac->stats.rx_packets;
-	stats->rx_bytes = emac->stats.rx_bytes;
-	stats->tx_packets = emac->stats.tx_packets;
-	stats->tx_bytes = emac->stats.tx_bytes;
-	stats->tx_dropped = emac->stats.tx_dropped;
-	stats->rx_over_errors = emac->stats.rx_over_errors;
-	stats->rx_length_errors = emac->stats.rx_length_errors;
+	stats->rx_packets = atomic64_read(&emac->stats.rx_packets);
+	stats->rx_bytes = atomic64_read(&emac->stats.rx_bytes);
+	stats->tx_packets = atomic64_read(&emac->stats.tx_packets);
+	stats->tx_bytes = atomic64_read(&emac->stats.tx_bytes);
+	stats->tx_dropped = atomic64_read(&emac->stats.tx_dropped);
+	stats->rx_over_errors = atomic64_read(&emac->stats.rx_over_errors);
+	stats->rx_length_errors = atomic64_read(&emac->stats.rx_length_errors);
 }
 
 /* enable/disable MC filter */
@@ -1662,6 +1707,11 @@ static enum hrtimer_restart icssm_emac_tx_timer_callback(struct hrtimer *timer)
 {
 	struct prueth_emac *emac =
 			container_of(timer, struct prueth_emac, tx_hrtimer);
+	struct prueth *prueth = emac->prueth;
+
+	/* Don't restart TX on a port that ndo_stop() is tearing down */
+	if (!(READ_ONCE(prueth->emac_configured) & BIT(emac->port_id)))
+		return HRTIMER_NORESTART;
 
 	if (netif_queue_stopped(emac->ndev))
 		netif_wake_queue(emac->ndev);
@@ -1779,8 +1829,24 @@ static int icssm_prueth_netdev_init(struct prueth *prueth,
 
 	netif_napi_add(ndev, &emac->napi, icssm_emac_napi_poll);
 
+	if ((prueth->support_lre || fw_data->support_switch) &&
+	    emac->port_id == PRUETH_PORT_MII0) {
+		netif_napi_add(ndev, &prueth->napi_hpq,
+			       icssm_prueth_common_napi_poll_hpq);
+		netif_napi_add(ndev, &prueth->napi_lpq,
+			       icssm_prueth_common_napi_poll_lpq);
+	}
+
 	hrtimer_setup(&emac->tx_hrtimer, &icssm_emac_tx_timer_callback,
 		      CLOCK_MONOTONIC, HRTIMER_MODE_REL_PINNED);
+
+	if ((prueth->support_lre || fw_data->support_switch) &&
+	    emac->port_id == PRUETH_PORT_MII0) {
+		prueth->hp->ndev = ndev;
+		prueth->hp->priority = 0;
+		prueth->lp->ndev = ndev;
+		prueth->lp->priority = 1;
+	}
 
 	return 0;
 free:
@@ -1793,6 +1859,7 @@ free:
 static void icssm_prueth_netdev_exit(struct prueth *prueth,
 				     struct device_node *eth_node)
 {
+	const struct prueth_private_data *fw_data = prueth->fw_data;
 	struct prueth_emac *emac;
 	enum prueth_mac mac;
 
@@ -1807,6 +1874,13 @@ static void icssm_prueth_netdev_exit(struct prueth *prueth,
 	phy_disconnect(emac->phydev);
 
 	netif_napi_del(&emac->napi);
+
+	if ((prueth->support_lre || fw_data->support_switch) &&
+	    emac->port_id == PRUETH_PORT_MII0) {
+		netif_napi_del(&prueth->napi_hpq);
+		netif_napi_del(&prueth->napi_lpq);
+	}
+
 	prueth->emac[mac] = NULL;
 }
 
@@ -2110,6 +2184,13 @@ static int icssm_prueth_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, prueth);
 	prueth->dev = dev;
 	prueth->fw_data = device_get_match_data(dev);
+	if (prueth->fw_data->fw_rev == FW_REV_V1_0)
+		prueth->fw_offsets = fw_offsets_v1_0;
+	else if (prueth->fw_data->fw_rev == FW_REV_V2_1)
+		prueth->fw_offsets = fw_offsets_v2_1;
+	else
+		return -EINVAL;
+
 	icssm_prueth_set_fw_offsets(prueth);
 
 	eth_ports_node = of_get_child_by_name(np, "ethernet-ports");
@@ -2264,6 +2345,41 @@ static int icssm_prueth_probe(struct platform_device *pdev)
 	 */
 	if (has_lre && (!eth0_node || !eth1_node))
 		has_lre = false;
+
+	/* Switch and LRE share HPQ/LPQ IRQs across both ports,
+	 * allocate the shared priority structures once here
+	 */
+	if (prueth->fw_data->support_switch || has_lre) {
+		prueth->hp = devm_kzalloc(dev,
+					  sizeof(struct prueth_ndev_priority),
+					  GFP_KERNEL);
+		if (!prueth->hp) {
+			ret = -ENOMEM;
+			goto free_pool;
+		}
+		prueth->lp = devm_kzalloc(dev,
+					  sizeof(struct prueth_ndev_priority),
+					  GFP_KERNEL);
+		if (!prueth->lp) {
+			ret = -ENOMEM;
+			goto free_pool;
+		}
+
+		prueth->rx_lpq_irq = of_irq_get_byname(np, "rx_lp");
+		if (prueth->rx_lpq_irq < 0) {
+			ret = prueth->rx_lpq_irq;
+			if (ret != -EPROBE_DEFER)
+				dev_err(prueth->dev, "could not get rx_lp irq\n");
+			goto free_pool;
+		}
+		prueth->rx_hpq_irq = of_irq_get_byname(np, "rx_hp");
+		if (prueth->rx_hpq_irq < 0) {
+			ret = prueth->rx_hpq_irq;
+			if (ret != -EPROBE_DEFER)
+				dev_err(prueth->dev, "could not get rx_hp irq\n");
+			goto free_pool;
+		}
+	}
 
 	prueth->support_lre = has_lre;
 	spin_lock_init(&prueth->addr_lock);
@@ -2505,6 +2621,7 @@ static struct prueth_private_data am335x_prueth_pdata = {
 		.fw_name[PRUSS_ETHTYPE_SWITCH] =
 			"ti-pruss/am335x-pru1-prusw-fw.elf",
 	},
+	.fw_rev = FW_REV_V1_0,
 	.support_lre = true,
 	.support_switch = true,
 };
@@ -2532,6 +2649,7 @@ static struct prueth_private_data am437x_prueth_pdata = {
 		.fw_name[PRUSS_ETHTYPE_SWITCH] =
 			"ti-pruss/am437x-pru1-prusw-fw.elf",
 	},
+	.fw_rev = FW_REV_V1_0,
 	.support_lre = true,
 	.support_switch = true,
 };
@@ -2560,6 +2678,7 @@ static struct prueth_private_data am57xx_prueth_pdata = {
 			"ti-pruss/am57xx-pru1-prusw-fw.elf",
 
 	},
+	.fw_rev = FW_REV_V2_1,
 	.support_lre = true,
 	.support_switch = true,
 };

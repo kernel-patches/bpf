@@ -152,6 +152,14 @@ static void icssm_prueth_lre_protocol_init(struct prueth *prueth)
 	       dram1 + ICSS_LRE_SUP_ADDR_LOW);
 }
 
+static void icssm_prueth_lre_config_packet_timestamping(struct prueth *prueth)
+{
+	void __iomem *sram = prueth->mem[PRUETH_MEM_SHARED_RAM].va;
+
+	writeb(1, sram + ICSS_LRE_PRIORITY_INTRS_STATUS_OFFSET);
+	writeb(1, sram + ICSS_LRE_TIMESTAMP_PKTS_STATUS_OFFSET);
+}
+
 static enum hrtimer_restart icssm_prueth_lre_timer(struct hrtimer *timer)
 {
 	struct prueth *prueth;
@@ -202,6 +210,11 @@ void icssm_prueth_lre_config(struct prueth *prueth)
 	icssm_prueth_lre_init(prueth);
 	icssm_prueth_lre_dbg_init(prueth);
 	icssm_prueth_lre_protocol_init(prueth);
+	/* Enable per-packet timestamping so the driver can order
+	 * received frames by arrival time across the two slave ports.
+	 */
+	icssm_prueth_lre_config_packet_timestamping(prueth);
+
 }
 
 void icssm_prueth_lre_cleanup(struct prueth *prueth)
