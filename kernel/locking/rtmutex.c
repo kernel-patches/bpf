@@ -68,18 +68,23 @@ static inline int __ww_mutex_check_kill(struct rt_mutex *lock,
 /*
  * lock->owner state tracking:
  *
- * lock->owner holds the task_struct pointer of the owner. Bit 0
- * is used to keep track of the "lock has waiters" state.
+ * lock->owner holds the task_struct pointer of the owner. Bit 0 is used to
+ * keep track of the "lock has waiters" state. Bit 1 identifies an atomic
+ * owner which cannot participate in priority inheritance. Atomic ownership
+ * is used only by PREEMPT_RT spinlock trylocks whose caller cannot block.
  *
- * owner	bit0
- * NULL		0	lock is free (fast acquire possible)
- * NULL		1	lock is free and has waiters and the top waiter
- *				is going to take the lock*
- * taskpointer	0	lock is held (fast release possible)
- * taskpointer	1	lock is held and has waiters**
+ * owner       bit1 bit0
+ * NULL        0    0    lock is free (fast acquire possible)
+ * NULL        0    1    lock is free and has waiters; the top waiter
+ *                       is going to take the lock*
+ * taskpointer 0    0    lock is held (fast release possible)
+ * taskpointer 0    1    lock is held and has waiters**
+ * taskpointer 1    0    lock is held by an atomic owner
+ * taskpointer 1    1    lock is held by an atomic owner while a slow path
+ *                       excludes further atomic acquisitions***
  *
- * The fast atomic compare exchange based acquire and release is only
- * possible when bit 0 of lock->owner is 0.
+ * The regular fast atomic compare exchange based acquire and release is only
+ * possible when both flag bits in lock->owner are 0.
  *
  * (*) It also can be a transitional state when grabbing the lock
  * with ->wait_lock is held. To prevent any fast path cmpxchg to the lock,
@@ -90,7 +95,49 @@ static inline int __ww_mutex_check_kill(struct rt_mutex *lock,
  * waiters. This can happen when grabbing the lock in the slow path.
  * To prevent a cmpxchg of the owner releasing the lock, we need to
  * set this bit before looking at the lock.
+ *
+ * (***) The slow path sets the waiters bit while holding ->wait_lock, then
+ * waits for the atomic owner to release the lock to NULL|HAS_WAITERS. The
+ * atomic owner never enters the PI machinery and can release without taking
+ * ->wait_lock or waking a task. It cannot be preempted while holding the lock.
  */
+
+static __always_inline bool
+rt_mutex_atomic_owner(struct rt_mutex_base *lock)
+{
+	return (unsigned long)READ_ONCE(lock->owner) & RT_MUTEX_OWNER_ATOMIC;
+}
+
+static __always_inline bool
+rt_mutex_atomic_try_acquire(struct rt_mutex_base *lock)
+{
+	struct task_struct *old = NULL;
+	struct task_struct *new = (struct task_struct *)
+		((unsigned long)current | RT_MUTEX_OWNER_ATOMIC);
+
+	return try_cmpxchg_acquire(&lock->owner, &old, new);
+}
+
+static __always_inline bool
+rt_mutex_atomic_release(struct rt_mutex_base *lock)
+{
+	struct task_struct *old = READ_ONCE(lock->owner);
+	struct task_struct *new;
+	unsigned long owner;
+
+	for (;;) {
+		owner = (unsigned long)old;
+		if (WARN_ON_ONCE((owner & ~RT_MUTEX_OWNER_MASK) !=
+				 (unsigned long)current) ||
+		    WARN_ON_ONCE(!(owner & RT_MUTEX_OWNER_ATOMIC)))
+			return false;
+
+		new = (struct task_struct *)(owner & RT_MUTEX_HAS_WAITERS);
+		if (try_cmpxchg_release(&lock->owner, &old, new))
+			return true;
+		cpu_relax();
+	}
+}
 
 static __always_inline struct task_struct *
 rt_mutex_owner_encode(struct rt_mutex_base *lock, struct task_struct *owner)
@@ -215,6 +262,37 @@ fixup_rt_mutex_waiters(struct rt_mutex_base *lock, bool acquire_lock)
 }
 
 /*
+ * Callers hold ->wait_lock, which serializes slow-path updates. This cmpxchg
+ * also arbitrates with regular lockless fast-path owner transitions when
+ * enabled and with atomic owner transitions, which do not take ->wait_lock.
+ * Once HAS_WAITERS is set, no new lockless acquisition can succeed. If an
+ * atomic owner was already present, wait until it drops its task pointer while
+ * preserving HAS_WAITERS.
+ */
+static __always_inline void mark_rt_mutex_waiters(struct rt_mutex_base *lock)
+	__must_hold(&lock->wait_lock)
+{
+	unsigned long *p = (unsigned long *)&lock->owner;
+	unsigned long owner, new;
+
+	owner = READ_ONCE(*p);
+	for (;;) {
+		new = owner | RT_MUTEX_HAS_WAITERS;
+		if (try_cmpxchg_relaxed(p, &owner, new))
+			break;
+		cpu_relax();
+	}
+
+	/*
+	 * The cmpxchg above is relaxed to avoid back-to-back ACQUIRE operations
+	 * in the event of contention. Ensure the successful cmpxchg is visible.
+	 */
+	smp_mb__after_atomic();
+
+	smp_cond_load_relaxed(p, !(VAL & RT_MUTEX_OWNER_ATOMIC));
+}
+
+/*
  * We can speed up the acquire/release, if there's no debugging state to be
  * set up.
  */
@@ -238,34 +316,45 @@ static __always_inline bool rt_mutex_cmpxchg_release(struct rt_mutex_base *lock,
 	return try_cmpxchg_release(&lock->owner, &old, new);
 }
 
-/*
- * Callers must hold the ->wait_lock -- which is the whole purpose as we force
- * all future threads that attempt to [Rmw] the lock to the slowpath. As such
- * relaxed semantics suffice.
- */
-static __always_inline void mark_rt_mutex_waiters(struct rt_mutex_base *lock)
+#else
+static __always_inline bool rt_mutex_cmpxchg_acquire(struct rt_mutex_base *lock,
+						     struct task_struct *old,
+						     struct task_struct *new)
 {
-	unsigned long *p = (unsigned long *) &lock->owner;
-	unsigned long owner, new;
-
-	owner = READ_ONCE(*p);
-	do {
-		new = owner | RT_MUTEX_HAS_WAITERS;
-	} while (!try_cmpxchg_relaxed(p, &owner, new));
-
-	/*
-	 * The cmpxchg loop above is relaxed to avoid back-to-back ACQUIRE
-	 * operations in the event of contention. Ensure the successful
-	 * cmpxchg is visible.
-	 */
-	smp_mb__after_atomic();
+	return false;
 }
+
+static int __sched rt_mutex_slowtrylock(struct rt_mutex_base *lock);
+
+static __always_inline bool rt_mutex_try_acquire(struct rt_mutex_base *lock)
+{
+	/*
+	 * With debug enabled rt_mutex_cmpxchg trylock() will always fail.
+	 *
+	 * Avoid unconditionally taking the slow path by using
+	 * rt_mutex_slow_trylock() which is covered by the debug code and can
+	 * acquire a non-contended rtmutex.
+	 */
+	return rt_mutex_slowtrylock(lock);
+}
+
+static __always_inline bool rt_mutex_cmpxchg_release(struct rt_mutex_base *lock,
+						     struct task_struct *old,
+						     struct task_struct *new)
+{
+	return false;
+}
+
+#endif
 
 /*
  * Safe fastpath aware unlock:
  * 1) Clear the waiters bit
  * 2) Drop lock->wait_lock
  * 3) Try to unlock the lock with cmpxchg
+ *
+ * Atomic trylock also bypasses wait_lock, so debug builds need the same
+ * cmpxchg arbitration even though the regular fast path is disabled.
  */
 static __always_inline bool unlock_rt_mutex_safe(struct rt_mutex_base *lock,
 						 unsigned long flags)
@@ -299,58 +388,8 @@ static __always_inline bool unlock_rt_mutex_safe(struct rt_mutex_base *lock,
 	 *					lock(wait_lock);
 	 *					acquire(lock);
 	 */
-	return rt_mutex_cmpxchg_release(lock, owner, NULL);
+	return try_cmpxchg_release(&lock->owner, &owner, NULL);
 }
-
-#else
-static __always_inline bool rt_mutex_cmpxchg_acquire(struct rt_mutex_base *lock,
-						     struct task_struct *old,
-						     struct task_struct *new)
-{
-	return false;
-
-}
-
-static int __sched rt_mutex_slowtrylock(struct rt_mutex_base *lock);
-
-static __always_inline bool rt_mutex_try_acquire(struct rt_mutex_base *lock)
-{
-	/*
-	 * With debug enabled rt_mutex_cmpxchg trylock() will always fail.
-	 *
-	 * Avoid unconditionally taking the slow path by using
-	 * rt_mutex_slow_trylock() which is covered by the debug code and can
-	 * acquire a non-contended rtmutex.
-	 */
-	return rt_mutex_slowtrylock(lock);
-}
-
-static __always_inline bool rt_mutex_cmpxchg_release(struct rt_mutex_base *lock,
-						     struct task_struct *old,
-						     struct task_struct *new)
-{
-	return false;
-}
-
-static __always_inline void mark_rt_mutex_waiters(struct rt_mutex_base *lock)
-	__must_hold(&lock->wait_lock)
-{
-	lock->owner = (struct task_struct *)
-			((unsigned long)lock->owner | RT_MUTEX_HAS_WAITERS);
-}
-
-/*
- * Simple slow path only version: lock->owner is protected by lock->wait_lock.
- */
-static __always_inline bool unlock_rt_mutex_safe(struct rt_mutex_base *lock,
-						 unsigned long flags)
-	__releases(lock->wait_lock)
-{
-	lock->owner = NULL;
-	raw_spin_unlock_irqrestore(&lock->wait_lock, flags);
-	return true;
-}
-#endif
 
 static __always_inline int __waiter_prio(struct task_struct *task)
 {
@@ -1432,9 +1471,8 @@ static void __sched rt_mutex_slowunlock(struct rt_mutex_base *lock)
 	debug_rt_mutex_unlock(lock);
 
 	/*
-	 * We must be careful here if the fast path is enabled. If we
-	 * have no waiters queued we cannot set owner to NULL here
-	 * because of:
+	 * If there are no waiters queued, owner still cannot be set to NULL
+	 * while wait_lock is held because a lockless acquisition can race:
 	 *
 	 * foo->lock->owner = NULL;
 	 *			rtmutex_lock(foo->lock);   <- fast path
@@ -1444,10 +1482,9 @@ static void __sched rt_mutex_slowunlock(struct rt_mutex_base *lock)
 	 *				kfree(foo);
 	 * raw_spin_unlock(foo->lock->wait_lock);
 	 *
-	 * So for the fastpath enabled kernel:
-	 *
-	 * Nothing can set the waiters bit as long as we hold
-	 * lock->wait_lock. So we do the following sequence:
+	 * The regular fast path can do this when enabled. Atomic trylock can do
+	 * this in debug builds too. Nothing can set the waiters bit as long as
+	 * wait_lock is held, so use the following sequence in either case:
 	 *
 	 *	owner = rt_mutex_owner(lock);
 	 *	clear_rt_mutex_waiters(lock);
@@ -1455,12 +1492,6 @@ static void __sched rt_mutex_slowunlock(struct rt_mutex_base *lock)
 	 *	if (cmpxchg(&lock->owner, owner, 0) == owner)
 	 *		return;
 	 *	goto retry;
-	 *
-	 * The fastpath disabled variant is simple as all access to
-	 * lock->owner is serialized by lock->wait_lock:
-	 *
-	 *	lock->owner = NULL;
-	 *	raw_spin_unlock(&lock->wait_lock);
 	 */
 	while (!rt_mutex_has_waiters(lock)) {
 		/* Drops lock->wait_lock ! */

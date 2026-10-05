@@ -46,12 +46,14 @@ static inline bool rt_mutex_base_is_locked(struct rt_mutex_base *lock)
 
 #ifdef CONFIG_RT_MUTEXES
 #define RT_MUTEX_HAS_WAITERS	1UL
+#define RT_MUTEX_OWNER_ATOMIC	2UL
+#define RT_MUTEX_OWNER_MASK	(RT_MUTEX_HAS_WAITERS | RT_MUTEX_OWNER_ATOMIC)
 
 static inline struct task_struct *rt_mutex_owner(struct rt_mutex_base *lock)
 {
 	unsigned long owner = (unsigned long) data_race(READ_ONCE(lock->owner));
 
-	return (struct task_struct *) (owner & ~RT_MUTEX_HAS_WAITERS);
+	return (struct task_struct *)(owner & ~RT_MUTEX_OWNER_MASK);
 }
 #endif
 extern void rt_mutex_base_init(struct rt_mutex_base *rtb);

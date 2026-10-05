@@ -35,9 +35,14 @@ extern void rt_spin_lock(spinlock_t *lock) __acquires(lock);
 extern void rt_spin_lock_nested(spinlock_t *lock, int subclass)	__acquires(lock);
 extern void rt_spin_lock_nest_lock(spinlock_t *lock, struct lockdep_map *nest_lock) __acquires(lock);
 extern void rt_spin_unlock(spinlock_t *lock)	__releases(lock);
+extern void rt_spin_unlock_irqrestore(spinlock_t *lock, unsigned long flags)
+	__releases(lock);
 extern void rt_spin_lock_unlock(spinlock_t *lock);
 extern int rt_spin_trylock_bh(spinlock_t *lock) __cond_acquires(true, lock);
 extern int rt_spin_trylock(spinlock_t *lock) __cond_acquires(true, lock);
+extern int rt_spin_trylock_nolock_irqsave(spinlock_t *lock,
+					  unsigned long *flags)
+	__cond_acquires(true, lock);
 
 static __always_inline void spin_lock(spinlock_t *lock)
 	__acquires(lock)
@@ -138,7 +143,7 @@ static __always_inline void spin_unlock_irqrestore(spinlock_t *lock,
 						   unsigned long flags)
 	__releases(lock)
 {
-	rt_spin_unlock(lock);
+	rt_spin_unlock_irqrestore(lock, flags);
 }
 
 #define spin_trylock(lock)	rt_spin_trylock(lock)
@@ -160,6 +165,27 @@ static __always_inline bool _spin_trylock_irqsave(spinlock_t *lock, unsigned lon
 	return rt_spin_trylock(lock);
 }
 #define spin_trylock_irqsave(lock, flags) _spin_trylock_irqsave(lock, &(flags))
+
+/*
+ * For bounded no-lock allocator sections. A non-preemptible caller can
+ * acquire only an uncontended lock. Success creates an atomic owner, leaves
+ * local interrupts disabled, and adds a preemption-disable level. NMI and
+ * hard interrupt callers fail.
+ *
+ * The section must not block. A regular waiter spins with interrupts disabled
+ * and cannot boost the atomic owner. Pair every successful call with
+ * spin_unlock_irqrestore(lock, flags); spin_unlock() does not restore the
+ * interrupt state of an atomic owner.
+ */
+static __always_inline bool
+_spin_trylock_nolock_irqsave(spinlock_t *lock, unsigned long *flags)
+	__cond_acquires(true, lock)
+{
+	return rt_spin_trylock_nolock_irqsave(lock, flags);
+}
+
+#define spin_trylock_nolock_irqsave(lock, flags) \
+	_spin_trylock_nolock_irqsave(lock, &(flags))
 
 #define spin_is_contended(lock)		(((void)(lock), 0))
 

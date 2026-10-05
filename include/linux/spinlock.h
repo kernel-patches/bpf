@@ -444,6 +444,9 @@ static __always_inline bool _spin_trylock_irqsave(spinlock_t *lock, unsigned lon
 }
 #define spin_trylock_irqsave(lock, flags) _spin_trylock_irqsave(lock, &(flags))
 
+#define spin_trylock_nolock_irqsave(lock, flags) \
+	spin_trylock_irqsave(lock, flags)
+
 static __always_inline int spin_trylock_irq_disable(spinlock_t *lock)
 	__cond_acquires(true, lock) __no_context_analysis
 {

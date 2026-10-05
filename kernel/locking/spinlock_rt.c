@@ -75,9 +75,22 @@ void __sched rt_spin_lock_nest_lock(spinlock_t *lock,
 EXPORT_SYMBOL(rt_spin_lock_nest_lock);
 #endif
 
-void __sched rt_spin_unlock(spinlock_t *lock) __releases(RCU)
+static __always_inline bool
+__rt_spin_unlock(spinlock_t *lock, unsigned long ip)
 {
-	spin_release(&lock->dep_map, _RET_IP_);
+	spin_release(&lock->dep_map, ip);
+
+	if (unlikely(rt_mutex_atomic_owner(&lock->lock))) {
+		/*
+		 * Atomic trylock holders have preemption disabled and never
+		 * entered the rtmutex PI machinery. Leave a marked slow path
+		 * the transitional HAS_WAITERS state and let it acquire the lock.
+		 */
+		WARN_ON_ONCE(!rt_mutex_atomic_release(&lock->lock));
+		rcu_read_unlock();
+		return true;
+	}
+
 	migrate_enable();
 
 	if (unlikely(!rt_mutex_cmpxchg_release(&lock->lock, current, NULL)))
@@ -100,8 +113,25 @@ void __sched rt_spin_unlock(spinlock_t *lock) __releases(RCU)
 	 *			    UAF ->	  rt_mutex_cmpxchg_release(&p->lock.lock...)
 	 */
 	rcu_read_unlock();
+	return false;
+}
+
+void __sched rt_spin_unlock(spinlock_t *lock) __releases(RCU)
+{
+	if (__rt_spin_unlock(lock, _RET_IP_))
+		preempt_enable();
 }
 EXPORT_SYMBOL(rt_spin_unlock);
+
+void __sched rt_spin_unlock_irqrestore(spinlock_t *lock, unsigned long flags)
+	__releases(RCU)
+{
+	if (__rt_spin_unlock(lock, _RET_IP_)) {
+		local_irq_restore(flags);
+		preempt_enable();
+	}
+}
+EXPORT_SYMBOL(rt_spin_unlock_irqrestore);
 
 /*
  * Wait for the lock to get unlocked: instead of polling for an unlock
@@ -115,7 +145,8 @@ void __sched rt_spin_lock_unlock(spinlock_t *lock)
 }
 EXPORT_SYMBOL(rt_spin_lock_unlock);
 
-static __always_inline int __rt_spin_trylock(spinlock_t *lock)
+static __always_inline int
+__rt_spin_trylock(spinlock_t *lock, unsigned long ip)
 {
 	int ret = 1;
 
@@ -123,7 +154,7 @@ static __always_inline int __rt_spin_trylock(spinlock_t *lock)
 		ret = rt_mutex_slowtrylock(&lock->lock);
 
 	if (ret) {
-		spin_acquire(&lock->dep_map, 0, 1, _RET_IP_);
+		spin_acquire(&lock->dep_map, 0, 1, ip);
 		rcu_read_lock();
 		migrate_disable();
 	}
@@ -132,16 +163,39 @@ static __always_inline int __rt_spin_trylock(spinlock_t *lock)
 
 int __sched rt_spin_trylock(spinlock_t *lock)
 {
-	return __rt_spin_trylock(lock);
+	return __rt_spin_trylock(lock, _RET_IP_);
 }
 EXPORT_SYMBOL(rt_spin_trylock);
+
+int __sched rt_spin_trylock_nolock_irqsave(spinlock_t *lock,
+					   unsigned long *flags)
+{
+	if (unlikely(in_nmi() || in_hardirq()))
+		return 0;
+	if (preemptible()) {
+		*flags = 0;
+		return __rt_spin_trylock(lock, _RET_IP_);
+	}
+
+	local_irq_save(*flags);
+	preempt_disable();
+	if (!rt_mutex_atomic_try_acquire(&lock->lock)) {
+		preempt_enable();
+		local_irq_restore(*flags);
+		return 0;
+	}
+
+	spin_acquire(&lock->dep_map, 0, 1, _RET_IP_);
+	rcu_read_lock();
+	return 1;
+}
 
 int __sched rt_spin_trylock_bh(spinlock_t *lock)
 {
 	int ret;
 
 	local_bh_disable();
-	ret = __rt_spin_trylock(lock);
+	ret = __rt_spin_trylock(lock, _RET_IP_);
 	if (!ret)
 		local_bh_enable();
 	return ret;

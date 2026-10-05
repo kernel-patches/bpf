@@ -46,21 +46,26 @@ is used]
 The state of the rt-mutex is tracked via the owner field of the rt-mutex
 structure:
 
-lock->owner holds the task_struct pointer of the owner. Bit 0 is used to
-keep track of the "lock has waiters" state:
+lock->owner holds the task_struct pointer of the owner. Bit 0 tracks the
+"lock has waiters" state. Bit 1 marks an atomic owner used by PREEMPT_RT
+spinlock trylocks whose callers cannot enter the priority inheritance or
+wakeup paths:
 
- ============ ======= ================================================
- owner        bit0    Notes
- ============ ======= ================================================
- NULL         0       lock is free (fast acquire possible)
- NULL         1       lock is free and has waiters and the top waiter
-		      is going to take the lock [1]_
- taskpointer  0       lock is held (fast release possible)
- taskpointer  1       lock is held and has waiters [2]_
- ============ ======= ================================================
+ ============ ======= ======= ================================================
+ owner        bit1    bit0    Notes
+ ============ ======= ======= ================================================
+ NULL         0       0       lock is free (fast acquire possible)
+ NULL         0       1       lock is free and has waiters and the top waiter
+			      is going to take the lock [1]_
+ taskpointer  0       0       lock is held (fast release possible)
+ taskpointer  0       1       lock is held and has waiters [2]_
+ taskpointer  1       0       lock is held by an atomic owner
+ taskpointer  1       1       lock is held by an atomic owner while a slow
+			      path excludes new atomic owners [3]_
+ ============ ======= ======= ================================================
 
-The fast atomic compare exchange based acquire and release is only
-possible when bit 0 of lock->owner is 0.
+The regular fast atomic compare exchange based acquire and release is only
+possible when both flag bits of lock->owner are clear.
 
 .. [1] It also can be a transitional state when grabbing the lock
        with ->wait_lock is held. To prevent any fast path cmpxchg to the lock,
@@ -71,6 +76,11 @@ possible when bit 0 of lock->owner is 0.
        waiters. This can happen when grabbing the lock in the slow path.
        To prevent a cmpxchg of the owner releasing the lock, we need to
        set this bit before looking at the lock.
+
+.. [3] The slow path sets bit 0 before waiting for the atomic owner. The
+       atomic owner then releases to ``NULL | HAS_WAITERS`` without entering
+       priority inheritance or wakeup handling. This lets the slow path take
+       the lock and prevents another atomic owner from barging ahead of it.
 
 BTW, there is still technically a "Pending Owner", it's just not called
 that anymore. The pending owner happens to be the top_waiter of a lock
