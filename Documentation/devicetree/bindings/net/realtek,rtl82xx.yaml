@@ -12,7 +12,17 @@ maintainers:
   - Heiner Kallweit <hkallweit1@gmail.com>
 
 description:
-  Bindings for Realtek RTL82xx PHYs
+  Bindings for Realtek RTL82xx PHYs.
+
+  The RTL8224 contains four PHYs at consecutive MDIO addresses. Its PHY
+  nodes may be grouped under an ethernet-phy-package node as described
+  in ethernet-phy-package.yaml. The package reg must identify the first
+  PHY's MDIO address, even if that PHY has no child node. This address
+  need not be a multiple of four. Each child PHY reg is its absolute
+  MDIO address, not an offset from the package base.
+
+  The enet-phy-pair-order and enet-phy-pair-polarity properties belong
+  to the individual PHY nodes and describe each port's MDI wiring.
 
 properties:
   compatible:
@@ -90,9 +100,45 @@ examples:
         #address-cells = <1>;
         #size-cells = <0>;
 
-        ethphy1: ethernet-phy@1 {
+        ethernet-phy@1 {
             reg = <1>;
-            realtek,clkout-disable;
             realtek,aldps-enable;
+            realtek,clkout-disable;
+        };
+    };
+  - |
+    mdio {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        ethernet-phy-package@1 {
+            reg = <1>;
+            #address-cells = <1>;
+            #size-cells = <0>;
+
+            ethernet-phy@1 {
+                compatible = "ethernet-phy-ieee802.3-c45";
+                reg = <1>;
+                enet-phy-pair-order = <0>;
+            };
+
+            ethernet-phy@2 {
+                compatible = "ethernet-phy-ieee802.3-c45";
+                reg = <2>;
+                enet-phy-pair-order = <0>;
+            };
+
+            ethernet-phy@3 {
+                compatible = "ethernet-phy-ieee802.3-c45";
+                reg = <3>;
+                enet-phy-pair-order = <1>;
+            };
+
+            ethernet-phy@4 {
+                compatible = "ethernet-phy-ieee802.3-c45";
+                reg = <4>;
+                enet-phy-pair-order = <1>;
+                enet-phy-pair-polarity = <0x1>;
+            };
         };
     };
