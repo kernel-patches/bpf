@@ -26,6 +26,30 @@ struct ppe_plat_data {
 	unsigned int num_icc, num_ports;
 };
 
+/* IPQ5332 interconnect paths. Zero bandwidths use the PPE clock rate. */
+static const struct icc_bulk_data ipq5332_icc_data[] = {
+	{
+		.name = "ppe",
+		.avg_bw = 0,
+		.peak_bw = 0,
+	},
+	{
+		.name = "ppe_cfg",
+		.avg_bw = 0,
+		.peak_bw = 0,
+	},
+	{
+		.name = "qos_gen",
+		.avg_bw = 6000,
+		.peak_bw = 6000,
+	},
+	{
+		.name = "timeout_ref",
+		.avg_bw = 6000,
+		.peak_bw = 6000,
+	},
+};
+
 /* IPQ9574 interconnect paths. Zero bandwidths use the PPE clock rate. */
 static const struct icc_bulk_data ipq9574_icc_data[] = {
 	{
@@ -63,6 +87,14 @@ static const struct icc_bulk_data ipq9574_icc_data[] = {
 		.avg_bw = 533333,
 		.peak_bw = 533333,
 	},
+};
+
+static const struct ppe_plat_data ipq5332_ppe_data = {
+	.soc_cfg = &ipq5332_soc_config,
+	.icc_data = ipq5332_icc_data,
+	.ppe_clk_rate = 200000000,
+	.num_icc = ARRAY_SIZE(ipq5332_icc_data),
+	.num_ports = 3,
 };
 
 static const struct ppe_plat_data ipq9574_ppe_data = {
@@ -237,6 +269,7 @@ static void qcom_ppe_remove(struct platform_device *pdev)
 }
 
 static const struct of_device_id qcom_ppe_of_match[] = {
+	{ .compatible = "qcom,ipq5332-ppe", .data = &ipq5332_ppe_data },
 	{ .compatible = "qcom,ipq9574-ppe", .data = &ipq9574_ppe_data },
 	{}
 };

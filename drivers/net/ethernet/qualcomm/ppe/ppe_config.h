@@ -316,6 +316,7 @@ struct ppe_soc_config {
 	unsigned int sch_qm_config_cnt;
 };
 
+extern const struct ppe_soc_config ipq5332_soc_config;
 extern const struct ppe_soc_config ipq9574_soc_config;
 
 int ppe_hw_config(struct ppe_device *ppe_dev,
