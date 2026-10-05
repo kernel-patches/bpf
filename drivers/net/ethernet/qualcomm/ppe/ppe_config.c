@@ -835,6 +835,19 @@ static const struct ppe_port_schedule_resource ppe_scheduler_res[] = {
 	},
 };
 
+const struct ppe_soc_config ipq9574_soc_config = {
+	.bm_group_config = ipq9574_ppe_bm_group_config,
+	.bm_port_config = ipq9574_ppe_bm_port_config,
+	.bm_port_config_cnt = ARRAY_SIZE(ipq9574_ppe_bm_port_config),
+	.qm_group_config = ipq9574_ppe_qm_group_config,
+	.qm_queue_config = ipq9574_ppe_qm_queue_config,
+	.qm_queue_config_cnt = ARRAY_SIZE(ipq9574_ppe_qm_queue_config),
+	.sch_bm_config = ipq9574_ppe_sch_bm_config,
+	.sch_bm_config_cnt = ARRAY_SIZE(ipq9574_ppe_sch_bm_config),
+	.sch_qm_config = ipq9574_ppe_sch_qm_config,
+	.sch_qm_config_cnt = ARRAY_SIZE(ipq9574_ppe_sch_qm_config),
+};
+
 /* Set the PPE queue level scheduler configuration. */
 static int ppe_scheduler_l0_queue_map_set(struct ppe_device *ppe_dev,
 					  int node_id, int port,
@@ -1080,7 +1093,12 @@ int ppe_port_resource_get(struct ppe_device *ppe_dev, int port,
 	if (port > ppe_dev->num_ports)
 		return -EINVAL;
 
-	res = ppe_scheduler_res[port];
+	/* Port ID num_ports selects the reserved pool in the final entry. */
+	if (port == ppe_dev->num_ports)
+		res = ppe_scheduler_res[ARRAY_SIZE(ppe_scheduler_res) - 1];
+	else
+		res = ppe_scheduler_res[port];
+
 	switch (type) {
 	case PPE_RES_UCAST:
 		*res_start = res.ucastq_start;
@@ -1427,7 +1445,8 @@ static int ppe_config_bm_threshold(struct ppe_device *ppe_dev, int bm_port_id,
 }
 
 /* Configure the buffer threshold for the port flow control function. */
-static int ppe_config_bm(struct ppe_device *ppe_dev)
+static int ppe_config_bm(struct ppe_device *ppe_dev,
+			 const struct ppe_soc_config *soc_cfg)
 {
 	const struct ppe_bm_port_config *port_cfg;
 	unsigned int i, bm_port_id, port_cfg_cnt;
@@ -1440,7 +1459,7 @@ static int ppe_config_bm(struct ppe_device *ppe_dev)
 	 */
 	reg = PPE_BM_SHARED_GROUP_CFG_ADDR;
 	val = FIELD_PREP(PPE_BM_SHARED_GROUP_CFG_SHARED_LIMIT,
-			 ipq9574_ppe_bm_group_config);
+			 soc_cfg->bm_group_config);
 	ret = regmap_update_bits(ppe_dev->regmap, reg,
 				 PPE_BM_SHARED_GROUP_CFG_SHARED_LIMIT,
 				 val);
@@ -1448,8 +1467,8 @@ static int ppe_config_bm(struct ppe_device *ppe_dev)
 		goto bm_config_fail;
 
 	/* Configure buffer thresholds for the BM ports. */
-	port_cfg = ipq9574_ppe_bm_port_config;
-	port_cfg_cnt = ARRAY_SIZE(ipq9574_ppe_bm_port_config);
+	port_cfg = soc_cfg->bm_port_config;
+	port_cfg_cnt = soc_cfg->bm_port_config_cnt;
 	for (i = 0; i < port_cfg_cnt; i++) {
 		for (bm_port_id = port_cfg[i].port_id_start;
 		     bm_port_id <= port_cfg[i].port_id_end; bm_port_id++) {
@@ -1470,7 +1489,8 @@ bm_config_fail:
 /* Configure PPE hardware queue depth, which is decided by the threshold
  * of queue.
  */
-static int ppe_config_qm(struct ppe_device *ppe_dev)
+static int ppe_config_qm(struct ppe_device *ppe_dev,
+			 const struct ppe_soc_config *soc_cfg)
 {
 	const struct ppe_qm_queue_config *queue_cfg;
 	int ret, i, queue_id, queue_cfg_count;
@@ -1485,15 +1505,15 @@ static int ppe_config_qm(struct ppe_device *ppe_dev)
 	if (ret)
 		goto qm_config_fail;
 
-	PPE_AC_GRP_SET_BUF_LIMIT(group_cfg, ipq9574_ppe_qm_group_config);
+	PPE_AC_GRP_SET_BUF_LIMIT(group_cfg, soc_cfg->qm_group_config);
 
 	ret = regmap_bulk_write(ppe_dev->regmap, reg,
 				group_cfg, ARRAY_SIZE(group_cfg));
 	if (ret)
 		goto qm_config_fail;
 
-	queue_cfg = ipq9574_ppe_qm_queue_config;
-	queue_cfg_count = ARRAY_SIZE(ipq9574_ppe_qm_queue_config);
+	queue_cfg = soc_cfg->qm_queue_config;
+	queue_cfg_count = soc_cfg->qm_queue_config_cnt;
 	for (i = 0; i < queue_cfg_count; i++) {
 		queue_id = queue_cfg[i].queue_start;
 
@@ -1625,7 +1645,8 @@ static int ppe_node_scheduler_config(struct ppe_device *ppe_dev,
 /* Initialize scheduler settings for PPE buffer utilization and dispatching
  * packet on PPE queue.
  */
-static int ppe_config_scheduler(struct ppe_device *ppe_dev)
+static int ppe_config_scheduler(struct ppe_device *ppe_dev,
+				const struct ppe_soc_config *soc_cfg)
 {
 	const struct ppe_scheduler_port_config *port_cfg;
 	const struct ppe_scheduler_qm_config *qm_cfg;
@@ -1633,8 +1654,8 @@ static int ppe_config_scheduler(struct ppe_device *ppe_dev)
 	int ret, i, count;
 	u32 val, reg;
 
-	count = ARRAY_SIZE(ipq9574_ppe_sch_bm_config);
-	bm_cfg = ipq9574_ppe_sch_bm_config;
+	count = soc_cfg->sch_bm_config_cnt;
+	bm_cfg = soc_cfg->sch_bm_config;
 
 	/* Configure the depth of BM scheduler entries. */
 	val = FIELD_PREP(PPE_BM_SCH_CTRL_SCH_DEPTH, count);
@@ -1664,8 +1685,8 @@ static int ppe_config_scheduler(struct ppe_device *ppe_dev)
 			goto sch_config_fail;
 	}
 
-	count = ARRAY_SIZE(ipq9574_ppe_sch_qm_config);
-	qm_cfg = ipq9574_ppe_sch_qm_config;
+	count = soc_cfg->sch_qm_config_cnt;
+	qm_cfg = soc_cfg->sch_qm_config;
 
 	/* Configure the depth of QM scheduler entries. */
 	val = FIELD_PREP(PPE_PSCH_SCH_DEPTH_CFG_SCH_DEPTH, count);
@@ -1995,19 +2016,20 @@ static int ppe_bridge_init(struct ppe_device *ppe_dev)
 	return 0;
 }
 
-int ppe_hw_config(struct ppe_device *ppe_dev)
+int ppe_hw_config(struct ppe_device *ppe_dev,
+		  const struct ppe_soc_config *soc_cfg)
 {
 	int ret;
 
-	ret = ppe_config_bm(ppe_dev);
+	ret = ppe_config_bm(ppe_dev, soc_cfg);
 	if (ret)
 		return ret;
 
-	ret = ppe_config_qm(ppe_dev);
+	ret = ppe_config_qm(ppe_dev, soc_cfg);
 	if (ret)
 		return ret;
 
-	ret = ppe_config_scheduler(ppe_dev);
+	ret = ppe_config_scheduler(ppe_dev, soc_cfg);
 	if (ret)
 		return ret;
 
