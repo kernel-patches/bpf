@@ -30,6 +30,7 @@
 
 #include "icssm_prueth.h"
 #include "icssm_prueth_switch.h"
+#include "icssm_prueth_lre.h"
 #include "icssm_vlan_mcast_filter_mmap.h"
 #include "../icssg/icssg_mii_rt.h"
 #include "../icssg/icss_iep.h"
@@ -39,6 +40,29 @@
 #define TX_START_DELAY		0x40
 #define TX_CLK_DELAY_100M	0x6
 #define HR_TIMER_TX_DELAY_US	100
+
+#define NETIF_PRUETH_LRE_OFFLOAD_FEATURES       (NETIF_F_HW_HSR_FWD | \
+						 NETIF_F_HW_HSR_TAG_RM)
+
+static void icssm_prueth_set_fw_offsets(struct prueth *prueth)
+{
+	/* Set Multicast filter control and table offsets */
+	if (PRUETH_IS_EMAC(prueth) || PRUETH_IS_SWITCH(prueth)) {
+		prueth->fw_offsets.mc_ctrl_offset  =
+			ICSS_EMAC_FW_MULTICAST_FILTER_CTRL_OFFSET;
+		prueth->fw_offsets.mc_filter_mask =
+			ICSS_EMAC_FW_MULTICAST_FILTER_MASK_OFFSET;
+		prueth->fw_offsets.mc_filter_tbl =
+			ICSS_EMAC_FW_MULTICAST_FILTER_TABLE;
+	} else {
+		prueth->fw_offsets.mc_ctrl_offset  =
+			ICSS_LRE_FW_MULTICAST_TABLE_SEARCH_OP_CONTROL_BIT;
+		prueth->fw_offsets.mc_filter_mask =
+			ICSS_LRE_FW_MULTICAST_FILTER_MASK;
+		prueth->fw_offsets.mc_filter_tbl =
+			ICSS_LRE_FW_MULTICAST_FILTER_TABLE;
+	}
+}
 
 static void icssm_prueth_write_reg(struct prueth *prueth,
 				   enum prueth_mem region,
@@ -309,12 +333,15 @@ static void icssm_prueth_hostinit(struct prueth *prueth)
 	icssm_prueth_mii_init(prueth);
 }
 
-/* This function initialize the driver in EMAC mode
+/* Initialize the driver in EMAC, HSR or PRP mode
  * based on eth_type
  */
 static void icssm_prueth_init_ethernet_mode(struct prueth *prueth)
 {
+	icssm_prueth_set_fw_offsets(prueth);
 	icssm_prueth_hostinit(prueth);
+	if (prueth_is_lre(prueth))
+		icssm_prueth_lre_config(prueth);
 }
 
 static void icssm_prueth_port_enable(struct prueth_emac *emac, bool enable)
@@ -609,6 +636,9 @@ static int icssm_prueth_tx_enqueue(struct prueth_emac *emac,
        /* update first buffer descriptor */
 	wr_buf_desc = (pktlen << PRUETH_BD_LENGTH_SHIFT) &
 		       PRUETH_BD_LENGTH_MASK;
+	if (PRUETH_IS_HSR(prueth))
+		wr_buf_desc |= BIT(PRUETH_BD_HSR_FRAME_SHIFT);
+
 	sram = prueth->mem[PRUETH_MEM_SHARED_RAM].va;
 	if (!PRUETH_IS_EMAC(prueth))
 		writel(wr_buf_desc, sram + readw(&queue_desc->wr_ptr));
@@ -627,6 +657,12 @@ static int icssm_prueth_tx_enqueue(struct prueth_emac *emac,
 void icssm_parse_packet_info(struct prueth *prueth, u32 buffer_descriptor,
 			     struct prueth_packet_info *pkt_info)
 {
+	if (prueth_is_lre(prueth))
+		pkt_info->start_offset = !!(buffer_descriptor &
+					    PRUETH_BD_START_FLAG_MASK);
+	else
+		pkt_info->start_offset = false;
+
 	pkt_info->port = (buffer_descriptor & PRUETH_BD_PORT_MASK) >>
 			 PRUETH_BD_PORT_SHIFT;
 	pkt_info->length = (buffer_descriptor & PRUETH_BD_LENGTH_MASK) >>
@@ -661,10 +697,14 @@ int icssm_emac_rx_packet(struct prueth_emac *emac, u16 *bd_rd_ptr,
 	unsigned int actual_pkt_len;
 	bool buffer_wrapped = false;
 	void *src_addr, *dst_addr;
+	u16 start_offset = 0;
 	struct sk_buff *skb;
 	int pkt_block_size;
 	void *ocmc_ram;
 
+	if (PRUETH_IS_HSR(emac->prueth))
+		start_offset = (pkt_info->start_offset ?
+				ICSSM_LRE_TAG_SIZE : 0);
 	/* the PRU firmware deals mostly in pointers already
 	 * offset into ram, we would like to deal in indexes
 	 * within the queue we are working with for code
@@ -687,7 +727,8 @@ int icssm_emac_rx_packet(struct prueth_emac *emac, u16 *bd_rd_ptr,
 	/* calculate new pointer in ram */
 	*bd_rd_ptr = rxqueue->buffer_desc_offset + (update_block * BD_SIZE);
 
-	actual_pkt_len = pkt_info->length;
+	/* Exclude the HSR tag bytes already stripped by firmware, if any. */
+	actual_pkt_len = pkt_info->length - start_offset;
 
 	/* Allocate a socket buffer for this packet */
 	skb = netdev_alloc_skb_ip_align(ndev, actual_pkt_len);
@@ -707,6 +748,7 @@ int icssm_emac_rx_packet(struct prueth_emac *emac, u16 *bd_rd_ptr,
 	 */
 	src_addr = ocmc_ram + rxqueue->buffer_offset +
 		   (read_block * ICSS_BLOCK_SIZE);
+	src_addr += start_offset;
 
 	/* Copy the data from PRU buffers(OCMC) to socket buffer(DRAM) */
 	if (buffer_wrapped) { /* wrapped around buffer */
@@ -719,6 +761,9 @@ int icssm_emac_rx_packet(struct prueth_emac *emac, u16 *bd_rd_ptr,
 		 */
 		if (pkt_info->length < bytes)
 			bytes = pkt_info->length;
+
+		/* If applicable, account for the HSR tag removed */
+		bytes -= start_offset;
 
 		/* copy non-wrapped part */
 		memcpy(dst_addr, src_addr, bytes);
@@ -740,6 +785,12 @@ int icssm_emac_rx_packet(struct prueth_emac *emac, u16 *bd_rd_ptr,
 		if (!pkt_info->lookup_success)
 			icssm_prueth_sw_learn_fdb(emac, skb->data + ETH_ALEN);
 	}
+
+	/* For PRP, the RCT trailer is at the frame tail, exclude it from
+	 * the length to avoid passing it up the stack.
+	 */
+	if (PRUETH_IS_PRP(emac->prueth) && pkt_info->start_offset)
+		actual_pkt_len -= ICSSM_LRE_TAG_SIZE;
 
 	skb_put(skb, actual_pkt_len);
 
@@ -804,13 +855,12 @@ static int icssm_emac_rx_packets(struct prueth_emac *emac, int budget)
 			rd_buf_desc = readl(shared_ram + bd_rd_ptr);
 			icssm_parse_packet_info(prueth, rd_buf_desc, &pkt_info);
 
-			if (pkt_info.length <= 0) {
-				/* a packet length of zero will cause us to
-				 * never move the read pointer ahead, locking
-				 * the driver, so we manually have to move it
-				 * to the write pointer, discarding all
-				 * remaining packets in this queue. This should
-				 * never happen.
+			if (pkt_info.length < EMAC_MIN_PKTLEN) {
+				/* if the packet is too small we skip it but we
+				 * still need to move the read pointer ahead
+				 * and assume something is wrong with the read
+				 * pointer as the firmware should be filtering
+				 * these packets
 				 */
 				update_rd_ptr = bd_wr_ptr;
 				emac->stats.rx_length_errors++;
@@ -982,14 +1032,20 @@ static int icssm_emac_ndo_open(struct net_device *ndev)
 		icssm_prueth_init_ethernet_mode(prueth);
 
 	/* reset and start PRU firmware */
-	if (PRUETH_IS_SWITCH(prueth)) {
+	if (!PRUETH_IS_EMAC(prueth)) {
+		/* Switch, HSR and PRP protocols share same queue structure */
 		ret = icssm_prueth_sw_emac_config(emac);
 		if (ret)
-			return ret;
+			goto free_hrtimer;
 
-		ret = icssm_prueth_sw_init_fdb_table(prueth);
-		if (ret)
-			return ret;
+		if (PRUETH_IS_SWITCH(prueth)) {
+			ret = icssm_prueth_sw_init_fdb_table(prueth);
+			if (ret)
+				goto free_hrtimer;
+		} else {
+			/* LRE mode: set up duplicate-table check flags */
+			icssm_prueth_lre_config_check_flags(prueth);
+		}
 	} else {
 		icssm_prueth_emac_config(emac);
 	}
@@ -1046,6 +1102,9 @@ iep_exit:
 		icss_iep_exit(prueth->iep);
 free_mem:
 	icssm_prueth_free_memory(emac->prueth);
+free_hrtimer:
+	if (prueth_is_lre(prueth) && !prueth->emac_configured)
+		icssm_prueth_lre_cleanup(prueth);
 	return ret;
 }
 
@@ -1078,6 +1137,9 @@ static int icssm_emac_ndo_stop(struct net_device *ndev)
 		icssm_prueth_sw_shutdown_prus(emac, ndev);
 	else
 		rproc_shutdown(emac->pru);
+
+	if (prueth_is_lre(prueth) && !prueth->emac_configured)
+		icssm_prueth_lre_cleanup(prueth);
 
 	/* free rx interrupts */
 	free_irq(emac->rx_irq, ndev);
@@ -1122,7 +1184,8 @@ static int icssm_prueth_change_mode(struct prueth *prueth,
 		}
 	}
 
-	if (mode == PRUSS_ETHTYPE_EMAC || mode == PRUSS_ETHTYPE_SWITCH) {
+	if (mode == PRUSS_ETHTYPE_EMAC || mode == PRUSS_ETHTYPE_SWITCH ||
+	    mode == PRUSS_ETHTYPE_HSR || mode == PRUSS_ETHTYPE_PRP) {
 		prueth->eth_type = mode;
 	} else {
 		dev_err(prueth->dev, "unknown mode\n");
@@ -1266,11 +1329,16 @@ static void icssm_emac_mc_filter_ctrl(struct prueth_emac *emac, bool enable)
 {
 	struct prueth *prueth = emac->prueth;
 	void __iomem *mc_filter_ctrl;
+	u32 mc_ctrl_offset;
 	void __iomem *ram;
 	u32 reg;
 
 	ram = prueth->mem[emac->dram].va;
-	mc_filter_ctrl = ram + ICSS_EMAC_FW_MULTICAST_FILTER_CTRL_OFFSET;
+	if (prueth_is_lre(prueth))
+		ram = prueth->mem[PRUETH_MEM_DRAM1].va;
+
+	mc_ctrl_offset = prueth->fw_offsets.mc_ctrl_offset;
+	mc_filter_ctrl = ram + mc_ctrl_offset;
 
 	if (enable)
 		reg = ICSS_EMAC_FW_MULTICAST_FILTER_CTRL_ENABLED;
@@ -1289,7 +1357,10 @@ static void icssm_emac_mc_filter_reset(struct prueth_emac *emac)
 	void __iomem *ram;
 
 	ram = prueth->mem[emac->dram].va;
-	mc_filter_tbl_base = ICSS_EMAC_FW_MULTICAST_FILTER_TABLE;
+	if (prueth_is_lre(prueth))
+		ram = prueth->mem[PRUETH_MEM_DRAM1].va;
+
+	mc_filter_tbl_base = prueth->fw_offsets.mc_filter_tbl;
 
 	mc_filter_tbl = ram + mc_filter_tbl_base;
 	memset_io(mc_filter_tbl, 0, ICSS_EMAC_FW_MULTICAST_TABLE_SIZE_BYTES);
@@ -1302,11 +1373,16 @@ static void icssm_emac_mc_filter_hashmask
 {
 	struct prueth *prueth = emac->prueth;
 	void __iomem *mc_filter_mask;
+	u32 mc_filter_mask_base;
 	void __iomem *ram;
 
 	ram = prueth->mem[emac->dram].va;
+	if (prueth_is_lre(prueth))
+		ram = prueth->mem[PRUETH_MEM_DRAM1].va;
 
-	mc_filter_mask = ram + ICSS_EMAC_FW_MULTICAST_FILTER_MASK_OFFSET;
+	mc_filter_mask_base = prueth->fw_offsets.mc_filter_mask;
+
+	mc_filter_mask = ram + mc_filter_mask_base;
 	memcpy_toio(mc_filter_mask, mask,
 		    ICSS_EMAC_FW_MULTICAST_FILTER_MASK_SIZE_BYTES);
 }
@@ -1316,11 +1392,16 @@ static void icssm_emac_mc_filter_bin_update(struct prueth_emac *emac, u8 hash,
 {
 	struct prueth *prueth = emac->prueth;
 	void __iomem *mc_filter_tbl;
+	u32 mc_filter_tbl_base;
 	void __iomem *ram;
 
 	ram = prueth->mem[emac->dram].va;
+	if (prueth_is_lre(prueth))
+		ram = prueth->mem[PRUETH_MEM_DRAM1].va;
 
-	mc_filter_tbl = ram + ICSS_EMAC_FW_MULTICAST_FILTER_TABLE;
+	mc_filter_tbl_base = prueth->fw_offsets.mc_filter_tbl;
+
+	mc_filter_tbl = ram + mc_filter_tbl_base;
 	writeb(val, mc_filter_tbl + hash);
 }
 
@@ -1360,6 +1441,8 @@ static void icssm_emac_ndo_set_rx_mode(struct net_device *ndev)
 {
 	struct prueth_emac *emac = netdev_priv(ndev);
 	bool promisc = ndev->flags & IFF_PROMISC;
+	/* Spinlock for multicast filter table */
+	spinlock_t *mc_filter_tbl_lock;
 	struct netdev_hw_addr *ha;
 	struct prueth *prueth;
 	unsigned long flags;
@@ -1371,8 +1454,13 @@ static void icssm_emac_ndo_set_rx_mode(struct net_device *ndev)
 	sram = prueth->mem[PRUETH_MEM_SHARED_RAM].va;
 	reg = readl(sram + EMAC_PROMISCUOUS_MODE_OFFSET);
 
+	if (prueth_is_lre(prueth))
+		mc_filter_tbl_lock = &prueth->addr_lock;
+	else
+		mc_filter_tbl_lock = &emac->addr_lock;
+
 	/* It is a shared table. So lock the access */
-	spin_lock_irqsave(&emac->addr_lock, flags);
+	spin_lock_irqsave(mc_filter_tbl_lock, flags);
 
 	/* Disable and reset multicast filter, allows allmulti */
 	icssm_emac_mc_filter_ctrl(emac, false);
@@ -1429,15 +1517,109 @@ static void icssm_emac_ndo_set_rx_mode(struct net_device *ndev)
 	}
 
 unlock:
-	spin_unlock_irqrestore(&emac->addr_lock, flags);
+	spin_unlock_irqrestore(mc_filter_tbl_lock, flags);
+}
+
+static netdev_features_t icssm_emac_ndo_fix_features(struct net_device *ndev,
+						     netdev_features_t features)
+{
+	/* hsr tag removal offload and hsr fwd offload are tightly coupled in
+	 * firmware implementation. Both these features need to be enabled /
+	 * disabled together.
+	 */
+	if (!(ndev->features & NETIF_PRUETH_LRE_OFFLOAD_FEATURES))
+		if ((features & NETIF_F_HW_HSR_FWD) ||
+		    (features & NETIF_F_HW_HSR_TAG_RM))
+			features |= NETIF_PRUETH_LRE_OFFLOAD_FEATURES;
+
+	if ((ndev->features & NETIF_F_HW_HSR_FWD) ||
+	    (ndev->features & NETIF_F_HW_HSR_TAG_RM))
+		if (!(features & NETIF_F_HW_HSR_FWD) ||
+		    !(features & NETIF_F_HW_HSR_TAG_RM))
+			features &= ~NETIF_PRUETH_LRE_OFFLOAD_FEATURES;
+
+	return features;
+}
+
+/**
+ * icssm_emac_ndo_set_features - Configure HSR/PRP offload features
+ * @ndev: network device
+ * @features: Requested feature set
+ *
+ * Called by ethtool -K to configure HSR/PRP offload features. The request
+ * is rejected if this interface or its paired interface is running.
+ *
+ * Return: 0 on success, -EINVAL or -EBUSY on error.
+ */
+static int icssm_emac_ndo_set_features(struct net_device *ndev,
+				       netdev_features_t features)
+{
+	struct prueth_emac *emac, *other_emac;
+	netdev_features_t have, wanted;
+	struct net_device *upper;
+	struct prueth *prueth;
+	bool change_request;
+	int ret = -EBUSY;
+
+	emac = netdev_priv(ndev);
+	prueth = emac->prueth;
+	/* MAC instance index starts from 0. So index by port_id - 1 */
+	other_emac = emac->prueth->emac[(emac->port_id == PRUETH_PORT_MII0) ?
+				PRUETH_PORT_MII1 - 1 : PRUETH_PORT_MII0 - 1];
+	wanted = features & NETIF_PRUETH_LRE_OFFLOAD_FEATURES;
+	have = ndev->features & NETIF_PRUETH_LRE_OFFLOAD_FEATURES;
+	change_request = ((wanted ^ have) != 0);
+
+	if (!prueth->fw_data->support_lre)
+		return 0;
+
+	if (PRUETH_IS_SWITCH(prueth) && change_request) {
+		/* LRE offload cannot be enabled in switch mode, remove the
+		 * bridge first to revert to EMAC mode.
+		 */
+		netdev_err(ndev,
+			   "Switch to HSR/PRP not allowed\n");
+		return -EINVAL;
+	}
+
+	upper = netdev_master_upper_dev_get(ndev);
+	if (upper && is_hsr_master(upper) && change_request) {
+		/* Firmware mode is switched to HSR/PRP based on the offload
+		 * features set at the time this port joins the hsr device, so
+		 * changing the features afterwards would desync ndev->features
+		 * from the firmware mode without the hsr core noticing.
+		 * Require unlinking from the hsr device first.
+		 */
+		netdev_err(ndev,
+			   "Can't change offload features while port is an HSR/PRP slave\n");
+		return -EBUSY;
+	}
+
+	if (netif_running(ndev) && change_request) {
+		netdev_err(ndev,
+			   "Can't change feature when device runs\n");
+		return ret;
+	}
+
+	if (other_emac && netif_running(other_emac->ndev) && change_request) {
+		netdev_err(ndev,
+			   "Can't change feature when other device runs\n");
+		return ret;
+	}
+
+	return 0;
 }
 
 static const struct net_device_ops emac_netdev_ops = {
 	.ndo_open = icssm_emac_ndo_open,
 	.ndo_stop = icssm_emac_ndo_stop,
 	.ndo_start_xmit = icssm_emac_ndo_start_xmit,
+	.ndo_set_mac_address = eth_mac_addr,
+	.ndo_validate_addr = eth_validate_addr,
 	.ndo_get_stats64 = icssm_emac_ndo_get_stats64,
 	.ndo_set_rx_mode = icssm_emac_ndo_set_rx_mode,
+	.ndo_set_features = icssm_emac_ndo_set_features,
+	.ndo_fix_features = icssm_emac_ndo_fix_features,
 };
 
 /* get emac_port corresponding to eth_node name */
@@ -1588,6 +1770,9 @@ static int icssm_prueth_netdev_init(struct prueth *prueth,
 		ndev->features |= NETIF_F_HW_L2FW_DOFFLOAD;
 		ndev->hw_features |= NETIF_F_HW_L2FW_DOFFLOAD;
 	}
+
+	if (prueth->support_lre)
+		ndev->hw_features |= NETIF_PRUETH_LRE_OFFLOAD_FEATURES;
 
 	ndev->dev.of_node = eth_node;
 	ndev->netdev_ops = &emac_netdev_ops;
@@ -1741,6 +1926,109 @@ static int icssm_prueth_ndev_port_unlink(struct net_device *ndev)
 	return ret;
 }
 
+static int icssm_prueth_hsr_port_link(struct net_device *ndev,
+				      struct net_device *hsr_ndev)
+{
+	struct prueth_emac *emac = netdev_priv(ndev);
+	struct prueth *prueth = emac->prueth;
+	enum pruss_ethtype mode, prev_mode;
+	enum hsr_version ver;
+	unsigned long flags;
+	u8 all_slaves;
+	int ret = 0;
+
+	if (PRUETH_IS_SWITCH(prueth))
+		return -EOPNOTSUPP;
+
+	hsr_get_version(hsr_ndev, &ver);
+
+	if (ver == HSR_V1)
+		mode = PRUSS_ETHTYPE_HSR;
+	else if (ver == PRP_V1)
+		mode = PRUSS_ETHTYPE_PRP;
+	else
+		return -EOPNOTSUPP;
+
+	all_slaves = BIT(PRUETH_PORT_MII0) | BIT(PRUETH_PORT_MII1);
+
+	spin_lock_irqsave(&prueth->addr_lock, flags);
+
+	if (!prueth->hsr_members) {
+		prueth->hsr_dev = hsr_ndev;
+	} else {
+		/* Adding the port to a second bridge is not supported */
+		if (prueth->hsr_dev != hsr_ndev) {
+			spin_unlock_irqrestore(&prueth->addr_lock, flags);
+			return -EOPNOTSUPP;
+		}
+	}
+
+	prueth->hsr_members |= BIT(emac->port_id);
+
+	spin_unlock_irqrestore(&prueth->addr_lock, flags);
+
+	if (!prueth_is_lre(prueth) && prueth->hsr_members == all_slaves) {
+		prev_mode = prueth->eth_type;
+		ret = icssm_prueth_change_mode(prueth, mode);
+		if (ret < 0) {
+			dev_err(prueth->dev, "Failed to enable %s mode\n",
+				(mode == PRUSS_ETHTYPE_HSR) ?
+				"HSR" : "PRP");
+			goto free_hsr;
+		} else {
+			dev_info(prueth->dev,
+				 "TI PRU ethernet now in %s mode\n",
+				 (mode == PRUSS_ETHTYPE_HSR) ?
+				 "HSR" : "PRP");
+		}
+	}
+
+	return 0;
+
+free_hsr:
+	prueth->eth_type = prev_mode;
+
+	spin_lock_irqsave(&prueth->addr_lock, flags);
+
+	prueth->hsr_members &= ~BIT(emac->port_id);
+
+	spin_unlock_irqrestore(&prueth->addr_lock, flags);
+	return ret;
+}
+
+static int icssm_prueth_hsr_port_unlink(struct net_device *ndev)
+{
+	struct prueth_emac *emac = netdev_priv(ndev);
+	struct prueth *prueth = emac->prueth;
+	enum pruss_ethtype prev_mode;
+	unsigned long flags;
+	int ret = 0;
+
+	spin_lock_irqsave(&prueth->addr_lock, flags);
+
+	prueth->hsr_members &= ~BIT(emac->port_id);
+
+	spin_unlock_irqrestore(&prueth->addr_lock, flags);
+
+	if (prueth_is_lre(prueth) && !prueth->hsr_members) {
+		prev_mode = prueth->eth_type;
+		ret = icssm_prueth_change_mode(prueth, PRUSS_ETHTYPE_EMAC);
+		if (ret < 0) {
+			dev_err(prueth->dev, "Failed to enable dual EMAC mode\n");
+			prueth->eth_type = prev_mode;
+		}
+	}
+
+	spin_lock_irqsave(&prueth->addr_lock, flags);
+
+	if (!prueth->hsr_members)
+		prueth->hsr_dev = NULL;
+
+	spin_unlock_irqrestore(&prueth->addr_lock, flags);
+
+	return ret;
+}
+
 static int icssm_prueth_ndev_event(struct notifier_block *unused,
 				   unsigned long event, void *ptr)
 {
@@ -1754,6 +2042,17 @@ static int icssm_prueth_ndev_event(struct notifier_block *unused,
 	switch (event) {
 	case NETDEV_CHANGEUPPER:
 		info = ptr;
+		if (is_hsr_master(info->upper_dev)) {
+			if (info->linking) {
+				if (ndev->features &
+				    NETIF_PRUETH_LRE_OFFLOAD_FEATURES)
+					ret = icssm_prueth_hsr_port_link
+						(ndev, info->upper_dev);
+			} else {
+				ret = icssm_prueth_hsr_port_unlink(ndev);
+			}
+		}
+
 		if (netif_is_bridge_master(info->upper_dev)) {
 			if (info->linking)
 				ret = icssm_prueth_ndev_port_link
@@ -1796,6 +2095,7 @@ static int icssm_prueth_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct device_node *np;
 	struct prueth *prueth;
+	bool has_lre = false;
 	struct pruss *pruss;
 	int i, ret;
 
@@ -1810,6 +2110,7 @@ static int icssm_prueth_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, prueth);
 	prueth->dev = dev;
 	prueth->fw_data = device_get_match_data(dev);
+	icssm_prueth_set_fw_offsets(prueth);
 
 	eth_ports_node = of_get_child_by_name(np, "ethernet-ports");
 	if (!eth_ports_node)
@@ -1955,6 +2256,17 @@ static int icssm_prueth_probe(struct platform_device *pdev)
 		prueth->mem[PRUETH_MEM_OCMC].va,
 		prueth->mem[PRUETH_MEM_OCMC].size);
 
+	if (IS_ENABLED(CONFIG_HSR) && prueth->fw_data->support_lre)
+		has_lre = true;
+
+	/* LRE requires both ethernet nodes to be present in
+	 * DT, otherwise clear the support flag
+	 */
+	if (has_lre && (!eth0_node || !eth1_node))
+		has_lre = false;
+
+	prueth->support_lre = has_lre;
+	spin_lock_init(&prueth->addr_lock);
 	/* setup netdev interfaces */
 	if (eth0_node) {
 		ret = icssm_prueth_netdev_init(prueth, eth0_node);
@@ -2176,15 +2488,24 @@ static struct prueth_private_data am335x_prueth_pdata = {
 	.fw_pru[PRUSS_PRU0] = {
 		.fw_name[PRUSS_ETHTYPE_EMAC] =
 			"ti-pruss/am335x-pru0-prueth-fw.elf",
+		.fw_name[PRUSS_ETHTYPE_HSR] =
+			"ti-pruss/am335x-pru0-pruhsr-fw.elf",
+		.fw_name[PRUSS_ETHTYPE_PRP] =
+			"ti-pruss/am335x-pru0-pruprp-fw.elf",
 		.fw_name[PRUSS_ETHTYPE_SWITCH] =
 			"ti-pruss/am335x-pru0-prusw-fw.elf",
 	},
 	.fw_pru[PRUSS_PRU1] = {
 		.fw_name[PRUSS_ETHTYPE_EMAC] =
 			"ti-pruss/am335x-pru1-prueth-fw.elf",
+		.fw_name[PRUSS_ETHTYPE_HSR] =
+			"ti-pruss/am335x-pru1-pruhsr-fw.elf",
+		.fw_name[PRUSS_ETHTYPE_PRP] =
+			"ti-pruss/am335x-pru1-pruprp-fw.elf",
 		.fw_name[PRUSS_ETHTYPE_SWITCH] =
 			"ti-pruss/am335x-pru1-prusw-fw.elf",
 	},
+	.support_lre = true,
 	.support_switch = true,
 };
 
@@ -2194,15 +2515,24 @@ static struct prueth_private_data am437x_prueth_pdata = {
 	.fw_pru[PRUSS_PRU0] = {
 		.fw_name[PRUSS_ETHTYPE_EMAC] =
 			"ti-pruss/am437x-pru0-prueth-fw.elf",
+		.fw_name[PRUSS_ETHTYPE_HSR] =
+			"ti-pruss/am437x-pru0-pruhsr-fw.elf",
+		.fw_name[PRUSS_ETHTYPE_PRP] =
+			"ti-pruss/am437x-pru0-pruprp-fw.elf",
 		.fw_name[PRUSS_ETHTYPE_SWITCH] =
 			"ti-pruss/am437x-pru0-prusw-fw.elf",
 	},
 	.fw_pru[PRUSS_PRU1] = {
 		.fw_name[PRUSS_ETHTYPE_EMAC] =
 			"ti-pruss/am437x-pru1-prueth-fw.elf",
+		.fw_name[PRUSS_ETHTYPE_HSR] =
+			"ti-pruss/am437x-pru1-pruhsr-fw.elf",
+		.fw_name[PRUSS_ETHTYPE_PRP] =
+			"ti-pruss/am437x-pru1-pruprp-fw.elf",
 		.fw_name[PRUSS_ETHTYPE_SWITCH] =
 			"ti-pruss/am437x-pru1-prusw-fw.elf",
 	},
+	.support_lre = true,
 	.support_switch = true,
 };
 
@@ -2212,16 +2542,25 @@ static struct prueth_private_data am57xx_prueth_pdata = {
 	.fw_pru[PRUSS_PRU0] = {
 		.fw_name[PRUSS_ETHTYPE_EMAC] =
 			"ti-pruss/am57xx-pru0-prueth-fw.elf",
+		.fw_name[PRUSS_ETHTYPE_HSR] =
+			"ti-pruss/am57xx-pru0-pruhsr-fw.elf",
+		.fw_name[PRUSS_ETHTYPE_PRP] =
+			"ti-pruss/am57xx-pru0-pruprp-fw.elf",
 	.fw_name[PRUSS_ETHTYPE_SWITCH] =
 			"ti-pruss/am57xx-pru0-prusw-fw.elf",
 	},
 	.fw_pru[PRUSS_PRU1] = {
 		.fw_name[PRUSS_ETHTYPE_EMAC] =
 			"ti-pruss/am57xx-pru1-prueth-fw.elf",
+		.fw_name[PRUSS_ETHTYPE_HSR] =
+			"ti-pruss/am57xx-pru1-pruhsr-fw.elf",
+		.fw_name[PRUSS_ETHTYPE_PRP] =
+			"ti-pruss/am57xx-pru1-pruprp-fw.elf",
 		.fw_name[PRUSS_ETHTYPE_SWITCH] =
 			"ti-pruss/am57xx-pru1-prusw-fw.elf",
 
 	},
+	.support_lre = true,
 	.support_switch = true,
 };
 

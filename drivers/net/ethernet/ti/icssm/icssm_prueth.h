@@ -16,13 +16,17 @@
 #include "icssm_switch.h"
 #include "icssm_prueth_ptp.h"
 #include "icssm_prueth_fdb_tbl.h"
+#include "icssm_lre_firmware.h"
 
 /* ICSSM size of redundancy tag */
 #define ICSSM_LRE_TAG_SIZE	6
 
+#define PRUETH_TIMER_MS (10)
+
 /* PRUSS local memory map */
 #define ICSS_LOCAL_SHARED_RAM	0x00010000
 #define EMAC_MAX_PKTLEN		(ETH_HLEN + VLAN_HLEN + ETH_DATA_LEN)
+#define EMAC_MIN_PKTLEN		ETH_ZLEN
 /* Below macro is for 1528 Byte Frame support, to Allow even with
  * Redundancy tag
  */
@@ -42,6 +46,8 @@ enum pruss_ethtype {
 
 #define PRUETH_IS_EMAC(p)	((p)->eth_type == PRUSS_ETHTYPE_EMAC)
 #define PRUETH_IS_SWITCH(p)	((p)->eth_type == PRUSS_ETHTYPE_SWITCH)
+#define PRUETH_IS_HSR(p)	((p)->eth_type == PRUSS_ETHTYPE_HSR)
+#define PRUETH_IS_PRP(p)	((p)->eth_type == PRUSS_ETHTYPE_PRP)
 
 /**
  * struct prueth_queue_desc - Queue descriptor
@@ -86,6 +92,7 @@ struct prueth_queue_info {
 
 /**
  * struct prueth_packet_info - Info about a packet in buffer
+ * @start_offset: true if frame carries an HSR/PRP start offset
  * @shadow: this packet is stored in the collision queue
  * @port: port packet is on
  * @length: length of packet
@@ -96,6 +103,7 @@ struct prueth_queue_info {
  * @timestamp: Specifies if timestamp is appended to the packet
  */
 struct prueth_packet_info {
+	bool start_offset;
 	bool shadow;
 	unsigned int port;
 	unsigned int length;
@@ -171,6 +179,13 @@ enum prueth_mem {
 	PRUETH_MEM_MAX,
 };
 
+/* Firmware offsets/size information */
+struct prueth_fw_offsets {
+	u32 mc_ctrl_offset;
+	u32 mc_filter_mask;
+	u32 mc_filter_tbl;
+};
+
 enum pruss_device {
 	PRUSS_AM57XX = 0,
 	PRUSS_AM43XX,
@@ -183,11 +198,13 @@ enum pruss_device {
  * @driver_data: PRU Ethernet device name
  * @fw_pru: firmware names to be used for PRUSS ethernet usecases
  * @support_switch: boolean to indicate if switch is enabled
+ * @support_lre: boolean to indicate if LRE is enabled
  */
 struct prueth_private_data {
 	enum pruss_device driver_data;
 	const struct prueth_firmware fw_pru[PRUSS_NUM_PRUS];
 	bool support_switch;
+	bool support_lre;
 };
 
 struct prueth_emac_stats {
@@ -248,13 +265,20 @@ struct prueth {
 	struct icss_iep *iep;
 
 	const struct prueth_private_data *fw_data;
-	struct prueth_fw_offsets *fw_offsets;
+	struct prueth_fw_offsets fw_offsets;
 
 	struct device_node *eth_node[PRUETH_NUM_MACS];
 	struct prueth_emac *emac[PRUETH_NUM_MACS];
 	struct net_device *registered_netdevs[PRUETH_NUM_MACS];
 
+	bool support_lre;
+	unsigned int tbl_check_mask;
+	struct hrtimer tbl_check_timer;
+	/* serialize access to LRE VLAN/MC filter table */
+	spinlock_t addr_lock;
+
 	struct net_device *hw_bridge_dev;
+	struct net_device *hsr_dev;
 	struct fdb_tbl *fdb_tbl;
 
 	struct notifier_block prueth_netdevice_nb;
@@ -264,6 +288,7 @@ struct prueth {
 	unsigned int eth_type;
 	size_t ocmc_ram_size;
 	u8 emac_configured;
+	u8 hsr_members;
 	u8 br_members;
 };
 
@@ -277,4 +302,9 @@ int icssm_emac_rx_packet(struct prueth_emac *emac, u16 *bd_rd_ptr,
 void icssm_emac_mc_filter_bin_allow(struct prueth_emac *emac, u8 hash);
 void icssm_emac_mc_filter_bin_disallow(struct prueth_emac *emac, u8 hash);
 u8 icssm_emac_get_mc_hash(u8 *mac, u8 *mask);
+
+static inline bool prueth_is_lre(struct prueth *prueth)
+{
+	return PRUETH_IS_HSR(prueth) || PRUETH_IS_PRP(prueth);
+}
 #endif /* __NET_TI_PRUETH_H */
