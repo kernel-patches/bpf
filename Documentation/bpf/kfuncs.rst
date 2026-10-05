@@ -695,6 +695,59 @@ verified inline, so an unassigned R2 is simply passed back to the caller as
 uninitialized and only a caller that reads it fails. A stack pointer left in
 R2 is still rejected there, just as one in R0 is.
 
+2.10 Inline kfuncs
+------------------
+
+A kfunc can come with a body: a few BPF instructions that compute it from its
+arguments in R1-R5 into R0. The verifier then checks each call of the kfunc as
+its body, so it knows as much about the result as if the program had computed
+it in BPF, and the JIT puts native code in place of the call. Where the JIT has
+no native code, the body runs in place of the call. BPF programs call such
+kfuncs like any other, and arguments whose names end in ``__k`` must be known
+constants (see section 2.3.2). ``CONFIG_BPF_INSN_KFUNCS`` provides
+``bpf_rol64()``, ``bpf_select64()``, ``bpf_extract64()``, ``bpf_load_be64()``,
+``bpf_prefetch()``, ``bpf_copy16()`` and ``bpf_lea64()``.
+
+The verifier replaces each call with the body before it analyzes the program.
+Only the arguments are readable at the entry of the body, and R1-R5 are not
+readable after it, as after a call. After the analysis, a call goes back into
+the program if the JIT has native code for it, with its operands bound to the
+registers that the moves around the call copied them from or to. The body stays
+when the verifier rewrites it later, for example with speculation barriers,
+when it accesses memory other than the stack, map values, memory and packets,
+and when constant blinding is on.
+
+The native code comes from the kfunc set: an ``emit`` callback writes it for
+the architecture, such as ``rol $13`` or ``movbe 8(%rdi)`` on x86-64. Without
+``emit``, or when it has no code for the CPU, the x86-64 JIT copies the
+compiled kfunc with its registers renamed. It copies only straight-line moves,
+ALU instructions and address computations on the registers of a call, without
+division or rip-relative addressing. Native code is trusted like the rest of
+the JIT: it has to compute what the body computes, with the same memory
+accesses.
+
+A kfunc set gives bodies to some of its kfuncs::
+
+        static const struct bpf_insn rol64_body[] = { ... };
+
+        static const struct bpf_kfunc_body bodies[] = {
+                { &body_ids[0], rol64_body, ARRAY_SIZE(rol64_body), rol64_emit },
+        };
+
+        static const struct btf_kfunc_id_set kfunc_set = {
+                .set      = &kfunc_ids,
+                .bodies   = bodies,
+                .body_cnt = ARRAY_SIZE(bodies),
+        };
+
+Registration checks each body: it may use R0-R5, ALU instructions, loads and
+stores, and forward jumps that land within it, so that it ends by falling
+through its last instruction, but not the sign extension, signed division and
+byte swap of cpu v4, which not every JIT has. Each argument and the result must
+fit in one register, and the kfunc may have no kfunc flags. ``emit`` writes at
+most ``BPF_KFUNC_INLINE_MAX`` bytes. Modules give their kfuncs bodies and
+native code in the same way.
+
 .. _BPF_kfunc_lifecycle_expectations:
 
 3. kfunc lifecycle expectations
