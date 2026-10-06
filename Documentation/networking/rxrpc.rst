@@ -290,6 +290,10 @@ Notes on sendmsg:
      EINTR/ERESTARTSYS if nothing was consumed or returning the amount of data
      consumed.
 
+     If sendmsg() returns EAGAIN, ENOMEM, EINTR, ERESTARTSYS or EFAULT, then
+     the sendmsg can be retried.  If anything else is returned, the call should
+     be considered unusable and should be aborted.
+
 
 Notes on recvmsg:
 
@@ -864,13 +868,13 @@ The kernel interface functions are as follows:
  (#) Send data through a call::
 
 	typedef void (*rxrpc_notify_end_tx_t)(struct sock *sk,
-					      unsigned long user_call_ID,
-					      struct sk_buff *skb);
+					      struct rxrpc_call *call,
+					      unsigned long user_call_ID);
 
 	int rxrpc_kernel_send_data(struct socket *sock,
 				   struct rxrpc_call *call,
 				   struct msghdr *msg,
-				   rxrpc_notify_end_tx_t notify_end_rx);
+				   rxrpc_notify_end_tx_t notify_end_tx);
 
      This is used to supply either the request part of a client call or the
      reply part of a server call.  msg.msg_iovlen and msg.msg_iov specify the
@@ -879,7 +883,9 @@ The kernel interface functions are as follows:
      MSG_MORE if there will be subsequent data sends for this call.
 
      msg must not specify a destination address, control data or any flags
-     other than MSG_MORE or MSG_WAITALL.
+     other than MSG_MORE or MSG_WAITALL.  The last-packet flag will only be set
+     on the outgoing packet if MSG_MORE is not set and all the data in the
+     iterator is buffered.
 
      notify_end_rx can be NULL or it can be used to specify a function to be
      called when the call changes state to end the Tx phase.  This function is
@@ -887,7 +893,12 @@ The kernel interface functions are as follows:
      transmitted until the function returns.
 
      It returns 0 if all the provided data has been buffered and a negative
-     error code on failure.
+     error code on failure.  If the error is one of EAGAIN, ENOMEM, EINTR,
+     ERESTARTSYS or EFAULT, sending data is retryable; for anything else the
+     call should be considered unusable and should be aborted.
+
+     If the call becomes unusable, rxrpc_kernel_recv_data() should be called to
+     collect more information.
 
  (#) Receive data from a call::
 
