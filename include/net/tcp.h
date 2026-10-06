@@ -3056,6 +3056,18 @@ struct bpf_tcp_ops {
 			      struct request_sock *req, struct sk_buff *syn_skb,
 			      enum tcp_synack_type synack_type,
 			      u32 opt_off);
+
+	/*
+	 * Called when an incoming skb is enqueued to sk->sk_receive_queue
+	 * if BPF_TCP_OPS_FLAG_RCVQ is enabled.
+	 */
+	void (*enqueue_rcvq)(struct sock *sk, struct sk_buff *skb);
+
+	/*
+	 * Called after data is dequeued from sk->sk_receive_queue
+	 * if BPF_TCP_OPS_FLAG_RCVQ is enabled.
+	 */
+	void (*dequeue_rcvq)(struct sock *sk);
 };
 
 #define __bpf_tcp_ops_call(op, sk, ...)					\
