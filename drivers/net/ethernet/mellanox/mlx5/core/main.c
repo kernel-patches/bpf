@@ -275,6 +275,9 @@ void mlx5_core_uplink_netdev_set(struct mlx5_core_dev *dev, struct net_device *n
 	mlx5_blocking_notifier_call_chain(dev, MLX5_DRIVER_EVENT_UPLINK_NETDEV,
 					  netdev);
 	mutex_unlock(&dev->mlx5e_res.uplink_netdev_lock);
+
+	if (netdev)
+		mlx5_esw_offloads_uplink_netdev_attach(dev);
 }
 
 void mlx5_core_uplink_netdev_event_replay(struct mlx5_core_dev *dev)

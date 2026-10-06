@@ -43,6 +43,11 @@ struct mlx5_eswitch_rep_ops {
 		     struct mlx5_eswitch_rep *rep,
 		     enum mlx5_switchdev_event event,
 		     void *data);
+	/* Attach an uplink netdev that showed up only after the uplink
+	 * representor was already loaded.
+	 */
+	int (*attach_uplink_netdev)(struct mlx5_core_dev *dev,
+				    struct mlx5_eswitch_rep *rep);
 };
 
 struct mlx5_eswitch_rep_data {

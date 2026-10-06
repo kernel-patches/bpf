@@ -4865,6 +4865,29 @@ mlx5_eswitch_register_vport_reps_blocked(struct mlx5_eswitch *esw,
 	}
 }
 
+static void mlx5_eswitch_attach_uplink_netdev(struct mlx5_eswitch *esw,
+					      struct mlx5_eswitch_rep *uplink)
+{
+	const struct mlx5_eswitch_rep_ops *ops;
+	int type;
+	int err;
+
+	for (type = 0; type < NUM_REP_TYPES; type++) {
+		if (atomic_read(&uplink->rep_data[type].state) != REP_LOADED)
+			continue;
+
+		ops = esw->offloads.rep_ops[type];
+		if (!ops || !ops->attach_uplink_netdev)
+			continue;
+
+		err = ops->attach_uplink_netdev(esw->dev, uplink);
+		if (err)
+			esw_warn(esw->dev,
+				 "Failed to attach uplink netdev to rep type %d, err(%d)\n",
+				 type, err);
+	}
+}
+
 static void mlx5_eswitch_reload_reps_blocked(struct mlx5_eswitch *esw)
 {
 	struct mlx5_eswitch_rep *uplink;
@@ -4884,6 +4907,8 @@ static void mlx5_eswitch_reload_reps_blocked(struct mlx5_eswitch *esw)
 			__esw_offloads_unload_rep(esw, uplink, REP_ETH);
 		return;
 	}
+
+	mlx5_eswitch_attach_uplink_netdev(esw, uplink);
 
 	if (mlx5_get_sd(esw->dev) && !mlx5_lag_is_active(esw->dev))
 		return;
@@ -4907,6 +4932,16 @@ static void mlx5_eswitch_reload_reps(struct mlx5_eswitch *esw)
 	mlx5_esw_reps_block(esw);
 	mlx5_eswitch_reload_reps_blocked(esw);
 	mlx5_esw_reps_unblock(esw);
+}
+
+void mlx5_esw_offloads_uplink_netdev_attach(struct mlx5_core_dev *dev)
+{
+	struct mlx5_eswitch *esw = dev->priv.eswitch;
+
+	if (!mlx5_esw_allowed(esw))
+		return;
+
+	mlx5_esw_add_work(esw, mlx5_eswitch_reload_reps, GFP_KERNEL);
 }
 
 static void

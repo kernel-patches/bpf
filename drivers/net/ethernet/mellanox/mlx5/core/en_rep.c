@@ -1490,8 +1490,22 @@ mlx5e_vport_uplink_rep_load(struct mlx5_core_dev *dev, struct mlx5_eswitch_rep *
 	rpriv->netdev = netdev;
 	err = mlx5e_netdev_change_profile(netdev, dev,
 					  &mlx5e_uplink_rep_profile, rpriv);
+	if (err)
+		rpriv->netdev = NULL;
 	mlx5_uplink_netdev_put(dev, netdev);
 	return err;
+}
+
+static int
+mlx5e_vport_uplink_rep_attach_netdev(struct mlx5_core_dev *dev,
+				     struct mlx5_eswitch_rep *rep)
+{
+	struct mlx5e_rep_priv *rpriv = mlx5e_rep_to_rep_priv(rep);
+
+	if (rpriv->netdev)
+		return 0;
+
+	return mlx5e_vport_uplink_rep_load(dev, rep);
 }
 
 static void
@@ -1741,6 +1755,7 @@ static const struct mlx5_eswitch_rep_ops rep_ops = {
 	.unload = mlx5e_vport_rep_unload,
 	.get_proto_dev = mlx5e_vport_rep_get_proto_dev,
 	.event = mlx5e_vport_rep_event,
+	.attach_uplink_netdev = mlx5e_vport_uplink_rep_attach_netdev,
 };
 
 static int mlx5e_rep_probe(struct auxiliary_device *adev,
