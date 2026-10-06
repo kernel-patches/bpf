@@ -13,7 +13,11 @@
 #include <linux/kernfs.h>
 #include <linux/lsm_hooks.h>
 #include <linux/mm.h>
+#include <linux/namei.h>
 #include <linux/net.h>
+#include <linux/slab.h>
+
+#include "internal.h"
 #include <linux/xattr.h>
 
 __bpf_kfunc_start_defs();
@@ -500,6 +504,143 @@ __bpf_kfunc struct inode *bpf_real_data_inode(struct file *file)
 
 __bpf_kfunc_end_defs();
 
+enum bpf_path_ancestors_flag {
+	/* bpf_path_ancestors_pos_flags() bits */
+	BPF_PATH_ANCESTORS_DISCONNECTED	= (1 << 0),
+	/* the position is a mountpoint a mount crossing landed on */
+	BPF_PATH_ANCESTORS_MOUNTPOINT	= (1 << 1),
+	/* the iteration ended on a failed allocation, not at the root */
+	BPF_PATH_ANCESTORS_NOMEM	= (1 << 2),
+};
+
+/*
+ * Walks over a path's ancestors.
+ *
+ * bpf_iter_path_ancestors runs with references.  Its kfuncs are
+ * sleepable, so the iteration may sleep between positions.
+ *
+ * Each position is handed to the program as an acquired reference of its
+ * own, to release with bpf_path_put().  The walk's own reference moves on
+ * with the walk, so a position that outlives the step it came from - a
+ * dentry saved for later, or the path a sleepable kfunc is still working
+ * on - has to be kept alive by the program's reference rather than by the
+ * iterator's.
+ */
+struct bpf_iter_path_ancestors {
+	__u64 __opaque[5];
+} __aligned(8);
+
+struct bpf_path_ancestors_kern {
+	struct vfs_ancestor_walk aw;
+	int step;	/* last vfs_walk_next() result, or -ENOMEM */
+} __aligned(8);
+
+static int bpf_path_ancestors_new(struct bpf_path_ancestors_kern *kit,
+				  struct path *path, u64 flags,
+				  unsigned int walk_flags)
+{
+	BUILD_BUG_ON(sizeof(struct bpf_path_ancestors_kern) >
+		     sizeof(struct bpf_iter_path_ancestors));
+	BUILD_BUG_ON(__alignof__(struct bpf_path_ancestors_kern) !=
+		     __alignof__(struct bpf_iter_path_ancestors));
+
+	if (flags) {
+		/* A zeroed walk makes destroying the iterator a no-op. */
+		memset(kit, 0, sizeof(*kit));
+		kit->step = 1;
+		return -EINVAL;
+	}
+	kit->step = 0;
+	vfs_walk_start(&kit->aw, path, walk_flags);
+	return 0;
+}
+
+/* The walk's own view of the next position, which the step after it ends. */
+static struct path *bpf_path_ancestors_step(struct bpf_path_ancestors_kern *kit)
+{
+	if (kit->step)
+		return NULL;
+	kit->step = vfs_walk_next(&kit->aw);
+	return kit->step ? NULL : &kit->aw.pos;
+}
+
+static u32 bpf_path_ancestors_flags(const struct bpf_path_ancestors_kern *kit)
+{
+	u32 flags = 0;
+
+	if (kit->step == -ENOMEM)
+		return BPF_PATH_ANCESTORS_NOMEM;
+	if (!kit->step) {
+		if (kit->aw.pos_flags & VFS_WALK_POS_DISCONNECTED)
+			flags |= BPF_PATH_ANCESTORS_DISCONNECTED;
+		if (kit->aw.pos_flags & VFS_WALK_POS_MOUNTPOINT)
+			flags |= BPF_PATH_ANCESTORS_MOUNTPOINT;
+	}
+	return flags;
+}
+
+__bpf_kfunc_start_defs();
+
+__bpf_kfunc int bpf_iter_path_ancestors_new(struct bpf_iter_path_ancestors *it,
+					    struct path *path, u64 flags)
+{
+	return bpf_path_ancestors_new((void *)it, path, flags, 0);
+}
+
+/**
+ * bpf_iter_path_ancestors_next - acquire the walk's next position
+ * @it: the iterator
+ *
+ * Return: the next position with a reference held, to release with
+ * bpf_path_put(), or NULL once the walk has passed the real root - or on
+ * an allocation failure, which ends the iteration and is reported as
+ * %BPF_PATH_ANCESTORS_NOMEM by bpf_path_ancestors_pos_flags().
+ */
+__bpf_kfunc struct path *
+bpf_iter_path_ancestors_next(struct bpf_iter_path_ancestors *it)
+{
+	struct bpf_path_ancestors_kern *kit = (void *)it;
+	struct path *pos = bpf_path_ancestors_step(kit);
+	struct path *held;
+
+	if (!pos)
+		return NULL;
+	/*
+	 * The position must outlive the walk's own view of it, so it gets a
+	 * reference and a struct path of its own to live in: struct path is
+	 * a value type, with nothing a BPF reference could be taken on
+	 * otherwise.  Sleepable, so no atomic allocation.
+	 */
+	held = kmalloc_obj(*held);
+	if (!held) {
+		kit->step = -ENOMEM;
+		return NULL;
+	}
+	*held = *pos;
+	path_get(held);
+	return held;
+}
+
+__bpf_kfunc void
+bpf_iter_path_ancestors_destroy(struct bpf_iter_path_ancestors *it)
+{
+	vfs_walk_end(&((struct bpf_path_ancestors_kern *)it)->aw);
+}
+
+__bpf_kfunc u32
+bpf_path_ancestors_pos_flags(struct bpf_iter_path_ancestors *it__iter)
+{
+	return bpf_path_ancestors_flags((void *)it__iter);
+}
+
+__bpf_kfunc void bpf_path_put(struct path *path)
+{
+	path_put(path);
+	kfree(path);
+}
+
+__bpf_kfunc_end_defs();
+
 BTF_KFUNCS_START(bpf_fs_kfunc_set_ids)
 BTF_ID_FLAGS(func, bpf_get_task_exe_file, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_put_file, KF_RELEASE)
@@ -513,6 +654,12 @@ BTF_ID_FLAGS(func, bpf_inode_init_xattr)
 #ifdef CONFIG_NET
 BTF_ID_FLAGS(func, bpf_sock_read_xattr, KF_RCU)
 #endif
+BTF_ID_FLAGS(func, bpf_iter_path_ancestors_new, KF_ITER_NEW | KF_SLEEPABLE)
+BTF_ID_FLAGS(func, bpf_iter_path_ancestors_next,
+	     KF_ITER_NEXT | KF_ACQUIRE | KF_RET_NULL | KF_SLEEPABLE)
+BTF_ID_FLAGS(func, bpf_iter_path_ancestors_destroy, KF_ITER_DESTROY | KF_SLEEPABLE)
+BTF_ID_FLAGS(func, bpf_path_ancestors_pos_flags)
+BTF_ID_FLAGS(func, bpf_path_put, KF_RELEASE | KF_SLEEPABLE)
 BTF_KFUNCS_END(bpf_fs_kfunc_set_ids)
 
 /* Side-effecting kfuncs that stay exclusive to LSM programs. */

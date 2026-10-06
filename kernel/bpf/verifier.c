@@ -8656,6 +8656,13 @@ static int process_iter_next_call(struct bpf_verifier_env *env, int insn_idx,
 	/* switch to DRAINED state, but keep the depth unchanged */
 	/* mark current iter state as drained and assume returned NULL */
 	cur_iter->iter.state = BPF_ITER_STATE_DRAINED;
+	/*
+	 * An acquiring iter_next() hands out nothing once drained: the
+	 * acquired reference exists only in the forked active state, not on
+	 * this NULL-returning branch.
+	 */
+	if (meta->kfunc_flags & KF_ACQUIRE)
+		WARN_ON_ONCE(release_reference_nomark(env, cur_fr->regs[BPF_REG_0].id));
 	__mark_reg_const_zero(env, &cur_fr->regs[BPF_REG_0]);
 
 	return 0;
