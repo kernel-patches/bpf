@@ -7385,6 +7385,12 @@ int netif_set_threaded(struct net_device *dev,
 				}
 			}
 		}
+	} else {
+		list_for_each_entry(napi, &dev->napi_list, dev_list) {
+			if (napi->thread &&
+			    test_bit(NAPI_STATE_NPSVC, &napi->state))
+				return -EBUSY;
+		}
 	}
 
 	WRITE_ONCE(dev->threaded, threaded);
