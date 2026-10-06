@@ -767,11 +767,8 @@ static bool legitimize_mnt(struct vfsmount *bastard, unsigned seq)
 	int res = __legitimize_mnt(bastard, seq);
 	if (likely(!res))
 		return true;
-	if (unlikely(res < 0)) {
-		rcu_read_unlock();
-		mntput(bastard);
-		rcu_read_lock();
-	}
+	if (unlikely(res < 0))
+		mnt_undo_legitimize(real_mount(bastard));
 	return false;
 }
 
@@ -1330,8 +1327,19 @@ static void delayed_mntput(struct work_struct *unused)
 	struct llist_node *node = llist_del_all(&delayed_mntput_list);
 	struct mount *m, *t;
 
-	llist_for_each_entry_safe(m, t, node, mnt_llist)
-		cleanup_mnt(m);
+	llist_for_each_entry_safe(m, t, node, mnt_llist) {
+		/*
+		 * MNT_DOOMED is only ever set on the mounts
+		 * mntput_no_expire_slowpath() queues here, never on the
+		 * kept-count ones mnt_undo_legitimize() queues.  Route on it
+		 * rather than on mnt_get_count(), which a concurrent failed
+		 * __legitimize_mnt() can transiently inflate.
+		 */
+		if (m->mnt.mnt_flags & MNT_DOOMED)
+			cleanup_mnt(m);
+		else
+			mntput(&m->mnt);	/* kept by mnt_undo_legitimize() */
+	}
 }
 static DECLARE_DELAYED_WORK(delayed_mntput_work, delayed_mntput);
 
@@ -1422,6 +1430,47 @@ void mntput(struct vfsmount *mnt)
 	}
 }
 EXPORT_SYMBOL(mntput);
+
+/**
+ * mnt_undo_legitimize - drop a count __legitimize_mnt() asked us to put
+ * @mnt: the mount __legitimize_mnt() failed on
+ *
+ * Like the mntput() that a failed __legitimize_mnt() normally obliges,
+ * but callable from the RCU read-side critical section the legitimization
+ * ran under: when the count turns out to be the mount's last, it is kept
+ * and the mount handed to delayed_mntput() for the sleepable final put.
+ * Unlike mntput(), mnt_expiry_mark is left alone: a walker that failed
+ * to legitimize the mount never used it.
+ */
+void mnt_undo_legitimize(struct mount *mnt)
+{
+	if (likely(READ_ONCE(mnt->mnt_ns))) {
+		/* Not the final count, as in mntput_no_expire(). */
+		mnt_add_count(mnt, -1);
+		return;
+	}
+	lock_mount_hash();
+	/*
+	 * As in mntput_no_expire(): make sure that if a concurrent
+	 * __legitimize_mnt() has not seen us grab mount_lock, we'll see
+	 * its refcount increment here.
+	 */
+	smp_mb();
+	if (likely(mnt_get_count(mnt) > 1)) {
+		mnt_add_count(mnt, -1);
+		unlock_mount_hash();
+		return;
+	}
+	unlock_mount_hash();
+	/*
+	 * Ours is the last count: nothing else can reach the mount any
+	 * more, which makes its mnt_llist ours to use.  delayed_mntput()
+	 * tells our kept-count mount from the doomed ones by MNT_DOOMED.
+	 */
+	WARN_ON_ONCE(mnt->mnt.mnt_flags & MNT_DOOMED);
+	if (llist_add(&mnt->mnt_llist, &delayed_mntput_list))
+		schedule_delayed_work(&delayed_mntput_work, 1);
+}
 
 struct vfsmount *mntget(struct vfsmount *mnt)
 {
