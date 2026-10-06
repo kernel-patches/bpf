@@ -13,6 +13,7 @@
 #include <linux/bpf.h>
 #include <linux/skbuff.h>
 #include <linux/netdevice.h>
+#include <linux/workqueue.h>
 #include <linux/if_vlan.h>
 #include <linux/prandom.h>
 #include <linux/highmem.h>
@@ -24,6 +25,7 @@
 #define MAX_DATA	128
 #define MAX_INSNS	512
 #define MAX_K		0xffffFFFF
+#define MAX_OUTPUT	256
 
 /* Few constants used to init test 'skb' */
 #define SKB_TYPE	3
@@ -83,6 +85,10 @@ struct bpf_test {
 	__u8 frag_data[MAX_DATA];
 	int stack_depth; /* for eBPF only, since tests don't call verifier */
 	int nr_testruns; /* Custom run count, defaults to MAX_TESTRUNS if 0 */
+	struct work_struct work;
+	char output[MAX_OUTPUT];
+	int nbytes;
+	int index;
 };
 
 /* Large test cases need separate allocation and fill handler. */
@@ -3174,6 +3180,7 @@ static int bpf_fill_staggered_jsle32_reg(struct bpf_test *self)
 	return __bpf_fill_staggered_jumps(self, &jmp, -1, -1);
 }
 
+static struct workqueue_struct *bpf_wq;
 
 static struct bpf_test tests[] = {
 	{
@@ -14974,6 +14981,18 @@ static void release_test_data(const struct bpf_test *test, void *data)
 		kfree_skb(data);
 }
 
+static void __printf(2, 3)
+test_log(struct bpf_test *test, const char *fmt, ...)
+{
+	va_list args;
+
+	va_start(args, fmt);
+	test->nbytes += vscnprintf(test->output + test->nbytes,
+				   sizeof(test->output) - test->nbytes,
+				   fmt, args);
+	va_end(args);
+}
+
 static int filter_length(int which)
 {
 	struct sock_filter *fp;
@@ -15000,7 +15019,8 @@ static void *filter_pointer(int which)
 
 static struct bpf_prog *generate_filter(int which, int *err)
 {
-	__u8 test_type = tests[which].aux & TEST_TYPE_MASK;
+	struct bpf_test *test = &tests[which];
+	__u8 test_type = test->aux & TEST_TYPE_MASK;
 	unsigned int flen = filter_length(which);
 	void *fptr = filter_pointer(which);
 	struct sock_fprog_kern fprog;
@@ -15012,14 +15032,14 @@ static struct bpf_prog *generate_filter(int which, int *err)
 		fprog.len = flen;
 
 		*err = bpf_prog_create(&fp, &fprog);
-		if (tests[which].aux & FLAG_EXPECTED_FAIL) {
-			if (*err == tests[which].expected_errcode) {
-				pr_cont("PASS\n");
+		if (test->aux & FLAG_EXPECTED_FAIL) {
+			if (*err == test->expected_errcode) {
+				test_log(test, "PASS\n");
 				/* Verifier rejected filter as expected. */
 				*err = 0;
 				return NULL;
 			} else {
-				pr_cont("UNEXPECTED_PASS\n");
+				test_log(test, "UNEXPECTED_PASS\n");
 				/* Verifier didn't reject the test that's
 				 * bad enough, just return!
 				 */
@@ -15028,8 +15048,8 @@ static struct bpf_prog *generate_filter(int which, int *err)
 			}
 		}
 		if (*err) {
-			pr_cont("FAIL to prog_create err=%d len=%d\n",
-				*err, fprog.len);
+			test_log(test, "FAIL to prog_create err=%d len=%d\n",
+				 *err, fprog.len);
 			return NULL;
 		}
 		break;
@@ -15037,7 +15057,7 @@ static struct bpf_prog *generate_filter(int which, int *err)
 	case INTERNAL:
 		fp = bpf_prog_alloc(bpf_prog_size(flen), 0);
 		if (fp == NULL) {
-			pr_cont("UNEXPECTED_FAIL no memory left\n");
+			test_log(test, "UNEXPECTED_FAIL no memory left\n");
 			*err = -ENOMEM;
 			return NULL;
 		}
@@ -15046,8 +15066,8 @@ static struct bpf_prog *generate_filter(int which, int *err)
 		/* Type doesn't really matter here as long as it's not unspec. */
 		fp->type = BPF_PROG_TYPE_SOCKET_FILTER;
 		memcpy(fp->insnsi, fptr, fp->len * sizeof(struct bpf_insn));
-		fp->aux->stack_depth = tests[which].stack_depth;
-		fp->aux->verifier_zext = !!(tests[which].aux &
+		fp->aux->stack_depth = test->stack_depth;
+		fp->aux->verifier_zext = !!(test->aux &
 					    FLAG_VERIFIER_ZEXT);
 
 		/* We cannot error here as we don't need type compatibility
@@ -15055,7 +15075,7 @@ static struct bpf_prog *generate_filter(int which, int *err)
 		 */
 		fp = bpf_prog_select_runtime(fp, err);
 		if (*err) {
-			pr_cont("FAIL to select_runtime err=%d\n", *err);
+			test_log(test, "FAIL to select_runtime err=%d\n", *err);
 			return NULL;
 		}
 		break;
@@ -15125,7 +15145,7 @@ static int run_one(const struct bpf_prog *fp, struct bpf_test *test)
 
 		data = generate_test_data(test, i);
 		if (!data && !(test->aux & FLAG_NO_DATA)) {
-			pr_cont("data generation failed ");
+			test_log(test, "data generation failed ");
 			err_cnt++;
 			break;
 		}
@@ -15133,12 +15153,12 @@ static int run_one(const struct bpf_prog *fp, struct bpf_test *test)
 		release_test_data(test, data);
 
 		if (ret == test->test[i].result) {
-			pr_cont("%lld ", duration);
+			test_log(test, "%lld ", duration);
 		} else {
 			s32 res = test->test[i].result;
 
-			pr_cont("ret %d != %d (%#x != %#x)",
-				ret, res, ret, res);
+			test_log(test, "ret %d != %d (%#x != %#x)",
+				 ret, res, ret, res);
 			err_cnt++;
 		}
 	}
@@ -15154,6 +15174,9 @@ module_param(test_id, int, 0);
 
 static int test_range[2] = { 0, INT_MAX };
 module_param_array(test_range, int, NULL, 0);
+
+static bool legacy;
+module_param(legacy, bool, 0);
 
 static bool exclude_test(int test_id)
 {
@@ -15345,65 +15368,80 @@ static __init int test_skb_segment(void)
 	return err_cnt ? -EINVAL : 0;
 }
 
+static atomic_t err_cnt = ATOMIC_INIT(0), pass_cnt = ATOMIC_INIT(0);
+static atomic_t jit_cnt = ATOMIC_INIT(0), run_cnt = ATOMIC_INIT(0);
+
+static void test_bpf_work_handler(struct work_struct *work)
+{
+	struct bpf_test *test = container_of(work, struct bpf_test, work);
+	struct bpf_prog *fp;
+	int err;
+
+	test_log(test, "#%d %s ", test->index, test->descr);
+
+	fp = generate_filter(test->index, &err);
+
+	if (test->fill_helper) {
+		kfree(test->u.ptr.insns);
+		test->u.ptr.insns = NULL;
+	}
+
+	if (fp == NULL) {
+		if (err == 0) {
+			atomic_inc(&pass_cnt);
+			return;
+		}
+		atomic_inc(&err_cnt);
+		return;
+	}
+
+	test_log(test, "jited:%u ", fp->jited);
+
+	atomic_inc(&run_cnt);
+	if (fp->jited)
+		atomic_inc(&jit_cnt);
+
+	err = run_one(fp, test);
+	release_filter(fp, test->index);
+
+	if (err) {
+		test_log(test, "FAIL (%d times)\n", err);
+		atomic_inc(&err_cnt);
+	} else {
+		test_log(test, "PASS\n");
+		atomic_inc(&pass_cnt);
+	}
+
+	pr_info("%s", test->output);
+}
+
 static __init int test_bpf(void)
 {
-	int i, err_cnt = 0, pass_cnt = 0;
-	int jit_cnt = 0, run_cnt = 0;
+	int i;
 
 	for (i = 0; i < ARRAY_SIZE(tests); i++) {
-		struct bpf_prog *fp;
-		int err;
-
-		cond_resched();
 		if (exclude_test(i))
 			continue;
 
-		pr_info("#%d %s ", i, tests[i].descr);
-
 		if (tests[i].fill_helper &&
 		    tests[i].fill_helper(&tests[i]) < 0) {
-			pr_cont("FAIL to prog_fill\n");
+			pr_err("#%d %s: FAIL to setup helper\n",
+			       i, tests[i].descr);
 			continue;
 		}
 
-		fp = generate_filter(i, &err);
-
-		if (tests[i].fill_helper) {
-			kfree(tests[i].u.ptr.insns);
-			tests[i].u.ptr.insns = NULL;
-		}
-
-		if (fp == NULL) {
-			if (err == 0) {
-				pass_cnt++;
-				continue;
-			}
-			err_cnt++;
-			continue;
-		}
-
-		pr_cont("jited:%u ", fp->jited);
-
-		run_cnt++;
-		if (fp->jited)
-			jit_cnt++;
-
-		err = run_one(fp, &tests[i]);
-		release_filter(fp, i);
-
-		if (err) {
-			pr_cont("FAIL (%d times)\n", err);
-			err_cnt++;
-		} else {
-			pr_cont("PASS\n");
-			pass_cnt++;
-		}
+		INIT_WORK(&tests[i].work, test_bpf_work_handler);
+		tests[i].index = i;
+		queue_work(bpf_wq, &tests[i].work);
 	}
 
-	pr_info("Summary: %d PASSED, %d FAILED, [%d/%d JIT'ed]\n",
-		pass_cnt, err_cnt, jit_cnt, run_cnt);
+	flush_workqueue(bpf_wq);
 
-	return err_cnt ? -EINVAL : 0;
+	pr_info("Summary: %d PASSED, %d FAILED, [%d/%d JIT'ed]\n",
+		atomic_read(&pass_cnt), atomic_read(&err_cnt),
+		atomic_read(&jit_cnt), atomic_read(&run_cnt));
+
+	return atomic_read(&err_cnt) ? -EINVAL : 0;
 }
 
 struct tail_call_test {
@@ -15901,6 +15939,14 @@ static int __init test_bpf_init(void)
 	if (ret < 0)
 		return ret;
 
+	if (legacy)
+		bpf_wq = alloc_ordered_workqueue("test_bpf_wq", 0);
+	else
+		bpf_wq = alloc_workqueue("test_bpf_wq", WQ_UNBOUND, num_online_cpus());
+
+	if (!bpf_wq)
+		return -ENOMEM;
+
 	if (!strlen(test_suite) || !strcmp(test_suite, "test_bpf")) {
 		ret = test_bpf();
 		if (ret)
@@ -15925,6 +15971,8 @@ static int __init test_bpf_init(void)
 
 static void __exit test_bpf_exit(void)
 {
+	if (bpf_wq)
+		destroy_workqueue(bpf_wq);
 }
 
 module_init(test_bpf_init);
