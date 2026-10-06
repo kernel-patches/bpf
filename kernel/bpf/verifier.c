@@ -18921,12 +18921,21 @@ static void mark_fastcall_pattern_for_call(struct bpf_verifier_env *env,
 {
 	struct bpf_insn *insns = env->prog->insnsi, *stx, *ldx;
 	struct bpf_insn *call = &env->prog->insnsi[insn_idx];
+	struct bpf_kfunc_inline *r;
 	u32 clobbered_regs_mask;
 	struct bpf_call_summary cs;
 	u32 expected_regs_mask;
+	int i, last = insn_idx;
 	s16 off;
-	int i;
 
+	/* the fills follow the body that stands for a kfunc call */
+	if (env->insn_aux_data[insn_idx].kfunc_body_entry) {
+		r = bpf_kfunc_inline_at(env, insn_idx);
+		if (!r)
+			return;
+		call = &r->call;
+		last = insn_idx + r->body->len - 1;
+	}
 	if (!bpf_get_call_summary(env, call, &cs))
 		return;
 
@@ -18950,14 +18959,14 @@ static void mark_fastcall_pattern_for_call(struct bpf_verifier_env *env,
 	 * rX = *(u64 *)(r10 - Y)
 	 */
 	for (i = 1, off = lowest_off; i <= ARRAY_SIZE(caller_saved); ++i, off += BPF_REG_SIZE) {
-		if (insn_idx - i < 0 || insn_idx + i >= env->prog->len)
+		if (insn_idx - i < 0 || last + i >= env->prog->len)
 			break;
 		/* stx/ldx/call must not be a jump targets, a jump to the first stx is fine */
 		if (bpf_is_jump_target(env, insn_idx - i + 1) ||
-		    bpf_is_jump_target(env, insn_idx + i))
+		    bpf_is_jump_target(env, last + i))
 			break;
 		stx = &insns[insn_idx - i];
-		ldx = &insns[insn_idx + i];
+		ldx = &insns[last + i];
 		/* must be a stack spill/fill pair */
 		if (stx->code != (BPF_STX | BPF_MEM | BPF_DW) ||
 		    ldx->code != (BPF_LDX | BPF_MEM | BPF_DW) ||
@@ -18978,7 +18987,7 @@ static void mark_fastcall_pattern_for_call(struct bpf_verifier_env *env,
 			break;
 		expected_regs_mask &= ~BIT(stx->src_reg);
 		env->insn_aux_data[insn_idx - i].fastcall_pattern = 1;
-		env->insn_aux_data[insn_idx + i].fastcall_pattern = 1;
+		env->insn_aux_data[last + i].fastcall_pattern = 1;
 	}
 	if (i == 1)
 		return;
@@ -19026,7 +19035,8 @@ static int mark_fastcall_patterns(struct bpf_verifier_env *env)
 		/* use this offset to find fastcall patterns */
 		for (i = subprog->start; i < (subprog + 1)->start; ++i) {
 			insn = env->prog->insnsi + i;
-			if (insn->code != (BPF_JMP | BPF_CALL))
+			if (insn->code != (BPF_JMP | BPF_CALL) &&
+			    !env->insn_aux_data[i].kfunc_body_entry)
 				continue;
 			mark_fastcall_pattern_for_call(env, subprog, i, lowest_off);
 		}

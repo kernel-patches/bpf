@@ -749,6 +749,12 @@ fit in one register, and the kfunc may have no kfunc flags. ``emit`` writes at
 most ``BPF_KFUNC_INLINE_MAX`` bytes. Modules give their kfuncs bodies and
 native code in the same way.
 
+A kfunc with a body may also have ``KF_FASTCALL``. Its body then writes only R0,
+if the kfunc returns a value, and its argument registers, and the JIT puts
+only code from ``emit`` in its place, not a copy, so that both keep the other
+registers of R1-R5. The spills and fills that the compiler adds around a
+``bpf_fastcall`` call then go away, whether native code or the body runs.
+
 .. _BPF_kfunc_lifecycle_expectations:
 
 3. kfunc lifecycle expectations

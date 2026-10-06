@@ -1816,6 +1816,7 @@ struct bpf_kfunc_inline {
 	bool entered;	/* the verifier reached the body */
 	bool ret;	/* the kfunc returns a value */
 	bool copy;	/* the native code is a copy of the compiled kfunc */
+	bool is_fastcall;	/* KF_FASTCALL: only emitted code is native */
 };
 
 struct bpf_kfunc_desc {
@@ -1834,6 +1835,8 @@ int bpf_mark_kfunc_body_regs(struct bpf_verifier_env *env, int prev_insn_idx,
 			     const struct bpf_insn_aux_data *aux);
 void bpf_restore_kfunc_calls(struct bpf_verifier_env *env);
 void bpf_free_kfunc_inlines(struct bpf_verifier_env *env);
+struct bpf_kfunc_inline *bpf_kfunc_inline_at(struct bpf_verifier_env *env, int idx);
+u32 bpf_kfunc_call_len(struct bpf_verifier_env *env, int idx);
 const struct bpf_kfunc_inline *bpf_kfunc_native(const struct bpf_verifier_env *env, int idx);
 
 struct bpf_kfunc_desc_tab {

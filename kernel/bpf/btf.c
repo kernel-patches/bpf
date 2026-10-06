@@ -9732,13 +9732,18 @@ static bool btf_kfunc_reg_type(const struct btf *btf, u32 id)
  * within it, so that it ends by falling through the last instruction. The
  * verifier checks the rest.
  */
+/*
+ * A body that follows bpf_fastcall writes only R0, if the kfunc returns a
+ * value, and its argument registers.
+ */
 static bool btf_check_kfunc_body(const struct btf *btf, const struct btf_type *func,
-				 const struct bpf_kfunc_body *b)
+				 const struct bpf_kfunc_body *b, bool is_fastcall)
 {
 	const struct btf_type *proto = btf_type_by_id(btf, func->type);
 	const struct btf_param *args = btf_params(proto);
 	int i, n = btf_type_vlen(proto), len = b->len;
 	const struct bpf_insn *insn;
+	u16 writable;
 	u8 op;
 
 	if (n > MAX_BPF_FUNC_REG_ARGS || !b->insns || !len || len > BPF_KFUNC_BODY_MAX_INSNS ||
@@ -9749,6 +9754,7 @@ static bool btf_check_kfunc_body(const struct btf *btf, const struct btf_type *f
 		    (btf_param_match_suffix(btf, &args[i], "__k") &&
 		     btf_type_skip_modifiers(btf, args[i].type, NULL)->size > sizeof(s32)))
 			return false;
+	writable = GENMASK(n, BPF_REG_0) & ~(proto->type ? 0 : BIT(BPF_REG_0));
 	for (i = 0; i < len; i++) {
 		insn = &b->insns[i];
 		op = BPF_OP(insn->code);
@@ -9757,10 +9763,14 @@ static bool btf_check_kfunc_body(const struct btf *btf, const struct btf_type *f
 		switch (BPF_CLASS(insn->code)) {
 		case BPF_ALU:
 		case BPF_ALU64:		/* not movsx, sdiv, smod or bswap */
-			if (insn->off || (BPF_CLASS(insn->code) == BPF_ALU64 && op == BPF_END))
+			if (insn->off || (BPF_CLASS(insn->code) == BPF_ALU64 && op == BPF_END) ||
+			    (is_fastcall && !(writable & BIT(insn->dst_reg))))
 				return false;
 			break;
 		case BPF_LDX:
+			if (is_fastcall && !(writable & BIT(insn->dst_reg)))
+				return false;
+			fallthrough;
 		case BPF_ST:
 		case BPF_STX:		/* not ldsx or atomics */
 			if (BPF_MODE(insn->code) != BPF_MEM)
@@ -9801,9 +9811,12 @@ static int btf_add_kfunc_bodies(struct btf *btf, const struct btf_kfunc_id_set *
 		id = btf_relocate_id(btf, *b->id);
 		t = btf_type_by_id(btf, id);
 		pair = btf_id_set8_contains(kset->set, *b->id);
-		/* the body stands for the call, so no kfunc flags apply */
-		if (!pair || pair[1] || !t || !btf_type_is_func(t) ||
-		    !btf_check_kfunc_body(btf, t, b)) {
+		/*
+		 * The body stands for the call, so no kfunc flags apply but
+		 * KF_FASTCALL, which the body has to follow too.
+		 */
+		if (!pair || (pair[1] & ~KF_FASTCALL) || !t || !btf_type_is_func(t) ||
+		    !btf_check_kfunc_body(btf, t, b, pair[1] & KF_FASTCALL)) {
 			/* a set that fails to register leaves no bodies */
 			tab->cnt = cnt;
 			return -EINVAL;

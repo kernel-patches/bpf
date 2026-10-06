@@ -79,16 +79,16 @@ static const struct bpf_insn select64_body[] = {
 	BPF_MOV64_REG(BPF_REG_0, BPF_REG_2),
 };
 
-/* x << (64 - start - len) >> (64 - len) */
+/* x << (64 - start - len) >> (64 - len), in R0 and the argument registers */
 static const struct bpf_insn extract64_body[] = {
-	BPF_MOV32_IMM(BPF_REG_4, 64),
-	BPF_ALU32_REG(BPF_SUB, BPF_REG_4, BPF_REG_2),
-	BPF_ALU32_REG(BPF_SUB, BPF_REG_4, BPF_REG_3),
+	BPF_ALU32_IMM(BPF_NEG, BPF_REG_2, 0),
+	BPF_ALU32_IMM(BPF_ADD, BPF_REG_2, 64),
+	BPF_ALU32_REG(BPF_SUB, BPF_REG_2, BPF_REG_3),
 	BPF_MOV64_REG(BPF_REG_0, BPF_REG_1),
-	BPF_ALU64_REG(BPF_LSH, BPF_REG_0, BPF_REG_4),
-	BPF_MOV32_IMM(BPF_REG_4, 64),
-	BPF_ALU32_REG(BPF_SUB, BPF_REG_4, BPF_REG_3),
-	BPF_ALU64_REG(BPF_RSH, BPF_REG_0, BPF_REG_4),
+	BPF_ALU64_REG(BPF_LSH, BPF_REG_0, BPF_REG_2),
+	BPF_ALU32_IMM(BPF_NEG, BPF_REG_3, 0),
+	BPF_ALU32_IMM(BPF_ADD, BPF_REG_3, 64),
+	BPF_ALU64_REG(BPF_RSH, BPF_REG_0, BPF_REG_3),
 };
 
 /* the offset is an s32 */
@@ -132,16 +132,18 @@ static const struct bpf_insn lea64_body[] = {
 #define extract64_emit	NULL
 #define load_be64_emit	NULL
 #define lea64_emit	NULL
+#define prefetch_emit	NULL
 #endif
 
 BTF_KFUNCS_START(insn_kfunc_ids)
-BTF_ID_FLAGS(func, bpf_rol64)
-BTF_ID_FLAGS(func, bpf_select64)
-BTF_ID_FLAGS(func, bpf_extract64)
-BTF_ID_FLAGS(func, bpf_load_be64)
-BTF_ID_FLAGS(func, bpf_prefetch)
+/* copy16 needs two scratch registers besides its arguments */
+BTF_ID_FLAGS(func, bpf_rol64, KF_FASTCALL)
+BTF_ID_FLAGS(func, bpf_select64, KF_FASTCALL)
+BTF_ID_FLAGS(func, bpf_extract64, KF_FASTCALL)
+BTF_ID_FLAGS(func, bpf_load_be64, KF_FASTCALL)
+BTF_ID_FLAGS(func, bpf_prefetch, KF_FASTCALL)
 BTF_ID_FLAGS(func, bpf_copy16)
-BTF_ID_FLAGS(func, bpf_lea64)
+BTF_ID_FLAGS(func, bpf_lea64, KF_FASTCALL)
 BTF_KFUNCS_END(insn_kfunc_ids)
 
 BTF_ID_LIST(body_ids)
@@ -161,7 +163,7 @@ static const struct bpf_kfunc_body bodies[] = {
 	BODY(1, select64, select64_emit),
 	BODY(2, extract64, extract64_emit),
 	BODY(3, load_be64, load_be64_emit),
-	BODY(4, prefetch, NULL),
+	BODY(4, prefetch, prefetch_emit),
 	BODY(5, copy16, NULL),
 	BODY(6, lea64, lea64_emit),
 };

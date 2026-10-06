@@ -540,4 +540,28 @@ void __kfunc_btf_root(void)
 	bpf_testmod_inline_div(0, 0);
 }
 
+/* bpf_fastcall: r3 lives across the call, so its spill and fill go away */
+SEC("tc")
+__success __retval(23)
+__xlated("0: r3 = 7")
+__xlated("1: r1 = 1")
+__xlated("2: call")
+__xlated("3: r0 += r3")
+__arch_x86_64
+__naked void inline_fastcall(void)
+{
+	asm volatile (
+	"r3 = 7;"
+	"r1 = 1;"
+	"r2 = 4;"
+	"*(u64 *)(r10 - 8) = r3;"
+	"call %[bpf_rol64];"
+	"r3 = *(u64 *)(r10 - 8);"
+	"r0 += r3;"
+	"exit;"
+	:
+	: __imm(bpf_rol64)
+	: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";

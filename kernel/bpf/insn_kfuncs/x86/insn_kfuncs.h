@@ -103,10 +103,13 @@ static int select64_emit(const u8 *reg, const s32 *imm, u8 *buf)
 			   reg[2], reg[3]);
 }
 
-/* R4 is free for the control word, as there are three arguments */
+/*
+ * The control word goes into %dst, or into %r11, which the JIT keeps free,
+ * when %dst is also %src: under bpf_fastcall R4 has to stay as it is.
+ */
 static int extract64_emit(const u8 *reg, const s32 *imm, u8 *buf)
 {
-	u8 dst = reg[0], src = reg[1], ctl = dst != src ? dst : reg[4];
+	u8 dst = reg[0], src = reg[1], ctl = dst != src ? dst : 11;
 	u32 start = imm[BPF_REG_2], len = imm[BPF_REG_3];
 	u8 *p = buf;
 
@@ -138,6 +141,17 @@ static int load_be64_emit(const u8 *reg, const s32 *imm, u8 *buf)
 	*p++ = 0x38;
 	*p++ = 0xf0;
 	return x86_mem(p, dst, base, 4, 0, imm[BPF_REG_2]) - buf;
+}
+
+static int prefetch_emit(const u8 *reg, const s32 *imm, u8 *buf)
+{
+	u8 base = reg[1], *p = buf;
+
+	/* prefetcht0 (%base) */
+	p = x86_rex(p, false, 0, base);
+	*p++ = 0x0f;
+	*p++ = 0x18;
+	return x86_mem(p, 1, base, 4, 0, 0) - buf;
 }
 
 static int lea64_emit(const u8 *reg, const s32 *imm, u8 *buf)

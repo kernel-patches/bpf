@@ -27,6 +27,7 @@ static struct bpf_kfunc_desc *body_desc(struct bpf_verifier_env *env,
  */
 int bpf_inline_kfunc_bodies(struct bpf_verifier_env *env)
 {
+	struct bpf_call_summary cs;
 	struct bpf_kfunc_desc *desc;
 	struct bpf_kfunc_inline *r;
 	struct bpf_prog *prog;
@@ -52,6 +53,7 @@ int bpf_inline_kfunc_bodies(struct bpf_verifier_env *env)
 		r->nargs = desc->func_model.nr_args;
 		r->imm_mask = desc->body_imm;
 		r->ret = desc->func_model.ret_size;
+		r->is_fastcall = bpf_get_call_summary(env, &r->call, &cs) && cs.fastcall;
 		prog = bpf_patch_insn_data(env, i, r->body->insns, r->body->len);
 		if (!prog)
 			return -ENOMEM;
@@ -160,12 +162,14 @@ static bool kfunc_native_ok(struct bpf_verifier_env *env, const struct bpf_kfunc
  * - emitted native code has the constant arguments as immediates;
  * - the result goes straight to its R6-R9 destination.
  * No jump may land between such a move and the call. Only emitted code may
- * share the result register with an argument.
+ * share the result register with an argument. The spills and fills of a
+ * bpf_fastcall pattern may sit between the call and these moves.
  */
 static int kfunc_bind(struct bpf_verifier_env *env, struct bpf_kfunc_inline *r, u32 *drop)
 {
 	struct bpf_insn_aux_data *aux = env->insn_aux_data;
 	struct bpf_insn *insns = env->prog->insnsi, *mov;
+	u32 k = aux[r->start].fastcall_spills_num;
 	u32 end = r->start + r->body->len, i;
 	bool emit = !r->copy;
 	u16 used = 0, written = 0;
@@ -176,7 +180,7 @@ static int kfunc_bind(struct bpf_verifier_env *env, struct bpf_kfunc_inline *r, 
 		r->reg[i] = i;
 
 	/* walk back over moves into R1-R5 that do not read R0-R5 */
-	for (i = r->start; i-- > 0 && !bpf_is_jump_target(env, i + 1);) {
+	for (i = r->start - k; i-- > 0 && !bpf_is_jump_target(env, i + 1);) {
 		mov = &insns[i];
 		dst = mov->dst_reg;
 		src = mov->src_reg;
@@ -199,10 +203,13 @@ static int kfunc_bind(struct bpf_verifier_env *env, struct bpf_kfunc_inline *r, 
 		written |= BIT(dst);
 	}
 
+	end += k;
+	if (end + 1 >= env->prog->len)
+		return n;
 	mov = &insns[end];
 	dst = mov->dst_reg;
 	/* the result register must be live so that the JIT saves it */
-	if (r->ret && !bpf_is_jump_target(env, end) && end + 1 < env->prog->len &&
+	if (r->ret && !bpf_is_jump_target(env, end) &&
 	    mov->code == (BPF_ALU64 | BPF_MOV | BPF_X) && !mov->off &&
 	    mov->src_reg == BPF_REG_0 && dst >= BPF_REG_6 && dst <= BPF_REG_9 &&
 	    (emit || !(used & BIT(dst))) &&
@@ -230,11 +237,12 @@ void bpf_restore_kfunc_calls(struct bpf_verifier_env *env)
 	for (i = 0; i < env->kfunc_inline_cnt; i++) {
 		struct bpf_kfunc_inline *r = &env->kfunc_inlines[i];
 
-		if (!kfunc_native_ok(env, r))
+		/* copied code may write any of R0-R5, unlike bpf_fastcall allows */
+		if (!kfunc_native_ok(env, r) || (r->is_fastcall && r->copy))
 			continue;
 		n = kfunc_bind(env, r, drop);
 		len = bpf_jit_inline_kfunc(r, code);
-		if (len <= 0 && !r->copy) {
+		if (len <= 0 && !r->copy && !r->is_fastcall) {
 			r->copy = true;
 			n = kfunc_bind(env, r, drop);
 			len = bpf_jit_inline_kfunc(r, code);
@@ -261,6 +269,28 @@ const struct bpf_kfunc_inline *bpf_kfunc_native(const struct bpf_verifier_env *e
 	if (!i || i > env->kfunc_inline_cnt || !env->kfunc_inlines[i - 1].image)
 		return NULL;
 	return &env->kfunc_inlines[i - 1];
+}
+
+/* The kfunc call whose body starts at @idx */
+struct bpf_kfunc_inline *bpf_kfunc_inline_at(struct bpf_verifier_env *env, int idx)
+{
+	u32 i;
+
+	for (i = 0; i < env->kfunc_inline_cnt; i++)
+		if (env->kfunc_inlines[i].start == idx)
+			return &env->kfunc_inlines[i];
+	return NULL;
+}
+
+/* The length of the call at @idx: that of its body if it has one */
+u32 bpf_kfunc_call_len(struct bpf_verifier_env *env, int idx)
+{
+	struct bpf_kfunc_inline *r;
+
+	if (!env->insn_aux_data[idx].kfunc_body_entry)
+		return 1;
+	r = bpf_kfunc_inline_at(env, idx);
+	return r ? r->body->len : 1;
 }
 
 void bpf_free_kfunc_inlines(struct bpf_verifier_env *env)
