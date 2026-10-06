@@ -71,14 +71,11 @@ static int rxrpc_preparse_xdr_rxkad(struct key_preparsed_payload *prep,
 	if (toklen < 8 * 4 + tktlen)
 		return -EKEYREJECTED;
 
-	plen = sizeof(*token) + sizeof(*token->kad) + tktlen;
-	prep->quotalen += datalen + plen;
-
-	plen -= sizeof(*token);
 	token = kzalloc_obj(*token);
 	if (!token)
 		return -ENOMEM;
 
+	plen = sizeof(*token->kad) + tktlen;
 	token->kad = kzalloc(plen, GFP_KERNEL);
 	if (!token->kad) {
 		kfree(token);
@@ -112,6 +109,8 @@ static int rxrpc_preparse_xdr_rxkad(struct key_preparsed_payload *prep,
 		       token->kad->ticket[4], token->kad->ticket[5],
 		       token->kad->ticket[6], token->kad->ticket[7]);
 
+	prep->quotalen += sizeof(*token) + datalen + plen;
+
 	/* count the number of tokens attached */
 	prep->payload.data[1] = (void *)((unsigned long)prep->payload.data[1] + 1);
 
@@ -129,6 +128,7 @@ static int rxrpc_preparse_xdr_rxkad(struct key_preparsed_payload *prep,
 	return 0;
 }
 
+#ifdef CONFIG_RXGK
 static u64 xdr_dec64(const __be32 *xdr)
 {
 	return (u64)ntohl(xdr[0]) << 32 | (u64)ntohl(xdr[1]);
@@ -166,12 +166,13 @@ static int rxrpc_preparse_xdr_yfs_rxgk(struct key_preparsed_payload *prep,
 				       size_t datalen,
 				       const __be32 *xdr, unsigned int toklen)
 {
+	const struct krb5_enctype *enc;
 	struct rxrpc_key_token *token, **pptoken;
 	time64_t expiry;
-	size_t plen;
 	const __be32 *ticket, *key;
 	s64 tmp;
 	size_t raw_keylen, raw_tktlen, keylen, tktlen;
+	int ret = -EKEYREJECTED;
 
 	_enter(",{%x,%x,%x,%x},%x",
 	       ntohl(xdr[0]), ntohl(xdr[1]), ntohl(xdr[2]), ntohl(xdr[3]),
@@ -202,10 +203,6 @@ static int rxrpc_preparse_xdr_yfs_rxgk(struct key_preparsed_payload *prep,
 		goto reject;
 	}
 
-	plen = sizeof(*token) + sizeof(*token->rxgk) + tktlen + keylen;
-	prep->quotalen += datalen + plen;
-
-	plen -= sizeof(*token);
 	token = kzalloc_obj(*token);
 	if (!token)
 		goto nomem;
@@ -228,6 +225,17 @@ static int rxrpc_preparse_xdr_yfs_rxgk(struct key_preparsed_payload *prep,
 	token->rxgk->key.len	= raw_keylen;
 	token->rxgk->key.data	= token->rxgk->_key;
 	token->rxgk->ticket.len = raw_tktlen;
+
+	/* Check the enctype is supported. */
+	enc = crypto_krb5_find_enctype(token->rxgk->enctype);
+	if (!enc) {
+		ret = -ENOPKG;
+		goto reject_token;
+	}
+	if (raw_keylen != enc->key_len) {
+		ret = -EKEYREJECTED;
+		goto reject_token;
+	}
 
 	if (token->rxgk->endtime != 0) {
 		expiry = rxrpc_s64_to_time64(token->rxgk->endtime);
@@ -257,6 +265,8 @@ static int rxrpc_preparse_xdr_yfs_rxgk(struct key_preparsed_payload *prep,
 	_debug("TICK: %*phN",
 	       min_t(u32, token->rxgk->ticket.len, 32), token->rxgk->ticket.data);
 
+	prep->quotalen += sizeof(*token) + datalen + tktlen + keylen;
+
 	/* count the number of tokens attached */
 	prep->payload.data[1] = (void *)((unsigned long)prep->payload.data[1] + 1);
 
@@ -280,12 +290,13 @@ reject_token:
 	kfree(token->rxgk);
 	kfree(token);
 reject:
-	return -EKEYREJECTED;
+	return ret;
 expired:
 	kfree(token->rxgk);
 	kfree(token);
 	return -EKEYEXPIRED;
 }
+#endif /* CONFIG_RXGK */
 
 /*
  * attempt to parse the data as the XDR format
@@ -386,9 +397,11 @@ static int rxrpc_preparse_xdr(struct key_preparsed_payload *prep)
 		case RXRPC_SECURITY_RXKAD:
 			ret2 = rxrpc_preparse_xdr_rxkad(prep, datalen, token, toklen);
 			break;
+#ifdef CONFIG_RXGK
 		case RXRPC_SECURITY_YFS_RXGK:
 			ret2 = rxrpc_preparse_xdr_yfs_rxgk(prep, datalen, token, toklen);
 			break;
+#endif
 		default:
 			ret2 = -EPROTONOSUPPORT;
 			break;
@@ -556,10 +569,12 @@ static void rxrpc_free_token_list(struct rxrpc_key_token *token)
 		case RXRPC_SECURITY_RXKAD:
 			kfree(token->kad);
 			break;
+#ifdef CONFIG_RXGK
 		case RXRPC_SECURITY_YFS_RXGK:
 			kfree(token->rxgk->ticket.data);
 			kfree(token->rxgk);
 			break;
+#endif
 		default:
 			pr_err("Unknown token type %x on rxrpc key\n",
 			       token->security_index);
@@ -603,9 +618,11 @@ static void rxrpc_describe(const struct key *key, struct seq_file *m)
 		case RXRPC_SECURITY_RXKAD:
 			seq_puts(m, "ka");
 			break;
+#ifdef CONFIG_RXGK
 		case RXRPC_SECURITY_YFS_RXGK:
 			seq_puts(m, "ygk");
 			break;
+#endif
 		default: /* we have a ticket we can't encode */
 			seq_printf(m, "%u", token->security_index);
 			break;
@@ -770,12 +787,14 @@ static long rxrpc_read(const struct key *key,
 				toksize += RND(token->kad->ticket_len);
 			break;
 
+#ifdef CONFIG_RXGK
 		case RXRPC_SECURITY_YFS_RXGK:
 			toksize += 6 * 8 + 2 * 4;
 			if (!token->no_leak_key)
 				toksize += RND(token->rxgk->key.len);
 			toksize += RND(token->rxgk->ticket.len);
 			break;
+#endif
 
 		default: /* we have a ticket we can't encode */
 			pr_err("Unsupported key token type (%u)\n",
@@ -856,6 +875,7 @@ static long rxrpc_read(const struct key *key,
 				ENCODE_DATA(token->kad->ticket_len, token->kad->ticket);
 			break;
 
+#ifdef CONFIG_RXGK
 		case RXRPC_SECURITY_YFS_RXGK:
 			ENCODE64(token->rxgk->begintime);
 			ENCODE64(token->rxgk->endtime);
@@ -869,6 +889,7 @@ static long rxrpc_read(const struct key *key,
 				ENCODE_DATA(token->rxgk->key.len, token->rxgk->key.data);
 			ENCODE_DATA(token->rxgk->ticket.len, token->rxgk->ticket.data);
 			break;
+#endif
 
 		default:
 			pr_err("Unsupported key token type (%u)\n",
