@@ -220,10 +220,10 @@ int otx2_set_mac_address(struct net_device *netdev, void *p)
 		eth_hw_addr_set(netdev, addr->sa_data);
 		/* update dmac field in vlan offload rule */
 		if (netif_running(netdev) &&
-		    pfvf->flags & OTX2_FLAG_RX_VLAN_SUPPORT)
+		    otx2_test_flag(pfvf, OTX2_FLAG_RX_VLAN_SUPPORT))
 			otx2_install_rxvlan_offload_flow(pfvf);
 		/* update dmac address in ntuple and DMAC filter list */
-		if (pfvf->flags & OTX2_FLAG_DMACFLTR_SUPPORT)
+		if (otx2_test_flag(pfvf, OTX2_FLAG_DMACFLTR_SUPPORT))
 			otx2_dmacflt_update_pfmac_flow(pfvf);
 	} else {
 		return -EPERM;
@@ -275,8 +275,8 @@ int otx2_config_pause_frm(struct otx2_nic *pfvf)
 		goto unlock;
 	}
 
-	req->rx_pause = !!(pfvf->flags & OTX2_FLAG_RX_PAUSE_ENABLED);
-	req->tx_pause = !!(pfvf->flags & OTX2_FLAG_TX_PAUSE_ENABLED);
+	req->rx_pause = otx2_test_flag(pfvf, OTX2_FLAG_RX_PAUSE_ENABLED);
+	req->tx_pause = otx2_test_flag(pfvf, OTX2_FLAG_TX_PAUSE_ENABLED);
 	req->set = 1;
 
 	err = otx2_sync_mbox_msg(&pfvf->mbox);

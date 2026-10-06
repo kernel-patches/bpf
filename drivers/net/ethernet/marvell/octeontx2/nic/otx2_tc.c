@@ -159,7 +159,7 @@ static int otx2_tc_validate_flow(struct otx2_nic *nic,
 				 struct flow_action *actions,
 				 struct netlink_ext_ack *extack)
 {
-	if (nic->flags & OTX2_FLAG_INTF_DOWN) {
+	if (otx2_test_flag(nic, OTX2_FLAG_INTF_DOWN)) {
 		NL_SET_ERR_MSG_MOD(extack, "Interface not initialized");
 		return -EINVAL;
 	}
@@ -223,7 +223,7 @@ static int otx2_tc_egress_matchall_install(struct otx2_nic *nic,
 	if (err)
 		return err;
 
-	if (nic->flags & OTX2_FLAG_TC_MATCHALL_EGRESS_ENABLED) {
+	if (otx2_test_flag(nic, OTX2_FLAG_TC_MATCHALL_EGRESS_ENABLED)) {
 		NL_SET_ERR_MSG_MOD(extack,
 				   "Only one Egress MATCHALL ratelimiter can be offloaded");
 		return -ENOMEM;
@@ -244,7 +244,7 @@ static int otx2_tc_egress_matchall_install(struct otx2_nic *nic,
 						    otx2_convert_rate(entry->police.rate_bytes_ps));
 		if (err)
 			return err;
-		nic->flags |= OTX2_FLAG_TC_MATCHALL_EGRESS_ENABLED;
+		otx2_set_flag(nic, OTX2_FLAG_TC_MATCHALL_EGRESS_ENABLED);
 		break;
 	default:
 		NL_SET_ERR_MSG_MOD(extack,
@@ -261,13 +261,13 @@ static int otx2_tc_egress_matchall_delete(struct otx2_nic *nic,
 	struct netlink_ext_ack *extack = cls->common.extack;
 	int err;
 
-	if (nic->flags & OTX2_FLAG_INTF_DOWN) {
+	if (otx2_test_flag(nic, OTX2_FLAG_INTF_DOWN)) {
 		NL_SET_ERR_MSG_MOD(extack, "Interface not initialized");
 		return -EINVAL;
 	}
 
 	err = otx2_set_matchall_egress_rate(nic, 0, 0);
-	nic->flags &= ~OTX2_FLAG_TC_MATCHALL_EGRESS_ENABLED;
+	otx2_clear_flag(nic, OTX2_FLAG_TC_MATCHALL_EGRESS_ENABLED);
 	return err;
 }
 
@@ -505,7 +505,7 @@ static int otx2_tc_parse_actions(struct otx2_nic *nic,
 			mark = act->mark;
 			req->match_id = mark & OTX2_RX_MATCH_ID_MASK;
 			req->op = NIX_RX_ACTION_DEFAULT;
-			nic->flags |= OTX2_FLAG_TC_MARK_ENABLED;
+			otx2_set_flag(nic, OTX2_FLAG_TC_MARK_ENABLED);
 			refcount_inc(&nic->flow_cfg->mark_flows);
 			break;
 
@@ -942,7 +942,7 @@ static void otx2_destroy_tc_flow_list(struct otx2_nic *pfvf)
 	struct otx2_flow_config *flow_cfg = pfvf->flow_cfg;
 	struct otx2_tc_flow *iter, *tmp;
 
-	if (!(pfvf->flags & OTX2_FLAG_MCAM_ENTRIES_ALLOC))
+	if (!otx2_test_flag(pfvf, OTX2_FLAG_MCAM_ENTRIES_ALLOC))
 		return;
 
 	list_for_each_entry_safe(iter, tmp, &flow_cfg->flow_list_tc, list) {
@@ -1195,12 +1195,12 @@ static int otx2_tc_del_flow(struct otx2_nic *nic,
 	/* Disable TC MARK flag if they are no rules with skbedit mark action */
 	if (flow_node->req.match_id)
 		if (!refcount_dec_and_test(&flow_cfg->mark_flows))
-			nic->flags &= ~OTX2_FLAG_TC_MARK_ENABLED;
+			otx2_clear_flag(nic, OTX2_FLAG_TC_MARK_ENABLED);
 
 	if (flow_node->is_act_police) {
 		__clear_bit(flow_node->rq, &nic->rq_bmap);
 
-		if (nic->flags & OTX2_FLAG_INTF_DOWN)
+		if (otx2_test_flag(nic, OTX2_FLAG_INTF_DOWN))
 			goto free_mcam_flow;
 
 		mutex_lock(&nic->mbox.lock);
@@ -1246,10 +1246,10 @@ static int otx2_tc_add_flow(struct otx2_nic *nic,
 	struct npc_install_flow_req *req, dummy;
 	int rc, err, entry;
 
-	if (!(nic->flags & OTX2_FLAG_TC_FLOWER_SUPPORT))
+	if (!otx2_test_flag(nic, OTX2_FLAG_TC_FLOWER_SUPPORT))
 		return -ENOMEM;
 
-	if (nic->flags & OTX2_FLAG_INTF_DOWN) {
+	if (otx2_test_flag(nic, OTX2_FLAG_INTF_DOWN)) {
 		NL_SET_ERR_MSG_MOD(extack, "Interface not initialized");
 		return -EINVAL;
 	}
@@ -1444,7 +1444,7 @@ static int otx2_tc_ingress_matchall_install(struct otx2_nic *nic,
 	if (err)
 		return err;
 
-	if (nic->flags & OTX2_FLAG_TC_MATCHALL_INGRESS_ENABLED) {
+	if (otx2_test_flag(nic, OTX2_FLAG_TC_MATCHALL_INGRESS_ENABLED)) {
 		NL_SET_ERR_MSG_MOD(extack,
 				   "Only one ingress MATCHALL ratelimitter can be offloaded");
 		return -ENOMEM;
@@ -1469,7 +1469,7 @@ static int otx2_tc_ingress_matchall_install(struct otx2_nic *nic,
 		err = cn10k_set_matchall_ipolicer_rate(nic, entry->police.burst, rate);
 		if (err)
 			return err;
-		nic->flags |= OTX2_FLAG_TC_MATCHALL_INGRESS_ENABLED;
+		otx2_set_flag(nic, OTX2_FLAG_TC_MATCHALL_INGRESS_ENABLED);
 		break;
 	default:
 		NL_SET_ERR_MSG_MOD(extack,
@@ -1486,13 +1486,13 @@ static int otx2_tc_ingress_matchall_delete(struct otx2_nic *nic,
 	struct netlink_ext_ack *extack = cls->common.extack;
 	int err;
 
-	if (nic->flags & OTX2_FLAG_INTF_DOWN) {
+	if (otx2_test_flag(nic, OTX2_FLAG_INTF_DOWN)) {
 		NL_SET_ERR_MSG_MOD(extack, "Interface not initialized");
 		return -EINVAL;
 	}
 
 	err = cn10k_free_matchall_ipolicer(nic);
-	nic->flags &= ~OTX2_FLAG_TC_MATCHALL_INGRESS_ENABLED;
+	otx2_clear_flag(nic, OTX2_FLAG_TC_MATCHALL_INGRESS_ENABLED);
 	return err;
 }
 

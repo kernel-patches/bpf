@@ -610,7 +610,7 @@ static int otx2vf_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	vf->dev = dev;
 	vf->iommu_domain = iommu_get_domain_for_dev(dev);
 
-	vf->flags |= OTX2_FLAG_INTF_DOWN;
+	otx2_set_flag(vf, OTX2_FLAG_INTF_DOWN);
 	hw = &vf->hw;
 	hw->pdev = vf->pdev;
 	hw->rx_queues = qcount;
@@ -824,10 +824,10 @@ static void otx2vf_remove(struct pci_dev *pdev)
 	vf = netdev_priv(netdev);
 
 	/* Disable 802.3x pause frames */
-	if (vf->flags & OTX2_FLAG_RX_PAUSE_ENABLED ||
-	    (vf->flags & OTX2_FLAG_TX_PAUSE_ENABLED)) {
-		vf->flags &= ~OTX2_FLAG_RX_PAUSE_ENABLED;
-		vf->flags &= ~OTX2_FLAG_TX_PAUSE_ENABLED;
+	if (otx2_test_flag(vf, OTX2_FLAG_RX_PAUSE_ENABLED) ||
+	    otx2_test_flag(vf, OTX2_FLAG_TX_PAUSE_ENABLED)) {
+		otx2_clear_flag(vf, OTX2_FLAG_RX_PAUSE_ENABLED);
+		otx2_clear_flag(vf, OTX2_FLAG_TX_PAUSE_ENABLED);
 		otx2_config_pause_frm(vf);
 	}
 
