@@ -101,6 +101,7 @@ config BPF_CRYPTO
 	  data. The supported algorithms are AES-CBC and AES-ECB.
 
 source "kernel/bpf/preload/Kconfig"
+source "kernel/bpf/insn_kfuncs/Kconfig"
 
 config BPF_LSM
 	bool "Enable BPF LSM Instrumentation"

@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: GPL-2.0-only
+config BPF_INSN_KFUNCS
+	tristate "Kfuncs for CPU instructions that BPF lacks"
+	depends on BPF_SYSCALL && BPF_JIT && DEBUG_INFO_BTF
+	help
+	  Provide kfuncs for rotate, conditional select, bit field extract,
+	  big-endian load, prefetch, 16-byte copy and address computation.
+	  The verifier checks each call as the kfunc's BPF body, and the JIT
+	  puts native code in its place where it can.
+
+	  If unsure, say N.
+
+config BPF_INSN_KFUNCS_ARCH
+	bool
+	depends on BPF_INSN_KFUNCS
+	default y if X86_64

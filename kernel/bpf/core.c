@@ -3299,6 +3299,15 @@ bool __weak bpf_jit_inlines_helper_call(s32 imm)
 	return false;
 }
 
+/* Write native code for an inlined kfunc call, see struct bpf_kfunc_inline,
+ * to @buf for the JIT to copy. Return its length, or an error to keep the
+ * body of the kfunc.
+ */
+int __weak bpf_jit_inline_kfunc(const struct bpf_kfunc_inline *in, u8 *buf)
+{
+	return -EOPNOTSUPP;
+}
+
 /* Return TRUE if the JIT backend supports mixing bpf2bpf and tailcalls. */
 bool __weak bpf_jit_supports_subprog_tailcalls(void)
 {
