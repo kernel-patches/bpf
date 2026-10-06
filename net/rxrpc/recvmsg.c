@@ -37,12 +37,12 @@ void rxrpc_notify_socket(struct rxrpc_call *call)
 
 	rx = rcu_dereference(call->socket);
 	sk = &rx->sk;
-	if (rx && sk->sk_state < RXRPC_CLOSE) {
-		if (call->notify_rx) {
-			spin_lock_irqsave(&call->notify_lock, flags);
-			call->notify_rx(sk, call, call->user_call_ID);
-			spin_unlock_irqrestore(&call->notify_lock, flags);
-		} else {
+	if (call->notify_rx) {
+		spin_lock_irqsave(&call->notify_lock, flags);
+		call->notify_rx(sk, call, call->user_call_ID);
+		spin_unlock_irqrestore(&call->notify_lock, flags);
+	} else {
+		if (rx && sk->sk_state < RXRPC_CLOSE) {
 			spin_lock_irqsave(&rx->recvmsg_lock, flags);
 			if (list_empty(&call->recvmsg_link)) {
 				rxrpc_get_call(call, rxrpc_call_get_notify_socket);
