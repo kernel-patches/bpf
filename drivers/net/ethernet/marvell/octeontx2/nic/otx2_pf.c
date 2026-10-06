@@ -2008,6 +2008,15 @@ int otx2_open(struct net_device *netdev)
 	if (err)
 		goto err_free_mem;
 
+	/* Fail closed: abort open if cached mqprio shapers cannot be restored. */
+	err = otx2_mqprio_up(pf);
+	if (err) {
+		netdev_err(pf->netdev,
+			   "mqprio: failed to restore shapers during open: %d\n",
+			   err);
+		goto err_free_hw;
+	}
+
 	/* Register NAPI handler */
 	for (qidx = 0; qidx < pf->hw.cint_cnt; qidx++) {
 		cq_poll = &qset->napi[qidx];
@@ -2206,6 +2215,7 @@ err_free_cints:
 	free_irq(vec, pf);
 err_disable_napi:
 	otx2_disable_napi(pf);
+err_free_hw:
 	otx2_free_hw_resources(pf);
 err_free_mem:
 	otx2_free_queue_mem(qset);
@@ -2281,6 +2291,7 @@ int otx2_stop(struct net_device *netdev)
 	for (qidx = 0; qidx < netdev->num_tx_queues; qidx++)
 		netdev_tx_reset_queue(netdev_get_tx_queue(netdev, qidx));
 
+	synchronize_net();
 	otx2_free_queue_mem(qset);
 	/* Do not clear RQ/SQ ringsize settings */
 	memset_startat(qset, 0, sqe_cnt);
@@ -2924,6 +2935,12 @@ static int otx2_xdp_setup(struct otx2_nic *pf, struct bpf_prog *prog)
 	bool if_up = netif_running(pf->netdev);
 	struct bpf_prog *old_prog;
 
+	if (prog && pf->mqprio.rate_limit) {
+		netdev_err(dev,
+			   "XDP: cannot attach while mqprio bandwidth offload is active\n");
+		return -EOPNOTSUPP;
+	}
+
 	if (prog && dev->mtu > MAX_XDP_MTU) {
 		netdev_warn(dev, "Jumbo frames not yet supported with XDP\n");
 		return -EOPNOTSUPP;
@@ -3368,10 +3385,14 @@ static int otx2_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	if (err)
 		goto err_mcs_free;
 
+	err = otx2_init_tc(pf);
+	if (err)
+		goto err_ipsec_clean;
+
 	err = register_netdev(netdev);
 	if (err) {
 		dev_err(dev, "Failed to register netdevice\n");
-		goto err_ipsec_clean;
+		goto err_shutdown_tc;
 	}
 
 	err = otx2_wq_init(pf);
@@ -3379,10 +3400,6 @@ static int otx2_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		goto err_unreg_netdev;
 
 	otx2_set_ethtool_ops(netdev);
-
-	err = otx2_init_tc(pf);
-	if (err)
-		goto err_mcam_flow_del;
 
 	err = otx2_register_dl(pf);
 	if (err)
@@ -3420,11 +3437,13 @@ err_sriov_cleannup:
 	otx2_sriov_vfcfg_cleanup(pf);
 err_pf_sriov_init:
 	otx2_unregister_dl(pf);
-	otx2_shutdown_tc(pf);
 err_mcam_flow_del:
 	otx2_mcam_flow_del(pf);
 err_unreg_netdev:
+	otx2_shutdown_tc_mqprio(pf);
 	unregister_netdev(netdev);
+err_shutdown_tc:
+	otx2_shutdown_tc(pf);
 err_ipsec_clean:
 	cn10k_ipsec_clean(pf);
 err_mcs_free:
@@ -3622,7 +3641,9 @@ static void otx2_remove(struct pci_dev *pdev)
 	otx2_cgx_config_linkevents(pf, false);
 
 	otx2_unregister_dl(pf);
+	otx2_shutdown_tc_mqprio(pf);
 	unregister_netdev(netdev);
+	otx2_shutdown_tc(pf);
 	cn10k_ipsec_clean(pf);
 	cn10k_mcs_free(pf);
 	otx2_sriov_disable(pf->pdev);
@@ -3632,7 +3653,6 @@ static void otx2_remove(struct pci_dev *pdev)
 
 	otx2_ptp_destroy(pf);
 	otx2_mcam_flow_del(pf);
-	otx2_shutdown_tc(pf);
 	otx2_shutdown_qos(pf);
 	otx2_ndc_sync(pf);
 	otx2_detach_resources(&pf->mbox);

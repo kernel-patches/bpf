@@ -287,6 +287,21 @@ static int otx2_set_channels(struct net_device *dev,
 		return -EINVAL;
 	}
 
+	if (pfvf->mqprio.rate_limit &&
+	    (channel->tx_count != pfvf->hw.tx_queues ||
+	     channel->rx_count != pfvf->hw.rx_queues)) {
+		netdev_info(dev,
+			    "Not permitted to change channel count while MQ prio is active\n");
+		return -EINVAL;
+	}
+
+	if ((pfvf->old_mq_snap || pfvf->cur_mq_snap) &&
+	    channel->tx_count < pfvf->hw.tx_queues) {
+		netdev_err(dev,
+			   "Cannot reduce TX queues after mqprio bandwidth offload was configured\n");
+		return -EINVAL;
+	}
+
 	if (if_up)
 		dev->netdev_ops->ndo_stop(dev);
 

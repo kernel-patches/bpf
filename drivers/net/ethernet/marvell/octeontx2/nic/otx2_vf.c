@@ -740,25 +740,25 @@ static int otx2vf_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	if (err)
 		goto err_ipsec_clean;
 
+	err = otx2vf_mcam_flow_init(vf);
+	if (err)
+		goto err_wq_destroy;
+
+	err = otx2_init_tc(vf);
+	if (err)
+		goto err_wq_destroy;
+
 	err = register_netdev(netdev);
 	if (err) {
 		dev_err(dev, "Failed to register netdevice\n");
-		goto err_wq_destroy;
+		goto err_shutdown_tc;
 	}
 
 	otx2vf_set_ethtool_ops(netdev);
 
-	err = otx2vf_mcam_flow_init(vf);
-	if (err)
-		goto err_unreg_netdev;
-
-	err = otx2_init_tc(vf);
-	if (err)
-		goto err_unreg_netdev;
-
 	err = otx2_register_dl(vf);
 	if (err)
-		goto err_shutdown_tc;
+		goto err_unreg_netdev;
 
 	vf->af_xdp_zc_qidx = bitmap_zalloc(qcount, GFP_KERNEL);
 	if (!vf->af_xdp_zc_qidx) {
@@ -784,10 +784,11 @@ err_free_zc_bmap:
 #endif
 err_unreg_devlink:
 	otx2_unregister_dl(vf);
+err_unreg_netdev:
+	otx2_shutdown_tc_mqprio(vf);
+	unregister_netdev(netdev);
 err_shutdown_tc:
 	otx2_shutdown_tc(vf);
-err_unreg_netdev:
-	unregister_netdev(netdev);
 err_wq_destroy:
 	cancel_work_sync(&vf->reset_task);
 	cancel_work_sync(&vf->rx_mode_work);
@@ -840,7 +841,9 @@ static void otx2vf_remove(struct pci_dev *pdev)
 #endif
 
 	otx2_unregister_dl(vf);
+	otx2_shutdown_tc_mqprio(vf);
 	unregister_netdev(netdev);
+	otx2_shutdown_tc(vf);
 	if (vf->otx2_wq) {
 		cancel_work_sync(&vf->reset_task);
 		cancel_work_sync(&vf->rx_mode_work);
@@ -849,7 +852,6 @@ static void otx2vf_remove(struct pci_dev *pdev)
 	cn10k_ipsec_clean(vf);
 	otx2_ptp_destroy(vf);
 	otx2_mcam_flow_del(vf);
-	otx2_shutdown_tc(vf);
 	otx2_shutdown_qos(vf);
 	otx2_detach_resources(&vf->mbox);
 	otx2vf_disable_mbox_intr(vf);
