@@ -404,6 +404,7 @@ void smc_sk_init(struct net *net, struct sock *sk, int protocol)
 	INIT_WORK(&smc->tcp_listen_work, smc_tcp_listen_work);
 	INIT_WORK(&smc->connect_work, smc_connect_work);
 	INIT_DELAYED_WORK(&smc->conn.tx_work, smc_tx_work);
+	INIT_WORK(&smc->conn.abort_work, smc_conn_abort_work);
 	INIT_LIST_HEAD(&smc->accept_q);
 	sock_lock_init_class_and_name(sk, "slock-AF_SMC", &smc_slock_key,
 				      "sk_lock-AF_SMC", &smc_key);

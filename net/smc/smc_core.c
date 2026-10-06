@@ -1253,9 +1253,13 @@ static void smc_buf_unuse(struct smc_connection *conn,
 	}
 }
 
-/* remove a finished connection from its link group */
+/* remove a finished connection from its link group.
+ * Must be called with the socket lock held: conn->freed is what disarms
+ * a pending or running abort_work, and both are set and tested under it.
+ */
 void smc_conn_free(struct smc_connection *conn)
 {
+	struct smc_sock *smc = container_of(conn, struct smc_sock, conn);
 	struct smc_link_group *lgr = conn->lgr;
 
 	if (!lgr || conn->freed)
@@ -1278,8 +1282,13 @@ void smc_conn_free(struct smc_connection *conn)
 			smcd_buf_detach(conn);
 	} else {
 		smc_cdc_wait_pend_tx_wr(conn);
-		if (current_work() != &conn->abort_work)
-			cancel_work_sync(&conn->abort_work);
+		/* Do not wait here: the work takes the socket lock this
+		 * caller holds. An instance that is already running is
+		 * parked on that lock and will find conn->freed set; only a
+		 * still-pending one has to give its reference back.
+		 */
+		if (cancel_work(&conn->abort_work))
+			sock_put(&smc->sk);
 	}
 	if (!list_empty(&lgr->list)) {
 		smc_buf_unuse(conn, lgr); /* allow buffer reuse */
@@ -1745,7 +1754,7 @@ void smcr_lgr_set_type_asym(struct smc_link_group *lgr,
 }
 
 /* abort connection, abort_work scheduled from tasklet context */
-static void smc_conn_abort_work(struct work_struct *work)
+void smc_conn_abort_work(struct work_struct *work)
 {
 	struct smc_connection *conn = container_of(work,
 						   struct smc_connection,
@@ -1753,7 +1762,12 @@ static void smc_conn_abort_work(struct work_struct *work)
 	struct smc_sock *smc = container_of(conn, struct smc_sock, conn);
 
 	lock_sock(&smc->sk);
-	smc_conn_kill(conn, true);
+	/* smc_conn_free() sets freed with this lock held and before it
+	 * releases anything, so an instance that was queued or parked by
+	 * then has nothing left to do.
+	 */
+	if (!conn->freed)
+		smc_conn_kill(conn, true);
 	release_sock(&smc->sk);
 	sock_put(&smc->sk); /* sock_hold done by schedulers of abort_work */
 }
@@ -2062,7 +2076,6 @@ create:
 	conn->local_tx_ctrl.len = SMC_WR_TX_SIZE;
 	conn->urg_state = SMC_URG_READ;
 	init_waitqueue_head(&conn->cdc_pend_tx_wq);
-	INIT_WORK(&smc->conn.abort_work, smc_conn_abort_work);
 	if (ini->is_smcd) {
 		conn->rx_off = sizeof(struct smcd_cdc_msg);
 		smcd_cdc_rx_init(conn); /* init tasklet for this conn */
