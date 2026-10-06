@@ -2229,6 +2229,97 @@ in_root:
 	return dget(path->dentry);
 }
 
+static unsigned int vfs_walk_pos_flags(const struct vfsmount *mnt,
+				       const struct dentry *dentry)
+{
+	if (unlikely(IS_ROOT(dentry) && dentry != mnt->mnt_root))
+		return VFS_WALK_POS_DISCONNECTED;
+	return 0;
+}
+
+/* No boundary: ancestor walks go up to the real root. */
+static const struct path vfs_walk_no_root;
+
+/* Internal walk flag: the starting position has been yielded. */
+#define VFS_WALK_STARTED	BIT(31)
+
+/**
+ * vfs_walk_start - begin a stepwise ancestor walk
+ * @aw: walk state, valid until vfs_walk_end()
+ * @path: position to walk up from; never modified
+ * @flags: %VFS_WALK_* flags; none defined yet, pass 0
+ */
+void vfs_walk_start(struct vfs_ancestor_walk *aw, const struct path *path,
+		    unsigned int flags)
+{
+	aw->pos = *path;
+	aw->flags = flags;
+	aw->pos_flags = 0;
+	path_get(&aw->pos);
+}
+
+static int vfs_walk_step_ref(struct vfs_ancestor_walk *aw)
+{
+	struct dentry *parent;
+
+	if (unlikely(aw->pos_flags & VFS_WALK_POS_DISCONNECTED)) {
+		/* Resume at the root of the disconnected position's mount. */
+		dput(aw->pos.dentry);
+		aw->pos.dentry = dget(aw->pos.mnt->mnt_root);
+		aw->pos_flags = 0;
+		return 0;
+	}
+	parent = __path_walk_parent(&aw->pos, &vfs_walk_no_root,
+				    LOOKUP_BENEATH);
+	if (IS_ERR(parent))
+		/* The real root. */
+		return 1;
+	/*
+	 * A mount crossing can step onto a disconnected root, whose parent
+	 * is itself: only then is the mountpoint itself yielded, flagged.
+	 */
+	aw->pos_flags = parent == aw->pos.dentry ?
+		VFS_WALK_POS_DISCONNECTED | VFS_WALK_POS_MOUNTPOINT :
+		vfs_walk_pos_flags(aw->pos.mnt, parent);
+	dput(aw->pos.dentry);
+	aw->pos.dentry = parent;
+	return 0;
+}
+
+/**
+ * vfs_walk_next - yield the walk's next position in @aw->pos
+ * @aw: the walk
+ *
+ * The first call yields the starting position itself.  @aw->pos_flags
+ * carries the position's %VFS_WALK_POS_* flags, with the semantics
+ * described at vfs_walk_ancestors().
+ *
+ * Returns: 0 with @aw->pos valid, 1 once the walk has passed the real
+ * root.
+ */
+int vfs_walk_next(struct vfs_ancestor_walk *aw)
+{
+	if (aw->flags & VFS_WALK_STARTED) {
+		int err = vfs_walk_step_ref(aw);
+
+		if (err)
+			return err;
+	} else {
+		aw->flags |= VFS_WALK_STARTED;
+		aw->pos_flags = vfs_walk_pos_flags(aw->pos.mnt, aw->pos.dentry);
+	}
+	return 0;
+}
+
+/**
+ * vfs_walk_end - finish a stepwise ancestor walk
+ * @aw: the walk; its positions, including @aw->pos, become invalid
+ */
+void vfs_walk_end(struct vfs_ancestor_walk *aw)
+{
+	path_put(&aw->pos);
+}
+
 /**
  * vfs_walk_ancestors - invoke a callback on a path and each of its ancestors
  * @path: path to walk up from; the caller's path is never modified
@@ -2253,55 +2344,27 @@ int vfs_walk_ancestors(const struct path *path,
 				 unsigned int pos_flags, void *data),
 		       void *data, unsigned int flags)
 {
-	const struct path root = {};
-	struct path walk = *path;
-	unsigned int pos_flags = 0;
+	struct vfs_ancestor_walk aw;
 	int ret;
 
-	path_get(&walk);
-	if (unlikely(IS_ROOT(walk.dentry) &&
-		     walk.dentry != walk.mnt->mnt_root))
-		pos_flags = VFS_WALK_POS_DISCONNECTED;
+	vfs_walk_start(&aw, path, flags);
 	for (;;) {
-		struct dentry *parent;
-
-		ret = cb(&walk, pos_flags, data);
+		ret = vfs_walk_next(&aw);
+		if (ret) {
+			if (ret == 1)
+				/* The real root was reached. */
+				ret = 0;
+			break;
+		}
+		ret = cb(&aw.pos, aw.pos_flags, data);
 		if (ret < 0)
 			break;
 		if (ret == VFS_WALK_STOP) {
 			ret = 1;
 			break;
 		}
-
-		if (unlikely(pos_flags & VFS_WALK_POS_DISCONNECTED)) {
-			dput(walk.dentry);
-			walk.dentry = dget(walk.mnt->mnt_root);
-			pos_flags = 0;
-			continue;
-		}
-		parent = __path_walk_parent(&walk, &root, LOOKUP_BENEATH);
-		if (IS_ERR(parent)) {
-			/* The real root. */
-			ret = 0;
-			break;
-		}
-		/*
-		 * A mount crossing can step onto a disconnected root, whose
-		 * parent is itself: only then is the mountpoint itself
-		 * visited, flagged, next iteration.
-		 */
-		if (unlikely(parent == walk.dentry))
-			pos_flags = VFS_WALK_POS_DISCONNECTED |
-				    VFS_WALK_POS_MOUNTPOINT;
-		else if (unlikely(IS_ROOT(parent) &&
-				  parent != walk.mnt->mnt_root))
-			pos_flags = VFS_WALK_POS_DISCONNECTED;
-		else
-			pos_flags = 0;
-		dput(walk.dentry);
-		walk.dentry = parent;
 	}
-	path_put(&walk);
+	vfs_walk_end(&aw);
 	return ret;
 }
 

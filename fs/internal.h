@@ -71,6 +71,21 @@ struct dentry *start_dirop(struct dentry *parent, struct qstr *name,
 			   unsigned int lookup_flags);
 int lookup_noperm_common(struct qstr *qname, struct dentry *base);
 
+/*
+ * The stepwise engine under vfs_walk_ancestors(); fs-internal so iterating
+ * consumers (BPF) can drive it, with the walk invariants staying in namei.c.
+ */
+struct vfs_ancestor_walk {
+	struct path pos;
+	unsigned int pos_flags;	/* VFS_WALK_POS_* describing pos */
+	unsigned int flags;	/* VFS_WALK_* */
+};
+
+void vfs_walk_start(struct vfs_ancestor_walk *aw, const struct path *path,
+		    unsigned int flags);
+int vfs_walk_next(struct vfs_ancestor_walk *aw);
+void vfs_walk_end(struct vfs_ancestor_walk *aw);
+
 void __init filename_init(void);
 
 /*
