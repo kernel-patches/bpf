@@ -210,6 +210,11 @@ static void bpf_skops_established(struct sock *sk, int bpf_op,
 
 static void bpf_tcp_ops_parse_hdr(struct sock *sk, struct sk_buff *skb)
 {
+	const struct tcp_sock *tp;
+
+	if (!cgroup_bpf_enabled(CGROUP_TCP_SOCK_OPS))
+		return;
+
 	switch (sk->sk_state) {
 	case TCP_SYN_RECV:
 	case TCP_SYN_SENT:
@@ -217,7 +222,12 @@ static void bpf_tcp_ops_parse_hdr(struct sock *sk, struct sk_buff *skb)
 		return;
 	}
 
-	bpf_tcp_ops_call(parse_hdr, sk, skb);
+	tp = tcp_sk(sk);
+
+	if ((tp->rx_opt.saw_unknown &&
+	     BPF_TCP_OPS_TEST_FLAG(tp, PARSE_HDR_OPT_UNKNOWN)) ||
+	    BPF_TCP_OPS_TEST_FLAG(tp, PARSE_HDR_OPT_ALL))
+		__bpf_tcp_ops_call(parse_hdr, sk, skb);
 }
 
 static __cold void tcp_gro_dev_warn(const struct sock *sk, const struct sk_buff *skb,
