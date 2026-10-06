@@ -345,27 +345,19 @@ static inline bool cgroup_bpf_sock_enabled(struct sock *sk,
  * calling bpf_setsockopt on listener-sk will not make sense anyway,
  * so passing 'sock_ops->sk == req_sk' to the bpf prog is appropriate here.
  */
-#define BPF_CGROUP_RUN_PROG_SOCK_OPS_SK(sock_ops, sk)			\
-({									\
-	int __ret = 0;							\
-	if (cgroup_bpf_enabled(CGROUP_SOCK_OPS))			\
-		__ret = __cgroup_bpf_run_filter_sock_ops(sk,		\
-							 sock_ops,	\
-							 CGROUP_SOCK_OPS); \
-	__ret;								\
-})
+#define __BPF_CGROUP_RUN_PROG_SOCK_OPS_SK(sock_ops, sk)				\
+	__cgroup_bpf_run_filter_sock_ops(sk, sock_ops,				\
+					 CGROUP_SOCK_OPS)
 
-#define BPF_CGROUP_RUN_PROG_SOCK_OPS(sock_ops)				       \
-({									       \
-	int __ret = 0;							       \
-	if (cgroup_bpf_enabled(CGROUP_SOCK_OPS) && (sock_ops)->sk) {       \
-		typeof(sk) __sk = sk_to_full_sk((sock_ops)->sk);	       \
-		if (__sk && sk_fullsock(__sk))				       \
-			__ret = __cgroup_bpf_run_filter_sock_ops(__sk,	       \
-								 sock_ops,     \
-							 CGROUP_SOCK_OPS); \
-	}								       \
-	__ret;								       \
+#define __BPF_CGROUP_RUN_PROG_SOCK_OPS(sock_ops)				\
+({										\
+	int __ret = 0;								\
+	typeof(sk) __sk = sk_to_full_sk((sock_ops)->sk);			\
+	if (__sk && sk_fullsock(__sk))						\
+		__ret = __cgroup_bpf_run_filter_sock_ops(__sk,			\
+							 sock_ops,		\
+							 CGROUP_SOCK_OPS);	\
+	__ret;									\
 })
 
 #define BPF_CGROUP_RUN_PROG_DEVICE_CGROUP(atype, major, minor, access)	      \
@@ -529,7 +521,7 @@ static inline int cgroup_bpf_struct_ops_attach(struct bpf_map *map,
 #define BPF_CGROUP_RUN_PROG_UDP4_RECVMSG_LOCK(sk, uaddr, uaddrlen) ({ 0; })
 #define BPF_CGROUP_RUN_PROG_UDP6_RECVMSG_LOCK(sk, uaddr, uaddrlen) ({ 0; })
 #define BPF_CGROUP_RUN_PROG_UNIX_RECVMSG_LOCK(sk, uaddr, uaddrlen) ({ 0; })
-#define BPF_CGROUP_RUN_PROG_SOCK_OPS(sock_ops) ({ 0; })
+#define __BPF_CGROUP_RUN_PROG_SOCK_OPS(sock_ops) ({ 0; })
 #define BPF_CGROUP_RUN_PROG_DEVICE_CGROUP(atype, major, minor, access) ({ 0; })
 #define BPF_CGROUP_RUN_PROG_SYSCTL(head,table,write,buf,count,pos) ({ 0; })
 #define BPF_CGROUP_RUN_PROG_GETSOCKOPT(sock, level, optname, optval, \
