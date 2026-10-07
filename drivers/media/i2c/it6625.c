@@ -212,6 +212,11 @@ MODULE_PARM_DESC(debug, "debug level (0-3)");
 #define B_CEC_SEND_DATA BIT(5)
 #define B_CONFIG_UPDATE BIT(6)
 #define B_IF_BANK BIT(7)
+/*
+ * The MCU can take up to 150 ms to clear REG_HOST_CTRL_INT while it is
+ * busy handling the HDMI input; allow 250 ms to leave some margin.
+ */
+#define IT6625_HOST_CTRL_TIMEOUT_MS 250
 
 #define REG_MCU_INTERRUPT 0xFF
 #define B_SYS_INT_ACTIVE BIT(0)
@@ -530,7 +535,8 @@ static void it6625_write_command(struct it6625 *it6625, u8 *cmds, int cmd_len)
 {
 	it6625_write_bytes(it6625, REG_CMD_SET, cmds, cmd_len);
 	it6625_write_byte(it6625, REG_HOST_CTRL_INT, B_CMD_SET);
-	it6625_wait_for_status(it6625, REG_HOST_CTRL_INT, 0x00, 25);
+	it6625_wait_for_status(it6625, REG_HOST_CTRL_INT, 0x00,
+			       IT6625_HOST_CTRL_TIMEOUT_MS);
 }
 
 static int it6625_update_config(struct it6625 *it6625)
@@ -542,7 +548,8 @@ static int it6625_update_config(struct it6625 *it6625)
 	if (err < 0)
 		return err;
 
-	return it6625_wait_for_status(it6625, REG_HOST_CTRL_INT, 0x00, 25);
+	return it6625_wait_for_status(it6625, REG_HOST_CTRL_INT, 0x00,
+				      IT6625_HOST_CTRL_TIMEOUT_MS);
 }
 
 static int it6625_set_bank(struct it6625 *it6625, u8 bank)
@@ -557,7 +564,8 @@ static int it6625_set_bank(struct it6625 *it6625, u8 bank)
 	if (err < 0)
 		return err;
 
-	return it6625_wait_for_status(it6625, REG_HOST_CTRL_INT, 0x00, 25);
+	return it6625_wait_for_status(it6625, REG_HOST_CTRL_INT, 0x00,
+				      IT6625_HOST_CTRL_TIMEOUT_MS);
 }
 
 static inline bool is_hdmi(struct it6625 *it6625)
@@ -1027,7 +1035,8 @@ static int it6625_initial_setup(struct it6625 *it6625)
 	if (err)
 		return err;
 
-	return it6625_wait_for_status(it6625, REG_HOST_CTRL_INT, 0x00, 25);
+	return it6625_wait_for_status(it6625, REG_HOST_CTRL_INT, 0x00,
+				      IT6625_HOST_CTRL_TIMEOUT_MS);
 }
 
 static int it6625_cec_adap_enable(struct cec_adapter *adap, bool enable)
@@ -1084,7 +1093,8 @@ static int it6625_cec_adap_transmit(struct cec_adapter *adap, u8 attempts,
 	it6625_write_bytes(it6625, REG_CEC_TX_DATA, msg->msg, msg->len);
 	it6625_write_byte(it6625, REG_CEC_TX_DATA_LEN, msg->len);
 	it6625_set_bits(it6625, REG_HOST_CTRL_INT, B_CEC_SEND_DATA, B_CEC_SEND_DATA);
-	it6625_wait_for_status(it6625, REG_HOST_CTRL_INT, 0x00, 25);
+	it6625_wait_for_status(it6625, REG_HOST_CTRL_INT, 0x00,
+			       IT6625_HOST_CTRL_TIMEOUT_MS);
 
 	return 0;
 }
