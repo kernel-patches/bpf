@@ -3395,6 +3395,22 @@ int amdgpu_psp_read_discovery(struct amdgpu_device *adev, uint8_t *binary,
 	return ret;
 }
 
+int amdgpu_psp_disable_fb_carveout(struct amdgpu_device *adev)
+{
+	int ret;
+
+	WREG32(mmMP0_SMN_C2PMSG_64_MMIO, GFX_CTRL_CMD_ID_DISABLE_FB_CARVEOUT);
+
+	ret = __psp_wait_for(adev, mmMP0_SMN_C2PMSG_64_MMIO,
+			     MBOX_TOS_RESP_FLAG, MBOX_TOS_RESP_MASK,
+			     PSP_WAITREG_NOVERBOSE);
+	if (ret) {
+		dev_err(adev->dev, "disable_fb_carveout: PSP cmd failed\n");
+	}
+
+	return ret;
+}
+
 int amdgpu_psp_wait_for_bootloader(struct amdgpu_device *adev)
 {
 	struct psp_context *psp = &adev->psp;
