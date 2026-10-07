@@ -103,6 +103,16 @@
  *                   - POINTER_VALUE
  *                   - TEST_DATA_LEN
  * __retval_unpriv   Same, but load program in unprivileged mode.
+ * __set_global      Set a global variable of the program to a value before
+ *                   executing it. The variable has to be an int or an enum,
+ *                   live in .bss or .data and be four or eight bytes wide,
+ *                   and the value is a number or several joined by '|',
+ *                   without parentheses.
+ * __ret_global      Execute the program and check that a global variable
+ *                   holds the given value afterwards, under the same rules.
+ *                   __set_global and __ret_global both make the loader run
+ *                   the program and check its return value; without
+ *                   __retval, the program must return 0.
  *
  * __description     Text to be used for display and as an additional filter
  *                   alias, while the original program name stays matchable.
@@ -161,6 +171,8 @@
 #define __flag(flag)		__test_tag("test_prog_flags=" #flag)
 #define __retval(val)		__test_tag("test_retval=" XSTR(val))
 #define __retval_unpriv(val)	__test_tag("test_retval_unpriv=" XSTR(val))
+#define __set_global(var, val)	__test_tag("test_global_set=" #var ":" XSTR(val))
+#define __ret_global(var, val)	__test_tag("test_global_ret=" #var ":" XSTR(val))
 #define __auxiliary		__test_tag("test_auxiliary")
 #define __auxiliary_unpriv	__test_tag("test_auxiliary_unpriv")
 #define __btf_path(path)	__test_tag("test_btf_path=" path)

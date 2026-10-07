@@ -9,6 +9,7 @@
 #include <linux/sched/signal.h>
 #include <net/xdp.h>
 #include "disasm.h"
+#include "exception.h"
 
 #define verbose(env, fmt, args...) bpf_verifier_log_write(env, fmt, ##args)
 
@@ -244,10 +245,19 @@ static void adjust_insn_aux_data(struct bpf_verifier_env *env,
 			data[i].non_stack_access =
 				data[off + cnt - 1].non_stack_access;
 			data[off + cnt - 1].non_stack_access = false;
+			data[i].cleanup_pad = data[off + cnt - 1].cleanup_pad;
+			data[off + cnt - 1].cleanup_pad = 0;
+			data[i].arg_prog = data[off + cnt - 1].arg_prog;
+			data[off + cnt - 1].arg_prog = 0;
 		} else if (bpf_is_mem_insn(insn + i)) {
 			data[i].non_stack_access = true;
 		}
 	}
+
+	if (env->cleanup_info_cnt)
+		for (i = 0; i < prog_len; i++)
+			if (data[i].cleanup_pad > off + 1)
+				data[i].cleanup_pad += cnt - 1;
 
 	/*
 	 * Last slot instruction could be a newly generated
@@ -595,6 +605,7 @@ static int verifier_remove_insns(struct bpf_verifier_env *env, u32 off, u32 cnt)
 	struct bpf_insn_aux_data *aux_data = env->insn_aux_data;
 	unsigned int orig_prog_len = env->prog->len;
 	int err;
+	u32 i;
 
 	if (bpf_rewrite_must_abort())
 		return -EINTR;
@@ -622,6 +633,17 @@ static int verifier_remove_insns(struct bpf_verifier_env *env, u32 off, u32 cnt)
 	memmove(aux_data + off,	aux_data + off + cnt,
 		sizeof(*aux_data) * (orig_prog_len - off - cnt));
 	env->insn_aux_data_len -= cnt;
+
+	if (env->cleanup_info_cnt) {
+		for (i = 0; i < env->insn_aux_data_len; i++) {
+			u32 pad = aux_data[i].cleanup_pad;
+
+			if (pad > off + cnt)
+				aux_data[i].cleanup_pad = pad - cnt;
+			else if (pad > off)
+				aux_data[i].cleanup_pad = 0;
+		}
+	}
 
 	return 0;
 }
@@ -696,6 +718,32 @@ static void keep_funcs_with_addr_taken(struct bpf_verifier_env *env)
 	}
 }
 
+static int keep_subprog_exits(struct bpf_verifier_env *env)
+{
+	u32 i, j;
+
+	for (i = 0; i < env->subprog_cnt; i++) {
+		bool found = false;
+		u32 start;
+
+		if (!env->subprog_info[i].might_unwind)
+			continue;
+		start = env->subprog_info[i].start;
+		for (j = env->subprog_info[i + 1].start; j-- > start; ) {
+			if (env->prog->insnsi[j].code != (BPF_JMP | BPF_EXIT))
+				continue;
+			env->insn_aux_data[j].seen = env->pass_cnt;
+			found = true;
+			break;
+		}
+		if (!found) {
+			verbose(env, "subprog %u can be unwound through but has no exit\n", i);
+			return -EINVAL;
+		}
+	}
+	return 0;
+}
+
 int bpf_opt_remove_dead_code(struct bpf_verifier_env *env)
 {
 	struct bpf_insn_aux_data *aux_data = env->insn_aux_data;
@@ -703,6 +751,9 @@ int bpf_opt_remove_dead_code(struct bpf_verifier_env *env)
 	int i, err;
 
 	keep_funcs_with_addr_taken(env);
+	err = keep_subprog_exits(env);
+	if (err)
+		return err;
 
 	for (i = 0; i < insn_cnt; i++) {
 		int j;
@@ -728,7 +779,7 @@ int bpf_opt_remove_nops(struct bpf_verifier_env *env)
 	struct bpf_insn *insn = env->prog->insnsi;
 	int insn_cnt = env->prog->len;
 	bool is_may_goto_0, is_ja;
-	int i, err;
+	int i, j, err;
 
 	for (i = 0; i < insn_cnt; i++) {
 		is_may_goto_0 = !memcmp(&insn[i], &MAY_GOTO_0, sizeof(MAY_GOTO_0));
@@ -738,6 +789,11 @@ int bpf_opt_remove_nops(struct bpf_verifier_env *env)
 			continue;
 		if (aux[i].indirect_target)
 			continue;
+
+		if (env->cleanup_info_cnt)
+			for (j = 0; j < insn_cnt; j++)
+				if (env->insn_aux_data[j].cleanup_pad == i + 1)
+					env->insn_aux_data[j].cleanup_pad = i + 2;
 
 		err = verifier_remove_insns(env, i, 1);
 		if (err)
@@ -1238,6 +1294,40 @@ static int resolve_func_ptrs(struct bpf_verifier_env *env, struct bpf_prog *prog
 	return 0;
 }
 
+static int exc_info_for_subprog(struct bpf_verifier_env *env, struct bpf_prog *sub,
+				u32 start, u32 end)
+{
+	struct bpf_cleanup_info *recs;
+	u32 i, cnt = 0;
+
+	if (!env->cleanup_info_cnt)
+		return 0;
+
+	for (i = start; i < end; i++) {
+		if (env->insn_aux_data[i].cleanup_pad)
+			cnt++;
+	}
+	if (!cnt)
+		return 0;
+
+	recs = kvmalloc_array(cnt, sizeof(*recs), GFP_KERNEL_ACCOUNT | __GFP_NOWARN);
+	if (!recs)
+		return -ENOMEM;
+
+	for (i = start, cnt = 0; i < end; i++) {
+		u32 pad = env->insn_aux_data[i].cleanup_pad;
+
+		if (!pad)
+			continue;
+		pad--;
+		recs[cnt].begin_off = i - start;
+		recs[cnt].end_off = i - start + 1;
+		recs[cnt].landing_pad_off = pad - start;
+		cnt++;
+	}
+	return bpf_exc_attach_info(sub->aux, recs, cnt);
+}
+
 static int jit_subprogs(struct bpf_verifier_env *env)
 {
 	struct bpf_prog *prog = env->prog, **func, *tmp;
@@ -1245,7 +1335,7 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 	struct bpf_map *map_ptr;
 	struct bpf_insn *insn;
 	void *old_bpf_func;
-	int err, num_exentries;
+	int err, exc_err, num_exentries;
 
 	for (i = 0, insn = prog->insnsi; i < prog->len; i++, insn++) {
 		if (!bpf_pseudo_func(insn) && !bpf_pseudo_call(insn))
@@ -1372,9 +1462,15 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 		func[i]->aux->exception_cb = env->subprog_info[i].is_exception_cb;
 		func[i]->aux->changes_pkt_data = env->subprog_info[i].changes_pkt_data;
 		func[i]->aux->might_sleep = env->subprog_info[i].might_sleep;
+		func[i]->aux->might_unwind = env->subprog_info[i].might_unwind;
 		func[i]->aux->token = prog->aux->token;
 		if (!i)
 			func[i]->aux->exception_boundary = env->seen_exception;
+		exc_err = exc_info_for_subprog(env, func[i], subprog_start, subprog_end);
+		if (exc_err) {
+			err = exc_err;
+			goto out_free;
+		}
 		func[i] = bpf_int_jit_compile(env, func[i]);
 		if (!func[i]->jited) {
 			err = -ENOTSUPP;
@@ -1484,6 +1580,9 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 	prog->aux->bpf_exception_cb = (void *)func[env->exception_callback_subprog]->bpf_func;
 	prog->aux->exception_boundary = func[0]->aux->exception_boundary;
 	prog->aux->stack_arg_sp_adjust = func[0]->aux->stack_arg_sp_adjust;
+	prog->aux->exc = func[0]->aux->exc;
+	func[0]->aux->exc = NULL;
+	prog->aux->epilogue_ip = func[0]->aux->epilogue_ip;
 	bpf_prog_jit_attempt_done(prog);
 	return 0;
 out_free:
@@ -1707,6 +1806,48 @@ static int may_goto_expand(struct bpf_insn *insn_buf, int off, int stack_off,
 	}
 	memcpy(insn_buf + cnt, tail, tail_cnt * sizeof(*tail));
 	return cnt + tail_cnt;
+}
+
+/*
+ * Follow each bpf_unwind() call with 'r0 = 0; exit', or with
+ * 'r0 = 0; goto pad' where a record covers the call.
+ */
+int bpf_exc_patch_unwind_calls(struct bpf_verifier_env *env)
+{
+	int insn_cnt = env->prog->len;
+	struct bpf_insn insn_buf[3];
+	struct bpf_prog *new_prog;
+	int i, off, delta = 0;
+
+	if (!bpf_prog_may_unwind(env))
+		return 0;
+
+	for (i = 0; i < insn_cnt; i++) {
+		int call = i + delta, pad;
+		struct bpf_insn *insn = env->prog->insnsi + call;
+
+		if (!bpf_is_unwind_kfunc(insn))
+			continue;
+
+		insn_buf[0] = *insn;
+		insn_buf[1] = BPF_MOV64_IMM(BPF_REG_0, 0);
+		insn_buf[2] = BPF_EXIT_INSN();
+		pad = bpf_exc_pad_of_call(env, call);
+		if (pad >= 0) {
+			/* The goto is at call + 2; a pad after the call moves down by 2. */
+			if (pad > call)
+				pad += 2;
+			off = pad - (call + 3);
+			insn_buf[2] = off == (s16)off ? BPF_JMP_A(off) : BPF_JMP32_A(off);
+		}
+
+		new_prog = bpf_patch_insn_data(env, call, insn_buf, 3);
+		if (!new_prog)
+			return -ENOMEM;
+		delta += 2;
+		env->prog = new_prog;
+	}
+	return 0;
 }
 
 /* Do various post-verification rewrites in a single program pass.
@@ -2101,6 +2242,25 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 			goto next_insn;
 		if (insn->src_reg == BPF_PSEUDO_CALL)
 			goto next_insn;
+		if (bpf_is_unwind_resume_kfunc(insn)) {
+			/*
+			 * A pad's resume is just the frame returning, to
+			 * where bpf_unwind() pointed its return address: its
+			 * caller's pad or epilogue, or the kernel from the main
+			 * program. The verifier checked this exit with r0 a
+			 * known zero, so return zero.
+			 */
+			insn_buf[0] = BPF_MOV64_IMM(BPF_REG_0, 0);
+			insn_buf[1] = BPF_EXIT_INSN();
+			cnt = 2;
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			if (!new_prog)
+				return -ENOMEM;
+			delta += cnt - 1;
+			env->prog = prog = new_prog;
+			insn = new_prog->insnsi + i + delta;
+			goto next_insn;
+		}
 		if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
 			ret = bpf_fixup_kfunc_call(env, insn, insn_buf, i + delta, &cnt);
 			if (ret)

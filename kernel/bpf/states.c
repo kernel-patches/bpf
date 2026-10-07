@@ -201,9 +201,13 @@ static int maybe_exit_scc(struct bpf_verifier_env *env, struct bpf_verifier_stat
 		 * c. A checkpoint is reached and matched. Checkpoints are created by
 		 *    is_state_visited(), which calls maybe_enter_scc(), which allocates
 		 *    bpf_scc_visit instances for checkpoints within SCCs.
-		 * (c) is the only case that can reach this point.
+		 * d. An unwind returns from frame 0, ending the path at a call or at
+		 *    the unwinding insn, which may be in an SCC as a top-level
+		 *    BPF_EXIT is not. Like (b), it leaves nothing to exit.
+		 * (c) and (d), and a speculative path, are the only ways to reach
+		 * this point.
 		 */
-		if (!st->speculative) {
+		if (!st->speculative && !st->unwind_exit) {
 			verifier_bug(env, "scc exit: no visit info for call chain %s",
 				     format_callchain(env, callchain));
 			return -EFAULT;
@@ -950,6 +954,9 @@ static bool func_states_equal(struct bpf_verifier_env *env, struct bpf_func_stat
 		return false;
 
 	if (!old->no_stack_arg_load && cur->no_stack_arg_load)
+		return false;
+
+	if (old->in_pad != cur->in_pad)
 		return false;
 
 	for (i = 0; i < MAX_BPF_REG; i++)
