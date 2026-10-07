@@ -65,7 +65,7 @@
 
 /* default link frequency and external clock */
 #define IMX471_LINK_FREQ_DEFAULT		200000000LL
-#define IMX471_EXT_CLK				19200000
+#define IMX471_EXT_CLK				19200000LL
 
 /* PLL */
 #define IMX471_REG_VTPXCK_DIV			CCI_REG16(0x0300)
@@ -706,9 +706,15 @@ static int imx471_init_controls(struct imx471 *sensor)
 					   ARRAY_SIZE(link_freq_menu_items) - 1,
 					   0,
 					   link_freq_menu_items);
-
-	/* pixel_rate = link_freq * 2 * nr_of_lanes / bits_per_sample */
-	pixel_rate = div_u64(IMX471_LINK_FREQ_DEFAULT * 2 * 4, 10);
+	/*
+	 * The sensor runs in the dual mode so the pixel rate is defined as
+	 * follows:
+	 * (ext_freq * IVT_PLL_MPY * num_of_vt_lanes) /
+	 * (VT_PREPLLCK_DIV * IVT_SYCK_DIV * IVT_PXCK_DIV)
+	 */
+	pixel_rate = (IMX471_EXT_CLK * IMX471_PLL_VT_MPY * 4) /
+		     (IMX471_PREPLLCK_VT_DIV * IMX471_VTSYCK_DIV *
+		      IMX471_VTPXCK_DIV);
 
 	v4l2_ctrl_new_std(ctrl_hdlr, &imx471_ctrl_ops,
 			  V4L2_CID_PIXEL_RATE, pixel_rate,
