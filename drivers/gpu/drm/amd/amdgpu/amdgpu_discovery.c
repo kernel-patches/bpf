@@ -771,6 +771,12 @@ static int amdgpu_discovery_init(struct amdgpu_device *adev)
 							   fw_name);
 		if (r)
 			goto out;
+	} else if (amdgpu_is_spm_passthrough(adev)) {
+		drm_dbg(&adev->ddev, "use ip discovery information from psp mailbox\n");
+		r = amdgpu_psp_read_discovery(adev, discovery_bin,
+					      GFX_CTRL_ADDR_TYPE_GUEST_PHY_ADDR);
+		if (r)
+			goto out;
 	} else {
 		drm_dbg(&adev->ddev, "use ip discovery information from memory\n");
 		r = amdgpu_discovery_read_binary_from_mem(adev, discovery_bin,

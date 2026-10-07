@@ -52,6 +52,12 @@
 
 #define PSP_IRQ_DEFAULT_HANDLER_ID 0xFFFFFFFF
 
+/* Note: These are pre-IP-discovery fixed MMIO indexes */
+#define mmMP0_SMN_C2PMSG_64_MMIO	0x16080
+#define mmMP0_SMN_C2PMSG_69_MMIO	0x16085
+#define mmMP0_SMN_C2PMSG_70_MMIO	0x16086
+#define mmMP0_SMN_C2PMSG_71_MMIO	0x16087
+
 static int psp_load_smu_fw(struct psp_context *psp);
 static int psp_rap_terminate(struct psp_context *psp);
 static int psp_securedisplay_terminate(struct psp_context *psp);
@@ -760,17 +766,13 @@ static int psp_sw_fini(struct amdgpu_ip_block *ip_block)
 	return 0;
 }
 
-int psp_wait_for(struct psp_context *psp, uint32_t reg_index, uint32_t reg_val,
-		 uint32_t mask, uint32_t flags)
+static int __psp_wait_for(struct amdgpu_device *adev, uint32_t reg_index, uint32_t reg_val,
+			  uint32_t mask, uint32_t flags)
 {
 	bool check_changed = flags & PSP_WAITREG_CHANGED;
 	bool verbose = !(flags & PSP_WAITREG_NOVERBOSE);
 	uint32_t val;
 	int i;
-	struct amdgpu_device *adev = psp->adev;
-
-	if (psp->adev->no_hw_access)
-		return 0;
 
 	for (i = 0; i < adev->usec_timeout; i++) {
 		val = RREG32(reg_index);
@@ -790,6 +792,17 @@ int psp_wait_for(struct psp_context *psp, uint32_t reg_index, uint32_t reg_val,
 			reg_index, mask, val, reg_val);
 
 	return -ETIME;
+}
+
+int psp_wait_for(struct psp_context *psp, uint32_t reg_index, uint32_t reg_val,
+		 uint32_t mask, uint32_t flags)
+{
+	struct amdgpu_device *adev = psp->adev;
+
+	if (psp->adev->no_hw_access)
+		return 0;
+
+	return __psp_wait_for(adev, reg_index, reg_val, mask, flags);
 }
 
 int psp_wait_for_spirom_update(struct psp_context *psp, uint32_t reg_index,
@@ -3345,6 +3358,42 @@ int psp_securedisplay_invoke(struct psp_context *psp, uint32_t ta_cmd_id)
 	return ret;
 }
 /* SECUREDISPLAY end */
+
+int amdgpu_psp_read_discovery(struct amdgpu_device *adev, uint8_t *binary,
+			      GFX_CTRL_ADDR_TYPE addr_type)
+{
+	void *cpu_addr;
+	dma_addr_t dma_addr;
+	u32 length;
+	int ret;
+
+	cpu_addr = dma_alloc_coherent(adev->dev, adev->discovery.size,
+				      &dma_addr, GFP_KERNEL);
+	if (!cpu_addr)
+		return -ENOMEM;
+
+	length = adev->discovery.size;
+	length = (length & 0x0fffffffU) | ((u32)addr_type << 28);
+
+	WREG32(mmMP0_SMN_C2PMSG_69_MMIO, lower_32_bits((u64)dma_addr));
+	WREG32(mmMP0_SMN_C2PMSG_70_MMIO, upper_32_bits((u64)dma_addr));
+	WREG32(mmMP0_SMN_C2PMSG_71_MMIO, length);
+
+	WREG32(mmMP0_SMN_C2PMSG_64_MMIO, GFX_CTRL_CMD_ID_GET_IP_DISCOVERY);
+
+	ret = __psp_wait_for(adev, mmMP0_SMN_C2PMSG_64_MMIO,
+			     MBOX_TOS_RESP_FLAG, MBOX_TOS_RESP_MASK,
+			     PSP_WAITREG_NOVERBOSE);
+	if (ret) {
+		dev_err(adev->dev, "ip_discovery: PSP cmd failed\n");
+	} else {
+		memcpy(binary, cpu_addr, adev->discovery.size);
+	}
+
+	dma_free_coherent(adev->dev, adev->discovery.size, cpu_addr, dma_addr);
+
+	return ret;
+}
 
 int amdgpu_psp_wait_for_bootloader(struct amdgpu_device *adev)
 {

@@ -1019,6 +1019,11 @@ static inline struct amdgpu_device *amdgpu_ttm_adev(struct ttm_device *bdev)
 	return container_of(bdev, struct amdgpu_device, mman.bdev);
 }
 
+static inline bool amdgpu_is_spm_passthrough(struct amdgpu_device *adev)
+{
+	return amdgpu_passthrough(adev) && !pci_resource_len(adev->pdev, 0);
+}
+
 static inline bool amdgpu_is_multi_aid(struct amdgpu_device *adev)
 {
 	return !!adev->aid_mask;
