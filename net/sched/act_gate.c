@@ -18,6 +18,17 @@
 
 static struct tc_action_ops act_gate_ops;
 
+/* A netlink attribute records its total length, including the 4-byte
+ * header, in a u16 nla_len, so one nested attribute can describe at most
+ * 65532 bytes. tcf_gate_dump() emits each schedule entry as 36 bytes, or
+ * 40 with the gate-open flag, so 1024 entries serialize to 36868-40964
+ * bytes and still fit a single TCA_GATE_ENTRY_LIST nest, while 4096 would
+ * need ~144-160 KiB and cannot be represented. 1024 is also the schedule
+ * table capacity of SJA1105 (SJA1110 provides 4096). Cap the entry list
+ * at 1024.
+ */
+#define GATE_ENTRIES_MAX	1024
+
 static ktime_t gate_get_time(struct tcf_gate *gact)
 {
 	ktime_t mono = ktime_get();
@@ -275,6 +286,14 @@ static int parse_gate_list(struct nlattr *list_attr,
 		if (nla_type(n) != TCA_GATE_ONE_ENTRY) {
 			NL_SET_ERR_MSG(extack, "Attribute isn't type 'entry'");
 			continue;
+		}
+
+		if (i >= GATE_ENTRIES_MAX) {
+			NL_SET_ERR_MSG_FMT(extack,
+					   "Too many schedule entries, at most %u are supported",
+					   GATE_ENTRIES_MAX);
+			err = -E2BIG;
+			goto release_list;
 		}
 
 		entry = kzalloc_obj(*entry, GFP_ATOMIC);
