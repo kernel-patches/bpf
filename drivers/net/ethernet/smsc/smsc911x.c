@@ -439,6 +439,13 @@ static int smsc911x_request_resources(struct platform_device *pdev)
 	pdata->reset_gpiod = devm_gpiod_get_optional(&pdev->dev,
 						     "reset",
 						     GPIOD_OUT_LOW);
+	if (IS_ERR(pdata->reset_gpiod)) {
+		if (!ret)
+			regulator_bulk_free(ARRAY_SIZE(pdata->supplies),
+					    pdata->supplies);
+		return dev_err_probe(&pdev->dev, PTR_ERR(pdata->reset_gpiod),
+				     "failed to get reset gpio\n");
+	}
 
 	/* Request clock */
 	pdata->clk = clk_get(&pdev->dev, NULL);
