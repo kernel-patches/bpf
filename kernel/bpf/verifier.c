@@ -13219,8 +13219,12 @@ check_ok:
 				return -EINVAL;
 			}
 
-			if (bpf_register_is_null(buff_reg))
+			if (bpf_register_is_null(buff_reg)) {
+				ret = mark_arg_precision(env, argno);
+				if (ret)
+					return ret;
 				break;
+			}
 
 			ret = check_mem_size_reg(env, buff_reg, size_reg, buff_argno, argno,
 						 BPF_READ | BPF_WRITE, true, meta, &failure);
