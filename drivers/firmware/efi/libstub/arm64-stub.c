@@ -19,10 +19,9 @@ efi_status_t handle_kernel_image(unsigned long *image_addr,
 				 unsigned long *reserve_addr,
 				 unsigned long *reserve_size,
 				 efi_loaded_image_t *image,
-				 efi_handle_t image_handle)
+				 efi_handle_t image_handle,
+				 const struct efi_image_info **image_info)
 {
-	unsigned long kernel_size, kernel_codesize, kernel_memsize;
-
 	if (image->image_base != _text) {
 		efi_err("FIRMWARE BUG: efi_loaded_image_t::image_base has bogus value\n");
 		image->image_base = _text;
@@ -32,13 +31,7 @@ efi_status_t handle_kernel_image(unsigned long *image_addr,
 		efi_err("FIRMWARE BUG: kernel image not aligned on %dk boundary\n",
 			SEGMENT_ALIGN >> 10);
 
-	kernel_size = _edata - _text;
-	kernel_codesize = __inittext_end - _text;
-	kernel_memsize = kernel_size + (_end - _edata);
-	*image_addr = (unsigned long)_text;
-
-	return efi_kaslr_relocate_kernel(image_addr, image_size,
-					 kernel_size, kernel_codesize, kernel_memsize,
+	return efi_kaslr_relocate_kernel(image_addr, image_size, image_info,
 					 efi_kaslr_get_phys_seed(image_handle));
 }
 

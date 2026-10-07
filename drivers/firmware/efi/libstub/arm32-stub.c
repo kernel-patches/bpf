@@ -82,12 +82,15 @@ extern u32 input_data_end[] __aligned(1);
 /* entry #3 in the zimage magic table carries the kernel's BSS size */
 extern u32 zimage_magic_table[] asm("_table_start");
 
+struct efi_image_info efistub_image_info = {};
+
 efi_status_t handle_kernel_image(unsigned long *image_addr,
 				 unsigned long *image_size,
 				 unsigned long *reserve_addr,
 				 unsigned long *reserve_size,
 				 efi_loaded_image_t *image,
-				 efi_handle_t image_handle)
+				 efi_handle_t image_handle,
+				 const struct efi_image_info **image_info)
 {
 	unsigned long kernel_memsize = input_data_end[-1] + zimage_magic_table[3];
 	const int pgdir_size = (4 + IS_ENABLED(CONFIG_ARM_LPAE)) * PAGE_SIZE;
@@ -121,6 +124,9 @@ efi_status_t handle_kernel_image(unsigned long *image_addr,
 	} else {
 		kernel_base = round_down(alloc_base, EFI_PHYS_ALIGN);
 	}
+
+	efistub_image_info._text_offset =
+		kernel_base + TEXT_OFFSET - (u32)&efistub_image_info;
 
 	*reserve_addr = kernel_base + slack;
 	*reserve_size = alloc_size;

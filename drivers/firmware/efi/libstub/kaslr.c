@@ -84,9 +84,7 @@ static bool check_image_region(u64 base, u64 size)
  * efi_kaslr_relocate_kernel() - Relocate the kernel (random if KASLR enabled)
  * @image_addr:		Pointer to variable carrying the image base address
  * @alloc_size:		Pointer to variable carrying the allocated size
- * @kernel_size:	Size of the text + data
- * @kernel_codesize:	Size of the text
- * @kernel_memsize:	Size of the text + data + bss
+ * @image_info:		Pointer to struct efi_image_info pointer
  * @phys_seed:		Random seed used for the relocation
  *
  * If KASLR is not enabled, this function relocates the kernel to a fixed
@@ -97,14 +95,15 @@ static bool check_image_region(u64 base, u64 size)
  */
 efi_status_t efi_kaslr_relocate_kernel(unsigned long *image_addr,
 				       unsigned long *alloc_size,
-				       unsigned long kernel_size,
-				       unsigned long kernel_codesize,
-				       unsigned long kernel_memsize,
+				       const struct efi_image_info **image_info,
 				       u32 phys_seed)
 {
-	unsigned long kernel_base = *image_addr;
+	unsigned long kernel_base	= efistub_kernel_base(*image_info);
+	unsigned long kernel_size	= efistub_kernel_size(*image_info);
+	unsigned long kernel_codesize	= efistub_kernel_codesize(*image_info);
+	unsigned long kernel_memsize	= efistub_kernel_memsize(*image_info);
+	u64 min_kimg_align		= efi_get_kimg_min_align();
 	efi_status_t status;
-	u64 min_kimg_align = efi_get_kimg_min_align();
 
 	if (IS_ENABLED(CONFIG_RANDOMIZE_BASE) && phys_seed != 0) {
 		/*
@@ -147,6 +146,8 @@ efi_status_t efi_kaslr_relocate_kernel(unsigned long *image_addr,
 
 	efi_icache_sync(*image_addr, *image_addr + kernel_codesize);
 	efi_remap_image(*image_addr, kernel_memsize, kernel_codesize);
+
+	*(unsigned long *)image_info += *image_addr - kernel_base;
 
 	return status;
 }
