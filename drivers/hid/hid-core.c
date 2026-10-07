@@ -3115,7 +3115,11 @@ struct hid_device *hid_allocate_device(void)
 	return hdev;
 
 out_err:
-	hid_destroy_device(hdev);
+	/* init_srcu_struct() was called but failed; the SRCU struct
+	 * is not usable.  Skip hid_destroy_device() which would call
+	 * cleanup_srcu_struct() on the failed state.
+	 */
+	put_device(&hdev->dev);
 	return ERR_PTR(ret);
 }
 EXPORT_SYMBOL_GPL(hid_allocate_device);
