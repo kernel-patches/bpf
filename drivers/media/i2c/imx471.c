@@ -29,6 +29,10 @@
 #define IMX471_REG_FLL				CCI_REG16(0x0340)
 #define IMX471_FLL_MAX				0xffff
 
+/* H-timing internal */
+#define IMX471_REG_LINE_LENGTH_PCK		CCI_REG16(0x0342)
+#define IMX471_LLP_MAX				0xffff
+
 /* Exposure control */
 #define IMX471_REG_EXPOSURE			CCI_REG16(0x0202)
 #define IMX471_EXPOSURE_MIN			1
@@ -282,7 +286,7 @@ static const struct imx471_mode imx471_modes[] = {
 		.height = 1088,
 		.fll_def = 1308,
 		.fll_min = 1308,
-		.llp = 2328,
+		.llp = 2560,
 		.default_mode_regs = mode_1928x1088_regs,
 		.default_mode_regs_length = ARRAY_SIZE(mode_1928x1088_regs),
 	},
@@ -335,6 +339,10 @@ static int imx471_set_ctrl(struct v4l2_ctrl *ctrl)
 	case V4L2_CID_EXPOSURE:
 		ret = cci_write(sensor->regmap, IMX471_REG_EXPOSURE,
 				ctrl->val, NULL);
+		break;
+	case V4L2_CID_HBLANK:
+		ret = cci_write(sensor->regmap, IMX471_REG_LINE_LENGTH_PCK,
+				ctrl->val + format->width, NULL);
 		break;
 	case V4L2_CID_VBLANK:
 		/* Update FLL that meets expected vertical blanking */
@@ -447,12 +455,10 @@ static int imx471_set_pad_format(struct v4l2_subdev *sd,
 		return ret;
 
 	h_blank = mode->llp - mode->width;
-	/*
-	 * Currently hblank is not changeable.
-	 * So FPS control is done only by vblank.
-	 */
 	return __v4l2_ctrl_modify_range(sensor->hblank, h_blank,
-					h_blank, 1, h_blank);
+					IMX471_LLP_MAX - mode->width,
+					1,
+					h_blank);
 }
 
 static int imx471_get_selection(struct v4l2_subdev *sd,
@@ -710,7 +716,8 @@ static int imx471_init_controls(struct imx471 *sensor)
 
 	hblank = mode->llp - mode->width;
 	sensor->hblank = v4l2_ctrl_new_std(ctrl_hdlr, &imx471_ctrl_ops,
-					   V4L2_CID_HBLANK, hblank, hblank,
+					   V4L2_CID_HBLANK, hblank,
+					   IMX471_LLP_MAX - mode->width,
 					   1, hblank);
 
 	/* fll >= exposure time + adjust parameter (default value is 18) */
@@ -747,7 +754,6 @@ static int imx471_init_controls(struct imx471 *sensor)
 	}
 
 	link_freq->flags |= V4L2_CTRL_FLAG_READ_ONLY;
-	sensor->hblank->flags |= V4L2_CTRL_FLAG_READ_ONLY;
 	sensor->hflip->flags |= V4L2_CTRL_FLAG_MODIFY_LAYOUT;
 	sensor->vflip->flags |= V4L2_CTRL_FLAG_MODIFY_LAYOUT;
 
