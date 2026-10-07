@@ -2070,6 +2070,20 @@ splice_requeue:
 	goto splice_read_end;
 }
 
+#define TLS_RX_NODATA_LIMIT	16
+
+static void tls_rx_data_ready_work(struct work_struct *w)
+{
+	struct tls_sw_context_rx *ctx =
+		container_of(w, struct tls_sw_context_rx, data_ready_work);
+	struct sock *sk = ctx->strp.sk;
+
+	/* A callback that finds the socket unowned reads from it. */
+	lock_sock(sk);
+	READ_ONCE(sk->sk_data_ready)(sk);
+	release_sock(sk);
+}
+
 int tls_sw_read_sock(struct sock *sk, read_descriptor_t *desc,
 		     sk_read_actor_t read_actor)
 {
@@ -2078,6 +2092,7 @@ int tls_sw_read_sock(struct sock *sk, read_descriptor_t *desc,
 	struct tls_prot_info *prot = &tls_ctx->prot_info;
 	struct strp_msg *rxm = NULL;
 	struct sk_buff *skb = NULL;
+	unsigned int nodata = 0;
 	struct sk_psock *psock;
 	size_t flushed_at = 0;
 	bool released = true;
@@ -2136,14 +2151,22 @@ int tls_sw_read_sock(struct sock *sk, read_descriptor_t *desc,
 			goto read_sock_requeue;
 		}
 
-		/* An empty data record (legal in TLS 1.3) gives a zero
-		 * read_actor return, indistinguishable from the consumer
-		 * stalling; the used <= 0 path would requeue it at the
-		 * head of rx_list and block all later records. Consume it
-		 * here instead.
+		/* An empty data record gives a zero read_actor return,
+		 * indistinguishable from the consumer stalling; the
+		 * used <= 0 path would requeue it at the head of rx_list
+		 * and block all later records. Consume it here instead.
 		 */
 		if (rxm->full_len == 0) {
+			err = 0;
 			consume_skb(skb);
+			if (++nodata >= TLS_RX_NODATA_LIMIT) {
+				/* tls_rx_reader_release() does not call the
+				 * consumer's sk_data_ready, which can re-enter
+				 * this function.
+				 */
+				schedule_work(&ctx->data_ready_work);
+				break;
+			}
 			continue;
 		}
 
@@ -2154,6 +2177,7 @@ int tls_sw_read_sock(struct sock *sk, read_descriptor_t *desc,
 			goto read_sock_requeue;
 		}
 		copied += used;
+		nodata = 0;
 		if (used < rxm->full_len) {
 			rxm->offset += used;
 			rxm->full_len -= used;
@@ -2345,6 +2369,7 @@ void tls_sw_strparser_done(struct tls_context *tls_ctx)
 {
 	struct tls_sw_context_rx *ctx = tls_sw_ctx_rx(tls_ctx);
 
+	cancel_work_sync(&ctx->data_ready_work);
 	tls_strp_done(&ctx->strp);
 }
 
@@ -2476,6 +2501,7 @@ static struct tls_sw_context_rx *init_ctx_rx(struct tls_context *ctx)
 	crypto_init_wait(&sw_ctx_rx->async_wait);
 	atomic_set(&sw_ctx_rx->decrypt_pending, 1);
 	init_waitqueue_head(&sw_ctx_rx->wq);
+	INIT_WORK(&sw_ctx_rx->data_ready_work, tls_rx_data_ready_work);
 	skb_queue_head_init(&sw_ctx_rx->rx_list);
 	skb_queue_head_init(&sw_ctx_rx->async_hold);
 
