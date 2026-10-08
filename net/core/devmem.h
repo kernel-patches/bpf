@@ -54,6 +54,8 @@ struct net_devmem_dmabuf_binding {
 	 */
 	struct list_head list;
 
+	struct list_head live_list;
+
 	/* rxq's this binding is active on. */
 	struct xarray bound_rxqs;
 

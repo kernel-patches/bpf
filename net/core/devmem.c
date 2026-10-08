@@ -25,6 +25,9 @@
 
 static DEFINE_XARRAY_FLAGS(net_devmem_dmabuf_bindings, XA_FLAGS_ALLOC1);
 
+static DEFINE_SPINLOCK(net_devmem_live_bindings_lock);
+static LIST_HEAD(net_devmem_live_bindings);
+
 static const struct memory_provider_ops dmabuf_devmem_ops;
 
 static struct net_iov *net_iov_free_pop(struct net_iov_area *area,
@@ -62,6 +65,10 @@ static void net_devmem_dmabuf_binding_release(struct percpu_ref *ref)
 void __net_devmem_dmabuf_binding_free(struct work_struct *wq)
 {
 	struct net_devmem_dmabuf_binding *binding = container_of(wq, typeof(*binding), unbind_w);
+
+	spin_lock(&net_devmem_live_bindings_lock);
+	list_del(&binding->live_list);
+	spin_unlock(&net_devmem_live_bindings_lock);
 
 	if (binding->freelist)
 		WARN(binding->free_count != binding->area.num_niovs,
@@ -321,6 +328,10 @@ net_devmem_bind_dmabuf(struct net_device *dev, void *vdev,
 
 	list_add(&binding->list, &priv->bindings);
 
+	spin_lock(&net_devmem_live_bindings_lock);
+	list_add(&binding->live_list, &net_devmem_live_bindings);
+	spin_unlock(&net_devmem_live_bindings_lock);
+
 	return binding;
 
 err_free_niovs:
@@ -356,6 +367,25 @@ struct net_devmem_dmabuf_binding *net_devmem_lookup_dmabuf(u32 id)
 
 	return binding;
 }
+
+bool netdev_has_dmabuf_binding(struct net_device *dev, struct device *dma_dev)
+{
+	struct net_devmem_dmabuf_binding *binding;
+	bool found = false;
+
+	spin_lock(&net_devmem_live_bindings_lock);
+	list_for_each_entry(binding, &net_devmem_live_bindings, live_list) {
+		if (dev == READ_ONCE(binding->dev) &&
+		    (!dma_dev || binding->attachment->dev == dma_dev)) {
+			found = true;
+			break;
+		}
+	}
+	spin_unlock(&net_devmem_live_bindings_lock);
+
+	return found;
+}
+EXPORT_SYMBOL_GPL(netdev_has_dmabuf_binding);
 
 void net_devmem_get_net_iov(struct net_iov *niov)
 {

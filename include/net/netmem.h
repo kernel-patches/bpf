@@ -387,13 +387,36 @@ static inline unsigned long netmem_get_dma_addr(netmem_ref netmem)
 	return netmem_to_nmdesc(netmem)->dma_addr;
 }
 
+struct net_device;
+
 #if defined(CONFIG_NET_DEVMEM)
 static inline bool net_is_devmem_iov(const struct net_iov *niov)
 {
 	return niov->type == NET_IOV_DMABUF;
 }
+
+/**
+ * netdev_has_dmabuf_binding - is there a dmabuf binding for a
+ * given @dev and @dma_dev
+ *
+ * @dev: netdev to check bindings
+ * @dma_dev: dma device to check, when NULL it will not be checked
+ *
+ * A binding is reported until its last reference is dropped, which can be
+ * long after the user unbound it: net_iovs of a TX binding can still be
+ * queued in flight, with DMA mappings that are only valid for @dma_dev.
+ *
+ * Return: true if a binding is found under @dev and possibly @dma_dev
+ */
+bool netdev_has_dmabuf_binding(struct net_device *dev, struct device *dma_dev);
 #else
 static inline bool net_is_devmem_iov(const struct net_iov *niov)
+{
+	return false;
+}
+
+static inline bool netdev_has_dmabuf_binding(struct net_device *dev,
+					     struct device *dma_dev)
 {
 	return false;
 }
