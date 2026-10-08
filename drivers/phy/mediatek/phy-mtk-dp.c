@@ -639,7 +639,7 @@ end:
 			return 0;
 		}
 		return ret;
-	};
+	}
 
 	return 0;
 }
