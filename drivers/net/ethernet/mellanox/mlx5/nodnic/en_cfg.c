@@ -15,6 +15,8 @@
 #include "nodnic_ifc.h"
 #include "nodnic.h"
 #include "nodnic_pci_vsc.h"
+#include "rx.h"
+#include "tx.h"
 
 #define MLX5_NODNIC_CQ_INIT_CMD_SN cpu_to_be32(2 << 28)
 
@@ -347,6 +349,46 @@ static int mlx5_nodnic_read_cq_n(struct mlx5_nodnic_core_dev *dev)
 	return 0;
 }
 
+static irqreturn_t mlx5_nodnic_cq_irq_handler(int irq, void *data)
+{
+	struct mlx5_nodnic_cq *cq = data;
+
+	cq->arm_sn++;
+	napi_schedule_irqoff(&cq->napi);
+
+	return IRQ_HANDLED;
+}
+
+static int mlx5_nodnic_setup_data_irq(struct mlx5_nodnic_cq *cq)
+{
+	struct mlx5_nodnic_priv *priv = container_of(cq,
+						     struct mlx5_nodnic_priv,
+						     cq);
+	struct net_device *netdev = priv->netdev;
+	int irqn, err;
+
+	irqn = pci_irq_vector(priv->core_dev->pdev, MLX5_NODNIC_DATA_MSIX);
+	if (irqn < 0) {
+		netdev_err(netdev, "pci_irq_vector failed: %d\n", irqn);
+		return irqn;
+	}
+
+	err = request_irq(irqn, mlx5_nodnic_cq_irq_handler, 0,
+			  "mlx5_nodnic-cq", cq);
+	if (err) {
+		netdev_err(netdev, "request_irq failed\n");
+		return err;
+	}
+	cq->irqn = irqn;
+
+	return 0;
+}
+
+static void mlx5_nodnic_cleanup_data_irq(struct mlx5_nodnic_cq *cq)
+{
+	free_irq(cq->irqn, cq);
+}
+
 int mlx5_nodnic_init_working_buffer(struct mlx5_nodnic_core_dev *dev)
 {
 	struct mlx5_nodnic_ring *work_buf = &dev->priv->working_buffer;
@@ -376,6 +418,7 @@ int mlx5_nodnic_open_cq(struct mlx5_nodnic_core_dev *dev)
 	int err;
 
 	cq->cc = 0;
+	cq->arm_sn = 0;
 
 	err = mlx5_nodnic_init_cq_ring(dev);
 	if (err)
@@ -389,8 +432,19 @@ int mlx5_nodnic_open_cq(struct mlx5_nodnic_core_dev *dev)
 	if (err)
 		goto err_cleanup_dbr;
 
+	netif_napi_add_config_locked(dev->priv->netdev, &cq->napi,
+				     mlx5_nodnic_napi_poll, 0);
+
+	err = mlx5_nodnic_setup_data_irq(cq);
+	if (err)
+		goto err_napi_del;
+
+	netif_napi_set_irq_locked(&cq->napi, cq->irqn);
+
 	return 0;
 
+err_napi_del:
+	netif_napi_del_locked(&cq->napi);
 err_cleanup_dbr:
 	mlx5_nodnic_cleanup_cq_dbr(dev);
 err_cleanup_ring:
@@ -403,6 +457,8 @@ static void mlx5_nodnic_close_cq(struct mlx5_nodnic_cq *cq)
 	struct mlx5_nodnic_core_dev *dev =
 		container_of(cq, struct mlx5_nodnic_priv, cq)->core_dev;
 
+	mlx5_nodnic_cleanup_data_irq(cq);
+	netif_napi_del_locked(&cq->napi);
 	mlx5_nodnic_cleanup_cq_dbr(dev);
 	mlx5_nodnic_cleanup_cq_ring(dev);
 }
@@ -427,14 +483,28 @@ int mlx5_nodnic_open_sq(struct mlx5_nodnic_core_dev *dev)
 
 	ring->lkey = dev->lkey;
 
+	sq->wqe_info = kvcalloc(ring->num_entries,
+				sizeof(struct mlx5_nodnic_tx_wqe_info),
+				GFP_KERNEL);
+	if (!sq->wqe_info) {
+		err = -ENOMEM;
+		goto err_free_ring;
+	}
+
 	return 0;
+
+err_free_ring:
+	mlx5_nodnic_free_ring(dev, ring);
+	return err;
 }
 
 static void mlx5_nodnic_close_sq(struct mlx5_nodnic_core_dev *dev)
 {
 	struct mlx5_nodnic_sq *sq = &dev->priv->sq;
 
+	mlx5_nodnic_sq_free_pending(sq);
 	mlx5_nodnic_free_ring(dev, &sq->ring);
+	kvfree(sq->wqe_info);
 }
 
 int mlx5_nodnic_open_rq(struct mlx5_nodnic_core_dev *dev)
@@ -573,6 +643,143 @@ void mlx5_nodnic_refresh_carrier(struct mlx5_nodnic_priv *priv)
 	mutex_unlock(&priv->state_lock);
 }
 
+static int mlx5_nodnic_activate_rq(struct mlx5_nodnic_core_dev *dev)
+{
+	struct mlx5_nodnic_priv *priv = dev->priv;
+	struct net_device *netdev = priv->netdev;
+	struct mlx5_nodnic_rq *rq = &priv->rq;
+	struct page_pool_params pp_params = {
+		.flags    = PP_FLAG_DMA_MAP | PP_FLAG_DMA_SYNC_DEV,
+		.order    = 0,
+		.pool_size = rq->ring.num_entries,
+		.nid      = dev_to_node(dev->device),
+		.dev      = dev->device,
+		.napi     = &priv->cq.napi,
+		.netdev   = netdev,
+		.dma_dir  = DMA_FROM_DEVICE,
+		.offset   = MLX5_NODNIC_SKB_HEADROOM_BYTES,
+		.max_len  = MLX5_NODNIC_HW_MTU,
+	};
+	int err;
+
+	rq->page_pool = page_pool_create(&pp_params);
+	if (IS_ERR(rq->page_pool)) {
+		err = PTR_ERR(rq->page_pool);
+		return err;
+	}
+
+	err = mlx5_nodnic_rq_alloc_pages(rq);
+	if (err) {
+		netdev_err(netdev, "failed to alloc RX pages, err=%d\n", err);
+		goto err_destroy_page_pool;
+	}
+
+	netif_queue_set_napi(netdev, 0, NETDEV_QUEUE_TYPE_RX, &priv->cq.napi);
+
+	return 0;
+
+err_destroy_page_pool:
+	page_pool_destroy(rq->page_pool);
+
+	return err;
+}
+
+static void mlx5_nodnic_deactivate_rq(struct mlx5_nodnic_core_dev *dev)
+{
+	struct net_device *netdev = dev->priv->netdev;
+	struct mlx5_nodnic_rq *rq = &dev->priv->rq;
+
+	netif_queue_set_napi(netdev, 0, NETDEV_QUEUE_TYPE_RX, NULL);
+
+	mlx5_nodnic_rq_free_pages(rq);
+	page_pool_destroy(rq->page_pool);
+}
+
+static void mlx5_nodnic_tx_disable_queue(struct netdev_queue *txq)
+{
+	__netif_tx_lock_bh(txq);
+	netif_tx_stop_queue(txq);
+	__netif_tx_unlock_bh(txq);
+}
+
+static void mlx5_nodnic_activate_sq(struct mlx5_nodnic_core_dev *dev)
+{
+	struct mlx5_nodnic_priv *priv = dev->priv;
+	struct mlx5_nodnic_sq *sq = &priv->sq;
+
+	sq->txq = netdev_get_tx_queue(priv->netdev, 0);
+	netdev_tx_reset_queue(sq->txq);
+	netif_tx_start_queue(sq->txq);
+	netif_queue_set_napi(sq->netdev, 0, NETDEV_QUEUE_TYPE_TX,
+			     &priv->cq.napi);
+}
+
+static void mlx5_nodnic_deactivate_sq(struct mlx5_nodnic_sq *sq)
+{
+	netif_queue_set_napi(sq->netdev, 0, NETDEV_QUEUE_TYPE_TX, NULL);
+	mlx5_nodnic_tx_disable_queue(sq->txq);
+}
+
+static void mlx5_nodnic_init_cqes_ownership(struct mlx5_nodnic_cq *cq)
+{
+	struct mlx5_cqe64 *cqe;
+
+	for (int i = 0; i < cq->num_entries; i++) {
+		cqe = (struct mlx5_cqe64 *)
+		      ((u8 *)cq->ring.wq + i * MLX5_NODNIC_CQE_SIZE_B);
+		cqe->op_own = 0xf1;
+	}
+}
+
+static int mlx5_nodnic_activate_queues(struct mlx5_nodnic_core_dev *dev)
+{
+	struct mlx5_nodnic_cq *cq = &dev->priv->cq;
+	int err;
+
+	napi_enable_locked(&cq->napi);
+
+	mlx5_nodnic_init_cqes_ownership(cq);
+
+	err = mlx5_nodnic_activate_rq(dev);
+	if (err)
+		goto err_napi;
+
+	err = mlx5_nodnic_vsc_context_acquire(dev->vsc_ctx);
+	if (err)
+		goto err_rq;
+
+	err = mlx5_nodnic_enable_port(dev);
+	mlx5_nodnic_vsc_context_release(dev->vsc_ctx);
+	if (err)
+		goto err_rq;
+
+	mlx5_nodnic_arm_cq(cq);
+	napi_schedule(&cq->napi);
+
+	mlx5_nodnic_activate_sq(dev);
+
+	return 0;
+
+err_rq:
+	mlx5_nodnic_deactivate_rq(dev);
+err_napi:
+	napi_disable_locked(&cq->napi);
+
+	return err;
+}
+
+static void mlx5_nodnic_deactivate_queues(struct mlx5_nodnic_core_dev *dev)
+{
+	if (!mlx5_nodnic_vsc_context_acquire(dev->vsc_ctx)) {
+		mlx5_nodnic_disable_port(dev);
+		mlx5_nodnic_vsc_context_release(dev->vsc_ctx);
+	}
+
+	mlx5_nodnic_deactivate_sq(&dev->priv->sq);
+	napi_disable_locked(&dev->priv->cq.napi);
+	mlx5_nodnic_deactivate_rq(dev);
+}
+
 int mlx5_nodnic_enable_port(struct mlx5_nodnic_core_dev *dev)
 {
 	struct mlx5_nodnic_vsc_ctx *vsc_ctx = dev->vsc_ctx;
@@ -692,6 +899,10 @@ static int mlx5_nodnic_open_locked(struct net_device *netdev)
 
 	set_bit(MLX5_NODNIC_STATE_OPENED, &priv->state);
 
+	err = mlx5_nodnic_activate_queues(dev);
+	if (err)
+		goto err_close;
+
 	err = mlx5_nodnic_refresh_carrier_locked(dev->priv);
 	if (err)
 		netdev_err(dev->priv->netdev,
@@ -699,6 +910,9 @@ static int mlx5_nodnic_open_locked(struct net_device *netdev)
 
 	return 0;
 
+err_close:
+	clear_bit(MLX5_NODNIC_STATE_OPENED, &priv->state);
+	mlx5_nodnic_close_queues(dev);
 err_uar:
 	mlx5_nodnic_cleanup_uar_map(dev);
 	return err;
@@ -721,6 +935,7 @@ static int mlx5_nodnic_close_locked(struct net_device *netdev)
 	struct mlx5_nodnic_priv *priv = netdev_priv(netdev);
 	struct mlx5_nodnic_core_dev *dev = priv->core_dev;
 
+	mlx5_nodnic_deactivate_queues(dev);
 	clear_bit(MLX5_NODNIC_STATE_OPENED, &priv->state);
 	netif_carrier_off(priv->netdev);
 	netdev_info(priv->netdev, "Link down\n");
@@ -751,6 +966,8 @@ int mlx5_nodnic_close(struct net_device *netdev)
 static const struct net_device_ops mlx5_nodnic_netdev_ops = {
 	.ndo_open		= mlx5_nodnic_open,
 	.ndo_stop		= mlx5_nodnic_close,
+	.ndo_start_xmit		= mlx5_nodnic_xmit,
+	.ndo_features_check	= mlx5_nodnic_check_features,
 };
 
 void mlx5_nodnic_build_netdev(struct net_device *netdev)
@@ -764,6 +981,9 @@ void mlx5_nodnic_build_netdev(struct net_device *netdev)
 
 	netdev->netdev_ops = &mlx5_nodnic_netdev_ops;
 	netdev->request_ops_lock = true;
+
+	netdev->hw_features = NETIF_F_HW_CSUM | NETIF_F_RXCSUM;
+	netdev->features = netdev->hw_features;
 
 	eth_hw_addr_set(netdev, core_dev->mac_address);
 }

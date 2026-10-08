@@ -4,6 +4,7 @@ config MLX5_NODNIC
 	tristate "Mellanox NODNIC core driver"
 	depends on PCI
 	depends on NETDEVICES && ETHERNET
+	select PAGE_POOL
 	help
 	  This driver provides core support for Mellanox NODNIC (NO DRAM NIC)
 	  devices. NODNIC is a lightweight network

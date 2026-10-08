@@ -4,10 +4,12 @@
 #ifndef __MLX5_NODNIC_EN_H__
 #define __MLX5_NODNIC_EN_H__
 
+#include <net/page_pool/helpers.h>
 #include <linux/if_vlan.h>
 #include <linux/mlx5/device.h>
 #include <linux/mutex.h>
 #include <linux/netdevice.h>
+#include <linux/skbuff.h>
 #include <linux/timer.h>
 #include <linux/types.h>
 
@@ -16,14 +18,30 @@
 #define MLX5_NODNIC_SQ_WQEBB_B		64
 #define MLX5_NODNIC_RQ_STRIDE_BYTES	16
 
+#define MLX5_NODNIC_ETH_HARD_MTU    (ETH_HLEN + VLAN_HLEN + ETH_FCS_LEN)
+#define MLX5_NODNIC_HW_MTU          (ETH_DATA_LEN + MLX5_NODNIC_ETH_HARD_MTU)
+#define MLX5_NODNIC_SKB_HEADROOM_BYTES  NET_SKB_PAD
+
 enum {
 	MLX5_NODNIC_STATE_OPENED,
+};
+
+enum {
+	MLX5_NODNIC_CQE_OWNER_MASK = 1,
 };
 
 enum {
 	MLX5_NODNIC_RCV_DBR,
 	MLX5_NODNIC_SND_DBR,
 	MLX5_NODNIC_DBR_WORDS,
+};
+
+enum mlx5_nodnic_cqe_opcode {
+	OPCODE_CQ_SEND,
+	OPCODE_CQ_RECV     = 0x2,
+	OPCODE_CQ_SEND_ERR = 0xD,
+	OPCODE_CQ_RECV_ERR,
+	OPCODE_CQ_INVALID,
 };
 
 struct mlx5_nodnic_ring {
@@ -35,17 +53,24 @@ struct mlx5_nodnic_ring {
 	u32 lkey;
 };
 
+struct mlx5_nodnic_tx_wqe_info;
+
 struct mlx5_nodnic_sq {
 	struct device		*device;
 	struct net_device	*netdev;
+	struct netdev_queue	*txq;
 	struct mlx5_nodnic_ring ring;
+
+	struct mlx5_nodnic_tx_wqe_info  *wqe_info;
 
 	u16 pc;
 	u16 cc;
 };
 
 struct mlx5_nodnic_rq {
+	struct page_pool	*page_pool;
 	struct mlx5_nodnic_ring ring;
+	struct page		**pages;
 	u16 pc;
 	u16 cc;
 };
@@ -62,9 +87,13 @@ struct mlx5_nodnic_cq {
 	int			num_entries;
 	int			log_num_entries;
 
+	int			irqn;
 	struct mlx5_nodnic_dbr	dbr;
+	unsigned int		arm_sn;
 
 	int cc;
+
+	struct napi_struct	napi;
 };
 
 /* for FW use only */
@@ -93,5 +122,11 @@ void mlx5_nodnic_refresh_carrier(struct mlx5_nodnic_priv *priv);
 void mlx5_nodnic_cleanup_netdev(struct mlx5_nodnic_core_dev *dev);
 int mlx5_nodnic_open(struct net_device *netdev);
 int mlx5_nodnic_close(struct net_device *netdev);
+
+void mlx5_nodnic_arm_cq(struct mlx5_nodnic_cq *cq);
+int mlx5_nodnic_napi_poll(struct napi_struct *napi, int budget);
+netdev_features_t mlx5_nodnic_check_features(struct sk_buff *skb,
+					     struct net_device *netdev,
+					     netdev_features_t features);
 
 #endif /* __MLX5_NODNIC_EN_H__ */
