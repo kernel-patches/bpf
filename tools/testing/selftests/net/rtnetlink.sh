@@ -412,6 +412,13 @@ kci_test_addrlabel()
 kci_test_ifalias()
 {
 	local ret=0
+
+	run_cmd uuidgen
+	if [ $ret -ne 0 ]; then
+		end_test "SKIP: uuidgen not installed"
+		return $ksft_skip
+	fi
+
 	namewant=$(uuidgen)
 	syspathname="/sys/class/net/$devdummy/ifalias"
 	run_cmd ip link set dev "$devdummy" alias "$namewant"
