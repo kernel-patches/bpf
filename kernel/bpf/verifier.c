@@ -1497,51 +1497,51 @@ static int grow_stack_arg_slots(struct bpf_verifier_env *env,
 	return 0;
 }
 
-/* Acquire a pointer id from the env and update the state->refs to include
- * this new pointer reference.
- * On success, returns a valid pointer id to associate with the register
- * On failure, returns a negative errno.
+/*
+ * Append @ref to @state->refs. Return its id, or a negative errno.
  */
-static struct bpf_reference_state *acquire_reference_state(struct bpf_verifier_env *env, int insn_idx)
+static int acquire_reference_state(struct bpf_verifier_state *state,
+				   struct bpf_reference_state ref)
 {
-	struct bpf_verifier_state *state = env->cur_state;
 	int new_ofs = state->acquired_refs;
 	int err;
 
 	err = resize_reference_state(state, state->acquired_refs + 1);
 	if (err)
-		return NULL;
-	state->refs[new_ofs].insn_idx = insn_idx;
-
-	return &state->refs[new_ofs];
+		return err;
+	state->refs[new_ofs] = ref;
+	return ref.id;
 }
 
 static int acquire_reference(struct bpf_verifier_env *env, int insn_idx, int parent_id)
 {
-	struct bpf_reference_state *s;
+	int id;
 
-	s = acquire_reference_state(env, insn_idx);
-	if (!s)
-		return -ENOMEM;
-	s->type = REF_TYPE_PTR;
-	s->id = ++env->id_gen;
-	s->parent_id = parent_id;
-	bpf_diag_record_ref_acquire(env, insn_idx, s->id);
-	return s->id;
+	id = acquire_reference_state(env->cur_state, (struct bpf_reference_state) {
+		.type = REF_TYPE_PTR,
+		.id = ++env->id_gen,
+		.insn_idx = insn_idx,
+		.parent_id = parent_id,
+	});
+	if (id >= 0)
+		bpf_diag_record_ref_acquire(env, insn_idx, id);
+	return id;
 }
 
 static int acquire_lock_state(struct bpf_verifier_env *env, int insn_idx, enum ref_state_type type,
 			      int id, void *ptr)
 {
 	struct bpf_verifier_state *state = env->cur_state;
-	struct bpf_reference_state *s;
+	int err;
 
-	s = acquire_reference_state(env, insn_idx);
-	if (!s)
-		return -ENOMEM;
-	s->type = type;
-	s->id = id;
-	s->ptr = ptr;
+	err = acquire_reference_state(state, (struct bpf_reference_state) {
+		.type = type,
+		.id = id,
+		.insn_idx = insn_idx,
+		.ptr = ptr,
+	});
+	if (err < 0)
+		return err;
 
 	state->active_locks++;
 	state->active_lock_id = id;
@@ -1554,18 +1554,20 @@ static int acquire_lock_state(struct bpf_verifier_env *env, int insn_idx, enum r
 static int acquire_irq_state(struct bpf_verifier_env *env, int insn_idx)
 {
 	struct bpf_verifier_state *state = env->cur_state;
-	struct bpf_reference_state *s;
+	int id;
 
-	s = acquire_reference_state(env, insn_idx);
-	if (!s)
-		return -ENOMEM;
-	s->type = REF_TYPE_IRQ;
-	s->id = ++env->id_gen;
+	id = acquire_reference_state(state, (struct bpf_reference_state) {
+		.type = REF_TYPE_IRQ,
+		.id = ++env->id_gen,
+		.insn_idx = insn_idx,
+	});
+	if (id < 0)
+		return id;
 
-	state->active_irq_id = s->id;
+	state->active_irq_id = id;
 	bpf_diag_record_context(env, insn_idx, BPF_DIAG_CONTEXT_IRQ, true,
 				bpf_diag_irq_depth(state));
-	return s->id;
+	return id;
 }
 
 static void release_reference_state(struct bpf_verifier_state *state, int idx)
