@@ -604,6 +604,7 @@ static int handle_gso_encap(struct sk_buff *skb, bool ipv4, int encap_len)
 
 int bpf_lwt_push_ip_encap(struct sk_buff *skb, void *hdr, u32 len, bool ingress)
 {
+	u8 hdr_buf[LWT_BPF_MAX_HEADROOM];
 	bool is_udp_tunnel;
 	struct iphdr *iph;
 	bool ipv4;
@@ -611,6 +612,11 @@ int bpf_lwt_push_ip_encap(struct sk_buff *skb, void *hdr, u32 len, bool ingress)
 
 	if (unlikely(len < sizeof(struct iphdr) || len > LWT_BPF_MAX_HEADROOM))
 		return -EINVAL;
+
+	if ((u8 *)hdr >= skb->head && (u8 *)hdr < skb_end_pointer(skb)) {
+		memcpy(hdr_buf, hdr, len);
+		hdr = hdr_buf;
+	}
 
 	/* validate protocol and length */
 	iph = (struct iphdr *)hdr;
