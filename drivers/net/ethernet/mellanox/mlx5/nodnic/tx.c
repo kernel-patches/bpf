@@ -143,6 +143,7 @@ netdev_tx_t mlx5_nodnic_xmit(struct sk_buff *skb, struct net_device *netdev)
 
 	err = mlx5_nodnic_tx_write_wqe(sq, skb, wqe);
 	if (err) {
+		priv->sq_stats.dropped++;
 		dev_kfree_skb_any(skb);
 
 		return NETDEV_TX_OK;
@@ -176,6 +177,9 @@ void mlx5_nodnic_handle_send_cqe(struct mlx5_nodnic_cq *cq,
 	wi = &sq->wqe_info[pi];
 
 	mlx5_nodnic_complete_send_wqe(sq, wi, napi_budget);
+
+	priv->sq_stats.packets++;
+	priv->sq_stats.bytes += wi->num_bytes;
 }
 
 void mlx5_nodnic_complete_send_wqe(struct mlx5_nodnic_sq *sq,

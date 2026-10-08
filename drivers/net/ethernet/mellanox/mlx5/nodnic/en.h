@@ -44,6 +44,17 @@ enum mlx5_nodnic_cqe_opcode {
 	OPCODE_CQ_INVALID,
 };
 
+struct mlx5_nodnic_sq_stats {
+	u64 packets;
+	u64 bytes;
+	u64 dropped;
+};
+
+struct mlx5_nodnic_rq_stats {
+	u64 packets;
+	u64 bytes;
+};
+
 struct mlx5_nodnic_ring {
 	void *wq;
 	dma_addr_t dma_handle;
@@ -108,6 +119,9 @@ struct mlx5_nodnic_priv {
 
 	struct mutex state_lock; /* protects Interface state */
 	unsigned long state;
+
+	struct mlx5_nodnic_sq_stats sq_stats;
+	struct mlx5_nodnic_rq_stats rq_stats;
 
 	struct mlx5_nodnic_sq	sq;
 	struct mlx5_nodnic_rq	rq;

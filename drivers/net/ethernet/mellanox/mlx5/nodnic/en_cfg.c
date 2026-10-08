@@ -963,10 +963,35 @@ int mlx5_nodnic_close(struct net_device *netdev)
 	return err;
 }
 
+static void mlx5_nodnic_update_sq_stats(const struct mlx5_nodnic_sq_stats *sq,
+					struct rtnl_link_stats64 *s)
+{
+	s->tx_packets = sq->packets;
+	s->tx_bytes = sq->bytes;
+	s->tx_dropped = sq->dropped;
+}
+
+static void mlx5_nodnic_update_rq_stats(const struct mlx5_nodnic_rq_stats *rq,
+					struct rtnl_link_stats64 *s)
+{
+	s->rx_packets = rq->packets;
+	s->rx_bytes = rq->bytes;
+}
+
+static void mlx5_nodnic_get_stats64(struct net_device *netdev,
+				    struct rtnl_link_stats64 *stats)
+{
+	struct mlx5_nodnic_priv *priv = netdev_priv(netdev);
+
+	mlx5_nodnic_update_sq_stats(&priv->sq_stats, stats);
+	mlx5_nodnic_update_rq_stats(&priv->rq_stats, stats);
+}
+
 static const struct net_device_ops mlx5_nodnic_netdev_ops = {
 	.ndo_open		= mlx5_nodnic_open,
 	.ndo_stop		= mlx5_nodnic_close,
 	.ndo_start_xmit		= mlx5_nodnic_xmit,
+	.ndo_get_stats64	= mlx5_nodnic_get_stats64,
 	.ndo_features_check	= mlx5_nodnic_check_features,
 };
 
