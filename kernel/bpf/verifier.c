@@ -713,11 +713,12 @@ static void mark_dynptr_stack_regs(struct bpf_verifier_env *env,
 	__mark_dynptr_reg(sreg2, type, false, id, parent_id);
 }
 
-static void mark_dynptr_cb_reg(struct bpf_verifier_env *env,
-			       struct bpf_reg_state *reg,
-			       enum bpf_dynptr_type type)
+static int mark_dynptr_cb_reg(struct bpf_verifier_env *env, struct bpf_verifier_state *state,
+			      struct bpf_func_state *callee, u32 regno,
+			      enum bpf_dynptr_type type)
 {
-	__mark_dynptr_reg(reg, type, true, ++env->id_gen, 0);
+	__mark_dynptr_reg(&callee->regs[regno], type, true, 0, 0);
+	return mark_frame_scoped_arg(env, state, callee, regno);
 }
 
 static int destroy_if_dynptr_stack_slot(struct bpf_verifier_env *env,
@@ -11451,11 +11452,15 @@ static int set_user_ringbuf_callback_state(struct bpf_verifier_env *env,
 					   struct bpf_func_state *callee,
 					   int insn_idx)
 {
+	int err;
+
 	/* bpf_user_ringbuf_drain(struct bpf_map *map, void *callback_fn, void
 	 *			  callback_ctx, u64 flags);
 	 * callback_fn(const struct bpf_dynptr_t* dynptr, void *callback_ctx);
 	 */
-	mark_dynptr_cb_reg(env, &callee->regs[BPF_REG_1], BPF_DYNPTR_TYPE_LOCAL);
+	err = mark_dynptr_cb_reg(env, state, callee, BPF_REG_1, BPF_DYNPTR_TYPE_LOCAL);
+	if (err)
+		return err;
 	callee->regs[BPF_REG_2] = caller->regs[BPF_REG_3];
 
 	callee->in_callback_fn = true;
