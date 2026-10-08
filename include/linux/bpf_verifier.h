@@ -272,15 +272,13 @@ struct bpf_stack_state {
 };
 
 struct bpf_reference_state {
-	/* Each reference object has a type. Ensure REF_TYPE_PTR is zero to
-	 * default to pointer reference on zero initialization of a state.
-	 */
 	enum ref_state_type {
 		REF_TYPE_PTR		= (1 << 1),
 		REF_TYPE_IRQ		= (1 << 2),
 		REF_TYPE_LOCK		= (1 << 3),
 		REF_TYPE_RES_LOCK 	= (1 << 4),
 		REF_TYPE_RES_LOCK_IRQ	= (1 << 5),
+		REF_TYPE_FRAME		= (1 << 6),
 		REF_TYPE_LOCK_MASK	= REF_TYPE_LOCK | REF_TYPE_RES_LOCK | REF_TYPE_RES_LOCK_IRQ,
 	} type;
 	/* Track each reference created with a unique id, even if the same
@@ -298,6 +296,8 @@ struct bpf_reference_state {
 		 * it matches on unlock.
 		 */
 		void *ptr;
+		/* For REF_TYPE_FRAME */
+		u32 frameno;
 	};
 };
 

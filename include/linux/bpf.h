@@ -3188,6 +3188,8 @@ int map_set_for_each_callback_args(struct bpf_verifier_env *env,
 				   struct bpf_verifier_state *state,
 				   struct bpf_func_state *caller,
 				   struct bpf_func_state *callee);
+int mark_frame_scoped_arg(struct bpf_verifier_env *env, struct bpf_verifier_state *state,
+			  struct bpf_func_state *callee, u32 regno);
 
 int bpf_percpu_hash_copy(struct bpf_map *map, void *key, void *value, u64 flags);
 int bpf_percpu_array_copy(struct bpf_map *map, void *key, void *value, u64 flags);
