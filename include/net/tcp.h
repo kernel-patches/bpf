@@ -3064,22 +3064,33 @@ struct bpf_tcp_ops {
 			      u32 opt_off);
 };
 
+#define __bpf_tcp_ops_call(op, sk, ...)					\
+do {									\
+	const struct bpf_prog_array_item *item;				\
+	const struct bpf_tcp_ops *tcp_ops;				\
+	struct cgroup *cgrp;						\
+									\
+	cgrp = sock_cgroup_ptr(&sk->sk_cgrp_data);			\
+	rcu_read_lock_dont_migrate();					\
+	bpf_cgroup_struct_ops_foreach(tcp_ops, item, cgrp,		\
+				      CGROUP_TCP_SOCK_OPS) {		\
+		if (tcp_ops->op)					\
+			tcp_ops->op(sk, ##__VA_ARGS__);			\
+	}								\
+	rcu_read_unlock_migrate();					\
+} while (0)
+
 #define bpf_tcp_ops_call(op, sk, ...)					\
 do {									\
-	if (cgroup_bpf_enabled(CGROUP_TCP_SOCK_OPS)) {			\
-		const struct bpf_prog_array_item *item;			\
-		const struct bpf_tcp_ops *tcp_ops;			\
-		struct cgroup *cgrp;					\
-									\
-		cgrp = sock_cgroup_ptr(&sk->sk_cgrp_data);		\
-		rcu_read_lock_dont_migrate();				\
-		bpf_cgroup_struct_ops_foreach(tcp_ops, item, cgrp,	\
-					      CGROUP_TCP_SOCK_OPS) {	\
-			if (tcp_ops->op)				\
-				tcp_ops->op(sk, ##__VA_ARGS__);		\
-		}							\
-		rcu_read_unlock_migrate();				\
-	}								\
+	if (cgroup_bpf_enabled(CGROUP_TCP_SOCK_OPS))			\
+		__bpf_tcp_ops_call(op, sk, ##__VA_ARGS__);		\
+} while (0)
+
+#define bpf_tcp_ops_call_flag(op, flag, sk, ...)			\
+do {									\
+	if (cgroup_bpf_enabled(CGROUP_TCP_SOCK_OPS) &&			\
+	    BPF_TCP_OPS_TEST_FLAG(tcp_sk(sk), flag))			\
+		__bpf_tcp_ops_call(op, sk, ##__VA_ARGS__);		\
 } while (0)
 
 #define bpf_tcp_ops_call_int(op, init_retval, sk, ...)			\
@@ -3115,7 +3126,9 @@ do {									\
 })
 
 #else
-#define bpf_tcp_ops_call(op, sk, ...)		do { } while (0)
+#define __bpf_tcp_ops_call(op, sk, ...)			do { } while (0)
+#define bpf_tcp_ops_call(op, sk, ...)			do { } while (0)
+#define bpf_tcp_ops_call_flag(op, flag, sk, ...)	do { } while (0)
 #define bpf_tcp_ops_call_int(op, init_retval, sk, ...)	(init_retval)
 #endif
 
@@ -3150,7 +3163,8 @@ static inline void tcp_bpf_rtt(struct sock *sk, long mrtt, u32 srtt)
 {
 	if (BPF_SOCK_OPS_TEST_FLAG(tcp_sk(sk), BPF_SOCK_OPS_RTT_CB_FLAG))
 		tcp_call_bpf_2arg(sk, BPF_SOCK_OPS_RTT_CB, mrtt, srtt);
-	bpf_tcp_ops_call(rtt, sk, mrtt, srtt);
+
+	bpf_tcp_ops_call_flag(rtt, RTT, sk, mrtt, srtt);
 }
 
 #if IS_ENABLED(CONFIG_SMC)

@@ -581,8 +581,8 @@ static void bpf_skops_write_hdr_opt(struct sock *sk, struct sk_buff *skb,
 	 * writer's bytes). The writer finds the append point by scanning from
 	 * first_opt_off + nr_written to the first NOP.
 	 */
-	bpf_tcp_ops_call(write_hdr_opt, sk, skb, req, syn_skb, synack_type,
-			 first_opt_off + nr_written);
+	bpf_tcp_ops_call_flag(write_hdr_opt, WRITE_HDR_OPT, sk, skb, req,
+			      syn_skb, synack_type, first_opt_off + nr_written);
 }
 #else
 static u32 bpf_skops_hdr_opt_len(struct sock *sk, struct sk_buff *skb,
@@ -613,11 +613,12 @@ static u32 bpf_tcp_ops_hdr_opt_len(struct sock *sk, struct sk_buff *skb,
 {
 	unsigned int remaining_out = remaining, reserved;
 
-	if (!remaining)
-		return 0;
+	if (!BPF_TCP_OPS_TEST_FLAG(tcp_sk(sk), WRITE_HDR_OPT) ||
+	    !remaining)
+		return remaining;
 
 	/* bpf_tcp_ops_reserve_hdr_opt() reserves space via remaining_out */
-	bpf_tcp_ops_call(hdr_opt_len, sk, skb, req, syn_skb, synack_type, &remaining_out);
+	__bpf_tcp_ops_call(hdr_opt_len, sk, skb, req, syn_skb, synack_type, &remaining_out);
 
 	reserved = remaining - remaining_out;
 	if (!reserved)
@@ -628,6 +629,21 @@ static u32 bpf_tcp_ops_hdr_opt_len(struct sock *sk, struct sk_buff *skb,
 
 	opts->bpf_opt_len += reserved;
 	return remaining - reserved;
+}
+
+static __always_inline u32 tcp_bpf_hdr_opt_len(struct sock *sk, struct sk_buff *skb,
+					       struct request_sock *req,
+					       struct sk_buff *syn_skb,
+					       enum tcp_synack_type synack_type,
+					       struct tcp_out_options *opts,
+					       u32 remaining)
+{
+	if (cgroup_bpf_enabled(CGROUP_TCP_SOCK_OPS))
+		remaining = bpf_tcp_ops_hdr_opt_len(sk, skb, req, syn_skb,
+						    synack_type, opts,
+						    remaining);
+
+	return remaining;
 }
 
 static __be32 *process_tcp_ao_options(struct tcp_sock *tp,
@@ -1089,8 +1105,8 @@ static unsigned int tcp_syn_options(struct sock *sk, struct sk_buff *skb,
 
 	remaining = bpf_skops_hdr_opt_len(sk, skb, NULL, NULL, 0, opts,
 					  remaining);
-	remaining = bpf_tcp_ops_hdr_opt_len(sk, skb, NULL, NULL, 0, opts,
-					    remaining);
+	remaining = tcp_bpf_hdr_opt_len(sk, skb, NULL, NULL, 0, opts,
+					remaining);
 
 	return MAX_TCP_OPTION_SPACE - remaining;
 }
@@ -1179,8 +1195,8 @@ static unsigned int tcp_synack_options(const struct sock *sk,
 
 	remaining = bpf_skops_hdr_opt_len((struct sock *)sk, skb, req, syn_skb,
 					  synack_type, opts, remaining);
-	remaining = bpf_tcp_ops_hdr_opt_len((struct sock *)sk, skb, req, syn_skb,
-					    synack_type, opts, remaining);
+	remaining = tcp_bpf_hdr_opt_len((struct sock *)sk, skb, req, syn_skb,
+					synack_type, opts, remaining);
 
 	return MAX_TCP_OPTION_SPACE - remaining;
 }
@@ -1193,8 +1209,9 @@ static unsigned int tcp_established_options(struct sock *sk, struct sk_buff *skb
 					struct tcp_key *key)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
-	unsigned int size = 0;
 	unsigned int eff_sacks;
+	unsigned int remaining;
+	unsigned int size = 0;
 
 	opts->options = 0;
 	opts->bpf_opt_len = 0;
@@ -1224,10 +1241,10 @@ static unsigned int tcp_established_options(struct sock *sk, struct sk_buff *skb
 	 * left.
 	 */
 	if (sk_is_mptcp(sk)) {
-		unsigned int remaining = MAX_TCP_OPTION_SPACE - size;
 		bool has_ts = opts->options & OPTION_TS;
 		int opt_size;
 
+		remaining = MAX_TCP_OPTION_SPACE - size;
 		opts->mptcp.drop_ts = 0;
 
 		opt_size = mptcp_established_options(sk, skb, remaining, has_ts,
@@ -1244,7 +1261,8 @@ static unsigned int tcp_established_options(struct sock *sk, struct sk_buff *skb
 
 	eff_sacks = tp->rx_opt.num_sacks + tp->rx_opt.dsack;
 	if (unlikely(eff_sacks)) {
-		const unsigned int remaining = MAX_TCP_OPTION_SPACE - size;
+		remaining = MAX_TCP_OPTION_SPACE - size;
+
 		if (likely(remaining >= TCPOLEN_SACK_BASE_ALIGNED +
 					TCPOLEN_SACK_PERBLOCK)) {
 			opts->num_sack_blocks =
@@ -1277,22 +1295,17 @@ static unsigned int tcp_established_options(struct sock *sk, struct sk_buff *skb
 
 	if (unlikely(BPF_SOCK_OPS_TEST_FLAG(tp,
 					    BPF_SOCK_OPS_WRITE_HDR_OPT_CB_FLAG))) {
-		unsigned int remaining = MAX_TCP_OPTION_SPACE - size;
-
+		remaining = MAX_TCP_OPTION_SPACE - size;
 		remaining = bpf_skops_hdr_opt_len(sk, skb, NULL, NULL, 0, opts,
 						  remaining);
 
 		size = MAX_TCP_OPTION_SPACE - remaining;
 	}
 
-	if (cgroup_bpf_enabled(CGROUP_TCP_SOCK_OPS)) {
-		unsigned int remaining = MAX_TCP_OPTION_SPACE - size;
+	remaining = tcp_bpf_hdr_opt_len(sk, skb, NULL, NULL, 0, opts,
+					MAX_TCP_OPTION_SPACE - size);
 
-		remaining = bpf_tcp_ops_hdr_opt_len(sk, skb, NULL, NULL, 0, opts,
-						    remaining);
-
-		size = MAX_TCP_OPTION_SPACE - remaining;
-	}
+	size = MAX_TCP_OPTION_SPACE - remaining;
 
 	return size;
 }
