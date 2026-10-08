@@ -17008,6 +17008,15 @@ F:	drivers/infiniband/hw/mlx5/
 F:	include/linux/mlx5/
 F:	include/uapi/rdma/mlx5-abi.h
 
+MELLANOX MLX5 NODNIC DRIVER
+M:	Shahar Shitrit <shshitrit@nvidia.com>
+M:	Tariq Toukan <tariqt@nvidia.com>
+L:	netdev@vger.kernel.org
+S:	Maintained
+W:	https://www.nvidia.com/networking/
+Q:	https://patchwork.kernel.org/project/netdevbpf/list/
+F:	drivers/net/ethernet/mellanox/mlx5/nodnic/
+
 MELLANOX MLX5 VDPA DRIVER
 M:	Dragos Tatulea <dtatulea@nvidia.com>
 L:	virtualization@lists.linux.dev

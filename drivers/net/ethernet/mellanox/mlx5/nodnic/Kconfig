@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+config MLX5_NODNIC
+	tristate "Mellanox NODNIC core driver"
+	depends on PCI
+	depends on NETDEVICES && ETHERNET
+	help
+	  This driver provides core support for Mellanox NODNIC (NO DRAM NIC)
+	  devices. NODNIC is a lightweight network
+	  interface driver that uses Vendor Specific Capability (VSC) for
+	  PCI communication with Mellanox network adapters.
+
+	  This driver enables basic Ethernet networking functionality for
+	  supported Mellanox NODNIC hardware.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called mlx5_nodnic.
+
