@@ -33,6 +33,7 @@
 #include <linux/dim.h>
 #include <net/tc_act/tc_gact.h>
 #include <linux/mlx5/fs.h>
+#include <linux/mlx5/data_direct.h>
 #include <net/vxlan.h>
 #include <net/geneve.h>
 #include <linux/bpf.h>
@@ -6023,6 +6024,18 @@ void mlx5e_destroy_q_counters(struct mlx5e_priv *priv)
 	}
 }
 
+static int mlx5e_data_direct_event(struct notifier_block *nb,
+				   unsigned long action, void *data)
+{
+	struct mlx5e_priv *priv = container_of(nb, struct mlx5e_priv,
+					       data_direct_nb);
+
+	if (action == MLX5_DATA_DIRECT_UNBIND)
+		mlx5_core_dbg(priv->mdev, "data direct device unbound\n");
+
+	return NOTIFY_OK;
+}
+
 static int mlx5e_nic_init(struct mlx5_core_dev *mdev,
 			  struct net_device *netdev)
 {
@@ -6225,6 +6238,12 @@ static int mlx5e_nic_enable(struct mlx5e_priv *priv)
 
 	mlx5e_pcie_cong_event_init(priv);
 	mlx5e_hv_vhca_stats_create(priv);
+
+	if (mlx5_data_direct_supported(mdev)) {
+		priv->data_direct_nb.notifier_call = mlx5e_data_direct_event;
+		mlx5_data_direct_register(mdev, &priv->data_direct_nb);
+	}
+
 	if (netdev->reg_state != NETREG_REGISTERED)
 		return 0;
 	mlx5e_dcbnl_init_app(priv);
@@ -6250,6 +6269,8 @@ out_ipsec_cleanup:
 static void mlx5e_nic_disable(struct mlx5e_priv *priv)
 {
 	struct mlx5_core_dev *mdev = priv->mdev;
+
+	mlx5_data_direct_unregister(mdev, &priv->data_direct_nb);
 
 	if (priv->netdev->reg_state == NETREG_REGISTERED)
 		mlx5e_dcbnl_delete_app(priv);
