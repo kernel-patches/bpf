@@ -1040,6 +1040,24 @@ __bpf_kfunc u64 bpf_kfunc_call_test_i128_arg(u64 a, u64 b, __int128 v)
 	return a + b * 2 + (u64)v * 3 + (u64)((unsigned __int128)v >> 64) * 4;
 }
 
+__bpf_kfunc u64 bpf_kfunc_call_test_i128_arg_odd(u64 a, __int128 v, u64 b)
+{
+	return a + b + (u64)((unsigned __int128)v >> 64) + (u64)v;
+}
+
+__bpf_kfunc u64 bpf_kfunc_call_test_i128_arg_shift(u64 a, __int128 v, u64 b, u64 c,
+						   u64 d)
+{
+	return a + b + c + d + (u64)((unsigned __int128)v >> 64) + (u64)v;
+}
+
+__bpf_kfunc u64 bpf_kfunc_call_test_i128_arg_ovf(u64 a, __int128 v, u64 b, u64 c,
+						 u64 d, u64 e, u64 f)
+{
+	return a + b + c + d + e + f +
+	       (u64)((unsigned __int128)v >> 64) + (u64)v;
+}
+
 __bpf_kfunc u64 bpf_kfunc_call_test_i128_arg_pad(u64 a, u64 b, u64 c, u64 d, u64 e,
 						 u64 f, u64 g, __int128 v)
 {
@@ -1763,6 +1781,9 @@ BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_deep)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_ii)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_pair_arg)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_i128_arg)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_i128_arg_odd)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_i128_arg_shift)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_i128_arg_ovf)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_i128_arg_pad)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_pair_arg_nofit)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_pair_arg_tail)
