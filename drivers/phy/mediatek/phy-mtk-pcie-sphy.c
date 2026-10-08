@@ -480,7 +480,7 @@ end:
 			return 0;
 		}
 		return ret;
-	};
+	}
 	cal->supported = true;
 
 	return 0;
