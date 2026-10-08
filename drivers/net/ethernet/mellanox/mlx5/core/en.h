@@ -397,6 +397,7 @@ enum {
 	MLX5E_SQ_STATE_PENDING_XSK_TX,
 	MLX5E_SQ_STATE_PENDING_TLS_RX_RESYNC,
 	MLX5E_SQ_STATE_LOCK_NEEDED,
+	MLX5E_SQ_STATE_DATA_DIRECT, /* set when the sq maps net_iov frags through data direct */
 	MLX5E_NUM_SQ_STATES, /* Must be kept last */
 };
 
@@ -453,6 +454,7 @@ struct mlx5e_txqsq {
 	u8                         min_inline_mode;
 	struct device             *pdev;
 	__be32                     mkey_be;
+	__be32                     crossing_mkey_be;
 	unsigned long              state;
 	unsigned int               hw_mtu;
 	struct mlx5_clock         *clock;

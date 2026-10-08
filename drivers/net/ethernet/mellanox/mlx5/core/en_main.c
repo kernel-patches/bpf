@@ -1825,6 +1825,12 @@ static int mlx5e_alloc_txqsq(struct mlx5e_channel *c,
 		set_bit(MLX5E_SQ_STATE_IPSEC, &sq->state);
 	if (param->is_mpw)
 		set_bit(MLX5E_SQ_STATE_MPWQE, &sq->state);
+	if (MLX5E_GET_PFLAG(params, MLX5E_PFLAG_DATA_DIRECT)) {
+		u32 mkey = mdev->mlx5e_res.hw_objs.data_direct_crossing_mkey;
+
+		sq->crossing_mkey_be = cpu_to_be32(mkey);
+		set_bit(MLX5E_SQ_STATE_DATA_DIRECT, &sq->state);
+	}
 	sq->stop_room = param->stop_room;
 	sq->ptp_cyc2time = mlx5_sq_ts_translator(mdev);
 

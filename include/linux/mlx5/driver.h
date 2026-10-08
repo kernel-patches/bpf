@@ -678,6 +678,7 @@ struct mlx5e_resources {
 		u32                        pdn;
 		struct mlx5_td             td;
 		u32			   mkey;
+		u32			   data_direct_crossing_mkey;
 		struct mlx5_sq_bfreg      *bfregs;
 		unsigned int               num_bfregs;
 #define MLX5_MAX_NUM_TC 8
