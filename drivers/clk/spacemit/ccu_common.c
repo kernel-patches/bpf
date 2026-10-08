@@ -169,6 +169,10 @@ int spacemit_ccu_probe(struct platform_device *pdev, const char *compat)
 	if (ret)
 		return dev_err_probe(dev, ret, "failed to register resets\n");
 
+	ret = spacemit_ccu_aux_register(dev, base_regmap, data->pm_name);
+	if (ret)
+		return dev_err_probe(dev, ret, "failed to register pm domain\n");
+
 	return 0;
 }
 EXPORT_SYMBOL_NS_GPL(spacemit_ccu_probe, "CLK_SPACEMIT");
