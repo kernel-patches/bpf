@@ -23,8 +23,10 @@
 #include <asm-generic/errno.h>
 #include <errno.h>
 #include <sys/types.h>
+#include <linux/magic.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
+#include <sys/vfs.h>
 #include <unistd.h>
 
 #include <test_progs.h>
@@ -88,13 +90,22 @@ static int read_from_file(const char *path, char *buf, size_t size)
 /* mounts bpffs and mkdir for reading stats, returns 0 on success. */
 static int setup_bpffs(void)
 {
+	struct statfs st;
 	int err;
 
-	/* Mount bpffs */
-	err = mount("bpf", BPFFS_ROOT, "bpf", 0, NULL);
-	mounted_bpffs = !err;
-	if (ASSERT_FALSE(err && errno != EBUSY, "mount"))
+	/*
+	 * Mount bpffs unless it is already there. Mounting another one on top
+	 * would hide what other tests running in parallel pin in it.
+	 */
+	err = statfs(BPFFS_ROOT, &st);
+	if (!ASSERT_OK(err, "statfs " BPFFS_ROOT))
 		return err;
+	if (st.f_type != BPF_FS_MAGIC) {
+		err = mount("bpf", BPFFS_ROOT, "bpf", 0, NULL);
+		if (!ASSERT_OK(err, "mount"))
+			return err;
+		mounted_bpffs = true;
+	}
 
 	/* Create a directory to contain stat files in bpffs */
 	err = mkdir(BPFFS_ATTACH_COUNTERS, 0755);
