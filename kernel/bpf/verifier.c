@@ -18057,9 +18057,22 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 		src_reg = &regs[insn->src_reg];
 		if (!(reg_is_pkt_pointer_any(dst_reg) && reg_is_pkt_pointer_any(src_reg)) &&
 		    is_pointer_value(env, insn->src_reg)) {
-			verbose(env, "R%d pointer comparison prohibited\n",
-				insn->src_reg);
-			return -EACCES;
+			/*
+			 * Symmetric NULL check: "if (r_zero == r_nullable)".
+			 * Comparing a nullable pointer against a register proven
+			 * to be zero is not a pointer leak -- it is the reversed
+			 * form of the already-permitted "if (r_nullable == 0)".
+			 * Permit it; reject every other src_reg pointer comparison.
+			 */
+			if (BPF_CLASS(insn->code) == BPF_JMP32 ||
+			    (BPF_OP(insn->code) != BPF_JEQ &&
+			     BPF_OP(insn->code) != BPF_JNE) ||
+			    !type_may_be_null(src_reg->type) ||
+			    !bpf_register_is_null(dst_reg)) {
+				verbose(env, "R%d pointer comparison prohibited\n",
+					insn->src_reg);
+				return -EACCES;
+			}
 		}
 
 		if (src_reg->type == PTR_TO_STACK)
@@ -18247,6 +18260,27 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 		mark_ptr_or_null_regs(this_branch, insn->dst_reg,
 				      opcode == BPF_JNE);
 		mark_ptr_or_null_regs(other_branch, insn->dst_reg,
+				      opcode == BPF_JEQ);
+	} else if (!is_jmp32 && BPF_SRC(insn->code) == BPF_X &&
+		   (opcode == BPF_JEQ || opcode == BPF_JNE) &&
+		   type_may_be_null(src_reg->type) &&
+		   bpf_register_is_null(dst_reg)) {
+		/*
+		 * Symmetric case: src_reg is the nullable pointer, dst_reg is
+		 * a register whose value is known to be zero.  This arises when
+		 * the programmer writes the comparison in reversed operand order,
+		 * e.g. "if (0 == map_val)" or "if (r0 == map_val)" where r0 has
+		 * been proven zero by the verifier.
+		 *
+		 * The zero is a property of this execution path, so dst_reg
+		 * must be marked precise before we propagate nullness.
+		 */
+		err = mark_chain_precision(env, insn->dst_reg);
+		if (err)
+			return err;
+		mark_ptr_or_null_regs(this_branch, insn->src_reg,
+				      opcode == BPF_JNE);
+		mark_ptr_or_null_regs(other_branch, insn->src_reg,
 				      opcode == BPF_JEQ);
 	} else if (!try_match_pkt_pointers(insn, dst_reg, &regs[insn->src_reg],
 					   this_branch, other_branch) &&
