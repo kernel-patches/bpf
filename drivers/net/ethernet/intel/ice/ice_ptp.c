@@ -748,6 +748,68 @@ ice_ptp_alloc_tx_tracker(struct ice_ptp_tx *tx)
 }
 
 /**
+ * ice_ptp_is_tracker_drained - Check for outstanding timestamps
+ * @pf: Board private structure
+ * @tx: Timestamp tracker structure
+ *
+ * Return: False if there are any timestamps still waiting for hardware;
+ *         otherwise true, including when unable to read the ready bitmap.
+ */
+static bool
+ice_ptp_is_tracker_drained(struct ice_pf *pf, struct ice_ptp_tx *tx)
+{
+	struct ice_hw *hw = &pf->hw;
+	bool pending = false;
+	unsigned long flags;
+	u64 tstamp_ready;
+	u8 idx;
+
+	/* If HW reset is ongoing, we can't access SBQ */
+	if (hw->reset_ongoing)
+		return true;
+
+	if (ice_get_phy_tx_tstamp_ready(hw, tx->block, &tstamp_ready))
+		return true;
+
+	spin_lock_irqsave(&tx->lock, flags);
+	for_each_set_bit(idx, tx->in_use, tx->len) {
+		if (!(tstamp_ready & BIT_ULL(idx + tx->offset))) {
+			pending = true;
+			break;
+		}
+	}
+	spin_unlock_irqrestore(&tx->lock, flags);
+
+	return !pending;
+}
+
+/**
+ * ice_ptp_wait_for_tracker_drain - Wait for PHY to complete timestamps
+ * @pf: Board private structure
+ * @tx: Timestamp tracker structure
+ *
+ * Wait for up to 10 milliseconds for the PHY to complete any outstanding
+ * timestamps before flushing.
+ */
+static void
+ice_ptp_wait_for_tracker_drain(struct ice_pf *pf, struct ice_ptp_tx *tx)
+{
+	bool drained;
+	int err;
+
+	if (!tx->has_ready_bitmap)
+		return;
+
+	err = read_poll_timeout(ice_ptp_is_tracker_drained,
+				drained, drained, 500, 10 * USEC_PER_MSEC, false,
+				pf, tx);
+	if (err) {
+		dev_dbg(ice_pf_to_dev(pf), "Timed out waiting for in-flight Tx timestamps on block %u\n",
+			tx->block);
+	}
+}
+
+/**
  * ice_ptp_flush_tx_tracker - Flush any remaining timestamps from the tracker
  * @pf: Board private structure
  * @tx: the tracker to flush
@@ -762,6 +824,8 @@ ice_ptp_flush_tx_tracker(struct ice_pf *pf, struct ice_ptp_tx *tx)
 	u64 tstamp_ready;
 	int err;
 	u8 idx;
+
+	ice_ptp_wait_for_tracker_drain(pf, tx);
 
 	err = ice_get_phy_tx_tstamp_ready(hw, tx->block, &tstamp_ready);
 	if (err) {
