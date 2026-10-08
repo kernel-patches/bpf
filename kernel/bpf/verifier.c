@@ -10797,7 +10797,7 @@ static int release_frame_references(struct bpf_verifier_env *env, u32 frameno)
 		}
 		id = state->refs[i].id;
 		release_reference_state(state, i);
-		err = invalidate_reference(env, id, BPF_DIAG_MOD_REF_RELEASE);
+		err = invalidate_reference(env, id, BPF_DIAG_MOD_FRAME_RELEASE);
 		if (err)
 			return err;
 	}
