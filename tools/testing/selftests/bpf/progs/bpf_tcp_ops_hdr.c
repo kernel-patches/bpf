@@ -19,6 +19,24 @@ __u8 found_d0;
 __u8 found_d1;
 
 SEC("struct_ops")
+void BPF_PROG(test_listen, struct sock *sk)
+{
+	bpf_tcp_ops_set_flags((struct tcp_sock *)sk,
+			      BPF_TCP_OPS_FLAG_PARSE_HDR_OPT_ALL |
+			      BPF_TCP_OPS_FLAG_WRITE_HDR_OPT,
+			      0);
+}
+
+SEC("struct_ops")
+void BPF_PROG(test_connect, struct sock *sk)
+{
+	bpf_tcp_ops_set_flags((struct tcp_sock *)sk,
+			      BPF_TCP_OPS_FLAG_PARSE_HDR_OPT_UNKNOWN |
+			      BPF_TCP_OPS_FLAG_WRITE_HDR_OPT,
+			      0);
+}
+
+SEC("struct_ops")
 void BPF_PROG(test_hdr_opt_len, struct sock *sk, struct sk_buff *skb,
 	      struct request_sock *req, struct sk_buff *syn_skb,
 	      enum tcp_synack_type synack_type, unsigned int *remaining)
@@ -78,6 +96,8 @@ void BPF_PROG(test_parse_hdr, struct sock *sk, struct sk_buff *skb)
 
 SEC(".struct_ops.link")
 struct bpf_tcp_ops test_hdr_ops = {
+	.listen		= (void *)test_listen,
+	.connect	= (void *)test_connect,
 	.hdr_opt_len	= (void *)test_hdr_opt_len,
 	.write_hdr_opt	= (void *)test_write_hdr_opt,
 	.parse_hdr	= (void *)test_parse_hdr,
