@@ -238,6 +238,8 @@ static inline struct sk_buff *dequeue_head(struct fq_pie_flow *flow)
 static struct sk_buff *fq_pie_qdisc_dequeue(struct Qdisc *sch)
 {
 	struct fq_pie_sched_data *q = qdisc_priv(sch);
+	struct fq_pie_flow *first = NULL;
+	bool scanned = false;
 	struct sk_buff *skb = NULL;
 	struct fq_pie_flow *flow;
 	struct list_head *head;
@@ -254,6 +256,45 @@ begin:
 	flow = list_first_entry(head, struct fq_pie_flow, flowchain);
 	/* Flow has exhausted all its credits */
 	if (flow->deficit <= 0) {
+		/* The head cannot dequeue. Once a full round passes with
+		 * no flow becoming eligible, skip the remaining empty
+		 * rounds in a single bulk refill.
+		 */
+		if (!scanned && flow == first) {
+			unsigned int rounds = UINT_MAX;
+			struct fq_pie_flow *iter;
+			bool skip = true;
+
+			scanned = true;
+			/* A completed round leaves new_flows empty, so
+			 * only old_flows still holds flows awaiting a
+			 * refill.
+			 */
+			list_for_each_entry(iter, &q->old_flows, flowchain) {
+				unsigned int r;
+
+				/* An empty flow cannot dequeue next round
+				 * (it is removed instead), so it neither
+				 * arms nor sizes the skip.
+				 */
+				if (!iter->head)
+					continue;
+				if (iter->deficit > 0) {
+					skip = false;
+					break;
+				}
+				r = DIV_ROUND_UP(1 - iter->deficit, q->quantum);
+				rounds = min(rounds, r);
+			}
+			if (skip && rounds != UINT_MAX) {
+				list_for_each_entry(iter, &q->old_flows, flowchain)
+					iter->deficit += rounds * q->quantum;
+				goto begin;
+			}
+		}
+
+		if (!first)
+			first = flow;
 		flow->deficit += q->quantum;
 		list_move_tail(&flow->flowchain, &q->old_flows);
 		goto begin;
@@ -269,10 +310,16 @@ begin:
 
 	if (!skb) {
 		/* force a pass through old_flows to prevent starvation */
-		if (head == &q->new_flows && !list_empty(&q->old_flows))
+		if (head == &q->new_flows && !list_empty(&q->old_flows)) {
 			list_move_tail(&flow->flowchain, &q->old_flows);
-		else
+		} else {
+			/* first would point at an off-list flow and the
+			 * scan would never arm; re-arm it.
+			 */
+			if (flow == first)
+				first = NULL;
 			list_del_init(&flow->flowchain);
+		}
 		goto begin;
 	}
 
