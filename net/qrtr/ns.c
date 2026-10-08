@@ -547,6 +547,14 @@ static int ctrl_cmd_new_lookup(struct sockaddr_qrtr *from,
 	if (from->sq_node != qrtr_ns.local_node)
 		return -EINVAL;
 
+	list_for_each_entry(lookup, &qrtr_ns.lookups, li) {
+		if (lookup->sq.sq_node == from->sq_node &&
+		    lookup->sq.sq_port == from->sq_port &&
+		    lookup->service == service &&
+		    lookup->instance == instance)
+			goto notify;
+	}
+
 	if (qrtr_ns.lookup_count >= QRTR_NS_MAX_LOOKUPS) {
 		pr_err_ratelimited("QRTR client node exceeds max lookup limit!\n");
 		return -ENOSPC;
@@ -562,6 +570,7 @@ static int ctrl_cmd_new_lookup(struct sockaddr_qrtr *from,
 	list_add_tail(&lookup->li, &qrtr_ns.lookups);
 	qrtr_ns.lookup_count++;
 
+notify:
 	memset(&filter, 0, sizeof(filter));
 	filter.service = service;
 	filter.instance = instance;
