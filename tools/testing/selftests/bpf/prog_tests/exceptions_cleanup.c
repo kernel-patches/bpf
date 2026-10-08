@@ -6,6 +6,7 @@
 #include "exceptions_cleanup_fail.skel.h"
 #include "exceptions_cleanup_shapes.skel.h"
 #include "exceptions_cleanup_tracing.skel.h"
+#include "exceptions_cleanup.lskel.h"
 
 /* foo3 unwound: every frame that has a pad ran it. */
 #define PADS_FOO3_UNWOUND \
@@ -63,6 +64,33 @@ static int load_tracer(struct exceptions_cleanup *tgt, bool fexit)
 	return err;
 }
 
+static void test_light_skeleton(void)
+{
+	struct exceptions_cleanup_lskel *skel;
+	__u64 ctx = 0;
+	int err;
+
+	LIBBPF_OPTS(bpf_test_run_opts, topts,
+		    .ctx_in = &ctx,
+		    .ctx_size_in = sizeof(ctx),
+	);
+
+	skel = exceptions_cleanup_lskel__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "light open_and_load"))
+		return;
+
+	/* foo3 unwinds, so every pad runs: the whole table has to arrive. */
+	skel->bss->input = 101;
+	err = bpf_prog_test_run_opts(skel->progs.entry.prog_fd, &topts);
+	if (!ASSERT_OK(err, "run"))
+		goto out;
+	ASSERT_EQ(topts.retval, 0, "retval");
+	ASSERT_EQ(skel->bss->pads_ran, PADS_FOO3_UNWOUND | RAN_BUMP,
+		  "pads_ran");
+out:
+	exceptions_cleanup_lskel__destroy(skel);
+}
+
 void test_exceptions_cleanup(void)
 {
 	char log[8192] = {};
@@ -112,6 +140,9 @@ void test_exceptions_cleanup(void)
 	}
 
 	exceptions_cleanup__destroy(skel);
+
+	if (test__start_subtest("light_skeleton"))
+		test_light_skeleton();
 
 	RUN_TESTS(exceptions_cleanup_fail);
 	RUN_TESTS(exceptions_cleanup_shapes);
