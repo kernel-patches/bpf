@@ -526,6 +526,9 @@ void rtnl_unregister_all(int protocol)
 	}
 	rtnl_unlock();
 
+	/* Wait for rtnl_get_link() callers under RCU that may still
+	 * dereference tab.
+	 */
 	synchronize_net();
 
 	kfree(tab);
@@ -711,6 +714,7 @@ void rtnl_link_unregister(struct rtnl_link_ops *ops)
 	 * not yet taken ops->srcu.
 	 */
 	synchronize_rcu();
+	/* Wait for rtnl_link_ops_get() callers to call rtnl_link_ops_put(). */
 	synchronize_srcu(&ops->srcu);
 	cleanup_srcu_struct(&ops->srcu);
 
@@ -843,7 +847,11 @@ void rtnl_af_unregister(struct rtnl_af_ops *ops)
 	list_del_rcu(&ops->list);
 	spin_unlock(&rtnl_af_ops_lock);
 
+	/* Wait for RCU walkers of rtnl_af_ops, including rtnl_af_lookup()
+	 * readers that found ops but have not yet taken ops->srcu.
+	 */
 	synchronize_rcu();
+	/* Wait for rtnl_af_lookup() callers to call rtnl_af_put(). */
 	synchronize_srcu(&ops->srcu);
 	cleanup_srcu_struct(&ops->srcu);
 }
