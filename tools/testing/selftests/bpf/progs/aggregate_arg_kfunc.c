@@ -50,6 +50,27 @@ int aggregate_arg_kfunc_int128(struct __sk_buff *skb)
 	return 0;
 }
 
+/*
+ * arm64 rounds the register number up to an even one for an argument
+ * aligned to 16 bytes, so it wants this __int128 in x2 and x3.
+ * The x86-64 ABI has no such rule.
+ */
+SEC("tc")
+__arch_x86_64 __arch_arm64
+__load_if_JITed()
+__success __retval(0)
+int aggregate_arg_kfunc_int128_odd(struct __sk_buff *skb)
+{
+	__u64 a = skb->len ^ MIX_A;
+	__u64 b = skb->len ^ MIX_B;
+	u128 v = ((u128)a << 64) | b;
+
+	if (bpf_kfunc_call_test_i128_arg_odd(1, v, 2) != a + b + 3)
+		return 1;
+
+	return 0;
+}
+
 #endif /* __SIZEOF_INT128__ */
 
 #if defined(__clang__) && defined(__BPF_FEATURE_STACK_ARGUMENT)
@@ -130,6 +151,48 @@ int aggregate_arg_kfunc_split8(struct __sk_buff *skb)
 }
 
 #ifdef __SIZEOF_INT128__
+
+/*
+ * The same hole, with enough arguments after the __int128 that the shift
+ * reaches the registers the BPF convention counts as stack slots: arm64
+ * wants the last one in x6 where the BPF convention put it in x5.
+ */
+SEC("tc")
+__arch_x86_64 __arch_arm64
+__load_if_JITed()
+__success __retval(0)
+int aggregate_arg_kfunc_int128_shift(struct __sk_buff *skb)
+{
+	__u64 a = skb->len ^ MIX_A;
+	__u64 b = skb->len ^ MIX_B;
+	u128 v = ((u128)a << 64) | b;
+
+	if (bpf_kfunc_call_test_i128_arg_shift(1, v, 2, 3, 4) != a + b + 10)
+		return 1;
+
+	return 0;
+}
+
+/*
+ * One argument further and the hole pushes the last one off x7, so the JIT
+ * shifts it into the first arm64 stack slot. The x86-64 ABI packs the
+ * eightbytes, so its last two are on the stack where BPF put them.
+ */
+SEC("tc")
+__arch_x86_64 __arch_arm64
+__load_if_JITed()
+__success __retval(0)
+int aggregate_arg_kfunc_int128_ovf(struct __sk_buff *skb)
+{
+	__u64 a = skb->len ^ MIX_A;
+	__u64 b = skb->len ^ MIX_B;
+	u128 v = ((u128)a << 64) | b;
+
+	if (bpf_kfunc_call_test_i128_arg_ovf(1, v, 2, 3, 4, 5, 6) != a + b + 21)
+		return 1;
+
+	return 0;
+}
 
 /*
  * Both conventions pad the stack to align this __int128, and the BPF

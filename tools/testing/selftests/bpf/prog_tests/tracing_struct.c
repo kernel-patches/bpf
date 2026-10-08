@@ -139,6 +139,20 @@ static void test_int128_args(void)
 	ASSERT_EQ(skel->bss->t_c, 3, "t:c");
 	ASSERT_EQ(skel->bss->t_ret, 6, "t ret");
 
+	ASSERT_EQ(skel->bss->s_g, 7, "s:g");
+	ASSERT_EQ(skel->bss->s_h_lo, 8, "s:h.lo");
+	ASSERT_EQ(skel->bss->s_h_hi, 9, "s:h.hi");
+	ASSERT_EQ(skel->bss->s_i, 10, "s:i");
+	ASSERT_EQ(skel->bss->s_ret, 55, "s ret");
+
+	ASSERT_EQ(skel->bss->b_f_a, 6, "b:f.a");
+	ASSERT_EQ(skel->bss->b_f_b, 7, "b:f.b");
+	ASSERT_EQ(skel->bss->b_g, 8, "b:g");
+	ASSERT_EQ(skel->bss->b_h, 9, "b:h");
+	ASSERT_EQ(skel->bss->b_i_lo, 10, "b:i.lo");
+	ASSERT_EQ(skel->bss->b_i_hi, 11, "b:i.hi");
+	ASSERT_EQ(skel->bss->b_ret, 66, "b ret");
+
 destroy_skel:
 	tracing_struct_int128__destroy(skel);
 #else
