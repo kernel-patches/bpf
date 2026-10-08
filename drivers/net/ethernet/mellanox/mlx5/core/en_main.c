@@ -5897,10 +5897,10 @@ static int mlx5e_queue_start(struct net_device *dev,
 	return 0;
 }
 
-static struct device *mlx5e_queue_get_dma_dev(struct net_device *dev,
+static struct device *mlx5e_queue_get_dma_dev(struct net_device *netdev,
 					      int queue_index)
 {
-	struct mlx5e_priv *priv = netdev_priv(dev);
+	struct mlx5e_priv *priv = netdev_priv(netdev);
 	struct mlx5e_channels *channels;
 	struct device *pdev = NULL;
 	struct mlx5e_channel *ch;
@@ -5913,7 +5913,16 @@ static struct device *mlx5e_queue_get_dma_dev(struct net_device *dev,
 		goto out;
 
 	ch = channels->c[queue_index];
-	pdev = ch->pdev;
+	if (MLX5E_GET_PFLAG(&channels->params, MLX5E_PFLAG_DATA_DIRECT)) {
+		struct mlx5_core_dev *mdev = ch->mdev;
+		struct mlx5_data_direct_dev *dd_dev;
+
+		dd_dev = mlx5_data_direct_get_dev(mdev->data_direct);
+		if (dd_dev)
+			pdev = &dd_dev->pdev->dev;
+	} else {
+		pdev = ch->pdev;
+	}
 out:
 	mutex_unlock(&priv->state_lock);
 
