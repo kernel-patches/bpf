@@ -476,8 +476,8 @@ static u32 bpf_skops_hdr_opt_len(struct sock *sk, struct sk_buff *skb,
 	struct bpf_sock_ops_kern sock_ops;
 	int err;
 
-	if (likely(!BPF_SOCK_OPS_TEST_FLAG(tcp_sk(sk),
-					   BPF_SOCK_OPS_WRITE_HDR_OPT_CB_FLAG)) ||
+	if (!BPF_SOCK_OPS_TEST_FLAG(tcp_sk(sk),
+				    BPF_SOCK_OPS_WRITE_HDR_OPT_CB_FLAG) ||
 	    !remaining)
 		return remaining;
 
@@ -518,7 +518,7 @@ static u32 bpf_skops_hdr_opt_len(struct sock *sk, struct sk_buff *skb,
 	if (skb)
 		bpf_skops_init_skb(&sock_ops, skb, 0);
 
-	err = BPF_CGROUP_RUN_PROG_SOCK_OPS_SK(&sock_ops, sk);
+	err = __BPF_CGROUP_RUN_PROG_SOCK_OPS_SK(&sock_ops, sk);
 
 	if (err || sock_ops.remaining_opt_len == remaining)
 		return remaining;
@@ -543,7 +543,8 @@ static void bpf_skops_write_hdr_opt(struct sock *sk, struct sk_buff *skb,
 
 	first_opt_off = tcp_hdrlen(skb) - max_opt_len;
 
-	if (BPF_SOCK_OPS_TEST_FLAG(tcp_sk(sk),
+	if (cgroup_bpf_enabled(CGROUP_SOCK_OPS) &&
+	    BPF_SOCK_OPS_TEST_FLAG(tcp_sk(sk),
 				   BPF_SOCK_OPS_WRITE_HDR_OPT_CB_FLAG)) {
 		struct bpf_sock_ops_kern sock_ops;
 		int err;
@@ -567,7 +568,7 @@ static void bpf_skops_write_hdr_opt(struct sock *sk, struct sk_buff *skb,
 		sock_ops.remaining_opt_len = max_opt_len;
 		bpf_skops_init_skb(&sock_ops, skb, first_opt_off);
 
-		err = BPF_CGROUP_RUN_PROG_SOCK_OPS_SK(&sock_ops, sk);
+		err = __BPF_CGROUP_RUN_PROG_SOCK_OPS_SK(&sock_ops, sk);
 		if (!err)
 			nr_written = max_opt_len - sock_ops.remaining_opt_len;
 	}
@@ -638,6 +639,11 @@ static __always_inline u32 tcp_bpf_hdr_opt_len(struct sock *sk, struct sk_buff *
 					       struct tcp_out_options *opts,
 					       u32 remaining)
 {
+	if (cgroup_bpf_enabled(CGROUP_SOCK_OPS))
+		remaining = bpf_skops_hdr_opt_len(sk, skb, req, syn_skb,
+						  synack_type, opts,
+						  remaining);
+
 	if (cgroup_bpf_enabled(CGROUP_TCP_SOCK_OPS))
 		remaining = bpf_tcp_ops_hdr_opt_len(sk, skb, req, syn_skb,
 						    synack_type, opts,
@@ -1103,8 +1109,6 @@ static unsigned int tcp_syn_options(struct sock *sk, struct sk_buff *skb,
 		remaining -= tcp_options_fit_accecn(opts, 0, remaining);
 	}
 
-	remaining = bpf_skops_hdr_opt_len(sk, skb, NULL, NULL, 0, opts,
-					  remaining);
 	remaining = tcp_bpf_hdr_opt_len(sk, skb, NULL, NULL, 0, opts,
 					remaining);
 
@@ -1193,8 +1197,6 @@ static unsigned int tcp_synack_options(const struct sock *sk,
 		remaining -= tcp_options_fit_accecn(opts, 0, remaining);
 	}
 
-	remaining = bpf_skops_hdr_opt_len((struct sock *)sk, skb, req, syn_skb,
-					  synack_type, opts, remaining);
 	remaining = tcp_bpf_hdr_opt_len((struct sock *)sk, skb, req, syn_skb,
 					synack_type, opts, remaining);
 
@@ -1291,15 +1293,6 @@ static unsigned int tcp_established_options(struct sock *sk, struct sk_buff *skb
 			size += tcp_options_fit_accecn(opts, tp->accecn_minlen,
 						       MAX_TCP_OPTION_SPACE - size);
 		}
-	}
-
-	if (unlikely(BPF_SOCK_OPS_TEST_FLAG(tp,
-					    BPF_SOCK_OPS_WRITE_HDR_OPT_CB_FLAG))) {
-		remaining = MAX_TCP_OPTION_SPACE - size;
-		remaining = bpf_skops_hdr_opt_len(sk, skb, NULL, NULL, 0, opts,
-						  remaining);
-
-		size = MAX_TCP_OPTION_SPACE - remaining;
 	}
 
 	remaining = tcp_bpf_hdr_opt_len(sk, skb, NULL, NULL, 0, opts,
@@ -3738,9 +3731,8 @@ start:
 		err = tcp_transmit_skb(sk, skb, 1, GFP_ATOMIC);
 	}
 
-	if (BPF_SOCK_OPS_TEST_FLAG(tp, BPF_SOCK_OPS_RETRANS_CB_FLAG))
-		tcp_call_bpf_3arg(sk, BPF_SOCK_OPS_RETRANS_CB,
-				  TCP_SKB_CB(skb)->seq, segs, err);
+	tcp_call_bpf_flag(sk, BPF_SOCK_OPS_RETRANS_CB,
+			  TCP_SKB_CB(skb)->seq, segs, err);
 	bpf_tcp_ops_call(retrans, sk, skb, err);
 
 	if (unlikely(err) && err != -EBUSY)
@@ -4368,7 +4360,7 @@ int tcp_connect(struct sock *sk)
 	struct sk_buff *buff;
 	int err;
 
-	tcp_call_bpf(sk, BPF_SOCK_OPS_TCP_CONNECT_CB, 0, NULL);
+	tcp_call_bpf(sk, BPF_SOCK_OPS_TCP_CONNECT_CB);
 	bpf_tcp_ops_call(connect, sk);
 
 #if defined(CONFIG_TCP_MD5SIG) && defined(CONFIG_TCP_AO)
