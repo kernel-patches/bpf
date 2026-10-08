@@ -901,6 +901,7 @@ static int mlx5e_alloc_rq(struct mlx5e_params *params,
 	void *rqc_wq = MLX5_ADDR_OF(rqc, rq_param->rqc, wq);
 	struct mlx5_core_dev *mdev = rq->mdev;
 	u32 pool_order = 0;
+	u16 entries_bytes;
 	u32 pool_size;
 	int wq_sz;
 	int err;
@@ -946,6 +947,16 @@ static int mlx5e_alloc_rq(struct mlx5e_params *params,
 		rq->mpwqe.mtts_per_wqe =
 			mlx5e_mpwrq_mtts_per_wqe(mdev, rq->mpwqe.page_shift,
 						 rq->mpwqe.umr_mode);
+
+		rq->mpwqe.umr_entry_size =
+			mlx5e_mpwrq_umr_entry_size(rq->mpwqe.umr_mode);
+		entries_bytes = rq->mpwqe.pages_per_wqe *
+				rq->mpwqe.umr_entry_size;
+		rq->mpwqe.umr_pad_offset = entries_bytes;
+		/* padding can be 0 when no padding is needed */
+		rq->mpwqe.umr_pad_bytes =
+			ALIGN(entries_bytes, MLX5_UMR_FLEX_ALIGNMENT) -
+			entries_bytes;
 
 		pool_size = rq->mpwqe.pages_per_wqe <<
 			mlx5e_mpwqe_get_log_rq_size(mdev, params, rqo);

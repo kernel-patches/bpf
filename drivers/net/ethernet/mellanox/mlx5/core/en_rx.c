@@ -674,16 +674,11 @@ static int mlx5e_alloc_rx_mpwqe(struct mlx5e_rq *rq, u16 ix)
 		};
 	}
 
-	/* Pad if needed, in case the value set to ucseg->xlt_octowords
-	 * in mlx5e_build_umr_wqe() needed alignment.
+	/* Pad when the value set to ucseg->xlt_octowords in
+	 * mlx5e_build_umr_wqe() needed alignment.
 	 */
-	if (rq->mpwqe.pages_per_wqe & (MLX5_UMR_MTT_NUM_ENTRIES_ALIGNMENT - 1)) {
-		int pad = ALIGN(rq->mpwqe.pages_per_wqe, MLX5_UMR_MTT_NUM_ENTRIES_ALIGNMENT) -
-			rq->mpwqe.pages_per_wqe;
-
-		memset(&umr_wqe->inline_mtts[rq->mpwqe.pages_per_wqe], 0,
-		       sizeof(*umr_wqe->inline_mtts) * pad);
-	}
+	memset((u8 *)umr_wqe->inline_mtts + rq->mpwqe.umr_pad_offset, 0,
+	       rq->mpwqe.umr_pad_bytes);
 
 	bitmap_zero(wi->skip_release_bitmap, rq->mpwqe.pages_per_wqe);
 	wi->consumed_strides = 0;
@@ -692,7 +687,8 @@ static int mlx5e_alloc_rx_mpwqe(struct mlx5e_rq *rq, u16 ix)
 		cpu_to_be32((sq->pc << MLX5_WQE_CTRL_WQE_INDEX_SHIFT) |
 			    MLX5_OPCODE_UMR);
 
-	offset = (ix * rq->mpwqe.mtts_per_wqe) * sizeof(struct mlx5_mtt) / MLX5_OCTWORD;
+	offset = ix * rq->mpwqe.mtts_per_wqe *
+		 rq->mpwqe.umr_entry_size / MLX5_OCTWORD;
 	umr_wqe->hdr.uctrl.xlt_offset = cpu_to_be16(offset);
 
 	sq->db.wqe_info[pi] = (struct mlx5e_icosq_wqe_info) {
