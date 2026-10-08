@@ -144,7 +144,8 @@ static void rds_conn_peer_gen_update(struct rds_connection *conn,
 	if (peer_gen_num != 0) {
 		if (conn->c_peer_gen_num != 0 &&
 		    peer_gen_num != conn->c_peer_gen_num) {
-			for (i = 0; i < RDS_MPATH_WORKERS; i++) {
+			for (i = 0; i < (conn->c_trans->t_mp_capable ?
+			     RDS_MPATH_WORKERS : 1); i++) {
 				struct rds_conn_path *cp;
 
 				cp = &conn->c_path[i];
