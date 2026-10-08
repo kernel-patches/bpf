@@ -162,5 +162,11 @@ int lan9645x_port_setup(struct dsa_switch *ds, int port)
 		ANA_PORT_CFG_PORTID_VAL,
 		lan9645x, ANA_PORT_CFG(p->chip_port));
 
+	if (p->chip_port != lan9645x->npi) {
+		mutex_lock(&lan9645x->fwd_domain_lock);
+		lan9645x_vlan_set_hostmode(p);
+		mutex_unlock(&lan9645x->fwd_domain_lock);
+	}
+
 	return 0;
 }
