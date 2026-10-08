@@ -79,16 +79,16 @@ static void spacemit_adev_unregister(void *data)
 	auxiliary_device_uninit(adev);
 }
 
-static int spacemit_ccu_reset_register(struct device *dev,
+static int spacemit_ccu_aux_register(struct device *dev,
 				       struct regmap *regmap,
-				       const char *reset_name)
+				       const char *name)
 {
 	struct spacemit_ccu_adev *cadev;
 	struct auxiliary_device *adev;
 	int ret;
 
-	/* Nothing to do if the CCU does not implement a reset controller */
-	if (!reset_name)
+	/* Nothing to do if the CCU does not implement a reset/pm controller */
+	if (!name)
 		return 0;
 
 	cadev = kzalloc_obj(*cadev);
@@ -98,7 +98,7 @@ static int spacemit_ccu_reset_register(struct device *dev,
 	cadev->regmap = regmap;
 
 	adev = &cadev->adev;
-	adev->name = reset_name;
+	adev->name = name;
 	adev->dev.parent = dev;
 	adev->dev.release = spacemit_cadev_release;
 	adev->dev.of_node = dev->of_node;
@@ -165,7 +165,7 @@ int spacemit_ccu_probe(struct platform_device *pdev, const char *compat)
 	if (ret)
 		return dev_err_probe(dev, ret, "failed to register clocks\n");
 
-	ret = spacemit_ccu_reset_register(dev, base_regmap, data->reset_name);
+	ret = spacemit_ccu_aux_register(dev, base_regmap, data->reset_name);
 	if (ret)
 		return dev_err_probe(dev, ret, "failed to register resets\n");
 
