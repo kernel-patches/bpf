@@ -29,8 +29,10 @@
 #include <linux/task_work.h>
 #include <linux/irq_work.h>
 #include <linux/buildid.h>
+#include <linux/kprobes.h>
 
 #include "../../lib/kstrtox.h"
+#include "exception.h"
 
 /* If kernel subsystem is allowing eBPF programs to call this function,
  * inside its own verifier_ops->get_func_proto() callback it should return
@@ -3424,6 +3426,76 @@ static bool bpf_stack_walker(void *cookie, u64 ip, u64 sp, u64 bp)
 	return false;
 }
 
+struct bpf_unwind_ctx {
+	const struct bpf_prog_aux *aux;
+	u32 cnt;
+};
+
+static bool bpf_unwind_ip_in(const struct bpf_prog *prog, u64 ip)
+{
+	u64 start = (u64)(long)prog->bpf_func;
+
+	return ip > start && ip <= start + prog->jited_len;
+}
+
+/*
+ * The function of the calling program that @ip returns into, looked up in the
+ * program itself: its kallsyms entries can go while an instance still runs.
+ * The main function is the outer program, which holds its table and epilogue.
+ */
+static struct bpf_prog *bpf_unwind_find_prog(const struct bpf_prog_aux *aux, u64 ip)
+{
+	u32 i;
+
+	for (i = 1; i < aux->func_cnt; i++)
+		if (bpf_unwind_ip_in(aux->func[i], ip))
+			return aux->func[i];
+	return bpf_unwind_ip_in(aux->prog, ip) ? aux->prog : NULL;
+}
+
+static bool bpf_unwind_rewrite(void *cookie, u64 ip, u64 sp, u64 bp, u64 *ra)
+{
+	const struct bpf_cleanup_range *rec;
+	struct bpf_unwind_ctx *ctx = cookie;
+	struct bpf_prog *prog;
+
+	prog = bpf_unwind_find_prog(ctx->aux, ip);
+	if (!prog)
+		return !ctx->cnt;
+	ctx->cnt++;
+
+	/*
+	 * The frame that called bpf_unwind(): bpf_exc_patch_unwind_calls()
+	 * put 'r0 = 0' and a jump to its pad, or an exit, after the call,
+	 * so leave its return address alone and let it go on there. The pad
+	 * then starts with r0 at a known zero.
+	 */
+	if (ctx->cnt == 1)
+		return bpf_is_subprog(prog);
+
+	rec = bpf_exc_pad_for_ip(prog, ip);
+	*ra = rec ? rec->pad : prog->aux->epilogue_ip;
+
+	return bpf_is_subprog(prog);
+}
+
+/*
+ * Neither traced nor probed: a tracer hooking its return would put a
+ * trampoline in the slot of the frame that called it, which the walk would
+ * then have to leave alone, and every BPF frame above would return to a path
+ * the verifier never walked. BPF frames themselves can be neither.
+ *
+ * @aux is the calling program's, supplied by the verifier (KF_IMPLICIT_ARGS):
+ * programs call bpf_unwind() with no arguments.
+ */
+__bpf_kfunc notrace void bpf_unwind(struct bpf_prog_aux *aux)
+{
+	struct bpf_unwind_ctx ctx = { .aux = aux };
+
+	arch_bpf_stack_walk_ra(bpf_unwind_rewrite, &ctx);
+}
+NOKPROBE_SYMBOL(bpf_unwind);
+
 __bpf_kfunc void bpf_throw(u64 cookie)
 {
 	struct bpf_throw_ctx ctx = {};
@@ -3443,6 +3515,16 @@ __bpf_kfunc void bpf_throw(u64 cookie)
 	kasan_unpoison_task_stack_below((void *)(long)(ctx.sp ?: ctx.bp));
 	ctx.aux->bpf_exception_cb(cookie, ctx.sp + ctx.aux->stack_arg_sp_adjust, ctx.bp, 0, 0);
 	WARN(1, "A call to BPF exception callback should never return\n");
+}
+
+__bpf_kfunc void bpf_unwind_resume(void *ptr__ign)
+{
+	/*
+	 * Never reached: the verifier accepts this kfunc only as a frame
+	 * terminator and bpf_do_misc_fixups() lowers every one of them to
+	 * 'r0 = 0; exit', so no call to this body survives to run.
+	 */
+	WARN_ONCE(1, "exception cleanup resume was not lowered to a return\n");
 }
 
 __bpf_kfunc int bpf_wq_init(struct bpf_wq *wq, void *p__const_map, unsigned int flags)
@@ -5081,6 +5163,8 @@ BTF_ID_FLAGS(func, bpf_task_get_cgroup1, KF_ACQUIRE | KF_RCU | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_task_from_pid, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_task_from_vpid, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_throw)
+BTF_ID_FLAGS(func, bpf_unwind, KF_IMPLICIT_ARGS)
+BTF_ID_FLAGS(func, bpf_unwind_resume)
 #ifdef CONFIG_BPF_EVENTS
 BTF_ID_FLAGS(func, bpf_send_signal_task)
 #endif
