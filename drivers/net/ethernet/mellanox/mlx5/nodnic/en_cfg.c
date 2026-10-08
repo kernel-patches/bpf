@@ -987,6 +987,39 @@ static void mlx5_nodnic_get_stats64(struct net_device *netdev,
 	mlx5_nodnic_update_rq_stats(&priv->rq_stats, stats);
 }
 
+static u16 mlx5_nodnic_fw_rev_maj(struct mlx5_nodnic_core_dev *dev)
+{
+	return ioread32be(&dev->iseg->fw_rev) & 0xffff;
+}
+
+static u16 mlx5_nodnic_fw_rev_min(struct mlx5_nodnic_core_dev *dev)
+{
+	return ioread32be(&dev->iseg->fw_rev) >> 16;
+}
+
+static u16 mlx5_nodnic_fw_rev_sub(struct mlx5_nodnic_core_dev *dev)
+{
+	return ioread32be(&dev->iseg->cmdif_rev_fw_sub) & 0xffff;
+}
+
+static void mlx5_nodnic_get_drvinfo(struct net_device *netdev,
+				    struct ethtool_drvinfo *drvinfo)
+{
+	struct mlx5_nodnic_priv *priv = netdev_priv(netdev);
+	struct mlx5_nodnic_core_dev *mdev = priv->core_dev;
+
+	strscpy(drvinfo->driver, KBUILD_MODNAME, sizeof(drvinfo->driver));
+	snprintf(drvinfo->fw_version, sizeof(drvinfo->fw_version),
+		 "%d.%d.%04d", mlx5_nodnic_fw_rev_maj(mdev),
+		 mlx5_nodnic_fw_rev_min(mdev), mlx5_nodnic_fw_rev_sub(mdev));
+	strscpy(drvinfo->bus_info, dev_name(mdev->device),
+		sizeof(drvinfo->bus_info));
+}
+
+static const struct ethtool_ops mlx5_nodnic_ethtool_ops = {
+	.get_drvinfo	= mlx5_nodnic_get_drvinfo,
+};
+
 static const struct net_device_ops mlx5_nodnic_netdev_ops = {
 	.ndo_open		= mlx5_nodnic_open,
 	.ndo_stop		= mlx5_nodnic_close,
@@ -1005,6 +1038,7 @@ void mlx5_nodnic_build_netdev(struct net_device *netdev)
 	SET_NETDEV_DEV(netdev, core_dev->device);
 
 	netdev->netdev_ops = &mlx5_nodnic_netdev_ops;
+	netdev->ethtool_ops = &mlx5_nodnic_ethtool_ops;
 	netdev->request_ops_lock = true;
 
 	netdev->hw_features = NETIF_F_HW_CSUM | NETIF_F_RXCSUM;
