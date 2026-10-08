@@ -1768,24 +1768,36 @@ static int netlink_getsockopt(struct socket *sock, int level, int optname,
 		flag = NETLINK_F_RECV_NO_ENOBUFS;
 		break;
 	case NETLINK_LIST_MEMBERSHIPS: {
+		unsigned long *groups = NULL;
 		int pos, idx, shift, err = 0;
+		unsigned int ngroups;
 
+		/* copy_to_iter() may sleep in a page fault, do it unlocked. */
 		netlink_lock_table();
-		for (pos = 0; pos * 8 < nlk->ngroups; pos += sizeof(u32)) {
+		ngroups = nlk->ngroups;
+		if (ngroups)
+			groups = kmemdup(nlk->groups, NLGRPSZ(ngroups),
+					 GFP_KERNEL);
+		netlink_unlock_table();
+
+		if (ngroups && !groups)
+			return -ENOMEM;
+
+		for (pos = 0; pos * 8 < ngroups; pos += sizeof(u32)) {
 			if (len - pos < sizeof(u32))
 				break;
 
 			idx = pos / sizeof(unsigned long);
 			shift = (pos % sizeof(unsigned long)) * 8;
-			group = (u32)(nlk->groups[idx] >> shift);
+			group = (u32)(groups[idx] >> shift);
 			if (copy_to_iter(&group, sizeof(u32),
 					 &opt->iter_out) != sizeof(u32)) {
 				err = -EFAULT;
 				break;
 			}
 		}
-		opt->optlen = ALIGN(BITS_TO_BYTES(nlk->ngroups), sizeof(u32));
-		netlink_unlock_table();
+		opt->optlen = ALIGN(BITS_TO_BYTES(ngroups), sizeof(u32));
+		kfree(groups);
 		return err;
 	}
 	case NETLINK_LISTEN_ALL_NSID:
