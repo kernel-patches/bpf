@@ -1933,6 +1933,19 @@ out:
 	return ret;
 }
 
+static int sock_map_iter_validate_target(struct bpf_prog *prog,
+					 const struct bpf_iter_aux_info *aux)
+{
+	if (aux->map->map_type != BPF_MAP_TYPE_SOCKMAP &&
+	    aux->map->map_type != BPF_MAP_TYPE_SOCKHASH)
+		return -EINVAL;
+
+	if (prog->aux->max_rdonly_access > aux->map->key_size)
+		return -EACCES;
+
+	return 0;
+}
+
 static int sock_map_iter_attach_target(struct bpf_prog *prog,
 				       union bpf_iter_link_info *linfo,
 				       struct bpf_iter_aux_info *aux)
@@ -1947,19 +1960,15 @@ static int sock_map_iter_attach_target(struct bpf_prog *prog,
 	if (IS_ERR(map))
 		return PTR_ERR(map);
 
-	if (map->map_type != BPF_MAP_TYPE_SOCKMAP &&
-	    map->map_type != BPF_MAP_TYPE_SOCKHASH)
-		goto put_map;
-
-	if (prog->aux->max_rdonly_access > map->key_size) {
-		err = -EACCES;
-		goto put_map;
-	}
-
 	aux->map = map;
+	err = sock_map_iter_validate_target(prog, aux);
+	if (err)
+		goto put_map;
+
 	return 0;
 
 put_map:
+	aux->map = NULL;
 	bpf_map_put_with_uref(map);
 	return err;
 }
@@ -1972,6 +1981,7 @@ static void sock_map_iter_detach_target(struct bpf_iter_aux_info *aux)
 static struct bpf_iter_reg sock_map_iter_reg = {
 	.target			= "sockmap",
 	.attach_target		= sock_map_iter_attach_target,
+	.validate_target	= sock_map_iter_validate_target,
 	.detach_target		= sock_map_iter_detach_target,
 	.show_fdinfo		= bpf_iter_map_show_fdinfo,
 	.fill_link_info		= bpf_iter_map_fill_link_info,
