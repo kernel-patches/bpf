@@ -83,6 +83,7 @@ struct dml2_pmo_options {
 	bool force_optional_uclk_pstate_support;
 	bool force_optional_mcache_support;
 	bool force_optional_ppt_temp_read_admissibility;
+	bool relax_stutter_constraint_for_drr;
 	struct dml2_pmo_pstate_strategy *override_strategy_lists[DML2_MAX_PLANES];
 	unsigned int num_override_strategies_per_list[DML2_MAX_PLANES];
 };
