@@ -779,6 +779,9 @@ struct dst_entry *inet_csk_route_req(const struct sock *sk,
 		goto no_route;
 	if (opt && opt->opt.is_strictroute && rt->rt_uses_gateway)
 		goto route_err;
+	/* Never send a SYNACK to a broadcast or multicast destination. */
+	if (rt->rt_flags & (RTCF_BROADCAST | RTCF_MULTICAST))
+		goto route_err;
 	rcu_read_unlock();
 	return &rt->dst;
 
