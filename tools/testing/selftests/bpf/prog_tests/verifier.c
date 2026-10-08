@@ -144,6 +144,7 @@
 #include "irq.skel.h"
 #include "verifier_ctx_ptr_param.skel.h"
 #include "verifier_zext.skel.h"
+#include "verifier_null_ptr_symmetric.skel.h"
 
 #define MAX_ENTRIES 11
 
@@ -377,3 +378,5 @@ void test_verifier_value_ptr_arith(void)
 		      verifier_value_ptr_arith__elf_bytes,
 		      init_value_ptr_arith_maps);
 }
+
+void test_verifier_null_ptr_symmetric(void) { RUN(verifier_null_ptr_symmetric); }

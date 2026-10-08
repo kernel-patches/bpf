@@ -18248,6 +18248,26 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 				      opcode == BPF_JNE);
 		mark_ptr_or_null_regs(other_branch, insn->dst_reg,
 				      opcode == BPF_JEQ);
+	} else if (!is_jmp32 && BPF_SRC(insn->code) == BPF_X &&
+		   (opcode == BPF_JEQ || opcode == BPF_JNE) &&
+		   type_may_be_null(src_reg->type) &&
+		   bpf_register_is_null(dst_reg)) {
+		/* Symmetric case: src_reg is the nullable pointer, dst_reg is
+		 * a register whose value is known to be zero.  This arises when
+		 * the programmer writes the comparison in reversed operand order,
+		 * e.g. "if (0 == map_val)" or "if (r0 == map_val)" where r0 has
+		 * been proven zero by the verifier.
+		 *
+		 * The zero is a property of this execution path, so dst_reg
+		 * must be marked precise before we propagate nullness.
+		 */
+		err = mark_chain_precision(env, insn->dst_reg);
+		if (err)
+			return err;
+		mark_ptr_or_null_regs(this_branch, insn->src_reg,
+				      opcode == BPF_JNE);
+		mark_ptr_or_null_regs(other_branch, insn->src_reg,
+				      opcode == BPF_JEQ);
 	} else if (!try_match_pkt_pointers(insn, dst_reg, &regs[insn->src_reg],
 					   this_branch, other_branch) &&
 		   is_pointer_value(env, insn->dst_reg)) {
