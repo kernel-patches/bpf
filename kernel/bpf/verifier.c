@@ -10817,6 +10817,7 @@ static void invalidate_outgoing_stack_args(struct bpf_verifier_env *env,
 }
 
 typedef int (*set_callee_state_fn)(struct bpf_verifier_env *env,
+				   struct bpf_verifier_state *state,
 				   struct bpf_func_state *caller,
 				   struct bpf_func_state *callee,
 				   int insn_idx);
@@ -11000,7 +11001,7 @@ static int push_callback_call(struct bpf_verifier_env *env, struct bpf_insn *ins
 		callee->async_entry_cnt = state->frame[0]->async_entry_cnt + 1;
 
 		/* Convert bpf_timer_set_callback() args into timer callback args */
-		err = set_callee_state_cb(env, caller, callee, insn_idx);
+		err = set_callee_state_cb(env, async_cb, caller, callee, insn_idx);
 		if (err)
 			return err;
 
@@ -11027,7 +11028,7 @@ static int push_callback_call(struct bpf_verifier_env *env, struct bpf_insn *ins
 	if (IS_ERR(callee))
 		return PTR_ERR(callee);
 
-	err = set_callee_state_cb(env, caller, callee, insn_idx);
+	err = set_callee_state_cb(env, callback_state, caller, callee, insn_idx);
 	if (err)
 		return err;
 
@@ -11257,6 +11258,7 @@ static int check_func_callx(struct bpf_verifier_env *env, struct bpf_insn *insn,
 }
 
 int map_set_for_each_callback_args(struct bpf_verifier_env *env,
+				   struct bpf_verifier_state *state,
 				   struct bpf_func_state *caller,
 				   struct bpf_func_state *callee)
 {
@@ -11287,6 +11289,7 @@ int map_set_for_each_callback_args(struct bpf_verifier_env *env,
 }
 
 static int set_map_elem_callback_state(struct bpf_verifier_env *env,
+				       struct bpf_verifier_state *state,
 				       struct bpf_func_state *caller,
 				       struct bpf_func_state *callee,
 				       int insn_idx)
@@ -11303,7 +11306,7 @@ static int set_map_elem_callback_state(struct bpf_verifier_env *env,
 		return -ENOTSUPP;
 	}
 
-	err = map->ops->map_set_for_each_callback_args(env, caller, callee);
+	err = map->ops->map_set_for_each_callback_args(env, state, caller, callee);
 	if (err)
 		return err;
 
@@ -11313,6 +11316,7 @@ static int set_map_elem_callback_state(struct bpf_verifier_env *env,
 }
 
 static int set_loop_callback_state(struct bpf_verifier_env *env,
+				   struct bpf_verifier_state *state,
 				   struct bpf_func_state *caller,
 				   struct bpf_func_state *callee,
 				   int insn_idx)
@@ -11335,6 +11339,7 @@ static int set_loop_callback_state(struct bpf_verifier_env *env,
 }
 
 static int set_timer_callback_state(struct bpf_verifier_env *env,
+				    struct bpf_verifier_state *state,
 				    struct bpf_func_state *caller,
 				    struct bpf_func_state *callee,
 				    int insn_idx)
@@ -11370,6 +11375,7 @@ static int set_timer_callback_state(struct bpf_verifier_env *env,
 }
 
 static int set_find_vma_callback_state(struct bpf_verifier_env *env,
+				       struct bpf_verifier_state *state,
 				       struct bpf_func_state *caller,
 				       struct bpf_func_state *callee,
 				       int insn_idx)
@@ -11398,6 +11404,7 @@ static int set_find_vma_callback_state(struct bpf_verifier_env *env,
 }
 
 static int set_user_ringbuf_callback_state(struct bpf_verifier_env *env,
+					   struct bpf_verifier_state *state,
 					   struct bpf_func_state *caller,
 					   struct bpf_func_state *callee,
 					   int insn_idx)
@@ -11421,6 +11428,7 @@ static int set_user_ringbuf_callback_state(struct bpf_verifier_env *env,
 }
 
 static int set_rbtree_add_callback_state(struct bpf_verifier_env *env,
+					 struct bpf_verifier_state *state,
 					 struct bpf_func_state *caller,
 					 struct bpf_func_state *callee,
 					 int insn_idx)
@@ -11454,6 +11462,7 @@ static int set_rbtree_add_callback_state(struct bpf_verifier_env *env,
 }
 
 static int set_task_work_schedule_callback_state(struct bpf_verifier_env *env,
+						 struct bpf_verifier_state *state,
 						 struct bpf_func_state *caller,
 						 struct bpf_func_state *callee,
 						 int insn_idx)
@@ -11489,6 +11498,7 @@ static int set_task_work_schedule_callback_state(struct bpf_verifier_env *env,
 }
 
 static int set_rcu_callback_state(struct bpf_verifier_env *env,
+				  struct bpf_verifier_state *state,
 				  struct bpf_func_state *caller,
 				  struct bpf_func_state *callee,
 				  int insn_idx)
