@@ -450,6 +450,7 @@ struct mana_ethtool_stats {
 	u64 tx_cqe_unknown_type;
 	u64 tx_linear_pkt_cnt;
 	u64 rx_cqe_unknown_type;
+	u64 eq_throttle_events;
 };
 
 struct mana_ethtool_hc_stats {

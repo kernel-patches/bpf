@@ -747,6 +747,18 @@ void mana_gd_free_service_wq(struct gdma_context *gc)
 	gc->service_wq = NULL;
 }
 
+static void mana_gd_schedule_eq_cqs(struct gdma_queue *eq)
+{
+	struct gdma_queue *cq;
+	u8 i;
+
+	for (i = 0; i < GDMA_EQ_MAX_CHILD_CQ; i++) {
+		cq = rcu_dereference(eq->eq.child_cq[i]);
+		if (cq && cq->cq.callback)
+			cq->cq.callback(cq->cq.context, cq);
+	}
+}
+
 static void mana_gd_process_eqe(struct gdma_queue *eq)
 {
 	u32 head = eq->head % (eq->queue_size / GDMA_EQE_SIZE);
@@ -775,6 +787,11 @@ static void mana_gd_process_eqe(struct gdma_queue *eq)
 		if (cq->cq.callback)
 			cq->cq.callback(cq->cq.context, cq);
 
+		break;
+
+	case GDMA_EQE_THROTTLE:
+		eq->eq.throttle_count++;
+		mana_gd_schedule_eq_cqs(eq);
 		break;
 
 	case GDMA_EQE_TEST_EVENT:
@@ -1063,17 +1080,41 @@ static void mana_gd_create_cq(const struct gdma_queue_spec *spec,
 			      struct gdma_queue *queue)
 {
 	u32 log2_num_entries = ilog2(spec->queue_size / GDMA_CQE_SIZE);
+	struct gdma_queue *parent;
+	u8 i;
 
 	queue->head |= INITIALIZED_OWNER_BIT(log2_num_entries);
-	queue->cq.parent = spec->cq.parent_eq;
+	parent = spec->cq.parent_eq;
+	queue->cq.parent = parent;
 	queue->cq.context = spec->cq.context;
 	queue->cq.callback = spec->cq.callback;
+
+	if (!parent)
+		return;
+
+	/* For throttled EQE store the child CQ */
+	for (i = 0; i < GDMA_EQ_MAX_CHILD_CQ; i++)
+		if (!rcu_access_pointer(parent->eq.child_cq[i])) {
+			rcu_assign_pointer(parent->eq.child_cq[i], queue);
+			return;
+		}
 }
 
 static void mana_gd_destroy_cq(struct gdma_context *gc,
 			       struct gdma_queue *queue)
 {
+	struct gdma_queue *parent = queue->cq.parent;
 	u32 id = queue->id;
+	u8 i;
+
+	if (parent) {
+		for (i = 0; i < GDMA_EQ_MAX_CHILD_CQ; i++) {
+			if (rcu_access_pointer(parent->eq.child_cq[i]) == queue)
+				RCU_INIT_POINTER(parent->eq.child_cq[i], NULL);
+		}
+
+		synchronize_rcu();
+	}
 
 	if (id >= gc->max_num_cqs)
 		return;

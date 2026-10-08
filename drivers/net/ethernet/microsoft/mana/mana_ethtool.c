@@ -22,6 +22,8 @@ static const struct mana_stats_desc mana_eth_stats[] = {
 				       tx_linear_pkt_cnt)},
 	{"rx_cqe_unknown_type", offsetof(struct mana_ethtool_stats,
 					rx_cqe_unknown_type)},
+	{"eq_throttle_events", offsetof(struct mana_ethtool_stats,
+					eq_throttle_events)},
 };
 
 static const struct mana_stats_desc mana_hc_stats[] = {
@@ -260,6 +262,11 @@ static void mana_get_ethtool_stats(struct net_device *ndev,
 	 * counters.
 	 */
 	mana_query_phy_stats(apc);
+
+	apc->eth_stats.eq_throttle_events = 0;
+	for (q = 0; q < num_queues; q++)
+		apc->eth_stats.eq_throttle_events +=
+			apc->eqs[q].eq->eq.throttle_count;
 
 	for (q = 0; q < ARRAY_SIZE(mana_eth_stats); q++)
 		data[i++] = *(u64 *)(eth_stats + mana_eth_stats[q].offset);
