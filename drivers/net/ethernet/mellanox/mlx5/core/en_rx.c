@@ -669,9 +669,15 @@ static int mlx5e_alloc_rx_mpwqe(struct mlx5e_rq *rq, u16 ix)
 			goto err_unmap;
 
 		addr = page_pool_get_dma_addr_netmem(frag_page->netmem);
-		umr_wqe->inline_mtts[i] = (struct mlx5_mtt) {
-			.ptag = cpu_to_be64(addr | MLX5_EN_WR),
-		};
+		if (test_bit(MLX5E_RQ_STATE_DATA_DIRECT, &rq->state))
+			umr_wqe->inline_ksms[i] = (struct mlx5_ksm) {
+				.key = rq->mpwqe.ksm_child_mkey_be,
+				.va  = cpu_to_be64(addr),
+			};
+		else
+			umr_wqe->inline_mtts[i] = (struct mlx5_mtt) {
+				.ptag = cpu_to_be64(addr | MLX5_EN_WR),
+			};
 	}
 
 	/* Pad when the value set to ucseg->xlt_octowords in
