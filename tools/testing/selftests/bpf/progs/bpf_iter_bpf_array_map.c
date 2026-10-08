@@ -51,3 +51,20 @@ int dump_bpf_array_map(struct bpf_iter__bpf_map_elem *ctx)
 	*val = *key;
 	return 0;
 }
+
+SEC("iter/bpf_map_elem")
+int noop_bpf_array_map(struct bpf_iter__bpf_map_elem *ctx)
+{
+	return 0;
+}
+
+SEC("iter/bpf_map_elem")
+int oob_write_bpf_array_map(struct bpf_iter__bpf_map_elem *ctx)
+{
+	__u64 *val = ctx->value;
+
+	if (val)
+		val[1] = 0;
+
+	return 0;
+}
