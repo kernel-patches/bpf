@@ -6144,9 +6144,28 @@ static int mlx5e_data_direct_event(struct notifier_block *nb,
 {
 	struct mlx5e_priv *priv = container_of(nb, struct mlx5e_priv,
 					       data_direct_nb);
+	struct mlx5e_params new_params;
 
-	if (action == MLX5_DATA_DIRECT_UNBIND)
-		mlx5_core_dbg(priv->mdev, "data direct device unbound\n");
+	if (action != MLX5_DATA_DIRECT_UNBIND)
+		return NOTIFY_DONE;
+
+	rtnl_lock();
+	netdev_lock(priv->netdev);
+	mutex_lock(&priv->state_lock);
+
+	if (!MLX5E_GET_PFLAG(&priv->channels.params, MLX5E_PFLAG_DATA_DIRECT))
+		goto out;
+
+	new_params = priv->channels.params;
+	MLX5E_SET_PFLAG(&new_params, MLX5E_PFLAG_DATA_DIRECT, false);
+	mlx5e_safe_switch_params(priv, &new_params, NULL, NULL, true);
+	netdev_info(priv->netdev,
+		    "data_direct device unbound, disabled data_direct\n");
+
+out:
+	mutex_unlock(&priv->state_lock);
+	netdev_unlock(priv->netdev);
+	rtnl_unlock();
 
 	return NOTIFY_OK;
 }
