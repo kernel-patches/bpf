@@ -995,7 +995,7 @@ static struct macsec_rx_sc *find_rx_sc(struct macsec_secy *secy, sci_t sci)
 	struct macsec_rx_sc *rx_sc;
 
 	for_each_rxsc(secy, rx_sc) {
-		if (rx_sc->sci == sci)
+		if (rx_sc->sci == sci && READ_ONCE(rx_sc->active))
 			return rx_sc;
 	}
 
