@@ -309,7 +309,8 @@ struct atio7_fcp_cmnd {
 	/*
 	 * add_cdb is optional and can absent from struct atio7_fcp_cmnd. Size 4
 	 * only to make sizeof(struct atio7_fcp_cmnd) be as expected by
-	 * BUILD_BUG_ON in qlt_init().
+	 * BUILD_BUG_ON in tcm_qla2xxx_init(). See also, BUILD_BUG_ON in
+	 * qlt_queue_unknown_atio().
 	 */
 	uint8_t  add_cdb[4];
 	/* __le32	data_length; */
@@ -845,7 +846,11 @@ struct qla_tgt_sess_op {
 	struct rsp_que *rsp;
 
 	struct atio_from_isp atio;
-	/* DO NOT ADD ANYTHING ELSE HERE - atio must be last member */
+	/*
+	 * DO NOT ADD ANYTHING ELSE HERE.
+	 * atio.u.isp24.fcp_cmnd.add_cdb may extend past end of atio.
+	 */
+	uint8_t atio_u_isp24_fcp_cmnd_add_cdb[];
 };
 
 enum trace_flags {
