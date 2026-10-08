@@ -2934,6 +2934,7 @@ static inline int tcp_call_bpf_3arg(struct sock *sk, int op, u32 arg1, u32 arg2,
 static inline void tcp_clear_sock_ops_cb_flags(struct sock *sk)
 {
 	tcp_sk(sk)->bpf_sock_ops_cb_flags = 0;
+	WRITE_ONCE(tcp_sk(sk)->bpf_tcp_ops_flags, 0);
 }
 
 #else
@@ -2989,7 +2990,7 @@ struct bpf_tcp_ops {
 	/* Called when the retransmission timer fires. */
 	void (*rto)(struct sock *sk);
 
-	/* Called on every RTT sample.
+	/* Called on every RTT sample if BPF_TCP_OPS_FLAG_RTT is enabled.
 	 * @mrtt: the measured RTT, in microseconds.
 	 * @srtt: the updated smoothed RTT.
 	 */
@@ -3016,12 +3017,18 @@ struct bpf_tcp_ops {
 	 * Parse the TCP header options of an incoming skb received on an
 	 * established connection. Use bpf_dynptr_from_skb()/bpf_skb_load_bytes()
 	 * to access the options.
+	 *
+	 * Called if BPF_TCP_OPS_FLAG_PARSE_HDR_OPT_ALL is enabled, or if
+	 * BPF_TCP_OPS_FLAG_PARSE_HDR_OPT_UNKNOWN is enabled and an unknown
+	 * option is received.
 	 */
 	void (*parse_hdr)(struct sock *sk, struct sk_buff *skb);
 
 	/*
 	 * Reserve space in the outgoing TCP header for options to be written
 	 * later by write_hdr_opt(). Call bpf_reserve_hdr_opt() to reserve bytes.
+	 *
+	 * Called if BPF_TCP_OPS_FLAG_WRITE_HDR_OPT is enabled.
 	 *
 	 * @skb: outgoing packet. NULL when called from tcp_current_mss()
 	 *       (MSS sizing).
@@ -3040,6 +3047,8 @@ struct bpf_tcp_ops {
 	 * Write header options into the space reserved earlier by hdr_opt_len().
 	 * Use bpf_store_hdr_opt() to write; it appends within the reserved window
 	 * shared with legacy SOCKOPS.
+	 *
+	 * Called if BPF_TCP_OPS_FLAG_WRITE_HDR_OPT is enabled.
 	 *
 	 * @skb: outgoing packet.
 	 * @req: request_sock on the synack path; NULL otherwise.

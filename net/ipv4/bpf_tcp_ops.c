@@ -328,8 +328,67 @@ static struct bpf_struct_ops bpf_tcp_ops = {
 	.owner = THIS_MODULE,
 };
 
+__bpf_kfunc_start_defs();
+
+__bpf_kfunc int bpf_tcp_ops_set_flags(struct tcp_sock *tp, u32 enable, u32 disable)
+{
+	u32 old, new;
+
+	if ((enable & disable) || (enable | disable) & ~BPF_TCP_OPS_FLAG_ALL)
+		return -EINVAL;
+
+	old = READ_ONCE(tp->bpf_tcp_ops_flags);
+
+	do {
+		new = (old | enable) & ~disable;
+		if (new == old)
+			break;
+	} while (!try_cmpxchg(&tp->bpf_tcp_ops_flags, &old, new));
+
+	return 0;
+}
+
+__bpf_kfunc_end_defs();
+
+BTF_KFUNCS_START(bpf_tcp_ops_set_flags_kfunc_set)
+BTF_ID_FLAGS(func, bpf_tcp_ops_set_flags)
+BTF_KFUNCS_END(bpf_tcp_ops_set_flags_kfunc_set)
+
+static int bpf_tcp_ops_set_flags_kfunc_filter(const struct bpf_prog *prog,
+					      u32 kfunc_id)
+{
+	if (!btf_id_set8_contains(&bpf_tcp_ops_set_flags_kfunc_set, kfunc_id))
+		return 0;
+
+	if (prog->type == BPF_PROG_TYPE_STRUCT_OPS &&
+	    prog->aux->st_ops == &bpf_tcp_ops)
+		return 0;
+
+	if (prog->type == BPF_PROG_TYPE_CGROUP_SOCKOPT ||
+	    prog->type == BPF_PROG_TYPE_CGROUP_SKB)
+		return 0;
+
+	return -EACCES;
+}
+
+static const struct btf_kfunc_id_set bpf_tcp_ops_set_flags_kfunc_id_set = {
+	.owner = THIS_MODULE,
+	.set = &bpf_tcp_ops_set_flags_kfunc_set,
+	.filter = bpf_tcp_ops_set_flags_kfunc_filter,
+};
+
 static int __init __bpf_tcp_ops_init(void)
 {
-	return register_bpf_struct_ops(&bpf_tcp_ops, bpf_tcp_ops);
+	int ret;
+
+	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS,
+					&bpf_tcp_ops_set_flags_kfunc_id_set);
+	/* BPF_PROG_TYPE_CGROUP_{SOCKOPT,SKB} share BTF_KFUNC_HOOK_CGROUP. */
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_CGROUP_SOCKOPT,
+					       &bpf_tcp_ops_set_flags_kfunc_id_set);
+	ret = ret ?: register_bpf_struct_ops(&bpf_tcp_ops, bpf_tcp_ops);
+
+	return ret;
 }
+
 late_initcall(__bpf_tcp_ops_init);
