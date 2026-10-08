@@ -643,6 +643,108 @@ void orangefs_readdir_index_put(int buffer_index)
 }
 
 /*
+ * Copy between a mapped bufmap address and a page-cache iterator.
+ * bvec and xarray iterators are folios. Copy each folio in one piece
+ * when the folio is contiguous, so a 2 MiB folio moves 2 MiB at a time.
+ * Other iterators are user buffers and use the usual copy helpers.
+ */
+static size_t orangefs_copy_bvec(char *kaddr, size_t bytes,
+				 struct iov_iter *iter, bool from_iter)
+{
+	size_t copied = 0;
+
+	while (bytes && iter->nr_segs) {
+		const struct bio_vec *bv = iter->bvec;
+		size_t skip = iter->iov_offset;
+		struct folio *folio;
+		size_t folio_off, chunk;
+
+		if (skip >= bv->bv_len)
+			break;
+
+		folio = page_folio(bv->bv_page);
+		folio_off = folio_page_idx(folio, bv->bv_page) * PAGE_SIZE +
+			    bv->bv_offset + skip;
+		chunk = min_t(size_t, bytes, bv->bv_len - skip);
+		if (folio_off >= folio_size(folio))
+			break;
+		if (chunk > folio_size(folio) - folio_off)
+			chunk = folio_size(folio) - folio_off;
+
+		if (from_iter)
+			memcpy_from_folio(kaddr, folio, folio_off, chunk);
+		else
+			memcpy_to_folio(folio, folio_off, kaddr, chunk);
+
+		kaddr += chunk;
+		copied += chunk;
+		bytes -= chunk;
+		iov_iter_advance(iter, chunk);
+	}
+	return copied;
+}
+
+static size_t orangefs_copy_xarray(char *kaddr, size_t bytes,
+				   struct iov_iter *iter, bool from_iter)
+{
+	struct folio *folio;
+	size_t copied = 0;
+	loff_t start = iter->xarray_start + iter->iov_offset;
+	pgoff_t index = start / PAGE_SIZE;
+	XA_STATE(xas, iter->xarray, index);
+
+	rcu_read_lock();
+	xas_for_each(&xas, folio, ULONG_MAX) {
+		size_t offset, flen;
+
+		if (xas_retry(&xas, folio))
+			continue;
+		if (WARN_ON(xa_is_value(folio)))
+			break;
+		if (WARN_ON(folio_test_hugetlb(folio)))
+			break;
+
+		offset = offset_in_folio(folio, start + copied);
+		flen = min_t(size_t, folio_size(folio) - offset, bytes);
+		if (!flen)
+			break;
+
+		if (from_iter)
+			memcpy_from_folio(kaddr, folio, offset, flen);
+		else
+			memcpy_to_folio(folio, offset, kaddr, flen);
+
+		kaddr += flen;
+		copied += flen;
+		bytes -= flen;
+		if (!bytes)
+			break;
+	}
+	rcu_read_unlock();
+	iov_iter_advance(iter, copied);
+	return copied;
+}
+
+static size_t orangefs_copy_iter(void *kaddr, size_t bytes,
+				 struct iov_iter *iter, bool from_iter)
+{
+	char *addr = kaddr;
+
+	if (bytes > iov_iter_count(iter))
+		bytes = iov_iter_count(iter);
+	if (!bytes)
+		return 0;
+
+	if (iov_iter_is_bvec(iter))
+		return orangefs_copy_bvec(addr, bytes, iter, from_iter);
+	if (iov_iter_is_xarray(iter))
+		return orangefs_copy_xarray(addr, bytes, iter, from_iter);
+	if (from_iter)
+		return copy_from_iter(kaddr, bytes, iter);
+	return copy_to_iter(kaddr, bytes, iter);
+}
+
+/*
  * we've been handed an iovec, we need to copy it to
  * the shared memory descriptor at "buffer_index".
  */
@@ -686,7 +788,7 @@ int orangefs_bufmap_copy_from_iovec(struct iov_iter *iter,
 
 		/* First 2 MiB chunk */
 		kaddr = kmap_local_folio(to->folio_array[0], 0);
-		copied = copy_from_iter(kaddr, first, iter);
+		copied = orangefs_copy_iter(kaddr, first, iter, true);
 		kunmap_local(kaddr);
 		if (copied != first)
 			return -EFAULT;
@@ -696,7 +798,7 @@ int orangefs_bufmap_copy_from_iovec(struct iov_iter *iter,
 
 		/* Second 2 MiB chunk */
 		kaddr = kmap_local_folio(to->folio_array[1], 0);
-		copied = copy_from_iter(kaddr, second, iter);
+		copied = orangefs_copy_iter(kaddr, second, iter, true);
 		kunmap_local(kaddr);
 		if (copied != second)
 			return -EFAULT;
@@ -724,7 +826,7 @@ int orangefs_bufmap_copy_from_iovec(struct iov_iter *iter,
 		folio_avail = folio_nr_pages(folio) * PAGE_SIZE - folio_offset;
 		copy_amount = min(remaining, folio_avail);
 		kaddr = kmap_local_folio(folio, folio_offset);
-		copied = copy_from_iter(kaddr, copy_amount, iter);
+		copied = orangefs_copy_iter(kaddr, copy_amount, iter, true);
 		kunmap_local(kaddr);
 
 		if (copied != copy_amount)
@@ -783,7 +885,7 @@ int orangefs_bufmap_copy_to_iovec(struct iov_iter *iter,
 
 		/* First 2 MiB chunk */
 		kaddr = kmap_local_folio(from->folio_array[0], 0);
-		copied = copy_to_iter(kaddr, first, iter);
+		copied = orangefs_copy_iter(kaddr, first, iter, false);
 		kunmap_local(kaddr);
 		if (copied != first)
 			return -EFAULT;
@@ -793,7 +895,7 @@ int orangefs_bufmap_copy_to_iovec(struct iov_iter *iter,
 
 		/* Second 2 MiB chunk */
 		kaddr = kmap_local_folio(from->folio_array[1], 0);
-		copied = copy_to_iter(kaddr, second, iter);
+		copied = orangefs_copy_iter(kaddr, second, iter, false);
 		kunmap_local(kaddr);
 		if (copied != second)
 			return -EFAULT;
@@ -822,7 +924,7 @@ int orangefs_bufmap_copy_to_iovec(struct iov_iter *iter,
 		copy_amount = min(remaining, folio_avail);
 
 		kaddr = kmap_local_folio(folio, folio_offset);
-		copied = copy_to_iter(kaddr, copy_amount, iter);
+		copied = orangefs_copy_iter(kaddr, copy_amount, iter, false);
 		kunmap_local(kaddr);
 
 		if (copied != copy_amount)
