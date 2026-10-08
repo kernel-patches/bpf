@@ -789,7 +789,8 @@ int rds_recvmsg(struct socket *sock, struct msghdr *msg, size_t size,
 				sin6->sin6_port = inc->i_hdr.h_sport;
 				sin6->sin6_addr = inc->i_saddr;
 				sin6->sin6_flowinfo = 0;
-				sin6->sin6_scope_id = rs->rs_bound_scope_id;
+				sin6->sin6_scope_id = rs->rs_conn_scope_id ?:
+						      rs->rs_bound_scope_id;
 				msg->msg_namelen = sizeof(*sin6);
 			}
 		}
