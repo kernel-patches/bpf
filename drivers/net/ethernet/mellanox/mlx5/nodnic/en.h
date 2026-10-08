@@ -113,6 +113,16 @@ struct mlx5_nodnic_working_buffer {
 	u32 alloc_size;
 };
 
+struct mlx5_nodnic_health {
+	struct health_buffer __iomem   *health;
+	__be32 __iomem		       *health_counter;
+	struct timer_list		timer;
+	u32				prev_counter;
+	int				miss_counter;
+	u8				synd;
+	u32				fatal_error;
+};
+
 struct mlx5_nodnic_priv {
 	struct mlx5_nodnic_core_dev *core_dev;
 	struct net_device *netdev;
@@ -128,6 +138,8 @@ struct mlx5_nodnic_priv {
 	struct mlx5_nodnic_dbr	dbr; /* one shared dbr for TX and RX */
 	struct mlx5_nodnic_cq	cq;
 	struct mlx5_nodnic_ring	working_buffer;
+
+	struct mlx5_nodnic_health health;
 };
 
 void mlx5_nodnic_build_netdev(struct net_device *netdev);

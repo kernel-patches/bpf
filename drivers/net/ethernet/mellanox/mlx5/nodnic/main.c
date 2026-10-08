@@ -804,6 +804,7 @@ static int mlx5_nodnic_probe_one(struct pci_dev *pdev,
 	dev->netdev_registered = true;
 
 	dev->state = NODNIC_DEVICE_STATE_UP;
+	mlx5_nodnic_start_health_poll(dev);
 
 	pci_save_state(pdev);
 
@@ -829,6 +830,7 @@ static void mlx5_nodnic_remove_one(struct pci_dev *pdev)
 	if (!dev)
 		return;
 
+	mlx5_nodnic_stop_health_poll(dev);
 	mlx5_nodnic_event_irq_cleanup(dev);
 	mlx5_nodnic_cleanup_netdev(dev);
 	mlx5_nodnic_dev_cleanup(dev);
