@@ -40,6 +40,9 @@ static void dml21_populate_pmo_options(struct dml2_pmo_options *pmo_options,
 
 	pmo_options->force_mandatory_uclk_pstate_support = config->pmo.force_mandatory_uclk_pstate_support;
 	pmo_options->force_optional_uclk_pstate_support = in_dc->debug.force_optional_uclk_pstate_support;
+
+	// stutter
+	pmo_options->relax_stutter_constraint_for_drr = config->pmo.relax_stutter_constraint_for_drr;
 }
 
 static enum dml2_project_id dml21_dcn_revision_to_dml2_project_id(const struct dc *in_dc)
