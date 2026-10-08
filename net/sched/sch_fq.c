@@ -737,8 +737,10 @@ static struct sk_buff *fq_dequeue(struct Qdisc *sch)
 	struct fq_sched_data *q = qdisc_priv(sch);
 	u64 offload_horizon = fq_offload_horizon(sch, q);
 	struct fq_perband_flows *pband;
+	struct fq_flow *first = NULL;
 	struct fq_flow_head *head;
 	u64 time_next_packet = 0;
+	bool scanned = false;
 	struct sk_buff *skb;
 	struct fq_flow *f;
 	unsigned long rate;
@@ -769,8 +771,16 @@ begin:
 			pband = &q->band_flows[q->band_nr];
 			pband->credit = min(pband->credit + pband->quantum,
 					    pband->quantum);
-			if (pband->credit > 0)
+			if (pband->credit > 0) {
+				/* first belongs to the old pband, so
+				 * both the sentinel and the scan flag
+				 * must be reset here. This is the only
+				 * goto begin that changes pband.
+				 */
+				first = NULL;
+				scanned = false;
 				goto begin;
+			}
 			retry = 0;
 		}
 		if (q->time_next_delayed_flow != ~0ULL)
@@ -782,6 +792,45 @@ begin:
 	f = head->first;
 	retry = 0;
 	if (f->credit <= 0) {
+		/* The head cannot dequeue. Once a full round passes with
+		 * no flow becoming eligible, skip the remaining empty
+		 * rounds in a single bulk refill.
+		 */
+		if (!scanned && f == first) {
+			unsigned int rounds = UINT_MAX;
+			struct fq_flow *iter;
+
+			scanned = true;
+			/* A completed round leaves new_flows empty, so
+			 * only old_flows still holds flows awaiting a
+			 * refill.
+			 */
+			for (iter = pband->old_flows.first; iter;
+			     iter = iter->next) {
+				/* A flow that cannot dequeue next round
+				 * (empty queue) is removed instead, so it
+				 * neither arms nor sizes the skip.
+				 */
+				if (!fq_peek(iter))
+					continue;
+				if (iter->credit > 0) {
+					rounds = 0;
+					break;
+				}
+				rounds = min(rounds,
+					     DIV_ROUND_UP(1 - iter->credit,
+							  q->quantum));
+			}
+			if (rounds && rounds != UINT_MAX) {
+				for (iter = pband->old_flows.first; iter;
+				     iter = iter->next)
+					iter->credit += rounds * q->quantum;
+				goto begin;
+			}
+		}
+
+		if (!first)
+			first = f;
 		f->credit += q->quantum;
 		head->first = f->next;
 		fq_flow_add_tail(q, f, OLD_FLOW);
@@ -796,6 +845,11 @@ begin:
 		if (now + offload_horizon < time_next_packet) {
 			head->first = f->next;
 			f->time_next_packet = time_next_packet;
+			/* first would point at an off-list flow and
+			 * the scan would never arm; re-arm it.
+			 */
+			if (f == first)
+				first = NULL;
 			fq_flow_set_throttled(q, f);
 			goto begin;
 		}
@@ -814,6 +868,11 @@ begin:
 		if (head == &pband->new_flows) {
 			fq_flow_add_tail(q, f, OLD_FLOW);
 		} else {
+			/* f leaves the list; re-arm first if it was the
+			 * sentinel (see the throttled path above).
+			 */
+			if (f == first)
+				first = NULL;
 			fq_flow_set_detached(f);
 		}
 		goto begin;
