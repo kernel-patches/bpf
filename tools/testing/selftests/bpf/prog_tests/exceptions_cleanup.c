@@ -4,6 +4,7 @@
 #include "exceptions_cleanup.h"
 #include "exceptions_cleanup.skel.h"
 #include "exceptions_cleanup_fail.skel.h"
+#include "exceptions_cleanup_shapes.skel.h"
 #include "exceptions_cleanup_tracing.skel.h"
 
 /* foo3 unwound: every frame that has a pad ran it. */
@@ -113,4 +114,5 @@ void test_exceptions_cleanup(void)
 	exceptions_cleanup__destroy(skel);
 
 	RUN_TESTS(exceptions_cleanup_fail);
+	RUN_TESTS(exceptions_cleanup_shapes);
 }
