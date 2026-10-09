@@ -1896,6 +1896,17 @@ static void print_subprog_arg_access(struct bpf_verifier_env *env,
 	}
 }
 
+static void record_stack_ptrs(struct bpf_verifier_env *env, int idx, struct arg_track *at_in)
+{
+	u16 r, mask = 0;
+
+	for (r = 0; r < MAX_BPF_REG; r++)
+		if (arg_is_fp(&at_in[r]))
+			mask |= BIT(r);
+
+	env->insn_aux_data[idx].stack_ptrs |= mask;
+}
+
 /*
  * Compute arg tracking dataflow for a single subprog.
  * Runs forward fixed-point with arg_track_xfer(), then records
@@ -2045,6 +2056,8 @@ redo:
 			snap->slots = nslots;
 			memcpy(snap->at, &at_stack_in[(size_t)i * nslots], nslots * sizeof(*snap->at));
 		}
+
+		record_stack_ptrs(env, idx, at_in[i]);
 	}
 
 	info->at_in = at_in;
