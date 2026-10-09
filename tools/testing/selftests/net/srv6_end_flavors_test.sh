@@ -328,7 +328,7 @@ cleanup()
 	# check whether the setup phase was completed successfully or not. In
 	# case of an error during the setup phase of the testing environment,
 	# the selftest is considered as "skipped".
-	if [ "${SETUP_ERR}" -ne 0 ]; then
+	if [ "${SETUP_ERR}" -ne 0 ] && [ "$ret" -ne "$ksft_fail" ]; then
 		echo "SKIP: Setting up the testing environment failed"
 		exit "${ksft_skip}"
 	fi
@@ -628,6 +628,12 @@ setup()
 	setup_rt_local_sids 3 "1 2 4"
 	setup_rt_local_sids 4 "1 2 3"
 
+	# testing environment was set up successfully
+	SETUP_ERR=0
+}
+
+setup_end_flv_psp()
+{
 	# set up SRv6 policies
 	# create a connection between hosts hs-1 and hs-2.
 	# The path between hs-1 and hs-2 traverses SRv6 aware routers.
@@ -644,9 +650,6 @@ setup()
 	#  - rt-1 (SRv6 End flavor PSP with SL=1)
 	setup_rt_policy_ipv6 2 1 "3:noflv 4:psp 2:psp"
 	setup_rt_policy_ipv6 1 2 "1:psp"
-
-	# testing environment was set up successfully
-	SETUP_ERR=0
 }
 
 check_rt_connectivity()
@@ -741,7 +744,13 @@ host2gateway_tests()
 
 host_srv6_end_flv_psp_tests()
 {
-	log_section "SRv6 connectivity test hosts (h1 <-> h2, PSP flavor)"
+	set -e
+	SETUP_ERR=1
+	setup_end_flv_psp
+	SETUP_ERR=0
+	set +e
+
+	log_section "SRv6 connectivity test hosts (h1 <-> h2, End flavor PSP)"
 
 	check_and_log_hs_connectivity 1 2
 	check_and_log_hs_connectivity 2 1
