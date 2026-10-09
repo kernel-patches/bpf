@@ -18,6 +18,7 @@
 #include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/phy.h>
+#include <linux/ptp_clock_kernel.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/string.h>
@@ -144,6 +145,105 @@ int __mdiobus_write(struct mii_bus *bus, int addr, u32 regnum, u16 val)
 	return err;
 }
 EXPORT_SYMBOL(__mdiobus_write);
+
+/**
+ * __mdiobus_write_sts - Timestamped version of the __mdiobus_write function
+ * @bus: the mii_bus struct
+ * @addr: the phy address
+ * @regnum: register number to write
+ * @val: value to write to @regnum
+ * @sts: system timestamps bounding completion, or NULL
+ *
+ * Return: Zero if successful, negative error code on failure. Returns
+ *	   -EBUSY or -EINVAL if the system timestamps are not valid. If @sts
+ *	   is not NULL, -EOPNOTSUPP is returned only if
+ *	   mdiobus_supports_write_sts() is false.
+ *
+ * Write a MDIO bus register, with system timestamps bounding completion;
+ * a transfer is considered complete on the rising edge of the MDC
+ * that clocks the last data bit. Caller must hold the mdio bus lock.
+ *
+ * For clocks that can be stepped, validate the clock generation through
+ * the raw time of the upper bound.
+ *
+ * If @sts is NULL, perform an ordinary write.
+ *
+ * NOTE: MUST NOT be called from interrupt context.
+ */
+int __mdiobus_write_sts(struct mii_bus *bus, int addr, u32 regnum, u16 val,
+			struct ptp_system_timestamp *sts)
+{
+	struct system_time_snapshot now;
+	ktime_t deadline;
+	int err;
+
+	if (!sts)
+		return __mdiobus_write(bus, addr, regnum, val);
+
+	lockdep_assert_held_once(&bus->mdio_lock);
+
+	if (addr >= PHY_MAX_ADDR)
+		return -ENXIO;
+
+	if (bus->write_sts)
+		err = bus->write_sts(bus, addr, regnum, val, sts);
+	else
+		err = -EOPNOTSUPP;
+
+	trace_mdio_access(bus, 0, addr, regnum, val, err);
+	mdiobus_stats_acct(&bus->stats[addr], false, err);
+
+	if (err)
+		return err;
+
+	if (!sts->pre_sts.valid || !sts->post_sts.valid)
+		return -EINVAL;
+
+	if (sts->clockid == CLOCK_MONOTONIC ||
+	    sts->clockid == CLOCK_MONOTONIC_RAW)
+		return 0;
+
+	/* Fail if the clock was stepped; callers must retry anyway. */
+	if (sts->pre_sts.clock_was_set_seq != sts->post_sts.clock_was_set_seq)
+		return -EBUSY;
+
+	/* The shifted upper bound can be later than actual completion. */
+	deadline = ktime_add_ns(ktime_get_raw(), NSEC_PER_MSEC);
+	for (;;) {
+		ktime_get_snapshot_id(sts->clockid, &now);
+		if (!now.valid)
+			return -EINVAL;
+
+		if (now.clock_was_set_seq != sts->pre_sts.clock_was_set_seq)
+			return -EBUSY;
+
+		if (!ktime_before(now.monoraw, sts->post_sts.monoraw))
+			return 0;
+
+		/* Cap the wait at 1 ms, which is more than any single
+		 * write's delay. This guards against an aux clock being
+		 * disabled and reenabled, which restarts its raw time.
+		 */
+		if (!ktime_before(ktime_get_raw(), deadline))
+			return -EBUSY;
+
+		cpu_relax();
+	}
+}
+EXPORT_SYMBOL_GPL(__mdiobus_write_sts);
+
+/**
+ * mdiobus_supports_write_sts - Check for timestamped write support
+ * @bus: the mii_bus struct
+ *
+ * Return: true if __mdiobus_write_sts() can return system timestamps
+ * for writes on @bus.
+ */
+bool mdiobus_supports_write_sts(struct mii_bus *bus)
+{
+	return bus->write_sts;
+}
+EXPORT_SYMBOL_GPL(mdiobus_supports_write_sts);
 
 /**
  * __mdiobus_modify_changed - Unlocked version of the mdiobus_modify function
