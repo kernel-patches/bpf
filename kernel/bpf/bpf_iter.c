@@ -409,6 +409,9 @@ static int bpf_iter_link_replace(struct bpf_link *link,
 				 struct bpf_prog *new_prog,
 				 struct bpf_prog *old_prog)
 {
+	struct bpf_iter_link *iter_link =
+		container_of(link, struct bpf_iter_link, link);
+	const struct bpf_iter_reg *reg_info = iter_link->tinfo->reg_info;
 	int ret = 0;
 
 	mutex_lock(&link_mutex);
@@ -422,6 +425,18 @@ static int bpf_iter_link_replace(struct bpf_link *link,
 	    link->prog->aux->attach_btf_id != new_prog->aux->attach_btf_id) {
 		ret = -EINVAL;
 		goto out_unlock;
+	}
+
+	if (new_prog->sleepable &&
+	    !bpf_iter_target_support_resched(iter_link->tinfo)) {
+		ret = -EINVAL;
+		goto out_unlock;
+	}
+
+	if (reg_info->validate_target) {
+		ret = reg_info->validate_target(new_prog, &iter_link->aux);
+		if (ret)
+			goto out_unlock;
 	}
 
 	old_prog = xchg(&link->prog, new_prog);

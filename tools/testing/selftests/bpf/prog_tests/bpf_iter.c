@@ -897,13 +897,21 @@ static void test_bpf_hash_map(void)
 	/* Sleepable program is prohibited for hash map iterator */
 	linfo.map.map_fd = map_fd;
 	link = bpf_program__attach_iter(skel->progs.sleepable_dummy_dump, &opts);
-	if (!ASSERT_ERR_PTR(link, "attach_sleepable_prog_to_iter"))
+	err = libbpf_get_error(link);
+	if (!ASSERT_EQ(err, -EINVAL, "attach_sleepable_prog_to_iter")) {
+		if (!err)
+			bpf_link__destroy(link);
 		goto out;
+	}
 
 	linfo.map.map_fd = map_fd;
 	link = bpf_program__attach_iter(skel->progs.dump_bpf_hash_map, &opts);
 	if (!ASSERT_OK_PTR(link, "attach_iter"))
 		goto out;
+
+	err = bpf_link__update_program(link, skel->progs.sleepable_dummy_dump);
+	if (!ASSERT_EQ(err, -EINVAL, "update_sleepable_prog"))
+		goto free_link;
 
 	iter_fd = bpf_iter_create(bpf_link__fd(link));
 	if (!ASSERT_GE(iter_fd, 0, "create_iter"))
@@ -1023,7 +1031,7 @@ static void test_bpf_array_map(void)
 	int err, i, map_fd, hash_fd, iter_fd;
 	struct bpf_iter_bpf_array_map *skel;
 	union bpf_iter_link_info linfo;
-	struct bpf_link *link;
+	struct bpf_link *link, *bad_link;
 	char buf[64] = {};
 	int len, start;
 
@@ -1049,10 +1057,24 @@ static void test_bpf_array_map(void)
 	linfo.map.map_fd = map_fd;
 	opts.link_info = &linfo;
 	opts.link_info_len = sizeof(linfo);
+	bad_link = bpf_program__attach_iter(skel->progs.oob_write_bpf_array_map,
+					    &opts);
+	err = libbpf_get_error(bad_link);
+	if (!ASSERT_EQ(err, -EACCES, "attach_oob_write_iter")) {
+		if (!err)
+			bpf_link__destroy(bad_link);
+		goto out;
+	}
+
 	link = bpf_program__attach_iter(skel->progs.dump_bpf_array_map, &opts);
 	if (!ASSERT_OK_PTR(link, "attach_iter"))
 		goto out;
 
+	err = bpf_link__update_program(link, skel->progs.oob_write_bpf_array_map);
+	if (!ASSERT_EQ(err, -EACCES, "update_oob_write_iter"))
+		goto free_link;
+
+	/* The rejected update must leave dump_bpf_array_map attached. */
 	iter_fd = bpf_iter_create(bpf_link__fd(link));
 	if (!ASSERT_GE(iter_fd, 0, "create_iter"))
 		goto free_link;
@@ -1091,6 +1113,9 @@ static void test_bpf_array_map(void)
 		if (!ASSERT_EQ(key, val - 4, "invalid_val hashmap1"))
 			goto close_iter;
 	}
+
+	err = bpf_link__update_program(link, skel->progs.noop_bpf_array_map);
+	ASSERT_OK(err, "update_valid_iter");
 
 close_iter:
 	close(iter_fd);
@@ -1362,6 +1387,11 @@ static void test_bpf_sk_storage_map(void)
 	link = bpf_program__attach_iter(skel->progs.rw_bpf_sk_storage_map, &opts);
 	if (!ASSERT_OK_PTR(link, "attach_iter"))
 		goto out;
+
+	err = bpf_link__update_program(link,
+				       skel->progs.oob_write_bpf_sk_storage_map);
+	if (!ASSERT_EQ(err, -EACCES, "update_oob_write_iter"))
+		goto free_link;
 
 	iter_fd = bpf_iter_create(bpf_link__fd(link));
 	if (!ASSERT_GE(iter_fd, 0, "create_iter"))

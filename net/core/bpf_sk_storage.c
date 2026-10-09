@@ -846,6 +846,18 @@ static void bpf_iter_fini_sk_storage_map(void *priv_data)
 	bpf_map_put_with_uref(seq_info->map);
 }
 
+static int bpf_iter_validate_map(struct bpf_prog *prog,
+				 const struct bpf_iter_aux_info *aux)
+{
+	if (aux->map->map_type != BPF_MAP_TYPE_SK_STORAGE)
+		return -EINVAL;
+
+	if (prog->aux->max_rdwr_access > aux->map->value_size)
+		return -EACCES;
+
+	return 0;
+}
+
 static int bpf_iter_attach_map(struct bpf_prog *prog,
 			       union bpf_iter_link_info *linfo,
 			       struct bpf_iter_aux_info *aux)
@@ -860,18 +872,15 @@ static int bpf_iter_attach_map(struct bpf_prog *prog,
 	if (IS_ERR(map))
 		return PTR_ERR(map);
 
-	if (map->map_type != BPF_MAP_TYPE_SK_STORAGE)
-		goto put_map;
-
-	if (prog->aux->max_rdwr_access > map->value_size) {
-		err = -EACCES;
-		goto put_map;
-	}
-
 	aux->map = map;
+	err = bpf_iter_validate_map(prog, aux);
+	if (err)
+		goto put_map;
+
 	return 0;
 
 put_map:
+	aux->map = NULL;
 	bpf_map_put_with_uref(map);
 	return err;
 }
@@ -898,6 +907,7 @@ static const struct bpf_iter_seq_info iter_seq_info = {
 static struct bpf_iter_reg bpf_sk_storage_map_reg_info = {
 	.target			= "bpf_sk_storage_map",
 	.attach_target		= bpf_iter_attach_map,
+	.validate_target	= bpf_iter_validate_map,
 	.detach_target		= bpf_iter_detach_map,
 	.show_fdinfo		= bpf_iter_map_show_fdinfo,
 	.fill_link_info		= bpf_iter_map_fill_link_info,
