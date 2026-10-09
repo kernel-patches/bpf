@@ -374,6 +374,14 @@ struct mii_bus {
 	/** @write_c45: Perform a C45 write transfer on the bus */
 	int (*write_c45)(struct mii_bus *bus, int addr, int devnum,
 			 int regnum, u16 val);
+	/**
+	 * @write_sts: Perform a write transfer on the bus,
+	 * with system timestamps bounding its completion. Set only
+	 * if timestamps can always be provided. Must not return
+	 * -EOPNOTSUPP.
+	 */
+	int (*write_sts)(struct mii_bus *bus, int addr, int regnum, u16 val,
+			 struct ptp_system_timestamp *sts);
 	/** @reset: Perform a reset of the bus */
 	int (*reset)(struct mii_bus *bus);
 	/**
@@ -1797,6 +1805,35 @@ static inline int __phy_write(struct phy_device *phydev, u32 regnum, u16 val)
 {
 	return __mdiobus_write(phydev->mdio.bus, phydev->mdio.addr, regnum,
 			       val);
+}
+
+/**
+ * phy_supports_write_sts - Check for timestamped PHY register writes
+ * @phydev: the phy_device struct
+ *
+ * Return: true if __phy_write_sts() can return system timestamps.
+ */
+static inline bool phy_supports_write_sts(struct phy_device *phydev)
+{
+	return mdiobus_supports_write_sts(phydev->mdio.bus);
+}
+
+/**
+ * __phy_write_sts - Write a PHY register with a frame-end timestamp
+ * @phydev: the phy_device struct
+ * @regnum: clause 22 register number
+ * @val: value to write
+ * @sts: system timestamp bounds, or NULL
+ *
+ * Return: As for __mdiobus_write_sts().
+ *
+ * The caller must hold the MDIO bus lock.
+ */
+static inline int __phy_write_sts(struct phy_device *phydev, u32 regnum, u16 val,
+				  struct ptp_system_timestamp *sts)
+{
+	return __mdiobus_write_sts(phydev->mdio.bus, phydev->mdio.addr,
+				   regnum, val, sts);
 }
 
 /**
