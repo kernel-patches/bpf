@@ -184,9 +184,9 @@ struct bpf_reg_state {
 	 * other registers. Kept outside the metadata union for ID remapping
 	 * during state comparisons.
 	 */
-	u32 map_uid;
+	u32 map_uid:31;
 	/* if (!precise && SCALAR_VALUE) min/max/tnum don't affect safety */
-	bool precise;
+	u32 precise:1;
 };
 
 static inline s64 reg_smin(const struct bpf_reg_state *reg)
