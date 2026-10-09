@@ -159,6 +159,52 @@ static __used __naked void write_first_param(void)
 	::: __clobber_all);
 }
 
+struct cnt8 { long v; };
+
+__noinline int global_noop_arg(struct cnt8 *p)
+{
+	return 0;
+}
+
+SEC("socket")
+__log_level(2)
+/* Call to a global function: the argument is described by its declared type. */
+__msg("stack use/def subprog#0 global_callee_arg (d0,cs0):")
+__msg("3: (85) call pc+{{.*}}; use: fp0-8 def: fp0-8 may_def: fp0-8")
+__naked void global_callee_arg(void)
+{
+	asm volatile (
+	"*(u64 *)(r10 - 8) = 0;"
+	"r1 = r10;"
+	"r1 += -8;"
+	"call global_noop_arg;"
+	"exit;"
+	::: __clobber_all);
+}
+
+struct task_struct { int pid; };
+
+__noinline int global_noop_btf_arg(struct task_struct *p __arg_untrusted)
+{
+	return 0;
+}
+
+SEC("socket")
+__success __log_level(2)
+/* Untrusted BTF pointer arguments need no caller stack state. */
+__msg("stack use/def subprog#0 global_callee_btf_arg (d0,cs0):")
+__msg("3: (85) call pc+{{[0-9]+}}\n")
+__naked void global_callee_btf_arg(void)
+{
+	asm volatile (
+	"*(u64 *)(r10 - 8) = 0;"
+	"r1 = r10;"
+	"r1 += -8;"
+	"call global_noop_btf_arg;"
+	"exit;"
+	::: __clobber_all);
+}
+
 /*
  * Cross-frame imprecise write: imprecise_frame_writer() receives a pointer
  * into the caller's frame (frame 0) but conditionally replaces it with a
