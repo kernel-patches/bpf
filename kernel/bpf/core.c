@@ -3342,6 +3342,18 @@ u32 bpf_jit_place_args(const struct bpf_jit_arg_abi *abi,
 	u32 i, k, nslots, slot = 0, nregs_used = 0, stack_off = 0;
 	bool on_stack = false;
 
+	/*
+	 * A BPF function is called by BPF code, which passes slot N where
+	 * the kernel convention passes its Nth eightbyte, whatever the
+	 * arguments: no hole, no split refused and no register backfilled.
+	 */
+	if (fm->bpf_tgt_prog) {
+		for (i = 0; i < fm->nr_args; i++)
+			for (k = btf_func_model_arg_slots(fm, i); k > 0; k--, slot++)
+				pos_of_slot[slot] = slot;
+		return slot;
+	}
+
 	for (i = 0; i < fm->nr_args; i++) {
 		bool align16 = fm->arg_flags[i] & BTF_FMODEL_ALIGN16_ARG;
 		u32 pos;
