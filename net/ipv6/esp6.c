@@ -782,6 +782,17 @@ int esp6_input_done2(struct sk_buff *skb, int err)
 			goto out;
 		}
 
+		/*
+		 * ipv6_skip_exthdr() can advance past the packet end when the
+		 * last extension header claims an oversized length; the
+		 * transport header below would then be read out of bounds.
+		 * Make sure there is room for the 2-byte source port we read.
+		 */
+		if (offset + sizeof(__be16) > skb->len) {
+			err = -EINVAL;
+			goto out;
+		}
+
 		uh = (void *)(skb->data + offset);
 		th = (void *)(skb->data + offset);
 		hdr_len += offset;
