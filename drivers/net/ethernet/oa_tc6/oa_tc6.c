@@ -8,6 +8,7 @@
 #include <linux/bitfield.h>
 #include <linux/delay.h>
 #include <linux/gpio/consumer.h>
+#include <linux/bitops.h>
 #include <linux/iopoll.h>
 #include <linux/interrupt.h>
 #include <linux/mdio.h>
@@ -15,6 +16,16 @@
 #include <linux/oa_tc6.h>
 
 #include "oa_tc6_std_def.h"
+
+struct oa_tc6_ts_info_rx {
+	bool rtsa;
+	bool rtsp;
+};
+
+struct oa_tc6_ts_info_tx {
+	ktime_t hwtstamp;
+	u8 tsc;
+};
 
 static int oa_tc6_spi_transfer(struct oa_tc6 *tc6,
 			       enum oa_tc6_header_type header_type, u16 length)
@@ -48,6 +59,193 @@ static int oa_tc6_get_parity(u32 p)
 
 	/* Odd parity is used here */
 	return !((p >> 28) & 1);
+}
+
+static struct oa_tc6_ts_info_tx *oa_tc6_tsinfo_tx(struct sk_buff *skb)
+{
+	return (struct oa_tc6_ts_info_tx *)(skb->cb);
+}
+
+static struct oa_tc6_ts_info_rx *oa_tc6_tsinfo_rx(struct sk_buff *skb)
+{
+	return (struct oa_tc6_ts_info_rx *)(skb->cb);
+}
+
+static u8 oa_tc6_next_tsc(u8 tsc)
+{
+	return tsc < OA_TC6_TTSCC_REG_ID ? tsc + 1 : OA_TC6_TTSCA_REG_ID;
+}
+
+static bool oa_tc6_req_tx_hwtstamp(struct oa_tc6 *tc6, struct sk_buff *skb)
+{
+	u8 tsc;
+	u8 i;
+
+	lockdep_assert_held(&tc6->tx_skb_lock);
+
+	if (!skb || !(skb_shinfo(skb)->tx_flags & SKBTX_HW_TSTAMP))
+		return false;
+
+	if (!tc6->hw_tstamp_enabled)
+		return false;
+
+	if (tc6->ts_config.tx_type != HWTSTAMP_TX_ON) {
+		tc6->tx_hwtstamp_lost++;
+		return false;
+	}
+
+	tsc = tc6->ttsc_current_id;
+	for (i = 0; i < OA_TC6_TTSCC_REG_ID; i++) {
+		if (!(tc6->ts_ttsc_pending &
+		    BIT(tsc - OA_TC6_TTSCA_REG_ID)))
+			goto slot_found;
+		tsc = oa_tc6_next_tsc(tsc);
+	}
+
+	/* All the three slots are waiting for its event. This skb
+	 * can't request timestamp. Marking it to be dropped.
+	 */
+	tc6->tx_hwtstamp_lost++;
+	return true;
+
+slot_found:
+	tc6->ts_ttsc_pending |= BIT(tsc - OA_TC6_TTSCA_REG_ID);
+	tc6->ttsc_current_id = oa_tc6_next_tsc(tsc);
+	oa_tc6_tsinfo_tx(skb)->tsc = tsc;
+	skb_shinfo(skb)->tx_flags |= SKBTX_IN_PROGRESS;
+	return false;
+}
+
+static void oa_tc6_events_handle(struct oa_tc6 *tc6, u32 val, const u32 *ts)
+{
+	struct skb_shared_hwtstamps tstamp;
+	struct oa_tc6_ts_info_tx *ski;
+	struct sk_buff *skb, *tmp;
+	LIST_HEAD(deliver);
+	LIST_HEAD(drop);
+	u8 tsc, bit_num;
+	u32 handled = 0;
+	u32 event;
+
+	spin_lock_bh(&tc6->tx_skb_lock);
+	list_for_each_entry_safe(skb, tmp, &tc6->tx_ts_skb_q, list) {
+		ski = oa_tc6_tsinfo_tx(skb);
+		tsc = ski->tsc;
+		bit_num = tsc - OA_TC6_TTSCA_REG_ID;
+		event = OA_TC6_STATUS0_TTSCAA << bit_num;
+		if (!(val & event))
+			continue;
+		if (handled & event) {
+			dev_warn_ratelimited(&tc6->spi->dev,
+					     "Multiple skbs\n");
+			tc6->tx_hwtstamp_err++;
+			list_move_tail(&skb->list, &drop);
+			continue;
+		}
+
+		handled |= event;
+		tc6->ts_ttsc_pending &= ~BIT(bit_num);
+
+		ski->hwtstamp = ktime_set(ts[2 * bit_num],
+					  ts[2 * bit_num + 1]);
+		tc6->tx_hwtstamp_pkts++;
+		list_move_tail(&skb->list, &deliver);
+	}
+	spin_unlock_bh(&tc6->tx_skb_lock);
+
+	/* skb_tstamp_tx() clones the skb and wakes the owning socket, so keep
+	 * it out of the lock that oa_tc6_start_xmit() takes.
+	 */
+	list_for_each_entry_safe(skb, tmp, &deliver, list) {
+		list_del(&skb->list);
+		memset(&tstamp, 0, sizeof(tstamp));
+		tstamp.hwtstamp = oa_tc6_tsinfo_tx(skb)->hwtstamp;
+		skb_tstamp_tx(skb, &tstamp);
+		dev_kfree_skb(skb);
+	}
+
+	list_for_each_entry_safe(skb, tmp, &drop, list) {
+		list_del(&skb->list);
+		dev_kfree_skb(skb);
+	}
+
+	if (val & ~handled) {
+		tc6->tx_hwtstamp_err += hweight32(val & ~handled);
+		dev_warn_ratelimited(&tc6->spi->dev,
+				     "Unexpected event: 0x%x\n",
+				     val & ~handled);
+	}
+}
+
+void oa_tc6_cleanup_tx_tstamp_skbs(struct oa_tc6 *tc6)
+{
+	struct sk_buff *skb, *tmp;
+
+	spin_lock_bh(&tc6->tx_skb_lock);
+	list_for_each_entry_safe(skb, tmp, &tc6->tx_ts_skb_q, list) {
+		list_del(&skb->list);
+		tc6->ts_ttsc_pending &= ~BIT(oa_tc6_tsinfo_tx(skb)->tsc -
+					     OA_TC6_TTSCA_REG_ID);
+		dev_kfree_skb(skb);
+
+		/* The frame was transmitted, only its timestamp is lost. */
+		tc6->tx_hwtstamp_lost++;
+	}
+	spin_unlock_bh(&tc6->tx_skb_lock);
+}
+
+static int oa_tc6_update_ts_in_rx_skb(struct oa_tc6 *tc6)
+{
+	unsigned int expected_len = ETH_HLEN;
+	struct sk_buff *skb = tc6->rx_skb;
+	struct oa_tc6_ts_info_rx *ski;
+	__be32 ts_val[2];
+	u32 ts[2];
+
+	ski = oa_tc6_tsinfo_rx(skb);
+	if (ski->rtsa)
+		expected_len += OA_TC6_TSTAMP_SZ;
+
+	if (skb->len < expected_len) {
+		tc6->netdev->stats.rx_length_errors++;
+		return -EINVAL;
+	}
+
+	if (!ski->rtsa)
+		return 0;
+
+	memcpy(&ts_val[0], skb->data, 4);
+	memcpy(&ts_val[1], (u32 *)skb->data + 1, 4);
+
+	ts[0] = be32_to_cpu(ts_val[0]);
+	ts[1] = be32_to_cpu(ts_val[1]);
+
+	/* Check parity */
+	if ((oa_tc6_get_parity(ts[0]) ^ oa_tc6_get_parity(ts[1])) ==
+	    !ski->rtsp) {
+		struct skb_shared_hwtstamps *hw_ts;
+
+		/* Report timestamp to the upper layers */
+		hw_ts = skb_hwtstamps(skb);
+		memset(hw_ts, 0, sizeof(*hw_ts));
+		hw_ts->hwtstamp = ktime_set(ts[0], ts[1]);
+	}
+	skb_pull(skb, sizeof(ts));
+
+	return 0;
+}
+
+static int oa_tc6_update_standard_capability(struct oa_tc6 *tc6)
+{
+	u32 regval = 0;
+	int ret;
+
+	ret = oa_tc6_read_register(tc6, OA_TC6_REG_STDCAP, &regval);
+	if (ret)
+		return ret;
+	if (regval & OA_TC6_STDCAP_TIMESTAMP_CAPABILITY)
+		tc6->hw_tstamp_supported = true;
+	return 0;
 }
 
 static __be32 oa_tc6_prepare_ctrl_header(u32 addr, u8 length,
@@ -625,6 +823,16 @@ static void oa_tc6_cleanup_ongoing_rx_skb(struct oa_tc6 *tc6)
 
 static void oa_tc6_cleanup_ongoing_tx_skb(struct oa_tc6 *tc6)
 {
+	if (tc6->ongoing_tx_skb &&
+	    oa_tc6_tsinfo_tx(tc6->ongoing_tx_skb)->tsc) {
+		u8 tsc = oa_tc6_tsinfo_tx(tc6->ongoing_tx_skb)->tsc;
+
+		spin_lock_bh(&tc6->tx_skb_lock);
+		tc6->ts_ttsc_pending &= ~BIT(tsc - OA_TC6_TTSCA_REG_ID);
+		spin_unlock_bh(&tc6->tx_skb_lock);
+	}
+
+	tc6->tx_skb_offset = 0;
 	oa_tc6_drop_tx_skb(tc6, tc6->ongoing_tx_skb);
 	tc6->ongoing_tx_skb = NULL;
 }
@@ -650,6 +858,7 @@ static void oa_tc6_free_pending_skbs(struct oa_tc6 *tc6)
 {
 	oa_tc6_free_ongoing_skbs(tc6);
 	oa_tc6_cleanup_waiting_tx_skb(tc6);
+	oa_tc6_cleanup_tx_tstamp_skbs(tc6);
 }
 
 static void oa_tc6_look_for_new_frame(struct oa_tc6 *tc6)
@@ -678,6 +887,8 @@ static void oa_tc6_disable_traffic(struct oa_tc6 *tc6)
 	netif_tx_disable(tc6->netdev);
 	oa_tc6_drop_tx_skb(tc6, skb);
 	oa_tc6_free_ongoing_skbs(tc6);
+	oa_tc6_cleanup_tx_tstamp_skbs(tc6);
+
 	oa_tc6_write_register(tc6, OA_TC6_REG_INT_MASK0, regval);
 	oa_tc6_read_register(tc6, OA_TC6_REG_STATUS0, &regval);
 	oa_tc6_write_register(tc6, OA_TC6_REG_STATUS0, regval);
@@ -686,15 +897,28 @@ static void oa_tc6_disable_traffic(struct oa_tc6 *tc6)
 
 static int oa_tc6_process_extended_status(struct oa_tc6 *tc6)
 {
+	u32 regs[OA_TC6_STATUS0_TTSC_REG_COUNT];
+	bool ts_valid = !!tc6->ptp_clock;
 	u32 value;
 	int ret;
 
-	ret = oa_tc6_read_register(tc6, OA_TC6_REG_STATUS0, &value);
+	/* When timestamp is disabled, there is no behavior change
+	 * as it reads only STATUS0 register. When enabled,
+	 * TTSCA_HIGH..TTSCC_LOW are fetched together with STATUS0
+	 * to avoid having to make second SPI transaction. Reading few
+	 * extra registers, even it may not be needed every time this
+	 * function is called, it is more efficient than making second
+	 * SPI transaction, when needed.
+	 */
+	ret = oa_tc6_read_registers(tc6, OA_TC6_REG_STATUS0, regs,
+				    ts_valid ?
+				    OA_TC6_STATUS0_TTSC_REG_COUNT : 1);
 	if (ret) {
 		netdev_err(tc6->netdev, "STATUS0 register read failed: %d\n",
 			   ret);
 		return ret;
 	}
+	value = regs[0];
 
 	/* This function is called for each chunk received in a given SPI
 	 * transaction. In case, extended status bit is set in more than
@@ -702,6 +926,11 @@ static int oa_tc6_process_extended_status(struct oa_tc6 *tc6)
 	 */
 	if (!value)
 		return 0;
+
+	if ((value & OA_TC6_STATUS0_TTSCA_MASK) != 0)
+		oa_tc6_events_handle(tc6, value &
+				     OA_TC6_STATUS0_TTSCA_MASK,
+				     &regs[OA_TC6_TTSC_REG_OFFSET]);
 
 	/* Clear the error interrupts status */
 	ret = oa_tc6_write_register(tc6, OA_TC6_REG_STATUS0, value);
@@ -788,6 +1017,13 @@ static void oa_tc6_submit_rx_skb(struct oa_tc6 *tc6)
 	    tc6->rx_skb->len > ETH_FCS_LEN)
 		skb_trim(tc6->rx_skb, tc6->rx_skb->len - ETH_FCS_LEN);
 
+	if (oa_tc6_update_ts_in_rx_skb(tc6)) {
+		tc6->netdev->stats.rx_dropped++;
+		dev_kfree_skb_any(tc6->rx_skb);
+		tc6->rx_skb = NULL;
+		return;
+	}
+
 	tc6->rx_skb->protocol = eth_type_trans(tc6->rx_skb, tc6->netdev);
 	tc6->netdev->stats.rx_packets++;
 	tc6->netdev->stats.rx_bytes += tc6->rx_skb->len;
@@ -823,25 +1059,32 @@ static int oa_tc6_update_rx_skb(struct oa_tc6 *tc6, u8 *payload, u8 length)
  * buffer pointer. We should release, if a valid pointer is found before
  * allocating a new one.
  */
-static int oa_tc6_allocate_rx_skb(struct oa_tc6 *tc6)
+static int oa_tc6_allocate_rx_skb(struct oa_tc6 *tc6, u32 footer)
 {
+	struct oa_tc6_ts_info_rx *ski;
+
 	oa_tc6_cleanup_ongoing_rx_skb(tc6);
-	tc6->rx_skb = netdev_alloc_skb_ip_align(tc6->netdev, tc6->netdev->mtu +
-						ETH_HLEN + ETH_FCS_LEN);
+	tc6->rx_skb = netdev_alloc_skb_ip_align(tc6->netdev,
+						tc6->netdev->mtu +
+						ETH_HLEN + ETH_FCS_LEN +
+						OA_TC6_TSTAMP_SZ);
 	if (!tc6->rx_skb) {
 		tc6->netdev->stats.rx_dropped++;
 		return -ENOMEM;
 	}
 
+	ski = oa_tc6_tsinfo_rx(tc6->rx_skb);
+	ski->rtsa = FIELD_GET(OA_TC6_DATA_FOOTER_RTSA_VALID, footer);
+	ski->rtsp = FIELD_GET(OA_TC6_DATA_FOOTER_RTSP_VALID, footer);
 	return 0;
 }
 
 static int oa_tc6_prcs_complete_rx_frame(struct oa_tc6 *tc6, u8 *payload,
-					 u16 size)
+					 u16 size, u32 footer)
 {
 	int ret;
 
-	ret = oa_tc6_allocate_rx_skb(tc6);
+	ret = oa_tc6_allocate_rx_skb(tc6, footer);
 	if (ret)
 		return ret;
 
@@ -854,11 +1097,11 @@ static int oa_tc6_prcs_complete_rx_frame(struct oa_tc6 *tc6, u8 *payload,
 	return 0;
 }
 
-static int oa_tc6_prcs_rx_frame_start(struct oa_tc6 *tc6, u8 *payload, u16 size)
+static int oa_tc6_prcs_rx_frame_start(struct oa_tc6 *tc6, u8 *payload, u16 size, u32 footer)
 {
 	int ret;
 
-	ret = oa_tc6_allocate_rx_skb(tc6);
+	ret = oa_tc6_allocate_rx_skb(tc6, footer);
 	if (ret)
 		return ret;
 
@@ -905,7 +1148,7 @@ static int oa_tc6_prcs_rx_chunk_payload(struct oa_tc6 *tc6, u8 *data,
 		size = end_byte_offset + 1 - start_byte_offset;
 		return oa_tc6_prcs_complete_rx_frame(tc6,
 						     &data[start_byte_offset],
-						     size);
+						     size, footer);
 	}
 
 	/* Process the chunk with only rx frame start */
@@ -913,7 +1156,7 @@ static int oa_tc6_prcs_rx_chunk_payload(struct oa_tc6 *tc6, u8 *data,
 		size = OA_TC6_CHUNK_PAYLOAD_SIZE - start_byte_offset;
 		return oa_tc6_prcs_rx_frame_start(tc6,
 						  &data[start_byte_offset],
-						  size);
+						  size, footer);
 	}
 
 	/* Process the chunk with only rx frame end */
@@ -946,7 +1189,7 @@ static int oa_tc6_prcs_rx_chunk_payload(struct oa_tc6 *tc6, u8 *data,
 		size = OA_TC6_CHUNK_PAYLOAD_SIZE - start_byte_offset;
 		return oa_tc6_prcs_rx_frame_start(tc6,
 						  &data[start_byte_offset],
-						  size);
+						  size, footer);
 	}
 
 	/* Process the chunk with ongoing rx frame data */
@@ -1025,13 +1268,15 @@ static int oa_tc6_process_spi_data_rx_buf(struct oa_tc6 *tc6, u16 length)
 }
 
 static __be32 oa_tc6_prepare_data_header(bool data_valid, bool start_valid,
-					 bool end_valid, u8 end_byte_offset)
+					 bool end_valid, u8 end_byte_offset,
+					 u8 tsc)
 {
 	u32 header = FIELD_PREP(OA_TC6_DATA_HEADER_DATA_NOT_CTRL,
 				OA_TC6_DATA_HEADER) |
 		     FIELD_PREP(OA_TC6_DATA_HEADER_DATA_VALID, data_valid) |
 		     FIELD_PREP(OA_TC6_DATA_HEADER_START_VALID, start_valid) |
 		     FIELD_PREP(OA_TC6_DATA_HEADER_END_VALID, end_valid) |
+		     FIELD_PREP(OA_TC6_DATA_HEADER_TSC_OFFSET, tsc) |
 		     FIELD_PREP(OA_TC6_DATA_HEADER_END_BYTE_OFFSET,
 				end_byte_offset);
 
@@ -1050,6 +1295,7 @@ static void oa_tc6_add_tx_skb_to_spi_buf(struct oa_tc6 *tc6)
 	enum oa_tc6_data_start_valid_info start_valid;
 	u8 end_byte_offset = 0;
 	u16 length_to_copy;
+	u8 tsc = 0;
 
 	/* Initial value is assigned here to avoid more than 80 characters in
 	 * the declaration place.
@@ -1059,8 +1305,10 @@ static void oa_tc6_add_tx_skb_to_spi_buf(struct oa_tc6 *tc6)
 	/* Set start valid if the current tx chunk contains the start of the tx
 	 * ethernet frame.
 	 */
-	if (!tc6->tx_skb_offset)
+	if (!tc6->tx_skb_offset) {
 		start_valid = OA_TC6_DATA_START_VALID;
+		tsc = oa_tc6_tsinfo_tx(tc6->ongoing_tx_skb)->tsc;
+	}
 
 	/* If the remaining tx skb length is more than the chunk payload size of
 	 * 64 bytes then copy only 64 bytes and leave the ongoing tx skb for
@@ -1081,17 +1329,29 @@ static void oa_tc6_add_tx_skb_to_spi_buf(struct oa_tc6 *tc6)
 		tc6->tx_skb_offset = 0;
 		tc6->netdev->stats.tx_bytes += tc6->ongoing_tx_skb->len;
 		tc6->netdev->stats.tx_packets++;
-		kfree_skb(tc6->ongoing_tx_skb);
+
+		/* Free the ones that are not saved for later processing,
+		 * like timestamping.
+		 */
+		if (!oa_tc6_tsinfo_tx(tc6->ongoing_tx_skb)->tsc) {
+			kfree_skb(tc6->ongoing_tx_skb);
+		} else {
+			spin_lock_bh(&tc6->tx_skb_lock);
+			list_add_tail(&tc6->ongoing_tx_skb->list,
+				      &tc6->tx_ts_skb_q);
+			spin_unlock_bh(&tc6->tx_skb_lock);
+		}
 		tc6->ongoing_tx_skb = NULL;
 	}
 
 	*tx_buf = oa_tc6_prepare_data_header(OA_TC6_DATA_VALID, start_valid,
-					     end_valid, end_byte_offset);
+					     end_valid, end_byte_offset, tsc);
 	tc6->spi_data_tx_buf_offset += OA_TC6_CHUNK_SIZE;
 }
 
 static u16 oa_tc6_prepare_spi_tx_buf_for_tx_skbs(struct oa_tc6 *tc6)
 {
+	struct sk_buff *drop_skb;
 	u16 used_tx_credits;
 
 	/* Get tx skbs and convert them into tx chunks based on the tx credits
@@ -1100,10 +1360,21 @@ static u16 oa_tc6_prepare_spi_tx_buf_for_tx_skbs(struct oa_tc6 *tc6)
 	for (used_tx_credits = 0; used_tx_credits < tc6->tx_credits;
 	     used_tx_credits++) {
 		if (!tc6->ongoing_tx_skb) {
+			drop_skb = NULL;
 			spin_lock_bh(&tc6->tx_skb_lock);
 			tc6->ongoing_tx_skb = tc6->waiting_tx_skb;
 			tc6->waiting_tx_skb = NULL;
+			if (oa_tc6_req_tx_hwtstamp(tc6,
+						   tc6->ongoing_tx_skb)) {
+				drop_skb = tc6->ongoing_tx_skb;
+				tc6->ongoing_tx_skb = NULL;
+				if (!tc6->disable_traffic &&
+				    netif_running(tc6->netdev) &&
+				    netif_queue_stopped(tc6->netdev))
+					netif_wake_queue(tc6->netdev);
+			}
 			spin_unlock_bh(&tc6->tx_skb_lock);
+			oa_tc6_drop_tx_skb(tc6, drop_skb);
 		}
 		if (!tc6->ongoing_tx_skb)
 			break;
@@ -1120,7 +1391,7 @@ static void oa_tc6_add_empty_chunks_to_spi_buf(struct oa_tc6 *tc6,
 
 	header = oa_tc6_prepare_data_header(OA_TC6_DATA_INVALID,
 					    OA_TC6_DATA_START_INVALID,
-					    OA_TC6_DATA_END_INVALID, 0);
+					    OA_TC6_DATA_END_INVALID, 0, 0);
 
 	while (needed_empty_chunks--) {
 		__be32 *tx_buf = tc6->spi_data_tx_buf +
@@ -1312,6 +1583,7 @@ netdev_tx_t oa_tc6_start_xmit(struct oa_tc6 *tc6, struct sk_buff *skb)
 		return NETDEV_TX_OK;
 	}
 
+	oa_tc6_tsinfo_tx(skb)->tsc = 0;
 	spin_lock_bh(&tc6->tx_skb_lock);
 	if (tc6->waiting_tx_skb) {
 		netif_stop_queue(tc6->netdev);
@@ -1371,6 +1643,8 @@ struct oa_tc6 *oa_tc6_init(struct spi_device *spi, struct net_device *netdev,
 	SET_NETDEV_DEV(netdev, &spi->dev);
 	mutex_init(&tc6->spi_ctrl_lock);
 	spin_lock_init(&tc6->tx_skb_lock);
+	tc6->ttsc_current_id = OA_TC6_TTSCA_REG_ID;
+	INIT_LIST_HEAD(&tc6->tx_ts_skb_q);
 
 	if (quirks)
 		tc6->quirk_flags = quirks->quirk_flags;
@@ -1461,6 +1735,12 @@ struct oa_tc6 *oa_tc6_init(struct spi_device *spi, struct net_device *netdev,
 	if (ret) {
 		dev_err(&tc6->spi->dev,
 			"Failed to update buffer status: %d\n", ret);
+		goto phy_exit;
+	}
+
+	ret = oa_tc6_update_standard_capability(tc6);
+	if (ret) {
+		dev_err(&tc6->spi->dev, "Failed to read capability\n");
 		goto phy_exit;
 	}
 

@@ -18,6 +18,9 @@
 #include <linux/wait.h>
 #include <linux/phy.h>
 
+/* Tx timestamp capture register A (high) */
+#define OA_TC6_REG_TTSCA_HIGH			(0x10)
+
 /* Control command header */
 #define OA_TC6_CTRL_HEADER_DATA_NOT_CTRL	BIT(31)
 #define OA_TC6_CTRL_HEADER_WRITE_NOT_READ	BIT(29)
@@ -33,6 +36,7 @@
 #define OA_TC6_DATA_HEADER_START_WORD_OFFSET	GENMASK(19, 16)
 #define OA_TC6_DATA_HEADER_END_VALID		BIT(14)
 #define OA_TC6_DATA_HEADER_END_BYTE_OFFSET	GENMASK(13, 8)
+#define OA_TC6_DATA_HEADER_TSC_OFFSET		GENMASK(7, 6)
 #define OA_TC6_DATA_HEADER_PARITY		BIT(0)
 
 /* Data footer */
@@ -44,6 +48,8 @@
 #define OA_TC6_DATA_FOOTER_START_VALID		BIT(20)
 #define OA_TC6_DATA_FOOTER_START_WORD_OFFSET	GENMASK(19, 16)
 #define OA_TC6_DATA_FOOTER_END_VALID		BIT(14)
+#define OA_TC6_DATA_FOOTER_RTSA_VALID		BIT(7)
+#define OA_TC6_DATA_FOOTER_RTSP_VALID		BIT(6)
 #define OA_TC6_DATA_FOOTER_END_BYTE_OFFSET	GENMASK(13, 8)
 #define OA_TC6_DATA_FOOTER_TX_CREDITS		GENMASK(5, 1)
 
@@ -70,6 +76,33 @@
 
 #define OA_TC6_REG_MMS_MASK		GENMASK(19, 16)
 
+#define OA_TC6_TSTAMP_SZ			8
+
+#define OA_TC6_TTSCA_REG_ID			1
+#define OA_TC6_TTSCB_REG_ID			2
+#define OA_TC6_TTSCC_REG_ID			3
+
+/* STATUS0 and the TTSCA/B/C capture registers are contiguous in MMS 0, so
+ * they are fetched with a single control transaction while timestamping is
+ * available.
+ */
+#define OA_TC6_TTSC_REG_OFFSET		(OA_TC6_REG_TTSCA_HIGH - \
+					 OA_TC6_REG_STATUS0)
+#define OA_TC6_TTSC_REG_COUNT		(2 * OA_TC6_TTSCC_REG_ID)
+#define OA_TC6_STATUS0_TTSC_REG_COUNT	(OA_TC6_TTSC_REG_OFFSET + \
+					 OA_TC6_TTSC_REG_COUNT)
+
+/* Useful for reading all the registers between CONFIG0 and INT_MASK0
+ * in a single SPI transaction
+ */
+#define CFG0_TO_IMASK0_REG_COUNT	(OA_TC6_REG_INT_MASK0 - \
+					 OA_TC6_REG_CONFIG0 + 1)
+#define CFG0_VAL_OFFSET			(0)
+#define STATUS0_VAL_OFFSET		(OA_TC6_REG_STATUS0 - \
+					 OA_TC6_REG_CONFIG0)
+#define IRQM_VAL_OFFSET			(OA_TC6_REG_INT_MASK0 - \
+					 OA_TC6_REG_CONFIG0)
+
 /* Internal structure for MAC-PHY drivers */
 struct oa_tc6 {
 	struct net_device *netdev;
@@ -95,6 +128,16 @@ struct oa_tc6 {
 	bool prot_ctrl;
 	enum oa_tc6_quirk_flag quirk_flags;
 	struct gpio_desc *reset_gpio;
+	struct hwtstamp_config ts_config;
+	struct list_head tx_ts_skb_q;
+	struct ptp_clock *ptp_clock;
+	bool hw_tstamp_supported;
+	bool hw_tstamp_enabled;
+	u64 tx_hwtstamp_pkts;
+	u64 tx_hwtstamp_lost;
+	u64 tx_hwtstamp_err;
+	u8 ts_ttsc_pending;
+	u8 ttsc_current_id;
 };
 
 enum oa_tc6_header_type {
@@ -121,5 +164,8 @@ enum oa_tc6_data_end_valid_info {
 	OA_TC6_DATA_END_INVALID,
 	OA_TC6_DATA_END_VALID,
 };
+
+void oa_tc6_cleanup_tx_tstamp_skbs(struct oa_tc6 *tc6);
+
 #endif /* OA_TC6_STD_DEF_H */
 

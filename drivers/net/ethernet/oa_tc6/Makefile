@@ -4,4 +4,4 @@
 #
 
 obj-$(CONFIG_OA_TC6) := oa_tc6_mod.o
-oa_tc6_mod-objs := oa_tc6.o
+oa_tc6_mod-objs := oa_tc6.o oa_tc6_ptp.o oa_tc6_tstamp.o
