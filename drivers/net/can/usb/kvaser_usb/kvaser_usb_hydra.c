@@ -37,9 +37,6 @@ static const struct kvaser_usb_dev_cfg kvaser_usb_hydra_dev_cfg_kcan;
 static const struct kvaser_usb_dev_cfg kvaser_usb_hydra_dev_cfg_flexc;
 static const struct kvaser_usb_dev_cfg kvaser_usb_hydra_dev_cfg_rt;
 
-#define KVASER_USB_HYDRA_BULK_EP_IN_ADDR	0x82
-#define KVASER_USB_HYDRA_BULK_EP_OUT_ADDR	0x02
-
 #define KVASER_USB_HYDRA_MAX_TRANSID		0xff
 #define KVASER_USB_HYDRA_MIN_TRANSID		0x01
 
@@ -1733,32 +1730,6 @@ static int kvaser_usb_hydra_get_berr_counter(const struct net_device *netdev,
 	return 0;
 }
 
-static int kvaser_usb_hydra_setup_endpoints(struct kvaser_usb *dev)
-{
-	const struct usb_host_interface *iface_desc;
-	struct usb_endpoint_descriptor *ep;
-	int i;
-
-	iface_desc = dev->intf->cur_altsetting;
-
-	for (i = 0; i < iface_desc->desc.bNumEndpoints; ++i) {
-		ep = &iface_desc->endpoint[i].desc;
-
-		if (!dev->bulk_in && usb_endpoint_is_bulk_in(ep) &&
-		    ep->bEndpointAddress == KVASER_USB_HYDRA_BULK_EP_IN_ADDR)
-			dev->bulk_in = ep;
-
-		if (!dev->bulk_out && usb_endpoint_is_bulk_out(ep) &&
-		    ep->bEndpointAddress == KVASER_USB_HYDRA_BULK_EP_OUT_ADDR)
-			dev->bulk_out = ep;
-
-		if (dev->bulk_in && dev->bulk_out)
-			return 0;
-	}
-
-	return -ENODEV;
-}
-
 static int kvaser_usb_hydra_init_card(struct kvaser_usb *dev)
 {
 	int err;
@@ -2203,7 +2174,6 @@ const struct kvaser_usb_dev_ops kvaser_usb_hydra_dev_ops = {
 	.dev_set_data_bittiming = kvaser_usb_hydra_set_data_bittiming,
 	.dev_get_data_busparams = kvaser_usb_hydra_get_data_busparams,
 	.dev_get_berr_counter = kvaser_usb_hydra_get_berr_counter,
-	.dev_setup_endpoints = kvaser_usb_hydra_setup_endpoints,
 	.dev_init_card = kvaser_usb_hydra_init_card,
 	.dev_init_channel = kvaser_usb_hydra_init_channel,
 	.dev_get_software_info = kvaser_usb_hydra_get_software_info,
