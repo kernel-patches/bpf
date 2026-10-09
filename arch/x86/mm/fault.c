@@ -20,6 +20,7 @@
 #include <linux/mm_types.h>
 #include <linux/mm.h>			/* find_and_lock_vma() */
 #include <linux/vmalloc.h>
+#include <linux/filter.h>		/* is_bpf_text_address()	*/
 
 #include <asm/cpufeature.h>		/* boot_cpu_has, ...		*/
 #include <asm/traps.h>			/* dotraplinkage, ...		*/
@@ -1262,6 +1263,16 @@ void do_user_addr_fault(struct pt_regs *regs,
 	if (unlikely(cpu_feature_enabled(X86_FEATURE_SMAP) &&
 		     !(error_code & X86_PF_USER) &&
 		     !(regs->flags & X86_EFLAGS_AC))) {
+		/*
+		 * JITed BPF programs dereference untrusted pointers with loads
+		 * that carry an exception table entry (PROBE_MEM). SMAP makes
+		 * sure such a load cannot read user memory, so resolve the
+		 * fault through the exception table, as for an unmapped kernel
+		 * address, instead of oopsing.
+		 */
+		if (is_bpf_text_address(regs->ip) &&
+		    fixup_exception(regs, X86_TRAP_PF, error_code, address))
+			return;
 		/*
 		 * No extable entry here.  This was a kernel access to an
 		 * invalid pointer.  get_kernel_nofault() will not get here.
