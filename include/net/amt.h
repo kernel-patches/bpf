@@ -242,10 +242,6 @@ struct amt_tunnel_list {
 	struct delayed_work	gc_wq;
 	__be16			source_port;
 	__be32			ip4;
-	__be32			nonce;
-	siphash_key_t		key;
-	u64			mac:48,
-				reserved:16;
 	struct rcu_head		rcu;
 	struct hlist_head	groups[];
 };
@@ -325,8 +321,11 @@ struct amt_dev {
 	struct work_struct	event_wq;
 	/* AMT status */
 	enum amt_status		status;
-	/* Generated key */
-	siphash_key_t		key;
+	/* Generated keys. key[0] is current, key[1] is the previous
+	 * generation, kept so that a Request/Update exchange straddling a
+	 * secret rotation still verifies.
+	 */
+	siphash_key_t		key[2];
 	struct sock	  __rcu *sk;
 	u32			max_groups;
 	u32			max_sources;
