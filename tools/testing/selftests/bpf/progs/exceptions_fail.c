@@ -31,6 +31,11 @@ struct {
 	__type(value, struct hmap_elem);
 } hmap SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_USER_RINGBUF);
+	__uint(max_entries, 4096);
+} user_ringbuf SEC(".maps");
+
 private(A) struct bpf_spin_lock lock;
 private(A) struct bpf_rb_root rbtree __contains(foo, node);
 
@@ -107,6 +112,21 @@ __noinline
 static int timer_cb(void *map, int *key, struct bpf_timer *timer)
 {
 	bpf_throw(0);
+	return 0;
+}
+
+static long drain_cb(struct bpf_dynptr *dynptr, void *context)
+{
+	bpf_throw(0);
+	return 0;
+}
+
+SEC("?tc")
+__failure
+__msg("bpf_throw kfunc (insn {{[0-9]+}}) cannot be called from callback subprog {{[0-9]+}}")
+int reject_user_ringbuf_callback_throw(struct __sk_buff *ctx)
+{
+	bpf_user_ringbuf_drain(&user_ringbuf, drain_cb, NULL, 0);
 	return 0;
 }
 
