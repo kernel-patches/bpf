@@ -26,6 +26,23 @@ static int rmnet_is_real_dev_registered(const struct net_device *real_dev)
 	return rcu_access_pointer(real_dev->rx_handler) == rmnet_rx_handler;
 }
 
+/* Only three MAP configurations are supported: MAPv1 (no checksum
+ * offload), MAPv4 (v4 checksum offload) and MAPv5 (v5 checksum
+ * offload). MAP command support is orthogonal and permitted with any
+ * of the three. Checksum offload versions are selected independently
+ * for ingress and egress, but only one version may be enabled across
+ * the device. Mixing v4 and v5 checksum flags is not supported.
+ */
+static bool rmnet_config_data_format_valid(u32 data_format)
+{
+	u32 v4_mask = RMNET_FLAGS_INGRESS_MAP_CKSUMV4 |
+		      RMNET_FLAGS_EGRESS_MAP_CKSUMV4;
+	u32 v5_mask = RMNET_FLAGS_INGRESS_MAP_CKSUMV5 |
+		      RMNET_FLAGS_EGRESS_MAP_CKSUMV5;
+
+	return !(data_format & v4_mask) || !(data_format & v5_mask);
+}
+
 /* Needs rtnl lock */
 struct rmnet_port*
 rmnet_get_port_rtnl(const struct net_device *real_dev)
@@ -149,6 +166,12 @@ static int rmnet_newlink(struct net_device *dev,
 		flags = nla_data(data[IFLA_RMNET_FLAGS]);
 		data_format &= ~flags->mask;
 		data_format |= flags->flags & flags->mask;
+	}
+
+	if (!rmnet_config_data_format_valid(data_format)) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "unsupported MAP checksum flag combination");
+		return -EINVAL;
 	}
 
 	ep = kzalloc_obj(*ep);
@@ -337,6 +360,12 @@ static int rmnet_changelink(struct net_device *dev, struct nlattr *tb[],
 		flags = nla_data(data[IFLA_RMNET_FLAGS]);
 		data_format = old_data_format & ~flags->mask;
 		data_format |= flags->flags & flags->mask;
+
+		if (!rmnet_config_data_format_valid(data_format)) {
+			NL_SET_ERR_MSG_MOD(extack,
+					   "unsupported MAP checksum flag combination");
+			return -EINVAL;
+		}
 	}
 
 	if (data[IFLA_RMNET_MUX_ID]) {
