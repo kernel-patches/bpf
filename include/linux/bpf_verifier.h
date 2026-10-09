@@ -139,6 +139,13 @@ struct bpf_reg_state {
 	 */
 	struct cnum64 r64; /* 64-bit range as circular number */
 	struct cnum32 r32; /* 32-bit range as circular number */
+	/*
+	 * The value described by this register, interpreted as s64, lies on
+	 * a line described by a linear equation base + step * k.
+	 * Invariant: base < step.
+	 */
+	u16 base;
+	u16 step;
 	/* For PTR_TO_PACKET, used to find other pointers with the same variable
 	 * offset, so they can share range knowledge.
 	 * For PTR_TO_MAP_VALUE_OR_NULL this is used to share which map value we
