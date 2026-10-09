@@ -384,11 +384,47 @@ mdio_pm_exit:
 	return status;
 }
 
-static int macb_mdio_write_c22(struct mii_bus *bus, int mii_id, int regnum,
-			       u16 value)
+static u64 macb_mdio_sts_delay(struct macb *bp)
+{
+	static const u16 gem_divisors[] = {
+		[GEM_CLK_DIV8] = 8,
+		[GEM_CLK_DIV16] = 16,
+		[GEM_CLK_DIV32] = 32,
+		[GEM_CLK_DIV48] = 48,
+		[GEM_CLK_DIV64] = 64,
+		[GEM_CLK_DIV96] = 96,
+		[GEM_CLK_DIV128] = 128,
+		[GEM_CLK_DIV224] = 224,
+	};
+	static const u16 macb_divisors[] = {
+		[MACB_CLK_DIV8] = 8,
+		[MACB_CLK_DIV16] = 16,
+		[MACB_CLK_DIV32] = 32,
+		[MACB_CLK_DIV64] = 64,
+	};
+	unsigned long rate = READ_ONCE(bp->mdio_sts_rate);
+	u32 config = macb_readl(bp, NCFGR);
+	u32 divisor;
+
+	if (macb_is_gem(bp))
+		divisor = gem_divisors[GEM_BFEXT(CLK, config)];
+	else
+		divisor = macb_divisors[MACB_BFEXT(CLK, config)];
+
+	/* On RP1 the MDC edge that clocks the last bit of a clause 22
+	 * write comes 63.5 periods after the command write.
+	 */
+	return div64_ul(127ULL * divisor * NSEC_PER_SEC, 2 * rate);
+}
+
+static int macb_mdio_write_c22_sts(struct mii_bus *bus, int mii_id, int regnum,
+				   u16 value, struct ptp_system_timestamp *sts)
 {
 	struct macb *bp = bus->priv;
+	unsigned long flags;
+	u64 delay_ns;
 	int status;
+	u32 cmd;
 
 	status = pm_runtime_resume_and_get(&bp->pdev->dev);
 	if (status < 0)
@@ -398,12 +434,32 @@ static int macb_mdio_write_c22(struct mii_bus *bus, int mii_id, int regnum,
 	if (status < 0)
 		goto mdio_write_exit;
 
-	macb_writel(bp, MAN, (MACB_BF(SOF, MACB_MAN_C22_SOF)
-			      | MACB_BF(RW, MACB_MAN_C22_WRITE)
-			      | MACB_BF(PHYA, mii_id)
-			      | MACB_BF(REGA, regnum)
-			      | MACB_BF(CODE, MACB_MAN_C22_CODE)
-			      | MACB_BF(DATA, value)));
+	cmd = MACB_BF(SOF, MACB_MAN_C22_SOF)
+	      | MACB_BF(RW, MACB_MAN_C22_WRITE)
+	      | MACB_BF(PHYA, mii_id)
+	      | MACB_BF(REGA, regnum)
+	      | MACB_BF(CODE, MACB_MAN_C22_CODE)
+	      | MACB_BF(DATA, value);
+
+	if (sts) {
+		delay_ns = macb_mdio_sts_delay(bp);
+		local_irq_save(flags);
+		ptp_read_system_prets(sts);
+		/* macb_writel() is relaxed; order it after the timestamp. */
+		mb();
+	}
+	macb_writel(bp, MAN, cmd);
+	if (sts) {
+		/* Flush the posted write before taking the upper bound. */
+		macb_readl(bp, NSR);
+		/* Order the read-back before the system timestamp. */
+		rmb();
+		ptp_read_system_postts(sts);
+		local_irq_restore(flags);
+
+		ptp_adjust_system_prets(sts, delay_ns);
+		ptp_adjust_system_postts(sts, delay_ns);
+	}
 
 	status = macb_mdio_wait_for_idle(bp);
 	if (status < 0)
@@ -413,6 +469,12 @@ mdio_write_exit:
 	pm_runtime_put_autosuspend(&bp->pdev->dev);
 mdio_pm_exit:
 	return status;
+}
+
+static int macb_mdio_write_c22(struct mii_bus *bus, int mii_id, int regnum,
+			       u16 value)
+{
+	return macb_mdio_write_c22_sts(bus, mii_id, regnum, value, NULL);
 }
 
 static int macb_mdio_write_c45(struct mii_bus *bus, int mii_id,
@@ -1141,6 +1203,13 @@ static int macb_mdiobus_register(struct macb *bp, struct device_node *mdio_np)
 	return mdiobus_register(bp->mii_bus);
 }
 
+static bool macb_mdio_init_sts(struct macb *bp)
+{
+	bp->mdio_sts_rate = clk_get_rate(bp->pclk);
+
+	return bp->mdio_sts_rate != 0;
+}
+
 static int macb_mii_init(struct macb *bp)
 {
 	struct device_node *mdio_np, *np = bp->pdev->dev.of_node;
@@ -1166,6 +1235,8 @@ static int macb_mii_init(struct macb *bp)
 	bp->mii_bus->name = "MACB_mii_bus";
 	bp->mii_bus->read = &macb_mdio_read_c22;
 	bp->mii_bus->write = &macb_mdio_write_c22;
+	if (macb_mdio_init_sts(bp))
+		bp->mii_bus->write_sts = &macb_mdio_write_c22_sts;
 	bp->mii_bus->read_c45 = &macb_mdio_read_c45;
 	bp->mii_bus->write_c45 = &macb_mdio_write_c45;
 	snprintf(bp->mii_bus->id, MII_BUS_ID_SIZE, "%s-%x",
@@ -3113,12 +3184,20 @@ static void macb_configure_dma(struct macb *bp)
 
 static void macb_init_hw(struct macb *bp)
 {
+	unsigned long rate;
 	u32 config;
 
 	macb_reset_hw(bp);
 	macb_set_hwaddr(bp);
 
 	config = macb_mdc_clk_div(bp);
+	/* Record the pclk rate the MDC divider is chosen from, for
+	 * write_sts, which can't call clk_get_rate() under the MDIO bus
+	 * lock.
+	 */
+	rate = clk_get_rate(bp->pclk);
+	if (rate)
+		WRITE_ONCE(bp->mdio_sts_rate, rate);
 	/* Make eth data aligned.
 	 * If RSC capable, that offset is ignored by HW.
 	 */
