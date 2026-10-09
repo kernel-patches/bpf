@@ -1002,6 +1002,11 @@ int do_ipv6_getsockopt(struct sock *sk, int level, int optname,
 
 	if (copy_from_sockptr(&len, optlen, sizeof(int)))
 		return -EFAULT;
+	/* Historic bug compatibility: the int options have always taken a
+	 * negative optlen as 4, so take it as 4 everywhere.
+	 */
+	if (len < 0)
+		len = 4;
 	switch (optname) {
 	case MCAST_MSFILTER:
 		if (in_compat_syscall())
