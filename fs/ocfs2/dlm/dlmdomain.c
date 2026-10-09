@@ -1708,7 +1708,7 @@ static void dlm_unregister_domain_handlers(struct dlm_ctxt *dlm)
 {
 	o2hb_unregister_callback(dlm->name, &dlm->dlm_hb_up);
 	o2hb_unregister_callback(dlm->name, &dlm->dlm_hb_down);
-	o2net_unregister_handler_list(&dlm->dlm_domain_handlers);
+	o2net_unregister_and_flush_handler_list(&dlm->dlm_domain_handlers);
 }
 
 static int dlm_register_domain_handlers(struct dlm_ctxt *dlm)
