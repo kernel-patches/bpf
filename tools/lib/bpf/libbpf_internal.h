@@ -56,6 +56,9 @@
 #ifndef R_BPF_64_ABS32
 #define R_BPF_64_ABS32 3
 #endif
+#ifndef R_BPF_64_NODYLD32
+#define R_BPF_64_NODYLD32 4
+#endif
 #ifndef R_BPF_64_32
 #define R_BPF_64_32 10
 #endif
@@ -567,6 +570,13 @@ static inline void bpf_core_relo_bswap(struct bpf_core_relo *i)
 	i->type_id = bswap_32(i->type_id);
 	i->access_str_off = bswap_32(i->access_str_off);
 	i->kind = bswap_32(i->kind);
+}
+
+static inline void bpf_cleanup_info_bswap(struct bpf_cleanup_info *i)
+{
+	i->begin_off = bswap_32(i->begin_off);
+	i->end_off = bswap_32(i->end_off);
+	i->landing_pad_off = bswap_32(i->landing_pad_off);
 }
 
 enum btf_field_iter_kind {
