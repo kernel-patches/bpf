@@ -423,9 +423,11 @@ int mt7530_lib_fdb_cmd(struct mt7530_lib_priv *priv, enum mt7530_fdb_cmd cmd,
 		return ret;
 	}
 
-	regmap_field_read(priv->fields[MT7530_ATC_INVALID], &val);
-	if (cmd == MT7530_FDB_READ && val)
-		return -EINVAL;
+	if (priv->fields[MT7530_ATC_INVALID]) {
+		regmap_field_read(priv->fields[MT7530_ATC_INVALID], &val);
+		if (cmd == MT7530_FDB_READ && val)
+			return -EINVAL;
+	}
 
 	if (rsp)
 		regmap_field_read(priv->fields[__MT7530_ATC], rsp);
@@ -442,6 +444,8 @@ static void mt7530_lib_fdb_write(struct mt7530_lib_priv *priv, u16 vid,
 	regmap_field_write(priv->fields[__MT7530_ATWD1], 0);
 	regmap_field_write(priv->fields[__MT7530_ATWD2], 0);
 	regmap_field_write(priv->fields[__MT7530_ATWD3], 0);
+	if (priv->fields[__MT7530_ATWD4])
+		regmap_field_write(priv->fields[__MT7530_ATWD4], 0);
 
 	regmap_field_write(priv->fields[MT7530_ATWD_CVID], vid);
 	regmap_field_write(priv->fields[MT7530_ATWD_IVL], 1);
@@ -452,7 +456,17 @@ static void mt7530_lib_fdb_write(struct mt7530_lib_priv *priv, u16 vid,
 	 * be aged out and STATIC_EMP specified as erasing an
 	 * entry
 	 */
-	regmap_field_write(priv->fields[MT7530_ATWD_ENT_STATUS], type);
+	if (priv->fields[MT7530_ATWD_ENT_STATUS])
+		regmap_field_write(priv->fields[MT7530_ATWD_ENT_STATUS], type);
+	if (priv->fields[AN8855_ATWD_TYPE]) {
+		/* Default to static entry (0) */
+		regmap_field_write(priv->fields[AN8855_ATWD_TYPE], 0);
+	}
+	if (priv->fields[AN8855_ATWD_VLD]) {
+		/* Load entry if STATIC_ENT */
+		regmap_field_write(priv->fields[AN8855_ATWD_VLD],
+				   type == STATIC_ENT);
+	}
 	regmap_field_write(priv->fields[MT7530_ATWD_MAC_BYTE_5], mac[5]);
 	regmap_field_write(priv->fields[MT7530_ATWD_MAC_BYTE_4], mac[4]);
 	regmap_field_write(priv->fields[MT7530_ATWD_MAC_BYTE_3], mac[3]);
@@ -483,8 +497,14 @@ void mt7530_lib_fdb_read(struct mt7530_lib_priv *priv, struct mt7530_fdb *fdb)
 	fdb->mac[1] = val;
 	regmap_field_read(priv->fields[MT7530_ATRD_MAC_BYTE_0], &val);
 	fdb->mac[0] = val;
-	regmap_field_read(priv->fields[MT7530_ATRD_ENT_STATUS], &val);
-	fdb->noarp = val == STATIC_ENT;
+	if (priv->fields[MT7530_ATRD_ENT_STATUS]) {
+		regmap_field_read(priv->fields[MT7530_ATRD_ENT_STATUS], &val);
+		fdb->noarp = val == STATIC_ENT;
+	}
+	if (priv->fields[AN8855_ATRD_ARP]) {
+		regmap_field_read(priv->fields[AN8855_ATRD_ARP], &val);
+		fdb->noarp = !!val;
+	}
 }
 EXPORT_SYMBOL_GPL(mt7530_lib_fdb_read);
 
@@ -787,6 +807,17 @@ void mt7530_lib_port_bridge_leave(struct mt7530_lib_priv *priv, int port,
 }
 EXPORT_SYMBOL_GPL(mt7530_lib_port_bridge_leave);
 
+void mt7530_port_set_pvid(struct mt7530_lib_priv *priv, int port,
+			  u16 pvid)
+{
+	regmap_fields_write(priv->fields[MT7530_PPBV1_G0_PORT_VID],
+			    port, pvid);
+	if (priv->fields[AN8855_PVID_G0_PORT_VID])
+		regmap_fields_write(priv->fields[AN8855_PVID_G0_PORT_VID],
+				    port, pvid);
+}
+EXPORT_SYMBOL_GPL(mt7530_port_set_pvid);
+
 static void mt7530_port_set_vlan_unaware(struct mt7530_lib_priv *priv, int port)
 {
 	struct dsa_switch *ds = priv->ds;
@@ -807,8 +838,7 @@ static void mt7530_port_set_vlan_unaware(struct mt7530_lib_priv *priv, int port)
 	regmap_fields_write(priv->fields[MT7530_PVC_ACC_FRM],
 			    port, MT7530_VLAN_ACC_ALL);
 
-	regmap_fields_write(priv->fields[MT7530_PPBV1_G0_PORT_VID],
-			    port, G0_PORT_VID_DEF);
+	mt7530_port_set_pvid(priv, port, G0_PORT_VID_DEF);
 
 	for (i = 0; i < priv->ds->num_ports; i++) {
 		if (i == port)
@@ -840,8 +870,7 @@ static void mt7530_port_set_vlan_aware(struct mt7530_lib_priv *priv, int port)
 	if (dsa_is_user_port(ds, port)) {
 		regmap_fields_write(priv->fields[MT7530_PCR_PORT_VLAN],
 				    port, MT7530_PORT_SECURITY_MODE);
-		regmap_fields_write(priv->fields[MT7530_PPBV1_G0_PORT_VID],
-				    port, priv->ports[port].pvid);
+		mt7530_port_set_pvid(priv, port, priv->ports[port].pvid);
 
 		/* Only accept tagged frames if PVID is not set */
 		if (!priv->ports[port].pvid)
@@ -919,10 +948,12 @@ static int mt7530_vlan_cmd(struct mt7530_lib_priv *priv, enum mt7530_vlan_cmd cm
 		return ret;
 	}
 
-	regmap_field_read(priv->fields[MT7530_VTCR_INVALID], &val);
-	if (val) {
-		dev_err(priv->dev, "read VTCR invalid\n");
-		return -EINVAL;
+	if (priv->fields[MT7530_VTCR_INVALID]) {
+		regmap_field_read(priv->fields[MT7530_VTCR_INVALID], &val);
+		if (val) {
+			dev_err(priv->dev, "read VTCR invalid\n");
+			return -EINVAL;
+		}
 	}
 
 	return 0;
@@ -1044,8 +1075,7 @@ skip_vlan_table:
 
 		/* Only configure PVID if VLAN filtering is enabled */
 		if (dsa_port_is_vlan_filtering(dsa_to_port(ds, port)))
-			regmap_fields_write(priv->fields[MT7530_PPBV1_G0_PORT_VID],
-					    port, vlan->vid);
+			mt7530_port_set_pvid(priv, port, vlan->vid);
 	} else if (vlan->vid && priv->ports[port].pvid == vlan->vid) {
 		/* This VLAN is overwritten without PVID, so unset it */
 		priv->ports[port].pvid = G0_PORT_VID_DEF;
@@ -1055,8 +1085,7 @@ skip_vlan_table:
 			regmap_fields_write(priv->fields[MT7530_PVC_ACC_FRM],
 					    port, MT7530_VLAN_ACC_TAGGED);
 
-		regmap_fields_write(priv->fields[MT7530_PPBV1_G0_PORT_VID],
-				    port, G0_PORT_VID_DEF);
+		mt7530_port_set_pvid(priv, port, G0_PORT_VID_DEF);
 	}
 
 	mutex_unlock(priv->reg_mutex);
@@ -1093,8 +1122,7 @@ skip_vlan_table:
 			regmap_fields_write(priv->fields[MT7530_PVC_ACC_FRM],
 					    port, MT7530_VLAN_ACC_TAGGED);
 
-		regmap_fields_write(priv->fields[MT7530_PPBV1_G0_PORT_VID],
-				    port, G0_PORT_VID_DEF);
+		mt7530_port_set_pvid(priv, port, G0_PORT_VID_DEF);
 	}
 
 	mutex_unlock(priv->reg_mutex);

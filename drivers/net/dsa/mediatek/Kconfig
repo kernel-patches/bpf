@@ -1,4 +1,14 @@
 # SPDX-License-Identifier: GPL-2.0-only
+config NET_DSA_AN8855
+	tristate "Airoha AN8855 Ethernet switch support"
+	depends on MFD_AIROHA_AN8855 || COMPILE_TEST
+	depends on NET_DSA
+	select NET_DSA_MT7530_LIB
+	select NET_DSA_TAG_AIROHA
+	help
+	  This enables support for the Ethernet switch inside the
+	  Airoha AN8855 chip.
+
 config NET_DSA_MT7530_LIB
 	tristate
 
