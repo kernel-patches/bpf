@@ -1715,6 +1715,8 @@ static int record_arg_access(struct bpf_verifier_env *env,
 		info = bpf_helper_stack_access_bytes(env, insn, arg_idx, insn_idx);
 	} else if (bpf_pseudo_kfunc_call(insn)) {
 		info = bpf_kfunc_stack_access_bytes(env, insn, arg_idx, insn_idx);
+	} else if (bpf_pseudo_call(insn)) {
+		info = bpf_global_subprog_stack_access_bytes(env, insn, arg_idx, insn_idx);
 	} else {
 		for (int f = 0; f <= depth; f++) {
 			err = mark_stack_read_all(env, instance, f, insn_idx);
@@ -1736,7 +1738,7 @@ static int record_arg_access(struct bpf_verifier_env *env,
 	return err;
 }
 
-/* Record stack access for a given 'at' state of helper/kfunc 'insn' */
+/* Record stack access for a given 'at' state of helper/kfunc/global subprog 'insn' */
 static int record_call_access(struct bpf_verifier_env *env,
 			      struct func_instance *instance,
 			      struct arg_track *at,
@@ -1744,12 +1746,19 @@ static int record_call_access(struct bpf_verifier_env *env,
 {
 	struct bpf_insn *insn = &env->prog->insnsi[insn_idx];
 	struct bpf_call_summary cs;
-	int r, err, arg_slot_cnt = 5;
+	int r, err, callee, arg_slot_cnt = 5;
 
-	if (bpf_pseudo_call(insn))
-		return 0;
-
-	if (bpf_is_callx(insn))
+	if (bpf_pseudo_call(insn)) {
+		/*
+		 * analyze_subprog() handles static callees. For global callees,
+		 * derive effects from argument types so may_write marks remain
+		 * conservative under freplace.
+		 */
+		callee = bpf_find_subprog(env, insn_idx + insn->imm + 1);
+		if (callee < 0 || !bpf_subprog_is_global(env, callee))
+			return 0;
+		arg_slot_cnt = MAX_BPF_FUNC_ARGS;
+	} else if (bpf_is_callx(insn))
 		/*
 		 * The callee is not known statically. Assume that all arg
 		 * slots are passed and let record_arg_access() conservatively
@@ -2282,7 +2291,12 @@ static int analyze_subprog(struct bpf_verifier_env *env,
 		if (bpf_pseudo_call(insn)) {
 			target = idx + insn->imm + 1;
 			callee = bpf_find_subprog(env, target);
-			if (callee < 0)
+			/*
+			 * Global subprograms can be freplaced, so conservatively derive
+			 * their stack effects from their BTF signatures instead of
+			 * analyzing them in the context of their callers.
+			 */
+			if (callee < 0 || bpf_subprog_is_global(env, callee))
 				continue;
 
 			/* Build entry args: R1-R5 and stack args from at_in at call site */

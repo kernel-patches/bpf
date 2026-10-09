@@ -14571,6 +14571,72 @@ out:
 	return info;
 }
 
+/*
+ * Called before dead code elimination, some subprograms may be genuinely unreachable.
+ * Suppress diagnostics so callers can use a conservative result on error.
+ * The main pass would report errors for reachable subprograms.
+ */
+static bool try_btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
+{
+	struct bpf_prog *prog = env->prog;
+	u32 log_level = env->log.level;
+	int err;
+
+	if (!prog->aux->func_info || !prog->aux->func_info[subprog].type_id)
+		return false;
+
+	env->log.level = 0;
+	err = btf_prepare_func_args(env, subprog);
+	env->log.level = log_level;
+	return !err;
+}
+
+/*
+ * Derive stack effects for a global subprog's argument slot @arg (0-based)
+ * from its declared type, matching the main pass's argument checks.
+ */
+struct arg_access_info
+bpf_global_subprog_stack_access_bytes(struct bpf_verifier_env *env, struct bpf_insn *insn,
+				      int arg, int insn_idx)
+{
+	struct arg_access_info info = {
+		.size = U32_MAX,
+		.may_read = true,
+		.may_write = true,
+	};
+	struct bpf_subprog_info *sub;
+	int callee;
+
+	callee = bpf_find_subprog(env, insn_idx + insn->imm + 1);
+	if (callee < 0)
+		return info;
+	sub = subprog_info(env, callee);
+	if (!try_btf_prepare_func_args(env, callee))
+		return info;
+
+	switch (base_type(sub->args[arg].arg_type)) {
+	case ARG_UNUSED:	/* Not an argument slot. */
+	case ARG_ANYTHING:	/* A scalar, the callee can't dereference it. */
+		return (struct arg_access_info) {};
+	case ARG_PTR_TO_BTF_ID:
+		/*
+		 * Trusted arguments cannot be stack pointers.
+		 * Untrusted arguments use ARG_IGNORE:
+		 * probe reads need no caller stack state, writes are prohibited.
+		 */
+		return (struct arg_access_info) {};
+	case ARG_PTR_TO_MEM:
+		/* mem_size is zero for untrusted pointers of unknown size. */
+		if (sub->args[arg].mem_size) {
+			info.size = sub->args[arg].mem_size;
+			info.must_write = true;
+		}
+		return info;
+	default:
+		return info;
+	}
+}
+
 /* check special kfuncs and return:
  *  1  - not fall-through to 'else' branch, continue verification
  *  0  - fall-through to 'else' branch
