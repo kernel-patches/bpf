@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# onsemi S2500 Driver Support
+#
+
+config S2500_MACPHY
+	tristate "S2500 support"
+	depends on SPI
+	depends on PTP_1588_CLOCK_OPTIONAL
+	imply NET_SELFTESTS
+	select BITREVERSE
+	select NCN26000_PHY
+	select OA_TC6
+	help
+	  Support for the onsemi S2500 MACPHY Ethernet chip.
+	  It works under the framework that conform to OPEN Alliance
+	  10BASE-T1x Serial Interface specification.
+
+	  To compile this driver as a module, choose M here. The module will be
+	  called s2500.
+

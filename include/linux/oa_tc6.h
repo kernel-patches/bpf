@@ -75,6 +75,7 @@
 #define OA_TC6_PHY_C45_VS_PLCA_MMS4		4	/* MMD 31 */
 #define OA_TC6_PHY_C45_AUTO_NEG_MMS5		5	/* MMD 7 */
 #define OA_TC6_PHY_C45_POWER_UNIT_MMS6		6	/* MMD 13 */
+#define OA_TC6_PHY_C45_VS_MMS12			12	/* for vendors */
 
 struct oa_tc6;
 
