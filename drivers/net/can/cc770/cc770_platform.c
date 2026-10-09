@@ -137,11 +137,11 @@ static int cc770_get_platform_data(struct platform_device *pdev,
 	struct cc770_platform_data *pdata = dev_get_platdata(&pdev->dev);
 
 	priv->can.clock.freq = pdata->osc_freq;
+	priv->cpu_interface = pdata->cir;
 	if (priv->cpu_interface & CPUIF_DSC)
 		priv->can.clock.freq /= 2;
 	priv->clkout = pdata->cor;
 	priv->bus_config = pdata->bcr;
-	priv->cpu_interface = pdata->cir;
 
 	return 0;
 }
