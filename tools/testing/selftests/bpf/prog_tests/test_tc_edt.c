@@ -127,7 +127,7 @@ static void run_test(void)
 		  "rate error is lower than threshold");
 }
 
-void test_tc_edt(void)
+void serial_test_tc_edt(void)
 {
 	struct test_tc_edt *skel;
 
