@@ -547,16 +547,63 @@ __setup_rt_policy()
 		add "${IPv6_HS_NETWORK}::${dst}" \
 		encap seg6 mode inline segs "${policy}" \
 		dev "${DUMMY_DEVNAME}"
-
-	ip -netns "${in_nsname}" -6 neigh \
-		add proxy "${IPv6_HS_NETWORK}::${dst}" \
-		dev "${RT2HS_DEVNAME}"
 }
 
 # see __setup_rt_policy
 setup_rt_policy_ipv6()
 {
 	__setup_rt_policy "$1" "$2" "$3"
+}
+
+cleanup_rt_policy_ipv6()
+{
+	local dst="$1"
+	local encap_rt="$2"
+	local policy_rts="$3"
+	local in_nsname
+	local rt_nsname
+	local function
+	local fullsid
+	local op_type
+	local node
+	local n
+
+	in_nsname="$(get_rtname "${encap_rt}")"
+
+	for n in ${policy_rts}; do
+		node="$(__get_srv6_rtcfg_id "${n}")"
+		op_type="$(__get_srv6_rtcfg_op "${n}")"
+		rt_nsname="$(get_rtname "${node}")"
+
+		case "${op_type}" in
+		"noflv")
+			function="${END_FUNC}"
+			;;
+
+		"psp")
+			function="${END_PSP_FUNC}"
+			;;
+
+		*)
+			break
+			;;
+		esac
+
+		fullsid="${LOCATOR_SERVICE}:${node}::${function}"
+
+		# Remove SRv6 Endpoint behavior for the selected router
+		# Skip noflv END_FUNC which is added in common setup.
+		if ! echo "${fullsid}" | grep -q "${END_FUNC}"; then
+			ip -netns "${rt_nsname}" -6 route \
+				del "${fullsid}" \
+				table "${LOCALSID_TABLE_ID}" \
+				dev "${DUMMY_DEVNAME}"
+		fi
+	done
+
+	# Remove SRv6 policy for incoming traffic sent by connected hosts
+	ip -netns "${in_nsname}" -6 route \
+		del "${IPv6_HS_NETWORK}::${dst}" dev "${DUMMY_DEVNAME}"
 }
 
 setup_hs()
@@ -628,6 +675,14 @@ setup()
 	setup_rt_local_sids 3 "1 2 4"
 	setup_rt_local_sids 4 "1 2 3"
 
+	# setup proxy on route entries for hosts
+	ip -netns "$(get_rtname 1)" -6 neigh add \
+		proxy "${IPv6_HS_NETWORK}::2" \
+		dev "${RT2HS_DEVNAME}"
+	ip -netns "$(get_rtname 2)" -6 neigh add \
+		proxy "${IPv6_HS_NETWORK}::1" \
+		dev "${RT2HS_DEVNAME}"
+
 	# testing environment was set up successfully
 	SETUP_ERR=0
 }
@@ -650,6 +705,12 @@ setup_end_flv_psp()
 	#  - rt-1 (SRv6 End flavor PSP with SL=1)
 	setup_rt_policy_ipv6 2 1 "3:noflv 4:psp 2:psp"
 	setup_rt_policy_ipv6 1 2 "1:psp"
+}
+
+cleanup_end_flv_psp()
+{
+	cleanup_rt_policy_ipv6 2 1 "3:noflv 4:psp 2:psp"
+	cleanup_rt_policy_ipv6 1 2 "1:psp"
 }
 
 check_rt_connectivity()
@@ -754,6 +815,8 @@ host_srv6_end_flv_psp_tests()
 
 	check_and_log_hs_connectivity 1 2
 	check_and_log_hs_connectivity 2 1
+
+	cleanup_end_flv_psp
 }
 
 test_iproute2_supp_or_ksft_skip()
