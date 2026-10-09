@@ -1075,10 +1075,10 @@ static int f81604_close(struct net_device *netdev)
 	f81604_set_reset_mode(priv);
 
 	netif_stop_queue(netdev);
-	cancel_work_sync(&priv->clear_reg_work);
 	close_candev(netdev);
 
 	f81604_unregister_urbs(priv);
+	cancel_work_sync(&priv->clear_reg_work);
 
 	return 0;
 }
