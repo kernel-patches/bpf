@@ -818,14 +818,6 @@ out:
 	return err;
 }
 
-static void pneigh_destroy(struct rcu_head *rcu)
-{
-	struct pneigh_entry *n = container_of(rcu, struct pneigh_entry, rcu);
-
-	netdev_put(n->dev, &n->dev_tracker);
-	kfree(n);
-}
-
 int pneigh_delete(struct neigh_table *tbl, const void *pkey,
 		  struct net_device *dev)
 {
@@ -849,7 +841,8 @@ int pneigh_delete(struct neigh_table *tbl, const void *pkey,
 			if (tbl->pdestructor)
 				tbl->pdestructor(n);
 
-			call_rcu(&n->rcu, pneigh_destroy);
+			netdev_put(n->dev, &n->dev_tracker);
+			kfree_rcu(n, rcu);
 			return 0;
 		}
 	}
@@ -891,7 +884,8 @@ skip:
 		if (tbl->pdestructor)
 			tbl->pdestructor(n);
 
-		call_rcu(&n->rcu, pneigh_destroy);
+		netdev_put(n->dev, &n->dev_tracker);
+		kfree_rcu(n, rcu);
 	}
 }
 
