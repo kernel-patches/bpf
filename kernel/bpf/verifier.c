@@ -1531,6 +1531,49 @@ static int acquire_reference(struct bpf_verifier_env *env, int insn_idx, int par
 	return id;
 }
 
+/* Acquire a reference owned by frame @frameno of @state */
+static int acquire_frame_reference(struct bpf_verifier_env *env, struct bpf_verifier_state *state,
+				   int insn_idx, u32 frameno)
+{
+	struct bpf_reference_state ref = {
+		.type = REF_TYPE_FRAME,
+		.id = ++env->id_gen,
+		.insn_idx = insn_idx,
+		.frameno = frameno,
+	};
+
+	return acquire_reference_state(state, &ref);
+}
+
+/*
+ * Anchor @regno in @callee to a reference owned by the callee frame, so the
+ * value and everything derived from it is invalidated when the frame is
+ * popped. @state owns @callee; for a callback it is not env->cur_state.
+ */
+int mark_frame_scoped_arg(struct bpf_verifier_env *env, struct bpf_verifier_state *state,
+			  struct bpf_func_state *callee, u32 regno)
+{
+	int id;
+
+	if (verifier_bug_if(!callee->frameno, env,
+			    "cannot scope an argument to frame 0"))
+		return -EFAULT;
+
+	id = acquire_frame_reference(env, state, callee->callsite, callee->frameno);
+	if (id < 0)
+		return id;
+	/*
+	 * The value is its own lifetime anchor: there is no associated
+	 * object to borrow from, only the frame. parent_id = id here
+	 * covers both possible derived references:
+	 *  - through the id (e.g. dynptr slice)
+	 *  - through parent_id (e.g. dynptr clone)
+	 */
+	callee->regs[regno].id = id;
+	callee->regs[regno].parent_id = id;
+	return 0;
+}
+
 static int acquire_lock_state(struct bpf_verifier_env *env, int insn_idx, enum ref_state_type type,
 			      int id, void *ptr)
 {
@@ -10889,7 +10932,7 @@ static int invalidate_reference(struct bpf_verifier_env *env, int id,
 				continue;
 
 			/* Free objects derived from the current object */
-			if (reg->parent_id == id) {
+			if (reg->parent_id == id && reg->id != id) {
 				err = idstack_push(idstack, reg->id);
 				if (err)
 					return err;
@@ -10927,6 +10970,27 @@ static int release_reference(struct bpf_verifier_env *env, int id)
 		WARN_ON_ONCE(err);
 	}
 	return invalidate_reference(env, id, BPF_DIAG_MOD_REF_RELEASE);
+}
+
+static int release_frame_references(struct bpf_verifier_env *env, u32 frameno)
+{
+	struct bpf_verifier_state *state = env->cur_state;
+	int i, id, err;
+
+	for (i = 0; i < state->acquired_refs;) {
+		if (state->refs[i].type != REF_TYPE_FRAME ||
+		    state->refs[i].frameno != frameno) {
+			i++;
+			continue;
+		}
+		id = state->refs[i].id;
+		release_reference_state(state, i);
+		err = invalidate_reference(env, id, BPF_DIAG_MOD_FRAME_RELEASE);
+		if (err)
+			return err;
+	}
+
+	return 0;
 }
 
 static void invalidate_non_owning_refs(struct bpf_verifier_env *env)
@@ -11823,6 +11887,15 @@ static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 		verbose(env, "to caller at %d:\n", *insn_idx);
 		print_verifier_state(env, state, caller->frameno, true);
 	}
+
+	/*
+	 * Values the caller only guaranteed for the duration of the call stop
+	 * being valid here.
+	 */
+	err = release_frame_references(env, callee->frameno);
+	if (err)
+		return err;
+
 	account_processed_insns(env, callee, caller);
 	/* clear everything in the callee. In case of exceptional exits using
 	 * bpf_throw, this will be done by copy_verifier_state for extra frames. */
@@ -12000,6 +12073,11 @@ static int check_reference_leak(struct bpf_verifier_env *env, bool exception_exi
 		return 0;
 
 	for (i = 0; i < state->acquired_refs; i++) {
+		if (!exception_exit && state->refs[i].type == REF_TYPE_FRAME) {
+			verifier_bug(env, "frame %u reference id=%d alive at program exit",
+				     state->refs[i].frameno, state->refs[i].id);
+			return -EFAULT;
+		}
 		if (state->refs[i].type != REF_TYPE_PTR)
 			continue;
 		/* Allow struct_ops programs to return a referenced kptr back to
