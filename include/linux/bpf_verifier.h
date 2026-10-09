@@ -9,6 +9,20 @@
 #include <linux/filter.h> /* for MAX_BPF_STACK */
 #include <linux/tnum.h>
 #include <linux/cnum.h>
+#include <linux/math64.h> /* for div_s64_rem() */
+
+/*
+ * Mathematical modulo, the residue of 'v' modulo 'step', normalized to [0, step).
+ * This differs from C's '%' operator, which truncates the quotient toward zero
+ * and so returns a remainder with the sign of the dividend (e.g. -1 % 3 == -1, not 2).
+ */
+static inline u16 imod(s64 v, u16 step)
+{
+	s32 rem;
+
+	div_s64_rem(v, step, &rem);
+	return rem < 0 ? rem + step : rem;
+}
 
 /* Maximum variable offset umax_value permitted when resolving memory accesses.
  * In practice this is far bigger than any realistic pointer offset; this limit
