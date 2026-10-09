@@ -6,6 +6,22 @@
 #define _RMNET_MAP_H_
 #include <linux/if_rmnet.h>
 
+enum rmnet_map_v5_close_type {
+	RMNET_MAP_COAL_CLOSE_NON_COAL,
+	RMNET_MAP_COAL_CLOSE_IP_MISS,
+	RMNET_MAP_COAL_CLOSE_TRANS_MISS,
+	RMNET_MAP_COAL_CLOSE_HW,
+	RMNET_MAP_COAL_CLOSE_COAL,
+};
+
+enum rmnet_map_v5_close_value {
+	RMNET_MAP_COAL_CLOSE_HW_NL,
+	RMNET_MAP_COAL_CLOSE_HW_PKT,
+	RMNET_MAP_COAL_CLOSE_HW_BYTE,
+	RMNET_MAP_COAL_CLOSE_HW_TIME,
+	RMNET_MAP_COAL_CLOSE_HW_EVICT,
+};
+
 struct rmnet_map_control_command {
 	u8  command_name;
 	u8  cmd_type:2;
@@ -55,7 +71,7 @@ void rmnet_map_checksum_uplink_packet(struct sk_buff *skb,
 				      int csum_type);
 int rmnet_map_process_next_hdr_packet(struct sk_buff *skb,
 				      struct sk_buff_head *list,
-				      u16 len);
+				      u16 len, u32 data_format);
 unsigned int rmnet_map_tx_aggregate(struct sk_buff *skb, struct rmnet_port *port,
 				    struct net_device *orig_dev);
 void rmnet_map_tx_aggregate_init(struct rmnet_port *port);
