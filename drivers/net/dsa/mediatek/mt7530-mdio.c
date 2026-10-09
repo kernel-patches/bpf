@@ -218,6 +218,10 @@ mt7530_probe(struct mdio_device *mdiodev)
 	if (IS_ERR(priv->regmap))
 		return PTR_ERR(priv->regmap);
 
+	ret = mt7530_setup_lib_priv(priv);
+	if (ret)
+		return ret;
+
 	if (priv->id == ID_MT7531)
 		priv->create_sgmii = mt7531_create_sgmii;
 

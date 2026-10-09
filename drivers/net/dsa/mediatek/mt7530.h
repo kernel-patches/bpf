@@ -7,14 +7,11 @@
 #define __MT7530_H
 
 #include <linux/bitfield.h>
+#include "mt7530-lib.h"
 
 #define MT7530_NUM_PORTS		7
 #define MT7530_NUM_PHYS			5
 #define MT7530_NUM_FDB_RECORDS		2048
-#define MT7530_ALL_MEMBERS		0xff
-
-#define MTK_HDR_LEN	4
-#define MT7530_MAX_MTU	(15 * 1024 - ETH_HLEN - ETH_FCS_LEN - MTK_HDR_LEN)
 
 enum mt753x_id {
 	ID_MT7530 = 0,
@@ -135,18 +132,8 @@ enum mt753x_id {
 #define  R03_EG_TAG(x)			FIELD_PREP(R03_EG_TAG_MASK, x)
 #define  R03_PORT_FW_MASK		GENMASK(2, 0)
 
-enum mt753x_to_cpu_fw {
-	TO_CPU_FW_SYSTEM_DEFAULT,
-	TO_CPU_FW_CPU_EXCLUDE = 4,
-	TO_CPU_FW_CPU_INCLUDE = 5,
-	TO_CPU_FW_CPU_ONLY = 6,
-	TO_CPU_FW_DROP = 7,
-};
-
 /* Registers for address table access */
 #define MT7530_ATA1			0x74
-#define  STATIC_EMP			0
-#define  STATIC_ENT			3
 #define MT7530_ATA2			0x78
 #define  ATA2_IVL			BIT(15)
 #define  ATA2_FID_MASK			GENMASK(14, 12)
@@ -165,16 +152,6 @@ enum mt753x_to_cpu_fw {
 #define  ATC_INVALID			BIT(12)
 #define  ATC_MAT_MASK			GENMASK(11, 8)
 #define  ATC_MAT(x)			FIELD_PREP(ATC_MAT_MASK, x)
-#define  ATC_MAT_MACTAB			ATC_MAT(0)
-#define  ATC_MAT_NON_STATIC_MAC		ATC_MAT(4)
-
-enum mt7530_fdb_cmd {
-	MT7530_FDB_READ	= 0,
-	MT7530_FDB_WRITE = 1,
-	MT7530_FDB_FLUSH = 2,
-	MT7530_FDB_START = 4,
-	MT7530_FDB_NEXT = 5,
-};
 
 /* Registers for table search read address */
 #define MT7530_TSRA1			0x84
@@ -202,14 +179,6 @@ enum mt7530_fdb_cmd {
 #define  VTCR_VID_MASK			GENMASK(11, 0)
 #define  VTCR_VID(x)			FIELD_PREP(VTCR_VID_MASK, x)
 
-enum mt7530_vlan_cmd {
-	/* Read/Write the specified VID entry from VAWD register based
-	 * on VID.
-	 */
-	MT7530_VTCR_RD_VID = 0,
-	MT7530_VTCR_WR_VID = 1,
-};
-
 /* Register for setup vlan and acl write data */
 #define MT7530_VAWD1			0x94
 #define  PORT_STAG			BIT(31)
@@ -228,21 +197,7 @@ enum mt7530_vlan_cmd {
 /* VLAN Entry Valid */
 #define  VLAN_VALID			BIT(0)
 
-enum mt7530_fid {
-	FID_STANDALONE = 0,
-	FID_BRIDGED = 1,
-};
-
 #define MT7530_VAWD2			0x98
-/* Egress Tag Control */
-#define  ETAG_CTRL_P(p, x)		(((x) & 0x3) << ((p) << 1))
-#define  ETAG_CTRL_P_MASK(p)		ETAG_CTRL_P(p, 3)
-
-enum mt7530_vlan_egress_attr {
-	MT7530_VLAN_EGRESS_UNTAG = 0,
-	MT7530_VLAN_EGRESS_TAG = 2,
-	MT7530_VLAN_EGRESS_STACK = 3,
-};
 
 /* Register for address age control */
 #define MT7530_AAC			0xa0
@@ -270,39 +225,15 @@ enum mt7530_vlan_egress_attr {
 #define  EGR_BC_CRC_IPG_PREAMBLE	0x18	/* crc + ipg + preamble */
 
 /* Register for port STP state control */
-#define MT7530_SSP_P(x)			(0x2000 + ((x) * 0x100))
-#define  FID_PST(fid, state)		(((state) & 0x3) << ((fid) * 2))
-#define  FID_PST_MASK(fid)		FID_PST(fid, 0x3)
-
-enum mt7530_stp_state {
-	MT7530_STP_DISABLED = 0,
-	MT7530_STP_BLOCKING = 1,
-	MT7530_STP_LISTENING = 1,
-	MT7530_STP_LEARNING = 2,
-	MT7530_STP_FORWARDING  = 3
-};
+#define MT7530_SSP			0x2000
+#define MT7530_SSP_P(x)			(MT7530_SSP + ((x) * 0x100))
 
 /* Register for port control */
-#define MT7530_PCR_P(x)			(0x2004 + ((x) * 0x100))
+#define MT7530_PCR			0x2004
+#define MT7530_PCR_P(x)			(MT7530_PCR + ((x) * 0x100))
 #define  PORT_TX_MIR			BIT(9)
 #define  PORT_RX_MIR			BIT(8)
 #define  PCR_PORT_VLAN_MASK		GENMASK(1, 0)
-
-enum mt7530_port_mode {
-	/* Port Matrix Mode: Frames are forwarded by the PCR_MATRIX members. */
-	MT7530_PORT_MATRIX_MODE = 0,
-
-	/* Fallback Mode: Forward received frames with ingress ports that do
-	 * not belong to the VLAN member. Frames whose VID is not listed on
-	 * the VLAN table are forwarded by the PCR_MATRIX members.
-	 */
-	MT7530_PORT_FALLBACK_MODE = 1,
-
-	/* Security Mode: Discard any frame due to ingress membership
-	 * violation or VID missed on the VLAN table.
-	 */
-	MT7530_PORT_SECURITY_MODE = 3,
-};
 
 #define  PCR_MATRIX_MASK		GENMASK(23, 16)
 #define  PCR_MATRIX(x)			FIELD_PREP(PCR_MATRIX_MASK, x)
@@ -313,11 +244,13 @@ enum mt7530_port_mode {
 #define  PCR_MATRIX_CLR			PCR_MATRIX(0)
 
 /* Register for port security control */
-#define MT7530_PSC_P(x)			(0x200c + ((x) * 0x100))
+#define MT7530_PSC			0x200c
+#define MT7530_PSC_P(x)			(MT7530_PSC + ((x) * 0x100))
 #define  SA_DIS				BIT(4)
 
 /* Register for port vlan control */
-#define MT7530_PVC_P(x)			(0x2010 + ((x) * 0x100))
+#define MT7530_PVC			0x2010
+#define MT7530_PVC_P(x)			(MT7530_PVC + ((x) * 0x100))
 #define  PORT_SPEC_TAG			BIT(5)
 #define  PVC_EG_TAG_MASK		GENMASK(10, 8)
 #define  PVC_EG_TAG(x)			FIELD_PREP(PVC_EG_TAG_MASK, x)
@@ -325,31 +258,14 @@ enum mt7530_port_mode {
 #define  VLAN_ATTR(x)			FIELD_PREP(VLAN_ATTR_MASK, x)
 #define  ACC_FRM_MASK			GENMASK(1, 0)
 
-enum mt7530_vlan_port_eg_tag {
-	MT7530_VLAN_EG_DISABLED = 0,
-	MT7530_VLAN_EG_CONSISTENT = 1,
-	MT7530_VLAN_EG_UNTAGGED = 4,
-};
-
-enum mt7530_vlan_port_attr {
-	MT7530_VLAN_USER = 0,
-	MT7530_VLAN_TRANSPARENT = 3,
-};
-
-enum mt7530_vlan_port_acc_frm {
-	MT7530_VLAN_ACC_ALL = 0,
-	MT7530_VLAN_ACC_TAGGED = 1,
-	MT7530_VLAN_ACC_UNTAGGED = 2,
-};
-
 #define  STAG_VPID_MASK			GENMASK(31, 16)
 #define  STAG_VPID(x)			FIELD_PREP(STAG_VPID_MASK, x)
 
 /* Register for port port-and-protocol based vlan 1 control */
+#define MT7530_PPBV1			0x2014
 #define MT7530_PPBV1_P(x)		(0x2014 + ((x) * 0x100))
 #define  G0_PORT_VID_MASK		GENMASK(11, 0)
 #define  G0_PORT_VID(x)			FIELD_PREP(G0_PORT_VID_MASK, x)
-#define  G0_PORT_VID_DEF		G0_PORT_VID(0)
 
 /* Register for port MAC control register */
 #define MT753X_PMCR_P(x)		(0x3000 + ((x) * 0x100))
@@ -427,55 +343,54 @@ enum mt7530_vlan_port_acc_frm {
 #define  MAX_RX_JUMBO_MASK		GENMASK(5, 2)
 #define  MAX_RX_JUMBO(x)		FIELD_PREP(MAX_RX_JUMBO_MASK, x)
 #define  MAX_RX_PKT_LEN_MASK		GENMASK(1, 0)
-#define  MAX_RX_PKT_LEN_1522		0x0
-#define  MAX_RX_PKT_LEN_1536		0x1
-#define  MAX_RX_PKT_LEN_1552		0x2
-#define  MAX_RX_PKT_LEN_JUMBO		0x3
 
 /* Register for MIB */
-#define MT7530_PORT_MIB_COUNTER(x)	(0x4000 + (x) * 0x100)
+#define MT7530_MIB_COUNTER		0x4000
+#define MT7530_PORT_MIB_COUNTER(x)	(MT7530_MIB_COUNTER + (x) * 0x100)
 /* Each define is an offset of MT7530_PORT_MIB_COUNTER */
-#define   MT7530_PORT_MIB_TX_DROP	0x00
-#define   MT7530_PORT_MIB_TX_CRC_ERR	0x04
-#define   MT7530_PORT_MIB_TX_UNICAST	0x08
-#define   MT7530_PORT_MIB_TX_MULTICAST	0x0c
-#define   MT7530_PORT_MIB_TX_BROADCAST	0x10
-#define   MT7530_PORT_MIB_TX_COLLISION	0x14
-#define   MT7530_PORT_MIB_TX_SINGLE_COLLISION 0x18
-#define   MT7530_PORT_MIB_TX_MULTIPLE_COLLISION 0x1c
-#define   MT7530_PORT_MIB_TX_DEFERRED	0x20
-#define   MT7530_PORT_MIB_TX_LATE_COLLISION 0x24
-#define   MT7530_PORT_MIB_TX_EXCESSIVE_COLLISION 0x28
-#define   MT7530_PORT_MIB_TX_PAUSE	0x2c
-#define   MT7530_PORT_MIB_TX_PKT_SZ_64	0x30
-#define   MT7530_PORT_MIB_TX_PKT_SZ_65_TO_127 0x34
-#define   MT7530_PORT_MIB_TX_PKT_SZ_128_TO_255 0x38
-#define   MT7530_PORT_MIB_TX_PKT_SZ_256_TO_511 0x3c
-#define   MT7530_PORT_MIB_TX_PKT_SZ_512_TO_1023 0x40
-#define   MT7530_PORT_MIB_TX_PKT_SZ_1024_TO_MAX 0x44
-#define   MT7530_PORT_MIB_TX_BYTES	0x48 /* 64 bytes */
-#define   MT7530_PORT_MIB_RX_DROP	0x60
-#define   MT7530_PORT_MIB_RX_FILTERING	0x64
-#define   MT7530_PORT_MIB_RX_UNICAST	0x68
-#define   MT7530_PORT_MIB_RX_MULTICAST	0x6c
-#define   MT7530_PORT_MIB_RX_BROADCAST	0x70
-#define   MT7530_PORT_MIB_RX_ALIGN_ERR	0x74
-#define   MT7530_PORT_MIB_RX_CRC_ERR	0x78
-#define   MT7530_PORT_MIB_RX_UNDER_SIZE_ERR 0x7c
-#define   MT7530_PORT_MIB_RX_FRAG_ERR	0x80
-#define   MT7530_PORT_MIB_RX_OVER_SZ_ERR 0x84
-#define   MT7530_PORT_MIB_RX_JABBER_ERR	0x88
-#define   MT7530_PORT_MIB_RX_PAUSE	0x8c
-#define   MT7530_PORT_MIB_RX_PKT_SZ_64	0x90
-#define   MT7530_PORT_MIB_RX_PKT_SZ_65_TO_127 0x94
-#define   MT7530_PORT_MIB_RX_PKT_SZ_128_TO_255 0x98
-#define   MT7530_PORT_MIB_RX_PKT_SZ_256_TO_511 0x9c
-#define   MT7530_PORT_MIB_RX_PKT_SZ_512_TO_1023 0xa0
-#define   MT7530_PORT_MIB_RX_PKT_SZ_1024_TO_MAX 0xa4
-#define   MT7530_PORT_MIB_RX_BYTES	0xa8 /* 64 bytes */
-#define   MT7530_PORT_MIB_RX_CTRL_DROP	0xb0
-#define   MT7530_PORT_MIB_RX_INGRESS_DROP 0xb4
-#define   MT7530_PORT_MIB_RX_ARL_DROP	0xb8
+#define   MT7530_PORT_MIB_TX_DROP	(MT7530_MIB_COUNTER + 0x00)
+#define   MT7530_PORT_MIB_TX_CRC_ERR	(MT7530_MIB_COUNTER + 0x04)
+#define   MT7530_PORT_MIB_TX_UNICAST	(MT7530_MIB_COUNTER + 0x08)
+#define   MT7530_PORT_MIB_TX_MULTICAST	(MT7530_MIB_COUNTER + 0x0c)
+#define   MT7530_PORT_MIB_TX_BROADCAST	(MT7530_MIB_COUNTER + 0x10)
+#define   MT7530_PORT_MIB_TX_COLLISION	(MT7530_MIB_COUNTER + 0x14)
+#define   MT7530_PORT_MIB_TX_SINGLE_COLLISION (MT7530_MIB_COUNTER + 0x18)
+#define   MT7530_PORT_MIB_TX_MULTIPLE_COLLISION (MT7530_MIB_COUNTER + 0x1c)
+#define   MT7530_PORT_MIB_TX_DEFERRED	(MT7530_MIB_COUNTER + 0x20)
+#define   MT7530_PORT_MIB_TX_LATE_COLLISION (MT7530_MIB_COUNTER + 0x24)
+#define   MT7530_PORT_MIB_TX_EXCESSIVE_COLLISION (MT7530_MIB_COUNTER + 0x28)
+#define   MT7530_PORT_MIB_TX_PAUSE	(MT7530_MIB_COUNTER + 0x2c)
+#define   MT7530_PORT_MIB_TX_PKT_SZ_64	(MT7530_MIB_COUNTER + 0x30)
+#define   MT7530_PORT_MIB_TX_PKT_SZ_65_TO_127 (MT7530_MIB_COUNTER + 0x34)
+#define   MT7530_PORT_MIB_TX_PKT_SZ_128_TO_255 (MT7530_MIB_COUNTER + 0x38)
+#define   MT7530_PORT_MIB_TX_PKT_SZ_256_TO_511 (MT7530_MIB_COUNTER + 0x3c)
+#define   MT7530_PORT_MIB_TX_PKT_SZ_512_TO_1023 (MT7530_MIB_COUNTER + 0x40)
+#define   MT7530_PORT_MIB_TX_PKT_SZ_1024_TO_MAX (MT7530_MIB_COUNTER + 0x44)
+#define   MT7530_PORT_MIB_TX_BYTES_LOW	(MT7530_MIB_COUNTER + 0x48) /* 64 bytes */
+#define   MT7530_PORT_MIB_TX_BYTES_HIGH	(MT7530_MIB_COUNTER + 0x4c)
+#define   MT7530_PORT_MIB_RX_DROP	(MT7530_MIB_COUNTER + 0x60)
+#define   MT7530_PORT_MIB_RX_FILTERING	(MT7530_MIB_COUNTER + 0x64)
+#define   MT7530_PORT_MIB_RX_UNICAST	(MT7530_MIB_COUNTER + 0x68)
+#define   MT7530_PORT_MIB_RX_MULTICAST	(MT7530_MIB_COUNTER + 0x6c)
+#define   MT7530_PORT_MIB_RX_BROADCAST	(MT7530_MIB_COUNTER + 0x70)
+#define   MT7530_PORT_MIB_RX_ALIGN_ERR	(MT7530_MIB_COUNTER + 0x74)
+#define   MT7530_PORT_MIB_RX_CRC_ERR	(MT7530_MIB_COUNTER + 0x78)
+#define   MT7530_PORT_MIB_RX_UNDER_SIZE_ERR (MT7530_MIB_COUNTER + 0x7c)
+#define   MT7530_PORT_MIB_RX_FRAG_ERR	(MT7530_MIB_COUNTER + 0x80)
+#define   MT7530_PORT_MIB_RX_OVER_SZ_ERR (MT7530_MIB_COUNTER + 0x84)
+#define   MT7530_PORT_MIB_RX_JABBER_ERR	(MT7530_MIB_COUNTER + 0x88)
+#define   MT7530_PORT_MIB_RX_PAUSE	(MT7530_MIB_COUNTER + 0x8c)
+#define   MT7530_PORT_MIB_RX_PKT_SZ_64	(MT7530_MIB_COUNTER + 0x90)
+#define   MT7530_PORT_MIB_RX_PKT_SZ_65_TO_127 (MT7530_MIB_COUNTER + 0x94)
+#define   MT7530_PORT_MIB_RX_PKT_SZ_128_TO_255 (MT7530_MIB_COUNTER + 0x98)
+#define   MT7530_PORT_MIB_RX_PKT_SZ_256_TO_511 (MT7530_MIB_COUNTER + 0x9c)
+#define   MT7530_PORT_MIB_RX_PKT_SZ_512_TO_1023 (MT7530_MIB_COUNTER + 0xa0)
+#define   MT7530_PORT_MIB_RX_PKT_SZ_1024_TO_MAX (MT7530_MIB_COUNTER + 0xa4)
+#define   MT7530_PORT_MIB_RX_BYTES_LOW	(MT7530_MIB_COUNTER + 0xa8) /* 64 bytes */
+#define   MT7530_PORT_MIB_RX_BYTES_HIGH	(MT7530_MIB_COUNTER + 0xac)
+#define   MT7530_PORT_MIB_RX_CTRL_DROP	(MT7530_MIB_COUNTER + 0xb0)
+#define   MT7530_PORT_MIB_RX_INGRESS_DROP (MT7530_MIB_COUNTER + 0xb4)
+#define   MT7530_PORT_MIB_RX_ARL_DROP	(MT7530_MIB_COUNTER + 0xb8)
 #define MT7530_MIB_CCR			0x4fe0
 #define  CCR_MIB_ENABLE			BIT(31)
 #define  CCR_RX_OCT_CNT_GOOD		BIT(7)
@@ -794,45 +709,6 @@ enum mt7531_xtal_fsel {
 #define  REG_GSWCK_EN			BIT(0)
 #define  REG_TRGMIICK_EN		BIT(1)
 
-#define MIB_DESC(_s, _o, _n)	\
-	{			\
-		.size = (_s),	\
-		.offset = (_o),	\
-		.name = (_n),	\
-	}
-
-struct mt7530_mib_desc {
-	unsigned int size;
-	unsigned int offset;
-	const char *name;
-};
-
-struct mt7530_fdb {
-	u16 vid;
-	u8 port_mask;
-	u8 aging;
-	u8 mac[6];
-	bool noarp;
-};
-
-/* struct mt7530_port -	This is the main data structure for holding the state
- *			of the port.
- * @enable:	The status used for show port is enabled or not.
- * @pm:		The matrix used to show all connections with the port.
- * @pvid:	The VLAN specified is to be considered a PVID at ingress.  Any
- *		untagged frames will be assigned to the related VLAN.
- * @sgmii_pcs:	Pointer to PCS instance for SerDes ports
- * @stats:	Cached port statistics for MDIO-connected switches
- */
-struct mt7530_port {
-	bool enable;
-	bool isolated;
-	u32 pm;
-	u16 pvid;
-	struct phylink_pcs *sgmii_pcs;
-	struct rtnl_link_stats64 stats;
-};
-
 /* Port 5 mode definitions of the MT7530 switch */
 enum mt7530_p5_mode {
 	GMAC5,
@@ -863,6 +739,9 @@ struct mt753x_pcs {
  */
 struct mt753x_info {
 	enum mt753x_id id;
+
+	const struct mt7530_reg_field *reg_fields;
+	unsigned int num_reg_fields;
 
 	const struct phylink_pcs_ops *pcs_ops;
 
@@ -921,8 +800,6 @@ struct mt7530_priv {
 	bool			mcm;
 	enum mt7530_p5_mode	p5_mode;
 	bool			p5_sgmii;
-	u8			mirror_rx;
-	u8			mirror_tx;
 	struct mt7530_port	ports[MT7530_NUM_PORTS];
 	struct mt753x_pcs	pcs[MT7530_NUM_PORTS];
 	/* protect among processes for registers access*/
@@ -934,23 +811,9 @@ struct mt7530_priv {
 	spinlock_t stats_lock; /* protects cached stats counters */
 	struct delayed_work stats_work;
 	unsigned long stats_last;
+
+	struct mt7530_lib_priv lib_priv;
 };
-
-struct mt7530_hw_vlan_entry {
-	int port;
-	u8  old_members;
-	bool untagged;
-};
-
-static inline void mt7530_hw_vlan_entry_init(struct mt7530_hw_vlan_entry *e,
-					     int port, bool untagged)
-{
-	e->port = port;
-	e->untagged = untagged;
-}
-
-typedef void (*mt7530_vlan_op)(struct mt7530_priv *,
-			       struct mt7530_hw_vlan_entry *);
 
 struct mt7530_hw_stats {
 	const char	*string;
@@ -960,6 +823,7 @@ struct mt7530_hw_stats {
 
 int mt7530_probe_common(struct mt7530_priv *priv);
 void mt7530_remove_common(struct mt7530_priv *priv);
+int mt7530_setup_lib_priv(struct mt7530_priv *priv);
 
 extern const struct mt753x_info mt753x_table[];
 
