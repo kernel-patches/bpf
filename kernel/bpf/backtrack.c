@@ -888,6 +888,10 @@ int bpf_mark_chain_precision(struct bpf_verifier_env *env,
 		}
 
 		if (last_idx < 0) {
+			/* Consecutive checkpoints can have no instructions between them. */
+			if (st->parent)
+				goto parent;
+
 			/* we are at the entry into subprog, which
 			 * is expected for global funcs, but only if
 			 * requested precise registers are R1-R5
@@ -952,6 +956,7 @@ int bpf_mark_chain_precision(struct bpf_verifier_env *env,
 				return -EFAULT;
 			}
 		}
+parent:
 		st = st->parent;
 		if (!st)
 			break;
