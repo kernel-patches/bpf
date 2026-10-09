@@ -705,6 +705,16 @@ void bpf_mark_all_scalars_precise(struct bpf_verifier_env *env,
 						i, -(j + 1) * 8);
 				}
 			}
+			bpf_for_each_spilled_stack_arg(j, func, reg) {
+				if (!reg || reg->type != SCALAR_VALUE || reg->precise)
+					continue;
+				reg->precise = true;
+				if (env->log.level & BPF_LOG_LEVEL2) {
+					verbose(env,
+						"force_precise: frame%d: forcing sa%d to be precise\n",
+						i, j);
+				}
+			}
 		}
 	}
 }
