@@ -280,7 +280,7 @@ void test_mmap(void)
 	munmap(tmp1, map_sz);
 
 	/* we need to wait for RCU grace period */
-	for (i = 0; i < 10000; i++) {
+	while (true) {
 		__u32 id = data_map_id - 1;
 		if (bpf_map_get_next_id(id, &id) || id > data_map_id)
 			break;
