@@ -53,34 +53,45 @@ rmnet_map_ipv4_dl_csum_trailer(struct sk_buff *skb,
 {
 	struct iphdr *ip4h = (struct iphdr *)skb->data;
 	void *txporthdr = skb->data + ip4h->ihl * 4;
+	struct rmnet_pcpu_stats *pcpu_ptr;
 	__sum16 *csum_field, pseudo_csum;
 	__sum16 ip_payload_csum;
+
+	pcpu_ptr = this_cpu_ptr(priv->pcpu_stats);
 
 	/* Computing the checksum over just the IPv4 header--including its
 	 * checksum field--should yield 0.  If it doesn't, the IP header
 	 * is bad, so return an error and let the IP layer drop it.
 	 */
 	if (ip_fast_csum(ip4h, ip4h->ihl)) {
-		priv->stats.csum_ip4_header_bad++;
+		u64_stats_update_begin(&pcpu_ptr->syncp);
+		u64_stats_inc(&pcpu_ptr->priv_stats.csum_ip4_header_bad);
+		u64_stats_update_end(&pcpu_ptr->syncp);
 		return -EINVAL;
 	}
 
 	/* We don't support checksum offload on IPv4 fragments */
 	if (ip_is_fragment(ip4h)) {
-		priv->stats.csum_fragmented_pkt++;
+		u64_stats_update_begin(&pcpu_ptr->syncp);
+		u64_stats_inc(&pcpu_ptr->priv_stats.csum_fragmented_pkt);
+		u64_stats_update_end(&pcpu_ptr->syncp);
 		return -EOPNOTSUPP;
 	}
 
 	/* Checksum offload is only supported for UDP and TCP protocols */
 	csum_field = rmnet_map_get_csum_field(ip4h->protocol, txporthdr);
 	if (!csum_field) {
-		priv->stats.csum_err_invalid_transport++;
+		u64_stats_update_begin(&pcpu_ptr->syncp);
+		u64_stats_inc(&pcpu_ptr->priv_stats.csum_err_invalid_transport);
+		u64_stats_update_end(&pcpu_ptr->syncp);
 		return -EPROTONOSUPPORT;
 	}
 
 	/* RFC 768: UDP checksum is optional for IPv4, and is 0 if unused */
 	if (!*csum_field && ip4h->protocol == IPPROTO_UDP) {
-		priv->stats.csum_skipped++;
+		u64_stats_update_begin(&pcpu_ptr->syncp);
+		u64_stats_inc(&pcpu_ptr->priv_stats.csum_skipped);
+		u64_stats_update_end(&pcpu_ptr->syncp);
 		return 0;
 	}
 
@@ -113,11 +124,15 @@ rmnet_map_ipv4_dl_csum_trailer(struct sk_buff *skb,
 
 	/* The cast is required to ensure only the low 16 bits are examined */
 	if (ip_payload_csum != (__sum16)~pseudo_csum) {
-		priv->stats.csum_validation_failed++;
+		u64_stats_update_begin(&pcpu_ptr->syncp);
+		u64_stats_inc(&pcpu_ptr->priv_stats.csum_validation_failed);
+		u64_stats_update_end(&pcpu_ptr->syncp);
 		return -EINVAL;
 	}
 
-	priv->stats.csum_ok++;
+	u64_stats_update_begin(&pcpu_ptr->syncp);
+	u64_stats_inc(&pcpu_ptr->priv_stats.csum_ok);
+	u64_stats_update_end(&pcpu_ptr->syncp);
 	return 0;
 }
 
@@ -129,16 +144,21 @@ rmnet_map_ipv6_dl_csum_trailer(struct sk_buff *skb,
 {
 	struct ipv6hdr *ip6h = (struct ipv6hdr *)skb->data;
 	void *txporthdr = skb->data + sizeof(*ip6h);
+	struct rmnet_pcpu_stats *pcpu_ptr;
 	__sum16 *csum_field, pseudo_csum;
 	__sum16 ip6_payload_csum;
 	__be16 ip_header_csum;
+
+	pcpu_ptr = this_cpu_ptr(priv->pcpu_stats);
 
 	/* Checksum offload is only supported for UDP and TCP protocols;
 	 * the packet cannot include any IPv6 extension headers
 	 */
 	csum_field = rmnet_map_get_csum_field(ip6h->nexthdr, txporthdr);
 	if (!csum_field) {
-		priv->stats.csum_err_invalid_transport++;
+		u64_stats_update_begin(&pcpu_ptr->syncp);
+		u64_stats_inc(&pcpu_ptr->priv_stats.csum_err_invalid_transport);
+		u64_stats_update_end(&pcpu_ptr->syncp);
 		return -EPROTONOSUPPORT;
 	}
 
@@ -164,11 +184,15 @@ rmnet_map_ipv6_dl_csum_trailer(struct sk_buff *skb,
 	 * examined.
 	 */
 	if (ip6_payload_csum != (__sum16)~pseudo_csum) {
-		priv->stats.csum_validation_failed++;
+		u64_stats_update_begin(&pcpu_ptr->syncp);
+		u64_stats_inc(&pcpu_ptr->priv_stats.csum_validation_failed);
+		u64_stats_update_end(&pcpu_ptr->syncp);
 		return -EINVAL;
 	}
 
-	priv->stats.csum_ok++;
+	u64_stats_update_begin(&pcpu_ptr->syncp);
+	u64_stats_inc(&pcpu_ptr->priv_stats.csum_ok);
+	u64_stats_update_end(&pcpu_ptr->syncp);
 	return 0;
 }
 #else
@@ -263,6 +287,9 @@ static void rmnet_map_v5_checksum_uplink_packet(struct sk_buff *skb,
 {
 	struct rmnet_priv *priv = netdev_priv(orig_dev);
 	struct rmnet_map_v5_csum_header *ul_header;
+	struct rmnet_pcpu_stats *pcpu_ptr;
+
+	pcpu_ptr = this_cpu_ptr(priv->pcpu_stats);
 
 	ul_header = skb_push(skb, sizeof(*ul_header));
 	memset(ul_header, 0, sizeof(*ul_header));
@@ -287,7 +314,9 @@ static void rmnet_map_v5_checksum_uplink_packet(struct sk_buff *skb,
 			proto = ((struct ipv6hdr *)iph)->nexthdr;
 			trans = iph + ip_len;
 		} else {
-			priv->stats.csum_err_invalid_ip_version++;
+			u64_stats_update_begin(&pcpu_ptr->syncp);
+			u64_stats_inc(&pcpu_ptr->priv_stats.csum_err_invalid_ip_version);
+			u64_stats_update_end(&pcpu_ptr->syncp);
 			goto sw_csum;
 		}
 
@@ -296,13 +325,17 @@ static void rmnet_map_v5_checksum_uplink_packet(struct sk_buff *skb,
 			skb->ip_summed = CHECKSUM_NONE;
 			/* Ask for checksum offloading */
 			ul_header->csum_info |= MAPV5_CSUMINFO_VALID_FLAG;
-			priv->stats.csum_hw++;
+			u64_stats_update_begin(&pcpu_ptr->syncp);
+			u64_stats_inc(&pcpu_ptr->priv_stats.csum_hw);
+			u64_stats_update_end(&pcpu_ptr->syncp);
 			return;
 		}
 	}
 
 sw_csum:
-	priv->stats.csum_sw++;
+	u64_stats_update_begin(&pcpu_ptr->syncp);
+	u64_stats_inc(&pcpu_ptr->priv_stats.csum_sw);
+	u64_stats_update_end(&pcpu_ptr->syncp);
 }
 
 /* Adds MAP header to front of skb->data
@@ -434,16 +467,23 @@ int rmnet_map_checksum_downlink_packet(struct sk_buff *skb, u16 len)
 {
 	struct rmnet_priv *priv = netdev_priv(skb->dev);
 	struct rmnet_map_dl_csum_trailer *csum_trailer;
+	struct rmnet_pcpu_stats *pcpu_ptr;
+
+	pcpu_ptr = this_cpu_ptr(priv->pcpu_stats);
 
 	if (unlikely(!(skb->dev->features & NETIF_F_RXCSUM))) {
-		priv->stats.csum_sw++;
+		u64_stats_update_begin(&pcpu_ptr->syncp);
+		u64_stats_inc(&pcpu_ptr->priv_stats.csum_sw);
+		u64_stats_update_end(&pcpu_ptr->syncp);
 		return -EOPNOTSUPP;
 	}
 
 	csum_trailer = (struct rmnet_map_dl_csum_trailer *)(skb->data + len);
 
 	if (!(csum_trailer->flags & MAP_CSUM_DL_VALID_FLAG)) {
-		priv->stats.csum_valid_unset++;
+		u64_stats_update_begin(&pcpu_ptr->syncp);
+		u64_stats_inc(&pcpu_ptr->priv_stats.csum_valid_unset);
+		u64_stats_update_end(&pcpu_ptr->syncp);
 		return -EINVAL;
 	}
 
@@ -453,7 +493,9 @@ int rmnet_map_checksum_downlink_packet(struct sk_buff *skb, u16 len)
 	if (IS_ENABLED(CONFIG_IPV6) && skb->protocol == htons(ETH_P_IPV6))
 		return rmnet_map_ipv6_dl_csum_trailer(skb, csum_trailer, priv);
 
-	priv->stats.csum_err_invalid_ip_version++;
+	u64_stats_update_begin(&pcpu_ptr->syncp);
+	u64_stats_inc(&pcpu_ptr->priv_stats.csum_err_invalid_ip_version);
+	u64_stats_update_end(&pcpu_ptr->syncp);
 
 	return -EPROTONOSUPPORT;
 }
@@ -463,7 +505,10 @@ static void rmnet_map_v4_checksum_uplink_packet(struct sk_buff *skb,
 {
 	struct rmnet_priv *priv = netdev_priv(orig_dev);
 	struct rmnet_map_ul_csum_header *ul_header;
+	struct rmnet_pcpu_stats *pcpu_ptr;
 	void *iphdr;
+
+	pcpu_ptr = this_cpu_ptr(priv->pcpu_stats);
 
 	ul_header = (struct rmnet_map_ul_csum_header *)
 		    skb_push(skb, sizeof(struct rmnet_map_ul_csum_header));
@@ -480,22 +525,30 @@ static void rmnet_map_v4_checksum_uplink_packet(struct sk_buff *skb,
 
 	if (skb->protocol == htons(ETH_P_IP)) {
 		rmnet_map_ipv4_ul_csum_header(iphdr, ul_header, skb);
-		priv->stats.csum_hw++;
+		u64_stats_update_begin(&pcpu_ptr->syncp);
+		u64_stats_inc(&pcpu_ptr->priv_stats.csum_hw);
+		u64_stats_update_end(&pcpu_ptr->syncp);
 		return;
 	}
 
 	if (IS_ENABLED(CONFIG_IPV6) && skb->protocol == htons(ETH_P_IPV6)) {
 		rmnet_map_ipv6_ul_csum_header(iphdr, ul_header, skb);
-		priv->stats.csum_hw++;
+		u64_stats_update_begin(&pcpu_ptr->syncp);
+		u64_stats_inc(&pcpu_ptr->priv_stats.csum_hw);
+		u64_stats_update_end(&pcpu_ptr->syncp);
 		return;
 	}
 
-	priv->stats.csum_err_invalid_ip_version++;
+	u64_stats_update_begin(&pcpu_ptr->syncp);
+	u64_stats_inc(&pcpu_ptr->priv_stats.csum_err_invalid_ip_version);
+	u64_stats_update_end(&pcpu_ptr->syncp);
 
 sw_csum:
 	memset(ul_header, 0, sizeof(*ul_header));
 
-	priv->stats.csum_sw++;
+	u64_stats_update_begin(&pcpu_ptr->syncp);
+	u64_stats_inc(&pcpu_ptr->priv_stats.csum_sw);
+	u64_stats_update_end(&pcpu_ptr->syncp);
 }
 
 /* Generates UL checksum meta info header for IPv4 and IPv6 over TCP and UDP
@@ -665,8 +718,12 @@ __rmnet_map_segment_coal_skb(struct sk_buff *coal_skb,
 			     bool csum_valid)
 {
 	u32 dlen = coal_meta->data_len * coal_meta->pkt_count;
+	struct rmnet_priv *priv = netdev_priv(coal_skb->dev);
 	u32 hlen = coal_meta->ip_len + coal_meta->trans_len;
+	struct rmnet_pcpu_stats *pcpu_ptr;
 	struct sk_buff *skbn;
+
+	pcpu_ptr = this_cpu_ptr(priv->pcpu_stats);
 
 	/* RFC 768: UDP checksum is optional for IPv4, and is 0 if unused.
 	 * Such packets are never actually bad, regardless of what the
@@ -675,12 +732,29 @@ __rmnet_map_segment_coal_skb(struct sk_buff *coal_skb,
 	if (!csum_valid && coal_meta->zero_csum)
 		csum_valid = true;
 
-	if (!csum_valid)
+	if (!csum_valid) {
+		u64_stats_update_begin(&pcpu_ptr->syncp);
+		/* rx_dropped is standard accounting. coal_csum_drop is its
+		 * coalescing-specific checksum error subset.
+		 */
+		u64_stats_add(&pcpu_ptr->priv_stats.rx_dropped, coal_meta->pkt_count);
+		u64_stats_inc(&pcpu_ptr->priv_stats.coal_csum_drop);
+		u64_stats_update_end(&pcpu_ptr->syncp);
 		goto next_pkt;
+	}
 
 	skbn = alloc_skb(hlen + dlen + RMNET_MAP_DEAGGR_HEADROOM, GFP_ATOMIC);
-	if (!skbn)
+	if (!skbn) {
+		u64_stats_update_begin(&pcpu_ptr->syncp);
+		/* The coal counter is the coalescing subset of the standard
+		 * allocation failure and RX drop counters.
+		 */
+		u64_stats_add(&pcpu_ptr->priv_stats.rx_alloc_fail, coal_meta->pkt_count);
+		u64_stats_add(&pcpu_ptr->priv_stats.rx_dropped, coal_meta->pkt_count);
+		u64_stats_add(&pcpu_ptr->priv_stats.coal_alloc_fail, coal_meta->pkt_count);
+		u64_stats_update_end(&pcpu_ptr->syncp);
 		goto next_pkt;
+	}
 
 	skb_reserve(skbn, hlen + RMNET_MAP_DEAGGR_HEADROOM);
 	skb_put_data(skbn,
@@ -729,6 +803,9 @@ __rmnet_map_segment_coal_skb(struct sk_buff *coal_skb,
 	rmnet_map_partial_csum(skbn, coal_meta);
 
 	skbn->dev = coal_skb->dev;
+	u64_stats_update_begin(&pcpu_ptr->syncp);
+	u64_stats_inc(&pcpu_ptr->priv_stats.coal_reconstruct);
+	u64_stats_update_end(&pcpu_ptr->syncp);
 
 	if (coal_meta->pkt_count > 1)
 		rmnet_map_gso_stamp(skbn, coal_meta);
@@ -747,14 +824,22 @@ static bool rmnet_map_coal_parse_ip_hdr(struct sk_buff *coal_skb,
 					struct rmnet_map_coal_metadata *meta,
 					bool *gro)
 {
+	struct rmnet_priv *priv = netdev_priv(coal_skb->dev);
+	struct rmnet_pcpu_stats *pcpu_ptr;
 	struct ipv6hdr *ip6h;
 	struct iphdr *iph;
 	__be16 frag_off;
 	u8 protocol;
 	int ret;
 
-	if (coal_skb->len < sizeof(*iph))
+	pcpu_ptr = this_cpu_ptr(priv->pcpu_stats);
+
+	if (coal_skb->len < sizeof(*iph)) {
+		u64_stats_update_begin(&pcpu_ptr->syncp);
+		u64_stats_inc(&pcpu_ptr->priv_stats.coal_ip_invalid);
+		u64_stats_update_end(&pcpu_ptr->syncp);
 		return false;
+	}
 
 	iph = (struct iphdr *)coal_skb->data;
 
@@ -763,35 +848,58 @@ static bool rmnet_map_coal_parse_ip_hdr(struct sk_buff *coal_skb,
 		meta->ip_len = iph->ihl * 4;
 		meta->trans_proto = iph->protocol;
 		meta->ip_header = iph;
-		if (meta->ip_len < sizeof(*iph) || coal_skb->len < meta->ip_len)
+		if (meta->ip_len < sizeof(*iph) || coal_skb->len < meta->ip_len) {
+			u64_stats_update_begin(&pcpu_ptr->syncp);
+			u64_stats_inc(&pcpu_ptr->priv_stats.coal_ip_invalid);
+			u64_stats_update_end(&pcpu_ptr->syncp);
 			return false;
+		}
 
-		if (ip_is_fragment(iph))
+		if (ip_is_fragment(iph)) {
+			u64_stats_update_begin(&pcpu_ptr->syncp);
+			u64_stats_inc(&pcpu_ptr->priv_stats.coal_ip_invalid);
+			u64_stats_update_end(&pcpu_ptr->syncp);
 			return false;
+		}
 
 		if (iph->ihl != 5)
 			*gro = false;
 	} else if (iph->version == 6) {
-		if (coal_skb->len < sizeof(*ip6h))
+		if (coal_skb->len < sizeof(*ip6h)) {
+			u64_stats_update_begin(&pcpu_ptr->syncp);
+			u64_stats_inc(&pcpu_ptr->priv_stats.coal_ip_invalid);
+			u64_stats_update_end(&pcpu_ptr->syncp);
 			return false;
+		}
 
 		ip6h = (struct ipv6hdr *)iph;
 		protocol = ip6h->nexthdr;
 		meta->ip_proto = 6;
 		ret = ipv6_skip_exthdr(coal_skb, sizeof(*ip6h), &protocol,
 				       &frag_off);
-		if (ret < 0 || frag_off || ret > U16_MAX)
+		if (ret < 0 || frag_off || ret > U16_MAX) {
+			u64_stats_update_begin(&pcpu_ptr->syncp);
+			u64_stats_inc(&pcpu_ptr->priv_stats.coal_ip_invalid);
+			u64_stats_update_end(&pcpu_ptr->syncp);
 			return false;
+		}
 
 		meta->ip_len = (u16)ret;
 		meta->trans_proto = protocol;
 		meta->ip_header = ip6h;
-		if (coal_skb->len < meta->ip_len)
+		if (coal_skb->len < meta->ip_len) {
+			u64_stats_update_begin(&pcpu_ptr->syncp);
+			u64_stats_inc(&pcpu_ptr->priv_stats.coal_ip_invalid);
+			u64_stats_update_end(&pcpu_ptr->syncp);
 			return false;
+		}
 
 		if (meta->ip_len > sizeof(*ip6h))
 			*gro = false;
 	} else {
+		u64_stats_update_begin(&pcpu_ptr->syncp);
+		u64_stats_inc(&pcpu_ptr->priv_stats.coal_ip_invalid);
+		u64_stats_update_end(&pcpu_ptr->syncp);
 		return false;
 	}
 
@@ -804,29 +912,49 @@ static bool rmnet_map_coal_parse_ip_hdr(struct sk_buff *coal_skb,
 static bool rmnet_map_coal_parse_trans_hdr(struct sk_buff *coal_skb,
 					   struct rmnet_map_coal_metadata *meta)
 {
+	struct rmnet_priv *priv = netdev_priv(coal_skb->dev);
+	struct rmnet_pcpu_stats *pcpu_ptr;
 	struct udphdr *uh;
 	struct tcphdr *th;
 	u32 avail;
 	u8 *base;
 
-	if (meta->ip_len > coal_skb->len)
+	pcpu_ptr = this_cpu_ptr(priv->pcpu_stats);
+
+	if (meta->ip_len > coal_skb->len) {
+		u64_stats_update_begin(&pcpu_ptr->syncp);
+		u64_stats_inc(&pcpu_ptr->priv_stats.coal_trans_invalid);
+		u64_stats_update_end(&pcpu_ptr->syncp);
 		return false;
+	}
 
 	base = (u8 *)meta->ip_header + meta->ip_len;
 	avail = coal_skb->len - meta->ip_len;
 
 	if (meta->trans_proto == IPPROTO_TCP) {
-		if (avail < sizeof(*th))
+		if (avail < sizeof(*th)) {
+			u64_stats_update_begin(&pcpu_ptr->syncp);
+			u64_stats_inc(&pcpu_ptr->priv_stats.coal_trans_invalid);
+			u64_stats_update_end(&pcpu_ptr->syncp);
 			return false;
+		}
 
 		th = (struct tcphdr *)base;
 		meta->trans_len = th->doff * 4;
 		meta->trans_header = th;
-		if (meta->trans_len < sizeof(*th) || avail < meta->trans_len)
+		if (meta->trans_len < sizeof(*th) || avail < meta->trans_len) {
+			u64_stats_update_begin(&pcpu_ptr->syncp);
+			u64_stats_inc(&pcpu_ptr->priv_stats.coal_trans_invalid);
+			u64_stats_update_end(&pcpu_ptr->syncp);
 			return false;
+		}
 	} else if (meta->trans_proto == IPPROTO_UDP) {
-		if (avail < sizeof(*uh))
+		if (avail < sizeof(*uh)) {
+			u64_stats_update_begin(&pcpu_ptr->syncp);
+			u64_stats_inc(&pcpu_ptr->priv_stats.coal_trans_invalid);
+			u64_stats_update_end(&pcpu_ptr->syncp);
 			return false;
+		}
 
 		uh = (struct udphdr *)base;
 		meta->trans_len = sizeof(*uh);
@@ -834,6 +962,9 @@ static bool rmnet_map_coal_parse_trans_hdr(struct sk_buff *coal_skb,
 		if (meta->ip_proto == 4 && !uh->check)
 			meta->zero_csum = true;
 	} else {
+		u64_stats_update_begin(&pcpu_ptr->syncp);
+		u64_stats_inc(&pcpu_ptr->priv_stats.coal_trans_invalid);
+		u64_stats_update_end(&pcpu_ptr->syncp);
 		return false;
 	}
 
@@ -919,11 +1050,15 @@ static void rmnet_map_coal_segment_loop(struct sk_buff *coal_skb,
 					struct sk_buff_head *list,
 					u64 nlo_err_mask, bool gro, u8 num_nlos)
 {
+	struct rmnet_priv *priv = netdev_priv(coal_skb->dev);
 	u32 hlen = coal_meta->ip_len + coal_meta->trans_len;
+	struct rmnet_pcpu_stats *pcpu_ptr;
 	u8 pkt, total_pkt = 0;
 	bool csum_err;
 	u16 pkt_len;
 	u8 nlo;
+
+	pcpu_ptr = this_cpu_ptr(priv->pcpu_stats);
 
 	for (nlo = 0; nlo < num_nlos; nlo++) {
 		pkt_len = ntohs(coal_hdr->nl_pairs[nlo].pkt_len);
@@ -938,6 +1073,12 @@ static void rmnet_map_coal_segment_loop(struct sk_buff *coal_skb,
 		for (pkt = 0; pkt < coal_hdr->nl_pairs[nlo].num_packets;
 		     pkt++, total_pkt++, nlo_err_mask >>= 1) {
 			csum_err = nlo_err_mask & 1;
+
+			if (csum_err) {
+				u64_stats_update_begin(&pcpu_ptr->syncp);
+				u64_stats_inc(&pcpu_ptr->priv_stats.coal_csum_err);
+				u64_stats_update_end(&pcpu_ptr->syncp);
+			}
 
 			if (!gro) {
 				coal_meta->pkt_count = 1;
@@ -982,10 +1123,14 @@ static int rmnet_map_segment_coal_skb(struct sk_buff *coal_skb,
 {
 	bool gro_hw = coal_skb->dev->features & NETIF_F_GRO_HW;
 	bool rxcsum = coal_skb->dev->features & NETIF_F_RXCSUM;
+	struct rmnet_priv *priv = netdev_priv(coal_skb->dev);
 	struct rmnet_map_v5_coal_header *coal_hdr;
 	struct rmnet_map_coal_metadata coal_meta;
+	struct rmnet_pcpu_stats *pcpu_ptr;
 	bool gro = gro_hw;
 	u32 hlen;
+
+	pcpu_ptr = this_cpu_ptr(priv->pcpu_stats);
 
 	memset(&coal_meta, 0, sizeof(coal_meta));
 
@@ -1005,14 +1150,28 @@ static int rmnet_map_segment_coal_skb(struct sk_buff *coal_skb,
 	hlen = coal_meta.ip_len + coal_meta.trans_len;
 
 	if (!rmnet_map_coal_validate_bounds(coal_skb, coal_hdr, num_nlos, hlen,
-					    &gro))
+					    &gro)) {
+		u64_stats_update_begin(&pcpu_ptr->syncp);
+		u64_stats_inc(&pcpu_ptr->priv_stats.coal_bounds_err);
+		u64_stats_update_end(&pcpu_ptr->syncp);
 		return -EINVAL;
+	}
 
 	/* Device capability gates coalesced delivery. Packet format can still
 	 * disable GSO and use the per-packet fallback below.
 	 */
 	if (total_pkts > 1 && (!rxcsum || !gro_hw))
 		return -EINVAL;
+
+	if (gro && total_pkts > 1) {
+		/* Standard counters cover delivered HW-GRO skbs. coal_rx and
+		 * coal_pkts cover coalescing input regardless of HW-GRO.
+		 */
+		u64_stats_update_begin(&pcpu_ptr->syncp);
+		u64_stats_inc(&pcpu_ptr->priv_stats.rx_hw_gro_packets);
+		u64_stats_add(&pcpu_ptr->priv_stats.rx_hw_gro_wire_packets, total_pkts);
+		u64_stats_update_end(&pcpu_ptr->syncp);
+	}
 
 	if (total_pkts == 1 && (!rxcsum || !gro_hw)) {
 		coal_skb->ip_summed = CHECKSUM_NONE;
@@ -1034,6 +1193,67 @@ static int rmnet_map_segment_coal_skb(struct sk_buff *coal_skb,
 				    nlo_err_mask, gro, num_nlos);
 
 	return 0;
+}
+
+/* Log the hardware close-reason counter for a coalescing header. */
+static void rmnet_map_data_log_close_stats(struct rmnet_pcpu_stats *pcpu_ptr,
+					   u8 type, u8 code)
+{
+	switch (type) {
+	case RMNET_MAP_COAL_CLOSE_NON_COAL:
+		u64_stats_update_begin(&pcpu_ptr->syncp);
+		u64_stats_inc(&pcpu_ptr->priv_stats.coal_close_non_coal);
+		u64_stats_update_end(&pcpu_ptr->syncp);
+		break;
+	case RMNET_MAP_COAL_CLOSE_IP_MISS:
+		u64_stats_update_begin(&pcpu_ptr->syncp);
+		u64_stats_inc(&pcpu_ptr->priv_stats.coal_close_ip_miss);
+		u64_stats_update_end(&pcpu_ptr->syncp);
+		break;
+	case RMNET_MAP_COAL_CLOSE_TRANS_MISS:
+		u64_stats_update_begin(&pcpu_ptr->syncp);
+		u64_stats_inc(&pcpu_ptr->priv_stats.coal_close_trans_miss);
+		u64_stats_update_end(&pcpu_ptr->syncp);
+		break;
+	case RMNET_MAP_COAL_CLOSE_HW:
+		switch (code) {
+		case RMNET_MAP_COAL_CLOSE_HW_NL:
+			u64_stats_update_begin(&pcpu_ptr->syncp);
+			u64_stats_inc(&pcpu_ptr->priv_stats.coal_close_hw_nl);
+			u64_stats_update_end(&pcpu_ptr->syncp);
+			break;
+		case RMNET_MAP_COAL_CLOSE_HW_PKT:
+			u64_stats_update_begin(&pcpu_ptr->syncp);
+			u64_stats_inc(&pcpu_ptr->priv_stats.coal_close_hw_pkt);
+			u64_stats_update_end(&pcpu_ptr->syncp);
+			break;
+		case RMNET_MAP_COAL_CLOSE_HW_BYTE:
+			u64_stats_update_begin(&pcpu_ptr->syncp);
+			u64_stats_inc(&pcpu_ptr->priv_stats.coal_close_hw_byte);
+			u64_stats_update_end(&pcpu_ptr->syncp);
+			break;
+		case RMNET_MAP_COAL_CLOSE_HW_TIME:
+			u64_stats_update_begin(&pcpu_ptr->syncp);
+			u64_stats_inc(&pcpu_ptr->priv_stats.coal_close_hw_time);
+			u64_stats_update_end(&pcpu_ptr->syncp);
+			break;
+		case RMNET_MAP_COAL_CLOSE_HW_EVICT:
+			u64_stats_update_begin(&pcpu_ptr->syncp);
+			u64_stats_inc(&pcpu_ptr->priv_stats.coal_close_hw_evict);
+			u64_stats_update_end(&pcpu_ptr->syncp);
+			break;
+		default:
+			break;
+		}
+		break;
+	case RMNET_MAP_COAL_CLOSE_COAL:
+		u64_stats_update_begin(&pcpu_ptr->syncp);
+		u64_stats_inc(&pcpu_ptr->priv_stats.coal_close_coal);
+		u64_stats_update_end(&pcpu_ptr->syncp);
+		break;
+	default:
+		break;
+	}
 }
 
 /* Validate the coalescing header and build the checksum error mask.
@@ -1062,23 +1282,34 @@ static int rmnet_map_data_check_coal_header(struct sk_buff *skb,
 					    u16 *num_pkts)
 {
 	struct rmnet_map_header *maph = (struct rmnet_map_header *)skb->data;
+	struct rmnet_priv *priv = netdev_priv(skb->dev);
 	struct rmnet_map_v5_coal_header *coal_hdr;
+	struct rmnet_pcpu_stats *pcpu_ptr;
 	u16 pkts = 0;
 	u64 mask = 0;
 	int nlos;
 	int i;
 
+	pcpu_ptr = this_cpu_ptr(priv->pcpu_stats);
+
 	/* coal header is counted in pkt_len */
-	if (ntohs(maph->pkt_len) < sizeof(*coal_hdr))
+	if (ntohs(maph->pkt_len) < sizeof(*coal_hdr)) {
+		u64_stats_update_begin(&pcpu_ptr->syncp);
+		u64_stats_inc(&pcpu_ptr->priv_stats.coal_hdr_err);
+		u64_stats_update_end(&pcpu_ptr->syncp);
 		return -EINVAL;
+	}
 
 	coal_hdr = (struct rmnet_map_v5_coal_header *)(skb->data + sizeof(*maph));
 	nlos = rmnet_map_v5_get_num_nlos(coal_hdr);
-	if (nlos < 0)
+	if (nlos < 0) {
+		u64_stats_update_begin(&pcpu_ptr->syncp);
+		u64_stats_inc(&pcpu_ptr->priv_stats.coal_hdr_err);
+		u64_stats_update_end(&pcpu_ptr->syncp);
 		return -EINVAL;
+	}
 
 	*num_nlos = nlos;
-
 	for (i = 0; i < RMNET_MAP_V5_MAX_NLOS; i++) {
 		u8 err = coal_hdr->nl_pairs[i].csum_error_bitmap;
 		u8 pkt = coal_hdr->nl_pairs[i].num_packets;
@@ -1086,10 +1317,26 @@ static int rmnet_map_data_check_coal_header(struct sk_buff *skb,
 		mask |= ((u64)err) << (8 * i);
 		if (i < *num_nlos) {
 			pkts += pkt;
-			if (pkts > RMNET_MAP_V5_MAX_PACKETS)
+			if (pkts > RMNET_MAP_V5_MAX_PACKETS) {
+				u64_stats_update_begin(&pcpu_ptr->syncp);
+				u64_stats_inc(&pcpu_ptr->priv_stats.coal_hdr_pkt_err);
+				u64_stats_update_end(&pcpu_ptr->syncp);
 				return -EINVAL;
+			}
 		}
 	}
+
+	/* coal_pkts counts packets reported by the hardware, independent of
+	 * whether the frame is later delivered through HW-GRO.
+	 */
+	u64_stats_update_begin(&pcpu_ptr->syncp);
+	u64_stats_add(&pcpu_ptr->priv_stats.coal_pkts, pkts);
+	u64_stats_update_end(&pcpu_ptr->syncp);
+	rmnet_map_data_log_close_stats(pcpu_ptr,
+				       u8_get_bits(coal_hdr->close_info,
+						   MAPV5_CLOSEINFO_CLOSE_TYPE_FMASK),
+				       u8_get_bits(coal_hdr->close_info,
+						   MAPV5_CLOSEINFO_CLOSE_VALUE_FMASK));
 
 	*nlo_err_mask = mask;
 	*num_pkts = pkts;
@@ -1101,16 +1348,23 @@ int rmnet_map_process_next_hdr_packet(struct sk_buff *skb,
 				      u16 len, u32 data_format)
 {
 	struct rmnet_priv *priv = netdev_priv(skb->dev);
+	struct rmnet_pcpu_stats *pcpu_ptr;
 	u64 nlo_err_mask;
 	u16 num_pkts;
 	u8 num_nlos;
 	int rc;
+
+	pcpu_ptr = this_cpu_ptr(priv->pcpu_stats);
 
 	switch (rmnet_map_get_next_hdr_type(skb)) {
 	case RMNET_MAP_HEADER_TYPE_COALESCING:
 		if (!(data_format & RMNET_FLAGS_INGRESS_COALESCE))
 			return -EINVAL;
 
+		/* coal_rx counts coalescing input, not delivered HW-GRO skbs. */
+		u64_stats_update_begin(&pcpu_ptr->syncp);
+		u64_stats_inc(&pcpu_ptr->priv_stats.coal_rx);
+		u64_stats_update_end(&pcpu_ptr->syncp);
 		rc = rmnet_map_data_check_coal_header(skb, &nlo_err_mask,
 						      &num_nlos, &num_pkts);
 		if (rc)
@@ -1135,12 +1389,18 @@ int rmnet_map_process_next_hdr_packet(struct sk_buff *skb,
 
 	case RMNET_MAP_HEADER_TYPE_CSUM_OFFLOAD:
 		if (unlikely(!(skb->dev->features & NETIF_F_RXCSUM))) {
-			priv->stats.csum_sw++;
+			u64_stats_update_begin(&pcpu_ptr->syncp);
+			u64_stats_inc(&pcpu_ptr->priv_stats.csum_sw);
+			u64_stats_update_end(&pcpu_ptr->syncp);
 		} else if (rmnet_map_get_csum_valid(skb)) {
-			priv->stats.csum_ok++;
+			u64_stats_update_begin(&pcpu_ptr->syncp);
+			u64_stats_inc(&pcpu_ptr->priv_stats.csum_ok);
+			u64_stats_update_end(&pcpu_ptr->syncp);
 			skb->ip_summed = CHECKSUM_UNNECESSARY;
 		} else {
-			priv->stats.csum_valid_unset++;
+			u64_stats_update_begin(&pcpu_ptr->syncp);
+			u64_stats_inc(&pcpu_ptr->priv_stats.csum_valid_unset);
+			u64_stats_update_end(&pcpu_ptr->syncp);
 		}
 
 		skb_pull(skb, sizeof(struct rmnet_map_header) +
