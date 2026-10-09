@@ -1165,6 +1165,7 @@ int bpf_vlog_finalize(struct bpf_verifier_log *log, u32 *log_size_actual);
 __printf(3, 4) void verbose_linfo(struct bpf_verifier_env *env,
 				  u32 insn_off,
 				  const char *prefix_fmt, ...);
+void bpf_verbose_snum(struct bpf_verifier_env *env, s64 num);
 
 #define verifier_bug_if(cond, env, fmt, args...)						\
 	({											\
