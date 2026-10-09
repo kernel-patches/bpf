@@ -7,6 +7,7 @@
 #include <linux/capability.h>
 #include <linux/etherdevice.h>
 #include <linux/ethtool.h>
+#include <net/netdev_queues.h>
 #include <linux/if_arp.h>
 #include <linux/netlink.h>
 #include <net/pkt_sched.h>
@@ -141,8 +142,10 @@ static void rmnet_vnd_uninit(struct net_device *dev)
 static void rmnet_get_stats64(struct net_device *dev,
 			      struct rtnl_link_stats64 *s)
 {
+	struct rmnet_priv_stats total_priv_stats = { };
 	struct rmnet_priv *priv = netdev_priv(dev);
 	struct rmnet_vnd_stats total_stats = { };
+	struct rmnet_priv_stats priv_snapshot;
 	struct rmnet_pcpu_stats *pcpu_ptr;
 	struct rmnet_vnd_stats snapshot;
 	unsigned int cpu, start;
@@ -153,6 +156,8 @@ static void rmnet_get_stats64(struct net_device *dev,
 		do {
 			start = u64_stats_fetch_begin(&pcpu_ptr->syncp);
 			snapshot = pcpu_ptr->stats;	/* struct assignment */
+			u64_stats_copy(&priv_snapshot, &pcpu_ptr->priv_stats,
+				       sizeof(priv_snapshot));
 		} while (u64_stats_fetch_retry(&pcpu_ptr->syncp, start));
 
 		total_stats.rx_pkts += snapshot.rx_pkts;
@@ -160,6 +165,7 @@ static void rmnet_get_stats64(struct net_device *dev,
 		total_stats.tx_pkts += snapshot.tx_pkts;
 		total_stats.tx_bytes += snapshot.tx_bytes;
 		total_stats.tx_drops += snapshot.tx_drops;
+		total_priv_stats.rx_dropped += priv_snapshot.rx_dropped;
 	}
 
 	s->rx_packets = total_stats.rx_pkts;
@@ -167,7 +173,44 @@ static void rmnet_get_stats64(struct net_device *dev,
 	s->tx_packets = total_stats.tx_pkts;
 	s->tx_bytes = total_stats.tx_bytes;
 	s->tx_dropped = total_stats.tx_drops;
+	s->rx_dropped = total_priv_stats.rx_dropped;
 }
+
+/* Report standard network stack RX statistics. These are distinct from the
+ * rmnet-specific coalescing diagnostics exposed through ethtool.
+ */
+static void rmnet_get_queue_stats_rx(struct net_device *dev, int idx,
+				     struct netdev_queue_stats_rx *stats)
+{
+	struct rmnet_priv *priv = netdev_priv(dev);
+	struct rmnet_priv_stats total_stats = { };
+	struct rmnet_pcpu_stats *pcpu_ptr;
+	struct rmnet_priv_stats snapshot;
+	unsigned int cpu, start;
+
+	for_each_possible_cpu(cpu) {
+		pcpu_ptr = per_cpu_ptr(priv->pcpu_stats, cpu);
+
+		do {
+			start = u64_stats_fetch_begin(&pcpu_ptr->syncp);
+			u64_stats_copy(&snapshot, &pcpu_ptr->priv_stats,
+				       sizeof(snapshot));
+		} while (u64_stats_fetch_retry(&pcpu_ptr->syncp, start));
+
+		total_stats.rx_hw_gro_packets += snapshot.rx_hw_gro_packets;
+		total_stats.rx_hw_gro_wire_packets +=
+			snapshot.rx_hw_gro_wire_packets;
+		total_stats.rx_alloc_fail += snapshot.rx_alloc_fail;
+	}
+
+	stats->hw_gro_packets = total_stats.rx_hw_gro_packets;
+	stats->hw_gro_wire_packets = total_stats.rx_hw_gro_wire_packets;
+	stats->alloc_fail = total_stats.rx_alloc_fail;
+}
+
+static const struct netdev_stat_ops rmnet_stat_ops = {
+	.get_queue_stats_rx = rmnet_get_queue_stats_rx,
+};
 
 static const struct net_device_ops rmnet_vnd_ops = {
 	.ndo_start_xmit = rmnet_vnd_start_xmit,
@@ -192,7 +235,33 @@ static const char rmnet_gstrings_stats[][ETH_GSTRING_LEN] = {
 	"Checksum skipped",
 	"Checksum computed in software",
 	"Checksum computed in hardware",
+	/* DL coalescing */
+	"Coal alloc packet drops",
+	"Coal frames received",
+	"Packets in coal frames",
+	"Coal header errors",
+	"Coal hdr pkt count errors",
+	"Coal bounds errors",
+	"Coal checksum errors",
+	"Coal packets csum err drops",
+	"Coal segments reconstructed",
+	"Coal invalid IP packet",
+	"Coal invalid transport",
+	/* close reasons */
+	"Coal closed: non-coal",
+	"Coal closed: IP miss",
+	"Coal closed: transport miss",
+	"Coal closed: hw NL limit",
+	"Coal closed: hw pkt limit",
+	"Coal closed: hw byte limit",
+	"Coal closed: hw time limit",
+	"Coal closed: hw evict",
+	"Coal closed: FIN/PSH",
 };
+
+static_assert(ARRAY_SIZE(rmnet_gstrings_stats) ==
+	      (sizeof(struct rmnet_priv_stats) -
+	       offsetof(struct rmnet_priv_stats, csum_ok)) / sizeof(u64));
 
 static void rmnet_get_strings(struct net_device *dev, u32 stringset, u8 *buf)
 {
@@ -218,12 +287,68 @@ static void rmnet_get_ethtool_stats(struct net_device *dev,
 				    struct ethtool_stats *stats, u64 *data)
 {
 	struct rmnet_priv *priv = netdev_priv(dev);
-	struct rmnet_priv_stats *st = &priv->stats;
+	struct rmnet_priv_stats total_stats = { };
+	struct rmnet_pcpu_stats *pcpu_ptr;
+	struct rmnet_priv_stats *snapshot;
+	unsigned int cpu, start;
 
 	if (!data)
 		return;
 
-	memcpy(data, st, ARRAY_SIZE(rmnet_gstrings_stats) * sizeof(u64));
+	snapshot = kzalloc_obj(*snapshot);
+	if (!snapshot)
+		return;
+
+	for_each_possible_cpu(cpu) {
+		pcpu_ptr = per_cpu_ptr(priv->pcpu_stats, cpu);
+
+		do {
+			start = u64_stats_fetch_begin(&pcpu_ptr->syncp);
+			u64_stats_copy(snapshot, &pcpu_ptr->priv_stats,
+				       sizeof(*snapshot));
+		} while (u64_stats_fetch_retry(&pcpu_ptr->syncp, start));
+
+		total_stats.csum_ok += snapshot->csum_ok;
+		total_stats.csum_ip4_header_bad += snapshot->csum_ip4_header_bad;
+		total_stats.csum_valid_unset += snapshot->csum_valid_unset;
+		total_stats.csum_validation_failed += snapshot->csum_validation_failed;
+		total_stats.csum_err_bad_buffer += snapshot->csum_err_bad_buffer;
+		total_stats.csum_err_invalid_ip_version +=
+			snapshot->csum_err_invalid_ip_version;
+		total_stats.csum_err_invalid_transport +=
+			snapshot->csum_err_invalid_transport;
+		total_stats.csum_fragmented_pkt += snapshot->csum_fragmented_pkt;
+		total_stats.csum_skipped += snapshot->csum_skipped;
+		total_stats.csum_sw += snapshot->csum_sw;
+		total_stats.csum_hw += snapshot->csum_hw;
+		/* Custom rmnet coalescing diagnostics follow. */
+		total_stats.coal_alloc_fail += snapshot->coal_alloc_fail;
+		total_stats.coal_rx += snapshot->coal_rx;
+		total_stats.coal_pkts += snapshot->coal_pkts;
+		total_stats.coal_hdr_err += snapshot->coal_hdr_err;
+		total_stats.coal_hdr_pkt_err += snapshot->coal_hdr_pkt_err;
+		total_stats.coal_bounds_err += snapshot->coal_bounds_err;
+		total_stats.coal_csum_err += snapshot->coal_csum_err;
+		total_stats.coal_csum_drop += snapshot->coal_csum_drop;
+		total_stats.coal_reconstruct += snapshot->coal_reconstruct;
+		total_stats.coal_ip_invalid += snapshot->coal_ip_invalid;
+		total_stats.coal_trans_invalid += snapshot->coal_trans_invalid;
+		total_stats.coal_close_non_coal += snapshot->coal_close_non_coal;
+		total_stats.coal_close_ip_miss += snapshot->coal_close_ip_miss;
+		total_stats.coal_close_trans_miss += snapshot->coal_close_trans_miss;
+		total_stats.coal_close_hw_nl += snapshot->coal_close_hw_nl;
+		total_stats.coal_close_hw_pkt += snapshot->coal_close_hw_pkt;
+		total_stats.coal_close_hw_byte += snapshot->coal_close_hw_byte;
+		total_stats.coal_close_hw_time += snapshot->coal_close_hw_time;
+		total_stats.coal_close_hw_evict += snapshot->coal_close_hw_evict;
+		total_stats.coal_close_coal += snapshot->coal_close_coal;
+	}
+
+	kfree(snapshot);
+
+	/* The first four fields are reported through netdev queue statistics. */
+	memcpy(data, &total_stats.ethtool_stats,
+	       sizeof(total_stats.ethtool_stats));
 }
 
 static int rmnet_get_coalesce(struct net_device *dev,
@@ -332,6 +457,7 @@ int rmnet_vnd_newlink(u8 id, struct net_device *rmnet_dev,
 	rmnet_dev->hw_features |= NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM;
 	rmnet_dev->hw_features |= NETIF_F_SG;
 	rmnet_dev->hw_features |= NETIF_F_GRO_HW;
+	rmnet_dev->stat_ops = &rmnet_stat_ops;
 
 	priv->real_dev = real_dev;
 
