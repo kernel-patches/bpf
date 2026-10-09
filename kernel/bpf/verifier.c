@@ -21600,6 +21600,23 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 				prog_extension ? "Extension" : "Tracing");
 			return -EINVAL;
 		}
+		/*
+		 * A trampoline that calls its target stays as a frame between a
+		 * subprog and its caller, and bpf_unwind() cannot walk past it:
+		 * the frames above it would carry on after their calls rather
+		 * than at their landing pads or epilogues. fentry leaves no
+		 * frame, and the main program's caller is above where the walk
+		 * stops.
+		 */
+		if (aux->func && subprog && aux->func[subprog]->aux->might_unwind &&
+		    (prog->expected_attach_type == BPF_TRACE_FEXIT ||
+		     prog->expected_attach_type == BPF_MODIFY_RETURN ||
+		     prog->expected_attach_type == BPF_TRACE_FSESSION)) {
+			bpf_log(log,
+				"Cannot attach fexit, fmod_ret or fsession to %s, which can unwind\n",
+				tname);
+			return -EINVAL;
+		}
 		conservative = aux->func_info_aux[subprog].unreliable;
 		if (prog_extension) {
 			if (conservative) {
