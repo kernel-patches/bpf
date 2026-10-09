@@ -259,7 +259,7 @@ static void ctucan_pci_remove(struct pci_dev *pdev)
 	kfree(bdata);
 }
 
-static SIMPLE_DEV_PM_OPS(ctucan_pci_pm_ops, ctucan_suspend, ctucan_resume);
+static DEFINE_SIMPLE_DEV_PM_OPS(ctucan_pci_pm_ops, ctucan_suspend, ctucan_resume);
 
 static const struct pci_device_id ctucan_pci_tbl[] = {
 	{PCI_DEVICE_DATA(TEDIA, CTUCAN_VER21,
@@ -273,7 +273,7 @@ static struct pci_driver ctucan_pci_driver = {
 	.id_table = ctucan_pci_tbl,
 	.probe = ctucan_pci_probe,
 	.remove = ctucan_pci_remove,
-	.driver.pm = &ctucan_pci_pm_ops,
+	.driver.pm = pm_sleep_ptr(&ctucan_pci_pm_ops),
 };
 
 module_pci_driver(ctucan_pci_driver);

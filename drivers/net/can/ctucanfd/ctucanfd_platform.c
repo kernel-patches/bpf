@@ -99,7 +99,7 @@ static void ctucan_platform_remove(struct platform_device *pdev)
 	free_candev(ndev);
 }
 
-static SIMPLE_DEV_PM_OPS(ctucan_platform_pm_ops, ctucan_suspend, ctucan_resume);
+static DEFINE_SIMPLE_DEV_PM_OPS(ctucan_platform_pm_ops, ctucan_suspend, ctucan_resume);
 
 /* Match table for OF platform binding */
 static const struct of_device_id ctucan_of_match[] = {
@@ -114,7 +114,7 @@ static struct platform_driver ctucanfd_driver = {
 	.remove = ctucan_platform_remove,
 	.driver	= {
 		.name = DRV_NAME,
-		.pm = &ctucan_platform_pm_ops,
+		.pm = pm_sleep_ptr(&ctucan_platform_pm_ops),
 		.of_match_table	= ctucan_of_match,
 	},
 };
