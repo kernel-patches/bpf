@@ -9590,6 +9590,58 @@ static int bpf_object__read_kallsyms_file(struct bpf_object *obj)
 	return libbpf_kallsyms_parse(kallsyms_cb, obj);
 }
 
+static int bpf_object__resolve_ksyms_in_kernel(struct bpf_object *obj)
+{
+	struct extern_desc *ext;
+	int i, prog_fd, err = 0;
+	struct {
+		__u64 addr;
+		char name[512];
+	} ctx = {};
+	LIBBPF_OPTS(bpf_prog_load_opts, opts, .prog_flags = BPF_F_SLEEPABLE);
+	LIBBPF_OPTS(bpf_test_run_opts, topts, .ctx_in = &ctx, .ctx_size_in = sizeof(ctx));
+	/* bpf_kallsyms_lookup_name(ctx.name, sizeof(ctx.name), 0, &ctx.addr) */
+	static const struct bpf_insn insns[] = {
+		BPF_MOV64_REG(BPF_REG_4, BPF_REG_1),
+		BPF_ALU64_IMM(BPF_ADD, BPF_REG_1, 8),
+		BPF_MOV64_IMM(BPF_REG_2, sizeof(ctx.name)),
+		BPF_MOV64_IMM(BPF_REG_3, 0),
+		BPF_EMIT_CALL(BPF_FUNC_kallsyms_lookup_name),
+		BPF_EXIT_INSN(),
+	};
+
+	if (obj->gen_loader || obj->token_fd)
+		return -EOPNOTSUPP;
+
+	prog_fd = bpf_prog_load(BPF_PROG_TYPE_SYSCALL, NULL, "GPL",
+				insns, ARRAY_SIZE(insns), &opts);
+	if (prog_fd < 0)
+		return prog_fd;
+
+	for (i = 0; i < obj->nr_extern; i++) {
+		ext = &obj->externs[i];
+		if (ext->type != EXT_KSYM || ext->ksym.type_id)
+			continue;
+		if (snprintf(ctx.name, sizeof(ctx.name), "%s", ext->name) >= sizeof(ctx.name)) {
+			err = -ENAMETOOLONG;
+			break;
+		}
+		err = bpf_prog_test_run_opts(prog_fd, &topts) ?: (int)topts.retval;
+		if (err == -ENOENT && ext->is_weak) {
+			err = 0;
+			continue;
+		}
+		if (err)
+			break;
+		ext->is_set = true;
+		ext->ksym.addr = ctx.addr;
+		pr_debug("extern (ksym) '%s': resolved in kernel to 0x%llx\n",
+			 ext->name, ext->ksym.addr);
+	}
+	close(prog_fd);
+	return err;
+}
+
 static int find_ksym_btf_id(struct bpf_object *obj, const char *ksym_name,
 			    __u16 kind, struct btf **res_btf,
 			    struct module_btf **res_mod_btf)
@@ -9863,7 +9915,12 @@ static int bpf_object__resolve_externs(struct bpf_object *obj,
 			return -EINVAL;
 	}
 	if (need_kallsyms) {
-		err = bpf_object__read_kallsyms_file(obj);
+		err = bpf_object__resolve_ksyms_in_kernel(obj);
+		if (err) {
+			pr_debug("failed to resolve ksyms in kernel: %s, falling back to /proc/kallsyms\n",
+				 errstr(err));
+			err = bpf_object__read_kallsyms_file(obj);
+		}
 		if (err)
 			return -EINVAL;
 	}
