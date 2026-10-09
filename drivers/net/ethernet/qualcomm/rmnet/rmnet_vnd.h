@@ -12,7 +12,7 @@ int rmnet_vnd_newlink(u8 id, struct net_device *rmnet_dev,
 		      struct rmnet_port *port,
 		      struct net_device *real_dev,
 		      struct rmnet_endpoint *ep,
-		      struct netlink_ext_ack *extack);
+		      struct netlink_ext_ack *extack, u32 data_format);
 int rmnet_vnd_dellink(u8 id, struct rmnet_port *port,
 		      struct rmnet_endpoint *ep);
 void rmnet_vnd_rx_fixup(struct sk_buff *skb, struct net_device *dev);
@@ -21,5 +21,5 @@ void rmnet_vnd_tx_fixup(struct sk_buff *skb, struct net_device *dev);
 void rmnet_vnd_setup(struct net_device *dev);
 int rmnet_vnd_validate_real_dev_mtu(struct net_device *real_dev);
 int rmnet_vnd_update_dev_mtu(struct rmnet_port *port,
-			     struct net_device *real_dev);
+			     struct net_device *real_dev, u32 data_format);
 #endif /* _RMNET_VND_H_ */
