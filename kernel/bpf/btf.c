@@ -2079,7 +2079,8 @@ static const struct resolve_vertex *env_stack_peak(struct btf_verifier_env *env)
  * *elem_id: id of u32
  * *total_nelems: (x * y).  Hence, individual elem size is
  *                (*type_size / *total_nelems)
- * *type_id: id of type if it's changed within the function, 0 if not
+ * *type_id: ID of the returned type if leading modifiers were stripped;
+ *           otherwise left unchanged.
  *
  * type: is not an array (e.g. const struct X)
  * return type: type "struct X"
@@ -2087,7 +2088,8 @@ static const struct resolve_vertex *env_stack_peak(struct btf_verifier_env *env)
  * *elem_type: same as return type ("struct X")
  * *elem_id: 0
  * *total_nelems: 1
- * *type_id: id of type if it's changed within the function, 0 if not
+ * *type_id: ID of the returned type if leading modifiers were stripped;
+ *           otherwise left unchanged.
  */
 static const struct btf_type *
 __btf_resolve_size(const struct btf *btf, const struct btf_type *type,
@@ -2120,7 +2122,8 @@ __btf_resolve_size(const struct btf *btf, const struct btf_type *type,
 		case BTF_KIND_CONST:
 		case BTF_KIND_RESTRICT:
 		case BTF_KIND_TYPE_TAG:
-			id = type->type;
+			if (!array_type)
+				id = type->type;
 			type = btf_type_by_id(btf, type->type);
 			break;
 
@@ -7549,6 +7552,14 @@ bool btf_ctx_access(int off, int size, enum bpf_access_type type,
 }
 EXPORT_SYMBOL_GPL(btf_ctx_access);
 
+#define MAX_ARRAYS_WALK 16
+
+/* Description of an array crossed while walking a BTF access chain */
+struct array_access {
+	u32 id;		/* BTF_KIND_ARRAY type id */
+	u32 off;	/* offset of the access within the array */
+};
+
 enum bpf_struct_walk_result {
 	/* < 0 error */
 	WALK_SCALAR = 0,
@@ -7557,10 +7568,43 @@ enum bpf_struct_walk_result {
 	WALK_STRUCT,
 };
 
+static const struct btf_member *find_flex_member(const struct btf *btf, const struct btf_type *t)
+{
+	const struct btf_array *array;
+	const struct btf_type *mtype;
+	const struct btf_member *member;
+	u32 vlen = btf_type_vlen(t);
+
+	if (vlen == 0)
+		return NULL;
+
+	member = btf_type_member(t) + vlen - 1;
+	mtype = btf_type_skip_modifiers(btf, member->type, NULL);
+	if (!btf_type_is_array(mtype))
+		return NULL;
+
+	array = (const struct btf_array *)(mtype + 1);
+	if (array->nelems != 0)
+		return NULL;
+
+	return member;
+}
+
+static int push_array(struct array_access *arrays, u32 *arrays_cnt, struct array_access item)
+{
+	if (arrays == NULL)
+		return 0;
+	if (*arrays_cnt == MAX_ARRAYS_WALK)
+		return -1;
+	arrays[(*arrays_cnt)++] = item;
+	return 0;
+}
+
 static int btf_struct_walk(struct bpf_verifier_log *log, const struct btf *btf,
 			   const struct btf_type *t, int off, int size,
 			   u32 *next_btf_id, enum bpf_type_flag *flag,
-			   const char **field_name, bool walk_flex_arrays)
+			   const char **field_name, bool walk_flex_arrays,
+			   struct array_access *arrays, u32 *arrays_cnt)
 {
 	u32 i, moff, mtrue_end, msize = 0, total_nelems = 0;
 	const struct btf_type *mtype, *elem_type = NULL;
@@ -7595,22 +7639,19 @@ again:
 		/* If the last element is a variable size array, we may
 		 * need to relax the rule.
 		 */
-		if (vlen == 0)
-			goto error;
-
-		member = btf_type_member(t) + vlen - 1;
-		mtype = btf_type_skip_modifiers(btf, member->type,
-						NULL);
-		if (!btf_type_is_array(mtype))
-			goto error;
-
-		array_elem = (struct btf_array *)(mtype + 1);
-		if (array_elem->nelems != 0)
+		member = find_flex_member(btf, t);
+		if (!member)
 			goto error;
 
 		moff = __btf_member_bit_offset(t, member) / 8;
 		if (off < moff)
 			goto error;
+
+		mtype = btf_type_skip_modifiers(btf, member->type, &mid);
+		array_elem = (struct btf_array *)(mtype + 1);
+
+		if (push_array(arrays, arrays_cnt, (struct array_access){ mid, off - moff }))
+			return -E2BIG;
 
 		/* allow structure and integer */
 		t = btf_type_skip_modifiers(btf, array_elem->type,
@@ -7733,6 +7774,9 @@ error:
 			 *      the array's element as long as it is
 			 *      within the mtrue_end boundary.
 			 */
+			if (push_array(arrays, arrays_cnt,
+				       (struct array_access){ mid, off - moff }))
+				return -E2BIG;
 
 			/* skip empty array */
 			if (moff == mtrue_end)
@@ -7825,15 +7869,29 @@ error:
 
 int btf_struct_access(struct bpf_verifier_log *log,
 		      const struct bpf_reg_state *reg,
-		      int off, int size, enum bpf_access_type atype __maybe_unused,
+		      int _off, int size, enum bpf_access_type atype __maybe_unused,
 		      u32 *next_btf_id, enum bpf_type_flag *flag,
 		      const char **field_name)
 {
 	const struct btf *btf = reg->btf;
 	enum bpf_type_flag tmp_flag = 0;
+	struct array_access arrays[MAX_ARRAYS_WALK];
+	const struct btf_member *member;
 	const struct btf_type *t;
+	u32 i, arrays_cnt = 0;
 	u32 id = reg->btf_id;
-	int err;
+	s64 min_off, max_off, flex_off;
+	int err, off, ret;
+
+	if (check_add_overflow(reg_smin(reg), (s64)_off, &min_off) ||
+	    check_add_overflow(reg_smax(reg), (s64)_off, &max_off) ||
+	    min_off != (int)min_off) {
+		bpf_log(log,
+			"offset computation overflows: register offset range is [%lld, %lld], instruction offset is %d\n",
+			reg_smin(reg), reg_smax(reg), _off);
+		return -EINVAL;
+	}
+	off = min_off;
 
 	while (type_is_alloc(reg->type)) {
 		struct btf_struct_meta *meta;
@@ -7860,26 +7918,30 @@ int btf_struct_access(struct bpf_verifier_log *log,
 	t = btf_type_by_id(btf, id);
 	do {
 		err = btf_struct_walk(log, btf, t, off, size, &id, &tmp_flag,
-				      field_name, !type_is_alloc(reg->type));
-
+				      field_name, !type_is_alloc(reg->type), arrays, &arrays_cnt);
 		switch (err) {
 		case WALK_PTR:
 			/* For local types, the destination register cannot
 			 * become a pointer again.
 			 */
-			if (type_is_alloc(reg->type))
-				return SCALAR_VALUE;
+			if (type_is_alloc(reg->type)) {
+				ret = SCALAR_VALUE;
+				goto check_variable_offset;
+			}
 			/* If we found the pointer or scalar on t+off,
 			 * we're done.
 			 */
 			*next_btf_id = id;
 			*flag = tmp_flag;
-			return PTR_TO_BTF_ID;
+			ret = PTR_TO_BTF_ID;
+			goto check_variable_offset;
 		case WALK_PTR_UNTRUSTED:
 			*flag = MEM_RDONLY | PTR_UNTRUSTED;
-			return PTR_TO_MEM;
+			ret = PTR_TO_MEM;
+			goto check_variable_offset;
 		case WALK_SCALAR:
-			return SCALAR_VALUE;
+			ret = SCALAR_VALUE;
+			goto check_variable_offset;
 		case WALK_STRUCT:
 			/* We found nested struct, so continue the search
 			 * by diving in it. At this point the offset is
@@ -7898,6 +7960,55 @@ int btf_struct_access(struct bpf_verifier_log *log,
 		}
 	} while (t);
 
+	return -EINVAL;
+
+check_variable_offset:
+	if (min_off == max_off)
+		return ret;
+
+	/* Find an offset at which access would go to a flexible array tail (if any). */
+	t = btf_type_skip_modifiers(btf, reg->btf_id, NULL);
+	member = find_flex_member(btf, t);
+	flex_off = member ? __btf_member_bit_offset(t, member) / 8 : S64_MAX;
+
+	/*
+	 * If this is a varying offset access, the step recorded within a register
+	 * should correspond to one of the arrays visited while walking.
+	 */
+	for (i = 0; i < arrays_cnt; i++) {
+		s64 array_start, array_end, access_end;
+		u32 asize, esize, elem_id;
+
+		/*
+		 * 'arrays' records top-level arrays only, use __btf_resolve_size()
+		 * to get flattened representation.
+		 */
+		t = btf_type_by_id(btf, arrays[i].id);
+		if (IS_ERR(__btf_resolve_size(btf, t, &asize, NULL, &elem_id, NULL, NULL)) ||
+		    IS_ERR(btf_resolve_size(btf, btf_type_by_id(btf, elem_id), &esize)))
+			continue;
+		/* Make sure every accessed offset lands on the same field of some element. */
+		if (esize == 0 || reg->step % esize != 0)
+			continue;
+
+		array_start = min_off - arrays[i].off;
+		/* An array within the flexible tail has no upper bound to exceed */
+		if (array_start >= flex_off && btf_type_is_array(t) &&
+		    btf_type_array(t)->nelems == 0)
+			return ret;
+
+		/* the 'size' bytes read at max_off must stay within the array */
+		if (check_add_overflow(array_start, (s64)asize, &array_end) ||
+		    check_add_overflow(max_off, (s64)size, &access_end) ||
+		    access_end > array_end)
+			continue;
+		return ret;
+	}
+
+	bpf_log(log,
+		"invalid variable offset access into struct %s: offsets [%lld, %lld] size %d step %d do not match any array\n",
+		btf_name_by_offset(btf, btf_type_by_id(btf, reg->btf_id)->name_off),
+		min_off, max_off, size, reg->step);
 	return -EINVAL;
 }
 
@@ -7939,7 +8050,7 @@ again:
 	if (!type)
 		return false;
 	err = btf_struct_walk(log, btf, type, off, 1, &id, &flag, NULL,
-			      walk_flex_arrays);
+			      walk_flex_arrays, NULL, NULL);
 	if (err != WALK_STRUCT)
 		return false;
 
