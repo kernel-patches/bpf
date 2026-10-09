@@ -8130,6 +8130,7 @@ int btf_distill_func_proto(struct bpf_verifier_log *log,
 	u32 i, nargs;
 	int ret;
 
+	m->bpf_tgt_prog = false;
 	if (!func) {
 		/* BTF function prototype doesn't match the verifier types.
 		 * Fall back to MAX_BPF_FUNC_REG_ARGS u64 args.

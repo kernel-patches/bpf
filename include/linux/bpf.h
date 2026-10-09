@@ -1260,6 +1260,8 @@ struct btf_func_model {
 	u8 ret_size;
 	u8 ret_flags;
 	u8 nr_args;
+	/* a function of a BPF target program, called in the BPF convention */
+	bool bpf_tgt_prog;
 	u8 arg_size[MAX_BPF_FUNC_ARGS];
 	u8 arg_flags[MAX_BPF_FUNC_ARGS];
 };
