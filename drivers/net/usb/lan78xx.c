@@ -1719,6 +1719,8 @@ static int lan78xx_ethtool_set_eeprom(struct net_device *netdev,
 		 (ee->len == 512) &&
 		 (data[0] == OTP_INDICATOR_1))
 		ret = lan78xx_write_raw_otp(dev, ee->offset, ee->len, data);
+	else
+		ret = -EINVAL;
 
 	usb_autopm_put_interface(dev->intf);
 
