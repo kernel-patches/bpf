@@ -2133,6 +2133,7 @@ static int do_jit(struct bpf_verifier_env *env, struct bpf_prog *bpf_prog, int *
 		const s32 imm32 = insn->imm;
 		u32 dst_reg = insn->dst_reg;
 		u32 src_reg = insn->src_reg;
+		bool probe_mem, bounds_check;
 		bool accesses_stack_only;
 		u8 b2 = 0, b3 = 0;
 		u8 *start_of_ldx;
@@ -2709,6 +2710,15 @@ populate_extable:
 		case BPF_LDX | BPF_PROBE_MEMSX | BPF_B:
 		case BPF_LDX | BPF_PROBE_MEMSX | BPF_H:
 		case BPF_LDX | BPF_PROBE_MEMSX | BPF_W:
+			probe_mem = BPF_MODE(insn->code) == BPF_PROBE_MEM ||
+				    BPF_MODE(insn->code) == BPF_PROBE_MEMSX;
+			/*
+			 * With SMAP enabled, a load from a user address faults and
+			 * do_user_addr_fault() resolves the exception table entry of the
+			 * program, as for an unmapped kernel address, so the address range
+			 * check is only needed without SMAP.
+			 */
+			bounds_check = probe_mem && !cpu_feature_enabled(X86_FEATURE_SMAP);
 			insn_off = insn->off;
 			if (src_reg == BPF_REG_PARAMS) {
 				if (insn_off == 8) {
@@ -2724,8 +2734,7 @@ populate_extable:
 				 */
 			}
 
-			if (BPF_MODE(insn->code) == BPF_PROBE_MEM ||
-			    BPF_MODE(insn->code) == BPF_PROBE_MEMSX) {
+			if (bounds_check) {
 				/* Conservatively check that src_reg + insn->off is a kernel address:
 				 *   src_reg + insn->off > TASK_SIZE_MAX + PAGE_SIZE
 				 *   and
@@ -2772,6 +2781,8 @@ populate_extable:
 				/* populate jmp_offset for JAE above to jump to start_of_ldx */
 				start_of_ldx = prog;
 				end_of_jmp[-1] = start_of_ldx - end_of_jmp;
+			} else if (probe_mem) {
+				start_of_ldx = prog;
 			} else if (!accesses_stack_only) {
 				err = emit_kasan_check(env, &prog, src_reg,
 						       insn_off,
@@ -2785,14 +2796,14 @@ populate_extable:
 				emit_ldsx(&prog, BPF_SIZE(insn->code), dst_reg, src_reg, insn_off);
 			else
 				emit_ldx(&prog, BPF_SIZE(insn->code), dst_reg, src_reg, insn_off);
-			if (BPF_MODE(insn->code) == BPF_PROBE_MEM ||
-			    BPF_MODE(insn->code) == BPF_PROBE_MEMSX) {
+			if (probe_mem) {
 				struct exception_table_entry *ex;
 				u8 *_insn = image + proglen + (start_of_ldx - temp);
 				s64 delta;
 
 				/* populate jmp_offset for JMP above */
-				start_of_ldx[-1] = prog - start_of_ldx;
+				if (bounds_check)
+					start_of_ldx[-1] = prog - start_of_ldx;
 
 				if (!bpf_prog->aux->extable)
 					break;
