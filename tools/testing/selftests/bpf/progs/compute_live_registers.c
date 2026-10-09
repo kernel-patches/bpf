@@ -414,6 +414,35 @@ static __used __naked int aux1(void)
 		::: __clobber_all);
 }
 
+static __noinline __used int static_two(int a, int b)
+{
+	return a;
+}
+
+__noinline __used int global_two(int a, int b)
+{
+	return a;
+}
+
+SEC("socket")
+__log_level(2)
+/* a static callee reads r1 only, a global callee its declared arguments */
+__msg("2: .1........ (85) call pc+")
+__msg("5: .12....... (85) call pc+")
+__naked void subprog_declared_args(void)
+{
+	asm volatile (
+		"r1 = 1;"
+		"r2 = 2;"
+		"call static_two;"
+		"r1 = 1;"
+		"r2 = 2;"
+		"call global_two;"
+		"r0 = 0;"
+		"exit;"
+		::: __clobber_all);
+}
+
 SEC("socket")
 __log_level(2)
 __msg("0: .......... (b7) r1 = 1")
