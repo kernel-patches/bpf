@@ -15,6 +15,11 @@
 #define SYS_PWRRDY_N_DSI_MASK	BIT(1)
 #define SYS_PWRRDY_N_CSI_MASK	BIT(2)
 
+struct pwrseq_rz_info {
+	const struct pwrseq_target_data **targets;
+	pwrseq_match_func match;
+};
+
 static int pwrseq_rzg3l_set_pwrrdy(struct pwrseq_device *pwrseq, u32 mask,
 				   bool val)
 {
@@ -111,19 +116,28 @@ static int pwrseq_rzg3l_pwrrdy_match(struct pwrseq_device *pwrseq,
 static int pwrseq_rzg3l_pwrrdy_probe(struct auxiliary_device *adev,
 				     const struct auxiliary_device_id *id)
 {
+	const struct pwrseq_rz_info *info = (const struct pwrseq_rz_info *)id->driver_data;
 	struct pwrseq_config config = {
 		.parent = &adev->dev,
 		.owner = THIS_MODULE,
 		.drvdata = adev->dev.platform_data,
-		.match = pwrseq_rzg3l_pwrrdy_match,
-		.targets = pwrseq_rzg3l_pwrrdy_targets,
+		.match = info->match,
+		.targets = info->targets,
 	};
 
 	return PTR_ERR_OR_ZERO(devm_pwrseq_device_register(&adev->dev, &config));
 }
 
+static const struct pwrseq_rz_info pwrseq_rzg3l_info = {
+	.targets = pwrseq_rzg3l_pwrrdy_targets,
+	.match = pwrseq_rzg3l_pwrrdy_match,
+};
+
 static const struct auxiliary_device_id pwrseq_rzg3l_pwrrdy_id_table[] = {
-	{ .name = "rz_sysc.pwrseq-pwrrdy" },
+	{
+		.name = "rz_sysc.pwrseq-pwrrdy",
+		.driver_data = (kernel_ulong_t)&pwrseq_rzg3l_info,
+	},
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(auxiliary, pwrseq_rzg3l_pwrrdy_id_table);
