@@ -397,6 +397,36 @@ __get_srv6_rtcfg_op()
 		xargs | sed 's/ /,/g'
 }
 
+# Given the description of a router <id:op:act> as an input, the function
+# returns the <act> token which represents the action (e.g. End, End.X,
+# End.T behavior with or without route table, out interface) configured
+# for the node.
+#
+# Support End, End.X at present. When omit, return default End behavior.
+# i.e. input: "1:psp:End.X,1,3"
+#      output: "End.X nh6 fcf0:0:1:3::3 oif veth-rt-1-3"
+__get_srv6_rtcfg_act()
+{
+	local element="$1"
+	local net_prefix
+	local acts
+	local out
+
+	acts="$(echo "${element}" | cut -d':' -f3)"
+	act="$(echo "${acts}" | cut -d',' -f1)"
+	act="${act:-"End"}"
+
+	rt="$(echo "${acts}" | cut -d',' -f2)"
+	neigh="$(echo "${acts}" | cut -d',' -f3)"
+
+	if [ "$act" == "End" ]; then
+		echo "End"
+	elif [ "$act" == "End.X" ]; then
+		net_prefix="$(get_network_prefix "${rt}" "${neigh}")"
+		echo "End.X nh6 ${net_prefix}::${neigh} oif veth-rt-${rt}-${neigh}"
+	fi
+}
+
 # Setup the basic networking for the routers
 setup_rt_networking()
 {
@@ -497,6 +527,7 @@ __setup_rt_policy()
 	local function
 	local fullsid
 	local op_type
+	local action
 	local node
 	local n
 
@@ -505,19 +536,20 @@ __setup_rt_policy()
 	for n in ${policy_rts}; do
 		node="$(__get_srv6_rtcfg_id "${n}")"
 		op_type="$(__get_srv6_rtcfg_op "${n}")"
+		action="$(__get_srv6_rtcfg_act "${n}")"
 		rt_nsname="$(get_rtname "${node}")"
 
 		case "${op_type}" in
 		"noflv")
 			policy="${policy}${LOCATOR_SERVICE}:${node}::${END_FUNC},"
 			function="${END_FUNC}"
-			behavior_cfg="End"
+			behavior_cfg="${action}"
 			;;
 
 		"psp")
 			policy="${policy}${LOCATOR_SERVICE}:${node}::${END_PSP_FUNC},"
 			function="${END_PSP_FUNC}"
-			behavior_cfg="End flavors psp"
+			behavior_cfg="${action} flavors psp"
 			;;
 
 		*)
@@ -713,6 +745,30 @@ cleanup_end_flv_psp()
 	cleanup_rt_policy_ipv6 1 2 "1:psp"
 }
 
+setup_endx_flv_psp()
+{
+	# Direction hs-1 -> hs-2 (End.X PSP flavor)
+	# SID List=fcff:3::e,fcff:4::ef1,cafe::2
+	#  - rt-1 (SRv6 H.Insert policy)
+	#  - rt-3 (SRv6 End behavior)
+	#  - rt-4 (SRv6 End.X flavor PSP with SL=1, route to rt-2 via nh/oif)
+	#  - rt-2 (Route to hs-2 with same subnet)
+	#
+	# Direction hs-2 -> hs-1 (End.X PSP flavor)
+	# SID List=fcff:3::ef1,cafe::1
+	#  - rt-2 (SRv6 H.Insert policy)
+	#  - rt-3 (SRv6 End.X flavor PSP with SL=1, route to rt-1 via nh/oif)
+	#  - rt-1 (Route to hs-1 with same subnet)
+	setup_rt_policy_ipv6 2 1 "3:noflv:End 4:psp:End.X,4,2"
+	setup_rt_policy_ipv6 1 2 "3:psp:End.X,3,1"
+}
+
+cleanup_endx_flv_psp()
+{
+	cleanup_rt_policy_ipv6 2 1 "3:noflv 4:psp"
+	cleanup_rt_policy_ipv6 1 2 "3:psp"
+}
+
 check_rt_connectivity()
 {
 	local rtsrc="$1"
@@ -819,6 +875,22 @@ host_srv6_end_flv_psp_tests()
 	cleanup_end_flv_psp
 }
 
+host_srv6_endx_flv_psp_tests()
+{
+	set -e
+	SETUP_ERR=1
+	setup_endx_flv_psp
+	SETUP_ERR=0
+	set +e
+
+	log_section "SRv6 connectivity test hosts (h1 <-> h2, End.X flavor PSP)"
+
+	check_and_log_hs_connectivity 1 2
+	check_and_log_hs_connectivity 2 1
+
+	cleanup_endx_flv_psp
+}
+
 test_iproute2_supp_or_ksft_skip()
 {
 	local flavor="$1"
@@ -920,5 +992,6 @@ set +e
 router_tests
 host2gateway_tests
 host_srv6_end_flv_psp_tests
+host_srv6_endx_flv_psp_tests
 
 print_log_test_results
