@@ -639,6 +639,7 @@ struct airoha_ppe {
 
 	void *foe;
 	dma_addr_t foe_dma;
+	bool flow_stats_cap;
 
 	struct rhashtable l2_flows;
 
