@@ -692,6 +692,13 @@ static int decode_seqof(struct bitstr *bs, const struct field_t *f,
 
 	/* Decode nested field */
 	son = f->fields;
+	/*
+	 * Malformed table entries may carry a NULL fields pointer (e.g.
+	 * the *_Caps.supportedPrefixes SEQOF,SEMI rows); treat them as
+	 * undecodable instead of dereferencing NULL when count > 0.
+	 */
+	if (!son)
+		return H323_ERROR_BOUND;
 	if (base)
 		base -= son->offset;
 	for (i = 0; i < count; i++) {
