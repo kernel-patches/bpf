@@ -9,6 +9,7 @@ void test_enable_stats(void)
 	struct bpf_prog_info info;
 	__u32 info_len = sizeof(info);
 	int duration = 0;
+	LIBBPF_OPTS(bpf_test_run_opts, topts);
 
 	skel = test_enable_stats__open_and_load();
 	if (CHECK(!skel, "skel_open_and_load", "skeleton open/load failed\n"))
@@ -20,18 +21,23 @@ void test_enable_stats(void)
 		return;
 	}
 
-	err = test_enable_stats__attach(skel);
-	if (CHECK(err, "attach_raw_tp", "err %d\n", err))
-		goto cleanup;
-
-	test_enable_stats__detach(skel);
-
 	prog_fd = bpf_program__fd(skel->progs.test_enable_stats);
-	memset(&info, 0, info_len);
-	err = bpf_prog_get_info_by_fd(prog_fd, &info, &info_len);
-	if (CHECK(err, "get_prog_info",
-		  "failed to get bpf_prog_info for fd %d\n", prog_fd))
+
+	/*
+	 * A single run can be too short for the clock to tell. Run the program
+	 * until its run time shows, unless its runs aren't counted at all.
+	 */
+	do {
+		err = bpf_prog_test_run_opts(prog_fd, &topts);
+		if (err)
+			break;
+
+		memset(&info, 0, info_len);
+		err = bpf_prog_get_info_by_fd(prog_fd, &info, &info_len);
+	} while (!err && info.run_cnt && !info.run_time_ns);
+	if (CHECK(err, "run_and_get_prog_info", "err %d\n", err))
 		goto cleanup;
+
 	if (CHECK(info.run_time_ns == 0, "check_stats_enabled",
 		  "failed to enable run_time_ns stats\n"))
 		goto cleanup;
