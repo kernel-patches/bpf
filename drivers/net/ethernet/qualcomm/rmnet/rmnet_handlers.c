@@ -50,6 +50,16 @@ rmnet_deliver_skb(struct sk_buff *skb)
 	gro_cells_receive(&priv->gro_cells, skb);
 }
 
+static void rmnet_deliver_skb_list(struct sk_buff_head *head)
+{
+	struct sk_buff *skb;
+
+	while ((skb = __skb_dequeue(head))) {
+		rmnet_set_skb_proto(skb);
+		rmnet_deliver_skb(skb);
+	}
+}
+
 /* MAP handler */
 
 static void
@@ -59,6 +69,7 @@ __rmnet_map_ingress_handler(struct sk_buff *skb,
 {
 	struct rmnet_map_header *map_header = (void *)skb->data;
 	struct rmnet_endpoint *ep;
+	struct sk_buff_head list;
 	u16 len, pad;
 	u8 mux_id;
 
@@ -83,12 +94,12 @@ __rmnet_map_ingress_handler(struct sk_buff *skb,
 
 	skb->dev = ep->egress_dev;
 
+	__skb_queue_head_init(&list);
+
 	if ((data_format & RMNET_FLAGS_INGRESS_MAP_CKSUMV5) &&
 	    (map_header->flags & MAP_NEXT_HEADER_FLAG)) {
-		if (rmnet_map_process_next_hdr_packet(skb, len))
+		if (rmnet_map_process_next_hdr_packet(skb, &list, len))
 			goto free_skb;
-		skb_pull(skb, sizeof(*map_header));
-		rmnet_set_skb_proto(skb);
 	} else {
 		/* Subtract MAP header */
 		skb_pull(skb, sizeof(*map_header));
@@ -96,10 +107,11 @@ __rmnet_map_ingress_handler(struct sk_buff *skb,
 		if (data_format & RMNET_FLAGS_INGRESS_MAP_CKSUMV4 &&
 		    !rmnet_map_checksum_downlink_packet(skb, len + pad))
 			skb->ip_summed = CHECKSUM_UNNECESSARY;
+		skb_trim(skb, len);
+		__skb_queue_tail(&list, skb);
 	}
 
-	skb_trim(skb, len);
-	rmnet_deliver_skb(skb);
+	rmnet_deliver_skb_list(&list);
 	return;
 
 free_skb:
