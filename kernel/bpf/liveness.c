@@ -1604,21 +1604,6 @@ static int record_load_store_access(struct bpf_verifier_env *env,
 	return 0;
 }
 
-/* Adapt the signed kfunc access size until its producer is converted. */
-static struct arg_access_info stack_access_info(s64 bytes)
-{
-	bool write = bytes < 0 && bytes != S64_MIN && -bytes < U32_MAX;
-
-	return (struct arg_access_info) {
-		.size = bytes == S64_MIN
-			? U32_MAX
-			: min_t(u64, bytes < 0 ? -bytes : bytes, U32_MAX),
-		.may_read = bytes > 0 || bytes == S64_MIN,
-		.may_write = write,
-		.must_write = write,
-	};
-}
-
 static int record_arg_access(struct bpf_verifier_env *env,
 			     struct func_instance *instance,
 			     struct bpf_insn *insn,
@@ -1636,8 +1621,7 @@ static int record_arg_access(struct bpf_verifier_env *env,
 	if (bpf_helper_call(insn)) {
 		info = bpf_helper_stack_access_bytes(env, insn, arg_idx, insn_idx);
 	} else if (bpf_pseudo_kfunc_call(insn)) {
-		info = stack_access_info(bpf_kfunc_stack_access_bytes(env, insn,
-								      arg_idx, insn_idx));
+		info = bpf_kfunc_stack_access_bytes(env, insn, arg_idx, insn_idx);
 	} else {
 		for (int f = 0; f <= depth; f++) {
 			err = mark_stack_read_all(env, instance, f, insn_idx);
