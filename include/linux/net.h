@@ -84,11 +84,15 @@ static inline int sockopt_init_user(sockopt_t *opt, char __user *optval,
  */
 static inline int sockopt_expand_out(sockopt_t *opt, size_t size)
 {
+	/* iov_iter_revert() refuses to unroll past MAX_RW_COUNT, so a size
+	 * beyond that could never be reverted back to the fixed part later,
+	 * even when optlen already covers it.
+	 */
+	if (size > MAX_RW_COUNT)
+		return -EINVAL;
+
 	if (size <= (size_t)opt->optlen)
 		return 0;
-
-	if (size > INT_MAX)
-		return -EINVAL;
 
 	/* Re-anchoring reads iter_out.ubuf, so the iterator has to be a user
 	 * buffer that nothing has written through yet.
