@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: (GPL-2.0+ OR BSD-3-Clause)
-/* Copyright 2024 NXP */
+/* Copyright 2024, 2026 NXP */
 
 #include <linux/clk.h>
 #include <linux/module.h>
@@ -11,6 +11,10 @@
 #include "enetc4_debugfs.h"
 
 #define ENETC_SI_MAX_RING_NUM	8
+
+/* embedded overlay blob, created by cmd_wrap_S_dtb in scripts/Makefile.lib */
+extern char __dtbo_enetc4_pseudo_mac_begin[];
+extern char __dtbo_enetc4_pseudo_mac_end[];
 
 static void enetc4_get_port_caps(struct enetc_pf *pf)
 {
@@ -932,6 +936,32 @@ static void enetc4_pl_mac_link_down(struct phylink_config *config,
 	enetc4_mac_tx_graceful_stop(pf);
 }
 
+static void enetc4_get_pcr_speed(struct enetc_hw *hw, int *speed)
+{
+	u32 val = enetc_port_rd(hw, ENETC4_PCR);
+	int pspeed = FIELD_GET(PCR_PSPEED, val);
+
+	*speed = (pspeed + 1) * 10;
+}
+
+/* Pseudo-MAC ports have no real PHY; the link is fixed. The overlay puts
+ * phylink into fixed-link mode, but the operating speed is taken live from
+ * PCR[PSPEED] here rather than from the DT 'speed' cell.
+ */
+static void enetc4_pl_get_fixed_state(struct phylink_config *config,
+				      struct phylink_link_state *state)
+{
+	struct enetc_pf *pf = phylink_to_enetc_pf(config);
+	int speed;
+
+	enetc4_get_pcr_speed(&pf->si->hw, &speed);
+
+	state->link = 1;
+	state->an_complete = 1;
+	state->duplex = DUPLEX_FULL;
+	state->speed = enetc_phylink_match_pseudo_mac_speed(speed);
+}
+
 static const struct phylink_mac_ops enetc_pl_mac_ops = {
 	.mac_select_pcs = enetc4_pl_mac_select_pcs,
 	.mac_config = enetc4_pl_mac_config,
@@ -946,23 +976,76 @@ static void enetc4_pci_remove(void *data)
 	enetc_pci_remove(pdev);
 }
 
+static void enetc4_put_overlay(struct enetc_ndev_priv *priv)
+{
+	if (!priv->ovcs_id)
+		return;
+
+	of_overlay_remove(&priv->ovcs_id);
+	priv->ovcs_id = 0;
+}
+
+static int enetc4_apply_overlay(struct enetc_ndev_priv *priv)
+{
+	u32 size = __dtbo_enetc4_pseudo_mac_end - __dtbo_enetc4_pseudo_mac_begin;
+	struct device_node *np = dev_of_node(priv->dev);
+	int err;
+
+	if (!np)
+		return dev_err_probe(priv->dev, -ENODEV,
+				     "Missing of_node for Pseudo-MAC port\n");
+
+	err = of_overlay_fdt_apply(__dtbo_enetc4_pseudo_mac_begin, size,
+				   &priv->ovcs_id, np);
+	if (err)
+		return dev_err_probe(priv->dev, err,
+				     "Failed to apply fixed-link overlay\n");
+
+	return 0;
+}
+
 static int enetc4_link_init(struct enetc_ndev_priv *priv,
 			    struct device_node *node)
 {
+	bool dynamic = node && of_node_check_flag(node, OF_DYNAMIC);
 	struct enetc_pf *pf = enetc_si_priv(priv->si);
 	struct device *dev = priv->dev;
 	int err;
 
-	err = of_get_phy_mode(node, &pf->if_mode);
-	if (err) {
-		dev_err(dev, "Failed to get PHY mode\n");
-		return err;
+	/* Pseudo-MAC ENETCs are described by a runtime fixed-link overlay
+	 * rather than static DT. This covers both a missing OF node and a
+	 * PCI-synthesized (OF_DYNAMIC) node, which is an empty node created
+	 * by the PCI core and thus carries no fixed-link description.
+	 */
+	if (enetc_is_pseudo_mac(priv->si) && (!node || dynamic)) {
+		pf->if_mode = PHY_INTERFACE_MODE_INTERNAL;
+
+		err = enetc4_apply_overlay(priv);
+		if (err)
+			return err;
+
+		/* Source the fixed-link speed live from PCR[PSPEED] instead
+		 * of the overlay 'speed' cell.
+		 */
+		pf->phylink_config.get_fixed_state = enetc4_pl_get_fixed_state;
+
+		/* The overlay was grafted onto dev's own of_node, so phylink
+		 * will find the fixed-link via dev_fwnode(dev). Use that node
+		 * for the subsequent MDIO/phylink setup below.
+		 */
+		node = dev_of_node(dev);
+	} else {
+		err = of_get_phy_mode(node, &pf->if_mode);
+		if (err) {
+			dev_err(dev, "Failed to get PHY mode\n");
+			return err;
+		}
 	}
 
 	err = enetc_mdiobus_create(pf, node);
 	if (err) {
 		dev_err(dev, "Failed to create MDIO bus\n");
-		return err;
+		goto err_mdiobus_create;
 	}
 
 	err = enetc_phylink_create(priv, node, &enetc_pl_mac_ops);
@@ -975,6 +1058,8 @@ static int enetc4_link_init(struct enetc_ndev_priv *priv,
 
 err_phylink_create:
 	enetc_mdiobus_destroy(pf);
+err_mdiobus_create:
+	enetc4_put_overlay(priv);
 
 	return err;
 }
@@ -985,6 +1070,7 @@ static void enetc4_link_deinit(struct enetc_ndev_priv *priv)
 
 	enetc_phylink_destroy(priv);
 	enetc_mdiobus_destroy(pf);
+	enetc4_put_overlay(priv);
 }
 
 static void enetc4_pf_link_status_task(struct work_struct *work)
