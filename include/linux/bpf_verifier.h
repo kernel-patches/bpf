@@ -745,6 +745,7 @@ struct bpf_insn_aux_data {
 	bool call_with_percpu_alloc_ptr; /* {this,per}_cpu_ptr() with prog percpu alloc */
 	bool arena_scalar; /* ldx/stx/st/atomic through a number, it's an address in arena */
 	bool bb_end; /* last instruction of a basic block */
+	bool need_scev;
 	u8 alu_state; /* used in combination with alu_limit */
 	/* true if STX or LDX instruction is a part of a spill/fill
 	 * pattern for a bpf_fastcall call.
@@ -1000,6 +1001,7 @@ struct bpf_scc_info {
 };
 
 struct bpf_liveness;
+struct scev;
 
 struct bpf_fd_array {
 	union {
@@ -1164,6 +1166,7 @@ struct bpf_verifier_env {
 	struct bpf_iarray *succ;
 	struct bpf_iarray *gotox_tmp_buf;
 	int *idoms;
+	struct scev *scev;
 };
 
 static inline struct bpf_func_info_aux *subprog_aux(struct bpf_verifier_env *env, int subprog)
@@ -1963,5 +1966,9 @@ int bpf_compute_idoms(struct bpf_verifier_env *env);
 int bpf_compute_loops(struct bpf_verifier_env *env);
 int bpf_loop_at_index(struct bpf_verifier_env *env, u32 idx);
 bool bpf_is_nested_loop(struct bpf_verifier_env *env, int inner_header, int outer_header);
+
+int bpf_init_scev(struct bpf_verifier_env *env);
+void bpf_free_scev(struct bpf_verifier_env *env);
+int bpf_compute_scev(struct bpf_verifier_env *env);
 
 #endif /* _LINUX_BPF_VERIFIER_H */
