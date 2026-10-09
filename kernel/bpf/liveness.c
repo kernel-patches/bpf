@@ -2472,6 +2472,12 @@ static inline u32 mask_widen(u32 m) { return m | (m << 16); }
 static inline u16 mask_lo(u32 m) { return (u16)m; }
 static inline u16 mask_hi(u32 m) { return (u16)(m >> 16); }
 
+/* Index of the subprogram called by pseudo call @insn */
+static int callee_subprog(struct bpf_verifier_env *env, const struct bpf_insn *insn)
+{
+	return bpf_find_subprog(env, insn - env->prog->insnsi + insn->imm + 1);
+}
+
 /* Compute info->{use,def} fields for the instruction */
 static void compute_insn_live_regs(struct bpf_verifier_env *env,
 				   struct bpf_insn *insn,
@@ -2489,6 +2495,7 @@ static void compute_insn_live_regs(struct bpf_verifier_env *env,
 	const u32 dst32 = mask_lo(dst);
 	const u32 r0  = reg64_mask(0);
 	const u32 r2  = reg64_mask(BPF_REG_2);
+	int subprog, reg_args;
 	u32 def = 0;
 	u32 use = U32_MAX;
 
@@ -2613,8 +2620,18 @@ static void compute_insn_live_regs(struct bpf_verifier_env *env,
 		case BPF_CALL:
 			def = ALL_CALLER_SAVED_REGS;
 			use = def & ~BIT(BPF_REG_0);
-			if (bpf_get_call_summary(env, insn, &cs))
+			if (bpf_get_call_summary(env, insn, &cs)) {
 				use = GENMASK(min_t(u8, cs.arg_slot_cnt, MAX_BPF_FUNC_REG_ARGS), 1);
+			} else if (bpf_pseudo_call(insn)) {
+				/* a static callee's reads are added in bpf_compute_live_registers() */
+				subprog = callee_subprog(env, insn);
+				if (bpf_subprog_is_global(env, subprog)) {
+					reg_args = min_t(u8, env->subprog_info[subprog].arg_slot_cnt, MAX_BPF_FUNC_REG_ARGS);
+					use = GENMASK(reg_args, 1);
+				} else {
+					use = 0;
+				}
+			}
 			def = mask_widen(def);
 			use = mask_widen(use);
 			/* callx reads the address of the callee from dst_reg */
@@ -2699,11 +2716,21 @@ int bpf_compute_live_registers(struct bpf_verifier_env *env)
 			struct bpf_iarray *succ;
 			u32 new_out = 0;
 			u32 new_in = 0;
+			u32 use;
 
 			succ = bpf_insn_successors(env, insn_idx);
 			for (int s = 0; s < succ->cnt; ++s)
 				new_out |= state[succ->items[s]].in;
-			new_in = (new_out & ~live->def) | live->use;
+			use = live->use;
+			/*
+			 * For a call to a static subprogram include the callee's
+			 * entry 'in' as computed so far.
+			 */
+			if (bpf_pseudo_call(&insns[insn_idx]) &&
+			    !bpf_subprog_is_global(env, callee_subprog(env, &insns[insn_idx])))
+				use |= state[insn_idx + insns[insn_idx].imm + 1].in &
+				       mask_widen(GENMASK(BPF_REG_5, BPF_REG_1));
+			new_in = (new_out & ~live->def) | use;
 			if (new_out != live->out || new_in != live->in) {
 				live->in = new_in;
 				live->out = new_out;

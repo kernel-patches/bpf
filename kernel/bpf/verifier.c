@@ -10913,6 +10913,7 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog, s
 	struct bpf_call_arg_meta meta;
 	struct bpf_func_proto *fn;
 	int ret, err;
+	u32 i;
 
 	memset(&meta, 0, sizeof(meta));
 	meta.btf = btf;
@@ -10939,6 +10940,15 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog, s
 	meta.fn = fn;
 	meta.func_proto = func_proto;
 
+	/*
+	 * Check if all register arguments declared in BTF are initialized.
+	 * If they aren't the BTF is unreliable.
+	 */
+	if (!bpf_subprog_is_global(env, subprog)) {
+		for (i = 0; i < min_t(u32, sub->arg_slot_cnt, MAX_BPF_FUNC_REG_ARGS); i++)
+			if (caller->regs[BPF_REG_1 + i].type == NOT_INIT)
+				return -EINVAL;
+	}
 	return check_func_args(env, &meta, env->insn_idx);
 }
 
@@ -14589,6 +14599,18 @@ static bool try_btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 	err = btf_prepare_func_args(env, subprog);
 	env->log.level = log_level;
 	return !err;
+}
+
+/* Prepare argument metadata for liveness; the main program is handled separately. */
+static void prepare_subprog_args(struct bpf_verifier_env *env)
+{
+	int i;
+
+	for (i = 1; i < env->subprog_cnt; i++) {
+		if (!try_btf_prepare_func_args(env, i) && bpf_subprog_is_global(env, i))
+			/* Keep all argument registers live if the prototype is unavailable. */
+			env->subprog_info[i].arg_slot_cnt = MAX_BPF_FUNC_REG_ARGS;
+	}
 }
 
 /*
@@ -22835,6 +22857,8 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	ret = bpf_compute_subprog_ret_regs(env);
 	if (ret < 0)
 		goto skip_full_check;
+
+	prepare_subprog_args(env);
 
 	ret = bpf_compute_live_registers(env);
 	if (ret < 0)

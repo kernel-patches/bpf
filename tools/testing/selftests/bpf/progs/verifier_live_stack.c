@@ -1470,7 +1470,7 @@ static __used __naked void inner_reader(void)
 SEC("socket")
 __log_level(2)
 /* fp-8 NOT live at call: callee writes before reading (parent_def kills it) */
-__msg("2: .12345.... (85) call pc+")
+__msg("2: .1........ (85) call pc+")
 __naked void callee_must_write_before_read(void)
 {
 	asm volatile (
