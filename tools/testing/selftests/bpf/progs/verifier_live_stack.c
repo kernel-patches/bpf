@@ -2696,6 +2696,127 @@ __naked void atomic_rmw(void)
 	: __clobber_all);
 }
 
+#ifdef CAN_USE_LOAD_ACQ_STORE_REL
+
+/*
+ * An 8-byte load-acquire from a spill slot restores the spilled register.
+ * The store through the restored pointer is a definite write to fp-8.
+ */
+SEC("socket")
+__log_level(2)
+__success
+__msg("r2 = load_acquire((u64 *)(r10 -16)){{.*}}use: fp0-16")
+__msg("*(u64 *)(r2 +0) = 42{{.*}}def: fp0-8 may_def: fp0-8")
+__naked void load_acquire_fills_spilled_ptr(void)
+{
+	asm volatile (
+	"r1 = r10;"
+	"r1 += -8;"
+	"*(u64 *)(r10 - 16) = r1;"		/* fp-16 = &fp-8 */
+	".8byte %[load_acquire_insn];"		/* r2 = load_acquire(fp-16) */
+	"*(u64 *)(r2 + 0) = 42;"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm_insn(load_acquire_insn,
+		     BPF_ATOMIC_OP(BPF_DW, BPF_LOAD_ACQ, BPF_REG_2, BPF_REG_10, -16))
+	: __clobber_all);
+}
+
+/* An 8-byte store-release spills the register, same as a plain store. */
+SEC("socket")
+__log_level(2)
+__success
+__msg("store_release((u64 *)(r10 -16), r1){{.*}}def: fp0-16")
+__msg("*(u64 *)(r2 +0) = 42{{.*}}def: fp0-8 may_def: fp0-8")
+__naked void store_release_spills_ptr(void)
+{
+	asm volatile (
+	"r1 = r10;"
+	"r1 += -8;"
+	".8byte %[store_release_insn];"		/* store_release(fp-16, r1): fp-16 = &fp-8 */
+	"r2 = *(u64 *)(r10 - 16);"
+	"*(u64 *)(r2 + 0) = 42;"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm_insn(store_release_insn,
+		     BPF_ATOMIC_OP(BPF_DW, BPF_STORE_REL, BPF_REG_10, BPF_REG_1, -16))
+	: __clobber_all);
+}
+
+#endif /* CAN_USE_LOAD_ACQ_STORE_REL */
+
+/* Stack fills through xchg, fetch_add and cmpxchg instructions. */
+SEC("socket")
+__log_level(2)
+__success
+__msg("r2 = atomic64_xchg((u64 *)(r10 -16), r2){{.*}}use: fp0-16{{.*}}may_def: fp0-16")
+__msg("*(u64 *)(r2 +0) = 42{{.*}}def: fp0-8 may_def: fp0-8")
+__msg("r3 = atomic64_fetch_add((u64 *)(r10 -16), r3){{.*}}use: fp0-16{{.*}}may_def: fp0-16")
+__msg("*(u64 *)(r3 +0) = 42{{.*}}def: fp0-8 may_def: fp0-8")
+__msg("r0 = atomic64_cmpxchg((u64 *)(r10 -16), r0, r4){{.*}}use: fp0-16{{.*}}may_def: fp0-16")
+__msg("*(u64 *)(r0 +0) = 42{{.*}}def: fp0-8 may_def: fp0-8")
+__naked void atomic_rmw_fills_spilled_ptr(void)
+{
+	asm volatile (
+	"r1 = r10;"
+	"r1 += -8;"
+	"*(u64 *)(r10 - 16) = r1;"		/* fp-16 = &fp-8 */
+	"r2 = 0;"
+	".8byte %[atomic_xchg];"		/* r2 = xchg(fp-16, r2) */
+	"*(u64 *)(r2 + 0) = 42;"
+	"*(u64 *)(r10 - 16) = r1;"
+	"r3 = 0;"
+	".8byte %[atomic_fetch_add];"		/* r3 = fetch_add(fp-16, r3) */
+	"*(u64 *)(r3 + 0) = 42;"
+	"*(u64 *)(r10 - 16) = r1;"
+	"r0 = 0;"
+	"r4 = 0;"
+	".8byte %[atomic_cmpxchg];"		/* r0 = cmpxchg(fp-16, r0, r4) */
+	"*(u64 *)(r0 + 0) = 42;"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm_insn(atomic_xchg, BPF_ATOMIC_OP(BPF_DW, BPF_XCHG, BPF_REG_10, BPF_REG_2, -16)),
+	  __imm_insn(atomic_fetch_add, BPF_ATOMIC_OP(BPF_DW, BPF_ADD | BPF_FETCH, BPF_REG_10, BPF_REG_3, -16)),
+	  __imm_insn(atomic_cmpxchg, BPF_ATOMIC_OP(BPF_DW, BPF_CMPXCHG, BPF_REG_10, BPF_REG_4, -16))
+	: __clobber_all);
+}
+
+/* xchg returning caller's &fp-8. */
+SEC("socket")
+__log_level(2)
+__success
+__msg("r2 = atomic64_xchg((u64 *)(r1 +0), r2){{.*}}use: fp0-16{{.*}}may_def: fp0-16")
+__msg("*(u64 *)(r2 +0) = 42{{.*}}; may_def: fp0-8")
+__naked void atomic_rmw_fills_parent_spilled_ptr(void)
+{
+	asm volatile (
+	"r1 = r10;"
+	"r1 += -8;"
+	"*(u64 *)(r10 - 16) = r1;"		/* fp-16 = &fp-8 */
+	"r1 = r10;"
+	"r1 += -16;"
+	"call atomic_rmw_fills_parent_spilled_ptr_callee;"
+	"r0 = 0;"
+	"exit;"
+	::: __clobber_all);
+}
+
+static __used __naked void atomic_rmw_fills_parent_spilled_ptr_callee(void)
+{
+	asm volatile (
+	"r2 = 0;"
+	".8byte %[atomic_xchg];"		/* r2 = xchg(r1, r2) == caller's &fp-8 */
+	"*(u64 *)(r2 + 0) = 42;"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm_insn(atomic_xchg, BPF_ATOMIC_OP(BPF_DW, BPF_XCHG, BPF_REG_1, BPF_REG_2, 0))
+	: __clobber_all);
+}
+
 SEC("socket")
 __success
 __naked void imprecise_fill_loses_cross_frame(void)
