@@ -143,6 +143,14 @@ static int rmnet_newlink(struct net_device *dev,
 		return -ENODEV;
 	}
 
+	if (data[IFLA_RMNET_FLAGS]) {
+		struct ifla_rmnet_flags *flags;
+
+		flags = nla_data(data[IFLA_RMNET_FLAGS]);
+		data_format &= ~flags->mask;
+		data_format |= flags->flags & flags->mask;
+	}
+
 	ep = kzalloc_obj(*ep);
 	if (!ep)
 		return -ENOMEM;
@@ -154,7 +162,8 @@ static int rmnet_newlink(struct net_device *dev,
 		goto err0;
 
 	port = rmnet_get_port_rtnl(real_dev);
-	err = rmnet_vnd_newlink(mux_id, dev, port, real_dev, ep, extack);
+	err = rmnet_vnd_newlink(mux_id, dev, port, real_dev, ep, extack,
+				data_format);
 	if (err)
 		goto err1;
 
@@ -162,24 +171,23 @@ static int rmnet_newlink(struct net_device *dev,
 	if (err < 0)
 		goto err2;
 
+	/* Update existing MTUs before publishing the shared data format. */
+	err = rmnet_vnd_update_dev_mtu(port, real_dev, data_format);
+	if (err)
+		goto err3;
+
 	port->rmnet_mode = mode;
 	port->rmnet_dev = dev;
 
 	hlist_add_head_rcu(&ep->hlnode, &port->muxed_ep[mux_id]);
-
-	if (data[IFLA_RMNET_FLAGS]) {
-		struct ifla_rmnet_flags *flags;
-
-		flags = nla_data(data[IFLA_RMNET_FLAGS]);
-		data_format &= ~flags->mask;
-		data_format |= flags->flags & flags->mask;
-	}
 
 	netdev_dbg(dev, "data format [0x%08X]\n", data_format);
 	WRITE_ONCE(port->data_format, data_format);
 
 	return 0;
 
+err3:
+	netdev_upper_dev_unlink(real_dev, dev);
 err2:
 	unregister_netdevice(dev);
 	rmnet_vnd_dellink(mux_id, port, ep);
@@ -301,9 +309,13 @@ static int rmnet_changelink(struct net_device *dev, struct nlattr *tb[],
 			    struct netlink_ext_ack *extack)
 {
 	struct rmnet_priv *priv = netdev_priv(dev);
+	struct ifla_rmnet_flags *flags;
 	struct net_device *real_dev;
 	struct rmnet_port *port;
+	u32 old_data_format;
+	u32 data_format;
 	u16 mux_id;
+	int err;
 
 	if (!dev)
 		return -ENODEV;
@@ -319,6 +331,13 @@ static int rmnet_changelink(struct net_device *dev, struct nlattr *tb[],
 	}
 
 	port = rmnet_get_port_rtnl(real_dev);
+
+	if (data[IFLA_RMNET_FLAGS]) {
+		old_data_format = READ_ONCE(port->data_format);
+		flags = nla_data(data[IFLA_RMNET_FLAGS]);
+		data_format = old_data_format & ~flags->mask;
+		data_format |= flags->flags & flags->mask;
+	}
 
 	if (data[IFLA_RMNET_MUX_ID]) {
 		mux_id = nla_get_u16(data[IFLA_RMNET_MUX_ID]);
@@ -346,21 +365,13 @@ static int rmnet_changelink(struct net_device *dev, struct nlattr *tb[],
 	}
 
 	if (data[IFLA_RMNET_FLAGS]) {
-		struct ifla_rmnet_flags *flags;
-		u32 old_data_format;
-		u32 data_format;
-
-		old_data_format = port->data_format;
-		flags = nla_data(data[IFLA_RMNET_FLAGS]);
-		data_format = old_data_format & ~flags->mask;
-		data_format |= flags->flags & flags->mask;
-		WRITE_ONCE(port->data_format, data_format);
-
-		if (rmnet_vnd_update_dev_mtu(port, real_dev)) {
-			WRITE_ONCE(port->data_format, old_data_format);
+		err = rmnet_vnd_update_dev_mtu(port, real_dev, data_format);
+		if (err) {
 			NL_SET_ERR_MSG_MOD(extack, "Invalid MTU on real dev");
-			return -EINVAL;
+			return err;
 		}
+
+		WRITE_ONCE(port->data_format, data_format);
 	}
 
 	return 0;
