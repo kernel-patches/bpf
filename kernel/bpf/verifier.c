@@ -11489,9 +11489,6 @@ int map_set_for_each_callback_args(struct bpf_verifier_env *env,
 
 	/* pointer to stack or null */
 	callee->regs[BPF_REG_4] = caller->regs[BPF_REG_3];
-
-	/* unused */
-	bpf_mark_reg_not_init(env, &callee->regs[BPF_REG_5]);
 	return 0;
 }
 
@@ -11535,11 +11532,6 @@ static int set_loop_callback_state(struct bpf_verifier_env *env,
 	callee->regs[BPF_REG_1].type = SCALAR_VALUE;
 	callee->regs[BPF_REG_2] = caller->regs[BPF_REG_3];
 
-	/* unused */
-	bpf_mark_reg_not_init(env, &callee->regs[BPF_REG_3]);
-	bpf_mark_reg_not_init(env, &callee->regs[BPF_REG_4]);
-	bpf_mark_reg_not_init(env, &callee->regs[BPF_REG_5]);
-
 	callee->in_callback_fn = true;
 	callee->callback_ret_range = retval_range(0, 1);
 	return 0;
@@ -11559,11 +11551,7 @@ static int set_timer_callback_state(struct bpf_verifier_env *env,
 	mark_map_callback_reg(&callee->regs[BPF_REG_3], &caller->regs[BPF_REG_1], PTR_TO_MAP_VALUE);
 	callee->regs[BPF_REG_3].id = ++env->id_gen;
 
-	/* unused */
-	bpf_mark_reg_not_init(env, &callee->regs[BPF_REG_4]);
-	bpf_mark_reg_not_init(env, &callee->regs[BPF_REG_5]);
 	callee->in_async_callback_fn = true;
-	callee->callback_ret_range = retval_range(0, 0);
 	return 0;
 }
 
@@ -11587,10 +11575,6 @@ static int set_find_vma_callback_state(struct bpf_verifier_env *env,
 
 	/* pointer to stack or null */
 	callee->regs[BPF_REG_3] = caller->regs[BPF_REG_4];
-
-	/* unused */
-	bpf_mark_reg_not_init(env, &callee->regs[BPF_REG_4]);
-	bpf_mark_reg_not_init(env, &callee->regs[BPF_REG_5]);
 	callee->in_callback_fn = true;
 	callee->callback_ret_range = retval_range(0, 1);
 	return 0;
@@ -11606,14 +11590,8 @@ static int set_user_ringbuf_callback_state(struct bpf_verifier_env *env,
 	 *			  callback_ctx, u64 flags);
 	 * callback_fn(const struct bpf_dynptr_t* dynptr, void *callback_ctx);
 	 */
-	bpf_mark_reg_not_init(env, &callee->regs[BPF_REG_0]);
 	mark_dynptr_cb_reg(env, &callee->regs[BPF_REG_1], BPF_DYNPTR_TYPE_LOCAL);
 	callee->regs[BPF_REG_2] = caller->regs[BPF_REG_3];
-
-	/* unused */
-	bpf_mark_reg_not_init(env, &callee->regs[BPF_REG_3]);
-	bpf_mark_reg_not_init(env, &callee->regs[BPF_REG_4]);
-	bpf_mark_reg_not_init(env, &callee->regs[BPF_REG_5]);
 
 	callee->in_callback_fn = true;
 	callee->callback_ret_range = retval_range(0, 1);
@@ -11646,9 +11624,6 @@ static int set_rbtree_add_callback_state(struct bpf_verifier_env *env,
 	mark_reg_graph_node(callee->regs, BPF_REG_2, &field->graph_root);
 	ref_set_non_owning(env, &callee->regs[BPF_REG_2]);
 
-	bpf_mark_reg_not_init(env, &callee->regs[BPF_REG_3]);
-	bpf_mark_reg_not_init(env, &callee->regs[BPF_REG_4]);
-	bpf_mark_reg_not_init(env, &callee->regs[BPF_REG_5]);
 	callee->in_callback_fn = true;
 	callee->callback_ret_range = retval_range(0, 1);
 	return 0;
@@ -11668,9 +11643,6 @@ static int set_task_work_schedule_callback_state(struct bpf_verifier_env *env,
 	mark_map_callback_reg(&callee->regs[BPF_REG_3], &caller->regs[BPF_REG_3], PTR_TO_MAP_VALUE);
 	callee->regs[BPF_REG_3].id = ++env->id_gen;
 
-	/* unused */
-	bpf_mark_reg_not_init(env, &callee->regs[BPF_REG_4]);
-	bpf_mark_reg_not_init(env, &callee->regs[BPF_REG_5]);
 	callee->in_async_callback_fn = true;
 	callee->callback_ret_range = retval_range(S32_MIN, S32_MAX);
 	return 0;
@@ -11689,9 +11661,6 @@ static int set_rcu_callback_state(struct bpf_verifier_env *env,
 	mark_map_callback_reg(&callee->regs[BPF_REG_2], &caller->regs[BPF_REG_2], PTR_TO_MAP_KEY);
 	mark_map_callback_reg(&callee->regs[BPF_REG_3], &caller->regs[BPF_REG_2], PTR_TO_MAP_VALUE);
 
-	/* unused */
-	bpf_mark_reg_not_init(env, &callee->regs[BPF_REG_4]);
-	bpf_mark_reg_not_init(env, &callee->regs[BPF_REG_5]);
 	callee->in_async_callback_fn = true;
 	callee->callback_ret_range = retval_range(S32_MIN, S32_MAX);
 	return 0;
