@@ -7,13 +7,18 @@
  * Author: Parthiban Veerasooran <parthiban.veerasooran@microchip.com>
  */
 
+#ifndef _LINUX_OA_TC6_H
+#define _LINUX_OA_TC6_H
+
 #include <linux/etherdevice.h>
 #include <linux/spi/spi.h>
+#include <linux/ptp_clock_kernel.h>
 
 /* OPEN Alliance TC6 registers */
 /* Standard Capabilities Register */
 #define OA_TC6_REG_STDCAP			0x0002
 #define OA_TC6_STDCAP_DIRECT_PHY_REG_ACCESS	BIT(8)
+#define OA_TC6_STDCAP_TIMESTAMP_CAPABILITY	BIT(6)
 
 /* Reset Control and Status Register */
 #define OA_TC6_REG_RESET			0x0003
@@ -23,6 +28,8 @@
 #define OA_TC6_REG_CONFIG0			0x0004
 #define OA_TC6_CONFIG0_SYNC			BIT(15)
 #define OA_TC6_CONFIG0_ZARFE_ENABLE		BIT(12)
+#define OA_TC6_CONFIG0_FTSE_ENABLE		BIT(7)
+#define OA_TC6_CONFIG0_FTSS_64BIT_TSTAMP	BIT(6)
 #define OA_TC6_CONFIG0_PROTE			BIT(5)
 
 /* Configuration Register #2 */
@@ -30,6 +37,10 @@
 
 /* Status Register #0 */
 #define OA_TC6_REG_STATUS0			0x0008
+#define OA_TC6_STATUS0_TTSCAC			BIT(10)
+#define OA_TC6_STATUS0_TTSCAB			BIT(9)
+#define OA_TC6_STATUS0_TTSCAA			BIT(8)
+#define OA_TC6_STATUS0_TTSCA_MASK		GENMASK(10, 8)
 #define OA_TC6_STATUS0_RESETC			BIT(6)	/* Reset Complete */
 #define OA_TC6_STATUS0_HEADER_ERROR		BIT(5)
 #define OA_TC6_STATUS0_LOSS_OF_FRAME_ERROR	BIT(4)
@@ -43,6 +54,7 @@
 
 /* Interrupt Mask Register #0 */
 #define OA_TC6_REG_INT_MASK0				0x000C
+#define OA_TC6_INT_MASK0_TTSCA_MASK			GENMASK(10, 8)
 #define OA_TC6_INT_MASK0_HEADER_ERR_MASK		BIT(5)
 #define OA_TC6_INT_MASK0_LOSS_OF_FRAME_ERR_MASK		BIT(4)
 #define OA_TC6_INT_MASK0_RX_BUFFER_OVERFLOW_ERR_MASK	BIT(3)
@@ -93,3 +105,14 @@ int oa_tc6_mdiobus_read_c45(struct mii_bus *bus, int addr, int devnum,
 			    int regnum);
 int oa_tc6_mdiobus_write_c45(struct mii_bus *bus, int addr, int devnum,
 			     int regnum, u16 val);
+int oa_tc6_ptp_register(struct oa_tc6 *tc6, struct ptp_clock_info *info);
+int oa_tc6_get_ts_info(struct oa_tc6 *tc6,
+		       struct kernel_ethtool_ts_info *info);
+void oa_tc6_hwtstamp_get(struct oa_tc6 *tc6,
+			 struct kernel_hwtstamp_config *cfg);
+void oa_tc6_get_ts_stats(struct oa_tc6 *tc6,
+			 struct ethtool_ts_stats *stats);
+int oa_tc6_hwtstamp_set(struct oa_tc6 *tc6,
+			struct kernel_hwtstamp_config *cfg);
+void oa_tc6_ptp_unregister(struct oa_tc6 *tc6);
+#endif /* _LINUX_OA_TC6_H */
