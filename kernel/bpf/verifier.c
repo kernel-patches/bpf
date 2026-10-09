@@ -1456,7 +1456,7 @@ static int resize_reference_state(struct bpf_verifier_state *state, size_t n)
 /* Possibly update state->allocated_stack to be at least size bytes. Also
  * possibly update the function's high-water mark in its bpf_subprog_info.
  */
-static int grow_stack_state(struct bpf_verifier_env *env, struct bpf_func_state *state, int size)
+int bpf_grow_stack_state(struct bpf_verifier_env *env, struct bpf_func_state *state, int size)
 {
 	size_t old_n = bpf_stack_nr_slots(state), n;
 
@@ -6705,7 +6705,7 @@ static int check_stack_access_within_bounds(
 	/* Note that there is no stack access with offset zero, so the needed stack
 	 * size is -min_off, not -min_off+1.
 	 */
-	return grow_stack_state(env, state, -min_off /* size */);
+	return bpf_grow_stack_state(env, state, -min_off /* size */);
 }
 
 static bool get_func_retval_range(struct bpf_prog *prog,

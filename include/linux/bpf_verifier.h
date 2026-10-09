@@ -522,7 +522,7 @@ static inline u32 bpf_stack_nr_slots(const struct bpf_func_state *frame)
 
 /*
  * Stack slot @spi of @frame, covering bytes [fp - (spi + 1) * 8, fp - spi * 8).
- * The caller must ensure spi < bpf_stack_nr_slots(frame), see grow_stack_state().
+ * The caller must ensure spi < bpf_stack_nr_slots(frame), see bpf_grow_stack_state().
  */
 static inline struct bpf_stack_state *bpf_stack_slot(const struct bpf_func_state *frame, u32 spi)
 {
@@ -1297,6 +1297,7 @@ void bpf_bt_sync_linked_regs(struct backtrack_state *bt, struct bpf_jmp_history_
 void bpf_mark_reg_not_init(const struct bpf_verifier_env *env,
 			   struct bpf_reg_state *reg);
 void bpf_mark_reg_unknown_imprecise(struct bpf_reg_state *reg);
+int bpf_grow_stack_state(struct bpf_verifier_env *env, struct bpf_func_state *state, int size);
 void bpf_mark_all_scalars_precise(struct bpf_verifier_env *env,
 				  struct bpf_verifier_state *st);
 void bpf_clear_singular_ids(struct bpf_verifier_env *env, struct bpf_verifier_state *st);
