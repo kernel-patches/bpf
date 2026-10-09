@@ -787,7 +787,10 @@ static int hi3110_open(struct net_device *net)
 	return 0;
 
  out_free_irq:
+	priv->force_quit = 1;
+	mutex_unlock(&priv->hi3110_lock);
 	free_irq(spi->irq, priv);
+	mutex_lock(&priv->hi3110_lock);
 	hi3110_hw_sleep(spi);
  out_close:
 	hi3110_power_enable(priv->transceiver, 0);
