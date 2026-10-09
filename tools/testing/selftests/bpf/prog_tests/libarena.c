@@ -240,6 +240,15 @@ void serial_test_libarena(void)
 	if (!ASSERT_OK(ret, "arena_alloc_reserve"))
 		goto out;
 
+	/* Skip on kernels with more possible CPUs than arena spin locks support */
+	ret = libarena_run_prog(bpf_program__fd(skel->progs.arena_buddy_reset));
+	if (ret == -EOPNOTSUPP) {
+		test__skip();
+		goto out;
+	}
+	if (!ASSERT_OK(ret, "arena_buddy_reset"))
+		goto out;
+
 	bpf_object__for_each_program(prog, skel->obj) {
 		const char *name = bpf_program__name(prog);
 
