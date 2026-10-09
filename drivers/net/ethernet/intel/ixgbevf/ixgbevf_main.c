@@ -2344,6 +2344,10 @@ static void ixgbevf_negotiate_api(struct ixgbevf_adapter *adapter)
 		idx++;
 	}
 
+	if (api[idx] == ixgbe_mbox_api_unknown)
+		netdev_warn(adapter->netdev,
+			    "Mailbox API negotiation with PF failed: %d\n", err);
+
 	ixgbevf_set_features(adapter);
 
 	if (adapter->pf_features & IXGBEVF_PF_SUP_ESX_MBX) {
