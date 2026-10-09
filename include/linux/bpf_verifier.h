@@ -1420,6 +1420,15 @@ static inline bool bpf_is_spilled_reg(const struct bpf_stack_state *stack)
 	return stack->slot_type[BPF_REG_SIZE - 1] == STACK_SPILL;
 }
 
+static inline int bpf_spill_size(const struct bpf_stack_state *stack)
+{
+	int i, spill_size = 0;
+
+	for (i = BPF_REG_SIZE - 1; i >= 0 && stack->slot_type[i] == STACK_SPILL; i--)
+		spill_size++;
+	return spill_size;
+}
+
 static inline bool bpf_is_spilled_scalar_reg(const struct bpf_stack_state *stack)
 {
 	return bpf_is_spilled_reg(stack) && stack->spilled_ptr.type == SCALAR_VALUE;

@@ -4247,10 +4247,7 @@ static int check_stack_read_fixed_off(struct bpf_verifier_env *env,
 		bpf_diag_mod_begin(env, &state->regs[dst_regno], reg, BPF_DIAG_MOD_WRITE);
 
 	if (bpf_is_spilled_reg(ss)) {
-		u8 spill_size = 1;
-
-		for (i = BPF_REG_SIZE - 1; i > 0 && stype[i - 1] == STACK_SPILL; i--)
-			spill_size++;
+		u8 spill_size = bpf_spill_size(ss);
 
 		if (size != BPF_REG_SIZE || spill_size != BPF_REG_SIZE) {
 			if (reg->type != SCALAR_VALUE) {
