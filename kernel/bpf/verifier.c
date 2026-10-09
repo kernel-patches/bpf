@@ -11461,6 +11461,16 @@ static int check_func_callx(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	return check_static_func_call(env, subprog, insn_idx);
 }
 
+static void mark_map_callback_reg(struct bpf_reg_state *reg,
+				  const struct bpf_reg_state *map_reg,
+				  enum bpf_reg_type type)
+{
+	reg->type = type;
+	__mark_reg_known_zero(reg);
+	reg->map_ptr = map_reg->map_ptr;
+	reg->map_uid = map_reg->map_uid;
+}
+
 int map_set_for_each_callback_args(struct bpf_verifier_env *env,
 				   struct bpf_verifier_state *state,
 				   struct bpf_func_state *caller,
@@ -11473,15 +11483,8 @@ int map_set_for_each_callback_args(struct bpf_verifier_env *env,
 	 */
 	callee->regs[BPF_REG_1] = caller->regs[BPF_REG_1];
 
-	callee->regs[BPF_REG_2].type = PTR_TO_MAP_KEY;
-	__mark_reg_known_zero(&callee->regs[BPF_REG_2]);
-	callee->regs[BPF_REG_2].map_ptr = caller->regs[BPF_REG_1].map_ptr;
-	callee->regs[BPF_REG_2].map_uid = caller->regs[BPF_REG_1].map_uid;
-
-	callee->regs[BPF_REG_3].type = PTR_TO_MAP_VALUE;
-	__mark_reg_known_zero(&callee->regs[BPF_REG_3]);
-	callee->regs[BPF_REG_3].map_ptr = caller->regs[BPF_REG_1].map_ptr;
-	callee->regs[BPF_REG_3].map_uid = caller->regs[BPF_REG_1].map_uid;
+	mark_map_callback_reg(&callee->regs[BPF_REG_2], &caller->regs[BPF_REG_1], PTR_TO_MAP_KEY);
+	mark_map_callback_reg(&callee->regs[BPF_REG_3], &caller->regs[BPF_REG_1], PTR_TO_MAP_VALUE);
 	callee->regs[BPF_REG_3].id = ++env->id_gen;
 
 	/* pointer to stack or null */
@@ -11548,26 +11551,12 @@ static int set_timer_callback_state(struct bpf_verifier_env *env,
 				    struct bpf_func_state *callee,
 				    int insn_idx)
 {
-	struct bpf_map *map_ptr = caller->regs[BPF_REG_1].map_ptr;
-	u32 map_uid = caller->regs[BPF_REG_1].map_uid;
-
 	/* bpf_timer_set_callback(struct bpf_timer *timer, void *callback_fn);
 	 * callback_fn(struct bpf_map *map, void *key, void *value);
 	 */
-	callee->regs[BPF_REG_1].type = CONST_PTR_TO_MAP;
-	__mark_reg_known_zero(&callee->regs[BPF_REG_1]);
-	callee->regs[BPF_REG_1].map_ptr = map_ptr;
-	callee->regs[BPF_REG_1].map_uid = map_uid;
-
-	callee->regs[BPF_REG_2].type = PTR_TO_MAP_KEY;
-	__mark_reg_known_zero(&callee->regs[BPF_REG_2]);
-	callee->regs[BPF_REG_2].map_ptr = map_ptr;
-	callee->regs[BPF_REG_2].map_uid = map_uid;
-
-	callee->regs[BPF_REG_3].type = PTR_TO_MAP_VALUE;
-	__mark_reg_known_zero(&callee->regs[BPF_REG_3]);
-	callee->regs[BPF_REG_3].map_ptr = map_ptr;
-	callee->regs[BPF_REG_3].map_uid = map_uid;
+	mark_map_callback_reg(&callee->regs[BPF_REG_1], &caller->regs[BPF_REG_1], CONST_PTR_TO_MAP);
+	mark_map_callback_reg(&callee->regs[BPF_REG_2], &caller->regs[BPF_REG_1], PTR_TO_MAP_KEY);
+	mark_map_callback_reg(&callee->regs[BPF_REG_3], &caller->regs[BPF_REG_1], PTR_TO_MAP_VALUE);
 	callee->regs[BPF_REG_3].id = ++env->id_gen;
 
 	/* unused */
@@ -11671,26 +11660,12 @@ static int set_task_work_schedule_callback_state(struct bpf_verifier_env *env,
 						 struct bpf_func_state *callee,
 						 int insn_idx)
 {
-	struct bpf_map *map_ptr = caller->regs[BPF_REG_3].map_ptr;
-	u32 map_uid = caller->regs[BPF_REG_3].map_uid;
-
 	/*
 	 * callback_fn(struct bpf_map *map, void *key, void *value);
 	 */
-	callee->regs[BPF_REG_1].type = CONST_PTR_TO_MAP;
-	__mark_reg_known_zero(&callee->regs[BPF_REG_1]);
-	callee->regs[BPF_REG_1].map_ptr = map_ptr;
-	callee->regs[BPF_REG_1].map_uid = map_uid;
-
-	callee->regs[BPF_REG_2].type = PTR_TO_MAP_KEY;
-	__mark_reg_known_zero(&callee->regs[BPF_REG_2]);
-	callee->regs[BPF_REG_2].map_ptr = map_ptr;
-	callee->regs[BPF_REG_2].map_uid = map_uid;
-
-	callee->regs[BPF_REG_3].type = PTR_TO_MAP_VALUE;
-	__mark_reg_known_zero(&callee->regs[BPF_REG_3]);
-	callee->regs[BPF_REG_3].map_ptr = map_ptr;
-	callee->regs[BPF_REG_3].map_uid = map_uid;
+	mark_map_callback_reg(&callee->regs[BPF_REG_1], &caller->regs[BPF_REG_3], CONST_PTR_TO_MAP);
+	mark_map_callback_reg(&callee->regs[BPF_REG_2], &caller->regs[BPF_REG_3], PTR_TO_MAP_KEY);
+	mark_map_callback_reg(&callee->regs[BPF_REG_3], &caller->regs[BPF_REG_3], PTR_TO_MAP_VALUE);
 	callee->regs[BPF_REG_3].id = ++env->id_gen;
 
 	/* unused */
@@ -11707,26 +11682,12 @@ static int set_rcu_callback_state(struct bpf_verifier_env *env,
 				  struct bpf_func_state *callee,
 				  int insn_idx)
 {
-	struct bpf_map *map_ptr = caller->regs[BPF_REG_2].map_ptr;
-	u32 map_uid = caller->regs[BPF_REG_2].map_uid;
-
 	/*
 	 * callback_fn(struct bpf_map *map, void *key, void *value);
 	 */
-	callee->regs[BPF_REG_1].type = CONST_PTR_TO_MAP;
-	__mark_reg_known_zero(&callee->regs[BPF_REG_1]);
-	callee->regs[BPF_REG_1].map_ptr = map_ptr;
-	callee->regs[BPF_REG_1].map_uid = map_uid;
-
-	callee->regs[BPF_REG_2].type = PTR_TO_MAP_KEY;
-	__mark_reg_known_zero(&callee->regs[BPF_REG_2]);
-	callee->regs[BPF_REG_2].map_ptr = map_ptr;
-	callee->regs[BPF_REG_2].map_uid = map_uid;
-
-	callee->regs[BPF_REG_3].type = PTR_TO_MAP_VALUE;
-	__mark_reg_known_zero(&callee->regs[BPF_REG_3]);
-	callee->regs[BPF_REG_3].map_ptr = map_ptr;
-	callee->regs[BPF_REG_3].map_uid = map_uid;
+	mark_map_callback_reg(&callee->regs[BPF_REG_1], &caller->regs[BPF_REG_2], CONST_PTR_TO_MAP);
+	mark_map_callback_reg(&callee->regs[BPF_REG_2], &caller->regs[BPF_REG_2], PTR_TO_MAP_KEY);
+	mark_map_callback_reg(&callee->regs[BPF_REG_3], &caller->regs[BPF_REG_2], PTR_TO_MAP_VALUE);
 
 	/* unused */
 	bpf_mark_reg_not_init(env, &callee->regs[BPF_REG_4]);
