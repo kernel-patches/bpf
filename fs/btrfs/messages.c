@@ -132,10 +132,10 @@ void __btrfs_handle_fs_error(struct btrfs_fs_info *fs_info, const char *function
 #endif
 
 	/*
-	 * Special case: if the error is EROFS, and we're already under
-	 * SB_RDONLY, then it is safe here.
+	 * Special case: if the error is EROFS, and we're already read-only,
+	 * then it is safe here.
 	 */
-	if (error == -EROFS && sb_rdonly(sb))
+	if (error == -EROFS && btrfs_fs_rdonly(fs_info))
 		return;
 
 #ifdef CONFIG_PRINTK
@@ -168,7 +168,7 @@ void __btrfs_handle_fs_error(struct btrfs_fs_info *fs_info, const char *function
 	if (!(sb->s_flags & SB_BORN))
 		return;
 
-	if (sb_rdonly(sb))
+	if (btrfs_fs_rdonly(fs_info))
 		return;
 
 	btrfs_discard_stop(fs_info);
