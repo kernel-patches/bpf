@@ -310,3 +310,21 @@ Running tests CI-style
 
 See https://github.com/linux-netdev/nipa/wiki for instructions on how
 to easily run the tests using ``virtme-ng``.
+
+XDP feature test
+===============
+
+``hw/xdp_features.py`` compares the DUT's advertised XDP capabilities with
+packet observations. The endpoints must be directly connected at layer 2.
+The remote helper needs packet-socket privileges and GNU ``timeout``, but
+does not load BPF, attach XDP, or change interface/offload settings.
+Probe checksums are computed in software; TX checksum offload may remain
+at its configured value on both endpoints.
+
+A DUT without advertised native XDP support is skipped. On veth,
+``XDP_TX`` additionally requires an existing native XDP program on the
+peer, because veth only flushes its peer receive ring in that case.
+Without this prerequisite the TX subtest is skipped; the test does not
+change the shared remote endpoint to enable it. Other advertised versus
+observed mismatches are failures, including unsupported features that
+unexpectedly work.

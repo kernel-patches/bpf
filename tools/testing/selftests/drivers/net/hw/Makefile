@@ -51,6 +51,7 @@ TEST_PROGS = \
 	userns_devmem.py \
 	uso.py \
 	vlan.py \
+	xdp_features.py \
 	xdp_metadata.py \
 	xsk_reconfig.py \
 	#
@@ -79,7 +80,7 @@ YNL_GEN_FILES := \
 	toeplitz \
 	$(COND_GEN_FILES) \
 # end of YNL_GEN_FILES
-TEST_GEN_FILES += $(YNL_GEN_FILES)
+TEST_GEN_FILES += $(YNL_GEN_FILES) xdp_features
 TEST_GEN_FILES += $(patsubst %.c,%.o,$(wildcard *.bpf.c))
 
 include ../../../lib.mk
@@ -93,6 +94,18 @@ YNL_GENS := \
 include ../../../net/ynl.mk
 
 include ../../../net/bpf.mk
+
+$(OUTPUT)/xdp_features.bpf.o: xdp_features.h
+
+$(OUTPUT)/xdp_features: CFLAGS += -I$(OUTPUT) -I$(SCRATCH_DIR)/include
+$(OUTPUT)/xdp_features: CFLAGS += -I../../../net/lib
+$(OUTPUT)/xdp_features: LDLIBS += -lelf -lz -lpthread
+$(OUTPUT)/xdp_features: xdp_features.c xdp_features.h \
+			   $(OUTPUT)/xdp_features.skel.h $(BPFOBJ)
+	$(call msg,BINARY,,$@)
+	$(Q)$(CC) $(CFLAGS) $(CPPFLAGS) $(KHDR_INCLUDES) \
+		$(filter %.c %.o,$^) $(BPFOBJ) \
+		$(LDFLAGS) $(LDLIBS) -o $@
 
 ifeq ($(HAS_IOURING_ZCRX),y)
 $(OUTPUT)/iou-zcrx: LDLIBS += -luring -lpthread

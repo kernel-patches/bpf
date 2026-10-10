@@ -29,6 +29,7 @@
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
 
+#include "ksft.h"
 #include "xdp_features.skel.h"
 #include "xdp_features.h"
 
@@ -480,6 +481,7 @@ static int dut_run(struct xdp_features *skel)
 			"Failed creating control socket on device %s\n", env.ifname);
 		return -errno;
 	}
+	ksft_ready();
 
 	/* Allow remote startup and BPF loading on slow test machines. */
 	ctrl_sockfd = -1;
