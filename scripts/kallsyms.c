@@ -338,9 +338,8 @@ static void sort_symbols_by_name(void)
 
 static void write_src(void)
 {
-	unsigned int i, k, off;
+	unsigned int i, k, off, table_size;
 	unsigned int best_idx[256];
-	unsigned int *markers, markers_cnt;
 	char buf[KSYM_NAME_LEN];
 
 	printf("\t.section .rodata, \"a\"\n");
@@ -349,17 +348,10 @@ static void write_src(void)
 	printf("\t.long\t%u\n", table_cnt);
 	printf("\n");
 
-	/* table of offset markers, that give the offset in the compressed stream
-	 * every 256 symbols */
-	markers_cnt = (table_cnt + 255) / 256;
-	markers = xmalloc(sizeof(*markers) * markers_cnt);
-
 	output_label("kallsyms_names");
 	off = 0;
 	for (i = 0; i < table_cnt; i++) {
-		if ((i & 0xFF) == 0)
-			markers[i >> 8] = off;
-		table[i]->seq = i;
+		table[i]->seq = off;
 
 		/* There cannot be any symbol of length zero. */
 		if (table[i]->len == 0) {
@@ -396,18 +388,17 @@ static void write_src(void)
 		 */
 		expand_symbol(table[i]->sym, table[i]->len, buf);
 		strcpy((char *)table[i]->sym, buf);
-		printf("\t/* %s */\n", table[i]->sym);
+		printf("\t/* %d@%d: %s */\n", i, table[i]->seq, table[i]->sym);
 	}
+	table_size = off;
 	printf(".size kallsyms_names, . - kallsyms_names\n");
 	printf("\n");
 
 	output_label("kallsyms_markers");
-	for (i = 0; i < markers_cnt; i++)
-		printf("\t.long\t%u\n", markers[i]);
+	for (i = 0; i < table_cnt; i += 256)
+		printf("\t.long\t%u\n", table[i]->seq);
 	printf(".size kallsyms_markers, . - kallsyms_markers\n");
 	printf("\n");
-
-	free(markers);
 
 	output_label("kallsyms_token_table");
 	off = 0;
@@ -448,13 +439,28 @@ static void write_src(void)
 	printf("\n");
 
 	sort_symbols_by_name();
-	output_label("kallsyms_seqs_of_names");
-	for (i = 0; i < table_cnt; i++)
-		printf("\t.byte 0x%02x, 0x%02x, 0x%02x\t/* %s */\n",
-			(unsigned char)(table[i]->seq >> 16),
-			(unsigned char)(table[i]->seq >> 8),
-			(unsigned char)(table[i]->seq >> 0),
-		       table[i]->sym);
+	if (table_size < (1u << 24)) {
+		output_label("kallsyms_off24_of_names");
+		for (i = 0; i < table_cnt; i++) {
+			printf("\t.byte 0x%02x, 0x%02x, 0x%02x\t/* %s */\n",
+#ifdef CONFIG_CPU_BIG_ENDIAN
+				(unsigned char)(table[i]->seq >> 16),
+				(unsigned char)(table[i]->seq >> 8),
+				(unsigned char)(table[i]->seq >> 0),
+#else
+				(unsigned char)(table[i]->seq >> 0),
+				(unsigned char)(table[i]->seq >> 8),
+				(unsigned char)(table[i]->seq >> 16),
+#endif
+			       table[i]->sym);
+		}
+	} else {
+		output_label("kallsyms_off32_of_names");
+		for (i = 0; i < table_cnt; i++) {
+			printf("\t.long %#04x\t/* %s */\n",
+				table[i]->seq >> 16, table[i]->sym);
+		}
+	}
 	printf("\n");
 }
 
