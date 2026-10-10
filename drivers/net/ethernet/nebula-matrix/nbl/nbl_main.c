@@ -10,6 +10,7 @@
 #include "nbl_include/nbl_include.h"
 #include "nbl_include/nbl_def_channel.h"
 #include "nbl_include/nbl_def_hw.h"
+#include "nbl_include/nbl_def_resource.h"
 #include "nbl_include/nbl_def_common.h"
 #include "nbl_core.h"
 
@@ -27,6 +28,7 @@ struct nbl_adapter *nbl_core_init(struct pci_dev *pdev,
 	adapter->pdev = pdev;
 	common = &adapter->common;
 
+	common->mgt_pf = 0;
 	common->pdev = pdev;
 	common->dev = &pdev->dev;
 	common->has_ctrl = param->caps.has_ctrl;
@@ -42,7 +44,13 @@ struct nbl_adapter *nbl_core_init(struct pci_dev *pdev,
 	ret = nbl_chan_init_common(adapter);
 	if (ret)
 		goto chan_init_fail;
+
+	ret = nbl_res_init_leonis(adapter);
+	if (ret)
+		goto res_init_fail;
 	return adapter;
+res_init_fail:
+	nbl_chan_remove_common(adapter);
 chan_init_fail:
 	nbl_hw_remove_leonis(adapter);
 hw_init_fail:
@@ -51,6 +59,7 @@ hw_init_fail:
 
 void nbl_core_remove(struct nbl_adapter *adapter)
 {
+	nbl_res_remove_leonis(adapter);
 	nbl_chan_remove_common(adapter);
 	nbl_hw_remove_leonis(adapter);
 }
