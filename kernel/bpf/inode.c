@@ -119,8 +119,24 @@ static const struct inode_operations bpf_symlink_iops;
 static const struct inode_operations bpf_prog_iops = {
 	.listxattr	= bpf_fs_listxattr,
 };
+
+static int bpf_map_setattr(struct mnt_idmap *idmap, struct dentry *dentry,
+			   struct iattr *attr)
+{
+	struct inode *inode = d_inode(dentry);
+	struct bpf_map *map = inode->i_private;
+
+	if (map->map_type == BPF_MAP_TYPE_ARENA &&
+	    (map->map_flags & BPF_F_ARENA_EXPORT) &&
+	    (attr->ia_valid & ATTR_SIZE) && attr->ia_size != i_size_read(inode))
+		return -EINVAL;
+
+	return simple_setattr(idmap, dentry, attr);
+}
+
 static const struct inode_operations bpf_map_iops  = {
 	.listxattr	= bpf_fs_listxattr,
+	.setattr	= bpf_map_setattr,
 };
 static const struct inode_operations bpf_link_iops  = {
 	.listxattr	= bpf_fs_listxattr,
@@ -351,6 +367,68 @@ static const struct file_operations bpffs_map_fops = {
 	.release	= bpffs_map_release,
 };
 
+/*
+ * An arena with BPF_F_ARENA_EXPORT pinned in bpffs can serve as a
+ * shared-memory file. The ordinary map FD is an anonymous inode with no
+ * size and cannot be opened by pathname, so keep the pin's inode and
+ * forward mmap to the map FD implementation. The pinned file uses ordinary
+ * address selection so QEMU can map the pages at another virtual address.
+ */
+static int bpffs_arena_open(struct inode *inode, struct file *file)
+{
+	struct bpf_map *map = inode->i_private;
+	int err;
+
+	err = security_bpf_map(map, file->f_mode);
+	if (err)
+		return err;
+	bpf_map_inc_with_uref(map);
+	file->private_data = map;
+
+	return 0;
+}
+
+static int bpffs_arena_mmap(struct file *file, struct vm_area_struct *vma)
+{
+	/*
+	 * Generic mmap clears VM_SHARED for O_RDONLY files, but VM_MAYSHARE
+	 * still distinguishes shared mappings from private ones. Restore
+	 * VM_SHARED for the map mmap path without granting VM_MAYWRITE.
+	 */
+	if (!(file->f_mode & FMODE_WRITE) && (vma->vm_flags & VM_MAYSHARE))
+		vm_flags_set(vma, VM_SHARED);
+
+	return bpf_map_fops.mmap(file, vma);
+}
+
+static int bpffs_arena_release(struct inode *inode, struct file *file)
+{
+	return bpf_map_fops.release(inode, file);
+}
+
+static unsigned long bpffs_arena_get_unmapped_area(struct file *file,
+						 unsigned long addr,
+						 unsigned long len,
+						 unsigned long pgoff,
+						 unsigned long flags)
+{
+	return bpf_map_fops.get_unmapped_area(file, addr, len, pgoff, flags);
+}
+
+static loff_t bpffs_arena_llseek(struct file *file, loff_t offset, int whence)
+{
+	return fixed_size_llseek(file, offset, whence, i_size_read(file_inode(file)));
+}
+
+static const struct file_operations bpffs_arena_fops = {
+	.open		= bpffs_arena_open,
+	.llseek		= bpffs_arena_llseek,
+	.fsync		= noop_fsync,
+	.release	= bpffs_arena_release,
+	.mmap		= bpffs_arena_mmap,
+	.get_unmapped_area = bpffs_arena_get_unmapped_area,
+};
+
 static int bpffs_obj_open(struct inode *inode, struct file *file)
 {
 	return -EIO;
@@ -362,7 +440,7 @@ static const struct file_operations bpffs_obj_fops = {
 
 static int bpf_mkobj_ops(struct dentry *dentry, umode_t mode, void *raw,
 			 const struct inode_operations *iops,
-			 const struct file_operations *fops)
+			 const struct file_operations *fops, loff_t size)
 {
 	struct inode *dir = dentry->d_parent->d_inode;
 	struct inode *inode;
@@ -382,6 +460,7 @@ static int bpf_mkobj_ops(struct dentry *dentry, umode_t mode, void *raw,
 	inode->i_op = iops;
 	inode->i_fop = fops;
 	inode->i_private = raw;
+	i_size_write(inode, size);
 
 	bpf_dentry_finalize(dentry, inode, dir);
 	return 0;
@@ -390,16 +469,20 @@ static int bpf_mkobj_ops(struct dentry *dentry, umode_t mode, void *raw,
 static int bpf_mkprog(struct dentry *dentry, umode_t mode, void *arg)
 {
 	return bpf_mkobj_ops(dentry, mode, arg, &bpf_prog_iops,
-			     &bpffs_obj_fops);
+			     &bpffs_obj_fops, 0);
 }
 
 static int bpf_mkmap(struct dentry *dentry, umode_t mode, void *arg)
 {
 	struct bpf_map *map = arg;
+	bool shared_arena = map->map_type == BPF_MAP_TYPE_ARENA &&
+			    (map->map_flags & BPF_F_ARENA_EXPORT);
 
 	return bpf_mkobj_ops(dentry, mode, arg, &bpf_map_iops,
-			     bpf_map_support_seq_show(map) ?
-			     &bpffs_map_fops : &bpffs_obj_fops);
+			    shared_arena ? &bpffs_arena_fops :
+			    bpf_map_support_seq_show(map) ?
+			    &bpffs_map_fops : &bpffs_obj_fops,
+			    shared_arena ? (loff_t)map->max_entries * PAGE_SIZE : 0);
 }
 
 static int bpf_mklink(struct dentry *dentry, umode_t mode, void *arg)
@@ -408,7 +491,7 @@ static int bpf_mklink(struct dentry *dentry, umode_t mode, void *arg)
 
 	return bpf_mkobj_ops(dentry, mode, arg, &bpf_link_iops,
 			     bpf_link_is_iter(link) ?
-			     &bpf_iter_fops : &bpffs_obj_fops);
+			     &bpf_iter_fops : &bpffs_obj_fops, 0);
 }
 
 static struct dentry *
@@ -483,7 +566,7 @@ static int bpf_iter_link_pin_kernel(struct dentry *parent,
 	if (IS_ERR(dentry))
 		return PTR_ERR(dentry);
 	ret = bpf_mkobj_ops(dentry, mode, link, &bpf_link_iops,
-			    &bpf_iter_fops);
+			    &bpf_iter_fops, 0);
 	simple_done_creating(dentry);
 	return ret;
 }
