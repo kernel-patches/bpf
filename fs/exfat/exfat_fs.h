@@ -123,6 +123,7 @@ enum {
 
 /* Superblock flags */
 #define EXFAT_FLAGS_SHUTDOWN	1
+#define EXFAT_FLAGS_EMERGENCY_RO	2	/* read-only after an error */
 
 struct exfat_dentry_namebuf {
 	char *lfn;
@@ -373,6 +374,24 @@ static inline bool exfat_advance_zeroed_size(struct exfat_inode_info *ei,
 static inline int exfat_forced_shutdown(struct super_block *sb)
 {
 	return test_bit(EXFAT_FLAGS_SHUTDOWN, &EXFAT_SB(sb)->s_exfat_flags);
+}
+
+static inline int exfat_emergency_ro(struct super_block *sb)
+{
+	return test_bit(EXFAT_FLAGS_EMERGENCY_RO, &EXFAT_SB(sb)->s_exfat_flags);
+}
+
+/*
+ * Modifications are refused after a forced shutdown (-EIO) and after an error
+ * with errors=remount-ro (-EROFS).
+ */
+static inline int exfat_emergency_state(struct super_block *sb)
+{
+	if (unlikely(exfat_forced_shutdown(sb)))
+		return -EIO;
+	if (unlikely(exfat_emergency_ro(sb)))
+		return -EROFS;
+	return 0;
 }
 
 /*

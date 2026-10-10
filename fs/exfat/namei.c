@@ -562,8 +562,9 @@ static int exfat_create(const struct mnt_idmap *idmap, struct inode *dir,
 	int err;
 	loff_t size = i_size_read(dir);
 
-	if (unlikely(exfat_forced_shutdown(sb)))
-		return -EIO;
+	err = exfat_emergency_state(sb);
+	if (unlikely(err))
+		return err;
 
 	mutex_lock(&EXFAT_SB(sb)->s_lock);
 	exfat_set_volume_dirty(sb);
@@ -783,8 +784,9 @@ static int exfat_unlink(struct inode *dir, struct dentry *dentry)
 	struct exfat_entry_set_cache es;
 	int err = 0;
 
-	if (unlikely(exfat_forced_shutdown(sb)))
-		return -EIO;
+	err = exfat_emergency_state(sb);
+	if (unlikely(err))
+		return err;
 
 	mutex_lock(&EXFAT_SB(sb)->s_lock);
 	if (ei->dir.dir == DIR_DELETED) {
@@ -836,8 +838,9 @@ static struct dentry *exfat_mkdir(const struct mnt_idmap *idmap, struct inode *d
 	int err;
 	loff_t size = i_size_read(dir);
 
-	if (unlikely(exfat_forced_shutdown(sb)))
-		return ERR_PTR(-EIO);
+	err = exfat_emergency_state(sb);
+	if (unlikely(err))
+		return ERR_PTR(err);
 
 	mutex_lock(&EXFAT_SB(sb)->s_lock);
 	exfat_set_volume_dirty(sb);
@@ -927,8 +930,9 @@ static int exfat_rmdir(struct inode *dir, struct dentry *dentry)
 	struct exfat_entry_set_cache es;
 	int err;
 
-	if (unlikely(exfat_forced_shutdown(sb)))
-		return -EIO;
+	err = exfat_emergency_state(sb);
+	if (unlikely(err))
+		return err;
 
 	mutex_lock(&EXFAT_SB(inode->i_sb)->s_lock);
 
@@ -1010,9 +1014,6 @@ static int exfat_rename_file(struct inode *parent_inode,
 	struct exfat_entry_set_cache old_es, new_es;
 	int sync = IS_DIRSYNC(parent_inode);
 	unsigned int num_extra_entries, num_total_entries;
-
-	if (unlikely(exfat_forced_shutdown(sb)))
-		return -EIO;
 
 	num_new_entries = exfat_calc_num_entries(p_uniname);
 	if (num_new_entries < 0)
@@ -1282,6 +1283,10 @@ static int exfat_rename(const struct mnt_idmap *idmap,
 	 */
 	if (flags & ~RENAME_NOREPLACE)
 		return -EINVAL;
+
+	err = exfat_emergency_state(sb);
+	if (unlikely(err))
+		return err;
 
 	mutex_lock(&EXFAT_SB(sb)->s_lock);
 	old_inode = old_dentry->d_inode;
