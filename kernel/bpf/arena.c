@@ -283,7 +283,8 @@ static struct bpf_map *arena_map_alloc(union bpf_attr *attr)
 	    /* BPF_F_MMAPABLE must be set */
 	    !(attr->map_flags & BPF_F_MMAPABLE) ||
 	    /* No unsupported flags present */
-	    (attr->map_flags & ~(BPF_F_SEGV_ON_FAULT | BPF_F_MMAPABLE | BPF_F_NO_USER_CONV)))
+	    (attr->map_flags & ~(BPF_F_SEGV_ON_FAULT | BPF_F_MMAPABLE |
+				 BPF_F_NO_USER_CONV | BPF_F_ARENA_NO_FREE)))
 		return ERR_PTR(-EINVAL);
 
 	if (attr->map_extra & ~PAGE_MASK)
@@ -1134,7 +1135,8 @@ __bpf_kfunc void bpf_arena_free_pages(void *p__map, void *ptr__ign, u32 page_cnt
 	struct bpf_map *map = p__map;
 	struct bpf_arena *arena = container_of(map, struct bpf_arena, map);
 
-	if (map->map_type != BPF_MAP_TYPE_ARENA || !page_cnt || !ptr__ign)
+	if (map->map_type != BPF_MAP_TYPE_ARENA || !page_cnt || !ptr__ign ||
+	    (map->map_flags & BPF_F_ARENA_NO_FREE))
 		return;
 	arena_free_pages(arena, (long)ptr__ign, page_cnt, true);
 }
@@ -1144,7 +1146,8 @@ void bpf_arena_free_pages_non_sleepable(void *p__map, void *ptr__ign, u32 page_c
 	struct bpf_map *map = p__map;
 	struct bpf_arena *arena = container_of(map, struct bpf_arena, map);
 
-	if (map->map_type != BPF_MAP_TYPE_ARENA || !page_cnt || !ptr__ign)
+	if (map->map_type != BPF_MAP_TYPE_ARENA || !page_cnt || !ptr__ign ||
+	    (map->map_flags & BPF_F_ARENA_NO_FREE))
 		return;
 	arena_free_pages(arena, (long)ptr__ign, page_cnt, false);
 }
