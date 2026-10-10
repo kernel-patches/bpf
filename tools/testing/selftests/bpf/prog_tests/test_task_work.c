@@ -3,9 +3,11 @@
 #include <test_progs.h>
 #include <string.h>
 #include <stdio.h>
+#include <fcntl.h>
 #include "task_work.skel.h"
 #include "task_work_fail.skel.h"
 #include "task_work_race.skel.h"
+#include "task_work_busy.skel.h"
 #include <linux/bpf.h>
 #include <linux/perf_event.h>
 #include <sys/syscall.h>
@@ -435,4 +437,564 @@ stop:
 		pthread_join(target, NULL);
 cleanup:
 	task_work_race__destroy(skel);
+}
+
+#define TASK_WORK_BUSY_ROUNDS		32
+#define TASK_WORK_BUSY_MAX_ATTEMPTS	96
+#define TASK_WORK_BUSY_POLL_US		100
+#define TASK_WORK_BUSY_POLL_ITERS	20000
+#define TASK_WORK_BUSY_START_POLL_ITERS	50000
+#define TASK_WORK_BUSY_GAP_US		10000
+/* Must match BUSY_WAIT_ITERS in progs/task_work_busy.c. */
+#define TASK_WORK_BUSY_WAIT_ITERS	1000000LL
+
+/* Must match progs/task_work_busy.c. */
+enum task_work_busy_status {
+	BUSY_ARM_SEQ,
+	/*
+	 * High 32 bits hold the sequence.  BUSY_WINDOW low bits: 1 open,
+	 * 2 the in-window attempt was seen before the handler returned,
+	 * 3 the wait bound was reached without it.  Result slots: signed
+	 * error in the low 32 bits.
+	 */
+	BUSY_WINDOW,
+	BUSY_ACK,
+	BUSY_GEN1_RESULT,
+	BUSY_GEN2_RESULT,
+	BUSY_CB1_SEQ,
+	BUSY_CB2_COUNT,
+	BUSY_CB2_SEQ,
+	BUSY_RECOVER_SEQ,
+	BUSY_LAST_WAIT_NS,
+	BUSY_LAST_WAIT_LOOPS,
+	BUSY_RT_DETECTED,
+	BUSY_STATUS_MAX,
+};
+
+/* Must match progs/task_work_busy.c. */
+enum task_work_busy_stat {
+	BUSY_STAT_TOTAL,
+	BUSY_STAT_FILTERED,
+	BUSY_STAT_WINDOW,
+	BUSY_STAT_ACK_SEEN,
+	BUSY_STAT_TIMEOUT,
+	BUSY_STAT_G1_RETRY,
+	BUSY_STAT_G2_RETRY,
+	BUSY_STAT_MAX,
+};
+
+struct task_work_busy_value {
+	__u32 seq;
+	char data[60];
+	struct bpf_task_work tw;
+};
+
+enum task_work_busy_attempt {
+	TWB_VALID,
+	TWB_MISSED,
+	TWB_RT,
+	TWB_HARD_FAIL,
+};
+
+static const char *twb_attempt_name(enum task_work_busy_attempt r)
+{
+	switch (r) {
+	case TWB_VALID:
+		return "valid";
+	case TWB_MISSED:
+		return "missed";
+	case TWB_RT:
+		return "rt";
+	default:
+		return "fail";
+	}
+}
+
+/*
+ * Positive confirmation of PREEMPT_RT only: not every RT kernel provides
+ * this file, and its absence proves nothing.  The definitive check for
+ * such kernels is the irq_work thread observation inside the BPF program.
+ */
+static bool task_work_busy_rt_confirmed(void)
+{
+	char buf[2] = {};
+	int fd, n;
+
+	fd = open("/sys/kernel/realtime", O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return false;
+	n = read(fd, buf, sizeof(buf) - 1);
+	close(fd);
+	return n > 0 && buf[0] == '1';
+}
+
+static int task_work_busy_status(struct task_work_busy *skel, int idx,
+				 __s64 *value)
+{
+	return bpf_map_lookup_elem(bpf_map__fd(skel->maps.status), &idx,
+				   value);
+}
+
+static int task_work_busy_set_status(struct task_work_busy *skel, int idx,
+				     __s64 value)
+{
+	return bpf_map_update_elem(bpf_map__fd(skel->maps.status), &idx,
+				   &value, BPF_ANY);
+}
+
+static int task_work_busy_stat(struct task_work_busy *skel, int idx,
+			       __u64 *value)
+{
+	return bpf_map_lookup_elem(bpf_map__fd(skel->maps.stats), &idx,
+				   value);
+}
+
+/*
+ * Wait until the high 32 bits of slot idx hold seq; return the signed
+ * low 32 bits through err.
+ */
+static int task_work_busy_wait_seq(struct task_work_busy *skel, int idx,
+				   __u32 seq, __s32 *err)
+{
+	int i;
+
+	for (i = 0; i < TASK_WORK_BUSY_POLL_ITERS; i++) {
+		__s64 value = 0;
+
+		if (!task_work_busy_status(skel, idx, &value) &&
+		    (__u32)((__u64)value >> 32) == seq) {
+			*err = (__s32)value;
+			return 0;
+		}
+		usleep(TASK_WORK_BUSY_POLL_US);
+	}
+	return -ETIMEDOUT;
+}
+
+static int task_work_busy_wait_value(struct task_work_busy *skel, int idx,
+				     __s64 want)
+{
+	int i;
+
+	for (i = 0; i < TASK_WORK_BUSY_POLL_ITERS; i++) {
+		__s64 value = 0;
+
+		if (!task_work_busy_status(skel, idx, &value) && value == want)
+			return 0;
+		usleep(TASK_WORK_BUSY_POLL_US);
+	}
+	return -ETIMEDOUT;
+}
+
+/* Wait until the window slot reports a final state (2 or 3) for seq. */
+static int task_work_busy_wait_window(struct task_work_busy *skel, __u32 seq,
+				      __s64 *window)
+{
+	int i;
+
+	for (i = 0; i < TASK_WORK_BUSY_POLL_ITERS; i++) {
+		__s64 value = 0;
+
+		if (!task_work_busy_status(skel, BUSY_WINDOW, &value) &&
+		    (__u32)((__u64)value >> 32) == seq &&
+		    (__u32)value >= 2) {
+			*window = value;
+			return 0;
+		}
+		usleep(TASK_WORK_BUSY_POLL_US);
+	}
+	return -ETIMEDOUT;
+}
+
+/*
+ * The fexit program publishes the wait diagnostics before the final
+ * window state; the slots were zeroed before arming and are written only
+ * once per attempt.  Wait for both fields instead of assuming propagation
+ * order between independent slots.
+ */
+static int task_work_busy_wait_diag(struct task_work_busy *skel,
+				    __s64 *wait_ns, __s64 *loops)
+{
+	int i;
+
+	for (i = 0; i < TASK_WORK_BUSY_POLL_ITERS; i++) {
+		__s64 ns = 0, lp = 0;
+
+		if (task_work_busy_status(skel, BUSY_LAST_WAIT_NS, &ns) ||
+		    task_work_busy_status(skel, BUSY_LAST_WAIT_LOOPS, &lp))
+			return -errno;
+		if (ns > 0 && lp >= 1 && lp <= TASK_WORK_BUSY_WAIT_ITERS) {
+			*wait_ns = ns;
+			*loops = lp;
+			return 0;
+		}
+		usleep(TASK_WORK_BUSY_POLL_US);
+	}
+	return -ETIMEDOUT;
+}
+
+static int task_work_busy_prepare_elem(struct task_work_busy *skel, int key)
+{
+	struct task_work_busy_value value = {};
+
+	if (!bpf_map_update_elem(bpf_map__fd(skel->maps.hmap), &key, &value,
+				 BPF_NOEXIST))
+		return 0;
+	return -errno;
+}
+
+static int task_work_busy_reset(struct task_work_busy *skel)
+{
+	static const int zeroed[] = {
+		BUSY_WINDOW, BUSY_ACK, BUSY_GEN1_RESULT, BUSY_GEN2_RESULT,
+		BUSY_CB1_SEQ, BUSY_CB2_COUNT, BUSY_CB2_SEQ, BUSY_RECOVER_SEQ,
+		BUSY_LAST_WAIT_NS, BUSY_LAST_WAIT_LOOPS,
+	};
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(zeroed); i++)
+		if (task_work_busy_set_status(skel, zeroed[i], 0))
+			return -errno;
+	return 0;
+}
+
+/*
+ * join waits for clear_child_tid, which is cleared before exit_task_work().
+ * PID lookup stops finding the worker only after its exit task_work has run.
+ * Probe with signal 0; no signal is delivered.  Do not create new workers
+ * until both old TIDs have disappeared.
+ */
+static int task_work_busy_wait_exit(int tid)
+{
+	int i;
+
+	for (i = 0; i < TASK_WORK_BUSY_POLL_ITERS; i++) {
+		if (syscall(__NR_tgkill, getpid(), tid, 0)) {
+			if (errno == ESRCH)
+				return 0;
+			return -errno;
+		}
+		usleep(TASK_WORK_BUSY_POLL_US);
+	}
+	return -ETIMEDOUT;
+}
+
+/*
+ * Run one attempt on dedicated workers and report its outcome.  The
+ * workers are stopped, joined and waited out of PID lookup before another
+ * attempt can reset the shared state.  join alone does not wait for their
+ * exit task_work to finish.
+ */
+static enum task_work_busy_attempt
+task_work_busy_run_attempt(struct task_work_busy *skel, int seq,
+			   int trigger_cpu, int target_cpu, __s64 *out_wait_ns)
+{
+	struct task_work_race_ctx ctx = {};
+	struct task_work_race_thread_arg trigger_arg = {
+		.ctx = &ctx,
+		.cpu = trigger_cpu,
+		.tid = &ctx.trigger_tid,
+	};
+	struct task_work_race_thread_arg target_arg = {
+		.ctx = &ctx,
+		.cpu = target_cpu,
+		.tid = &ctx.target_tid,
+	};
+	enum task_work_busy_attempt result = TWB_HARD_FAIL;
+	pthread_t trigger, target;
+	bool trigger_started = false, target_started = false;
+	__s64 window = 0, wait_ns = 0, loops = 0, count = -1, rt = 0;
+	__s32 res = 0;
+	int err, i;
+
+	*out_wait_ns = 0;
+	/* Do not let a reused TID match the previous attempt's filter. */
+	skel->bss->trigger_tid = 0;
+	skel->bss->target_tid = 0;
+
+	/* Clear old state before enabling workers that can read it. */
+	if (!ASSERT_OK(task_work_busy_prepare_elem(skel, seq), "prepare elem"))
+		goto out;
+	if (!ASSERT_OK(task_work_busy_reset(skel), "reset slots"))
+		goto out;
+
+	err = pthread_create(&target, NULL, task_work_race_worker, &target_arg);
+	if (err) {
+		ASSERT_OK(err, "pthread_create target");
+		goto out;
+	}
+	target_started = true;
+	err = pthread_create(&trigger, NULL, task_work_race_worker, &trigger_arg);
+	if (err) {
+		ASSERT_OK(err, "pthread_create trigger");
+		goto out;
+	}
+	trigger_started = true;
+
+	for (i = 0; i < TASK_WORK_BUSY_START_POLL_ITERS; i++) {
+		if (__atomic_load_n(&ctx.trigger_tid, __ATOMIC_ACQUIRE) &&
+		    __atomic_load_n(&ctx.target_tid, __ATOMIC_ACQUIRE))
+			break;
+		usleep(TASK_WORK_BUSY_POLL_US);
+	}
+	if (!ASSERT_TRUE(__atomic_load_n(&ctx.trigger_tid, __ATOMIC_ACQUIRE) &&
+			 __atomic_load_n(&ctx.target_tid, __ATOMIC_ACQUIRE),
+			 "thread start"))
+		goto out;
+	if (!ASSERT_OK(__atomic_load_n(&ctx.setup_err, __ATOMIC_ACQUIRE),
+		       "thread affinity"))
+		goto out;
+
+	skel->bss->trigger_tid = __atomic_load_n(&ctx.trigger_tid, __ATOMIC_ACQUIRE);
+	skel->bss->target_tid = __atomic_load_n(&ctx.target_tid, __ATOMIC_ACQUIRE);
+
+	/* Arm last, once this attempt's value, slots and TIDs are in place. */
+	if (!ASSERT_OK(task_work_busy_set_status(skel, BUSY_ARM_SEQ, seq),
+		       "arm"))
+		goto out;
+
+	/*
+	 * First-round scheduling; transient -EBUSY is retried inside the
+	 * BPF program without publishing a result.
+	 */
+	err = task_work_busy_wait_seq(skel, BUSY_GEN1_RESULT, seq, &res);
+	if (!ASSERT_OK(err, "gen1 result"))
+		goto out;
+	if (!ASSERT_OK(res, "gen1 schedule")) {
+		fprintf(stderr, "attempt %d: gen1 failed: %d\n", seq, res);
+		goto out;
+	}
+
+	err = task_work_busy_wait_window(skel, seq, &window);
+	if (err) {
+		/*
+		 * The window never reached a final state.  On PREEMPT_RT
+		 * the scheduling handler runs in the irq_work thread, the
+		 * fexit filter records that, and no window can open: a
+		 * definitive skip instead of a failure.
+		 */
+		if (!task_work_busy_status(skel, BUSY_RT_DETECTED, &rt) && rt) {
+			result = TWB_RT;
+			goto out;
+		}
+		ASSERT_OK(err, "window close");
+		goto out;
+	}
+	if (!ASSERT_OK(task_work_busy_wait_diag(skel, &wait_ns, &loops),
+		       "wait diagnostics"))
+		goto out;
+
+	if ((__u32)window == 3) {
+		/*
+		 * The attempt did not arrive inside the wait bound.  The
+		 * elapsed time and loop count are diagnostics only; count
+		 * the miss and retry with a fresh attempt.
+		 */
+		result = TWB_MISSED;
+		goto out;
+	}
+
+	/*
+	 * Valid window: the handler saw this sequence's attempt before
+	 * returning, so the attempt ran while the scheduling irq_work was
+	 * still BUSY.  The elapsed time is a diagnostic only: host vCPU
+	 * preemption can stretch wall-clock time without affecting the
+	 * gate behavior under test.
+	 */
+	if (!ASSERT_OK(task_work_busy_wait_value(skel, BUSY_CB1_SEQ, seq),
+		       "gen1 callback"))
+		goto out;
+
+	err = task_work_busy_wait_seq(skel, BUSY_ACK, seq, &res);
+	if (!ASSERT_OK(err, "in-window attempt"))
+		goto out;
+	if (res != -EBUSY) {
+		fprintf(stderr,
+			"attempt %d: in-window reuse %s (%d), expected -EBUSY, wait_ns %lld\n",
+			seq, res == 0 ? "accepted" : "failed", res,
+			(long long)wait_ns);
+		ASSERT_EQ(res, -EBUSY, "in-window BUSY gate rejection");
+		goto out;
+	}
+
+	/*
+	 * The window was released; retry until BUSY clears.  The second
+	 * callback must then run exactly once.
+	 */
+	if (!ASSERT_OK(task_work_busy_set_status(skel, BUSY_RECOVER_SEQ, seq),
+		       "enable recovery"))
+		goto out;
+	err = task_work_busy_wait_seq(skel, BUSY_GEN2_RESULT, seq, &res);
+	if (!ASSERT_OK(err, "recovery result"))
+		goto out;
+	if (!ASSERT_OK(res, "recovery schedule")) {
+		fprintf(stderr, "attempt %d: recovery failed: %d\n", seq, res);
+		goto out;
+	}
+	if (!ASSERT_OK(task_work_busy_wait_value(skel, BUSY_CB2_SEQ, seq),
+		       "gen2 callback"))
+		goto out;
+	result = TWB_VALID;
+out:
+	__atomic_store_n(&ctx.stop, 1, __ATOMIC_RELEASE);
+	if (trigger_started &&
+	    (!ASSERT_OK(pthread_join(trigger, NULL), "trigger join") ||
+	     !ASSERT_OK(task_work_busy_wait_exit(ctx.trigger_tid), "trigger exit")))
+		result = TWB_HARD_FAIL;
+	if (target_started &&
+	    (!ASSERT_OK(pthread_join(target, NULL), "target join") ||
+	     !ASSERT_OK(task_work_busy_wait_exit(ctx.target_tid), "target exit")))
+		result = TWB_HARD_FAIL;
+	/* Both workers have passed exit_task_work; the count is now stable. */
+	if (result == TWB_VALID) {
+		if (!ASSERT_OK(task_work_busy_status(skel, BUSY_CB2_COUNT, &count),
+			       "cb2 count")) {
+			result = TWB_HARD_FAIL;
+		} else if (!ASSERT_EQ(count, 1, "gen2 callback exactly once")) {
+			fprintf(stderr, "attempt %d: gen2 callback count %lld\n",
+				seq, (long long)count);
+			result = TWB_HARD_FAIL;
+		}
+	}
+	*out_wait_ns = wait_ns;
+	fprintf(stderr, "attempt %d: %s (window %u wait_ns %lld loops %lld)\n",
+		seq, twb_attempt_name(result), (__u32)window,
+		(long long)wait_ns, (long long)loops);
+	return result;
+}
+
+void serial_test_task_work_busy(void)
+{
+	struct task_work_busy *skel;
+	struct bpf_link *link_tp = NULL, *link_fexit = NULL;
+	cpu_set_t allowed;
+	int cpu, cpu_count = 0, trigger_cpu = -1, target_cpu = -1;
+	int attempt, attempts_started = 0, valid = 0, missed = 0;
+	bool hard_fail = false;
+	__s64 max_wait_ns = 0;
+	__u64 stat_window = 0, stat_total = 0, stat_filtered = 0;
+	__u64 stat_g1r = 0, stat_g2r = 0;
+
+	if (task_work_busy_rt_confirmed()) {
+		printf("%s:SKIP:PREEMPT_RT runs irq_work in a kernel thread\n",
+		       __func__);
+		test__skip();
+		return;
+	}
+	if (sched_getaffinity(0, sizeof(allowed), &allowed)) {
+		ASSERT_OK(-errno, "sched_getaffinity");
+		return;
+	}
+	for (cpu = 0; cpu < CPU_SETSIZE && cpu_count < 2; cpu++) {
+		if (!CPU_ISSET(cpu, &allowed))
+			continue;
+		if (!cpu_count)
+			trigger_cpu = cpu;
+		else
+			target_cpu = cpu;
+		cpu_count++;
+	}
+	if (cpu_count < 2) {
+		printf("%s:SKIP:need two CPUs in the process affinity mask\n",
+		       __func__);
+		test__skip();
+		return;
+	}
+
+	skel = task_work_busy__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "open_and_load"))
+		return;
+
+	link_tp = bpf_program__attach_tracepoint(skel->progs.busy_sched_work,
+						 "syscalls",
+						 "sys_enter_getppid");
+	if (!ASSERT_OK_PTR(link_tp, "attach tracepoint"))
+		goto cleanup;
+
+	link_fexit = bpf_program__attach_trace(skel->progs.busy_fexit_task_work_add);
+	if (!ASSERT_OK_PTR(link_fexit, "attach fexit"))
+		goto cleanup;
+
+	for (attempt = 1;
+	     attempt <= TASK_WORK_BUSY_MAX_ATTEMPTS &&
+	     valid < TASK_WORK_BUSY_ROUNDS;
+	     attempt++) {
+		enum task_work_busy_attempt res;
+		__s64 wait_ns = 0;
+
+		attempts_started = attempt;
+		res = task_work_busy_run_attempt(skel, attempt, trigger_cpu,
+						 target_cpu, &wait_ns);
+		switch (res) {
+		case TWB_VALID:
+			valid++;
+			if (wait_ns > max_wait_ns)
+				max_wait_ns = wait_ns;
+			break;
+		case TWB_MISSED:
+			missed++;
+			break;
+		case TWB_RT:
+			printf("%s:SKIP:PREEMPT_RT detected (irq_work thread ran the handler)\n",
+			       __func__);
+			test__skip();
+			goto cleanup;
+		case TWB_HARD_FAIL:
+			hard_fail = true;
+			break;
+		}
+		if (hard_fail)
+			break;
+		/* Pacing only; worker disappearance provides the lifecycle boundary. */
+		usleep(TASK_WORK_BUSY_GAP_US);
+	}
+
+	if (!ASSERT_OK(task_work_busy_stat(skel, BUSY_STAT_WINDOW, &stat_window),
+		       "window stat") ||
+	    !ASSERT_OK(task_work_busy_stat(skel, BUSY_STAT_TOTAL, &stat_total),
+		       "total stat") ||
+	    !ASSERT_OK(task_work_busy_stat(skel, BUSY_STAT_FILTERED, &stat_filtered),
+		       "filtered stat") ||
+	    !ASSERT_OK(task_work_busy_stat(skel, BUSY_STAT_G1_RETRY, &stat_g1r),
+		       "gen1 retry stat") ||
+	    !ASSERT_OK(task_work_busy_stat(skel, BUSY_STAT_G2_RETRY, &stat_g2r),
+		       "gen2 retry stat"))
+		goto cleanup;
+	fprintf(stderr,
+		"task_work_busy: %d/%d valid, %d missed, %d attempts, max_wait %lld ns, windows %llu, adds %llu, filtered %llu, g1_retries %llu, g2_retries %llu\n",
+		valid, TASK_WORK_BUSY_ROUNDS, missed, attempts_started,
+		(long long)max_wait_ns, (unsigned long long)stat_window,
+		(unsigned long long)stat_total,
+		(unsigned long long)stat_filtered,
+		(unsigned long long)stat_g1r, (unsigned long long)stat_g2r);
+
+	/*
+	 * Consistency and coverage assertions only make sense when no hard
+	 * failure aborted the loop; after a hard failure keep the primary
+	 * reason instead of deriving more assertion noise from it.
+	 */
+	if (!hard_fail) {
+		if (!ASSERT_EQ(stat_window, (__u64)(valid + missed),
+			       "window accounting"))
+			fprintf(stderr,
+				"windows entered %llu, valid %d, missed %d\n",
+				(unsigned long long)stat_window, valid, missed);
+		if (!ASSERT_GE(stat_total, (__u64)(2 * valid),
+			       "task_work_add calls seen"))
+			fprintf(stderr,
+				"only %llu task_work_add calls for %d valid rounds\n",
+				(unsigned long long)stat_total, valid);
+		if (valid != TASK_WORK_BUSY_ROUNDS)
+			fprintf(stderr,
+				"busy coverage: %d/%d valid, %d missed in %d attempts\n",
+				valid, TASK_WORK_BUSY_ROUNDS, missed,
+				attempts_started);
+		if (!ASSERT_EQ(valid, TASK_WORK_BUSY_ROUNDS,
+			       "valid busy windows"))
+			goto cleanup;
+	}
+cleanup:
+	bpf_link__destroy(link_tp);
+	bpf_link__destroy(link_fexit);
+	task_work_busy__destroy(skel);
 }
