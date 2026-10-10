@@ -1586,8 +1586,14 @@ static int process_sip_request(struct sk_buff *skb, unsigned int protoff,
 	 * router for one of these phones, save the port number from the
 	 * Via: header so that nf_nat_sip can redirect the responses to
 	 * the correct port.
+	 *
+	 * Only honour the Via: port for requests coming from the phone,
+	 * i.e. in the original direction.  The remote peer must not be
+	 * able to pick the destination port of packets delivered to the
+	 * NATed host.
 	 */
-	if (ct_sip_parse_header_uri(ct, *dptr, NULL, *datalen,
+	if (dir == IP_CT_DIR_ORIGINAL &&
+	    ct_sip_parse_header_uri(ct, *dptr, NULL, *datalen,
 				    SIP_HDR_VIA_UDP, NULL, &matchoff,
 				    &matchlen, &addr, &port) > 0 &&
 	    port != ct->tuplehash[dir].tuple.src.u.udp.port &&

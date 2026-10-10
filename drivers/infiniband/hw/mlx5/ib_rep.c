@@ -273,10 +273,34 @@ mlx5_ib_vport_rep_unload(struct mlx5_eswitch_rep *rep)
 	}
 }
 
+static int
+mlx5_ib_vport_uplink_rep_attach_netdev(struct mlx5_core_dev *mdev,
+				       struct mlx5_eswitch_rep *rep)
+{
+	struct mlx5_ib_dev *dev = mlx5_ib_rep_to_dev(rep);
+	struct net_device *ndev;
+	int i;
+
+	/* Shared FDB slave uplinks share the master's IB device. */
+	if (!dev)
+		return 0;
+
+	ndev = mlx5_ib_get_rep_netdev(rep->esw, rep->vport);
+	if (!ndev)
+		return -ENODEV;
+
+	for (i = 0; i < dev->num_ports; i++)
+		if (dev->port[i].rep == rep)
+			return ib_device_set_netdev(&dev->ib_dev, ndev, i + 1);
+
+	return 0;
+}
+
 static const struct mlx5_eswitch_rep_ops rep_ops = {
 	.load = mlx5_ib_vport_rep_load,
 	.unload = mlx5_ib_vport_rep_unload,
 	.get_proto_dev = mlx5_ib_rep_to_dev,
+	.attach_uplink_netdev = mlx5_ib_vport_uplink_rep_attach_netdev,
 };
 
 static void mlx5_ib_register_peer_vport_reps(struct mlx5_core_dev *mdev)

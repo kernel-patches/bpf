@@ -1564,7 +1564,10 @@ static const struct supplier_bindings of_supplier_bindings[] = {
 	{ .parse_prop = parse_backlight, },
 	{ .parse_prop = parse_panel, },
 	{ .parse_prop = parse_msi_parent, },
-	{ .parse_prop = parse_pses, },
+	{
+		.parse_prop = parse_pses,
+		.fwlink_flags = FWLINK_FLAG_IGNORE,
+	},
 	{ .parse_prop = parse_power_supplies, },
 	{ .parse_prop = parse_mmc_pwrseq, },
 	{ .parse_prop = parse_gpio_compat, },

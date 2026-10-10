@@ -376,6 +376,8 @@ err_ip:
 
 static struct inet6_dev *ipv6_add_dev(struct net_device *dev)
 {
+	struct net *net = dev_net(dev);
+	struct neigh_table *tbl;
 	struct inet6_dev *ndev;
 	int err = -ENOMEM;
 
@@ -393,14 +395,15 @@ static struct inet6_dev *ipv6_add_dev(struct net_device *dev)
 	ndev->dev = dev;
 	INIT_LIST_HEAD(&ndev->addr_list);
 	timer_setup(&ndev->rs_timer, addrconf_rs_timer, 0);
-	memcpy(&ndev->cnf, dev_net(dev)->ipv6.devconf_dflt, sizeof(ndev->cnf));
+	memcpy(&ndev->cnf, net->ipv6.devconf_dflt, sizeof(ndev->cnf));
 
 	if (ndev->cnf.stable_secret.initialized)
 		ndev->cnf.addr_gen_mode = IN6_ADDR_GEN_MODE_STABLE_PRIVACY;
 
+	tbl = nd_table(net);
 	ndev->cnf.mtu6 = dev->mtu;
 	ndev->ra_mtu = 0;
-	ndev->nd_parms = neigh_parms_alloc(dev, &nd_tbl);
+	ndev->nd_parms = neigh_parms_alloc(dev, tbl);
 	if (!ndev->nd_parms) {
 		kfree(ndev);
 		return ERR_PTR(err);
@@ -413,7 +416,7 @@ static struct inet6_dev *ipv6_add_dev(struct net_device *dev)
 	if (snmp6_alloc_dev(ndev) < 0) {
 		netdev_dbg(dev, "%s: cannot allocate memory for statistics\n",
 			   __func__);
-		neigh_parms_release(&nd_tbl, ndev->nd_parms);
+		neigh_parms_release(tbl, ndev->nd_parms);
 		netdev_put(dev, &ndev->dev_tracker);
 		kfree(ndev);
 		return ERR_PTR(err);
@@ -481,7 +484,7 @@ static struct inet6_dev *ipv6_add_dev(struct net_device *dev)
 	return ndev;
 
 err_release:
-	neigh_parms_release(&nd_tbl, ndev->nd_parms);
+	neigh_parms_release(tbl, ndev->nd_parms);
 	ndev->dead = 1;
 	in6_dev_finish_destroy(ndev);
 	return ERR_PTR(err);
@@ -1095,13 +1098,13 @@ ipv6_add_addr(struct inet6_dev *idev, struct ifa6_config *cfg,
 		return ERR_PTR(-EADDRNOTAVAIL);
 	}
 
-	if (idev->dead) {
+	if (READ_ONCE(idev->dead)) {
 		NL_SET_ERR_MSG_MOD(extack, "device is going away");
 		err = -ENODEV;
 		goto out;
 	}
 
-	if (idev->cnf.disable_ipv6) {
+	if (READ_ONCE(idev->cnf.disable_ipv6)) {
 		NL_SET_ERR_MSG_MOD(extack, "IPv6 is disabled on this device");
 		err = -EACCES;
 		goto out;
@@ -1159,6 +1162,7 @@ ipv6_add_addr(struct inet6_dev *idev, struct ifa6_config *cfg,
 	ifa->tokenized = false;
 
 	ifa->rt = f6i;
+	ifa->ifpub = cfg->ifpub;
 
 	ifa->idev = idev;
 	in6_dev_hold(idev);
@@ -1168,13 +1172,19 @@ ipv6_add_addr(struct inet6_dev *idev, struct ifa6_config *cfg,
 
 	rcu_read_lock();
 
-	err = ipv6_add_addr_hash(idev->dev, ifa);
+	write_lock_bh(&idev->lock);
+
+	if (idev->dead)
+		err = -ENODEV;
+	else if (READ_ONCE(idev->cnf.disable_ipv6))
+		err = -EACCES;
+	else
+		err = ipv6_add_addr_hash(idev->dev, ifa);
 	if (err < 0) {
+		write_unlock_bh(&idev->lock);
 		rcu_read_unlock();
 		goto out;
 	}
-
-	write_lock_bh(&idev->lock);
 
 	/* Add to inet6_dev unicast addr list. */
 	ipv6_link_dev_addr(idev, ifa);
@@ -1487,6 +1497,7 @@ retry:
 
 	cfg.pfx = &addr;
 	cfg.scope = ipv6_addr_scope(cfg.pfx);
+	cfg.ifpub = ifp;
 
 	ift = ipv6_add_addr(idev, &cfg, block, NULL);
 	if (IS_ERR(ift)) {
@@ -1498,7 +1509,6 @@ retry:
 	}
 
 	spin_lock_bh(&ift->lock);
-	ift->ifpub = ifp;
 	ift->cstamp = now;
 	ift->tstamp = tmp_tstamp;
 	spin_unlock_bh(&ift->lock);
@@ -3897,7 +3907,9 @@ static int addrconf_ifdown(struct net_device *dev, bool unregister)
 	 *	   Do not dev_put!
 	 */
 	if (unregister) {
+		write_lock_bh(&idev->lock);
 		WRITE_ONCE(idev->dead, 1);
+		write_unlock_bh(&idev->lock);
 
 		/* protected by rtnl_lock */
 		RCU_INIT_POINTER(dev->ip6_ptr, NULL);
@@ -4019,6 +4031,10 @@ restart:
 		}
 
 		if (!keep) {
+			spin_lock_bh(&net->ipv6.addrconf_hash_lock);
+			hlist_del_init_rcu(&ifa->addr_lst);
+			spin_unlock_bh(&net->ipv6.addrconf_hash_lock);
+
 			write_lock_bh(&idev->lock);
 			list_del_rcu(&ifa->if_list);
 			write_unlock_bh(&idev->lock);
@@ -4039,9 +4055,11 @@ restart:
 
 	/* Last: Shot the device (if unregistered) */
 	if (unregister) {
+		struct neigh_table *tbl = nd_table(net);
+
 		addrconf_sysctl_unregister(idev);
-		neigh_parms_release(&nd_tbl, idev->nd_parms);
-		neigh_ifdown(&nd_tbl, dev);
+		neigh_parms_release(tbl, idev->nd_parms);
+		neigh_ifdown(tbl, dev);
 		in6_dev_put(idev);
 	}
 	return 0;

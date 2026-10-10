@@ -161,7 +161,6 @@ struct kvaser_usb_net_priv {
  * @dev_get_data_busparams:	readback data busparams
  * @dev_get_berr_counter:	used for can.do_get_berr_counter
  *
- * @dev_setup_endpoints:	setup USB in and out endpoints
  * @dev_init_card:		initialize card
  * @dev_init_channel:		initialize channel
  * @dev_remove_channel:		uninitialize channel
@@ -189,7 +188,6 @@ struct kvaser_usb_dev_ops {
 	int (*dev_get_data_busparams)(struct kvaser_usb_net_priv *priv);
 	int (*dev_get_berr_counter)(const struct net_device *netdev,
 				    struct can_berr_counter *bec);
-	int (*dev_setup_endpoints)(struct kvaser_usb *dev);
 	int (*dev_init_card)(struct kvaser_usb *dev);
 	int (*dev_init_channel)(struct kvaser_usb_net_priv *priv);
 	void (*dev_remove_channel)(struct kvaser_usb_net_priv *priv);

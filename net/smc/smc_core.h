@@ -596,6 +596,7 @@ void smc_rmb_sync_sg_for_cpu(struct smc_connection *conn);
 int smc_vlan_by_tcpsk(struct socket *clcsock, struct smc_init_info *ini);
 
 void smc_conn_free(struct smc_connection *conn);
+void smc_conn_abort_work(struct work_struct *work);
 int smc_conn_create(struct smc_sock *smc, struct smc_init_info *ini);
 int smc_core_init(void);
 void smc_core_exit(void);

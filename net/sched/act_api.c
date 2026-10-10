@@ -372,9 +372,10 @@ static int __tcf_action_put(struct tc_action *p, bool bind)
 {
 	struct tcf_idrinfo *idrinfo = p->idrinfo;
 
-	if (refcount_dec_and_mutex_lock(&p->tcfa_refcnt, &idrinfo->lock)) {
-		if (bind)
-			atomic_dec(&p->tcfa_bindcnt);
+	mutex_lock(&idrinfo->lock);
+	if (bind)
+		atomic_dec(&p->tcfa_bindcnt);
+	if (refcount_dec_and_test(&p->tcfa_refcnt)) {
 		idr_remove(&idrinfo->action_idr, p->tcfa_index);
 		mutex_unlock(&idrinfo->lock);
 
@@ -382,9 +383,7 @@ static int __tcf_action_put(struct tc_action *p, bool bind)
 		return 1;
 	}
 
-	if (bind)
-		atomic_dec(&p->tcfa_bindcnt);
-
+	mutex_unlock(&idrinfo->lock);
 	return 0;
 }
 
@@ -475,6 +474,15 @@ static size_t tcf_action_full_attrs_size(size_t sz)
 		+ sz;
 }
 
+/* tca_get_fill() may append TCA_ROOT_EXT_WARN_MSG from extack->_msg */
+static size_t tcf_action_warn_attr_size(const struct netlink_ext_ack *extack)
+{
+	if (unlikely(extack && extack->_msg))
+		return nla_total_size(strlen(extack->_msg) + 1);
+
+	return 0;
+}
+
 static size_t tcf_action_fill_size(const struct tc_action *act)
 {
 	size_t sz = tcf_action_shared_attrs_size(act);
@@ -549,7 +557,8 @@ tcf_action_dump_1(struct sk_buff *skb, struct tc_action *a, int bind, int ref)
 		goto nla_put_failure;
 	err = tcf_action_dump_old(skb, a, bind, ref);
 	if (err > 0) {
-		nla_nest_end(skb, nest);
+		if (nla_nest_end_safe(skb, nest) < 0)
+			goto nla_put_failure;
 		return err;
 	}
 
@@ -1270,7 +1279,9 @@ int tcf_action_dump(struct sk_buff *skb, struct tc_action *actions[],
 			tcf_action_dump_1(skb, a, bind, ref);
 		if (err < 0)
 			goto errout;
-		nla_nest_end(skb, nest);
+		err = nla_nest_end_safe(skb, nest);
+		if (err < 0)
+			goto errout;
 	}
 
 	return 0;
@@ -1684,7 +1695,8 @@ static int tca_get_fill(struct sk_buff *skb, struct tc_action *actions[],
 	if (tcf_action_dump(skb, actions, bind, ref, false) < 0)
 		goto out_nlmsg_trim;
 
-	nla_nest_end(skb, nest);
+	if (nla_nest_end_safe(skb, nest) < 0)
+		goto out_nlmsg_trim;
 
 	nlh->nlmsg_len = skb_tail_pointer(skb) - b;
 
@@ -1980,7 +1992,8 @@ static struct sk_buff *tcf_del_notify_msg(struct net *net, struct nlmsghdr *n,
 {
 	struct sk_buff *skb;
 
-	skb = alloc_skb(max(attr_size, NLMSG_GOODSIZE), GFP_KERNEL);
+	skb = alloc_skb(max(attr_size + tcf_action_warn_attr_size(extack),
+			    NLMSG_GOODSIZE), GFP_KERNEL);
 	if (!skb)
 		return ERR_PTR(-ENOBUFS);
 
@@ -2078,7 +2091,8 @@ static struct sk_buff *tcf_add_notify_msg(struct net *net, struct nlmsghdr *n,
 {
 	struct sk_buff *skb;
 
-	skb = alloc_skb(max(attr_size, NLMSG_GOODSIZE), GFP_KERNEL);
+	skb = alloc_skb(max(attr_size + tcf_action_warn_attr_size(extack),
+			    NLMSG_GOODSIZE), GFP_KERNEL);
 	if (!skb)
 		return ERR_PTR(-ENOBUFS);
 

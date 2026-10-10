@@ -49,6 +49,7 @@ config NXP_ENETC4
 	tristate "ENETC4 PF driver"
 	depends on PTP_1588_CLOCK_OPTIONAL
 	depends on PCI_MSI
+	depends on OF_OVERLAY
 	select FSL_ENETC_CORE
 	select FSL_ENETC_MDIO
 	select NXP_ENETC_PF_COMMON
@@ -69,6 +70,7 @@ config FSL_ENETC_VF
 	depends on PCI_MSI
 	select FSL_ENETC_CORE
 	select FSL_ENETC_MDIO
+	select NXP_NTMP
 	select PHYLINK
 	select DIMLIB
 	select CRC_ITU_T

@@ -1045,6 +1045,7 @@ struct ibmvnic_adapter {
 
 	struct tasklet_struct tasklet;
 	enum vnic_state state;
+	bool removing;
 	/* Used for serialization of state field. When taking both state
 	 * and rwi locks, take state lock first.
 	 */
@@ -1056,6 +1057,7 @@ struct ibmvnic_adapter {
 	 */
 	spinlock_t rwi_lock;
 	struct work_struct ibmvnic_reset;
+	struct work_struct ibmvnic_close_work;
 	struct delayed_work ibmvnic_delayed_reset;
 	unsigned long resetting;
 	/* last device reset time */

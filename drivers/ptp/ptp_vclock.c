@@ -6,10 +6,12 @@
  */
 #include <linux/slab.h>
 #include <linux/hashtable.h>
+#include <linux/math64.h>
 #include "ptp_private.h"
 
 #define PTP_VCLOCK_CC_SHIFT		31
 #define PTP_VCLOCK_CC_MULT		(1 << PTP_VCLOCK_CC_SHIFT)
+#define PTP_VCLOCK_FRAC_MASK		((1ULL << PTP_VCLOCK_CC_SHIFT) - 1)
 #define PTP_VCLOCK_FADJ_SHIFT		9
 #define PTP_VCLOCK_FADJ_DENOMINATOR	15625ULL
 #define PTP_VCLOCK_REFRESH_INTERVAL	(HZ * 2)
@@ -42,21 +44,74 @@ static void ptp_vclock_hash_del(struct ptp_vclock *vclock)
 	synchronize_srcu(&vclock_srcu);
 }
 
+/*
+ * Physical clock samples already contain full-width nanoseconds. Do not
+ * truncate them to a 32-bit counter: failed reads can postpone a refresh
+ * beyond its wrap period. Use a wide multiply and retain fractional ns.
+ * Packet timestamps may precede the last sample; conversion must not move
+ * the clock's anchor in that case. The caller holds vclock->lock.
+ */
+static u64 ptp_vclock_convert(struct ptp_vclock *vclock, u64 cycles, u64 *frac)
+{
+	u64 delta = cycles - vclock->cycles;
+	bool backwards = delta > S64_MAX;
+	u64 nsec, rem;
+
+	if (backwards)
+		delta = -delta;
+	nsec = mul_u64_u32_shr(delta, vclock->mult, PTP_VCLOCK_CC_SHIFT);
+	rem = (delta * vclock->mult) & PTP_VCLOCK_FRAC_MASK;
+	if (backwards) {
+		nsec = vclock->nsec - nsec - (rem > *frac);
+		*frac = (*frac - rem) & PTP_VCLOCK_FRAC_MASK;
+	} else {
+		rem += *frac;
+		nsec += vclock->nsec + (rem >> PTP_VCLOCK_CC_SHIFT);
+		*frac = rem & PTP_VCLOCK_FRAC_MASK;
+	}
+
+	return nsec;
+}
+
+static void ptp_vclock_update(struct ptp_vclock *vclock, u64 cycles)
+{
+	vclock->nsec = ptp_vclock_convert(vclock, cycles, &vclock->frac);
+	vclock->cycles = cycles;
+}
+
+/* The caller holds vclock->lock, or has not published the clock yet. */
+static int ptp_vclock_sample(struct ptp_vclock *vclock, u64 *cycles)
+{
+	struct ptp_clock *ptp = vclock->pclock;
+	struct timespec64 ts;
+	int err;
+
+	err = ptp->info->getcycles64(ptp->info, &ts);
+	if (!err)
+		*cycles = timespec64_to_ns(&ts);
+	return err;
+}
+
 static int ptp_vclock_adjfine(struct ptp_clock_info *ptp, long scaled_ppm)
 {
 	struct ptp_vclock *vclock = info_to_vclock(ptp);
+	u64 cycles;
 	s64 adj;
+	int err;
 
 	adj = (s64)scaled_ppm << PTP_VCLOCK_FADJ_SHIFT;
 	adj = div_s64(adj, PTP_VCLOCK_FADJ_DENOMINATOR);
 
 	if (mutex_lock_interruptible(&vclock->lock))
 		return -EINTR;
-	timecounter_read(&vclock->tc);
-	vclock->cc.mult = PTP_VCLOCK_CC_MULT + adj;
+	err = ptp_vclock_sample(vclock, &cycles);
+	if (!err) {
+		ptp_vclock_update(vclock, cycles);
+		vclock->mult = PTP_VCLOCK_CC_MULT + adj;
+	}
 	mutex_unlock(&vclock->lock);
 
-	return 0;
+	return err;
 }
 
 static int ptp_vclock_adjtime(struct ptp_clock_info *ptp, s64 delta)
@@ -65,7 +120,7 @@ static int ptp_vclock_adjtime(struct ptp_clock_info *ptp, s64 delta)
 
 	if (mutex_lock_interruptible(&vclock->lock))
 		return -EINTR;
-	timecounter_adjtime(&vclock->tc, delta);
+	vclock->nsec += delta;
 	mutex_unlock(&vclock->lock);
 
 	return 0;
@@ -75,15 +130,19 @@ static int ptp_vclock_gettime(struct ptp_clock_info *ptp,
 			      struct timespec64 *ts)
 {
 	struct ptp_vclock *vclock = info_to_vclock(ptp);
-	u64 ns;
+	u64 cycles;
+	int err;
 
 	if (mutex_lock_interruptible(&vclock->lock))
 		return -EINTR;
-	ns = timecounter_read(&vclock->tc);
+	err = ptp_vclock_sample(vclock, &cycles);
+	if (!err) {
+		ptp_vclock_update(vclock, cycles);
+		*ts = ns_to_timespec64(vclock->nsec);
+	}
 	mutex_unlock(&vclock->lock);
-	*ts = ns_to_timespec64(ns);
 
-	return 0;
+	return err;
 }
 
 static int ptp_vclock_gettimex(struct ptp_clock_info *ptp,
@@ -94,34 +153,37 @@ static int ptp_vclock_gettimex(struct ptp_clock_info *ptp,
 	struct ptp_clock *pptp = vclock->pclock;
 	struct timespec64 pts;
 	int err;
-	u64 ns;
-
-	err = pptp->info->getcyclesx64(pptp->info, &pts, sts);
-	if (err)
-		return err;
 
 	if (mutex_lock_interruptible(&vclock->lock))
 		return -EINTR;
-	ns = timecounter_cyc2time(&vclock->tc, timespec64_to_ns(&pts));
+	err = pptp->info->getcyclesx64(pptp->info, &pts, sts);
+	if (!err) {
+		ptp_vclock_update(vclock, timespec64_to_ns(&pts));
+		*ts = ns_to_timespec64(vclock->nsec);
+	}
 	mutex_unlock(&vclock->lock);
 
-	*ts = ns_to_timespec64(ns);
-
-	return 0;
+	return err;
 }
 
 static int ptp_vclock_settime(struct ptp_clock_info *ptp,
 			      const struct timespec64 *ts)
 {
 	struct ptp_vclock *vclock = info_to_vclock(ptp);
-	u64 ns = timespec64_to_ns(ts);
+	u64 cycles;
+	int err;
 
 	if (mutex_lock_interruptible(&vclock->lock))
 		return -EINTR;
-	timecounter_init(&vclock->tc, &vclock->cc, ns);
+	err = ptp_vclock_sample(vclock, &cycles);
+	if (!err) {
+		vclock->cycles = cycles;
+		vclock->nsec = timespec64_to_ns(ts);
+		vclock->frac = 0;
+	}
 	mutex_unlock(&vclock->lock);
 
-	return 0;
+	return err;
 }
 
 static int ptp_vclock_getcrosststamp(struct ptp_clock_info *ptp,
@@ -130,20 +192,17 @@ static int ptp_vclock_getcrosststamp(struct ptp_clock_info *ptp,
 	struct ptp_vclock *vclock = info_to_vclock(ptp);
 	struct ptp_clock *pptp = vclock->pclock;
 	int err;
-	u64 ns;
-
-	err = pptp->info->getcrosscycles(pptp->info, xtstamp);
-	if (err)
-		return err;
 
 	if (mutex_lock_interruptible(&vclock->lock))
 		return -EINTR;
-	ns = timecounter_cyc2time(&vclock->tc, ktime_to_ns(xtstamp->device));
+	err = pptp->info->getcrosscycles(pptp->info, xtstamp);
+	if (!err) {
+		ptp_vclock_update(vclock, ktime_to_ns(xtstamp->device));
+		xtstamp->device = ns_to_ktime(vclock->nsec);
+	}
 	mutex_unlock(&vclock->lock);
 
-	xtstamp->device = ns_to_ktime(ns);
-
-	return 0;
+	return err;
 }
 
 static long ptp_vclock_refresh(struct ptp_clock_info *ptp)
@@ -171,24 +230,6 @@ static const struct ptp_clock_info ptp_vclock_info = {
 	.do_aux_work	= ptp_vclock_refresh,
 };
 
-static u64 ptp_vclock_read(struct cyclecounter *cc)
-{
-	struct ptp_vclock *vclock = cc_to_vclock(cc);
-	struct ptp_clock *ptp = vclock->pclock;
-	struct timespec64 ts = {};
-
-	ptp->info->getcycles64(ptp->info, &ts);
-
-	return timespec64_to_ns(&ts);
-}
-
-static const struct cyclecounter ptp_vclock_cc = {
-	.read	= ptp_vclock_read,
-	.mask	= CYCLECOUNTER_MASK(32),
-	.mult	= PTP_VCLOCK_CC_MULT,
-	.shift	= PTP_VCLOCK_CC_SHIFT,
-};
-
 struct ptp_vclock *ptp_vclock_register(struct ptp_clock *pclock)
 {
 	struct ptp_vclock *vclock;
@@ -205,7 +246,7 @@ struct ptp_vclock *ptp_vclock_register(struct ptp_clock *pclock)
 		vclock->info.gettime64 = ptp_vclock_gettime;
 	if (pclock->info->getcrosscycles)
 		vclock->info.getcrosststamp = ptp_vclock_getcrosststamp;
-	vclock->cc = ptp_vclock_cc;
+	vclock->mult = PTP_VCLOCK_CC_MULT;
 
 	snprintf(vclock->info.name, PTP_CLOCK_NAME_LEN, "ptp%d_virt",
 		 pclock->index);
@@ -213,6 +254,11 @@ struct ptp_vclock *ptp_vclock_register(struct ptp_clock *pclock)
 	INIT_HLIST_NODE(&vclock->vclock_hash_node);
 
 	mutex_init(&vclock->lock);
+
+	if (ptp_vclock_sample(vclock, &vclock->cycles)) {
+		kfree(vclock);
+		return NULL;
+	}
 
 	vclock->clock = ptp_clock_register(&vclock->info, &pclock->dev);
 	if (IS_ERR_OR_NULL(vclock->clock)) {
@@ -222,7 +268,6 @@ struct ptp_vclock *ptp_vclock_register(struct ptp_clock *pclock)
 
 	ptp_vclock_set_subclass(vclock->clock);
 
-	timecounter_init(&vclock->tc, &vclock->cc, 0);
 	ptp_schedule_worker(vclock->clock, PTP_VCLOCK_REFRESH_INTERVAL);
 
 	ptp_vclock_hash_add(vclock);
@@ -280,7 +325,7 @@ ktime_t ptp_convert_timestamp(const ktime_t *hwtstamp, int vclock_index)
 	struct ptp_vclock *vclock;
 	u64 vclock_ns = 0;
 	int srcu_idx;
-	u64 ns;
+	u64 ns, frac;
 
 	ns = ktime_to_ns(*hwtstamp);
 
@@ -293,7 +338,8 @@ ktime_t ptp_convert_timestamp(const ktime_t *hwtstamp, int vclock_index)
 
 		if (mutex_lock_interruptible(&vclock->lock))
 			break;
-		vclock_ns = timecounter_cyc2time(&vclock->tc, ns);
+		frac = vclock->frac;
+		vclock_ns = ptp_vclock_convert(vclock, ns, &frac);
 		mutex_unlock(&vclock->lock);
 		break;
 	}

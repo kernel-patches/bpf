@@ -16,13 +16,17 @@
 #include "icssm_switch.h"
 #include "icssm_prueth_ptp.h"
 #include "icssm_prueth_fdb_tbl.h"
+#include "icssm_lre_firmware.h"
 
 /* ICSSM size of redundancy tag */
 #define ICSSM_LRE_TAG_SIZE	6
 
+#define PRUETH_TIMER_MS (10)
+
 /* PRUSS local memory map */
 #define ICSS_LOCAL_SHARED_RAM	0x00010000
 #define EMAC_MAX_PKTLEN		(ETH_HLEN + VLAN_HLEN + ETH_DATA_LEN)
+#define EMAC_MIN_PKTLEN		ETH_ZLEN
 /* Below macro is for 1528 Byte Frame support, to Allow even with
  * Redundancy tag
  */
@@ -42,6 +46,8 @@ enum pruss_ethtype {
 
 #define PRUETH_IS_EMAC(p)	((p)->eth_type == PRUSS_ETHTYPE_EMAC)
 #define PRUETH_IS_SWITCH(p)	((p)->eth_type == PRUSS_ETHTYPE_SWITCH)
+#define PRUETH_IS_HSR(p)	((p)->eth_type == PRUSS_ETHTYPE_HSR)
+#define PRUETH_IS_PRP(p)	((p)->eth_type == PRUSS_ETHTYPE_PRP)
 
 /**
  * struct prueth_queue_desc - Queue descriptor
@@ -86,8 +92,9 @@ struct prueth_queue_info {
 
 /**
  * struct prueth_packet_info - Info about a packet in buffer
+ * @start_offset: true if frame carries an HSR/PRP start offset
  * @shadow: this packet is stored in the collision queue
- * @port: port packet is on
+ * @host_recv_flag: this frame should be received by host
  * @length: length of packet
  * @broadcast: this packet is a broadcast packet
  * @error: this packet has an error
@@ -96,8 +103,9 @@ struct prueth_queue_info {
  * @timestamp: Specifies if timestamp is appended to the packet
  */
 struct prueth_packet_info {
+	bool start_offset;
 	bool shadow;
-	unsigned int port;
+	bool host_recv_flag;
 	unsigned int length;
 	bool broadcast;
 	bool error;
@@ -171,6 +179,24 @@ enum prueth_mem {
 	PRUETH_MEM_MAX,
 };
 
+/* PRU firmware revision */
+enum fw_revision {
+	FW_REV_INVALID = 0,
+	FW_REV_V1_0,
+	FW_REV_V2_1
+};
+
+/* Firmware offsets/size information */
+struct prueth_fw_offsets {
+	u32 mc_ctrl_offset;
+	u32 mc_filter_mask;
+	u32 mc_filter_tbl;
+	/* IEP wrap is used in the rx packet ordering logic and
+	 * is different for ICSSM v1.0 vs 2.1
+	 */
+	u32 iep_wrap;
+};
+
 enum pruss_device {
 	PRUSS_AM57XX = 0,
 	PRUSS_AM43XX,
@@ -182,22 +208,26 @@ enum pruss_device {
  * struct prueth_private_data - PRU Ethernet private data
  * @driver_data: PRU Ethernet device name
  * @fw_pru: firmware names to be used for PRUSS ethernet usecases
+ * @fw_rev: Firmware revision identifier
  * @support_switch: boolean to indicate if switch is enabled
+ * @support_lre: boolean to indicate if LRE is enabled
  */
 struct prueth_private_data {
 	enum pruss_device driver_data;
 	const struct prueth_firmware fw_pru[PRUSS_NUM_PRUS];
+	enum fw_revision fw_rev;
 	bool support_switch;
+	bool support_lre;
 };
 
 struct prueth_emac_stats {
-	u64 tx_packets;
-	u64 tx_dropped;
-	u64 tx_bytes;
-	u64 rx_packets;
-	u64 rx_bytes;
-	u64 rx_length_errors;
-	u64 rx_over_errors;
+	atomic64_t tx_packets;
+	atomic64_t tx_dropped;
+	atomic64_t tx_bytes;
+	atomic64_t rx_packets;
+	atomic64_t rx_bytes;
+	atomic64_t rx_length_errors;
+	atomic64_t rx_over_errors;
 };
 
 /* data for each emac port */
@@ -210,6 +240,8 @@ struct prueth_emac {
 	struct phy_device *phydev;
 	struct prueth_queue_desc __iomem *rx_queue_descs;
 	struct prueth_queue_desc __iomem *tx_queue_descs;
+	/* LRE duplicates each TX frame to both ports */
+	struct prueth_queue_desc __iomem *tx_queue_descs_other_port;
 
 	int link;
 	int speed;
@@ -233,9 +265,15 @@ struct prueth_emac {
 	spinlock_t lock;
 	spinlock_t addr_lock;   /* serialize access to VLAN/MC filter table */
 
+	spinlock_t host_queue_lock[NUM_QUEUES / 2];
 	struct hrtimer tx_hrtimer;
 	struct prueth_emac_stats stats;
 	int offload_fwd_mark;
+};
+
+struct prueth_ndev_priority {
+	struct net_device *ndev;
+	int priority;
 };
 
 struct prueth {
@@ -248,13 +286,26 @@ struct prueth {
 	struct icss_iep *iep;
 
 	const struct prueth_private_data *fw_data;
-	struct prueth_fw_offsets *fw_offsets;
+	struct prueth_fw_offsets fw_offsets;
 
 	struct device_node *eth_node[PRUETH_NUM_MACS];
 	struct prueth_emac *emac[PRUETH_NUM_MACS];
 	struct net_device *registered_netdevs[PRUETH_NUM_MACS];
+	struct prueth_ndev_priority *hp, *lp;
+	/* NAPI for lp and hp queue scans */
+	struct napi_struct napi_lpq;
+	struct napi_struct napi_hpq;
+	int rx_lpq_irq;
+	int rx_hpq_irq;
+
+	bool support_lre;
+	unsigned int tbl_check_mask;
+	struct hrtimer tbl_check_timer;
+	/* serialize access to LRE VLAN/MC filter table */
+	spinlock_t addr_lock;
 
 	struct net_device *hw_bridge_dev;
+	struct net_device *hsr_dev;
 	struct fdb_tbl *fdb_tbl;
 
 	struct notifier_block prueth_netdevice_nb;
@@ -264,10 +315,17 @@ struct prueth {
 	unsigned int eth_type;
 	size_t ocmc_ram_size;
 	u8 emac_configured;
+	u8 hsr_members;
 	u8 br_members;
+
+	/* Per-queue TX lock - LRE uses only two priority queues
+	 * one for high priority and the other for low priority.
+	 */
+	spinlock_t lre_host_queue_lock[NUM_QUEUES / 2];
 };
 
 extern const struct prueth_queue_desc queue_descs[][NUM_QUEUES];
+extern const struct prueth_queue_desc hsr_prp_txopt_queue_descs[][NUM_QUEUES];
 
 void icssm_parse_packet_info(struct prueth *prueth, u32 buffer_descriptor,
 			     struct prueth_packet_info *pkt_info);
@@ -277,4 +335,15 @@ int icssm_emac_rx_packet(struct prueth_emac *emac, u16 *bd_rd_ptr,
 void icssm_emac_mc_filter_bin_allow(struct prueth_emac *emac, u8 hash);
 void icssm_emac_mc_filter_bin_disallow(struct prueth_emac *emac, u8 hash);
 u8 icssm_emac_get_mc_hash(u8 *mac, u8 *mask);
+
+int icssm_prueth_common_napi_poll_lpq(struct napi_struct *napi, int budget);
+int icssm_prueth_common_napi_poll_hpq(struct napi_struct *napi, int budget);
+
+int icssm_prueth_common_request_irqs(struct prueth_emac *emac);
+void icssm_prueth_common_free_irqs(struct prueth_emac *emac);
+
+static inline bool prueth_is_lre(struct prueth *prueth)
+{
+	return PRUETH_IS_HSR(prueth) || PRUETH_IS_PRP(prueth);
+}
 #endif /* __NET_TI_PRUETH_H */

@@ -48,7 +48,7 @@ static void smc_tx_write_space(struct sock *sk)
 	if (atomic_read(&smc->conn.sndbuf_space) && sock) {
 		if (test_bit(SOCK_NOSPACE, &sock->flags))
 			SMC_STAT_RMB_TX_FULL(smc, !smc->conn.lnk);
-		clear_bit(SOCK_NOSPACE, &sock->flags);
+		sk_clear_nospace(sk);
 		rcu_read_lock();
 		wq = rcu_dereference(sk->sk_wq);
 		if (skwq_has_sleeper(wq))
@@ -100,7 +100,7 @@ static int smc_tx_wait(struct smc_sock *smc, int flags)
 		}
 		if (!timeo) {
 			/* ensure EPOLLOUT is subsequently generated */
-			set_bit(SOCK_NOSPACE, &sk->sk_socket->flags);
+			sk_set_nospace(sk);
 			rc = -EAGAIN;
 			break;
 		}
@@ -111,7 +111,7 @@ static int smc_tx_wait(struct smc_sock *smc, int flags)
 		sk_clear_bit(SOCKWQ_ASYNC_NOSPACE, sk);
 		if (atomic_read(&conn->sndbuf_space) && !conn->urg_tx_pend)
 			break; /* at least 1 byte of free & no urgent data */
-		set_bit(SOCK_NOSPACE, &sk->sk_socket->flags);
+		sk_set_nospace(sk);
 		sk_wait_event(sk, &timeo,
 			      READ_ONCE(sk->sk_err) ||
 			      (READ_ONCE(sk->sk_shutdown) & SEND_SHUTDOWN) ||
@@ -233,6 +233,19 @@ int smc_tx_sendmsg(struct smc_sock *smc, struct msghdr *msg, size_t len)
 		/* initialize variables for 1st iteration of subsequent loop */
 		/* could be just 1 byte, even after smc_tx_wait above */
 		writespace = atomic_read(&conn->sndbuf_space);
+		/* sndbuf_space is advanced from the peer's wire-controlled
+		 * consumer cursor on the SMC-D DMB-merge path; a forged cursor
+		 * can inflate it past the send buffer, or overflow the signed
+		 * accumulator to a negative value across many CDC messages
+		 * (which a plain "> len" check would miss before the size_t
+		 * cast below turns it huge).  Bound it to the send buffer in
+		 * either case so the wrap-around write cannot run past
+		 * sndbuf_desc->len.  This enforces the documented
+		 * 0 <= sndbuf_space <= sndbuf_desc->len invariant at the
+		 * producer, race-free against the CDC tasklet.
+		 */
+		if (writespace < 0 || writespace > conn->sndbuf_desc->len)
+			writespace = conn->sndbuf_desc->len;
 		/* not more than what user space asked for */
 		copylen = min_t(size_t, send_remaining, writespace);
 		/* determine start of sndbuf */
@@ -570,8 +583,10 @@ static int smcr_tx_sndbuf_nonempty(struct smc_connection *conn)
 			if (conn->killed)
 				return -EPIPE;
 			rc = 0;
-			mod_delayed_work(conn->lgr->tx_wq, &conn->tx_work,
-					 SMC_TX_WORK_DELAY);
+			sock_hold(&smc->sk);
+			if (!queue_delayed_work(conn->lgr->tx_wq, &conn->tx_work,
+						SMC_TX_WORK_DELAY))
+				sock_put(&smc->sk);
 		}
 		return rc;
 	}
@@ -667,7 +682,7 @@ void smc_tx_pending(struct smc_connection *conn)
 	struct smc_sock *smc = container_of(conn, struct smc_sock, conn);
 	int rc;
 
-	if (smc->sk.sk_err)
+	if (smc->sk.sk_err || conn->freed)
 		return;
 
 	rc = smc_tx_sndbuf_nonempty(conn);
@@ -690,6 +705,7 @@ void smc_tx_work(struct work_struct *work)
 	lock_sock(&smc->sk);
 	smc_tx_pending(conn);
 	release_sock(&smc->sk);
+	sock_put(&smc->sk);
 }
 
 void smc_tx_consumer_update(struct smc_connection *conn, bool force)
@@ -718,8 +734,13 @@ void smc_tx_consumer_update(struct smc_connection *conn, bool force)
 			return;
 		if ((smc_cdc_get_slot_and_msg_send(conn) < 0) &&
 		    !conn->killed) {
-			queue_delayed_work(conn->lgr->tx_wq, &conn->tx_work,
-					   SMC_TX_WORK_DELAY);
+			struct smc_sock *smc =
+				container_of(conn, struct smc_sock, conn);
+
+			sock_hold(&smc->sk);
+			if (!queue_delayed_work(conn->lgr->tx_wq, &conn->tx_work,
+						SMC_TX_WORK_DELAY))
+				sock_put(&smc->sk);
 			return;
 		}
 	}

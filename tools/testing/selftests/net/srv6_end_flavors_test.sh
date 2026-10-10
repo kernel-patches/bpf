@@ -194,8 +194,8 @@
 # after the IPv6 header. At this point, the packet with IPv6 DA=cafe::1 is sent
 # to the destination, i.e. hs-1.
 
-# Kselftest framework requirement - SKIP code is 4.
-readonly ksft_skip=4
+# shellcheck source=lib.sh
+source lib.sh
 
 readonly RDMSUFF="$(mktemp -u XXXXXXXX)"
 readonly DUMMY_DEVNAME="dum0"
@@ -224,24 +224,7 @@ nfail=0
 
 log_test()
 {
-	local rc="$1"
-	local expected="$2"
-	local msg="$3"
-
-	if [ "${rc}" -eq "${expected}" ]; then
-		nsuccess=$((nsuccess+1))
-		printf "\n    TEST: %-60s  [ OK ]\n" "${msg}"
-	else
-		ret=1
-		nfail=$((nfail+1))
-		printf "\n    TEST: %-60s  [FAIL]\n" "${msg}"
-		if [ "${PAUSE_ON_FAIL}" = "yes" ]; then
-			echo
-			echo "hit enter to continue, 'q' to quit"
-			read a
-			[ "$a" = "q" ] && exit 1
-		fi
-	fi
+	log_test_expected "$1" "$2" "$3"
 }
 
 print_log_test_results()
@@ -345,7 +328,7 @@ cleanup()
 	# check whether the setup phase was completed successfully or not. In
 	# case of an error during the setup phase of the testing environment,
 	# the selftest is considered as "skipped".
-	if [ "${SETUP_ERR}" -ne 0 ]; then
+	if [ "${SETUP_ERR}" -ne 0 ] && [ "$ret" -ne "$ksft_fail" ]; then
 		echo "SKIP: Setting up the testing environment failed"
 		exit "${ksft_skip}"
 	fi
@@ -412,6 +395,36 @@ __get_srv6_rtcfg_op()
 	# return the lexicographically ordered flavors
 	echo "${element}" | cut -d':' -f2 | sed 's/,/\n/g' | sort | \
 		xargs | sed 's/ /,/g'
+}
+
+# Given the description of a router <id:op:act> as an input, the function
+# returns the <act> token which represents the action (e.g. End, End.X,
+# End.T behavior with or without route table, out interface) configured
+# for the node.
+#
+# Support End, End.X at present. When omit, return default End behavior.
+# i.e. input: "1:psp:End.X,1,3"
+#      output: "End.X nh6 fcf0:0:1:3::3 oif veth-rt-1-3"
+__get_srv6_rtcfg_act()
+{
+	local element="$1"
+	local net_prefix
+	local acts
+	local out
+
+	acts="$(echo "${element}" | cut -d':' -f3)"
+	act="$(echo "${acts}" | cut -d',' -f1)"
+	act="${act:-"End"}"
+
+	rt="$(echo "${acts}" | cut -d',' -f2)"
+	neigh="$(echo "${acts}" | cut -d',' -f3)"
+
+	if [ "$act" == "End" ]; then
+		echo "End"
+	elif [ "$act" == "End.X" ]; then
+		net_prefix="$(get_network_prefix "${rt}" "${neigh}")"
+		echo "End.X nh6 ${net_prefix}::${neigh} oif veth-rt-${rt}-${neigh}"
+	fi
 }
 
 # Setup the basic networking for the routers
@@ -514,6 +527,7 @@ __setup_rt_policy()
 	local function
 	local fullsid
 	local op_type
+	local action
 	local node
 	local n
 
@@ -522,19 +536,20 @@ __setup_rt_policy()
 	for n in ${policy_rts}; do
 		node="$(__get_srv6_rtcfg_id "${n}")"
 		op_type="$(__get_srv6_rtcfg_op "${n}")"
+		action="$(__get_srv6_rtcfg_act "${n}")"
 		rt_nsname="$(get_rtname "${node}")"
 
 		case "${op_type}" in
 		"noflv")
 			policy="${policy}${LOCATOR_SERVICE}:${node}::${END_FUNC},"
 			function="${END_FUNC}"
-			behavior_cfg="End"
+			behavior_cfg="${action}"
 			;;
 
 		"psp")
 			policy="${policy}${LOCATOR_SERVICE}:${node}::${END_PSP_FUNC},"
 			function="${END_PSP_FUNC}"
-			behavior_cfg="End flavors psp"
+			behavior_cfg="${action} flavors psp"
 			;;
 
 		*)
@@ -564,16 +579,63 @@ __setup_rt_policy()
 		add "${IPv6_HS_NETWORK}::${dst}" \
 		encap seg6 mode inline segs "${policy}" \
 		dev "${DUMMY_DEVNAME}"
-
-	ip -netns "${in_nsname}" -6 neigh \
-		add proxy "${IPv6_HS_NETWORK}::${dst}" \
-		dev "${RT2HS_DEVNAME}"
 }
 
 # see __setup_rt_policy
 setup_rt_policy_ipv6()
 {
 	__setup_rt_policy "$1" "$2" "$3"
+}
+
+cleanup_rt_policy_ipv6()
+{
+	local dst="$1"
+	local encap_rt="$2"
+	local policy_rts="$3"
+	local in_nsname
+	local rt_nsname
+	local function
+	local fullsid
+	local op_type
+	local node
+	local n
+
+	in_nsname="$(get_rtname "${encap_rt}")"
+
+	for n in ${policy_rts}; do
+		node="$(__get_srv6_rtcfg_id "${n}")"
+		op_type="$(__get_srv6_rtcfg_op "${n}")"
+		rt_nsname="$(get_rtname "${node}")"
+
+		case "${op_type}" in
+		"noflv")
+			function="${END_FUNC}"
+			;;
+
+		"psp")
+			function="${END_PSP_FUNC}"
+			;;
+
+		*)
+			break
+			;;
+		esac
+
+		fullsid="${LOCATOR_SERVICE}:${node}::${function}"
+
+		# Remove SRv6 Endpoint behavior for the selected router
+		# Skip noflv END_FUNC which is added in common setup.
+		if ! echo "${fullsid}" | grep -q "${END_FUNC}"; then
+			ip -netns "${rt_nsname}" -6 route \
+				del "${fullsid}" \
+				table "${LOCALSID_TABLE_ID}" \
+				dev "${DUMMY_DEVNAME}"
+		fi
+	done
+
+	# Remove SRv6 policy for incoming traffic sent by connected hosts
+	ip -netns "${in_nsname}" -6 route \
+		del "${IPv6_HS_NETWORK}::${dst}" dev "${DUMMY_DEVNAME}"
 }
 
 setup_hs()
@@ -645,6 +707,20 @@ setup()
 	setup_rt_local_sids 3 "1 2 4"
 	setup_rt_local_sids 4 "1 2 3"
 
+	# setup proxy on route entries for hosts
+	ip -netns "$(get_rtname 1)" -6 neigh add \
+		proxy "${IPv6_HS_NETWORK}::2" \
+		dev "${RT2HS_DEVNAME}"
+	ip -netns "$(get_rtname 2)" -6 neigh add \
+		proxy "${IPv6_HS_NETWORK}::1" \
+		dev "${RT2HS_DEVNAME}"
+
+	# testing environment was set up successfully
+	SETUP_ERR=0
+}
+
+setup_end_flv_psp()
+{
 	# set up SRv6 policies
 	# create a connection between hosts hs-1 and hs-2.
 	# The path between hs-1 and hs-2 traverses SRv6 aware routers.
@@ -661,9 +737,36 @@ setup()
 	#  - rt-1 (SRv6 End flavor PSP with SL=1)
 	setup_rt_policy_ipv6 2 1 "3:noflv 4:psp 2:psp"
 	setup_rt_policy_ipv6 1 2 "1:psp"
+}
 
-	# testing environment was set up successfully
-	SETUP_ERR=0
+cleanup_end_flv_psp()
+{
+	cleanup_rt_policy_ipv6 2 1 "3:noflv 4:psp 2:psp"
+	cleanup_rt_policy_ipv6 1 2 "1:psp"
+}
+
+setup_endx_flv_psp()
+{
+	# Direction hs-1 -> hs-2 (End.X PSP flavor)
+	# SID List=fcff:3::e,fcff:4::ef1,cafe::2
+	#  - rt-1 (SRv6 H.Insert policy)
+	#  - rt-3 (SRv6 End behavior)
+	#  - rt-4 (SRv6 End.X flavor PSP with SL=1, route to rt-2 via nh/oif)
+	#  - rt-2 (Route to hs-2 with same subnet)
+	#
+	# Direction hs-2 -> hs-1 (End.X PSP flavor)
+	# SID List=fcff:3::ef1,cafe::1
+	#  - rt-2 (SRv6 H.Insert policy)
+	#  - rt-3 (SRv6 End.X flavor PSP with SL=1, route to rt-1 via nh/oif)
+	#  - rt-1 (Route to hs-1 with same subnet)
+	setup_rt_policy_ipv6 2 1 "3:noflv:End 4:psp:End.X,4,2"
+	setup_rt_policy_ipv6 1 2 "3:psp:End.X,3,1"
+}
+
+cleanup_endx_flv_psp()
+{
+	cleanup_rt_policy_ipv6 2 1 "3:noflv 4:psp"
+	cleanup_rt_policy_ipv6 1 2 "3:psp"
 }
 
 check_rt_connectivity()
@@ -758,10 +861,34 @@ host2gateway_tests()
 
 host_srv6_end_flv_psp_tests()
 {
-	log_section "SRv6 connectivity test hosts (h1 <-> h2, PSP flavor)"
+	set -e
+	SETUP_ERR=1
+	setup_end_flv_psp
+	SETUP_ERR=0
+	set +e
+
+	log_section "SRv6 connectivity test hosts (h1 <-> h2, End flavor PSP)"
 
 	check_and_log_hs_connectivity 1 2
 	check_and_log_hs_connectivity 2 1
+
+	cleanup_end_flv_psp
+}
+
+host_srv6_endx_flv_psp_tests()
+{
+	set -e
+	SETUP_ERR=1
+	setup_endx_flv_psp
+	SETUP_ERR=0
+	set +e
+
+	log_section "SRv6 connectivity test hosts (h1 <-> h2, End.X flavor PSP)"
+
+	check_and_log_hs_connectivity 1 2
+	check_and_log_hs_connectivity 2 1
+
+	cleanup_endx_flv_psp
 }
 
 test_iproute2_supp_or_ksft_skip()
@@ -865,5 +992,6 @@ set +e
 router_tests
 host2gateway_tests
 host_srv6_end_flv_psp_tests
+host_srv6_endx_flv_psp_tests
 
 print_log_test_results

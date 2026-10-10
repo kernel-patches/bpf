@@ -11,6 +11,7 @@
 
 struct gpio_desc;
 struct mii_bus;
+struct ptp_system_timestamp;
 struct reset_control;
 
 /* Multiple levels of nesting are possible. However typically this is
@@ -574,6 +575,9 @@ static inline void mii_c73_mod_linkmode(unsigned long *adv, u16 *lpa)
 
 int __mdiobus_read(struct mii_bus *bus, int addr, u32 regnum);
 int __mdiobus_write(struct mii_bus *bus, int addr, u32 regnum, u16 val);
+int __mdiobus_write_sts(struct mii_bus *bus, int addr, u32 regnum, u16 val,
+			struct ptp_system_timestamp *sts);
+bool mdiobus_supports_write_sts(struct mii_bus *bus);
 int __mdiobus_modify(struct mii_bus *bus, int addr, u32 regnum, u16 mask,
 		     u16 set);
 int __mdiobus_modify_changed(struct mii_bus *bus, int addr, u32 regnum,

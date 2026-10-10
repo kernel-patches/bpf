@@ -174,6 +174,9 @@ struct ppe_port_schedule_resource {
  */
 static const int ipq9574_ppe_bm_group_config = 1550;
 
+/* IPQ5332 BM group0 shared buffer limit. */
+static const int ipq5332_ppe_bm_group_config = 360;
+
 /* The buffer configurations per PPE port. There are 15 BM ports and
  * 4 BM groups supported by PPE. BM port (0-7) is for EDMA port 0,
  * BM port (8-13) is for PPE physical port 1-6 and BM port 14 is for
@@ -230,6 +233,34 @@ static const struct ppe_bm_port_config ipq9574_ppe_bm_port_config[] = {
 	},
 };
 
+/* IPQ5332: BM ports 0-7 serve EDMA, ports 8-9 serve ports 1-2. */
+static const struct ppe_bm_port_config ipq5332_ppe_bm_port_config[] = {
+	{
+		/* Buffer configuration for the BM port ID 0-7 of EDMA. */
+		.port_id_start	= 0,
+		.port_id_end	= 7,
+		.pre_alloc	= 12,
+		.in_fly_buf	= 40,
+		.ceil		= 30,
+		.weight		= 7,
+		.resume_offset	= 5,
+		.resume_ceil	= 20,
+		.dynamic	= true,
+	},
+	{
+		/* Buffer configuration for the BM port ID 8-9 of PPE ports. */
+		.port_id_start	= 8,
+		.port_id_end	= 9,
+		.pre_alloc	= 12,
+		.in_fly_buf	= 128,
+		.ceil		= 48,
+		.weight		= 7,
+		.resume_offset	= 5,
+		.resume_ceil	= 20,
+		.dynamic	= true,
+	},
+};
+
 /* QM fetches the packet from PPE buffer management for transmitting the
  * packet out. The QM group configuration limits the total number of buffers
  * enqueued by all PPE hardware queues.
@@ -239,6 +270,9 @@ static const struct ppe_bm_port_config ipq9574_ppe_bm_port_config[] = {
  * queues by default.
  */
 static const int ipq9574_ppe_qm_group_config = 2000;
+
+/* IPQ5332 QM group0 buffer limit. */
+static const int ipq5332_ppe_qm_group_config = 500;
 
 /* Default QM settings for unicast and multicast queues for IPQ9754. */
 static const struct ppe_qm_queue_config ipq9574_ppe_qm_queue_config[] = {
@@ -260,6 +294,30 @@ static const struct ppe_qm_queue_config ipq9574_ppe_qm_queue_config[] = {
 		.ceil		= 250,
 		.weight		= 0,
 		.resume_offset	= 36,
+		.dynamic	= false,
+	},
+};
+
+/* IPQ5332 unicast and multicast queue thresholds. */
+static const struct ppe_qm_queue_config ipq5332_ppe_qm_queue_config[] = {
+	{
+		/* QM settings for unicast queues 0 to 255. */
+		.queue_start	= 0,
+		.queue_end	= 255,
+		.prealloc_buf	= 0,
+		.ceil		= 300,
+		.weight		= 7,
+		.resume_offset	= 18,
+		.dynamic	= true,
+	},
+	{
+		/* QM settings for multicast queues 256 to 299. */
+		.queue_start	= 256,
+		.queue_end	= 299,
+		.prealloc_buf	= 0,
+		.ceil		= 50,
+		.weight		= 0,
+		.resume_offset	= 18,
 		.dynamic	= false,
 	},
 };
@@ -372,6 +430,44 @@ static const struct ppe_scheduler_bm_config ipq9574_ppe_sch_bm_config[] = {
 	{true, PPE_SCH_EGRESS,  7, false, 0},
 };
 
+/* IPQ5332 BM arbitration. The invalid final slot is included in the
+ * 32-slot scheduler depth.
+ */
+static const struct ppe_scheduler_bm_config ipq5332_ppe_sch_bm_config[] = {
+	{true,  PPE_SCH_INGRESS, 2, false, 0},
+	{true,  PPE_SCH_EGRESS,  0, false, 0},
+	{true,  PPE_SCH_INGRESS, 1, false, 0},
+	{true,  PPE_SCH_EGRESS,  1, false, 0},
+	{true,  PPE_SCH_INGRESS, 2, false, 0},
+	{true,  PPE_SCH_EGRESS,  2, false, 0},
+	{true,  PPE_SCH_INGRESS, 0, false, 0},
+	{true,  PPE_SCH_EGRESS,  0, false, 0},
+	{true,  PPE_SCH_INGRESS, 2, false, 0},
+	{true,  PPE_SCH_EGRESS,  1, false, 0},
+	{true,  PPE_SCH_INGRESS, 1, false, 0},
+	{true,  PPE_SCH_EGRESS,  2, false, 0},
+	{true,  PPE_SCH_INGRESS, 0, false, 0},
+	{true,  PPE_SCH_EGRESS,  0, false, 0},
+	{true,  PPE_SCH_INGRESS, 1, false, 0},
+	{true,  PPE_SCH_EGRESS,  1, false, 0},
+	{true,  PPE_SCH_INGRESS, 2, false, 0},
+	{true,  PPE_SCH_EGRESS,  2, false, 0},
+	{true,  PPE_SCH_INGRESS, 1, false, 0},
+	{true,  PPE_SCH_EGRESS,  0, false, 0},
+	{true,  PPE_SCH_INGRESS, 2, false, 0},
+	{true,  PPE_SCH_EGRESS,  1, false, 0},
+	{true,  PPE_SCH_INGRESS, 0, false, 0},
+	{true,  PPE_SCH_EGRESS,  2, false, 0},
+	{true,  PPE_SCH_INGRESS, 2, false, 0},
+	{true,  PPE_SCH_EGRESS,  0, false, 0},
+	{true,  PPE_SCH_INGRESS, 1, false, 0},
+	{true,  PPE_SCH_EGRESS,  1, false, 0},
+	{true,  PPE_SCH_INGRESS, 0, false, 0},
+	{true,  PPE_SCH_EGRESS,  2, false, 0},
+	{true,  PPE_SCH_INGRESS, 1, false, 0},
+	{false, PPE_SCH_INGRESS, 0, false, 0},
+};
+
 /* PPE scheduler configuration for QM includes multiple entries. Each entry
  * contains ports to be dispatched for enqueueing and dequeueing. The backup
  * port for dequeueing is supported to be used when the primary port for
@@ -437,6 +533,22 @@ static const struct ppe_scheduler_qm_config ipq9574_ppe_sch_qm_config[] = {
 	{0x34, 7, 6, true, 3},
 	{0x94, 5, 0, true, 1},
 	{0x98, 6, 5, true, 2},
+};
+
+/* IPQ5332 QM arbitration. The enqueue bitmap is zero in every slot;
+ * ensch_port identifies the enqueue port. Backup dequeue ports are disabled.
+ */
+static const struct ppe_scheduler_qm_config ipq5332_ppe_sch_qm_config[] = {
+	{0x0, 0x2, 0, false, 0x0},
+	{0x0, 0x1, 2, false, 0x0},
+	{0x0, 0x0, 1, false, 0x0},
+	{0x0, 0x0, 2, false, 0x0},
+	{0x0, 0x1, 0, false, 0x0},
+	{0x0, 0x2, 1, false, 0x0},
+	{0x0, 0x0, 2, false, 0x0},
+	{0x0, 0x0, 1, false, 0x0},
+	{0x0, 0x0, 2, false, 0x0},
+	{0x0, 0x0, 1, false, 0x0},
 };
 
 static const struct ppe_scheduler_port_config ppe_port_sch_config[] = {
@@ -732,6 +844,8 @@ static const struct ppe_scheduler_port_config ppe_port_sch_config[] = {
 
 /* The scheduler resource is applied to each PPE port, The resource
  * includes the unicast & multicast queues, flow nodes and DRR nodes.
+ * Entries 1 and 2 serve ports 1 and 2 on both IPQ5332 and IPQ9574.
+ * The reserved pool is the last entry.
  */
 static const struct ppe_port_schedule_resource ppe_scheduler_res[] = {
 	{	.ucastq_start	= 0,
@@ -833,6 +947,32 @@ static const struct ppe_port_schedule_resource ppe_scheduler_res[] = {
 		.l1node_start	= 1,
 		.l1node_end	= 7,
 	},
+};
+
+const struct ppe_soc_config ipq5332_soc_config = {
+	.bm_group_config = ipq5332_ppe_bm_group_config,
+	.bm_port_config = ipq5332_ppe_bm_port_config,
+	.bm_port_config_cnt = ARRAY_SIZE(ipq5332_ppe_bm_port_config),
+	.qm_group_config = ipq5332_ppe_qm_group_config,
+	.qm_queue_config = ipq5332_ppe_qm_queue_config,
+	.qm_queue_config_cnt = ARRAY_SIZE(ipq5332_ppe_qm_queue_config),
+	.sch_bm_config = ipq5332_ppe_sch_bm_config,
+	.sch_bm_config_cnt = ARRAY_SIZE(ipq5332_ppe_sch_bm_config),
+	.sch_qm_config = ipq5332_ppe_sch_qm_config,
+	.sch_qm_config_cnt = ARRAY_SIZE(ipq5332_ppe_sch_qm_config),
+};
+
+const struct ppe_soc_config ipq9574_soc_config = {
+	.bm_group_config = ipq9574_ppe_bm_group_config,
+	.bm_port_config = ipq9574_ppe_bm_port_config,
+	.bm_port_config_cnt = ARRAY_SIZE(ipq9574_ppe_bm_port_config),
+	.qm_group_config = ipq9574_ppe_qm_group_config,
+	.qm_queue_config = ipq9574_ppe_qm_queue_config,
+	.qm_queue_config_cnt = ARRAY_SIZE(ipq9574_ppe_qm_queue_config),
+	.sch_bm_config = ipq9574_ppe_sch_bm_config,
+	.sch_bm_config_cnt = ARRAY_SIZE(ipq9574_ppe_sch_bm_config),
+	.sch_qm_config = ipq9574_ppe_sch_qm_config,
+	.sch_qm_config_cnt = ARRAY_SIZE(ipq9574_ppe_sch_qm_config),
 };
 
 /* Set the PPE queue level scheduler configuration. */
@@ -1080,7 +1220,12 @@ int ppe_port_resource_get(struct ppe_device *ppe_dev, int port,
 	if (port > ppe_dev->num_ports)
 		return -EINVAL;
 
-	res = ppe_scheduler_res[port];
+	/* Port ID num_ports selects the reserved pool in the final entry. */
+	if (port == ppe_dev->num_ports)
+		res = ppe_scheduler_res[ARRAY_SIZE(ppe_scheduler_res) - 1];
+	else
+		res = ppe_scheduler_res[port];
+
 	switch (type) {
 	case PPE_RES_UCAST:
 		*res_start = res.ucastq_start;
@@ -1427,7 +1572,8 @@ static int ppe_config_bm_threshold(struct ppe_device *ppe_dev, int bm_port_id,
 }
 
 /* Configure the buffer threshold for the port flow control function. */
-static int ppe_config_bm(struct ppe_device *ppe_dev)
+static int ppe_config_bm(struct ppe_device *ppe_dev,
+			 const struct ppe_soc_config *soc_cfg)
 {
 	const struct ppe_bm_port_config *port_cfg;
 	unsigned int i, bm_port_id, port_cfg_cnt;
@@ -1440,7 +1586,7 @@ static int ppe_config_bm(struct ppe_device *ppe_dev)
 	 */
 	reg = PPE_BM_SHARED_GROUP_CFG_ADDR;
 	val = FIELD_PREP(PPE_BM_SHARED_GROUP_CFG_SHARED_LIMIT,
-			 ipq9574_ppe_bm_group_config);
+			 soc_cfg->bm_group_config);
 	ret = regmap_update_bits(ppe_dev->regmap, reg,
 				 PPE_BM_SHARED_GROUP_CFG_SHARED_LIMIT,
 				 val);
@@ -1448,8 +1594,8 @@ static int ppe_config_bm(struct ppe_device *ppe_dev)
 		goto bm_config_fail;
 
 	/* Configure buffer thresholds for the BM ports. */
-	port_cfg = ipq9574_ppe_bm_port_config;
-	port_cfg_cnt = ARRAY_SIZE(ipq9574_ppe_bm_port_config);
+	port_cfg = soc_cfg->bm_port_config;
+	port_cfg_cnt = soc_cfg->bm_port_config_cnt;
 	for (i = 0; i < port_cfg_cnt; i++) {
 		for (bm_port_id = port_cfg[i].port_id_start;
 		     bm_port_id <= port_cfg[i].port_id_end; bm_port_id++) {
@@ -1470,7 +1616,8 @@ bm_config_fail:
 /* Configure PPE hardware queue depth, which is decided by the threshold
  * of queue.
  */
-static int ppe_config_qm(struct ppe_device *ppe_dev)
+static int ppe_config_qm(struct ppe_device *ppe_dev,
+			 const struct ppe_soc_config *soc_cfg)
 {
 	const struct ppe_qm_queue_config *queue_cfg;
 	int ret, i, queue_id, queue_cfg_count;
@@ -1485,15 +1632,15 @@ static int ppe_config_qm(struct ppe_device *ppe_dev)
 	if (ret)
 		goto qm_config_fail;
 
-	PPE_AC_GRP_SET_BUF_LIMIT(group_cfg, ipq9574_ppe_qm_group_config);
+	PPE_AC_GRP_SET_BUF_LIMIT(group_cfg, soc_cfg->qm_group_config);
 
 	ret = regmap_bulk_write(ppe_dev->regmap, reg,
 				group_cfg, ARRAY_SIZE(group_cfg));
 	if (ret)
 		goto qm_config_fail;
 
-	queue_cfg = ipq9574_ppe_qm_queue_config;
-	queue_cfg_count = ARRAY_SIZE(ipq9574_ppe_qm_queue_config);
+	queue_cfg = soc_cfg->qm_queue_config;
+	queue_cfg_count = soc_cfg->qm_queue_config_cnt;
 	for (i = 0; i < queue_cfg_count; i++) {
 		queue_id = queue_cfg[i].queue_start;
 
@@ -1625,7 +1772,8 @@ static int ppe_node_scheduler_config(struct ppe_device *ppe_dev,
 /* Initialize scheduler settings for PPE buffer utilization and dispatching
  * packet on PPE queue.
  */
-static int ppe_config_scheduler(struct ppe_device *ppe_dev)
+static int ppe_config_scheduler(struct ppe_device *ppe_dev,
+				const struct ppe_soc_config *soc_cfg)
 {
 	const struct ppe_scheduler_port_config *port_cfg;
 	const struct ppe_scheduler_qm_config *qm_cfg;
@@ -1633,8 +1781,8 @@ static int ppe_config_scheduler(struct ppe_device *ppe_dev)
 	int ret, i, count;
 	u32 val, reg;
 
-	count = ARRAY_SIZE(ipq9574_ppe_sch_bm_config);
-	bm_cfg = ipq9574_ppe_sch_bm_config;
+	count = soc_cfg->sch_bm_config_cnt;
+	bm_cfg = soc_cfg->sch_bm_config;
 
 	/* Configure the depth of BM scheduler entries. */
 	val = FIELD_PREP(PPE_BM_SCH_CTRL_SCH_DEPTH, count);
@@ -1664,8 +1812,8 @@ static int ppe_config_scheduler(struct ppe_device *ppe_dev)
 			goto sch_config_fail;
 	}
 
-	count = ARRAY_SIZE(ipq9574_ppe_sch_qm_config);
-	qm_cfg = ipq9574_ppe_sch_qm_config;
+	count = soc_cfg->sch_qm_config_cnt;
+	qm_cfg = soc_cfg->sch_qm_config;
 
 	/* Configure the depth of QM scheduler entries. */
 	val = FIELD_PREP(PPE_PSCH_SCH_DEPTH_CFG_SCH_DEPTH, count);
@@ -1995,19 +2143,20 @@ static int ppe_bridge_init(struct ppe_device *ppe_dev)
 	return 0;
 }
 
-int ppe_hw_config(struct ppe_device *ppe_dev)
+int ppe_hw_config(struct ppe_device *ppe_dev,
+		  const struct ppe_soc_config *soc_cfg)
 {
 	int ret;
 
-	ret = ppe_config_bm(ppe_dev);
+	ret = ppe_config_bm(ppe_dev, soc_cfg);
 	if (ret)
 		return ret;
 
-	ret = ppe_config_qm(ppe_dev);
+	ret = ppe_config_qm(ppe_dev, soc_cfg);
 	if (ret)
 		return ret;
 
-	ret = ppe_config_scheduler(ppe_dev);
+	ret = ppe_config_scheduler(ppe_dev, soc_cfg);
 	if (ret)
 		return ret;
 

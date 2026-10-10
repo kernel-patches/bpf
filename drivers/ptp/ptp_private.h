@@ -71,17 +71,18 @@ struct ptp_clock {
 };
 
 #define info_to_vclock(d) container_of((d), struct ptp_vclock, info)
-#define cc_to_vclock(d) container_of((d), struct ptp_vclock, cc)
 #define dw_to_vclock(d) container_of((d), struct ptp_vclock, refresh_work)
 
 struct ptp_vclock {
+	u64 cycles;
+	u64 nsec;
+	u64 frac;
+	u32 mult;
 	struct ptp_clock *pclock;
 	struct ptp_clock_info info;
 	struct ptp_clock *clock;
 	struct hlist_node vclock_hash_node;
-	struct cyclecounter cc;
-	struct timecounter tc;
-	struct mutex lock;	/* protects tc/cc */
+	struct mutex lock;	/* protects the virtual counter */
 };
 
 /*
@@ -169,6 +170,7 @@ extern const struct attribute_group *ptp_groups[];
 
 int ptp_populate_pin_groups(struct ptp_clock *ptp);
 void ptp_cleanup_pin_groups(struct ptp_clock *ptp);
+void ptp_vclock_remove_sysfs(struct ptp_clock *ptp);
 
 struct ptp_vclock *ptp_vclock_register(struct ptp_clock *pclock);
 void ptp_vclock_unregister(struct ptp_vclock *vclock);

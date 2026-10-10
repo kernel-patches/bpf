@@ -392,9 +392,29 @@ static int cls_bpf_prog_from_efd(struct nlattr **tb, struct cls_bpf_prog *prog,
 	if (bpf_prog_is_dev_bound(fp->aux)) {
 		struct tcf_block *block = tp->chain->block;
 		struct net_device *dev;
+		unsigned long ifindex;
+		bool found = false;
+		bool match = false;
 
-		dev = block->q ? qdisc_dev(block->q) : NULL;
-		if (!dev || !bpf_offload_dev_match(fp, dev)) {
+		/* A shared block has no qdisc (block->q == NULL) but may
+		 * bind several netdevs; the program is offloaded to all of
+		 * them, so it must match all of them.
+		 */
+		if (!tcf_block_shared(block)) {
+			match = bpf_offload_dev_match(fp, qdisc_dev(tcf_block_q(block)));
+		} else {
+			xa_for_each(&block->ports, ifindex, dev) {
+				found = true;
+				if (!bpf_offload_dev_match(fp, dev)) {
+					match = false;
+					break;
+				}
+				match = true;
+			}
+			if (!found)
+				match = false;
+		}
+		if (!match) {
 			NL_SET_ERR_MSG(extack,
 				       "Program is bound to a different device");
 			bpf_prog_put(fp);
@@ -631,7 +651,8 @@ static int cls_bpf_dump(struct net *net, struct tcf_proto *tp, void *fh,
 	    nla_put_u32(skb, TCA_BPF_FLAGS_GEN, prog->gen_flags))
 		goto nla_put_failure;
 
-	nla_nest_end(skb, nest);
+	if (nla_nest_end_safe(skb, nest) < 0)
+		goto nla_put_failure;
 
 	if (tcf_exts_dump_stats(skb, &prog->exts) < 0)
 		goto nla_put_failure;

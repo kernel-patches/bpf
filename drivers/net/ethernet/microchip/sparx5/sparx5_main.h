@@ -19,6 +19,7 @@
 #include <linux/hrtimer.h>
 #include <linux/debugfs.h>
 #include <net/flow_offload.h>
+#include <net/pkt_cls.h>
 
 #include <fdma_api.h>
 
@@ -108,6 +109,7 @@ enum sparx5_feature {
 #define SPX5_PRIOS             8     /* Number of priority queues */
 #define SPX5_BUFFER_CELL_SZ    184   /* Cell size  */
 #define SPX5_BUFFER_MEMORY     4194280 /* 22795 words * 184 bytes */
+#define SPX5_TAS_ENTRIES_PER_PORT 2 /* TAS lists per port */
 
 #define XTR_QUEUE     0
 #define INJ_QUEUE     0
@@ -206,6 +208,24 @@ struct sparx5_port_config {
 	u32 sd_sgpio;
 };
 
+#define SPX5_POLICERS_PER_PORT 4 /* Number of ingress port policers */
+
+struct sparx5_port_policer {
+	/* Last raw values of the 40-bit hardware counters */
+	struct flow_stats raw;
+	/* 64-bit totals, and the totals last reported to tc */
+	struct flow_stats stats;
+	struct flow_stats prev;
+	/* Port policers hold the client reference (cookie) */
+	unsigned long policer;
+};
+
+struct sparx5_port_tc {
+	/* Ingress uses a shared filter block */
+	bool ingress_block_shared;
+	struct sparx5_port_policer port_policer[SPX5_POLICERS_PER_PORT];
+};
+
 struct sparx5_port {
 	struct net_device *ndev;
 	struct sparx5 *sparx5;
@@ -229,6 +249,7 @@ struct sparx5_port {
 	enum sparx5_vlan_port_type vlan_type;
 	u32 custom_etype;
 	bool vlan_aware;
+	struct sparx5_port_tc tc;
 	struct hrtimer inj_timer;
 	/* ptp */
 	u8 ptp_cmd;
@@ -236,6 +257,11 @@ struct sparx5_port {
 	struct sk_buff_head tx_skbs;
 	bool is_mrouter;
 	struct list_head tc_templates; /* list of TC templates on this port */
+	/* TAS GCL entries owned by each of the port's two TAS lists. */
+	struct {
+		int gcl_base;
+		int gcl_count;
+	} tas_lists[SPX5_TAS_ENTRIES_PER_PORT];
 };
 
 enum sparx5_core_clockfreq {
@@ -276,6 +302,10 @@ struct sparx5_mall_mirror_entry {
 	struct sparx5_port *port;
 };
 
+struct sparx5_mall_port_policer_entry {
+	struct flow_action_police police;
+};
+
 struct sparx5_mall_entry {
 	struct list_head list;
 	struct sparx5_port *port;
@@ -284,6 +314,7 @@ struct sparx5_mall_entry {
 	bool ingress;
 	union {
 		struct sparx5_mall_mirror_entry mirror;
+		struct sparx5_mall_port_policer_entry port_policer;
 	};
 };
 
@@ -316,6 +347,8 @@ struct sparx5_consts {
 	u32 n_gates;             /* Number of PSFP gates */
 	u32 n_sdlbs;             /* Number of service dual leaky buckets */
 	u32 n_dsm_cal_taxis;     /* Number of DSM calendar taxis */
+	u32 n_tas_gcl;           /* Number of TAS gate control list entries */
+	u32 n_tas_lists;         /* Number of TAS lists */
 	u32 buf_size;            /* Amount of QLIM watermark memory */
 	u32 qres_max_prio_idx;   /* Maximum QRES prio index */
 	u32 qres_max_colour_idx; /* Maximum QRES colour index */
@@ -374,6 +407,8 @@ struct sparx5 {
 	void __iomem *regs[NUM_TARGETS];
 	int port_count;
 	struct mutex lock; /* MAC reg lock */
+	struct mutex tas_lock; /* Time Aware Shaper lock */
+	unsigned long *tas_gcl_bitmap; /* Allocated TAS GCL entries */
 	/* port structures are in net device */
 	struct sparx5_port *ports[SPX5_PORTS];
 	enum sparx5_core_clockfreq coreclock;
@@ -629,8 +664,8 @@ void sparx5_sdlb_group_init(struct sparx5 *sparx5, u64 max_rate, u32 min_burst,
 
 /* sparx5_police.c */
 enum {
-	/* More policer types will be added later */
-	SPX5_POL_SERVICE
+	SPX5_POL_SERVICE,
+	SPX5_POL_PORT,
 };
 
 struct sparx5_policer {
@@ -643,6 +678,13 @@ struct sparx5_policer {
 };
 
 int sparx5_policer_conf_set(struct sparx5 *sparx5, struct sparx5_policer *pol);
+int sparx5_port_policer_init(struct sparx5 *sparx5);
+int sparx5_add_port_policer(struct sparx5_mall_entry *entry,
+			    struct netlink_ext_ack *extack);
+int sparx5_delete_port_policer(struct sparx5_mall_entry *entry);
+int sparx5_update_port_policer_stats(struct net_device *ndev,
+				     struct tc_cls_matchall_offload *tmo);
+void sparx5_port_policer_stats_poll(struct sparx5_port *port);
 
 /* sparx5_psfp.c */
 #define SPX5_PSFP_GCE_CNT 4
@@ -706,6 +748,24 @@ void sparx5_psfp_init(struct sparx5 *sparx5);
 /* sparx5_qos.c */
 void sparx5_new_base_time(struct sparx5 *sparx5, const u32 cycle_time,
 			  const ktime_t org_base_time, ktime_t *new_base_time);
+
+/* sparx5_tas.c */
+/* TAS list states, mirrors the HSCH_TAS_LIST_STATE_LIST_STATE HW field */
+enum sparx5_tas_state {
+	SPX5_TAS_STATE_ADMIN,
+	SPX5_TAS_STATE_ADVANCING,
+	SPX5_TAS_STATE_PENDING,
+	SPX5_TAS_STATE_OPERATING,
+	SPX5_TAS_STATE_TERMINATING,
+	SPX5_NUM_TAS_STATE,
+};
+
+int sparx5_tas_init(struct sparx5 *sparx5);
+struct tc_taprio_qopt_offload;
+int sparx5_tas_enable(struct sparx5_port *port,
+		      struct tc_taprio_qopt_offload *qopt);
+int sparx5_tas_disable(struct sparx5_port *port);
+void sparx5_tas_speed(struct sparx5_port *port, int speed);
 
 /* sparx5_mirror.c */
 int sparx5_mirror_add(struct sparx5_mall_entry *entry);

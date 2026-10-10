@@ -8,9 +8,11 @@
 #include <linux/device.h>
 #include <linux/ethtool.h>
 #include <linux/ethtool_netlink.h>
+#include <linux/notifier.h>
 #include <linux/of.h>
 #include <linux/phy.h>
 #include <linux/pse-pd/pse.h>
+#include <linux/regulator/consumer.h>
 #include <linux/regulator/driver.h>
 #include <linux/regulator/machine.h>
 #include <linux/rtnetlink.h>
@@ -22,6 +24,86 @@ static DEFINE_MUTEX(pse_list_mutex);
 static LIST_HEAD(pse_controller_list);
 static DEFINE_XARRAY_ALLOC(pse_pw_d_map);
 static DEFINE_MUTEX(pse_pw_d_mutex);
+
+/* Serialises phydev->psec against the PSE controller lifecycle notifier and
+ * the ethtool PSE paths, in place of rtnl. The attach must not take rtnl: an
+ * MDIO bus registered from ndo_init (e.g. lantiq_etop) calls
+ * phy_device_register() with rtnl already held, so taking rtnl for the attach
+ * would deadlock. It lives here rather than in phylib because PSE_CONTROLLER
+ * is bool, so pse_core is always built into vmlinux and net/ethtool can call
+ * these directly; phylib is tristate and must not be linked against from
+ * built-in code. Lock order: rtnl -> pse_phy_mutex -> pse_list_mutex ->
+ * pcdev->lock.
+ */
+static DEFINE_MUTEX(pse_phy_mutex);
+
+static BLOCKING_NOTIFIER_HEAD(pse_controller_notifier);
+
+/**
+ * pse_phy_lock - serialise access to phydev->psec
+ *
+ * Held by the PSE controller lifecycle notifier, by the phy attach and detach
+ * paths and by the ethtool PSE paths. The PSE_UNREGISTERED walk clears
+ * phydev->psec and drops the phy's reference under this lock, so anything that
+ * attaches, detaches or dereferences phydev->psec must hold it across the
+ * whole access.
+ */
+void pse_phy_lock(void)
+{
+	mutex_lock(&pse_phy_mutex);
+}
+EXPORT_SYMBOL_GPL(pse_phy_lock);
+
+/**
+ * pse_phy_unlock - release the lock taken by pse_phy_lock()
+ */
+void pse_phy_unlock(void)
+{
+	mutex_unlock(&pse_phy_mutex);
+}
+EXPORT_SYMBOL_GPL(pse_phy_unlock);
+
+#ifdef CONFIG_LOCKDEP
+/**
+ * pse_phy_lock_assert_held - assert that pse_phy_lock() is held
+ */
+void pse_phy_lock_assert_held(void)
+{
+	lockdep_assert_held(&pse_phy_mutex);
+}
+EXPORT_SYMBOL_GPL(pse_phy_lock_assert_held);
+#endif
+
+/**
+ * pse_register_notifier - register a callback for PSE controller events
+ * @nb: notifier block to register
+ *
+ * See enum pse_controller_event for events fired and their subscriber
+ * contract. Callbacks run in process context; they may sleep, take
+ * rtnl, and call of_pse_control_get(). The chain fires synchronously,
+ * so a PSE controller driver's probe/unbind path must not hold any
+ * such lock when calling pse_controller_register() or
+ * pse_controller_unregister().
+ *
+ * Return: 0 on success, negative error code otherwise.
+ */
+int pse_register_notifier(struct notifier_block *nb)
+{
+	return blocking_notifier_chain_register(&pse_controller_notifier, nb);
+}
+EXPORT_SYMBOL_GPL(pse_register_notifier);
+
+/**
+ * pse_unregister_notifier - unregister a previously registered callback
+ * @nb: notifier block previously passed to pse_register_notifier()
+ *
+ * Return: 0 on success, negative error code otherwise.
+ */
+int pse_unregister_notifier(struct notifier_block *nb)
+{
+	return blocking_notifier_chain_unregister(&pse_controller_notifier, nb);
+}
+EXPORT_SYMBOL_GPL(pse_unregister_notifier);
 
 /**
  * struct pse_control - a PSE control
@@ -826,6 +908,98 @@ static const struct regulator_ops pse_pi_ops = {
 	.set_current_limit = pse_pi_set_current_limit,
 };
 
+/* The regulator core treats an unresolved "vpwr" supply as non-fatal and
+ * retries it on its own later, which would leave this controller able to
+ * register while of_pse_control_get() still fails with -EPROBE_DEFER for
+ * this PI. A consumer that is not itself retried by deferred probe -
+ * phylib, once it attaches from the PSE notifier - would never get it.
+ * Check the supply up front so the PSE driver's own probe defers instead.
+ *
+ * This is the first of the two stages the core uses, the PI's own node.
+ * pse_controller_check_supply() is the second, the controller device.
+ * Neither get falls back to the dummy regulator, so a PI that names no supply
+ * anywhere still reports -ENODEV and keeps its existing behaviour - the
+ * core resolves it to the dummy when the PI regulator is registered.
+ *
+ * The PI node is consulted only once its own phandle is known to resolve.
+ * of_regulator_get_optional() falls back to of_get_child_regulator() on
+ * the *device* node, which walks every descendant of the controller, so a
+ * PI that does not name a supply itself would otherwise be answered from
+ * a sibling PI's and pass before the controller node is ever consulted.
+ * The core reaches the same sibling walk, but only at its second stage
+ * and only after the controller's own vpwr-supply has had its turn - so
+ * the gate is what keeps a controller-level supply from being masked.
+ *
+ * Return: 0 if this PI needs nothing more, 1 if the controller device has
+ *	   to answer for it, or a negative error.
+ */
+static int pse_pi_check_supply(struct pse_controller_dev *pcdev, int id)
+{
+	struct device_node *np;
+	struct regulator *supply;
+	int ret;
+
+	/* Skip exactly the PIs the registration loop below skips, so every
+	 * regulator that will be created is covered.
+	 */
+	if (!pcdev->no_of_pse_pi && !pcdev->pi[id].np)
+		return 0;
+
+	np = pcdev->pi[id].np ?
+	     of_parse_phandle(pcdev->pi[id].np, "vpwr-supply", 0) : NULL;
+	if (!np)
+		return 1;
+
+	of_node_put(np);
+	supply = of_regulator_get_optional(pcdev->dev, pcdev->pi[id].np,
+					   "vpwr");
+	if (!IS_ERR(supply)) {
+		regulator_put(supply);
+		return 0;
+	}
+
+	ret = PTR_ERR(supply);
+	/* -EPERM only says someone holds this provider exclusively, which
+	 * the core's own resolution never asks about. The provider is
+	 * there, so this PI is fine.
+	 */
+	if (ret == -EPERM)
+		return 0;
+	/* Only -ENODEV moves on to the second stage; a provider that has
+	 * not registered yet gives -EPROBE_DEFER, which is the case worth
+	 * catching here.
+	 */
+	if (ret == -ENODEV)
+		return 1;
+
+	return dev_err_probe(pcdev->dev, ret,
+			     "PI %d: failed to get vpwr supply\n", id);
+}
+
+/* Second stage of pse_pi_check_supply(). A vpwr-supply on the controller
+ * node covers every PI, and is where a PI without a node of its own
+ * resolves too, so the answer is the same for all of them - ask it once,
+ * and only if some PI needs it.
+ */
+static int pse_controller_check_supply(struct pse_controller_dev *pcdev)
+{
+	struct regulator *supply;
+	int ret;
+
+	supply = regulator_get_optional(pcdev->dev, "vpwr");
+	if (!IS_ERR(supply)) {
+		regulator_put(supply);
+		return 0;
+	}
+
+	ret = PTR_ERR(supply);
+	if (ret == -ENODEV || ret == -EPERM)
+		return 0;
+
+	return dev_err_probe(pcdev->dev, ret,
+			     "failed to get vpwr supply\n");
+}
+
 static int
 devm_pse_pi_regulator_register(struct pse_controller_dev *pcdev,
 			       char *name, int id)
@@ -903,11 +1077,21 @@ static void pse_flush_pw_ds(struct pse_controller_dev *pcdev)
 			continue;
 
 		pw_d = xa_load(&pse_pw_d_map, pcdev->pi[i].pw_d->id);
-		if (!pw_d)
+		if (!pw_d) {
+			pcdev->pi[i].pw_d = NULL;
 			continue;
+		}
 
 		kref_put_mutex(&pw_d->refcnt, __pse_pw_d_release,
 			       &pse_pw_d_mutex);
+		/* The pw_d is devm memory of whichever controller created
+		 * it, so it can go away as soon as that probe unwinds.
+		 * Nothing may be left pointing at it: pse_pi_is_enabled()
+		 * reaches pi[].pw_d from the regulator "state" attribute,
+		 * which stays readable until the PI regulators are
+		 * unregistered after us.
+		 */
+		pcdev->pi[i].pw_d = NULL;
 	}
 }
 
@@ -1038,6 +1222,7 @@ static void pse_send_ntf_worker(struct work_struct *work)
  */
 int pse_controller_register(struct pse_controller_dev *pcdev)
 {
+	bool ctrl_supply_ok = false;
 	size_t reg_name_len;
 	int ret, i;
 
@@ -1058,17 +1243,50 @@ int pse_controller_register(struct pse_controller_dev *pcdev)
 	    !pcdev->ops->pi_get_pw_status) {
 		dev_err(pcdev->dev,
 			"Mandatory status report callbacks are missing");
-		return -EINVAL;
+		ret = -EINVAL;
+		goto free_kfifo;
 	}
 
 	ret = of_load_pse_pis(pcdev);
 	if (ret)
-		return ret;
+		goto free_kfifo;
 
 	if (pcdev->ops->setup_pi_matrix) {
 		ret = pcdev->ops->setup_pi_matrix(pcdev);
 		if (ret)
-			return ret;
+			goto release_pis;
+	}
+
+	/* Check every PI supply before any regulator of ours is registered:
+	 * a provider that has not probed yet is the ordinary -EPROBE_DEFER
+	 * case, and unwinding it must still be able to release the PI array,
+	 * which it cannot once a PI regulator exists.
+	 *
+	 * This has to stay after setup_pi_matrix(). A PI's vpwr-supply can
+	 * name a regulator the controller itself creates there - pd692x0's
+	 * pse-pi nodes point at its manager regulators - so checking any
+	 * earlier would defer on a supply that only this driver can bring
+	 * up, and it would never probe.
+	 */
+	for (i = 0; i < pcdev->nr_lines; i++) {
+		ret = pse_pi_check_supply(pcdev, i);
+		if (ret < 0)
+			goto release_pis;
+
+		/* The controller device answers for every PI that its own
+		 * node cannot, so it is asked at the first such PI and not
+		 * again. Asking it here rather than after the loop keeps
+		 * the order the core resolves in, so the first PI to fail
+		 * is still the one reported.
+		 */
+		if (!ret || ctrl_supply_ok)
+			continue;
+
+		ret = pse_controller_check_supply(pcdev);
+		if (ret)
+			goto release_pis;
+
+		ctrl_supply_ok = true;
 	}
 
 	/* Each regulator name len is pcdev dev name + 7 char +
@@ -1076,7 +1294,12 @@ int pse_controller_register(struct pse_controller_dev *pcdev)
 	 */
 	reg_name_len = strlen(dev_name(pcdev->dev)) + 18;
 
-	/* Register PI regulators */
+	/* Register PI regulators. Once one of these exists, pse_pi_ops index
+	 * pcdev->pi[] and nothing here can unregister it again, so the array
+	 * must outlive this function. Failures below therefore unwind to
+	 * free_kfifo and deliberately leak it, as they already do today,
+	 * rather than hand the live regulators a freed pointer.
+	 */
 	for (i = 0; i < pcdev->nr_lines; i++) {
 		char *reg_name;
 
@@ -1085,26 +1308,49 @@ int pse_controller_register(struct pse_controller_dev *pcdev)
 			continue;
 
 		reg_name = devm_kzalloc(pcdev->dev, reg_name_len, GFP_KERNEL);
-		if (!reg_name)
-			return -ENOMEM;
+		if (!reg_name) {
+			ret = -ENOMEM;
+			goto free_kfifo;
+		}
 
 		snprintf(reg_name, reg_name_len, "pse-%s_pi%d",
 			 dev_name(pcdev->dev), i);
 
 		ret = devm_pse_pi_regulator_register(pcdev, reg_name, i);
 		if (ret)
-			return ret;
+			goto free_kfifo;
 	}
 
 	ret = pse_register_pw_ds(pcdev);
-	if (ret)
-		return ret;
+	if (ret) {
+		/* Deliberately not release_pis: the PI regulators registered
+		 * above index pcdev->pi[] and outlive this function.
+		 */
+		pse_flush_pw_ds(pcdev);
+		goto free_kfifo;
+	}
 
 	mutex_lock(&pse_list_mutex);
 	list_add(&pcdev->list, &pse_controller_list);
 	mutex_unlock(&pse_list_mutex);
 
+	blocking_notifier_call_chain(&pse_controller_notifier,
+				     PSE_REGISTERED, pcdev);
+
 	return 0;
+
+	/* Only for failures above the PI regulator loop, where no regulator
+	 * indexes pcdev->pi[] yet. Anything below it has to go straight to
+	 * free_kfifo instead.
+	 */
+release_pis:
+	pse_release_pis(pcdev);
+	pcdev->pi = NULL;
+
+free_kfifo:
+	kfifo_free(&pcdev->ntf_fifo);
+
+	return ret;
 }
 EXPORT_SYMBOL_GPL(pse_controller_register);
 
@@ -1114,15 +1360,48 @@ EXPORT_SYMBOL_GPL(pse_controller_register);
  */
 void pse_controller_unregister(struct pse_controller_dev *pcdev)
 {
-	pse_flush_pw_ds(pcdev);
-	pse_release_pis(pcdev);
+	/* Raise the interrupt's disable depth before anything is freed.
+	 * pse_isr() queues notifications and reaches pcdev->pi, and nothing
+	 * below re-enables it. For a driver that requests its irq after
+	 * devm_pse_controller_register(), devres has already run free_irq()
+	 * by the time we get here and this only bumps the depth - the
+	 * ordering does not rely on that, so a driver requesting the irq
+	 * earlier is covered too.
+	 */
 	if (pcdev->irq)
 		disable_irq(pcdev->irq);
-	cancel_work_sync(&pcdev->ntf_work);
-	kfifo_free(&pcdev->ntf_fifo);
+
+	/* Unlink before the event: of_pse_control_get() walks
+	 * pse_controller_list and dereferences pcdev->pi[] through
+	 * of_pse_match_pi(), so no lookup may still reach this controller
+	 * once its teardown starts. Subscribers are handed pcdev as the
+	 * event data, so the notifier does not need it on the list.
+	 */
 	mutex_lock(&pse_list_mutex);
 	list_del(&pcdev->list);
 	mutex_unlock(&pse_list_mutex);
+
+	blocking_notifier_call_chain(&pse_controller_notifier,
+				     PSE_UNREGISTERED, pcdev);
+
+	/* After the event, not before. A subscriber dropping the last
+	 * pse_control reference reaches __pse_control_release() ->
+	 * regulator_disable() -> _pse_pi_disable(), which can end up in
+	 * pse_disable_pi_pol() and queue a notification of its own, so a
+	 * cancel_work_sync() placed above the walk would not stay drained.
+	 */
+	cancel_work_sync(&pcdev->ntf_work);
+
+	/* Every handle should be gone here: subscribers drop theirs in the
+	 * event above, and the worker's transient one goes with the drain.
+	 * The controller is off the list and the irq is off, so nothing can
+	 * add one. Anything left is a holder nobody accounted for.
+	 */
+	WARN_ON(!list_empty(&pcdev->pse_control_head));
+
+	pse_flush_pw_ds(pcdev);
+	pse_release_pis(pcdev);
+	kfifo_free(&pcdev->ntf_fifo);
 }
 EXPORT_SYMBOL_GPL(pse_controller_unregister);
 
@@ -1981,3 +2260,17 @@ bool pse_has_c33(struct pse_control *psec)
 	return psec->pcdev->types & ETHTOOL_PSE_C33;
 }
 EXPORT_SYMBOL_GPL(pse_has_c33);
+
+/**
+ * pse_control_matches_pcdev - Test whether a pse_control targets a controller
+ * @psec: pse_control obtained from of_pse_control_get()
+ * @pcdev: PSE controller to compare against
+ *
+ * Return: %true if @psec was obtained from @pcdev, %false otherwise.
+ */
+bool pse_control_matches_pcdev(struct pse_control *psec,
+			       struct pse_controller_dev *pcdev)
+{
+	return psec->pcdev == pcdev;
+}
+EXPORT_SYMBOL_GPL(pse_control_matches_pcdev);

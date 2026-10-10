@@ -328,7 +328,6 @@ struct sk_buff *tcp_gro_receive(struct list_head *head, struct sk_buff *skb,
 	flush |= skb_cmp_decrypted(p, skb);
 
 	if (unlikely(NAPI_GRO_CB(p)->is_flist)) {
-		flush |= (__force int)(flags ^ tcp_flag_word(th2));
 		flush |= skb->ip_summed != p->ip_summed;
 		flush |= skb->csum_level != p->csum_level;
 		flush |= NAPI_GRO_CB(p)->count >= 64;

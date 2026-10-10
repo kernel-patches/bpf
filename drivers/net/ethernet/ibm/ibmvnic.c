@@ -2152,6 +2152,26 @@ static int ibmvnic_close(struct net_device *netdev)
 	return rc;
 }
 
+static void ibmvnic_close_work(struct work_struct *work)
+{
+	struct ibmvnic_adapter *adapter = container_of(work,
+							struct ibmvnic_adapter,
+							ibmvnic_close_work);
+	unsigned long flags;
+	bool removing;
+
+	/* The close path can sleep, so run it outside the CRQ tasklet. */
+	wait_for_completion(&adapter->probe_done);
+	rtnl_lock();
+	spin_lock_irqsave(&adapter->rwi_lock, flags);
+	removing = adapter->removing;
+	spin_unlock_irqrestore(&adapter->rwi_lock, flags);
+
+	if (!removing)
+		ibmvnic_close(adapter->netdev);
+	rtnl_unlock();
+}
+
 /**
  * get_hdr_lens - fills list of L2/L3/L4 hdr lens
  * @hdr_field: bitfield determining needed headers
@@ -3229,9 +3249,12 @@ static void __ibmvnic_reset(struct work_struct *work)
 	if (adapter->state == VNIC_PROBING &&
 	    !wait_for_completion_timeout(&adapter->probe_done, timeout)) {
 		dev_err(dev, "Reset thread timed out on probe");
-		queue_delayed_work(system_long_wq,
-				   &adapter->ibmvnic_delayed_reset,
-				   IBMVNIC_RESET_DELAY);
+		spin_lock_irqsave(&adapter->rwi_lock, flags);
+		if (!adapter->removing)
+			queue_delayed_work(system_long_wq,
+					   &adapter->ibmvnic_delayed_reset,
+					   IBMVNIC_RESET_DELAY);
+		spin_unlock_irqrestore(&adapter->rwi_lock, flags);
 		return;
 	}
 
@@ -3265,7 +3288,7 @@ static void __ibmvnic_reset(struct work_struct *work)
 	 */
 	need_reset = false;
 	spin_lock(&adapter->rwi_lock);
-	if (!list_empty(&adapter->rwi_list)) {
+	if (!adapter->removing && !list_empty(&adapter->rwi_list)) {
 		if (test_and_set_bit_lock(0, &adapter->resetting)) {
 			queue_delayed_work(system_long_wq,
 					   &adapter->ibmvnic_delayed_reset,
@@ -3422,7 +3445,8 @@ static int ibmvnic_reset(struct ibmvnic_adapter *adapter,
 	 * a failover reset scheduled, we will detect and drop the
 	 * duplicate reset when walking the ->rwi_list below.
 	 */
-	if (adapter->state == VNIC_REMOVING ||
+	if (adapter->removing ||
+	    adapter->state == VNIC_REMOVING ||
 	    adapter->state == VNIC_REMOVED ||
 	    (adapter->failover_pending && reason != VNIC_RESET_FAILOVER)) {
 		ret = EBUSY;
@@ -3458,11 +3482,11 @@ static int ibmvnic_reset(struct ibmvnic_adapter *adapter,
 
 	ret = 0;
 err:
-	/* ibmvnic_close() below can block, so drop the lock first */
-	spin_unlock_irqrestore(&adapter->rwi_lock, flags);
-
 	if (ret == ENOMEM)
-		ibmvnic_close(netdev);
+		queue_work(system_long_wq, &adapter->ibmvnic_close_work);
+
+	/* ibmvnic_close() can block, so defer it out of atomic context. */
+	spin_unlock_irqrestore(&adapter->rwi_lock, flags);
 
 	return -ret;
 }
@@ -6466,6 +6490,7 @@ static int ibmvnic_probe(struct vio_dev *dev, const struct vio_device_id *id)
 	SET_NETDEV_DEV(netdev, &dev->dev);
 
 	INIT_WORK(&adapter->ibmvnic_reset, __ibmvnic_reset);
+	INIT_WORK(&adapter->ibmvnic_close_work, ibmvnic_close_work);
 	INIT_DELAYED_WORK(&adapter->ibmvnic_delayed_reset,
 			  __ibmvnic_delayed_reset);
 	INIT_LIST_HEAD(&adapter->rwi_list);
@@ -6568,7 +6593,8 @@ static int ibmvnic_probe(struct vio_dev *dev, const struct vio_device_id *id)
 		goto cpu_notif_add_failed;
 	}
 
-	complete(&adapter->probe_done);
+	complete_all(&adapter->probe_done);
+	flush_work(&adapter->ibmvnic_close_work);
 
 	return 0;
 
@@ -6591,10 +6617,14 @@ ibmvnic_init_fail:
 	/* cleanup worker thread after releasing CRQ so we don't get
 	 * transport events (i.e new work items for the worker thread).
 	 */
+	spin_lock_irqsave(&adapter->rwi_lock, flags);
+	adapter->removing = true;
 	adapter->state = VNIC_REMOVING;
-	complete(&adapter->probe_done);
+	spin_unlock_irqrestore(&adapter->rwi_lock, flags);
+	complete_all(&adapter->probe_done);
 	flush_work(&adapter->ibmvnic_reset);
 	flush_delayed_work(&adapter->ibmvnic_delayed_reset);
+	flush_work(&adapter->ibmvnic_close_work);
 
 	flush_reset_queue(adapter);
 
@@ -6620,6 +6650,7 @@ static void ibmvnic_remove(struct vio_dev *dev)
 	 * from the flush_work() below, can make progress.
 	 */
 	spin_lock(&adapter->rwi_lock);
+	adapter->removing = true;
 	adapter->state = VNIC_REMOVING;
 	spin_unlock(&adapter->rwi_lock);
 
@@ -6629,6 +6660,7 @@ static void ibmvnic_remove(struct vio_dev *dev)
 
 	flush_work(&adapter->ibmvnic_reset);
 	flush_delayed_work(&adapter->ibmvnic_delayed_reset);
+	flush_work(&adapter->ibmvnic_close_work);
 
 	rtnl_lock();
 	unregister_netdevice(netdev);

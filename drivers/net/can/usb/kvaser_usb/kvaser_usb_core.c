@@ -926,6 +926,23 @@ candev_free:
 	return err;
 }
 
+static int kvaser_usb_setup_endpoints(struct kvaser_usb *dev)
+{
+	struct usb_host_interface *iface_desc;
+	int ret;
+
+	iface_desc = dev->intf->cur_altsetting;
+
+	/* use first bulk endpoint for in and out */
+	ret = usb_find_common_endpoints(iface_desc, &dev->bulk_in,
+					&dev->bulk_out, NULL, NULL);
+
+	if (ret)
+		return -ENODEV;
+
+	return 0;
+}
+
 static int kvaser_usb_probe(struct usb_interface *intf,
 			    const struct usb_device_id *id)
 {
@@ -949,7 +966,7 @@ static int kvaser_usb_probe(struct usb_interface *intf,
 	dev->driver_info = driver_info;
 	ops = driver_info->ops;
 
-	err = ops->dev_setup_endpoints(dev);
+	err = kvaser_usb_setup_endpoints(dev);
 	if (err) {
 		dev_err_probe(&intf->dev, err, "Cannot get usb endpoint(s)");
 		goto free_devlink;

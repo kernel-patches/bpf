@@ -28,7 +28,7 @@ struct gmii2rgmii {
 	struct mdio_device *mdio;
 };
 
-static void xgmiitorgmii_configure(struct gmii2rgmii *priv, int speed)
+static void xgmiitorgmii_configure(const struct gmii2rgmii *priv, int speed)
 {
 	struct mii_bus *bus = priv->mdio->bus;
 	int addr = priv->mdio->addr;
@@ -49,7 +49,9 @@ static void xgmiitorgmii_configure(struct gmii2rgmii *priv, int speed)
 
 static int xgmiitorgmii_read_status(struct phy_device *phydev)
 {
-	struct gmii2rgmii *priv = mdiodev_get_drvdata(&phydev->mdio);
+	const struct gmii2rgmii *priv = container_of_const(phydev->drv,
+							   struct gmii2rgmii,
+							   conv_phy_drv);
 	int err;
 
 	if (priv->phy_drv->read_status)
@@ -67,7 +69,9 @@ static int xgmiitorgmii_read_status(struct phy_device *phydev)
 static int xgmiitorgmii_set_loopback(struct phy_device *phydev, bool enable,
 				     int speed)
 {
-	struct gmii2rgmii *priv = mdiodev_get_drvdata(&phydev->mdio);
+	const struct gmii2rgmii *priv = container_of_const(phydev->drv,
+							   struct gmii2rgmii,
+							   conv_phy_drv);
 	int err;
 
 	if (priv->phy_drv->set_loopback)
@@ -123,10 +127,26 @@ static int xgmiitorgmii_probe(struct mdio_device *mdiodev)
 	       sizeof(struct phy_driver));
 	priv->conv_phy_drv.read_status = xgmiitorgmii_read_status;
 	priv->conv_phy_drv.set_loopback = xgmiitorgmii_set_loopback;
-	mdiodev_set_drvdata(&priv->phy_dev->mdio, priv);
 	priv->phy_dev->drv = &priv->conv_phy_drv;
+	mdiodev_set_drvdata(mdiodev, priv);
 
 	return 0;
+}
+
+static void xgmiitorgmii_remove(struct mdio_device *mdiodev)
+{
+	struct gmii2rgmii *priv = mdiodev_get_drvdata(mdiodev);
+
+	/*
+	 * Restore the original driver only if the converter's copy is still
+	 * installed. Serialize against PHY callbacks that hold phydev->lock.
+	 */
+	mutex_lock(&priv->phy_dev->lock);
+	if (priv->phy_dev->drv == &priv->conv_phy_drv)
+		priv->phy_dev->drv = priv->phy_drv;
+	mutex_unlock(&priv->phy_dev->lock);
+
+	put_device(&priv->phy_dev->mdio.dev);
 }
 
 static const struct of_device_id xgmiitorgmii_of_match[] = {
@@ -137,6 +157,7 @@ MODULE_DEVICE_TABLE(of, xgmiitorgmii_of_match);
 
 static struct mdio_driver xgmiitorgmii_driver = {
 	.probe	= xgmiitorgmii_probe,
+	.remove	= xgmiitorgmii_remove,
 	.mdiodrv.driver = {
 		.name = "xgmiitorgmii",
 		.of_match_table = xgmiitorgmii_of_match,

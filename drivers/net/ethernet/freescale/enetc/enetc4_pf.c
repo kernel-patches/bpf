@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: (GPL-2.0+ OR BSD-3-Clause)
-/* Copyright 2024 NXP */
+/* Copyright 2024, 2026 NXP */
 
 #include <linux/clk.h>
 #include <linux/module.h>
@@ -12,10 +12,9 @@
 
 #define ENETC_SI_MAX_RING_NUM	8
 
-#define ENETC_MAC_FILTER_TYPE_UC	BIT(0)
-#define ENETC_MAC_FILTER_TYPE_MC	BIT(1)
-#define ENETC_MAC_FILTER_TYPE_ALL	(ENETC_MAC_FILTER_TYPE_UC | \
-					 ENETC_MAC_FILTER_TYPE_MC)
+/* embedded overlay blob, created by cmd_wrap_S_dtb in scripts/Makefile.lib */
+extern char __dtbo_enetc4_pseudo_mac_begin[];
+extern char __dtbo_enetc4_pseudo_mac_end[];
 
 static void enetc4_get_port_caps(struct enetc_pf *pf)
 {
@@ -137,7 +136,7 @@ clear_maft_entries:
 static void enetc4_pf_set_uc_hash_filter(struct enetc_pf *pf,
 					 struct netdev_hw_addr_list *uc)
 {
-	struct enetc_mac_filter *mac_filter = &pf->mac_filter[UC];
+	struct enetc_mac_filter *mac_filter = &pf->si->mac_filter[UC];
 	struct netdev_hw_addr *ha;
 	u64 hash;
 
@@ -172,7 +171,7 @@ static int enetc4_pf_set_uc_exact_filter(struct enetc_pf *pf,
 
 	err = enetc4_pf_add_maft_entries(pf, uc);
 	if (!err) {
-		enetc_reset_mac_addr_filter(&pf->mac_filter[UC]);
+		enetc_reset_mac_addr_filter(&si->mac_filter[UC]);
 		enetc_set_si_uc_hash_filter(si, 0, 0);
 	}
 
@@ -182,7 +181,7 @@ static int enetc4_pf_set_uc_exact_filter(struct enetc_pf *pf,
 static void enetc4_pf_set_mc_hash_filter(struct enetc_pf *pf,
 					 struct netdev_hw_addr_list *mc)
 {
-	struct enetc_mac_filter *mac_filter = &pf->mac_filter[MC];
+	struct enetc_mac_filter *mac_filter = &pf->si->mac_filter[MC];
 	struct netdev_hw_addr *ha;
 	u64 hash;
 
@@ -217,18 +216,42 @@ static void enetc4_pf_set_mac_filter(struct enetc_pf *pf, int type,
 		enetc4_pf_set_mc_hash_filter(pf, mc);
 }
 
+static void enetc4_pf_vf_flr_handler(struct enetc_pf *pf, int vf_id)
+{
+	struct enetc_vf_state *vf_state;
+	bool uc_promisc, mc_promisc;
+
+	vf_state = &pf->vf_state[vf_id];
+	mutex_lock(&vf_state->lock);
+
+	uc_promisc = !!(vf_state->flags & ENETC_VF_FLAG_UC_PROMISC);
+	mc_promisc = !!(vf_state->flags & ENETC_VF_FLAG_MC_PROMISC);
+
+	spin_lock(&pf->si->gen_lock);
+	enetc_set_si_uc_promisc(pf->si, vf_id + 1, uc_promisc);
+	enetc_set_si_mc_promisc(pf->si, vf_id + 1, mc_promisc);
+	spin_unlock(&pf->si->gen_lock);
+
+	mutex_unlock(&vf_state->lock);
+}
+
 static const struct enetc_pf_ops enetc4_pf_ops = {
 	.set_si_primary_mac = enetc4_pf_set_si_primary_mac,
 	.get_si_primary_mac = enetc4_pf_get_si_primary_mac,
+	.vf_flr_handler = enetc4_pf_vf_flr_handler,
 };
 
 static int enetc4_pf_struct_init(struct enetc_si *si)
 {
 	struct enetc_pf *pf = enetc_si_priv(si);
+	int err;
 
 	pf->si = si;
-	pf->total_vfs = pci_sriov_get_totalvfs(si->pdev);
 	pf->ops = &enetc4_pf_ops;
+
+	err = enetc_init_sriov_resources(pf);
+	if (err)
+		return err;
 
 	enetc4_get_port_caps(pf);
 	enetc4_get_psi_hw_features(si);
@@ -524,8 +547,10 @@ static int enetc4_pf_set_rx_mode(struct net_device *ndev,
 		type = ENETC_MAC_FILTER_TYPE_ALL;
 	}
 
+	spin_lock(&si->gen_lock);
 	enetc_set_si_uc_promisc(si, 0, uc_promisc);
 	enetc_set_si_mc_promisc(si, 0, mc_promisc);
+	spin_unlock(&si->gen_lock);
 
 	if (uc_promisc) {
 		enetc_set_si_uc_hash_filter(si, 0, 0);
@@ -574,6 +599,9 @@ static const struct net_device_ops enetc4_ndev_ops = {
 	.ndo_eth_ioctl		= enetc_ioctl,
 	.ndo_hwtstamp_get	= enetc_hwtstamp_get,
 	.ndo_hwtstamp_set	= enetc_hwtstamp_set,
+	.ndo_set_vf_trust	= enetc_pf_set_vf_trust,
+	.ndo_set_vf_mac		= enetc_pf_set_vf_mac,
+	.ndo_get_vf_config	= enetc_pf_get_vf_config,
 };
 
 static struct phylink_pcs *
@@ -894,6 +922,7 @@ static void enetc4_pl_mac_link_up(struct phylink_config *config,
 	enetc4_set_rx_pause(pf, rx_pause);
 	enetc4_mac_tx_enable(pf);
 	enetc4_mac_rx_enable(pf);
+	enetc_pf_notify_vf_link_up(pf);
 }
 
 static void enetc4_pl_mac_link_down(struct phylink_config *config,
@@ -902,8 +931,35 @@ static void enetc4_pl_mac_link_down(struct phylink_config *config,
 {
 	struct enetc_pf *pf = phylink_to_enetc_pf(config);
 
+	enetc_pf_notify_vf_link_down(pf);
 	enetc4_mac_rx_graceful_stop(pf);
 	enetc4_mac_tx_graceful_stop(pf);
+}
+
+static void enetc4_get_pcr_speed(struct enetc_hw *hw, int *speed)
+{
+	u32 val = enetc_port_rd(hw, ENETC4_PCR);
+	int pspeed = FIELD_GET(PCR_PSPEED, val);
+
+	*speed = (pspeed + 1) * 10;
+}
+
+/* Pseudo-MAC ports have no real PHY; the link is fixed. The overlay puts
+ * phylink into fixed-link mode, but the operating speed is taken live from
+ * PCR[PSPEED] here rather than from the DT 'speed' cell.
+ */
+static void enetc4_pl_get_fixed_state(struct phylink_config *config,
+				      struct phylink_link_state *state)
+{
+	struct enetc_pf *pf = phylink_to_enetc_pf(config);
+	int speed;
+
+	enetc4_get_pcr_speed(&pf->si->hw, &speed);
+
+	state->link = 1;
+	state->an_complete = 1;
+	state->duplex = DUPLEX_FULL;
+	state->speed = enetc_phylink_match_pseudo_mac_speed(speed);
 }
 
 static const struct phylink_mac_ops enetc_pl_mac_ops = {
@@ -920,23 +976,76 @@ static void enetc4_pci_remove(void *data)
 	enetc_pci_remove(pdev);
 }
 
+static void enetc4_put_overlay(struct enetc_ndev_priv *priv)
+{
+	if (!priv->ovcs_id)
+		return;
+
+	of_overlay_remove(&priv->ovcs_id);
+	priv->ovcs_id = 0;
+}
+
+static int enetc4_apply_overlay(struct enetc_ndev_priv *priv)
+{
+	u32 size = __dtbo_enetc4_pseudo_mac_end - __dtbo_enetc4_pseudo_mac_begin;
+	struct device_node *np = dev_of_node(priv->dev);
+	int err;
+
+	if (!np)
+		return dev_err_probe(priv->dev, -ENODEV,
+				     "Missing of_node for Pseudo-MAC port\n");
+
+	err = of_overlay_fdt_apply(__dtbo_enetc4_pseudo_mac_begin, size,
+				   &priv->ovcs_id, np);
+	if (err)
+		return dev_err_probe(priv->dev, err,
+				     "Failed to apply fixed-link overlay\n");
+
+	return 0;
+}
+
 static int enetc4_link_init(struct enetc_ndev_priv *priv,
 			    struct device_node *node)
 {
+	bool dynamic = node && of_node_check_flag(node, OF_DYNAMIC);
 	struct enetc_pf *pf = enetc_si_priv(priv->si);
 	struct device *dev = priv->dev;
 	int err;
 
-	err = of_get_phy_mode(node, &pf->if_mode);
-	if (err) {
-		dev_err(dev, "Failed to get PHY mode\n");
-		return err;
+	/* Pseudo-MAC ENETCs are described by a runtime fixed-link overlay
+	 * rather than static DT. This covers both a missing OF node and a
+	 * PCI-synthesized (OF_DYNAMIC) node, which is an empty node created
+	 * by the PCI core and thus carries no fixed-link description.
+	 */
+	if (enetc_is_pseudo_mac(priv->si) && (!node || dynamic)) {
+		pf->if_mode = PHY_INTERFACE_MODE_INTERNAL;
+
+		err = enetc4_apply_overlay(priv);
+		if (err)
+			return err;
+
+		/* Source the fixed-link speed live from PCR[PSPEED] instead
+		 * of the overlay 'speed' cell.
+		 */
+		pf->phylink_config.get_fixed_state = enetc4_pl_get_fixed_state;
+
+		/* The overlay was grafted onto dev's own of_node, so phylink
+		 * will find the fixed-link via dev_fwnode(dev). Use that node
+		 * for the subsequent MDIO/phylink setup below.
+		 */
+		node = dev_of_node(dev);
+	} else {
+		err = of_get_phy_mode(node, &pf->if_mode);
+		if (err) {
+			dev_err(dev, "Failed to get PHY mode\n");
+			return err;
+		}
 	}
 
 	err = enetc_mdiobus_create(pf, node);
 	if (err) {
 		dev_err(dev, "Failed to create MDIO bus\n");
-		return err;
+		goto err_mdiobus_create;
 	}
 
 	err = enetc_phylink_create(priv, node, &enetc_pl_mac_ops);
@@ -949,6 +1058,8 @@ static int enetc4_link_init(struct enetc_ndev_priv *priv,
 
 err_phylink_create:
 	enetc_mdiobus_destroy(pf);
+err_mdiobus_create:
+	enetc4_put_overlay(priv);
 
 	return err;
 }
@@ -959,6 +1070,37 @@ static void enetc4_link_deinit(struct enetc_ndev_priv *priv)
 
 	enetc_phylink_destroy(priv);
 	enetc_mdiobus_destroy(pf);
+	enetc4_put_overlay(priv);
+}
+
+static void enetc4_pf_link_status_task(struct work_struct *work)
+{
+	struct enetc_pf *pf = container_of(work, struct enetc_pf,
+					   link_status_task);
+
+	enetc_pf_send_link_status_msg(pf);
+}
+
+static int enetc4_pf_wq_task_init(struct enetc_si *si)
+{
+	struct enetc_pf *pf = enetc_si_priv(si);
+
+	si->workqueue = alloc_ordered_workqueue("enetc-%s-wq", 0,
+						pci_name(si->pdev));
+	if (!si->workqueue)
+		return -ENOMEM;
+
+	INIT_WORK(&pf->link_status_task, enetc4_pf_link_status_task);
+
+	return 0;
+}
+
+static void enetc4_pf_wq_task_destroy(struct enetc_si *si)
+{
+	struct enetc_pf *pf = enetc_si_priv(si);
+
+	disable_work_sync(&pf->link_status_task);
+	destroy_workqueue(si->workqueue);
 }
 
 static int enetc4_pf_netdev_create(struct enetc_si *si)
@@ -1001,6 +1143,10 @@ static int enetc4_pf_netdev_create(struct enetc_si *si)
 	if (err)
 		goto err_link_init;
 
+	err = enetc4_pf_wq_task_init(si);
+	if (err)
+		goto err_wq_init;
+
 	err = register_netdev(ndev);
 	if (err) {
 		dev_err(dev, "Failed to register netdev\n");
@@ -1010,6 +1156,8 @@ static int enetc4_pf_netdev_create(struct enetc_si *si)
 	return 0;
 
 err_reg_netdev:
+	enetc4_pf_wq_task_destroy(si);
+err_wq_init:
 	enetc4_link_deinit(priv);
 err_link_init:
 	enetc_free_msix(priv);
@@ -1027,6 +1175,7 @@ static void enetc4_pf_netdev_destroy(struct enetc_si *si)
 	struct net_device *ndev = si->ndev;
 
 	unregister_netdev(ndev);
+	enetc4_pf_wq_task_destroy(si);
 	enetc4_link_deinit(priv);
 	enetc_free_msix(priv);
 	free_netdev(ndev);
@@ -1096,6 +1245,9 @@ static void enetc4_pf_remove(struct pci_dev *pdev)
 	struct enetc_si *si = pci_get_drvdata(pdev);
 	struct enetc_pf *pf = enetc_si_priv(si);
 
+	if (pf->num_vfs)
+		enetc_sriov_configure(pdev, 0);
+
 	enetc_remove_debugfs(si);
 	enetc4_pf_netdev_destroy(si);
 	enetc4_pf_free(pf);
@@ -1113,6 +1265,7 @@ static struct pci_driver enetc4_pf_driver = {
 	.id_table = enetc4_pf_id_table,
 	.probe = enetc4_pf_probe,
 	.remove = enetc4_pf_remove,
+	.sriov_configure = enetc_sriov_configure,
 };
 module_pci_driver(enetc4_pf_driver);
 

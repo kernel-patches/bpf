@@ -96,6 +96,10 @@ The port wrapper provides connections from the 6 GMAC/XGMACS to UNIPHY (PCS) sup
 various modes such as SGMII/QSGMII/PSGMII/USXGMII/10G-BASER. There are 3 UNIPHY (PCS)
 instances supported on the IPQ9574.
 
+IPQ5332 uses the same PPE architecture with two front panel ports and two UNIPHY
+(PCS) instances. Its Ethernet datapath has a CPU port (port0) and two GMAC/XGMAC
+ports (port1 and port2).
+
 Ethernet DMA is used to transmit and receive packets between the Ethernet subsystem
 and ARM host CPU.
 
@@ -118,6 +122,8 @@ PPE driver:
     through the UNIPHY PCS block. Each MAC block includes the GMAC and XGMAC blocks and
     the switch port can select to use GMAC or XMAC through a MUX selection according to
     the external PHY's capability.
+    IPQ5332 has two MACs (MAC0 and MAC1), connected to switch ports port1 and
+    port2 through two UNIPHY instances.
 - EDMA (Ethernet DMA)
     The Ethernet DMA is used to transmit and receive Ethernet packets between the PPE
     ports and the ARM cores.
@@ -164,8 +170,9 @@ CPU code counters and queue counters.
 PPE Driver Supported SoCs
 =========================
 
-The PPE driver supports the following IPQ SoC:
+The PPE driver supports the following IPQ SoCs:
 
+- IPQ5332
 - IPQ9574
 
 

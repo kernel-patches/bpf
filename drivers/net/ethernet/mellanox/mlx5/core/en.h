@@ -264,6 +264,7 @@ enum mlx5e_priv_flag {
 	MLX5E_PFLAG_XDP_TX_MPWQE,
 	MLX5E_PFLAG_SKB_TX_MPWQE,
 	MLX5E_PFLAG_TX_PORT_TS,
+	MLX5E_PFLAG_DATA_DIRECT,
 	MLX5E_NUM_PFLAGS, /* Keep last */
 };
 
@@ -341,6 +342,7 @@ enum {
 	MLX5E_RQ_STATE_SHAMPO, /* set when SHAMPO cap is used */
 	MLX5E_RQ_STATE_MINI_CQE_ENHANCED,  /* set when enhanced mini_cqe_cap is used */
 	MLX5E_RQ_STATE_XSK, /* set to indicate an xsk rq */
+	MLX5E_RQ_STATE_DATA_DIRECT, /* set when the rq maps data through data direct */
 	MLX5E_NUM_RQ_STATES, /* Must be kept last */
 };
 
@@ -395,6 +397,7 @@ enum {
 	MLX5E_SQ_STATE_PENDING_XSK_TX,
 	MLX5E_SQ_STATE_PENDING_TLS_RX_RESYNC,
 	MLX5E_SQ_STATE_LOCK_NEEDED,
+	MLX5E_SQ_STATE_DATA_DIRECT, /* set when the sq maps net_iov frags through data direct */
 	MLX5E_NUM_SQ_STATES, /* Must be kept last */
 };
 
@@ -451,6 +454,7 @@ struct mlx5e_txqsq {
 	u8                         min_inline_mode;
 	struct device             *pdev;
 	__be32                     mkey_be;
+	__be32                     crossing_mkey_be;
 	unsigned long              state;
 	unsigned int               hw_mtu;
 	struct mlx5_clock         *clock;
@@ -684,6 +688,8 @@ struct mlx5e_rq {
 			struct mlx5e_mpw_info *info;
 			mlx5e_fp_skb_from_cqe_mpwrq skb_from_cqe_mpwrq;
 			__be32                 umr_mkey_be;
+			__be32                 ksm_child_mkey_be;
+			u32                    crossing_mkey;
 			u16                    num_strides;
 			u16                    actual_wq_head;
 			u8                     log_stride_sz;
@@ -696,6 +702,9 @@ struct mlx5e_rq {
 			u8                     umr_wqebbs;
 			u8                     mtts_per_wqe;
 			u8                     umr_mode;
+			u8                     umr_entry_size;
+			u8                     umr_pad_bytes;
+			u16                    umr_pad_offset;
 			struct mlx5e_mpw_linear_info *linear_info;
 			struct mlx5e_shampo_hd *shampo;
 		} mpwqe;
@@ -984,6 +993,7 @@ struct mlx5e_priv {
 	struct mlx5e_mqprio_rl    *mqprio_rl;
 	struct dentry             *dfs_root;
 	struct mlx5_devcom_comp_dev *devcom;
+	struct notifier_block      data_direct_nb;
 };
 
 static inline u16 mlx5e_stats_nch_read(const struct mlx5e_priv *priv)
@@ -1197,6 +1207,9 @@ static inline bool mlx5_tx_swp_supported(struct mlx5_core_dev *mdev)
 extern const struct ethtool_ops mlx5e_ethtool_ops;
 
 int mlx5e_create_mkey(struct mlx5_core_dev *mdev, u32 pdn, u32 *mkey);
+int mlx5e_create_crossing_vhca_mkey(struct mlx5_core_dev *mdev,
+				    u32 crossed_mkey, u64 crossed_len,
+				    u32 *crossing_mkey);
 int mlx5e_create_mdev_resources(struct mlx5_core_dev *mdev, bool create_tises);
 void mlx5e_destroy_mdev_resources(struct mlx5_core_dev *mdev);
 int mlx5e_modify_tirs_lb(struct mlx5_core_dev *mdev, bool enable_uc_lb,

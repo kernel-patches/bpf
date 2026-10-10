@@ -272,8 +272,20 @@ static int rxrpc_process_event(struct rxrpc_connection *conn,
 	bool secured = false;
 	int ret;
 
-	if (conn->state == RXRPC_CONN_ABORTED)
+	if (conn->state == RXRPC_CONN_ABORTED) {
+		/*
+		 * Drop the ref taken by rxrpc_post_challenge() on this
+		 * CHALLENGE before bailing out: otherwise the skb is
+		 * released by the caller with the connection reference
+		 * still held, pinning the connection forever (leak).
+		 */
+		if (sp->chall.conn) {
+			sp->chall.conn = NULL;
+			rxrpc_put_connection(conn,
+					rxrpc_conn_put_challenge_input);
+		}
 		return -ECONNABORTED;
+	}
 
 	_enter("{%d},{%u,%%%u},", conn->debug_id, sp->hdr.type, sp->hdr.serial);
 
