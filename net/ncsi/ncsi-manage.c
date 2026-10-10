@@ -263,7 +263,7 @@ static void ncsi_remove_channel(struct ncsi_channel *nc)
 	np->channel_num--;
 	spin_unlock_irqrestore(&np->lock, flags);
 
-	kfree(nc);
+	kfree_rcu(nc, rcu_head);
 }
 
 struct ncsi_package *ncsi_find_package(struct ncsi_dev_priv *ndp,
@@ -326,7 +326,7 @@ void ncsi_remove_package(struct ncsi_package *np)
 	ndp->package_num--;
 	spin_unlock_irqrestore(&ndp->lock, flags);
 
-	kfree(np);
+	kfree_rcu(np, rcu_head);
 }
 
 void ncsi_find_package_and_channel(struct ncsi_dev_priv *ndp,
@@ -1958,6 +1958,8 @@ void ncsi_unregister_dev(struct ncsi_dev *nd)
 	struct ncsi_package *np, *tmp;
 	unsigned long flags;
 
+	disable_work_sync(&ndp->work);
+
 	dev_remove_pack(&ndp->ptype);
 
 	list_for_each_entry_safe(np, tmp, &ndp->packages, node)
@@ -1966,8 +1968,6 @@ void ncsi_unregister_dev(struct ncsi_dev *nd)
 	spin_lock_irqsave(&ncsi_dev_lock, flags);
 	list_del_rcu(&ndp->node);
 	spin_unlock_irqrestore(&ncsi_dev_lock, flags);
-
-	disable_work_sync(&ndp->work);
 
 	kfree(ndp);
 }
