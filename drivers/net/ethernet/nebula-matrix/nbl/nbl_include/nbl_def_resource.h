@@ -12,6 +12,9 @@ struct nbl_resource_mgt;
 struct nbl_adapter;
 
 struct nbl_resource_ops {
+	int (*init_module)(struct nbl_resource_mgt *res_mgt);
+	void (*deinit_module)(struct nbl_resource_mgt *res_mgt);
+
 	int (*cfg_msix_map)(struct nbl_resource_mgt *res_mgt, u16 func_id,
 			    u16 num_net_msix, u16 num_others_msix,
 			    bool net_msix_mask_en);
