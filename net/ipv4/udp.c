@@ -2473,7 +2473,10 @@ static int udp_queue_rcv_skb(struct sock *sk, struct sk_buff *skb)
 		return udp_queue_rcv_one_skb(sk, skb);
 
 	BUILD_BUG_ON(sizeof(struct udp_skb_cb) > SKB_GSO_CB_OFFSET);
-	__skb_push(skb, -skb_mac_offset(skb));
+	if (skb_mac_header_was_set(skb))
+		__skb_push(skb, -skb_mac_offset(skb));
+	else
+		__skb_push(skb, -skb_network_offset(skb));
 	segs = udp_rcv_segment(sk, skb, true);
 	skb_list_walk_safe(segs, skb, next) {
 		__skb_pull(skb, skb_transport_offset(skb));
