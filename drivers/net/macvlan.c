@@ -1671,7 +1671,8 @@ static int macvlan_changelink(struct net_device *dev,
 	int ret;
 
 	if (data &&
-	    (data[IFLA_MACVLAN_BC_QUEUE_LEN] || data[IFLA_MACVLAN_BC_CUTOFF]) &&
+	    (data[IFLA_MACVLAN_BC_QUEUE_LEN] || data[IFLA_MACVLAN_BC_CUTOFF] ||
+	     data[IFLA_MACVLAN_FLAGS]) &&
 	    !rtnl_dev_link_net_capable(dev, dev_net(vlan->lowerdev))) {
 		NL_SET_ERR_MSG(extack,
 			       "Changing shared macvlan port settings requires CAP_NET_ADMIN in the lower device network namespace");
