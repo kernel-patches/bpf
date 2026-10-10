@@ -305,6 +305,8 @@ static int ntfs_reconfigure(struct fs_context *fc)
 
 	ntfs_debug("Entering with remount");
 
+	/* Mark the volume dirty first if an error made it read-only. */
+	flush_work(&vol->error_work);
 	err = sync_filesystem(sb);
 	if (err) {
 		ntfs_warning(sb, "Failed to sync the filesystem.");
@@ -434,7 +436,21 @@ void ntfs_handle_error(struct super_block *sb)
 		return;
 
 	if (vol->on_errors == ON_ERRORS_REMOUNT_RO) {
-		sb->s_flags |= SB_RDONLY;
+		if (!(sb->s_flags & SB_BORN)) {
+			/* Before SB_BORN the mounter holds s_umount. */
+			sb->s_flags |= SB_RDONLY;
+		} else {
+			/*
+			 * NV_EmergencyRO makes the volume refuse modifications
+			 * instead and NV_Errors keeps it from being remounted
+			 * read-write. The error work marks the volume dirty on
+			 * disk.
+			 */
+			NVolSetErrors(vol);
+			if (test_and_set_bit(NV_EmergencyRO, &vol->flags))
+				return;
+			queue_work(ntfs_wq, &vol->error_work);
+		}
 		pr_crit("(device %s): Filesystem has been set read-only\n",
 			sb->s_id);
 	} else if (vol->on_errors == ON_ERRORS_PANIC) {
@@ -557,18 +573,18 @@ int ntfs_set_volume_flags(struct ntfs_volume *vol, __le16 flags)
  * last one, ntfs_put_super(), runs after evict_inodes() on a quiesced
  * filesystem, so a volume that is read-write at unmount time cannot
  * unmount clean.  A volume that is already read-only when the error is
- * recorded (errors=remount-ro flips the superblock on the first error,
- * as does an earlier remount-ro) has no persistence point left and
+ * recorded (an earlier remount-ro) has no persistence point left and
  * keeps whatever on-disk bit it had; that behaviour is unchanged.  The
  * residual window is a crash between the error and the next
- * persistence point.
+ * persistence point.  errors=remount-ro keeps the superblock read-write
+ * and ntfs_error_work() persists the error state right away.
  *
  * This is the single point that persists the in-memory error state to disk.
  * The runtime error paths only record NVolErrors() because they run under a
  * variety of ntfs locks the dirty-bit write cannot be taken under (runlist
  * locks, vol->lcnbmp_lock, vol->mftbmp_lock, mrec_locks); a sync of a
- * volume with recorded errors, a remount to read-only, or the unmount,
- * then persists the flag here.
+ * volume with recorded errors, ntfs_error_work(), a remount to read-only,
+ * or the unmount, then persists the flag here.
  *
  * A hibernated volume is not written from these persistence paths:
  * resuming Windows from a modified image corrupts it, so the dirty bit
@@ -581,6 +597,25 @@ static int ntfs_sync_volume_dirty_state(struct ntfs_volume *vol)
 	if (NVolHibernated(vol))
 		return 0;
 	return ntfs_write_volume_flags(vol, 0, VOLUME_IS_DIRTY, true);
+}
+
+/*
+ * ntfs_error_work - mark the volume dirty on disk after an error
+ * @work:	the error_work of the ntfs volume
+ *
+ * VOLUME_IS_DIRTY is set lazily and may not be on disk yet when the error hits.
+ * A work item because ntfs_error() may be called with mft records locked, and
+ * sb_start_intwrite() waits for a frozen volume to be thawed.
+ */
+static void ntfs_error_work(struct work_struct *work)
+{
+	struct ntfs_volume *vol = container_of(work, struct ntfs_volume,
+					       error_work);
+
+	sb_start_intwrite(vol->sb);
+	if (!ntfs_sync_volume_dirty_state(vol))
+		ntfs_commit_inode(vol->vol_ino);
+	sb_end_intwrite(vol->sb);
 }
 
 int ntfs_write_volume_label(struct ntfs_volume *vol, char *label)
@@ -2080,6 +2115,10 @@ static void ntfs_put_super(struct super_block *sb)
 
 	cancel_work_sync(&vol->precalc_work);
 
+	/* Let a pending error work persist the error state first. */
+	flush_work(&vol->error_work);
+	disable_work_sync(&vol->error_work);
+
 	/*
 	 * Commit all inodes while they are still open in case some of them
 	 * cause others to be dirtied.
@@ -2998,6 +3037,7 @@ static int ntfs_init_fs_context(struct fs_context *fc)
 	init_rwsem(&vol->mftbmp_lock);
 	init_rwsem(&vol->lcnbmp_lock);
 	mutex_init(&vol->volume_label_lock);
+	INIT_WORK(&vol->error_work, ntfs_error_work);
 
 	fc->s_fs_info = vol;
 	fc->ops = &ntfs_context_ops;

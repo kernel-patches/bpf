@@ -907,8 +907,9 @@ static int ntfs_setxattr(const struct xattr_handler *handler,
 
 	if (ntfs_inode_is_named_stream(ni))
 		return -EOPNOTSUPP;
-	if (NVolShutdown(ni->vol))
-		return -EIO;
+	err = ntfs_emergency_state(ni->vol);
+	if (err)
+		return err;
 
 	/* Only fileattr_set may change the flags and their cached state. */
 	if (!strcmp(name, "$LINUXFLAGS"))
@@ -1193,6 +1194,11 @@ out:
 int ntfs_set_acl(const struct mnt_idmap *idmap, struct dentry *dentry,
 		 struct posix_acl *acl, int type)
 {
+	int err;
+
+	err = ntfs_emergency_state(NTFS_I(d_inode(dentry))->vol);
+	if (err)
+		return err;
 	return ntfs_set_acl_ex(idmap, d_inode(dentry), acl, type, false);
 }
 

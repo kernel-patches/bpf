@@ -425,7 +425,8 @@ int ntfs_drop_big_inode(struct inode *inode)
 			if (!inode->i_nlink) {
 				struct ntfs_inode *ni = NTFS_I(inode);
 
-				if (ni->data_size == 0)
+				/* Like ntfs_evict_big_inode(), leave it to chkdsk. */
+				if (ni->data_size == 0 || ntfs_emergency_state(ni->vol))
 					return 0;
 
 				/* To avoid evict_inode call simultaneously */
@@ -2434,7 +2435,11 @@ void ntfs_evict_big_inode(struct inode *vi)
 
 	truncate_inode_pages_final(&vi->i_data);
 
-	if (!vi->i_nlink) {
+	/*
+	 * After an error the freed mft record would go out right away while
+	 * the rest of the deletion can't, leave the inode to chkdsk.
+	 */
+	if (!vi->i_nlink && !ntfs_emergency_state(ni->vol)) {
 		if (!NInoAttr(ni)) {
 			/* Never called with extent inodes */
 			WARN_ON(ni->nr_extents == -1);
@@ -2907,8 +2912,13 @@ int __ntfs_write_inode(struct inode *vi, int sync)
 	ntfs_debug("Entering for %sinode 0x%llx.", NInoAttr(ni) ? "attr " : "",
 			ni->mft_no);
 
-	if (NVolShutdown(ni->vol))
-		return -EIO;
+	/* After an error only $Volume is still written, see ntfs_error_work(). */
+	err = ntfs_emergency_state(ni->vol);
+	if (err) {
+		if (err != -EROFS || vi != ni->vol->vol_ino)
+			return err;
+		err = 0;
+	}
 
 	/*
 	 * Dirty attribute inodes are written via their real inodes so just

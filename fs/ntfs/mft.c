@@ -2956,6 +2956,11 @@ int ntfs_mft_record_free(struct ntfs_volume *vol, struct ntfs_inode *ni)
 	if (!vol || !ni)
 		return -EINVAL;
 
+	/* The freed record goes out right away, the rest of the deletion can't. */
+	err = ntfs_emergency_state(vol);
+	if (err)
+		return err;
+
 	ntfs_debug("Entering for inode 0x%llx.\n", (long long)ni->mft_no);
 
 	ni_mrec = map_mft_record(ni);
@@ -3423,8 +3428,9 @@ int ntfs_mft_writepages(struct address_space *mapping,
 	struct folio *folio = NULL;
 	int error;
 
-	if (NVolShutdown(NTFS_I(mapping->host)->vol))
-		return -EIO;
+	error = ntfs_emergency_state(NTFS_I(mapping->host)->vol);
+	if (error)
+		return error;
 
 	while ((folio = writeback_iter(mapping, wbc, folio, &error)))
 		error = ntfs_write_mft_block(folio, wbc);
