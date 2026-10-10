@@ -1047,6 +1047,11 @@ static int vxlan_fdb_update_existing(struct vxlan_dev *vxlan,
 	if ((flags & NLM_F_APPEND) &&
 	    (is_multicast_ether_addr(f->key.eth_addr) ||
 	     is_zero_ether_addr(f->key.eth_addr))) {
+		if (rcu_access_pointer(f->nh)) {
+			NL_SET_ERR_MSG(extack,
+				       "Cannot append a remote to a nexthop fdb");
+			return -EOPNOTSUPP;
+		}
 		rc = vxlan_fdb_append(f, ip, port, vni, ifindex, &rd);
 
 		if (rc < 0)
