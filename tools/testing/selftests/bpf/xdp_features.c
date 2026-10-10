@@ -229,12 +229,12 @@ static void *dut_echo_thread(void *arg)
 	while (!exiting) {
 		struct tlv_hdr *tlv = (struct tlv_hdr *)buf;
 		struct sockaddr_storage addr;
-		socklen_t addrlen;
-		size_t n;
+		socklen_t addrlen = sizeof(addr);
+		ssize_t n;
 
 		n = recvfrom(sockfd, buf, sizeof(buf), MSG_WAITALL,
 			     (struct sockaddr *)&addr, &addrlen);
-		if (n != ntohs(tlv->len))
+		if (n != sizeof(*tlv) || n != ntohs(tlv->len))
 			continue;
 
 		if (ntohs(tlv->type) != CMD_ECHO)
@@ -244,7 +244,6 @@ static void *dut_echo_thread(void *arg)
 		       (struct sockaddr *)&addr, addrlen);
 	}
 
-	pthread_exit((void *)0);
 	close(sockfd);
 
 	return NULL;
@@ -252,24 +251,27 @@ static void *dut_echo_thread(void *arg)
 
 static int dut_run_echo_thread(pthread_t *t, int *sockfd)
 {
-	int err;
+	int *fds, err;
 
-	sockfd = start_reuseport_server(AF_INET6, SOCK_DGRAM, NULL,
+	fds = start_reuseport_server(AF_INET6, SOCK_DGRAM, NULL,
 					DUT_ECHO_PORT, 0, 1);
-	if (!sockfd) {
+	if (!fds) {
 		fprintf(stderr,
 			"Failed creating data UDP socket on device %s\n",
 			env.ifname);
 		return -errno;
 	}
 
+	*sockfd = *fds;
+	free(fds);
+
 	/* start echo channel */
 	err = pthread_create(t, NULL, dut_echo_thread, sockfd);
 	if (err) {
 		fprintf(stderr,
 			"Failed creating data UDP thread on device %s: %s\n",
-			env.ifname, strerror(-err));
-		free_fds(sockfd, 1);
+			env.ifname, strerror(err));
+		close(*sockfd);
 		return -EINVAL;
 	}
 
@@ -361,10 +363,11 @@ static int recv_msg(int sockfd, void *buf, size_t bufsize, void *val,
 static int dut_run(struct xdp_features *skel)
 {
 	int flags = XDP_FLAGS_UPDATE_IF_NOEXIST | XDP_FLAGS_DRV_MODE;
-	int state, err = 0, *sockfd, ctrl_sockfd, echo_sockfd;
+	int state = CMD_STOP, err = 0, *sockfd, ctrl_sockfd, echo_sockfd;
 	struct sockaddr_storage ctrl_addr;
-	pthread_t dut_thread = 0;
-	socklen_t addrlen;
+	pthread_t dut_thread;
+	bool thread_started = false;
+	socklen_t addrlen = sizeof(ctrl_addr);
 
 	sockfd = start_reuseport_server(AF_INET6, SOCK_STREAM, NULL,
 					DUT_CTRL_PORT, 0, 1);
@@ -406,6 +409,7 @@ static int dut_run(struct xdp_features *skel)
 			err = dut_run_echo_thread(&dut_thread, &echo_sockfd);
 			if (err < 0)
 				goto out;
+			thread_started = true;
 
 			tlv->type = htons(CMD_ACK);
 			tlv->len = htons(sizeof(*tlv));
@@ -484,7 +488,9 @@ static int dut_run(struct xdp_features *skel)
 	}
 
 end_thread:
-	pthread_join(dut_thread, NULL);
+	exiting = true;
+	if (thread_started)
+		pthread_join(dut_thread, NULL);
 out:
 	bpf_xdp_detach(env.ifindex, flags, NULL);
 	close(ctrl_sockfd);
@@ -636,12 +642,14 @@ static int tester_run(struct xdp_features *skel)
 	if (err)
 		goto out;
 
+	/* Sample before teardown can produce additional echo traffic. */
+	detected_cap = tester_collect_detected_cap(skel, ntohl(stats));
+
 	/* stop the test */
 	err = send_and_recv_msg(sockfd, CMD_STOP, NULL, 0);
 	/* send a new echo message to wake echo thread of the dut */
 	send_echo_msg();
 
-	detected_cap = tester_collect_detected_cap(skel, ntohl(stats));
 
 	fprintf(stdout, "Feature %s: [%s][%s]\n", get_xdp_feature_str(),
 		detected_cap ? GREEN("DETECTED") : RED("NOT DETECTED"),
