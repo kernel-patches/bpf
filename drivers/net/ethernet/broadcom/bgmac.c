@@ -232,7 +232,8 @@ err_drop:
 }
 
 /* Free transmitted packets */
-static void bgmac_dma_tx_free(struct bgmac *bgmac, struct bgmac_dma_ring *ring)
+static void bgmac_dma_tx_free(struct bgmac *bgmac, struct bgmac_dma_ring *ring,
+			      int budget)
 {
 	struct device *dma_dev = bgmac->dma_dev;
 	int empty_slot;
@@ -272,7 +273,7 @@ static void bgmac_dma_tx_free(struct bgmac *bgmac, struct bgmac_dma_ring *ring)
 			pkts_compl++;
 
 			/* Free memory! :) */
-			dev_kfree_skb(slot->skb);
+			napi_consume_skb(slot->skb, budget);
 			slot->skb = NULL;
 		}
 
@@ -466,9 +467,9 @@ static int bgmac_dma_rx_read(struct bgmac *bgmac, struct bgmac_dma_ring *ring,
 			/* Omit CRC. */
 			len -= ETH_FCS_LEN;
 
-			skb = build_skb(buf, BGMAC_RX_ALLOC_SIZE);
+			skb = napi_build_skb(buf, BGMAC_RX_ALLOC_SIZE);
 			if (unlikely(!skb)) {
-				netdev_err(bgmac->net_dev, "build_skb failed\n");
+				netdev_err(bgmac->net_dev, "napi_build_skb failed\n");
 				put_page(virt_to_head_page(buf));
 				bgmac->net_dev->stats.rx_errors++;
 				break;
@@ -1155,7 +1156,7 @@ static int bgmac_poll(struct napi_struct *napi, int weight)
 	/* Ack */
 	bgmac_write(bgmac, BGMAC_INT_STATUS, ~0);
 
-	bgmac_dma_tx_free(bgmac, &bgmac->tx_ring[0]);
+	bgmac_dma_tx_free(bgmac, &bgmac->tx_ring[0], weight);
 	handled += bgmac_dma_rx_read(bgmac, &bgmac->rx_ring[0], weight);
 
 	/* Poll again if more events arrived in the meantime */
