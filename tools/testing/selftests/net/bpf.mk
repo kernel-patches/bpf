@@ -51,3 +51,28 @@ $(BPFOBJ): $(wildcard $(BPFDIR)/*.[ch] $(BPFDIR)/Makefile)		       \
 		    DESTDIR=$(SCRATCH_DIR) prefix= all install_headers
 
 EXTRA_CLEAN += $(SCRATCH_DIR)
+
+# Build a host bpftool only when a test needs a generated skeleton.
+BPFTOOL_BUILD := $(BUILD_DIR)/bpftool
+ifeq ($(origin BPFTOOL),undefined)
+BPFTOOL := $(BPFTOOL_BUILD)/bootstrap/bpftool
+BPFTOOL_DEP := $(BPFTOOL)
+else
+BPFTOOL_DEP := $(shell command -v $(BPFTOOL))
+endif
+
+$(BPFTOOL_BUILD)/bootstrap/bpftool: \
+	$(wildcard $(top_srcdir)/tools/bpf/bpftool/*.[ch]) \
+	$(top_srcdir)/tools/bpf/bpftool/Makefile \
+	$(wildcard $(BPFDIR)/*.[ch] $(BPFDIR)/Makefile)
+	$(call msg,MAKE,,$@)
+	$(Q)mkdir -p $(BPFTOOL_BUILD)
+	$(Q)$(MAKE) $(submake_extras) -C $(top_srcdir)/tools/bpf/bpftool \
+		OUTPUT=$(BPFTOOL_BUILD)/ ARCH= CROSS_COMPILE= bootstrap
+
+$(OUTPUT)/%.skel.h: $(OUTPUT)/%.bpf.o $(BPFTOOL_DEP)
+	$(call msg,GEN-SKEL,,$@)
+	$(Q)$(BPFTOOL) gen skeleton $< name $(notdir $*) > $@.tmp
+	$(Q)mv $@.tmp $@
+
+EXTRA_CLEAN += $(wildcard $(OUTPUT)/*.skel.h $(OUTPUT)/*.skel.h.tmp)
