@@ -583,6 +583,7 @@ void ip_md_tunnel_xmit(struct sk_buff *skb, struct net_device *dev,
 	struct rtable *rt = NULL;
 	struct flowi4 fl4;
 	__be16 df = 0;
+	int encap_hlen;
 	u8 tos, ttl;
 	bool use_cache;
 
@@ -591,6 +592,11 @@ void ip_md_tunnel_xmit(struct sk_buff *skb, struct net_device *dev,
 		     ip_tunnel_info_af(tun_info) != AF_INET))
 		goto tx_error;
 	key = &tun_info->key;
+	encap_hlen = ip_encap_hlen(&tun_info->encap);
+	if (encap_hlen < 0)
+		goto tx_error;
+	if (skb_cow_head(skb, encap_hlen))
+		goto tx_dropped;
 	memset(&(IPCB(skb)->opt), 0, sizeof(IPCB(skb)->opt));
 	inner_iph = (const struct iphdr *)skb_inner_network_header(skb);
 	tos = key->tos;
@@ -675,6 +681,7 @@ void ip_tunnel_xmit(struct sk_buff *skb, struct net_device *dev,
 {
 	struct ip_tunnel *tunnel = netdev_priv(dev);
 	struct ip_tunnel_info *tun_info = NULL;
+	struct ip_tunnel_encap encap;
 	const struct iphdr *inner_iph;
 	unsigned int max_headroom;	/* The extra header space needed */
 	struct rtable *rt = NULL;		/* Route to the other host */
@@ -683,10 +690,22 @@ void ip_tunnel_xmit(struct sk_buff *skb, struct net_device *dev,
 	struct flowi4 fl4;
 	bool md = false;
 	bool connected;
+	int encap_hlen;
 	int err_count;
 	u8 tos, ttl;
 	__be32 dst;
 	__be16 df;
+
+	/* Size and push the encap header from one copy of the config. */
+	encap = READ_ONCE(tunnel->encap);
+	encap_hlen = ip_encap_hlen(&encap);
+	if (encap_hlen < 0)
+		goto tx_error;
+	if (skb_cow_head(skb, encap_hlen)) {
+		DEV_STATS_INC(dev, tx_dropped);
+		kfree_skb(skb);
+		return;
+	}
 
 	inner_iph = (const struct iphdr *)skb_inner_network_header(skb);
 	connected = (tunnel->parms.iph.daddr != 0);
@@ -769,7 +788,7 @@ void ip_tunnel_xmit(struct sk_buff *skb, struct net_device *dev,
 			    tunnel->net, READ_ONCE(tunnel->parms.link),
 			    tunnel->fwmark, skb_get_hash(skb), 0);
 
-	if (ip_tunnel_encap(skb, &tunnel->encap, &protocol, &fl4) < 0)
+	if (ip_tunnel_encap(skb, &encap, &protocol, &fl4) < 0)
 		goto tx_error;
 
 	if (connected && md) {
@@ -838,7 +857,7 @@ void ip_tunnel_xmit(struct sk_buff *skb, struct net_device *dev,
 	}
 
 	max_headroom = LL_RESERVED_SPACE(rt->dst.dev) + sizeof(struct iphdr)
-			+ rt->dst.header_len + ip_encap_hlen(&tunnel->encap);
+			+ rt->dst.header_len + encap_hlen;
 
 	if (skb_cow_head(skb, max_headroom)) {
 		ip_rt_put(rt);
