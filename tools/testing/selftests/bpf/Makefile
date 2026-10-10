@@ -41,7 +41,13 @@ TEST_FILES = xsk_prereqs.sh $(wildcard progs/btf_dump_test_case_*.c)	\
 TEST_PROGS := test_bpftool_build.sh \
 	test_doc_build.sh \
 	test_xsk.sh \
-	test_xdp_features.sh
+	test_xdp_features.sh \
+	arena_kvm.py
+
+TEST_GEN_FILES += arena_kvm_guest-init arena_kvm_host-runner
+ifneq ($(CLANG_CPUV4),)
+TEST_GEN_FILES += arena_kvm_guest.bpf.o arena_kvm_host.bpf.o
+endif
 
 TEST_PROGS_EXTENDED := \
 	ima_setup.sh verify_sig_setup.sh
@@ -92,6 +98,25 @@ include Makefile.buildvars
 BPFTOOLDIR := $(TOOLSDIR)/bpf/bpftool
 HOST_BPFOBJ := $(HOST_BUILD_DIR)/libbpf/libbpf.a
 BPF_TARGET_ENDIAN:=$(if $(IS_LITTLE_ENDIAN),--target=bpfel,--target=bpfeb)
+
+# These helpers are installed beside arena_kvm.py, including for OUTPUT=.
+$(OUTPUT)/arena_kvm_%.bpf.o: arena_kvm_%.bpf.c arena_kvm_shared.h \
+		libarena/include/bpf_atomic.h \
+		libarena/include/bpf_arena_common.h \
+		$(INCLUDE_DIR)/vmlinux.h $(BPFOBJ) | $(OUTPUT)
+	$(call msg,BPF,,$@)
+	$(Q)$(CLANG) $(BPF_CFLAGS) $(CLANG_CFLAGS) -O2 \
+		$(BPF_TARGET_ENDIAN) -mcpu=v4 -c $< -o $@ $(call skip_on_fail,BPF)
+
+$(OUTPUT)/arena_kvm_guest-init: arena_kvm_guest.c arena_kvm_shared.h \
+		$(BPFOBJ) | $(OUTPUT)
+	$(call msg,BINARY,,$@)
+	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) $< $(BPFOBJ) $(LDLIBS) -lzstd -o $@
+
+$(OUTPUT)/arena_kvm_host-runner: arena_kvm_host.c arena_kvm_shared.h \
+		$(BPFOBJ) | $(OUTPUT)
+	$(call msg,BINARY,,$@)
+	$(Q)$(CC) $(CFLAGS) $(LDFLAGS) $< $(BPFOBJ) $(LDLIBS) -lzstd -o $@
 
 NON_CHECK_FEAT_TARGETS := clean docs-clean emit_tests
 CHECK_FEAT := $(filter-out $(NON_CHECK_FEAT_TARGETS),$(or $(MAKECMDGOALS), "none"))
