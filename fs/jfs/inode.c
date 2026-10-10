@@ -178,7 +178,7 @@ void jfs_evict_inode(struct inode *inode)
 	 * nothing did.
 	 */
 	if (ji->atlhead) {
-		WARN_ON_ONCE(!sb_rdonly(inode->i_sb));
+		WARN_ON_ONCE(!sb_rdonly_any(inode->i_sb));
 		txAbortAnon(inode);
 	}
 	BUG_ON(!list_empty(&ji->anon_inode_list));
@@ -195,6 +195,10 @@ void jfs_evict_inode(struct inode *inode)
 void jfs_dirty_inode(struct inode *inode, int flags)
 {
 	static int noisy = 5;
+
+	/* After an error only allocations under way still get committed. */
+	if (sb_emergency_ro(inode->i_sb) && !READ_ONCE(JFS_IP(inode)->atlhead))
+		return;
 
 	if (isReadOnly(inode)) {
 		if (!special_file(inode->i_mode) && noisy) {

@@ -2935,7 +2935,8 @@ int jfs_readdir(struct file *file, struct dir_context *ctx)
 				if ((jfs_dirent->position < 2) ||
 				    (jfs_dirent->position >=
 				     JFS_IP(ip)->next_index)) {
-					if (!page_fixed && !isReadOnly(ip)) {
+					if (!page_fixed && !isReadOnly(ip) &&
+					    !sb_emergency_ro(ip->i_sb)) {
 						fix_page = 1;
 						/*
 						 * setting overflow and setting
