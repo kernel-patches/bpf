@@ -173,8 +173,12 @@ void __btrfs_handle_fs_error(struct btrfs_fs_info *fs_info, const char *function
 
 	btrfs_discard_stop(fs_info);
 
-	/* Handle error by forcing the filesystem readonly. */
-	btrfs_set_sb_rdonly(sb);
+	/*
+	 * Handle error by forcing the filesystem readonly. SB_RDONLY needs
+	 * s_umount, see sb_set_emergency_ro().
+	 */
+	set_bit(BTRFS_FS_STATE_RO, &fs_info->fs_state);
+	sb_set_emergency_ro(sb);
 	btrfs_info(fs_info, "forced readonly");
 	/*
 	 * Note that a running device replace operation is not canceled here

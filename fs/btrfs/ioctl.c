@@ -5165,6 +5165,11 @@ static int btrfs_ioctl_shutdown(struct btrfs_fs_info *fs_info, unsigned long arg
 	if (btrfs_is_shutdown(fs_info))
 		return 0;
 
+	/* After an error there is nothing to flush and freezing fails. */
+	if (flags != BTRFS_SHUTDOWN_FLAGS_NOLOGFLUSH &&
+	    sb_emergency_ro(fs_info->sb))
+		flags = BTRFS_SHUTDOWN_FLAGS_NOLOGFLUSH;
+
 	switch (flags) {
 	case BTRFS_SHUTDOWN_FLAGS_LOGFLUSH:
 	case BTRFS_SHUTDOWN_FLAGS_DEFAULT:
