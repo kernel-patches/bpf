@@ -5,6 +5,7 @@
 #include <linux/bpf_verifier.h>
 #include <linux/jhash.h>
 #include <linux/log2.h>
+#include <linux/math64.h>
 #include <linux/min_heap.h>
 #include <linux/bug.h>
 #include <linux/tnum.h>
@@ -2083,7 +2084,7 @@ static bool compute_max_iters(struct bpf_verifier_env *env,
 	struct bpf_loop *loop = aux[bpf_loop_at_index(env, latch->insn_idx)].loop;
 	struct scev *scev = env->scev;
 	struct scev_value initial_val, step_val, bound_val;
-	u64 step, diff, bound, initial, backedge_taken_count;
+	u64 rem, step, diff, bound, initial, backedge_taken_count;
 	u8 op = latch->op;
 	bool up, down;
 
@@ -2129,26 +2130,26 @@ static bool compute_max_iters(struct bpf_verifier_env *env,
 		    /* Is the latch condition false on the first iteration? */
 		    initial >= bound ||
 		    /* Count iterations satisfying the strict inequality, including i=0. */
-		    check_add_overflow((diff - 1) / step, 1, &backedge_taken_count) ||
+		    check_add_overflow(div64_u64(diff - 1, step), 1, &backedge_taken_count) ||
 		    /*
 		     * Check if the last iteration overflows the counter:
 		     *   initial + backedge_taken_count * step > U64_MAX
 		     */
-		    backedge_taken_count > (U64_MAX - initial) / step)
+		    backedge_taken_count > div64_u64(U64_MAX - initial, step))
 			return false;
 		break;
 	case BPF_JLE:
 		/* E.g.: 3 + 2*i ≤ 7 ⇔ 2*i ≤ 4 ⇔ i ∈ [0,1,2]. */
 		if (down || initial > bound ||
 		    /* Count iterations satisfying the non-strict inequality. */
-		    check_add_overflow(diff / step, 1, &backedge_taken_count) ||
-		    backedge_taken_count > (U64_MAX - initial) / step)
+		    check_add_overflow(div64_u64(diff, step), 1, &backedge_taken_count) ||
+		    backedge_taken_count > div64_u64(U64_MAX - initial, step))
 			return false;
 		break;
 	case BPF_JGT:
 		/* E.g.: 7 - 2*i > 3 ⇔ 2*i < 4 ⇔ i ∈ [0,1]. */
 		if (up || initial <= bound ||
-		    check_add_overflow((-diff - 1) / -step, 1, &backedge_taken_count) ||
+		    check_add_overflow(div64_u64(-diff - 1, -step), 1, &backedge_taken_count) ||
 		    /*
 		     * The last iteration underflows the counter if:
 		     *   initial + backedge_taken_count * step < 0 ⇔
@@ -2156,35 +2157,35 @@ static bool compute_max_iters(struct bpf_verifier_env *env,
 		     *                    backedge_taken_count > initial / -step
 		     * (direction flips because step < 0)
 		     */
-		    backedge_taken_count > initial / -step)
+		    backedge_taken_count > div64_u64(initial, -step))
 			return false;
 		break;
 	case BPF_JGE:
 		/* E.g.: 7 - 2*i ≥ 3 ⇔ 2*i ≤ 4 ⇔ i ∈ [0,1,2]. */
 		if (up || initial < bound ||
-		    check_add_overflow(-diff / -step, 1, &backedge_taken_count) ||
-		    backedge_taken_count > initial / -step)
+		    check_add_overflow(div64_u64(-diff, -step), 1, &backedge_taken_count) ||
+		    backedge_taken_count > div64_u64(initial, -step))
 			return false;
 		break;
 	case BPF_JSLT:
 		if (down || (s64)initial >= (s64)bound ||
-		    check_add_overflow((diff - 1) / step, 1, &backedge_taken_count) ||
+		    check_add_overflow(div64_u64(diff - 1, step), 1, &backedge_taken_count) ||
 		    /*
 		     * Check if the last iteration overflows the signed counter:
 		     *   (s64)initial + backedge_taken_count * step > S64_MAX
 		     */
-		    backedge_taken_count > ((u64)S64_MAX - initial) / step)
+		    backedge_taken_count > div64_u64((u64)S64_MAX - initial, step))
 			return false;
 		break;
 	case BPF_JSLE:
 		if (down || (s64)initial > (s64)bound ||
-		    check_add_overflow(diff / step, 1, &backedge_taken_count) ||
-		    backedge_taken_count > ((u64)S64_MAX - initial) / step)
+		    check_add_overflow(div64_u64(diff, step), 1, &backedge_taken_count) ||
+		    backedge_taken_count > div64_u64((u64)S64_MAX - initial, step))
 			return false;
 		break;
 	case BPF_JSGT:
 		if (up || (s64)initial <= (s64)bound ||
-		    check_add_overflow((-diff - 1) / -step, 1, &backedge_taken_count) ||
+		    check_add_overflow(div64_u64(-diff - 1, -step), 1, &backedge_taken_count) ||
 		    /*
 		     * The last iteration underflows the signed counter if:
 		     *   (s64)initial + backedge_taken_count * step < S64_MIN ⇔
@@ -2192,13 +2193,13 @@ static bool compute_max_iters(struct bpf_verifier_env *env,
 		     *                         backedge_taken_count > initial - (u64)S64_MIN / -step
 		     *	 (direction flips because step < 0)
 		     */
-		    backedge_taken_count > (initial - (u64)S64_MIN) / -step)
+		    backedge_taken_count > div64_u64(initial - (u64)S64_MIN, -step))
 			return false;
 		break;
 	case BPF_JSGE:
 		if (up || (s64)initial < (s64)bound ||
-		    check_add_overflow(-diff / -step, 1, &backedge_taken_count) ||
-		    backedge_taken_count > (initial - (u64)S64_MIN) / -step)
+		    check_add_overflow(div64_u64(-diff, -step), 1, &backedge_taken_count) ||
+		    backedge_taken_count > div64_u64(initial - (u64)S64_MIN, -step))
 			return false;
 		break;
 	case BPF_JNE:
@@ -2208,9 +2209,9 @@ static bool compute_max_iters(struct bpf_verifier_env *env,
 		 */
 		diff = down ? -diff : diff;
 		step = down ? -step : step;
-		if (diff == 0 || diff % step)
+		backedge_taken_count = div64_u64_rem(diff, step, &rem);
+		if (diff == 0 || rem != 0)
 			return false;
-		backedge_taken_count = diff / step;
 		break;
 	default:
 		return false;
