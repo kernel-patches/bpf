@@ -947,10 +947,8 @@ $(OUTPUT)/xdp_hw_metadata: xdp_hw_metadata.c xsk.c network_helpers.c \
 	$(call msg,BINARY,,$@)
 	$(Q)$(CC) $(CFLAGS) $(filter %.a %.o %.c,$^) $(LDLIBS) -o $@
 
-$(OUTPUT)/xdp_features: xdp_features.c network_helpers.c xdp_features.h \
-			   network_helpers.h \
-			   test_progs.h bpf_util.h $(OUTPUT)/xdp_features.skel.h \
-			   $(BPFOBJ) | $(OUTPUT)
+$(OUTPUT)/xdp_features: xdp_features.c xdp_features.h \
+			   $(OUTPUT)/xdp_features.skel.h $(BPFOBJ) | $(OUTPUT)
 	$(call msg,BINARY,,$@)
 	$(Q)$(CC) $(CFLAGS) $(filter %.a %.o %.c,$^) $(LDLIBS) -o $@
 

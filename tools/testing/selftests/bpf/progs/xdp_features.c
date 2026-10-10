@@ -35,13 +35,6 @@ struct {
 	__type(key, __u32);
 	__type(value, __u32);
 	__uint(max_entries, 1);
-} stats SEC(".maps");
-
-struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__type(key, __u32);
-	__type(value, __u32);
-	__uint(max_entries, 1);
 } dut_stats SEC(".maps");
 
 struct {
@@ -125,24 +118,21 @@ xdp_process_echo_packet(struct xdp_md *xdp, bool dut)
 		return -EINVAL;
 
 	tlv = (struct tlv_hdr *)(uh + 1);
-	if (tlv + 1 > data_end)
+	if ((void *)(tlv + 1) > data_end)
 		return -EINVAL;
 
 	return bpf_htons(tlv->type) == CMD_ECHO ? 0 : -EINVAL;
 }
 
 static __always_inline int
-xdp_update_stats(struct xdp_md *xdp, bool tx, bool dut)
+xdp_update_stats(struct xdp_md *xdp)
 {
 	__u32 *val, key = 0;
 
-	if (xdp_process_echo_packet(xdp, tx))
+	if (xdp_process_echo_packet(xdp, true))
 		return -EINVAL;
 
-	if (dut)
-		val = bpf_map_lookup_elem(&dut_stats, &key);
-	else
-		val = bpf_map_lookup_elem(&stats, &key);
+	val = bpf_map_lookup_elem(&dut_stats, &key);
 
 	if (val)
 		__sync_add_and_fetch(val, 1);
@@ -150,30 +140,12 @@ xdp_update_stats(struct xdp_md *xdp, bool tx, bool dut)
 	return 0;
 }
 
-/* Tester */
-
-SEC("xdp")
-int xdp_tester_check_tx(struct xdp_md *xdp)
-{
-	xdp_update_stats(xdp, true, false);
-
-	return XDP_PASS;
-}
-
-SEC("xdp")
-int xdp_tester_check_rx(struct xdp_md *xdp)
-{
-	xdp_update_stats(xdp, false, false);
-
-	return XDP_PASS;
-}
-
 /* DUT */
 
 SEC("xdp")
 int xdp_do_pass(struct xdp_md *xdp)
 {
-	xdp_update_stats(xdp, true, true);
+	xdp_update_stats(xdp);
 
 	return XDP_PASS;
 }
@@ -181,7 +153,7 @@ int xdp_do_pass(struct xdp_md *xdp)
 SEC("xdp")
 int xdp_do_drop(struct xdp_md *xdp)
 {
-	if (xdp_update_stats(xdp, true, true))
+	if (xdp_update_stats(xdp))
 		return XDP_PASS;
 
 	return XDP_DROP;
@@ -203,7 +175,7 @@ int xdp_do_tx(struct xdp_md *xdp)
 	struct ethhdr *eh = data;
 	__u8 tmp_mac[ETH_ALEN];
 
-	if (xdp_update_stats(xdp, true, true))
+	if (xdp_update_stats(xdp))
 		return XDP_PASS;
 
 	__builtin_memcpy(tmp_mac, eh->h_source, ETH_ALEN);

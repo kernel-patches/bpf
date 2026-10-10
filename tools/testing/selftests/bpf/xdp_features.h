@@ -8,6 +8,7 @@ enum test_commands {
 	CMD_ACK,		/* CMD + data */
 	CMD_GET_XDP_CAP,	/* CMD */
 	CMD_GET_STATS,		/* CMD */
+	CMD_GET_MAC,		/* CMD + data */
 };
 
 #define DUT_CTRL_PORT	12345
