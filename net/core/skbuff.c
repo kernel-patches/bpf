@@ -6704,6 +6704,7 @@ int skb_mpls_push(struct sk_buff *skb, __be32 mpls_lse, __be16 mpls_proto,
 		  int mac_len, bool ethernet)
 {
 	struct mpls_shim_hdr *lse;
+	bool trans_update;
 	int err;
 
 	if (unlikely(!eth_p_mpls(mpls_proto)))
@@ -6722,11 +6723,15 @@ int skb_mpls_push(struct sk_buff *skb, __be32 mpls_lse, __be16 mpls_proto,
 		skb_set_inner_protocol(skb, skb->protocol);
 	}
 
+	trans_update = skb_transport_header_was_set(skb) &&
+		       skb->transport_header <= skb->network_header;
 	skb_push(skb, MPLS_HLEN);
 	memmove(skb_mac_header(skb) - MPLS_HLEN, skb_mac_header(skb),
 		mac_len);
 	skb_reset_mac_header(skb);
 	skb_set_network_header(skb, mac_len);
+	if (trans_update)
+		skb->transport_header = skb->network_header;
 	skb_reset_mac_len(skb);
 
 	lse = mpls_hdr(skb);
@@ -6761,6 +6766,10 @@ int skb_mpls_pop(struct sk_buff *skb, __be16 next_proto, int mac_len,
 	if (unlikely(!eth_p_mpls(skb->protocol)))
 		return 0;
 
+	/* Networking stack does not allow simultaneous Tunnel and MPLS GSO. */
+	if (skb->encapsulation)
+		return -EINVAL;
+
 	err = skb_ensure_writable(skb, mac_len + MPLS_HLEN);
 	if (unlikely(err))
 		return err;
@@ -6772,6 +6781,10 @@ int skb_mpls_pop(struct sk_buff *skb, __be16 next_proto, int mac_len,
 	__skb_pull(skb, MPLS_HLEN);
 	skb_reset_mac_header(skb);
 	skb_set_network_header(skb, mac_len);
+	if (skb_transport_header_was_set(skb) &&
+	    skb->transport_header <= skb->network_header)
+		skb->transport_header = skb->network_header;
+	skb_reset_mac_len(skb);
 
 	if (ethernet && mac_len >= ETH_HLEN) {
 		struct ethhdr *hdr;
