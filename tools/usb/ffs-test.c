@@ -527,7 +527,6 @@ empty_out_buf(struct thread *ignore, const void *buf, size_t nbytes)
 {
 	const __u8 *p;
 	__u8 expected;
-	ssize_t ret;
 	size_t len;
 
 	(void)ignore;
@@ -549,9 +548,9 @@ empty_out_buf(struct thread *ignore, const void *buf, size_t nbytes)
 		break;
 
 	case PAT_PIPE:
-		ret = fwrite(buf, nbytes, 1, stdout);
-		if (ret > 0)
-			fflush(stdout);
+		if (fwrite(buf, nbytes, 1, stdout) != 1 || fflush(stdout))
+			return -1;
+		len = nbytes;
 		break;
 
 invalid:
