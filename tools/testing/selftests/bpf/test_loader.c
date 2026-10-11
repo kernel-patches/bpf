@@ -508,6 +508,16 @@ static int parse_test_spec(struct test_loader *tester,
 			if (err)
 				goto cleanup;
 			spec->mode_mask |= UNPRIV;
+		} else if ((msg = str_has_pfx(s, "test_expect_msg_next="))) {
+			err = __push_msg(msg, true, false, &spec->priv.expect_msgs);
+			if (err)
+				goto cleanup;
+			spec->mode_mask |= PRIV;
+		} else if ((msg = str_has_pfx(s, "test_expect_msg_next_unpriv="))) {
+			err = __push_msg(msg, true, false, &spec->unpriv.expect_msgs);
+			if (err)
+				goto cleanup;
+			spec->mode_mask |= UNPRIV;
 		} else if ((msg = str_has_pfx(s, "test_jited="))) {
 			if (arch_mask == 0) {
 				PRINT_FAIL("__jited used before __arch_*");
@@ -998,6 +1008,7 @@ void validate_msgs(const char *log_buf, struct expected_msgs *msgs,
 
 		no_match   = !msg->negative && !match->start;
 		wrong_line = !msg->negative &&
+			     match->start &&
 			     msg->on_next_line &&
 			     prev_match && prev_match->line + 1 != match->line;
 		unexpected = msg->negative && match->start;

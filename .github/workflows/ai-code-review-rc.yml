@@ -17,13 +17,20 @@ on:
 env:
   # The experiment: the bpf-ai-review ref to review with.
   AI_REVIEW_WRAPPER_REF: shadow/subsystem-build
-  # Review one in N KPD series.
-  AI_REVIEW_SAMPLE_EVERY: 4
 
 jobs:
   get-commits-rc:
-    # This codition is an indicator that we are running in a context of PR owned by kernel-patches org
-    if: ${{ github.repository == 'kernel-patches/bpf-rc' && vars.AWS_REGION }}
+    # Sample about one in four KPD PRs by head SHA (first hex digit 0-3).
+    # Test PRs against ai-review-base always run. Decide before allocating
+    # a CodeBuild runner so that unsampled PRs skip the entire workflow.
+    if: >-
+      github.repository == 'kernel-patches/bpf-rc' && vars.AWS_REGION &&
+      (github.base_ref == 'ai-review-base' ||
+       (startsWith(github.head_ref, 'series/') &&
+        (startsWith(github.event.pull_request.head.sha, '0') ||
+         startsWith(github.event.pull_request.head.sha, '1') ||
+         startsWith(github.event.pull_request.head.sha, '2') ||
+         startsWith(github.event.pull_request.head.sha, '3'))))
     runs-on:
       - ${{ format('codebuild-bpf-ci-{0}-{1}', github.run_id, github.run_attempt) }}
       - image:custom-linux-ghcr.io/kernel-patches/runner:kbuilder-debian-x86_64
@@ -49,17 +56,6 @@ jobs:
       - name: Get PR commits
         id: get-commits
         run: |
-          # Review one in AI_REVIEW_SAMPLE_EVERY KPD series, by patchwork series
-          # ID. Test PRs against ai-review-base always run.
-          if [ "$GITHUB_BASE_REF" != ai-review-base ]; then
-            if ! [[ $GITHUB_HEAD_REF =~ ^series/([0-9]+)= ]] ||
-               (( BASH_REMATCH[1] % AI_REVIEW_SAMPLE_EVERY )); then
-              echo "::notice::$GITHUB_HEAD_REF is not sampled (1 in ${AI_REVIEW_SAMPLE_EVERY} series)"
-              echo "commits=[]" >> "$GITHUB_OUTPUT"
-              echo "has-commits=false" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-          fi
           cd .kernel
           if [ "$(git log -1 --format=%s ${{ github.event.pull_request.head.sha }})" = "Dummy commit" ]; then
             echo "::notice::KPD Dummy commit, the series did not apply: skipping AI review"

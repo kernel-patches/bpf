@@ -4,7 +4,8 @@
 #include <bpf/btf.h>
 #include <test_progs.h>
 
-#if defined(__x86_64__) || defined(__powerpc__) || defined(__aarch64__)
+#if defined(__x86_64__) || defined(__powerpc__) || defined(__aarch64__) || \
+	(defined(__riscv) && __riscv_xlen == 64)
 static int map_create(__u32 map_type, __u32 max_entries)
 {
 	const char *map_name = "insn_array";

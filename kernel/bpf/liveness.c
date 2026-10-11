@@ -23,6 +23,7 @@ enum {
 	FM_MAY_READ,	/* stack slots that may be read by this instruction */
 	FM_MUST_WRITE,	/* stack slots written by this instruction */
 	FM_LIVE_BEFORE,	/* stack slots that may be read by this insn and its successors */
+	FM_MAY_WRITE,	/* stack slots that may be written by this instruction */
 	FM_MASK_CNT,
 };
 
@@ -262,6 +263,12 @@ static int mark_stack_write(struct func_instance *instance, u32 frame, u32 insn_
 	return mark_stack_range(instance, frame, insn_idx, FM_MUST_WRITE, lo, hi);
 }
 
+static int mark_stack_may_write(struct func_instance *instance, u32 frame, u32 insn_idx,
+				s32 lo, s32 hi)
+{
+	return mark_stack_range(instance, frame, insn_idx, FM_MAY_WRITE, lo, hi);
+}
+
 /*
  * Mark every half-slot of @frame as possibly read by @insn_idx. This widens
  * the masks to the program's stack budget: a full read recorded at a narrower
@@ -277,9 +284,16 @@ static int mark_stack_read_all(struct bpf_verifier_env *env, struct func_instanc
 			       env->stack_limit / BPF_HALF_REG_SIZE - 1);
 }
 
-/* Accumulate @src, a mask @src_words wide, into may_read of @frame at @insn_idx */
-static int mark_stack_read_mask(struct func_instance *instance, u32 frame, u32 insn_idx,
-				const unsigned long *src, u32 src_words)
+static int mark_stack_may_write_all(struct bpf_verifier_env *env, struct func_instance *instance,
+				    u32 frame, u32 insn_idx)
+{
+	return mark_stack_may_write(instance, frame, insn_idx, 0,
+				    env->stack_limit / BPF_HALF_REG_SIZE - 1);
+}
+
+/* Accumulate @src, a mask @src_words wide, into @kind mask of @frame at @insn_idx */
+static int mark_stack_mask(struct func_instance *instance, u32 frame, u32 insn_idx, u32 kind,
+			   const unsigned long *src, u32 src_words)
 {
 	u32 nbits = src_words * BITS_PER_LONG;
 	struct frame_masks *fm;
@@ -292,12 +306,18 @@ static int mark_stack_read_mask(struct func_instance *instance, u32 frame, u32 i
 	fm = widen_frame_masks(instance, frame, BITS_TO_LONGS(last + 1));
 	if (!fm)
 		return -ENOMEM;
-	dst = rel_mask(fm, relative_idx(instance, insn_idx), FM_MAY_READ);
+	dst = rel_mask(fm, relative_idx(instance, insn_idx), kind);
 	/* @src has no bits set past @last, hence none past @fm->words either */
 	src_words = min(src_words, fm->words);
 	for (w = 0; w < src_words; w++)
 		dst[w] |= src[w];
 	return 0;
+}
+
+static int mark_stack_read_mask(struct func_instance *instance, u32 frame, u32 insn_idx,
+				const unsigned long *src, u32 src_words)
+{
+	return mark_stack_mask(instance, frame, insn_idx, FM_MAY_READ, src, src_words);
 }
 
 int bpf_jmp_offset(struct bpf_insn *insn)
@@ -624,16 +644,41 @@ static char *fmt_spis_mask(struct bpf_verifier_env *env, int frame, bool first,
 	return env->tmp_str_buf;
 }
 
+/* Print mask @kind of the instruction at relative index @i for every frame, if any bit is set. */
+static bool print_mask(struct bpf_verifier_env *env, struct func_instance *instance, int i,
+		       const char *name, u32 kind)
+{
+	struct frame_masks *fm;
+	bool printed = false;
+	unsigned long *mask;
+	int frame;
+	u64 pos;
+
+	pos = env->log.end_pos;
+	verbose(env, "%s", name);
+	for (frame = instance->depth; frame >= 0; --frame) {
+		fm = instance->frames[frame];
+		if (!fm)
+			continue;
+		mask = rel_mask(fm, i, kind);
+		if (bitmap_empty(mask, frame_mask_bits(fm)))
+			continue;
+		verbose(env, "%s", fmt_spis_mask(env, frame, !printed, mask, fm->words));
+		printed = true;
+	}
+	if (!printed)
+		bpf_vlog_reset(&env->log, pos);
+	return printed;
+}
+
 static void print_instance(struct bpf_verifier_env *env, struct func_instance *instance)
 {
 	int start = env->subprog_info[instance->subprog].start;
 	struct bpf_insn *insns = env->prog->insnsi;
-	struct frame_masks *fm;
-	unsigned long *mask;
 	int len = instance->insn_cnt;
-	int insn_idx, frame, i;
-	bool has_use, has_def;
 	u64 pos, insn_pos;
+	int insn_idx, i;
+	bool printed;
 
 	if (!(env->log.level & BPF_LOG_LEVEL2))
 		return;
@@ -642,41 +687,17 @@ static void print_instance(struct bpf_verifier_env *env, struct func_instance *i
 	verbose(env, "%s:\n", fmt_instance(env, instance));
 	for (i = 0; i < len; i++) {
 		insn_idx = start + i;
-		has_use = false;
-		has_def = false;
 		pos = env->log.end_pos;
 		verbose(env, "%3d: ", insn_idx);
 		bpf_verbose_insn(env, &insns[insn_idx]);
 		insn_pos = env->log.end_pos;
 		verbose(env, "%*c;", bpf_vlog_alignment(insn_pos - pos), ' ');
-		pos = env->log.end_pos;
-		verbose(env, " use: ");
-		for (frame = instance->depth; frame >= 0; --frame) {
-			fm = instance->frames[frame];
-			if (!fm)
-				continue;
-			mask = rel_mask(fm, i, FM_MAY_READ);
-			if (bitmap_empty(mask, frame_mask_bits(fm)))
-				continue;
-			verbose(env, "%s", fmt_spis_mask(env, frame, !has_use, mask, fm->words));
-			has_use = true;
-		}
-		if (!has_use)
-			bpf_vlog_reset(&env->log, pos);
-		pos = env->log.end_pos;
-		verbose(env, " def: ");
-		for (frame = instance->depth; frame >= 0; --frame) {
-			fm = instance->frames[frame];
-			if (!fm)
-				continue;
-			mask = rel_mask(fm, i, FM_MUST_WRITE);
-			if (bitmap_empty(mask, frame_mask_bits(fm)))
-				continue;
-			verbose(env, "%s", fmt_spis_mask(env, frame, !has_def, mask, fm->words));
-			has_def = true;
-		}
-		if (!has_def)
-			bpf_vlog_reset(&env->log, has_use ? pos : insn_pos);
+		printed = false;
+		printed |= print_mask(env, instance, i, " use: ", FM_MAY_READ);
+		printed |= print_mask(env, instance, i, " def: ", FM_MUST_WRITE);
+		printed |= print_mask(env, instance, i, " may_def: ", FM_MAY_WRITE);
+		if (!printed)
+			bpf_vlog_reset(&env->log, insn_pos);
 		verbose(env, "\n");
 		if (bpf_is_ldimm64(&insns[insn_idx]))
 			i++;
@@ -695,6 +716,49 @@ static int cmp_instances(const void *pa, const void *pb)
 	if (ddepth)
 		return ddepth;
 	return 0;
+}
+
+/* OR the 8-byte slots touched by a half-slot (4-byte) mask into @slots. */
+static void half_spis_to_slots(unsigned long *slots, const unsigned long *mask, u32 nbits)
+{
+	u32 slot;
+
+	for (slot = 0; slot < MAX_BPF_STACK_SLOTS && slot * 2 + 1 < nbits; slot++)
+		if (test_bit(slot * 2, mask) || test_bit(slot * 2 + 1, mask))
+			__set_bit(slot, slots);
+}
+
+/*
+ * Precompute, for each instruction, the OR of may_write and live_before masks
+ * over its top frame across all func_instances reaching it, stash them in the
+ * insn_aux_data.
+ */
+static void compute_may_write_masks(struct bpf_verifier_env *env)
+{
+	struct bpf_insn_aux_data *aux = env->insn_aux_data;
+	struct bpf_liveness *liveness = env->liveness;
+	struct func_instance *instance;
+	struct frame_masks *fm;
+	u32 nbits;
+	int bkt, i;
+
+	hash_for_each(liveness->func_instances, bkt, instance, hl_node) {
+		fm = instance->frames[instance->depth];
+		if (!fm)
+			continue;
+		nbits = frame_mask_bits(fm);
+		for (i = 0; i < instance->insn_cnt; i++) {
+			half_spis_to_slots(aux[instance->subprog_start + i].may_write_mask,
+					   rel_mask(fm, i, FM_MAY_WRITE), nbits);
+			half_spis_to_slots(aux[instance->subprog_start + i].live_stack_before,
+					   rel_mask(fm, i, FM_LIVE_BEFORE), nbits);
+		}
+	}
+}
+
+const unsigned long *bpf_may_write_mask(struct bpf_verifier_env *env, u32 insn_idx)
+{
+	return env->insn_aux_data[insn_idx].may_write_mask;
 }
 
 /* print use/def slots for all instances ordered by callsite first, then by depth */
@@ -1294,6 +1358,29 @@ static bool can_be_local_fp(int depth, int regno, struct arg_track *at)
 }
 
 /*
+ * Model 8-byte reads through @reg, including load-acquire
+ * and the old value fetched by atomic operations.
+ */
+static struct arg_track arg_track_deref(struct bpf_verifier_env *env, struct bpf_insn *insn,
+					struct arg_track *at_out, int reg,
+					struct arg_track *at_stack_out, u32 nslots,
+					int depth, u32 *callsites)
+{
+	struct arg_track *ptr = &at_out[reg];
+
+	if (can_be_local_fp(depth, reg, ptr))
+		return fill_from_stack(insn, at_out, reg, at_stack_out, nslots, depth);
+	if (ptr->frame >= 0 && ptr->frame < depth) {
+		struct spill_snapshot *parent = env->callsite_at_stack[callsites[ptr->frame]];
+
+		return fill_from_stack(insn, at_out, reg, parent->at, parent->slots, ptr->frame);
+	}
+	if (ptr->frame == ARG_IMPRECISE && !(ptr->mask & BIT(depth)) && ptr->mask)
+		return *ptr;
+	return (struct arg_track){ .frame = ARG_NONE };
+}
+
+/*
  * Pure dataflow transfer function for arg_track state.
  * Updates at_out[] based on how the instruction modifies registers.
  * Tracks spill/fill, but not other memory accesses.
@@ -1374,56 +1461,42 @@ static void arg_track_xfer(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		for (r = BPF_REG_0; r <= BPF_REG_5; r++)
 			at_out[r] = none;
 	} else if (class == BPF_LDX) {
-		u32 sz = bpf_size_to_bytes(BPF_SIZE(insn->code));
-		bool src_is_local_fp = can_be_local_fp(depth, insn->src_reg, src);
-
-		/*
-		 * Reload from callee stack: if src is current-frame FP-derived
-		 * and the load is an 8-byte BPF_MEM, try to restore the spill
-		 * identity.  For imprecise sources fill_from_stack() returns
-		 * ARG_IMPRECISE (off_cnt == 0).
-		 */
-		if (src_is_local_fp && BPF_MODE(insn->code) == BPF_MEM && sz == 8) {
-			*dst = fill_from_stack(insn, at_out, insn->src_reg, at_stack_out, nslots,
-					       depth);
-		} else if (src->frame >= 0 && src->frame < depth &&
-			   BPF_MODE(insn->code) == BPF_MEM && sz == 8) {
-			struct spill_snapshot *parent =
-				env->callsite_at_stack[callsites[src->frame]];
-
-			*dst = fill_from_stack(insn, at_out, insn->src_reg,
-					       parent->at, parent->slots, src->frame);
-		} else if (src->frame == ARG_IMPRECISE &&
-			   !(src->mask & BIT(depth)) && src->mask &&
-			   BPF_MODE(insn->code) == BPF_MEM && sz == 8) {
-			/*
-			 * Imprecise src with only parent-frame bits:
-			 * conservative fallback.
-			 */
-			*dst = *src;
-		} else {
+		/* Only an 8-byte BPF_MEM load can be a fill, see arg_track_deref(). */
+		if (BPF_MODE(insn->code) == BPF_MEM && BPF_SIZE(insn->code) == BPF_DW)
+			*dst = arg_track_deref(env, insn, at_out, insn->src_reg,
+					       at_stack_out, nslots, depth, callsites);
+		else
 			*dst = none;
-		}
 	} else if (class == BPF_LD && BPF_MODE(insn->code) == BPF_IMM) {
 		*dst = none;
 	} else if (class == BPF_STX) {
 		u32 sz = bpf_size_to_bytes(BPF_SIZE(insn->code));
-		bool dst_is_local_fp;
+		bool dst_is_local_fp = can_be_local_fp(depth, insn->dst_reg, dst);
+		u8 mode = BPF_MODE(insn->code);
 
-		/* Track spills to current-frame FP-derived callee stack */
-		dst_is_local_fp = can_be_local_fp(depth, insn->dst_reg, dst);
-		if (dst_is_local_fp && BPF_MODE(insn->code) == BPF_MEM)
-			spill_to_stack(insn, at_out, insn->dst_reg,
-				       at_stack_out, nslots, src, sz);
-
-		if (BPF_MODE(insn->code) == BPF_ATOMIC) {
-			if (dst_is_local_fp && insn->imm != BPF_LOAD_ACQ)
-				clear_stack_for_all_offs(insn, at_out, insn->dst_reg,
-							 at_stack_out, nslots, sz);
+		if (mode == BPF_MEM || (mode == BPF_ATOMIC && insn->imm == BPF_STORE_REL)) {
+			if (dst_is_local_fp)
+				spill_to_stack(insn, at_out, insn->dst_reg,
+					       at_stack_out, nslots, src, sz);
+		} else if (mode == BPF_ATOMIC && insn->imm == BPF_LOAD_ACQ) {
+			if (sz == 8)
+				*dst = arg_track_deref(env, insn, at_out, insn->src_reg,
+						       at_stack_out, nslots, depth, callsites);
+			else
+				*dst = none;
+		} else if (mode == BPF_ATOMIC) {
+			/* BPF_XCHG, BPF_CMPXCHG or BPF_{ADD,AND,OR,XOR} | [BPF_FETCH] */
+			struct arg_track old = none;
 
 			r = bpf_atomic_load_reg(insn);
+			if (r >= 0 && sz == 8)
+				old = arg_track_deref(env, insn, at_out, insn->dst_reg,
+						      at_stack_out, nslots, depth, callsites);
+			if (dst_is_local_fp)
+				clear_stack_for_all_offs(insn, at_out, insn->dst_reg,
+							 at_stack_out, nslots, sz);
 			if (r >= 0)
-				at_out[r] = none;
+				at_out[r] = old;
 		}
 	} else if (class == BPF_ST && BPF_MODE(insn->code) == BPF_MEM) {
 		u32 sz = bpf_size_to_bytes(BPF_SIZE(insn->code));
@@ -1437,17 +1510,16 @@ static void arg_track_xfer(struct bpf_verifier_env *env, struct bpf_insn *insn,
 }
 
 /*
- * Record access_bytes from helper/kfunc or load/store insn.
- *   access_bytes > 0:      stack read
- *   access_bytes < 0:      stack write
- *   access_bytes == S64_MIN: unknown   — conservative, mark [0..slot] as read
- *   access_bytes == 0:      no access
- *
+ * Record possible reads and writes for every touched half-slot. A definite
+ * write requires full coverage, a known size, and a single possible offset.
  */
-static int record_stack_access_off(struct func_instance *instance, s64 fp_off,
-				   s64 access_bytes, u32 frame, u32 insn_idx)
+static int record_stack_access_off(struct func_instance *instance, const struct arg_track *arg,
+				   s64 off_idx, struct arg_access_info info,
+				   u32 frame, u32 insn_idx)
 {
+	s64 fp_off = arg->off[off_idx];
 	s32 slot_hi, slot_lo;
+	int err;
 
 	if (fp_off >= 0)
 		/*
@@ -1456,61 +1528,68 @@ static int record_stack_access_off(struct func_instance *instance, s64 fp_off,
 		 * by the main verifier pass later.
 		 */
 		return 0;
-	if (access_bytes == S64_MIN) {
-		/* helper/kfunc read unknown amount of bytes from fp_off until fp+0 */
-		slot_hi = (-fp_off - 1) / STACK_SLOT_SZ;
-		return mark_stack_read(instance, frame, insn_idx, 0, slot_hi);
+
+	/*
+	 * Read and may_write marks include partially covered slots.
+	 * An unknown access size may reach from fp_off to the frame top.
+	 */
+	slot_hi = (-fp_off - 1) / STACK_SLOT_SZ;
+	slot_lo = info.size == U32_MAX
+		  ? 0
+		  : max_t(s32, (-fp_off - info.size) / STACK_SLOT_SZ, 0);
+	if (info.may_read) {
+		err = mark_stack_read(instance, frame, insn_idx, slot_lo, slot_hi);
+		if (err)
+			return err;
 	}
-	if (access_bytes > 0) {
-		/* Mark any touched slot as use */
-		slot_hi = (-fp_off - 1) / STACK_SLOT_SZ;
-		slot_lo = max_t(s32, (-fp_off - access_bytes) / STACK_SLOT_SZ, 0);
-		return mark_stack_read(instance, frame, insn_idx, slot_lo, slot_hi);
-	} else if (access_bytes < 0) {
+	if (info.may_write) {
+		err = mark_stack_may_write(instance, frame, insn_idx, slot_lo, slot_hi);
+		if (err)
+			return err;
+	}
+	if (info.must_write && info.size != U32_MAX && arg->off_cnt == 1) {
 		/* Mark only fully covered slots as def */
-		access_bytes = -access_bytes;
 		slot_hi = (-fp_off) / STACK_SLOT_SZ - 1;
-		slot_lo = max_t(s32, (-fp_off - access_bytes + STACK_SLOT_SZ - 1) / STACK_SLOT_SZ, 0);
+		slot_lo = max_t(s32, (-fp_off - info.size + STACK_SLOT_SZ - 1) / STACK_SLOT_SZ, 0);
 		return mark_stack_write(instance, frame, insn_idx, slot_lo, slot_hi);
 	}
 	return 0;
 }
 
-/*
- * 'arg' is FP-derived argument to helper/kfunc or load/store that
- * reads (positive) or writes (negative) 'access_bytes' into 'use' or 'def'.
- */
-static int record_stack_access(struct bpf_verifier_env *env, struct func_instance *instance,
+/* Record access through a pointer with a known frame and possibly known offsets. */
+static int record_stack_access(struct bpf_verifier_env *env,
+			       struct func_instance *instance,
 			       const struct arg_track *arg,
-			       s64 access_bytes, u32 frame, u32 insn_idx)
+			       struct arg_access_info info, u32 frame, u32 insn_idx)
 {
 	int i, err;
 
-	if (access_bytes == 0)
+	if (!info.size)
 		return 0;
 	if (arg->off_cnt == 0) {
-		if (access_bytes > 0 || access_bytes == S64_MIN)
-			return mark_stack_read_all(env, instance, frame, insn_idx);
+		if (info.may_read) {
+			err = mark_stack_read_all(env, instance, frame, insn_idx);
+			if (err)
+				return err;
+		}
+		if (info.may_write) {
+			err = mark_stack_may_write_all(env, instance, frame, insn_idx);
+			if (err)
+				return err;
+		}
 		return 0;
 	}
-	if (access_bytes != S64_MIN && access_bytes < 0 && arg->off_cnt != 1)
-		/* multi-offset write cannot set stack_def */
-		return 0;
-
 	for (i = 0; i < arg->off_cnt; i++) {
-		err = record_stack_access_off(instance, arg->off[i], access_bytes, frame, insn_idx);
+		err = record_stack_access_off(instance, arg, i, info, frame, insn_idx);
 		if (err)
 			return err;
 	}
 	return 0;
 }
 
-/*
- * When a pointer is ARG_IMPRECISE, conservatively mark every frame in
- * the bitmask as fully used.
- */
+/* Record possible effects on every candidate frame of an imprecise pointer. */
 static int record_imprecise(struct bpf_verifier_env *env, struct func_instance *instance,
-			    u32 mask, u32 insn_idx)
+			    struct arg_access_info info, u32 mask, u32 insn_idx)
 {
 	int depth = instance->depth;
 	int f, err;
@@ -1519,9 +1598,16 @@ static int record_imprecise(struct bpf_verifier_env *env, struct func_instance *
 		if (!(mask & 1))
 			continue;
 		if (f <= depth) {
-			err = mark_stack_read_all(env, instance, f, insn_idx);
-			if (err)
-				return err;
+			if (info.may_read) {
+				err = mark_stack_read_all(env, instance, f, insn_idx);
+				if (err)
+					return err;
+			}
+			if (info.may_write) {
+				err = mark_stack_may_write_all(env, instance, f, insn_idx);
+				if (err)
+					return err;
+			}
 		}
 	}
 	return 0;
@@ -1533,9 +1619,10 @@ static int record_load_store_access(struct bpf_verifier_env *env,
 				    struct arg_track *at, int insn_idx)
 {
 	struct bpf_insn *insn = &env->prog->insnsi[insn_idx];
+	struct arg_access_info info = {};
 	int depth = instance->depth;
-	s32 sz = bpf_size_to_bytes(BPF_SIZE(insn->code));
 	u8 class = BPF_CLASS(insn->code);
+	bool read = false, write = false;
 	struct arg_track resolved, *ptr;
 	int oi;
 
@@ -1552,23 +1639,34 @@ static int record_load_store_access(struct bpf_verifier_env *env,
 	switch (class) {
 	case BPF_LDX:
 		ptr = &at[insn->src_reg];
+		read = true;
 		break;
 	case BPF_STX:
 		if (BPF_MODE(insn->code) == BPF_ATOMIC) {
-			if (insn->imm == BPF_STORE_REL)
-				sz = -sz;
-			if (insn->imm == BPF_LOAD_ACQ)
+			switch (insn->imm) {
+			case BPF_LOAD_ACQ:
 				ptr = &at[insn->src_reg];
-			else
+				read = true;
+				break;
+			case BPF_STORE_REL:
 				ptr = &at[insn->dst_reg];
+				write = true;
+				break;
+			default:
+				/* ADD/AND/OR/XOR(+FETCH), XCHG, CMPXCHG */
+				ptr = &at[insn->dst_reg];
+				read = true;
+				write = true;
+				break;
+			}
 		} else {
 			ptr = &at[insn->dst_reg];
-			sz = -sz;
+			write = true;
 		}
 		break;
 	case BPF_ST:
 		ptr = &at[insn->dst_reg];
-		sz = -sz;
+		write = true;
 		break;
 	default:
 		return 0;
@@ -1587,10 +1685,14 @@ static int record_load_store_access(struct bpf_verifier_env *env,
 		ptr = &resolved;
 	}
 
+	info.may_read = read;
+	info.may_write = write;
+	info.must_write = write;
+	info.size = bpf_size_to_bytes(BPF_SIZE(insn->code));
 	if (ptr->frame >= 0 && ptr->frame <= depth)
-		return record_stack_access(env, instance, ptr, sz, ptr->frame, insn_idx);
+		return record_stack_access(env, instance, ptr, info, ptr->frame, insn_idx);
 	if (ptr->frame == ARG_IMPRECISE)
-		return record_imprecise(env, instance, ptr->mask, insn_idx);
+		return record_imprecise(env, instance, info, ptr->mask, insn_idx);
 	/* ARG_NONE: not derived from any frame pointer, skip */
 	return 0;
 }
@@ -1601,37 +1703,42 @@ static int record_arg_access(struct bpf_verifier_env *env,
 			     struct arg_track *at, int arg_idx,
 			     int insn_idx)
 {
+	struct arg_access_info info;
 	int depth = instance->depth;
 	int frame = at->frame;
 	int err = 0;
-	s64 bytes;
 
 	if (!arg_is_fp(at))
 		return 0;
 
 	if (bpf_helper_call(insn)) {
-		bytes = bpf_helper_stack_access_bytes(env, insn, arg_idx, insn_idx);
+		info = bpf_helper_stack_access_bytes(env, insn, arg_idx, insn_idx);
 	} else if (bpf_pseudo_kfunc_call(insn)) {
-		bytes = bpf_kfunc_stack_access_bytes(env, insn, arg_idx, insn_idx);
+		info = bpf_kfunc_stack_access_bytes(env, insn, arg_idx, insn_idx);
+	} else if (bpf_pseudo_call(insn)) {
+		info = bpf_global_subprog_stack_access_bytes(env, insn, arg_idx, insn_idx);
 	} else {
 		for (int f = 0; f <= depth; f++) {
 			err = mark_stack_read_all(env, instance, f, insn_idx);
 			if (err)
 				return err;
+			err = mark_stack_may_write_all(env, instance, f, insn_idx);
+			if (err)
+				return err;
 		}
 		return 0;
 	}
-	if (bytes == 0)
+	if (!info.size)
 		return 0;
 
 	if (frame >= 0 && frame <= depth)
-		err = record_stack_access(env, instance, at, bytes, frame, insn_idx);
+		err = record_stack_access(env, instance, at, info, frame, insn_idx);
 	else if (frame == ARG_IMPRECISE)
-		err = record_imprecise(env, instance, at->mask, insn_idx);
+		err = record_imprecise(env, instance, info, at->mask, insn_idx);
 	return err;
 }
 
-/* Record stack access for a given 'at' state of helper/kfunc 'insn' */
+/* Record stack access for a given 'at' state of helper/kfunc/global subprog 'insn' */
 static int record_call_access(struct bpf_verifier_env *env,
 			      struct func_instance *instance,
 			      struct arg_track *at,
@@ -1639,12 +1746,19 @@ static int record_call_access(struct bpf_verifier_env *env,
 {
 	struct bpf_insn *insn = &env->prog->insnsi[insn_idx];
 	struct bpf_call_summary cs;
-	int r, err, arg_slot_cnt = 5;
+	int r, err, callee, arg_slot_cnt = 5;
 
-	if (bpf_pseudo_call(insn))
-		return 0;
-
-	if (bpf_is_callx(insn))
+	if (bpf_pseudo_call(insn)) {
+		/*
+		 * analyze_subprog() handles static callees. For global callees,
+		 * derive effects from argument types so may_write marks remain
+		 * conservative under freplace.
+		 */
+		callee = bpf_find_subprog(env, insn_idx + insn->imm + 1);
+		if (callee < 0 || !bpf_subprog_is_global(env, callee))
+			return 0;
+		arg_slot_cnt = MAX_BPF_FUNC_ARGS;
+	} else if (bpf_is_callx(insn))
 		/*
 		 * The callee is not known statically. Assume that all arg
 		 * slots are passed and let record_arg_access() conservatively
@@ -1808,6 +1922,17 @@ static void print_subprog_arg_access(struct bpf_verifier_env *env,
 	}
 }
 
+static void record_stack_ptrs(struct bpf_verifier_env *env, int idx, struct arg_track *at_in)
+{
+	u16 r, mask = 0;
+
+	for (r = 0; r < MAX_BPF_REG; r++)
+		if (arg_is_fp(&at_in[r]))
+			mask |= BIT(r);
+
+	env->insn_aux_data[idx].stack_ptrs |= mask;
+}
+
 /*
  * Compute arg tracking dataflow for a single subprog.
  * Runs forward fixed-point with arg_track_xfer(), then records
@@ -1957,6 +2082,8 @@ redo:
 			snap->slots = nslots;
 			memcpy(snap->at, &at_stack_in[(size_t)i * nslots], nslots * sizeof(*snap->at));
 		}
+
+		record_stack_ptrs(env, idx, at_in[i]);
 	}
 
 	info->at_in = at_in;
@@ -1987,6 +2114,7 @@ static bool has_fp_args(struct arg_track *args)
 /*
  * Merge a freshly analyzed instance into the original.
  * may_read: union (any pass might read the slot).
+ * may_write: union (slots written on ANY pass).
  * must_write: intersection (only slots written on ALL passes are guaranteed).
  * live_before is recomputed by a subsequent update_instance() on @dst.
  *
@@ -2025,14 +2153,46 @@ static int merge_instances(struct func_instance *dst, struct func_instance *src)
 		for (i = 0; i < dst->insn_cnt; i++) {
 			unsigned long *dst_read = rel_mask(d, i, FM_MAY_READ);
 			unsigned long *dst_write = rel_mask(d, i, FM_MUST_WRITE);
+			unsigned long *dst_may_write = rel_mask(d, i, FM_MAY_WRITE);
 			unsigned long *src_read = rel_mask(s, i, FM_MAY_READ);
 			unsigned long *src_write = rel_mask(s, i, FM_MUST_WRITE);
+			unsigned long *src_may_write = rel_mask(s, i, FM_MAY_WRITE);
 
 			for (w = 0; w < d->words; w++) {
 				dst_read[w] |= w < s->words ? src_read[w] : 0;
 				dst_write[w] &= w < s->words ? src_write[w] : 0;
+				dst_may_write[w] |= w < s->words ? src_may_write[w] : 0;
 			}
 		}
+	}
+	return 0;
+}
+
+/*
+ * Fold a fully analyzed callee instance writes to upper frames as
+ * may_write marks at callsite in caller's frames.
+ */
+static int merge_may_write(struct func_instance *caller, struct func_instance *callee)
+{
+	DECLARE_BITMAP(acc, FRAME_HALF_SPIS);
+	u32 call_idx = callee->callsite;
+	struct frame_masks *fm;
+	u32 f, i, nbits;
+	int err;
+
+	for (f = 0; f < callee->depth; f++) {
+		fm = callee->frames[f];
+		if (!fm)
+			continue;
+		nbits = frame_mask_bits(fm);
+		bitmap_zero(acc, nbits);
+		for (i = 0; i < callee->insn_cnt; i++)
+			bitmap_or(acc, acc, rel_mask(fm, i, FM_MAY_WRITE), nbits);
+		if (bitmap_empty(acc, nbits))
+			continue;
+		err = mark_stack_mask(caller, f, call_idx, FM_MAY_WRITE, acc, fm->words);
+		if (err)
+			return err;
 	}
 	return 0;
 }
@@ -2131,7 +2291,12 @@ static int analyze_subprog(struct bpf_verifier_env *env,
 		if (bpf_pseudo_call(insn)) {
 			target = idx + insn->imm + 1;
 			callee = bpf_find_subprog(env, target);
-			if (callee < 0)
+			/*
+			 * Global subprograms can be freplaced, so conservatively derive
+			 * their stack effects from their BTF signatures instead of
+			 * analyzing them in the context of their callers.
+			 */
+			if (callee < 0 || bpf_subprog_is_global(env, callee))
 				continue;
 
 			/* Build entry args: R1-R5 and stack args from at_in at call site */
@@ -2150,6 +2315,9 @@ static int analyze_subprog(struct bpf_verifier_env *env,
 					continue;
 				for (int f = 0; f <= depth; f++) {
 					err = mark_stack_read_all(env, instance, f, idx);
+					if (err)
+						goto out_free;
+					err = mark_stack_may_write_all(env, instance, f, idx);
 					if (err)
 						goto out_free;
 				}
@@ -2204,6 +2372,11 @@ static int analyze_subprog(struct bpf_verifier_env *env,
 					goto out_free;
 			}
 		}
+
+		/* Summarize callee's writes to ancestor frames onto the callsite */
+		err = merge_may_write(instance, callee_instance);
+		if (err)
+			goto out_free;
 	}
 
 	if (prev_instance) {
@@ -2266,6 +2439,8 @@ int bpf_compute_subprog_arg_access(struct bpf_verifier_env *env)
 			goto out;
 	}
 
+	compute_may_write_masks(env);
+
 	if (env->log.level & BPF_LOG_LEVEL2)
 		err = print_instances(env);
 
@@ -2297,6 +2472,12 @@ static inline u32 mask_widen(u32 m) { return m | (m << 16); }
 static inline u16 mask_lo(u32 m) { return (u16)m; }
 static inline u16 mask_hi(u32 m) { return (u16)(m >> 16); }
 
+/* Index of the subprogram called by pseudo call @insn */
+static int callee_subprog(struct bpf_verifier_env *env, const struct bpf_insn *insn)
+{
+	return bpf_find_subprog(env, insn - env->prog->insnsi + insn->imm + 1);
+}
+
 /* Compute info->{use,def} fields for the instruction */
 static void compute_insn_live_regs(struct bpf_verifier_env *env,
 				   struct bpf_insn *insn,
@@ -2314,6 +2495,7 @@ static void compute_insn_live_regs(struct bpf_verifier_env *env,
 	const u32 dst32 = mask_lo(dst);
 	const u32 r0  = reg64_mask(0);
 	const u32 r2  = reg64_mask(BPF_REG_2);
+	int subprog, reg_args;
 	u32 def = 0;
 	u32 use = U32_MAX;
 
@@ -2438,8 +2620,18 @@ static void compute_insn_live_regs(struct bpf_verifier_env *env,
 		case BPF_CALL:
 			def = ALL_CALLER_SAVED_REGS;
 			use = def & ~BIT(BPF_REG_0);
-			if (bpf_get_call_summary(env, insn, &cs))
+			if (bpf_get_call_summary(env, insn, &cs)) {
 				use = GENMASK(min_t(u8, cs.arg_slot_cnt, MAX_BPF_FUNC_REG_ARGS), 1);
+			} else if (bpf_pseudo_call(insn)) {
+				/* a static callee's reads are added in bpf_compute_live_registers() */
+				subprog = callee_subprog(env, insn);
+				if (bpf_subprog_is_global(env, subprog)) {
+					reg_args = min_t(u8, env->subprog_info[subprog].arg_slot_cnt, MAX_BPF_FUNC_REG_ARGS);
+					use = GENMASK(reg_args, 1);
+				} else {
+					use = 0;
+				}
+			}
 			def = mask_widen(def);
 			use = mask_widen(use);
 			/* callx reads the address of the callee from dst_reg */
@@ -2472,8 +2664,7 @@ int bpf_compute_live_registers(struct bpf_verifier_env *env)
 	struct bpf_insn *insns = env->prog->insnsi;
 	struct insn_live_regs *state;
 	int insn_cnt = env->prog->len;
-	u64 pos, insn_pos;
-	int err = 0, i, j, subprog, start, end;
+	int err = 0, i, subprog, start, end;
 	bool changed, ret_reg_pair;
 
 	/* Use the following algorithm:
@@ -2524,11 +2715,21 @@ int bpf_compute_live_registers(struct bpf_verifier_env *env)
 			struct bpf_iarray *succ;
 			u32 new_out = 0;
 			u32 new_in = 0;
+			u32 use;
 
 			succ = bpf_insn_successors(env, insn_idx);
 			for (int s = 0; s < succ->cnt; ++s)
 				new_out |= state[succ->items[s]].in;
-			new_in = (new_out & ~live->def) | live->use;
+			use = live->use;
+			/*
+			 * For a call to a static subprogram include the callee's
+			 * entry 'in' as computed so far.
+			 */
+			if (bpf_pseudo_call(&insns[insn_idx]) &&
+			    !bpf_subprog_is_global(env, callee_subprog(env, &insns[insn_idx])))
+				use |= state[insn_idx + insns[insn_idx].imm + 1].in &
+				       mask_widen(GENMASK(BPF_REG_5, BPF_REG_1));
+			new_in = (new_out & ~live->def) | use;
 			if (new_out != live->out || new_in != live->in) {
 				live->in = new_in;
 				live->out = new_out;
@@ -2550,31 +2751,6 @@ int bpf_compute_live_registers(struct bpf_verifier_env *env)
 		 * upper half of that register is alive after the instruction.
 		 */
 		insn_aux[i].zext_dst = def32 >= 0 && (mask_hi(out) & BIT(def32));
-	}
-
-	if (env->log.level & BPF_LOG_LEVEL2) {
-		verbose(env, "Live regs before insn:\n");
-		for (i = 0; i < insn_cnt; ++i) {
-			if (env->insn_aux_data[i].scc)
-				verbose(env, "%3d ", env->insn_aux_data[i].scc);
-			else
-				verbose(env, "    ");
-			verbose(env, "%3d: ", i);
-			for (j = BPF_REG_0; j < BPF_REG_10; ++j)
-				if (insn_aux[i].live_regs_before & BIT(j))
-					verbose(env, "%d", j);
-				else
-					verbose(env, ".");
-			verbose(env, " ");
-			pos = env->log.end_pos;
-			bpf_verbose_insn(env, &insns[i]);
-			insn_pos = env->log.end_pos;
-			if (insn_aux[i].zext_dst)
-				verbose(env, "%*c; zext", bpf_vlog_alignment(insn_pos - pos), ' ');
-			verbose(env, "\n");
-			if (bpf_is_ldimm64(&insns[i]))
-				i++;
-		}
 	}
 
 out:
