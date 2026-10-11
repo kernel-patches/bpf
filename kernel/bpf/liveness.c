@@ -2623,14 +2623,15 @@ static void compute_insn_live_regs(struct bpf_verifier_env *env,
 			if (bpf_get_call_summary(env, insn, &cs)) {
 				use = GENMASK(min_t(u8, cs.arg_slot_cnt, MAX_BPF_FUNC_REG_ARGS), 1);
 			} else if (bpf_pseudo_call(insn)) {
-				/* a static callee's reads are added in bpf_compute_live_registers() */
+				/*
+				 * Use BTF signatures as a starting point.
+				 * See special case for static subprograms
+				 * in the bpf_compute_live_registers()'s main loop.
+				 */
 				subprog = callee_subprog(env, insn);
-				if (bpf_subprog_is_global(env, subprog)) {
-					reg_args = min_t(u8, env->subprog_info[subprog].arg_slot_cnt, MAX_BPF_FUNC_REG_ARGS);
-					use = GENMASK(reg_args, 1);
-				} else {
-					use = 0;
-				}
+				reg_args = min_t(u8, env->subprog_info[subprog].arg_slot_cnt,
+						 MAX_BPF_FUNC_REG_ARGS);
+				use = GENMASK(reg_args, 1);
 			}
 			def = mask_widen(def);
 			use = mask_widen(use);

@@ -14834,15 +14834,27 @@ static bool try_btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 	return !err;
 }
 
-/* Prepare argument metadata for liveness; the main program is handled separately. */
+/* Initialize env->subprog_info[].arg_slot_cnt */
 static void prepare_subprog_args(struct bpf_verifier_env *env)
 {
+	struct bpf_prog_aux *aux = env->prog->aux;
+	const struct btf_type *t;
 	int i;
 
-	for (i = 1; i < env->subprog_cnt; i++) {
-		if (!try_btf_prepare_func_args(env, i) && bpf_subprog_is_global(env, i))
-			/* Keep all argument registers live if the prototype is unavailable. */
-			env->subprog_info[i].arg_slot_cnt = MAX_BPF_FUNC_REG_ARGS;
+	for (i = 0; i < env->subprog_cnt; i++) {
+		/*
+		 * Keep all argument registers live if the prototype is unavailable.
+		 * No need to include stack args, as those are not supported for
+		 * subprograms w/o BTF.
+		 */
+		env->subprog_info[i].arg_slot_cnt = MAX_BPF_FUNC_REG_ARGS;
+		if (!aux->func_info)
+			continue;
+		/* BTF validation guarantees FUNC -> FUNC_PROTO. */
+		t = btf_type_by_id(aux->btf, aux->func_info[i].type_id);
+		t = btf_type_by_id(aux->btf, t->type);
+		env->subprog_info[i].arg_slot_cnt = min_t(u32, btf_proto_slots(aux->btf, t),
+							  MAX_BPF_FUNC_ARGS);
 	}
 }
 
@@ -23396,6 +23408,8 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	if (ret < 0)
 		goto skip_full_check;
 
+	prepare_subprog_args(env);
+
 	ret = check_subprogs(env);
 	if (ret < 0)
 		goto skip_full_check;
@@ -23457,8 +23471,6 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	ret = bpf_compute_subprog_ret_regs(env);
 	if (ret < 0)
 		goto skip_full_check;
-
-	prepare_subprog_args(env);
 
 	ret = bpf_compute_idoms(env);
 	if (ret < 0)

@@ -322,7 +322,7 @@ static void test_exceptions_success(void)
 				       bpf_program__fd(skel->progs.exception_throw_subprog),
 				       "subprog"), "set_attach_target"))
 				goto done;
-		}), "Cannot replace static functions", 0);
+		}), "subprog() is not a global function", 0);
 
 	if (test__start_subtest("non-throwing extension -> throwing subprog"))
 		/* non-throwing extension -> throwing subprog : BAD (!global) */

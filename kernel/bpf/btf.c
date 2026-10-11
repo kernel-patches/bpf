@@ -8634,7 +8634,6 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 	}
 	args = (const struct btf_param *)(t + 1);
 	nargs = btf_type_vlen(t);
-	sub->arg_slot_cnt = nargs;
 	if (nargs > MAX_BPF_FUNC_ARGS) {
 		bpf_log(log, "kernel supports at most %d parameters, function %s has %d\n",
 			MAX_BPF_FUNC_ARGS, tname, nargs);
@@ -8829,10 +8828,13 @@ skip_pointer:
 		return -EINVAL;
 	}
 
-	err = btf_check_arg_slots(log, tname, is_global, slots_used, sub);
+	if (verifier_bug_if(slots_used != sub->arg_slot_cnt, env,
+			    "func#%d argument slot count mismatch: %u != %u",
+			    subprog, slots_used, sub->arg_slot_cnt))
+		return -EFAULT;
+	err = btf_check_arg_slots(log, tname, is_global, sub->arg_slot_cnt, sub);
 	if (err)
 		return err;
-	sub->arg_slot_cnt = slots_used;
 
 	sub->args_cached = true;
 
