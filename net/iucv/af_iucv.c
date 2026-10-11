@@ -39,6 +39,9 @@
 
 static char iucv_userid[80];
 
+static int afiucv_hs_backlog_rcv(struct sock *sk, struct sk_buff *skb);
+static int afiucv_hs_dispatch(struct sock *sk, struct sk_buff *skb);
+
 static struct proto iucv_proto = {
 	.name		= "AF_IUCV",
 	.owner		= THIS_MODULE,
@@ -374,26 +377,28 @@ static void iucv_sever_path(struct sock *sk, int with_user_data)
 static int iucv_send_ctrl(struct sock *sk, u8 flags)
 {
 	struct iucv_sock *iucv = iucv_sk(sk);
-	int err = 0;
 	int blen;
 	struct sk_buff *skb;
-	u8 shutdown = 0;
+	bool force;
 
 	blen = sizeof(struct af_iucv_trans_hdr) +
 	       LL_RESERVED_SPACE(iucv->hs_dev);
-	if (sk->sk_shutdown & SEND_SHUTDOWN) {
-		/* controlling flags should be sent anyway */
-		shutdown = sk->sk_shutdown;
-		sk->sk_shutdown &= RCV_SHUTDOWN;
+	/* Control frames go out after a shutdown too. The FIN and the first SHT
+	 * end the stream and may exceed sk_sndbuf, like TCP's FIN; at sk_sndbuf
+	 * the others get -EAGAIN and arm SIGIO, as sock_alloc_send_skb() does.
+	 */
+	force = flags == AF_IUCV_FLAG_FIN ||
+		(flags == AF_IUCV_FLAG_SHT &&
+		 !(sk->sk_shutdown & SEND_SHUTDOWN));
+	if (!force && sk_wmem_alloc_get(sk) >= sk->sk_sndbuf) {
+		sk_set_bit(SOCKWQ_ASYNC_NOSPACE, sk);
+		return -EAGAIN;
 	}
-	skb = sock_alloc_send_skb(sk, blen, 1, &err);
-	if (skb) {
-		skb_reserve(skb, blen);
-		err = afiucv_hs_send(NULL, sk, skb, flags);
-	}
-	if (shutdown)
-		sk->sk_shutdown = shutdown;
-	return err;
+	skb = sock_wmalloc(sk, blen, 1, sk->sk_allocation);
+	if (!skb)
+		return -ENOBUFS;
+	skb_reserve(skb, blen);
+	return afiucv_hs_send(NULL, sk, skb, flags);
 }
 
 /**
@@ -507,6 +512,8 @@ static struct sock *iucv_sock_alloc(struct socket *sock, int proto, gfp_t prio, 
 		iucv->transport = AF_IUCV_TRANS_HIPER;
 
 	sk->sk_destruct = iucv_sock_destruct;
+	/* not from iucv_proto: sk_alloc() does not copy proto->backlog_rcv */
+	sk->sk_backlog_rcv = afiucv_hs_backlog_rcv;
 	sk->sk_sndtimeo = IUCV_CONN_TIMEOUT;
 
 	sock_reset_flag(sk, SOCK_ZAPPED);
@@ -812,7 +819,7 @@ static int iucv_sock_listen(struct socket *sock, int backlog)
 	if (sock->type != SOCK_STREAM && sock->type != SOCK_SEQPACKET)
 		goto done;
 
-	sk->sk_max_ack_backlog = backlog;
+	WRITE_ONCE(sk->sk_max_ack_backlog, backlog);
 	sk->sk_ack_backlog = 0;
 	sk->sk_state = IUCV_LISTEN;
 	err = 0;
@@ -1024,7 +1031,16 @@ static int iucv_sock_sendmsg(struct socket *sock, struct msghdr *msg,
 		}
 	}
 	skb = sock_alloc_send_pskb(sk, headroom + linear, len - linear,
-				   noblock, &err, 0);
+				   1, &err, 0);
+	if (!skb && err == -EAGAIN && !noblock) {
+		/* unlocked: over z/VM the room comes back only when the peer
+		 * receives, and that may wait for our own recvmsg()
+		 */
+		release_sock(sk);
+		skb = sock_alloc_send_pskb(sk, headroom + linear,
+					   len - linear, 0, &err, 0);
+		lock_sock(sk);
+	}
 	if (!skb)
 		goto out;
 	if (headroom)
@@ -1038,10 +1054,16 @@ static int iucv_sock_sendmsg(struct socket *sock, struct msghdr *msg,
 
 	/* wait if outstanding messages for iucv path has reached */
 	timeo = sock_sndtimeo(sk, noblock);
-	err = iucv_sock_wait(sk, iucv_below_msglim(sk), timeo);
+	err = iucv_sock_wait(sk, iucv_below_msglim(sk) ||
+			     (sk->sk_shutdown & SEND_SHUTDOWN), timeo);
 	if (err)
 		goto fail;
 
+	/* return -EPIPE if sending has been shut down meanwhile */
+	if (sk->sk_shutdown & SEND_SHUTDOWN) {
+		err = -EPIPE;
+		goto fail;
+	}
 	/* return -ECONNRESET if the socket is no longer connected */
 	if (sk->sk_state != IUCV_CONNECTED) {
 		err = -ECONNRESET;
@@ -1245,6 +1267,47 @@ static void iucv_process_message_q(struct sock *sk)
 	}
 }
 
+/*
+ * Like skb_recv_datagram(), but sleep with the socket lock released, so that
+ * release_sock() runs the backlog and a deferred FIN reaches the reader.
+ */
+static struct sk_buff *iucv_sock_recv_skb(struct sock *sk, int flags, int *err)
+{
+	long timeo = sock_rcvtimeo(sk, flags & MSG_DONTWAIT);
+	DEFINE_WAIT_FUNC(wait, woken_wake_function);
+	struct sk_buff *skb;
+
+	add_wait_queue(sk_sleep(sk), &wait);
+	for (;;) {
+		/* receive/dequeue next skb:
+		 * the function understands MSG_PEEK and, thus, does not
+		 * dequeue skb, only refcount is increased.
+		 */
+		skb = skb_recv_datagram(sk, flags | MSG_DONTWAIT, err);
+		if (skb || *err != -EAGAIN)
+			break;
+		if (sk->sk_shutdown & RCV_SHUTDOWN)
+			break;
+		if (!timeo)
+			break;
+		if (sk->sk_state != IUCV_CONNECTED) {
+			*err = -ENOTCONN;
+			break;
+		}
+		if (signal_pending(current)) {
+			*err = sock_intr_errno(timeo);
+			break;
+		}
+		sk_wait_event(sk, &timeo,
+			      !skb_queue_empty_lockless(&sk->sk_receive_queue) ||
+			      READ_ONCE(sk->sk_err) ||
+			      (READ_ONCE(sk->sk_shutdown) & RCV_SHUTDOWN) ||
+			      sk->sk_state != IUCV_CONNECTED, &wait);
+	}
+	remove_wait_queue(sk_sleep(sk), &wait);
+	return skb;
+}
+
 static int iucv_sock_recvmsg(struct socket *sock, struct msghdr *msg,
 			     size_t len, int flags)
 {
@@ -1256,24 +1319,25 @@ static int iucv_sock_recvmsg(struct socket *sock, struct msghdr *msg,
 	int err = 0;
 	u32 offset;
 
+	lock_sock(sk);
 	if ((sk->sk_state == IUCV_DISCONN) &&
 	    skb_queue_empty(&iucv->backlog_skb_q) &&
 	    skb_queue_empty(&sk->sk_receive_queue) &&
-	    list_empty(&iucv->message_q.list))
-		return 0;
+	    list_empty(&iucv->message_q.list)) {
+		copied = 0;
+		goto out;
+	}
 
-	if (flags & (MSG_OOB))
-		return -EOPNOTSUPP;
+	if (flags & (MSG_OOB)) {
+		err = -EOPNOTSUPP;
+		goto out_err;
+	}
 
-	/* receive/dequeue next skb:
-	 * the function understands MSG_PEEK and, thus, does not dequeue skb
-	 * only refcount is increased.
-	 */
-	skb = skb_recv_datagram(sk, flags, &err);
+	skb = iucv_sock_recv_skb(sk, flags, &err);
 	if (!skb) {
 		if (sk->sk_shutdown & RCV_SHUTDOWN)
-			return 0;
-		return err;
+			err = 0;
+		goto out_err;
 	}
 
 	offset = IUCV_SKB_CB(skb)->offset;
@@ -1322,8 +1386,9 @@ static int iucv_sock_recvmsg(struct socket *sock, struct msghdr *msg,
 			atomic_inc(&iucv->msg_recv);
 			if (atomic_read(&iucv->msg_recv) > iucv->msglimit) {
 				WARN_ON(1);
-				iucv_sock_close(sk);
-				return -EFAULT;
+				__iucv_sock_close(sk);
+				err = -EFAULT;
+				goto out_err;
 			}
 		}
 
@@ -1350,13 +1415,18 @@ static int iucv_sock_recvmsg(struct socket *sock, struct msghdr *msg,
 		}
 		spin_unlock_bh(&iucv->message_q.lock);
 
-		if (send_win) {
+		if (send_win && sk->sk_state == IUCV_CONNECTED) {
 			err = iucv_send_ctrl(sk, AF_IUCV_FLAG_WIN);
 			if (err) {
 				sk->sk_state = IUCV_DISCONN;
 				sk->sk_state_change(sk);
 			}
 		}
+		/* the peer won't take this credit: drop it, or a SHT's
+		 * zero-length skb counts past msglimit
+		 */
+		if (send_win && sk->sk_state != IUCV_CONNECTED)
+			atomic_set(&iucv->msg_recv, 0);
 	}
 
 done:
@@ -1365,7 +1435,8 @@ done:
 		copied = rlen;
 	if (flags & MSG_PEEK)
 		skb_unref(skb);
-
+out:
+	release_sock(sk);
 	return copied;
 
 err_out:
@@ -1373,7 +1444,8 @@ err_out:
 		skb_queue_head(&sk->sk_receive_queue, skb);
 	else
 		skb_unref(skb);
-
+out_err:
+	release_sock(sk);
 	return err;
 }
 
@@ -1549,7 +1621,7 @@ static int iucv_sock_setsockopt(struct socket *sock, int level, int optname,
 			if (val < 1 || val > U16_MAX)
 				rc = -EINVAL;
 			else
-				iucv->msglimit = val;
+				WRITE_ONCE(iucv->msglimit, val);
 			break;
 		default:
 			rc = -EINVAL;
@@ -1894,7 +1966,6 @@ static int afiucv_hs_callback_syn(struct sock *sk, struct sk_buff *skb)
 	}
 
 	nsk = iucv_sock_alloc(NULL, sk->sk_protocol, GFP_ATOMIC, 0);
-	bh_lock_sock(sk);
 	if ((sk->sk_state != IUCV_LISTEN) ||
 	    sk_acceptq_is_full(sk) ||
 	    !nsk) {
@@ -1904,7 +1975,6 @@ static int afiucv_hs_callback_syn(struct sock *sk, struct sk_buff *skb)
 		err = dev_queue_xmit(skb);
 		if (nsk)
 			iucv_sock_kill(nsk);
-		bh_unlock_sock(sk);
 		goto out;
 	}
 
@@ -1934,7 +2004,6 @@ static int afiucv_hs_callback_syn(struct sock *sk, struct sk_buff *skb)
 		sk->sk_data_ready(sk);
 	} else
 		iucv_sock_kill(nsk);
-	bh_unlock_sock(sk);
 
 out:
 	return NET_RX_SUCCESS;
@@ -1952,11 +2021,9 @@ static int afiucv_hs_callback_synack(struct sock *sk, struct sk_buff *skb)
 		return NET_RX_SUCCESS;
 	}
 
-	bh_lock_sock(sk);
 	iucv->msglimit_peer = iucv_trans_hdr(skb)->window;
 	sk->sk_state = IUCV_CONNECTED;
 	sk->sk_state_change(sk);
-	bh_unlock_sock(sk);
 	consume_skb(skb);
 	return NET_RX_SUCCESS;
 }
@@ -1973,10 +2040,8 @@ static int afiucv_hs_callback_synfin(struct sock *sk, struct sk_buff *skb)
 		return NET_RX_SUCCESS;
 	}
 
-	bh_lock_sock(sk);
 	sk->sk_state = IUCV_DISCONN;
 	sk->sk_state_change(sk);
-	bh_unlock_sock(sk);
 	consume_skb(skb);
 	return NET_RX_SUCCESS;
 }
@@ -1994,12 +2059,10 @@ static int afiucv_hs_callback_fin(struct sock *sk, struct sk_buff *skb)
 		return NET_RX_SUCCESS;
 	}
 
-	bh_lock_sock(sk);
 	if (sk->sk_state == IUCV_CONNECTED) {
 		sk->sk_state = IUCV_DISCONN;
 		sk->sk_state_change(sk);
 	}
-	bh_unlock_sock(sk);
 	consume_skb(skb);
 	return NET_RX_SUCCESS;
 }
@@ -2014,6 +2077,7 @@ static int afiucv_hs_callback_win(struct sock *sk, struct sk_buff *skb)
 	if (!iucv)
 		return NET_RX_SUCCESS;
 
+	/* also runs while the user owns the socket, see afiucv_hs_rcv() */
 	if (sk->sk_state != IUCV_CONNECTED)
 		return NET_RX_SUCCESS;
 
@@ -2034,12 +2098,13 @@ static int afiucv_hs_callback_rx(struct sock *sk, struct sk_buff *skb)
 		return NET_RX_SUCCESS;
 	}
 
+	/* also runs while the user owns the socket, see afiucv_hs_rcv() */
 	if (sk->sk_state != IUCV_CONNECTED) {
 		kfree_skb(skb);
 		return NET_RX_SUCCESS;
 	}
 
-	if (sk->sk_shutdown & RCV_SHUTDOWN) {
+	if (READ_ONCE(sk->sk_shutdown) & RCV_SHUTDOWN) {
 		kfree_skb(skb);
 		return NET_RX_SUCCESS;
 	}
@@ -2064,6 +2129,64 @@ static int afiucv_hs_callback_rx(struct sock *sk, struct sk_buff *skb)
 		skb_queue_tail(&iucv_sk(sk)->backlog_skb_q, skb);
 	spin_unlock(&iucv->message_q.lock);
 	return NET_RX_SUCCESS;
+}
+
+/* data, SHT and WIN frames: they leave sk_state alone */
+static bool afiucv_hs_is_data(u8 flags)
+{
+	return !flags || flags == AF_IUCV_FLAG_SHT || flags == AF_IUCV_FLAG_WIN;
+}
+
+/*
+ * Frames that change sk_state wait while the user owns the socket. Data, SHT
+ * and WIN frames go through, but never past waiting ones: sk_backlog.len stays
+ * set until __release_sock() has run them all. So they wait only behind a FIN,
+ * which voids them, or a SYN|ACK, when we have sent nothing for a WIN to ack.
+ */
+static bool afiucv_hs_defer(struct sock *sk, u8 flags)
+{
+	return !afiucv_hs_is_data(flags) || sk->sk_backlog.len != 0;
+}
+
+/*
+ * Not sk_add_backlog(): its limit is in bytes, and nothing resends a frame it
+ * drops. Count frames instead. Data, SHT and WIN frames get msglimit + 1: a
+ * peer that keeps to the window has at most msglimit data frames and one SHT
+ * waiting (a repeated one carries nothing); WINs need no room (see above). The
+ * rest get sk_max_ack_backlog + 2: a SYN|ACK and a FIN, or a listener's SYNs up
+ * to its accept queue and one more. Both counts restart only once
+ * __release_sock() has run every frame: a flood cannot keep the owner draining.
+ */
+static void afiucv_hs_backlog_add(struct sock *sk, struct sk_buff *skb,
+				  u8 flags)
+{
+	struct iucv_sock *iucv = iucv_sk(sk);
+	unsigned int *count, limit;
+
+	if (!sk->sk_backlog.len) {
+		iucv->sk_backlog_data = 0;
+		iucv->sk_backlog_ctrl = 0;
+	}
+	if (afiucv_hs_is_data(flags)) {
+		count = &iucv->sk_backlog_data;
+		limit = READ_ONCE(iucv->msglimit) + 1;
+	} else {
+		count = &iucv->sk_backlog_ctrl;
+		limit = READ_ONCE(sk->sk_max_ack_backlog) + 2;
+	}
+	if (*count < limit &&
+	    !(skb_pfmemalloc(skb) && !sock_flag(sk, SOCK_MEMALLOC))) {
+		__sk_add_backlog(sk, skb);
+		/* msglimit 65535 x 64K frames would wrap the int */
+		sk->sk_backlog.len = min_t(u32, sk->sk_backlog.len +
+					   skb->truesize, INT_MAX);
+		(*count)++;
+	} else if (flags == AF_IUCV_FLAG_SYN) {
+		afiucv_hs_callback_syn(NULL, skb);
+	} else {
+		sk_drops_inc(sk);
+		kfree_skb_reason(skb, SKB_DROP_REASON_SOCKET_BACKLOG);
+	}
 }
 
 /*
@@ -2128,6 +2251,28 @@ static int afiucv_hs_rcv(struct sk_buff *skb, struct net_device *dev,
 	if (!iucv)
 		sk = NULL;
 
+	if (!sk)
+		return afiucv_hs_dispatch(NULL, skb);
+
+	bh_lock_sock(sk);
+	if (!sock_owned_by_user(sk) || !afiucv_hs_defer(sk, trans_hdr->flags))
+		err = afiucv_hs_dispatch(sk, skb);
+	else
+		afiucv_hs_backlog_add(sk, skb, trans_hdr->flags);
+	bh_unlock_sock(sk);
+	sock_put(sk);
+	return err;
+}
+
+/*
+ * @sk is NULL, or locked by the caller: bh_lock_sock() in afiucv_hs_rcv(),
+ * where the user may own it too, or user-owned in afiucv_hs_backlog_rcv().
+ */
+static int afiucv_hs_dispatch(struct sock *sk, struct sk_buff *skb)
+{
+	struct af_iucv_trans_hdr *trans_hdr = iucv_trans_hdr(skb);
+	int err = NET_RX_SUCCESS;
+
 	/* no sock
 	how should we send with no sock
 	1) send without sock no send rc checking?
@@ -2172,10 +2317,22 @@ static int afiucv_hs_rcv(struct sk_buff *skb, struct net_device *dev,
 	default:
 		kfree_skb(skb);
 	}
-
-	if (sk)
-		sock_put(sk);
 	return err;
+}
+
+/* run by __release_sock() for each frame that waited; @sk is still owned */
+static int afiucv_hs_backlog_rcv(struct sock *sk, struct sk_buff *skb)
+{
+	/* closed while the frame waited: nothing holds skb->dev any more */
+	if (!iucv_sk(sk)->hs_dev) {
+		kfree_skb(skb);
+		return 0;
+	}
+	/* BH off: the callbacks take message_q.lock with spin_lock() */
+	local_bh_disable();
+	afiucv_hs_dispatch(sk, skb);
+	local_bh_enable();
+	return 0;
 }
 
 /*
