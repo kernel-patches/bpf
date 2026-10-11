@@ -1529,7 +1529,7 @@ static int ice_phy_cfg_parpcs_eth56g(struct ice_hw *hw, u8 port)
 	err = ice_write_xpcs_reg_eth56g(hw, port, PHY_VENDOR_TXLANE_THRESH,
 					ICE_ETH56G_NOMINAL_THRESH4);
 	if (err) {
-		ice_debug(hw, ICE_DBG_PTP, "Failed to read VENDOR_TXLANE_THRESH, status: %d",
+		ice_debug(hw, ICE_DBG_PTP, "Failed to write VENDOR_TXLANE_THRESH, status: %d",
 			  err);
 		return err;
 	}
@@ -2589,14 +2589,14 @@ ice_read_64b_phy_reg_e82x(struct ice_hw *hw, u8 port, u16 low_addr, u64 *val)
 
 	err = ice_read_phy_reg_e82x(hw, port, low_addr, &low);
 	if (err) {
-		ice_debug(hw, ICE_DBG_PTP, "Failed to read from low register 0x%08x\n, err %d",
+		ice_debug(hw, ICE_DBG_PTP, "Failed to read from low register 0x%08x, err %d\n",
 			  low_addr, err);
 		return err;
 	}
 
 	err = ice_read_phy_reg_e82x(hw, port, high_addr, &high);
 	if (err) {
-		ice_debug(hw, ICE_DBG_PTP, "Failed to read from high register 0x%08x\n, err %d",
+		ice_debug(hw, ICE_DBG_PTP, "Failed to read from high register 0x%08x, err %d\n",
 			  high_addr, err);
 		return err;
 	}
