@@ -1858,6 +1858,14 @@ int tcp_set_rcvlowat(struct sock *sk, int val)
 
 void tcp_set_rcvbuf(struct sock *sk, int val)
 {
+	/* Without a connection there is no clamp to update: it is chosen
+	 * from the route's window metric and the buffer size when the
+	 * connection is set up, see tcp_connect_init() and
+	 * tcp_openreq_init_rwin().
+	 */
+	if ((1 << sk->sk_state) & (TCPF_CLOSE | TCPF_LISTEN))
+		return;
+
 	tcp_set_window_clamp(sk, tcp_win_from_space(sk, val));
 }
 
