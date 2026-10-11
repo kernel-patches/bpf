@@ -414,9 +414,21 @@ static __used __naked int aux1(void)
 		::: __clobber_all);
 }
 
-static __noinline __used int static_two(int a, int b)
+static __used __naked int static_two(int a, int b)
 {
-	return a;
+	asm volatile (
+		"w0 = w1;"
+		"exit;"
+		::: __clobber_all);
+}
+
+static __used __naked int static_three(int a, int b)
+{
+	asm volatile (
+		"w0 = w1;"
+		"w0 += w3;"
+		"exit;"
+		::: __clobber_all);
 }
 
 __noinline __used int global_two(int a, int b)
@@ -425,16 +437,24 @@ __noinline __used int global_two(int a, int b)
 }
 
 SEC("socket")
-__log_level(2)
-/* a static callee reads r1 only, a global callee its declared arguments */
-__msg("2: .1........ (85) call pc+")
-__msg("5: .12....... (85) call pc+")
+__success __log_level(2)
+__btf_func_path("btf__compute_live_registers.bpf.o")
+/*
+ * BTF declares r1 and r2 for each callee. static_two reads only r1,
+ * while static_three also reads r3, so its call must keep all three live.
+ */
+__msg("2: .12....... (85) call pc+")
+__msg("5: .123...... (85) call pc+")
+__msg("8: .12....... (85) call pc+")
 __naked void subprog_declared_args(void)
 {
 	asm volatile (
 		"r1 = 1;"
 		"r2 = 2;"
 		"call static_two;"
+		"r1 = 1;"
+		"r3 = 3;"
+		"call static_three;"
 		"r1 = 1;"
 		"r2 = 2;"
 		"call global_two;"
