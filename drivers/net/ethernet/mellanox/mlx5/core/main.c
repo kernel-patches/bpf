@@ -2138,10 +2138,97 @@ static void mlx5_pci_resume(struct pci_dev *pdev)
 		       !err ? "recovered" : "Failed");
 }
 
+static void mlx5_pci_reset_prepare(struct pci_dev *pdev)
+{
+	struct mlx5_core_dev *dev = pci_get_drvdata(pdev);
+	struct devlink *devlink;
+	bool fw_reset_in_prog;
+
+	if (!dev)
+		return;
+
+	devlink = priv_to_devlink(dev);
+
+	devl_lock(devlink);
+	fw_reset_in_prog = mlx5_fw_reset_in_progress(dev);
+	if (!fw_reset_in_prog)
+		dev->pci_reset_in_progress = true;
+	devl_unlock(devlink);
+
+	if (fw_reset_in_prog) {
+		mlx5_core_info(dev,
+			       "%s: fw reset in progress, leaving drain to fw_reset flow\n",
+			       __func__);
+		return;
+	}
+
+	mlx5_core_info(dev, "%s: resetting, device state = %d, pci_status = %d, intf_state = 0x%lx\n",
+		       __func__, dev->state, dev->pci_status, dev->intf_state);
+
+	mlx5_enter_error_state(dev, true);
+	mlx5_drain_health_wq(dev);
+	mlx5_unload_one(dev, false);
+	mlx5_pci_disable_device(dev);
+}
+
+static void mlx5_pci_reset_done(struct pci_dev *pdev)
+{
+	struct mlx5_core_dev *dev = pci_get_drvdata(pdev);
+	struct devlink *devlink;
+	int err;
+
+	if (!dev)
+		return;
+
+	devlink = priv_to_devlink(dev);
+
+	if (!dev->pci_reset_in_progress) {
+		mlx5_core_info(dev,
+			       "%s: reset owned by fw_reset flow, leaving reload to it\n",
+			       __func__);
+		return;
+	}
+
+	err = mlx5_pci_enable_device(dev);
+	if (err) {
+		mlx5_core_err(dev, "%s: mlx5_pci_enable_device failed, err = %d\n",
+			      __func__, err);
+		goto clear_pci_reset_flag;
+	}
+
+	pci_set_master(pdev);
+	err = wait_vital(pdev);
+	if (err) {
+		mlx5_core_err(dev, "%s: wait_vital failed, err = %d\n",
+			      __func__, err);
+		goto disable;
+	}
+
+	err = mlx5_load_one(dev, true);
+	if (err) {
+		mlx5_core_err(dev, "%s: mlx5_load_one failed, err = %d\n",
+			      __func__, err);
+		goto disable;
+	}
+
+	mlx5_core_info(dev, "%s: reset done, device state = %d, pci_status = %d\n",
+		       __func__, dev->state, dev->pci_status);
+	goto clear_pci_reset_flag;
+
+disable:
+	mlx5_pci_disable_device(dev);
+clear_pci_reset_flag:
+	devl_lock(devlink);
+	dev->pci_reset_in_progress = false;
+	devl_unlock(devlink);
+}
+
 static const struct pci_error_handlers mlx5_err_handler = {
 	.error_detected = mlx5_pci_err_detected,
 	.slot_reset	= mlx5_pci_slot_reset,
-	.resume		= mlx5_pci_resume
+	.resume		= mlx5_pci_resume,
+	.reset_prepare	= mlx5_pci_reset_prepare,
+	.reset_done	= mlx5_pci_reset_done,
 };
 
 static int mlx5_try_fast_unload(struct mlx5_core_dev *dev)

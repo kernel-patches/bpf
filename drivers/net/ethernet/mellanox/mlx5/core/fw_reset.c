@@ -501,6 +501,13 @@ static void mlx5_sync_reset_request_event(struct work_struct *work)
 		return;
 	}
 
+	if (dev->pci_reset_in_progress) {
+		err = mlx5_fw_reset_set_reset_sync_nack(dev);
+		mlx5_core_warn(dev, "PCI reset in progress, Sync FW Update Reset Nack %s",
+			       err ? "Failed" : "Sent");
+		goto unlock;
+	}
+
 	if (mlx5_sync_reset_set_reset_requested(dev))
 		goto unlock;
 
