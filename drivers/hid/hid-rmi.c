@@ -130,7 +130,7 @@ static int rmi_set_page(struct hid_device *hdev, u8 page)
 
 	retval = rmi_write_report(hdev, data->writeReport,
 			data->output_report_size);
-	if (retval != data->output_report_size) {
+	if (retval) {
 		dev_err(&hdev->dev,
 			"%s: set page failed: %d.", __func__, retval);
 		return retval;
@@ -182,7 +182,13 @@ static int rmi_write_report(struct hid_device *hdev, u8 *report, int len)
 		return ret;
 	}
 
-	return ret;
+	if (ret != len) {
+		dev_err(&hdev->dev, "short write to hid device (%d < %d)\n",
+			ret, len);
+		return -EIO;
+	}
+
+	return 0;
 }
 
 static int rmi_hid_read_block(struct rmi_transport_dev *xport, u16 addr,
@@ -216,7 +222,7 @@ static int rmi_hid_read_block(struct rmi_transport_dev *xport, u16 addr,
 
 		ret = rmi_write_report(hdev, data->writeReport,
 						data->output_report_size);
-		if (ret != data->output_report_size) {
+		if (ret) {
 			dev_err(&hdev->dev,
 				"failed to write request output report (%d)\n",
 				ret);
@@ -300,13 +306,12 @@ static int rmi_hid_write_block(struct rmi_transport_dev *xport, u16 addr,
 
 	ret = rmi_write_report(hdev, data->writeReport,
 					data->output_report_size);
-	if (ret < 0) {
+	if (ret) {
 		dev_err(&hdev->dev,
 			"failed to write request output report (%d)\n",
 			ret);
 		goto exit;
 	}
-	ret = 0;
 
 exit:
 	mutex_unlock(&data->page_mutex);
