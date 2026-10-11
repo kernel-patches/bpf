@@ -113,10 +113,8 @@ static void test_exceptions_success(void)
 			goto done;						  \
 		}								  \
 		if (load_ret != 0) {						  \
-			if (!ASSERT_OK_PTR(strstr(log_buf, msg), "strstr")) {	  \
-				printf("%s\n", log_buf);			  \
+			if (!ASSERT_HAS_SUBSTR(log_buf, msg, "strstr"))		  \
 				goto done;					  \
-			}							  \
 		}								  \
 		if (!load_ret && attach_err) {					  \
 			if (!ASSERT_ERR_PTR(link = bpf_program__attach(prog), "attach err")) \
@@ -335,7 +333,7 @@ static void test_exceptions_success(void)
 				goto done;
 		}), "Cannot replace static functions", 0);
 
-	if (test__start_subtest("non-throwing extension -> non-throwing subprog"))
+	if (test__start_subtest("non-throwing extension -> non-throwing global subprog"))
 		/* non-throwing extension -> non-throwing global subprog : OK */
 		RUN_EXT(0, false, ({
 			prog = eskel->progs.extension;
