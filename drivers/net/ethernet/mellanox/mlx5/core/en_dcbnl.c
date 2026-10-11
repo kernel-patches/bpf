@@ -439,9 +439,6 @@ static u8 mlx5e_dcbnl_setdcbx(struct net_device *dev, u8 mode)
 	struct mlx5e_dcbx *dcbx = &priv->dcbx;
 	enum mlx5_dcbx_oper_mode target_mode;
 
-	if (mode & DCB_CAP_DCBX_LLD_MANAGED)
-		return 1;
-
 	if (!MLX5_CAP_GEN(priv->mdev, dcbx))
 		return !new_is_host;
 
