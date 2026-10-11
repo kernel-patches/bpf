@@ -99,25 +99,6 @@ static int mlx5e_dcbnl_set_dcbx_mode(struct mlx5e_priv *priv,
 	return mlx5_set_port_dcbx_param(mdev, param);
 }
 
-static int mlx5e_dcbnl_switch_to_host_mode(struct mlx5e_priv *priv)
-{
-	struct mlx5e_dcbx *dcbx = &priv->dcbx;
-	int err;
-
-	if (!MLX5_CAP_GEN(priv->mdev, dcbx))
-		return 0;
-
-	if (dcbx->mode == MLX5E_DCBX_PARAM_VER_OPER_HOST)
-		return 0;
-
-	err = mlx5e_dcbnl_set_dcbx_mode(priv, MLX5E_DCBX_PARAM_VER_OPER_HOST);
-	if (err)
-		return err;
-
-	dcbx->mode = MLX5E_DCBX_PARAM_VER_OPER_HOST;
-	return 0;
-}
-
 static int mlx5e_dcbnl_ieee_getets(struct net_device *netdev,
 				   struct ieee_ets *ets)
 {
@@ -453,32 +434,31 @@ static u8 mlx5e_dcbnl_getdcbx(struct net_device *dev)
 
 static u8 mlx5e_dcbnl_setdcbx(struct net_device *dev, u8 mode)
 {
+	bool new_is_host = mode & DCB_CAP_DCBX_HOST;
 	struct mlx5e_priv *priv = netdev_priv(dev);
 	struct mlx5e_dcbx *dcbx = &priv->dcbx;
+	enum mlx5_dcbx_oper_mode target_mode;
 
 	if (mode & DCB_CAP_DCBX_LLD_MANAGED)
 		return 1;
 
-	if ((!mode) && MLX5_CAP_GEN(priv->mdev, dcbx)) {
-		if (dcbx->mode == MLX5E_DCBX_PARAM_VER_OPER_AUTO)
-			return 0;
+	if (!MLX5_CAP_GEN(priv->mdev, dcbx))
+		return !new_is_host;
 
-		/* set dcbx to fw controlled */
-		if (!mlx5e_dcbnl_set_dcbx_mode(priv, MLX5E_DCBX_PARAM_VER_OPER_AUTO)) {
-			dcbx->mode = MLX5E_DCBX_PARAM_VER_OPER_AUTO;
-			dcbx->cap &= ~DCB_CAP_DCBX_HOST;
-			return 0;
-		}
+	target_mode = new_is_host ? MLX5E_DCBX_PARAM_VER_OPER_HOST :
+				    MLX5E_DCBX_PARAM_VER_OPER_AUTO;
+	if (dcbx->mode == target_mode)
+		return 0;
 
-		return 1;
-	}
-
-	if (!(mode & DCB_CAP_DCBX_HOST))
+	if (mlx5e_dcbnl_set_dcbx_mode(priv, target_mode))
 		return 1;
 
-	if (mlx5e_dcbnl_switch_to_host_mode(netdev_priv(dev)))
-		return 1;
+	if (!new_is_host)
+		mode = DCB_CAP_DCBX_VER_CEE |
+		       DCB_CAP_DCBX_VER_IEEE |
+		       DCB_CAP_DCBX_LLD_MANAGED;
 
+	dcbx->mode = target_mode;
 	dcbx->cap = mode;
 
 	return 0;
