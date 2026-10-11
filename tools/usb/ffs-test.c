@@ -232,7 +232,7 @@ static size_t descs_to_legacy(void **legacy, const void *descriptors_v2)
 			const struct usb_functionfs_descs_head_v2 header;
 			const __le32 counts[];
 		} __attribute__((packed)) *const in = descriptors_v2;
-		const __le32 *counts = in->counts;
+		const unsigned char *counts = (const void *)in->counts;
 		__u32 flags;
 
 		if (le32_to_cpu(in->header.magic) !=
@@ -252,9 +252,9 @@ static size_t descs_to_legacy(void **legacy, const void *descriptors_v2)
 				break;			\
 			if (length < 4)			\
 				return 0;		\
-			ret = le32_to_cpu(*counts);	\
+			ret = get_unaligned_le32(counts); \
 			length -= 4;			\
-			++counts;			\
+			counts += 4;			\
 		} while (0)
 
 		GET_NEXT_COUNT_IF_FLAG(fs_count, FUNCTIONFS_HAS_FS_DESC);
