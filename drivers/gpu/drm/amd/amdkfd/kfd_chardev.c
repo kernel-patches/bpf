@@ -3227,10 +3227,7 @@ static int kfd_ioctl_set_debug_trap(struct file *filep, struct kfd_process *p, v
 
 	switch (args->op) {
 	case KFD_IOC_DBG_TRAP_ENABLE:
-		if (target != p)
-			target->debugger_process = p;
-
-		r = kfd_dbg_trap_enable(target,
+		r = kfd_dbg_trap_enable(target, p,
 					args->enable.dbg_fd,
 					(void __user *)args->enable.rinfo_ptr,
 					&args->enable.rinfo_size);

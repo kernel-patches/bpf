@@ -44,8 +44,8 @@ bool kfd_dbg_ev_raise(uint64_t event_mask,
 			void *exception_data,
 			size_t exception_data_size);
 int kfd_dbg_trap_disable(struct kfd_process *target, bool drain_irqs);
-int kfd_dbg_trap_enable(struct kfd_process *target, uint32_t fd,
-			void __user *runtime_info,
+int kfd_dbg_trap_enable(struct kfd_process *target, struct kfd_process *debugger,
+			uint32_t fd, void __user *runtime_info,
 			uint32_t *runtime_info_size);
 int kfd_dbg_trap_set_wave_launch_override(struct kfd_process *target,
 					uint32_t trap_override,

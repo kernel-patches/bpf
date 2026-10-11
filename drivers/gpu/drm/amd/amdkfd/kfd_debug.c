@@ -779,8 +779,8 @@ unwind_err:
 	return r;
 }
 
-int kfd_dbg_trap_enable(struct kfd_process *target, uint32_t fd,
-			void __user *runtime_info, uint32_t *runtime_size)
+int kfd_dbg_trap_enable(struct kfd_process *target, struct kfd_process *debugger,
+			uint32_t fd, void __user *runtime_info, uint32_t *runtime_size)
 {
 	struct file *f;
 	uint32_t copy_size;
@@ -821,8 +821,10 @@ int kfd_dbg_trap_enable(struct kfd_process *target, uint32_t fd,
 	kref_get(&target->ref);
 	target->debug_trap_enabled = true;
 
-	if (target->debugger_process)
-		atomic_inc(&target->debugger_process->debugged_process_count);
+	if (target != debugger) {
+		target->debugger_process = debugger;
+		atomic_inc(&debugger->debugged_process_count);
+	}
 
 	if (copy_to_user(runtime_info, (void *)&target->runtime_info, copy_size)) {
 		kfd_dbg_trap_deactivate(target, false, 0);
@@ -830,6 +832,7 @@ int kfd_dbg_trap_enable(struct kfd_process *target, uint32_t fd,
 		target->dbg_ev_file = NULL;
 		if (target->debugger_process)
 			atomic_dec(&target->debugger_process->debugged_process_count);
+		target->debugger_process = NULL;
 		target->debug_trap_enabled = false;
 		kfd_unref_process(target);
 		r = -EFAULT;
