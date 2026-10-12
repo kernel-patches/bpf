@@ -868,11 +868,10 @@ bool folio_can_map_prot_numa(struct folio *folio, struct vm_area_struct *vma,
 		return false;
 
 	/*
-	 * Skip scanning top tier node if normal numa
-	 * balancing is disabled
+	 * Skip scanning top tier memory whose owner participates in
+	 * tiering: hinting faults on it would buy nothing.
 	 */
-	if (!(sysctl_numa_balancing_mode & NUMA_BALANCING_NORMAL) &&
-	    node_is_toptier(nid))
+	if (folio_numab_mode_tiering(folio) && node_is_toptier(nid))
 		return false;
 
 	if (folio_use_access_time(folio))

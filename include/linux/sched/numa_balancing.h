@@ -7,6 +7,7 @@
  * implements memory access pattern based NUMA-balancing:
  */
 
+#include <linux/bpf_numab.h>
 #include <linux/sched.h>
 #include <linux/sched/sysctl.h>
 
@@ -36,24 +37,66 @@ bool should_numa_migrate_memory(struct task_struct *p, struct folio *folio,
 
 extern struct static_key_false sched_numa_balancing;
 
-/*
- * Whether NUMA balancing applies to @p.  The @p argument is unused for
- * now: a later patch will consult a per-cgroup BPF policy with it.
+/* Whether NUMA balancing applies to @p: the global sysctl state, possibly
+ * overridden by a BPF policy attached to @p's cgroup. The requests of
+ * the task's cgroup and of every ancestor are combined; a policy can
+ * always opt out, so a latency-sensitive workload is never forced in.
  */
 static inline bool task_numab_enabled(struct task_struct *p)
 {
+	u32 state = bpf_numab_mode(p, NULL);
+
+	/* A policy can always opt out, regardless of the global state. */
+	if (state & BPF_NUMAB_DISABLED)
+		return false;
+	if (state & (BPF_NUMAB_NORMAL | BPF_NUMAB_TIERING))
+		return true;
 	return static_branch_unlikely(&sched_numa_balancing);
 }
 
-/*
- * The global sysctl state, for the system-wide tiering machinery: this
- * reflects kernel.numa_balancing_mode only and takes no task.
- */
 static inline bool numab_mode_tiering(void)
 {
 	if (sysctl_numa_balancing_mode & NUMA_BALANCING_MEMORY_TIERING)
 		return true;
 	return false;
+}
+
+/*
+ * Whether @p runs in tiering mode, i.e. whether faults on non-top-tier
+ * memory still feed its NUMA statistics. The requests of the task's
+ * cgroup and of every ancestor are combined; DISABLED and NORMAL both
+ * opt out of tiering (a policy can always opt out), so only an
+ * unopposed TIERING request engages it. Without any request, the
+ * global sysctl decides.
+ */
+static inline bool task_numab_mode_tiering(struct task_struct *p)
+{
+	u32 state = bpf_numab_mode(p, NULL);
+
+	if (state & (BPF_NUMAB_DISABLED | BPF_NUMAB_NORMAL))
+		return false;
+	if (state & BPF_NUMAB_TIERING)
+		return true;
+	return numab_mode_tiering();
+}
+
+/*
+ * Whether @folio's memory participates in tiering, i.e. whether its
+ * _last_cpupid carries an access time instead of a cpupid. The requests
+ * of the owner cgroup and of every ancestor are combined. DISABLED
+ * never speaks for memory (it is a task-surface request), so only
+ * NORMAL and TIERING are consulted here; without either, the global
+ * sysctl decides.
+ */
+static inline bool folio_numab_mode_tiering(struct folio *folio)
+{
+	u32 state = bpf_numab_mode(NULL, folio);
+
+	if (state & BPF_NUMAB_NORMAL)
+		return false;
+	if (state & BPF_NUMAB_TIERING)
+		return true;
+	return numab_mode_tiering();
 }
 #else
 static inline void task_numa_fault(int last_node, int node, int pages,
@@ -80,6 +123,14 @@ static inline bool task_numab_enabled(struct task_struct *p)
 	return false;
 }
 static inline bool numab_mode_tiering(void)
+{
+	return false;
+}
+static inline bool task_numab_mode_tiering(struct task_struct *p)
+{
+	return false;
+}
+static inline bool folio_numab_mode_tiering(struct folio *folio)
 {
 	return false;
 }

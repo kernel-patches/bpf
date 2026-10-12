@@ -40,3 +40,8 @@ obj-y += core.o
 obj-y += fair.o
 obj-y += build_policy.o
 obj-y += build_utility.o
+
+# BPF-based per-cgroup NUMA balancing
+ifdef CONFIG_NUMA_BALANCING
+obj-$(CONFIG_CGROUP_BPF) += bpf_numab.o
+endif
