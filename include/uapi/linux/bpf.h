@@ -1500,6 +1500,12 @@ enum {
 
 /* Enable BPF ringbuf overwrite mode */
 	BPF_F_RB_OVERWRITE	= (1U << 19),
+
+	/* Keep arena pages allocated until the map is destroyed. */
+	BPF_F_ARENA_NO_FREE	= (1U << 20),
+
+	/* Expose a pinned arena as a sized file; requires BPF_F_ARENA_NO_FREE. */
+	BPF_F_ARENA_EXPORT	= (1U << 21),
 };
 
 /* Flags for BPF_PROG_QUERY. */
