@@ -13,6 +13,7 @@
 #include <linux/bpf_verifier.h>
 #include <linux/bpf_lsm.h>
 #include <linux/delay.h>
+#include <linux/sort.h>
 
 /* dummy _ops. The verifier will operate on target program's ops. */
 const struct bpf_verifier_ops bpf_extension_verifier_ops = {
@@ -58,6 +59,33 @@ static void trampoline_unlock(struct bpf_trampoline *tr)
 {
 	mutex_unlock(select_trampoline_lock(tr));
 }
+
+#ifdef CONFIG_BPF_SYSCALL
+
+static void trampoline_lock_all(void)
+{
+	int i;
+
+	for (i = 0; i < TRAMPOLINE_LOCKS_TABLE_SIZE; i++)
+		mutex_lock(&trampoline_locks[i].mutex);
+}
+
+static void trampoline_unlock_all(void)
+{
+	int i;
+
+	for (i = 0; i < TRAMPOLINE_LOCKS_TABLE_SIZE; i++)
+		mutex_unlock(&trampoline_locks[i].mutex);
+}
+
+static void bpf_trampoline_multi_attach_init(struct bpf_trampoline *tr)
+{
+	tr->multi_attach.old_image = tr->cur_image;
+	tr->multi_attach.new_image = NULL;
+	tr->multi_attach.old_flags = tr->flags;
+}
+
+#endif /* CONFIG_BPF_SYSCALL */
 
 struct bpf_trampoline_ops {
 	int (*register_fentry)(struct bpf_trampoline *tr, struct bpf_tramp_image *im, void *data);
@@ -475,18 +503,11 @@ static int register_fentry(struct bpf_trampoline *tr, struct bpf_tramp_image *im
 			   void *data __maybe_unused)
 {
 	void *new_addr = im->image;
-	void *ip = tr->func.addr;
-	unsigned long faddr;
 	int ret;
 
-	faddr = ftrace_location((unsigned long)ip);
-	if (faddr) {
+	if (tr->func.ftrace_managed) {
 		if (!tr->fops)
 			return -ENOTSUPP;
-		tr->func.ftrace_managed = true;
-	}
-
-	if (tr->func.ftrace_managed) {
 		ret = direct_ops_add(tr, new_addr);
 	} else {
 		ret = bpf_trampoline_update_fentry(tr, 0, NULL, new_addr);
@@ -1286,6 +1307,7 @@ struct bpf_trampoline *bpf_trampoline_get(u64 key,
 
 	memcpy(&tr->func.model, &tgt_info->fmodel, sizeof(tgt_info->fmodel));
 	tr->func.addr = (void *)tgt_info->tgt_addr;
+	tr->func.ftrace_managed = tr->ip != 0;
 out:
 	trampoline_unlock(tr);
 	return tr;
@@ -1579,22 +1601,6 @@ int __weak arch_bpf_trampoline_size(const struct btf_func_model *m, u32 flags,
     defined(CONFIG_HAVE_SINGLE_FTRACE_DIRECT_OPS) && \
     defined(CONFIG_BPF_SYSCALL)
 
-static void trampoline_lock_all(void)
-{
-	int i;
-
-	for (i = 0; i < TRAMPOLINE_LOCKS_TABLE_SIZE; i++)
-		mutex_lock(&trampoline_locks[i].mutex);
-}
-
-static void trampoline_unlock_all(void)
-{
-	int i;
-
-	for (i = 0; i < TRAMPOLINE_LOCKS_TABLE_SIZE; i++)
-		mutex_unlock(&trampoline_locks[i].mutex);
-}
-
 static void remove_tracing_multi_data(struct bpf_tracing_multi_data *data)
 {
 	ftrace_hash_remove(data->reg);
@@ -1635,8 +1641,8 @@ static void ftrace_hash_add(struct ftrace_hash *hash, struct ftrace_func_entry *
 static int register_fentry_multi(struct bpf_trampoline *tr, struct bpf_tramp_image *im, void *ptr)
 {
 	unsigned long addr = (unsigned long) im->image;
-	unsigned long ip = ftrace_location(tr->ip);
 	struct bpf_tracing_multi_data *data = ptr;
+	unsigned long ip = tr->ip;
 
 	/*
 	 * Different BTF ids get different trampolines, but they can still
@@ -1649,7 +1655,6 @@ static int register_fentry_multi(struct bpf_trampoline *tr, struct bpf_tramp_ima
 	if (bpf_trampoline_use_jmp(tr->flags))
 		addr = ftrace_jmp_set(addr);
 
-	tr->func.ftrace_managed = true;
 	ftrace_hash_add(data->reg, data->entry, ip, addr);
 	tr->cur_image = im;
 	return 0;
@@ -1658,13 +1663,12 @@ static int register_fentry_multi(struct bpf_trampoline *tr, struct bpf_tramp_ima
 static int unregister_fentry_multi(struct bpf_trampoline *tr, u32 orig_flags, void *ptr)
 {
 	unsigned long addr = (unsigned long) tr->cur_image->image;
-	unsigned long ip = ftrace_location(tr->ip);
 	struct bpf_tracing_multi_data *data = ptr;
 
 	if (bpf_trampoline_use_jmp(tr->flags))
 		addr = ftrace_jmp_set(addr);
 
-	ftrace_hash_add(data->unreg, data->entry, ip, addr);
+	ftrace_hash_add(data->unreg, data->entry, tr->ip, addr);
 	tr->cur_image = NULL;
 	return 0;
 }
@@ -1673,13 +1677,12 @@ static int modify_fentry_multi(struct bpf_trampoline *tr, u32 orig_flags, struct
 			       bool lock_direct_mutex, void *ptr)
 {
 	unsigned long addr = (unsigned long) im->image;
-	unsigned long ip = ftrace_location(tr->ip);
 	struct bpf_tracing_multi_data *data = ptr;
 
 	if (bpf_trampoline_use_jmp(tr->flags))
 		addr = ftrace_jmp_set(addr);
 
-	ftrace_hash_add(data->modify, data->entry, ip, addr);
+	ftrace_hash_add(data->modify, data->entry, tr->ip, addr);
 	tr->cur_image = im;
 	return 0;
 }
@@ -1689,12 +1692,6 @@ static const struct bpf_trampoline_ops trampoline_multi_ops = {
 	.unregister_fentry = unregister_fentry_multi,
 	.modify_fentry     = modify_fentry_multi,
 };
-
-static void bpf_trampoline_multi_attach_init(struct bpf_trampoline *tr)
-{
-	tr->multi_attach.old_image = tr->cur_image;
-	tr->multi_attach.old_flags = tr->flags;
-}
 
 static void bpf_trampoline_multi_attach_free(struct bpf_trampoline *tr)
 {
@@ -1712,6 +1709,7 @@ static void bpf_trampoline_multi_attach_free(struct bpf_trampoline *tr)
 		bpf_tramp_image_put(tr->multi_attach.old_image);
 
 	tr->multi_attach.old_image = NULL;
+	tr->multi_attach.new_image = NULL;
 	tr->multi_attach.old_flags = 0;
 }
 
@@ -1723,6 +1721,7 @@ static void bpf_trampoline_multi_attach_rollback(struct bpf_trampoline *tr)
 	tr->flags = tr->multi_attach.old_flags;
 
 	tr->multi_attach.old_image = NULL;
+	tr->multi_attach.new_image = NULL;
 	tr->multi_attach.old_flags = 0;
 }
 
@@ -1868,9 +1867,277 @@ void bpf_trampoline_multi_detach(struct bpf_prog *prog,
 #undef for_each_mnode_cnt
 #undef for_each_mnode
 
+#else
+
+void bpf_trampoline_multi_detach(struct bpf_prog *prog,
+				 struct bpf_tracing_multi_link *link) {}
+
 #endif /* CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS &&
 	  CONFIG_HAVE_SINGLE_FTRACE_DIRECT_OPS &&
 	  CONFIG_BPF_SYSCALL */
+
+#ifdef CONFIG_BPF_SYSCALL
+
+static int bpf_text_poke_cmp(const void *a, const void *b)
+{
+	const struct bpf_text_poke *pa = *(struct bpf_text_poke * const *)a;
+	const struct bpf_text_poke *pb = *(struct bpf_text_poke * const *)b;
+	unsigned long ipa = (unsigned long) pa->ip;
+	unsigned long ipb = (unsigned long) pb->ip;
+
+	return (ipa > ipb) - (ipa < ipb);
+}
+
+static int bpf_text_poke_batch(struct bpf_text_poke **pokes, u32 cnt)
+{
+	int i, err;
+
+	/*
+	 * Sort pokes for two purposes:
+	 * 1. Check duplicated poke target IPs.
+	 * 2. Sorted poke target IPs would be friendly for poking them on x86,
+	 *    see arch/x86/kernel/alternative.c::smp_text_poke_batch_add().
+	 */
+	sort_nonatomic(pokes, cnt, sizeof(*pokes), bpf_text_poke_cmp, NULL);
+
+	for (i = 1; i < cnt; i++)
+		if (pokes[i - 1]->ip == pokes[i]->ip)
+			return -EINVAL;
+
+	err = bpf_arch_text_poke_batch(pokes, cnt);
+	if (err != -EOPNOTSUPP)
+		return err;
+
+	for (i = 0; i < cnt; i++) {
+		struct bpf_text_poke *p = pokes[i];
+
+		err = bpf_arch_text_poke(p->ip, p->old_t, p->new_t, p->old_addr, p->new_addr);
+		if (err)
+			goto rollback;
+	}
+
+	return 0;
+
+rollback:
+	for (i--; i >= 0; i--) {
+		struct bpf_text_poke *p = pokes[i];
+
+		WARN_ON_ONCE(bpf_arch_text_poke(p->ip, p->new_t, p->old_t, p->new_addr,
+						p->old_addr));
+	}
+	return err;
+}
+
+static enum bpf_text_poke_type bpf_trampoline_poke_type(const struct bpf_tramp_image *im, u32 flags)
+{
+	if (!im)
+		return BPF_MOD_NOP;
+
+	return bpf_trampoline_use_jmp(flags) ? BPF_MOD_JUMP : BPF_MOD_CALL;
+}
+
+static void bpf_text_poke_init(struct bpf_text_poke *poke, struct bpf_trampoline *tr)
+{
+	struct bpf_tramp_image *old_image = tr->multi_attach.old_image;
+	struct bpf_tramp_image *new_image = tr->multi_attach.new_image;
+
+	poke->ip = tr->func.addr;
+	poke->old_addr = old_image ? old_image->image : NULL;
+	poke->new_addr = new_image ? new_image->image : NULL;
+	poke->old_t = bpf_trampoline_poke_type(old_image, tr->multi_attach.old_flags);
+	poke->new_t = bpf_trampoline_poke_type(new_image, tr->flags);
+}
+
+static int register_fentry_multi_prog(struct bpf_trampoline *tr,
+				      struct bpf_tramp_image *im,
+				      void *data __maybe_unused)
+{
+	tr->multi_attach.new_image = im;
+	return 0;
+}
+
+static int unregister_fentry_multi_prog(struct bpf_trampoline *tr,
+					u32 orig_flags __maybe_unused,
+					void *data __maybe_unused)
+{
+	tr->multi_attach.new_image = NULL;
+	return 0;
+}
+
+static int modify_fentry_multi_prog(struct bpf_trampoline *tr,
+				    u32 orig_flags __maybe_unused,
+				    struct bpf_tramp_image *im,
+				    bool lock_direct_mutex __maybe_unused,
+				    void *data __maybe_unused)
+{
+	tr->multi_attach.new_image = im;
+	return 0;
+}
+
+static const struct bpf_trampoline_ops trampoline_multi_prog_ops = {
+	.register_fentry   = register_fentry_multi_prog,
+	.unregister_fentry = unregister_fentry_multi_prog,
+	.modify_fentry     = modify_fentry_multi_prog,
+};
+
+static void bpf_trampoline_multi_prog_commit(struct bpf_trampoline *tr)
+{
+	struct bpf_tramp_image *old_image = tr->multi_attach.old_image;
+
+	tr->cur_image = tr->multi_attach.new_image;
+	tr->multi_attach.old_image = NULL;
+	tr->multi_attach.new_image = NULL;
+	tr->multi_attach.old_flags = 0;
+
+	if (old_image)
+		bpf_tramp_image_put(old_image);
+}
+
+static void bpf_trampoline_multi_prog_rollback(struct bpf_trampoline *tr)
+{
+	if (tr->multi_attach.new_image)
+		bpf_tramp_image_put(tr->multi_attach.new_image);
+
+	tr->flags = tr->multi_attach.old_flags;
+	tr->multi_attach.old_image = NULL;
+	tr->multi_attach.new_image = NULL;
+	tr->multi_attach.old_flags = 0;
+}
+
+#define for_each_mnode_cnt(mnode, link, cnt) \
+	for (i = 0, mnode = &link->nodes[i]; i < cnt; i++, mnode = &link->nodes[i])
+
+#define for_each_mnode(mnode, link) \
+	for_each_mnode_cnt(mnode, link, link->nodes_cnt)
+
+static int bpf_trampoline_multi_prog_prepare(struct bpf_prog *prog, u32 *ids, u64 *keys,
+					     struct bpf_tracing_multi_link *link)
+{
+	struct bpf_attach_target_info tgt_info = {};
+	struct bpf_tracing_multi_node *mnode;
+	struct bpf_trampoline *tr;
+	int i, cnt, err;
+
+	for_each_mnode(mnode, link) {
+		err = bpf_check_attach_target(NULL, prog, link->tgt_progs[i], ids[i], &tgt_info);
+		if (err)
+			goto put_trampolines;
+
+		tr = bpf_trampoline_get(keys[i], &tgt_info);
+		if (!tr) {
+			err = -ENOMEM;
+			goto put_trampolines;
+		}
+
+		mnode->trampoline = tr;
+		mnode->node.link = &link->link;
+		mnode->node.cookie = link->cookies ? link->cookies[i] : 0;
+
+		if (prog->expected_attach_type == BPF_TRACE_FSESSION_MULTI) {
+			link->fexits[i].link = &link->link;
+			link->fexits[i].cookie = link->cookies ? link->cookies[i] : 0;
+		}
+	}
+
+	return 0;
+
+put_trampolines:
+	cnt = i;
+	for_each_mnode_cnt(mnode, link, cnt)
+		bpf_trampoline_put(mnode->trampoline);
+	return err;
+}
+
+int bpf_trampoline_multi_prog_attach(struct bpf_prog *prog, u32 *ids, u64 *keys,
+				     struct bpf_tracing_multi_link *link)
+{
+	struct bpf_tracing_multi_node *mnode;
+	int i, err, linked_cnt = 0;
+
+	err = bpf_trampoline_multi_prog_prepare(prog, ids, keys, link);
+	if (err)
+		return err;
+
+	trampoline_lock_all();
+
+	for_each_mnode(mnode, link) {
+		bpf_trampoline_multi_attach_init(mnode->trampoline);
+
+		if (link->tgt_progs[i]->aux->tail_call_reachable)
+			mnode->trampoline->flags |= BPF_TRAMP_F_TAIL_CALL_CTX;
+
+		err = __bpf_trampoline_link_prog(&mnode->node, mnode->trampoline, NULL,
+						 &trampoline_multi_prog_ops, NULL);
+		if (err) {
+			bpf_trampoline_multi_prog_rollback(mnode->trampoline);
+			goto rollback;
+		}
+		linked_cnt++;
+	}
+
+	for_each_mnode(mnode, link) {
+		link->pokes[i] = &mnode->poke;
+		bpf_text_poke_init(link->pokes[i], mnode->trampoline);
+	}
+
+	err = bpf_text_poke_batch(link->pokes, link->nodes_cnt);
+	if (err)
+		goto rollback;
+
+	for_each_mnode(mnode, link)
+		bpf_trampoline_multi_prog_commit(mnode->trampoline);
+
+	trampoline_unlock_all();
+	return 0;
+
+rollback:
+	for_each_mnode_cnt(mnode, link, linked_cnt) {
+		bpf_trampoline_remove_prog(mnode->trampoline, &mnode->node);
+		bpf_trampoline_multi_prog_rollback(mnode->trampoline);
+	}
+
+	trampoline_unlock_all();
+
+	for_each_mnode(mnode, link)
+		bpf_trampoline_put(mnode->trampoline);
+	return err;
+}
+
+void bpf_trampoline_multi_prog_detach(struct bpf_tracing_multi_link *link)
+{
+	struct bpf_tracing_multi_node *mnode;
+	int i, err;
+
+	trampoline_lock_all();
+
+	for_each_mnode(mnode, link) {
+		bpf_trampoline_multi_attach_init(mnode->trampoline);
+		err = __bpf_trampoline_unlink_prog(&mnode->node, mnode->trampoline, NULL,
+						   &trampoline_multi_prog_ops, NULL);
+		if (WARN_ONCE(err, "__bpf_trampoline_unlink_prog failed: %d\n", err))
+			bpf_trampoline_multi_prog_rollback(mnode->trampoline);
+	}
+
+	for_each_mnode(mnode, link) {
+		link->pokes[i] = &mnode->poke;
+		bpf_text_poke_init(link->pokes[i], mnode->trampoline);
+	}
+
+	WARN_ON_ONCE(bpf_text_poke_batch(link->pokes, link->nodes_cnt));
+
+	for_each_mnode(mnode, link)
+		bpf_trampoline_multi_prog_commit(mnode->trampoline);
+
+	trampoline_unlock_all();
+
+	for_each_mnode(mnode, link)
+		bpf_trampoline_put(mnode->trampoline);
+}
+
+#undef for_each_mnode_cnt
+#undef for_each_mnode
+
+#endif /* CONFIG_BPF_SYSCALL */
 
 static int __init init_trampolines(void)
 {

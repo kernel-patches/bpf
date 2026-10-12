@@ -12,6 +12,7 @@
 #include "tracing_multi_verifier.skel.h"
 #include "tracing_multi_bench.skel.h"
 #include "tracing_multi_rollback.skel.h"
+#include "tracing_multi_bpf.skel.h"
 #include "trace_helpers.h"
 
 static __u64 bpf_fentry_test_cookies[] = {
@@ -1125,4 +1126,257 @@ void test_tracing_multi_test(void)
 	RUN_TESTS(tracing_multi_verifier);
 	if (test__start_subtest("fentry_after_multi"))
 		test_fentry_after_multi();
+}
+
+static int run_bpf_target(struct bpf_program *prog, __u32 retval, const char *name)
+{
+	LIBBPF_OPTS(bpf_test_run_opts, topts);
+	int err;
+
+	err = bpf_prog_test_run_opts(bpf_program__fd(prog), &topts);
+	if (!ASSERT_OK(err, name))
+		return err;
+
+	if (!ASSERT_EQ(topts.retval, retval, name))
+		return -EINVAL;
+
+	return 0;
+}
+
+static void test_link_api_bpf_prog(bool test_cookies)
+{
+	const char *funcs[] = { "target_1", "target_2" };
+	__u64 fentry_cookies[] = { 0xfeed01, 0xfeed02 };
+	__u64 fexit_cookies[] = { 0xfeed11, 0xfeed12 };
+	__u64 fsession_cookies[] = { 0xfeed21, 0xfeed22 };
+	LIBBPF_OPTS(bpf_tracing_multi_opts, opts);
+	struct tracing_multi_bpf *skel = NULL;
+	int fds[ARRAY_SIZE(funcs)];
+	struct bpf_link *link;
+
+	skel = tracing_multi_bpf__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "tracing_multi_bpf__open_and_load"))
+		return;
+
+	fds[0] = bpf_program__fd(skel->progs.target_1);
+	fds[1] = bpf_program__fd(skel->progs.target_2);
+
+	skel->bss->test_cookies = test_cookies;
+
+	opts.fds = fds;
+	opts.funcs = funcs;
+	opts.cnt = ARRAY_SIZE(fds);
+
+	opts.cookies = test_cookies ? fentry_cookies : NULL;
+	link = bpf_program__attach_tracing_multi(skel->progs.test_fentry, NULL, &opts);
+	if (!ASSERT_OK_PTR(link, "attach_fentry"))
+		goto cleanup;
+	skel->links.test_fentry = link;
+
+	opts.cookies = test_cookies ? fexit_cookies : NULL;
+	link = bpf_program__attach_tracing_multi(skel->progs.test_fexit, NULL, &opts);
+	if (!ASSERT_OK_PTR(link, "attach_fexit"))
+		goto cleanup;
+	skel->links.test_fexit = link;
+
+	opts.cookies = test_cookies ? fsession_cookies : NULL;
+	link = bpf_program__attach_tracing_multi(skel->progs.test_fsession, NULL, &opts);
+	if (!ASSERT_OK_PTR(link, "attach_fsession"))
+		goto cleanup;
+	skel->links.test_fsession = link;
+
+	skel->bss->fentry_cookie = fentry_cookies[0];
+	skel->bss->fexit_cookie = fexit_cookies[0];
+	skel->bss->fsession_cookie = fsession_cookies[0];
+	if (run_bpf_target(skel->progs.target_1, 1, "target_1"))
+		goto cleanup;
+
+	skel->bss->fentry_cookie = fentry_cookies[1];
+	skel->bss->fexit_cookie = fexit_cookies[1];
+	skel->bss->fsession_cookie = fsession_cookies[1];
+	if (run_bpf_target(skel->progs.target_2, 2, "target_2"))
+		goto cleanup;
+
+	ASSERT_EQ(skel->bss->target_1_result, 1, "target_1_result");
+	ASSERT_EQ(skel->bss->target_2_result, 1, "target_2_result");
+	ASSERT_EQ(skel->bss->test_result_fentry, ARRAY_SIZE(funcs), "test_result_fentry");
+	ASSERT_EQ(skel->bss->test_result_fexit, ARRAY_SIZE(funcs), "test_result_fexit");
+	ASSERT_EQ(skel->bss->test_result_fsession_entry, ARRAY_SIZE(funcs),
+		  "test_result_fsession_entry");
+	ASSERT_EQ(skel->bss->test_result_fsession_exit, ARRAY_SIZE(funcs),
+		  "test_result_fsession_exit");
+
+cleanup:
+	tracing_multi_bpf__destroy(skel);
+}
+
+static void test_attach_api_bpf_prog_fails(void)
+{
+	static const char * const kfuncs[] = {
+		"bpf_fentry_test1",
+	};
+	const char *bpf_funcs[] = { "target_1" };
+	LIBBPF_OPTS(bpf_tracing_multi_opts, opts);
+	LIBBPF_OPTS(bpf_link_create_opts, lopts);
+	struct tracing_multi_bpf *skel = NULL;
+	int fd, target_id, token_fd;
+	int fds[2], dup_fd = -1;
+	struct bpf_link *link;
+	__u32 target_ids[2];
+	__u32 *ids = NULL;
+	long err;
+
+	skel = tracing_multi_bpf__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "tracing_multi_bpf__open_and_load"))
+		return;
+
+	ids = get_ids(kfuncs, ARRAY_SIZE(kfuncs), NULL);
+	if (!ASSERT_OK_PTR(ids, "get_ids"))
+		goto cleanup;
+
+	fds[0] = bpf_program__fd(skel->progs.target_1);
+
+	/* fail#1 (libbpf) kernel ids and BPF prog fds */
+	LIBBPF_OPTS_RESET(opts,
+		.ids = ids,
+		.fds = fds,
+		.funcs = bpf_funcs,
+		.cnt = ARRAY_SIZE(bpf_funcs),
+	);
+
+	link = bpf_program__attach_tracing_multi(skel->progs.test_fentry, NULL, &opts);
+	err = libbpf_get_error(link);
+	if (!ASSERT_EQ(err, -EINVAL, "libbpf_ids_fds")) {
+		if (!err)
+			bpf_link__destroy(link);
+		goto cleanup;
+	}
+
+	/* fail#2 (libbpf) kernel pattern and BPF prog fds */
+	LIBBPF_OPTS_RESET(opts,
+		.fds = fds,
+		.funcs = bpf_funcs,
+		.cnt = ARRAY_SIZE(bpf_funcs),
+	);
+
+	link = bpf_program__attach_tracing_multi(skel->progs.test_fentry,
+						"bpf_fentry_test*", &opts);
+	err = libbpf_get_error(link);
+	if (!ASSERT_EQ(err, -EINVAL, "libbpf_pattern_fds")) {
+		if (!err)
+			bpf_link__destroy(link);
+		goto cleanup;
+	}
+
+	/* fail#3 (kernel) kernel id with BPF prog fd */
+	lopts.tracing_multi.ids = ids;
+	lopts.tracing_multi.fds = fds;
+	lopts.tracing_multi.cnt = ARRAY_SIZE(bpf_funcs);
+	fd = bpf_link_create(bpf_program__fd(skel->progs.test_fentry), 0,
+			     BPF_TRACE_FENTRY_MULTI, &lopts);
+	ASSERT_EQ(fd, -EINVAL, "kernel_id_bpf_fd");
+	if (fd >= 0)
+		close(fd);
+
+	/* fail#4 (kernel) duplicate target through different fds */
+	token_fd = bpf_object__token_fd(skel->obj);
+	token_fd = token_fd < 0 ? 0 : token_fd;
+	target_id = libbpf_find_prog_btf_id("target_1", fds[0], token_fd);
+	if (!ASSERT_GT(target_id, 0, "target_1_btf_id"))
+		goto cleanup;
+
+	dup_fd = dup(fds[0]);
+	if (!ASSERT_GE(dup_fd, 0, "dup_target_fd"))
+		goto cleanup;
+
+	fds[1] = dup_fd;
+	target_ids[0] = target_id;
+	target_ids[1] = target_id;
+	lopts.tracing_multi.ids = target_ids;
+	lopts.tracing_multi.fds = fds;
+	lopts.tracing_multi.cnt = ARRAY_SIZE(fds);
+	fd = bpf_link_create(bpf_program__fd(skel->progs.test_fentry), 0,
+			     BPF_TRACE_FENTRY_MULTI, &lopts);
+	ASSERT_EQ(fd, -EINVAL, "duplicate_bpf_target");
+	if (fd >= 0)
+		close(fd);
+
+cleanup:
+	if (dup_fd >= 0)
+		close(dup_fd);
+	tracing_multi_bpf__destroy(skel);
+	free(ids);
+}
+
+static void test_rollback_bpf_prog(void)
+{
+	int token_fd, prog_fd, fd = -1, pre_fd = -1;
+	LIBBPF_OPTS(bpf_link_create_opts, lopts);
+	struct tracing_multi_bpf *skel = NULL;
+	__u32 target_ids[2], ids[2];
+	int target_fds[2], fds[2];
+	struct bpf_program *prog;
+	int first, second;
+
+	skel = tracing_multi_bpf__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "tracing_multi_bpf__open_and_load"))
+		return;
+
+	token_fd = bpf_object__token_fd(skel->obj);
+	token_fd = token_fd < 0 ? 0 : token_fd;
+	target_fds[0] = bpf_program__fd(skel->progs.target_1);
+	target_fds[1] = bpf_program__fd(skel->progs.target_2);
+	target_ids[0] = libbpf_find_prog_btf_id("target_1", target_fds[0], token_fd);
+	if (!ASSERT_GT(target_ids[0], 0, "target_1_btf_id"))
+		goto cleanup;
+	target_ids[1] = libbpf_find_prog_btf_id("target_2", target_fds[1], token_fd);
+	if (!ASSERT_GT(target_ids[1], 0, "target_2_btf_id"))
+		goto cleanup;
+
+	first = target_fds[0] < target_fds[1] ? 0 : 1;
+	second = 1 - first;
+	fds[0] = target_fds[first];
+	fds[1] = target_fds[second];
+	ids[0] = target_ids[first];
+	ids[1] = target_ids[second];
+
+	prog_fd = bpf_program__fd(skel->progs.test_fentry);
+	lopts.tracing_multi.ids = &ids[1];
+	lopts.tracing_multi.fds = &fds[1];
+	lopts.tracing_multi.cnt = 1;
+	pre_fd = bpf_link_create(prog_fd, 0, BPF_TRACE_FENTRY_MULTI, &lopts);
+	if (!ASSERT_GE(pre_fd, 0, "pre_attach"))
+		goto cleanup;
+
+	lopts.tracing_multi.ids = ids;
+	lopts.tracing_multi.fds = fds;
+	lopts.tracing_multi.cnt = ARRAY_SIZE(ids);
+
+	fd = bpf_link_create(prog_fd, 0, BPF_TRACE_FENTRY_MULTI, &lopts);
+	if (!ASSERT_EQ(fd, -EBUSY, "bpf_link_create"))
+		goto cleanup;
+
+	prog = first == 0 ? skel->progs.target_1 : skel->progs.target_2;
+	if (run_bpf_target(prog, first + 1, "rollback_target"))
+		goto cleanup;
+	ASSERT_EQ(skel->bss->test_result_fentry, 0, "test_result_fentry");
+
+cleanup:
+	if (fd >= 0)
+		close(fd);
+	if (pre_fd >= 0)
+		close(pre_fd);
+	tracing_multi_bpf__destroy(skel);
+}
+
+void test_tracing_multi_prog_test(void)
+{
+	if (test__start_subtest("link_api"))
+		test_link_api_bpf_prog(false);
+	if (test__start_subtest("attach_api_fails"))
+		test_attach_api_bpf_prog_fails();
+	if (test__start_subtest("cookies"))
+		test_link_api_bpf_prog(true);
+	if (test__start_subtest("rollback"))
+		test_rollback_bpf_prog();
 }
