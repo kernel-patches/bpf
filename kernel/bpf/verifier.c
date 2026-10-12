@@ -5436,6 +5436,18 @@ static bool is_arena_scalar(struct bpf_verifier_env *env, int regno)
 	return reg->type == SCALAR_VALUE && env->arena_scalar && env->prog->aux->arena;
 }
 
+/*
+ * The insn being verified works with the arena base, which a JIT sets up in
+ * the prologue of the function the insn belongs to, see
+ * bpf_prog_uses_arena_insns(). Every caller checked that the program has an
+ * arena, so uses_arena_insns implies one.
+ */
+static void mark_uses_arena_insn(struct bpf_verifier_env *env)
+{
+	bpf_find_containing_subprog(env, env->insn_idx)->uses_arena_insns = true;
+	env->prog->aux->uses_arena_insns = true;
+}
+
 static bool is_load_acq_unsafe(struct bpf_verifier_env *env, int regno,
 			       struct bpf_insn *insn)
 {
@@ -6552,6 +6564,42 @@ static bool type_is_trusted_or_null(struct bpf_verifier_env *env,
 					  "__safe_trusted_or_null");
 }
 
+/*
+ * The member holds the kernel address of arena memory, which the rewritten
+ * load turns into an arena pointer, see arena_member_fixup(). NULL needs no
+ * tracking, PTR_TO_ARENA covers it.
+ */
+static int check_arena_member_load(struct bpf_verifier_env *env, struct bpf_reg_state *regs,
+				   int value_regno, enum bpf_type_flag flag, const char *tname,
+				   const char *field_name)
+{
+	struct bpf_insn_aux_data *aux = &env->insn_aux_data[env->insn_idx];
+
+	/* a helper reading the member as bytes needs no rewrite */
+	if (value_regno < 0)
+		return 0;
+	if (!env->prog->aux->arena) {
+		verbose(env,
+			"arena pointer member %s of struct %s requires a program with an associated arena\n",
+			field_name, tname);
+		return -EINVAL;
+	}
+	/* only a plain load is rewritten */
+	if (BPF_CLASS(env->prog->insnsi[env->insn_idx].code) != BPF_LDX) {
+		verbose(env,
+			"arena pointer member %s of struct %s can only be read with a plain load\n",
+			field_name, tname);
+		return -EACCES;
+	}
+
+	aux->arena_member = true;
+	if (flag & PTR_MAYBE_NULL)
+		aux->arena_member_nullable = true;
+	mark_reg_unknown(env, regs, value_regno);
+	regs[value_regno].type = PTR_TO_ARENA;
+	return 0;
+}
+
 static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 				   struct bpf_reg_state *regs, struct bpf_reg_state *reg,
 				   argno_t argno, int off, int size,
@@ -6661,6 +6709,11 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 	if (ret < 0)
 		return ret;
 
+	if (ret == PTR_TO_ARENA)
+		return check_arena_member_load(env, regs, value_regno, flag, tname, field_name);
+	if (atype == BPF_READ && value_regno >= 0)
+		env->insn_aux_data[env->insn_idx].non_arena_member = true;
+
 	if (ret != PTR_TO_BTF_ID) {
 		/* just mark; */
 
@@ -6720,6 +6773,13 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 		/* Old compat. Deprecated */
 		clear_trusted_flags(&flag);
 	}
+
+	/*
+	 * A __nullable member only matters where NULL would otherwise be
+	 * assumed away, on trusted and RCU pointers; the rest are probed.
+	 */
+	if (!(flag & (PTR_TRUSTED | MEM_RCU)))
+		flag &= ~PTR_MAYBE_NULL;
 
 	if (atype == BPF_READ && value_regno >= 0) {
 		ret = mark_btf_ld_reg(env, regs, value_regno, ret, reg->btf, btf_id, flag);
@@ -6785,6 +6845,8 @@ static int check_ptr_to_map_access(struct bpf_verifier_env *env,
 	ret = btf_struct_access(&env->log, &map_reg, off, size, atype, &btf_id, &flag, NULL);
 	if (ret < 0)
 		return ret;
+	/* Nothing walked from a map is trusted, a __nullable member changes nothing. */
+	flag &= ~PTR_MAYBE_NULL;
 
 	if (value_regno >= 0) {
 		ret = mark_btf_ld_reg(env, regs, value_regno, ret, btf_vmlinux, btf_id, flag);
@@ -7330,6 +7392,7 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, struct b
 		if (!err && value_regno >= 0 && (rdonly_mem || t == BPF_READ))
 			mark_reg_unknown(env, regs, value_regno);
 	} else if (reg->type == PTR_TO_ARENA) {
+		mark_uses_arena_insn(env);
 		if (t == BPF_READ && value_regno >= 0)
 			mark_reg_unknown(env, regs, value_regno);
 	} else {
@@ -7389,6 +7452,7 @@ static struct bpf_reg_state *mem_access_reg(struct bpf_verifier_env *env, int re
 	memset(arena, 0, sizeof(*arena));
 	arena->type = PTR_TO_ARENA;
 	env->insn_aux_data[env->insn_idx].arena_scalar = true;
+	mark_uses_arena_insn(env);
 	return arena;
 }
 
@@ -13798,6 +13862,8 @@ get_kfunc_arg_type(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 				reg_arg_name(env, argno));
 			return -EINVAL;
 		}
+		/* the JIT rebases the argument on the arena base */
+		mark_uses_arena_insn(env);
 		if (reg_from_argno(argno) < 0) {
 			verbose(env, "%s arena pointer cannot be a stack argument\n",
 				reg_arg_name(env, argno));
@@ -17478,6 +17544,7 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 					verbose(env, "addr_space_cast insn can only be used in a program that has an associated arena\n");
 					return -EINVAL;
 				}
+				mark_uses_arena_insn(env);
 			}
 
 			/* check src operand */

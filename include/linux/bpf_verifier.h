@@ -791,6 +791,14 @@ struct bpf_insn_aux_data {
 	 */
 	u8 fastcall_spills_num:3;
 	u8 arg_prog:4;
+	/*
+	 * What a load through a kernel struct pointer found, on any path: an
+	 * __arena pointer member, which arena_member_fixup() rewrites, one
+	 * that is __nullable as well, or any other member.
+	 */
+	u8 arena_member:1;
+	u8 arena_member_nullable:1;
+	u8 non_arena_member:1;
 
 	/* below fields are initialized once */
 	unsigned int orig_idx; /* original instruction index */
@@ -958,6 +966,8 @@ struct bpf_subprog_info {
 	bool keep_fastcall_stack: 1;
 	bool changes_pkt_data: 1;
 	bool might_sleep: 1;
+	/* true if an insn works with the arena base, see mark_uses_arena_insn() */
+	bool uses_arena_insns: 1;
 	u8 arg_slot_cnt:4;
 
 	enum priv_stack_mode priv_stack_mode;
