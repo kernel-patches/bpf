@@ -26,7 +26,8 @@ struct bpf_stab {
 
 /* This mutex is used to
  *  - protect race between prog/link attach/detach and link prog update, and
- *  - protect race between releasing and accessing map in bpf_link.
+ *  - protect race between releasing and accessing map in bpf_link, and
+ *  - protect race between map user-reference release and prog/link updates.
  * A single global mutex lock is used since it is expected contention is low.
  */
 static DEFINE_MUTEX(sockmap_mutex);
@@ -372,7 +373,10 @@ static void sock_map_free(struct bpf_map *map)
 
 static void sock_map_release_progs(struct bpf_map *map)
 {
-	psock_progs_drop(&container_of(map, struct bpf_stab, map)->progs);
+	mutex_lock(&sockmap_mutex);
+	if (!atomic64_read(&map->usercnt))
+		psock_progs_drop(&container_of(map, struct bpf_stab, map)->progs);
+	mutex_unlock(&sockmap_mutex);
 }
 
 static struct sock *__sock_map_lookup_elem(struct bpf_map *map, u32 key)
@@ -1226,7 +1230,10 @@ static void *sock_hash_lookup(struct bpf_map *map, void *key)
 
 static void sock_hash_release_progs(struct bpf_map *map)
 {
-	psock_progs_drop(&container_of(map, struct bpf_shtab, map)->progs);
+	mutex_lock(&sockmap_mutex);
+	if (!atomic64_read(&map->usercnt))
+		psock_progs_drop(&container_of(map, struct bpf_shtab, map)->progs);
+	mutex_unlock(&sockmap_mutex);
 }
 
 BPF_CALL_4(bpf_sock_hash_update, struct bpf_sock_ops_kern *, sops,
@@ -1743,6 +1750,7 @@ struct sockmap_link {
 static void sock_map_link_release(struct bpf_link *link)
 {
 	struct sockmap_link *sockmap_link = container_of(link, struct sockmap_link, link);
+	struct bpf_map *map = NULL;
 
 	mutex_lock(&sockmap_mutex);
 	if (!sockmap_link->map)
@@ -1751,10 +1759,12 @@ static void sock_map_link_release(struct bpf_link *link)
 	WARN_ON_ONCE(sock_map_prog_update(sockmap_link->map, NULL, link->prog, link,
 					  link->attach_type));
 
-	bpf_map_put_with_uref(sockmap_link->map);
+	map = sockmap_link->map;
 	sockmap_link->map = NULL;
 out:
 	mutex_unlock(&sockmap_mutex);
+	if (map)
+		bpf_map_put_with_uref(map);
 }
 
 static int sock_map_link_detach(struct bpf_link *link)
