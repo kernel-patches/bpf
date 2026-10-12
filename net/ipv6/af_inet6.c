@@ -110,6 +110,7 @@ static int inet6_create(struct net *net, struct socket *sock, int protocol,
 	struct sock *sk;
 	struct inet_protosw *answer;
 	struct proto *answer_prot;
+	struct module *owner = NULL;
 	unsigned char answer_flags;
 	int try_loading_module = 0;
 	int err;
@@ -169,6 +170,17 @@ lookup_protocol:
 
 	sock->ops = answer->ops;
 	answer_prot = answer->prot;
+	if (answer->protocol == IPPROTO_SCTP) {
+		owner = answer_prot->owner;
+		err = -EPROTONOSUPPORT;
+		/* SCTP init can unwind despite an owner reference.
+		 * Allow the kernel control socket during initialization.
+		 */
+		if (!kern && owner && module_is_coming(owner))
+			goto out_rcu_unlock;
+		if (!try_module_get(owner))
+			goto out_rcu_unlock;
+	}
 	answer_flags = answer->flags;
 	rcu_read_unlock();
 
@@ -176,6 +188,7 @@ lookup_protocol:
 
 	err = -ENOBUFS;
 	sk = sk_alloc(net, PF_INET6, GFP_KERNEL, answer_prot, kern);
+	module_put(owner);
 	if (!sk)
 		goto out;
 
