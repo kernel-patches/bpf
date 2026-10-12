@@ -529,6 +529,9 @@ extern const struct bench bench_trig_fmodret;
 extern const struct bench bench_trig_tp;
 extern const struct bench bench_trig_rawtp;
 
+/* tracing_multi link attachment benchmark */
+extern const struct bench bench_tracing_multi_attach_progs;
+
 /* uprobe/uretprobe benchmarks */
 extern const struct bench bench_trig_uprobe_nop;
 extern const struct bench bench_trig_uretprobe_nop;
@@ -615,6 +618,8 @@ static const struct bench *benchs[] = {
 	&bench_trig_fmodret,
 	&bench_trig_tp,
 	&bench_trig_rawtp,
+	/* tracing_multi */
+	&bench_tracing_multi_attach_progs,
 	/* uprobes */
 	&bench_trig_uprobe_nop,
 	&bench_trig_uretprobe_nop,
