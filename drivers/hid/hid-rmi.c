@@ -610,7 +610,7 @@ static int rmi_check_valid_report_id(struct hid_device *hdev, unsigned type,
 	return 0;
 }
 
-static struct rmi_device_platform_data rmi_hid_pdata = {
+static const struct rmi_device_platform_data rmi_hid_pdata = {
 	.sensor_pdata = {
 		.sensor_type = rmi_sensor_touchpad,
 		.axis_align.flip_y = true,
@@ -773,12 +773,12 @@ static int rmi_probe(struct hid_device *hdev, const struct hid_device_id *id)
 		return ret;
 	}
 
-	if (data->device_flags & RMI_DEVICE_HAS_PHYS_BUTTONS)
-		rmi_hid_pdata.gpio_data.disable = true;
-
 	data->xport.dev = hdev->dev.parent;
 	data->xport.pdata = rmi_hid_pdata;
 	data->xport.pdata.irq = data->rmi_irq;
+	if (data->device_flags & RMI_DEVICE_HAS_PHYS_BUTTONS)
+		data->xport.pdata.gpio_data.disable = true;
+
 	data->xport.proto_name = "hid";
 	data->xport.ops = &hid_rmi_ops;
 
