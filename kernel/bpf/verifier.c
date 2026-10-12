@@ -6721,6 +6721,13 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 		clear_trusted_flags(&flag);
 	}
 
+	/*
+	 * A __nullable member only matters where NULL would otherwise be
+	 * assumed away, on trusted and RCU pointers; the rest are probed.
+	 */
+	if (!(flag & (PTR_TRUSTED | MEM_RCU)))
+		flag &= ~PTR_MAYBE_NULL;
+
 	if (atype == BPF_READ && value_regno >= 0) {
 		ret = mark_btf_ld_reg(env, regs, value_regno, ret, reg->btf, btf_id, flag);
 		if (ret < 0)
@@ -6785,6 +6792,8 @@ static int check_ptr_to_map_access(struct bpf_verifier_env *env,
 	ret = btf_struct_access(&env->log, &map_reg, off, size, atype, &btf_id, &flag, NULL);
 	if (ret < 0)
 		return ret;
+	/* Nothing walked from a map is trusted, a __nullable member changes nothing. */
+	flag &= ~PTR_MAYBE_NULL;
 
 	if (value_regno >= 0) {
 		ret = mark_btf_ld_reg(env, regs, value_regno, ret, btf_vmlinux, btf_id, flag);
