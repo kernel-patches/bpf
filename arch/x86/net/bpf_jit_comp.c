@@ -734,6 +734,47 @@ int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type old_t,
 	return __bpf_arch_text_poke(ip, old_t, new_t, old_addr, new_addr);
 }
 
+int bpf_arch_text_poke_batch(struct bpf_text_poke **pokes, u32 cnt)
+{
+	u8 old_insn[X86_PATCH_SIZE];
+	u8 new_insn[X86_PATCH_SIZE];
+	int err;
+	u32 i;
+
+	for (i = 0; i < cnt; i++) {
+		err = bpf_arch_text_poke_check_ip(&pokes[i]->ip);
+		if (err)
+			return err;
+	}
+
+	guard(mutex)(&text_mutex);
+
+	for (i = 0; i < cnt; i++) {
+		struct bpf_text_poke *poke = pokes[i];
+
+		err = bpf_arch_text_poke_prepare_insns(poke->ip, poke->old_t, poke->new_t,
+						       poke->old_addr, poke->new_addr, old_insn,
+						       new_insn);
+		if (err)
+			return err;
+		if (memcmp(poke->ip, old_insn, X86_PATCH_SIZE))
+			return -EBUSY;
+	}
+
+	for (i = 0; i < cnt; i++) {
+		struct bpf_text_poke *poke = pokes[i];
+
+		bpf_arch_text_poke_prepare_insns(poke->ip, poke->old_t, poke->new_t,
+						 poke->old_addr, poke->new_addr, old_insn,
+						 new_insn);
+		if (memcmp(poke->ip, new_insn, X86_PATCH_SIZE))
+			smp_text_poke_batch_add(poke->ip, new_insn, X86_PATCH_SIZE, NULL);
+	}
+
+	smp_text_poke_batch_finish();
+	return 0;
+}
+
 #define EMIT_LFENCE()	EMIT3(0x0F, 0xAE, 0xE8)
 
 static void __emit_indirect_jump(u8 **pprog, int reg, bool ereg)
