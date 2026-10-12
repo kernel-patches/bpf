@@ -15,6 +15,7 @@
 #include <linux/module.h>
 #include <linux/pm.h>
 #include <linux/slab.h>
+#include <linux/unaligned.h>
 #include <linux/wait.h>
 #include <linux/sched.h>
 #include <linux/rmi.h>
@@ -125,7 +126,7 @@ static int rmi_set_page(struct hid_device *hdev, u8 page)
 
 	data->writeReport[0] = RMI_WRITE_REPORT_ID;
 	data->writeReport[1] = 1;
-	data->writeReport[2] = 0xFF;
+	put_unaligned_le16(0x00ff, &data->writeReport[2]);
 	data->writeReport[4] = page;
 
 	retval = rmi_write_report(hdev, data->writeReport,
@@ -216,10 +217,8 @@ static int rmi_hid_read_block(struct rmi_transport_dev *xport, u16 addr,
 	for (retries = 5; retries > 0; retries--) {
 		data->writeReport[0] = RMI_READ_ADDR_REPORT_ID;
 		data->writeReport[1] = 0; /* old 1 byte read count */
-		data->writeReport[2] = addr & 0xFF;
-		data->writeReport[3] = (addr >> 8) & 0xFF;
-		data->writeReport[4] = len  & 0xFF;
-		data->writeReport[5] = (len >> 8) & 0xFF;
+		put_unaligned_le16(addr, &data->writeReport[2]);
+		put_unaligned_le16(len, &data->writeReport[4]);
 
 		set_bit(RMI_READ_REQUEST_PENDING, &data->flags);
 
@@ -292,8 +291,7 @@ static int rmi_hid_write_block(struct rmi_transport_dev *xport, u16 addr,
 
 	data->writeReport[0] = RMI_WRITE_REPORT_ID;
 	data->writeReport[1] = len;
-	data->writeReport[2] = addr & 0xFF;
-	data->writeReport[3] = (addr >> 8) & 0xFF;
+	put_unaligned_le16(addr, &data->writeReport[2]);
 	memcpy(&data->writeReport[4], buf, len);
 
 	ret = rmi_write_report(hdev, data->writeReport,
