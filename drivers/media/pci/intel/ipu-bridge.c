@@ -60,7 +60,7 @@ static const u16 ipu6_ov5693_ncont_clk[] = {
 
 static const struct ipu_sensor_config ipu_supported_sensors[] = {
 	/* GalaxyCore GC5035 */
-	IPU_SENSOR_CONFIG("GCTI5035", 1, 422400000),
+	IPU_SENSOR_CONFIG("GCTI5035", 2, 175200000, 422400000),
 	/* GalaxyCore GC8034 */
 	IPU_SENSOR_CONFIG("GCTI8034", 1, 268800000),
 	/* Himax HM1092 */
