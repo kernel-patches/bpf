@@ -158,9 +158,11 @@ static void test_st_ops_assoc_in_timer_no_uref(void)
 	 * Run .test_1 by calling kfunc bpf_kfunc_multi_st_ops_test_1_prog_arg() and checks
 	 * the return value. .test_1 will also schedule timer_cb that runs .test_1 again.
 	 * timer_cb will run 500ms after syscall_prog runs, when the user space no longer
-	 * holds a reference to st_ops_map.
+	 * holds a reference to st_ops_map, and every 500ms after that until the map is
+	 * freed.
 	 */
 	skel->bss->timer_ns = 500000000;
+	skel->bss->wait_map_free = 1;
 	err = bpf_prog_test_run_opts(bpf_program__fd(skel->progs.syscall_prog), NULL);
 	ASSERT_OK(err, "bpf_prog_test_run_opts");
 
