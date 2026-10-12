@@ -38,13 +38,6 @@
 #define RMI_DEVICE_HAS_PHYS_BUTTONS	BIT(1)
 #define RMI_DEVICE_OUTPUT_SET_REPORT	BIT(2)
 
-/*
- * retrieve the ctrl registers
- * the ctrl register has a size of 20 but a fw bug split it into 16 + 4,
- * and there is no way to know if the first 20 bytes are here or not.
- * We use only the first 12 bytes, so get only them.
- */
-#define RMI_F11_CTRL_REG_COUNT		12
 
 enum rmi_mode_type {
 	RMI_MODE_OFF			= 0,
@@ -103,7 +96,34 @@ struct rmi_data {
 
 #define RMI_PAGE(addr) (((addr) >> 8) & 0xff)
 
-static int rmi_write_report(struct hid_device *hdev, u8 *report, int len);
+static int rmi_write_report(struct hid_device *hdev, u8 *report, int len)
+{
+	struct rmi_data *data = hid_get_drvdata(hdev);
+	int ret;
+
+	if (data->device_flags & RMI_DEVICE_OUTPUT_SET_REPORT) {
+		/*
+		 * Talk to device by using SET_REPORT requests instead.
+		 */
+		ret = hid_hw_raw_request(hdev, report[0], report,
+				len, HID_OUTPUT_REPORT, HID_REQ_SET_REPORT);
+	} else {
+		ret = hid_hw_output_report(hdev, report, len);
+	}
+
+	if (ret < 0) {
+		dev_err(&hdev->dev, "failed to write hid report (%d)\n", ret);
+		return ret;
+	}
+
+	if (ret != len) {
+		dev_err(&hdev->dev, "short write to hid device (%d < %d)\n",
+			ret, len);
+		return -EIO;
+	}
+
+	return 0;
+}
 
 /**
  * rmi_set_page - Set RMI page
@@ -156,35 +176,6 @@ static int rmi_set_mode(struct hid_device *hdev, u8 mode)
 		dev_err(&hdev->dev, "unable to set rmi mode to %d (%d)\n", mode,
 			ret);
 		return ret;
-	}
-
-	return 0;
-}
-
-static int rmi_write_report(struct hid_device *hdev, u8 *report, int len)
-{
-	struct rmi_data *data = hid_get_drvdata(hdev);
-	int ret;
-
-	if (data->device_flags & RMI_DEVICE_OUTPUT_SET_REPORT) {
-		/*
-		 * Talk to device by using SET_REPORT requests instead.
-		 */
-		ret = hid_hw_raw_request(hdev, report[0], report,
-				len, HID_OUTPUT_REPORT, HID_REQ_SET_REPORT);
-	} else {
-		ret = hid_hw_output_report(hdev, (void *)report, len);
-	}
-
-	if (ret < 0) {
-		dev_err(&hdev->dev, "failed to write hid report (%d)\n", ret);
-		return ret;
-	}
-
-	if (ret != len) {
-		dev_err(&hdev->dev, "short write to hid device (%d < %d)\n",
-			ret, len);
-		return -EIO;
 	}
 
 	return 0;
@@ -411,8 +402,6 @@ static int rmi_raw_event(struct hid_device *hdev,
 	default:
 		return 1;
 	}
-
-	return 0;
 }
 
 static int rmi_event(struct hid_device *hdev, struct hid_field *field,
