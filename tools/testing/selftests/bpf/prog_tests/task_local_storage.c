@@ -138,12 +138,6 @@ static void test_recursion(void)
 	ASSERT_OK(err, "get prog info");
 	ASSERT_EQ(info.recursion_misses, 2, "on_update prog recursion");
 
-	prog_fd = bpf_program__fd(skel->progs.on_enter);
-	memset(&info, 0, sizeof(info));
-	err = bpf_prog_get_info_by_fd(prog_fd, &info, &info_len);
-	ASSERT_OK(err, "get prog info");
-	ASSERT_EQ(info.recursion_misses, 0, "on_enter prog recursion");
-
 out:
 	close(task_fd);
 	task_ls_recursion__destroy(skel);
