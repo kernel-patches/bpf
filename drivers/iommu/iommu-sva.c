@@ -2,6 +2,7 @@
 /*
  * Helpers for IOMMU drivers implementing SVA
  */
+#include <linux/memcontrol.h>
 #include <linux/mmu_context.h>
 #include <linux/mmu_notifier.h>
 #include <linux/mutex.h>
@@ -220,6 +221,7 @@ iommu_sva_handle_mm(struct iommu_fault *fault, struct mm_struct *mm)
 	unsigned int access_flags = 0;
 	unsigned int fault_flags = FAULT_FLAG_REMOTE;
 	struct iommu_fault_page_request *prm = &fault->prm;
+	struct mem_cgroup *memcg, *old_memcg;
 	enum iommu_page_response_code status = IOMMU_PAGE_RESP_INVALID;
 
 	if (!(prm->flags & IOMMU_FAULT_PAGE_REQUEST_PASID_VALID))
@@ -255,7 +257,11 @@ iommu_sva_handle_mm(struct iommu_fault *fault, struct mm_struct *mm)
 		/* Access fault */
 		goto out_put_mm;
 
+	memcg = get_mem_cgroup_from_mm(mm);
+	old_memcg = set_active_memcg(memcg);
 	ret = handle_mm_fault(vma, prm->addr, fault_flags, NULL);
+	set_active_memcg(old_memcg);
+	mem_cgroup_put(memcg);
 	status = ret & VM_FAULT_ERROR ? IOMMU_PAGE_RESP_INVALID :
 		IOMMU_PAGE_RESP_SUCCESS;
 
