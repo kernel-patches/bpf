@@ -377,6 +377,10 @@ static void del_nbp(struct net_bridge_port *p)
 
 	br_netpoll_disable(p);
 
+	timer_shutdown_sync(&p->message_age_timer);
+	timer_shutdown_sync(&p->forward_delay_timer);
+	timer_shutdown_sync(&p->hold_timer);
+
 	call_rcu(&p->rcu, destroy_nbp_rcu);
 }
 
