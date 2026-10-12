@@ -197,10 +197,13 @@ static int rmi_hid_read_block(struct rmi_transport_dev *xport, u16 addr,
 	struct rmi_data *data = container_of(xport, struct rmi_data, xport);
 	struct hid_device *hdev = data->hdev;
 	int ret;
-	int bytes_read;
-	int bytes_needed;
 	int retries;
-	int read_input_count;
+	size_t bytes_read;
+	size_t bytes_needed;
+	size_t read_input_count;
+
+	if (len > U16_MAX)
+		return -EINVAL;
 
 	mutex_lock(&data->page_mutex);
 
@@ -241,23 +244,14 @@ static int rmi_hid_read_block(struct rmi_transport_dev *xport, u16 addr,
 				break;
 			}
 
-			read_input_count = min_t(int, data->readReport[1],
-						 data->input_report_size - 2);
-			if (!read_input_count) {
-				/*
-				 * A zero length reply advances neither
-				 * bytes_read nor bytes_needed, and because a
-				 * reply did arrive the wait above does not
-				 * time out either, so a device answering 0
-				 * forever would spin here indefinitely with
-				 * page_mutex held.
-				 */
-				hid_warn(hdev, "%s: zero-length read reply\n",
-					 __func__);
+			read_input_count = data->readReport[1];
+			if (read_input_count == 0 ||
+			    read_input_count > data->input_report_size - 2) {
 				clear_bit(RMI_READ_DATA_PENDING, &data->flags);
-				ret = -EIO;
+				ret = -EPROTO;
 				break;
 			}
+
 			memcpy(buf + bytes_read, &data->readReport[2],
 				min(read_input_count, bytes_needed));
 
@@ -285,17 +279,15 @@ static int rmi_hid_write_block(struct rmi_transport_dev *xport, u16 addr,
 	struct hid_device *hdev = data->hdev;
 	int ret;
 
+	if (len > data->output_report_size - 4 || len > U8_MAX)
+		return -EINVAL;
+
 	mutex_lock(&data->page_mutex);
 
 	if (RMI_PAGE(addr) != data->page) {
 		ret = rmi_set_page(hdev, RMI_PAGE(addr));
 		if (ret < 0)
 			goto exit;
-	}
-
-	if (len + 4 > data->output_report_size) {
-		ret = -EINVAL;
-		goto exit;
 	}
 
 	data->writeReport[0] = RMI_WRITE_REPORT_ID;
@@ -305,7 +297,7 @@ static int rmi_hid_write_block(struct rmi_transport_dev *xport, u16 addr,
 	memcpy(&data->writeReport[4], buf, len);
 
 	ret = rmi_write_report(hdev, data->writeReport,
-					data->output_report_size);
+			       data->output_report_size);
 	if (ret) {
 		dev_err(&hdev->dev,
 			"failed to write request output report (%d)\n",
@@ -388,13 +380,19 @@ static int rmi_input_event(struct hid_device *hdev, u8 *data, int size)
 static int rmi_read_data_event(struct hid_device *hdev, u8 *data, int size)
 {
 	struct rmi_data *hdata = hid_get_drvdata(hdev);
+	size_t copy_size;
 
 	if (!test_bit(RMI_READ_REQUEST_PENDING, &hdata->flags)) {
 		hid_dbg(hdev, "no read request pending\n");
 		return 0;
 	}
 
-	memcpy(hdata->readReport, data, min((u32)size, hdata->input_report_size));
+	copy_size = min_t(size_t, size, hdata->input_report_size);
+	if (copy_size < 3 || data[1] == 0 || data[1] > copy_size - 2)
+		hdata->readReport[1] = 0;
+	else
+		memcpy(hdata->readReport, data, copy_size);
+
 	set_bit(RMI_READ_DATA_PENDING, &hdata->flags);
 	wake_up(&hdata->wait);
 
@@ -722,6 +720,12 @@ static int rmi_probe(struct hid_device *hdev, const struct hid_device_id *id)
 		goto start;
 	}
 
+	if (!rmi_check_valid_report_id(hdev, HID_INPUT_REPORT,
+				       RMI_READ_DATA_REPORT_ID, &input_report)) {
+		hid_dbg(hdev, "device does not have read data input report\n");
+		goto start;
+	}
+
 	data->input_report_size = hid_report_len(input_report);
 
 	if (!rmi_check_valid_report_id(hdev, HID_OUTPUT_REPORT,
@@ -733,15 +737,10 @@ static int rmi_probe(struct hid_device *hdev, const struct hid_device_id *id)
 
 	data->output_report_size = hid_report_len(output_report);
 
-	/*
-	 * The write reports built by this driver occupy 6 bytes and the read
-	 * handshake looks at the first 3 bytes of an input report, so refuse
-	 * to drive a device whose reports cannot hold them.
-	 */
-	if (data->output_report_size < 6 || data->input_report_size < 3) {
-		hid_err(hdev, "rmi reports too small (out=%u in=%u)\n",
-			data->output_report_size, data->input_report_size);
-		goto start;
+	if (data->input_report_size < 3 || data->output_report_size < 6) {
+		hid_err(hdev, "invalid report sizes (in %u, out %u)\n",
+			data->input_report_size, data->output_report_size);
+		return -EINVAL;
 	}
 
 	data->device_flags |= RMI_DEVICE;
