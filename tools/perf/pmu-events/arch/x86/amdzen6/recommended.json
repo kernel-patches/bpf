@@ -269,7 +269,6 @@
     "BriefDescription": "Memory controller data bus utilization.",
     "MetricExpr": "d_ratio(umc_data_slot_clks.all / 2, umc_mem_clk)",
     "MetricGroup": "memory_controller",
-    "PerPkg": "1",
     "ScaleUnit": "100%"
   },
   {
@@ -277,7 +276,6 @@
     "BriefDescription": "Memory controller CAS command rate.",
     "MetricExpr": "d_ratio(umc_cas_cmd.all * 1000, umc_mem_clk)",
     "MetricGroup": "memory_controller",
-    "PerPkg": "1",
     "ScaleUnit": "1per_memclk"
   },
   {
@@ -285,7 +283,6 @@
     "BriefDescription": "Ratio of memory controller CAS commands for reads.",
     "MetricExpr": "d_ratio(umc_cas_cmd.rd, umc_cas_cmd.all)",
     "MetricGroup": "memory_controller",
-    "PerPkg": "1",
     "ScaleUnit": "100%"
   },
   {
@@ -293,7 +290,6 @@
     "BriefDescription": "Ratio of memory controller CAS commands for writes.",
     "MetricExpr": "d_ratio(umc_cas_cmd.wr, umc_cas_cmd.all)",
     "MetricGroup": "memory_controller",
-    "PerPkg": "1",
     "ScaleUnit": "100%"
   },
   {
@@ -301,7 +297,6 @@
     "BriefDescription": "Estimated memory read bandwidth.",
     "MetricExpr": "(umc_cas_cmd.rd * 64) / 1e6 / duration_time",
     "MetricGroup": "memory_controller",
-    "PerPkg": "1",
     "ScaleUnit": "1MB/s"
   },
   {
@@ -309,7 +304,6 @@
     "BriefDescription": "Estimated memory write bandwidth.",
     "MetricExpr": "(umc_cas_cmd.wr * 64) / 1e6 / duration_time",
     "MetricGroup": "memory_controller",
-    "PerPkg": "1",
     "ScaleUnit": "1MB/s"
   },
   {
@@ -317,7 +311,6 @@
     "BriefDescription": "Estimated combined memory bandwidth.",
     "MetricExpr": "(umc_cas_cmd.all * 64) / 1e6 / duration_time",
     "MetricGroup": "memory_controller",
-    "PerPkg": "1",
     "ScaleUnit": "1MB/s"
   },
   {
@@ -325,7 +318,6 @@
     "BriefDescription": "Memory controller ACTIVATE command rate.",
     "MetricExpr": "d_ratio(umc_act_cmd.all * 1000, umc_mem_clk)",
     "MetricGroup": "memory_controller",
-    "PerPkg": "1",
     "ScaleUnit": "1per_memclk"
   },
   {
@@ -333,7 +325,6 @@
     "BriefDescription": "Memory controller PRECHARGE command rate.",
     "MetricExpr": "d_ratio(umc_pchg_cmd.all * 1000, umc_mem_clk)",
     "MetricGroup": "memory_controller",
-    "PerPkg": "1",
     "ScaleUnit": "1per_memclk"
   },
   {
