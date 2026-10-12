@@ -576,9 +576,10 @@ __weak int buddy_init(struct buddy __arena *buddy)
 
 	chunk = buddy_chunk_get(buddy);
 
-	if (buddy_lock(buddy, flags)) {
+	ret = buddy_lock(buddy, flags);
+	if (ret) {
 		bpf_arena_free_pages(&arena, chunk, BUDDY_CHUNK_PAGES);
-		return -EINVAL;
+		return ret;
 	}
 
 	/* Chunk is already properly unpoisoned if allocated. */
