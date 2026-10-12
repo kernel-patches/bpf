@@ -143,17 +143,15 @@ static int rmi_set_page(struct hid_device *hdev, u8 page)
 
 static int rmi_set_mode(struct hid_device *hdev, u8 mode)
 {
-	int ret;
 	const u8 txbuf[2] = {RMI_SET_RMI_MODE_REPORT_ID, mode};
-	u8 *buf;
+	int ret;
 
-	buf = kmemdup(txbuf, sizeof(txbuf), GFP_KERNEL);
+	u8 *buf __free(kfree) = kmemdup(txbuf, sizeof(txbuf), GFP_KERNEL);
 	if (!buf)
 		return -ENOMEM;
 
 	ret = hid_hw_raw_request(hdev, RMI_SET_RMI_MODE_REPORT_ID, buf,
 			sizeof(txbuf), HID_FEATURE_REPORT, HID_REQ_SET_REPORT);
-	kfree(buf);
 	if (ret < 0) {
 		dev_err(&hdev->dev, "unable to set rmi mode to %d (%d)\n", mode,
 			ret);
