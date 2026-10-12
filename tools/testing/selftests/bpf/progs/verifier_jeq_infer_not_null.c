@@ -273,6 +273,88 @@ __naked void jne_reg_reg_null_check(void)
         : __clobber_all);
 }
 
+/* Symmetric case: dst_reg is known 0, src_reg is nullable pointer.
+ * "if (r1 == r0) goto 1f;" (reversed operand order).
+ * Verify that non-nullness is propagated to src_reg in the non-null branch.
+ */
+SEC("socket")
+__description("null check: symmetric form (dst 0 reg, src nullable) JEQ")
+__success __success_unpriv
+__retval(0)
+__naked void jeq_reg_reg_null_check_symmetric(void)
+{
+	asm volatile ("					\
+	*(u32*)(r10 - 8) = 0;				\
+	r1 = %[map_hash] ll;				\
+	r2 = r10;					\
+	r2 += -8;					\
+	call %[bpf_map_lookup_elem];			\
+	r1 = 0;						\
+	/* r1 is known 0, r0 is nullable ptr */		\
+	if r1 == r0 goto 1f;				\
+	r0 = *(u32*)(r0 + 0);				\
+1:	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_map_lookup_elem),
+	  __imm_addr(map_hash)
+	: __clobber_all);
+}
+
+/* Symmetric case with JNE: "if (r1 != r0) goto 1f;"
+ * Taken branch: r0 is non-null. Fall-through: r0 is null.
+ */
+SEC("socket")
+__description("null check: symmetric form (dst 0 reg, src nullable) JNE")
+__success __success_unpriv
+__retval(0)
+__naked void jne_reg_reg_null_check_symmetric(void)
+{
+	asm volatile ("					\
+	*(u32*)(r10 - 8) = 0;				\
+	r1 = %[map_hash] ll;				\
+	r2 = r10;					\
+	r2 += -8;					\
+	call %[bpf_map_lookup_elem];			\
+	r1 = 0;						\
+	if r1 != r0 goto 1f;				\
+	goto 2f;					\
+1:	r0 = *(u32*)(r0 + 0);				\
+2:	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_map_lookup_elem),
+	  __imm_addr(map_hash)
+	: __clobber_all);
+}
+
+/* Negative test: dst_reg is a non-zero scalar (r1 = 1).
+ * "if (r1 == r0)" must NOT be treated as a null check.
+ * Dereference must fail because r0 remains nullable.
+ */
+SEC("socket")
+__description("null check: symmetric form with non-zero dst must not elide null check")
+__failure
+__msg("R0 invalid mem access 'map_value_or_null'")
+__naked void null_check_symmetric_nonzero_dst_rejected(void)
+{
+	asm volatile ("					\
+	*(u32*)(r10 - 8) = 0;				\
+	r1 = %[map_hash] ll;				\
+	r2 = r10;					\
+	r2 += -8;					\
+	call %[bpf_map_lookup_elem];			\
+	r1 = 1;						\
+	if r1 == r0 goto 1f;				\
+	r0 = *(u32*)(r0 + 0);				\
+1:	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_map_lookup_elem),
+	  __imm_addr(map_hash)
+	: __clobber_all);
+}
+
 /*
  * A comparison between PTR_TO_MEM | MEM_RDONLY | PTR_UNTRUSTED and
  * PTR_TO_MAP_VALUE_OR_NULL should not infer that map pointer is not null.
