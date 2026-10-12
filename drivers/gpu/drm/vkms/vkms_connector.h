@@ -11,7 +11,7 @@
 /**
  * struct vkms_connector - VKMS custom type wrapping around the DRM connector
  *
- * @drm: Base DRM connector
+ * @base: Base DRM connector
  */
 struct vkms_connector {
 	struct drm_connector base;
