@@ -21,6 +21,7 @@
 #include <linux/rtnetlink.h>
 #include <linux/reciprocal_div.h>
 #include <linux/rbtree.h>
+#include <linux/math64.h>
 
 #include <net/gso.h>
 #include <net/netlink.h>
@@ -366,17 +367,26 @@ static s64 tabledist(s64 mu, s32 sigma,
 
 static u64 packet_time_ns(u64 len, const struct netem_sched_data *q)
 {
+	u64 d;
+
+	if ((s64)len + q->packet_overhead <= 0)
+		return 0;
+
 	len += q->packet_overhead;
 
 	if (q->cell_size) {
 		u32 cells = reciprocal_divide(len, q->cell_size_reciprocal);
+		s64 cell_len = (s64)q->cell_size + q->cell_overhead;
 
 		if (len > cells * q->cell_size)	/* extra cell needed for remainder */
 			cells++;
-		len = cells * (q->cell_size + q->cell_overhead);
+		if (cell_len <= 0)
+			return 0;
+		len = (u64)cells * cell_len;
 	}
 
-	return div64_u64(len * NSEC_PER_SEC, q->rate);
+	d = mul_u64_u64_div_u64(len, NSEC_PER_SEC, q->rate);
+	return min_t(u64, d, S64_MAX);
 }
 
 static void tfifo_reset(struct Qdisc *sch)
