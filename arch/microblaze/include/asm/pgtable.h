@@ -14,6 +14,7 @@
 extern int mem_init_done;
 #endif
 
+#include <asm/page.h>
 #include <asm-generic/pgtable-nopmd.h>
 
 #ifdef __KERNEL__
@@ -23,7 +24,6 @@ extern int mem_init_done;
 #include <linux/threads.h>
 #include <asm/processor.h>		/* For TASK_SIZE */
 #include <asm/mmu.h>
-#include <asm/page.h>
 
 extern unsigned long va_to_phys(unsigned long address);
 extern pte_t *va_to_pte(unsigned long address);
@@ -102,13 +102,6 @@ extern pte_t *va_to_pte(unsigned long address);
 
 #define USER_PGD_PTRS (PAGE_OFFSET >> PGDIR_SHIFT)
 #define KERNEL_PGD_PTRS (PTRS_PER_PGD-USER_PGD_PTRS)
-
-#define pte_ERROR(e) \
-	printk(KERN_ERR "%s:%d: bad pte "PTE_FMT".\n", \
-		__FILE__, __LINE__, pte_val(e))
-#define pgd_ERROR(e) \
-	printk(KERN_ERR "%s:%d: bad pgd %08lx.\n", \
-		__FILE__, __LINE__, pgd_val(e))
 
 /*
  * Bits in a linux-style PTE.  These match the bits in the

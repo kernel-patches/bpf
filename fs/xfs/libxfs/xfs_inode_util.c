@@ -3,7 +3,6 @@
  * Copyright (c) 2000-2006 Silicon Graphics, Inc.
  * All Rights Reserved.
  */
-#include <linux/iversion.h>
 #include "xfs_platform.h"
 #include "xfs_fs.h"
 #include "xfs_shared.h"

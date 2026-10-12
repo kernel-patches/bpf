@@ -46,6 +46,7 @@ int
 xchk_rgsuperblock(
 	struct xfs_scrub	*sc)
 {
+	struct xfs_buf		*bp = NULL;
 	xfs_rgnumber_t		rgno = sc->sm->sm_agno;
 	unsigned int		flags;
 	int			error;
@@ -78,9 +79,17 @@ xchk_rgsuperblock(
 		return error;
 
 	/*
-	 * Since we already validated the rt superblock at mount time, we don't
-	 * need to check its contents again.  All we need is to cross-reference.
+	 * Read the rt super from disk in case it's been corrupted since mount
+	 * time.  Crashing with a bad rt super may prevent remount, so we want
+	 * to fix these things ASAP.
 	 */
+	error = xfs_buf_read_uncached(sc->mp->m_rtdev_targp, XFS_RTSB_DADDR,
+			sc->mp->m_sb.sb_blocksize >> BBSHIFT, &bp,
+			&xfs_rtsb_buf_ops);
+	if (!xchk_process_rt_error(sc, 0, 0, &error))
+		return error;
+	xfs_buf_relse(bp);
+
 	xchk_rgsuperblock_xref(sc);
 	return 0;
 }
@@ -91,12 +100,28 @@ xrep_rgsuperblock(
 	struct xfs_scrub	*sc)
 {
 	struct xfs_buf		*sb_bp;
+	struct xfs_buf		*rtsb_bp;
+	int			error;
 
 	ASSERT(rtg_rgno(sc->sr.rtg) == 0);
 
 	sb_bp = xfs_trans_getsb(sc->tp);
 	xfs_log_sb(sc->tp);
-	xfs_log_rtsb(sc->tp, sb_bp);
-	return 0;
+	rtsb_bp = xfs_log_rtsb(sc->tp, sb_bp);
+	if (!rtsb_bp)
+		return 0;
+
+	/* synchronous transaction to flush/release the buffer log item */
+	xfs_trans_set_sync(sc->tp);
+	error = xrep_trans_commit(sc);
+	if (error)
+		return error;
+
+	/* write the rt super out immediately */
+	xfs_buf_lock(rtsb_bp);
+	xfs_buf_hold(rtsb_bp);
+	error = xfs_bwrite(rtsb_bp);
+	xfs_buf_relse(rtsb_bp);
+	return error;
 }
 #endif /* CONFIG_XFS_ONLINE_REPAIR */

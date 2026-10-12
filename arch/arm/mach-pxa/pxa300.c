@@ -19,7 +19,6 @@
 #include "pxa300.h"
 
 #include "generic.h"
-#include "devices.h"
 
 static struct mfp_addr_map pxa300_mfp_addr_map[] __initdata = {
 

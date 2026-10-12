@@ -64,16 +64,9 @@
 		busyuart \tmp, \rb
 		.endm
 
-#if defined(CONFIG_ARCH_SA1100)
-		.macro	loadsp, rb, tmp1, tmp2
-		mov	\rb, #0x80000000	@ physical base address
-		add	\rb, \rb, #0x00010000	@ Ser1
-		.endm
-#else
 		.macro	loadsp,	rb, tmp1, tmp2
 		addruart \rb, \tmp1, \tmp2
 		.endm
-#endif
 #endif
 #endif
 

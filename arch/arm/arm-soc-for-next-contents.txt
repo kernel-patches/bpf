@@ -1,0 +1,70 @@
+soc/arm
+	patch
+		ARM: remove sa1100 platform
+		ARM: remove footbridge
+		ARM: remove legacy pxa board files
+		ARM: orion/dove/mv78xx0: remove all board files
+		ARM: orion5x: fold plat-orion/pcie.c and hw_pci into pci.c
+		ARM: omap2: remove omap24xx support
+		ARM: imx: remove i.MX31 SoC support
+		ARM: versatile: remove Integrator/CM1136JF-S option
+		ARM: imx: remove nommu support
+		ARM: lpc18xx: remove entire platform
+		ARM: stm32: remove stm32f4/f7/h7 MCU support
+		ARM: versatile: remove mps2 support
+		ARM: at91: remove samv7 support
+		ARM: axxia: remove entire platform
+
+soc/dt
+	renesas/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-dts-for-v7.4-tag1
+		contains renesas/fixes-2
+		contains renesas/fixes
+	rockchip/dt64
+		ssh://gitolite.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v7.4-rockchip-dts64-1
+	qcom/dt64
+		ssh://gitolite.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-arm64-for-7.4
+	mediatek/dt64
+		ssh://gitolite.kernel.org/pub/scm/linux/kernel/git/mediatek/linux tags/mtk-dts64-for-v7.4
+	mediatek/dt32
+		ssh://gitolite.kernel.org/pub/scm/linux/kernel/git/mediatek/linux tags/mtk-dts32-for-v7.4
+	arm-juno/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/sudeep.holla/linux tags/juno-updates-7.4
+	ste/dt32
+		https://git.kernel.org/pub/scm/linux/kernel/git/linusw/linux-nomadik tags/ux500-dts-for-7.4
+	gemini/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/linusw/linux-integrator tags/gemini-dts-for-7.4
+	omap/dt32
+		https://git.kernel.org/pub/scm/linux/kernel/git/khilman/linux-omap tags/omap-for-v7.4/dt-signed
+
+soc/drivers
+	renesas/drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-drivers-for-v7.4-tag1
+	patch
+		platform: cznic: turris-omnia-mcu: Add missing MODULE_DEVICE_TABLE()
+	mediatek/drivers
+		ssh://gitolite.kernel.org/pub/scm/linux/kernel/git/mediatek/linux tags/mtk-soc-for-v7.4
+	scmi/drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/sudeep.holla/linux tags/scmi-updates-7.4
+		contains scmi/fixes
+
+soc/defconfig
+	renesas/defconfig
+		https://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-arm-defconfig-for-v7.4-tag1
+	qcom/defconfig
+		ssh://gitolite.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-arm64-defconfig-for-7.4
+
+soc/late
+
+arm/fixes
+	<no branch> (55981579b27b6541aeeab81c768f248dba0491ac)
+		https://git.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-clk-fixes-for-7.3
+	<no branch> (35ce3c571297aee13c6da604d022929fd1aa9efb)
+		https://git.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-arm64-fixes-for-7.3
+	<no branch> (7ba5290db6bf365e46fb70bf13dc2a47048165ea)
+		https://git.kernel.org/pub/scm/linux/kernel/git/frank.li/linux tags/imx-fixes-7.3
+	<no branch> (3c0d2f1f431c51a11253f28763be723ac782fd7a)
+		git://git.kernel.org/pub/scm/linux/kernel/git/jenswi/linux-tee tags/optee-fixes-for-v7.3
+	patch
+		MAINTAINERS: update my email address
+

@@ -14,6 +14,7 @@
 #include <linux/err.h>
 #include <linux/firmware.h>
 #include <linux/gpio/consumer.h>
+#include <linux/interrupt.h>
 #include <linux/jiffies.h>
 #include <linux/mfd/core.h>
 #include <linux/mfd/cs42l43.h>
@@ -959,6 +960,7 @@ static void cs42l43_boot_work(struct work_struct *work)
 {
 	struct cs42l43 *cs42l43 = container_of(work, struct cs42l43, boot_work);
 	unsigned int devid, revid, otp;
+	bool valid_id;
 	int ret;
 
 	ret = cs42l43_wait_for_attach(cs42l43);
@@ -973,16 +975,21 @@ static void cs42l43_boot_work(struct work_struct *work)
 
 	switch (devid) {
 	case CS42L43_DEVID_VAL:
+		valid_id = (cs42l43->variant_id == CS42L43_DEVID_VAL);
+		break;
 	case CS42L43B_DEVID_VAL:
-		if (devid != cs42l43->variant_id) {
-			dev_err(cs42l43->dev,
-				"Device ID (0x%06x) does not match variant ID (0x%06lx)\n",
-				devid, cs42l43->variant_id);
-			goto err;
-		}
+	case CS42L44_DEVID_VAL:
+		valid_id = (cs42l43->variant_id == CS42L43B_DEVID_VAL);
 		break;
 	default:
 		dev_err(cs42l43->dev, "Unrecognised devid: 0x%06x\n", devid);
+		goto err;
+	}
+
+	if (!valid_id) {
+		dev_err(cs42l43->dev,
+			"Device ID (0x%06x) does not match variant ID (0x%06lx)\n",
+			devid, cs42l43->variant_id);
 		goto err;
 	}
 
@@ -1099,14 +1106,18 @@ static int cs42l43_power_down(struct cs42l43 *cs42l43)
 	return 0;
 }
 
-static void cs42l43_dev_remove(void *data)
+static void cs42l43_dev_power_down(void *data)
 {
 	struct cs42l43 *cs42l43 = data;
 
-	cancel_work_sync(&cs42l43->boot_work);
-
 	cs42l43_power_down(cs42l43);
 }
+
+void cs42l43_dev_remove(struct cs42l43 *cs42l43)
+{
+	flush_work(&cs42l43->boot_work);
+}
+EXPORT_SYMBOL_NS_GPL(cs42l43_dev_remove, "MFD_CS42L43");
 
 int cs42l43_dev_probe(struct cs42l43 *cs42l43)
 {
@@ -1153,7 +1164,7 @@ int cs42l43_dev_probe(struct cs42l43 *cs42l43)
 	if (ret)
 		return ret;
 
-	ret = devm_add_action_or_reset(cs42l43->dev, cs42l43_dev_remove, cs42l43);
+	ret = devm_add_action_or_reset(cs42l43->dev, cs42l43_dev_power_down, cs42l43);
 	if (ret)
 		return ret;
 

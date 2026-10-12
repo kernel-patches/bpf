@@ -39,6 +39,7 @@
 #include "scrub/newbt.h"
 #include "scrub/reap.h"
 #include "scrub/rcbag.h"
+#include "scrub/refcount.h"
 
 /*
  * Rebuilding the Reference Count Btree
@@ -295,7 +296,7 @@ xrep_refc_encode_startblock(
 }
 
 /* Sort in the same order as the ondisk records. */
-static int
+int
 xrep_refc_extent_cmp(
 	const void			*a,
 	const void			*b)

@@ -1026,8 +1026,7 @@ int						/* error code */
 xfs_bmap_add_attrfork(
 	struct xfs_trans	*tp,
 	struct xfs_inode	*ip,		/* incore inode pointer */
-	int			size,		/* space new attribute needs */
-	int			rsvd)		/* xact may use reserved blks */
+	int			size)		/* space new attribute needs */
 {
 	struct xfs_mount	*mp = tp->t_mountp;
 	int			logflags;	/* logging flags */
@@ -3150,6 +3149,8 @@ xfs_bmap_longest_free_extent(
 	xfs_extlen_t		*blen)
 {
 	xfs_extlen_t		longest;
+	unsigned int		min_free;
+	unsigned int		max_free;
 	int			error = 0;
 
 	if (!xfs_perag_initialised_agf(pag)) {
@@ -3159,8 +3160,9 @@ xfs_bmap_longest_free_extent(
 			return error;
 	}
 
-	longest = xfs_alloc_longest_free_extent(pag,
-				xfs_alloc_min_freelist(pag_mount(pag), pag),
+	/* bmap allocs always have minleft set, so account for max_free */
+	xfs_alloc_freelist(pag_mount(pag), pag, &min_free, &max_free);
+	longest = xfs_alloc_longest_free_extent(pag, min_free, max_free,
 				xfs_ag_resv_needed(pag, XFS_AG_RESV_NONE));
 	if (*blen < longest)
 		*blen = longest;
@@ -6088,7 +6090,7 @@ xfs_bmap_validate_extent_raw(
 	int			whichfork,
 	struct xfs_bmbt_irec	*irec)
 {
-	if (!xfs_verify_fileext(mp, irec->br_startoff, irec->br_blockcount))
+	if (!xfs_verify_fileext(irec->br_startoff, irec->br_blockcount))
 		return __this_address;
 
 	if (rtfile && whichfork == XFS_DATA_FORK) {

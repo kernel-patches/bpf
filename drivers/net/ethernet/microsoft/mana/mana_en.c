@@ -9,7 +9,6 @@
 #include <linux/ethtool.h>
 #include <linux/filter.h>
 #include <linux/mm.h>
-#include <linux/pci.h>
 #include <linux/export.h>
 #include <linux/skbuff.h>
 
@@ -20,6 +19,7 @@
 #include <net/xdp.h>
 
 #include <net/mana/mana.h>
+
 #include <net/mana/mana_auxiliary.h>
 #include <net/mana/hw_channel.h>
 
@@ -758,6 +758,44 @@ static void *mana_get_rxbuf_pre(struct mana_rxq *rxq, dma_addr_t *da)
 	return va;
 }
 
+/* Reserve enough headroom to satisfy the skb_cow() in ip_forward() and avoid
+ * reallocation: the TX path keeps the SGE DMA mappings in struct mana_skb_head
+ * at skb->head, so the port advertises ndev->needed_headroom = MANA_HEADROOM.
+ */
+static u32 mana_get_rxbuf_headroom(struct mana_port_context *apc)
+{
+	if (mana_xdp_get(apc))
+		return mana_xdp_headroom(apc->ndev);
+
+	return LL_RESERVED_SPACE(apc->ndev);
+}
+
+static u32 mana_get_rxbuf_size(struct mana_port_context *apc, u32 mtu)
+{
+	u32 len = SKB_DATA_ALIGN(mtu + MANA_RXBUF_PAD +
+				 mana_get_rxbuf_headroom(apc));
+
+	return ALIGN(len, MANA_RX_FRAG_ALIGNMENT);
+}
+
+/* Returns true when one RX buffer per page is already required by XDP or by
+ * the buffer size implied by the MTU, i.e. regardless of the
+ * MANA_PRIV_FLAG_USE_FULL_PAGE_RXBUF private flag.
+ */
+bool mana_single_rxbuf_per_page_forced(struct mana_port_context *apc, u32 mtu)
+{
+	/* For xdp make sure only one packet fits per page. */
+	if (mana_xdp_get(apc))
+		return true;
+
+	/* Only use the page_pool fragment path when at least two buffers,
+	 * including the headroom each of them has to reserve, actually fit
+	 * into one page. Otherwise the fragment path degenerates into one
+	 * buffer per page while still paying the fragment accounting cost.
+	 */
+	return PAGE_SIZE / mana_get_rxbuf_size(apc, mtu) < 2;
+}
+
 static bool
 mana_use_single_rxbuf_per_page(struct mana_port_context *apc, u32 mtu)
 {
@@ -770,32 +808,27 @@ mana_use_single_rxbuf_per_page(struct mana_port_context *apc, u32 mtu)
 	if (apc->priv_flags & BIT(MANA_PRIV_FLAG_USE_FULL_PAGE_RXBUF))
 		return true;
 
-	/* For xdp and jumbo frames make sure only one packet fits per page. */
-	if (mtu + MANA_RXBUF_PAD > PAGE_SIZE / 2 || mana_xdp_get(apc))
-		return true;
-
-	return false;
+	return mana_single_rxbuf_per_page_forced(apc, mtu);
 }
 
-/* Get RX buffer's data size, alloc size, XDP headroom based on MTU */
+/* Get RX buffer's data size, alloc size, headroom and frag count based on MTU */
 static void mana_get_rxbuf_cfg(struct mana_port_context *apc,
 			       int mtu, u32 *datasize, u32 *alloc_size,
 			       u32 *headroom, u32 *frag_count)
 {
-	u32 len, buf_size;
+	u32 buf_size;
 
 	/* Calculate datasize first (consistent across all cases) */
 	*datasize = mtu + ETH_HLEN;
 
+	*headroom = mana_get_rxbuf_headroom(apc);
+
 	if (mana_use_single_rxbuf_per_page(apc, mtu)) {
-		if (mana_xdp_get(apc)) {
-			*headroom = XDP_PACKET_HEADROOM;
+		if (mana_xdp_get(apc))
 			*alloc_size = PAGE_SIZE;
-		} else {
-			*headroom = 0; /* no support for XDP */
+		else
 			*alloc_size = SKB_DATA_ALIGN(mtu + MANA_RXBUF_PAD +
 						     *headroom);
-		}
 
 		*frag_count = 1;
 
@@ -809,11 +842,7 @@ static void mana_get_rxbuf_cfg(struct mana_port_context *apc,
 	}
 
 	/* Standard MTU case - optimize for multiple packets per page */
-	*headroom = 0;
-
-	/* Calculate base buffer size needed */
-	len = SKB_DATA_ALIGN(mtu + MANA_RXBUF_PAD + *headroom);
-	buf_size = ALIGN(len, MANA_RX_FRAG_ALIGNMENT);
+	buf_size = mana_get_rxbuf_size(apc, mtu);
 
 	/* Calculate how many packets can fit in a page */
 	*frag_count = PAGE_SIZE / buf_size;
@@ -3725,10 +3754,9 @@ static int mana_dealloc_queues(struct net_device *ndev)
 				tsleep <<= 1;
 			}
 			if (atomic_read(&txq->pending_sends)) {
-				err =
-				    pcie_flr(to_pci_dev(gd->gdma_context->dev));
+				err = mana_gd_dev_reset(gd->gdma_context);
 				if (err) {
-					netdev_err(ndev, "flr failed %d with %d pkts pending in txq %u\n",
+					netdev_err(ndev, "device reset failed %d with %d pkts pending in txq %u\n",
 						   err,
 					    atomic_read(&txq->pending_sends),
 					    txq->gdma_txq_id);
@@ -3958,7 +3986,9 @@ static int add_adev(struct gdma_dev *gd, const char *name)
 
 	/* madev is owned by the auxiliary device */
 	madev = NULL;
-	ret = auxiliary_device_add(adev);
+	/* Keep match names independent of the common module's name. */
+	ret = __auxiliary_device_add(adev,
+				     gd->gdma_context->bus_ops->adev_prefix);
 	if (ret)
 		goto add_fail;
 
@@ -4030,6 +4060,9 @@ int mana_rdma_service_event(struct gdma_context *gc, enum gdma_service_type even
 		/* RDMA device is not detected on pci */
 		return 0;
 	}
+
+	if (!gc->service_wq)
+		return -EOPNOTSUPP;
 
 	serv_work = kzalloc_obj(*serv_work, GFP_ATOMIC);
 	if (!serv_work)
@@ -4192,6 +4225,7 @@ out:
 
 	return err;
 }
+EXPORT_SYMBOL_NS(mana_probe, "NET_MANA");
 
 void mana_remove(struct gdma_dev *gd, bool suspending)
 {
@@ -4270,6 +4304,7 @@ void mana_remove(struct gdma_dev *gd, bool suspending)
 	kfree(ac);
 	dev_dbg(dev, "%s succeeded\n", __func__);
 }
+EXPORT_SYMBOL_NS(mana_remove, "NET_MANA");
 
 int mana_rdma_probe(struct gdma_dev *gd)
 {
@@ -4305,6 +4340,7 @@ int mana_rdma_probe(struct gdma_dev *gd)
 
 	return err;
 }
+EXPORT_SYMBOL_NS(mana_rdma_probe, "NET_MANA");
 
 void mana_rdma_remove(struct gdma_dev *gd)
 {
@@ -4325,6 +4361,7 @@ void mana_rdma_remove(struct gdma_dev *gd)
 
 	mana_gd_deregister_device(gd);
 }
+EXPORT_SYMBOL_NS(mana_rdma_remove, "NET_MANA");
 
 struct net_device *mana_get_primary_netdev(struct mana_context *ac,
 					   u32 port_index,

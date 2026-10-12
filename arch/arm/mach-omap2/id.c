@@ -55,9 +55,7 @@ int omap_type(void)
 	if (val < OMAP2_DEVICETYPE_MASK)
 		return val;
 
-	if (soc_is_omap24xx()) {
-		val = omap_ctrl_readl(OMAP24XX_CONTROL_STATUS);
-	} else if (soc_is_ti81xx()) {
+	if (soc_is_ti81xx()) {
 		val = omap_ctrl_readl(TI81XX_CONTROL_STATUS);
 	} else if (soc_is_am33xx() || soc_is_am43xx()) {
 		val = omap_ctrl_readl(AM33XX_CONTROL_STATUS);
@@ -99,22 +97,6 @@ EXPORT_SYMBOL(omap_type);
 
 #define read_tap_reg(reg)	readl_relaxed(tap_base  + (reg))
 
-struct omap_id {
-	u16	hawkeye;	/* Silicon type (Hawkeye id) */
-	u8	dev;		/* Device type from production_id reg */
-	u32	type;		/* Combined type id copied to omap_revision */
-};
-
-/* Register values to detect the OMAP version */
-static struct omap_id omap_ids[] __initdata = {
-	{ .hawkeye = 0xb5d9, .dev = 0x0, .type = 0x24200024 },
-	{ .hawkeye = 0xb5d9, .dev = 0x1, .type = 0x24201024 },
-	{ .hawkeye = 0xb5d9, .dev = 0x2, .type = 0x24202024 },
-	{ .hawkeye = 0xb5d9, .dev = 0x4, .type = 0x24220024 },
-	{ .hawkeye = 0xb5d9, .dev = 0x8, .type = 0x24230024 },
-	{ .hawkeye = 0xb68a, .dev = 0x0, .type = 0x24300024 },
-};
-
 static void __iomem *tap_base;
 static u16 tap_prod_id;
 
@@ -144,62 +126,6 @@ static int __init omap_feed_randpool(void)
 	return 0;
 }
 omap_device_initcall(omap_feed_randpool);
-
-void __init omap2xxx_check_revision(void)
-{
-	int i, j;
-	u32 idcode, prod_id;
-	u16 hawkeye;
-	u8  dev_type, rev;
-	struct omap_die_id odi;
-
-	idcode = read_tap_reg(OMAP_TAP_IDCODE);
-	prod_id = read_tap_reg(tap_prod_id);
-	hawkeye = (idcode >> 12) & 0xffff;
-	rev = (idcode >> 28) & 0x0f;
-	dev_type = (prod_id >> 16) & 0x0f;
-	omap_get_die_id(&odi);
-
-	pr_debug("OMAP_TAP_IDCODE 0x%08x REV %i HAWKEYE 0x%04x MANF %03x\n",
-		 idcode, rev, hawkeye, (idcode >> 1) & 0x7ff);
-	pr_debug("OMAP_TAP_DIE_ID_0: 0x%08x\n", odi.id_0);
-	pr_debug("OMAP_TAP_DIE_ID_1: 0x%08x DEV_REV: %i\n",
-		 odi.id_1, (odi.id_1 >> 28) & 0xf);
-	pr_debug("OMAP_TAP_DIE_ID_2: 0x%08x\n", odi.id_2);
-	pr_debug("OMAP_TAP_DIE_ID_3: 0x%08x\n", odi.id_3);
-	pr_debug("OMAP_TAP_PROD_ID_0: 0x%08x DEV_TYPE: %i\n",
-		 prod_id, dev_type);
-
-	/* Check hawkeye ids */
-	for (i = 0; i < ARRAY_SIZE(omap_ids); i++) {
-		if (hawkeye == omap_ids[i].hawkeye)
-			break;
-	}
-
-	if (i == ARRAY_SIZE(omap_ids)) {
-		printk(KERN_ERR "Unknown OMAP CPU id\n");
-		return;
-	}
-
-	for (j = i; j < ARRAY_SIZE(omap_ids); j++) {
-		if (dev_type == omap_ids[j].dev)
-			break;
-	}
-
-	if (j == ARRAY_SIZE(omap_ids)) {
-		pr_err("Unknown OMAP device type. Handling it as OMAP%04x\n",
-		       omap_ids[i].type >> 16);
-		j = i;
-	}
-
-	sprintf(soc_name, "OMAP%04x", omap_rev() >> 16);
-	sprintf(soc_rev, "ES%x", (omap_rev() >> 12) & 0xf);
-
-	pr_info("%s", soc_name);
-	if ((omap_rev() >> 8) & 0x0f)
-		pr_cont("%s", soc_rev);
-	pr_cont("\n");
-}
 
 #define OMAP3_SHOW_FEATURE(feat)		\
 	if (omap3_has_ ##feat())		\
@@ -750,9 +676,7 @@ static const char * const omap_types[] = {
 
 static const char * __init omap_get_family(void)
 {
-	if (soc_is_omap24xx())
-		return kasprintf(GFP_KERNEL, "OMAP2");
-	else if (soc_is_omap34xx())
+	if (soc_is_omap34xx())
 		return kasprintf(GFP_KERNEL, "OMAP3");
 	else if (soc_is_omap44xx())
 		return kasprintf(GFP_KERNEL, "OMAP4");

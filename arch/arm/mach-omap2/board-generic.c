@@ -45,40 +45,6 @@ void tick_broadcast(const struct cpumask *mask)
 }
 #endif
 
-#ifdef CONFIG_SOC_OMAP2420
-static const char *const omap242x_boards_compat[] __initconst = {
-	"ti,omap2420",
-	NULL,
-};
-
-DT_MACHINE_START(OMAP242X_DT, "Generic OMAP2420 (Flattened Device Tree)")
-	.reserve	= omap_reserve,
-	.map_io		= omap242x_map_io,
-	.init_early	= omap2420_init_early,
-	.init_machine	= omap_generic_init,
-	.init_time	= omap_init_time_of,
-	.dt_compat	= omap242x_boards_compat,
-	.restart	= omap2xxx_restart,
-MACHINE_END
-#endif
-
-#ifdef CONFIG_SOC_OMAP2430
-static const char *const omap243x_boards_compat[] __initconst = {
-	"ti,omap2430",
-	NULL,
-};
-
-DT_MACHINE_START(OMAP243X_DT, "Generic OMAP2430 (Flattened Device Tree)")
-	.reserve	= omap_reserve,
-	.map_io		= omap243x_map_io,
-	.init_early	= omap2430_init_early,
-	.init_machine	= omap_generic_init,
-	.init_time	= omap_init_time_of,
-	.dt_compat	= omap243x_boards_compat,
-	.restart	= omap2xxx_restart,
-MACHINE_END
-#endif
-
 #ifdef CONFIG_ARCH_OMAP3
 /* Some boards need board name for legacy userspace in /proc/cpuinfo */
 static const char *const n900_boards_compat[] __initconst = {

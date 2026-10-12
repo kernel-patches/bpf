@@ -488,7 +488,7 @@ nouveau_abi16_ioctl_channel_alloc(ABI16_IOCTL_ARGS)
 			goto done;
 		break;
 	case NV_DEVICE_INFO_V0_TURING:
-		if (engine != NV_DEVICE_HOST_RUNLIST_ENGINES_NVDEC) {
+		if (engine == NV_DEVICE_HOST_RUNLIST_ENGINES_GR) {
 			ret = nvif_object_ctor(&chan->chan->user, "abi16CeWar",
 					       0, TURING_DMA_COPY_A, NULL, 0,
 					       &chan->ce);
@@ -664,6 +664,10 @@ nouveau_abi16_ioctl_notifierobj_alloc(ABI16_IOCTL_ARGS)
 
 	/* completely unnecessary for these chipsets... */
 	if (unlikely(device->info.family >= NV_DEVICE_INFO_V0_FERMI))
+		return nouveau_abi16_put(abi16, -EINVAL);
+
+	/* zero size yields a zero-length node, underflowing args.limit */
+	if (unlikely(!info->size))
 		return nouveau_abi16_put(abi16, -EINVAL);
 
 	chan = nouveau_abi16_chan(abi16, info->channel);

@@ -322,6 +322,8 @@ enum {
 	IO_RING_F_DRAIN_DISABLED	= BIT(10),
 	IO_RING_F_COMPAT		= BIT(11),
 	IO_RING_F_IOWQ_LIMITS_SET	= BIT(12),
+	/* restrictions were inherited from the task that created the ring */
+	IO_RING_F_RESTRICT_INHERITED	= BIT(13),
 };
 
 struct iou_ctx {};
@@ -522,6 +524,8 @@ struct io_ring_ctx {
 
 	/* protected by ->completion_lock */
 	unsigned			nr_req_allocated;
+	/* pending SEND_ZC notifications, protected by ->uring_lock */
+	unsigned			nr_notifs;
 
 #ifdef CONFIG_NET_RX_BUSY_POLL
 	struct list_head	napi_list;	/* track busy poll napi_id */

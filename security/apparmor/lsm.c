@@ -397,7 +397,7 @@ static int apparmor_path_rename(const struct path *old_dir, struct dentry *old_d
 
 	label = begin_current_label_crit_section(&needput);
 	if (!unconfined(label)) {
-		struct mnt_idmap *idmap = mnt_idmap(old_dir->mnt);
+		const struct mnt_idmap *idmap = mnt_idmap(old_dir->mnt);
 		vfsuid_t vfsuid;
 		struct path old_path = { .mnt = old_dir->mnt,
 					 .dentry = old_dentry };
@@ -485,7 +485,7 @@ static int apparmor_file_open(struct file *file)
 
 	label = aa_get_newest_cred_label_condref(file->f_cred, &needput);
 	if (!unconfined(label)) {
-		struct mnt_idmap *idmap = file_mnt_idmap(file);
+		const struct mnt_idmap *idmap = file_mnt_idmap(file);
 		struct inode *inode = file_inode(file);
 		vfsuid_t vfsuid;
 		struct path_cond cond = {
@@ -525,7 +525,7 @@ static void apparmor_file_free_security(struct file *file)
 		aa_put_label(rcu_access_pointer(ctx->label));
 }
 
-static int common_file_perm(const char *op, struct file *file, u32 mask)
+static int common_file_perm(const char *op, const struct file *file, u32 mask)
 {
 	struct aa_label *label;
 	bool needput;
@@ -543,7 +543,7 @@ static int apparmor_file_receive(struct file *file)
 	return common_file_perm(OP_FRECEIVE, file, aa_map_file_to_perms(file));
 }
 
-static int apparmor_file_permission(struct file *file, int mask)
+static int apparmor_file_permission(const struct file *file, int mask)
 {
 	return common_file_perm(OP_FPERM, file, mask);
 }

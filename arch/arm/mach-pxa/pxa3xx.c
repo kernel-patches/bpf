@@ -10,20 +10,17 @@
  *             initial version
  */
 #include <linux/dmaengine.h>
-#include <linux/dma/pxa-dma.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
-#include <linux/gpio-pxa.h>
 #include <linux/pm.h>
 #include <linux/platform_device.h>
+#include <linux/interrupt.h>
 #include <linux/irq.h>
 #include <linux/irqchip.h>
 #include <linux/io.h>
 #include <linux/of.h>
 #include <linux/syscore_ops.h>
-#include <linux/platform_data/i2c-pxa.h>
-#include <linux/platform_data/mmp_dma.h>
 #include <linux/soc/pxa/cpu.h>
 #include <linux/clk/pxa.h>
 
@@ -31,14 +28,12 @@
 #include <asm/suspend.h>
 #include "pxa3xx-regs.h"
 #include "reset.h"
-#include <linux/platform_data/usb-ohci-pxa27x.h>
 #include "pm.h"
 #include "addr-map.h"
 #include "smemc.h"
 #include "irqs.h"
 
 #include "generic.h"
-#include "devices.h"
 
 #define PECR_IE(n)	((1 << ((n) * 2)) << 28)
 #define PECR_IS(n)	((1 << ((n) * 2)) << 29)

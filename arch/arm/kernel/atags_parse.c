@@ -69,24 +69,6 @@ static int __init parse_tag_mem32(const struct tag *tag)
 
 __tagtable(ATAG_MEM, parse_tag_mem32);
 
-#if defined(CONFIG_ARCH_FOOTBRIDGE) && defined(CONFIG_VGA_CONSOLE)
-static int __init parse_tag_videotext(const struct tag *tag)
-{
-	vgacon_screen_info.orig_x            = tag->u.videotext.x;
-	vgacon_screen_info.orig_y            = tag->u.videotext.y;
-	vgacon_screen_info.orig_video_page   = tag->u.videotext.video_page;
-	vgacon_screen_info.orig_video_mode   = tag->u.videotext.video_mode;
-	vgacon_screen_info.orig_video_cols   = tag->u.videotext.video_cols;
-	vgacon_screen_info.orig_video_ega_bx = tag->u.videotext.video_ega_bx;
-	vgacon_screen_info.orig_video_lines  = tag->u.videotext.video_lines;
-	vgacon_screen_info.orig_video_isVGA  = tag->u.videotext.video_isvga;
-	vgacon_screen_info.orig_video_points = tag->u.videotext.video_points;
-	return 0;
-}
-
-__tagtable(ATAG_VIDEOTEXT, parse_tag_videotext);
-#endif
-
 #ifdef CONFIG_BLK_DEV_RAM
 static int __init parse_tag_ramdisk(const struct tag *tag)
 {

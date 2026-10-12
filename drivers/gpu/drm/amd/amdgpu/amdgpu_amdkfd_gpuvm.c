@@ -22,7 +22,6 @@
  */
 #include <linux/dma-buf.h>
 #include <linux/list.h>
-#include <linux/pagemap.h>
 #include <linux/sched/mm.h>
 #include <linux/sched/task.h>
 #include <drm/ttm/ttm_tt.h>
@@ -1954,7 +1953,7 @@ int amdgpu_amdkfd_gpuvm_free_memory_of_gpu(
 		return ret;
 
 	/* Cleanup user pages and MMU notifiers */
-	if (amdgpu_ttm_tt_get_usermm(mem->bo->tbo.ttm)) {
+	if (mem->alloc_flags & KFD_IOC_ALLOC_MEM_FLAGS_USERPTR) {
 		amdgpu_hmm_unregister(mem->bo);
 		amdgpu_hmm_range_free(mem->range);
 		mem->range = NULL;

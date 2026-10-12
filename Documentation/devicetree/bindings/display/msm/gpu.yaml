@@ -414,7 +414,10 @@ allOf:
           contains:
             enum:
               - qcom,adreno-44010000
+              - qcom,adreno-44050001
               - qcom,adreno-44050a01
+              - qcom,adreno-44041400
+              - qcom,adreno-44051401
               - qcom,adreno-44070001
     then:
       properties:
@@ -451,7 +454,11 @@ allOf:
               - qcom,adreno-43050c01
               - qcom,adreno-43051401
               - qcom,adreno-44010000
+              - qcom,adreno-44050001
               - qcom,adreno-44050a01
+              - qcom,adreno-44041400
+              - qcom,adreno-44051401
+              - qcom,adreno-44060000
               - qcom,adreno-44070001
 
     then: # Starting with A6xx, the clocks are usually defined in the GMU node

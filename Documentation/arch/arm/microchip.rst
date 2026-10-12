@@ -157,45 +157,6 @@ the Microchip website: http://www.microchip.com.
 
           Coming soon
 
-    * ARM Cortex-M7 MCUs
-      - sams70 family
-
-        - sams70j19
-        - sams70j20
-        - sams70j21
-        - sams70n19
-        - sams70n20
-        - sams70n21
-        - sams70q19
-        - sams70q20
-        - sams70q21
-
-      - samv70 family
-
-        - samv70j19
-        - samv70j20
-        - samv70n19
-        - samv70n20
-        - samv70q19
-        - samv70q20
-
-      - samv71 family
-
-        - samv71j19
-        - samv71j20
-        - samv71j21
-        - samv71n19
-        - samv71n20
-        - samv71n21
-        - samv71q19
-        - samv71q20
-        - samv71q21
-
-          * Datasheet
-
-          http://ww1.microchip.com/downloads/en/DeviceDoc/SAM-E70-S70-V70-V71-Family-Data-Sheet-DS60001527D.pdf
-
-
 Linux kernel information
 ------------------------
 Linux kernel mach directory: arch/arm/mach-at91

@@ -1275,9 +1275,6 @@ int ath11k_core_suspend_late(struct ath11k_base *ab)
 	if (ab->actual_pm_policy == ATH11K_PM_WOW)
 		return 0;
 
-	ath11k_hif_irq_disable(ab);
-	ath11k_hif_ce_irq_disable(ab);
-
 	ath11k_hif_power_down(ab, true);
 
 	return 0;
@@ -2333,6 +2330,8 @@ static int ath11k_core_reconfigure_on_crash(struct ath11k_base *ab)
 	int ret;
 
 	mutex_lock(&ab->core_lock);
+	ath11k_hif_irq_disable(ab);
+	ath11k_hif_ce_irq_disable(ab);
 	ath11k_thermal_unregister(ab);
 	ath11k_dp_pdev_free(ab);
 	ath11k_cfr_deinit(ab);
@@ -2594,9 +2593,6 @@ static void ath11k_core_reset(struct work_struct *work)
 
 	time_left = wait_for_completion_timeout(&ab->recovery_start,
 						ATH11K_RECOVER_START_TIMEOUT_HZ);
-
-	ath11k_hif_irq_disable(ab);
-	ath11k_hif_ce_irq_disable(ab);
 
 	ath11k_hif_power_down(ab, false);
 	ath11k_hif_power_up(ab);

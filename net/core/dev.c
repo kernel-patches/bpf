@@ -129,7 +129,9 @@
 #include <linux/ip.h>
 #include <net/ip.h>
 #include <net/mpls.h>
+#include <net/route.h>
 #include <linux/ipv6.h>
+#include <net/ip6_route.h>
 #include <linux/in.h>
 #include <linux/jhash.h>
 #include <linux/random.h>
@@ -566,6 +568,42 @@ static inline void netdev_set_xmit_lockdep_class(spinlock_t *lock,
 static inline void netdev_set_addr_lockdep_class(struct net_device *dev)
 {
 }
+#endif
+
+#ifdef CONFIG_PROVE_LOCKING
+static int netdev_lock_cmp_fn(const struct lockdep_map *a,
+			      const struct lockdep_map *b)
+{
+	if (a == b)
+		return 0;
+
+	/* @a and @b are of same lock class.
+	 * cmp_fn won't be called for devices of different classes.
+	 *
+	 * For the same class only allow nesting under the protection
+	 * of rtnl_lock. Note that we can't use lockdep_rtnl_is_held()
+	 * here, it always answers UNKNOWN from within lockdep.
+	 */
+	return rtnl_is_locked() ? -1 : 1;
+}
+
+/* A virtual device can be locked before the physical device it leases
+ * queues from, see netdev_nl_queue_create_doit(). Keep the two kinds
+ * in separate classes so the dependency graph enforces the order;
+ * netdev_lock_cmp_fn() then only has to rule on same-class nesting.
+ * Other virtual devices stay in the default class.
+ */
+void netdev_set_instance_lock_class(struct net_device *dev)
+{
+	static struct lock_class_key netdev_virt_instance_lock_key;
+
+	if (!netdev_can_create_queue(dev, NULL))
+		return;
+
+	lockdep_set_class(&dev->lock, &netdev_virt_instance_lock_key);
+	lock_set_cmp_fn(&dev->lock, netdev_lock_cmp_fn, NULL);
+}
+EXPORT_SYMBOL_GPL(netdev_set_instance_lock_class);
 #endif
 
 /*******************************************************************************
@@ -6959,7 +6997,7 @@ static void skb_defer_free_flush(void)
 	struct skb_defer_node *sdn;
 	int node;
 
-	for_each_node(node) {
+	for_each_online_node(node) {
 		sdn = this_cpu_ptr(net_hotdata.skb_defer_nodes) + node;
 		__skb_defer_free_flush(sdn, 1);
 	}
@@ -10364,13 +10402,15 @@ EXPORT_SYMBOL_GPL(dev_xdp_prog_count);
 
 u8 dev_xdp_sb_prog_count(struct net_device *dev)
 {
+	struct bpf_prog *prog;
 	u8 count = 0;
 	int i;
 
-	for (i = 0; i < __MAX_XDP_MODE; i++)
-		if (dev->xdp_state[i].prog &&
-		    !dev->xdp_state[i].prog->aux->xdp_has_frags)
+	for (i = 0; i < __MAX_XDP_MODE; i++) {
+		prog = dev_xdp_prog(dev, i);
+		if (prog && !prog->aux->xdp_has_frags)
 			count++;
+	}
 	return count;
 }
 
@@ -10750,11 +10790,12 @@ static int bpf_xdp_link_update(struct bpf_link *link, struct bpf_prog *new_prog,
 	bpf_op = dev_xdp_bpf_op(xdp_link->dev, mode);
 	err = dev_xdp_install(xdp_link->dev, mode, bpf_op, NULL,
 			      xdp_link->flags, new_prog);
+	if (!err)
+		old_prog = xchg(&link->prog, new_prog);
 	netdev_unlock_ops(xdp_link->dev);
 	if (err)
 		goto out_unlock;
 
-	old_prog = xchg(&link->prog, new_prog);
 	bpf_prog_put(old_prog);
 
 out_unlock:
@@ -11415,6 +11456,31 @@ static void netdev_free_phy_link_topology(struct net_device *dev)
 	}
 }
 
+static int netdev_check_ops(struct net_device *dev)
+{
+	const struct net_device_ops *ops = dev->netdev_ops;
+
+	if (((dev->hw_features | dev->features) &
+	     NETIF_F_HW_VLAN_CTAG_FILTER) &&
+	    (!ops->ndo_vlan_rx_add_vid || !ops->ndo_vlan_rx_kill_vid)) {
+		netdev_WARN(dev, "Buggy VLAN acceleration in driver!\n");
+		return -EINVAL;
+	}
+
+	if (!ops->ndo_hwtstamp_get != !ops->ndo_hwtstamp_set) {
+		netdev_WARN(dev, "driver implements only one hwtstamp NDO\n");
+		return -EINVAL;
+	}
+
+	if (netdev_need_ops_lock(dev) && ops->ndo_set_rx_mode &&
+	    !ops->ndo_set_rx_mode_async) {
+		netdev_WARN(dev, "ops-locked drivers should use ndo_set_rx_mode_async\n");
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 /**
  * register_netdevice() - register a network device
  * @dev: device to register
@@ -11470,19 +11536,9 @@ int register_netdevice(struct net_device *dev)
 		}
 	}
 
-	if (((dev->hw_features | dev->features) &
-	     NETIF_F_HW_VLAN_CTAG_FILTER) &&
-	    (!dev->netdev_ops->ndo_vlan_rx_add_vid ||
-	     !dev->netdev_ops->ndo_vlan_rx_kill_vid)) {
-		netdev_WARN(dev, "Buggy VLAN acceleration in driver!\n");
-		ret = -EINVAL;
+	ret = netdev_check_ops(dev);
+	if (ret)
 		goto err_uninit;
-	}
-
-	if (netdev_need_ops_lock(dev) &&
-	    dev->netdev_ops->ndo_set_rx_mode &&
-	    !dev->netdev_ops->ndo_set_rx_mode_async)
-		netdev_WARN(dev, "ops-locked drivers should use ndo_set_rx_mode_async\n");
 
 	ret = netdev_do_alloc_pcpu_stats(dev);
 	if (ret)
@@ -11833,6 +11889,11 @@ void netdev_run_todo(void)
 		WRITE_ONCE(dev->reg_state, NETREG_UNREGISTERED);
 		netdev_unlock(dev);
 		linkwatch_sync_dev(dev);
+	}
+
+	if (!list_empty(&list)) {
+		rt_flush_dev(NULL);
+		rt6_uncached_list_flush_dev(NULL);
 	}
 
 	cnt = 0;
@@ -12215,6 +12276,8 @@ struct net_device *alloc_netdev_mqs(int sizeof_priv, const char *name,
 #endif
 
 	mutex_init(&dev->lock);
+	/* see also netdev_set_instance_lock_class() */
+	lock_set_cmp_fn(&dev->lock, netdev_lock_cmp_fn, NULL);
 	netif_rx_mode_init(dev);
 
 	dev->priv_flags = IFF_XMIT_DST_RELEASE | IFF_XMIT_DST_RELEASE_PERM;
@@ -12238,10 +12301,8 @@ struct net_device *alloc_netdev_mqs(int sizeof_priv, const char *name,
 	if (!dev->ethtool)
 		goto free_all;
 
-	dev->cfg = kzalloc_obj(*dev->cfg, GFP_KERNEL_ACCOUNT);
-	if (!dev->cfg)
+	if (netdev_alloc_config(dev))
 		goto free_all;
-	dev->cfg_pending = dev->cfg;
 
 	dev->num_napi_configs = maxqs;
 	napi_config_sz = array_size(maxqs, sizeof(*dev->napi_config));
@@ -12313,8 +12374,7 @@ void free_netdev(struct net_device *dev)
 		return;
 	}
 
-	WARN_ON(dev->cfg != dev->cfg_pending);
-	kfree(dev->cfg);
+	netdev_free_config(dev);
 	kfree(dev->ethtool);
 	netif_free_tx_queues(dev);
 	netif_free_rx_queues(dev);
@@ -12460,19 +12520,31 @@ static void netif_close_many_and_unlock(struct list_head *close_head)
 	}
 }
 
-static void netif_close_many_and_unlock_cond(struct list_head *close_head)
+/* Handle one class of ops-locked devices. Since close requires the lock
+ * we need to be careful about which classes we allow to nest.
+ */
+static void netdev_lock_ops_close_many(struct list_head *head,
+				       struct list_head *close_head,
+				       bool leasing)
 {
-#ifdef CONFIG_LOCKDEP
-	/* We can only track up to MAX_LOCK_DEPTH locks per task.
-	 *
-	 * Reserve half the available slots for additional locks possibly
-	 * taken by notifiers and (soft)irqs.
-	 */
-	unsigned int limit = MAX_LOCK_DEPTH / 2;
+	struct net_device *dev;
 
-	if (lockdep_depth(current) > limit)
-		netif_close_many_and_unlock(close_head);
+	list_for_each_entry(dev, head, unreg_list) {
+		if (!(dev->flags & IFF_UP) || !netdev_need_ops_lock(dev) ||
+		    netdev_can_create_queue(dev, NULL) != leasing)
+			continue;
+		list_add_tail(&dev->close_list, close_head);
+		netdev_lock(dev);
+
+#ifdef CONFIG_LOCKDEP
+		/* We can only track up to MAX_LOCK_DEPTH locks per task.
+		 * Reserve half the available slots for additional locks
+		 * possibly taken by notifiers and (soft)irqs.
+		 */
+		if (lockdep_depth(current) > MAX_LOCK_DEPTH / 2)
+			netif_close_many_and_unlock(close_head);
 #endif
+	}
 }
 
 bool unregister_netdevice_queued(const struct net_device *dev)
@@ -12512,15 +12584,8 @@ void unregister_netdevice_many_notify(struct list_head *head,
 	}
 
 	/* If device is running, close it first. Start with ops locked... */
-	list_for_each_entry(dev, head, unreg_list) {
-		if (!(dev->flags & IFF_UP))
-			continue;
-		if (netdev_need_ops_lock(dev)) {
-			list_add_tail(&dev->close_list, &close_head);
-			netdev_lock(dev);
-		}
-		netif_close_many_and_unlock_cond(&close_head);
-	}
+	netdev_lock_ops_close_many(head, &close_head, true); /* queue leasing */
+	netdev_lock_ops_close_many(head, &close_head, false); /* the rest */
 	netif_close_many_and_unlock(&close_head);
 	/* ... now go over the rest. */
 	list_for_each_entry(dev, head, unreg_list) {

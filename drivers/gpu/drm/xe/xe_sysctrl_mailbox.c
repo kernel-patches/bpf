@@ -11,6 +11,7 @@
 
 #include "regs/xe_sysctrl_regs.h"
 #include "xe_device.h"
+#include "xe_log.h"
 #include "xe_mmio.h"
 #include "xe_pm.h"
 #include "xe_printk.h"
@@ -19,45 +20,37 @@
 #include "xe_sysctrl_mailbox_types.h"
 
 struct xe_sysctrl_mailbox_msg_hdr {
-	__le32 data;
-} __packed;
+	u32 data;
+};
 
 #define XE_SYSCTRL_HDR_GROUP_ID(hdr) \
-	FIELD_GET(SYSCTRL_HDR_GROUP_ID_MASK, le32_to_cpu((hdr)->data))
+	REG_FIELD_GET(SYSCTRL_HDR_GROUP_ID_MASK, (hdr)->data)
 
 #define XE_SYSCTRL_HDR_COMMAND(hdr) \
-	FIELD_GET(SYSCTRL_HDR_COMMAND_MASK, le32_to_cpu((hdr)->data))
+	REG_FIELD_GET(SYSCTRL_HDR_COMMAND_MASK, (hdr)->data)
 
 #define XE_SYSCTRL_HDR_IS_RESPONSE(hdr) \
-	FIELD_GET(SYSCTRL_HDR_IS_RESPONSE, le32_to_cpu((hdr)->data))
+	REG_FIELD_GET(SYSCTRL_HDR_IS_RESPONSE, (hdr)->data)
 
 #define XE_SYSCTRL_HDR_RESULT(hdr) \
-	FIELD_GET(SYSCTRL_HDR_RESULT_MASK, le32_to_cpu((hdr)->data))
+	REG_FIELD_GET(SYSCTRL_HDR_RESULT_MASK, (hdr)->data)
 
-static bool sysctrl_wait_bit_clear(struct xe_sysctrl *sc, u32 bit_mask,
-				   unsigned int timeout_ms)
+static int sysctrl_wait_bit_clear(struct xe_sysctrl *sc, u32 bit_mask,
+				  unsigned int timeout_ms)
 {
-	int ret;
-
-	ret = xe_mmio_wait32_not(sc->mmio, SYSCTRL_MB_CTRL, bit_mask, bit_mask,
-				 timeout_ms * 1000, NULL, false);
-
-	return ret == 0;
+	return xe_mmio_wait32_not(sc->mmio, SYSCTRL_MB_CTRL, bit_mask, bit_mask,
+				  timeout_ms * 1000, NULL, false);
 }
 
-static bool sysctrl_wait_bit_set(struct xe_sysctrl *sc, u32 bit_mask,
-				 unsigned int timeout_ms)
+static int sysctrl_wait_bit_set(struct xe_sysctrl *sc, u32 bit_mask,
+				unsigned int timeout_ms)
 {
-	int ret;
-
-	ret = xe_mmio_wait32(sc->mmio, SYSCTRL_MB_CTRL, bit_mask, bit_mask,
-			     timeout_ms * 1000, NULL, false);
-
-	return ret == 0;
+	return xe_mmio_wait32(sc->mmio, SYSCTRL_MB_CTRL, bit_mask, bit_mask,
+			      timeout_ms * 1000, NULL, false);
 }
 
-static int sysctrl_write_frame(struct xe_sysctrl *sc, const void *frame,
-			       size_t len)
+static void sysctrl_write_frame(struct xe_sysctrl *sc, const void *frame,
+				size_t len)
 {
 	static const struct xe_reg regs[] = {
 		SYSCTRL_MB_DATA0, SYSCTRL_MB_DATA1, SYSCTRL_MB_DATA2, SYSCTRL_MB_DATA3
@@ -73,12 +66,10 @@ static int sysctrl_write_frame(struct xe_sysctrl *sc, const void *frame,
 
 	for (i = 0; i < dw; i++)
 		xe_mmio_write32(sc->mmio, regs[i], val[i]);
-
-	return 0;
 }
 
-static int sysctrl_read_frame(struct xe_sysctrl *sc, void *frame,
-			      size_t len)
+static void sysctrl_read_frame(struct xe_sysctrl *sc, void *frame,
+			       size_t len)
 {
 	static const struct xe_reg regs[] = {
 		SYSCTRL_MB_DATA0, SYSCTRL_MB_DATA1, SYSCTRL_MB_DATA2, SYSCTRL_MB_DATA3
@@ -94,8 +85,6 @@ static int sysctrl_read_frame(struct xe_sysctrl *sc, void *frame,
 		val[i] = xe_mmio_read32(sc->mmio, regs[i]);
 
 	memcpy(frame, val, len);
-
-	return 0;
 }
 
 static void sysctrl_clear_response(struct xe_sysctrl *sc)
@@ -114,10 +103,7 @@ static int sysctrl_prepare_command(struct xe_device *xe,
 
 	xe_assert(xe, command <= SYSCTRL_HDR_COMMAND_MAX);
 
-	if (data_in_len > XE_SYSCTRL_MB_MAX_MESSAGE_SIZE - sizeof(*hdr)) {
-		xe_err(xe, "sysctrl: Input data too large: %zu bytes\n", data_in_len);
-		return -EINVAL;
-	}
+	xe_assert(xe, data_in_len <= XE_SYSCTRL_MB_MAX_MESSAGE_SIZE - sizeof(*hdr));
 
 	size = sizeof(*hdr) + data_in_len;
 
@@ -126,8 +112,8 @@ static int sysctrl_prepare_command(struct xe_device *xe,
 		return -ENOMEM;
 
 	hdr = (struct xe_sysctrl_mailbox_msg_hdr *)buffer;
-	hdr->data = cpu_to_le32(FIELD_PREP(SYSCTRL_HDR_GROUP_ID_MASK, group_id) |
-				     FIELD_PREP(SYSCTRL_HDR_COMMAND_MASK, command));
+	hdr->data = REG_FIELD_PREP(SYSCTRL_HDR_GROUP_ID_MASK, group_id) |
+		    REG_FIELD_PREP(SYSCTRL_HDR_COMMAND_MASK, command);
 
 	if (data_in && data_in_len)
 		memcpy(buffer + sizeof(*hdr), data_in, data_in_len);
@@ -146,12 +132,14 @@ static int sysctrl_send_frames(struct xe_sysctrl *sc,
 	u32 ctrl_reg, total_frames, frame;
 	size_t bytes_sent, frame_size;
 	bool phase;
+	int ret;
 
 	total_frames = DIV_ROUND_UP(cmd_size, XE_SYSCTRL_MB_FRAME_SIZE);
 
-	if (!sysctrl_wait_bit_clear(sc, SYSCTRL_MB_CTRL_RUN_BUSY, timeout_ms)) {
-		xe_err(xe, "sysctrl: Mailbox busy\n");
-		return -EBUSY;
+	ret = sysctrl_wait_bit_clear(sc, SYSCTRL_MB_CTRL_RUN_BUSY, timeout_ms);
+	if (ret) {
+		xe_log_err(xe, SYSCTRL, ret, "Mailbox busy\n");
+		return ret;
 	}
 
 	ctrl_reg = xe_mmio_read32(sc->mmio, SYSCTRL_MB_CTRL);
@@ -161,10 +149,7 @@ static int sysctrl_send_frames(struct xe_sysctrl *sc,
 	for (frame = 0; frame < total_frames; frame++) {
 		frame_size = min_t(size_t, cmd_size - bytes_sent, XE_SYSCTRL_MB_FRAME_SIZE);
 
-		if (sysctrl_write_frame(sc, mbox_cmd + bytes_sent, frame_size)) {
-			xe_err(xe, "sysctrl: Failed to write frame %u\n", frame);
-			return -EIO;
-		}
+		sysctrl_write_frame(sc, mbox_cmd + bytes_sent, frame_size);
 
 		ctrl_reg = SYSCTRL_MB_CTRL_RUN_BUSY |
 			   REG_FIELD_PREP(SYSCTRL_FRAME_CURRENT_MASK, frame) |
@@ -174,9 +159,10 @@ static int sysctrl_send_frames(struct xe_sysctrl *sc,
 
 		xe_mmio_write32(sc->mmio, SYSCTRL_MB_CTRL, ctrl_reg);
 
-		if (!sysctrl_wait_bit_clear(sc, SYSCTRL_MB_CTRL_RUN_BUSY, timeout_ms)) {
-			xe_err(xe, "sysctrl: Frame %u acknowledgment timeout\n", frame);
-			return -ETIMEDOUT;
+		ret = sysctrl_wait_bit_clear(sc, SYSCTRL_MB_CTRL_RUN_BUSY, timeout_ms);
+		if (ret) {
+			xe_log_err(xe, SYSCTRL, ret, "Frame %u acknowledgment timeout\n", frame);
+			return ret;
 		}
 
 		bytes_sent += frame_size;
@@ -193,19 +179,17 @@ static int sysctrl_process_frame(struct xe_sysctrl *sc, void *out,
 	struct xe_device *xe = sc_to_xe(sc);
 	int ret;
 
-	if (!sysctrl_wait_bit_set(sc, SYSCTRL_MB_CTRL_RUN_BUSY_OUT, timeout_ms)) {
-		xe_err(xe, "sysctrl: Response frame timeout\n");
-		return -ETIMEDOUT;
+	ret = sysctrl_wait_bit_set(sc, SYSCTRL_MB_CTRL_RUN_BUSY_OUT, timeout_ms);
+	if (ret) {
+		xe_log_err(xe, SYSCTRL, ret, "Response frame timeout\n");
+		return ret;
 	}
 
 	ctrl_reg = xe_mmio_read32(sc->mmio, SYSCTRL_MB_CTRL);
-	total_frames = FIELD_GET(SYSCTRL_FRAME_TOTAL_MASK, ctrl_reg);
-	curr_frame = FIELD_GET(SYSCTRL_FRAME_CURRENT_MASK, ctrl_reg);
+	total_frames = REG_FIELD_GET(SYSCTRL_FRAME_TOTAL_MASK, ctrl_reg);
+	curr_frame = REG_FIELD_GET(SYSCTRL_FRAME_CURRENT_MASK, ctrl_reg);
 
-	ret = sysctrl_read_frame(sc, out, frame_size);
-	if (ret)
-		return ret;
-
+	sysctrl_read_frame(sc, out, frame_size);
 	sysctrl_clear_response(sc);
 
 	if (curr_frame == total_frames)
@@ -249,13 +233,15 @@ static int sysctrl_receive_frames(struct xe_sysctrl *sc,
 	if (!XE_SYSCTRL_HDR_IS_RESPONSE(hdr) ||
 	    XE_SYSCTRL_HDR_GROUP_ID(hdr) != XE_SYSCTRL_HDR_GROUP_ID(req) ||
 	    XE_SYSCTRL_HDR_COMMAND(hdr) != XE_SYSCTRL_HDR_COMMAND(req)) {
-		xe_err(xe, "sysctrl: Response header mismatch\n");
+		xe_log_err(xe, SYSCTRL, -EPROTO,
+			   "Response header mismatch: %#x != %#x\n",
+			   hdr->data, req->data);
 		return -EPROTO;
 	}
 
 	if (XE_SYSCTRL_HDR_RESULT(hdr) != 0) {
-		xe_err(xe, "sysctrl: Firmware error: 0x%02lx\n",
-		       XE_SYSCTRL_HDR_RESULT(hdr));
+		xe_log_err(xe, SYSCTRL, -EIO, "Firmware error: %#04x\n",
+			   XE_SYSCTRL_HDR_RESULT(hdr));
 		return -EIO;
 	}
 
@@ -311,8 +297,8 @@ void xe_sysctrl_create_command(struct xe_sysctrl_mailbox_command *command, u8 gr
 {
 	struct xe_sysctrl_app_msg_hdr header = {0};
 
-	header.data = FIELD_PREP(APP_HDR_GROUP_ID_MASK, group_id) |
-		      FIELD_PREP(APP_HDR_COMMAND_MASK, cmd_id);
+	header.data = REG_FIELD_PREP(APP_HDR_GROUP_ID_MASK, group_id) |
+		      REG_FIELD_PREP(APP_HDR_COMMAND_MASK, cmd_id);
 
 	command->header = header;
 	command->data_in = request;
@@ -334,6 +320,9 @@ void xe_sysctrl_create_command(struct xe_sysctrl_mailbox_command *command, u8 gr
  * If a response is expected, @cmd->data_out must point to a buffer of
  * size @cmd->data_out_len supplied by caller.
  *
+ * @cmd->timeout_ms specifies the response timeout in milliseconds.
+ * A value of 0 uses %XE_SYSCTRL_MB_DEFAULT_TIMEOUT_MS.
+ *
  * On success, @rdata_len is updated with number of valid response bytes
  * returned by firmware, bounded by @cmd->data_out_len.
  *
@@ -347,6 +336,7 @@ int xe_sysctrl_send_command(struct xe_sysctrl *sc,
 	u8 group_id, command_code;
 	u8 *mbox_cmd = NULL;
 	size_t cmd_size = 0;
+	unsigned int timeout_ms;
 	int ret;
 
 	guard(xe_pm_runtime_noresume)(xe);
@@ -360,6 +350,7 @@ int xe_sysctrl_send_command(struct xe_sysctrl *sc,
 
 	group_id = XE_SYSCTRL_APP_HDR_GROUP_ID(&cmd->header);
 	command_code = XE_SYSCTRL_APP_HDR_COMMAND(&cmd->header);
+	timeout_ms = cmd->timeout_ms ?: XE_SYSCTRL_MB_DEFAULT_TIMEOUT_MS;
 
 	might_sleep();
 
@@ -367,7 +358,8 @@ int xe_sysctrl_send_command(struct xe_sysctrl *sc,
 				      cmd->data_in, cmd->data_in_len,
 				      &mbox_cmd, &cmd_size);
 	if (ret) {
-		xe_err(xe, "sysctrl: Failed to prepare command: %pe\n", ERR_PTR(ret));
+		xe_log_err(xe, SYSCTRL, ret, "Failed to prepare command %#x.%#x\n",
+			   group_id, command_code);
 		return ret;
 	}
 
@@ -375,9 +367,10 @@ int xe_sysctrl_send_command(struct xe_sysctrl *sc,
 
 	ret = sysctrl_send_command(sc, mbox_cmd, cmd_size,
 				   cmd->data_out, cmd->data_out_len, rdata_len,
-				   XE_SYSCTRL_MB_DEFAULT_TIMEOUT_MS);
+				   timeout_ms);
 	if (ret)
-		xe_err(xe, "sysctrl: Mailbox command failed: %pe\n", ERR_PTR(ret));
+		xe_log_err(xe, SYSCTRL, ret, "Mailbox command failed to send %#x.%#x\n",
+			   group_id, command_code);
 
 	kfree(mbox_cmd);
 

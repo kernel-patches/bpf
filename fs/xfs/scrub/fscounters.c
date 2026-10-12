@@ -368,8 +368,10 @@ retry:
 	/* Bail out if the values we compute are totally nonsense. */
 	if (fsc->icount < fsc->icount_min || fsc->icount > fsc->icount_max ||
 	    fsc->fdblocks > mp->m_sb.sb_dblocks ||
-	    fsc->ifree > fsc->icount_max)
+	    fsc->ifree > fsc->icount_max) {
+		xchk_set_incomplete(sc);
 		return -EFSCORRUPTED;
+	}
 
 	/*
 	 * If ifree > icount then we probably had some perturbation in the
@@ -541,7 +543,10 @@ xchk_fscounters(
 			return -EDEADLOCK;
 
 		xchk_set_corrupt(sc);
-		return 0;
+
+		/* Need to compute all the fields in fsc for a repair */
+		if (!xchk_could_repair(sc))
+			return 0;
 	}
 
 	/* See if icount is obviously wrong. */
@@ -600,6 +605,13 @@ xchk_fscounters(
 			&mp->m_free[XC_FREE_BLOCKS].count, fsc->fdblocks)) {
 		if (fsc->frozen)
 			xchk_set_corrupt(sc);
+		else
+			try_again = true;
+	}
+
+	if (!xfs_has_zoned(mp) && fsc->frextents < fsc->frextents_delayed) {
+		if (fsc->frozen)
+			xchk_set_incomplete(sc);
 		else
 			try_again = true;
 	}

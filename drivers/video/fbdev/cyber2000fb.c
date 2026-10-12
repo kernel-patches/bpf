@@ -1723,16 +1723,6 @@ static int cyberpro_pci_probe(struct pci_dev *dev,
 	cfb->mclk_mult = cyber2000_grphr(EXT_MCLK_MULT, cfb);
 	cfb->mclk_div  = cyber2000_grphr(EXT_MCLK_DIV, cfb);
 
-#ifdef __arm__
-	/*
-	 * MCLK on the NetWinder and the Shark is fixed at 75MHz
-	 */
-	if (machine_is_netwinder()) {
-		cfb->mclk_mult = 0xdb;
-		cfb->mclk_div  = 0x54;
-	}
-#endif
-
 	err = cyberpro_common_probe(cfb);
 	if (err)
 		goto failed;

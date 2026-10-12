@@ -2157,6 +2157,7 @@ static struct xfrm_policy *xfrm_policy_lookup_bytype(struct net *net, u8 type,
 	struct xfrm_pol_inexact_bin *bin;
 	struct xfrm_policy *pol, *ret;
 	struct hlist_head *chain;
+	unsigned int inexact_sequence;
 	unsigned int sequence;
 	int err;
 
@@ -2191,12 +2192,18 @@ static struct xfrm_policy *xfrm_policy_lookup_bytype(struct net *net, u8 type,
 		goto skip_inexact;
 
 	bin = xfrm_policy_inexact_lookup_rcu(net, type, family, dir, if_id);
-	if (!bin || !xfrm_policy_find_inexact_candidates(&cand, bin, saddr,
-							 daddr))
+	if (!bin)
+		goto skip_inexact;
+
+	inexact_sequence = read_seqcount_begin(&bin->count);
+	if (!xfrm_policy_find_inexact_candidates(&cand, bin, saddr, daddr))
 		goto skip_inexact;
 
 	pol = xfrm_policy_eval_candidates(&cand, ret, fl, type,
 					  family, if_id);
+	if (read_seqcount_retry(&bin->count, inexact_sequence))
+		goto retry;
+
 	if (pol) {
 		ret = pol;
 		if (IS_ERR(pol))
@@ -2772,7 +2779,7 @@ static struct dst_entry *xfrm_bundle_create(struct xfrm_policy *policy,
 	err = -ENODEV;
 	rcu_read_lock();
 	dev = dst_dev_rcu(dst);
-	if (!dev) {
+	if (!dev || !netif_is_alive(dev)) {
 		rcu_read_unlock();
 		goto free_dst;
 	}
@@ -3066,7 +3073,7 @@ static struct xfrm_dst *xfrm_create_dummy_bundle(struct net *net,
 	err = -ENODEV;
 	rcu_read_lock();
 	dev = dst_dev_rcu(dst);
-	if (!dev) {
+	if (!dev || !netif_is_alive(dev)) {
 		rcu_read_unlock();
 		goto free_dst;
 	}

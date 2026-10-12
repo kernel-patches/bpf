@@ -144,6 +144,7 @@ xchk_dir_lock_child(
 STATIC int
 xchk_dir_parent_pointer(
 	struct xchk_dir		*sd,
+	xfs_dablk_t		offset,
 	const struct xfs_name	*name,
 	struct xfs_inode	*ip)
 {
@@ -154,7 +155,10 @@ xchk_dir_parent_pointer(
 	error = xfs_parent_lookup(sc->tp, ip, name, &sd->pptr_rec,
 			&sd->pptr_args);
 	if (error == -ENOATTR)
-		xchk_fblock_xref_set_corrupt(sc, XFS_DATA_FORK, 0);
+		xchk_fblock_xref_set_corrupt(sc, XFS_DATA_FORK, offset);
+	else
+		xchk_fblock_xref_process_error(sc, XFS_DATA_FORK, offset,
+				&error);
 
 	return 0;
 }
@@ -163,7 +167,7 @@ xchk_dir_parent_pointer(
 STATIC int
 xchk_dir_check_pptr_fast(
 	struct xchk_dir		*sd,
-	xfs_dir2_dataptr_t	dapos,
+	xfs_dablk_t		offset,
 	const struct xfs_name	*name,
 	struct xfs_inode	*ip)
 {
@@ -178,7 +182,7 @@ xchk_dir_check_pptr_fast(
 
 	/* No self-referential non-dot or dotdot dirents. */
 	if (ip == sc->ip) {
-		xchk_fblock_set_corrupt(sc, XFS_DATA_FORK, 0);
+		xchk_fblock_set_corrupt(sc, XFS_DATA_FORK, offset);
 		return -ECANCELED;
 	}
 
@@ -195,19 +199,19 @@ xchk_dir_check_pptr_fast(
 
 		error = xfblob_storename(sd->dir_names, &save_de.name_cookie,
 				name);
-		if (!xchk_fblock_xref_process_error(sc, XFS_DATA_FORK, 0,
+		if (!xchk_fblock_xref_process_error(sc, XFS_DATA_FORK, offset,
 					&error))
 			return error;
 
 		error = xfarray_append(sd->dir_entries, &save_de);
-		if (!xchk_fblock_xref_process_error(sc, XFS_DATA_FORK, 0,
+		if (!xchk_fblock_xref_process_error(sc, XFS_DATA_FORK, offset,
 					&error))
 			return error;
 
 		return 0;
 	}
 
-	error = xchk_dir_parent_pointer(sd, name, ip);
+	error = xchk_dir_parent_pointer(sd, offset, name, ip);
 	xfs_iunlock(ip, lockmode);
 	return error;
 }
@@ -298,7 +302,7 @@ xchk_dir_actor(
 	xchk_dir_check_ftype(sc, offset, ip, name->type);
 
 	if (xfs_has_parent(mp)) {
-		error = xchk_dir_check_pptr_fast(sd, dapos, name, ip);
+		error = xchk_dir_check_pptr_fast(sd, offset, name, ip);
 		if (error)
 			goto out_rele;
 	}
@@ -1023,7 +1027,7 @@ xchk_dir_slow_dirent(
 		goto out_unlock;
 
 check_pptr:
-	error = xchk_dir_parent_pointer(sd, xname, ip);
+	error = xchk_dir_parent_pointer(sd, 0, xname, ip);
 out_unlock:
 	xfs_iunlock(ip, lockmode);
 out_rele:

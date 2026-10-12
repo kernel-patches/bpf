@@ -51,7 +51,7 @@ struct s390_operand {
 
 struct s390_insn {
 	union {
-		const char name[5];
+		const char name[5] __nonstring;
 		struct {
 			unsigned char zero;
 			unsigned int offset;
@@ -340,7 +340,7 @@ static const unsigned char formats[][6] = {
 	[INSTR_VSI_URDV]     = { V_32, D_20, B_16, U8_8, 0, 0 },
 };
 
-static char long_insn_name[][7] = LONG_INSN_INITIALIZER;
+static char long_insn_name[][7] __nonstring_array = LONG_INSN_INITIALIZER;
 static struct s390_insn opcode[] = OPCODE_TABLE_INITIALIZER;
 static struct s390_opcode_offset opcode_offset[] = OPCODE_OFFSET_INITIALIZER;
 

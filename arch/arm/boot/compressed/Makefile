@@ -29,16 +29,8 @@ ifeq ($(CONFIG_ARCH_ACORN),y)
 OBJS		+= ll_char_wr.o font.o
 endif
 
-ifeq ($(CONFIG_ARCH_SA1100),y)
-OBJS		+= head-sa1100.o
-endif
-
 ifeq ($(CONFIG_CPU_XSCALE),y)
 OBJS		+= head-xscale.o
-endif
-
-ifeq ($(CONFIG_PXA_SHARPSL_DETECT_MACH_ID),y)
-OBJS		+= head-sharpsl.o
 endif
 
 ifeq ($(CONFIG_CPU_ENDIAN_BE32),y)

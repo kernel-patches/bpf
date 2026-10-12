@@ -317,6 +317,7 @@ static int _hda_dsp_stream_put(struct snd_sof_dev *sdev, int direction, int stre
 		if (s->direction == direction && s->stream_tag == stream_tag) {
 			s->opened = false;
 			found = true;
+			s->curr_pos = 0;
 			if (pair)
 				link_stream = hext_stream;
 		} else if (!(hda_stream->flags & SOF_HDA_STREAM_DMI_L1_COMPATIBLE)) {
@@ -754,13 +755,12 @@ int hda_dsp_stream_hw_params(struct snd_sof_dev *sdev,
 	return ret;
 }
 
-int hda_dsp_stream_hw_free(struct snd_sof_dev *sdev,
-			   struct snd_pcm_substream *substream)
+static int _hda_dsp_stream_hw_free(struct snd_sof_dev *sdev,
+				   struct hdac_stream *hstream)
 {
-	struct hdac_stream *hstream = substream->runtime->private_data;
 	struct hdac_ext_stream *hext_stream = container_of(hstream,
-							 struct hdac_ext_stream,
-							 hstream);
+							   struct hdac_ext_stream,
+							   hstream);
 	int ret;
 
 	ret = hda_dsp_stream_reset(sdev, hstream);
@@ -785,7 +785,20 @@ int hda_dsp_stream_hw_free(struct snd_sof_dev *sdev,
 
 	return 0;
 }
+
+int hda_dsp_stream_hw_free(struct snd_sof_dev *sdev,
+			   struct snd_pcm_substream *substream)
+{
+	return _hda_dsp_stream_hw_free(sdev, substream->runtime->private_data);
+}
 EXPORT_SYMBOL_NS(hda_dsp_stream_hw_free, "SND_SOC_SOF_INTEL_HDA_COMMON");
+
+int hda_dsp_stream_compr_hw_free(struct snd_sof_dev *sdev,
+				 struct snd_compr_stream *cstream)
+{
+	return _hda_dsp_stream_hw_free(sdev, cstream->runtime->private_data);
+}
+EXPORT_SYMBOL_NS(hda_dsp_stream_compr_hw_free, "SND_SOC_SOF_INTEL_HDA_COMMON");
 
 bool hda_dsp_check_stream_irq(struct snd_sof_dev *sdev)
 {
@@ -1161,19 +1174,9 @@ EXPORT_SYMBOL_NS(hda_dsp_stream_get_position, "SND_SOC_SOF_INTEL_HDA_COMMON");
 
 #define merge_u64(u32_u, u32_l) (((u64)(u32_u) << 32) | (u32_l))
 
-/**
- * hda_dsp_get_stream_llp - Retrieve the LLP (Linear Link Position) of the stream
- * @sdev: SOF device
- * @component: ASoC component
- * @substream: PCM substream
- *
- * Returns the raw Linear Link Position value
- */
-u64 hda_dsp_get_stream_llp(struct snd_sof_dev *sdev,
-			   struct snd_soc_component *component,
-			   struct snd_pcm_substream *substream)
+static u64 hda_dsp_get_llp(struct snd_sof_dev *sdev,
+			   struct snd_soc_pcm_runtime *rtd, int dir)
 {
-	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
 	struct snd_soc_pcm_runtime *be_rtd = NULL;
 	struct hdac_ext_stream *hext_stream;
 	struct snd_soc_dai *cpu_dai;
@@ -1184,7 +1187,7 @@ u64 hda_dsp_get_stream_llp(struct snd_sof_dev *sdev,
 	 * The LLP needs to be read from the Link DMA used for this FE as it is
 	 * allowed to use any combination of Link and Host channels
 	 */
-	for_each_dpcm_be(rtd, substream->stream, dpcm) {
+	for_each_dpcm_be(rtd, dir, dpcm) {
 		if (dpcm->fe != rtd)
 			continue;
 
@@ -1198,7 +1201,7 @@ u64 hda_dsp_get_stream_llp(struct snd_sof_dev *sdev,
 	if (!cpu_dai)
 		return 0;
 
-	hext_stream = snd_soc_dai_get_dma_data(cpu_dai, substream);
+	hext_stream = snd_soc_dai_dma_data_get(cpu_dai, dir);
 	if (!hext_stream)
 		return 0;
 
@@ -1222,7 +1225,36 @@ u64 hda_dsp_get_stream_llp(struct snd_sof_dev *sdev,
 
 	return merge_u64(llp_u, llp_l);
 }
+
+/**
+ * hda_dsp_get_stream_llp - Retrieve the LLP (Linear Link Position) of the stream
+ * @sdev: SOF device
+ * @component: ASoC component
+ * @substream: PCM substream
+ *
+ * Returns the raw Linear Link Position value
+ */
+u64 hda_dsp_get_stream_llp(struct snd_sof_dev *sdev,
+			   struct snd_soc_component *component,
+			   struct snd_pcm_substream *substream)
+{
+	return hda_dsp_get_llp(sdev, snd_soc_substream_to_rtd(substream),
+			       substream->stream);
+}
 EXPORT_SYMBOL_NS(hda_dsp_get_stream_llp, "SND_SOC_SOF_INTEL_HDA_COMMON");
+
+/**
+ * hda_dsp_compr_get_stream_llp - Retrieve the LLP (Linear Link Position) of the stream
+ * @sdev: SOF device
+ * @cstream: Compress stream
+ *
+ * Returns the raw Linear Link Position value
+ */
+u64 hda_dsp_compr_get_stream_llp(struct snd_sof_dev *sdev, struct snd_compr_stream *cstream)
+{
+	return hda_dsp_get_llp(sdev, cstream->private_data, cstream->direction);
+}
+EXPORT_SYMBOL_NS(hda_dsp_compr_get_stream_llp, "SND_SOC_SOF_INTEL_HDA_COMMON");
 
 /**
  * hda_dsp_get_stream_ldp - Retrieve the LDP (Linear DMA Position) of the stream

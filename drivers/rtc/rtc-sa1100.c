@@ -275,18 +275,10 @@ static int sa1100_rtc_probe(struct platform_device *pdev)
 	if (IS_ERR(base))
 		return PTR_ERR(base);
 
-	if (IS_ENABLED(CONFIG_ARCH_SA1100) ||
-	    of_device_is_compatible(pdev->dev.of_node, "mrvl,sa1100-rtc")) {
-		info->rcnr = base + 0x04;
-		info->rtsr = base + 0x10;
-		info->rtar = base + 0x00;
-		info->rttr = base + 0x08;
-	} else {
-		info->rcnr = base + 0x0;
-		info->rtsr = base + 0x8;
-		info->rtar = base + 0x4;
-		info->rttr = base + 0xc;
-	}
+	info->rcnr = base + 0x0;
+	info->rtsr = base + 0x8;
+	info->rtar = base + 0x4;
+	info->rttr = base + 0xc;
 
 	platform_set_drvdata(pdev, info);
 	device_init_wakeup(&pdev->dev, true);
@@ -329,7 +321,6 @@ static SIMPLE_DEV_PM_OPS(sa1100_rtc_pm_ops, sa1100_rtc_suspend,
 
 #ifdef CONFIG_OF
 static const struct of_device_id sa1100_rtc_dt_ids[] = {
-	{ .compatible = "mrvl,sa1100-rtc", },
 	{ .compatible = "mrvl,mmp-rtc", },
 	{}
 };

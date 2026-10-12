@@ -579,8 +579,10 @@ xrep_dinode_flags(
 
 		fa = xfs_dinode_verify_metadir(sc->mp, dip, mode, flags,
 				flags2);
-		if (fa)
+		if (fa) {
 			flags2 &= ~XFS_DIFLAG2_METADATA;
+			dip->di_metatype = cpu_to_be16(XFS_METAFILE_UNKNOWN);
+		}
 	}
 
 	dip->di_flags = cpu_to_be16(flags);
@@ -933,7 +935,7 @@ xrep_dinode_bad_bmbt_fork(
 
 		fkp = xfs_bmdr_key_addr(dfp, i);
 		fileoff = be64_to_cpu(fkp->br_startoff);
-		if (!xfs_verify_fileoff(sc->mp, fileoff))
+		if (!xfs_verify_fileoff(fileoff))
 			return true;
 
 		fpp = xfs_bmdr_ptr_addr(dfp, i, dmxr);
@@ -1012,6 +1014,11 @@ xrep_dinode_bad_metabt_fork(
 	if (whichfork != XFS_DATA_FORK)
 		return true;
 
+	if (!xfs_has_metadir(sc->mp))
+		return true;
+	if (!(dip->di_flags2 & cpu_to_be64(XFS_DIFLAG2_METADATA)))
+		return true;
+
 	switch (be16_to_cpu(dip->di_metatype)) {
 	case XFS_METAFILE_RTRMAP:
 		return xrep_dinode_bad_rtrmapbt_fork(sc, dip, dfork_size);
@@ -1022,6 +1029,30 @@ xrep_dinode_bad_metabt_fork(
 	}
 
 	return false;
+}
+
+static xfs_failaddr_t
+xrep_symlink_shortform_verify(
+	void			*sfp,
+	int64_t			size)
+{
+	/*
+	 * Zero length symlinks should never occur in memory as they are
+	 * never allowed to exist on disk.
+	 */
+	if (!size)
+		return __this_address;
+
+	/* No negative sizes or overly long symlink targets. */
+	if (size < 0 || size > XFS_SYMLINK_MAXLEN)
+		return __this_address;
+
+	/* No NULLs in the target either. */
+	if (memchr(sfp, 0, size))
+		return __this_address;
+
+	/* ondisk symlink target isn't null terminated, unlike incore */
+	return NULL;
 }
 
 /*
@@ -1099,7 +1130,7 @@ xrep_dinode_check_dfork(
 			return true;
 		/* symlink structure must pass verification. */
 		if (S_ISLNK(mode) &&
-		    xfs_symlink_shortform_verify(dfork_ptr, data_size) != NULL)
+		    xrep_symlink_shortform_verify(dfork_ptr, data_size) != NULL)
 			return true;
 		break;
 	case XFS_DINODE_FMT_EXTENTS:
@@ -1405,7 +1436,7 @@ xrep_dinode_ensure_forkoff(
 			break;
 		case XFS_METAFILE_RTREFCOUNT:
 			rcdr = XFS_DFORK_PTR(dip, XFS_DATA_FORK);
-			dfork_min = xfs_rtrefcount_broot_space(sc->mp, rcdr);
+			dfork_min = xfs_rtrefcount_broot_space(rcdr);
 			break;
 		default:
 			dfork_min = 0;
@@ -1949,7 +1980,7 @@ xrep_inode_pptr(
 		return 0;
 
 	return xfs_bmap_add_attrfork(sc->tp, ip,
-			sizeof(struct xfs_attr_sf_hdr), true);
+			sizeof(struct xfs_attr_sf_hdr));
 }
 
 /* Fix COW extent size hint problems. */

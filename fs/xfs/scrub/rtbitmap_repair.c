@@ -276,7 +276,7 @@ xrep_rtbitmap_mark_free(
 		xrep_wordoff_t	rem;
 		xrep_wordcnt_t	wordcnt;
 
-		wordcnt = min_t(xrep_wordcnt_t, nextwordoff - wordoff,
+		wordcnt = min_t(xrep_wordoff_t, nextwordoff - wordoff,
 				bufwsize);
 
 		/*
@@ -383,21 +383,8 @@ xrep_rtbitmap_prep_buf(
 	if (error)
 		return error;
 
-	if (xfs_has_rtgroups(sc->mp)) {
-		struct xfs_rtbuf_blkinfo	*hdr = bp->b_addr;
-
-		hdr->rt_magic = cpu_to_be32(XFS_RTBITMAP_MAGIC);
-		hdr->rt_owner = cpu_to_be64(I_INO(sc->ip));
-		hdr->rt_blkno = cpu_to_be64(xfs_buf_daddr(bp));
-		hdr->rt_lsn = 0;
-		uuid_copy(&hdr->rt_uuid, &sc->mp->m_sb.sb_meta_uuid);
-		bp->b_ops = &xfs_rtbitmap_buf_ops;
-	} else {
-		bp->b_ops = &xfs_rtbuf_ops;
-	}
-
+	xfs_rtfile_initialize_buf(sc->sr.rtg, XFS_RTGI_BITMAP, bp, sc->tp);
 	rtb->prep_wordoff += mp->m_blockwsize;
-	xfs_trans_buf_set_type(sc->tp, bp, XFS_BLFT_RTBITMAP_BUF);
 	return 0;
 }
 

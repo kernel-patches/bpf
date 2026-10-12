@@ -1070,25 +1070,75 @@ void cfg80211_sched_dfs_chan_update(struct cfg80211_registered_device *rdev)
 	queue_delayed_work(cfg80211_wq, &rdev->dfs_update_channels_wk, 0);
 }
 
+struct cfg80211_dfs_chan_expiry {
+	struct ieee80211_channel *chan;
+	unsigned long entered;
+	enum nl80211_dfs_state state;
+	enum nl80211_radar_event event;
+};
+
+static bool cfg80211_dfs_chan_expire(struct cfg80211_registered_device *rdev,
+				     struct cfg80211_dfs_chan_expiry *exp,
+				     struct cfg80211_chan_def *chandef)
+{
+	struct ieee80211_channel *c = exp->chan;
+
+	guard(wiphy)(&rdev->wiphy);
+
+	/* the state may have changed while the wiphy wasn't locked */
+	if (c->dfs_state != exp->state || c->dfs_state_entered != exp->entered)
+		return false;
+
+	c->dfs_state = NL80211_DFS_USABLE;
+	c->dfs_state_entered = jiffies;
+
+	cfg80211_chandef_create(chandef, c, NL80211_CHAN_NO_HT);
+
+	nl80211_radar_notify(rdev, chandef, exp->event, NULL, GFP_KERNEL);
+
+	return true;
+}
+
 void cfg80211_dfs_channels_update_work(struct work_struct *work)
 {
 	struct delayed_work *delayed_work = to_delayed_work(work);
+	struct cfg80211_dfs_chan_expiry *expired;
 	struct cfg80211_registered_device *rdev;
 	struct cfg80211_chan_def chandef;
 	struct ieee80211_supported_band *sband;
 	struct ieee80211_channel *c;
 	struct wiphy *wiphy;
-	bool check_again = false;
+	bool check_again = false, pre_cac_allowed;
 	unsigned long timeout, next_time = 0;
 	unsigned long time_dfs_update;
 	enum nl80211_radar_event radar_event;
+	unsigned int n_chans = 0, n_expired = 0;
 	int bandid, i;
 
 	rdev = container_of(delayed_work, struct cfg80211_registered_device,
 			    dfs_update_channels_wk);
 	wiphy = &rdev->wiphy;
 
-	rtnl_lock();
+	mutex_lock(&cfg80211_mutex);
+	wiphy_lock(wiphy);
+	for (bandid = 0; bandid < NUM_NL80211_BANDS; bandid++) {
+		if (wiphy->bands[bandid])
+			n_chans += wiphy->bands[bandid]->n_channels;
+	}
+
+	expired = kvcalloc(n_chans, sizeof(*expired), GFP_KERNEL);
+	if (!expired) {
+		/* hmm - retry later */
+		queue_delayed_work(cfg80211_wq,
+				   &rdev->dfs_update_channels_wk,
+				   HZ);
+		wiphy_unlock(wiphy);
+		mutex_unlock(&cfg80211_mutex);
+		return;
+	}
+
+	pre_cac_allowed = regulatory_pre_cac_allowed(wiphy);
+
 	for (bandid = 0; bandid < NUM_NL80211_BANDS; bandid++) {
 		sband = wiphy->bands[bandid];
 		if (!sband)
@@ -1108,8 +1158,7 @@ void cfg80211_dfs_channels_update_work(struct work_struct *work)
 				time_dfs_update = IEEE80211_DFS_MIN_NOP_TIME_MS;
 				radar_event = NL80211_RADAR_NOP_FINISHED;
 			} else {
-				if (regulatory_pre_cac_allowed(wiphy) ||
-				    cfg80211_any_wiphy_oper_chan(wiphy, c))
+				if (pre_cac_allowed)
 					continue;
 
 				time_dfs_update = REG_PRE_CAC_EXPIRY_GRACE_MS;
@@ -1120,19 +1169,11 @@ void cfg80211_dfs_channels_update_work(struct work_struct *work)
 				  msecs_to_jiffies(time_dfs_update);
 
 			if (time_after_eq(jiffies, timeout)) {
-				c->dfs_state = NL80211_DFS_USABLE;
-				c->dfs_state_entered = jiffies;
-
-				cfg80211_chandef_create(&chandef, c,
-							NL80211_CHAN_NO_HT);
-
-				nl80211_radar_notify(rdev, &chandef,
-						     radar_event, NULL,
-						     GFP_ATOMIC);
-
-				regulatory_propagate_dfs_state(wiphy, &chandef,
-							       c->dfs_state,
-							       radar_event);
+				expired[n_expired].chan = c;
+				expired[n_expired].state = c->dfs_state;
+				expired[n_expired].entered = c->dfs_state_entered;
+				expired[n_expired].event = radar_event;
+				n_expired++;
 				continue;
 			}
 
@@ -1143,7 +1184,24 @@ void cfg80211_dfs_channels_update_work(struct work_struct *work)
 			check_again = true;
 		}
 	}
-	rtnl_unlock();
+	wiphy_unlock(wiphy);
+
+	/* these lock the wiphys, so must be done without holding ours */
+	for (i = 0; i < n_expired; i++) {
+		if (expired[i].event == NL80211_RADAR_PRE_CAC_EXPIRED &&
+		    cfg80211_any_wiphy_oper_chan(wiphy, expired[i].chan))
+			continue;
+
+		if (!cfg80211_dfs_chan_expire(rdev, &expired[i], &chandef))
+			continue;
+
+		regulatory_propagate_dfs_state(wiphy, &chandef,
+					       NL80211_DFS_USABLE,
+					       expired[i].event);
+	}
+	mutex_unlock(&cfg80211_mutex);
+
+	kvfree(expired);
 
 	/* reschedule if there are other channels waiting to be cleared again */
 	if (check_again)

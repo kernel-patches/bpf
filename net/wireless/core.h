@@ -19,6 +19,9 @@
 #include "reg.h"
 
 
+/* protects the wiphy list and regulatory state */
+extern struct mutex cfg80211_mutex;
+
 #define WIPHY_IDX_INVALID	-1
 
 struct cfg80211_scan_request_int {
@@ -179,15 +182,10 @@ extern struct workqueue_struct *cfg80211_wq;
 extern struct list_head cfg80211_rdev_list;
 extern int cfg80211_rdev_list_generation;
 
-/* This is constructed like this so it can be used in if/else */
-static inline int for_each_rdev_check_rtnl(void)
-{
-	ASSERT_RTNL();
-	return 0;
-}
 #define for_each_rdev(rdev)						\
-	if (for_each_rdev_check_rtnl()) {} else				\
-		list_for_each_entry(rdev, &cfg80211_rdev_list, list)
+	list_for_each_entry_rcu(rdev, &cfg80211_rdev_list, list,	\
+				lockdep_rtnl_is_held() ||		\
+				lockdep_is_held(&cfg80211_mutex))
 
 enum bss_source_type {
 	BSS_SOURCE_DIRECT = 0,
@@ -453,13 +451,16 @@ void cfg80211_sme_abandon_assoc(struct wireless_dev *wdev);
 
 /* internal helpers */
 bool cfg80211_supported_cipher_suite(struct wiphy *wiphy, u32 cipher);
+bool cfg80211_cigtk_supported(struct wireless_dev *wdev,
+			      struct genl_info *info);
 bool cfg80211_valid_key_idx(struct wireless_dev *wdev,
-			    int key_idx, bool pairwise,
+			    int key_idx, enum nl80211_key_type type,
 			    const u8 *mac_addr);
 int cfg80211_validate_key_settings(struct cfg80211_registered_device *rdev,
 				   struct wireless_dev *wdev,
 				   struct key_params *params, int key_idx,
-				   bool pairwise, const u8 *mac_addr);
+				   enum nl80211_key_type type,
+				   const u8 *mac_addr);
 void __cfg80211_scan_done(struct wiphy *wiphy, struct wiphy_work *wk);
 void ___cfg80211_scan_done(struct cfg80211_registered_device *rdev,
 			   bool send_message);
@@ -574,6 +575,10 @@ void cfg80211_stop_pd(struct cfg80211_registered_device *rdev,
 int cfg80211_nan_set_local_schedule(struct cfg80211_registered_device *rdev,
 				    struct wireless_dev *wdev,
 				    struct cfg80211_nan_local_sched *sched);
+
+int cfg80211_nan_set_non_evac_channels(struct cfg80211_registered_device *rdev,
+				       struct wireless_dev *wdev,
+				       struct cfg80211_nan_non_evac_channels *channels);
 
 struct cfg80211_internal_bss *
 cfg80211_bss_update(struct cfg80211_registered_device *rdev,
