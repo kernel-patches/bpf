@@ -1700,6 +1700,30 @@ static bool cfg80211_ir_permissive_chan(struct wiphy *wiphy,
 
 	lockdep_assert_held(&rdev->wiphy.mtx);
 
+	/*
+	 * A channel the wiphy is already operating on (e.g. a station
+	 * connection) is already being radiated on by this device; starting
+	 * an AP on the very same channel adds nothing new from a regulatory
+	 * point of view. Allow it regardless of the driver's relax opt-in.
+	 */
+	list_for_each_entry(wdev, &rdev->wiphy.wdev_list, list) {
+		struct ieee80211_channel *other_chan = NULL;
+		unsigned int link_id;
+
+		for_each_valid_link(wdev, link_id) {
+			if (wdev->iftype == NL80211_IFTYPE_STATION &&
+			    wdev->links[link_id].client.current_bss)
+				other_chan = wdev->links[link_id].client.current_bss->pub.channel;
+			else if (wdev->iftype == NL80211_IFTYPE_AP &&
+				 wdev->links[link_id].ap.beacon_interval)
+				other_chan = wdev->links[link_id].ap.chandef.chan;
+
+			if (other_chan == chan)
+				return true;
+			other_chan = NULL;
+		}
+	}
+
 	if (!IS_ENABLED(CONFIG_CFG80211_REG_RELAX_NO_IR) ||
 	    !(wiphy->regulatory_flags & REGULATORY_ENABLE_RELAX_NO_IR))
 		return false;
@@ -1707,7 +1731,8 @@ static bool cfg80211_ir_permissive_chan(struct wiphy *wiphy,
 	/* only valid for GO and TDLS off-channel (station/p2p-CL) */
 	if (iftype != NL80211_IFTYPE_P2P_GO &&
 	    iftype != NL80211_IFTYPE_STATION &&
-	    iftype != NL80211_IFTYPE_P2P_CLIENT)
+	    iftype != NL80211_IFTYPE_P2P_CLIENT &&
+	    iftype != NL80211_IFTYPE_AP)
 		return false;
 
 	if (regulatory_indoor_allowed() &&
