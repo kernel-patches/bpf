@@ -343,6 +343,22 @@ static void rmi_reset_work(struct work_struct *work)
 	rmi_reset_attn_mode(hdata->hdev);
 }
 
+static int rmi_check_sanity(struct hid_device *hdev, u8 *data, int size)
+{
+	int valid_size = size;
+	/*
+	 * On the Dell XPS 13 9333, the bus sometimes get confused and fills
+	 * the report with a sentinel value "ff". Synaptics told us that such
+	 * behavior does not comes from the touchpad itself, so we filter out
+	 * such reports here.
+	 */
+
+	while (valid_size > 0 && data[valid_size - 1] == 0xff)
+		valid_size--;
+
+	return valid_size;
+}
+
 static int rmi_input_event(struct hid_device *hdev, u8 *data, int size)
 {
 	struct rmi_data *hdata = hid_get_drvdata(hdev);
@@ -350,6 +366,10 @@ static int rmi_input_event(struct hid_device *hdev, u8 *data, int size)
 	unsigned long flags;
 
 	if (!(test_bit(RMI_STARTED, &hdata->flags)))
+		return 0;
+
+	size = rmi_check_sanity(hdev, data, size);
+	if (size < 2)
 		return 0;
 
 	pm_wakeup_event(hdev->dev.parent, 0);
@@ -381,22 +401,6 @@ static int rmi_read_data_event(struct hid_device *hdev, u8 *data, int size)
 	return 1;
 }
 
-static int rmi_check_sanity(struct hid_device *hdev, u8 *data, int size)
-{
-	int valid_size = size;
-	/*
-	 * On the Dell XPS 13 9333, the bus sometimes get confused and fills
-	 * the report with a sentinel value "ff". Synaptics told us that such
-	 * behavior does not comes from the touchpad itself, so we filter out
-	 * such reports here.
-	 */
-
-	while (valid_size > 0 && data[valid_size - 1] == 0xff)
-		valid_size--;
-
-	return valid_size;
-}
-
 static int rmi_raw_event(struct hid_device *hdev,
 		struct hid_report *report, u8 *data, int size)
 {
@@ -405,7 +409,6 @@ static int rmi_raw_event(struct hid_device *hdev,
 	if (!(hdata->device_flags & RMI_DEVICE))
 		return 0;
 
-	size = rmi_check_sanity(hdev, data, size);
 	if (size < 2)
 		return 0;
 
