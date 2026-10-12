@@ -3379,15 +3379,10 @@ u32 bpf_jit_place_args(const struct bpf_jit_arg_abi *abi,
 	return slot;
 }
 
-u32 bpf_jit_plan_arg_moves(const struct bpf_jit_arg_abi *abi,
-			   const struct btf_func_model *fm,
-			   struct bpf_jit_arg_move *moves)
+u32 bpf_jit_plan_slot_moves(const u8 *pos_of_slot, u32 nslots,
+			    struct bpf_jit_arg_move *moves)
 {
-	u8 pos_of_slot[MAX_BPF_FUNC_ARG_SLOTS];
-	u32 nslots, n = 0, s, back;
-
-	nslots = bpf_jit_place_args(abi, fm, pos_of_slot);
-	back = nslots;
+	u32 n = 0, s, back = nslots;
 
 	/*
 	 * An argument is two eightbytes at most, so it frees one register at
@@ -3418,6 +3413,45 @@ u32 bpf_jit_plan_arg_moves(const struct bpf_jit_arg_abi *abi,
 	}
 
 	return n;
+}
+
+u32 bpf_jit_plan_arg_moves(const struct bpf_jit_arg_abi *abi,
+			   const struct btf_func_model *fm,
+			   struct bpf_jit_arg_move *moves)
+{
+	u8 pos_of_slot[MAX_BPF_FUNC_ARG_SLOTS];
+	u32 nslots;
+
+	nslots = bpf_jit_place_args(abi, fm, pos_of_slot);
+	return bpf_jit_plan_slot_moves(pos_of_slot, nslots, moves);
+}
+
+/*
+ * Return how many stack slots a call passes when one of its stack arguments is
+ * aligned to 16 bytes, or 0 otherwise. @pos_of_slot is where
+ * bpf_jit_place_args() put each argument slot. Such an argument goes in a
+ * 16-byte aligned stack slot, so a JIT whose stack is only 8-byte aligned has
+ * to realign that many slots before the call.
+ */
+u32 bpf_jit_stack_slots_to_align(const struct bpf_jit_arg_abi *abi,
+				 const struct btf_func_model *fm,
+				 const u8 *pos_of_slot)
+{
+	u32 i, k, slot = 0, top = 0;
+	bool align16 = false;
+
+	for (i = 0; i < fm->nr_args; i++) {
+		u32 nslots = btf_func_model_arg_slots(fm, i);
+
+		if ((fm->arg_flags[i] & BTF_FMODEL_ALIGN16_ARG) &&
+		    pos_of_slot[slot] >= abi->nr_arg_regs)
+			align16 = true;
+		for (k = 0; k < nslots; k++, slot++)
+			if (pos_of_slot[slot] >= abi->nr_arg_regs)
+				top = max_t(u32, top, pos_of_slot[slot] - abi->nr_arg_regs + 1);
+	}
+
+	return align16 ? top : 0;
 }
 
 bool __weak bpf_jit_supports_stack_args(void)
