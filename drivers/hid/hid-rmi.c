@@ -428,6 +428,7 @@ static int rmi_event(struct hid_device *hdev, struct hid_field *field,
 	struct rmi_data *data = hid_get_drvdata(hdev);
 
 	if ((data->device_flags & RMI_DEVICE) &&
+	    test_bit(RMI_STARTED, &data->flags) &&
 	    (field->application == HID_GD_POINTER ||
 	    field->application == HID_GD_MOUSE)) {
 		if (data->device_flags & RMI_DEVICE_HAS_PHYS_BUTTONS) {
@@ -469,12 +470,15 @@ static int rmi_suspend(struct hid_device *hdev, pm_message_t message)
 	struct rmi_device *rmi_dev = data->xport.rmi_dev;
 	int ret;
 
-	if (!(data->device_flags & RMI_DEVICE))
+	if (!test_bit(RMI_STARTED, &data->flags))
 		return 0;
+
+	disable_work_sync(&data->reset_work);
 
 	ret = rmi_driver_suspend(rmi_dev, false);
 	if (ret) {
 		hid_warn(hdev, "Failed to suspend device: %d\n", ret);
+		enable_work(&data->reset_work);
 		return ret;
 	}
 
@@ -486,27 +490,31 @@ static int rmi_post_resume(struct hid_device *hdev)
 	struct rmi_data *data = hid_get_drvdata(hdev);
 	struct rmi_device *rmi_dev = data->xport.rmi_dev;
 	int ret;
+	int err;
 
-	if (!(data->device_flags & RMI_DEVICE))
+	if (!test_bit(RMI_STARTED, &data->flags))
 		return 0;
 
 	/* Make sure the HID device is ready to receive events */
 	ret = hid_hw_open(hdev);
 	if (ret)
-		return ret;
+		goto out;
 
 	ret = rmi_reset_attn_mode(hdev);
 	if (ret)
-		goto out;
+		hid_warn(hdev, "Failed to reset attention mode: %d\n", ret);
 
-	ret = rmi_driver_resume(rmi_dev, false);
-	if (ret) {
-		hid_warn(hdev, "Failed to resume device: %d\n", ret);
-		goto out;
+	err = rmi_driver_resume(rmi_dev, false);
+	if (err) {
+		hid_warn(hdev, "Failed to resume device: %d\n", err);
+		if (!ret)
+			ret = err;
 	}
 
-out:
 	hid_hw_close(hdev);
+
+out:
+	enable_work(&data->reset_work);
 	return ret;
 }
 
@@ -787,10 +795,8 @@ static void rmi_remove(struct hid_device *hdev)
 {
 	struct rmi_data *hdata = hid_get_drvdata(hdev);
 
-	if ((hdata->device_flags & RMI_DEVICE)
-	    && test_bit(RMI_STARTED, &hdata->flags)) {
-		clear_bit(RMI_STARTED, &hdata->flags);
-		cancel_work_sync(&hdata->reset_work);
+	if (test_and_clear_bit(RMI_STARTED, &hdata->flags)) {
+		disable_work_sync(&hdata->reset_work);
 		rmi_unregister_transport_device(&hdata->xport);
 	}
 
