@@ -334,7 +334,7 @@ static int cn10k_outb_cpt_init(struct net_device *netdev)
 						CN10K_CPT_LF_NQX(0));
 
 	/* Set ipsec offload enabled for this device */
-	pf->flags |= OTX2_FLAG_IPSEC_OFFLOAD_ENABLED;
+	otx2_set_flag(pf, OTX2_FLAG_IPSEC_OFFLOAD_ENABLED);
 
 	cn10k_cpt_device_set_available(pf);
 	return 0;
@@ -356,7 +356,7 @@ static int cn10k_outb_cpt_clean(struct otx2_nic *pf)
 	}
 
 	/* Set ipsec offload disabled for this device */
-	pf->flags &= ~OTX2_FLAG_IPSEC_OFFLOAD_ENABLED;
+	otx2_clear_flag(pf, OTX2_FLAG_IPSEC_OFFLOAD_ENABLED);
 
 	/* Disable CPTLF Instruction Queue (IQ) */
 	cn10k_outb_cptlf_iq_disable(pf);
@@ -820,7 +820,7 @@ void cn10k_ipsec_clean(struct otx2_nic *pf)
 	if (!is_dev_support_ipsec_offload(pf->pdev))
 		return;
 
-	if (!(pf->flags & OTX2_FLAG_IPSEC_OFFLOAD_ENABLED))
+	if (!otx2_test_flag(pf, OTX2_FLAG_IPSEC_OFFLOAD_ENABLED))
 		return;
 
 	if (pf->ipsec.sa_workq) {
@@ -945,7 +945,7 @@ bool cn10k_ipsec_transmit(struct otx2_nic *pf, struct netdev_queue *txq,
 	u16 dlen;
 
 	/* Check for IPSEC offload enabled */
-	if (!(pf->flags & OTX2_FLAG_IPSEC_OFFLOAD_ENABLED))
+	if (!otx2_test_flag(pf, OTX2_FLAG_IPSEC_OFFLOAD_ENABLED))
 		goto drop;
 
 	sp = skb_sec_path(skb);

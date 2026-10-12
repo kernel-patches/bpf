@@ -287,7 +287,40 @@ struct ppe_rss_hash_cfg {
 	u8 hash_fin_outer[PPE_RSS_HASH_TUPLES];
 };
 
-int ppe_hw_config(struct ppe_device *ppe_dev);
+/**
+ * struct ppe_soc_config - SoC-specific PPE hardware configuration.
+ * @bm_group_config: Buffer Management (BM) group configuration.
+ * @bm_port_config: Pointer to the BM port configuration array.
+ * @bm_port_config_cnt: Number of entries in the BM port configuration array.
+ * @qm_group_config: Queue Management (QM) group configuration.
+ * @qm_queue_config: Pointer to the QM queue configuration array.
+ * @qm_queue_config_cnt: Number of entries in the QM queue configuration array.
+ * @sch_bm_config: Pointer to the BM scheduler arbitration array.
+ * @sch_bm_config_cnt: Number of entries in the BM scheduler arbitration array.
+ * @sch_qm_config: Pointer to the QM scheduler arbitration array.
+ * @sch_qm_config_cnt: Number of entries in the QM scheduler arbitration array.
+ */
+struct ppe_soc_config {
+	int bm_group_config;
+	const struct ppe_bm_port_config *bm_port_config;
+	unsigned int bm_port_config_cnt;
+
+	int qm_group_config;
+	const struct ppe_qm_queue_config *qm_queue_config;
+	unsigned int qm_queue_config_cnt;
+
+	const struct ppe_scheduler_bm_config *sch_bm_config;
+	unsigned int sch_bm_config_cnt;
+
+	const struct ppe_scheduler_qm_config *sch_qm_config;
+	unsigned int sch_qm_config_cnt;
+};
+
+extern const struct ppe_soc_config ipq5332_soc_config;
+extern const struct ppe_soc_config ipq9574_soc_config;
+
+int ppe_hw_config(struct ppe_device *ppe_dev,
+		  const struct ppe_soc_config *soc_cfg);
 int ppe_queue_scheduler_set(struct ppe_device *ppe_dev,
 			    int node_id, bool flow_level, int port,
 			    struct ppe_scheduler_cfg scheduler_cfg);

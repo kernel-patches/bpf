@@ -17,6 +17,7 @@
 #include <linux/soc/marvell/silicons.h>
 #include <linux/soc/marvell/octeontx2/asm.h>
 #include <net/macsec.h>
+#include <uapi/linux/pkt_sched.h>
 #include <net/pkt_cls.h>
 #include <net/devlink.h>
 #include <linux/time64.h>
@@ -42,7 +43,6 @@
 /* PCI device IDs */
 #define PCI_DEVID_OCTEONTX2_RVU_PF              0xA063
 #define PCI_DEVID_OCTEONTX2_RVU_VF		0xA064
-#define PCI_DEVID_OCTEONTX2_RVU_AFVF		0xA0F8
 
 #define PCI_SUBSYS_DEVID_96XX_RVU_PFVF		0xB200
 #define PCI_SUBSYS_DEVID_CN10K_A_RVU_PFVF	0xB900
@@ -483,6 +483,62 @@ struct pf_irq_data {
 	int mdevs;
 };
 
+enum otx2_flag_bits {
+	OTX2_FLAG_RX_TSTAMP_ENABLED,
+	OTX2_FLAG_TX_TSTAMP_ENABLED,
+	OTX2_FLAG_INTF_DOWN,
+	OTX2_FLAG_MCAM_ENTRIES_ALLOC,
+	OTX2_FLAG_NTUPLE_SUPPORT,
+	OTX2_FLAG_UCAST_FLTR_SUPPORT,
+	OTX2_FLAG_RX_VLAN_SUPPORT,
+	OTX2_FLAG_VF_VLAN_SUPPORT,
+	OTX2_FLAG_PF_SHUTDOWN,
+	OTX2_FLAG_RX_PAUSE_ENABLED,
+	OTX2_FLAG_TX_PAUSE_ENABLED,
+	OTX2_FLAG_TC_FLOWER_SUPPORT,
+	OTX2_FLAG_TC_MATCHALL_EGRESS_ENABLED,
+	OTX2_FLAG_TC_MATCHALL_INGRESS_ENABLED,
+	OTX2_FLAG_DMACFLTR_SUPPORT,
+	OTX2_FLAG_PTP_ONESTEP_SYNC,
+	OTX2_FLAG_ADPTV_INT_COAL_ENABLED,
+	OTX2_FLAG_TC_MARK_ENABLED,
+	OTX2_FLAG_REP_MODE_ENABLED,
+	OTX2_FLAG_PORT_UP,
+	OTX2_FLAG_IPSEC_OFFLOAD_ENABLED,
+	OTX2_FLAG_REP_VF_INITIALIZED,
+	OTX2_FLAG_MAX,
+};
+
+/* Representor-owned flags copied onto the PF mailbox context in
+ * rvu_rep_setup_tc_cb().  All other bits are owned by the PF/VF netdev.
+ */
+#define OTX2_REP_SYNC_FLAGS_MASK				\
+	(BIT(OTX2_FLAG_MCAM_ENTRIES_ALLOC) |			\
+	 BIT(OTX2_FLAG_NTUPLE_SUPPORT) |			\
+	 BIT(OTX2_FLAG_TC_FLOWER_SUPPORT) |			\
+	 BIT(OTX2_FLAG_REP_VF_INITIALIZED))
+
+struct mq_offload_snap {
+	u64 min_rate[TC_QOPT_MAX_QUEUE];
+	u64 max_rate[TC_QOPT_MAX_QUEUE];
+	u32 flags;
+	__u8 num_tc;
+	__u16 count[TC_QOPT_MAX_QUEUE];
+	__u16 offset[TC_QOPT_MAX_QUEUE];
+	__u8 prio_tc_map[TC_QOPT_BITMASK + 1];
+};
+
+struct otx2_mqprio {
+	u32	flags;
+	u64	*min_rate;
+	u64	*max_rate;
+	bool	rate_limit;
+	bool	replace_setup_done;
+	bool	replace_graft_done;
+	bool	defer_tc_work;
+	struct work_struct netdev_tc_work;
+};
+
 struct otx2_nic {
 	void __iomem		*reg_base;
 	struct net_device	*netdev;
@@ -491,29 +547,12 @@ struct otx2_nic {
 	u16			tx_max_pktlen;
 	u16			rbsize; /* Receive buffer size */
 
-#define OTX2_FLAG_RX_TSTAMP_ENABLED		BIT_ULL(0)
-#define OTX2_FLAG_TX_TSTAMP_ENABLED		BIT_ULL(1)
-#define OTX2_FLAG_INTF_DOWN			BIT_ULL(2)
-#define OTX2_FLAG_MCAM_ENTRIES_ALLOC		BIT_ULL(3)
-#define OTX2_FLAG_NTUPLE_SUPPORT		BIT_ULL(4)
-#define OTX2_FLAG_UCAST_FLTR_SUPPORT		BIT_ULL(5)
-#define OTX2_FLAG_RX_VLAN_SUPPORT		BIT_ULL(6)
-#define OTX2_FLAG_VF_VLAN_SUPPORT		BIT_ULL(7)
-#define OTX2_FLAG_PF_SHUTDOWN			BIT_ULL(8)
-#define OTX2_FLAG_RX_PAUSE_ENABLED		BIT_ULL(9)
-#define OTX2_FLAG_TX_PAUSE_ENABLED		BIT_ULL(10)
-#define OTX2_FLAG_TC_FLOWER_SUPPORT		BIT_ULL(11)
-#define OTX2_FLAG_TC_MATCHALL_EGRESS_ENABLED	BIT_ULL(12)
-#define OTX2_FLAG_TC_MATCHALL_INGRESS_ENABLED	BIT_ULL(13)
-#define OTX2_FLAG_DMACFLTR_SUPPORT		BIT_ULL(14)
-#define OTX2_FLAG_PTP_ONESTEP_SYNC		BIT_ULL(15)
-#define OTX2_FLAG_ADPTV_INT_COAL_ENABLED BIT_ULL(16)
-#define OTX2_FLAG_TC_MARK_ENABLED		BIT_ULL(17)
-#define OTX2_FLAG_REP_MODE_ENABLED		 BIT_ULL(18)
-#define OTX2_FLAG_PORT_UP			BIT_ULL(19)
-#define OTX2_FLAG_IPSEC_OFFLOAD_ENABLED		BIT_ULL(20)
-	u64			flags;
+	unsigned long		flags;
 	u64			*cq_op_addr;
+
+	struct otx2_mqprio	mqprio;
+	struct mq_offload_snap	*cur_mq_snap;
+	struct mq_offload_snap	*old_mq_snap;
 
 	struct bpf_prog		*xdp_prog;
 	struct otx2_qset	qset;
@@ -593,6 +632,32 @@ struct otx2_nic {
 	/* af_xdp zero-copy */
 	unsigned long		*af_xdp_zc_qidx;
 };
+
+static inline void otx2_set_flag(struct otx2_nic *nic, unsigned int flag)
+{
+	set_bit(flag, &nic->flags);
+}
+
+static inline void otx2_clear_flag(struct otx2_nic *nic, unsigned int flag)
+{
+	clear_bit(flag, &nic->flags);
+}
+
+static inline bool otx2_test_flag(struct otx2_nic *nic, unsigned int flag)
+{
+	return test_bit(flag, &nic->flags);
+}
+
+static inline void otx2_sync_flags_from_rep(struct otx2_nic *dst,
+					    unsigned long *src_flags)
+{
+	unsigned long src = READ_ONCE(*src_flags);
+	unsigned long new_flags;
+
+	new_flags = (READ_ONCE(dst->flags) & ~OTX2_REP_SYNC_FLAGS_MASK) |
+		    (src & OTX2_REP_SYNC_FLAGS_MASK);
+	WRITE_ONCE(dst->flags, new_flags);
+}
 
 static inline bool is_otx2_lbkvf(struct pci_dev *pdev)
 {
@@ -786,7 +851,7 @@ static inline u64 otx2_atomic64_add(u64 incr, void __iomem *addr)
 	u64 __iomem *ptr = addr;
 	u64 result;
 
-	__asm__ volatile(".cpu   generic+lse\n"
+	__asm__ volatile(".arch_extension lse\n"
 			 "ldadd %x[i], %x[r], [%[b]]"
 			 : [r]"=r"(result), "+m"(*ptr)
 			 : [i]"r"(incr), [b]"r"(ptr)
@@ -997,6 +1062,8 @@ static inline u16 otx2_get_smq_idx(struct otx2_nic *pfvf, u16 qidx)
 	if (qidx >= pfvf->hw.non_qos_queues) {
 		smq = pfvf->qos.qid_to_sqmap[qidx - pfvf->hw.non_qos_queues];
 	} else {
+		if (!pfvf->hw.txschq_cnt[NIX_TXSCH_LVL_SMQ])
+			return 0;
 		idx = qidx % pfvf->hw.txschq_cnt[NIX_TXSCH_LVL_SMQ];
 		smq = pfvf->hw.txschq_list[NIX_TXSCH_LVL_SMQ][idx];
 	}
@@ -1184,6 +1251,7 @@ int otx2_mcam_entry_init(struct otx2_nic *pfvf);
 
 /* tc support */
 int otx2_init_tc(struct otx2_nic *nic);
+void otx2_shutdown_tc_mqprio(struct otx2_nic *nic);
 void otx2_shutdown_tc(struct otx2_nic *nic);
 int otx2_setup_tc(struct net_device *netdev, enum tc_setup_type type,
 		  void *type_data);
@@ -1255,6 +1323,11 @@ dma_addr_t otx2_dma_map_skb_frag(struct otx2_nic *pfvf,
 				 struct sk_buff *skb, int seg, int *len);
 void otx2_dma_unmap_skb_frags(struct otx2_nic *pfvf, struct sg_list *sg);
 int otx2_read_free_sqe(struct otx2_nic *pfvf, u16 qidx);
+int otx2_nix_tm_set_queue_shaper(struct otx2_nic *pfvf, int txq,
+				 u64 minrate, u64 maxrate);
+int otx2_nix_tm_clear_queue_shaper(struct otx2_nic *pfvf);
+int otx2_mqprio_down(struct otx2_nic *pfvf);
+int otx2_mqprio_up(struct otx2_nic *pfvf);
 void otx2_queue_vf_work(struct mbox *mw, struct workqueue_struct *mbox_wq,
 			int first, int mdevs, u64 intr);
 int otx2_del_mcam_flow_entry(struct otx2_nic *nic, u16 entry,

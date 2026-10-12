@@ -3383,10 +3383,15 @@ static void mlx5_esw_offloads_rep_event_unpair(struct mlx5_eswitch *esw,
 static void mlx5_esw_offloads_unpair(struct mlx5_eswitch *esw,
 				     struct mlx5_eswitch *peer_esw)
 {
+	struct list_head *dup_peer_flows;
+
 #if IS_ENABLED(CONFIG_MLX5_CLS_ACT)
 	mlx5e_tc_clean_fdb_peer_flows(esw);
 #endif
 	mlx5_esw_offloads_rep_event_unpair(esw, peer_esw);
+	dup_peer_flows = xa_erase(&esw->offloads.peer_flows,
+				  MLX5_CAP_GEN(peer_esw->dev, vhca_id));
+	kfree(dup_peer_flows);
 	esw_del_fdb_peer_miss_rules(esw, peer_esw->dev);
 }
 
@@ -3394,6 +3399,7 @@ static int mlx5_esw_offloads_pair(struct mlx5_eswitch *esw,
 				  struct mlx5_eswitch *peer_esw)
 {
 	const struct mlx5_eswitch_rep_ops *ops;
+	struct list_head *dup_peer_flows;
 	struct mlx5_eswitch_rep *rep;
 	unsigned long i;
 	u8 rep_type;
@@ -3402,6 +3408,20 @@ static int mlx5_esw_offloads_pair(struct mlx5_eswitch *esw,
 	err = esw_add_fdb_peer_miss_rules(esw, peer_esw->dev);
 	if (err)
 		return err;
+
+	dup_peer_flows = kzalloc_obj(*dup_peer_flows);
+	if (!dup_peer_flows) {
+		err = -ENOMEM;
+		goto err_out;
+	}
+	INIT_LIST_HEAD(dup_peer_flows);
+	err = xa_err(xa_store(&esw->offloads.peer_flows,
+			      MLX5_CAP_GEN(peer_esw->dev, vhca_id),
+			      dup_peer_flows, GFP_KERNEL));
+	if (err) {
+		kfree(dup_peer_flows);
+		goto err_out;
+	}
 
 	mlx5_esw_for_each_rep(esw, i, rep) {
 		for (rep_type = 0; rep_type < NUM_REP_TYPES; rep_type++) {
@@ -3548,10 +3568,9 @@ err_out:
 void mlx5_esw_offloads_devcom_init(struct mlx5_eswitch *esw,
 				   const struct mlx5_devcom_match_attr *attr)
 {
-	int i;
+	int err;
 
-	for (i = 0; i < MLX5_MAX_PORTS; i++)
-		INIT_LIST_HEAD(&esw->offloads.peer_flows[i]);
+	xa_init(&esw->offloads.peer_flows);
 	mutex_init(&esw->offloads.peer_mutex);
 
 	if (!MLX5_CAP_ESW(esw->dev, merged_eswitch))
@@ -3572,10 +3591,12 @@ void mlx5_esw_offloads_devcom_init(struct mlx5_eswitch *esw,
 	if (!esw->devcom)
 		return;
 
-	mlx5_devcom_send_event(esw->devcom,
-			       ESW_OFFLOADS_DEVCOM_PAIR,
-			       ESW_OFFLOADS_DEVCOM_UNPAIR,
-			       esw);
+	err = mlx5_devcom_send_event(esw->devcom,
+				     ESW_OFFLOADS_DEVCOM_PAIR,
+				     ESW_OFFLOADS_DEVCOM_UNPAIR,
+				     esw);
+	if (err)
+		mlx5_esw_offloads_devcom_cleanup(esw);
 }
 
 void mlx5_esw_offloads_devcom_cleanup(struct mlx5_eswitch *esw)
@@ -3592,6 +3613,8 @@ void mlx5_esw_offloads_devcom_cleanup(struct mlx5_eswitch *esw)
 	xa_destroy(&esw->paired);
 	xa_destroy(&esw->fdb_table.offloads.peer_miss_rules);
 	esw->devcom = NULL;
+	WARN_ON_ONCE(!xa_empty(&esw->offloads.peer_flows));
+	xa_destroy(&esw->offloads.peer_flows);
 }
 
 bool mlx5_esw_offloads_devcom_is_ready(struct mlx5_eswitch *esw)
@@ -4842,6 +4865,29 @@ mlx5_eswitch_register_vport_reps_blocked(struct mlx5_eswitch *esw,
 	}
 }
 
+static void mlx5_eswitch_attach_uplink_netdev(struct mlx5_eswitch *esw,
+					      struct mlx5_eswitch_rep *uplink)
+{
+	const struct mlx5_eswitch_rep_ops *ops;
+	int type;
+	int err;
+
+	for (type = 0; type < NUM_REP_TYPES; type++) {
+		if (atomic_read(&uplink->rep_data[type].state) != REP_LOADED)
+			continue;
+
+		ops = esw->offloads.rep_ops[type];
+		if (!ops || !ops->attach_uplink_netdev)
+			continue;
+
+		err = ops->attach_uplink_netdev(esw->dev, uplink);
+		if (err)
+			esw_warn(esw->dev,
+				 "Failed to attach uplink netdev to rep type %d, err(%d)\n",
+				 type, err);
+	}
+}
+
 static void mlx5_eswitch_reload_reps_blocked(struct mlx5_eswitch *esw)
 {
 	struct mlx5_eswitch_rep *uplink;
@@ -4861,6 +4907,8 @@ static void mlx5_eswitch_reload_reps_blocked(struct mlx5_eswitch *esw)
 			__esw_offloads_unload_rep(esw, uplink, REP_ETH);
 		return;
 	}
+
+	mlx5_eswitch_attach_uplink_netdev(esw, uplink);
 
 	if (mlx5_get_sd(esw->dev) && !mlx5_lag_is_active(esw->dev))
 		return;
@@ -4884,6 +4932,16 @@ static void mlx5_eswitch_reload_reps(struct mlx5_eswitch *esw)
 	mlx5_esw_reps_block(esw);
 	mlx5_eswitch_reload_reps_blocked(esw);
 	mlx5_esw_reps_unblock(esw);
+}
+
+void mlx5_esw_offloads_uplink_netdev_attach(struct mlx5_core_dev *dev)
+{
+	struct mlx5_eswitch *esw = dev->priv.eswitch;
+
+	if (!mlx5_esw_allowed(esw))
+		return;
+
+	mlx5_esw_add_work(esw, mlx5_eswitch_reload_reps, GFP_KERNEL);
 }
 
 static void

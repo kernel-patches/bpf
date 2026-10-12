@@ -284,6 +284,8 @@ static void drop_func(struct sk_buff *skb, void *ctx)
 static struct sk_buff *__fq_codel_dequeue(struct Qdisc *sch)
 {
 	struct fq_codel_sched_data *q = qdisc_priv(sch);
+	struct fq_codel_flow *first = NULL;
+	bool scanned = false;
 	struct sk_buff *skb;
 	struct fq_codel_flow *flow;
 	struct list_head *head;
@@ -298,6 +300,47 @@ begin:
 	flow = list_first_entry(head, struct fq_codel_flow, flowchain);
 
 	if (flow->deficit <= 0) {
+		/* The head cannot dequeue. Once a full round passes with
+		 * no flow becoming eligible, skip the remaining empty
+		 * rounds in a single bulk refill.
+		 */
+		if (!scanned && flow == first) {
+			unsigned int rounds = UINT_MAX;
+			struct fq_codel_flow *iter;
+			bool skip = true;
+
+			scanned = true;
+			/* A completed round leaves new_flows empty, so
+			 * only old_flows still holds flows awaiting a
+			 * refill.
+			 */
+			list_for_each_entry(iter, &q->old_flows, flowchain) {
+				unsigned int r;
+
+				/* An empty flow cannot dequeue next round
+				 * (it is removed instead), so it neither
+				 * arms nor sizes the skip.
+				 */
+				if (!iter->head)
+					continue;
+				if (iter->deficit > 0) {
+					skip = false;
+					break;
+				}
+				r = DIV_ROUND_UP(1 - iter->deficit, q->quantum);
+				rounds = min(rounds, r);
+			}
+			if (skip && rounds != UINT_MAX) {
+				list_for_each_entry(iter, &q->old_flows, flowchain)
+					WRITE_ONCE(iter->deficit,
+						   iter->deficit +
+						   rounds * q->quantum);
+				goto begin;
+			}
+		}
+
+		if (!first)
+			first = flow;
 		WRITE_ONCE(flow->deficit, flow->deficit + q->quantum);
 		list_move_tail(&flow->flowchain, &q->old_flows);
 		goto begin;
@@ -309,10 +352,16 @@ begin:
 
 	if (!skb) {
 		/* force a pass through old_flows to prevent starvation */
-		if ((head == &q->new_flows) && !list_empty(&q->old_flows))
+		if (head == &q->new_flows && !list_empty(&q->old_flows)) {
 			list_move_tail(&flow->flowchain, &q->old_flows);
-		else
+		} else {
+			/* first would point at an off-list flow and the
+			 * scan would never arm; re-arm it.
+			 */
+			if (flow == first)
+				first = NULL;
 			list_del_init(&flow->flowchain);
+		}
 		goto begin;
 	}
 	qdisc_bstats_update(sch, skb);

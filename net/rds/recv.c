@@ -144,7 +144,8 @@ static void rds_conn_peer_gen_update(struct rds_connection *conn,
 	if (peer_gen_num != 0) {
 		if (conn->c_peer_gen_num != 0 &&
 		    peer_gen_num != conn->c_peer_gen_num) {
-			for (i = 0; i < RDS_MPATH_WORKERS; i++) {
+			for (i = 0; i < (conn->c_trans->t_mp_capable ?
+			     RDS_MPATH_WORKERS : 1); i++) {
 				struct rds_conn_path *cp;
 
 				cp = &conn->c_path[i];
@@ -224,7 +225,8 @@ static void rds_recv_hs_exthdrs(struct rds_header *hdr,
 		/* Process extension header here */
 		switch (type) {
 		case RDS_EXTHDR_NPATHS:
-			new_npaths = min_t(int, RDS_MPATH_WORKERS,
+			new_npaths = min_t(int, conn->c_trans->t_mp_capable ?
+					   RDS_MPATH_WORKERS : 1,
 					   be16_to_cpu(buffer.rds_npaths));
 			break;
 		case RDS_EXTHDR_GEN_NUM:
@@ -789,7 +791,8 @@ int rds_recvmsg(struct socket *sock, struct msghdr *msg, size_t size,
 				sin6->sin6_port = inc->i_hdr.h_sport;
 				sin6->sin6_addr = inc->i_saddr;
 				sin6->sin6_flowinfo = 0;
-				sin6->sin6_scope_id = rs->rs_bound_scope_id;
+				sin6->sin6_scope_id = rs->rs_conn_scope_id ?:
+						      rs->rs_bound_scope_id;
 				msg->msg_namelen = sizeof(*sin6);
 			}
 		}

@@ -99,8 +99,38 @@ void j1939_ecu_unmap(struct j1939_ecu *ecu)
 void j1939_ecu_unmap_all(struct j1939_priv *priv)
 {
 	int i;
+	struct j1939_ecu *ecu;
 
 	write_lock_bh(&priv->lock);
+	/* Cancel all pending address claim timers before unmapping.
+	 * This prevents an orphaned late-firing timer from re-mapping
+	 * an ECU after the spaces are cleared.
+	 */
+rescan_timers:
+	list_for_each_entry(ecu, &priv->ecus, list) {
+		int ret = hrtimer_try_to_cancel(&ecu->ac_timer);
+
+		if (ret == 0) { /* Not active or already finished. */
+			continue;
+		} else if (ret == 1) { /* Successfully canceled. */
+			/* Drop a ref from j1939_ecu_timer_start(). */
+			j1939_ecu_put(ecu);
+		} else { /* Executing on another CPU. */
+			/* Let j1939_ecu_timer_cancel() determine whether to
+			 * drop a ref from j1939_ecu_timer_start(). But guard
+			 * with a local ref in order to make sure that unlocked
+			 * j1939_ecu_put() from j1939_ecu_timer_cancel() cannot
+			 * be the final reference.
+			 */
+			j1939_ecu_get(ecu);
+			write_unlock_bh(&priv->lock);
+			j1939_ecu_timer_cancel(ecu);
+			write_lock_bh(&priv->lock);
+			j1939_ecu_put(ecu);
+		}
+		goto rescan_timers;
+	}
+	/* Unmap any remaining mapped ECUs */
 	for (i = 0; i < ARRAY_SIZE(priv->ents); i++)
 		if (priv->ents[i].ecu)
 			j1939_ecu_unmap_locked(priv->ents[i].ecu);

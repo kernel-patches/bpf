@@ -8,7 +8,6 @@
 #include <linux/etherdevice.h>
 #include <linux/if_ether.h>
 #include <linux/if_vlan.h>
-#include <net/llc_pdu.h>
 #include <linux/kernel.h>
 #include <linux/jhash.h>
 #include <linux/jiffies.h>
@@ -190,6 +189,7 @@ static bool arphdr_ok(struct sk_buff *skb)
 static int check_iphdr(struct sk_buff *skb)
 {
 	unsigned int nh_ofs = skb_network_offset(skb);
+	const struct iphdr *nh;
 	unsigned int ip_len;
 	int err;
 
@@ -202,7 +202,10 @@ static int check_iphdr(struct sk_buff *skb)
 		     skb->len < nh_ofs + ip_len))
 		return -EINVAL;
 
-	skb_set_transport_header(skb, nh_ofs + ip_len);
+	nh = ip_hdr(skb);
+	if (!(nh->frag_off & htons(IP_OFFSET)))
+		skb_set_transport_header(skb, nh_ofs + ip_len);
+
 	return 0;
 }
 
@@ -899,7 +902,8 @@ static int key_extract_l3l4(struct sk_buff *skb, struct sw_flow_key *key)
  *    - skb->transport_header: If key->eth.type is ETH_P_IP or ETH_P_IPV6
  *      on output, then just past the IP header, if one is present and
  *      of a correct length, otherwise the same as skb->network_header.
- *      For other key->eth.type values it is left untouched.
+ *      For later IP fragments and for other key->eth.type values it is
+ *      left untouched.
  *
  *    - skb->protocol: the type of the data starting at skb->network_header.
  *      Equals to key->eth.type.

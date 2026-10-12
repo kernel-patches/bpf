@@ -15,6 +15,7 @@ struct mlx5e_xsk_param {
 struct mlx5e_rq_opt_param {
 	struct mlx5e_xsk_param *xsk;
 	struct netdev_queue_config *qcfg;
+	bool data_direct;
 };
 
 struct mlx5e_cq_param {
@@ -146,6 +147,7 @@ void mlx5e_build_xdpsq_param(struct mlx5_core_dev *mdev,
 int mlx5e_build_channel_param(struct mlx5_core_dev *mdev,
 			      struct mlx5e_params *params,
 			      struct netdev_queue_config *qcfg,
+			      bool data_direct,
 			      struct mlx5e_channel_param *cparam);
 
 void mlx5e_build_xsk_channel_param(struct mlx5_core_dev *mdev,

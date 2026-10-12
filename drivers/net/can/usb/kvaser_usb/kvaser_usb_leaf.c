@@ -1964,22 +1964,6 @@ static int kvaser_usb_leaf_get_berr_counter(const struct net_device *netdev,
 	return 0;
 }
 
-static int kvaser_usb_leaf_setup_endpoints(struct kvaser_usb *dev)
-{
-	struct usb_host_interface *iface_desc;
-	int ret;
-
-	iface_desc = dev->intf->cur_altsetting;
-
-	/* use first bulk endpoint for in and out */
-	ret = usb_find_common_endpoints(iface_desc, &dev->bulk_in, &dev->bulk_out,
-					NULL, NULL);
-	if (ret)
-		return -ENODEV;
-
-	return 0;
-}
-
 const struct kvaser_usb_dev_ops kvaser_usb_leaf_dev_ops = {
 	.dev_set_mode = kvaser_usb_leaf_set_mode,
 	.dev_set_bittiming = kvaser_usb_leaf_set_bittiming,
@@ -1987,7 +1971,6 @@ const struct kvaser_usb_dev_ops kvaser_usb_leaf_dev_ops = {
 	.dev_set_data_bittiming = NULL,
 	.dev_get_data_busparams = NULL,
 	.dev_get_berr_counter = kvaser_usb_leaf_get_berr_counter,
-	.dev_setup_endpoints = kvaser_usb_leaf_setup_endpoints,
 	.dev_init_card = kvaser_usb_leaf_init_card,
 	.dev_init_channel = kvaser_usb_leaf_init_channel,
 	.dev_remove_channel = kvaser_usb_leaf_remove_channel,

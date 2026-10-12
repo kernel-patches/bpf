@@ -32,6 +32,7 @@
 
 #include <linux/dim.h>
 #include <linux/ethtool_netlink.h>
+#include <linux/mlx5/data_direct.h>
 #include <net/netdev_queues.h>
 
 #include "en.h"
@@ -378,6 +379,9 @@ void mlx5e_ethtool_get_ringparam(struct mlx5e_priv *priv,
 
 	kernel_param->hds_thresh = 0;
 	kernel_param->hds_thresh_max = 0;
+
+	if (priv->channels.params.packet_merge.type == MLX5E_PACKET_MERGE_SHAMPO)
+		kernel_param->tcp_data_split = ETHTOOL_TCP_DATA_SPLIT_ENABLED;
 }
 
 static void mlx5e_get_ringparam(struct net_device *dev,
@@ -403,10 +407,11 @@ static bool mlx5e_ethtool_set_tcp_data_split(struct mlx5e_priv *priv,
 		return false;
 	}
 
-	/* Might need to disable HW-GRO if it was kept on due to hds. */
-	if (tcp_data_split == ETHTOOL_TCP_DATA_SPLIT_DISABLED &&
-	    dev->cfg->hds_config == ETHTOOL_TCP_DATA_SPLIT_ENABLED)
-		netdev_update_features(priv->netdev);
+	if (tcp_data_split == ETHTOOL_TCP_DATA_SPLIT_DISABLED) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "TCP-data-split can not be disabled");
+		return false;
+	}
 
 	return true;
 }
@@ -468,13 +473,22 @@ static int mlx5e_set_ringparam(struct net_device *dev,
 			       struct netlink_ext_ack *extack)
 {
 	struct mlx5e_priv *priv = netdev_priv(dev);
+	int err;
 
 	if (!mlx5e_ethtool_set_tcp_data_split(priv,
 					      kernel_param->tcp_data_split,
 					      extack))
 		return -EINVAL;
 
-	return mlx5e_ethtool_set_ringparam(priv, param, extack);
+	err = mlx5e_ethtool_set_ringparam(priv, param, extack);
+	if (err)
+		return err;
+
+	/* Disable HW-GRO if it was only kept on for HDS. */
+	if (dev->cfg->hds_config != kernel_param->tcp_data_split)
+		netdev_update_features(priv->netdev);
+
+	return 0;
 }
 
 void mlx5e_ethtool_get_channels(struct mlx5e_priv *priv,
@@ -2320,10 +2334,8 @@ static int set_pflag_rx_no_csum_complete(struct net_device *netdev, bool enable)
 
 	for (i = 0; i < channels->num; i++) {
 		c = channels->c[i];
-		if (enable)
-			__set_bit(MLX5E_RQ_STATE_NO_CSUM_COMPLETE, &c->rq.state);
-		else
-			__clear_bit(MLX5E_RQ_STATE_NO_CSUM_COMPLETE, &c->rq.state);
+		__assign_bit(MLX5E_RQ_STATE_NO_CSUM_COMPLETE, &c->rq.state,
+			     enable);
 	}
 
 	return 0;
@@ -2402,6 +2414,44 @@ static int set_pflag_tx_port_ts(struct net_device *netdev, bool enable)
 	return err;
 }
 
+static int set_pflag_data_direct(struct net_device *netdev, bool enable)
+{
+	struct mlx5e_priv *priv = netdev_priv(netdev);
+	struct mlx5_core_dev *mdev = priv->mdev;
+	struct mlx5e_params new_params;
+
+	if (enable) {
+		if (!mlx5_data_direct_supported(mdev) ||
+		    !MLX5_CAP_GEN(mdev, crossing_vhca_mkey)) {
+			netdev_err(netdev, "data_direct is not supported by the device\n");
+			return -EOPNOTSUPP;
+		}
+
+		if (!MLX5_CAP_GEN(mdev, shampo)) {
+			netdev_err(netdev, "data_direct requires SHAMPO (Header-Data Split) support\n");
+			return -EOPNOTSUPP;
+		}
+
+		if (!mlx5_data_direct_get_dev(mdev->data_direct)) {
+			netdev_err(netdev, "data_direct device not bound\n");
+			return -ENODEV;
+		}
+	}
+
+	/* Changing the flag reopens the channels with a different DMA device,
+	 * which would break any dmabuf currently bound to this netdev.
+	 */
+	if (netdev_has_dmabuf_binding(netdev, NULL)) {
+		netdev_err(netdev, "Can't change data_direct while dmabufs are bound\n");
+		return -EBUSY;
+	}
+
+	new_params = priv->channels.params;
+	MLX5E_SET_PFLAG(&new_params, MLX5E_PFLAG_DATA_DIRECT, enable);
+
+	return mlx5e_safe_switch_params(priv, &new_params, NULL, NULL, true);
+}
+
 static const struct pflag_desc mlx5e_priv_flags[MLX5E_NUM_PFLAGS] = {
 	{ "rx_cqe_moder",        set_pflag_rx_cqe_based_moder },
 	{ "tx_cqe_moder",        set_pflag_tx_cqe_based_moder },
@@ -2411,6 +2461,7 @@ static const struct pflag_desc mlx5e_priv_flags[MLX5E_NUM_PFLAGS] = {
 	{ "xdp_tx_mpwqe",        set_pflag_xdp_tx_mpwqe },
 	{ "skb_tx_mpwqe",        set_pflag_skb_tx_mpwqe },
 	{ "tx_port_ts",          set_pflag_tx_port_ts },
+	{ "data_direct",         set_pflag_data_direct },
 };
 
 static int mlx5e_handle_pflag(struct net_device *netdev,

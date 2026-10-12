@@ -237,6 +237,7 @@ config TI_PRUETH
 	depends on NET_SWITCHDEV
 	select TI_ICSS_IEP
 	depends on PTP_1588_CLOCK_OPTIONAL
+	depends on HSR || !HSR
 	help
 	  Some TI SoCs has Programmable Realtime Unit (PRU) cores which can
 	  support Single or Dual Ethernet ports with the help of firmware code

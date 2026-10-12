@@ -2149,11 +2149,20 @@ retry:
 			    rtnl_held, extack);
 	if (ret <= 0) {
 		kfree_skb(skb);
-		if (ret == -EMSGSIZE) {
-			size += NLMSG_GOODSIZE;
-			goto retry;
-		}
-		return ERR_PTR(-EINVAL);
+		if (ret != -EMSGSIZE)
+			return ERR_PTR(-EINVAL);
+		/* A filter dump is carried inside a nest whose u16 nla_len
+		 * caps it, so a dump that still does not serialize once the
+		 * skb is larger than any valid message can never be built,
+		 * however big the skb gets. Filling reports that structural
+		 * overflow and genuine capacity exhaustion the same way, so
+		 * stop at the bound instead of looping until alloc_skb()
+		 * fails on an order too large for the page allocator.
+		 */
+		if (size > U16_MAX + NLMSG_GOODSIZE)
+			return ERR_PTR(-EMSGSIZE);
+		size += NLMSG_GOODSIZE;
+		goto retry;
 	}
 	return skb;
 }
@@ -2200,8 +2209,16 @@ static int tfilter_del_notify(struct net *net, struct sk_buff *oskb,
 	skb = tfilter_notify_prep(net, oskb, n, tp, block, q, parent, fh,
 				  RTM_DELTFILTER, portid, rtnl_held, extack);
 	if (IS_ERR(skb)) {
-		NL_SET_ERR_MSG(extack, "Failed to build del event notification");
-		return PTR_ERR(skb);
+		if (PTR_ERR(skb) != -EMSGSIZE) {
+			NL_SET_ERR_MSG(extack, "Failed to build del event notification");
+			return PTR_ERR(skb);
+		}
+		/* The filter's dump cannot be represented in a u16 nest, so no
+		 * notification can ever be built for it. Drop the notification
+		 * rather than refusing to delete the filter.
+		 */
+		NL_SET_ERR_MSG(extack, "Filter deleted; del event notification could not be built");
+		return tp->ops->delete(tp, fh, last, rtnl_held, extack);
 	}
 
 	err = tp->ops->delete(tp, fh, last, rtnl_held, extack);
@@ -3529,7 +3546,8 @@ int tcf_exts_dump(struct sk_buff *skb, struct tcf_exts *exts)
 			if (tcf_action_dump(skb, exts->actions, 0, 0, false)
 			    < 0)
 				goto nla_put_failure;
-			nla_nest_end(skb, nest);
+			if (nla_nest_end_safe(skb, nest) < 0)
+				goto nla_put_failure;
 		} else if (exts->police) {
 			struct tc_action *act = tcf_exts_first_act(exts);
 			nest = nla_nest_start_noflag(skb, exts->police);
@@ -3537,7 +3555,8 @@ int tcf_exts_dump(struct sk_buff *skb, struct tcf_exts *exts)
 				goto nla_put_failure;
 			if (tcf_action_dump_old(skb, act, 0, 0) < 0)
 				goto nla_put_failure;
-			nla_nest_end(skb, nest);
+			if (nla_nest_end_safe(skb, nest) < 0)
+				goto nla_put_failure;
 		}
 	}
 	return 0;
@@ -3565,7 +3584,8 @@ int tcf_exts_terse_dump(struct sk_buff *skb, struct tcf_exts *exts)
 
 	if (tcf_action_dump(skb, exts->actions, 0, 0, true) < 0)
 		goto nla_put_failure;
-	nla_nest_end(skb, nest);
+	if (nla_nest_end_safe(skb, nest) < 0)
+		goto nla_put_failure;
 	return 0;
 
 nla_put_failure:

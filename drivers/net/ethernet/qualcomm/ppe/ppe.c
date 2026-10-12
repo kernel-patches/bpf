@@ -11,6 +11,7 @@
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
+#include <linux/property.h>
 #include <linux/regmap.h>
 #include <linux/reset.h>
 
@@ -18,13 +19,39 @@
 #include "ppe_config.h"
 #include "ppe_debugfs.h"
 
-#define PPE_PORT_MAX		8
-#define PPE_CLK_RATE		353000000
+struct ppe_plat_data {
+	const struct ppe_soc_config *soc_cfg;
+	const struct icc_bulk_data *icc_data;
+	unsigned long ppe_clk_rate;
+	unsigned int num_icc, num_ports;
+};
 
-/* ICC clocks for enabling PPE device. The avg_bw and peak_bw with value 0
- * will be updated by the clock rate of PPE.
- */
-static const struct icc_bulk_data ppe_icc_data[] = {
+/* IPQ5332 interconnect paths. Zero bandwidths use the PPE clock rate. */
+static const struct icc_bulk_data ipq5332_icc_data[] = {
+	{
+		.name = "ppe",
+		.avg_bw = 0,
+		.peak_bw = 0,
+	},
+	{
+		.name = "ppe_cfg",
+		.avg_bw = 0,
+		.peak_bw = 0,
+	},
+	{
+		.name = "qos_gen",
+		.avg_bw = 6000,
+		.peak_bw = 6000,
+	},
+	{
+		.name = "timeout_ref",
+		.avg_bw = 6000,
+		.peak_bw = 6000,
+	},
+};
+
+/* IPQ9574 interconnect paths. Zero bandwidths use the PPE clock rate. */
+static const struct icc_bulk_data ipq9574_icc_data[] = {
 	{
 		.name = "ppe",
 		.avg_bw = 0,
@@ -62,6 +89,23 @@ static const struct icc_bulk_data ppe_icc_data[] = {
 	},
 };
 
+static const struct ppe_plat_data ipq5332_ppe_data = {
+	.soc_cfg = &ipq5332_soc_config,
+	.icc_data = ipq5332_icc_data,
+	.ppe_clk_rate = 200000000,
+	.num_icc = ARRAY_SIZE(ipq5332_icc_data),
+	.num_ports = 3,
+};
+
+static const struct ppe_plat_data ipq9574_ppe_data = {
+	.soc_cfg = &ipq9574_soc_config,
+	.icc_data = ipq9574_icc_data,
+	.ppe_clk_rate = 353000000,
+	.num_icc = ARRAY_SIZE(ipq9574_icc_data),
+	.num_ports = 8,
+};
+
+/* PPE register access ranges. */
 static const struct regmap_range ppe_readable_ranges[] = {
 	regmap_reg_range(0x0, 0x1ff),		/* Global */
 	regmap_reg_range(0x400, 0x5ff),		/* LPI CSR */
@@ -99,7 +143,7 @@ static const struct regmap_access_table ppe_reg_table = {
 	.n_yes_ranges = ARRAY_SIZE(ppe_readable_ranges),
 };
 
-static const struct regmap_config regmap_config_ipq9574 = {
+static const struct regmap_config ppe_reg_config = {
 	.reg_bits = 32,
 	.reg_stride = 4,
 	.val_bits = 32,
@@ -108,7 +152,8 @@ static const struct regmap_config regmap_config_ipq9574 = {
 	.max_register = 0xbef800,
 };
 
-static int ppe_clock_init_and_reset(struct ppe_device *ppe_dev)
+static int ppe_clock_init_and_reset(struct ppe_device *ppe_dev,
+				    const struct icc_bulk_data *ppe_icc_data)
 {
 	unsigned long ppe_rate = ppe_dev->clk_rate;
 	struct device *dev = ppe_dev->dev;
@@ -172,12 +217,17 @@ static int ppe_clock_init_and_reset(struct ppe_device *ppe_dev)
 
 static int qcom_ppe_probe(struct platform_device *pdev)
 {
+	const struct ppe_plat_data *plat_data;
 	struct device *dev = &pdev->dev;
 	struct ppe_device *ppe_dev;
 	void __iomem *base;
 	int ret, num_icc;
 
-	num_icc = ARRAY_SIZE(ppe_icc_data);
+	plat_data = device_get_match_data(dev);
+	if (!plat_data)
+		return -EINVAL;
+
+	num_icc = plat_data->num_icc;
 	ppe_dev = devm_kzalloc(dev, struct_size(ppe_dev, icc_paths, num_icc),
 			       GFP_KERNEL);
 	if (!ppe_dev)
@@ -187,20 +237,20 @@ static int qcom_ppe_probe(struct platform_device *pdev)
 	if (IS_ERR(base))
 		return dev_err_probe(dev, PTR_ERR(base), "PPE ioremap failed\n");
 
-	ppe_dev->regmap = devm_regmap_init_mmio(dev, base, &regmap_config_ipq9574);
+	ppe_dev->regmap = devm_regmap_init_mmio(dev, base, &ppe_reg_config);
 	if (IS_ERR(ppe_dev->regmap))
 		return dev_err_probe(dev, PTR_ERR(ppe_dev->regmap),
 				     "PPE initialize regmap failed\n");
 	ppe_dev->dev = dev;
-	ppe_dev->clk_rate = PPE_CLK_RATE;
-	ppe_dev->num_ports = PPE_PORT_MAX;
+	ppe_dev->clk_rate = plat_data->ppe_clk_rate;
+	ppe_dev->num_ports = plat_data->num_ports;
 	ppe_dev->num_icc_paths = num_icc;
 
-	ret = ppe_clock_init_and_reset(ppe_dev);
+	ret = ppe_clock_init_and_reset(ppe_dev, plat_data->icc_data);
 	if (ret)
 		return dev_err_probe(dev, ret, "PPE clock config failed\n");
 
-	ret = ppe_hw_config(ppe_dev);
+	ret = ppe_hw_config(ppe_dev, plat_data->soc_cfg);
 	if (ret)
 		return dev_err_probe(dev, ret, "PPE HW config failed\n");
 
@@ -219,7 +269,8 @@ static void qcom_ppe_remove(struct platform_device *pdev)
 }
 
 static const struct of_device_id qcom_ppe_of_match[] = {
-	{ .compatible = "qcom,ipq9574-ppe" },
+	{ .compatible = "qcom,ipq5332-ppe", .data = &ipq5332_ppe_data },
+	{ .compatible = "qcom,ipq9574-ppe", .data = &ipq9574_ppe_data },
 	{}
 };
 MODULE_DEVICE_TABLE(of, qcom_ppe_of_match);

@@ -43,6 +43,11 @@ struct mlx5_eswitch_rep_ops {
 		     struct mlx5_eswitch_rep *rep,
 		     enum mlx5_switchdev_event event,
 		     void *data);
+	/* Attach an uplink netdev that showed up only after the uplink
+	 * representor was already loaded.
+	 */
+	int (*attach_uplink_netdev)(struct mlx5_core_dev *dev,
+				    struct mlx5_eswitch_rep *rep);
 };
 
 struct mlx5_eswitch_rep_data {
@@ -222,6 +227,9 @@ static inline bool is_mdev_switchdev_mode(struct mlx5_core_dev *dev)
 /* The returned number is valid only when the dev is eswitch manager. */
 static inline u16 mlx5_eswitch_manager_vport(struct mlx5_core_dev *dev)
 {
+	if (MLX5_CAP_ESW(dev, esw_manager_vport_number_valid))
+		return MLX5_CAP_ESW(dev, esw_manager_vport_number);
+
 	return mlx5_core_is_ecpf_esw_manager(dev) ?
 		MLX5_VPORT_ECPF : MLX5_VPORT_HOST_PF;
 }

@@ -123,6 +123,31 @@ out:
 	return r;
 }
 
+static int mdio_mux_write_sts(struct mii_bus *bus, int phy_id, int regnum,
+			      u16 val, struct ptp_system_timestamp *sts)
+{
+	struct mdio_mux_child_bus *cb = bus->priv;
+	struct mdio_mux_parent_bus *pb = cb->parent;
+
+	int r;
+
+	mutex_lock_nested(&pb->mii_bus->mdio_lock, MDIO_MUTEX_MUX);
+	r = pb->switch_fn(pb->current_child, cb->bus_number, pb->switch_data);
+	/* write_sts must not return -EOPNOTSUPP. */
+	if (r == -EOPNOTSUPP)
+		r = -EIO;
+	if (r)
+		goto out;
+
+	pb->current_child = cb->bus_number;
+
+	r = pb->mii_bus->write_sts(pb->mii_bus, phy_id, regnum, val, sts);
+out:
+	mutex_unlock(&pb->mii_bus->mdio_lock);
+
+	return r;
+}
+
 static int parent_count;
 
 static void mdio_mux_uninit_children(struct mdio_mux_parent_bus *pb)
@@ -222,6 +247,8 @@ int mdio_mux_init(struct device *dev,
 			cb->mii_bus->read_c45 = mdio_mux_read_c45;
 		if (parent_bus->write_c45)
 			cb->mii_bus->write_c45 = mdio_mux_write_c45;
+		if (parent_bus->write_sts)
+			cb->mii_bus->write_sts = mdio_mux_write_sts;
 		r = of_mdiobus_register(cb->mii_bus, child_bus_node);
 		if (r) {
 			mdiobus_free(cb->mii_bus);

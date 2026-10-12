@@ -751,13 +751,7 @@ static int udpv6_err(struct sk_buff *skb, struct inet6_skb_parm *opt,
 			harderr = 1;
 	}
 	if (type == NDISC_REDIRECT) {
-		if (tunnel) {
-			ip6_redirect(skb, sock_net(sk), inet6_iif(skb),
-				     READ_ONCE(sk->sk_mark),
-				     sk_uid(sk));
-		} else {
-			ip6_sk_redirect(skb, sk);
-		}
+		ip6_sk_redirect(skb, sk);
 		goto out;
 	}
 
@@ -895,7 +889,10 @@ static int udpv6_queue_rcv_skb(struct sock *sk, struct sk_buff *skb)
 	if (likely(!udp_unexpected_gso(sk, skb)))
 		return udpv6_queue_rcv_one_skb(sk, skb);
 
-	__skb_push(skb, -skb_mac_offset(skb));
+	if (skb_mac_header_was_set(skb))
+		__skb_push(skb, -skb_mac_offset(skb));
+	else
+		__skb_push(skb, -skb_network_offset(skb));
 	segs = udp_rcv_segment(sk, skb, false);
 	skb_list_walk_safe(segs, skb, next) {
 		__skb_pull(skb, skb_transport_offset(skb));

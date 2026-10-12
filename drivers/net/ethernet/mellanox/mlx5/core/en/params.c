@@ -62,6 +62,9 @@ mlx5e_mpwrq_umr_mode(struct mlx5_core_dev *mdev,
 	bool unaligned = xsk ? xsk->unaligned : false;
 	bool oversized = false;
 
+	if (rqo && rqo->data_direct)
+		return MLX5E_MPWRQ_UMR_MODE_UNALIGNED;
+
 	if (xsk) {
 		oversized = xsk->chunk_size < (1 << page_shift);
 		WARN_ON_ONCE(xsk->chunk_size > (1 << page_shift));
@@ -1296,12 +1299,14 @@ void mlx5e_build_xdpsq_param(struct mlx5_core_dev *mdev,
 int mlx5e_build_channel_param(struct mlx5_core_dev *mdev,
 			      struct mlx5e_params *params,
 			      struct netdev_queue_config *qcfg,
+			      bool data_direct,
 			      struct mlx5e_channel_param *cparam)
 {
 	u8 icosq_log_wq_sz, async_icosq_log_wq_sz;
 	int err;
 
 	cparam->rq_opt.qcfg = qcfg;
+	cparam->rq_opt.data_direct = data_direct;
 
 	err = mlx5e_build_rq_param(mdev, params, &cparam->rq_opt, &cparam->rq);
 	if (err)

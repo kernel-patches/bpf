@@ -1042,15 +1042,15 @@ receive lists, their filters and the count of filter matches can be
 checked in the appropriate receive list. All entries contain the
 device and a protocol module identifier::
 
-    foo@bar:~$ cat /proc/net/can/rcvlist_all
+    foo@bar:~$ cat /proc/net/can/rcvlist_fil
 
-    receive list 'rx_all':
-      (vcan3: no entry)
-      (vcan2: no entry)
-      (vcan1: no entry)
-      device   can_id   can_mask  function  userdata   matches  ident
-       vcan0     000    00000000  f88e6370  f6c6f400         0  raw
+    receive list 'rx_fil':
       (any: no entry)
+      device   can_id   can_mask   matches     sock_inode     function
+       vcan0  80000123  c00007ff         0  000000000000f862  raw_rcv [can_raw]
+      (vcan1: no entry)
+      (vcan2: no entry)
+      (vcan3: no entry)
 
 In this example an application requests any CAN traffic from vcan0::
 

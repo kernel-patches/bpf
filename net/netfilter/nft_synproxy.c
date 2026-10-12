@@ -118,16 +118,16 @@ static void nft_synproxy_do_eval(const struct nft_synproxy *priv,
 		return;
 	}
 
-	if (nf_checksum(skb, nft_hook(pkt), thoff, IPPROTO_TCP,
-			nft_pf(pkt))) {
-		regs->verdict.code = NF_DROP;
-		return;
-	}
-
 	tcp = skb_header_pointer(skb, thoff,
 				 sizeof(struct tcphdr),
 				 &_tcph);
 	if (!tcp) {
+		regs->verdict.code = NF_DROP;
+		return;
+	}
+
+	if (nf_checksum(skb, nft_hook(pkt), thoff, IPPROTO_TCP,
+			nft_pf(pkt))) {
 		regs->verdict.code = NF_DROP;
 		return;
 	}

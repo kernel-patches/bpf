@@ -748,7 +748,7 @@ static void unlink_all_urbs(struct ems_usb *dev)
 {
 	int i;
 
-	usb_unlink_urb(dev->intr_urb);
+	usb_kill_urb(dev->intr_urb);
 
 	usb_kill_anchored_urbs(&dev->rx_submitted);
 

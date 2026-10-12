@@ -28,11 +28,15 @@ description: |
   supporting various modes such as SGMII/QSGMII/PSGMII/USXGMII/10G-BASER. There
   are 3 UNIPHY (PCS) instances supported on the IPQ9574.
 
-  Ethernet DMA is used to transmit and receive packets between the six Ethernet
+  IPQ5332 uses the same PPE architecture with two front panel ports and two
+  UNIPHY (PCS) instances. Its Ethernet datapath has a CPU port (port0) and
+  two GMAC/XGMAC ports (port1 and port2).
+
+  Ethernet DMA is used to transmit and receive packets between the Ethernet
   ports and ARM host CPU.
 
-  The follow diagram shows the PPE hardware block along with its connectivity
-  to the external hardware blocks such clock hardware blocks (CMNPLL, GCC,
+  The following diagram shows the IPQ9574 PPE hardware block and its
+  connectivity to external clock hardware blocks (CMNPLL, GCC,
   NSS clock controller) and Ethernet PCS/PHY blocks. For depicting the PHY
   connectivity, one 4x1 Gbps PHY (QCA8075) and two 10 GBps PHYs are used as an
   example.
@@ -77,24 +81,29 @@ description: |
 properties:
   compatible:
     enum:
+      - qcom,ipq5332-ppe
       - qcom,ipq9574-ppe
 
   reg:
     maxItems: 1
 
   clocks:
+    minItems: 4
     items:
       - description: PPE core clock
       - description: PPE APB (Advanced Peripheral Bus) clock
       - description: PPE IPE (Ingress Process Engine) clock
       - description: PPE BM, QM and scheduler clock
+      - description: PPE sleep clock from GCC
 
   clock-names:
+    minItems: 4
     items:
       - const: ppe
       - const: apb
       - const: ipe
       - const: btq
+      - const: sleep
 
   resets:
     maxItems: 1
@@ -105,6 +114,7 @@ properties:
     description: PPE switch miscellaneous interrupt
 
   interconnects:
+    minItems: 4
     items:
       - description: Bus interconnect path leading to PPE switch core function
       - description: Bus interconnect path leading to PPE register access
@@ -115,6 +125,7 @@ properties:
       - description: Bus interconnect path leading to enhanced memory NOC from NSS NOC
 
   interconnect-names:
+    minItems: 4
     items:
       - const: ppe
       - const: ppe_cfg
@@ -130,7 +141,9 @@ properties:
     description:
       EDMA (Ethernet DMA) is used to transmit packets between PPE and ARM
       host CPU. There are 32 TX descriptor rings, 32 TX completion rings,
-      24 RX descriptor rings and 8 RX fill rings supported.
+      24 RX descriptor rings and 8 RX fill rings supported on IPQ9574.
+      IPQ5332 supports 24 TX descriptor rings, 24 TX completion rings,
+      16 RX descriptor rings and 8 RX fill rings.
 
     properties:
       clocks:
@@ -144,15 +157,18 @@ properties:
           - const: apb
 
       resets:
-        maxItems: 1
-        description: EDMA reset
+        minItems: 1
+        items:
+          - description:
+              EDMA system reset. On IPQ9574 this also resets the configuration.
+          - description: EDMA configuration reset
 
       interrupts:
-        minItems: 65
+        minItems: 49
         maxItems: 65
 
       interrupt-names:
-        minItems: 65
+        minItems: 49
         maxItems: 65
         items:
           oneOf:
@@ -165,6 +181,7 @@ properties:
           Interrupts "rxfill_[0-7]" are the Ethernet DMA RX fill ring interrupts.
           Interrupts "rxdesc_[0-23]" are the Ethernet DMA RX Descriptor ring interrupts.
           Interrupt "misc" is the Ethernet DMA miscellaneous error interrupt.
+          On IPQ5332, only "txcmpl_[0-23]" and "rxdesc_[0-15]" are supported.
 
     required:
       - clocks
@@ -174,8 +191,17 @@ properties:
       - interrupt-names
 
   ethernet-ports:
+    type: object
+    additionalProperties: false
+
+    properties:
+      '#address-cells':
+        const: 1
+      '#size-cells':
+        const: 0
+
     patternProperties:
-      "^ethernet-port@[1-6]+$":
+      "^ethernet-port@[1-6]$":
         type: object
         unevaluatedProperties: false
         $ref: ethernet-switch-port.yaml#
@@ -229,6 +255,65 @@ required:
 
 allOf:
   - $ref: ethernet-switch.yaml
+  - if:
+      properties:
+        compatible:
+          contains:
+            const: qcom,ipq5332-ppe
+    then:
+      properties:
+        clocks:
+          minItems: 5
+        clock-names:
+          minItems: 5
+        interconnects:
+          maxItems: 4
+        interconnect-names:
+          maxItems: 4
+        ethernet-dma:
+          properties:
+            resets:
+              minItems: 2
+            interrupts:
+              maxItems: 49
+            interrupt-names:
+              maxItems: 49
+              items:
+                oneOf:
+                  - pattern: '^txcmpl_(1?[0-9]|2[0-3])$'
+                  - pattern: '^rxfill_[0-7]$'
+                  - pattern: '^rxdesc_([0-9]|1[0-5])$'
+                  - const: misc
+        ethernet-ports:
+          patternProperties:
+            "^ethernet-port@[1-2]$":
+              properties:
+                reg:
+                  maximum: 2
+            "^ethernet-port@[3-6]$": false
+  - if:
+      properties:
+        compatible:
+          contains:
+            const: qcom,ipq9574-ppe
+    then:
+      properties:
+        clocks:
+          maxItems: 4
+        clock-names:
+          maxItems: 4
+        interconnects:
+          minItems: 7
+        interconnect-names:
+          minItems: 7
+        ethernet-dma:
+          properties:
+            resets:
+              maxItems: 1
+            interrupts:
+              minItems: 65
+            interrupt-names:
+              minItems: 65
 
 unevaluatedProperties: false
 

@@ -1719,6 +1719,8 @@ static int lan78xx_ethtool_set_eeprom(struct net_device *netdev,
 		 (ee->len == 512) &&
 		 (data[0] == OTP_INDICATOR_1))
 		ret = lan78xx_write_raw_otp(dev, ee->offset, ee->len, data);
+	else
+		ret = -EINVAL;
 
 	usb_autopm_put_interface(dev->intf);
 
@@ -2897,6 +2899,7 @@ static int lan78xx_phy_init(struct lan78xx_net *dev)
 		phydev->irq = dev->domain_data.phyirq;
 	else
 		phydev->irq = PHY_POLL;
+	dev->mdiobus->irq[phydev->mdio.addr] = phydev->irq;
 	netdev_dbg(dev->net, "phydev->irq = %d\n", phydev->irq);
 
 	ret = phylink_connect_phy(dev->phylink, phydev);

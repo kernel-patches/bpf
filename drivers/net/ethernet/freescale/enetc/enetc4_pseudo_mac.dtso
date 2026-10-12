@@ -1,0 +1,32 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR BSD-3-Clause)
+/*
+ * Device-tree overlay for ENETC v4 Pseudo-MAC (PPM) ports.
+ *
+ * ENETCv4 pseudo-MACs are proprietary internal links to the on-chip NETC
+ * switch; they implement no standard MII interface and are modeled as a
+ * fixed link whose speed is set at boot time from the Port PCR[PSPEED]
+ * field.
+ *
+ * This overlay is applied by the ENETC4 PF driver onto the PCI function's own
+ * dynamic OF node (created by the PCI core when CONFIG_PCI_DYNAMIC_OF_NODES
+ * is enabled). The overlay only selects fixed-link mode and carries the duplex
+ * setting; the 'speed' property is a placeholder.
+ *
+ * Copyright 2026 NXP
+ */
+
+/dts-v1/;
+/plugin/;
+
+/ {
+	fragment@0 {
+		target-path = "";
+
+		__overlay__ {
+			fixed-link {
+				speed = <2500>;
+				full-duplex;
+			};
+		};
+	};
+};

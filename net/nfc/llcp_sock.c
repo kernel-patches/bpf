@@ -714,6 +714,15 @@ static int llcp_sock_connect(struct socket *sock, struct sockaddr_unsized *_addr
 		ret = -EINPROGRESS;
 		goto error;
 	}
+	/* A bound socket is already linked into local->sockets; letting
+	 * it connect() would link the same sk->sk_node into
+	 * local->connecting_sockets too, and the CC handler's re-add turns
+	 * it into a self-loop.  Reject like CONNECTED/CONNECTING.
+	 */
+	if (sk->sk_state == LLCP_BOUND) {
+		ret = -EISCONN;
+		goto error;
+	}
 
 	dev = nfc_get_device(addr->dev_idx);
 	if (dev == NULL) {

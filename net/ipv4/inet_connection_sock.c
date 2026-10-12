@@ -779,6 +779,9 @@ struct dst_entry *inet_csk_route_req(const struct sock *sk,
 		goto no_route;
 	if (opt && opt->opt.is_strictroute && rt->rt_uses_gateway)
 		goto route_err;
+	/* Never send a SYNACK to a broadcast or multicast destination. */
+	if (rt->rt_flags & (RTCF_BROADCAST | RTCF_MULTICAST))
+		goto route_err;
 	rcu_read_unlock();
 	return &rt->dst;
 
@@ -1253,6 +1256,7 @@ struct sock *inet_csk_clone_lock(const struct sock *sk,
 	memset(&newicsk->icsk_accept_queue, 0,
 	       sizeof(newicsk->icsk_accept_queue));
 
+	newicsk->unhashed_state = 0;
 	inet_sk_set_state(newsk, TCP_SYN_RECV);
 
 	inet_clone_ulp(req, newsk, priority);

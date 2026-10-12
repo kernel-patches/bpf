@@ -62,14 +62,17 @@ static void acc_resetmode_leave(struct acc_core *core)
 	acc_resetmode_entered(core);
 }
 
-static void acc_txq_put(struct acc_core *core, u32 acc_id, u32 acc_dlc,
-			const void *data)
+static void acc_txq_put(struct acc_core *core, u32 acc_dlc, const void *data)
 {
 	acc_write32_noswap(core, ACC_CORE_OF_TXFIFO_DATA_1,
 			   *((const u32 *)(data + 4)));
 	acc_write32_noswap(core, ACC_CORE_OF_TXFIFO_DATA_0,
 			   *((const u32 *)data));
 	acc_write32(core, ACC_CORE_OF_TXFIFO_DLC, acc_dlc);
+}
+
+static void acc_txq_start(struct acc_core *core, u32 acc_id)
+{
 	/* CAN id must be written at last. This write starts TX. */
 	acc_write32(core, ACC_CORE_OF_TXFIFO_ID, acc_id);
 }
@@ -287,11 +290,12 @@ netdev_tx_t acc_start_xmit(struct sk_buff *skb, struct net_device *netdev)
 		acc_id = cf->can_id & CAN_SFF_MASK;
 	}
 
-	can_put_echo_skb(skb, netdev, core->tx_fifo_head, 0);
+	acc_txq_put(core, acc_dlc, cf->data);
 
+	can_put_echo_skb(skb, netdev, core->tx_fifo_head, 0);
 	core->tx_fifo_head = acc_tx_fifo_next(core, tx_fifo_head);
 
-	acc_txq_put(core, acc_id, acc_dlc, cf->data);
+	acc_txq_start(core, acc_id);
 
 	return NETDEV_TX_OK;
 }

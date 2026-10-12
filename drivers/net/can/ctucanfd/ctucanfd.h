@@ -76,7 +76,7 @@ int ctucan_probe_common(struct device *dev, void __iomem *addr,
 			void (*set_drvdata_fnc)(struct device *dev,
 						struct net_device *ndev));
 
-int ctucan_suspend(struct device *dev) __maybe_unused;
-int ctucan_resume(struct device *dev) __maybe_unused;
+int ctucan_suspend(struct device *dev);
+int ctucan_resume(struct device *dev);
 
 #endif /*__CTUCANFD__*/

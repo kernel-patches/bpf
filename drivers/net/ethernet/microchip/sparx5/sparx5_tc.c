@@ -47,7 +47,9 @@ static int sparx5_tc_block_cb_egress(enum tc_setup_type type,
 static int sparx5_tc_setup_block(struct net_device *ndev,
 				 struct flow_block_offload *fbo)
 {
+	struct sparx5_port *port = netdev_priv(ndev);
 	flow_setup_cb_t *cb;
+	int err;
 
 	if (fbo->binder_type == FLOW_BLOCK_BINDER_TYPE_CLSACT_INGRESS)
 		cb = sparx5_tc_block_cb_ingress;
@@ -56,8 +58,16 @@ static int sparx5_tc_setup_block(struct net_device *ndev,
 	else
 		return -EOPNOTSUPP;
 
-	return flow_block_cb_setup_simple(fbo, &sparx5_block_cb_list,
-					  cb, ndev, ndev, false);
+	err = flow_block_cb_setup_simple(fbo, &sparx5_block_cb_list,
+					 cb, ndev, ndev, false);
+	if (err)
+		return err;
+
+	if (fbo->binder_type == FLOW_BLOCK_BINDER_TYPE_CLSACT_INGRESS)
+		port->tc.ingress_block_shared =
+			fbo->command == FLOW_BLOCK_BIND && fbo->block_shared;
+
+	return 0;
 }
 
 static void sparx5_tc_get_layer_and_idx(struct sparx5 *sparx5, u32 parent,
@@ -154,6 +164,21 @@ static int sparx5_tc_setup_qdisc_ets(struct net_device *ndev,
 	return -EOPNOTSUPP;
 }
 
+static int sparx5_tc_setup_qdisc_taprio(struct net_device *ndev,
+					struct tc_taprio_qopt_offload *qopt)
+{
+	struct sparx5_port *port = netdev_priv(ndev);
+
+	switch (qopt->cmd) {
+	case TAPRIO_CMD_REPLACE:
+		return sparx5_tas_enable(port, qopt);
+	case TAPRIO_CMD_DESTROY:
+		return sparx5_tas_disable(port);
+	default:
+		return -EOPNOTSUPP;
+	}
+}
+
 int sparx5_port_setup_tc(struct net_device *ndev, enum tc_setup_type type,
 			 void *type_data)
 {
@@ -166,6 +191,8 @@ int sparx5_port_setup_tc(struct net_device *ndev, enum tc_setup_type type,
 		return sparx5_tc_setup_qdisc_tbf(ndev, type_data);
 	case TC_SETUP_QDISC_ETS:
 		return sparx5_tc_setup_qdisc_ets(ndev, type_data);
+	case TC_SETUP_QDISC_TAPRIO:
+		return sparx5_tc_setup_qdisc_taprio(ndev, type_data);
 	default:
 		return -EOPNOTSUPP;
 	}

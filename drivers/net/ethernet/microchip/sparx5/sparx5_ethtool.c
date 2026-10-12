@@ -1116,6 +1116,7 @@ static void sparx5_update_port_stats(struct sparx5 *sparx5, int portno)
 		sparx5_get_asm_stats(sparx5, portno);
 	sparx5_get_ana_ac_stats_stats(sparx5, portno);
 	sparx5_get_queue_sys_stats(sparx5, portno);
+	sparx5_port_policer_stats_poll(sparx5->ports[portno]);
 }
 
 static void sparx5_update_stats(struct sparx5 *sparx5)

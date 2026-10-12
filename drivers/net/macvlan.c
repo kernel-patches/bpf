@@ -83,6 +83,11 @@ static inline void macvlan_set_passthru(struct macvlan_port *port)
 	port->flags |= MACVLAN_F_PASSTHRU;
 }
 
+static inline void macvlan_clear_passthru(struct macvlan_port *port)
+{
+	port->flags &= ~MACVLAN_F_PASSTHRU;
+}
+
 static inline bool macvlan_addr_change(const struct macvlan_port *port)
 {
 	return port->flags & MACVLAN_F_ADDRCHANGE;
@@ -217,8 +222,7 @@ static bool macvlan_addr_busy(const struct macvlan_port *port,
 	 * currently in use by the underlying device or
 	 * another macvlan.
 	 */
-	if (!macvlan_passthru(port) && !macvlan_addr_change(port) &&
-	    ether_addr_equal_64bits(port->dev->dev_addr, addr))
+	if (ether_addr_equal_64bits(port->dev->dev_addr, addr))
 		return true;
 
 	if (macvlan_hash_lookup(port, addr))
@@ -637,7 +641,7 @@ static int macvlan_open(struct net_device *dev)
 	struct net_device *lowerdev = vlan->lowerdev;
 	int err;
 
-	if (macvlan_passthru(vlan->port)) {
+	if (vlan->mode == MACVLAN_MODE_PASSTHRU) {
 		if (!(vlan->flags & MACVLAN_FLAG_NOPROMISC)) {
 			err = dev_set_promiscuity(lowerdev, 1);
 			if (err < 0)
@@ -712,7 +716,7 @@ static int macvlan_stop(struct net_device *dev)
 	dev_uc_unsync(lowerdev, dev);
 	dev_mc_unsync(lowerdev, dev);
 
-	if (macvlan_passthru(vlan->port)) {
+	if (vlan->mode == MACVLAN_MODE_PASSTHRU) {
 		if (!(vlan->flags & MACVLAN_FLAG_NOPROMISC))
 			dev_set_promiscuity(lowerdev, -1);
 		goto hash_del;
@@ -737,17 +741,18 @@ static int macvlan_sync_address(struct net_device *dev,
 	struct macvlan_dev *vlan = netdev_priv(dev);
 	struct net_device *lowerdev = vlan->lowerdev;
 	struct macvlan_port *port = vlan->port;
+	bool passthru_dev = vlan->mode == MACVLAN_MODE_PASSTHRU;
 	int err;
 
 	if (!(dev->flags & IFF_UP)) {
 		/* Just copy in the new address */
 		eth_hw_addr_set(dev, addr);
 	} else {
-		/* Rehash and update the device filters */
-		if (macvlan_addr_busy(vlan->port, addr))
-			return -EADDRINUSE;
+		if (!passthru_dev) {
+			/* Rehash and update the device filters */
+			if (macvlan_addr_busy(vlan->port, addr))
+					return -EADDRINUSE;
 
-		if (!macvlan_passthru(port)) {
 			err = dev_uc_add(lowerdev, addr);
 			if (err)
 				return err;
@@ -757,7 +762,7 @@ static int macvlan_sync_address(struct net_device *dev,
 
 		macvlan_hash_change_addr(vlan, addr);
 	}
-	if (macvlan_passthru(port) && !macvlan_addr_change(port)) {
+	if (passthru_dev && !macvlan_addr_change(port)) {
 		/* Since addr_change isn't set, we are here due to lower
 		 * device change.  Save the lower-dev address so we can
 		 * restore it later.
@@ -781,13 +786,16 @@ static int macvlan_set_mac_address(struct net_device *dev, void *p)
 	if (ether_addr_equal(dev->dev_addr, addr->__data))
 		return 0;
 
-	if (READ_ONCE(vlan->mode) == MACVLAN_MODE_PASSTHRU) {
-		macvlan_set_addr_change(vlan->port);
-		return dev_set_mac_address(vlan->lowerdev, addr, NULL);
-	}
-
 	if (macvlan_addr_busy(vlan->port, addr->__data))
 		return -EADDRINUSE;
+
+	if (READ_ONCE(vlan->mode) == MACVLAN_MODE_PASSTHRU) {
+		macvlan_set_addr_change(vlan->port);
+		/* macvlan_sync_address() via netdev notifier,
+		 * to keep passthru and lower in sync.
+		 */
+		return dev_set_mac_address(vlan->lowerdev, addr, NULL);
+	}
 
 	return macvlan_sync_address(dev, addr->__data);
 }
@@ -800,7 +808,7 @@ static void macvlan_change_rx_flags(struct net_device *dev, int change)
 	if (dev->flags & IFF_UP) {
 		if (change & IFF_ALLMULTI)
 			dev_set_allmulti(lowerdev, dev->flags & IFF_ALLMULTI ? 1 : -1);
-		if (!macvlan_passthru(vlan->port) && change & IFF_PROMISC)
+		if (READ_ONCE(vlan->mode) != MACVLAN_MODE_PASSTHRU && change & IFF_PROMISC)
 			dev_set_promiscuity(lowerdev,
 					    dev->flags & IFF_PROMISC ? 1 : -1);
 
@@ -979,7 +987,26 @@ static void macvlan_uninit(struct net_device *dev)
 
 	macvlan_flush_sources(port, vlan);
 	port->count -= 1;
-	if (!port->count)
+
+	if (vlan->mode == MACVLAN_MODE_PASSTHRU) {
+		/* If the lower device address has been changed by passthru
+		 * macvlan, put it back.
+		 *
+		 * Caution: This triggers NETDEV_CHANGEADDR on
+		 * the lower device. But we're in the green because
+		 * the passthru interface is already off the list.
+		 */
+		if (!ether_addr_equal(port->dev->dev_addr, port->perm_addr)) {
+			struct sockaddr_storage ss;
+
+			ss.ss_family = port->dev->type;
+			memcpy(&ss.__data, port->perm_addr, port->dev->addr_len);
+			dev_set_mac_address(port->dev, &ss, NULL);
+		}
+		macvlan_clear_passthru(port);
+	}
+
+	if (port->count == 0)
 		macvlan_port_destroy(port->dev);
 }
 
@@ -1054,7 +1081,7 @@ static int macvlan_fdb_add(struct ndmsg *ndm, struct nlattr *tb[],
 	/* Support unicast filter only on passthru devices.
 	 * Multicast filter should be allowed on all devices.
 	 */
-	if (!macvlan_passthru(vlan->port) && is_unicast_ether_addr(addr))
+	if (vlan->mode != MACVLAN_MODE_PASSTHRU && is_unicast_ether_addr(addr))
 		return -EOPNOTSUPP;
 
 	if (flags & NLM_F_REPLACE)
@@ -1079,7 +1106,7 @@ static int macvlan_fdb_del(struct ndmsg *ndm, struct nlattr *tb[],
 	/* Support unicast filter only on passthru devices.
 	 * Multicast filter should be allowed on all devices.
 	 */
-	if (!macvlan_passthru(vlan->port) && is_unicast_ether_addr(addr))
+	if (vlan->mode != MACVLAN_MODE_PASSTHRU && is_unicast_ether_addr(addr))
 		return -EOPNOTSUPP;
 
 	if (is_unicast_ether_addr(addr))
@@ -1268,7 +1295,6 @@ static int macvlan_port_create(struct net_device *dev)
 		return -ENOMEM;
 
 	port->dev = dev;
-	ether_addr_copy(port->perm_addr, dev->dev_addr);
 	INIT_LIST_HEAD(&port->vlans);
 	for (i = 0; i < MACVLAN_HASH_SIZE; i++)
 		INIT_HLIST_HEAD(&port->vlan_hash[i]);
@@ -1308,18 +1334,6 @@ static void macvlan_port_destroy(struct net_device *dev)
 			dev_put(src->dev);
 
 		kfree_skb(skb);
-	}
-
-	/* If the lower device address has been changed by passthru
-	 * macvlan, put it back.
-	 */
-	if (macvlan_passthru(port) &&
-	    !ether_addr_equal(port->dev->dev_addr, port->perm_addr)) {
-		struct sockaddr_storage ss;
-
-		ss.ss_family = port->dev->type;
-		memcpy(&ss.__data, port->perm_addr, port->dev->addr_len);
-		dev_set_mac_address(port->dev, &ss, NULL);
 	}
 
 	kfree(port);
@@ -1523,15 +1537,6 @@ int macvlan_common_newlink(struct net_device *dev,
 	}
 	port = macvlan_port_get_rtnl(lowerdev);
 
-	/* Only 1 macvlan device can be created in passthru mode */
-	if (macvlan_passthru(port)) {
-		/* The macvlan port must be not created this time,
-		 * still goto destroy_macvlan_port for readability.
-		 */
-		err = -EINVAL;
-		goto destroy_macvlan_port;
-	}
-
 	vlan->lowerdev = lowerdev;
 	vlan->dev      = dev;
 	vlan->port     = port;
@@ -1544,12 +1549,32 @@ int macvlan_common_newlink(struct net_device *dev,
 	if (data && data[IFLA_MACVLAN_FLAGS])
 		vlan->flags = nla_get_u16(data[IFLA_MACVLAN_FLAGS]);
 
+	/* Only 1 macvlan device can be created in passthru mode. There may be
+	 * additional source mode devices but nothing else at the moment.
+	 *
+	 * First check if adding a source mode device to an existing passthru vlan.
+	 */
+	if (macvlan_passthru(port) && vlan->mode != MACVLAN_MODE_SOURCE) {
+		/* The macvlan port must be not created this time,
+		 * still goto destroy_macvlan_port for readability.
+		 */
+		err = -EINVAL;
+		goto destroy_macvlan_port;
+	}
+
+	/* Now check if adding a passthru device to an existing set of source mode
+	 * devices.
+	 */
 	if (vlan->mode == MACVLAN_MODE_PASSTHRU) {
-		if (port->count) {
-			err = -EINVAL;
-			goto destroy_macvlan_port;
+		struct macvlan_dev *p;
+
+		list_for_each_entry(p, &port->vlans, list) {
+			if (p->mode != MACVLAN_MODE_SOURCE) {
+				err = -EINVAL;
+				goto destroy_macvlan_port;
+			}
 		}
-		macvlan_set_passthru(port);
+		ether_addr_copy(port->perm_addr, lowerdev->dev_addr);
 		eth_hw_addr_inherit(dev, lowerdev);
 	}
 
@@ -1581,7 +1606,12 @@ int macvlan_common_newlink(struct net_device *dev,
 	if (err)
 		goto unregister_netdev;
 
-	list_add_tail_rcu(&vlan->list, &port->vlans);
+	/* macvlan_handle_frame expects the (one and only) passthru device first. */
+	if (vlan->mode == MACVLAN_MODE_PASSTHRU) {
+		list_add_rcu(&vlan->list, &port->vlans);
+		macvlan_set_passthru(port);
+	} else
+		list_add_tail_rcu(&vlan->list, &port->vlans);
 	update_port_bc_queue_len(vlan->port);
 	netif_stacked_transfer_operstate(lowerdev, dev);
 	linkwatch_fire_event(dev);
@@ -1641,7 +1671,8 @@ static int macvlan_changelink(struct net_device *dev,
 	int ret;
 
 	if (data &&
-	    (data[IFLA_MACVLAN_BC_QUEUE_LEN] || data[IFLA_MACVLAN_BC_CUTOFF]) &&
+	    (data[IFLA_MACVLAN_BC_QUEUE_LEN] || data[IFLA_MACVLAN_BC_CUTOFF] ||
+	     data[IFLA_MACVLAN_FLAGS]) &&
 	    !rtnl_dev_link_net_capable(dev, dev_net(vlan->lowerdev))) {
 		NL_SET_ERR_MSG(extack,
 			       "Changing shared macvlan port settings requires CAP_NET_ADMIN in the lower device network namespace");
@@ -1652,19 +1683,23 @@ static int macvlan_changelink(struct net_device *dev,
 	if (data && data[IFLA_MACVLAN_MODE]) {
 		set_mode = true;
 		mode = nla_get_u32(data[IFLA_MACVLAN_MODE]);
-		/* Passthrough mode can't be set or cleared dynamically */
-		if ((mode == MACVLAN_MODE_PASSTHRU) !=
-		    (vlan->mode == MACVLAN_MODE_PASSTHRU))
-			return -EINVAL;
-		if (vlan->mode == MACVLAN_MODE_SOURCE &&
-		    vlan->mode != mode)
-			macvlan_flush_sources(vlan->port, vlan);
+		if (mode != vlan->mode) {
+			/* Passthrough mode can't be set or cleared dynamically,
+			 * regardless of existing source interfaces. Furthermore, source
+			 * interfaces can't switch modes within a passhtrough port.
+			 */
+			if (mode == MACVLAN_MODE_PASSTHRU ||
+			    macvlan_passthru(vlan->port))
+				return -EINVAL;
+			if (vlan->mode == MACVLAN_MODE_SOURCE)
+				macvlan_flush_sources(vlan->port, vlan);
+		}
 	}
 
 	if (data && data[IFLA_MACVLAN_FLAGS]) {
 		__u16 flags = nla_get_u16(data[IFLA_MACVLAN_FLAGS]);
 		bool promisc = (flags ^ vlan->flags) & MACVLAN_FLAG_NOPROMISC;
-		if (macvlan_passthru(vlan->port) && promisc) {
+		if (vlan->mode == MACVLAN_MODE_PASSTHRU && promisc) {
 			int err;
 
 			if (flags & MACVLAN_FLAG_NOPROMISC)
@@ -1897,8 +1932,14 @@ static int macvlan_device_event(struct notifier_block *unused,
 		vlan = list_first_entry_or_null(&port->vlans,
 						struct macvlan_dev,
 						list);
-
-		if (vlan && macvlan_sync_address(vlan->dev, dev->dev_addr))
+		/* Validate the interface mode again because we're potentially
+		 * triggered upon removal of the passthru interface. In which
+		 * case it is already off the list (and has restored the lower
+		 * device mac already).
+		 */
+		if (!vlan || vlan->mode != MACVLAN_MODE_PASSTHRU)
+			return NOTIFY_DONE;
+		if (macvlan_sync_address(vlan->dev, dev->dev_addr))
 			return NOTIFY_BAD;
 
 		break;

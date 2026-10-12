@@ -616,10 +616,10 @@ static int sparx5_init_coreclock(struct sparx5 *sparx5)
 		 sparx5,
 		 HSCH_TAS_STATEMACHINE_CFG);
 
-	spx5_rmw(ANA_AC_POL_POL_UPD_INT_CFG_POL_UPD_INT_SET(pol_upd_int),
-		 ANA_AC_POL_POL_UPD_INT_CFG_POL_UPD_INT,
+	spx5_rmw(ANA_AC_POL_UPD_INT_CFG_POL_UPD_INT_SET(pol_upd_int),
+		 ANA_AC_POL_UPD_INT_CFG_POL_UPD_INT,
 		 sparx5,
-		 ANA_AC_POL_POL_UPD_INT_CFG);
+		 ANA_AC_POL_UPD_INT_CFG);
 
 	return 0;
 }
@@ -1064,6 +1064,8 @@ static const struct sparx5_consts sparx5_consts = {
 	.n_gates             = 1024,
 	.n_sdlbs             = 4096,
 	.n_dsm_cal_taxis     = 8,
+	.n_tas_gcl           = 10000,
+	.n_tas_lists         = 128,
 	.buf_size            = 4194280,
 	.qres_max_prio_idx   = 630,
 	.qres_max_colour_idx = 638,
