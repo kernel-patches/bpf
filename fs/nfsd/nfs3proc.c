@@ -225,6 +225,13 @@ struct READDIR3args_wrapper {
 
 static_assert(offsetof(struct READDIR3args_wrapper, xdrgen) == 0);
 
+struct READDIRPLUS3args_wrapper {
+	struct READDIRPLUS3args	xdrgen;
+	struct svc_fh		fh;
+};
+
+static_assert(offsetof(struct READDIRPLUS3args_wrapper, xdrgen) == 0);
+
 static int nfsd3_ftype3_to_mode(ftype3 ftype)
 {
 	switch (ftype) {
@@ -1559,27 +1566,32 @@ static __be32 nfsd3_proc_readdir(struct svc_rqst *rqstp)
 	return rpc_success;
 }
 
-/*
- * Read a portion of a directory, including file handles and attrs.
- * For now, we choose to ignore the dircount parameter.
+/**
+ * nfsd3_proc_readdirplus - READDIRPLUS: Extended read from directory
+ * @rqstp: RPC transaction context
+ *
+ * Return:
+ *   %rpc_success:		RPC executed successfully
+ *
+ * RPC synopsis:
+ *   READDIRPLUS3res NFSPROC3_READDIRPLUS(READDIRPLUS3args) = 17;
  */
-static __be32
-nfsd3_proc_readdirplus(struct svc_rqst *rqstp)
+static __be32 nfsd3_proc_readdirplus(struct svc_rqst *rqstp)
 {
-	struct nfsd3_readdirargs *argp = rqstp->rq_argp;
+	struct READDIRPLUS3args_wrapper *argp = rqstp->rq_argp;
 	struct nfsd3_readdirres  *resp = rqstp->rq_resp;
-	loff_t	offset;
+	loff_t offset = argp->xdrgen.cookie;
+	struct svc_fh *fhp = &argp->fh;
 
-	trace_nfsd_vfs_readdir(rqstp, &argp->fh, argp->count, argp->cookie);
+	nfsd3_fh3_to_svc_fh(fhp, &argp->xdrgen.dir);
+	trace_nfsd_vfs_readdir(rqstp, fhp, argp->xdrgen.maxcount,
+			       argp->xdrgen.cookie);
 
-	nfsd3_init_dirlist_pages(rqstp, resp, argp->count);
-
-	fh_copy(&resp->fh, &argp->fh);
+	nfsd3_init_dirlist_pages(rqstp, resp, argp->xdrgen.maxcount);
+	fh_copy(&resp->fh, fhp);
 	resp->common.err = nfs_ok;
 	resp->cookie_offset = 0;
 	resp->rqstp = rqstp;
-	offset = argp->cookie;
-
 	resp->status = fh_verify(rqstp, &resp->fh, S_IFDIR, NFSD_MAY_NOP);
 	if (resp->status != nfs_ok)
 		goto out;
@@ -1591,7 +1603,7 @@ nfsd3_proc_readdirplus(struct svc_rqst *rqstp)
 
 	resp->status = nfsd_readdir(rqstp, &resp->fh, &offset,
 				    &resp->common, nfs3svc_encode_entryplus3);
-	memcpy(resp->verf, argp->verf, 8);
+	memcpy(resp->verf, argp->xdrgen.cookieverf, NFS3_COOKIEVERFSIZE);
 	nfs3svc_encode_cookie3(resp, offset);
 
 	/* Recycle only pages that were part of the reply */
@@ -1832,8 +1844,6 @@ out:
  * NFSv3 Server procedures.
  * Only the results of non-idempotent operations are cached.
  */
-#define nfsd3_readdirplusargs		nfsd3_readdirargs
-
 static const struct svc_procedure nfsd_procedures3[22] = {
 	[NFSPROC3_NULL] = {
 		.pc_func	= nfsd3_proc_null,
@@ -2026,15 +2036,15 @@ static const struct svc_procedure nfsd_procedures3[22] = {
 		.pc_name	= "READDIR",
 	},
 	[NFSPROC3_READDIRPLUS] = {
-		.pc_func = nfsd3_proc_readdirplus,
-		.pc_decode = nfs3svc_decode_readdirplusargs,
-		.pc_encode = nfs3svc_encode_readdirres,
-		.pc_release = nfs3svc_release_fhandle,
-		.pc_argsize = sizeof(struct nfsd3_readdirplusargs),
-		.pc_argzero = sizeof(struct nfsd3_readdirplusargs),
-		.pc_ressize = sizeof(struct nfsd3_readdirres),
-		.pc_cachetype = RC_NOCACHE,
-		.pc_name = "READDIRPLUS",
+		.pc_func	= nfsd3_proc_readdirplus,
+		.pc_decode	= nfs_svc_decode_READDIRPLUS3args,
+		.pc_encode	= nfs3svc_encode_readdirres,
+		.pc_release	= nfs3svc_release_fhandle,
+		.pc_argsize	= sizeof(struct READDIRPLUS3args_wrapper),
+		.pc_argzero	= 0,
+		.pc_ressize	= sizeof(struct nfsd3_readdirres),
+		.pc_cachetype	= RC_NOCACHE,
+		.pc_name	= "READDIRPLUS",
 	},
 	[NFSPROC3_FSSTAT] = {
 		.pc_func	= nfsd3_proc_fsstat,
@@ -2114,7 +2124,7 @@ union nfsd3_xdrstore {
 	struct LINK3args_wrapper	linkargs;
 	struct LINK3res			linkres;
 	struct READDIR3args_wrapper	readdirargs;
-	struct nfsd3_readdirargs	readdirplusargs;
+	struct READDIRPLUS3args_wrapper	readdirplusargs;
 	struct READLINK3res		readlinkres;
 	struct READ3res			readres;
 	struct nfsd3_writeres		writeres;

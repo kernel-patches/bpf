@@ -24,13 +24,6 @@ struct nfsd3_accessargs {
 	__u32			access;
 };
 
-struct nfsd3_readdirargs {
-	struct svc_fh		fh;
-	__u64			cookie;
-	__u32			count;
-	__be32 *		verf;
-};
-
 struct nfsd3_getaclargs {
 	struct svc_fh		fh;
 	__u32			mask;
@@ -112,8 +105,6 @@ struct nfsd3_getaclres {
 	struct posix_acl	*acl_default;
 	struct kstat		stat;
 };
-
-bool nfs3svc_decode_readdirplusargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 
 bool nfs3svc_encode_accessres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_encode_readdirres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
