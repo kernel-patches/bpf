@@ -78,6 +78,13 @@ struct ACCESS3args_wrapper {
 
 static_assert(offsetof(struct ACCESS3args_wrapper, xdrgen) == 0);
 
+struct READLINK3args_wrapper {
+	struct READLINK3args	xdrgen;
+	struct svc_fh		fh;
+};
+
+static_assert(offsetof(struct READLINK3args_wrapper, xdrgen) == 0);
+
 static int	nfs3_ftypes[] = {
 	0,			/* NF3NON */
 	S_IFREG,		/* NF3REG */
@@ -587,24 +594,44 @@ static __be32 nfsd3_proc_access(struct svc_rqst *rqstp)
 	return rpc_success;
 }
 
-/*
- * Read a symlink.
+/**
+ * nfsd3_proc_readlink - READLINK: Read from symbolic link
+ * @rqstp: RPC transaction context
+ *
+ * Return:
+ *   %rpc_success:		RPC executed successfully
+ *
+ * RPC synopsis:
+ *   READLINK3res NFSPROC3_READLINK(READLINK3args) = 5;
  */
-static __be32
-nfsd3_proc_readlink(struct svc_rqst *rqstp)
+static __be32 nfsd3_proc_readlink(struct svc_rqst *rqstp)
 {
-	struct nfsd_fhandle *argp = rqstp->rq_argp;
-	struct nfsd3_readlinkres *resp = rqstp->rq_resp;
+	struct READLINK3args_wrapper *argp = rqstp->rq_argp;
+	struct READLINK3res *resp = rqstp->rq_resp;
+	struct svc_fh *fhp = &argp->fh;
+	struct page *page;
+	u32 len;
 
-	dprintk("nfsd: READLINK(3) %s\n", SVCFH_fmt(&argp->fh));
+	nfsd3_fh3_to_svc_fh(fhp, &argp->xdrgen.symlink);
 
-	/* Read the symlink. */
-	fh_copy(&resp->fh, &argp->fh);
-	resp->len = NFS3_MAXPATHLEN;
-	resp->pages = rqstp->rq_next_page++;
-	resp->status = nfsd_readlink(rqstp, &resp->fh,
-				     page_address(*resp->pages), &resp->len);
-	resp->status = nfsd3_map_status(resp->status);
+	len = NFS3_MAXPATHLEN;
+	page = *(rqstp->rq_next_page++);
+	resp->status = nfsd_readlink(rqstp, fhp, page_address(page), &len);
+
+	if (resp->status == nfs_ok) {
+		struct READLINK3resok *resok = &resp->u.resok;
+
+		resok->data.len = len;
+		nfsd3_fill_post_op_attr(rqstp, &resok->symlink_attributes, fhp);
+	} else {
+		struct READLINK3resfail *resfail = &resp->u.resfail;
+
+		resp->status = nfsd3_map_status(resp->status);
+		nfsd3_fill_post_op_attr(rqstp, &resfail->symlink_attributes,
+					fhp);
+	}
+
+	fh_put(fhp);
 	return rpc_success;
 }
 
@@ -1338,16 +1365,17 @@ static const struct svc_procedure nfsd_procedures3[22] = {
 		.pc_name	= "ACCESS",
 	},
 	[NFSPROC3_READLINK] = {
-		.pc_func = nfsd3_proc_readlink,
-		.pc_decode = nfs3svc_decode_fhandleargs,
-		.pc_encode = nfs3svc_encode_readlinkres,
-		.pc_release = nfs3svc_release_fhandle,
-		.pc_argsize = sizeof(struct nfsd_fhandle),
-		.pc_argzero = sizeof(struct nfsd_fhandle),
-		.pc_ressize = sizeof(struct nfsd3_readlinkres),
-		.pc_cachetype = RC_NOCACHE,
-		.pc_xdrressize = ST+pAT+1+NFS3_MAXPATHLEN/4,
-		.pc_name = "READLINK",
+		.pc_func	= nfsd3_proc_readlink,
+		.pc_decode	= nfs_svc_decode_READLINK3args,
+		.pc_encode	= nfs_svc_encode_READLINK3res,
+		.pc_argsize	= sizeof(struct READLINK3args_wrapper),
+		.pc_argzero	= 0,
+		.pc_ressize	= sizeof(struct READLINK3res),
+		.pc_cachetype	= RC_NOCACHE,
+		/* _sz omits the payload, which nfs3.x leaves unbounded */
+		.pc_xdrressize	= NFS3_READLINK3res_sz +
+				  XDR_QUADLEN(NFS3_MAXPATHLEN),
+		.pc_name	= "READLINK",
 	},
 	[NFSPROC3_READ] = {
 		.pc_func = nfsd3_proc_read,
@@ -1550,6 +1578,7 @@ union nfsd3_xdrstore {
 	struct LOOKUP3res_wrapper	lookupres;
 	struct ACCESS3args_wrapper	accessargs;
 	struct ACCESS3res		accessres;
+	struct READLINK3args_wrapper	readlinkargs;
 	struct nfsd3_diropargs		diropargs;
 	struct nfsd3_readargs		readargs;
 	struct nfsd3_writeargs		writeargs;
@@ -1559,7 +1588,7 @@ union nfsd3_xdrstore {
 	struct nfsd3_symlinkargs	symlinkargs;
 	struct nfsd3_readdirargs	readdirargs;
 	struct nfsd3_diropres		diropres;
-	struct nfsd3_readlinkres	readlinkres;
+	struct READLINK3res		readlinkres;
 	struct nfsd3_readres		readres;
 	struct nfsd3_writeres		writeres;
 	struct nfsd3_renameres		renameres;

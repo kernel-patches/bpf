@@ -9,6 +9,7 @@
 #define _LINUX_NFSD_XDR3_H
 
 #include <linux/vfs.h>
+#include <linux/sunrpc/xdrgen/nfs3.h>
 
 #include "vfs.h"
 
@@ -134,13 +135,6 @@ struct nfsd3_accessres {
 	struct kstat		stat;
 };
 
-struct nfsd3_readlinkres {
-	__be32			status;
-	struct svc_fh		fh;
-	__u32			len;
-	struct page		**pages;
-};
-
 struct nfsd3_readres {
 	__be32			status;
 	struct svc_fh		fh;
@@ -252,7 +246,6 @@ bool nfs3svc_decode_commitargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 
 bool nfs3svc_encode_wccstat(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_encode_accessres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
-bool nfs3svc_encode_readlinkres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_encode_readres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_encode_writeres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_encode_createres(struct svc_rqst *rqstp, struct xdr_stream *xdr);

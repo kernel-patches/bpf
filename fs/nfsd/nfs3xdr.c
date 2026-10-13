@@ -708,34 +708,6 @@ nfs3svc_encode_wccstat(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 		svcxdr_encode_wcc_data(rqstp, xdr, &resp->fh);
 }
 
-/* READLINK */
-bool
-nfs3svc_encode_readlinkres(struct svc_rqst *rqstp, struct xdr_stream *xdr)
-{
-	struct nfsd3_readlinkres *resp = rqstp->rq_resp;
-	struct kvec *head = rqstp->rq_res.head;
-
-	if (!svcxdr_encode_nfsstat3(xdr, resp->status))
-		return false;
-	switch (resp->status) {
-	case nfs_ok:
-		if (!svcxdr_encode_post_op_attr(rqstp, xdr, &resp->fh))
-			return false;
-		if (xdr_stream_encode_u32(xdr, resp->len) < 0)
-			return false;
-		svcxdr_encode_opaque_pages(rqstp, xdr, resp->pages, 0,
-					   resp->len);
-		if (svc_encode_result_payload(rqstp, head->iov_len, resp->len) < 0)
-			return false;
-		break;
-	default:
-		if (!svcxdr_encode_post_op_attr(rqstp, xdr, &resp->fh))
-			return false;
-	}
-
-	return true;
-}
-
 /* READ */
 bool
 nfs3svc_encode_readres(struct svc_rqst *rqstp, struct xdr_stream *xdr)

@@ -331,6 +331,7 @@ struct READLINK3resok {
 	post_op_attr	symlink_attributes;
 	nfspath3	data;
 };
+pragma pages READLINK3resok data;
 
 struct READLINK3resfail {
 	post_op_attr	symlink_attributes;
