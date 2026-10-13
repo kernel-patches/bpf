@@ -40,4 +40,7 @@ void __init prom_meminit(void)
 			bank, base, size >> 20);
 		memblock_add(base, size);
 	}
+
+	/* ARC describes only the first 256 MiB, so RAM comes from CRIME. */
+	prom_mdesc_init(false);
 }
