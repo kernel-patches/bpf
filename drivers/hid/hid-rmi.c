@@ -320,6 +320,12 @@ static int rmi_reset_attn_mode(struct hid_device *hdev)
 	if (ret)
 		return ret;
 
+	mutex_lock(&data->page_mutex);
+	ret = rmi_set_page(hdev, 0);
+	mutex_unlock(&data->page_mutex);
+	if (ret)
+		return ret;
+
 	if (test_bit(RMI_STARTED, &data->flags))
 		ret = rmi_dev->driver->reset_handler(rmi_dev);
 
