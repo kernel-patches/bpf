@@ -182,7 +182,8 @@ static void txgbe_mac_link_down(struct phylink_config *config,
 {
 	struct wx *wx = phylink_to_wx(config);
 
-	wr32m(wx, WX_MAC_TX_CFG, WX_MAC_TX_CFG_TE, 0);
+	if (!wx->ncsi_enabled)
+		wr32m(wx, WX_MAC_TX_CFG, WX_MAC_TX_CFG_TE, 0);
 
 	wx->speed = SPEED_UNKNOWN;
 	if (test_bit(WX_STATE_PTP_RUNNING, wx->state))
@@ -252,6 +253,10 @@ static int txgbe_mac_finish(struct phylink_config *config, unsigned int mode,
 
 	txgbe_enable_sec_tx_path(wx);
 	wr32m(wx, WX_MAC_RX_CFG, WX_MAC_RX_CFG_RE, WX_MAC_RX_CFG_RE);
+
+	/* NCSI requires MAC Tx to be enabled even if the host link stays down. */
+	if (wx->ncsi_enabled)
+		wr32m(wx, WX_MAC_TX_CFG, WX_MAC_TX_CFG_TE, WX_MAC_TX_CFG_TE);
 
 	return 0;
 }
@@ -367,6 +372,11 @@ static int txgbe_gpio_direction_out(struct gpio_chip *chip, unsigned int offset,
 	struct wx *wx = gpiochip_get_data(chip);
 	unsigned long flags;
 	u32 set;
+
+	/* Keep the NCSI transmitter enabled while the host interface is down. */
+	if (wx->ncsi_enabled && BIT(offset) == TXGBE_GPIOBIT_1 &&
+	    test_bit(WX_STATE_DOWN, wx->state))
+		val = 0;
 
 	set = val ? BIT(offset) : 0;
 
