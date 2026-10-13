@@ -1314,7 +1314,8 @@ void wx_disable_rx(struct wx *wx)
 		wr32(wx, WX_RDB_PB_CTL, rxctrl);
 
 		if (!(((wx->subsystem_device_id & WX_NCSI_MASK) == WX_NCSI_SUP) ||
-		      ((wx->subsystem_device_id & WX_WOL_MASK) == WX_WOL_SUP))) {
+		      ((wx->subsystem_device_id & WX_WOL_MASK) == WX_WOL_SUP) ||
+		      (wx->mac.type == wx_mac_em && (wx->subsystem_device_id & 0xFF) == 0x40))) {
 			/* disable mac receiver */
 			wr32m(wx, WX_MAC_RX_CFG,
 			      WX_MAC_RX_CFG_RE, 0);
