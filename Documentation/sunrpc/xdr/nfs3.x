@@ -356,6 +356,7 @@ struct READ3resok {
 	bool		eof;
 	opaque		data<>;
 };
+pragma pages READ3resok data;
 
 struct READ3resfail {
 	post_op_attr	file_attributes;

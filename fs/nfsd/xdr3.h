@@ -30,12 +30,6 @@ struct nfsd3_accessargs {
 	__u32			access;
 };
 
-struct nfsd3_readargs {
-	struct svc_fh		fh;
-	__u64			offset;
-	__u32			count;
-};
-
 struct nfsd3_writeargs {
 	svc_fh			fh;
 	__u64			offset;
@@ -135,14 +129,6 @@ struct nfsd3_accessres {
 	struct kstat		stat;
 };
 
-struct nfsd3_readres {
-	__be32			status;
-	struct svc_fh		fh;
-	unsigned long		count;
-	__u32			eof;
-	struct page		**pages;
-};
-
 struct nfsd3_writeres {
 	__be32			status;
 	struct svc_fh		fh;
@@ -232,7 +218,6 @@ struct nfsd3_fhandle_pair {
 
 bool nfs3svc_decode_fhandleargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_decode_diropargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
-bool nfs3svc_decode_readargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_decode_writeargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_decode_createargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_decode_mkdirargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
@@ -246,7 +231,6 @@ bool nfs3svc_decode_commitargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 
 bool nfs3svc_encode_wccstat(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_encode_accessres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
-bool nfs3svc_encode_readres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_encode_writeres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_encode_createres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_encode_renameres(struct svc_rqst *rqstp, struct xdr_stream *xdr);

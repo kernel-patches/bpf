@@ -85,6 +85,13 @@ struct READLINK3args_wrapper {
 
 static_assert(offsetof(struct READLINK3args_wrapper, xdrgen) == 0);
 
+struct READ3args_wrapper {
+	struct READ3args	xdrgen;
+	struct svc_fh		fh;
+};
+
+static_assert(offsetof(struct READ3args_wrapper, xdrgen) == 0);
+
 static int	nfs3_ftypes[] = {
 	0,			/* NF3NON */
 	S_IFREG,		/* NF3REG */
@@ -635,41 +642,57 @@ static __be32 nfsd3_proc_readlink(struct svc_rqst *rqstp)
 	return rpc_success;
 }
 
-/*
- * Read a portion of a file.
+/**
+ * nfsd3_proc_read - READ: Read from file
+ * @rqstp: RPC transaction context
+ *
+ * Return:
+ *   %rpc_success:		RPC executed successfully
+ *
+ * RPC synopsis:
+ *   READ3res NFSPROC3_READ(READ3args) = 6;
  */
-static __be32
-nfsd3_proc_read(struct svc_rqst *rqstp)
+static __be32 nfsd3_proc_read(struct svc_rqst *rqstp)
 {
-	struct nfsd3_readargs *argp = rqstp->rq_argp;
-	struct nfsd3_readres *resp = rqstp->rq_resp;
+	struct READ3args_wrapper *argp = rqstp->rq_argp;
+	struct READ3res *resp = rqstp->rq_resp;
+	unsigned long count = argp->xdrgen.count;
+	u64 offset = argp->xdrgen.offset;
+	struct svc_fh *fhp = &argp->fh;
+	u32 eof;
 
-	dprintk("nfsd: READ(3) %s %lu bytes at %Lu\n",
-				SVCFH_fmt(&argp->fh),
-				(unsigned long) argp->count,
-				(unsigned long long) argp->offset);
+	nfsd3_fh3_to_svc_fh(fhp, &argp->xdrgen.file);
+	count = min_t(u32, count, svc_max_payload(rqstp));
+	count = min_t(u32, count, rqstp->rq_res.buflen);
+	if (offset > (u64)OFFSET_MAX)
+		offset = (u64)OFFSET_MAX;
+	if (offset + count > (u64)OFFSET_MAX)
+		count = (u64)OFFSET_MAX - offset;
 
-	argp->count = min_t(u32, argp->count, svc_max_payload(rqstp));
-	argp->count = min_t(u32, argp->count, rqstp->rq_res.buflen);
-	if (argp->offset > (u64)OFFSET_MAX)
-		argp->offset = (u64)OFFSET_MAX;
-	if (argp->offset + argp->count > (u64)OFFSET_MAX)
-		argp->count = (u64)OFFSET_MAX - argp->offset;
-
-	resp->pages = rqstp->rq_next_page;
-
-	/* Obtain buffer pointer for payload.
+	/*
+	 * Obtain buffer pointer for payload.
 	 * 1 (status) + 22 (post_op_attr) + 1 (count) + 1 (eof)
 	 * + 1 (xdr opaque byte count) = 26
 	 */
-	resp->count = argp->count;
 	svc_reserve_auth(rqstp, ((1 + NFS3_post_op_attr_sz + 3) << 2) +
-			 resp->count + 4);
+			 count + 4);
+	resp->status = nfsd_read(rqstp, fhp, offset, &count, &eof);
 
-	fh_copy(&resp->fh, &argp->fh);
-	resp->status = nfsd_read(rqstp, &resp->fh, argp->offset,
-				 &resp->count, &resp->eof);
-	resp->status = nfsd3_map_status(resp->status);
+	if (resp->status == nfs_ok) {
+		struct READ3resok *resok = &resp->u.resok;
+
+		resok->count = count;
+		resok->eof = !!eof;
+		resok->data.len = count;
+		nfsd3_fill_post_op_attr(rqstp, &resok->file_attributes, fhp);
+	} else {
+		struct READ3resfail *resfail = &resp->u.resfail;
+
+		resp->status = nfsd3_map_status(resp->status);
+		nfsd3_fill_post_op_attr(rqstp, &resfail->file_attributes, fhp);
+	}
+
+	fh_put(fhp);
 	return rpc_success;
 }
 
@@ -1378,16 +1401,16 @@ static const struct svc_procedure nfsd_procedures3[22] = {
 		.pc_name	= "READLINK",
 	},
 	[NFSPROC3_READ] = {
-		.pc_func = nfsd3_proc_read,
-		.pc_decode = nfs3svc_decode_readargs,
-		.pc_encode = nfs3svc_encode_readres,
-		.pc_release = nfs3svc_release_fhandle,
-		.pc_argsize = sizeof(struct nfsd3_readargs),
-		.pc_argzero = sizeof(struct nfsd3_readargs),
-		.pc_ressize = sizeof(struct nfsd3_readres),
-		.pc_cachetype = RC_NOCACHE,
-		.pc_xdrressize = ST+pAT+4+NFSSVC_MAXBLKSIZE/4,
-		.pc_name = "READ",
+		.pc_func	= nfsd3_proc_read,
+		.pc_decode	= nfs_svc_decode_READ3args,
+		.pc_encode	= nfs_svc_encode_READ3res,
+		.pc_argsize	= sizeof(struct READ3args_wrapper),
+		.pc_argzero	= 0,
+		.pc_ressize	= sizeof(struct READ3res),
+		.pc_cachetype	= RC_NOCACHE,
+		.pc_xdrressize	= NFS3_READ3res_sz +
+				  XDR_QUADLEN(NFSSVC_MAXBLKSIZE),
+		.pc_name	= "READ",
 	},
 	[NFSPROC3_WRITE] = {
 		.pc_func = nfsd3_proc_write,
@@ -1579,8 +1602,8 @@ union nfsd3_xdrstore {
 	struct ACCESS3args_wrapper	accessargs;
 	struct ACCESS3res		accessres;
 	struct READLINK3args_wrapper	readlinkargs;
+	struct READ3args_wrapper	readargs;
 	struct nfsd3_diropargs		diropargs;
-	struct nfsd3_readargs		readargs;
 	struct nfsd3_writeargs		writeargs;
 	struct nfsd3_createargs		createargs;
 	struct nfsd3_renameargs		renameargs;
@@ -1589,7 +1612,7 @@ union nfsd3_xdrstore {
 	struct nfsd3_readdirargs	readdirargs;
 	struct nfsd3_diropres		diropres;
 	struct READLINK3res		readlinkres;
-	struct nfsd3_readres		readres;
+	struct READ3res			readres;
 	struct nfsd3_writeres		writeres;
 	struct nfsd3_renameres		renameres;
 	struct nfsd3_linkres		linkres;
