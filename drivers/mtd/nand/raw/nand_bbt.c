@@ -52,6 +52,7 @@
  * - bbts start at a page boundary, if autolocated on a block boundary
  * - the space necessary for a bbt in FLASH does not exceed a block boundary
  */
+#define pr_fmt(fmt) "nand_bbt: " fmt
 
 #include <linux/slab.h>
 #include <linux/types.h>
@@ -193,15 +194,15 @@ static int read_bbt(struct nand_chip *this, uint8_t *buf, int page, int num,
 		res = mtd_read(mtd, from, len, &retlen, buf);
 		if (res < 0) {
 			if (mtd_is_eccerr(res)) {
-				pr_info("nand_bbt: ECC error in BBT at 0x%012llx\n",
+				pr_info("ECC error in BBT at 0x%012llx\n",
 					from & ~mtd->writesize);
 				return res;
 			} else if (mtd_is_bitflip(res)) {
-				pr_info("nand_bbt: corrected error in BBT at 0x%012llx\n",
+				pr_info("corrected error in BBT at 0x%012llx\n",
 					from & ~mtd->writesize);
 				ret = res;
 			} else {
-				pr_info("nand_bbt: error reading BBT\n");
+				pr_info("error reading BBT\n");
 				return res;
 			}
 		}
@@ -214,7 +215,7 @@ static int read_bbt(struct nand_chip *this, uint8_t *buf, int page, int num,
 				if (tmp == msk)
 					continue;
 				if (reserved_block_code && (tmp == reserved_block_code)) {
-					pr_info("nand_read_bbt: reserved block at 0x%012llx\n",
+					pr_info("reserved block at 0x%012llx\n",
 						 (loff_t)(offs + act) <<
 						 this->bbt_erase_shift);
 					bbt_mark_entry(this, offs + act,
@@ -226,7 +227,7 @@ static int read_bbt(struct nand_chip *this, uint8_t *buf, int page, int num,
 				 * Leave it for now, if it's matured we can
 				 * move this message to pr_debug.
 				 */
-				pr_info("nand_read_bbt: bad block at 0x%012llx\n",
+				pr_info("bad block at 0x%012llx\n",
 					 (loff_t)(offs + act) <<
 					 this->bbt_erase_shift);
 				/* Factory marked bad or worn out? */
@@ -503,7 +504,7 @@ static int create_bbt(struct nand_chip *this, uint8_t *buf,
 		from = 0;
 	} else {
 		if (chip >= nanddev_ntargets(&this->base)) {
-			pr_warn("create_bbt(): chipnr (%d) > available chips (%d)\n",
+			pr_warn("chipnr (%d) > available chips (%d)\n",
 			        chip + 1, nanddev_ntargets(&this->base));
 			return -EINVAL;
 		}
@@ -725,7 +726,7 @@ static void mark_bbt_block_bad(struct nand_chip *this,
 	to = (loff_t)block << this->bbt_erase_shift;
 	res = nand_markbad_bbm(this, to);
 	if (res)
-		pr_warn("nand_bbt: error %d while marking block %d bad\n",
+		pr_warn("error %d while marking block %d bad\n",
 			res, block);
 
 	td->pages[chip] = -1;
@@ -825,10 +826,10 @@ static int write_bbt(struct nand_chip *this, uint8_t *buf,
 			res = mtd_read(mtd, to, len, &retlen, buf);
 			if (res < 0) {
 				if (retlen != len) {
-					pr_info("nand_bbt: error reading block for writing the bad block table\n");
+					pr_info("error reading block for writing the bad block table\n");
 					return res;
 				}
-				pr_warn("nand_bbt: ECC error while reading block for writing bad block table\n");
+				pr_warn("ECC error while reading block for writing bad block table\n");
 			}
 			/* Read oob data */
 			ops.ooblen = (len >> this->page_shift) * mtd->oobsize;
@@ -890,7 +891,7 @@ static int write_bbt(struct nand_chip *this, uint8_t *buf,
 		einfo.len = 1 << this->bbt_erase_shift;
 		res = nand_erase_nand(this, &einfo, 1);
 		if (res < 0) {
-			pr_warn("nand_bbt: error while erasing BBT block %d\n",
+			pr_warn("error while erasing BBT block %d\n",
 				res);
 			mark_bbt_block_bad(this, td, chip, block);
 			continue;
@@ -900,7 +901,7 @@ static int write_bbt(struct nand_chip *this, uint8_t *buf,
 				     td->options & NAND_BBT_NO_OOB ?
 				     NULL : &buf[len]);
 		if (res < 0) {
-			pr_warn("nand_bbt: error while writing BBT block %d\n",
+			pr_warn("error while writing BBT block %d\n",
 				res);
 			mark_bbt_block_bad(this, td, chip, block);
 			continue;
@@ -915,7 +916,7 @@ static int write_bbt(struct nand_chip *this, uint8_t *buf,
 	return 0;
 
  outerr:
-	pr_warn("nand_bbt: error while writing bad block table %d\n", res);
+	pr_warn("error while writing bad block table %d\n", res);
 	return res;
 }
 
@@ -1263,7 +1264,7 @@ static int nand_scan_bbt(struct nand_chip *this, struct nand_bbt_descr *bd)
 	 */
 	if (!td) {
 		if ((res = nand_memory_bbt(this, bd))) {
-			pr_err("nand_bbt: can't scan flash and build the RAM-based BBT\n");
+			pr_err("can't scan flash and build the RAM-based BBT\n");
 			goto err_free_bbt;
 		}
 		return 0;
@@ -1451,7 +1452,7 @@ int nand_isbad_bbt(struct nand_chip *this, loff_t offs, int allowbbt)
 	block = (int)(offs >> this->bbt_erase_shift);
 	res = bbt_get_entry(this, block);
 
-	pr_debug("nand_isbad_bbt(): bbt info for offs 0x%08x: (block %d) 0x%02x\n",
+	pr_debug("bbt info for offs 0x%08x: (block %d) 0x%02x\n",
 		 (unsigned int)offs, block, res);
 
 	if (mtd_check_expert_analysis_mode())
