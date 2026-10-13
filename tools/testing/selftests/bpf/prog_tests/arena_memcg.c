@@ -2,8 +2,6 @@
 #define _GNU_SOURCE
 #include <test_progs.h>
 #include <fcntl.h>
-#include <linux/magic.h>
-#include <sys/vfs.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <sys/user.h>
@@ -35,38 +33,6 @@ static void dump_memcg(void)
 		fprintf(stderr, "memory.peak: %s", buf);
 	if (!read_cgroup_file(CG_PATH, "memory.events", buf, sizeof(buf)))
 		fprintf(stderr, "memory.events:\n%s", buf);
-}
-
-/*
- * Fill the page cache with @size bytes of clean, reclaimable pages by
- * reading a sparse temp file, the way the cgroup selftests do. Returns the
- * fd, which must stay open: closing it drops the cache. Returns -EOPNOTSUPP
- * if the working directory cannot back such a file, -1 on error.
- */
-static int alloc_pagecache(size_t size)
-{
-	struct statfs stfs;
-	char buf[4096];
-	size_t off;
-	int fd;
-
-	fd = open(".", O_TMPFILE | O_RDWR | O_EXCL, 0600);
-	if (fd < 0)
-		return errno == EOPNOTSUPP ? -EOPNOTSUPP : -1;
-	/* tmpfs hands out shmem pages, which are not reclaimable without swap */
-	if (fstatfs(fd, &stfs) || stfs.f_type == TMPFS_MAGIC) {
-		close(fd);
-		return -EOPNOTSUPP;
-	}
-	if (ftruncate(fd, size))
-		goto err;
-	for (off = 0; off < size; off += sizeof(buf))
-		if (read(fd, buf, sizeof(buf)) < 0)
-			goto err;
-	return fd;
-err:
-	close(fd);
-	return -1;
 }
 
 void serial_test_arena_memcg(void)
