@@ -1885,11 +1885,16 @@ static inline int ipmr_forward_finish(struct net *net, struct sock *sk,
 static bool ipmr_forward_offloaded(struct sk_buff *skb, struct mr_table *mrt,
 				   int in_vifi, int out_vifi)
 {
-	struct vif_device *out_vif = &mrt->vif_table[out_vifi];
-	struct vif_device *in_vif = &mrt->vif_table[in_vifi];
+	struct vif_device *out_vif, *in_vif;
 
 	if (!skb->offload_l3_fwd_mark)
 		return false;
+	if (in_vifi < 0 || in_vifi >= MAXVIFS ||
+	    out_vifi < 0 || out_vifi >= MAXVIFS)
+		return false;
+
+	out_vif = &mrt->vif_table[out_vifi];
+	in_vif = &mrt->vif_table[in_vifi];
 	if (!out_vif->dev_parent_id.id_len || !in_vif->dev_parent_id.id_len)
 		return false;
 	return netdev_phys_item_id_same(&out_vif->dev_parent_id,
