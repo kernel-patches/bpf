@@ -81,20 +81,32 @@ struct nfsd3_readdirres {
 
 static_assert(offsetof(struct nfsd3_readdirres, xdrgen) == 0);
 
-struct nfsd3_readdirplusres {
-	/* Components of the reply */
-	__be32			status;
+/*
+ * Declared here rather than in nfs3proc.c with the other proc wrappers
+ * because READDIRPLUS's encode path in nfs3xdr.c reads the file handle
+ * from it during encode and release. The xdrgen field must be first so
+ * the struct can be cast to its XDR type for the RPC dispatch layer.
+ */
+struct READDIRPLUS3args_wrapper {
+	struct READDIRPLUS3args	xdrgen;
 	struct svc_fh		fh;
-	__be32			verf[2];
-
-	/* Used to encode the reply's entry list */
-	struct xdr_stream	xdr;
-	struct xdr_buf		dirlist;
-	struct svc_fh		scratch;
-	struct readdir_cd	common;
-	unsigned int		cookie_offset;
-	struct svc_rqst		*rqstp;
 };
+
+static_assert(offsetof(struct READDIRPLUS3args_wrapper, xdrgen) == 0);
+
+struct nfsd3_readdirplusres {
+	struct READDIRPLUS3res	xdrgen;
+
+	/* Streaming state for encoding the reply's entry list */
+	struct nfsd_readdir_iter iter;		/* directory reader */
+	u32			count;		/* client's reply size hint */
+	u32			space_left;	/* remaining entry budget */
+	unsigned int		cookie_offset;	/* prev entry's cookie slot */
+	struct svc_fh		scratch;	/* per-entry file handle */
+	u8			fh_data[NFS3_FHSIZE];	/* per-entry handle bytes */
+};
+
+static_assert(offsetof(struct nfsd3_readdirplusres, xdrgen) == 0);
 
 struct nfsd3_fsstatres {
 	struct FSSTAT3res	xdrgen;
@@ -130,16 +142,15 @@ struct nfsd3_getaclres {
 	struct kstat		stat;
 };
 
-bool nfs3svc_encode_accessres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
-bool nfs3svc_encode_readdirplusres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
-
-void nfs3svc_release_fhandle(struct svc_rqst *);
 void nfs3svc_release_readdirres(struct svc_rqst *rqstp);
+void nfs3svc_release_readdirplusres(struct svc_rqst *rqstp);
 
 void nfs3svc_encode_cookie3(struct xdr_stream *xdr, unsigned int pos,
 			    u64 cookie);
-int nfs3svc_encode_entryplus3(void *data, const char *name, int namlen,
-			      loff_t offset, u64 ino, unsigned int d_type);
+void nfsd3_fill_post_op_attr(struct svc_rqst *rqstp, struct post_op_attr *attr,
+			     struct svc_fh *fhp);
+void nfsd3_fill_post_op_fh3(struct post_op_fh3 *post_op_fh,
+			    const struct svc_fh *fhp, u8 *data);
 /* Helper functions for NFSv3 ACL code */
 bool svcxdr_decode_nfs_fh3(struct xdr_stream *xdr, struct svc_fh *fhp);
 bool svcxdr_encode_nfsstat3(struct xdr_stream *xdr, __be32 status);

@@ -218,13 +218,6 @@ struct COMMIT3args_wrapper {
 
 static_assert(offsetof(struct COMMIT3args_wrapper, xdrgen) == 0);
 
-struct READDIRPLUS3args_wrapper {
-	struct READDIRPLUS3args	xdrgen;
-	struct svc_fh		fh;
-};
-
-static_assert(offsetof(struct READDIRPLUS3args_wrapper, xdrgen) == 0);
-
 static int nfsd3_ftype3_to_mode(ftype3 ftype)
 {
 	switch (ftype) {
@@ -436,10 +429,6 @@ nfsd3_stat_to_fattr3(struct svc_rqst *rqstp, struct fattr3 *fattr,
 }
 
 static void
-nfsd3_fill_post_op_attr(struct svc_rqst *rqstp, struct post_op_attr *attr,
-			struct svc_fh *fhp);
-
-static void
 nfsd3_fill_wcc_data(struct svc_rqst *rqstp, struct wcc_data *wcc,
 		    struct svc_fh *fhp)
 {
@@ -525,7 +514,7 @@ nfsd3_sattr3_to_iattr(struct svc_rqst *rqstp, struct iattr *iap,
  * post_op_attrs invoke nfsd3_fill_wcc_data() before invoking
  * nfsd3_fill_post_op_attr() on the same fhp argument.
  */
-static void
+void
 nfsd3_fill_post_op_attr(struct svc_rqst *rqstp, struct post_op_attr *attr,
 			struct svc_fh *fhp)
 {
@@ -550,7 +539,7 @@ no_post_op_attrs:
 	attr->attributes_follow = false;
 }
 
-static void
+void
 nfsd3_fill_post_op_fh3(struct post_op_fh3 *post_op_fh,
 		       const struct svc_fh *fhp, u8 *data)
 {
@@ -1239,27 +1228,6 @@ out:
 	return rpc_success;
 }
 
-static void
-nfsd3_init_dirlistplus_pages(struct svc_rqst *rqstp,
-			     struct nfsd3_readdirplusres *resp,
-			     u32 count)
-{
-	struct xdr_buf *buf = &resp->dirlist;
-	struct xdr_stream *xdr = &resp->xdr;
-	unsigned int sendbuf = min_t(unsigned int, rqstp->rq_res.buflen,
-				     svc_max_payload(rqstp));
-
-	memset(buf, 0, sizeof(*buf));
-
-	/* Reserve room for the NULL ptr & eof flag (-2 words) */
-	buf->buflen = clamp(count, (u32)(XDR_UNIT * 2), sendbuf);
-	buf->buflen -= XDR_UNIT * 2;
-	buf->pages = rqstp->rq_next_page;
-	rqstp->rq_next_page += (buf->buflen + PAGE_SIZE - 1) >> PAGE_SHIFT;
-
-	xdr_init_encode_pages(xdr, buf);
-}
-
 /**
  * nfsd3_proc_mknod - MKNOD: Create a special file
  * @rqstp: RPC transaction context
@@ -1573,6 +1541,12 @@ static __be32 nfsd3_proc_readdir(struct svc_rqst *rqstp)
  * nfsd3_proc_readdirplus - READDIRPLUS: Extended read from directory
  * @rqstp: RPC transaction context
  *
+ * The directory is opened here so the reply status reflects any open
+ * error before the generated encoder writes the status word.  The
+ * entry list is streamed from the reply's directory reader during
+ * encode; nfs3svc_release_readdirplusres() closes the reader and
+ * releases the file handle.
+ *
  * Return:
  *   %rpc_success:		RPC executed successfully
  *
@@ -1585,35 +1559,33 @@ static __be32 nfsd3_proc_readdirplus(struct svc_rqst *rqstp)
 	struct nfsd3_readdirplusres *resp = rqstp->rq_resp;
 	loff_t offset = argp->xdrgen.cookie;
 	struct svc_fh *fhp = &argp->fh;
+	__be32 status;
 
 	nfsd3_fh3_to_svc_fh(fhp, &argp->xdrgen.dir);
 	trace_nfsd_vfs_readdir(rqstp, fhp, argp->xdrgen.maxcount,
 			       argp->xdrgen.cookie);
 
-	nfsd3_init_dirlistplus_pages(rqstp, resp, argp->xdrgen.maxcount);
-	fh_copy(&resp->fh, fhp);
-	resp->common.err = nfs_ok;
-	resp->cookie_offset = 0;
-	resp->rqstp = rqstp;
-	resp->status = fh_verify(rqstp, &resp->fh, S_IFDIR, NFSD_MAY_NOP);
-	if (resp->status != nfs_ok)
-		goto out;
+	resp->count = argp->xdrgen.maxcount;
+	status = fh_verify(rqstp, fhp, S_IFDIR, NFSD_MAY_NOP);
+	if (status == nfs_ok &&
+	    fhp->fh_export->ex_flags & NFSEXP_NOREADDIRPLUS)
+		status = nfserr_notsupp;
+	if (status == nfs_ok)
+		status = nfsd_readdir_open(rqstp, fhp, &offset, &resp->iter);
 
-	if (resp->fh.fh_export->ex_flags & NFSEXP_NOREADDIRPLUS) {
-		resp->status = nfserr_notsupp;
-		goto out;
+	if (status == nfs_ok) {
+		struct READDIRPLUS3resok *resok = &resp->xdrgen.u.resok;
+
+		memcpy(resok->cookieverf, argp->xdrgen.cookieverf,
+		       NFS3_COOKIEVERFSIZE);
+		nfsd3_fill_post_op_attr(rqstp, &resok->dir_attributes, fhp);
+	} else {
+		struct READDIRPLUS3resfail *resfail = &resp->xdrgen.u.resfail;
+
+		nfsd3_fill_post_op_attr(rqstp, &resfail->dir_attributes, fhp);
 	}
 
-	resp->status = nfsd_readdir(rqstp, &resp->fh, &offset,
-				    &resp->common, nfs3svc_encode_entryplus3);
-	memcpy(resp->verf, argp->xdrgen.cookieverf, NFS3_COOKIEVERFSIZE);
-	nfs3svc_encode_cookie3(&resp->xdr, resp->cookie_offset, offset);
-
-	/* Recycle only pages that were part of the reply */
-	rqstp->rq_next_page = resp->xdr.page_ptr + 1;
-
-out:
-	resp->status = nfsd3_map_status(resp->status);
+	resp->xdrgen.status = nfsd3_map_status(status);
 	return rpc_success;
 }
 
@@ -2041,10 +2013,10 @@ static const struct svc_procedure nfsd_procedures3[22] = {
 	[NFSPROC3_READDIRPLUS] = {
 		.pc_func	= nfsd3_proc_readdirplus,
 		.pc_decode	= nfs_svc_decode_READDIRPLUS3args,
-		.pc_encode	= nfs3svc_encode_readdirplusres,
-		.pc_release	= nfs3svc_release_fhandle,
+		.pc_encode	= nfs_svc_encode_READDIRPLUS3res,
+		.pc_release	= nfs3svc_release_readdirplusres,
 		.pc_argsize	= sizeof(struct READDIRPLUS3args_wrapper),
-		.pc_argzero	= 0,
+		.pc_argzero	= sizeof(struct READDIRPLUS3args_wrapper),
 		.pc_ressize	= sizeof(struct nfsd3_readdirplusres),
 		.pc_cachetype	= RC_NOCACHE,
 		.pc_name	= "READDIRPLUS",
