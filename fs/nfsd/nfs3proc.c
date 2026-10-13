@@ -99,6 +99,22 @@ struct WRITE3args_wrapper {
 
 static_assert(offsetof(struct WRITE3args_wrapper, xdrgen) == 0);
 
+struct CREATE3args_wrapper {
+	struct CREATE3args	xdrgen;
+	struct svc_fh		fh;
+	struct iattr		iattrs;
+};
+
+static_assert(offsetof(struct CREATE3args_wrapper, xdrgen) == 0);
+
+struct CREATE3res_wrapper {
+	struct CREATE3res	xdrgen;
+	struct svc_fh		fh;
+	u8			fh_data[NFS3_FHSIZE];
+};
+
+static_assert(offsetof(struct CREATE3res_wrapper, xdrgen) == 0);
+
 static int	nfs3_ftypes[] = {
 	0,			/* NF3NON */
 	S_IFREG,		/* NF3REG */
@@ -418,6 +434,18 @@ nfsd3_fill_post_op_attr(struct svc_rqst *rqstp, struct post_op_attr *attr,
 
 no_post_op_attrs:
 	attr->attributes_follow = false;
+}
+
+static void
+nfsd3_fill_post_op_fh3(struct post_op_fh3 *post_op_fh,
+		       const struct svc_fh *fhp, u8 *data)
+{
+	if (fhp->fh_handle.fh_size != 0) {
+		post_op_fh->handle_follows = true;
+		nfsd3_svc_fh_to_fh3(&post_op_fh->u.handle, fhp, data);
+	} else {
+		post_op_fh->handle_follows = false;
+	}
 }
 
 /*
@@ -759,65 +787,78 @@ out:
  * Implement NFSv3's unchecked, guarded, and exclusive CREATE
  * semantics for regular files. Except for the created file,
  * this operation is stateless on the server.
- *
- * Upon return, caller must release @fhp and @resfhp.
  */
 static __be32
-nfsd3_create_file(struct svc_rqst *rqstp, struct svc_fh *fhp,
-		  struct svc_fh *resfhp, struct nfsd3_createargs *argp)
+nfsd3_create_file(struct svc_rqst *rqstp, struct svc_fh *dirfhp,
+		  struct svc_fh *resfhp, struct CREATE3args_wrapper *argp)
 {
-	struct iattr *iap = &argp->attrs;
+	struct diropargs3 *where = &argp->xdrgen.where;
+	struct createhow3 *how = &argp->xdrgen.how;
+	struct iattr *iattrs = &argp->iattrs;
 	struct dentry *parent, *child, *mnt_child;
-	struct nfsd_attrs attrs = {
-		.na_iattr	= iap,
-	};
 	struct svc_export *exp;
 	__u32 v_mtime, v_atime;
 	struct inode *inode;
+	struct nfsd_attrs nattrs = {
+		.na_iattr	= iattrs,
+	};
 	__be32 status;
 	int host_err;
 
-	trace_nfsd_vfs_create(rqstp, fhp, S_IFREG, argp->name, argp->len);
-
-	if (!nfsd3_time_in_range(iap))
-		return nfserr_inval;
-	if (name_is_dot_dotdot(argp->name, argp->len))
-		return nfserr_exist;
-	if (!(iap->ia_valid & ATTR_MODE))
-		iap->ia_mode = 0;
-
-	status = fh_verify(rqstp, fhp, S_IFDIR, NFSD_MAY_EXEC);
+	status = nfsd3_check_filename(where->name.data, where->name.len);
 	if (status != nfs_ok)
 		return status;
 
-	parent = fhp->fh_dentry;
+	trace_nfsd_vfs_create(rqstp, dirfhp, S_IFREG, (char *)where->name.data,
+			      where->name.len);
+
+	if (name_is_dot_dotdot(where->name.data, where->name.len))
+		return nfserr_exist;
+
+	if (how->mode != EXCLUSIVE) {
+		nfsd3_sattr3_to_iattr(rqstp, iattrs,
+				      &how->u.obj_attributes);
+		if (!(iattrs->ia_valid & ATTR_MODE))
+			iattrs->ia_mode = 0;
+	} else {
+		memset(iattrs, 0, sizeof(*iattrs));
+	}
+
+	if (!nfsd3_time_in_range(iattrs))
+		return nfserr_inval;
+
+	status = fh_verify(rqstp, dirfhp, S_IFDIR, NFSD_MAY_EXEC);
+	if (status != nfs_ok)
+		return status;
+
+	parent = dirfhp->fh_dentry;
 	inode = d_inode(parent);
 
-	host_err = fh_want_write(fhp);
+	host_err = fh_want_write(dirfhp);
 	if (host_err)
 		return nfserrno(host_err);
 
 	child = start_creating(&nop_mnt_idmap, parent,
-			       &QSTR_LEN(argp->name, argp->len));
+			       &QSTR_LEN(where->name.data, where->name.len));
 	if (IS_ERR(child)) {
 		status = nfserrno(PTR_ERR(child));
 		goto out_write;
 	}
 
 	if (d_really_is_negative(child)) {
-		status = fh_verify(rqstp, fhp, S_IFDIR, NFSD_MAY_CREATE);
+		status = fh_verify(rqstp, dirfhp, S_IFDIR, NFSD_MAY_CREATE);
 		if (status != nfs_ok)
 			goto out;
 	}
 
-	exp = exp_get(fhp->fh_export);
+	exp = exp_get(dirfhp->fh_export);
 	/*
 	 * Cross on a separate reference: child must remain the dentry
 	 * start_creating() returned so that end_creating() unlocks the
 	 * right directory.
 	 */
 	mnt_child = dget(child);
-	if (argp->createmode == UNCHECKED) {
+	if (how->mode == UNCHECKED) {
 		/*
 		 * If name is already in dcache we need to check for mountpoints
 		 */
@@ -832,7 +873,7 @@ nfsd3_create_file(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		}
 	}
 
-	status = fh_compose(resfhp, exp, mnt_child, fhp);
+	status = fh_compose(resfhp, exp, mnt_child, dirfhp);
 	dput(mnt_child);
 	exp_put(exp);
 	if (status != nfs_ok)
@@ -840,8 +881,8 @@ nfsd3_create_file(struct svc_rqst *rqstp, struct svc_fh *fhp,
 
 	v_mtime = 0;
 	v_atime = 0;
-	if (argp->createmode == EXCLUSIVE) {
-		u32 *verifier = (u32 *)argp->verf;
+	if (how->mode == EXCLUSIVE) {
+		u32 *verifier = (u32 *)how->u.verf;
 
 		/*
 		 * Solaris 7 gets confused (bugid 4218508) if these have
@@ -855,11 +896,11 @@ nfsd3_create_file(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	if (d_really_is_positive(child)) {
 		status = nfs_ok;
 
-		switch (argp->createmode) {
+		switch (how->mode) {
 		case UNCHECKED:
 			if (!d_is_reg(child))
 				break;
-			iap->ia_valid &= ATTR_SIZE;
+			iattrs->ia_valid &= ATTR_SIZE;
 			goto set_attr;
 		case GUARDED:
 			status = nfserr_exist;
@@ -876,52 +917,77 @@ nfsd3_create_file(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	}
 
 	if (!IS_POSIXACL(inode))
-		iap->ia_mode &= ~current_umask();
+		iattrs->ia_mode &= ~current_umask();
 
-	status = fh_fill_pre_attrs(fhp);
+	status = fh_fill_pre_attrs(dirfhp);
 	if (status != nfs_ok)
 		goto out;
-	host_err = vfs_create(&nop_mnt_idmap, child, iap->ia_mode, NULL);
+	host_err = vfs_create(&nop_mnt_idmap, child, iattrs->ia_mode, NULL);
 	if (host_err < 0) {
 		status = nfserrno(host_err);
 		goto out;
 	}
-	fh_fill_post_attrs(fhp);
+	fh_fill_post_attrs(dirfhp);
 
 	/* A newly created file already has a file size of zero. */
-	if ((iap->ia_valid & ATTR_SIZE) && (iap->ia_size == 0))
-		iap->ia_valid &= ~ATTR_SIZE;
-	if (argp->createmode == EXCLUSIVE) {
-		iap->ia_valid = ATTR_MTIME | ATTR_ATIME |
-				ATTR_MTIME_SET | ATTR_ATIME_SET;
-		iap->ia_mtime.tv_sec = v_mtime;
-		iap->ia_atime.tv_sec = v_atime;
-		iap->ia_mtime.tv_nsec = 0;
-		iap->ia_atime.tv_nsec = 0;
+	if ((iattrs->ia_valid & ATTR_SIZE) && iattrs->ia_size == 0)
+		iattrs->ia_valid &= ~ATTR_SIZE;
+	if (how->mode == EXCLUSIVE) {
+		iattrs->ia_valid = ATTR_MTIME | ATTR_ATIME |
+				   ATTR_MTIME_SET | ATTR_ATIME_SET;
+		iattrs->ia_mtime.tv_sec = v_mtime;
+		iattrs->ia_atime.tv_sec = v_atime;
+		iattrs->ia_mtime.tv_nsec = 0;
+		iattrs->ia_atime.tv_nsec = 0;
 	}
 
 set_attr:
-	status = nfsd_create_setattr(rqstp, fhp, resfhp, &attrs);
+	status = nfsd_create_setattr(rqstp, dirfhp, resfhp, &nattrs);
 
 out:
 	end_creating(child);
 out_write:
-	fh_drop_write(fhp);
+	fh_drop_write(dirfhp);
 	return status;
 }
 
-static __be32
-nfsd3_proc_create(struct svc_rqst *rqstp)
+/**
+ * nfsd3_proc_create - CREATE: Create a file
+ * @rqstp: RPC transaction context
+ *
+ * Return:
+ *   %rpc_success:		RPC executed successfully
+ *
+ * RPC synopsis:
+ *   CREATE3res NFSPROC3_CREATE(CREATE3args) = 8;
+ */
+static __be32 nfsd3_proc_create(struct svc_rqst *rqstp)
 {
-	struct nfsd3_createargs *argp = rqstp->rq_argp;
-	struct nfsd3_diropres *resp = rqstp->rq_resp;
-	svc_fh *dirfhp, *newfhp;
+	struct CREATE3args_wrapper *argp = rqstp->rq_argp;
+	struct CREATE3res_wrapper *resp = rqstp->rq_resp;
+	struct svc_fh *dirfhp = &argp->fh;
+	struct svc_fh *fhp = &resp->fh;
 
-	dirfhp = fh_copy(&resp->dirfh, &argp->fh);
-	newfhp = fh_init(&resp->fh, NFS3_FHSIZE);
+	nfsd3_fh3_to_svc_fh(dirfhp, &argp->xdrgen.where.dir);
 
-	resp->status = nfsd3_create_file(rqstp, dirfhp, newfhp, argp);
-	resp->status = nfsd3_map_status(resp->status);
+	fh_init(fhp, NFS3_FHSIZE);
+	resp->xdrgen.status = nfsd3_create_file(rqstp, dirfhp, fhp, argp);
+
+	if (resp->xdrgen.status == nfs_ok) {
+		struct CREATE3resok *resok = &resp->xdrgen.u.resok;
+
+		nfsd3_fill_post_op_fh3(&resok->obj, fhp, resp->fh_data);
+		nfsd3_fill_post_op_attr(rqstp, &resok->obj_attributes, fhp);
+		nfsd3_fill_wcc_data(rqstp, &resok->dir_wcc, dirfhp);
+	} else {
+		struct CREATE3resfail *resfail = &resp->xdrgen.u.resfail;
+
+		resp->xdrgen.status = nfsd3_map_status(resp->xdrgen.status);
+		nfsd3_fill_wcc_data(rqstp, &resfail->dir_wcc, dirfhp);
+	}
+
+	fh_put(fhp);
+	fh_put(dirfhp);
 	return rpc_success;
 }
 
@@ -1451,16 +1517,15 @@ static const struct svc_procedure nfsd_procedures3[22] = {
 		.pc_name	= "WRITE",
 	},
 	[NFSPROC3_CREATE] = {
-		.pc_func = nfsd3_proc_create,
-		.pc_decode = nfs3svc_decode_createargs,
-		.pc_encode = nfs3svc_encode_createres,
-		.pc_release = nfs3svc_release_fhandle2,
-		.pc_argsize = sizeof(struct nfsd3_createargs),
-		.pc_argzero = sizeof(struct nfsd3_createargs),
-		.pc_ressize = sizeof(struct nfsd3_diropres),
-		.pc_cachetype = RC_REPLBUFF,
-		.pc_xdrressize = ST+(1+FH+pAT)+WC,
-		.pc_name = "CREATE",
+		.pc_func	= nfsd3_proc_create,
+		.pc_decode	= nfs_svc_decode_CREATE3args,
+		.pc_encode	= nfs_svc_encode_CREATE3res,
+		.pc_argsize	= sizeof(struct CREATE3args_wrapper),
+		.pc_argzero	= 0,
+		.pc_ressize	= sizeof(struct CREATE3res_wrapper),
+		.pc_cachetype	= RC_REPLBUFF,
+		.pc_xdrressize	= NFS3_CREATE3res_sz,
+		.pc_name	= "CREATE",
 	},
 	[NFSPROC3_MKDIR] = {
 		.pc_func = nfsd3_proc_mkdir,
@@ -1631,7 +1696,8 @@ union nfsd3_xdrstore {
 	struct READ3args_wrapper	readargs;
 	struct nfsd3_diropargs		diropargs;
 	struct WRITE3args_wrapper	writeargs;
-	struct nfsd3_createargs		createargs;
+	struct CREATE3args_wrapper	createargs;
+	struct CREATE3res_wrapper	createres;
 	struct nfsd3_renameargs		renameargs;
 	struct nfsd3_linkargs		linkargs;
 	struct nfsd3_symlinkargs	symlinkargs;

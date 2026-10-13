@@ -491,30 +491,6 @@ nfs3svc_decode_diropargs(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 }
 
 bool
-nfs3svc_decode_createargs(struct svc_rqst *rqstp, struct xdr_stream *xdr)
-{
-	struct nfsd3_createargs *args = rqstp->rq_argp;
-
-	if (!svcxdr_decode_diropargs3(xdr, &args->fh, &args->name, &args->len))
-		return false;
-	if (xdr_stream_decode_u32(xdr, &args->createmode) < 0)
-		return false;
-	switch (args->createmode) {
-	case UNCHECKED:
-	case GUARDED:
-		return svcxdr_decode_sattr3(rqstp, xdr, &args->attrs);
-	case EXCLUSIVE:
-		args->verf = xdr_inline_decode(xdr, NFS3_CREATEVERFSIZE);
-		if (!args->verf)
-			return false;
-		break;
-	default:
-		return false;
-	}
-	return true;
-}
-
-bool
 nfs3svc_decode_mkdirargs(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 {
 	struct nfsd3_createargs *args = rqstp->rq_argp;
