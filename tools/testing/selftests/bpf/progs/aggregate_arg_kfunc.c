@@ -222,6 +222,48 @@ int aggregate_arg_kfunc_int128_pad(struct __sk_buff *skb)
 	return 0;
 }
 
+/*
+ * The kfunc returns the low four bits of the address of v, which both
+ * conventions pass in a 16-byte aligned stack slot. A program's frame is
+ * only 8-byte aligned on x86-64, so call it from two frames 8 bytes apart:
+ * one of them starts the call off by 8, whatever the program was given.
+ */
+static __noinline __u64 int128_align_frame1(__u64 a, __u64 b)
+{
+	volatile __u64 pad[1];
+	u128 v = ((u128)a << 64) | b;
+
+	pad[0] = a;
+	return bpf_kfunc_call_test_i128_arg_align(1, 2, 3, 4, 5, 6, pad[0], v);
+}
+
+static __noinline __u64 int128_align_frame2(__u64 a, __u64 b)
+{
+	volatile __u64 pad[2];
+	u128 v = ((u128)a << 64) | b;
+
+	pad[0] = a;
+	pad[1] = b;
+	return bpf_kfunc_call_test_i128_arg_align(1, 2, 3, 4, 5, pad[1], pad[0], v);
+}
+
+SEC("tc")
+__arch_x86_64 __arch_arm64
+__load_if_JITed()
+__success __retval(0)
+int aggregate_arg_kfunc_int128_align(struct __sk_buff *skb)
+{
+	__u64 a = skb->len ^ MIX_A;
+	__u64 b = skb->len ^ MIX_B;
+
+	if (int128_align_frame1(a, b))
+		return 1;
+	if (int128_align_frame2(a, b))
+		return 2;
+
+	return 0;
+}
+
 #endif /* __SIZEOF_INT128__ */
 
 #endif
