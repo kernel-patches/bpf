@@ -20,6 +20,7 @@ int read_cgroup_file(const char *relative_path, const char *file,
 int read_cgroup_file_parent(const char *relative_path, const char *file,
 			    char *buf, size_t len);
 int cgroup_setup_and_join(const char *relative_path);
+int alloc_pagecache(size_t size);
 int get_root_cgroup(void);
 int create_and_get_cgroup(const char *relative_path);
 void remove_cgroup(const char *relative_path);
