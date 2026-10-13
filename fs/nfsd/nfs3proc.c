@@ -177,6 +177,14 @@ struct RMDIR3args_wrapper {
 
 static_assert(offsetof(struct RMDIR3args_wrapper, xdrgen) == 0);
 
+struct RENAME3args_wrapper {
+	struct RENAME3args	xdrgen;
+	struct svc_fh		ffh;
+	struct svc_fh		tfh;
+};
+
+static_assert(offsetof(struct RENAME3args_wrapper, xdrgen) == 0);
+
 static int nfsd3_ftype3_to_mode(ftype3 ftype)
 {
 	switch (ftype) {
@@ -1352,17 +1360,57 @@ out:
 	return rpc_success;
 }
 
-static __be32
-nfsd3_proc_rename(struct svc_rqst *rqstp)
+/**
+ * nfsd3_proc_rename - RENAME: Rename a file or directory
+ * @rqstp: RPC transaction context
+ *
+ * Return:
+ *   %rpc_success:		RPC executed successfully
+ *
+ * RPC synopsis:
+ *   RENAME3res NFSPROC3_RENAME(RENAME3args) = 14;
+ */
+static __be32 nfsd3_proc_rename(struct svc_rqst *rqstp)
 {
-	struct nfsd3_renameargs *argp = rqstp->rq_argp;
-	struct nfsd3_renameres *resp = rqstp->rq_resp;
+	struct RENAME3args_wrapper *argp = rqstp->rq_argp;
+	struct diropargs3 *from = &argp->xdrgen.from;
+	struct diropargs3 *to = &argp->xdrgen.to;
+	struct RENAME3res *resp = rqstp->rq_resp;
+	struct svc_fh *ffhp = &argp->ffh;
+	struct svc_fh *tfhp = &argp->tfh;
 
-	fh_copy(&resp->ffh, &argp->ffh);
-	fh_copy(&resp->tfh, &argp->tfh);
-	resp->status = nfsd_rename(rqstp, &resp->ffh, argp->fname, argp->flen,
-				   &resp->tfh, argp->tname, argp->tlen);
-	resp->status = nfsd3_map_status(resp->status);
+	nfsd3_fh3_to_svc_fh(ffhp, &from->dir);
+	nfsd3_fh3_to_svc_fh(tfhp, &to->dir);
+	resp->status = nfsd3_check_filename(from->name.data,
+					    from->name.len);
+	if (resp->status != nfs_ok)
+		goto out;
+	resp->status = nfsd3_check_filename(to->name.data,
+					    to->name.len);
+	if (resp->status != nfs_ok)
+		goto out;
+
+	resp->status = nfsd_rename(rqstp, ffhp, (char *)from->name.data,
+				   from->name.len, tfhp,
+				   (char *)to->name.data,
+				   to->name.len);
+
+out:
+	if (resp->status == nfs_ok) {
+		struct RENAME3resok *resok = &resp->u.resok;
+
+		nfsd3_fill_wcc_data(rqstp, &resok->fromdir_wcc, ffhp);
+		nfsd3_fill_wcc_data(rqstp, &resok->todir_wcc, tfhp);
+	} else {
+		struct RENAME3resfail *resfail = &resp->u.resfail;
+
+		resp->status = nfsd3_map_status(resp->status);
+		nfsd3_fill_wcc_data(rqstp, &resfail->fromdir_wcc, ffhp);
+		nfsd3_fill_wcc_data(rqstp, &resfail->todir_wcc, tfhp);
+	}
+
+	fh_put(ffhp);
+	fh_put(tfhp);
 	return rpc_success;
 }
 
@@ -1799,16 +1847,15 @@ static const struct svc_procedure nfsd_procedures3[22] = {
 		.pc_name	= "RMDIR",
 	},
 	[NFSPROC3_RENAME] = {
-		.pc_func = nfsd3_proc_rename,
-		.pc_decode = nfs3svc_decode_renameargs,
-		.pc_encode = nfs3svc_encode_renameres,
-		.pc_release = nfs3svc_release_fhandle2,
-		.pc_argsize = sizeof(struct nfsd3_renameargs),
-		.pc_argzero = sizeof(struct nfsd3_renameargs),
-		.pc_ressize = sizeof(struct nfsd3_renameres),
-		.pc_cachetype = RC_REPLBUFF,
-		.pc_xdrressize = ST+WC+WC,
-		.pc_name = "RENAME",
+		.pc_func	= nfsd3_proc_rename,
+		.pc_decode	= nfs_svc_decode_RENAME3args,
+		.pc_encode	= nfs_svc_encode_RENAME3res,
+		.pc_argsize	= sizeof(struct RENAME3args_wrapper),
+		.pc_argzero	= 0,
+		.pc_ressize	= sizeof(struct RENAME3res),
+		.pc_cachetype	= RC_REPLBUFF,
+		.pc_xdrressize	= NFS3_RENAME3res_sz,
+		.pc_name	= "RENAME",
 	},
 	[NFSPROC3_LINK] = {
 		.pc_func = nfsd3_proc_link,
@@ -1918,13 +1965,13 @@ union nfsd3_xdrstore {
 	struct REMOVE3res		removeres;
 	struct RMDIR3args_wrapper	rmdirargs;
 	struct RMDIR3res		rmdirres;
-	struct nfsd3_renameargs		renameargs;
+	struct RENAME3args_wrapper	renameargs;
+	struct RENAME3res		renameres;
 	struct nfsd3_linkargs		linkargs;
 	struct nfsd3_readdirargs	readdirargs;
 	struct READLINK3res		readlinkres;
 	struct READ3res			readres;
 	struct nfsd3_writeres		writeres;
-	struct nfsd3_renameres		renameres;
 	struct nfsd3_linkres		linkres;
 	struct nfsd3_readdirres		readdirres;
 	struct nfsd3_fsstatres		fsstatres;

@@ -361,17 +361,6 @@ nfs3svc_decode_fhandleargs(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 }
 
 bool
-nfs3svc_decode_renameargs(struct svc_rqst *rqstp, struct xdr_stream *xdr)
-{
-	struct nfsd3_renameargs *args = rqstp->rq_argp;
-
-	return svcxdr_decode_diropargs3(xdr, &args->ffh,
-					&args->fname, &args->flen) &&
-		svcxdr_decode_diropargs3(xdr, &args->tfh,
-					 &args->tname, &args->tlen);
-}
-
-bool
 nfs3svc_decode_linkargs(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 {
 	struct nfsd3_linkargs *args = rqstp->rq_argp;
@@ -439,17 +428,6 @@ nfs3svc_decode_commitargs(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 /*
  * XDR encode functions
  */
-
-/* RENAME */
-bool
-nfs3svc_encode_renameres(struct svc_rqst *rqstp, struct xdr_stream *xdr)
-{
-	struct nfsd3_renameres *resp = rqstp->rq_resp;
-
-	return svcxdr_encode_nfsstat3(xdr, resp->status) &&
-		svcxdr_encode_wcc_data(rqstp, xdr, &resp->ffh) &&
-		svcxdr_encode_wcc_data(rqstp, xdr, &resp->tfh);
-}
 
 /* LINK */
 bool
