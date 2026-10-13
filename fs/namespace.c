@@ -396,7 +396,7 @@ out_free_cache:
  */
 bool __mnt_is_readonly(const struct vfsmount *mnt)
 {
-	return (mnt->mnt_flags & MNT_READONLY) || sb_rdonly(mnt->mnt_sb);
+	return (mnt->mnt_flags & MNT_READONLY) || sb_rdonly_any(mnt->mnt_sb);
 }
 EXPORT_SYMBOL_GPL(__mnt_is_readonly);
 
@@ -3416,8 +3416,14 @@ static bool can_change_locked_flags(struct mount *mnt, unsigned int mnt_flags)
 static int change_mount_ro_state(struct mount *mnt, unsigned int mnt_flags)
 {
 	bool readonly_request = (mnt_flags & MNT_READONLY);
+	/*
+	 * Not __mnt_is_readonly(), the emergency state doesn't make the mount
+	 * read-only and MNT_READONLY must not be set without holding writers.
+	 */
+	bool readonly = (mnt->mnt.mnt_flags & MNT_READONLY) ||
+			sb_rdonly(mnt->mnt.mnt_sb);
 
-	if (readonly_request == __mnt_is_readonly(&mnt->mnt))
+	if (readonly_request == readonly)
 		return 0;
 
 	if (readonly_request)
@@ -5497,6 +5503,9 @@ static void statmount_sb_basic(struct kstatmount *s)
 	s->sm.sb_dev_minor = MINOR(sb->s_dev);
 	s->sm.sb_magic = sb->s_magic;
 	s->sm.sb_flags = sb->s_flags & (SB_RDONLY|SB_SYNCHRONOUS|SB_DIRSYNC|SB_LAZYTIME);
+	/* An error made the filesystem read-only, SB_RDONLY stays clear. */
+	if (sb_emergency_ro(sb))
+		s->sm.sb_flags |= SB_RDONLY;
 }
 
 static void statmount_mnt_parent(struct kstatmount *s, const struct mount *m)

@@ -763,6 +763,28 @@ static int quota_rmxquota(struct super_block *sb, void __user *addr)
 	return sb->s_qcop->rm_xquota(sb, flags);
 }
 
+/* Return 1 if 'cmd' will block on frozen filesystem */
+static int quotactl_cmd_write(int cmd)
+{
+	/*
+	 * We cannot allow Q_GETQUOTA and Q_GETNEXTQUOTA without write access
+	 * as dquot_acquire() may allocate space for new structure and OCFS2
+	 * needs to increment on-disk use count.
+	 */
+	switch (cmd) {
+	case Q_GETFMT:
+	case Q_GETINFO:
+	case Q_SYNC:
+	case Q_XGETQSTAT:
+	case Q_XGETQSTATV:
+	case Q_XGETQUOTA:
+	case Q_XGETNEXTQUOTA:
+	case Q_XQUOTASYNC:
+		return 0;
+	}
+	return 1;
+}
+
 /* Copy parameters and call proper function */
 static int do_quotactl(struct super_block *sb, int type, int cmd, qid_t id,
 		       void __user *addr, const struct path *path)
@@ -782,6 +804,10 @@ static int do_quotactl(struct super_block *sb, int type, int cmd, qid_t id,
 	ret = check_quotactl_permission(sb, type, cmd, id);
 	if (ret < 0)
 		return ret;
+
+	/* An error made the filesystem read-only. */
+	if (sb_emergency_ro(sb) && quotactl_cmd_write(cmd))
+		return -EROFS;
 
 	switch (cmd) {
 	case Q_QUOTAON:
@@ -821,35 +847,13 @@ static int do_quotactl(struct super_block *sb, int type, int cmd, qid_t id,
 	case Q_XGETNEXTQUOTA:
 		return quota_getnextxquota(sb, type, id, addr);
 	case Q_XQUOTASYNC:
-		if (sb_rdonly(sb))
+		if (sb_rdonly_any(sb))
 			return -EROFS;
 		/* XFS quotas are fully coherent now, making this call a noop */
 		return 0;
 	default:
 		return -EINVAL;
 	}
-}
-
-/* Return 1 if 'cmd' will block on frozen filesystem */
-static int quotactl_cmd_write(int cmd)
-{
-	/*
-	 * We cannot allow Q_GETQUOTA and Q_GETNEXTQUOTA without write access
-	 * as dquot_acquire() may allocate space for new structure and OCFS2
-	 * needs to increment on-disk use count.
-	 */
-	switch (cmd) {
-	case Q_GETFMT:
-	case Q_GETINFO:
-	case Q_SYNC:
-	case Q_XGETQSTAT:
-	case Q_XGETQSTATV:
-	case Q_XGETQUOTA:
-	case Q_XGETNEXTQUOTA:
-	case Q_XQUOTASYNC:
-		return 0;
-	}
-	return 1;
 }
 
 /* Return true if quotactl command is manipulating quota on/off state */
