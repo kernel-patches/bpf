@@ -50,6 +50,27 @@ int aggregate_arg_kfunc_int128(struct __sk_buff *skb)
 	return 0;
 }
 
+/*
+ * arm64 rounds the register number up to an even one for an argument
+ * aligned to 16 bytes, so it wants this __int128 in x2 and x3, leaving x1
+ * empty, and the last argument in x4. The x86-64 ABI has no such rule.
+ */
+SEC("tc")
+__arch_x86_64 __arch_arm64
+__load_if_JITed()
+__success __retval(0)
+int aggregate_arg_kfunc_int128_odd(struct __sk_buff *skb)
+{
+	__u64 a = skb->len ^ MIX_A;
+	__u64 b = skb->len ^ MIX_B;
+	u128 v = ((u128)a << 64) | b;
+
+	if (bpf_kfunc_call_test_i128_arg_odd(1, v, 2) != 1 + 2 * b + 3 * a + 4 * 2)
+		return 1;
+
+	return 0;
+}
+
 #endif /* __SIZEOF_INT128__ */
 
 #if defined(__clang__) && defined(__BPF_FEATURE_STACK_ARGUMENT)
@@ -132,6 +153,56 @@ int aggregate_arg_kfunc_split8(struct __sk_buff *skb)
 #ifdef __SIZEOF_INT128__
 
 /*
+ * The hole of aggregate_arg_kfunc_int128_odd, with arguments after it that
+ * arm64 shifts through x5 to x7, where its JIT keeps the BPF stack slots,
+ * and onto its stack. The second __int128 then leaves the second arm64
+ * stack slot empty. x86-64 packs the eightbytes like the BPF convention,
+ * so nothing moves there.
+ */
+SEC("tc")
+__arch_x86_64 __arch_arm64
+__load_if_JITed()
+__success __retval(0)
+int aggregate_arg_kfunc_int128_odd_many(struct __sk_buff *skb)
+{
+	__u64 a = skb->len ^ MIX_A;
+	__u64 b = skb->len ^ MIX_B;
+	u128 v = ((u128)a << 64) | b;
+	u128 w = ((u128)~a << 64) | ~b;
+
+	if (bpf_kfunc_call_test_i128_arg_odd_many(1, v, 2, 3, 4, 5, 6, w) !=
+	    1 + 2 * b + 3 * a + 4 * 2 + 5 * 3 + 6 * 4 + 7 * 5 + 8 * 6 +
+	    9 * ~b + 10 * ~a)
+		return 1;
+
+	return 0;
+}
+
+/*
+ * x86-64 moves s to the stack and gives R9 back to the seventh argument.
+ * w, aligned to 16 bytes by the __int128 it holds, then leaves a stack slot
+ * empty before it: the fourth on x86-64, the second on arm64.
+ */
+SEC("tc")
+__arch_x86_64 __arch_arm64
+__load_if_JITed()
+__success __retval(0)
+int aggregate_arg_kfunc_int128_stack_hole(struct __sk_buff *skb)
+{
+	__u64 a = skb->len ^ MIX_A;
+	__u64 b = skb->len ^ MIX_B;
+	struct prog_test_pair_arg s = { .lo = a, .hi = b };
+	struct prog_test_i128_arg w = { .v = ((u128)~a << 64) | ~b };
+
+	if (bpf_kfunc_call_test_i128_arg_stack_hole(1, 2, 3, 4, 5, s, 6, 7, w) !=
+	    1 + 2 * 2 + 3 * 3 + 4 * 4 + 5 * 5 + 6 * a + 7 * b + 8 * 6 + 9 * 7 +
+	    10 * ~b + 11 * ~a)
+		return 1;
+
+	return 0;
+}
+
+/*
  * Both conventions pad the stack to align this __int128, and the BPF
  * convention pads for neither, so both JITs move it up an eightbyte.
  */
@@ -147,6 +218,48 @@ int aggregate_arg_kfunc_int128_pad(struct __sk_buff *skb)
 
 	if (bpf_kfunc_call_test_i128_arg_pad(1, 2, 3, 4, 5, 6, 7, v) != 9 * a + 8 * b + 140)
 		return 1;
+
+	return 0;
+}
+
+/*
+ * The kfunc returns the low four bits of the address of v, which both
+ * conventions pass in a 16-byte aligned stack slot. A program's frame is
+ * only 8-byte aligned on x86-64, so call it from two frames 8 bytes apart:
+ * one of them starts the call off by 8, whatever the program was given.
+ */
+static __noinline __u64 int128_align_frame1(__u64 a, __u64 b)
+{
+	volatile __u64 pad[1];
+	u128 v = ((u128)a << 64) | b;
+
+	pad[0] = a;
+	return bpf_kfunc_call_test_i128_arg_align(1, 2, 3, 4, 5, 6, pad[0], v);
+}
+
+static __noinline __u64 int128_align_frame2(__u64 a, __u64 b)
+{
+	volatile __u64 pad[2];
+	u128 v = ((u128)a << 64) | b;
+
+	pad[0] = a;
+	pad[1] = b;
+	return bpf_kfunc_call_test_i128_arg_align(1, 2, 3, 4, 5, pad[1], pad[0], v);
+}
+
+SEC("tc")
+__arch_x86_64 __arch_arm64
+__load_if_JITed()
+__success __retval(0)
+int aggregate_arg_kfunc_int128_align(struct __sk_buff *skb)
+{
+	__u64 a = skb->len ^ MIX_A;
+	__u64 b = skb->len ^ MIX_B;
+
+	if (int128_align_frame1(a, b))
+		return 1;
+	if (int128_align_frame2(a, b))
+		return 2;
 
 	return 0;
 }

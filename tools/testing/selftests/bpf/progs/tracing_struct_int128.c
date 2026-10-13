@@ -15,4 +15,58 @@ int test_int128_arg_fexit(unsigned long long *ctx)
 	return 0;
 }
 
+/*
+ * The arguments come packed in the BPF convention whatever holes the
+ * kernel convention left between them: an eightbyte each, and two for the
+ * struct holding an __int128. That struct fills its two slots in memory
+ * order, so which slot holds the low half depends on the byte order.
+ */
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+#define LO 0
+#define HI 1
+#else
+#define LO 1
+#define HI 0
+#endif
+
+long s_g, s_h_lo, s_h_hi, s_i, s_ret;
+
+SEC("fentry/bpf_testmod_test_int128_stack")
+int test_int128_stack_fentry(unsigned long long *ctx)
+{
+	s_g = ctx[6];
+	s_h_lo = ctx[7 + LO];
+	s_h_hi = ctx[7 + HI];
+	s_i = ctx[9];
+	return 0;
+}
+
+SEC("fexit/bpf_testmod_test_int128_stack")
+int test_int128_stack_fexit(unsigned long long *ctx)
+{
+	s_ret = ctx[10];
+	return 0;
+}
+
+long b_f_a, b_f_b, b_g, b_h, b_i_lo, b_i_hi, b_ret;
+
+SEC("fentry/bpf_testmod_test_int128_backfill")
+int test_int128_backfill_fentry(unsigned long long *ctx)
+{
+	b_f_a = ctx[5];
+	b_f_b = ctx[6];
+	b_g = ctx[7];
+	b_h = ctx[8];
+	b_i_lo = ctx[9 + LO];
+	b_i_hi = ctx[9 + HI];
+	return 0;
+}
+
+SEC("fexit/bpf_testmod_test_int128_backfill")
+int test_int128_backfill_fexit(unsigned long long *ctx)
+{
+	b_ret = ctx[11];
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";
