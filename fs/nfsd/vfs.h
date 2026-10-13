@@ -197,6 +197,7 @@ __be32		nfsd_vfs_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 				__be32 *verf);
 __be32		nfsd_readlink(struct svc_rqst *, struct svc_fh *,
 				char *, int *);
+char		*nfsd_symlink_target(const struct xdr_buf *to);
 __be32		nfsd_symlink(struct svc_rqst *, struct svc_fh *,
 			     char *name, int len, char *path,
 			     struct nfsd_attrs *attrs,

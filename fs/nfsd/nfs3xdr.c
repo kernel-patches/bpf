@@ -491,25 +491,6 @@ nfs3svc_decode_diropargs(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 }
 
 bool
-nfs3svc_decode_symlinkargs(struct svc_rqst *rqstp, struct xdr_stream *xdr)
-{
-	struct nfsd3_symlinkargs *args = rqstp->rq_argp;
-	struct kvec *head = rqstp->rq_arg.head;
-
-	if (!svcxdr_decode_diropargs3(xdr, &args->ffh, &args->fname, &args->flen))
-		return false;
-	if (!svcxdr_decode_sattr3(rqstp, xdr, &args->attrs))
-		return false;
-	if (xdr_stream_decode_u32(xdr, &args->tlen) < 0)
-		return false;
-
-	/* symlink_data */
-	args->first.iov_len = head->iov_len - xdr_stream_pos(xdr);
-	args->first.iov_base = xdr_inline_decode(xdr, args->tlen);
-	return args->first.iov_base != NULL;
-}
-
-bool
 nfs3svc_decode_mknodargs(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 {
 	struct nfsd3_mknodargs *args = rqstp->rq_argp;

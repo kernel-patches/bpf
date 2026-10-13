@@ -1927,6 +1927,35 @@ nfsd_readlink(struct svc_rqst *rqstp, struct svc_fh *fhp, char *buf, int *lenp)
 }
 
 /**
+ * nfsd_symlink_target - Copy a SYMLINK target out of the receive buffer
+ * @to: subsegment of the receive buffer that holds the target pathname
+ *
+ * Return: a NUL-terminated pathname the caller frees with kfree(),
+ * or an ERR_PTR holding a negative errno.
+ */
+char *nfsd_symlink_target(const struct xdr_buf *to)
+{
+	char *result;
+
+	result = kmalloc(to->len + 1, GFP_KERNEL);
+	if (!result)
+		return ERR_PTR(-ESERVERFAULT);
+	/* The target can span the receive buffer's head, pages, and tail */
+	if (read_bytes_from_xdr_buf(to, 0, result, to->len)) {
+		kfree(result);
+		return ERR_PTR(-ESERVERFAULT);
+	}
+	result[to->len] = '\0';
+
+	/* The VFS rejects a pathname that contains a NUL byte */
+	if (strlen(result) != to->len) {
+		kfree(result);
+		return ERR_PTR(-EINVAL);
+	}
+	return result;
+}
+
+/**
  * nfsd_symlink - Create a symlink and look up its inode
  * @rqstp: RPC transaction being executed
  * @fhp: NFS filehandle of parent directory

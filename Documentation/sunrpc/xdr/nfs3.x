@@ -464,6 +464,7 @@ struct symlinkdata3 {
 	sattr3		symlink_attributes;
 	nfspath3	symlink_data;
 };
+pragma pages symlinkdata3 symlink_data;
 
 struct SYMLINK3args {
 	diropargs3	where;
