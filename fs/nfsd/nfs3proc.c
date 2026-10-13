@@ -71,6 +71,13 @@ struct LOOKUP3res_wrapper {
 
 static_assert(offsetof(struct LOOKUP3res_wrapper, xdrgen) == 0);
 
+struct ACCESS3args_wrapper {
+	struct ACCESS3args	xdrgen;
+	struct svc_fh		fh;
+};
+
+static_assert(offsetof(struct ACCESS3args_wrapper, xdrgen) == 0);
+
 static int	nfs3_ftypes[] = {
 	0,			/* NF3NON */
 	S_IFREG,		/* NF3REG */
@@ -543,24 +550,40 @@ out:
 	return rpc_success;
 }
 
-/*
- * Check file access
+/**
+ * nfsd3_proc_access - ACCESS: Check access permission
+ * @rqstp: RPC transaction context
+ *
+ * Return:
+ *   %rpc_success:		RPC executed successfully
+ *
+ * RPC synopsis:
+ *   ACCESS3res NFSPROC3_ACCESS(ACCESS3args) = 4;
  */
-static __be32
-nfsd3_proc_access(struct svc_rqst *rqstp)
+static __be32 nfsd3_proc_access(struct svc_rqst *rqstp)
 {
-	struct nfsd3_accessargs *argp = rqstp->rq_argp;
-	struct nfsd3_accessres *resp = rqstp->rq_resp;
+	struct ACCESS3args_wrapper *argp = rqstp->rq_argp;
+	struct ACCESS3res *resp = rqstp->rq_resp;
+	struct svc_fh *fhp = &argp->fh;
 
-	dprintk("nfsd: ACCESS(3)   %s 0x%x\n",
-				SVCFH_fmt(&argp->fh),
-				argp->access);
+	nfsd3_fh3_to_svc_fh(fhp, &argp->xdrgen.object);
 
-	fh_copy(&resp->fh, &argp->fh);
-	resp->access = argp->access;
-	resp->status = nfsd_access(rqstp, &resp->fh, &nfsd3_access_maps,
-				   &resp->access, NULL);
-	resp->status = nfsd3_map_status(resp->status);
+	resp->status = nfsd_access(rqstp, fhp, &nfsd3_access_maps,
+				   &argp->xdrgen.access, NULL);
+
+	if (resp->status == nfs_ok) {
+		struct ACCESS3resok *resok = &resp->u.resok;
+
+		resok->access = argp->xdrgen.access;
+		nfsd3_fill_post_op_attr(rqstp, &resok->obj_attributes, fhp);
+	} else {
+		struct ACCESS3resfail *resfail = &resp->u.resfail;
+
+		resp->status = nfsd3_map_status(resp->status);
+		nfsd3_fill_post_op_attr(rqstp, &resfail->obj_attributes, fhp);
+	}
+
+	fh_put(fhp);
 	return rpc_success;
 }
 
@@ -1304,16 +1327,15 @@ static const struct svc_procedure nfsd_procedures3[22] = {
 		.pc_name	= "LOOKUP",
 	},
 	[NFSPROC3_ACCESS] = {
-		.pc_func = nfsd3_proc_access,
-		.pc_decode = nfs3svc_decode_accessargs,
-		.pc_encode = nfs3svc_encode_accessres,
-		.pc_release = nfs3svc_release_fhandle,
-		.pc_argsize = sizeof(struct nfsd3_accessargs),
-		.pc_argzero = sizeof(struct nfsd3_accessargs),
-		.pc_ressize = sizeof(struct nfsd3_accessres),
-		.pc_cachetype = RC_NOCACHE,
-		.pc_xdrressize = ST+pAT+1,
-		.pc_name = "ACCESS",
+		.pc_func	= nfsd3_proc_access,
+		.pc_decode	= nfs_svc_decode_ACCESS3args,
+		.pc_encode	= nfs_svc_encode_ACCESS3res,
+		.pc_argsize	= sizeof(struct ACCESS3args_wrapper),
+		.pc_argzero	= 0,
+		.pc_ressize	= sizeof(struct ACCESS3res),
+		.pc_cachetype	= RC_NOCACHE,
+		.pc_xdrressize	= NFS3_ACCESS3res_sz,
+		.pc_name	= "ACCESS",
 	},
 	[NFSPROC3_READLINK] = {
 		.pc_func = nfsd3_proc_readlink,
@@ -1526,6 +1548,8 @@ union nfsd3_xdrstore {
 	struct SETATTR3res		setattrres;
 	struct LOOKUP3args_wrapper	lookupargs;
 	struct LOOKUP3res_wrapper	lookupres;
+	struct ACCESS3args_wrapper	accessargs;
+	struct ACCESS3res		accessres;
 	struct nfsd3_diropargs		diropargs;
 	struct nfsd3_readargs		readargs;
 	struct nfsd3_writeargs		writeargs;
@@ -1535,7 +1559,6 @@ union nfsd3_xdrstore {
 	struct nfsd3_symlinkargs	symlinkargs;
 	struct nfsd3_readdirargs	readdirargs;
 	struct nfsd3_diropres		diropres;
-	struct nfsd3_accessres		accessres;
 	struct nfsd3_readlinkres	readlinkres;
 	struct nfsd3_readres		readres;
 	struct nfsd3_writeres		writeres;
