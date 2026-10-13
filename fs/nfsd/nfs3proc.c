@@ -163,6 +163,13 @@ struct MKNOD3res_wrapper {
 
 static_assert(offsetof(struct MKNOD3res_wrapper, xdrgen) == 0);
 
+struct REMOVE3args_wrapper {
+	struct REMOVE3args	xdrgen;
+	struct svc_fh		fh;
+};
+
+static_assert(offsetof(struct REMOVE3args_wrapper, xdrgen) == 0);
+
 static int nfsd3_ftype3_to_mode(ftype3 ftype)
 {
 	switch (ftype) {
@@ -1260,20 +1267,42 @@ out:
 	return rpc_success;
 }
 
-/*
- * Remove file/fifo/socket etc.
+/**
+ * nfsd3_proc_remove - REMOVE: Remove a file
+ * @rqstp: RPC transaction context
+ *
+ * Return:
+ *   %rpc_success:		RPC executed successfully
+ *
+ * RPC synopsis:
+ *   REMOVE3res NFSPROC3_REMOVE(REMOVE3args) = 12;
  */
-static __be32
-nfsd3_proc_remove(struct svc_rqst *rqstp)
+static __be32 nfsd3_proc_remove(struct svc_rqst *rqstp)
 {
-	struct nfsd3_diropargs *argp = rqstp->rq_argp;
-	struct nfsd3_attrstat *resp = rqstp->rq_resp;
+	struct REMOVE3args_wrapper *argp = rqstp->rq_argp;
+	struct diropargs3 *object = &argp->xdrgen.object;
+	struct REMOVE3res *resp = rqstp->rq_resp;
+	struct svc_fh *fhp = &argp->fh;
 
-	/* Unlink. -S_IFDIR means file must not be a directory */
-	fh_copy(&resp->fh, &argp->fh);
-	resp->status = nfsd_unlink(rqstp, &resp->fh, -S_IFDIR,
-				   argp->name, argp->len);
-	resp->status = nfsd3_map_status(resp->status);
+	nfsd3_fh3_to_svc_fh(fhp, &object->dir);
+	resp->status = nfsd3_check_filename(object->name.data,
+					    object->name.len);
+	if (resp->status != nfs_ok)
+		goto out;
+
+	resp->status = nfsd_unlink(rqstp, fhp, -S_IFDIR,
+				   (char *)object->name.data,
+				   object->name.len);
+
+out:
+	if (resp->status == nfs_ok) {
+		nfsd3_fill_wcc_data(rqstp, &resp->u.resok.dir_wcc, fhp);
+	} else {
+		resp->status = nfsd3_map_status(resp->status);
+		nfsd3_fill_wcc_data(rqstp, &resp->u.resfail.dir_wcc, fhp);
+	}
+
+	fh_put(fhp);
 	return rpc_success;
 }
 
@@ -1720,16 +1749,15 @@ static const struct svc_procedure nfsd_procedures3[22] = {
 		.pc_name	= "MKNOD",
 	},
 	[NFSPROC3_REMOVE] = {
-		.pc_func = nfsd3_proc_remove,
-		.pc_decode = nfs3svc_decode_diropargs,
-		.pc_encode = nfs3svc_encode_wccstatres,
-		.pc_release = nfs3svc_release_fhandle,
-		.pc_argsize = sizeof(struct nfsd3_diropargs),
-		.pc_argzero = sizeof(struct nfsd3_diropargs),
-		.pc_ressize = sizeof(struct nfsd3_wccstatres),
-		.pc_cachetype = RC_REPLBUFF,
-		.pc_xdrressize = ST+WC,
-		.pc_name = "REMOVE",
+		.pc_func	= nfsd3_proc_remove,
+		.pc_decode	= nfs_svc_decode_REMOVE3args,
+		.pc_encode	= nfs_svc_encode_REMOVE3res,
+		.pc_argsize	= sizeof(struct REMOVE3args_wrapper),
+		.pc_argzero	= 0,
+		.pc_ressize	= sizeof(struct REMOVE3res),
+		.pc_cachetype	= RC_REPLBUFF,
+		.pc_xdrressize	= NFS3_REMOVE3res_sz,
+		.pc_name	= "REMOVE",
 	},
 	[NFSPROC3_RMDIR] = {
 		.pc_func = nfsd3_proc_rmdir,
@@ -1860,6 +1888,8 @@ union nfsd3_xdrstore {
 	struct SYMLINK3res_wrapper	symlinkres;
 	struct MKNOD3args_wrapper	mknodargs;
 	struct MKNOD3res_wrapper	mknodres;
+	struct REMOVE3args_wrapper	removeargs;
+	struct REMOVE3res		removeres;
 	struct nfsd3_renameargs		renameargs;
 	struct nfsd3_linkargs		linkargs;
 	struct nfsd3_readdirargs	readdirargs;
