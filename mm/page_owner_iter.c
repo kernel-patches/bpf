@@ -177,4 +177,21 @@ __bpf_kfunc int bpf_page_owner_stack_snprint(struct page_owner_scan *scan,
 				   0);
 }
 
+__bpf_kfunc int bpf_page_owner_get_memcg_info(struct page_owner_scan *scan,
+					      struct memcg_info *info__uninit,
+					      char *buf__uninit, u32 buf__sz)
+{
+	/* Guard against the section being offlined after scan. */
+	struct page *page = pfn_to_online_page(scan->pfn);
+
+	if (!page) {
+		*info__uninit = (struct memcg_info){};
+		if (buf__uninit && buf__sz)
+			buf__uninit[0] = '\0';
+		return -ENODATA;
+	}
+
+	return get_page_memcg_info(page, info__uninit, buf__uninit, buf__sz);
+}
+
 __bpf_kfunc_end_defs();
