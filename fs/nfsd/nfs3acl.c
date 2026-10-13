@@ -294,11 +294,21 @@ static const struct svc_procedure nfsd_acl_procedures3[3] = {
 	},
 };
 
+/*
+ * Storage requirements for XDR arguments and results.
+ */
+union nfsd_acl3_xdrstore {
+	struct nfsd3_getaclargs		getaclargs;
+	struct nfsd3_setaclargs		setaclargs;
+	struct nfsd3_getaclres		getaclres;
+	struct nfsd3_attrstat		attrstat;
+};
+
 const struct svc_version nfsd_acl_version3 = {
 	.vs_vers	= 3,
 	.vs_nproc	= ARRAY_SIZE(nfsd_acl_procedures3),
 	.vs_proc	= nfsd_acl_procedures3,
 	.vs_dispatch	= nfsd_dispatch,
-	.vs_xdrsize	= NFS3_SVC_XDRSIZE,
+	.vs_xdrsize	= sizeof(union nfsd_acl3_xdrstore),
 };
 

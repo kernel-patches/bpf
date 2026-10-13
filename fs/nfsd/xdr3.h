@@ -243,36 +243,6 @@ struct nfsd3_fhandle_pair {
 	struct svc_fh		fh2;
 };
 
-/*
- * Storage requirements for XDR arguments and results.
- */
-union nfsd3_xdrstore {
-	struct nfsd3_sattrargs		sattrargs;
-	struct nfsd3_diropargs		diropargs;
-	struct nfsd3_readargs		readargs;
-	struct nfsd3_writeargs		writeargs;
-	struct nfsd3_createargs		createargs;
-	struct nfsd3_renameargs		renameargs;
-	struct nfsd3_linkargs		linkargs;
-	struct nfsd3_symlinkargs	symlinkargs;
-	struct nfsd3_readdirargs	readdirargs;
-	struct nfsd3_diropres 		diropres;
-	struct nfsd3_accessres		accessres;
-	struct nfsd3_readlinkres	readlinkres;
-	struct nfsd3_readres		readres;
-	struct nfsd3_writeres		writeres;
-	struct nfsd3_renameres		renameres;
-	struct nfsd3_linkres		linkres;
-	struct nfsd3_readdirres		readdirres;
-	struct nfsd3_fsstatres		fsstatres;
-	struct nfsd3_fsinfores		fsinfores;
-	struct nfsd3_pathconfres	pathconfres;
-	struct nfsd3_commitres		commitres;
-	struct nfsd3_getaclres		getaclres;
-};
-
-#define NFS3_SVC_XDRSIZE		sizeof(union nfsd3_xdrstore)
-
 bool nfs3svc_decode_fhandleargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_decode_sattrargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_decode_diropargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
