@@ -99,14 +99,10 @@ struct nfsd3_fsinfores {
 static_assert(offsetof(struct nfsd3_fsinfores, xdrgen) == 0);
 
 struct nfsd3_pathconfres {
-	__be32			status;
-	__u32			p_link_max;
-	__u32			p_name_max;
-	__u32			p_no_trunc;
-	__u32			p_chown_restricted;
-	bool			p_case_insensitive;
-	bool			p_case_preserving;
+	struct PATHCONF3res	xdrgen;
 };
+
+static_assert(offsetof(struct nfsd3_pathconfres, xdrgen) == 0);
 
 struct nfsd3_commitres {
 	__be32			status;
@@ -123,14 +119,12 @@ struct nfsd3_getaclres {
 	struct kstat		stat;
 };
 
-bool nfs3svc_decode_fhandleargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_decode_readdirargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_decode_readdirplusargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_decode_commitargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 
 bool nfs3svc_encode_accessres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_encode_readdirres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
-bool nfs3svc_encode_pathconfres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_encode_commitres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 
 void nfs3svc_release_fhandle(struct svc_rqst *);

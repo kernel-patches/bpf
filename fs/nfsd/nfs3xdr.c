@@ -18,13 +18,6 @@
 #include "nfserr.h"
 
 /*
- * Force construction of an empty post-op attr
- */
-static const struct svc_fh nfs3svc_null_fh = {
-	.fh_no_wcc	= true,
-};
-
-/*
  * Mapping of S_IF* types to NFS file types
  */
 static const u32 nfs3_ftypes[] = {
@@ -309,14 +302,6 @@ neither:
 /*
  * XDR decode functions
  */
-
-bool
-nfs3svc_decode_fhandleargs(struct svc_rqst *rqstp, struct xdr_stream *xdr)
-{
-	struct nfsd_fhandle *args = rqstp->rq_argp;
-
-	return svcxdr_decode_nfs_fh3(xdr, &args->fh);
-}
 
 bool
 nfs3svc_decode_readdirargs(struct svc_rqst *rqstp, struct xdr_stream *xdr)
@@ -609,48 +594,6 @@ out_toosmall:
 	resp->common.err = nfserr_toosmall;
 	resp->dirlist.len = starting_length;
 	return -EINVAL;
-}
-
-static bool
-svcxdr_encode_pathconf3resok(struct xdr_stream *xdr,
-			     const struct nfsd3_pathconfres *resp)
-{
-	__be32 *p;
-
-	p = xdr_reserve_space(xdr, XDR_UNIT * 6);
-	if (!p)
-		return false;
-	*p++ = cpu_to_be32(resp->p_link_max);
-	*p++ = cpu_to_be32(resp->p_name_max);
-	p = xdr_encode_bool(p, resp->p_no_trunc);
-	p = xdr_encode_bool(p, resp->p_chown_restricted);
-	p = xdr_encode_bool(p, resp->p_case_insensitive);
-	xdr_encode_bool(p, resp->p_case_preserving);
-
-	return true;
-}
-
-/* PATHCONF */
-bool
-nfs3svc_encode_pathconfres(struct svc_rqst *rqstp, struct xdr_stream *xdr)
-{
-	struct nfsd3_pathconfres *resp = rqstp->rq_resp;
-
-	if (!svcxdr_encode_nfsstat3(xdr, resp->status))
-		return false;
-	switch (resp->status) {
-	case nfs_ok:
-		if (!svcxdr_encode_post_op_attr(rqstp, xdr, &nfs3svc_null_fh))
-			return false;
-		if (!svcxdr_encode_pathconf3resok(xdr, resp))
-			return false;
-		break;
-	default:
-		if (!svcxdr_encode_post_op_attr(rqstp, xdr, &nfs3svc_null_fh))
-			return false;
-	}
-
-	return true;
 }
 
 /* COMMIT */
