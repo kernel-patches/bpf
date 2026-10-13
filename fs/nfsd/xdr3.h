@@ -18,13 +18,6 @@
 #define NFS3_MAXNAMLEN			NAME_MAX
 #define NFS3_MAXPATHLEN			PATH_MAX
 
-struct nfsd3_sattrargs {
-	struct svc_fh		fh;
-	struct iattr		attrs;
-	int			check_guard;
-	struct timespec64	guardtime;
-};
-
 struct nfsd3_diropargs {
 	struct svc_fh		fh;
 	char *			name;
@@ -244,7 +237,6 @@ struct nfsd3_fhandle_pair {
 };
 
 bool nfs3svc_decode_fhandleargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
-bool nfs3svc_decode_sattrargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_decode_diropargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_decode_accessargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_decode_readargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);

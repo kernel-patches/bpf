@@ -47,6 +47,15 @@ struct GETATTR3res_wrapper {
 
 static_assert(offsetof(struct GETATTR3res_wrapper, xdrgen) == 0);
 
+struct SETATTR3args_wrapper {
+	struct SETATTR3args	xdrgen;
+	struct svc_fh		fh;
+	struct iattr		iattrs;
+	struct timespec64	guard;
+};
+
+static_assert(offsetof(struct SETATTR3args_wrapper, xdrgen) == 0);
+
 static int	nfs3_ftypes[] = {
 	0,			/* NF3NON */
 	S_IFREG,		/* NF3REG */
@@ -184,6 +193,14 @@ nfsd3_mode_to_ftype3(umode_t mode)
 	return NF3REG;
 }
 
+static __always_inline void
+nfsd3_nfstime3_to_timespec64(struct timespec64 *dst,
+			     const struct nfstime3 *src)
+{
+	dst->tv_sec = src->seconds;
+	dst->tv_nsec = src->nseconds;
+}
+
 static void
 nfsd3_stat_to_fattr3(struct svc_rqst *rqstp, struct fattr3 *fattr,
 		     const struct kstat *stat, const struct svc_fh *fhp)
@@ -219,6 +236,121 @@ nfsd3_stat_to_fattr3(struct svc_rqst *rqstp, struct fattr3 *fattr,
 	nfsd3_timespec64_to_nfstime3(&fattr->atime, &stat->atime);
 	nfsd3_timespec64_to_nfstime3(&fattr->mtime, &stat->mtime);
 	nfsd3_timespec64_to_nfstime3(&fattr->ctime, &stat->ctime);
+}
+
+static void
+nfsd3_fill_post_op_attr(struct svc_rqst *rqstp, struct post_op_attr *attr,
+			struct svc_fh *fhp);
+
+static void
+nfsd3_fill_wcc_data(struct svc_rqst *rqstp, struct wcc_data *wcc,
+		    struct svc_fh *fhp)
+{
+	/* Pre-op attributes are of no use to the client without post-op ones */
+	if (!fhp->fh_post_saved) {
+		wcc->before.attributes_follow = false;
+		nfsd3_fill_post_op_attr(rqstp, &wcc->after, fhp);
+		return;
+	}
+
+	wcc->before.attributes_follow = fhp->fh_pre_saved;
+	if (fhp->fh_pre_saved) {
+		struct wcc_attr *wattr = &wcc->before.u.attributes;
+
+		wattr->size = fhp->fh_pre_size;
+		nfsd3_timespec64_to_nfstime3(&wattr->mtime, &fhp->fh_pre_mtime);
+		nfsd3_timespec64_to_nfstime3(&wattr->ctime, &fhp->fh_pre_ctime);
+	}
+
+	wcc->after.attributes_follow = true;
+	nfsd3_stat_to_fattr3(rqstp, &wcc->after.u.attributes,
+			     &fhp->fh_post_attr, fhp);
+}
+
+static void
+nfsd3_sattr3_to_iattr(struct svc_rqst *rqstp, struct iattr *iap,
+		      const struct sattr3 *sattr)
+{
+	/* trace_nfsd_vfs_setattr() records fields ia_valid leaves unset */
+	memset(iap, 0, sizeof(*iap));
+
+	if (sattr->mode.set_it) {
+		iap->ia_valid |= ATTR_MODE;
+		iap->ia_mode = sattr->mode.u.mode;
+	}
+	if (sattr->uid.set_it) {
+		iap->ia_uid = make_kuid(nfsd_user_namespace(rqstp),
+					sattr->uid.u.uid);
+		if (uid_valid(iap->ia_uid))
+			iap->ia_valid |= ATTR_UID;
+	}
+	if (sattr->gid.set_it) {
+		iap->ia_gid = make_kgid(nfsd_user_namespace(rqstp),
+					sattr->gid.u.gid);
+		if (gid_valid(iap->ia_gid))
+			iap->ia_valid |= ATTR_GID;
+	}
+	if (sattr->size.set_it) {
+		iap->ia_valid |= ATTR_SIZE;
+		iap->ia_size = sattr->size.u.size;
+	}
+	switch (sattr->atime.set_it) {
+	case DONT_CHANGE:
+		break;
+	case SET_TO_SERVER_TIME:
+		iap->ia_valid |= ATTR_ATIME;
+		break;
+	case SET_TO_CLIENT_TIME:
+		nfsd3_nfstime3_to_timespec64(&iap->ia_atime,
+					     &sattr->atime.u.atime);
+		iap->ia_valid |= ATTR_ATIME | ATTR_ATIME_SET;
+		break;
+	}
+	switch (sattr->mtime.set_it) {
+	case DONT_CHANGE:
+		break;
+	case SET_TO_SERVER_TIME:
+		iap->ia_valid |= ATTR_MTIME;
+		break;
+	case SET_TO_CLIENT_TIME:
+		nfsd3_nfstime3_to_timespec64(&iap->ia_mtime,
+					     &sattr->mtime.u.mtime);
+		iap->ia_valid |= ATTR_MTIME | ATTR_MTIME_SET;
+		break;
+	}
+}
+
+/*
+ * struct kstat is pretty huge. To reduce stack utilization, reuse @fhp's
+ * fh_post_attr field as the stat buffer passed to fh_getattr.
+ *
+ * This is safe to do as long as proc functions that need both WCC and
+ * post_op_attrs invoke nfsd3_fill_wcc_data() before invoking
+ * nfsd3_fill_post_op_attr() on the same fhp argument.
+ */
+static void
+nfsd3_fill_post_op_attr(struct svc_rqst *rqstp, struct post_op_attr *attr,
+			struct svc_fh *fhp)
+{
+	struct kstat *statp = &fhp->fh_post_attr;
+	struct dentry *dentry = fhp->fh_dentry;
+
+	/*
+	 * The inode may be NULL if the call failed because of a stale
+	 * file handle. In this case, no attributes are returned.
+	 */
+	if (fhp->fh_no_wcc || !dentry || !d_really_is_positive(dentry))
+		goto no_post_op_attrs;
+	if (fh_getattr(fhp, statp) != nfs_ok)
+		goto no_post_op_attrs;
+
+	attr->attributes_follow = true;
+	lease_get_mtime(d_inode(dentry), &statp->mtime);
+	nfsd3_stat_to_fattr3(rqstp, &attr->u.attributes, statp, fhp);
+	return;
+
+no_post_op_attrs:
+	attr->attributes_follow = false;
 }
 
 /*
@@ -280,32 +412,47 @@ out:
 	return rpc_success;
 }
 
-/*
- * Set a file's attributes
+/**
+ * nfsd3_proc_setattr - SETATTR: Set file attributes
+ * @rqstp: RPC transaction context
+ *
+ * Return:
+ *   %rpc_success:		RPC executed successfully
+ *
+ * RPC synopsis:
+ *   SETATTR3res NFSPROC3_SETATTR(SETATTR3args) = 2;
  */
-static __be32
-nfsd3_proc_setattr(struct svc_rqst *rqstp)
+static __be32 nfsd3_proc_setattr(struct svc_rqst *rqstp)
 {
-	struct nfsd3_sattrargs *argp = rqstp->rq_argp;
-	struct nfsd3_attrstat *resp = rqstp->rq_resp;
-	struct nfsd_attrs attrs = {
-		.na_iattr	= &argp->attrs,
-	};
+	struct SETATTR3args_wrapper *argp = rqstp->rq_argp;
+	struct SETATTR3res *resp = rqstp->rq_resp;
 	const struct timespec64 *guardtime = NULL;
+	struct svc_fh *fhp = &argp->fh;
+	struct nfsd_attrs nattrs = {
+		.na_iattr	= &argp->iattrs,
+	};
 
-	dprintk("nfsd: SETATTR(3)  %s\n",
-				SVCFH_fmt(&argp->fh));
-
-	fh_copy(&resp->fh, &argp->fh);
-	if (!nfsd3_time_in_range(&argp->attrs)) {
-		resp->status = nfserr_inval;
-		goto out;
+	nfsd3_fh3_to_svc_fh(fhp, &argp->xdrgen.object);
+	nfsd3_sattr3_to_iattr(rqstp, &argp->iattrs, &argp->xdrgen.new_attributes);
+	if (argp->xdrgen.guard.check) {
+		nfsd3_nfstime3_to_timespec64(&argp->guard,
+					     &argp->xdrgen.guard.u.obj_ctime);
+		guardtime = &argp->guard;
 	}
-	if (argp->check_guard)
-		guardtime = &argp->guardtime;
-	resp->status = nfsd_setattr(rqstp, &resp->fh, &attrs, guardtime);
-out:
-	resp->status = nfsd3_map_status(resp->status);
+
+	if (nfsd3_time_in_range(&argp->iattrs))
+		resp->status = nfsd_setattr(rqstp, fhp, &nattrs, guardtime);
+	else
+		resp->status = nfserr_inval;
+
+	if (resp->status == nfs_ok) {
+		nfsd3_fill_wcc_data(rqstp, &resp->u.resok.obj_wcc, fhp);
+	} else {
+		resp->status = nfsd3_map_status(resp->status);
+		nfsd3_fill_wcc_data(rqstp, &resp->u.resfail.obj_wcc, fhp);
+	}
+
+	fh_put(fhp);
 	return rpc_success;
 }
 
@@ -1072,16 +1219,15 @@ static const struct svc_procedure nfsd_procedures3[22] = {
 		.pc_name	= "GETATTR",
 	},
 	[NFSPROC3_SETATTR] = {
-		.pc_func = nfsd3_proc_setattr,
-		.pc_decode = nfs3svc_decode_sattrargs,
-		.pc_encode = nfs3svc_encode_wccstatres,
-		.pc_release = nfs3svc_release_fhandle,
-		.pc_argsize = sizeof(struct nfsd3_sattrargs),
-		.pc_argzero = sizeof(struct nfsd3_sattrargs),
-		.pc_ressize = sizeof(struct nfsd3_wccstatres),
-		.pc_cachetype = RC_REPLBUFF,
-		.pc_xdrressize = ST+WC,
-		.pc_name = "SETATTR",
+		.pc_func	= nfsd3_proc_setattr,
+		.pc_decode	= nfs_svc_decode_SETATTR3args,
+		.pc_encode	= nfs_svc_encode_SETATTR3res,
+		.pc_argsize	= sizeof(struct SETATTR3args_wrapper),
+		.pc_argzero	= 0,
+		.pc_ressize	= sizeof(struct SETATTR3res),
+		.pc_cachetype	= RC_REPLBUFF,
+		.pc_xdrressize	= NFS3_SETATTR3res_sz,
+		.pc_name	= "SETATTR",
 	},
 	[NFSPROC3_LOOKUP] = {
 		.pc_func = nfsd3_proc_lookup,
@@ -1314,7 +1460,8 @@ static const struct svc_procedure nfsd_procedures3[22] = {
 union nfsd3_xdrstore {
 	struct GETATTR3args_wrapper	getattrargs;
 	struct GETATTR3res_wrapper	getattrres;
-	struct nfsd3_sattrargs		sattrargs;
+	struct SETATTR3args_wrapper	setattrargs;
+	struct SETATTR3res		setattrres;
 	struct nfsd3_diropargs		diropargs;
 	struct nfsd3_readargs		readargs;
 	struct nfsd3_writeargs		writeargs;

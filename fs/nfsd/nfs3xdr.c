@@ -296,23 +296,6 @@ svcxdr_decode_sattr3(struct svc_rqst *rqstp, struct xdr_stream *xdr,
 }
 
 static bool
-svcxdr_decode_sattrguard3(struct xdr_stream *xdr, struct nfsd3_sattrargs *args)
-{
-	u32 check;
-
-	if (xdr_stream_decode_bool(xdr, &check) < 0)
-		return false;
-	if (check) {
-		if (!svcxdr_decode_nfstime3(xdr, &args->guardtime))
-			return false;
-		args->check_guard = 1;
-	} else
-		args->check_guard = 0;
-
-	return true;
-}
-
-static bool
 svcxdr_decode_specdata3(struct xdr_stream *xdr, struct nfsd3_mknodargs *args)
 {
 	__be32 *p;
@@ -497,16 +480,6 @@ nfs3svc_decode_fhandleargs(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 	struct nfsd_fhandle *args = rqstp->rq_argp;
 
 	return svcxdr_decode_nfs_fh3(xdr, &args->fh);
-}
-
-bool
-nfs3svc_decode_sattrargs(struct svc_rqst *rqstp, struct xdr_stream *xdr)
-{
-	struct nfsd3_sattrargs *args = rqstp->rq_argp;
-
-	return svcxdr_decode_nfs_fh3(xdr, &args->fh) &&
-		svcxdr_decode_sattr3(rqstp, xdr, &args->attrs) &&
-		svcxdr_decode_sattrguard3(xdr, args);
 }
 
 bool
