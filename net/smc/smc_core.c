@@ -89,12 +89,20 @@ static void smc_lgr_schedule_free_work(struct smc_link_group *lgr)
 	 * otherwise there is a risk of out-of-sync link groups.
 	 */
 	if (!lgr->freeing) {
-		mod_delayed_work(system_percpu_wq, &lgr->free_work,
-				 (!lgr->is_smcd && lgr->role == SMC_CLNT) ?
-						SMC_LGR_FREE_DELAY_CLNT :
-						SMC_LGR_FREE_DELAY_SERV);
+		smc_lgr_hold(lgr); /* released by the worker or cancellation */
+		if (mod_delayed_work(system_percpu_wq, &lgr->free_work,
+				     (!lgr->is_smcd && lgr->role == SMC_CLNT) ?
+					     SMC_LGR_FREE_DELAY_CLNT :
+					     SMC_LGR_FREE_DELAY_SERV))
+			smc_lgr_put(lgr); /* pending work already owns a reference */
 	}
 	spin_unlock_bh(lgr_lock);
+}
+
+static void smc_lgr_cancel_free_work(struct smc_link_group *lgr)
+{
+	if (cancel_delayed_work(&lgr->free_work))
+		smc_lgr_put(lgr); /* cancelled work will not release its reference */
 }
 
 /* Register connection's alert token in our lookup structure.
@@ -733,19 +741,19 @@ static void smc_lgr_free_work(struct work_struct *work)
 	spin_lock_bh(lgr_lock);
 	if (lgr->freeing) {
 		spin_unlock_bh(lgr_lock);
-		return;
+		goto out;
 	}
 	read_lock_bh(&lgr->conns_lock);
 	conns = RB_EMPTY_ROOT(&lgr->conns_all);
 	read_unlock_bh(&lgr->conns_lock);
 	if (!conns) { /* number of lgr connections is no longer zero */
 		spin_unlock_bh(lgr_lock);
-		return;
+		goto out;
 	}
 	list_del_init(&lgr->list); /* remove from smc_lgr_list */
 	lgr->freeing = 1; /* this instance does the freeing, no new schedule */
 	spin_unlock_bh(lgr_lock);
-	cancel_delayed_work(&lgr->free_work);
+	smc_lgr_cancel_free_work(lgr);
 
 	if (!lgr->is_smcd && !lgr->terminating)
 		smc_llc_send_link_delete_all(lgr, true,
@@ -755,6 +763,8 @@ static void smc_lgr_free_work(struct work_struct *work)
 	if (!lgr->is_smcd)
 		smcr_lgr_link_deactivate_all(lgr);
 	smc_lgr_free(lgr);
+out:
+	smc_lgr_put(lgr); /* smc_lgr_hold in smc_lgr_schedule_free_work() */
 }
 
 static void smc_lgr_terminate_work(struct work_struct *work)
@@ -1578,8 +1588,8 @@ static void __smc_lgr_terminate(struct smc_link_group *lgr, bool soft)
 
 	if (lgr->terminating)
 		return;	/* lgr already terminating */
-	/* cancel pending free_work */
-	cancel_delayed_work(&lgr->free_work);
+	/* A running free_work holds its own link group reference. */
+	smc_lgr_cancel_free_work(lgr);
 	lgr->terminating = 1;
 
 	/* kill remaining link group connections */
@@ -2031,8 +2041,8 @@ int smc_conn_create(struct smc_sock *smc, struct smc_init_info *ini)
 			conn->lgr = lgr;
 			rc = smc_lgr_register_conn(conn, false);
 			write_unlock_bh(&lgr->conns_lock);
-			if (!rc && delayed_work_pending(&lgr->free_work))
-				cancel_delayed_work(&lgr->free_work);
+			if (!rc)
+				smc_lgr_cancel_free_work(lgr);
 			break;
 		}
 		write_unlock_bh(&lgr->conns_lock);
