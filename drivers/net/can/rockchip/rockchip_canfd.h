@@ -12,6 +12,7 @@
 #include <linux/can/rx-offload.h>
 #include <linux/clk.h>
 #include <linux/io.h>
+#include <linux/mutex.h>
 #include <linux/netdevice.h>
 #include <linux/reset.h>
 #include <linux/skbuff.h>
@@ -477,6 +478,10 @@ struct rkcanfd_priv {
 	void __iomem *regs;
 	unsigned int tx_head;
 	unsigned int tx_tail;
+
+	bool closing;
+	/* Serializes restart with the close transition. */
+	struct mutex state_lock;
 
 	u32 reg_mode_default;
 	u32 reg_int_mask_default;

@@ -244,6 +244,8 @@ static void rkcanfd_chip_interrupts_enable(const struct rkcanfd_priv *priv)
 static void rkcanfd_chip_interrupts_disable(const struct rkcanfd_priv *priv)
 {
 	rkcanfd_write(priv, RKCANFD_REG_INT_MASK, RKCANFD_REG_INT_ALL);
+	/* Flush the mask before synchronizing a shared IRQ. */
+	rkcanfd_read(priv, RKCANFD_REG_INT_MASK);
 }
 
 static void rkcanfd_chip_fifo_setup(struct rkcanfd_priv *priv)
@@ -353,19 +355,27 @@ static int rkcanfd_set_mode(struct net_device *ndev,
 			    enum can_mode mode)
 {
 	struct rkcanfd_priv *priv = netdev_priv(ndev);
+	int err = 0;
 
-	switch (mode) {
-	case CAN_MODE_START:
-		rkcanfd_chip_start(priv);
-		rkcanfd_chip_interrupts_enable(priv);
-		netif_wake_queue(ndev);
-		break;
-
-	default:
+	if (mode != CAN_MODE_START)
 		return -EOPNOTSUPP;
+
+	mutex_lock(&priv->state_lock);
+	if (READ_ONCE(priv->closing)) {
+		err = -ENETDOWN;
+		goto out_unlock;
 	}
 
-	return 0;
+	disable_irq(ndev->irq);
+	rkcanfd_chip_start(priv);
+	rkcanfd_chip_interrupts_enable(priv);
+	enable_irq(ndev->irq);
+	netif_wake_queue(ndev);
+
+out_unlock:
+	mutex_unlock(&priv->state_lock);
+
+	return err;
 }
 
 static struct sk_buff *
@@ -666,6 +676,9 @@ static irqreturn_t rkcanfd_irq(int irq, void *dev_id)
 	struct rkcanfd_priv *priv = dev_id;
 	u32 reg_int_unmasked, reg_int;
 
+	if (READ_ONCE(priv->closing))
+		return IRQ_NONE;
+
 	reg_int_unmasked = rkcanfd_read(priv, RKCANFD_REG_INT);
 	reg_int = reg_int_unmasked & ~priv->reg_int_mask_default;
 
@@ -736,6 +749,7 @@ static int rkcanfd_open(struct net_device *ndev)
 	rkcanfd_chip_start(priv);
 	can_rx_offload_enable(&priv->offload);
 
+	WRITE_ONCE(priv->closing, false);
 	err = request_irq(ndev->irq, rkcanfd_irq, IRQF_SHARED, ndev->name, priv);
 	if (err)
 		goto out_rkcanfd_chip_stop;
@@ -758,9 +772,14 @@ static int rkcanfd_stop(struct net_device *ndev)
 {
 	struct rkcanfd_priv *priv = netdev_priv(ndev);
 
+	mutex_lock(&priv->state_lock);
+	WRITE_ONCE(priv->closing, true);
+	rkcanfd_chip_interrupts_disable(priv);
+	mutex_unlock(&priv->state_lock);
+	synchronize_irq(ndev->irq);
+	cancel_delayed_work_sync(&priv->can.restart_work);
 	netif_stop_queue(ndev);
 
-	rkcanfd_chip_interrupts_disable(priv);
 	free_irq(ndev->irq, priv);
 	can_rx_offload_disable(&priv->offload);
 	rkcanfd_chip_stop_sync(priv, CAN_STATE_STOPPED);
@@ -921,6 +940,7 @@ static int rkcanfd_probe(struct platform_device *pdev)
 	priv->can.do_set_mode = rkcanfd_set_mode;
 	priv->can.do_get_berr_counter = rkcanfd_get_berr_counter;
 	priv->ndev = ndev;
+	mutex_init(&priv->state_lock);
 
 	match = device_get_match_data(&pdev->dev);
 	if (match) {
