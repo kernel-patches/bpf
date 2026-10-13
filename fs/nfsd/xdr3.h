@@ -24,13 +24,6 @@ struct nfsd3_accessargs {
 	__u32			access;
 };
 
-struct nfsd3_linkargs {
-	struct svc_fh		ffh;
-	struct svc_fh		tfh;
-	char *			tname;
-	unsigned int		tlen;
-};
-
 struct nfsd3_readdirargs {
 	struct svc_fh		fh;
 	__u64			cookie;
@@ -75,12 +68,6 @@ struct nfsd3_writeres {
 };
 
 static_assert(offsetof(struct nfsd3_writeres, xdrgen) == 0);
-
-struct nfsd3_linkres {
-	__be32			status;
-	struct svc_fh		tfh;
-	struct svc_fh		fh;
-};
 
 struct nfsd3_readdirres {
 	/* Components of the reply */
@@ -142,21 +129,12 @@ struct nfsd3_getaclres {
 	struct kstat		stat;
 };
 
-/* dummy type for release */
-struct nfsd3_fhandle_pair {
-	__u32			dummy;
-	struct svc_fh		fh1;
-	struct svc_fh		fh2;
-};
-
 bool nfs3svc_decode_fhandleargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
-bool nfs3svc_decode_linkargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_decode_readdirargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_decode_readdirplusargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_decode_commitargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 
 bool nfs3svc_encode_accessres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
-bool nfs3svc_encode_linkres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_encode_readdirres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_encode_fsstatres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_encode_fsinfores(struct svc_rqst *rqstp, struct xdr_stream *xdr);
@@ -164,7 +142,6 @@ bool nfs3svc_encode_pathconfres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_encode_commitres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 
 void nfs3svc_release_fhandle(struct svc_rqst *);
-void nfs3svc_release_fhandle2(struct svc_rqst *);
 
 void nfs3svc_encode_cookie3(struct nfsd3_readdirres *resp, u64 offset);
 int nfs3svc_encode_entry3(void *data, const char *name, int namlen,

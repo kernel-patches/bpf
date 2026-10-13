@@ -163,39 +163,6 @@ svcxdr_encode_writeverf3(struct xdr_stream *xdr, const __be32 *verf)
 }
 
 static bool
-svcxdr_decode_filename3(struct xdr_stream *xdr, char **name, unsigned int *len)
-{
-	u32 size, i;
-	__be32 *p;
-	char *c;
-
-	if (xdr_stream_decode_u32(xdr, &size) < 0)
-		return false;
-	if (size == 0 || size > NFS3_MAXNAMLEN)
-		return false;
-	p = xdr_inline_decode(xdr, size);
-	if (!p)
-		return false;
-
-	*len = size;
-	*name = (char *)p;
-	for (i = 0, c = *name; i < size; i++, c++) {
-		if (*c == '\0' || *c == '/')
-			return false;
-	}
-
-	return true;
-}
-
-static bool
-svcxdr_decode_diropargs3(struct xdr_stream *xdr, struct svc_fh *fhp,
-			 char **name, unsigned int *len)
-{
-	return svcxdr_decode_nfs_fh3(xdr, fhp) &&
-		svcxdr_decode_filename3(xdr, name, len);
-}
-
-static bool
 svcxdr_encode_fattr3(struct svc_rqst *rqstp, struct xdr_stream *xdr,
 		     const struct svc_fh *fhp, const struct kstat *stat)
 {
@@ -361,16 +328,6 @@ nfs3svc_decode_fhandleargs(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 }
 
 bool
-nfs3svc_decode_linkargs(struct svc_rqst *rqstp, struct xdr_stream *xdr)
-{
-	struct nfsd3_linkargs *args = rqstp->rq_argp;
-
-	return svcxdr_decode_nfs_fh3(xdr, &args->ffh) &&
-		svcxdr_decode_diropargs3(xdr, &args->tfh,
-					 &args->tname, &args->tlen);
-}
-
-bool
 nfs3svc_decode_readdirargs(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 {
 	struct nfsd3_readdirargs *args = rqstp->rq_argp;
@@ -428,17 +385,6 @@ nfs3svc_decode_commitargs(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 /*
  * XDR encode functions
  */
-
-/* LINK */
-bool
-nfs3svc_encode_linkres(struct svc_rqst *rqstp, struct xdr_stream *xdr)
-{
-	struct nfsd3_linkres *resp = rqstp->rq_resp;
-
-	return svcxdr_encode_nfsstat3(xdr, resp->status) &&
-		svcxdr_encode_post_op_attr(rqstp, xdr, &resp->fh) &&
-		svcxdr_encode_wcc_data(rqstp, xdr, &resp->tfh);
-}
 
 /* READDIR */
 bool
@@ -839,13 +785,4 @@ nfs3svc_release_fhandle(struct svc_rqst *rqstp)
 	struct nfsd3_attrstat *resp = rqstp->rq_resp;
 
 	fh_put(&resp->fh);
-}
-
-void
-nfs3svc_release_fhandle2(struct svc_rqst *rqstp)
-{
-	struct nfsd3_fhandle_pair *resp = rqstp->rq_resp;
-
-	fh_put(&resp->fh1);
-	fh_put(&resp->fh2);
 }
