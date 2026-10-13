@@ -74,9 +74,14 @@ int lookup_noperm_common(struct qstr *qname, struct dentry *base);
 /*
  * The stepwise engine under vfs_walk_ancestors(); fs-internal so iterating
  * consumers (BPF) can drive it, with the walk invariants staying in namei.c.
+ * In rcu mode (%VFS_WALK_RCU) the caller holds rcu_read_lock() over the
+ * whole walk, no references are held, and vfs_walk_next() returning -ECHILD
+ * invalidates everything derived from the walk.
  */
 struct vfs_ancestor_walk {
 	struct path pos;
+	unsigned int seq;	/* pos.dentry->d_seq sample (rcu mode) */
+	unsigned int m_seq;	/* mount_lock sample (rcu mode) */
 	unsigned int pos_flags;	/* VFS_WALK_POS_* describing pos */
 	unsigned int flags;	/* VFS_WALK_* */
 };
@@ -85,6 +90,8 @@ void vfs_walk_start(struct vfs_ancestor_walk *aw, const struct path *path,
 		    unsigned int flags);
 int vfs_walk_next(struct vfs_ancestor_walk *aw);
 void vfs_walk_end(struct vfs_ancestor_walk *aw);
+bool vfs_walk_handover(struct vfs_ancestor_walk *to,
+		       struct vfs_ancestor_walk *from);
 
 void __init filename_init(void);
 
