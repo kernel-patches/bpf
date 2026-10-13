@@ -721,31 +721,6 @@ nfs3svc_encode_wccstat(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 		svcxdr_encode_wcc_data(rqstp, xdr, &resp->fh);
 }
 
-/* LOOKUP */
-bool
-nfs3svc_encode_lookupres(struct svc_rqst *rqstp, struct xdr_stream *xdr)
-{
-	struct nfsd3_diropres *resp = rqstp->rq_resp;
-
-	if (!svcxdr_encode_nfsstat3(xdr, resp->status))
-		return false;
-	switch (resp->status) {
-	case nfs_ok:
-		if (!svcxdr_encode_nfs_fh3(xdr, &resp->fh))
-			return false;
-		if (!svcxdr_encode_post_op_attr(rqstp, xdr, &resp->fh))
-			return false;
-		if (!svcxdr_encode_post_op_attr(rqstp, xdr, &resp->dirfh))
-			return false;
-		break;
-	default:
-		if (!svcxdr_encode_post_op_attr(rqstp, xdr, &resp->dirfh))
-			return false;
-	}
-
-	return true;
-}
-
 /* ACCESS */
 bool
 nfs3svc_encode_accessres(struct svc_rqst *rqstp, struct xdr_stream *xdr)

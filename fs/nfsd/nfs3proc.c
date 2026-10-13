@@ -56,6 +56,21 @@ struct SETATTR3args_wrapper {
 
 static_assert(offsetof(struct SETATTR3args_wrapper, xdrgen) == 0);
 
+struct LOOKUP3args_wrapper {
+	struct LOOKUP3args	xdrgen;
+	struct svc_fh		fh;
+};
+
+static_assert(offsetof(struct LOOKUP3args_wrapper, xdrgen) == 0);
+
+struct LOOKUP3res_wrapper {
+	struct LOOKUP3res	xdrgen;
+	struct svc_fh		fh;
+	u8			fh_data[NFS3_FHSIZE];
+};
+
+static_assert(offsetof(struct LOOKUP3res_wrapper, xdrgen) == 0);
+
 static int	nfs3_ftypes[] = {
 	0,			/* NF3NON */
 	S_IFREG,		/* NF3REG */
@@ -171,11 +186,35 @@ nfsd3_fh3_to_svc_fh(struct svc_fh *fhp, const struct nfs_fh3 *fh3)
 }
 
 static __always_inline void
+nfsd3_svc_fh_to_fh3(struct nfs_fh3 *fh3, const struct svc_fh *fhp, u8 *scratch)
+{
+	memcpy(scratch, fhp->fh_handle.fh_raw, fhp->fh_handle.fh_size);
+	fh3->data.data = scratch;
+	fh3->data.len = fhp->fh_handle.fh_size;
+}
+
+static __always_inline void
 nfsd3_timespec64_to_nfstime3(struct nfstime3 *dst,
 			     const struct timespec64 *src)
 {
 	dst->seconds = src->tv_sec;
 	dst->nseconds = src->tv_nsec;
+}
+
+static __be32
+nfsd3_check_filename(const unsigned char *name, u32 len)
+{
+	u32 i;
+
+	if (len == 0)
+		return nfserr_inval;
+	if (len > NFS3_MAXNAMLEN)
+		return nfserr_nametoolong;
+	for (i = 0; i < len; i++) {
+		if (name[i] == '\0' || name[i] == '/')
+			return nfserr_inval;
+	}
+	return nfs_ok;
 }
 
 static u32
@@ -456,27 +495,51 @@ static __be32 nfsd3_proc_setattr(struct svc_rqst *rqstp)
 	return rpc_success;
 }
 
-/*
- * Look up a path name component
+/**
+ * nfsd3_proc_lookup - LOOKUP: Look up file name
+ * @rqstp: RPC transaction context
+ *
+ * Return:
+ *   %rpc_success:		RPC executed successfully
+ *
+ * RPC synopsis:
+ *   LOOKUP3res NFSPROC3_LOOKUP(LOOKUP3args) = 3;
  */
-static __be32
-nfsd3_proc_lookup(struct svc_rqst *rqstp)
+static __be32 nfsd3_proc_lookup(struct svc_rqst *rqstp)
 {
-	struct nfsd3_diropargs *argp = rqstp->rq_argp;
-	struct nfsd3_diropres  *resp = rqstp->rq_resp;
+	struct LOOKUP3args_wrapper *argp = rqstp->rq_argp;
+	struct LOOKUP3res_wrapper *resp = rqstp->rq_resp;
+	struct diropargs3 *what = &argp->xdrgen.what;
+	struct svc_fh *dirfhp = &argp->fh;
+	struct svc_fh *fhp = &resp->fh;
 
-	dprintk("nfsd: LOOKUP(3)   %s %.*s\n",
-				SVCFH_fmt(&argp->fh),
-				argp->len,
-				argp->name);
+	nfsd3_fh3_to_svc_fh(dirfhp, &what->dir);
 
-	fh_copy(&resp->dirfh, &argp->fh);
-	fh_init(&resp->fh, NFS3_FHSIZE);
+	fh_init(fhp, NFS3_FHSIZE);
+	resp->xdrgen.status = nfsd3_check_filename(what->name.data,
+						   what->name.len);
+	if (resp->xdrgen.status != nfs_ok)
+		goto out;
+	resp->xdrgen.status = nfsd_lookup(rqstp, dirfhp,
+					  (char *)what->name.data,
+					  what->name.len, fhp);
 
-	resp->status = nfsd_lookup(rqstp, &resp->dirfh,
-				   argp->name, argp->len,
-				   &resp->fh);
-	resp->status = nfsd3_map_status(resp->status);
+out:
+	if (resp->xdrgen.status == nfs_ok) {
+		struct LOOKUP3resok *resok = &resp->xdrgen.u.resok;
+
+		nfsd3_svc_fh_to_fh3(&resok->object, fhp, resp->fh_data);
+		nfsd3_fill_post_op_attr(rqstp, &resok->obj_attributes, fhp);
+		nfsd3_fill_post_op_attr(rqstp, &resok->dir_attributes, dirfhp);
+	} else {
+		struct LOOKUP3resfail *resfail = &resp->xdrgen.u.resfail;
+
+		resp->xdrgen.status = nfsd3_map_status(resp->xdrgen.status);
+		nfsd3_fill_post_op_attr(rqstp, &resfail->dir_attributes, dirfhp);
+	}
+
+	fh_put(fhp);
+	fh_put(dirfhp);
 	return rpc_success;
 }
 
@@ -1230,16 +1293,15 @@ static const struct svc_procedure nfsd_procedures3[22] = {
 		.pc_name	= "SETATTR",
 	},
 	[NFSPROC3_LOOKUP] = {
-		.pc_func = nfsd3_proc_lookup,
-		.pc_decode = nfs3svc_decode_diropargs,
-		.pc_encode = nfs3svc_encode_lookupres,
-		.pc_release = nfs3svc_release_fhandle2,
-		.pc_argsize = sizeof(struct nfsd3_diropargs),
-		.pc_argzero = sizeof(struct nfsd3_diropargs),
-		.pc_ressize = sizeof(struct nfsd3_diropres),
-		.pc_cachetype = RC_NOCACHE,
-		.pc_xdrressize = ST+FH+pAT+pAT,
-		.pc_name = "LOOKUP",
+		.pc_func	= nfsd3_proc_lookup,
+		.pc_decode	= nfs_svc_decode_LOOKUP3args,
+		.pc_encode	= nfs_svc_encode_LOOKUP3res,
+		.pc_argsize	= sizeof(struct LOOKUP3args_wrapper),
+		.pc_argzero	= 0,
+		.pc_ressize	= sizeof(struct LOOKUP3res_wrapper),
+		.pc_cachetype	= RC_NOCACHE,
+		.pc_xdrressize	= NFS3_LOOKUP3res_sz,
+		.pc_name	= "LOOKUP",
 	},
 	[NFSPROC3_ACCESS] = {
 		.pc_func = nfsd3_proc_access,
@@ -1462,6 +1524,8 @@ union nfsd3_xdrstore {
 	struct GETATTR3res_wrapper	getattrres;
 	struct SETATTR3args_wrapper	setattrargs;
 	struct SETATTR3res		setattrres;
+	struct LOOKUP3args_wrapper	lookupargs;
+	struct LOOKUP3res_wrapper	lookupres;
 	struct nfsd3_diropargs		diropargs;
 	struct nfsd3_readargs		readargs;
 	struct nfsd3_writeargs		writeargs;
