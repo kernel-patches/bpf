@@ -1375,6 +1375,13 @@ int bnge_napi_poll(struct napi_struct *napi, int budget)
 				break;
 
 			idx = BNGE_NQ_HDL_IDX(idx);
+			/* NQ0 outlives its completion rings: ignore a stale
+			 * notification for a CQ that no longer exists.
+			 */
+			if (unlikely(idx >= nqr->cp_ring_count)) {
+				raw_cons = NEXT_RAW_CMP(raw_cons);
+				continue;
+			}
 			cpr = &nqr->cp_ring_arr[idx];
 			cpr->had_nqe_notify = 1;
 			cpr->toggle = NQE_CN_TOGGLE(type);
@@ -1394,6 +1401,41 @@ int bnge_napi_poll(struct napi_struct *napi, int budget)
 	}
 poll_done:
 	return work_done;
+}
+
+/* Consume pending NQ entries without polling the CP rings. The NQ's NAPI must
+ * be disabled (or quiesced) by the caller. HWRM events are handled, CQ
+ * notifications are dropped. cpr->had_nqe_notify is not reset, so the CP rings
+ * must be freed or re-initialised afterwards.
+ */
+void bnge_nq_drain(struct bnge_net *bn, struct bnge_napi *bnapi)
+{
+	struct bnge_nq_ring_info *nqr = &bnapi->nq_ring;
+	u32 raw_cons = nqr->nq_raw_cons;
+
+	while (1) {
+		u32 cons = RING_CMP(bn, raw_cons);
+		struct nqe_cn *nqcmp;
+		u16 type;
+
+		nqcmp = &nqr->desc_ring[CP_RING(cons)][CP_IDX(cons)];
+		if (!NQ_CMP_VALID(bn, nqcmp, raw_cons))
+			break;
+
+		/* The valid test of the entry must be done first before
+		 * reading any further.
+		 */
+		dma_rmb();
+
+		type = le16_to_cpu(nqcmp->type);
+		if (NQE_CN_TYPE(type) != NQ_CN_TYPE_CQ_NOTIFICATION)
+			bnge_hwrm_handler(bn, (struct tx_cmp *)nqcmp);
+		raw_cons = NEXT_RAW_CMP(raw_cons);
+	}
+
+	nqr->has_more_work = 0;
+	nqr->nq_raw_cons = raw_cons;
+	BNGE_DB_NQ(bn->bd, &nqr->nq_db, raw_cons);
 }
 
 static u16 bnge_xmit_get_cfa_action(struct sk_buff *skb)

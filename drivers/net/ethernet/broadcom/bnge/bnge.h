@@ -239,14 +239,15 @@ struct bnge_dev {
 #define bnge_dbg(bd, fmt, ...)	bnge_log(dbg, bd, fmt, ##__VA_ARGS__)
 
 /* Index of the first NQ created in ndo_open() and destroyed in ndo_stop().
- * NQs below it are created at probe and destroyed at remove. It starts at 0,
- * i.e. all NQs are open NQs, until NQ0 moves to probe.
+ * NQs below it are created at probe and destroyed at remove. Exactly one NQ,
+ * NQ0 (async events and queue 0), is created at probe.
  *
- * Layout of bd->irq_tbl: the NQs created at probe (none yet) come first,
- * then the aux (RoCE) vectors, then the NQs created in open. The ring_idx
- * the aux device receives is its irq_tbl index.
+ * Layout of bd->irq_tbl, with A = aux MSI-X count: NQ0 uses irq_tbl[0],
+ * the aux (RoCE) device irq_tbl[1..A], and the NQs created in open
+ * irq_tbl[A + 1..]. The ring_idx the aux device receives is its irq_tbl
+ * index.
  */
-#define BNGE_FIRST_OPEN_NQ	0
+#define BNGE_FIRST_OPEN_NQ	1
 
 #define bnge_for_each_open_nq(i, bd) \
 	for ((i) = BNGE_FIRST_OPEN_NQ; (i) < (bd)->nq_nr_rings; (i)++)

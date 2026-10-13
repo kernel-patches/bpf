@@ -1209,8 +1209,18 @@ static int bnge_init_ring_grps(struct bnge_net *bn)
 		bn->grp_info[i].agg_fw_ring_id = INVALID_HW_RING_ID;
 		bn->grp_info[i].nq_fw_ring_id = INVALID_HW_RING_ID;
 	}
+	/* NQ0 stays allocated in FW across open/close */
+	bn->grp_info[0].nq_fw_ring_id =
+		(u16)bn->nq0->nq_ring.ring_struct.fw_ring_id;
 
 	return 0;
+}
+
+static void bnge_nq0_clear_rings(struct bnge_net *bn)
+{
+	bn->nq0->rx_ring = NULL;
+	memset(bn->nq0->tx_ring, 0, sizeof(bn->nq0->tx_ring));
+	bn->nq0->events = 0;
 }
 
 static void bnge_free_core(struct bnge_net *bn)
@@ -1229,6 +1239,7 @@ static void bnge_free_core(struct bnge_net *bn)
 	bn->tx_ring = NULL;
 	kfree(bn->rx_ring);
 	bn->rx_ring = NULL;
+	bnge_nq0_clear_rings(bn);
 	kfree(bn->bnapi);
 	bn->bnapi = NULL;
 }
@@ -1243,12 +1254,15 @@ static int bnge_alloc_core(struct bnge_net *bn)
 	arr_size = L1_CACHE_ALIGN(sizeof(struct bnge_napi *) *
 			bd->nq_nr_rings);
 	size = L1_CACHE_ALIGN(sizeof(struct bnge_napi));
-	bnapi = kzalloc(arr_size + size * bd->nq_nr_rings, GFP_KERNEL);
+	bnapi = kzalloc(arr_size +
+			size * (bd->nq_nr_rings - BNGE_FIRST_OPEN_NQ),
+			GFP_KERNEL);
 	if (!bnapi)
 		return rc;
 
 	bn->bnapi = bnapi;
 	bnapi += arr_size;
+	bn->bnapi[0] = bn->nq0;
 	bnge_for_each_open_nq(i, bd) {
 		bn->bnapi[i] = bnapi;
 		bn->bnapi[i]->index = i;
@@ -1360,6 +1374,7 @@ err_free_rx_ring:
 	kfree(bn->rx_ring);
 	bn->rx_ring = NULL;
 err_free_bnapi:
+	bnge_nq0_clear_rings(bn);
 	kfree(bn->bnapi);
 	bn->bnapi = NULL;
 	return rc;
@@ -1973,18 +1988,12 @@ static int bnge_hwrm_ring_alloc(struct bnge_net *bn)
 	agg_rings = !!(bnge_is_agg_reqd(bd));
 	bnge_for_each_open_nq(i, bd) {
 		struct bnge_napi *bnapi = bn->bnapi[i];
-		struct bnge_ring_struct *ring = &bnapi->nq_ring.ring_struct;
 
 		rc = bnge_hwrm_nq_alloc(bn, bnapi);
 		if (rc)
 			goto err_out;
-		bn->grp_info[i].nq_fw_ring_id = (u16)ring->fw_ring_id;
-
-		if (!i) {
-			rc = bnge_hwrm_set_async_event_cr(bd, ring->fw_ring_id);
-			if (rc)
-				netdev_warn(bn->netdev, "Failed to set async event completion ring.\n");
-		}
+		bn->grp_info[i].nq_fw_ring_id =
+			(u16)bnapi->nq_ring.ring_struct.fw_ring_id;
 	}
 
 	for (i = 0; i < bd->tx_nr_rings; i++) {
@@ -2625,6 +2634,9 @@ static void bnge_setup_msix(struct bnge_net *bn)
 	int len, i;
 
 	len = sizeof(bd->irq_tbl[0].name);
+	/* NQ0 keeps the "<pci_name>-nq0" name set in bnge_nq0_init(). Only the
+	 * NQs created in open are named after the netdev here.
+	 */
 	bnge_for_each_open_nq(i, bd) {
 		int map_idx = bnge_cp_num_to_irq_num(bn, i);
 		char *attr;
@@ -2870,6 +2882,129 @@ static void bnge_del_napi(struct bnge_net *bn)
 	synchronize_net();
 }
 
+static void bnge_nq0_quiesce(struct bnge_net *bn)
+{
+	napi_disable_locked(&bn->nq0->napi);
+	/* Wait for RCU grace period after napi_disable_locked(): a poll can
+	 * still be arming the NQ doorbell after it clears NAPI_STATE_SCHED.
+	 */
+	synchronize_net();
+	bnge_db_nq(bn, &bn->nq0->nq_ring.nq_db, bn->nq0->nq_ring.nq_raw_cons);
+}
+
+static void bnge_nq0_resume(struct bnge_net *bn)
+{
+	struct bnge_nq_ring_info *nqr = &bn->nq0->nq_ring;
+
+	bn->nq0->in_reset = false;
+	bn->nq0->tx_fault = 0;
+	napi_enable_locked(&bn->nq0->napi);
+	bnge_db_nq_arm(bn, &nqr->nq_db, nqr->nq_raw_cons);
+}
+
+static int bnge_nq0_init(struct bnge_net *bn)
+{
+	struct net_device *dev = bn->netdev;
+	struct bnge_nq_ring_info *nqr;
+	struct bnge_dev *bd = bn->bd;
+	struct bnge_napi *bnapi;
+	struct bnge_irq *irq;
+	int rc;
+
+	bnapi = kzalloc_obj(*bnapi);
+	if (!bnapi)
+		return -ENOMEM;
+
+	/* NQ0 helpers hard-code NQ index 0 */
+	BUILD_BUG_ON(BNGE_FIRST_OPEN_NQ != 1);
+
+	bnapi->bn = bn;
+	bnapi->index = 0;
+	bn->nq0 = bnapi;
+	nqr = &bnapi->nq_ring;
+
+	rc = bnge_alloc_nq(bn, bnapi);
+	if (rc)
+		goto err_free_bnapi;
+
+	irq = &bd->irq_tbl[nqr->ring_struct.map_idx];
+	irq->handler = bnge_msix;
+	snprintf(irq->name, sizeof(irq->name), "%s-nq0", pci_name(bd->pdev));
+
+	/* The netdev is not registered yet, but the *_locked() NAPI helpers
+	 * expect the instance lock to be held.
+	 */
+	netdev_lock(dev);
+	netif_napi_add_config_locked(dev, &bnapi->napi, bnge_napi_poll,
+				     bnapi->index);
+
+	rc = bnge_nq_request_irq(bn, bnapi);
+	if (rc)
+		goto err_del_napi;
+
+	rc = bnge_hwrm_nq_alloc(bn, bnapi);
+	if (rc)
+		goto err_free_irq;
+
+	rc = bnge_hwrm_set_async_event_cr(bd, nqr->ring_struct.fw_ring_id);
+	if (rc) {
+		bnge_err(bd, "Failed to set async event completion ring: %d\n",
+			 rc);
+		goto err_free_irq;
+	}
+
+	/* Enable NAPI only now that the NQ doorbell is set up, so an early
+	 * interrupt cannot make the poll arm an uninitialized doorbell.
+	 */
+	napi_enable_locked(&bnapi->napi);
+	bnge_db_nq_arm(bn, &nqr->nq_db, nqr->nq_raw_cons);
+	netdev_unlock(dev);
+	return 0;
+
+err_free_irq:
+	bnge_nq_free_irq(bn, bnapi);
+	__netif_napi_del_locked(&bnapi->napi);
+	netdev_unlock(dev);
+	/* Same order as bnge_nq0_uninit(): no poll may touch the NQ once the
+	 * FW ring is freed.
+	 */
+	synchronize_net();
+	bnge_hwrm_nq_free(bn, bnapi);
+	bnge_free_nq(bn, bnapi);
+	goto err_free_bnapi;
+err_del_napi:
+	__netif_napi_del_locked(&bnapi->napi);
+	netdev_unlock(dev);
+	synchronize_net();
+	bnge_free_nq(bn, bnapi);
+err_free_bnapi:
+	kfree(bnapi);
+	bn->nq0 = NULL;
+	return rc;
+}
+
+static void bnge_nq0_uninit(struct bnge_net *bn)
+{
+	struct net_device *dev = bn->netdev;
+	struct bnge_napi *bnapi = bn->nq0;
+
+	netdev_lock(dev);
+	napi_disable_locked(&bnapi->napi);
+	bnge_nq_free_irq(bn, bnapi);
+	__netif_napi_del_locked(&bnapi->napi);
+	netdev_unlock(dev);
+	/* Wait for RCU grace period after removing the NAPI instance, and for
+	 * a poll that may still be arming the NQ doorbell, before destroying
+	 * the FW ring.
+	 */
+	synchronize_net();
+
+	bnge_hwrm_nq_free(bn, bnapi);
+	bnge_free_nq(bn, bnapi);
+	kfree(bnapi);
+	bn->nq0 = NULL;
+}
+
 static int bnge_init_nic(struct bnge_net *bn)
 {
 	int rc;
@@ -2976,10 +3111,17 @@ static int bnge_open_core(struct bnge_net *bn)
 		goto err_if_change;
 	}
 
+	bnge_nq0_quiesce(bn);
+
+	/* Drop async events NQ0 received while down. Its NAPI is quiesced, so
+	 * nothing can set bits concurrently.
+	 */
+	WRITE_ONCE(bn->sp_event, 0);
+
 	rc = bnge_alloc_core(bn);
 	if (rc) {
 		netdev_err(bn->netdev, "bnge_alloc_core err: %d\n", rc);
-		goto err_if_change;
+		goto err_nq0_resume;
 	}
 
 	bnge_init_napi(bn);
@@ -3011,6 +3153,8 @@ static int bnge_open_core(struct bnge_net *bn)
 	set_bit(BNGE_STATE_STATS_ENABLE, &bn->state);
 
 	bnge_enable_int(bn);
+	/* Resume NQ0 with the other NQs, once BNGE_STATE_OPEN is set */
+	bnge_nq0_resume(bn);
 
 	bnge_tx_enable(bn);
 
@@ -3022,10 +3166,13 @@ static int bnge_open_core(struct bnge_net *bn)
 	return 0;
 
 err_free_irq:
+	bnge_nq_drain(bn, bn->nq0);
 	bnge_free_irq(bn);
 err_del_napi:
 	bnge_del_napi(bn);
 	bnge_free_core(bn);
+err_nq0_resume:
+	bnge_nq0_resume(bn);
 err_if_change:
 	bnge_hwrm_if_change(bd, false);
 	return rc;
@@ -3238,6 +3385,8 @@ static void bnge_close_core(struct bnge_net *bn)
 	timer_delete_sync(&bn->timer);
 	bnge_shutdown_nic(bn);
 	bnge_disable_napi(bn);
+	bnge_nq0_quiesce(bn);
+	bnge_nq_drain(bn, bn->nq0);
 
 	/* Save ring stats before shutdown */
 	spin_lock_bh(&bn->stats_lock);
@@ -3250,6 +3399,7 @@ static void bnge_close_core(struct bnge_net *bn)
 	bnge_del_napi(bn);
 
 	bnge_free_core(bn);
+	bnge_nq0_resume(bn);
 }
 
 static int bnge_close(struct net_device *dev)
@@ -3259,7 +3409,6 @@ static int bnge_close(struct net_device *dev)
 	bnge_close_core(bn);
 	bnge_hwrm_shutdown_link(bn->bd);
 	bnge_hwrm_if_change(bn->bd, false);
-	bn->sp_event = 0;
 
 	return 0;
 }
@@ -3593,14 +3742,23 @@ int bnge_netdev_alloc(struct bnge_dev *bd, int max_irqs)
 	spin_lock_init(&bn->stats_lock);
 
 	netdev->request_ops_lock = true;
+
+	rc = bnge_nq0_init(bn);
+	if (rc) {
+		dev_err(bd->dev, "NQ0 init failed rc: %d\n", rc);
+		goto err_free_port_stats;
+	}
+
 	rc = register_netdev(netdev);
 	if (rc) {
 		dev_err(bd->dev, "Register netdev failed rc: %d\n", rc);
-		goto err_free_port_stats;
+		goto err_uninit_nq0;
 	}
 
 	return 0;
 
+err_uninit_nq0:
+	bnge_nq0_uninit(bn);
 err_free_port_stats:
 	bnge_free_port_stats(bn);
 err_free_workq:
@@ -3619,6 +3777,9 @@ void bnge_netdev_free(struct bnge_dev *bd)
 	bn = netdev_priv(netdev);
 
 	unregister_netdev(netdev);
+
+	/* NQ0 can queue sp_task; destroy it before the timer and workqueue */
+	bnge_nq0_uninit(bn);
 
 	timer_shutdown_sync(&bn->timer);
 	cancel_work_sync(&bn->sp_task);
