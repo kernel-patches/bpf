@@ -114,10 +114,39 @@ struct bpf_testmod_arena_pair {
 	u64 b;
 };
 
-/* The kernel defines the BPF pointer qualifiers, user space and BPF programs need them empty. */
+/*
+ * The kernel defines the BPF pointer qualifiers, a BPF program gets __arena
+ * from bpf_arena_common.h and user space needs neither.
+ */
+#ifndef __arena
+#define __arena
+#endif
 #ifndef __nullable
 #define __nullable
 #endif
+
+struct bpf_testmod_arena_nested {
+	u64 __arena *ptr;
+};
+
+union bpf_testmod_arena_union {
+	u64 __arena *ptr;
+	u64 raw;
+};
+
+/* Arguments of test_arena_member(), the pointers hold kernel addresses of arena memory */
+struct bpf_testmod_arena_member_args {
+	/* the value the caller passed, never NULL */
+	u64 __arena *ptr;
+	/* always NULL */
+	u64 __arena __nullable *null_ptr;
+	/* the same value again, behind a nested struct */
+	struct bpf_testmod_arena_nested nested;
+	/* the same value again, but a load from a union is rejected */
+	union bpf_testmod_arena_union u;
+	/* a scalar, loaded by the same insn as @ptr in a verifier test */
+	u64 cookie;
+};
 
 /* Arguments of test_nullable(), trusted through the __safe_trusted alias in the module */
 struct bpf_testmod_nullable_args {
@@ -138,6 +167,8 @@ struct bpf_testmod_ops3 {
 				u64 g, u64 h, u64 *ptr);
 	/* a multi-slot leading arg, so @ptr is not at the slot its arg index suggests */
 	int (*test_arena_multislot)(struct bpf_testmod_arena_pair p, u64 *ptr);
+	/* Used to test __arena pointer members. */
+	int (*test_arena_member)(struct bpf_testmod_arena_member_args *args);
 	/* Used to test __nullable pointer members. */
 	int (*test_nullable)(struct bpf_testmod_nullable_args *args);
 };
