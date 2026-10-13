@@ -36,6 +36,7 @@ struct page_owner_scan {
 	unsigned long pfn;
 	struct page *page;
 	struct page_owner po_snap;
+	int nid;
 };
 
 bool page_owner_next_eligible(struct page_owner_scan *scan);
