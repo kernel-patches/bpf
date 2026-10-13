@@ -492,9 +492,6 @@ const char *	   svc_proc_name(const struct svc_rqst *rqstp);
 int		   svc_encode_result_payload(struct svc_rqst *rqstp,
 					     unsigned int offset,
 					     unsigned int length);
-char		  *svc_fill_symlink_pathname(struct svc_rqst *rqstp,
-					     struct kvec *first, void *p,
-					     size_t total);
 __be32		   svc_generic_init_request(struct svc_rqst *rqstp,
 					    const struct svc_program *progp,
 					    struct svc_process_info *procinfo);
