@@ -120,6 +120,25 @@ static int xfrm_rcv_cb(struct sk_buff *skb, unsigned int family, u8 protocol,
 	return ret;
 }
 
+/* Finish an skb that is freed outside of xfrm_input()'s own drop path, e.g.
+ * from IPTFS.  The receive callbacks must still run before the skb goes away.
+ */
+void xfrm_input_drop(struct sk_buff *skb)
+{
+	struct sec_path *sp = skb_sec_path(skb);
+	struct xfrm_state *x;
+
+	if (!sp || !sp->len) {
+		kfree_skb(skb);
+		return;
+	}
+
+	x = sp->xvec[sp->len - 1];
+	xfrm_rcv_cb(skb, x->props.family, x->type ? x->type->proto : 0, -1);
+	kfree_skb(skb);
+}
+EXPORT_SYMBOL(xfrm_input_drop);
+
 struct sec_path *secpath_set(struct sk_buff *skb)
 {
 	struct sec_path *sp, *tmp = skb_ext_find(skb, SKB_EXT_SEC_PATH);

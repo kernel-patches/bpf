@@ -1211,7 +1211,7 @@ done:
 		 * either be save in ra_newskb, trimmed and sent on as an skb or
 		 * placed in defer to be freed.
 		 */
-		kfree_skb(skb);
+		xfrm_input_drop(skb);
 	}
 	return true;
 }
@@ -1298,7 +1298,7 @@ done:
 	if (!consumed) {
 		skb = skbseq.root_skb;
 		skb_abort_seq_read(&skbseq);
-		kfree_skb(skb);
+		xfrm_input_drop(skb);
 	}
 }
 
@@ -1751,7 +1751,7 @@ static int iptfs_input(struct xfrm_state *x, struct sk_buff *skb)
 
 	list_for_each_entry_safe(skb, next, &freelist, list) {
 		skb_list_del_init(skb);
-		kfree_skb(skb);
+		xfrm_input_drop(skb);
 	}
 done:
 	/* We always have dealt with the input SKB, either we are re-using it,
