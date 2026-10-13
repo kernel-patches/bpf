@@ -361,7 +361,6 @@ static int rmi_input_event(struct hid_device *hdev, u8 *data, int size)
 {
 	struct rmi_data *hdata = hid_get_drvdata(hdev);
 	struct rmi_device *rmi_dev = hdata->xport.rmi_dev;
-	unsigned long flags;
 
 	if (!(test_bit(RMI_STARTED, &hdata->flags)))
 		return 0;
@@ -372,13 +371,9 @@ static int rmi_input_event(struct hid_device *hdev, u8 *data, int size)
 
 	pm_wakeup_event(hdev->dev.parent, 0);
 
-	local_irq_save(flags);
-
 	rmi_set_attn_data(rmi_dev, data[1], &data[2], size - 2);
 
-	generic_handle_irq(hdata->rmi_irq);
-
-	local_irq_restore(flags);
+	generic_handle_irq_safe(hdata->rmi_irq);
 
 	return 1;
 }
