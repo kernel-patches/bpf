@@ -193,6 +193,13 @@ struct LINK3args_wrapper {
 
 static_assert(offsetof(struct LINK3args_wrapper, xdrgen) == 0);
 
+struct FSSTAT3args_wrapper {
+	struct FSSTAT3args	xdrgen;
+	struct svc_fh		fh;
+};
+
+static_assert(offsetof(struct FSSTAT3args_wrapper, xdrgen) == 0);
+
 static int nfsd3_ftype3_to_mode(ftype3 ftype)
 {
 	switch (ftype) {
@@ -1563,18 +1570,47 @@ out:
 	return rpc_success;
 }
 
-/*
- * Get file system stats
+/**
+ * nfsd3_proc_fsstat - FSSTAT: Get dynamic file system information
+ * @rqstp: RPC transaction context
+ *
+ * Return:
+ *   %rpc_success:		RPC executed successfully
+ *
+ * RPC synopsis:
+ *   FSSTAT3res NFSPROC3_FSSTAT(FSSTAT3args) = 18;
  */
-static __be32
-nfsd3_proc_fsstat(struct svc_rqst *rqstp)
+static __be32 nfsd3_proc_fsstat(struct svc_rqst *rqstp)
 {
-	struct nfsd_fhandle *argp = rqstp->rq_argp;
+	struct FSSTAT3args_wrapper *argp = rqstp->rq_argp;
 	struct nfsd3_fsstatres *resp = rqstp->rq_resp;
+	struct kstatfs *statp = &resp->stats;
+	struct svc_fh *fhp = &argp->fh;
 
-	resp->status = nfsd_statfs(rqstp, &argp->fh, &resp->stats, 0);
-	fh_put(&argp->fh);
-	resp->status = nfsd3_map_status(resp->status);
+	nfsd3_fh3_to_svc_fh(fhp, &argp->xdrgen.fsroot);
+
+	resp->xdrgen.status = nfsd_statfs(rqstp, fhp, statp, 0);
+
+	if (resp->xdrgen.status == nfs_ok) {
+		struct FSSTAT3resok *resok = &resp->xdrgen.u.resok;
+		u64 bs = statp->f_bsize;
+
+		resok->obj_attributes.attributes_follow = false;
+		resok->tbytes = bs * statp->f_blocks;
+		resok->fbytes = bs * statp->f_bfree;
+		resok->abytes = bs * statp->f_bavail;
+		resok->tfiles = statp->f_files;
+		resok->ffiles = statp->f_ffree;
+		resok->afiles = statp->f_ffree;
+		resok->invarsec = 0;
+	} else {
+		struct FSSTAT3resfail *resfail = &resp->xdrgen.u.resfail;
+
+		resp->xdrgen.status = nfsd3_map_status(resp->xdrgen.status);
+		resfail->obj_attributes.attributes_follow = false;
+	}
+
+	fh_put(fhp);
 	return rpc_success;
 }
 
@@ -1932,15 +1968,15 @@ static const struct svc_procedure nfsd_procedures3[22] = {
 		.pc_name = "READDIRPLUS",
 	},
 	[NFSPROC3_FSSTAT] = {
-		.pc_func = nfsd3_proc_fsstat,
-		.pc_decode = nfs3svc_decode_fhandleargs,
-		.pc_encode = nfs3svc_encode_fsstatres,
-		.pc_argsize = sizeof(struct nfsd3_fhandleargs),
-		.pc_argzero = sizeof(struct nfsd3_fhandleargs),
-		.pc_ressize = sizeof(struct nfsd3_fsstatres),
-		.pc_cachetype = RC_NOCACHE,
-		.pc_xdrressize = ST+pAT+2*6+1,
-		.pc_name = "FSSTAT",
+		.pc_func	= nfsd3_proc_fsstat,
+		.pc_decode	= nfs_svc_decode_FSSTAT3args,
+		.pc_encode	= nfs_svc_encode_FSSTAT3res,
+		.pc_argsize	= sizeof(struct FSSTAT3args_wrapper),
+		.pc_argzero	= 0,
+		.pc_ressize	= sizeof(struct nfsd3_fsstatres),
+		.pc_cachetype	= RC_NOCACHE,
+		.pc_xdrressize	= NFS3_FSSTAT3res_sz,
+		.pc_name	= "FSSTAT",
 	},
 	[NFSPROC3_FSINFO] = {
 		.pc_func = nfsd3_proc_fsinfo,
@@ -2014,6 +2050,7 @@ union nfsd3_xdrstore {
 	struct READ3res			readres;
 	struct nfsd3_writeres		writeres;
 	struct nfsd3_readdirres		readdirres;
+	struct FSSTAT3args_wrapper	fsstatargs;
 	struct nfsd3_fsstatres		fsstatres;
 	struct nfsd3_fsinfores		fsinfores;
 	struct nfsd3_pathconfres	pathconfres;

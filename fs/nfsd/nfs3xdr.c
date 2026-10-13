@@ -621,51 +621,6 @@ out_toosmall:
 }
 
 static bool
-svcxdr_encode_fsstat3resok(struct xdr_stream *xdr,
-			   const struct nfsd3_fsstatres *resp)
-{
-	const struct kstatfs *s = &resp->stats;
-	u64 bs = s->f_bsize;
-	__be32 *p;
-
-	p = xdr_reserve_space(xdr, XDR_UNIT * 13);
-	if (!p)
-		return false;
-	p = xdr_encode_hyper(p, bs * s->f_blocks);	/* total bytes */
-	p = xdr_encode_hyper(p, bs * s->f_bfree);	/* free bytes */
-	p = xdr_encode_hyper(p, bs * s->f_bavail);	/* user available bytes */
-	p = xdr_encode_hyper(p, s->f_files);		/* total inodes */
-	p = xdr_encode_hyper(p, s->f_ffree);		/* free inodes */
-	p = xdr_encode_hyper(p, s->f_ffree);		/* user available inodes */
-	*p = cpu_to_be32(resp->invarsec);		/* mean unchanged time */
-
-	return true;
-}
-
-/* FSSTAT */
-bool
-nfs3svc_encode_fsstatres(struct svc_rqst *rqstp, struct xdr_stream *xdr)
-{
-	struct nfsd3_fsstatres *resp = rqstp->rq_resp;
-
-	if (!svcxdr_encode_nfsstat3(xdr, resp->status))
-		return false;
-	switch (resp->status) {
-	case nfs_ok:
-		if (!svcxdr_encode_post_op_attr(rqstp, xdr, &nfs3svc_null_fh))
-			return false;
-		if (!svcxdr_encode_fsstat3resok(xdr, resp))
-			return false;
-		break;
-	default:
-		if (!svcxdr_encode_post_op_attr(rqstp, xdr, &nfs3svc_null_fh))
-			return false;
-	}
-
-	return true;
-}
-
-static bool
 svcxdr_encode_fsinfo3resok(struct xdr_stream *xdr,
 			   const struct nfsd3_fsinfores *resp)
 {
