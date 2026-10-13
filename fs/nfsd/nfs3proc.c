@@ -130,10 +130,21 @@ static __be32 nfsd3_map_status(__be32 status)
 }
 
 /*
- * NULL call.
+ * A full specification of each of the following NFSv3 procedures is
+ * available in RFC 1813 Section 3.3.
  */
-static __be32
-nfsd3_proc_null(struct svc_rqst *rqstp)
+
+/**
+ * nfsd3_proc_null - NULL: Do nothing
+ * @rqstp: RPC transaction context
+ *
+ * Return:
+ *   %rpc_success:		RPC executed successfully
+ *
+ * RPC synopsis:
+ *   void NFSPROC3_NULL(void) = 0;
+ */
+static __be32 nfsd3_proc_null(struct svc_rqst *rqstp)
 {
 	return rpc_success;
 }
@@ -933,15 +944,15 @@ out:
 
 static const struct svc_procedure nfsd_procedures3[22] = {
 	[NFSPROC3_NULL] = {
-		.pc_func = nfsd3_proc_null,
-		.pc_decode = nfssvc_decode_voidarg,
-		.pc_encode = nfssvc_encode_voidres,
-		.pc_argsize = sizeof(struct nfsd_voidargs),
-		.pc_argzero = sizeof(struct nfsd_voidargs),
-		.pc_ressize = sizeof(struct nfsd_voidres),
-		.pc_cachetype = RC_NOCACHE,
-		.pc_xdrressize = ST,
-		.pc_name = "NULL",
+		.pc_func	= nfsd3_proc_null,
+		.pc_decode	= xdrgen_svc_decode_void,
+		.pc_encode	= xdrgen_svc_encode_void,
+		.pc_argsize	= XDR_void,
+		.pc_argzero	= 0,
+		.pc_ressize	= 0,
+		.pc_cachetype	= RC_NOCACHE,
+		.pc_xdrressize	= XDR_void,
+		.pc_name	= "NULL",
 	},
 	[NFSPROC3_GETATTR] = {
 		.pc_func = nfsd3_proc_getattr,
