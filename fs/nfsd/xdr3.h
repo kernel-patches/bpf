@@ -31,12 +31,6 @@ struct nfsd3_readdirargs {
 	__be32 *		verf;
 };
 
-struct nfsd3_commitargs {
-	struct svc_fh		fh;
-	__u64			offset;
-	__u32			count;
-};
-
 struct nfsd3_getaclargs {
 	struct svc_fh		fh;
 	__u32			mask;
@@ -105,10 +99,10 @@ struct nfsd3_pathconfres {
 static_assert(offsetof(struct nfsd3_pathconfres, xdrgen) == 0);
 
 struct nfsd3_commitres {
-	__be32			status;
-	struct svc_fh		fh;
-	__be32			verf[2];
+	struct COMMIT3res	xdrgen;
 };
+
+static_assert(offsetof(struct nfsd3_commitres, xdrgen) == 0);
 
 struct nfsd3_getaclres {
 	__be32			status;
@@ -121,11 +115,9 @@ struct nfsd3_getaclres {
 
 bool nfs3svc_decode_readdirargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_decode_readdirplusargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
-bool nfs3svc_decode_commitargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 
 bool nfs3svc_encode_accessres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_encode_readdirres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
-bool nfs3svc_encode_commitres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 
 void nfs3svc_release_fhandle(struct svc_rqst *);
 

@@ -211,6 +211,13 @@ struct PATHCONF3args_wrapper {
 
 static_assert(offsetof(struct PATHCONF3args_wrapper, xdrgen) == 0);
 
+struct COMMIT3args_wrapper {
+	struct COMMIT3args	xdrgen;
+	struct svc_fh		fh;
+};
+
+static_assert(offsetof(struct COMMIT3args_wrapper, xdrgen) == 0);
+
 static int nfsd3_ftype3_to_mode(ftype3 ftype)
 {
 	switch (ftype) {
@@ -1762,31 +1769,47 @@ static __be32 nfsd3_proc_pathconf(struct svc_rqst *rqstp)
 	return rpc_success;
 }
 
-/*
- * Commit a file (range) to stable storage.
+/**
+ * nfsd3_proc_commit - COMMIT: Commit cached data on a server to stable storage
+ * @rqstp: RPC transaction context
+ *
+ * Return:
+ *   %rpc_success:		RPC executed successfully
+ *
+ * RPC synopsis:
+ *   COMMIT3res NFSPROC3_COMMIT(COMMIT3args) = 21;
  */
-static __be32
-nfsd3_proc_commit(struct svc_rqst *rqstp)
+static __be32 nfsd3_proc_commit(struct svc_rqst *rqstp)
 {
-	struct nfsd3_commitargs *argp = rqstp->rq_argp;
+	struct COMMIT3args_wrapper *argp = rqstp->rq_argp;
 	struct nfsd3_commitres *resp = rqstp->rq_resp;
+	struct svc_fh *fhp = &argp->fh;
 	struct nfsd_file *nf;
 
-	dprintk("nfsd: COMMIT(3)   %s %u@%Lu\n",
-				SVCFH_fmt(&argp->fh),
-				argp->count,
-				(unsigned long long) argp->offset);
+	nfsd3_fh3_to_svc_fh(fhp, &argp->xdrgen.file);
 
-	fh_copy(&resp->fh, &argp->fh);
-	resp->status = nfsd_file_acquire_gc(rqstp, &resp->fh, NFSD_MAY_WRITE |
-					    NFSD_MAY_NOT_BREAK_LEASE, &nf);
-	if (resp->status)
+	resp->xdrgen.status = nfsd_file_acquire_gc(rqstp, fhp, NFSD_MAY_WRITE |
+						   NFSD_MAY_NOT_BREAK_LEASE, &nf);
+	if (resp->xdrgen.status)
 		goto out;
-	resp->status = nfsd_commit(rqstp, &resp->fh, nf, argp->offset,
-				   argp->count, resp->verf);
+	resp->xdrgen.status = nfsd_commit(rqstp, fhp, nf,
+					  argp->xdrgen.offset, argp->xdrgen.count,
+					  (__be32 *)resp->xdrgen.u.resok.verf);
 	nfsd_file_put(nf);
+
 out:
-	resp->status = nfsd3_map_status(resp->status);
+	if (resp->xdrgen.status == nfs_ok) {
+		struct COMMIT3resok *resok = &resp->xdrgen.u.resok;
+
+		nfsd3_fill_wcc_data(rqstp, &resok->file_wcc, fhp);
+	} else {
+		struct COMMIT3resfail *resfail = &resp->xdrgen.u.resfail;
+
+		resp->xdrgen.status = nfsd3_map_status(resp->xdrgen.status);
+		nfsd3_fill_wcc_data(rqstp, &resfail->file_wcc, fhp);
+	}
+
+	fh_put(fhp);
 	return rpc_success;
 }
 
@@ -1796,11 +1819,6 @@ out:
  * Only the results of non-idempotent operations are cached.
  */
 #define nfsd3_readdirplusargs		nfsd3_readdirargs
-
-#define ST 1		/* status*/
-#define AT 21		/* attributes */
-#define pAT (1+AT)	/* post attributes - conditional */
-#define WC (7+pAT)	/* WCC attributes */
 
 static const struct svc_procedure nfsd_procedures3[22] = {
 	[NFSPROC3_NULL] = {
@@ -2038,16 +2056,15 @@ static const struct svc_procedure nfsd_procedures3[22] = {
 		.pc_name	= "PATHCONF",
 	},
 	[NFSPROC3_COMMIT] = {
-		.pc_func = nfsd3_proc_commit,
-		.pc_decode = nfs3svc_decode_commitargs,
-		.pc_encode = nfs3svc_encode_commitres,
-		.pc_release = nfs3svc_release_fhandle,
-		.pc_argsize = sizeof(struct nfsd3_commitargs),
-		.pc_argzero = sizeof(struct nfsd3_commitargs),
-		.pc_ressize = sizeof(struct nfsd3_commitres),
-		.pc_cachetype = RC_NOCACHE,
-		.pc_xdrressize = ST+WC+2,
-		.pc_name = "COMMIT",
+		.pc_func	= nfsd3_proc_commit,
+		.pc_decode	= nfs_svc_decode_COMMIT3args,
+		.pc_encode	= nfs_svc_encode_COMMIT3res,
+		.pc_argsize	= sizeof(struct COMMIT3args_wrapper),
+		.pc_argzero	= 0,
+		.pc_ressize	= sizeof(struct nfsd3_commitres),
+		.pc_cachetype	= RC_NOCACHE,
+		.pc_xdrressize	= NFS3_COMMIT3res_sz,
+		.pc_name	= "COMMIT",
 	},
 };
 
@@ -2093,6 +2110,7 @@ union nfsd3_xdrstore {
 	struct nfsd3_fsinfores		fsinfores;
 	struct PATHCONF3args_wrapper	pathconfargs;
 	struct nfsd3_pathconfres	pathconfres;
+	struct COMMIT3args_wrapper	commitargs;
 	struct nfsd3_commitres		commitres;
 	struct nfsd3_getaclres		getaclres;
 };

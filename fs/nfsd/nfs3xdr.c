@@ -134,19 +134,6 @@ svcxdr_encode_cookieverf3(struct xdr_stream *xdr, const __be32 *verf)
 }
 
 static bool
-svcxdr_encode_writeverf3(struct xdr_stream *xdr, const __be32 *verf)
-{
-	__be32 *p;
-
-	p = xdr_reserve_space(xdr, NFS3_WRITEVERFSIZE);
-	if (!p)
-		return false;
-	memcpy(p, verf, NFS3_WRITEVERFSIZE);
-
-	return true;
-}
-
-static bool
 svcxdr_encode_fattr3(struct svc_rqst *rqstp, struct xdr_stream *xdr,
 		     const struct svc_fh *fhp, const struct kstat *stat)
 {
@@ -198,35 +185,6 @@ svcxdr_encode_fattr3(struct svc_rqst *rqstp, struct xdr_stream *xdr,
 	return true;
 }
 
-static bool
-svcxdr_encode_wcc_attr(struct xdr_stream *xdr, const struct svc_fh *fhp)
-{
-	__be32 *p;
-
-	p = xdr_reserve_space(xdr, XDR_UNIT * 6);
-	if (!p)
-		return false;
-	p = xdr_encode_hyper(p, (u64)fhp->fh_pre_size);
-	p = encode_nfstime3(p, &fhp->fh_pre_mtime);
-	encode_nfstime3(p, &fhp->fh_pre_ctime);
-
-	return true;
-}
-
-static bool
-svcxdr_encode_pre_op_attr(struct xdr_stream *xdr, const struct svc_fh *fhp)
-{
-	if (!fhp->fh_pre_saved) {
-		if (xdr_stream_encode_item_absent(xdr) < 0)
-			return false;
-		return true;
-	}
-
-	if (xdr_stream_encode_item_present(xdr) < 0)
-		return false;
-	return svcxdr_encode_wcc_attr(xdr, fhp);
-}
-
 /**
  * svcxdr_encode_post_op_attr - Encode NFSv3 post-op attributes
  * @rqstp: Context of a completed RPC transaction
@@ -267,39 +225,6 @@ no_post_op_attrs:
 }
 
 /*
- * Encode weak cache consistency data
- */
-static bool
-svcxdr_encode_wcc_data(struct svc_rqst *rqstp, struct xdr_stream *xdr,
-		       const struct svc_fh *fhp)
-{
-	struct dentry *dentry = fhp->fh_dentry;
-
-	if (!dentry || !d_really_is_positive(dentry) || !fhp->fh_post_saved)
-		goto neither;
-
-	/* before */
-	if (!svcxdr_encode_pre_op_attr(xdr, fhp))
-		return false;
-
-	/* after */
-	if (xdr_stream_encode_item_present(xdr) < 0)
-		return false;
-	if (!svcxdr_encode_fattr3(rqstp, xdr, fhp, &fhp->fh_post_attr))
-		return false;
-
-	return true;
-
-neither:
-	if (xdr_stream_encode_item_absent(xdr) < 0)
-		return false;
-	if (!svcxdr_encode_post_op_attr(rqstp, xdr, fhp))
-		return false;
-
-	return true;
-}
-
-/*
  * XDR decode functions
  */
 
@@ -336,21 +261,6 @@ nfs3svc_decode_readdirplusargs(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 		return false;
 	/* dircount is ignored */
 	if (xdr_stream_decode_u32(xdr, &dircount) < 0)
-		return false;
-	if (xdr_stream_decode_u32(xdr, &args->count) < 0)
-		return false;
-
-	return true;
-}
-
-bool
-nfs3svc_decode_commitargs(struct svc_rqst *rqstp, struct xdr_stream *xdr)
-{
-	struct nfsd3_commitargs *args = rqstp->rq_argp;
-
-	if (!svcxdr_decode_nfs_fh3(xdr, &args->fh))
-		return false;
-	if (xdr_stream_decode_u64(xdr, &args->offset) < 0)
 		return false;
 	if (xdr_stream_decode_u32(xdr, &args->count) < 0)
 		return false;
@@ -594,29 +504,6 @@ out_toosmall:
 	resp->common.err = nfserr_toosmall;
 	resp->dirlist.len = starting_length;
 	return -EINVAL;
-}
-
-/* COMMIT */
-bool
-nfs3svc_encode_commitres(struct svc_rqst *rqstp, struct xdr_stream *xdr)
-{
-	struct nfsd3_commitres *resp = rqstp->rq_resp;
-
-	if (!svcxdr_encode_nfsstat3(xdr, resp->status))
-		return false;
-	switch (resp->status) {
-	case nfs_ok:
-		if (!svcxdr_encode_wcc_data(rqstp, xdr, &resp->fh))
-			return false;
-		if (!svcxdr_encode_writeverf3(xdr, resp->verf))
-			return false;
-		break;
-	default:
-		if (!svcxdr_encode_wcc_data(rqstp, xdr, &resp->fh))
-			return false;
-	}
-
-	return true;
 }
 
 /*
