@@ -147,16 +147,36 @@ struct SYMLINK3res_wrapper {
 
 static_assert(offsetof(struct SYMLINK3res_wrapper, xdrgen) == 0);
 
-static int	nfs3_ftypes[] = {
-	0,			/* NF3NON */
-	S_IFREG,		/* NF3REG */
-	S_IFDIR,		/* NF3DIR */
-	S_IFBLK,		/* NF3BLK */
-	S_IFCHR,		/* NF3CHR */
-	S_IFLNK,		/* NF3LNK */
-	S_IFSOCK,		/* NF3SOCK */
-	S_IFIFO,		/* NF3FIFO */
+struct MKNOD3args_wrapper {
+	struct MKNOD3args	xdrgen;
+	struct svc_fh		fh;
+	struct iattr		iattrs;
 };
+
+static_assert(offsetof(struct MKNOD3args_wrapper, xdrgen) == 0);
+
+struct MKNOD3res_wrapper {
+	struct MKNOD3res	xdrgen;
+	struct svc_fh		fh;
+	u8			fh_data[NFS3_FHSIZE];
+};
+
+static_assert(offsetof(struct MKNOD3res_wrapper, xdrgen) == 0);
+
+static int nfsd3_ftype3_to_mode(ftype3 ftype)
+{
+	switch (ftype) {
+	case NF3REG:  return S_IFREG;
+	case NF3DIR:  return S_IFDIR;
+	case NF3BLK:  return S_IFBLK;
+	case NF3CHR:  return S_IFCHR;
+	case NF3LNK:  return S_IFLNK;
+	case NF3SOCK: return S_IFSOCK;
+	case NF3FIFO: return S_IFIFO;
+	default:
+		return 0;
+	}
+}
 
 /*
  * Reject a client-supplied atime or mtime whose nanoseconds field is out
@@ -1157,45 +1177,86 @@ out:
 	return rpc_success;
 }
 
-/*
- * Make socket/fifo/device.
+/**
+ * nfsd3_proc_mknod - MKNOD: Create a special file
+ * @rqstp: RPC transaction context
+ *
+ * Return:
+ *   %rpc_success:		RPC executed successfully
+ *
+ * RPC synopsis:
+ *   MKNOD3res NFSPROC3_MKNOD(MKNOD3args) = 11;
  */
-static __be32
-nfsd3_proc_mknod(struct svc_rqst *rqstp)
+static __be32 nfsd3_proc_mknod(struct svc_rqst *rqstp)
 {
-	struct nfsd3_mknodargs *argp = rqstp->rq_argp;
-	struct nfsd3_diropres  *resp = rqstp->rq_resp;
-	struct nfsd_attrs attrs = {
-		.na_iattr	= &argp->attrs,
+	struct MKNOD3args_wrapper *argp = rqstp->rq_argp;
+	struct diropargs3 *where = &argp->xdrgen.where;
+	struct mknoddata3 *what = &argp->xdrgen.what;
+	struct MKNOD3res_wrapper *resp = rqstp->rq_resp;
+	struct iattr *iattrs = &argp->iattrs;
+	struct svc_fh *dirfhp = &argp->fh;
+	struct svc_fh *fhp = &resp->fh;
+	struct nfsd_attrs nattrs = {
+		.na_iattr	= iattrs,
 	};
-	int type;
-	dev_t	rdev = 0;
+	dev_t rdev = 0;
 
-	fh_copy(&resp->dirfh, &argp->fh);
-	fh_init(&resp->fh, NFS3_FHSIZE);
-
-	if (argp->ftype == NF3CHR || argp->ftype == NF3BLK) {
-		rdev = MKDEV(argp->major, argp->minor);
-		if (MAJOR(rdev) != argp->major ||
-		    MINOR(rdev) != argp->minor) {
-			resp->status = nfserr_inval;
+	nfsd3_fh3_to_svc_fh(dirfhp, &where->dir);
+	resp->xdrgen.status = nfsd3_check_filename(where->name.data,
+						   where->name.len);
+	if (resp->xdrgen.status != nfs_ok)
+		goto out;
+	switch (what->type) {
+	case NF3CHR:
+	case NF3BLK:
+		rdev = MKDEV(what->u.device.spec.specdata1,
+			     what->u.device.spec.specdata2);
+		if (MAJOR(rdev) != what->u.device.spec.specdata1 ||
+		    MINOR(rdev) != what->u.device.spec.specdata2) {
+			resp->xdrgen.status = nfserr_inval;
 			goto out;
 		}
-	} else if (argp->ftype != NF3SOCK && argp->ftype != NF3FIFO) {
-		resp->status = nfserr_badtype;
+		nfsd3_sattr3_to_iattr(rqstp, iattrs,
+				      &what->u.device.dev_attributes);
+		break;
+	case NF3SOCK:
+	case NF3FIFO:
+		nfsd3_sattr3_to_iattr(rqstp, iattrs,
+				      &what->u.pipe_attributes);
+		break;
+	default:
+		resp->xdrgen.status = nfserr_badtype;
 		goto out;
 	}
 
-	if (!nfsd3_time_in_range(&argp->attrs)) {
-		resp->status = nfserr_inval;
+	if (!nfsd3_time_in_range(iattrs)) {
+		resp->xdrgen.status = nfserr_inval;
 		goto out;
 	}
 
-	type = nfs3_ftypes[argp->ftype];
-	resp->status = nfsd_create(rqstp, &resp->dirfh, argp->name, argp->len,
-				   &attrs, type, rdev, &resp->fh);
+	fh_init(fhp, NFS3_FHSIZE);
+	resp->xdrgen.status = nfsd_create(rqstp, dirfhp,
+					  (char *)where->name.data,
+					  where->name.len, &nattrs,
+					  nfsd3_ftype3_to_mode(what->type),
+					  rdev, fhp);
+
 out:
-	resp->status = nfsd3_map_status(resp->status);
+	if (resp->xdrgen.status == nfs_ok) {
+		struct MKNOD3resok *resok = &resp->xdrgen.u.resok;
+
+		nfsd3_fill_post_op_fh3(&resok->obj, fhp, resp->fh_data);
+		nfsd3_fill_post_op_attr(rqstp, &resok->obj_attributes, fhp);
+		nfsd3_fill_wcc_data(rqstp, &resok->dir_wcc, dirfhp);
+	} else {
+		struct MKNOD3resfail *resfail = &resp->xdrgen.u.resfail;
+
+		resp->xdrgen.status = nfsd3_map_status(resp->xdrgen.status);
+		nfsd3_fill_wcc_data(rqstp, &resfail->dir_wcc, dirfhp);
+	}
+
+	fh_put(fhp);
+	fh_put(dirfhp);
 	return rpc_success;
 }
 
@@ -1518,7 +1579,6 @@ out:
 #define nfsd3_wccstatres		nfsd3_attrstat
 
 #define ST 1		/* status*/
-#define FH 17		/* filehandle with length */
 #define AT 21		/* attributes */
 #define pAT (1+AT)	/* post attributes - conditional */
 #define WC (7+pAT)	/* WCC attributes */
@@ -1649,16 +1709,15 @@ static const struct svc_procedure nfsd_procedures3[22] = {
 		.pc_name	= "SYMLINK",
 	},
 	[NFSPROC3_MKNOD] = {
-		.pc_func = nfsd3_proc_mknod,
-		.pc_decode = nfs3svc_decode_mknodargs,
-		.pc_encode = nfs3svc_encode_createres,
-		.pc_release = nfs3svc_release_fhandle2,
-		.pc_argsize = sizeof(struct nfsd3_mknodargs),
-		.pc_argzero = sizeof(struct nfsd3_mknodargs),
-		.pc_ressize = sizeof(struct nfsd3_diropres),
-		.pc_cachetype = RC_REPLBUFF,
-		.pc_xdrressize = ST+(1+FH+pAT)+WC,
-		.pc_name = "MKNOD",
+		.pc_func	= nfsd3_proc_mknod,
+		.pc_decode	= nfs_svc_decode_MKNOD3args,
+		.pc_encode	= nfs_svc_encode_MKNOD3res,
+		.pc_argsize	= sizeof(struct MKNOD3args_wrapper),
+		.pc_argzero	= 0,
+		.pc_ressize	= sizeof(struct MKNOD3res_wrapper),
+		.pc_cachetype	= RC_REPLBUFF,
+		.pc_xdrressize	= NFS3_MKNOD3res_sz,
+		.pc_name	= "MKNOD",
 	},
 	[NFSPROC3_REMOVE] = {
 		.pc_func = nfsd3_proc_remove,
@@ -1799,10 +1858,11 @@ union nfsd3_xdrstore {
 	struct MKDIR3res_wrapper	mkdirres;
 	struct SYMLINK3args_wrapper	symlinkargs;
 	struct SYMLINK3res_wrapper	symlinkres;
+	struct MKNOD3args_wrapper	mknodargs;
+	struct MKNOD3res_wrapper	mknodres;
 	struct nfsd3_renameargs		renameargs;
 	struct nfsd3_linkargs		linkargs;
 	struct nfsd3_readdirargs	readdirargs;
-	struct nfsd3_diropres		diropres;
 	struct READLINK3res		readlinkres;
 	struct READ3res			readres;
 	struct nfsd3_writeres		writeres;

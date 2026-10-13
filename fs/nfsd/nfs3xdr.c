@@ -57,20 +57,6 @@ encode_nfstime3(__be32 *p, const struct timespec64 *time)
 	return p;
 }
 
-static bool
-svcxdr_decode_nfstime3(struct xdr_stream *xdr, struct timespec64 *timep)
-{
-	__be32 *p;
-
-	p = xdr_inline_decode(xdr, XDR_UNIT * 2);
-	if (!p)
-		return false;
-	timep->tv_sec = be32_to_cpup(p++);
-	timep->tv_nsec = be32_to_cpup(p);
-
-	return true;
-}
-
 /**
  * svcxdr_decode_nfs_fh3 - Decode an NFSv3 file handle
  * @xdr: XDR stream positioned at an undecoded NFSv3 FH
@@ -207,114 +193,6 @@ svcxdr_decode_diropargs3(struct xdr_stream *xdr, struct svc_fh *fhp,
 {
 	return svcxdr_decode_nfs_fh3(xdr, fhp) &&
 		svcxdr_decode_filename3(xdr, name, len);
-}
-
-static bool
-svcxdr_decode_sattr3(struct svc_rqst *rqstp, struct xdr_stream *xdr,
-		     struct iattr *iap)
-{
-	u32 set_it;
-
-	iap->ia_valid = 0;
-
-	if (xdr_stream_decode_bool(xdr, &set_it) < 0)
-		return false;
-	if (set_it) {
-		u32 mode;
-
-		if (xdr_stream_decode_u32(xdr, &mode) < 0)
-			return false;
-		iap->ia_valid |= ATTR_MODE;
-		iap->ia_mode = mode;
-	}
-	if (xdr_stream_decode_bool(xdr, &set_it) < 0)
-		return false;
-	if (set_it) {
-		u32 uid;
-
-		if (xdr_stream_decode_u32(xdr, &uid) < 0)
-			return false;
-		iap->ia_uid = make_kuid(nfsd_user_namespace(rqstp), uid);
-		if (uid_valid(iap->ia_uid))
-			iap->ia_valid |= ATTR_UID;
-	}
-	if (xdr_stream_decode_bool(xdr, &set_it) < 0)
-		return false;
-	if (set_it) {
-		u32 gid;
-
-		if (xdr_stream_decode_u32(xdr, &gid) < 0)
-			return false;
-		iap->ia_gid = make_kgid(nfsd_user_namespace(rqstp), gid);
-		if (gid_valid(iap->ia_gid))
-			iap->ia_valid |= ATTR_GID;
-	}
-	if (xdr_stream_decode_bool(xdr, &set_it) < 0)
-		return false;
-	if (set_it) {
-		u64 newsize;
-
-		if (xdr_stream_decode_u64(xdr, &newsize) < 0)
-			return false;
-		iap->ia_valid |= ATTR_SIZE;
-		iap->ia_size = newsize;
-	}
-	if (xdr_stream_decode_u32(xdr, &set_it) < 0)
-		return false;
-	switch (set_it) {
-	case DONT_CHANGE:
-		break;
-	case SET_TO_SERVER_TIME:
-		iap->ia_valid |= ATTR_ATIME;
-		break;
-	case SET_TO_CLIENT_TIME:
-		if (!svcxdr_decode_nfstime3(xdr, &iap->ia_atime))
-			return false;
-		iap->ia_valid |= ATTR_ATIME | ATTR_ATIME_SET;
-		break;
-	default:
-		return false;
-	}
-	if (xdr_stream_decode_u32(xdr, &set_it) < 0)
-		return false;
-	switch (set_it) {
-	case DONT_CHANGE:
-		break;
-	case SET_TO_SERVER_TIME:
-		iap->ia_valid |= ATTR_MTIME;
-		break;
-	case SET_TO_CLIENT_TIME:
-		if (!svcxdr_decode_nfstime3(xdr, &iap->ia_mtime))
-			return false;
-		iap->ia_valid |= ATTR_MTIME | ATTR_MTIME_SET;
-		break;
-	default:
-		return false;
-	}
-
-	return true;
-}
-
-static bool
-svcxdr_decode_specdata3(struct xdr_stream *xdr, struct nfsd3_mknodargs *args)
-{
-	__be32 *p;
-
-	p = xdr_inline_decode(xdr, XDR_UNIT * 2);
-	if (!p)
-		return false;
-	args->major = be32_to_cpup(p++);
-	args->minor = be32_to_cpup(p);
-
-	return true;
-}
-
-static bool
-svcxdr_decode_devicedata3(struct svc_rqst *rqstp, struct xdr_stream *xdr,
-			  struct nfsd3_mknodargs *args)
-{
-	return svcxdr_decode_sattr3(rqstp, xdr, &args->attrs) &&
-		svcxdr_decode_specdata3(xdr, args);
 }
 
 static bool
@@ -491,34 +369,6 @@ nfs3svc_decode_diropargs(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 }
 
 bool
-nfs3svc_decode_mknodargs(struct svc_rqst *rqstp, struct xdr_stream *xdr)
-{
-	struct nfsd3_mknodargs *args = rqstp->rq_argp;
-
-	if (!svcxdr_decode_diropargs3(xdr, &args->fh, &args->name, &args->len))
-		return false;
-	if (xdr_stream_decode_u32(xdr, &args->ftype) < 0)
-		return false;
-	switch (args->ftype) {
-	case NF3CHR:
-	case NF3BLK:
-		return svcxdr_decode_devicedata3(rqstp, xdr, args);
-	case NF3SOCK:
-	case NF3FIFO:
-		return svcxdr_decode_sattr3(rqstp, xdr, &args->attrs);
-	case NF3REG:
-	case NF3DIR:
-	case NF3LNK:
-		/* Valid XDR but illegal file types */
-		break;
-	default:
-		return false;
-	}
-
-	return true;
-}
-
-bool
 nfs3svc_decode_renameargs(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 {
 	struct nfsd3_renameargs *args = rqstp->rq_argp;
@@ -606,31 +456,6 @@ nfs3svc_encode_wccstat(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 
 	return svcxdr_encode_nfsstat3(xdr, resp->status) &&
 		svcxdr_encode_wcc_data(rqstp, xdr, &resp->fh);
-}
-
-/* CREATE, MKDIR, SYMLINK, MKNOD */
-bool
-nfs3svc_encode_createres(struct svc_rqst *rqstp, struct xdr_stream *xdr)
-{
-	struct nfsd3_diropres *resp = rqstp->rq_resp;
-
-	if (!svcxdr_encode_nfsstat3(xdr, resp->status))
-		return false;
-	switch (resp->status) {
-	case nfs_ok:
-		if (!svcxdr_encode_post_op_fh3(xdr, &resp->fh))
-			return false;
-		if (!svcxdr_encode_post_op_attr(rqstp, xdr, &resp->fh))
-			return false;
-		if (!svcxdr_encode_wcc_data(rqstp, xdr, &resp->dirfh))
-			return false;
-		break;
-	default:
-		if (!svcxdr_encode_wcc_data(rqstp, xdr, &resp->dirfh))
-			return false;
-	}
-
-	return true;
 }
 
 /* RENAME */
