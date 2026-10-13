@@ -40,7 +40,6 @@ struct fsl_ifc_mtd {
 /* overview of the fsl ifc controller */
 struct fsl_ifc_nand_ctrl {
 	struct nand_controller controller;
-	struct fsl_ifc_mtd *chips[FSL_IFC_BANK_COUNT];
 
 	void __iomem *addr;	/* Address of assigned IFC buffer	*/
 	unsigned int page;	/* Last page written to / read from	*/
@@ -961,13 +960,6 @@ static int fsl_ifc_chip_init(struct fsl_ifc_mtd *priv)
 	return 0;
 }
 
-static int fsl_ifc_chip_remove(struct fsl_ifc_mtd *priv)
-{
-	ifc_nand_ctrl->chips[priv->bank] = NULL;
-
-	return 0;
-}
-
 static int match_bank(struct fsl_ifc_global __iomem *ifc_global, int bank,
 		      phys_addr_t addr)
 {
@@ -1037,7 +1029,6 @@ static int fsl_ifc_nand_probe(struct platform_device *dev)
 	}
 	mutex_unlock(&fsl_ifc_nand_mutex);
 
-	ifc_nand_ctrl->chips[bank] = priv;
 	priv->bank = bank;
 	priv->ctrl = fsl_ifc_ctrl_dev;
 	priv->dev = &dev->dev;
@@ -1058,19 +1049,17 @@ static int fsl_ifc_nand_probe(struct platform_device *dev)
 
 	mtd = nand_to_mtd(&priv->chip);
 	mtd->name = devm_kasprintf(priv->dev, GFP_KERNEL, "%llx.flash", (u64)res->start);
-	if (!mtd->name) {
-		ret = -ENOMEM;
-		goto err;
-	}
+	if (!mtd->name)
+		return -ENOMEM;
 
 	ret = fsl_ifc_chip_init(priv);
 	if (ret)
-		goto err;
+		return ret;
 
 	priv->chip.controller->ops = &fsl_ifc_controller_ops;
 	ret = nand_scan(&priv->chip, 1);
 	if (ret)
-		goto err;
+		return ret;
 
 	/* First look for RedBoot table or partitions on the command
 	 * line, these take precedence over device tree information */
@@ -1085,9 +1074,6 @@ static int fsl_ifc_nand_probe(struct platform_device *dev)
 
 cleanup_nand:
 	nand_cleanup(&priv->chip);
-err:
-	fsl_ifc_chip_remove(priv);
-
 	return ret;
 }
 
@@ -1100,8 +1086,6 @@ static void fsl_ifc_nand_remove(struct platform_device *dev)
 	ret = mtd_device_unregister(nand_to_mtd(chip));
 	WARN_ON(ret);
 	nand_cleanup(chip);
-
-	fsl_ifc_chip_remove(priv);
 }
 
 static const struct of_device_id fsl_ifc_nand_match[] = {
