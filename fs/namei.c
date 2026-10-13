@@ -2249,8 +2249,8 @@ static const struct path vfs_walk_no_root;
  * @path: position to walk up from; never modified
  * @flags: %VFS_WALK_* flags; none defined yet, pass 0
  */
-static void vfs_walk_start(struct vfs_ancestor_walk *aw,
-			   const struct path *path, unsigned int flags)
+void vfs_walk_start(struct vfs_ancestor_walk *aw, const struct path *path,
+		    unsigned int flags)
 {
 	if (WARN_ON_ONCE(flags))
 		flags = 0;
@@ -2299,7 +2299,7 @@ static int vfs_walk_step_ref(struct vfs_ancestor_walk *aw)
  * Returns: 0 with @aw->pos valid, 1 once the walk has passed the real
  * root.
  */
-static int vfs_walk_next(struct vfs_ancestor_walk *aw)
+int vfs_walk_next(struct vfs_ancestor_walk *aw)
 {
 	if (aw->flags & VFS_WALK_STARTED) {
 		int err = vfs_walk_step_ref(aw);
@@ -2317,7 +2317,7 @@ static int vfs_walk_next(struct vfs_ancestor_walk *aw)
  * vfs_walk_end - finish a stepwise ancestor walk
  * @aw: the walk; its positions, including @aw->pos, become invalid
  */
-static void vfs_walk_end(struct vfs_ancestor_walk *aw)
+void vfs_walk_end(struct vfs_ancestor_walk *aw)
 {
 	path_put(&aw->pos);
 }
