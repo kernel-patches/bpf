@@ -53,4 +53,30 @@ int stack_exit(unsigned long long *ctx)
 	return 0;
 }
 
+long split_e, split_lo, split_hi, split_i, split_ret;
+
+SEC("fentry/callee_split")
+int split_entry(unsigned long long *ctx)
+{
+	split_e = ctx[4];
+	split_lo = ctx[5 + LO];
+	split_hi = ctx[5 + HI];
+	split_i = ctx[7];
+	return 0;
+}
+
+SEC("fexit/callee_split")
+int split_exit(unsigned long long *ctx)
+{
+	split_ret = ctx[8];
+	return 0;
+}
+
+/* Refused: the trampoline would lose the stack argument. */
+SEC("?fentry/callee_unreliable")
+int unreliable_entry(unsigned long long *ctx)
+{
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";
