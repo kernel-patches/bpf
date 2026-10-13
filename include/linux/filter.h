@@ -1285,9 +1285,14 @@ struct bpf_jit_arg_move {
 	u8 src;
 };
 
+u32 bpf_jit_plan_slot_moves(const u8 *pos_of_slot, u32 nslots,
+			    struct bpf_jit_arg_move *moves);
 u32 bpf_jit_plan_arg_moves(const struct bpf_jit_arg_abi *abi,
 			   const struct btf_func_model *fm,
 			   struct bpf_jit_arg_move *moves);
+u32 bpf_jit_stack_slots_to_align(const struct bpf_jit_arg_abi *abi,
+				 const struct btf_func_model *fm,
+				 const u8 *pos_of_slot);
 u64 bpf_arch_uaddress_limit(void);
 void arch_bpf_stack_walk(bool (*consume_fn)(void *cookie, u64 ip, u64 sp, u64 bp), void *cookie);
 u64 arch_bpf_timed_may_goto(void);
