@@ -30,6 +30,7 @@
 #include <net/kcm.h>
 #include <net/netns/generic.h>
 #include <net/sock.h>
+#include <net/tcp.h>
 #include <uapi/linux/kcm.h>
 #include <trace/events/sock.h>
 
@@ -358,8 +359,19 @@ static void psock_data_ready(struct sock *sk)
 	read_lock_bh(&sk->sk_callback_lock);
 
 	psock = (struct kcm_psock *)sk->sk_user_data;
-	if (likely(psock))
-		strp_data_ready(&psock->strp);
+	if (likely(psock)) {
+		struct socket *sock = sk->sk_socket;
+
+		/* strp_data_ready() calls sock->ops->read_sock() inline from
+		 * this softirq callback. A ULP's read_sock, such as kTLS's
+		 * tls_sw_read_sock(), may sleep, so hand anything other than
+		 * TCP's own to the parser work, which runs under lock_sock().
+		 */
+		if (likely(sock && sock->ops->read_sock == tcp_read_sock))
+			strp_data_ready(&psock->strp);
+		else
+			strp_check_rcv(&psock->strp);
+	}
 
 	read_unlock_bh(&sk->sk_callback_lock);
 }
