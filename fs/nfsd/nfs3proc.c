@@ -24,9 +24,6 @@
 
 #define NFSDDBG_FACILITY		NFSDDBG_PROC
 
-#define NFS3_FSF_DEFAULT		0x001b
-#define NFS3_FSF_BILLYBOY		0x0018
-
 /*
  * Wrapper structures combine xdrgen types with legacy structures.
  * The xdrgen field must be first so the structure can be cast
@@ -199,6 +196,13 @@ struct FSSTAT3args_wrapper {
 };
 
 static_assert(offsetof(struct FSSTAT3args_wrapper, xdrgen) == 0);
+
+struct FSINFO3args_wrapper {
+	struct FSINFO3args	xdrgen;
+	struct svc_fh		fh;
+};
+
+static_assert(offsetof(struct FSINFO3args_wrapper, xdrgen) == 0);
 
 static int nfsd3_ftype3_to_mode(ftype3 ftype)
 {
@@ -1614,47 +1618,63 @@ static __be32 nfsd3_proc_fsstat(struct svc_rqst *rqstp)
 	return rpc_success;
 }
 
-/*
- * Get file system info
+/**
+ * nfsd3_proc_fsinfo - FSINFO: Get static file system information
+ * @rqstp: RPC transaction context
+ *
+ * Return:
+ *   %rpc_success:		RPC executed successfully
+ *
+ * RPC synopsis:
+ *   FSINFO3res NFSPROC3_FSINFO(FSINFO3args) = 19;
  */
-static __be32
-nfsd3_proc_fsinfo(struct svc_rqst *rqstp)
+static __be32 nfsd3_proc_fsinfo(struct svc_rqst *rqstp)
 {
-	struct nfsd_fhandle *argp = rqstp->rq_argp;
+	struct FSINFO3args_wrapper *argp = rqstp->rq_argp;
 	struct nfsd3_fsinfores *resp = rqstp->rq_resp;
-	u32	max_blocksize = svc_max_payload(rqstp);
+	struct svc_fh *fhp = &argp->fh;
 
-	dprintk("nfsd: FSINFO(3)   %s\n",
-				SVCFH_fmt(&argp->fh));
+	nfsd3_fh3_to_svc_fh(fhp, &argp->xdrgen.fsroot);
 
-	resp->f_rtmax  = max_blocksize;
-	resp->f_rtpref = max_blocksize;
-	resp->f_rtmult = PAGE_SIZE;
-	resp->f_wtmax  = max_blocksize;
-	resp->f_wtpref = max_blocksize;
-	resp->f_wtmult = PAGE_SIZE;
-	resp->f_dtpref = max_blocksize;
-	resp->f_maxfilesize = ~(u32) 0;
-	resp->f_properties = NFS3_FSF_DEFAULT;
+	resp->xdrgen.status = fh_verify(rqstp, fhp, 0, NFSD_MAY_NOP |
+					NFSD_MAY_BYPASS_GSS_ON_ROOT);
 
-	resp->status = fh_verify(rqstp, &argp->fh, 0,
-				 NFSD_MAY_NOP | NFSD_MAY_BYPASS_GSS_ON_ROOT);
+	if (resp->xdrgen.status == nfs_ok) {
+		struct FSINFO3resok *resok = &resp->xdrgen.u.resok;
+		struct super_block *sb = fhp->fh_dentry->d_sb;
+		u32 max_blocksize = svc_max_payload(rqstp);
 
-	/* Check special features of the file system. May request
-	 * different read/write sizes for file systems known to have
-	 * problems with large blocks */
-	if (resp->status == nfs_ok) {
-		struct super_block *sb = argp->fh.fh_dentry->d_sb;
+		resok->obj_attributes.attributes_follow = false;
+		resok->rtmax = max_blocksize;
+		resok->rtpref = max_blocksize;
+		resok->rtmult = PAGE_SIZE;
+		resok->wtmax = max_blocksize;
+		resok->wtpref = max_blocksize;
+		resok->wtmult = PAGE_SIZE;
+		resok->dtpref = max_blocksize;
+		resok->maxfilesize = ~(u32)0;
+		/* NFSD is accurate to the nearest second. */
+		resok->time_delta.seconds = 1;
+		resok->time_delta.nseconds = 0;
+		resok->properties = FSF3_LINK | FSF3_SYMLINK |
+				    FSF3_HOMOGENEOUS | FSF3_CANSETTIME;
 
-		/* Note that we don't care for remote fs's here */
-		if (sb->s_magic == MSDOS_SUPER_MAGIC) {
-			resp->f_properties = NFS3_FSF_BILLYBOY;
-		}
-		resp->f_maxfilesize = sb->s_maxbytes;
+		/*
+		 * Check special features of the file system. May
+		 * request different read/write sizes for file systems
+		 * known to have problems with large blocks.
+		 */
+		if (sb->s_magic == MSDOS_SUPER_MAGIC)
+			resok->properties = FSF3_HOMOGENEOUS | FSF3_CANSETTIME;
+		resok->maxfilesize = sb->s_maxbytes;
+	} else {
+		struct FSINFO3resfail *resfail = &resp->xdrgen.u.resfail;
+
+		resp->xdrgen.status = nfsd3_map_status(resp->xdrgen.status);
+		resfail->obj_attributes.attributes_follow = false;
 	}
 
-	fh_put(&argp->fh);
-	resp->status = nfsd3_map_status(resp->status);
+	fh_put(fhp);
 	return rpc_success;
 }
 
@@ -1979,15 +1999,15 @@ static const struct svc_procedure nfsd_procedures3[22] = {
 		.pc_name	= "FSSTAT",
 	},
 	[NFSPROC3_FSINFO] = {
-		.pc_func = nfsd3_proc_fsinfo,
-		.pc_decode = nfs3svc_decode_fhandleargs,
-		.pc_encode = nfs3svc_encode_fsinfores,
-		.pc_argsize = sizeof(struct nfsd3_fhandleargs),
-		.pc_argzero = sizeof(struct nfsd3_fhandleargs),
-		.pc_ressize = sizeof(struct nfsd3_fsinfores),
-		.pc_cachetype = RC_NOCACHE,
-		.pc_xdrressize = ST+pAT+12,
-		.pc_name = "FSINFO",
+		.pc_func	= nfsd3_proc_fsinfo,
+		.pc_decode	= nfs_svc_decode_FSINFO3args,
+		.pc_encode	= nfs_svc_encode_FSINFO3res,
+		.pc_argsize	= sizeof(struct FSINFO3args_wrapper),
+		.pc_argzero	= 0,
+		.pc_ressize	= sizeof(struct nfsd3_fsinfores),
+		.pc_cachetype	= RC_NOCACHE,
+		.pc_xdrressize	= NFS3_FSINFO3res_sz,
+		.pc_name	= "FSINFO",
 	},
 	[NFSPROC3_PATHCONF] = {
 		.pc_func = nfsd3_proc_pathconf,
@@ -2052,6 +2072,7 @@ union nfsd3_xdrstore {
 	struct nfsd3_readdirres		readdirres;
 	struct FSSTAT3args_wrapper	fsstatargs;
 	struct nfsd3_fsstatres		fsstatres;
+	struct FSINFO3args_wrapper	fsinfoargs;
 	struct nfsd3_fsinfores		fsinfores;
 	struct nfsd3_pathconfres	pathconfres;
 	struct nfsd3_commitres		commitres;

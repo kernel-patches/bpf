@@ -93,17 +93,10 @@ struct nfsd3_fsstatres {
 static_assert(offsetof(struct nfsd3_fsstatres, xdrgen) == 0);
 
 struct nfsd3_fsinfores {
-	__be32			status;
-	__u32			f_rtmax;
-	__u32			f_rtpref;
-	__u32			f_rtmult;
-	__u32			f_wtmax;
-	__u32			f_wtpref;
-	__u32			f_wtmult;
-	__u32			f_dtpref;
-	__u64			f_maxfilesize;
-	__u32			f_properties;
+	struct FSINFO3res	xdrgen;
 };
+
+static_assert(offsetof(struct nfsd3_fsinfores, xdrgen) == 0);
 
 struct nfsd3_pathconfres {
 	__be32			status;
@@ -137,7 +130,6 @@ bool nfs3svc_decode_commitargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 
 bool nfs3svc_encode_accessres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_encode_readdirres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
-bool nfs3svc_encode_fsinfores(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_encode_pathconfres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_encode_commitres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 

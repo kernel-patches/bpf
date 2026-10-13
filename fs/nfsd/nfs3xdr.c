@@ -25,15 +25,6 @@ static const struct svc_fh nfs3svc_null_fh = {
 };
 
 /*
- * time_delta. {1, 0} means the server is accurate only
- * to the nearest second.
- */
-static const struct timespec64 nfs3svc_time_delta = {
-	.tv_sec		= 1,
-	.tv_nsec	= 0,
-};
-
-/*
  * Mapping of S_IF* types to NFS file types
  */
 static const u32 nfs3_ftypes[] = {
@@ -618,52 +609,6 @@ out_toosmall:
 	resp->common.err = nfserr_toosmall;
 	resp->dirlist.len = starting_length;
 	return -EINVAL;
-}
-
-static bool
-svcxdr_encode_fsinfo3resok(struct xdr_stream *xdr,
-			   const struct nfsd3_fsinfores *resp)
-{
-	__be32 *p;
-
-	p = xdr_reserve_space(xdr, XDR_UNIT * 12);
-	if (!p)
-		return false;
-	*p++ = cpu_to_be32(resp->f_rtmax);
-	*p++ = cpu_to_be32(resp->f_rtpref);
-	*p++ = cpu_to_be32(resp->f_rtmult);
-	*p++ = cpu_to_be32(resp->f_wtmax);
-	*p++ = cpu_to_be32(resp->f_wtpref);
-	*p++ = cpu_to_be32(resp->f_wtmult);
-	*p++ = cpu_to_be32(resp->f_dtpref);
-	p = xdr_encode_hyper(p, resp->f_maxfilesize);
-	p = encode_nfstime3(p, &nfs3svc_time_delta);
-	*p = cpu_to_be32(resp->f_properties);
-
-	return true;
-}
-
-/* FSINFO */
-bool
-nfs3svc_encode_fsinfores(struct svc_rqst *rqstp, struct xdr_stream *xdr)
-{
-	struct nfsd3_fsinfores *resp = rqstp->rq_resp;
-
-	if (!svcxdr_encode_nfsstat3(xdr, resp->status))
-		return false;
-	switch (resp->status) {
-	case nfs_ok:
-		if (!svcxdr_encode_post_op_attr(rqstp, xdr, &nfs3svc_null_fh))
-			return false;
-		if (!svcxdr_encode_fsinfo3resok(xdr, resp))
-			return false;
-		break;
-	default:
-		if (!svcxdr_encode_post_op_attr(rqstp, xdr, &nfs3svc_null_fh))
-			return false;
-	}
-
-	return true;
 }
 
 static bool
