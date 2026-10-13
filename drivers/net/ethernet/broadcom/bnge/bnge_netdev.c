@@ -539,7 +539,7 @@ static int bnge_alloc_nq(struct bnge_net *bn, struct bnge_napi *bnapi)
 	}
 
 	ring->fw_ring_id = INVALID_HW_RING_ID_32BIT;
-	ring->map_idx = bnge_aux_get_msix(bn->bd) + bnapi->index;
+	ring->map_idx = bnge_nq_irq_idx(bn->bd, bnapi->index);
 	return 0;
 }
 
