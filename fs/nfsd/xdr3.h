@@ -56,20 +56,30 @@ struct nfsd3_writeres {
 
 static_assert(offsetof(struct nfsd3_writeres, xdrgen) == 0);
 
-struct nfsd3_readdirres {
-	/* Components of the reply */
-	__be32			status;
+/*
+ * Declared here rather than in nfs3proc.c with the other proc wrappers
+ * because READDIR's encode path in nfs3xdr.c reads the file handle from
+ * it during encode and release. The xdrgen field must be first so the
+ * struct can be cast to its XDR type for the RPC dispatch layer.
+ */
+struct READDIR3args_wrapper {
+	struct READDIR3args	xdrgen;
 	struct svc_fh		fh;
-	__be32			verf[2];
-
-	/* Used to encode the reply's entry list */
-	struct xdr_stream	xdr;
-	struct xdr_buf		dirlist;
-	struct svc_fh		scratch;
-	struct readdir_cd	common;
-	unsigned int		cookie_offset;
-	struct svc_rqst		*rqstp;
 };
+
+static_assert(offsetof(struct READDIR3args_wrapper, xdrgen) == 0);
+
+struct nfsd3_readdirres {
+	struct READDIR3res	xdrgen;
+
+	/* Streaming state for encoding the reply's entry list */
+	struct nfsd_readdir_iter iter;		/* directory reader */
+	u32			count;		/* client's reply size hint */
+	u32			space_left;	/* remaining entry budget */
+	unsigned int		cookie_offset;	/* prev entry's cookie slot */
+};
+
+static_assert(offsetof(struct nfsd3_readdirres, xdrgen) == 0);
 
 struct nfsd3_readdirplusres {
 	/* Components of the reply */
@@ -121,15 +131,13 @@ struct nfsd3_getaclres {
 };
 
 bool nfs3svc_encode_accessres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
-bool nfs3svc_encode_readdirres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_encode_readdirplusres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 
 void nfs3svc_release_fhandle(struct svc_rqst *);
+void nfs3svc_release_readdirres(struct svc_rqst *rqstp);
 
 void nfs3svc_encode_cookie3(struct xdr_stream *xdr, unsigned int pos,
 			    u64 cookie);
-int nfs3svc_encode_entry3(void *data, const char *name, int namlen,
-			  loff_t offset, u64 ino, unsigned int d_type);
 int nfs3svc_encode_entryplus3(void *data, const char *name, int namlen,
 			      loff_t offset, u64 ino, unsigned int d_type);
 /* Helper functions for NFSv3 ACL code */

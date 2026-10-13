@@ -626,6 +626,7 @@ struct dirlist3 {
 	entry3		*entries;
 	bool		eof;
 };
+pragma aggregate dirlist3 entries;
 
 struct READDIR3resok {
 	post_op_attr	dir_attributes;
