@@ -792,10 +792,7 @@ static int tun_attach(struct tun_struct *tun, struct file *file,
 		err = 0;
 	}
 
-	if (tfile->detached) {
-		tun_enable_queue(tfile);
-		tun_napi_enable(tfile);
-	} else {
+	if (!tfile->detached) {
 		sock_hold(&tfile->sk);
 		tun_napi_init(tun, tfile, napi, napi_frags);
 	}
@@ -811,11 +808,16 @@ static int tun_attach(struct tun_struct *tun, struct file *file,
 	 * initialized tfile; otherwise we risk using half-initialized
 	 * object.
 	 */
-	if (publish_tun)
-		rcu_assign_pointer(tfile->tun, tun);
 	rcu_assign_pointer(tun->tfiles[tun->numqueues], tfile);
 	WRITE_ONCE(tun->numqueues, tun->numqueues + 1);
 	tun_set_real_num_queues(tun);
+	if (publish_tun)
+		rcu_assign_pointer(tfile->tun, tun);
+
+	if (tfile->detached) {
+		tun_enable_queue(tfile);
+		tun_napi_enable(tfile);
+	}
 out:
 	return err;
 }
@@ -1959,6 +1961,11 @@ static ssize_t tun_get_user(struct tun_struct *tun, struct tun_file *tfile,
 	if (skb_xdp) {
 		struct bpf_prog *xdp_prog;
 		int ret;
+
+		if (unlikely(tfile->detached)) {
+			err = -EBUSY;
+			goto free_skb;
+		}
 
 		local_bh_disable();
 		rcu_read_lock();
