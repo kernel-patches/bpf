@@ -382,6 +382,7 @@ struct WRITE3args {
 	stable_how	stable;
 	opaque		data<>;
 };
+pragma pages WRITE3args data;
 
 struct WRITE3resok {
 	wcc_data	file_wcc;

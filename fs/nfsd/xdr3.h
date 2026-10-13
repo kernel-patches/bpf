@@ -30,15 +30,6 @@ struct nfsd3_accessargs {
 	__u32			access;
 };
 
-struct nfsd3_writeargs {
-	svc_fh			fh;
-	__u64			offset;
-	__u32			count;
-	__u32			stable;
-	__u32			len;
-	struct xdr_buf		payload;
-};
-
 struct nfsd3_createargs {
 	struct svc_fh		fh;
 	char *			name;
@@ -130,12 +121,10 @@ struct nfsd3_accessres {
 };
 
 struct nfsd3_writeres {
-	__be32			status;
-	struct svc_fh		fh;
-	unsigned long		count;
-	int			committed;
-	__be32			verf[2];
+	struct WRITE3res	xdrgen;
 };
+
+static_assert(offsetof(struct nfsd3_writeres, xdrgen) == 0);
 
 struct nfsd3_renameres {
 	__be32			status;
@@ -218,7 +207,6 @@ struct nfsd3_fhandle_pair {
 
 bool nfs3svc_decode_fhandleargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_decode_diropargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
-bool nfs3svc_decode_writeargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_decode_createargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_decode_mkdirargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_decode_mknodargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
@@ -231,7 +219,6 @@ bool nfs3svc_decode_commitargs(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 
 bool nfs3svc_encode_wccstat(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_encode_accessres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
-bool nfs3svc_encode_writeres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_encode_createres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_encode_renameres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_encode_linkres(struct svc_rqst *rqstp, struct xdr_stream *xdr);

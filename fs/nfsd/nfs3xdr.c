@@ -491,38 +491,6 @@ nfs3svc_decode_diropargs(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 }
 
 bool
-nfs3svc_decode_writeargs(struct svc_rqst *rqstp, struct xdr_stream *xdr)
-{
-	struct nfsd3_writeargs *args = rqstp->rq_argp;
-	u32 max_blocksize = svc_max_payload(rqstp);
-
-	if (!svcxdr_decode_nfs_fh3(xdr, &args->fh))
-		return false;
-	if (xdr_stream_decode_u64(xdr, &args->offset) < 0)
-		return false;
-	if (xdr_stream_decode_u32(xdr, &args->count) < 0)
-		return false;
-	if (xdr_stream_decode_u32(xdr, &args->stable) < 0)
-		return false;
-	if (args->stable > FILE_SYNC)
-		return false;
-
-	/* opaque data */
-	if (xdr_stream_decode_u32(xdr, &args->len) < 0)
-		return false;
-
-	/* request sanity */
-	if (args->count != args->len)
-		return false;
-	if (args->count > max_blocksize) {
-		args->count = max_blocksize;
-		args->len = max_blocksize;
-	}
-
-	return xdr_stream_subsegment(xdr, &args->payload, args->count);
-}
-
-bool
 nfs3svc_decode_createargs(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 {
 	struct nfsd3_createargs *args = rqstp->rq_argp;
@@ -691,33 +659,6 @@ nfs3svc_encode_wccstat(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 
 	return svcxdr_encode_nfsstat3(xdr, resp->status) &&
 		svcxdr_encode_wcc_data(rqstp, xdr, &resp->fh);
-}
-
-/* WRITE */
-bool
-nfs3svc_encode_writeres(struct svc_rqst *rqstp, struct xdr_stream *xdr)
-{
-	struct nfsd3_writeres *resp = rqstp->rq_resp;
-
-	if (!svcxdr_encode_nfsstat3(xdr, resp->status))
-		return false;
-	switch (resp->status) {
-	case nfs_ok:
-		if (!svcxdr_encode_wcc_data(rqstp, xdr, &resp->fh))
-			return false;
-		if (xdr_stream_encode_u32(xdr, resp->count) < 0)
-			return false;
-		if (xdr_stream_encode_u32(xdr, resp->committed) < 0)
-			return false;
-		if (!svcxdr_encode_writeverf3(xdr, resp->verf))
-			return false;
-		break;
-	default:
-		if (!svcxdr_encode_wcc_data(rqstp, xdr, &resp->fh))
-			return false;
-	}
-
-	return true;
 }
 
 /* CREATE, MKDIR, SYMLINK, MKNOD */
