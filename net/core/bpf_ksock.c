@@ -37,15 +37,6 @@ static void ksock_release_work_fn(struct work_struct *work)
 	kfree(ks);
 }
 
-static bool bpf_ksock_has_user_task_context(void)
-{
-	/*
-	 * Task work can run from do_exit() after exit_nsproxy_namespaces()
-	 * cleared current->nsproxy, while current is still not a kthread.
-	 */
-	return !(current->flags & PF_KTHREAD) && current->nsproxy;
-}
-
 __bpf_kfunc_start_defs();
 
 /**
@@ -72,16 +63,6 @@ bpf_ksock_create(const struct bpf_ksock_create_opts *opts, u32 opts__sz,
 	struct bpf_ksock_create_opts opts_copy;
 	struct bpf_ksock *ks;
 	int err;
-
-	/*
-	 * sock_create() derives the network namespace, credentials, and cgroup
-	 * from current. Kernel threads, including BPF workqueue callbacks, do
-	 * not carry the context of the task that invoked the BPF program.
-	 */
-	if (!bpf_ksock_has_user_task_context()) {
-		err = -EOPNOTSUPP;
-		goto err_out;
-	}
 
 	if (!opts || opts__sz != sizeof(struct bpf_ksock_create_opts)) {
 		err = -EINVAL;
@@ -165,9 +146,6 @@ __bpf_kfunc int bpf_ksock_connect(struct bpf_ksock *ks,
 	struct sockaddr_storage sa;
 	int addrlen;
 
-	if (!bpf_ksock_has_user_task_context())
-		return -EOPNOTSUPP;
-
 	if (!addr || addr__sz != sizeof(*addr))
 		return -EINVAL;
 
@@ -246,9 +224,6 @@ __bpf_kfunc int bpf_ksock_send(struct bpf_ksock *ks, const void *data,
 		.iov_len = data__sz,
 	};
 	int ret;
-
-	if (!bpf_ksock_has_user_task_context())
-		return -EOPNOTSUPP;
 
 	ret = kernel_sendmsg(ks->sock, &msg, &iov, 1, data__sz);
 
