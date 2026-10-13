@@ -12,6 +12,12 @@
 
 #include "vfs.h"
 
+#define NF3NON		(0)
+#define NF3BAD		(8)
+
+#define NFS3_MAXNAMLEN			NAME_MAX
+#define NFS3_MAXPATHLEN			PATH_MAX
+
 struct nfsd3_sattrargs {
 	struct svc_fh		fh;
 	struct iattr		attrs;

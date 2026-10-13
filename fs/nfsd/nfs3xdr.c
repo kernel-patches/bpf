@@ -8,7 +8,6 @@
  */
 
 #include <linux/namei.h>
-#include <linux/nfs3.h>
 #include <linux/sunrpc/svc_xprt.h>
 
 #include "nfsd.h"
@@ -560,7 +559,7 @@ nfs3svc_decode_writeargs(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 		return false;
 	if (xdr_stream_decode_u32(xdr, &args->stable) < 0)
 		return false;
-	if (args->stable > NFS_FILE_SYNC)
+	if (args->stable > FILE_SYNC)
 		return false;
 
 	/* opaque data */
@@ -588,10 +587,10 @@ nfs3svc_decode_createargs(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 	if (xdr_stream_decode_u32(xdr, &args->createmode) < 0)
 		return false;
 	switch (args->createmode) {
-	case NFS3_CREATE_UNCHECKED:
-	case NFS3_CREATE_GUARDED:
+	case UNCHECKED:
+	case GUARDED:
 		return svcxdr_decode_sattr3(rqstp, xdr, &args->attrs);
-	case NFS3_CREATE_EXCLUSIVE:
+	case EXCLUSIVE:
 		args->verf = xdr_inline_decode(xdr, NFS3_CREATEVERFSIZE);
 		if (!args->verf)
 			return false;

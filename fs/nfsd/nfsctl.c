@@ -20,7 +20,7 @@
 #include <linux/module.h>
 #include <linux/fsnotify.h>
 #include <linux/nfslocalio.h>
-#include <linux/nfs3.h>
+#include <linux/sunrpc/xdrgen/nfs3.h>
 
 #include "idmap.h"
 #include "nfsd.h"
