@@ -228,7 +228,6 @@ no_post_op_attrs:
  * XDR encode functions
  */
 
-/* READDIR */
 bool
 nfs3svc_encode_readdirres(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 {
@@ -259,8 +258,38 @@ nfs3svc_encode_readdirres(struct svc_rqst *rqstp, struct xdr_stream *xdr)
 	return true;
 }
 
+bool
+nfs3svc_encode_readdirplusres(struct svc_rqst *rqstp, struct xdr_stream *xdr)
+{
+	struct nfsd3_readdirplusres *resp = rqstp->rq_resp;
+	struct xdr_buf *dirlist = &resp->dirlist;
+
+	if (!svcxdr_encode_nfsstat3(xdr, resp->status))
+		return false;
+	switch (resp->status) {
+	case nfs_ok:
+		if (!svcxdr_encode_post_op_attr(rqstp, xdr, &resp->fh))
+			return false;
+		if (!svcxdr_encode_cookieverf3(xdr, resp->verf))
+			return false;
+		svcxdr_encode_opaque_pages(rqstp, xdr, dirlist->pages, 0,
+					   dirlist->len);
+		/* no more entries */
+		if (xdr_stream_encode_item_absent(xdr) < 0)
+			return false;
+		if (xdr_stream_encode_bool(xdr, resp->common.err == nfserr_eof) < 0)
+			return false;
+		break;
+	default:
+		if (!svcxdr_encode_post_op_attr(rqstp, xdr, &resp->fh))
+			return false;
+	}
+
+	return true;
+}
+
 static __be32
-compose_entry_fh(struct nfsd3_readdirres *cd, struct svc_fh *fhp,
+compose_entry_fh(struct nfsd3_readdirplusres *cd, struct svc_fh *fhp,
 		 const char *name, int namlen, u64 ino)
 {
 	struct svc_export	*exp;
@@ -373,7 +402,7 @@ out_toosmall:
 }
 
 static bool
-svcxdr_encode_entry3_plus(struct nfsd3_readdirres *resp, const char *name,
+svcxdr_encode_entry3_plus(struct nfsd3_readdirplusres *resp, const char *name,
 			  int namlen, u64 ino)
 {
 	struct xdr_stream *xdr = &resp->xdr;
@@ -425,8 +454,8 @@ int nfs3svc_encode_entryplus3(void *data, const char *name, int namlen,
 			      loff_t offset, u64 ino, unsigned int d_type)
 {
 	struct readdir_cd *ccd = data;
-	struct nfsd3_readdirres *resp =
-		container_of(ccd, struct nfsd3_readdirres, common);
+	struct nfsd3_readdirplusres *resp =
+		container_of(ccd, struct nfsd3_readdirplusres, common);
 	unsigned int starting_length = resp->dirlist.len;
 	struct xdr_stream *xdr = &resp->xdr;
 

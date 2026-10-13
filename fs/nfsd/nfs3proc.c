@@ -1246,6 +1246,27 @@ out:
 	return rpc_success;
 }
 
+static void
+nfsd3_init_dirlistplus_pages(struct svc_rqst *rqstp,
+			     struct nfsd3_readdirplusres *resp,
+			     u32 count)
+{
+	struct xdr_buf *buf = &resp->dirlist;
+	struct xdr_stream *xdr = &resp->xdr;
+	unsigned int sendbuf = min_t(unsigned int, rqstp->rq_res.buflen,
+				     svc_max_payload(rqstp));
+
+	memset(buf, 0, sizeof(*buf));
+
+	/* Reserve room for the NULL ptr & eof flag (-2 words) */
+	buf->buflen = clamp(count, (u32)(XDR_UNIT * 2), sendbuf);
+	buf->buflen -= XDR_UNIT * 2;
+	buf->pages = rqstp->rq_next_page;
+	rqstp->rq_next_page += (buf->buflen + PAGE_SIZE - 1) >> PAGE_SHIFT;
+
+	xdr_init_encode_pages(xdr, buf);
+}
+
 /**
  * nfsd3_proc_mknod - MKNOD: Create a special file
  * @rqstp: RPC transaction context
@@ -1579,7 +1600,7 @@ static __be32 nfsd3_proc_readdir(struct svc_rqst *rqstp)
 static __be32 nfsd3_proc_readdirplus(struct svc_rqst *rqstp)
 {
 	struct READDIRPLUS3args_wrapper *argp = rqstp->rq_argp;
-	struct nfsd3_readdirres  *resp = rqstp->rq_resp;
+	struct nfsd3_readdirplusres *resp = rqstp->rq_resp;
 	loff_t offset = argp->xdrgen.cookie;
 	struct svc_fh *fhp = &argp->fh;
 
@@ -1587,7 +1608,7 @@ static __be32 nfsd3_proc_readdirplus(struct svc_rqst *rqstp)
 	trace_nfsd_vfs_readdir(rqstp, fhp, argp->xdrgen.maxcount,
 			       argp->xdrgen.cookie);
 
-	nfsd3_init_dirlist_pages(rqstp, resp, argp->xdrgen.maxcount);
+	nfsd3_init_dirlistplus_pages(rqstp, resp, argp->xdrgen.maxcount);
 	fh_copy(&resp->fh, fhp);
 	resp->common.err = nfs_ok;
 	resp->cookie_offset = 0;
@@ -2038,11 +2059,11 @@ static const struct svc_procedure nfsd_procedures3[22] = {
 	[NFSPROC3_READDIRPLUS] = {
 		.pc_func	= nfsd3_proc_readdirplus,
 		.pc_decode	= nfs_svc_decode_READDIRPLUS3args,
-		.pc_encode	= nfs3svc_encode_readdirres,
+		.pc_encode	= nfs3svc_encode_readdirplusres,
 		.pc_release	= nfs3svc_release_fhandle,
 		.pc_argsize	= sizeof(struct READDIRPLUS3args_wrapper),
 		.pc_argzero	= 0,
-		.pc_ressize	= sizeof(struct nfsd3_readdirres),
+		.pc_ressize	= sizeof(struct nfsd3_readdirplusres),
 		.pc_cachetype	= RC_NOCACHE,
 		.pc_name	= "READDIRPLUS",
 	},
@@ -2129,6 +2150,7 @@ union nfsd3_xdrstore {
 	struct READ3res			readres;
 	struct nfsd3_writeres		writeres;
 	struct nfsd3_readdirres		readdirres;
+	struct nfsd3_readdirplusres	readdirplusres;
 	struct FSSTAT3args_wrapper	fsstatargs;
 	struct nfsd3_fsstatres		fsstatres;
 	struct FSINFO3args_wrapper	fsinfoargs;

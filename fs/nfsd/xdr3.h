@@ -68,8 +68,22 @@ struct nfsd3_readdirres {
 	struct svc_fh		scratch;
 	struct readdir_cd	common;
 	unsigned int		cookie_offset;
-	struct svc_rqst *	rqstp;
+	struct svc_rqst		*rqstp;
+};
 
+struct nfsd3_readdirplusres {
+	/* Components of the reply */
+	__be32			status;
+	struct svc_fh		fh;
+	__be32			verf[2];
+
+	/* Used to encode the reply's entry list */
+	struct xdr_stream	xdr;
+	struct xdr_buf		dirlist;
+	struct svc_fh		scratch;
+	struct readdir_cd	common;
+	unsigned int		cookie_offset;
+	struct svc_rqst		*rqstp;
 };
 
 struct nfsd3_fsstatres {
@@ -108,6 +122,7 @@ struct nfsd3_getaclres {
 
 bool nfs3svc_encode_accessres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 bool nfs3svc_encode_readdirres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
+bool nfs3svc_encode_readdirplusres(struct svc_rqst *rqstp, struct xdr_stream *xdr);
 
 void nfs3svc_release_fhandle(struct svc_rqst *);
 
