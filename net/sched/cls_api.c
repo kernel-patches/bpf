@@ -860,6 +860,10 @@ static int tcf_block_offload_cmd(struct tcf_block *block,
 		return tcf_block_setup(block, &bo);
 	}
 
+	/* a bind that cannot succeed must not leave a record behind */
+	if (command == FLOW_BLOCK_BIND && tcf_block_offload_in_use(block))
+		return -EOPNOTSUPP;
+
 	flow_indr_dev_setup_offload(dev, sch, TC_SETUP_BLOCK, block, &bo,
 				    tc_block_indr_cleanup);
 	tcf_block_setup(block, &bo);
