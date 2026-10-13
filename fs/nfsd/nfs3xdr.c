@@ -306,7 +306,7 @@ out:
  * @cookie: cookie to be encoded
  *
  * The buffer space for the offset cookie has already been reserved
- * by svcxdr_encode_entry3_common().
+ * by nfs3svc_encode_entry3() or nfs3svc_encode_entryplus3().
  */
 void nfs3svc_encode_cookie3(struct xdr_stream *xdr, unsigned int pos,
 			    u64 cookie)
@@ -316,29 +316,6 @@ void nfs3svc_encode_cookie3(struct xdr_stream *xdr, unsigned int pos,
 	if (!pos)
 		return;
 	write_bytes_to_xdr_buf(xdr->buf, pos, &wire_cookie, XDR_UNIT * 2);
-}
-
-static bool
-svcxdr_encode_entry3_common(struct nfsd3_readdirres *resp, const char *name,
-			    int namlen, loff_t offset, u64 ino)
-{
-	struct xdr_buf *dirlist = &resp->dirlist;
-	struct xdr_stream *xdr = &resp->xdr;
-
-	if (xdr_stream_encode_item_present(xdr) < 0)
-		return false;
-	/* fileid */
-	if (xdr_stream_encode_u64(xdr, ino) < 0)
-		return false;
-	/* name */
-	if (xdr_stream_encode_opaque(xdr, name, min(namlen, NFS3_MAXNAMLEN)) < 0)
-		return false;
-	/* cookie */
-	resp->cookie_offset = dirlist->len;
-	if (xdr_stream_encode_u64(xdr, OFFSET_MAX) < 0)
-		return false;
-
-	return true;
 }
 
 /**
@@ -363,18 +340,28 @@ int nfs3svc_encode_entry3(void *data, const char *name, int namlen,
 			  loff_t offset, u64 ino, unsigned int d_type)
 {
 	struct readdir_cd *ccd = data;
-	struct nfsd3_readdirres *resp = container_of(ccd,
-						     struct nfsd3_readdirres,
-						     common);
+	struct nfsd3_readdirres *resp =
+		container_of(ccd, struct nfsd3_readdirres, common);
 	unsigned int starting_length = resp->dirlist.len;
+	struct xdr_stream *xdr = &resp->xdr;
 
 	/* The offset cookie for the previous entry */
-	nfs3svc_encode_cookie3(&resp->xdr, resp->cookie_offset, offset);
+	nfs3svc_encode_cookie3(xdr, resp->cookie_offset, offset);
 
-	if (!svcxdr_encode_entry3_common(resp, name, namlen, offset, ino))
+	if (xdr_stream_encode_item_present(xdr) < 0)
+		goto out_toosmall;
+	/* fileid */
+	if (xdr_stream_encode_u64(xdr, ino) < 0)
+		goto out_toosmall;
+	/* name */
+	if (xdr_stream_encode_opaque(xdr, name, min(namlen, NFS3_MAXNAMLEN)) < 0)
+		goto out_toosmall;
+	/* cookie */
+	resp->cookie_offset = resp->dirlist.len;
+	if (xdr_stream_encode_u64(xdr, OFFSET_MAX) < 0)
 		goto out_toosmall;
 
-	xdr_commit_encode(&resp->xdr);
+	xdr_commit_encode(xdr);
 	resp->common.err = nfs_ok;
 	return 0;
 
@@ -438,20 +425,31 @@ int nfs3svc_encode_entryplus3(void *data, const char *name, int namlen,
 			      loff_t offset, u64 ino, unsigned int d_type)
 {
 	struct readdir_cd *ccd = data;
-	struct nfsd3_readdirres *resp = container_of(ccd,
-						     struct nfsd3_readdirres,
-						     common);
+	struct nfsd3_readdirres *resp =
+		container_of(ccd, struct nfsd3_readdirres, common);
 	unsigned int starting_length = resp->dirlist.len;
+	struct xdr_stream *xdr = &resp->xdr;
 
 	/* The offset cookie for the previous entry */
-	nfs3svc_encode_cookie3(&resp->xdr, resp->cookie_offset, offset);
+	nfs3svc_encode_cookie3(xdr, resp->cookie_offset, offset);
 
-	if (!svcxdr_encode_entry3_common(resp, name, namlen, offset, ino))
+	if (xdr_stream_encode_item_present(xdr) < 0)
 		goto out_toosmall;
+	/* fileid */
+	if (xdr_stream_encode_u64(xdr, ino) < 0)
+		goto out_toosmall;
+	/* name */
+	if (xdr_stream_encode_opaque(xdr, name, min(namlen, NFS3_MAXNAMLEN)) < 0)
+		goto out_toosmall;
+	/* cookie */
+	resp->cookie_offset = resp->dirlist.len;
+	if (xdr_stream_encode_u64(xdr, OFFSET_MAX) < 0)
+		goto out_toosmall;
+
 	if (!svcxdr_encode_entry3_plus(resp, name, namlen, ino))
 		goto out_toosmall;
 
-	xdr_commit_encode(&resp->xdr);
+	xdr_commit_encode(xdr);
 	resp->common.err = nfs_ok;
 	return 0;
 
