@@ -1120,6 +1120,20 @@ __bpf_kfunc u64 bpf_kfunc_call_test_i128_arg_pad(u64 a, u64 b, u64 c, u64 d, u64
 	       (u64)v * 8 + (u64)((unsigned __int128)v >> 64) * 9;
 }
 
+/*
+ * The low four bits of the address of v, which follows a stack slot hole: 0 if
+ * the caller passed it in a 16-byte aligned slot, as the x86-64 ABI asks.
+ */
+__bpf_kfunc u64 bpf_kfunc_call_test_i128_arg_align(u64 a, u64 b, u64 c, u64 d, u64 e,
+						   u64 f, u64 g, __int128 v)
+{
+	unsigned long addr = (unsigned long)&v;
+
+	/* or the compiler takes the alignment the ABI promises for granted */
+	OPTIMIZER_HIDE_VAR(addr);
+	return addr & 15;
+}
+
 __bpf_kfunc u64 bpf_kfunc_call_test_pair_arg_nofit(u64 a, u64 b, u64 c, u64 d,
 						   struct prog_test_pair_arg s)
 {
@@ -1840,6 +1854,7 @@ BTF_ID_FLAGS(func, bpf_kfunc_call_test_i128_arg_odd)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_i128_arg_odd_many)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_i128_arg_stack_hole)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_i128_arg_pad)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_i128_arg_align)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_pair_arg_nofit)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_pair_arg_tail)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_pair_arg_split8)

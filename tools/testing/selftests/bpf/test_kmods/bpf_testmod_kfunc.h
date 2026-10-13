@@ -249,6 +249,8 @@ __u64 bpf_kfunc_call_test_i128_arg_stack_hole(__u64 a, __u64 b, __u64 c, __u64 d
 					      struct prog_test_i128_arg w) __ksym;
 __u64 bpf_kfunc_call_test_i128_arg_pad(__u64 a, __u64 b, __u64 c, __u64 d, __u64 e,
 				       __u64 f, __u64 g, __int128 v) __ksym;
+__u64 bpf_kfunc_call_test_i128_arg_align(__u64 a, __u64 b, __u64 c, __u64 d, __u64 e,
+					 __u64 f, __u64 g, __int128 v) __ksym;
 #endif
 __u64 bpf_kfunc_call_test_pair_arg_nofit(__u64 a, __u64 b, __u64 c, __u64 d,
 					 struct prog_test_pair_arg s) __ksym;
