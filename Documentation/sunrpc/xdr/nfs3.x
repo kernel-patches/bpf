@@ -95,6 +95,7 @@ enum nfsstat3 {
 	NFS3ERR_BADTYPE		= 10007,
 	NFS3ERR_JUKEBOX		= 10008
 };
+pragma big_endian nfsstat3;
 
 enum ftype3 {
 	NF3REG		= 1,

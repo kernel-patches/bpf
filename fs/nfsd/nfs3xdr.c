@@ -738,25 +738,6 @@ nfs3svc_decode_commitargs(struct svc_rqst *rqstp, struct xdr_stream *xdr)
  * XDR encode functions
  */
 
-/* GETATTR */
-bool
-nfs3svc_encode_getattrres(struct svc_rqst *rqstp, struct xdr_stream *xdr)
-{
-	struct nfsd3_attrstat *resp = rqstp->rq_resp;
-
-	if (!svcxdr_encode_nfsstat3(xdr, resp->status))
-		return false;
-	switch (resp->status) {
-	case nfs_ok:
-		lease_get_mtime(d_inode(resp->fh.fh_dentry), &resp->stat.mtime);
-		if (!svcxdr_encode_fattr3(rqstp, xdr, &resp->fh, &resp->stat))
-			return false;
-		break;
-	}
-
-	return true;
-}
-
 /* SETATTR, REMOVE, RMDIR */
 bool
 nfs3svc_encode_wccstat(struct svc_rqst *rqstp, struct xdr_stream *xdr)
