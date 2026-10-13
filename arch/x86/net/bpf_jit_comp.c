@@ -1918,17 +1918,19 @@ static s32 x86_arg_stack_off(u8 pos)
 
 /*
  * Move the arguments the x86-64 ABI places somewhere other than the argument
- * slot the BPF calling convention gave them. @stack_base addresses the
+ * slot the BPF calling convention gave them, @pos_of_slot being where
+ * bpf_jit_place_args() put each of the @nslots slots. @stack_base addresses the
  * outgoing stack argument area from RBP. Return the number of emitted bytes.
  */
-static int emit_kfunc_arg_moves(const struct btf_func_model *fm, s32 stack_base, u8 **pprog)
+static int emit_kfunc_arg_moves(const u8 *pos_of_slot, u32 nslots, s32 stack_base,
+				u8 **pprog)
 {
 	struct bpf_jit_arg_move moves[BPF_JIT_MAX_ARG_MOVES];
 	const u8 nreg = x86_arg_abi.nr_arg_regs;
 	u8 *prog = *pprog, *start = prog;
 	u32 i, n;
 
-	n = bpf_jit_plan_arg_moves(&x86_arg_abi, fm, moves);
+	n = bpf_jit_plan_slot_moves(pos_of_slot, nslots, moves);
 
 	for (i = 0; i < n; i++) {
 		u8 dst = moves[i].dst, src = moves[i].src, reg;
@@ -1960,6 +1962,36 @@ static int emit_kfunc_arg_moves(const struct btf_func_model *fm, s32 stack_base,
 		else if (reg != x86_arg_reg[dst])
 			emit_mov_reg(&prog, true, x86_arg_reg[dst], reg);
 	}
+
+	*pprog = prog;
+	return prog - start;
+}
+
+/*
+ * When RSP is not 16-byte aligned, copy the @n on-stack argument slots at RSP
+ * to the first 16-byte aligned place below them. A push takes the address of
+ * its memory operand before it moves RSP, so the same push copies each slot in
+ * turn, from the top down. The caller puts RSP back after the call. Return the
+ * number of emitted bytes.
+ */
+static int emit_kfunc_align_stack_args(u32 n, u8 **pprog)
+{
+	u8 *prog = *pprog, *start = prog, *skip;
+	/* a kfunc takes MAX_BPF_FUNC_ARGS slots at most: disp fits in a disp8 */
+	u8 disp = (n - 1) * 8;
+	u32 i;
+
+	EMIT4(0x40, 0xF6, 0xC4, 0x08);		/* test spl, 8 */
+	EMIT2(X86_JE, 0);			/* je over the copy */
+	skip = prog;
+	if (!(n & 1)) {
+		/* an even number of slots keeps RSP's alignment */
+		EMIT4(0x48, 0x83, 0xEC, 8);	/* sub rsp, 8 */
+		disp += 8;
+	}
+	for (i = 0; i < n; i++)
+		EMIT4(0xFF, 0x74, 0x24, disp);	/* push qword ptr [rsp + disp] */
+	skip[-1] = prog - skip;
 
 	*pprog = prog;
 	return prog - start;
@@ -2953,6 +2985,8 @@ populate_extable:
 			/* call */
 		case BPF_JMP | BPF_CALL: {
 			const struct btf_func_model *fm = NULL;
+			u8 pos_of_slot[MAX_BPF_FUNC_ARG_SLOTS];
+			u32 nslots, align_slots = 0;
 
 			func = (u8 *) __bpf_call_base + imm32;
 			if (src_reg == BPF_PSEUDO_CALL && tail_call_reachable) {
@@ -2969,8 +3003,20 @@ populate_extable:
 				if (err < 0)
 					return err;
 				ip += err;
-				ip += emit_kfunc_arg_moves(fm, outgoing_arg_base -
-							   outgoing_rsp, &prog);
+				nslots = bpf_jit_place_args(&x86_arg_abi, fm, pos_of_slot);
+				ip += emit_kfunc_arg_moves(pos_of_slot, nslots,
+							   outgoing_arg_base - outgoing_rsp,
+							   &prog);
+				/*
+				 * The kernel keeps the stack only 8-byte aligned,
+				 * but a caller realigns RSP to pass an argument
+				 * aligned to 16 bytes on the stack, and the callee
+				 * may rely on its slot's alignment.
+				 */
+				align_slots = bpf_jit_stack_slots_to_align(&x86_arg_abi, fm,
+									   pos_of_slot);
+				if (align_slots)
+					ip += emit_kfunc_align_stack_args(align_slots, &prog);
 			}
 			if (func == (u8 *)arch_bpf_timed_may_goto) {
 				u32 fp = priv_frame_ptr ? X86_REG_R9 : BPF_REG_FP;
@@ -2993,6 +3039,15 @@ populate_extable:
 				return -EINVAL;
 			if (priv_frame_ptr)
 				pop_r9(&prog);
+			if (align_slots) {
+				s32 off = outgoing_arg_base - outgoing_rsp;
+
+				/* lea rsp, [rbp + off], wherever the copy left it */
+				if (is_imm8(off))
+					EMIT4(0x48, 0x8D, 0x65, (u8)off);
+				else
+					EMIT3_off32(0x48, 0x8D, 0xA5, off);
+			}
 			/*
 			 * A kfunc returning more than 8 bytes hands the second
 			 * half back in RDX (the native ABI's second return reg),
