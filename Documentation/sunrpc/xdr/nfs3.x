@@ -39,6 +39,8 @@
  *   ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+pragma header nfs3;
+
 const NFS3_FHSIZE		= 64;
 const NFS3_COOKIEVERFSIZE	= 8;
 const NFS3_CREATEVERFSIZE	= 8;
