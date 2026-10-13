@@ -487,6 +487,7 @@ int xfrm_input(struct sk_buff *skb, int nexthdr, __be32 spi, int encap_type)
 	const struct xfrm_state_afinfo *afinfo;
 	struct net *net = dev_net(skb->dev);
 	struct net_device *dev = skb->dev;
+	struct net_device *tdev;
 	int err;
 	__be32 seq;
 	__be32 seq_hi;
@@ -767,7 +768,13 @@ resume_decapped:
 			skb_dst_drop(skb);
 		if (async)
 			dev_put(dev);
+		/* Release the reference a receive callback left with
+		 * skb->dev, after the packet has been delivered.
+		 */
+		tdev = skb->dev != dev ? skb->dev : NULL;
 		gro_cells_receive(&gro_cells, skb);
+		if (tdev)
+			dev_put(tdev);
 		rcu_read_unlock();
 		return 0;
 	} else {
@@ -775,6 +782,10 @@ resume_decapped:
 		if (xo)
 			xfrm_gro = xo->flags & XFRM_GRO;
 
+		/* Release the reference a receive callback left with
+		 * skb->dev, after the packet has been delivered.
+		 */
+		tdev = skb->dev != dev ? skb->dev : NULL;
 		err = -EAFNOSUPPORT;
 		afinfo = xfrm_state_afinfo_get_rcu(family);
 		if (likely(afinfo))
@@ -788,6 +799,8 @@ resume_decapped:
 			gro_cells_receive(&gro_cells, skb);
 		}
 
+		if (tdev)
+			dev_put(tdev);
 		if (async)
 			dev_put(dev);
 		rcu_read_unlock();

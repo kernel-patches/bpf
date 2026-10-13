@@ -63,6 +63,8 @@ static int vti_input(struct sk_buff *skb, int nexthdr, __be32 spi,
 
 		XFRM_TUNNEL_SKB_CB(skb)->tunnel.ip4 = tunnel;
 
+		dev_hold(tunnel->dev);
+
 		if (update_skb_dev)
 			skb->dev = tunnel->dev;
 
@@ -109,10 +111,14 @@ static int vti_rcv_cb(struct sk_buff *skb, int err)
 
 	dev = tunnel->dev;
 
+	/* Drop the reference taken in vti_input(); on success it is
+	 * transferred with skb->dev and released by xfrm_input().
+	 */
 	if (err) {
 		DEV_STATS_INC(dev, rx_errors);
 		DEV_STATS_INC(dev, rx_dropped);
 
+		dev_put(dev);
 		return 0;
 	}
 
