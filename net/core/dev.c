@@ -4285,7 +4285,12 @@ static enum skb_drop_reason qdisc_pkt_len_segs_init(struct sk_buff *skb)
 	unsigned int hdr_len, tlen;
 	u16 gso_segs;
 
-	qdisc_skb_cb(skb)->pkt_len = skb->len;
+	/* Clamp from the start: the non-GSO and missing-transport-header
+	 * returns below leave pkt_len at this value, and a stabless skb
+	 * larger than QDISC_PKT_LEN_MAX would otherwise bypass the guard.
+	 */
+	qdisc_skb_cb(skb)->pkt_len =
+		min_t(unsigned int, skb->len, QDISC_PKT_LEN_MAX);
 	if (!shinfo->gso_size) {
 		qdisc_skb_cb(skb)->pkt_segs = 1;
 		return SKB_NOT_DROPPED_YET;
@@ -4338,6 +4343,14 @@ static enum skb_drop_reason qdisc_pkt_len_segs_init(struct sk_buff *skb)
 		qdisc_skb_cb(skb)->pkt_segs = gso_segs;
 	}
 	qdisc_skb_cb(skb)->pkt_len += (gso_segs - 1) * hdr_len;
+	/* (gso_segs - 1) * hdr_len can exceed QDISC_PKT_LEN_MAX for a dodgy
+	 * GSO skb, so clamp the accounted length as a size table does in
+	 * __qdisc_calculate_pkt_len(), keeping the backlog within one
+	 * stab-clamped packet of U32_MAX.
+	 */
+	qdisc_skb_cb(skb)->pkt_len = min_t(unsigned int,
+					   qdisc_skb_cb(skb)->pkt_len,
+					   QDISC_PKT_LEN_MAX);
 	return SKB_NOT_DROPPED_YET;
 }
 

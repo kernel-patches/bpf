@@ -215,6 +215,17 @@ static int fq_codel_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 		__qdisc_drop(skb, to_free);
 		return ret;
 	}
+
+	/* Drop before hashing so a rejected packet disturbs no flow hash;
+	 * the QDISC_MAX_BACKLOG margin leaves room for one more stab-clamped
+	 * packet.
+	 */
+	if (unlikely(qdisc_backlog_at_max(sch))) {
+		q->drop_overlimit++;
+		return qdisc_drop_reason(skb, sch, to_free,
+					 QDISC_DROP_OVERLIMIT);
+	}
+
 	if (do_hash)
 		idx = fq_codel_hash(q, skb) + 1;
 	idx--;
