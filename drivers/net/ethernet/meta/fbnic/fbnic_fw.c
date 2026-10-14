@@ -95,15 +95,25 @@ static void fbnic_mbx_reset_desc_ring(struct fbnic_dev *fbd, int mbx_idx)
 					    FBNIC_IPC_MBX_DESC_HOST_CMPL);
 }
 
+static const struct fbnic_threshold fbnic_threshold_no_data = {
+	.min	= FBNIC_SENSOR_NO_DATA,
+	.max	= FBNIC_SENSOR_NO_DATA,
+	.crit	= FBNIC_SENSOR_NO_DATA,
+};
+
 void fbnic_mbx_init(struct fbnic_dev *fbd)
 {
+	struct fbnic_fw_cap fw_cap_reset;
 	int i;
 
 	/* Initialize lock to protect Tx ring */
 	spin_lock_init(&fbd->fw_tx_lock);
 
-	/* Reset FW Capabilities */
-	memset(&fbd->fw_cap, 0, sizeof(fbd->fw_cap));
+	/* Reset FW Capabilities and seed thresholds with sentinel */
+	memset(&fw_cap_reset, 0, sizeof(fw_cap_reset));
+	fw_cap_reset.temp = fbnic_threshold_no_data;
+	fw_cap_reset.volt = fbnic_threshold_no_data;
+	fbd->fw_cap = fw_cap_reset;
 
 	/* Seed cache with sentinel so the first read always refreshes. The
 	 * cache mirrors what firmware reported, so drop it when the mailbox
@@ -595,6 +605,11 @@ static const struct fbnic_tlv_index fbnic_fw_cap_resp_index[] = {
 	FBNIC_TLV_ATTR_STRING(FBNIC_FW_CAP_RESP_UEFI_COMMIT_STR,
 			      FBNIC_FW_CAP_RESP_COMMIT_MAX_SIZE),
 	FBNIC_TLV_ATTR_U32(FBNIC_FW_CAP_RESP_ANTI_ROLLBACK_VERSION),
+	FBNIC_TLV_ATTR_S32(FBNIC_FW_CAP_RESP_TEMP_MIN),
+	FBNIC_TLV_ATTR_S32(FBNIC_FW_CAP_RESP_TEMP_MAX),
+	FBNIC_TLV_ATTR_S32(FBNIC_FW_CAP_RESP_TEMP_CRIT),
+	FBNIC_TLV_ATTR_S32(FBNIC_FW_CAP_RESP_VOLT_MIN),
+	FBNIC_TLV_ATTR_S32(FBNIC_FW_CAP_RESP_VOLT_MAX),
 	FBNIC_TLV_ATTR_LAST
 };
 
@@ -741,6 +756,22 @@ static int fbnic_fw_parse_cap_resp(void *opaque, struct fbnic_tlv_msg **results)
 
 	fbd->fw_cap.anti_rollback_version =
 		fta_get_uint(results, FBNIC_FW_CAP_RESP_ANTI_ROLLBACK_VERSION);
+
+	fbd->fw_cap.temp.min =
+		fbnic_tlv_attr_get_signed(results[FBNIC_FW_CAP_RESP_TEMP_MIN],
+					  FBNIC_SENSOR_NO_DATA);
+	fbd->fw_cap.temp.max =
+		fbnic_tlv_attr_get_signed(results[FBNIC_FW_CAP_RESP_TEMP_MAX],
+					  FBNIC_SENSOR_NO_DATA);
+	fbd->fw_cap.temp.crit =
+		fbnic_tlv_attr_get_signed(results[FBNIC_FW_CAP_RESP_TEMP_CRIT],
+					  FBNIC_SENSOR_NO_DATA);
+	fbd->fw_cap.volt.min =
+		fbnic_tlv_attr_get_signed(results[FBNIC_FW_CAP_RESP_VOLT_MIN],
+					  FBNIC_SENSOR_NO_DATA);
+	fbd->fw_cap.volt.max =
+		fbnic_tlv_attr_get_signed(results[FBNIC_FW_CAP_RESP_VOLT_MAX],
+					  FBNIC_SENSOR_NO_DATA);
 
 	return 0;
 }
