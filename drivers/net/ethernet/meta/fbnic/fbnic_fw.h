@@ -6,6 +6,7 @@
 
 #include <linux/completion.h>
 #include <linux/if_ether.h>
+#include <linux/limits.h>
 #include <linux/types.h>
 
 struct fbnic_dev;
@@ -58,6 +59,12 @@ enum {
 #define FBNIC_FW_CAP_BMC_PENDING	\
 	(BIT(FBNIC_FW_CAP_F_BMC_TCAM_REINIT) |	\
 	 BIT(FBNIC_FW_CAP_F_BMC_MACDA_SYNC))
+
+/* Sentinel for a sensor value the driver does not have: a threshold the
+ * firmware never populated (older firmware) or a cache entry not yet
+ * refreshed.
+ */
+#define FBNIC_SENSOR_NO_DATA			S32_MIN
 
 struct fbnic_fw_cap {
 	unsigned long state;

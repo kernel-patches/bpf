@@ -105,6 +105,13 @@ void fbnic_mbx_init(struct fbnic_dev *fbd)
 	/* Reset FW Capabilities */
 	memset(&fbd->fw_cap, 0, sizeof(fbd->fw_cap));
 
+	/* Seed cache with sentinel so the first read always refreshes. The
+	 * cache mirrors what firmware reported, so drop it when the mailbox
+	 * restarts.
+	 */
+	fbd->hwmon_cache.temp_mdeg = FBNIC_SENSOR_NO_DATA;
+	fbd->hwmon_cache.volt_mv = FBNIC_SENSOR_NO_DATA;
+
 	/* Reinitialize mailbox memory */
 	for (i = 0; i < FBNIC_IPC_MBX_INDICES; i++)
 		memset(&fbd->mbx[i], 0, sizeof(struct fbnic_fw_mbx));
