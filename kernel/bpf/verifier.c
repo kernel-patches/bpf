@@ -6759,9 +6759,9 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 		 * trusted if we are in an RCU CS. Such pointer can be NULL.
 		 */
 		if (type_is_trusted(env, reg, field_name, btf_id)) {
-			flag |= PTR_TRUSTED;
+			flag |= is_rcu_reg(reg) ? MEM_RCU : PTR_TRUSTED;
 		} else if (type_is_trusted_or_null(env, reg, field_name, btf_id)) {
-			flag |= PTR_TRUSTED | PTR_MAYBE_NULL;
+			flag |= (is_rcu_reg(reg) ? MEM_RCU : PTR_TRUSTED) | PTR_MAYBE_NULL;
 		} else if (in_rcu_cs(env) && !type_may_be_null(reg->type)) {
 			if (type_is_rcu(env, reg, field_name, btf_id)) {
 				/* ignore __rcu tag and mark it MEM_RCU */
