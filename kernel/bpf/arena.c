@@ -202,6 +202,9 @@ static int apply_range_set_cb(pte_t *pte, unsigned long addr, void *data)
 		return -EBUSY;
 	set_pte_at(&init_mm, addr, pte, pteval);
 #endif
+	page_folio(page)->index = compute_pgoff(d->arena,
+						addr - bpf_arena_get_kern_vm_start(d->arena));
+	page->mapping = d->arena->file->f_mapping;
 	WARN_ON_ONCE(llist_del_first(d->pages) != node);
 	d->i++;
 	WRITE_ONCE(d->arena->nr_pages, d->arena->nr_pages + 1);
@@ -272,6 +275,17 @@ static int populate_pgtable_except_pte(struct bpf_arena *arena)
 /* The backing file must not hold a map reference. */
 static const struct file_operations arena_backing_fops = {};
 
+/* Arena pages are not page-cache entries and must not be evicted by MM. */
+static bool arena_release_folio(struct folio *folio, gfp_t gfp)
+{
+	return false;
+}
+
+static const struct address_space_operations arena_aops = {
+	.dirty_folio = noop_dirty_folio,
+	.release_folio = arena_release_folio,
+};
+
 static struct bpf_map *arena_map_alloc(union bpf_attr *attr)
 {
 	struct vm_struct *kern_vm;
@@ -341,6 +355,8 @@ static struct bpf_map *arena_map_alloc(union bpf_attr *attr)
 		err = PTR_ERR(arena->file);
 		goto err_destroy_rt;
 	}
+	arena->file->f_mapping->a_ops = &arena_aops;
+	mapping_set_release_always(arena->file->f_mapping);
 
 	return &arena->map;
 
@@ -353,6 +369,14 @@ err_free_arena:
 err:
 	free_vm_area(kern_vm);
 	return ERR_PTR(err);
+}
+
+static void arena_put_page(struct page *page)
+{
+	lock_page(page);
+	page->mapping = NULL;
+	unlock_page(page);
+	__free_page(page);
 }
 
 static int existing_page_cb(pte_t *ptep, unsigned long addr, void *data)
@@ -378,7 +402,7 @@ static int existing_page_cb(pte_t *ptep, unsigned long addr, void *data)
 	 * the TLB entries can stick around and continue to permit access to
 	 * the freed page. So it all relies on 1.
 	 */
-	__free_page(page);
+	arena_put_page(page);
 	return 0;
 }
 
@@ -939,7 +963,7 @@ static void arena_free_pages(struct bpf_arena *arena, long uaddr, long page_cnt,
 			 * page_cnt is big it's faster to do the batched zap.
 			 */
 			zap_pages(arena, full_uaddr, 1);
-		__free_page(page);
+		arena_put_page(page);
 	}
 	bpf_map_memcg_exit(old_memcg, new_memcg);
 
@@ -1061,7 +1085,7 @@ static void arena_free_worker(struct work_struct *work)
 	/* free all pages collected by apply_to_existing_page_range() in the first loop */
 	llist_for_each_safe(pos, t, __llist_del_all(&free_pages)) {
 		page = llist_entry(pos, struct page, pcp_llist);
-		__free_page(page);
+		arena_put_page(page);
 	}
 
 	bpf_map_memcg_exit(old_memcg, new_memcg);
