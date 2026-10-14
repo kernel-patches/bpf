@@ -7,21 +7,24 @@
 #include <linux/device.h>
 
 #include "mtk_ctrl_plane.h"
+#include "mtk_port.h"
 
 /**
  * mtk_ctrl_init() - Initialize the control plane block.
  * @mdev: Pointer to the MTK modem device.
+ * @port_layer_cfg: Port layer configuration.
  *
  * Allocates and initializes the control plane block
  * associated with @mdev.  Runs once per bind; the allocation is
  * devres managed and is released at unbind, not by
  * mtk_ctrl_exit().
  *
- * Return: 0 on success, -ENOMEM on allocation failure.
+ * Return: 0 on success, negative error code on failure.
  */
-int mtk_ctrl_init(struct mtk_md_dev *mdev)
+int mtk_ctrl_init(struct mtk_md_dev *mdev, struct mtk_port_layer_cfg *port_layer_cfg)
 {
 	struct mtk_ctrl_blk *ctrl_blk;
+	int err;
 
 	ctrl_blk = devm_kzalloc(mdev->dev, sizeof(*ctrl_blk), GFP_KERNEL);
 	if (!ctrl_blk)
@@ -29,6 +32,13 @@ int mtk_ctrl_init(struct mtk_md_dev *mdev)
 
 	ctrl_blk->mdev = mdev;
 	mdev->ctrl_blk = ctrl_blk;
+
+	err = mtk_port_mngr_init(ctrl_blk, port_layer_cfg->port_cfg,
+				 port_layer_cfg->port_cnt);
+	if (err) {
+		mdev->ctrl_blk = NULL;
+		return err;
+	}
 
 	return 0;
 }
@@ -42,5 +52,8 @@ int mtk_ctrl_init(struct mtk_md_dev *mdev)
  */
 void mtk_ctrl_exit(struct mtk_md_dev *mdev)
 {
+	struct mtk_ctrl_blk *ctrl_blk = mdev->ctrl_blk;
+
+	mtk_port_mngr_exit(ctrl_blk);
 	mdev->ctrl_blk = NULL;
 }
