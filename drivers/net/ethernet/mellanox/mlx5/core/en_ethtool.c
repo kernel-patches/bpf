@@ -2206,12 +2206,20 @@ static int set_pflag_cqe_based_moder(struct net_device *netdev, bool enable,
 		mlx5e_channels_rx_toggle_dim(&priv->channels);
 		MLX5E_SET_PFLAG(&new_params, MLX5E_PFLAG_RX_CQE_BASED_MODER,
 				cq_period_mode);
+		new_params.rx_moder_use_cqe_mode = enable;
+		mlx5e_reset_rx_moderation(&new_params.rx_cq_moderation,
+					  cq_period_mode,
+					  new_params.rx_dim_enabled);
 	} else {
 		mlx5e_reset_tx_channels_moderation(&priv->channels, cq_period_mode,
 						   false, true);
 		mlx5e_channels_tx_toggle_dim(&priv->channels);
 		MLX5E_SET_PFLAG(&new_params, MLX5E_PFLAG_TX_CQE_BASED_MODER,
 				cq_period_mode);
+		new_params.tx_moder_use_cqe_mode = enable;
+		mlx5e_reset_tx_moderation(&new_params.tx_cq_moderation,
+					  cq_period_mode,
+					  new_params.tx_dim_enabled);
 	}
 
 	/* Update pflags of existing channels without resetting them */
