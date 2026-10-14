@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* Copyright (c) 2024 Meta Platforms, Inc. and affiliates. */
 #include <linux/anon_inodes.h>
+#include <linux/atomic.h>
 #include <linux/bits.h>
 #include <linux/bpf.h>
 #include <linux/btf.h>
@@ -13,6 +14,7 @@
 #include <linux/btf_ids.h>
 #include <linux/vmalloc.h>
 #include <linux/pagemap.h>
+#include <linux/wait.h>
 #include <asm/tlbflush.h>
 #include "range_tree.h"
 
@@ -61,6 +63,8 @@ struct bpf_arena {
 	struct range_tree rt;
 	/* protects rt and nr_pages */
 	rqspinlock_t spinlock;
+	atomic_t opref;
+	wait_queue_head_t opwait;
 	/* number of pages currently populated in the arena */
 	u64 nr_pages;
 	struct list_head vma_list;
@@ -73,6 +77,29 @@ struct bpf_arena {
 
 static void arena_free_worker(struct work_struct *work);
 static void arena_free_irq(struct irq_work *iw);
+
+/* Positive references admit frees, negative references admit faults. */
+enum arena_opref {
+	ARENA_OPREF_FREE = 1,
+	ARENA_OPREF_FAULT = -1,
+};
+
+static bool arena_opref_get(struct bpf_arena *arena, enum arena_opref ref)
+{
+	int users = atomic_read(&arena->opref);
+
+	do {
+		if (users && (users ^ ref) < 0)
+			return false;
+	} while (!atomic_try_cmpxchg_acquire(&arena->opref, &users, users + ref));
+	return true;
+}
+
+static void arena_opref_put(struct bpf_arena *arena, enum arena_opref ref)
+{
+	if (atomic_fetch_sub_release(ref, &arena->opref) == ref)
+		wake_up_all(&arena->opwait);
+}
 
 /*
  * Zero flags denote an unstarted free. ZAPPED implies CLEARED, and FAILED
@@ -361,6 +388,8 @@ static struct bpf_map *arena_map_alloc(union bpf_attr *attr)
 		goto err_free_scratch;
 	mutex_init(&arena->lock);
 	raw_res_spin_lock_init(&arena->spinlock);
+	atomic_set(&arena->opref, 0);
+	init_waitqueue_head(&arena->opwait);
 	err = populate_pgtable_except_pte(arena);
 	if (err)
 		goto err_destroy_rt;
@@ -545,12 +574,21 @@ static vm_fault_t arena_vm_fault(struct vm_fault *vmf)
 	struct bpf_arena *arena = container_of(map, struct bpf_arena, map);
 	struct mem_cgroup *new_memcg, *old_memcg;
 	LLIST_HEAD(pages);
-	struct page *page, *new_page = NULL;
 	struct apply_range_data data;
 	vm_fault_t fault_ret;
+	struct page *page, *new_page = NULL;
 	long kbase, kaddr;
 	unsigned long flags;
 	int ret;
+
+	if (!arena_opref_get(arena, ARENA_OPREF_FAULT)) {
+		if (vmf->flags & FAULT_FLAG_ALLOW_RETRY)
+			goto retry;
+		/* zap_pages() does not need the fault caller's mmap_lock. */
+		wait_event(arena->opwait, arena_opref_get(arena, ARENA_OPREF_FAULT));
+	}
+	/* folio_lock_or_retry() may drop the VMA lock before we release opref. */
+	bpf_map_inc(map);
 
 	kbase = bpf_arena_get_kern_vm_start(arena);
 	kaddr = kbase + (u32)(vmf->address);
@@ -569,15 +607,15 @@ static vm_fault_t arena_vm_fault(struct vm_fault *vmf)
 		bpf_map_memcg_exit(old_memcg, new_memcg);
 	}
 
-	if (raw_res_spin_lock_irqsave(&arena->spinlock, flags)) {
-		/*
-		 * A failed lock means a possible deadlock was detected. Don't
-		 * return VM_FAULT_RETRY: this handler never took mmap_lock, but
-		 * the fault path would re-take it on retry and deadlock. Fail.
-		 */
-		if (new_page)
-			free_pages_nolock(new_page, 0);
-		return VM_FAULT_SIGBUS;
+	ret = raw_res_spin_lock_irqsave(&arena->spinlock, flags);
+	if (ret) {
+		/* If we are deadlocking somehow, no way to ensure forward progress. */
+		if (ret == -EDEADLK) {
+			fault_ret = VM_FAULT_SIGBUS;
+			goto out_err;
+		}
+
+		goto retry_admitted;
 	}
 
 	page = vmalloc_to_page((void *)kaddr);
@@ -605,8 +643,8 @@ static vm_fault_t arena_vm_fault(struct vm_fault *vmf)
 
 	if (!new_page) {
 		/*
-		 * The probed page was freed meanwhile or preallocation failed;
-		 * try the non-blocking allocator, we cannot sleep here.
+		 * Preallocation failed; try the non-blocking allocator since
+		 * we cannot sleep here.
 		 */
 		new_page = bpf_alloc_page(map->numa_node, false);
 		if (!new_page) {
@@ -624,7 +662,7 @@ static vm_fault_t arena_vm_fault(struct vm_fault *vmf)
 			goto out_err_locked_memcg;
 		}
 		raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
-		goto retry;
+		goto retry_memcg;
 	} else if (ret) {
 		fault_ret = VM_FAULT_SIGBUS;
 		goto out_err_locked_memcg;
@@ -647,23 +685,42 @@ static vm_fault_t arena_vm_fault(struct vm_fault *vmf)
 	page = new_page;
 	new_page = NULL;
 out:
-	page_ref_add(page, 1);
+	/* Hand fault admission over to the folio lock before returning to MM. */
+	get_page(page);
 	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
-	if (new_page)
+
+	if (new_page) {
 		free_pages_nolock(new_page, 0);
-	vmf->page = page;
-	return 0;
+		new_page = NULL;
+	}
+
+	fault_ret = folio_lock_or_retry(page_folio(page), vmf);
+	if (fault_ret) {
+		put_page(page);
+	} else {
+		vmf->page = page;
+		fault_ret = VM_FAULT_LOCKED;
+	}
+	goto out_put;
 
 out_err_locked_memcg:
 	bpf_map_memcg_exit(old_memcg, new_memcg);
 out_err_locked:
 	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
+out_err:
 	if (new_page)
 		free_pages_nolock(new_page, 0);
+out_put:
+	arena_opref_put(arena, ARENA_OPREF_FAULT);
+	bpf_map_put(map);
 	return fault_ret;
 
-retry:
+retry_memcg:
 	bpf_map_memcg_exit(old_memcg, new_memcg);
+retry_admitted:
+	arena_opref_put(arena, ARENA_OPREF_FAULT);
+	bpf_map_put(map);
+retry:
 	if (new_page)
 		free_pages_nolock(new_page, 0);
 
@@ -947,6 +1004,14 @@ static void zap_pages(struct bpf_arena *arena, long uaddr, long page_cnt)
 	i_mmap_unlock_read(mapping);
 }
 
+static void wait_for_faults(struct llist_head *pages)
+{
+	struct page *page;
+
+	llist_for_each_entry(page, pages->first, pcp_llist)
+		folio_wait_locked(page_folio(page));
+}
+
 static void arena_free_pages(struct bpf_arena *arena, long uaddr, long page_cnt, bool sleepable)
 {
 	struct mem_cgroup *new_memcg, *old_memcg;
@@ -979,12 +1044,14 @@ static void arena_free_pages(struct bpf_arena *arena, long uaddr, long page_cnt,
 
 	if (!sleepable)
 		goto defer;
+	if (!arena_opref_get(arena, ARENA_OPREF_FREE))
+		goto defer;
 
 	ret = raw_res_spin_lock_irqsave(&arena->spinlock, flags);
 
 	/* Can't proceed without holding the spinlock so defer the free */
 	if (ret)
-		goto defer;
+		goto defer_admitted;
 
 	unavail_node = range_tree_set_unavail(&arena->rt, pgoff, page_cnt);
 	if (IS_ERR(unavail_node)) {
@@ -993,8 +1060,9 @@ static void arena_free_pages(struct bpf_arena *arena, long uaddr, long page_cnt,
 		/* If overlapping free in progress or out of memory, defer. */
 		ret = PTR_ERR(unavail_node);
 		if (ret == -ENOMEM || ret == -EAGAIN)
-			goto defer;
+			goto defer_admitted;
 		WARN_ON_ONCE(ret);
+		arena_opref_put(arena, ARENA_OPREF_FREE);
 		bpf_map_memcg_exit(old_memcg, new_memcg);
 		return;
 	}
@@ -1008,6 +1076,8 @@ static void arena_free_pages(struct bpf_arena *arena, long uaddr, long page_cnt,
 
 	/* drop the lock to do the tlb flush and zap pages */
 	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
+
+	wait_for_faults(&free_pages);
 
 	/* ensure no stale TLB entries */
 	flush_tlb_kernel_range(kaddr, kaddr + (page_cnt * PAGE_SIZE));
@@ -1031,16 +1101,19 @@ static void arena_free_pages(struct bpf_arena *arena, long uaddr, long page_cnt,
 	ret = raw_res_spin_lock_irqsave(&arena->spinlock, flags);
 	if (ret) {
 		release_only = true;
-		goto defer;
+		goto defer_admitted;
 	}
 
 	ret = range_tree_make_avail(&arena->rt, pgoff, page_cnt);
 	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
 	WARN_ON_ONCE(ret);
+	arena_opref_put(arena, ARENA_OPREF_FREE);
 	bpf_map_memcg_exit(old_memcg, new_memcg);
 
 	return;
 
+defer_admitted:
+	arena_opref_put(arena, ARENA_OPREF_FREE);
 defer:
 	s = kmalloc_nolock(sizeof(struct arena_free_span), __GFP_ACCOUNT, -1);
 	bpf_map_memcg_exit(old_memcg, new_memcg);
@@ -1133,7 +1206,12 @@ static void arena_free_worker(struct work_struct *work)
 	bool retry = false;
 	int ret;
 
+	if (!arena_opref_get(arena, ARENA_OPREF_FREE)) {
+		schedule_work(work);
+		return;
+	}
 	if (raw_res_spin_lock_irqsave(&arena->spinlock, flags)) {
+		arena_opref_put(arena, ARENA_OPREF_FREE);
 		schedule_work(work);
 		return;
 	}
@@ -1184,6 +1262,8 @@ clear_ptes:
 		s->flags |= ARENA_FREE_SPAN_CLEARED;
 	}
 	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
+
+	wait_for_faults(&free_pages);
 
 	/* Remove stale translations before freeing the collected pages. */
 	llist_for_each_safe(pos, t, list) {
@@ -1259,6 +1339,7 @@ clear_ptes:
 	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
 
 done:
+	arena_opref_put(arena, ARENA_OPREF_FREE);
 	bpf_map_memcg_exit(old_memcg, new_memcg);
 
 	if (retry)
