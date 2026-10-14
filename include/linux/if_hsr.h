@@ -3,6 +3,7 @@
 #define _LINUX_IF_HSR_H_
 
 #include <linux/types.h>
+#include <uapi/linux/hsr_ptp.h>
 
 struct net_device;
 
