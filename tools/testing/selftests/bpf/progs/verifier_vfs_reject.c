@@ -203,4 +203,23 @@ int BPF_PROG(trusted_field_escapes_rcu_cs, struct linux_binprm *bprm)
 	subprog_trusted_inode(inode);
 	return 0;
 }
+
+SEC("lsm.s/file_open")
+__failure __msg("R1 type=scalar expected=ptr_, trusted_ptr_, rcu_ptr_")
+int BPF_PROG(trusted_field_outlives_parent_reference)
+{
+	struct task_struct *task = bpf_get_current_task_btf();
+	struct file *file = bpf_get_task_exe_file(task);
+	struct inode *inode;
+
+	if (!file)
+		return 0;
+
+	inode = file->f_inode;
+	bpf_put_file(file);
+
+	/* inode was pinned by file's reference and died with it. */
+	subprog_trusted_inode(inode);
+	return 0;
+}
 char _license[] SEC("license") = "GPL";
