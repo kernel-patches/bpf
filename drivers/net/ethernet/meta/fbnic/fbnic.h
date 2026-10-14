@@ -26,6 +26,8 @@ struct fbnic_hwmon_cache {
 	unsigned long last_read;
 	s32 temp_mdeg;
 	s32 volt_mv;
+	u8 temp_alarm;
+	u8 volt_alarm;
 };
 
 struct fbnic_dev {

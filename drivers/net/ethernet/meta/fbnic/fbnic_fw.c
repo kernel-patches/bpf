@@ -121,6 +121,8 @@ void fbnic_mbx_init(struct fbnic_dev *fbd)
 	 */
 	fbd->hwmon_cache.temp_mdeg = FBNIC_SENSOR_NO_DATA;
 	fbd->hwmon_cache.volt_mv = FBNIC_SENSOR_NO_DATA;
+	fbd->hwmon_cache.temp_alarm = FBNIC_FW_TSENE_ALARM_UNKNOWN;
+	fbd->hwmon_cache.volt_alarm = FBNIC_FW_TSENE_ALARM_UNKNOWN;
 
 	/* Reinitialize mailbox memory */
 	for (i = 0; i < FBNIC_IPC_MBX_INDICES; i++)
@@ -1466,6 +1468,8 @@ static const struct fbnic_tlv_index fbnic_tsene_read_resp_index[] = {
 	FBNIC_TLV_ATTR_S32(FBNIC_FW_TSENE_THERM),
 	FBNIC_TLV_ATTR_S32(FBNIC_FW_TSENE_VOLT),
 	FBNIC_TLV_ATTR_S32(FBNIC_FW_TSENE_ERROR),
+	FBNIC_TLV_ATTR_U32(FBNIC_FW_TSENE_THERM_ALARM_STATE),
+	FBNIC_TLV_ATTR_U32(FBNIC_FW_TSENE_VOLT_ALARM_STATE),
 	FBNIC_TLV_ATTR_LAST
 };
 
@@ -1476,6 +1480,7 @@ static int fbnic_fw_parse_tsene_read_resp(void *opaque,
 	struct fbnic_dev *fbd = opaque;
 	s32 err_resp;
 	int err = 0;
+	u32 alarm;
 
 	/* Verify we have a completion pointer to provide with data */
 	cmpl_data = fbnic_fw_get_cmpl_by_type(fbd,
@@ -1496,6 +1501,20 @@ static int fbnic_fw_parse_tsene_read_resp(void *opaque,
 		fta_get_sint(results, FBNIC_FW_TSENE_THERM);
 	cmpl_data->u.tsene.millivolts =
 		fta_get_sint(results, FBNIC_FW_TSENE_VOLT);
+
+	/* Cache here so that it and the threshold event land in the order firmware
+	 * sent them. Firmware predating alarm state reporting sends neither
+	 * attribute.
+	 */
+	alarm = fbnic_tlv_attr_get_unsigned(results[FBNIC_FW_TSENE_THERM_ALARM_STATE],
+					    FBNIC_FW_TSENE_ALARM_UNKNOWN);
+	if (alarm != FBNIC_FW_TSENE_ALARM_UNKNOWN)
+		WRITE_ONCE(fbd->hwmon_cache.temp_alarm, alarm);
+
+	alarm = fbnic_tlv_attr_get_unsigned(results[FBNIC_FW_TSENE_VOLT_ALARM_STATE],
+					    FBNIC_FW_TSENE_ALARM_UNKNOWN);
+	if (alarm != FBNIC_FW_TSENE_ALARM_UNKNOWN)
+		WRITE_ONCE(fbd->hwmon_cache.volt_alarm, alarm);
 
 msg_err:
 	cmpl_data->result = err_resp ? : err;
@@ -1689,6 +1708,68 @@ fbnic_fw_parser_test(void *opaque, struct fbnic_tlv_msg **results)
 	return err;
 }
 
+static const struct fbnic_tlv_index fbnic_threshold_exceeded_resp_index[] = {
+	FBNIC_TLV_ATTR_U32(FBNIC_FW_TSENE_THERM_ALARM),
+	FBNIC_TLV_ATTR_U32(FBNIC_FW_TSENE_VOLT_ALARM),
+	FBNIC_TLV_ATTR_S32(FBNIC_FW_TSENE_THERMAL),
+	FBNIC_TLV_ATTR_S32(FBNIC_FW_TSENE_VOLTAGE),
+	FBNIC_TLV_ATTR_LAST
+};
+
+static int fbnic_fw_parse_threshold_exceeded_resp(void *opaque,
+						  struct fbnic_tlv_msg
+						  **results)
+{
+	struct fbnic_dev *fbd = opaque;
+	bool rec_flag = false;
+	u32 alarm;
+	s32 value;
+
+	if (results[FBNIC_FW_TSENE_THERM_ALARM]) {
+		bool have_temp = !!results[FBNIC_FW_TSENE_THERMAL];
+
+		alarm = fta_get_uint(results, FBNIC_FW_TSENE_THERM_ALARM);
+		value = fta_get_sint(results, FBNIC_FW_TSENE_THERMAL);
+		if (!have_temp)
+			dev_err(fbd->dev, "Thermal alarm %u received with no temperature!\n",
+				alarm);
+		else if (alarm != FBNIC_FW_TSENE_ALARM_NORMAL)
+			dev_err(fbd->dev, "Thermal alarm %u, temperature is currently %dmC!\n",
+				alarm, value);
+
+		/* Old firmware reports no range, leave the cache alone */
+		if (alarm != FBNIC_FW_TSENE_ALARM_DEPRECATED)
+			WRITE_ONCE(fbd->hwmon_cache.temp_alarm, alarm);
+		rec_flag = true;
+	}
+
+	if (results[FBNIC_FW_TSENE_VOLT_ALARM]) {
+		bool have_volt = !!results[FBNIC_FW_TSENE_VOLTAGE];
+
+		alarm = fta_get_uint(results, FBNIC_FW_TSENE_VOLT_ALARM);
+		value = fta_get_sint(results, FBNIC_FW_TSENE_VOLTAGE);
+		if (!have_volt)
+			dev_err(fbd->dev, "Voltage alarm %u received with no voltage!\n",
+				alarm);
+		else if (alarm != FBNIC_FW_TSENE_ALARM_NORMAL)
+			dev_err(fbd->dev, "Voltage alarm %u, voltage is currently %dmV!\n",
+				alarm, value);
+
+		/* Old firmware reports no range, leave the cache alone */
+		if (alarm != FBNIC_FW_TSENE_ALARM_DEPRECATED)
+			WRITE_ONCE(fbd->hwmon_cache.volt_alarm, alarm);
+		rec_flag = true;
+	}
+
+	if (!rec_flag) {
+		dev_warn(fbd->dev,
+			 "Threshold exceeded message received but no alarm found!\n");
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 static const struct fbnic_tlv_parser fbnic_fw_tlv_parser[] = {
 	FBNIC_TLV_PARSER(TEST, fbnic_tlv_test_index, fbnic_fw_parser_test),
 	FBNIC_TLV_PARSER(FW_CAP_RESP, fbnic_fw_cap_resp_index,
@@ -1717,6 +1798,9 @@ static const struct fbnic_tlv_parser fbnic_fw_tlv_parser[] = {
 	FBNIC_TLV_PARSER(TSENE_READ_RESP,
 			 fbnic_tsene_read_resp_index,
 			 fbnic_fw_parse_tsene_read_resp),
+	FBNIC_TLV_PARSER(SENSOR_THRESHOLD_EXCEEDED_RESP,
+			 fbnic_threshold_exceeded_resp_index,
+			 fbnic_fw_parse_threshold_exceeded_resp),
 	FBNIC_TLV_PARSER(LOG_MSG_REQ,
 			 fbnic_fw_log_req_index,
 			 fbnic_fw_parse_log_req),
