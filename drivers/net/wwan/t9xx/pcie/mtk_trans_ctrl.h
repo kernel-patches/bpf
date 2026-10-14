@@ -80,9 +80,12 @@ struct trb_srv {
 	struct task_struct *trb_thread;
 };
 
+struct mtk_fsm_param;
+
 int mtk_pcie_hif_init(struct mtk_md_dev *mdev);
 int mtk_pcie_hif_exit(struct mtk_md_dev *mdev);
 int mtk_pcie_hif_submit_skb(struct mtk_md_dev *mdev, struct sk_buff *skb, bool force_send);
+void mtk_pcie_hif_fsm_indication(struct mtk_md_dev *mdev, struct mtk_fsm_param *param);
 int mtk_pcie_hif_cmd_func(struct mtk_md_dev *mdev, int cmd, void *data);
 int mtk_trans_ctrl_init(struct mtk_md_dev *mdev);
 int mtk_trans_ctrl_exit(struct mtk_md_dev *mdev);

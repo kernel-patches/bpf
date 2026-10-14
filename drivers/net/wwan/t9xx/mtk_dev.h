@@ -40,6 +40,7 @@ struct mtk_md_dev {
 	u32 hw_ver;
 	char dev_str[MTK_DEV_STR_LEN];
 	struct mtk_ctrl_blk *ctrl_blk;
+	struct mtk_md_fsm *fsm;
 };
 
 #endif /* __MTK_DEV_H__ */

@@ -10,6 +10,7 @@
 #include <linux/skbuff.h>
 
 #include "mtk_dev.h"
+#include "mtk_fsm.h"
 
 #define Q_MTU_3_5K			(0xE00)
 #define Q_FRAG_3_5K			(0xE00)

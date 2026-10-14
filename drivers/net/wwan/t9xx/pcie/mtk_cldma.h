@@ -146,6 +146,12 @@ struct txq {
 	u32 wr_idx;
 	u32 free_idx;
 	bool tx_started;
+	/* Set by err_work while it stops this queue, and left set if the
+	 * stop failed: the device may still be walking the ring, so new
+	 * requests are refused with -EPIPE and the ones already queued are
+	 * kept.  Read under ring_lock by the producer.
+	 */
+	bool is_stopping;
 	u32 nr_bds;
 };
 
@@ -155,6 +161,7 @@ struct cldma_dev {
 };
 
 int mtk_cldma_init(struct mtk_ctrl_trans *trans);
+void mtk_cldma_quiesce(struct mtk_ctrl_trans *trans);
 void mtk_cldma_exit(struct mtk_ctrl_trans *trans);
 int mtk_cldma_submit_tx(void *dev, struct sk_buff *skb);
 int mtk_cldma_get_tx_budget(void *dev, enum mtk_hif_id hif_id, u32 qno);
