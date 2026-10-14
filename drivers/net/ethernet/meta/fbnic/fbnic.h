@@ -201,6 +201,7 @@ void fbnic_fw_free_mbx(struct fbnic_dev *fbd);
 void fbnic_hwmon_register(struct fbnic_dev *fbd);
 void fbnic_hwmon_unregister(struct fbnic_dev *fbd);
 void fbnic_hwmon_notify_event(struct fbnic_dev *fbd, int id);
+void fbnic_hwmon_old_notify_event(struct fbnic_dev *fbd, int id, s32 value);
 
 int fbnic_mac_request_irq(struct fbnic_dev *fbd);
 void fbnic_mac_free_irq(struct fbnic_dev *fbd);

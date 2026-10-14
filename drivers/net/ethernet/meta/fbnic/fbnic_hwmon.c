@@ -302,6 +302,35 @@ void fbnic_hwmon_unregister(struct fbnic_dev *fbd)
 	hwmon_device_unregister(hwmon);
 }
 
+void fbnic_hwmon_old_notify_event(struct fbnic_dev *fbd, int id, s32 value)
+{
+	const struct fbnic_threshold *thr;
+	u8 *cached;
+
+	switch (id) {
+	case FBNIC_SENSOR_TEMP:
+		thr = &fbd->fw_cap.temp;
+		cached = &fbd->hwmon_cache.temp_alarm;
+		break;
+	case FBNIC_SENSOR_VOLTAGE:
+		thr = &fbd->fw_cap.volt;
+		cached = &fbd->hwmon_cache.volt_alarm;
+		break;
+	default:
+		return;
+	}
+
+	/* Event arrived before the capability response containing
+	 * the thresholds.
+	 */
+	if (thr->min == FBNIC_SENSOR_NO_DATA ||
+	    thr->max == FBNIC_SENSOR_NO_DATA)
+		return;
+
+	WRITE_ONCE(*cached, fbnic_hwmon_classify(thr, value));
+	fbnic_hwmon_notify_event(fbd, id);
+}
+
 void fbnic_hwmon_notify_event(struct fbnic_dev *fbd, int id)
 {
 	enum hwmon_sensor_types type;

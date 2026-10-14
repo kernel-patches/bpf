@@ -1737,8 +1737,13 @@ static int fbnic_fw_parse_threshold_exceeded_resp(void *opaque,
 			dev_err(fbd->dev, "Thermal alarm %u, temperature is currently %dmC!\n",
 				alarm, value);
 
-		/* Old firmware reports no range, leave the cache alone */
-		if (alarm != FBNIC_FW_TSENE_ALARM_DEPRECATED) {
+		if (alarm == FBNIC_FW_TSENE_ALARM_DEPRECATED) {
+			/* Nothing to derive the range from, so do not guess */
+			if (have_temp)
+				fbnic_hwmon_old_notify_event(fbd,
+							     FBNIC_SENSOR_TEMP,
+							     value);
+		} else {
 			WRITE_ONCE(fbd->hwmon_cache.temp_alarm, alarm);
 			fbnic_hwmon_notify_event(fbd, FBNIC_SENSOR_TEMP);
 		}
@@ -1757,8 +1762,13 @@ static int fbnic_fw_parse_threshold_exceeded_resp(void *opaque,
 			dev_err(fbd->dev, "Voltage alarm %u, voltage is currently %dmV!\n",
 				alarm, value);
 
-		/* Old firmware reports no range, leave the cache alone */
-		if (alarm != FBNIC_FW_TSENE_ALARM_DEPRECATED) {
+		if (alarm == FBNIC_FW_TSENE_ALARM_DEPRECATED) {
+			/* Nothing to derive the range from, so do not guess */
+			if (have_volt)
+				fbnic_hwmon_old_notify_event(fbd,
+							     FBNIC_SENSOR_VOLTAGE,
+							     value);
+		} else {
 			WRITE_ONCE(fbd->hwmon_cache.volt_alarm, alarm);
 			fbnic_hwmon_notify_event(fbd, FBNIC_SENSOR_VOLTAGE);
 		}
