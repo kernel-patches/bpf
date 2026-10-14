@@ -311,6 +311,18 @@ static int prueth_emac_common_start(struct prueth *prueth)
 	if (ret)
 		goto disable_class;
 
+	/* PRU/RTU/txPRU are up now: re-sync any port
+	 * config (e.g. flood/promisc flags) that may have been
+	 * dropped while firmware was still rebooting above.
+	 */
+	for (slice = 0; slice < PRUETH_NUM_MACS; slice++) {
+		emac = prueth->emac[slice];
+		if (!emac)
+			continue;
+		if (netif_running(emac->ndev))
+			schedule_work(&emac->rx_mode_work);
+	}
+
 	emac = prueth->emac[ICSS_SLICE0] ? prueth->emac[ICSS_SLICE0] :
 	       prueth->emac[ICSS_SLICE1];
 	ret = icss_iep_init(emac->iep, &prueth_iep_clockops,
@@ -323,6 +335,11 @@ static int prueth_emac_common_start(struct prueth *prueth)
 	return 0;
 
 stop_pruss:
+	for (slice = 0; slice < PRUETH_NUM_MACS; slice++) {
+		emac = prueth->emac[slice];
+		if (emac)
+			cancel_work_sync(&emac->rx_mode_work);
+	}
 	prueth_emac_stop(prueth);
 
 disable_class:
