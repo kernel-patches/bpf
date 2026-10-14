@@ -3,6 +3,7 @@
 #include <linux/interval_tree_generic.h>
 #include <linux/slab.h>
 #include <linux/bpf.h>
+#include <linux/err.h>
 #include "range_tree.h"
 
 /*
@@ -39,7 +40,28 @@ struct range_node {
 	u32 rn_start;
 	u32 rn_last; /* inclusive */
 	u32 __rn_subtree_last;
+	bool available; /* range is available for allocating. */
 };
+
+/* Is the range available for merging? */
+static inline bool range_available(struct range_node *rn)
+{
+	/* Pairs with smp_store_release() in range_node_mark_available(). */
+	return rn && smp_load_acquire(&rn->available);
+}
+
+/*
+ * Mark a node as available. Designed to be used locklessly
+ * as a last-ditch effort to avoid leaking unavailable range
+ * tree nodes when all attempts to directly or indirectly
+ * free an arena region has failed. See arena_free_pages()
+ * for more info.
+ */
+void range_node_mark_available(struct range_node *rn)
+{
+	/* Pairs with smp_load_acquire() in range_available(). */
+	smp_store_release(&rn->available, true);
+}
 
 static struct range_node *rb_to_range_node(struct rb_node *rb)
 {
@@ -55,20 +77,30 @@ static u32 rn_size(struct range_node *rn)
 static inline struct range_node *__find_range(struct range_tree *rt, u32 len)
 {
 	struct rb_node *rb = rt->range_size_root.rb_root.rb_node;
-	struct range_node *best = NULL;
+	struct rb_node *best = NULL;
+	struct range_node *rn;
 
 	while (rb) {
-		struct range_node *rn = rb_to_range_node(rb);
+		rn = rb_to_range_node(rb);
 
 		if (len <= rn_size(rn)) {
-			best = rn;
+			best = rb;
 			rb = rb->rb_right;
 		} else {
 			rb = rb->rb_left;
 		}
 	}
 
-	return best;
+	/* Filter unavailable ranges. */
+	while (best) {
+		rn = rb_to_range_node(best);
+		if (range_available(rn))
+			return rn;
+
+		best = rb_prev(best);
+	}
+
+	return NULL;
 }
 
 s64 range_tree_find(struct range_tree *rt, u32 len)
@@ -135,9 +167,18 @@ range_it_iter_first(struct range_tree *rt, u32 start, u32 last)
 /* Clear the range in this range tree */
 int range_tree_clear(struct range_tree *rt, u32 start, u32 len)
 {
+	u32 first = start;
 	u32 last = start + len - 1;
 	struct range_node *new_rn;
 	struct range_node *rn;
+
+	/* Scan for unavailable ranges and try again if so. */
+	while ((rn = range_it_iter_first(rt, first, last))) {
+		if (!range_available(rn))
+			return -EAGAIN;
+
+		first = rn->rn_last + 1;
+	}
 
 	while ((rn = range_it_iter_first(rt, start, last))) {
 		if (rn->rn_start < start && rn->rn_last > last) {
@@ -159,6 +200,7 @@ int range_tree_clear(struct range_tree *rt, u32 start, u32 len)
 			range_it_insert(rn, rt);
 
 			/* Add right-half range */
+			new_rn->available = rn->available;
 			new_rn->rn_start = last + 1;
 			new_rn->rn_last = old_last;
 			range_it_insert(new_rn, rt);
@@ -205,8 +247,103 @@ int is_range_tree_set(struct range_tree *rt, u32 start, u32 len)
 	return -ESRCH;
 }
 
+/* Do we have adjacent ranges (and do not overlap with them)? */
+static int range_get_adjacent(struct range_tree *rt, u32 start, u32 last,
+		struct range_node **leftp, struct range_node **rightp)
+{
+	struct range_node *right;
+	struct range_node *left;
+
+	/* Do we have a left-adjacent range ? */
+	left = start ? range_it_iter_first(rt, start - 1, start - 1) : NULL;
+	if (left && left->rn_last != start - 1)
+		return -EFAULT;
+
+	/* Do we have a right-adjacent range ? */
+	right = last != U32_MAX ? range_it_iter_first(rt, last + 1, last + 1) : NULL;
+	if (right && right->rn_start != last + 1)
+		return -EFAULT;
+
+	*leftp = left;
+	*rightp = right;
+
+	return 0;
+}
+
+/*
+ * Merge with adjacent available ranges if possible. The new [start, last]
+ * has already been confirmed to be adjacent with left/right by the caller.
+ */
+static int range_tree_merge(struct range_tree *rt, u32 start, u32 last,
+		struct range_node *left, struct range_node *right)
+{
+	if (range_available(left) && range_available(right)) {
+		/* Combine left and right adjacent ranges */
+		range_it_remove(left, rt);
+		range_it_remove(right, rt);
+		left->rn_last = right->rn_last;
+		range_it_insert(left, rt);
+		kfree_nolock(right);
+	} else if (range_available(left)) {
+		/* Combine with the left range */
+		range_it_remove(left, rt);
+		left->rn_last = last;
+		range_it_insert(left, rt);
+	} else if (range_available(right)) {
+		/* Combine with the right range */
+		range_it_remove(right, rt);
+		right->rn_start = start;
+		range_it_insert(right, rt);
+	} else {
+		/* No merge available. */
+		return -ENOENT;
+	}
+
+	return 0;
+}
+
+/* Make a range available, possibly merging. */
+int range_tree_make_avail(struct range_tree *rt, u32 start, u32 len)
+{
+	u32 last = start + len - 1;
+	struct range_node *rn;
+	struct range_node *right;
+	struct range_node *left;
+	int err;
+
+	/*
+	 * Confirm the range exists is unavailable,
+	 * and fits the requested range exactly.
+	 */
+	rn = range_it_iter_first(rt, start, last);
+	if (!rn || rn->available)
+		return -EINVAL;
+
+	if (rn->rn_start != start || rn->rn_last != last)
+		return -EINVAL;
+
+	err = range_get_adjacent(rt, start, last, &left, &right);
+	if (err)
+		return err;
+
+	/* If no merging required, just make available. */
+	if (!range_available(left) && !range_available(right)) {
+		rn->available = true;
+		return 0;
+	}
+
+	/* Can merge, remove the range already. */
+	start = rn->rn_start;
+	last = rn->rn_last;
+	range_it_remove(rn, rt);
+	kfree_nolock(rn);
+
+	return range_tree_merge(rt, start, last, left, right);
+}
+
 /* Set the range in this range tree */
-int range_tree_set(struct range_tree *rt, u32 start, u32 len)
+static int range_tree_set(struct range_tree *rt, u32 start, u32 len,
+			  bool available, struct range_node **new_rnp)
 {
 	u32 last = start + len - 1;
 	struct range_node *new_rn = NULL;
@@ -214,16 +351,21 @@ int range_tree_set(struct range_tree *rt, u32 start, u32 len)
 	struct range_node *left;
 	int err;
 
-	/* Is this whole range already set ? */
+	/* Already available: nothing to change. */
 	left = range_it_iter_first(rt, start, last);
-	if (left && left->rn_start <= start && left->rn_last >= last)
+	if (available && range_available(left) &&
+	    left->rn_start <= start && left->rn_last >= last)
 		return 0;
 
-	left = range_it_iter_first(rt, start - 1, start - 1);
-	right = range_it_iter_first(rt, last + 1, last + 1);
-	if (!left && !right) {
-		new_rn = kmalloc_nolock(sizeof(struct range_node),
-					__GFP_ACCOUNT, NUMA_NO_NODE);
+	/* Predict whether insertion needs a new node before clearing. */
+	left = start ? range_it_iter_first(rt, start - 1, start - 1) : NULL;
+	right = last != U32_MAX ? range_it_iter_first(rt, last + 1, last + 1) : NULL;
+
+	/* Unavailable ranges cannot merge. Allocate before changing the tree. */
+	if (!available ||
+	    (!range_available(left) && !range_available(right))) {
+		new_rn = kmalloc_nolock(sizeof(*new_rn), __GFP_ACCOUNT,
+					NUMA_NO_NODE);
 		if (!new_rn)
 			return -ENOMEM;
 	}
@@ -233,34 +375,48 @@ int range_tree_set(struct range_tree *rt, u32 start, u32 len)
 	if (err)
 		goto out_free_new;
 
-	if (left && right) {
-		/* Combine left and right adjacent ranges */
-		range_it_remove(left, rt);
-		range_it_remove(right, rt);
-		left->rn_last = right->rn_last;
-		range_it_insert(left, rt);
-		kfree_nolock(right);
-	} else if (left) {
-		/* Combine with the left range */
-		range_it_remove(left, rt);
-		left->rn_last = last;
-		range_it_insert(left, rt);
-	} else if (right) {
-		/* Combine with the right range */
-		range_it_remove(right, rt);
-		right->rn_start = start;
-		range_it_insert(right, rt);
-	} else {
-		/* No adjacent ranges; use the pre-allocated node */
-		new_rn->rn_start = start;
-		new_rn->rn_last = last;
-		range_it_insert(new_rn, rt);
+	/* Recompute adjacency: clearing may have trimmed or split nodes. */
+	err = range_get_adjacent(rt, start, last, &left, &right);
+	if (err)
+		goto out_free_new;
+
+	if (available &&
+	    (range_available(left) || range_available(right))) {
+		err = range_tree_merge(rt, start, last, left, right);
+		goto out_free_new;
 	}
+
+	/* No merge possible; transfer the reserved node to the tree. */
+	new_rn->available = available;
+	new_rn->rn_start = start;
+	new_rn->rn_last = last;
+	range_it_insert(new_rn, rt);
+	if (new_rnp)
+		*new_rnp = new_rn;
+
 	return 0;
 
 out_free_new:
 	kfree_nolock(new_rn);
 	return err;
+}
+
+int range_tree_set_avail(struct range_tree *rt, u32 start, u32 len)
+{
+	return range_tree_set(rt, start, len, true, NULL);
+}
+
+struct range_node *range_tree_set_unavail(struct range_tree *rt, u32 start, u32 len)
+{
+	struct range_node *rn = NULL;
+	int err;
+
+	err = range_tree_set(rt, start, len, false, &rn);
+	if (err)
+		return ERR_PTR(err);
+	if (WARN_ON_ONCE(!rn))
+		return ERR_PTR(-EINVAL);
+	return rn;
 }
 
 void range_tree_destroy(struct range_tree *rt)
