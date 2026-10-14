@@ -89,6 +89,7 @@ struct bpf_map_ops {
 	/* funcs callable from userspace (via syscall) */
 	int (*map_alloc_check)(union bpf_attr *attr);
 	struct bpf_map *(*map_alloc)(union bpf_attr *attr);
+	struct file *(*map_get_file)(struct bpf_map *map, int flags);
 	void (*map_release)(struct bpf_map *map, struct file *map_file);
 	void (*map_free)(struct bpf_map *map);
 	void (*map_free_pre_rcu)(struct bpf_map *map);

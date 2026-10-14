@@ -1209,6 +1209,8 @@ int bpf_map_new_fd(struct bpf_map *map, int flags)
 	if (ret < 0)
 		return ret;
 
+	if (map->ops->map_get_file)
+		return FD_ADD(flags | O_CLOEXEC, map->ops->map_get_file(map, flags));
 	return anon_inode_getfd("bpf-map", &bpf_map_fops, map,
 				flags | O_CLOEXEC);
 }
