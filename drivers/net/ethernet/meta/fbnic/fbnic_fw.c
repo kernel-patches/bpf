@@ -1738,8 +1738,10 @@ static int fbnic_fw_parse_threshold_exceeded_resp(void *opaque,
 				alarm, value);
 
 		/* Old firmware reports no range, leave the cache alone */
-		if (alarm != FBNIC_FW_TSENE_ALARM_DEPRECATED)
+		if (alarm != FBNIC_FW_TSENE_ALARM_DEPRECATED) {
 			WRITE_ONCE(fbd->hwmon_cache.temp_alarm, alarm);
+			fbnic_hwmon_notify_event(fbd, FBNIC_SENSOR_TEMP);
+		}
 		rec_flag = true;
 	}
 
@@ -1756,8 +1758,10 @@ static int fbnic_fw_parse_threshold_exceeded_resp(void *opaque,
 				alarm, value);
 
 		/* Old firmware reports no range, leave the cache alone */
-		if (alarm != FBNIC_FW_TSENE_ALARM_DEPRECATED)
+		if (alarm != FBNIC_FW_TSENE_ALARM_DEPRECATED) {
 			WRITE_ONCE(fbd->hwmon_cache.volt_alarm, alarm);
+			fbnic_hwmon_notify_event(fbd, FBNIC_SENSOR_VOLTAGE);
+		}
 		rec_flag = true;
 	}
 

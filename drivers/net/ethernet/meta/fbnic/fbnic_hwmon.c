@@ -29,6 +29,10 @@ static umode_t fbnic_hwmon_is_visible(const void *drvdata,
 			return fbnic_hwmon_thr_visible(fbd->fw_cap.temp.max);
 		case hwmon_temp_crit:
 			return fbnic_hwmon_thr_visible(fbd->fw_cap.temp.crit);
+		case hwmon_temp_alarm:
+			return fbnic_hwmon_thr_visible(fbd->fw_cap.temp.min) &
+			       fbnic_hwmon_thr_visible(fbd->fw_cap.temp.max) &
+			       fbnic_hwmon_thr_visible(fbd->fw_cap.temp.crit);
 		}
 		break;
 	case hwmon_in:
@@ -39,6 +43,9 @@ static umode_t fbnic_hwmon_is_visible(const void *drvdata,
 			return fbnic_hwmon_thr_visible(fbd->fw_cap.volt.min);
 		case hwmon_in_max:
 			return fbnic_hwmon_thr_visible(fbd->fw_cap.volt.max);
+		case hwmon_in_alarm:
+			return fbnic_hwmon_thr_visible(fbd->fw_cap.volt.min) &
+			       fbnic_hwmon_thr_visible(fbd->fw_cap.volt.max);
 		}
 		break;
 	default:
@@ -120,6 +127,74 @@ static int fbnic_hwmon_read_threshold(long thr, long *val)
 	return 0;
 }
 
+static bool fbnic_hwmon_at_or_above(long val, s32 thr)
+{
+	return thr != FBNIC_SENSOR_NO_DATA && val >= thr;
+}
+
+static bool fbnic_hwmon_below(long val, s32 thr)
+{
+	return thr != FBNIC_SENSOR_NO_DATA && val < thr;
+}
+
+static u8 fbnic_hwmon_classify(const struct fbnic_threshold *thr, long val)
+{
+	if (fbnic_hwmon_at_or_above(val, thr->crit))
+		return FBNIC_FW_TSENE_ALARM_CRIT;
+	if (fbnic_hwmon_at_or_above(val, thr->max))
+		return FBNIC_FW_TSENE_ALARM_ABOVE_MAX;
+	if (fbnic_hwmon_below(val, thr->min))
+		return FBNIC_FW_TSENE_ALARM_BELOW_MIN;
+
+	return FBNIC_FW_TSENE_ALARM_NORMAL;
+}
+
+static int fbnic_hwmon_alarm_read(struct fbnic_dev *fbd,
+				  enum hwmon_sensor_types type, long *val)
+{
+	struct fbnic_hwmon_cache *cache = &fbd->hwmon_cache;
+	const struct fbnic_threshold *thr;
+	u8 *cached, alarm;
+	long reading;
+	int id, err;
+
+	switch (type) {
+	case hwmon_temp:
+		thr = &fbd->fw_cap.temp;
+		cached = &cache->temp_alarm;
+		id = FBNIC_SENSOR_TEMP;
+		break;
+	case hwmon_in:
+		thr = &fbd->fw_cap.volt;
+		cached = &cache->volt_alarm;
+		id = FBNIC_SENSOR_VOLTAGE;
+		break;
+	default:
+		return -EOPNOTSUPP;
+	}
+
+	/* Paired with WRITE_ONCE() on the mailbox thread. Firmware only
+	 * reports on a threshold crossing, so nothing is cached until the
+	 * first one. Read the sensor, whose response carries the range.
+	 */
+	alarm = READ_ONCE(*cached);
+	if (alarm == FBNIC_FW_TSENE_ALARM_UNKNOWN) {
+		err = fbnic_hwmon_sensor_read(fbd, id, &reading);
+		if (err)
+			return err;
+
+		alarm = READ_ONCE(*cached);
+
+		/* Firmware too old to report a range, derive it instead */
+		if (alarm == FBNIC_FW_TSENE_ALARM_UNKNOWN)
+			alarm = fbnic_hwmon_classify(thr, reading);
+	}
+
+	*val = alarm != FBNIC_FW_TSENE_ALARM_NORMAL;
+
+	return 0;
+}
+
 static int fbnic_hwmon_temp_read(struct fbnic_dev *fbd, u32 attr, long *val)
 {
 	switch (attr) {
@@ -131,6 +206,8 @@ static int fbnic_hwmon_temp_read(struct fbnic_dev *fbd, u32 attr, long *val)
 		return fbnic_hwmon_read_threshold(fbd->fw_cap.temp.max, val);
 	case hwmon_temp_crit:
 		return fbnic_hwmon_read_threshold(fbd->fw_cap.temp.crit, val);
+	case hwmon_temp_alarm:
+		return fbnic_hwmon_alarm_read(fbd, hwmon_temp, val);
 	default:
 		return -EOPNOTSUPP;
 	}
@@ -145,6 +222,8 @@ static int fbnic_hwmon_in_read(struct fbnic_dev *fbd, u32 attr, long *val)
 		return fbnic_hwmon_read_threshold(fbd->fw_cap.volt.min, val);
 	case hwmon_in_max:
 		return fbnic_hwmon_read_threshold(fbd->fw_cap.volt.max, val);
+	case hwmon_in_alarm:
+		return fbnic_hwmon_alarm_read(fbd, hwmon_in, val);
 	default:
 		return -EOPNOTSUPP;
 	}
@@ -172,10 +251,11 @@ static const struct hwmon_ops fbnic_hwmon_ops = {
 
 static const struct hwmon_channel_info *fbnic_hwmon_info[] = {
 	HWMON_CHANNEL_INFO(temp,
-			   HWMON_T_INPUT | HWMON_T_MIN | HWMON_T_MAX |
-			   HWMON_T_CRIT),
+			   HWMON_T_INPUT | HWMON_T_ALARM |
+			   HWMON_T_MIN | HWMON_T_MAX | HWMON_T_CRIT),
 	HWMON_CHANNEL_INFO(in,
-			   HWMON_I_INPUT | HWMON_I_MIN | HWMON_I_MAX),
+			   HWMON_I_INPUT | HWMON_I_ALARM |
+			   HWMON_I_MIN | HWMON_I_MAX),
 	NULL
 };
 
@@ -186,25 +266,69 @@ static const struct hwmon_chip_info fbnic_chip_info = {
 
 void fbnic_hwmon_register(struct fbnic_dev *fbd)
 {
+	struct device *hwmon;
+
 	if (!IS_REACHABLE(CONFIG_HWMON))
 		return;
 
-	fbd->hwmon = hwmon_device_register_with_info(fbd->dev, "fbnic",
-						     fbd, &fbnic_chip_info,
-						     NULL);
-	if (IS_ERR(fbd->hwmon)) {
+	hwmon = hwmon_device_register_with_info(fbd->dev, "fbnic",
+						fbd, &fbnic_chip_info,
+						NULL);
+	if (IS_ERR(hwmon)) {
 		dev_notice(fbd->dev,
 			   "Failed to register hwmon device %pe\n",
-			   fbd->hwmon);
-		fbd->hwmon = NULL;
+			   hwmon);
+		return;
 	}
+
+	WRITE_ONCE(fbd->hwmon, hwmon);
 }
 
 void fbnic_hwmon_unregister(struct fbnic_dev *fbd)
 {
+	struct device *hwmon;
+
 	if (!IS_REACHABLE(CONFIG_HWMON) || !fbd->hwmon)
 		return;
 
-	hwmon_device_unregister(fbd->hwmon);
-	fbd->hwmon = NULL;
+	hwmon = fbd->hwmon;
+	/* Pair with READ_ONCE() in fbnic_hwmon_notify_event(). Publish NULL
+	 * and wait for any in-flight FW mailbox IRQ handler to finish so it
+	 * cannot dereference the hwmon device after we unregister it.
+	 */
+	WRITE_ONCE(fbd->hwmon, NULL);
+	synchronize_irq(fbd->fw_msix_vector);
+
+	hwmon_device_unregister(hwmon);
+}
+
+void fbnic_hwmon_notify_event(struct fbnic_dev *fbd, int id)
+{
+	enum hwmon_sensor_types type;
+	struct device *hwmon;
+	u32 attr;
+
+	if (!IS_REACHABLE(CONFIG_HWMON))
+		return;
+
+	switch (id) {
+	case FBNIC_SENSOR_TEMP:
+		type = hwmon_temp;
+		attr = hwmon_temp_alarm;
+		break;
+	case FBNIC_SENSOR_VOLTAGE:
+		type = hwmon_in;
+		attr = hwmon_in_alarm;
+		break;
+	default:
+		return;
+	}
+
+	/* Pair with WRITE_ONCE() in fbnic_hwmon_unregister(). Skip the
+	 * notification if hwmon failed to register or has already been torn
+	 * down.
+	 */
+	hwmon = READ_ONCE(fbd->hwmon);
+	if (hwmon)
+		hwmon_notify_event(hwmon, type, attr, 0);
 }
