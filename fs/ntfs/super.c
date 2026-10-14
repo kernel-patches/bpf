@@ -441,13 +441,12 @@ void ntfs_handle_error(struct super_block *sb)
 			sb->s_flags |= SB_RDONLY;
 		} else {
 			/*
-			 * NV_EmergencyRO makes the volume refuse modifications
-			 * instead and NV_Errors keeps it from being remounted
-			 * read-write. The error work marks the volume dirty on
-			 * disk.
+			 * SB_RDONLY needs s_umount, see sb_set_emergency_ro().
+			 * NV_Errors keeps the volume from being remounted
+			 * read-write and the error work marks it dirty.
 			 */
 			NVolSetErrors(vol);
-			if (test_and_set_bit(NV_EmergencyRO, &vol->flags))
+			if (!sb_set_emergency_ro(sb))
 				return;
 			queue_work(ntfs_wq, &vol->error_work);
 		}
@@ -2271,6 +2270,11 @@ int ntfs_force_shutdown(struct super_block *sb, u32 flags)
 
 	if (NVolShutdown(vol))
 		return 0;
+
+	/* After an error there is nothing to flush and freezing fails. */
+	if ((flags == FS_SHUTDOWN_FLAGS_DEFAULT ||
+	     flags == FS_SHUTDOWN_FLAGS_LOGFLUSH) && sb_emergency_ro(sb))
+		flags = FS_SHUTDOWN_FLAGS_NOLOGFLUSH;
 
 	switch (flags) {
 	case FS_SHUTDOWN_FLAGS_DEFAULT:
