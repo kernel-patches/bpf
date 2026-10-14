@@ -865,6 +865,12 @@ static int bpf_iter_attach_map(struct bpf_prog *prog,
 	if (map->map_type != BPF_MAP_TYPE_SK_STORAGE)
 		goto put_map;
 
+	/* The iterator exposes values as raw buffers, bypassing field checks. */
+	if (map->record && prog->aux->max_rdwr_access) {
+		err = -EACCES;
+		goto put_map;
+	}
+
 	if (prog->aux->max_rdwr_access > map->value_size) {
 		err = -EACCES;
 		goto put_map;
