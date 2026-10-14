@@ -64,9 +64,10 @@ struct vsock_sock {
 	bool sent_request;
 	bool ignore_connecting_rst;
 	/*
-	 * Initial callback, used to identify replacements and deliver deferred
-	 * write-space notifications.
+	 * Initial callbacks, used to identify replacements and deliver deferred
+	 * notifications.
 	 */
+	void (*default_data_ready)(struct sock *sk);
 	void (*default_write_space)(struct sock *sk);
 
 	/* Protected by lock_sock(sk) */
