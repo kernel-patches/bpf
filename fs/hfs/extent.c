@@ -357,7 +357,7 @@ int hfs_get_block(struct inode *inode, sector_t block,
 			return -EIO;
 		if (ablock >= HFS_I(inode)->alloc_blocks) {
 			/* No new allocations after an error. */
-			if (unlikely(hfs_emergency_ro(sb)))
+			if (unlikely(sb_emergency_ro(sb)))
 				return -EROFS;
 			res = hfs_extend_file(inode);
 			if (res)
@@ -513,7 +513,7 @@ void hfs_file_truncate(struct inode *inode)
 	} else if (inode->i_size == HFS_I(inode)->phys_size)
 		return;
 	/* No frees after an error, hfs_write_begin() refuses expanding. */
-	if (unlikely(hfs_emergency_ro(sb)))
+	if (unlikely(sb_emergency_ro(sb)))
 		return;
 	size = inode->i_size + HFS_SB(sb)->alloc_blksz - 1;
 	blk_cnt = size / HFS_SB(sb)->alloc_blksz;

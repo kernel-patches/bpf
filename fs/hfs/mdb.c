@@ -338,7 +338,7 @@ int hfs_mdb_commit(struct super_block *sb)
 	struct hfs_mdb *mdb = HFS_SB(sb)->mdb;
 	int ret = 0;
 
-	if (sb_rdonly(sb) || hfs_emergency_ro(sb))
+	if (sb_rdonly_any(sb))
 		return 0;
 
 	/*
@@ -347,7 +347,7 @@ int hfs_mdb_commit(struct super_block *sb)
 	 */
 	if (!buffer_uptodate(HFS_SB(sb)->mdb_bh)) {
 		pr_err("primary MDB is corrupt, mounting read-only\n");
-		set_bit(HFS_FLG_EMERGENCY_RO, &HFS_SB(sb)->flags);
+		sb_set_emergency_ro(sb);
 		return -EIO;
 	}
 
@@ -381,7 +381,7 @@ int hfs_mdb_commit(struct super_block *sb)
 	    HFS_SB(sb)->alt_mdb) {
 		if (!buffer_uptodate(HFS_SB(sb)->alt_mdb_bh)) {
 			pr_err("alternate MDB is corrupt, mounting read-only\n");
-			set_bit(HFS_FLG_EMERGENCY_RO, &HFS_SB(sb)->flags);
+			sb_set_emergency_ro(sb);
 			ret = -EIO;
 			goto out;
 		}
@@ -432,7 +432,7 @@ out:
 void hfs_mdb_close(struct super_block *sb)
 {
 	/* update volume attributes */
-	if (sb_rdonly(sb) || hfs_emergency_ro(sb))
+	if (sb_rdonly_any(sb))
 		return;
 
 	if (!buffer_uptodate(HFS_SB(sb)->mdb_bh))

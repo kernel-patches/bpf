@@ -189,9 +189,6 @@ static int hfs_create(const struct mnt_idmap *idmap, struct inode *dir,
 	struct inode *inode;
 	int res;
 
-	if (unlikely(hfs_emergency_ro(dir->i_sb)))
-		return -EROFS;
-
 	inode = hfs_new_inode(dir, &dentry->d_name, mode);
 	if (IS_ERR(inode))
 		return PTR_ERR(inode);
@@ -221,9 +218,6 @@ static struct dentry *hfs_mkdir(const struct mnt_idmap *idmap, struct inode *dir
 {
 	struct inode *inode;
 	int res;
-
-	if (unlikely(hfs_emergency_ro(dir->i_sb)))
-		return ERR_PTR(-EROFS);
 
 	inode = hfs_new_inode(dir, &dentry->d_name, mode);
 	if (IS_ERR(inode))
@@ -257,9 +251,6 @@ static int hfs_remove(struct inode *dir, struct dentry *dentry)
 	struct super_block *sb = dir->i_sb;
 	struct inode *inode = d_inode(dentry);
 	int res;
-
-	if (unlikely(hfs_emergency_ro(sb)))
-		return -EROFS;
 
 	if (S_ISDIR(inode->i_mode) && inode->i_size != 2)
 		return -ENOTEMPTY;
@@ -298,9 +289,6 @@ static int hfs_rename(const struct mnt_idmap *idmap, struct inode *old_dir,
 
 	if (flags & ~RENAME_NOREPLACE)
 		return -EINVAL;
-
-	if (unlikely(hfs_emergency_ro(old_dir->i_sb)))
-		return -EROFS;
 
 	/* Unlink destination if it already exists */
 	if (d_really_is_positive(new_dentry)) {
