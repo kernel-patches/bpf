@@ -100,4 +100,27 @@ int BPF_PROG(inode_rename, struct inode *old_dir, struct dentry *old_dentry,
 	return 0;
 }
 
+SEC("lsm.s/bprm_committed_creds")
+__success
+int BPF_PROG(trusted_field_used_in_rcu_cs, struct linux_binprm *bprm)
+{
+	struct mm_struct *mm = bprm->mm;
+	struct inode *inode;
+	struct file *file;
+	ino_t ino = 0;
+
+	if (!mm)
+		return 0;
+
+	bpf_rcu_read_lock();
+	file = mm->exe_file;
+	if (file) {
+		inode = file->f_inode;
+		ino = inode->i_ino;
+	}
+	bpf_rcu_read_unlock();
+	__sink(ino);
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";
