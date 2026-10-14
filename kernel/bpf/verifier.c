@@ -6634,6 +6634,7 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 	const char *tname = btf_name_by_offset(reg->btf, t->name_off);
 	const char *field_name = NULL;
 	enum bpf_type_flag flag = 0;
+	u32 parent_id = 0;
 	u32 btf_id = 0;
 	s64 min_off;
 	int ret;
@@ -6791,6 +6792,11 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 			 */
 			flag = PTR_UNTRUSTED;
 		}
+
+		/* A trusted field is pinned by whatever pins its parent. */
+		if (flag & PTR_TRUSTED)
+			parent_id = reg_is_referenced(env, reg) ? reg->id :
+								  reg->parent_id;
 	} else {
 		/* Old compat. Deprecated */
 		clear_trusted_flags(&flag);
@@ -6810,6 +6816,7 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 		ret = mark_btf_ld_reg(env, regs, value_regno, ret, reg->btf, btf_id, flag);
 		if (ret < 0)
 			return ret;
+		regs[value_regno].parent_id = parent_id;
 	}
 
 	return 0;
