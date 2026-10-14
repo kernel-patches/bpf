@@ -257,6 +257,104 @@ __naked void atomics(void)
 }
 
 SEC("syscall")
+__flag(BPF_F_ARENA_SCALAR) __arch_arm64
+__description("arena_scalar: fetching and/or/xor")
+__success __retval(0)
+__load_if_JITed()
+__naked void fetch_and_or_xor(void)
+{
+	asm volatile ("					\
+	r1 = %[arena] ll;				\
+	r2 = 0;						\
+	r3 = 1;						\
+	r4 = -1;					\
+	r5 = 0;						\
+	call %[bpf_arena_alloc_pages];			\
+	r6 = r0;					\
+	r0 = 100;					\
+	if r6 == 0 goto 9f;				\
+	*(u64 *)(r6 + 8) = 0x110;			\
+	r1 = 0x011;					\
+	.8byte %[fetch_or_insn]; /* r1 = atomic_fetch_or((u64 *)(r6 + 8), r1) */ \
+	r0 = 1;						\
+	if r1 != 0x110 goto 9f;				\
+	r1 = 0x101;					\
+	.8byte %[fetch_and_insn]; /* r1 = atomic_fetch_and((u64 *)(r6 + 8), r1) */ \
+	r0 = 2;						\
+	if r1 != 0x111 goto 9f;				\
+	r1 = 0x011;					\
+	.8byte %[fetch_xor_insn]; /* r1 = atomic_fetch_xor((u64 *)(r6 + 8), r1) */ \
+	r0 = 3;						\
+	if r1 != 0x101 goto 9f;				\
+	r2 = *(u64 *)(r6 + 8);				\
+	r0 = 4;						\
+	if r2 != 0x110 goto 9f;				\
+	r0 = 0;						\
+9:	exit;						\
+"	:
+	: __imm_addr(arena),
+	  __imm(bpf_arena_alloc_pages),
+	  __imm_insn(fetch_or_insn, BPF_ATOMIC_OP(BPF_DW, BPF_OR | BPF_FETCH,
+						  BPF_REG_6, BPF_REG_1, 8)),
+	  __imm_insn(fetch_and_insn, BPF_ATOMIC_OP(BPF_DW, BPF_AND | BPF_FETCH,
+						   BPF_REG_6, BPF_REG_1, 8)),
+	  __imm_insn(fetch_xor_insn, BPF_ATOMIC_OP(BPF_DW, BPF_XOR | BPF_FETCH,
+						   BPF_REG_6, BPF_REG_1, 8))
+	: __clobber_all);
+}
+
+/*
+ * The x86-64 JIT saves R0 in BPF_REG_AX to lower these, which is where an
+ * access through a number keeps its address, so it refuses them.
+ */
+SEC("syscall")
+__flag(BPF_F_ARENA_SCALAR) __arch_x86_64
+__description("arena_scalar: fetching and/or/xor refused on x86-64")
+__failure
+__load_if_JITed()
+__naked void fetch_and_or_xor_x86(void)
+{
+	asm volatile ("					\
+	r1 = %[arena] ll;				\
+	r2 = 0;						\
+	r3 = 1;						\
+	r4 = -1;					\
+	r5 = 0;						\
+	call %[bpf_arena_alloc_pages];			\
+	r6 = r0;					\
+	r0 = 100;					\
+	if r6 == 0 goto 9f;				\
+	*(u64 *)(r6 + 8) = 0x110;			\
+	r1 = 0x011;					\
+	.8byte %[fetch_or_insn]; /* r1 = atomic_fetch_or((u64 *)(r6 + 8), r1) */ \
+	r0 = 1;						\
+	if r1 != 0x110 goto 9f;				\
+	r1 = 0x101;					\
+	.8byte %[fetch_and_insn]; /* r1 = atomic_fetch_and((u64 *)(r6 + 8), r1) */ \
+	r0 = 2;						\
+	if r1 != 0x111 goto 9f;				\
+	r1 = 0x011;					\
+	.8byte %[fetch_xor_insn]; /* r1 = atomic_fetch_xor((u64 *)(r6 + 8), r1) */ \
+	r0 = 3;						\
+	if r1 != 0x101 goto 9f;				\
+	r2 = *(u64 *)(r6 + 8);				\
+	r0 = 4;						\
+	if r2 != 0x110 goto 9f;				\
+	r0 = 0;						\
+9:	exit;						\
+"	:
+	: __imm_addr(arena),
+	  __imm(bpf_arena_alloc_pages),
+	  __imm_insn(fetch_or_insn, BPF_ATOMIC_OP(BPF_DW, BPF_OR | BPF_FETCH,
+						  BPF_REG_6, BPF_REG_1, 8)),
+	  __imm_insn(fetch_and_insn, BPF_ATOMIC_OP(BPF_DW, BPF_AND | BPF_FETCH,
+						   BPF_REG_6, BPF_REG_1, 8)),
+	  __imm_insn(fetch_xor_insn, BPF_ATOMIC_OP(BPF_DW, BPF_XOR | BPF_FETCH,
+						   BPF_REG_6, BPF_REG_1, 8))
+	: __clobber_all);
+}
+
+SEC("syscall")
 __arena_scalar
 __description("arena_scalar: cmpxchg through r0")
 __success __retval(0)
