@@ -20,6 +20,7 @@ struct mtk_port_ops {
 	void (*enable)(struct mtk_port *port);
 	void (*disable)(struct mtk_port *port);
 	int (*recv)(struct mtk_port *port, struct sk_buff *skb);
+	void (*tx_complete)(struct mtk_port *port);
 };
 
 const struct mtk_port_ops *mtk_port_get_ops(enum mtk_port_type type);
