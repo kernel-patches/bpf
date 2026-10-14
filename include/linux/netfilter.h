@@ -67,6 +67,14 @@ static inline void nf_inet_addr_mask(const union nf_inet_addr *a1,
 #endif
 }
 
+/* The bridge fills this in for the flowtable, which must not depend on it. */
+struct nf_br_utils {
+	bool (*fdb_moved)(struct net *net, int ifindex,
+			  const unsigned char *addr, u16 vid);
+};
+
+extern const struct nf_br_utils __rcu *nf_br_utils_hook;
+
 int netfilter_init(void);
 
 struct sk_buff;
