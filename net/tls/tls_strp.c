@@ -11,7 +11,7 @@
 
 #include "tls.h"
 
-static struct workqueue_struct *tls_strp_wq;
+struct workqueue_struct *tls_strp_wq;
 
 void tls_strp_abort_strp(struct tls_strparser *strp, int err)
 {
