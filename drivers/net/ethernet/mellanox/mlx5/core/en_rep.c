@@ -416,7 +416,8 @@ static u32 mlx5e_rep_get_rxfh_indir_size(struct net_device *netdev)
 static const struct ethtool_ops mlx5e_rep_ethtool_ops = {
 	.supported_coalesce_params = ETHTOOL_COALESCE_USECS |
 				     ETHTOOL_COALESCE_MAX_FRAMES |
-				     ETHTOOL_COALESCE_USE_ADAPTIVE,
+				     ETHTOOL_COALESCE_USE_ADAPTIVE |
+				     ETHTOOL_COALESCE_USE_CQE,
 	.op_needs_rtnl	   = ETHTOOL_OP_NEEDS_RTNL_SCHANNELS |
 			     ETHTOOL_OP_NEEDS_RTNL_SRINGPARAM |
 			     ETHTOOL_OP_NEEDS_RTNL_GLINK,
