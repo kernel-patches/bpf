@@ -147,10 +147,9 @@ struct nfs4_stid {
 /*
  * nn->deleg_lock protects sc_status for hashed delegation stateids.
  * ->cl_lock protects the bits set as one is disposed of
- * (SC_STATUS_CLOSED, SC_STATUS_FREEABLE, SC_STATUS_FREED) and
- * sc_status for open and lock stateids. ->st_mutex also protects
- * sc_status for open stateids. ->ls_lock protects sc_status for
- * layout stateids.
+ * (SC_STATUS_CLOSED, SC_STATUS_FREEABLE, SC_STATUS_FREED) and sc_status for
+ * open, lock, and layout stateids. ->st_mutex also protects sc_status for
+ * open stateids.
  */
 /*
  * For an open stateid kept around *only* to process close replays.
@@ -161,6 +160,7 @@ struct nfs4_stid {
 #define SC_STATUS_REVOKED	BIT(1)
 #define SC_STATUS_ADMIN_REVOKED	BIT(2)
 #define SC_STATUS_FREEABLE	BIT(3)
+/* Disposal has begun. References may still be in flight. */
 #define SC_STATUS_FREED		BIT(4)
 	unsigned short		sc_status;
 

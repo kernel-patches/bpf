@@ -5849,6 +5849,17 @@ static void nfsd4_drop_revoked_stid(struct nfs4_stid *s)
 	struct nfs4_delegation *dp;
 	bool unhashed;
 
+	/*
+	 * A disposed stateid stays in the IDR while references to it are in
+	 * flight, so a second call can find it here. CLOSED cannot mark the
+	 * first call: a revoked delegation is already closed.
+	 */
+	if (s->sc_status & SC_STATUS_FREED) {
+		spin_unlock(&cl->cl_lock);
+		return;
+	}
+	s->sc_status |= SC_STATUS_FREED;
+
 	switch (s->sc_type) {
 	case SC_TYPE_OPEN:
 		stp = openlockstateid(s);
@@ -5867,15 +5878,26 @@ static void nfsd4_drop_revoked_stid(struct nfs4_stid *s)
 	case SC_TYPE_DELEG:
 		dp = delegstateid(s);
 		list_del_init(&dp->dl_recall_lru);
-		s->sc_status |= SC_STATUS_FREED;
 		spin_unlock(&cl->cl_lock);
 		nfs4_put_stid(s);
 		break;
 	case SC_TYPE_LAYOUT:
 		ls = layoutstateid(s);
+		s->sc_status |= SC_STATUS_CLOSED;
+		/*
+		 * The IDR holds no reference on a layout stateid. Take one to
+		 * keep ls alive while the fence worker and the segments drain.
+		 * A count already at zero is a final put waiting on cl_lock;
+		 * it removes ls from the IDR and the list itself.
+		 */
+		if (!refcount_inc_not_zero(&s->sc_count)) {
+			spin_unlock(&cl->cl_lock);
+			break;
+		}
 		list_del_init(&ls->ls_perclnt);
 		spin_unlock(&cl->cl_lock);
 		nfsd4_stop_layout_fence(ls);
+		nfsd4_return_revoked_layout(ls);
 		nfs4_put_stid(s);
 		break;
 	default:
@@ -7901,6 +7923,8 @@ retry:
 		unsigned long id, tmp;
 		struct nfs4_stid *stid;
 
+		if (clp->cl_minorversion != 0)
+			continue;
 		if (atomic_read(&clp->cl_admin_revoked) == 0)
 			continue;
 		if (is_client_expired(clp))
@@ -7908,7 +7932,8 @@ retry:
 
 		spin_lock(&clp->cl_lock);
 		idr_for_each_entry_ul(&clp->cl_stateids, stid, tmp, id)
-			if (stid->sc_status & SC_STATUS_ADMIN_REVOKED) {
+			if ((stid->sc_status & SC_STATUS_ADMIN_REVOKED) &&
+			    !(stid->sc_status & SC_STATUS_FREED)) {
 				refcount_inc(&stid->sc_count);
 				atomic_inc(&clp->cl_rpc_users);
 				spin_unlock(&nn->client_lock);
@@ -8340,7 +8365,7 @@ static __be32 nfsd4_validate_stateid(struct nfs4_client *cl, stateid_t *stateid)
 		return status;
 	spin_lock(&cl->cl_lock);
 	s = find_stateid_locked(cl, stateid);
-	if (!s)
+	if (!s || s->sc_status & SC_STATUS_FREED)
 		goto out_unlock;
 	status = nfsd4_stid_check_stateid_generation(stateid, s, 1);
 	if (status)
@@ -8725,7 +8750,7 @@ nfsd4_free_stateid(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 
 	spin_lock(&cl->cl_lock);
 	s = find_stateid_locked(cl, stateid);
-	if (!s || s->sc_status & SC_STATUS_CLOSED)
+	if (!s || s->sc_status & (SC_STATUS_CLOSED | SC_STATUS_FREED))
 		goto out_unlock;
 	if (s->sc_status & SC_STATUS_ADMIN_REVOKED) {
 		nfsd4_drop_revoked_stid(s);

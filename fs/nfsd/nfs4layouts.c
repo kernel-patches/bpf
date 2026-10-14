@@ -312,6 +312,7 @@ nfsd4_preprocess_layout_stateid(struct svc_rqst *rqstp,
 		status = nfserr_jukebox;
 		if (!ls)
 			goto out;
+		stid = &ls->ls_stid;
 		mutex_lock(&ls->ls_mutex);
 	} else {
 		ls = container_of(stid, struct nfs4_layout_stateid, ls_stid);
@@ -323,6 +324,15 @@ nfsd4_preprocess_layout_stateid(struct svc_rqst *rqstp,
 		if (layout_type != ls->ls_layout_type)
 			goto out_unlock_stid;
 	}
+
+	/* Revocation can close the stateid before ls_mutex is taken. */
+	spin_lock(&stid->sc_client->cl_lock);
+	if (stid->sc_status & SC_STATUS_CLOSED) {
+		spin_unlock(&stid->sc_client->cl_lock);
+		status = nfserr_bad_stateid;
+		goto out_unlock_stid;
+	}
+	spin_unlock(&stid->sc_client->cl_lock);
 
 	*lsp = ls;
 	return 0;
@@ -537,11 +547,17 @@ nfsd4_return_file_layouts(struct svc_rqst *rqstp,
 			nfs4_inc_and_copy_stateid(&lrp->lr_sid, &ls->ls_stid);
 		lrp->lrs_present = true;
 	} else {
-		trace_nfsd_layoutstate_unhash(&ls->ls_stid.sc_stateid);
-		ls->ls_stid.sc_status |= SC_STATUS_CLOSED;
 		lrp->lrs_present = false;
 	}
 	spin_unlock(&ls->ls_lock);
+
+	if (!lrp->lrs_present) {
+		/* ls_mutex prevents a LAYOUTGET from adding another segment. */
+		spin_lock(&ls->ls_stid.sc_client->cl_lock);
+		ls->ls_stid.sc_status |= SC_STATUS_CLOSED;
+		spin_unlock(&ls->ls_stid.sc_client->cl_lock);
+		trace_nfsd_layoutstate_unhash(&ls->ls_stid.sc_stateid);
+	}
 
 	mutex_unlock(&ls->ls_mutex);
 	nfs4_put_stid(&ls->ls_stid);
@@ -592,6 +608,17 @@ nfsd4_return_all_layouts(struct nfs4_layout_stateid *ls,
 	spin_lock(&ls->ls_lock);
 	list_splice_init(&ls->ls_layouts, reaplist);
 	spin_unlock(&ls->ls_lock);
+}
+
+void nfsd4_return_revoked_layout(struct nfs4_layout_stateid *ls)
+{
+	LIST_HEAD(reaplist);
+
+	/* Wait out any LAYOUTGET that passed the CLOSED check. */
+	mutex_lock(&ls->ls_mutex);
+	nfsd4_return_all_layouts(ls, &reaplist);
+	mutex_unlock(&ls->ls_mutex);
+	nfsd4_free_layouts(&reaplist);
 }
 
 void
