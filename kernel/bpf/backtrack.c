@@ -4,6 +4,7 @@
 #include <linux/bpf_verifier.h>
 #include <linux/filter.h>
 #include <linux/bitmap.h>
+#include "exception.h"
 
 #define verbose(env, fmt, args...) bpf_verifier_log_write(env, fmt, ##args)
 
@@ -424,7 +425,31 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 		if (class == BPF_STX)
 			bt_set_reg(bt, sreg);
 	} else if (class == BPF_JMP || class == BPF_JMP32) {
-		if (bpf_pseudo_call(insn) || bpf_is_callx(insn)) {
+		if (hist && (hist->flags & INSN_F_UNWIND)) {
+			/*
+			 * A bpf_unwind(), a resume or an unwinding global call
+			 * left frame hist->frame here, for a landing pad in
+			 * this one, or for the main frame's exit, which is
+			 * this frame itself when it is the main one. The walk
+			 * crosses back into that frame, past any frames
+			 * between, which were entered and never returned
+			 * from. The pad found r0 unknown and r1-r5 clobbered;
+			 * r6-r9 and the stack are this frame's own and stay
+			 * marked in its masks until the walk comes back out.
+			 */
+			bt_clear_reg(bt, BPF_REG_0);
+			if (bt_reg_mask(bt) & BPF_REGMASK_ARGS) {
+				verifier_bug(env, "backtracking unwind unexpected regs %x",
+					     bt_reg_mask(bt));
+				return -EFAULT;
+			}
+			if (verifier_bug_if(hist->frame < bt->frame, env,
+					    "unwind from frame %d to frame %d",
+					    hist->frame, bt->frame))
+				return -EFAULT;
+			bt->frame = hist->frame;
+			return 0;
+		} else if (bpf_pseudo_call(insn) || bpf_is_callx(insn)) {
 			int subprog_insn_idx, subprog = -1;
 
 			if (bpf_pseudo_call(insn)) {
@@ -440,10 +465,17 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 				 * extra instructions from subprog; the next
 				 * instruction after call to global subprog
 				 * should be literally next instruction in
-				 * caller program
+				 * caller program, or the call's landing pad,
+				 * branched to from the state the call returns
+				 * in when the callee can unwind. A pad may be
+				 * the next instruction too, so the two edges
+				 * cannot be told apart, and need not be: the
+				 * pad finds r0 unknown and r1-r5 cleared, so
+				 * both clear the same registers below.
 				 */
-				verifier_bug_if(idx + 1 != subseq_idx, env,
-						"extra insn from subprog");
+				verifier_bug_if(idx + 1 != subseq_idx &&
+						bpf_exc_pad_of_call(env, idx) != subseq_idx,
+						env, "extra insn from subprog");
 				/* global subprog always sets R0 */
 				bt_clear_reg(bt, BPF_REG_0);
 				/* and if it does not set R2, main pass would catch it */
