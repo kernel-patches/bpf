@@ -852,6 +852,12 @@ static u32 iptfs_reassem_cont(struct xfrm_iptfs_data *xtfs, u64 seq,
 		 */
 		memcpy(skb_put(newskb, runtlen), xtfs->ra_runt,
 		       sizeof(xtfs->ra_runt));
+
+		/* The re-read below cannot back up a stepped seq read. */
+		if (unlikely(st->stepped_offset)) {
+			skb_abort_seq_read(st);
+			skb_prepare_seq_read(skb, 0, skb->len, st);
+		}
 	}
 
 	/* Continue reassembling the packet */
@@ -1045,7 +1051,7 @@ static bool __input_process_payload(struct xfrm_state *x, u32 data,
 			struct sk_buff *save = skbseq->root_skb;
 
 			skb_abort_seq_read(skbseq);
-			skb_prepare_seq_read(save, data, tail, skbseq);
+			skb_prepare_seq_read(save, 0, tail, skbseq);
 		}
 
 		if (first_skb) {
