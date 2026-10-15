@@ -3564,8 +3564,8 @@ void bnge_set_ring_params(struct bnge_dev *bd)
 		}
 		agg_ring_size = ring_size * agg_factor;
 
-		bn->rx_agg_nr_pages = bnge_adjust_pow_two(agg_ring_size,
-							  RX_DESC_CNT);
+		bn->rx_agg_nr_pages = bnge_calc_nr_ring_pages(agg_ring_size,
+							      RX_DESC_CNT);
 		if (bn->rx_agg_nr_pages > MAX_RX_AGG_PAGES) {
 			u32 tmp = agg_ring_size;
 
@@ -3588,11 +3588,11 @@ void bnge_set_ring_params(struct bnge_dev *bd)
 	bn->rx_buf_use_size = rx_size;
 	bn->rx_buf_size = rx_space;
 
-	bn->rx_nr_pages = bnge_adjust_pow_two(ring_size, RX_DESC_CNT);
+	bn->rx_nr_pages = bnge_calc_nr_ring_pages(ring_size, RX_DESC_CNT);
 	bn->rx_ring_mask = (bn->rx_nr_pages * RX_DESC_CNT) - 1;
 
 	ring_size = bn->tx_ring_size;
-	bn->tx_nr_pages = bnge_adjust_pow_two(ring_size, TX_DESC_CNT);
+	bn->tx_nr_pages = bnge_calc_nr_ring_pages(ring_size, TX_DESC_CNT);
 	bn->tx_ring_mask = (bn->tx_nr_pages * TX_DESC_CNT) - 1;
 
 	max_rx_cmpl = bn->rx_ring_size;
@@ -3602,7 +3602,7 @@ void bnge_set_ring_params(struct bnge_dev *bd)
 	ring_size = max_rx_cmpl * 2 + agg_ring_size + bn->tx_ring_size;
 	bn->cp_ring_size = ring_size;
 
-	bn->cp_nr_pages = bnge_adjust_pow_two(ring_size, CP_DESC_CNT);
+	bn->cp_nr_pages = bnge_calc_nr_ring_pages(ring_size, CP_DESC_CNT);
 	if (bn->cp_nr_pages > MAX_CP_PAGES) {
 		bn->cp_nr_pages = MAX_CP_PAGES;
 		bn->cp_ring_size = MAX_CP_PAGES * CP_DESC_CNT - 1;
