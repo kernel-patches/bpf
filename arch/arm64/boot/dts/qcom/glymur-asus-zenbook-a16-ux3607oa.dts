@@ -492,8 +492,19 @@
 
 	status = "okay";
 
-	/* EC subdevice @ 0x5b */
-	/* EC @ 0x76 */
+	embedded-controller@76 {
+		compatible = "asus,zenbook-a16-ux3607oa-ec";
+		reg = <0x76>;
+
+		interrupts-extended = <&tlmm 66 IRQ_TYPE_EDGE_FALLING>;
+
+		pinctrl-0 = <&ec_int_n_default>;
+		pinctrl-names = "default";
+
+		#thermal-sensor-cells = <1>;
+
+		wakeup-source;
+	};
 };
 
 &i2c10 {
