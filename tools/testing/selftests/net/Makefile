@@ -130,6 +130,7 @@ TEST_PROGS := \
 	udpgso_bench.sh \
 	unicast_extensions.sh \
 	veth.sh \
+	veth_channels_carrier.sh \
 	vlan_bridge_binding.sh \
 	vlan_hw_filter.sh \
 	vrf-xfrm-tests.sh \
