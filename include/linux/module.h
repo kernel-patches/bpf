@@ -42,6 +42,7 @@ struct modversion_info {
 
 struct module;
 struct exception_table_entry;
+struct jump_entry_index;
 
 struct module_kobject {
 	struct kobject kobj;
@@ -512,6 +513,7 @@ struct module {
 #ifdef CONFIG_JUMP_LABEL
 	struct jump_entry *jump_entries;
 	unsigned int num_jump_entries;
+	struct jump_entry_index *jump_entry_index;
 #endif
 #ifdef CONFIG_TRACING
 	unsigned int num_trace_bprintk_fmt;
