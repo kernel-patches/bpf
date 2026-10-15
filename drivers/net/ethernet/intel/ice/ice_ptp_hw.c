@@ -5001,8 +5001,8 @@ ice_get_phy_tx_tstamp_ready_e810(struct ice_hw *hw, u8 port, u64 *tstamp_ready)
  * The E810 devices do not have a Tx memory status register. Note this is
  * intentionally different behavior from ice_get_phy_tx_tstamp_ready_e810
  * which always says that all bits are ready. This function is called in cases
- * where code will trigger interrupts if timestamps are waiting, and should
- * not be called for E810 hardware.
+ * where code will trigger interrupts if timestamps are waiting, and which
+ * should not trigger for E810.
  *
  * Return: 0.
  */
