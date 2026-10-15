@@ -843,6 +843,8 @@ static inline struct nfs4_ol_stateid *openlockstateid(struct nfs4_stid *s)
 	return container_of(s, struct nfs4_ol_stateid, st_stid);
 }
 
+struct nfsd4_fence_script;
+
 struct nfs4_layout_stateid {
 	struct nfs4_stid		ls_stid;
 	struct list_head		ls_perclnt;
@@ -860,9 +862,11 @@ struct nfs4_layout_stateid {
 	struct delayed_work		ls_fence_work;
 	struct mutex			ls_fence_mutex; /* serializes fence shutdown */
 	unsigned int			ls_fence_delay;
+	/* Set once a lease break's fence worker is done */
 	bool				ls_fenced;
 	bool				ls_fence_inflight;
 	bool				ls_fence_stopped;
+	struct nfsd4_fence_script	*ls_fence_script;
 };
 
 static inline struct nfs4_layout_stateid *layoutstateid(struct nfs4_stid *s)
