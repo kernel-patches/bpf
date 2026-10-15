@@ -2122,12 +2122,34 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct rv_jit_context *ctx,
 	return 0;
 }
 
+static void emit_priv_stack_frame(struct rv_jit_context *ctx)
+{
+	u64 fp = (__force u64)ctx->prog->aux->priv_stack_ptr + PRIV_STACK_GUARD_SZ;
+
+	fp += round_up(ctx->prog->aux->stack_depth, STACK_ALIGN);
+	emit_imm(RV_REG_S5, fp, ctx);
+#ifdef CONFIG_SMP
+	emit_lw(RV_REG_T1, offsetof(struct thread_info, cpu), RV_REG_TP, ctx);
+	emit_imm(RV_REG_T2, (u64)__per_cpu_offset, ctx);
+	emit_sh3add(RV_REG_T1, RV_REG_T1, RV_REG_T2, ctx);
+	emit_ld(RV_REG_T1, 0, RV_REG_T1, ctx);
+	emit_add(RV_REG_S5, RV_REG_S5, RV_REG_T1, ctx);
+#endif
+}
+
 void bpf_jit_build_prologue(struct rv_jit_context *ctx, bool is_subprog)
 {
+	bool priv_stack = ctx->prog->aux->priv_stack_ptr;
 	int i, stack_adjust = 0, store_offset, bpf_stack_adjust = ctx->stack_arg_sz;
 
-	bpf_stack_adjust += round_up(ctx->prog->aux->stack_depth, STACK_ALIGN);
-	if (bpf_stack_adjust)
+	/*
+	 * With a private stack only the outgoing stack argument area is left in
+	 * this frame. It has to stay: the caller writes it relative to SP while
+	 * the callee reads it relative to RV_REG_FP, the caller's SP set below.
+	 */
+	if (!priv_stack)
+		bpf_stack_adjust += round_up(ctx->prog->aux->stack_depth, STACK_ALIGN);
+	if (bpf_stack_adjust || priv_stack)
 		mark_fp(ctx);
 
 	if (seen_reg(RV_REG_RA, ctx))
@@ -2205,7 +2227,16 @@ void bpf_jit_build_prologue(struct rv_jit_context *ctx, bool is_subprog)
 
 	emit_addi(RV_REG_FP, RV_REG_SP, stack_adjust, ctx);
 
-	if (bpf_stack_adjust)
+	/*
+	 * Point BPF_REG_FP at the top of this CPU's private stack. A program
+	 * with one can still be entered as a tail call target, at
+	 * RV_TAILCALL_OFFSET, so this has to come after that entry point; the
+	 * offset is a constant added to the target's bpf_func, so everything in
+	 * front of it must also be the same size in every program.
+	 */
+	if (priv_stack)
+		emit_priv_stack_frame(ctx);
+	else if (bpf_stack_adjust)
 		emit_addi(RV_REG_S5, RV_REG_SP, bpf_stack_adjust, ctx);
 
 	ctx->stack_size = stack_adjust;
@@ -2300,6 +2331,11 @@ bool bpf_jit_supports_stack_args(void)
 }
 
 bool bpf_jit_supports_callx(void)
+{
+	return true;
+}
+
+bool bpf_jit_supports_private_stack(void)
 {
 	return true;
 }

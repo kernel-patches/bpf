@@ -9,6 +9,7 @@
 #include <linux/bpf.h>
 #include <linux/filter.h>
 #include <linux/memory.h>
+#include <linux/percpu.h>
 #include <asm/text-patching.h>
 #include <asm/cfi.h>
 #include "bpf_jit.h"
@@ -42,6 +43,62 @@ static int build_body(struct rv_jit_context *ctx, bool extra_pass, int *offset)
 bool bpf_jit_needs_zext(void)
 {
 	return true;
+}
+
+#define PRIV_STACK_GUARD_VAL	0xEB9F12345678eb9fULL
+
+static u32 priv_stack_size(struct bpf_prog *prog)
+{
+	return round_up(prog->aux->stack_depth, STACK_ALIGN) +
+	       2 * PRIV_STACK_GUARD_SZ;
+}
+
+static int alloc_priv_stack(struct bpf_prog *prog)
+{
+	u32 size = priv_stack_size(prog);
+	u32 end = (size - PRIV_STACK_GUARD_SZ) / sizeof(u64);
+	void __percpu *ptr;
+	int cpu, i;
+
+	ptr = __alloc_percpu_gfp(size, STACK_ALIGN, GFP_KERNEL);
+	if (!ptr)
+		return -ENOMEM;
+
+	for_each_possible_cpu(cpu) {
+		u64 *stack = per_cpu_ptr(ptr, cpu);
+
+		for (i = 0; i < PRIV_STACK_GUARD_SZ / sizeof(u64); i++) {
+			stack[i] = PRIV_STACK_GUARD_VAL;
+			stack[end + i] = PRIV_STACK_GUARD_VAL;
+		}
+	}
+	prog->aux->priv_stack_ptr = ptr;
+	return 0;
+}
+
+static void priv_stack_check_guard(struct bpf_prog *prog)
+{
+	u32 end = (priv_stack_size(prog) - PRIV_STACK_GUARD_SZ) / sizeof(u64);
+	int cpu;
+
+	for_each_possible_cpu(cpu) {
+		u64 *stack = per_cpu_ptr(prog->aux->priv_stack_ptr, cpu);
+
+		if (stack[0] != PRIV_STACK_GUARD_VAL ||
+		    stack[1] != PRIV_STACK_GUARD_VAL ||
+		    stack[end] != PRIV_STACK_GUARD_VAL ||
+		    stack[end + 1] != PRIV_STACK_GUARD_VAL) {
+			pr_err("bpf-jit: private stack overflow/underflow guard of prog %s corrupted on CPU %d\n",
+			       bpf_jit_get_prog_name(prog), cpu);
+			return;
+		}
+	}
+}
+
+static void free_priv_stack(struct bpf_prog *prog)
+{
+	free_percpu(prog->aux->priv_stack_ptr);
+	prog->aux->priv_stack_ptr = NULL;
 }
 
 struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_prog *prog)
@@ -82,12 +139,15 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_pr
 			    round_up((stack_arg_cnt - RV_EXTRA_STK_ARGS) * 8, STACK_ALIGN) : 0;
 
 	ctx->prog = prog;
+	if (prog->aux->jits_use_priv_stack && alloc_priv_stack(prog))
+		goto out_free_hdr;
+
 	ctx->offset = kvzalloc_objs(int, prog->len);
 	if (!ctx->offset)
-		goto out_offset;
+		goto out_free_hdr;
 
 	if (build_body(ctx, extra_pass, NULL))
-		goto out_offset;
+		goto out_free_hdr;
 
 	for (i = 0; i < prog->len; i++) {
 		prev_ninsns += 32;
@@ -102,7 +162,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_pr
 		ctx->prologue_len = ctx->ninsns;
 
 		if (build_body(ctx, extra_pass, ctx->offset))
-			goto out_offset;
+			goto out_free_hdr;
 
 		ctx->epilogue_offset = ctx->ninsns;
 		bpf_jit_build_epilogue(ctx);
@@ -122,7 +182,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_pr
 							  bpf_fill_ill_insns,
 							  bpf_prog_was_classic(prog));
 			if (!jit_data->ro_header)
-				goto out_offset;
+				goto out_free_hdr;
 
 			/*
 			 * Use the image(RW) for writing the JITed instructions. But also save
@@ -188,10 +248,7 @@ skip_init_ctx:
 			ctx->offset[i] = ctx->offset[i - 1];
 		ctx->offset[0] = ninsns_rvoff(ctx->prologue_len);
 		bpf_prog_update_insn_ptrs(prog, ctx->offset, jit_data->ro_image);
-out_offset:
-		kvfree(ctx->offset);
-		kfree(jit_data);
-		prog->aux->jit_data = NULL;
+		goto out_free_ctx;
 	}
 
 	return prog;
@@ -207,7 +264,12 @@ out_free_hdr:
 				   sizeof(jit_data->header->size));
 		bpf_jit_binary_pack_free(jit_data->ro_header, jit_data->header);
 	}
-	goto out_offset;
+	free_priv_stack(prog);
+out_free_ctx:
+	kvfree(ctx->offset);
+	kfree(jit_data);
+	prog->aux->jit_data = NULL;
+	return prog;
 }
 
 u64 bpf_jit_alloc_exec_limit(void)
@@ -259,6 +321,10 @@ void bpf_jit_free(struct bpf_prog *prog)
 		prog->bpf_func = (void *)prog->bpf_func - cfi_get_offset();
 		hdr = bpf_jit_binary_pack_hdr(prog);
 		bpf_jit_binary_pack_free(hdr, NULL);
+		if (prog->aux->priv_stack_ptr) {
+			priv_stack_check_guard(prog);
+			free_priv_stack(prog);
+		}
 		WARN_ON_ONCE(!bpf_prog_kallsyms_verify_off(prog));
 	}
 
