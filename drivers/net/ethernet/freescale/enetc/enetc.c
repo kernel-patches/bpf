@@ -1814,6 +1814,7 @@ int enetc_xdp_xmit(struct net_device *ndev, int num_frames,
 	int err = 0;
 
 	tx_ring = priv->xdp_tx_ring[smp_processor_id()];
+	spin_lock(&tx_ring->xdp_lock);
 
 	if (unlikely(test_bit(ENETC_TX_DOWN, &priv->flags) ||
 		     !netif_carrier_ok(ndev))) {
@@ -1857,6 +1858,8 @@ int enetc_xdp_xmit(struct net_device *ndev, int num_frames,
 out:
 	tx_ring->stats.xdp_tx += xdp_tx_frm_cnt;
 	tx_ring->stats.xdp_tx_drops += num_frames - xdp_tx_frm_cnt;
+
+	spin_unlock(&tx_ring->xdp_lock);
 
 	return err ?: xdp_tx_frm_cnt;
 }
@@ -1998,6 +2001,9 @@ static int enetc_clean_rx_ring_xdp(struct enetc_bdr *rx_ring,
 	/* next descriptor to process */
 	i = rx_ring->next_to_clean;
 
+	tx_ring = priv->xdp_tx_ring[rx_ring->index];
+	spin_lock(&tx_ring->xdp_lock);
+
 	enetc_lock_mdio();
 
 	while (likely(rx_frm_cnt < work_limit)) {
@@ -2064,11 +2070,12 @@ static int enetc_clean_rx_ring_xdp(struct enetc_bdr *rx_ring,
 			enetc_bulk_flip_buff(rx_ring, orig_i, i);
 
 			enetc_unlock_mdio();
+			spin_unlock(&tx_ring->xdp_lock);
 			napi_gro_receive(napi, skb);
+			spin_lock(&tx_ring->xdp_lock);
 			enetc_lock_mdio();
 			break;
 		case XDP_TX:
-			tx_ring = priv->xdp_tx_ring[rx_ring->index];
 			if (unlikely(test_bit(ENETC_TX_DOWN, &priv->flags))) {
 				enetc_xdp_drop(rx_ring, orig_i, i);
 				tx_ring->stats.xdp_tx_drops++;
@@ -2101,7 +2108,11 @@ static int enetc_clean_rx_ring_xdp(struct enetc_bdr *rx_ring,
 			break;
 		case XDP_REDIRECT:
 			enetc_unlock_mdio();
+			spin_unlock(&tx_ring->xdp_lock);
+
 			err = xdp_do_redirect(rx_ring->ndev, &xdp_buff, prog);
+
+			spin_lock(&tx_ring->xdp_lock);
 			enetc_lock_mdio();
 			if (unlikely(err)) {
 				enetc_xdp_drop(rx_ring, orig_i, i);
@@ -2117,6 +2128,8 @@ static int enetc_clean_rx_ring_xdp(struct enetc_bdr *rx_ring,
 	}
 
 out:
+	spin_unlock(&tx_ring->xdp_lock);
+
 	rx_ring->next_to_clean = i;
 
 	rx_ring->stats.packets += rx_frm_cnt;
@@ -2128,8 +2141,11 @@ out:
 		enetc_lock_mdio();
 	}
 
-	if (xdp_tx_frm_cnt)
+	if (xdp_tx_frm_cnt) {
+		spin_lock(&tx_ring->xdp_lock);
 		enetc_update_tx_ring_tail(tx_ring);
+		spin_unlock(&tx_ring->xdp_lock);
+	}
 
 	if (cleaned_cnt > rx_ring->xdp.xdp_tx_in_flight)
 		enetc_refill_rx_ring(rx_ring, enetc_bd_unused(rx_ring) -
@@ -3589,6 +3605,7 @@ static int enetc_int_vector_init(struct enetc_ndev_priv *priv, int i,
 		idx = priv->bdr_int_num * j + i;
 		__set_bit(idx, &v->tx_rings_map);
 		bdr = &v->tx_ring[j];
+		spin_lock_init(&bdr->xdp_lock);
 		bdr->index = idx;
 		bdr->ndev = priv->ndev;
 		bdr->dev = priv->dev;

@@ -171,6 +171,10 @@ struct enetc_bdr {
 	void __iomem *idr; /* Interrupt Detect Register pointer */
 
 	int buffer_offset;
+
+	/* Serialize NAPI and ndo_xdp_xmit() targeting the same TX ring */
+	spinlock_t xdp_lock;
+
 	struct enetc_xdp_data xdp;
 
 	struct enetc_ring_stats stats;
