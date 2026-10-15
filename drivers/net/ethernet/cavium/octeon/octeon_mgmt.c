@@ -380,9 +380,7 @@ static u64 octeon_mgmt_dequeue_rx_buffer(struct octeon_mgmt *p,
 	p->rx_current_fill--;
 	*pskb = __skb_dequeue(&p->rx_list);
 
-	dma_unmap_single(p->dev, re.s.addr,
-			 ETH_FRAME_LEN + OCTEON_MGMT_RX_HEADROOM,
-			 DMA_FROM_DEVICE);
+	dma_unmap_single(p->dev, re.s.addr, re.s.len, DMA_FROM_DEVICE);
 
 	return re.d64;
 }
