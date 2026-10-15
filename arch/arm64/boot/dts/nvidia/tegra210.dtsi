@@ -935,6 +935,7 @@
 			pd_nvdec: nvdec {
 				clocks = <&tegra_car TEGRA210_CLK_NVDEC>;
 				resets = <&tegra_car 194>;
+				power-domains = <&pd_nvjpg>;
 				#power-domain-cells = <0>;
 			};
 
