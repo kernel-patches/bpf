@@ -1088,6 +1088,12 @@
 
 // addressBlock: mp_SmuMpASP_SmnDec
 // base address: 0x0
+#define regMPASP_SMN_C2PMSG_101                                                                         0x00a5
+#define regMPASP_SMN_C2PMSG_101_BASE_IDX                                                                0
+#define regMPASP_SMN_C2PMSG_102                                                                         0x00a6
+#define regMPASP_SMN_C2PMSG_102_BASE_IDX                                                                0
+#define regMPASP_SMN_C2PMSG_103                                                                         0x00a7
+#define regMPASP_SMN_C2PMSG_103_BASE_IDX                                                                0
 #define regMPASP_SMN_IH_CREDIT                                                                          0x0140
 #define regMPASP_SMN_IH_CREDIT_BASE_IDX                                                                 0
 #define regMPASP_SMN_IH_SW_INT                                                                          0x0141
