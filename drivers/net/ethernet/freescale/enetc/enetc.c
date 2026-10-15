@@ -165,6 +165,14 @@ static void enetc_free_tx_frame(struct enetc_bdr *tx_ring,
 
 	if (tx_swbd->dma)
 		enetc_unmap_tx_buff(tx_ring, tx_swbd);
+	if (tx_swbd->is_xdp_tx) {
+		struct enetc_ndev_priv *priv = netdev_priv(tx_ring->ndev);
+		struct enetc_bdr *rx_ring;
+
+		rx_ring = enetc_rx_ring_from_xdp_tx_ring(priv, tx_ring);
+		rx_ring->xdp.xdp_tx_in_flight--;
+		__free_page(tx_swbd->page);
+	}
 
 	if (xdp_frame) {
 		xdp_return_frame(tx_swbd->xdp_frame);
