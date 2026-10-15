@@ -794,6 +794,9 @@ static int svc_rdma_build_read_segment(struct svc_rqst *rqstp,
 	ctxt->rw_nents = nr_bvec;
 
 	for (bvec_idx = 0; bvec_idx < ctxt->rw_nents; bvec_idx++) {
+		if (head->rc_curpage >= rqstp->rq_maxpages)
+			goto out_put;
+
 		seg_len = min_t(unsigned int, len,
 				PAGE_SIZE - head->rc_pageoff);
 
@@ -810,9 +813,6 @@ static int svc_rdma_build_read_segment(struct svc_rqst *rqstp,
 			head->rc_pageoff = 0;
 		}
 		len -= seg_len;
-
-		if (len && ((head->rc_curpage + 1) > rqstp->rq_maxpages))
-			goto out_put;
 	}
 
 	ret = svc_rdma_rw_ctx_init(rdma, ctxt, segment->rs_offset,
