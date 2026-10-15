@@ -713,7 +713,7 @@ static void bpf_single_step(struct bpf_regs *r, struct sock_filter *f,
 		r->A = pkt_len;
 		break;
 	case BPF_LDX_W | BPF_LEN:
-		r->A = pkt_len;
+		r->X = pkt_len;
 		break;
 	case BPF_LD | BPF_IMM:
 		r->A = K;
