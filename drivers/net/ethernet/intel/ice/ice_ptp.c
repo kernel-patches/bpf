@@ -3086,6 +3086,9 @@ void ice_ptp_prepare_for_reset(struct ice_pf *pf, enum ice_reset_req reset_type)
 
 	kthread_cancel_delayed_work_sync(&ptp->work);
 
+	if (hw->mac_type == ICE_MAC_GENERIC)
+		kthread_cancel_delayed_work_sync(&ptp->port.ov_work);
+
 	if (reset_type == ICE_RESET_PFR)
 		return;
 
