@@ -756,7 +756,7 @@ static unsigned int nf_flow_encap_gso_xmit(struct net *net, struct sk_buff *skb,
 {
 	struct sk_buff *segs, *nskb;
 
-	segs = skb_gso_segment(skb, 0);
+	segs = skb_gso_segment(skb, NETIF_F_SG | NETIF_F_FRAGLIST);
 	if (IS_ERR(segs))
 		return NF_DROP;
 
