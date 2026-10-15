@@ -81,7 +81,6 @@ void serial_test_cgroup_attach_multi(void)
 	DECLARE_LIBBPF_OPTS(bpf_prog_attach_opts, attach_opts);
 	int allow_prog[7] = {-1};
 	unsigned long long value;
-	__u32 duration = 0;
 	int i = 0;
 
 	for (i = 0; i < ARRAY_SIZE(allow_prog); i++) {
