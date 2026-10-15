@@ -5438,6 +5438,18 @@ static bool is_arena_scalar(struct bpf_verifier_env *env, int regno)
 	return reg->type == SCALAR_VALUE && env->arena_scalar && env->prog->aux->arena;
 }
 
+/*
+ * The insn being verified works with the arena base, which a JIT sets up in
+ * the prologue of the function the insn belongs to, see
+ * bpf_prog_uses_arena_insns(). Every caller checked that the program has an
+ * arena, so uses_arena_insns implies one.
+ */
+static void mark_uses_arena_insn(struct bpf_verifier_env *env)
+{
+	bpf_find_containing_subprog(env, env->insn_idx)->uses_arena_insns = true;
+	env->prog->aux->uses_arena_insns = true;
+}
+
 static bool is_load_acq_unsafe(struct bpf_verifier_env *env, int regno,
 			       struct bpf_insn *insn)
 {
@@ -7371,6 +7383,7 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, struct b
 		if (!err && value_regno >= 0 && (rdonly_mem || t == BPF_READ))
 			mark_reg_unknown(env, regs, value_regno);
 	} else if (reg->type == PTR_TO_ARENA) {
+		mark_uses_arena_insn(env);
 		if (t == BPF_READ && value_regno >= 0)
 			mark_reg_unknown(env, regs, value_regno);
 	} else {
@@ -7430,6 +7443,7 @@ static struct bpf_reg_state *mem_access_reg(struct bpf_verifier_env *env, int re
 	memset(arena, 0, sizeof(*arena));
 	arena->type = PTR_TO_ARENA;
 	env->insn_aux_data[env->insn_idx].arena_scalar = true;
+	mark_uses_arena_insn(env);
 	return arena;
 }
 
@@ -9919,6 +9933,9 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg, u32 slot, u32 p
 		}
 		break;
 	case ARG_PTR_TO_ARENA:
+		/* the JIT rebases the __arena argument of a kfunc on the arena base */
+		if (is_kfunc(meta))
+			mark_uses_arena_insn(env);
 		break;
 	case ARG_PTR_TO_ALLOC_BTF_ID:
 		if (reg->type == (PTR_TO_BTF_ID | MEM_ALLOC)) {
@@ -17534,6 +17551,7 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 					verbose(env, "addr_space_cast insn can only be used in a program that has an associated arena\n");
 					return -EINVAL;
 				}
+				mark_uses_arena_insn(env);
 			}
 
 			/* check src operand */
