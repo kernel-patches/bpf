@@ -45,6 +45,7 @@
 #include "netns.h"
 #include "stats.h"
 #include "vfs.h"
+#include "pnfs.h"
 #include "filecache.h"
 #include "trace.h"
 
@@ -582,6 +583,15 @@ nfsd_setattr(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		err = nfsd_get_write_access(fhp);
 		if (err)
 			return err;
+		/*
+		 * Not under inode_lock: the LAYOUTCOMMIT that a client sends
+		 * before it returns its layout takes it.
+		 */
+		err = nfserrno(nfsd_break_layouts(inode, NULL));
+		if (err) {
+			put_write_access(inode);
+			return err;
+		}
 	}
 
 	inode_lock(inode);
@@ -720,6 +730,14 @@ int nfsd_clone_file_range(struct file *src, u64 src_pos, struct file *dst,
 			  u64 dst_pos, u64 count, errseq_t *since)
 {
 	loff_t cloned;
+	int ret;
+
+	/* The filesystem breaks the layouts of both files */
+	ret = nfsd_break_layouts(file_inode(src),
+				 file_inode(dst) != file_inode(src) ?
+				 file_inode(dst) : NULL);
+	if (ret)
+		return ret;
 
 	*since = READ_ONCE(dst->f_wb_err);
 	cloned = vfs_clone_file_range(src, src_pos, dst, dst_pos, count, 0);
@@ -793,7 +811,9 @@ __be32 nfsd4_vfs_fallocate(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	if (!S_ISREG(file_inode(file)->i_mode))
 		return nfserr_inval;
 
-	error = vfs_fallocate(file, flags, offset, len);
+	error = nfsd_break_layouts(file_inode(file), NULL);
+	if (!error)
+		error = vfs_fallocate(file, flags, offset, len);
 	if (!error)
 		error = commit_metadata(fhp);
 
@@ -878,6 +898,58 @@ int nfsd_open_break_lease(struct inode *inode, int access)
 		return 0;
 	mode = (access & NFSD_MAY_WRITE) ? O_WRONLY : O_RDONLY;
 	return break_lease(inode, mode | O_NONBLOCK);
+}
+
+static bool nfsd_other_layouts(struct inode *inode)
+{
+	return nfsd4_layout_holders(inode) & NFSD_LAYOUTS_OTHER;
+}
+
+/**
+ * nfsd_break_layouts - Recall the layouts of one or two files
+ * @inode: file that is about to be modified
+ * @inode2: the other file of a COPY or CLONE, or NULL
+ *
+ * Context: Process context. Sleeps for up to NFSD_LAYOUTRETURN_TIMEOUT.
+ *
+ * Return: zero if no layout is left, -EWOULDBLOCK while a recall is under
+ * way, or -ENOMEM
+ */
+int nfsd_break_layouts(struct inode *inode, struct inode *inode2)
+{
+	long timeout = NFSD_LAYOUTRETURN_TIMEOUT;
+	unsigned int holders;
+	int ret, ret2 = 0;
+
+	holders = nfsd4_layout_holders(inode);
+	if (inode2)
+		holders |= nfsd4_layout_holders(inode2);
+	if (!holders)
+		return 0;
+
+	/* Start the recalls without waiting, unlike the filesystem's break */
+	ret = break_layout(inode, false);
+	if (inode2)
+		ret2 = break_layout(inode2, false);
+	if (ret != -EWOULDBLOCK && ret2 != -EWOULDBLOCK)
+		return ret ? ret : ret2;
+	/*
+	 * Briefly wait for other clients' layouts if this started their
+	 * recall, as for delegations. The client of this request returns its
+	 * own only after its I/O through them.
+	 */
+	if ((holders & NFSD_LAYOUTS_OWN) || !(holders & NFSD_LAYOUTS_IDLE))
+		return -EWOULDBLOCK;
+
+	timeout = wait_var_event_timeout(inode, !nfsd_other_layouts(inode),
+					 timeout);
+	if (inode2 && timeout)
+		wait_var_event_timeout(inode2, !nfsd_other_layouts(inode2),
+				       timeout);
+	ret = break_layout(inode, false);
+	if (!ret && inode2)
+		ret = break_layout(inode2, false);
+	return ret;
 }
 
 /*
@@ -1462,6 +1534,10 @@ nfsd_vfs_write(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		host_err = nvecs;
 		goto out_nfserr;
 	}
+
+	host_err = nfsd_break_layouts(file_inode(file), NULL);
+	if (host_err)
+		goto out_nfserr;
 
 	since = READ_ONCE(file->f_wb_err);
 	if (verf)

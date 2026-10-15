@@ -2298,6 +2298,7 @@ nfsd4_copy(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 	struct nfsd4_async_copy *async_copy = NULL;
 	struct nfsd4_copy *copy = &u->copy;
 	struct nfsd42_write_res *result;
+	struct inode *src, *dst;
 	__be32 status;
 
 	result = &copy->cp_res;
@@ -2321,6 +2322,15 @@ nfsd4_copy(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 		if (status)
 			goto out;
 	}
+
+	/*
+	 * A copy can be done as a clone, which breaks both files. The source
+	 * of an inter-server copy is not local.
+	 */
+	dst = file_inode(copy->nf_dst->nf_file);
+	src = copy->nf_src ? file_inode(copy->nf_src->nf_file) : dst;
+	if (nfsd_break_layouts(dst, src != dst ? src : NULL))
+		goto out_err;
 
 	memcpy(&copy->fh, &cstate->current_fh.fh_handle,
 		sizeof(struct knfsd_fh));

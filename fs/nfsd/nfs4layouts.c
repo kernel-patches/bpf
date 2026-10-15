@@ -153,11 +153,66 @@ void nfsd4_close_layout(struct nfs4_layout_stateid *ls)
 	spin_unlock(&ls->ls_stid.sc_file->fi_lock);
 
 	if (fl) {
-		if (!nfsd4_layout_ops[ls->ls_layout_type]->disable_recalls)
+		if (!nfsd4_layout_ops[ls->ls_layout_type]->disable_recalls) {
 			kernel_setlease(fl->nf_file, F_UNLCK, NULL,
 					(void **)&ls);
+			/*
+			 * For nfsd_break_layouts(). No barrier needed: its
+			 * waiter rechecks under flc_lock, which removing the
+			 * lease took.
+			 */
+			wake_up_var(file_inode(fl->nf_file));
+		}
 		nfsd_file_put(fl);
 	}
+}
+
+/**
+ * nfsd4_layout_holders - Report which clients hold layout leases on a file
+ * @inode: file whose layout leases are checked
+ *
+ * Context: Takes the flc_lock of @inode.
+ *
+ * Return: a mask of NFSD_LAYOUTS_OWN if the client of the current request
+ * holds a layout lease on @inode, NFSD_LAYOUTS_OTHER if another client
+ * holds one, and NFSD_LAYOUTS_IDLE if a lease of another client is not
+ * being broken yet.
+ */
+unsigned int nfsd4_layout_holders(struct inode *inode)
+{
+	struct file_lock_context *ctx = locks_inode_context(inode);
+	struct nfs4_client *clp = NULL;
+	unsigned int holders = 0;
+	struct svc_rqst *rqstp;
+	struct file_lease *fl;
+
+	if (!ctx || list_empty_careful(&ctx->flc_lease))
+		return 0;
+	/* Without a compound, as for NFSv3, every layout is another client's */
+	rqstp = nfsd_current_rqst();
+	if (nfsd_v4client(rqstp)) {
+		struct nfsd_thread_local_info *ntli = rqstp->rq_private;
+
+		clp = *ntli->ntli_lease_breaker;
+	}
+
+	spin_lock(&ctx->flc_lock);
+	for_each_file_lock(fl, &ctx->flc_lease) {
+		struct nfs4_layout_stateid *ls = fl->c.flc_owner;
+
+		if (fl->fl_lmops != &nfsd4_layouts_lm_ops)
+			continue;
+		if (clp && ls->ls_stid.sc_client == clp) {
+			holders |= NFSD_LAYOUTS_OWN;
+			continue;
+		}
+		holders |= NFSD_LAYOUTS_OTHER;
+		if (!(fl->c.flc_flags &
+		      (FL_UNLOCK_PENDING | FL_DOWNGRADE_PENDING)))
+			holders |= NFSD_LAYOUTS_IDLE;
+	}
+	spin_unlock(&ctx->flc_lock);
+	return holders;
 }
 
 static void
