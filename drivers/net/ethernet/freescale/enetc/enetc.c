@@ -1888,8 +1888,8 @@ int enetc_xdp_xmit(struct net_device *ndev, int num_frames,
 	struct enetc_ndev_priv *priv = netdev_priv(ndev);
 	struct skb_shared_info *shinfo;
 	struct enetc_bdr *tx_ring;
-	int xdp_tx_bd_cnt, i, k;
-	int xdp_tx_frm_cnt = 0;
+	int xdp_tx_bd_cnt;
+	int i, k = 0;
 	int err = 0;
 
 	tx_ring = priv->xdp_tx_ring[smp_processor_id()];
@@ -1925,22 +1925,20 @@ int enetc_xdp_xmit(struct net_device *ndev, int num_frames,
 						    &xdp_redirect_arr[i]);
 			break;
 		}
-
-		xdp_tx_frm_cnt++;
 	}
 
-	if (unlikely((flags & XDP_XMIT_FLUSH) || k != xdp_tx_frm_cnt))
+	if (unlikely(k && ((flags & XDP_XMIT_FLUSH) || k < num_frames)))
 		enetc_update_tx_ring_tail(tx_ring);
 
 	enetc_unlock_mdio();
 
 out:
-	tx_ring->stats.xdp_tx += xdp_tx_frm_cnt;
-	tx_ring->stats.xdp_tx_drops += num_frames - xdp_tx_frm_cnt;
+	tx_ring->stats.xdp_tx += k;
+	tx_ring->stats.xdp_tx_drops += num_frames - k;
 
 	spin_unlock(&tx_ring->xdp_lock);
 
-	return err ?: xdp_tx_frm_cnt;
+	return err ?: k;
 }
 EXPORT_SYMBOL_GPL(enetc_xdp_xmit);
 
