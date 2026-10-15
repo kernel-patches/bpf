@@ -3557,7 +3557,8 @@ static int btf_type_tag_walk(const struct btf *btf,
 	return 0;
 }
 
-bool btf_type_is_arena_ptr(const struct btf *btf, const struct btf_type *t)
+/* Whether the pointee of pointer type @t carries the type tag @name */
+static bool btf_ptr_has_type_tag(const struct btf *btf, const struct btf_type *t, const char *name)
 {
 	if (!btf_type_is_ptr(t))
 		return false;
@@ -3566,11 +3567,16 @@ bool btf_type_is_arena_ptr(const struct btf *btf, const struct btf_type *t)
 	     t = btf_type_by_id(btf, t->type)) {
 		if (!btf_type_is_type_tag(t) || btf_type_kflag(t))
 			continue;
-		if (!strcmp(__btf_name_by_offset(btf, t->name_off), "arena"))
+		if (!strcmp(__btf_name_by_offset(btf, t->name_off), name))
 			return true;
 	}
 
 	return false;
+}
+
+bool btf_type_is_arena_ptr(const struct btf *btf, const struct btf_type *t)
+{
+	return btf_ptr_has_type_tag(btf, t, "arena");
 }
 
 static int btf_find_kptr(const struct btf *btf, const struct btf_type *t,
@@ -7961,6 +7967,14 @@ error:
 			id = ctx.id;
 			stype = ctx.t;
 
+			/*
+			 * __nullable combines with any of the above: it only says
+			 * that the pointer may be NULL, and every result of the
+			 * walk keeps that.
+			 */
+			if (btf_ptr_has_type_tag(btf, mtype, "nullable"))
+				tmp_flag |= PTR_MAYBE_NULL;
+
 			if (btf_type_is_struct(stype)) {
 				*next_btf_id = id;
 				*flag |= tmp_flag;
@@ -7969,6 +7983,7 @@ error:
 				return WALK_PTR;
 			}
 
+			*flag |= tmp_flag & PTR_MAYBE_NULL;
 			return WALK_PTR_UNTRUSTED;
 		}
 
@@ -8060,7 +8075,7 @@ int btf_struct_access(struct bpf_verifier_log *log,
 			ret = PTR_TO_BTF_ID;
 			goto check_variable_offset;
 		case WALK_PTR_UNTRUSTED:
-			*flag = MEM_RDONLY | PTR_UNTRUSTED;
+			*flag = MEM_RDONLY | PTR_UNTRUSTED | (tmp_flag & PTR_MAYBE_NULL);
 			ret = PTR_TO_MEM;
 			goto check_variable_offset;
 		case WALK_SCALAR:

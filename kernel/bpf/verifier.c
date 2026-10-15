@@ -2497,6 +2497,8 @@ static int mark_btf_ld_reg(struct bpf_verifier_env *env,
 		mark_reg_known_zero(env, regs, regno);
 		regs[regno].type = PTR_TO_MEM | flag;
 		regs[regno].mem_size = 0;
+		if (type_may_be_null(flag))
+			regs[regno].id = ++env->id_gen;
 		return 0;
 	default:
 		verifier_bug(env, "unexpected reg_type %d in %s\n", reg_type, __func__);
@@ -6712,9 +6714,9 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 			 * aggressively mark as untrusted otherwise such
 			 * pointers will be plain PTR_TO_BTF_ID without flags
 			 * and will be allowed to be passed into helpers for
-			 * compat reasons.
+			 * compat reasons. A __nullable member stays nullable.
 			 */
-			flag = PTR_UNTRUSTED;
+			flag = PTR_UNTRUSTED | (flag & PTR_MAYBE_NULL);
 		}
 	} else {
 		/* Old compat. Deprecated */
