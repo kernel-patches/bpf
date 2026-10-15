@@ -788,6 +788,14 @@ struct bpf_insn_aux_data {
 	 */
 	u8 fastcall_spills_num:3;
 	u8 arg_prog:4;
+	/*
+	 * What a load found, on any path: an __arena pointer member of a
+	 * kernel struct, which arena_member_fixup() rewrites, one that is
+	 * __nullable as well, or anything else through any pointer.
+	 */
+	u8 arena_member:1;
+	u8 arena_member_nullable:1;
+	u8 non_arena_load:1;
 
 	/* below fields are initialized once */
 	unsigned int orig_idx; /* original instruction index */
