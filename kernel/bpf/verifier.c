@@ -21041,10 +21041,6 @@ static int check_and_resolve_insns(struct bpf_verifier_env *env)
 	int insn_cnt = env->prog->len;
 	int i, err;
 
-	err = bpf_prog_calc_tag(env->prog);
-	if (err)
-		return err;
-
 	for (i = 0; i < insn_cnt; i++, insn++) {
 		if (insn->dst_reg >= MAX_BPF_REG &&
 		    !is_stack_arg_st(insn) && !is_stack_arg_stx(insn)) {
@@ -23307,11 +23303,15 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 		ret = -EINVAL;
 		goto err_prep;
 	}
-	if (env->signature) {
-		ret = bpf_prog_calc_tag(env->prog);
-		if (ret < 0)
-			goto err_prep;
-	}
+	/*
+	 * The digest covers the insns as submitted and is needed before the
+	 * fd_array is resolved: an exclusive map bound through it is checked
+	 * against the digest of the program, and a signature is verified over
+	 * the insns and the maps the array binds.
+	 */
+	ret = bpf_prog_calc_tag(env->prog);
+	if (ret < 0)
+		goto err_prep;
 
 	ret = process_fd_array(env, attr, uattr);
 	if (ret)
