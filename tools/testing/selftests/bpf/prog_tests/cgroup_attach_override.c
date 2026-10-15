@@ -26,7 +26,6 @@ static int prog_load(int verdict)
 void serial_test_cgroup_attach_override(void)
 {
 	int drop_prog = -1, allow_prog = -1, foo = -1, bar = -1;
-	__u32 duration = 0;
 
 	allow_prog = prog_load(1);
 	if (CHECK(allow_prog < 0, "prog_load_allow",
