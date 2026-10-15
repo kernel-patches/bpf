@@ -2090,6 +2090,9 @@ static struct sk_buff *build_skb_from_xdp_buff(struct net_device *dev,
 	data_len = xdp->data_end - xdp->data;
 	skb_reserve(skb, headroom);
 	__skb_put(skb, data_len);
+#if IS_ENABLED(CONFIG_NF_TABLES)
+	skb->nf_dup_netdev = xdp_buff_get_nf_dup_netdev(xdp);
+#endif
 
 	metasize = xdp->data - xdp->data_meta;
 	metasize = metasize > 0 ? metasize : 0;

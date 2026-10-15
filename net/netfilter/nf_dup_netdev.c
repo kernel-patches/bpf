@@ -58,13 +58,18 @@ void nf_dup_netdev_egress(const struct nft_pktinfo *pkt, int oif)
 	struct net_device *dev;
 	struct sk_buff *skb;
 
+	if (pkt->skb->nf_dup_netdev > NF_RECURSION_LIMIT)
+		return;
+
 	dev = dev_get_by_index_rcu(nft_net(pkt), oif);
 	if (dev == NULL)
 		return;
 
 	skb = skb_clone(pkt->skb, GFP_ATOMIC);
-	if (skb)
+	if (skb) {
+		skb->nf_dup_netdev = pkt->skb->nf_dup_netdev + 1;
 		nf_do_netdev_egress(skb, dev, nft_hook(pkt));
+	}
 }
 EXPORT_SYMBOL_GPL(nf_dup_netdev_egress);
 
@@ -74,6 +79,10 @@ int nft_fwd_dup_netdev_offload(struct nft_offload_ctx *ctx,
 {
 	struct flow_action_entry *entry;
 	struct net_device *dev;
+
+	/* The netdev duplication limit is carried in the skb. */
+	if (id == FLOW_ACTION_MIRRED)
+		return -EOPNOTSUPP;
 
 	dev = dev_get_by_index(ctx->net, oif);
 	if (!dev)

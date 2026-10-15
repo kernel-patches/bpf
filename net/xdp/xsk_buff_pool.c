@@ -663,6 +663,7 @@ static u32 xp_alloc_new_from_fq(struct xsk_buff_pool *pool, struct xdp_buff **xd
 		}
 
 		xskb = xp_get_xskb(pool, addr);
+		xskb->xdp.flags = 0;
 
 		*xdp = &xskb->xdp;
 		xdp++;
@@ -683,6 +684,7 @@ static u32 xp_alloc_reused(struct xsk_buff_pool *pool, struct xdp_buff **xdp, u3
 	while (i--) {
 		xskb = list_first_entry(&pool->free_list, struct xdp_buff_xsk, list_node);
 		list_del_init(&xskb->list_node);
+		xskb->xdp.flags = 0;
 
 		*xdp = &xskb->xdp;
 		xdp++;

@@ -821,6 +821,7 @@ enum skb_tstamp_type {
  *	@peeked: this packet has been seen already, so stats have been
  *		done for it, don't do them again
  *	@nf_trace: netfilter packet trace flag
+ *	@nf_dup_netdev: netdev duplication depth
  *	@protocol: Packet protocol from driver
  *	@destructor: Destruct function
  *	@tcp_tsorted_anchor: list structure for TCP (tp->tsorted_sent_queue)
@@ -1017,6 +1018,9 @@ struct sk_buff {
 #endif
 #if IS_ENABLED(CONFIG_NETFILTER_XT_TARGET_TRACE) || IS_ENABLED(CONFIG_NF_TABLES)
 	__u8			nf_trace:1;
+#endif
+#if IS_ENABLED(CONFIG_NF_TABLES)
+	__u8			nf_dup_netdev:2;	/* netdev duplication depth */
 #endif
 #ifdef CONFIG_NET_SWITCHDEV
 	__u8			offload_fwd_mark:1;
@@ -4610,6 +4614,11 @@ static inline bool skb_metadata_differs(const struct sk_buff *skb_a,
 {
 	u8 len_a = skb_metadata_len(skb_a);
 	u8 len_b = skb_metadata_len(skb_b);
+
+#if IS_ENABLED(CONFIG_NF_TABLES)
+	if (skb_a->nf_dup_netdev != skb_b->nf_dup_netdev)
+		return true;
+#endif
 
 	if (!(len_a | len_b))
 		return false;

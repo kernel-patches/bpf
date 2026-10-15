@@ -776,6 +776,9 @@ static int veth_convert_skb_to_xdp_buff(struct veth_rq *rq,
 	xdp_init_buff(xdp, frame_sz, &rq->xdp_rxq);
 	xdp_prepare_buff(xdp, skb->head, skb_headroom(skb),
 			 skb_headlen(skb), true);
+#if IS_ENABLED(CONFIG_NF_TABLES)
+	xdp_buff_set_nf_dup_netdev(xdp, skb->nf_dup_netdev);
+#endif
 
 	if (skb_shinfo(skb)->nr_frags) {
 		skb_shinfo(skb)->xdp_frags_size = skb->data_len;

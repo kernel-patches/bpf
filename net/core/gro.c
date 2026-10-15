@@ -675,6 +675,9 @@ static void napi_reuse_skb(struct napi_struct *napi, struct sk_buff *skb)
 
 	skb->encapsulation = 0;
 	skb->ip_summed = CHECKSUM_NONE;
+#if IS_ENABLED(CONFIG_NF_TABLES)
+	skb->nf_dup_netdev = 0;
+#endif
 
 	shinfo = skb_shinfo(skb);
 	shinfo->gso_type = 0;
