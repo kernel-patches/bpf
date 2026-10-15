@@ -427,6 +427,26 @@
 	};
 };
 
+&i2c9 {
+	clock-frequency = <400000>;
+
+	status = "okay";
+
+	embedded-controller@76 {
+		compatible = "asus,zenbook-a14-ux3407na-ec";
+		reg = <0x76>;
+
+		interrupts-extended = <&tlmm 66 IRQ_TYPE_EDGE_FALLING>;
+
+		pinctrl-0 = <&ec_int_n_default>;
+		pinctrl-names = "default";
+
+		#thermal-sensor-cells = <1>;
+
+		wakeup-source;
+	};
+};
+
 &i2c10 {
 	clock-frequency = <400000>;
 
@@ -684,6 +704,12 @@
 			function = "gpio";
 			bias-disable;
 		};
+	};
+
+	ec_int_n_default: ec-int-n-state {
+		pins = "gpio66";
+		function = "gpio";
+		bias-disable;
 	};
 
 	kybd_default: kybd-default-state {
