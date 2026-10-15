@@ -7505,10 +7505,13 @@ nodefer:	kfree_skb_napi_cache(skb);
 	sdn = per_cpu_ptr(net_hotdata.skb_defer_nodes, cpu) + cpu_to_node(my_cpu);
 
 	defer_max = READ_ONCE(net_hotdata.sysctl_skb_defer_max);
-	defer_count = atomic_long_inc_return(&sdn->defer_count);
-
-	if (defer_count >= defer_max)
+	/* Test before incrementing: the reject path returns below without
+	 * reaching kick_defer_list_purge(), so a kept increment never flushes.
+	 */
+	if (atomic_long_read(&sdn->defer_count) >= defer_max)
 		goto nodefer;
+
+	defer_count = atomic_long_inc_return(&sdn->defer_count);
 
 	llist_add(&skb->ll_node, &sdn->defer_list);
 
