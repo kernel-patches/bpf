@@ -3189,6 +3189,13 @@ static bool stmmac_safety_feat_interrupt(struct stmmac_priv *priv)
 
 	ret = stmmac_safety_feat_irq_status(priv, priv->dev,
 			priv->ioaddr, priv->dma_cap.asp, &priv->sstats);
+
+	/* Status is read/cleared; do not escalate to a global error reset
+	 * while the interface is going down.
+	 */
+	if (test_bit(STMMAC_DOWN, &priv->state))
+		return false;
+
 	if (ret && (ret != -EINVAL)) {
 		stmmac_global_err(priv);
 		return true;
@@ -3210,6 +3217,12 @@ static int stmmac_napi_check(struct stmmac_priv *priv, u32 chan, u32 dir)
 
 	rx_napi = rx_q->xsk_pool ? &ch->rxtx_napi : &ch->rx_napi;
 	tx_napi = tx_q->xsk_pool ? &ch->rxtx_napi : &ch->tx_napi;
+
+	/* Status was already read (and clear) above, so the irq line is
+	 * deasserted, Drop the event while the interface is going down.
+	 */
+	if (test_bit(STMMAC_DOWN, &priv->state))
+		return 0;
 
 	if ((status & handle_rx) && (chan < priv->plat->rx_queues_to_use)) {
 		if (napi_schedule_prep(rx_napi)) {
@@ -6607,10 +6620,6 @@ static irqreturn_t stmmac_interrupt(int irq, void *dev_id)
 	struct net_device *dev = (struct net_device *)dev_id;
 	struct stmmac_priv *priv = netdev_priv(dev);
 
-	/* Check if adapter is up */
-	if (test_bit(STMMAC_DOWN, &priv->state))
-		return IRQ_HANDLED;
-
 	/* Check ASP error if it isn't delivered via an individual IRQ */
 	if (priv->sfty_irq <= 0 && stmmac_safety_feat_interrupt(priv))
 		return IRQ_HANDLED;
@@ -6629,10 +6638,6 @@ static irqreturn_t stmmac_mac_interrupt(int irq, void *dev_id)
 	struct net_device *dev = (struct net_device *)dev_id;
 	struct stmmac_priv *priv = netdev_priv(dev);
 
-	/* Check if adapter is up */
-	if (test_bit(STMMAC_DOWN, &priv->state))
-		return IRQ_HANDLED;
-
 	/* To handle Common interrupts */
 	stmmac_common_interrupt(priv);
 
@@ -6643,10 +6648,6 @@ static irqreturn_t stmmac_safety_interrupt(int irq, void *dev_id)
 {
 	struct net_device *dev = (struct net_device *)dev_id;
 	struct stmmac_priv *priv = netdev_priv(dev);
-
-	/* Check if adapter is up */
-	if (test_bit(STMMAC_DOWN, &priv->state))
-		return IRQ_HANDLED;
 
 	/* Check if a fatal error happened */
 	stmmac_safety_feat_interrupt(priv);
@@ -6664,10 +6665,6 @@ static irqreturn_t stmmac_msi_intr_tx(int irq, void *data)
 
 	dma_conf = container_of(tx_q, struct stmmac_dma_conf, tx_queue[chan]);
 	priv = container_of(dma_conf, struct stmmac_priv, dma_conf);
-
-	/* Check if adapter is up */
-	if (test_bit(STMMAC_DOWN, &priv->state))
-		return IRQ_HANDLED;
 
 	status = stmmac_napi_check(priv, chan, DMA_DIR_TX);
 
@@ -6690,10 +6687,6 @@ static irqreturn_t stmmac_msi_intr_rx(int irq, void *data)
 
 	dma_conf = container_of(rx_q, struct stmmac_dma_conf, rx_queue[chan]);
 	priv = container_of(dma_conf, struct stmmac_priv, dma_conf);
-
-	/* Check if adapter is up */
-	if (test_bit(STMMAC_DOWN, &priv->state))
-		return IRQ_HANDLED;
 
 	stmmac_napi_check(priv, chan, DMA_DIR_RX);
 
