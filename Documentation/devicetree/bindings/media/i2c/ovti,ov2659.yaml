@@ -1,0 +1,95 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/media/i2c/ovti,ov2659.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: OmniVision OV2659 1/5-Inch 2Mp SOC Camera
+
+maintainers:
+  - Frank Li <Frank.Li@kernel.org>
+
+description:
+  The Omnivision OV2659 is a 1/5-inch SOC camera, with an active array size of
+  1632H x 1212V. It is programmable through a SCCB. The OV2659 sensor supports
+  multiple resolutions output, such as UXGA, SVGA, 720p. It also can support
+  YUV422, RGB565/555 or raw RGB output formats.
+
+properties:
+  compatible:
+    const: ovti,ov2659
+
+  reg:
+    maxItems: 1
+
+  clocks:
+    maxItems: 1
+
+  clock-names:
+    items:
+      - const: xvclk
+
+  powerdown-gpios:
+    description:
+      Reference to the GPIO connected to the pwdn pin, if any.
+      Active high with internal pull down resistor.
+    maxItems: 1
+
+  reset-gpios:
+    description:
+      Reference to the GPIO connected to the resetb pin, if any.
+      Active low with internal pull up resistor.
+    maxItems: 1
+
+  port:
+    $ref: /schemas/graph.yaml#/$defs/port-base
+    unevaluatedProperties: false
+
+    properties:
+      endpoint:
+        $ref: /schemas/media/video-interfaces.yaml#
+        unevaluatedProperties: false
+
+        properties:
+          link-frequencies:
+            description: Target pixel clock frequency.
+            maxItems: 1
+
+        required:
+          - link-frequencies
+
+required:
+  - compatible
+  - reg
+  - clocks
+  - clock-names
+  - port
+
+additionalProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/gpio/gpio.h>
+
+    i2c {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        camera@30 {
+            compatible = "ovti,ov2659";
+            reg = <0x30>;
+
+            clocks = <&clk_ov2659 0>;
+            clock-names = "xvclk";
+
+            powerdown-gpios = <&gpio6 14 GPIO_ACTIVE_HIGH>;
+            reset-gpios = <&gpio6 15 GPIO_ACTIVE_LOW>;
+
+            port {
+                endpoint {
+                    remote-endpoint = <&vpfe_ep>;
+                    link-frequencies = /bits/ 64 <70000000>;
+                };
+            };
+        };
+    };
