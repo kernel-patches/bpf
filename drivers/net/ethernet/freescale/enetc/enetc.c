@@ -1811,14 +1811,17 @@ int enetc_xdp_xmit(struct net_device *ndev, int num_frames,
 	struct enetc_bdr *tx_ring;
 	int xdp_tx_bd_cnt, i, k;
 	int xdp_tx_frm_cnt = 0;
-
-	if (unlikely(test_bit(ENETC_TX_DOWN, &priv->flags) ||
-		     !netif_carrier_ok(ndev)))
-		return -ENETDOWN;
-
-	enetc_lock_mdio();
+	int err = 0;
 
 	tx_ring = priv->xdp_tx_ring[smp_processor_id()];
+
+	if (unlikely(test_bit(ENETC_TX_DOWN, &priv->flags) ||
+		     !netif_carrier_ok(ndev))) {
+		err = -ENETDOWN;
+		goto out;
+	}
+
+	enetc_lock_mdio();
 
 	prefetchw(ENETC_TXBD(*tx_ring, tx_ring->next_to_use));
 
@@ -1840,7 +1843,6 @@ int enetc_xdp_xmit(struct net_device *ndev, int num_frames,
 			for (i = 0; i < xdp_tx_bd_cnt; i++)
 				enetc_unmap_tx_buff(tx_ring,
 						    &xdp_redirect_arr[i]);
-			tx_ring->stats.xdp_tx_drops++;
 			break;
 		}
 
@@ -1850,11 +1852,13 @@ int enetc_xdp_xmit(struct net_device *ndev, int num_frames,
 	if (unlikely((flags & XDP_XMIT_FLUSH) || k != xdp_tx_frm_cnt))
 		enetc_update_tx_ring_tail(tx_ring);
 
-	tx_ring->stats.xdp_tx += xdp_tx_frm_cnt;
-
 	enetc_unlock_mdio();
 
-	return xdp_tx_frm_cnt;
+out:
+	tx_ring->stats.xdp_tx += xdp_tx_frm_cnt;
+	tx_ring->stats.xdp_tx_drops += num_frames - xdp_tx_frm_cnt;
+
+	return err ?: xdp_tx_frm_cnt;
 }
 EXPORT_SYMBOL_GPL(enetc_xdp_xmit);
 
