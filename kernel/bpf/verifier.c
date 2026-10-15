@@ -23619,7 +23619,7 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	if (ret)
 		goto skip_full_check;
 
-	if (env->cleanup_info_cnt) {
+	if (env->cleanup_info_cnt || bpf_prog_may_unwind(env)) {
 		ret = bpf_exc_check_prog(env);
 		if (ret)
 			goto skip_full_check;
@@ -23716,6 +23716,9 @@ skip_full_check:
 	if (ret == 0)
 		/* program is valid, convert *(u32*)(ctx + off) accesses */
 		ret = bpf_convert_ctx_accesses(env);
+
+	if (ret == 0)
+		ret = bpf_exc_patch_unwind_calls(env);
 
 	if (ret == 0)
 		ret = bpf_do_misc_fixups(env);
