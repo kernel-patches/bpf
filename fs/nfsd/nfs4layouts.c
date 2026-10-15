@@ -312,6 +312,7 @@ nfsd4_alloc_layout_stateid(struct nfsd4_compound_state *cstate,
 		return NULL;
 	}
 
+	ls->ls_recall_start = 0;
 	ls->ls_fenced = false;
 	ls->ls_fence_inflight = false;
 	ls->ls_fence_stopped = false;
@@ -832,12 +833,18 @@ nfsd4_cb_layout_done(struct nfsd4_callback *cb, struct rpc_task *task)
 			return 1;
 
 		/* Poll the client until it's done with the layout */
-		now = ktime_get();
+		now = ktime_get_boottime();
 		nn = net_generic(ls->ls_stid.sc_client->net, nfsd_net_id);
 
-		/* Client gets 2 lease periods to return it */
-		cutoff = ktime_add_ns(task->tk_start,
-					 (u64)nn->nfsd4_lease * NSEC_PER_SEC * 2);
+		/*
+		 * Client gets 2 lease periods to return it, counted from its
+		 * first answer. task->tk_start is reset each time the RPC task
+		 * is restarted, so it cannot anchor the limit.
+		 */
+		if (!ls->ls_recall_start)
+			ls->ls_recall_start = now;
+		cutoff = ktime_add_ns(ls->ls_recall_start,
+				      (u64)nn->nfsd4_lease * NSEC_PER_SEC * 2);
 
 		if (ktime_before(now, cutoff)) {
 			rpc_delay(task, HZ/100); /* 10 mili-seconds */

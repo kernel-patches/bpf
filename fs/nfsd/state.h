@@ -853,6 +853,7 @@ struct nfs4_layout_stateid {
 	struct nfsd_file		*ls_file;
 	struct nfsd4_callback		ls_recall;
 	stateid_t			ls_recall_sid;
+	ktime_t				ls_recall_start;
 	bool				ls_recalled;
 	struct mutex			ls_mutex;
 
