@@ -4461,15 +4461,36 @@ static bool mlx5_devlink_switchdev_active_mode_change(struct mlx5_eswitch *esw,
 #define MLX5_ESW_HOLD_TIMEOUT_MS 7000
 #define MLX5_ESW_HOLD_RETRY_DELAY_MS 500
 
+/* Unlike mlx5_esw_try_lock(), don't refuse the lock over eswitch users.
+ * Teardown must run even with TC flows still offloaded, as those are only
+ * flushed once the REPs are removed.
+ */
+static bool esw_try_lock_ignore_users(struct mlx5_eswitch *esw)
+{
+	if (!down_write_trylock(&esw->mode_lock))
+		return false;
+
+	if (esw->eswitch_operation_in_progress) {
+		up_write(&esw->mode_lock);
+		return false;
+	}
+
+	return true;
+}
+
 void mlx5_eswitch_safe_aux_devs_remove(struct mlx5_core_dev *dev)
 {
+	struct mlx5_eswitch *esw = dev->priv.eswitch;
 	unsigned long timeout;
 	bool hold_esw = true;
 
+	if (!mlx5_esw_allowed(esw))
+		return;
+
 	/* Wait for any concurrent eswitch mode transition to complete. */
-	if (!mlx5_esw_hold(dev)) {
+	if (!esw_try_lock_ignore_users(esw)) {
 		timeout = jiffies + msecs_to_jiffies(MLX5_ESW_HOLD_TIMEOUT_MS);
-		while (!mlx5_esw_hold(dev)) {
+		while (!esw_try_lock_ignore_users(esw)) {
 			if (!time_before(jiffies, timeout)) {
 				hold_esw = false;
 				break;
@@ -4478,9 +4499,19 @@ void mlx5_eswitch_safe_aux_devs_remove(struct mlx5_core_dev *dev)
 		}
 	}
 	if (hold_esw) {
+		/* Keep mode_lock and reps_lock unnested. The operation flag
+		 * excludes mode users while mode_lock is dropped before the
+		 * REPs removal takes reps_lock.
+		 */
+		esw->eswitch_operation_in_progress = true;
+		mlx5_esw_unlock(esw);
+
 		if (mlx5_eswitch_mode(dev) == MLX5_ESWITCH_OFFLOADS)
 			mlx5_core_reps_aux_devs_remove(dev);
-		mlx5_esw_release(dev);
+
+		down_write(&esw->mode_lock);
+		esw->eswitch_operation_in_progress = false;
+		mlx5_esw_unlock(esw);
 	}
 }
 
