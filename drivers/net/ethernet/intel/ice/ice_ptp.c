@@ -759,7 +759,8 @@ ice_ptp_alloc_tx_tracker(struct ice_ptp_tx *tx)
  * @pf: Board private structure
  * @tx: the tracker to flush
  *
- * Called during teardown when a Tx tracker is being removed.
+ * Called to immediately discard any outstanding Tx timestamps, including when
+ * tearing down the Tx tracker, and on E825 when restarting the PHY.
  */
 static void
 ice_ptp_flush_tx_tracker(struct ice_pf *pf, struct ice_ptp_tx *tx)
@@ -1330,7 +1331,7 @@ ice_ptp_port_phy_restart(struct ice_ptp_port *ptp_port)
 		ptp_port->tx.calibrating = true;
 		spin_unlock_irqrestore(&ptp_port->tx.lock, flags);
 
-		ice_ptp_mark_tx_tracker_stale(&ptp_port->tx);
+		ice_ptp_flush_tx_tracker(pf, &ptp_port->tx);
 
 		err = ice_start_phy_timer_eth56g(hw, port);
 		if (err)
