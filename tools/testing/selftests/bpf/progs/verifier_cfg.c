@@ -96,6 +96,82 @@ __naked void subprog_fallthrough(void)
 "	::: __clobber_all);
 }
 
+void bpf_rcu_read_lock(void) __ksym;
+void bpf_throw(__u64 cookie) __ksym;
+
+/* A use from C, for the BTF of the kfuncs, which a use from asm alone lacks. */
+static __used __noinline void __kfunc_btf_anchor(void)
+{
+	bpf_rcu_read_lock();
+	bpf_throw(0);
+}
+
+/* A call may end a subprog, but not one to a kfunc that returns. */
+static __naked __noinline __used void kfunc_call_last(void)
+{
+	asm volatile ("					\
+	call %[bpf_rcu_read_lock];			\
+"	:
+	: __imm(bpf_rcu_read_lock)
+	: __clobber_all);
+}
+
+SEC("socket")
+__description("subprogram ends with a kfunc call that returns")
+__failure __msg("last insn is not an exit or jmp")
+__naked void kfunc_call_falls_through(void)
+{
+	asm volatile ("					\
+	call kfunc_call_last;				\
+	r0 = 0;						\
+	exit;						\
+"	::: __clobber_all);
+}
+
+/*
+ * No exit insn, so a call to it may end a subprog, but a BPF_LD_ABS that
+ * fails returns from it all the same.
+ */
+static __naked __noinline __used int ld_abs_no_exit(void)
+{
+	asm volatile ("					\
+	r6 = r1;					\
+	r0 = *(u8*)skb[0];				\
+l0_%=:	goto l0_%=;					\
+"	::: __clobber_all);
+}
+
+SEC("socket")
+__description("subprogram ends with a call that returns through ld_abs")
+__failure __msg("last insn is not an exit or jmp")
+__naked void ld_abs_call_falls_through(void)
+{
+	asm volatile ("					\
+	call ld_abs_no_exit;				\
+"	::: __clobber_all);
+}
+
+/* Only throws, but a global subprog is taken to return. */
+__naked __noinline __used int global_throws(void)
+{
+	asm volatile ("					\
+	r1 = 0;						\
+	call %[bpf_throw];				\
+"	:
+	: __imm(bpf_throw)
+	: __clobber_all);
+}
+
+SEC("tc")
+__description("subprogram ends with a call to a global subprog that throws")
+__failure __msg("last insn is not an exit or jmp")
+__naked void global_call_falls_through(void)
+{
+	asm volatile ("					\
+	call global_throws;				\
+"	::: __clobber_all);
+}
+
 SEC("socket")
 __description("invalid DW LDSX instruction in diagnostics")
 __failure __msg("BUG_ldx_99")
