@@ -589,11 +589,13 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 			 * *subprog* from exit from *callback*. In the former
 			 * case, we need to propagate the precision of the
 			 * return registers, if necessary. In the latter we
-			 * never do that.
+			 * never do that. A call that ends its subprog is never
+			 * returned to, so it does not count.
 			 */
 			from_subprog_call = subseq_idx - 1 >= 0 &&
 					    (bpf_pseudo_call(&env->prog->insnsi[subseq_idx - 1]) ||
-					     bpf_is_callx(&env->prog->insnsi[subseq_idx - 1]));
+					     bpf_is_callx(&env->prog->insnsi[subseq_idx - 1])) &&
+					    !bpf_call_ends_subprog(env, subseq_idx - 1);
 
 			r0_precise = from_subprog_call && bt_is_reg_set(bt, BPF_REG_0);
 			r2_precise = from_subprog_call && bt_is_reg_set(bt, BPF_REG_2);

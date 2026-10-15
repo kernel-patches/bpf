@@ -215,6 +215,10 @@ static int visit_func_call_insn(int t, struct bpf_insn *insns,
 		return ret;
 
 	insn_sz = bpf_is_ldimm64(&insns[t]) ? 2 : 1;
+	if (bpf_call_ends_subprog(env, t)) {
+		ret = DONE_EXPLORING;
+		goto callee;
+	}
 	ret = push_insn(t, t + insn_sz, FALLTHROUGH, env);
 	if (ret)
 		return ret;
@@ -223,6 +227,7 @@ static int visit_func_call_insn(int t, struct bpf_insn *insns,
 	/* when we exit from subprog, we need to record non-linear history */
 	mark_jmp_point(env, t + insn_sz);
 
+callee:
 	if (visit_callee) {
 		w = t + insns[t].imm + 1;
 		mark_prune_point(env, t);

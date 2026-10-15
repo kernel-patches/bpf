@@ -3317,6 +3317,17 @@ static void find_subprog_properties(struct bpf_verifier_env *env)
 	}
 }
 
+static int subprog_falls_through(struct bpf_verifier_env *env, int subprog, int idx)
+{
+	verbose(env, "last insn is not an exit or jmp\n");
+	bpf_diag_program_structure(
+		env, idx, "subprogram can fall through",
+		"End each subprogram with an exit or an explicit jump that keeps control flow inside the subprogram.",
+		"Subprogram %d reaches its last instruction %d without an exit or jump, so control could continue into the next subprogram.",
+		subprog, idx);
+	return -EINVAL;
+}
+
 static int check_subprogs(struct bpf_verifier_env *env)
 {
 	int i, subprog_start, subprog_end, off, cur_subprog = 0;
@@ -3356,25 +3367,44 @@ next:
 			/*
 			 * To avoid fall-through from one subprog into another,
 			 * the last insn of the subprog should be either exit
-			 * or unconditional jump back or bpf_throw call.
+			 * or unconditional jump back or a call that never
+			 * returns: to a kfunc checked below, or to a subprog
+			 * that do_check() finds never returns.
 			 */
 			if (code != (BPF_JMP | BPF_EXIT) &&
 			    code != (BPF_JMP32 | BPF_JA) &&
 			    code != (BPF_JMP | BPF_JA) &&
-			    !insn_is_gotox(&insn[i])) {
-				verbose(env, "last insn is not an exit or jmp\n");
-				bpf_diag_program_structure(
-					env, i, "subprogram can fall through",
-					"End each subprogram with an exit or an explicit jump that keeps control flow inside the subprogram.",
-					"Subprogram %d reaches its last instruction %d without an exit or jump, so control could continue into the next subprogram.",
-					cur_subprog, i);
-				return -EINVAL;
-			}
+			    !insn_is_gotox(&insn[i]) &&
+			    !bpf_call_ends_subprog(env, i))
+				return subprog_falls_through(env, cur_subprog, i);
 			subprog_start = subprog_end;
 			cur_subprog++;
 			if (cur_subprog < env->subprog_cnt)
 				subprog_end = subprog[cur_subprog + 1].start;
 		}
+	}
+
+	/*
+	 * A compiler ends a subprog with a call to a subprog only if the callee
+	 * has no exit, and with a call to a kfunc only if the kfunc never
+	 * returns. Refuse any other final call here, before do_check() can fail
+	 * on something else first, or follow a branch a kfunc pushed after it.
+	 */
+	for (i = 0; i < env->subprog_cnt; i++) {
+		int last = subprog[i + 1].start - 1, callee;
+
+		if (bpf_pseudo_kfunc_call(&insn[last])) {
+			if (!bpf_is_unwind_kfunc(&insn[last]) &&
+			    !bpf_is_unwind_resume_kfunc(&insn[last]) &&
+			    !bpf_is_throw_kfunc(&insn[last]))
+				return subprog_falls_through(env, i, last);
+			continue;
+		}
+		if (!bpf_pseudo_call(&insn[last]))
+			continue;
+		callee = bpf_find_subprog(env, last + insn[last].imm + 1);
+		if (callee >= 0 && subprog[callee].exit_idx != U32_MAX)
+			return subprog_falls_through(env, i, last);
 	}
 	return 0;
 }
@@ -11836,6 +11866,14 @@ static bool retval_range_within(struct bpf_retval_range range, const struct bpf_
 		return range.minval <= reg_smin(reg) && reg_smax(reg) <= range.maxval;
 }
 
+static int check_return_to_call(struct bpf_verifier_env *env, int call_idx)
+{
+	if (!bpf_call_ends_subprog(env, call_idx))
+		return 0;
+	return subprog_falls_through(env, bpf_find_containing_subprog(env, call_idx) -
+					  env->subprog_info, call_idx);
+}
+
 static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 {
 	struct bpf_verifier_state *state = env->cur_state, *prev_st;
@@ -11910,10 +11948,14 @@ static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 	 * converges is_state_visited() would prune that visit eventually.
 	 */
 	in_callback_fn = callee->in_callback_fn;
-	if (in_callback_fn)
+	if (in_callback_fn) {
 		*insn_idx = callee->callsite;
-	else
+	} else {
+		err = check_return_to_call(env, callee->callsite);
+		if (err)
+			return err;
 		*insn_idx = callee->callsite + 1;
+	}
 
 	if (env->log.level & BPF_LOG_LEVEL) {
 		verbose(env, "returning from callee:\n");
@@ -19419,6 +19461,8 @@ static void mark_fastcall_pattern_for_call(struct bpf_verifier_env *env,
 	s16 off;
 	int i;
 
+	if (bpf_call_ends_subprog(env, insn_idx))
+		return;
 	if (!bpf_get_call_summary(env, call, &cs))
 		return;
 
@@ -20101,7 +20145,13 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 				return check_func_callx(env, insn, &env->insn_idx);
 			if (insn->src_reg == BPF_PSEUDO_CALL) {
 				int call_idx = env->insn_idx;
+				int callee = bpf_find_subprog(env, call_idx + insn->imm + 1);
 
+				if (callee >= 0 && bpf_subprog_is_global(env, callee)) {
+					err = check_return_to_call(env, call_idx);
+					if (err)
+						return err;
+				}
 				err = check_func_call(env, insn, &env->insn_idx);
 				if (err)
 					return err;

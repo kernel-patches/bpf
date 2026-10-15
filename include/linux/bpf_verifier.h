@@ -1730,6 +1730,16 @@ bool btf_struct_is_composed_of(struct bpf_verifier_env *env, const struct btf *b
 u32 btf_func_arg_align(const struct btf *btf, const struct btf_type *t);
 
 int bpf_find_subprog(struct bpf_verifier_env *env, int off);
+
+static inline bool bpf_call_ends_subprog(struct bpf_verifier_env *env, int idx)
+{
+	struct bpf_insn *insn = &env->prog->insnsi[idx];
+
+	if (!bpf_pseudo_call(insn) && !bpf_pseudo_kfunc_call(insn))
+		return false;
+	return idx + 1 == env->prog->len || bpf_find_subprog(env, idx + 1) >= 0;
+}
+
 bool bpf_is_throw_kfunc(struct bpf_insn *insn);
 int bpf_compute_const_regs(struct bpf_verifier_env *env);
 int bpf_prune_dead_branches(struct bpf_verifier_env *env);

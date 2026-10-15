@@ -386,7 +386,7 @@ bpf_insn_successors(struct bpf_verifier_env *env, u32 idx)
 
 	opcode_info = &opcode_info_tbl[BPF_CLASS(insn->code) | BPF_OP(insn->code)];
 	insn_sz = bpf_is_ldimm64(insn) ? 2 : 1;
-	if (opcode_info->can_fallthrough)
+	if (opcode_info->can_fallthrough && !bpf_call_ends_subprog(env, idx))
 		succ->items[succ->cnt++] = idx + insn_sz;
 
 	if (opcode_info->can_jump)
@@ -435,8 +435,6 @@ static inline bool update_insn(struct bpf_verifier_env *env,
 	u32 s, w;
 
 	succ = bpf_insn_successors(env, insn_idx);
-	if (succ->cnt == 0)
-		return false;
 
 	/* All instructions of one frame array share the same mask width */
 	for (s = 0; s < succ->cnt; ++s) {
@@ -544,7 +542,7 @@ bool bpf_stack_slot_alive(struct bpf_verifier_env *env, u32 frameno, u32 half_sp
 	 * Slot is alive if it is read before q->insn_idx in current func instance,
 	 * or if for some outer func instance:
 	 * - alive before callsite if callsite calls callback or is callx, otherwise
-	 * - alive after callsite,
+	 * - alive after callsite, unless the call ends its subprog,
 	 * - or alive at the landing pad a cleanup record gives the callsite
 	 */
 	struct live_stack_query *q = &env->liveness->live_stack_query;
@@ -579,7 +577,8 @@ bool bpf_stack_slot_alive(struct bpf_verifier_env *env, u32 frameno, u32 half_sp
 
 		alive = callee_stack_access_at_callsite(env, callsite)
 			? is_live_before(instance, callsite, rel, half_spi)
-			: is_live_before(instance, callsite + 1, rel, half_spi);
+			: !bpf_call_ends_subprog(env, callsite) &&
+			  is_live_before(instance, callsite + 1, rel, half_spi);
 
 		if (!alive && unlikely(env->cleanup_info_cnt)) {
 			int pad = bpf_exc_pad_of_call(env, callsite);
