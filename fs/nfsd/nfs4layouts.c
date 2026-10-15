@@ -363,6 +363,7 @@ nfsd4_preprocess_layout_stateid(struct svc_rqst *rqstp,
 	struct nfs4_stid *stid;
 	unsigned short typemask = SC_TYPE_LAYOUT;
 	__be32 status;
+	bool after;
 
 	if (create)
 		typemask |= (SC_TYPE_OPEN | SC_TYPE_LOCK | SC_TYPE_DELEG);
@@ -392,7 +393,12 @@ nfsd4_preprocess_layout_stateid(struct svc_rqst *rqstp,
 
 		status = nfserr_bad_stateid;
 		mutex_lock(&ls->ls_mutex);
-		if (nfsd4_stateid_generation_after(stateid, &stid->sc_stateid))
+		/* The recall's ->done bumps the seqid under sc_lock alone. */
+		spin_lock(&stid->sc_lock);
+		after = nfsd4_stateid_generation_after(stateid,
+						       &stid->sc_stateid);
+		spin_unlock(&stid->sc_lock);
+		if (after)
 			goto out_unlock_stid;
 		if (layout_type != ls->ls_layout_type)
 			goto out_unlock_stid;
@@ -878,6 +884,7 @@ nfsd4_cb_layout_prepare(struct nfsd4_callback *cb)
 	mutex_lock(&ls->ls_mutex);
 	nfs4_inc_and_copy_stateid(&ls->ls_recall_sid, &ls->ls_stid);
 	mutex_unlock(&ls->ls_mutex);
+	ls->ls_recall_accepted = false;
 	return true;
 }
 
@@ -903,8 +910,25 @@ nfsd4_cb_layout_done(struct nfsd4_callback *cb, struct rpc_task *task)
 
 	trace_nfsd_cb_layout_done(&ls->ls_stid.sc_stateid, task);
 	switch (task->tk_status) {
-	case 0:
+	case -NFS4ERR_OLD_STATEID:
+		/*
+		 * The poll reuses the recall's seqid, against RFC 8881
+		 * section 12.5.3, so a client returning its layouts answers
+		 * NFS4ERR_OLD_STATEID too. A client that has not taken the
+		 * recall up is past that seqid, e.g. after a LAYOUTRETURN,
+		 * and gets a new one. ls_mutex could block rpciod, so the bump
+		 * relies on sc_lock.
+		 */
+		if (!ls->ls_recall_accepted) {
+			nfs4_inc_and_copy_stateid(&ls->ls_recall_sid,
+						  &ls->ls_stid);
+			trace_nfsd_layout_recall_new_seqid(&ls->ls_recall_sid);
+		}
+		fallthrough;
 	case -NFS4ERR_DELAY:
+	case 0:
+		if (!task->tk_status)
+			ls->ls_recall_accepted = true;
 		/*
 		 * Anything left? If not, then call it done. Note that we don't
 		 * take the spinlock since this is an optimization and nothing
