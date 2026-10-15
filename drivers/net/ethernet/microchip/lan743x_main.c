@@ -3334,6 +3334,8 @@ static int lan743x_netdev_close(struct net_device *netdev)
 	struct lan743x_adapter *adapter = netdev_priv(netdev);
 	int index;
 
+	lan743x_phylink_disconnect(adapter);
+
 	for (index = 0; index < adapter->used_tx_channels; index++)
 		lan743x_tx_close(&adapter->tx[index]);
 
@@ -3341,8 +3343,6 @@ static int lan743x_netdev_close(struct net_device *netdev)
 		lan743x_rx_close(&adapter->rx[index]);
 
 	lan743x_ptp_close(adapter);
-
-	lan743x_phylink_disconnect(adapter);
 
 	lan743x_mac_close(adapter);
 
@@ -3365,10 +3365,6 @@ static int lan743x_netdev_open(struct net_device *netdev)
 	if (ret)
 		goto close_intr;
 
-	ret = lan743x_phylink_connect(adapter);
-	if (ret)
-		goto close_mac;
-
 	ret = lan743x_ptp_open(adapter);
 	if (ret)
 		goto close_mac;
@@ -3386,6 +3382,10 @@ static int lan743x_netdev_open(struct net_device *netdev)
 		if (ret)
 			goto close_tx;
 	}
+
+	ret = lan743x_phylink_connect(adapter);
+	if (ret)
+		goto close_tx;
 
 	if (netdev->phydev)
 		phy_support_eee(netdev->phydev);
@@ -3414,8 +3414,6 @@ close_rx:
 			lan743x_rx_close(&adapter->rx[index]);
 	}
 	lan743x_ptp_close(adapter);
-	if (adapter->phylink)
-		lan743x_phylink_disconnect(adapter);
 
 close_mac:
 	lan743x_mac_close(adapter);
