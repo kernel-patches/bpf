@@ -346,14 +346,15 @@ out:
 }
 
 static void
-nfsd4_recall_file_layout(struct nfs4_layout_stateid *ls)
+nfsd4_recall_file_layout_locked(struct nfs4_layout_stateid *ls)
 {
-	spin_lock(&ls->ls_lock);
+	lockdep_assert_held(&ls->ls_lock);
+
 	if (ls->ls_recalled)
-		goto out_unlock;
+		return;
 
 	if (list_empty(&ls->ls_layouts))
-		goto out_unlock;
+		return;
 
 	ls->ls_recalled = true;
 	atomic_inc(&ls->ls_stid.sc_file->fi_lo_recalls);
@@ -363,7 +364,32 @@ nfsd4_recall_file_layout(struct nfs4_layout_stateid *ls)
 		refcount_inc(&ls->ls_stid.sc_count);
 		nfsd4_run_cb(&ls->ls_recall);
 	}
-out_unlock:
+}
+
+static void
+nfsd4_recall_file_layout(struct nfs4_layout_stateid *ls)
+{
+	spin_lock(&ls->ls_lock);
+	nfsd4_recall_file_layout_locked(ls);
+	spin_unlock(&ls->ls_lock);
+}
+
+/*
+ * A layout stateid with no layouts belongs to a LAYOUTGET in progress
+ * and already holds the lease. Mark the stateid recalled so that
+ * nfsd4_insert_layout() fails the LAYOUTGET and the lease is released.
+ */
+static void
+nfsd4_break_file_layout(struct nfs4_layout_stateid *ls)
+{
+	spin_lock(&ls->ls_lock);
+	if (!ls->ls_recalled && list_empty(&ls->ls_layouts)) {
+		ls->ls_recalled = true;
+		atomic_inc(&ls->ls_stid.sc_file->fi_lo_recalls);
+		trace_nfsd_layout_recall_empty(&ls->ls_stid.sc_stateid);
+	} else {
+		nfsd4_recall_file_layout_locked(ls);
+	}
 	spin_unlock(&ls->ls_lock);
 }
 
@@ -442,6 +468,10 @@ nfsd4_insert_layout(struct nfsd4_layoutget *lgp, struct nfs4_layout_stateid *ls)
 	if (nfserr)
 		goto out;
 	spin_lock(&ls->ls_lock);
+	if (ls->ls_recalled) {
+		nfserr = nfserr_recallconflict;
+		goto out_unlock_ls;
+	}
 	list_for_each_entry(lp, &ls->ls_layouts, lo_perstate) {
 		if (layouts_try_merge(&lp->lo_seg, seg))
 			goto done;
@@ -460,6 +490,10 @@ nfsd4_insert_layout(struct nfsd4_layoutget *lgp, struct nfs4_layout_stateid *ls)
 	if (nfserr)
 		goto out;
 	spin_lock(&ls->ls_lock);
+	if (ls->ls_recalled) {
+		nfserr = nfserr_recallconflict;
+		goto out_unlock_ls;
+	}
 	list_for_each_entry(lp, &ls->ls_layouts, lo_perstate) {
 		if (layouts_try_merge(&lp->lo_seg, seg))
 			goto done;
@@ -470,6 +504,7 @@ nfsd4_insert_layout(struct nfsd4_layoutget *lgp, struct nfs4_layout_stateid *ls)
 	new = NULL;
 done:
 	nfs4_inc_and_copy_stateid(&lgp->lg_sid, &ls->ls_stid);
+out_unlock_ls:
 	spin_unlock(&ls->ls_lock);
 out:
 	spin_unlock(&fp->fi_lock);
@@ -806,7 +841,7 @@ nfsd4_layout_lm_break(struct file_lease *fl)
 	 * Enforce break lease timeout to prevent NFSD
 	 * thread from hanging in __break_lease.
 	 */
-	nfsd4_recall_file_layout(fl->c.flc_owner);
+	nfsd4_break_file_layout(fl->c.flc_owner);
 	return false;
 }
 
