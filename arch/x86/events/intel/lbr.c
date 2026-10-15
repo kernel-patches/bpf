@@ -1026,8 +1026,10 @@ void intel_pmu_lbr_read(void)
 	 * but this simple approach seems to work for now.
 	 */
 	if (!cpuc->lbr_users || vlbr_exclude_host() ||
-	    cpuc->lbr_users == cpuc->lbr_pebs_users)
+	    cpuc->lbr_users == cpuc->lbr_pebs_users) {
+		cpuc->lbr_stack.nr = 0;
 		return;
+	}
 
 	x86_pmu.lbr_read(cpuc);
 
