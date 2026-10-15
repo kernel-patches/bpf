@@ -912,6 +912,15 @@ nfsd4_cb_layout_done(struct nfsd4_callback *cb, struct rpc_task *task)
 		 */
 		if (list_empty(&ls->ls_layouts))
 			return 1;
+		/*
+		 * The fence worker of a lease break is done: revoke the
+		 * layouts (RFC 8881 section 12.5.6), before one lease period
+		 * (section 12.5.5) when fs.lease-break-time is shorter.
+		 */
+		if (nfsd4_layout_fenced(ls)) {
+			trace_nfsd_layout_recall_fail(&ls->ls_stid.sc_stateid);
+			return 1;
+		}
 
 		/* Poll the client until it's done with the layout */
 		now = ktime_get_boottime();
