@@ -1444,10 +1444,12 @@ STATIC_IFN_KUNIT void handle_hpd_irq_helper(struct amdgpu_dm_connector *aconnect
 		if (delayed_work_pending(&aconnector->hdmi_hpd_debounce_work))
 			return;
 
-		scoped_guard(mutex, &adev->dm.dc_lock) {
-			dc_exit_ips_for_hw_access(dc);
-			ret = dc_link_detect(aconnector->dc_link, reason);
-		}
+		if (!amdgpu_in_reset(adev))
+			mutex_lock(&adev->dm.dc_lock);
+		dc_exit_ips_for_hw_access(dc);
+		ret = dc_link_detect(aconnector->dc_link, reason);
+		if (!amdgpu_in_reset(adev))
+			mutex_unlock(&adev->dm.dc_lock);
 		if (ret) {
 			/* w/a delay for certain panels */
 			amdgpu_dm_apply_delay_after_dpcd_poweroff(adev, aconnector->dc_sink);
