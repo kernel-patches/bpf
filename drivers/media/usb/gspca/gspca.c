@@ -865,6 +865,8 @@ static int gspca_init_transfer(struct gspca_dev *gspca_dev)
 		/* something when wrong
 		 * stop the webcam and free the transfer resources */
 		gspca_stream_off(gspca_dev);
+		/* The retry or exit path creates its own input URB. */
+		gspca_input_destroy_urb(gspca_dev);
 		if (ret != -ENOSPC) {
 			pr_err("usb_submit_urb alt %d err %d\n",
 			       gspca_dev->alt, ret);
