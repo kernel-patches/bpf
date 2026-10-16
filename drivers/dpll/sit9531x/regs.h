@@ -200,6 +200,7 @@
 /* Debug register (same offset, per-page) */
 #define SIT9531X_REG_OUTSYS_DEBUG		SIT9531X_REG(0x03, 0xBD)
 #define SIT9531X_DEBUG_UNLOCK_VAL		0xC3
+#define SIT9531X_DEBUG_LOCK_VAL			0x00
 
 /*
  * On-demand phase-flush fired from a register rather than a GPIO pin.
@@ -213,6 +214,18 @@
 
 /* ---- PLL page registers (apply to pages 0x0A-0x0D) ---- */
 #define SIT9531X_PLL_REG_SMALL_UPDATE	0x0F
+
+/* On-demand phase-flush enable (PLL page reg 0x3D bit 7) */
+#define SIT9531X_PLL_REG_PHFL_CTRL	0x3D
+#define SIT9531X_PLL_PHFL_ON_DEMAND_EN	BIT(7)
+
+/* Whether the PLL has the phase-flush feature (PLL page reg 0x47 bit 7) */
+#define SIT9531X_PLL_REG_CONFIG47	0x47
+#define SIT9531X_PLL_CONFIG47_PHFL_EN	BIT(7)
+
+/* Directives_GENERIC_PLL: the restart bit restarts the PLL, self-clearing */
+#define SIT9531X_PLL_REG_DIRECTIVES	0x05
+#define SIT9531X_PLL_DIRECTIVE_RESTART	BIT(0)
 
 /*
  * Loop-filter coefficients on PLL_PAGE regs 0x10-0x15 (3 normal +
@@ -228,6 +241,14 @@
 #define SIT9531X_PLL_REG_OUT_MAP_HI		0x27
 #define SIT9531X_PLL_REG_OUT_MAP_LO		0x28
 #define SIT9531X_PLL_REG_STATUS		0x31
+
+/* DIVN registers (free-run divider readback) */
+#define SIT9531X_PLL_REG_DIVN_INT		0x30
+#define SIT9531X_PLL_REG_DIVN_NUM		0x32  /* 4 bytes (0x32-0x35) */
+#define SIT9531X_PLL_REG_DIVN_DEN		0x38  /* 4 bytes (0x38-0x3B) */
+
+/* DIVN is carried as fixed point, in steps of 1e-12 of a whole divider */
+#define SIT9531X_DIVN_SCALE		1000000000000ULL
 
 #define SIT9531X_PLL_REG_ACTIVE		0x02
 #define SIT9531X_PLL_ACTIVE_BIT		BIT(0)  /* PLL reached active state */

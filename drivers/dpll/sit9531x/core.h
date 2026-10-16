@@ -192,6 +192,8 @@ struct sit9531x_chan {
  *			synchronization (INTSYNC), or -1 when disabled
  * @irq_ack_fails:	consecutive failures to acknowledge the
  *			notification latches from the interrupt handler
+ * @fvco_band_warned:	bit per PLL whose Fref * DIVN has been reported as
+ *			outside its VCO band; written under @multiop_lock
  */
 struct sit9531x_dev {
 	struct device			*dev;
@@ -203,6 +205,7 @@ struct sit9531x_dev {
 
 	/* Hardware state */
 	u8			irq_ack_fails;
+	u8			fvco_band_warned;
 	struct sit9531x_ref	ref[SIT9531X_MAX_INPUTS + 1]; /* +1 for xtal */
 	struct sit9531x_out	out[SIT9531X_MAX_OUTPUTS];
 	struct sit9531x_chan	chan[SIT9531X_NUM_PLLS];
@@ -258,6 +261,10 @@ int sit9531x_input_prio_add(struct sit9531x_dev *sitdev, u8 pll_idx,
 /* ---- Output enable/disable (Hi-Z control) ---- */
 
 /* ---- Output frequency ---- */
+int sit9531x_output_freq_set(struct sit9531x_dev *sitdev, u8 out_idx,
+			     u8 pll_idx, u64 frequency);
+int sit9531x_output_freq_get(struct sit9531x_dev *sitdev, u8 out_idx,
+			     u64 *frequency);
 
 /* ---- Output phase adjust (PRG_RST_DELAY register-based) ---- */
 
