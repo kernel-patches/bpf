@@ -4535,8 +4535,7 @@ error0:
  */
 int					/* error */
 xfs_btree_delete(
-	struct xfs_btree_cur	*cur,
-	int			*stat)	/* success/failure */
+	struct xfs_btree_cur	*cur)
 {
 	int			error;	/* error return value */
 	int			level;
@@ -4584,7 +4583,6 @@ xfs_btree_delete(
 		goto error0;
 	}
 
-	*stat = i;
 	return 0;
 error0:
 	return error;
