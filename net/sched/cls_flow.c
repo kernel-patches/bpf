@@ -408,6 +408,7 @@ static int flow_change(struct net *net, struct sk_buff *in_skb,
 	u32 keymask = 0;
 	u32 mode;
 	int err;
+	u32 val;
 
 	if (opt == NULL)
 		return -EINVAL;
@@ -486,7 +487,13 @@ static int flow_change(struct net *net, struct sk_buff *in_skb,
 		if (tb[TCA_FLOW_PERTURB]) {
 			if (mode != FLOW_MODE_HASH)
 				goto err2;
-			perturb_period = nla_get_u32(tb[TCA_FLOW_PERTURB]) * HZ;
+			val = nla_get_u32(tb[TCA_FLOW_PERTURB]);
+			if (val > INT_MAX / HZ) {
+				NL_SET_ERR_MSG_MOD(extack, "invalid perturb period");
+				err = -EINVAL;
+				goto err2;
+			}
+			perturb_period = val * HZ;
 		}
 	} else {
 		err = -EINVAL;
@@ -504,7 +511,13 @@ static int flow_change(struct net *net, struct sk_buff *in_skb,
 		if (tb[TCA_FLOW_PERTURB]) {
 			if (mode != FLOW_MODE_HASH)
 				goto err2;
-			perturb_period = nla_get_u32(tb[TCA_FLOW_PERTURB]) * HZ;
+			val = nla_get_u32(tb[TCA_FLOW_PERTURB]);
+			if (val > INT_MAX / HZ) {
+				NL_SET_ERR_MSG_MOD(extack, "invalid perturb period");
+				err = -EINVAL;
+				goto err2;
+			}
+			perturb_period = val * HZ;
 		}
 
 		if (TC_H_MAJ(baseclass) == 0) {
