@@ -9,6 +9,14 @@
 #endif
 #endif
 
+#ifndef __bpf_core_pso
+#if __has_attribute(preserve_static_offset)
+#define __bpf_core_pso preserve_static_offset
+#else
+#define __bpf_core_pso
+#endif
+#endif
+
 #ifndef __ksym
 #define __ksym __attribute__((section(".ksyms")))
 #endif

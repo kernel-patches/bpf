@@ -1203,12 +1203,17 @@ static int btf_c_annotate_records(struct btf *btf)
 
 	for (i = 1; i < cnt; i++) {
 		const struct btf_type *t = btf__type_by_id(btf, i);
+		const char *attr;
 
 		if (!btf_is_composite(t))
 			continue;
-		if (test_bit(i, no_pai))
+		if (!test_bit(i, no_pai))
+			attr = "__bpf_core_pai";
+		else if (btf_c_needs_static_offset(btf, t))
+			attr = "__bpf_core_pso";
+		else
 			continue;
-		err = btf__add_decl_attr(btf, "__bpf_core_pai", i, -1);
+		err = btf__add_decl_attr(btf, attr, i, -1);
 		if (err < 0)
 			goto out;
 	}
@@ -1249,6 +1254,13 @@ static int dump_btf_c(const struct btf *btf,
 	printf("#define __bpf_core_pai preserve_access_index\n");
 	printf("#else\n");
 	printf("#define __bpf_core_pai\n");
+	printf("#endif\n");
+	printf("#endif\n\n");
+	printf("#ifndef __bpf_core_pso\n");
+	printf("#if __has_attribute(preserve_static_offset)\n");
+	printf("#define __bpf_core_pso preserve_static_offset\n");
+	printf("#else\n");
+	printf("#define __bpf_core_pso\n");
 	printf("#endif\n");
 	printf("#endif\n\n");
 	printf("#ifndef __ksym\n");
