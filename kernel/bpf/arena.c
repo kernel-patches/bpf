@@ -4,12 +4,14 @@
 #include <linux/btf.h>
 #include <linux/cacheflush.h>
 #include <linux/err.h>
+#include <linux/fs.h>
 #include <linux/irq_work.h>
 #include "linux/filter.h"
 #include <linux/llist.h>
 #include <linux/btf_ids.h>
 #include <linux/vmalloc.h>
 #include <linux/pagemap.h>
+#include <linux/sched/mm.h>
 #include <asm/tlbflush.h>
 #include "range_tree.h"
 
@@ -492,15 +494,98 @@ static void arena_vm_close(struct vm_area_struct *vma)
 	kfree(vml);
 }
 
+/*
+ * Complete the shared fault here, rather than handing a locked page to MM.
+ * __do_fault() assumes that a mapped, poisoned VM_FAULT_LOCKED page has an
+ * address_space; arena pages deliberately do not have one.
+ * finish_fault() consumes the fault's reference only on successful insertion.
+ */
+static vm_fault_t arena_install_page(struct vm_fault *vmf, struct page *page)
+{
+	struct folio *folio = page_folio(page);
+	bool write = vmf->flags & FAULT_FLAG_WRITE;
+	vm_fault_t ret;
+
+	if (unlikely(PageHWPoison(page))) {
+		ret = VM_FAULT_HWPOISON;
+		goto out_put;
+	}
+
+	vmf->page = page;
+	ret = finish_fault(vmf);
+	vmf->page = NULL;
+	if (ret)
+		goto out_put;
+
+	/* Poison can be set without the folio lock, including during insertion. */
+	if (unlikely(PageHWPoison(page))) {
+		zap_vma_range(vmf->vma, vmf->address, PAGE_SIZE);
+		ret = VM_FAULT_HWPOISON;
+	} else if (write) {
+		/* Match do_shared_fault(), without page-cache writeback throttling. */
+		folio_mark_dirty(folio);
+	}
+	folio_unlock(folio);
+	if (!ret && write)
+		file_update_time(vmf->vma->vm_file);
+	return ret ? ret : VM_FAULT_NOPAGE;
+
+out_put:
+	folio_unlock(folio);
+	folio_put(folio);
+	return ret;
+}
+
+/*
+ * The page reference protects lifetime; the folio lock protects installation.
+ * Validate after locking: a free may have removed this page while we waited.
+ * Keep the folio locked until arena_install_page() has installed the user PTE.
+ */
+static vm_fault_t arena_fault_page(struct bpf_arena *arena,
+				   struct vm_fault *vmf,
+				   struct page *page, long kaddr)
+{
+	struct folio *folio = page_folio(page);
+	unsigned long flags;
+	vm_fault_t ret;
+	int err;
+
+	ret = folio_lock_or_retry(folio, vmf);
+	if (ret) {
+		/* The fault lock may be gone; do not access the arena here. */
+		put_page(page);
+		return ret;
+	}
+
+	err = raw_res_spin_lock_irqsave(&arena->spinlock, flags);
+	if (!err) {
+		if (vmalloc_to_page((void *)kaddr) == page) {
+			raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
+			return arena_install_page(vmf, page);
+		}
+		raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
+	}
+
+	folio_unlock(folio);
+	put_page(page);
+	if (err)
+		return VM_FAULT_SIGBUS;
+	if (!(vmf->flags & FAULT_FLAG_ALLOW_RETRY))
+		return VM_FAULT_NOPAGE;
+	if (!(vmf->flags & FAULT_FLAG_RETRY_NOWAIT))
+		release_fault_lock(vmf);
+	return VM_FAULT_RETRY;
+}
+
 static vm_fault_t arena_vm_fault(struct vm_fault *vmf)
 {
 	struct bpf_map *map = vmf->vma->vm_file->private_data;
 	struct bpf_arena *arena = container_of(map, struct bpf_arena, map);
 	struct mem_cgroup *new_memcg, *old_memcg;
 	LLIST_HEAD(pages);
-	struct page *page, *new_page = NULL;
 	struct apply_range_data data;
 	vm_fault_t fault_ret;
+	struct page *page, *new_page = NULL;
 	long kbase, kaddr;
 	unsigned long flags;
 	int ret;
@@ -522,15 +607,10 @@ static vm_fault_t arena_vm_fault(struct vm_fault *vmf)
 		bpf_map_memcg_exit(old_memcg, new_memcg);
 	}
 
-	if (raw_res_spin_lock_irqsave(&arena->spinlock, flags)) {
-		/*
-		 * A failed lock means a possible deadlock was detected. Don't
-		 * return VM_FAULT_RETRY: this handler never took mmap_lock, but
-		 * the fault path would re-take it on retry and deadlock. Fail.
-		 */
-		if (new_page)
-			free_pages_nolock(new_page, 0);
-		return VM_FAULT_SIGBUS;
+	ret = raw_res_spin_lock_irqsave(&arena->spinlock, flags);
+	if (ret) {
+		fault_ret = VM_FAULT_SIGBUS;
+		goto out_err;
 	}
 
 	page = vmalloc_to_page((void *)kaddr);
@@ -591,17 +671,22 @@ static vm_fault_t arena_vm_fault(struct vm_fault *vmf)
 	page = new_page;
 	new_page = NULL;
 out:
-	page_ref_add(page, 1);
+	/* Pin before dropping the arena lock and validate after locking the folio. */
+	get_page(page);
 	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
-	if (new_page)
+
+	if (new_page) {
 		free_pages_nolock(new_page, 0);
-	vmf->page = page;
-	return 0;
+		new_page = NULL;
+	}
+
+	return arena_fault_page(arena, vmf, page, kaddr);
 
 out_err_locked_memcg:
 	bpf_map_memcg_exit(old_memcg, new_memcg);
 out_err_locked:
 	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
+out_err:
 	if (new_page)
 		free_pages_nolock(new_page, 0);
 	return fault_ret;
