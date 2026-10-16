@@ -922,8 +922,9 @@ static int sit9531x_prio_prg_commit(struct sit9531x_dev *sitdev)
 	return 0;
 }
 
-/*
+/**
  * sit9531x_input_mon_fetch - read the clock monitor status of every lane
+ * @sitdev:	device pointer
  *
  * Four registers carry a nibble per lane.  Loss of signal and frequency
  * drift are what separate an input the device could lock to from one it
@@ -931,8 +932,10 @@ static int sit9531x_prio_prg_commit(struct sit9531x_dev *sitdev)
  * selection and the pins report as their operational state.
  *
  * Caller must hold sitdev->multiop_lock, or run before registration.
+ *
+ * Return: 0 on success, <0 on error
  */
-static int sit9531x_input_mon_fetch(struct sit9531x_dev *sitdev)
+int sit9531x_input_mon_fetch(struct sit9531x_dev *sitdev)
 {
 	static const unsigned int regs[] = {
 		SIT9531X_CLKMON_P_STATUS_01, SIT9531X_CLKMON_P_STATUS_23,
@@ -3051,6 +3054,202 @@ static int sit9531x_clear_notifications(struct sit9531x_dev *sitdev)
 	return 0;
 }
 
+/**
+ * sit9531x_phase_offset_read - read phase difference via TDC
+ * @sitdev:	device pointer
+ * @pll_idx:	PLL index (0-3)
+ * @phase_offset:	phase difference in units of 1/DPLL_PHASE_OFFSET_DIVIDER
+ *		of a picosecond, as the DPLL subsystem carries it
+ *
+ * Reads the Time-to-Digital Converter (TDC) code from the PLL page
+ * registers -- a 35-bit magnitude with a separate sign bit -- then
+ * converts it using the VCO frequency: phase_diff = tdc_code / fvco.
+ *
+ * Caller must hold sitdev->multiop_lock.
+ *
+ * Return: 0 on success, -ENODATA when the PLL has no known VCO rate
+ * (nothing is sampled then), or the register access error
+ */
+int sit9531x_phase_offset_read(struct sit9531x_dev *sitdev, u8 pll_idx,
+			       s64 *phase_offset)
+{
+	u8 v, old_write_code, old_read_code;
+	bool have_old = false;
+	int rc, ret, i;
+	s64 tdc_signed;
+	u64 fvco, mag;
+	u64 tdc_raw;
+	bool sign;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (pll_idx >= SIT9531X_NUM_PLLS)
+		return -EINVAL;
+
+	/*
+	 * Get the VCO rate first.  -ENODATA means the PLL has no rate to
+	 * convert against (a divider this board leaves unprogrammed), and
+	 * there is then no reason to open the debug window at all -- which
+	 * also keeps a bus error while it is open from ever being reported
+	 * as that benign case.
+	 */
+	rc = sit9531x_get_fvco(sitdev, pll_idx, &fvco);
+	if (rc) {
+		if (rc == -ENODATA)
+			dev_dbg(sitdev->dev,
+				"PLL%c: Fvco unknown, skip TDC\n",
+				'A' + pll_idx);
+		return rc;
+	}
+
+	/* Unlock the debug page so the TDC registers are accessible. */
+	rc = sit9531x_write_pll_u8(sitdev, pll_idx,
+				   SIT9531X_PLL_REG_DEBUG,
+				   SIT9531X_PLL_DEBUG_UNLOCK);
+	if (rc)
+		goto relock;
+
+	/*
+	 * Remember the tap selection so it can be put back.  The key
+	 * register is re-locked below, but the mux is not part of the key:
+	 * leaving it parked on the TDC with a slow sampling clock selected
+	 * is a state change the caller did not ask for, and the next reader
+	 * of a different tap would have to know to undo it.
+	 */
+	rc = sit9531x_read_pll_u8(sitdev, pll_idx,
+				  SIT9531X_PLL_REG_DBG_WRITE_CODE,
+				  &old_write_code);
+	if (!rc)
+		rc = sit9531x_read_pll_u8(sitdev, pll_idx,
+					  SIT9531X_PLL_REG_DBG_READ_CODE,
+					  &old_read_code);
+	if (rc)
+		goto relock;
+
+	have_old = true;
+
+	/*
+	 * Select the debug clock for taps below 200 kHz, then point the
+	 * readback at the TDC.  Only the one bit is touched: writing the
+	 * modifier register whole would clear the fields belonging to
+	 * other taps.
+	 */
+	rc = sit9531x_update_pll_u8(sitdev, pll_idx,
+				    SIT9531X_PLL_REG_DBG_WRITE_CODE,
+				    SIT9531X_DBG_LOW_FREQ_CLK_BIT,
+				    SIT9531X_DBG_LOW_FREQ_CLK_BIT);
+	if (rc)
+		goto relock;
+	rc = sit9531x_write_pll_u8(sitdev, pll_idx,
+				   SIT9531X_PLL_REG_DBG_READ_CODE,
+				   SIT9531X_DBG_READ_CODE_TDC);
+	if (rc)
+		goto relock;
+
+	/*
+	 * Latch a sample by reading the debug status data register.  A
+	 * single read returns the previous latch, so read it three times
+	 * as the documented phase-difference procedure does.
+	 */
+	for (i = 0; i < SIT9531X_DBG_STATUS_READS; i++) {
+		rc = sit9531x_read_pll_u8(sitdev, pll_idx,
+					  SIT9531X_PLL_REG_DBG_STATUS_DATA,
+					  &v);
+		if (rc)
+			goto relock;
+	}
+
+	tdc_raw = 0;
+
+	rc = sit9531x_read_pll_u8(sitdev, pll_idx,
+				  SIT9531X_PLL_REG_DBG_DATA_4, &v);
+	if (rc)
+		goto relock;
+	sign = !!(v & BIT(SIT9531X_TDC_SIGN_BIT));
+	tdc_raw = (u64)(v & SIT9531X_TDC_MAG_HI_MASK) << 32;
+
+	rc = sit9531x_read_pll_u8(sitdev, pll_idx,
+				  SIT9531X_PLL_REG_DBG_DATA_3, &v);
+	if (rc)
+		goto relock;
+	tdc_raw |= (u64)v << 24;
+
+	rc = sit9531x_read_pll_u8(sitdev, pll_idx,
+				  SIT9531X_PLL_REG_DBG_DATA_2, &v);
+	if (rc)
+		goto relock;
+	tdc_raw |= (u64)v << 16;
+
+	rc = sit9531x_read_pll_u8(sitdev, pll_idx,
+				  SIT9531X_PLL_REG_DBG_DATA_1, &v);
+	if (rc)
+		goto relock;
+	tdc_raw |= (u64)v << 8;
+
+	rc = sit9531x_read_pll_u8(sitdev, pll_idx,
+				  SIT9531X_PLL_REG_DBG_DATA_0, &v);
+	if (rc)
+		goto relock;
+	tdc_raw |= v;
+
+	/*
+	 * Apply sign.  Per the register map the sign bit is active-high
+	 * for a positive offset: bit set -> +code, bit clear -> -code.
+	 */
+	tdc_signed = sign ? (s64)tdc_raw : -(s64)tdc_raw;
+
+	/*
+	 * phase_diff (seconds) = tdc_code / fvco
+	 * phase_diff (ps) = tdc_code * 1e12 / fvco
+	 *
+	 * Scaled by the subsystem's divider before the division rather than
+	 * after it: one TDC code is 1e12 / fvco ps, a fraction of a
+	 * picosecond more often than not (203.45 ps at 4.9152 GHz), and
+	 * truncating to whole picoseconds first would leave the three
+	 * fractional digits the attribute carries always zero.  The
+	 * quotient fits u64 for any rate sit9531x_get_fvco() returns: it
+	 * refuses one below the VCO band.
+	 *
+	 * mul_u64_u64_div_u64() keeps the exact Hz denominator; dividing
+	 * by whole MHz instead would lose up to ~40 ppm of scale on a
+	 * fractional-DIVN Fvco.
+	 */
+	mag = mul_u64_u64_div_u64(tdc_signed < 0 ? -tdc_signed : tdc_signed,
+				  1000000000000ULL * DPLL_PHASE_OFFSET_DIVIDER,
+				  fvco);
+	*phase_offset = tdc_signed < 0 ? -(s64)mag : (s64)mag;
+
+	rc = 0;
+
+relock:
+	if (have_old) {
+		ret = sit9531x_write_pll_u8(sitdev, pll_idx,
+					    SIT9531X_PLL_REG_DBG_READ_CODE,
+					    old_read_code);
+		if (ret && !rc)
+			rc = ret;
+		ret = sit9531x_write_pll_u8(sitdev, pll_idx,
+					    SIT9531X_PLL_REG_DBG_WRITE_CODE,
+					    old_write_code);
+		if (ret && !rc)
+			rc = ret;
+	}
+
+	/*
+	 * Close the debug window again.  The key register opens every debug
+	 * register on this PLL while it holds the unlock value, and this read
+	 * runs on every pin-get of a connected input, so leaving it open
+	 * would mean normal monitoring permanently unlocks the block.
+	 */
+	ret = sit9531x_write_pll_u8(sitdev, pll_idx,
+				    SIT9531X_PLL_REG_DEBUG,
+				    SIT9531X_PLL_DEBUG_LOCK);
+	if (ret && !rc)
+		rc = ret;
+
+	return rc;
+}
+
 /*
  * sit9531x_ref_state_fetch - read input reference status from hardware
  * @index:	logical input index
@@ -3149,8 +3348,13 @@ static int sit9531x_pll_is_active(struct sit9531x_dev *sitdev, u8 pll_idx,
 	return 0;
 }
 
-/*
- * Read the reference the device feeds a PLL.
+/**
+ * sit9531x_chan_routed_ref_read - read the reference the device feeds a PLL
+ * @sitdev:	device pointer
+ * @pll_idx:	PLL index (0-3)
+ * @ref:	result: logical input index, SIT9531X_INTSYNC_PIN_ID for the
+ *		inter-PLL sync net, or SIT9531X_REF_INVALID when the code
+ *		names no registered input
  *
  * The active selection names the source the PLL was told to follow.  The
  * input subsystem feeds the PLL that source while it has signal and falls
@@ -3165,12 +3369,12 @@ static int sit9531x_pll_is_active(struct sit9531x_dev *sitdev, u8 pll_idx,
  * free-run the PLL is fed nothing and the bus is not consulted, so the
  * caller checks the mode first.
  *
- * @ref is the logical input index, SIT9531X_INTSYNC_PIN_ID for the
- * inter-PLL sync net, or SIT9531X_REF_INVALID when the code names no
- * registered input.  Caller must hold sitdev->multiop_lock.
+ * Caller must hold sitdev->multiop_lock.
+ *
+ * Return: 0 on success, <0 on error
  */
-static int sit9531x_chan_routed_ref_read(struct sit9531x_dev *sitdev,
-					 u8 pll_idx, u8 *ref)
+int sit9531x_chan_routed_ref_read(struct sit9531x_dev *sitdev, u8 pll_idx,
+				  u8 *ref)
 {
 	int rc, lock_rc;
 	u8 v, i;
