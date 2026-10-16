@@ -7,11 +7,36 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
+#include <net/udp.h>
+
 #include "ar-internal.h"
 
 static int rxrpc_input_packet_on_conn(struct rxrpc_connection *conn,
 				      struct sockaddr_rxrpc *peer_srx,
 				      struct sk_buff *skb);
+
+/*
+ * Drop UDP rmem ownership for packets charged in encap_rcv().
+ * sk_forward_alloc is serialised by sk_receive_queue.lock.
+ */
+static void rxrpc_skb_orphan_udp(struct sk_buff *skb)
+{
+	struct sock *sk = skb->sk;
+
+	if (!sk)
+		return;
+
+	spin_lock_bh(&sk->sk_receive_queue.lock);
+	skb_orphan(skb);
+	spin_unlock_bh(&sk->sk_receive_queue.lock);
+}
+
+static void rxrpc_encap_rcv_drop(struct sock *udp_sk, struct sk_buff *skb,
+				 enum skb_drop_reason reason)
+{
+	sk_drops_inc(udp_sk);
+	sk_skb_reason_drop(udp_sk, skb, reason);
+}
 
 /*
  * handle data received on the local endpoint
@@ -28,6 +53,10 @@ int rxrpc_encap_rcv(struct sock *udp_sk, struct sk_buff *skb)
 	struct sk_buff_head *rx_queue;
 	struct rxrpc_local *local = rcu_dereference_sk_user_data(udp_sk);
 	struct task_struct *io_thread;
+	enum skb_drop_reason reason;
+	unsigned int headroom;
+	unsigned int rcvbuf;
+	unsigned int rmem;
 
 	if (unlikely(!local)) {
 		kfree_skb(skb);
@@ -41,8 +70,6 @@ int rxrpc_encap_rcv(struct sock *udp_sk, struct sk_buff *skb)
 	if (skb->tstamp == 0)
 		skb->tstamp = ktime_get_real();
 
-	skb->mark = RXRPC_SKB_MARK_PACKET;
-	rxrpc_new_skb(skb, rxrpc_skb_new_encap_rcv);
 	rx_queue = &local->rx_queue;
 #ifdef CONFIG_AF_RXRPC_INJECT_RX_DELAY
 	if (rxrpc_inject_rx_delay ||
@@ -52,8 +79,35 @@ int rxrpc_encap_rcv(struct sock *udp_sk, struct sk_buff *skb)
 	}
 #endif
 
+	headroom = SKB_TRUESIZE(RXRPC_JUMBO(1)) * 2;
+	spin_lock(&udp_sk->sk_receive_queue.lock);
+	rxrpc_adjust_rcvbuf(udp_sk);
+	rcvbuf = READ_ONCE(udp_sk->sk_rcvbuf);
+	rmem = atomic_read(&udp_sk->sk_rmem_alloc);
+	/* Permit one skb when there is no receive memory charged, as UDP does. */
+	if (rmem && rmem + skb->truesize + headroom >= rcvbuf) {
+		reason = SKB_DROP_REASON_SOCKET_RCVBUFF;
+		goto drop;
+	}
+	if (!sk_rmem_schedule(udp_sk, skb, skb->truesize)) {
+		reason = SKB_DROP_REASON_PROTO_MEM;
+		goto drop;
+	}
+
+	skb->dev = NULL;
+	skb_set_owner_r(skb, udp_sk);
+	spin_unlock(&udp_sk->sk_receive_queue.lock);
+	skb_dst_drop(skb);
+
+	skb->mark = RXRPC_SKB_MARK_PACKET;
+	rxrpc_new_skb(skb, rxrpc_skb_new_encap_rcv);
 	skb_queue_tail(rx_queue, skb);
 	wake_up_process(io_thread);
+	return 0;
+
+drop:
+	spin_unlock(&udp_sk->sk_receive_queue.lock);
+	rxrpc_encap_rcv_drop(udp_sk, skb, reason);
 	return 0;
 }
 
@@ -471,6 +525,9 @@ int rxrpc_io_thread(void *data)
 		/* Distribute packets and errors. */
 		while ((skb = __skb_dequeue(&rx_queue))) {
 			struct rxrpc_skb_priv *sp = rxrpc_skb(skb);
+
+			if (skb->mark == RXRPC_SKB_MARK_PACKET)
+				rxrpc_skb_orphan_udp(skb);
 			switch (skb->mark) {
 			case RXRPC_SKB_MARK_PACKET:
 				skb->priority = 0;
