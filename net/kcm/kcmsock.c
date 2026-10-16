@@ -30,6 +30,7 @@
 #include <net/kcm.h>
 #include <net/netns/generic.h>
 #include <net/sock.h>
+#include <net/tcp.h>
 #include <uapi/linux/kcm.h>
 #include <trace/events/sock.h>
 
@@ -348,6 +349,30 @@ static void unreserve_rx_kcm(struct kcm_psock *psock,
 	spin_unlock_bh(&mux->rx_lock);
 }
 
+/* strp_data_ready() calls the lower socket's read_sock() inline, from
+ * softirq and under sk_callback_lock. That is only safe for TCP's own
+ * tcp_read_sock(); anything else goes to the parser work, which runs
+ * under lock_sock(). Called with sk_callback_lock held.
+ */
+static bool psock_can_parse_inline(struct sock *sk)
+{
+	struct socket *sock = sk->sk_socket;
+	const struct proto_ops *ops;
+
+	/* KCM holds the lower socket's file reference while a psock is
+	 * attached, so sk_socket should not be NULL here. Defer if it is,
+	 * as strp_read_sock() would not read without a socket anyway.
+	 */
+	if (!sock)
+		return false;
+
+	/* A ULP's read_sock, such as kTLS's tls_sw_read_sock(), may sleep.
+	 * READ_ONCE() pairs with the WRITE_ONCE() in kTLS's update_sk_prot().
+	 */
+	ops = READ_ONCE(sock->ops);
+	return ops->read_sock == tcp_read_sock;
+}
+
 /* Lower sock lock held */
 static void psock_data_ready(struct sock *sk)
 {
@@ -358,8 +383,12 @@ static void psock_data_ready(struct sock *sk)
 	read_lock_bh(&sk->sk_callback_lock);
 
 	psock = (struct kcm_psock *)sk->sk_user_data;
-	if (likely(psock))
-		strp_data_ready(&psock->strp);
+	if (likely(psock)) {
+		if (psock_can_parse_inline(sk))
+			strp_data_ready(&psock->strp);
+		else
+			strp_check_rcv(&psock->strp);
+	}
 
 	read_unlock_bh(&sk->sk_callback_lock);
 }
