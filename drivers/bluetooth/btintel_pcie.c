@@ -205,6 +205,108 @@ static inline bool btintel_pcie_dbg_to_wifi(struct btintel_pcie_data *data)
 	return data->dbg_path_cache != BTINTEL_PCIE_DRAM;
 }
 
+/* Name of the optional INI file used to override the default dbg_path
+ * (data->dbg_path_cache) and yoyo ini settings.
+ */
+#define BTINTEL_PCIE_DBG_INI_FILE "ibt_bt_dbg_cfg.ini"
+
+/* Loads optional "DBG_PATH=<value>" and ENABLE_INI=<value>
+ * overrides from BTINTEL_PCIE_DBG_INI_FILE
+ * and applies them to data->dbg_path_cache and data->enable_ini.
+ *
+ * DBG_PATH accepts BTINTEL_PCIE_WIFI_DBGC (0x06, default) and
+ * BTINTEL_PCIE_DRAM (0x01, legacy); an invalid or missing entry leaves
+ * the cached value set by the caller unchanged.
+ *
+ * ENABLE_INI accepts 1 (enabled) or 0 (disabled); an invalid or missing
+ * entry leaves data->enable_ini unchanged.
+ */
+static void btintel_pcie_load_dbg_path_from_ini(struct btintel_pcie_data *data)
+{
+	const struct firmware *fw;
+	const char *ini_file = BTINTEL_PCIE_DBG_INI_FILE;
+	char *buf, *cursor, *line;
+	bool dbg_path_applied = false;
+	int err;
+
+	err = request_firmware_direct(&fw, ini_file, &data->pdev->dev);
+	if (err < 0) {
+		BT_DBG("%s not found (%d), using dbg_path=0x%02x",
+		       ini_file, err, data->dbg_path_cache);
+		if (data->dbg_path_cache != BTINTEL_PCIE_DRAM)
+			data->enable_ini = false;
+		return;
+	}
+
+	buf = kmemdup_nul(fw->data, fw->size, GFP_KERNEL);
+	release_firmware(fw);
+	if (!buf)
+		return;
+
+	cursor = buf;
+	while ((line = strsep(&cursor, "\n"))) {
+		char *eq;
+		char *val;
+		uint parsed;
+
+		line = strim(line);
+		if (!line[0] || line[0] == '#' || line[0] == ';')
+			continue;
+
+		eq = strchr(line, '=');
+		if (!eq)
+			continue;
+
+		*eq = '\0';
+		line = strim(line);
+		val = strim(eq + 1);
+
+		/* Accept "DBG_PATH"/"dbg_path"
+		 * case-insensitively as the key.
+		 */
+		if (!strcasecmp(line, "DBG_PATH")) {
+			BT_INFO("Read DBG_PATH from %s: '%s'", ini_file, val);
+
+			/* base 0 lets kstrtouint accept "0x06", "6", etc. */
+			if (kstrtouint(val, 0, &parsed) == 0 &&
+			    (parsed == BTINTEL_PCIE_DRAM ||
+			     parsed == BTINTEL_PCIE_WIFI_DBGC)) {
+				data->dbg_path_cache = parsed;
+				dbg_path_applied = true;
+				BT_INFO("WRT dbg_path accepted: 0x%02x",
+					data->dbg_path_cache);
+			} else {
+				BT_WARN("Invalid DBG_PATH='%s' in %s, using dbg_path=0x%02x",
+					val, ini_file, data->dbg_path_cache);
+			}
+		} else if (!strcasecmp(line, "ENABLE_INI")) {
+			BT_INFO("Read ENABLE_INI from %s: '%s'", ini_file, val);
+
+			if (kstrtouint(val, 0, &parsed) == 0 &&
+			    (parsed == 0 || parsed == 1)) {
+				data->enable_ini = !!parsed;
+				BT_INFO("WRT enable_ini accepted: %u",
+					data->enable_ini);
+			} else {
+				BT_WARN("Invalid ENABLE_INI='%s' in %s, using enable_ini=%u",
+					val, ini_file, data->enable_ini);
+			}
+		}
+	}
+
+	if (data->dbg_path_cache != BTINTEL_PCIE_DRAM)
+		data->enable_ini = false;
+
+	if (dbg_path_applied)
+		BT_DBG("Loaded dbg_path=0x%02x from %s", data->dbg_path_cache, ini_file);
+	else
+		BT_WARN("No valid DBG_PATH in %s, dbg_path=0x%02x", ini_file, data->dbg_path_cache);
+
+	BT_DBG("ENABLE_INI effective state: %u", data->enable_ini);
+
+	kfree(buf);
+}
+
 /* Helper function to allocate and setup a debug buffer group
  * @data: driver data structure
  * @buf: pointer to data_buf array pointer
@@ -220,7 +322,8 @@ static int btintel_pcie_alloc_dbgc_buf(struct btintel_pcie_data *data,
 				       void **v_addr,
 				       struct btintel_pcie_dbgc_ctxt_buf *frag,
 				       u32 buf_index,
-				       u32 buf_count)
+				       u32 buf_count,
+				       u32 per_buf_size)
 {
 	struct data_buf *b;
 	int i;
@@ -233,8 +336,7 @@ static int btintel_pcie_alloc_dbgc_buf(struct btintel_pcie_data *data,
 	}
 
 	*v_addr = dmam_alloc_coherent(&data->pdev->dev,
-				      buf_count *
-					BTINTEL_PCIE_DBGC_BUFFER_SIZE,
+				      buf_count * per_buf_size,
 					p_addr,
 					GFP_KERNEL | __GFP_NOWARN);
 	if (!*v_addr) {
@@ -244,14 +346,38 @@ static int btintel_pcie_alloc_dbgc_buf(struct btintel_pcie_data *data,
 
 	for (i = 0; i < buf_count; i++) {
 		b = &(*buf)[i];
-		b->data_p_addr = *p_addr + i * BTINTEL_PCIE_DBGC_BUFFER_SIZE;
-		b->data = *v_addr + i * BTINTEL_PCIE_DBGC_BUFFER_SIZE;
+		b->data_p_addr = *p_addr + i * per_buf_size;
+		b->data = *v_addr + i * per_buf_size;
 		frag[i].buf_addr_lsb = lower_32_bits(b->data_p_addr);
 		frag[i].buf_addr_msb = upper_32_bits(b->data_p_addr);
-		frag[i].buf_size = BTINTEL_PCIE_DBGC_BUFFER_SIZE;
+		frag[i].buf_size = per_buf_size;
 	}
 
+	BT_INFO("dbgc buf %u allocated: frag_num=%u per_buf_size=%u total_size=%u",
+		buf_index + 1, buf_count, per_buf_size, buf_count * per_buf_size);
+
 	return 0;
+}
+
+/* Returns false if YoYo is enabled and @alloc_id is not configured */
+static bool btintel_pcie_get_mdbgc_cfg(struct btintel_pcie_data *data,
+				       u32 alloc_id, u32 *count, u32 *size)
+{
+	const struct btintel_pcie_buf_alloc *ba;
+
+	ba = btintel_pcie_yoyo_get_buf_alloc(&data->yoyo, alloc_id);
+	if (ba) {
+		*count = ba->max_num_frags;
+		*size = ba->req_buf_size / ba->max_num_frags;
+		return true;
+	}
+
+	if (data->yoyo.enabled)
+		return false;
+
+	*count = BTINTEL_PCIE_DBGC_BUFFER_COUNT;
+	*size = BTINTEL_PCIE_DBGC_BUFFER_SIZE;
+	return true;
 }
 
 /* This function initializes the memory for MDBGC buffers and formats the
@@ -263,9 +389,8 @@ static int btintel_pcie_setup_mdbgc(struct btintel_pcie_data *data)
 	struct btintel_pcie_mdbgc_ctxt db_frag;
 	u32 frag_size = sizeof(db_frag);
 	void *frag_v_addr;
+	u32 buf_count, buf_size;
 	int err;
-
-	data->mdbgc.count = BTINTEL_PCIE_DBGC_BUFFER_COUNT;
 
 	/* Allocate fragment context structure */
 	frag_v_addr = dmam_alloc_coherent(&data->pdev->dev, frag_size,
@@ -285,46 +410,71 @@ static int btintel_pcie_setup_mdbgc(struct btintel_pcie_data *data)
 	db_frag.ver = BTINTEL_PCIE_MDBGC_FRAG_VERSION;
 
 	/* Allocate DBGC buffer 1 */
-	db_frag.buf1_index = BTINTEL_PCIE_MDBGC_ALLOCATIONID_1;
-	db_frag.buf1_count = data->mdbgc.count;
-	err = btintel_pcie_alloc_dbgc_buf(data,
-					  &data->mdbgc.buf1,
-					  &data->mdbgc.buf1_p_addr,
-					  &data->mdbgc.buf1_v_addr,
-					  db_frag.buf1,
-					  0,
-					  data->mdbgc.count);
-	if (err)
-		return err;
+	if (btintel_pcie_get_mdbgc_cfg(data, BTINTEL_PCIE_ALLOC_ID_DBGC1,
+				       &buf_count, &buf_size)) {
+		db_frag.buf1_index = BTINTEL_PCIE_MDBGC_ALLOCATIONID_1;
+		data->mdbgc.buf1_count = buf_count;
+		data->mdbgc.buf1_size = buf_size;
+		db_frag.buf1_count = buf_count;
+
+		err = btintel_pcie_alloc_dbgc_buf(data,
+						  &data->mdbgc.buf1,
+						  &data->mdbgc.buf1_p_addr,
+						  &data->mdbgc.buf1_v_addr,
+						  db_frag.buf1,
+						  0,
+						  buf_count,
+						  buf_size);
+		if (err)
+			return err;
+	}
 
 	/* Allocate DBGC buffer 2 */
-	db_frag.buf2_index = BTINTEL_PCIE_MDBGC_ALLOCATIONID_2;
-	db_frag.buf2_count = data->mdbgc.count;
-	err = btintel_pcie_alloc_dbgc_buf(data,
-					  &data->mdbgc.buf2,
-					  &data->mdbgc.buf2_p_addr,
-					  &data->mdbgc.buf2_v_addr,
-					  db_frag.buf2,
-					  1,
-					  data->mdbgc.count);
-	if (err)
-		return err;
+	if (btintel_pcie_get_mdbgc_cfg(data, BTINTEL_PCIE_ALLOC_ID_DBGC2,
+				       &buf_count, &buf_size)) {
+		db_frag.buf2_index = BTINTEL_PCIE_MDBGC_ALLOCATIONID_2;
+		data->mdbgc.buf2_count = buf_count;
+		data->mdbgc.buf2_size = buf_size;
+		db_frag.buf2_count = buf_count;
+
+		err = btintel_pcie_alloc_dbgc_buf(data,
+						  &data->mdbgc.buf2,
+						  &data->mdbgc.buf2_p_addr,
+						  &data->mdbgc.buf2_v_addr,
+						  db_frag.buf2,
+						  1,
+						  buf_count,
+						  buf_size);
+		if (err)
+			return err;
+	}
 
 	/* Allocate DBGC buffer 3 */
-	db_frag.buf3_index = BTINTEL_PCIE_MDBGC_ALLOCATIONID_3;
-	db_frag.buf3_count = data->mdbgc.count;
-	err = btintel_pcie_alloc_dbgc_buf(data,
-					  &data->mdbgc.buf3,
-					  &data->mdbgc.buf3_p_addr,
-					  &data->mdbgc.buf3_v_addr,
-					  db_frag.buf3,
-					  2,
-					  data->mdbgc.count);
-	if (err)
-		return err;
+	if (btintel_pcie_get_mdbgc_cfg(data, BTINTEL_PCIE_ALLOC_ID_DBGC3,
+				       &buf_count, &buf_size)) {
+		db_frag.buf3_index = BTINTEL_PCIE_MDBGC_ALLOCATIONID_3;
+		data->mdbgc.buf3_count = buf_count;
+		data->mdbgc.buf3_size = buf_size;
+		db_frag.buf3_count = buf_count;
+
+		err = btintel_pcie_alloc_dbgc_buf(data,
+						  &data->mdbgc.buf3,
+						  &data->mdbgc.buf3_p_addr,
+						  &data->mdbgc.buf3_v_addr,
+						  db_frag.buf3,
+						  2,
+						  buf_count,
+						  buf_size);
+		if (err)
+			return err;
+	}
 
 	/* Copy fragment to DMA coherent memory */
 	memcpy(data->mdbgc.frag_v_addr, &db_frag, sizeof(db_frag));
+	BT_INFO("MDBGC: buf1 frag=%u size=%u; buf2 frag=%u size=%u; buf3 frag=%u size=%u",
+		db_frag.buf1_count, db_frag.buf1_count * db_frag.buf1[0].buf_size,
+		db_frag.buf2_count, db_frag.buf2_count * db_frag.buf2[0].buf_size,
+		db_frag.buf3_count, db_frag.buf3_count * db_frag.buf3[0].buf_size);
 	return 0;
 }
 
@@ -336,9 +486,21 @@ static int btintel_pcie_setup_dbgc(struct btintel_pcie_data *data)
 {
 	struct btintel_pcie_dbgc_ctxt db_frag;
 	u32 frag_size = sizeof(db_frag);
+	const struct btintel_pcie_buf_alloc *ba;
+	u32 buf_count, buf_size;
 	int err;
 
-	data->dbgc.count = BTINTEL_PCIE_DBGC_BUFFER_COUNT;
+	ba = btintel_pcie_yoyo_get_buf_alloc(&data->yoyo,
+					     BTINTEL_PCIE_ALLOC_ID_DBGC1);
+	buf_count = ba ? ba->max_num_frags : BTINTEL_PCIE_DBGC_BUFFER_COUNT;
+	buf_size = ba ? ba->req_buf_size / ba->max_num_frags :
+		BTINTEL_PCIE_DBGC_BUFFER_SIZE;
+
+	BT_INFO("dbgc setup: frag_num=%u per_buf_size=%u total_size=%u",
+		buf_count, buf_size, buf_count * buf_size);
+
+	data->dbgc.count = buf_count;
+	data->dbgc.buf_size = buf_size;
 
 	/* Allocate fragment context structure */
 	data->dbgc.frag_v_addr = dmam_alloc_coherent(&data->pdev->dev,
@@ -356,8 +518,9 @@ static int btintel_pcie_setup_dbgc(struct btintel_pcie_data *data)
 	memset(&db_frag, 0, sizeof(db_frag));
 	db_frag.magic_num = BTINTEL_PCIE_MAGIC_NUM;
 	db_frag.ver = BTINTEL_PCIE_DBGC_FRAG_VERSION;
-	db_frag.total_size = BTINTEL_PCIE_DBGC_FRAG_PAYLOAD_SIZE;
-	db_frag.num_buf = BTINTEL_PCIE_DBGC_FRAG_BUFFER_COUNT;
+	db_frag.total_size = sizeof(db_frag.num_buf) +
+			     buf_count * sizeof(db_frag.bufs[0]);
+	db_frag.num_buf = buf_count;
 
 	/* Allocate DBGC buffers */
 	err = btintel_pcie_alloc_dbgc_buf(data,
@@ -366,7 +529,8 @@ static int btintel_pcie_setup_dbgc(struct btintel_pcie_data *data)
 					  &data->dbgc.buf_v_addr,
 					  db_frag.bufs,
 					  0,
-					  data->dbgc.count);
+					  buf_count,
+					  buf_size);
 	if (err)
 		return err;
 
@@ -859,7 +1023,8 @@ static u32 btintel_pcie_dump_list_total_size(struct list_head *list)
 }
 
 static int btintel_pcie_dump_dram(struct list_head *list,
-				  u8 count, struct data_buf *bufs,
+				  u8 count, u32 buf_size,
+				  struct data_buf *bufs,
 				  u32 write_ptr, u32 wrap_ctr, u32 cur_frag,
 				  u32 region_id, const char *name)
 {
@@ -871,7 +1036,7 @@ static int btintel_pcie_dump_dram(struct list_head *list,
 	int i;
 
 	mon_hdr_size = sizeof(*mon_dump);
-	ranges_size = count * (sizeof(*range) + BTINTEL_PCIE_DBGC_BUFFER_SIZE);
+	ranges_size = count * (sizeof(*range) + buf_size);
 	payload_size = mon_hdr_size + ranges_size;
 	total_size = sizeof(*dump_data) + payload_size;
 
@@ -900,12 +1065,10 @@ static int btintel_pcie_dump_dram(struct list_head *list,
 
 	range = (void *)mon_dump->data;
 	for (i = 0; i < count; i++) {
-		range->range_data_size =
-			cpu_to_le32(BTINTEL_PCIE_DBGC_BUFFER_SIZE);
+		range->range_data_size = cpu_to_le32(buf_size);
 		range->dram_base_addr = cpu_to_le64(bufs[i].data_p_addr);
-		memcpy(range->data, bufs[i].data,
-		       BTINTEL_PCIE_DBGC_BUFFER_SIZE);
-		range = (void *)range->data + BTINTEL_PCIE_DBGC_BUFFER_SIZE;
+		memcpy(range->data, bufs[i].data, buf_size);
+		range = (void *)range->data + buf_size;
 	}
 
 	list_add_tail(&entry->list, list);
@@ -914,13 +1077,17 @@ static int btintel_pcie_dump_dram(struct list_head *list,
 
 static int
 btintel_pcie_dump_dram_monitor(struct btintel_pcie_data *data,
-			       struct list_head *list, u8 count,
+				       struct list_head *list, u8 count,
+				       u32 buf_size,
 			       struct data_buf *bufs, u32 status_reg,
 			       u32 wrap_reg, u8 allocation_id, u32 region_id,
 			       const char *name)
 {
 	u32 allocation_offset, write_ptr, wrap_ctr, wr_ptr_status;
 	u8 cur_frag;
+
+	if (!count)
+		return -ENOENT;
 
 	allocation_offset = allocation_id *
 			    BTINTEL_PCIE_DBGC_ALLOCATION_OFFSET;
@@ -943,8 +1110,8 @@ btintel_pcie_dump_dram_monitor(struct btintel_pcie_data *data,
 		   "allocation=%u wr_ptr_status=0x%08x write_ptr=0x%06x cur_frag=%u wrap_ctr=0x%08x",
 		   allocation_id, wr_ptr_status, write_ptr, cur_frag, wrap_ctr);
 
-	return btintel_pcie_dump_dram(list, count, bufs, write_ptr, wrap_ctr,
-				      cur_frag, region_id, name);
+	return btintel_pcie_dump_dram(list, count, buf_size, bufs, write_ptr,
+				      wrap_ctr, cur_frag, region_id, name);
 }
 
 static int btintel_pcie_dump_target_region(struct btintel_pcie_data *data,
@@ -1225,6 +1392,7 @@ static int btintel_pcie_read_debug_regions(struct btintel_pcie_data *data)
 	u8 hw_variant;
 	u32 file_len;
 	u8 count;
+	u32 buf_size;
 	int ret;
 	LIST_HEAD(dump_list);
 
@@ -1233,10 +1401,12 @@ static int btintel_pcie_read_debug_regions(struct btintel_pcie_data *data)
 
 	if (btintel_pcie_is_mdbgc_supported(data)) {
 		mdbgc = &data->mdbgc;
-		count = mdbgc->count;
+		count = mdbgc->buf1_count;
+		buf_size = mdbgc->buf1_size;
 	} else {
 		dbgc = &data->dbgc;
 		count = dbgc->count;
+		buf_size = dbgc->buf_size;
 	}
 
 	hw_variant = INTEL_HW_VARIANT(data->cnvi);
@@ -1256,7 +1426,9 @@ static int btintel_pcie_read_debug_regions(struct btintel_pcie_data *data)
 	}
 
 	if (btintel_pcie_is_mdbgc_supported(data)) {
-		ret = btintel_pcie_dump_dram_monitor(data, &dump_list, count,
+		ret = btintel_pcie_dump_dram_monitor(data, &dump_list,
+						     mdbgc->buf1_count,
+						     mdbgc->buf1_size,
 						     mdbgc->buf1, status_reg,
 						     wrap_reg,
 						     BTINTEL_PCIE_MDBGC_ALLOCATIONID_1,
@@ -1265,10 +1437,12 @@ static int btintel_pcie_read_debug_regions(struct btintel_pcie_data *data)
 		if (!ret)
 			regions_mask |=
 				BIT_ULL(BTINTEL_PCIE_INI_ID_DRAM_MONITOR1);
-		else
+		else if (ret != -ENOENT)
 			bt_dev_warn(hdev, "Failed to dump DRAM buf1: %d", ret);
 
-		ret = btintel_pcie_dump_dram_monitor(data, &dump_list, count,
+		ret = btintel_pcie_dump_dram_monitor(data, &dump_list,
+						     mdbgc->buf2_count,
+						     mdbgc->buf2_size,
 						     mdbgc->buf2, status_reg,
 						     wrap_reg,
 						     BTINTEL_PCIE_MDBGC_ALLOCATIONID_2,
@@ -1277,10 +1451,12 @@ static int btintel_pcie_read_debug_regions(struct btintel_pcie_data *data)
 		if (!ret)
 			regions_mask |=
 				BIT_ULL(BTINTEL_PCIE_INI_ID_DRAM_MONITOR2);
-		else
+		else if (ret != -ENOENT)
 			bt_dev_warn(hdev, "Failed to dump DRAM buf2: %d", ret);
 
-		ret = btintel_pcie_dump_dram_monitor(data, &dump_list, count,
+		ret = btintel_pcie_dump_dram_monitor(data, &dump_list,
+						     mdbgc->buf3_count,
+						     mdbgc->buf3_size,
 						     mdbgc->buf3, status_reg,
 						     wrap_reg,
 						     BTINTEL_PCIE_MDBGC_ALLOCATIONID_3,
@@ -1289,11 +1465,12 @@ static int btintel_pcie_read_debug_regions(struct btintel_pcie_data *data)
 		if (!ret)
 			regions_mask |=
 				BIT_ULL(BTINTEL_PCIE_INI_ID_DRAM_MONITOR3);
-		else
+		else if (ret != -ENOENT)
 			bt_dev_warn(hdev, "Failed to dump DRAM buf3: %d", ret);
 	} else {
 		ret = btintel_pcie_dump_dram_monitor(data, &dump_list, count,
-						     dbgc->bufs, status_reg,
+						     buf_size, dbgc->bufs,
+						     status_reg,
 						     wrap_reg,
 						     BTINTEL_PCIE_MDBGC_ALLOCATIONID_1,
 						     BTINTEL_PCIE_INI_ID_DRAM_MONITOR1,
@@ -3185,7 +3362,7 @@ static int btintel_pcie_alloc(struct btintel_pcie_data *data)
 		err = btintel_pcie_setup_dbgc(data);
 	}
 	if (err)
-		goto exit_error_txq;
+		goto exit_error_rxq;
 
 	/* Setup Context Information */
 	data->ci = v_addr;
@@ -3194,8 +3371,13 @@ static int btintel_pcie_alloc(struct btintel_pcie_data *data)
 	/* Initialize the CI */
 	btintel_pcie_init_ci(data, data->ci);
 
+	data->pcie_alloc_init = true;
+
 	return 0;
 
+exit_error_rxq:
+	/* RX setup succeeded, so release its buffers before the shared unwind. */
+	btintel_pcie_free_rxq_bufs(data, &data->rxq);
 exit_error_txq:
 	btintel_pcie_free_txq_bufs(data, &data->txq);
 exit_error_pool:
@@ -3365,6 +3547,31 @@ static void btintel_pcie_synchronize_irqs(struct btintel_pcie_data *data)
 {
 	for (int i = 0; i < data->alloc_vecs; i++)
 		synchronize_irq(data->msix_entries[i].vector);
+}
+
+static void btintel_pcie_probe_cleanup(struct btintel_pcie_data *data)
+{
+	struct pci_dev *pdev = data->pdev;
+
+	btintel_pcie_disable_interrupts(data);
+	btintel_pcie_synchronize_irqs(data);
+
+	disable_work_sync(&data->coredump_work);
+	disable_work_sync(&data->hwexp_work);
+	disable_work_sync(&data->fwtrigger_work);
+	disable_work_sync(&data->mbox_work);
+
+	flush_work(&data->rx_work);
+
+	btintel_pcie_reset_bt(data);
+	for (int i = 0; i < data->alloc_vecs; i++) {
+		struct msix_entry *msix_entry;
+
+		msix_entry = &data->msix_entries[i];
+		devm_free_irq(&pdev->dev, msix_entry->vector, msix_entry);
+	}
+
+	pci_free_irq_vectors(pdev);
 }
 
 static int btintel_pcie_get_debug_info_addr(struct hci_dev *hdev)
@@ -4056,6 +4263,7 @@ static int btintel_pcie_probe(struct pci_dev *pdev,
 			      const struct pci_device_id *ent)
 {
 	int err;
+	bool pcie_configured = false;
 	struct btintel_pcie_data *data;
 
 	if (!pdev)
@@ -4099,15 +4307,30 @@ static int btintel_pcie_probe(struct pci_dev *pdev,
 	data->boot_stage_cache = 0x00;
 	data->img_resp_cache = 0x00;
 	data->dbg_path_cache = BTINTEL_PCIE_WIFI_DBGC;
+	data->pcie_alloc_init = false;
+	data->enable_ini = false;
+	btintel_pcie_yoyo_init(&data->yoyo);
 	/* FLR can be invoked by echoing to debugfs path, so explicitly
 	 * initialized
 	 */
 	data->reset_type = BTINTEL_PCIE_IOSF_PRR_FLR;
+
+	btintel_pcie_load_dbg_path_from_ini(data);
+
 	err = btintel_pcie_config_pcie(pdev, data);
 	if (err)
 		goto exit_error;
 
+	pcie_configured = true;
+
 	pci_set_drvdata(pdev, data);
+	if (data->enable_ini) {
+		err = btintel_pcie_yoyo_load_and_parse(&data->yoyo, &pdev->dev);
+		if (err) {
+			BT_WARN("YoYo is not configured (%d)", err);
+			btintel_pcie_yoyo_cleanup(&data->yoyo);
+		}
+	}
 
 	err = btintel_pcie_alloc(data);
 	if (err)
@@ -4130,15 +4353,22 @@ static int btintel_pcie_probe(struct pci_dev *pdev,
 	if (err)
 		goto exit_error;
 
+	data->yoyo.hdev = data->hdev;
 	bt_dev_dbg(data->hdev, "cnvi: 0x%8.8x cnvr: 0x%8.8x", data->cnvi,
 		   data->cnvr);
 	return 0;
 
 exit_error:
-	/* reset device before exit */
-	btintel_pcie_reset_bt(data);
+	btintel_pcie_yoyo_cleanup(&data->yoyo);
+
+	if (pcie_configured)
+		btintel_pcie_probe_cleanup(data);
+
+	if (data->pcie_alloc_init)
+		btintel_pcie_free(data);
 
 	destroy_workqueue(data->dump_workqueue);
+	destroy_workqueue(data->workqueue);
 
 	pci_clear_master(pdev);
 
@@ -4174,6 +4404,8 @@ static void btintel_pcie_remove(struct pci_dev *pdev)
 	 */
 	if (current_work() != &data->reset_work)
 		disable_work_sync(&data->reset_work);
+
+	btintel_pcie_yoyo_cleanup(&data->yoyo);
 
 	btintel_pcie_disable_interrupts(data);
 
