@@ -2152,34 +2152,69 @@ static __always_inline const char *step_into(struct nameidata *nd, int flags,
 	return step_into_slowpath(nd, flags, dentry);
 }
 
-static struct dentry *follow_dotdot_rcu(struct nameidata *nd)
+/**
+ * __path_walk_parent_rcu - step towards the parent of the given struct path
+ * @path: position to step up from; updated in place on a mount crossing,
+ *        which is first if @path is the root of a mounted tree.  No
+ *        references are acquired; the callers layer their own bookkeeping
+ *        (path_connected(), nameidata updates, ...) on top
+ * @root: boundary as for choose_mountpoint_rcu(); if zero'ed, walk all the
+ *        way to the global root
+ * @flags: %LOOKUP_NO_XDEV fails a mount crossing with -ECHILD
+ * @m_seq: the walk's mount_lock sample
+ * @seqp: d_seq sample validating @path->dentry; updated to cover the new
+ *        @path->dentry when a mount is crossed
+ * @next_seqp: set to the returned parent's d_seq sample
+ *
+ * Returns: the parent dentry (which is @path->dentry itself if that is a
+ * disconnected root), NULL if @path is in the root with nothing to cross
+ * into, or ERR_PTR(-ECHILD) when a concurrent change was detected.
+ */
+static struct dentry *__path_walk_parent_rcu(struct path *path,
+					     const struct path *root, int flags,
+					     unsigned int m_seq, unsigned int *seqp,
+					     unsigned int *next_seqp)
 {
 	struct dentry *parent, *old;
 
-	if (path_equal(&nd->path, &nd->root))
-		goto in_root;
-	if (unlikely(nd->path.dentry == nd->path.mnt->mnt_root)) {
-		struct path path;
-		unsigned seq;
-		if (!choose_mountpoint_rcu(real_mount(nd->path.mnt),
-					   &nd->root, &path, &seq))
-			goto in_root;
-		if (unlikely(nd->flags & LOOKUP_NO_XDEV))
+	if (unlikely(path->dentry == path->mnt->mnt_root)) {
+		struct path mounted;
+		unsigned int seq;
+
+		if (!choose_mountpoint_rcu(real_mount(path->mnt),
+					   root, &mounted, &seq))
+			return NULL;
+		if (unlikely(flags & LOOKUP_NO_XDEV))
 			return ERR_PTR(-ECHILD);
-		nd->path = path;
-		nd->inode = path.dentry->d_inode;
-		nd->seq = seq;
+		*path = mounted;
+		*seqp = seq;
 		// makes sure that non-RCU pathwalk could reach this state
-		if (read_seqretry(&mount_lock, nd->m_seq))
+		if (read_seqretry(&mount_lock, m_seq))
 			return ERR_PTR(-ECHILD);
 		/* we know that mountpoint was pinned */
 	}
-	old = nd->path.dentry;
+	old = path->dentry;
 	parent = old->d_parent;
-	nd->next_seq = read_seqcount_begin(&parent->d_seq);
+	*next_seqp = read_seqcount_begin(&parent->d_seq);
 	// makes sure that non-RCU pathwalk could reach this state
-	if (read_seqcount_retry(&old->d_seq, nd->seq))
+	if (read_seqcount_retry(&old->d_seq, *seqp))
 		return ERR_PTR(-ECHILD);
+	return parent;
+}
+
+static struct dentry *follow_dotdot_rcu(struct nameidata *nd)
+{
+	struct dentry *parent;
+
+	if (path_equal(&nd->path, &nd->root))
+		goto in_root;
+	parent = __path_walk_parent_rcu(&nd->path, &nd->root, nd->flags,
+					nd->m_seq, &nd->seq, &nd->next_seq);
+	if (!parent)
+		goto in_root;
+	if (IS_ERR(parent))
+		return parent;
+	nd->inode = nd->path.dentry->d_inode;
 	if (unlikely(!path_connected(nd->path.mnt, parent)))
 		return ERR_PTR(-ECHILD);
 	return parent;
@@ -2192,36 +2227,311 @@ in_root:
 	return nd->path.dentry;
 }
 
+/**
+ * __path_walk_parent - step towards the parent of the given struct path
+ * @path: position to step up from; if it is the root of a mounted tree, it
+ *        is first updated to the mount point that tree is mounted on
+ * @root: boundary not to be crossed; if zero'ed, walk all the way to the
+ *        global root
+ * @flags: %LOOKUP_NO_XDEV returns -EXDEV once @path was updated to a new
+ *         mount; %LOOKUP_BENEATH returns -EXDEV at @root or at the root of
+ *         an unmounted tree, where @path->dentry itself is returned
+ *         otherwise
+ *
+ * Returns: the parent dentry with its refcount incremented, or an ERR_PTR().
+ */
+static struct dentry *__path_walk_parent(struct path *path, const struct path *root, int flags)
+{
+	if (path_equal(path, root))
+		goto in_root;
+	if (unlikely(path->dentry == path->mnt->mnt_root)) {
+		struct path new_path;
+
+		if (!choose_mountpoint(real_mount(path->mnt),
+				       root, &new_path))
+			goto in_root;
+		path_put(path);
+		*path = new_path;
+		if (unlikely(flags & LOOKUP_NO_XDEV))
+			return ERR_PTR(-EXDEV);
+	}
+	/* rare case of legitimate dget_parent()... */
+	return dget_parent(path->dentry);
+
+in_root:
+	if (unlikely(flags & LOOKUP_BENEATH))
+		return ERR_PTR(-EXDEV);
+	return dget(path->dentry);
+}
+
+static unsigned int vfs_walk_pos_flags(const struct vfsmount *mnt,
+				       const struct dentry *dentry)
+{
+	if (unlikely(IS_ROOT(dentry) && dentry != mnt->mnt_root))
+		return VFS_WALK_POS_DISCONNECTED;
+	return 0;
+}
+
+/* No boundary: ancestor walks go up to the real root. */
+static const struct path vfs_walk_no_root;
+
+/* Internal walk flag: the starting position has been yielded. */
+#define VFS_WALK_STARTED	BIT(31)
+
+/**
+ * vfs_walk_start - begin a stepwise ancestor walk
+ * @aw: walk state, valid until vfs_walk_end()
+ * @path: position to walk up from; never modified
+ * @flags: %VFS_WALK_RCU to walk lockless; the caller then holds
+ *         rcu_read_lock() from before vfs_walk_start() until after
+ *         vfs_walk_end(), and owns no references on yielded positions.
+ */
+void vfs_walk_start(struct vfs_ancestor_walk *aw, const struct path *path,
+		    unsigned int flags)
+{
+	if (WARN_ON_ONCE(flags & ~VFS_WALK_RCU))
+		flags &= VFS_WALK_RCU;
+	aw->pos = *path;
+	aw->flags = flags;
+	aw->pos_flags = 0;
+	if (flags & VFS_WALK_RCU) {
+		RCU_LOCKDEP_WARN(!rcu_read_lock_held(),
+				 "rcu-mode ancestor walk outside of RCU read-side critical section");
+		aw->m_seq = read_seqbegin(&mount_lock);
+		aw->seq = raw_seqcount_begin(&aw->pos.dentry->d_seq);
+	} else {
+		path_get(&aw->pos);
+	}
+}
+
+static int vfs_walk_step_ref(struct vfs_ancestor_walk *aw)
+{
+	struct dentry *parent;
+
+	if (unlikely(aw->pos_flags & VFS_WALK_POS_DISCONNECTED)) {
+		/* Resume at the root of the disconnected position's mount. */
+		dput(aw->pos.dentry);
+		aw->pos.dentry = dget(aw->pos.mnt->mnt_root);
+		aw->pos_flags = 0;
+		return 0;
+	}
+	parent = __path_walk_parent(&aw->pos, &vfs_walk_no_root,
+				    LOOKUP_BENEATH);
+	if (IS_ERR(parent))
+		/* The real root. */
+		return 1;
+	/*
+	 * A mount crossing can step onto a disconnected root, whose parent
+	 * is itself: only then is the mountpoint itself yielded, flagged.
+	 */
+	aw->pos_flags = parent == aw->pos.dentry ?
+		VFS_WALK_POS_DISCONNECTED | VFS_WALK_POS_MOUNTPOINT :
+		vfs_walk_pos_flags(aw->pos.mnt, parent);
+	dput(aw->pos.dentry);
+	aw->pos.dentry = parent;
+	return 0;
+}
+
+static int vfs_walk_step_rcu(struct vfs_ancestor_walk *aw)
+{
+	struct dentry *parent;
+	unsigned int next_seq;
+
+	if (unlikely(aw->pos_flags & VFS_WALK_POS_DISCONNECTED)) {
+		/* Resume at the root of the disconnected position's mount. */
+		aw->pos.dentry = aw->pos.mnt->mnt_root;
+		aw->seq = raw_seqcount_begin(&aw->pos.dentry->d_seq);
+		aw->pos_flags = 0;
+		return read_seqretry(&mount_lock, aw->m_seq) ? -ECHILD : 0;
+	}
+
+	parent = __path_walk_parent_rcu(&aw->pos, &vfs_walk_no_root, 0,
+					aw->m_seq, &aw->seq, &next_seq);
+	if (!parent)
+		/* The real root, unless the mount tree moved. */
+		return read_seqretry(&mount_lock, aw->m_seq) ? -ECHILD : 1;
+	if (IS_ERR(parent))
+		return PTR_ERR(parent);
+	/* A crossing onto a disconnected root, as in vfs_walk_step_ref(). */
+	aw->pos_flags = parent == aw->pos.dentry ?
+		VFS_WALK_POS_DISCONNECTED | VFS_WALK_POS_MOUNTPOINT :
+		vfs_walk_pos_flags(aw->pos.mnt, parent);
+	aw->pos.dentry = parent;
+	aw->seq = next_seq;
+	return 0;
+}
+
+/**
+ * vfs_walk_next - yield the walk's next position in @aw->pos
+ * @aw: the walk
+ *
+ * The first call yields the starting position itself.  @aw->pos_flags
+ * carries the position's %VFS_WALK_POS_* flags, with the semantics
+ * described at vfs_walk_ancestors().
+ *
+ * Returns: 0 with @aw->pos valid, 1 once the walk has passed the real
+ * root, -ECHILD when an rcu-mode walk lost a race and must be retried
+ * (typically in the referenced mode).
+ */
+int vfs_walk_next(struct vfs_ancestor_walk *aw)
+{
+	if (aw->flags & VFS_WALK_STARTED) {
+		int err = (aw->flags & VFS_WALK_RCU) ?
+			vfs_walk_step_rcu(aw) : vfs_walk_step_ref(aw);
+
+		if (err)
+			return err;
+	} else {
+		aw->flags |= VFS_WALK_STARTED;
+		aw->pos_flags |= vfs_walk_pos_flags(aw->pos.mnt, aw->pos.dentry);
+	}
+	/* The flags must describe the dentry the seq covers. */
+	if ((aw->flags & VFS_WALK_RCU) &&
+	    read_seqcount_retry(&aw->pos.dentry->d_seq, aw->seq))
+		return -ECHILD;
+	return 0;
+}
+
+/**
+ * vfs_walk_end - finish a stepwise ancestor walk
+ * @aw: the walk; its positions, including @aw->pos, become invalid
+ */
+void vfs_walk_end(struct vfs_ancestor_walk *aw)
+{
+	if (!(aw->flags & VFS_WALK_RCU))
+		path_put(&aw->pos);
+}
+
+/**
+ * vfs_walk_handover - continue an rcu-mode walk with references
+ * @to: walk state to begin at @from's current position, owning the
+ *      references acquired on it; valid until vfs_walk_end() either way
+ * @from: an rcu-mode walk, positioned by a 0 return from vfs_walk_next()
+ *
+ * Mirrors unlazy_walk(): @from's current position is legitimized and
+ * becomes the starting position of the referenced walk @to, which the
+ * first vfs_walk_next() on it yields.  A failed legitimization leaves no
+ * partial references behind and a successful one moves straight into @to,
+ * so nothing is ever put here and the handover is safe within the caller's
+ * RCU read-side critical section - where a path_put() would not be, dput()
+ * being allowed to sleep.  @to itself is only usable once the caller has
+ * left it, its walk being reference-based.
+ *
+ * @from is untouched on success and may keep stepping, lockless, from
+ * where it stands.  The references do not conclude its walk: a concurrent
+ * rename may relocate the position the instant they are taken, as it may
+ * during any reference-based walk.
+ *
+ * Returns: false iff @from lost a race; it is then dead, as after -ECHILD
+ * from vfs_walk_next(), and @to is zeroed - safe to vfs_walk_end(), but
+ * not to step, so the caller has to remember it never started.
+ */
+bool vfs_walk_handover(struct vfs_ancestor_walk *to,
+		       struct vfs_ancestor_walk *from)
+{
+	struct path pos = from->pos;
+	int err;
+
+	err = __legitimize_mnt(pos.mnt, from->m_seq);
+	if (unlikely(err)) {
+		if (err < 0)
+			mnt_undo_legitimize(real_mount(pos.mnt));
+		goto dead;
+	}
+	if (unlikely(read_seqcount_retry(&pos.dentry->d_seq, from->seq) ||
+		     !lockref_get_not_dead(&pos.dentry->d_lockref))) {
+		mnt_undo_legitimize(real_mount(pos.mnt));
+		goto dead;
+	}
+	to->pos = pos;
+	to->flags = 0;
+	to->pos_flags = from->pos_flags;
+	return true;
+
+dead:
+	memset(to, 0, sizeof(*to));
+	return false;
+}
+
+/**
+ * vfs_walk_ancestors - invoke a callback on a path and each of its ancestors
+ * @path: path to walk up from; the caller's path is never modified
+ * @cb: callback invoked on @path, then on each ancestor up to the real
+ *      root, crossing mount boundaries.  @cb must not sleep and returns
+ *      %VFS_WALK_CONTINUE, %VFS_WALK_STOP or a negative errno to abort the
+ *      walk; -ECHILD is reserved (see below).  @ancestor is only valid
+ *      during the invocation; @cb must take its own references to keep a
+ *      position.
+ *      A position whose dentry is a disconnected root is flagged with
+ *      %VFS_WALK_POS_DISCONNECTED (plus %VFS_WALK_POS_MOUNTPOINT when it
+ *      is a mountpoint a mount crossing landed on rather than a parent);
+ *      if @cb continues over it, the walk resumes at the root of that
+ *      position's mount.
+ *      With %VFS_WALK_RCU, @cb accepts positions the walk holds no
+ *      references on: the walk then runs lockless (under rcu_read_lock)
+ *      and returns -ECHILD when it loses a race, or when @cb returns
+ *      -ECHILD.  The caller should then discard any state @cb accumulated
+ *      and retry without %VFS_WALK_RCU.  Positions are seq-validated when
+ *      yielded; what @cb reads from one races with concurrent changes
+ *      just as in a referenced walk.
+ * @data: opaque argument passed to @cb
+ * @flags: %VFS_WALK_RCU if @cb copes with unreferenced positions
+ *
+ * Returns: 0 once the real root was reached, 1 if @cb stopped the walk,
+ * -ECHILD if a lockless walk must be retried with references, or the
+ * negative errno @cb aborted with.
+ */
+int vfs_walk_ancestors(const struct path *path,
+		       int (*cb)(const struct path *ancestor,
+				 unsigned int pos_flags, void *data),
+		       void *data, unsigned int flags)
+{
+	struct vfs_ancestor_walk aw;
+	int ret;
+
+	if (flags & VFS_WALK_RCU)
+		rcu_read_lock();
+	vfs_walk_start(&aw, path, flags);
+	for (;;) {
+		ret = vfs_walk_next(&aw);
+		if (ret) {
+			if (ret == 1)
+				ret = 0;
+			break;
+		}
+		ret = cb(&aw.pos, aw.pos_flags, data);
+		if (ret < 0)
+			break;
+		if (ret == VFS_WALK_STOP) {
+			ret = 1;
+			break;
+		}
+	}
+	vfs_walk_end(&aw);
+	if (flags & VFS_WALK_RCU)
+		rcu_read_unlock();
+	return ret;
+}
+
 static struct dentry *follow_dotdot(struct nameidata *nd)
 {
 	struct dentry *parent;
 
-	if (path_equal(&nd->path, &nd->root))
-		goto in_root;
-	if (unlikely(nd->path.dentry == nd->path.mnt->mnt_root)) {
-		struct path path;
-
-		if (!choose_mountpoint(real_mount(nd->path.mnt),
-				       &nd->root, &path))
-			goto in_root;
-		path_put(&nd->path);
-		nd->path = path;
-		nd->inode = path.dentry->d_inode;
-		if (unlikely(nd->flags & LOOKUP_NO_XDEV))
+	if (path_equal(&nd->path, &nd->root)) {
+		/* nd->root is never path_connected()-checked. */
+		if (unlikely(nd->flags & LOOKUP_BENEATH))
 			return ERR_PTR(-EXDEV);
+		return dget(nd->path.dentry);
 	}
-	/* rare case of legitimate dget_parent()... */
-	parent = dget_parent(nd->path.dentry);
+	parent = __path_walk_parent(&nd->path, &nd->root, nd->flags);
+	nd->inode = nd->path.dentry->d_inode;
+	if (IS_ERR(parent))
+		return parent;
 	if (unlikely(!path_connected(nd->path.mnt, parent))) {
 		dput(parent);
 		return ERR_PTR(-ENOENT);
 	}
 	return parent;
-
-in_root:
-	if (unlikely(nd->flags & LOOKUP_BENEATH))
-		return ERR_PTR(-EXDEV);
-	return dget(nd->path.dentry);
 }
 
 static const char *handle_dots(struct nameidata *nd, enum last_type type)
