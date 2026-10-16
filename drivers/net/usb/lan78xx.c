@@ -3496,6 +3496,8 @@ static int lan78xx_open(struct net_device *net)
 		if (ret < 0) {
 			netif_err(dev, ifup, dev->net,
 				  "intr submit %d\n", ret);
+			clear_bit(EVENT_DEV_OPEN, &dev->flags);
+			napi_disable(&dev->napi);
 			goto done;
 		}
 	}
