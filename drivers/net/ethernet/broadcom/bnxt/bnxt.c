@@ -11712,9 +11712,22 @@ static void bnxt_clear_int_mode(struct bnxt *bp)
 	bp->irq_tbl_size = 0;
 }
 
-int bnxt_reserve_rings(struct bnxt *bp, bool irq_re_init)
+static int bnxt_irqs_required(struct bnxt *bp)
 {
 	struct bnxt_en_dev *edev = bp->edev[BNXT_AUXDEV_RDMA];
+
+	if (BNXT_NEW_RM(bp) && !bnxt_ulp_registered(edev)) {
+		int ulp_msix = bnxt_get_avail_msix(bp, bp->ulp_num_msix_want);
+
+		if (ulp_msix > bp->ulp_num_msix_want)
+			ulp_msix = bp->ulp_num_msix_want;
+		return ulp_msix + bp->cp_nr_rings;
+	}
+	return bnxt_get_num_msix(bp);
+}
+
+int bnxt_reserve_rings(struct bnxt *bp, bool irq_re_init)
+{
 	bool irq_cleared = false;
 	bool irq_change = false;
 	int tcs = bp->num_tc;
@@ -11724,15 +11737,7 @@ int bnxt_reserve_rings(struct bnxt *bp, bool irq_re_init)
 	if (!bnxt_need_reserve_rings(bp))
 		return 0;
 
-	if (BNXT_NEW_RM(bp) && !bnxt_ulp_registered(edev)) {
-		int ulp_msix = bnxt_get_avail_msix(bp, bp->ulp_num_msix_want);
-
-		if (ulp_msix > bp->ulp_num_msix_want)
-			ulp_msix = bp->ulp_num_msix_want;
-		irqs_required = ulp_msix + bp->cp_nr_rings;
-	} else {
-		irqs_required = bnxt_get_num_msix(bp);
-	}
+	irqs_required = bnxt_irqs_required(bp);
 
 	if (irq_re_init && BNXT_NEW_RM(bp) && irqs_required != bp->total_irqs) {
 		irq_change = true;
