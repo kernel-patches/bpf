@@ -949,6 +949,16 @@ mtk_wed_free_ring(struct mtk_wed_device *dev, struct mtk_wed_ring *ring)
 static void
 mtk_wed_free_rx_rings(struct mtk_wed_device *dev)
 {
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(dev->rx_ring); i++)
+		if ((dev->tx_ring[i].flags & MTK_WED_RING_CONFIGURED))
+			mtk_wed_free_ring(dev, &dev->rx_ring[i]);
+
+	for (i = 0; i < ARRAY_SIZE(dev->tx_wdma); i++)
+		if ((dev->tx_wdma[i].flags & MTK_WED_RING_CONFIGURED))
+			mtk_wed_free_ring(dev, &dev->tx_wdma[i]);
+
 	mtk_wed_free_rx_buffer(dev);
 	mtk_wed_free_ring(dev, &dev->rro.ring);
 }
@@ -959,9 +969,11 @@ mtk_wed_free_tx_rings(struct mtk_wed_device *dev)
 	int i;
 
 	for (i = 0; i < ARRAY_SIZE(dev->tx_ring); i++)
-		mtk_wed_free_ring(dev, &dev->tx_ring[i]);
+		if ((dev->tx_ring[i].flags & MTK_WED_RING_CONFIGURED))
+			mtk_wed_free_ring(dev, &dev->tx_ring[i]);
 	for (i = 0; i < ARRAY_SIZE(dev->rx_wdma); i++)
-		mtk_wed_free_ring(dev, &dev->rx_wdma[i]);
+		if ((dev->rx_wdma[i].flags & MTK_WED_RING_CONFIGURED))
+			mtk_wed_free_ring(dev, &dev->rx_wdma[i]);
 }
 
 static void
@@ -1885,6 +1897,8 @@ mtk_wed_wdma_rx_ring_setup(struct mtk_wed_device *dev, int idx, int size,
 					 dev->hw->soc->wdma_desc_size, true))
 		return -ENOMEM;
 
+	wdma->flags |= MTK_WED_RING_CONFIGURED;
+
 	wdma_w32(dev, MTK_WDMA_RING_RX(idx) + MTK_WED_RING_OFS_BASE,
 		 wdma->desc_phys);
 	wdma_w32(dev, MTK_WDMA_RING_RX(idx) + MTK_WED_RING_OFS_COUNT,
@@ -1930,6 +1944,8 @@ mtk_wed_wdma_tx_ring_setup(struct mtk_wed_device *dev, int idx, int size,
 			desc++;
 		}
 	}
+
+	wdma->flags |= MTK_WED_RING_CONFIGURED;
 
 	wdma_w32(dev, MTK_WDMA_RING_TX(idx) + MTK_WED_RING_OFS_BASE,
 		 wdma->desc_phys);
@@ -2504,6 +2520,7 @@ mtk_wed_tx_ring_setup(struct mtk_wed_device *dev, int idx, void __iomem *regs,
 
 	ring->reg_base = MTK_WED_RING_TX(idx);
 	ring->wpdma = regs;
+	ring->flags |= MTK_WED_RING_CONFIGURED;
 
 	if (mtk_wed_is_v3_or_greater(dev->hw) && idx == 1) {
 		/* reset prefetch index */
