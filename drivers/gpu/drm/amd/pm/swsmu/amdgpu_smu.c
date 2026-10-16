@@ -884,6 +884,9 @@ static int smu_early_init(struct amdgpu_ip_block *ip_block)
 	r = smu_set_funcs(adev);
 	if (r)
 		return r;
+
+	smu_feature_init(smu, SMU_FEATURE_NUM_DEFAULT);
+
 	return smu_init_microcode(smu);
 }
 
@@ -1417,7 +1420,6 @@ static int smu_sw_init(struct amdgpu_ip_block *ip_block)
 	int i, ret;
 
 	smu->pool_size = adev->pm.smu_prv_buffer_size;
-	smu_feature_init(smu, SMU_FEATURE_NUM_DEFAULT);
 
 	INIT_WORK(&smu->throttling_logging_work, smu_throttling_logging_work_fn);
 	INIT_WORK(&smu->interrupt_work, smu_interrupt_work_fn);
@@ -3995,6 +3997,19 @@ static u64 smu_get_npm_cap(void *handle)
 	return smu->ppt_funcs->get_npm_cap(smu);
 }
 
+static int smu_set_npm_limit(void *handle, uint32_t limit)
+{
+	struct smu_context *smu = handle;
+
+	if (!smu->pm_enabled || !smu->adev->pm.dpm_enabled)
+		return -EOPNOTSUPP;
+
+	if (!smu->ppt_funcs || !smu->ppt_funcs->set_npm_limit)
+		return -EOPNOTSUPP;
+
+	return smu->ppt_funcs->set_npm_limit(smu, limit);
+}
+
 static ssize_t smu_sys_get_xcp_metrics(void *handle, int xcp_id, void *table)
 {
 	struct smu_context *smu = handle;
@@ -4069,6 +4084,7 @@ static const struct amd_pm_funcs swsmu_pm_funcs = {
 	.get_xcp_metrics                  = smu_sys_get_xcp_metrics,
 	.get_temp_metrics             = smu_sys_get_temp_metrics,
 	.temp_metrics_is_supported      = smu_temp_metrics_is_supported,
+	.set_npm_limit                = smu_set_npm_limit,
 	.get_npm_cap                  = smu_get_npm_cap,
 };
 
