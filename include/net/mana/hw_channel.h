@@ -5,6 +5,7 @@
 #define _HW_CHANNEL_H
 
 #include <linux/atomic.h>
+#include <linux/minmax.h>
 
 #define DEFAULT_LOG2_THROTTLING_FOR_ERROR_EQ  4
 
@@ -12,6 +13,9 @@
 #define HW_CHANNEL_MAX_RESPONSE_SIZE 0x1000
 
 #define HW_CHANNEL_VF_BOOTSTRAP_QUEUE_DEPTH 1
+
+/* Largest supported rebuild depth; larger reports retain bootstrap queues. */
+#define HW_CHANNEL_MAX_QUEUE_DEPTH 128
 
 #define HWC_INIT_DATA_CQID		1
 #define HWC_INIT_DATA_RQID		2
@@ -200,12 +204,18 @@ struct hw_channel_context {
 
 	u16 num_inflight_msg;
 	u32 max_req_msg_size;
+	u32 max_resp_msg_size;
+	/* Immutable reported maxima for the final RQ and SQ directions. */
+	u32 rx_msg_size_limit;
+	u32 tx_msg_size_limit;
 
-	u16 hwc_init_q_depth_max;
+	u32 hwc_init_q_depth_max;
 	u32 hwc_init_max_req_msg_size;
 	u32 hwc_init_max_resp_msg_size;
 	u32 hwc_init_max_num_cqs;
 	u32 hwc_init_cq_id;
+	bool hwc_init_doorbell;
+	int hwc_init_error;
 
 	struct completion hwc_init_eqe_comp;
 
@@ -241,6 +251,12 @@ struct hw_channel_context {
 
 	struct hwc_caller_ctx *caller_ctx;
 };
+
+/* Host-to-PF requests are bounded by the negotiated TX limit and SQ stride. */
+static inline u32 mana_hwc_get_max_req_size(const struct hw_channel_context *hwc)
+{
+	return min(hwc->tx_msg_size_limit, hwc->max_resp_msg_size);
+}
 
 int mana_hwc_create_channel(struct gdma_context *gc);
 void mana_hwc_destroy_channel(struct gdma_context *gc);

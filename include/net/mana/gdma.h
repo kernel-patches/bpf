@@ -594,6 +594,8 @@ void mana_gd_fence_eq(struct gdma_context *gc, struct gdma_queue *queue);
 
 int mana_gd_poll_cq(struct gdma_queue *cq, struct gdma_comp *comp, int num_cqe);
 
+bool mana_gd_is_valid_doorbell(struct gdma_context *gc, u32 db_id);
+
 void mana_gd_ring_cq(struct gdma_queue *cq, u8 arm_bit);
 
 ssize_t mana_gd_read_ring(struct gdma_queue *q, char __user *buf,
