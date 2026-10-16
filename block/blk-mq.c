@@ -1397,6 +1397,7 @@ static void blk_add_rq_to_plug(struct blk_plug *plug, struct request *rq)
 		   (!blk_queue_nomerges(rq->q) &&
 		    blk_rq_bytes(last) >= BLK_PLUG_FLUSH_SIZE)) {
 		blk_mq_flush_plug_list(plug, false);
+		blk_plug_invalidate_ts();
 		last = NULL;
 		trace_block_plug(rq->q);
 	}
@@ -3146,6 +3147,12 @@ void blk_mq_submit_bio(struct bio *bio)
 	 */
 	if (unlikely(bio_unaligned(bio, q))) {
 		bio_io_error(bio);
+		goto queue_exit;
+	}
+
+	if (unlikely(op_is_dmabuf(bio->bi_opf) &&
+		bdev_has_integrity_csum(bio->bi_bdev))) {
+		bio_endio_status(bio, BLK_STS_NOTSUPP);
 		goto queue_exit;
 	}
 
