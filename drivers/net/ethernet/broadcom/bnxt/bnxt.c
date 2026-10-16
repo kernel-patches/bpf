@@ -11510,6 +11510,12 @@ static int bnxt_change_msix(struct bnxt *bp, int total)
 	struct msi_map map;
 	int i;
 
+	if (!bp->irq_tbl)
+		return 0;
+
+	if (total > bp->irq_tbl_size)
+		return bp->total_irqs;
+
 	/* add MSIX to the end if needed */
 	for (i = bp->total_irqs; i < total; i++) {
 		map = pci_msix_alloc_irq_at(bp->pdev, i, NULL);
@@ -11652,12 +11658,13 @@ static int bnxt_init_int_mode(struct bnxt *bp)
 
 	tbl_size = total_vecs;
 	if (pci_msix_can_alloc_dyn(bp->pdev))
-		tbl_size = max;
+		tbl_size = bp->hw_resc.max_irqs;
 	bp->irq_tbl = kzalloc_objs(*bp->irq_tbl, tbl_size);
 	if (!bp->irq_tbl) {
 		rc = -ENOMEM;
 		goto msix_setup_exit;
 	}
+	bp->irq_tbl_size = tbl_size;
 
 	for (i = 0; i < total_vecs; i++)
 		bp->irq_tbl[i].vector = pci_irq_vector(bp->pdev, i);
@@ -11680,6 +11687,8 @@ msix_setup_exit:
 	netdev_err(bp->dev, "bnxt_init_int_mode err: %x\n", rc);
 	kfree(bp->irq_tbl);
 	bp->irq_tbl = NULL;
+	bp->total_irqs = 0;
+	bp->irq_tbl_size = 0;
 	pci_free_irq_vectors(bp->pdev);
 	return rc;
 }
@@ -11690,6 +11699,8 @@ static void bnxt_clear_int_mode(struct bnxt *bp)
 
 	kfree(bp->irq_tbl);
 	bp->irq_tbl = NULL;
+	bp->total_irqs = 0;
+	bp->irq_tbl_size = 0;
 }
 
 int bnxt_reserve_rings(struct bnxt *bp, bool irq_re_init)
@@ -11716,7 +11727,7 @@ int bnxt_reserve_rings(struct bnxt *bp, bool irq_re_init)
 
 	if (irq_re_init && BNXT_NEW_RM(bp) && irqs_required != bp->total_irqs) {
 		irq_change = true;
-		if (!pci_msix_can_alloc_dyn(bp->pdev)) {
+		if (!pci_msix_can_alloc_dyn(bp->pdev) || !bp->irq_tbl) {
 			bnxt_ulp_irq_stop(bp);
 			bnxt_clear_int_mode(bp);
 			irq_cleared = true;
@@ -15092,7 +15103,7 @@ int bnxt_check_rings(struct bnxt *bp, int tx, int rx, bool sh, int tcs,
 			hwr.cp += bnxt_get_ulp_msix_num(bp);
 			hwr.cp = min_t(int, hwr.cp, bnxt_get_max_func_irqs(bp));
 		}
-		if (hwr.cp > bp->total_irqs) {
+		if (bp->irq_tbl && hwr.cp > bp->total_irqs) {
 			int total_msix = bnxt_change_msix(bp, hwr.cp);
 
 			if (total_msix < hwr.cp) {
@@ -17755,7 +17766,7 @@ static void bnxt_io_resume(struct pci_dev *pdev)
 			err = bnxt_open(netdev);
 		} else {
 			err = bnxt_reserve_rings(bp, true);
-			if (!err)
+			if (!err && !bp->irq_tbl)
 				err = bnxt_init_int_mode(bp);
 		}
 	}

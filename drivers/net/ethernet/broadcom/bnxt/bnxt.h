@@ -2489,6 +2489,7 @@ struct bnxt {
 	 */
 	unsigned long		*ring_affinity_set;
 	int			max_irqs;
+	int			irq_tbl_size;
 	int			total_irqs;
 	int			ulp_num_msix_want;
 	u8			mac_addr[ETH_ALEN];
