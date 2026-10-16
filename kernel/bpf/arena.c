@@ -589,7 +589,7 @@ static bool arena_fault_page(struct bpf_arena *arena, struct vm_fault *vmf,
 
 	folio_unlock(folio);
 	put_page(page);
-	if (err) {
+	if (err == -EDEADLK) {
 		*retp = VM_FAULT_SIGBUS;
 		return true;
 	}
@@ -672,8 +672,13 @@ static vm_fault_t arena_vm_fault(struct vm_fault *vmf)
 
 	ret = raw_res_spin_lock_irqsave(&arena->spinlock, flags);
 	if (ret) {
-		fault_ret = VM_FAULT_SIGBUS;
-		goto out_err;
+		/* If we are deadlocking somehow, no way to ensure forward progress. */
+		if (ret == -EDEADLK) {
+			fault_ret = VM_FAULT_SIGBUS;
+			goto out_err;
+		}
+
+		goto retry_free;
 	}
 
 	page = vmalloc_to_page((void *)kaddr);
@@ -776,6 +781,9 @@ out_err:
 		free_pages_nolock(new_page, 0);
 	return fault_ret;
 
+retry_free:
+	if (new_page)
+		free_pages_nolock(new_page, 0);
 retry:
 	/* Non-retryable GUP callers recheck the PTE on NOPAGE. */
 	if (!(vmf->flags & FAULT_FLAG_ALLOW_RETRY))
