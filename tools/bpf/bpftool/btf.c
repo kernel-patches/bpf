@@ -1121,6 +1121,24 @@ static struct btf *btf_c_detached_copy(const struct btf *src)
 	return copy;
 }
 
+static int btf_c_annotate_records(struct btf *btf)
+{
+	__u32 i, cnt = btf__type_cnt(btf);
+	int err;
+
+	for (i = 1; i < cnt; i++) {
+		const struct btf_type *t = btf__type_by_id(btf, i);
+
+		if (!btf_is_composite(t))
+			continue;
+		err = btf__add_decl_attr(btf, "__bpf_core_pai", i, -1);
+		if (err < 0)
+			return err;
+	}
+
+	return 0;
+}
+
 static int dump_btf_c(const struct btf *btf,
 		      __u32 *root_type_ids, int root_type_cnt, bool sort_dump)
 {
@@ -1133,6 +1151,10 @@ static int dump_btf_c(const struct btf *btf,
 	if (!copy)
 		return -errno;
 
+	err = btf_c_annotate_records(copy);
+	if (err)
+		goto done_free;
+
 	d = btf_dump__new(copy, btf_dump_printf, NULL, NULL);
 	if (!d) {
 		err = -errno;
@@ -1142,8 +1164,12 @@ static int dump_btf_c(const struct btf *btf,
 	printf("#ifndef __VMLINUX_H__\n");
 	printf("#define __VMLINUX_H__\n");
 	printf("\n");
-	printf("#ifndef BPF_NO_PRESERVE_ACCESS_INDEX\n");
-	printf("#pragma clang attribute push (__attribute__((preserve_access_index)), apply_to = record)\n");
+	printf("#ifndef __bpf_core_pai\n");
+	printf("#if !defined(BPF_NO_PRESERVE_ACCESS_INDEX) && __has_attribute(preserve_access_index)\n");
+	printf("#define __bpf_core_pai preserve_access_index\n");
+	printf("#else\n");
+	printf("#define __bpf_core_pai\n");
+	printf("#endif\n");
 	printf("#endif\n\n");
 	printf("#ifndef __ksym\n");
 	printf("#define __ksym __attribute__((section(\".ksyms\")))\n");
@@ -1187,10 +1213,6 @@ static int dump_btf_c(const struct btf *btf,
 			goto done;
 	}
 
-	printf("#ifndef BPF_NO_PRESERVE_ACCESS_INDEX\n");
-	printf("#pragma clang attribute pop\n");
-	printf("#endif\n");
-	printf("\n");
 	printf("#endif /* __VMLINUX_H__ */\n");
 
 done:
