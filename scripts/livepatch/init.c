@@ -50,8 +50,6 @@ static int __init livepatch_mod_init(void)
 		funcs = kzalloc_objs(*funcs, nr_funcs + 1);
 		if (!funcs) {
 			ret = -ENOMEM;
-			for (int j = 0; j < i; j++)
-				kfree(objs[j].funcs);
 			goto err_free_objs;
 		}
 
@@ -78,9 +76,14 @@ static int __init livepatch_mod_init(void)
 	patch->replace = true;
 #endif
 
-	return klp_enable_patch(patch);
+	ret = klp_enable_patch(patch);
+	if (ret)
+		goto err_free_objs;
+	return 0;
 
 err_free_objs:
+	for (int i = 0; i < nr_objs; i++)
+		kfree(objs[i].funcs);
 	kfree(objs);
 err_free_patch:
 	kfree(patch);
