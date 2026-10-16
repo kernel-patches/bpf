@@ -441,6 +441,8 @@ static void print_prog_header_json(struct bpf_prog_info *info, int fd)
 	}
 	if (info->recursion_misses)
 		jsonw_uint_field(json_wtr, "recursion_misses", info->recursion_misses);
+	if (info->verified_insns)
+		jsonw_uint_field(json_wtr, "verified_insns", info->verified_insns);
 }
 
 static void print_prog_json(struct bpf_prog_info *info, int fd, bool orphaned)
@@ -526,6 +528,8 @@ static void print_prog_header_plain(struct bpf_prog_info *info, int fd)
 		       info->run_time_ns, info->run_cnt);
 	if (info->recursion_misses)
 		printf(" recursion_misses %llu", info->recursion_misses);
+	if (info->verified_insns)
+		printf(" verified_insns %u", info->verified_insns);
 	printf("\n");
 }
 
