@@ -63,6 +63,7 @@ static int _block2mtd_erase(struct block2mtd_dev *dev, loff_t to, size_t len)
 	u_long *max;
 
 	while (pages) {
+retry:
 		page = page_read(mapping, index);
 		if (IS_ERR(page))
 			return PTR_ERR(page);
@@ -71,6 +72,11 @@ static int _block2mtd_erase(struct block2mtd_dev *dev, loff_t to, size_t len)
 		for (p=page_address(page); p<max; p++)
 			if (*p != -1UL) {
 				lock_page(page);
+				if (page_folio(page)->mapping != mapping) {
+					unlock_page(page);
+					put_page(page);
+					goto retry;
+				}
 				memset(page_address(page), 0xff, PAGE_SIZE);
 				set_page_dirty(page);
 				unlock_page(page);
@@ -152,12 +158,18 @@ static int _block2mtd_write(struct block2mtd_dev *dev, const u_char *buf,
 			cpylen = len;			// this page
 		len = len - cpylen;
 
+retry:
 		page = page_read(mapping, index);
 		if (IS_ERR(page))
 			return PTR_ERR(page);
 
 		if (memcmp(page_address(page)+offset, buf, cpylen)) {
 			lock_page(page);
+			if (page_folio(page)->mapping != mapping) {
+				unlock_page(page);
+				put_page(page);
+				goto retry;
+			}
 			memcpy(page_address(page) + offset, buf, cpylen);
 			set_page_dirty(page);
 			unlock_page(page);
