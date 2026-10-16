@@ -680,12 +680,25 @@ config HID_LOGITECH_DJ
 	depends on HIDRAW
 	depends on HID_LOGITECH
 	select HID_LOGITECH_HIDPP
+	select HID_LOGITECH_HEADSET
 	help
 	Say Y if you want support for Logitech receivers and devices.
 	Logitech receivers are capable of pairing multiple Logitech compliant
 	devices to the same receiver. Without this driver it will be handled by
 	generic USB_HID driver and all incoming events will be multiplexed
 	into a single mouse and a single keyboard device.
+
+config HID_LOGITECH_HEADSET
+	tristate
+	depends on USB_HID
+	select POWER_SUPPLY
+	help
+	Support for the battery of Logitech wireless gaming headsets that
+	report it over a vendor collection instead of HID++. This is a hidden
+	option.
+
+	Supported devices:
+	- PRO X 2 LIGHTSPEED
 
 config HID_LOGITECH_HIDPP
 	tristate "Logitech HID++ devices support"
