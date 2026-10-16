@@ -3024,6 +3024,12 @@ static void enic_sriov_detect_vf_type(struct enic *enic)
 
 	if (enic->vf_type != ENIC_VF_TYPE_V2)
 		return;
+	if (!vnic_dev_uses_devcmd2(enic->vdev)) {
+		dev_warn(&pdev->dev,
+			 "SR-IOV V2 requires DEVCMD2; disabling V2 support\n");
+		enic->vf_type = ENIC_VF_TYPE_NONE;
+		return;
+	}
 
 	/* A successful command means firmware recognizes
 	 * VIC_FEATURE_SRIOV; supported_versions is available
@@ -3199,6 +3205,7 @@ enic_sriov_configure(struct pci_dev *pdev, int num_vfs)
 
 static int enic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 {
+	struct vnic_sriov_stats *sriov_stats;
 	struct device *dev = &pdev->dev;
 	struct net_device *netdev;
 	struct enic *enic;
@@ -3225,6 +3232,7 @@ static int enic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	enic = netdev_priv(netdev);
 	enic->netdev = netdev;
 	enic->pdev = pdev;
+	WRITE_ONCE(enic->vf_id, ENIC_MBOX_DST_PF);
 	spin_lock_init(&enic->vf_link_state_lock);
 
 	/* Setup PCI resources
@@ -3285,6 +3293,12 @@ static int enic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	if (err)
 		goto err_out_vnic_unregister;
+	if (enic_is_sriov_vf_v2(enic) &&
+	    !vnic_dev_uses_devcmd2(enic->vdev)) {
+		dev_err(dev, "SR-IOV V2 VF requires DEVCMD2\n");
+		err = -EOPNOTSUPP;
+		goto err_out_vnic_unregister;
+	}
 
 #ifdef CONFIG_PCI_IOV
 	enic_sriov_detect_vf_type(enic);
@@ -3394,6 +3408,9 @@ static int enic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	 * unmasks the admin interrupt so an early completion is not dropped.
 	 */
 	if (enic_is_sriov_vf_v2(enic)) {
+		u32 stats_ver;
+		u16 vf_id;
+
 		enic_mbox_init(enic);
 		err = enic_admin_channel_open(enic);
 		if (err) {
@@ -3401,6 +3418,27 @@ static int enic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 				"Failed to open admin channel: %d\n", err);
 			goto err_out_admin_fence;
 		}
+
+		err = enic_dev_sriov_stats(enic, &sriov_stats);
+		if (err) {
+			dev_err(dev, "Failed to get SR-IOV statistics: %d\n",
+				err);
+			goto err_out_admin_close;
+		}
+		/* enic_dev_sriov_stats() orders reads from the coherent target.
+		 * Snapshot each multibyte field once.
+		 */
+		stats_ver = le32_to_cpu(sriov_stats->ver);
+		vf_id = le16_to_cpu(sriov_stats->vf_index);
+		if (stats_ver != VNIC_SRIOV_STATS_VERSION ||
+		    vf_id == ENIC_MBOX_DST_PF) {
+			dev_err(dev,
+				"Invalid SR-IOV statistics version %u VF index %#x\n",
+				stats_ver, vf_id);
+			err = -EINVAL;
+			goto err_out_admin_close;
+		}
+		WRITE_ONCE(enic->vf_id, vf_id);
 		err = enic_mbox_vf_capability_check(enic);
 		if (err) {
 			dev_err(dev,
@@ -3562,7 +3600,7 @@ err_out_admin_close:
 err_out_admin_fence:
 	if (enic_dma_quarantined(enic)) {
 		dev_err(dev,
-			"Queue DMA ownership unresolved; retaining probe resources until reboot\n");
+			"DMA ownership unresolved; retaining probe resources until reboot\n");
 		enic_terminal_dma_quarantine(enic);
 		pci_disable_device(pdev);
 		return err;
@@ -3597,7 +3635,8 @@ err_out_free_netdev:
 static bool enic_dma_quarantined(struct enic *enic)
 {
 	return enic_datapath_is_quarantined(enic) ||
-	       enic_admin_channel_is_quarantined(enic);
+	       enic_admin_channel_is_quarantined(enic) ||
+	       READ_ONCE(enic->sriov_stats_dma_unresolved);
 }
 
 static int enic_datapath_recheck_on_remove(struct enic *enic)
@@ -3656,7 +3695,7 @@ static void enic_terminal_dma_quarantine(struct enic *enic)
 	enic_free_affinity_hint(enic);
 
 	/* Preserve netdev, vdev, BAR mappings, regions, rings, and their buffer
-	 * metadata because queue ownership remains unresolved until reboot.
+	 * metadata because DMA ownership remains unresolved until reboot.
 	 */
 	pci_clear_master(enic->pdev);
 }
@@ -3716,7 +3755,7 @@ static void enic_remove(struct pci_dev *pdev)
 			enic_datapath_recheck_on_remove(enic);
 		if (enic_dma_quarantined(enic)) {
 			dev_err(&pdev->dev,
-				"Queue DMA ownership unresolved; retaining resources until reboot\n");
+				"DMA ownership unresolved; retaining resources until reboot\n");
 			enic_terminal_dma_quarantine(enic);
 			retain_dma = true;
 			goto disable_device;

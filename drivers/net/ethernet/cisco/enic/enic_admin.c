@@ -406,6 +406,12 @@ static int enic_admin_qp_type_set(struct enic *enic, u32 enable)
 
 	spin_lock_bh(&enic->devcmd_lock);
 	err = vnic_dev_cmd(enic->vdev, CMD_QP_TYPE_SET, &a0, &a1, wait);
+	/* DEVCMD2 runs one command at a time for a vNIC. Completion of this
+	 * blocking command proves that earlier statistics-command DMA has
+	 * finished. Admin WQ/RQ ownership still requires RUNNING == 0.
+	 */
+	if (!err)
+		WRITE_ONCE(enic->sriov_stats_dma_unresolved, false);
 	spin_unlock_bh(&enic->devcmd_lock);
 
 	return err;
@@ -544,6 +550,11 @@ int enic_admin_channel_open(struct enic *enic)
 	if (READ_ONCE(enic->mbox_tx_poisoned)) {
 		netdev_err(enic->netdev,
 			   "Refusing to reopen poisoned admin channel\n");
+		return -EIO;
+	}
+	if (READ_ONCE(enic->sriov_stats_dma_unresolved)) {
+		netdev_err(enic->netdev,
+			   "Refusing to reopen admin channel before SR-IOV statistics-command DMA is fenced\n");
 		return -EIO;
 	}
 	/* Keep MBOX sends disabled for the entire open sequence.  It is
