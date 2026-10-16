@@ -109,16 +109,10 @@ static struct btf *mk_loc_btf(void)
 	return btf;
 }
 
-static int btf_to_tmpfile(const struct btf *btf, char *path)
+static int raw_to_tmpfile(const void *raw, __u32 sz, char *path)
 {
 	ssize_t written;
-	const void *raw;
-	__u32 sz;
 	int fd;
-
-	raw = btf__raw_data(btf, &sz);
-	if (!ASSERT_OK_PTR(raw, "raw_data"))
-		return -1;
 
 	snprintf(path, PATH_MAX, "/tmp/bpftool_btf_dump.XXXXXX");
 	fd = mkstemp(path);
@@ -133,6 +127,18 @@ static int btf_to_tmpfile(const struct btf *btf, char *path)
 	}
 
 	return 0;
+}
+
+static int btf_to_tmpfile(const struct btf *btf, char *path)
+{
+	const void *raw;
+	__u32 sz;
+
+	raw = btf__raw_data(btf, &sz);
+	if (!ASSERT_OK_PTR(raw, "raw_data"))
+		return -1;
+
+	return raw_to_tmpfile(raw, sz, path);
 }
 
 static char *dump_c(const char *btf_path, bool sorted)
@@ -262,6 +268,39 @@ static void test_loc_dump(const char *btf_path)
 	free(dump);
 }
 
+static void test_hdr_extra(const struct btf *btf)
+{
+	const __u32 extra_sz = 4;
+	char path[PATH_MAX];
+	__u32 hdr_len, sz;
+	const void *raw;
+	char *ext;
+	int err;
+
+	raw = btf__raw_data(btf, &sz);
+	if (!ASSERT_OK_PTR(raw, "raw_data"))
+		return;
+
+	hdr_len = ((const struct btf_header *)raw)->hdr_len;
+
+	ext = calloc(1, sz + extra_sz);
+	if (!ASSERT_OK_PTR(ext, "alloc_ext"))
+		return;
+
+	memcpy(ext, raw, hdr_len);
+	ext[hdr_len] = 0xA5; /* any nonzero value */
+	memcpy(ext + hdr_len + extra_sz, raw + hdr_len, sz - hdr_len);
+	((struct btf_header *)ext)->hdr_len = hdr_len + extra_sz;
+
+	err = raw_to_tmpfile(ext, sz + extra_sz, path);
+	free(ext);
+	if (err)
+		return;
+
+	test_dump(path, true);
+	unlink(path);
+}
+
 void test_bpftool_btf_dump(void)
 {
 	char path[PATH_MAX];
@@ -278,6 +317,8 @@ void test_bpftool_btf_dump(void)
 		test_dump(path, true);
 	if (test__start_subtest("c_unsorted"))
 		test_dump(path, false);
+	if (test__start_subtest("hdr_extra"))
+		test_hdr_extra(btf);
 	unlink(path);
 
 	btf__free(btf);
