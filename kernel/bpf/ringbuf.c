@@ -473,10 +473,11 @@ static void *__bpf_ringbuf_reserve(struct bpf_ringbuf *rb, u64 size)
 	if (len > ringbuf_total_data_sz(rb))
 		return NULL;
 
-	cons_pos = smp_load_acquire(&rb->consumer_pos);
-
 	if (raw_res_spin_lock_irqsave(&rb->spinlock, flags))
 		return NULL;
+
+	/* Under the lock, so at most one ring behind producer_pos. */
+	cons_pos = smp_load_acquire(&rb->consumer_pos);
 
 	pend_pos = rb->pending_pos;
 	prod_pos = rb->producer_pos;
