@@ -4829,6 +4829,46 @@ err_linearize:
 EXPORT_SYMBOL_GPL(skb_segment_list);
 
 /**
+ * skb_segment_list_csum_help - finish the checksums of fraglist segments
+ * @segs: segments built by skb_segment_list(), with their final headers
+ * @features: features of the output path
+ *
+ * The segments built by skb_segment_list() all have the ip_summed of the
+ * GRO head. If the aggregated packets were CHECKSUM_PARTIAL, e.g. received
+ * from virtio-net or veth, compute the checksums that the output device
+ * can't offload, as skb_segment() does for the segments it builds.
+ * Segments that are GSO packets themselves (TCP fraglist GRO can chain
+ * those) are left alone, as skb_checksum_help() can't handle them.
+ *
+ * Return: @segs, or an error pointer after freeing the segments.
+ */
+struct sk_buff *skb_segment_list_csum_help(struct sk_buff *segs,
+					   netdev_features_t features)
+{
+	struct sk_buff *seg;
+	int err;
+
+	if (segs->ip_summed != CHECKSUM_PARTIAL)
+		return segs;
+
+	for (seg = segs; seg; seg = seg->next) {
+		if (skb_is_gso(seg))
+			continue;
+
+		err = skb_csum_hwoffload_help(seg, features);
+		if (err) {
+			kfree_skb_list(segs->next);
+			segs->next = NULL;
+			/* drop the extra reference skb_segment_list() took */
+			kfree_skb(segs);
+			return ERR_PTR(err);
+		}
+	}
+
+	return segs;
+}
+
+/**
  *	skb_segment - Perform protocol segmentation on skb.
  *	@head_skb: buffer to segment
  *	@features: features for the output path (see dev->features)
