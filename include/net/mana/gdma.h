@@ -528,6 +528,15 @@ struct gdma_context {
 	/* Hardware communication channel (HWC) */
 	struct gdma_dev		hwc;
 
+	/* Sender drain; the final wakeup runs under hwc_lock. */
+	wait_queue_head_t	hwc_drain_waitq;
+
+	/* Protects runtime HWC publication and active sender references.
+	 * Setup owns an unpublished HWC directly; timeout updates use atomic
+	 * access helpers and do not require this lock.
+	 */
+	spinlock_t		hwc_lock;
+
 	/* Azure network adapter */
 	struct gdma_dev		mana;
 
@@ -1164,6 +1173,8 @@ void mana_gd_free_memory(struct gdma_mem_info *gmi);
 
 int mana_gd_send_request(struct gdma_context *gc, u32 req_len, const void *req,
 			 u32 resp_len, void *resp);
+
+int mana_gd_cancel_hwc_timeout(struct gdma_context *gc);
 
 int mana_gd_destroy_dma_region(struct gdma_context *gc, u64 dma_region_handle);
 void mana_register_debugfs(void);
