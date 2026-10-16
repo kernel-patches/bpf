@@ -10,6 +10,7 @@
 #include <linux/module.h>
 #include <linux/net.h>
 #include <linux/skbuff.h>
+#include <linux/slab.h>
 #include <net/sock.h>
 #include <net/af_rxrpc.h>
 #include "ar-internal.h"
@@ -58,10 +59,7 @@ void rxrpc_free_skb(struct sk_buff *skb, enum rxrpc_skb_trace why)
 	}
 }
 
-/*
- * Charge an skb retained outside UDP receive-memory accounting.
- */
-bool rxrpc_charge_async_queue(struct rxrpc_local *local, struct sk_buff *skb)
+static bool rxrpc_charge_async_queue_bytes(struct rxrpc_local *local, long size)
 {
 	struct sock *sk = local->socket->sk;
 	long rcvbuf;
@@ -72,15 +70,68 @@ bool rxrpc_charge_async_queue(struct rxrpc_local *local, struct sk_buff *skb)
 	for (;;) {
 		queued = atomic_long_read(&local->rx_async_queue_bytes);
 		if (queued &&
-		    (queued >= rcvbuf ||
-		     (long)skb->truesize >= rcvbuf - queued)) {
+		    (queued >= rcvbuf || size >= rcvbuf - queued)) {
 			sk_drops_inc(sk);
 			return false;
 		}
 		if (atomic_long_cmpxchg(&local->rx_async_queue_bytes, queued,
-					queued + (long)skb->truesize) == queued)
+					queued + size) == queued)
 			return true;
 	}
+}
+
+struct rxrpc_async_queue_charge *rxrpc_alloc_async_queue_charge(struct sk_buff *skb)
+{
+	struct rxrpc_async_queue_charge *charge;
+
+	charge = kzalloc(sizeof(*charge), GFP_NOFS);
+	if (!charge)
+		return NULL;
+
+	refcount_set(&charge->ref, 1);
+	charge->size = skb->truesize + sizeof(*charge);
+	return charge;
+}
+
+void rxrpc_put_async_queue_charge(struct rxrpc_local *local,
+				  struct rxrpc_async_queue_charge *charge)
+{
+	if (charge && refcount_dec_and_test(&charge->ref)) {
+		if (charge->charged)
+			atomic_long_sub(charge->size, &local->rx_async_queue_bytes);
+		kfree(charge);
+	}
+}
+
+/*
+ * Charge an skb retained outside UDP receive-memory accounting.
+ */
+bool rxrpc_charge_async_queue(struct rxrpc_local *local, struct sk_buff *skb)
+{
+	struct rxrpc_async_queue_charge *charge = NULL;
+	struct rxrpc_skb_priv *sp = rxrpc_skb(skb);
+	long size = 0;
+
+	if (sp->hdr.type == RXRPC_PACKET_TYPE_DATA)
+		charge = sp->data.charge;
+
+	if (charge) {
+		bool clone = sp->hdr.flags & RXRPC_JUMBO_PACKET;
+
+		if (!charge->charged) {
+			size = charge->size;
+			if (clone)
+				size += SKB_DATA_ALIGN(sizeof(struct sk_buff));
+		} else if (clone) {
+			size = SKB_DATA_ALIGN(sizeof(struct sk_buff));
+		}
+		if (size && !rxrpc_charge_async_queue_bytes(local, size))
+			return false;
+		charge->charged = true;
+		refcount_inc(&charge->ref);
+		return true;
+	}
+	return rxrpc_charge_async_queue_bytes(local, (long)skb->truesize);
 }
 
 /*
@@ -88,7 +139,34 @@ bool rxrpc_charge_async_queue(struct rxrpc_local *local, struct sk_buff *skb)
  */
 void rxrpc_uncharge_async_queue(struct rxrpc_local *local, struct sk_buff *skb)
 {
+	struct rxrpc_async_queue_charge *charge;
+	struct rxrpc_skb_priv *sp = rxrpc_skb(skb);
+
+	if (sp->hdr.type == RXRPC_PACKET_TYPE_DATA) {
+		charge = sp->data.charge;
+		if (charge) {
+			sp->data.charge = NULL;
+			if (sp->hdr.flags & RXRPC_JUMBO_PACKET)
+				atomic_long_sub(SKB_DATA_ALIGN(sizeof(struct sk_buff)),
+						&local->rx_async_queue_bytes);
+			rxrpc_put_async_queue_charge(local, charge);
+			return;
+		}
+	}
 	atomic_long_sub(skb->truesize, &local->rx_async_queue_bytes);
+}
+
+/*
+ * Purge DATA from a call's receive queue and release its per-local charge.
+ */
+void rxrpc_purge_data_queue(struct rxrpc_call *call, struct sk_buff_head *list)
+{
+	struct sk_buff *skb;
+
+	while ((skb = skb_dequeue(list)) != NULL) {
+		rxrpc_uncharge_async_queue(call->local, skb);
+		rxrpc_free_skb(skb, rxrpc_skb_put_purge);
+	}
 }
 
 /*

@@ -50,6 +50,7 @@ struct key_preparsed_payload;
 struct rxrpc_connection;
 struct rxrpc_txbuf;
 struct rxrpc_txqueue;
+struct rxrpc_async_queue_charge;
 struct rxgk_context;
 
 /*
@@ -223,6 +224,15 @@ struct rxrpc_host_header {
 } __packed;
 
 /*
+ * Shared asynchronous receive-memory charge for split jumbo DATA packets.
+ */
+struct rxrpc_async_queue_charge {
+	refcount_t		ref;
+	long			size;
+	bool			charged;
+};
+
+/*
  * RxRPC socket buffer private variables
  * - max 48 bytes (struct sk_buff::cb)
  */
@@ -233,6 +243,11 @@ struct rxrpc_skb_priv {
 			u16		offset;		/* Offset of data */
 			u16		len;		/* Length of data */
 		};
+		struct {
+			u16		offset;
+			u16		len;
+			struct rxrpc_async_queue_charge *charge;
+		} data;
 		struct {
 			rxrpc_seq_t	first_ack;	/* First packet in acks table */
 			rxrpc_seq_t	prev_ack;	/* Highest seq seen */
@@ -1517,8 +1532,12 @@ void rxrpc_new_skb(struct sk_buff *, enum rxrpc_skb_trace);
 void rxrpc_see_skb(struct sk_buff *, enum rxrpc_skb_trace);
 void rxrpc_get_skb(struct sk_buff *, enum rxrpc_skb_trace);
 void rxrpc_free_skb(struct sk_buff *, enum rxrpc_skb_trace);
-bool rxrpc_charge_async_queue(struct rxrpc_local *, struct sk_buff *);
-void rxrpc_uncharge_async_queue(struct rxrpc_local *, struct sk_buff *);
+struct rxrpc_async_queue_charge *rxrpc_alloc_async_queue_charge(struct sk_buff *skb);
+void rxrpc_put_async_queue_charge(struct rxrpc_local *local,
+				  struct rxrpc_async_queue_charge *charge);
+bool rxrpc_charge_async_queue(struct rxrpc_local *local, struct sk_buff *skb);
+void rxrpc_uncharge_async_queue(struct rxrpc_local *local, struct sk_buff *skb);
+void rxrpc_purge_data_queue(struct rxrpc_call *call, struct sk_buff_head *list);
 void rxrpc_purge_queue(struct sk_buff_head *);
 
 /*

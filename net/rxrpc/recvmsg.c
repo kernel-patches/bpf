@@ -119,6 +119,7 @@ static void rxrpc_rotate_rx_window(struct rxrpc_call *call)
 
 	skb = skb_dequeue(&call->recvmsg_queue);
 	rxrpc_see_skb(skb, rxrpc_skb_see_rotate);
+	rxrpc_uncharge_async_queue(call->local, skb);
 
 	sp = rxrpc_skb(skb);
 	tseq   = sp->hdr.seq;
@@ -566,7 +567,7 @@ try_again:
 	goto not_yet_complete;
 
 call_failed:
-	rxrpc_purge_queue(&call->recvmsg_queue);
+	rxrpc_purge_data_queue(call, &call->recvmsg_queue);
 call_complete:
 	ret = rxrpc_recvmsg_term(call, msg);
 	if (ret < 0)
