@@ -672,6 +672,44 @@ bool sit9531x_input_prio_present(struct sit9531x_dev *sitdev, u8 pll_idx,
 }
 
 /*
+ * sit9531x_input_prio_get - read an input's priority for a PLL
+ * @input_idx:	input source in hardware encoding (see
+ *		sit9531x_input_hw_src())
+ * @prio:	output priority (lower is preferred)
+ *
+ * Reports the priority configured for the source on this PLL, which is
+ * kept whether or not the source is currently in the table: state and
+ * priority are separate attributes, so disconnecting an input and
+ * connecting it again must not change the priority it reports.  The
+ * value is seeded from the hardware table, and re-seeded whenever the
+ * read-back shows the table was rewritten by something other than this
+ * driver.  A source that was never listed reports the lowest slot.
+ *
+ * Caller must hold sitdev->multiop_lock.
+ */
+int sit9531x_input_prio_get(struct sit9531x_dev *sitdev, u8 pll_idx,
+			    u8 input_idx, u8 *prio)
+{
+	const struct sit9531x_chan *chan;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (pll_idx >= SIT9531X_NUM_PLLS)
+		return -EINVAL;
+	input_idx = sit9531x_prio_src_canon(sitdev, input_idx);
+	if (input_idx >= SIT9531X_PRIO_NUM_SRC)
+		return -EINVAL;
+
+	chan = &sitdev->chan[pll_idx];
+	if (chan->cfg_known & BIT(input_idx))
+		*prio = chan->cfg_prio[input_idx];
+	else
+		*prio = SIT9531X_PRIO_MAX_SLOTS - 1;
+
+	return 0;
+}
+
+/*
  * Take the configured priorities from a table the hardware holds: each
  * listed source gets the first slot it occupies.  A source the table does
  * not list keeps whatever it had, so a disconnected input comes back with
@@ -2588,9 +2626,12 @@ static int sit9531x_dpll_pins_register(struct sit9531x_dpll *sitdpll)
 		/*
 		 * Pins registered before this one are already reachable from
 		 * netlink, and the walks over this list run under
-		 * multiop_lock, so the insertion does too.
+		 * multiop_lock, so the insertion does too.  The baseline the
+		 * poll compares the pin against is taken under the same
+		 * lock, from the cache the create notification just reported.
 		 */
 		mutex_lock(&sitdpll->dev->multiop_lock);
+		sit9531x_dpll_pin_baseline(pin);
 		list_add(&pin->list, &sitdpll->pins);
 		mutex_unlock(&sitdpll->dev->multiop_lock);
 	}

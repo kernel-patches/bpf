@@ -31,7 +31,8 @@ struct sit9531x_dpll_pin {
 	u8				id;		/* hardware index */
 	u8				prio;
 	enum dpll_pin_state		pin_state;
-	bool				seen;	/* baseline taken by the poll */
+	enum dpll_pin_operstate		operstate;
+	bool				ntf_pending;
 };
 
 /* Per-PLL DPLL device state. */
@@ -63,6 +64,7 @@ void sit9531x_dpll_unregister(struct sit9531x_dpll *sitdpll);
 
 /* ---- Periodic change detection ---- */
 void sit9531x_dpll_lock_status_baseline(struct sit9531x_dpll *sitdpll);
+void sit9531x_dpll_pin_baseline(struct sit9531x_dpll_pin *pin);
 void sit9531x_dpll_changes_check(struct sit9531x_dpll *sitdpll);
 
 #endif /* _SIT9531X_DPLL_H */
