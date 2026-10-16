@@ -146,12 +146,14 @@ enum {
  *  +---------------------------------------------------+
  */
 
-#define USECS_TO_CYCLES(time_usecs)			\
-	xloops_to_cycles((time_usecs) * 0x10C7UL)
-
-static inline unsigned long xloops_to_cycles(u64 xloops)
+static inline u64 rpmh_xloops_to_cycles(u64 xloops)
 {
 	return (xloops * loops_per_jiffy * HZ) >> 32;
+}
+
+static inline u64 rpmh_usecs_to_cycles(u64 time_usecs)
+{
+	return rpmh_xloops_to_cycles((time_usecs) * 0x10C7UL);
 }
 
 static u32 rpmh_rsc_reg_offset_ver_2_7[] = {
@@ -828,7 +830,7 @@ void rpmh_rsc_write_next_wakeup(struct rsc_drv *drv)
 	wakeup_us = ktime_to_us(wakeup);
 
 	/* Convert the wakeup to arch timer scale */
-	wakeup_cycles = USECS_TO_CYCLES(wakeup_us);
+	wakeup_cycles = rpmh_usecs_to_cycles(wakeup_us);
 	wakeup_cycles += arch_timer_read_counter();
 
 exit:
