@@ -375,6 +375,8 @@ static int existing_page_cb(pte_t *ptep, unsigned long addr, void *data)
 static void arena_map_free(struct bpf_map *map)
 {
 	struct bpf_arena *arena = container_of(map, struct bpf_arena, map);
+	struct llist_node *pos, *next;
+	struct arena_free_span *s;
 
 	/*
 	 * Check that user vma-s are not around when bpf map is freed.
@@ -385,9 +387,18 @@ static void arena_map_free(struct bpf_map *map)
 	if (WARN_ON_ONCE(!list_empty(&arena->vma_list)))
 		return;
 
-	/* Ensure no pending deferred frees */
+	/*
+	 * No callers remain. Drain the IRQ callback, then stop the worker,
+	 * including any attempts to requeue itself during teardown.
+	 */
 	irq_work_sync(&arena->free_irq);
-	flush_work(&arena->free_work);
+	disable_work_sync(&arena->free_work);
+
+	/* Remaining mapped pages are reclaimed by the page-table walk below. */
+	llist_for_each_safe(pos, next, llist_del_all(&arena->free_spans)) {
+		s = llist_entry(pos, struct arena_free_span, node);
+		kfree_nolock(s);
+	}
 
 	/*
 	 * free_vm_area() calls remove_vm_area() that calls free_unmap_vmap_area().
