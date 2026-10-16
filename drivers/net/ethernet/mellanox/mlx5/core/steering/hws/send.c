@@ -1002,7 +1002,9 @@ err_out:
 
 static void hws_send_ring_close_cq(struct mlx5hws_send_ring_cq *cq)
 {
-	mlx5_core_destroy_cq(cq->mdev, &cq->mcq);
+	/* A CQ that was not destroyed can still access its buffer, leak it */
+	if (mlx5_core_destroy_cq(cq->mdev, &cq->mcq))
+		return;
 	mlx5_wq_destroy(&cq->wq_ctrl);
 }
 
