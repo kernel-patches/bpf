@@ -528,6 +528,8 @@ int rxrpc_io_thread(void *data)
 
 			if (skb->mark == RXRPC_SKB_MARK_PACKET)
 				rxrpc_skb_orphan_udp(skb);
+			else if (skb->mark == RXRPC_SKB_MARK_SERVICE_CONN_SECURED)
+				rxrpc_uncharge_async_queue(sp->poke_conn->local, skb);
 			switch (skb->mark) {
 			case RXRPC_SKB_MARK_PACKET:
 				skb->priority = 0;

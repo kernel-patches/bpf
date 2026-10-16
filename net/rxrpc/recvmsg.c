@@ -249,8 +249,8 @@ static int rxrpc_recvmsg_oob(struct socket *sock, struct msghdr *msg,
 	if (ret < 0)
 		return ret;
 
-	switch ((enum rxrpc_oob_type)skb->mark) {
-	case RXRPC_OOB_CHALLENGE:
+	switch (skb->mark) {
+	case RXRPC_SKB_MARK_CHALLENGE:
 		need_response = true;
 		ret = rxrpc_recvmsg_challenge(sock, msg, skb, flags);
 		break;

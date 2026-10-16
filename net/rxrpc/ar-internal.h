@@ -360,6 +360,7 @@ struct rxrpc_local {
 	struct sk_buff_head	rx_delay_queue;	/* Delay injection queue */
 #endif
 	struct sk_buff_head	rx_queue;	/* Received packets */
+	atomic_long_t		rx_async_queue_bytes;	/* Outstanding async Rx bytes */
 	struct list_head	conn_attend_q;	/* Conns requiring immediate attention */
 	struct list_head	call_attend_q;	/* Calls requiring immediate attention */
 
@@ -1516,6 +1517,8 @@ void rxrpc_new_skb(struct sk_buff *, enum rxrpc_skb_trace);
 void rxrpc_see_skb(struct sk_buff *, enum rxrpc_skb_trace);
 void rxrpc_get_skb(struct sk_buff *, enum rxrpc_skb_trace);
 void rxrpc_free_skb(struct sk_buff *, enum rxrpc_skb_trace);
+bool rxrpc_charge_async_queue(struct rxrpc_local *, struct sk_buff *);
+void rxrpc_uncharge_async_queue(struct rxrpc_local *, struct sk_buff *);
 void rxrpc_purge_queue(struct sk_buff_head *);
 
 /*

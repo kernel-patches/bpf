@@ -46,7 +46,9 @@ bool rxrpc_notify_socket_oob(struct rxrpc_call *call, struct sk_buff *skb)
 		sk = &rx->sk;
 		spin_lock_irq(&rx->recvmsg_lock);
 
-		if (sk->sk_state < RXRPC_CLOSE) {
+		if (sk->sk_state < RXRPC_CLOSE &&
+		    rxrpc_charge_async_queue(sp->chall.conn->local, skb)) {
+			skb->mark = RXRPC_SKB_MARK_CHALLENGE;
 			skb->skb_mstamp_ns = rx->oob_id_counter++;
 			rxrpc_get_skb(skb, rxrpc_skb_get_post_oob);
 			skb_queue_tail(&rx->recvmsg_oobq, skb);
@@ -194,7 +196,7 @@ static int rxrpc_respond_to_oob(struct rxrpc_sock *rx,
 	switch (p->command) {
 	case RXRPC_OOB_CMD_RESPOND:
 		ret = -EPROTO;
-		if (skb->mark != RXRPC_OOB_CHALLENGE)
+		if (skb->mark != RXRPC_SKB_MARK_CHALLENGE)
 			break;
 		conn = sp->chall.conn;
 		ret = -EOPNOTSUPP;
@@ -214,7 +216,8 @@ static int rxrpc_respond_to_oob(struct rxrpc_sock *rx,
 	}
 
 	switch (skb->mark) {
-	case RXRPC_OOB_CHALLENGE:
+	case RXRPC_SKB_MARK_CHALLENGE:
+		rxrpc_uncharge_async_queue(sp->chall.conn->local, skb);
 		rxrpc_put_connection(sp->chall.conn, rxrpc_conn_put_oob);
 		break;
 	}
@@ -275,10 +278,10 @@ enum rxrpc_oob_type rxrpc_kernel_query_oob(struct sk_buff *oob,
 					   unsigned long *_peer_appdata)
 {
 	struct rxrpc_skb_priv *sp = rxrpc_skb(oob);
-	enum rxrpc_oob_type type = oob->mark;
+	enum rxrpc_oob_type type = RXRPC_OOB_CHALLENGE;
 
-	switch (type) {
-	case RXRPC_OOB_CHALLENGE:
+	switch (oob->mark) {
+	case RXRPC_SKB_MARK_CHALLENGE:
 		*_peer		= sp->chall.conn->peer;
 		*_peer_appdata	= sp->chall.conn->peer->app_data;
 		break;
@@ -312,7 +315,7 @@ struct sk_buff *rxrpc_kernel_dequeue_oob(struct socket *sock,
 
 	oob = skb_dequeue(&rx->recvmsg_oobq);
 	if (oob)
-		*_type = oob->mark;
+		*_type = RXRPC_OOB_CHALLENGE;
 	return oob;
 }
 EXPORT_SYMBOL(rxrpc_kernel_dequeue_oob);
@@ -328,7 +331,8 @@ void rxrpc_kernel_free_oob(struct sk_buff *oob)
 	struct rxrpc_skb_priv *sp = rxrpc_skb(oob);
 
 	switch (oob->mark) {
-	case RXRPC_OOB_CHALLENGE:
+	case RXRPC_SKB_MARK_CHALLENGE:
+		rxrpc_uncharge_async_queue(sp->chall.conn->local, oob);
 		rxrpc_put_connection(sp->chall.conn, rxrpc_conn_put_oob);
 		break;
 	}
