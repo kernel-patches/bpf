@@ -150,6 +150,7 @@ static int enic_mbox_send_msg_id(struct enic *enic, u8 msg_type,
 		 * Mark the channel unusable so no further sends are attempted.
 		 */
 		WRITE_ONCE(enic->mbox_send_disabled, true);
+		WRITE_ONCE(enic->mbox_tx_poisoned, true);
 	}
 
 	netdev_dbg(enic->netdev,

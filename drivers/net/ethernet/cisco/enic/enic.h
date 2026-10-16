@@ -306,13 +306,16 @@ struct enic {
 
 	/* Admin channel resources for SR-IOV MBOX */
 	bool has_admin_channel;
-	/* true only while the admin WQ/RQ/CQ are allocated and enabled; gates
-	 * enic_admin_channel_close() so it is a no-op after a failed (re)open
-	 * left the resources freed.
+	/* DOWN has no allocated admin DMA resources. QUARANTINED retains the
+	 * complete graph after a WQ or RQ failed to stop.
 	 */
-	bool admin_chan_up;
-	/* set on send timeout; cleared on channel re-open */
+	enum enic_dma_state admin_chan_state;
+	/* Blocks sends while the channel is closed or awaiting recovery. */
 	bool mbox_send_disabled;
+	/* A send timeout leaves a descriptor hardware-owned until both queues
+	 * report RUNNING == 0.
+	 */
+	bool mbox_tx_poisoned;
 	struct vnic_wq admin_wq;
 	struct vnic_rq admin_rq;
 	struct vnic_cq admin_cq[2];

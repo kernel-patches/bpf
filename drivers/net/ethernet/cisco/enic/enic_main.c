@@ -71,6 +71,7 @@
 #define PCI_DEVICE_ID_CISCO_VIC_ENET_VF_V2   0x02b7  /* enet SRIOV V2 VF */
 #define PCI_DEVICE_ID_CISCO_VIC_ENET_VF_USNIC 0x00cf /* enet USNIC VF */
 
+static bool enic_dma_quarantined(struct enic *enic);
 static void enic_terminal_dma_quarantine(struct enic *enic);
 
 /* Supported devices */
@@ -1729,11 +1730,15 @@ static void enic_notify_timer_start(struct enic *enic)
 	}
 }
 
-static void enic_datapath_release(struct enic *enic)
+static void enic_datapath_release(struct enic *enic, bool release_notify)
 {
 	unsigned int i;
 
-	enic_dev_notify_unset(enic);
+	/* The notification allocation is a separate vNIC DMA target.  Keep it
+	 * with the shared lifetime envelope if another DMA graph is quarantined.
+	 */
+	if (release_notify)
+		enic_dev_notify_unset(enic);
 
 	enic_unset_affinity_hint(enic);
 	enic_free_intr(enic);
@@ -1899,7 +1904,7 @@ err_out_free_rq:
 		enic_datapath_quarantine(enic);
 		return err;
 	}
-	enic_datapath_release(enic);
+	enic_datapath_release(enic, true);
 
 	return err;
 
@@ -1974,7 +1979,8 @@ static int enic_stop(struct net_device *netdev)
 		return disable_err;
 	}
 
-	enic_datapath_release(enic);
+	enic_datapath_release(enic,
+			      !enic_admin_channel_is_quarantined(enic));
 
 	return 0;
 }
@@ -2328,18 +2334,30 @@ static void enic_admin_chan_reopen(struct enic *enic)
 	if (enic_is_sriov_vf_v2(enic)) {
 		err = enic_mbox_vf_capability_check(enic);
 		if (err) {
+			int close_err;
+
 			netdev_err(enic->netdev,
 				   "MBOX capability check after reset failed: %d\n",
 				   err);
-			enic_admin_channel_close(enic);
+			close_err = enic_admin_channel_close(enic);
+			if (close_err)
+				netdev_err(enic->netdev,
+					   "Admin close after capability failure failed: %d\n",
+					   close_err);
 			return;
 		}
 		err = enic_mbox_vf_register(enic);
 		if (err) {
+			int close_err;
+
 			netdev_err(enic->netdev,
 				   "MBOX VF re-registration after reset failed: %d\n",
 				   err);
-			enic_admin_channel_close(enic);
+			close_err = enic_admin_channel_close(enic);
+			if (close_err)
+				netdev_err(enic->netdev,
+					   "Admin close after registration failure failed: %d\n",
+					   close_err);
 		}
 	} else {
 		/* The link came back up during enic_open() above while MBOX
@@ -2355,9 +2373,14 @@ static void enic_reset(struct work_struct *work)
 	struct enic *enic = container_of(work, struct enic, reset);
 	int stop_err = 0;
 	bool reopen;
+	int err;
 
-	if (enic_datapath_is_quarantined(enic) ||
-	    !netif_running(enic->netdev))
+	if (enic_datapath_is_quarantined(enic))
+		return;
+	if (enic_admin_channel_is_quarantined(enic) &&
+	    READ_ONCE(enic->datapath_state) != ENIC_DMA_LIVE)
+		return;
+	if (!netif_running(enic->netdev))
 		return;
 
 	rtnl_lock();
@@ -2368,22 +2391,27 @@ static void enic_reset(struct work_struct *work)
 	/* Stop any activity from infiniband */
 	enic_set_api_busy(enic, true);
 
-	/* Fully tear down the V2 admin/MBOX channel before the soft reset.
-	 * The reset wipes all hardware queues including the admin WQ/RQ;
-	 * closing first tells firmware to stop the admin QP (so it no longer
-	 * DMAs from the about-to-be-reset rings) and frees the admin resources
-	 * so they are cleanly re-allocated afterwards.
+	/* Stop the V2 admin/MBOX graph before the soft reset.  A queue timeout
+	 * quarantines that graph permanently; continue only far enough to stop
+	 * and, when possible, release the independent datapath graph.
 	 */
-	if (enic_has_admin_chan(enic))
-		enic_admin_channel_close(enic);
+	if (enic_has_admin_chan(enic)) {
+		err = enic_admin_channel_close(enic);
+		if (err && enic_admin_channel_is_quarantined(enic))
+			netdev_err(enic->netdev,
+				   "Admin queue did not stop: %d\n", err);
+		else if (err)
+			netdev_warn(enic->netdev,
+				    "Admin QP disable returned: %d\n", err);
+	}
 
 	if (reopen)
 		stop_err = enic_stop(enic->netdev);
 	if (enic_is_sriov_vf_v2(enic))
 		enic_mbox_vf_link_state_reset(enic);
-	if (enic_datapath_is_quarantined(enic)) {
+	if (enic_dma_quarantined(enic)) {
 		netdev_err(enic->netdev,
-			   "Datapath queue did not stop: %d; DMA resources retained until reboot\n",
+			   "Queue DMA ownership unresolved (datapath stop %d); resources retained until reboot\n",
 			   stop_err);
 		goto reset_out;
 	}
@@ -2398,13 +2426,17 @@ static void enic_reset(struct work_struct *work)
 	if (reopen)
 		enic_open(enic->netdev);
 
-	/* Re-establish the admin/MBOX channel after the data path is back up.
-	 * It was fully torn down by enic_admin_channel_close() above;
-	 * enic_admin_chan_reopen() reopens it and, for a PF re-pushes link
-	 * state, or for a VF re-runs the probe-time PF handshake.
+	/* Re-establish the admin/MBOX channel after its clean stop.  For a PF,
+	 * re-push link state; for a VF, rerun the probe-time PF handshake.
 	 */
 	if (enic_has_admin_chan(enic))
 		enic_admin_chan_reopen(enic);
+	if (enic_admin_channel_is_quarantined(enic)) {
+		stop_err = enic_stop(enic->netdev);
+		netdev_err(enic->netdev,
+			   "Admin queue did not stop after reopen failure (datapath stop %d); resources retained until reboot\n",
+			   stop_err);
+	}
 
 reset_out:
 	/* Allow infiniband to fiddle with the device again */
@@ -2422,30 +2454,39 @@ static void enic_tx_hang_reset(struct work_struct *work)
 	struct enic *enic = container_of(work, struct enic, tx_hang_reset);
 	int stop_err = 0;
 	bool reopen;
+	int err;
 
 	rtnl_lock();
 	reopen = netif_running(enic->netdev);
-	if (!reopen || enic_datapath_is_quarantined(enic))
+	if (enic_datapath_is_quarantined(enic) ||
+	    (enic_admin_channel_is_quarantined(enic) &&
+	     READ_ONCE(enic->datapath_state) != ENIC_DMA_LIVE) || !reopen)
 		goto unlock;
 
 	/* Stop any activity from infiniband */
 	enic_set_api_busy(enic, true);
 
-	/* Fully tear down the V2 admin/MBOX channel before the hang reset, for
-	 * the same reason as the soft reset path: stop the admin QP and free
-	 * the admin resources before the hardware queues are wiped.
+	/* Stop the V2 admin/MBOX graph before the hang reset.  As in the soft
+	 * reset path, a queue timeout is terminal for that graph.
 	 */
-	if (enic_has_admin_chan(enic))
-		enic_admin_channel_close(enic);
+	if (enic_has_admin_chan(enic)) {
+		err = enic_admin_channel_close(enic);
+		if (err && enic_admin_channel_is_quarantined(enic))
+			netdev_err(enic->netdev,
+				   "Admin queue did not stop: %d\n", err);
+		else if (err)
+			netdev_warn(enic->netdev,
+				    "Admin QP disable returned: %d\n", err);
+	}
 
 	enic_dev_hang_notify(enic);
 	if (reopen)
 		stop_err = enic_stop(enic->netdev);
 	if (enic_is_sriov_vf_v2(enic))
 		enic_mbox_vf_link_state_reset(enic);
-	if (enic_datapath_is_quarantined(enic)) {
+	if (enic_dma_quarantined(enic)) {
 		netdev_err(enic->netdev,
-			   "Datapath queue did not stop: %d; DMA resources retained until reboot\n",
+			   "Queue DMA ownership unresolved (datapath stop %d); resources retained until reboot\n",
 			   stop_err);
 		goto hang_reset_out;
 	}
@@ -2460,13 +2501,17 @@ static void enic_tx_hang_reset(struct work_struct *work)
 	if (reopen)
 		enic_open(enic->netdev);
 
-	/* Re-establish the admin/MBOX channel after the data path is back up.
-	 * It was fully torn down by enic_admin_channel_close() above;
-	 * enic_admin_chan_reopen() reopens it and, for a PF re-pushes link
-	 * state, or for a VF re-runs the probe-time PF handshake.
+	/* Re-establish the admin/MBOX channel after its clean stop.  For a PF,
+	 * re-push link state; for a VF, rerun the probe-time PF handshake.
 	 */
 	if (enic_has_admin_chan(enic))
 		enic_admin_chan_reopen(enic);
+	if (enic_admin_channel_is_quarantined(enic)) {
+		stop_err = enic_stop(enic->netdev);
+		netdev_err(enic->netdev,
+			   "Admin queue did not stop after reopen failure (datapath stop %d); resources retained until reboot\n",
+			   stop_err);
+	}
 
 hang_reset_out:
 	/* Allow infiniband to fiddle with the device again */
@@ -2998,6 +3043,7 @@ static void enic_sriov_detect_vf_type(struct enic *enic)
 static int __maybe_unused
 enic_sriov_v2_enable(struct enic *enic, int num_vfs)
 {
+	int close_err;
 	int err;
 
 	if (!enic->has_admin_channel) {
@@ -3037,15 +3083,26 @@ enic_sriov_v2_enable(struct enic *enic, int num_vfs)
 
 close_admin:
 	enic->num_vfs = 0;
-	enic_admin_channel_close(enic);
+	close_err = enic_admin_channel_close(enic);
+	if (close_err)
+		netdev_err(enic->netdev,
+			   "Failed to close admin channel: %d\n", close_err);
 free_vf_state:
 	kfree(enic->vf_state);
 	enic->vf_state = NULL;
+	/* The reset worker only converges the independent datapath to a stopped
+	 * state after terminal admin-queue failure; it does not issue a reset.
+	 */
+	if (enic_admin_channel_is_quarantined(enic) &&
+	    netif_running(enic->netdev))
+		schedule_work(&enic->reset);
 	return err;
 }
 
 static void enic_sriov_v2_disable(struct enic *enic)
 {
+	int close_err;
+
 	/* Stop new VF link-state broadcasts before tearing down vf_state.
 	 * Clearing ENIC_SRIOV_ENABLED makes enic_link_check() (called from
 	 * the notify timer/ISR) skip the VF notify path, and cancelling
@@ -3056,10 +3113,16 @@ static void enic_sriov_v2_disable(struct enic *enic)
 	cancel_work_sync(&enic->link_notify_work);
 
 	pci_disable_sriov(enic->pdev);
-	enic_admin_channel_close(enic);
+	close_err = enic_admin_channel_close(enic);
+	if (close_err)
+		netdev_err(enic->netdev,
+			   "Failed to close admin channel: %d\n", close_err);
 	kfree(enic->vf_state);
 	enic->vf_state = NULL;
 	enic->num_vfs = 0;
+	if (enic_admin_channel_is_quarantined(enic) &&
+	    netif_running(enic->netdev))
+		schedule_work(&enic->reset);
 }
 
 /*
@@ -3336,7 +3399,7 @@ static int enic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		if (err) {
 			dev_err(dev,
 				"Failed to open admin channel: %d\n", err);
-			goto err_out_dev_deinit;
+			goto err_out_admin_fence;
 		}
 		err = enic_mbox_vf_capability_check(enic);
 		if (err) {
@@ -3480,6 +3543,8 @@ static int enic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 err_out_admin_close:
 	if (enic_is_sriov_vf_v2(enic)) {
+		int close_err;
+
 		if (READ_ONCE(enic->vf_registered)) {
 			int unreg_err = enic_mbox_vf_unregister(enic);
 
@@ -3488,12 +3553,24 @@ err_out_admin_close:
 					    "Failed to unregister from PF: %d\n",
 					    unreg_err);
 		}
-		enic_admin_channel_close(enic);
+		close_err = enic_admin_channel_close(enic);
+		if (close_err)
+			netdev_err(netdev,
+				   "Failed to close admin channel: %d\n",
+				   close_err);
 	}
-err_out_dev_deinit:
+err_out_admin_fence:
+	if (enic_dma_quarantined(enic)) {
+		dev_err(dev,
+			"Queue DMA ownership unresolved; retaining probe resources until reboot\n");
+		enic_terminal_dma_quarantine(enic);
+		pci_disable_device(pdev);
+		return err;
+	}
 	enic_dev_deinit(enic);
 err_out_dev_close:
 	vnic_dev_close(enic->vdev);
+	goto err_out_disable_sriov;
 err_out_disable_sriov:
 	kfree(enic->pp);
 err_out_disable_sriov_pp:
@@ -3515,6 +3592,12 @@ err_out_free_netdev:
 	free_netdev(netdev);
 
 	return err;
+}
+
+static bool enic_dma_quarantined(struct enic *enic)
+{
+	return enic_datapath_is_quarantined(enic) ||
+	       enic_admin_channel_is_quarantined(enic);
 }
 
 static int enic_datapath_recheck_on_remove(struct enic *enic)
@@ -3544,7 +3627,8 @@ static int enic_datapath_recheck_on_remove(struct enic *enic)
 
 	dev_info(&enic->pdev->dev,
 		 "All datapath queues stopped at remove; releasing DMA graph\n");
-	enic_datapath_release(enic);
+	enic_datapath_release(enic,
+			      !enic_admin_channel_is_quarantined(enic));
 
 	return 0;
 }
@@ -3557,6 +3641,7 @@ static void enic_terminal_dma_quarantine(struct enic *enic)
 	 * ordinary stop path can return before freeing IRQs when a queue does
 	 * not stop, so each ownership-aware operation must be idempotent.
 	 */
+	WRITE_ONCE(enic->mbox_send_disabled, true);
 	for (i = 0; i < enic->intr_count; i++) {
 		vnic_intr_mask(&enic->intr[i]);
 		(void)vnic_intr_masked(&enic->intr[i]);
@@ -3593,6 +3678,8 @@ static void enic_remove(struct pci_dev *pdev)
 		 * touching a netdev that is being torn down.
 		 */
 		if (enic_is_sriov_vf_v2(enic)) {
+			int close_err;
+
 			if (READ_ONCE(enic->vf_registered)) {
 				int unreg_err = enic_mbox_vf_unregister(enic);
 
@@ -3601,7 +3688,11 @@ static void enic_remove(struct pci_dev *pdev)
 						    "Failed to unregister from PF: %d\n",
 						    unreg_err);
 			}
-			enic_admin_channel_close(enic);
+			close_err = enic_admin_channel_close(enic);
+			if (close_err)
+				netdev_warn(netdev,
+					    "Admin close returned: %d\n",
+					    close_err);
 		}
 
 		unregister_netdev(netdev);
@@ -3619,9 +3710,11 @@ static void enic_remove(struct pci_dev *pdev)
 				pci_disable_sriov(pdev);
 		}
 #endif
+		if (enic_admin_channel_is_quarantined(enic))
+			enic_admin_channel_recheck_on_remove(enic);
 		if (enic_datapath_is_quarantined(enic))
 			enic_datapath_recheck_on_remove(enic);
-		if (enic_datapath_is_quarantined(enic)) {
+		if (enic_dma_quarantined(enic)) {
 			dev_err(&pdev->dev,
 				"Queue DMA ownership unresolved; retaining resources until reboot\n");
 			enic_terminal_dma_quarantine(enic);
