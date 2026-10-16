@@ -1092,16 +1092,52 @@ static struct sort_datum *sort_btf_c(const struct btf *btf)
 	return datums;
 }
 
+static struct btf *btf_c_detached_copy(const struct btf *src)
+{
+	struct btf *copy;
+	size_t ptr_sz;
+	__u32 i, cnt;
+	int err;
+
+	copy = btf__new_empty();
+	if (!copy)
+		return NULL;
+
+	/* Retain the native default if the pointer size cannot be inferred. */
+	ptr_sz = btf__pointer_size(src);
+	if (ptr_sz)
+		btf__set_pointer_size(copy, ptr_sz);
+
+	cnt = btf__type_cnt(src);
+	for (i = 1; i < cnt; i++) {
+		err = btf__add_type(copy, src, btf__type_by_id(src, i));
+		if (err < 0) {
+			btf__free(copy);
+			errno = -err;
+			return NULL;
+		}
+	}
+
+	return copy;
+}
+
 static int dump_btf_c(const struct btf *btf,
 		      __u32 *root_type_ids, int root_type_cnt, bool sort_dump)
 {
 	struct sort_datum *datums = NULL;
+	struct btf *copy;
 	struct btf_dump *d;
 	int err = 0, i;
 
-	d = btf_dump__new(btf, btf_dump_printf, NULL, NULL);
-	if (!d)
+	copy = btf_c_detached_copy(btf);
+	if (!copy)
 		return -errno;
+
+	d = btf_dump__new(copy, btf_dump_printf, NULL, NULL);
+	if (!d) {
+		err = -errno;
+		goto done_free;
+	}
 
 	printf("#ifndef __VMLINUX_H__\n");
 	printf("#define __VMLINUX_H__\n");
@@ -1130,10 +1166,10 @@ static int dump_btf_c(const struct btf *btf,
 				goto done;
 		}
 	} else {
-		int cnt = btf__type_cnt(btf);
+		int cnt = btf__type_cnt(copy);
 
 		if (sort_dump)
-			datums = sort_btf_c(btf);
+			datums = sort_btf_c(copy);
 		for (i = 0; i < cnt; i++) {
 			int idx = datums ? datums[i].index : i;
 
@@ -1146,7 +1182,7 @@ static int dump_btf_c(const struct btf *btf,
 				goto done;
 		}
 
-		err = dump_btf_kfuncs(d, btf);
+		err = dump_btf_kfuncs(d, copy);
 		if (err)
 			goto done;
 	}
@@ -1160,6 +1196,8 @@ static int dump_btf_c(const struct btf *btf,
 done:
 	free(datums);
 	btf_dump__free(d);
+done_free:
+	btf__free(copy);
 	return err;
 }
 
