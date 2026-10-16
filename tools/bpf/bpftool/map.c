@@ -483,6 +483,8 @@ static int show_map_close_json(int fd, struct bpf_map_info *info)
 	jsonw_uint_field(json_wtr, "bytes_key", info->key_size);
 	jsonw_uint_field(json_wtr, "bytes_value", info->value_size);
 	jsonw_uint_field(json_wtr, "max_entries", info->max_entries);
+	if (info->map_extra)
+		jsonw_lluint_field(json_wtr, "map_extra", info->map_extra);
 
 	if (memlock)
 		jsonw_int_field(json_wtr, "bytes_memlock", atoll(memlock));
@@ -570,6 +572,8 @@ static int show_map_close_plain(int fd, struct bpf_map_info *info)
 	show_map_header_plain(info);
 	printf("\tkey %uB  value %uB  max_entries %u",
 	       info->key_size, info->value_size, info->max_entries);
+	if (info->map_extra)
+		printf("  map_extra %#llx", (unsigned long long)info->map_extra);
 
 	if (memlock)
 		printf("  memlock %sB", memlock);
