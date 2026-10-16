@@ -27,6 +27,8 @@
 #define SIT9531X_MAX_INPUTS		8
 #define SIT9531X_NUM_INPUT_PAIRS	(SIT9531X_MAX_INPUTS / 2)
 #define SIT9531X_MAX_OUTPUTS		12
+/* Output phase-adjust range advertised to the core, +/-1 ms in ps */
+#define SIT9531X_OUT_PHASE_ADJ_MAX_PS	1000000000
 /*
  * INTSYNC (the inter-PLL sync net) is modeled as two pins.  The
  * destination PLL that locks to INTSYNC sees an input pin
@@ -104,6 +106,18 @@ struct sit9531x_ref {
  * @routed:		output is mapped to @pll_idx by the initial
  *			configuration; an unrouted output has no DPLL pin
  * @pll_idx:		PLL driving this output (0-3)
+ * @phase_stale:	the programmed delay may differ from @phase_adj
+ * @flush_pending:	the programmed delay is committed but the flush
+ *			that applies it failed, so the output still realizes
+ *			@phase_adj; the next request for that delay runs the
+ *			flush although the registers already hold it
+ * @phase_armed:	a non-zero delay is programmed, so a rate change
+ *			has to re-time it; a profile delay beyond the
+ *			advertised range is not, since what the cache holds
+ *			for it is the end of the range, not the delay
+ * @phase_adj:		phase adjust the delay registers actually realize,
+ *			i.e. the last request quantized to whole VCO cycles
+ *			plus 30 ps fine steps, in the request's sign
  */
 struct sit9531x_out {
 	u64		freq;
@@ -112,6 +126,10 @@ struct sit9531x_out {
 	bool		state_stale;
 	bool		routed;
 	u8		pll_idx;
+	s32		phase_adj;
+	bool		phase_armed;
+	bool		phase_stale;
+	bool		flush_pending;
 };
 
 /*
@@ -274,6 +292,10 @@ int sit9531x_output_freq_get(struct sit9531x_dev *sitdev, u8 out_idx,
 			     u64 *frequency);
 
 /* ---- Output phase adjust (PRG_RST_DELAY register-based) ---- */
+int sit9531x_output_phase_read(struct sit9531x_dev *sitdev, u8 out_idx,
+			       s32 *phase_ps, bool *clamped);
+int sit9531x_output_phase_adjust_set(struct sit9531x_dev *sitdev,
+				     u8 out_idx, s32 phase_ps);
 
 /* ---- INTSYNC (inter-PLL synchronization) ---- */
 

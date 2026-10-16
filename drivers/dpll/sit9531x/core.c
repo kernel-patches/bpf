@@ -2267,11 +2267,431 @@ static int sit9531x_output_divo_read(struct sit9531x_dev *sitdev, u8 out_idx,
 	return *divo ? 0 : -ENODATA;
 }
 
+/*
+ * Phase adjust (PRG_RST_DELAY register-based).
+ *
+ * The chip exposes a per-output 34-bit coarse delay measured in VCO
+ * clock periods plus a 3-bit fine delay in fixed 30 ps steps.  The
+ * five bytes PROG6..PROG2 hold the field across registers:
+ *   base + 0  PROG6  [7:5] OPSTG_VCASC_BUMP (preserved via RMW)
+ *                    [4:2] PRG_RST_FINE_DELAY
+ *                    [1:0] PRG_RST_DELAY[33:32]
+ *   base + 1  PROG5  PRG_RST_DELAY[31:24]
+ *   base + 2  PROG4  PRG_RST_DELAY[23:16]
+ *   base + 3  PROG3  PRG_RST_DELAY[15:8]
+ *   base + 4  PROG2  PRG_RST_DELAY[7:0]
+ *
+ * Slots 0-5 live on Page 3, slots 6-11 on Page 4, with each slot's
+ * block at base = 0x15 + 16 * (slot % 6); the slot is the physical
+ * output position from clkout_map[], not the logical output index.
+ *
+ * The chip only supports unsigned positive delay.  Requests are folded
+ * modulo one output period: positive delays wrap naturally and a negative
+ * phase adjustment (advance) is rendered as (T_out - |phase|).
+ */
+
+/*
+ * Register of byte @i (PROG6 first) of an output's PRG_RST_DELAY block.
+ *
+ * The logical output index maps to the chip's physical output slot.  On
+ * SiT95317 the eight logical outputs land on chip slots {0, 3, 4, 5, 7,
+ * 8, 9, 11}; on SiT95316 the map is identity.  Page and base address the
+ * slot, not the logical index.
+ */
+static unsigned int sit9531x_output_prg_reg(struct sit9531x_dev *sitdev,
+					    u8 out_idx, u8 i)
+{
+	u8 slot = sitdev->info->clkout_map[out_idx];
+	u8 page = (slot > SIT9531X_PAGE_OUTSYS0_SLOT_MAX) ?
+		  SIT9531X_PAGE_OUTSYS1 : SIT9531X_PAGE_OUTSYS0;
+	u8 base = SIT9531X_OUT_PRG_DELAY_BASE +
+		  SIT9531X_OUT_PRG_SLOT_STRIDE * (slot % 6);
+
+	return SIT9531X_REG(page, base + i);
+}
+
+/* Read the PRG_RST_DELAY bytes of an output, PROG6 first. */
+static int sit9531x_output_phase_bytes_read(struct sit9531x_dev *sitdev,
+					    u8 out_idx, u8 *bytes)
+{
+	unsigned int reg;
+	int rc;
+	u8 i;
+
+	for (i = 0; i < SIT9531X_OUT_PRG_BYTES; i++) {
+		reg = sit9531x_output_prg_reg(sitdev, out_idx, i);
+		rc = sit9531x_read_u8(sitdev, reg, &bytes[i]);
+		if (rc)
+			return rc;
+	}
+
+	return 0;
+}
+
+/*
+ * Encode a quantized delay into the register bytes.  @old_bytes supplies
+ * the PROG6 bits that are not the delay's, which are preserved.
+ *
+ * The register value carries the divider's own settling time: the
+ * quantizer works in the delay the caller asked for, the register wants
+ * that plus the two VCO cycles the divider spends acting on it, and a
+ * request of zero still waits those two.  Only the register value carries
+ * them; @coarse stays the requested delay, which is what gets cached.
+ */
+static void sit9531x_output_phase_bytes_build(const u8 *old_bytes, u64 coarse,
+					      u8 fine, u8 *new_bytes)
+{
+	u64 prg_coarse = coarse + SIT9531X_OUT_PRG_DIVO_CYCLES;
+
+	/* PROG6 RMW: preserve OPSTG_VCASC_BUMP in [7:5] */
+	new_bytes[0] = old_bytes[0] & SIT9531X_OUT_PRG_OPSTG_MASK;
+	new_bytes[0] |= (fine << SIT9531X_OUT_PRG_FINE_SHIFT) &
+			SIT9531X_OUT_PRG_FINE_MASK;
+	new_bytes[0] |= (u8)((prg_coarse >> 32) &
+			     SIT9531X_OUT_PRG_COARSE_HI_MASK);
+	new_bytes[1] = (u8)((prg_coarse >> 24) & 0xFF);
+	new_bytes[2] = (u8)((prg_coarse >> 16) & 0xFF);
+	new_bytes[3] = (u8)((prg_coarse >> 8) & 0xFF);
+	new_bytes[4] = (u8)(prg_coarse & 0xFF);
+}
+
+/*
+ * Write an output's delay bytes.  The caller must already be in the
+ * programming state.  On a failure every byte is put back, the one whose
+ * write reported the error included, since it may have reached the part.
+ */
+static int sit9531x_output_phase_bytes_write(struct sit9531x_dev *sitdev,
+					     u8 out_idx, const u8 *new_bytes,
+					     const u8 *old_bytes)
+{
+	int rc, ret, rb_rc = 0;
+	unsigned int reg;
+	u8 i;
+
+	for (i = 0; i < SIT9531X_OUT_PRG_BYTES; i++) {
+		reg = sit9531x_output_prg_reg(sitdev, out_idx, i);
+		rc = sit9531x_write_u8(sitdev, reg, new_bytes[i]);
+		if (rc)
+			goto rollback;
+	}
+
+	return 0;
+
+rollback:
+	for (i = 0; i < SIT9531X_OUT_PRG_BYTES; i++) {
+		reg = sit9531x_output_prg_reg(sitdev, out_idx, i);
+		ret = sit9531x_write_u8(sitdev, reg, old_bytes[i]);
+		if (ret && !rb_rc)
+			rb_rc = ret;
+	}
+	if (rb_rc) {
+		dev_err(sitdev->dev,
+			"out%u: phase-adjust rollback failed (%d), the delay registers are part old and part new\n",
+			out_idx, rb_rc);
+		if (!rc)
+			rc = rb_rc;
+	}
+
+	return rc;
+}
+
+/*
+ * Error of realizing @abs_ps as @cycles whole VCO cycles plus the fine
+ * steps that come nearest, which are returned through @fine.
+ */
+static u64 sit9531x_output_phase_quant_err(u64 abs_ps, u64 fvco, u64 cycles,
+					   u8 *fine)
+{
+	u64 cycles_ps, steps = 0;
+
+	cycles_ps = mul_u64_u64_div_u64(cycles, 1000000000000ULL, fvco);
+	if (abs_ps > cycles_ps)
+		steps = div64_u64(abs_ps - cycles_ps +
+				  SIT9531X_OUT_PRG_FINE_STEP_PS / 2,
+				  SIT9531X_OUT_PRG_FINE_STEP_PS);
+	*fine = min_t(u64, steps, SIT9531X_OUT_PRG_FINE_MAX);
+
+	return abs_diff(abs_ps, cycles_ps +
+			(u64)*fine * SIT9531X_OUT_PRG_FINE_STEP_PS);
+}
+
+/*
+ * Quantize a phase request: fold @phase_ps into one output period and
+ * split it into whole VCO cycles (@coarse_out, without the divider's
+ * settling cycles) and fine steps (@fine_out).  @phase_adj gets the delay
+ * the two realize, in the request's sign and bounded to the advertised
+ * range, which is what the cache holds.  Pure arithmetic against @fvco
+ * and the divider @divo the output runs on, so a caller can encode
+ * before it enters the programming state.
+ */
+static int sit9531x_output_phase_encode(u64 fvco, u64 divo, s32 phase_ps,
+					u64 *coarse_out, u8 *fine_out,
+					s32 *phase_adj)
+{
+	u64 abs_ps, cycles, frac_ps, coarse = 0, coarse_ps, t_out_ps;
+	s64 phase_norm_ps = 0;
+	u8 fine = 0;
+
+	t_out_ps = mul_u64_u64_div_u64(divo, 1000000000000ULL, fvco);
+	if (!t_out_ps)
+		return -EINVAL;
+
+	/* No delay encodes as none; the divisions below have nothing to do. */
+	if (!phase_ps) {
+		*coarse_out = 0;
+		*fine_out = 0;
+		*phase_adj = 0;
+		return 0;
+	}
+
+	/*
+	 * Convert to unsigned absolute delay.  Both signs are folded
+	 * modulo one period: positive delays wrap naturally, negative
+	 * delays are rendered as T_out - |phase|.  abs() is safe here
+	 * because the core rejects anything outside the advertised phase
+	 * range, which is +/-1 ms.
+	 *
+	 * The period is exactly DIVO VCO cycles, whereas in picoseconds it
+	 * is a fraction more often than not: 7812.5 ps at 128 MHz from a
+	 * 5.12 GHz VCO, and a fold on the truncated 7812 drops the half
+	 * picosecond once per period folded away, so 100 us -- 12800
+	 * periods exactly -- would come out as 6400 ps rather than nothing.
+	 * Fold the whole VCO cycles of the request modulo DIVO instead, and
+	 * carry the sub-cycle part across as it is.  div64_u64_rem() rather
+	 * than the % operator: a 64-bit modulo has no compiler helper on
+	 * 32-bit targets and leaves the module with an undefined __umoddi3.
+	 */
+	abs_ps = abs(phase_ps);
+	cycles = mul_u64_u64_div_u64(abs_ps, fvco, 1000000000000ULL);
+	frac_ps = abs_ps - mul_u64_u64_div_u64(cycles, 1000000000000ULL, fvco);
+	div64_u64_rem(cycles, divo, &cycles);
+	abs_ps = mul_u64_u64_div_u64(cycles, 1000000000000ULL, fvco) + frac_ps;
+	/*
+	 * The truncations above can put a request within a picosecond of a
+	 * whole period a picosecond past it; that is the same edge as none.
+	 */
+	if (abs_ps >= t_out_ps)
+		abs_ps = 0;
+	phase_norm_ps = phase_ps < 0 ? -(s64)abs_ps : (s64)abs_ps;
+	abs_ps = (phase_ps < 0 && abs_ps) ? t_out_ps - abs_ps : abs_ps;
+
+	if (abs_ps) {
+		u64 floor_cycles, err, alt_err;
+		u8 alt_fine;
+
+		/*
+		 * coarse_cycles = abs_ps * Fvco / 1e12 ps/s.
+		 * mul_u64_u64_div_u64() avoids overflow when abs_ps approaches
+		 * one second of 1 PPS wrap-around.
+		 */
+		floor_cycles = mul_u64_u64_div_u64(abs_ps, fvco,
+						   1000000000000ULL);
+
+		/*
+		 * Fine = round((abs_ps - coarse * vco_period_ps) / 30 ps).
+		 * The fine field spans 210 ps, more than one VCO cycle in
+		 * every band, so the cycle count that floors the request is
+		 * not always the nearest encoding: one cycle more can land
+		 * closer than any fine code when the remainder sits just
+		 * under a cycle, and one cycle fewer with a larger fine code
+		 * can land closer or exact -- 210 ps at 5 GHz is seven fine
+		 * steps, not a cycle and a ten picosecond remainder.  Take
+		 * the nearest of the three, the floor on a tie.
+		 */
+		coarse = floor_cycles;
+		err = sit9531x_output_phase_quant_err(abs_ps, fvco, coarse,
+						      &fine);
+		alt_err = sit9531x_output_phase_quant_err(abs_ps, fvco,
+							  floor_cycles + 1,
+							  &alt_fine);
+		if (alt_err < err) {
+			coarse = floor_cycles + 1;
+			fine = alt_fine;
+			err = alt_err;
+		}
+		if (floor_cycles) {
+			u64 fewer = floor_cycles - 1;
+
+			alt_err = sit9531x_output_phase_quant_err(abs_ps, fvco,
+								  fewer,
+								  &alt_fine);
+			if (alt_err < err) {
+				coarse = fewer;
+				fine = alt_fine;
+			}
+		}
+
+		/*
+		 * A delay that quantizes to a whole output period or beyond
+		 * is the same edge as no delay at all; program none, so the
+		 * registers hold no residual past the period and the cache
+		 * below describes exactly what they realize.
+		 */
+		coarse_ps = mul_u64_u64_div_u64(coarse, 1000000000000ULL, fvco);
+		if (coarse_ps + (u64)fine * SIT9531X_OUT_PRG_FINE_STEP_PS >=
+		    t_out_ps) {
+			coarse = 0;
+			fine = 0;
+		}
+
+		if (coarse + SIT9531X_OUT_PRG_DIVO_CYCLES >=
+		    (1ULL << SIT9531X_OUT_PRG_COARSE_BITS))
+			return -ERANGE;
+	}
+
+	coarse_ps = mul_u64_u64_div_u64(coarse, 1000000000000ULL, fvco);
+	abs_ps = coarse_ps + (u64)fine * SIT9531X_OUT_PRG_FINE_STEP_PS;
+	/*
+	 * Quantization can also land a few picoseconds past the end of the
+	 * advertised range, which the getter must not report.  Bound both
+	 * signs to the range; the positive one is also what keeps the cast
+	 * to the s32 the ABI carries safe.
+	 */
+	if (phase_norm_ps < 0)
+		*phase_adj = abs_ps ?
+			     -(s32)min_t(u64, t_out_ps - abs_ps,
+					  SIT9531X_OUT_PHASE_ADJ_MAX_PS) : 0;
+	else
+		*phase_adj = (s32)min_t(u64, abs_ps,
+					 SIT9531X_OUT_PHASE_ADJ_MAX_PS);
+
+	*coarse_out = coarse;
+	*fine_out = fine;
+
+	return 0;
+}
+
+/**
+ * sit9531x_output_phase_read - read an output's programmed delay back
+ * @sitdev:	device pointer
+ * @out_idx:	logical output index
+ * @phase_ps:	result in picoseconds, in the advertised range
+ * @clamped:	set when the delay lies beyond the advertised range either
+ *		way and @phase_ps reports the end of the range in its place
+ *
+ * The delay the chip holds is part of the profile it loads before probe,
+ * and a rate or phase request that failed after its writes reached the
+ * device leaves the cache describing something else.  Decoding the five
+ * PRG_RST_DELAY bytes is the only way to say what the output is really
+ * doing.  The registers carry an unsigned delay, and an advance is held
+ * as its complement to the output period.  The two can only be told
+ * apart on an output whose period is longer than the advertised range:
+ * there a delay beyond the range whose complement is within it reads
+ * back as that advance.  On a faster output every delay is within the
+ * range, and an advance that was set reads back as the delay to the same
+ * edge, which is the same phase.
+ *
+ * Caller must hold sitdev->multiop_lock.
+ *
+ * Return: 0 on success, -ENODATA for an output no PLL drives or whose VCO
+ * rate is unknown, <0 on register access error
+ */
+int sit9531x_output_phase_read(struct sit9531x_dev *sitdev, u8 out_idx,
+			       s32 *phase_ps, bool *clamped)
+{
+	const struct sit9531x_chip_info *info = sitdev->info;
+	u8 bytes[SIT9531X_OUT_PRG_BYTES], fine;
+	u64 coarse = 0, fvco, ps, divo;
+	int rc;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (out_idx >= info->num_outputs)
+		return -EINVAL;
+
+	*clamped = false;
+
+	/*
+	 * An output no PLL drives has no Fvco to decode its delay against;
+	 * pll_idx then holds a placeholder, not a routing.
+	 */
+	if (!sitdev->out[out_idx].routed)
+		return -ENODATA;
+
+	rc = sit9531x_get_fvco(sitdev, sitdev->out[out_idx].pll_idx, &fvco);
+	if (rc)
+		return rc;
+
+	rc = sit9531x_output_phase_bytes_read(sitdev, out_idx, bytes);
+	if (rc)
+		return rc;
+
+	fine = (bytes[0] & SIT9531X_OUT_PRG_FINE_MASK) >>
+	       SIT9531X_OUT_PRG_FINE_SHIFT;
+	coarse = (u64)(bytes[0] & SIT9531X_OUT_PRG_COARSE_HI_MASK) << 32;
+	coarse |= (u64)bytes[1] << 24;
+	coarse |= (u64)bytes[2] << 16;
+	coarse |= (u64)bytes[3] << 8;
+	coarse |= bytes[4];
+
+	/*
+	 * The register carries the divider's settling time on top of the
+	 * delay that was asked for, so take it back off.  A profile can
+	 * leave a value below it, which describes no delay at all.
+	 */
+	coarse = (coarse > SIT9531X_OUT_PRG_DIVO_CYCLES) ?
+		 coarse - SIT9531X_OUT_PRG_DIVO_CYCLES : 0;
+
+	/*
+	 * The setter holds an advance as T_out - |advance|, so a delay
+	 * beyond the advertised range whose complement is within it is that
+	 * advance and reads back as one.  Anything else a profile left
+	 * beyond the range -- wider than an s32 on a slow output -- reports
+	 * the end of the range rather than a value the setter would refuse,
+	 * and says so: the end of the range is not the delay, and a rate
+	 * change must not re-time it into the device as though it were.
+	 *
+	 * The period comes from the divider rather than from the cached rate,
+	 * which is still unset at probe and whole hertz at best.  An output
+	 * without a programmed divider has no period to fold against; a
+	 * divider that could not be read is an error, not a missing one,
+	 * since the unfolded value would be cached as the realized delay.
+	 */
+	rc = sit9531x_output_divo_read(sitdev, out_idx, &divo);
+	if (rc && rc != -ENODATA)
+		return rc;
+
+	/*
+	 * The period is exactly DIVO VCO cycles, so fold the cycle count
+	 * rather than the picoseconds it converts to, which would drop the
+	 * fraction of a picosecond of the period once per period folded
+	 * away (see sit9531x_output_phase_encode()).  The fine steps can
+	 * still carry the sum a fraction of a cycle past the period; one
+	 * subtraction folds that without anything to accumulate.
+	 */
+	if (!rc)
+		div64_u64_rem(coarse, divo, &coarse);
+
+	ps = mul_u64_u64_div_u64(coarse, 1000000000000ULL, fvco);
+	ps += (u64)fine * SIT9531X_OUT_PRG_FINE_STEP_PS;
+
+	if (!rc) {
+		u64 t_out_ps = mul_u64_u64_div_u64(divo, 1000000000000ULL,
+						   fvco);
+
+		if (ps >= t_out_ps)
+			ps -= t_out_ps;
+		if (ps > SIT9531X_OUT_PHASE_ADJ_MAX_PS &&
+		    t_out_ps - ps <= SIT9531X_OUT_PHASE_ADJ_MAX_PS) {
+			*phase_ps = -(s32)(t_out_ps - ps);
+			return 0;
+		}
+	}
+	*clamped = ps > SIT9531X_OUT_PHASE_ADJ_MAX_PS;
+	*phase_ps = (s32)min_t(u64, ps, SIT9531X_OUT_PHASE_ADJ_MAX_PS);
+
+	return 0;
+}
+
 int sit9531x_output_freq_set(struct sit9531x_dev *sitdev, u8 out_idx,
 			     u8 pll_idx, u64 frequency)
 {
-	u64 fvco, divo;
+	u8 old_bytes[SIT9531X_OUT_PRG_BYTES], new_bytes[SIT9531X_OUT_PRG_BYTES];
+	u64 fvco, divo, coarse;
+	bool retime = false;
+	s32 phase_adj = 0;
 	int rc, ret;
+	u8 fine;
 
 	lockdep_assert_held(&sitdev->multiop_lock);
 
@@ -2280,11 +2700,45 @@ int sit9531x_output_freq_set(struct sit9531x_dev *sitdev, u8 out_idx,
 	if (rc)
 		return rc;
 
+	/*
+	 * The programmed reset delay counts VCO cycles, and a rate change
+	 * moves only the divider, so a positive delay keeps its timing; an
+	 * advance, though, is held as T_out - |advance| and has to be
+	 * re-encoded against the new period.  Re-encode the delay the output
+	 * realizes, which is what the cache holds, against the new divider,
+	 * and write it in the same programming window as the divider: the
+	 * rate change then costs one commit and one flush.  A second window
+	 * would open the output loops and wait out their settling again, and
+	 * a second flush would restart the PLL's dividers again -- or, on a
+	 * PLL the profile builds without the phase-flush feature, the PLL
+	 * itself.  For a positive delay the bytes come out the same and
+	 * nothing is written.  A re-time that cannot be worked out fails
+	 * the request before anything is written.
+	 */
+	if (sitdev->out[out_idx].phase_armed) {
+		s32 held = sitdev->out[out_idx].phase_adj;
+
+		rc = sit9531x_output_phase_encode(fvco, divo, held, &coarse,
+						  &fine, &phase_adj);
+		if (rc)
+			return rc;
+		rc = sit9531x_output_phase_bytes_read(sitdev, out_idx,
+						      old_bytes);
+		if (rc)
+			return rc;
+		sit9531x_output_phase_bytes_build(old_bytes, coarse, fine,
+						  new_bytes);
+		retime = memcmp(old_bytes, new_bytes, sizeof(new_bytes)) != 0;
+	}
+
 	rc = sit9531x_prg_enter(sitdev);
 	if (rc)
 		return rc;
 
 	rc = sit9531x_output_divo_write(sitdev, out_idx, divo);
+	if (!rc && retime)
+		rc = sit9531x_output_phase_bytes_write(sitdev, out_idx,
+						       new_bytes, old_bytes);
 	/*
 	 * Step 4: NVM update + loop lock.  Always run prg_commit() so the chip
 	 * leaves the PRG_CMD state with the output loops re-locked, even when a
@@ -2294,8 +2748,26 @@ int sit9531x_output_freq_set(struct sit9531x_dev *sitdev, u8 out_idx,
 	ret = sit9531x_prg_commit(sitdev);
 	if (ret && !rc)
 		rc = ret;
-	if (rc)
+	if (rc) {
+		/*
+		 * The divider may have changed all the same: a failed update
+		 * can have reached the part, a loop lock can fail after it
+		 * took effect, and a failed rollback leaves whatever landed.
+		 * An advance is held as T_out - |advance| against the period
+		 * that was, and the re-timed bytes may or may not be in, so
+		 * the cache no longer says what the output does.  Mark it for
+		 * a read-back: the core drops a retry of either request,
+		 * the rate because it reads the new one first and the phase
+		 * because it would match the stale cache.  A flush is owed
+		 * as well: whatever landed did so without its realignment,
+		 * and once the read-back has refreshed the cache an identical
+		 * phase request would otherwise skip it.
+		 */
+		if (sitdev->out[out_idx].phase_armed)
+			sitdev->out[out_idx].phase_stale = true;
+		sitdev->out[out_idx].flush_pending = true;
 		return rc;
+	}
 
 	/*
 	 * Step 5: flush the PLL's output phase so the new DIVO starts
@@ -2308,19 +2780,39 @@ int sit9531x_output_freq_set(struct sit9531x_dev *sitdev, u8 out_idx,
 	 * divider on its old phase, which is a realignment that did not
 	 * happen rather than a rate that did not change -- and reporting a
 	 * failure would be doubly wrong, because the core asks for the
-	 * current rate first and would drop an identical retry.
+	 * current rate first and would drop an identical retry.  A re-timed
+	 * delay is then committed but not applied either: the cache takes
+	 * the committed value and the flush is recorded as owed, so the
+	 * next phase request realigns the output.  Marking the delay stale
+	 * instead would have the getter publish the committed value, the
+	 * core would then drop a retry as a request for the value already
+	 * reported, and the realignment would never run.
 	 */
 	rc = sit9531x_output_phase_flush(sitdev, pll_idx);
 	if (rc) {
 		dev_warn(sitdev->dev,
 			 "out%u: rate changed but the divider phase was not realigned (%d)\n",
 			 out_idx, rc);
+		sitdev->out[out_idx].flush_pending = true;
+		if (retime) {
+			sitdev->out[out_idx].phase_adj = phase_adj;
+			sitdev->out[out_idx].phase_armed = phase_adj != 0;
+			sitdev->out[out_idx].phase_stale = false;
+		}
 		rc = 0;
+	} else {
+		/* Whatever flush was owed from before has now run. */
+		sitdev->out[out_idx].flush_pending = false;
+		if (retime) {
+			sitdev->out[out_idx].phase_adj = phase_adj;
+			sitdev->out[out_idx].phase_armed = phase_adj != 0;
+			sitdev->out[out_idx].phase_stale = false;
+		}
 	}
 
 	sitdev->out[out_idx].freq = div64_u64(fvco, divo);
 
-	return 0;
+	return rc;
 }
 
 /*
@@ -2374,27 +2866,140 @@ int sit9531x_output_freq_get(struct sit9531x_dev *sitdev, u8 out_idx,
 	return 0;
 }
 
-/*
- * Phase adjust (PRG_RST_DELAY register-based).
- *
- * The chip exposes a per-output 34-bit coarse delay measured in VCO
- * clock periods plus a 3-bit fine delay in fixed 30 ps steps.  The
- * five bytes PROG6..PROG2 hold the field across registers:
- *   base + 0  PROG6  [7:5] OPSTG_VCASC_BUMP (preserved via RMW)
- *                    [4:2] PRG_RST_FINE_DELAY
- *                    [1:0] PRG_RST_DELAY[33:32]
- *   base + 1  PROG5  PRG_RST_DELAY[31:24]
- *   base + 2  PROG4  PRG_RST_DELAY[23:16]
- *   base + 3  PROG3  PRG_RST_DELAY[15:8]
- *   base + 4  PROG2  PRG_RST_DELAY[7:0]
- *
- * Outputs 0-5 live on Page 3, outputs 6-11 on Page 4, with each
- * output's block at base = 0x15 + 16 * (out_idx % 6).
- *
- * The chip only supports unsigned positive delay.  A negative phase
- * adjustment (advance) is wrapped to (T_out - |phase|) modulo one
- * output period, which is identical for a periodic signal.
- */
+int sit9531x_output_phase_adjust_set(struct sit9531x_dev *sitdev,
+				     u8 out_idx, s32 phase_ps)
+{
+	u8 old_bytes[SIT9531X_OUT_PRG_BYTES], new_bytes[SIT9531X_OUT_PRG_BYTES];
+	const struct sit9531x_chip_info *info = sitdev->info;
+	u64 fvco, divo, coarse;
+	u8 pll_idx, fine;
+	s32 phase_adj;
+	int rc, ret;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (out_idx >= info->num_outputs)
+		return -EINVAL;
+
+	pll_idx = sitdev->out[out_idx].pll_idx;
+	if (pll_idx >= SIT9531X_NUM_PLLS)
+		return -EINVAL;
+
+	rc = sit9531x_get_fvco(sitdev, pll_idx, &fvco);
+	if (rc)
+		return rc == -ENODATA ? -ENODEV : rc;
+
+	/*
+	 * The output period comes from the divider the output runs on, not
+	 * from the cached rate: that is whole hertz, so a profile's output at
+	 * a fractional rate would fold an advance against the wrong period.
+	 */
+	rc = sit9531x_output_divo_read(sitdev, out_idx, &divo);
+	if (rc)
+		return rc == -ENODATA ? -ENODEV : rc;
+
+	rc = sit9531x_output_phase_encode(fvco, divo, phase_ps, &coarse, &fine,
+					  &phase_adj);
+	if (rc)
+		return rc;
+
+	rc = sit9531x_output_phase_bytes_read(sitdev, out_idx, old_bytes);
+	if (rc)
+		return rc;
+	sit9531x_output_phase_bytes_build(old_bytes, coarse, fine, new_bytes);
+
+	/*
+	 * The pin advertises 1 ps granularity but caches the quantized
+	 * value, so a repeated off-grid request reaches here with the
+	 * registers already holding it.  Rewriting them would still restart
+	 * the divider phase of every output on the PLL; skip it unless an
+	 * earlier failure left the delay unconfirmed.  A delay whose flush
+	 * failed is committed and only owes that flush, which matching
+	 * bytes would otherwise skip as well.
+	 */
+	if (!memcmp(old_bytes, new_bytes, sizeof(new_bytes)) &&
+	    !sitdev->out[out_idx].phase_stale) {
+		if (!sitdev->out[out_idx].flush_pending)
+			goto cache;
+		goto flush;
+	}
+
+	/*
+	 * The PRG_RST_DELAY bytes live in the output system, so the writes
+	 * only take effect when made inside the PRG_CMD programming state and
+	 * committed to the NVM shadow, exactly like sit9531x_output_freq_set().
+	 */
+	rc = sit9531x_prg_enter(sitdev);
+	if (rc)
+		return rc;
+
+	rc = sit9531x_output_phase_bytes_write(sitdev, out_idx, new_bytes,
+					       old_bytes);
+
+	/*
+	 * Always leave the PRG_CMD state via prg_commit(), even on a
+	 * mid-sequence write failure, so the output loops are re-locked rather
+	 * than stranded unlocked; keep the first error.
+	 */
+	ret = sit9531x_prg_commit(sitdev);
+	if (ret && !rc)
+		rc = ret;
+	if (rc) {
+		/*
+		 * The delay registers were written and the rollback may not
+		 * have put all of them back, so what the output realizes is
+		 * no longer what the cache says.  Mark it so the getter reads
+		 * the registers instead of reporting the value that was
+		 * cached before this call.  No flush ran either way.
+		 */
+		sitdev->out[out_idx].phase_stale = true;
+		sitdev->out[out_idx].flush_pending = true;
+		return rc;
+	}
+
+flush:
+	/*
+	 * Restart the output divider phase so the freshly programmed delay is
+	 * applied against a known edge instead of the divider's arbitrary
+	 * running phase.
+	 */
+	rc = sit9531x_output_phase_flush(sitdev, pll_idx);
+	if (rc) {
+		/*
+		 * The delay is committed but the output keeps the phase it
+		 * had, so the cache is left as it is: it still says what the
+		 * output realizes.  Record the flush that is owed instead.
+		 * Marking the cache stale would have the getter publish the
+		 * new delay off the registers, the core would then drop a
+		 * retry as a request for the value already reported, and the
+		 * realignment would never run.
+		 */
+		sitdev->out[out_idx].flush_pending = true;
+		return rc;
+	}
+	sitdev->out[out_idx].flush_pending = false;
+	sitdev->out[out_idx].phase_stale = false;
+
+cache:
+	/*
+	 * Cache what the registers realize, and only once every step has
+	 * succeeded: the core drops a repeated request with the same value,
+	 * so a cache updated by a failed call would make the retry a no-op.
+	 */
+	sitdev->out[out_idx].phase_adj = phase_adj;
+
+	/*
+	 * Arm the re-time a rate change owes only for a delay that is
+	 * actually programmed: an advance is held as T_out - |advance|,
+	 * which has to be re-encoded against the new period.  A request
+	 * that quantized to nothing stays nothing at any rate, since the
+	 * quantum is the VCO cycle and not the output period, so there is
+	 * nothing to re-time for it.
+	 */
+	sitdev->out[out_idx].phase_armed = phase_adj != 0;
+
+	return 0;
+}
 
 /*
  * sit9531x_clear_notifications - clear all notification registers
@@ -2897,6 +3502,9 @@ static int sit9531x_dev_state_fetch(struct sit9531x_dev *sitdev)
 	}
 
 	for (i = 0; i < sitdev->info->num_outputs; i++) {
+		bool clamped;
+		s32 phase_ps;
+
 		/*
 		 * Nothing runs concurrently before registration, but the
 		 * output fetch walks paged registers under the same contract
@@ -2908,6 +3516,32 @@ static int sit9531x_dev_state_fetch(struct sit9531x_dev *sitdev)
 		if (rc) {
 			dev_err(sitdev->dev,
 				"Failed to fetch output %u state: %d\n", i, rc);
+			return rc;
+		}
+
+		/*
+		 * The delay registers are part of the profile the chip loads
+		 * before probe, so an output can already carry one.  Seeding
+		 * the cache from the device is what lets a request of 0 ps
+		 * clear it: the core drops a request equal to what the
+		 * getter reports, and a cache that started at zero would
+		 * make clearing a programmed delay impossible.  An output
+		 * the configuration does not route has no Fvco to decode
+		 * against, which is not an error here.  A delay beyond the
+		 * range is reported as its end but not armed: re-timing it
+		 * on a rate change would write that end over the profile's
+		 * delay.
+		 */
+		mutex_lock(&sitdev->multiop_lock);
+		rc = sit9531x_output_phase_read(sitdev, i, &phase_ps, &clamped);
+		mutex_unlock(&sitdev->multiop_lock);
+		if (!rc) {
+			sitdev->out[i].phase_adj = phase_ps;
+			sitdev->out[i].phase_armed = !clamped && phase_ps;
+		} else if (rc != -ENODATA) {
+			dev_err(sitdev->dev,
+				"Failed to read output %u delay: %d\n",
+				i, rc);
 			return rc;
 		}
 	}
