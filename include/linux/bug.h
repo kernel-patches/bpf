@@ -40,6 +40,7 @@ void bug_get_file_line(struct bug_entry *bug, const char **file,
 		       unsigned int *line);
 
 struct bug_entry *find_bug(unsigned long bugaddr);
+void sort_main_bug_table(void);
 
 enum bug_trap_type report_bug(unsigned long bug_addr, struct pt_regs *regs);
 enum bug_trap_type report_bug_entry(struct bug_entry *bug, struct pt_regs *regs);
@@ -55,6 +56,8 @@ static inline void *find_bug(unsigned long bugaddr)
 {
 	return NULL;
 }
+
+static inline void sort_main_bug_table(void) {}
 
 static inline enum bug_trap_type report_bug(unsigned long bug_addr,
 					    struct pt_regs *regs)

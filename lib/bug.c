@@ -48,9 +48,14 @@
 #include <linux/rculist.h>
 #include <linux/ftrace.h>
 #include <linux/context_tracking.h>
+#include <linux/bsearch.h>
+#include <linux/sort.h>
+#include <linux/init.h>
 #include <kunit/test-bug.h>
 
 extern struct bug_entry __start___bug_table[], __stop___bug_table[];
+
+static bool main_bug_table_sorted;
 
 static inline unsigned long bug_addr(const struct bug_entry *bug)
 {
@@ -59,6 +64,74 @@ static inline unsigned long bug_addr(const struct bug_entry *bug)
 #else
 	return bug->bug_addr;
 #endif
+}
+
+static int bug_cmp(const void *a, const void *b)
+{
+	const struct bug_entry *bug_a = a, *bug_b = b;
+	unsigned long addr_a = bug_addr(bug_a), addr_b = bug_addr(bug_b);
+
+	if (addr_a < addr_b)
+		return -1;
+	if (addr_a > addr_b)
+		return 1;
+	return 0;
+}
+
+static int bug_search_cmp(const void *key, const void *elt)
+{
+	const struct bug_entry *bug = elt;
+	unsigned long addr = *(unsigned long *)key;
+	unsigned long bugaddr = bug_addr(bug);
+
+	if (addr < bugaddr)
+		return -1;
+	if (addr > bugaddr)
+		return 1;
+	return 0;
+}
+
+#ifdef CONFIG_GENERIC_BUG_RELATIVE_POINTERS
+static void bug_swap(void *a, void *b, int size)
+{
+	struct bug_entry *x = a, *y = b, tmp;
+	int delta = b - a;
+
+	(void)size;
+
+	tmp = *x;
+	*x = *y;
+	*y = tmp;
+
+	x->bug_addr_disp += delta;
+	y->bug_addr_disp -= delta;
+#ifdef HAVE_ARCH_BUG_FORMAT
+	if (x->format_disp)
+		x->format_disp += delta;
+	if (y->format_disp)
+		y->format_disp -= delta;
+#endif
+#ifdef CONFIG_DEBUG_BUGVERBOSE
+	if (x->file_disp)
+		x->file_disp += delta;
+	if (y->file_disp)
+		y->file_disp -= delta;
+#endif
+}
+#define BUG_SWAP bug_swap
+#else
+#define BUG_SWAP NULL
+#endif
+
+static void sort_bug_table(struct bug_entry *start, struct bug_entry *end)
+{
+	sort(start, end - start, sizeof(*start), bug_cmp, BUG_SWAP);
+}
+
+void __init sort_main_bug_table(void)
+{
+	sort_bug_table(__start___bug_table, __stop___bug_table);
+	main_bug_table_sorted = true;
 }
 
 #ifdef CONFIG_MODULES
@@ -72,12 +145,10 @@ static struct bug_entry *module_find_bug(unsigned long bugaddr)
 
 	guard(rcu)();
 	list_for_each_entry_rcu(mod, &module_bug_list, bug_list) {
-		unsigned int i;
-
-		bug = mod->bug_table;
-		for (i = 0; i < mod->num_bugs; ++i, ++bug)
-			if (bugaddr == bug_addr(bug))
-				return bug;
+		bug = bsearch(&bugaddr, mod->bug_table, mod->num_bugs,
+			      sizeof(*mod->bug_table), bug_search_cmp);
+		if (bug)
+			return bug;
 	}
 	return NULL;
 }
@@ -98,6 +169,9 @@ void module_bug_finalize(const Elf_Ehdr *hdr, const Elf_Shdr *sechdrs,
 			continue;
 		mod->bug_table = (void *) sechdrs[i].sh_addr;
 		mod->num_bugs = sechdrs[i].sh_size / sizeof(struct bug_entry);
+		if (mod->num_bugs > 1)
+			sort_bug_table(mod->bug_table,
+				       mod->bug_table + mod->num_bugs);
 		break;
 	}
 
@@ -167,9 +241,18 @@ struct bug_entry *find_bug(unsigned long bugaddr)
 {
 	struct bug_entry *bug;
 
-	for (bug = __start___bug_table; bug < __stop___bug_table; ++bug)
-		if (bugaddr == bug_addr(bug))
-			return bug;
+	if (unlikely(!main_bug_table_sorted)) {
+		for (bug = __start___bug_table; bug < __stop___bug_table; ++bug)
+			if (bugaddr == bug_addr(bug))
+				return bug;
+		return module_find_bug(bugaddr);
+	}
+
+	bug = bsearch(&bugaddr, __start___bug_table,
+		      __stop___bug_table - __start___bug_table,
+		      sizeof(*bug), bug_search_cmp);
+	if (bug)
+		return bug;
 
 	return module_find_bug(bugaddr);
 }
