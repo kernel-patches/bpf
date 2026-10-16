@@ -127,6 +127,7 @@ static inline char *id_to_core_name(unsigned int id)
 #define CPU_FEATURE_MSGINT		31	/* CPU has MSG interrupt */
 #define CPU_FEATURE_AVECINT		32	/* CPU has AVEC interrupt */
 #define CPU_FEATURE_REDIRECTINT		33	/* CPU has interrupt remapping */
+#define CPU_FEATURE_DIV32		34	/* CPU has DIV32 feature */
 
 #define LOONGARCH_CPU_CPUCFG		BIT_ULL(CPU_FEATURE_CPUCFG)
 #define LOONGARCH_CPU_LAM		BIT_ULL(CPU_FEATURE_LAM)
@@ -162,5 +163,6 @@ static inline char *id_to_core_name(unsigned int id)
 #define LOONGARCH_CPU_MSGINT		BIT_ULL(CPU_FEATURE_MSGINT)
 #define LOONGARCH_CPU_AVECINT		BIT_ULL(CPU_FEATURE_AVECINT)
 #define LOONGARCH_CPU_REDIRECTINT	BIT_ULL(CPU_FEATURE_REDIRECTINT)
+#define LOONGARCH_CPU_DIV32		BIT_ULL(CPU_FEATURE_DIV32)
 
 #endif /* _ASM_CPU_H */
