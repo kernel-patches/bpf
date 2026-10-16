@@ -12,6 +12,7 @@
 #include <linux/vmalloc.h>
 #include <linux/pagemap.h>
 #include <linux/sched/mm.h>
+#include <linux/wait_bit.h>
 #include <asm/tlbflush.h>
 #include "range_tree.h"
 
@@ -57,15 +58,22 @@ struct bpf_arena {
 	struct vm_struct *kern_vm;
 	struct page *scratch_page;
 	struct range_tree rt;
-	/* protects rt and nr_pages */
+	/* Protects rt, retire_*, real kernel mappings, and nr_pages. */
 	rqspinlock_t spinlock;
+	/*
+	 * Range whose kernel PTEs a free has cleared but whose user mappings
+	 * may still be live. Faults on it wait until the free completes.
+	 * Frees hold arena->lock while retiring, so at most one range retires.
+	 */
+	u32 retire_pgoff;
+	u32 retire_cnt;
+	/* Bumped when a free stops retiring. Faults wait for it to change. */
+	u32 retire_seq;
 	/* number of pages currently populated in the arena */
 	u64 nr_pages;
 	struct list_head vma_list;
 	/* protects vma_list */
 	struct mutex lock;
-	u64 zap_gen;
-	struct mutex zap_mutex;
 	struct irq_work     free_irq;
 	struct work_struct  free_work;
 	struct llist_head   free_spans;
@@ -144,6 +152,15 @@ static int arena_map_get_next_key(struct bpf_map *map, void *key, void *next_key
 static long compute_pgoff(struct bpf_arena *arena, long uaddr)
 {
 	return (u32)(uaddr - (u32)arena->user_vm_start) >> PAGE_SHIFT;
+}
+
+/* Is a free retiring any of these pages? Caller holds arena->spinlock. */
+static bool arena_range_retiring(struct bpf_arena *arena, unsigned long pgoff,
+				 unsigned long cnt)
+{
+	return arena->retire_cnt &&
+	       pgoff < arena->retire_pgoff + arena->retire_cnt &&
+	       arena->retire_pgoff < pgoff + cnt;
 }
 
 struct apply_range_data {
@@ -328,7 +345,6 @@ static struct bpf_map *arena_map_alloc(union bpf_attr *attr)
 	if (err)
 		goto err_free_scratch;
 	mutex_init(&arena->lock);
-	mutex_init(&arena->zap_mutex);
 	raw_res_spin_lock_init(&arena->spinlock);
 	err = populate_pgtable_except_pte(arena);
 	if (err)
@@ -390,8 +406,8 @@ static void arena_map_free(struct bpf_map *map)
 		return;
 
 	/*
-	 * No callers remain. Drain the IRQ callback, then stop the worker,
-	 * including any attempts to requeue itself during teardown.
+	 * No callers remain. Drain the IRQ callback, then wait for the worker
+	 * and keep it from running again.
 	 */
 	irq_work_sync(&arena->free_irq);
 	disable_work_sync(&arena->free_work);
@@ -399,7 +415,7 @@ static void arena_map_free(struct bpf_map *map)
 	/* Remaining mapped pages are reclaimed by the page-table walk below. */
 	llist_for_each_safe(pos, next, llist_del_all(&arena->free_spans)) {
 		s = llist_entry(pos, struct arena_free_span, node);
-		kfree_nolock(s);
+		kfree(s);
 	}
 
 	/*
@@ -441,10 +457,11 @@ static u64 arena_map_mem_usage(const struct bpf_map *map)
 }
 
 struct vma_list {
-	struct vm_area_struct *vma;
 	struct list_head head;
 	refcount_t mmap_count;
-	u64 zap_gen;
+	struct vm_area_struct *vma;
+	/* Temporary MM pins and locks, protected by arena->lock. */
+	struct mm_struct *mm;
 };
 
 static int remember_vma(struct bpf_arena *arena, struct vm_area_struct *vma)
@@ -455,9 +472,9 @@ static int remember_vma(struct bpf_arena *arena, struct vm_area_struct *vma)
 	if (!vml)
 		return -ENOMEM;
 	refcount_set(&vml->mmap_count, 1);
-	vma->vm_private_data = vml;
 	vml->vma = vma;
-	vml->zap_gen = 0;
+	vml->mm = NULL;
+	vma->vm_private_data = vml;
 	list_add(&vml->head, &arena->vma_list);
 	return 0;
 }
@@ -540,10 +557,12 @@ out_put:
  * The page reference protects lifetime; the folio lock protects installation.
  * Validate after locking: a free may have removed this page while we waited.
  * Keep the folio locked until arena_install_page() has installed the user PTE.
+ *
+ * Returns true with the fault result in *retp, or false if the fault must be
+ * retried.
  */
-static vm_fault_t arena_fault_page(struct bpf_arena *arena,
-				   struct vm_fault *vmf,
-				   struct page *page, long kaddr)
+static bool arena_fault_page(struct bpf_arena *arena, struct vm_fault *vmf,
+			     struct page *page, long kaddr, vm_fault_t *retp)
 {
 	struct folio *folio = page_folio(page);
 	unsigned long flags;
@@ -554,26 +573,70 @@ static vm_fault_t arena_fault_page(struct bpf_arena *arena,
 	if (ret) {
 		/* The fault lock may be gone; do not access the arena here. */
 		put_page(page);
-		return ret;
+		*retp = ret;
+		return true;
 	}
 
 	err = raw_res_spin_lock_irqsave(&arena->spinlock, flags);
 	if (!err) {
 		if (vmalloc_to_page((void *)kaddr) == page) {
 			raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
-			return arena_install_page(vmf, page);
+			*retp = arena_install_page(vmf, page);
+			return true;
 		}
 		raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
 	}
 
 	folio_unlock(folio);
 	put_page(page);
-	if (err)
-		return VM_FAULT_SIGBUS;
-	if (!(vmf->flags & FAULT_FLAG_ALLOW_RETRY))
-		return VM_FAULT_NOPAGE;
-	if (!(vmf->flags & FAULT_FLAG_RETRY_NOWAIT))
+	if (err) {
+		*retp = VM_FAULT_SIGBUS;
+		return true;
+	}
+
+	return false;
+}
+
+/*
+ * A free is retiring the faulting page. Wait for it instead of failing the
+ * fault, until @seq, read while the range was retiring, changes. The free
+ * only trylocks mmap_lock and never waits for a fault that is waiting here,
+ * so waiting is safe with or without the fault lock held. It does not take
+ * arena->lock, so it cannot make a concurrent free fail to trylock it.
+ */
+static vm_fault_t arena_wait_for_free(struct bpf_arena *arena, struct vm_fault *vmf,
+				      u32 seq)
+{
+	bool retry = vmf->flags & FAULT_FLAG_ALLOW_RETRY;
+
+	/* The caller keeps the fault lock and retries later. */
+	if (retry && (vmf->flags & FAULT_FLAG_RETRY_NOWAIT))
+		return VM_FAULT_RETRY;
+
+	if (retry) {
+		/* Once the fault lock is gone, only this reference pins the map. */
+		bpf_map_inc(&arena->map);
 		release_fault_lock(vmf);
+	}
+
+	/*
+	 * The retried fault rechecks everything under arena->spinlock, so
+	 * READ_ONCE() without acquire ordering is enough. FAULT_FLAG_KILLABLE
+	 * always comes with FAULT_FLAG_ALLOW_RETRY: a fatal signal ends the
+	 * wait, and the caller checks for it on VM_FAULT_RETRY.
+	 */
+	if (vmf->flags & FAULT_FLAG_KILLABLE)
+		wait_var_event_killable(&arena->retire_seq,
+					READ_ONCE(arena->retire_seq) != seq);
+	else
+		wait_var_event(&arena->retire_seq,
+			       READ_ONCE(arena->retire_seq) != seq);
+
+	/* GUP callers that cannot retry recheck the PTE on NOPAGE. */
+	if (!retry)
+		return VM_FAULT_NOPAGE;
+
+	bpf_map_put(&arena->map);
 	return VM_FAULT_RETRY;
 }
 
@@ -634,12 +697,31 @@ static vm_fault_t arena_vm_fault(struct vm_fault *vmf)
 		goto out_err_locked;
 	}
 
+	/* A free is retiring this page; wait for it, then retry. */
+	if (arena_range_retiring(arena, vmf->pgoff, 1)) {
+		u32 seq = arena->retire_seq;
+
+		raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
+		if (new_page)
+			free_pages_nolock(new_page, 0);
+		return arena_wait_for_free(arena, vmf, seq);
+	}
+
+	/*
+	 * Allocated without a page and not being freed: the page is reserved.
+	 * Fail like the scratch page above instead of populating it.
+	 */
+	if (is_range_tree_set(&arena->rt, vmf->pgoff, 1)) {
+		fault_ret = VM_FAULT_SIGBUS;
+		goto out_err_locked;
+	}
+
 	bpf_map_memcg_enter(&arena->map, &old_memcg, &new_memcg);
 
 	if (!new_page) {
 		/*
-		 * The probed page was freed meanwhile or preallocation failed;
-		 * try the non-blocking allocator, we cannot sleep here.
+		 * Preallocation failed; try the non-blocking allocator since
+		 * we cannot sleep here.
 		 */
 		new_page = bpf_alloc_page(map->numa_node, false);
 		if (!new_page) {
@@ -680,7 +762,10 @@ out:
 		new_page = NULL;
 	}
 
-	return arena_fault_page(arena, vmf, page, kaddr);
+	if (arena_fault_page(arena, vmf, page, kaddr, &fault_ret))
+		return fault_ret;
+
+	goto retry;
 
 out_err_locked_memcg:
 	bpf_map_memcg_exit(old_memcg, new_memcg);
@@ -690,9 +775,24 @@ out_err:
 	if (new_page)
 		free_pages_nolock(new_page, 0);
 	return fault_ret;
+
+retry:
+	/* Non-retryable GUP callers recheck the PTE on NOPAGE. */
+	if (!(vmf->flags & FAULT_FLAG_ALLOW_RETRY))
+		return VM_FAULT_NOPAGE;
+
+	if (!(vmf->flags & FAULT_FLAG_RETRY_NOWAIT))
+		release_fault_lock(vmf);
+
+	return VM_FAULT_RETRY;
 }
 
 static const struct vm_operations_struct arena_vm_ops = {
+	/*
+	 * No ->map_pages: MM falls back from per-VMA locking to mmap_lock.
+	 * No ->page_mkwrite: arena_install_page() completes shared write faults.
+	 * Adding either hook requires revisiting the retirement protocol.
+	 */
 	.open		= arena_vm_open,
 	.may_split	= arena_vm_may_split,
 	.mremap		= arena_vm_mremap,
@@ -925,85 +1025,270 @@ out_memcg:
 }
 
 /*
- * If page is present in vmalloc area, unmap it from vmalloc area,
- * unmap it from all user space vma-s,
- * and free it.
+ * The mmap read locks keep VMAs that are still in their mm's tree mapped until
+ * the zap completes. munmap() can isolate a VMA before arena_vm_close()
+ * unlinks its vml, so zap_pages() must recheck the tree. Locks are tried, never
+ * waited for, before marking any range as retiring. In particular, recursively
+ * taking an mmap read lock can fail when a writer is queued behind the caller.
  */
+static void arena_finish_zap(struct bpf_arena *arena, bool unlock)
+{
+	struct vma_list *vml;
+
+	lockdep_assert_held(&arena->lock);
+	list_for_each_entry(vml, &arena->vma_list, head) {
+		if (!vml->mm)
+			continue;
+		mmap_read_unlock(vml->mm);
+		/*
+		 * The last mmput() can run exit_mmap(), which calls
+		 * arena_vm_close() and takes arena->lock.
+		 */
+		mmput_async(vml->mm);
+		vml->mm = NULL;
+	}
+
+	if (unlock)
+		mutex_unlock(&arena->lock);
+}
+
+/*
+ * Prepare the arena to zap user mappings during a free. The arena
+ * mutex protects against arena_vm_close(), per-mm state, and
+ * serializes frees. The mm locks protect the PTEs from being
+ * replaced while the page table walks are in progress.
+ *
+ * A BPF program can get here while tracing a free that holds arena->lock,
+ * and while holding an mmap_lock itself, so it only trylocks. The deferred
+ * free worker does neither. It passes @busy and waits for arena->lock, and
+ * gets back the pinned mm of a contended mmap_lock to wait on once it holds
+ * nothing.
+ */
+static bool arena_prepare_zap(struct bpf_arena *arena, struct mm_struct **busy)
+{
+	struct vma_list *vml;
+	struct mm_struct *mm;
+
+	if (busy)
+		mutex_lock(&arena->lock);
+	else if (!mutex_trylock(&arena->lock))
+		return false;
+
+	/* We can only have a single VMA per mm for the arena. */
+	list_for_each_entry(vml, &arena->vma_list, head) {
+		mm = vml->vma->vm_mm;
+		/* Exiting MMs cannot start faults; exit_mmap() drops their PTEs. */
+		if (!mmget_not_zero(mm))
+			continue;
+
+		/*
+		 * Do trylock to avoid ABBA with arena_vm_close()
+		 * (arena lock->mmap read lock vs mmap write lock -> arena lock).
+		 */
+		if (!mmap_read_trylock(mm)) {
+			if (busy)
+				*busy = mm;
+			else
+				mmput_async(mm);
+			arena_finish_zap(arena, true);
+			return false;
+		}
+
+		vml->mm = mm;
+	}
+
+	return true;
+}
+
+/* All mmap locks were acquired before clearing kernel PTEs. Never reacquire. */
 static void zap_pages(struct bpf_arena *arena, long uaddr, long page_cnt)
 {
-	unsigned long size = (unsigned long)page_cnt << PAGE_SHIFT;
-	struct vm_area_struct *vma;
-	struct mm_struct *mm;
 	struct vma_list *vml;
-	unsigned long vm_start;
-	u64 my_gen;
+	unsigned long size = (unsigned long)page_cnt << PAGE_SHIFT;
+
+	lockdep_assert_held(&arena->lock);
+	list_for_each_entry(vml, &arena->vma_list, head) {
+		if (!vml->mm)
+			continue;
+		mmap_assert_locked(vml->mm);
+		/*
+		 * munmap() removes the VMA from the tree and downgrades mmap_lock
+		 * before arena_vm_close() unlinks the vml, then frees the VMA's
+		 * page tables under the read lock. Skip VMAs that have left the
+		 * tree; munmap() zaps their PTEs itself.
+		 */
+		if (vma_lookup(vml->mm, vml->vma->vm_start) != vml->vma)
+			continue;
+		zap_vma_range(vml->vma, uaddr, size);
+	}
+}
+
+static void wait_for_faults(struct llist_head *pages)
+{
+	struct page *page;
+
+	llist_for_each_entry(page, pages->first, pcp_llist)
+		folio_wait_locked(page_folio(page));
+}
+
+/*
+ * Release the retired range and let faults on it proceed. This must finish
+ * before arena->lock is dropped, so that at most one range retires at a time.
+ * Retry the resilient spinlock in place: callers can sleep and hold no other
+ * resilient spinlock, so acquisition can only time out.
+ */
+static void arena_finish_range(struct bpf_arena *arena, u32 pgoff, u32 page_cnt,
+			       bool release)
+{
+	unsigned long flags;
 
 	/*
-	 * Taking mmap_read_lock() under arena->lock would deadlock against
-	 * arena_vm_close(), which runs with mmap_write_lock held and then
-	 * acquires arena->lock. Drop arena->lock for mmap_read_lock().
-	 *
-	 * Use per-call my_gen, recorded in vml->zap_gen, to remember which
-	 * vmls this invocation has already processed across the lock drop.
-	 * Hold zap_mutex around the whole walk so concurrent zap_pages()
-	 * callers cannot overwrite each other's marks on shared vmls --
-	 * otherwise call B's mark would make call A skip a vml that A has
-	 * not yet zapped for A's uaddr range.
+	 * Can only fail due to timeouts. Code is only reachable from a sleepable
+	 * context and no other res_spinlocks are held (so AA and ABBA are ruled out).
+	 * It's safe to try and take the lock till we succeed.
 	 */
-	mutex_lock(&arena->zap_mutex);
-	mutex_lock(&arena->lock);
-	my_gen = ++arena->zap_gen;
-	for (;;) {
-		mm = NULL;
-		list_for_each_entry(vml, &arena->vma_list, head) {
-			if (vml->zap_gen >= my_gen)
-				continue;
-			vml->zap_gen = my_gen;
-			if (!mmget_not_zero(vml->vma->vm_mm))
-				continue;
-			mm = vml->vma->vm_mm;
-			vm_start = vml->vma->vm_start;
-			break;
-		}
-		if (!mm)
-			break;
-		mutex_unlock(&arena->lock);
+	while (raw_res_spin_lock_irqsave(&arena->spinlock, flags))
+		cond_resched();
+	/*
+	 * If the tree cannot allocate a node for the range, the range stays
+	 * allocated, as on any other range_tree_set() failure.
+	 */
+	if (release)
+		range_tree_set(&arena->rt, pgoff, page_cnt);
+	arena->retire_cnt = 0;
+	WRITE_ONCE(arena->retire_seq, arena->retire_seq + 1);
+	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
 
-		mmap_read_lock(mm);
-		/*
-		 * Re-resolve: while we waited the VMA could have been unmapped
-		 * and a different mapping installed at the same address.
-		 */
-		vma = find_vma(mm, vm_start);
-		if (vma && vma->vm_start == vm_start &&
-		    vma->vm_file && vma->vm_file->private_data == &arena->map)
-			zap_vma_range(vma, uaddr, size);
-		mmap_read_unlock(mm);
-		mmput(mm);
+	/*
+	 * Order the store above before wake_up_var() checks for waiters. Pairs
+	 * with the barrier in set_current_state() in prepare_to_wait_event().
+	 */
+	smp_mb();
+	wake_up_var(&arena->retire_seq);
+}
 
-		mutex_lock(&arena->lock);
+/* Called only for PTEs that are not none: a page or the scratch page. */
+static int apply_range_mapped_cb(pte_t *pte, unsigned long addr, void *data)
+{
+	return -EEXIST;
+}
+
+/*
+ * Release a range without kernel PTEs, such as a reserved one, right away,
+ * without arena->lock or mmap_lock. Unless a free is still retiring it, it
+ * has nothing to flush or zap: frees flush and zap before they stop
+ * retiring, and faults map pages to user space only while their kernel PTE
+ * is present. Allocations and faults install PTEs under arena->spinlock, so
+ * the check and the release are atomic. A scratch PTE takes the full path,
+ * which flushes it, since an allocation may replace it without a TLB flush.
+ */
+static bool arena_free_unpopulated(struct bpf_arena *arena, u32 pgoff, long kaddr,
+				   u32 page_cnt)
+{
+	unsigned long flags;
+	bool release;
+
+	/* As in arena_finish_range(), acquisition can only time out. */
+	while (raw_res_spin_lock_irqsave(&arena->spinlock, flags))
+		cond_resched();
+
+	release = !arena_range_retiring(arena, pgoff, page_cnt) &&
+		  !apply_to_existing_page_range(&init_mm, kaddr,
+						(unsigned long)page_cnt << PAGE_SHIFT,
+						apply_range_mapped_cb, NULL);
+	/* If the tree cannot allocate a node, the range stays allocated. */
+	if (release)
+		range_tree_set(&arena->rt, pgoff, page_cnt);
+	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
+	return release;
+}
+
+static bool arena_free_span(struct bpf_arena *arena, struct arena_free_span *s,
+			    struct mm_struct **busy)
+{
+	LLIST_HEAD(pages);
+	struct clear_range_data cdata = {
+		.arena = arena,
+		.free_pages = &pages,
+	};
+	struct llist_node *pos, *next;
+	struct page *page;
+	unsigned long flags;
+	long pgoff = compute_pgoff(arena, s->uaddr);
+	long kaddr = bpf_arena_get_kern_vm_start(arena) + s->uaddr;
+	unsigned long uaddr = clear_lo32(arena->user_vm_start) + s->uaddr;
+	bool failed;
+	int ret;
+
+	if (arena_free_unpopulated(arena, pgoff, kaddr, s->page_cnt))
+		return true;
+
+	if (!arena_prepare_zap(arena, busy))
+		return false;
+
+	ret = raw_res_spin_lock_irqsave(&arena->spinlock, flags);
+	if (ret) {
+		arena_finish_zap(arena, true);
+		return false;
 	}
+
+	/*
+	 * Claim any free pages in the range so allocations cannot land in it
+	 * while it retires. This only allocates a node when one free range
+	 * covers the whole range, and leaves the tree unchanged if that fails.
+	 * Such a range is entirely free, so it holds no pages and there is
+	 * nothing to free. Any scratch PTEs stay, as in other free ranges.
+	 */
+	ret = range_tree_clear(&arena->rt, pgoff, s->page_cnt);
+	if (ret) {
+		raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
+		arena_finish_zap(arena, true);
+		return true;
+	}
+	arena->retire_pgoff = pgoff;
+	arena->retire_cnt = s->page_cnt;
+
+	ret = apply_to_existing_page_range(&init_mm, kaddr,
+					  (unsigned long)s->page_cnt << PAGE_SHIFT,
+					  apply_range_clear_cb, &cdata);
+	/* If clearing fails, the range stays allocated with its remaining pages. */
+	failed = WARN_ON_ONCE(ret);
+	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
+
+	/*
+	 * A fault validated before clearing holds its folio locked through
+	 * arena_install_page(). A later fault fails its kernel-PTE recheck.
+	 */
+	wait_for_faults(&pages);
+	flush_tlb_kernel_range(kaddr, kaddr + ((unsigned long)s->page_cnt << PAGE_SHIFT));
+	zap_pages(arena, uaddr, s->page_cnt);
+	llist_for_each_safe(pos, next, __llist_del_all(&pages)) {
+		page = llist_entry(pos, struct page, pcp_llist);
+		__free_page(page);
+	}
+
+	/* Finalization needs no mmap locks, so drop them before spinning. */
+	arena_finish_zap(arena, false);
+	arena_finish_range(arena, pgoff, s->page_cnt, !failed);
 	mutex_unlock(&arena->lock);
-	mutex_unlock(&arena->zap_mutex);
+	return true;
+}
+
+static void arena_queue_free_span(struct bpf_arena *arena, struct arena_free_span *s)
+{
+	llist_add(&s->node, &arena->free_spans);
+	irq_work_queue(&arena->free_irq);
 }
 
 static void arena_free_pages(struct bpf_arena *arena, long uaddr, long page_cnt, bool sleepable)
 {
 	struct mem_cgroup *new_memcg, *old_memcg;
-	u64 full_uaddr, uaddr_end;
-	long kaddr, pgoff;
-	struct page *page;
-	struct llist_head free_pages;
-	struct llist_node *pos, *t;
+	struct arena_free_span span = {};
 	struct arena_free_span *s;
-	struct clear_range_data cdata;
-	unsigned long flags;
-	int ret = 0;
+	u64 full_uaddr, uaddr_end;
 
-	/* only aligned lower 32-bit are relevant */
-	uaddr = (u32)uaddr;
-	uaddr &= PAGE_MASK;
-	kaddr = bpf_arena_get_kern_vm_start(arena) + uaddr;
+	/* Only aligned lower 32 bits are relevant. */
+	uaddr = (u32)uaddr & PAGE_MASK;
 	full_uaddr = clear_lo32(arena->user_vm_start) + uaddr;
 	if (full_uaddr < arena->user_vm_start)
 		return;
@@ -1011,68 +1296,30 @@ static void arena_free_pages(struct bpf_arena *arena, long uaddr, long page_cnt,
 	if (full_uaddr >= uaddr_end)
 		return;
 
-	page_cnt = (uaddr_end - full_uaddr) >> PAGE_SHIFT;
-	pgoff = compute_pgoff(arena, uaddr);
+	span.uaddr = uaddr;
+	span.page_cnt = (uaddr_end - full_uaddr) >> PAGE_SHIFT;
 	bpf_map_memcg_enter(&arena->map, &old_memcg, &new_memcg);
-
-	if (!sleepable)
-		goto defer;
-
-	ret = raw_res_spin_lock_irqsave(&arena->spinlock, flags);
-
-	/* Can't proceed without holding the spinlock so defer the free */
-	if (ret)
-		goto defer;
-
-	range_tree_set(&arena->rt, pgoff, page_cnt);
-
-	init_llist_head(&free_pages);
-	cdata.arena = arena;
-	cdata.free_pages = &free_pages;
-	/* clear ptes and collect struct pages */
-	apply_to_existing_page_range(&init_mm, kaddr, page_cnt << PAGE_SHIFT,
-				     apply_range_clear_cb, &cdata);
-
-	/* drop the lock to do the tlb flush and zap pages */
-	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
-
-	/* ensure no stale TLB entries */
-	flush_tlb_kernel_range(kaddr, kaddr + (page_cnt * PAGE_SIZE));
-
-	if (page_cnt > 1)
-		/* bulk zap if multiple pages being freed */
-		zap_pages(arena, full_uaddr, page_cnt);
-
-	llist_for_each_safe(pos, t, __llist_del_all(&free_pages)) {
-		page = llist_entry(pos, struct page, pcp_llist);
-		if (page_cnt == 1 && page_ref_count(page) > 1) /* maybe mapped by user space */
-			/* Optimization for the common case of page_cnt==1:
-			 * If page wasn't mapped into some user vma there
-			 * is no need to call zap_pages which is slow. When
-			 * page_cnt is big it's faster to do the batched zap.
-			 */
-			zap_pages(arena, full_uaddr, 1);
-		__free_page(page);
-	}
-	bpf_map_memcg_exit(old_memcg, new_memcg);
-
-	return;
-
-defer:
-	s = kmalloc_nolock(sizeof(struct arena_free_span), __GFP_ACCOUNT, -1);
-	bpf_map_memcg_exit(old_memcg, new_memcg);
-	if (!s)
+	if (sleepable) {
+		if (arena_free_span(arena, &span, NULL))
+			goto out;
 		/*
-		 * If allocation fails in non-sleepable context, pages are intentionally left
-		 * inaccessible (leaked) until the arena is destroyed. Cleanup or retries are not
-		 * possible here, so we intentionally omit them for safety.
+		 * No arena locks remain, and nothing was retired yet. Like
+		 * bpf_alloc_page(), let a charge to the map's memcg at
+		 * memory.max fail instead of invoking the memcg OOM killer.
 		 */
-		return;
+		s = kmalloc_obj(*s, GFP_KERNEL_ACCOUNT | __GFP_RETRY_MAYFAIL | __GFP_NOWARN);
+	} else {
+		/* No mutex/MM/folio locking or TLB zapping in this context. */
+		s = kmalloc_nolock(sizeof(*s), __GFP_ACCOUNT, NUMA_NO_NODE);
+	}
+	/* Without retry storage, the pages stay mapped until map free. */
+	if (!s)
+		goto out;
+	*s = span;
 
-	s->page_cnt = page_cnt;
-	s->uaddr = uaddr;
-	llist_add(&s->node, &arena->free_spans);
-	irq_work_queue(&arena->free_irq);
+	arena_queue_free_span(arena, s);
+out:
+	bpf_map_memcg_exit(old_memcg, new_memcg);
 }
 
 /*
@@ -1117,66 +1364,27 @@ static void arena_free_worker(struct work_struct *work)
 {
 	struct bpf_arena *arena = container_of(work, struct bpf_arena, free_work);
 	struct mem_cgroup *new_memcg, *old_memcg;
-	struct llist_node *list, *pos, *t;
+	struct llist_node *list, *pos, *next;
+	struct mm_struct *busy = NULL;
 	struct arena_free_span *s;
-	u64 arena_vm_start, user_vm_start;
-	struct llist_head free_pages;
-	struct clear_range_data cdata;
-	struct page *page;
-	unsigned long full_uaddr;
-	long kaddr, page_cnt, pgoff;
-	unsigned long flags;
-
-	if (raw_res_spin_lock_irqsave(&arena->spinlock, flags)) {
-		schedule_work(work);
-		return;
-	}
 
 	bpf_map_memcg_enter(&arena->map, &old_memcg, &new_memcg);
-
-	init_llist_head(&free_pages);
-	cdata.arena = arena;
-	cdata.free_pages = &free_pages;
-	arena_vm_start = bpf_arena_get_kern_vm_start(arena);
-	user_vm_start = bpf_arena_get_user_vm_start(arena);
-
 	list = llist_del_all(&arena->free_spans);
-	llist_for_each(pos, list) {
+	llist_for_each_safe(pos, next, list) {
 		s = llist_entry(pos, struct arena_free_span, node);
-		page_cnt = s->page_cnt;
-		kaddr = arena_vm_start + s->uaddr;
-		pgoff = compute_pgoff(arena, s->uaddr);
-
-		/* clear ptes and collect pages in free_pages llist */
-		apply_to_existing_page_range(&init_mm, kaddr, page_cnt << PAGE_SHIFT,
-					     apply_range_clear_cb, &cdata);
-
-		range_tree_set(&arena->rt, pgoff, page_cnt);
+		while (!arena_free_span(arena, s, &busy)) {
+			/* Holding nothing else, wait out the contended mmap_lock. */
+			if (busy) {
+				mmap_read_lock(busy);
+				mmap_read_unlock(busy);
+				mmput_async(busy);
+				busy = NULL;
+			}
+			cond_resched();
+		}
+		kfree(s);
+		cond_resched();
 	}
-	raw_res_spin_unlock_irqrestore(&arena->spinlock, flags);
-
-	/* Iterate the list again without holding spinlock to do the tlb flush and zap_pages */
-	llist_for_each_safe(pos, t, list) {
-		s = llist_entry(pos, struct arena_free_span, node);
-		page_cnt = s->page_cnt;
-		full_uaddr = clear_lo32(user_vm_start) + s->uaddr;
-		kaddr = arena_vm_start + s->uaddr;
-
-		/* ensure no stale TLB entries */
-		flush_tlb_kernel_range(kaddr, kaddr + (page_cnt * PAGE_SIZE));
-
-		/* remove pages from user vmas */
-		zap_pages(arena, full_uaddr, page_cnt);
-
-		kfree_nolock(s);
-	}
-
-	/* free all pages collected by apply_to_existing_page_range() in the first loop */
-	llist_for_each_safe(pos, t, __llist_del_all(&free_pages)) {
-		page = llist_entry(pos, struct page, pcp_llist);
-		__free_page(page);
-	}
-
 	bpf_map_memcg_exit(old_memcg, new_memcg);
 }
 
