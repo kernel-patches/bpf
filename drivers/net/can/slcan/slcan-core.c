@@ -849,7 +849,6 @@ static int slcan_open(struct tty_struct *tty)
 
 	/* Mark ldisc channel as alive */
 	sl->tty = tty;
-	tty->disc_data = sl;
 
 	err = register_candev(dev);
 	if (err) {
@@ -857,6 +856,8 @@ static int slcan_open(struct tty_struct *tty)
 		pr_err("can't register candev\n");
 		return err;
 	}
+
+	tty->disc_data = sl;
 
 	netdev_info(dev, "slcan on %s.\n", tty->name);
 	/* TTY layer expects 0 on success */
