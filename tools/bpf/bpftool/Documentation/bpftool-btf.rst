@@ -70,6 +70,24 @@ bpftool btf dump *BTF_SRC* [format *FORMAT*] [root_id *ROOT_ID*]
     formatting, the output is sorted by default. Use the **unsorted** option
     to avoid sorting the output.
 
+    C output annotates struct and union definitions individually, with or
+    without **unsorted**. Most records carry
+    ``__attribute__((__bpf_core_pai))``. The generated header defines
+    ``__bpf_core_pai`` as ``preserve_access_index`` where supported, or as
+    empty when **BPF_NO_PRESERVE_ACCESS_INDEX** is defined or the compiler
+    lacks the attribute. GCC-BPF can apply CO-RE through these attributes.
+
+    Context and socket types whose field accesses the verifier rewrites
+    carry ``__attribute__((__bpf_core_pso))`` instead, and their nested
+    anonymous records carry no attribute. ``__bpf_core_pso`` expands to
+    ``preserve_static_offset`` where supported (Clang 18 and later), or to
+    empty otherwise. The attribute keeps static field offsets in load and
+    store instruction immediates. **BPF_NO_PRESERVE_ACCESS_INDEX** does
+    not affect ``__bpf_core_pso``.
+
+    Either macro may be pre-defined as a bare attribute name, such as
+    ``preserve_access_index``, or as empty to override the policy.
+
     **root_id** option can be used to filter a dump to a single type and all
     its dependent types. It cannot be used with any other types of filtering
     (such as the "key", "value", or "kv" arguments when dumping BTF for a map).
