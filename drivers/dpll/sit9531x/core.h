@@ -211,6 +211,11 @@ struct sit9531x_chan {
  *			I2C client), 0 if no IRQ is wired
  * @intsync_src:	PLL index currently sourcing inter-PLL
  *			synchronization (INTSYNC), or -1 when disabled
+ * @intsync_partial:	@intsync_src holds only part of the source
+ *			configuration, left by an enable or a disable
+ *			that stopped part way
+ * @intsync_stale:	@intsync_src could not be read back on resume; the
+ *			next INTSYNC pin getter or setter reads it through
  * @irq_ack_fails:	consecutive failures to acknowledge the
  *			notification latches from the interrupt handler
  * @fvco_band_warned:	bit per PLL whose Fref * DIVN has been reported as
@@ -248,6 +253,8 @@ struct sit9531x_dev {
 
 	/* Inter-PLL synchronization state */
 	s8			intsync_src;
+	bool			intsync_partial;
+	bool			intsync_stale;
 
 };
 
@@ -298,6 +305,9 @@ int sit9531x_output_phase_adjust_set(struct sit9531x_dev *sitdev,
 				     u8 out_idx, s32 phase_ps);
 
 /* ---- INTSYNC (inter-PLL synchronization) ---- */
+int sit9531x_intsync_enable(struct sit9531x_dev *sitdev, u8 src_pll_idx);
+int sit9531x_intsync_disable(struct sit9531x_dev *sitdev, u8 src_pll_idx);
+int sit9531x_intsync_src_detect(struct sit9531x_dev *sitdev);
 
 /* ---- Phase offset (TDC readback) ---- */
 int sit9531x_chan_routed_ref_read(struct sit9531x_dev *sitdev, u8 pll_idx,

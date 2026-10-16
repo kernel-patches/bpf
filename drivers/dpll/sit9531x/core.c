@@ -3054,6 +3054,381 @@ static int sit9531x_clear_notifications(struct sit9531x_dev *sitdev)
 	return 0;
 }
 
+/*
+ * Close the debug window on a PLL's EXT page.  The key register opens
+ * every debug register on that page while it holds the unlock value.
+ */
+static int sit9531x_intsync_debug_lock(struct sit9531x_dev *sitdev, u8 ext_page)
+{
+	return sit9531x_write_u8(sitdev,
+				 SIT9531X_REG(ext_page, SIT9531X_PLL_REG_DEBUG),
+				 SIT9531X_PLL_DEBUG_LOCK);
+}
+
+/*
+ * INTSYNC configuration register values.
+ * These are written to the source PLL's EXT page to enable/disable
+ * inter-PLL synchronization (lock frequency PLL to phase PLL).
+ */
+struct sit9531x_intsync_reg {
+	u8 offset;
+	u8 en_val;
+	u8 dis_val;
+};
+
+static const struct sit9531x_intsync_reg intsync_config[] = {
+	{ 0x2D, 0x02, 0x00 },
+	{ 0x50, 0x08, 0x00 },
+	{ 0x51, 0x04, 0x00 },
+	{ 0x54, 0x02, 0x00 },
+	{ 0x55, 0x28, 0x20 },
+	{ 0x5C, 0x0F, 0x00 },
+	{ 0x5D, 0xFF, 0x00 },
+	{ 0x6C, 0xDD, 0x00 },
+};
+
+int sit9531x_intsync_src_detect(struct sit9531x_dev *sitdev)
+{
+	s8 src = -1, partial = -1;
+	int rc, ret, n_en, n_dis;
+	u8 pll, ext_page;
+	unsigned int i;
+	u8 global;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	rc = sit9531x_read_u8(sitdev, SIT9531X_REG_INTSYNC_GLOBAL, &global);
+	if (rc)
+		return rc;
+
+	if (!(global & BIT(SIT9531X_INTSYNC_EN_BIT))) {
+		sitdev->intsync_src = -1;
+		sitdev->intsync_partial = false;
+		return 0;
+	}
+
+	for (pll = 0; pll < SIT9531X_NUM_PLLS; pll++) {
+		ext_page = SIT9531X_PLL_EXT_PAGE(pll);
+
+		/*
+		 * These are debug registers, which the enable and disable
+		 * sequences only touch with the EXT page's debug window
+		 * open; read them the same way.
+		 */
+		rc = sit9531x_write_u8(sitdev,
+				       SIT9531X_REG(ext_page,
+						    SIT9531X_PLL_REG_DEBUG),
+				       SIT9531X_PLL_DEBUG_UNLOCK);
+		if (rc)
+			return rc;
+
+		n_en = 0;
+		n_dis = 0;
+		for (i = 0; i < ARRAY_SIZE(intsync_config); i++) {
+			u16 reg;
+			u8 val;
+
+			reg = SIT9531X_REG(ext_page, intsync_config[i].offset);
+
+			rc = sit9531x_read_u8(sitdev, reg, &val);
+			if (rc)
+				break;
+			if (val == intsync_config[i].en_val)
+				n_en++;
+			else if (val == intsync_config[i].dis_val)
+				n_dis++;
+		}
+
+		ret = sit9531x_intsync_debug_lock(sitdev, ext_page);
+		if (!rc)
+			rc = ret;
+		if (rc)
+			return rc;
+
+		if (n_en == ARRAY_SIZE(intsync_config)) {
+			/*
+			 * Only one PLL can drive the net.  If a second
+			 * one matches, the registers are not describing
+			 * a state this driver put the device in, so say
+			 * so rather than pick silently.
+			 */
+			if (src < 0)
+				src = pll;
+			else
+				dev_warn(sitdev->dev,
+					 "PLL%c also matches the INTSYNC source pattern; keeping PLL%c\n",
+					 'A' + pll, 'A' + src);
+		} else if (n_en && n_dis &&
+			   n_en + n_dis == ARRAY_SIZE(intsync_config) &&
+			   partial < 0) {
+			/*
+			 * Every register holds one of the two patterns and both
+			 * occur: the residue of an enable or a disable that
+			 * stopped part way, and nothing a profile writes.
+			 */
+			partial = pll;
+		}
+	}
+
+	/*
+	 * An enable or a disable that stopped part way leaves a PLL holding
+	 * a mix of the two patterns.  Treat it as the owner, so that another
+	 * PLL cannot be enabled on top of the leftover configuration, but
+	 * record that it is partial: a repeated connect on that PLL must run
+	 * the enable again rather than take the PLL for configured, and a
+	 * repeated disconnect runs the disable again.
+	 */
+	sitdev->intsync_partial = src < 0 && partial >= 0;
+	if (sitdev->intsync_partial) {
+		dev_warn(sitdev->dev,
+			 "PLL%c holds a partial INTSYNC source configuration\n",
+			 'A' + partial);
+		src = partial;
+	}
+
+	sitdev->intsync_src = src;
+
+	return 0;
+}
+
+static int __sit9531x_intsync_disable(struct sit9531x_dev *sitdev,
+				      u8 src_pll_idx, bool restore);
+
+/*
+ * sit9531x_intsync_enable - enable inter-PLL synchronization
+ * @src_pll_idx: source (frequency) PLL index (0-3)
+ *
+ * Enables INTSYNC global bit, unlocks the source PLL's EXT page
+ * debug registers, writes configuration, and triggers a small
+ * update on the source PLL.
+ *
+ * Caller must hold sitdev->multiop_lock.
+ */
+int sit9531x_intsync_enable(struct sit9531x_dev *sitdev, u8 src_pll_idx)
+{
+	u8 ext_page, val;
+	int rc, lock_rc;
+	unsigned int i;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (src_pll_idx >= SIT9531X_NUM_PLLS)
+		return -EINVAL;
+
+	ext_page = SIT9531X_PLL_EXT_PAGE(src_pll_idx);
+
+	rc = sit9531x_read_u8(sitdev, SIT9531X_REG_INTSYNC_GLOBAL, &val);
+	if (rc)
+		return rc;
+	rc = sit9531x_write_u8(sitdev, SIT9531X_REG_INTSYNC_GLOBAL,
+			       val | BIT(SIT9531X_INTSYNC_EN_BIT));
+	if (rc)
+		return rc;
+
+	/* Small update on Page 0 */
+	rc = sit9531x_write_u8(sitdev, SIT9531X_REG_GLOBAL_UPDATE,
+			       SIT9531X_SMALL_UPDATE_CMD);
+	usleep_range(1000, 2000);
+	if (rc)
+		goto relock_err;
+
+	/* Unlock debug on EXT page */
+	rc = sit9531x_write_u8(sitdev,
+			       SIT9531X_REG(ext_page,
+					    SIT9531X_PLL_REG_DEBUG),
+			       SIT9531X_PLL_DEBUG_UNLOCK);
+	if (rc)
+		goto relock_err;
+
+	for (i = 0; i < ARRAY_SIZE(intsync_config); i++) {
+		rc = sit9531x_write_u8(sitdev,
+				       SIT9531X_REG(ext_page,
+						    intsync_config[i].offset),
+				       intsync_config[i].en_val);
+		if (rc)
+			goto relock_err;
+	}
+
+	/* Small update on source PLL */
+	rc = sit9531x_pll_small_update(sitdev, src_pll_idx);
+	if (rc)
+		goto relock_err;
+
+	rc = 0;
+	goto relock;
+
+relock_err:
+	sit9531x_intsync_debug_lock(sitdev, ext_page);
+	goto err_disable;
+
+relock:
+	/*
+	 * Close the EXT page debug window the sequence opened.  Nothing
+	 * else writes the key back, so leaving it open would keep the block
+	 * unlocked for as long as the device runs.  The net is driven by
+	 * now, though, so a failure here must not read as a failed enable:
+	 * the caller would then not record the owner of a net that is
+	 * driven.
+	 */
+	lock_rc = sit9531x_intsync_debug_lock(sitdev, ext_page);
+	if (lock_rc)
+		dev_warn(sitdev->dev,
+			 "PLL%c: INTSYNC enabled but the debug window was left open: %d\n",
+			 'A' + src_pll_idx, lock_rc);
+
+	return rc;
+
+err_disable:
+	/*
+	 * The global enable is already set at this point.  The caller only
+	 * records the source PLL when this function succeeds, so nothing
+	 * else will ever clear the bit: undo it here rather than leave the
+	 * net asserted with a half-written EXT page.  The disable must not
+	 * put the bit back when it fails part way, as it does for a
+	 * disconnect: here the bit is what the rollback set out to clear,
+	 * and restoring it would leave the net asserted with no PLL
+	 * matching the source pattern, which no owner on record would ever
+	 * clear.
+	 */
+	{
+		int rollback_rc;
+
+		rollback_rc = __sit9531x_intsync_disable(sitdev, src_pll_idx,
+							 false);
+		if (rollback_rc)
+			dev_warn(sitdev->dev,
+				 "INTSYNC rollback failed after enable error: %d (original %d)\n",
+				 rollback_rc, rc);
+	}
+
+	return rc;
+}
+
+/*
+ * The disable sequence.  @restore says whether a failure before the EXT
+ * page holds the disable pattern puts the global enable back, which a
+ * disconnect wants (see restore_global below) and the rollback of a
+ * failed enable does not.
+ */
+static int __sit9531x_intsync_disable(struct sit9531x_dev *sitdev,
+				      u8 src_pll_idx, bool restore)
+{
+	u8 ext_page, val;
+	int rc, lock_rc;
+	unsigned int i;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (src_pll_idx >= SIT9531X_NUM_PLLS)
+		return -EINVAL;
+
+	ext_page = SIT9531X_PLL_EXT_PAGE(src_pll_idx);
+
+	rc = sit9531x_read_u8(sitdev, SIT9531X_REG_INTSYNC_GLOBAL, &val);
+	if (rc)
+		return rc;
+	rc = sit9531x_write_u8(sitdev, SIT9531X_REG_INTSYNC_GLOBAL,
+			       val & ~BIT(SIT9531X_INTSYNC_EN_BIT));
+	if (rc)
+		goto restore_global;
+
+	/* Small update on Page 0 */
+	rc = sit9531x_write_u8(sitdev, SIT9531X_REG_GLOBAL_UPDATE,
+			       SIT9531X_SMALL_UPDATE_CMD);
+	usleep_range(1000, 2000);
+	if (rc)
+		goto restore_global;
+
+	/* Unlock debug on EXT page */
+	rc = sit9531x_write_u8(sitdev,
+			       SIT9531X_REG(ext_page,
+					    SIT9531X_PLL_REG_DEBUG),
+			       SIT9531X_PLL_DEBUG_UNLOCK);
+	if (rc)
+		goto restore_global;
+
+	for (i = 0; i < ARRAY_SIZE(intsync_config); i++) {
+		rc = sit9531x_write_u8(sitdev,
+				       SIT9531X_REG(ext_page,
+						    intsync_config[i].offset),
+				       intsync_config[i].dis_val);
+		if (rc)
+			goto restore_global;
+	}
+
+	/*
+	 * Small update on source PLL.  The global enable is latched off and
+	 * every register holds the disable value by now, so the net is not
+	 * driven whether or not this latch went through.  Putting the bit
+	 * back for a failure here would describe the net as driven with no
+	 * PLL matching the source pattern: the detector would record no
+	 * owner, and nothing would ever clear the bit.
+	 */
+	rc = sit9531x_pll_small_update(sitdev, src_pll_idx);
+
+	goto relock;
+
+restore_global:
+	/*
+	 * The global enable was cleared first, so a failure here leaves the
+	 * EXT page still holding the enable pattern with nothing pointing
+	 * at it: the source detector keys on the global bit, would report
+	 * the net as unowned, and a retry of the disable would then
+	 * short-circuit.  Put the bit back so the state stays one the
+	 * driver can describe and the request can be repeated.
+	 */
+	if (restore &&
+	    !sit9531x_read_u8(sitdev, SIT9531X_REG_INTSYNC_GLOBAL, &val) &&
+	    !sit9531x_write_u8(sitdev, SIT9531X_REG_INTSYNC_GLOBAL,
+			       val | BIT(SIT9531X_INTSYNC_EN_BIT))) {
+		/*
+		 * Every write of the global enable, here and in SiTime's
+		 * sequences, is followed by the page-0 small update that
+		 * applies it.  Without it the bit would sit pending until
+		 * an unrelated commit through the same update register
+		 * applied it, re-asserting the net over a half-written
+		 * EXT page with nobody having asked.
+		 */
+		sit9531x_write_u8(sitdev, SIT9531X_REG_GLOBAL_UPDATE,
+				  SIT9531X_SMALL_UPDATE_CMD);
+		usleep_range(1000, 2000);
+	}
+
+relock:
+	/*
+	 * Close the EXT page debug window the sequence opened.  After a
+	 * disable that took effect, a failure here is a warning, for the
+	 * same reason as in sit9531x_intsync_enable().
+	 */
+	lock_rc = sit9531x_intsync_debug_lock(sitdev, ext_page);
+	if (lock_rc) {
+		if (rc)
+			dev_warn(sitdev->dev,
+				 "PLL%c: debug window left open: %d\n",
+				 'A' + src_pll_idx, lock_rc);
+		else
+			dev_warn(sitdev->dev,
+				 "PLL%c: INTSYNC disabled but the debug window was left open: %d\n",
+				 'A' + src_pll_idx, lock_rc);
+	}
+
+	return rc;
+}
+
+/*
+ * sit9531x_intsync_disable - disable inter-PLL synchronization
+ * @src_pll_idx: source (frequency) PLL index (0-3)
+ *
+ * Clears INTSYNC global bit, writes disable values to the source
+ * PLL's EXT page, and triggers a small update.
+ *
+ * Caller must hold sitdev->multiop_lock.
+ */
+int sit9531x_intsync_disable(struct sit9531x_dev *sitdev, u8 src_pll_idx)
+{
+	return __sit9531x_intsync_disable(sitdev, src_pll_idx, true);
+}
+
 /**
  * sit9531x_phase_offset_read - read phase difference via TDC
  * @sitdev:	device pointer
@@ -3702,6 +4077,15 @@ static int sit9531x_dev_state_fetch(struct sit9531x_dev *sitdev)
 	if (rc) {
 		dev_err(sitdev->dev,
 			"Failed to fetch input priority tables: %d\n", rc);
+		return rc;
+	}
+
+	mutex_lock(&sitdev->multiop_lock);
+	rc = sit9531x_intsync_src_detect(sitdev);
+	mutex_unlock(&sitdev->multiop_lock);
+	if (rc) {
+		dev_err(sitdev->dev,
+			"Failed to detect INTSYNC source: %d\n", rc);
 		return rc;
 	}
 
@@ -4452,13 +4836,13 @@ static bool sit9531x_dpll_pin_is_registrable(struct sit9531x_dpll *sitdpll,
 		if (index == SIT9531X_MAX_INPUTS)
 			return true;
 		if (index == SIT9531X_INTSYNC_PIN_ID)
-			return false;
+			return true;
 
 		return sit9531x_input_pin_is_registrable(sitdev, index);
 	}
 
 	if (index == SIT9531X_INTSYNC_OUT_PIN_ID)
-		return false;
+		return true;
 
 	if (index >= sitdev->info->num_outputs)
 		return false;
@@ -4894,8 +5278,35 @@ static int sit9531x_suspend(struct device *dev)
 static int sit9531x_resume(struct device *dev)
 {
 	struct sit9531x_dev *sitdev = dev_get_drvdata(dev);
+	int rc;
+	u8 i;
 
 	sit9531x_page_cache_drop(sitdev);
+
+	/*
+	 * A part that lost power across suspend comes back with its
+	 * profile's INTSYNC routing and output mutes, not with what the
+	 * caches say, and the poll watches neither.  Read them back here;
+	 * a cache that cannot be read is left for the getter's read-through.
+	 * Nothing races this: the poll is parked and the IRQ disabled.
+	 */
+	mutex_lock(&sitdev->multiop_lock);
+	rc = sit9531x_intsync_src_detect(sitdev);
+	if (rc)
+		dev_warn(sitdev->dev,
+			 "INTSYNC source not re-detected on resume: %d\n", rc);
+	sitdev->intsync_stale = rc != 0;
+	for (i = 0; i < sitdev->info->num_outputs; i++) {
+		rc = sit9531x_output_state_refresh(sitdev, i);
+		if (rc) {
+			dev_warn(sitdev->dev,
+				 "Output %u mute state not read on resume: %d\n",
+				 i, rc);
+			sitdev->out[i].state_stale = true;
+		}
+	}
+	mutex_unlock(&sitdev->multiop_lock);
+
 	if (sitdev->irq > 0)
 		enable_irq(sitdev->irq);
 	kthread_queue_delayed_work(sitdev->kworker, &sitdev->work, 0);
