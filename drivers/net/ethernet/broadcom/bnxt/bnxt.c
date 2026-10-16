@@ -8161,7 +8161,7 @@ static int __bnxt_reserve_rings(struct bnxt *bp)
 	rc = bnxt_trim_rings(bp, &rx_rings, &hwr.tx, hwr.cp, sh);
 	if (bp->flags & BNXT_FLAG_AGG_RINGS)
 		hwr.rx = rx_rings << 1;
-	tx_cp = bnxt_num_tx_to_cp(bp, hwr.tx);
+	tx_cp = bnxt_num_tx_to_cp(bp, hwr.tx, bp->tx_nr_rings_xdp, rx_rings);
 	hwr.cp = sh ? max_t(int, tx_cp, rx_rings) : tx_cp + rx_rings;
 	if (hwr.tx != bp->tx_nr_rings) {
 		netdev_warn(bp->dev,
@@ -11294,27 +11294,24 @@ static int __bnxt_num_tx_to_cp(struct bnxt *bp, int tx, int tx_sets, int tx_xdp)
 	return (tx - tx_xdp) / tx_sets + tx_xdp;
 }
 
-int bnxt_num_tx_to_cp(struct bnxt *bp, int tx)
+int bnxt_num_tx_to_cp(struct bnxt *bp, int tx, int tx_xdp, int rx)
 {
-	int tcs = bp->num_tc;
+	int tcs = bp->num_tc ? bp->num_tc : 1;
 
-	if (!tcs)
-		tcs = 1;
-	return __bnxt_num_tx_to_cp(bp, tx, tcs, bp->tx_nr_rings_xdp);
+	return __bnxt_num_tx_to_cp(bp, tx, tcs, tx_xdp);
 }
 
-static int bnxt_num_cp_to_tx(struct bnxt *bp, int tx_cp)
+static int bnxt_num_cp_to_tx(struct bnxt *bp, int tx_cp, int tx_xdp, int rx)
 {
-	int tcs = bp->num_tc;
+	int tcs = bp->num_tc ? bp->num_tc : 1;
 
-	return (tx_cp - bp->tx_nr_rings_xdp) * tcs +
-	       bp->tx_nr_rings_xdp;
+	return (tx_cp - tx_xdp) * tcs + tx_xdp;
 }
 
 static int bnxt_trim_rings(struct bnxt *bp, int *rx, int *tx, int max,
 			   bool sh)
 {
-	int tx_cp = bnxt_num_tx_to_cp(bp, *tx);
+	int tx_cp = bnxt_num_tx_to_cp(bp, *tx, bp->tx_nr_rings_xdp, *rx);
 
 	if (tx_cp != *tx) {
 		int tx_saved = tx_cp, rc;
@@ -11323,7 +11320,8 @@ static int bnxt_trim_rings(struct bnxt *bp, int *rx, int *tx, int max,
 		if (rc)
 			return rc;
 		if (tx_cp != tx_saved)
-			*tx = bnxt_num_cp_to_tx(bp, tx_cp);
+			*tx = bnxt_num_cp_to_tx(bp, tx_cp, bp->tx_nr_rings_xdp,
+						*rx);
 		return 0;
 	}
 	return __bnxt_trim_rings(bp, rx, tx, max, sh);
@@ -11536,7 +11534,8 @@ static int bnxt_init_int_mode(struct bnxt *bp)
 	if (rc)
 		goto msix_setup_exit;
 
-	tx_cp = bnxt_num_tx_to_cp(bp, bp->tx_nr_rings);
+	tx_cp = bnxt_num_tx_to_cp(bp, bp->tx_nr_rings, bp->tx_nr_rings_xdp,
+				  bp->rx_nr_rings);
 	bp->cp_nr_rings = (min == 1) ?
 			  max_t(int, tx_cp, bp->rx_nr_rings) :
 			  tx_cp + bp->rx_nr_rings;
@@ -15659,7 +15658,8 @@ static int bnxt_change_mtu(struct net_device *dev, int new_mtu)
 
 void bnxt_set_cp_rings(struct bnxt *bp, bool sh)
 {
-	int tx_cp = bnxt_num_tx_to_cp(bp, bp->tx_nr_rings);
+	int tx_cp = bnxt_num_tx_to_cp(bp, bp->tx_nr_rings, bp->tx_nr_rings_xdp,
+				      bp->rx_nr_rings);
 
 	bp->cp_nr_rings = sh ? max_t(int, tx_cp, bp->rx_nr_rings) :
 			       tx_cp + bp->rx_nr_rings;

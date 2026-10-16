@@ -3003,7 +3003,7 @@ int bnxt_hwrm_set_coal(struct bnxt *);
 size_t bnxt_copy_ctx_mem(struct bnxt *bp, struct bnxt_ctx_mem_type *ctxm,
 			 void *buf, size_t offset);
 void bnxt_free_ctx_mem(struct bnxt *bp, bool force);
-int bnxt_num_tx_to_cp(struct bnxt *bp, int tx);
+int bnxt_num_tx_to_cp(struct bnxt *bp, int tx, int tx_xdp, int rx);
 unsigned int bnxt_get_max_func_stat_ctxs(struct bnxt *bp);
 unsigned int bnxt_get_avail_stat_ctxs_for_en(struct bnxt *bp);
 unsigned int bnxt_get_max_func_cp_rings(struct bnxt *bp);
