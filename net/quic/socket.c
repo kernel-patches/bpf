@@ -52,6 +52,7 @@ static int quic_init_sock(struct sock *sk)
 	quic_conn_id_set_init(quic_source(sk), true);
 	quic_conn_id_set_init(quic_dest(sk), false);
 	quic_path_init(quic_paths(sk));
+	quic_cong_init(quic_cong(sk));
 
 	if (quic_stream_init(quic_streams(sk)))
 		return -ENOMEM;
