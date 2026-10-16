@@ -8168,6 +8168,20 @@ static bool bnxt_rings_ok(struct bnxt *bp, struct bnxt_hw_rings *hwr)
 	       hwr->stat && (hwr->cp_p5 || !(bp->flags & BNXT_FLAG_CHIP_P5_PLUS));
 }
 
+/* Check to see if we need to reset the user configured RSS table
+ * (default RSS context) because of change in RX rings from
+ * old_rx to new_rx.
+ */
+static void bnxt_check_rss_tbl_lost(struct bnxt *bp, int old_rx, int new_rx)
+{
+	if (netif_is_rxfh_configured(bp->dev) &&
+	    (bnxt_get_nr_rss_ctxs(bp, old_rx) !=
+	     bnxt_get_nr_rss_ctxs(bp, new_rx) ||
+	     bnxt_get_max_rss_ring(bp) >= new_rx)) {
+		ethtool_rxfh_indir_lost(bp->dev);
+	}
+}
+
 static int bnxt_get_avail_msix(struct bnxt *bp, int num);
 
 static int __bnxt_reserve_rings(struct bnxt *bp)
@@ -8257,12 +8271,7 @@ static int __bnxt_reserve_rings(struct bnxt *bp)
 	if (rx_rings != bp->rx_nr_rings) {
 		netdev_warn(bp->dev, "Able to reserve only %d out of %d requested RX rings\n",
 			    rx_rings, bp->rx_nr_rings);
-		if (netif_is_rxfh_configured(bp->dev) &&
-		    (bnxt_get_nr_rss_ctxs(bp, bp->rx_nr_rings) !=
-		     bnxt_get_nr_rss_ctxs(bp, rx_rings) ||
-		     bnxt_get_max_rss_ring(bp) >= rx_rings)) {
-			ethtool_rxfh_indir_lost(bp->dev);
-		}
+		bnxt_check_rss_tbl_lost(bp, bp->rx_nr_rings, rx_rings);
 	}
 	bp->rx_nr_rings = rx_rings;
 	bp->cp_nr_rings = hwr.cp;
