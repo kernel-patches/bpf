@@ -8069,8 +8069,25 @@ static void bnxt_copy_reserved_rings(struct bnxt *bp, struct bnxt_hw_rings *hwr)
 
 static bool bnxt_rings_ok(struct bnxt *bp, struct bnxt_hw_rings *hwr)
 {
-	return hwr->tx && hwr->rx && hwr->cp && hwr->grp && hwr->vnic &&
-	       hwr->stat && (hwr->cp_p5 || !(bp->flags & BNXT_FLAG_CHIP_P5_PLUS));
+	int min_tx = bp->num_tc ? bp->num_tc : 1;
+	int min_tx_xdp = 0;
+	int min_rx = 1;
+	int min_cp;
+	int tx_cp;
+
+	if (bp->tx_nr_rings_xdp) {
+		min_tx++;
+		min_tx_xdp = 1;
+	}
+
+	tx_cp = bnxt_num_tx_to_cp(bp, min_tx, min_tx_xdp, min_rx);
+	if (bp->flags & BNXT_FLAG_SHARED_RINGS)
+		min_cp = max(tx_cp, min_rx);
+	else
+		min_cp = tx_cp + min_rx;
+	return hwr->tx >= min_tx && hwr->rx >= min_rx && hwr->cp >= min_cp &&
+	       hwr->grp && hwr->vnic && hwr->stat &&
+	       (hwr->cp_p5 || !(bp->flags & BNXT_FLAG_CHIP_P5_PLUS));
 }
 
 /* Check to see if we need to reset the user configured RSS table
@@ -8088,10 +8105,13 @@ static void bnxt_check_rss_tbl_lost(struct bnxt *bp, int old_rx, int new_rx)
 }
 
 static int bnxt_get_avail_msix(struct bnxt *bp, int num);
+static void bnxt_adj_rings(struct bnxt *bp);
 
 static int __bnxt_reserve_rings(struct bnxt *bp)
 {
 	struct bnxt_en_dev *edev = bp->edev[BNXT_AUXDEV_RDMA];
+	int req_rx_rings = bp->rx_nr_rings;
+	int req_tx_rings = bp->tx_nr_rings;
 	struct bnxt_hw_rings hwr = {0};
 	int rx_rings, old_rx_rings, rc;
 	int cp = bp->cp_nr_rings;
@@ -8159,49 +8179,68 @@ static int __bnxt_reserve_rings(struct bnxt *bp)
 		hwr.stat -= bnxt_get_ulp_stat_ctxs(bp);
 	hwr.cp = min_t(int, hwr.cp, hwr.stat);
 	rc = bnxt_trim_rings(bp, &rx_rings, &hwr.tx, hwr.cp, sh);
+	if (rc)
+		goto reserve_rings_exit;
+
+	if (bp->bnapi && (rx_rings < bp->rx_nr_rings ||
+			  hwr.tx < bp->tx_nr_rings)) {
+		netdev_err(bp->dev, "Unexpected ring shrinkage %d/%d RX/TX to %d/%d\n",
+			   bp->rx_nr_rings, bp->tx_nr_rings, rx_rings, hwr.tx);
+		rc = -ENOSPC;
+		goto reserve_rings_exit;
+	}
 	if (bp->flags & BNXT_FLAG_AGG_RINGS)
 		hwr.rx = rx_rings << 1;
 	tx_cp = bnxt_num_tx_to_cp(bp, hwr.tx, bp->tx_nr_rings_xdp, rx_rings);
 	hwr.cp = sh ? max_t(int, tx_cp, rx_rings) : tx_cp + rx_rings;
-	if (hwr.tx != bp->tx_nr_rings) {
+
+	if (!bnxt_rings_ok(bp, &hwr)) {
+		rc = -ENOMEM;
+		goto reserve_rings_exit;
+	}
+
+	bp->tx_nr_rings = hwr.tx;
+	bp->rx_nr_rings = rx_rings;
+	bp->cp_nr_rings = hwr.cp;
+
+	if (!bp->bnapi)
+		bnxt_adj_rings(bp);
+
+	if (req_tx_rings != bp->tx_nr_rings) {
 		netdev_warn(bp->dev,
 			    "Able to reserve only %d out of %d requested TX rings\n",
-			    hwr.tx, bp->tx_nr_rings);
+			    bp->tx_nr_rings, req_tx_rings);
 	}
-	bp->tx_nr_rings = hwr.tx;
-
 	/* If we cannot reserve all the RX rings, reset the RSS map only
 	 * if absolutely necessary
 	 */
-	if (rx_rings != bp->rx_nr_rings) {
+	if (req_rx_rings != bp->rx_nr_rings) {
 		netdev_warn(bp->dev, "Able to reserve only %d out of %d requested RX rings\n",
-			    rx_rings, bp->rx_nr_rings);
-		bnxt_check_rss_tbl_lost(bp, bp->rx_nr_rings, rx_rings);
+			    bp->rx_nr_rings, req_rx_rings);
+		bnxt_check_rss_tbl_lost(bp, req_rx_rings, bp->rx_nr_rings);
 	}
-	bp->rx_nr_rings = rx_rings;
-	bp->cp_nr_rings = hwr.cp;
 
 	/* Fall back if we cannot reserve enough HW RSS contexts */
 	if ((bp->rss_cap & BNXT_RSS_CAP_LARGE_RSS_CTX) &&
 	    hwr.rss_ctx < bnxt_get_total_rss_ctxs(bp, &hwr))
 		bp->rss_cap &= ~BNXT_RSS_CAP_LARGE_RSS_CTX;
 
-	if (!bnxt_rings_ok(bp, &hwr))
-		return -ENOMEM;
-
-	if (old_rx_rings != bp->hw_resc.resv_rx_rings &&
+	if ((old_rx_rings != bp->hw_resc.resv_rx_rings ||
+	     req_rx_rings != bp->rx_nr_rings) &&
 	    !netif_is_rxfh_configured(bp->dev))
 		bnxt_set_dflt_rss_indir_tbl(bp, NULL);
 
+reserve_rings_exit:
 	if (!bnxt_ulp_registered(edev) && BNXT_NEW_RM(bp)) {
 		int resv_msix, resv_ctx, ulp_ctxs;
 		struct bnxt_hw_resc *hw_resc;
 
 		hw_resc = &bp->hw_resc;
-		resv_msix = hw_resc->resv_irqs - bp->cp_nr_rings;
+		resv_msix = max_t(int, hw_resc->resv_irqs - bp->cp_nr_rings, 0);
 		ulp_msix = min_t(int, resv_msix, ulp_msix);
 		bnxt_set_ulp_msix_num(bp, ulp_msix);
-		resv_ctx = hw_resc->resv_stat_ctxs  - bp->cp_nr_rings;
+		resv_ctx = max_t(int, hw_resc->resv_stat_ctxs - bp->cp_nr_rings,
+				 0);
 		ulp_ctxs = min(resv_ctx, bnxt_get_ulp_stat_ctxs(bp));
 		bnxt_set_ulp_stat_ctxs(bp, ulp_ctxs);
 	}
@@ -11298,6 +11337,10 @@ int bnxt_num_tx_to_cp(struct bnxt *bp, int tx, int tx_xdp, int rx)
 {
 	int tcs = bp->num_tc ? bp->num_tc : 1;
 
+	if (tx_xdp) {
+		tx_xdp = tx / (tcs + 1);
+		tx_xdp = min(tx_xdp, rx);
+	}
 	return __bnxt_num_tx_to_cp(bp, tx, tcs, tx_xdp);
 }
 
@@ -11305,7 +11348,13 @@ static int bnxt_num_cp_to_tx(struct bnxt *bp, int tx_cp, int tx_xdp, int rx)
 {
 	int tcs = bp->num_tc ? bp->num_tc : 1;
 
-	return (tx_cp - tx_xdp) * tcs + tx_xdp;
+	if (tx_xdp) {
+		int cp_per_tc = tx_cp / 2;
+
+		cp_per_tc = min(cp_per_tc, rx);
+		return cp_per_tc * (tcs + 1);
+	}
+	return tx_cp * tcs;
 }
 
 static int bnxt_trim_rings(struct bnxt *bp, int *rx, int *tx, int max,
@@ -11493,7 +11542,9 @@ static int bnxt_get_num_msix(struct bnxt *bp)
 
 static int bnxt_init_int_mode(struct bnxt *bp)
 {
-	int i, total_vecs, max, rc, min = 1, ulp_msix, tx_cp, tbl_size;
+	int i, total_vecs, max, rc, min = 1, ulp_msix, tbl_size, req_rx_rings;
+	int min_tx, req_tx_rings, req_cp_rings, req_tx_per_tc, req_tx_xdp;
+	int tcs = bp->num_tc ? bp->num_tc : 1;
 
 	total_vecs = bnxt_get_num_msix(bp);
 	max = bnxt_get_max_func_irqs(bp);
@@ -11528,19 +11579,49 @@ static int bnxt_init_int_mode(struct bnxt *bp)
 		bp->irq_tbl[i].vector = pci_irq_vector(bp->pdev, i);
 
 	bp->total_irqs = total_vecs;
+	req_tx_rings = bp->tx_nr_rings;
+	req_tx_per_tc = bp->tx_nr_rings_per_tc;
+	req_tx_xdp = bp->tx_nr_rings_xdp;
+	req_rx_rings = bp->rx_nr_rings;
+	req_cp_rings = bp->cp_nr_rings;
+
 	/* Trim rings based upon num of vectors allocated */
 	rc = bnxt_trim_rings(bp, &bp->rx_nr_rings, &bp->tx_nr_rings,
 			     total_vecs - ulp_msix, min == 1);
 	if (rc)
 		goto msix_setup_exit;
 
-	tx_cp = bnxt_num_tx_to_cp(bp, bp->tx_nr_rings, bp->tx_nr_rings_xdp,
-				  bp->rx_nr_rings);
-	bp->cp_nr_rings = (min == 1) ?
-			  max_t(int, tx_cp, bp->rx_nr_rings) :
-			  tx_cp + bp->rx_nr_rings;
+	min_tx = bp->tx_nr_rings_xdp ? tcs + 1 : tcs;
+	if (bp->tx_nr_rings < min_tx) {
+		netdev_err(bp->dev, "Not enough MSI-X to satisfy min. TX rings\n");
+		rc = -ENOMEM;
+		goto msix_setup_exit_restore;
+	}
 
+	bnxt_adj_rings(bp);
+
+	if (bp->bnapi && (req_tx_rings != bp->tx_nr_rings ||
+			  req_rx_rings != bp->rx_nr_rings)) {
+		netdev_err(bp->dev, "Cannot shrink rings once NAPI is allocated\n");
+		rc = -ENOSPC;
+		goto msix_setup_exit_restore;
+	}
+
+	if (req_rx_rings != bp->rx_nr_rings) {
+		netdev_warn(bp->dev, "RX rings reduced from %d to %d\n",
+			    req_rx_rings, bp->rx_nr_rings);
+		bnxt_check_rss_tbl_lost(bp, req_rx_rings, bp->rx_nr_rings);
+		if (!netif_is_rxfh_configured(bp->dev))
+			bnxt_set_dflt_rss_indir_tbl(bp, NULL);
+	}
 	return 0;
+
+msix_setup_exit_restore:
+	bp->tx_nr_rings = req_tx_rings;
+	bp->tx_nr_rings_per_tc = req_tx_per_tc;
+	bp->tx_nr_rings_xdp = req_tx_xdp;
+	bp->rx_nr_rings = req_rx_rings;
+	bp->cp_nr_rings = req_cp_rings;
 
 msix_setup_exit:
 	netdev_err(bp->dev, "bnxt_init_int_mode err: %x\n", rc);
@@ -11579,8 +11660,6 @@ static int bnxt_irqs_required(struct bnxt *bp)
 int bnxt_reserve_rings(struct bnxt *bp, bool irq_re_init)
 {
 	bool irq_cleared = false;
-	bool irq_change = false;
-	int tcs = bp->num_tc;
 	int irqs_required;
 	int rc;
 
@@ -11590,7 +11669,6 @@ int bnxt_reserve_rings(struct bnxt *bp, bool irq_re_init)
 	irqs_required = bnxt_irqs_required(bp);
 
 	if (irq_re_init && BNXT_NEW_RM(bp) && irqs_required != bp->total_irqs) {
-		irq_change = true;
 		if (!pci_msix_can_alloc_dyn(bp->pdev) || !bp->irq_tbl) {
 			bnxt_ulp_irq_stop(bp);
 			bnxt_clear_int_mode(bp);
@@ -11602,24 +11680,22 @@ int bnxt_reserve_rings(struct bnxt *bp, bool irq_re_init)
 		if (!rc)
 			rc = bnxt_init_int_mode(bp);
 		bnxt_ulp_irq_restart(bp, rc);
-	} else if (irq_change && !rc) {
-		if (bnxt_change_msix(bp, irqs_required) != irqs_required)
-			rc = -ENOSPC;
+	} else if (irq_re_init && BNXT_NEW_RM(bp) && !rc) {
+		/* __bnxt_reserve_rings() may have shrunk the rings */
+		irqs_required = bnxt_irqs_required(bp);
+		if (irqs_required != bp->total_irqs) {
+			/* Don't bother reducing static IRQs to avoid disrupting
+			 * RoCE.
+			 */
+			if (pci_msix_can_alloc_dyn(bp->pdev) &&
+			    bnxt_change_msix(bp, irqs_required) !=
+			    irqs_required)
+				rc = -ENOSPC;
+		}
 	}
 	if (rc) {
 		netdev_err(bp->dev, "ring reservation/IRQ init failure rc: %d\n", rc);
 		return rc;
-	}
-	if (tcs && (bp->tx_nr_rings_per_tc * tcs !=
-		    bp->tx_nr_rings - bp->tx_nr_rings_xdp)) {
-		netdev_err(bp->dev, "tx ring reservation failure\n");
-		netdev_reset_tc(bp->dev);
-		bp->num_tc = 0;
-		if (bp->tx_nr_rings_xdp)
-			bp->tx_nr_rings_per_tc = bp->tx_nr_rings_xdp;
-		else
-			bp->tx_nr_rings_per_tc = bp->tx_nr_rings;
-		return -ENOMEM;
 	}
 	return 0;
 }
@@ -13118,13 +13194,29 @@ static void bnxt_set_xdp_tx_rings(struct bnxt *bp)
 	bp->tx_nr_rings += bp->tx_nr_rings_xdp;
 }
 
-static void bnxt_adj_tx_rings(struct bnxt *bp)
+static void bnxt_adj_rings(struct bnxt *bp)
 {
-	/* Make adjustments if reserved TX rings are less than requested */
-	bp->tx_nr_rings -= bp->tx_nr_rings_xdp;
-	bp->tx_nr_rings_per_tc = bnxt_tx_nr_rings_per_tc(bp);
-	if (bp->tx_nr_rings_xdp)
-		bnxt_set_xdp_tx_rings(bp);
+	int tcs = bp->num_tc ? bp->num_tc : 1;
+	int rx = bp->rx_nr_rings;
+
+	/* Make adjustments to rings based on TC/XDP/shared rings policies */
+	if (bp->tx_nr_rings_xdp) {
+		tcs++;
+		bp->tx_nr_rings_per_tc = bp->tx_nr_rings / tcs;
+		bp->tx_nr_rings_xdp = bp->tx_nr_rings_per_tc;
+	} else {
+		bp->tx_nr_rings_per_tc = bnxt_tx_nr_rings_per_tc(bp);
+	}
+
+	if (bp->flags & BNXT_FLAG_SHARED_RINGS) {
+		bp->tx_nr_rings_per_tc = min(bp->tx_nr_rings_per_tc, rx);
+		bp->rx_nr_rings = bp->tx_nr_rings_per_tc;
+		if (bp->tx_nr_rings_xdp)
+			bp->tx_nr_rings_xdp = bp->tx_nr_rings_per_tc;
+	}
+
+	bp->tx_nr_rings = bp->tx_nr_rings_per_tc * tcs;
+	bnxt_set_cp_rings(bp, bp->flags & BNXT_FLAG_SHARED_RINGS);
 }
 
 static int __bnxt_open_nic(struct bnxt *bp, bool irq_re_init, bool link_re_init)
@@ -13144,7 +13236,6 @@ static int __bnxt_open_nic(struct bnxt *bp, bool irq_re_init, bool link_re_init)
 	if (rc)
 		return rc;
 
-	bnxt_adj_tx_rings(bp);
 	rc = bnxt_alloc_mem(bp, irq_re_init);
 	if (rc) {
 		netdev_err(bp->dev, "bnxt_alloc_mem err: %x\n", rc);
@@ -16819,7 +16910,6 @@ static int bnxt_set_dflt_rings(struct bnxt *bp, bool sh)
 	if (rc && rc != -ENODEV)
 		netdev_warn(bp->dev, "Unable to reserve tx rings\n");
 
-	bnxt_adj_tx_rings(bp);
 	if (sh)
 		bnxt_adj_dflt_rings(bp, true);
 
@@ -16828,7 +16918,6 @@ static int bnxt_set_dflt_rings(struct bnxt *bp, bool sh)
 		rc = __bnxt_reserve_rings(bp);
 		if (rc && rc != -ENODEV)
 			netdev_warn(bp->dev, "2nd rings reservation failed.\n");
-		bnxt_adj_tx_rings(bp);
 	}
 	if (rc) {
 		bp->tx_nr_rings = 0;
@@ -16857,8 +16946,6 @@ static int bnxt_init_dflt_ring_mode(struct bnxt *bp)
 	rc = bnxt_init_int_mode(bp);
 	if (rc)
 		goto init_dflt_ring_err;
-
-	bnxt_adj_tx_rings(bp);
 
 	bnxt_set_dflt_rfs(bp);
 
@@ -17252,11 +17339,6 @@ static int bnxt_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 	rc = bnxt_init_int_mode(bp);
 	if (rc)
 		goto init_err_pci_clean;
-
-	/* No TC has been set yet and rings may have been trimmed due to
-	 * limited MSIX, so we re-initialize the TX rings per TC.
-	 */
-	bp->tx_nr_rings_per_tc = bp->tx_nr_rings;
 
 	if (BNXT_PF(bp)) {
 		if (!bnxt_pf_wq) {
