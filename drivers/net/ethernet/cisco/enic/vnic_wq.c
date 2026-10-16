@@ -6,9 +6,9 @@
 
 #include <linux/kernel.h>
 #include <linux/errno.h>
+#include <linux/iopoll.h>
 #include <linux/types.h>
 #include <linux/pci.h>
-#include <linux/delay.h>
 #include <linux/slab.h>
 
 #include "vnic_dev.h"
@@ -170,21 +170,21 @@ void vnic_wq_enable(struct vnic_wq *wq)
 
 int vnic_wq_disable(struct vnic_wq *wq)
 {
-	unsigned int wait;
 	struct vnic_dev *vdev = wq->vdev;
+	u32 running;
+	int err;
 
 	iowrite32(0, &wq->ctrl->enable);
 
-	/* Wait for HW to ACK disable request */
-	for (wait = 0; wait < 1000; wait++) {
-		if (!(ioread32(&wq->ctrl->running)))
-			return 0;
-		udelay(10);
-	}
+	/* Poll for up to 500 ms for outstanding operations to drain. */
+	err = read_poll_timeout(ioread32, running, !running, 10, 500000,
+				false, &wq->ctrl->running);
+	if (!err)
+		return 0;
 
 	vdev_neterr(vdev, "Failed to disable WQ[%d]\n", wq->index);
 
-	return -ETIMEDOUT;
+	return err;
 }
 
 void vnic_wq_clean(struct vnic_wq *wq,

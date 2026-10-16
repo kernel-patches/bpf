@@ -71,6 +71,8 @@
 #define PCI_DEVICE_ID_CISCO_VIC_ENET_VF_V2   0x02b7  /* enet SRIOV V2 VF */
 #define PCI_DEVICE_ID_CISCO_VIC_ENET_VF_USNIC 0x00cf /* enet USNIC VF */
 
+static void enic_terminal_dma_quarantine(struct enic *enic);
+
 /* Supported devices */
 static const struct pci_device_id enic_id_table[] = {
 	{ PCI_VDEVICE(CISCO, PCI_DEVICE_ID_CISCO_VIC_ENET) },
@@ -476,8 +478,7 @@ static void enic_notify_check(struct enic *enic)
 
 static irqreturn_t enic_isr_legacy(int irq, void *data)
 {
-	struct net_device *netdev = data;
-	struct enic *enic = netdev_priv(netdev);
+	struct enic *enic = data;
 	unsigned int io_intr = ENIC_LEGACY_IO_INTR;
 	unsigned int err_intr = ENIC_LEGACY_ERR_INTR;
 	unsigned int notify_intr = ENIC_LEGACY_NOTIFY_INTR;
@@ -1563,22 +1564,25 @@ static void enic_notify_timer(struct timer_list *t)
 
 static void enic_free_intr(struct enic *enic)
 {
-	struct net_device *netdev = enic->netdev;
 	unsigned int i;
 
 	enic_free_rx_cpu_rmap(enic);
 	switch (vnic_dev_get_intr_mode(enic->vdev)) {
 	case VNIC_DEV_INTR_MODE_INTX:
-		free_irq(enic->pdev->irq, netdev);
-		break;
 	case VNIC_DEV_INTR_MODE_MSI:
-		free_irq(enic->pdev->irq, enic);
+		if (enic->non_msix_intr_requested) {
+			free_irq(enic->pdev->irq, enic);
+			enic->non_msix_intr_requested = false;
+		}
 		break;
 	case VNIC_DEV_INTR_MODE_MSIX:
-		for (i = 0; i < enic->intr_count; i++)
-			if (enic->msix[i].requested)
+		for (i = 0; i < enic->intr_count; i++) {
+			if (enic->msix[i].requested) {
 				free_irq(enic->msix_entry[i].vector,
 					enic->msix[i].devid);
+				enic->msix[i].requested = false;
+			}
+		}
 		break;
 	default:
 		break;
@@ -1587,23 +1591,28 @@ static void enic_free_intr(struct enic *enic)
 
 static int enic_request_intr(struct enic *enic)
 {
+	enum vnic_dev_intr_mode intr_mode;
 	struct net_device *netdev = enic->netdev;
+	unsigned long irq_flags;
+	irq_handler_t handler;
 	unsigned int i, intr;
 	int err = 0;
 
 	enic_set_rx_cpu_rmap(enic);
-	switch (vnic_dev_get_intr_mode(enic->vdev)) {
+	intr_mode = vnic_dev_get_intr_mode(enic->vdev);
+	switch (intr_mode) {
 
 	case VNIC_DEV_INTR_MODE_INTX:
-
-		err = request_irq(enic->pdev->irq, enic_isr_legacy,
-			IRQF_SHARED, netdev->name, netdev);
-		break;
-
 	case VNIC_DEV_INTR_MODE_MSI:
+		handler = intr_mode == VNIC_DEV_INTR_MODE_INTX ?
+			enic_isr_legacy : enic_isr_msi;
+		irq_flags = intr_mode == VNIC_DEV_INTR_MODE_INTX ?
+			IRQF_SHARED : 0;
 
-		err = request_irq(enic->pdev->irq, enic_isr_msi,
-			0, netdev->name, enic);
+		err = request_irq(enic->pdev->irq, handler, irq_flags,
+				  netdev->name, enic);
+		if (!err)
+			enic->non_msix_intr_requested = true;
 		break;
 
 	case VNIC_DEV_INTR_MODE_MSIX:
@@ -1673,11 +1682,13 @@ static void enic_synchronize_irqs(struct enic *enic)
 	switch (vnic_dev_get_intr_mode(enic->vdev)) {
 	case VNIC_DEV_INTR_MODE_INTX:
 	case VNIC_DEV_INTR_MODE_MSI:
-		synchronize_irq(enic->pdev->irq);
+		if (enic->non_msix_intr_requested)
+			synchronize_irq(enic->pdev->irq);
 		break;
 	case VNIC_DEV_INTR_MODE_MSIX:
 		for (i = 0; i < enic->intr_count; i++)
-			synchronize_irq(enic->msix_entry[i].vector);
+			if (enic->msix[i].requested)
+				synchronize_irq(enic->msix_entry[i].vector);
 		break;
 	default:
 		break;
@@ -1718,11 +1729,51 @@ static void enic_notify_timer_start(struct enic *enic)
 	}
 }
 
+static void enic_datapath_release(struct enic *enic)
+{
+	unsigned int i;
+
+	enic_dev_notify_unset(enic);
+
+	enic_unset_affinity_hint(enic);
+	enic_free_intr(enic);
+
+	for (i = 0; i < enic->wq_count; i++)
+		vnic_wq_clean(&enic->wq[i].vwq, enic_free_wq_buf);
+	for (i = 0; i < enic->rq_count; i++) {
+		vnic_rq_clean(&enic->rq[i].vrq, enic_free_rq_buf);
+		if (enic->rq[i].pool) {
+			page_pool_destroy(enic->rq[i].pool);
+			enic->rq[i].pool = NULL;
+		}
+	}
+	for (i = 0; i < enic->cq_count; i++)
+		vnic_cq_clean(&enic->cq[i]);
+	for (i = 0; i < enic->intr_count; i++)
+		vnic_intr_clean(&enic->intr[i]);
+
+	WRITE_ONCE(enic->datapath_state, ENIC_DMA_DOWN);
+}
+
+static void enic_datapath_quarantine(struct enic *enic)
+{
+	WRITE_ONCE(enic->datapath_state, ENIC_DMA_QUARANTINED);
+	WRITE_ONCE(enic->mbox_send_disabled, true);
+	netif_device_detach(enic->netdev);
+	netif_carrier_off(enic->netdev);
+	/* Bus-master disable contains the failed function but does not return
+	 * ownership of DMA resources which the device may still reference.
+	 */
+	pci_clear_master(enic->pdev);
+}
+
 /* rtnl lock is held, process context */
 static int enic_open(struct net_device *netdev)
 {
 	struct enic *enic = netdev_priv(netdev);
+	unsigned int rqs_enabled = 0;
 	unsigned int i;
+	int disable_err = 0;
 	int err, ret;
 	unsigned int max_pkt_len = netdev->mtu + VLAN_ETH_HLEN;
 	struct page_pool_params pp_params = {
@@ -1736,6 +1787,11 @@ static int enic_open(struct net_device *netdev)
 		.flags = PP_FLAG_DMA_MAP | PP_FLAG_DMA_SYNC_DEV,
 	};
 
+	if (enic_datapath_is_quarantined(enic)) {
+		netdev_err(netdev,
+			   "Datapath DMA remains quarantined until reboot\n");
+		return -EBUSY;
+	}
 	err = enic_request_intr(enic);
 	if (err) {
 		netdev_err(netdev, "Unable to request irq.\n");
@@ -1764,6 +1820,7 @@ static int enic_open(struct net_device *netdev)
 
 		/* enable rq before updating rq desc */
 		vnic_rq_enable(&enic->rq[i].vrq);
+		rqs_enabled++;
 		vnic_rq_fill(&enic->rq[i].vrq, enic_rq_alloc_buf);
 		/* Need at least one buffer on ring to get going */
 		if (vnic_rq_desc_used(&enic->rq[i].vrq) == 0) {
@@ -1802,6 +1859,7 @@ static int enic_open(struct net_device *netdev)
 	enic_rfs_timer_start(enic);
 	if (enic_is_sriov_vf_v2(enic))
 		enic_mbox_vf_link_state_set_running(enic, true);
+	WRITE_ONCE(enic->datapath_state, ENIC_DMA_LIVE);
 
 	return 0;
 
@@ -1814,18 +1872,37 @@ err_out_dev_enable:
 	netif_tx_disable(netdev);
 	if (!enic_is_dynamic(enic) && !enic_is_sriov_vf(enic))
 		enic_dev_del_station_addr(enic);
-	for (i = 0; i < enic->wq_count; i++)
-		vnic_wq_disable(&enic->wq[i].vwq);
-err_out_free_rq:
-	for (i = 0; i < enic->rq_count; i++) {
-		ret = vnic_rq_disable(&enic->rq[i].vrq);
-		if (!ret) {
-			vnic_rq_clean(&enic->rq[i].vrq, enic_free_rq_buf);
-			page_pool_destroy(enic->rq[i].pool);
-			enic->rq[i].pool = NULL;
-		}
+	for (i = 0; i < enic->wq_count; i++) {
+		ret = vnic_wq_disable(&enic->wq[i].vwq);
+		if (ret)
+			netdev_err(netdev,
+				   "WQ %u did not stop during open unwind: %d\n",
+				   i, ret);
+		if (ret && !disable_err)
+			disable_err = ret;
 	}
-	enic_dev_notify_unset(enic);
+err_out_free_rq:
+	for (i = 0; i < rqs_enabled; i++) {
+		ret = vnic_rq_disable(&enic->rq[i].vrq);
+		if (ret)
+			netdev_err(netdev,
+				   "RQ %u did not stop during open unwind: %d\n",
+				   i, ret);
+		if (ret && !disable_err)
+			disable_err = ret;
+	}
+	if (disable_err) {
+		/* A partially stopped datapath remains a single DMA ownership
+		 * graph.  Keep every ring, mapping, page pool, interrupt, and the
+		 * notification allocation for the remainder of this boot.
+		 */
+		enic_datapath_quarantine(enic);
+		return err;
+	}
+	enic_datapath_release(enic);
+
+	return err;
+
 err_out_free_intr:
 	enic_unset_affinity_hint(enic);
 	enic_free_intr(enic);
@@ -1838,7 +1915,14 @@ static int enic_stop(struct net_device *netdev)
 {
 	struct enic *enic = netdev_priv(netdev);
 	unsigned int i;
+	int disable_err = 0;
 	int err;
+
+	/* An internal reset can leave IFF_UP set after software has already
+	 * stopped the datapath.  Never disable NAPI or release rings twice.
+	 */
+	if (READ_ONCE(enic->datapath_state) != ENIC_DMA_LIVE)
+		return 0;
 
 	for (i = 0; i < enic->intr_count; i++) {
 		vnic_intr_mask(&enic->intr[i]);
@@ -1870,30 +1954,41 @@ static int enic_stop(struct net_device *netdev)
 	for (i = 0; i < enic->wq_count; i++) {
 		err = vnic_wq_disable(&enic->wq[i].vwq);
 		if (err)
-			return err;
+			netdev_err(netdev, "WQ %u did not stop: %d\n", i, err);
+		if (err && !disable_err)
+			disable_err = err;
 	}
 	for (i = 0; i < enic->rq_count; i++) {
 		err = vnic_rq_disable(&enic->rq[i].vrq);
 		if (err)
-			return err;
+			netdev_err(netdev, "RQ %u did not stop: %d\n", i, err);
+		if (err && !disable_err)
+			disable_err = err;
 	}
 
-	enic_dev_notify_unset(enic);
-	enic_unset_affinity_hint(enic);
-	enic_free_intr(enic);
-
-	for (i = 0; i < enic->wq_count; i++)
-		vnic_wq_clean(&enic->wq[i].vwq, enic_free_wq_buf);
-	for (i = 0; i < enic->rq_count; i++) {
-		vnic_rq_clean(&enic->rq[i].vrq, enic_free_rq_buf);
-		page_pool_destroy(enic->rq[i].pool);
-		enic->rq[i].pool = NULL;
+	if (disable_err) {
+		/* Even queues which stopped belong to this datapath allocation
+		 * graph.  Retain the graph as a unit when any queue times out.
+		 */
+		enic_datapath_quarantine(enic);
+		return disable_err;
 	}
-	for (i = 0; i < enic->cq_count; i++)
-		vnic_cq_clean(&enic->cq[i]);
-	for (i = 0; i < enic->intr_count; i++)
-		vnic_intr_clean(&enic->intr[i]);
 
+	enic_datapath_release(enic);
+
+	return 0;
+}
+
+int enic_close_for_reconfigure(struct net_device *netdev)
+{
+	int err;
+
+	/* dev_close() cannot propagate an ndo_stop() error. */
+	err = enic_stop(netdev);
+	if (err)
+		return err;
+
+	dev_close(netdev);
 	return 0;
 }
 
@@ -1974,7 +2069,7 @@ static void enic_poll_controller(struct net_device *netdev)
 		enic_isr_msi(enic->pdev->irq, enic);
 		break;
 	case VNIC_DEV_INTR_MODE_INTX:
-		enic_isr_legacy(enic->pdev->irq, netdev);
+		enic_isr_legacy(enic->pdev->irq, enic);
 		break;
 	default:
 		break;
@@ -2258,11 +2353,17 @@ static void enic_admin_chan_reopen(struct enic *enic)
 static void enic_reset(struct work_struct *work)
 {
 	struct enic *enic = container_of(work, struct enic, reset);
+	int stop_err = 0;
+	bool reopen;
 
-	if (!netif_running(enic->netdev))
+	if (enic_datapath_is_quarantined(enic) ||
+	    !netif_running(enic->netdev))
 		return;
 
 	rtnl_lock();
+	reopen = netif_running(enic->netdev);
+	if (!reopen || enic_datapath_is_quarantined(enic))
+		goto unlock;
 
 	/* Stop any activity from infiniband */
 	enic_set_api_busy(enic, true);
@@ -2276,9 +2377,16 @@ static void enic_reset(struct work_struct *work)
 	if (enic_has_admin_chan(enic))
 		enic_admin_channel_close(enic);
 
-	enic_stop(enic->netdev);
+	if (reopen)
+		stop_err = enic_stop(enic->netdev);
 	if (enic_is_sriov_vf_v2(enic))
 		enic_mbox_vf_link_state_reset(enic);
+	if (enic_datapath_is_quarantined(enic)) {
+		netdev_err(enic->netdev,
+			   "Datapath queue did not stop: %d; DMA resources retained until reboot\n",
+			   stop_err);
+		goto reset_out;
+	}
 
 	enic_dev_soft_reset(enic);
 	enic_reset_addr_lists(enic);
@@ -2287,7 +2395,8 @@ static void enic_reset(struct work_struct *work)
 	enic_dev_set_ig_vlan_rewrite_mode(enic);
 	enic_ext_cq(enic);
 
-	enic_open(enic->netdev);
+	if (reopen)
+		enic_open(enic->netdev);
 
 	/* Re-establish the admin/MBOX channel after the data path is back up.
 	 * It was fully torn down by enic_admin_channel_close() above;
@@ -2297,19 +2406,27 @@ static void enic_reset(struct work_struct *work)
 	if (enic_has_admin_chan(enic))
 		enic_admin_chan_reopen(enic);
 
+reset_out:
 	/* Allow infiniband to fiddle with the device again */
 	enic_set_api_busy(enic, false);
 
-	call_netdevice_notifiers(NETDEV_REBOOT, enic->netdev);
+	if (reopen)
+		call_netdevice_notifiers(NETDEV_REBOOT, enic->netdev);
 
+unlock:
 	rtnl_unlock();
 }
 
 static void enic_tx_hang_reset(struct work_struct *work)
 {
 	struct enic *enic = container_of(work, struct enic, tx_hang_reset);
+	int stop_err = 0;
+	bool reopen;
 
 	rtnl_lock();
+	reopen = netif_running(enic->netdev);
+	if (!reopen || enic_datapath_is_quarantined(enic))
+		goto unlock;
 
 	/* Stop any activity from infiniband */
 	enic_set_api_busy(enic, true);
@@ -2322,9 +2439,16 @@ static void enic_tx_hang_reset(struct work_struct *work)
 		enic_admin_channel_close(enic);
 
 	enic_dev_hang_notify(enic);
-	enic_stop(enic->netdev);
+	if (reopen)
+		stop_err = enic_stop(enic->netdev);
 	if (enic_is_sriov_vf_v2(enic))
 		enic_mbox_vf_link_state_reset(enic);
+	if (enic_datapath_is_quarantined(enic)) {
+		netdev_err(enic->netdev,
+			   "Datapath queue did not stop: %d; DMA resources retained until reboot\n",
+			   stop_err);
+		goto hang_reset_out;
+	}
 
 	enic_dev_hang_reset(enic);
 	enic_reset_addr_lists(enic);
@@ -2333,7 +2457,8 @@ static void enic_tx_hang_reset(struct work_struct *work)
 	enic_dev_set_ig_vlan_rewrite_mode(enic);
 	enic_ext_cq(enic);
 
-	enic_open(enic->netdev);
+	if (reopen)
+		enic_open(enic->netdev);
 
 	/* Re-establish the admin/MBOX channel after the data path is back up.
 	 * It was fully torn down by enic_admin_channel_close() above;
@@ -2343,11 +2468,14 @@ static void enic_tx_hang_reset(struct work_struct *work)
 	if (enic_has_admin_chan(enic))
 		enic_admin_chan_reopen(enic);
 
+hang_reset_out:
 	/* Allow infiniband to fiddle with the device again */
 	enic_set_api_busy(enic, false);
 
-	call_netdevice_notifiers(NETDEV_REBOOT, enic->netdev);
+	if (reopen)
+		call_netdevice_notifiers(NETDEV_REBOOT, enic->netdev);
 
+unlock:
 	rtnl_unlock();
 }
 
@@ -2678,9 +2806,12 @@ free_queues:
 	return -ENOMEM;
 }
 
-static void enic_dev_deinit(struct enic *enic)
+static void enic_del_napi(struct enic *enic)
 {
 	unsigned int i;
+
+	if (!enic->napi_added)
+		return;
 
 	for (i = 0; i < enic->rq_count; i++)
 		__netif_napi_del(&enic->napi[i]);
@@ -2691,6 +2822,12 @@ static void enic_dev_deinit(struct enic *enic)
 
 	/* observe RCU grace period after __netif_napi_del() calls */
 	synchronize_net();
+	enic->napi_added = false;
+}
+
+static void enic_dev_deinit(struct enic *enic)
+{
+	enic_del_napi(enic);
 
 	enic_free_vnic_resources(enic);
 	enic_clear_intr_mode(enic);
@@ -2783,6 +2920,7 @@ static int enic_dev_init(struct enic *enic)
 				       enic_poll_msix_wq);
 		break;
 	}
+	enic->napi_added = true;
 
 	return 0;
 
@@ -3035,7 +3173,10 @@ static int enic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		goto err_out_free_netdev;
 	}
 
-	err = pci_request_regions(pdev, DRV_NAME);
+	/* Terminal DMA quarantine may retain the PCI regions across module
+	 * removal. Use the PCI device name because it outlives module rodata.
+	 */
+	err = pci_request_regions(pdev, dev_name(dev));
 	if (err) {
 		dev_err(dev, "Cannot request PCI regions, aborting\n");
 		goto err_out_disable_device;
@@ -3376,12 +3517,72 @@ err_out_free_netdev:
 	return err;
 }
 
+static int enic_datapath_recheck_on_remove(struct enic *enic)
+{
+	int disable_err = 0;
+	unsigned int i;
+	int err;
+
+	if (!enic_datapath_is_quarantined(enic))
+		return 0;
+
+	/* Removal is the last opportunity to observe that every queue drained.
+	 * Keep the complete graph if even one queue still reports RUNNING.
+	 */
+	for (i = 0; i < enic->wq_count; i++) {
+		err = vnic_wq_disable(&enic->wq[i].vwq);
+		if (err && !disable_err)
+			disable_err = err;
+	}
+	for (i = 0; i < enic->rq_count; i++) {
+		err = vnic_rq_disable(&enic->rq[i].vrq);
+		if (err && !disable_err)
+			disable_err = err;
+	}
+	if (disable_err)
+		return disable_err;
+
+	dev_info(&enic->pdev->dev,
+		 "All datapath queues stopped at remove; releasing DMA graph\n");
+	enic_datapath_release(enic);
+
+	return 0;
+}
+
+static void enic_terminal_dma_quarantine(struct enic *enic)
+{
+	unsigned int i;
+
+	/* Detach every CPU callback before retaining the DMA owner graph.  The
+	 * ordinary stop path can return before freeing IRQs when a queue does
+	 * not stop, so each ownership-aware operation must be idempotent.
+	 */
+	for (i = 0; i < enic->intr_count; i++) {
+		vnic_intr_mask(&enic->intr[i]);
+		(void)vnic_intr_masked(&enic->intr[i]);
+	}
+	if (vnic_dev_get_intr_mode(enic->vdev) == VNIC_DEV_INTR_MODE_INTX)
+		pci_intx(enic->pdev, 0);
+	enic_synchronize_irqs(enic);
+	enic_unset_affinity_hint(enic);
+	enic_free_intr(enic);
+	enic_del_napi(enic);
+	enic_clear_intr_mode(enic);
+	enic_free_affinity_hint(enic);
+
+	/* Preserve netdev, vdev, BAR mappings, regions, rings, and their buffer
+	 * metadata because queue ownership remains unresolved until reboot.
+	 */
+	pci_clear_master(enic->pdev);
+}
+
 static void enic_remove(struct pci_dev *pdev)
 {
 	struct net_device *netdev = pci_get_drvdata(pdev);
 
 	if (netdev) {
 		struct enic *enic = netdev_priv(netdev);
+		bool retain_dma = false;
 
 		disable_work_sync(&enic->reset);
 		disable_work_sync(&enic->tx_hang_reset);
@@ -3418,14 +3619,25 @@ static void enic_remove(struct pci_dev *pdev)
 				pci_disable_sriov(pdev);
 		}
 #endif
+		if (enic_datapath_is_quarantined(enic))
+			enic_datapath_recheck_on_remove(enic);
+		if (enic_datapath_is_quarantined(enic)) {
+			dev_err(&pdev->dev,
+				"Queue DMA ownership unresolved; retaining resources until reboot\n");
+			enic_terminal_dma_quarantine(enic);
+			retain_dma = true;
+			goto disable_device;
+		}
 		enic_dev_deinit(enic);
 		vnic_dev_close(enic->vdev);
 		kfree(enic->pp);
 		vnic_dev_unregister(enic->vdev);
 		enic_iounmap(enic);
 		pci_release_regions(pdev);
+disable_device:
 		pci_disable_device(pdev);
-		free_netdev(netdev);
+		if (!retain_dma)
+			free_netdev(netdev);
 	}
 }
 
