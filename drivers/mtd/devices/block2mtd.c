@@ -139,44 +139,38 @@ static int block2mtd_read(struct mtd_info *mtd, loff_t from, size_t len,
 static int _block2mtd_write(struct block2mtd_dev *dev, const u_char *buf,
 		loff_t to, size_t len, size_t *retlen)
 {
-	struct page *page;
 	struct address_space *mapping = dev->bdev_file->f_mapping;
-	pgoff_t index = to >> PAGE_SHIFT;	// page index
-	int offset = to & ~PAGE_MASK;	// page offset
-	int cpylen;
+	struct folio *folio;
+	size_t offset, cpylen;
+	void *p;
 
 	while (len) {
-		if ((offset+len) > PAGE_SIZE)
-			cpylen = PAGE_SIZE - offset;	// multiple pages
-		else
-			cpylen = len;			// this page
-		len = len - cpylen;
+		folio = read_mapping_folio(mapping, to >> PAGE_SHIFT, NULL);
+		if (IS_ERR(folio))
+			return PTR_ERR(folio);
 
-retry:
-		page = page_read(mapping, index);
-		if (IS_ERR(page))
-			return PTR_ERR(page);
-
-		if (memcmp(page_address(page)+offset, buf, cpylen)) {
-			lock_page(page);
-			if (page_folio(page)->mapping != mapping) {
-				unlock_page(page);
-				put_page(page);
-				goto retry;
+		offset = offset_in_folio(folio, to);
+		cpylen = min(len, folio_size(folio) - offset);
+		p = folio_address(folio) + offset;
+		if (memcmp(p, buf, cpylen)) {
+			folio_lock(folio);
+			if (folio->mapping != mapping) {
+				folio_unlock(folio);
+				folio_put(folio);
+				continue;
 			}
-			memcpy(page_address(page) + offset, buf, cpylen);
-			set_page_dirty(page);
-			unlock_page(page);
+			memcpy(p, buf, cpylen);
+			folio_mark_dirty(folio);
+			folio_unlock(folio);
 			balance_dirty_pages_ratelimited(mapping);
 		}
-		put_page(page);
+		folio_put(folio);
 
 		if (retlen)
 			*retlen += cpylen;
-
 		buf += cpylen;
-		offset = 0;
-		index++;
+		to += cpylen;
+		len -= cpylen;
 	}
 	return 0;
 }
