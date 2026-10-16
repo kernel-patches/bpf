@@ -47,46 +47,38 @@ struct block2mtd_dev {
 static LIST_HEAD(blkmtd_device_list);
 
 
-static struct page *page_read(struct address_space *mapping, pgoff_t index)
-{
-	return read_mapping_page(mapping, index, NULL);
-}
-
 /* erase a specified part of the device */
 static int _block2mtd_erase(struct block2mtd_dev *dev, loff_t to, size_t len)
 {
 	struct address_space *mapping = dev->bdev_file->f_mapping;
-	struct page *page;
-	pgoff_t index = to >> PAGE_SHIFT;	// page index
-	int pages = len >> PAGE_SHIFT;
-	u_long *p;
-	u_long *max;
+	struct folio *folio;
+	size_t offset, chunk;
+	void *p;
 
-	while (pages) {
-retry:
-		page = page_read(mapping, index);
-		if (IS_ERR(page))
-			return PTR_ERR(page);
+	while (len) {
+		folio = read_mapping_folio(mapping, to >> PAGE_SHIFT, NULL);
+		if (IS_ERR(folio))
+			return PTR_ERR(folio);
 
-		max = page_address(page) + PAGE_SIZE;
-		for (p=page_address(page); p<max; p++)
-			if (*p != -1UL) {
-				lock_page(page);
-				if (page_folio(page)->mapping != mapping) {
-					unlock_page(page);
-					put_page(page);
-					goto retry;
-				}
-				memset(page_address(page), 0xff, PAGE_SIZE);
-				set_page_dirty(page);
-				unlock_page(page);
-				balance_dirty_pages_ratelimited(mapping);
-				break;
+		offset = offset_in_folio(folio, to);
+		chunk = min(len, folio_size(folio) - offset);
+		p = folio_address(folio) + offset;
+		if (memchr_inv(p, 0xff, chunk)) {
+			folio_lock(folio);
+			if (folio->mapping != mapping) {
+				folio_unlock(folio);
+				folio_put(folio);
+				continue;
 			}
+			memset(p, 0xff, chunk);
+			folio_mark_dirty(folio);
+			folio_unlock(folio);
+			balance_dirty_pages_ratelimited(mapping);
+		}
+		folio_put(folio);
 
-		put_page(page);
-		pages--;
-		index++;
+		to += chunk;
+		len -= chunk;
 	}
 	return 0;
 }
