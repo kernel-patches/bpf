@@ -488,70 +488,49 @@ static int sit9531x_output_forced_hiz(struct sit9531x_dev *sitdev,
 					muted);
 }
 
-/* Attempts to re-lock the output loops before reporting them open. */
-#define SIT9531X_LOOP_LOCK_TRIES	3
-
 /*
- * sit9531x_prg_abort - leave the programming state without committing
+ * sit9531x_output_state_refresh - read an output's mute state back
  *
- * Entering the state is two writes, and the second can fail with the debug
- * block already unlocked and the part possibly already in PRG_CMD.  There
- * is nothing to commit in that case, but the loops still have to be closed
- * and the debug key put back, which is otherwise only done by
- * sit9531x_prg_commit().
+ * Used when a mute could not be confirmed at the time it was written.  The
+ * driver does not poll output state, so without this the cached value would
+ * stand until something else happened to write it.
+ *
+ * Caller must hold sitdev->multiop_lock.
  */
-static void sit9531x_prg_abort(struct sit9531x_dev *sitdev)
+int sit9531x_output_state_refresh(struct sit9531x_dev *sitdev, u8 out_idx)
 {
-	int rc = -EIO;
-	u8 attempt;
-
-	for (attempt = 0; attempt < SIT9531X_LOOP_LOCK_TRIES; attempt++) {
-		rc = sit9531x_write_u8(sitdev, SIT9531X_REG_PRG_DIR_GEN,
-				       SIT9531X_LOOP_LOCK);
-		if (!rc)
-			break;
-		usleep_range(1000, 2000);
-	}
-	if (rc)
-		dev_err(sitdev->dev,
-			"output loops left unlocked after a failed entry: %d\n",
-			rc);
-
-	sit9531x_write_u8(sitdev, SIT9531X_REG_OUTSYS_DEBUG,
-			  SIT9531X_DEBUG_LOCK_VAL);
-}
-
-/*
- * Enter the output-system programming state: unlock the debug
- * registers on Page 3 and issue the PRG_CMD state command.  Register
- * writes that reconfigure the output system only take effect when
- * they are made inside this state.
- */
-static int sit9531x_prg_enter(struct sit9531x_dev *sitdev)
-{
+	bool muted;
 	int rc;
 
-	rc = sit9531x_write_u8(sitdev, SIT9531X_REG_OUTSYS_DEBUG,
-			       SIT9531X_DEBUG_UNLOCK_VAL);
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	rc = sit9531x_output_forced_hiz(sitdev, out_idx, &muted);
 	if (rc)
 		return rc;
 
-	rc = sit9531x_write_u8(sitdev, SIT9531X_REG_PRG_DIR_GEN,
-			       SIT9531X_PRG_CMD_STATE);
-	if (rc) {
-		/*
-		 * The debug block is unlocked at this point, and a transfer
-		 * that reported an error may still have reached the part --
-		 * which would leave the device in PRG_CMD with its output
-		 * loops open.  Callers skip the commit when the entry
-		 * fails, so close both here.
-		 */
-		sit9531x_prg_abort(sitdev);
-		return rc;
-	}
+	sitdev->out[out_idx].enabled = !muted;
+	sitdev->out[out_idx].state_stale = false;
 
 	return 0;
 }
+
+static int sit9531x_hiz_set_bit(struct sit9531x_dev *sitdev,
+				unsigned int reg, u8 bit, bool set)
+{
+	u8 cur, new_val;
+	int rc;
+
+	rc = sit9531x_read_u8(sitdev, reg, &cur);
+	if (rc)
+		return rc;
+
+	new_val = set ? (cur | BIT(bit)) : (cur & ~BIT(bit));
+
+	return sit9531x_write_u8(sitdev, reg, new_val);
+}
+
+/* Attempts to re-lock the output loops before reporting them open. */
+#define SIT9531X_LOOP_LOCK_TRIES	3
 
 /*
  * Commit a programming sequence started by sit9531x_prg_enter():
@@ -620,6 +599,251 @@ static int sit9531x_prg_commit(struct sit9531x_dev *sitdev)
 			 rc3);
 
 	return 0;
+}
+
+/*
+ * Enter the output-system programming state: unlock the debug
+ * registers on Page 3 and issue the PRG_CMD state command.  Register
+ * writes that reconfigure the output system only take effect when
+ * they are made inside this state.
+ */
+static int sit9531x_prg_enter(struct sit9531x_dev *sitdev)
+{
+	int rc;
+
+	rc = sit9531x_write_u8(sitdev, SIT9531X_REG_OUTSYS_DEBUG,
+			       SIT9531X_DEBUG_UNLOCK_VAL);
+	if (rc)
+		return rc;
+
+	rc = sit9531x_write_u8(sitdev, SIT9531X_REG_PRG_DIR_GEN,
+			       SIT9531X_PRG_CMD_STATE);
+	if (rc) {
+		/*
+		 * The debug block is unlocked at this point, and a transfer
+		 * that reported an error may still have reached the part --
+		 * which would leave the device in PRG_CMD with its output
+		 * loops open.  Callers skip the commit when the entry fails,
+		 * so leave the state here the way every completed sequence
+		 * does: nothing was changed, so the update commits what the
+		 * part already holds, the loops are re-locked, and the
+		 * settling time is waited out before the caller drops the
+		 * lock and the next request programs the part.  The entry
+		 * failure is the error to report.
+		 */
+		sit9531x_prg_commit(sitdev);
+		return rc;
+	}
+
+	return 0;
+}
+
+/*
+ * sit9531x_output_hiz_write - mute or unmute an output
+ *
+ * Muting takes control of the pin (MASK=1) and forces it to Hi-Z
+ * (STATE=0) on every Hi-Z pair of the slot -- differential, CMOS OutP
+ * and CMOS OutN -- because the output must go quiet whichever way it is
+ * wired; unmuting releases the override on all of them and hands the pin
+ * back to the device.  The caller must already be in the programming
+ * state.
+ */
+static int sit9531x_output_hiz_write(struct sit9531x_dev *sitdev, u8 slot,
+				     bool mute)
+{
+	u8 mask[SIT9531X_HIZ_PAIRS], state[SIT9531X_HIZ_PAIRS];
+	struct sit9531x_hiz_pair p[SIT9531X_HIZ_PAIRS];
+	int i, rc, undo_rc;
+
+	sit9531x_output_get_hiz_regs(slot, p);
+
+	if (!mute) {
+		for (i = 0; i < SIT9531X_HIZ_PAIRS; i++) {
+			rc = sit9531x_hiz_set_bit(sitdev, p[i].mask, p[i].bit,
+						  false);
+			if (rc)
+				return rc;
+		}
+		return 0;
+	}
+
+	/*
+	 * Remember every pair as it was: if the mute fails part-way, that
+	 * is what the pad goes back to -- which may already be a mute, from
+	 * an earlier request or from the loaded profile.
+	 */
+	for (i = 0; i < SIT9531X_HIZ_PAIRS; i++) {
+		rc = sit9531x_read_u8(sitdev, p[i].state, &state[i]);
+		if (rc)
+			return rc;
+		rc = sit9531x_read_u8(sitdev, p[i].mask, &mask[i]);
+		if (rc)
+			return rc;
+	}
+
+	/*
+	 * Forced value first, override enable second.  Muted is decoded as
+	 * MASK set with STATE clear, so enabling the override while STATE
+	 * still holds whatever the loaded configuration left there can pin
+	 * the pad driven for the width of an I2C transfer.
+	 */
+	for (i = 0; i < SIT9531X_HIZ_PAIRS; i++) {
+		rc = sit9531x_hiz_set_bit(sitdev, p[i].state, p[i].bit, false);
+		if (!rc)
+			rc = sit9531x_hiz_set_bit(sitdev, p[i].mask, p[i].bit,
+						  true);
+		if (rc)
+			break;
+	}
+	if (!rc)
+		return 0;
+
+	/*
+	 * Only part of the mute reached the device.  Put every pair it may
+	 * have touched back to the bits read above -- override first, then
+	 * value, the reverse of the order they went on -- so the pad ends
+	 * where the request started rather than on part of a mute, or
+	 * un-muted when it was muted before.
+	 */
+	for (; i >= 0; i--) {
+		u8 bit = BIT(p[i].bit);
+
+		undo_rc = sit9531x_hiz_set_bit(sitdev, p[i].mask, p[i].bit,
+					       mask[i] & bit);
+		if (!undo_rc)
+			undo_rc = sit9531x_hiz_set_bit(sitdev, p[i].state,
+						       p[i].bit,
+						       state[i] & bit);
+		if (undo_rc)
+			dev_err(sitdev->dev,
+				"slot%u: Hi-Z override left part applied (%d)\n",
+				slot, undo_rc);
+	}
+
+	return rc;
+}
+
+/*
+ * sit9531x_output_disable - mute an output (force Hi-Z)
+ * @index:	logical output index (0..info->num_outputs-1)
+ *
+ * Sets MASK and clears STATE on every Hi-Z pair of the slot, differential
+ * and both CMOS pads, so that the output is muted regardless of its
+ * electrical configuration.  The
+ * writes are wrapped in the PRG_CMD / NVM update / loop lock sequence
+ * so the new state is applied by the hardware.
+ *
+ * Caller must hold sitdev->multiop_lock.
+ */
+int sit9531x_output_disable(struct sit9531x_dev *sitdev, u8 index)
+{
+	const struct sit9531x_chip_info *info = sitdev->info;
+	int rc, ret, state_rc;
+	bool muted;
+	u8 slot;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (index >= info->num_outputs)
+		return -EINVAL;
+
+	slot = info->clkout_map[index];
+	rc = sit9531x_prg_enter(sitdev);
+	if (rc)
+		return rc;
+
+	rc = sit9531x_output_hiz_write(sitdev, slot, true);
+
+	/*
+	 * Always leave the PRG_CMD programming state, even on a mid-sequence
+	 * write failure: prg_enter() unlocked the output loops, so returning
+	 * without prg_commit() would strand the chip in the programming state
+	 * with the loops unlocked.  Best effort -- keep the first error.
+	 */
+	ret = sit9531x_prg_commit(sitdev);
+	if (ret && !rc)
+		rc = ret;
+
+	/*
+	 * Keep the software state aligned to what hardware now drives even
+	 * when one write in the sequence failed. The commit above may have
+	 * applied a partial mask/state combination.
+	 */
+	state_rc = sit9531x_output_forced_hiz(sitdev, index, &muted);
+	if (!state_rc) {
+		sitdev->out[index].enabled = !muted;
+		sitdev->out[index].state_stale = false;
+	} else {
+		/*
+		 * The writes may well have landed; what failed is the proof.
+		 * Mark the cached state for a read-through rather than
+		 * reporting the value it had before this call.
+		 */
+		sitdev->out[index].state_stale = true;
+		if (!rc)
+			rc = state_rc;
+	}
+
+	return rc;
+}
+
+/*
+ * sit9531x_output_enable - un-mute an output (active state)
+ * @index:	logical output index (0..info->num_outputs-1)
+ *
+ * Releases MASK on every Hi-Z pair so the device drives the output
+ * again as the loaded profile configures it.  The writes are wrapped
+ * in the PRG_CMD / NVM update / loop lock sequence so the new state is
+ * applied by the hardware.
+ *
+ * Caller must hold sitdev->multiop_lock.
+ */
+int sit9531x_output_enable(struct sit9531x_dev *sitdev, u8 index)
+{
+	const struct sit9531x_chip_info *info = sitdev->info;
+	int rc, ret, state_rc;
+	bool muted;
+	u8 slot;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (index >= info->num_outputs)
+		return -EINVAL;
+
+	slot = info->clkout_map[index];
+	rc = sit9531x_prg_enter(sitdev);
+	if (rc)
+		return rc;
+
+	rc = sit9531x_output_hiz_write(sitdev, slot, false);
+
+	/*
+	 * Always leave the PRG_CMD programming state, even on a mid-sequence
+	 * write failure: prg_enter() unlocked the output loops, so returning
+	 * without prg_commit() would strand the chip in the programming state
+	 * with the loops unlocked.  Best effort -- keep the first error.
+	 */
+	ret = sit9531x_prg_commit(sitdev);
+	if (ret && !rc)
+		rc = ret;
+
+	/* See sit9531x_output_disable(): commit can apply part of it. */
+	state_rc = sit9531x_output_forced_hiz(sitdev, index, &muted);
+	if (!state_rc) {
+		sitdev->out[index].enabled = !muted;
+		sitdev->out[index].state_stale = false;
+	} else {
+		/*
+		 * The writes may well have landed; what failed is the proof.
+		 * Mark the cached state for a read-through rather than
+		 * reporting the value it had before this call.
+		 */
+		sitdev->out[index].state_stale = true;
+		if (!rc)
+			rc = state_rc;
+	}
+
+	return rc;
 }
 
 /*
@@ -2515,6 +2739,8 @@ static int sit9531x_out_state_fetch(struct sit9531x_dev *sitdev, u8 index)
 	if (rc)
 		return rc;
 
+	sitdev->out[index].state_stale = false;
+
 	/*
 	 * Each PLL page holds the PLL's output-enable mask, twelve bits:
 	 * bits 0-7 in OUT_MAP_LO and bits 8-11 in OUT_MAP_HI[3:0].  PLLA and
@@ -3323,7 +3549,7 @@ static void sit9531x_dpll_pin_unregister(struct sit9531x_dpll_pin *pin)
 	 * afterwards leaves a window where the field still reads as live
 	 * and the pin behind it is already gone.
 	 */
-	pin->dpll_pin = NULL;
+	WRITE_ONCE(pin->dpll_pin, NULL);
 
 	dpll_pin_unregister(sitdpll->dpll_dev, dpll_pin, ops, pin);
 	dpll_pin_put(dpll_pin, &pin->tracker);
@@ -3373,8 +3599,8 @@ static void sit9531x_dpll_pins_unregister(struct sit9531x_dpll *sitdpll)
  * @index:	pin hardware index
  *
  * For input pins: delegate to sit9531x_input_pin_is_registrable().
- * A pin class whose state callback the tree does not have yet is not
- * registrable: the core refuses a pin without one.
+ * For output pins: the pin is registrable if this DPLL is routed to it,
+ * whether or not it is currently driving.
  *
  * Return: true if pin should be registered, false otherwise
  */
@@ -3384,13 +3610,23 @@ static bool sit9531x_dpll_pin_is_registrable(struct sit9531x_dpll *sitdpll,
 {
 	struct sit9531x_dev *sitdev = sitdpll->dev;
 
-	if (dir != DPLL_PIN_DIRECTION_INPUT)
+	if (dir == DPLL_PIN_DIRECTION_INPUT) {
+		if (index == SIT9531X_MAX_INPUTS)
+			return true;
+		if (index == SIT9531X_INTSYNC_PIN_ID)
+			return false;
+
+		return sit9531x_input_pin_is_registrable(sitdev, index);
+	}
+
+	if (index == SIT9531X_INTSYNC_OUT_PIN_ID)
 		return false;
 
-	if (index == SIT9531X_MAX_INPUTS)
-		return true;
+	if (index >= sitdev->info->num_outputs)
+		return false;
 
-	return sit9531x_input_pin_is_registrable(sitdev, index);
+	return sitdev->out[index].pll_idx == sitdpll->id &&
+	       sitdev->out[index].routed;
 }
 
 /*
