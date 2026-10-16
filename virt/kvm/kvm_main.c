@@ -10,6 +10,8 @@
  *   Yaniv Kamay  <yaniv@qumranet.com>
  */
 
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include <kvm/iodev.h>
 
 #include <linux/kvm_host.h>
@@ -470,7 +472,7 @@ static void kvm_vcpu_destroy(struct kvm_vcpu *vcpu)
 	kvm_dirty_ring_free(&vcpu->dirty_ring);
 
 	/*
-	 * No need for rcu_read_lock as VCPU_RUN is the only place that changes
+	 * No need for rcu_read_lock as KVM_RUN is the only place that changes
 	 * the vcpu->pid pointer, and at destruction time all file descriptors
 	 * are already gone.
 	 */
@@ -813,6 +815,16 @@ static void kvm_mmu_notifier_invalidate_range_end(struct mmu_notifier *mn,
 
 	/* Pairs with the increment in range_start(). */
 	spin_lock(&kvm->mn_invalidate_lock);
+	kvm->gpc_invalidate_seq++;
+
+	/*
+	 * As with the MMU sequence counter and mmu_invalidate_in_progress, the
+	 * GPC sequence increase must be visible before the invalidate count
+	 * goes to zero.  Pairs with the smp_rmb() in
+	 * mmu_notifier_retry_cache().
+	 */
+	smp_wmb();
+
 	if (!WARN_ON_ONCE(!kvm->mn_active_invalidate_count))
 		--kvm->mn_active_invalidate_count;
 	wake = !kvm->mn_active_invalidate_count;
@@ -1013,7 +1025,7 @@ static int kvm_create_vm_debugfs(struct kvm *kvm, const char *fdname)
 	mutex_lock(&kvm_debugfs_lock);
 	dent = debugfs_lookup(dir_name, kvm_debugfs_dir);
 	if (dent) {
-		pr_warn_ratelimited("KVM: debugfs: duplicate directory %s\n", dir_name);
+		pr_warn_ratelimited("debugfs: duplicate directory %s\n", dir_name);
 		dput(dent);
 		mutex_unlock(&kvm_debugfs_lock);
 		return 0;
@@ -1314,7 +1326,7 @@ void kvm_get_kvm(struct kvm *kvm)
 {
 	refcount_inc(&kvm->users_count);
 }
-EXPORT_SYMBOL_GPL(kvm_get_kvm);
+EXPORT_SYMBOL_FOR_KVM_INTERNAL(kvm_get_kvm);
 
 /*
  * Make sure the vm is not during destruction, which is a safe version of
@@ -1324,14 +1336,14 @@ bool kvm_get_kvm_safe(struct kvm *kvm)
 {
 	return refcount_inc_not_zero(&kvm->users_count);
 }
-EXPORT_SYMBOL_GPL(kvm_get_kvm_safe);
+EXPORT_SYMBOL_FOR_KVM_INTERNAL(kvm_get_kvm_safe);
 
 void kvm_put_kvm(struct kvm *kvm)
 {
 	if (refcount_dec_and_test(&kvm->users_count))
 		kvm_destroy_vm(kvm);
 }
-EXPORT_SYMBOL_GPL(kvm_put_kvm);
+EXPORT_SYMBOL_FOR_KVM_INTERNAL(kvm_put_kvm);
 
 /*
  * Used to put a reference that was taken on behalf of an object associated
@@ -1351,6 +1363,8 @@ static int kvm_vm_release(struct inode *inode, struct file *filp)
 	struct kvm *kvm = filp->private_data;
 
 	kvm_irqfd_release(kvm);
+
+	WRITE_ONCE(kvm->file, NULL);
 
 	kvm_put_kvm(kvm);
 	return 0;
@@ -4088,7 +4102,7 @@ static vm_fault_t kvm_vcpu_fault(struct vm_fault *vmf)
 	else if (vmf->pgoff == KVM_PIO_PAGE_OFFSET)
 		page = virt_to_page(vcpu->arch.pio_data);
 #endif
-#ifdef CONFIG_KVM_MMIO
+#ifndef __KVM_NO_MMIO
 	else if (vmf->pgoff == KVM_COALESCED_MMIO_PAGE_OFFSET)
 		page = virt_to_page(vcpu->kvm->coalesced_mmio_ring);
 #endif
@@ -4142,9 +4156,9 @@ static struct file_operations kvm_vcpu_fops = {
  */
 static int create_vcpu_fd(struct kvm_vcpu *vcpu)
 {
-	char name[8 + 1 + ITOA_MAX_LEN + 1];
+	char name[sizeof(__stringify(KVM_DEV_NAME) "-vcpu:") + ITOA_MAX_LEN + 1];
 
-	snprintf(name, sizeof(name), "kvm-vcpu:%d", vcpu->vcpu_id);
+	snprintf(name, sizeof(name), __stringify(KVM_DEV_NAME) "-vcpu:%d", vcpu->vcpu_id);
 	return anon_inode_getfd(name, &kvm_vcpu_fops, vcpu, O_RDWR | O_CLOEXEC);
 }
 
@@ -4338,9 +4352,9 @@ static int kvm_vcpu_ioctl_get_stats_fd(struct kvm_vcpu *vcpu)
 {
 	int fd;
 	struct file *file;
-	char name[15 + ITOA_MAX_LEN + 1];
+	char name[sizeof(__stringify(KVM_DEV_NAME) "-vcpu-stats:") + ITOA_MAX_LEN + 1];
 
-	snprintf(name, sizeof(name), "kvm-vcpu-stats:%d", vcpu->vcpu_id);
+	snprintf(name, sizeof(name), __stringify(KVM_DEV_NAME) "-vcpu-stats:%d", vcpu->vcpu_id);
 
 	fd = get_unused_fd_flags(O_CLOEXEC);
 	if (fd < 0)
@@ -4363,7 +4377,7 @@ static int kvm_vcpu_ioctl_get_stats_fd(struct kvm_vcpu *vcpu)
 static int kvm_vcpu_pre_fault_memory(struct kvm_vcpu *vcpu,
 				     struct kvm_pre_fault_memory *range)
 {
-	int idx;
+	int idx, err;
 	long r;
 	u64 full_size;
 
@@ -4374,6 +4388,14 @@ static int kvm_vcpu_pre_fault_memory(struct kvm_vcpu *vcpu,
 	    !PAGE_ALIGNED(range->size) ||
 	    range->gpa + range->size <= range->gpa)
 		return -EINVAL;
+
+	/*
+	 * Certain architectures (e.g. arm64) need to reject the ioctl 'early'
+	 * before vcpu_load().
+	 */
+	err = kvm_arch_pre_fault_allowed(vcpu);
+	if (err)
+		return err;
 
 	vcpu_load(vcpu);
 	idx = srcu_read_lock(&vcpu->kvm->srcu);
@@ -4899,7 +4921,7 @@ static int kvm_vm_ioctl_check_extension_generic(struct kvm *kvm, long arg)
 	case KVM_CAP_DESTROY_MEMORY_REGION_WORKS:
 	case KVM_CAP_JOIN_MEMORY_REGIONS_WORKS:
 	case KVM_CAP_INTERNAL_ERROR_DATA:
-#ifdef CONFIG_HAVE_KVM_MSI
+#ifdef __KVM_HAVE_MSI
 	case KVM_CAP_SIGNAL_MSI:
 #endif
 #ifdef CONFIG_HAVE_KVM_IRQCHIP
@@ -4910,7 +4932,7 @@ static int kvm_vm_ioctl_check_extension_generic(struct kvm *kvm, long arg)
 	case KVM_CAP_ENABLE_CAP_VM:
 	case KVM_CAP_HALT_POLL:
 		return 1;
-#ifdef CONFIG_KVM_MMIO
+#ifndef __KVM_NO_MMIO
 	case KVM_CAP_COALESCED_MMIO:
 		return KVM_COALESCED_MMIO_PAGE_OFFSET;
 	case KVM_CAP_COALESCED_PIO:
@@ -5153,7 +5175,7 @@ static int kvm_vm_ioctl_get_stats_fd(struct kvm *kvm)
 	if (fd < 0)
 		return fd;
 
-	file = anon_inode_getfile_fmode("kvm-vm-stats",
+	file = anon_inode_getfile_fmode(__stringify(KVM_DEV_NAME) "-vm-stats",
 			&kvm_vm_stats_fops, kvm, O_RDONLY, FMODE_PREAD);
 	if (IS_ERR(file)) {
 		put_unused_fd(fd);
@@ -5251,7 +5273,7 @@ static long kvm_vm_ioctl(struct file *filp,
 		break;
 	}
 #endif
-#ifdef CONFIG_KVM_MMIO
+#ifndef __KVM_NO_MMIO
 	case KVM_REGISTER_COALESCED_MMIO: {
 		struct kvm_coalesced_mmio_zone zone;
 
@@ -5289,7 +5311,7 @@ static long kvm_vm_ioctl(struct file *filp,
 		r = kvm_ioeventfd(kvm, &data);
 		break;
 	}
-#ifdef CONFIG_HAVE_KVM_MSI
+#ifdef __KVM_HAVE_MSI
 	case KVM_SIGNAL_MSI: {
 		struct kvm_msi msi;
 
@@ -5500,11 +5522,16 @@ static struct file_operations kvm_vm_fops = {
 	KVM_COMPAT(kvm_vm_compat_ioctl),
 };
 
-bool file_is_kvm(struct file *file)
+#ifdef kvm_file_to_kvm_arch
+struct kvm *kvm_file_to_kvm_fn(struct file *file)
 {
-	return file && file->f_op == &kvm_vm_fops;
+	if (!file || file->f_op != &kvm_vm_fops)
+		return NULL;
+
+	return file->private_data;
 }
-EXPORT_SYMBOL_FOR_KVM_INTERNAL(file_is_kvm);
+EXPORT_SYMBOL_GPL(kvm_file_to_kvm_fn);
+#endif
 
 static int kvm_dev_ioctl_create_vm(unsigned long type)
 {
@@ -5525,11 +5552,13 @@ static int kvm_dev_ioctl_create_vm(unsigned long type)
 		goto put_fd;
 	}
 
-	file = anon_inode_getfile("kvm-vm", &kvm_vm_fops, kvm, O_RDWR);
+	file = anon_inode_getfile(__stringify(KVM_DEV_NAME) "-vm", &kvm_vm_fops, kvm, O_RDWR);
 	if (IS_ERR(file)) {
 		r = PTR_ERR(file);
 		goto put_kvm;
 	}
+
+	kvm->file = file;
 
 	/*
 	 * Don't call kvm_put_kvm anymore at this point; file->f_op is
@@ -5573,7 +5602,7 @@ static long kvm_dev_ioctl(struct file *filp,
 #ifdef CONFIG_X86
 		r += PAGE_SIZE;    /* pio data page */
 #endif
-#ifdef CONFIG_KVM_MMIO
+#ifndef __KVM_NO_MMIO
 		r += PAGE_SIZE;    /* coalesced mmio ring page */
 #endif
 		break;
@@ -5591,8 +5620,8 @@ static struct file_operations kvm_chardev_ops = {
 };
 
 static struct miscdevice kvm_dev = {
-	KVM_MINOR,
-	"kvm",
+	KVM_DEV_MINOR,
+	__stringify(KVM_DEV_NAME),
 	&kvm_chardev_ops,
 };
 
@@ -5626,7 +5655,7 @@ static int kvm_enable_virtualization_cpu(void)
 		return 0;
 
 	if (kvm_arch_enable_virtualization_cpu()) {
-		pr_info("kvm: enabling virtualization on CPU%d failed\n",
+		pr_info("enabling virtualization on CPU%d failed\n",
 			raw_smp_processor_id());
 		return -EIO;
 	}
@@ -5673,7 +5702,7 @@ static void kvm_shutdown(void *data)
 	 * is used for both shutdown and reboot scenarios, i.e. neither name is
 	 * 100% comprehensive.
 	 */
-	pr_info("kvm: exiting hardware virtualization\n");
+	pr_info("exiting hardware virtualization\n");
 	on_each_cpu(kvm_disable_virtualization_cpu, NULL, 1);
 }
 
@@ -6084,7 +6113,7 @@ int kvm_io_bus_unregister_dev(struct kvm *kvm, enum kvm_bus bus_idx,
 	 * attached devices. Otherwise, destroy the caller's device only.
 	 */
 	if (!new_bus) {
-		pr_err("kvm: failed to shrink bus, removing it completely\n");
+		pr_err("failed to shrink bus, removing it completely\n");
 		kvm_io_bus_destroy(bus);
 		return -ENOMEM;
 	}
@@ -6371,7 +6400,7 @@ static void kvm_init_debug(void)
 	const struct kvm_stats_desc *pdesc;
 	int i;
 
-	kvm_debugfs_dir = debugfs_create_dir("kvm", NULL);
+	kvm_debugfs_dir = debugfs_create_dir(__stringify(KVM_DEV_NAME), NULL);
 
 	for (i = 0; i < kvm_vm_stats_header.num_desc; ++i) {
 		pdesc = &kvm_vm_stats_desc[i];
@@ -6516,7 +6545,7 @@ int kvm_init(unsigned vcpu_size, unsigned vcpu_align, struct module *module)
 	if (!vcpu_align)
 		vcpu_align = __alignof__(struct kvm_vcpu);
 	kvm_vcpu_cache =
-		kmem_cache_create_usercopy("kvm_vcpu", vcpu_size, vcpu_align,
+		kmem_cache_create_usercopy(KVM_DEV_STRING(vcpu), vcpu_size, vcpu_align,
 					   SLAB_ACCOUNT,
 					   offsetof(struct kvm_vcpu, arch),
 					   offsetofend(struct kvm_vcpu, stats_id)
@@ -6569,7 +6598,7 @@ int kvm_init(unsigned vcpu_size, unsigned vcpu_align, struct module *module)
 	 */
 	r = misc_register(&kvm_dev);
 	if (r) {
-		pr_err("kvm: misc device register failed\n");
+		pr_err("misc device register failed\n");
 		goto err_register;
 	}
 

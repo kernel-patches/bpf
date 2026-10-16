@@ -45,6 +45,10 @@
 #include <asm/kvm_host.h>
 #include <linux/kvm_dirty_ring.h>
 
+#define __KVM_DEV_STRING(name, x) __stringify(name ## _ ## x)
+#define _KVM_DEV_STRING(name, x) __KVM_DEV_STRING(name, x)
+#define KVM_DEV_STRING(x) _KVM_DEV_STRING(KVM_DEV_NAME, x)
+
 #ifndef KVM_MAX_VCPU_IDS
 #define KVM_MAX_VCPU_IDS KVM_MAX_VCPUS
 #endif
@@ -562,7 +566,7 @@ static inline int kvm_vcpu_exiting_guest_mode(struct kvm_vcpu *vcpu)
 	/*
 	 * The memory barrier ensures a previous write to vcpu->requests cannot
 	 * be reordered with the read of vcpu->mode.  It pairs with the general
-	 * memory barrier following the write of vcpu->mode in VCPU RUN.
+	 * memory barrier following the write of vcpu->mode in KVM_RUN.
 	 */
 	smp_mb__before_atomic();
 	return cmpxchg(&vcpu->mode, IN_GUEST_MODE, EXITING_GUEST_MODE);
@@ -746,7 +750,11 @@ static inline u64 kvm_gmem_get_supported_flags(struct kvm *kvm)
 #ifndef kvm_arch_has_readonly_mem
 static inline bool kvm_arch_has_readonly_mem(struct kvm *kvm)
 {
-	return IS_ENABLED(CONFIG_HAVE_KVM_READONLY_MEM);
+#ifdef __KVM_HAVE_READONLY_MEM
+	return true;
+#else
+	return false;
+#endif
 }
 #endif
 
@@ -784,6 +792,12 @@ struct kvm {
 	 * kvm_swap_active_memslots().
 	 */
 	struct mutex slots_arch_lock;
+	/*
+	 * Back-reference to the VM file for subsystems (e.g., VFIO). Holds no
+	 * reference to avoid pinning the VM. Callers storing the file must
+	 * take their own reference.
+	 */
+	struct file *file;
 	struct mm_struct *mm; /* userspace tied to this vm */
 	unsigned long nr_memslot_pages;
 	/* The two memslot sets - active and inactive (per address space) */
@@ -832,7 +846,7 @@ struct kvm {
 	struct kvm_vm_stat stat;
 	struct kvm_arch arch;
 	refcount_t users_count;
-#ifdef CONFIG_KVM_MMIO
+#ifndef __KVM_NO_MMIO
 	struct kvm_coalesced_mmio_ring *coalesced_mmio_ring;
 	spinlock_t ring_lock;
 	struct list_head coalesced_zones;
@@ -853,6 +867,8 @@ struct kvm {
 	long mmu_invalidate_in_progress;
 	gfn_t mmu_invalidate_range_start;
 	gfn_t mmu_invalidate_range_end;
+
+	unsigned long gpc_invalidate_seq;
 
 	struct list_head devices;
 	u64 manual_dirty_log_protect;
@@ -1080,7 +1096,18 @@ void kvm_exit(void);
 void kvm_get_kvm(struct kvm *kvm);
 bool kvm_get_kvm_safe(struct kvm *kvm);
 void kvm_put_kvm(struct kvm *kvm);
-bool file_is_kvm(struct file *file);
+
+/*
+ * Architectures define kvm_file_to_kvm_arch to <arch>
+ * to get a typed, arch-namespaced helper:
+ *
+ *   struct kvm *file_to_kvm_<arch>(struct file *file)
+ */
+#ifdef kvm_file_to_kvm_arch
+#define kvm_file_to_kvm_fn CONCATENATE(file_to_kvm_, kvm_file_to_kvm_arch)
+struct kvm *kvm_file_to_kvm_fn(struct file *file);
+#endif /* kvm_file_to_kvm_arch */
+
 void kvm_put_kvm_no_destroy(struct kvm *kvm);
 
 static inline struct kvm_memslots *__kvm_memslots(struct kvm *kvm, int as_id)
@@ -2464,7 +2491,7 @@ void kvm_arch_update_irqfd_routing(struct kvm_kernel_irqfd *irqfd,
 				   struct kvm_kernel_irq_routing_entry *new);
 #endif /* CONFIG_HAVE_KVM_IRQ_BYPASS */
 
-#ifdef CONFIG_HAVE_KVM_INVALID_WAKEUPS
+#ifdef __KVM_HAVE_INVALID_WAKEUPS
 /* If we wakeup during the poll time, was it a sucessful poll? */
 static inline bool vcpu_valid_wakeup(struct kvm_vcpu *vcpu)
 {
@@ -2476,9 +2503,9 @@ static inline bool vcpu_valid_wakeup(struct kvm_vcpu *vcpu)
 {
 	return true;
 }
-#endif /* CONFIG_HAVE_KVM_INVALID_WAKEUPS */
+#endif /* __KVM_HAVE_INVALID_WAKEUPS */
 
-#ifdef CONFIG_HAVE_KVM_NO_POLL
+#ifdef __KVM_HAVE_NO_POLL
 /* Callback that tells if we must not poll */
 bool kvm_arch_no_poll(struct kvm_vcpu *vcpu);
 #else
@@ -2486,18 +2513,18 @@ static inline bool kvm_arch_no_poll(struct kvm_vcpu *vcpu)
 {
 	return false;
 }
-#endif /* CONFIG_HAVE_KVM_NO_POLL */
+#endif /* __KVM_HAVE_NO_POLL */
 
 void kvm_arch_guest_memory_reclaimed(struct kvm *kvm);
 
-#ifdef CONFIG_HAVE_KVM_VCPU_RUN_PID_CHANGE
+#ifdef __KVM_HAVE_VCPU_RUN_PID_CHANGE
 int kvm_arch_vcpu_run_pid_change(struct kvm_vcpu *vcpu);
 #else
 static inline int kvm_arch_vcpu_run_pid_change(struct kvm_vcpu *vcpu)
 {
 	return 0;
 }
-#endif /* CONFIG_HAVE_KVM_VCPU_RUN_PID_CHANGE */
+#endif /* __KVM_HAVE_VCPU_RUN_PID_CHANGE */
 
 #ifdef CONFIG_VIRT_XFER_TO_GUEST_WORK
 static inline void kvm_handle_signal_exit(struct kvm_vcpu *vcpu)
@@ -2647,6 +2674,7 @@ void kvm_arch_gmem_invalidate_range(struct kvm *kvm, struct kvm_gfn_range *range
 #endif
 
 #ifdef CONFIG_KVM_GENERIC_PRE_FAULT_MEMORY
+int kvm_arch_pre_fault_allowed(struct kvm_vcpu *vcpu);
 long kvm_arch_vcpu_pre_fault_memory(struct kvm_vcpu *vcpu,
 				    struct kvm_pre_fault_memory *range);
 #endif

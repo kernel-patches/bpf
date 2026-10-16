@@ -16,6 +16,7 @@
 #include <linux/irq_work.h>
 #include <linux/irq.h>
 #include <linux/workqueue.h>
+#include <linux/xarray.h>
 
 #include <linux/kvm.h>
 #include <linux/kvm_para.h>
@@ -44,7 +45,12 @@
 
 #include <hyperv/hvhdk.h>
 
+#define kvm_file_to_kvm_arch x86
+
 #define __KVM_HAVE_ARCH_VCPU_DEBUGFS
+#define __KVM_HAVE_MSI
+#define __KVM_HAVE_NO_POLL
+#define __KVM_HAVE_READONLY_MEM
 
 /*
  * CONFIG_KVM_MAX_NR_VCPUS is defined iff CONFIG_KVM!=n, provide a dummy max if
@@ -1104,7 +1110,7 @@ struct kvm_xen {
 	bool runstate_update_flag;
 	u8 upcall_vector;
 	struct gfn_to_pfn_cache shinfo_cache;
-	struct idr evtchn_ports;
+	struct xarray evtchn_ports;
 	unsigned long poll_mask[BITS_TO_LONGS(KVM_MAX_VCPUS)];
 
 	struct kvm_xen_hvm_config hvm_config;
