@@ -30,7 +30,6 @@
 #include <linux/sched.h>
 #include <linux/sched/mm.h>
 #include <linux/fs.h>
-#include <linux/pagemap.h>
 #include <linux/seq_file.h>
 #include <linux/debugfs.h>
 
@@ -272,9 +271,6 @@ MODULE_PARM_DESC(bch,		 "Enable BCH ecc and set how many bits should "
  */
 #define NS_MAX_PREVSTATES 1
 
-/* Maximum page cache pages needed to read or write a NAND page to the cache_file */
-#define NS_MAX_HELD_PAGES 16
-
 /*
  * A union to represent flash memory contents and flash buffer.
  */
@@ -353,8 +349,6 @@ struct nandsim {
 	struct file *cfile; /* Open file */
 	unsigned long *pages_written; /* Which pages have been written */
 	void *file_buf;
-	struct page *held_pages[NS_MAX_HELD_PAGES];
-	int held_cnt;
 
 	/* debugfs entry */
 	struct dentry *dent;
@@ -1297,77 +1291,27 @@ static int ns_find_operation(struct nandsim *ns, uint32_t flag)
 	return -1;
 }
 
-static void ns_put_pages(struct nandsim *ns)
-{
-	int i;
-
-	for (i = 0; i < ns->held_cnt; i++)
-		put_page(ns->held_pages[i]);
-}
-
-/* Get page cache pages in advance to provide NOFS memory allocation */
-static int ns_get_pages(struct nandsim *ns, struct file *file, size_t count,
-			loff_t pos)
-{
-	pgoff_t index, start_index, end_index;
-	struct page *page;
-	struct address_space *mapping = file->f_mapping;
-
-	start_index = pos >> PAGE_SHIFT;
-	end_index = (pos + count - 1) >> PAGE_SHIFT;
-	if (end_index - start_index + 1 > NS_MAX_HELD_PAGES)
-		return -EINVAL;
-	ns->held_cnt = 0;
-	for (index = start_index; index <= end_index; index++) {
-		page = find_get_page(mapping, index);
-		if (page == NULL) {
-			page = find_or_create_page(mapping, index, GFP_NOFS);
-			if (page == NULL) {
-				write_inode_now(mapping->host, 1);
-				page = find_or_create_page(mapping, index, GFP_NOFS);
-			}
-			if (page == NULL) {
-				ns_put_pages(ns);
-				return -ENOMEM;
-			}
-			unlock_page(page);
-		}
-		ns->held_pages[ns->held_cnt++] = page;
-	}
-	return 0;
-}
-
-static ssize_t ns_read_file(struct nandsim *ns, struct file *file, void *buf,
-			    size_t count, loff_t pos)
+static ssize_t ns_read_file(struct file *file, void *buf, size_t count,
+			    loff_t pos)
 {
 	ssize_t tx;
-	int err;
 	unsigned int noio_flag;
 
-	err = ns_get_pages(ns, file, count, pos);
-	if (err)
-		return err;
 	noio_flag = memalloc_noio_save();
 	tx = kernel_read(file, buf, count, &pos);
 	memalloc_noio_restore(noio_flag);
-	ns_put_pages(ns);
 	return tx;
 }
 
-static ssize_t ns_write_file(struct nandsim *ns, struct file *file, void *buf,
-			     size_t count, loff_t pos)
+static ssize_t ns_write_file(struct file *file, void *buf, size_t count,
+			     loff_t pos)
 {
 	ssize_t tx;
-	int err;
 	unsigned int noio_flag;
 
-	err = ns_get_pages(ns, file, count, pos);
-	if (err)
-		return err;
 	noio_flag = memalloc_noio_save();
 	tx = kernel_write(file, buf, count, &pos);
 	memalloc_noio_restore(noio_flag);
-	ns_put_pages(ns);
 	return tx;
 }
 
@@ -1436,8 +1380,7 @@ static void ns_read_page(struct nandsim *ns, int num)
 			if (ns_do_read_error(ns, num))
 				return;
 			pos = (loff_t)NS_RAW_OFFSET(ns) + ns->regs.off;
-			tx = ns_read_file(ns, ns->cfile, ns->buf.byte, num,
-					  pos);
+			tx = ns_read_file(ns->cfile, ns->buf.byte, num, pos);
 			if (tx != num) {
 				NS_ERR("read_page: read error for page %d ret %ld\n", ns->regs.row, (long)tx);
 				return;
@@ -1511,7 +1454,7 @@ static int ns_prog_page(struct nandsim *ns, int num)
 			memset(ns->file_buf, 0xff, ns->geom.pgszoob);
 		} else {
 			all = 0;
-			tx = ns_read_file(ns, ns->cfile, pg_off, num, off);
+			tx = ns_read_file(ns->cfile, pg_off, num, off);
 			if (tx != num) {
 				NS_ERR("prog_page: read error for page %d ret %ld\n", ns->regs.row, (long)tx);
 				return -1;
@@ -1521,7 +1464,7 @@ static int ns_prog_page(struct nandsim *ns, int num)
 			pg_off[i] &= ns->buf.byte[i];
 		if (all) {
 			loff_t pos = (loff_t)ns->regs.row * ns->geom.pgszoob;
-			tx = ns_write_file(ns, ns->cfile, ns->file_buf,
+			tx = ns_write_file(ns->cfile, ns->file_buf,
 					   ns->geom.pgszoob, pos);
 			if (tx != ns->geom.pgszoob) {
 				NS_ERR("prog_page: write error for page %d ret %ld\n", ns->regs.row, (long)tx);
@@ -1529,7 +1472,7 @@ static int ns_prog_page(struct nandsim *ns, int num)
 			}
 			__set_bit(ns->regs.row, ns->pages_written);
 		} else {
-			tx = ns_write_file(ns, ns->cfile, pg_off, num, off);
+			tx = ns_write_file(ns->cfile, pg_off, num, off);
 			if (tx != num) {
 				NS_ERR("prog_page: write error for page %d ret %ld\n", ns->regs.row, (long)tx);
 				return -1;
