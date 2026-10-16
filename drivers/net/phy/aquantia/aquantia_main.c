@@ -1074,23 +1074,25 @@ static int aqr_gen1_resume(struct phy_device *phydev)
 
 static int aqr115c_get_features(struct phy_device *phydev)
 {
-	unsigned long *supported = phydev->supported;
+	int ret;
 
-	/* PHY supports speeds up to 2.5G with autoneg. PMA capabilities
-	 * are not useful.
-	 */
-	linkmode_or(supported, supported, phy_gbit_features);
-	linkmode_set_bit(ETHTOOL_LINK_MODE_2500baseT_Full_BIT, supported);
+	ret = genphy_c45_pma_read_abilities(phydev);
+	if (ret)
+		return ret;
+
+	linkmode_set_bit(ETHTOOL_LINK_MODE_2500baseT_Full_BIT, phydev->supported);
 
 	return 0;
 }
 
 static int aqr111_get_features(struct phy_device *phydev)
 {
-	/* PHY supports speeds up to 5G with autoneg. PMA capabilities
-	 * are not useful.
-	 */
-	aqr115c_get_features(phydev);
+	int ret;
+
+	ret = aqr115c_get_features(phydev);
+	if (ret)
+		return ret;
+
 	linkmode_set_bit(ETHTOOL_LINK_MODE_5000baseT_Full_BIT,
 			 phydev->supported);
 
