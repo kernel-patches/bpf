@@ -5437,8 +5437,9 @@ static int bpf_map_get_info_by_fd(struct file *file,
 				  union bpf_attr __user *uattr)
 {
 	struct bpf_map_info __user *uinfo = u64_to_user_ptr(attr->info.info);
+	u32 info_len = attr->info.info_len, len, hash_size;
 	struct bpf_map_info info;
-	u32 info_len = attr->info.info_len, len;
+	u64 hash;
 	int err;
 
 	len = offsetofend(struct bpf_map_info, hash_size);
@@ -5450,7 +5451,11 @@ static int bpf_map_get_info_by_fd(struct file *file,
 	memset(&info, 0, sizeof(info));
 	if (copy_from_user(&info, uinfo, info_len))
 		return -EFAULT;
-
+	hash = info.hash;
+	hash_size = info.hash_size;
+	memset(&info, 0, sizeof(info));
+	info.hash = hash;
+	info.hash_size = hash_size;
 	info.type = map->map_type;
 	info.id = map->id;
 	info.key_size = map->key_size;
