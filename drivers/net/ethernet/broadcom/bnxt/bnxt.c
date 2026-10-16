@@ -14091,7 +14091,8 @@ static int bnxt_reinit_features(struct bnxt *bp, bool irq_re_init,
 				bool link_re_init, u32 flags, bool update_tpa)
 {
 	bnxt_close_nic(bp, irq_re_init, link_re_init);
-	bp->flags = flags;
+	bp->flags = (bp->flags & ~BNXT_FLAG_ALL_CONFIG_FEATS) |
+		    (flags & BNXT_FLAG_ALL_CONFIG_FEATS);
 	if (update_tpa)
 		bnxt_set_ring_params(bp);
 	return bnxt_open_nic(bp, irq_re_init, link_re_init);
