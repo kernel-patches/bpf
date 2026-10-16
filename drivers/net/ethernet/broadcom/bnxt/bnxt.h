@@ -2295,7 +2295,6 @@ struct bnxt {
 	#define BNXT_FLAG_DSN_VALID	0x200000
 	#define BNXT_FLAG_DOUBLE_DB	0x400000
 	#define BNXT_FLAG_UDP_GSO_CAP	0x800000
-	#define BNXT_FLAG_CHIP_NITRO_A0	0x1000000
 	#define BNXT_FLAG_DIM		0x2000000
 	#define BNXT_FLAG_ROCE_MIRROR_CAP	0x4000000
 	#define BNXT_FLAG_TX_COAL_CMPL	0x8000000
@@ -2323,10 +2322,8 @@ struct bnxt {
 #define BNXT_PHY_CFG_ABLE(bp)	((BNXT_SINGLE_PF(bp) ||			\
 				  BNXT_SH_PORT_CFG_OK(bp)) &&		\
 				 (bp)->link_info.phy_state == BNXT_PHY_STATE_ENABLED)
-#define BNXT_CHIP_TYPE_NITRO_A0(bp) ((bp)->flags & BNXT_FLAG_CHIP_NITRO_A0)
 #define BNXT_RX_PAGE_MODE(bp)	((bp)->flags & BNXT_FLAG_RX_PAGE_MODE)
-#define BNXT_SUPPORTS_TPA(bp)	(!BNXT_CHIP_TYPE_NITRO_A0(bp) &&	\
-				 (!((bp)->flags & BNXT_FLAG_CHIP_P5_PLUS) ||\
+#define BNXT_SUPPORTS_TPA(bp)	((!((bp)->flags & BNXT_FLAG_CHIP_P5_PLUS) ||\
 				  (bp)->max_tpa_v2) && !is_kdump_kernel())
 #define BNXT_RX_JUMBO_MODE(bp)	((bp)->flags & BNXT_FLAG_JUMBO)
 
@@ -2347,13 +2344,11 @@ struct bnxt {
 	(BNXT_CHIP_NUM_57X1X((bp)->chip_num) ||	\
 	 BNXT_CHIP_NUM_5745X((bp)->chip_num) ||	\
 	 BNXT_CHIP_NUM_588XX((bp)->chip_num) ||	\
-	 (BNXT_CHIP_NUM_58700((bp)->chip_num) &&	\
-	  !BNXT_CHIP_TYPE_NITRO_A0(bp)))
+	 BNXT_CHIP_NUM_58700((bp)->chip_num))
 
 /* Chip class phase 3.x */
 #define BNXT_CHIP_P3(bp)			\
-	(BNXT_CHIP_NUM_57X0X((bp)->chip_num) ||	\
-	 BNXT_CHIP_TYPE_NITRO_A0(bp))
+	(BNXT_CHIP_NUM_57X0X((bp)->chip_num))
 
 #define BNXT_CHIP_P4_PLUS(bp)			\
 	(BNXT_CHIP_P4(bp) || BNXT_CHIP_P5_PLUS(bp))
