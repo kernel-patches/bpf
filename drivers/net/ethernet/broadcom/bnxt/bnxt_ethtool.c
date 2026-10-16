@@ -853,6 +853,7 @@ static int bnxt_set_ringparam(struct net_device *dev,
 {
 	u8 tcp_data_split = kernel_ering->tcp_data_split;
 	struct bnxt *bp = netdev_priv(dev);
+	bool irq_re_init = false;
 	u8 hds_config_mod;
 	int rc;
 
@@ -876,8 +877,13 @@ static int bnxt_set_ringparam(struct net_device *dev,
 		return -EINVAL;
 	}
 
+	if (hds_config_mod &&
+	    tcp_data_split == ETHTOOL_TCP_DATA_SPLIT_ENABLED &&
+	    !(bp->flags & BNXT_FLAG_AGG_RINGS))
+		irq_re_init = true;
+
 	if (netif_running(dev))
-		bnxt_close_nic(bp, false, false);
+		bnxt_close_nic(bp, irq_re_init, false);
 
 	if (hds_config_mod) {
 		if (tcp_data_split == ETHTOOL_TCP_DATA_SPLIT_ENABLED)
@@ -891,7 +897,7 @@ static int bnxt_set_ringparam(struct net_device *dev,
 	bnxt_set_ring_params(bp);
 
 	if (netif_running(dev)) {
-		rc = bnxt_open_nic(bp, false, false);
+		rc = bnxt_open_nic(bp, irq_re_init, false);
 		if (rc)
 			return rc;
 	}

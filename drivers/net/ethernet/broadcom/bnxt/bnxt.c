@@ -14116,10 +14116,11 @@ static int bnxt_set_features(struct net_device *dev, netdev_features_t features)
 {
 	bool update_tpa = false, update_ntuple = false;
 	struct bnxt *bp = netdev_priv(dev);
+	bool irq_re_init = false;
 	u32 flags = bp->flags;
+	bool re_init = false;
 	u32 changes;
 	int rc = 0;
-	bool re_init = false;
 
 	bp->tx_wake_thresh = max_t(int, bp->tx_ring_size / 2,
 				   bnxt_min_tx_desc_cnt(bp, features));
@@ -14146,8 +14147,12 @@ static int bnxt_set_features(struct net_device *dev, netdev_features_t features)
 		update_tpa = true;
 		if ((bp->flags & BNXT_FLAG_TPA) == 0 ||
 		    (flags & BNXT_FLAG_TPA) == 0 ||
-		    (bp->flags & BNXT_FLAG_CHIP_P5_PLUS))
+		    (bp->flags & BNXT_FLAG_CHIP_P5_PLUS)) {
 			re_init = true;
+			if (!(bp->flags & BNXT_FLAG_AGG_RINGS) &&
+			    (flags & BNXT_FLAG_AGG_RINGS))
+				irq_re_init = true;
+		}
 	}
 
 	if (changes & ~BNXT_FLAG_TPA)
@@ -14170,7 +14175,7 @@ static int bnxt_set_features(struct net_device *dev, netdev_features_t features)
 			return bnxt_reinit_features(bp, true, false, flags, update_tpa);
 
 		if (re_init)
-			return bnxt_reinit_features(bp, false, false, flags, update_tpa);
+			return bnxt_reinit_features(bp, irq_re_init, false, flags, update_tpa);
 
 		if (update_tpa) {
 			bp->flags = flags;
