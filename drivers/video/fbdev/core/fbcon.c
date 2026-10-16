@@ -2431,6 +2431,17 @@ static int fbcon_do_set_font(struct vc_data *vc, int w, int h, int charcount,
 	else if (!vc->vc_hi_font_mask && charcount == 512)
 		set_vc_hi_font(vc, true);
 
+	/*
+	 * The rotated font buffer is sized from the new font's width, height
+	 * and charcount. Rebuild it for the visible console before the redraw
+	 * below, as fbcon_switch() and fbcon_modechanged() already do. The
+	 * redraw reaches the rotated bitops through hide_cursor(), and those
+	 * index the buffer with the new cell size and character codes, so a
+	 * stale, too-small buffer is read out of bounds.
+	 */
+	if (con_is_visible(vc) && par->bitops->rotate_font)
+		par->bitops->rotate_font(info, vc);
+
 	if (resize) {
 		int cols, rows;
 
