@@ -56,7 +56,7 @@ static void strp_abort_strp(struct strparser *strp, int err)
 	strp->need_bytes = 0;
 
 	/* Report an error on the lower socket */
-	sk->sk_err = -err;
+	WRITE_ONCE(sk->sk_err, -err);
 	sk_error_report(sk);
 }
 
