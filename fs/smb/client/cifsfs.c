@@ -401,7 +401,7 @@ out_unlock:
 	return rc;
 }
 
-static int cifs_permission(struct mnt_idmap *idmap,
+static int cifs_permission(const struct mnt_idmap *idmap,
 			   struct inode *inode, int mask)
 {
 	unsigned int sbflags = cifs_sb_flags(CIFS_SB(inode));
@@ -1330,7 +1330,7 @@ static int cifs_precopy_set_eof(struct inode *src_inode, struct cifsInodeInfo *s
 		goto set_failed;
 
 	netfs_resize_file(&src_cifsi->netfs, src_end, true);
-	fscache_resize_cookie(cifs_inode_cookie(src_inode), src_end);
+	fscache_resize_cookie(cifs_inode_cookie(src_inode), src_end, false);
 	return 0;
 
 set_failed:
@@ -1624,9 +1624,9 @@ ssize_t cifs_file_copychunk_range(unsigned int xid,
 		if (rc > 0 && destoff + rc > i_size_read(target_inode)) {
 			truncate_setsize(target_inode, destoff + rc);
 			netfs_resize_file(&target_cifsi->netfs,
-					  i_size_read(target_inode), true);
+					  destoff + rc, true);
 			fscache_resize_cookie(cifs_inode_cookie(target_inode),
-					      i_size_read(target_inode));
+					      destoff + rc, false);
 		}
 		if (rc > 0) {
 			spin_lock(&target_inode->i_lock);
