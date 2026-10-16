@@ -2698,7 +2698,12 @@ int tls_set_sw_offload(struct sock *sk, int tx,
 		}
 	}
 
-	ctx->push_pending_record = tls_sw_push_pending_record;
+	/* The RX path shares tls_context with a TX side that may be HW
+	 * offloaded and rely on tls_device_push_pending_record(); only the TX
+	 * setup owns this hook.
+	 */
+	if (tx)
+		ctx->push_pending_record = tls_sw_push_pending_record;
 
 	/* setkey is the last operation that could fail during a
 	 * rekey. if it succeeds, we can start modifying the
