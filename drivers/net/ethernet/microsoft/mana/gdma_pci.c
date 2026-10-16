@@ -725,7 +725,7 @@ unmap_bar:
 	pci_iounmap(pdev, bar0_va);
 free_gc:
 	pci_set_drvdata(pdev, NULL);
-	vfree(gc);
+	mana_gd_free_context(gc);
 release_region:
 	pci_release_regions(pdev);
 disable_dev:
@@ -778,7 +778,7 @@ static void mana_gd_remove(struct pci_dev *pdev)
 
 	pci_iounmap(pdev, gc->bar0_va);
 
-	vfree(gc);
+	mana_gd_free_context(gc);
 
 	pci_release_regions(pdev);
 	pci_disable_device(pdev);

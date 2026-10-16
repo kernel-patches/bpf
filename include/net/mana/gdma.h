@@ -580,6 +580,9 @@ int mana_gd_create_mana_wq_cq(struct gdma_dev *gd,
 
 void mana_gd_destroy_queue(struct gdma_context *gc, struct gdma_queue *queue);
 
+/* Remove an EQ from interrupt dispatch without freeing its queue memory. */
+void mana_gd_fence_eq(struct gdma_context *gc, struct gdma_queue *queue);
+
 int mana_gd_poll_cq(struct gdma_queue *cq, struct gdma_comp *comp, int num_cqe);
 
 void mana_gd_ring_cq(struct gdma_queue *cq, u8 arm_bit);
@@ -1121,6 +1124,7 @@ int mana_gd_verify_vf_version(struct gdma_context *gc);
 int mana_gd_query_max_resources(struct gdma_context *gc);
 int mana_gd_setup(struct gdma_context *gc);
 void mana_gd_cleanup(struct gdma_context *gc);
+void mana_gd_free_context(struct gdma_context *gc);
 int mana_gd_detect_devices(struct gdma_context *gc);
 int mana_gd_init_registers(struct gdma_context *gc);
 irqreturn_t mana_gd_intr(int irq, void *arg);

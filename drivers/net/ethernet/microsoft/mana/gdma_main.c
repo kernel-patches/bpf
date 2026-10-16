@@ -11,6 +11,7 @@
 #include <linux/irqdomain.h>
 #include <linux/export.h>
 #include <linux/uaccess.h>
+#include <linux/vmalloc.h>
 
 #include <net/mana/mana.h>
 #include <net/mana/hw_channel.h>
@@ -754,6 +755,7 @@ static void mana_gd_process_eqe(struct gdma_queue *eq)
 	union gdma_eqe_info eqe_info;
 	enum gdma_eqe_type type;
 	struct gdma_event event;
+	struct gdma_queue **cq_table;
 	struct gdma_queue *cq;
 	struct gdma_eqe *eqe;
 	u32 cq_id;
@@ -765,11 +767,16 @@ static void mana_gd_process_eqe(struct gdma_queue *eq)
 	switch (type) {
 	case GDMA_EQE_COMPLETION:
 		cq_id = eqe->details[0] & 0xFFFFFF;
-		if (WARN_ON_ONCE(cq_id >= gc->max_num_cqs))
+		/* The IRQ handler's RCU read-side section protects the table
+		 * until HWC teardown has fenced its EQ and waited for readers.
+		 */
+		cq_table = smp_load_acquire(&gc->cq_table);
+		if (!cq_table || cq_id >= READ_ONCE(gc->max_num_cqs))
 			break;
 
-		cq = gc->cq_table[cq_id];
-		if (WARN_ON_ONCE(!cq || cq->type != GDMA_CQ || cq->id != cq_id))
+		cq = READ_ONCE(cq_table[cq_id]);
+		if (!cq || WARN_ON_ONCE(cq->type != GDMA_CQ ||
+					cq->id != cq_id))
 			break;
 
 		if (cq->cq.callback)
@@ -993,21 +1000,30 @@ out:
 	return err;
 }
 
-static void mana_gd_destroy_eq(struct gdma_context *gc, bool flush_evenets,
+static void mana_gd_destroy_eq(struct gdma_context *gc, bool flush_events,
 			       struct gdma_queue *queue)
 {
 	int err;
 
-	if (flush_evenets) {
+	if (queue->eq.msix_index == INVALID_PCI_MSIX_INDEX)
+		return;
+
+	if (flush_events) {
 		err = mana_gd_test_eq(gc, queue);
 		if (err && mana_need_log(gc, err))
 			dev_warn(gc->dev, "Failed to flush EQ: %d\n", err);
 	}
 
 	mana_gd_deregister_irq(queue);
+	queue->eq.msix_index = INVALID_PCI_MSIX_INDEX;
 
 	if (queue->eq.disable_needed)
 		mana_gd_disable_queue(queue);
+}
+
+void mana_gd_fence_eq(struct gdma_context *gc, struct gdma_queue *queue)
+{
+	mana_gd_destroy_eq(gc, false, queue);
 }
 
 static int mana_gd_create_eq(struct gdma_dev *gd,
@@ -1078,10 +1094,10 @@ static void mana_gd_destroy_cq(struct gdma_context *gc,
 	if (id >= gc->max_num_cqs)
 		return;
 
-	if (!gc->cq_table[id])
+	if (!READ_ONCE(gc->cq_table[id]))
 		return;
 
-	gc->cq_table[id] = NULL;
+	WRITE_ONCE(gc->cq_table[id], NULL);
 }
 
 int mana_gd_create_hwc_queue(struct gdma_dev *gd,
@@ -2007,6 +2023,13 @@ void mana_gd_cleanup(struct gdma_context *gc)
 	dev_dbg(gc->dev, "mana gdma cleanup successful\n");
 }
 EXPORT_SYMBOL_NS(mana_gd_cleanup, "NET_MANA");
+
+void mana_gd_free_context(struct gdma_context *gc)
+{
+	mana_hwc_free_retained_channel(gc);
+	vfree(gc);
+}
+EXPORT_SYMBOL_NS(mana_gd_free_context, "NET_MANA");
 
 static int __init gdma_core_init(void)
 {
