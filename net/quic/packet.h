@@ -14,6 +14,8 @@ struct quic_packet {
 	union quic_addr daddr;    /* Dest address from received packet */
 	union quic_addr saddr;    /* Source address from received packet */
 
+	struct sk_buff_head deferred_list; /* Packets deferred to work queue */
+	struct sk_buff_head backlog_list;  /* Packets waiting for crypto keys */
 	struct list_head frame_list; /* Frames to pack into packet for send */
 	struct sk_buff *head;        /* Head skb for packet bundling on send */
 	u32 version;   /* QUIC version used/selected during handshake */
@@ -25,6 +27,7 @@ struct quic_packet {
 	u16 hlen;      /* UDP + IP header length for sending */
 	u16 len;       /* QUIC packet length including taglen for sending */
 
+	u8 validate_peer_address:1; /* Temporary; will move to quic_outqueue */
 	u8 path_validating:1; /* Packet contains path_validating frames */
 	u8 ack_eliciting:1;   /* Packet contains ack-eliciting frames */
 	u8 ack_immediate:1;   /* Send ACK immediately (skip ack_delay timer) */
@@ -53,6 +56,8 @@ struct quic_packet {
 #define QUIC_PACKET_INVALID		0xff
 
 #define QUIC_VERSION_LEN		4
+
+#define QUIC_ALPN_MAX_LEN		128
 
 #define QUIC_PACKET_MSS_NORMAL		0
 #define QUIC_PACKET_MSS_DGRAM		1
@@ -101,6 +106,7 @@ static inline void quic_packet_reset(struct quic_packet *packet)
 	packet->ack_immediate = 0;
 }
 
+int quic_packet_process(struct sock *sk, struct sk_buff *skb, gfp_t gfp);
 u16 quic_packet_overhead(struct sock *sk, u8 level, u8 path);
 int quic_packet_config(struct sock *sk, u8 level, u8 path);
 
@@ -110,3 +116,8 @@ int quic_packet_route(struct sock *sk);
 void quic_packet_mss_update(struct sock *sk, u32 mss);
 void quic_packet_flush(struct sock *sk);
 void quic_packet_init(struct sock *sk);
+void quic_packet_free(struct sock *sk);
+
+u32 *quic_packet_compatible_versions(u32 version);
+
+void quic_packet_rcv_err_pmtu(struct sock *sk);

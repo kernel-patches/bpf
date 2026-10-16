@@ -168,6 +168,7 @@ quic_path_orig_dcid(struct quic_path_group *paths)
 	return paths->retry ? &paths->retry_dcid : &paths->orig_dcid;
 }
 
+int quic_packet_rcv(struct sock *sk, struct sk_buff *skb, bool icmp);
 void quic_path_init(struct quic_path_group *paths);
 
 bool quic_path_detect_alt(struct quic_path_group *paths, union quic_addr *sa,
