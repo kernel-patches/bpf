@@ -112,30 +112,24 @@ static int block2mtd_read(struct mtd_info *mtd, loff_t from, size_t len,
 {
 	struct block2mtd_dev *dev = mtd->priv;
 	struct address_space *mapping = dev->bdev_file->f_mapping;
-	struct page *page;
-	pgoff_t index = from >> PAGE_SHIFT;
-	int offset = from & (PAGE_SIZE-1);
-	int cpylen;
+	struct folio *folio;
+	size_t offset, cpylen;
 
 	while (len) {
-		if ((offset + len) > PAGE_SIZE)
-			cpylen = PAGE_SIZE - offset;	// multiple pages
-		else
-			cpylen = len;	// this page
-		len = len - cpylen;
+		folio = read_mapping_folio(mapping, from >> PAGE_SHIFT, NULL);
+		if (IS_ERR(folio))
+			return PTR_ERR(folio);
 
-		page = page_read(mapping, index);
-		if (IS_ERR(page))
-			return PTR_ERR(page);
-
-		memcpy(buf, page_address(page) + offset, cpylen);
-		put_page(page);
+		offset = offset_in_folio(folio, from);
+		cpylen = min(len, folio_size(folio) - offset);
+		memcpy(buf, folio_address(folio) + offset, cpylen);
+		folio_put(folio);
 
 		if (retlen)
 			*retlen += cpylen;
 		buf += cpylen;
-		offset = 0;
-		index++;
+		from += cpylen;
+		len -= cpylen;
 	}
 	return 0;
 }
