@@ -896,6 +896,7 @@ struct bpf_verifier_log *bpf_log_attr_create_vlog(struct bpf_log_attr *attr_log,
 						  struct bpf_common_attr *common, bpfptr_t uattr,
 						  u32 size);
 int bpf_log_attr_finalize(struct bpf_log_attr *attr, struct bpf_verifier_log *log);
+int bpf_log_attr_report_size(struct bpf_log_attr *attr, u32 size);
 
 #define BPF_MAX_SUBPROGS 256
 
