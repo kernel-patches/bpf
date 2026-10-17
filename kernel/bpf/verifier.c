@@ -23473,6 +23473,9 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	if (ret < 0)
 		goto skip_full_check;
 
+	/* The CFG needs an edge from a call in a cleanup range to its pad. */
+	bpf_exc_mark_call_sites(env);
+
 	/* Validate instructions and resolve the program's referenced resources. */
 	ret = check_and_resolve_insns(env);
 	if (ret < 0)
@@ -23509,6 +23512,12 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	ret = check_attach_btf_id(env);
 	if (ret)
 		goto skip_full_check;
+
+	if (env->cleanup_info_cnt) {
+		ret = bpf_exc_check_prog(env);
+		if (ret)
+			goto skip_full_check;
+	}
 
 	ret = bpf_compute_const_regs(env);
 	if (ret < 0)
