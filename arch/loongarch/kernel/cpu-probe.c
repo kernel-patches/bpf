@@ -236,6 +236,10 @@ static void cpu_probe_common(struct cpuinfo_loongarch *c)
 		elf_hwcap |= HWCAP_LOONGARCH_LBT_MIPS;
 	}
 #endif
+	if (config & CPUCFG2_DIV32) {
+		c->options |= LOONGARCH_CPU_DIV32;
+		elf_hwcap |= HWCAP_LOONGARCH_DIV32;
+	}
 
 	config = read_cpucfg(LOONGARCH_CPUCFG6);
 	if (config & CPUCFG6_PMP)
