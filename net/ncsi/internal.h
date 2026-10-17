@@ -318,6 +318,7 @@ struct vlan_vid {
 
 struct ncsi_dev_priv {
 	struct ncsi_dev     ndev;            /* Associated NCSI device     */
+	struct rcu_head     rcu;             /* Deferred free (kfree_rcu)  */
 	unsigned int        flags;           /* NCSI device flags          */
 #define NCSI_DEV_PROBED		1            /* Finalized NCSI topology    */
 #define NCSI_DEV_HWA		2            /* Enabled HW arbitration     */
