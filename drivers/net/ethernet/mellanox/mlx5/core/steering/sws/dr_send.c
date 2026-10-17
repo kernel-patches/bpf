@@ -1130,7 +1130,9 @@ out:
 
 static void dr_destroy_cq(struct mlx5_core_dev *mdev, struct mlx5dr_cq *cq)
 {
-	mlx5_core_destroy_cq(mdev, &cq->mcq);
+	/* The device may still use an undestroyed CQ; keep it. */
+	if (mlx5_core_destroy_cq(mdev, &cq->mcq))
+		return;
 	mlx5_wq_destroy(&cq->wq_ctrl);
 	kfree(cq);
 }

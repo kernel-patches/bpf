@@ -649,7 +649,7 @@ static int korina_rx(struct net_device *dev, int limit)
 
 		pkt_len = RCVPKT_LENGTH(devcs);
 		dma_unmap_single(lp->dmadev, lp->rx_skb_dma[lp->rx_next_done],
-				 pkt_len, DMA_FROM_DEVICE);
+				 KORINA_RBSIZE, DMA_FROM_DEVICE);
 
 		/* Do not count the CRC */
 		skb_put(skb, pkt_len - 4);

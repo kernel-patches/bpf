@@ -206,6 +206,44 @@ static void prueth_emac_stop(struct prueth *prueth)
 	}
 }
 
+static void icssg_update_hsr_rx_offload(struct prueth_emac *emac)
+{
+	struct prueth *prueth = emac->prueth;
+
+	if (!prueth->is_hsr_offload_mode)
+		return;
+
+	if (emac->ndev->features & NETIF_F_HW_HSR_TAG_RM)
+		icssg_set_port_state(emac, ICSSG_EMAC_HSR_RX_OFFLOAD_ENABLE);
+	else
+		icssg_set_port_state(emac, ICSSG_EMAC_HSR_RX_OFFLOAD_DISABLE);
+}
+
+static void icssg_enable_fw_offload_emac(struct prueth_emac *emac)
+{
+	struct prueth *prueth = emac->prueth;
+
+	if (prueth->is_switch_mode || prueth->is_hsr_offload_mode) {
+		icssg_fdb_add_del(emac, eth_stp_addr, prueth->default_vlan,
+				  ICSSG_FDB_ENTRY_P0_MEMBERSHIP |
+				  ICSSG_FDB_ENTRY_P1_MEMBERSHIP |
+				  ICSSG_FDB_ENTRY_P2_MEMBERSHIP |
+				  ICSSG_FDB_ENTRY_BLOCK,
+				  true);
+		icssg_vtbl_modify(emac, emac->port_vlan | DEFAULT_VID,
+				  BIT(emac->port_id) | DEFAULT_PORT_MASK,
+				  BIT(emac->port_id) | DEFAULT_UNTAG_MASK,
+				  true);
+		if (prueth->is_hsr_offload_mode)
+			icssg_vtbl_modify(emac, DEFAULT_VID,
+					  DEFAULT_PORT_MASK,
+					  DEFAULT_UNTAG_MASK, true);
+		icssg_set_pvid(prueth, emac->port_vlan, emac->port_id);
+		if (prueth->is_switch_mode)
+			icssg_set_port_state(emac, ICSSG_EMAC_PORT_VLAN_AWARE_ENABLE);
+	}
+}
+
 static void icssg_enable_fw_offload(struct prueth *prueth)
 {
 	struct prueth_emac *emac;
@@ -213,34 +251,11 @@ static void icssg_enable_fw_offload(struct prueth *prueth)
 
 	for (mac = PRUETH_MAC0; mac < PRUETH_NUM_MACS; mac++) {
 		emac = prueth->emac[mac];
-		if (prueth->is_hsr_offload_mode) {
-			if (emac->ndev->features & NETIF_F_HW_HSR_TAG_RM)
-				icssg_set_port_state(emac, ICSSG_EMAC_HSR_RX_OFFLOAD_ENABLE);
-			else
-				icssg_set_port_state(emac, ICSSG_EMAC_HSR_RX_OFFLOAD_DISABLE);
-		}
 
-		if (prueth->is_switch_mode || prueth->is_hsr_offload_mode) {
-			if (netif_running(emac->ndev)) {
-				icssg_fdb_add_del(emac, eth_stp_addr, prueth->default_vlan,
-						  ICSSG_FDB_ENTRY_P0_MEMBERSHIP |
-						  ICSSG_FDB_ENTRY_P1_MEMBERSHIP |
-						  ICSSG_FDB_ENTRY_P2_MEMBERSHIP |
-						  ICSSG_FDB_ENTRY_BLOCK,
-						  true);
-				icssg_vtbl_modify(emac, emac->port_vlan | DEFAULT_VID,
-						  BIT(emac->port_id) | DEFAULT_PORT_MASK,
-						  BIT(emac->port_id) | DEFAULT_UNTAG_MASK,
-						  true);
-				if (prueth->is_hsr_offload_mode)
-					icssg_vtbl_modify(emac, DEFAULT_VID,
-							  DEFAULT_PORT_MASK,
-							  DEFAULT_UNTAG_MASK, true);
-				icssg_set_pvid(prueth, emac->port_vlan, emac->port_id);
-				if (prueth->is_switch_mode)
-					icssg_set_port_state(emac, ICSSG_EMAC_PORT_VLAN_AWARE_ENABLE);
-			}
-		}
+		icssg_update_hsr_rx_offload(emac);
+
+		if (netif_running(emac->ndev))
+			icssg_enable_fw_offload_emac(emac);
 	}
 }
 
@@ -296,6 +311,18 @@ static int prueth_emac_common_start(struct prueth *prueth)
 	if (ret)
 		goto disable_class;
 
+	/* PRU/RTU/txPRU are up now: re-sync any port
+	 * config (e.g. flood/promisc flags) that may have been
+	 * dropped while firmware was still rebooting above.
+	 */
+	for (slice = 0; slice < PRUETH_NUM_MACS; slice++) {
+		emac = prueth->emac[slice];
+		if (!emac)
+			continue;
+		if (netif_running(emac->ndev))
+			schedule_work(&emac->rx_mode_work);
+	}
+
 	emac = prueth->emac[ICSS_SLICE0] ? prueth->emac[ICSS_SLICE0] :
 	       prueth->emac[ICSS_SLICE1];
 	ret = icss_iep_init(emac->iep, &prueth_iep_clockops,
@@ -308,6 +335,11 @@ static int prueth_emac_common_start(struct prueth *prueth)
 	return 0;
 
 stop_pruss:
+	for (slice = 0; slice < PRUETH_NUM_MACS; slice++) {
+		emac = prueth->emac[slice];
+		if (emac)
+			cancel_work_sync(&emac->rx_mode_work);
+	}
 	prueth_emac_stop(prueth);
 
 disable_class:
@@ -1067,8 +1099,9 @@ static int emac_ndo_open(struct net_device *ndev)
 		ret = prueth_emac_common_start(prueth);
 		if (ret)
 			goto free_rx_irq;
-		icssg_enable_fw_offload(prueth);
 	}
+	icssg_update_hsr_rx_offload(emac);
+	icssg_enable_fw_offload_emac(emac);
 
 	flow_cfg = emac->dram.va + ICSSG_CONFIG_OFFSET + PSI_L_REGULAR_FLOW_ID_BASE_OFFSET;
 	writew(emac->rx_flow_id_base, &flow_cfg->rx_base_flow);
@@ -1100,7 +1133,7 @@ static int emac_ndo_open(struct net_device *ndev)
 
 	prueth->emacs_initialized++;
 
-	queue_work(system_long_wq, &emac->stats_work.work);
+	queue_work(system_dfl_long_wq, &emac->stats_work.work);
 
 	return 0;
 

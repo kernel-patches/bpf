@@ -375,11 +375,18 @@ static int xfrmi_rcv_cb(struct sk_buff *skb, int err)
 
 	link = skb->dev->ifindex;
 	dev = xi->dev;
-	skb->dev = dev;
+	if (skb->dev != dev) {
+		/* Reference travels with skb->dev; released by xfrm_input()
+		 * after delivery.  Guard makes a re-invocation a no-op.
+		 */
+		dev_hold(dev);
+		skb->dev = dev;
+	}
 
 	if (err) {
 		DEV_STATS_INC(dev, rx_errors);
 		DEV_STATS_INC(dev, rx_dropped);
+		dev_put(dev);
 
 		return 0;
 	}

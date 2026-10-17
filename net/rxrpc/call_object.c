@@ -553,9 +553,9 @@ static void rxrpc_cleanup_tx_buffers(struct rxrpc_call *call)
  */
 static void rxrpc_cleanup_rx_buffers(struct rxrpc_call *call)
 {
-	rxrpc_purge_queue(&call->recvmsg_queue);
+	rxrpc_purge_data_queue(call, &call->recvmsg_queue);
 	rxrpc_purge_queue(&call->rx_queue);
-	rxrpc_purge_queue(&call->rx_oos_queue);
+	rxrpc_purge_data_queue(call, &call->rx_oos_queue);
 	kfree(call->rx_dec_buffer);
 }
 

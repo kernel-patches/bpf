@@ -38,7 +38,6 @@ config KUNIT_FAULT_TEST
 
 config KUNIT_TEST
 	tristate "KUnit test for KUnit" if !KUNIT_ALL_TESTS
-	default KUNIT_ALL_TESTS
 	help
 	  Enables the unit tests for the KUnit test framework. These tests test
 	  the KUnit test framework itself; the tests are both written using

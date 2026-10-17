@@ -134,8 +134,8 @@ static void esp_ssg_unref(struct xfrm_state *x, void *tmp, struct sk_buff *skb, 
 		struct scatterlist *src = already_unref ? esp_req_sg(aead, req) : req->src;
 
 		for (sg = sg_next(src); sg; sg = sg_next(sg))
-			skb_page_unref(page_to_netmem(sg_page(sg)),
-				       skb->pp_recycle);
+			skb_netmem_unref(page_to_netmem(sg_page(sg)),
+					 skb->pp_recycle);
 	}
 }
 
@@ -778,6 +778,17 @@ int esp6_input_done2(struct sk_buff *skb, int err)
 
 		offset = ipv6_skip_exthdr(skb, offset, &nexthdr, &frag_off);
 		if (offset == -1) {
+			err = -EINVAL;
+			goto out;
+		}
+
+		/*
+		 * ipv6_skip_exthdr() can advance past the packet end when the
+		 * last extension header claims an oversized length; the
+		 * transport header below would then be read out of bounds.
+		 * Make sure there is room for the 2-byte source port we read.
+		 */
+		if (offset + sizeof(__be16) > skb->len) {
 			err = -EINVAL;
 			goto out;
 		}

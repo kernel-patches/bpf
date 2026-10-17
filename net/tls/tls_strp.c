@@ -11,7 +11,7 @@
 
 #include "tls.h"
 
-static struct workqueue_struct *tls_strp_wq;
+struct workqueue_struct *tls_strp_wq;
 
 void tls_strp_abort_strp(struct tls_strparser *strp, int err)
 {
@@ -197,7 +197,7 @@ static void tls_strp_flush_anchor_copy(struct tls_strparser *strp)
 	DEBUG_NET_WARN_ON_ONCE(atomic_read(&shinfo->dataref) != 1);
 
 	for (i = 0; i < shinfo->nr_frags; i++)
-		__skb_frag_unref(&shinfo->frags[i], false);
+		skb_frag_unref(strp->anchor, i);
 	shinfo->nr_frags = 0;
 	if (strp->copy_mode) {
 		kfree_skb_list(shinfo->frag_list);

@@ -4,6 +4,7 @@
  * Copyright (c) 2013, The Linux Foundation. All rights reserved.
  */
 #include <linux/module.h>
+#include <linux/net.h>
 #include <linux/netlink.h>
 #include <linux/qrtr.h>
 #include <linux/termios.h>	/* For TIOCINQ/OUTQ */
@@ -1034,10 +1035,8 @@ static int qrtr_sendmsg(struct socket *sock, struct msghdr *msg, size_t len)
 	plen = (len + 3) & ~3;
 	skb = sock_alloc_send_skb(sk, plen + QRTR_HDR_MAX_SIZE,
 				  msg->msg_flags & MSG_DONTWAIT, &rc);
-	if (!skb) {
-		rc = -ENOMEM;
+	if (!skb)
 		goto out_node;
-	}
 
 	skb_reserve(skb, QRTR_HDR_MAX_SIZE);
 
@@ -1109,18 +1108,14 @@ static int qrtr_recvmsg(struct socket *sock, struct msghdr *msg,
 	struct qrtr_cb *cb;
 	int copied, rc;
 
-	lock_sock(sk);
-
-	if (sock_flag(sk, SOCK_ZAPPED)) {
-		release_sock(sk);
+	if (sock_flag(sk, SOCK_ZAPPED))
 		return -EADDRNOTAVAIL;
-	}
 
 	skb = skb_recv_datagram(sk, flags, &rc);
-	if (!skb) {
-		release_sock(sk);
+	if (!skb)
 		return rc;
-	}
+
+	lock_sock(sk);
 	cb = (struct qrtr_cb *)skb->cb;
 
 	copied = skb->len;
@@ -1274,6 +1269,36 @@ static int qrtr_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 	return rc;
 }
 
+static int qrtr_shutdown(struct socket *sock, int mode)
+{
+	struct sock *sk;
+
+	if (mode < SHUT_RD || mode > SHUT_RDWR)
+		return -EINVAL;
+
+	/*
+	 * This maps:
+	 * SHUT_RD   (0) -> RCV_SHUTDOWN  (1)
+	 * SHUT_WR   (1) -> SEND_SHUTDOWN (2)
+	 * SHUT_RDWR (2) -> SHUTDOWN_MASK (3)
+	 */
+	mode++;
+
+	sk = sock->sk;
+
+	/*
+	 * Do not use lock_sock() here: sendmsg() holds it while sleeping on
+	 * remote flow control, which would block shutdown() indefinitely.
+	 * The spinlock only serializes concurrent shutdown() callers.
+	 */
+	spin_lock_bh(&sk->sk_lock.slock);
+	WRITE_ONCE(sk->sk_shutdown, sk->sk_shutdown | mode);
+	spin_unlock_bh(&sk->sk_lock.slock);
+	sk->sk_state_change(sk);
+
+	return 0;
+}
+
 static int qrtr_release(struct socket *sock)
 {
 	struct sock *sk = sock->sk;
@@ -1285,7 +1310,7 @@ static int qrtr_release(struct socket *sock)
 	lock_sock(sk);
 
 	ipc = qrtr_sk(sk);
-	sk->sk_shutdown = SHUTDOWN_MASK;
+	WRITE_ONCE(sk->sk_shutdown, SHUTDOWN_MASK);
 	if (!sock_flag(sk, SOCK_DEAD))
 		sk->sk_state_change(sk);
 
@@ -1318,7 +1343,7 @@ static const struct proto_ops qrtr_proto_ops = {
 	.ioctl		= qrtr_ioctl,
 	.gettstamp	= sock_gettstamp,
 	.poll		= datagram_poll,
-	.shutdown	= sock_no_shutdown,
+	.shutdown	= qrtr_shutdown,
 	.release	= qrtr_release,
 	.mmap		= sock_no_mmap,
 };

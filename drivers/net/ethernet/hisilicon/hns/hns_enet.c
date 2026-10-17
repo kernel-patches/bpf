@@ -1230,7 +1230,7 @@ static void hns_nic_update_stats(struct net_device *netdev)
 	h->dev->ops->update_stats(h, &netdev->stats);
 }
 
-/* set mac addr if it is configed. or leave it to the AE driver */
+/* set mac addr if it is configured. or leave it to the AE driver */
 static void hns_init_mac_addr(struct net_device *ndev)
 {
 	struct hns_nic_priv *priv = netdev_priv(ndev);
@@ -2024,21 +2024,22 @@ static void hns_nic_reset_subtask(struct hns_nic_priv *priv)
 		return;
 	clear_bit(NIC_STATE2_RESET_REQUESTED, &priv->state);
 
-	/* If we're already down, removing or resetting, just bail */
+	rtnl_lock();
+	/* Serialize the reset decision with ndo_stop and unregister. */
 	if (test_bit(NIC_STATE_DOWN, &priv->state) ||
 	    test_bit(NIC_STATE_REMOVING, &priv->state) ||
 	    test_bit(NIC_STATE_RESETTING, &priv->state))
-		return;
+		goto out;
 
 	hns_nic_dump(priv);
 	netdev_info(priv->netdev, "try to reset %s port!\n",
 		    (type == HNAE_PORT_DEBUG ? "debug" : "service"));
 
-	rtnl_lock();
 	/* put off any impending NetWatchDogTimeout */
 	netif_trans_update(priv->netdev);
 	hns_nic_net_reinit(priv->netdev);
 
+out:
 	rtnl_unlock();
 }
 
@@ -2058,7 +2059,14 @@ static void hns_nic_service_task(struct work_struct *work)
 	struct hnae_handle *h = priv->ae_handle;
 
 	hns_nic_reset_subtask(priv);
-	hns_nic_update_link_status(priv->netdev);
+
+	rtnl_lock();
+	/* Keep linkwatch events within the netdev's registered lifetime. */
+	if (!test_bit(NIC_STATE_DOWN, &priv->state) &&
+	    !test_bit(NIC_STATE_REMOVING, &priv->state))
+		hns_nic_update_link_status(priv->netdev);
+	rtnl_unlock();
+
 	h->dev->ops->update_led_status(h);
 	hns_nic_update_stats(priv->netdev);
 
@@ -2317,7 +2325,7 @@ static int hns_nic_dev_probe(struct platform_device *pdev)
 		ret = device_property_read_u32(dev, "port-id", &port_id);
 		if (ret)
 			goto out_read_prop_fail;
-		/* for old dts, we need to caculate the port offset */
+		/* for old dts, we need to calculate the port offset */
 		port_id = port_id < HNS_SRV_OFFSET ? port_id + HNS_DEBUG_OFFSET
 			: port_id - HNS_SRV_OFFSET;
 	}
@@ -2398,6 +2406,21 @@ static void hns_nic_dev_remove(struct platform_device *pdev)
 	struct net_device *ndev = platform_get_drvdata(pdev);
 	struct hns_nic_priv *priv = netdev_priv(ndev);
 
+	set_bit(NIC_STATE_REMOVING, &priv->state);
+	if (priv->notifier_block.notifier_call)
+		hnae_unregister_notifier(&priv->notifier_block);
+	priv->notifier_block.notifier_call = NULL;
+
+	/* Join a TX timeout that passed the REMOVING check before work drain. */
+	if (ndev->reg_state != NETREG_UNINITIALIZED) {
+		netif_tx_lock_bh(ndev);
+		netif_tx_unlock_bh(ndev);
+	}
+
+	/* Stop the timer and drain work before ndo_stop touches the hardware. */
+	timer_shutdown_sync(&priv->service_timer);
+	cancel_work_sync(&priv->service_task);
+
 	if (ndev->reg_state != NETREG_UNINITIALIZED)
 		unregister_netdev(ndev);
 
@@ -2411,12 +2434,6 @@ static void hns_nic_dev_remove(struct platform_device *pdev)
 	if (!IS_ERR_OR_NULL(priv->ae_handle))
 		hnae_put_handle(priv->ae_handle);
 	priv->ae_handle = NULL;
-	if (priv->notifier_block.notifier_call)
-		hnae_unregister_notifier(&priv->notifier_block);
-	priv->notifier_block.notifier_call = NULL;
-
-	set_bit(NIC_STATE_REMOVING, &priv->state);
-	(void)cancel_work_sync(&priv->service_task);
 
 	/* safe for ACPI FW */
 	of_node_put(to_of_node(priv->fwnode));

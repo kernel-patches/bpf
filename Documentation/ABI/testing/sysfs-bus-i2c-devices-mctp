@@ -1,0 +1,26 @@
+What:		/sys/bus/i2c/devices/i2c-<n>/mctp_controller
+Date:		October 2026
+KernelVersion:	7.4
+Contact:	Kenny Hsieh <kenny_hsieh@jabil.com>
+Description:
+		Controls whether an MCTP network device exists for this I2C
+		bus. Writing 1 creates it, writing 0 removes it, and reading
+		returns 1 while it exists. Writing a value that matches the
+		current state is a no-op.
+
+		The attribute appears only on mux child busses whose mux tree
+		root has an mctp-i2c-controller device bound to it. The root
+		bus itself is excluded, because its network device follows
+		that mctp-i2c-controller device rather than this attribute.
+
+		A bus described in the devicetree can carry an
+		"mctp-controller" property instead, which creates the network
+		device when the mctp-i2c-controller device probes. This
+		attribute covers busses instantiated at runtime through the
+		I2C sysfs interface, which have no devicetree node on which to
+		set that property. Both mechanisms may be used on the same mux
+		tree.
+
+		Removal is synchronous and does not drain traffic: queued
+		packets are discarded and in-flight requests fail, so a
+		requester sees a timeout rather than an error.

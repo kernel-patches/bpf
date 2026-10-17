@@ -50,6 +50,9 @@ void nf_dup_ipv6(struct net *net, struct sk_buff *skb, unsigned int hooknum,
 	local_bh_disable();
 	if (current->in_nf_duplicate)
 		goto out;
+	if ((hooknum == NF_INET_PRE_ROUTING || hooknum == NF_INET_LOCAL_IN) &&
+	    ipv6_hdr(skb)->hop_limit <= 1)
+		goto out;
 	skb = pskb_copy(skb, GFP_ATOMIC);
 	if (skb == NULL)
 		goto out;

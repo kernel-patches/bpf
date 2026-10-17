@@ -2549,6 +2549,112 @@ static const struct raw_rec id2_data_l0 = {
 	},
 };
 
+/* TLS 1.2, AES_CCM, data, seqno:16, plaintext: 'Hello world' */
+static const struct raw_rec id16_data_l11 = {
+	.plain_len = 11,
+	.plain_data = {
+		0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x77, 0x6f,
+		0x72, 0x6c, 0x64,
+	},
+	.cipher_len = 40,
+	.cipher_data = {
+		0x17, 0x03, 0x03, 0x00, 0x23, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x10, 0xd3, 0x50, 0x90,
+		0xe1, 0x2a, 0x77, 0xc9, 0x38, 0x95, 0xef, 0xa4,
+		0x6f, 0x5e, 0xb6, 0x52, 0x05, 0x4b, 0x01, 0x44,
+		0x06, 0xc2, 0x51, 0x3f, 0x5e, 0xa5, 0x3e, 0x65,
+	},
+};
+
+/* TLS 1.2, AES_CCM, data, seqno:0-15, plaintext: '' -- the AEAD tag
+ * of each; the header and explicit nonce are built at send time
+ */
+static const unsigned char nodata_tags[16][16] = {
+	{ 0xc5, 0x37, 0x90, 0x70, 0x45, 0x89, 0xfb, 0x5c,
+	  0xc7, 0x89, 0x03, 0x68, 0x80, 0xd3, 0xd8, 0xcc, },
+	{ 0xce, 0xfc, 0x86, 0xc8, 0xf0, 0x55, 0xf9, 0x47,
+	  0x3f, 0x74, 0xdc, 0xc9, 0xbf, 0xfe, 0x5b, 0xb1, },
+	{ 0xc3, 0xca, 0x26, 0x22, 0xe4, 0x25, 0xfb, 0x5f,
+	  0x6d, 0xbf, 0x83, 0x30, 0x48, 0x69, 0x1a, 0x47, },
+	{ 0x4d, 0xfc, 0xe2, 0xc3, 0xfe, 0x11, 0x80, 0x85,
+	  0x94, 0x53, 0x79, 0x1d, 0x31, 0x14, 0x39, 0xec, },
+	{ 0x1e, 0x63, 0xa1, 0xfa, 0xef, 0xf1, 0x9e, 0x5c,
+	  0xee, 0x39, 0xcf, 0x41, 0x27, 0x36, 0xf5, 0x69, },
+	{ 0xa3, 0x49, 0x72, 0x01, 0x1a, 0xff, 0x1f, 0x71,
+	  0x51, 0x57, 0x80, 0xd2, 0x81, 0xee, 0xef, 0x75, },
+	{ 0x95, 0x92, 0x72, 0xda, 0x7a, 0x4e, 0x68, 0x91,
+	  0x02, 0x09, 0xfc, 0xe8, 0x2b, 0x3a, 0x54, 0x05, },
+	{ 0x41, 0x00, 0x73, 0xcf, 0xd3, 0xb3, 0xa7, 0x19,
+	  0x7d, 0x0f, 0x6d, 0x9d, 0xf6, 0x57, 0xee, 0xdd, },
+	{ 0xb5, 0x24, 0x17, 0x2d, 0xac, 0xcf, 0x5f, 0xac,
+	  0x2d, 0x24, 0xf2, 0x8c, 0xaf, 0xf3, 0xd7, 0x78, },
+	{ 0xf8, 0x23, 0xde, 0x09, 0x08, 0x7c, 0x75, 0x7c,
+	  0x23, 0x3a, 0xb6, 0x46, 0xc2, 0xfc, 0xac, 0xdb, },
+	{ 0x72, 0x01, 0x24, 0x35, 0x9f, 0x13, 0x92, 0xb2,
+	  0x93, 0xd9, 0xb4, 0x2e, 0xfc, 0xfc, 0x95, 0xa7, },
+	{ 0x2f, 0x0f, 0x94, 0xcf, 0x1a, 0x0f, 0x1a, 0xf1,
+	  0xe2, 0x6a, 0x97, 0x21, 0x12, 0x5f, 0x24, 0x39, },
+	{ 0xb4, 0xb9, 0xe1, 0x0a, 0x9c, 0x28, 0xbb, 0xf6,
+	  0xd9, 0xd7, 0x39, 0xf6, 0xfa, 0xcd, 0x47, 0xd6, },
+	{ 0xe8, 0xb9, 0x01, 0x90, 0x2e, 0x72, 0xa1, 0xd5,
+	  0x13, 0xdc, 0x28, 0xa7, 0x91, 0x04, 0x9b, 0xcb, },
+	{ 0x73, 0x67, 0x17, 0x6e, 0x50, 0xee, 0x28, 0x3b,
+	  0x6e, 0x2b, 0x32, 0xdd, 0xa1, 0x55, 0x97, 0x7a, },
+	{ 0xaf, 0xd4, 0xed, 0x91, 0xc3, 0x91, 0x21, 0x55,
+	  0xd8, 0xef, 0x23, 0xbe, 0xbf, 0x7b, 0xf2, 0x36, },
+};
+
+static void zero_len_sock_pair(struct __test_metadata *_metadata,
+			       int *fd, int *cfd, bool *notls)
+{
+	struct tls_crypto_info_keys tls12;
+	int ret;
+
+	tls_crypto_info_init(TLS_1_2_VERSION, TLS_CIPHER_AES_CCM_128,
+			     &tls12, 0);
+
+	ulp_sock_pair(_metadata, fd, cfd, notls);
+	if (*notls)
+		return;
+
+	/* fd stays keyless; these fixtures send raw records over it */
+	ret = setsockopt(*cfd, SOL_TLS, TLS_RX, &tls12, tls12.len);
+	ASSERT_EQ(ret, 0);
+}
+
+/* Send a variant's records; return the last one carrying payload */
+static const struct raw_rec *
+zero_len_send_recs(struct __test_metadata *_metadata, int fd,
+		   const struct raw_rec *const *recs)
+{
+	const struct raw_rec *payload = NULL;
+	int i;
+
+	for (i = 0; i < 4 && recs[i]; i++) {
+		EXPECT_EQ(send(fd, recs[i]->cipher_data, recs[i]->cipher_len, 0),
+			  recs[i]->cipher_len);
+		if (recs[i]->plain_len)
+			payload = recs[i];
+	}
+
+	return payload;
+}
+
+/* Send @count empty data records with sequence numbers 0 to @count - 1 */
+static void
+zero_len_send_nodata(struct __test_metadata *_metadata, int fd,
+		     unsigned int count)
+{
+	unsigned char rec[29] = { 0x17, 0x03, 0x03, 0x00, 0x18, };
+	unsigned int seq;
+
+	for (seq = 0; seq < count; seq++) {
+		rec[12] = seq;
+		memcpy(rec + 13, nodata_tags[seq], 16);
+		EXPECT_EQ(send(fd, rec, sizeof(rec), 0), sizeof(rec));
+	}
+}
+
 FIXTURE(zero_len)
 {
 	int fd, cfd;
@@ -2609,21 +2715,15 @@ FIXTURE_VARIANT_ADD(zero_len, data_0data_0data)
 	.recv_ret = { 11, -EAGAIN, },
 };
 
+FIXTURE_VARIANT_ADD(zero_len, data_0data_data)
+{
+	.recs = { &id0_data_l11, &id1_data_l0, &id2_data_l11, },
+	.recv_ret = { 11, 11, -EAGAIN, },
+};
+
 FIXTURE_SETUP(zero_len)
 {
-	struct tls_crypto_info_keys tls12;
-	int ret;
-
-	tls_crypto_info_init(TLS_1_2_VERSION, TLS_CIPHER_AES_CCM_128,
-			     &tls12, 0);
-
-	ulp_sock_pair(_metadata, &self->fd, &self->cfd, &self->notls);
-	if (self->notls)
-		return;
-
-	/* Don't install keys on fd, we'll send raw records */
-	ret = setsockopt(self->cfd, SOL_TLS, TLS_RX, &tls12, tls12.len);
-	ASSERT_EQ(ret, 0);
+	zero_len_sock_pair(_metadata, &self->fd, &self->cfd, &self->notls);
 }
 
 FIXTURE_TEARDOWN(zero_len)
@@ -2639,10 +2739,10 @@ TEST_F(zero_len, test)
 	int rec_off;
 	int i;
 
-	for (i = 0; i < 4 && variant->recs[i]; i++)
-		EXPECT_EQ(send(self->fd, variant->recs[i]->cipher_data,
-			       variant->recs[i]->cipher_len, 0),
-			  variant->recs[i]->cipher_len);
+	if (self->notls)
+		SKIP(return, "no TLS support");
+
+	zero_len_send_recs(_metadata, self->fd, variant->recs);
 
 	rec = &variant->recs[0];
 	rec_off = 0;
@@ -2667,6 +2767,218 @@ TEST_F(zero_len, test)
 		}
 	}
 };
+
+FIXTURE(zero_len_peek)
+{
+	int fd, cfd;
+	bool notls;
+};
+
+FIXTURE_VARIANT(zero_len_peek)
+{
+	const struct raw_rec *recs[4];
+	ssize_t peek_ret;
+};
+
+FIXTURE_VARIANT_ADD(zero_len_peek, 0data_0data_data)
+{
+	.recs = { &id0_data_l0, &id1_data_l0, &id2_data_l11, },
+	.peek_ret = 11,
+};
+
+FIXTURE_VARIANT_ADD(zero_len_peek, 0data_0data_0data)
+{
+	.recs = { &id0_data_l0, &id1_data_l0, &id2_data_l0, },
+	.peek_ret = -EAGAIN,
+};
+
+FIXTURE_SETUP(zero_len_peek)
+{
+	zero_len_sock_pair(_metadata, &self->fd, &self->cfd, &self->notls);
+}
+
+FIXTURE_TEARDOWN(zero_len_peek)
+{
+	close(self->fd);
+	close(self->cfd);
+}
+
+/* Peeking past a run of empty data records must reach the payload
+ * behind them, and a run with no payload behind it must report EAGAIN
+ * and leave no record queued.
+ */
+TEST_F(zero_len_peek, test)
+{
+	struct pollfd pfd = { .fd = self->cfd, .events = POLLIN };
+	const struct raw_rec *payload;
+	unsigned char buf[128];
+	ssize_t ret;
+
+	if (self->notls)
+		SKIP(return, "no TLS support");
+
+	payload = zero_len_send_recs(_metadata, self->fd, variant->recs);
+
+	if (variant->peek_ret < 0) {
+		ret = recv(self->cfd, buf, sizeof(buf),
+			   MSG_DONTWAIT | MSG_PEEK);
+		EXPECT_EQ(ret, -1);
+		EXPECT_EQ(errno, -variant->peek_ret);
+
+		/* A record left on rx_list keeps the socket readable */
+		EXPECT_EQ(poll(&pfd, 1, 0), 0);
+		return;
+	}
+
+	ret = recv(self->cfd, buf, sizeof(buf), MSG_DONTWAIT | MSG_PEEK);
+	EXPECT_EQ(ret, variant->peek_ret);
+	if (ret == variant->peek_ret)
+		EXPECT_EQ(memcmp(buf, payload->plain_data,
+				 variant->peek_ret), 0);
+
+	ret = recv(self->cfd, buf, sizeof(buf), MSG_DONTWAIT);
+	EXPECT_EQ(ret, variant->peek_ret);
+	if (ret == variant->peek_ret)
+		EXPECT_EQ(memcmp(buf, payload->plain_data,
+				 variant->peek_ret), 0);
+
+	ret = recv(self->cfd, buf, sizeof(buf), MSG_DONTWAIT);
+	EXPECT_EQ(ret, -1);
+	EXPECT_EQ(errno, EAGAIN);
+}
+
+FIXTURE(zero_len_splice)
+{
+	int fd, cfd;
+	bool notls;
+};
+
+FIXTURE_VARIANT(zero_len_splice)
+{
+	unsigned int nodata;
+	const struct raw_rec *recs[4];
+	ssize_t splice_ret;
+};
+
+FIXTURE_VARIANT_ADD(zero_len_splice, 0data_data)
+{
+	.recs = { &id0_data_l0, &id1_data_l11, },
+	.splice_ret = 11,
+};
+
+FIXTURE_VARIANT_ADD(zero_len_splice, 0data_0data_data)
+{
+	.recs = { &id0_data_l0, &id1_data_l0, &id2_data_l11, },
+	.splice_ret = 11,
+};
+
+FIXTURE_VARIANT_ADD(zero_len_splice, 0data_0data_0data)
+{
+	.recs = { &id0_data_l0, &id1_data_l0, &id2_data_l0, },
+	.splice_ret = -EAGAIN,
+};
+
+FIXTURE_VARIANT_ADD(zero_len_splice, 0data_0ctrl)
+{
+	.recs = { &id0_data_l0, &id1_ctrl_l0, },
+	.splice_ret = -EINVAL,
+};
+
+/* TLS_RX_NODATA_LIMIT empty records ahead of the payload */
+FIXTURE_VARIANT_ADD(zero_len_splice, 0data_x16_data)
+{
+	.nodata = 16,
+	.recs = { &id16_data_l11, },
+	.splice_ret = -EAGAIN,
+};
+
+FIXTURE_SETUP(zero_len_splice)
+{
+	zero_len_sock_pair(_metadata, &self->fd, &self->cfd, &self->notls);
+}
+
+FIXTURE_TEARDOWN(zero_len_splice)
+{
+	close(self->fd);
+	close(self->cfd);
+}
+
+/* Splicing must skip a run of empty data records to reach the payload
+ * behind it, since a zero-byte splice reads as EOF. Splice reports
+ * EAGAIN for a run with no payload behind it, and EINVAL for a control
+ * record behind the run. A run at the cap reports EAGAIN with the
+ * payload left for the next splice.
+ */
+static void
+zero_len_do_splice(struct __test_metadata *_metadata,
+		   FIXTURE_DATA(zero_len_splice) *self,
+		   const FIXTURE_VARIANT(zero_len_splice) *variant,
+		   unsigned int splice_flags)
+{
+	struct pollfd pfd = { .fd = self->cfd, .events = POLLIN };
+	const struct raw_rec *payload;
+	unsigned char buf[128];
+	ssize_t ret;
+	int p[2];
+
+	ASSERT_GE(pipe(p), 0);
+
+	zero_len_send_nodata(_metadata, self->fd, variant->nodata);
+	payload = zero_len_send_recs(_metadata, self->fd, variant->recs);
+
+	ret = splice(self->cfd, NULL, p[1], NULL, sizeof(buf), splice_flags);
+	if (variant->splice_ret < 0) {
+		EXPECT_EQ(ret, -1);
+		EXPECT_EQ(errno, -variant->splice_ret);
+		if (!payload)
+			goto out;
+
+		ret = splice(self->cfd, NULL, p[1], NULL, sizeof(buf),
+			     splice_flags);
+	}
+
+	/* ASSERT so a zero return stops the test here; the read
+	 * below would block until the harness timeout.
+	 */
+	ASSERT_EQ(ret, payload->plain_len);
+	ret = read(p[0], buf, sizeof(buf));
+	EXPECT_EQ(ret, payload->plain_len);
+	if (ret == payload->plain_len)
+		EXPECT_EQ(memcmp(buf, payload->plain_data, ret), 0);
+
+	/* The empty records were consumed, not left queued */
+	EXPECT_EQ(poll(&pfd, 1, 0), 0);
+
+out:
+	close(p[0]);
+	close(p[1]);
+}
+
+TEST_F(zero_len_splice, test)
+{
+	if (self->notls)
+		SKIP(return, "no TLS support");
+
+	zero_len_do_splice(_metadata, self, variant, SPLICE_F_NONBLOCK);
+}
+
+/* The socket's O_NONBLOCK governs the record wait, as on a plain TCP
+ * socket, so a splice without SPLICE_F_NONBLOCK behaves like one that
+ * sets it.
+ */
+TEST_F(zero_len_splice, nonblock_socket)
+{
+	int sflags;
+
+	if (self->notls)
+		SKIP(return, "no TLS support");
+
+	sflags = fcntl(self->cfd, F_GETFL, 0);
+	ASSERT_GE(sflags, 0);
+	ASSERT_EQ(fcntl(self->cfd, F_SETFL, sflags | O_NONBLOCK), 0);
+
+	zero_len_do_splice(_metadata, self, variant, 0);
+}
 
 FIXTURE(tls_err)
 {

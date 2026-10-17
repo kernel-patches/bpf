@@ -131,10 +131,7 @@ int slcan_enable_err_rst_on_open(struct net_device *ndev, bool on)
 	if (netif_running(ndev))
 		return -EBUSY;
 
-	if (on)
-		set_bit(CF_ERR_RST, &sl->cmd_flags);
-	else
-		clear_bit(CF_ERR_RST, &sl->cmd_flags);
+	assign_bit(CF_ERR_RST, &sl->cmd_flags, on);
 
 	return 0;
 }
@@ -852,7 +849,6 @@ static int slcan_open(struct tty_struct *tty)
 
 	/* Mark ldisc channel as alive */
 	sl->tty = tty;
-	tty->disc_data = sl;
 
 	err = register_candev(dev);
 	if (err) {
@@ -860,6 +856,8 @@ static int slcan_open(struct tty_struct *tty)
 		pr_err("can't register candev\n");
 		return err;
 	}
+
+	tty->disc_data = sl;
 
 	netdev_info(dev, "slcan on %s.\n", tty->name);
 	/* TTY layer expects 0 on success */

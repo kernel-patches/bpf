@@ -485,8 +485,9 @@ static int ip6mr_vif_seq_show(struct seq_file *seq, void *v)
 		seq_printf(seq,
 			   "%2td %-10s %8ld %7ld  %8ld %7ld %05X\n",
 			   vif - mrt->vif_table,
-			   name, vif->bytes_in, vif->pkt_in,
-			   vif->bytes_out, vif->pkt_out,
+			   name,
+			   READ_ONCE(vif->bytes_in), READ_ONCE(vif->pkt_in),
+			   READ_ONCE(vif->bytes_out), READ_ONCE(vif->pkt_out),
 			   vif->flags);
 	}
 	return 0;
@@ -651,6 +652,12 @@ static netdev_tx_t reg_vif_xmit(struct sk_buff *skb,
 
 	DEV_STATS_ADD(dev, tx_bytes, skb->len);
 	DEV_STATS_INC(dev, tx_packets);
+
+	/* skb->cb[] holds qdisc/tc state at this point, not IP6CB.
+	 * ip6mr_cache_report() copies it to the report delivered to
+	 * the mroute socket, where it is read as IP6CB.
+	 */
+	memset(IP6CB(skb), 0, sizeof(*IP6CB(skb)));
 
 	ip6mr_cache_report(mrt, skb, READ_ONCE(mrt->mroute_reg_vif_num),
 			   MRT6MSG_WHOLEPKT);
@@ -1892,8 +1899,7 @@ int ip6_mroute_setsockopt(struct sock *sk, int optname, sockptr_t optval,
  *	Getsock opt support for the multicast routing system.
  */
 
-int ip6_mroute_getsockopt(struct sock *sk, int optname, sockptr_t optval,
-			  sockptr_t optlen)
+int ip6_mroute_getsockopt(struct sock *sk, int optname, sockopt_t *sopt)
 {
 	int olr;
 	int val;
@@ -1924,16 +1930,12 @@ int ip6_mroute_getsockopt(struct sock *sk, int optname, sockptr_t optval,
 		return -ENOPROTOOPT;
 	}
 
-	if (copy_from_sockptr(&olr, optlen, sizeof(int)))
-		return -EFAULT;
-
-	olr = min_t(int, olr, sizeof(int));
+	olr = min_t(int, sopt->optlen, sizeof(int));
 	if (olr < 0)
 		return -EINVAL;
 
-	if (copy_to_sockptr(optlen, &olr, sizeof(int)))
-		return -EFAULT;
-	if (copy_to_sockptr(optval, &val, olr))
+	sopt->optlen = olr;
+	if (copy_to_iter(&val, olr, &sopt->iter_out) != olr)
 		return -EFAULT;
 	return 0;
 }

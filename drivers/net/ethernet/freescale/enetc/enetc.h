@@ -22,9 +22,12 @@
 #define ENETC_MAX_MTU		(ENETC_MAC_MAXFRM_SIZE - \
 				(ETH_FCS_LEN + ETH_HLEN + VLAN_HLEN))
 
+#define ENETC_MIN_BUFF_SIZE	16
+
 #define ENETC_CBD_DATA_MEM_ALIGN 64
 
 #define ENETC_MADDR_HASH_TBL_SZ	64
+#define ENETC_INT_NAME_MAX	(IFNAMSIZ + 8)
 
 enum enetc_mac_addr_type {UC, MC, MADDR_TYPE};
 
@@ -144,6 +147,8 @@ struct enetc_bdr_resource {
 	};
 	char *tso_headers;
 	dma_addr_t tso_headers_dma;
+	void *tx_pad;
+	dma_addr_t tx_pad_dma;
 };
 
 struct enetc_bdr {
@@ -170,6 +175,10 @@ struct enetc_bdr {
 	void __iomem *idr; /* Interrupt Detect Register pointer */
 
 	int buffer_offset;
+
+	/* Serialize NAPI and ndo_xdp_xmit() targeting the same TX ring */
+	spinlock_t xdp_lock;
+
 	struct enetc_xdp_data xdp;
 
 	struct enetc_ring_stats stats;
@@ -181,6 +190,10 @@ struct enetc_bdr {
 	/* DMA buffer for TSO headers */
 	char *tso_headers;
 	dma_addr_t tso_headers_dma;
+
+	/* Shared read-only zero buffer to pad short frames to ETH_ZLEN */
+	void *tx_pad;
+	dma_addr_t tx_pad_dma;
 } ____cacheline_aligned_in_smp;
 
 static inline void enetc_bdr_idx_inc(struct enetc_bdr *bdr, int *i)
@@ -299,6 +312,10 @@ struct enetc_si_ops {
 	int (*set_rss_table)(struct enetc_si *si, const u32 *table, int count);
 	int (*setup_cbdr)(struct enetc_si *si);
 	void (*teardown_cbdr)(struct enetc_si *si);
+
+	/* VSI-specific hooks */
+	int (*vf_reg_link_status_notifier)(struct enetc_si *si);
+	int (*vf_unreg_link_status_notifier)(struct enetc_si *si);
 };
 
 /* PCI IEP device data */
@@ -333,6 +350,11 @@ struct enetc_si {
 
 	struct dentry *debugfs_root;
 	struct enetc_msg_swbd msg; /* Only valid for VSI */
+	struct workqueue_struct *workqueue;
+	struct work_struct msg_task;
+	char msg_int_name[ENETC_INT_NAME_MAX];
+
+	struct enetc_mac_filter mac_filter[MADDR_TYPE];
 };
 
 #define ENETC_SI_ALIGN	32
@@ -374,7 +396,6 @@ static inline bool enetc_is_pseudo_mac(struct enetc_si *si)
 }
 
 #define ENETC_MAX_NUM_TXQS	8
-#define ENETC_INT_NAME_MAX	(IFNAMSIZ + 8)
 
 struct enetc_int_vector {
 	void __iomem *rbier;

@@ -8,6 +8,7 @@ if NET_VENDOR_MICROCHIP
 config LAN865X
 	tristate "LAN865x support"
 	depends on SPI
+	depends on PTP_1588_CLOCK_OPTIONAL
 	select OA_TC6
 	help
 	  Support for the Microchip LAN8650/1 Rev.B0/B1 MACPHY Ethernet chip. It

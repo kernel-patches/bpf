@@ -381,6 +381,9 @@ static int enic_set_ringparam(struct net_device *netdev,
 	unsigned int tx_pending;
 	int err = 0;
 
+	if (enic_datapath_is_quarantined(enic))
+		return -EBUSY;
+
 	if (ring->rx_mini_max_pending || ring->rx_mini_pending) {
 		netdev_info(netdev,
 			    "modifying mini ring params is not supported");
@@ -407,8 +410,11 @@ static int enic_set_ringparam(struct net_device *netdev,
 			c->max_wq_ring);
 		return -EINVAL;
 	}
-	if (running)
-		dev_close(netdev);
+	if (running) {
+		err = enic_close_for_reconfigure(netdev);
+		if (err)
+			return err;
+	}
 	c->rq_desc_count =
 		ring->rx_pending & 0xffffffe0; /* must be aligned to groups of 32 */
 	c->wq_desc_count =

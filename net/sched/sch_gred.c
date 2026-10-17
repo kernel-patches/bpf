@@ -170,6 +170,16 @@ static int gred_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	unsigned long qavg = 0;
 	u16 dp = tc_index_to_dp(skb);
 
+	/* The per-VQ limits do not bound sch->qstats.backlog: qdisc_enqueue_tail()
+	 * adds every VQ into the one u32 aggregate, so individually legal VQs
+	 * can wrap it. Guard the aggregate before dispatching.
+	 */
+	if (unlikely(qdisc_backlog_at_max(sch))) {
+		qdisc_qstats_overlimit(sch);
+		return qdisc_drop_reason(skb, sch, to_free,
+					 QDISC_DROP_OVERLIMIT);
+	}
+
 	if (dp >= t->DPs || (q = t->tab[dp]) == NULL) {
 		dp = t->def;
 

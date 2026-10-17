@@ -232,7 +232,8 @@ err_drop:
 }
 
 /* Free transmitted packets */
-static void bgmac_dma_tx_free(struct bgmac *bgmac, struct bgmac_dma_ring *ring)
+static void bgmac_dma_tx_free(struct bgmac *bgmac, struct bgmac_dma_ring *ring,
+			      int budget)
 {
 	struct device *dma_dev = bgmac->dma_dev;
 	int empty_slot;
@@ -272,7 +273,7 @@ static void bgmac_dma_tx_free(struct bgmac *bgmac, struct bgmac_dma_ring *ring)
 			pkts_compl++;
 
 			/* Free memory! :) */
-			dev_kfree_skb(slot->skb);
+			napi_consume_skb(slot->skb, budget);
 			slot->skb = NULL;
 		}
 
@@ -466,9 +467,9 @@ static int bgmac_dma_rx_read(struct bgmac *bgmac, struct bgmac_dma_ring *ring,
 			/* Omit CRC. */
 			len -= ETH_FCS_LEN;
 
-			skb = build_skb(buf, BGMAC_RX_ALLOC_SIZE);
+			skb = napi_build_skb(buf, BGMAC_RX_ALLOC_SIZE);
 			if (unlikely(!skb)) {
-				netdev_err(bgmac->net_dev, "build_skb failed\n");
+				netdev_err(bgmac->net_dev, "napi_build_skb failed\n");
 				put_page(virt_to_head_page(buf));
 				bgmac->net_dev->stats.rx_errors++;
 				break;
@@ -535,17 +536,19 @@ static void bgmac_dma_tx_ring_free(struct bgmac *bgmac,
 		unsigned int len = ctl1 & BGMAC_DESC_CTL1_LEN;
 
 		slot = &ring->slots[i];
+
+		if (slot->dma_addr) {
+			if (le32_to_cpu(dma_desc[i].ctl0) & BGMAC_DESC_CTL0_SOF)
+				dma_unmap_single(dma_dev, slot->dma_addr,
+						 len, DMA_TO_DEVICE);
+			else
+				dma_unmap_page(dma_dev, slot->dma_addr,
+					       len, DMA_TO_DEVICE);
+			slot->dma_addr = 0;
+		}
+
 		dev_kfree_skb(slot->skb);
-
-		if (!slot->dma_addr)
-			continue;
-
-		if (slot->skb)
-			dma_unmap_single(dma_dev, slot->dma_addr,
-					 len, DMA_TO_DEVICE);
-		else
-			dma_unmap_page(dma_dev, slot->dma_addr,
-				       len, DMA_TO_DEVICE);
+		slot->skb = NULL;
 	}
 }
 
@@ -1153,7 +1156,7 @@ static int bgmac_poll(struct napi_struct *napi, int weight)
 	/* Ack */
 	bgmac_write(bgmac, BGMAC_INT_STATUS, ~0);
 
-	bgmac_dma_tx_free(bgmac, &bgmac->tx_ring[0]);
+	bgmac_dma_tx_free(bgmac, &bgmac->tx_ring[0], weight);
 	handled += bgmac_dma_rx_read(bgmac, &bgmac->rx_ring[0], weight);
 
 	/* Poll again if more events arrived in the meantime */
@@ -1183,9 +1186,6 @@ static int bgmac_open(struct net_device *net_dev)
 	if (err)
 		return err;
 
-	/* Specs say about reclaiming rings here, but we do that in DMA init */
-	bgmac_chip_init(bgmac);
-
 	err = request_irq(bgmac->irq, bgmac_interrupt, IRQF_SHARED,
 			  net_dev->name, net_dev);
 	if (err < 0) {
@@ -1194,6 +1194,9 @@ static int bgmac_open(struct net_device *net_dev)
 		return err;
 	}
 	napi_enable(&bgmac->napi);
+
+	/* Specs say about reclaiming rings here, but we do that in DMA init */
+	bgmac_chip_init(bgmac);
 
 	phy_start(net_dev->phydev);
 
@@ -1608,9 +1611,9 @@ int bgmac_enet_resume(struct bgmac *bgmac)
 	if (rc)
 		return rc;
 
-	bgmac_chip_init(bgmac);
-
 	napi_enable(&bgmac->napi);
+
+	bgmac_chip_init(bgmac);
 
 	netif_tx_lock(bgmac->net_dev);
 	netif_device_attach(bgmac->net_dev);

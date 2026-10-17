@@ -98,7 +98,7 @@ static int emac_send_command_sr1(struct prueth_emac *emac, u32 cmd)
 	tx_chn = &emac->tx_chns[emac->tx_ch_num - 1];
 
 	/* Map the linear buffer */
-	buf_dma = dma_map_single(tx_chn->dma_dev, data, pkt_len, DMA_TO_DEVICE);
+	buf_dma = dma_map_single(tx_chn->dma_dev, data, pkt_len, DMA_BIDIRECTIONAL);
 	if (dma_mapping_error(tx_chn->dma_dev, buf_dma)) {
 		netdev_err(emac->ndev, "cmd %x: failed to map cmd buffer\n", cmd);
 		ret = -EINVAL;
@@ -108,7 +108,7 @@ static int emac_send_command_sr1(struct prueth_emac *emac, u32 cmd)
 	first_desc = k3_cppi_desc_pool_alloc(tx_chn->desc_pool);
 	if (!first_desc) {
 		netdev_err(emac->ndev, "cmd %x: failed to allocate descriptor\n", cmd);
-		dma_unmap_single(tx_chn->dma_dev, buf_dma, pkt_len, DMA_TO_DEVICE);
+		dma_unmap_single(tx_chn->dma_dev, buf_dma, pkt_len, DMA_BIDIRECTIONAL);
 		ret = -ENOMEM;
 		goto err_unlock;
 	}
@@ -303,7 +303,7 @@ static struct page *prueth_process_rx_mgm(struct prueth_emac *emac,
 	page = swdata->data.page;
 	cppi5_hdesc_get_obuf(desc_rx, &buf_dma, &buf_dma_len);
 
-	dma_unmap_single(rx_chn->dma_dev, buf_dma, buf_dma_len, DMA_FROM_DEVICE);
+	dma_unmap_single(rx_chn->dma_dev, buf_dma, buf_dma_len, DMA_BIDIRECTIONAL);
 	k3_cppi_desc_pool_free(rx_chn->desc_pool, desc_rx);
 
 	new_page = page_pool_dev_alloc_pages(rx_chn->pg_pool);

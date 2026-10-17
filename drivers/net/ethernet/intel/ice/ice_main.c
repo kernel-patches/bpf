@@ -3248,7 +3248,7 @@ skip_irq:
 	ice_irq_dynamic_ena(hw, NULL, NULL);
 	ice_flush(hw);
 
-	if (ice_ptp_tx_tstamps_pending(pf)) {
+	if (ice_ptp_tx_tstamps_pending(pf, true)) {
 		/* If any new Tx timestamps happened while in interrupt,
 		 * re-arm the interrupt to trigger it again.
 		 */
@@ -3428,7 +3428,7 @@ skip_req_irq:
 		     ((pf->ll_ts_irq.index + pf_intr_start_offset) &
 		      PFINT_SB_CTL_MSIX_INDX_M) | PFINT_SB_CTL_CAUSE_ENA_M);
 	wr32(hw, GLINT_ITR(ICE_RX_ITR, pf->oicr_irq.index),
-	     ITR_REG_ALIGN(ICE_ITR_8K) >> ICE_ITR_GRAN_S);
+	     ITR_REG_ALIGN(ICE_ITR_20K) >> ICE_ITR_GRAN_S);
 
 	ice_flush(hw);
 	ice_irq_dynamic_ena(hw, NULL, NULL);
@@ -4725,6 +4725,14 @@ static void ice_init_features(struct ice_pf *pf)
 	if (ice_is_safe_mode(pf))
 		return;
 
+	/* pf->dplls.lock guards TSPLL/CGU access shared between the DPLL
+	 * subsystem callbacks and the PTP periodic worker's TSPLL monitor.
+	 * Initialize it before ice_ptp_init() so the PTP kworker never sees
+	 * an uninitialized mutex, and destroy it in ice_deinit_features()
+	 * only after ice_ptp_release() has drained the kworker.
+	 */
+	mutex_init(&pf->dplls.lock);
+
 	/* initialize DDP driven features */
 	if (test_bit(ICE_FLAG_PTP_SUPPORTED, pf->flags))
 		ice_ptp_init(pf);
@@ -4769,6 +4777,7 @@ static void ice_deinit_features(struct ice_pf *pf)
 		ice_ptp_release(pf);
 	if (test_bit(ICE_FLAG_DPLL, pf->flags))
 		ice_dpll_deinit(pf);
+	mutex_destroy(&pf->dplls.lock);
 	if (pf->eswitch_mode == DEVLINK_ESWITCH_MODE_SWITCHDEV)
 		xa_destroy(&pf->eswitch.reprs);
 	ice_hwmon_exit(pf);
@@ -4809,6 +4818,14 @@ static void ice_init_link(struct ice_pf *pf)
 		dev_err(dev, "ice_update_link_info failed: %d\n", err);
 
 	ice_init_link_dflt_override(pf->hw.port_info);
+
+	/* Seed PTP link status from current PHY status, since link may
+	 * already be up (e.g. after PXE boot) without a link-change edge to
+	 * catch it later.
+	 */
+	WRITE_ONCE(pf->ptp.port.link_up,
+		   !!(pf->hw.port_info->phy.link_info.link_info &
+		      ICE_AQ_LINK_UP));
 
 	ice_check_link_cfg_err(pf,
 			       pf->hw.port_info->phy.link_info.link_cfg_err);
@@ -5521,7 +5538,7 @@ static int ice_suspend(struct device *dev)
 
 	pf = pci_get_drvdata(pdev);
 
-	if (!ice_pf_state_is_nominal(pf)) {
+	if (!pf || !ice_pf_state_is_nominal(pf)) {
 		dev_err(dev, "Device is not ready, no need to suspend it\n");
 		return -EBUSY;
 	}
@@ -6202,7 +6219,7 @@ ice_fdb_del(struct ndmsg *ndm, __always_unused struct nlattr *tb[],
  *
  * Features that need fixing:
  *	Cannot simultaneously enable CTAG and STAG stripping and/or insertion.
- *	These are mutually exlusive as the VSI context cannot support multiple
+ *	These are mutually exclusive as the VSI context cannot support multiple
  *	VLAN ethertypes simultaneously for stripping and/or insertion. If this
  *	is not done, then default to clearing the requested STAG offload
  *	settings.
@@ -6745,7 +6762,6 @@ static int ice_up_complete(struct ice_vsi *vsi)
 		ice_print_link_msg(vsi, true);
 		netif_tx_start_all_queues(vsi->netdev);
 		netif_carrier_on(vsi->netdev);
-		ice_ptp_link_change(pf, true);
 	}
 
 	/* Perform an initial read of the statistics registers now to
@@ -7273,7 +7289,6 @@ int ice_down(struct ice_vsi *vsi)
 
 	if (vsi->netdev) {
 		vlan_err = ice_vsi_del_vlan_zero(vsi);
-		ice_ptp_link_change(vsi->back, false);
 		netif_carrier_off(vsi->netdev);
 		netif_tx_disable(vsi->netdev);
 	}
@@ -7793,6 +7808,14 @@ static void ice_rebuild(struct ice_pf *pf, enum ice_reset_req reset_type)
 		netif_device_attach(vsi->netdev);
 
 	ice_update_pf_netdev_link(pf);
+
+	if (test_bit(ICE_FLAG_PTP_SUPPORTED, pf->flags) && pf->hw.port_info) {
+		bool link_up;
+
+		link_up = !!(pf->hw.port_info->phy.link_info.link_info &
+			     ICE_AQ_LINK_UP);
+		ice_ptp_link_change(pf, link_up);
+	}
 
 	/* tell the firmware we are up */
 	err = ice_send_version(pf);

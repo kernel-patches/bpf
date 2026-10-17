@@ -568,8 +568,8 @@ int cfg80211_chandef_add_npca(struct wiphy *wiphy,
 			      const struct ieee80211_uhr_npca_info *npca)
 {
 	struct cfg80211_chan_def new_chandef = *chandef;
-	u32 width, npca_freq;
-	u8 offs;
+	u32 npca_freq;
+	u8 chan;
 
 	if (chandef->npca_chan || chandef->npca_punctured)
 		return -EINVAL;
@@ -589,11 +589,10 @@ int cfg80211_chandef_add_npca(struct wiphy *wiphy,
 		return -EINVAL;
 	}
 
-	offs = le32_get_bits(npca->params,
-			     IEEE80211_UHR_NPCA_PARAMS_PRIMARY_CHAN_OFFS);
+	chan = le32_get_bits(npca->params,
+			     IEEE80211_UHR_NPCA_PARAMS_PRIMARY_CHAN);
 
-	width = cfg80211_chandef_get_width(chandef);
-	npca_freq = chandef->center_freq1 - width / 2 + 10 + 20 * offs;
+	npca_freq = ieee80211_channel_to_frequency(chan, chandef->chan->band);
 	new_chandef.npca_chan = ieee80211_get_channel(wiphy, npca_freq);
 	if (!new_chandef.npca_chan)
 		return -EINVAL;
@@ -1244,7 +1243,7 @@ bool cfg80211_any_wiphy_oper_chan(struct wiphy *wiphy,
 {
 	struct cfg80211_registered_device *rdev;
 
-	ASSERT_RTNL();
+	lockdep_assert_held(&cfg80211_mutex);
 
 	if (!(chan->flags & IEEE80211_CHAN_RADAR))
 		return false;
@@ -1701,6 +1700,30 @@ static bool cfg80211_ir_permissive_chan(struct wiphy *wiphy,
 
 	lockdep_assert_held(&rdev->wiphy.mtx);
 
+	/*
+	 * A channel the wiphy is already operating on (e.g. a station
+	 * connection) is already being radiated on by this device; starting
+	 * an AP on the very same channel adds nothing new from a regulatory
+	 * point of view. Allow it regardless of the driver's relax opt-in.
+	 */
+	list_for_each_entry(wdev, &rdev->wiphy.wdev_list, list) {
+		struct ieee80211_channel *other_chan = NULL;
+		unsigned int link_id;
+
+		for_each_valid_link(wdev, link_id) {
+			if (wdev->iftype == NL80211_IFTYPE_STATION &&
+			    wdev->links[link_id].client.current_bss)
+				other_chan = wdev->links[link_id].client.current_bss->pub.channel;
+			else if (wdev->iftype == NL80211_IFTYPE_AP &&
+				 wdev->links[link_id].ap.beacon_interval)
+				other_chan = wdev->links[link_id].ap.chandef.chan;
+
+			if (other_chan == chan)
+				return true;
+			other_chan = NULL;
+		}
+	}
+
 	if (!IS_ENABLED(CONFIG_CFG80211_REG_RELAX_NO_IR) ||
 	    !(wiphy->regulatory_flags & REGULATORY_ENABLE_RELAX_NO_IR))
 		return false;
@@ -1708,7 +1731,8 @@ static bool cfg80211_ir_permissive_chan(struct wiphy *wiphy,
 	/* only valid for GO and TDLS off-channel (station/p2p-CL) */
 	if (iftype != NL80211_IFTYPE_P2P_GO &&
 	    iftype != NL80211_IFTYPE_STATION &&
-	    iftype != NL80211_IFTYPE_P2P_CLIENT)
+	    iftype != NL80211_IFTYPE_P2P_CLIENT &&
+	    iftype != NL80211_IFTYPE_AP)
 		return false;
 
 	if (regulatory_indoor_allowed() &&
@@ -1811,13 +1835,44 @@ bool cfg80211_reg_check_beaconing(struct wiphy *wiphy,
 }
 EXPORT_SYMBOL(cfg80211_reg_check_beaconing);
 
+static bool cfg80211_can_set_monitor_channel(struct cfg80211_registered_device *rdev,
+					     struct cfg80211_chan_def *chandef)
+{
+	struct wireless_dev *wdev;
+	int radio_idx;
+
+	lockdep_assert_held(&rdev->wiphy.mtx);
+
+	if (rdev->num_running_monitor_ifaces < 1)
+		return false;
+
+	if (cfg80211_has_monitors_only(rdev))
+		return true;
+
+	radio_idx = cfg80211_get_radio_idx_by_chan(&rdev->wiphy, chandef->chan);
+	/* No defined radio covers this channel. Fall back on global behavior */
+	if (radio_idx < 0)
+		return false;
+
+	list_for_each_entry(wdev, &rdev->wiphy.wdev_list, list) {
+		if (wdev->iftype == NL80211_IFTYPE_MONITOR)
+			continue;
+		if (!wdev->netdev)
+			continue;
+		if (rdev_get_radio_mask(rdev, wdev->netdev) & BIT(radio_idx))
+			return false;
+	}
+
+	return true;
+}
+
 int cfg80211_set_monitor_channel(struct cfg80211_registered_device *rdev,
 				 struct net_device *dev,
 				 struct cfg80211_chan_def *chandef)
 {
 	if (!rdev->ops->set_monitor_channel)
 		return -EOPNOTSUPP;
-	if (!cfg80211_has_monitors_only(rdev))
+	if (!cfg80211_can_set_monitor_channel(rdev, chandef))
 		return -EBUSY;
 
 	return rdev_set_monitor_channel(rdev, dev, chandef);

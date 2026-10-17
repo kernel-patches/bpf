@@ -352,7 +352,7 @@ static void *rxrpc_peer_seq_start(struct seq_file *seq, loff_t *_pos)
 static void *rxrpc_peer_seq_next(struct seq_file *seq, void *v, loff_t *_pos)
 {
 	struct rxrpc_net *rxnet = rxrpc_net(seq_file_net(seq));
-	unsigned int bucket, n;
+	unsigned int bucket;
 	unsigned int shift = 32 - HASH_BITS(rxnet->peer_hash);
 	void *p;
 
@@ -367,19 +367,14 @@ static void *rxrpc_peer_seq_next(struct seq_file *seq, void *v, loff_t *_pos)
 
 	for (;;) {
 		bucket++;
-		n = 1;
-		*_pos = (bucket << shift) | n;
+		*_pos = (bucket << shift) | 1;
 
 		if (bucket >= HASH_SIZE(rxnet->peer_hash)) {
 			*_pos = UINT_MAX;
 			return NULL;
 		}
-		if (n == 0) {
-			*_pos += 1;
-			n++;
-		}
 
-		p = seq_hlist_start_rcu(&rxnet->peer_hash[bucket], n - 1);
+		p = seq_hlist_start_rcu(&rxnet->peer_hash[bucket], 0);
 		if (p)
 			return p;
 	}

@@ -61,6 +61,7 @@
 #include <linux/export.h>
 #include <linux/vmalloc.h>
 #include <linux/notifier.h>
+#include <linux/nospec.h>
 #include <net/net_namespace.h>
 #include <net/inet_dscp.h>
 #include <net/ip.h>
@@ -961,6 +962,8 @@ static struct key_vector *fib_find_node(struct trie *t,
 			break;
 		}
 
+		index = array_index_nospec(index, 1ul << n->bits);
+
 		/* keep searching until we find a perfect match leaf or NULL */
 	} while (IS_TNODE(n));
 
@@ -1079,8 +1082,6 @@ void fib_alias_hw_flags_set(struct net *net, const struct fib_rt_info *fri)
 
 	err = fib_dump_info(skb, 0, 0, RTM_NEWROUTE, fri, 0);
 	if (err < 0) {
-		/* -EMSGSIZE implies BUG in fib_nlmsg_size() */
-		WARN_ON(err == -EMSGSIZE);
 		kfree_skb(skb);
 		goto errout;
 	}
@@ -1435,7 +1436,8 @@ int fib_table_lookup(struct fib_table *tb, const struct flowi4 *flp,
 
 	n = get_child_rcu(pn, cindex);
 	if (!n) {
-		trace_fib_table_lookup(tb->tb_id, flp, NULL, -EAGAIN);
+		trace_fib_table_lookup(tb->tb_id, flp, NULL, -EAGAIN,
+				       tb->tb_net);
 		return -EAGAIN;
 	}
 
@@ -1467,6 +1469,8 @@ int fib_table_lookup(struct fib_table *tb, const struct flowi4 *flp,
 		/* we have found a leaf. Prefixes have already been compared */
 		if (IS_LEAF(n))
 			goto found;
+
+		index = array_index_nospec(index, 1ul << n->bits);
 
 		/* only record pn and cindex if we are going to be chopping
 		 * bits later.  Otherwise we are just wasting cycles.
@@ -1522,7 +1526,8 @@ backtrace:
 				 */
 				if (IS_TRIE(pn)) {
 					trace_fib_table_lookup(tb->tb_id, flp,
-							       NULL, -EAGAIN);
+							       NULL, -EAGAIN,
+							       tb->tb_net);
 					return -EAGAIN;
 				}
 #ifdef CONFIG_IP_FIB_TRIE_STATS
@@ -1569,7 +1574,8 @@ out_reject:
 #ifdef CONFIG_IP_FIB_TRIE_STATS
 			this_cpu_inc(stats->semantic_match_passed);
 #endif
-			trace_fib_table_lookup(tb->tb_id, flp, NULL, err);
+			trace_fib_table_lookup(tb->tb_id, flp, NULL, err,
+					       tb->tb_net);
 			return err;
 		}
 		if (fi->fib_flags & RTNH_F_DEAD)
@@ -1610,7 +1616,8 @@ set_result:
 #ifdef CONFIG_IP_FIB_TRIE_STATS
 			this_cpu_inc(stats->semantic_match_passed);
 #endif
-			trace_fib_table_lookup(tb->tb_id, flp, nhc, err);
+			trace_fib_table_lookup(tb->tb_id, flp, nhc, err,
+					       tb->tb_net);
 
 			return err;
 		}
@@ -1768,6 +1775,8 @@ static struct key_vector *leaf_walk_rcu(struct key_vector **tn, t_key key)
 		if (cindex >> pn->bits)
 			break;
 
+		cindex = array_index_nospec(cindex, 1ul << pn->bits);
+
 		/* descend into the next child */
 		n = get_child_rcu(pn, cindex++);
 		if (!n)
@@ -1788,6 +1797,8 @@ static struct key_vector *leaf_walk_rcu(struct key_vector **tn, t_key key)
 			cindex = get_index(pkey, pn) + 1;
 			continue;
 		}
+
+		cindex = array_index_nospec(cindex, 1ul << pn->bits);
 
 		/* grab the next available node */
 		n = get_child_rcu(pn, cindex++);
@@ -1881,7 +1892,7 @@ struct fib_table *fib_trie_unmerge(struct fib_table *oldtb)
 	if (oldtb->tb_data == oldtb->__data)
 		return oldtb;
 
-	local_tb = fib_trie_table(RT_TABLE_LOCAL, NULL);
+	local_tb = fib_trie_table(oldtb->tb_net, RT_TABLE_LOCAL, NULL);
 	if (!local_tb)
 		return NULL;
 
@@ -2378,7 +2389,8 @@ void __init fib_trie_init(void)
 					   0, SLAB_PANIC | SLAB_ACCOUNT, NULL);
 }
 
-struct fib_table *fib_trie_table(u32 id, struct fib_table *alias)
+struct fib_table *fib_trie_table(struct net *net, u32 id,
+				 struct fib_table *alias)
 {
 	struct fib_table *tb;
 	struct trie *t;
@@ -2391,6 +2403,7 @@ struct fib_table *fib_trie_table(u32 id, struct fib_table *alias)
 	if (!tb)
 		return NULL;
 
+	tb->tb_net = net;
 	tb->tb_id = id;
 	tb->tb_num_default = 0;
 	tb->tb_data = (alias ? alias->__data : tb->__data);

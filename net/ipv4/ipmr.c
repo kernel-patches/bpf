@@ -479,6 +479,7 @@ static struct net_device *ipmr_new_tunnel(struct net *net, struct vifctl *v)
 {
 	struct net_device *tunnel_dev, *new_dev;
 	struct ip_tunnel_parm_kern p = { };
+	LIST_HEAD(dev_kill_list);
 	int err;
 
 	tunnel_dev = __dev_get_by_name(net, "tunl0");
@@ -520,7 +521,8 @@ static struct net_device *ipmr_new_tunnel(struct net *net, struct vifctl *v)
 	return new_dev;
 
 out_unregister:
-	unregister_netdevice(new_dev);
+	new_dev->rtnl_link_ops->dellink(new_dev, &dev_kill_list);
+	unregister_netdevice_many(&dev_kill_list);
 out:
 	return ERR_PTR(-ENOBUFS);
 }
@@ -733,8 +735,12 @@ static int vif_delete(struct mr_table *mrt, int vifi, int notify,
 		ip_rt_multicast_event(in_dev);
 	}
 
-	if (v->flags & (VIFF_TUNNEL | VIFF_REGISTER) && !notify)
-		unregister_netdevice_queue(dev, head);
+	if (!notify) {
+		if (v->flags & VIFF_TUNNEL)
+			dev->rtnl_link_ops->dellink(dev, head);
+		else if (v->flags & VIFF_REGISTER)
+			unregister_netdevice_queue(dev, head);
+	}
 
 	netdev_put(dev, &v->dev_tracker);
 	return 0;
@@ -1057,6 +1063,7 @@ static void ipmr_cache_resolve(struct net *net, struct mr_table *mrt,
 static int ipmr_cache_report(const struct mr_table *mrt,
 			     struct sk_buff *pkt, vifi_t vifi, int assert)
 {
+	unsigned char pkt_cb[sizeof(pkt->cb)];
 	const int ihl = ip_hdrlen(pkt);
 	struct sock *mroute_sk;
 	struct igmphdr *igmp;
@@ -1112,8 +1119,6 @@ static int ipmr_cache_report(const struct mr_table *mrt,
 		msg = (struct igmpmsg *)skb_network_header(skb);
 		msg->im_vif = vifi;
 		msg->im_vif_hi = vifi >> 8;
-		ipv4_pktinfo_prepare(mroute_sk, pkt, false);
-		memcpy(skb->cb, pkt->cb, sizeof(skb->cb));
 		/* Add our header.
 		 * Note that code, csum and group fields are cleared.
 		 */
@@ -1123,6 +1128,12 @@ static int ipmr_cache_report(const struct mr_table *mrt,
 		ip_hdr(skb)->tot_len = htons(skb->len);	/* Fix the length */
 		skb->transport_header = skb->network_header;
 	}
+
+	memcpy(pkt_cb, pkt->cb, sizeof(pkt_cb));
+	ipv4_pktinfo_prepare(mroute_sk, pkt, false);
+	memset(skb->cb, 0, sizeof(skb->cb));
+	*PKTINFO_SKB_CB(skb) = *PKTINFO_SKB_CB(pkt);
+	memcpy(pkt->cb, pkt_cb, sizeof(pkt_cb));
 
 	igmpmsg_netlink_event(mrt, skb);
 
@@ -1632,8 +1643,7 @@ int ipmr_sk_ioctl(struct sock *sk, unsigned int cmd, void __user *arg)
 }
 
 /* Getsock opt support for the multicast routing system. */
-int ip_mroute_getsockopt(struct sock *sk, int optname, sockptr_t optval,
-			 sockptr_t optlen)
+int ip_mroute_getsockopt(struct sock *sk, int optname, sockopt_t *opt)
 {
 	int olr;
 	int val;
@@ -1664,16 +1674,14 @@ int ip_mroute_getsockopt(struct sock *sk, int optname, sockptr_t optval,
 		return -ENOPROTOOPT;
 	}
 
-	if (copy_from_sockptr(&olr, optlen, sizeof(int)))
-		return -EFAULT;
+	olr = opt->optlen;
 	if (olr < 0)
 		return -EINVAL;
 
 	olr = min_t(unsigned int, olr, sizeof(int));
 
-	if (copy_to_sockptr(optlen, &olr, sizeof(int)))
-		return -EFAULT;
-	if (copy_to_sockptr(optval, &val, olr))
+	opt->optlen = olr;
+	if (copy_to_iter(&val, olr, &opt->iter_out) != olr)
 		return -EFAULT;
 	return 0;
 }
@@ -1879,11 +1887,16 @@ static inline int ipmr_forward_finish(struct net *net, struct sock *sk,
 static bool ipmr_forward_offloaded(struct sk_buff *skb, struct mr_table *mrt,
 				   int in_vifi, int out_vifi)
 {
-	struct vif_device *out_vif = &mrt->vif_table[out_vifi];
-	struct vif_device *in_vif = &mrt->vif_table[in_vifi];
+	struct vif_device *out_vif, *in_vif;
 
 	if (!skb->offload_l3_fwd_mark)
 		return false;
+	if (in_vifi < 0 || in_vifi >= MAXVIFS ||
+	    out_vifi < 0 || out_vifi >= MAXVIFS)
+		return false;
+
+	out_vif = &mrt->vif_table[out_vifi];
+	in_vif = &mrt->vif_table[in_vifi];
 	if (!out_vif->dev_parent_id.id_len || !in_vif->dev_parent_id.id_len)
 		return false;
 	return netdev_phys_item_id_same(&out_vif->dev_parent_id,
@@ -1908,6 +1921,7 @@ static int ipmr_prepare_xmit(struct net *net, struct mr_table *mrt,
 	struct rtable *rt;
 	struct flowi4 fl4;
 	int    encap = 0;
+	unsigned int mtu;
 
 	vif_dev = vif_dev_read(vif);
 	if (!vif_dev)
@@ -1940,7 +1954,9 @@ static int ipmr_prepare_xmit(struct net *net, struct mr_table *mrt,
 			return -1;
 	}
 
-	if (skb->len+encap > dst4_mtu(&rt->dst) && (ntohs(iph->frag_off) & IP_DF)) {
+	mtu = dst4_mtu(&rt->dst) - encap;
+	if (skb->len > mtu && (ntohs(iph->frag_off) & IP_DF) &&
+	    !(skb_is_gso(skb) && skb_gso_validate_network_len(skb, mtu))) {
 		/* Do not fragment multicasts. Alas, IPv4 does not
 		 * allow to send ICMP, so that packets will disappear
 		 * to blackhole.
@@ -3178,8 +3194,9 @@ static int ipmr_vif_seq_show(struct seq_file *seq, void *v)
 		seq_printf(seq,
 			   "%2td %-10s %8ld %7ld  %8ld %7ld %05X %08X %08X\n",
 			   vif - mrt->vif_table,
-			   name, vif->bytes_in, vif->pkt_in,
-			   vif->bytes_out, vif->pkt_out,
+			   name,
+			   READ_ONCE(vif->bytes_in), READ_ONCE(vif->pkt_in),
+			   READ_ONCE(vif->bytes_out), READ_ONCE(vif->pkt_out),
 			   vif->flags, vif->local, vif->remote);
 	}
 	return 0;

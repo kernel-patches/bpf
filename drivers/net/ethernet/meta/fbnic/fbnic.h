@@ -22,11 +22,20 @@ struct fbnic_napi_vector;
 #define FBNIC_MAX_NAPI_VECTORS		128u
 #define FBNIC_MBX_CMPL_SLOTS		4
 
+struct fbnic_hwmon_cache {
+	unsigned long last_read;
+	s32 temp_mdeg;
+	s32 volt_mv;
+	u8 temp_alarm;
+	u8 volt_alarm;
+};
+
 struct fbnic_dev {
 	struct device *dev;
 	struct net_device *netdev;
 	struct dentry *dbg_fbd;
 	struct device *hwmon;
+	struct fbnic_hwmon_cache hwmon_cache;
 	struct devlink_health_reporter *fw_reporter;
 	struct devlink_health_reporter *otp_reporter;
 
@@ -57,6 +66,7 @@ struct fbnic_dev {
 	u64 dsn;
 	u32 mps;
 	u32 readrq;
+	u32 rx_cqe_nsecs;
 	u8 relaxed_ord;
 
 	/* Local copy of the devices TCAM */
@@ -160,7 +170,12 @@ void fbnic_fw_wr32(struct fbnic_dev *fbd, u32 reg, u32 val);
 
 static inline bool fbnic_bmc_present(struct fbnic_dev *fbd)
 {
-	return fbd->fw_cap.bmc_present;
+	return test_bit(FBNIC_FW_CAP_F_BMC_PRESENT, &fbd->fw_cap.state);
+}
+
+static inline bool fbnic_bmc_all_multi(struct fbnic_dev *fbd)
+{
+	return test_bit(FBNIC_FW_CAP_F_BMC_ALL_MULTI, &fbd->fw_cap.state);
 }
 
 static inline bool fbnic_init_failure(struct fbnic_dev *fbd)
@@ -185,6 +200,8 @@ void fbnic_fw_free_mbx(struct fbnic_dev *fbd);
 
 void fbnic_hwmon_register(struct fbnic_dev *fbd);
 void fbnic_hwmon_unregister(struct fbnic_dev *fbd);
+void fbnic_hwmon_notify_event(struct fbnic_dev *fbd, int id);
+void fbnic_hwmon_old_notify_event(struct fbnic_dev *fbd, int id, s32 value);
 
 int fbnic_mac_request_irq(struct fbnic_dev *fbd);
 void fbnic_mac_free_irq(struct fbnic_dev *fbd);
@@ -250,6 +267,7 @@ int fbnic_csr_regs_len(struct fbnic_dev *fbd);
 
 void fbnic_config_txrx_usecs(struct fbnic_napi_vector *nv, u32 arm);
 void fbnic_config_rx_frames(struct fbnic_napi_vector *nv);
+void fbnic_config_rx_cqe_nsecs(struct fbnic_dev *fbd);
 
 enum fbnic_boards {
 	fbnic_board_asic

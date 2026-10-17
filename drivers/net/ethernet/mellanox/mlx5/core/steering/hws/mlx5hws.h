@@ -689,6 +689,21 @@ mlx5hws_action_create_modify_header(struct mlx5hws_context *ctx,
 				    u32 flags);
 
 /**
+ * mlx5hws_pat_compare_pattern - Compare two modify header patterns.
+ *
+ * @cur_num_of_actions: Number of actions in "cur_actions" array.
+ * @cur_actions: First pattern actions.
+ * @num_of_actions: Number of actions in "actions" array.
+ * @actions: Second pattern actions.
+ *
+ * Return: true if the patterns differ only in values, false otherwise.
+ */
+bool mlx5hws_pat_compare_pattern(int cur_num_of_actions,
+				 __be64 cur_actions[],
+				 int num_of_actions,
+				 __be64 actions[]);
+
+/**
  * mlx5hws_action_create_aso_meter - Create direct rule ASO flow meter action.
  *
  * @ctx: The context in which the new action will be created.

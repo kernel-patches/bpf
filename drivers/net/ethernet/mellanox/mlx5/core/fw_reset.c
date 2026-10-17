@@ -66,10 +66,8 @@ static int mlx5_fw_reset_enable_remote_dev_reset_set(struct devlink *devlink, u3
 
 	fw_reset = dev->priv.fw_reset;
 
-	if (ctx->val.vbool)
-		clear_bit(MLX5_FW_RESET_FLAGS_NACK_RESET_REQUEST, &fw_reset->reset_flags);
-	else
-		set_bit(MLX5_FW_RESET_FLAGS_NACK_RESET_REQUEST, &fw_reset->reset_flags);
+	assign_bit(MLX5_FW_RESET_FLAGS_NACK_RESET_REQUEST,
+		   &fw_reset->reset_flags, !ctx->val.vbool);
 	return 0;
 }
 
@@ -501,6 +499,13 @@ static void mlx5_sync_reset_request_event(struct work_struct *work)
 		mlx5_core_warn(dev, "PCI Sync FW Update Reset Nack %s",
 			       err ? "Failed" : "Sent");
 		return;
+	}
+
+	if (dev->pci_reset_in_progress) {
+		err = mlx5_fw_reset_set_reset_sync_nack(dev);
+		mlx5_core_warn(dev, "PCI reset in progress, Sync FW Update Reset Nack %s",
+			       err ? "Failed" : "Sent");
+		goto unlock;
 	}
 
 	if (mlx5_sync_reset_set_reset_requested(dev))

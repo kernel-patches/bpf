@@ -22,6 +22,19 @@
 
 static void rxrpc_local_rcu(struct rcu_head *);
 
+void rxrpc_adjust_rcvbuf(struct sock *sk)
+{
+	u32 rcvbuf, old_rcvbuf;
+
+	rcvbuf = READ_ONCE(rxrpc_rx_window_size) *
+		SKB_TRUESIZE(RXRPC_JUMBO(1)) * 2;
+	rcvbuf += rcvbuf / 4;
+	rcvbuf = min_t(u32, rcvbuf, READ_ONCE(sysctl_rmem_max));
+	old_rcvbuf = READ_ONCE(sk->sk_rcvbuf);
+	if (rcvbuf > old_rcvbuf)
+		WRITE_ONCE(sk->sk_rcvbuf, rcvbuf);
+}
+
 /*
  * Handle an ICMP/ICMP6 error turning up at the tunnel.  Push it through the
  * usual mechanism so that it gets parsed and presented through the UDP
@@ -124,6 +137,7 @@ static struct rxrpc_local *rxrpc_alloc_local(struct net *net,
 		skb_queue_head_init(&local->rx_delay_queue);
 #endif
 		skb_queue_head_init(&local->rx_queue);
+		atomic_long_set(&local->rx_async_queue_bytes, 0);
 		INIT_LIST_HEAD(&local->conn_attend_q);
 		INIT_LIST_HEAD(&local->call_attend_q);
 
@@ -198,6 +212,9 @@ static int rxrpc_open_socket(struct rxrpc_local *local, struct net *net)
 
 	/* set the socket up */
 	usk = local->socket->sk;
+	spin_lock_bh(&usk->sk_receive_queue.lock);
+	rxrpc_adjust_rcvbuf(usk);
+	spin_unlock_bh(&usk->sk_receive_queue.lock);
 	usk->sk_error_report = rxrpc_error_report;
 
 	switch (srx->transport.family) {
@@ -437,8 +454,8 @@ void rxrpc_destroy_local(struct rxrpc_local *local)
 	if (socket) {
 		local->socket = NULL;
 		kernel_sock_shutdown(socket, SHUT_RDWR);
-		socket->sk->sk_user_data = NULL;
-		sock_release(socket);
+		rcu_assign_sk_user_data(socket->sk, NULL);
+		synchronize_rcu();
 	}
 
 	/* At this point, there should be no more packets coming in to the
@@ -448,6 +465,10 @@ void rxrpc_destroy_local(struct rxrpc_local *local)
 	rxrpc_purge_queue(&local->rx_delay_queue);
 #endif
 	rxrpc_purge_queue(&local->rx_queue);
+
+	if (socket)
+		sock_release(socket);
+
 	rxrpc_purge_client_connections(local);
 	page_frag_cache_drain(&local->tx_alloc);
 }

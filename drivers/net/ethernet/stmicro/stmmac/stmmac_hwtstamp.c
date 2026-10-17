@@ -183,7 +183,8 @@ static int adjust_systime(void __iomem *ioaddr, u32 sec, u32 nsec,
 					 10, 100000);
 }
 
-static void get_systime(void __iomem *ioaddr, u64 *systime)
+static void get_systime(void __iomem *ioaddr, u64 *systime,
+			struct ptp_system_timestamp *sts)
 {
 	u64 ns, sec0, sec1;
 
@@ -191,8 +192,10 @@ static void get_systime(void __iomem *ioaddr, u64 *systime)
 	sec1 = readl_relaxed(ioaddr + PTP_STSR);
 	do {
 		sec0 = sec1;
+		ptp_read_system_prets(sts);
 		/* Get the TSSS value */
-		ns = readl_relaxed(ioaddr + PTP_STNSR);
+		ns = readl(ioaddr + PTP_STNSR);
+		ptp_read_system_postts(sts);
 		/* Get the TSS value */
 		sec1 = readl_relaxed(ioaddr + PTP_STSR);
 	} while (sec0 != sec1);
@@ -242,7 +245,10 @@ static void timestamp_interrupt(struct stmmac_priv *priv)
 		       GMAC_TIMESTAMP_ATSNS_SHIFT;
 
 	acr_value = readl(priv->ptpaddr + PTP_ACR);
-	channel = ilog2(FIELD_GET(PTP_ACR_MASK, acr_value));
+	channel = FIELD_GET(PTP_ACR_MASK, acr_value);
+	if (!channel)
+		return;
+	channel = ilog2(channel);
 
 	for (i = 0; i < num_snapshot; i++) {
 		read_lock_irqsave(&priv->ptp_lock, flags);
@@ -276,4 +282,16 @@ const struct stmmac_hwtimestamp dwmac1000_ptp = {
 	.get_systime = get_systime,
 	.get_ptptime = dwmac1000_get_ptptime,
 	.timestamp_interrupt = dwmac1000_timestamp_interrupt,
+};
+
+const struct stmmac_hwtimestamp dwxgmac2_ptp = {
+	.config_hw_tstamping = config_hw_tstamping,
+	.init_systime = init_systime,
+	.config_sub_second_increment = config_sub_second_increment,
+	.config_addend = config_addend,
+	.adjust_systime = adjust_systime,
+	.get_systime = get_systime,
+	.get_ptptime = get_ptptime,
+	.timestamp_interrupt = dwxgmac2_timestamp_interrupt,
+	.hwtstamp_correct_latency = hwtstamp_correct_latency,
 };

@@ -416,7 +416,8 @@ static u32 mlx5e_rep_get_rxfh_indir_size(struct net_device *netdev)
 static const struct ethtool_ops mlx5e_rep_ethtool_ops = {
 	.supported_coalesce_params = ETHTOOL_COALESCE_USECS |
 				     ETHTOOL_COALESCE_MAX_FRAMES |
-				     ETHTOOL_COALESCE_USE_ADAPTIVE,
+				     ETHTOOL_COALESCE_USE_ADAPTIVE |
+				     ETHTOOL_COALESCE_USE_CQE,
 	.op_needs_rtnl	   = ETHTOOL_OP_NEEDS_RTNL_SCHANNELS |
 			     ETHTOOL_OP_NEEDS_RTNL_SRINGPARAM |
 			     ETHTOOL_OP_NEEDS_RTNL_GLINK,
@@ -629,8 +630,12 @@ mlx5e_remove_sqs_fwd_rules(struct mlx5e_priv *priv)
 	struct mlx5_eswitch *esw = priv->mdev->priv.eswitch;
 	struct mlx5e_rep_priv *rpriv = priv->ppriv;
 	struct mlx5_eswitch_rep *rep = rpriv->rep;
+	bool devcom_locked;
 
+	devcom_locked = mlx5_devcom_for_each_peer_begin(esw->devcom);
 	mlx5e_sqs2vport_stop(esw, rep);
+	if (devcom_locked)
+		mlx5_devcom_for_each_peer_end(esw->devcom);
 }
 
 static int

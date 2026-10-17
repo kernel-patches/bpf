@@ -496,7 +496,7 @@ int ptp_get_vclocks_index(int pclock_index, int **vclock_index);
  * @hwtstamp:     timestamp
  * @vclock_index: phc index of ptp vclock.
  *
- * Returns: converted timestamp, or 0 on error.
+ * Returns: converted timestamp, or 0 if @hwtstamp is zero or on error.
  */
 ktime_t ptp_convert_timestamp(const ktime_t *hwtstamp, int vclock_index);
 #else
@@ -518,6 +518,54 @@ static inline void ptp_read_system_postts(struct ptp_system_timestamp *sts)
 {
 	if (sts)
 		ktime_get_snapshot_id(sts->clockid, &sts->post_sts);
+}
+
+static inline void __ptp_adjust_snapshot(struct system_time_snapshot *snap,
+					 s64 ns)
+{
+	if (!snap->valid)
+		return;
+	snap->systime = ktime_add_ns(snap->systime, ns);
+	snap->monoraw = ktime_add_ns(snap->monoraw, ns);
+	/* No counter value corresponds to the adjusted times. */
+	snap->cycles = 0;
+	snap->cs_id = CSID_GENERIC;
+	snap->hw_cycles = 0;
+	snap->hw_csid = CSID_GENERIC;
+}
+
+/**
+ * ptp_adjust_system_prets - Shift the lower system timestamp bound
+ * @sts: system timestamps, or NULL
+ * @ns: CLOCK_MONOTONIC_RAW nanoseconds to add
+ *
+ * Add @ns to the selected clock's time and to the CLOCK_MONOTONIC_RAW
+ * time of the lower bound, and clear its clocksource counter values.
+ * @ns is not scaled for the selected clock's frequency correction, so
+ * the bound is off by @ns times that correction.
+ */
+static inline void ptp_adjust_system_prets(struct ptp_system_timestamp *sts,
+					   s64 ns)
+{
+	if (sts)
+		__ptp_adjust_snapshot(&sts->pre_sts, ns);
+}
+
+/**
+ * ptp_adjust_system_postts - Shift the upper system timestamp bound
+ * @sts: system timestamps, or NULL
+ * @ns: CLOCK_MONOTONIC_RAW nanoseconds to add
+ *
+ * Add @ns to the selected clock's time and to the CLOCK_MONOTONIC_RAW
+ * time of the upper bound, and clear its clocksource counter values.
+ * @ns is not scaled for the selected clock's frequency correction, so
+ * the bound is off by @ns times that correction.
+ */
+static inline void ptp_adjust_system_postts(struct ptp_system_timestamp *sts,
+					    s64 ns)
+{
+	if (sts)
+		__ptp_adjust_snapshot(&sts->post_sts, ns);
 }
 
 #endif

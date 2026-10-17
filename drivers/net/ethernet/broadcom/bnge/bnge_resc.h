@@ -81,6 +81,17 @@ bnge_adjust_pow_two(u32 total_ent, u16 ent_per_blk)
 {
 	u32 blks = total_ent / ent_per_blk;
 
+	if (!blks)
+		return 1;
+
+	return roundup_pow_of_two(blks + 1);
+}
+
+static inline u32
+bnge_calc_nr_ring_pages(u32 total_ent, u16 ent_per_blk)
+{
+	u32 blks = total_ent / ent_per_blk;
+
 	if (blks == 0 || blks == 1)
 		return ++blks;
 

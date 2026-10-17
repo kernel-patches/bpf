@@ -89,7 +89,8 @@ static int stmmac_adjust_time(struct ptp_clock_info *ptp, s64 delta)
 		u64 cycle_time;
 
 		mutex_lock(&priv->est_lock);
-		priv->ptp_clock_ops.gettime64(&priv->ptp_clock_ops, &current_time);
+		priv->ptp_clock_ops.gettimex64(&priv->ptp_clock_ops,
+					       &current_time, NULL);
 		current_time_ns = timespec64_to_ktime(current_time);
 		time.tv_nsec = priv->est->btr_reserve[0];
 		time.tv_sec = priv->est->btr_reserve[1];
@@ -114,15 +115,15 @@ static int stmmac_adjust_time(struct ptp_clock_info *ptp, s64 delta)
 }
 
 /**
- * stmmac_get_time
- *
+ * stmmac_get_timex - read the PTP clock, with system timestamps if requested
  * @ptp: pointer to ptp_clock_info structure
  * @ts: pointer to hold time/result
+ * @sts: pointer to hold system timestamps around the read, or NULL
  *
- * Description: this function will read the current time from the
- * hardware clock and store it in @ts.
+ * Return: 0
  */
-static int stmmac_get_time(struct ptp_clock_info *ptp, struct timespec64 *ts)
+static int stmmac_get_timex(struct ptp_clock_info *ptp, struct timespec64 *ts,
+			    struct ptp_system_timestamp *sts)
 {
 	struct stmmac_priv *priv =
 	    container_of(ptp, struct stmmac_priv, ptp_clock_ops);
@@ -130,7 +131,7 @@ static int stmmac_get_time(struct ptp_clock_info *ptp, struct timespec64 *ts)
 	u64 ns = 0;
 
 	read_lock_irqsave(&priv->ptp_lock, flags);
-	stmmac_get_systime(priv, priv->ptpaddr, &ns);
+	stmmac_get_systime(priv, priv->ptpaddr, &ns, sts);
 	read_unlock_irqrestore(&priv->ptp_lock, flags);
 
 	*ts = ns_to_timespec64(ns);
@@ -200,7 +201,7 @@ static int stmmac_enable(struct ptp_clock_info *ptp,
 
 		target_ns = cfg->start.tv_nsec + ((u64)cfg->start.tv_sec * NSEC_PER_SEC);
 
-		stmmac_get_systime(priv, priv->ptpaddr, &ns);
+		stmmac_get_systime(priv, priv->ptpaddr, &ns, NULL);
 		if (ns > TIME64_MAX - PTP_SAFE_TIME_OFFSET_NS)
 			return -EINVAL;
 
@@ -226,6 +227,13 @@ static int stmmac_enable(struct ptp_clock_info *ptp,
 		u8 channel;
 
 		mutex_lock(&priv->aux_ts_lock);
+		/* Refuse to arm once the clock has been invalidated by
+		 * unregister.
+		 */
+		if (!priv->ptp_clock) {
+			mutex_unlock(&priv->aux_ts_lock);
+			return -ENODEV;
+		}
 		acr_value = readl(ptpaddr + PTP_ACR);
 		channel = ilog2(FIELD_GET(PTP_ACR_MASK, acr_value));
 		acr_value &= ~PTP_ACR_MASK;
@@ -239,22 +247,49 @@ static int stmmac_enable(struct ptp_clock_info *ptp,
 				return -EBUSY;
 			}
 
+			if (rq->extts.index >= PTP_ACR_ATSEN_NUM) {
+				mutex_unlock(&priv->aux_ts_lock);
+				return -EINVAL;
+			}
+
 			priv->plat->flags |= STMMAC_FLAG_EXT_SNAPSHOT_EN;
+			priv->plat->ext_snapshot_num = rq->extts.index;
 
 			/* Enable External snapshot trigger */
 			acr_value |= PTP_ACR_ATSEN(rq->extts.index);
 			acr_value |= PTP_ACR_ATSFC;
 		} else {
 			priv->plat->flags &= ~STMMAC_FLAG_EXT_SNAPSHOT_EN;
+			priv->plat->ext_snapshot_num = -1;
 		}
 		netdev_dbg(priv->dev, "Auxiliary Snapshot %d %s.\n",
 			   rq->extts.index, on ? "enabled" : "disabled");
 		writel(acr_value, ptpaddr + PTP_ACR);
-		mutex_unlock(&priv->aux_ts_lock);
-		/* wait for auxts fifo clear to finish */
+		/* Keep the lock across the FIFO clear so the arm below
+		 * cannot interleave with a suspend.
+		 */
 		ret = readl_poll_timeout(ptpaddr + PTP_ACR, acr_value,
 					 !(acr_value & PTP_ACR_ATSFC),
 					 10, 10000);
+		if (ret && on) {
+			/* Roll the failed enable back so no half-enabled
+			 * channel is left.
+			 */
+			acr_value = readl(ptpaddr + PTP_ACR);
+			acr_value &= ~PTP_ACR_ATSEN(rq->extts.index);
+			writel(acr_value, ptpaddr + PTP_ACR);
+			priv->plat->flags &= ~STMMAC_FLAG_EXT_SNAPSHOT_EN;
+			priv->plat->ext_snapshot_num = -1;
+		}
+		/* Arm the timestamp interrupt only after the FIFO clear,
+		 * so the handler cannot see a snapshot that is about to be
+		 * discarded.
+		 */
+		stmmac_mac_timestamp_interrupt_cfg(priv, on && !ret);
+		/* Drain an in-flight handler before the channel is freed. */
+		if (!on)
+			stmmac_sync_timestamp_irq(priv);
+		mutex_unlock(&priv->aux_ts_lock);
 		break;
 	}
 
@@ -304,7 +339,7 @@ const struct ptp_clock_info stmmac_ptp_clock_ops = {
 	.pps = 0,
 	.adjfine = stmmac_adjust_freq,
 	.adjtime = stmmac_adjust_time,
-	.gettime64 = stmmac_get_time,
+	.gettimex64 = stmmac_get_timex,
 	.settime64 = stmmac_set_time,
 	.enable = stmmac_enable,
 };
@@ -321,7 +356,7 @@ const struct ptp_clock_info dwmac1000_ptp_clock_ops = {
 	.pps = 0,
 	.adjfine = stmmac_adjust_freq,
 	.adjtime = stmmac_adjust_time,
-	.gettime64 = stmmac_get_time,
+	.gettimex64 = stmmac_get_timex,
 	.settime64 = stmmac_set_time,
 	.enable = dwmac1000_ptp_enable,
 };
@@ -355,7 +390,7 @@ void stmmac_ptp_register(struct stmmac_priv *priv)
 	if (pps_out_num)
 		priv->ptp_clock_ops.n_per_out = pps_out_num;
 
-	n_ext_ts = priv->dma_cap.aux_snapshot_n;
+	n_ext_ts = min(priv->dma_cap.aux_snapshot_n, PTP_ACR_ATSEN_NUM);
 	if (n_ext_ts)
 		priv->ptp_clock_ops.n_ext_ts = n_ext_ts;
 
@@ -364,8 +399,6 @@ void stmmac_ptp_register(struct stmmac_priv *priv)
 
 	if (priv->plat->crosststamp)
 		priv->ptp_clock_ops.getcrosststamp = stmmac_getcrosststamp;
-
-	mutex_init(&priv->aux_ts_lock);
 
 	priv->ptp_clock = ptp_clock_register(&priv->ptp_clock_ops,
 					     priv->device);
@@ -376,8 +409,6 @@ void stmmac_ptp_register(struct stmmac_priv *priv)
 
 	if (priv->ptp_clock)
 		netdev_info(priv->dev, "registered PTP clock\n");
-	else
-		mutex_destroy(&priv->aux_ts_lock);
 }
 
 /**
@@ -388,12 +419,22 @@ void stmmac_ptp_register(struct stmmac_priv *priv)
  */
 void stmmac_ptp_unregister(struct stmmac_priv *priv)
 {
-	if (priv->ptp_clock) {
-		ptp_clock_unregister(priv->ptp_clock);
-		priv->ptp_clock = NULL;
-		pr_debug("Removed PTP HW clock successfully on %s\n",
-			 priv->dev->name);
+	struct ptp_clock *clock;
 
-		mutex_destroy(&priv->aux_ts_lock);
-	}
+	if (!priv->ptp_clock)
+		return;
+
+	/* Tear the hardware state down and invalidate the clock before
+	 * releasing the lock, so a concurrent request cannot re-arm a
+	 * clock that is going away.
+	 */
+	mutex_lock(&priv->aux_ts_lock);
+	clock = priv->ptp_clock;
+	priv->ptp_clock = NULL;
+	stmmac_mac_timestamp_interrupt_cfg(priv, false);
+	priv->plat->flags &= ~STMMAC_FLAG_EXT_SNAPSHOT_EN;
+	mutex_unlock(&priv->aux_ts_lock);
+
+	ptp_clock_unregister(clock);
+	pr_debug("Removed PTP HW clock successfully on %s\n", priv->dev->name);
 }

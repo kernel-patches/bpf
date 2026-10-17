@@ -272,8 +272,20 @@ static int rxrpc_process_event(struct rxrpc_connection *conn,
 	bool secured = false;
 	int ret;
 
-	if (conn->state == RXRPC_CONN_ABORTED)
+	if (conn->state == RXRPC_CONN_ABORTED) {
+		/*
+		 * Drop the ref taken by rxrpc_post_challenge() on this
+		 * CHALLENGE before bailing out: otherwise the skb is
+		 * released by the caller with the connection reference
+		 * still held, pinning the connection forever (leak).
+		 */
+		if (sp->chall.conn) {
+			sp->chall.conn = NULL;
+			rxrpc_put_connection(conn,
+					rxrpc_conn_put_challenge_input);
+		}
 		return -ECONNABORTED;
+	}
 
 	_enter("{%d},{%u,%%%u},", conn->debug_id, sp->hdr.type, sp->hdr.serial);
 
@@ -391,8 +403,17 @@ static void rxrpc_do_process_connection(struct rxrpc_connection *conn)
 	/* go through the conn-level event packets, releasing the ref on this
 	 * connection that each one has when we've finished with it */
 	while ((skb = skb_dequeue(&conn->rx_queue))) {
+		struct rxrpc_skb_priv *sp = rxrpc_skb(skb);
 		rxrpc_see_skb(skb, rxrpc_skb_see_conn_work);
 		rxrpc_process_event(conn, skb);
+		if (skb->mark != RXRPC_SKB_MARK_SERVICE_CONN_SECURED)
+			rxrpc_uncharge_async_queue(conn->local, skb);
+		if (sp->hdr.type == RXRPC_PACKET_TYPE_CHALLENGE && sp->chall.conn) {
+			rxrpc_put_connection(
+				sp->chall.conn,
+				rxrpc_conn_put_challenge_input);
+			sp->chall.conn = NULL;
+		}
 		rxrpc_free_skb(skb, rxrpc_skb_put_conn_work);
 	}
 }
@@ -414,15 +435,22 @@ void rxrpc_process_connection(struct work_struct *work)
  * post connection-level events to the connection
  * - this includes challenges, responses, some aborts and call terminal packet
  *   retransmission.
+ * - bound the queued memory independently of the UDP rmem charge.
  */
-static void rxrpc_post_packet_to_conn(struct rxrpc_connection *conn,
+static bool rxrpc_post_packet_to_conn(struct rxrpc_connection *conn,
 				      struct sk_buff *skb)
 {
+	struct rxrpc_local *local = conn->local;
+
+	if (!rxrpc_charge_async_queue(local, skb))
+		return false;
+
 	_enter("%p,%p", conn, skb);
 
 	rxrpc_get_skb(skb, rxrpc_skb_get_conn_work);
 	skb_queue_tail(&conn->rx_queue, skb);
 	rxrpc_queue_conn(conn, rxrpc_conn_queue_rx_work);
+	return true;
 }
 
 /*
@@ -442,7 +470,10 @@ static bool rxrpc_post_challenge(struct rxrpc_connection *conn,
 		rxrpc_get_connection(conn, rxrpc_conn_get_challenge_input);
 
 	if (!conn->security->challenge_to_recvmsg) {
-		rxrpc_post_packet_to_conn(conn, skb);
+		if (!rxrpc_post_packet_to_conn(conn, skb)) {
+			rxrpc_put_connection(conn, rxrpc_conn_put_challenge_input);
+			sp->chall.conn = NULL;
+		}
 		return true;
 	}
 
@@ -480,8 +511,10 @@ static bool rxrpc_post_challenge(struct rxrpc_connection *conn,
 		return false;
 	}
 
-	if (!call)
-		rxrpc_post_packet_to_conn(conn, skb);
+	if (!call && !rxrpc_post_packet_to_conn(conn, skb)) {
+		rxrpc_put_connection(conn, rxrpc_conn_put_challenge_input);
+		sp->chall.conn = NULL;
+	}
 	return true;
 }
 

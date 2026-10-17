@@ -287,6 +287,14 @@ static int otx2_set_channels(struct net_device *dev,
 		return -EINVAL;
 	}
 
+	if (pfvf->mqprio.rate_limit &&
+	    (channel->tx_count != pfvf->hw.tx_queues ||
+	     channel->rx_count != pfvf->hw.rx_queues)) {
+		netdev_info(dev,
+			    "Not permitted to change channel count while MQ prio is active\n");
+		return -EINVAL;
+	}
+
 	if (if_up)
 		dev->netdev_ops->ndo_stop(dev);
 
@@ -354,14 +362,14 @@ static int otx2_set_pauseparam(struct net_device *netdev,
 		return -EOPNOTSUPP;
 
 	if (pause->rx_pause)
-		pfvf->flags |= OTX2_FLAG_RX_PAUSE_ENABLED;
+		otx2_set_flag(pfvf, OTX2_FLAG_RX_PAUSE_ENABLED);
 	else
-		pfvf->flags &= ~OTX2_FLAG_RX_PAUSE_ENABLED;
+		otx2_clear_flag(pfvf, OTX2_FLAG_RX_PAUSE_ENABLED);
 
 	if (pause->tx_pause)
-		pfvf->flags |= OTX2_FLAG_TX_PAUSE_ENABLED;
+		otx2_set_flag(pfvf, OTX2_FLAG_TX_PAUSE_ENABLED);
 	else
-		pfvf->flags &= ~OTX2_FLAG_TX_PAUSE_ENABLED;
+		otx2_clear_flag(pfvf, OTX2_FLAG_TX_PAUSE_ENABLED);
 
 	return otx2_config_pause_frm(pfvf);
 }
@@ -470,8 +478,7 @@ static int otx2_get_coalesce(struct net_device *netdev,
 	cmd->rx_max_coalesced_frames = hw->cq_ecount_wait;
 	cmd->tx_coalesce_usecs = hw->cq_time_wait;
 	cmd->tx_max_coalesced_frames = hw->cq_ecount_wait;
-	if ((pfvf->flags & OTX2_FLAG_ADPTV_INT_COAL_ENABLED) ==
-			OTX2_FLAG_ADPTV_INT_COAL_ENABLED) {
+	if (otx2_test_flag(pfvf, OTX2_FLAG_ADPTV_INT_COAL_ENABLED)) {
 		cmd->use_adaptive_rx_coalesce = 1;
 		cmd->use_adaptive_tx_coalesce = 1;
 	} else {
@@ -502,15 +509,14 @@ static int otx2_set_coalesce(struct net_device *netdev,
 	}
 
 	/* Check and update coalesce status */
-	if ((pfvf->flags & OTX2_FLAG_ADPTV_INT_COAL_ENABLED) ==
-			OTX2_FLAG_ADPTV_INT_COAL_ENABLED) {
+	if (otx2_test_flag(pfvf, OTX2_FLAG_ADPTV_INT_COAL_ENABLED)) {
 		priv_coalesce_status = 1;
 		if (!ec->use_adaptive_rx_coalesce)
-			pfvf->flags &= ~OTX2_FLAG_ADPTV_INT_COAL_ENABLED;
+			otx2_clear_flag(pfvf, OTX2_FLAG_ADPTV_INT_COAL_ENABLED);
 	} else {
 		priv_coalesce_status = 0;
 		if (ec->use_adaptive_rx_coalesce)
-			pfvf->flags |= OTX2_FLAG_ADPTV_INT_COAL_ENABLED;
+			otx2_set_flag(pfvf, OTX2_FLAG_ADPTV_INT_COAL_ENABLED);
 	}
 
 	/* 'cq_time_wait' is 8bit and is in multiple of 100ns,
@@ -556,8 +562,7 @@ static int otx2_set_coalesce(struct net_device *netdev,
 	 * 'on' to 'off'.
 	 */
 	if (priv_coalesce_status &&
-	    ((pfvf->flags & OTX2_FLAG_ADPTV_INT_COAL_ENABLED) !=
-	     OTX2_FLAG_ADPTV_INT_COAL_ENABLED)) {
+	    (!otx2_test_flag(pfvf, OTX2_FLAG_ADPTV_INT_COAL_ENABLED))) {
 		hw->cq_time_wait = CQ_TIMER_THRESH_DEFAULT;
 		hw->cq_ecount_wait = CQ_CQE_THRESH_DEFAULT;
 	}
@@ -1209,6 +1214,7 @@ static int otx2_get_link_ksettings(struct net_device *netdev,
 {
 	struct otx2_nic *pfvf = netdev_priv(netdev);
 	struct cgx_fw_data *rsp = NULL;
+	u8 port;
 
 	cmd->base.duplex  = pfvf->linfo.full_duplex;
 	cmd->base.speed   = pfvf->linfo.speed;
@@ -1231,6 +1237,23 @@ static int otx2_get_link_ksettings(struct net_device *netdev,
 				OTX2_MODE_SUPPORTED, cmd);
 	otx2_get_fec_info(rsp->fwdata.supported_fec,
 			  OTX2_MODE_SUPPORTED, cmd);
+
+	port = FIELD_GET(GENMASK(7, 0), rsp->fwdata.port);
+	switch (port) {
+	case PORT_TP:
+	case PORT_AUI:
+	case PORT_MII:
+	case PORT_FIBRE:
+	case PORT_BNC:
+	case PORT_DA:
+	case PORT_NONE:
+		cmd->base.port = port;
+		break;
+	default:
+		cmd->base.port = PORT_OTHER;
+		break;
+	}
+
 	return 0;
 }
 

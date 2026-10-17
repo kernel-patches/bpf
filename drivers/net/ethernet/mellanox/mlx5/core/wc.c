@@ -148,10 +148,14 @@ err_create_cqwq:
 	return err;
 }
 
-static void mlx5_wc_destroy_cq(struct mlx5_wc_cq *cq)
+static int mlx5_wc_destroy_cq(struct mlx5_wc_cq *cq)
 {
-	mlx5_core_destroy_cq(cq->mdev, &cq->mcq);
-	mlx5_wq_destroy(&cq->wq_ctrl);
+	int err = mlx5_core_destroy_cq(cq->mdev, &cq->mcq);
+
+	/* The device may still access an undestroyed CQ's buffer; keep it. */
+	if (!err)
+		mlx5_wq_destroy(&cq->wq_ctrl);
+	return err;
 }
 
 static int create_wc_sq(struct mlx5_core_dev *mdev, void *sqc_data,
@@ -360,6 +364,7 @@ static int mlx5_wc_poll_cq(struct mlx5_wc_sq *sq)
 static void mlx5_core_test_wc(struct mlx5_core_dev *mdev)
 {
 	unsigned int offset = 0;
+	bool keep_sq = false;
 	struct mlx5_wc_sq *sq;
 	int i, err;
 
@@ -396,11 +401,13 @@ static void mlx5_core_test_wc(struct mlx5_core_dev *mdev)
 	mlx5_wc_destroy_sq(sq);
 
 err_create_sq:
-	mlx5_wc_destroy_cq(&sq->cq);
+	/* An undestroyed CQ may still be in use; keep the SQ that holds it. */
+	keep_sq = mlx5_wc_destroy_cq(&sq->cq);
 err_create_cq:
 	mlx5_free_bfreg(mdev, &sq->bfreg);
 err_alloc_bfreg:
-	kfree(sq);
+	if (!keep_sq)
+		kfree(sq);
 
 	if (mdev->wc_state == MLX5_WC_STATE_UNSUPPORTED)
 		mlx5_core_warn(mdev, "Write combining is not supported\n");

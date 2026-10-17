@@ -473,6 +473,7 @@ bool rxrpc_input_call_event(struct rxrpc_call *call)
 out:
 	if (__rxrpc_call_is_complete(call)) {
 		timer_delete_sync(&call->timer);
+		rxrpc_purge_queue(&call->rx_queue);
 		if (!test_bit(RXRPC_CALL_DISCONNECTED, &call->flags))
 			rxrpc_disconnect_call(call);
 		if (call->security)

@@ -756,7 +756,7 @@ static unsigned int nf_flow_encap_gso_xmit(struct net *net, struct sk_buff *skb,
 {
 	struct sk_buff *segs, *nskb;
 
-	segs = skb_gso_segment(skb, 0);
+	segs = skb_gso_segment(skb, NETIF_F_SG | NETIF_F_FRAGLIST);
 	if (IS_ERR(segs))
 		return NF_DROP;
 
@@ -767,12 +767,6 @@ static unsigned int nf_flow_encap_gso_xmit(struct net *net, struct sk_buff *skb,
 
 	skb_list_walk_safe(segs, segs, nskb) {
 		skb_mark_not_on_list(segs);
-
-		if (nf_flow_encap_push(segs, xmit->tuple, xmit->outdev) < 0) {
-			kfree_skb(segs);
-			kfree_skb_list(nskb);
-			return NF_STOLEN;
-		}
 		__nf_flow_queue_xmit(net, segs, xmit);
 	}
 
@@ -783,11 +777,12 @@ static unsigned int nf_flow_queue_xmit(struct net *net, struct sk_buff *skb,
 				       struct nf_flow_xmit *xmit)
 {
 	if (xmit->tuple->encap_num) {
+		if (nf_flow_encap_push(skb, xmit->tuple, xmit->outdev) < 0)
+			return NF_DROP;
+
 		if (skb_is_gso(skb) && xmit->needs_gso_segment)
 			return nf_flow_encap_gso_xmit(net, skb, xmit);
 
-		if (nf_flow_encap_push(skb, xmit->tuple, xmit->outdev) < 0)
-			return NF_DROP;
 	}
 
 	__nf_flow_queue_xmit(net, skb, xmit);

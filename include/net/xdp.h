@@ -81,6 +81,9 @@ enum xdp_buff_flags {
 	 * XDP program is not attached.
 	 */
 	XDP_FLAGS_FRAGS_UNREADABLE	= BIT(2),
+	/* Netfilter netdev-dup recursion depth, carried through XDP frames. */
+	XDP_FLAGS_NF_DUP_NETDEV_SHIFT	= 3,
+	XDP_FLAGS_NF_DUP_NETDEV_MASK	= 3U << XDP_FLAGS_NF_DUP_NETDEV_SHIFT,
 };
 
 struct xdp_buff {
@@ -105,6 +108,21 @@ struct xdp_buff {
 #endif
 	};
 };
+
+static __always_inline u8
+xdp_buff_get_nf_dup_netdev(const struct xdp_buff *xdp)
+{
+	return (xdp->flags & XDP_FLAGS_NF_DUP_NETDEV_MASK) >>
+		XDP_FLAGS_NF_DUP_NETDEV_SHIFT;
+}
+
+static __always_inline void
+xdp_buff_set_nf_dup_netdev(struct xdp_buff *xdp, u8 depth)
+{
+	xdp->flags &= ~XDP_FLAGS_NF_DUP_NETDEV_MASK;
+	xdp->flags |= (depth << XDP_FLAGS_NF_DUP_NETDEV_SHIFT) &
+		      XDP_FLAGS_NF_DUP_NETDEV_MASK;
+}
 
 static __always_inline void xdp_reinit_buff(struct xdp_buff *xdp)
 {
@@ -309,6 +327,13 @@ struct xdp_frame {
 	u32 frame_sz;
 	u32 flags; /* supported values defined in xdp_buff_flags */
 };
+
+static __always_inline u8
+xdp_frame_get_nf_dup_netdev(const struct xdp_frame *frame)
+{
+	return (frame->flags & XDP_FLAGS_NF_DUP_NETDEV_MASK) >>
+		XDP_FLAGS_NF_DUP_NETDEV_SHIFT;
+}
 
 static __always_inline bool xdp_frame_has_frags(const struct xdp_frame *frame)
 {
