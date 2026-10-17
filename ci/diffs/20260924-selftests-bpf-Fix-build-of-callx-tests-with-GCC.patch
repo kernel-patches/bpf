@@ -1,0 +1,128 @@
+From b83699a7ee87e77b306e59efe94b80a58adb385f Mon Sep 17 00:00:00 2001
+From: Alexei Starovoitov <ast@kernel.org>
+Date: Thu, 24 Sep 2026 18:21:04 +0000
+Subject: [PATCH] selftests/bpf: Fix build of callx tests with GCC
+
+GCC doesn't support indirect calls in BPF:
+
+  progs/verifier_callx.c: In function 'apply_op':
+  progs/verifier_callx.c:977:1: error: indirect call in function, which are not supported by eBPF
+  progs/verifier_callx_rodata.c: In function 'use_shape':
+  progs/verifier_callx_rodata.c:746:1: error: indirect call in function, which are not supported by eBPF
+
+Build verifier_callx, verifier_callx_rodata and callx_rodata progs
+with clang only. Skip callx_rodata_lskel test when progs are built
+with GCC.
+
+Fixes: e9b22d50796d ("selftests/bpf: Add tests for callx")
+Fixes: b018e998e645 ("selftests/bpf: Add tests for callx through pointers in read-only data")
+Signed-off-by: Alexei Starovoitov <ast@kernel.org>
+---
+ .../bpf/prog_tests/callx_rodata_lskel.c       |  6 ++++
+ .../selftests/bpf/progs/callx_rodata.c        | 28 +++++++++++++++++--
+ .../selftests/bpf/progs/verifier_callx.c      |  3 +-
+ .../bpf/progs/verifier_callx_rodata.c         |  3 +-
+ 4 files changed, 36 insertions(+), 4 deletions(-)
+
+diff --git a/tools/testing/selftests/bpf/prog_tests/callx_rodata_lskel.c b/tools/testing/selftests/bpf/prog_tests/callx_rodata_lskel.c
+index 96f6179f0492..6a43b880d730 100644
+--- a/tools/testing/selftests/bpf/prog_tests/callx_rodata_lskel.c
++++ b/tools/testing/selftests/bpf/prog_tests/callx_rodata_lskel.c
+@@ -35,6 +35,12 @@ void test_callx_rodata_lskel(void)
+ 	if (!ASSERT_OK_PTR(skel, "open"))
+ 		return;
+ 
++	/* gcc doesn't support indirect calls */
++	if (skel->rodata->skip) {
++		test__skip();
++		goto out;
++	}
++
+ 	skel->rodata->bias = 7;
+ 
+ 	if (!ASSERT_OK(callx_rodata_lskel__load(skel), "load"))
+diff --git a/tools/testing/selftests/bpf/progs/callx_rodata.c b/tools/testing/selftests/bpf/progs/callx_rodata.c
+index 07ae2d1b6b8e..e3f8335f80f8 100644
+--- a/tools/testing/selftests/bpf/progs/callx_rodata.c
++++ b/tools/testing/selftests/bpf/progs/callx_rodata.c
+@@ -1,16 +1,21 @@
+ // SPDX-License-Identifier: GPL-2.0
+ /* callx through pointers to functions in .rodata, loaded by light skeleton */
+ 
++#include <stdbool.h>
+ #include <linux/bpf.h>
+ #include <bpf/bpf_helpers.h>
+ 
+-typedef int (*op_fn)(int);
+-
+ /* set by user space before the programs are loaded, it's in .rodata too */
+ const volatile int bias = 1;
+ 
+ int op_idx;
+ 
++#ifdef __clang__
++
++const volatile bool skip = false;
++
++typedef int (*op_fn)(int);
++
+ static __noinline int add_bias(int x)
+ {
+ 	return x + bias;
+@@ -41,6 +46,25 @@ int both_ops(void *ctx)
+ 	return ops[1](ops[0](4));
+ }
+ 
++#else
++
++/* gcc doesn't support indirect calls */
++const volatile bool skip = true;
++
++SEC("socket")
++int select_op(void *ctx)
++{
++	return 0;
++}
++
++SEC("socket")
++int both_ops(void *ctx)
++{
++	return 0;
++}
++
++#endif
++
+ /* no callx here */
+ SEC("socket")
+ int read_bias(void *ctx)
+diff --git a/tools/testing/selftests/bpf/progs/verifier_callx.c b/tools/testing/selftests/bpf/progs/verifier_callx.c
+index ea3d3f97da31..bc31d0221f6a 100644
+--- a/tools/testing/selftests/bpf/progs/verifier_callx.c
++++ b/tools/testing/selftests/bpf/progs/verifier_callx.c
+@@ -6,7 +6,8 @@
+ #include "bpf_misc.h"
+ #include "../../../include/linux/filter.h"
+ 
+-#if defined(__TARGET_ARCH_x86) || defined(__TARGET_ARCH_arm64)
++/* gcc doesn't support indirect calls */
++#if (defined(__TARGET_ARCH_x86) || defined(__TARGET_ARCH_arm64)) && defined(__clang__)
+ 
+ #define CALLX_INSN(DST, SRC, OFF, IMM) \
+ 	BPF_RAW_INSN(BPF_JMP | BPF_CALL | BPF_X, DST, SRC, OFF, IMM)
+diff --git a/tools/testing/selftests/bpf/progs/verifier_callx_rodata.c b/tools/testing/selftests/bpf/progs/verifier_callx_rodata.c
+index 65d34769c8bf..db3169a1ddf6 100644
+--- a/tools/testing/selftests/bpf/progs/verifier_callx_rodata.c
++++ b/tools/testing/selftests/bpf/progs/verifier_callx_rodata.c
+@@ -6,7 +6,8 @@
+ #include "bpf_misc.h"
+ #include "../../../include/linux/filter.h"
+ 
+-#if defined(__TARGET_ARCH_x86) || defined(__TARGET_ARCH_arm64)
++/* gcc doesn't support indirect calls */
++#if (defined(__TARGET_ARCH_x86) || defined(__TARGET_ARCH_arm64)) && defined(__clang__)
+ 
+ /*
+  * Read-only data with pointers to functions, where the compiler puts tables
+-- 
+2.55.0
+
