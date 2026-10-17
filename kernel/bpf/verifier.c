@@ -3317,6 +3317,54 @@ static void find_subprog_properties(struct bpf_verifier_env *env)
 	}
 }
 
+static int subprog_falls_through(struct bpf_verifier_env *env, int subprog, int idx)
+{
+	verbose(env, "last insn is not an exit or jmp\n");
+	bpf_diag_program_structure(
+		env, idx, "subprogram can fall through",
+		"End each subprogram with an exit or an explicit jump that keeps control flow inside the subprogram.",
+		"Subprogram %d reaches its last instruction %d without an exit or jump, so control could continue into the next subprogram.",
+		subprog, idx);
+	return -EINVAL;
+}
+
+/*
+ * Put an exit after a call that ends a subprog, so that nothing from the CFG
+ * walk on has to know a subprog can end that way. check_subprogs() only lets
+ * such a call be to a callee that never returns, so do_check() never reaches
+ * the exit.
+ */
+static int add_exits_after_final_calls(struct bpf_verifier_env *env)
+{
+	struct bpf_insn patch[2] = { {}, BPF_EXIT_INSN() };
+	struct bpf_prog *new_prog;
+	int i, j;
+
+	for (i = 0; i < env->subprog_cnt; i++) {
+		int last = env->subprog_info[i + 1].start - 1;
+		struct bpf_insn *insn = &env->prog->insnsi[last];
+
+		if (!bpf_pseudo_call(insn) && !bpf_pseudo_kfunc_call(insn))
+			continue;
+		patch[0] = *insn;
+		new_prog = bpf_patch_insn_data(env, last, patch, 2);
+		if (!new_prog)
+			return -ENOMEM;
+		env->prog = new_prog;
+		/* The patch moved the call's aux data, orig_idx included, to the exit. */
+		env->insn_aux_data[last].orig_idx = env->insn_aux_data[last + 1].orig_idx;
+		/* The patch does not adjust the call itself for a callee after it. */
+		insn = &new_prog->insnsi[last];
+		if (bpf_pseudo_call(insn) && insn->imm >= 0)
+			insn->imm++;
+		/* Nor does it move the exits check_subprogs() found after it. */
+		for (j = i + 1; j < env->subprog_cnt; j++)
+			if (env->subprog_info[j].exit_idx != U32_MAX)
+				env->subprog_info[j].exit_idx++;
+	}
+	return 0;
+}
+
 static int check_subprogs(struct bpf_verifier_env *env)
 {
 	int i, subprog_start, subprog_end, off, cur_subprog = 0;
@@ -3356,25 +3404,43 @@ next:
 			/*
 			 * To avoid fall-through from one subprog into another,
 			 * the last insn of the subprog should be either exit
-			 * or unconditional jump back or bpf_throw call.
+			 * or unconditional jump back or a call that does not
+			 * return, checked below.
 			 */
 			if (code != (BPF_JMP | BPF_EXIT) &&
 			    code != (BPF_JMP32 | BPF_JA) &&
 			    code != (BPF_JMP | BPF_JA) &&
-			    !insn_is_gotox(&insn[i])) {
-				verbose(env, "last insn is not an exit or jmp\n");
-				bpf_diag_program_structure(
-					env, i, "subprogram can fall through",
-					"End each subprogram with an exit or an explicit jump that keeps control flow inside the subprogram.",
-					"Subprogram %d reaches its last instruction %d without an exit or jump, so control could continue into the next subprogram.",
-					cur_subprog, i);
-				return -EINVAL;
-			}
+			    !insn_is_gotox(&insn[i]) &&
+			    !bpf_pseudo_call(&insn[i]) &&
+			    !bpf_pseudo_kfunc_call(&insn[i]))
+				return subprog_falls_through(env, cur_subprog, i);
 			subprog_start = subprog_end;
 			cur_subprog++;
 			if (cur_subprog < env->subprog_cnt)
 				subprog_end = subprog[cur_subprog + 1].start;
 		}
+	}
+
+	/*
+	 * A compiler ends a subprog with a call only if the callee never
+	 * returns. Refuse any other final call.
+	 */
+	for (i = 0; i < env->subprog_cnt; i++) {
+		int last = subprog[i + 1].start - 1, callee;
+
+		if (bpf_pseudo_kfunc_call(&insn[last])) {
+			if (!bpf_is_unwind_kfunc(&insn[last]) &&
+			    !bpf_is_unwind_resume_kfunc(&insn[last]))
+				return subprog_falls_through(env, i, last);
+			continue;
+		}
+		if (!bpf_pseudo_call(&insn[last]))
+			continue;
+		callee = bpf_find_subprog(env, last + insn[last].imm + 1);
+		if (bpf_subprog_is_global(env, callee) ||
+		    subprog[callee].exit_idx != U32_MAX ||
+		    subprog[callee].has_tail_call || subprog[callee].has_ld_abs)
+			return subprog_falls_through(env, i, last);
 	}
 	return 0;
 }
@@ -23602,15 +23668,6 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	env->test_reg_invariants = attr->prog_flags & BPF_F_TEST_REG_INVARIANTS;
 	env->arena_scalar = attr->prog_flags & BPF_F_ARENA_SCALAR;
 
-	env->explored_states = kvzalloc_objs(struct list_head,
-					     state_htab_size(env),
-					     GFP_KERNEL_ACCOUNT);
-	ret = -ENOMEM;
-	if (!env->explored_states)
-		goto skip_full_check;
-
-	for (i = 0; i < state_htab_size(env); i++)
-		INIT_LIST_HEAD(&env->explored_states[i]);
 	INIT_LIST_HEAD(&env->free_list);
 
 	/* Prepare BTF and func_info needed to discover all subprograms. */
@@ -23660,6 +23717,24 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	ret = add_kfuncs(env);
 	if (ret < 0)
 		goto skip_full_check;
+
+	/*
+	 * After everything above has recorded insn offsets, so the patch
+	 * adjusts them, and before an offloaded program's per-insn state.
+	 */
+	ret = add_exits_after_final_calls(env);
+	if (ret < 0)
+		goto skip_full_check;
+
+	env->explored_states = kvzalloc_objs(struct list_head,
+					     state_htab_size(env),
+					     GFP_KERNEL_ACCOUNT);
+	ret = -ENOMEM;
+	if (!env->explored_states)
+		goto skip_full_check;
+
+	for (i = 0; i < state_htab_size(env); i++)
+		INIT_LIST_HEAD(&env->explored_states[i]);
 
 	if (bpf_prog_is_offloaded(env->prog->aux)) {
 		ret = bpf_prog_offload_verifier_prep(env->prog);
