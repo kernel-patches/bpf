@@ -2205,17 +2205,13 @@ static const struct dmi_system_id ctrl_ps2_aux_port_list[] = {
 	{}
 };
 
-static int ideapad_psy_ext_set_prop(struct power_supply *psy,
-				    const struct power_supply_ext *ext,
-				    void *ext_data,
-				    enum power_supply_property psp,
-				    const union power_supply_propval *val)
+static int ideapad_set_charge_types(struct ideapad_private *priv,
+				    enum power_supply_charge_type charge_type)
 {
-	struct ideapad_private *priv = ext_data;
 	unsigned long op1, op2;
 	int err;
 
-	switch (val->intval) {
+	switch (charge_type) {
 	case POWER_SUPPLY_CHARGE_TYPE_FAST:
 		if (WARN_ON(!priv->features.rapid_charge))
 			return -EINVAL;
@@ -2247,22 +2243,19 @@ static int ideapad_psy_ext_set_prop(struct power_supply *psy,
 	return exec_sbmc(priv->adev->handle, op2);
 }
 
-static int ideapad_psy_ext_get_prop(struct power_supply *psy,
-				    const struct power_supply_ext *ext,
-				    void *ext_data,
-				    enum power_supply_property psp,
-				    union power_supply_propval *val)
+static int ideapad_psy_ext_set_prop(struct power_supply *psy, const struct power_supply_ext *ext,
+				    void *ext_data, enum power_supply_property psp,
+				    const union power_supply_propval *val)
 {
 	struct ideapad_private *priv = ext_data;
-	bool is_rapid_charge, is_conservation;
-	unsigned long result;
-	int err;
 
-	scoped_guard(mutex, &priv->gbmd_sbmc_mutex) {
-		err = eval_gbmd(priv->adev->handle, &result);
-		if (err)
-			return err;
-	}
+	return ideapad_set_charge_types(priv, val->intval);
+}
+
+static int ideapad_get_charge_types(struct ideapad_private *priv, unsigned long result,
+				    enum power_supply_charge_type *charge_type)
+{
+	bool is_rapid_charge, is_conservation;
 
 	is_rapid_charge = (priv->features.rapid_charge &&
 			   test_bit(GBMD_RAPID_CHARGE_STATE_BIT, &result));
@@ -2275,13 +2268,31 @@ static int ideapad_psy_ext_get_prop(struct power_supply *psy,
 	}
 
 	if (is_rapid_charge)
-		val->intval = POWER_SUPPLY_CHARGE_TYPE_FAST;
+		*charge_type = POWER_SUPPLY_CHARGE_TYPE_FAST;
 	else if (is_conservation)
-		val->intval = POWER_SUPPLY_CHARGE_TYPE_LONGLIFE;
+		*charge_type = POWER_SUPPLY_CHARGE_TYPE_LONGLIFE;
 	else
-		val->intval = POWER_SUPPLY_CHARGE_TYPE_STANDARD;
+		*charge_type = POWER_SUPPLY_CHARGE_TYPE_STANDARD;
 
 	return 0;
+}
+
+static int ideapad_psy_ext_get_prop(struct power_supply *psy, const struct power_supply_ext *ext,
+				    void *ext_data, enum power_supply_property psp,
+				    union power_supply_propval *val)
+{
+	struct ideapad_private *priv = ext_data;
+	unsigned long result;
+	int err;
+
+	scoped_guard(mutex, &priv->gbmd_sbmc_mutex) {
+		err = eval_gbmd(priv->adev->handle, &result);
+		if (err)
+			return err;
+	}
+
+	return ideapad_get_charge_types(priv, result,
+					(enum power_supply_charge_type *)&val->intval);
 }
 
 static int ideapad_psy_prop_is_writeable(struct power_supply *psy,
