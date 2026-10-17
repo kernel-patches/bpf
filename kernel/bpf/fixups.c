@@ -727,13 +727,63 @@ static void keep_funcs_with_addr_taken(struct bpf_verifier_env *env)
 	}
 }
 
+/*
+ * The walk sends a frame that a callee unwinds through to its epilogue, which
+ * the x86 JIT emits at the first exit, so keep one. A frame that only unwinds
+ * may have none: put one after its last insn.
+ */
+static int keep_subprog_exits(struct bpf_verifier_env *env)
+{
+	struct bpf_insn patch[2] = { {}, BPF_EXIT_INSN() };
+	struct bpf_prog *new_prog;
+	u32 i, j;
+
+	for (i = 0; i < env->subprog_cnt; i++) {
+		u32 start, end;
+		bool found = false;
+
+		if (!env->subprog_info[i].might_unwind)
+			continue;
+		start = env->subprog_info[i].start;
+		if (!env->insn_aux_data[start].seen)
+			continue;
+
+		end = env->subprog_info[i + 1].start;
+		for (j = end; j-- > start; ) {
+			if (env->prog->insnsi[j].code == (BPF_JMP | BPF_EXIT)) {
+				found = true;
+				break;
+			}
+		}
+		if (!found) {
+			struct bpf_insn_aux_data aux = env->insn_aux_data[end - 1];
+
+			patch[0] = env->prog->insnsi[end - 1];
+			new_prog = bpf_patch_insn_data(env, end - 1, patch, 2);
+			if (!new_prog)
+				return -ENOMEM;
+			env->prog = new_prog;
+			env->insn_aux_data[end - 1] = aux;
+			memset(&env->insn_aux_data[end], 0, sizeof(aux));
+			j = end;
+		}
+		env->insn_aux_data[j].seen = env->pass_cnt;
+	}
+	return 0;
+}
+
 int bpf_opt_remove_dead_code(struct bpf_verifier_env *env)
 {
-	struct bpf_insn_aux_data *aux_data = env->insn_aux_data;
-	int insn_cnt = env->prog->len;
-	int i, err;
+	struct bpf_insn_aux_data *aux_data;
+	int i, insn_cnt, err;
 
 	keep_funcs_with_addr_taken(env);
+	err = keep_subprog_exits(env);
+	if (err)
+		return err;
+
+	aux_data = env->insn_aux_data;
+	insn_cnt = env->prog->len;
 
 	for (i = 0; i < insn_cnt; i++) {
 		int j;
