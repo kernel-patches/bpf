@@ -39,6 +39,7 @@
 
 #include "diagnostics.h"
 #include "disasm.h"
+#include "exception.h"
 
 static const struct bpf_verifier_ops * const bpf_verifier_ops[] = {
 #define BPF_PROG_TYPE(_id, _name, prog_ctx_type, kern_ctx_type) \
@@ -1750,6 +1751,7 @@ int bpf_copy_verifier_state(struct bpf_verifier_state *dst_state,
 		return err;
 	dst_state->speculative = src->speculative;
 	dst_state->in_sleepable = src->in_sleepable;
+	dst_state->unwind_exit = src->unwind_exit;
 	dst_state->curframe = src->curframe;
 	dst_state->branches = src->branches;
 	dst_state->parent = src->parent;
@@ -3315,6 +3317,54 @@ static void find_subprog_properties(struct bpf_verifier_env *env)
 	}
 }
 
+static int subprog_falls_through(struct bpf_verifier_env *env, int subprog, int idx)
+{
+	verbose(env, "last insn is not an exit or jmp\n");
+	bpf_diag_program_structure(
+		env, idx, "subprogram can fall through",
+		"End each subprogram with an exit or an explicit jump that keeps control flow inside the subprogram.",
+		"Subprogram %d reaches its last instruction %d without an exit or jump, so control could continue into the next subprogram.",
+		subprog, idx);
+	return -EINVAL;
+}
+
+/*
+ * Put an exit after a call that ends a subprog, so that nothing from the CFG
+ * walk on has to know a subprog can end that way. check_subprogs() only lets
+ * such a call be to a callee that never returns, so do_check() never reaches
+ * the exit.
+ */
+static int add_exits_after_final_calls(struct bpf_verifier_env *env)
+{
+	struct bpf_insn patch[2] = { {}, BPF_EXIT_INSN() };
+	struct bpf_prog *new_prog;
+	int i, j;
+
+	for (i = 0; i < env->subprog_cnt; i++) {
+		int last = env->subprog_info[i + 1].start - 1;
+		struct bpf_insn *insn = &env->prog->insnsi[last];
+
+		if (!bpf_pseudo_call(insn) && !bpf_pseudo_kfunc_call(insn))
+			continue;
+		patch[0] = *insn;
+		new_prog = bpf_patch_insn_data(env, last, patch, 2);
+		if (!new_prog)
+			return -ENOMEM;
+		env->prog = new_prog;
+		/* The patch moved the call's aux data, orig_idx included, to the exit. */
+		env->insn_aux_data[last].orig_idx = env->insn_aux_data[last + 1].orig_idx;
+		/* The patch does not adjust the call itself for a callee after it. */
+		insn = &new_prog->insnsi[last];
+		if (bpf_pseudo_call(insn) && insn->imm >= 0)
+			insn->imm++;
+		/* Nor does it move the exits check_subprogs() found after it. */
+		for (j = i + 1; j < env->subprog_cnt; j++)
+			if (env->subprog_info[j].exit_idx != U32_MAX)
+				env->subprog_info[j].exit_idx++;
+	}
+	return 0;
+}
+
 static int check_subprogs(struct bpf_verifier_env *env)
 {
 	int i, subprog_start, subprog_end, off, cur_subprog = 0;
@@ -3354,25 +3404,43 @@ next:
 			/*
 			 * To avoid fall-through from one subprog into another,
 			 * the last insn of the subprog should be either exit
-			 * or unconditional jump back or bpf_throw call.
+			 * or unconditional jump back or a call that does not
+			 * return, checked below.
 			 */
 			if (code != (BPF_JMP | BPF_EXIT) &&
 			    code != (BPF_JMP32 | BPF_JA) &&
 			    code != (BPF_JMP | BPF_JA) &&
-			    !insn_is_gotox(&insn[i])) {
-				verbose(env, "last insn is not an exit or jmp\n");
-				bpf_diag_program_structure(
-					env, i, "subprogram can fall through",
-					"End each subprogram with an exit or an explicit jump that keeps control flow inside the subprogram.",
-					"Subprogram %d reaches its last instruction %d without an exit or jump, so control could continue into the next subprogram.",
-					cur_subprog, i);
-				return -EINVAL;
-			}
+			    !insn_is_gotox(&insn[i]) &&
+			    !bpf_pseudo_call(&insn[i]) &&
+			    !bpf_pseudo_kfunc_call(&insn[i]))
+				return subprog_falls_through(env, cur_subprog, i);
 			subprog_start = subprog_end;
 			cur_subprog++;
 			if (cur_subprog < env->subprog_cnt)
 				subprog_end = subprog[cur_subprog + 1].start;
 		}
+	}
+
+	/*
+	 * A compiler ends a subprog with a call only if the callee never
+	 * returns. Refuse any other final call.
+	 */
+	for (i = 0; i < env->subprog_cnt; i++) {
+		int last = subprog[i + 1].start - 1, callee;
+
+		if (bpf_pseudo_kfunc_call(&insn[last])) {
+			if (!bpf_is_unwind_kfunc(&insn[last]) &&
+			    !bpf_is_unwind_resume_kfunc(&insn[last]))
+				return subprog_falls_through(env, i, last);
+			continue;
+		}
+		if (!bpf_pseudo_call(&insn[last]))
+			continue;
+		callee = bpf_find_subprog(env, last + insn[last].imm + 1);
+		if (bpf_subprog_is_global(env, callee) ||
+		    subprog[callee].exit_idx != U32_MAX ||
+		    subprog[callee].has_tail_call || subprog[callee].has_ld_abs)
+			return subprog_falls_through(env, i, last);
 	}
 	return 0;
 }
@@ -5953,6 +6021,17 @@ static int check_max_stack_depth(struct bpf_verifier_env *env)
 			break;
 		}
 	}
+
+	/*
+	 * A private stack keeps its frame pointer in %r9 on x86-64, restored
+	 * by a pop after the call that an unwind skips. A frame resumed at a
+	 * pad then addresses its stack through a stale pointer, and a frame
+	 * sent to its epilogue instead pops its callee-saved registers one
+	 * slot off. Do not use a private stack for any program that can
+	 * unwind, on every arch for now.
+	 */
+	if (env->cleanup_info_cnt || bpf_prog_may_unwind(env))
+		priv_stack_mode = NO_PRIV_STACK;
 
 	if (priv_stack_mode == PRIV_STACK_UNKNOWN)
 		priv_stack_mode = bpf_enable_priv_stack(env->prog);
@@ -11189,6 +11268,10 @@ static int push_callback_call(struct bpf_verifier_env *env, struct bpf_insn *ins
 	 * callbacks
 	 */
 	env->subprog_info[subprog].is_cb = true;
+	err = bpf_exc_check_callback(env, subprog);
+	if (err)
+		return err;
+
 	if (bpf_pseudo_kfunc_call(insn) &&
 	    !is_callback_calling_kfunc(insn->imm)) {
 		verifier_bug(env, "kfunc %s#%d not marked as callback-calling",
@@ -11251,6 +11334,8 @@ static int push_callback_call(struct bpf_verifier_env *env, struct bpf_insn *ins
 
 static int process_bpf_exit_full(struct bpf_verifier_env *env,
 				 bool *do_print_state, bool exception_exit);
+static int process_bpf_unwind(struct bpf_verifier_env *env, int *insn_idx);
+static int unwind_frames(struct bpf_verifier_env *env, bool *do_print_state);
 
 /*
  * Call of a static subprog. The callee is verified in the context of
@@ -15563,6 +15648,16 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	if (bpf_is_throw_kfunc(insn))
 		return process_bpf_exit_full(env, NULL, true);
 
+	if (bpf_is_unwind_kfunc(insn))
+		return process_bpf_unwind(env, insn_idx_p);
+	if (bpf_is_unwind_resume_kfunc(insn)) {
+		if (!cur_func(env)->in_pad) {
+			verbose(env, "resume at insn %d is not in a landing pad\n", insn_idx);
+			return -EINVAL;
+		}
+		return unwind_frames(env, NULL);
+	}
+
 	return 0;
 }
 
@@ -19673,6 +19768,136 @@ enum {
 	INSN_IDX_UPDATED = 2,
 };
 
+static int unwind_frames(struct bpf_verifier_env *env, bool *do_print_state)
+{
+	struct bpf_verifier_state *state = env->cur_state;
+	u32 frameno = state->curframe;
+	struct bpf_func_state *callee, *caller;
+	int err, pad;
+
+	while (state->curframe) {
+		callee = cur_func(env);
+		caller = state->frame[state->curframe - 1];
+		pad = bpf_exc_pad_of_call(env, callee->callsite);
+		/* The caller is at its call now, not at this frame's insn. */
+		state->insn_idx = callee->callsite;
+		/* As on a return: the frame's dynptrs, and their slices, go with it. */
+		err = destroy_dynptrs_in_stack_slots(env, callee, 0,
+						     callee->allocated_stack / BPF_REG_SIZE - 1);
+		if (err)
+			return err;
+
+		account_processed_insns(env, callee, caller);
+		free_func_state(callee);
+		state->frame[state->curframe--] = NULL;
+		invalidate_outgoing_stack_args(env, caller);
+		if (pad < 0)
+			continue;
+
+		/*
+		 * Mark the unwinding insn with the frame it ran in: backtracking
+		 * from the pad comes back to that insn and goes on in that frame.
+		 */
+		err = bpf_push_jmp_history(env, state, INSN_F_UNWIND, 0, frameno, NULL, 0);
+		if (err)
+			return err;
+		clear_caller_saved_regs(env, caller->regs);
+		mark_reg_unknown(env, caller->regs, BPF_REG_0);
+		caller->in_pad = true;
+		env->insn_idx = pad;
+		if (do_print_state)
+			*do_print_state = true;
+		return INSN_IDX_UPDATED;
+	}
+
+	/* A resource still held leaks; report it at the unwinding insn. */
+	err = check_resource_leak(env, false, true, "bpf_unwind");
+	if (err)
+		return err;
+	/*
+	 * No pad: the program ends at frame 0's call into the popped frames, or
+	 * at the unwinding insn itself if none was popped. Mark the unwinding
+	 * insn as above; an unwinding global call needs that when backtracking
+	 * from the end reaches it.
+	 */
+	err = bpf_push_jmp_history(env, state, INSN_F_UNWIND, 0, frameno, NULL, 0);
+	if (err)
+		return err;
+	/*
+	 * Then, in an entry of its own, a jump from the unwinding insn to the
+	 * end, so backtracking from the end goes back to the unwinding insn.
+	 */
+	env->cur_hist_ent = NULL;
+	env->prev_insn_idx = env->insn_idx;
+	env->insn_idx = state->insn_idx;
+	err = bpf_push_jmp_history(env, state, 0, 0, 0, NULL, 0);
+	if (err)
+		return err;
+	/*
+	 * The end may be in a loop: unlike a plain exit, the path can stop
+	 * inside an SCC with no checkpoint there.
+	 */
+	state->unwind_exit = true;
+
+	/* The call clobbered r1-r5, and r0 holds the zero the fixups put there. */
+	clear_caller_saved_regs(env, cur_regs(env));
+	__mark_reg_const_zero(env, &cur_regs(env)[BPF_REG_0]);
+	/*
+	 * A global subprog verified on its own returns here too. One that
+	 * returns in R0:R2 has R2 checked as well, though its caller never
+	 * reads either: it resumes at a pad or an epilogue.
+	 */
+	if (cur_func(env)->subprogno &&
+	    bpf_ret_reg_pair(env, cur_func(env)->subprogno))
+		mark_reg_unknown(env, cur_regs(env), BPF_REG_2);
+
+	return process_bpf_exit_full(env, do_print_state, false);
+}
+
+static int process_global_call_unwind(struct bpf_verifier_env *env,
+				      int call_idx, bool *do_print_state)
+{
+	const struct bpf_insn *insn = &env->prog->insnsi[call_idx];
+	int subprog = bpf_find_subprog(env, call_idx + insn->imm + 1);
+	struct bpf_verifier_state *branch;
+	struct bpf_func_state *frame;
+	int pad;
+
+	if (!bpf_subprog_is_global(env, subprog) ||
+	    !env->subprog_info[subprog].might_unwind)
+		return 0;
+
+	/* The call returning normally is walked later. */
+	branch = push_stack(env, call_idx + 1, call_idx, false);
+	if (IS_ERR(branch))
+		return PTR_ERR(branch);
+
+	pad = bpf_exc_pad_of_call(env, call_idx);
+	if (pad < 0)
+		return unwind_frames(env, do_print_state);
+	frame = cur_func(env);
+	clear_caller_saved_regs(env, frame->regs);
+	mark_reg_unknown(env, frame->regs, BPF_REG_0);
+	frame->in_pad = true;
+	env->insn_idx = pad;
+	*do_print_state = true;
+	return INSN_IDX_UPDATED;
+}
+
+static int process_bpf_unwind(struct bpf_verifier_env *env, int *insn_idx)
+{
+	struct bpf_func_state *frame = cur_func(env);
+	int pad = bpf_exc_pad_of_call(env, *insn_idx);
+
+	if (pad < 0)
+		return unwind_frames(env, NULL);
+	clear_caller_saved_regs(env, frame->regs);
+	mark_reg_unknown(env, frame->regs, BPF_REG_0);
+	frame->in_pad = true;
+	*insn_idx = pad;
+	return INSN_IDX_UPDATED;
+}
+
 static int process_bpf_exit_full(struct bpf_verifier_env *env,
 				 bool *do_print_state,
 				 bool exception_exit)
@@ -19864,6 +20089,12 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 	struct bpf_insn *insn = &env->prog->insnsi[env->insn_idx];
 	u8 class = BPF_CLASS(insn->code);
 
+	if (unlikely(env->cleanup_info_cnt)) {
+		err = bpf_exc_check_insn(env, insn);
+		if (err)
+			return err;
+	}
+
 	switch (class) {
 	case BPF_ALU:
 	case BPF_ALU64:
@@ -19934,8 +20165,14 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 				cur_func(env)->no_stack_arg_load = true;
 			if (bpf_is_callx(insn))
 				return check_func_callx(env, insn, &env->insn_idx);
-			if (insn->src_reg == BPF_PSEUDO_CALL)
-				return check_func_call(env, insn, &env->insn_idx);
+			if (insn->src_reg == BPF_PSEUDO_CALL) {
+				int call_idx = env->insn_idx;
+
+				err = check_func_call(env, insn, &env->insn_idx);
+				if (err)
+					return err;
+				return process_global_call_unwind(env, call_idx, do_print_state);
+			}
 			if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL)
 				return check_kfunc_call(env, insn, &env->insn_idx);
 			return check_helper_call(env, insn, &env->insn_idx);
@@ -22134,6 +22371,23 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 				prog_extension ? "Extension" : "Tracing");
 			return -EINVAL;
 		}
+		/*
+		 * A trampoline that calls its target stays as a frame between a
+		 * subprog and its caller, and bpf_unwind() cannot walk past it:
+		 * the frames above it would carry on after their calls rather
+		 * than at their landing pads or epilogues. fentry leaves no
+		 * frame, and the main program's caller is above where the walk
+		 * stops.
+		 */
+		if (aux->func && subprog && aux->func[subprog]->aux->might_unwind &&
+		    (prog->expected_attach_type == BPF_TRACE_FEXIT ||
+		     prog->expected_attach_type == BPF_MODIFY_RETURN ||
+		     prog->expected_attach_type == BPF_TRACE_FSESSION)) {
+			bpf_log(log,
+				"Cannot attach fexit, fmod_ret or fsession to %s, which can unwind\n",
+				tname);
+			return -EINVAL;
+		}
 		conservative = aux->func_info_aux[subprog].unreliable;
 		if (prog_extension) {
 			if (conservative) {
@@ -23431,15 +23685,6 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	env->test_reg_invariants = attr->prog_flags & BPF_F_TEST_REG_INVARIANTS;
 	env->arena_scalar = attr->prog_flags & BPF_F_ARENA_SCALAR;
 
-	env->explored_states = kvzalloc_objs(struct list_head,
-					     state_htab_size(env),
-					     GFP_KERNEL_ACCOUNT);
-	ret = -ENOMEM;
-	if (!env->explored_states)
-		goto skip_full_check;
-
-	for (i = 0; i < state_htab_size(env); i++)
-		INIT_LIST_HEAD(&env->explored_states[i]);
 	INIT_LIST_HEAD(&env->free_list);
 
 	/* Prepare BTF and func_info needed to discover all subprograms. */
@@ -23468,6 +23713,13 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	if (ret < 0)
 		goto skip_full_check;
 
+	ret = bpf_exc_check_info(env, attr, uattr);
+	if (ret < 0)
+		goto skip_full_check;
+
+	/* The CFG needs an edge from a call in a cleanup range to its pad. */
+	bpf_exc_mark_call_sites(env);
+
 	/* Validate instructions and resolve the program's referenced resources. */
 	ret = check_and_resolve_insns(env);
 	if (ret < 0)
@@ -23482,6 +23734,24 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	ret = add_kfuncs(env);
 	if (ret < 0)
 		goto skip_full_check;
+
+	/*
+	 * After everything above has recorded insn offsets, so the patch
+	 * adjusts them, and before an offloaded program's per-insn state.
+	 */
+	ret = add_exits_after_final_calls(env);
+	if (ret < 0)
+		goto skip_full_check;
+
+	env->explored_states = kvzalloc_objs(struct list_head,
+					     state_htab_size(env),
+					     GFP_KERNEL_ACCOUNT);
+	ret = -ENOMEM;
+	if (!env->explored_states)
+		goto skip_full_check;
+
+	for (i = 0; i < state_htab_size(env); i++)
+		INIT_LIST_HEAD(&env->explored_states[i]);
 
 	if (bpf_prog_is_offloaded(env->prog->aux)) {
 		ret = bpf_prog_offload_verifier_prep(env->prog);
@@ -23504,6 +23774,12 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	ret = check_attach_btf_id(env);
 	if (ret)
 		goto skip_full_check;
+
+	if (env->cleanup_info_cnt || bpf_prog_may_unwind(env)) {
+		ret = bpf_exc_check_prog(env);
+		if (ret)
+			goto skip_full_check;
+	}
 
 	ret = bpf_compute_const_regs(env);
 	if (ret < 0)
@@ -23598,6 +23874,9 @@ skip_full_check:
 	if (ret == 0)
 		/* program is valid, convert *(u32*)(ctx + off) accesses */
 		ret = bpf_convert_ctx_accesses(env);
+
+	if (ret == 0)
+		ret = bpf_exc_patch_unwind_calls(env);
 
 	if (ret == 0)
 		ret = bpf_do_misc_fixups(env);
@@ -23713,6 +23992,7 @@ err_free_env:
 	kvfree(env->func_ptrs);
 	bpf_diag_free(env);
 	kvfree(env->idoms);
+	kvfree(env->cleanup_info);
 	kvfree(env);
 	return ret;
 }
