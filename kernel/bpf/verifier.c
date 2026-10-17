@@ -8416,6 +8416,7 @@ static int process_dynptr_func(struct bpf_verifier_env *env, struct bpf_reg_stat
 			       argno_t argno, int insn_idx, enum bpf_arg_type arg_type,
 			       struct bpf_call_arg_meta *meta)
 {
+	bool is_arg = reg->type == CONST_PTR_TO_DYNPTR;
 	int spi, err = 0;
 
 	/*  MEM_UNINIT - Points to memory that is an appropriate candidate for
@@ -8502,7 +8503,12 @@ static int process_dynptr_func(struct bpf_verifier_env *env, struct bpf_reg_stat
 			reg = &bpf_stack_slot(state, spi)->spilled_ptr;
 		}
 
-		meta->dynptr.type = reg->dynptr.type;
+		/*
+		 * The callers of a global function may hand in a dynptr of any
+		 * type. Take it for that of an skb, so that a write through it
+		 * and its slices are treated with care.
+		 */
+		meta->dynptr.type = is_arg ? BPF_DYNPTR_TYPE_SKB : reg->dynptr.type;
 		meta->dynptr.id = reg->id;
 		meta->dynptr.parent_id = reg->parent_id;
 	}
