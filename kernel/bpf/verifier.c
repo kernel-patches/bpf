@@ -6562,6 +6562,7 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 	const char *tname = btf_name_by_offset(reg->btf, t->name_off);
 	const char *field_name = NULL;
 	enum bpf_type_flag flag = 0;
+	u32 parent_id = 0;
 	u32 btf_id = 0;
 	s64 min_off;
 	int ret;
@@ -6684,9 +6685,9 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 		 * trusted if we are in an RCU CS. Such pointer can be NULL.
 		 */
 		if (type_is_trusted(env, reg, field_name, btf_id)) {
-			flag |= PTR_TRUSTED;
+			flag |= is_rcu_reg(reg) ? MEM_RCU : PTR_TRUSTED;
 		} else if (type_is_trusted_or_null(env, reg, field_name, btf_id)) {
-			flag |= PTR_TRUSTED | PTR_MAYBE_NULL;
+			flag |= (is_rcu_reg(reg) ? MEM_RCU : PTR_TRUSTED) | PTR_MAYBE_NULL;
 		} else if (in_rcu_cs(env) && !type_may_be_null(reg->type)) {
 			if (type_is_rcu(env, reg, field_name, btf_id)) {
 				/* ignore __rcu tag and mark it MEM_RCU */
@@ -6716,6 +6717,11 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 			 */
 			flag = PTR_UNTRUSTED;
 		}
+
+		/* A trusted field is pinned by whatever pins its parent. */
+		if (flag & PTR_TRUSTED)
+			parent_id = reg_is_referenced(env, reg) ? reg->id :
+								  reg->parent_id;
 	} else {
 		/* Old compat. Deprecated */
 		clear_trusted_flags(&flag);
@@ -6725,6 +6731,7 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 		ret = mark_btf_ld_reg(env, regs, value_regno, ret, reg->btf, btf_id, flag);
 		if (ret < 0)
 			return ret;
+		regs[value_regno].parent_id = parent_id;
 	}
 
 	return 0;
