@@ -2329,6 +2329,50 @@ DEFINE_IDEAPAD_POWER_SUPPLY_EXTENSION(ideapad_battery_ext_v2,
 				       BIT(POWER_SUPPLY_CHARGE_TYPE_LONGLIFE))
 );
 
+static int ideapad_battery_check(struct ideapad_private *priv)
+{
+	enum power_supply_charge_type charge_type;
+	unsigned long val;
+	int ret;
+
+	/* Not acquiring gbmd_sbmc_mutex as race condition is impossible on init. */
+	ret = eval_gbmd(priv->adev->handle, &val);
+	if (ret)
+		return ret;
+
+	priv->features.conservation_mode = true;
+	priv->features.rapid_charge = test_bit(GBMD_RAPID_CHARGE_SUPPORTED_BIT, &val);
+
+	ret = priv->features.rapid_charge ? ideapad_get_charge_types(priv, val, &charge_type) : 0;
+	if (ret) {
+		/*
+		 * Some unfortunate combinations of BIOS and Lenovo utilities
+		 * (e.g., Legion Go 2 + Legion Space) may enable Rapid Charge
+		 * and Conservation Mode at the same time, which is very out of
+		 * sepc.
+		 *
+		 * If both are enabled during a previous Windows boot, we will
+		 * see both bits set.
+		 *
+		 * Conservation Mode should override Rapid Charge. Before a BIOS
+		 * update addresses this, enforce it by selecting [Long_Life].
+		 */
+		dev_notice(&priv->platform_device->dev,
+			   "selecting [Long_life] to fix unexpected charge_types\n");
+
+		ret = ideapad_set_charge_types(priv, POWER_SUPPLY_CHARGE_TYPE_LONGLIFE);
+		if (ret) {
+			dev_err(&priv->platform_device->dev,
+				"failed to fix unexpected charge_types: %d\n", ret);
+			return ret;
+		}
+
+		/* Best-effort only. No read back. */
+	}
+
+	return 0;
+}
+
 static int ideapad_battery_add(struct power_supply *battery, struct acpi_battery_hook *hook)
 {
 	struct ideapad_private *priv = container_of(hook, struct ideapad_private, battery_hook);
@@ -2367,12 +2411,12 @@ static int ideapad_check_features(struct ideapad_private *priv)
 		priv->features.fan_mode = true;
 
 	if (acpi_has_method(handle, "GBMD") && acpi_has_method(handle, "SBMC")) {
-		/* Not acquiring gbmd_sbmc_mutex as race condition is impossible on init */
-		if (!eval_gbmd(handle, &val)) {
-			priv->features.conservation_mode = true;
-			priv->features.rapid_charge = test_bit(GBMD_RAPID_CHARGE_SUPPORTED_BIT,
-							       &val);
-
+		err = ideapad_battery_check(priv);
+		if (err) {
+			/* Continue with no battery hook or conservation_mode attribute. */
+			priv->features.conservation_mode = false;
+			priv->features.rapid_charge = false;
+		} else {
 			priv->battery_ext = priv->features.rapid_charge
 					    ? &ideapad_battery_ext_v2
 					    : &ideapad_battery_ext_v1;
