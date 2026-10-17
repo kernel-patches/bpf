@@ -2578,8 +2578,10 @@ struct sock *sk_clone(const struct sock *sk, const gfp_t priority,
 		goto free;
 	}
 
-	if (bpf_sk_storage_clone(sk, newsk))
+	if (bpf_sk_storage_clone(sk, newsk)) {
+		xfrm_sk_free_policy(newsk);
 		goto free;
+	}
 
 	/* Clear sk_user_data if parent had the pointer tagged
 	 * as not suitable for copying when cloning.
