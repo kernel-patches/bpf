@@ -2255,6 +2255,11 @@ patch_map_ops_generic:
 				insn_buf[1] = BPF_ALU64_IMM(BPF_AND, BPF_REG_0, 0xFF);
 				cnt = 2;
 			}
+			/*
+			 * The helper takes a u32 index; zero-extend it before
+			 * the bounds check and the 64-bit address math below.
+			 */
+			insn_buf[cnt++] = BPF_MOV32_REG(BPF_REG_2, BPF_REG_2);
 			insn_buf[cnt++] = BPF_JMP32_REG(BPF_JGE, BPF_REG_2, BPF_REG_0, 6);
 			insn_buf[cnt++] = BPF_ALU64_IMM(BPF_LSH, BPF_REG_2, 3);
 			insn_buf[cnt++] = BPF_ALU64_REG(BPF_ADD, BPF_REG_2, BPF_REG_1);
