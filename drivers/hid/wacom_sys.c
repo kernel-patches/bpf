@@ -175,6 +175,9 @@ static int wacom_raw_event(struct hid_device *hdev, struct hid_report *report,
 	if (wacom->wacom_wac.features.type == BOOTLOADER)
 		return 0;
 
+	if (size < hid_report_len(report))
+		return 0;
+
 	if (wacom_wac_pen_serial_enforce(hdev, report, raw_data, size))
 		return -1;
 
