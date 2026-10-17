@@ -269,6 +269,8 @@ struct bpf_prog *bpf_prog_realloc(struct bpf_prog *fp_old, unsigned int size,
 		memcpy(fp, fp_old, fp_old->pages * PAGE_SIZE);
 		fp->pages = pages;
 		fp->aux->prog = fp;
+		if (fp->aux->offload)
+			fp->aux->offload->prog = fp;
 
 		/* We keep fp->aux from fp_old around in the new
 		 * reallocated structure.
