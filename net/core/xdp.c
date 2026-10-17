@@ -605,6 +605,7 @@ struct xdp_frame *xdp_convert_zc_to_xdp_frame(struct xdp_buff *xdp)
 	xdpf->headroom = metasize;
 	xdpf->metasize = metasize;
 	xdpf->frame_sz = PAGE_SIZE;
+	xdpf->flags = xdp->flags & XDP_FLAGS_NF_DUP_NETDEV_MASK;
 	xdpf->mem_type = MEM_TYPE_PAGE_ORDER0;
 
 	xsk_buff_free(xdp);
@@ -658,6 +659,9 @@ struct sk_buff *xdp_build_skb_from_buff(const struct xdp_buff *xdp)
 		skb_mark_for_recycle(skb);
 
 	skb_record_rx_queue(skb, rxq->queue_index);
+#if IS_ENABLED(CONFIG_NF_TABLES)
+	skb->nf_dup_netdev = xdp_buff_get_nf_dup_netdev(xdp);
+#endif
 
 	if (unlikely(nr_frags)) {
 		u32 tsize;
@@ -773,6 +777,9 @@ struct sk_buff *xdp_build_skb_from_zc(struct xdp_buff *xdp)
 	}
 
 	skb_record_rx_queue(skb, rxq->queue_index);
+#if IS_ENABLED(CONFIG_NF_TABLES)
+	skb->nf_dup_netdev = xdp_buff_get_nf_dup_netdev(xdp);
+#endif
 
 	if (unlikely(xdp_buff_has_frags(xdp)) &&
 	    unlikely(!xdp_copy_frags_from_zc(skb, xdp, pp))) {
@@ -819,6 +826,9 @@ struct sk_buff *__xdp_build_skb_from_frame(struct xdp_frame *xdpf,
 
 	skb_reserve(skb, headroom);
 	__skb_put(skb, xdpf->len);
+#if IS_ENABLED(CONFIG_NF_TABLES)
+	skb->nf_dup_netdev = xdp_frame_get_nf_dup_netdev(xdpf);
+#endif
 	if (xdpf->metasize)
 		skb_metadata_set(skb, xdpf->metasize);
 

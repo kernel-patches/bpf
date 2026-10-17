@@ -5233,11 +5233,11 @@ static struct slave *bond_xmit_3ad_xor_slave_get(struct bonding *bond,
 	unsigned int count;
 	u32 hash;
 
-	hash = bond_xmit_hash(bond, skb);
 	count = slaves ? READ_ONCE(slaves->count) : 0;
 	if (unlikely(!count))
 		return NULL;
 
+	hash = bond_xmit_hash(bond, skb);
 	slave = slaves->arr[hash % count];
 	return slave;
 }
@@ -5289,9 +5289,60 @@ static bool bond_should_broadcast_neighbor(struct sk_buff *skb,
 	return false;
 }
 
-/* Use this Xmit function for 3AD as well as XOR modes. The current
- * usable slave array is formed in the control path. The xmit function
- * just calculates hash and sends the packet out.
+/* Called with RCU held and only in 802.3ad mode. */
+static const struct aggregator *bond_3ad_tx_eligible_agg(struct slave *slave)
+{
+	const struct aggregator *agg;
+
+	agg = rcu_dereference(SLAVE_AD_INFO(slave)->port.aggregator);
+	if (!agg || !READ_ONCE(agg->is_active) || !bond_slave_can_tx(slave))
+		return NULL;
+
+	return agg;
+}
+
+/* Called with RCU held when the usable slave array is empty. */
+static struct slave *bond_3ad_xmit_fallback(struct bonding *bond,
+					    struct sk_buff *skb)
+{
+	const struct aggregator *agg = NULL, *slave_agg;
+	struct slave *slave, *first = NULL;
+	struct list_head *iter;
+	unsigned int count = 0, target;
+
+	if (!netif_carrier_ok(bond->dev))
+		return NULL;
+
+	bond_for_each_slave_rcu(bond, slave, iter) {
+		slave_agg = bond_3ad_tx_eligible_agg(slave);
+		if (!slave_agg)
+			continue;
+		if (!agg)
+			agg = slave_agg;
+		if (slave_agg == agg)
+			count++;
+	}
+
+	if (!count)
+		return NULL;
+
+	target = bond_xmit_hash(bond, skb) % count;
+	bond_for_each_slave_rcu(bond, slave, iter) {
+		if (bond_3ad_tx_eligible_agg(slave) != agg)
+			continue;
+		if (!first)
+			first = slave;
+		if (!target)
+			return slave;
+		target--;
+	}
+
+	return first;
+}
+
+/* Use this Xmit function for 3AD as well as XOR modes. The usable
+ * slave array is formed in the control path; 3AD can use current state
+ * while the array is empty.
  */
 static netdev_tx_t bond_3ad_xor_xmit(struct sk_buff *skb,
 				     struct net_device *dev)
@@ -5302,6 +5353,8 @@ static netdev_tx_t bond_3ad_xor_xmit(struct sk_buff *skb,
 
 	slaves = rcu_dereference(bond->usable_slaves);
 	slave = bond_xmit_3ad_xor_slave_get(bond, skb, slaves);
+	if (unlikely(!slave) && BOND_MODE(bond) == BOND_MODE_8023AD)
+		slave = bond_3ad_xmit_fallback(bond, skb);
 	if (likely(slave))
 		return bond_dev_queue_xmit(bond, skb, slave->dev);
 
@@ -5327,6 +5380,35 @@ static netdev_tx_t bond_xmit_broadcast(struct sk_buff *skb,
 		slaves = rcu_dereference(bond->usable_slaves);
 
 	slaves_count = slaves ? READ_ONCE(slaves->count) : 0;
+	if (!slaves_count && !all_slaves &&
+	    BOND_MODE(bond) == BOND_MODE_8023AD &&
+	    netif_carrier_ok(bond_dev)) {
+		const struct aggregator *agg = NULL, *slave_agg;
+		struct list_head *iter;
+		struct slave *slave;
+
+		bond_for_each_slave_rcu(bond, slave, iter) {
+			struct sk_buff *skb2;
+
+			slave_agg = bond_3ad_tx_eligible_agg(slave);
+			if (!slave_agg)
+				continue;
+			if (!agg)
+				agg = slave_agg;
+			if (slave_agg != agg)
+				continue;
+
+			skb2 = skb_clone(skb, GFP_ATOMIC);
+			if (!skb2) {
+				net_err_ratelimited("%s: Error: %s: skb_clone() failed\n",
+						    bond_dev->name, __func__);
+				continue;
+			}
+
+			if (bond_dev_queue_xmit(bond, skb2, slave->dev) == NETDEV_TX_OK)
+				xmit_suc = true;
+		}
+	}
 	for (i = 0; i < slaves_count; i++) {
 		struct slave *slave = slaves->arr[i];
 		struct sk_buff *skb2;
@@ -5432,6 +5514,9 @@ static struct net_device *bond_xmit_get_slave(struct net_device *master_dev,
 		else
 			slaves = rcu_dereference(bond->usable_slaves);
 		slave = bond_xmit_3ad_xor_slave_get(bond, skb, slaves);
+		if (unlikely(!slave) && !all_slaves &&
+		    BOND_MODE(bond) == BOND_MODE_8023AD)
+			slave = bond_3ad_xmit_fallback(bond, skb);
 		break;
 	case BOND_MODE_BROADCAST:
 		break;
@@ -5732,12 +5817,12 @@ static int bond_xdp_set(struct net_device *dev, struct bpf_prog *prog,
 			bpf_prog_inc(prog);
 	}
 
-	if (prog) {
+	if (prog && !old_prog)
 		static_branch_inc(&bpf_master_redirect_enabled_key);
-	} else if (old_prog) {
-		bpf_prog_put(old_prog);
+	else if (!prog && old_prog)
 		static_branch_dec(&bpf_master_redirect_enabled_key);
-	}
+	if (old_prog)
+		bpf_prog_put(old_prog);
 
 	return 0;
 

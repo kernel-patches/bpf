@@ -22,6 +22,8 @@
 #include <linux/i2c.h>
 #include <linux/i2c-mux.h>
 #include <linux/if_arp.h>
+#include <linux/sysfs.h>
+#include <linux/nsproxy.h>
 #include <net/mctp.h>
 #include <net/mctpdevice.h>
 
@@ -83,16 +85,38 @@ struct mctp_i2c_dev {
 
 };
 
+/* One adapter that carries this client's mctp_controller attribute. The
+ * entry holds a reference on the adapter device, so it never points at a
+ * freed adapter.
+ */
+struct mctp_i2c_attr {
+	struct i2c_adapter *adap;
+	struct list_head list; /* For mctp_i2c_client.attrs */
+};
+
 /* The i2c client structure. One per hardware i2c bus at the top of the
  * mux tree, shared by multiple netdevs
  */
 struct mctp_i2c_client {
 	struct i2c_client *client;
 	u8 lladdr;
+	/* Namespace the controller was probed in. Netdevs are created here
+	 * regardless of which namespace writes the mctp_controller attribute.
+	 */
+	possible_net_t net;
 
 	struct mctp_i2c_dev *sel;
 	struct list_head devs;
 	spinlock_t sel_lock; /* Protects sel and devs */
+
+	/* Adapters this client has added the mctp_controller attribute to,
+	 * so removal never walks the i2c bus. attrs_lock is never held over
+	 * a sysfs group call or i2c_for_each_dev(): a group removal waits on
+	 * a kernfs reference that mctp_controller_store() holds while it
+	 * waits for driver_clients_lock.
+	 */
+	struct list_head attrs;
+	struct mutex attrs_lock; /* Protects attrs */
 
 	struct list_head list; /* For driver_clients */
 };
@@ -111,6 +135,11 @@ static int mctp_i2c_slave_cb(struct i2c_client *client,
 			     enum i2c_slave_event event, u8 *val);
 static void mctp_i2c_ndo_uninit(struct net_device *dev);
 static int mctp_i2c_ndo_open(struct net_device *dev);
+/* Defined below the attribute group, which the store handler it serves has
+ * to precede.
+ */
+static bool mctp_i2c_attr_tracked(struct mctp_i2c_client *mcli,
+				  struct i2c_adapter *adap);
 
 static struct i2c_adapter *mux_root_adapter(struct i2c_adapter *adap)
 {
@@ -162,7 +191,13 @@ static struct mctp_i2c_client *mctp_i2c_new_client(struct i2c_client *client)
 	spin_lock_init(&mcli->sel_lock);
 	INIT_LIST_HEAD(&mcli->devs);
 	INIT_LIST_HEAD(&mcli->list);
+	INIT_LIST_HEAD(&mcli->attrs);
+	mutex_init(&mcli->attrs_lock);
 	mcli->lladdr = client->addr & 0xff;
+	/* The reference keeps the namespace alive for this client's lifetime,
+	 * and is dropped in mctp_i2c_free_client().
+	 */
+	write_pnet(&mcli->net, get_net(current->nsproxy->net_ns));
 	mcli->client = client;
 	i2c_set_clientdata(client, mcli);
 
@@ -189,14 +224,17 @@ static void mctp_i2c_free_client(struct mctp_i2c_client *mcli)
 
 	WARN_ON(!mutex_is_locked(&driver_clients_lock));
 	WARN_ON(!list_empty(&mcli->devs));
+	WARN_ON(!list_empty(&mcli->attrs));
 	WARN_ON(mcli->sel); /* sanity check, no locking */
 
 	rc = i2c_slave_unregister(mcli->client);
 	/* Leak if it fails, we can't propagate errors upwards */
-	if (rc < 0)
+	if (rc < 0) {
 		dev_err(&mcli->client->dev, "i2c unregister failed %d\n", rc);
-	else
+	} else {
+		put_net(read_pnet(&mcli->net));
 		kfree(mcli);
+	}
 }
 
 /* Switch the mctp i2c device to receive responses.
@@ -857,6 +895,25 @@ static int mctp_i2c_ndo_open(struct net_device *dev)
 	return 0;
 }
 
+/* Returns the netdev for adap, or NULL if there is none */
+static struct mctp_i2c_dev *mctp_i2c_find_dev(struct mctp_i2c_client *mcli,
+					      struct i2c_adapter *adap)
+{
+	struct mctp_i2c_dev *midev = NULL, *m = NULL;
+	unsigned long flags;
+
+	spin_lock_irqsave(&mcli->sel_lock, flags);
+	/* List size is limited by number of MCTP netdevs on a single hardware bus */
+	list_for_each_entry(m, &mcli->devs, list)
+		if (m->adapter == adap) {
+			midev = m;
+			break;
+		}
+	spin_unlock_irqrestore(&mcli->sel_lock, flags);
+
+	return midev;
+}
+
 static int mctp_i2c_add_netdev(struct mctp_i2c_client *mcli,
 			       struct i2c_adapter *adap)
 {
@@ -876,6 +933,15 @@ static int mctp_i2c_add_netdev(struct mctp_i2c_client *mcli,
 	}
 
 	WARN_ON(!mutex_is_locked(&driver_clients_lock));
+
+	/* An existing netdev for @adap is success: all three callers can race
+	 * each other on one adapter, and only this check keeps the losers out
+	 * of mctp_register_netdev(), which would fail with -EEXIST and log an
+	 * error for a bus that already works.
+	 */
+	if (mctp_i2c_find_dev(mcli, adap))
+		return 0;
+
 	snprintf(namebuf, sizeof(namebuf), "mctpi2c%d", adap->nr);
 	ndev = alloc_netdev(sizeof(*midev), namebuf, NET_NAME_ENUM, mctp_i2c_net_setup);
 	if (!ndev) {
@@ -883,7 +949,12 @@ static int mctp_i2c_add_netdev(struct mctp_i2c_client *mcli,
 		rc = -ENOMEM;
 		goto err;
 	}
-	dev_net_set(ndev, current->nsproxy->net_ns);
+	/* Tie the netdev to the namespace the mctp-i2c-controller device was
+	 * probed in, not to whoever happens to write mctp_controller. A write
+	 * from another namespace must not place the netdev there, since the
+	 * attribute is visible in all of them.
+	 */
+	dev_net_set(ndev, read_pnet(&mcli->net));
 	SET_NETDEV_DEV(ndev, &adap->dev);
 	dev_addr_set(ndev, &mcli->lladdr);
 
@@ -900,6 +971,12 @@ static int mctp_i2c_add_netdev(struct mctp_i2c_client *mcli,
 		dev_err(&mcli->client->dev,
 			"register netdev \"%s\" failed %d\n",
 			ndev->name, rc);
+		/* register_netdevice() has already run ndo_uninit, which
+		 * frees midev. Every error path it takes reaches err_uninit
+		 * except err_free_name, and that one needs an ndo_init this
+		 * driver does not provide.
+		 */
+		midev = NULL;
 		goto err;
 	}
 
@@ -920,18 +997,10 @@ err:
 static void mctp_i2c_remove_netdev(struct mctp_i2c_client *mcli,
 				   struct i2c_adapter *adap)
 {
-	struct mctp_i2c_dev *midev = NULL, *m = NULL;
-	unsigned long flags;
+	struct mctp_i2c_dev *midev = NULL;
 
 	WARN_ON(!mutex_is_locked(&driver_clients_lock));
-	spin_lock_irqsave(&mcli->sel_lock, flags);
-	/* List size is limited by number of MCTP netdevs on a single hardware bus */
-	list_for_each_entry(m, &mcli->devs, list)
-		if (m->adapter == adap) {
-			midev = m;
-			break;
-		}
-	spin_unlock_irqrestore(&mcli->sel_lock, flags);
+	midev = mctp_i2c_find_dev(mcli, adap);
 
 	if (midev)
 		mctp_i2c_unregister(midev);
@@ -968,6 +1037,287 @@ static bool mctp_i2c_adapter_match(struct i2c_adapter *adap, bool match_no_of)
 	return of_property_read_bool(adap->dev.of_node, MCTP_I2C_OF_PROP);
 }
 
+/* Returns the client owning @root's mux tree, or NULL.
+ * Call with driver_clients_lock held. The returned pointer is only valid
+ * while that lock is held.
+ */
+static struct mctp_i2c_client *mctp_i2c_find_client(struct i2c_adapter *root)
+{
+	struct mctp_i2c_client *mcli = NULL;
+
+	WARN_ON(!mutex_is_locked(&driver_clients_lock));
+	list_for_each_entry(mcli, &driver_clients, list)
+		if (mcli->client->adapter == root)
+			return mcli;
+
+	return NULL;
+}
+
+/* A bus instantiated at runtime has no devicetree node on which to set the
+ * "mctp-controller" property, so this attribute is how userspace asks for its
+ * netdev once the adapter exists.
+ */
+static ssize_t mctp_controller_show(struct device *dev,
+				    struct device_attribute *attr, char *buf)
+{
+	struct i2c_adapter *root = NULL, *adap = NULL;
+	struct mctp_i2c_client *mcli;
+	bool present = false;
+
+	adap = mctp_i2c_get_adapter(dev, &root);
+	if (!adap)
+		return -ENODEV;
+
+	mutex_lock(&driver_clients_lock);
+	mcli = mctp_i2c_find_client(root);
+	if (mcli)
+		present = mctp_i2c_find_dev(mcli, adap);
+	mutex_unlock(&driver_clients_lock);
+
+	return sysfs_emit(buf, "%d\n", present);
+}
+
+static ssize_t mctp_controller_store(struct device *dev,
+				     struct device_attribute *attr,
+				     const char *buf, size_t count)
+{
+	struct i2c_adapter *root = NULL, *adap = NULL;
+	struct mctp_i2c_client *mcli;
+	bool enable;
+	int rc;
+
+	rc = kstrtobool(buf, &enable);
+	if (rc < 0)
+		return rc;
+
+	adap = mctp_i2c_get_adapter(dev, &root);
+	if (!adap)
+		return -ENODEV;
+
+	mutex_lock(&driver_clients_lock);
+	mcli = mctp_i2c_find_client(root);
+	if (!mcli) {
+		/* No mctp-i2c-controller on this mux tree's root */
+		rc = -ENODEV;
+		goto out;
+	}
+
+	/* A netdev store handler checks CAP_NET_ADMIN in the user namespace of
+	 * the netns owning the device, as netdev_store() does. The netns here
+	 * belongs to the client rather than to a netdev, so the check waits
+	 * until the lookup has found the client to read it from.
+	 */
+	if (!ns_capable(read_pnet(&mcli->net)->user_ns, CAP_NET_ADMIN)) {
+		rc = -EPERM;
+		goto out;
+	}
+
+	if (enable) {
+		/* device_del() sends BUS_NOTIFY_DEL_DEVICE well before
+		 * kobject_del() makes this attribute unreachable, so a write
+		 * can arrive after the adapter stopped being tracked. No
+		 * second notification would ever remove a netdev created here,
+		 * so refuse the write instead.
+		 */
+		if (!mctp_i2c_attr_tracked(mcli, adap)) {
+			rc = -ENODEV;
+			goto out;
+		}
+
+		rc = mctp_i2c_add_netdev(mcli, adap);
+	} else {
+		mctp_i2c_remove_netdev(mcli, adap);
+		rc = 0;
+	}
+out:
+	mutex_unlock(&driver_clients_lock);
+
+	return rc < 0 ? rc : count;
+}
+
+static DEVICE_ATTR_RW(mctp_controller);
+
+static struct attribute *mctp_i2c_adapter_attrs[] = {
+	&dev_attr_mctp_controller.attr,
+	NULL,
+};
+
+static const struct attribute_group mctp_i2c_adapter_group = {
+	.attrs = mctp_i2c_adapter_attrs,
+};
+
+/* Returns the tracking entry for @adap, or NULL.
+ * Call with mcli->attrs_lock held.
+ */
+static struct mctp_i2c_attr *__mctp_i2c_find_attr(struct mctp_i2c_client *mcli,
+						  struct i2c_adapter *adap)
+{
+	struct mctp_i2c_attr *attr = NULL;
+
+	lockdep_assert_held(&mcli->attrs_lock);
+	/* List size is limited by the number of adapters on one mux tree */
+	list_for_each_entry(attr, &mcli->attrs, list)
+		if (attr->adap == adap)
+			return attr;
+
+	return NULL;
+}
+
+/* Stops tracking @adap and frees its entry, without touching sysfs.
+ * Returns whether an entry was found, so the caller knows whether the
+ * attribute is still on the adapter.
+ */
+static bool mctp_i2c_drop_attr(struct mctp_i2c_client *mcli,
+			       struct i2c_adapter *adap)
+{
+	struct mctp_i2c_attr *attr;
+
+	mutex_lock(&mcli->attrs_lock);
+	attr = __mctp_i2c_find_attr(mcli, adap);
+	if (attr)
+		list_del(&attr->list);
+	mutex_unlock(&mcli->attrs_lock);
+
+	if (!attr)
+		return false;
+
+	put_device(&attr->adap->dev);
+	kfree(attr);
+	return true;
+}
+
+/* Reports whether the client owning @adap's mux tree still tracks the
+ * mctp_controller attribute for @adap. An adapter is untracked before its
+ * attribute goes away, so a write that finds no entry is a write to an
+ * adapter that is already being deleted, which mctp_controller_store() has
+ * to refuse rather than act on.
+ */
+static bool mctp_i2c_attr_tracked(struct mctp_i2c_client *mcli,
+				  struct i2c_adapter *adap)
+{
+	bool tracked;
+
+	mutex_lock(&mcli->attrs_lock);
+	tracked = __mctp_i2c_find_attr(mcli, adap);
+	mutex_unlock(&mcli->attrs_lock);
+
+	return tracked;
+}
+
+/* Adds the attribute to one adapter of @root's mux tree, the root included,
+ * and records it on the owning client. The entry goes in first, and only the
+ * caller that inserted it goes on to sysfs, so sysfs_update_group() never
+ * runs twice at once on one adapter. The group is never removed on its own.
+ */
+static void mctp_i2c_add_sysfs(struct i2c_adapter *adap,
+			       struct i2c_adapter *root)
+{
+	struct mctp_i2c_client *mcli;
+	struct mctp_i2c_attr *attr;
+	bool attach = false;
+	int rc;
+
+	attr = kzalloc_obj(*attr);
+	if (!attr) {
+		/* The attribute is an optional control rather than a
+		 * requirement, so skip the attach instead of failing.
+		 */
+		dev_warn(&adap->dev,
+			 "Failed tracking mctp_controller attribute\n");
+		return;
+	}
+	/* The entry must never point at a freed adapter */
+	get_device(&adap->dev);
+	attr->adap = adap;
+	INIT_LIST_HEAD(&attr->list);
+
+	mutex_lock(&driver_clients_lock);
+	mcli = mctp_i2c_find_client(root);
+	if (mcli) {
+		mutex_lock(&mcli->attrs_lock);
+		if (!__mctp_i2c_find_attr(mcli, adap)) {
+			list_add(&attr->list, &mcli->attrs);
+			attach = true;
+		}
+		mutex_unlock(&mcli->attrs_lock);
+	}
+	mutex_unlock(&driver_clients_lock);
+
+	if (!attach) {
+		/* Another attach path won, or there is no client to track it */
+		put_device(&adap->dev);
+		kfree(attr);
+		return;
+	}
+
+	/* Outside both locks: updating the group waits for a kernfs drain, and
+	 * a concurrent mctp_controller_store() holds that reference while it
+	 * waits for driver_clients_lock.
+	 */
+	rc = sysfs_update_group(&adap->dev.kobj, &mctp_i2c_adapter_group);
+	if (rc < 0) {
+		dev_warn(&adap->dev,
+			 "Failed adding mctp_controller attribute, %d\n", rc);
+		/* The list must not claim an attribute that is not there. The
+		 * entry is looked up again rather than reused, because the
+		 * client can go away while the group updates.
+		 */
+		mutex_lock(&driver_clients_lock);
+		mcli = mctp_i2c_find_client(root);
+		if (mcli)
+			mctp_i2c_drop_attr(mcli, adap);
+		mutex_unlock(&driver_clients_lock);
+	}
+}
+
+/* Removes the attribute from one adapter of @root's mux tree.
+ * Call with driver_clients_lock not held, for the reason struct
+ * mctp_i2c_client gives.
+ */
+static void mctp_i2c_remove_sysfs(struct i2c_adapter *adap,
+				  struct i2c_adapter *root)
+{
+	struct mctp_i2c_client *mcli;
+	bool tracked = false;
+
+	/* Hold @adap over the sysfs call, after the entry's reference goes */
+	get_device(&adap->dev);
+
+	mutex_lock(&driver_clients_lock);
+	mcli = mctp_i2c_find_client(root);
+	if (mcli)
+		tracked = mctp_i2c_drop_attr(mcli, adap);
+	mutex_unlock(&driver_clients_lock);
+
+	if (tracked)
+		sysfs_remove_group(&adap->dev.kobj, &mctp_i2c_adapter_group);
+
+	put_device(&adap->dev);
+}
+
+/* Removes every attribute @mcli added, as the client goes away. The list is
+ * detached first so sysfs_remove_group() runs with no lock held.
+ */
+static void mctp_i2c_remove_sysfs_all(struct mctp_i2c_client *mcli)
+{
+	struct mctp_i2c_attr *attr = NULL, *tmp = NULL;
+	LIST_HEAD(attrs);
+
+	lockdep_assert_not_held(&driver_clients_lock);
+
+	mutex_lock(&mcli->attrs_lock);
+	list_splice_init(&mcli->attrs, &attrs);
+	mutex_unlock(&mcli->attrs_lock);
+
+	list_for_each_entry_safe(attr, tmp, &attrs, list) {
+		sysfs_remove_group(&attr->adap->dev.kobj,
+				   &mctp_i2c_adapter_group);
+		list_del(&attr->list);
+		put_device(&attr->adap->dev);
+		kfree(attr);
+	}
+}
+
 /* Called for each existing i2c device (adapter or client) when a
  * new mctp-i2c client is probed.
  */
@@ -981,37 +1331,62 @@ static int mctp_i2c_client_try_attach(struct device *dev, void *data)
 		return 0;
 	if (mcli->client->adapter != root)
 		return 0;
+
+	/* Unmarked busses get the attribute too, so userspace can enable them */
+	mctp_i2c_add_sysfs(adap, root);
+
 	/* Must either have mctp-controller property on the adapter, or
 	 * be a root adapter if it's non-devicetree
 	 */
 	if (!mctp_i2c_adapter_match(adap, adap == root))
 		return 0;
 
-	return mctp_i2c_add_netdev(mcli, adap);
+	/* @mcli cannot be unbound here: the driver core holds the device lock
+	 * across probe, and an unbind needs that same lock.
+	 */
+	mutex_lock(&driver_clients_lock);
+	mctp_i2c_add_netdev(mcli, adap);
+	mutex_unlock(&driver_clients_lock);
+
+	return 0;
 }
 
 static void mctp_i2c_notify_add(struct device *dev)
 {
-	struct mctp_i2c_client *mcli = NULL, *m = NULL;
+	struct mctp_i2c_client *mcli = NULL;
 	struct i2c_adapter *root = NULL, *adap = NULL;
+	bool have_client;
+	bool match;
 	int rc;
 
 	adap = mctp_i2c_get_adapter(dev, &root);
 	if (!adap)
 		return;
+
 	/* Check for mctp-controller property on the adapter */
-	if (!mctp_i2c_adapter_match(adap, false))
+	match = mctp_i2c_adapter_match(adap, false);
+
+	mutex_lock(&driver_clients_lock);
+	have_client = mctp_i2c_find_client(root);
+	mutex_unlock(&driver_clients_lock);
+
+	if (!have_client)
 		return;
 
-	/* Find an existing mcli for adap's root */
-	mutex_lock(&driver_clients_lock);
-	list_for_each_entry(m, &driver_clients, list) {
-		if (m->client->adapter == root) {
-			mcli = m;
-			break;
-		}
-	}
+	/* Outside the lock: updating the group waits for a kernfs drain, and a
+	 * concurrent mctp_controller_store() holds that reference while it
+	 * waits for driver_clients_lock.
+	 */
+	mctp_i2c_add_sysfs(adap, root);
 
+	if (!match)
+		return;
+
+	mutex_lock(&driver_clients_lock);
+	/* The pointer from the first lookup does not outlive the dropped
+	 * lock, so look the client up again.
+	 */
+	mcli = mctp_i2c_find_client(root);
 	if (mcli) {
 		rc = mctp_i2c_add_netdev(mcli, adap);
 		if (rc < 0)
@@ -1030,42 +1405,47 @@ static void mctp_i2c_notify_del(struct device *dev)
 		return;
 
 	mutex_lock(&driver_clients_lock);
-	list_for_each_entry(mcli, &driver_clients, list) {
-		if (mcli->client->adapter == root) {
-			mctp_i2c_remove_netdev(mcli, adap);
-			break;
-		}
-	}
+	mcli = mctp_i2c_find_client(root);
+	if (mcli)
+		mctp_i2c_remove_netdev(mcli, adap);
 	mutex_unlock(&driver_clients_lock);
+
+	/* Outside the lock, for the reason mctp_i2c_remove_sysfs() gives */
+	mctp_i2c_remove_sysfs(adap, root);
 }
 
 static int mctp_i2c_probe(struct i2c_client *client)
 {
-	struct mctp_i2c_client *mcli = NULL;
-	int rc;
+	struct mctp_i2c_client *mcli;
 
 	mutex_lock(&driver_clients_lock);
 	mcli = mctp_i2c_new_client(client);
 	if (IS_ERR(mcli)) {
-		rc = PTR_ERR(mcli);
-		mcli = NULL;
-		goto out;
-	} else {
-		list_add(&mcli->list, &driver_clients);
+		mutex_unlock(&driver_clients_lock);
+		return PTR_ERR(mcli);
 	}
-
-	/* Add a netdev for adapters that have a 'mctp-controller' property */
-	i2c_for_each_dev(mcli, mctp_i2c_client_try_attach);
-	rc = 0;
-out:
+	list_add(&mcli->list, &driver_clients);
 	mutex_unlock(&driver_clients_lock);
-	return rc;
+
+	/* Add a netdev for adapters that have a 'mctp-controller' property.
+	 * Runs with the lock dropped, for the reason mctp_i2c_notify_add()
+	 * gives.
+	 */
+	i2c_for_each_dev(mcli, mctp_i2c_client_try_attach);
+
+	return 0;
 }
 
 static void mctp_i2c_remove(struct i2c_client *client)
 {
 	struct mctp_i2c_client *mcli = i2c_get_clientdata(client);
 	struct mctp_i2c_dev *midev = NULL, *tmp = NULL;
+
+	/* Before the lock: sysfs_remove_group() waits for a kernfs active
+	 * reference that mctp_controller_store() holds while it waits for
+	 * driver_clients_lock.
+	 */
+	mctp_i2c_remove_sysfs_all(mcli);
 
 	mutex_lock(&driver_clients_lock);
 	list_del(&mcli->list);

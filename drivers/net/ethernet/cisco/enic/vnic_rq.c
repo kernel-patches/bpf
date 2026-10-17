@@ -6,9 +6,9 @@
 
 #include <linux/kernel.h>
 #include <linux/errno.h>
+#include <linux/iopoll.h>
 #include <linux/types.h>
 #include <linux/pci.h>
-#include <linux/delay.h>
 #include <linux/slab.h>
 
 #include "vnic_dev.h"
@@ -150,8 +150,9 @@ void vnic_rq_enable(struct vnic_rq *rq)
 
 int vnic_rq_disable(struct vnic_rq *rq)
 {
-	unsigned int wait;
 	struct vnic_dev *vdev = rq->vdev;
+	u32 running;
+	int err;
 	int i;
 
 	/* Due to a race condition with clearing RQ "mini-cache" in hw, we need
@@ -161,15 +162,16 @@ int vnic_rq_disable(struct vnic_rq *rq)
 	for (i = 0; i < 2; i++) {
 		iowrite32(0, &rq->ctrl->enable);
 
-		/* Wait for HW to ACK disable request */
-		for (wait = 20000; wait > 0; wait--)
-			if (!ioread32(&rq->ctrl->running))
-				break;
-		if (!wait) {
+		/* Poll for up to 500 ms for outstanding operations to drain.
+		 * Preserve both passes required for the RQ mini-cache.
+		 */
+		err = read_poll_timeout(ioread32, running, !running, 10, 500000,
+					false, &rq->ctrl->running);
+		if (err) {
 			vdev_neterr(vdev, "Failed to disable RQ[%d]\n",
 				    rq->index);
 
-			return -ETIMEDOUT;
+			return err;
 		}
 	}
 

@@ -95,15 +95,34 @@ static void fbnic_mbx_reset_desc_ring(struct fbnic_dev *fbd, int mbx_idx)
 					    FBNIC_IPC_MBX_DESC_HOST_CMPL);
 }
 
+static const struct fbnic_threshold fbnic_threshold_no_data = {
+	.min	= FBNIC_SENSOR_NO_DATA,
+	.max	= FBNIC_SENSOR_NO_DATA,
+	.crit	= FBNIC_SENSOR_NO_DATA,
+};
+
 void fbnic_mbx_init(struct fbnic_dev *fbd)
 {
+	struct fbnic_fw_cap fw_cap_reset;
 	int i;
 
 	/* Initialize lock to protect Tx ring */
 	spin_lock_init(&fbd->fw_tx_lock);
 
-	/* Reset FW Capabilities */
-	memset(&fbd->fw_cap, 0, sizeof(fbd->fw_cap));
+	/* Reset FW Capabilities and seed thresholds with sentinel */
+	memset(&fw_cap_reset, 0, sizeof(fw_cap_reset));
+	fw_cap_reset.temp = fbnic_threshold_no_data;
+	fw_cap_reset.volt = fbnic_threshold_no_data;
+	fbd->fw_cap = fw_cap_reset;
+
+	/* Seed cache with sentinel so the first read always refreshes. The
+	 * cache mirrors what firmware reported, so drop it when the mailbox
+	 * restarts.
+	 */
+	fbd->hwmon_cache.temp_mdeg = FBNIC_SENSOR_NO_DATA;
+	fbd->hwmon_cache.volt_mv = FBNIC_SENSOR_NO_DATA;
+	fbd->hwmon_cache.temp_alarm = FBNIC_FW_TSENE_ALARM_UNKNOWN;
+	fbd->hwmon_cache.volt_alarm = FBNIC_FW_TSENE_ALARM_UNKNOWN;
 
 	/* Reinitialize mailbox memory */
 	for (i = 0; i < FBNIC_IPC_MBX_INDICES; i++)
@@ -588,6 +607,11 @@ static const struct fbnic_tlv_index fbnic_fw_cap_resp_index[] = {
 	FBNIC_TLV_ATTR_STRING(FBNIC_FW_CAP_RESP_UEFI_COMMIT_STR,
 			      FBNIC_FW_CAP_RESP_COMMIT_MAX_SIZE),
 	FBNIC_TLV_ATTR_U32(FBNIC_FW_CAP_RESP_ANTI_ROLLBACK_VERSION),
+	FBNIC_TLV_ATTR_S32(FBNIC_FW_CAP_RESP_TEMP_MIN),
+	FBNIC_TLV_ATTR_S32(FBNIC_FW_CAP_RESP_TEMP_MAX),
+	FBNIC_TLV_ATTR_S32(FBNIC_FW_CAP_RESP_TEMP_CRIT),
+	FBNIC_TLV_ATTR_S32(FBNIC_FW_CAP_RESP_VOLT_MIN),
+	FBNIC_TLV_ATTR_S32(FBNIC_FW_CAP_RESP_VOLT_MAX),
 	FBNIC_TLV_ATTR_LAST
 };
 
@@ -620,11 +644,55 @@ static int fbnic_fw_parse_bmc_addrs(u8 bmc_mac_addr[][ETH_ALEN],
 	return 0;
 }
 
+static int fbnic_fw_parse_bmc_cap(struct fbnic_dev *fbd,
+				  struct fbnic_tlv_msg **results)
+{
+	struct fbnic_tlv_msg *attr;
+	bool bmc_present = false;
+	u32 all_multi = 0;
+	int err;
+
+	/* FW reports the BMC present once its NC-SI channel is enabled, before
+	 * it has a MAC. No MAC array means nothing to program, so treat it as
+	 * absent rather than rejecting the message.
+	 */
+	attr = results[FBNIC_FW_CAP_RESP_BMC_PRESENT] ?
+	       results[FBNIC_FW_CAP_RESP_BMC_MAC_ARRAY] : NULL;
+	if (attr) {
+		err = fbnic_fw_parse_bmc_addrs(fbd->fw_cap.bmc_mac_addr,
+					       attr, 4);
+		if (err)
+			return err;
+
+		all_multi = fta_get_uint(results,
+					 FBNIC_FW_CAP_RESP_BMC_ALL_MULTI);
+		bmc_present = true;
+	} else {
+		memset(fbd->fw_cap.bmc_mac_addr, 0,
+		       sizeof(fbd->fw_cap.bmc_mac_addr));
+	}
+
+	/* all_multi is only read out of the message when a BMC is present, so
+	 * it is never set on its own and callers can test it without pairing
+	 * it with the presence check.
+	 */
+	assign_bit(FBNIC_FW_CAP_F_BMC_PRESENT, &fbd->fw_cap.state, bmc_present);
+	assign_bit(FBNIC_FW_CAP_F_BMC_ALL_MULTI, &fbd->fw_cap.state, all_multi);
+
+	/* Always assume we need a BMC reinit. The barrier orders the BMC state
+	 * published above ahead of the flag, pairing with the ordering implied
+	 * by the test_and_clear_bit() in fbnic_bmc_rpc_check().
+	 */
+	smp_mb__before_atomic();
+	set_bit(FBNIC_FW_CAP_F_BMC_TCAM_REINIT, &fbd->fw_cap.state);
+
+	return 0;
+}
+
 static int fbnic_fw_parse_cap_resp(void *opaque, struct fbnic_tlv_msg **results)
 {
-	u32 all_multi = 0, version = 0;
 	struct fbnic_dev *fbd = opaque;
-	bool bmc_present;
+	u32 version = 0;
 	int err;
 
 	version = fta_get_uint(results, FBNIC_FW_CAP_RESP_VERSION);
@@ -684,36 +752,28 @@ static int fbnic_fw_parse_cap_resp(void *opaque, struct fbnic_tlv_msg **results)
 	fbd->fw_cap.link_fec =
 		fta_get_uint(results, FBNIC_FW_CAP_RESP_FW_LINK_FEC);
 
-	bmc_present = !!results[FBNIC_FW_CAP_RESP_BMC_PRESENT];
-	if (bmc_present) {
-		struct fbnic_tlv_msg *attr;
-
-		attr = results[FBNIC_FW_CAP_RESP_BMC_MAC_ARRAY];
-		if (!attr)
-			return -EINVAL;
-
-		err = fbnic_fw_parse_bmc_addrs(fbd->fw_cap.bmc_mac_addr,
-					       attr, 4);
-		if (err)
-			return err;
-
-		all_multi =
-			fta_get_uint(results, FBNIC_FW_CAP_RESP_BMC_ALL_MULTI);
-	} else {
-		memset(fbd->fw_cap.bmc_mac_addr, 0,
-		       sizeof(fbd->fw_cap.bmc_mac_addr));
-	}
-
-	fbd->fw_cap.bmc_present = bmc_present;
-
-	if (results[FBNIC_FW_CAP_RESP_BMC_ALL_MULTI] || !bmc_present)
-		fbd->fw_cap.all_multi = all_multi;
+	err = fbnic_fw_parse_bmc_cap(fbd, results);
+	if (err)
+		return err;
 
 	fbd->fw_cap.anti_rollback_version =
 		fta_get_uint(results, FBNIC_FW_CAP_RESP_ANTI_ROLLBACK_VERSION);
 
-	/* Always assume we need a BMC reinit */
-	fbd->fw_cap.need_bmc_tcam_reinit = true;
+	fbd->fw_cap.temp.min =
+		fbnic_tlv_attr_get_signed(results[FBNIC_FW_CAP_RESP_TEMP_MIN],
+					  FBNIC_SENSOR_NO_DATA);
+	fbd->fw_cap.temp.max =
+		fbnic_tlv_attr_get_signed(results[FBNIC_FW_CAP_RESP_TEMP_MAX],
+					  FBNIC_SENSOR_NO_DATA);
+	fbd->fw_cap.temp.crit =
+		fbnic_tlv_attr_get_signed(results[FBNIC_FW_CAP_RESP_TEMP_CRIT],
+					  FBNIC_SENSOR_NO_DATA);
+	fbd->fw_cap.volt.min =
+		fbnic_tlv_attr_get_signed(results[FBNIC_FW_CAP_RESP_VOLT_MIN],
+					  FBNIC_SENSOR_NO_DATA);
+	fbd->fw_cap.volt.max =
+		fbnic_tlv_attr_get_signed(results[FBNIC_FW_CAP_RESP_VOLT_MAX],
+					  FBNIC_SENSOR_NO_DATA);
 
 	return 0;
 }
@@ -1408,6 +1468,8 @@ static const struct fbnic_tlv_index fbnic_tsene_read_resp_index[] = {
 	FBNIC_TLV_ATTR_S32(FBNIC_FW_TSENE_THERM),
 	FBNIC_TLV_ATTR_S32(FBNIC_FW_TSENE_VOLT),
 	FBNIC_TLV_ATTR_S32(FBNIC_FW_TSENE_ERROR),
+	FBNIC_TLV_ATTR_U32(FBNIC_FW_TSENE_THERM_ALARM_STATE),
+	FBNIC_TLV_ATTR_U32(FBNIC_FW_TSENE_VOLT_ALARM_STATE),
 	FBNIC_TLV_ATTR_LAST
 };
 
@@ -1418,6 +1480,7 @@ static int fbnic_fw_parse_tsene_read_resp(void *opaque,
 	struct fbnic_dev *fbd = opaque;
 	s32 err_resp;
 	int err = 0;
+	u32 alarm;
 
 	/* Verify we have a completion pointer to provide with data */
 	cmpl_data = fbnic_fw_get_cmpl_by_type(fbd,
@@ -1438,6 +1501,20 @@ static int fbnic_fw_parse_tsene_read_resp(void *opaque,
 		fta_get_sint(results, FBNIC_FW_TSENE_THERM);
 	cmpl_data->u.tsene.millivolts =
 		fta_get_sint(results, FBNIC_FW_TSENE_VOLT);
+
+	/* Cache here so that it and the threshold event land in the order firmware
+	 * sent them. Firmware predating alarm state reporting sends neither
+	 * attribute.
+	 */
+	alarm = fbnic_tlv_attr_get_unsigned(results[FBNIC_FW_TSENE_THERM_ALARM_STATE],
+					    FBNIC_FW_TSENE_ALARM_UNKNOWN);
+	if (alarm != FBNIC_FW_TSENE_ALARM_UNKNOWN)
+		WRITE_ONCE(fbd->hwmon_cache.temp_alarm, alarm);
+
+	alarm = fbnic_tlv_attr_get_unsigned(results[FBNIC_FW_TSENE_VOLT_ALARM_STATE],
+					    FBNIC_FW_TSENE_ALARM_UNKNOWN);
+	if (alarm != FBNIC_FW_TSENE_ALARM_UNKNOWN)
+		WRITE_ONCE(fbd->hwmon_cache.volt_alarm, alarm);
 
 msg_err:
 	cmpl_data->result = err_resp ? : err;
@@ -1631,6 +1708,82 @@ fbnic_fw_parser_test(void *opaque, struct fbnic_tlv_msg **results)
 	return err;
 }
 
+static const struct fbnic_tlv_index fbnic_threshold_exceeded_resp_index[] = {
+	FBNIC_TLV_ATTR_U32(FBNIC_FW_TSENE_THERM_ALARM),
+	FBNIC_TLV_ATTR_U32(FBNIC_FW_TSENE_VOLT_ALARM),
+	FBNIC_TLV_ATTR_S32(FBNIC_FW_TSENE_THERMAL),
+	FBNIC_TLV_ATTR_S32(FBNIC_FW_TSENE_VOLTAGE),
+	FBNIC_TLV_ATTR_LAST
+};
+
+static int fbnic_fw_parse_threshold_exceeded_resp(void *opaque,
+						  struct fbnic_tlv_msg
+						  **results)
+{
+	struct fbnic_dev *fbd = opaque;
+	bool rec_flag = false;
+	u32 alarm;
+	s32 value;
+
+	if (results[FBNIC_FW_TSENE_THERM_ALARM]) {
+		bool have_temp = !!results[FBNIC_FW_TSENE_THERMAL];
+
+		alarm = fta_get_uint(results, FBNIC_FW_TSENE_THERM_ALARM);
+		value = fta_get_sint(results, FBNIC_FW_TSENE_THERMAL);
+		if (!have_temp)
+			dev_err(fbd->dev, "Thermal alarm %u received with no temperature!\n",
+				alarm);
+		else if (alarm != FBNIC_FW_TSENE_ALARM_NORMAL)
+			dev_err(fbd->dev, "Thermal alarm %u, temperature is currently %dmC!\n",
+				alarm, value);
+
+		if (alarm == FBNIC_FW_TSENE_ALARM_DEPRECATED) {
+			/* Nothing to derive the range from, so do not guess */
+			if (have_temp)
+				fbnic_hwmon_old_notify_event(fbd,
+							     FBNIC_SENSOR_TEMP,
+							     value);
+		} else {
+			WRITE_ONCE(fbd->hwmon_cache.temp_alarm, alarm);
+			fbnic_hwmon_notify_event(fbd, FBNIC_SENSOR_TEMP);
+		}
+		rec_flag = true;
+	}
+
+	if (results[FBNIC_FW_TSENE_VOLT_ALARM]) {
+		bool have_volt = !!results[FBNIC_FW_TSENE_VOLTAGE];
+
+		alarm = fta_get_uint(results, FBNIC_FW_TSENE_VOLT_ALARM);
+		value = fta_get_sint(results, FBNIC_FW_TSENE_VOLTAGE);
+		if (!have_volt)
+			dev_err(fbd->dev, "Voltage alarm %u received with no voltage!\n",
+				alarm);
+		else if (alarm != FBNIC_FW_TSENE_ALARM_NORMAL)
+			dev_err(fbd->dev, "Voltage alarm %u, voltage is currently %dmV!\n",
+				alarm, value);
+
+		if (alarm == FBNIC_FW_TSENE_ALARM_DEPRECATED) {
+			/* Nothing to derive the range from, so do not guess */
+			if (have_volt)
+				fbnic_hwmon_old_notify_event(fbd,
+							     FBNIC_SENSOR_VOLTAGE,
+							     value);
+		} else {
+			WRITE_ONCE(fbd->hwmon_cache.volt_alarm, alarm);
+			fbnic_hwmon_notify_event(fbd, FBNIC_SENSOR_VOLTAGE);
+		}
+		rec_flag = true;
+	}
+
+	if (!rec_flag) {
+		dev_warn(fbd->dev,
+			 "Threshold exceeded message received but no alarm found!\n");
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 static const struct fbnic_tlv_parser fbnic_fw_tlv_parser[] = {
 	FBNIC_TLV_PARSER(TEST, fbnic_tlv_test_index, fbnic_fw_parser_test),
 	FBNIC_TLV_PARSER(FW_CAP_RESP, fbnic_fw_cap_resp_index,
@@ -1659,6 +1812,9 @@ static const struct fbnic_tlv_parser fbnic_fw_tlv_parser[] = {
 	FBNIC_TLV_PARSER(TSENE_READ_RESP,
 			 fbnic_tsene_read_resp_index,
 			 fbnic_fw_parse_tsene_read_resp),
+	FBNIC_TLV_PARSER(SENSOR_THRESHOLD_EXCEEDED_RESP,
+			 fbnic_threshold_exceeded_resp_index,
+			 fbnic_fw_parse_threshold_exceeded_resp),
 	FBNIC_TLV_PARSER(LOG_MSG_REQ,
 			 fbnic_fw_log_req_index,
 			 fbnic_fw_parse_log_req),
@@ -1697,16 +1853,19 @@ static void fbnic_mbx_process_rx_msgs(struct fbnic_dev *fbd)
 		if (!length)
 			goto next_page;
 
-		/* Report descriptors with length greater than page size */
-		if (length > PAGE_SIZE) {
+		/* Report descriptors with invalid message extents. */
+		if (length < sizeof(msg->hdr) || length > PAGE_SIZE) {
 			dev_warn(fbd->dev,
 				 "Invalid mailbox descriptor length: %lld\n",
 				 length);
 			goto next_page;
 		}
 
-		if (le16_to_cpu(msg->hdr.len) * sizeof(u32) > length)
+		if (!le16_to_cpu(msg->hdr.len) ||
+		    le16_to_cpu(msg->hdr.len) * sizeof(u32) > length) {
 			dev_warn(fbd->dev, "Mailbox message length mismatch\n");
+			goto next_page;
+		}
 
 		/* If parsing fails dump contents of message to dmesg */
 		err = fbnic_tlv_msg_parse(fbd, msg, fbnic_fw_tlv_parser);

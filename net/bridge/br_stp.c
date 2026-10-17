@@ -463,6 +463,12 @@ static void br_make_forwarding(struct net_bridge_port *p)
 	if (p->state != BR_STATE_BLOCKING)
 		return;
 
+	/* br_set_state() will not move an MRP driven port out of BLOCKING,
+	 * so arming forward_delay_timer for it only leaks a live timer.
+	 */
+	if (test_bit(BR_MRP_AWARE_BIT, &p->flags))
+		return;
+
 	if (br->stp_enabled == BR_NO_STP || br->forward_delay == 0) {
 		br_set_state(p, BR_STATE_FORWARDING);
 		br_topology_change_detection(br);

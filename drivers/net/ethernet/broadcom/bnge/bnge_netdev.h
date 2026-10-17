@@ -315,6 +315,8 @@ struct bnge_net {
 	u32			hash_seed;
 	u64			toeplitz_prefix;
 
+	/* Lives from probe to remove. bnapi[0] points to it. */
+	struct bnge_napi		*nq0;
 	struct bnge_napi		**bnapi;
 
 	struct bnge_rx_ring_info	*rx_ring;

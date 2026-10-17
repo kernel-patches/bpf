@@ -184,6 +184,8 @@ int tls_sw_fallback_init(struct sock *sk,
 			 struct tls_offload_context_tx *offload_ctx,
 			 struct tls_crypto_info *crypto_info);
 
+extern struct workqueue_struct *tls_strp_wq;
+
 int tls_strp_dev_init(void);
 void tls_strp_dev_exit(void);
 

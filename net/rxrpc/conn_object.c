@@ -301,6 +301,19 @@ static void rxrpc_rcu_free_connection(struct rcu_head *rcu)
 }
 
 /*
+ * Purge a connection's receive queue, updating the local queue accounting.
+ */
+static void rxrpc_purge_conn_queue(struct rxrpc_connection *conn)
+{
+	struct sk_buff *skb;
+
+	while ((skb = skb_dequeue(&conn->rx_queue))) {
+		rxrpc_uncharge_async_queue(conn->local, skb);
+		rxrpc_free_skb(skb, rxrpc_skb_put_purge);
+	}
+}
+
+/*
  * Clean up a dead connection.
  */
 static void rxrpc_clean_up_connection(struct work_struct *work)
@@ -329,7 +342,7 @@ static void rxrpc_clean_up_connection(struct work_struct *work)
 		conn->peer->pmtud_pending = true;
 	}
 
-	rxrpc_purge_queue(&conn->rx_queue);
+	rxrpc_purge_conn_queue(conn);
 	rxrpc_free_skb(conn->tx_response, rxrpc_skb_put_response);
 
 	rxrpc_kill_client_conn(conn);
@@ -338,15 +351,15 @@ static void rxrpc_clean_up_connection(struct work_struct *work)
 	key_put(conn->key);
 	rxrpc_put_bundle(conn->bundle, rxrpc_bundle_put_conn);
 	rxrpc_put_peer(conn->peer, rxrpc_peer_put_conn);
-	rxrpc_put_local(conn->local, rxrpc_local_put_kill_conn);
 
 	/* Drain the Rx queue.  Note that even though we've unpublished, an
 	 * incoming packet could still be being added to our Rx queue, so we
 	 * will need to drain it again in the RCU cleanup handler.
 	 */
-	rxrpc_purge_queue(&conn->rx_queue);
+	rxrpc_purge_conn_queue(conn);
 
 	page_frag_cache_drain(&conn->tx_data_alloc);
+	rxrpc_put_local(conn->local, rxrpc_local_put_kill_conn);
 	call_rcu(&conn->rcu, rxrpc_rcu_free_connection);
 }
 

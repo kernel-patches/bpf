@@ -1259,8 +1259,13 @@ int pep_write(struct sock *sk, struct sk_buff *skb)
 	struct sk_buff *rskb, *fs;
 	int flen = 0;
 
-	if (pep_sk(sk)->aligned)
+	if (pep_sk(sk)->aligned) {
+		if (skb_cow_head(skb, MAX_PNPIPE_HEADER)) {
+			kfree_skb(skb);
+			return -ENOMEM;
+		}
 		return pipe_skb_send(sk, skb);
+	}
 
 	rskb = alloc_skb(MAX_PNPIPE_HEADER, GFP_ATOMIC);
 	if (!rskb) {

@@ -2,3 +2,6 @@
 iou-zcrx
 ncdevmem
 toeplitz
+tools/
+xdp_features
+xdp_features.skel.h

@@ -6,6 +6,7 @@
 
 #include <linux/completion.h>
 #include <linux/if_ether.h>
+#include <linux/limits.h>
 #include <linux/types.h>
 
 struct fbnic_dev;
@@ -45,7 +46,34 @@ struct fbnic_fw_ver {
 	char commit[FBNIC_FW_CAP_RESP_COMMIT_MAX_SIZE];
 };
 
+/* Bits in fbnic_fw_cap.state. The firmware mailbox publishes the BMC state
+ * and the service task consumes it, so they are updated with atomic bitops.
+ */
+enum {
+	FBNIC_FW_CAP_F_BMC_PRESENT,
+	FBNIC_FW_CAP_F_BMC_ALL_MULTI,
+	FBNIC_FW_CAP_F_BMC_TCAM_REINIT,
+	FBNIC_FW_CAP_F_BMC_MACDA_SYNC,
+};
+
+#define FBNIC_FW_CAP_BMC_PENDING	\
+	(BIT(FBNIC_FW_CAP_F_BMC_TCAM_REINIT) |	\
+	 BIT(FBNIC_FW_CAP_F_BMC_MACDA_SYNC))
+
+/* Sentinel for a sensor value the driver does not have: a threshold the
+ * firmware never populated (older firmware) or a cache entry not yet
+ * refreshed.
+ */
+#define FBNIC_SENSOR_NO_DATA			S32_MIN
+
+struct fbnic_threshold {
+	s32 min;
+	s32 max;
+	s32 crit;
+};
+
 struct fbnic_fw_cap {
+	unsigned long state;
 	struct {
 		struct fbnic_fw_ver mgmt, bootloader;
 	} running;
@@ -54,13 +82,11 @@ struct fbnic_fw_cap {
 	} stored;
 	u8	active_slot;
 	u8	bmc_mac_addr[4][ETH_ALEN];
-	u8	bmc_present		: 1;
-	u8	need_bmc_tcam_reinit	: 1;
-	u8	need_bmc_macda_sync	: 1;
-	u8	all_multi		: 1;
 	u8	link_speed;
 	u8	link_fec;
 	u32	anti_rollback_version;
+	struct fbnic_threshold temp;
+	struct fbnic_threshold volt;
 };
 
 struct fbnic_fw_completion {
@@ -213,6 +239,7 @@ enum {
 	FBNIC_TLV_MSG_ID_QSFP_READ_RESP			= 0x39,
 	FBNIC_TLV_MSG_ID_TSENE_READ_REQ			= 0x3C,
 	FBNIC_TLV_MSG_ID_TSENE_READ_RESP		= 0x3D,
+	FBNIC_TLV_MSG_ID_SENSOR_THRESHOLD_EXCEEDED_RESP = 0x40,
 	FBNIC_TLV_MSG_ID_LOG_SEND_LOGS_REQ		= 0x43,
 	FBNIC_TLV_MSG_ID_LOG_MSG_REQ			= 0x44,
 	FBNIC_TLV_MSG_ID_LOG_MSG_RESP			= 0x45,
@@ -243,6 +270,12 @@ enum {
 	FBNIC_FW_CAP_RESP_UEFI_VERSION			= 0x11,
 	FBNIC_FW_CAP_RESP_UEFI_COMMIT_STR		= 0x12,
 	FBNIC_FW_CAP_RESP_ANTI_ROLLBACK_VERSION		= 0x15,
+	/* 0x16 and 0x17 are reserved for future use */
+	FBNIC_FW_CAP_RESP_TEMP_MIN			= 0x18,
+	FBNIC_FW_CAP_RESP_TEMP_MAX			= 0x19,
+	FBNIC_FW_CAP_RESP_TEMP_CRIT			= 0x1a,
+	FBNIC_FW_CAP_RESP_VOLT_MIN			= 0x1b,
+	FBNIC_FW_CAP_RESP_VOLT_MAX			= 0x1c,
 	FBNIC_FW_CAP_RESP_MSG_MAX
 };
 
@@ -273,7 +306,29 @@ enum {
 	FBNIC_FW_TSENE_THERM			= 0x0,
 	FBNIC_FW_TSENE_VOLT			= 0x1,
 	FBNIC_FW_TSENE_ERROR			= 0x2,
+	FBNIC_FW_TSENE_THERM_ALARM_STATE	= 0x3,
+	FBNIC_FW_TSENE_VOLT_ALARM_STATE		= 0x4,
 	FBNIC_FW_TSENE_MSG_MAX
+};
+
+enum {
+	FBNIC_FW_TSENE_THERM_ALARM		= 0x0,
+	FBNIC_FW_TSENE_VOLT_ALARM		= 0x1,
+	FBNIC_FW_TSENE_THERMAL			= 0x2,
+	FBNIC_FW_TSENE_VOLTAGE			= 0x3,
+	FBNIC_FW_TSENE_EXCEEDED_MSG_MAX,
+};
+
+enum {
+	FBNIC_FW_TSENE_ALARM_NORMAL		= 0x0,
+	FBNIC_FW_TSENE_ALARM_DEPRECATED		= 0x1,
+	FBNIC_FW_TSENE_ALARM_BELOW_MIN		= 0x2,
+	FBNIC_FW_TSENE_ALARM_ABOVE_MAX		= 0x3,
+	FBNIC_FW_TSENE_ALARM_CRIT		= 0x4,
+	/* Driver internal, never sent by firmware. 0xff so its out of
+	 * range wherever the range is held in a u8.
+	 */
+	FBNIC_FW_TSENE_ALARM_UNKNOWN		= 0xff,
 };
 
 enum {

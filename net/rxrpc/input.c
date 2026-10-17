@@ -479,7 +479,9 @@ static void rxrpc_input_queue_data(struct rxrpc_call *call, struct sk_buff *skb,
  * Process a DATA packet.
  */
 static void rxrpc_input_data_one(struct rxrpc_call *call, struct sk_buff *skb,
-				 bool *_notify, rxrpc_serial_t *_ack_serial, int *_ack_reason)
+				 bool *_notify, rxrpc_serial_t *_ack_serial,
+				 int *_ack_reason,
+				 struct rxrpc_async_queue_charge **_charge)
 {
 	struct rxrpc_skb_priv *sp = rxrpc_skb(skb);
 	struct sk_buff *oos;
@@ -487,9 +489,13 @@ static void rxrpc_input_data_one(struct rxrpc_call *call, struct sk_buff *skb,
 	unsigned int sack = call->ackr_sack_base;
 	rxrpc_seq_t window = call->ackr_window;
 	rxrpc_seq_t wtop = call->ackr_wtop;
-	rxrpc_seq_t wlimit = window + call->rx_winsize - 1;
+	/* Bound queued DATA by the application's receive window. */
+	rxrpc_seq_t wlimit = smp_load_acquire(&call->rx_consumed) +
+		call->rx_winsize;
 	rxrpc_seq_t seq = sp->hdr.seq;
 	bool last = sp->hdr.flags & RXRPC_LAST_PACKET;
+	bool set_last = false;
+	unsigned int slot = 0;
 	int ack_reason = -1;
 
 	rxrpc_inc_stat(call->rxnet, stat_rx_data);
@@ -498,10 +504,24 @@ static void rxrpc_input_data_one(struct rxrpc_call *call, struct sk_buff *skb,
 	if (sp->hdr.flags & RXRPC_JUMBO_PACKET)
 		rxrpc_inc_stat(call->rxnet, stat_rx_data_jumbo);
 
+	if (after(seq, call->rx_highest_seq))
+		call->rx_highest_seq = seq;
+
+	trace_rxrpc_rx_data(call->debug_id, seq, serial, sp->hdr.flags);
+
+	if (after(seq, wlimit)) {
+		ack_reason = RXRPC_ACK_EXCEEDS_WINDOW;
+		goto send_ack;
+	}
+
 	if (last) {
-		if (test_and_set_bit(RXRPC_CALL_RX_LAST, &call->flags) &&
-		    seq + 1 != wtop)
-			return rxrpc_proto_abort(call, seq, rxrpc_eproto_different_last);
+		if (test_and_set_bit(RXRPC_CALL_RX_LAST, &call->flags)) {
+			if (seq + 1 != wtop)
+				return rxrpc_proto_abort(call, seq,
+							rxrpc_eproto_different_last);
+		} else {
+			set_last = true;
+		}
 	} else {
 		if (test_bit(RXRPC_CALL_RX_LAST, &call->flags) &&
 		    after_eq(seq, wtop)) {
@@ -511,17 +531,33 @@ static void rxrpc_input_data_one(struct rxrpc_call *call, struct sk_buff *skb,
 		}
 	}
 
-	if (after(seq, call->rx_highest_seq))
-		call->rx_highest_seq = seq;
-
-	trace_rxrpc_rx_data(call->debug_id, seq, serial, sp->hdr.flags);
-
 	if (before(seq, window)) {
 		ack_reason = RXRPC_ACK_DUPLICATE;
 		goto send_ack;
 	}
-	if (after(seq, wlimit)) {
-		ack_reason = RXRPC_ACK_EXCEEDS_WINDOW;
+
+	if (seq != window) {
+		slot = seq - window;
+		sack = (sack + slot) % RXRPC_SACK_SIZE;
+
+		if (call->ackr_sack_table[sack]) {
+			ack_reason = RXRPC_ACK_DUPLICATE;
+			goto send_ack;
+		}
+	}
+
+	sp->data.charge = NULL;
+	if (sp->offset != sizeof(struct rxrpc_wire_header) ||
+	    (sp->hdr.flags & RXRPC_JUMBO_PACKET)) {
+		if (!*_charge)
+			*_charge = rxrpc_alloc_async_queue_charge(skb);
+		sp->data.charge = *_charge;
+	}
+	if (!rxrpc_charge_async_queue(call->local, skb)) {
+		sp->data.charge = NULL;
+		if (set_last)
+			clear_bit(RXRPC_CALL_RX_LAST, &call->flags);
+		ack_reason = RXRPC_ACK_NOSPACE;
 		goto send_ack;
 	}
 
@@ -568,19 +604,8 @@ static void rxrpc_input_data_one(struct rxrpc_call *call, struct sk_buff *skb,
 
 		call->ackr_sack_base = sack;
 	} else {
-		unsigned int slot;
-
 		ack_reason = RXRPC_ACK_OUT_OF_SEQUENCE;
-
-		slot = seq - window;
-		sack = (sack + slot) % RXRPC_SACK_SIZE;
-
-		if (call->ackr_sack_table[sack % RXRPC_SACK_SIZE]) {
-			ack_reason = RXRPC_ACK_DUPLICATE;
-			goto send_ack;
-		}
-
-		call->ackr_sack_table[sack % RXRPC_SACK_SIZE] |= 1;
+		call->ackr_sack_table[sack] |= 1;
 		trace_rxrpc_sack(call, seq, sack, rxrpc_sack_oos);
 
 		if (after(seq + 1, wtop)) {
@@ -623,6 +648,7 @@ send_ack:
  */
 static bool rxrpc_input_split_jumbo(struct rxrpc_call *call, struct sk_buff *skb)
 {
+	struct rxrpc_async_queue_charge *charge = NULL;
 	struct rxrpc_jumbo_header jhdr;
 	struct rxrpc_skb_priv *sp = rxrpc_skb(skb), *jsp;
 	struct sk_buff *jskb;
@@ -644,13 +670,15 @@ static bool rxrpc_input_split_jumbo(struct rxrpc_call *call, struct sk_buff *skb
 		jskb = skb_clone(skb, GFP_NOFS);
 		if (!jskb) {
 			kdebug("couldn't clone");
+			rxrpc_put_async_queue_charge(call->local, charge);
 			return false;
 		}
 		rxrpc_new_skb(jskb, rxrpc_skb_new_jumbo_subpacket);
 		jsp = rxrpc_skb(jskb);
 		jsp->offset = offset;
 		jsp->len = RXRPC_JUMBO_DATALEN;
-		rxrpc_input_data_one(call, jskb, &notify, &ack_serial, &ack_reason);
+		rxrpc_input_data_one(call, jskb, &notify, &ack_serial, &ack_reason,
+				    &charge);
 		rxrpc_free_skb(jskb, rxrpc_skb_put_jumbo_subpacket);
 
 		sp->hdr.flags = jhdr.flags;
@@ -664,7 +692,8 @@ static bool rxrpc_input_split_jumbo(struct rxrpc_call *call, struct sk_buff *skb
 
 	sp->offset = offset;
 	sp->len    = len;
-	rxrpc_input_data_one(call, skb, &notify, &ack_serial, &ack_reason);
+	rxrpc_input_data_one(call, skb, &notify, &ack_serial, &ack_reason,
+			    &charge);
 
 	stat_ix = umin(count, ARRAY_SIZE(call->rxnet->stat_rx_jumbo)) - 1;
 	atomic_inc(&call->rxnet->stat_rx_jumbo[stat_ix]);
@@ -681,9 +710,11 @@ static bool rxrpc_input_split_jumbo(struct rxrpc_call *call, struct sk_buff *skb
 		trace_rxrpc_notify_socket(call->debug_id, sp->hdr.serial);
 		rxrpc_notify_socket(call);
 	}
+	rxrpc_put_async_queue_charge(call->local, charge);
 	return true;
 
 protocol_error:
+	rxrpc_put_async_queue_charge(call->local, charge);
 	return false;
 }
 

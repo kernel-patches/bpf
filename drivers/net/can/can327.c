@@ -1037,7 +1037,6 @@ static int can327_ldisc_open(struct tty_struct *tty)
 
 	/* Mark ldisc channel as alive */
 	elm->tty = tty;
-	tty->disc_data = elm;
 
 	/* Let 'er rip */
 	err = register_candev(elm->dev);
@@ -1045,6 +1044,8 @@ static int can327_ldisc_open(struct tty_struct *tty)
 		free_candev(elm->dev);
 		return err;
 	}
+
+	tty->disc_data = elm;
 
 	netdev_info(elm->dev, "can327 on %s.\n", tty->name);
 

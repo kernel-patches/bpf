@@ -340,9 +340,12 @@ static void tipc_group_delete_member(struct tipc_group *grp,
 	rb_erase(&m->tree_node, &grp->members);
 	grp->member_cnt--;
 
-	/* Check if we were waiting for replicast ack from this member */
-	if (grp->bc_ackers && less(m->bc_acked, grp->bc_snd_nxt - 1))
-		grp->bc_ackers--;
+	/* If this member held the last outstanding replicast ack,
+	 * restore the open state so blocked broadcast senders can proceed.
+	 */
+	if (grp->bc_ackers && less(m->bc_acked, grp->bc_snd_nxt - 1) &&
+	    !--grp->bc_ackers)
+		*grp->open = true;
 
 	list_del_init(&m->list);
 	list_del_init(&m->small_win);

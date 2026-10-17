@@ -1100,7 +1100,7 @@ static int icssm_prueth_change_mode(struct prueth *prueth,
 	bool portstatus[PRUETH_NUM_MACS];
 	struct prueth_emac *emac;
 	struct net_device *ndev;
-	int i, ret;
+	int i, j, ret;
 
 	for (i = 0; i < PRUETH_NUM_MACS; i++) {
 		if (!prueth->emac[i]) {
@@ -1115,11 +1115,7 @@ static int icssm_prueth_change_mode(struct prueth *prueth,
 		if (!portstatus[i])
 			continue;
 
-		ret = ndev->netdev_ops->ndo_stop(ndev);
-		if (ret < 0) {
-			netdev_err(ndev, "failed to stop: %d", ret);
-			return ret;
-		}
+		dev_close(ndev);
 	}
 
 	if (mode == PRUSS_ETHTYPE_EMAC || mode == PRUSS_ETHTYPE_SWITCH) {
@@ -1141,14 +1137,25 @@ static int icssm_prueth_change_mode(struct prueth *prueth,
 		if (!portstatus[i])
 			continue;
 
-		ret = ndev->netdev_ops->ndo_open(ndev);
+		ret = dev_open(ndev, NULL);
 		if (ret < 0) {
 			netdev_err(ndev, "failed to start: %d", ret);
-			return ret;
+			goto err_dev_open;
 		}
 	}
 
 	return 0;
+
+err_dev_open:
+	for (j = 0; j < i; j++) {
+		if (portstatus[j])
+			dev_close(prueth->emac[j]->ndev);
+	}
+
+	/* Fall back to EMAC mode */
+	prueth->eth_type = PRUSS_ETHTYPE_EMAC;
+
+	return ret;
 }
 
 /* VLAN-tag PCP to priority queue map for EMAC/Switch/HSR/PRP used by driver
@@ -1563,6 +1570,8 @@ static int icssm_prueth_netdev_init(struct prueth *prueth,
 	}
 	ether_addr_copy(emac->mac_addr, ndev->dev_addr);
 
+	ndev->netdev_ops = &emac_netdev_ops;
+
 	/* connect PHY */
 	emac->phydev = of_phy_get_and_connect(ndev, eth_node,
 					      icssm_emac_adjust_link);
@@ -1590,7 +1599,6 @@ static int icssm_prueth_netdev_init(struct prueth *prueth,
 	}
 
 	ndev->dev.of_node = eth_node;
-	ndev->netdev_ops = &emac_netdev_ops;
 
 	netif_napi_add(ndev, &emac->napi, icssm_emac_napi_poll);
 
@@ -1638,6 +1646,8 @@ bool icssm_prueth_sw_port_dev_check(const struct net_device *ndev)
 
 static int icssm_prueth_port_offload_fwd_mark_update(struct prueth *prueth)
 {
+	struct prueth_emac *emac;
+	unsigned long flags;
 	int set_val = 0;
 	int i, ret = 0;
 	u8 all_slaves;
@@ -1660,11 +1670,20 @@ static int icssm_prueth_port_offload_fwd_mark_update(struct prueth *prueth)
 	 */
 	if (set_val && !PRUETH_IS_SWITCH(prueth)) {
 		ret = icssm_prueth_change_mode(prueth, PRUSS_ETHTYPE_SWITCH);
-		if (ret < 0)
+		if (ret < 0) {
 			dev_err(prueth->dev, "Failed to enable Switch mode\n");
-		else
+			emac = prueth->emac[0];
+			spin_lock_irqsave(&emac->addr_lock, flags);
+
+			prueth->br_members &= ~BIT(emac->port_id);
+			if (!prueth->br_members)
+				prueth->hw_bridge_dev = NULL;
+
+			spin_unlock_irqrestore(&emac->addr_lock, flags);
+		} else {
 			dev_info(prueth->dev,
 				 "TI PRU ethernet now in Switch mode\n");
+		}
 	}
 
 	/* Bridge is deleted, switch to Dual EMAC mode */

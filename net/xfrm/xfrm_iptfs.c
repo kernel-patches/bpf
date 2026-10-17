@@ -486,8 +486,7 @@ static int iptfs_skb_add_frags(struct sk_buff *skb,
 			tofrag->len -= offset;
 			offset = 0;
 		}
-		__skb_frag_ref(tofrag);
-		shinfo->nr_frags++;
+		skb_frag_ref(skb, shinfo->nr_frags++);
 		shinfo->flags |= SKBFL_SHARED_FRAG;
 
 		/* see if we are done */
@@ -853,6 +852,12 @@ static u32 iptfs_reassem_cont(struct xfrm_iptfs_data *xtfs, u64 seq,
 		 */
 		memcpy(skb_put(newskb, runtlen), xtfs->ra_runt,
 		       sizeof(xtfs->ra_runt));
+
+		/* The re-read below cannot back up a stepped seq read. */
+		if (unlikely(st->stepped_offset)) {
+			skb_abort_seq_read(st);
+			skb_prepare_seq_read(skb, 0, skb->len, st);
+		}
 	}
 
 	/* Continue reassembling the packet */
@@ -1046,7 +1051,7 @@ static bool __input_process_payload(struct xfrm_state *x, u32 data,
 			struct sk_buff *save = skbseq->root_skb;
 
 			skb_abort_seq_read(skbseq);
-			skb_prepare_seq_read(save, data, tail, skbseq);
+			skb_prepare_seq_read(save, 0, tail, skbseq);
 		}
 
 		if (first_skb) {
@@ -1211,7 +1216,7 @@ done:
 		 * either be save in ra_newskb, trimmed and sent on as an skb or
 		 * placed in defer to be freed.
 		 */
-		kfree_skb(skb);
+		xfrm_input_drop(skb);
 	}
 	return true;
 }
@@ -1298,7 +1303,7 @@ done:
 	if (!consumed) {
 		skb = skbseq.root_skb;
 		skb_abort_seq_read(&skbseq);
-		kfree_skb(skb);
+		xfrm_input_drop(skb);
 	}
 }
 
@@ -1751,7 +1756,7 @@ static int iptfs_input(struct xfrm_state *x, struct sk_buff *skb)
 
 	list_for_each_entry_safe(skb, next, &freelist, list) {
 		skb_list_del_init(skb);
-		kfree_skb(skb);
+		xfrm_input_drop(skb);
 	}
 done:
 	/* We always have dealt with the input SKB, either we are re-using it,

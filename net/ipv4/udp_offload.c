@@ -473,9 +473,11 @@ static struct sk_buff *__udp_gso_segment_list(struct sk_buff *skb,
 	udp_set_len_short(udp_hdr(skb), sizeof(struct udphdr) + mss);
 
 	if (is_ipv6)
-		return __udpv6_gso_segment_list_csum(skb);
+		skb = __udpv6_gso_segment_list_csum(skb);
 	else
-		return __udpv4_gso_segment_list_csum(skb);
+		skb = __udpv4_gso_segment_list_csum(skb);
+
+	return skb_segment_list_csum_help(skb, features);
 }
 
 struct sk_buff *__udp_gso_segment(struct sk_buff *gso_skb,

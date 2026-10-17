@@ -220,6 +220,38 @@ struct bnge_dev {
 	u32			phy_flags;
 };
 
+/* The netdev has no name until register_netdev(), so log through the PCI
+ * device before that (e.g. during probe).
+ */
+#define bnge_log(level, bd, fmt, ...)					\
+	do {								\
+		struct bnge_dev *__bd = (bd);				\
+									\
+		if (__bd->netdev &&					\
+		    READ_ONCE(__bd->netdev->reg_state) != NETREG_UNINITIALIZED)\
+			netdev_##level(__bd->netdev, fmt, ##__VA_ARGS__);\
+		else							\
+			dev_##level(__bd->dev, fmt, ##__VA_ARGS__);	\
+	} while (0)
+
+#define bnge_err(bd, fmt, ...)	bnge_log(err, bd, fmt, ##__VA_ARGS__)
+#define bnge_warn(bd, fmt, ...)	bnge_log(warn, bd, fmt, ##__VA_ARGS__)
+#define bnge_dbg(bd, fmt, ...)	bnge_log(dbg, bd, fmt, ##__VA_ARGS__)
+
+/* Index of the first NQ created in ndo_open() and destroyed in ndo_stop().
+ * NQs below it are created at probe and destroyed at remove. Exactly one NQ,
+ * NQ0 (async events and queue 0), is created at probe.
+ *
+ * Layout of bd->irq_tbl, with A = aux MSI-X count: NQ0 uses irq_tbl[0],
+ * the aux (RoCE) device irq_tbl[1..A], and the NQs created in open
+ * irq_tbl[A + 1..]. The ring_idx the aux device receives is its irq_tbl
+ * index.
+ */
+#define BNGE_FIRST_OPEN_NQ	1
+
+#define bnge_for_each_open_nq(i, bd) \
+	for ((i) = BNGE_FIRST_OPEN_NQ; (i) < (bd)->nq_nr_rings; (i)++)
+
 static inline bool bnge_is_roce_en(struct bnge_dev *bd)
 {
 	return bd->flags & BNGE_EN_ROCE;
@@ -262,5 +294,20 @@ static inline void bnge_db_write(struct bnge_dev *bd, struct bnge_db_info *db,
 
 bool bnge_aux_registered(struct bnge_dev *bd);
 u16 bnge_aux_get_msix(struct bnge_dev *bd);
+
+/* irq_tbl index of the i-th aux vector, also used as its ring_idx */
+static inline int bnge_aux_irq_idx(int i)
+{
+	return BNGE_FIRST_OPEN_NQ + i;
+}
+
+/* irq_tbl index of NQ nq_idx */
+static inline int bnge_nq_irq_idx(struct bnge_dev *bd, int nq_idx)
+{
+	if (nq_idx < BNGE_FIRST_OPEN_NQ)
+		return nq_idx;
+
+	return bnge_aux_get_msix(bd) + nq_idx;
+}
 
 #endif /* _BNGE_H_ */

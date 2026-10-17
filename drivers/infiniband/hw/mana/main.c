@@ -406,28 +406,38 @@ static int mana_ib_gd_create_dma_region(struct mana_ib_dev *dev, struct ib_umem 
 	unsigned int create_req_msg_size;
 	struct hw_channel_context *hwc;
 	struct ib_block_iter biter;
-	size_t max_pgs_add_cmd = 0;
+	size_t max_pgs_add_cmd;
 	size_t max_pgs_create_cmd;
 	struct gdma_context *gc;
 	size_t num_pages_total;
 	unsigned int tail = 0;
+	u32 req_limit;
 	u64 *page_addr_list;
 	void *request_buf;
 	int err = 0;
 
 	gc = mdev_to_gc(dev);
 	hwc = gc->hwc.driver_data;
+	req_limit = mana_hwc_get_max_req_size(hwc);
+	if (req_limit < struct_size(create_req, page_addr_list, 1) ||
+	    req_limit < struct_size(add_req, page_addr_list, 1)) {
+		ibdev_dbg(&dev->ib_dev,
+			  "HWC request budget %u is too small for DMA region commands\n",
+			  req_limit);
+		return -EMSGSIZE;
+	}
 
 	num_pages_total = ib_umem_num_dma_blocks(umem, page_sz);
 
 	max_pgs_create_cmd =
-		(hwc->max_req_msg_size - sizeof(*create_req)) / sizeof(u64);
+		(req_limit - sizeof(*create_req)) / sizeof(u64);
+	max_pgs_add_cmd = (req_limit - sizeof(*add_req)) / sizeof(u64);
 	num_pages_to_handle =
 		min_t(size_t, num_pages_total, max_pgs_create_cmd);
 	create_req_msg_size =
 		struct_size(create_req, page_addr_list, num_pages_to_handle);
 
-	request_buf = kzalloc(hwc->max_req_msg_size, GFP_KERNEL);
+	request_buf = kzalloc(req_limit, GFP_KERNEL);
 	if (!request_buf)
 		return -ENOMEM;
 
@@ -469,9 +479,6 @@ static int mana_ib_gd_create_dma_region(struct mana_ib_dev *dev, struct ib_umem 
 							  expected_status);
 			if (err)
 				goto out;
-
-			max_pgs_add_cmd = (hwc->max_req_msg_size -
-				sizeof(*add_req)) / sizeof(u64);
 
 			add_req = request_buf;
 			add_req->dma_region_handle = *gdma_region;

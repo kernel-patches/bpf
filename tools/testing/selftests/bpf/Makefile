@@ -41,7 +41,7 @@ TEST_FILES = xsk_prereqs.sh $(wildcard progs/btf_dump_test_case_*.c)	\
 TEST_PROGS := test_bpftool_build.sh \
 	test_doc_build.sh \
 	test_xsk.sh \
-	test_xdp_features.sh
+	#
 
 TEST_PROGS_EXTENDED := \
 	ima_setup.sh verify_sig_setup.sh
@@ -56,7 +56,6 @@ TEST_GEN_PROGS_EXTENDED = \
 	flow_dissector_load \
 	test_cpp \
 	veristat \
-	xdp_features \
 	xdp_hw_metadata \
 	xdp_synproxy \
 	xskxceiver
@@ -593,13 +592,6 @@ $(OUTPUT)/xdp_hw_metadata: xdp_hw_metadata.c xsk.c network_helpers.c \
 			   $(TOOLSDIR)/lib/find_bit.c xdp_metadata.h \
 			   xsk.h network_helpers.h test_progs.h bpf_util.h \
 			   $(OUTPUT)/xdp_hw_metadata.skel.h $(BPFOBJ) | $(OUTPUT)
-	$(call msg,BINARY,,$@)
-	$(Q)$(CC) $(CFLAGS) $(filter %.a %.o %.c,$^) $(LDLIBS) -o $@
-
-$(OUTPUT)/xdp_features: xdp_features.c network_helpers.c xdp_features.h \
-			   network_helpers.h \
-			   test_progs.h bpf_util.h $(OUTPUT)/xdp_features.skel.h \
-			   $(BPFOBJ) | $(OUTPUT)
 	$(call msg,BINARY,,$@)
 	$(Q)$(CC) $(CFLAGS) $(filter %.a %.o %.c,$^) $(LDLIBS) -o $@
 

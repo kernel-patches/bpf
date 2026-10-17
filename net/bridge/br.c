@@ -12,8 +12,6 @@
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
 #include <linux/init.h>
-#include <linux/llc.h>
-#include <net/llc.h>
 #include <net/stp.h>
 #include <net/switchdev.h>
 
@@ -202,7 +200,7 @@ static int br_switchdev_event(struct notifier_block *unused,
 	case SWITCHDEV_FDB_FLUSH_TO_BRIDGE:
 		fdb_info = ptr;
 		/* Don't delete static entries */
-		br_fdb_delete_by_port(br, p, fdb_info->vid, 0);
+		br_fdb_cleanup_by_dst(br, br_port_to_dst(p), fdb_info->vid, 0);
 		break;
 	}
 
@@ -396,10 +394,7 @@ void br_opt_toggle(struct net_bridge *br, enum net_bridge_opts opt, bool on)
 	if (cur == on)
 		return;
 
-	if (on)
-		set_bit(opt, &br->options);
-	else
-		clear_bit(opt, &br->options);
+	assign_bit(opt, &br->options, on);
 }
 
 static void __net_exit br_net_exit_rtnl(struct net *net,
@@ -463,6 +458,7 @@ static int __init br_init(void)
 		goto err_out6;
 
 	brioctl_set(br_ioctl_stub);
+	br_nf_utils_init();
 
 #if IS_MODULE(CONFIG_BRIDGE_NETFILTER)
 	pr_info("bridge: filtering via arp/ip/ip6tables is no longer available "
@@ -491,6 +487,7 @@ err_out:
 
 static void __exit br_deinit(void)
 {
+	br_nf_utils_fini();
 	stp_proto_unregister(&br_stp_proto);
 	br_netlink_fini();
 	unregister_switchdev_blocking_notifier(&br_switchdev_blocking_notifier);

@@ -396,7 +396,7 @@ void bnxt_ulp_irq_restart(struct bnxt *bp, int err)
 		if (!ops || !ops->ulp_irq_restart)
 			return;
 
-		if (!err) {
+		if (!err && bp->irq_tbl) {
 			ent = kzalloc_objs(*ent, ulp->msix_requested);
 			if (!ent)
 				return;

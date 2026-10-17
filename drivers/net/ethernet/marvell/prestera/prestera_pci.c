@@ -6,6 +6,7 @@
 #include <linux/device.h>
 #include <linux/firmware.h>
 #include <linux/iopoll.h>
+#include <linux/unaligned.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/pci.h>
@@ -589,18 +590,27 @@ static u8 __iomem *prestera_ldr_wr_ptr(struct prestera_fw *fw)
 
 static int prestera_ldr_send(struct prestera_fw *fw, const u8 *buf, size_t len)
 {
+	size_t write_len = ALIGN(len, sizeof(u32));
+	size_t i;
 	int err;
-	int i;
 
-	err = prestera_ldr_wait_buf(fw, len);
+	err = prestera_ldr_wait_buf(fw, write_len);
 	if (err) {
 		dev_err(fw->dev.dev, "failed wait for sending firmware\n");
 		return err;
 	}
 
-	for (i = 0; i < len; i += 4) {
-		writel_relaxed(*(u32 *)(buf + i), prestera_ldr_wr_ptr(fw));
-		prestera_ldr_wr_idx_move(fw, 4);
+	for (i = 0; i + sizeof(u32) <= len; i += sizeof(u32)) {
+		writel_relaxed(get_unaligned((const u32 *)(buf + i)),
+			       prestera_ldr_wr_ptr(fw));
+		prestera_ldr_wr_idx_move(fw, sizeof(u32));
+	}
+	if (i < len) {
+		u32 last = 0;
+
+		memcpy(&last, buf + i, len - i);
+		writel_relaxed(last, prestera_ldr_wr_ptr(fw));
+		prestera_ldr_wr_idx_move(fw, sizeof(u32));
 	}
 
 	prestera_ldr_wr_idx_commit(fw);

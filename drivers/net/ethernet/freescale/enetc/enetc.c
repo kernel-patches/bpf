@@ -88,10 +88,7 @@ void enetc_set_congestion_mode(struct enetc_ndev_priv *priv, bool enable)
 
 	spin_lock(&si->gen_lock);
 
-	if (enable)
-		set_bit(ENETC_RXBDR_CM, &priv->flags);
-	else
-		clear_bit(ENETC_RXBDR_CM, &priv->flags);
+	assign_bit(ENETC_RXBDR_CM, &priv->flags, enable);
 
 	for (int i = 0; i < priv->num_rx_rings; i++) {
 		u32 old_rbmr = enetc_rxbdr_rd(hw, i, ENETC_RBMR);
@@ -168,6 +165,14 @@ static void enetc_free_tx_frame(struct enetc_bdr *tx_ring,
 
 	if (tx_swbd->dma)
 		enetc_unmap_tx_buff(tx_ring, tx_swbd);
+	if (tx_swbd->is_xdp_tx) {
+		struct enetc_ndev_priv *priv = netdev_priv(tx_ring->ndev);
+		struct enetc_bdr *rx_ring;
+
+		rx_ring = enetc_rx_ring_from_xdp_tx_ring(priv, tx_ring);
+		rx_ring->xdp.xdp_tx_in_flight--;
+		__free_page(tx_swbd->page);
+	}
 
 	if (xdp_frame) {
 		xdp_return_frame(tx_swbd->xdp_frame);
@@ -527,7 +532,7 @@ dma_err:
 static int enetc_map_tx_tso_hdr(struct enetc_bdr *tx_ring, struct sk_buff *skb,
 				struct enetc_tx_swbd *tx_swbd,
 				union enetc_tx_bd *txbd, int *i, int hdr_len,
-				int data_len)
+				int data_len, int frm_len)
 {
 	union enetc_tx_bd txbd_tmp;
 	u8 flags = 0, e_flags = 0;
@@ -544,7 +549,7 @@ static int enetc_map_tx_tso_hdr(struct enetc_bdr *tx_ring, struct sk_buff *skb,
 	txbd_tmp.buf_len = cpu_to_le16(hdr_len);
 
 	/* first BD needs frm_len and offload flags set */
-	txbd_tmp.frm_len = cpu_to_le16(hdr_len + data_len);
+	txbd_tmp.frm_len = cpu_to_le16(frm_len);
 	txbd_tmp.flags = flags;
 
 	/* For the TSO header we do not set the dma address since we do not
@@ -614,6 +619,23 @@ static int enetc_map_tx_tso_data(struct enetc_bdr *tx_ring, struct sk_buff *skb,
 	*txbd = txbd_tmp;
 
 	return 0;
+}
+
+/* Append a zero-padding BD to a frame shorter than ETH_ZLEN */
+static void enetc_map_tx_pad(struct enetc_bdr *tx_ring, int i, int pad_len)
+{
+	struct enetc_tx_swbd *tx_swbd = &tx_ring->tx_swbd[i];
+	union enetc_tx_bd *txbd = ENETC_TXBD(*tx_ring, i);
+
+	enetc_clear_tx_bd(txbd);
+	txbd->addr = cpu_to_le64(tx_ring->tx_pad_dma);
+	txbd->buf_len = cpu_to_le16(pad_len);
+	txbd->flags = ENETC_TXBD_FLAGS_F;
+
+	tx_swbd->len = pad_len;
+	tx_swbd->is_eof = 1;
+	tx_swbd->do_twostep_tstamp = false;
+	tx_swbd->check_wb = false;
 }
 
 static __wsum enetc_tso_hdr_csum(struct tso_t *tso, struct sk_buff *skb,
@@ -918,6 +940,8 @@ static int enetc_map_tx_tso_buffs(struct enetc_bdr *tx_ring, struct sk_buff *skb
 	i = tx_ring->next_to_use;
 
 	while (total_len > 0) {
+		int frm_len;
+		int pad_len;
 		char *hdr;
 
 		/* Get the BD */
@@ -929,6 +953,10 @@ static int enetc_map_tx_tso_buffs(struct enetc_bdr *tx_ring, struct sk_buff *skb
 		data_len = min_t(int, skb_shinfo(skb)->gso_size, total_len);
 		total_len -= data_len;
 
+		/* Pad segments below ETH_ZLEN so the mEMAC does not pad them. */
+		frm_len = max_t(int, hdr_len + data_len, ETH_ZLEN);
+		pad_len = frm_len - (hdr_len + data_len);
+
 		/* prepare packet headers: MAC + IP + TCP */
 		hdr = tx_ring->tso_headers + i * TSO_HEADER_SIZE;
 		tso_build_hdr(skb, hdr, &tso, data_len, total_len == 0);
@@ -936,7 +964,7 @@ static int enetc_map_tx_tso_buffs(struct enetc_bdr *tx_ring, struct sk_buff *skb
 		/* compute the csum over the L4 header */
 		csum = enetc_tso_hdr_csum(&tso, skb, hdr, hdr_len, &pos);
 		count += enetc_map_tx_tso_hdr(tx_ring, skb, tx_swbd, txbd,
-					      &i, hdr_len, data_len);
+					      &i, hdr_len, data_len, frm_len);
 		bd_data_num = 0;
 
 		while (data_len > 0) {
@@ -958,8 +986,10 @@ static int enetc_map_tx_tso_buffs(struct enetc_bdr *tx_ring, struct sk_buff *skb
 			csum = csum_block_add(csum, csum2, pos);
 			pos += size;
 
+			/* When padding, the pad BD is the last one, not this */
 			err = enetc_map_tx_tso_data(tx_ring, skb, tx_swbd, txbd,
 						    tso.data, size,
+						    !pad_len &&
 						    size == data_len);
 			if (err) {
 				if (i == 0)
@@ -979,6 +1009,13 @@ static int enetc_map_tx_tso_buffs(struct enetc_bdr *tx_ring, struct sk_buff *skb
 		}
 
 		enetc_tso_complete_csum(tx_ring, &tso, skb, hdr, pos, csum);
+
+		if (pad_len) {
+			enetc_bdr_idx_inc(tx_ring, &i);
+			enetc_map_tx_pad(tx_ring, i, pad_len);
+			tx_swbd = &tx_ring->tx_swbd[i];
+			count++;
+		}
 
 		if (total_len == 0)
 			tx_swbd->skb = skb;
@@ -1032,7 +1069,9 @@ static netdev_tx_t enetc_start_xmit(struct sk_buff *skb,
 
 			count = enetc_lso_hw_offload(tx_ring, skb);
 		} else {
-			if (enetc_bd_unused(tx_ring) < tso_count_descs(skb)) {
+			/* +gso_segs to cover one pad BD per segment */
+			if (enetc_bd_unused(tx_ring) < tso_count_descs(skb) +
+			    skb_shinfo(skb)->gso_segs) {
 				netif_stop_subqueue(ndev, tx_ring->index);
 				return NETDEV_TX_BUSY;
 			}
@@ -1042,6 +1081,15 @@ static netdev_tx_t enetc_start_xmit(struct sk_buff *skb,
 			enetc_unlock_mdio();
 		}
 	} else {
+		if (eth_skb_pad(skb))
+			return NETDEV_TX_OK;
+
+		if (unlikely(skb_headlen(skb) < ENETC_MIN_BUFF_SIZE &&
+			     !pskb_may_pull(skb, ENETC_MIN_BUFF_SIZE))) {
+			dev_kfree_skb_any(skb);
+			return NETDEV_TX_OK;
+		}
+
 		if (unlikely(skb_shinfo(skb)->nr_frags > priv->max_frags))
 			if (unlikely(skb_linearize(skb)))
 				goto drop_packet_err;
@@ -1707,8 +1755,11 @@ static bool enetc_xdp_tx(struct enetc_bdr *tx_ring,
 {
 	struct enetc_tx_swbd *tmp_tx_swbd = xdp_tx_arr;
 	int i, k, frm_len = tmp_tx_swbd->len;
+	struct enetc_tx_swbd *last_swbd;
+	int pad_len;
 
-	if (unlikely(enetc_bd_unused(tx_ring) < ENETC_TXBDS_NEEDED(num_tx_swbd)))
+	/* Hardware does not support a first buffer size of less than 16 bytes */
+	if (unlikely(xdp_tx_arr[0].len < ENETC_MIN_BUFF_SIZE))
 		return false;
 
 	while (unlikely(!tmp_tx_swbd->is_eof)) {
@@ -1716,19 +1767,44 @@ static bool enetc_xdp_tx(struct enetc_bdr *tx_ring,
 		frm_len += tmp_tx_swbd->len;
 	}
 
+	/* Pad frames below ETH_ZLEN so the mEMAC does not pad them. */
+	pad_len = max_t(int, ETH_ZLEN - frm_len, 0);
+
+	if (unlikely(enetc_bd_unused(tx_ring) <
+		     ENETC_TXBDS_NEEDED(num_tx_swbd + !!pad_len)))
+		return false;
+
 	i = tx_ring->next_to_use;
 
 	for (k = 0; k < num_tx_swbd; k++) {
 		struct enetc_tx_swbd *xdp_tx_swbd = &xdp_tx_arr[k];
 
-		enetc_xdp_map_tx_buff(tx_ring, i, xdp_tx_swbd, frm_len);
+		enetc_xdp_map_tx_buff(tx_ring, i, xdp_tx_swbd,
+				      frm_len + pad_len);
+		last_swbd = &tx_ring->tx_swbd[i];
 
-		/* last BD needs 'F' bit set */
-		if (xdp_tx_swbd->is_eof) {
+		/* last BD needs 'F' bit set, unless a pad BD follows */
+		if (xdp_tx_swbd->is_eof && !pad_len) {
 			union enetc_tx_bd *txbd = ENETC_TXBD(*tx_ring, i);
 
 			txbd->flags = ENETC_TXBD_FLAGS_F;
 		}
+
+		enetc_bdr_idx_inc(tx_ring, &i);
+	}
+
+	/* The pad BD becomes the last one, so it takes over the xdp_frame
+	 * (if any) from the last data BD. The pad BD has no DMA mapping of
+	 * its own, and it is not an XDP_TX buffer to be recycled.
+	 */
+	if (unlikely(pad_len)) {
+		struct enetc_tx_swbd *pad_swbd = &tx_ring->tx_swbd[i];
+
+		enetc_map_tx_pad(tx_ring, i, pad_len);
+		pad_swbd->is_xdp_redirect = last_swbd->is_xdp_redirect;
+		pad_swbd->xdp_frame = last_swbd->xdp_frame;
+		last_swbd->xdp_frame = NULL;
+		last_swbd->is_eof = false;
 
 		enetc_bdr_idx_inc(tx_ring, &i);
 	}
@@ -1812,16 +1888,20 @@ int enetc_xdp_xmit(struct net_device *ndev, int num_frames,
 	struct enetc_ndev_priv *priv = netdev_priv(ndev);
 	struct skb_shared_info *shinfo;
 	struct enetc_bdr *tx_ring;
-	int xdp_tx_bd_cnt, i, k;
-	int xdp_tx_frm_cnt = 0;
-
-	if (unlikely(test_bit(ENETC_TX_DOWN, &priv->flags) ||
-		     !netif_carrier_ok(ndev)))
-		return -ENETDOWN;
-
-	enetc_lock_mdio();
+	int xdp_tx_bd_cnt;
+	int i, k = 0;
+	int err = 0;
 
 	tx_ring = priv->xdp_tx_ring[smp_processor_id()];
+	spin_lock(&tx_ring->xdp_lock);
+
+	if (unlikely(test_bit(ENETC_TX_DOWN, &priv->flags) ||
+		     !netif_carrier_ok(ndev))) {
+		err = -ENETDOWN;
+		goto out;
+	}
+
+	enetc_lock_mdio();
 
 	prefetchw(ENETC_TXBD(*tx_ring, tx_ring->next_to_use));
 
@@ -1843,21 +1923,22 @@ int enetc_xdp_xmit(struct net_device *ndev, int num_frames,
 			for (i = 0; i < xdp_tx_bd_cnt; i++)
 				enetc_unmap_tx_buff(tx_ring,
 						    &xdp_redirect_arr[i]);
-			tx_ring->stats.xdp_tx_drops++;
 			break;
 		}
-
-		xdp_tx_frm_cnt++;
 	}
 
-	if (unlikely((flags & XDP_XMIT_FLUSH) || k != xdp_tx_frm_cnt))
+	if (unlikely(k && ((flags & XDP_XMIT_FLUSH) || k < num_frames)))
 		enetc_update_tx_ring_tail(tx_ring);
-
-	tx_ring->stats.xdp_tx += xdp_tx_frm_cnt;
 
 	enetc_unlock_mdio();
 
-	return xdp_tx_frm_cnt;
+out:
+	tx_ring->stats.xdp_tx += k;
+	tx_ring->stats.xdp_tx_drops += num_frames - k;
+
+	spin_unlock(&tx_ring->xdp_lock);
+
+	return err ?: k;
 }
 EXPORT_SYMBOL_GPL(enetc_xdp_xmit);
 
@@ -1997,6 +2078,9 @@ static int enetc_clean_rx_ring_xdp(struct enetc_bdr *rx_ring,
 	/* next descriptor to process */
 	i = rx_ring->next_to_clean;
 
+	tx_ring = priv->xdp_tx_ring[rx_ring->index];
+	spin_lock(&tx_ring->xdp_lock);
+
 	enetc_lock_mdio();
 
 	while (likely(rx_frm_cnt < work_limit)) {
@@ -2063,11 +2147,12 @@ static int enetc_clean_rx_ring_xdp(struct enetc_bdr *rx_ring,
 			enetc_bulk_flip_buff(rx_ring, orig_i, i);
 
 			enetc_unlock_mdio();
+			spin_unlock(&tx_ring->xdp_lock);
 			napi_gro_receive(napi, skb);
+			spin_lock(&tx_ring->xdp_lock);
 			enetc_lock_mdio();
 			break;
 		case XDP_TX:
-			tx_ring = priv->xdp_tx_ring[rx_ring->index];
 			if (unlikely(test_bit(ENETC_TX_DOWN, &priv->flags))) {
 				enetc_xdp_drop(rx_ring, orig_i, i);
 				tx_ring->stats.xdp_tx_drops++;
@@ -2100,7 +2185,11 @@ static int enetc_clean_rx_ring_xdp(struct enetc_bdr *rx_ring,
 			break;
 		case XDP_REDIRECT:
 			enetc_unlock_mdio();
+			spin_unlock(&tx_ring->xdp_lock);
+
 			err = xdp_do_redirect(rx_ring->ndev, &xdp_buff, prog);
+
+			spin_lock(&tx_ring->xdp_lock);
 			enetc_lock_mdio();
 			if (unlikely(err)) {
 				enetc_xdp_drop(rx_ring, orig_i, i);
@@ -2116,6 +2205,8 @@ static int enetc_clean_rx_ring_xdp(struct enetc_bdr *rx_ring,
 	}
 
 out:
+	spin_unlock(&tx_ring->xdp_lock);
+
 	rx_ring->next_to_clean = i;
 
 	rx_ring->stats.packets += rx_frm_cnt;
@@ -2127,8 +2218,11 @@ out:
 		enetc_lock_mdio();
 	}
 
-	if (xdp_tx_frm_cnt)
+	if (xdp_tx_frm_cnt) {
+		spin_lock(&tx_ring->xdp_lock);
 		enetc_update_tx_ring_tail(tx_ring);
+		spin_unlock(&tx_ring->xdp_lock);
+	}
 
 	if (cleaned_cnt > rx_ring->xdp.xdp_tx_in_flight)
 		enetc_refill_rx_ring(rx_ring, enetc_bd_unused(rx_ring) -
@@ -2277,8 +2371,18 @@ static int enetc_alloc_tx_resource(struct enetc_bdr_resource *res,
 		goto err_alloc_tso;
 	}
 
+	res->tx_pad = dma_alloc_coherent(dev, ETH_ZLEN, &res->tx_pad_dma,
+					 GFP_KERNEL);
+	if (!res->tx_pad) {
+		err = -ENOMEM;
+		goto err_alloc_pad;
+	}
+
 	return 0;
 
+err_alloc_pad:
+	dma_free_coherent(dev, bd_count * TSO_HEADER_SIZE, res->tso_headers,
+			  res->tso_headers_dma);
 err_alloc_tso:
 	enetc_dma_free_bdr(res);
 err_alloc_bdr:
@@ -2290,6 +2394,7 @@ err_alloc_bdr:
 
 static void enetc_free_tx_resource(const struct enetc_bdr_resource *res)
 {
+	dma_free_coherent(res->dev, ETH_ZLEN, res->tx_pad, res->tx_pad_dma);
 	dma_free_coherent(res->dev, res->bd_count * TSO_HEADER_SIZE,
 			  res->tso_headers, res->tso_headers_dma);
 	enetc_dma_free_bdr(res);
@@ -2417,6 +2522,8 @@ static void enetc_assign_tx_resource(struct enetc_bdr *tx_ring,
 	tx_ring->tx_swbd = res ? res->tx_swbd : NULL;
 	tx_ring->tso_headers = res ? res->tso_headers : NULL;
 	tx_ring->tso_headers_dma = res ? res->tso_headers_dma : 0;
+	tx_ring->tx_pad = res ? res->tx_pad : NULL;
+	tx_ring->tx_pad_dma = res ? res->tx_pad_dma : 0;
 }
 
 static void enetc_assign_rx_resource(struct enetc_bdr *rx_ring,
@@ -2630,7 +2737,8 @@ static void enetc_setup_txbdr(struct enetc_hw *hw, struct enetc_bdr *tx_ring)
 	 * adjust sw indexes
 	 */
 	tx_ring->next_to_use = enetc_txbdr_rd(hw, idx, ENETC_TBPIR);
-	tx_ring->next_to_clean = enetc_txbdr_rd(hw, idx, ENETC_TBCIR);
+	tx_ring->next_to_clean = enetc_txbdr_rd(hw, idx, ENETC_TBCIR) &
+				 ENETC_TBCIR_IDX_MASK;
 
 	if (tx_ring->next_to_use != tx_ring->next_to_clean &&
 	    !is_enetc_rev1(si)) {
@@ -2935,11 +3043,31 @@ static void enetc_clear_interrupts(struct enetc_ndev_priv *priv)
 static int enetc_phylink_connect(struct net_device *ndev)
 {
 	struct enetc_ndev_priv *priv = netdev_priv(ndev);
+	struct enetc_si *si = priv->si;
 	struct ethtool_keee edata;
 	int err;
 
 	if (!priv->phylink) {
 		/* phy-less mode */
+		if (!si->ops->vf_reg_link_status_notifier)
+			goto carrier_on;
+
+		/* For phy-less VFs on ENETC v4, attempt to register a link
+		 * status notifier with the PF via the VSI-to-PSI messaging
+		 * channel. If registration succeeds, the PF will immediately
+		 * send the current link status and broadcast future link
+		 * transitions; carrier state is then managed in
+		 * enetc_vf_msg_handle_link_status(). If registration fails,
+		 * fall back to the LS1028A behaviour and assert carrier
+		 * unconditionally via netif_carrier_on().
+		 */
+		if (!si->ops->vf_reg_link_status_notifier(si))
+			return 0;
+
+		dev_warn(&ndev->dev,
+			 "Link status notifier registration failed\n");
+
+carrier_on:
 		netif_carrier_on(ndev);
 		return 0;
 	}
@@ -3024,10 +3152,6 @@ int enetc_open(struct net_device *ndev)
 	if (err)
 		goto err_setup_irqs;
 
-	err = enetc_phylink_connect(ndev);
-	if (err)
-		goto err_phy_connect;
-
 	tx_res = enetc_alloc_tx_resources(priv);
 	if (IS_ERR(tx_res)) {
 		err = PTR_ERR(tx_res);
@@ -3040,6 +3164,10 @@ int enetc_open(struct net_device *ndev)
 		goto err_alloc_rx;
 	}
 
+	err = enetc_phylink_connect(ndev);
+	if (err)
+		goto err_phy_connect;
+
 	enetc_tx_onestep_tstamp_init(priv);
 	enetc_assign_tx_resources(priv, tx_res);
 	enetc_assign_rx_resources(priv, rx_res);
@@ -3048,12 +3176,11 @@ int enetc_open(struct net_device *ndev)
 
 	return 0;
 
+err_phy_connect:
+	enetc_free_rx_resources(rx_res, priv->num_rx_rings);
 err_alloc_rx:
 	enetc_free_tx_resources(tx_res, priv->num_tx_rings);
 err_alloc_tx:
-	if (priv->phylink)
-		phylink_disconnect_phy(priv->phylink);
-err_phy_connect:
 	enetc_free_irqs(priv);
 err_setup_irqs:
 	clk_disable_unprepare(priv->ref_clk);
@@ -3093,6 +3220,7 @@ EXPORT_SYMBOL_GPL(enetc_stop);
 int enetc_close(struct net_device *ndev)
 {
 	struct enetc_ndev_priv *priv = netdev_priv(ndev);
+	struct enetc_si *si = priv->si;
 
 	enetc_stop(ndev);
 
@@ -3100,6 +3228,20 @@ int enetc_close(struct net_device *ndev)
 		phylink_stop(priv->phylink);
 		phylink_disconnect_phy(priv->phylink);
 	} else {
+		if (!si->ops->vf_unreg_link_status_notifier)
+			goto carrier_off;
+
+		/* No need to check whether the previous registration was
+		 * successful. Sending the deregistration message has no
+		 * impact; the PF side simply clears the corresponding bit
+		 * in link_status_ms_mask for the VF.
+		 */
+		if (!si->ops->vf_unreg_link_status_notifier(si))
+			goto carrier_off;
+
+		dev_warn(&ndev->dev,
+			 "Link status notifier unregistration failed\n");
+carrier_off:
 		netif_carrier_off(ndev);
 	}
 
@@ -3554,6 +3696,7 @@ static int enetc_int_vector_init(struct enetc_ndev_priv *priv, int i,
 		idx = priv->bdr_int_num * j + i;
 		__set_bit(idx, &v->tx_rings_map);
 		bdr = &v->tx_ring[j];
+		spin_lock_init(&bdr->xdp_lock);
 		bdr->index = idx;
 		bdr->ndev = priv->ndev;
 		bdr->dev = priv->dev;
@@ -3794,6 +3937,13 @@ static const struct enetc_drvdata enetc_vf_data = {
 	.eth_ops = &enetc_vf_ethtool_ops,
 };
 
+static const struct enetc_drvdata enetc4_vf_data = {
+	.sysclk_freq = ENETC_CLK_333M,
+	.tx_csum = true,
+	.max_frags = ENETC4_MAX_SKB_FRAGS,
+	.eth_ops = &enetc_vf_ethtool_ops,
+};
+
 static const struct enetc_platform_info enetc_info[] = {
 	{ .revision = ENETC_REV_1_0,
 	  .dev_id = ENETC_DEV_ID_PF,
@@ -3807,6 +3957,10 @@ static const struct enetc_platform_info enetc_info[] = {
 	  .dev_id = ENETC_DEV_ID_VF,
 	  .data = &enetc_vf_data,
 	},
+	{ .revision = ENETC_REV_4_1,
+	  .dev_id = NXP_ENETC_VF_DEV_ID,
+	  .data = &enetc4_vf_data,
+	},
 	{
 	  .revision = ENETC_REV_4_3,
 	  .dev_id = NXP_ENETC_PPM_DEV_ID,
@@ -3815,6 +3969,10 @@ static const struct enetc_platform_info enetc_info[] = {
 	{ .revision = ENETC_REV_4_3,
 	  .dev_id = NXP_ENETC_PF_DEV_ID,
 	  .data = &enetc4_pf_data,
+	},
+	{ .revision = ENETC_REV_4_3,
+	  .dev_id = NXP_ENETC_VF_DEV_ID,
+	  .data = &enetc4_vf_data,
 	},
 };
 

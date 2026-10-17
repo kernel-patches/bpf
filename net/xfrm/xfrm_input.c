@@ -120,6 +120,25 @@ static int xfrm_rcv_cb(struct sk_buff *skb, unsigned int family, u8 protocol,
 	return ret;
 }
 
+/* Finish an skb that is freed outside of xfrm_input()'s own drop path, e.g.
+ * from IPTFS.  The receive callbacks must still run before the skb goes away.
+ */
+void xfrm_input_drop(struct sk_buff *skb)
+{
+	struct sec_path *sp = skb_sec_path(skb);
+	struct xfrm_state *x;
+
+	if (!sp || !sp->len) {
+		kfree_skb(skb);
+		return;
+	}
+
+	x = sp->xvec[sp->len - 1];
+	xfrm_rcv_cb(skb, x->props.family, x->type ? x->type->proto : 0, -1);
+	kfree_skb(skb);
+}
+EXPORT_SYMBOL(xfrm_input_drop);
+
 struct sec_path *secpath_set(struct sk_buff *skb)
 {
 	struct sec_path *sp, *tmp = skb_ext_find(skb, SKB_EXT_SEC_PATH);
@@ -468,6 +487,7 @@ int xfrm_input(struct sk_buff *skb, int nexthdr, __be32 spi, int encap_type)
 	const struct xfrm_state_afinfo *afinfo;
 	struct net *net = dev_net(skb->dev);
 	struct net_device *dev = skb->dev;
+	struct net_device *tdev;
 	int err;
 	__be32 seq;
 	__be32 seq_hi;
@@ -487,6 +507,7 @@ int xfrm_input(struct sk_buff *skb, int nexthdr, __be32 spi, int encap_type)
 				      encap_type == UDP_ENCAP_ESPINUDP))) {
 		x = xfrm_input_state(skb);
 		xfrm_proto = x->type ? x->type->proto : nexthdr;
+		family = x->props.family;
 
 		if (unlikely(x->km.state != XFRM_STATE_VALID)) {
 			if (x->km.state == XFRM_STATE_ACQ)
@@ -499,8 +520,6 @@ int xfrm_input(struct sk_buff *skb, int nexthdr, __be32 spi, int encap_type)
 				dev_put(dev);
 			goto drop;
 		}
-
-		family = x->props.family;
 
 		/* An encap_type of -2 indicates reconstructed inner packet */
 		if (encap_type == -2)
@@ -749,7 +768,13 @@ resume_decapped:
 			skb_dst_drop(skb);
 		if (async)
 			dev_put(dev);
+		/* Release the reference a receive callback left with
+		 * skb->dev, after the packet has been delivered.
+		 */
+		tdev = skb->dev != dev ? skb->dev : NULL;
 		gro_cells_receive(&gro_cells, skb);
+		if (tdev)
+			dev_put(tdev);
 		rcu_read_unlock();
 		return 0;
 	} else {
@@ -757,6 +782,10 @@ resume_decapped:
 		if (xo)
 			xfrm_gro = xo->flags & XFRM_GRO;
 
+		/* Release the reference a receive callback left with
+		 * skb->dev, after the packet has been delivered.
+		 */
+		tdev = skb->dev != dev ? skb->dev : NULL;
 		err = -EAFNOSUPPORT;
 		afinfo = xfrm_state_afinfo_get_rcu(family);
 		if (likely(afinfo))
@@ -770,6 +799,8 @@ resume_decapped:
 			gro_cells_receive(&gro_cells, skb);
 		}
 
+		if (tdev)
+			dev_put(tdev);
 		if (async)
 			dev_put(dev);
 		rcu_read_unlock();

@@ -58,6 +58,9 @@ static int em_text_change(struct net *net, void *data, int len,
 	if (len < sizeof(*conf) || len < (sizeof(*conf) + conf->pattern_len))
 		return -EINVAL;
 
+	if (!memchr(conf->algo, '\0', sizeof(conf->algo)))
+		return -EINVAL;
+
 	if (conf->from_layer > conf->to_layer)
 		return -EINVAL;
 
@@ -125,8 +128,8 @@ static int em_text_dump(struct sk_buff *skb, struct tcf_ematch *m)
 
 	if (nla_put_nohdr(skb, sizeof(conf), &conf) < 0)
 		goto nla_put_failure;
-	if (nla_append(skb, conf.pattern_len,
-		       textsearch_get_pattern(tm->config)) < 0)
+	if (nla_put_nohdr(skb, conf.pattern_len,
+			  textsearch_get_pattern(tm->config)) < 0)
 		goto nla_put_failure;
 	return 0;
 

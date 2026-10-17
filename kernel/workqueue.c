@@ -2290,7 +2290,7 @@ static bool is_chained_work(struct workqueue_struct *wq)
 	 * Return %true iff I'm a worker executing a work item on @wq.  If
 	 * I'm @worker, it's safe to dereference it without locking.
 	 */
-	return worker && worker->current_pwq->wq == wq;
+	return worker && worker->current_pwq && worker->current_pwq->wq == wq;
 }
 
 /*
@@ -6320,7 +6320,7 @@ bool current_is_workqueue_mem_reclaim(void)
 {
 	struct worker *worker = current_wq_worker();
 
-	return worker &&
+	return worker && worker->current_pwq &&
 		((worker->current_pwq->wq->flags &
 		  (WQ_MEM_RECLAIM | __WQ_LEGACY)) == WQ_MEM_RECLAIM);
 }

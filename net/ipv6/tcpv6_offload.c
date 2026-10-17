@@ -162,7 +162,9 @@ static struct sk_buff *__tcp6_gso_segment_list(struct sk_buff *skb,
 	if (IS_ERR(skb))
 		return skb;
 
-	return __tcpv6_gso_segment_list_csum(skb);
+	skb = __tcpv6_gso_segment_list_csum(skb);
+
+	return skb_segment_list_csum_help(skb, features);
 }
 
 static struct sk_buff *tcp6_gso_segment(struct sk_buff *skb,

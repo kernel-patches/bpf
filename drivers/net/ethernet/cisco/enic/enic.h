@@ -238,6 +238,12 @@ enum enic_vf_type {
 	ENIC_VF_TYPE_V2,
 };
 
+enum enic_dma_state {
+	ENIC_DMA_DOWN,
+	ENIC_DMA_LIVE,
+	ENIC_DMA_QUARANTINED,
+};
+
 /* Per-instance private data structure */
 struct enic {
 	struct net_device *netdev;
@@ -251,6 +257,8 @@ struct enic {
 	struct work_struct change_mtu_work;
 	struct msix_entry *msix_entry;
 	struct enic_msix_entry *msix;
+	bool non_msix_intr_requested;
+	bool napi_added;
 	u32 msg_enable;
 	spinlock_t devcmd_lock;
 	u8 mac_addr[ETH_ALEN];
@@ -265,6 +273,11 @@ struct enic {
 	u16 num_vfs;
 	enum enic_vf_type vf_type;
 	bool vf_registered;
+	u16 vf_id;
+	/* A CMD_SRIOV_STATS_GET timeout leaves its persistent coherent target
+	 * device-owned until a later serialized command completes.
+	 */
+	bool sriov_stats_dma_unresolved;
 	u32 pf_cap_version;
 	unsigned int enable_count;
 	spinlock_t enic_api_lock;
@@ -298,13 +311,16 @@ struct enic {
 
 	/* Admin channel resources for SR-IOV MBOX */
 	bool has_admin_channel;
-	/* true only while the admin WQ/RQ/CQ are allocated and enabled; gates
-	 * enic_admin_channel_close() so it is a no-op after a failed (re)open
-	 * left the resources freed.
+	/* DOWN has no allocated admin DMA resources. QUARANTINED retains the
+	 * complete graph after a WQ or RQ failed to stop.
 	 */
-	bool admin_chan_up;
-	/* set on send timeout; cleared on channel re-open */
+	enum enic_dma_state admin_chan_state;
+	/* Blocks sends while the channel is closed or awaiting recovery. */
 	bool mbox_send_disabled;
+	/* A send timeout leaves a descriptor hardware-owned until both queues
+	 * report RUNNING == 0.
+	 */
+	bool mbox_tx_poisoned;
 	struct vnic_wq admin_wq;
 	struct vnic_rq admin_rq;
 	struct vnic_cq admin_cq[2];
@@ -325,6 +341,10 @@ struct enic {
 	spinlock_t vf_link_state_lock;
 	enum enic_vf_link_state vf_link_state;
 	bool vf_link_running;
+	/* A queue-disable failure leaves DMA ownership unresolved.  Retain the
+	 * complete mapped datapath graph for the remainder of this boot.
+	 */
+	enum enic_dma_state datapath_state;
 
 	/* MBOX protocol state — mbox_lock serializes admin WQ sends */
 	struct mutex mbox_lock;
@@ -345,6 +365,11 @@ struct enic {
 		bool registered;
 	} *vf_state;
 };
+
+static inline bool enic_datapath_is_quarantined(struct enic *enic)
+{
+	return READ_ONCE(enic->datapath_state) == ENIC_DMA_QUARANTINED;
+}
 
 static inline struct net_device *vnic_get_netdev(struct vnic_dev *vdev)
 {
@@ -466,6 +491,7 @@ int enic_sriov_enabled(struct enic *enic);
 int enic_is_valid_vf(struct enic *enic, int vf);
 int enic_is_dynamic(struct enic *enic);
 int enic_is_sriov_vf_v2(struct enic *enic);
+int enic_close_for_reconfigure(struct net_device *netdev);
 void enic_set_ethtool_ops(struct net_device *netdev);
 int __enic_set_rsskey(struct enic *enic);
 void enic_ext_cq(struct enic *enic);

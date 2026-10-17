@@ -50,6 +50,7 @@ struct key_preparsed_payload;
 struct rxrpc_connection;
 struct rxrpc_txbuf;
 struct rxrpc_txqueue;
+struct rxrpc_async_queue_charge;
 struct rxgk_context;
 
 /*
@@ -223,6 +224,15 @@ struct rxrpc_host_header {
 } __packed;
 
 /*
+ * Shared asynchronous receive-memory charge for split jumbo DATA packets.
+ */
+struct rxrpc_async_queue_charge {
+	refcount_t		ref;
+	long			size;
+	bool			charged;
+};
+
+/*
  * RxRPC socket buffer private variables
  * - max 48 bytes (struct sk_buff::cb)
  */
@@ -233,6 +243,11 @@ struct rxrpc_skb_priv {
 			u16		offset;		/* Offset of data */
 			u16		len;		/* Length of data */
 		};
+		struct {
+			u16		offset;
+			u16		len;
+			struct rxrpc_async_queue_charge *charge;
+		} data;
 		struct {
 			rxrpc_seq_t	first_ack;	/* First packet in acks table */
 			rxrpc_seq_t	prev_ack;	/* Highest seq seen */
@@ -360,6 +375,7 @@ struct rxrpc_local {
 	struct sk_buff_head	rx_delay_queue;	/* Delay injection queue */
 #endif
 	struct sk_buff_head	rx_queue;	/* Received packets */
+	atomic_long_t		rx_async_queue_bytes;	/* Outstanding async Rx bytes */
 	struct list_head	conn_attend_q;	/* Conns requiring immediate attention */
 	struct list_head	call_attend_q;	/* Calls requiring immediate attention */
 
@@ -1323,6 +1339,7 @@ void rxrpc_send_version_request(struct rxrpc_local *local,
  * local_object.c
  */
 void rxrpc_local_dont_fragment(const struct rxrpc_local *local, bool set);
+void rxrpc_adjust_rcvbuf(struct sock *sk);
 struct rxrpc_local *rxrpc_lookup_local(struct net *, const struct sockaddr_rxrpc *);
 struct rxrpc_local *rxrpc_get_local(struct rxrpc_local *, enum rxrpc_local_trace);
 struct rxrpc_local *rxrpc_get_local_maybe(struct rxrpc_local *, enum rxrpc_local_trace);
@@ -1515,6 +1532,12 @@ void rxrpc_new_skb(struct sk_buff *, enum rxrpc_skb_trace);
 void rxrpc_see_skb(struct sk_buff *, enum rxrpc_skb_trace);
 void rxrpc_get_skb(struct sk_buff *, enum rxrpc_skb_trace);
 void rxrpc_free_skb(struct sk_buff *, enum rxrpc_skb_trace);
+struct rxrpc_async_queue_charge *rxrpc_alloc_async_queue_charge(struct sk_buff *skb);
+void rxrpc_put_async_queue_charge(struct rxrpc_local *local,
+				  struct rxrpc_async_queue_charge *charge);
+bool rxrpc_charge_async_queue(struct rxrpc_local *local, struct sk_buff *skb);
+void rxrpc_uncharge_async_queue(struct rxrpc_local *local, struct sk_buff *skb);
+void rxrpc_purge_data_queue(struct rxrpc_call *call, struct sk_buff_head *list);
 void rxrpc_purge_queue(struct sk_buff_head *);
 
 /*

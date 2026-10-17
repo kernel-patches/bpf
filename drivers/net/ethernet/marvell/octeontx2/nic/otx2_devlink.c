@@ -104,7 +104,7 @@ static int otx2_dl_ucast_flt_cnt_validate(struct devlink *devlink, u32 id,
 	struct otx2_nic *pfvf = otx2_dl->pfvf;
 
 	/* Check for UNICAST filter support*/
-	if (!(pfvf->flags & OTX2_FLAG_UCAST_FLTR_SUPPORT)) {
+	if (!otx2_test_flag(pfvf, OTX2_FLAG_UCAST_FLTR_SUPPORT)) {
 		NL_SET_ERR_MSG_MOD(extack,
 				   "Unicast filter not enabled");
 		return -EINVAL;

@@ -1516,10 +1516,14 @@ static void lan743x_rfe_set_multicast(struct lan743x_adapter *adapter)
 static int lan743x_dmac_init(struct lan743x_adapter *adapter)
 {
 	u32 data = 0;
+	int ret;
 
 	lan743x_csr_write(adapter, DMAC_CMD, DMAC_CMD_SWR_);
-	lan743x_csr_wait_for_bit(adapter, DMAC_CMD, DMAC_CMD_SWR_,
-				 0, 1000, 20000, 100);
+	ret = lan743x_csr_wait_for_bit(adapter, DMAC_CMD, DMAC_CMD_SWR_,
+				       0, 1000, 20000, 100);
+	if (ret)
+		return ret;
+
 	switch (DEFAULT_DMA_DESCRIPTOR_SPACING) {
 	case DMA_DESCRIPTOR_SPACING_16:
 		data = DMAC_CFG_MAX_DSPACE_16_;
@@ -1584,6 +1588,15 @@ static int lan743x_dmac_tx_wait_till_stopped(struct lan743x_adapter *adapter,
 	return result;
 }
 
+static int lan743x_dmac_tx_reset(struct lan743x_adapter *adapter,
+				 int tx_channel)
+{
+	lan743x_csr_write(adapter, DMAC_CMD, DMAC_CMD_TX_SWR_(tx_channel));
+	return lan743x_csr_wait_for_bit(adapter, DMAC_CMD,
+					DMAC_CMD_TX_SWR_(tx_channel),
+					0, 1000, 20000, 100);
+}
+
 static int lan743x_dmac_rx_get_state(struct lan743x_adapter *adapter,
 				     int rx_channel)
 {
@@ -1611,6 +1624,15 @@ static int lan743x_dmac_rx_wait_till_stopped(struct lan743x_adapter *adapter,
 	if (result == DMAC_CHANNEL_STATE_STOP_PENDING)
 		result = -ENODEV;
 	return result;
+}
+
+static int lan743x_dmac_rx_reset(struct lan743x_adapter *adapter,
+				 int rx_channel)
+{
+	lan743x_csr_write(adapter, DMAC_CMD, DMAC_CMD_RX_SWR_(rx_channel));
+	return lan743x_csr_wait_for_bit(adapter, DMAC_CMD,
+					DMAC_CMD_RX_SWR_(rx_channel),
+					0, 1000, 20000, 100);
 }
 
 static void lan743x_tx_release_desc(struct lan743x_tx *tx,
@@ -1686,10 +1708,23 @@ static int lan743x_tx_next_index(struct lan743x_tx *tx, int index)
 
 static void lan743x_tx_release_completed_descriptors(struct lan743x_tx *tx)
 {
+	struct lan743x_tx_buffer_info *buffer_info;
+	unsigned int bytes = 0;
+	unsigned int pkts = 0;
+
 	while (le32_to_cpu(*tx->head_cpu_ptr) != (tx->last_head)) {
+		buffer_info = &tx->buffer_info[tx->last_head];
+		if (buffer_info->skb) {
+			bytes += buffer_info->skb->len;
+			pkts++;
+		}
 		lan743x_tx_release_desc(tx, tx->last_head, false);
 		tx->last_head = lan743x_tx_next_index(tx, tx->last_head);
 	}
+
+	netdev_tx_completed_queue(netdev_get_tx_queue(tx->adapter->netdev,
+						      tx->channel_number),
+				  pkts, bytes);
 }
 
 static void lan743x_tx_release_all_descriptors(struct lan743x_tx *tx)
@@ -1981,6 +2016,10 @@ static void lan743x_tx_frame_end(struct lan743x_tx *tx,
 	if (ignore_sync)
 		buffer_info->flags |= TX_BUFFER_INFO_FLAG_IGNORE_SYNC;
 
+	netdev_tx_sent_queue(netdev_get_tx_queue(adapter->netdev,
+						 tx->channel_number),
+			     skb->len);
+
 	tx_descriptor = &tx->ring_cpu_ptr[tx->frame_tail];
 	tx_descriptor->data0 = cpu_to_le32(tx->frame_data0);
 	tx->frame_tail = lan743x_tx_next_index(tx, tx->frame_tail);
@@ -2107,7 +2146,8 @@ static int lan743x_tx_napi_poll(struct napi_struct *napi, int weight)
 	/* clean up tx ring */
 	lan743x_tx_release_completed_descriptors(tx);
 	txq = netdev_get_tx_queue(adapter->netdev, tx->channel_number);
-	if (netif_tx_queue_stopped(txq)) {
+	if (netif_tx_queue_stopped(txq) &&
+	    netif_device_present(adapter->netdev)) {
 		if (tx->rqd_descriptors) {
 			if (tx->rqd_descriptors <=
 			    lan743x_tx_get_avail_desc(tx)) {
@@ -2221,11 +2261,22 @@ cleanup:
 static void lan743x_tx_close(struct lan743x_tx *tx)
 {
 	struct lan743x_adapter *adapter = tx->adapter;
+	int ret;
 
 	lan743x_csr_write(adapter,
 			  DMAC_CMD,
 			  DMAC_CMD_STOP_T_(tx->channel_number));
-	lan743x_dmac_tx_wait_till_stopped(adapter, tx->channel_number);
+	ret = lan743x_dmac_tx_wait_till_stopped(adapter, tx->channel_number);
+	if (ret < 0 || ret == DMAC_CHANNEL_STATE_STARTED) {
+		netdev_warn(adapter->netdev,
+			    "TX channel %d failed to stop, resetting it\n",
+			    tx->channel_number);
+		ret = lan743x_dmac_tx_reset(adapter, tx->channel_number);
+		if (ret)
+			netdev_err(adapter->netdev,
+				   "TX channel %d reset timed out\n",
+				   tx->channel_number);
+	}
 
 	lan743x_csr_write(adapter,
 			  DMAC_INT_EN_CLR,
@@ -2242,6 +2293,8 @@ static void lan743x_tx_close(struct lan743x_tx *tx)
 				 0, 1000, 20000, 100);
 
 	lan743x_tx_release_all_descriptors(tx);
+	netdev_tx_reset_queue(netdev_get_tx_queue(adapter->netdev,
+						  tx->channel_number));
 
 	tx->rqd_descriptors = 0;
 
@@ -2271,11 +2324,11 @@ static int lan743x_tx_open(struct lan743x_tx *tx)
 			  FCT_TX_CTL_EN_(tx->channel_number));
 
 	/* reset tx channel */
-	lan743x_csr_write(adapter, DMAC_CMD,
-			  DMAC_CMD_TX_SWR_(tx->channel_number));
-	lan743x_csr_wait_for_bit(adapter, DMAC_CMD,
-				 DMAC_CMD_TX_SWR_(tx->channel_number),
-				 0, 1000, 20000, 100);
+	ret = lan743x_dmac_tx_reset(adapter, tx->channel_number);
+	if (ret)
+		netdev_err(adapter->netdev,
+			   "TX channel %d reset timed out\n",
+			   tx->channel_number);
 
 	/* Write TX_BASE_ADDR */
 	lan743x_csr_write(adapter,
@@ -2775,6 +2828,7 @@ cleanup:
 static void lan743x_rx_close(struct lan743x_rx *rx)
 {
 	struct lan743x_adapter *adapter = rx->adapter;
+	int ret;
 
 	lan743x_csr_write(adapter, FCT_RX_CTL,
 			  FCT_RX_CTL_DIS_(rx->channel_number));
@@ -2784,7 +2838,17 @@ static void lan743x_rx_close(struct lan743x_rx *rx)
 
 	lan743x_csr_write(adapter, DMAC_CMD,
 			  DMAC_CMD_STOP_R_(rx->channel_number));
-	lan743x_dmac_rx_wait_till_stopped(adapter, rx->channel_number);
+	ret = lan743x_dmac_rx_wait_till_stopped(adapter, rx->channel_number);
+	if (ret < 0 || ret == DMAC_CHANNEL_STATE_STARTED) {
+		netdev_warn(adapter->netdev,
+			    "RX channel %d failed to stop, resetting it\n",
+			    rx->channel_number);
+		ret = lan743x_dmac_rx_reset(adapter, rx->channel_number);
+		if (ret)
+			netdev_err(adapter->netdev,
+				   "RX channel %d reset timed out\n",
+				   rx->channel_number);
+	}
 
 	lan743x_csr_write(adapter, DMAC_INT_EN_CLR,
 			  DMAC_INT_BIT_RXFRM_(rx->channel_number));
@@ -2810,11 +2874,11 @@ static int lan743x_rx_open(struct lan743x_rx *rx)
 
 	netif_napi_add(adapter->netdev, &rx->napi, lan743x_rx_napi_poll);
 
-	lan743x_csr_write(adapter, DMAC_CMD,
-			  DMAC_CMD_RX_SWR_(rx->channel_number));
-	lan743x_csr_wait_for_bit(adapter, DMAC_CMD,
-				 DMAC_CMD_RX_SWR_(rx->channel_number),
-				 0, 1000, 20000, 100);
+	ret = lan743x_dmac_rx_reset(adapter, rx->channel_number);
+	if (ret)
+		netdev_err(adapter->netdev,
+			   "RX channel %d reset timed out\n",
+			   rx->channel_number);
 
 	/* set ring base address */
 	lan743x_csr_write(adapter,
@@ -3294,6 +3358,17 @@ static int lan743x_netdev_close(struct net_device *netdev)
 	struct lan743x_adapter *adapter = netdev_priv(netdev);
 	int index;
 
+	/* lan743x_reset_work() takes rtnl, so it cannot be waited for here.
+	 * A running one returns if the device is still down when it gets
+	 * rtnl, otherwise it resets the reopened device once more.
+	 */
+	cancel_work(&adapter->reset_work);
+
+	lan743x_phylink_disconnect(adapter);
+
+	synchronize_net();
+	netif_tx_disable(netdev);
+
 	for (index = 0; index < adapter->used_tx_channels; index++)
 		lan743x_tx_close(&adapter->tx[index]);
 
@@ -3301,8 +3376,6 @@ static int lan743x_netdev_close(struct net_device *netdev)
 		lan743x_rx_close(&adapter->rx[index]);
 
 	lan743x_ptp_close(adapter);
-
-	lan743x_phylink_disconnect(adapter);
 
 	lan743x_mac_close(adapter);
 
@@ -3325,10 +3398,6 @@ static int lan743x_netdev_open(struct net_device *netdev)
 	if (ret)
 		goto close_intr;
 
-	ret = lan743x_phylink_connect(adapter);
-	if (ret)
-		goto close_mac;
-
 	ret = lan743x_ptp_open(adapter);
 	if (ret)
 		goto close_mac;
@@ -3346,6 +3415,10 @@ static int lan743x_netdev_open(struct net_device *netdev)
 		if (ret)
 			goto close_tx;
 	}
+
+	ret = lan743x_phylink_connect(adapter);
+	if (ret)
+		goto close_tx;
 
 	if (netdev->phydev)
 		phy_support_eee(netdev->phydev);
@@ -3374,8 +3447,6 @@ close_rx:
 			lan743x_rx_close(&adapter->rx[index]);
 	}
 	lan743x_ptp_close(adapter);
-	if (adapter->phylink)
-		lan743x_phylink_disconnect(adapter);
 
 close_mac:
 	lan743x_mac_close(adapter);
@@ -3387,6 +3458,61 @@ return_error:
 	netif_warn(adapter, ifup, adapter->netdev,
 		   "Error opening LAN743x\n");
 	return ret;
+}
+
+static int lan743x_netdev_stop(struct net_device *netdev)
+{
+	if (!netif_device_present(netdev))
+		return 0;
+
+	return lan743x_netdev_close(netdev);
+}
+
+static void lan743x_reset_work(struct work_struct *work)
+{
+	struct lan743x_adapter *adapter =
+		container_of(work, struct lan743x_adapter, reset_work);
+	struct net_device *netdev = adapter->netdev;
+	int ret;
+
+	rtnl_lock();
+
+	if (!netif_running(netdev) || !netif_device_present(netdev))
+		goto unlock;
+
+	netdev_warn(netdev, "resetting after TX timeout\n");
+
+	netif_device_detach(netdev);
+	lan743x_netdev_close(netdev);
+
+	ret = lan743x_dmac_init(adapter);
+	if (ret) {
+		netdev_err(netdev, "DMA controller reset failed: %d\n", ret);
+		goto close;
+	}
+
+	ret = lan743x_netdev_open(netdev);
+	if (ret) {
+		netdev_err(netdev, "failed to reopen after reset: %d\n", ret);
+		goto close;
+	}
+
+	goto attach;
+
+close:
+	dev_close(netdev);
+attach:
+	netif_device_attach(netdev);
+unlock:
+	rtnl_unlock();
+}
+
+static void lan743x_netdev_tx_timeout(struct net_device *netdev,
+				      unsigned int txqueue)
+{
+	struct lan743x_adapter *adapter = netdev_priv(netdev);
+
+	schedule_work(&adapter->reset_work);
 }
 
 static netdev_tx_t lan743x_netdev_xmit_frame(struct sk_buff *skb,
@@ -3495,8 +3621,9 @@ static int lan743x_netdev_set_mac_address(struct net_device *netdev,
 
 static const struct net_device_ops lan743x_netdev_ops = {
 	.ndo_open		= lan743x_netdev_open,
-	.ndo_stop		= lan743x_netdev_close,
+	.ndo_stop		= lan743x_netdev_stop,
 	.ndo_start_xmit		= lan743x_netdev_xmit_frame,
+	.ndo_tx_timeout		= lan743x_netdev_tx_timeout,
 	.ndo_eth_ioctl		= lan743x_netdev_ioctl,
 	.ndo_set_rx_mode	= lan743x_netdev_set_multicast,
 	.ndo_change_mtu		= lan743x_netdev_change_mtu,
@@ -3525,6 +3652,7 @@ static void lan743x_destroy_phylink(struct lan743x_adapter *adapter)
 static void lan743x_full_cleanup(struct lan743x_adapter *adapter)
 {
 	unregister_netdev(adapter->netdev);
+	cancel_work_sync(&adapter->reset_work);
 
 	lan743x_destroy_phylink(adapter);
 	lan743x_mdiobus_cleanup(adapter);
@@ -3719,6 +3847,7 @@ static int lan743x_pcidev_probe(struct pci_dev *pdev,
 			      NETIF_MSG_LINK | NETIF_MSG_IFUP |
 			      NETIF_MSG_IFDOWN | NETIF_MSG_TX_QUEUED;
 	netdev->max_mtu = LAN743X_MAX_FRAME_SIZE;
+	INIT_WORK(&adapter->reset_work, lan743x_reset_work);
 
 	of_get_mac_address(pdev->dev.of_node, adapter->mac_address);
 

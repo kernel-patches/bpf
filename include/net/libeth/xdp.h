@@ -1181,10 +1181,12 @@ libeth_xdp_init_buff(struct libeth_xdp_buff *dst,
 		     const struct libeth_xdp_buff_stash *src,
 		     struct xdp_rxq_info *rxq)
 {
-	if (likely(!src->data))
+	if (likely(!src->data)) {
 		dst->data = NULL;
-	else
+		dst->base.flags = 0;
+	} else {
 		libeth_xdp_load_stash(dst, src);
+	}
 
 	dst->base.rxq = rxq;
 }

@@ -275,6 +275,34 @@ static u32 hinic3_get_sge_num(struct hinic3_rxq *rxq, u32 pkt_len)
 	return sge_num;
 }
 
+/* The device reported a frame that needs more fragments than an skb can
+ * carry.  Give the buffers it claimed back to the pool and advance the ring
+ * over them, so the consumer index stays in step with the device.
+ */
+static void hinic3_discard_rx_pkt(struct hinic3_rxq *rxq, u32 sge_num)
+{
+	u32 sw_ci = rxq->cons_idx & rxq->q_mask;
+	u32 i;
+
+	for (i = 0; i < sge_num; i++) {
+		struct hinic3_rx_info *rx_info = &rxq->rx_info[sw_ci];
+
+		if (rx_info->page) {
+			page_pool_put_full_page(rxq->page_pool, rx_info->page,
+						false);
+			rx_info->page = NULL;
+		}
+		sw_ci = (sw_ci + 1) & rxq->q_mask;
+	}
+
+	rxq->cons_idx += sge_num;
+	rxq->delta += sge_num;
+
+	u64_stats_update_begin(&rxq->rxq_stats.syncp);
+	rxq->rxq_stats.dropped++;
+	u64_stats_update_end(&rxq->rxq_stats.syncp);
+}
+
 static struct sk_buff *hinic3_fetch_rx_buffer(struct hinic3_rxq *rxq,
 					      u32 pkt_len)
 {
@@ -553,7 +581,7 @@ int hinic3_configure_rxqs(struct net_device *netdev, u16 num_rq,
 int hinic3_rx_poll(struct hinic3_rxq *rxq, int budget)
 {
 	struct hinic3_nic_dev *nic_dev = netdev_priv(rxq->netdev);
-	u32 sw_ci, status, pkt_len, vlan_len;
+	u32 sw_ci, status, pkt_len, vlan_len, sge_num;
 	struct hinic3_rq_cqe *rx_cqe;
 	u32 num_wqe = 0;
 	int nr_pkts = 0;
@@ -571,13 +599,21 @@ int hinic3_rx_poll(struct hinic3_rxq *rxq, int budget)
 
 		vlan_len = le32_to_cpu(rx_cqe->vlan_len);
 		pkt_len = RQ_CQE_SGE_GET(vlan_len, LEN);
-		if (recv_one_pkt(rxq, rx_cqe, pkt_len, vlan_len, status))
+
+		/* The length is chosen by the device and an skb can only hold
+		 * MAX_SKB_FRAGS fragments, so a longer frame has to be dropped
+		 * rather than overrun the fragment array.
+		 */
+		sge_num = hinic3_get_sge_num(rxq, pkt_len);
+		if (unlikely(sge_num > MAX_SKB_FRAGS))
+			hinic3_discard_rx_pkt(rxq, sge_num);
+		else if (recv_one_pkt(rxq, rx_cqe, pkt_len, vlan_len, status))
 			break;
 
 		nr_pkts++;
 		num_lro = RQ_CQE_STATUS_GET(status, NUM_LRO);
 		if (num_lro)
-			num_wqe += hinic3_get_sge_num(rxq, pkt_len);
+			num_wqe += sge_num;
 
 		rx_cqe->status = 0;
 

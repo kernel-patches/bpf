@@ -30,6 +30,7 @@
 #include <net/kcm.h>
 #include <net/netns/generic.h>
 #include <net/sock.h>
+#include <net/tcp.h>
 #include <uapi/linux/kcm.h>
 #include <trace/events/sock.h>
 
@@ -358,8 +359,19 @@ static void psock_data_ready(struct sock *sk)
 	read_lock_bh(&sk->sk_callback_lock);
 
 	psock = (struct kcm_psock *)sk->sk_user_data;
-	if (likely(psock))
-		strp_data_ready(&psock->strp);
+	if (likely(psock)) {
+		struct socket *sock = sk->sk_socket;
+
+		/* strp_data_ready() calls sock->ops->read_sock() inline from
+		 * this softirq callback. A ULP's read_sock, such as kTLS's
+		 * tls_sw_read_sock(), may sleep, so hand anything other than
+		 * TCP's own to the parser work, which runs under lock_sock().
+		 */
+		if (likely(sock && sock->ops->read_sock == tcp_read_sock))
+			strp_data_ready(&psock->strp);
+		else
+			strp_check_rcv(&psock->strp);
+	}
 
 	read_unlock_bh(&sk->sk_callback_lock);
 }
@@ -735,7 +747,7 @@ static void kcm_tx_work(struct work_struct *w)
 	/* Primarily for SOCK_SEQPACKET sockets */
 	if (likely(sk->sk_socket) &&
 	    test_bit(SOCK_NOSPACE, &sk->sk_socket->flags)) {
-		clear_bit(SOCK_NOSPACE, &sk->sk_socket->flags);
+		sk_clear_nospace(sk);
 		sk->sk_write_space(sk);
 	}
 
@@ -779,7 +791,7 @@ static int kcm_sendmsg(struct socket *sock, struct msghdr *msg, size_t len)
 	/* Call the sk_stream functions to manage the sndbuf mem. */
 	if (!sk_stream_memory_free(sk)) {
 		kcm_push(kcm);
-		set_bit(SOCK_NOSPACE, &sk->sk_socket->flags);
+		sk_set_nospace(sk);
 		err = sk_stream_wait_memory(sk, &timeo);
 		if (err)
 			goto out_error;

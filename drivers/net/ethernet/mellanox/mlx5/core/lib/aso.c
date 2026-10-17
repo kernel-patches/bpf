@@ -112,10 +112,14 @@ static int create_aso_cq(struct mlx5_aso_cq *cq, void *cqc_data)
 	return err;
 }
 
-static void mlx5_aso_destroy_cq(struct mlx5_aso_cq *cq)
+static int mlx5_aso_destroy_cq(struct mlx5_aso_cq *cq)
 {
-	mlx5_core_destroy_cq(cq->mdev, &cq->mcq);
-	mlx5_wq_destroy(&cq->wq_ctrl);
+	int err = mlx5_core_destroy_cq(cq->mdev, &cq->mcq);
+
+	/* The device may still access an undestroyed CQ's buffer; keep it. */
+	if (!err)
+		mlx5_wq_destroy(&cq->wq_ctrl);
+	return err;
 }
 
 static int mlx5_aso_create_cq(struct mlx5_core_dev *mdev, int numa_node,
@@ -326,7 +330,9 @@ struct mlx5_aso *mlx5_aso_create(struct mlx5_core_dev *mdev, u32 pdn)
 	return aso;
 
 err_sq:
-	mlx5_aso_destroy_cq(&aso->cq);
+	/* An undestroyed CQ may still be in use; keep the ASO that holds it. */
+	if (mlx5_aso_destroy_cq(&aso->cq))
+		return ERR_PTR(err);
 err_cq:
 	kfree(aso);
 	return ERR_PTR(err);
@@ -335,7 +341,9 @@ err_cq:
 void mlx5_aso_destroy(struct mlx5_aso *aso)
 {
 	mlx5_aso_destroy_sq(aso);
-	mlx5_aso_destroy_cq(&aso->cq);
+	/* An undestroyed CQ may still be in use; keep the ASO that holds it. */
+	if (mlx5_aso_destroy_cq(&aso->cq))
+		return;
 	kfree(aso);
 }
 
@@ -421,7 +429,7 @@ int mlx5_aso_poll_cq(struct mlx5_aso *aso, bool with_data)
 	mlx5_cqwq_update_db_record(&cq->wq);
 
 	/* ensure cq space is freed before enabling more cqes */
-	wmb();
+	dma_wmb();
 
 	if (with_data)
 		aso->cc += MLX5_ASO_WQEBBS_DATA;

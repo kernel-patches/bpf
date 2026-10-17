@@ -378,6 +378,9 @@ void mlx5e_ethtool_get_ringparam(struct mlx5e_priv *priv,
 
 	kernel_param->hds_thresh = 0;
 	kernel_param->hds_thresh_max = 0;
+
+	if (priv->channels.params.packet_merge.type == MLX5E_PACKET_MERGE_SHAMPO)
+		kernel_param->tcp_data_split = ETHTOOL_TCP_DATA_SPLIT_ENABLED;
 }
 
 static void mlx5e_get_ringparam(struct net_device *dev,
@@ -403,10 +406,11 @@ static bool mlx5e_ethtool_set_tcp_data_split(struct mlx5e_priv *priv,
 		return false;
 	}
 
-	/* Might need to disable HW-GRO if it was kept on due to hds. */
-	if (tcp_data_split == ETHTOOL_TCP_DATA_SPLIT_DISABLED &&
-	    dev->cfg->hds_config == ETHTOOL_TCP_DATA_SPLIT_ENABLED)
-		netdev_update_features(priv->netdev);
+	if (tcp_data_split == ETHTOOL_TCP_DATA_SPLIT_DISABLED) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "TCP-data-split can not be disabled");
+		return false;
+	}
 
 	return true;
 }
@@ -468,13 +472,22 @@ static int mlx5e_set_ringparam(struct net_device *dev,
 			       struct netlink_ext_ack *extack)
 {
 	struct mlx5e_priv *priv = netdev_priv(dev);
+	int err;
 
 	if (!mlx5e_ethtool_set_tcp_data_split(priv,
 					      kernel_param->tcp_data_split,
 					      extack))
 		return -EINVAL;
 
-	return mlx5e_ethtool_set_ringparam(priv, param, extack);
+	err = mlx5e_ethtool_set_ringparam(priv, param, extack);
+	if (err)
+		return err;
+
+	/* Disable HW-GRO if it was only kept on for HDS. */
+	if (dev->cfg->hds_config != kernel_param->tcp_data_split)
+		netdev_update_features(priv->netdev);
+
+	return 0;
 }
 
 void mlx5e_ethtool_get_channels(struct mlx5e_priv *priv,
@@ -2193,12 +2206,20 @@ static int set_pflag_cqe_based_moder(struct net_device *netdev, bool enable,
 		mlx5e_channels_rx_toggle_dim(&priv->channels);
 		MLX5E_SET_PFLAG(&new_params, MLX5E_PFLAG_RX_CQE_BASED_MODER,
 				cq_period_mode);
+		new_params.rx_moder_use_cqe_mode = enable;
+		mlx5e_reset_rx_moderation(&new_params.rx_cq_moderation,
+					  cq_period_mode,
+					  new_params.rx_dim_enabled);
 	} else {
 		mlx5e_reset_tx_channels_moderation(&priv->channels, cq_period_mode,
 						   false, true);
 		mlx5e_channels_tx_toggle_dim(&priv->channels);
 		MLX5E_SET_PFLAG(&new_params, MLX5E_PFLAG_TX_CQE_BASED_MODER,
 				cq_period_mode);
+		new_params.tx_moder_use_cqe_mode = enable;
+		mlx5e_reset_tx_moderation(&new_params.tx_cq_moderation,
+					  cq_period_mode,
+					  new_params.tx_dim_enabled);
 	}
 
 	/* Update pflags of existing channels without resetting them */
@@ -2320,10 +2341,8 @@ static int set_pflag_rx_no_csum_complete(struct net_device *netdev, bool enable)
 
 	for (i = 0; i < channels->num; i++) {
 		c = channels->c[i];
-		if (enable)
-			__set_bit(MLX5E_RQ_STATE_NO_CSUM_COMPLETE, &c->rq.state);
-		else
-			__clear_bit(MLX5E_RQ_STATE_NO_CSUM_COMPLETE, &c->rq.state);
+		__assign_bit(MLX5E_RQ_STATE_NO_CSUM_COMPLETE, &c->rq.state,
+			     enable);
 	}
 
 	return 0;

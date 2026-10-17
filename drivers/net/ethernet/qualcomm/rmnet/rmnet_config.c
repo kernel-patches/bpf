@@ -26,6 +26,31 @@ static int rmnet_is_real_dev_registered(const struct net_device *real_dev)
 	return rcu_access_pointer(real_dev->rx_handler) == rmnet_rx_handler;
 }
 
+/* Only three MAP configurations are supported: MAPv1 (no checksum
+ * offload), MAPv4 (v4 checksum offload) and MAPv5 (v5 checksum
+ * offload). MAP command support is orthogonal and permitted with any
+ * of the three. Checksum offload versions are selected independently
+ * for ingress and egress, but only one version may be enabled across
+ * the device. Mixing v4 and v5 checksum flags is not supported. DL
+ * packet coalescing additionally requires a MAPv5 configuration.
+ */
+static bool rmnet_config_data_format_valid(u32 data_format)
+{
+	u32 v4_mask = RMNET_FLAGS_INGRESS_MAP_CKSUMV4 |
+		      RMNET_FLAGS_EGRESS_MAP_CKSUMV4;
+	u32 v5_mask = RMNET_FLAGS_INGRESS_MAP_CKSUMV5 |
+		      RMNET_FLAGS_EGRESS_MAP_CKSUMV5;
+
+	if ((data_format & v4_mask) && (data_format & v5_mask))
+		return false;
+
+	if ((data_format & RMNET_FLAGS_INGRESS_COALESCE) &&
+	    !(data_format & RMNET_FLAGS_INGRESS_MAP_CKSUMV5))
+		return false;
+
+	return true;
+}
+
 /* Needs rtnl lock */
 struct rmnet_port*
 rmnet_get_port_rtnl(const struct net_device *real_dev)
@@ -143,6 +168,20 @@ static int rmnet_newlink(struct net_device *dev,
 		return -ENODEV;
 	}
 
+	if (data[IFLA_RMNET_FLAGS]) {
+		struct ifla_rmnet_flags *flags;
+
+		flags = nla_data(data[IFLA_RMNET_FLAGS]);
+		data_format &= ~flags->mask;
+		data_format |= flags->flags & flags->mask;
+	}
+
+	if (!rmnet_config_data_format_valid(data_format)) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "unsupported MAP checksum flag combination");
+		return -EINVAL;
+	}
+
 	ep = kzalloc_obj(*ep);
 	if (!ep)
 		return -ENOMEM;
@@ -154,7 +193,8 @@ static int rmnet_newlink(struct net_device *dev,
 		goto err0;
 
 	port = rmnet_get_port_rtnl(real_dev);
-	err = rmnet_vnd_newlink(mux_id, dev, port, real_dev, ep, extack);
+	err = rmnet_vnd_newlink(mux_id, dev, port, real_dev, ep, extack,
+				data_format);
 	if (err)
 		goto err1;
 
@@ -162,24 +202,23 @@ static int rmnet_newlink(struct net_device *dev,
 	if (err < 0)
 		goto err2;
 
+	/* Update existing MTUs before publishing the shared data format. */
+	err = rmnet_vnd_update_dev_mtu(port, real_dev, data_format);
+	if (err)
+		goto err3;
+
 	port->rmnet_mode = mode;
 	port->rmnet_dev = dev;
 
 	hlist_add_head_rcu(&ep->hlnode, &port->muxed_ep[mux_id]);
 
-	if (data[IFLA_RMNET_FLAGS]) {
-		struct ifla_rmnet_flags *flags;
-
-		flags = nla_data(data[IFLA_RMNET_FLAGS]);
-		data_format &= ~flags->mask;
-		data_format |= flags->flags & flags->mask;
-	}
-
 	netdev_dbg(dev, "data format [0x%08X]\n", data_format);
-	port->data_format = data_format;
+	WRITE_ONCE(port->data_format, data_format);
 
 	return 0;
 
+err3:
+	netdev_upper_dev_unlink(real_dev, dev);
 err2:
 	unregister_netdevice(dev);
 	rmnet_vnd_dellink(mux_id, port, ep);
@@ -301,9 +340,13 @@ static int rmnet_changelink(struct net_device *dev, struct nlattr *tb[],
 			    struct netlink_ext_ack *extack)
 {
 	struct rmnet_priv *priv = netdev_priv(dev);
+	struct ifla_rmnet_flags *flags;
 	struct net_device *real_dev;
 	struct rmnet_port *port;
+	u32 old_data_format;
+	u32 data_format;
 	u16 mux_id;
+	int err;
 
 	if (!dev)
 		return -ENODEV;
@@ -312,7 +355,26 @@ static int rmnet_changelink(struct net_device *dev, struct nlattr *tb[],
 	if (!rmnet_is_real_dev_registered(real_dev))
 		return -ENODEV;
 
+	if (!rtnl_dev_link_net_capable(dev, dev_net(real_dev))) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "request modifies device in another netns");
+		return -EPERM;
+	}
+
 	port = rmnet_get_port_rtnl(real_dev);
+
+	if (data[IFLA_RMNET_FLAGS]) {
+		old_data_format = READ_ONCE(port->data_format);
+		flags = nla_data(data[IFLA_RMNET_FLAGS]);
+		data_format = old_data_format & ~flags->mask;
+		data_format |= flags->flags & flags->mask;
+
+		if (!rmnet_config_data_format_valid(data_format)) {
+			NL_SET_ERR_MSG_MOD(extack,
+					   "unsupported MAP checksum flag combination");
+			return -EINVAL;
+		}
+	}
 
 	if (data[IFLA_RMNET_MUX_ID]) {
 		mux_id = nla_get_u16(data[IFLA_RMNET_MUX_ID]);
@@ -331,28 +393,22 @@ static int rmnet_changelink(struct net_device *dev, struct nlattr *tb[],
 			}
 
 			hlist_del_init_rcu(&ep->hlnode);
+			WRITE_ONCE(ep->mux_id, mux_id);
 			hlist_add_head_rcu(&ep->hlnode,
 					   &port->muxed_ep[mux_id]);
 
-			ep->mux_id = mux_id;
-			priv->mux_id = mux_id;
+			WRITE_ONCE(priv->mux_id, mux_id);
 		}
 	}
 
 	if (data[IFLA_RMNET_FLAGS]) {
-		struct ifla_rmnet_flags *flags;
-		u32 old_data_format;
-
-		old_data_format = port->data_format;
-		flags = nla_data(data[IFLA_RMNET_FLAGS]);
-		port->data_format &= ~flags->mask;
-		port->data_format |= flags->flags & flags->mask;
-
-		if (rmnet_vnd_update_dev_mtu(port, real_dev)) {
-			port->data_format = old_data_format;
+		err = rmnet_vnd_update_dev_mtu(port, real_dev, data_format);
+		if (err) {
 			NL_SET_ERR_MSG_MOD(extack, "Invalid MTU on real dev");
-			return -EINVAL;
+			return err;
 		}
+
+		WRITE_ONCE(port->data_format, data_format);
 	}
 
 	return 0;
@@ -369,32 +425,24 @@ static size_t rmnet_get_size(const struct net_device *dev)
 
 static int rmnet_fill_info(struct sk_buff *skb, const struct net_device *dev)
 {
-	struct rmnet_priv *priv = netdev_priv(dev);
-	struct net_device *real_dev;
+	const struct rmnet_priv *priv = netdev_priv(dev);
+	const struct rmnet_port *port;
 	struct ifla_rmnet_flags f;
-	struct rmnet_port *port;
 
-	real_dev = priv->real_dev;
+	if (nla_put_u16(skb, IFLA_RMNET_MUX_ID, READ_ONCE(priv->mux_id)))
+		return -EMSGSIZE;
 
-	if (nla_put_u16(skb, IFLA_RMNET_MUX_ID, priv->mux_id))
-		goto nla_put_failure;
-
-	if (rmnet_is_real_dev_registered(real_dev)) {
-		port = rmnet_get_port_rtnl(real_dev);
-		f.flags = port->data_format;
-	} else {
-		f.flags = 0;
-	}
+	rcu_read_lock();
+	port = rmnet_get_port_rcu(priv->real_dev);
+	f.flags = port ? READ_ONCE(port->data_format) : 0;
+	rcu_read_unlock();
 
 	f.mask  = ~0;
 
 	if (nla_put(skb, IFLA_RMNET_FLAGS, sizeof(f), &f))
-		goto nla_put_failure;
+		return -EMSGSIZE;
 
 	return 0;
-
-nla_put_failure:
-	return -EMSGSIZE;
 }
 
 struct rtnl_link_ops rmnet_link_ops __read_mostly = {
@@ -411,12 +459,16 @@ struct rtnl_link_ops rmnet_link_ops __read_mostly = {
 	.fill_info	= rmnet_fill_info,
 };
 
-struct rmnet_port *rmnet_get_port_rcu(struct net_device *real_dev)
+/* Can be called from a RCU read-side critical section, with or
+ * without BH disabled.
+ */
+struct rmnet_port *rmnet_get_port_rcu(const struct net_device *real_dev)
 {
-	if (rmnet_is_real_dev_registered(real_dev))
-		return rcu_dereference_bh(real_dev->rx_handler_data);
-	else
+	if (!rmnet_is_real_dev_registered(real_dev))
 		return NULL;
+
+	return rcu_dereference_check(real_dev->rx_handler_data,
+				     rcu_read_lock_bh_held());
 }
 
 struct rmnet_endpoint *rmnet_get_endpoint(struct rmnet_port *port, u8 mux_id)
@@ -425,7 +477,7 @@ struct rmnet_endpoint *rmnet_get_endpoint(struct rmnet_port *port, u8 mux_id)
 
 	hlist_for_each_entry_rcu(ep, &port->muxed_ep[mux_id], hlnode,
 				 lockdep_rtnl_is_held()) {
-		if (ep->mux_id == mux_id)
+		if (READ_ONCE(ep->mux_id) == mux_id)
 			return ep;
 	}
 
@@ -440,6 +492,12 @@ int rmnet_add_bridge(struct net_device *rmnet_dev,
 	struct net_device *real_dev = priv->real_dev;
 	struct rmnet_port *port, *slave_port;
 	int err;
+
+	if (!rtnl_dev_link_net_capable(slave_dev, dev_net(real_dev))) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "request modifies device in another netns");
+		return -EPERM;
+	}
 
 	port = rmnet_get_port_rtnl(real_dev);
 
@@ -489,7 +547,14 @@ int rmnet_add_bridge(struct net_device *rmnet_dev,
 int rmnet_del_bridge(struct net_device *rmnet_dev,
 		     struct net_device *slave_dev)
 {
-	struct rmnet_port *port = rmnet_get_port_rtnl(slave_dev);
+	struct rmnet_priv *priv = netdev_priv(rmnet_dev);
+	struct net_device *real_dev = priv->real_dev;
+	struct rmnet_port *port;
+
+	if (!rtnl_dev_link_net_capable(slave_dev, dev_net(real_dev)))
+		return -EPERM;
+
+	port = rmnet_get_port_rtnl(slave_dev);
 
 	rmnet_unregister_bridge(port);
 

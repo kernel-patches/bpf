@@ -135,6 +135,8 @@ struct iucv_sock {
 	atomic_t		msg_recv;
 	atomic_t		pendings;
 	int			transport;
+	unsigned int		sk_backlog_data;
+	unsigned int		sk_backlog_ctrl;
 	void			(*sk_txnotify)(struct sock *sk,
 					       enum iucv_tx_notify n);
 };
