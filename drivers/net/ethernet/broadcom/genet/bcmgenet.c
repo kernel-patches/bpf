@@ -4293,6 +4293,9 @@ static int bcmgenet_resume(struct device *d)
 		bcmgenet_rdma_disable(priv);
 		bcmgenet_intr_disable(priv);
 		bcmgenet_fini_dma(priv);
+		/* An earlier rebuild of this datapath may have stopped it */
+		if (phy_is_started(dev->phydev))
+			phy_stop(dev->phydev);
 		enable_irq(priv->irq1);
 	}
 
