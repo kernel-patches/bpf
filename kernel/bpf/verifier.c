@@ -15573,8 +15573,13 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 
 	if (bpf_is_unwind_kfunc(insn))
 		return process_bpf_unwind(env, insn_idx_p);
-	if (bpf_is_unwind_resume_kfunc(insn))
+	if (bpf_is_unwind_resume_kfunc(insn)) {
+		if (!cur_func(env)->in_pad) {
+			verbose(env, "resume at insn %d is not in a landing pad\n", insn_idx);
+			return -EINVAL;
+		}
 		return unwind_frames(env, NULL);
+	}
 
 	return 0;
 }
@@ -19721,6 +19726,7 @@ static int unwind_frames(struct bpf_verifier_env *env, bool *do_print_state)
 			return err;
 		clear_caller_saved_regs(env, caller->regs);
 		mark_reg_unknown(env, caller->regs, BPF_REG_0);
+		caller->in_pad = true;
 		env->insn_idx = pad;
 		if (do_print_state)
 			*do_print_state = true;
@@ -19795,6 +19801,7 @@ static int process_global_call_unwind(struct bpf_verifier_env *env,
 	frame = cur_func(env);
 	clear_caller_saved_regs(env, frame->regs);
 	mark_reg_unknown(env, frame->regs, BPF_REG_0);
+	frame->in_pad = true;
 	env->insn_idx = pad;
 	*do_print_state = true;
 	return INSN_IDX_UPDATED;
@@ -19809,6 +19816,7 @@ static int process_bpf_unwind(struct bpf_verifier_env *env, int *insn_idx)
 		return unwind_frames(env, NULL);
 	clear_caller_saved_regs(env, frame->regs);
 	mark_reg_unknown(env, frame->regs, BPF_REG_0);
+	frame->in_pad = true;
 	*insn_idx = pad;
 	return INSN_IDX_UPDATED;
 }
@@ -20003,6 +20011,12 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 	int err;
 	struct bpf_insn *insn = &env->prog->insnsi[env->insn_idx];
 	u8 class = BPF_CLASS(insn->code);
+
+	if (unlikely(env->cleanup_info_cnt)) {
+		err = bpf_exc_check_insn(env, insn);
+		if (err)
+			return err;
+	}
 
 	switch (class) {
 	case BPF_ALU:
