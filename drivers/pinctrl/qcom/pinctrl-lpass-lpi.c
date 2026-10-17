@@ -76,7 +76,9 @@ static int lpi_gpio_read(struct lpi_pinctrl *state, unsigned int pin,
 
 	lpi_gpio_read_reg(state, pin, addr, val);
 
-	return pm_runtime_put_autosuspend(state->dev);
+	pm_runtime_put_autosuspend(state->dev);
+
+	return 0;
 }
 
 static const struct pinctrl_ops lpi_gpio_pinctrl_ops = {
@@ -164,7 +166,9 @@ static int lpi_gpio_set_mux(struct pinctrl_dev *pctldev, unsigned int function,
 	u32p_replace_bits(&val, i, LPI_GPIO_FUNCTION_MASK);
 	lpi_gpio_write_reg(pctrl, pin, LPI_GPIO_CFG_REG, val);
 
-	return pm_runtime_put_autosuspend(pctrl->dev);
+	pm_runtime_put_autosuspend(pctrl->dev);
+
+	return 0;
 }
 
 static const struct pinmux_ops lpi_gpio_pinmux_ops = {
@@ -261,7 +265,9 @@ static int lpi_config_set_slew_rate(struct lpi_pinctrl *pctrl,
 
 	mutex_unlock(&pctrl->lock);
 
-	return pm_runtime_put_autosuspend(pctrl->dev);
+	pm_runtime_put_autosuspend(pctrl->dev);
+
+	return 0;
 }
 
 static int lpi_config_set(struct pinctrl_dev *pctldev, unsigned int group,
@@ -335,7 +341,9 @@ static int lpi_config_set(struct pinctrl_dev *pctldev, unsigned int group,
 
 	lpi_gpio_write_reg(pctrl, group, LPI_GPIO_CFG_REG, val);
 
-	return pm_runtime_put_autosuspend(pctrl->dev);
+	pm_runtime_put_autosuspend(pctrl->dev);
+
+	return 0;
 }
 
 static const struct pinconf_ops lpi_gpio_pinconf_ops = {
@@ -421,6 +429,7 @@ static void lpi_gpio_dbg_show_one(struct seq_file *s,
 	struct pinctrl_pin_desc pindesc;
 	unsigned int func;
 	int is_out;
+	int value;
 	int drive;
 	int pull;
 	u32 ctl_reg;
@@ -443,7 +452,10 @@ static void lpi_gpio_dbg_show_one(struct seq_file *s,
 	drive = FIELD_GET(LPI_GPIO_OUT_STRENGTH_MASK, ctl_reg);
 	pull = FIELD_GET(LPI_GPIO_PULL_MASK, ctl_reg);
 
-	seq_printf(s, " %-8s: %-3s %d", pindesc.name, is_out ? "out" : "in", func);
+	value = lpi_gpio_get(chip, offset);
+
+	seq_printf(s, " %-8s: %-3s", pindesc.name, is_out ? "out" : "in");
+	seq_printf(s, " %-4s func%d", str_high_low(value), func);
 	seq_printf(s, " %dmA", lpi_regval_to_drive(drive));
 	seq_printf(s, " %s", pulls[pull]);
 }

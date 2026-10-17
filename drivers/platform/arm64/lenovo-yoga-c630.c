@@ -10,7 +10,7 @@
 #include <linux/device.h>
 #include <linux/err.h>
 #include <linux/i2c.h>
-#include <linux/irqreturn.h>
+#include <linux/interrupt.h>
 #include <linux/lockdep.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
@@ -221,7 +221,7 @@ static int yoga_c630_ec_probe(struct i2c_client *client)
 					NULL, yoga_c630_ec_thread_intr,
 					IRQF_ONESHOT, "yoga_c630_ec", ec);
 	if (ret < 0)
-		return dev_err_probe(dev, ret, "unable to request irq\n");
+		return ret;
 
 	ret = yoga_c630_aux_init(dev, YOGA_C630_DEV_PSY, ec);
 	if (ret)

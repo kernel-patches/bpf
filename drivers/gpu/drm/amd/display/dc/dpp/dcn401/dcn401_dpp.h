@@ -712,7 +712,8 @@ void dpp401_dpp_setup(
 	enum expansion_mode mode,
 	struct dc_csc_transform input_csc_color_matrix,
 	enum dc_color_space input_color_space,
-	struct cnv_alpha_2bit_lut *alpha_2bit_lut);
+	struct cnv_alpha_2bit_lut *alpha_2bit_lut,
+	enum upsp_mode upsp_mode);
 
 void dpp401_set_cursor_attributes(
 	struct dpp *dpp_base,
@@ -724,6 +725,8 @@ void dpp401_set_cursor_position(
 	const struct dc_cursor_mi_param *param,
 	uint32_t width,
 	uint32_t height);
+
+void dpp401_cursor_refresh_state(struct dpp *dpp_base);
 
 void dpp401_set_optional_cursor_attributes(
 	struct dpp *dpp_base,

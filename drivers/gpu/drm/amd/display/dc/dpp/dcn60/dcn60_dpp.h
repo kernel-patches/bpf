@@ -414,9 +414,7 @@
 	TF_SF(CNVC_CFG0_CNVC_UPSP_CLAMP, UPSP_CLAMP_MIN, mask_sh)
 
 #define DPP_REG_FIELD_LIST_DCN60(type) \
-	DPP_REG_FIELD_LIST_DCN42(type); \
-	type PRE_GAM_MODE; \
-	type PRE_REGAM_SELECT; \
+	DPP_REG_FIELD_LIST_DCN50(type); \
 	type AUTOCAL_FRAC_MODE; \
 	type SCL_BLACK_COLOR_RGB_Y; \
 	type SCL_BLACK_COLOR_CBCR; \
@@ -448,15 +446,14 @@
 	type UPSP_CLAMP_MIN
 
 #define DPP_REG_VARIABLE_LIST_DCN60 \
-	DPP_REG_VARIABLE_LIST_DCN42; \
-	uint32_t PRE_GAM; \
+	DPP_REG_VARIABLE_LIST_DCN50; \
 	uint32_t SCL_BLACK_COLOR; \
-	uint32_t UPSP_MODE; \
-	uint32_t UPSP_V_COEF_P0; \
-	uint32_t UPSP_V_COEF_P1; \
-	uint32_t UPSP_H_COEF_P0; \
-	uint32_t UPSP_H_COEF_P1; \
-	uint32_t UPSP_CLAMP
+	uint32_t CNVC_UPSP_MODE; \
+	uint32_t CNVC_UPSP_V_COEF_P0; \
+	uint32_t CNVC_UPSP_V_COEF_P1; \
+	uint32_t CNVC_UPSP_H_COEF_P0; \
+	uint32_t CNVC_UPSP_H_COEF_P1; \
+	uint32_t CNVC_UPSP_CLAMP
 
 struct dcn60_dpp_registers {
 	DPP_REG_VARIABLE_LIST_DCN60;
@@ -493,7 +490,8 @@ void dpp60_dpp_setup(
 	enum expansion_mode mode,
 	struct dc_csc_transform input_csc_color_matrix,
 	enum dc_color_space input_color_space,
-	struct cnv_alpha_2bit_lut *alpha_2bit_lut);
+	struct cnv_alpha_2bit_lut *alpha_2bit_lut,
+	enum upsp_mode upsp_mode);
 
 void dpp60_full_bypass(struct dpp *dpp_base);
 
@@ -520,6 +518,9 @@ bool dpp60_construct(struct dcn60_dpp *dpp60,
 	const struct dcn60_dpp_registers *tf_regs,
 	const struct dcn60_dpp_shift *tf_shift,
 	const struct dcn60_dpp_mask *tf_mask);
+
+bool dpp6_program_gamcor_lut(
+	struct dpp *dpp_base, const struct pwl_params *params);
 
 
 #endif /* __DCN60_DPP_H__ */

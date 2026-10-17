@@ -75,8 +75,8 @@
 #define VA_BITS_SV48 48
 #define VA_BITS_SV57 57
 
-#define VA_BITS		(pgtable_l5_enabled ? \
-				VA_BITS_SV57 : (pgtable_l4_enabled ? VA_BITS_SV48 : VA_BITS_SV39))
+#define VA_BITS		(pgtable_l5_enabled() ? \
+				VA_BITS_SV57 : (pgtable_l4_enabled() ? VA_BITS_SV48 : VA_BITS_SV39))
 #else
 #define VA_BITS		VA_BITS_SV32
 #endif
@@ -555,10 +555,6 @@ static inline pte_t pte_modify(pte_t pte, pgprot_t newprot)
 
 	return __pte((pte_val(pte) & _PAGE_CHG_MASK) | newprot_val);
 }
-
-#define pgd_ERROR(e) \
-	pr_err("%s:%d: bad pgd " PTE_FMT ".\n", __FILE__, __LINE__, pgd_val(e))
-
 
 /* Commit new configuration to MMU hardware */
 static inline void update_mmu_cache_range(struct vm_fault *vmf,

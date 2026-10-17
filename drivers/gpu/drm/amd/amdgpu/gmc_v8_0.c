@@ -1051,6 +1051,7 @@ static int gmc_v8_0_sw_init(struct amdgpu_ip_block *ip_block)
 {
 	int r;
 	struct amdgpu_device *adev = ip_block->adev;
+	unsigned long vmid_mask;
 
 	set_bit(AMDGPU_GFXHUB(0), adev->vmhubs_mask);
 
@@ -1118,10 +1119,15 @@ static int gmc_v8_0_sw_init(struct amdgpu_ip_block *ip_block)
 	/*
 	 * number of VMs
 	 * VMID 0 is reserved for System
-	 * amdgpu graphics/compute will use VMIDs 1-7
-	 * amdkfd will use VMIDs 8-15
+	 * amdgpu graphics/compute kernel queues will use VMIDs 1-7
+	 * amdkfd/MES user queues will use VMIDs 8-15
 	 */
-	adev->vm_manager.first_kfd_vmid = 8;
+	vmid_mask = GENMASK(7, 1);
+
+	/* Reserve the last VMID for SPM */
+	adev->vm_manager.spm_vmid = AMDGPU_NUM_VMID - 1;
+
+	amdgpu_vmid_mgr_set_vmid_mask(adev, vmid_mask, vmid_mask);
 	amdgpu_vm_manager_init(adev);
 
 	/* base offset of vram pages */
@@ -1219,18 +1225,6 @@ static int gmc_v8_0_resume(struct amdgpu_ip_block *ip_block)
 	amdgpu_vmid_reset_all(ip_block->adev);
 
 	return 0;
-}
-
-static bool gmc_v8_0_is_idle(struct amdgpu_ip_block *ip_block)
-{
-	struct amdgpu_device *adev = ip_block->adev;
-	u32 tmp = RREG32(mmSRBM_STATUS);
-
-	if (tmp & (SRBM_STATUS__MCB_BUSY_MASK | SRBM_STATUS__MCB_NON_DISPLAY_BUSY_MASK |
-		   SRBM_STATUS__MCC_BUSY_MASK | SRBM_STATUS__MCD_BUSY_MASK | SRBM_STATUS__VMC_BUSY_MASK))
-		return false;
-
-	return true;
 }
 
 static int gmc_v8_0_wait_for_idle(struct amdgpu_ip_block *ip_block)
@@ -1592,7 +1586,6 @@ static const struct amd_ip_funcs gmc_v8_0_ip_funcs = {
 	.hw_fini = gmc_v8_0_hw_fini,
 	.suspend = gmc_v8_0_suspend,
 	.resume = gmc_v8_0_resume,
-	.is_idle = gmc_v8_0_is_idle,
 	.wait_for_idle = gmc_v8_0_wait_for_idle,
 	.set_clockgating_state = gmc_v8_0_set_clockgating_state,
 	.set_powergating_state = gmc_v8_0_set_powergating_state,

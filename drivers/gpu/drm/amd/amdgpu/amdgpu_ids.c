@@ -172,6 +172,68 @@ struct amdgpu_fpriv *amdgpu_pasid_get_fpriv_locked(u32 pasid)
 }
 
 /**
+ * amdgpu_pasid_drain_irq - wait for pending KFD interrupts of a PASID
+ * @adev: amdgpu device the drain fence is sent to
+ * @pasid: PASID whose interrupts should be drained
+ * @ih_fence: IH entry injected as the drain fence
+ * @timeout: maximum time to wait, in jiffies
+ *
+ * Injects @ih_fence behind the interrupts already queued for KFD and waits
+ * until amdgpu_pasid_drain_irq_done() is called for @pasid.
+ *
+ * The caller must hold a reference to the DRM file that owns @pasid, so
+ * that its amdgpu_fpriv stays valid after the PASID lock is dropped.
+ *
+ * Returns:
+ * 0 on success or when no fence could be sent, -ENOENT if @pasid has no
+ * owner, -ETIMEDOUT on timeout or -ERESTARTSYS if interrupted.
+ */
+int amdgpu_pasid_drain_irq(struct amdgpu_device *adev, u32 pasid,
+			   u32 *ih_fence, unsigned long timeout)
+{
+	struct amdgpu_fpriv *fpriv;
+	unsigned long flags;
+	long r;
+
+	amdgpu_pasid_lock(&flags);
+	fpriv = amdgpu_pasid_get_fpriv_locked(pasid);
+	if (fpriv)
+		reinit_completion(&fpriv->irq_drain_done);
+	amdgpu_pasid_unlock(flags);
+	if (!fpriv)
+		return -ENOENT;
+
+	if (amdgpu_amdkfd_send_close_event_drain_irq(adev, ih_fence))
+		return 0;
+
+	r = wait_for_completion_interruptible_timeout(&fpriv->irq_drain_done,
+						      timeout);
+	if (!r)
+		return -ETIMEDOUT;
+
+	return r < 0 ? r : 0;
+}
+
+/**
+ * amdgpu_pasid_drain_irq_done - signal that a KFD interrupt drain completed
+ * @pasid: PASID carried by the drain fence
+ *
+ * Called by KFD when it processes the drain fence injected by
+ * amdgpu_pasid_drain_irq().
+ */
+void amdgpu_pasid_drain_irq_done(u32 pasid)
+{
+	struct amdgpu_fpriv *fpriv;
+	unsigned long flags;
+
+	amdgpu_pasid_lock(&flags);
+	fpriv = amdgpu_pasid_get_fpriv_locked(pasid);
+	if (fpriv)
+		complete(&fpriv->irq_drain_done);
+	amdgpu_pasid_unlock(flags);
+}
+
+/**
  * amdgpu_pasid_free_delayed - free pasid when fences signal
  *
  * @resv: reservation object with the fences to wait for
@@ -228,12 +290,12 @@ fallback:
  */
 
 /**
- * amdgpu_vmid_had_gpu_reset - check if reset occured since last use
+ * amdgpu_vmid_had_gpu_reset - check if reset occurred since last use
  *
  * @adev: amdgpu_device pointer
  * @id: VMID structure
  *
- * Check if GPU reset occured since last use of the VMID.
+ * Check if GPU reset occurred since last use of the VMID.
  */
 bool amdgpu_vmid_had_gpu_reset(struct amdgpu_device *adev,
 			       struct amdgpu_vmid *id)
@@ -278,7 +340,7 @@ static int amdgpu_vmid_grab_idle(struct amdgpu_ring *ring,
 {
 	struct amdgpu_device *adev = ring->adev;
 	unsigned vmhub = ring->vm_hub;
-	struct amdgpu_vmid_mgr *id_mgr = &adev->vm_manager.id_mgr[vmhub];
+	struct amdgpu_kq_vmid_mgr *id_mgr = &adev->vm_manager.id_mgr[vmhub];
 
 	/* If anybody is waiting for a VMID let everybody wait for fairness */
 	if (!dma_fence_is_signaled(ring->vmid_wait)) {
@@ -372,7 +434,6 @@ static int amdgpu_vmid_grab_reserved(struct amdgpu_vm *vm,
 		return r;
 
 	job->vm_needs_flush = needs_flush;
-	job->spm_update_needed = true;
 	return 0;
 }
 
@@ -393,7 +454,7 @@ static int amdgpu_vmid_grab_used(struct amdgpu_vm *vm,
 {
 	struct amdgpu_device *adev = ring->adev;
 	unsigned vmhub = ring->vm_hub;
-	struct amdgpu_vmid_mgr *id_mgr = &adev->vm_manager.id_mgr[vmhub];
+	struct amdgpu_kq_vmid_mgr *id_mgr = &adev->vm_manager.id_mgr[vmhub];
 	uint64_t fence_context = adev->fence_context + ring->idx;
 	uint64_t updates = amdgpu_vm_tlb_seq(vm);
 	int r;
@@ -454,7 +515,7 @@ int amdgpu_vmid_grab(struct amdgpu_vm *vm, struct amdgpu_ring *ring,
 {
 	struct amdgpu_device *adev = ring->adev;
 	unsigned vmhub = ring->vm_hub;
-	struct amdgpu_vmid_mgr *id_mgr = &adev->vm_manager.id_mgr[vmhub];
+	struct amdgpu_kq_vmid_mgr *id_mgr = &adev->vm_manager.id_mgr[vmhub];
 	struct amdgpu_vmid *idle = NULL;
 	struct amdgpu_vmid *id = NULL;
 	int r = 0;
@@ -540,7 +601,7 @@ bool amdgpu_vmid_uses_reserved(struct amdgpu_vm *vm, unsigned int vmhub)
 int amdgpu_vmid_alloc_reserved(struct amdgpu_device *adev, struct amdgpu_vm *vm,
 			       unsigned vmhub)
 {
-	struct amdgpu_vmid_mgr *id_mgr = &adev->vm_manager.id_mgr[vmhub];
+	struct amdgpu_kq_vmid_mgr *id_mgr = &adev->vm_manager.id_mgr[vmhub];
 	struct amdgpu_vmid *id;
 	int r = 0;
 
@@ -551,9 +612,12 @@ int amdgpu_vmid_alloc_reserved(struct amdgpu_device *adev, struct amdgpu_vm *vm,
 		r = -ENOENT;
 		goto unlock;
 	}
-	/* Remove from normal round robin handling */
-	id = list_first_entry(&id_mgr->ids_lru, struct amdgpu_vmid, list);
-	list_del_init(&id->list);
+	if (!adev->vm_manager.spm_vmid) {
+		r = -ENOENT;
+		goto unlock;
+	}
+
+	id = &id_mgr->ids[adev->vm_manager.spm_vmid];
 	vm->reserved_vmid[vmhub] = id;
 	id_mgr->reserved_vmid = true;
 	mutex_unlock(&id_mgr->lock);
@@ -573,12 +637,10 @@ unlock:
 void amdgpu_vmid_free_reserved(struct amdgpu_device *adev, struct amdgpu_vm *vm,
 			       unsigned vmhub)
 {
-	struct amdgpu_vmid_mgr *id_mgr = &adev->vm_manager.id_mgr[vmhub];
+	struct amdgpu_kq_vmid_mgr *id_mgr = &adev->vm_manager.id_mgr[vmhub];
 
 	mutex_lock(&id_mgr->lock);
 	if (vm->reserved_vmid[vmhub]) {
-		list_add(&vm->reserved_vmid[vmhub]->list,
-			&id_mgr->ids_lru);
 		vm->reserved_vmid[vmhub] = NULL;
 		id_mgr->reserved_vmid = false;
 	}
@@ -597,7 +659,7 @@ void amdgpu_vmid_free_reserved(struct amdgpu_device *adev, struct amdgpu_vm *vm,
 void amdgpu_vmid_reset(struct amdgpu_device *adev, unsigned vmhub,
 		       unsigned vmid)
 {
-	struct amdgpu_vmid_mgr *id_mgr = &adev->vm_manager.id_mgr[vmhub];
+	struct amdgpu_kq_vmid_mgr *id_mgr = &adev->vm_manager.id_mgr[vmhub];
 	struct amdgpu_vmid *id = &id_mgr->ids[vmid];
 
 	mutex_lock(&id_mgr->lock);
@@ -623,11 +685,75 @@ void amdgpu_vmid_reset_all(struct amdgpu_device *adev)
 	unsigned i, j;
 
 	for (i = 0; i < AMDGPU_MAX_VMHUBS; ++i) {
-		struct amdgpu_vmid_mgr *id_mgr =
+		struct amdgpu_kq_vmid_mgr *id_mgr =
 			&adev->vm_manager.id_mgr[i];
-
-		for (j = 1; j < id_mgr->num_ids; ++j)
+		for_each_set_bit(j, id_mgr->vmid_mask, AMDGPU_NUM_VMID)
 			amdgpu_vmid_reset(adev, i, j);
+	}
+
+	/*
+	 * The SPM VMID is not part of the normal kernel pool, reset it
+	 * anyway in case it is used with kernel queues.
+	 */
+	if (adev->vm_manager.spm_vmid)
+		for (i = AMDGPU_GFXHUB_START; i < AMDGPU_MMHUB0_START; ++i)
+			amdgpu_vmid_reset(adev, i, adev->vm_manager.spm_vmid);
+}
+
+/**
+ * amdgpu_vmid_mgr_set_vmid_mask - set the kernel- and user-queue VMID
+ * pools for both hubs
+ *
+ * @adev: amdgpu device structure
+ * @vmid_kq_mask_gfxhub: kernel-queue VMID pool mask for GFXHUB
+ * @vmid_kq_mask_mmhub: kernel-queue VMID pool mask for MMHUB
+ *
+ * Sets both GFXHUB and MMHUB kernel-queue VMID pools
+ * via id_mgr[].ids_lru, and KFD/MES user-queue masks too.
+ */
+void amdgpu_vmid_mgr_set_vmid_mask(struct amdgpu_device *adev,
+				   unsigned long vmid_kq_mask_gfxhub,
+				   unsigned long vmid_kq_mask_mmhub)
+{
+	unsigned long uq_mask_gfxhub, uq_mask_mmhub;
+	unsigned int i;
+
+	BUILD_BUG_ON(AMDGPU_NUM_VMID > BITS_PER_LONG);
+
+	/*
+	 * Derive the uq masks from the kq masks as given, then carve each
+	 * hub's dedicated out-of-pool VMID out of both of that hub's pools.
+	 */
+	uq_mask_gfxhub = GENMASK(AMDGPU_NUM_VMID - 1, 1) & ~vmid_kq_mask_gfxhub;
+	uq_mask_mmhub = 0xFF00;
+
+	/*
+	 * SPM uses a dedicated vmid that is reserved from gfxhub.
+	 * Unmask the reserved vmids from both user and kernel queues
+	 */
+	if (adev->vm_manager.spm_vmid) {
+		vmid_kq_mask_gfxhub &= ~BIT(adev->vm_manager.spm_vmid);
+		uq_mask_gfxhub &= ~BIT(adev->vm_manager.spm_vmid);
+	}
+
+	/*
+	 * NPA uses a dedicated vmid that is reserved from mmhub.
+	 * Unmask the reserved VMIDs from both user and kernel queues
+	 */
+	if (adev->vm_manager.npa_vmid) {
+		vmid_kq_mask_mmhub &= ~BIT(adev->vm_manager.npa_vmid);
+		uq_mask_mmhub &= ~BIT(adev->vm_manager.npa_vmid);
+	}
+
+	adev->vm_manager.vmid_uq_mask_gfxhub = uq_mask_gfxhub;
+	adev->vm_manager.vmid_uq_mask_mmhub = uq_mask_mmhub;
+
+	for (i = 0; i < AMDGPU_MAX_VMHUBS; i++) {
+		bool is_mmhub = AMDGPU_IS_MMHUB0(i) || AMDGPU_IS_MMHUB1(i);
+
+		bitmap_copy(adev->vm_manager.id_mgr[i].vmid_mask,
+			    is_mmhub ? &vmid_kq_mask_mmhub : &vmid_kq_mask_gfxhub,
+			    AMDGPU_NUM_VMID);
 	}
 }
 
@@ -643,29 +769,29 @@ void amdgpu_vmid_mgr_init(struct amdgpu_device *adev)
 	unsigned i, j;
 
 	for (i = 0; i < AMDGPU_MAX_VMHUBS; ++i) {
-		struct amdgpu_vmid_mgr *id_mgr =
+		struct amdgpu_kq_vmid_mgr *id_mgr =
 			&adev->vm_manager.id_mgr[i];
 
 		mutex_init(&id_mgr->lock);
 		INIT_LIST_HEAD(&id_mgr->ids_lru);
 
-		/* for GC <10, SDMA uses MMHUB so use first_kfd_vmid for both GC and MM */
-		if (amdgpu_ip_version(adev, GC_HWIP, 0) < IP_VERSION(10, 0, 0))
-			/* manage only VMIDs not used by KFD */
-			id_mgr->num_ids = adev->vm_manager.first_kfd_vmid;
-		else if (AMDGPU_IS_MMHUB0(i) ||
-			 AMDGPU_IS_MMHUB1(i))
-			id_mgr->num_ids = 16;
-		else
-			/* manage only VMIDs not used by KFD */
-			id_mgr->num_ids = adev->vm_manager.first_kfd_vmid;
-
 		/* skip over VMID 0, since it is the system VM */
-		for (j = 1; j < id_mgr->num_ids; ++j) {
+		for_each_set_bit(j, id_mgr->vmid_mask, AMDGPU_NUM_VMID) {
 			amdgpu_vmid_reset(adev, i, j);
 			amdgpu_sync_create(&id_mgr->ids[j].active);
 			list_add_tail(&id_mgr->ids[j].list, &id_mgr->ids_lru);
 		}
+	}
+
+	/*
+	 * The SPM VMID is not part of the normal kernel pool, create its
+	 * sync anyway in case it is used with kernel queues.
+	 */
+	if (adev->vm_manager.spm_vmid) {
+		unsigned int spm_vmid = adev->vm_manager.spm_vmid;
+
+		for (i = AMDGPU_GFXHUB_START; i < AMDGPU_MMHUB0_START; ++i)
+			amdgpu_sync_create(&adev->vm_manager.id_mgr[i].ids[spm_vmid].active);
 	}
 }
 
@@ -681,10 +807,11 @@ void amdgpu_vmid_mgr_fini(struct amdgpu_device *adev)
 	unsigned i, j;
 
 	for (i = 0; i < AMDGPU_MAX_VMHUBS; ++i) {
-		struct amdgpu_vmid_mgr *id_mgr =
+		struct amdgpu_kq_vmid_mgr *id_mgr =
 			&adev->vm_manager.id_mgr[i];
 
 		mutex_destroy(&id_mgr->lock);
+
 		for (j = 0; j < AMDGPU_NUM_VMID; ++j) {
 			struct amdgpu_vmid *id = &id_mgr->ids[j];
 

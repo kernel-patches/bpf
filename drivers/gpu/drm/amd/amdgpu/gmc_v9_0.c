@@ -63,6 +63,7 @@
 
 #include "ivsrcid/vmc/irqsrcs_vmc_1_0.h"
 
+#include "amdgpu_ip.h"
 #include "amdgpu_ras.h"
 #include "amdgpu_xgmi.h"
 
@@ -1848,6 +1849,8 @@ static int gmc_v9_0_sw_init(struct amdgpu_ip_block *ip_block)
 	int r, vram_width = 0, vram_type = 0, vram_vendor = 0, dma_addr_bits;
 	struct amdgpu_device *adev = ip_block->adev;
 	unsigned long inst_mask = adev->aid_mask;
+	unsigned int last_kq_vmid;
+	unsigned long vmid_mask;
 
 	adev->gfxhub.funcs->init(adev);
 
@@ -2016,8 +2019,8 @@ static int gmc_v9_0_sw_init(struct amdgpu_ip_block *ip_block)
 	/*
 	 * number of VMs
 	 * VMID 0 is reserved for System
-	 * amdgpu graphics/compute will use VMIDs 1..n-1
-	 * amdkfd will use VMIDs n..15
+	 * amdgpu graphics/compute kernel queues will use VMIDs 1..n-1
+	 * amdkfd/MES user queues will use VMIDs n..15
 	 *
 	 * The first KFD VMID is 8 for GPUs with graphics, 3 for
 	 * compute-only GPUs. On compute-only GPUs that leaves 2 VMIDs
@@ -2029,15 +2032,21 @@ static int gmc_v9_0_sw_init(struct amdgpu_ip_block *ip_block)
 	    adev->jpeg.disable_kq &&
 	    adev->vcn.disable_kq &&
 	    adev->sdma.no_user_submission)
-		adev->vm_manager.first_kfd_vmid = 1;
+		last_kq_vmid = 0;
 	else
-		adev->vm_manager.first_kfd_vmid =
+		last_kq_vmid =
 			(amdgpu_ip_version(adev, GC_HWIP, 0) == IP_VERSION(9, 4, 1) ||
 			 amdgpu_ip_version(adev, GC_HWIP, 0) == IP_VERSION(9, 4, 2) ||
 			 amdgpu_is_multi_aid(adev)) ?
-			3 :
-			8;
+			2 :
+			7;
 
+	vmid_mask = GENMASK(last_kq_vmid, 1);
+
+	/* Reserve the last VMID for SPM */
+	adev->vm_manager.spm_vmid = AMDGPU_NUM_VMID - 1;
+
+	amdgpu_vmid_mgr_set_vmid_mask(adev, vmid_mask, vmid_mask);
 	amdgpu_vm_manager_init(adev);
 
 	gmc_v9_0_save_registers(adev);
@@ -2300,21 +2309,9 @@ static int gmc_v9_0_resume(struct amdgpu_ip_block *ip_block)
 	return 0;
 }
 
-static bool gmc_v9_0_is_idle(struct amdgpu_ip_block *ip_block)
-{
-	/* MC is always ready in GMC v9.*/
-	return true;
-}
-
 static int gmc_v9_0_wait_for_idle(struct amdgpu_ip_block *ip_block)
 {
 	/* There is no need to wait for MC idle in GMC v9.*/
-	return 0;
-}
-
-static int gmc_v9_0_soft_reset(struct amdgpu_ip_block *ip_block)
-{
-	/* XXX for emulation.*/
 	return 0;
 }
 
@@ -2355,9 +2352,7 @@ const struct amd_ip_funcs gmc_v9_0_ip_funcs = {
 	.hw_fini = gmc_v9_0_hw_fini,
 	.suspend = gmc_v9_0_suspend,
 	.resume = gmc_v9_0_resume,
-	.is_idle = gmc_v9_0_is_idle,
 	.wait_for_idle = gmc_v9_0_wait_for_idle,
-	.soft_reset = gmc_v9_0_soft_reset,
 	.set_clockgating_state = gmc_v9_0_set_clockgating_state,
 	.set_powergating_state = gmc_v9_0_set_powergating_state,
 	.get_clockgating_state = gmc_v9_0_get_clockgating_state,

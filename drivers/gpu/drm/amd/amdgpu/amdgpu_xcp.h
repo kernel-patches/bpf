@@ -100,6 +100,11 @@ struct amdgpu_xcp_ip {
 	bool valid;
 };
 
+struct amdgpu_xcp_ualink {
+	struct kobject kobj;
+	bool sysfs;
+};
+
 struct amdgpu_xcp {
 	struct amdgpu_xcp_ip ip[AMDGPU_XCP_MAX_BLOCKS];
 
@@ -115,6 +120,7 @@ struct amdgpu_xcp {
 	struct amdgpu_sched	gpu_sched[AMDGPU_HW_IP_NUM][AMDGPU_RING_PRIO_MAX];
 	struct amdgpu_xcp_mgr *xcp_mgr;
 	struct kobject kobj;
+	struct amdgpu_xcp_ualink ualink;
 	uint64_t unique_id;
 };
 
@@ -175,6 +181,7 @@ int amdgpu_xcp_get_inst_details(struct amdgpu_xcp *xcp,
 int amdgpu_xcp_dev_register(struct amdgpu_device *adev,
 				const struct pci_device_id *ent);
 void amdgpu_xcp_dev_unplug(struct amdgpu_device *adev);
+void amdgpu_xcp_dev_fini(struct amdgpu_device *adev);
 int amdgpu_xcp_open_device(struct amdgpu_device *adev,
 			   struct amdgpu_fpriv *fpriv,
 			   struct drm_file *file_priv);
@@ -191,6 +198,7 @@ int amdgpu_xcp_pre_partition_switch(struct amdgpu_xcp_mgr *xcp_mgr, u32 flags);
 int amdgpu_xcp_post_partition_switch(struct amdgpu_xcp_mgr *xcp_mgr, u32 flags);
 void amdgpu_xcp_sysfs_init(struct amdgpu_device *adev);
 void amdgpu_xcp_sysfs_fini(struct amdgpu_device *adev);
+bool amdgpu_xcp_is_primary(struct amdgpu_xcp *xcp);
 
 static inline int amdgpu_xcp_get_num_xcp(struct amdgpu_xcp_mgr *xcp_mgr)
 {

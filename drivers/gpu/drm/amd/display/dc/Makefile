@@ -22,7 +22,7 @@
 #
 # Makefile for Display Core (dc) component.
 
-DC_LIBS = basics bios dml clk_mgr dce gpio hwss irq link dsc resource optc dpp hubbub dccg hubp dio dwb hpo mmhubbub mpc opp pg
+DC_LIBS = basics bios dml clk_mgr dce gpio hwss irq link dsc resource optc dpp hubbub dccg hubp dio dwb hpo mmhubbub mpc opp pg rmcm
 
 ifdef CONFIG_DRM_AMD_DC_FP
 
@@ -37,6 +37,7 @@ DC_LIBS += dcn301
 DC_LIBS += dcn31
 DC_LIBS += dml
 DC_LIBS += dml2_0
+DC_LIBS += dml2_wrapper
 DC_LIBS += soc_and_ip_translator
 endif
 
@@ -63,21 +64,25 @@ include $(AMD_DC)
 
 FILES =
 FILES += dc_dmub_srv.o
-FILES += dc_edid_parser.o
 FILES += dc_fused_io.o
 FILES += dc_helper.o
+FILES += dc_memory_pool.o
 FILES += core/dc.o
+FILES += dc_api_dispatch/api_shim.o
 FILES += core/dc_debug.o
 FILES += core/dc_hw_sequencer.o
 FILES += core/dc_link_enc_cfg.o
 FILES += core/dc_link_exports.o
 FILES += core/dc_resource.o
+FILES += core/dc_resource_helper.o
 FILES += core/dc_sink.o
 FILES += core/dc_stat.o
 FILES += core/dc_state.o
 FILES += core/dc_stream.o
 FILES += core/dc_surface.o
 FILES += core/dc_vm_helper.o
+FILES += core2/dc_core2.o
+FILES += core2/dc_core2_init.o
 
 AMD_DISPLAY_FILES += $(addprefix $(AMDDALPATH)/dc/, $(FILES))
 

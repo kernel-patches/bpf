@@ -746,6 +746,7 @@ static int mlx5_fs_fte_get_hws_actions(struct mlx5_flow_root_namespace *ns,
 	struct mlx5_fs_hws_context *fs_ctx = &ns->fs_hws_context;
 	struct mlx5hws_action_dest_attr *dest_actions;
 	struct mlx5hws_context *ctx = fs_ctx->hws_ctx;
+	struct mlx5_fs_hws_rule_action *rule_actions;
 	struct mlx5_fs_hws_rule_action *fs_actions;
 	struct mlx5_core_dev *dev = ns->dev;
 	struct mlx5hws_action *dest_action;
@@ -928,6 +929,7 @@ static int mlx5_fs_fte_get_hws_actions(struct mlx5_flow_root_namespace *ns,
 			goto free_actions;
 		}
 		(*ractions)[num_actions].aso_meter.offset =
+			(fte_action->exe_aso.object_id - fte_action->exe_aso.base_id) * 2 +
 			fte_action->exe_aso.flow_meter.meter_idx;
 		(*ractions)[num_actions].aso_meter.init_color =
 			fte_action->exe_aso.flow_meter.init_color;
@@ -1041,13 +1043,20 @@ static int mlx5_fs_fte_get_hws_actions(struct mlx5_flow_root_namespace *ns,
 	fs_actions[num_fs_actions++].action = tmp_action;
 	(*ractions)[num_actions++].action = tmp_action;
 
+	rule_actions = kmemdup_array(fs_actions, num_fs_actions,
+				     sizeof(*fs_actions), GFP_KERNEL);
+	if (!rule_actions) {
+		err = -ENOMEM;
+		goto free_actions;
+	}
+	kfree(fs_actions);
 	kfree(dest_actions);
 
 	/* Actions created specifically for this rule will be destroyed
 	 * once rule is deleted.
 	 */
 	fte->fs_hws_rule.num_fs_actions = num_fs_actions;
-	fte->fs_hws_rule.hws_fs_actions = fs_actions;
+	fte->fs_hws_rule.hws_fs_actions = rule_actions;
 
 	return 0;
 
@@ -1398,8 +1407,8 @@ static void mlx5_cmd_hws_packet_reformat_dealloc(struct mlx5_flow_root_namespace
 						    pr_data->data_size);
 		break;
 	case MLX5_REFORMAT_TYPE_L2_TO_L3_TUNNEL:
-		pr_pool = mlx5_fs_get_pr_encap_pool(dev, &hws_pool->el2tol2tnl_pools,
-						    MLX5HWS_ACTION_TYP_REFORMAT_L2_TO_TNL_L2,
+		pr_pool = mlx5_fs_get_pr_encap_pool(dev, &hws_pool->el2tol3tnl_pools,
+						    MLX5HWS_ACTION_TYP_REFORMAT_L2_TO_TNL_L3,
 						    pr_data->data_size);
 		break;
 	case MLX5_REFORMAT_TYPE_L3_TUNNEL_TO_L2:

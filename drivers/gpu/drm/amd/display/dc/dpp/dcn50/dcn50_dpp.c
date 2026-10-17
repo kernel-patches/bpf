@@ -25,17 +25,27 @@
 void dpp50_set_pregam_state(
 	struct dpp *dpp_base,
 	enum dc_transfer_func_predefined tr,
-	enum dc_scaling_linearity scaling)
+	enum dc_scaling_linearity scaling,
+	bool source_is_linear)
 {
 	struct dcn50_dpp *dpp = TO_DCN50_DPP(dpp_base);
 	enum pregam_mode pre_degam_en = PREGAM_DEGAM;
 	enum degam_lut degamma_lut_selection = 0;
 
 	if (scaling == DC_SCALING_LINEARITY_SOURCE) {
-		//If scaling in non-linear, apply regamma
-		REG_SET_2(PRE_GAM, 0,
-			PRE_GAM_MODE, PREGAM_REGAM,
-			PRE_REGAM_SELECT, REGAM_20);
+		if (source_is_linear) {
+			//Linear source data (e.g. FP16) must be de-linearized
+			//(apply regamma) before scaling in source/non-linear space.
+			REG_SET_2(PRE_GAM, 0,
+				PRE_GAM_MODE, PREGAM_REGAM,
+				PRE_REGAM_SELECT, REGAM_20);
+		} else {
+			//Non-linear source data (e.g. YUV) is already in source
+			//space, so scale directly with no pregam conversion.
+			REG_SET_2(PRE_GAM, 0,
+				PRE_GAM_MODE, PREGAM_BYPASS,
+				PRE_DEGAM_SELECT, 0);
+		}
 	} else {
 		//If scaling in linear, apply degamma based on TF
 		switch (tr) {
@@ -80,8 +90,10 @@ void dpp50_dpp_setup(
 	enum expansion_mode mode,
 	struct dc_csc_transform input_csc_color_matrix,
 	enum dc_color_space input_color_space,
-	struct cnv_alpha_2bit_lut *alpha_2bit_lut)
+	struct cnv_alpha_2bit_lut *alpha_2bit_lut,
+	enum upsp_mode upsp_mode)
 {
+	(void)upsp_mode;
 	struct dcn50_dpp *dpp = TO_DCN50_DPP(dpp_base);
 	uint32_t pixel_format = 0;
 	uint32_t alpha_en = 1;

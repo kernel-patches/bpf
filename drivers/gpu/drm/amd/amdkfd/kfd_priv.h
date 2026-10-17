@@ -45,7 +45,6 @@
 #include <drm/drm_device.h>
 #include <drm/drm_ioctl.h>
 #include <kgd_kfd_interface.h>
-#include <linux/swap.h>
 
 #include "amd_shared.h"
 #include "amdgpu.h"
@@ -132,6 +131,13 @@
  * the OFFSET and SIZE set in registers like BIF_SDMA0_DOORBELL_RANGE.
  */
 #define KFD_QUEUE_DOORBELL_MIRROR_OFFSET 512
+
+/*
+ * On GC 9.4.3, 9.4.4 and 9.5.0, doorbell writes issued from shaders are
+ * routed to an SDMA engine at 32-byte granularity, i.e. 4 indices with the
+ * 8-byte SDMA doorbells used on SOC15.
+ */
+#define KFD_SDMA_SHADER_DOORBELL_GRANULARITY 4
 
 /**
  * enum kfd_ioctl_flags - KFD ioctl flags
@@ -429,8 +435,6 @@ enum kfd_unmap_queues_filter {
  * @KFD_QUEUE_TYPE_SDMA: SDMA user mode queue type.
  *
  * @KFD_QUEUE_TYPE_HIQ: HIQ queue type.
- *
- * @KFD_QUEUE_TYPE_DIQ: DIQ queue type.
  *
  * @KFD_QUEUE_TYPE_SDMA_XGMI: Special SDMA queue for XGMI interface.
  *
@@ -1032,10 +1036,6 @@ struct kfd_process {
 	uint64_t exception_enable_mask;
 	uint64_t exception_status;
 
-	/* Used to drain stale interrupts */
-	wait_queue_head_t wait_irq_drain;
-	bool irq_drain_is_open;
-
 	/* shared virtual memory registered by this process */
 	struct svm_range_list svms;
 
@@ -1247,9 +1247,7 @@ bool enqueue_ih_ring_entry(struct kfd_node *kfd, const void *ih_ring_entry);
 bool interrupt_is_wanted(struct kfd_node *dev,
 				const uint32_t *ih_ring_entry,
 				uint32_t *patched_ihre, bool *flag);
-int kfd_process_drain_interrupts(struct kfd_process_device *pdd);
-void kfd_process_close_interrupt_drain(unsigned int pasid);
-
+void kfd_process_drain_interrupts(struct kfd_process_device *pdd);
 /* amdkfd Apertures */
 int kfd_init_apertures(struct kfd_process *process);
 

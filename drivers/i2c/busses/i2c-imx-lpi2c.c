@@ -780,7 +780,7 @@ static void lpi2c_dma_unmap(struct lpi2c_imx_dma *dma)
 	struct dma_chan *chan = dma->dma_data_dir == DMA_FROM_DEVICE
 				? dma->chan_rx : dma->chan_tx;
 
-	dma_unmap_single(chan->device->dev, dma->dma_addr,
+	dma_unmap_single(dmaengine_get_dma_device(chan), dma->dma_addr,
 			 dma->dma_len, dma->dma_data_dir);
 
 	dma->dma_data_dir = DMA_NONE;
@@ -789,7 +789,7 @@ static void lpi2c_dma_unmap(struct lpi2c_imx_dma *dma)
 static void lpi2c_cleanup_rx_cmd_dma(struct lpi2c_imx_dma *dma)
 {
 	dmaengine_terminate_sync(dma->chan_tx);
-	dma_unmap_single(dma->chan_tx->device->dev, dma->dma_tx_addr,
+	dma_unmap_single(dmaengine_get_dma_device(dma->chan_tx), dma->dma_tx_addr,
 			 dma->rx_cmd_buf_len, DMA_TO_DEVICE);
 }
 
@@ -817,10 +817,10 @@ static int lpi2c_dma_rx_cmd_submit(struct lpi2c_imx_struct *lpi2c_imx)
 	struct dma_chan *txchan = dma->chan_tx;
 	dma_cookie_t cookie;
 
-	dma->dma_tx_addr = dma_map_single(txchan->device->dev,
+	dma->dma_tx_addr = dma_map_single(dmaengine_get_dma_device(txchan),
 					  dma->rx_cmd_buf, dma->rx_cmd_buf_len,
 					  DMA_TO_DEVICE);
-	if (dma_mapping_error(txchan->device->dev, dma->dma_tx_addr)) {
+	if (dma_mapping_error(dmaengine_get_dma_device(txchan), dma->dma_tx_addr)) {
 		dev_err(&lpi2c_imx->adapter.dev, "DMA map failed, use pio\n");
 		return -EINVAL;
 	}
@@ -844,14 +844,13 @@ static int lpi2c_dma_rx_cmd_submit(struct lpi2c_imx_struct *lpi2c_imx)
 	return 0;
 
 desc_prepare_err_exit:
-	dma_unmap_single(txchan->device->dev, dma->dma_tx_addr,
+	dma_unmap_single(dmaengine_get_dma_device(txchan), dma->dma_tx_addr,
 			 dma->rx_cmd_buf_len, DMA_TO_DEVICE);
 	return -EINVAL;
 
 submit_err_exit:
-	dma_unmap_single(txchan->device->dev, dma->dma_tx_addr,
+	dma_unmap_single(dmaengine_get_dma_device(txchan), dma->dma_tx_addr,
 			 dma->rx_cmd_buf_len, DMA_TO_DEVICE);
-	dmaengine_desc_free(rx_cmd_desc);
 	return -EINVAL;
 }
 
@@ -872,9 +871,9 @@ static int lpi2c_dma_submit(struct lpi2c_imx_struct *lpi2c_imx)
 		dma->dma_transfer_dir = DMA_MEM_TO_DEV;
 	}
 
-	dma->dma_addr = dma_map_single(chan->device->dev,
+	dma->dma_addr = dma_map_single(dmaengine_get_dma_device(chan),
 				       dma->dma_buf, dma->dma_len, dma->dma_data_dir);
-	if (dma_mapping_error(chan->device->dev, dma->dma_addr)) {
+	if (dma_mapping_error(dmaengine_get_dma_device(chan), dma->dma_addr)) {
 		dev_err(&lpi2c_imx->adapter.dev, "DMA map failed, use pio\n");
 		return -EINVAL;
 	}
@@ -910,7 +909,6 @@ desc_prepare_err_exit:
 
 submit_err_exit:
 	lpi2c_dma_unmap(dma);
-	dmaengine_desc_free(desc);
 	return -EINVAL;
 }
 
@@ -1085,7 +1083,7 @@ static int lpi2c_imx_dma_xfer(struct lpi2c_imx_struct *lpi2c_imx,
 	}
 
 	if (dma->dma_msg_flag & I2C_M_RD)
-		dma_unmap_single(dma->chan_tx->device->dev, dma->dma_tx_addr,
+		dma_unmap_single(dmaengine_get_dma_device(dma->chan_tx), dma->dma_tx_addr,
 				 dma->rx_cmd_buf_len, DMA_TO_DEVICE);
 	lpi2c_dma_unmap(dma);
 
@@ -1555,23 +1553,13 @@ static int lpi2c_imx_probe(struct platform_device *pdev)
 	pm_runtime_enable(&pdev->dev);
 
 	/*
-	 * Reset all internal controller registers to avoid effects of any
-	 * state left over from a previous stage (e.g. the bootloader).
-	 *
-	 * The Master block (MCR) is present on every controller, so reset it
-	 * unconditionally. VERID shows whether the target feature is supported.
-	 * Do not touch the Target block (SCR) on a master-only controller to
-	 * avoid an asynchronous SError.
+	 * Reset all internal controller registers of both Master and Target
+	 * to avoid effects of previous status.
 	 */
 	writel(MCR_RST, lpi2c_imx->base + LPI2C_MCR);
+	writel(SCR_RST, lpi2c_imx->base + LPI2C_SCR);
 	writel(0, lpi2c_imx->base + LPI2C_MCR);
-
-	lpi2c_imx->target_supported = !!(readl(lpi2c_imx->base + LPI2C_VERID) &
-					 VERID_FEATURE_TARGET_PRESENT);
-	if (lpi2c_imx->target_supported) {
-		writel(SCR_RST, lpi2c_imx->base + LPI2C_SCR);
-		writel(0, lpi2c_imx->base + LPI2C_SCR);
-	}
+	writel(0, lpi2c_imx->base + LPI2C_SCR);
 
 	ret = devm_request_irq(&pdev->dev, lpi2c_imx->irq, lpi2c_imx_isr, IRQF_NO_SUSPEND,
 			       pdev->name, lpi2c_imx);

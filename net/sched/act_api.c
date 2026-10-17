@@ -307,13 +307,11 @@ int tcf_action_update_hw_stats(struct tc_action *action)
 
 	err = tcf_action_offload_cmd(&fl_act, NULL, NULL, NULL);
 	if (!err) {
-		preempt_disable();
 		tcf_action_stats_update(action, fl_act.stats.bytes,
 					fl_act.stats.pkts,
 					fl_act.stats.drops,
 					fl_act.stats.lastused,
 					true);
-		preempt_enable();
 		action->used_hw_stats = fl_act.stats.used_hw_stats;
 		action->used_hw_stats_valid = true;
 	} else {
@@ -372,9 +370,10 @@ static int __tcf_action_put(struct tc_action *p, bool bind)
 {
 	struct tcf_idrinfo *idrinfo = p->idrinfo;
 
-	if (refcount_dec_and_mutex_lock(&p->tcfa_refcnt, &idrinfo->lock)) {
-		if (bind)
-			atomic_dec(&p->tcfa_bindcnt);
+	mutex_lock(&idrinfo->lock);
+	if (bind)
+		atomic_dec(&p->tcfa_bindcnt);
+	if (refcount_dec_and_test(&p->tcfa_refcnt)) {
 		idr_remove(&idrinfo->action_idr, p->tcfa_index);
 		mutex_unlock(&idrinfo->lock);
 
@@ -382,9 +381,7 @@ static int __tcf_action_put(struct tc_action *p, bool bind)
 		return 1;
 	}
 
-	if (bind)
-		atomic_dec(&p->tcfa_bindcnt);
-
+	mutex_unlock(&idrinfo->lock);
 	return 0;
 }
 
@@ -473,6 +470,15 @@ static size_t tcf_action_full_attrs_size(size_t sz)
 		+ sizeof(struct tcamsg)
 		+ nla_total_size(0)             /* TCA_ACT_TAB nested */
 		+ sz;
+}
+
+/* tca_get_fill() may append TCA_ROOT_EXT_WARN_MSG from extack->_msg */
+static size_t tcf_action_warn_attr_size(const struct netlink_ext_ack *extack)
+{
+	if (unlikely(extack && extack->_msg))
+		return nla_total_size(strlen(extack->_msg) + 1);
+
+	return 0;
 }
 
 static size_t tcf_action_fill_size(const struct tc_action *act)
@@ -1588,6 +1594,7 @@ void tcf_action_update_stats(struct tc_action *a, u64 bytes, u64 packets,
 			     u64 drops, bool hw)
 {
 	if (a->cpu_bstats) {
+		local_bh_disable();
 		_bstats_update(this_cpu_ptr(a->cpu_bstats), bytes, packets);
 
 		this_cpu_add(a->cpu_qstats->drops, drops);
@@ -1595,13 +1602,16 @@ void tcf_action_update_stats(struct tc_action *a, u64 bytes, u64 packets,
 		if (hw)
 			_bstats_update(this_cpu_ptr(a->cpu_bstats_hw),
 				       bytes, packets);
+		local_bh_enable();
 		return;
 	}
 
+	spin_lock_bh(&a->tcfa_lock);
 	_bstats_update(&a->tcfa_bstats, bytes, packets);
 	atomic_add(drops, &a->tcfa_drops);
 	if (hw)
 		_bstats_update(&a->tcfa_bstats_hw, bytes, packets);
+	spin_unlock_bh(&a->tcfa_lock);
 }
 EXPORT_SYMBOL(tcf_action_update_stats);
 
@@ -1980,7 +1990,8 @@ static struct sk_buff *tcf_del_notify_msg(struct net *net, struct nlmsghdr *n,
 {
 	struct sk_buff *skb;
 
-	skb = alloc_skb(max(attr_size, NLMSG_GOODSIZE), GFP_KERNEL);
+	skb = alloc_skb(max(attr_size + tcf_action_warn_attr_size(extack),
+			    NLMSG_GOODSIZE), GFP_KERNEL);
 	if (!skb)
 		return ERR_PTR(-ENOBUFS);
 
@@ -2078,7 +2089,8 @@ static struct sk_buff *tcf_add_notify_msg(struct net *net, struct nlmsghdr *n,
 {
 	struct sk_buff *skb;
 
-	skb = alloc_skb(max(attr_size, NLMSG_GOODSIZE), GFP_KERNEL);
+	skb = alloc_skb(max(attr_size + tcf_action_warn_attr_size(extack),
+			    NLMSG_GOODSIZE), GFP_KERNEL);
 	if (!skb)
 		return ERR_PTR(-ENOBUFS);
 

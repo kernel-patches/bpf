@@ -67,6 +67,7 @@ TEST_PROGS := \
 	nat6to4.sh \
 	ndisc_unsolicited_na_test.sh \
 	netdev-l2addr.sh \
+	netdev_lock.py \
 	netdevice.sh \
 	netns-name.sh \
 	netns-sysctl.sh \
@@ -104,7 +105,6 @@ TEST_PROGS := \
 	stress_reuseport_listen.sh \
 	tcp_ecmp_failover.sh \
 	tcp_fastopen_backup_key.sh \
-	test_bpf.sh \
 	test_bridge_backup_port.sh \
 	test_bridge_neigh_suppress.sh \
 	test_ingress_egress_chaining.sh \
@@ -196,6 +196,7 @@ TEST_GEN_PROGS := \
 	sk_connect_zero_addr \
 	sk_so_peek_off \
 	so_incoming_cpu \
+	so_reserve_mem \
 	tap \
 	tcp_port_share \
 	tls \

@@ -359,6 +359,24 @@ static bool event_interrupt_isr_v9(struct kfd_node *dev,
 		!amdgpu_no_queue_eviction_on_vm_fault);
 }
 
+static void gfx_9_clean_fault(uint16_t pasid)
+{
+	struct kfd_process *p;
+	struct kfd_process_device *pdd = NULL;
+	struct device_queue_manager *dqm;
+
+	p = kfd_lookup_process_by_pasid(pasid, &pdd);
+
+	if (!pdd)
+		return;
+
+	/* To Clean the GFX on the faulting device	 */
+	dqm = pdd->dev->dqm;
+	dqm->ops.clean_process_queues_cpsch(dqm, &pdd->qpd);
+
+	kfd_unref_process(p);
+}
+
 static void event_interrupt_wq_v9(struct kfd_node *dev,
 					const uint32_t *ih_ring_entry)
 {
@@ -547,6 +565,13 @@ static void event_interrupt_wq_v9(struct kfd_node *dev,
 			return;
 		}
 
+		/* GPR cleaner for GFX9 MI-series GPUs */
+		if (KFD_GC_VERSION(dev) == IP_VERSION(9, 4, 2) ||
+		    KFD_GC_VERSION(dev) == IP_VERSION(9, 4, 3) ||
+		    KFD_GC_VERSION(dev) == IP_VERSION(9, 4, 4) ||
+		    KFD_GC_VERSION(dev) == IP_VERSION(9, 5, 0))
+			gfx_9_clean_fault(pasid);
+
 		info.vmid = vmid;
 		info.mc_id = client_id;
 		info.page_addr = ih_ring_entry[4] |
@@ -571,7 +596,7 @@ static void event_interrupt_wq_v9(struct kfd_node *dev,
 						sizeof(exception_data));
 		kfd_smi_event_update_vmfault(dev, pasid);
 	} else if (KFD_IRQ_IS_FENCE(client_id, source_id)) {
-		kfd_process_close_interrupt_drain(pasid);
+		amdgpu_pasid_drain_irq_done(pasid);
 	}
 }
 

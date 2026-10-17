@@ -352,10 +352,12 @@ static void dccg314_set_valid_pixel_rate(
 static void dccg314_dpp_root_clock_control(
 		struct dccg *dccg,
 		unsigned int dpp_inst,
-		bool clock_on)
+		bool clock_on,
+		bool root_clock_optimization_dpp)
 {
 	struct dcn_dccg *dccg_dcn = TO_DCN_DCCG(dccg);
 
+	(void)root_clock_optimization_dpp;
 	if (dccg->dpp_clock_gated[dpp_inst] != clock_on)
 		return;
 
@@ -429,6 +431,7 @@ struct dccg *dccg314_create(
 	base->ctx = ctx;
 	base->funcs = &dccg314_funcs;
 
+	base->inst = 0;
 	dccg_dcn->regs = regs;
 	dccg_dcn->dccg_shift = dccg_shift;
 	dccg_dcn->dccg_mask = dccg_mask;
