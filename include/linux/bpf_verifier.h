@@ -429,6 +429,8 @@ enum {
 	INSN_F_SRC_REG_STACK = BIT(2), /* src_reg is PTR_TO_STACK */
 
 	INSN_F_STACK_ARG_ACCESS = BIT(3),
+
+	INSN_F_UNWIND = BIT(4),
 };
 
 /* Registers linked to one jump condition that a history entry can record */
@@ -437,10 +439,10 @@ enum {
 struct bpf_jmp_history_entry {
 	/* insn idx can't be bigger than 1 million */
 	u32 idx : 20;
-	u32 frame : 4;	/* stack access frame number */
+	u32 frame : 4;	/* stack access frame number, or the frame an unwind ran in */
 	/* special INSN_F_xxx flags */
-	u32 flags : 4;
-	u32 : 4;
+	u32 flags : 5;
+	u32 : 3;
 	u32 prev_idx : 20;
 	u32 spi : 12;	/* stack slot index */
 	/*
@@ -527,6 +529,8 @@ struct bpf_verifier_state {
 
 	bool speculative;
 	bool in_sleepable;
+	/* the path ends with an unwind returning from frame 0 */
+	bool unwind_exit;
 
 	/*
 	 * First and last insn idx of this verifier state.
@@ -949,6 +953,7 @@ struct bpf_subprog_info {
 	s16 fastcall_stack_off;
 	bool has_tail_call: 1;
 	bool might_throw: 1;
+	bool might_unwind: 1;
 	bool tail_call_reachable: 1;
 	bool has_ld_abs: 1;
 	bool is_cb: 1;
