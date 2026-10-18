@@ -15,6 +15,7 @@
 #include <linux/memory.h>
 #include <linux/sort.h>
 #include <linux/execmem.h>
+#include <linux/extable.h>
 #include <asm/extable.h>
 #include <asm/ftrace.h>
 #include <asm/set_memory.h>
@@ -2511,6 +2512,71 @@ static void adjust_cmp_imm(u32 *op, s32 *imm)
 	}
 }
 
+/* See bpf_jit_unwind_site() */
+static bool unwind_site(struct bpf_verifier_env *env, struct bpf_prog *prog, int i)
+{
+	/* 'pop r9' after the call has to run on the way to the pad too */
+	return !prog->aux->priv_stack_ptr && bpf_jit_unwind_site(env, prog, i);
+}
+
+/* The branch after the call is not emitted. Remember where it goes. */
+static int add_unwind_exentry(struct bpf_prog *prog, u8 *image, u8 *rw_image, int *excnt,
+			      int ret_addr, int pad)
+{
+	struct exception_table_entry *ex;
+	s64 delta;
+
+	if (!prog->aux->extable)
+		return 0;
+	if (*excnt >= prog->aux->num_exentries) {
+		pr_err("unwind extable bug\n");
+		return -EFAULT;
+	}
+	ex = &prog->aux->extable[(*excnt)++];
+	delta = image + ret_addr - 1 - (u8 *)&ex->insn;
+	if (!is_simm32(delta)) {
+		pr_err("extable->insn doesn't fit into 32-bit\n");
+		return -EFAULT;
+	}
+	/* switch ex to rw buffer for writes */
+	ex = (void *)rw_image + ((void *)ex - (void *)image);
+	ex->insn = delta;
+	ex->fixup = pad - ret_addr;
+	ex->data = EX_TYPE_BPF;
+	return 0;
+}
+
+static u64 bpf_unwind_target(u64 ret_addr)
+{
+	const struct exception_table_entry *e = search_bpf_extables(ret_addr - 1);
+
+	return e ? ret_addr + e->fixup : ret_addr;
+}
+
+/* r0, r2 and r3 are what the caller may look at */
+static int emit_unwind_ret_addr(u8 **pprog, u8 *ip, bool look_at_r3)
+{
+	u8 *prog = *pprog, *start = prog, *jmp = NULL;
+
+	if (look_at_r3) {
+		EMIT3(0x48, 0x85, 0xD2);	/* test rdx, rdx */
+		EMIT2(X86_JE, 0);
+		jmp = prog;
+	}
+	EMIT3(0x50, 0x56, 0x52);		/* push rax; push rsi; push rdx */
+	EMIT4(0x48, 0x8B, 0x7D, 0x08);		/* mov rdi, [rbp + 8] */
+	ip += prog - start;
+	ip += x86_call_depth_emit_accounting(&prog, bpf_unwind_target, ip);
+	if (emit_call(&prog, bpf_unwind_target, ip))
+		return -EINVAL;
+	EMIT4(0x48, 0x89, 0x45, 0x08);		/* mov [rbp + 8], rax */
+	EMIT3(0x5A, 0x5E, 0x58);		/* pop rdx; pop rsi; pop rax */
+	if (jmp)
+		jmp[-1] = prog - jmp;
+	*pprog = prog;
+	return 0;
+}
+
 static int do_jit(struct bpf_verifier_env *env, struct bpf_prog *bpf_prog, int *addrs, u8 *image,
 		  u8 *rw_image, int oldproglen, struct jit_context *ctx, bool jmp_padding)
 {
@@ -2518,7 +2584,7 @@ static int do_jit(struct bpf_verifier_env *env, struct bpf_prog *bpf_prog, int *
 	struct bpf_insn *insn = bpf_prog->insnsi;
 	bool callee_regs_used[4] = {};
 	int insn_cnt = bpf_prog->len;
-	bool seen_exit = false;
+	bool seen_exit = false, skip_branch = false;
 	u8 temp[BPF_MAX_INSN_SIZE + BPF_INSN_SAFETY];
 	void __percpu *priv_frame_ptr = NULL;
 	u16 out_stack_arg_cnt, outgoing_rsp;
@@ -2655,6 +2721,12 @@ static int do_jit(struct bpf_verifier_env *env, struct bpf_prog *bpf_prog, int *
 		int nops;
 		u32 jmp_op = BPF_OP(insn->code);
 		s32 cmp_imm;
+		enum bpf_unwind_exit unw;
+
+		if (skip_branch) {
+			skip_branch = false;
+			goto insn_done;
+		}
 
 		if (priv_frame_ptr) {
 			if (src_reg == BPF_REG_FP)
@@ -3460,6 +3532,15 @@ populate_extable:
 			ip += x86_call_depth_emit_accounting(&prog, func, ip);
 			if (emit_call(&prog, func, ip))
 				return -EINVAL;
+			if (unwind_site(env, bpf_prog, i - 1)) {
+				skip_branch = true;
+				err = add_unwind_exentry(bpf_prog, image, rw_image, &excnt,
+							 proglen + (prog - temp),
+							 addrs[i + 1 + insn[1].off]);
+				if (err)
+					return err;
+				break;
+			}
 			if (priv_frame_ptr)
 				pop_r9(&prog);
 			/*
@@ -3487,6 +3568,15 @@ populate_extable:
 			}
 			if (emit_indirect_call(&prog, insn->dst_reg, ip))
 				return -EINVAL;
+			if (unwind_site(env, bpf_prog, i - 1)) {
+				skip_branch = true;
+				err = add_unwind_exentry(bpf_prog, image, rw_image, &excnt,
+							 proglen + (prog - temp),
+							 addrs[i + 1 + insn[1].off]);
+				if (err)
+					return err;
+				break;
+			}
 			if (priv_frame_ptr)
 				pop_r9(&prog);
 			break;
@@ -3772,13 +3862,17 @@ emit_jmp:
 			break;
 
 		case BPF_JMP | BPF_EXIT:
+			unw = bpf_jit_unwind_exit(env, bpf_prog, i - 1);
+			if (unw != BPF_EXIT_RETURNS &&
+			    emit_unwind_ret_addr(&prog, ip, unw == BPF_EXIT_LOOK_AT_R3))
+				return -EINVAL;
 			if (seen_exit) {
 				jmp_offset = ctx->cleanup_addr - addrs[i];
 				goto emit_jmp;
 			}
 			seen_exit = true;
 			/* Update cleanup_addr */
-			ctx->cleanup_addr = proglen;
+			ctx->cleanup_addr = proglen + (prog - temp);
 			if (bpf_prog_was_classic(bpf_prog) &&
 			    !ns_capable_noaudit(&init_user_ns, CAP_SYS_ADMIN)) {
 				if (emit_spectre_bhb_barrier(&prog, ip, bpf_prog))
@@ -3811,6 +3905,7 @@ emit_jmp:
 			return -EINVAL;
 		}
 
+insn_done:
 		ilen = prog - temp;
 		if (ilen > BPF_MAX_INSN_SIZE) {
 			pr_err("bpf_jit: fatal insn size error\n");
@@ -4864,6 +4959,9 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_pr
 		    is_atomic_fetch_op(insn))
 			prog->aux->num_exentries++;
 	}
+	for (i = 0; i < prog->len; i++)
+		if (unwind_site(env, prog, i))
+			prog->aux->num_exentries++;
 
 	addrs = kvmalloc_objs(*addrs, prog->len + 1);
 	if (!addrs)

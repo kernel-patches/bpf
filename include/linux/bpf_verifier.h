@@ -1326,7 +1326,7 @@ static inline void mark_jump_target(struct bpf_verifier_env *env, int idx)
 	env->insn_aux_data[idx].jump_target = true;
 }
 
-static inline bool bpf_is_jump_target(struct bpf_verifier_env *env, int insn_idx)
+static inline bool bpf_is_jump_target(const struct bpf_verifier_env *env, int insn_idx)
 {
 	return env->insn_aux_data[insn_idx].jump_target;
 }

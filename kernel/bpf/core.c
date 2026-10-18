@@ -3352,6 +3352,50 @@ bool __weak bpf_jit_supports_unwind(void)
 }
 
 /*
+ * A subprog that can unwind says so in r3 and its caller does
+ * 'if r3 != 0 goto pad' after the call. A JIT can keep that off the normal path.
+ * It doesn't emit the branch and adds an extable entry instead:
+ *   insn  = return address of the call - 1
+ *   fixup = pad - return address of the call
+ * - 1, because what follows the call can have an entry of its own.
+ * An exit with r3 != 0 looks its own return address up and returns to the pad.
+ * When there is no entry it returns as usual and the branch is there.
+ *
+ * Is insn i of the prog such a call?
+ */
+bool bpf_jit_unwind_site(const struct bpf_verifier_env *env, const struct bpf_prog *prog, int i)
+{
+	const struct bpf_insn *insn = &prog->insnsi[i];
+
+	if (!env || i + 1 >= prog->len)
+		return false;
+	if (!bpf_pseudo_call(insn) && !bpf_is_callx(insn))
+		return false;
+	/*
+	 * No need to know the callee: the verifier lets r3 be read after
+	 * a call only when every callee seen there says something in it.
+	 */
+	return insn[1].code == (BPF_JMP | BPF_JNE | BPF_K) && !insn[1].imm &&
+	       insn[1].dst_reg == BPF_REG_UNWIND &&
+	       !bpf_is_jump_target(env, prog->aux->subprog_start + i + 1);
+}
+
+/* What does 'exit' at insn i of the prog do? */
+enum bpf_unwind_exit bpf_jit_unwind_exit(const struct bpf_verifier_env *env,
+					 const struct bpf_prog *prog, int i)
+{
+	const struct bpf_insn *insn = &prog->insnsi[i];
+
+	if (!env || !prog->aux->ret_unwind)
+		return BPF_EXIT_RETURNS;
+	if (!i || bpf_is_jump_target(env, prog->aux->subprog_start + i) ||
+	    insn[-1].code != (BPF_ALU64 | BPF_MOV | BPF_K) ||
+	    insn[-1].dst_reg != BPF_REG_UNWIND)
+		return BPF_EXIT_LOOK_AT_R3;
+	return insn[-1].imm ? BPF_EXIT_UNWINDS : BPF_EXIT_RETURNS;
+}
+
+/*
  * How this arch places a by-value kfunc argument, or NULL for one that has
  * not opted in and so only takes an argument of a single eightbyte, which
  * every convention places in slot order.

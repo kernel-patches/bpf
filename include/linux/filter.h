@@ -1245,6 +1245,16 @@ bool bpf_jit_supports_kfunc_call(void);
 bool bpf_jit_supports_callx(void);
 bool bpf_jit_supports_kfunc_ret_reg_pair(void);
 bool bpf_jit_supports_unwind(void);
+
+enum bpf_unwind_exit {
+	BPF_EXIT_RETURNS,
+	BPF_EXIT_UNWINDS,
+	BPF_EXIT_LOOK_AT_R3,
+};
+
+bool bpf_jit_unwind_site(const struct bpf_verifier_env *env, const struct bpf_prog *prog, int i);
+enum bpf_unwind_exit bpf_jit_unwind_exit(const struct bpf_verifier_env *env,
+					 const struct bpf_prog *prog, int i);
 bool bpf_jit_supports_stack_args(void);
 bool bpf_jit_supports_arena_args(void);
 bool bpf_jit_supports_far_kfunc_call(void);
