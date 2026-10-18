@@ -11,6 +11,7 @@
 #include <linux/bitfield.h>
 #include <linux/bpf.h>
 #include <linux/cfi.h>
+#include <linux/extable.h>
 #include <linux/filter.h>
 #include <linux/memory.h>
 #include <linux/printk.h>
@@ -1221,6 +1222,86 @@ static int add_exception_handler(const struct bpf_insn *insn,
 	return 0;
 }
 
+/*
+ * See bpf_jit_unwind_site(). The branch after the call that was just emitted is
+ * not emitted. Remember where it goes. The pad is an index into ctx->offset.
+ */
+static int add_unwind_exentry(struct jit_ctx *ctx, int pad)
+{
+	struct exception_table_entry *ex;
+	off_t ins_offset;
+
+	if (!ctx->image)
+		/* First pass */
+		return 0;
+
+	if (!ctx->prog->aux->extable ||
+	    WARN_ON_ONCE(ctx->exentry_idx >= ctx->prog->aux->num_exentries))
+		return -EINVAL;
+
+	ex = &ctx->prog->aux->extable[ctx->exentry_idx];
+	ins_offset = (long)&ctx->ro_image[ctx->idx] - 1 - (long)&ex->insn;
+	if (WARN_ON_ONCE(ins_offset >= 0 || ins_offset < INT_MIN))
+		return -ERANGE;
+
+	/* switch ex to rw buffer for writing */
+	ex = (void *)ctx->image + ((void *)ex - (void *)ctx->ro_image);
+	ex->insn = ins_offset;
+	ex->fixup = (ctx->offset[pad] - ctx->idx) * AARCH64_INSN_SIZE;
+	ex->type = EX_TYPE_BPF;
+
+	ctx->exentry_idx++;
+	return 0;
+}
+
+static u64 bpf_unwind_target(u64 ret_addr)
+{
+	const struct exception_table_entry *e = search_bpf_extables(ret_addr - 1);
+
+	return e ? ret_addr + e->fixup : ret_addr;
+}
+
+/*
+ * Make an exit with r3 != 0 return to the pad.
+ * LR in the frame record is signed with SP at the entry of the prog, which is
+ * FP + 16. The x16/x17 forms are hints like PACIASP: nops without pointer auth.
+ * r0, r2 and r3 are what the caller may look at.
+ */
+static void emit_unwind_ret_addr(struct jit_ctx *ctx, bool look_at_r3)
+{
+	const bool ptr_auth = IS_ENABLED(CONFIG_ARM64_PTR_AUTH_KERNEL);
+	const u8 r0 = bpf2a64[BPF_REG_0];
+	const u8 r2 = bpf2a64[BPF_REG_2];
+	const u8 r3 = bpf2a64[BPF_REG_3];
+	__le32 *branch = ctx->image + ctx->idx;
+
+	if (look_at_r3)
+		emit(A64_NOP, ctx);
+
+	emit(A64_PUSH(r0, r2, A64_SP), ctx);
+	emit(A64_PUSH(r3, A64_ZR, A64_SP), ctx);
+
+	emit(A64_LDR64I(A64_R(17), A64_FP, 8), ctx);
+	if (ptr_auth) {
+		emit(A64_ADD_I(1, A64_R(16), A64_FP, 16), ctx);
+		emit(A64_AUTIA1716, ctx);
+	}
+	emit(A64_MOV(1, A64_R(0), A64_R(17)), ctx);
+	emit_call((u64)bpf_unwind_target, ctx);
+	emit(A64_MOV(1, A64_R(17), A64_R(0)), ctx);
+	if (ptr_auth) {
+		emit(A64_ADD_I(1, A64_R(16), A64_FP, 16), ctx);
+		emit(A64_PACIA1716, ctx);
+	}
+	emit(A64_STR64I(A64_R(17), A64_FP, 8), ctx);
+
+	emit(A64_POP(r3, A64_ZR, A64_SP), ctx);
+	emit(A64_POP(r0, r2, A64_SP), ctx);
+
+	if (look_at_r3 && ctx->image)
+		*branch = cpu_to_le32(A64_CBZ(1, r3, &ctx->image[ctx->idx] - branch));
+}
+
 static const struct bpf_jit_arg_abi arm64_arg_abi = {
 	.nr_arg_regs		= 8,
 	.even_reg_align		= true,
@@ -1378,6 +1459,7 @@ static int build_insn(const struct bpf_verifier_env *env, const struct bpf_insn 
 	int off_adj;
 	int ret;
 	bool sign_extend;
+	enum bpf_unwind_exit unw;
 
 	if (bpf_insn_is_indirect_target(env, ctx->prog, i))
 		emit_bti(A64_BTI_J, ctx);
@@ -1781,6 +1863,13 @@ emit_cond_jmp:
 			emit_kfunc_arg_moves(ctx, fm);
 		}
 		emit_call(func_addr, ctx);
+		if (bpf_jit_unwind_site(env, ctx->prog, i)) {
+			ret = add_unwind_exentry(ctx, i + 2 + insn[1].off);
+			if (ret)
+				return ret;
+			emit(A64_MOV(1, r0, A64_R(0)), ctx);
+			return 1;
+		}
 		/*
 		 * Call to arch_bpf_timed_may_goto() is emitted by the
 		 * verifier and called with custom calling convention with
@@ -1799,6 +1888,13 @@ emit_cond_jmp:
 		 * counter and the private stack are callee saved.
 		 */
 		emit(A64_BLR(dst), ctx);
+		if (bpf_jit_unwind_site(env, ctx->prog, i)) {
+			ret = add_unwind_exentry(ctx, i + 2 + insn[1].off);
+			if (ret)
+				return ret;
+			emit(A64_MOV(1, bpf2a64[BPF_REG_0], A64_R(0)), ctx);
+			return 1;
+		}
 		emit(A64_MOV(1, bpf2a64[BPF_REG_0], A64_R(0)), ctx);
 		break;
 	/* tail call */
@@ -1808,6 +1904,9 @@ emit_cond_jmp:
 		break;
 	/* function return */
 	case BPF_JMP | BPF_EXIT:
+		unw = bpf_jit_unwind_exit(env, ctx->prog, i);
+		if (unw != BPF_EXIT_RETURNS)
+			emit_unwind_ret_addr(ctx, unw == BPF_EXIT_LOOK_AT_R3);
 		/* Optimization: when last instruction is EXIT,
 		   simply fallthrough to epilogue. */
 		if (i == ctx->prog->len - 1)
@@ -2240,6 +2339,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_pr
 	int body_idx;
 	int exentry_idx;
 	int out_cnt;
+	int i;
 
 	if (!prog->jit_requested)
 		return prog;
@@ -2312,6 +2412,11 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_pr
 	ctx.epilogue_offset = ctx.idx;
 	build_epilogue(&ctx, was_classic);
 	build_plt(&ctx);
+
+	/* The extra pass doesn't get here, so the count is adjusted once. */
+	for (i = 0; i < prog->len; i++)
+		if (bpf_jit_unwind_site(env, prog, i))
+			prog->aux->num_exentries++;
 
 	extable_align = __alignof__(struct exception_table_entry);
 	extable_size = prog->aux->num_exentries *
@@ -2460,6 +2565,11 @@ bool bpf_jit_supports_kfunc_call(void)
 }
 
 bool bpf_jit_supports_kfunc_ret_reg_pair(void)
+{
+	return true;
+}
+
+bool bpf_jit_supports_unwind(void)
 {
 	return true;
 }
