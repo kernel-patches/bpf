@@ -4842,6 +4842,24 @@ static int __pyrf_session_tool__stat_round(const struct perf_tool *tool,
  */
 static struct pyrf_session *pyrf_session__active;
 
+/*
+ * In pipe mode attrs are only known once processed, so set up callchains again,
+ * as perf script does.
+ */
+static int pyrf_session__process_attr(const struct perf_tool *tool,
+				      union perf_event *event,
+				      struct evlist **pevlist)
+{
+	int err = perf_event__process_attr(tool, event, pevlist);
+
+	if (err)
+		return err;
+	callchain_param_setup(evlist__combined_sample_type(*pevlist),
+			      perf_session__e_machine(evsel__session(evlist__last(*pevlist)),
+						      /*e_flags=*/NULL));
+	return 0;
+}
+
 static bool pyrf_session__check_not_busy(struct pyrf_session *psession)
 {
 	if (pyrf_session__active == psession &&
@@ -5061,7 +5079,7 @@ static PyObject *pyrf_session__new(PyTypeObject *type, PyObject *args, PyObject 
 	psession->tool.ksymbol          = perf_event__process_ksymbol;
 	psession->tool.text_poke        = perf_event__process_text_poke;
 	psession->tool.build_id         = perf_event__process_build_id;
-	psession->tool.attr		= perf_event__process_attr;
+	psession->tool.attr		= pyrf_session__process_attr;
 	psession->tool.event_update	= perf_event__process_event_update;
 	psession->tool.feature		= perf_event__process_feature;
 #ifdef HAVE_LIBTRACEEVENT
@@ -5139,6 +5157,8 @@ static PyObject *pyrf_session__new(PyTypeObject *type, PyObject *args, PyObject 
 		PyErr_SetString(PyExc_OSError, "perf: symbol__init failed");
 		goto err_out;
 	}
+	callchain_param_setup(evlist__combined_sample_type(session->evlist),
+			      perf_session__e_machine(session, /*e_flags=*/NULL));
 	if (psession->symfs && !symbol_conf.symfs[0])
 		zfree(&psession->symfs);
 
