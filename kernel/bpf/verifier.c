@@ -440,7 +440,7 @@ static const int ret_regs[] = { BPF_REG_0, BPF_REG_2 };
 static int bpf_compute_subprog_ret_regs(struct bpf_verifier_env *env)
 {
 	const struct btf *btf = env->prog->aux->btf;
-	const struct btf_type *type;
+	const struct btf_type *type, *func;
 	int subprog;
 	u32 size;
 
@@ -454,8 +454,26 @@ static int bpf_compute_subprog_ret_regs(struct bpf_verifier_env *env)
 	 * refuses to replace a function returning more than 8 bytes.
 	 */
 	for (subprog = 1; subprog < env->subprog_cnt; subprog++) {
+		struct bpf_subprog_info *sub = subprog_info(env, subprog);
+
 		type = subprog_ret_type(env, subprog);
-		if (!type || btf_type_is_void(type))
+		if (!type)
+			continue;
+		func = btf_type_by_id(btf, env->prog->aux->func_info[subprog].type_id);
+		if (btf_find_next_decl_tag(btf, func, -1, "unwind", 0) > 0) {
+			if (!bpf_jit_supports_unwind()) {
+				verbose(env, "JIT does not support unwinding\n");
+				return -ENOTSUPP;
+			}
+			/* They return to the caller with whatever is in r3. */
+			if (sub->has_tail_call || sub->has_ld_abs) {
+				verbose(env, "tail call or ld_abs in a subprog that can unwind\n");
+				return -EINVAL;
+			}
+			sub->ret_unwind = true;
+			env->prog->jit_required = 1;
+		}
+		if (btf_type_is_void(type))
 			continue;
 		if (verifier_bug_if(IS_ERR(btf_resolve_size(btf, type, &size)), env,
 				    "cannot size return type of subprog %d", subprog))
@@ -11500,6 +11518,9 @@ static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			}
 		}
 
+		if (env->subprog_info[subprog].ret_unwind)
+			mark_reg_unknown(env, caller->regs, BPF_REG_UNWIND);
+
 		if (env->subprog_info[subprog].might_throw) {
 			struct bpf_verifier_state *branch;
 
@@ -11952,13 +11973,14 @@ static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 	struct bpf_verifier_state *state = env->cur_state, *prev_st;
 	struct bpf_func_state *caller, *callee;
 	struct bpf_reg_state *r0;
-	bool in_callback_fn;
+	bool in_callback_fn, ret_unwind;
 	u32 i, nregs;
 	int err;
 
 	callee = state->frame[state->curframe];
 	r0 = &callee->regs[BPF_REG_0];
 	nregs = bpf_ret_reg_pair(env, callee->subprogno) ? 2 : 1;
+	ret_unwind = subprog_info(env, callee->subprogno)->ret_unwind;
 	for (i = 0; i < nregs; i++) {
 		if (callee->regs[ret_regs[i]].type != PTR_TO_STACK)
 			continue;
@@ -11990,6 +12012,16 @@ static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 					       "At callback return", "R0");
 			return -EINVAL;
 		}
+		/* the helper that called it does not look at r3 */
+		if (ret_unwind) {
+			if (!bpf_register_is_null(&callee->regs[BPF_REG_UNWIND])) {
+				verbose(env, "callback cannot unwind\n");
+				return -EINVAL;
+			}
+			err = mark_chain_precision(env, BPF_REG_UNWIND);
+			if (err)
+				return err;
+		}
 		if (!bpf_calls_callback(env, callee->callsite)) {
 			verifier_bug(env, "in callback at %d, callsite %d !calls_callback",
 				     *insn_idx, callee->callsite);
@@ -12006,6 +12038,22 @@ static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 			bpf_diag_mod_begin(env, &caller->regs[regno], &callee->regs[regno],
 					   BPF_DIAG_MOD_WRITE);
 			caller->regs[regno] = callee->regs[regno];
+			bpf_diag_mod_end(env);
+		}
+		if (ret_unwind) {
+			struct bpf_reg_state *r3 = &callee->regs[BPF_REG_UNWIND];
+
+			err = check_reg_arg(env, BPF_REG_UNWIND, SRC_OP);
+			if (err)
+				return err;
+			if (r3->type != SCALAR_VALUE) {
+				verbose(env, "At subprogram exit the register R%d is not a scalar value (%s)\n",
+					BPF_REG_UNWIND, reg_type_str(env, r3->type));
+				return -EINVAL;
+			}
+			bpf_diag_mod_begin(env, &caller->regs[BPF_REG_UNWIND], r3,
+					   BPF_DIAG_MOD_WRITE);
+			caller->regs[BPF_REG_UNWIND] = *r3;
 			bpf_diag_mod_end(env);
 		}
 	}
@@ -19402,6 +19450,12 @@ static int check_global_subprog_return_code(struct bpf_verifier_env *env)
 	u32 i, nregs;
 	int err;
 
+	if (subprog_info(env, subprog)->ret_unwind) {
+		err = check_global_ret_scalar_reg(env, BPF_REG_UNWIND);
+		if (err)
+			return err;
+	}
+
 	if (subprog_returns_void(env, subprog))
 		return 0;
 
@@ -22310,6 +22364,12 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 			bpf_log(log,
 				"%s programs cannot attach to exception callback\n",
 				prog_extension ? "Extension" : "Tracing");
+			return -EINVAL;
+		}
+		/* Neither a trampoline that calls the subprog nor an extension keeps r3. */
+		if (aux->func && subprog && aux->func[subprog]->aux->ret_unwind &&
+		    prog->expected_attach_type != BPF_TRACE_FENTRY) {
+			bpf_log(log, "Only fentry can attach to %s, which can unwind\n", tname);
 			return -EINVAL;
 		}
 		conservative = aux->func_info_aux[subprog].unreliable;

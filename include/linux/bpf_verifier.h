@@ -949,6 +949,7 @@ struct bpf_subprog_info {
 	s16 fastcall_stack_off;
 	bool has_tail_call: 1;
 	bool might_throw: 1;
+	bool ret_unwind: 1; /* says in r3 whether it returns or unwinds */
 	bool tail_call_reachable: 1;
 	bool has_ld_abs: 1;
 	bool is_cb: 1;
@@ -1218,6 +1219,8 @@ static inline struct bpf_subprog_info *subprog_info(struct bpf_verifier_env *env
 {
 	return &env->subprog_info[subprog];
 }
+
+#define BPF_REG_UNWIND BPF_REG_3
 
 static inline bool bpf_ret_reg_pair(struct bpf_verifier_env *env, int subprog)
 {

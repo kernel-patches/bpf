@@ -1895,6 +1895,7 @@ struct bpf_prog_aux {
 	bool priv_stack_requested;
 	bool changes_pkt_data;
 	bool might_sleep;
+	bool ret_unwind;
 	bool kprobe_write_ctx;
 	struct {
 		s32 keyring_serial;

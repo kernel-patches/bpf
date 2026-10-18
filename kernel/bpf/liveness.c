@@ -2482,7 +2482,7 @@ static int callee_subprog(struct bpf_verifier_env *env, const struct bpf_insn *i
 static void compute_insn_live_regs(struct bpf_verifier_env *env,
 				   struct bpf_insn *insn,
 				   struct insn_live_regs *info,
-				   bool ret_reg_pair)
+				   bool ret_reg_pair, bool ret_unwind)
 {
 	struct bpf_call_summary cs;
 	const u8 class = BPF_CLASS(insn->code);
@@ -2616,6 +2616,8 @@ static void compute_insn_live_regs(struct bpf_verifier_env *env,
 		case BPF_EXIT:
 			def = 0;
 			use = ret_reg_pair ? (r0 | r2) : r0;
+			if (ret_unwind)
+				use |= reg64_mask(BPF_REG_UNWIND);
 			break;
 		case BPF_CALL:
 			def = ALL_CALLER_SAVED_REGS;
@@ -2698,7 +2700,8 @@ int bpf_compute_live_registers(struct bpf_verifier_env *env)
 		ret_reg_pair = bpf_ret_reg_pair(env, subprog);
 
 		for (i = start; i < end; ++i)
-			compute_insn_live_regs(env, &insns[i], &state[i], ret_reg_pair);
+			compute_insn_live_regs(env, &insns[i], &state[i], ret_reg_pair,
+					       subprog && env->subprog_info[subprog].ret_unwind);
 	}
 
 	/* Forward pass: resolve stack access through FP-derived pointers */
