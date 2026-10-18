@@ -17,6 +17,14 @@ config SND_MESON_AIU
 	  Select Y or M to add support for the Audio output subsystem found
 	  in the Amlogic Meson8, Meson8b and GX SoC families
 
+config SND_MESON_AUDIN
+	tristate "Amlogic AUDIN"
+	select REGMAP_MMIO
+	select SND_MESON_GX_FORMATTER
+	help
+	  Select Y or M to add support for the audio input subsystem found
+	  in the Amlogic GX SoC family. Currently only I2S input is supported.
+
 config SND_MESON_AXG_FIFO
 	tristate
 	select REGMAP_MMIO
@@ -113,6 +121,7 @@ config SND_MESON_GX_SOUND_CARD
 	tristate "Amlogic GX Sound Card Support"
 	select SND_MESON_CARD_UTILS
 	imply SND_MESON_AIU
+	imply SND_MESON_AUDIN
 	help
 	  Select Y or M to add support for the GXBB/GXL SoC sound card
 
