@@ -1,0 +1,160 @@
+From 5f79aa3b7458fcbc6d62eb270b5e10842e5891f7 Mon Sep 17 00:00:00 2001
+From: Ihor Solodrai <ihor.solodrai@linux.dev>
+Date: Fri, 25 Sep 2026 14:03:47 -0700
+Subject: [PATCH] bpf: Allow bpf_d_path() from filp_close_sync()
+
+The d_path selftest closes its descriptors with close_range() so that
+its fentry program on filp_close() runs. The vfs commit
+c1ed65ea167b ("fs: make close_range() synchronous") switched
+close_range() to filp_close_sync(), so the program still attaches but
+is never called:
+
+  test_d_path_basic:FAIL:close trampoline for filp_close was not called
+
+With that series, close(), close_range() and the closes on exec and
+exit all go through filp_close_sync(). Few paths still reach
+filp_close(), dup2() being one of them, so a program on filp_close()
+no longer sees most file closes.
+
+Allow bpf_d_path() from filp_close_sync(), but only from fentry.
+filp_close_sync() drops the last file reference inline, so by the time
+an fexit program runs, file->f_path may already be freed, with no RCU
+delay for NORCU dentries such as pipes and sockets.
+
+Attach the selftest program to filp_close_sync() and keep triggering
+it with close_range().
+
+Add a test rejecting bpf_d_path() from fexit/filp_close_sync.
+
+Assisted-by: LLM
+Signed-off-by: Ihor Solodrai <ihor.solodrai@linux.dev>
+---
+BPF CI note: the fs/open.c hunk is not part of the upstream patch. It
+only exists so that this diff applies on trees that have
+filp_close_sync() (linux-next) and is skipped on bpf and bpf-next,
+where attaching to fentry/filp_close_sync would fail.
+
+ fs/open.c                                     |  1 +
+ kernel/trace/bpf_trace.c                      | 16 ++++++++++++--
+ .../testing/selftests/bpf/prog_tests/d_path.c |  7 ++++---
+ .../testing/selftests/bpf/progs/test_d_path.c |  2 +-
+ .../selftests/bpf/progs/verifier_d_path.c     | 21 +++++++++++++++++++
+ 5 files changed, 41 insertions(+), 6 deletions(-)
+
+diff --git a/fs/open.c b/fs/open.c
+index e43f02ff64ac..435e684aafd0 100644
+--- a/fs/open.c
++++ b/fs/open.c
+@@ -1563,6 +1563,7 @@ int filp_close(struct file *filp, fl_owner_t id)
+ EXPORT_SYMBOL(filp_close);
+ 
+ /* Like filp_close() but the last reference is put right here. */
++/* BPF CI: guard hunk so this diff applies only where filp_close_sync() exists. */
+ int filp_close_sync(struct file *filp, fl_owner_t id)
+ {
+ 	int retval;
+diff --git a/kernel/trace/bpf_trace.c b/kernel/trace/bpf_trace.c
+index 195f78db9bda..42dc01756f8a 100644
+--- a/kernel/trace/bpf_trace.c
++++ b/kernel/trace/bpf_trace.c
+@@ -974,6 +974,10 @@ BTF_ID(func, vfs_getattr)
+ BTF_ID(func, filp_close)
+ BTF_SET_END(btf_allowlist_d_path)
+ 
++BTF_SET_START(btf_allowlist_d_path_fentry)
++BTF_ID(func, filp_close_sync)
++BTF_SET_END(btf_allowlist_d_path_fentry)
++
+ static bool bpf_d_path_allowed(const struct bpf_prog *prog)
+ {
+ 	if (prog->type == BPF_PROG_TYPE_TRACING &&
+@@ -983,8 +987,16 @@ static bool bpf_d_path_allowed(const struct bpf_prog *prog)
+ 	if (prog->type == BPF_PROG_TYPE_LSM)
+ 		return bpf_lsm_is_sleepable_hook(prog->aux->attach_btf_id);
+ 
+-	return btf_id_set_contains(&btf_allowlist_d_path,
+-				   prog->aux->attach_btf_id);
++	if (btf_id_set_contains(&btf_allowlist_d_path,
++				prog->aux->attach_btf_id))
++		return true;
++
++	if (btf_id_set_contains(&btf_allowlist_d_path_fentry,
++				prog->aux->attach_btf_id))
++		return prog->expected_attach_type == BPF_TRACE_FENTRY ||
++		       prog->expected_attach_type == BPF_TRACE_FENTRY_MULTI;
++
++	return false;
+ }
+ 
+ BTF_ID_LIST_SINGLE(bpf_d_path_btf_ids, struct, path)
+diff --git a/tools/testing/selftests/bpf/prog_tests/d_path.c b/tools/testing/selftests/bpf/prog_tests/d_path.c
+index 1a2a2f1abf03..7665e1d28a64 100644
+--- a/tools/testing/selftests/bpf/prog_tests/d_path.c
++++ b/tools/testing/selftests/bpf/prog_tests/d_path.c
+@@ -109,8 +109,9 @@ static int trigger_fstat_events(pid_t pid)
+ 	fstat(indicatorfd, &fileStat);
+ 
+ out_close:
+-	/* sys_close no longer triggers filp_close, but we can
+-	 * call sys_close_range instead which still does
++	/*
++	 * filp_close_sync() may be inlined into close(2), so use
++	 * close_range(2), which calls it directly.
+ 	 */
+ 	syscall_close(pipefd[0]);
+ 	syscall_close(pipefd[1]);
+@@ -165,7 +166,7 @@ static void test_d_path_basic(void)
+ 
+ 	if (CHECK(!bss->called_close,
+ 		  "close",
+-		  "trampoline for filp_close was not called\n"))
++		  "trampoline for filp_close_sync was not called\n"))
+ 		goto cleanup;
+ 
+ 	for (int i = 0; i < MAX_FILES; i++) {
+diff --git a/tools/testing/selftests/bpf/progs/test_d_path.c b/tools/testing/selftests/bpf/progs/test_d_path.c
+index 561b2f861808..edb5494a47f7 100644
+--- a/tools/testing/selftests/bpf/progs/test_d_path.c
++++ b/tools/testing/selftests/bpf/progs/test_d_path.c
+@@ -41,7 +41,7 @@ int BPF_PROG(prog_stat, struct path *path, struct kstat *stat,
+ 	return 0;
+ }
+ 
+-SEC("fentry/filp_close")
++SEC("fentry/filp_close_sync")
+ int BPF_PROG(prog_close, struct file *file, void *id)
+ {
+ 	pid_t pid = bpf_get_current_pid_tgid() >> 32;
+diff --git a/tools/testing/selftests/bpf/progs/verifier_d_path.c b/tools/testing/selftests/bpf/progs/verifier_d_path.c
+index 87e51a215558..7ab9b6b1d589 100644
+--- a/tools/testing/selftests/bpf/progs/verifier_d_path.c
++++ b/tools/testing/selftests/bpf/progs/verifier_d_path.c
+@@ -45,4 +45,25 @@ __naked void d_path_reject(void)
+ 	: __clobber_all);
+ }
+ 
++SEC("fexit/filp_close_sync")
++__description("d_path fexit reject")
++__failure __msg("helper call is not allowed in probe")
++__naked void d_path_fexit_reject(void)
++{
++	asm volatile ("					\
++	r1 = *(u64 *)(r1 + 0);				\
++	r2 = r10;					\
++	r2 += -8;					\
++	r6 = 0;						\
++	*(u64*)(r2 + 0) = r6;				\
++	r3 = 8 ll;					\
++	call %[bpf_d_path];				\
++	r0 = 0;						\
++	exit;						\
++	"
++	:
++	: __imm(bpf_d_path)
++	: __clobber_all);
++}
++
+ char _license[] SEC("license") = "GPL";
+-- 
+2.56.0
+
