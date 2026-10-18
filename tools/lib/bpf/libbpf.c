@@ -59,6 +59,10 @@
 #define BPF_FS_MAGIC		0xcafe4a11
 #endif
 
+#ifndef TRACEFS_MAGIC
+#define TRACEFS_MAGIC		0x74726163
+#endif
+
 #define MAX_EVENT_NAME_LEN	64
 
 #define BPF_FS_DEFAULT_PATH "/sys/fs/bpf"
@@ -12780,12 +12784,17 @@ static int append_to_file(const char *file, const char *fmt, ...)
 
 static bool use_debugfs(void)
 {
-	static int has_debugfs = -1;
+	static int needs_debugfs = -1;
+	struct statfs st_fs;
 
-	if (has_debugfs < 0)
-		has_debugfs = faccessat(AT_FDCWD, DEBUGFS, F_OK, AT_EACCESS) == 0;
+	if (needs_debugfs < 0) {
+		if (statfs(TRACEFS, &st_fs) == 0 && st_fs.f_type == TRACEFS_MAGIC)
+			needs_debugfs = 0;
+		else
+			needs_debugfs = faccessat(AT_FDCWD, DEBUGFS, F_OK, AT_EACCESS) == 0;
+	}
 
-	return has_debugfs == 1;
+	return needs_debugfs == 1;
 }
 
 static const char *tracefs_path(void)
