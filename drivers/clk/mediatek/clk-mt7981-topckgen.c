@@ -173,7 +173,7 @@ static const char * const emmc_400m_parents[] __initconst = {
 	"cb_cksq_40m",
 	"cb_net2_d2",
 	"cb_mm_d2",
-	"cb_net2_d2"
+	"cb_net2_d4"
 };
 
 static const char * const csw_f26m_parents[] __initconst = {
