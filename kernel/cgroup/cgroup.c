@@ -39,6 +39,7 @@
 #include <linux/proc_fs.h>
 #include <linux/rcupdate.h>
 #include <linux/sched.h>
+#include <linux/sched/numa_balancing.h>
 #include <linux/sched/task.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
@@ -2121,6 +2122,9 @@ static void init_cgroup_housekeeping(struct cgroup *cgrp)
 #ifdef CONFIG_CGROUP_BPF
 	for (int i = 0; i < ARRAY_SIZE(cgrp->bpf.revisions); i++)
 		cgrp->bpf.revisions[i] = 1;
+#endif
+#ifdef CONFIG_BPF_NUMAB
+	cgrp->numab_mode = NUMAB_FOLLOW_SYSTEM;
 #endif
 
 	init_waitqueue_head(&cgrp->offline_waitq);
@@ -5719,6 +5723,16 @@ static void css_free_rwork_fn(struct work_struct *work)
 			cgroup1_pidlist_destroy_all(cgrp);
 		cancel_work_sync(&cgrp->release_agent_work);
 		bpf_cgrp_storage_free(cgrp);
+#ifdef CONFIG_BPF_NUMAB
+		/*
+		 * Drop the static key count of a request the caller never
+		 * cleared. No setter can race: this path runs only after
+		 * the last css ref is gone, and the kfunc pins the cgroup
+		 * while it runs.
+		 */
+		if (cgrp->numab_mode != NUMAB_FOLLOW_SYSTEM)
+			static_branch_dec(&numab_cgroup_mode_set);
+#endif
 
 		if (cgroup_parent(cgrp)) {
 			/*

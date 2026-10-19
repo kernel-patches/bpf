@@ -639,6 +639,16 @@ struct cgroup {
 #ifdef CONFIG_EXT_SUB_SCHED
 	struct scx_sched __rcu *scx_sched;
 #endif
+#ifdef CONFIG_BPF_NUMAB
+	/*
+	 * The NUMA balancing mode requested for this cgroup:
+	 * NUMAB_FOLLOW_SYSTEM (-1) defers to the global sysctl state,
+	 * anything else is a NUMA_BALANCING_* bitmask. Written by
+	 * bpf_numab_set_mode() under numab_mode_mutex, read locklessly
+	 * under RCU.
+	 */
+	int numab_mode;
+#endif
 
 	/* All ancestors including self */
 	union {

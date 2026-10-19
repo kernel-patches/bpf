@@ -75,4 +75,8 @@
 # include "ext/sub.c"
 #endif
 
+#ifdef CONFIG_BPF_NUMAB
+#include "bpf_numab.c"
+#endif
+
 #include "syscalls.c"

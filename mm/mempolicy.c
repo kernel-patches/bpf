@@ -871,7 +871,7 @@ bool folio_can_map_prot_numa(struct folio *folio, struct vm_area_struct *vma,
 	 * Skip scanning top tier node if normal numa
 	 * balancing is disabled
 	 */
-	if (!numab_in_normal_mode() && node_is_toptier(nid))
+	if (!folio_numab_in_normal_mode(folio) && node_is_toptier(nid))
 		return false;
 
 	if (folio_use_access_time(folio))

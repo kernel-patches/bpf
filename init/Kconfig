@@ -1036,6 +1036,26 @@ config NUMA_BALANCING
 
 	  This system will be inactive on UMA systems.
 
+config BPF_NUMAB
+	bool "Per-cgroup NUMA balancing mode selection"
+	default y
+	depends on NUMA_BALANCING && MEMCG && BPF_SYSCALL
+	help
+	  Allow BPF programs to select the NUMA balancing mode (disabled,
+	  normal, memory tiering, or both) on a per-cgroup basis, overriding the
+	  global NUMA balancing sysctl. A latency-sensitive service can
+	  opt its tasks out of balancing, or a batch service can have its
+	  PMEM-resident memory promoted when hot, without changing the
+	  mode for the rest of the system.
+
+	  The request is written and read back through the
+	  bpf_numab_set_mode() and bpf_numab_get_mode() kfuncs, callable
+	  from BPF_PROG_TYPE_SYSCALL programs. While no cgroup makes a
+	  request, the NUMA balancing hot paths pay a single patched-out
+	  branch and nothing else.
+
+	  If unsure, say Y.
+
 config SCHED_CACHE
 	bool "Cache aware load balance"
 	default y
