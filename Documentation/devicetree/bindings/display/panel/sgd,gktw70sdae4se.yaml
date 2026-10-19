@@ -38,9 +38,6 @@ properties:
   height-mm:
     const: 86
 
-  panel-timing: true
-  port: true
-
 required:
   - compatible
   - port
@@ -49,7 +46,7 @@ required:
   - height-mm
   - panel-timing
 
-additionalProperties: false
+unevaluatedProperties: false
 
 examples:
   - |+
