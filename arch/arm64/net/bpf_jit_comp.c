@@ -1221,6 +1221,70 @@ static int add_exception_handler(const struct bpf_insn *insn,
 	return 0;
 }
 
+/*
+ * unwind_goto: an entry for bpf_unwind_target(). 'bl foo; mov x8, x0' is in front
+ * of it. The pad doesn't miss the mov: r0 is x8 and the epilogue of the callee
+ * copies it to x0 and leaves x8 as it is.
+ */
+static int add_unwind_exentry(struct jit_ctx *ctx, int pad)
+{
+	int ret_addr = ctx->idx - 1;
+	struct exception_table_entry *ex;
+	off_t ins_offset;
+
+	if (!ctx->image)
+		/* First pass */
+		return 0;
+
+	if (!ctx->prog->aux->extable ||
+	    WARN_ON_ONCE(ctx->exentry_idx >= ctx->prog->aux->num_exentries))
+		return -EINVAL;
+
+	ex = &ctx->prog->aux->extable[ctx->exentry_idx];
+	ins_offset = (long)&ctx->ro_image[ret_addr] - 1 - (long)&ex->insn;
+	if (WARN_ON_ONCE(ins_offset >= 0 || ins_offset < INT_MIN))
+		return -ERANGE;
+
+	/* switch ex to rw buffer for writing */
+	ex = (void *)ctx->image + ((void *)ex - (void *)ctx->ro_image);
+	ex->insn = ins_offset;
+	ex->fixup = (ctx->offset[pad] - ret_addr) * AARCH64_INSN_SIZE;
+	ex->type = EX_TYPE_BPF;
+
+	ctx->exentry_idx++;
+	return 0;
+}
+
+/*
+ * unwind_exit: fix LR in the frame record. It's signed with SP at the entry of
+ * the prog, which is FP + 16. The x16/x17 forms are hints like PACIASP: nops
+ * without pointer auth. r0 and r2 are returned.
+ */
+static void emit_unwind_ret_addr(struct jit_ctx *ctx)
+{
+	const bool ptr_auth = IS_ENABLED(CONFIG_ARM64_PTR_AUTH_KERNEL);
+	const u8 r0 = bpf2a64[BPF_REG_0];
+	const u8 r2 = bpf2a64[BPF_REG_2];
+
+	emit(A64_PUSH(r0, r2, A64_SP), ctx);
+
+	emit(A64_LDR64I(A64_R(17), A64_FP, 8), ctx);
+	if (ptr_auth) {
+		emit(A64_ADD_I(1, A64_R(16), A64_FP, 16), ctx);
+		emit(A64_AUTIA1716, ctx);
+	}
+	emit(A64_MOV(1, A64_R(0), A64_R(17)), ctx);
+	emit_call((u64)bpf_unwind_target, ctx);
+	emit(A64_MOV(1, A64_R(17), A64_R(0)), ctx);
+	if (ptr_auth) {
+		emit(A64_ADD_I(1, A64_R(16), A64_FP, 16), ctx);
+		emit(A64_PACIA1716, ctx);
+	}
+	emit(A64_STR64I(A64_R(17), A64_FP, 8), ctx);
+
+	emit(A64_POP(r0, r2, A64_SP), ctx);
+}
+
 static const struct bpf_jit_arg_abi arm64_arg_abi = {
 	.nr_arg_regs		= 8,
 	.even_reg_align		= true,
@@ -1806,8 +1870,17 @@ emit_cond_jmp:
 		if (emit_bpf_tail_call(ctx))
 			return -EFAULT;
 		break;
+	/* unwind_goto. The verifier expanded may_goto. */
+	case BPF_JMP | BPF_JCOND:
+		ret = add_unwind_exentry(ctx, i + 1 + off);
+		if (ret)
+			return ret;
+		break;
 	/* function return */
 	case BPF_JMP | BPF_EXIT:
+		/* The caller of the main prog doesn't tell them apart */
+		if (bpf_is_unwind_exit(insn) && bpf_is_subprog(ctx->prog))
+			emit_unwind_ret_addr(ctx);
 		/* Optimization: when last instruction is EXIT,
 		   simply fallthrough to epilogue. */
 		if (i == ctx->prog->len - 1)
@@ -2462,6 +2535,11 @@ bool bpf_jit_supports_kfunc_call(void)
 }
 
 bool bpf_jit_supports_kfunc_ret_reg_pair(void)
+{
+	return true;
+}
+
+bool bpf_jit_supports_unwind(void)
 {
 	return true;
 }
