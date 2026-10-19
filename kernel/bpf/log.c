@@ -884,17 +884,22 @@ struct bpf_verifier_log *bpf_log_attr_create_vlog(struct bpf_log_attr *attr_log,
 	return log;
 }
 
+int bpf_log_attr_report_size(struct bpf_log_attr *attr, u32 size)
+{
+	if (attr->offsetof_true_size &&
+	    copy_to_bpfptr_offset(attr->uattr, attr->offsetof_true_size, &size, sizeof(size)))
+		return -EFAULT;
+
+	return 0;
+}
+
 int bpf_log_attr_finalize(struct bpf_log_attr *attr, struct bpf_verifier_log *log)
 {
 	u32 log_true_size;
-	int err;
+	int err, ret;
 
 	err = bpf_vlog_finalize(log, &log_true_size);
 
-	if (attr->offsetof_true_size &&
-	    copy_to_bpfptr_offset(attr->uattr, attr->offsetof_true_size, &log_true_size,
-				  sizeof(log_true_size)))
-		return -EFAULT;
-
-	return err;
+	ret = bpf_log_attr_report_size(attr, log_true_size);
+	return ret ? ret : err;
 }
