@@ -1342,11 +1342,17 @@ void exit_tasks_rcu_finish(void) { }
 ////////////////////////////////////////////////////////////////////////
 //
 // "Rude" variant of Tasks RCU, inspired by Steve Rostedt's
-// trick of passing an empty function to schedule_on_each_cpu().
+// trick of passing an empty function to per-CPUs workqueue.
 // This approach provides batching of concurrent calls to the synchronous
-// synchronize_rcu_tasks_rude() API.  This invokes schedule_on_each_cpu()
-// in order to send IPIs far and wide and induces otherwise unnecessary
-// context switches on all online CPUs, whether idle or not.
+// synchronize_rcu_tasks_rude() API.  A no-op work item is scheduled on
+// each online CPUs, in order to send IPIs far and wide and induces otherwise
+// unnecessary context switches on all online CPUs, whether idle or not.
+//
+// A statically defined per-CPU work_struct is used instead of a
+// runtime-allocated one, which can fail under memory pressure. Each
+// CPU's work item is scheduled with schedule_work_on() and waited for
+// with flush_work(), under the read side of the CPU-hotplug lock so the
+// set of online CPUs cannot change mid-iteration.
 //
 // Callback handling is provided by the rcu_tasks_kthread() function.
 //
@@ -1357,11 +1363,25 @@ static void rcu_tasks_be_rude(struct work_struct *work)
 {
 }
 
+static DEFINE_PER_CPU(struct work_struct, tasks_rude_work);
+
 // Wait for one rude RCU-tasks grace period.
 static void rcu_tasks_rude_wait_gp(struct rcu_tasks *rtp)
 {
+	int cpu;
+
+	guard(cpus_read_lock)();
 	rtp->n_ipis += cpumask_weight(cpu_online_mask);
-	schedule_on_each_cpu(rcu_tasks_be_rude);
+
+	for_each_online_cpu(cpu) {
+		struct work_struct *work = &per_cpu(tasks_rude_work, cpu);
+
+		INIT_WORK(work, rcu_tasks_be_rude);
+		schedule_work_on(cpu, work);
+	}
+
+	for_each_online_cpu(cpu)
+		flush_work(&per_cpu(tasks_rude_work, cpu));
 }
 
 static void call_rcu_tasks_rude(struct rcu_head *rhp, rcu_callback_t func);
