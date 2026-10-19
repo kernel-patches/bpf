@@ -487,6 +487,7 @@ pub trait IoBase<'a>: Copy {
 /// - Fallible (runtime checked) accessors for different data widths
 ///
 /// Which I/O methods are available depends on the associated [`IoBackend`] implementation.
+#[doc(notable_trait)]
 pub trait Io<'a>: IoBase<'a> {
     /// Returns the size of this I/O region.
     #[inline]
