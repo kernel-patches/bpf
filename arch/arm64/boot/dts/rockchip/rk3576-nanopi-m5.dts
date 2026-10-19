@@ -839,6 +839,10 @@
 	status = "okay";
 };
 
+&pd_gpu {
+	domain-supply = <&vdd_gpu_s0>;
+};
+
 &pinctrl {
 	gmac {
 		gmac0_int: gmac0-int {

@@ -1173,7 +1173,7 @@
 					};
 				};
 
-				power-domain@RK3576_PD_GPU {
+				pd_gpu: power-domain@RK3576_PD_GPU {
 					reg = <RK3576_PD_GPU>;
 					clocks = <&cru CLK_GPU>, <&cru PCLK_GPU_ROOT>;
 					pm_qos = <&qos_gpu>;
