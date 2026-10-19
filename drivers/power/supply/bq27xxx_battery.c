@@ -89,6 +89,10 @@
 #define BQ27XXX_SET_CFGUPDATE		0x13
 #define BQ27XXX_SOFT_RESET		0x42
 #define BQ27XXX_RESET			0x41
+#define BQ27XXX_DEVICE_TYPE		0x0001
+
+#define BQ27411_DEVICE_TYPE		0x0421
+#define BQ27541_DEVICE_TYPE		0x0541
 
 #define BQ27XXX_RS			(20) /* Resistor sense mOhm */
 #define BQ27XXX_POWER_CONSTANT		(29200) /* 29.2 µV^2 * 1000 */
@@ -1163,6 +1167,56 @@ static inline int bq27xxx_write(struct bq27xxx_device_info *di, int reg_index,
 	return ret;
 }
 
+static int bq27xxx_battery_check_device_type(struct bq27xxx_device_info *di)
+{
+	enum bq27xxx_chip detected_chip;
+	int expected_type;
+	int ret;
+
+	/* Add fuel gauges with supported DeviceType reporting to this list. */
+	switch (di->chip) {
+	case BQ27411:
+		expected_type = BQ27411_DEVICE_TYPE;
+		break;
+	case BQ27541:
+		expected_type = BQ27541_DEVICE_TYPE;
+		break;
+	default:
+		return 0;
+	}
+
+	ret = bq27xxx_write(di, BQ27XXX_REG_CTRL, BQ27XXX_DEVICE_TYPE,
+			    false);
+	if (ret < 0)
+		return ret;
+
+	ret = bq27xxx_read(di, BQ27XXX_REG_CTRL, false);
+	if (ret < 0)
+		return ret;
+
+	switch (ret) {
+	case BQ27411_DEVICE_TYPE:
+		detected_chip = BQ27411;
+		break;
+	case BQ27541_DEVICE_TYPE:
+		detected_chip = BQ27541;
+		break;
+	default:
+		dev_err(di->dev, "unrecognized DeviceType 0x%04x\n", ret);
+		return -ENODEV;
+	}
+
+	if (detected_chip == di->chip)
+		return 0;
+
+	dev_warn(di->dev,
+		 "detected DeviceType 0x%04x instead of expected 0x%04x\n",
+		 ret, expected_type);
+	di->chip = detected_chip;
+
+	return 0;
+}
+
 static inline int bq27xxx_read_block(struct bq27xxx_device_info *di, int reg_index,
 				     u8 *data, int len)
 {
@@ -2216,6 +2270,12 @@ int bq27xxx_battery_setup(struct bq27xxx_device_info *di)
 	int ret;
 
 	ret = devm_mutex_init(di->dev, &di->lock);
+	if (ret)
+		return ret;
+
+	di->regs       = bq27xxx_chip_data[di->chip].regs;
+
+	ret = bq27xxx_battery_check_device_type(di);
 	if (ret)
 		return ret;
 
