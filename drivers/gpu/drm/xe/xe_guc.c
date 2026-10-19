@@ -894,9 +894,10 @@ static u32 guc_additional_cache_size(struct xe_device *xe)
  */
 int xe_guc_init_post_hwconfig(struct xe_guc *guc)
 {
+	struct xe_device *xe = guc_to_xe(guc);
 	int ret;
 
-	if (IS_SRIOV_VF(guc_to_xe(guc)))
+	if (IS_SRIOV_VF(xe))
 		return vf_guc_init_post_hwconfig(guc);
 
 	ret = xe_guc_realloc_post_hwconfig(guc);
@@ -909,19 +910,7 @@ int xe_guc_init_post_hwconfig(struct xe_guc *guc)
 
 	guc_init_params_post_hwconfig(guc);
 
-	ret = xe_guc_submit_init(guc);
-	if (ret)
-		return ret;
-
-	ret = xe_guc_db_mgr_init(&guc->dbm, ~0);
-	if (ret)
-		return ret;
-
 	ret = xe_guc_pc_init(&guc->pc);
-	if (ret)
-		return ret;
-
-	ret = xe_guc_rc_init(guc);
 	if (ret)
 		return ret;
 
@@ -930,7 +919,32 @@ int xe_guc_init_post_hwconfig(struct xe_guc *guc)
 		return ret;
 
 	ret = xe_guc_buf_cache_init_with_size(&guc->buf,
-					      guc_additional_cache_size(guc_to_xe(guc)));
+					      guc_additional_cache_size(xe));
+	if (ret)
+		return ret;
+
+	/*
+	 * The GuC keeps accessing its GGTT-mapped buffers until it is reset,
+	 * so move guc_fini_hw() after all GuC allocations above to have the
+	 * reset done before any of them is unpinned and its GGTT PTEs cleared.
+	 * Teardown actions that must run before the reset, either because they
+	 * still talk to the GuC (like GuC RC) or because they stop the CT and
+	 * submission (like GuC submit), must be registered after this point.
+	 */
+	devm_remove_action(xe->drm.dev, guc_fini_hw, guc);
+	ret = devm_add_action_or_reset(xe->drm.dev, guc_fini_hw, guc);
+	if (ret)
+		return ret;
+
+	ret = xe_guc_submit_init(guc);
+	if (ret)
+		return ret;
+
+	ret = xe_guc_db_mgr_init(&guc->dbm, ~0);
+	if (ret)
+		return ret;
+
+	ret = xe_guc_rc_init(guc);
 	if (ret)
 		return ret;
 
