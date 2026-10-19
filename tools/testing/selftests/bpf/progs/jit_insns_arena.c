@@ -34,7 +34,7 @@ struct {
 
 #if defined(__BPF_FEATURE_ADDR_SPACE_CAST)
 SEC("syscall")
-__description("arena access with zero offset")
+__description("arena_access_with_zero_offset")
 __success __retval(0)
 int arena_zero_off(void *ctx)
 {
@@ -82,7 +82,7 @@ int arena_zero_off(void *ctx)
 }
 
 SEC("syscall")
-__description("cast to a user address")
+__description("cast_to_a_user_address")
 __success __retval(0)
 int cast_to_user(void *ctx)
 {
