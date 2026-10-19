@@ -860,7 +860,7 @@ static int hns3_dbg_bd_file_init(struct hnae3_handle *handle, u32 cmd)
 		data[i].handle = handle;
 		data[i].cmd = hns3_dbg_cmd[cmd].cmd;
 		data[i].qid = i;
-		sprintf(name, "%s%u", hns3_dbg_cmd[cmd].name, i);
+		scnprintf(name, sizeof(name), "%s%u", hns3_dbg_cmd[cmd].name, i);
 		debugfs_create_file(name, 0400, entry_dir, &data[i],
 				    &hns3_dbg_bd_info_fops);
 	}
