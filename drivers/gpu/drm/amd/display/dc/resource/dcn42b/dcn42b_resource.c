@@ -875,6 +875,7 @@ static const struct dc_debug_options debug_defaults_drv = {
 	.min_deep_sleep_dcfclk_khz = 8000,
 	.replay_skip_crtc_disabled = true,
 	.psr_skip_crtc_disable = true,
+	.iommu_mismatch_temp_wka = 0x7,
 };
 
 static const struct dc_check_config config_defaults = {
