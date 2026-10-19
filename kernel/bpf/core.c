@@ -804,6 +804,24 @@ out:
 	return e;
 }
 
+/*
+ * JITs don't emit a branch for unwind_goto. They add an extable entry
+ *   { .insn = ret_addr - 1, .fixup = pad - ret_addr }
+ * where ret_addr is the return address of the call in front of it. unwind_exit
+ * replaces the return address of its frame with what this function returns.
+ * ret_addr - 1, because what follows the call can have an entry of its own.
+ * No insn starts there, so a fault cannot hit the entry.
+ */
+u64 bpf_unwind_target(u64 ret_addr)
+{
+	const struct exception_table_entry *e = search_bpf_extables(ret_addr - 1);
+
+	/* The verifier made sure that unwind_goto follows the call */
+	if (WARN_ON_ONCE(!e))
+		return ret_addr;
+	return ret_addr + e->fixup;
+}
+
 int bpf_get_kallsym(unsigned int symnum, unsigned long *value, char *type,
 		    char *sym)
 {
@@ -3395,6 +3413,12 @@ bool __weak bpf_jit_supports_callx(void)
 }
 
 bool __weak bpf_jit_supports_kfunc_ret_reg_pair(void)
+{
+	return false;
+}
+
+/* unwind_goto and unwind_exit */
+bool __weak bpf_jit_supports_unwind(void)
 {
 	return false;
 }

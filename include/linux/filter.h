@@ -254,6 +254,16 @@ static inline bool insn_is_mov_percpu_addr(const struct bpf_insn *insn)
 		.off   = 0,					\
 		.imm   = 1 })
 
+static inline bool bpf_is_unwind_goto(const struct bpf_insn *insn)
+{
+	return insn->code == (BPF_JMP | BPF_JCOND) && insn->src_reg == BPF_UNWIND_GOTO;
+}
+
+static inline bool bpf_is_unwind_exit(const struct bpf_insn *insn)
+{
+	return insn->code == (BPF_JMP | BPF_EXIT) && insn->src_reg == BPF_UNWIND_EXIT;
+}
+
 static inline bool insn_is_zext(const struct bpf_insn *insn)
 {
 	return insn->code == (BPF_ALU | BPF_MOV | BPF_X) && insn->imm == 1;
@@ -1257,6 +1267,8 @@ bool bpf_jit_supports_percpu_insn(void);
 bool bpf_jit_supports_kfunc_call(void);
 bool bpf_jit_supports_callx(void);
 bool bpf_jit_supports_kfunc_ret_reg_pair(void);
+bool bpf_jit_supports_unwind(void);
+u64 bpf_unwind_target(u64 ret_addr);
 bool bpf_jit_supports_stack_args(void);
 bool bpf_jit_supports_arena_args(void);
 bool bpf_jit_supports_far_kfunc_call(void);

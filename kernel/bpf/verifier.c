@@ -1769,6 +1769,7 @@ int bpf_copy_verifier_state(struct bpf_verifier_state *dst_state,
 		return err;
 	dst_state->speculative = src->speculative;
 	dst_state->in_sleepable = src->in_sleepable;
+	dst_state->unwound = src->unwound;
 	dst_state->curframe = src->curframe;
 	dst_state->branches = src->branches;
 	dst_state->parent = src->parent;
@@ -3428,6 +3429,45 @@ static int next_callx_callee(struct bpf_verifier_env *env, int caller, int from)
 		return -1;
 	bit = find_next_bit(env->callx_edges, end, caller * cnt + from);
 	return bit < end ? bit - caller * cnt : -1;
+}
+
+/*
+ * 'call foo; unwind_goto pad' goes to the pad when foo left with unwind_exit.
+ * JITs don't emit a branch for it. unwind_exit finds the pad by its return
+ * address. So unwind_goto has to follow the call and nothing may jump to it.
+ */
+static int check_unwind_insns(struct bpf_verifier_env *env)
+{
+	struct bpf_insn *insn = env->prog->insnsi;
+	bool seen = false;
+	int i;
+
+	for (i = 0; i < env->prog->len; i++, insn++) {
+		if (bpf_is_unwind_exit(insn)) {
+			bpf_find_containing_subprog(env, i)->can_unwind = true;
+			seen = true;
+		}
+		if (!bpf_is_unwind_goto(insn))
+			continue;
+		seen = true;
+		if (!i || !(bpf_pseudo_call(insn - 1) || bpf_is_callx(insn - 1))) {
+			verbose(env, "unwind_goto at insn %d doesn't follow a call of a subprog\n",
+				i);
+			return -EINVAL;
+		}
+		if (bpf_is_jump_target(env, i)) {
+			verbose(env, "jump to unwind_goto at insn %d\n", i);
+			return -EINVAL;
+		}
+	}
+	if (!seen)
+		return 0;
+	if (!bpf_jit_supports_unwind()) {
+		verbose(env, "JIT does not support unwinding\n");
+		return -ENOTSUPP;
+	}
+	env->prog->jit_required = 1;
+	return 0;
 }
 
 /*
@@ -11584,6 +11624,19 @@ static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			}
 		}
 
+		if (env->subprog_info[subprog].can_unwind) {
+			struct bpf_verifier_state *branch;
+
+			if (!bpf_is_unwind_goto(insn + 1)) {
+				verbose(env, "no unwind_goto after the call of %s()\n", sub_name);
+				return -EINVAL;
+			}
+			branch = push_stack(env, *insn_idx + 1, *insn_idx, false);
+			if (IS_ERR(branch))
+				return PTR_ERR(branch);
+			branch->unwound = true;
+		}
+
 		if (env->subprog_info[subprog].might_throw) {
 			struct bpf_verifier_state *branch;
 
@@ -12057,6 +12110,19 @@ static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 	}
 
 	caller = state->frame[state->curframe - 1];
+	if (bpf_is_unwind_exit(&env->prog->insnsi[*insn_idx])) {
+		/* the helper or the kfunc that called it doesn't expect that */
+		if (callee->in_callback_fn) {
+			verbose(env, "callback cannot unwind\n");
+			return -EINVAL;
+		}
+		if (!bpf_is_unwind_goto(&env->prog->insnsi[callee->callsite + 1])) {
+			verbose(env, "unwind_exit, but no unwind_goto after the call at insn %d\n",
+				callee->callsite);
+			return -EINVAL;
+		}
+		state->unwound = true;
+	}
 	if (callee->in_callback_fn) {
 		if (r0->type != SCALAR_VALUE) {
 			verbose(env, "R0 not a scalar value\n");
@@ -18759,6 +18825,13 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 		return -EINVAL;
 	}
 
+	if (bpf_is_unwind_goto(insn)) {
+		if (env->cur_state->unwound)
+			*insn_idx += insn->off;
+		env->cur_state->unwound = false;
+		return 0;
+	}
+
 	if (opcode == BPF_JCOND) {
 		struct bpf_verifier_state *cur_st = env->cur_state, *queued_st, *prev_st;
 		int idx = *insn_idx;
@@ -19986,6 +20059,12 @@ static int process_bpf_exit_full(struct bpf_verifier_env *env,
 	 * Exit from async callback implies return code restrictions
 	 * that depend on async scheduling mechanism.
 	 */
+	if ((cur_frame->in_async_callback_fn || cur_frame->in_exception_callback_fn) &&
+	    bpf_is_unwind_exit(&env->prog->insnsi[env->insn_idx])) {
+		verbose(env, "callback cannot unwind\n");
+		return -EINVAL;
+	}
+
 	if (cur_frame->subprogno &&
 	    !cur_frame->in_async_callback_fn &&
 	    !cur_frame->in_exception_callback_fn)
@@ -21223,14 +21302,14 @@ static int check_jmp_fields(struct bpf_verifier_env *env, struct bpf_insn *insn)
 		return 0;
 	case BPF_EXIT:
 		if (BPF_SRC(insn->code) != BPF_K || insn->imm != 0 ||
-		    insn->src_reg != BPF_REG_0 || insn->dst_reg != BPF_REG_0 ||
+		    insn->src_reg > BPF_UNWIND_EXIT || insn->dst_reg != BPF_REG_0 ||
 		    class == BPF_JMP32) {
 			verbose(env, "BPF_EXIT uses reserved fields\n");
 			return -EINVAL;
 		}
 		return 0;
 	case BPF_JCOND:
-		if (insn->code != (BPF_JMP | BPF_JCOND) || insn->src_reg != BPF_MAY_GOTO ||
+		if (insn->code != (BPF_JMP | BPF_JCOND) || insn->src_reg > BPF_UNWIND_GOTO ||
 		    insn->dst_reg || insn->imm) {
 			verbose(env, "invalid may_goto imm %d\n", insn->imm);
 			return -EINVAL;
@@ -22462,6 +22541,12 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 			bpf_log(log,
 				"%s programs cannot attach to exception callback\n",
 				prog_extension ? "Extension" : "Tracing");
+			return -EINVAL;
+		}
+		/* unwind_exit would return to the trampoline that called the subprog */
+		if (aux->func && subprog && aux->func[subprog]->aux->can_unwind &&
+		    !prog_extension && prog->expected_attach_type != BPF_TRACE_FENTRY) {
+			bpf_log(log, "Only fentry can attach to %s, which can unwind\n", tname);
 			return -EINVAL;
 		}
 		conservative = aux->func_info_aux[subprog].unreliable;
@@ -23842,6 +23927,10 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	}
 
 	ret = bpf_check_cfg(env);
+	if (ret < 0)
+		goto skip_full_check;
+
+	ret = check_unwind_insns(env);
 	if (ret < 0)
 		goto skip_full_check;
 
