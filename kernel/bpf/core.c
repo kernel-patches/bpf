@@ -3607,6 +3607,15 @@ void __weak arch_bpf_stack_walk(bool (*consume_fn)(void *cookie, u64 ip, u64 sp,
 {
 }
 
+/*
+ * The native entry of bpf_throw(), which captures the BPF register file of
+ * the throw site, or NULL when the architecture calls the kfunc directly.
+ */
+void * __weak bpf_arch_throw_entry(void)
+{
+	return NULL;
+}
+
 bool __weak bpf_jit_supports_timed_may_goto(void)
 {
 	return false;
