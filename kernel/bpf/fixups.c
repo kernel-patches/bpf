@@ -733,6 +733,33 @@ int bpf_opt_remove_dead_code(struct bpf_verifier_env *env)
 	return 0;
 }
 
+/*
+ * Rewrite "if (cond) goto +1; goto X" into "if (!cond) goto X; goto +0" and
+ * let bpf_opt_remove_nops() delete the "goto +0".
+ */
+void bpf_opt_invert_cond_over_ja(struct bpf_verifier_env *env)
+{
+	struct bpf_insn *insn = env->prog->insnsi;
+	int i;
+
+	if (bpf_prog_is_offloaded(env->prog->aux))
+		return;
+
+	for (i = 0; i + 1 < env->prog->len; i++) {
+		struct bpf_insn *ja = &insn[i + 1];
+		u8 op = bpf_rev_opcode(BPF_OP(insn[i].code));
+
+		/* JSET has no inverse: bpf_rev_opcode() returns JSET | BPF_X */
+		if (!bpf_insn_is_cond_jump(insn[i].code) || insn[i].off != 1 ||
+		    !op || (op & BPF_X) || ja->code != (BPF_JMP | BPF_JA) ||
+		    ja->off == S16_MAX || bpf_is_jump_target(env, i + 1))
+			continue;
+		insn[i].code = BPF_CLASS(insn[i].code) | BPF_SRC(insn[i].code) | op;
+		insn[i].off = ja->off + 1;
+		*ja = NOP;
+	}
+}
+
 int bpf_opt_remove_nops(struct bpf_verifier_env *env)
 {
 	struct bpf_insn_aux_data *aux = env->insn_aux_data;

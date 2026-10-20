@@ -23941,6 +23941,8 @@ skip_full_check:
 		if (ret == 0)
 			ret = bpf_opt_remove_dead_code(env);
 		if (ret == 0)
+			bpf_opt_invert_cond_over_ja(env);
+		if (ret == 0)
 			ret = bpf_opt_remove_nops(env);
 	} else {
 		if (ret == 0)
