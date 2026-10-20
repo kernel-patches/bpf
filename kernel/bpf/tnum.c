@@ -200,6 +200,21 @@ struct tnum tnum_cast(struct tnum a, u8 size)
 	return a;
 }
 
+struct tnum tnum_sext(struct tnum a, u8 size)
+{
+	u8 shift = 64 - size * 8;
+
+	/*
+	 * Shifting the field up to the top and back down arithmetically
+	 * replicates its sign bit through the high half. Applying that to the
+	 * mask as well carries over whether the sign was known: an unknown
+	 * sign bit leaves every high bit unknown.
+	 */
+	a = tnum_cast(a, size);
+	return TNUM((s64)(a.value << shift) >> shift,
+		    (s64)(a.mask << shift) >> shift);
+}
+
 bool tnum_is_aligned(struct tnum a, u64 size)
 {
 	if (!size)
