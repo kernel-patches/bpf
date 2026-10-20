@@ -6256,6 +6256,7 @@ static void set_sext32_default_val(struct bpf_reg_state *reg, int size)
 static void coerce_subreg_to_size_sx(struct bpf_reg_state *reg, int size)
 {
 	s32 init_s32_max, init_s32_min, s32_max, s32_min, u32_val;
+	s32 field_smin, field_smax;
 	u32 top_smax_value, top_smin_value;
 	u32 num_bits = size * 8;
 
@@ -6264,6 +6265,27 @@ static void coerce_subreg_to_size_sx(struct bpf_reg_state *reg, int size)
 	 * sign extension is a noop.
 	 */
 	if (reg_umax(reg) < (1ULL << (num_bits - 1)))
+		return;
+
+	if (size == 1) {
+		field_smin = S8_MIN;
+		field_smax = S8_MAX;
+	} else {
+		/* size == 2 */
+		field_smin = S16_MIN;
+		field_smax = S16_MAX;
+	}
+
+	/*
+	 * The range already fits the field, so (sN)v == v for every value the
+	 * register can hold and the sign extension changes nothing. The test
+	 * above misses this once the range straddles zero: it only looks at
+	 * reg_umax(), which a negative smin makes huge.
+	 *
+	 * This has to precede reg_step_reset() below: the extension is a noop,
+	 * so the base/step line still holds and there is nothing to discard.
+	 */
+	if (reg_s32_min(reg) >= field_smin && reg_s32_max(reg) <= field_smax)
 		return;
 
 	/* See comment at reg_step_check_unsigned(). */
