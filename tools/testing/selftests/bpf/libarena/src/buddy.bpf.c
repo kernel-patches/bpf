@@ -185,6 +185,43 @@ int buddy_cache_free(struct buddy __arena *buddy, void __arena *addr)
 	return ret;
 }
 
+static void __arena *buddy_cache_refill(struct buddy __arena *buddy,
+					size_t size, int order)
+{
+	struct buddy_cache_state __arena *state = &buddy->cache_state;
+	struct buddy_cache_order __arena *slots;
+	struct buddy_cache_ctx ctx;
+	void __arena *address = NULL;
+	int ret;
+
+	DISABLE_CACHE_IF_ASAN(NULL);
+
+	if (order >= BUDDY_CACHE_NUM_ORDERS)
+		return NULL;
+
+	if (buddy_cache_enter(state, &ctx))
+		return NULL;
+
+	/* A free may have populated the cache between the miss and refill. */
+	address = buddy_cache_pop(ctx.cache, order);
+	if (address)
+		goto done;
+
+	slots = &ctx.cache->orders[order];
+	ret = buddy_alloc_bulk(buddy, size, arena_fls(BUDDY_CACHE_BATCH_SIZE) - 1,
+				(void __arena * __arena *)slots->objects);
+	if (ret)
+		goto done;
+
+	address = slots->objects[BUDDY_CACHE_BATCH_SIZE - 1];
+	WRITE_ONCE(slots->elems, BUDDY_CACHE_BATCH_SIZE - 1);
+
+done:
+	buddy_cache_exit(&ctx);
+
+	return address;
+}
+
 enum {
 	BUDDY_POISONED = (s8)0xef,
 
@@ -1049,6 +1086,13 @@ void __arena *buddy_alloc(struct buddy __arena *buddy, size_t size)
 
 	order = size_to_order(size);
 	address = buddy_cache_alloc(buddy, order);
+	if (address)
+		return address;
+
+	if (bpf_in_nmi())
+		return NULL;
+
+	address = buddy_cache_refill(buddy, size, order);
 	if (address)
 		return address;
 
