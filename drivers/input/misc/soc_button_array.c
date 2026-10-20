@@ -17,6 +17,7 @@
 #include <linux/gpio_keys.h>
 #include <linux/platform_data/x86/soc.h>
 #include <linux/platform_device.h>
+#include <linux/slab.h>
 
 static bool use_low_level_irq;
 module_param(use_low_level_irq, bool, 0444);
@@ -154,6 +155,11 @@ soc_button_device_create(struct platform_device *pdev,
 			 const struct soc_button_info *button_info,
 			 bool autorepeat)
 {
+	struct platform_device_info pdevinfo = {
+		.parent = &pdev->dev,
+		.name = "gpio-keys",
+		.id = PLATFORM_DEVID_AUTO,
+	};
 	const struct soc_button_info *info;
 	struct platform_device *pd;
 	struct gpio_keys_button *gpio_keys;
@@ -167,12 +173,24 @@ soc_button_device_create(struct platform_device *pdev,
 		if (info->autorepeat == autorepeat)
 			n_buttons++;
 
+	struct resource *irq_resources __free(kfree) = NULL;
+	/* See dmi_use_low_level_irq[] comment */
+	if (!autorepeat && (use_low_level_irq ||
+			    dmi_check_system(dmi_use_low_level_irq))) {
+		irq_resources = kzalloc_objs(*irq_resources, n_buttons);
+		if (!irq_resources)
+			return ERR_PTR(-ENOMEM);
+	}
+
 	gpio_keys_pdata = devm_kzalloc(&pdev->dev,
 				       sizeof(*gpio_keys_pdata) +
 					sizeof(*gpio_keys) * n_buttons,
 				       GFP_KERNEL);
 	if (!gpio_keys_pdata)
 		return ERR_PTR(-ENOMEM);
+
+	pdevinfo.data = gpio_keys_pdata;
+	pdevinfo.size_data = sizeof(*gpio_keys_pdata);
 
 	gpio_keys = (void *)(gpio_keys_pdata + 1);
 	n_buttons = 0;
@@ -212,10 +230,9 @@ soc_button_device_create(struct platform_device *pdev,
 		}
 
 		/* See dmi_use_low_level_irq[] comment */
-		if (!autorepeat && (use_low_level_irq ||
-				    dmi_check_system(dmi_use_low_level_irq))) {
+		if (irq_resources) {
 			irq_set_irq_type(irq, IRQ_TYPE_LEVEL_LOW);
-			gpio_keys[n_buttons].irq = irq;
+			irq_resources[n_buttons] = DEFINE_RES_IRQ(irq);
 			gpio_keys[n_buttons].gpio = -ENOENT;
 		} else {
 			gpio_keys[n_buttons].gpio = gpio;
@@ -240,10 +257,12 @@ soc_button_device_create(struct platform_device *pdev,
 	gpio_keys_pdata->nbuttons = n_buttons;
 	gpio_keys_pdata->rep = autorepeat;
 
-	pd = platform_device_register_resndata(&pdev->dev, "gpio-keys",
-					       PLATFORM_DEVID_AUTO, NULL, 0,
-					       gpio_keys_pdata,
-					       sizeof(*gpio_keys_pdata));
+	if (irq_resources) {
+		pdevinfo.res = irq_resources;
+		pdevinfo.num_res = n_buttons;
+	}
+
+	pd = platform_device_register_full(&pdevinfo);
 	error = PTR_ERR_OR_ZERO(pd);
 	if (error) {
 		dev_err(&pdev->dev,
