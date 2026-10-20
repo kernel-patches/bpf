@@ -811,6 +811,7 @@ struct rxrpc_call {
 #define RXRPC_TX_SMSS		RXRPC_JUMBO_DATALEN
 #define RXRPC_MIN_CWND		4
 	enum rxrpc_ca_state	cong_ca_state;	/* Congestion control state */
+	bool			cong_in_recovery:1; /* If we're in Fast/RTO recovery */
 	u8			cong_extra;	/* Extra to send for congestion management */
 	u16			cong_cwnd;	/* Congestion window size */
 	u16			cong_ssthresh;	/* Slow-start threshold */
@@ -895,7 +896,6 @@ struct rxrpc_ack_summary {
 	bool		retrans_timeo:1;	/* T if reTx due to timeout happened */
 	bool		need_retransmit:1;	/* T if we need transmission */
 	bool		rtt_sample_avail:1;	/* T if RTT sample available */
-	bool		in_fast_or_rto_recovery:1;
 	bool		exiting_fast_or_rto_recovery:1;
 	bool		tlp_probe_acked:1;	/* T if the TLP probe seq was acked */
 	u8 /*enum rxrpc_congest_change*/ change;

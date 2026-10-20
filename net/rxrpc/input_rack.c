@@ -30,7 +30,6 @@ static void rxrpc_rack_mark_lost(struct rxrpc_call *call,
 
 	if (__test_and_clear_bit(ix, &tq->in_flight))
 		call->tx_in_flight--;
-	tq->segment_xmit_ts[ix] = UINT_MAX;
 }
 
 /*
@@ -184,7 +183,7 @@ static ktime_t rxrpc_rack_update_reo_wnd(struct rxrpc_call *call,
 	}
 
 	if (!call->rack_reordering_seen) {
-		if (summary->in_fast_or_rto_recovery)
+		if (call->cong_in_recovery)
 			return 0;
 		if (call->acks_nr_sacks >= dup_thresh)
 			return 0;
@@ -230,6 +229,7 @@ static ktime_t rxrpc_rack_detect_loss(struct rxrpc_call *call,
 				remaining = ktime_sub(ktime_add(xmit_ts, lost_after), now);
 				if (remaining <= 0) {
 					rxrpc_rack_mark_lost(call, tq, ix);
+					tq->segment_xmit_ts[ix] = UINT_MAX;
 					trace_rxrpc_rack_detect_loss(call, summary, seq);
 				} else {
 					timeout = max(remaining, timeout);
@@ -300,7 +300,7 @@ ktime_t rxrpc_tlp_calc_pto(struct rxrpc_call *call, ktime_t now)
 	if (call->rtt_count > 0) {
 		/* Use 2*SRTT as the timeout. */
 		pto = ns_to_ktime(call->srtt_us * NSEC_PER_USEC / 4);
-		if (flight_size)
+		if (flight_size <= max(call->peer->pmtud_jumbo, 1))
 			pto = ktime_add(pto, call->tlp_max_ack_delay);
 	} else {
 		pto = NSEC_PER_SEC;
