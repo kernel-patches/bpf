@@ -70,6 +70,10 @@ struct bpf_map_create_opts {
 	const void *excl_prog_hash;
 	__u32 excl_prog_hash_size;
 
+	/* offset and size of an arena percpu chunk */
+	__u32 arena_percpu_chunk_off;
+	__u32 arena_percpu_chunk_sz;
+
 	struct bpf_log_opts *log_opts;
 
 	size_t :0;

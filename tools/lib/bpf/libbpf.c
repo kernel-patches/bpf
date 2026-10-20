@@ -5816,6 +5816,12 @@ static int bpf_object__create_map(struct bpf_object *obj, struct bpf_map *map, b
 	create_attr.map_flags = def->map_flags;
 	create_attr.numa_node = map->numa_node;
 	create_attr.map_extra = map->map_extra;
+
+	if (obj->arena_percpu.present && map == &obj->maps[obj->arena_map_idx]) {
+		create_attr.arena_percpu_chunk_off = obj->arena_percpu.offset;
+		create_attr.arena_percpu_chunk_sz = obj->arena_percpu.chunk_sz;
+	}
+
 	create_attr.token_fd = obj->token_fd;
 	if (obj->token_fd)
 		create_attr.map_flags |= BPF_F_TOKEN_FD;
