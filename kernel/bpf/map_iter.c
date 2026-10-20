@@ -97,25 +97,15 @@ static struct bpf_iter_reg bpf_map_reg_info = {
 	.seq_info		= &bpf_map_seq_info,
 };
 
-static int bpf_iter_attach_map(struct bpf_prog *prog,
-			       union bpf_iter_link_info *linfo,
-			       struct bpf_iter_aux_info *aux)
+static int bpf_iter_map_elem_check_prog(struct bpf_prog *prog,
+					struct bpf_map *map)
 {
 	u32 key_acc_size, value_acc_size, key_size, value_size;
-	struct bpf_map *map;
 	bool is_percpu = false;
 	int err = -EINVAL;
 
-	if (!linfo->map.map_fd)
-		return -EBADF;
-
-	map = bpf_map_get_with_uref(linfo->map.map_fd);
-	if (IS_ERR(map))
-		return PTR_ERR(map);
-	if (map->excl_prog_sha) {
-		err = -EPERM;
-		goto put_map;
-	}
+	if (map->excl_prog_sha)
+		return -EPERM;
 
 	if (map->map_type == BPF_MAP_TYPE_PERCPU_HASH ||
 	    map->map_type == BPF_MAP_TYPE_LRU_PERCPU_HASH ||
@@ -125,7 +115,7 @@ static int bpf_iter_attach_map(struct bpf_prog *prog,
 		 map->map_type != BPF_MAP_TYPE_LRU_HASH &&
 		 map->map_type != BPF_MAP_TYPE_ARRAY &&
 		 map->map_type != BPF_MAP_TYPE_RHASH)
-		goto put_map;
+		return err;
 
 	key_acc_size = prog->aux->max_rdonly_access;
 	value_acc_size = prog->aux->max_rdwr_access;
@@ -135,10 +125,39 @@ static int bpf_iter_attach_map(struct bpf_prog *prog,
 	else
 		value_size = round_up(map->value_size, 8) * num_possible_cpus();
 
-	if (key_acc_size > key_size || value_acc_size > value_size) {
-		err = -EACCES;
+	if (key_acc_size > key_size || value_acc_size > value_size)
+		return -EACCES;
+
+	/* Fields are sorted by offset; max_rdwr_access is an exclusive end. */
+	if (map->record && value_acc_size > map->record->fields[0].offset)
+		return -EACCES;
+
+	return 0;
+}
+
+static int bpf_iter_map_elem_validate_prog(struct bpf_prog *prog,
+					   const struct bpf_iter_aux_info *aux)
+{
+	return bpf_iter_map_elem_check_prog(prog, aux->map);
+}
+
+static int bpf_iter_attach_map(struct bpf_prog *prog,
+			       union bpf_iter_link_info *linfo,
+			       struct bpf_iter_aux_info *aux)
+{
+	struct bpf_map *map;
+	int err;
+
+	if (!linfo->map.map_fd)
+		return -EBADF;
+
+	map = bpf_map_get_with_uref(linfo->map.map_fd);
+	if (IS_ERR(map))
+		return PTR_ERR(map);
+
+	err = bpf_iter_map_elem_check_prog(prog, map);
+	if (err)
 		goto put_map;
-	}
 
 	aux->map = map;
 	return 0;
@@ -172,6 +191,7 @@ DEFINE_BPF_ITER_FUNC(bpf_map_elem, struct bpf_iter_meta *meta,
 static const struct bpf_iter_reg bpf_map_elem_reg_info = {
 	.target			= "bpf_map_elem",
 	.attach_target		= bpf_iter_attach_map,
+	.validate_prog		= bpf_iter_map_elem_validate_prog,
 	.detach_target		= bpf_iter_detach_map,
 	.show_fdinfo		= bpf_iter_map_show_fdinfo,
 	.fill_link_info		= bpf_iter_map_fill_link_info,

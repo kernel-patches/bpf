@@ -3007,6 +3007,8 @@ struct bpf_iter_aux_info {
 typedef int (*bpf_iter_attach_target_t)(struct bpf_prog *prog,
 					union bpf_iter_link_info *linfo,
 					struct bpf_iter_aux_info *aux);
+typedef int (*bpf_iter_validate_prog_t)(struct bpf_prog *prog,
+					const struct bpf_iter_aux_info *aux);
 typedef void (*bpf_iter_detach_target_t)(struct bpf_iter_aux_info *aux);
 typedef void (*bpf_iter_show_fdinfo_t) (const struct bpf_iter_aux_info *aux,
 					struct seq_file *seq);
@@ -3024,6 +3026,7 @@ enum bpf_iter_feature {
 struct bpf_iter_reg {
 	const char *target;
 	bpf_iter_attach_target_t attach_target;
+	bpf_iter_validate_prog_t validate_prog;
 	bpf_iter_detach_target_t detach_target;
 	bpf_iter_show_fdinfo_t show_fdinfo;
 	bpf_iter_fill_link_info_t fill_link_info;

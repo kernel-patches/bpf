@@ -1400,6 +1400,191 @@ out:
 	bpf_iter_bpf_sk_storage_map__destroy(skel);
 }
 
+struct managed_value {
+	__u64 prefix;
+	__u64 ptr;
+};
+
+static struct bpf_link *attach_managed_map_iter(struct bpf_program *prog,
+						int map_fd)
+{
+	DECLARE_LIBBPF_OPTS(bpf_iter_attach_opts, opts);
+	union bpf_iter_link_info linfo = {};
+
+	linfo.map.map_fd = map_fd;
+	opts.link_info = &linfo;
+	opts.link_info_len = sizeof(linfo);
+	return bpf_program__attach_iter(prog, &opts);
+}
+
+static int read_managed_map_iter(struct bpf_link *link)
+{
+	char buf[64];
+	int iter_fd, len, err = 0;
+
+	iter_fd = bpf_iter_create(bpf_link__fd(link));
+	if (iter_fd < 0)
+		return -errno;
+
+	while ((len = read(iter_fd, buf, sizeof(buf))) > 0)
+		;
+	if (len < 0)
+		err = -errno;
+	close(iter_fd);
+	return err;
+}
+
+static void test_managed_map_elem_iter(struct bpf_iter_bpf_sk_storage_map *skel)
+{
+	struct managed_value value = { .prefix = 10 };
+	__u32 key = 1;
+	int map_fd, err;
+	struct bpf_link *link;
+
+	map_fd = bpf_map__fd(skel->maps.managed_hash_map);
+	err = bpf_map_update_elem(map_fd, &key, &value, BPF_ANY);
+	if (!ASSERT_OK(err, "hash_map_update"))
+		return;
+
+	link = attach_managed_map_iter(skel->progs.map_iter_prefix, map_fd);
+	if (!ASSERT_OK_PTR(link, "hash_prefix_attach"))
+		return;
+	err = read_managed_map_iter(link);
+	bpf_link__destroy(link);
+	if (!ASSERT_OK(err, "hash_prefix_iter"))
+		return;
+
+	err = bpf_map_lookup_elem(map_fd, &key, &value);
+	if (!ASSERT_OK(err, "hash_prefix_lookup") ||
+	    !ASSERT_EQ(value.prefix, 11, "hash_prefix_value"))
+		return;
+
+	link = attach_managed_map_iter(skel->progs.map_iter_no_access, map_fd);
+	if (!ASSERT_OK_PTR(link, "hash_no_access_attach"))
+		return;
+	err = bpf_link__update_program(link, skel->progs.map_iter_write_kptr);
+	if (!ASSERT_EQ(err, -EACCES, "hash_link_update_kptr"))
+		goto out;
+	err = bpf_link__update_program(link, skel->progs.map_iter_prefix);
+	if (!ASSERT_OK(err, "hash_link_update_prefix"))
+		goto out;
+	err = read_managed_map_iter(link);
+	if (!ASSERT_OK(err, "hash_updated_iter"))
+		goto out;
+	err = bpf_map_lookup_elem(map_fd, &key, &value);
+	if (!ASSERT_OK(err, "hash_updated_lookup") ||
+	    !ASSERT_EQ(value.prefix, 12, "hash_updated_value"))
+		goto out;
+
+	bpf_link__destroy(link);
+	link = attach_managed_map_iter(skel->progs.map_iter_read_kptr, map_fd);
+	err = libbpf_get_error(link);
+	if (!ASSERT_EQ(err, -EACCES, "hash_read_kptr_attach")) {
+		if (!err)
+			bpf_link__destroy(link);
+		return;
+	}
+
+	link = attach_managed_map_iter(skel->progs.map_iter_write_kptr, map_fd);
+	err = libbpf_get_error(link);
+	if (!ASSERT_EQ(err, -EACCES, "hash_write_kptr_attach")) {
+		if (!err)
+			bpf_link__destroy(link);
+	}
+	return;
+
+out:
+	bpf_link__destroy(link);
+}
+
+static void test_managed_sk_storage_iter(struct bpf_iter_bpf_sk_storage_map *skel)
+{
+	struct managed_value value = { .prefix = 20 };
+	int sock_fd, map_fd, err;
+	struct bpf_link *link;
+
+	sock_fd = socket(AF_INET6, SOCK_STREAM, 0);
+	if (!ASSERT_GE(sock_fd, 0, "managed_storage_socket"))
+		return;
+
+	map_fd = bpf_map__fd(skel->maps.managed_sk_storage_map);
+	err = bpf_map_update_elem(map_fd, &sock_fd, &value, BPF_NOEXIST);
+	if (!ASSERT_OK(err, "storage_map_update"))
+		goto out_socket;
+
+	link = attach_managed_map_iter(skel->progs.sk_storage_iter_prefix, map_fd);
+	if (!ASSERT_OK_PTR(link, "storage_prefix_attach"))
+		goto out_socket;
+	err = read_managed_map_iter(link);
+	bpf_link__destroy(link);
+	if (!ASSERT_OK(err, "storage_prefix_iter"))
+		goto out_socket;
+
+	err = bpf_map_lookup_elem(map_fd, &sock_fd, &value);
+	if (!ASSERT_OK(err, "storage_prefix_lookup") ||
+	    !ASSERT_EQ(value.prefix, 21, "storage_prefix_value"))
+		goto out_socket;
+
+	link = attach_managed_map_iter(skel->progs.sk_storage_iter_no_access,
+				       map_fd);
+	if (!ASSERT_OK_PTR(link, "storage_no_access_attach"))
+		goto out_socket;
+	err = bpf_link__update_program(link,
+				       skel->progs.sk_storage_iter_write_kptr);
+	if (!ASSERT_EQ(err, -EACCES, "storage_link_update_kptr"))
+		goto out_link;
+	err = bpf_link__update_program(link,
+				       skel->progs.sk_storage_iter_prefix);
+	if (!ASSERT_OK(err, "storage_link_update_prefix"))
+		goto out_link;
+	err = read_managed_map_iter(link);
+	if (!ASSERT_OK(err, "storage_updated_iter"))
+		goto out_link;
+	err = bpf_map_lookup_elem(map_fd, &sock_fd, &value);
+	if (!ASSERT_OK(err, "storage_updated_lookup") ||
+	    !ASSERT_EQ(value.prefix, 22, "storage_updated_value"))
+		goto out_link;
+
+	bpf_link__destroy(link);
+	link = NULL;
+	link = attach_managed_map_iter(skel->progs.sk_storage_iter_read_kptr,
+				       map_fd);
+	err = libbpf_get_error(link);
+	if (!ASSERT_EQ(err, -EACCES, "storage_read_kptr_attach")) {
+		if (!err)
+			bpf_link__destroy(link);
+		goto out_socket;
+	}
+
+	link = attach_managed_map_iter(skel->progs.sk_storage_iter_write_kptr,
+				       map_fd);
+	err = libbpf_get_error(link);
+	if (!ASSERT_EQ(err, -EACCES, "storage_write_kptr_attach")) {
+		if (!err)
+			bpf_link__destroy(link);
+	}
+	goto out_socket;
+
+out_link:
+	if (link)
+		bpf_link__destroy(link);
+out_socket:
+	close(sock_fd);
+}
+
+static void test_bpf_iter_managed_map_fields(void)
+{
+	struct bpf_iter_bpf_sk_storage_map *skel;
+
+	skel = bpf_iter_bpf_sk_storage_map__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "managed_map_fields_open_and_load"))
+		return;
+
+	test_managed_map_elem_iter(skel);
+	test_managed_sk_storage_iter(skel);
+	bpf_iter_bpf_sk_storage_map__destroy(skel);
+}
+
 static void test_rdonly_buf_out_of_bound(void)
 {
 	DECLARE_LIBBPF_OPTS(bpf_iter_attach_opts, opts);
@@ -1776,6 +1961,8 @@ void test_bpf_iter(void)
 		test_bpf_percpu_array_map();
 	if (test__start_subtest("bpf_sk_storage_map"))
 		test_bpf_sk_storage_map();
+	if (test__start_subtest("managed_map_fields"))
+		test_bpf_iter_managed_map_fields();
 	if (test__start_subtest("bpf_sk_storage_map_iter_fd"))
 		test_bpf_sk_storage_map_iter_fd();
 	if (test__start_subtest("bpf_sk_storage_delete"))
