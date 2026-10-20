@@ -87,6 +87,14 @@ __bpf_kfunc int bpf_path_d_path(const struct path *path, char *buf, size_t buf__
 	if (!buf__sz)
 		return -EINVAL;
 
+	/*
+	 * An exiting task releases its last files from exit_task_work(), after
+	 * exit_fs() has already dropped its ->fs, which d_path() uses to
+	 * resolve against.
+	 */
+	if (!current->fs)
+		return -EINVAL;
+
 	ret = d_path(path, buf, buf__sz);
 	if (IS_ERR(ret))
 		return PTR_ERR(ret);
