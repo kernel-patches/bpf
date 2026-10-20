@@ -223,6 +223,7 @@ static bool in_rcu_callback(struct bpf_verifier_env *env);
 static const char *non_sleepable_context_description(struct bpf_verifier_env *env);
 static void scalar32_min_max_add(struct bpf_reg_state *dst_reg, struct bpf_reg_state *src_reg);
 static void scalar_min_max_add(struct bpf_reg_state *dst_reg, struct bpf_reg_state *src_reg);
+static void zext_32_to_64(struct bpf_reg_state *reg);
 
 static void bpf_map_ptr_store(struct bpf_insn_aux_data *aux,
 			      struct bpf_map *map,
@@ -3968,15 +3969,46 @@ static int check_stack_write_fixed_off(struct bpf_verifier_env *env,
 	mark_stack_slot_scratched(env, spi);
 	if (reg && !(off % BPF_REG_SIZE) && reg->type == SCALAR_VALUE && env->bpf_capable) {
 		bool reg_value_fits;
+		bool subreg_link;
 
 		reg_value_fits = get_reg_width(reg) <= BITS_PER_BYTE * size;
+		/*
+		 * A narrowing spill stores the low 32 bits of the source, so
+		 * the slot is their zero-extension: record a low-32 link
+		 * rather than dropping the relation, as a 32-bit mov does.
+		 * A store never sign-extends, so there is only one link kind here.
+		 */
+		subreg_link = !reg_value_fits && size == 4;
+
 		/* Make sure that reg had an ID to build a relation on spill. */
-		if (reg_value_fits)
+		if (reg_value_fits || subreg_link)
 			assign_scalar_id_before_mov(env, reg);
 		save_register_state(env, state, spi, reg, size);
-		/* Break the relation on a narrowing spill. */
-		if (!reg_value_fits)
-			bpf_clear_scalar_id(&ss->spilled_ptr);
+		if (!reg_value_fits) {
+			if (subreg_link && reg->id) {
+				/*
+				 * save_register_state() copies the source
+				 * whole, but the store only wrote its low 32
+				 * bits, so truncate to those before recording
+				 * the kind: a slot asserting BPF_REG_LINK_ZEXT
+				 * over the source's wider bounds is a register
+				 * state that contradicts itself.
+				 *
+				 * Keep the source's delta, though: the slot
+				 * holds (u32)(base + delta), so resetting it to
+				 * 0 would record a relation off by that delta.
+				 */
+				zext_32_to_64(&ss->spilled_ptr);
+				ss->spilled_ptr.link_kind = BPF_REG_LINK_ZEXT;
+			} else {
+				/*
+				 * Nothing to relate: either the source has no
+				 * id to share, or the store is narrower than
+				 * the 32 bits a link can describe.
+				 */
+				bpf_clear_scalar_id(&ss->spilled_ptr);
+			}
+		}
 	} else if (!reg && !(off % BPF_REG_SIZE) && is_bpf_st_mem(insn) &&
 		   env->bpf_capable) {
 		struct bpf_reg_state *tmp_reg = &env->fake_reg[0];
