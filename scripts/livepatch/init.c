@@ -34,7 +34,7 @@ static int __init livepatch_mod_init(void)
 		goto err;
 	}
 
-	objs = kzalloc(sizeof(struct klp_object) * (nr_objs + 1),  GFP_KERNEL);
+	objs = kzalloc_objs(*objs, nr_objs + 1);
 	if (!objs) {
 		ret = -ENOMEM;
 		goto err_free_patch;
@@ -47,7 +47,7 @@ static int __init livepatch_mod_init(void)
 		struct klp_func *funcs = objs[i].funcs;
 		struct klp_object *obj = objs + i;
 
-		funcs = kzalloc(sizeof(struct klp_func) * (nr_funcs + 1), GFP_KERNEL);
+		funcs = kzalloc_objs(*funcs, nr_funcs + 1);
 		if (!funcs) {
 			ret = -ENOMEM;
 			for (int j = 0; j < i; j++)
