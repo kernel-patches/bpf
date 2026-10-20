@@ -295,8 +295,10 @@ void txgbe_down(struct wx *wx)
 		break;
 	case wx_mac_aml:
 		phylink_stop(wx->phylink);
-		/* Disable TX laser */
-		wr32m(wx, WX_GPIO_DR, TXGBE_GPIOBIT_1, TXGBE_GPIOBIT_1);
+		if (!wx->ncsi_enabled) {
+			/* Disable TX laser */
+			wr32m(wx, WX_GPIO_DR, TXGBE_GPIOBIT_1, TXGBE_GPIOBIT_1);
+		}
 		break;
 	case wx_mac_sp:
 		phylink_stop(wx->phylink);
