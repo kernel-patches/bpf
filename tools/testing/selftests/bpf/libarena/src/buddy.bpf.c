@@ -131,6 +131,78 @@ static __always_inline int buddy_cache_push(struct buddy_cache __arena *cache,
 	return 0;
 }
 
+static int buddy_transfer_take_batch(struct buddy_cache_state __arena *state,
+				     int order,
+				     struct buddy_cache_order __arena *slots)
+{
+	struct buddy_transfer_order __arena *transfer;
+	unsigned long flags;
+	u32 elems, start;
+	unsigned int i;
+	int ret = 0;
+
+	transfer = &state->transfer[order];
+	if (arena_spin_lock_irqsave(&transfer->lock, flags))
+		return -EAGAIN;
+
+	elems = READ_ONCE(transfer->elems);
+	if (elems < BUDDY_CACHE_BATCH_SIZE) {
+		ret = -ENOENT;
+		goto out_unlock;
+	}
+
+	start = elems - BUDDY_CACHE_BATCH_SIZE;
+	for (i = zero; i < BUDDY_CACHE_BATCH_SIZE && can_loop; i++)
+		WRITE_ONCE(slots->objects[i],
+			   READ_ONCE(transfer->objects[start + i]));
+
+	WRITE_ONCE(transfer->elems, start);
+	WRITE_ONCE(slots->elems, BUDDY_CACHE_BATCH_SIZE);
+
+out_unlock:
+	arena_spin_unlock_irqrestore(&transfer->lock, flags);
+	return ret;
+}
+
+static int buddy_transfer_put_batch(struct buddy_cache_state __arena *state,
+				    int order,
+				    struct buddy_cache_order __arena *slots)
+{
+	struct buddy_transfer_order __arena *transfer;
+	unsigned long flags;
+	u32 elems, local_elems, start;
+	unsigned int i;
+	int ret = 0;
+
+	transfer = &state->transfer[order];
+	if (arena_spin_lock_irqsave(&transfer->lock, flags))
+		return -EAGAIN;
+
+	elems = READ_ONCE(transfer->elems);
+	if (elems > BUDDY_TRANSFER_CAPACITY - BUDDY_CACHE_BATCH_SIZE) {
+		ret = -ENOMEM;
+		goto out_unlock;
+	}
+
+	local_elems = READ_ONCE(slots->elems);
+	if (local_elems < BUDDY_CACHE_BATCH_SIZE) {
+		ret = -EINVAL;
+		goto out_unlock;
+	}
+
+	start = local_elems - BUDDY_CACHE_BATCH_SIZE;
+	for (i = zero; i < BUDDY_CACHE_BATCH_SIZE && can_loop; i++)
+		WRITE_ONCE(transfer->objects[elems + i],
+			   READ_ONCE(slots->objects[start + i]));
+
+	WRITE_ONCE(slots->elems, start);
+	WRITE_ONCE(transfer->elems, elems + BUDDY_CACHE_BATCH_SIZE);
+
+out_unlock:
+	arena_spin_unlock_irqrestore(&transfer->lock, flags);
+	return ret;
+}
+
 void __arena *buddy_cache_alloc(struct buddy __arena *buddy, size_t order)
 {
 	struct buddy_cache_state __arena *state = &buddy->cache_state;
@@ -185,6 +257,38 @@ int buddy_cache_free(struct buddy __arena *buddy, void __arena *addr)
 	return ret;
 }
 
+static int buddy_cache_transfer_free(struct buddy __arena *buddy,
+				     void __arena *addr)
+{
+	struct buddy_cache_state __arena *state = &buddy->cache_state;
+	struct buddy_cache_order __arena *slots;
+	struct buddy_cache_ctx ctx;
+	int order, ret;
+
+	DISABLE_CACHE_IF_ASAN(-EINVAL);
+
+	order = buddy_cache_get_order(addr);
+	if (order >= BUDDY_CACHE_NUM_ORDERS)
+		return -EINVAL;
+
+	if (buddy_cache_enter(state, &ctx))
+		return -EAGAIN;
+
+	/* An allocation may have made room since the first local attempt. */
+	ret = buddy_cache_push(ctx.cache, order, addr);
+	if (!ret)
+		goto done;
+
+	slots = &ctx.cache->orders[order];
+	ret = buddy_transfer_put_batch(state, order, slots);
+	if (!ret)
+		ret = buddy_cache_push(ctx.cache, order, addr);
+
+done:
+	buddy_cache_exit(&ctx);
+	return ret;
+}
+
 static void __arena *buddy_cache_refill(struct buddy __arena *buddy,
 					size_t size, int order)
 {
@@ -208,6 +312,12 @@ static void __arena *buddy_cache_refill(struct buddy __arena *buddy,
 		goto done;
 
 	slots = &ctx.cache->orders[order];
+	ret = buddy_transfer_take_batch(state, order, slots);
+	if (!ret) {
+		address = buddy_cache_pop(ctx.cache, order);
+		goto done;
+	}
+
 	ret = buddy_alloc_bulk(buddy, size, arena_fls(BUDDY_CACHE_BATCH_SIZE) - 1,
 				(void __arena * __arena *)slots->objects);
 	if (ret)
@@ -745,10 +855,12 @@ static int buddy_cache_state_init(struct buddy __arena *buddy)
 
 	DISABLE_CACHE_IF_ASAN(0);
 
+	WRITE_ONCE(state->valid, false);
 	if (CONFIG_NR_CPUS > BUDDY_CACHE_MAX_CPUS)
 		return -E2BIG;
 
-	WRITE_ONCE(state->valid, false);
+	for (order = zero; order < BUDDY_CACHE_NUM_ORDERS && can_loop; order++)
+		WRITE_ONCE(state->transfer[order].elems, 0);
 
 	for (cpu = zero; cpu < CONFIG_NR_CPUS && can_loop; cpu++) {
 		ret = buddy_alloc_bulk(buddy, sizeof(*cache), 0,
@@ -762,18 +874,19 @@ static int buddy_cache_state_init(struct buddy __arena *buddy)
 	}
 
 	WRITE_ONCE(state->valid, true);
-
 	return 0;
 }
 
 static void buddy_cache_state_destroy(struct buddy __arena *buddy)
 {
 	struct buddy_cache_state __arena *state = &buddy->cache_state;
-	unsigned int cpu;
+	unsigned int cpu, order;
 
 	WRITE_ONCE(state->valid, false);
 	for (cpu = zero; cpu < CONFIG_NR_CPUS && can_loop; cpu++)
 		WRITE_ONCE(state->percpu[cpu], NULL);
+	for (order = zero; order < BUDDY_CACHE_NUM_ORDERS && can_loop; order++)
+		WRITE_ONCE(state->transfer[order].elems, 0);
 }
 
 __weak int buddy_init(struct buddy __arena *buddy)
@@ -1292,6 +1405,10 @@ __weak int buddy_free(struct buddy __arena *buddy, void __arena *addr)
 		buddy_deferred_free_start(buddy, addr);
 		return 0;
 	}
+
+	ret = buddy_cache_transfer_free(buddy, addr);
+	if (!ret)
+		return 0;
 
 	ret = buddy_lock(buddy, flags);
 	if (ret)
