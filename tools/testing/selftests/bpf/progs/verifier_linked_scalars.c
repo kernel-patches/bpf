@@ -710,4 +710,352 @@ l_exit_%=:							\
 	: __clobber_all);
 }
 
+/*
+ * A 32-bit mov from a wide source shares only the low 32 bits. Narrowing the
+ * source must reach the destination through that link.
+ */
+SEC("socket")
+__success
+__naked void zext_mov_narrow_src(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	w7 = w6;		/* forms the link */		\
+	if w6 != 0 goto 1f;	/* narrows r6, propagates to r7 */ \
+	if w7 == 0 goto 1f;					\
+	r0 /= 0;						\
+1:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * Pinning the base's low 32 bits makes the member a known constant over all
+ * 64, not merely over its low half: the member is the zero-extension, so its
+ * high half is zero by construction. Checked with a 64-bit compare, which
+ * zext_mov_narrow_src above does not do. Code that needs a provable constant
+ * -- a helper argument such as bpf_rdonly_cast()'s btf_id, say -- depends on
+ * this and not on the 32-bit form.
+ */
+SEC("socket")
+__success
+__naked void zext_sync_makes_member_const(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	w7 = w6;		/* forms the link */		\
+	if w6 != 0 goto 1f;	/* narrows r6's low 32 to 0 */	\
+	if r7 == 0 goto 1f;	/* r7 is 0 over all 64 bits */	\
+	r0 /= 0;						\
+1:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * A contradiction between the two sides must not leave an empty range behind.
+ * The branch really is dead -- (u32)7 is not 5 -- but an empty range is a
+ * shape nothing downstream handles.
+ *
+ * The mod by a known-zero divisor validates r7 without recomputing it, so an
+ * empty range would survive into the check; under BPF_F_TEST_REG_INVARIANTS
+ * that is a load failure, which is what __success asserts. A later patch
+ * prunes this branch, so the test pins this patch standing alone.
+ */
+SEC("socket")
+__success
+__flag(BPF_F_TEST_REG_INVARIANTS)
+__naked void zext_contradiction_keeps_range_sane(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	w7 = w6;		/* forms the link */		\
+	if w7 != 5 goto 1f;	/* r7 == 5 */			\
+	if r6 != 7 goto 1f;	/* r6 is wide, so this is explored */ \
+	r9 = 0;							\
+	r7 %%= r9;		/* validates r7 without touching it */ \
+1:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * The reverse does not hold: narrowing the low-32 link says nothing about the
+ * base's high bits, so r6 must stay unknown and the div stays reachable.
+ */
+SEC("socket")
+__failure __msg("div by zero")
+__naked void zext_narrow_dst_keeps_base(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	w7 = w6;		/* forms the link */		\
+	if r7 != 0 goto 1f;	/* narrows r7, must not propagate to r6 */ \
+	if r6 == 0 goto 1f;	/* taken only if r6 wrongly narrowed */	\
+	r0 /= 0;						\
+1:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * A provably-u32 source takes the full-equality path, not the low-32 one:
+ * narrowing the destination must reach the source.
+ */
+SEC("socket")
+__success
+__naked void zext_u32_src_is_full_link(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	w6 = w0;		/* r6 provably u32 */		\
+	w7 = w6;		/* full link, not low-32 */	\
+	if r7 > 10 goto 1f;	/* narrows r7, propagates to r6 */ \
+	if r6 > 10 goto 2f;					\
+	goto 1f;						\
+2:								\
+	r0 /= 0;						\
+1:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * A self-mov has nothing to link, so it must not mint an id for r6.
+ */
+SEC("socket")
+__success __log_level(2)
+/* an id would print as R6=scalar(id=N+0,smin=... */
+__msg("(bc) w6 = w6 {{.*}} R6=scalar(smin=0,")
+__naked void zext_self_mov_no_link(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	r6 ^= 0;		/* drop the id */		\
+	w6 = w6;		/* forms no link */		\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * A second 32-bit mov drops the link: assign_scalar_id_before_mov() clears
+ * any link kind on the source, and the zero-extending link is one, so
+ * narrowing the base no longer reaches the end of the chain. Same rule as
+ * scalars_double_add above -- a delta of zero is not special.
+ */
+SEC("socket")
+__failure
+__msg("div by zero")
+__naked void zext_chain_drops_link(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	w7 = w6;		/* forms the link */		\
+	w8 = w7;		/* the 2nd mov breaks the link */ \
+	if w6 != 0 goto 1f;	/* narrows r6, does not reach r8 */ \
+	if w8 == 0 goto 1f;					\
+	r0 /= 0;						\
+1:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * Two members of one id set carrying different link kinds do not propagate
+ * to each other: r7 is (u32)base and r8 is base + 3, and the deltas were
+ * added at different ALU widths, so narrowing r8 says nothing about r7.
+ * sync_linked_regs() declines the pair on the kinds before the deltas are
+ * ever consulted. Note neither register is the base -- that is r6.
+ */
+SEC("socket")
+__failure __msg("div by zero")
+__naked void zext_no_sync_between_mixed_kinds(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	w7 = w6;		/* forms the link */		\
+	r8 = r6;						\
+	r8 += 3;		/* r8 is BPF_REG_LINK_FULL, r7 is BPF_REG_LINK_ZEXT */	\
+	if r8 != 3 goto 1f;	/* must not propagate to r7 */	\
+	if w7 == 0 goto 1f;					\
+	r0 /= 0;						\
+1:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * ... and here the low-32 link is the branch register, so the register
+ * carrying the delta must not be narrowed either.
+ */
+SEC("socket")
+__failure __msg("div by zero")
+__naked void zext_no_sync_from_subreg_base(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	w7 = w6;		/* forms the link */		\
+	r8 = r6;						\
+	r8 += 3;		/* delta on r8 */		\
+	if w7 != 0 goto 1f;	/* must not propagate to r8 */	\
+	if r8 == 3 goto 1f;	/* taken only if r8 wrongly narrowed */	\
+	r0 /= 0;						\
+1:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * Two low-32 links on the same base do propagate to each other: both are the
+ * zero-extension of the same low 32 bits.
+ */
+SEC("socket")
+__success
+__naked void zext_sync_between_two_subregs(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	w7 = w6;		/* two links on one base */	\
+	w8 = w6;						\
+	if w7 != 0 goto 1f;	/* narrows r7, propagates to r8 */ \
+	if w8 == 0 goto 1f;					\
+	r0 /= 0;						\
+1:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * A narrowing of the base must not widen a member that has already proved
+ * itself tighter. The low-32 link does not propagate back to the base, so the
+ * base can be the wider of the two; rebuilding the member from it has to
+ * refine what the member knows rather than replace it.
+ */
+SEC("socket")
+__success
+__naked void zext_sync_keeps_narrower_member(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	call %[bpf_get_prandom_u32];				\
+	r0 <<= 32;						\
+	r6 |= r0;		/* r6 = full 64-bit unknown */	\
+	w7 = w6;		/* forms the link */		\
+	if w7 > 7 goto 1f;	/* r7 low 32 bits in [0, 7] */	\
+	if r6 > 100 goto 1f;	/* narrows the base, syncs to r7 */ \
+	if r7 <= 7 goto 1f;	/* still provable if r7 kept [0, 7] */ \
+	r0 /= 0;						\
+1:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * Only one of the two paths links r7 to r8, so narrowing w8 reaches r7 on one
+ * and not the other, and the div stays reachable. This pins the outcome, not
+ * any one check: the two states differ in several ways, so no single
+ * regsafe() test is load-bearing here.
+ */
+SEC("socket")
+__failure __msg("div by zero")
+__flag(BPF_F_TEST_STATE_FREQ)
+__naked void zext_unlinked_path_stays_reachable(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	r6 &= 1;						\
+	if r6 >= 1 goto 2f;					\
+	/* explored first: r7 is a low-32 link of r8 */		\
+	call %[bpf_get_prandom_u32];				\
+	r8 = r0;						\
+	w7 = w8;		/* forms the link */		\
+	goto 1f;						\
+2:								\
+	/* runtime path: r7 unrelated to r8 */			\
+	call %[bpf_get_prandom_u32];				\
+	r8 = r0;						\
+	call %[bpf_get_prandom_u32];				\
+	w7 = w0;		/* no link here */		\
+1:								\
+	if w8 != 0 goto 3f;	/* propagates to r7 only if linked */ \
+	if w7 == 0 goto 3f;					\
+	r0 /= 0;						\
+3:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * Forming the link calls assign_scalar_id_before_mov(), which drops whatever
+ * link the source already carries. That is what the narrow-source path has
+ * always done, so a wide source behaves the same: r5 stops tracking r6.
+ */
+SEC("socket")
+__failure __msg("div by zero")
+__naked void zext_mov_breaks_linked_src(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	r5 = r6;		/* r5, r6 linked */		\
+	r5 += 3;		/* r5 = base + 3 */		\
+	w7 = w5;		/* breaks r5's delta link */	\
+	if r6 > 9 goto 1f;	/* r6 in [0, 9] */		\
+	if r5 < 13 goto 1f;	/* taken only if r5 still linked */ \
+	r0 /= 0;						\
+1:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";
