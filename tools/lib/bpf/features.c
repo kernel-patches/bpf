@@ -2,6 +2,7 @@
 /* Copyright (c) 2023 Meta Platforms, Inc. and affiliates. */
 #include <linux/kernel.h>
 #include <linux/filter.h>
+#include <sys/mman.h>
 #include "bpf.h"
 #include "libbpf.h"
 #include "libbpf_common.h"
@@ -728,6 +729,52 @@ static int probe_kern_percpu_data(int token_fd)
 	return probe_fd(ret);
 }
 
+static int probe_kern_arena_percpu_data(int token_fd)
+{
+	int possible_cpus;
+	size_t page_sz = sysconf(_SC_PAGE_SIZE);
+	bool *mask = NULL;
+	struct bpf_insn insns[] = {
+		BPF_LD_IMM64_RAW_FULL(BPF_REG_0, BPF_PSEUDO_ARENA_PERCPU, 0, 0, 0, 0),
+		BPF_EXIT_INSN(),
+	};
+	LIBBPF_OPTS(bpf_map_create_opts, map_opts,
+		.token_fd = token_fd,
+		.map_flags = BPF_F_MMAPABLE | (token_fd ? BPF_F_TOKEN_FD : 0),
+		.arena_percpu_chunk_sz = page_sz,
+	);
+	LIBBPF_OPTS(bpf_prog_load_opts, prog_opts,
+		.token_fd = token_fd,
+		.prog_flags = token_fd ? BPF_F_TOKEN_FD : 0,
+	);
+	void *mmaped;
+	int ret, map_fd, insn_cnt = ARRAY_SIZE(insns);
+
+	ret = parse_cpu_mask_file("/sys/devices/system/cpu/possible", &mask, &possible_cpus);
+	if (ret < 0 || possible_cpus <= 0) {
+		free(mask);
+		return -EINVAL;
+	}
+	free(mask);
+
+	map_fd = bpf_map_create(BPF_MAP_TYPE_ARENA, "arena_percpu", 0, 0, possible_cpus, &map_opts);
+	if (map_fd < 0)
+		return 0;
+
+	mmaped = mmap(NULL, possible_cpus * page_sz, PROT_READ | PROT_WRITE, MAP_SHARED, map_fd, 0);
+	if (mmaped == MAP_FAILED) {
+		close(map_fd);
+		return 0;
+	}
+
+	insns[0].imm = map_fd;
+	ret = bpf_prog_load(BPF_PROG_TYPE_SOCKET_FILTER, NULL, "GPL", insns, insn_cnt, &prog_opts);
+	munmap(mmaped, possible_cpus * page_sz);
+	close(map_fd);
+
+	return probe_fd(ret);
+}
+
 typedef int (*feature_probe_fn)(int /* token_fd */);
 
 static struct kern_feature_cache feature_cache;
@@ -823,6 +870,9 @@ static struct kern_feature_desc {
 	},
 	[FEAT_EXCL_MAP_FD_ARRAY_CNT] = {
 		"exclusive map bound through fd_array_cnt", probe_kern_excl_map_fd_array_cnt,
+	},
+	[FEAT_ARENA_PERCPU_DATA] = {
+		"kernel supports arena percpu data", probe_kern_arena_percpu_data,
 	},
 };
 

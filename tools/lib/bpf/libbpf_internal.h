@@ -408,6 +408,8 @@ enum kern_feature_id {
 	FEAT_FD_ARRAY_CNT,
 	/* Kernel checks an exclusive map bound through fd_array_cnt against the final digest */
 	FEAT_EXCL_MAP_FD_ARRAY_CNT,
+	/* Kernel supports arena percpu data */
+	FEAT_ARENA_PERCPU_DATA,
 	__FEAT_CNT,
 };
 

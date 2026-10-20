@@ -8288,6 +8288,12 @@ static int bpf_object__relocate(struct bpf_object *obj, const char *targ_btf_pat
 			return -EOPNOTSUPP;
 		}
 
+		if (obj->arena_percpu.present && !kernel_supports(obj, FEAT_ARENA_PERCPU_DATA)) {
+			pr_warn("map '%s': kernel doesn't support %s variables\n",
+				arena_map->name, ARENA_PERCPU_SEC);
+			return -EOPNOTSUPP;
+		}
+
 		if (data_sz + percpu_sz > mmap_sz) {
 			pr_warn("map '%s': declared ARENA map size (%zu) is too small to hold "
 				"global %s of size %zu plus the percpu data size %zu\n",
