@@ -293,6 +293,14 @@
 #define CAN_USE_MOVSX
 #endif
 
+#if (defined(__TARGET_ARCH_arm64) || defined(__TARGET_ARCH_x86) ||	\
+     (defined(__TARGET_ARCH_riscv) && __riscv_xlen == 64) ||		\
+     defined(__TARGET_ARCH_arm) || defined(__TARGET_ARCH_s390) ||	\
+     defined(__TARGET_ARCH_loongarch)) &&				\
+	(__clang_major__ >= 18 || defined(__BPF_FEATURE_LDSX))
+#define CAN_USE_LDSX
+#endif
+
 #if __clang_major__ >= 18 && defined(ENABLE_ATOMICS_TESTS) &&		\
 	(defined(__TARGET_ARCH_arm64) ||				\
 	 defined(__TARGET_ARCH_x86) ||					\

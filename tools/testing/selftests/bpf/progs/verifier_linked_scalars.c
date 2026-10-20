@@ -245,6 +245,7 @@ l0_%=:								\
 	: __imm(bpf_get_prandom_u32)
 	: __clobber_all);
 }
+
 #endif /* CAN_USE_MOVSX */
 
 SEC("socket")
@@ -1120,6 +1121,102 @@ __naked void zext_mov_breaks_linked_src(void)
 	: __clobber_all);
 }
 
+/*
+ * A narrowing fill keeps only the slot's low 32 bits, so a later narrowing of
+ * the spilled value must still reach the filled register. Same relation as a
+ * 32-bit mov from a wide source, with the stack slot as the base.
+ */
+SEC("socket")
+__success
+__naked void zext_fill_narrow_from_wide_spill(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	call %[bpf_get_prandom_u32];				\
+	r0 <<= 32;						\
+	r6 |= r0;		/* r6 = full 64-bit unknown */	\
+	*(u64 *)(r10 - 8) = r6;	/* slot linked to r6 */		\
+"
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+"	r2 = *(u32 *)(r10 - 8);	/* narrowing fill, forms the link */ \
+"
+#else
+"	r2 = *(u32 *)(r10 - 4);				\
+"
+#endif
+"	if w6 != 0 goto 1f;	/* narrows r6, propagates to r2 */ \
+	if r2 == 0 goto 1f;					\
+	r0 /= 0;						\
+1:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * A full-width fill of a wide slot is a plain 64-bit equality, not a low-32
+ * link, so it must keep propagating exactly as before.
+ */
+SEC("socket")
+__success
+__naked void zext_fill_full_width_keeps_full_link(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	call %[bpf_get_prandom_u32];				\
+	r0 <<= 32;						\
+	r6 |= r0;						\
+	*(u64 *)(r10 - 8) = r6;					\
+	r2 = *(u64 *)(r10 - 8);	/* no narrowing */		\
+	if r6 != 0 goto 1f;					\
+	if r2 == 0 goto 1f;					\
+	r0 /= 0;						\
+1:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * A sub-word fill is below the low-32 model, so no link is formed and the
+ * relation is dropped as before.
+ */
+SEC("socket")
+__failure __msg("div by zero")
+__naked void zext_fill_byte_forms_no_link(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	call %[bpf_get_prandom_u32];				\
+	r0 <<= 32;						\
+	r6 |= r0;						\
+	*(u64 *)(r10 - 8) = r6;					\
+"
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+"	r2 = *(u8 *)(r10 - 8);	/* 1-byte fill: no link */	\
+"
+#else
+"	r2 = *(u8 *)(r10 - 1);					\
+"
+#endif
+"	if w6 != 0 goto 1f;					\
+	if r2 == 0 goto 1f;	/* not deduced */		\
+	r0 /= 0;						\
+1:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
 #ifdef CAN_USE_MOVSX
 
 /*
@@ -1494,6 +1591,215 @@ __naked void sext_drops_stale_step(void)
 	: __clobber_all);
 }
 
+/*
+ * Same for a narrowing fill: the slot is (s32)(r6 + 5), so the filled register
+ * is (u32)(r6 + 5). Forcing the delta to 0 made the verifier believe r2 == r6.
+ */
+SEC("socket")
+__success
+__naked void sext_delta_survives_narrowing_fill(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	r6 <<= 32;						\
+	call %[bpf_get_prandom_u32];				\
+	r6 |= r0;		/* r6 = full 64-bit unknown */	\
+	w7 = w6;		/* BPF_REG_LINK_ZEXT, delta 0 */	\
+	w7 += 5;		/* BPF_REG_LINK_ZEXT, delta 5 */	\
+	r8 = (s32)r7;		/* BPF_REG_LINK_SEXT, delta 5 */	\
+	*(u64 *)(r10 - 8) = r8;	/* full spill keeps the link */	\
+"
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+"	r2 = *(u32 *)(r10 - 8);	/* narrowing fill inherits delta */ \
+"
+#else
+"	r2 = *(u32 *)(r10 - 4);					\
+"
+#endif
+"	if r6 != 0 goto 1f;	/* r6 == 0, so r2 == 5 */	\
+	if r2 == 5 goto 1f;	/* always taken: r2 is 5 */	\
+	r0 /= 0;						\
+1:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
 #endif /* CAN_USE_MOVSX */
+
+#ifdef CAN_USE_LDSX
+
+/*
+ * The sign-extending counterpart: the filled register is the sign extension of
+ * the slot's low 32 bits, so a narrowing of those bits arrives sign-extended.
+ */
+SEC("socket")
+__success
+__naked void sext_fill_narrow_from_wide_spill(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	call %[bpf_get_prandom_u32];				\
+	r0 <<= 32;						\
+	r6 |= r0;		/* r6 = full 64-bit unknown */	\
+	*(u64 *)(r10 - 8) = r6;	/* slot linked to r6 */		\
+"
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+"	r2 = *(s32 *)(r10 - 8);	/* narrowing sx fill */		\
+"
+#else
+"	r2 = *(s32 *)(r10 - 4);				\
+"
+#endif
+"	if w6 != -1 goto 1f;	/* narrows r6, propagates to r2 */ \
+	if r2 == -1 goto 1f;	/* sign-extended, not 0xffffffff */ \
+	r0 /= 0;						\
+1:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * The same, for the two link kinds off one slot.
+ */
+SEC("socket")
+__failure __msg("div by zero")
+__flag(BPF_F_TEST_STATE_FREQ)
+__naked void fill_kinds_reach_different_values(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	r6 &= 1;						\
+	call %[bpf_get_prandom_u32];				\
+	r8 = r0;						\
+	call %[bpf_get_prandom_u32];				\
+	r0 <<= 32;						\
+	r8 |= r0;						\
+	*(u64 *)(r10 - 8) = r8;					\
+	if r6 >= 1 goto 2f;					\
+"
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+"	r2 = *(s32 *)(r10 - 8);	/* sign-extending fill */	\
+"
+#else
+"	r2 = *(s32 *)(r10 - 4);				\
+"
+#endif
+"	goto 1f;						\
+2:								\
+"
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+"	r2 = *(u32 *)(r10 - 8);	/* zero-extending fill */	\
+"
+#else
+"	r2 = *(u32 *)(r10 - 4);				\
+"
+#endif
+"1:								\
+	if w8 != -1 goto 3f;					\
+	if r2 == -1 goto 3f;	/* only the sign-extending path */ \
+	r0 /= 0;						\
+3:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * A sign-extending fill must not come away with a zero-extending link. The
+ * slot below already fits 32 bits, so the fill is not narrowing and assigns
+ * no link kind of its own, and "state->regs[dst] = *reg" copies the slot's
+ * verbatim; check_mem_access() is what has to drop it, since it would leave
+ * r2 recording a zero-extension of a value it has just sign-extended.
+ * Asserted on the register dump rather than on a guarded branch, so it pins
+ * the rule itself and not a downstream effect.
+ */
+SEC("socket")
+__success __log_level(2)
+/* a copied link would print as R2=scalar(id=N+0,smin=... */
+__msg("(81) r2 = *(s32 *)(r10 {{.*}} R2=scalar(smin=")
+__naked void sext_fill_does_not_inherit_zext_link(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	call %[bpf_get_prandom_u32];				\
+	r0 <<= 32;						\
+	r6 |= r0;		/* r6 = full 64-bit unknown */	\
+	w7 = w6;		/* r7 = zext32(r6), fits 32 bits */ \
+	*(u64 *)(r10 - 8) = r7;					\
+"
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+"	r2 = *(s32 *)(r10 - 8);	/* sign-extending, not narrowing */ \
+"
+#else
+"	r2 = *(s32 *)(r10 - 4);					\
+"
+#endif
+"	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * BPF_REG_LINK_SEXT says the register is (s32)(base + delta) -- a 32-bit sign
+ * extension specifically. An 8- or 16-bit ldsx is a different relation, so
+ * the exemption that keeps a sign-extending link across a sign-extending
+ * load has to be gated on the load width. Ungated, r2 below claims to be
+ * (s32)r6 when it is really (s8)((s32)r6).
+ */
+SEC("socket")
+__success __log_level(2)
+#ifdef CAN_USE_MOVSX
+/*
+ * Needs MOVSX as well as LDSX: the BPF_REG_LINK_SEXT under test is built with
+ * r7 = (s32)r6, and only the byte fill below is an ldsx.
+ */
+/* a surviving link would print as R2=scalar(id=N+0.sx,smin=... */
+__msg("(91) r2 = *(s8 *)(r10 {{.*}} R2=scalar(smin=")
+__naked void sext_byte_fill_drops_sext_link(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	call %[bpf_get_prandom_u32];				\
+	r0 <<= 32;						\
+	r6 |= r0;		/* r6 = full 64-bit unknown */	\
+	r7 = (s32)r6;		/* r7 = BPF_REG_LINK_SEXT, delta 0 */	\
+	if r7 > 255 goto 1f;	/* r7 fits a byte */		\
+	*(u64 *)(r10 - 8) = r7;	/* full spill keeps the link */	\
+"
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+"	r2 = *(s8 *)(r10 - 8);	/* 8-bit ldsx: no link survives */ \
+"
+#else
+"	r2 = *(s8 *)(r10 - 1);					\
+"
+#endif
+"	r0 = r2;		/* keep r2 live so the fill prints it */ \
+	r0 &= 1;						\
+	exit;							\
+1:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+#endif /* CAN_USE_MOVSX */
+
+#endif /* CAN_USE_LDSX */
 
 char _license[] SEC("license") = "GPL";
