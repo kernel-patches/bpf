@@ -318,7 +318,8 @@ static void __arena *buddy_cache_refill(struct buddy __arena *buddy,
 		goto done;
 	}
 
-	ret = buddy_alloc_bulk(buddy, size, arena_fls(BUDDY_CACHE_BATCH_SIZE) - 1,
+	ret = buddy_alloc_bulk(buddy, size,
+				arena_fls(BUDDY_CACHE_BATCH_SIZE) - 1,
 				(void __arena * __arena *)slots->objects);
 	if (ret)
 		goto done;
@@ -1179,6 +1180,11 @@ int buddy_alloc_bulk(struct buddy __arena *buddy, size_t size, size_t norder,
 	if (!buddy || !out || norder >= BUDDY_CHUNK_NUM_ORDERS)
 		return -EINVAL;
 
+	/*
+	 * Bulk allocations bypass the per-cpu caches and reserve one buddy
+	 * block covering all returned objects. The buddy metadata records
+	 * each object separately so it can later be freed independently.
+	 */
 	order = size_to_order(size);
 	address = buddy_alloc_memory(buddy, size, order, norder);
 	if (!address)
