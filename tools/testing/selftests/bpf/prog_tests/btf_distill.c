@@ -671,6 +671,138 @@ cleanup:
 	btf__free(btf1);
 }
 
+/* Relocation matches distilled struct/union/enum types with base BTF by name
+ * and size, treating struct and union alike, and enum and enum64 alike.  Base
+ * types that cannot be told apart that way should be added to split BTF in
+ * full, so that relocation succeeds.  Types sharing a name but differing in
+ * size are still distilled.
+ */
+static void test_distilled_base_ambiguous(void)
+{
+	struct btf *btf1 = NULL, *btf2 = NULL, *btf3 = NULL, *btf4 = NULL;
+
+	btf1 = btf__new_empty();
+	if (!ASSERT_OK_PTR(btf1, "empty_main_btf"))
+		return;
+
+	btf__add_int(btf1, "int", 4, BTF_INT_SIGNED);	/* [1] int */
+	btf__add_struct(btf1, "inner", 4);		/* [2] struct inner { */
+	btf__add_field(btf1, "f1", 1, 0, 0);		/*	int f1; */
+							/* } */
+	btf__add_struct(btf1, "s1", 4);			/* [3] struct s1 { */
+	btf__add_field(btf1, "f1", 2, 0, 0);		/*	struct inner f1; */
+							/* } */
+	btf__add_struct(btf1, "s1", 4);			/* [4] struct s1 { */
+	btf__add_field(btf1, "f2", 1, 0, 0);		/*	int f2; */
+							/* } */
+	btf__add_struct(btf1, "s1", 8);			/* [5] struct s1 { */
+	btf__add_field(btf1, "f1", 1, 0, 0);		/*	int f1; */
+	btf__add_field(btf1, "f2", 1, 32, 0);		/*	int f2; */
+							/* } */
+	/* relocation matches struct and union alike */
+	btf__add_union(btf1, "s1", 4);			/* [6] union s1 { */
+	btf__add_field(btf1, "f1", 1, 0, 0);		/*	int f1; */
+							/* } */
+	btf__add_enum(btf1, "e1", 4);			/* [7] enum e1 { */
+	btf__add_enum_value(btf1, "v1", 1);		/*	v1 = 1; */
+							/* } */
+	/* relocation matches enum and enum64 alike */
+	btf__add_enum64(btf1, "e1", 4, false);		/* [8] enum64 e1 { */
+	btf__add_enum64_value(btf1, "v2", 2);		/*	v2 = 2; */
+							/* } */
+	VALIDATE_RAW_BTF(
+		btf1,
+		"[1] INT 'int' size=4 bits_offset=0 nr_bits=32 encoding=SIGNED",
+		"[2] STRUCT 'inner' size=4 vlen=1\n"
+		"\t'f1' type_id=1 bits_offset=0",
+		"[3] STRUCT 's1' size=4 vlen=1\n"
+		"\t'f1' type_id=2 bits_offset=0",
+		"[4] STRUCT 's1' size=4 vlen=1\n"
+		"\t'f2' type_id=1 bits_offset=0",
+		"[5] STRUCT 's1' size=8 vlen=2\n"
+		"\t'f1' type_id=1 bits_offset=0\n"
+		"\t'f2' type_id=1 bits_offset=32",
+		"[6] UNION 's1' size=4 vlen=1\n"
+		"\t'f1' type_id=1 bits_offset=0",
+		"[7] ENUM 'e1' encoding=UNSIGNED size=4 vlen=1\n"
+		"\t'v1' val=1",
+		"[8] ENUM64 'e1' encoding=UNSIGNED size=4 vlen=1\n"
+		"\t'v2' val=2");
+
+	btf2 = btf__new_empty_split(btf1);
+	if (!ASSERT_OK_PTR(btf2, "empty_split_btf"))
+		goto cleanup;
+
+	btf__add_ptr(btf2, 3);				/* [9] ptr to struct s1 (size 4) */
+	btf__add_ptr(btf2, 5);				/* [10] ptr to struct s1 (size 8) */
+	btf__add_ptr(btf2, 6);				/* [11] ptr to union s1 */
+	btf__add_ptr(btf2, 7);				/* [12] ptr to enum e1 */
+
+	if (!ASSERT_EQ(0, btf__distill_base(btf2, &btf3, &btf4),
+		       "distilled_base") ||
+	    !ASSERT_OK_PTR(btf3, "distilled_base") ||
+	    !ASSERT_OK_PTR(btf4, "distilled_split") ||
+	    !ASSERT_EQ(4, btf__type_cnt(btf3), "distilled_base_type_cnt"))
+		goto cleanup;
+
+	/* The ambiguous struct s1, union s1 and enum e1 are in split BTF in
+	 * full, while the base types their members refer to are distilled.
+	 */
+	VALIDATE_RAW_BTF(
+		btf4,
+		"[1] INT 'int' size=4 bits_offset=0 nr_bits=32 encoding=SIGNED",
+		"[2] STRUCT 'inner' size=4 vlen=0",
+		"[3] STRUCT 's1' size=8 vlen=0",
+		"[4] PTR '(anon)' type_id=8",
+		"[5] PTR '(anon)' type_id=3",
+		"[6] PTR '(anon)' type_id=9",
+		"[7] PTR '(anon)' type_id=10",
+		"[8] STRUCT 's1' size=4 vlen=1\n"
+		"\t'f1' type_id=2 bits_offset=0",
+		"[9] UNION 's1' size=4 vlen=1\n"
+		"\t'f1' type_id=1 bits_offset=0",
+		"[10] ENUM 'e1' encoding=UNSIGNED size=4 vlen=1\n"
+		"\t'v1' val=1");
+
+	if (!ASSERT_EQ(btf__relocate(btf4, btf1), 0, "relocate_split"))
+		goto cleanup;
+
+	VALIDATE_RAW_BTF(
+		btf4,
+		"[1] INT 'int' size=4 bits_offset=0 nr_bits=32 encoding=SIGNED",
+		"[2] STRUCT 'inner' size=4 vlen=1\n"
+		"\t'f1' type_id=1 bits_offset=0",
+		"[3] STRUCT 's1' size=4 vlen=1\n"
+		"\t'f1' type_id=2 bits_offset=0",
+		"[4] STRUCT 's1' size=4 vlen=1\n"
+		"\t'f2' type_id=1 bits_offset=0",
+		"[5] STRUCT 's1' size=8 vlen=2\n"
+		"\t'f1' type_id=1 bits_offset=0\n"
+		"\t'f2' type_id=1 bits_offset=32",
+		"[6] UNION 's1' size=4 vlen=1\n"
+		"\t'f1' type_id=1 bits_offset=0",
+		"[7] ENUM 'e1' encoding=UNSIGNED size=4 vlen=1\n"
+		"\t'v1' val=1",
+		"[8] ENUM64 'e1' encoding=UNSIGNED size=4 vlen=1\n"
+		"\t'v2' val=2",
+		"[9] PTR '(anon)' type_id=13",
+		"[10] PTR '(anon)' type_id=5",
+		"[11] PTR '(anon)' type_id=14",
+		"[12] PTR '(anon)' type_id=15",
+		"[13] STRUCT 's1' size=4 vlen=1\n"
+		"\t'f1' type_id=2 bits_offset=0",
+		"[14] UNION 's1' size=4 vlen=1\n"
+		"\t'f1' type_id=1 bits_offset=0",
+		"[15] ENUM 'e1' encoding=UNSIGNED size=4 vlen=1\n"
+		"\t'v1' val=1");
+
+cleanup:
+	btf__free(btf4);
+	btf__free(btf3);
+	btf__free(btf2);
+	btf__free(btf1);
+}
+
 /* LOC_PARAM, LOC_PROTO should be added to split BTF. */
 static void test_distilled_loc(void)
 {
@@ -789,6 +921,8 @@ void test_btf_distill(void)
 		test_distilled_base_multi_err2();
 	if (test__start_subtest("distilled_base_embedded_err"))
 		test_distilled_base_embedded_err();
+	if (test__start_subtest("distilled_base_ambiguous"))
+		test_distilled_base_ambiguous();
 	if (test__start_subtest("distilled_base_vmlinux"))
 		test_distilled_base_vmlinux();
 	if (test__start_subtest("distilled_endianness"))
