@@ -56,13 +56,14 @@ enum bpf_iter_state {
  * how much, and is meaningful for every kind:
  *
  *   BPF_REG_LINK_FULL:  reg == base + delta
- *   BPF_REG_LINK_ZEXT:  reg == (u32)(base + delta), base known to fit u32
+ *   BPF_REG_LINK_ZEXT:  reg == (u32)(base + delta), for ANY base width
  *   BPF_REG_LINK_SEXT:  reg == (s32)(base + delta)
  *
  *   r1 = r2;       r1 and r3 are linked to r2: id == N
  *   r3 = r2;
  *   r1 += 10;      r1 gets BPF_REG_LINK_FULL, delta 10
  *   w3 += 10;      w3 gets BPF_REG_LINK_ZEXT, delta 10
+ *   w7 = w6;       r7 gets BPF_REG_LINK_ZEXT, delta 0  (r6 may be wide)
  */
 enum bpf_reg_link_kind {
 	BPF_REG_LINK_NONE = 0,

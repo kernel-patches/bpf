@@ -17618,13 +17618,6 @@ static int adjust_reg_min_max_vals(struct bpf_verifier_env *env,
 		verbose(env, "verifier internal error: no src_reg\n");
 		return -EFAULT;
 	}
-	/*
-	 * For alu32 linked register tracking, we need to check dst_reg's
-	 * umax_value before the ALU operation. After adjust_scalar_min_max_vals(),
-	 * alu32 ops will have zero-extended the result, making umax_value <= U32_MAX.
-	 */
-	u64 dst_umax = reg_umax(dst_reg);
-
 	err = adjust_scalar_min_max_vals(env, insn, dst_reg, *src_reg);
 	if (err)
 		return err;
@@ -17647,9 +17640,6 @@ static int adjust_reg_min_max_vals(struct bpf_verifier_env *env,
 		if (!alu32 && ((s64)val < S32_MIN || (s64)val > S32_MAX))
 			goto clear_id;
 
-		if (alu32 && (dst_umax > U32_MAX))
-			goto clear_id;
-
 		off = (s32)val;
 
 		if (BPF_OP(insn->code) == BPF_SUB) {
@@ -17661,11 +17651,28 @@ static int adjust_reg_min_max_vals(struct bpf_verifier_env *env,
 
 		if (dst_reg->link_kind) {
 			/*
-			 * If the register already went through rX += val
-			 * we cannot accumulate another val into rx->off.
+			 * Only the zero-extending link the mov above records,
+			 * BPF_REG_LINK_ZEXT with delta 0, can take a delta:
+			 * (u32)((u32)(base + 0) + off) is (u32)(base + off).
+			 * The add has to be 32-bit as well, since a 64-bit one
+			 * parts company with the link once the low half wraps.
+			 *
+			 * Everything else still drops the link. A zero delta
+			 * reached by an add rather than by the mov, say "r1 +=
+			 * r3" with r3 known to be 0, has already spent its
+			 * delta; composing onto it keeps a link alive across a
+			 * loop's increments, and since the delta is compared
+			 * for equality, every value the loop reaches becomes a
+			 * state of its own and stops pruning.
 			 */
+			if (dst_reg->link_kind != BPF_REG_LINK_ZEXT || !alu32 ||
+			    dst_reg->delta) {
+				/* also the target of the two gotos above */
 clear_id:
-			bpf_clear_scalar_id(dst_reg);
+				bpf_clear_scalar_id(dst_reg);
+			} else {
+				dst_reg->delta = off;
+			}
 		} else {
 			if (alu32)
 				dst_reg->link_kind = BPF_REG_LINK_ZEXT;
@@ -17890,16 +17897,43 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 				} else if (src_reg->type == SCALAR_VALUE) {
 					if (insn->off == 0) {
 						bool is_src_reg_u32 = get_reg_width(src_reg) <= 32;
+						/*
+						 * A wide src shares only its low 32 bits. A
+						 * full link would let dst's [0, U32_MAX]
+						 * propagate onto src's unknown high bits, so
+						 * record a low-32-only link instead. A
+						 * self-mov has nothing to link.
+						 */
+						bool subreg_link = !is_src_reg_u32 &&
+								   src_reg != dst_reg;
 
-						if (is_src_reg_u32)
+						if (is_src_reg_u32 || subreg_link)
 							assign_scalar_id_before_mov(env, src_reg);
 						*dst_reg = *src_reg;
-						/* Make sure ID is cleared if src_reg is not in u32
-						 * range otherwise dst_reg min/max could be incorrectly
-						 * propagated into src_reg by sync_linked_regs()
-						 */
-						if (!is_src_reg_u32)
+						if (subreg_link && src_reg->id) {
+							/*
+							 * Keep src's delta. It is
+							 * always zero here, since
+							 * assign_scalar_id_before_mov()
+							 * above has just dropped any
+							 * kind src carried; the
+							 * inheritance starts to matter
+							 * once BPF_REG_LINK_SEXT is
+							 * spared there, because dst is
+							 * (u32)(base + delta) whatever
+							 * kind src had --
+							 * (u32)((s32)(base + d)) ==
+							 * (u32)(base + d).
+							 */
+							dst_reg->link_kind = BPF_REG_LINK_ZEXT;
+						} else if (!is_src_reg_u32) {
+							/*
+							 * dst min/max could otherwise be
+							 * propagated back into a src that
+							 * is not in u32 range.
+							 */
 							bpf_clear_scalar_id(dst_reg);
+						}
 					} else {
 						/* case: W1 = (s8, s16)W2 */
 						bool no_sext = reg_umax(src_reg) < (1ULL << (insn->off - 1));
@@ -18782,19 +18816,34 @@ static void sync_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier_s
 		if (reg->id != known_reg->id)
 			continue;
 		/*
+		 * A zero-extending link, spelled BPF_REG_LINK_ZEXT: the
+		 * relation reg == (u32)(base + delta) does not invert once the
+		 * base is wider than 32 bits, so the reverse direction is
+		 * skipped.
+		 */
+		if (known_reg->link_kind == BPF_REG_LINK_ZEXT &&
+		    get_reg_width(reg) > 32)
+			continue;
+		/*
 		 * Skip mixed 32/64-bit links: the delta relationship doesn't
 		 * hold across different ALU widths.
 		 */
 		if (reg->link_kind && known_reg->link_kind &&
 		    reg->link_kind != known_reg->link_kind)
 			continue;
-		if ((!reg->link_kind && !known_reg->link_kind) ||
-		    reg->delta == known_reg->delta) {
+		/*
+		 * Only an unlinked pair is a plain copy. Anything carrying a
+		 * kind goes through the differencing arm below, which adds the
+		 * delta difference (zero when the deltas match) and then
+		 * applies the BPF_REG_LINK_ZEXT zero-extension.
+		 */
+		if (!reg->link_kind && !known_reg->link_kind) {
 			*reg = *known_reg;
 		} else {
 			enum bpf_reg_link_kind saved_link_kind = reg->link_kind;
 			s32 saved_off = reg->delta;
 			u32 saved_id = reg->id;
+			struct bpf_reg_state prev = *reg;
 
 			fake_reg.type = SCALAR_VALUE;
 			__mark_reg_known(&fake_reg, (s64)reg->delta - (s64)known_reg->delta);
@@ -18816,6 +18865,27 @@ static void sync_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier_s
 			if (reg->link_kind == BPF_REG_LINK_ZEXT ||
 			    known_reg->link_kind == BPF_REG_LINK_ZEXT)
 				zext_32_to_64(reg);
+			/*
+			 * Intersect rather than overwrite. A BPF_REG_LINK_ZEXT
+			 * link over a wide base does not propagate back, so the
+			 * base can be wider than what @reg has already proved
+			 * about itself; replacing it would lose that.
+			 */
+			cnum64_intersect_with(&reg->r64, prev.r64);
+			cnum32_intersect_with(&reg->r32, prev.r32);
+			reg->var_off = tnum_intersect(reg->var_off, prev.var_off);
+			/*
+			 * An empty intersection means the two sides contradict,
+			 * so this path is unreachable. Say nothing rather than
+			 * say it with an empty range: reg_bounds_sync() below
+			 * refuses to touch one, and the first later
+			 * reg_bounds_sanity_check() would report it as a
+			 * verifier bug, which it is not. Keeping the wider
+			 * pre-intersect state only costs precision on a path
+			 * that cannot be taken.
+			 */
+			if (range_bounds_violation(reg))
+				*reg = prev;
 			reg_bounds_sync(reg);
 		}
 		if (e->is_reg)
