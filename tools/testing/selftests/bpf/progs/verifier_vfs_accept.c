@@ -124,4 +124,21 @@ int BPF_PROG(trusted_field_used_in_rcu_cs, struct linux_binprm *bprm)
 	return 0;
 }
 
+SEC("lsm.s/file_open")
+__success
+int BPF_PROG(trusted_field_used_before_put)
+{
+	struct task_struct *task = bpf_get_current_task_btf();
+	struct file *file = bpf_get_task_exe_file(task);
+	ino_t ino;
+
+	if (!file)
+		return 0;
+
+	ino = file->f_inode->i_ino;
+	bpf_put_file(file);
+	__sink(ino);
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";
