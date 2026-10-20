@@ -378,6 +378,7 @@ enum reloc_type {
 	RELO_SUBPROG_ADDR,
 	RELO_CORE,
 	RELO_INSN_ARRAY,
+	RELO_ARENA_PERCPU,
 };
 
 struct reloc_desc {
@@ -4934,7 +4935,8 @@ static int bpf_prog_compute_hash(struct bpf_program *prog)
 		purged[i] = prog->insns[i];
 		if (purged[i].code == (BPF_LD | BPF_IMM | BPF_DW) &&
 		    (purged[i].src_reg == BPF_PSEUDO_MAP_FD ||
-		     purged[i].src_reg == BPF_PSEUDO_MAP_VALUE)) {
+		     purged[i].src_reg == BPF_PSEUDO_MAP_VALUE ||
+		     purged[i].src_reg == BPF_PSEUDO_ARENA_PERCPU)) {
 			purged[i].imm = 0;
 			i++;
 			if (i >= prog->insns_cnt ||
@@ -5067,6 +5069,20 @@ static int bpf_program__record_reloc(struct bpf_program *prog,
 		pr_debug("prog '%s': found arena map %d (%s, sec %d, off %zu) for insn %u\n",
 			 prog->name, obj->arena_map_idx, map->name, map->sec_idx,
 			 map->sec_offset, insn_idx);
+		return 0;
+	}
+
+	/* arena percpu data relocation */
+	if (shdr_idx == obj->efile.arena_percpu_shndx) {
+		if (obj->arena_map_idx < 0) {
+			pr_warn("prog '%s': bad arena percpu data relocation at insn %u, no arena maps defined\n",
+				prog->name, insn_idx);
+			return -LIBBPF_ERRNO__RELOC;
+		}
+		reloc_desc->type = RELO_ARENA_PERCPU;
+		reloc_desc->insn_idx = insn_idx;
+		reloc_desc->map_idx = obj->arena_map_idx;
+		reloc_desc->sym_off = sym->st_value;
 		return 0;
 	}
 
@@ -7099,6 +7115,23 @@ bpf_object__relocate_data(struct bpf_object *obj, struct bpf_program *prog)
 				insn[0].imm = relo->map_idx;
 			} else if (map->autocreate) {
 				insn[0].src_reg = BPF_PSEUDO_MAP_VALUE;
+				insn[0].imm = map->fd;
+			} else {
+				poison_map_ldimm64(prog, i, relo->insn_idx, insn,
+						   relo->map_idx, map);
+			}
+			break;
+		case RELO_ARENA_PERCPU:
+			/*
+			 * resolve the symbol to its arena-relative offset in cpu 0's chunk. The JIT
+			 * will add smp_processor_id() * chunk_sz to it at run time, so the address
+			 * ends up in the running cpu's replica.
+			 */
+			insn[1].imm = insn[0].imm + relo->sym_off + obj->arena_percpu.offset;
+
+			map = &obj->maps[relo->map_idx];
+			if (map->autocreate) {
+				insn[0].src_reg = BPF_PSEUDO_ARENA_PERCPU;
 				insn[0].imm = map->fd;
 			} else {
 				poison_map_ldimm64(prog, i, relo->insn_idx, insn,

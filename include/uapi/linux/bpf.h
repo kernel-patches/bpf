@@ -1418,6 +1418,19 @@ enum {
  */
 #define BPF_PSEUDO_FUNC		4
 
+/* insn[0].src_reg:  BPF_PSEUDO_ARENA_PERCPU
+ * insn[0].imm:      map fd
+ * insn[1].imm:      offset of the value in cpu 0's chunk, including the chunk's
+ *                   offset in the arena and the value's offset in the chunk
+ * insn[0].off:      0
+ * insn[1].off:      0
+ * ldimm64 rewrite:  address of the value in cpu 0's chunk. The JIT adds
+ *                   smp_processor_id() * chunk_sz to step it into the
+ *                   running cpu's replica
+ * verifier type:    PTR_TO_ARENA
+ */
+#define BPF_PSEUDO_ARENA_PERCPU	7
+
 /* when bpf_call->src_reg == BPF_PSEUDO_CALL, bpf_call->imm == pc-relative
  * offset to another bpf function
  */
