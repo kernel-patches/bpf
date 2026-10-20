@@ -2772,6 +2772,34 @@ static int do_jit(struct bpf_verifier_env *env, struct bpf_prog *bpf_prog, int *
 
 		case BPF_LD | BPF_IMM | BPF_DW:
 			emit_mov_imm64(&prog, dst_reg, insn[1].imm, insn[0].imm);
+
+#ifdef CONFIG_SMP
+			if (insn->src_reg == BPF_PSEUDO_ARENA_PERCPU) {
+				u32 chunk_sz = bpf_arena_percpu_chunk_sz(bpf_prog_arena(bpf_prog));
+
+				/* aux = smp_processor_id(); mov aux, gs:[cpu_number] */
+				EMIT2(0x65, add_2mod(0x40, 0, AUX_REG));
+				EMIT3(0x8B, add_2reg(0x04, 0, AUX_REG), 0x25);
+				EMIT((u32)(unsigned long)&cpu_number, 4);
+
+				/*
+				 * aux *= chunk_sz
+				 * arena_map_alloc() guarantees
+				 * chunk_sz * nr_cpu_ids <= vm_range <= 4 GiB and
+				 * cpu_number < nr_cpu_ids, so a 32-bit imul
+				 * cannot overflow here.
+				 */
+				maybe_emit_mod(&prog, AUX_REG, AUX_REG, false);
+				/* imul aux, aux, imm32 */
+				EMIT2_off32(0x69, add_2reg(0xC0, AUX_REG, AUX_REG),
+					    chunk_sz);
+
+				/* dst += aux */
+				maybe_emit_mod(&prog, dst_reg, AUX_REG, true);
+				EMIT2(0x01, add_2reg(0xC0, dst_reg, AUX_REG));
+			}
+#endif
+
 			insn++;
 			i++;
 			break;
@@ -5068,6 +5096,11 @@ bool bpf_jit_supports_large_stack(void)
 }
 
 bool bpf_jit_supports_percpu_insn(void)
+{
+	return true;
+}
+
+bool bpf_jit_supports_arena_percpu_insn(void)
 {
 	return true;
 }
