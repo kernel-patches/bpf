@@ -2,6 +2,8 @@
 /* Copyright (c) 2026 Meta Platforms, Inc. and affiliates. */
 #pragma once
 
+#include <libarena/buddy_cache.h>
+
 enum buddy_consts {
 	/*
 	 * Minimum allocation is 1 << BUDDY_MIN_ALLOC_SHIFT.
@@ -69,6 +71,7 @@ struct buddy {
 	struct buddy_chunk __arena *first_chunk;		/* Pointer to the chunk linked list. */
 	arena_spinlock_t lock;			/* Allocator lock */
 	u64 vaddr;				/* Allocation into reserved vaddr */
+	struct buddy_cache_state cache_state;
 };
 
 #ifdef __BPF__
