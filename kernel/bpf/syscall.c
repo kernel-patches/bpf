@@ -5868,6 +5868,7 @@ static int link_create(union bpf_attr *attr, bpfptr_t uattr, struct bpf_common_a
 	struct bpf_verifier_log *log;
 	struct bpf_log_attr attr_log;
 	struct bpf_prog *prog;
+	char *errmsg = NULL;
 	int ret;
 
 	if (CHECK_ATTR(BPF_LINK_CREATE))
@@ -5944,7 +5945,7 @@ static int link_create(union bpf_attr *attr, bpfptr_t uattr, struct bpf_common_a
 		break;
 #ifdef CONFIG_NET
 	case BPF_PROG_TYPE_XDP:
-		ret = bpf_xdp_link_attach(attr, prog);
+		ret = bpf_xdp_link_attach(attr, prog, &errmsg);
 		break;
 	case BPF_PROG_TYPE_SCHED_CLS:
 		if (attr->link_create.attach_type == BPF_TCX_INGRESS ||
@@ -5979,6 +5980,11 @@ static int link_create(union bpf_attr *attr, bpfptr_t uattr, struct bpf_common_a
 out:
 	if (ret < 0) {
 		int err;
+
+		if (errmsg) {
+			bpf_log(log, "%s\n", errmsg);
+			kfree(errmsg);
+		}
 
 		err = bpf_log_attr_finalize(&attr_log, log);
 		ret = err ? err : ret;
