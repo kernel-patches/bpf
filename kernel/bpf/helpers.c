@@ -3427,7 +3427,12 @@ static bool bpf_stack_walker(void *cookie, u64 ip, u64 sp, u64 bp)
 	return false;
 }
 
-__bpf_kfunc void bpf_throw(u64 cookie)
+/*
+ * Unwind the stack to the exception callback of the main program. @regs holds
+ * the callee-saved registers of the throw site, or is NULL when the
+ * architecture has no native entry and the kfunc was called directly.
+ */
+void bpf_throw_unwind(struct bpf_throw_regs *regs, u64 cookie)
 {
 	struct bpf_throw_ctx ctx = {};
 
@@ -3439,13 +3444,18 @@ __bpf_kfunc void bpf_throw(u64 cookie)
 	WARN_ON_ONCE(!ctx.cnt);
 	/*
 	 * Prevent KASAN false positives for CONFIG_KASAN_STACK by unpoisoning
-	 * deeper stack depths than ctx.sp as we do not return from bpf_throw,
-	 * which skips compiler generated instrumentation to do the same. Some
+	 * deeper stack depths than ctx.sp as we do not return from here, which
+	 * skips compiler generated instrumentation to do the same. Some
 	 * architectures cannot recover sp while unwinding, so fall back to bp.
 	 */
 	kasan_unpoison_task_stack_below((void *)(long)(ctx.sp ?: ctx.bp));
 	ctx.aux->bpf_exception_cb(cookie, ctx.sp + ctx.aux->stack_arg_sp_adjust, ctx.bp, 0, 0);
 	WARN(1, "A call to BPF exception callback should never return\n");
+}
+
+__bpf_kfunc void bpf_throw(u64 cookie)
+{
+	bpf_throw_unwind(NULL, cookie);
 }
 
 __bpf_kfunc int bpf_wq_init(struct bpf_wq *wq, void *p__const_map, unsigned int flags)

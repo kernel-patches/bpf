@@ -23263,6 +23263,11 @@ static int specialize_kfunc(struct bpf_verifier_env *env, struct bpf_kfunc_desc 
 	} else if (func_id == special_kfunc_list[KF_bpf_arena_free_pages]) {
 		if (env->insn_aux_data[insn_idx].non_sleepable)
 			addr = (unsigned long)bpf_arena_free_pages_non_sleepable;
+	} else if (func_id == special_kfunc_list[KF_bpf_throw]) {
+		void *entry = bpf_arch_throw_entry();
+
+		if (entry)
+			addr = (unsigned long)entry;
 	}
 	desc->addr = addr;
 	return 0;
