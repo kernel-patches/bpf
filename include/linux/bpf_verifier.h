@@ -794,6 +794,10 @@ struct bpf_insn_aux_data {
 	 * bpf_fastcall pattern.
 	 */
 	u64 fastcall_spills_num:3;
+	/* for CALL instructions, the registers whose spill/fill pairs in the
+	 * bpf_fastcall pattern are removed and must survive the call.
+	 */
+	u64 fastcall_spilled_regs:6;
 	u64 arg_prog:4;
 	/*
 	 * What a load found, on any path: an __arena pointer member of a
