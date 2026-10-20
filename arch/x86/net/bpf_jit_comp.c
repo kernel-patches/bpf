@@ -5270,6 +5270,14 @@ void arch_bpf_stack_walk(bool (*consume_fn)(void *cookie, u64 ip, u64 sp, u64 bp
 #endif
 }
 
+#ifdef CONFIG_BPF_SYSCALL
+/* arch/x86/net/bpf_throw.S, which calls bpf_throw_unwind(); both need the syscall. */
+void *bpf_arch_throw_entry(void)
+{
+	return (void *)bpf_throw_entry;
+}
+#endif
+
 void bpf_arch_poke_desc_update(struct bpf_jit_poke_descriptor *poke,
 			       struct bpf_prog *new, struct bpf_prog *old)
 {
