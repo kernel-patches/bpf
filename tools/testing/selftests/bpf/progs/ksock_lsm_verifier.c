@@ -33,7 +33,26 @@ int BPF_PROG(socket_sendmsg_ksock_send, struct socket *sock, struct msghdr *msg,
 }
 
 SEC("lsm.s/socket_sendmsg")
-__description("bpf_ksock operations other than send are allowed from socket_sendmsg LSM hook")
+__description("bpf_ksock_sendto is rejected from socket_sendmsg LSM hook")
+__failure __msg("calling kernel function bpf_ksock_sendto is not allowed")
+int BPF_PROG(socket_sendmsg_ksock_sendto, struct socket *sock,
+	     struct msghdr *msg, int size, int ret)
+{
+	struct bpf_ksock *ks;
+
+	ks = ksock_ctx_get();
+	if (!ks)
+		return ret;
+
+	bpf_ksock_sendto(ks, send_data, sizeof(send_data), NULL, 0);
+	bpf_ksock_release(ks);
+
+	return ret;
+}
+
+
+SEC("lsm.s/socket_sendmsg")
+__description("bpf_ksock acquire and release are allowed from socket_sendmsg LSM hook")
 __success
 int BPF_PROG(socket_sendmsg_ksock_allowed, struct socket *sock,
 	     struct msghdr *msg, int size, int ret)
@@ -103,6 +122,7 @@ int BPF_PROG(socket_connect_ksock_allowed, struct socket *sock,
 		return ret;
 
 	bpf_ksock_send(ks, send_data, sizeof(send_data));
+	bpf_ksock_sendto(ks, send_data, sizeof(send_data), NULL, 0);
 	bpf_ksock_release(ks);
 
 	return ret;
