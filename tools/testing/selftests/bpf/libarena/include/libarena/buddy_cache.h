@@ -43,3 +43,9 @@ struct buddy_cache_state {
 	struct buddy_cache __arena *percpu[BUDDY_CACHE_MAX_CPUS];
 	bool valid;
 };
+
+/* Per-CPU guard against nested or preempting cache operations. */
+
+struct __attribute__((aligned(64))) buddy_cache_active {
+	unsigned int value;
+};

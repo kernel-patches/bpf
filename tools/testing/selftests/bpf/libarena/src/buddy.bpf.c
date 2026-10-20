@@ -7,6 +7,7 @@
 #include <libarena/buddy_cache.h>
 
 #include <bpf_arena_spin_lock.h>
+#include <bpf_experimental.h>
 
 _Static_assert(BUDDY_CACHE_MAX_CPUS == _Q_MAX_CPUS,
 	       "buddy caches must cover every CPU arena spinlocks support");
@@ -48,6 +49,14 @@ static u64 size_to_order(size_t size);
 static void __arena *buddy_alloc_memory(struct buddy __arena *buddy, size_t size,
 					int order, size_t norder);
 static int buddy_free_unlocked(struct buddy __arena *buddy, u64 addr);
+static bool buddy_deferred_free_pending(struct buddy __arena *buddy);
+static int buddy_deferred_free_complete(struct buddy __arena *buddy);
+static struct buddy_cache_active active[BUDDY_CACHE_MAX_CPUS];
+
+struct buddy_cache_ctx {
+	struct buddy_cache __arena *cache;
+	struct buddy_cache_active *active;
+};
 
 #define buddy_lock(buddy, flags) (arena_spin_lock_irqsave(&(buddy)->lock, (flags)))
 #define buddy_unlock(buddy, flags) (arena_spin_unlock_irqrestore(&(buddy)->lock, (flags)))
@@ -61,6 +70,31 @@ static int buddy_free_unlocked(struct buddy __arena *buddy, u64 addr);
 #else
 #define DISABLE_CACHE_IF_ASAN(...)
 #endif
+
+static __always_inline int
+buddy_cache_enter(struct buddy_cache_state __arena *state,
+		  struct buddy_cache_ctx *ctx)
+{
+	unsigned int cpu;
+
+	/*
+	 * No support for cache operations from contexts that interrupted or
+	 * preempted an in-flight operation on the same CPU, just like the
+	 * kernel's BPF memory allocator.
+	 */
+	cpu = bpf_get_smp_processor_id();
+	ctx->cache = state->percpu[cpu];
+	ctx->active = &active[cpu];
+	if (cmpxchg(&ctx->active->value, 0, 1))
+		return -EAGAIN;
+
+	return 0;
+}
+
+static __always_inline void buddy_cache_exit(struct buddy_cache_ctx *ctx)
+{
+	smp_store_release(&ctx->active->value, 0);
+}
 
 static __always_inline void __arena *
 buddy_cache_pop(struct buddy_cache __arena *cache, int order)
@@ -100,18 +134,21 @@ static __always_inline int buddy_cache_push(struct buddy_cache __arena *cache,
 void __arena *buddy_cache_alloc(struct buddy __arena *buddy, size_t order)
 {
 	struct buddy_cache_state __arena *state = &buddy->cache_state;
-	struct buddy_cache __arena *cache;
-	unsigned int cpu;
+	struct buddy_cache_ctx ctx;
+	void __arena *address = NULL;
 
 	DISABLE_CACHE_IF_ASAN(NULL);
 
 	if (order >= BUDDY_CACHE_NUM_ORDERS)
 		return NULL;
 
-	cpu = bpf_get_smp_processor_id();
-	cache = state->percpu[cpu];
+	if (buddy_cache_enter(state, &ctx))
+		return NULL;
 
-	return buddy_cache_pop(cache, order);
+	address = buddy_cache_pop(ctx.cache, order);
+	buddy_cache_exit(&ctx);
+
+	return address;
 }
 
 /* Retrieve the order of an allocation from the address. */
@@ -129,9 +166,9 @@ static int buddy_cache_get_order(void __arena *addr)
 int buddy_cache_free(struct buddy __arena *buddy, void __arena *addr)
 {
 	struct buddy_cache_state __arena *state = &buddy->cache_state;
-	struct buddy_cache __arena *cache;
-	unsigned int cpu;
+	struct buddy_cache_ctx ctx;
 	int order;
+	int ret = 0;
 
 	DISABLE_CACHE_IF_ASAN(-EINVAL);
 
@@ -139,10 +176,13 @@ int buddy_cache_free(struct buddy __arena *buddy, void __arena *addr)
 	if (order >= BUDDY_CACHE_NUM_ORDERS)
 		return -EINVAL;
 
-	cpu = bpf_get_smp_processor_id();
-	cache = state->percpu[cpu];
+	if (buddy_cache_enter(state, &ctx))
+		return -EAGAIN;
 
-	return buddy_cache_push(cache, order, addr);
+	ret = buddy_cache_push(ctx.cache, order, addr);
+	buddy_cache_exit(&ctx);
+
+	return ret;
 }
 
 enum {
@@ -707,6 +747,7 @@ __weak int buddy_init(struct buddy __arena *buddy)
 
 	if (!asan_ready())
 		return -EINVAL;
+	buddy->deferred_free = NULL;
 
 	/* Reserve enough address space to ensure allocations are aligned. */
 	ret = buddy_reserve_arena_vaddr(buddy);
@@ -777,6 +818,7 @@ __weak int buddy_destroy(struct buddy __arena *buddy)
 
 	/* Clear all fields. */
 	buddy->first_chunk = NULL;
+	buddy->deferred_free = NULL;
 
 	return 0;
 }
@@ -926,8 +968,18 @@ static void __arena *buddy_alloc_memory(struct buddy __arena *buddy, size_t size
 		return NULL;
 	}
 
+	if (bpf_in_nmi())
+		return NULL;
+
 	if (buddy_lock(buddy, flags))
 		return NULL;
+
+	if (unlikely(buddy_deferred_free_pending(buddy))) {
+		if (buddy_deferred_free_complete(buddy)) {
+			buddy_unlock(buddy, flags);
+			return NULL;
+		}
+	}
 
 	address = (u8 __arena *)buddy_alloc_from_existing_chunks(buddy, order, norder);
 	buddy_unlock(buddy, flags);
@@ -1084,6 +1136,98 @@ static int buddy_free_unlocked(struct buddy __arena *buddy, u64 addr)
 	return 0;
 }
 
+static bool buddy_deferred_free_pending(struct buddy __arena *buddy)
+{
+	return buddy->deferred_free != NULL;
+}
+
+static void buddy_deferred_free_start(struct buddy __arena *buddy, void __arena *addr)
+{
+	void __arena *head;
+	void __arena * __arena *new;
+
+	/*
+	 * Make a linked list by chaining the allocations into a linked list.
+	 * Possible because allocations are 16 bytes minimum and so fit a pointer.
+	 */
+	new = (void __arena * __arena *)addr;
+	asan_unpoison(addr, sizeof(void *));
+	do  {
+		head = buddy->deferred_free;
+		*new = head;
+	} while (cmpxchg((void __arena * __arena *)&buddy->deferred_free,
+			 head, (void __arena *)new) != head && can_loop);
+}
+
+static void buddy_deferred_free_start_bulk(struct buddy __arena *buddy,
+		 void __arena * __arena *addrs, size_t naddrs)
+{
+	void __arena *head, *first, *last, *addr;
+	unsigned int i;
+
+	/* Create a linked list locally. */
+	first = NULL;
+	last = NULL;
+	for (i = zero; i < naddrs && can_loop; i++) {
+		addr = addrs[i];
+		if (!addr)
+			continue;
+
+		asan_unpoison(addr, sizeof(void *));
+
+		if (!first)
+			first = addr;
+		else
+			*(void __arena * __arena *)last = addr;
+
+		last = addr;
+	}
+
+	if (!first)
+		return;
+
+	/*
+	 * Make a linked list by chaining the allocations into a linked list.
+	 * Possible because allocations are 16 bytes minimum and so fit a pointer.
+	 */
+	do  {
+		head = buddy->deferred_free;
+		*(void __arena * __arena *)last = head;
+	} while (cmpxchg((void __arena * __arena *)&buddy->deferred_free,
+			 head, first) != head && can_loop);
+}
+
+static int buddy_deferred_free_complete(struct buddy __arena *buddy)
+{
+	void __arena *head, *old;
+	int ret = 0, err;
+
+	do {
+		head = buddy->deferred_free;
+		if (!head)
+			break;
+		old = head;
+
+		/*
+		 * The cmpxchg is safe because we never pop from the list
+		 * without holding the buddy lock. The next pointer of
+		 * the element then cannot have been gotten invalidated.
+		 */
+
+	} while (cmpxchg((void __arena * __arena *)&buddy->deferred_free,
+			 old, NULL) != old && can_loop);
+
+	while (head && can_loop) {
+		old = head;
+		head = *(void __arena * __arena *)head;
+
+		err = buddy_free_unlocked(buddy, (u64)old);
+		ret = ret ?: err;
+	}
+
+	return ret;
+}
+
 __weak int buddy_free(struct buddy __arena *buddy, void __arena *addr)
 {
 	unsigned long flags;
@@ -1100,12 +1244,25 @@ __weak int buddy_free(struct buddy __arena *buddy, void __arena *addr)
 	if (!ret)
 		return 0;
 
+	if (bpf_in_nmi()) {
+		buddy_deferred_free_start(buddy, addr);
+		return 0;
+	}
+
 	ret = buddy_lock(buddy, flags);
 	if (ret)
 		return ret;
 
 	ret = buddy_free_unlocked(buddy, (u64)addr);
 
+	/* Drain any frees stranded during an NMI. */
+	if (unlikely(buddy_deferred_free_pending(buddy))) {
+		ret = buddy_deferred_free_complete(buddy);
+		if (ret)
+			goto out_unlock;
+	}
+
+out_unlock:
 	buddy_unlock(buddy, flags);
 
 	return ret;
@@ -1127,6 +1284,11 @@ __weak int buddy_free_bulk(struct buddy __arena *buddy, void __arena * __arena *
 	if (!addrs)
 		return -EINVAL;
 
+	if (bpf_in_nmi()) {
+		buddy_deferred_free_start_bulk(buddy, addrs, naddrs);
+		return 0;
+	}
+
 	ret = buddy_lock(buddy, flags);
 	if (ret)
 		return ret;
@@ -1137,6 +1299,12 @@ __weak int buddy_free_bulk(struct buddy __arena *buddy, void __arena * __arena *
 			continue;
 
 		err = buddy_free_unlocked(buddy, (u64)addrs[i]);
+		ret = ret ?: err;
+	}
+
+	/* Drain any frees stranded during an NMI. */
+	if (unlikely(buddy_deferred_free_pending(buddy))) {
+		err = buddy_deferred_free_complete(buddy);
 		ret = ret ?: err;
 	}
 
