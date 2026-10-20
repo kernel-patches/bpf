@@ -17,6 +17,12 @@ struct ksock_test_env {
 	int rfd;
 };
 
+struct ksock_test_case {
+	const char *name;
+	bool connect_in_syscall;
+	bool connect_in_lsm;
+};
+
 static bool ksock_test_env_setup(struct ksock_test_env *env)
 {
 	struct sockaddr_in addr = {
@@ -55,16 +61,18 @@ fail:
 	return false;
 }
 
-void test_ksock_lsm(void)
+static void test_ksock_lsm_case(const struct ksock_test_case *test)
 {
 	LIBBPF_OPTS(bpf_test_run_opts, opts);
-	struct ksock_test_env env;
 	struct sockaddr_in trigger_addr = {
 		.sin_family = AF_INET,
 		.sin_addr.s_addr = htonl(INADDR_LOOPBACK),
 	};
+	struct ksock_test_env env;
 	struct ksock_lsm *skel;
 	char recv_data[sizeof(skel->data->send_data)] = {};
+	bool connected = test->connect_in_syscall || test->connect_in_lsm;
+	int expected_send_ret = connected ? (int)sizeof(skel->data->send_data) : -EDESTADDRREQ;
 	ssize_t n;
 	int tfd = -1;
 	int err;
@@ -79,6 +87,8 @@ void test_ksock_lsm(void)
 	/* Step 1: Run the setup SYSCALL prog to create the ksock */
 	skel->bss->ipv4_remote = htonl(INADDR_LOOPBACK);
 	skel->bss->remote_port = RECV_PORT;
+	skel->bss->connect_in_syscall = test->connect_in_syscall;
+	skel->bss->connect_in_lsm = test->connect_in_lsm;
 	err = bpf_prog_test_run_opts(bpf_program__fd(skel->progs.ksock_setup),
 				     &opts);
 	if (!ASSERT_OK(err, "ksock_setup run"))
@@ -103,15 +113,25 @@ void test_ksock_lsm(void)
 	if (!ASSERT_OK(err, "trigger bind"))
 		goto fail;
 
-	/* Step 3: Verify the LSM hook sent the notification */
-	if (!ASSERT_EQ(skel->data->send_ret, sizeof(skel->data->send_data),
-		       "LSM send bytes"))
+	/* Step 3: Verify the operations and received notification, if any. */
+	if (!ASSERT_EQ(skel->data->connect_ret, connected ? 0 : -1, "connect retval"))
 		goto fail;
 
-	n = recvfrom(env.rfd, recv_data, sizeof(recv_data), 0, NULL, NULL);
-	if (ASSERT_EQ(n, sizeof(recv_data), "recvfrom len"))
-		ASSERT_MEMEQ(recv_data, skel->data->send_data, sizeof(recv_data),
-			     "payload match");
+	if (!ASSERT_EQ(skel->data->send_ret, expected_send_ret, "LSM send retval"))
+		goto fail;
+
+	n = recvfrom(env.rfd, recv_data, sizeof(recv_data),
+		     connected ? 0 : MSG_DONTWAIT, NULL, NULL);
+	if (!connected) {
+		if (ASSERT_EQ(n, -1, "no datagram"))
+			ASSERT_EQ(errno, EAGAIN, "recvfrom errno");
+		goto fail;
+	}
+
+	if (!ASSERT_EQ(n, sizeof(recv_data), "recvfrom len") ||
+	    !ASSERT_MEMEQ(recv_data, skel->data->send_data, sizeof(recv_data),
+			  "payload match"))
+		goto fail;
 
 fail:
 	if (tfd >= 0)
@@ -122,6 +142,21 @@ fail:
 		close_netns(env.nstoken);
 	remove_netns(NS_TEST);
 	ksock_lsm__destroy(skel);
+}
+
+void test_ksock_lsm(void)
+{
+	static const struct ksock_test_case tests[] = {
+		{ .name = "unconnected_send" },
+		{ .name = "syscall_connect_send", .connect_in_syscall = true },
+		{ .name = "lsm_connect_send", .connect_in_lsm = true },
+	};
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(tests); i++) {
+		if (test__start_subtest(tests[i].name))
+			test_ksock_lsm_case(&tests[i]);
+	}
 }
 
 void test_ksock_lsm_verifier(void)

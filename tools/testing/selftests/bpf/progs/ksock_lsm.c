@@ -13,6 +13,9 @@ char send_data[32] = "hello from bpf ksock";
 __be32 ipv4_remote;
 __u16 remote_port;
 int target_pid;
+bool connect_in_syscall;
+bool connect_in_lsm;
+int connect_ret = -1;
 int send_ret = -1;
 
 SEC("syscall")
@@ -31,14 +34,15 @@ int ksock_setup(void *ctx)
 	if (!ks)
 		return err;
 
-	addr.sin.sin_family = AF_INET;
-	addr.sin.sin_port = bpf_htons(remote_port);
-	addr.sin.sin_addr.s_addr = ipv4_remote;
-
-	err = bpf_ksock_connect(ks, &addr, sizeof(addr));
-	if (err) {
-		bpf_ksock_release(ks);
-		return err;
+	if (connect_in_syscall) {
+		addr.sin.sin_family = AF_INET;
+		addr.sin.sin_port = bpf_htons(remote_port);
+		addr.sin.sin_addr.s_addr = ipv4_remote;
+		connect_ret = bpf_ksock_connect(ks, &addr, sizeof(addr));
+		if (connect_ret) {
+			bpf_ksock_release(ks);
+			return connect_ret;
+		}
 	}
 
 	err = ksock_ctx_insert(ks);
@@ -51,6 +55,7 @@ SEC("lsm.s/socket_bind")
 int BPF_PROG(ksock_socket_bind, struct socket *sock, struct sockaddr *address,
 	     int addrlen, int ret)
 {
+	union bpf_ksock_addr addr = {};
 	struct bpf_ksock *ks;
 	u32 pid = bpf_get_current_pid_tgid() >> 32;
 
@@ -63,7 +68,18 @@ int BPF_PROG(ksock_socket_bind, struct socket *sock, struct sockaddr *address,
 		return ret;
 	}
 
+	addr.sin.sin_family = AF_INET;
+	addr.sin.sin_port = bpf_htons(remote_port);
+	addr.sin.sin_addr.s_addr = ipv4_remote;
+
+	if (connect_in_lsm) {
+		connect_ret = bpf_ksock_connect(ks, &addr, sizeof(addr));
+		if (connect_ret)
+			goto out;
+	}
+
 	send_ret = bpf_ksock_send(ks, send_data, sizeof(send_data));
+out:
 	bpf_ksock_release(ks);
 
 	return ret;
