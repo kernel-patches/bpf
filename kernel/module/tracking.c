@@ -28,7 +28,10 @@ int try_add_tainted_module(struct module *mod)
 				lockdep_is_held(&module_mutex)) {
 		if (!strcmp(mod_taint->name, mod->name) &&
 		    mod_taint->taints == mod->taints) {
-			mod_taint->count++;
+			unsigned int count = mod_taint->count;
+
+			if (count != UINT_MAX)
+				WRITE_ONCE(mod_taint->count, count + 1);
 			goto out;
 		}
 	}
@@ -57,8 +60,8 @@ void print_unloaded_tainted_modules(void)
 
 			l = module_flags_taint(mod_taint->taints, buf);
 			buf[l++] = '\0';
-			pr_cont(" %s(%s):%llu", mod_taint->name, buf,
-				mod_taint->count);
+			pr_cont(" %s(%s):%u", mod_taint->name, buf,
+				READ_ONCE(mod_taint->count));
 		}
 	}
 }
@@ -92,7 +95,8 @@ static int unloaded_tainted_modules_seq_show(struct seq_file *m, void *p)
 	l = module_flags_taint(mod_taint->taints, buf);
 	buf[l++] = '\0';
 
-	seq_printf(m, "%s (%s) %llu", mod_taint->name, buf, mod_taint->count);
+	seq_printf(m, "%s (%s) %u", mod_taint->name, buf,
+		   READ_ONCE(mod_taint->count));
 	seq_puts(m, "\n");
 
 	return 0;
