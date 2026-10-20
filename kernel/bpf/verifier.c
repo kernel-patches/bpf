@@ -3823,7 +3823,7 @@ static void assign_scalar_id_before_mov(struct bpf_verifier_env *env,
 	 * rY->id has special linked register already.
 	 * Cleared it, since multiple rX += const are not supported.
 	 */
-	if (src_reg->link_kind)
+	if (src_reg->link_kind && src_reg->link_kind != BPF_REG_LINK_SEXT)
 		bpf_clear_scalar_id(src_reg);
 	/*
 	 * Ensure that src_reg has a valid ID that will be copied to
@@ -6129,6 +6129,25 @@ static void zext_32_to_64(struct bpf_reg_state *reg)
 	reg_step_check_unsigned(reg, 32);
 	reg->var_off = tnum_subreg(reg->var_off);
 	reg_set_urange64(reg, reg_u32_min(reg), reg_u32_max(reg));
+}
+
+/*
+ * The sign-extending counterpart. Signed bounds carry over directly because
+ * sign extension is monotonic over the signed 32-bit range.
+ */
+static void sext_32_to_64(struct bpf_reg_state *reg)
+{
+	/*
+	 * See comment at reg_step_check_unsigned(). Sign extension subtracts
+	 * 2^32 from every value with bit 31 set, which preserves a residue
+	 * mod step only when step divides 2^32, so the line cannot be kept.
+	 * The zero-extending twin calls reg_step_check_unsigned(reg, 32) for
+	 * the same reason; the unsigned form does not apply here because the
+	 * result is not the low 32 bits but the low 32 bits moved.
+	 */
+	reg_step_reset(reg);
+	reg->var_off = tnum_sext(reg->var_off, 4);
+	reg_set_srange64(reg, reg_s32_min(reg), reg_s32_max(reg));
 }
 
 /* truncate register to smaller size (in bytes)
@@ -17875,12 +17894,29 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 						return -EACCES;
 					} else if (src_reg->type == SCALAR_VALUE) {
 						bool no_sext;
+						/*
+						 * A 32-bit sign extension keeps the low 32
+						 * bits, so dst shares them with whatever src
+						 * shares them with. Both base + d and
+						 * (u32)(base + d) have low half (base + d), so
+						 * dst is (s32)(base + d) either way: inherit
+						 * src's id and delta and record
+						 * BPF_REG_LINK_SEXT.
+						 */
+						bool subreg_link =
+							(insn->off >> 3) == 4 &&
+							(src_reg != dst_reg || src_reg->id);
 
 						no_sext = reg_umax(src_reg) < (1ULL << (insn->off - 1));
 						if (no_sext)
 							assign_scalar_id_before_mov(env, src_reg);
+						else if (subreg_link && !src_reg->id &&
+							 !tnum_is_const(src_reg->var_off))
+							src_reg->id = ++env->id_gen;
 						*dst_reg = *src_reg;
-						if (!no_sext)
+						if (!no_sext && subreg_link && src_reg->id)
+							dst_reg->link_kind = BPF_REG_LINK_SEXT;
+						else if (!no_sext)
 							bpf_clear_scalar_id(dst_reg);
 						coerce_reg_to_size_sx(dst_reg, insn->off >> 3);
 					} else {
@@ -18816,17 +18852,29 @@ static void sync_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier_s
 		if (reg->id != known_reg->id)
 			continue;
 		/*
-		 * A zero-extending link, spelled BPF_REG_LINK_ZEXT: the
-		 * relation reg == (u32)(base + delta) does not invert once the
-		 * base is wider than 32 bits, so the reverse direction is
-		 * skipped.
+		 * The reverse direction does not work for a narrow known_reg:
+		 * it knows only its low 32 bits, which say nothing about a
+		 * wider reg's high half. Neither (u32)(base + delta) nor
+		 * (s32)(base + delta) inverts once the base is wider than 32
+		 * bits.
 		 */
-		if (known_reg->link_kind == BPF_REG_LINK_ZEXT &&
+		if ((known_reg->link_kind == BPF_REG_LINK_ZEXT ||
+		     known_reg->link_kind == BPF_REG_LINK_SEXT) &&
+		    reg->link_kind != BPF_REG_LINK_ZEXT &&
+		    reg->link_kind != BPF_REG_LINK_SEXT &&
 		    get_reg_width(reg) > 32)
 			continue;
 		/*
-		 * Skip mixed 32/64-bit links: the delta relationship doesn't
-		 * hold across different ALU widths.
+		 * Skip a pair of differing kinds. Where BPF_REG_LINK_FULL meets
+		 * a 32-bit kind the delta relationship genuinely does not hold:
+		 * the deltas were added at different ALU widths.
+		 * BPF_REG_LINK_ZEXT against BPF_REG_LINK_SEXT is not that case
+		 * -- both are base + delta in the low 32 bits, so narrowing one
+		 * really does narrow the other -- but that deduction is
+		 * declined on purpose. It makes an int loop counter a fresh
+		 * constant on every iteration, so no two iterations prune
+		 * against each other and the program runs to the instruction
+		 * limit. See sext_no_sync_from_zext_sibling.
 		 */
 		if (reg->link_kind && known_reg->link_kind &&
 		    reg->link_kind != known_reg->link_kind)
@@ -18835,7 +18883,7 @@ static void sync_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier_s
 		 * Only an unlinked pair is a plain copy. Anything carrying a
 		 * kind goes through the differencing arm below, which adds the
 		 * delta difference (zero when the deltas match) and then
-		 * applies the BPF_REG_LINK_ZEXT zero-extension.
+		 * re-applies whichever extension the kinds call for.
 		 */
 		if (!reg->link_kind && !known_reg->link_kind) {
 			*reg = *known_reg;
@@ -18862,9 +18910,26 @@ static void sync_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier_s
 			scalar32_min_max_add(reg, &fake_reg);
 			scalar_min_max_add(reg, &fake_reg);
 			reg->var_off = tnum_add(reg->var_off, fake_reg.var_off);
-			if (reg->link_kind == BPF_REG_LINK_ZEXT ||
-			    known_reg->link_kind == BPF_REG_LINK_ZEXT)
+			if (reg->link_kind == BPF_REG_LINK_SEXT) {
+				sext_32_to_64(reg);
+			} else if (reg->link_kind == BPF_REG_LINK_ZEXT ||
+				   known_reg->link_kind == BPF_REG_LINK_ZEXT ||
+				   known_reg->link_kind == BPF_REG_LINK_SEXT) {
+				/*
+				 * Either @reg is itself the zero extension, or
+				 * @reg has no 32-bit kind and @known_reg does
+				 * -- the reverse direction, where the guard
+				 * above has already proved @reg fits 32 bits.
+				 * Then @reg is @known_reg's low half with
+				 * nothing above it, whichever way @known_reg
+				 * filled its own high half, so the zero
+				 * extension is the reconstruction for both
+				 * kinds. BPF_REG_LINK_FULL is not here on
+				 * purpose: it relates all 64 bits and must not
+				 * be truncated.
+				 */
 				zext_32_to_64(reg);
+			}
 			/*
 			 * Intersect rather than overwrite. A BPF_REG_LINK_ZEXT
 			 * link over a wide base does not propagate back, so the
