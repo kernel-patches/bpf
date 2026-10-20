@@ -573,6 +573,13 @@ struct bpf_struct_ops {
  */
 #define ARENA_DATA_SEC ".arena.data"
 
+/*
+ * A variable in this section is arena percpu data. It lives in the bpf
+ * arena and has a separate value for each possible CPU. The initial value
+ * is replicated for each CPU at load time.
+ */
+#define ARENA_PERCPU_SEC ".arena.percpu"
+
 enum libbpf_map_type {
 	LIBBPF_MAP_UNSPEC,
 	LIBBPF_MAP_DATA,
@@ -718,6 +725,7 @@ struct elf_state {
 	Elf64_Ehdr *ehdr;
 	Elf_Data *symbols;
 	Elf_Data *arena_data;
+	Elf_Data *arena_percpu_data;
 	size_t shstrndx; /* section index for section name strings */
 	size_t strtabidx;
 	struct elf_sec_desc *secs;
@@ -728,6 +736,7 @@ struct elf_state {
 	int symbols_shndx;
 	bool has_st_ops;
 	int arena_data_shndx;
+	int arena_percpu_shndx;
 	int jumptables_data_shndx;
 };
 
@@ -1645,6 +1654,7 @@ static struct bpf_object *bpf_object__new(const char *path,
 	obj->efile.obj_buf_sz = obj_buf_sz;
 	obj->efile.btf_maps_shndx = -1;
 	obj->efile.arena_data_shndx = -1;
+	obj->efile.arena_percpu_shndx = -1;
 	obj->kconfig_map_idx = -1;
 	obj->arena_map_idx = -1;
 
@@ -1664,6 +1674,7 @@ static void bpf_object__elf_finish(struct bpf_object *obj)
 	obj->efile.ehdr = NULL;
 	obj->efile.symbols = NULL;
 	obj->efile.arena_data = NULL;
+	obj->efile.arena_percpu_data = NULL;
 
 	zfree(&obj->efile.secs);
 	obj->efile.sec_cnt = 0;
@@ -3201,7 +3212,7 @@ static int bpf_object__init_arena_data(struct bpf_object *obj)
 
 	if (obj->arena_map_idx < 0) {
 		/* bpf_object__init_user_btf_maps() didn't look: there is no .maps section */
-		if (obj->efile.arena_data) {
+		if (obj->efile.arena_data || obj->efile.arena_percpu_data) {
 			pr_warn("elf: sec '%s': to use global __arena variables the ARENA map should be explicitly declared in SEC(\".maps\")\n",
 				ARENA_SEC);
 			return -ENOENT;
@@ -3328,6 +3339,12 @@ static int bpf_object__init_user_btf_maps(struct bpf_object *obj, bool strict,
 	if (obj->efile.arena_data && obj->arena_map_idx < 0) {
 		pr_warn("elf: sec '%s': to use global __arena variables the ARENA map should be explicitly declared in SEC(\".maps\")\n",
 			ARENA_SEC);
+		return -ENOENT;
+	}
+
+	if (obj->efile.arena_percpu_data && obj->arena_map_idx < 0) {
+		pr_warn("elf: sec '%s': to use arena percpu variables the ARENA map should be explicitly declared in SEC(\".maps\")\n",
+			ARENA_PERCPU_SEC);
 		return -ENOENT;
 	}
 
@@ -4286,6 +4303,9 @@ static int bpf_object__elf_collect(struct bpf_object *obj)
 				obj->efile.arena_data_shndx = idx;
 			} else if (strcmp(name, ARENA_DATA_SEC) == 0) {
 				/* the marker, see the first pass */
+			} else if (strcmp(name, ARENA_PERCPU_SEC) == 0) {
+				obj->efile.arena_percpu_data = data;
+				obj->efile.arena_percpu_shndx = idx;
 			} else if (strcmp(name, JUMPTABLES_SEC) == 0) {
 				obj->jumptables_data = malloc(data->d_size);
 				if (!obj->jumptables_data)
