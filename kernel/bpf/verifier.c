@@ -4283,7 +4283,8 @@ static void bpf_diag_stack_read_invalid(struct bpf_verifier_env *env, int off, i
 static int check_stack_read_fixed_off(struct bpf_verifier_env *env,
 				      /* func where src register points to */
 				      struct bpf_func_state *reg_state,
-				      int off, int size, int dst_regno)
+				      int off, int size, int dst_regno,
+				      bool is_ldsx)
 {
 	struct bpf_verifier_state *vstate = env->cur_state;
 	struct bpf_func_state *state = vstate->frame[vstate->curframe];
@@ -4318,22 +4319,52 @@ static int check_stack_read_fixed_off(struct bpf_verifier_env *env,
 
 			if (size <= spill_size &&
 			    bpf_stack_narrow_access_ok(off, size, spill_size)) {
+				bool narrowing = get_reg_width(reg) > size * BITS_PER_BYTE;
+				/*
+				 * A narrowing fill keeps only the slot's low 32 bits,
+				 * so record a low-32 link rather than dropping the
+				 * relation, as a 32-bit mov from a wide source does.
+				 * Which link kind depends on how the load fills the high
+				 * half, hence is_ldsx.
+				 */
+				bool subreg_link = narrowing && size == 4;
+
 				if (dst_regno < 0)
 					return 0;
 
-				if (env->bpf_capable && size == 4 && spill_size == 4 &&
-				    get_reg_width(reg) <= 32)
+				if (env->bpf_capable && size == 4 &&
+				    (subreg_link || (spill_size == 4 && !narrowing)))
 					/* Ensure stack slot has an ID to build a relation
 					 * with the destination register on fill.
 					 */
 					assign_scalar_id_before_mov(env, reg);
 				state->regs[dst_regno] = *reg;
 
-				/* Break the relation on a narrowing fill.
-				 * coerce_reg_to_size will adjust the boundaries.
+				/*
+				 * A fill that is not narrowing copies the slot's link
+				 * kind verbatim, which a sign-extending load can
+				 * contradict. check_mem_access() runs after this and
+				 * drops any kind but BPF_REG_LINK_SEXT once it knows
+				 * the extension was not a no-op.
 				 */
-				if (get_reg_width(reg) > size * BITS_PER_BYTE)
+				if (subreg_link && reg->id) {
+					/*
+					 * Keep the slot's delta: both
+					 * (u32)(base + d) and (s32)(base + d)
+					 * have low half base + d, so the fill
+					 * inherits it rather than resetting it.
+					 */
+					state->regs[dst_regno].link_kind =
+						is_ldsx ? BPF_REG_LINK_SEXT : BPF_REG_LINK_ZEXT;
+				} else if (narrowing) {
+					/*
+					 * Nothing to relate: either the slot has
+					 * no id to share, or the fill is narrower
+					 * than the 32 bits a link can describe.
+					 * coerce_reg_to_size adjusts the bounds.
+					 */
 					bpf_clear_scalar_id(&state->regs[dst_regno]);
+				}
 			} else {
 				int spill_cnt = 0, zero_cnt = 0;
 
@@ -4499,7 +4530,7 @@ static int check_stack_read_var_off(struct bpf_verifier_env *env, struct bpf_reg
  */
 static int check_stack_read(struct bpf_verifier_env *env,
 			    struct bpf_reg_state *reg, argno_t ptr_argno, int off, int size,
-			    int dst_regno)
+			    int dst_regno, bool is_ldsx)
 {
 	struct bpf_func_state *state = bpf_func(env, reg);
 	int err;
@@ -4538,7 +4569,7 @@ static int check_stack_read(struct bpf_verifier_env *env,
 	if (!var_off) {
 		off += reg->var_off.value;
 		err = check_stack_read_fixed_off(env, state, off, size,
-						 dst_regno);
+						 dst_regno, is_ldsx);
 	} else {
 		/* Variable offset stack reads need more conservative handling
 		 * than fixed offset ones. Note that dst_regno >= 0 on this
@@ -7421,7 +7452,7 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, struct b
 
 		if (t == BPF_READ)
 			err = check_stack_read(env, reg, argno, off, size,
-					       value_regno);
+					       value_regno, is_ldsx);
 		else
 			err = check_stack_write(env, reg, off, size,
 						value_regno, insn_idx);
@@ -7518,13 +7549,20 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, struct b
 			 * Sign-extension can change the register value relative
 			 * to a scalar it is linked with by id (e.g. a zero-
 			 * extending fill of the same spilled stack slot), thus
-			 * drop the shared id in that case.
+			 * drop the shared id in that case. Only a 4-byte
+			 * BPF_REG_LINK_SEXT link survives: it says the high
+			 * half is this very sign-extension. BPF_REG_LINK_ZEXT
+			 * says the opposite and would be a lie about the value
+			 * just produced, and an 8- or 16-bit sign extension is
+			 * a relation BPF_REG_LINK_SEXT cannot express at all --
+			 * it means (s32)(base + delta) specifically.
 			 */
 			bool no_sext = reg_umax(&regs[value_regno]) <
 					(1ULL << (size * BITS_PER_BYTE - 1));
 
 			coerce_reg_to_size_sx(&regs[value_regno], size);
-			if (!no_sext)
+			if (!no_sext &&
+			    !(size == 4 && regs[value_regno].link_kind == BPF_REG_LINK_SEXT))
 				bpf_clear_scalar_id(&regs[value_regno]);
 		}
 	}
