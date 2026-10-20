@@ -102,6 +102,7 @@ MODULE_DESCRIPTION("Asus HID Keyboard and TouchPad");
 #define QUIRK_ROG_ALLY_XPAD		BIT(13)
 #define QUIRK_HID_FN_LOCK		BIT(14)
 #define QUIRK_FILTER_CAMERA_COMPANION	BIT(15)
+#define QUIRK_ZENBOOK_DUO_KEYBOARD	BIT(16)
 
 #define I2C_KEYBOARD_QUIRKS			(QUIRK_FIX_NOTEBOOK_REPORT | \
 						 QUIRK_NO_INIT_REPORTS | \
@@ -1707,43 +1708,58 @@ static const __u8 *asus_report_fixup(struct hid_device *hdev, __u8 *rdesc,
 		hid_info(hdev, "Fixing up Asus T100 keyb report descriptor\n");
 		rdesc[74] &= ~HID_MAIN_ITEM_CONSTANT;
 	}
-	/* For the T100CHI/T90CHI keyboard dock */
-	if (drvdata->quirks & (QUIRK_T100CHI | QUIRK_T90CHI)) {
-		int rsize_orig;
-		int offs;
+	/* For the T100CHI/T90CHI keyboard dock and Zenbook Duo keyboards */
+	if (drvdata->quirks & (QUIRK_T100CHI | QUIRK_T90CHI | QUIRK_ZENBOOK_DUO_KEYBOARD)) {
+		u16 rsize_orig = 0, offs = 0;
+		u16 new_rsize;
 
 		if (drvdata->quirks & QUIRK_T100CHI) {
 			rsize_orig = 403;
 			offs = 388;
-		} else {
+		} else if (drvdata->quirks & QUIRK_T90CHI) {
 			rsize_orig = 306;
 			offs = 291;
+		} else if (drvdata->quirks & QUIRK_ZENBOOK_DUO_KEYBOARD) {
+			if (hid_is_usb(hdev)) {
+				rsize_orig = 90;
+				offs = 66;
+			} else { /* Bluetooth */
+				rsize_orig = 257;
+				offs = 176;
+			}
 		}
 
 		/*
 		 * Change Usage (76h) to Usage Minimum (00h), Usage Maximum
-		 * (FFh) and clear the flags in the Input() byte.
-		 * Note the descriptor has a bogus 0 byte at the end so we
-		 * only need 1 extra byte.
+		 * (FFh) and clear the flags in the Input() byte, shifting
+		 * the rest of the descriptor by the 2 bytes that adds. Drop
+		 * the bogus 0 bytes some descriptors end with first, but
+		 * never the Input() item that follows the usage.
 		 */
 		if (*rsize == rsize_orig &&
 			rdesc[offs] == 0x09 && rdesc[offs + 1] == 0x76) {
 			__u8 *new_rdesc;
 
-			new_rdesc = devm_kzalloc(&hdev->dev, rsize_orig + 1,
+			new_rsize = rsize_orig;
+			while (new_rsize > offs + 14 && rdesc[new_rsize - 1] == 0)
+				--new_rsize;
+
+			new_rdesc = devm_kzalloc(&hdev->dev, new_rsize + 2,
 						 GFP_KERNEL);
 			if (!new_rdesc)
 				return rdesc;
 
 			hid_info(hdev, "Fixing up %s keyb report descriptor\n",
-				drvdata->quirks & QUIRK_T100CHI ?
-				"T100CHI" : "T90CHI");
+				drvdata->quirks & QUIRK_T100CHI ? "T100CHI" :
+				drvdata->quirks & QUIRK_T90CHI ? "T90CHI" :
+				"Zenbook Duo");
 
-			memcpy(new_rdesc, rdesc, rsize_orig);
-			*rsize = rsize_orig + 1;
+			memcpy(new_rdesc, rdesc, new_rsize);
+			*rsize = new_rsize + 2;
 			rdesc = new_rdesc;
 
-			memmove(rdesc + offs + 4, rdesc + offs + 2, 12);
+			memmove(rdesc + offs + 4, rdesc + offs + 2,
+				new_rsize - (offs + 2));
 			rdesc[offs] = 0x19;
 			rdesc[offs + 1] = 0x00;
 			rdesc[offs + 2] = 0x29;
