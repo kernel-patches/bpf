@@ -14,6 +14,74 @@ void bpf_cgroup_release(struct cgroup *p) __ksym;
 void bpf_rcu_read_lock(void) __ksym;
 void bpf_rcu_read_unlock(void) __ksym;
 
+__weak int subprog_trusted_file(struct file *file __arg_trusted)
+{
+	return file->f_inode->i_ino;
+}
+
+SEC("?raw_tp")
+__failure __msg("invalid mem access 'scalar'")
+int iter_task_vma_use_after_destroy(const void *ctx)
+{
+	struct task_struct *task = bpf_get_current_task_btf();
+	struct bpf_iter_task_vma it;
+	struct vm_area_struct *vma;
+	unsigned long start;
+
+	bpf_iter_task_vma_new(&it, task, 0);
+	vma = bpf_iter_task_vma_next(&it);
+	if (!vma) {
+		bpf_iter_task_vma_destroy(&it);
+		return 0;
+	}
+	bpf_iter_task_vma_destroy(&it);
+
+	/* The vma snapshot lives in the iterator and died with it. */
+	start = vma->vm_start;
+	return start;
+}
+
+SEC("?raw_tp")
+__failure __msg("R1 type=scalar expected=ptr_, trusted_ptr_, rcu_ptr_")
+int iter_task_vma_file_after_destroy(const void *ctx)
+{
+	struct task_struct *task = bpf_get_current_task_btf();
+	struct bpf_iter_task_vma it;
+	struct vm_area_struct *vma;
+	struct file *file;
+
+	bpf_iter_task_vma_new(&it, task, 0);
+	vma = bpf_iter_task_vma_next(&it);
+	file = vma ? vma->vm_file : NULL;
+	if (!file) {
+		bpf_iter_task_vma_destroy(&it);
+		return 0;
+	}
+	bpf_iter_task_vma_destroy(&it);
+
+	/* vm_file was pinned through the vma by the iterator. */
+	return subprog_trusted_file(file);
+}
+
+SEC("?raw_tp")
+__success
+int iter_task_vma_file_before_destroy(const void *ctx)
+{
+	struct task_struct *task = bpf_get_current_task_btf();
+	struct bpf_iter_task_vma it;
+	struct vm_area_struct *vma;
+	struct file *file;
+	int ret = 0;
+
+	bpf_iter_task_vma_new(&it, task, 0);
+	vma = bpf_iter_task_vma_next(&it);
+	file = vma ? vma->vm_file : NULL;
+	if (file)
+		ret = subprog_trusted_file(file);
+	bpf_iter_task_vma_destroy(&it);
+	return ret;
+}
+
 SEC("?fentry.s/" SYS_PREFIX "sys_getpgid")
 __failure __msg("kernel func bpf_iter_task_new requires RCU critical section protection")
 int BPF_PROG(iter_tasks_without_lock)
