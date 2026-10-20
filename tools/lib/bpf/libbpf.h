@@ -1231,6 +1231,32 @@ LIBBPF_API int bpf_map__set_initial_value(struct bpf_map *map,
 LIBBPF_API void *bpf_map__initial_value(const struct bpf_map *map, size_t *psize);
 
 /**
+ * @brief **bpf_map__arena_percpu_ptr()** translates an address within
+ * cpu 0's chunk of the arena's per-cpu area (e.g. the address of an
+ * `__arena_percpu` variable as seen in the skeleton's arena_percpu
+ * section) to the per-cpu chunk of the requested @cpu.
+ * @param map the ARENA map
+ * @param ptr address of an `__arena_percpu` variable (cpu 0's chunk)
+ * @param cpu cpu id to obtain the chunk for
+ * @return pointer to the variable in the chunk of @cpu; error pointer, if the
+ * map is not a loaded ARENA map with a per-cpu area, @cpu is out of range,
+ * or @ptr is not within cpu 0's chunk
+ */
+LIBBPF_API void *bpf_map__arena_percpu_ptr(const struct bpf_map *map, void *ptr,
+					   unsigned int cpu);
+
+/**
+ * @brief **bpf_map__arena_percpu_base()** returns the base of cpu 0's
+ * chunk of the arena's per-cpu area in the user-space-visible mmap of
+ * the arena, i.e. where the skeleton's arena_percpu section points.
+ * @param map the ARENA map
+ * @return pointer to the start of cpu 0's chunk; NULL if @map is not a
+ * loaded ARENA map whose per-cpu chunks have been populated (e.g.
+ * before load, or for a map with `autocreate == false`)
+ */
+LIBBPF_API void *bpf_map__arena_percpu_base(const struct bpf_map *map);
+
+/**
  * @brief **bpf_map__is_internal()** tells the caller whether or not the
  * passed map is a special map created by libbpf automatically for things like
  * global variables, __ksym externs, Kconfig values, etc

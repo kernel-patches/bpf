@@ -12287,6 +12287,55 @@ void *bpf_map__initial_value(const struct bpf_map *map, size_t *psize)
 	return map->mmaped;
 }
 
+void *bpf_map__arena_percpu_ptr(const struct bpf_map *map, void *ptr, unsigned int cpu)
+{
+	struct bpf_object *obj;
+	uint64_t base;
+
+	if (!map || !ptr)
+		return libbpf_err_ptr(-EINVAL);
+
+	obj = map->obj;
+	if (map->def.type != BPF_MAP_TYPE_ARENA || !obj->arena_percpu.present)
+		return libbpf_err_ptr(-EINVAL);
+
+	if (cpu >= obj->arena_percpu.nr_chunks)
+		return libbpf_err_ptr(-ERANGE);
+
+	/*
+	 * obj->arena_percpu.chunk is freed by arena_percpu_populate(), and only
+	 * then the map is mmaped
+	 */
+	if (obj->arena_percpu.chunk)
+		return libbpf_err_ptr(-EINVAL);
+
+	base = (uint64_t)map->mmaped + obj->arena_percpu.offset;
+	if ((uint64_t)ptr < base || (uint64_t)ptr >= base + obj->arena_percpu.chunk_sz)
+		return libbpf_err_ptr(-EINVAL);
+
+	return (void *)((uint64_t)ptr + (uint64_t)cpu * obj->arena_percpu.chunk_sz);
+}
+
+void *bpf_map__arena_percpu_base(const struct bpf_map *map)
+{
+	struct bpf_object *obj;
+
+	if (!map)
+		return NULL;
+
+	obj = map->obj;
+	/*
+	 * The per-cpu chunks exist once the map is created and populated;
+	 * obj->arena_percpu.chunk is freed by arena_percpu_populate(), and
+	 * only then the map is mmaped
+	 */
+	if (map->def.type != BPF_MAP_TYPE_ARENA || !obj->arena_percpu.present ||
+	    obj->arena_percpu.chunk)
+		return NULL;
+
+	return map->mmaped + obj->arena_percpu.offset;
+}
+
 bool bpf_map__is_internal(const struct bpf_map *map)
 {
 	return map->libbpf_type != LIBBPF_MAP_UNSPEC;
