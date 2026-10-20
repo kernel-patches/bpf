@@ -253,19 +253,6 @@ static inline void kmod_dup_request_announce(char *module_name, int ret)
 #endif
 
 #ifdef CONFIG_MODULE_UNLOAD_TAINT_TRACKING
-struct mod_unload_taint {
-	struct list_head list;
-	char name[MODULE_NAME_LEN];
-	unsigned long taints;
-
-	/*
-	 * Number of times a module with this name and taint combination has
-	 * been unloaded. Updates are serialized by module_mutex and use
-	 * WRITE_ONCE(). Readers that may run concurrently use READ_ONCE().
-	 */
-	unsigned int count;
-};
-
 int try_add_tainted_module(struct module *mod);
 void print_unloaded_tainted_modules(void);
 #else /* !CONFIG_MODULE_UNLOAD_TAINT_TRACKING */
