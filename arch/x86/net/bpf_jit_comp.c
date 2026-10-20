@@ -428,6 +428,24 @@ static void pop_callee_regs(u8 **pprog, bool *callee_regs_used)
 	*pprog = prog;
 }
 
+/*
+ * Record where push_callee_regs() saved the caller's R6..R9 relative to rbp, for the
+ * exception unwinder. @off is the offset of rsp from rbp right before the first push.
+ */
+static void record_callee_reg_off(struct bpf_prog *prog, s32 off, bool *callee_regs_used)
+{
+	int i;
+
+	for (i = 0; i < 4; i++) {
+		if (!callee_regs_used[i]) {
+			prog->aux->callee_reg_off[i] = 0;
+			continue;
+		}
+		off -= 8;
+		prog->aux->callee_reg_off[i] = off;
+	}
+}
+
 /* add rsp, depth */
 static void emit_add_rsp(u8 **pprog, u32 depth)
 {
@@ -2593,6 +2611,7 @@ static int do_jit(struct bpf_verifier_env *env, struct bpf_prog *bpf_prog, int *
 	u32 stack_depth;
 	int callee_saved_size;
 	s32 outgoing_arg_base;
+	s32 callee_regs_off;
 	int err;
 
 	stack_depth = bpf_prog->aux->stack_depth;
@@ -2653,6 +2672,20 @@ static int do_jit(struct bpf_verifier_env *env, struct bpf_prog *bpf_prog, int *
 			push_r12(&prog);
 		push_callee_regs(&prog, callee_regs_used);
 	}
+
+	/*
+	 * Record where the pushes above saved the caller's R6..R9, relative to the
+	 * rbp that arch_bpf_stack_walk() reports for this frame. Below rbp lie, from
+	 * high to low addresses: round_up(stack_depth, 8) bytes of program stack
+	 * (none with a private stack), the tail call count and its pointer (16 bytes)
+	 * when tail_call_reachable, r12 when exception_boundary or arena_vm_start,
+	 * and then rbx, r13, r14 and r15 in push order, each only when pushed.
+	 */
+	callee_regs_off = -(s32)round_up(stack_depth, 8) - (tail_call_reachable ? 16 : 0);
+	if (bpf_prog->aux->exception_boundary || arena_vm_start)
+		callee_regs_off -= 8;
+	record_callee_reg_off(bpf_prog, callee_regs_off,
+			      bpf_prog->aux->exception_boundary ? all_callee_regs_used : callee_regs_used);
 
 	/* Compute callee-saved register area size. */
 	callee_saved_size = 0;
