@@ -23,12 +23,13 @@ static bool rxrpc_rack_sent_after(ktime_t t1, rxrpc_seq_t seq1,
 static void rxrpc_rack_mark_lost(struct rxrpc_call *call,
 				 struct rxrpc_txqueue *tq, unsigned int ix)
 {
-	if (__test_and_set_bit(ix, &tq->segment_lost)) {
-		if (__test_and_clear_bit(ix, &tq->segment_retransmitted))
-			call->tx_nr_resent--;
-	} else {
+	if (__test_and_set_bit(ix, &tq->segment_lost))
+		__clear_bit(ix, &tq->segment_retransmitted);
+	else
 		call->tx_nr_lost++;
-	}
+
+	if (__test_and_clear_bit(ix, &tq->in_flight))
+		call->tx_in_flight--;
 	tq->segment_xmit_ts[ix] = UINT_MAX;
 }
 
@@ -136,6 +137,8 @@ void rxrpc_input_rack(struct rxrpc_call *call,
 		unsigned int ix = __ffs(new_acks);
 
 		__clear_bit(ix, &new_acks);
+		if (__test_and_clear_bit(ix, &tq->in_flight))
+			call->tx_in_flight--;
 		rxrpc_input_rack_one(call, summary, tq, ix);
 	}
 
@@ -289,7 +292,7 @@ static void rxrpc_rack_mark_losses_on_rto(struct rxrpc_call *call)
  */
 ktime_t rxrpc_tlp_calc_pto(struct rxrpc_call *call, ktime_t now)
 {
-	unsigned int flight_size = rxrpc_tx_in_flight(call);
+	unsigned int flight_size = call->tx_in_flight;
 	ktime_t rto_at = ktime_add(call->tx_last_sent,
 				   rxrpc_get_rto_backoff(call, false));
 	ktime_t pto;
@@ -313,7 +316,7 @@ ktime_t rxrpc_tlp_calc_pto(struct rxrpc_call *call, ktime_t now)
  */
 void rxrpc_tlp_send_probe(struct rxrpc_call *call)
 {
-	unsigned int in_flight = rxrpc_tx_in_flight(call);
+	unsigned int in_flight = call->tx_in_flight;
 
 	if (after_eq(call->acks_hard_ack, call->tx_transmitted))
 		return; /* Everything we transmitted has been acked. */
@@ -333,7 +336,7 @@ void rxrpc_tlp_send_probe(struct rxrpc_call *call)
 			call->tlp_serial = call->tx_last_serial;
 			call->tlp_seq = call->tx_transmitted;
 			trace_rxrpc_tlp_probe(call, rxrpc_tlp_probe_trace_transmit_new);
-			in_flight = rxrpc_tx_in_flight(call);
+			in_flight = call->tx_in_flight;
 		} else {
 			/* Retransmit the highest-sequence DATA sent */
 			call->tx_last_serial = 0;

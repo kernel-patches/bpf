@@ -782,9 +782,8 @@ struct rxrpc_call {
 	rxrpc_seq_t		tx_top;		/* Highest Tx slot allocated. */
 	rxrpc_serial_t		tx_last_serial;	/* Serial of last DATA transmitted */
 	u16			tx_backoff;	/* Delay to insert due to Tx failure (ms) */
-	u16			tx_nr_sent;	/* Number of packets sent, but unacked */
+	u16			tx_in_flight;	/* Number of packets considered "in flight" */
 	u16			tx_nr_lost;	/* Number of packets marked lost */
-	u16			tx_nr_resent;	/* Number of packets resent, but unacked */
 	u16			tx_winsize;	/* Maximum size of Tx window */
 #define RXRPC_TX_MAX_WINDOW	128
 	u8			tx_jumbo_max;	/* Maximum subpkts peer will accept */
@@ -980,6 +979,7 @@ struct rxrpc_txqueue {
 	unsigned long		segment_acked;	/* Bit-per-buf: Set if ACK'd */
 	unsigned long		segment_lost;	/* Bit-per-buf: Set if declared lost */
 	unsigned long		segment_retransmitted; /* Bit-per-buf: Set if retransmitted */
+	unsigned long		in_flight;	/* Bit-per-buf: Set if "in flight" */
 	unsigned long		rtt_samples;	/* Bit-per-buf: Set if available for RTT */
 	unsigned long		ever_retransmitted; /* Bit-per-buf: Set if ever retransmitted */
 
@@ -1599,20 +1599,6 @@ static inline unsigned int rxrpc_tx_window_space(const struct rxrpc_call *call)
 	int transmitted = call->tx_top - call->tx_bottom;
 
 	return max(winsize - transmitted, 0);
-}
-
-static inline unsigned int rxrpc_left_out(const struct rxrpc_call *call)
-{
-	return call->acks_nr_sacks + call->tx_nr_lost;
-}
-
-/*
- * Calculate the number of transmitted DATA packets assumed to be in flight
- * [approx RFC6675].
- */
-static inline unsigned int rxrpc_tx_in_flight(const struct rxrpc_call *call)
-{
-	return call->tx_nr_sent - rxrpc_left_out(call) + call->tx_nr_resent;
 }
 
 /*
