@@ -247,6 +247,30 @@ l0_%=:								\
 }
 #endif /* CAN_USE_MOVSX */
 
+SEC("socket")
+__success
+__retval(0)
+__naked void zext_reverse_pins_low_half(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	r6 <<= 32;						\
+	call %[bpf_get_prandom_u32];				\
+	r6 |= r0;		/* r6 = full 64-bit unknown */	\
+	w7 = w6;						\
+	w7 += 5;		/* r7 = (u32)(r6 + 5) */	\
+	if w7 != 15 goto l0_%=;	/* so (u32)r6 == 10 */		\
+	if w6 == 10 goto l0_%=;					\
+	r0 /= 0;						\
+l0_%=:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
 /*
  * Test that sync_linked_regs() correctly handles large offset differences.
  * r1.off = S32_MIN, r2.off = 1, delta = S32_MIN - 1 requires 64-bit math.
@@ -414,9 +438,11 @@ l0_%=:								\
 }
 
 /*
- * Test that sync_linked_regs() skips propagation when one register used
- * alu32 (BPF_REG_LINK_ZEXT) and the other used alu64 (BPF_REG_LINK_FULL).
- * The delta relationship doesn't hold across different ALU widths.
+ * Test that sync_linked_regs() does not carry the delta relationship across
+ * registers that used different ALU widths: r7 used alu32 (BPF_REG_LINK_ZEXT) and r8
+ * alu64 (BPF_REG_LINK_FULL), so the relationship does not hold over all 64 bits. The
+ * low half is recovered -- r8 comes out exactly 0x100000000 -- which is why
+ * the div is still reachable and this is a __failure.
  */
 SEC("socket")
 __failure __msg("div by zero")
@@ -434,7 +460,7 @@ __naked void scalars_alu32_alu64_cross_type(void)
 	/* r7 = 0xFFFFFFFF */					\
 	/* sync: known_reg=r7 (BPF_REG_LINK_ZEXT), reg=r8 (BPF_REG_LINK_FULL) */ \
 	/* Without fix: r8 = zext(0xFFFFFFFF + 1) = 0 */	\
-	/* With fix: r8 stays [2, 0x100000001] (r8 >= 2) */	\
+	/* With fix: r8 == 0x100000000, so still > 0 */		\
 	if r8 > 0 goto l1_%=;					\
 	goto l0_%=;						\
 l1_%=:								\
@@ -950,8 +976,10 @@ __naked void zext_no_sync_between_mixed_kinds(void)
 }
 
 /*
- * ... and here the low-32 link is the branch register, so the register
- * carrying the delta must not be narrowed either.
+ * ... and here the low-32 link is the branch register. Its low half does
+ * reach the register carrying the delta, but the high half must not: r8's
+ * low 32 bits become 3 while the rest stays unknown, so r8 == 3 is still
+ * not provable and the div stays reachable.
  */
 SEC("socket")
 __failure __msg("div by zero")
@@ -1276,9 +1304,10 @@ __naked void sext_no_sync_when_base_has_delta(void)
 
 /*
  * ... and with the link as the branch register the propagation must not run
- * backwards: a BPF_REG_LINK_SEXT register knows nothing about the base's high half, so
- * narrowing it must leave the rest of the set alone. Were the guard missing,
- * r8 would be rebuilt as r7 + 3 == 2, treating r7 as if it were the base.
+ * backwards over the high half: a BPF_REG_LINK_SEXT register knows nothing about the
+ * base's high bits. The low half is recovered, so r8's low 32 bits do become
+ * 2, but treating that as the whole value -- r8 == 2, as if r7 were the base
+ * -- must not happen.
  */
 SEC("socket")
 __failure __msg("div by zero")
