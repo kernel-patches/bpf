@@ -13,8 +13,12 @@
 #include "abm.h"
 #include "audio.h"
 #include "dchubbub.h"
+#include "hubp.h"
+#include "dpp.h"
+#include "mpc.h"
 #include "dio.h"
 #include "link_encoder.h"
+#include "vpg.h"
 #include "panel_cntl.h"
 #include "link_service.h"
 #include "dc_bios_types.h"
@@ -31,6 +35,15 @@ static noinline_for_stack bool dc2_bls_step_supported(const struct dc2 *dc2,
 	struct clk_mgr *clk_mgr;
 	struct dccg *dccg;
 	struct dc_context *ctx;
+	struct hubbub *hubbub;
+	struct timing_generator *tg;
+	struct output_pixel_processor *opp;
+	struct clock_source *cs;
+	struct link_encoder *link_enc;
+	struct dce_hwseq *hws;
+	struct hubp *hubp;
+	struct dpp *dpp;
+	struct mpc *mpc;
 
 	switch (step->func) {
 	case LEGACY_CLK_MGR_INIT_CLOCKS:
@@ -283,6 +296,197 @@ static noinline_for_stack bool dc2_bls_step_supported(const struct dc2 *dc2,
 		return hubbub && hubbub->funcs &&
 				hubbub->funcs->force_pstate_change_control;
 	}
+	case CLK_MGR_UPDATE_CLOCKS_FOR_STATE:
+		clk_mgr = step->params.clk_mgr_update_clocks_for_state_params
+				.clk_mgr;
+		return clk_mgr && clk_mgr->funcs && clk_mgr->funcs->update_clocks &&
+				step->params.clk_mgr_update_clocks_for_state_params
+				.context;
+	case HUBBUB_PROGRAM_WATERMARKS:
+		hubbub = step->params.hubbub_program_watermarks_params.hubbub;
+		return hubbub && hubbub->funcs &&
+				hubbub->funcs->program_watermarks &&
+				step->params.hubbub_program_watermarks_params
+				.watermarks;
+	case HUBBUB_PROGRAM_ARBITER:
+		hubbub = step->params.hubbub_program_arbiter_params.hubbub;
+		return hubbub && hubbub->funcs &&
+				hubbub->funcs->program_arbiter &&
+				step->params.hubbub_program_arbiter_params.arb_regs;
+	case HUBBUB_PROGRAM_COMPBUF_SEGMENTS:
+		hubbub = step->params.hubbub_program_compbuf_segments_params
+				.hubbub;
+		return hubbub && hubbub->funcs &&
+				hubbub->funcs->program_compbuf_segments;
+	case HUBP_PROGRAM_DET_SEGMENTS:
+		hubbub = step->params.program_det_segments_params.hubbub;
+		return hubbub && hubbub->funcs &&
+				hubbub->funcs->program_det_segments;
+	case TG_LOCK: {
+		const struct tg_lock_params *p = &step->params.tg_lock_params;
+
+		/* DMUB inbox1 and triple-buffer locks are not leaf calls. */
+		return p->tg && p->tg->funcs && !p->use_dmub_inbox1 &&
+				!p->triplebuffer_flips &&
+				(p->lock ? p->tg->funcs->lock : p->tg->funcs->unlock);
+	}
+	case TG_ENABLE_CRTC:
+		tg = step->params.tg_enable_crtc_params.tg;
+		return tg && tg->funcs && tg->funcs->enable_crtc;
+	case TG_DISABLE_CRTC:
+		tg = step->params.tg_disable_crtc_params.tg;
+		return tg && tg->funcs && tg->funcs->disable_crtc;
+	case TG_WAIT_ODM_DOUBLEBUFFER_PENDING_CLEAR:
+		tg = step->params.tg_wait_odm_doublebuffer_pending_clear_params.tg;
+		return tg && tg->funcs &&
+				tg->funcs->wait_odm_doublebuffer_pending_clear;
+	case TG_PROGRAM_STEREO:
+		tg = step->params.tg_program_stereo_params.tg;
+		return tg && tg->funcs && tg->funcs->program_stereo &&
+				step->params.tg_program_stereo_params.timing;
+	case OPP_PROGRAM_STEREO:
+		opp = step->params.opp_program_stereo_params.opp;
+		return opp && opp->funcs && opp->funcs->opp_program_stereo &&
+				step->params.opp_program_stereo_params.timing;
+	case TG_WAIT_FOR_STATE:
+		tg = step->params.tg_wait_for_state_params.tg;
+		return tg && tg->funcs && tg->funcs->wait_for_state;
+	case TG_SETUP_VERTICAL_INTERRUPT2:
+		tg = step->params.tg_setup_vertical_interrupt2_params.tg;
+		return tg && tg->funcs && tg->funcs->setup_vertical_interrupt2;
+	case OPTC_SET_ODM_BYPASS:
+		tg = step->params.set_odm_bypass_params.tg;
+		return tg && tg->funcs && tg->funcs->set_odm_bypass &&
+				step->params.set_odm_bypass_params.timing;
+	case TG_ENABLE_OPTC_CLOCK:
+		tg = step->params.tg_enable_optc_clock_params.tg;
+		return tg && tg->funcs && tg->funcs->enable_optc_clock;
+	case TG_PROGRAM_TIMING:
+		tg = step->params.tg_program_timing_params.tg;
+		return tg && tg->funcs && tg->funcs->program_timing &&
+				step->params.tg_program_timing_params.timing;
+	case TG_SET_H_TIMING_DIV_MANUAL_MODE:
+		tg = step->params.tg_set_h_timing_div_manual_mode_params.tg;
+		return tg && tg->funcs &&
+				tg->funcs->set_h_timing_div_manual_mode;
+	case TG_SET_DRR:
+		tg = step->params.tg_set_drr_params.tg;
+		return tg && tg->funcs && tg->funcs->set_drr;
+	case TG_SET_STATIC_SCREEN_CONTROL:
+		tg = step->params.tg_set_static_screen_control_params.tg;
+		return tg && tg->funcs && tg->funcs->set_static_screen_control;
+	case TG_SET_OUT_MUX:
+		tg = step->params.tg_set_out_mux_params.tg;
+		return tg && tg->funcs && tg->funcs->set_out_mux;
+	case TG_SET_EARLY_CONTROL:
+		tg = step->params.tg_set_early_control_params.tg;
+		return tg && tg->funcs && tg->funcs->set_early_control;
+	case OPP_PROGRAM_FMT:
+		opp = step->params.opp_program_fmt_params.opp;
+		return opp && opp->funcs && opp->funcs->opp_program_fmt &&
+				step->params.opp_program_fmt_params.fmt_bit_depth &&
+				step->params.opp_program_fmt_params.clamping;
+	case OPP_SET_DYN_EXPANSION:
+		opp = step->params.opp_set_dyn_expansion_params.opp;
+		return opp && opp->funcs && opp->funcs->opp_set_dyn_expansion;
+	case OPP_PIPE_CLOCK_CONTROL:
+		opp = step->params.opp_pipe_clock_control_params.opp;
+		return opp && opp->funcs && opp->funcs->opp_pipe_clock_control;
+	case OPP_PROGRAM_LEFT_EDGE_EXTRA_PIXEL:
+		opp = step->params.opp_program_left_edge_extra_pixel_params.opp;
+		return opp && opp->funcs &&
+				opp->funcs->opp_program_left_edge_extra_pixel;
+	case OPP_SET_DISP_PATTERN_GENERATOR:
+		opp = step->params.opp_set_disp_pattern_generator_params.opp;
+		return opp && opp->funcs &&
+				opp->funcs->opp_set_disp_pattern_generator;
+	case OPP_WAIT_FOR_BLANK_COMPLETE:
+		opp = step->params.opp_wait_for_blank_complete_params.opp;
+		return opp && opp->funcs && opp->funcs->dpg_is_pending &&
+				opp->funcs->dpg_is_blanked &&
+				step->params.opp_wait_for_blank_complete_params
+				.polling_interval_us;
+	case DCCG_SET_PIXEL_RATE_DIV:
+		dccg = step->params.dccg_set_pixel_rate_div_params.dccg;
+		return dccg && dccg->funcs && dccg->funcs->set_pixel_rate_div;
+	case DCCG_DISABLE_SYMCLK_SE:
+		dccg = step->params.dccg_disable_symclk_se_params.dccg;
+		return dccg && dccg->funcs && dccg->funcs->disable_symclk_se;
+	case DCCG_ENABLE_SYMCLK_SE:
+		dccg = step->params.dccg_enable_symclk_se_params.dccg;
+		return dccg && dccg->funcs && dccg->funcs->enable_symclk_se;
+	case DCCG_SET_DTBCLK_P_SRC:
+		dccg = step->params.dccg_set_dtbclk_p_src_params.dccg;
+		return dccg && dccg->funcs && dccg->funcs->set_dtbclk_p_src;
+	case CLK_SRC_PROGRAM_PIX_CLK: {
+		const struct clk_src_program_pix_clk_params *p =
+				&step->params.clk_src_program_pix_clk_params;
+
+		return p->clock_source && p->clock_source->funcs &&
+				p->clock_source->funcs->program_pix_clk &&
+				p->pix_clk_params && p->pll_settings;
+	}
+	case CLK_SRC_POWER_DOWN:
+		cs = step->params.clk_src_power_down_params.clock_source;
+		return cs && cs->funcs && cs->funcs->cs_power_down;
+	case DIO_LINK_ENC_CONNECT_DIG_BE_TO_FE:
+		link_enc = step->params.link_enc_connect_dig_be_to_fe_params
+				.link_enc;
+		return link_enc && link_enc->funcs &&
+				link_enc->funcs->connect_dig_be_to_fe;
+	case DIO_LINK_ENC_ENABLE_DP_OUTPUT:
+		link_enc = step->params.link_enc_enable_dp_output_params
+				.link_enc;
+		return link_enc && link_enc->funcs &&
+				link_enc->funcs->enable_dp_output &&
+				step->params.link_enc_enable_dp_output_params
+				.link_settings;
+	case DIO_LINK_ENC_DISABLE_OUTPUT:
+		link_enc = step->params.link_enc_disable_output_params.link_enc;
+		return link_enc && link_enc->funcs &&
+				link_enc->funcs->disable_output;
+	case BIOS_SET_SCRATCH_CRITICAL_STATE: {
+		struct dc_bios *dcb =
+				step->params.bios_set_scratch_critical_state_params.dcb;
+
+		return dcb && dcb->funcs && dcb->funcs->set_scratch_critical_state;
+	}
+	case HUBP_PG_CONTROL:
+		hws = step->params.hubp_pg_control_params.hws;
+		return hws && hws->funcs.hubp_pg_control;
+	case DC_IP_REQUEST_CNTL:
+		hws = step->params.dc_ip_request_cntl_params.hws;
+		return hws && hws->funcs.dc_ip_request_cntl;
+	case HUBP_CLK_CNTL:
+		hubp = step->params.hubp_clk_cntl_params.hubp;
+		return hubp && hubp->funcs && hubp->funcs->hubp_clk_cntl;
+	case HUBP_SET_BLANK:
+		hubp = step->params.hubp_set_blank_params.hubp;
+		return hubp && hubp->funcs && hubp->funcs->set_blank;
+	case HUBP_UPDATE_MALL_SEL:
+		hubp = step->params.hubp_update_mall_sel_params.hubp;
+		return hubp && hubp->funcs && hubp->funcs->hubp_update_mall_sel;
+	case HUBP_SET_FLIP_CONTROL_GSL:
+		hubp = step->params.set_flip_control_gsl_params.hubp;
+		return hubp && hubp->funcs &&
+				hubp->funcs->hubp_set_flip_control_surface_gsl;
+	case HUBP_RESET:
+		hubp = step->params.hubp_reset_params.hubp;
+		return hubp && hubp->funcs && hubp->funcs->hubp_reset;
+	case DPP_RESET:
+		dpp = step->params.dpp_reset_params.dpp;
+		return dpp && dpp->funcs && dpp->funcs->dpp_reset;
+	case MPC_ASSERT_IDLE_MPCC:
+		mpc = step->params.mpc_assert_idle_mpcc_params.mpc;
+		return mpc && mpc->funcs && mpc->funcs->wait_for_idle;
+	case DPP_DPPCLK_CONTROL:
+		dpp = step->params.dpp_dppclk_control_params.dpp;
+		return dpp && dpp->funcs && dpp->funcs->dpp_dppclk_control;
+	case MPC_REMOVE_MPCC:
+		mpc = step->params.mpc_remove_mpcc_params.mpc;
+		return mpc && mpc->funcs && mpc->funcs->remove_mpcc &&
+				step->params.mpc_remove_mpcc_params.mpc_tree_params &&
+				step->params.mpc_remove_mpcc_params.mpcc_to_remove;
 	default:
 		return false;
 	}
@@ -346,6 +550,21 @@ static noinline_for_stack enum dc2_bls_exec_result dc2_bls_exec_dmub_gpint(
 	return DC2_BLS_EXEC_OK;
 }
 
+static noinline_for_stack bool dc2_bls_wait_for_blank_complete(
+		const struct opp_wait_for_blank_complete_params *w)
+{
+	unsigned int waited_us;
+
+	for (waited_us = 0; w->opp->funcs->dpg_is_pending(w->opp);
+			waited_us += w->polling_interval_us) {
+		if (waited_us >= w->timeout_us)
+			return false;
+		udelay(w->polling_interval_us);
+	}
+
+	return w->opp->funcs->dpg_is_blanked(w->opp);
+}
+
 enum dc2_bls_exec_result dc2_bls_execute(
 		struct dc2 *dc2,
 		const struct block_sequence *steps,
@@ -354,6 +573,13 @@ enum dc2_bls_exec_result dc2_bls_execute(
 	enum dc2_bls_exec_result result = DC2_BLS_EXEC_OK;
 	const struct block_sequence *entry;
 	enum dc2_bls_exec_result sent;
+	struct timing_generator *tg;
+	struct output_pixel_processor *opp;
+	struct clock_source *cs;
+	struct link_encoder *link_enc;
+	struct hubp *hubp;
+	struct dpp *dpp;
+	struct mpc *mpc;
 	unsigned int i;
 
 	if (!steps || num_steps > MAX_HWSS_BLOCK_SEQUENCE_SIZE)
@@ -691,6 +917,364 @@ enum dc2_bls_exec_result dc2_bls_execute(
 
 			p->hubbub->funcs->set_request_limit(p->hubbub,
 					p->num_chans, p->words_per_umc);
+			break;
+		}
+		case CLK_MGR_UPDATE_CLOCKS_FOR_STATE: {
+			const struct clk_mgr_update_clocks_for_state_params *p =
+					&entry->params
+					.clk_mgr_update_clocks_for_state_params;
+			bool *p_state = &p->context->bw_ctx.bw.dcn.clk
+					.p_state_change_support;
+			bool saved = *p_state;
+
+			if (p->disallow_p_state_change)
+				*p_state = false;
+			p->clk_mgr->funcs->update_clocks(p->clk_mgr, p->context,
+					p->safe_to_lower);
+			*p_state = saved;
+			break;
+		}
+		case HUBBUB_PROGRAM_WATERMARKS: {
+			const struct hubbub_program_watermarks_params *p =
+					&entry->params.hubbub_program_watermarks_params;
+			bool changed = p->hubbub->funcs->program_watermarks(
+					p->hubbub, p->watermarks, p->refclk_mhz,
+					p->safe_to_lower);
+
+			if (p->dc && !p->safe_to_lower)
+				p->dc->optimized_required |= changed;
+			break;
+		}
+		case HUBBUB_PROGRAM_ARBITER: {
+			const struct hubbub_program_arbiter_params *p =
+					&entry->params.hubbub_program_arbiter_params;
+			bool changed = p->hubbub->funcs->program_arbiter(p->hubbub,
+					p->arb_regs, p->safe_to_lower);
+
+			if (p->dc && !p->safe_to_lower)
+				p->dc->optimized_required |= changed;
+			break;
+		}
+		case HUBBUB_PROGRAM_COMPBUF_SEGMENTS: {
+			const struct hubbub_program_compbuf_segments_params *p =
+					&entry->params
+					.hubbub_program_compbuf_segments_params;
+
+			p->hubbub->funcs->program_compbuf_segments(p->hubbub,
+					p->compbuf_size, p->safe_to_lower);
+			break;
+		}
+		case HUBP_PROGRAM_DET_SEGMENTS: {
+			const struct program_det_segments_params *p =
+					&entry->params.program_det_segments_params;
+
+			p->hubbub->funcs->program_det_segments(p->hubbub,
+					p->hubp_inst, p->det_size);
+			break;
+		}
+		case TG_LOCK: {
+			const struct tg_lock_params *p =
+					&entry->params.tg_lock_params;
+
+			if (p->lock)
+				p->tg->funcs->lock(p->tg);
+			else
+				p->tg->funcs->unlock(p->tg);
+			break;
+		}
+		case TG_ENABLE_CRTC:
+			tg = entry->params.tg_enable_crtc_params.tg;
+			if (!tg->funcs->enable_crtc(tg))
+				return DC2_BLS_EXEC_ERROR;
+			break;
+		case TG_DISABLE_CRTC:
+			tg = entry->params.tg_disable_crtc_params.tg;
+			if (!tg->funcs->disable_crtc(tg))
+				return DC2_BLS_EXEC_ERROR;
+			break;
+		case TG_WAIT_ODM_DOUBLEBUFFER_PENDING_CLEAR:
+			tg = entry->params
+					.tg_wait_odm_doublebuffer_pending_clear_params.tg;
+			tg->funcs->wait_odm_doublebuffer_pending_clear(tg);
+			break;
+		case TG_PROGRAM_STEREO: {
+			const struct tg_program_stereo_params *p =
+					&entry->params.tg_program_stereo_params;
+			struct crtc_stereo_flags flags = p->flags;
+
+			p->tg->funcs->program_stereo(p->tg, p->timing, &flags);
+			break;
+		}
+		case OPP_PROGRAM_STEREO: {
+			const struct opp_program_stereo_params *p =
+					&entry->params.opp_program_stereo_params;
+
+			p->opp->funcs->opp_program_stereo(p->opp, p->enable,
+					p->timing);
+			break;
+		}
+		case TG_WAIT_FOR_STATE:
+			tg = entry->params.tg_wait_for_state_params.tg;
+			tg->funcs->wait_for_state(tg,
+					entry->params.tg_wait_for_state_params.state);
+			break;
+		case TG_SETUP_VERTICAL_INTERRUPT2:
+			tg = entry->params.tg_setup_vertical_interrupt2_params.tg;
+			tg->funcs->setup_vertical_interrupt2(tg, entry->params
+					.tg_setup_vertical_interrupt2_params.start_line);
+			break;
+		case OPTC_SET_ODM_BYPASS:
+			tg = entry->params.set_odm_bypass_params.tg;
+			tg->funcs->set_odm_bypass(tg,
+					entry->params.set_odm_bypass_params.timing);
+			break;
+		case TG_ENABLE_OPTC_CLOCK:
+			tg = entry->params.tg_enable_optc_clock_params.tg;
+			tg->funcs->enable_optc_clock(tg,
+					entry->params.tg_enable_optc_clock_params.enable);
+			break;
+		case TG_PROGRAM_TIMING: {
+			const struct tg_program_timing_params *p =
+					&entry->params.tg_program_timing_params;
+
+			p->tg->funcs->program_timing(p->tg, p->timing,
+					p->vready_offset, p->vstartup_start,
+					p->vupdate_offset, p->vupdate_width,
+					p->pstate_keepout, p->signal, p->use_vbios);
+			break;
+		}
+		case TG_SET_H_TIMING_DIV_MANUAL_MODE:
+			tg = entry->params.tg_set_h_timing_div_manual_mode_params.tg;
+			tg->funcs->set_h_timing_div_manual_mode(tg, entry->params
+					.tg_set_h_timing_div_manual_mode_params
+					.manual_mode);
+			break;
+		case TG_SET_DRR:
+			tg = entry->params.tg_set_drr_params.tg;
+			tg->funcs->set_drr(tg, &entry->params.tg_set_drr_params.drr);
+			break;
+		case TG_SET_STATIC_SCREEN_CONTROL: {
+			const struct tg_set_static_screen_control_params *p =
+					&entry->params
+					.tg_set_static_screen_control_params;
+
+			p->tg->funcs->set_static_screen_control(p->tg,
+					p->event_triggers, p->num_frames);
+			break;
+		}
+		case TG_SET_OUT_MUX:
+			tg = entry->params.tg_set_out_mux_params.tg;
+			tg->funcs->set_out_mux(tg,
+					entry->params.tg_set_out_mux_params.dest);
+			break;
+		case TG_SET_EARLY_CONTROL:
+			tg = entry->params.tg_set_early_control_params.tg;
+			tg->funcs->set_early_control(tg, entry->params
+					.tg_set_early_control_params.early_cntl);
+			break;
+		case OPP_PROGRAM_FMT:
+			opp = entry->params.opp_program_fmt_params.opp;
+			opp->funcs->opp_program_fmt(opp,
+					entry->params.opp_program_fmt_params
+					.fmt_bit_depth,
+					entry->params.opp_program_fmt_params.clamping);
+			break;
+		case OPP_SET_DYN_EXPANSION: {
+			const struct opp_set_dyn_expansion_params *p =
+					&entry->params.opp_set_dyn_expansion_params;
+
+			p->opp->funcs->opp_set_dyn_expansion(p->opp,
+					p->color_space, p->color_depth, p->signal);
+			break;
+		}
+		case OPP_PIPE_CLOCK_CONTROL:
+			opp = entry->params.opp_pipe_clock_control_params.opp;
+			opp->funcs->opp_pipe_clock_control(opp, entry->params
+					.opp_pipe_clock_control_params.enable);
+			break;
+		case OPP_PROGRAM_LEFT_EDGE_EXTRA_PIXEL: {
+			const struct opp_program_left_edge_extra_pixel_params *p =
+					&entry->params
+					.opp_program_left_edge_extra_pixel_params;
+
+			p->opp->funcs->opp_program_left_edge_extra_pixel(p->opp,
+					p->pixel_encoding, p->is_otg_master);
+			break;
+		}
+		case OPP_SET_DISP_PATTERN_GENERATOR: {
+			const struct opp_set_disp_pattern_generator_params *p =
+					&entry->params
+					.opp_set_disp_pattern_generator_params;
+
+			p->opp->funcs->opp_set_disp_pattern_generator(p->opp,
+					p->test_pattern, p->color_space,
+					p->color_depth,
+					p->use_solid_color ? &p->solid_color : NULL,
+					p->width, p->height, p->offset,
+					p->disable_dyn_exp_for_test_pattern);
+			break;
+		}
+		case OPP_WAIT_FOR_BLANK_COMPLETE:
+			if (dc2_bls_wait_for_blank_complete(&entry->params
+					.opp_wait_for_blank_complete_params))
+				break;
+			if (!entry->params.opp_wait_for_blank_complete_params
+					.continue_on_error)
+				return DC2_BLS_EXEC_ERROR;
+			result = DC2_BLS_EXEC_CONTINUED_ON_ERROR;
+			break;
+		case DCCG_SET_PIXEL_RATE_DIV: {
+			const struct dccg_set_pixel_rate_div_params *p =
+					&entry->params.dccg_set_pixel_rate_div_params;
+
+			p->dccg->funcs->set_pixel_rate_div(p->dccg, p->otg_inst,
+					p->k1, p->k2);
+			break;
+		}
+		case DCCG_DISABLE_SYMCLK_SE: {
+			const struct dccg_disable_symclk_se_params *p =
+					&entry->params.dccg_disable_symclk_se_params;
+
+			p->dccg->funcs->disable_symclk_se(p->dccg,
+					p->stream_enc_inst, p->link_enc_inst);
+			break;
+		}
+		case DCCG_ENABLE_SYMCLK_SE: {
+			const struct dccg_enable_symclk_se_params *p =
+					&entry->params.dccg_enable_symclk_se_params;
+
+			p->dccg->funcs->enable_symclk_se(p->dccg,
+					p->stream_enc_inst, p->link_enc_inst);
+			break;
+		}
+		case DCCG_SET_DTBCLK_P_SRC: {
+			const struct dccg_set_dtbclk_p_src_params *p =
+					&entry->params.dccg_set_dtbclk_p_src_params;
+
+			p->dccg->funcs->set_dtbclk_p_src(p->dccg, p->src,
+					p->otg_inst);
+			break;
+		}
+		case CLK_SRC_PROGRAM_PIX_CLK: {
+			const struct clk_src_program_pix_clk_params *p =
+					&entry->params.clk_src_program_pix_clk_params;
+
+			if (!p->clock_source->funcs->program_pix_clk(
+					p->clock_source, p->pix_clk_params,
+					p->encoding, p->pll_settings))
+				return DC2_BLS_EXEC_ERROR;
+			break;
+		}
+		case CLK_SRC_POWER_DOWN:
+			cs = entry->params.clk_src_power_down_params.clock_source;
+			if (cs->funcs->cs_power_down(cs))
+				break;
+			if (!entry->params.clk_src_power_down_params
+					.continue_on_error)
+				return DC2_BLS_EXEC_ERROR;
+			result = DC2_BLS_EXEC_CONTINUED_ON_ERROR;
+			break;
+		case DIO_LINK_ENC_CONNECT_DIG_BE_TO_FE: {
+			const struct link_enc_connect_dig_be_to_fe_params *p =
+					&entry->params
+					.link_enc_connect_dig_be_to_fe_params;
+
+			p->link_enc->funcs->connect_dig_be_to_fe(p->link_enc,
+					p->engine, p->connect);
+			break;
+		}
+		case DIO_LINK_ENC_ENABLE_DP_OUTPUT: {
+			const struct link_enc_enable_dp_output_params *p =
+					&entry->params.link_enc_enable_dp_output_params;
+
+			p->link_enc->funcs->enable_dp_output(p->link_enc,
+					p->link_settings, p->clock_source);
+			break;
+		}
+		case DIO_LINK_ENC_DISABLE_OUTPUT:
+			link_enc = entry->params.link_enc_disable_output_params
+					.link_enc;
+			link_enc->funcs->disable_output(link_enc,
+					entry->params.link_enc_disable_output_params
+					.signal);
+			break;
+		case BIOS_SET_SCRATCH_CRITICAL_STATE: {
+			const struct bios_set_scratch_critical_state_params *p =
+					&entry->params
+					.bios_set_scratch_critical_state_params;
+
+			p->dcb->funcs->set_scratch_critical_state(p->dcb, p->state);
+			break;
+		}
+		case HUBP_PG_CONTROL: {
+			const struct hubp_pg_control_params *p =
+					&entry->params.hubp_pg_control_params;
+
+			p->hws->funcs.hubp_pg_control(p->hws, p->hubp_inst,
+					p->power_on);
+			break;
+		}
+		case DC_IP_REQUEST_CNTL: {
+			const struct dc_ip_request_cntl_params *p =
+					&entry->params.dc_ip_request_cntl_params;
+
+			p->hws->funcs.dc_ip_request_cntl(p->hws, p->enable);
+			break;
+		}
+		case HUBP_CLK_CNTL:
+			hubp = entry->params.hubp_clk_cntl_params.hubp;
+			hubp->funcs->hubp_clk_cntl(hubp,
+					entry->params.hubp_clk_cntl_params.enable);
+			hubp->power_gated =
+					!entry->params.hubp_clk_cntl_params.enable;
+			break;
+		case HUBP_SET_BLANK:
+			hubp = entry->params.hubp_set_blank_params.hubp;
+			hubp->funcs->set_blank(hubp,
+					entry->params.hubp_set_blank_params.blank);
+			break;
+		case HUBP_UPDATE_MALL_SEL: {
+			const struct hubp_update_mall_sel_params *p =
+					&entry->params.hubp_update_mall_sel_params;
+
+			p->hubp->funcs->hubp_update_mall_sel(p->hubp, p->mall_sel,
+					p->cache_cursor);
+			break;
+		}
+		case HUBP_SET_FLIP_CONTROL_GSL: {
+			const struct set_flip_control_gsl_params *p =
+					&entry->params.set_flip_control_gsl_params;
+
+			p->hubp->funcs->hubp_set_flip_control_surface_gsl(p->hubp,
+					p->flip_immediate);
+			break;
+		}
+		case HUBP_RESET:
+			hubp = entry->params.hubp_reset_params.hubp;
+			hubp->funcs->hubp_reset(hubp);
+			break;
+		case DPP_RESET:
+			dpp = entry->params.dpp_reset_params.dpp;
+			dpp->funcs->dpp_reset(dpp);
+			break;
+		case MPC_ASSERT_IDLE_MPCC:
+			mpc = entry->params.mpc_assert_idle_mpcc_params.mpc;
+			mpc->funcs->wait_for_idle(mpc,
+					entry->params.mpc_assert_idle_mpcc_params.mpcc_id);
+			break;
+		case DPP_DPPCLK_CONTROL:
+			dpp = entry->params.dpp_dppclk_control_params.dpp;
+			dpp->funcs->dpp_dppclk_control(dpp,
+					entry->params.dpp_dppclk_control_params
+					.dppclk_div,
+					entry->params.dpp_dppclk_control_params.enable);
+			break;
+		case MPC_REMOVE_MPCC: {
+			const struct mpc_remove_mpcc_params *p =
+					&entry->params.mpc_remove_mpcc_params;
+
+			p->mpc->funcs->remove_mpcc(p->mpc, p->mpc_tree_params,
+					p->mpcc_to_remove);
 			break;
 		}
 		default:

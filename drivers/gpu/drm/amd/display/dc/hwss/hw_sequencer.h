@@ -29,6 +29,7 @@
 #include "inc/clock_source.h"
 #include "inc/hw/timing_generator.h"
 #include "inc/hw/opp.h"
+#include "inc/hw/dccg.h"
 #include "inc/hw/link_encoder.h"
 #include "inc/core_status.h"
 #include "inc/hw/hw_shared.h"
@@ -283,6 +284,143 @@ struct clk_mgr_notify_wm_ranges_params {
 struct bios_is_accelerated_mode_params {
 	struct dc_bios *dcb;
 	bool *out_accelerated_mode;
+};
+
+struct clk_mgr_update_clocks_for_state_params {
+	struct clk_mgr *clk_mgr;
+	struct dc_state *context;
+	bool safe_to_lower;
+	/* Clears context's p_state_change_support for this call only. */
+	bool disallow_p_state_change;
+};
+
+struct tg_enable_optc_clock_params {
+	struct timing_generator *tg;
+	bool enable;
+};
+
+struct tg_program_timing_params {
+	struct timing_generator *tg;
+	const struct dc_crtc_timing *timing;
+	int vready_offset;
+	int vstartup_start;
+	int vupdate_offset;
+	int vupdate_width;
+	int pstate_keepout;
+	enum signal_type signal;
+	bool use_vbios;
+};
+
+struct tg_set_h_timing_div_manual_mode_params {
+	struct timing_generator *tg;
+	bool manual_mode;
+};
+
+struct tg_set_drr_params {
+	struct timing_generator *tg;
+	struct drr_params drr;
+};
+
+struct tg_set_static_screen_control_params {
+	struct timing_generator *tg;
+	uint32_t event_triggers;
+	uint32_t num_frames;
+};
+
+struct tg_set_out_mux_params {
+	struct timing_generator *tg;
+	enum otg_out_mux_dest dest;
+};
+
+struct tg_set_early_control_params {
+	struct timing_generator *tg;
+	uint32_t early_cntl;
+};
+
+struct tg_disable_crtc_params {
+	struct timing_generator *tg;
+};
+
+struct tg_wait_odm_doublebuffer_pending_clear_params {
+	struct timing_generator *tg;
+};
+
+struct tg_program_stereo_params {
+	struct timing_generator *tg;
+	const struct dc_crtc_timing *timing;
+	struct crtc_stereo_flags flags;
+};
+
+struct opp_program_stereo_params {
+	struct output_pixel_processor *opp;
+	bool enable;
+	const struct dc_crtc_timing *timing;
+};
+
+struct opp_wait_for_blank_complete_params {
+	struct output_pixel_processor *opp;
+	unsigned int polling_interval_us;
+	unsigned int timeout_us;
+	bool continue_on_error;
+};
+
+struct dccg_set_pixel_rate_div_params {
+	struct dccg *dccg;
+	uint32_t otg_inst;
+	enum pixel_rate_div k1;
+	enum pixel_rate_div k2;
+};
+
+struct dccg_disable_symclk_se_params {
+	struct dccg *dccg;
+	uint32_t stream_enc_inst;
+	uint32_t link_enc_inst;
+};
+
+struct dccg_enable_symclk_se_params {
+	struct dccg *dccg;
+	uint32_t stream_enc_inst;
+	uint32_t link_enc_inst;
+};
+
+struct dccg_set_dtbclk_p_src_params {
+	struct dccg *dccg;
+	enum streamclk_source src;
+	uint32_t otg_inst;
+};
+
+struct clk_src_program_pix_clk_params {
+	struct clock_source *clock_source;
+	struct pixel_clk_params *pix_clk_params;
+	enum dp_link_encoding encoding;
+	struct pll_settings *pll_settings;
+};
+
+struct clk_src_power_down_params {
+	struct clock_source *clock_source;
+	bool continue_on_error;
+};
+
+struct link_enc_connect_dig_be_to_fe_params {
+	struct link_encoder *link_enc;
+	enum engine_id engine;
+	bool connect;
+};
+
+struct link_enc_enable_dp_output_params {
+	struct link_encoder *link_enc;
+	const struct dc_link_settings *link_settings;
+	enum clock_source_id clock_source;
+};
+
+struct link_enc_disable_output_params {
+	struct link_encoder *link_enc;
+	enum signal_type signal;
+};
+
+struct bios_set_scratch_critical_state_params {
+	struct dc_bios *dcb;
+	bool state;
 };
 
 struct lsdma_send_pio_copy_params {
@@ -1350,6 +1488,37 @@ union block_sequence_params {
 			clk_mgr_initialize_min_clocks_params;
 	struct clk_mgr_notify_wm_ranges_params clk_mgr_notify_wm_ranges_params;
 	struct bios_is_accelerated_mode_params bios_is_accelerated_mode_params;
+	struct clk_mgr_update_clocks_for_state_params
+			clk_mgr_update_clocks_for_state_params;
+	struct tg_enable_optc_clock_params tg_enable_optc_clock_params;
+	struct tg_program_timing_params tg_program_timing_params;
+	struct tg_set_h_timing_div_manual_mode_params
+			tg_set_h_timing_div_manual_mode_params;
+	struct tg_set_drr_params tg_set_drr_params;
+	struct tg_set_static_screen_control_params
+			tg_set_static_screen_control_params;
+	struct tg_set_out_mux_params tg_set_out_mux_params;
+	struct tg_set_early_control_params tg_set_early_control_params;
+	struct tg_disable_crtc_params tg_disable_crtc_params;
+	struct tg_wait_odm_doublebuffer_pending_clear_params
+			tg_wait_odm_doublebuffer_pending_clear_params;
+	struct tg_program_stereo_params tg_program_stereo_params;
+	struct opp_program_stereo_params opp_program_stereo_params;
+	struct opp_wait_for_blank_complete_params
+			opp_wait_for_blank_complete_params;
+	struct dccg_set_pixel_rate_div_params dccg_set_pixel_rate_div_params;
+	struct dccg_disable_symclk_se_params dccg_disable_symclk_se_params;
+	struct dccg_enable_symclk_se_params dccg_enable_symclk_se_params;
+	struct dccg_set_dtbclk_p_src_params dccg_set_dtbclk_p_src_params;
+	struct clk_src_program_pix_clk_params clk_src_program_pix_clk_params;
+	struct clk_src_power_down_params clk_src_power_down_params;
+	struct link_enc_connect_dig_be_to_fe_params
+			link_enc_connect_dig_be_to_fe_params;
+	struct link_enc_enable_dp_output_params
+			link_enc_enable_dp_output_params;
+	struct link_enc_disable_output_params link_enc_disable_output_params;
+	struct bios_set_scratch_critical_state_params
+			bios_set_scratch_critical_state_params;
 	struct hubbub_program_watermarks_params hubbub_program_watermarks_params;
 	struct hubbub_program_arbiter_params hubbub_program_arbiter_params;
 	struct hubbub_program_compbuf_segments_params hubbub_program_compbuf_segments_params;
@@ -1559,6 +1728,29 @@ enum block_sequence_func {
 	HUBBUB_SET_REQUEST_LIMIT,
 	BIOS_IS_ACCELERATED_MODE,
 	DMUB_FAMS2_UPDATE_CONFIG,
+	CLK_MGR_UPDATE_CLOCKS_FOR_STATE,
+	TG_ENABLE_OPTC_CLOCK,
+	TG_PROGRAM_TIMING,
+	TG_SET_H_TIMING_DIV_MANUAL_MODE,
+	TG_SET_DRR,
+	TG_SET_STATIC_SCREEN_CONTROL,
+	TG_SET_OUT_MUX,
+	TG_SET_EARLY_CONTROL,
+	TG_DISABLE_CRTC,
+	TG_WAIT_ODM_DOUBLEBUFFER_PENDING_CLEAR,
+	TG_PROGRAM_STEREO,
+	OPP_PROGRAM_STEREO,
+	OPP_WAIT_FOR_BLANK_COMPLETE,
+	DCCG_SET_PIXEL_RATE_DIV,
+	DCCG_DISABLE_SYMCLK_SE,
+	DCCG_ENABLE_SYMCLK_SE,
+	DCCG_SET_DTBCLK_P_SRC,
+	CLK_SRC_PROGRAM_PIX_CLK,
+	CLK_SRC_POWER_DOWN,
+	DIO_LINK_ENC_CONNECT_DIG_BE_TO_FE,
+	DIO_LINK_ENC_ENABLE_DP_OUTPUT,
+	DIO_LINK_ENC_DISABLE_OUTPUT,
+	BIOS_SET_SCRATCH_CRITICAL_STATE,
 	/* This must be the last value in this enum, add new ones above */
 	HWSS_BLOCK_SEQUENCE_FUNC_COUNT
 };
