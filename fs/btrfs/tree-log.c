@@ -160,6 +160,7 @@ struct walk_control {
 	struct btrfs_path *subvol_path;
 };
 
+__printf(5, 6) __cold
 static void do_abort_log_replay(struct walk_control *wc, const char *function,
 				unsigned int line, int error, const char *fmt, ...)
 {
