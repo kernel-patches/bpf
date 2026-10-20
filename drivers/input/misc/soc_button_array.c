@@ -366,10 +366,10 @@ static const u8 btns_desc_uuid[16] = {
 static struct soc_button_info *soc_button_get_button_info(struct device *dev)
 {
 	struct acpi_buffer buf = { ACPI_ALLOCATE_BUFFER };
-	const union acpi_object *desc, *el0, *uuid, *btns_desc = NULL;
-	struct soc_button_info *button_info;
+	const union acpi_object *el0, *uuid, *btns_desc = NULL;
 	acpi_status status;
 	int i, btn, collection_uid = -1;
+	int error;
 
 	status = acpi_evaluate_object_typed(ACPI_HANDLE(dev), "_DSD", NULL,
 					    &buf, ACPI_TYPE_PACKAGE);
@@ -378,8 +378,9 @@ static struct soc_button_info *soc_button_get_button_info(struct device *dev)
 		return ERR_PTR(-ENODEV);
 	}
 
+	union acpi_object *desc __free(acpi_object_free) = buf.pointer;
+
 	/* Look for the Button Descriptors UUID */
-	desc = buf.pointer;
 	for (i = 0; (i + 1) < desc->package.count; i += 2) {
 		uuid = &desc->package.elements[i];
 
@@ -397,8 +398,7 @@ static struct soc_button_info *soc_button_get_button_info(struct device *dev)
 
 	if (!btns_desc || !btns_desc->package.count) {
 		dev_err(dev, "ACPI Button Descriptors not found\n");
-		button_info = ERR_PTR(-ENODEV);
-		goto out;
+		return ERR_PTR(-ENODEV);
 	}
 
 	/* The first package describes the collection */
@@ -414,32 +414,26 @@ static struct soc_button_info *soc_button_get_button_info(struct device *dev)
 	}
 	if (collection_uid == -1) {
 		dev_err(dev, "Invalid Button Collection Descriptor\n");
-		button_info = ERR_PTR(-ENODEV);
-		goto out;
+		return ERR_PTR(-ENODEV);
 	}
 
 	/* There are package.count - 1 buttons + 1 terminating empty entry */
-	button_info = devm_kzalloc_objs(dev, *button_info,
-					btns_desc->package.count);
-	if (!button_info) {
-		button_info = ERR_PTR(-ENOMEM);
-		goto out;
-	}
+	struct soc_button_info *button_info __free(kfree) =
+		kzalloc_objs(*button_info, btns_desc->package.count);
+	if (!button_info)
+		return ERR_PTR(-ENOMEM);
 
 	/* Parse the button descriptors */
 	for (i = 1, btn = 0; i < btns_desc->package.count; i++, btn++) {
-		if (soc_button_parse_btn_desc(dev,
-					      &btns_desc->package.elements[i],
-					      collection_uid,
-					      &button_info[btn])) {
-			button_info = ERR_PTR(-ENODEV);
-			goto out;
-		}
+		error = soc_button_parse_btn_desc(dev,
+						  &btns_desc->package.elements[i],
+						  collection_uid,
+						  &button_info[btn]);
+		if (error)
+			return ERR_PTR(error);
 	}
 
-out:
-	kfree(buf.pointer);
-	return button_info;
+	return_ptr(button_info);
 }
 
 static void soc_button_remove(struct platform_device *pdev)
@@ -458,6 +452,7 @@ static int soc_button_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	const struct soc_device_data *device_data;
 	const struct soc_button_info *button_info;
+	const struct soc_button_info *dynamic_button_info __free(kfree) = NULL;
 	struct soc_button_data *priv;
 	struct platform_device *pd;
 	int i;
@@ -473,9 +468,11 @@ static int soc_button_probe(struct platform_device *pdev)
 	if (device_data && device_data->button_info) {
 		button_info = device_data->button_info;
 	} else {
-		button_info = soc_button_get_button_info(dev);
-		if (IS_ERR(button_info))
-			return PTR_ERR(button_info);
+		dynamic_button_info = soc_button_get_button_info(dev);
+		if (IS_ERR(dynamic_button_info))
+			return PTR_ERR(dynamic_button_info);
+
+		button_info = dynamic_button_info;
 	}
 
 	error = gpiod_count(dev, NULL);
@@ -506,9 +503,6 @@ static int soc_button_probe(struct platform_device *pdev)
 
 	if (!priv->children[0] && !priv->children[1])
 		return -ENODEV;
-
-	if (!device_data || !device_data->button_info)
-		devm_kfree(dev, button_info);
 
 	return 0;
 }
