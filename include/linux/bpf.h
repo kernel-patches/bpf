@@ -1940,6 +1940,12 @@ struct bpf_prog_aux {
 	u64 (*bpf_exception_cb)(u64 cookie, u64 sp, u64 bp, u64, u64);
 	u16 stack_arg_sp_adjust;
 	u16 freplace_link_cnt; /* counts freplace links extending this prog */
+	/*
+	 * Offsets from the native frame pointer of this JITed program at which
+	 * its prologue saved the caller's R6..R9, or 0 when that register is not
+	 * saved. Filled by the JIT; consumed by the exception unwinder.
+	 */
+	s16 callee_reg_off[4];
 #ifdef CONFIG_SECURITY
 	void *security;
 #endif

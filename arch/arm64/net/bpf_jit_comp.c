@@ -422,6 +422,42 @@ static void find_used_callee_regs(struct jit_ctx *ctx)
 	ctx->nr_used_callee_reg = i;
 }
 
+/*
+ * Offset from the frame pointer of the @idx-th register pushed by push_callee_regs(). The
+ * frame record sits at the frame pointer, the tail call count pair right below it, and
+ * then the pushed pairs, each 16 bytes with its first register at the lower address.
+ */
+static int callee_reg_slot_off(int idx)
+{
+	return -32 - 16 * (idx / 2) + 8 * (idx % 2);
+}
+
+/*
+ * Record where push_callee_regs() saved the caller's R6..R9, relative to the frame
+ * pointer that arch_bpf_stack_walk() reports for this frame, for the exception unwinder.
+ * An exception boundary pushes x19..x28 in order, so R6..R9 take the first four slots.
+ */
+static void record_callee_reg_off(struct jit_ctx *ctx)
+{
+	struct bpf_prog_aux *aux = ctx->prog->aux;
+	int i, j;
+
+	if (aux->exception_boundary) {
+		for (i = 0; i < 4; i++)
+			aux->callee_reg_off[i] = callee_reg_slot_off(i);
+		return;
+	}
+	for (i = 0; i < 4; i++) {
+		aux->callee_reg_off[i] = 0;
+		for (j = 0; j < ctx->nr_used_callee_reg; j++) {
+			if (ctx->used_callee_reg[j] != bpf2a64[BPF_REG_6 + i])
+				continue;
+			aux->callee_reg_off[i] = callee_reg_slot_off(j);
+			break;
+		}
+	}
+}
+
 /* Save callee-saved registers */
 static void push_callee_regs(struct jit_ctx *ctx)
 {
@@ -452,6 +488,7 @@ static void push_callee_regs(struct jit_ctx *ctx)
 			emit(A64_PUSH(reg1, A64_ZR, A64_SP), ctx);
 		}
 	}
+	record_callee_reg_off(ctx);
 }
 
 /* Restore callee-saved registers */
