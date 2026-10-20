@@ -1217,6 +1217,128 @@ __naked void zext_fill_byte_forms_no_link(void)
 	: __clobber_all);
 }
 
+/*
+ * The link does reach a fill, provided the narrowing happens while the value
+ * is still on the stack: sync_linked_regs() walks spilled slots, so narrowing
+ * r6 narrows the slot and the fill copies an already narrowed value. This is
+ * the order the narrowing-spill link is for; the other order is below.
+ */
+SEC("socket")
+__success
+__naked void zext_narrowing_spill_reaches_fill(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	call %[bpf_get_prandom_u32];				\
+	r0 <<= 32;						\
+	r6 |= r0;		/* r6 = full 64-bit unknown */	\
+	*(u32 *)(r10 - 8) = r6;	/* narrowing spill, forms the link */ \
+	if w6 != 0 goto 1f;	/* narrow r6 while it is on the stack */ \
+	r2 = *(u32 *)(r10 - 8);	/* fill gets the narrowed value */ \
+	if r2 == 0 goto 1f;					\
+	r0 /= 0;						\
+1:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * A narrowing spill stores only the source's low 32 bits, so the slot is their
+ * zero-extension. Filling it back is a mov, though, and that drops the link
+ * for the same reason zext_chain_drops_link does, so a later narrowing of the
+ * source does not reach the filled register.
+ */
+SEC("socket")
+__failure
+__msg("div by zero")
+__naked void zext_narrowing_spill_drops_link(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	call %[bpf_get_prandom_u32];				\
+	r0 <<= 32;						\
+	r6 |= r0;		/* r6 = full 64-bit unknown */	\
+	*(u32 *)(r10 - 8) = r6;	/* narrowing spill, forms the link */ \
+	r2 = *(u32 *)(r10 - 8);	/* fill it back */		\
+	if w6 != 0 goto 1f;	/* narrows r6, propagates to r2 */ \
+	if r2 == 0 goto 1f;					\
+	r0 /= 0;						\
+1:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * save_register_state() copies the source register whole, so the slot of a
+ * narrowing spill arrives holding bounds for bits the store never wrote.
+ * Recording BPF_REG_LINK_ZEXT on top of those is a contradiction, and the first
+ * sync_linked_regs() runs straight into it: it rebuilds the slot's low half
+ * correctly and then intersects it against the stale wide bounds, which are
+ * disjoint from it, leaving the slot with an empty range. Nothing downstream
+ * notices -- not even BPF_F_TEST_REG_INVARIANTS, which does not walk stack
+ * slots -- so assert on the dump.
+ */
+SEC("socket")
+__success __log_level(2)
+/* untruncated, the slot kept r6's umin=0x100000000 and went empty on sync */
+__msg("*(u32 *)(r10 -8) = r6 {{.*}} fp-8={{.*}}smin=0,smax=umax=0xffffffff")
+__naked void zext_narrowing_spill_truncates_slot(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	r7 = 1;							\
+	r7 <<= 32;						\
+	r6 |= r7;		/* r6 >= 2^32, so the spill narrows */ \
+	*(u32 *)(r10 - 8) = r6;	/* slot is (u32)r6 */		\
+	r8 = 1;							\
+	r8 <<= 32;						\
+	r8 += 5;						\
+	if r6 > r8 goto 1f;	/* narrows r6, syncs the slot */ \
+1:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * A sub-word spill is below the low-32 model, so no link is formed there.
+ * The fill is a byte load too, so this pins the spill-side and fill-side
+ * size gates together rather than either on its own.
+ */
+SEC("socket")
+__failure __msg("div by zero")
+__naked void zext_narrowing_spill_byte_no_link(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	call %[bpf_get_prandom_u32];				\
+	r0 <<= 32;						\
+	r6 |= r0;						\
+	*(u8 *)(r10 - 8) = r6;	/* 1-byte spill: no link */	\
+	r2 = *(u8 *)(r10 - 8);					\
+	if w6 != 0 goto 1f;					\
+	if r2 == 0 goto 1f;	/* not deduced */		\
+	r0 /= 0;						\
+1:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
 #ifdef CAN_USE_MOVSX
 
 /*
@@ -1628,6 +1750,36 @@ __naked void sext_delta_survives_narrowing_fill(void)
 	: __clobber_all);
 }
 
+/*
+ * And for a narrowing spill: the slot holds (u32)(r6 + 5). Recording delta 0
+ * there put the slot, and anything filled from it, 5 away from the truth.
+ */
+SEC("socket")
+__success
+__naked void sext_delta_survives_narrowing_spill(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	r6 <<= 32;						\
+	call %[bpf_get_prandom_u32];				\
+	r6 |= r0;		/* r6 = full 64-bit unknown */	\
+	w7 = w6;		/* BPF_REG_LINK_ZEXT, delta 0 */	\
+	w7 += 5;		/* BPF_REG_LINK_ZEXT, delta 5 */	\
+	r8 = (s32)r7;		/* BPF_REG_LINK_SEXT, delta 5 */	\
+	*(u32 *)(r10 - 8) = r8;	/* narrowing spill keeps delta */ \
+	if r6 != 0 goto 1f;	/* narrow before the fill */	\
+	r2 = *(u32 *)(r10 - 8);	/* r2 == 5, not 0 */		\
+	if r2 == 5 goto 1f;	/* always taken: r2 is 5 */					\
+	r0 /= 0;						\
+1:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
 #endif /* CAN_USE_MOVSX */
 
 #ifdef CAN_USE_LDSX
@@ -1799,6 +1951,35 @@ __naked void sext_byte_fill_drops_sext_link(void)
 	: __clobber_all);
 }
 #endif /* CAN_USE_MOVSX */
+
+/*
+ * The same, with the zero-extending link coming from a narrowing spill rather
+ * than a mov. The spill truncated the slot to 32 bits, so the fill is not
+ * narrowing and assigns no link kind of its own; the slot's zero-extending
+ * one must not survive the sign-extending load.
+ */
+SEC("socket")
+__failure __msg("div by zero")
+__naked void sext_fill_of_narrowing_spill_drops_zext(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	call %[bpf_get_prandom_u32];				\
+	r0 <<= 32;						\
+	r6 |= r0;		/* r6 = full 64-bit unknown */	\
+	*(u32 *)(r10 - 8) = r6;	/* narrowing spill: slot is ZEXT */ \
+	r2 = *(s32 *)(r10 - 8);	/* sign-extending, not narrowing */ \
+	if w6 != -1 goto 1f;	/* slot low 32 bits are all ones */ \
+	if r2 s>= 0 goto 1f;	/* taken only if r2 was rebuilt zext */ \
+	r0 /= 0;						\
+1:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
 
 #endif /* CAN_USE_LDSX */
 
