@@ -18852,29 +18852,54 @@ static void sync_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier_s
 		if (reg->id != known_reg->id)
 			continue;
 		/*
-		 * The reverse direction does not work for a narrow known_reg:
-		 * it knows only its low 32 bits, which say nothing about a
-		 * wider reg's high half. Neither (u32)(base + delta) nor
-		 * (s32)(base + delta) inverts once the base is wider than 32
-		 * bits.
+		 * The reverse direction, from a narrow known_reg to a wider
+		 * reg, does not invert: neither (u32)(base + delta) nor
+		 * (s32)(base + delta) says anything about the base's high
+		 * half. It does still pin the low half, though -- both sides
+		 * are (base + delta) mod 2^32, differing only by their deltas
+		 * -- so recover that much and leave the high half alone.
 		 */
 		if ((known_reg->link_kind == BPF_REG_LINK_ZEXT ||
 		     known_reg->link_kind == BPF_REG_LINK_SEXT) &&
 		    reg->link_kind != BPF_REG_LINK_ZEXT &&
 		    reg->link_kind != BPF_REG_LINK_SEXT &&
-		    get_reg_width(reg) > 32)
-			continue;
+		    get_reg_width(reg) > 32) {
+			/*
+			 * Only @low's 32-bit half is meaningful: its var_off
+			 * is advanced over all 64 bits while r64 and the
+			 * base/step line are not, and nothing below reads
+			 * either. It is a scratch value, not a register state.
+			 */
+			struct bpf_reg_state low = *known_reg;
+			struct tnum low32;
+
+			fake_reg.type = SCALAR_VALUE;
+			__mark_reg_known(&fake_reg,
+					 (s64)reg->delta - (s64)known_reg->delta);
+			scalar32_min_max_add(&low, &fake_reg);
+			low.var_off = tnum_add(low.var_off, fake_reg.var_off);
+
+			cnum32_intersect_with(&reg->r32, low.r32);
+			low32 = tnum_intersect(tnum_subreg(reg->var_off),
+					       tnum_subreg(low.var_off));
+			reg->var_off = tnum_with_subreg(reg->var_off, low32);
+			reg_bounds_sync(reg);
+			goto scratched;
+		}
 		/*
 		 * Skip a pair of differing kinds. Where BPF_REG_LINK_FULL meets
-		 * a 32-bit kind the delta relationship genuinely does not hold:
-		 * the deltas were added at different ALU widths.
-		 * BPF_REG_LINK_ZEXT against BPF_REG_LINK_SEXT is not that case
-		 * -- both are base + delta in the low 32 bits, so narrowing one
-		 * really does narrow the other -- but that deduction is
-		 * declined on purpose. It makes an int loop counter a fresh
-		 * constant on every iteration, so no two iterations prune
-		 * against each other and the program runs to the instruction
-		 * limit. See sext_no_sync_from_zext_sibling.
+		 * a 32-bit kind the delta relationship does not hold over all
+		 * 64 bits: the deltas were added at different ALU widths. For a
+		 * wide member the low half still relates and the arm above has
+		 * already recovered it; a member that fits 32 bits does not
+		 * reach that arm and is skipped outright. BPF_REG_LINK_ZEXT
+		 * against BPF_REG_LINK_SEXT is not that case -- both are base +
+		 * delta in the low 32 bits, so narrowing one really does narrow
+		 * the other -- but that deduction is declined on purpose. It
+		 * makes an int loop counter a fresh constant on every
+		 * iteration, so no two iterations prune against each other and
+		 * the program runs to the instruction limit. See
+		 * sext_no_sync_from_zext_sibling.
 		 */
 		if (reg->link_kind && known_reg->link_kind &&
 		    reg->link_kind != known_reg->link_kind)
@@ -18953,6 +18978,7 @@ static void sync_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier_s
 				*reg = prev;
 			reg_bounds_sync(reg);
 		}
+scratched:
 		if (e->is_reg)
 			mark_reg_scratched(env, e->regno);
 		else
