@@ -8,6 +8,7 @@
 #include "arena_percpu_only.skel.h"
 #include "arena_percpu_mixed.skel.h"
 
+static char log_buf[16384];
 static cpu_set_t affinity_save;
 
 static int pin_to(int cpu)
@@ -231,6 +232,120 @@ out:
 	restore_affinity();
 }
 
+/* check out of range pseudo instructions and accesses */
+static void test_arena_percpu_percpu_bounds(void)
+{
+	struct bpf_insn insns[] = {
+		BPF_LD_IMM64_RAW(BPF_REG_1, BPF_PSEUDO_ARENA_PERCPU, 0),
+		BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_1, 0),
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+	};
+	LIBBPF_OPTS(bpf_map_create_opts, map_opts);
+	LIBBPF_OPTS(bpf_prog_load_opts, prog_opts);
+	bool *possible = NULL;
+	__u32 page_sz = getpagesize();
+	__u32 bad_offs[2];
+	char expected[128];
+	void *arena = MAP_FAILED;
+	int possible_cpus, nr_pages, map_fd, prog_fd, i;
+
+	if (parse_possible_cpus(&possible, &possible_cpus))
+		return;
+
+	/* a one-page per-cpu chunk at page 1 of the arena */
+	map_opts.map_flags = BPF_F_MMAPABLE;
+	map_opts.arena_percpu_chunk_off = page_sz;
+	map_opts.arena_percpu_chunk_sz = page_sz;
+
+	prog_opts.log_buf = log_buf;
+	prog_opts.log_size = sizeof(log_buf);
+	prog_opts.log_level = 1;
+
+	/* one page per possible cpu plus one for the chunk offset */
+	nr_pages = possible_cpus + 1;
+
+	map_fd = bpf_map_create(BPF_MAP_TYPE_ARENA, "arena_percpu_ref",
+				0, 0, nr_pages, &map_opts);
+	if (!ASSERT_GE(map_fd, 0, "map_create"))
+		goto out;
+
+	arena = mmap(NULL, nr_pages * page_sz, PROT_READ | PROT_WRITE,
+		     MAP_SHARED, map_fd, 0);
+	if (!ASSERT_NEQ(arena, MAP_FAILED, "arena_mmap"))
+		goto out;
+
+	insns[0].imm = map_fd;
+
+	/* a reference at the start of the chunk loads */
+	insns[1].imm = page_sz;
+	prog_fd = bpf_prog_load(BPF_PROG_TYPE_RAW_TRACEPOINT,
+				"arena_percpu_ref", "GPL", insns,
+				ARRAY_SIZE(insns), &prog_opts);
+	if (!ASSERT_GE(prog_fd, 0, "in_range_load"))
+		goto out;
+	close(prog_fd);
+
+	/* the first u64 below the chunk and one past its end are rejected */
+	bad_offs[0] = page_sz - 8;
+	bad_offs[1] = page_sz + page_sz;
+
+	for (i = 0; i < ARRAY_SIZE(bad_offs); i++) {
+		insns[1].imm = bad_offs[i];
+		prog_fd = bpf_prog_load(BPF_PROG_TYPE_RAW_TRACEPOINT,
+					"arena_percpu_ref", "GPL", insns,
+					ARRAY_SIZE(insns), &prog_opts);
+		if (!ASSERT_LT(prog_fd, 0, "out_of_range_load"))
+			close(prog_fd);
+		snprintf(expected, sizeof(expected),
+			 "per-cpu arena reference at offset %u "
+			 "outside cpu 0's chunk", bad_offs[i]);
+		ASSERT_HAS_SUBSTR(log_buf, expected, "out_of_range_log");
+	}
+
+	/* the last u64 of the chunk is in range and loads */
+	insns[1].imm = page_sz + page_sz - 8;
+	insns[2].off = 0;
+	prog_fd = bpf_prog_load(BPF_PROG_TYPE_RAW_TRACEPOINT,
+				"arena_percpu_ref", "GPL", insns,
+				ARRAY_SIZE(insns), &prog_opts);
+	if (!ASSERT_GE(prog_fd, 0, "last_u64_load"))
+		goto out;
+	close(prog_fd);
+
+	/* one u64 past the chunk end is rejected */
+	insns[2].off = 8;
+	prog_fd = bpf_prog_load(BPF_PROG_TYPE_RAW_TRACEPOINT,
+				"arena_percpu_ref", "GPL", insns,
+				ARRAY_SIZE(insns), &prog_opts);
+	if (!ASSERT_LT(prog_fd, 0, "out_of_range_access"))
+		close(prog_fd);
+	snprintf(expected, sizeof(expected),
+		 "per-cpu arena access at offset %d size 8 "
+		 "outside cpu 0's chunk", (int)page_sz);
+	ASSERT_HAS_SUBSTR(log_buf, expected, "out_of_range_access_log");
+
+	/* an access below the chunk start is rejected */
+	insns[1].imm = page_sz;
+	insns[2].off = -8;
+	prog_fd = bpf_prog_load(BPF_PROG_TYPE_RAW_TRACEPOINT,
+				"arena_percpu_ref", "GPL", insns,
+				ARRAY_SIZE(insns), &prog_opts);
+	if (!ASSERT_LT(prog_fd, 0, "below_chunk_access"))
+		close(prog_fd);
+	snprintf(expected, sizeof(expected),
+		 "per-cpu arena access at offset -8 size 8 "
+		 "outside cpu 0's chunk");
+	ASSERT_HAS_SUBSTR(log_buf, expected, "below_chunk_access_log");
+
+out:
+	if (arena != MAP_FAILED)
+		munmap(arena, nr_pages * page_sz);
+	if (map_fd >= 0)
+		close(map_fd);
+	free(possible);
+}
+
 void test_arena_percpu(void)
 {
 	if (!feat_supported(NULL, FEAT_ARENA_PERCPU_DATA)) {
@@ -241,4 +356,6 @@ void test_arena_percpu(void)
 		test_arena_percpu_only();
 	if (test__start_subtest("percpu_mixed"))
 		test_arena_percpu_mixed();
+	if (test__start_subtest("percpu_bounds"))
+		test_arena_percpu_percpu_bounds();
 }
