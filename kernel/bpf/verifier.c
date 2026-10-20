@@ -2080,6 +2080,7 @@ static void __mark_reg_known(struct bpf_reg_state *reg, u64 imm)
 	reg->id = 0;
 	reg->parent_id = 0;
 	reg->map_uid = 0;
+	reg->link_kind = BPF_REG_LINK_NONE;
 	___mark_reg_known(reg, imm);
 }
 
@@ -3812,12 +3813,6 @@ static bool __is_pointer_value(bool allow_ptr_leaks,
 	return is_pointer_regtype(reg->type);
 }
 
-static void clear_scalar_id(struct bpf_reg_state *reg)
-{
-	reg->id = 0;
-	reg->delta = 0;
-}
-
 static void assign_scalar_id_before_mov(struct bpf_verifier_env *env,
 					struct bpf_reg_state *src_reg)
 {
@@ -3828,8 +3823,8 @@ static void assign_scalar_id_before_mov(struct bpf_verifier_env *env,
 	 * rY->id has special linked register already.
 	 * Cleared it, since multiple rX += const are not supported.
 	 */
-	if (src_reg->id & BPF_ADD_CONST)
-		clear_scalar_id(src_reg);
+	if (src_reg->link_kind)
+		bpf_clear_scalar_id(src_reg);
 	/*
 	 * Ensure that src_reg has a valid ID that will be copied to
 	 * dst_reg and then will be used by sync_linked_regs() to
@@ -3981,7 +3976,7 @@ static int check_stack_write_fixed_off(struct bpf_verifier_env *env,
 		save_register_state(env, state, spi, reg, size);
 		/* Break the relation on a narrowing spill. */
 		if (!reg_value_fits)
-			clear_scalar_id(&ss->spilled_ptr);
+			bpf_clear_scalar_id(&ss->spilled_ptr);
 	} else if (!reg && !(off % BPF_REG_SIZE) && is_bpf_st_mem(insn) &&
 		   env->bpf_capable) {
 		struct bpf_reg_state *tmp_reg = &env->fake_reg[0];
@@ -4338,7 +4333,7 @@ static int check_stack_read_fixed_off(struct bpf_verifier_env *env,
 				 * coerce_reg_to_size will adjust the boundaries.
 				 */
 				if (get_reg_width(reg) > size * BITS_PER_BYTE)
-					clear_scalar_id(&state->regs[dst_regno]);
+					bpf_clear_scalar_id(&state->regs[dst_regno]);
 			} else {
 				int spill_cnt = 0, zero_cnt = 0;
 
@@ -7511,7 +7506,7 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, struct b
 
 			coerce_reg_to_size_sx(&regs[value_regno], size);
 			if (!no_sext)
-				clear_scalar_id(&regs[value_regno]);
+				bpf_clear_scalar_id(&regs[value_regno]);
 		}
 	}
 
@@ -17225,7 +17220,7 @@ static void scalar_byte_swap(struct bpf_reg_state *dst_reg, struct bpf_insn *ins
 	 * any existing ties and avoid incorrect bounds propagation.
 	 */
 	if (need_bswap || insn->imm == 16 || insn->imm == 32)
-		clear_scalar_id(dst_reg);
+		bpf_clear_scalar_id(dst_reg);
 
 	if (need_bswap) {
 		if (insn->imm == 16)
@@ -17664,18 +17659,18 @@ static int adjust_reg_min_max_vals(struct bpf_verifier_env *env,
 			off = -off;
 		}
 
-		if (dst_reg->id & BPF_ADD_CONST) {
+		if (dst_reg->link_kind) {
 			/*
 			 * If the register already went through rX += val
 			 * we cannot accumulate another val into rx->off.
 			 */
 clear_id:
-			clear_scalar_id(dst_reg);
+			bpf_clear_scalar_id(dst_reg);
 		} else {
 			if (alu32)
-				dst_reg->id |= BPF_ADD_CONST32;
+				dst_reg->link_kind = BPF_REG_LINK_ZEXT;
 			else
-				dst_reg->id |= BPF_ADD_CONST64;
+				dst_reg->link_kind = BPF_REG_LINK_FULL;
 			dst_reg->delta = off;
 		}
 	} else {
@@ -17683,7 +17678,7 @@ clear_id:
 		 * Make sure ID is cleared otherwise dst_reg min/max could be
 		 * incorrectly propagated into other registers by sync_linked_regs()
 		 */
-		clear_scalar_id(dst_reg);
+		bpf_clear_scalar_id(dst_reg);
 	}
 	return 0;
 }
@@ -17879,7 +17874,7 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 							assign_scalar_id_before_mov(env, src_reg);
 						*dst_reg = *src_reg;
 						if (!no_sext)
-							clear_scalar_id(dst_reg);
+							bpf_clear_scalar_id(dst_reg);
 						coerce_reg_to_size_sx(dst_reg, insn->off >> 3);
 					} else {
 						mark_reg_unknown(env, regs, insn->dst_reg);
@@ -17904,7 +17899,7 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 						 * propagated into src_reg by sync_linked_regs()
 						 */
 						if (!is_src_reg_u32)
-							clear_scalar_id(dst_reg);
+							bpf_clear_scalar_id(dst_reg);
 					} else {
 						/* case: W1 = (s8, s16)W2 */
 						bool no_sext = reg_umax(src_reg) < (1ULL << (insn->off - 1));
@@ -17913,7 +17908,7 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 							assign_scalar_id_before_mov(env, src_reg);
 						*dst_reg = *src_reg;
 						if (!no_sext)
-							clear_scalar_id(dst_reg);
+							bpf_clear_scalar_id(dst_reg);
 						coerce_subreg_to_size_sx(dst_reg, insn->off >> 3);
 					}
 				} else {
@@ -18719,7 +18714,7 @@ static void __collect_linked_regs(struct linked_regs *reg_set, struct bpf_reg_st
 {
 	struct linked_reg *e;
 
-	if (reg->type != SCALAR_VALUE || (reg->id & ~BPF_ADD_CONST) != id)
+	if (reg->type != SCALAR_VALUE || reg->id != id)
 		return;
 
 	e = linked_regs_push(reg_set);
@@ -18728,7 +18723,7 @@ static void __collect_linked_regs(struct linked_regs *reg_set, struct bpf_reg_st
 		e->is_reg = is_reg;
 		e->regno = spi_or_reg;
 	} else {
-		clear_scalar_id(reg);
+		bpf_clear_scalar_id(reg);
 	}
 }
 
@@ -18747,7 +18742,6 @@ static void collect_linked_regs(struct bpf_verifier_env *env,
 	u16 live_regs;
 	int i, j;
 
-	id = id & ~BPF_ADD_CONST;
 	for (i = vstate->curframe; i >= 0; i--) {
 		live_regs = aux[bpf_frame_insn_idx(vstate, i)].live_regs_before;
 		func = vstate->frame[i];
@@ -18785,18 +18779,20 @@ static void sync_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier_s
 				: &bpf_stack_slot(vstate->frame[e->frameno], e->spi)->spilled_ptr;
 		if (reg->type != SCALAR_VALUE || reg == known_reg)
 			continue;
-		if ((reg->id & ~BPF_ADD_CONST) != (known_reg->id & ~BPF_ADD_CONST))
+		if (reg->id != known_reg->id)
 			continue;
 		/*
 		 * Skip mixed 32/64-bit links: the delta relationship doesn't
 		 * hold across different ALU widths.
 		 */
-		if (((reg->id ^ known_reg->id) & BPF_ADD_CONST) == BPF_ADD_CONST)
+		if (reg->link_kind && known_reg->link_kind &&
+		    reg->link_kind != known_reg->link_kind)
 			continue;
-		if ((!(reg->id & BPF_ADD_CONST) && !(known_reg->id & BPF_ADD_CONST)) ||
+		if ((!reg->link_kind && !known_reg->link_kind) ||
 		    reg->delta == known_reg->delta) {
 			*reg = *known_reg;
 		} else {
+			enum bpf_reg_link_kind saved_link_kind = reg->link_kind;
 			s32 saved_off = reg->delta;
 			u32 saved_id = reg->id;
 
@@ -18806,17 +18802,19 @@ static void sync_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier_s
 			/* reg = known_reg; reg += delta */
 			*reg = *known_reg;
 			/*
-			 * Must preserve off and id, otherwise another sync_linked_regs()
-			 * will be incorrect.
+			 * Must preserve off, id and link_kind, otherwise another
+			 * sync_linked_regs() will be incorrect.
 			 */
 			reg->delta = saved_off;
 			reg->id = saved_id;
+			reg->link_kind = saved_link_kind;
 
 			scalar_step_add(reg, reg, &fake_reg);
 			scalar32_min_max_add(reg, &fake_reg);
 			scalar_min_max_add(reg, &fake_reg);
 			reg->var_off = tnum_add(reg->var_off, fake_reg.var_off);
-			if ((reg->id | known_reg->id) & BPF_ADD_CONST32)
+			if (reg->link_kind == BPF_REG_LINK_ZEXT ||
+			    known_reg->link_kind == BPF_REG_LINK_ZEXT)
 				zext_32_to_64(reg);
 			reg_bounds_sync(reg);
 		}
@@ -19930,7 +19928,7 @@ void bpf_clear_singular_ids(struct bpf_verifier_env *env,
 			continue;
 		if (!reg->id)
 			continue;
-		idset_cnt_inc(idset, reg->id & ~BPF_ADD_CONST);
+		idset_cnt_inc(idset, reg->id);
 	}));
 
 	bpf_for_each_reg_in_vstate(st, func, reg, ({
@@ -19938,8 +19936,8 @@ void bpf_clear_singular_ids(struct bpf_verifier_env *env,
 			continue;
 		if (!reg->id)
 			continue;
-		if (idset_cnt_get(idset, reg->id & ~BPF_ADD_CONST) == 1)
-			clear_scalar_id(reg);
+		if (idset_cnt_get(idset, reg->id) == 1)
+			bpf_clear_scalar_id(reg);
 	}));
 }
 
