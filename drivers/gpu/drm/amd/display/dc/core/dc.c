@@ -2711,11 +2711,16 @@ enum dc_status dc_commit_streams(struct dc *dc, struct dc_commit_streams_params 
 	 */
 	if (dc->hwss.is_pipe_topology_transition_seamless &&
 			!dc->hwss.is_pipe_topology_transition_seamless(dc, dc->current_state, context)) {
-		res = commit_minimal_transition_state(dc, context);
-		if (res != DC_OK) {
-			BREAK_TO_DEBUGGER();
-			goto fail;
-		}
+		/*
+		 * A minimal (no-ODM) intermediate transition could not be built
+		 * for a stream that still passed full validation above, e.g. a
+		 * high pixel clock mode that needs ODM combine to meet DISPCLK.
+		 * In that case commit the validated target context directly
+		 * instead of failing the whole commit and blanking the display.
+		 */
+		if (!commit_minimal_transition_state(dc, context))
+			DC_LOG_WARNING("%s: minimal transition unavailable; committing target\n",
+				       __func__);
 	}
 
 	res = dc_commit_state_no_check(dc, context);
