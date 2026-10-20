@@ -25,6 +25,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <ctype.h>
+#include <sched.h>
 #include <asm/unistd.h>
 #include <linux/err.h>
 #include <linux/kernel.h>
@@ -5649,6 +5650,49 @@ static struct bpf_map *bpf_object__sec_map(struct bpf_object *obj, int sec_idx)
 	return NULL;
 }
 
+/*
+ * Copy the percpu chunks into the mmapped bpf arena, one chunk at a
+ * time. Before copying each chunk, pin the thread to the chunk's cpu,
+ * so the copy faults the chunk's pages in from that cpu's NUMA node.
+ * If pinning fails, fall back to copying on the current cpu.
+ */
+static void arena_percpu_populate(struct bpf_object *obj, void *arena_mmaped)
+{
+	size_t chunk_sz = obj->arena_percpu.chunk_sz;
+	cpu_set_t *saved_set = NULL, *one = NULL;
+	size_t set_sz;
+	void *base;
+	int cpu;
+
+	base = arena_mmaped + obj->arena_percpu.offset;
+
+	set_sz = CPU_ALLOC_SIZE(obj->arena_percpu.nr_chunks);
+	saved_set = CPU_ALLOC(obj->arena_percpu.nr_chunks);
+	one = CPU_ALLOC(obj->arena_percpu.nr_chunks);
+	if (!saved_set || !one || sched_getaffinity(0, set_sz, saved_set) != 0) {
+		/* no affinity info, fall back to copying on the current cpu */
+		for (cpu = 0; cpu < obj->arena_percpu.nr_chunks; cpu++)
+			memcpy(base + cpu * chunk_sz, obj->arena_percpu.chunk, chunk_sz);
+		goto out;
+	}
+
+	for (cpu = 0; cpu < obj->arena_percpu.nr_chunks; cpu++) {
+		CPU_ZERO_S(set_sz, one);
+		CPU_SET_S(cpu, set_sz, one);
+		sched_setaffinity(0, set_sz, one);
+
+		/* faults the chunk pages in from the target cpu's NUMA node */
+		memcpy(base + cpu * chunk_sz, obj->arena_percpu.chunk, chunk_sz);
+	}
+
+	sched_setaffinity(0, set_sz, saved_set);
+
+out:
+	CPU_FREE(saved_set);
+	CPU_FREE(one);
+	zfree(&obj->arena_percpu.chunk);
+}
+
 static int bpf_object__mmap_arena(struct bpf_object *obj, struct bpf_map *map)
 {
 	int i, err;
@@ -5669,6 +5713,8 @@ static int bpf_object__mmap_arena(struct bpf_object *obj, struct bpf_map *map)
 			obj->arena_data_sz);
 		zfree(&obj->arena_data);
 	}
+	if (obj->arena_percpu.present)
+		arena_percpu_populate(obj, map->mmaped);
 	for (i = 0; i < obj->nr_maps; i++) {
 		struct bpf_map *m = &obj->maps[i];
 
