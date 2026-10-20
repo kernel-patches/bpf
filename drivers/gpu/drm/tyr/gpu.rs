@@ -16,9 +16,9 @@ use kernel::{
     },
     prelude::*,
     time::Delta,
-    transmute::AsBytes,
     uapi, //
 };
+use zerocopy_derive::Immutable;
 
 use crate::{
     driver::IoMem,
@@ -30,12 +30,8 @@ use crate::{
 
 /// Struct containing information that can be queried by userspace. This is read from
 /// the GPU's registers.
-///
-/// # Invariants
-///
-/// - The layout of this struct is identical to the C `struct drm_panthor_gpu_info`.
 #[repr(transparent)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, IntoBytes, Immutable)]
 pub(crate) struct GpuInfo(pub(crate) uapi::drm_panthor_gpu_info);
 
 impl GpuInfo {
@@ -133,17 +129,6 @@ impl DerefMut for GpuInfo {
         &mut self.0
     }
 }
-
-// SAFETY: `GpuInfo`'s invariant guarantees that it is the same type that is
-// already exposed to userspace by the C driver. This implies that it fulfills
-// the requirements for `AsBytes`.
-//
-// This means:
-//
-// - No implicit padding,
-// - No kernel pointers,
-// - No interior mutability.
-unsafe impl AsBytes for GpuInfo {}
 
 struct GpuModels {
     name: &'static str,
