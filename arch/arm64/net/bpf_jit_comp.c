@@ -500,6 +500,21 @@ static void emit_percpu_ptr(const u8 dst_reg, void __percpu *ptr,
 	emit(A64_ADD(1, dst_reg, dst_reg, tmp), ctx);
 }
 
+static void emit_current_cpu_id(u8 dst, struct jit_ctx *ctx)
+{
+	u8 tmp = bpf2a64[TMP_REG_1];
+	u8 tmp2 = bpf2a64[TMP_REG_2];
+	u32 cpu_offset = offsetof(struct thread_info, cpu);
+
+	emit(A64_MRS_SP_EL0(tmp), ctx);
+	if (is_lsi_offset(cpu_offset, 2)) {
+		emit(A64_LDR32I(dst, tmp, cpu_offset), ctx);
+	} else {
+		emit_a64_mov_i(1, tmp2, cpu_offset, ctx);
+		emit(A64_LDR32(dst, tmp, tmp2), ctx);
+	}
+}
+
 #define BTI_INSNS (IS_ENABLED(CONFIG_ARM64_BTI_KERNEL) ? 1 : 0)
 #define PAC_INSNS (IS_ENABLED(CONFIG_ARM64_PTR_AUTH_KERNEL) ? 1 : 0)
 
@@ -1742,19 +1757,10 @@ emit_cond_jmp:
 		const u8 r0 = bpf2a64[BPF_REG_0];
 		bool func_addr_fixed;
 		u64 func_addr;
-		u32 cpu_offset;
 
 		/* Implement helper call to bpf_get_smp_processor_id() inline */
 		if (insn->src_reg == 0 && insn->imm == BPF_FUNC_get_smp_processor_id) {
-			cpu_offset = offsetof(struct thread_info, cpu);
-
-			emit(A64_MRS_SP_EL0(tmp), ctx);
-			if (is_lsi_offset(cpu_offset, 2)) {
-				emit(A64_LDR32I(r0, tmp, cpu_offset), ctx);
-			} else {
-				emit_a64_mov_i(1, tmp2, cpu_offset, ctx);
-				emit(A64_LDR32(r0, tmp, tmp2), ctx);
-			}
+			emit_current_cpu_id(r0, ctx);
 			break;
 		}
 
@@ -1828,6 +1834,26 @@ emit_cond_jmp:
 			emit_addr_mov_i64(dst, imm64, ctx);
 		else
 			emit_a64_mov_i64(dst, imm64, ctx);
+
+#ifdef CONFIG_SMP
+		if (insn->src_reg == BPF_PSEUDO_ARENA_PERCPU) {
+			u32 chunk_sz = bpf_arena_percpu_chunk_sz(bpf_prog_arena(ctx->prog));
+
+			/* tmp = smp_processor_id() */
+			emit_current_cpu_id(tmp, ctx);
+			/*
+			 * tmp *= chunk_sz
+			 * arena_map_alloc() guarantees
+			 * chunk_sz * nr_cpu_ids <= vm_range <= 4 GiB and
+			 * cpu_number < nr_cpu_ids, so a 32-bit mul
+			 * cannot overflow here.
+			 */
+			emit_a64_mov_i(0, tmp2, chunk_sz, ctx);
+			emit(A64_MUL(0, tmp, tmp, tmp2), ctx);
+			/* dst += tmp */
+			emit(A64_ADD(1, dst, dst, tmp), ctx);
+		}
+#endif
 
 		return 1;
 	}
@@ -3442,6 +3468,11 @@ bool bpf_jit_supports_insn(struct bpf_insn *insn, bool in_arena)
 }
 
 bool bpf_jit_supports_percpu_insn(void)
+{
+	return true;
+}
+
+bool bpf_jit_supports_arena_percpu_insn(void)
 {
 	return true;
 }

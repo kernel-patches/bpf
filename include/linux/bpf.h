@@ -677,7 +677,7 @@ u64 bpf_arena_map_kern_vm_start(struct bpf_map *map);
 u32 bpf_arena_percpu_chunk_off(const struct bpf_map *map);
 u32 bpf_arena_percpu_chunk_sz(const struct bpf_map *map);
 bool bpf_arena_percpu_off_in_range(const struct bpf_map *map, u32 off);
-struct bpf_map *bpf_prog_arena(struct bpf_prog *prog);
+struct bpf_map *bpf_prog_arena(const struct bpf_prog *prog);
 int bpf_obj_name_cpy(char *dst, const char *src, unsigned int size);
 
 struct bpf_offload_dev;
