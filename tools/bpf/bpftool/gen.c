@@ -132,6 +132,10 @@ static bool get_datasec_ident(const char *sec_name, char *buf, size_t buf_sz)
 		snprintf(buf, buf_sz, "arena");
 		return true;
 	}
+	if (strcmp(sec_name, ".arena.percpu") == 0) {
+		snprintf(buf, buf_sz, "arena_percpu");
+		return true;
+	}
 	for  (i = 0, n = ARRAY_SIZE(pfxs); i < n; i++) {
 		const char *pfx = pfxs[i];
 
@@ -324,6 +328,14 @@ static int codegen_datasecs(struct bpf_object *obj, const char *obj_name)
 			if (err)
 				goto out;
 		}
+	}
+
+	/* expose arena percpu  as a separate data section */
+	sec = find_type_for_map(btf, "arena_percpu");
+	if (sec) {
+		err = codegen_datasec_def(obj, btf, d, sec, obj_name);
+		if (err)
+			goto out;
 	}
 
 
@@ -1511,11 +1523,58 @@ static int do_skeleton(int argc, char **argv)
 			return %1$s__open_opts(NULL);			    \n\
 		}							    \n\
 									    \n\
-		static inline int					    \n\
-		%1$s__load(struct %1$s *obj)				    \n\
-		{							    \n\
-			return bpf_object__load_skeleton(obj->skeleton);    \n\
-		}							    \n\
+		",
+		obj_name
+	);
+
+	/* The per-cpu arena data has no mmaped slot in the map skeleton.
+	 * Point obj->arena_percpu at cpu 0's chunk once the object is
+	 * loaded.
+	 */
+	{
+		char arena_map_ident[256] = "";
+		bool have_percpu_arena = false;
+
+		bpf_object__for_each_map(map, obj) {
+			if (bpf_map__type(map) != BPF_MAP_TYPE_ARENA)
+				continue;
+			if (find_type_for_map(bpf_object__btf(obj), "arena_percpu") &&
+			    get_map_ident(map, arena_map_ident, sizeof(arena_map_ident))) {
+				have_percpu_arena = true;
+				break;
+			}
+		}
+
+		if (have_percpu_arena) {
+			codegen("\
+				\n\
+				static inline int \n\
+				%1$s__load(struct %1$s *obj) \n\
+				{ \n\
+					int err; \n\
+					 \n\
+					err = bpf_object__load_skeleton(obj->skeleton); \n\
+					if (err) \n\
+						return err; \n\
+					obj->arena_percpu = \n\
+						bpf_map__arena_percpu_base(obj->maps.%2$s); \n\
+					return 0; \n\
+				} \n\
+				", obj_name, arena_map_ident);
+		} else {
+			codegen("\
+				\n\
+				static inline int \n\
+				%1$s__load(struct %1$s *obj) \n\
+				{ \n\
+					return bpf_object__load_skeleton(obj->skeleton); \n\
+				} \n\
+				", obj_name);
+		}
+	}
+
+	codegen("\
+		\n\
 									    \n\
 		static inline struct %1$s *				    \n\
 		%1$s__open_and_load(void)				    \n\
