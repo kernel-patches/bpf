@@ -829,6 +829,13 @@ struct bpf_object {
 	} *data_ptrs;
 	size_t data_ptr_cnt;
 
+	struct {
+		void *chunk; /* copy from section .arena.percpu, zero-padded to chunk size */
+		size_t chunk_sz;	/* chunk size, page-aligned */
+		size_t nr_chunks;	/* how many chunks, one chunk per possible cpu */
+		bool present;
+	} arena_percpu;
+
 	void *jumptables_data;
 	size_t jumptables_data_sz;
 
@@ -3267,6 +3274,41 @@ static int bpf_object__init_arena_data(struct bpf_object *obj)
 	return 0;
 }
 
+static int init_arena_percpu_data(struct bpf_object *obj, void *percpu_data, size_t percpu_sz)
+{
+	static const char *fcpu = "/sys/devices/system/cpu/possible";
+	bool *mask = NULL;
+	int possible_cpus;
+	int err;
+
+	if (percpu_sz == 0) {
+		pr_warn("arena percpu: empty %s section\n", ARENA_PERCPU_SEC);
+		return -EINVAL;
+	}
+
+	err = parse_cpu_mask_file(fcpu, &mask, &possible_cpus);
+	if (err) {
+		pr_warn("arena percpu: failed to get possible cpus: %s\n",
+			errstr(err));
+		return err;
+	}
+
+	obj->arena_percpu.chunk_sz = roundup(percpu_sz, sysconf(_SC_PAGE_SIZE));
+	obj->arena_percpu.chunk = calloc(1, obj->arena_percpu.chunk_sz); /* zero padding */
+	if (!obj->arena_percpu.chunk) {
+		free(mask);
+		return -ENOMEM;
+	}
+
+	memcpy(obj->arena_percpu.chunk, percpu_data, percpu_sz);
+
+	obj->arena_percpu.nr_chunks = possible_cpus;
+	obj->arena_percpu.present = true;
+	free(mask);
+
+	return 0;
+}
+
 static int bpf_object__init_user_btf_maps(struct bpf_object *obj, bool strict,
 					  const char *pin_root_path)
 {
@@ -3332,6 +3374,13 @@ static int bpf_object__init_user_btf_maps(struct bpf_object *obj, bool strict,
 		if (obj->efile.arena_data) {
 			err = init_arena_map_data(obj, map, obj->efile.arena_data->d_buf,
 						  obj->efile.arena_data->d_size);
+			if (err)
+				return err;
+		}
+
+		if (obj->efile.arena_percpu_data) {
+			err = init_arena_percpu_data(obj, obj->efile.arena_percpu_data->d_buf,
+						     obj->efile.arena_percpu_data->d_size);
 			if (err)
 				return err;
 		}
@@ -8141,12 +8190,24 @@ static int bpf_object__relocate(struct bpf_object *obj, const char *targ_btf_pat
 		struct bpf_map *arena_map = &obj->maps[obj->arena_map_idx];
 		size_t data_sz = roundup(obj->arena_data_sz, sysconf(_SC_PAGE_SIZE));
 		size_t mmap_sz = bpf_map_mmap_sz(arena_map);
+		size_t percpu_sz = obj->arena_percpu.nr_chunks * obj->arena_percpu.chunk_sz;
 
-		if (data_sz > mmap_sz) {
-			pr_warn("map '%s': declared ARENA map size (%zu) is too small to hold global %s of size %zu\n",
+		/*
+		 * the light skeleton loader doesn't mmap the arena in user space, so the percpu
+		 * chunks could not be populated
+		 */
+		if (obj->gen_loader && obj->arena_percpu.present) {
+			pr_warn("map '%s': light skeletons don't support arena percpu variables\n",
+				arena_map->name);
+			return -EOPNOTSUPP;
+		}
+
+		if (data_sz + percpu_sz > mmap_sz) {
+			pr_warn("map '%s': declared ARENA map size (%zu) is too small to hold "
+				"global %s of size %zu plus the percpu data size %zu\n",
 				arena_map->name, mmap_sz,
 				obj->data_in_arena ? "data" : "__arena variables",
-				obj->arena_data_sz);
+				obj->arena_data_sz, percpu_sz);
 			return -E2BIG;
 		}
 
@@ -10649,6 +10710,7 @@ void bpf_object__close(struct bpf_object *obj)
 		close(obj->token_fd);
 
 	zfree(&obj->arena_data);
+	zfree(&obj->arena_percpu.chunk);
 
 	zfree(&obj->jumptables_data);
 	obj->jumptables_data_sz = 0;
@@ -12103,6 +12165,13 @@ int bpf_map__set_initial_value(struct bpf_map *map,
 	return 0;
 }
 
+/*
+ * NOTE: For an ARENA map, the initial value returned covers the global
+ * data only. Percpu variables live in a different region from the
+ * global variables. We cannot return a flat initial value for both
+ * global and percpu arena data. Read and set the arena percpu data
+ * through the bpf skeleton.
+ */
 void *bpf_map__initial_value(const struct bpf_map *map, size_t *psize)
 {
 	if (bpf_map__is_struct_ops(map)) {

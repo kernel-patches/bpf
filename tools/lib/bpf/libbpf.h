@@ -1221,6 +1221,13 @@ LIBBPF_API int bpf_map__set_map_extra(struct bpf_map *map, __u64 map_extra);
 
 LIBBPF_API int bpf_map__set_initial_value(struct bpf_map *map,
 					  const void *data, size_t size);
+/*
+ * NOTE: For an ARENA map, the initial value returned covers the global
+ * data only. Percpu variables live in a different region from the
+ * global variables. We cannot return a flat initial value for both
+ * global and percpu arena data. Read and set the arena percpu data
+ * through the bpf skeleton.
+ */
 LIBBPF_API void *bpf_map__initial_value(const struct bpf_map *map, size_t *psize);
 
 /**
