@@ -79,7 +79,11 @@ Constructor/next/destructor implementation contract is as follows:
     will eventually return NULL when elements are exhausted. Once NULL is
     returned, subsequent next calls *should keep returning NULL*. Next method
     is marked with KF_ITER_NEXT (and should also have KF_RET_NULL as
-    NULL-returning kfunc, of course).
+    NULL-returning kfunc, of course). An element is only guaranteed to be
+    valid until the iterator is destroyed, so the verifier invalidates it,
+    and every trusted pointer derived from it, at `bpf_iter_<type>_destroy()`.
+    Elements of an RCU-protected iterator (see KF_RCU_PROTECTED) are instead
+    valid until the end of the RCU critical section.
 
   - destructor, `bpf_iter_<type>_destroy()`, is always called once. Even if
     constructor failed or next returned nothing.  Destructor frees up any
