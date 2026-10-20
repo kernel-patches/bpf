@@ -6,6 +6,7 @@
 #include <sys/mman.h>
 #include "bpf/libbpf_internal.h"
 #include "arena_percpu_only.skel.h"
+#include "arena_percpu_mixed.skel.h"
 
 static cpu_set_t affinity_save;
 
@@ -137,6 +138,99 @@ out:
 	restore_affinity();
 }
 
+static void test_arena_percpu_mixed(void)
+{
+	struct arena_percpu_mixed *skel;
+	struct bpf_map *arena, *bss_map;
+	bool *possible = NULL, *online = NULL, *written = NULL;
+	int possible_cpus, online_cpus, nr_written = 0, cpu, err;
+
+	if (save_affinity())
+		return;
+
+	skel = arena_percpu_mixed__open();
+	if (!ASSERT_OK_PTR(skel, "open"))
+		return;
+
+	if (parse_possible_cpus(&possible, &possible_cpus))
+		goto out;
+
+	/* size the arena for the per-cpu chunks and load the object */
+	if (!ASSERT_OK(bpf_map__set_max_entries(skel->maps.arena, possible_cpus + 16),
+		       "set_max_entries"))
+		goto out;
+	if (!ASSERT_OK(arena_percpu_mixed__load(skel), "load"))
+		goto out;
+	arena = skel->maps.arena;
+
+	for (cpu = 0; cpu < possible_cpus; cpu++) {
+		if (!possible[cpu])
+			continue;
+
+		check_percpu_value(arena, &skel->arena_percpu->data1, cpu,
+				   0x123456789, "data1_init");
+		check_percpu_value(arena, &skel->arena_percpu->data2, cpu,
+				   0x987654321, "data2_init");
+	}
+
+	if (!ASSERT_OK(parse_cpu_mask_file("/sys/devices/system/cpu/online",
+					   &online, &online_cpus),
+		       "parse_online"))
+		goto out;
+
+	written = calloc(online_cpus, sizeof(*written));
+	if (!ASSERT_OK_PTR(written, "written_alloc"))
+		goto out;
+
+	for (cpu = 0; cpu < online_cpus; cpu++) {
+		if (!online[cpu] || cpu >= CPU_SETSIZE || !CPU_ISSET(cpu, &affinity_save))
+			continue;
+
+		err = run_on_cpu(cpu, skel->progs.arena_percpu_mixed_write, "write");
+		if (err < 0)
+			goto out;
+		if (err > 0)
+			continue;
+		written[cpu] = true;
+		nr_written++;
+	}
+	if (!ASSERT_GE(nr_written, 1, "cpus_exercised"))
+		goto out;
+
+	/* check every written chunk from user space */
+	for (cpu = 0; cpu < online_cpus; cpu++) {
+		if (!written[cpu])
+			continue;
+
+		check_percpu_value(arena, &skel->arena_percpu->data1, cpu,
+				   cpu, "data1_written");
+		check_percpu_value(arena, &skel->arena_percpu->data2, cpu,
+				   cpu << 2, "data2_written");
+	}
+
+	/* the __arena global should not be touched */
+	ASSERT_EQ(skel->arena->arena_global, 0x5a5ba5a5c0dec0de, "arena_global_intact");
+
+	/* api error paths: cpu out of range, pointer outside cpu 0's chunk */
+	ASSERT_ERR_PTR(bpf_map__arena_percpu_ptr(arena, &skel->arena_percpu->data1,
+						 possible_cpus), "api_cpu_range");
+	ASSERT_ERR_PTR(bpf_map__arena_percpu_ptr(arena, possible, 0),
+		       "api_not_in_chunk");
+
+	/* a non-ARENA map has no per-cpu chunks to index */
+	bss_map = bpf_object__find_map_by_name(skel->obj, ".bss");
+	if (ASSERT_OK_PTR(bss_map, "bss_map"))
+		ASSERT_EQ(libbpf_get_error(bpf_map__arena_percpu_ptr(bss_map, &cpu, 0)),
+			  -EINVAL, "api_not_arena");
+
+out:
+	free(written);
+	free(online);
+	free(possible);
+	arena_percpu_mixed__destroy(skel);
+	restore_affinity();
+}
+
 void test_arena_percpu(void)
 {
 	if (!feat_supported(NULL, FEAT_ARENA_PERCPU_DATA)) {
@@ -145,4 +239,6 @@ void test_arena_percpu(void)
 	}
 	if (test__start_subtest("percpu_only"))
 		test_arena_percpu_only();
+	if (test__start_subtest("percpu_mixed"))
+		test_arena_percpu_mixed();
 }
