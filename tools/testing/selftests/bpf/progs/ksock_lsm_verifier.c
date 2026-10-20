@@ -12,7 +12,7 @@ char send_data[11] = "dummy data";
 SEC("lsm.s/socket_sendmsg")
 __description("bpf_ksock_send is rejected from socket_sendmsg LSM hook")
 __failure __msg("calling kernel function bpf_ksock_send is not allowed")
-int BPF_PROG(ksock_socket_sendmsg, struct socket *sock, struct msghdr *msg,
+int BPF_PROG(socket_sendmsg_ksock_send, struct socket *sock, struct msghdr *msg,
 	     int size, int ret)
 {
 	struct __ksock_ctx_value *v;
@@ -31,5 +31,22 @@ int BPF_PROG(ksock_socket_sendmsg, struct socket *sock, struct msghdr *msg,
 
 	return ret;
 }
+
+SEC("lsm.s/socket_sendmsg")
+__description("bpf_ksock operations other than send are allowed from socket_sendmsg LSM hook")
+__success
+int BPF_PROG(socket_sendmsg_ksock_allowed, struct socket *sock,
+	     struct msghdr *msg, int size, int ret)
+{
+	struct bpf_ksock *ks;
+
+	ks = ksock_ctx_get();
+	if (!ks)
+		return ret;
+
+	bpf_ksock_release(ks);
+	return ret;
+}
+
 
 char __license[] SEC("license") = "GPL";
