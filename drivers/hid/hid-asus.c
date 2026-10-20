@@ -631,6 +631,19 @@ static int asus_raw_event(struct hid_device *hdev,
 
 static int asus_kbd_set_report(struct hid_device *hdev, const u8 *buf, size_t buf_size)
 {
+	struct hid_report *report;
+
+	/*
+	 * Do not send more than the declared size of the report, report ID
+	 * included. Sizes differ between devices: most ROG keyboards declare
+	 * 64 bytes and the XG Mobile 300, while the Zenbook Duo keyboards, like
+	 * the touchpads, declare 16 for report 0x5a, the size of the handshake,
+	 * and do not answer the 64 byte writes sized for the ROG keyboards.
+	 */
+	report = hdev->report_enum[HID_FEATURE_REPORT].report_id_hash[buf[0]];
+	if (report)
+		buf_size = min_t(size_t, buf_size, hid_report_len(report));
+
 	u8 *dmabuf __free(kfree) = kmemdup(buf, buf_size, GFP_KERNEL);
 	if (!dmabuf)
 		return -ENOMEM;
