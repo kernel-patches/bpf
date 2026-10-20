@@ -264,6 +264,7 @@ BTF_ID(func, bpf_lsm_socket_sendmsg)
 #else
 BTF_ID_UNUSED
 #endif
+BTF_ID_LIST_SINGLE(bpf_ksock_send_id, func, bpf_ksock_send)
 #endif
 
 static int bpf_ksock_kfunc_filter(const struct bpf_prog *prog, u32 kfunc_id)
@@ -275,9 +276,13 @@ static int bpf_ksock_kfunc_filter(const struct bpf_prog *prog, u32 kfunc_id)
 		return 0;
 
 #ifdef CONFIG_BPF_LSM
-	if (prog->type == BPF_PROG_TYPE_LSM &&
-	    prog->aux->attach_btf_id != bpf_lsm_socket_sendmsg_id[0])
+	if (prog->type == BPF_PROG_TYPE_LSM) {
+		if (prog->aux->attach_btf_id == bpf_lsm_socket_sendmsg_id[0] &&
+		    kfunc_id == bpf_ksock_send_id[0])
+			return -EACCES;
+
 		return 0;
+	}
 #endif
 
 	return -EACCES;
