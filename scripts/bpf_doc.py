@@ -908,7 +908,7 @@ class PrinterHelpersHeader(Printer):
             comma = ', '
             print(one_arg, end='')
 
-        print(') = (void *) %d;' % helper.enum_val)
+        print(') = (__typeof__(%s)) %d;' % (proto['name'], helper.enum_val))
         print('')
 
 
