@@ -1712,10 +1712,10 @@ static int asus_probe(struct hid_device *hdev, const struct hid_device_id *id)
 		hid_warn(hdev, "Failed to initialize backlight.\n");
 
 	/*
-	 * For ROG keyboards, skip rename for consistency and ->input check as
-	 * some devices do not have inputs.
+	 * For ROG and Zenbook Duo keyboards, skip rename for consistency and
+	 * ->input check as some devices do not have inputs.
 	 */
-	if (drvdata->quirks & QUIRK_ROG_NKEY_KEYBOARD)
+	if (drvdata->quirks & (QUIRK_ROG_NKEY_KEYBOARD | QUIRK_ZENBOOK_DUO_KEYBOARD))
 		return 0;
 
 	/*
