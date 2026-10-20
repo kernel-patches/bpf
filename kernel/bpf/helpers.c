@@ -3401,12 +3401,21 @@ struct bpf_throw_ctx {
 	u64 sp;
 	u64 bp;
 	int cnt;
+	const struct bpf_throw_regs *regs;	/* register file of the throw site, or NULL */
+	/*
+	 * The callee-saved registers of the frame being walked, R6-R9 then the
+	 * architecture's own: what the throw site had, then what each frame
+	 * recovered of its caller's. After the main frame they are the ones
+	 * its caller expects back.
+	 */
+	u64 saved[BPF_THROW_NR_CALLEE_SAVED];
 };
 
 static bool bpf_stack_walker(void *cookie, u64 ip, u64 sp, u64 bp)
 {
 	struct bpf_throw_ctx *ctx = cookie;
 	struct bpf_prog *prog;
+	int i;
 
 	/*
 	 * The RCU read lock is held to safely traverse the latch tree, but we
@@ -3418,6 +3427,20 @@ static bool bpf_stack_walker(void *cookie, u64 ip, u64 sp, u64 bp)
 	rcu_read_unlock();
 	if (!prog)
 		return !ctx->cnt;
+	if (ctx->regs) {
+		/* The symbol of a program JITed as a set of functions covers its first function. */
+		const struct bpf_prog_aux *fn = !prog->is_func && prog->aux->func ?
+						prog->aux->func[0]->aux : prog->aux;
+
+		/*
+		 * Recover the caller's callee-saved registers: those this frame's
+		 * prologue saved sit in its frame, the rest are still the values
+		 * the frame itself has.
+		 */
+		for (i = 0; i < BPF_THROW_NR_CALLEE_SAVED; i++)
+			if (fn->callee_reg_off[i])
+				ctx->saved[i] = *(u64 *)(long)(bp + fn->callee_reg_off[i]);
+	}
 	ctx->cnt++;
 	if (bpf_is_subprog(prog))
 		return true;
@@ -3430,12 +3453,16 @@ static bool bpf_stack_walker(void *cookie, u64 ip, u64 sp, u64 bp)
 /*
  * Unwind the stack to the exception callback of the main program. @regs holds
  * the callee-saved registers of the throw site, or is NULL when the
- * architecture has no native entry and the kfunc was called directly.
+ * architecture has no native entry and the kfunc was called directly; with it,
+ * the callee-saved registers of the frames unwound are restored for the
+ * callback, without it the main program's prologue has saved them all.
  */
 void bpf_throw_unwind(struct bpf_throw_regs *regs, u64 cookie)
 {
-	struct bpf_throw_ctx ctx = {};
+	struct bpf_throw_ctx ctx = { .regs = regs };
 
+	if (regs)
+		memcpy(ctx.saved, regs->saved, sizeof(ctx.saved));
 	arch_bpf_stack_walk(bpf_stack_walker, &ctx);
 	WARN_ON_ONCE(!ctx.aux);
 	if (ctx.aux)
@@ -3449,7 +3476,7 @@ void bpf_throw_unwind(struct bpf_throw_regs *regs, u64 cookie)
 	 * architectures cannot recover sp while unwinding, so fall back to bp.
 	 */
 	kasan_unpoison_task_stack_below((void *)(long)(ctx.sp ?: ctx.bp));
-	ctx.aux->bpf_exception_cb(cookie, ctx.sp + ctx.aux->stack_arg_sp_adjust, ctx.bp, 0, 0);
+	ctx.aux->bpf_exception_cb(cookie, ctx.sp, ctx.bp, (u64)(long)ctx.saved, 0);
 	WARN(1, "A call to BPF exception callback should never return\n");
 }
 

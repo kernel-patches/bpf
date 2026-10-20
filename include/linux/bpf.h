@@ -1938,15 +1938,21 @@ struct bpf_prog_aux {
 	int cgroup_atype; /* enum cgroup_bpf_attach_type */
 	struct bpf_map *cgroup_storage[MAX_BPF_CGROUP_STORAGE_TYPE];
 	char name[BPF_OBJ_NAME_LEN];
-	u64 (*bpf_exception_cb)(u64 cookie, u64 sp, u64 bp, u64, u64);
-	u16 stack_arg_sp_adjust;
+	/*
+	 * The exception callback of the main program: @cookie is the value of
+	 * the throw, @sp and @bp the native stack and frame pointers of the main
+	 * program's frame, @saved the callee-saved registers the unwinder
+	 * restored, R6..R9 then the architecture's own, see struct bpf_throw_regs.
+	 */
+	u64 (*bpf_exception_cb)(u64 cookie, u64 sp, u64 bp, u64 saved, u64);
 	u16 freplace_link_cnt; /* counts freplace links extending this prog */
 	/*
 	 * Offsets from the native frame pointer of this JITed program at which
-	 * its prologue saved the caller's R6..R9, or 0 when that register is not
-	 * saved. Filled by the JIT; consumed by the exception unwinder.
+	 * its prologue saved the caller's callee-saved registers, R6..R9 then
+	 * the architecture's own, or 0 when that register is not saved. Filled
+	 * by the JIT; consumed by the exception unwinder.
 	 */
-	s16 callee_reg_off[4];
+	s16 callee_reg_off[BPF_THROW_NR_CALLEE_SAVED];
 #ifdef CONFIG_SECURITY
 	void *security;
 #endif
