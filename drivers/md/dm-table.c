@@ -983,16 +983,8 @@ verify_rq_based:
 		return -EINVAL;
 	}
 
-	if (list_empty(devices)) {
-		int srcu_idx;
-		struct dm_table *live_table = dm_get_live_table(t->md, &srcu_idx);
-
-		/* inherit live table's type */
-		if (live_table)
-			t->type = live_table->type;
-		dm_put_live_table(t->md, srcu_idx);
+	if (list_empty(devices))
 		return 0;
-	}
 
 	ti = dm_table_get_immutable_target(t);
 	if (!ti) {
