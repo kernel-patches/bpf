@@ -464,7 +464,11 @@ l0_%=:	r1 >>= 16;					\
 SEC("raw_tp")
 __log_level(2)
 __success
-__msg("fp-8=0m??scalar()")
+/*
+ * The 4-byte spill carries the low-32 link, and the slot is truncated to
+ * the bits the store wrote; the narrower spills do neither.
+ */
+__msg("fp-8=0m??scalar(id={{[0-9]+}}+0,smin=0,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff))")
 __msg("fp-16=00mm??scalar()")
 __msg("fp-24=00mm???scalar()")
 __naked void spill_subregs_preserve_stack_zero(void)
