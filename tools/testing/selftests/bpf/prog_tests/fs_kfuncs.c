@@ -4,12 +4,15 @@
 #include <stdlib.h>
 #include <sys/types.h>
 #include <sys/xattr.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
 #include <linux/fsverity.h>
 #include <unistd.h>
 #include <test_progs.h>
 #include "test_get_xattr.skel.h"
 #include "test_set_remove_xattr.skel.h"
 #include "test_fsverity.skel.h"
+#include "test_path_d_path.skel.h"
 
 static const char testfile[] = "/tmp/test_progs_fs_kfuncs";
 
@@ -268,6 +271,51 @@ out:
 	remove(testfile);
 }
 
+static void test_path_d_path_on_exit(void)
+{
+	struct test_path_d_path *skel = NULL;
+	struct stat st;
+	int fd, status;
+	pid_t pid;
+
+	fd = open(testfile, O_CREAT | O_RDONLY, 0644);
+	if (!ASSERT_GE(fd, 0, "create_file"))
+		return;
+	close(fd);
+
+	if (!ASSERT_OK(stat(testfile, &st), "stat"))
+		goto out;
+
+	skel = test_path_d_path__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "test_path_d_path__open_and_load"))
+		goto out;
+
+	skel->bss->monitored_ino = st.st_ino;
+
+	if (!ASSERT_OK(test_path_d_path__attach(skel), "test_path_d_path__attach"))
+		goto out;
+
+	/*
+	 * The child exits with testfile still open, so exit_files() drops
+	 * the last reference and the file is released from exit_task_work(),
+	 * after exit_fs().
+	 */
+	pid = fork();
+	if (!ASSERT_GE(pid, 0, "fork"))
+		goto out;
+	if (pid == 0)
+		_exit(open(testfile, O_RDONLY) < 0);
+
+	if (!ASSERT_EQ(waitpid(pid, &status, 0), pid, "waitpid"))
+		goto out;
+	ASSERT_TRUE(WIFEXITED(status) && !WEXITSTATUS(status), "child_open");
+	ASSERT_EQ(skel->bss->called, 1, "called");
+	ASSERT_EQ(skel->bss->ret, -EINVAL, "bpf_path_d_path");
+out:
+	test_path_d_path__destroy(skel);
+	remove(testfile);
+}
+
 void test_fs_kfuncs(void)
 {
 	/* Matches xattr_names in progs/test_get_xattr.c */
@@ -288,4 +336,7 @@ void test_fs_kfuncs(void)
 
 	if (test__start_subtest("fsverity"))
 		test_fsverity();
+
+	if (test__start_subtest("path_d_path_on_exit"))
+		test_path_d_path_on_exit();
 }
