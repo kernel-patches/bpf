@@ -27,7 +27,7 @@ int try_add_tainted_module(struct module *mod)
 	list_for_each_entry_rcu(mod_taint, &unloaded_tainted_modules, list,
 				lockdep_is_held(&module_mutex)) {
 		if (!strcmp(mod_taint->name, mod->name) &&
-		    mod_taint->taints & mod->taints) {
+		    mod_taint->taints == mod->taints) {
 			mod_taint->count++;
 			goto out;
 		}
