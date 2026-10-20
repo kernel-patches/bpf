@@ -319,7 +319,8 @@ int bpf_prog_calc_tag(struct bpf_prog *fp)
 		if (!was_ld_map &&
 		    dst[i].code == (BPF_LD | BPF_IMM | BPF_DW) &&
 		    (dst[i].src_reg == BPF_PSEUDO_MAP_FD ||
-		     dst[i].src_reg == BPF_PSEUDO_MAP_VALUE)) {
+		     dst[i].src_reg == BPF_PSEUDO_MAP_VALUE ||
+		     dst[i].src_reg == BPF_PSEUDO_ARENA_PERCPU)) {
 			was_ld_map = true;
 			dst[i].imm = 0;
 		} else if (was_ld_map &&
@@ -1594,6 +1595,20 @@ struct bpf_prog *bpf_jit_blind_constants(struct bpf_verifier_env *env, struct bp
 			/* ld_imm64 with an address of bpf subprog is not
 			 * a user controlled constant. Don't randomize it,
 			 * since it will conflict with jit_subprogs() logic.
+			 */
+			insn++;
+			i++;
+			continue;
+		}
+
+		if (insn->code == (BPF_LD | BPF_IMM | BPF_DW) &&
+		    insn->src_reg == BPF_PSEUDO_ARENA_PERCPU) {
+			/*
+			 * The imm of an arena percpu pseudo insn is the
+			 * loader resolved address of the value in cpu 0's
+			 * chunk, and the JIT translates the pseudo insn to
+			 * step it into the running cpu's chunk. No need to
+			 * blind it.
 			 */
 			insn++;
 			i++;
@@ -3379,6 +3394,11 @@ bool __weak bpf_jit_supports_subprog_tailcalls(void)
 }
 
 bool __weak bpf_jit_supports_percpu_insn(void)
+{
+	return false;
+}
+
+bool __weak bpf_jit_supports_arena_percpu_insn(void)
 {
 	return false;
 }

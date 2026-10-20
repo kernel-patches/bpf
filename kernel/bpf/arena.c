@@ -102,6 +102,29 @@ u64 bpf_arena_map_kern_vm_start(struct bpf_map *map)
 	return bpf_arena_get_kern_vm_start(container_of(map, struct bpf_arena, map));
 }
 
+u32 bpf_arena_percpu_chunk_off(const struct bpf_map *map)
+{
+	struct bpf_arena *arena = container_of(map, struct bpf_arena, map);
+
+	return arena->percpu_chunk_off;
+}
+
+u32 bpf_arena_percpu_chunk_sz(const struct bpf_map *map)
+{
+	struct bpf_arena *arena = container_of(map, struct bpf_arena, map);
+
+	return arena->percpu_chunk_sz;
+}
+
+bool bpf_arena_percpu_off_in_range(const struct bpf_map *map, u32 off)
+{
+	struct bpf_arena *arena = container_of(map, struct bpf_arena, map);
+	u32 chunk_off = arena->percpu_chunk_off;
+	u32 chunk_sz = arena->percpu_chunk_sz;
+
+	return off >= chunk_off && off - chunk_off < chunk_sz;
+}
+
 /**
  * bpf_prog_arena - return the bpf_map of the arena referenced by @prog
  * @prog: a loaded BPF program

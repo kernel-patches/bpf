@@ -4724,6 +4724,10 @@ static int __check_mem_access(struct bpf_verifier_env *env, struct bpf_reg_state
 		verbose(env, "invalid access to context, ctx_size=%d off=%d size=%d\n",
 			mem_size, off, size);
 		break;
+	case PTR_TO_ARENA:
+		verbose(env, "per-cpu arena access at offset %d size %d outside cpu 0's chunk\n",
+			off, size);
+		break;
 	case PTR_TO_MEM:
 	default:
 		verbose(env, "invalid access to memory, mem_size=%u off=%d size=%d\n",
@@ -7415,6 +7419,17 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, struct b
 		if (!err && value_regno >= 0 && (rdonly_mem || t == BPF_READ))
 			mark_reg_unknown(env, regs, value_regno);
 	} else if (reg->type == PTR_TO_ARENA) {
+		/*
+		 * A per-cpu reference is bounded to cpu 0's chunk through
+		 * mem_size. A plain arena pointer has no bound and only
+		 * faults at runtime.
+		 */
+		if (reg->mem_size) {
+			err = check_mem_region_access(env, reg, argno, off, size,
+						      reg->mem_size, false);
+			if (err)
+				return err;
+		}
 		if (t == BPF_READ && value_regno >= 0)
 			mark_reg_unknown(env, regs, value_regno);
 	} else {
@@ -17456,7 +17471,12 @@ static int adjust_reg_min_max_vals(struct bpf_verifier_env *env,
 			aux->zext_dst = true;
 		}
 
-		/* Any arithmetic operations are allowed on arena pointers */
+		/*
+		 * Any arithmetic operations are allowed on arena pointers.
+		 * Arithmetic on a per-cpu reference drops its chunk bound.
+		 * The register rolls back to a plain arena pointer.
+		 */
+		dst_reg->mem_size = 0;
 		return 0;
 	}
 
@@ -19080,10 +19100,27 @@ static int check_ld_imm(struct bpf_verifier_env *env, struct bpf_insn *insn)
 	map = env->used_maps[aux->map_index];
 
 	if (insn->src_reg == BPF_PSEUDO_MAP_VALUE ||
-	    insn->src_reg == BPF_PSEUDO_MAP_IDX_VALUE) {
+	    insn->src_reg == BPF_PSEUDO_MAP_IDX_VALUE ||
+	    insn->src_reg == BPF_PSEUDO_ARENA_PERCPU) {
 		if (map->map_type == BPF_MAP_TYPE_ARENA) {
-			__mark_reg_unknown(env, dst_reg);
-			dst_reg->map_ptr = map;
+			if (insn->src_reg == BPF_PSEUDO_ARENA_PERCPU) {
+				u64 pos = aux->map_off - bpf_arena_percpu_chunk_off(map);
+
+				/*
+				 * The register value tracks the position of
+				 * the reference inside cpu 0's chunk and
+				 * mem_size bounds accesses to the chunk.
+				 * map_ptr and mem_size share a union and
+				 * map_ptr is never read for PTR_TO_ARENA,
+				 * so only mem_size is set.
+				 */
+				__mark_reg_known(dst_reg, pos);
+				dst_reg->type = PTR_TO_ARENA;
+				dst_reg->mem_size = bpf_arena_percpu_chunk_sz(map);
+			} else {
+				__mark_reg_unknown(env, dst_reg);
+				dst_reg->map_ptr = map;
+			}
 			bpf_diag_mod_end(env);
 			return 0;
 		}
@@ -21372,6 +21409,7 @@ static int check_and_resolve_insns(struct bpf_verifier_env *env)
 			switch (insn[0].src_reg) {
 			case BPF_PSEUDO_MAP_VALUE:
 			case BPF_PSEUDO_MAP_IDX_VALUE:
+			case BPF_PSEUDO_ARENA_PERCPU:
 				break;
 			case BPF_PSEUDO_MAP_FD:
 			case BPF_PSEUDO_MAP_IDX:
@@ -21409,6 +21447,26 @@ static int check_and_resolve_insns(struct bpf_verifier_env *env)
 				addr = (unsigned long)map;
 			} else {
 				u32 off = insn[1].imm;
+
+				if (insn[0].src_reg == BPF_PSEUDO_ARENA_PERCPU) {
+					if (map->map_type != BPF_MAP_TYPE_ARENA) {
+						verbose(env, "per-cpu value pseudo insn only allowed on arena maps\n");
+						return -EINVAL;
+					}
+					if (!bpf_arena_percpu_chunk_sz(map)) {
+						verbose(env, "arena map has no per-cpu chunks\n");
+						return -EINVAL;
+					}
+					if (!bpf_arena_percpu_off_in_range(map, off)) {
+						verbose(env, "per-cpu arena reference at offset %u outside cpu 0's chunk\n",
+							off);
+						return -ERANGE;
+					}
+					if (!bpf_jit_supports_arena_percpu_insn()) {
+						verbose(env, "JIT doesn't support arena percpu insn\n");
+						return -EOPNOTSUPP;
+					}
+				}
 
 				if (!map->ops->map_direct_value_addr) {
 					verbose(env, "no direct value access support for this map type\n");
@@ -21578,6 +21636,9 @@ static void convert_pseudo_ld_imm64(struct bpf_verifier_env *env)
 		if (insn->code != (BPF_LD | BPF_IMM | BPF_DW))
 			continue;
 		if (insn->src_reg == BPF_PSEUDO_FUNC)
+			continue;
+		/* The JIT reads this pseudo to emit the per-cpu step */
+		if (insn->src_reg == BPF_PSEUDO_ARENA_PERCPU)
 			continue;
 		insn->src_reg = 0;
 	}
