@@ -10,6 +10,7 @@
 #include <linux/arm-smccc.h>
 #include <linux/bitfield.h>
 #include <linux/bpf.h>
+#include <linux/bpf_throw.h>
 #include <linux/cfi.h>
 #include <linux/extable.h>
 #include <linux/filter.h>
@@ -3578,6 +3579,13 @@ bool bpf_jit_supports_timed_may_goto(void)
 {
 	return true;
 }
+
+#ifdef CONFIG_BPF_SYSCALL
+void *bpf_arch_throw_entry(void)
+{
+	return (void *)bpf_throw_entry;
+}
+#endif
 
 bool bpf_jit_inlines_helper_call(s32 imm)
 {
