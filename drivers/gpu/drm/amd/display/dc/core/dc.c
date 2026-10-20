@@ -2348,30 +2348,16 @@ static void determine_pipe_unlock_order(struct dc *dc, struct dc_state *context)
 	}
 }
 
-/**
- * dc_commit_state_no_check - Apply context to the hardware
- *
- * @dc: DC object with the current status to be updated
- * @context: New state that will become the current status at the end of this function
- *
- * Applies given context to the hardware and copy it into current context.
- * It's up to the user to release the src context afterwards.
- *
- * Return: an enum dc_status result code for the operation
- */
-static enum dc_status dc_commit_state_no_check(struct dc *dc, struct dc_state *context)
+/* Hardware span of a commit. The API shim picks Core2 or this body. */
+enum dc_status legacy_commit_state_hw(struct dc *dc, struct dc_state *context)
 {
 	struct dc_bios *dcb = dc->ctx->dc_bios;
 	enum dc_status result = DC_ERROR_UNEXPECTED;
 	struct pipe_ctx *pipe;
 	unsigned int i, k, l;
 	struct dc_stream_state *dc_streams[MAX_STREAMS] = {0};
-	struct dc_state *old_state;
 	bool subvp_prev_use = false;
 	bool dmub_locked = false;
-
-	dc_z10_restore(dc);
-	dc_allow_idle_optimizations(dc, false);
 
 	for (i = 0; i < dc->res_pool->pipe_count; i++) {
 		struct pipe_ctx *old_pipe = &dc->current_state->res_ctx.pipe_ctx[i];
@@ -2563,6 +2549,33 @@ static enum dc_status dc_commit_state_no_check(struct dc *dc, struct dc_state *c
 
 	if (dc->hwss.update_dsc_pg)
 		dc->hwss.update_dsc_pg(dc, context, true);
+
+	return result;
+}
+
+/**
+ * dc_commit_state_no_check - Apply context to the hardware
+ *
+ * @dc: DC object with the current status to be updated
+ * @context: New state that will become the current status at the end of this function
+ *
+ * Applies given context to the hardware and copy it into current context.
+ * It's up to the user to release the src context afterwards.
+ *
+ * Return: an enum dc_status result code for the operation
+ */
+static enum dc_status dc_commit_state_no_check(struct dc *dc, struct dc_state *context)
+{
+	enum dc_status result;
+	unsigned int i;
+	struct dc_state *old_state;
+
+	dc_z10_restore(dc);
+	dc_allow_idle_optimizations(dc, false);
+
+	result = api_shim_commit_state_hw(dc, context);
+	if (result != DC_OK)
+		return result;
 
 	if (dc->ctx->dce_version >= DCE_VERSION_MAX)
 		TRACE_DCN_CLOCK_STATE(&context->bw_ctx.bw.dcn.clk);
@@ -6771,6 +6784,7 @@ void legacy_hardware_release(struct dc *dc)
 static const struct dc2_funcs dc2_legacy_funcs_table = {
 	.hardware_init = legacy_hardware_init,
 	.hardware_release = legacy_hardware_release,
+	.commit_state_hw = legacy_commit_state_hw,
 };
 
 const struct dc2_funcs *dc2_legacy_funcs(void)

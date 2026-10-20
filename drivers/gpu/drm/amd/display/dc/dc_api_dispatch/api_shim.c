@@ -30,3 +30,10 @@ void dc_hardware_release(struct dc *dc)
 	else
 		legacy_hardware_release(dc);
 }
+
+enum dc_status api_shim_commit_state_hw(struct dc *dc, struct dc_state *context)
+{
+	if (TO_DC2(dc)->selection == DC2_SELECTION_CORE2)
+		return core2_funcs()->commit_state_hw(dc, context);
+	return legacy_commit_state_hw(dc, context);
+}

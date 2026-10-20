@@ -42,7 +42,7 @@ static void core2_run_native_hardware_init(struct dc *dc)
 	const struct bls_builder *builder;
 	enum bls_builder_result result;
 
-	builder = bls_builder_create(dc, DCN_DECL_INITIALIZATION);
+	builder = TO_DC2(dc)->builders[DCN_DECL_INITIALIZATION];
 	if (!builder || builder->kind != BLS_BUILDER_DECLARATIVE ||
 			!builder->build.declarative)
 		return;

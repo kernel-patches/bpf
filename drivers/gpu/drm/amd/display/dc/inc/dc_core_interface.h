@@ -5,7 +5,10 @@
 
 #pragma once
 
+#include "core_status.h"
+
 struct dc;
+struct dc_state;
 
 /*
  * Construction-time Core implementation selection. Zero is LEGACY so existing
@@ -24,8 +27,10 @@ enum dc2_hw_ownership {
 struct dc2_funcs {
 	void (*hardware_init)(struct dc *dc);
 	void (*hardware_release)(struct dc *dc);
+	enum dc_status (*commit_state_hw)(struct dc *dc, struct dc_state *context);
 };
 
 void legacy_hardware_init(struct dc *dc);
 void legacy_hardware_release(struct dc *dc);
+enum dc_status legacy_commit_state_hw(struct dc *dc, struct dc_state *context);
 const struct dc2_funcs *dc2_legacy_funcs(void);
