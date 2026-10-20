@@ -144,7 +144,7 @@ err_out:
  * Connects the socket to the specified remote address and port.
  *
  * This function may sleep while connecting the socket, so it can only be used
- * in sleepable BPF programs (SYSCALL).
+ * in sleepable BPF programs.
  *
  * Return: 0 on success, negative errno on error.
  */
@@ -243,7 +243,6 @@ __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(ksock_init_kfunc_btf_ids)
 BTF_ID_FLAGS(func, bpf_ksock_create, KF_ACQUIRE | KF_RET_NULL | KF_SLEEPABLE)
-BTF_ID_FLAGS(func, bpf_ksock_connect, KF_SLEEPABLE)
 BTF_KFUNCS_END(ksock_init_kfunc_btf_ids)
 
 static const struct btf_kfunc_id_set ksock_init_kfunc_set = {
@@ -254,6 +253,7 @@ static const struct btf_kfunc_id_set ksock_init_kfunc_set = {
 BTF_KFUNCS_START(ksock_kfunc_btf_ids)
 BTF_ID_FLAGS(func, bpf_ksock_release, KF_RELEASE)
 BTF_ID_FLAGS(func, bpf_ksock_acquire, KF_ACQUIRE | KF_RCU | KF_RET_NULL)
+BTF_ID_FLAGS(func, bpf_ksock_connect, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_ksock_send, KF_SLEEPABLE)
 BTF_KFUNCS_END(ksock_kfunc_btf_ids)
 
@@ -265,6 +265,14 @@ BTF_ID(func, bpf_lsm_socket_sendmsg)
 BTF_ID_UNUSED
 #endif
 BTF_ID_LIST_SINGLE(bpf_ksock_send_id, func, bpf_ksock_send)
+
+BTF_ID_LIST(bpf_lsm_socket_connect_id)
+#ifdef CONFIG_SECURITY_NETWORK
+BTF_ID(func, bpf_lsm_socket_connect)
+#else
+BTF_ID_UNUSED
+#endif
+BTF_ID_LIST_SINGLE(bpf_ksock_connect_id, func, bpf_ksock_connect)
 #endif
 
 static int bpf_ksock_kfunc_filter(const struct bpf_prog *prog, u32 kfunc_id)
@@ -278,7 +286,17 @@ static int bpf_ksock_kfunc_filter(const struct bpf_prog *prog, u32 kfunc_id)
 #ifdef CONFIG_BPF_LSM
 	if (prog->type == BPF_PROG_TYPE_LSM) {
 		if (prog->aux->attach_btf_id == bpf_lsm_socket_sendmsg_id[0] &&
-		    kfunc_id == bpf_ksock_send_id[0])
+		    (kfunc_id == bpf_ksock_send_id[0] ||
+		    /*
+		     * Break the socket_sendmsg -> bpf_ksock_connect() ->
+		     * socket_connect -> bpf_ksock_send() -> socket_sendmsg'
+		     * cycle. Blocking this edge is enough.
+		     */
+		     kfunc_id == bpf_ksock_connect_id[0]))
+			return -EACCES;
+
+		if (prog->aux->attach_btf_id == bpf_lsm_socket_connect_id[0] &&
+		    kfunc_id == bpf_ksock_connect_id[0])
 			return -EACCES;
 
 		return 0;
