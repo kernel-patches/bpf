@@ -1307,6 +1307,24 @@ __bpf_kfunc struct prog_test_ret_ii bpf_kfunc_call_test_ret_ii(int a, int b)
 }
 #endif /* __x86_64__ || __aarch64__ */
 
+/* KF_FASTCALL kfuncs for the JIT inlining tests: two that the JIT can copy
+ * and one with a branch that it cannot.
+ */
+__bpf_kfunc u64 bpf_kfunc_call_test_fastcall_lt(u64 a, u64 b)
+{
+	return a < b;
+}
+
+__bpf_kfunc u64 bpf_kfunc_call_test_fastcall_mix(u64 a)
+{
+	return (a >> 7) ^ ((a << 3) + (a >> 11)) ^ (a * 5);
+}
+
+__bpf_kfunc u64 bpf_kfunc_call_test_fastcall_div(u64 a, u64 b)
+{
+	return b ? a / b : 0;
+}
+
 /*
  * Takes no argument on purpose: with no arguments there is nothing for the sret
  * pointer to displace, so this needs no architecture guard even though it
@@ -1923,6 +1941,9 @@ BTF_ID_FLAGS(func, bpf_kfunc_call_test_pair_arg_split8)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_ptr_arg)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_pair_arena_arg)
 #endif
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_fastcall_lt, KF_FASTCALL)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_fastcall_mix, KF_FASTCALL)
+BTF_ID_FLAGS(func, bpf_kfunc_call_test_fastcall_div, KF_FASTCALL)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_ret_big)
 BTF_ID_FLAGS(func, bpf_kfunc_call_stack_arg)
 BTF_ID_FLAGS(func, bpf_kfunc_call_stack_arg_ptr)
