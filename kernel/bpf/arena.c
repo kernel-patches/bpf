@@ -67,6 +67,9 @@ struct bpf_arena {
 	struct irq_work     free_irq;
 	struct work_struct  free_work;
 	struct llist_head   free_spans;
+	/* percpu chunk offset and size */
+	u32 percpu_chunk_off;
+	u32 percpu_chunk_sz;
 };
 
 static void arena_free_worker(struct work_struct *work);
@@ -298,6 +301,17 @@ static struct bpf_map *arena_map_alloc(union bpf_attr *attr)
 		/* user vma must not cross 32-bit boundary */
 		return ERR_PTR(-ERANGE);
 
+	if (attr->arena_percpu_chunk_sz) {
+		u64 offset = attr->arena_percpu_chunk_off;
+		u64 size = attr->arena_percpu_chunk_sz;
+
+		if (!IS_ALIGNED(offset, PAGE_SIZE) || !IS_ALIGNED(size, PAGE_SIZE))
+			return ERR_PTR(-EINVAL);
+
+		if (offset > vm_range || size > (vm_range - offset) / nr_cpu_ids)
+			return ERR_PTR(-E2BIG);
+	}
+
 	kern_vm = get_vm_area(KERN_VM_SZ, VM_SPARSE | VM_USERMAP);
 	if (!kern_vm)
 		return ERR_PTR(-ENOMEM);
@@ -310,6 +324,10 @@ static struct bpf_map *arena_map_alloc(union bpf_attr *attr)
 	arena->user_vm_start = attr->map_extra;
 	if (arena->user_vm_start)
 		arena->user_vm_end = arena->user_vm_start + vm_range;
+
+	arena->percpu_chunk_sz = attr->arena_percpu_chunk_sz;
+	if (attr->arena_percpu_chunk_sz)
+		arena->percpu_chunk_off = attr->arena_percpu_chunk_off;
 
 	INIT_LIST_HEAD(&arena->vma_list);
 	init_llist_head(&arena->free_spans);

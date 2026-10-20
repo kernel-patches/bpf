@@ -1628,6 +1628,10 @@ union bpf_attr {
 		__aligned_u64 excl_prog_hash;
 		/* Size of the passed excl_prog_hash. */
 		__u32 excl_prog_hash_size;
+
+		/* offset and size of an arena percpu chunk */
+		__u32	arena_percpu_chunk_off;
+		__u32	arena_percpu_chunk_sz;
 	};
 
 	struct { /* anonymous struct used by BPF_MAP_*_ELEM and BPF_MAP_FREEZE commands */

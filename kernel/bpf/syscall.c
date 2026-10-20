@@ -1396,7 +1396,7 @@ free_map_tab:
 	return ret;
 }
 
-#define BPF_MAP_CREATE_LAST_FIELD excl_prog_hash_size
+#define BPF_MAP_CREATE_LAST_FIELD arena_percpu_chunk_sz
 /* called via syscall */
 static int map_create_alloc(union bpf_attr *attr, bpfptr_t uattr, struct bpf_verifier_log *log,
 			    struct bpf_map **mapp, struct bpf_token **tokenp)
