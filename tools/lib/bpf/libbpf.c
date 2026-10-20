@@ -833,6 +833,7 @@ struct bpf_object {
 		void *chunk; /* copy from section .arena.percpu, zero-padded to chunk size */
 		size_t chunk_sz;	/* chunk size, page-aligned */
 		size_t nr_chunks;	/* how many chunks, one chunk per possible cpu */
+		size_t offset;		/* offset within the arena */
 		bool present;
 	} arena_percpu;
 
@@ -8212,8 +8213,12 @@ static int bpf_object__relocate(struct bpf_object *obj, const char *targ_btf_pat
 		}
 
 		/* place globals at the end of the arena (if supported) */
-		if (kernel_supports(obj, FEAT_LDIMM64_FULL_RANGE_OFF))
-			obj->arena_data_off = mmap_sz - data_sz;
+		if (kernel_supports(obj, FEAT_LDIMM64_FULL_RANGE_OFF)) {
+			obj->arena_data_off = data_sz ? mmap_sz - data_sz : 0;
+			obj->arena_percpu.offset = mmap_sz - data_sz - percpu_sz;
+		} else {
+			obj->arena_percpu.offset = data_sz;
+		}
 	}
 
 	err = bpf_object__relocate_data_ptrs(obj);
