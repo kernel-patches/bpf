@@ -4,11 +4,7 @@
 #include <bpf/bpf_helpers.h>
 #include "bpf_misc.h"
 
-#if (defined(__TARGET_ARCH_arm64) || defined(__TARGET_ARCH_x86) || \
-	(defined(__TARGET_ARCH_riscv) && __riscv_xlen == 64) || \
-	defined(__TARGET_ARCH_arm) || defined(__TARGET_ARCH_s390) || \
-	defined(__TARGET_ARCH_loongarch)) && \
-	(__clang_major__ >= 18 || defined(__BPF_FEATURE_MOVSX))
+#ifdef CAN_USE_MOVSX
 
 SEC("socket")
 __description("MOV32SX, S8")
@@ -405,6 +401,6 @@ int dummy_test(void)
 	return 0;
 }
 
-#endif
+#endif /* CAN_USE_MOVSX */
 
 char _license[] SEC("license") = "GPL";
