@@ -24,6 +24,7 @@ enum bls_builder_result {
 enum bls_builder_name {
 	DCN_DECL_INITIALIZATION,
 	DCN_DECL_INITIALIZATION_LEGACY,
+	DCN_DECL_NON_SEAMLESS_COMMIT,
 	BLS_BUILDER_NAME_COUNT,
 };
 

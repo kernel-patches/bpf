@@ -407,6 +407,8 @@ const struct bls_builder *dcn401_bls_builder_create(
 		return &initialization_builder;
 	case DCN_DECL_INITIALIZATION_LEGACY:
 		return &legacy_initialization_builder;
+	case DCN_DECL_NON_SEAMLESS_COMMIT:
+		return dcn401_non_seamless_commit_builder();
 	default:
 		return NULL;
 	}
