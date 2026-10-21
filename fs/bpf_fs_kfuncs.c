@@ -1,22 +1,126 @@
 // SPDX-License-Identifier: GPL-2.0
 /* Copyright (c) 2024 Google LLC. */
 
+#include <linux/align.h>
 #include <linux/binfmt_misc.h>
 #include <linux/bpf.h>
 #include <linux/bpf_lsm.h>
 #include <linux/btf.h>
 #include <linux/btf_ids.h>
+#include <linux/cred.h>
 #include <linux/dcache.h>
 #include <linux/fs.h>
 #include <linux/fsnotify.h>
 #include <linux/file.h>
+#include <linux/kdev_t.h>
 #include <linux/kernfs.h>
 #include <linux/lsm_hooks.h>
 #include <linux/mm.h>
 #include <linux/net.h>
 #include <linux/xattr.h>
 
+#include "internal.h"
+#include "mount.h"
+
+/**
+ * struct bpf_file_stat - attributes returned by bpf_path_getattr()
+ * @ino: inode number
+ * @dev: device number in huge_encode_dev() format
+ * @mnt_id: legacy mount ID, or unique ID if STATX_MNT_ID_UNIQUE is requested
+ * @size: file size in bytes
+ * @attributes: STATX_ATTR_* flags
+ * @attributes_mask: supported bits in @attributes
+ * @mode: file type and permissions
+ * @uid: owner UID in the current task's user namespace
+ * @gid: owner GID in the current task's user namespace
+ * @result_mask: available STATX_* fields represented in this structure
+ *
+ * Ownership includes mount idmapping. Unmapped IDs use the overflow UID or GID.
+ */
+struct bpf_file_stat {
+	u64 ino;
+	u64 dev;
+	u64 mnt_id;
+	u64 size;
+	u64 attributes;
+	u64 attributes_mask;
+	u32 mode;
+	u32 uid;
+	u32 gid;
+	u32 result_mask;
+};
+
+#define BPF_FILE_STAT_FIELDS (STATX_TYPE | STATX_MODE | STATX_UID | STATX_GID | \
+			      STATX_INO | STATX_SIZE | STATX_MNT_ID | \
+			      STATX_MNT_ID_UNIQUE)
+
 __bpf_kfunc_start_defs();
+
+/**
+ * bpf_path_getattr - query attributes of a trusted path
+ * @path: resolved, trusted path
+ * @request_mask: bits from STATX_BASIC_STATS, STATX_MNT_ID and STATX_MNT_ID_UNIQUE
+ * @query_flags: AT_STATX_SYNC_AS_STAT, AT_STATX_FORCE_SYNC or AT_STATX_DONT_SYNC
+ * @out__uninit: naturally aligned result buffer
+ * @out__sz: must equal sizeof(struct bpf_file_stat)
+ *
+ * Only sleepable LSM programs may call this kfunc. The caller must not hold
+ * locks that conflict with the filesystem's getattr operation.
+ *
+ * Uses vfs_getattr_nosec() to avoid a direct security_inode_getattr() call.
+ * Results follow statx(2), including mount IDs and STATX_ATTR_MOUNT_ROOT.
+ * The mount ID is legacy unless STATX_MNT_ID_UNIQUE is requested. Fields not
+ * requested may also be returned.
+ *
+ * Return: Zero on success or a negative error code. Unsupported mask bits,
+ * query flags, size or alignment return -EINVAL. With a valid size, the output
+ * is initialized on every return; an invalid size leaves it untouched.
+ */
+__bpf_kfunc int bpf_path_getattr(const struct path *path, u32 request_mask,
+				 u32 query_flags, struct bpf_file_stat *out__uninit,
+				 u32 out__sz)
+{
+	struct bpf_file_stat *out = out__uninit;
+	struct kstat stat;
+	int ret;
+
+	if (out__sz != sizeof(*out))
+		return -EINVAL;
+	memset(out, 0, sizeof(*out));
+
+	if (!IS_ALIGNED((unsigned long)out, __alignof__(*out)))
+		return -EINVAL;
+
+	if (request_mask & ~(STATX_BASIC_STATS | STATX_MNT_ID | STATX_MNT_ID_UNIQUE))
+		return -EINVAL;
+	if (query_flags & ~AT_STATX_SYNC_TYPE ||
+	    (query_flags & AT_STATX_SYNC_TYPE) == AT_STATX_SYNC_TYPE)
+		return -EINVAL;
+
+	ret = vfs_getattr_nosec(path, &stat, request_mask, query_flags);
+	if (ret)
+		return ret;
+
+	out->ino = stat.ino;
+	out->dev = huge_encode_dev(stat.dev);
+	if (request_mask & STATX_MNT_ID_UNIQUE) {
+		out->mnt_id = real_mount(path->mnt)->mnt_id_unique;
+		stat.result_mask |= STATX_MNT_ID_UNIQUE;
+	} else {
+		out->mnt_id = real_mount(path->mnt)->mnt_id;
+		stat.result_mask |= STATX_MNT_ID;
+	}
+	out->size = stat.size;
+	out->attributes = stat.attributes & ~STATX_ATTR_CHANGE_MONOTONIC;
+	if (path_mounted(path))
+		out->attributes |= STATX_ATTR_MOUNT_ROOT;
+	out->attributes_mask = stat.attributes_mask | STATX_ATTR_MOUNT_ROOT;
+	out->mode = stat.mode;
+	out->uid = from_kuid_munged(current_user_ns(), stat.uid);
+	out->gid = from_kgid_munged(current_user_ns(), stat.gid);
+	out->result_mask = stat.result_mask & BPF_FILE_STAT_FIELDS;
+	return 0;
+}
 
 /**
  * bpf_get_task_exe_file - get a reference on the exe_file struct file member of
@@ -504,6 +608,7 @@ BTF_KFUNCS_START(bpf_fs_kfunc_set_ids)
 BTF_ID_FLAGS(func, bpf_get_task_exe_file, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_put_file, KF_RELEASE)
 BTF_ID_FLAGS(func, bpf_path_d_path)
+BTF_ID_FLAGS(func, bpf_path_getattr, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_get_dentry_xattr, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_get_file_xattr, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_set_dentry_xattr, KF_SLEEPABLE)
@@ -515,8 +620,9 @@ BTF_ID_FLAGS(func, bpf_sock_read_xattr, KF_RCU)
 #endif
 BTF_KFUNCS_END(bpf_fs_kfunc_set_ids)
 
-/* Side-effecting kfuncs that stay exclusive to LSM programs. */
+/* Kfuncs that stay exclusive to LSM programs. */
 BTF_SET_START(bpf_fs_kfunc_lsm_only_ids)
+BTF_ID(func, bpf_path_getattr)
 BTF_ID(func, bpf_set_dentry_xattr)
 BTF_ID(func, bpf_remove_dentry_xattr)
 BTF_SET_END(bpf_fs_kfunc_lsm_only_ids)
