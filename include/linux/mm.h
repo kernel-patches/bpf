@@ -3435,6 +3435,9 @@ extern long change_protection(struct mmu_gather *tlb,
 extern int mprotect_fixup(struct vma_iterator *vmi, struct mmu_gather *tlb,
 	  struct vm_area_struct *vma, struct vm_area_struct **pprev,
 	  unsigned long start, unsigned long end, vm_flags_t newflags);
+/* Caller must hold current->mm's mmap write lock. */
+int do_mprotect_pkey_locked(unsigned long start, size_t len,
+			    unsigned long prot, int pkey);
 
 /*
  * doesn't attempt to fault and will return short.

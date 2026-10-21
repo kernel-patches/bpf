@@ -868,8 +868,8 @@ fail:
 /*
  * pkey==-1 when doing a legacy mprotect()
  */
-static int do_mprotect_pkey(unsigned long start, size_t len,
-		unsigned long prot, int pkey)
+int do_mprotect_pkey_locked(unsigned long start, size_t len,
+			    unsigned long prot, int pkey)
 {
 	unsigned long nstart, end, tmp, reqprot;
 	struct vm_area_struct *vma, *prev;
@@ -899,8 +899,7 @@ static int do_mprotect_pkey(unsigned long start, size_t len,
 
 	reqprot = prot;
 
-	if (mmap_write_lock_killable(current->mm))
-		return -EINTR;
+	mmap_assert_write_locked(current->mm);
 
 	/*
 	 * If userspace did not allocate the pkey, do not let
@@ -1013,8 +1012,19 @@ static int do_mprotect_pkey(unsigned long start, size_t len,
 		error = -ENOMEM;
 
 out:
-	mmap_write_unlock(current->mm);
 	return error;
+}
+
+static int do_mprotect_pkey(unsigned long start, size_t len,
+			    unsigned long prot, int pkey)
+{
+	int ret;
+
+	if (mmap_write_lock_killable(current->mm))
+		return -EINTR;
+	ret = do_mprotect_pkey_locked(start, len, prot, pkey);
+	mmap_write_unlock(current->mm);
+	return ret;
 }
 
 SYSCALL_DEFINE3(mprotect, unsigned long, start, size_t, len,
