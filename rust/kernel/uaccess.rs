@@ -31,6 +31,15 @@ impl UserPtr {
         Self(addr as *mut c_void)
     }
 
+    /// Create a [`UserPtr`] from a [`u64`] userspace address.
+    ///
+    /// Deliberately truncate upper bits for 32-bit systems.
+    #[doc(alias = "u64_to_user_ptr")]
+    #[inline]
+    pub fn from_u64(addr: u64) -> Self {
+        Self::from_addr(addr as usize)
+    }
+
     /// Create a `UserPtr` from a pointer representing the userspace address.
     #[inline]
     pub fn from_ptr(addr: *mut c_void) -> Self {
