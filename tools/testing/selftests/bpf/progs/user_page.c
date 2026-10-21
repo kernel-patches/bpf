@@ -11,6 +11,7 @@ char _license[] SEC("license") = "GPL";
 #define USER_PAGE_ALLOC 1
 #define USER_PAGE_EXEC 2
 #define USER_PAGE_EXEC_ONLY 3
+#define USER_PAGE_WRITE 4
 
 int monitored_pid;
 int action;
@@ -19,6 +20,8 @@ long exec_addr;
 unsigned long nr_pages;
 int write_ret;
 int exec_ret;
+
+static const char data[] = "fault-enabled BPF write";
 static const unsigned char insns[] = {
 	0xf3, 0x0f, 0x1e, 0xfa, /* endbr64 */
 	0xb8, 42, 0, 0, 0, 0xc3, /* mov $42, %eax; ret */
@@ -42,6 +45,10 @@ int user_page_test(struct pt_regs *ctx)
 		break;
 	case USER_PAGE_EXEC_ONLY:
 		exec_ret = bpf_user_page_exec(exec_addr);
+		break;
+	case USER_PAGE_WRITE:
+		write_ret = bpf_probe_write_user_faultable((void *)user_addr, data,
+							   sizeof(data));
 		break;
 	}
 
