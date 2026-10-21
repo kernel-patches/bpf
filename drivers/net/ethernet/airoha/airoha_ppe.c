@@ -144,6 +144,9 @@ static void airoha_ppe_hw_init(struct airoha_ppe *ppe)
 	sram_ppe_num_data_entries =
 		PPE_RAM_NUM_ENTRIES_SHIFT(sram_ppe_num_data_entries);
 
+	if (sram_num_stats_entries > 0)
+		airoha_fe_clear(eth, PSE_FC_CFG, PSE_PORT6_SHARE_DIS);
+
 	for (i = 0; i < eth->soc->num_ppe; i++) {
 		airoha_fe_wr(eth, REG_PPE_TB_BASE(i),
 			     ppe->foe_dma + sram_tb_size);
@@ -613,6 +616,9 @@ static void airoha_ppe_foe_flow_stat_entry_reset(struct airoha_ppe *ppe,
 						 struct airoha_npu *npu,
 						 int index)
 {
+	if (!npu->stats)
+		return;
+
 	memset_io(&npu->stats[index], 0, sizeof(*npu->stats));
 	memset(&ppe->foe_stats[index], 0, sizeof(*ppe->foe_stats));
 }
@@ -642,6 +648,9 @@ static void airoha_ppe_foe_flow_stats_update(struct airoha_ppe *ppe,
 
 	ppe_num_stats_entries = airoha_ppe_get_total_num_stats_entries(ppe);
 	if (ppe_num_stats_entries < 0)
+		return;
+
+	if (!npu->stats)
 		return;
 
 	if (airoha_ppe_foe_get_flow_stats_index(ppe, hash, &index))
@@ -1324,7 +1333,7 @@ void airoha_ppe_foe_entry_get_stats(struct airoha_ppe *ppe, u32 hash,
 	rcu_read_lock();
 
 	npu = rcu_dereference(eth->npu);
-	if (npu) {
+	if (npu && npu->stats) {
 		u64 packets = ppe->foe_stats[index].packets;
 		u64 bytes = ppe->foe_stats[index].bytes;
 		struct airoha_foe_stats npu_stats;
@@ -1454,10 +1463,9 @@ static int airoha_ppe_offload_setup(struct airoha_eth *eth)
 
 	ppe_num_stats_entries = airoha_ppe_get_total_num_stats_entries(ppe);
 	if (ppe_num_stats_entries > 0) {
-		err = npu->ops.ppe_init_stats(npu, ppe->foe_stats_dma,
-					      ppe_num_stats_entries);
-		if (err)
-			goto error_npu_put;
+		if (npu->ops.ppe_init_stats(npu, ppe->foe_stats_dma,
+					    ppe_num_stats_entries))
+			dev_warn(eth->dev, "NPU refused flow stats\n");
 	}
 
 	airoha_ppe_hw_init(ppe);
