@@ -12,6 +12,7 @@ char _license[] SEC("license") = "GPL";
 #define USER_PAGE_EXEC 2
 #define USER_PAGE_EXEC_ONLY 3
 #define USER_PAGE_WRITE 4
+#define USER_PAGE_BAD_WRITE 5
 
 int monitored_pid;
 int action;
@@ -49,6 +50,10 @@ int user_page_test(struct pt_regs *ctx)
 	case USER_PAGE_WRITE:
 		write_ret = bpf_probe_write_user_faultable((void *)user_addr, data,
 							   sizeof(data));
+		break;
+	case USER_PAGE_BAD_WRITE:
+		write_ret = bpf_probe_write_user_faultable((void *)1, data,
+							    sizeof(data));
 		break;
 	}
 
