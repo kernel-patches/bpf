@@ -8,24 +8,28 @@
 
 char _license[] SEC("license") = "GPL";
 
-#define USER_PAGE_ALLOC 1
-#define USER_PAGE_EXEC 2
-#define USER_PAGE_EXEC_ONLY 3
-#define USER_PAGE_WRITE 4
+extern int bpf_copy_to_user_current(void *dst, const void *src, u32 size,
+				    u64 flags) __ksym;
+extern long bpf_user_mmap(unsigned long len, unsigned long prot) __ksym;
+extern int bpf_user_munmap(unsigned long addr, unsigned long len) __ksym;
+
+enum {
+	USER_MEM_MAP = 1,
+	USER_MEM_COPY = 2,
+	USER_MEM_BAD_COPY = 3,
+	USER_MEM_BAD_COPY_FLAGS = 4,
+	USER_MEM_UNMAP = 5,
+};
 
 int monitored_pid;
 int action;
+unsigned long map_len;
+unsigned long map_prot;
+u64 copy_flags;
 long user_addr;
-long exec_addr;
-unsigned long nr_pages;
-int write_ret;
-int exec_ret;
+int op_ret;
 
 static const char data[] = "fault-enabled BPF write";
-static const unsigned char insns[] = {
-	0xf3, 0x0f, 0x1e, 0xfa, /* endbr64 */
-	0xb8, 42, 0, 0, 0, 0xc3, /* mov $42, %eax; ret */
-};
 
 SEC("uprobe.s//proc/self/exe:user_page_trigger")
 int user_page_test(struct pt_regs *ctx)
@@ -34,21 +38,22 @@ int user_page_test(struct pt_regs *ctx)
 		return 0;
 
 	switch (action) {
-	case USER_PAGE_ALLOC:
-		user_addr = bpf_user_page_alloc(nr_pages);
+	case USER_MEM_MAP:
+		user_addr = bpf_user_mmap(map_len, map_prot);
 		break;
-	case USER_PAGE_EXEC:
-		write_ret = bpf_probe_write_user_faultable((void *)exec_addr,
-							   insns, sizeof(insns));
-		exec_ret = write_ret ? write_ret :
-			bpf_user_page_exec(exec_addr);
+	case USER_MEM_COPY:
+		op_ret = bpf_copy_to_user_current((void *)user_addr, data,
+						  sizeof(data), 0);
 		break;
-	case USER_PAGE_EXEC_ONLY:
-		exec_ret = bpf_user_page_exec(exec_addr);
+	case USER_MEM_BAD_COPY:
+		op_ret = bpf_copy_to_user_current((void *)1, data, sizeof(data), 0);
 		break;
-	case USER_PAGE_WRITE:
-		write_ret = bpf_probe_write_user_faultable((void *)user_addr, data,
-							   sizeof(data));
+	case USER_MEM_BAD_COPY_FLAGS:
+		op_ret = bpf_copy_to_user_current((void *)user_addr, data,
+						  sizeof(data), copy_flags);
+		break;
+	case USER_MEM_UNMAP:
+		op_ret = bpf_user_munmap(user_addr, map_len);
 		break;
 	}
 
