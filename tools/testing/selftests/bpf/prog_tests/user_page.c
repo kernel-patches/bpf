@@ -11,6 +11,7 @@ enum {
 	USER_PAGE_ALLOC = 1,
 	USER_PAGE_EXEC = 2,
 	USER_PAGE_EXEC_ONLY = 3,
+	USER_PAGE_WRITE = 4,
 };
 
 static noinline void user_page_trigger(void)
@@ -186,6 +187,28 @@ out:
 		munmap((void *)addr, page_size * 3);
 }
 
+static void test_faultable_write(struct user_page *skel)
+{
+	static const char expected[] = "fault-enabled BPF write";
+	long page_size = sysconf(_SC_PAGESIZE);
+	long addr = -1;
+
+	if (!alloc_user_pages(skel, 1, &addr))
+		return;
+
+	skel->bss->user_addr = addr;
+	skel->bss->action = USER_PAGE_WRITE;
+	user_page_trigger();
+	if (!ASSERT_EQ(skel->bss->write_ret, 0, "write_ret"))
+		goto out;
+
+	ASSERT_EQ(memcmp((void *)addr, expected, sizeof(expected)), 0, "written_data");
+
+out:
+	if (addr >= 0)
+		munmap((void *)addr, page_size);
+}
+
 void test_user_page(void)
 {
 	struct user_page *skel;
@@ -208,6 +231,8 @@ void test_user_page(void)
 		test_execute_user_page(skel);
 	if (test__start_subtest("partial_exec"))
 		test_partial_exec(skel);
+	if (test__start_subtest("faultable_write"))
+		test_faultable_write(skel);
 
 out:
 	user_page__destroy(skel);
