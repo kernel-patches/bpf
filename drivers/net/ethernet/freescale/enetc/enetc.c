@@ -524,7 +524,7 @@ dma_err:
 static int enetc_map_tx_tso_hdr(struct enetc_bdr *tx_ring, struct sk_buff *skb,
 				struct enetc_tx_swbd *tx_swbd,
 				union enetc_tx_bd *txbd, int *i, int hdr_len,
-				int data_len)
+				int data_len, int frm_len)
 {
 	union enetc_tx_bd txbd_tmp;
 	u8 flags = 0, e_flags = 0;
@@ -541,7 +541,7 @@ static int enetc_map_tx_tso_hdr(struct enetc_bdr *tx_ring, struct sk_buff *skb,
 	txbd_tmp.buf_len = cpu_to_le16(hdr_len);
 
 	/* first BD needs frm_len and offload flags set */
-	txbd_tmp.frm_len = cpu_to_le16(hdr_len + data_len);
+	txbd_tmp.frm_len = cpu_to_le16(frm_len);
 	txbd_tmp.flags = flags;
 
 	/* For the TSO header we do not set the dma address since we do not
@@ -611,6 +611,22 @@ static int enetc_map_tx_tso_data(struct enetc_bdr *tx_ring, struct sk_buff *skb,
 	*txbd = txbd_tmp;
 
 	return 0;
+}
+
+static void enetc_append_tx_pad(struct enetc_bdr *tx_ring, int i, int pad_len)
+{
+	struct enetc_tx_swbd *tx_swbd = &tx_ring->tx_swbd[i];
+	union enetc_tx_bd *txbd = ENETC_TXBD(*tx_ring, i);
+
+	enetc_clear_tx_bd(txbd);
+	txbd->addr = cpu_to_le64(tx_ring->tx_pad_dma);
+	txbd->buf_len = cpu_to_le16(pad_len);
+	txbd->flags = ENETC_TXBD_FLAGS_F;
+
+	tx_swbd->len = pad_len;
+	tx_swbd->is_eof = true;
+	tx_swbd->do_twostep_tstamp = false;
+	tx_swbd->check_wb = false;
 }
 
 static __wsum enetc_tso_hdr_csum(struct tso_t *tso, struct sk_buff *skb,
@@ -687,7 +703,8 @@ static int enetc_lso_count_descs(const struct sk_buff *skb)
 
 static int enetc_tso_count_descs(const struct sk_buff *skb)
 {
-	int count = tso_count_descs(skb);
+	/* +gso_segs to cover one pad BD per segment */
+	int count = tso_count_descs(skb) + skb_shinfo(skb)->gso_segs;
 
 	/* Each segment also needs an extension BD for VLAN insertion */
 	if (skb_vlan_tag_present(skb))
@@ -926,6 +943,9 @@ static int enetc_map_tx_tso_buffs(struct enetc_bdr *tx_ring, struct sk_buff *skb
 	i = tx_ring->next_to_use;
 
 	while (total_len > 0) {
+		int max_data_bds;
+		int frm_len;
+		int pad_len;
 		char *hdr;
 
 		/* Get the BD */
@@ -937,6 +957,12 @@ static int enetc_map_tx_tso_buffs(struct enetc_bdr *tx_ring, struct sk_buff *skb
 		data_len = min_t(int, skb_shinfo(skb)->gso_size, total_len);
 		total_len -= data_len;
 
+		/* Pad segments below ETH_ZLEN so the mEMAC does not pad them. */
+		frm_len = max_t(int, hdr_len + data_len, ETH_ZLEN);
+		pad_len = frm_len - (hdr_len + data_len);
+		/* The pad BD counts towards the max chained BD limit */
+		max_data_bds = priv->max_frags - !!pad_len;
+
 		/* prepare packet headers: MAC + IP + TCP */
 		hdr = tx_ring->tso_headers + i * TSO_HEADER_SIZE;
 		tso_build_hdr(skb, hdr, &tso, data_len, total_len == 0);
@@ -944,7 +970,7 @@ static int enetc_map_tx_tso_buffs(struct enetc_bdr *tx_ring, struct sk_buff *skb
 		/* compute the csum over the L4 header */
 		csum = enetc_tso_hdr_csum(&tso, skb, hdr, hdr_len, &pos);
 		count += enetc_map_tx_tso_hdr(tx_ring, skb, tx_swbd, txbd,
-					      &i, hdr_len, data_len);
+					      &i, hdr_len, data_len, frm_len);
 		bd_data_num = 0;
 
 		while (data_len > 0) {
@@ -966,8 +992,10 @@ static int enetc_map_tx_tso_buffs(struct enetc_bdr *tx_ring, struct sk_buff *skb
 			csum = csum_block_add(csum, csum2, pos);
 			pos += size;
 
+			/* When padding, the pad BD is the last one, not this */
 			err = enetc_map_tx_tso_data(tx_ring, skb, tx_swbd, txbd,
 						    tso.data, size,
+						    !pad_len &&
 						    size == data_len);
 			if (err) {
 				if (i == 0)
@@ -982,11 +1010,18 @@ static int enetc_map_tx_tso_buffs(struct enetc_bdr *tx_ring, struct sk_buff *skb
 			bd_data_num++;
 			tso_build_data(skb, &tso, size);
 
-			if (unlikely(bd_data_num >= priv->max_frags && data_len))
+			if (unlikely(bd_data_num >= max_data_bds && data_len))
 				goto err_chained_bd;
 		}
 
 		enetc_tso_complete_csum(tx_ring, &tso, skb, hdr, pos, csum);
+
+		if (pad_len) {
+			enetc_bdr_idx_inc(tx_ring, &i);
+			enetc_append_tx_pad(tx_ring, i, pad_len);
+			tx_swbd = &tx_ring->tx_swbd[i];
+			count++;
+		}
 
 		if (total_len == 0)
 			tx_swbd->skb = skb;
@@ -1050,6 +1085,9 @@ static netdev_tx_t enetc_start_xmit(struct sk_buff *skb,
 			enetc_unlock_mdio();
 		}
 	} else {
+		if (eth_skb_pad(skb))
+			return NETDEV_TX_OK;
+
 		if (unlikely(skb_shinfo(skb)->nr_frags > priv->max_frags))
 			if (unlikely(skb_linearize(skb)))
 				goto drop_packet_err;
@@ -2285,8 +2323,18 @@ static int enetc_alloc_tx_resource(struct enetc_bdr_resource *res,
 		goto err_alloc_tso;
 	}
 
+	res->tx_pad = dma_alloc_coherent(dev, ETH_ZLEN, &res->tx_pad_dma,
+					 GFP_KERNEL);
+	if (!res->tx_pad) {
+		err = -ENOMEM;
+		goto err_alloc_pad;
+	}
+
 	return 0;
 
+err_alloc_pad:
+	dma_free_coherent(dev, bd_count * TSO_HEADER_SIZE, res->tso_headers,
+			  res->tso_headers_dma);
 err_alloc_tso:
 	enetc_dma_free_bdr(res);
 err_alloc_bdr:
@@ -2298,6 +2346,7 @@ err_alloc_bdr:
 
 static void enetc_free_tx_resource(const struct enetc_bdr_resource *res)
 {
+	dma_free_coherent(res->dev, ETH_ZLEN, res->tx_pad, res->tx_pad_dma);
 	dma_free_coherent(res->dev, res->bd_count * TSO_HEADER_SIZE,
 			  res->tso_headers, res->tso_headers_dma);
 	enetc_dma_free_bdr(res);
@@ -2425,6 +2474,8 @@ static void enetc_assign_tx_resource(struct enetc_bdr *tx_ring,
 	tx_ring->tx_swbd = res ? res->tx_swbd : NULL;
 	tx_ring->tso_headers = res ? res->tso_headers : NULL;
 	tx_ring->tso_headers_dma = res ? res->tso_headers_dma : 0;
+	tx_ring->tx_pad = res ? res->tx_pad : NULL;
+	tx_ring->tx_pad_dma = res ? res->tx_pad_dma : 0;
 }
 
 static void enetc_assign_rx_resource(struct enetc_bdr *rx_ring,

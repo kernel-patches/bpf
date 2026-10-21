@@ -145,6 +145,8 @@ struct enetc_bdr_resource {
 	};
 	char *tso_headers;
 	dma_addr_t tso_headers_dma;
+	void *tx_pad;
+	dma_addr_t tx_pad_dma;
 };
 
 struct enetc_bdr {
@@ -182,6 +184,10 @@ struct enetc_bdr {
 	/* DMA buffer for TSO headers */
 	char *tso_headers;
 	dma_addr_t tso_headers_dma;
+
+	/* Shared read-only zero buffer to pad short frames to ETH_ZLEN */
+	void *tx_pad;
+	dma_addr_t tx_pad_dma;
 } ____cacheline_aligned_in_smp;
 
 static inline void enetc_bdr_idx_inc(struct enetc_bdr *bdr, int *i)
