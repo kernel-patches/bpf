@@ -29,6 +29,7 @@
 #include <linux/task_work.h>
 #include <linux/irq_work.h>
 #include <linux/buildid.h>
+#include <asm/tlb.h>
 
 #include "../../lib/kstrtox.h"
 
@@ -3739,6 +3740,36 @@ __bpf_kfunc int bpf_copy_from_user_mm(void *dst, u32 dst__sz,
 }
 
 /**
+ * bpf_probe_write_user_faultable() - Copy data to userspace with page faults
+ * enabled
+ * @unsafe_dst__ign: Destination address in the current task's address space.
+ * @src__srcptr:     Source buffer in BPF-accessible memory.
+ * @src__sz:         Number of bytes to copy.
+ *
+ * Copies data to userspace, allowing page faults to resolve the destination
+ * mapping. A failed copy may have written a prefix of the source buffer.
+ *
+ * Return: 0 on success, -EFAULT if the copy is incomplete, or -EPERM if the
+ * current task cannot safely access userspace.
+ */
+__bpf_kfunc int bpf_probe_write_user_faultable(void __user *unsafe_dst__ign,
+					      const void *src__srcptr,
+					      u32 src__sz)
+{
+	if (unlikely(in_interrupt() ||
+		     current->flags & (PF_KTHREAD | PF_EXITING)))
+		return -EPERM;
+	if (unlikely(!nmi_uaccess_okay()))
+		return -EPERM;
+	if (unlikely(!current->mm))
+		return -EFAULT;
+	if (copy_to_user(unsafe_dst__ign, src__srcptr, src__sz))
+		return -EFAULT;
+
+	return 0;
+}
+
+/**
  * bpf_copy_from_user_mm_str() - Copy a string from an address space
  * @dst:             Destination address, in kernel space. This buffer must be
  *                   at least @dst__sz bytes long
@@ -5139,6 +5170,31 @@ static const struct btf_kfunc_id_set generic_kfunc_set = {
 	.set   = &generic_btf_ids,
 };
 
+BTF_KFUNCS_START(user_mem_btf_ids)
+BTF_ID_FLAGS(func, bpf_probe_write_user_faultable, KF_SLEEPABLE | KF_PERFMON)
+BTF_KFUNCS_END(user_mem_btf_ids)
+
+enum user_mem_kfunc_id {
+	KF_bpf_probe_write_user_faultable,
+};
+
+BTF_ID_LIST_SINGLE(bpf_probe_write_user_faultable_btf_id, func,
+		   bpf_probe_write_user_faultable)
+
+static int user_mem_kfunc_filter(const struct bpf_prog *prog, u32 kfunc_id)
+{
+	if (kfunc_id == bpf_probe_write_user_faultable_btf_id[0])
+		return security_locked_down(LOCKDOWN_BPF_WRITE_USER);
+
+	return 0;
+}
+
+static const struct btf_kfunc_id_set user_mem_kfunc_set = {
+	.owner = THIS_MODULE,
+	.set = &user_mem_btf_ids,
+	.filter = user_mem_kfunc_filter,
+};
+
 BTF_ID_LIST(generic_dtor_ids)
 BTF_ID(struct, task_struct)
 BTF_ID(func, bpf_task_release_dtor)
@@ -5266,6 +5322,7 @@ static int __init kfunc_init(void)
 	};
 
 	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_TRACING, &generic_kfunc_set);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_KPROBE, &user_mem_kfunc_set);
 	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_CLS, &generic_kfunc_set);
 	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_XDP, &generic_kfunc_set);
 	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS, &generic_kfunc_set);
