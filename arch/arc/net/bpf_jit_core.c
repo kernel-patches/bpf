@@ -734,6 +734,9 @@ static int handle_insn(struct jit_context *ctx, u32 idx)
 	u8  len = 0;
 	int ret = 0;
 
+	if (bpf_insn_is_hmul(insn))
+		return -EOPNOTSUPP;
+
 	switch (code) {
 	/* dst += src (32-bit) */
 	case BPF_ALU | BPF_ADD | BPF_X:
