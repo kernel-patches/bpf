@@ -1088,6 +1088,12 @@ static netdev_tx_t enetc_start_xmit(struct sk_buff *skb,
 		if (eth_skb_pad(skb))
 			return NETDEV_TX_OK;
 
+		if (unlikely(skb_headlen(skb) < ENETC_MIN_BUFF_SIZE &&
+			     !pskb_may_pull(skb, ENETC_MIN_BUFF_SIZE))) {
+			dev_kfree_skb_any(skb);
+			return NETDEV_TX_OK;
+		}
+
 		if (unlikely(skb_shinfo(skb)->nr_frags > priv->max_frags))
 			if (unlikely(skb_linearize(skb)))
 				goto drop_packet_err;
