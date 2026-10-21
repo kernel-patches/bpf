@@ -871,23 +871,18 @@ static void dcn401_add_step(struct block_sequence_state *sequence,
 				&p->clk_mgr_update_clocks_for_state_params);
 		break;
 	case HUBBUB_PROGRAM_WATERMARKS:
-		p->hubbub_program_watermarks_params.dc = dc;
-		p->hubbub_program_watermarks_params.hubbub =
-				dc->res_pool->hubbub;
-		p->hubbub_program_watermarks_params.watermarks =
-				&bw->watermarks;
-		p->hubbub_program_watermarks_params.refclk_mhz =
+		p->hubbub_program_watermarks_params =
+				hwss_prepare_hubbub_program_watermarks(dc,
+				dc->res_pool->hubbub, &bw->watermarks,
 				dc->res_pool->ref_clocks.dchub_ref_clock_inKhz /
-				1000;
-		p->hubbub_program_watermarks_params.safe_to_lower =
-				m->hubbub_program_watermarks.safe_to_lower;
+				1000,
+				m->hubbub_program_watermarks.safe_to_lower);
 		break;
 	case HUBBUB_PROGRAM_ARBITER:
-		p->hubbub_program_arbiter_params.dc = dc;
-		p->hubbub_program_arbiter_params.hubbub = dc->res_pool->hubbub;
-		p->hubbub_program_arbiter_params.arb_regs = &bw->arb_regs;
-		p->hubbub_program_arbiter_params.safe_to_lower =
-				m->hubbub_program_arbiter.safe_to_lower;
+		p->hubbub_program_arbiter_params =
+				hwss_prepare_hubbub_program_arbiter(
+				dc->res_pool->hubbub, &bw->arb_regs,
+				m->hubbub_program_arbiter.safe_to_lower);
 		break;
 	case HUBBUB_PROGRAM_COMPBUF_SEGMENTS:
 		p->hubbub_program_compbuf_segments_params.hubbub =

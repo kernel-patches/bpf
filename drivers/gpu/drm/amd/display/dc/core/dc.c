@@ -4412,7 +4412,7 @@ static void commit_planes_do_stream_update_sequence(struct dc *dc,
 					if (dpms_pipe_ctx->stream_res.audio && !dc->debug.az_endpoint_mute_only)
 						hwss_add_disable_audio_stream(&seq_state, dpms_pipe_ctx);
 
-					hwss_add_dc_set_optimized_required(&seq_state, dc, true);
+					hwss_add_dc_set_optimized_required(&seq_state, true);
 
 				} else {
 					if (get_seamless_boot_stream_count(context) == 0 && dc->hwss.prepare_bandwidth_sequence)

@@ -311,8 +311,7 @@ static noinline_for_stack bool dc2_bls_step_supported(const struct dc2 *dc2,
 	case HUBBUB_PROGRAM_ARBITER:
 		hubbub = step->params.hubbub_program_arbiter_params.hubbub;
 		return hubbub && hubbub->funcs &&
-				hubbub->funcs->program_arbiter &&
-				step->params.hubbub_program_arbiter_params.arb_regs;
+				hubbub->funcs->program_arbiter;
 	case HUBBUB_PROGRAM_COMPBUF_SEGMENTS:
 		hubbub = step->params.hubbub_program_compbuf_segments_params
 				.hubbub;
@@ -939,20 +938,22 @@ enum dc2_bls_exec_result dc2_bls_execute(
 					&entry->params.hubbub_program_watermarks_params;
 			bool changed = p->hubbub->funcs->program_watermarks(
 					p->hubbub, p->watermarks, p->refclk_mhz,
-					p->safe_to_lower);
+					p->policy, p->safe_to_lower);
 
-			if (p->dc && !p->safe_to_lower)
-				p->dc->optimized_required |= changed;
+			if (dc2 && !p->safe_to_lower)
+				dc2->dc.optimized_required |= changed;
 			break;
 		}
 		case HUBBUB_PROGRAM_ARBITER: {
 			const struct hubbub_program_arbiter_params *p =
 					&entry->params.hubbub_program_arbiter_params;
 			bool changed = p->hubbub->funcs->program_arbiter(p->hubbub,
-					p->arb_regs, p->safe_to_lower);
+					p->pstate_stall_threshold,
+					p->allow_sdpif_rate_limit_when_cstate_req,
+					p->safe_to_lower);
 
-			if (p->dc && !p->safe_to_lower)
-				p->dc->optimized_required |= changed;
+			if (dc2 && !p->safe_to_lower)
+				dc2->dc.optimized_required |= changed;
 			break;
 		}
 		case HUBBUB_PROGRAM_COMPBUF_SEGMENTS: {

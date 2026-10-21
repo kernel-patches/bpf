@@ -2438,6 +2438,7 @@ void dcn20_prepare_bandwidth(
 	struct hubbub *hubbub = dc->res_pool->hubbub;
 	unsigned int compbuf_size_kb = 0;
 	unsigned int cache_wm_a = context->bw_ctx.bw.dcn.watermarks.a.cstate_pstate.pstate_change_ns;
+	struct hubbub_program_watermarks_params wm;
 	unsigned int i;
 
 	dc->clk_mgr->funcs->update_clocks(
@@ -2459,10 +2460,13 @@ void dcn20_prepare_bandwidth(
 	 * For assigning optimized_required, use |= operator since we don't want
 	 * to clear the value if the optimize has not happened yet
 	 */
+	wm = hwss_prepare_hubbub_program_watermarks(dc, hubbub, &context->bw_ctx.bw.dcn.watermarks,
+			dc->res_pool->ref_clocks.dchub_ref_clock_inKhz / 1000, false);
+	/* Read after update_clocks(): P-state support is being lost, lower to dummy P-state now */
+	wm.policy.force_safe_to_lower = dc->clk_mgr->clks.prev_p_state_change_support &&
+			!dc->clk_mgr->clks.p_state_change_support;
 	dc->optimized_required |= hubbub->funcs->program_watermarks(hubbub,
-					&context->bw_ctx.bw.dcn.watermarks,
-					dc->res_pool->ref_clocks.dchub_ref_clock_inKhz / 1000,
-					false);
+			wm.watermarks, wm.refclk_mhz, wm.policy, wm.safe_to_lower);
 
 	// Restore the real watermark so we can commit the value to DMCUB
 	// DMCUB uses the "original" watermark value in SubVP MCLK switch
@@ -2487,6 +2491,7 @@ void dcn20_optimize_bandwidth(
 		struct dc_state *context)
 {
 	struct hubbub *hubbub = dc->res_pool->hubbub;
+	struct hubbub_program_watermarks_params wm;
 	unsigned int i;
 
 	for (i = 0; i < dc->res_pool->pipe_count; i++) {
@@ -2500,10 +2505,10 @@ void dcn20_optimize_bandwidth(
 	}
 
 	/* program dchubbub watermarks */
+	wm = hwss_prepare_hubbub_program_watermarks(dc, hubbub, &context->bw_ctx.bw.dcn.watermarks,
+			dc->res_pool->ref_clocks.dchub_ref_clock_inKhz / 1000, true);
 	hubbub->funcs->program_watermarks(hubbub,
-					&context->bw_ctx.bw.dcn.watermarks,
-					dc->res_pool->ref_clocks.dchub_ref_clock_inKhz / 1000,
-					true);
+			wm.watermarks, wm.refclk_mhz, wm.policy, wm.safe_to_lower);
 
 	if (dc->clk_mgr->dc_mode_softmax_enabled) {
 		int softmax_memclk_khz = dc->clk_mgr->bw_params->dc_mode_softmax_memclk * 1000;

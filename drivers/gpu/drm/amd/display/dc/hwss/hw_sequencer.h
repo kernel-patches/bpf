@@ -732,7 +732,6 @@ struct mpc_remove_mpcc_params {
 };
 
 struct dc_set_optimized_required_params {
-	struct dc *dc;
 	bool optimized_required;
 };
 
@@ -1264,17 +1263,21 @@ struct dccg_initialize_clocks_params {
 };
 
 struct hubbub_program_watermarks_params {
-	struct dc *dc;
 	struct hubbub *hubbub;
+	/* Workaround: watermarks by value would add ~160 B to every step (~158 KiB per dc_state).
+	 * TODO: pass by value once block_sequence storage moves from dc_state to dc-owned scratch.
+	 * The pointed-to watermarks must not change between build and execution.
+	 */
 	union dcn_watermark_set *watermarks;
 	unsigned int refclk_mhz;
+	struct hubbub_watermark_policy policy;
 	bool safe_to_lower;
 };
 
 struct hubbub_program_arbiter_params {
-	struct dc *dc;
 	struct hubbub *hubbub;
-	struct dml2_display_arb_regs *arb_regs;
+	uint32_t pstate_stall_threshold;
+	bool allow_sdpif_rate_limit_when_cstate_req;
 	bool safe_to_lower;
 };
 
@@ -2345,7 +2348,7 @@ void hwss_set_abm_immediate_disable(union block_sequence_params *params);
 
 void hwss_mpc_remove_mpcc(union block_sequence_params *params);
 
-void hwss_dc_set_optimized_required(union block_sequence_params *params);
+bool hwss_dc_set_optimized_required(union block_sequence_params *params);
 
 void hwss_hubp_disconnect(union block_sequence_params *params);
 
@@ -2664,7 +2667,7 @@ void hwss_add_dsc_disconnect(struct block_sequence_state *seq_state,
 		struct display_stream_compressor *dsc);
 
 void hwss_add_dc_set_optimized_required(struct block_sequence_state *seq_state,
-		struct dc *dc, bool optimized_required);
+		bool optimized_required);
 
 void hwss_add_abm_set_immediate_disable(struct block_sequence_state *seq_state,
 		struct dc *dc, struct pipe_ctx *pipe_ctx);
@@ -3139,9 +3142,9 @@ void hwss_add_link_set_dpms_on(struct block_sequence_state *seq_state,
 void hwss_clk_mgr_set_max_memclk(union block_sequence_params *params);
 void hwss_clk_mgr_update_clocks(union block_sequence_params *params);
 
-void hwss_hubbub_program_watermarks(union block_sequence_params *params);
+bool hwss_hubbub_program_watermarks(union block_sequence_params *params);
 
-void hwss_hubbub_program_arbiter(union block_sequence_params *params);
+bool hwss_hubbub_program_arbiter(union block_sequence_params *params);
 
 void hwss_hubbub_program_compbuf_segments(union block_sequence_params *params);
 
@@ -3153,17 +3156,28 @@ void hwss_add_clk_mgr_set_max_memclk(struct block_sequence_state *seq_state,
 void hwss_add_clk_mgr_update_clocks(struct block_sequence_state *seq_state,
 		struct clk_mgr *clk_mgr);
 
-void hwss_add_hubbub_program_watermarks(struct block_sequence_state *seq_state,
-		struct dc *dc,
+struct hubbub_program_watermarks_params hwss_prepare_hubbub_program_watermarks(
+		const struct dc *dc,
 		struct hubbub *hubbub,
 		union dcn_watermark_set *watermarks,
 		unsigned int refclk_mhz,
 		bool safe_to_lower);
 
-void hwss_add_hubbub_program_arbiter(struct block_sequence_state *seq_state,
-		struct dc *dc,
+void hwss_add_hubbub_program_watermarks(struct block_sequence_state *seq_state,
+		const struct dc *dc,
 		struct hubbub *hubbub,
-		struct dml2_display_arb_regs *arb_regs,
+		union dcn_watermark_set *watermarks,
+		unsigned int refclk_mhz,
+		bool safe_to_lower);
+
+struct hubbub_program_arbiter_params hwss_prepare_hubbub_program_arbiter(
+		struct hubbub *hubbub,
+		const struct dml2_display_arb_regs *arb_regs,
+		bool safe_to_lower);
+
+void hwss_add_hubbub_program_arbiter(struct block_sequence_state *seq_state,
+		struct hubbub *hubbub,
+		const struct dml2_display_arb_regs *arb_regs,
 		bool safe_to_lower);
 
 void hwss_add_hubbub_program_compbuf_segments(struct block_sequence_state *seq_state,

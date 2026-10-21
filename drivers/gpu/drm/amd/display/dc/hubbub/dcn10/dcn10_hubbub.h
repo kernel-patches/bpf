@@ -606,6 +606,7 @@ bool hubbub1_program_watermarks(
 		struct hubbub *hubbub,
 		union dcn_watermark_set *watermarks,
 		unsigned int refclk_mhz,
+		struct hubbub_watermark_policy policy,
 		bool safe_to_lower);
 
 void hubbub1_allow_self_refresh_control(struct hubbub *hubbub, bool allow);

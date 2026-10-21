@@ -3420,6 +3420,7 @@ void dcn10_prepare_bandwidth(
 {
 	struct dce_hwseq *hws = dc->hwseq;
 	struct hubbub *hubbub = dc->res_pool->hubbub;
+	struct hubbub_program_watermarks_params wm;
 	int min_fclk_khz, min_dcfclk_khz, socclk_khz;
 
 	if (dc->debug.sanity_checks)
@@ -3433,10 +3434,10 @@ void dcn10_prepare_bandwidth(
 			context,
 			false);
 
+	wm = hwss_prepare_hubbub_program_watermarks(dc, hubbub, &context->bw_ctx.bw.dcn.watermarks,
+			dc->res_pool->ref_clocks.dchub_ref_clock_inKhz / 1000, true);
 	dc->optimized_required = hubbub->funcs->program_watermarks(hubbub,
-			&context->bw_ctx.bw.dcn.watermarks,
-			dc->res_pool->ref_clocks.dchub_ref_clock_inKhz / 1000,
-			true);
+			wm.watermarks, wm.refclk_mhz, wm.policy, wm.safe_to_lower);
 	dcn10_stereo_hw_frame_pack_wa(dc, context);
 
 	if (dc->debug.pplib_wm_report_mode == WM_REPORT_OVERRIDE) {
@@ -3458,6 +3459,7 @@ void dcn10_optimize_bandwidth(
 {
 	struct dce_hwseq *hws = dc->hwseq;
 	struct hubbub *hubbub = dc->res_pool->hubbub;
+	struct hubbub_program_watermarks_params wm;
 	int min_fclk_khz, min_dcfclk_khz, socclk_khz;
 
 	if (dc->debug.sanity_checks)
@@ -3471,10 +3473,10 @@ void dcn10_optimize_bandwidth(
 			context,
 			true);
 
+	wm = hwss_prepare_hubbub_program_watermarks(dc, hubbub, &context->bw_ctx.bw.dcn.watermarks,
+			dc->res_pool->ref_clocks.dchub_ref_clock_inKhz / 1000, true);
 	hubbub->funcs->program_watermarks(hubbub,
-			&context->bw_ctx.bw.dcn.watermarks,
-			dc->res_pool->ref_clocks.dchub_ref_clock_inKhz / 1000,
-			true);
+			wm.watermarks, wm.refclk_mhz, wm.policy, wm.safe_to_lower);
 
 	dcn10_stereo_hw_frame_pack_wa(dc, context);
 

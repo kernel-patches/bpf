@@ -1421,6 +1421,8 @@ void dcn401_prepare_bandwidth(struct dc *dc,
 	struct hubbub *hubbub = dc->res_pool->hubbub;
 	bool p_state_change_support = context->bw_ctx.bw.dcn.clk.p_state_change_support;
 	unsigned int compbuf_size = 0;
+	struct hubbub_program_watermarks_params wm;
+	struct hubbub_program_arbiter_params arb;
 
 	/* Any transition into P-State support should disable MCLK switching first to avoid hangs */
 	if (p_state_change_support) {
@@ -1446,19 +1448,25 @@ void dcn401_prepare_bandwidth(struct dc *dc,
 	 * For assigning optimized_required, use |= operator since we don't want
 	 * to clear the value if the optimize has not happened yet
 	 */
+	wm = hwss_prepare_hubbub_program_watermarks(dc, hubbub,
+			&context->bw_ctx.bw.dcn.watermarks,
+			dc->res_pool->ref_clocks.dchub_ref_clock_inKhz / 1000, false);
 	dc->optimized_required |= hubbub->funcs->program_watermarks(hubbub,
-					&context->bw_ctx.bw.dcn.watermarks,
-					dc->res_pool->ref_clocks.dchub_ref_clock_inKhz / 1000,
-					false);
+			wm.watermarks, wm.refclk_mhz, wm.policy, wm.safe_to_lower);
 	/* update timeout thresholds */
 	if (hubbub->funcs->program_arbiter) {
-		dc->optimized_required |= hubbub->funcs->program_arbiter(hubbub, &context->bw_ctx.bw.dcn.arb_regs, false);
+		arb = hwss_prepare_hubbub_program_arbiter(hubbub,
+				&context->bw_ctx.bw.dcn.arb_regs, false);
+		dc->optimized_required |= hubbub->funcs->program_arbiter(hubbub,
+				arb.pstate_stall_threshold,
+				arb.allow_sdpif_rate_limit_when_cstate_req, arb.safe_to_lower);
 	}
 
 	/* decrease compbuf size */
 	if (hubbub->funcs->program_compbuf_segments) {
 		compbuf_size = context->bw_ctx.bw.dcn.arb_regs.compbuf_size;
-		dc->optimized_required |= (compbuf_size != dc->current_state->bw_ctx.bw.dcn.arb_regs.compbuf_size);
+		dc->optimized_required |= (compbuf_size !=
+				dc->current_state->bw_ctx.bw.dcn.arb_regs.compbuf_size);
 
 		hubbub->funcs->program_compbuf_segments(hubbub, compbuf_size, false);
 	}
@@ -1489,7 +1497,7 @@ void dcn401_prepare_bandwidth_sequence(struct dc *dc,
 
 	/* Any transition into P-State support should disable MCLK switching first to avoid hangs */
 	if (p_state_change_support) {
-		dc->optimized_required = true;
+		hwss_add_dc_set_optimized_required(seq_state, true);
 		context->bw_ctx.bw.dcn.clk.p_state_change_support = false;
 	}
 
@@ -1510,12 +1518,13 @@ void dcn401_prepare_bandwidth_sequence(struct dc *dc,
 					false);
 
 	if (hubbub->funcs->program_arbiter)
-		hwss_add_hubbub_program_arbiter(seq_state, dc, hubbub,
+		hwss_add_hubbub_program_arbiter(seq_state, hubbub,
 				&context->bw_ctx.bw.dcn.arb_regs, false);
 
 	if (hubbub->funcs->program_compbuf_segments) {
 		compbuf_size = context->bw_ctx.bw.dcn.arb_regs.compbuf_size;
-		dc->optimized_required |= (compbuf_size != dc->current_state->bw_ctx.bw.dcn.arb_regs.compbuf_size);
+		if (compbuf_size != dc->current_state->bw_ctx.bw.dcn.arb_regs.compbuf_size)
+			hwss_add_dc_set_optimized_required(seq_state, true);
 
 		hwss_add_hubbub_program_compbuf_segments(seq_state, hubbub, compbuf_size, false);
 	}
@@ -1536,6 +1545,8 @@ void dcn401_optimize_bandwidth(
 {
 	unsigned int i;
 	struct hubbub *hubbub = dc->res_pool->hubbub;
+	struct hubbub_program_watermarks_params wm;
+	struct hubbub_program_arbiter_params arb;
 
 	/* enable fams2 if needed */
 	if (dc->debug.fams2_config.bits.enable) {
@@ -1548,13 +1559,17 @@ void dcn401_optimize_bandwidth(
 	}
 
 	/* program dchubbub watermarks */
+	wm = hwss_prepare_hubbub_program_watermarks(dc, hubbub,
+			&context->bw_ctx.bw.dcn.watermarks,
+			dc->res_pool->ref_clocks.dchub_ref_clock_inKhz / 1000, true);
 	hubbub->funcs->program_watermarks(hubbub,
-					&context->bw_ctx.bw.dcn.watermarks,
-					dc->res_pool->ref_clocks.dchub_ref_clock_inKhz / 1000,
-					true);
+			wm.watermarks, wm.refclk_mhz, wm.policy, wm.safe_to_lower);
 	/* update timeout thresholds */
 	if (hubbub->funcs->program_arbiter) {
-		hubbub->funcs->program_arbiter(hubbub, &context->bw_ctx.bw.dcn.arb_regs, true);
+		arb = hwss_prepare_hubbub_program_arbiter(hubbub,
+				&context->bw_ctx.bw.dcn.arb_regs, true);
+		hubbub->funcs->program_arbiter(hubbub, arb.pstate_stall_threshold,
+				arb.allow_sdpif_rate_limit_when_cstate_req, arb.safe_to_lower);
 	}
 
 	if (dc->clk_mgr->dc_mode_softmax_enabled) {
@@ -1611,7 +1626,7 @@ void dcn401_optimize_bandwidth_sequence(struct dc *dc,
 					true);
 
 	if (hubbub->funcs->program_arbiter)
-		hwss_add_hubbub_program_arbiter(seq_state, dc, hubbub,
+		hwss_add_hubbub_program_arbiter(seq_state, hubbub,
 				&context->bw_ctx.bw.dcn.arb_regs, true);
 
 	if (dc->clk_mgr->dc_mode_softmax_enabled)
@@ -3300,7 +3315,7 @@ void dcn401_plane_atomic_disconnect_sequence(struct dc *dc,
 	}
 
 	/* Step 3: Set optimized required flag */
-	hwss_add_dc_set_optimized_required(seq_state, dc, true);
+	hwss_add_dc_set_optimized_required(seq_state, true);
 
 	/* Step 4: Disconnect HUBP if function exists */
 	if (hubp->funcs->hubp_disconnect)

@@ -1913,7 +1913,7 @@ void hwss_execute_sequence(struct dc *dc,
 			hwss_mpc_remove_mpcc(params);
 			break;
 		case DC_SET_OPTIMIZED_REQUIRED:
-			hwss_dc_set_optimized_required(params);
+			dc->optimized_required = hwss_dc_set_optimized_required(params);
 			break;
 		case HUBP_DISCONNECT:
 			hwss_hubp_disconnect(params);
@@ -2217,10 +2217,10 @@ void hwss_execute_sequence(struct dc *dc,
 			hwss_clk_mgr_update_clocks(params);
 			break;
 		case HUBBUB_PROGRAM_WATERMARKS:
-			hwss_hubbub_program_watermarks(params);
+			dc->optimized_required |= hwss_hubbub_program_watermarks(params);
 			break;
 		case HUBBUB_PROGRAM_ARBITER:
-			hwss_hubbub_program_arbiter(params);
+			dc->optimized_required |= hwss_hubbub_program_arbiter(params);
 			break;
 		case HUBBUB_PROGRAM_COMPBUF_SEGMENTS:
 			hwss_hubbub_program_compbuf_segments(params);
@@ -3593,12 +3593,12 @@ void hwss_mpc_remove_mpcc(union block_sequence_params *params)
 	mpc->funcs->remove_mpcc(mpc, mpc_tree_params, mpcc_to_remove);
 }
 
-void hwss_dc_set_optimized_required(union block_sequence_params *params)
+bool hwss_dc_set_optimized_required(union block_sequence_params *params)
 {
-	struct dc *dc = params->dc_set_optimized_required_params.dc;
-	bool optimized_required = params->dc_set_optimized_required_params.optimized_required;
+	if (!params)
+		return false;
 
-	dc->optimized_required = optimized_required;
+	return params->dc_set_optimized_required_params.optimized_required;
 }
 
 void hwss_hubp_disconnect(union block_sequence_params *params)
@@ -4655,35 +4655,41 @@ void hwss_clk_mgr_update_clocks(union block_sequence_params *params)
 /*
  * Hubbub executor functions
  */
-void hwss_hubbub_program_watermarks(union block_sequence_params *params)
+bool hwss_hubbub_program_watermarks(union block_sequence_params *params)
 {
-	struct dc *dc = params->hubbub_program_watermarks_params.dc;
-	struct hubbub *hubbub = params->hubbub_program_watermarks_params.hubbub;
-	union dcn_watermark_set *watermarks = params->hubbub_program_watermarks_params.watermarks;
-	unsigned int refclk_mhz = params->hubbub_program_watermarks_params.refclk_mhz;
-	bool safe_to_lower = params->hubbub_program_watermarks_params.safe_to_lower;
+	struct hubbub_program_watermarks_params *wm;
+	bool pending;
 
-	if (hubbub && hubbub->funcs && hubbub->funcs->program_watermarks) {
-		bool wm_changed = hubbub->funcs->program_watermarks(hubbub, watermarks, refclk_mhz, safe_to_lower);
+	if (!params)
+		return false;
 
-		if (dc && !safe_to_lower)
-			dc->optimized_required |= wm_changed;
-	}
+	wm = &params->hubbub_program_watermarks_params;
+	if (!wm->hubbub || !wm->hubbub->funcs || !wm->hubbub->funcs->program_watermarks ||
+			!wm->watermarks)
+		return false;
+
+	pending = wm->hubbub->funcs->program_watermarks(wm->hubbub, wm->watermarks,
+		wm->refclk_mhz, wm->policy, wm->safe_to_lower);
+
+	return !wm->safe_to_lower && pending;
 }
 
-void hwss_hubbub_program_arbiter(union block_sequence_params *params)
+bool hwss_hubbub_program_arbiter(union block_sequence_params *params)
 {
-	struct dc *dc = params->hubbub_program_arbiter_params.dc;
-	struct hubbub *hubbub = params->hubbub_program_arbiter_params.hubbub;
-	struct dml2_display_arb_regs *arb_regs = params->hubbub_program_arbiter_params.arb_regs;
-	bool safe_to_lower = params->hubbub_program_arbiter_params.safe_to_lower;
+	struct hubbub_program_arbiter_params *arb;
+	bool pending;
 
-	if (hubbub && hubbub->funcs && hubbub->funcs->program_arbiter) {
-		bool arb_changed = hubbub->funcs->program_arbiter(hubbub, arb_regs, safe_to_lower);
+	if (!params)
+		return false;
 
-		if (dc && !safe_to_lower)
-			dc->optimized_required |= arb_changed;
-	}
+	arb = &params->hubbub_program_arbiter_params;
+	if (!arb->hubbub || !arb->hubbub->funcs || !arb->hubbub->funcs->program_arbiter)
+		return false;
+
+	pending = arb->hubbub->funcs->program_arbiter(arb->hubbub, arb->pstate_stall_threshold,
+		arb->allow_sdpif_rate_limit_when_cstate_req, arb->safe_to_lower);
+
+	return !arb->safe_to_lower && pending;
 }
 
 void hwss_hubbub_program_compbuf_segments(union block_sequence_params *params)
@@ -4837,11 +4843,15 @@ void hwss_add_dsc_disconnect(struct block_sequence_state *seq_state,
 }
 
 void hwss_add_dc_set_optimized_required(struct block_sequence_state *seq_state,
-		struct dc *dc, bool optimized_required)
+		bool optimized_required)
 {
+	if (!seq_state || !seq_state->steps || !seq_state->num_steps) {
+		ASSERT(false);
+		return;
+	}
+
 	if (*seq_state->num_steps < MAX_HWSS_BLOCK_SEQUENCE_SIZE) {
 		seq_state->steps[*seq_state->num_steps].func = DC_SET_OPTIMIZED_REQUIRED;
-		seq_state->steps[*seq_state->num_steps].params.dc_set_optimized_required_params.dc = dc;
 		seq_state->steps[*seq_state->num_steps].params.dc_set_optimized_required_params.optimized_required = optimized_required;
 		(*seq_state->num_steps)++;
 	}
@@ -6421,20 +6431,45 @@ void hwss_add_setup_periodic_interrupt(struct block_sequence_state *seq_state,
 /*
  * Hubbub helper functions
  */
-void hwss_add_hubbub_program_watermarks(struct block_sequence_state *seq_state,
-		struct dc *dc,
+struct hubbub_program_watermarks_params hwss_prepare_hubbub_program_watermarks(
+		const struct dc *dc,
 		struct hubbub *hubbub,
 		union dcn_watermark_set *watermarks,
 		unsigned int refclk_mhz,
 		bool safe_to_lower)
 {
+	struct hubbub_program_watermarks_params prepared = {};
+
+	prepared.hubbub = hubbub;
+	prepared.watermarks = watermarks;
+	prepared.refclk_mhz = refclk_mhz;
+	prepared.policy.urgent_watermark_override = dc->debug.urgent_watermark_override;
+	prepared.policy.disable_stutter = dc->debug.disable_stutter;
+	prepared.policy.disable_stutter_for_program = dc->debug.disable_stutter_for_wm_program;
+	prepared.policy.force_usr_allow = dc->debug.force_usr_allow;
+	prepared.safe_to_lower = safe_to_lower;
+
+	return prepared;
+}
+
+void hwss_add_hubbub_program_watermarks(struct block_sequence_state *seq_state,
+		const struct dc *dc,
+		struct hubbub *hubbub,
+		union dcn_watermark_set *watermarks,
+		unsigned int refclk_mhz,
+		bool safe_to_lower)
+{
+	if (!seq_state || !seq_state->steps || !seq_state->num_steps || !dc || !watermarks ||
+			!hubbub || !hubbub->funcs || !hubbub->funcs->program_watermarks) {
+		ASSERT(false);
+		return;
+	}
+
 	if (*seq_state->num_steps < MAX_HWSS_BLOCK_SEQUENCE_SIZE) {
 		seq_state->steps[*seq_state->num_steps].func = HUBBUB_PROGRAM_WATERMARKS;
-		seq_state->steps[*seq_state->num_steps].params.hubbub_program_watermarks_params.dc = dc;
-		seq_state->steps[*seq_state->num_steps].params.hubbub_program_watermarks_params.hubbub = hubbub;
-		seq_state->steps[*seq_state->num_steps].params.hubbub_program_watermarks_params.watermarks = watermarks;
-		seq_state->steps[*seq_state->num_steps].params.hubbub_program_watermarks_params.refclk_mhz = refclk_mhz;
-		seq_state->steps[*seq_state->num_steps].params.hubbub_program_watermarks_params.safe_to_lower = safe_to_lower;
+		seq_state->steps[*seq_state->num_steps].params.hubbub_program_watermarks_params =
+			hwss_prepare_hubbub_program_watermarks(dc, hubbub, watermarks,
+					refclk_mhz, safe_to_lower);
 		(*seq_state->num_steps)++;
 	}
 }
@@ -6451,18 +6486,37 @@ void hwss_add_dp_trace_source_sequence(struct block_sequence_state *seq_state,
 	}
 }
 
-void hwss_add_hubbub_program_arbiter(struct block_sequence_state *seq_state,
-		struct dc *dc,
+struct hubbub_program_arbiter_params hwss_prepare_hubbub_program_arbiter(
 		struct hubbub *hubbub,
-		struct dml2_display_arb_regs *arb_regs,
+		const struct dml2_display_arb_regs *arb_regs,
 		bool safe_to_lower)
 {
+	struct hubbub_program_arbiter_params prepared = {};
+
+	prepared.hubbub = hubbub;
+	prepared.pstate_stall_threshold = arb_regs->pstate_stall_threshold;
+	prepared.allow_sdpif_rate_limit_when_cstate_req =
+			arb_regs->allow_sdpif_rate_limit_when_cstate_req != 0;
+	prepared.safe_to_lower = safe_to_lower;
+
+	return prepared;
+}
+
+void hwss_add_hubbub_program_arbiter(struct block_sequence_state *seq_state,
+		struct hubbub *hubbub,
+		const struct dml2_display_arb_regs *arb_regs,
+		bool safe_to_lower)
+{
+	if (!seq_state || !seq_state->steps || !seq_state->num_steps || !arb_regs ||
+			!hubbub || !hubbub->funcs || !hubbub->funcs->program_arbiter) {
+		ASSERT(false);
+		return;
+	}
+
 	if (*seq_state->num_steps < MAX_HWSS_BLOCK_SEQUENCE_SIZE) {
 		seq_state->steps[*seq_state->num_steps].func = HUBBUB_PROGRAM_ARBITER;
-		seq_state->steps[*seq_state->num_steps].params.hubbub_program_arbiter_params.dc = dc;
-		seq_state->steps[*seq_state->num_steps].params.hubbub_program_arbiter_params.hubbub = hubbub;
-		seq_state->steps[*seq_state->num_steps].params.hubbub_program_arbiter_params.arb_regs = arb_regs;
-		seq_state->steps[*seq_state->num_steps].params.hubbub_program_arbiter_params.safe_to_lower = safe_to_lower;
+		seq_state->steps[*seq_state->num_steps].params.hubbub_program_arbiter_params =
+			hwss_prepare_hubbub_program_arbiter(hubbub, arb_regs, safe_to_lower);
 		(*seq_state->num_steps)++;
 	}
 }
