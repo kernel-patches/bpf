@@ -1144,14 +1144,14 @@ ice_link_event(struct ice_pf *pf, struct ice_port_info *pi, bool link_up,
 		ice_set_link(vsi, false);
 	}
 
+	ice_ptp_link_change(pf, link_up);
+
 	/* if the old link up/down and speed is the same as the new */
 	if (link_up == old_link && link_speed == old_link_speed)
 		return 0;
 
 	if (!link_up && old_link)
 		pf->link_down_events++;
-
-	ice_ptp_link_change(pf, link_up);
 
 	if (ice_is_dcb_active(pf)) {
 		if (test_bit(ICE_FLAG_DCB_ENA, pf->flags))
@@ -4819,6 +4819,14 @@ static void ice_init_link(struct ice_pf *pf)
 
 	ice_init_link_dflt_override(pf->hw.port_info);
 
+	/* Seed PTP link status from current PHY status, since link may
+	 * already be up (e.g. after PXE boot) without a link-change edge to
+	 * catch it later.
+	 */
+	WRITE_ONCE(pf->ptp.port.link_up,
+		   !!(pf->hw.port_info->phy.link_info.link_info &
+		      ICE_AQ_LINK_UP));
+
 	ice_check_link_cfg_err(pf,
 			       pf->hw.port_info->phy.link_info.link_cfg_err);
 
@@ -6754,7 +6762,6 @@ static int ice_up_complete(struct ice_vsi *vsi)
 		ice_print_link_msg(vsi, true);
 		netif_tx_start_all_queues(vsi->netdev);
 		netif_carrier_on(vsi->netdev);
-		ice_ptp_link_change(pf, true);
 	}
 
 	/* Perform an initial read of the statistics registers now to
@@ -7282,7 +7289,6 @@ int ice_down(struct ice_vsi *vsi)
 
 	if (vsi->netdev) {
 		vlan_err = ice_vsi_del_vlan_zero(vsi);
-		ice_ptp_link_change(vsi->back, false);
 		netif_carrier_off(vsi->netdev);
 		netif_tx_disable(vsi->netdev);
 	}
@@ -7632,13 +7638,15 @@ static void ice_update_pf_netdev_link(struct ice_pf *pf)
 		if (!vsi || vsi->type != ICE_VSI_PF)
 			return;
 
-		ice_get_link_status(pf->vsi[i]->port_info, &link_up);
+		/* Make sure to get current link info */
+		vsi->port_info->phy.get_link_info = true;
+		ice_get_link_status(vsi->port_info, &link_up);
 		if (link_up) {
-			netif_carrier_on(pf->vsi[i]->netdev);
-			netif_tx_wake_all_queues(pf->vsi[i]->netdev);
+			netif_carrier_on(vsi->netdev);
+			netif_tx_wake_all_queues(vsi->netdev);
 		} else {
-			netif_carrier_off(pf->vsi[i]->netdev);
-			netif_tx_stop_all_queues(pf->vsi[i]->netdev);
+			netif_carrier_off(vsi->netdev);
+			netif_tx_stop_all_queues(vsi->netdev);
 		}
 	}
 }
@@ -7754,10 +7762,6 @@ static void ice_rebuild(struct ice_pf *pf, enum ice_reset_req reset_type)
 	if (test_bit(ICE_FLAG_DCB_ENA, pf->flags))
 		ice_dcb_rebuild(pf);
 
-	/* If the PF previously had enabled PTP, PTP init needs to happen before
-	 * the VSI rebuild. If not, this causes the PTP link status events to
-	 * fail.
-	 */
 	if (test_bit(ICE_FLAG_PTP_SUPPORTED, pf->flags))
 		ice_ptp_rebuild(pf, reset_type);
 
@@ -7802,6 +7806,14 @@ static void ice_rebuild(struct ice_pf *pf, enum ice_reset_req reset_type)
 		netif_device_attach(vsi->netdev);
 
 	ice_update_pf_netdev_link(pf);
+
+	if (test_bit(ICE_FLAG_PTP_SUPPORTED, pf->flags) && pf->hw.port_info) {
+		bool link_up;
+
+		link_up = !!(pf->hw.port_info->phy.link_info.link_info &
+			     ICE_AQ_LINK_UP);
+		ice_ptp_link_change(pf, link_up);
+	}
 
 	/* tell the firmware we are up */
 	err = ice_send_version(pf);

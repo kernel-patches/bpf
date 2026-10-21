@@ -1322,6 +1322,9 @@ void ice_ptp_link_change(struct ice_pf *pf, bool linkup)
 
 	mutex_lock(&pf->adapter->ps_lock);
 
+	if (READ_ONCE(ptp_port->link_up) == linkup)
+		goto out_unlock;
+
 	WRITE_ONCE(ptp_port->link_up, linkup);
 
 	if (pf->ptp.state != ICE_PTP_READY || pf->hw.reset_ongoing)
@@ -1370,11 +1373,8 @@ void ice_ptp_link_change(struct ice_pf *pf, bool linkup)
 		/* Do not reconfigure E810 or E830 PHY */
 		break;
 	case ICE_MAC_GENERIC:
-		ice_ptp_port_phy_restart(ptp_port);
-		break;
 	case ICE_MAC_GENERIC_3K_E825:
-		if (linkup)
-			ice_ptp_port_phy_restart(ptp_port);
+		ice_ptp_port_phy_restart(ptp_port);
 		break;
 	default:
 		dev_warn(ice_pf_to_dev(pf), "%s: Unknown PHY type\n", __func__);
