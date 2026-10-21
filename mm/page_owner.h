@@ -6,6 +6,7 @@
 #ifndef __MM_PAGE_OWNER_H
 #define __MM_PAGE_OWNER_H
 
+#include <linux/jump_label.h>
 #include <linux/page_ext.h>
 #include <linux/sched.h>
 #include <linux/stackdepot.h>
@@ -13,6 +14,8 @@
 /*
  * mm/page_owner.c
  */
+DECLARE_STATIC_KEY_FALSE(page_owner_inited);
+
 struct page_owner {
 	unsigned short order;
 	short last_migrate_reason;
