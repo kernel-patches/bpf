@@ -66,6 +66,12 @@ struct prog_test_pair_arg {	/* 16 bytes: two argument registers */
 	__u64 hi;
 };
 
+#ifdef __SIZEOF_INT128__
+struct prog_test_i128_arg {	/* 16 bytes, aligned to 16 like its member */
+	__int128 v;
+};
+#endif
+
 struct prog_test_ptr_arg {	/* 16 bytes, but holds a pointer */
 	void *p;
 	__u64 x;
@@ -218,6 +224,8 @@ int bpf_testmod_ops3_call_test_arena(__u64 *ptr__arena) __ksym;
 int bpf_testmod_ops3_call_test_arena_nullable(__u64 *ptr__arena__nullable) __ksym;
 int bpf_testmod_ops3_call_test_arena_stack(__u64 *ptr__arena) __ksym;
 int bpf_testmod_ops3_call_test_arena_multislot(__u64 *ptr__arena) __ksym;
+int bpf_testmod_ops3_call_test_arena_member(__u64 *ptr__arena) __ksym;
+int bpf_testmod_ops3_call_test_nullable(void) __ksym;
 
 __u64 bpf_kfunc_call_test1(struct sock *sk, __u32 a, __u64 b,
 				__u32 c, __u64 d) __ksym;
@@ -234,6 +242,13 @@ struct prog_test_ret_ii bpf_kfunc_call_test_ret_ii(int a, int b) __ksym;
 __u64 bpf_kfunc_call_test_pair_arg(__u64 a, struct prog_test_pair_arg s, __u64 b) __ksym;
 #ifdef __SIZEOF_INT128__
 __u64 bpf_kfunc_call_test_i128_arg(__u64 a, __u64 b, __int128 v) __ksym;
+__u64 bpf_kfunc_call_test_i128_arg_odd(__u64 a, __int128 v, __u64 b) __ksym;
+__u64 bpf_kfunc_call_test_i128_arg_odd_many(__u64 a, __int128 v, __u64 b, __u64 c,
+					    __u64 d, __u64 e, __u64 f, __int128 w) __ksym;
+__u64 bpf_kfunc_call_test_i128_arg_stack_hole(__u64 a, __u64 b, __u64 c, __u64 d,
+					      __u64 e, struct prog_test_pair_arg s,
+					      __u64 f, __u64 g,
+					      struct prog_test_i128_arg w) __ksym;
 __u64 bpf_kfunc_call_test_i128_arg_pad(__u64 a, __u64 b, __u64 c, __u64 d, __u64 e,
 				       __u64 f, __u64 g, __int128 v) __ksym;
 #endif
@@ -340,6 +355,8 @@ int bpf_kfunc_st_ops_inc10(struct st_ops_args *args) __ksym;
 
 void bpf_kfunc_trusted_vma_test(struct vm_area_struct *ptr) __ksym;
 void bpf_kfunc_trusted_task_test(struct task_struct *ptr) __ksym;
+struct task_struct *bpf_kfunc_trusted_null_test(void) __ksym;
+void bpf_kfunc_trusted_nullable_test(struct task_struct *ptr__nullable) __ksym;
 void bpf_kfunc_trusted_num_test(int *ptr) __ksym;
 void bpf_kfunc_rcu_task_test(struct task_struct *ptr) __ksym;
 struct task_struct *bpf_kfunc_ret_rcu_test(void) __ksym;

@@ -477,11 +477,7 @@ static int adjust_subprog_starts_after_remove(struct bpf_verifier_env *env,
 
 	if (j > i) {
 		struct bpf_prog_aux *aux = env->prog->aux;
-		int move, k;
-
-		/* The removed subprogs own their jump tables. */
-		for (k = i; k < j; k++)
-			kvfree(env->subprog_info[k].jt);
+		int move;
 
 		/* move fake 'exit' subprog as well */
 		move = env->subprog_cnt + 1 - j;
@@ -489,9 +485,6 @@ static int adjust_subprog_starts_after_remove(struct bpf_verifier_env *env,
 		memmove(env->subprog_info + i,
 			env->subprog_info + j,
 			sizeof(*env->subprog_info) * move);
-		/* The vacated tail still holds copies of the moved entries. */
-		memset(env->subprog_info + i + move, 0,
-		       sizeof(*env->subprog_info) * (j - i));
 		env->subprog_cnt -= j - i;
 
 		/* remove func_info and its aux */
@@ -665,6 +658,7 @@ void bpf_opt_hard_wire_dead_code_branches(struct bpf_verifier_env *env)
 {
 	struct bpf_insn_aux_data *aux_data = env->insn_aux_data;
 	struct bpf_insn ja = BPF_JMP_IMM(BPF_JA, 0, 0, 0);
+	struct bpf_insn trap = BPF_JMP_IMM(BPF_JA, 0, 0, -1);
 	struct bpf_insn *insn = env->prog->insnsi;
 	const int insn_cnt = env->prog->len;
 	int i;
@@ -672,6 +666,20 @@ void bpf_opt_hard_wire_dead_code_branches(struct bpf_verifier_env *env)
 	for (i = 0; i < insn_cnt; i++, insn++) {
 		if (!bpf_insn_is_cond_jump(insn->code))
 			continue;
+
+		if (bpf_is_unwind_goto(insn) && aux_data[i + 1 + insn->off].seen) {
+			/*
+			 * The callee never exits. Its unwind_exit needs
+			 * unwind_goto all the same, and the cpu predicts that it
+			 * returns to what follows. Don't let the removal of dead
+			 * code put something else there.
+			 */
+			if (!aux_data[i + 1].seen) {
+				memcpy(insn + 1, &trap, sizeof(trap));
+				aux_data[i + 1].seen = env->pass_cnt;
+			}
+			continue;
+		}
 
 		if (!aux_data[i + 1].seen)
 			ja.off = insn->off;
@@ -865,11 +873,61 @@ apply_patch_buffer:
 	return 0;
 }
 
+/*
+ * The prologue takes the context from R1, and it can clobber R2-R5. An
+ * extension gets the arguments of the function that it replaces.
+ */
+static bool ext_prog_takes_prologue(const struct bpf_verifier_env *env)
+{
+	const struct bpf_subprog_info *sub = &env->subprog_info[0];
+	int i, cnt = min_t(int, sub->arg_slot_cnt, MAX_BPF_FUNC_REG_ARGS);
+
+	if (!cnt || sub->args[0].arg_type != ARG_PTR_TO_CTX)
+		return false;
+
+	for (i = 1; i < cnt; i++)
+		if (sub->args[i].arg_type != ARG_SCALAR)
+			return false;
+
+	return true;
+}
+
 /* convert load instructions that access fields of a context type into a
  * sequence of instructions that access fields of the underlying structure:
  *     struct __sk_buff    -> struct sk_buff
  *     struct bpf_sock_ops -> struct sock
  */
+/*
+ * A load through an __arena pointer member of a kernel struct reads the kernel
+ * address of arena memory. Append the conversion to the arena pointer form,
+ * (u32)(kaddr - kern_vm_start), that the struct_ops trampoline applies to
+ * __arena arguments. A __nullable member keeps NULL as NULL, tested on the
+ * full kernel address, and so does a probed load, which reads as 0 when it
+ * faults. Returns the number of insns in @buf, 0 when the insn loads no such
+ * member, or an error when it does so on some paths only.
+ */
+static int arena_member_fixup(struct bpf_verifier_env *env, int idx, struct bpf_insn *insn,
+			      struct bpf_insn *buf)
+{
+	struct bpf_insn_aux_data *aux = &env->insn_aux_data[idx];
+	int cnt = 0;
+	u32 base;
+
+	if (!aux->arena_member)
+		return 0;
+	if (aux->non_arena_load) {
+		verbose(env, "an insn loads an arena pointer member on one path and something else on another\n");
+		return -EINVAL;
+	}
+
+	base = bpf_arena_get_kern_vm_start(env->prog->aux->arena);
+	buf[cnt++] = *insn;
+	if (aux->arena_member_nullable || BPF_MODE(insn->code) == BPF_PROBE_MEM)
+		buf[cnt++] = BPF_JMP_IMM(BPF_JEQ, insn->dst_reg, 0, 1);
+	buf[cnt++] = BPF_ALU32_IMM(BPF_SUB, insn->dst_reg, (s32)base);
+	return cnt;
+}
+
 int bpf_convert_ctx_accesses(struct bpf_verifier_env *env)
 {
 	struct bpf_subprog_info *subprogs = env->subprog_info;
@@ -922,6 +980,18 @@ int bpf_convert_ctx_accesses(struct bpf_verifier_env *env)
 			verifier_bug(env, "prologue is too long");
 			return -EFAULT;
 		} else if (cnt) {
+			if (env->prog->type == BPF_PROG_TYPE_EXT &&
+			    !ext_prog_takes_prologue(env)) {
+				verbose(env,
+					"Extension writing packet data must take ctx and scalars only\n");
+				return -EINVAL;
+			}
+			if (env->prog->type == BPF_PROG_TYPE_EXT &&
+			    bpf_check_ext_prologue(&env->log,
+						   env->prog->aux->dst_prog,
+						   env->prog->aux->attach_btf_id))
+				return -EINVAL;
+			env->prog->aux->has_prologue = true;
 			new_prog = __bpf_patch_insn_data(env, 0, insn_buf, cnt,
 							 BPF_PATCH_MOVE_TARGET);
 			if (!new_prog)
@@ -1001,6 +1071,21 @@ int bpf_convert_ctx_accesses(struct bpf_verifier_env *env)
 			   env->insn_aux_data[i + delta].ptr_type == PTR_TO_ARENA) {
 			insn->code = BPF_STX | BPF_PROBE_ATOMIC | BPF_SIZE(insn->code);
 			env->prog->aux->num_exentries++;
+			continue;
+		} else if (insn->code == (BPF_STX | BPF_ATOMIC | BPF_DW) &&
+			   insn->imm == BPF_LOAD_ACQ &&
+			   env->insn_aux_data[i + delta].arena_member) {
+			/* an acquire load of an __arena member is rewritten like a plain load */
+			cnt = arena_member_fixup(env, i + delta, insn, insn_buf);
+			if (cnt < 0)
+				return cnt;
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			if (!new_prog)
+				return -ENOMEM;
+
+			delta    += cnt - 1;
+			env->prog = new_prog;
+			insn      = new_prog->insnsi + i + delta;
 			continue;
 		} else if (insn->code == (BPF_JMP | BPF_EXIT) &&
 			   epilogue_cnt &&
@@ -1093,11 +1178,23 @@ int bpf_convert_ctx_accesses(struct bpf_verifier_env *env)
 					insn->code = BPF_LDX | BPF_PROBE_MEMSX |
 						     BPF_SIZE(insn->code);
 				env->prog->aux->num_exentries++;
-				continue;
-			}
-			if (verifier_bug_if(bpf_may_fault_on_deref(ptr_type), env,
-					    "access to a fault prone pointer is not rewritten as a probed one"))
+			} else if (verifier_bug_if(bpf_may_fault_on_deref(ptr_type), env,
+						   "access to a fault prone pointer is not rewritten as a probed one")) {
 				return -EFAULT;
+			}
+
+			cnt = arena_member_fixup(env, i + delta, insn, insn_buf);
+			if (cnt < 0)
+				return cnt;
+			if (!cnt)
+				continue;
+			new_prog = bpf_patch_insn_data(env, i + delta, insn_buf, cnt);
+			if (!new_prog)
+				return -ENOMEM;
+
+			delta    += cnt - 1;
+			env->prog = new_prog;
+			insn      = new_prog->insnsi + i + delta;
 			continue;
 		}
 
@@ -1366,6 +1463,7 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 		func[i]->aux->jited_linfo = prog->aux->jited_linfo;
 		func[i]->aux->linfo_idx = env->subprog_info[i].linfo_idx;
 		func[i]->aux->arena = prog->aux->arena;
+		func[i]->aux->uses_arena_insns = bpf_prog_has_arena_insns(func[i]);
 		func[i]->aux->used_maps = env->used_maps;
 		func[i]->aux->used_map_cnt = env->used_map_cnt;
 		num_exentries = 0;
@@ -1384,12 +1482,15 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 			if (BPF_CLASS(insn->code) == BPF_STX &&
 			     BPF_MODE(insn->code) == BPF_PROBE_ATOMIC)
 				num_exentries++;
+			if (bpf_is_unwind_goto(insn))
+				num_exentries++;
 		}
 		func[i]->aux->num_exentries = num_exentries;
 		func[i]->aux->tail_call_reachable = env->subprog_info[i].tail_call_reachable;
 		func[i]->aux->exception_cb = env->subprog_info[i].is_exception_cb;
 		func[i]->aux->changes_pkt_data = env->subprog_info[i].changes_pkt_data;
 		func[i]->aux->might_sleep = env->subprog_info[i].might_sleep;
+		func[i]->aux->can_unwind = env->subprog_info[i].can_unwind;
 		func[i]->aux->token = prog->aux->token;
 		if (!i)
 			func[i]->aux->exception_boundary = env->seen_exception;
@@ -2158,6 +2259,10 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 			if (!bpf_allow_tail_call_in_subprogs(env))
 				prog->aux->stack_depth = MAX_BPF_STACK;
 			prog->aux->max_pkt_offset = MAX_PACKET_OFF;
+			prog->aux->max_rdonly_access = U32_MAX;
+			prog->aux->max_rdwr_access = U32_MAX;
+			if (prog->type == BPF_PROG_TYPE_RAW_TRACEPOINT_WRITABLE)
+				prog->aux->max_tp_access = U32_MAX;
 
 			/* mark bpf_tail_call as different opcode to avoid
 			 * conditional branch in the interpreter for every normal
@@ -2467,7 +2572,7 @@ patch_map_ops_generic:
 				cnt = 2;
 			}
 			insn_buf[cnt++] = BPF_JMP32_REG(BPF_JGE, BPF_REG_2, BPF_REG_0, 6);
-			insn_buf[cnt++] = BPF_ALU64_IMM(BPF_LSH, BPF_REG_2, 3);
+			insn_buf[cnt++] = BPF_ALU32_IMM(BPF_LSH, BPF_REG_2, 3);
 			insn_buf[cnt++] = BPF_ALU64_REG(BPF_ADD, BPF_REG_2, BPF_REG_1);
 			insn_buf[cnt++] = BPF_LDX_MEM(BPF_DW, BPF_REG_0, BPF_REG_2, 0);
 			insn_buf[cnt++] = BPF_STX_MEM(BPF_DW, BPF_REG_3, BPF_REG_0, 0);

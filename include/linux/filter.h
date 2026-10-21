@@ -254,6 +254,29 @@ static inline bool insn_is_mov_percpu_addr(const struct bpf_insn *insn)
 		.off   = 0,					\
 		.imm   = 1 })
 
+static inline bool bpf_is_unwind_goto(const struct bpf_insn *insn)
+{
+	return insn->code == (BPF_JMP | BPF_JCOND) && insn->src_reg == BPF_UNWIND_GOTO;
+}
+
+static inline bool bpf_is_unwind_exit(const struct bpf_insn *insn)
+{
+	return insn->code == (BPF_JMP | BPF_EXIT) && insn->src_reg == BPF_UNWIND_EXIT;
+}
+
+/*
+ * The caller of the main prog doesn't tell unwind_exit from exit. An extension
+ * is different: its caller is the caller of the subprog that it replaced.
+ * An exception callback returns from the frame of the main prog. After freplace
+ * or a tail call it returns to a prog that wasn't verified with the callback.
+ */
+static inline bool bpf_prog_can_unwind(const struct bpf_prog *prog)
+{
+	if (prog->aux->exception_cb)
+		return false;
+	return bpf_is_subprog(prog) || prog->type == BPF_PROG_TYPE_EXT;
+}
+
 static inline bool insn_is_zext(const struct bpf_insn *insn)
 {
 	return insn->code == (BPF_ALU | BPF_MOV | BPF_X) && insn->imm == 1;
@@ -1110,6 +1133,19 @@ static inline unsigned int bpf_prog_size(unsigned int proglen)
 		   offsetof(struct bpf_prog, insns[proglen]));
 }
 
+bool bpf_prog_has_arena_insns(const struct bpf_prog *prog);
+
+/*
+ * Whether a JIT has to set up the arena base for @prog. A program bound to
+ * an arena need not touch it, libbpf binds the arena of an object to every
+ * program in it. The flag caches bpf_prog_has_arena_insns() for the function
+ * about to be JITed, see bpf_prog_jit_compile() and jit_subprogs().
+ */
+static inline bool bpf_prog_uses_arena_insns(const struct bpf_prog *prog)
+{
+	return prog->aux->uses_arena_insns;
+}
+
 static inline bool bpf_prog_was_classic(const struct bpf_prog *prog)
 {
 	/* When classic BPF programs have been loaded and the arch
@@ -1244,6 +1280,7 @@ bool bpf_jit_supports_percpu_insn(void);
 bool bpf_jit_supports_kfunc_call(void);
 bool bpf_jit_supports_callx(void);
 bool bpf_jit_supports_kfunc_ret_reg_pair(void);
+bool bpf_jit_supports_unwind(void);
 bool bpf_jit_supports_stack_args(void);
 bool bpf_jit_supports_arena_args(void);
 bool bpf_jit_supports_far_kfunc_call(void);
