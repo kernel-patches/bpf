@@ -5944,8 +5944,14 @@ static int link_create(union bpf_attr *attr, bpfptr_t uattr, struct bpf_common_a
 		break;
 #ifdef CONFIG_NET
 	case BPF_PROG_TYPE_XDP:
-		ret = bpf_xdp_link_attach(attr, prog, log);
+{
+		struct netlink_ext_ack extack = {};
+
+		ret = bpf_xdp_link_attach(attr, prog, &extack);
+		if (extack._msg)
+			bpf_log(log, "%s\n", extack._msg);
 		break;
+}
 	case BPF_PROG_TYPE_SCHED_CLS:
 		if (attr->link_create.attach_type == BPF_TCX_INGRESS ||
 		    attr->link_create.attach_type == BPF_TCX_EGRESS)
