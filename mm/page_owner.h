@@ -38,6 +38,7 @@ struct page_owner_scan {
 	/* resume point */
 	unsigned long pfn;
 	struct page_owner po_snap;
+	int nid;
 };
 
 bool page_owner_next_eligible(struct page_owner_scan *scan);

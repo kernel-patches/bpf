@@ -712,8 +712,21 @@ void __dump_page_owner(const struct page *page)
 }
 
 /*
+ * NUMA node of @page, bypassing PF_POISONED_CHECK() in page_to_nid() to
+ * avoid VM_BUG_ON on poisoned pages; -1 for poisoned pages.
+ */
+static int page_owner_get_nid(struct page *page)
+{
+	memdesc_flags_t page_flags = READ_ONCE(page->flags);
+
+	if (page_flags.f == PAGE_POISON_PATTERN)
+		return -1;
+	return memdesc_nid(&page_flags);
+}
+
+/*
  * Advance @scan to the next page eligible for page_owner output.
- * On a hit, fill scan->pfn/po_snap and return true; the caller
+ * On a hit, fill scan->pfn/po_snap/nid and return true; the caller
  * must advance scan->pfn past the hit before calling again to resume
  * the scan.
  */
@@ -790,6 +803,7 @@ bool page_owner_next_eligible(struct page_owner_scan *scan)
 		if (!scan->po_snap.handle)
 			goto ext_put_continue;
 
+		scan->nid = page_owner_get_nid(page);
 		page_ext_put(page_ext);
 		put_online_mems();
 		return true;
@@ -833,17 +847,8 @@ read_page_owner(struct file *file, char __user *buf, size_t count, loff_t *ppos)
 			goto skip_continue;
 
 		if (state->nid_filter_enabled) {
-			int nid;
-			memdesc_flags_t page_flags = READ_ONCE(page->flags);
-
-			/*
-			 * Bypass PF_POISONED_CHECK() in page_to_nid() to avoid
-			 * VM_BUG_ON when accessing poisoned pages.
-			 */
-			if (page_flags.f == PAGE_POISON_PATTERN)
-				goto skip_continue;
-			nid = memdesc_nid(&page_flags);
-			if (!node_isset(nid, state->nid_filter))
+			if (scan.nid < 0 ||
+			    !node_isset(scan.nid, state->nid_filter))
 				goto skip_continue;
 		}
 

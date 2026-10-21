@@ -12,10 +12,11 @@ struct bpf_iter__page_owner {
 	__bpf_md_ptr(struct bpf_iter_meta *, meta);
 	__bpf_md_ptr(struct page_owner *, po);
 	u64 pfn;
+	int nid;
 };
 
 DEFINE_BPF_ITER_FUNC(page_owner, struct bpf_iter_meta *meta,
-		     struct page_owner *po, u64 pfn)
+		     struct page_owner *po, u64 pfn, int nid)
 
 static void *page_owner_seq_start(struct seq_file *seq, loff_t *posp)
 {
@@ -52,6 +53,7 @@ static int page_owner_prog_seq_show(struct bpf_prog *prog,
 		/* @po: hit-time snapshot, no RCU window needed. */
 		ctx.po = &scan->po_snap;
 		ctx.pfn = scan->pfn;
+		ctx.nid = scan->nid;
 	}
 
 	return bpf_iter_run_prog(prog, &ctx);
