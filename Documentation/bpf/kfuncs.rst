@@ -351,6 +351,29 @@ In this case, a program attached to the ``inode_init_security`` LSM hook
 can pass the hook's own ``xattr_count`` argument through to the kfunc,
 which claims xattr slots by writing through it.
 
+2.3.10 __srcptr Annotation
+-------------------------
+
+This annotation marks a pointer argument as a source buffer that the kfunc
+reads without writing. The verifier requires read access, so the source may
+point to read-only or read/write memory. Pair variable-size buffers with a
+following ``__sz`` or ``__szk`` argument. For a scalar pointer, the verifier
+uses the pointee's BTF size; a ``void *`` requires an explicit size.
+
+For example, the first kfunc takes a variable-size buffer, while the second
+takes a scalar source::
+
+        __bpf_kfunc void bpf_consume_data(const void *src__srcptr,
+                                          u32 src__sz)
+        {
+        ...
+        }
+
+        __bpf_kfunc void bpf_consume_scalar(const u32 *src__srcptr)
+        {
+        ...
+        }
+
 .. _BPF_kfunc_nodef:
 
 2.4 Using an existing kernel function
