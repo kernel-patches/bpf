@@ -355,6 +355,9 @@ struct jit_context {
 	 */
 	int tail_call_direct_label;
 	int tail_call_indirect_label;
+
+	/* Set when a pass moves the end of any insn */
+	bool addrs_changed;
 };
 
 /* Maximum number of bytes emitted while JITing one eBPF insn */
@@ -2574,6 +2577,13 @@ static int emit_unwind_ret_addr(u8 **pprog, u8 *ip)
 	return 0;
 }
 
+static void set_insn_end(struct jit_context *ctx, int *insn_end, int end)
+{
+	if (*insn_end != end)
+		ctx->addrs_changed = true;
+	*insn_end = end;
+}
+
 static int do_jit(struct bpf_verifier_env *env, struct bpf_prog *bpf_prog, int *addrs, u8 *image,
 		  u8 *rw_image, int oldproglen, struct jit_context *ctx, bool jmp_padding)
 {
@@ -2702,7 +2712,8 @@ static int do_jit(struct bpf_verifier_env *env, struct bpf_prog *bpf_prog, int *
 	if (rw_image)
 		memcpy(rw_image + proglen, temp, ilen);
 	proglen += ilen;
-	addrs[0] = proglen;
+	ctx->addrs_changed = false;
+	set_insn_end(ctx, addrs, proglen);
 	prog = temp;
 
 	for (i = 1; i <= insn_cnt; i++, insn++) {
@@ -3930,7 +3941,7 @@ emit_jmp:
 			memcpy(rw_image + proglen, temp, ilen);
 		}
 		proglen += ilen;
-		addrs[i] = proglen;
+		set_insn_end(ctx, addrs + i, proglen);
 		prog = temp;
 	}
 
@@ -4977,10 +4988,10 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_pr
 skip_init_addrs:
 
 	/*
-	 * JITed image shrinks with every pass and the loop iterates
-	 * until the image stops shrinking. Very large BPF programs
-	 * may converge on the last pass. In such case do one more
-	 * pass to emit the final image.
+	 * JITed image usually shrinks with every pass, but individual
+	 * jumps can grow, so the loop iterates until no insn moves.
+	 * Very large BPF programs may converge on the last pass. In
+	 * such case do one more pass to emit the final image.
 	 */
 	for (pass = 0; pass < MAX_PASSES || image; pass++) {
 		if (!padding && pass >= PADDING_PASSES)
@@ -5010,7 +5021,7 @@ out_image:
 			}
 			break;
 		}
-		if (proglen == oldproglen) {
+		if (!ctx.addrs_changed) {
 			/*
 			 * The number of entries in extable is the number of BPF_LDX
 			 * insns that access kernel memory via "pointer to BTF type".
