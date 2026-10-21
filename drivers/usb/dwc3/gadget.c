@@ -1775,6 +1775,8 @@ static int __dwc3_gadget_get_frame(struct dwc3 *dwc)
 	return DWC3_DSTS_SOFFN(reg);
 }
 
+static void dwc3_schedule_err_recovery(struct dwc3 *dwc);
+
 /**
  * __dwc3_stop_active_transfer - stop the current active transfer
  * @dep: isoc endpoint
@@ -1817,6 +1819,9 @@ static int __dwc3_stop_active_transfer(struct dwc3_ep *dep, bool force, bool int
 	if (ret)
 		dev_err_ratelimited(dep->dwc->dev,
 				"end transfer failed: %d\n", ret);
+
+	if (ret == -ETIMEDOUT && dep->dwc->err_state == DWC3_ERR_NONE)
+		dwc3_schedule_err_recovery(dep->dwc);
 
 	dep->resource_index = 0;
 
