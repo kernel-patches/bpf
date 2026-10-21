@@ -36,6 +36,7 @@
 #include <net/protocol.h>
 #include <net/netlink.h>
 #include <linux/skbuff.h>
+#include <linux/skbuff_ref.h>
 #include <linux/skmsg.h>
 #include <net/sock.h>
 #include <net/flow_dissector.h>
@@ -4380,6 +4381,18 @@ static bool bpf_xdp_shrink_data(struct xdp_buff *xdp, skb_frag_t *frag,
 	}
 
 	if (release) {
+		/* The frag may be page_pool-backed even when the rxq's
+		 * xdp_rxq_info carries no mem model (generic XDP on a
+		 * driver that never registers one, e.g. loopback).  In that
+		 * case mem_type is MEM_TYPE_PAGE_SHARED and __xdp_return()
+		 * would free the page through page_frag_free(), leaving the
+		 * page_pool's accounting dangling -- "page_pool leak".  Route
+		 * page_pool pages back through the pool instead.
+		 */
+		if (IS_ENABLED(CONFIG_PAGE_POOL) &&
+		    mem_type == MEM_TYPE_PAGE_SHARED && napi_pp_put_page(netmem))
+			return release;
+
 		__xdp_return(netmem, mem_type, false, zc_frag);
 	} else {
 		if (!tail)
