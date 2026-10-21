@@ -1200,6 +1200,16 @@ static struct sk_buff *end_dt_vrf_rcv(struct sk_buff *skb, u16 family,
 		/* the skb buffer was consumed by the handler */
 		return NULL;
 
+	/* the VRF device had its chance to rebuild the mac header for
+	 * sniffers; restore a valid one pointing at the network header,
+	 * like any L3 device without an L2 header, before the packet
+	 * continues up the stack.
+	 */
+	if (!skb_mac_header_was_set(skb)) {
+		skb_reset_mac_header(skb);
+		skb_reset_mac_len(skb);
+	}
+
 	/* when a packet is received by a VRF or by one of its slaves, the
 	 * master device reference is set into the skb.
 	 */
