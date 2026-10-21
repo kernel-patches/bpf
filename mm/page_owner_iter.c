@@ -181,4 +181,52 @@ __bpf_kfunc int bpf_page_owner_stack_snprint(struct page_owner_scan *scan,
 	return len;
 }
 
+/**
+ * bpf_page_owner_get_memcg_info - Report the memcg charged for the current page
+ * @scan: page_owner scan handle.
+ * @info__uninit: output buffer for the memcg_info.
+ * @buf__uninit: optional output buffer for the full cgroup path.
+ * @buf__sz: size of @buf__uninit.
+ *
+ * Fills @info__uninit with the memcg charged for the page backing
+ * @scan->pfn.  If @buf__uninit and @buf__sz are provided, the full
+ * cgroup path is also copied out, so a BPF program can attribute a
+ * page_owner allocation to a specific cgroup.
+ *
+ * @scan->pfn is resolved to a struct page under get_online_mems(),
+ * so the page cannot be accessed after its memory section is offlined
+ * or removed.
+ *
+ * Returns:
+ * * 0 on success
+ * * -ENODATA if the page is not online or not charged to a memcg
+ * * -EOPNOTSUPP if built without CONFIG_MEMCG
+ */
+__bpf_kfunc int bpf_page_owner_get_memcg_info(struct page_owner_scan *scan,
+					      struct memcg_info *info__uninit,
+					      char *buf__uninit, u32 buf__sz)
+{
+	struct page *page;
+	int ret = -ENODATA;
+
+	if (!static_branch_unlikely(&page_owner_inited))
+		goto nodata;
+
+	get_online_mems();
+	page = pfn_to_online_page(scan->pfn);
+	if (!page) {
+		put_online_mems();
+		goto nodata;
+	}
+	ret = get_page_memcg_info(page, info__uninit, buf__uninit, buf__sz);
+	put_online_mems();
+	return ret;
+
+nodata:
+	*info__uninit = (struct memcg_info){};
+	if (buf__uninit && buf__sz)
+		buf__uninit[0] = '\0';
+	return ret;
+}
+
 __bpf_kfunc_end_defs();
