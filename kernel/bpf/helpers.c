@@ -29,6 +29,10 @@
 #include <linux/task_work.h>
 #include <linux/irq_work.h>
 #include <linux/buildid.h>
+#include <linux/mm.h>
+#include <linux/mman.h>
+#include <linux/personality.h>
+#include <asm/cacheflush.h>
 #include <asm/tlb.h>
 
 #include "../../lib/kstrtox.h"
@@ -3739,6 +3743,127 @@ __bpf_kfunc int bpf_copy_from_user_mm(void *dst, u32 dst__sz,
 	return ret;
 }
 
+/* vm_private_data token for the unmergeable anonymous mapping below. */
+static char bpf_user_page_marker;
+
+/**
+ * bpf_user_page_alloc() - Allocate lazy anonymous pages in the current mm
+ * @nr_pages: Number of pages to allocate
+ *
+ * Creates a read/write anonymous mapping in the current task's address space.
+ * The mapping is kept non-executable even for tasks with READ_IMPLIES_EXEC,
+ * to avoid creating a writable executable mapping. The physical page is
+ * allocated on its first access. The mapping remains until userspace unmaps
+ * it or the process exits.
+ *
+ * Return: The userspace address on success, or a negative error code.
+ */
+__bpf_kfunc long bpf_user_page_alloc(unsigned long nr_pages)
+{
+	const unsigned long prot = PROT_READ | PROT_WRITE;
+	const unsigned long flags = MAP_PRIVATE | MAP_ANONYMOUS;
+	struct mm_struct *mm = current->mm;
+	unsigned long addr, populate, len;
+	struct vm_area_struct *vma;
+	int err;
+
+	if (unlikely(in_interrupt() || current->flags & (PF_KTHREAD | PF_EXITING)))
+		return -EPERM;
+	if (unlikely(!nmi_uaccess_okay()))
+		return -EPERM;
+	if (unlikely(!mm))
+		return -EFAULT;
+	if (unlikely(!nr_pages || nr_pages > (ULONG_MAX >> PAGE_SHIFT)))
+		return -EINVAL;
+
+	len = nr_pages << PAGE_SHIFT;
+	err = security_mmap_file(NULL, prot, flags);
+	if (err)
+		return err;
+
+	if (mmap_write_lock_killable(mm))
+		return -EINTR;
+
+	addr = do_mmap(NULL, 0, len, prot, flags,
+		       mk_vma_flags(VMA_DONTEXPAND_BIT, VMA_DONTCOPY_BIT, VMA_DONTDUMP_BIT),
+		       0, &populate, NULL);
+	if (!IS_ERR_VALUE(addr)) {
+		/* VM_DONTEXPAND prevents merging this mapping into another VMA. */
+		vma = find_vma(mm, addr);
+		vma_start_write(vma);
+		if (current->personality & READ_IMPLIES_EXEC) {
+			vm_flags_clear(vma, VM_EXEC);
+			vma_set_page_prot(vma);
+		}
+		vma->vm_private_data = &bpf_user_page_marker;
+	}
+
+	mmap_write_unlock(mm);
+
+	if (!IS_ERR_VALUE(addr) && populate)
+		mm_populate(addr, populate);
+	return addr;
+}
+
+/**
+ * bpf_user_page_exec() - Make a BPF-allocated user page read/execute
+ * @addr: Address of the page to change
+ *
+ * Changes a writable page created by bpf_user_page_alloc() to read/execute.
+ * The page cannot be made writable again after this call.
+ *
+ * Return: 0 on success, or a negative error code.
+ */
+__bpf_kfunc int bpf_user_page_exec(unsigned long addr)
+{
+	struct mm_struct *mm = current->mm;
+	struct vm_area_struct *vma;
+	struct page *page;
+	int err = -EINVAL;
+
+	if (unlikely(in_interrupt() ||
+		     current->flags & (PF_KTHREAD | PF_EXITING)))
+		return -EPERM;
+	if (unlikely(!nmi_uaccess_okay()))
+		return -EPERM;
+	if (unlikely(!mm))
+		return -EFAULT;
+	if ((addr & ~PAGE_MASK) || addr > ULONG_MAX - PAGE_SIZE)
+		return -EINVAL;
+
+	if (mmap_write_lock_killable(mm))
+		return -EINTR;
+
+	vma = find_vma(mm, addr);
+	if (!vma || vma->vm_start > addr)
+		goto out;
+	/* Allow to change only vma allocated by bpf_user_page_alloc. */
+	if (vma->vm_private_data != &bpf_user_page_marker)
+		goto out;
+	if (!(vma->vm_flags & VM_WRITE) || !(vma->vm_flags & VM_MAYEXEC))
+		goto out;
+
+	vma_start_write(vma);
+
+	err = get_user_pages(addr, 1, FOLL_WRITE, &page);
+	if (err != 1) {
+		if (!err)
+			err = -EFAULT;
+		goto out;
+	}
+
+	flush_icache_user_page(vma, page, addr, PAGE_SIZE);
+	err = do_mprotect_pkey_locked(addr, PAGE_SIZE, PROT_READ | PROT_EXEC, -1);
+	if (!err) {
+		vma = find_vma(mm, addr);
+		vm_flags_clear(vma, VM_MAYWRITE);
+	}
+	put_page(page);
+out:
+	mmap_write_unlock(mm);
+	return err;
+}
+
 /**
  * bpf_probe_write_user_faultable() - Copy data to userspace with page faults
  * enabled
@@ -5171,6 +5296,8 @@ static const struct btf_kfunc_id_set generic_kfunc_set = {
 };
 
 BTF_KFUNCS_START(user_mem_btf_ids)
+BTF_ID_FLAGS(func, bpf_user_page_alloc, KF_SLEEPABLE | KF_PERFMON)
+BTF_ID_FLAGS(func, bpf_user_page_exec, KF_SLEEPABLE | KF_PERFMON)
 BTF_ID_FLAGS(func, bpf_probe_write_user_faultable, KF_SLEEPABLE | KF_PERFMON)
 BTF_KFUNCS_END(user_mem_btf_ids)
 
