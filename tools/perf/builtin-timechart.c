@@ -9,8 +9,10 @@
  */
 
 #include <errno.h>
+#include <fcntl.h>
 #include <inttypes.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 #include "builtin.h"
 #include "util/color.h"
@@ -28,6 +30,7 @@
 #include "util/header.h"
 #include <subcmd/pager.h>
 #include <subcmd/parse-options.h>
+#include <api/fs/tracing_path.h>
 #include "util/parse-events.h"
 #include "util/event.h"
 #include "util/session.h"
@@ -1793,6 +1796,30 @@ static int timechart__tui(struct timechart *tchart)
 	return ret;
 }
 
+/*
+ * None of the syscall tracepoints can be used: find out why from the
+ * syscalls event directory and explain it the way parse_events() does.
+ */
+static void timechart__io_record_error(void)
+{
+	char errbuf[BUFSIZ];
+	char *path = get_events_file("syscalls");
+	int err = ENOENT;
+	int fd;
+
+	if (path) {
+		fd = open(path, O_RDONLY | O_DIRECTORY);
+		if (fd < 0)
+			err = errno;
+		else
+			close(fd);
+		put_events_file(path);
+	}
+
+	tracing_path__strerror_open_tp(err, errbuf, sizeof(errbuf), "syscalls", NULL);
+	pr_err("No syscall tracepoints available to record IO events\n%s", errbuf);
+}
+
 static int timechart__io_record(int argc, const char **argv, const char *output_data)
 {
 	unsigned int rec_argc, i;
@@ -1920,6 +1947,14 @@ static int timechart__io_record(int argc, const char **argv, const char *output_
 		*p++ = poll_events[i];
 		*p++ = "--filter";
 		*p++ = filter;
+	}
+
+	/* With no event, perf record would silently use its default one */
+	if (p == rec_argv + common_args_nr) {
+		timechart__io_record_error();
+		free(rec_argv);
+		free(filter);
+		return -1;
 	}
 
 	for (i = 0; i < (unsigned int)argc; i++)
