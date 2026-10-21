@@ -81,10 +81,14 @@ enum buddy_cache_consts {
 	 */
 	BUDDY_CACHE_MAX_CPUS = 1024,
 
+	/* Objects moved to and from the buddy allocator at once, as an order. */
+	BUDDY_CACHE_BATCH_ORDER = 3,
+	BUDDY_CACHE_BATCH_SIZE = 1 << BUDDY_CACHE_BATCH_ORDER,
+
 	/*
 	 * Objects retained locally for each allocation order.
 	 */
-	BUDDY_CACHE_CAPACITY = 16,
+	BUDDY_CACHE_CAPACITY = BUDDY_CACHE_BATCH_SIZE * 2,
 };
 
 struct buddy_cache_order {
