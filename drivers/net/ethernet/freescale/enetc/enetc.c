@@ -1759,8 +1759,11 @@ static bool enetc_xdp_tx(struct enetc_bdr *tx_ring,
 {
 	struct enetc_tx_swbd *tmp_tx_swbd = xdp_tx_arr;
 	int i, k, frm_len = tmp_tx_swbd->len;
+	struct enetc_tx_swbd *last_swbd;
+	int pad_len;
 
-	if (unlikely(enetc_bd_unused(tx_ring) < ENETC_TXBDS_NEEDED(num_tx_swbd)))
+	/* Hardware does not support a first buffer size of less than 16 bytes */
+	if (unlikely(xdp_tx_arr[0].len < ENETC_MIN_BUFF_SIZE))
 		return false;
 
 	while (unlikely(!tmp_tx_swbd->is_eof)) {
@@ -1768,19 +1771,44 @@ static bool enetc_xdp_tx(struct enetc_bdr *tx_ring,
 		frm_len += tmp_tx_swbd->len;
 	}
 
+	/* Pad frames below ETH_ZLEN so the mEMAC does not pad them. */
+	pad_len = max_t(int, ETH_ZLEN - frm_len, 0);
+
+	if (unlikely(enetc_bd_unused(tx_ring) <
+		     ENETC_TXBDS_NEEDED(num_tx_swbd + !!pad_len)))
+		return false;
+
 	i = tx_ring->next_to_use;
 
 	for (k = 0; k < num_tx_swbd; k++) {
 		struct enetc_tx_swbd *xdp_tx_swbd = &xdp_tx_arr[k];
 
-		enetc_xdp_map_tx_buff(tx_ring, i, xdp_tx_swbd, frm_len);
+		enetc_xdp_map_tx_buff(tx_ring, i, xdp_tx_swbd,
+				      frm_len + pad_len);
+		last_swbd = &tx_ring->tx_swbd[i];
 
-		/* last BD needs 'F' bit set */
-		if (xdp_tx_swbd->is_eof) {
+		/* last BD needs 'F' bit set, unless a pad BD follows */
+		if (xdp_tx_swbd->is_eof && !pad_len) {
 			union enetc_tx_bd *txbd = ENETC_TXBD(*tx_ring, i);
 
 			txbd->flags = ENETC_TXBD_FLAGS_F;
 		}
+
+		enetc_bdr_idx_inc(tx_ring, &i);
+	}
+
+	/* The pad BD becomes the last one, so it takes over the xdp_frame
+	 * (if any) from the last data BD. The pad BD has no DMA mapping of
+	 * its own, and it is not an XDP_TX buffer to be recycled.
+	 */
+	if (unlikely(pad_len)) {
+		struct enetc_tx_swbd *pad_swbd = &tx_ring->tx_swbd[i];
+
+		enetc_append_tx_pad(tx_ring, i, pad_len);
+		pad_swbd->is_xdp_redirect = last_swbd->is_xdp_redirect;
+		pad_swbd->xdp_frame = last_swbd->xdp_frame;
+		last_swbd->xdp_frame = NULL;
+		last_swbd->is_eof = false;
 
 		enetc_bdr_idx_inc(tx_ring, &i);
 	}
