@@ -762,13 +762,22 @@ static bool page_owner_next_eligible(struct page_owner_scan *scan)
 			continue;
 		}
 
-		page = pfn_to_page(pfn);
+		/*
+		 * Hold a mem-hotplug reader across the page derefs so the
+		 * vmemmap isn't torn down mid-scan; released before
+		 * cond_resched().
+		 */
+		get_online_mems();
+		page = pfn_to_online_page(pfn);
+		if (!page)
+			goto put_online_continue;
+
 		if (skip_buddy_pages(&pfn, page))
-			continue;
+			goto put_online_continue;
 
 		page_ext = page_ext_get(page);
 		if (unlikely(!page_ext))
-			continue;
+			goto put_online_continue;
 
 		/*
 		 * Some pages could be missed by concurrent allocation or free,
@@ -805,10 +814,13 @@ static bool page_owner_next_eligible(struct page_owner_scan *scan)
 			goto ext_put_continue;
 
 		page_ext_put(page_ext);
+		put_online_mems();
 		return true;
 
 ext_put_continue:
 		page_ext_put(page_ext);
+put_online_continue:
+		put_online_mems();
 		cond_resched();
 	}
 
@@ -831,7 +843,17 @@ read_page_owner(struct file *file, char __user *buf, size_t count, loff_t *ppos)
 
 	/* Find an allocated page */
 	while (page_owner_next_eligible(&scan)) {
-		struct page *page = pfn_to_page(scan.pfn);
+		struct page *page;
+		ssize_t ret;
+
+		/*
+		 * The scan is lockless. Re-resolve the page under a mem-hotplug
+		 * read-side lock so that we never access a hot-removed section.
+		 */
+		get_online_mems();
+		page = pfn_to_online_page(scan.pfn);
+		if (!page)
+			goto skip_continue;
 
 		if (state->nid_filter_enabled) {
 			int nid;
@@ -851,10 +873,13 @@ read_page_owner(struct file *file, char __user *buf, size_t count, loff_t *ppos)
 		/* Record the next PFN to read in the file offset */
 		*ppos = scan.pfn + 1;
 
-		return print_page_owner(buf, count, scan.pfn, page,
+		ret = print_page_owner(buf, count, scan.pfn, page,
 				&scan.po_snap, scan.po_snap.handle, state);
+		put_online_mems();
+		return ret;
 
 skip_continue:
+		put_online_mems();
 		scan.pfn++;
 		cond_resched();
 	}
