@@ -748,7 +748,18 @@ static void fq_codel_walk(struct Qdisc *sch, struct qdisc_walker *arg)
 		return;
 
 	for (i = 0; i < q->flows_cnt; i++) {
-		if (list_empty(&q->flows[i].flowchain)) {
+		bool empty;
+
+		/* flowchain is spliced by the datapath (fq_codel_enqueue/
+		 * fq_codel_dequeue) under the qdisc root lock.  This walker
+		 * runs under rtnl_lock, which does not exclude those writers,
+		 * so read the membership under the same lock they use.
+		 */
+		sch_tree_lock(sch);
+		empty = list_empty(&q->flows[i].flowchain);
+		sch_tree_unlock(sch);
+
+		if (empty) {
 			arg->count++;
 			continue;
 		}
