@@ -9,6 +9,8 @@
 
 enum {
 	USER_PAGE_ALLOC = 1,
+	USER_PAGE_EXEC = 2,
+	USER_PAGE_EXEC_ONLY = 3,
 };
 
 static noinline void user_page_trigger(void)
@@ -128,6 +130,62 @@ out:
 		  "restore_personality");
 }
 
+static void test_execute_user_page(struct user_page *skel)
+{
+	long page_size = sysconf(_SC_PAGESIZE);
+	long addr = -1;
+
+#ifndef __x86_64__
+	test__skip();
+	return;
+#endif
+
+	if (!alloc_user_pages(skel, 1, &addr))
+		return;
+
+	skel->bss->exec_addr = addr;
+	skel->bss->action = USER_PAGE_EXEC;
+	user_page_trigger();
+	if (!ASSERT_EQ(skel->bss->write_ret, 0, "exec_write_ret") ||
+	    !ASSERT_EQ(skel->bss->exec_ret, 0, "exec_ret"))
+		goto out;
+
+	ASSERT_EQ(((int (*)(void))addr)(), 42, "execute_user_page");
+
+out:
+	if (addr >= 0)
+		munmap((void *)addr, page_size);
+}
+
+static void test_partial_exec(struct user_page *skel)
+{
+	long page_size = sysconf(_SC_PAGESIZE);
+	long addr = -1;
+
+	if (!alloc_user_pages(skel, 3, &addr))
+		return;
+
+	skel->bss->exec_addr = addr + page_size;
+	skel->bss->action = USER_PAGE_EXEC_ONLY;
+	user_page_trigger();
+	if (!ASSERT_OK(skel->bss->exec_ret, "middle_page_exec_ret") ||
+	    !check_user_page_vma((void *)(addr + 0 * page_size), page_size, "rw-p") ||
+	    !check_user_page_vma((void *)(addr + 1 * page_size), page_size, "r-xp") ||
+	    !check_user_page_vma((void *)(addr + 2 * page_size), page_size, "rw-p"))
+		goto out;
+
+	skel->bss->exec_addr = addr + 2 * page_size;
+	user_page_trigger();
+	if (!ASSERT_OK(skel->bss->exec_ret, "last_page_exec_ret"))
+		goto out;
+
+	check_user_page_vma((void *)(addr + 2 * page_size), page_size, "r-xp");
+
+out:
+	if (addr >= 0)
+		munmap((void *)addr, page_size * 3);
+}
+
 void test_user_page(void)
 {
 	struct user_page *skel;
@@ -146,6 +204,10 @@ void test_user_page(void)
 		test_reallocate_after_unmap(skel);
 	if (test__start_subtest("read_implies_exec"))
 		test_read_implies_exec(skel);
+	if (test__start_subtest("execute_user_page"))
+		test_execute_user_page(skel);
+	if (test__start_subtest("partial_exec"))
+		test_partial_exec(skel);
 
 out:
 	user_page__destroy(skel);
