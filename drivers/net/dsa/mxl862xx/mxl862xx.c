@@ -593,7 +593,16 @@ static int mxl862xx_allocate_bridge(struct mxl862xx_priv *priv)
 	if (ret)
 		return ret;
 
-	return le16_to_cpu(br_alloc.bridge_id);
+	/* Per the API spec, id 0 is not used for historic reasons. Accepting
+	 * it verbatim collides with MXL862XX_DEFAULT_BRIDGE (the CPU port),
+	 * silently merging the port's FID with the CPU port's filtering
+	 * domain.
+	 */
+	ret = le16_to_cpu(br_alloc.bridge_id);
+	if (ret == 0)
+		return -EIO;
+
+	return ret;
 }
 
 static void mxl862xx_free_bridge(struct dsa_switch *ds,
@@ -1513,9 +1522,11 @@ static int mxl862xx_port_fdb_dump(struct dsa_switch *ds, int port,
 		if (ret)
 			return ret;
 
-		/* The MAC table capacity is fixed by the device. A walk longer
-		 * than that means the device (or its firmware) is not
-		 * responding correctly; bail out instead of looping forever
+		/* The exact MAC table capacity is not part of the public
+		 * driver API. Use a conservative upper bound: 16k entries is
+		 * well above any documented table size for this family, while
+		 * a device that stopped responding correctly (e.g. firmware
+		 * crash mid-walk) would otherwise keep us looping forever
 		 * with RTNL held.
 		 */
 		if (count++ >= MXL862XX_MAC_TABLE_FDB_SIZE) {
