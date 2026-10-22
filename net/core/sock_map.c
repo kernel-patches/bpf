@@ -145,6 +145,7 @@ static void sock_map_del_link(struct sock *sk,
 {
 	bool strp_stop = false, verdict_stop = false;
 	struct sk_psock_link *link, *tmp;
+	int (*update_proto)(struct sock *sk, struct sk_psock *psock, bool restore);
 
 	spin_lock_bh(&psock->link_lock);
 	list_for_each_entry_safe(link, tmp, &psock->link, list) {
@@ -152,11 +153,11 @@ static void sock_map_del_link(struct sock *sk,
 			struct bpf_map *map = link->map;
 			struct sk_psock_progs *progs = sock_map_progs(map);
 
-			if (psock->saved_data_ready && progs->stream_parser)
+			if (READ_ONCE(psock->saved_data_ready) && progs->stream_parser)
 				strp_stop = true;
-			if (psock->saved_data_ready && progs->stream_verdict)
+			if (READ_ONCE(psock->saved_data_ready) && progs->stream_verdict)
 				verdict_stop = true;
-			if (psock->saved_data_ready && progs->skb_verdict)
+			if (READ_ONCE(psock->saved_data_ready) && progs->skb_verdict)
 				verdict_stop = true;
 			list_del(&link->list);
 			sk_psock_free_link(link);
@@ -171,8 +172,9 @@ static void sock_map_del_link(struct sock *sk,
 		if (verdict_stop)
 			sk_psock_stop_verdict(sk, psock);
 
-		if (psock->psock_update_sk_prot)
-			psock->psock_update_sk_prot(sk, psock, false);
+		update_proto = READ_ONCE(psock->psock_update_sk_prot);
+		if (update_proto)
+			update_proto(sk, psock, false);
 		write_unlock_bh(&sk->sk_callback_lock);
 	}
 }
@@ -189,10 +191,13 @@ static void sock_map_unref(struct sock *sk, void *link_raw)
 
 static int sock_map_init_proto(struct sock *sk, struct sk_psock *psock)
 {
-	if (!sk->sk_prot->psock_update_sk_prot)
+	int (*update_proto)(struct sock *sk, struct sk_psock *psock, bool restore);
+
+	update_proto = READ_ONCE(sk->sk_prot)->psock_update_sk_prot;
+	if (!update_proto)
 		return -EINVAL;
-	psock->psock_update_sk_prot = sk->sk_prot->psock_update_sk_prot;
-	return sk->sk_prot->psock_update_sk_prot(sk, psock, false);
+	WRITE_ONCE(psock->psock_update_sk_prot, update_proto);
+	return update_proto(sk, psock, false);
 }
 
 static struct sk_psock *sock_map_psock_get_checked(struct sock *sk)
@@ -202,7 +207,7 @@ static struct sk_psock *sock_map_psock_get_checked(struct sock *sk)
 	rcu_read_lock();
 	psock = sk_psock(sk);
 	if (psock) {
-		if (sk->sk_prot->close != sock_map_close) {
+		if (READ_ONCE(sk->sk_prot)->close != sock_map_close) {
 			psock = ERR_PTR(-EBUSY);
 			goto out;
 		}
@@ -303,7 +308,8 @@ static int sock_map_link(struct bpf_map *map, struct sock *sk)
 	}
 
 	write_lock_bh(&sk->sk_callback_lock);
-	if (stream_parser && stream_verdict && !psock->saved_data_ready) {
+	if (stream_parser && stream_verdict &&
+	    !READ_ONCE(psock->saved_data_ready)) {
 		if (sk_is_tcp(sk))
 			ret = sk_psock_init_strp(sk, psock);
 		else
@@ -314,9 +320,11 @@ static int sock_map_link(struct bpf_map *map, struct sock *sk)
 			goto out;
 		}
 		sk_psock_start_strp(sk, psock);
-	} else if (!stream_parser && stream_verdict && !psock->saved_data_ready) {
+	} else if (!stream_parser && stream_verdict &&
+		   !READ_ONCE(psock->saved_data_ready)) {
 		sk_psock_start_verdict(sk,psock);
-	} else if (!stream_verdict && skb_verdict && !psock->saved_data_ready) {
+	} else if (!stream_verdict && skb_verdict &&
+		   !READ_ONCE(psock->saved_data_ready)) {
 		sk_psock_start_verdict(sk, psock);
 	}
 	write_unlock_bh(&sk->sk_callback_lock);
@@ -536,7 +544,7 @@ static bool sock_map_redirect_allowed(const struct sock *sk)
 
 static bool sock_map_sk_is_suitable(const struct sock *sk)
 {
-	return !!sk->sk_prot->psock_update_sk_prot;
+	return !!READ_ONCE(sk->sk_prot)->psock_update_sk_prot;
 }
 
 static bool sock_map_sk_state_allowed(const struct sock *sk)

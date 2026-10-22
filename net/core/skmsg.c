@@ -1167,22 +1167,25 @@ int sk_psock_init_strp(struct sock *sk, struct sk_psock *psock)
 
 void sk_psock_start_strp(struct sock *sk, struct sk_psock *psock)
 {
-	if (psock->saved_data_ready)
+	if (READ_ONCE(psock->saved_data_ready))
 		return;
 
-	psock->saved_data_ready = sk->sk_data_ready;
+	WRITE_ONCE(psock->saved_data_ready, READ_ONCE(sk->sk_data_ready));
 	WRITE_ONCE(sk->sk_data_ready, sk_psock_strp_data_ready);
 	WRITE_ONCE(sk->sk_write_space, sk_psock_write_space);
 }
 
 void sk_psock_stop_strp(struct sock *sk, struct sk_psock *psock)
 {
+	void (*saved_data_ready)(struct sock *sk);
+
 	psock_set_prog(&psock->progs.stream_parser, NULL);
 
-	if (!psock->saved_data_ready)
+	saved_data_ready = READ_ONCE(psock->saved_data_ready);
+	if (!saved_data_ready)
 		return;
 
-	WRITE_ONCE(sk->sk_data_ready, psock->saved_data_ready);
+	WRITE_ONCE(sk->sk_data_ready, saved_data_ready);
 	WRITE_ONCE(psock->saved_data_ready, NULL);
 	strp_stop(&psock->strp);
 }
@@ -1260,22 +1263,25 @@ static void sk_psock_verdict_data_ready(struct sock *sk)
 
 void sk_psock_start_verdict(struct sock *sk, struct sk_psock *psock)
 {
-	if (psock->saved_data_ready)
+	if (READ_ONCE(psock->saved_data_ready))
 		return;
 
-	psock->saved_data_ready = sk->sk_data_ready;
+	WRITE_ONCE(psock->saved_data_ready, READ_ONCE(sk->sk_data_ready));
 	WRITE_ONCE(sk->sk_data_ready, sk_psock_verdict_data_ready);
 	WRITE_ONCE(sk->sk_write_space, sk_psock_write_space);
 }
 
 void sk_psock_stop_verdict(struct sock *sk, struct sk_psock *psock)
 {
+	void (*saved_data_ready)(struct sock *sk);
+
 	psock_set_prog(&psock->progs.stream_verdict, NULL);
 	psock_set_prog(&psock->progs.skb_verdict, NULL);
 
-	if (!psock->saved_data_ready)
+	saved_data_ready = READ_ONCE(psock->saved_data_ready);
+	if (!saved_data_ready)
 		return;
 
-	WRITE_ONCE(sk->sk_data_ready, psock->saved_data_ready);
-	psock->saved_data_ready = NULL;
+	WRITE_ONCE(sk->sk_data_ready, saved_data_ready);
+	WRITE_ONCE(psock->saved_data_ready, NULL);
 }

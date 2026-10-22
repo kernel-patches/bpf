@@ -488,8 +488,11 @@ static inline void sk_psock_cork_free(struct sk_psock *psock)
 static inline void sk_psock_restore_proto(struct sock *sk,
 					  struct sk_psock *psock)
 {
-	if (psock->psock_update_sk_prot)
-		psock->psock_update_sk_prot(sk, psock, true);
+	int (*update_proto)(struct sock *sk, struct sk_psock *psock, bool restore);
+
+	update_proto = READ_ONCE(psock->psock_update_sk_prot);
+	if (update_proto)
+		update_proto(sk, psock, true);
 }
 
 static inline struct sk_psock *sk_psock_get(struct sock *sk)
