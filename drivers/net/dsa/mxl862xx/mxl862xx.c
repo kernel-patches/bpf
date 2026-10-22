@@ -1497,18 +1497,31 @@ static int mxl862xx_port_fdb_del(struct dsa_switch *ds, int port,
 	return ret;
 }
 
+#define MXL862XX_MAC_TABLE_FDB_SIZE 16384
+
 static int mxl862xx_port_fdb_dump(struct dsa_switch *ds, int port,
 				  dsa_fdb_dump_cb_t *cb, void *data)
 {
 	struct mxl862xx_mac_table_read param = { .initial = 1 };
 	struct mxl862xx_priv *priv = ds->priv;
 	u32 entry_port_id;
+	unsigned long count = 0;
 	int ret;
 
 	while (true) {
 		ret = MXL862XX_API_READ(priv, MXL862XX_MAC_TABLEENTRYREAD, param);
 		if (ret)
 			return ret;
+
+		/* The MAC table capacity is fixed by the device. A walk longer
+		 * than that means the device (or its firmware) is not
+		 * responding correctly; bail out instead of looping forever
+		 * with RTNL held.
+		 */
+		if (count++ >= MXL862XX_MAC_TABLE_FDB_SIZE) {
+			dev_err(ds->dev, "FDB dump exceeded table capacity\n");
+			return -EIO;
+		}
 
 		if (param.last)
 			break;
