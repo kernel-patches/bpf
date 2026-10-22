@@ -16,6 +16,14 @@
 			default-state = "off";
 		};
 	};
+
+	usb_vbus: vbus-regulator {
+		compatible = "regulator-fixed";
+		gpio = <&gpioa 13 GPIO_ACTIVE_LOW>;
+		regulator-name = "Vbus";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+	};
 };
 
 &adc {
@@ -28,21 +36,6 @@
 
 &fmc {
 	status = "disabled";
-};
-
-&gpioa {
-	/*
-	 * NOTE: The USB Port on the PicoITX needs a PWR_EN signal to enable
-	 * port power. This signal should be handled by USB power sequencing
-	 * in order to turn on port power when USB bus is powered up, but so
-	 * far there is no such functionality.
-	 */
-	usb-port-power-hog {
-		gpio-hog;
-		gpios = <13 0>;
-		output-low;
-		line-name = "usb-port-power";
-	};
 };
 
 &gpioc {
@@ -132,6 +125,10 @@
 
 &usbphyc_port0 {
 	phy-supply = <&vdd_usb>;
+	connector {
+		compatible = "usb-a-connector";
+		vbus-supply = <&usb_vbus>;
+	};
 };
 
 &usbphyc_port1 {
