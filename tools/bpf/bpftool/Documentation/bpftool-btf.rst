@@ -70,6 +70,30 @@ bpftool btf dump *BTF_SRC* [format *FORMAT*] [root_id *ROOT_ID*]
     formatting, the output is sorted by default. Use the **unsorted** option
     to avoid sorting the output.
 
+    C output annotates struct and union definitions individually. Most
+    records carry ``__attribute__((__bpf_relocatable))``. The generated
+    header defines ``__bpf_relocatable`` as ``preserve_access_index`` where
+    supported, or as empty when **BPF_NO_PRESERVE_ACCESS_INDEX** is defined
+    or the compiler lacks the attribute. GCC-BPF can apply CO-RE through
+    these attributes.
+
+    Context and socket types whose field accesses the verifier rewrites
+    carry ``__attribute__((__bpf_static_offset))`` instead, and their nested
+    anonymous records carry no attribute. ``__bpf_static_offset`` expands to
+    ``preserve_static_offset`` where supported (Clang 18 and later), or to
+    empty otherwise. The attribute keeps static field offsets in load and
+    store instruction immediates. **BPF_NO_PRESERVE_ACCESS_INDEX** does
+    not affect ``__bpf_static_offset``.
+
+    Either macro may be pre-defined as a bare attribute name, such as
+    ``preserve_access_index``, or as empty to override the policy.
+
+    Clang 18 through 23 crash when ``__builtin_preserve_field_info`` is used
+    on a type marked ``__bpf_static_offset``, including through
+    ``bpf_core_field_*`` and the CO-RE bitfield helpers. Compile with
+    ``-D__bpf_static_offset=`` to use these helpers with an affected
+    compiler.
+
     **root_id** option can be used to filter a dump to a single type and all
     its dependent types. It cannot be used with any other types of filtering
     (such as the "key", "value", or "kv" arguments when dumping BTF for a map).
