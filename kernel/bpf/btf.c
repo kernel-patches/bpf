@@ -10128,8 +10128,12 @@ static int __register_btf_kfunc_id_set(enum btf_kfunc_hook hook,
 	for (i = 0; i < kset->set->cnt; i++) {
 		ret = btf_check_kfunc_protos(btf, btf_relocate_id(btf, kset->set->pairs[i].id),
 					     kset->set->pairs[i].flags);
-		if (ret)
+		if (ret) {
+			pr_err("register_btf_kfunc_id_set: kfunc id %u in BTF of %s failed sanity check, ret %d\n",
+			       kset->set->pairs[i].id,
+			       kset->owner ? kset->owner->name : "vmlinux", ret);
 			goto err_out;
+		}
 	}
 
 	ret = btf_populate_kfunc_set(btf, hook, kset);
