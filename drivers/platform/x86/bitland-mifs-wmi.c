@@ -114,6 +114,19 @@ static const struct bitland_mifs_quirks default_quirks = {
 	.num_profile_entries = ARRAY_SIZE(default_profile_entries),
 };
 
+static const struct bitland_profile_entry tm2107_profile_entries[] = {
+	{ PLATFORM_PROFILE_LOW_POWER,   2 },
+	{ PLATFORM_PROFILE_BALANCED,    1 },
+	{ PLATFORM_PROFILE_PERFORMANCE, 0 },
+};
+
+static const struct bitland_mifs_quirks tm2107_quirks = {
+	.profile_entries = tm2107_profile_entries,
+	.num_profile_entries = ARRAY_SIZE(tm2107_profile_entries),
+	.return_code_at_end = true,
+	.skip_ac_type_check = true,
+};
+
 static const struct bitland_profile_entry tm2135_profile_entries[] = {
 	{ PLATFORM_PROFILE_LOW_POWER,		0x02 },
 	{ PLATFORM_PROFILE_BALANCED,		0x01 },
@@ -141,6 +154,14 @@ static const struct bitland_mifs_quirks tm2424_quirks = {
 };
 
 static const struct dmi_system_id bitland_mifs_dmi_table[] = {
+	{
+		.matches = {
+			DMI_EXACT_MATCH(DMI_SYS_VENDOR, "TIMI"),
+			DMI_EXACT_MATCH(DMI_PRODUCT_NAME, "Redmi Book Pro 14 2022"),
+			DMI_EXACT_MATCH(DMI_BOARD_NAME, "TM2107"),
+		},
+		.driver_data = (void *)&tm2107_quirks,
+	},
 	{
 		.matches = {
 			DMI_EXACT_MATCH(DMI_SYS_VENDOR, "TIMI"),
