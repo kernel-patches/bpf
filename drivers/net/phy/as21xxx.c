@@ -616,6 +616,13 @@ static int as21xxx_probe(struct phy_device *phydev)
 	if (ret)
 		return ret;
 
+	/* Even if PHY declare support for Clause 22 register,
+	 * Clause 45 register should be used for ANEG configuration
+	 * and restart. Clear the C22 bit for devices_in_package to
+	 * force C45 generic OPs in generic PHY ANGE OPs.
+	 */
+	phydev->c45_ids.devices_in_package &= ~BIT(0);
+
 	ret = aeon_ipc_sync_parity(phydev, priv);
 	if (ret)
 		return ret;
@@ -631,6 +638,32 @@ static int as21xxx_probe(struct phy_device *phydev)
 		return ret;
 
 	return aeon_dpc_ra_enable(phydev);
+}
+
+static int as21xxx_config_aneg(struct phy_device *phydev)
+{
+	bool changed = false;
+	int ret;
+	u16 adv;
+
+	ret = genphy_c45_an_config_aneg(phydev);
+	if (ret < 0)
+		return ret;
+	if (ret > 0)
+		changed = true;
+
+	adv = linkmode_adv_to_mii_ctrl1000_t(phydev->advertising);
+
+	ret = phy_modify_mmd_changed(phydev, MDIO_MMD_AN,
+				     AS21XXX_MDIO_AN_C22 + MII_CTRL1000,
+				     ADVERTISE_1000FULL |
+				     ADVERTISE_1000HALF, adv);
+	if (ret < 0)
+		return ret;
+	if (ret > 0)
+		changed = true;
+
+	return genphy_c45_check_and_restart_aneg(phydev, changed);
 }
 
 static int as21xxx_read_link(struct phy_device *phydev, int *bmcr)
@@ -990,6 +1023,7 @@ static struct phy_driver as21xxx_drivers[] = {
 		.name		= "Aeonsemi AS21011JB1",
 		.probe		= as21xxx_probe,
 		.match_phy_device = as21xxx_match_phy_device,
+		.config_aneg	= as21xxx_config_aneg,
 		.read_status	= as21xxx_read_status,
 		.led_brightness_set = as21xxx_led_brightness_set,
 		.led_hw_is_supported = as21xxx_led_hw_is_supported,
@@ -1002,6 +1036,7 @@ static struct phy_driver as21xxx_drivers[] = {
 		.name		= "Aeonsemi AS21011PB1",
 		.probe		= as21xxx_probe,
 		.match_phy_device = as21xxx_match_phy_device,
+		.config_aneg	= as21xxx_config_aneg,
 		.read_status	= as21xxx_read_status,
 		.led_brightness_set = as21xxx_led_brightness_set,
 		.led_hw_is_supported = as21xxx_led_hw_is_supported,
@@ -1014,6 +1049,7 @@ static struct phy_driver as21xxx_drivers[] = {
 		.name		= "Aeonsemi AS21010PB1",
 		.probe		= as21xxx_probe,
 		.match_phy_device = as21xxx_match_phy_device,
+		.config_aneg	= as21xxx_config_aneg,
 		.read_status	= as21xxx_read_status,
 		.led_brightness_set = as21xxx_led_brightness_set,
 		.led_hw_is_supported = as21xxx_led_hw_is_supported,
@@ -1026,6 +1062,7 @@ static struct phy_driver as21xxx_drivers[] = {
 		.name		= "Aeonsemi AS21010JB1",
 		.probe		= as21xxx_probe,
 		.match_phy_device = as21xxx_match_phy_device,
+		.config_aneg	= as21xxx_config_aneg,
 		.read_status	= as21xxx_read_status,
 		.led_brightness_set = as21xxx_led_brightness_set,
 		.led_hw_is_supported = as21xxx_led_hw_is_supported,
@@ -1038,6 +1075,7 @@ static struct phy_driver as21xxx_drivers[] = {
 		.name		= "Aeonsemi AS21210PB1",
 		.probe		= as21xxx_probe,
 		.match_phy_device = as21xxx_match_phy_device,
+		.config_aneg	= as21xxx_config_aneg,
 		.read_status	= as21xxx_read_status,
 		.led_brightness_set = as21xxx_led_brightness_set,
 		.led_hw_is_supported = as21xxx_led_hw_is_supported,
@@ -1050,6 +1088,7 @@ static struct phy_driver as21xxx_drivers[] = {
 		.name		= "Aeonsemi AS21510JB1",
 		.probe		= as21xxx_probe,
 		.match_phy_device = as21xxx_match_phy_device,
+		.config_aneg	= as21xxx_config_aneg,
 		.read_status	= as21xxx_read_status,
 		.led_brightness_set = as21xxx_led_brightness_set,
 		.led_hw_is_supported = as21xxx_led_hw_is_supported,
@@ -1062,6 +1101,7 @@ static struct phy_driver as21xxx_drivers[] = {
 		.name		= "Aeonsemi AS21510PB1",
 		.probe		= as21xxx_probe,
 		.match_phy_device = as21xxx_match_phy_device,
+		.config_aneg	= as21xxx_config_aneg,
 		.read_status	= as21xxx_read_status,
 		.led_brightness_set = as21xxx_led_brightness_set,
 		.led_hw_is_supported = as21xxx_led_hw_is_supported,
@@ -1074,6 +1114,7 @@ static struct phy_driver as21xxx_drivers[] = {
 		.name		= "Aeonsemi AS21511JB1",
 		.probe		= as21xxx_probe,
 		.match_phy_device = as21xxx_match_phy_device,
+		.config_aneg	= as21xxx_config_aneg,
 		.read_status	= as21xxx_read_status,
 		.led_brightness_set = as21xxx_led_brightness_set,
 		.led_hw_is_supported = as21xxx_led_hw_is_supported,
@@ -1086,6 +1127,7 @@ static struct phy_driver as21xxx_drivers[] = {
 		.name		= "Aeonsemi AS21210JB1",
 		.probe		= as21xxx_probe,
 		.match_phy_device = as21xxx_match_phy_device,
+		.config_aneg	= as21xxx_config_aneg,
 		.read_status	= as21xxx_read_status,
 		.led_brightness_set = as21xxx_led_brightness_set,
 		.led_hw_is_supported = as21xxx_led_hw_is_supported,
@@ -1098,6 +1140,7 @@ static struct phy_driver as21xxx_drivers[] = {
 		.name		= "Aeonsemi AS21511PB1",
 		.probe		= as21xxx_probe,
 		.match_phy_device = as21xxx_match_phy_device,
+		.config_aneg	= as21xxx_config_aneg,
 		.read_status	= as21xxx_read_status,
 		.led_brightness_set = as21xxx_led_brightness_set,
 		.led_hw_is_supported = as21xxx_led_hw_is_supported,
