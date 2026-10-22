@@ -320,6 +320,28 @@ struct hpd_rx_irq_offload_work {
 };
 
 /**
+ * struct dm_otg_sw_counter - Per-OTG sw vblank counter state
+ * @frozen: Frozen vblank counter snapshot, valid while
+ *	    dm->use_sw_vblank_counter is set.
+ * @offset: Offset applied to the live hw vblank counter to keep it
+ *	    continuous across a freeze/resume cycle.
+ * @vblank_start: Frozen scanout vblank start position, valid while
+ *		  dm->use_sw_vblank_counter is set.
+ * @vblank_end: Frozen scanout vblank end position, valid while
+ *		dm->use_sw_vblank_counter is set.
+ *
+ * Indexed by otg_inst rather than by CRTC, so a value survives a CRTC's
+ * stream being reassigned to a different OTG. Guarded by
+ * dm->sw_counter_lock.
+ */
+struct dm_otg_sw_counter {
+	u32 frozen;
+	u32 offset;
+	u32 vblank_start;
+	u32 vblank_end;
+};
+
+/**
  * struct amdgpu_display_manager - Central amdgpu display manager device
  *
  * @dc: Display Core control structure
@@ -466,6 +488,30 @@ struct amdgpu_display_manager {
 	 * sequences.
 	 */
 	struct mutex dc_lock;
+
+	/**
+	 * @sw_counter_lock
+	 *
+	 * Guards sw_vblank counter.
+	 */
+	spinlock_t sw_counter_lock;
+
+	/**
+	 * @use_sw_vblank_counter
+	 *
+	 * use sw vblank counter instead of hw vblank counter. Can only be set
+	 * under dc_lock and sw_counter_lock.
+	 * Set implies active_vblank_irq_count == 0.
+	 */
+	bool use_sw_vblank_counter;
+
+	/**
+	 * @otg_sw_counter:
+	 *
+	 * Per-OTG sw vblank counter state, indexed by otg_inst. Guarded by
+	 * sw_counter_lock. See &struct dm_otg_sw_counter.
+	 */
+	struct dm_otg_sw_counter otg_sw_counter[AMDGPU_MAX_CRTCS];
 
 	/**
 	 * @dmub_lock:
@@ -1170,6 +1216,9 @@ bool amdgpu_dm_execute_fused_io(
 
 int amdgpu_dm_process_dmub_set_config_sync(struct dc_context *ctx, unsigned int link_index,
 					struct set_config_cmd_payload *payload, enum set_config_status *operation_result);
+
+void amdgpu_dm_sw_counter_freeze(struct amdgpu_display_manager *dm);
+void amdgpu_dm_sw_counter_resume(struct amdgpu_display_manager *dm);
 
 int dm_atomic_get_state(struct drm_atomic_commit *state,
 			struct dm_atomic_state **dm_state);

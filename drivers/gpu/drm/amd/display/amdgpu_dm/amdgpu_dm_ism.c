@@ -293,8 +293,10 @@ static void dm_ism_commit_idle_optimization_state(struct amdgpu_dm_ism *ism,
 	 * If there is an active vblank requestor, or if SSO is being engaged,
 	 * then disallow idle optimizations.
 	 */
-	if (vblank_enabled || allow_panel_sso)
+	if (vblank_enabled || allow_panel_sso) {
 		dc_allow_idle_optimizations(dm->dc, false);
+		amdgpu_dm_sw_counter_resume(dm);
+	}
 
 	/*
 	 * Control PSR based on vblank requirements from OS
@@ -326,9 +328,19 @@ static void dm_ism_commit_idle_optimization_state(struct amdgpu_dm_ism *ism,
 	 * optimizations at the start of this func -- we should disallow
 	 * whenever there's *an* active CRTC.
 	 */
-	if (!vblank_enabled && dm->active_vblank_irq_count == 0) {
-		dc_post_update_surfaces_to_stream(dm->dc);
-		dc_allow_idle_optimizations(dm->dc, true);
+	if (!vblank_enabled) {
+		bool allow;
+
+		scoped_guard(spinlock_irqsave, &dm->ddev->vbl_lock) {
+			allow = !dm->active_vblank_irq_count;
+			if (allow)
+				amdgpu_dm_sw_counter_freeze(dm);
+		}
+
+		if (allow) {
+			dc_post_update_surfaces_to_stream(dm->dc);
+			dc_allow_idle_optimizations(dm->dc, true);
+		}
 	}
 }
 

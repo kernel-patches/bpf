@@ -170,6 +170,7 @@ static inline void amdgpu_dm_exit_ips_for_hw_access(struct dc *dc)
 STATIC_IFN_KUNIT u32 dm_vblank_get_counter(struct amdgpu_device *adev, int crtc)
 {
 	struct amdgpu_crtc *acrtc = NULL;
+	struct amdgpu_display_manager *dm = &adev->dm;
 
 	if (crtc >= adev->mode_info.num_crtc)
 		return 0;
@@ -182,7 +183,19 @@ STATIC_IFN_KUNIT u32 dm_vblank_get_counter(struct amdgpu_device *adev, int crtc)
 		return 0;
 	}
 
-	return dc_stream_get_vblank_counter(acrtc->dm_irq_params.stream);
+	guard(spinlock_irqsave)(&adev->dm.sw_counter_lock);
+
+	if (acrtc->otg_inst < 0) {
+		drm_err(adev_to_drm(adev), "dm_vblank_get_counter: no otg_inst for crtc '%d'!\n",
+			crtc);
+		return 0;
+	}
+
+	if (dm->use_sw_vblank_counter)
+		return dm->otg_sw_counter[acrtc->otg_inst].frozen;
+
+	return (dc_stream_get_vblank_counter(acrtc->dm_irq_params.stream) +
+		dm->otg_sw_counter[acrtc->otg_inst].offset) & 0xffffff;
 }
 EXPORT_IF_KUNIT(dm_vblank_get_counter);
 
@@ -190,8 +203,8 @@ STATIC_IFN_KUNIT int dm_crtc_get_scanoutpos(struct amdgpu_device *adev, int crtc
 					    u32 *vbl, u32 *position)
 {
 	u32 v_blank_start = 0, v_blank_end = 0, h_position = 0, v_position = 0;
+	struct amdgpu_display_manager *dm = &adev->dm;
 	struct amdgpu_crtc *acrtc = NULL;
-	struct dc *dc = adev->dm.dc;
 
 	if ((crtc < 0) || (crtc >= adev->mode_info.num_crtc))
 		return -EINVAL;
@@ -204,8 +217,20 @@ STATIC_IFN_KUNIT int dm_crtc_get_scanoutpos(struct amdgpu_device *adev, int crtc
 		return 0;
 	}
 
-	if (dc && dc->caps.ips_support && dc->idle_optimizations_allowed)
-		dc_allow_idle_optimizations(dc, false);
+	guard(spinlock_irqsave)(&adev->dm.sw_counter_lock);
+
+	if (acrtc->otg_inst < 0) {
+		drm_err(adev_to_drm(adev), "dm_crtc_get_scanoutpos: no otg_inst for crtc '%d'!\n",
+			crtc);
+		return 0;
+	}
+
+	if (dm->use_sw_vblank_counter) {
+		*vbl = dm->otg_sw_counter[acrtc->otg_inst].vblank_start |
+		       (dm->otg_sw_counter[acrtc->otg_inst].vblank_end << 16);
+		*position = dm->otg_sw_counter[acrtc->otg_inst].vblank_end;
+		return 0;
+	}
 
 	/*
 	 * TODO rework base driver to use values directly.
@@ -223,6 +248,61 @@ STATIC_IFN_KUNIT int dm_crtc_get_scanoutpos(struct amdgpu_device *adev, int crtc
 	return 0;
 }
 EXPORT_IF_KUNIT(dm_crtc_get_scanoutpos);
+
+/* active_vblank_irq_count must be 0 before calling this function */
+void amdgpu_dm_sw_counter_freeze(struct amdgpu_display_manager *dm)
+{
+	struct dc *dc = dm->dc;
+
+	lockdep_assert_held(&dm->dc_lock);
+
+	if (!dc->caps.ips_support || dc->config.disable_ips == DMUB_IPS_DISABLE_ALL)
+		return;
+
+	guard(spinlock_irqsave)(&dm->sw_counter_lock);
+
+	if (dm->use_sw_vblank_counter)
+		return;
+
+	for (int i = 0; i < MAX_PIPES; i++) {
+		u32 hw, h_position, v_position;
+
+		hw = dc_otg_get_vblank_counter(dc, i);
+		dm->otg_sw_counter[i].frozen = (hw + dm->otg_sw_counter[i].offset + 1) & 0xffffff;
+		dc_otg_get_scanoutpos(dc, i,
+				      &dm->otg_sw_counter[i].vblank_start,
+				      &dm->otg_sw_counter[i].vblank_end,
+				      &h_position, &v_position);
+	}
+
+	dm->use_sw_vblank_counter = true;
+
+}
+
+/* should only be called after IPS exit */
+void amdgpu_dm_sw_counter_resume(struct amdgpu_display_manager *dm)
+{
+	struct dc *dc = dm->dc;
+
+	lockdep_assert_held(&dm->dc_lock);
+
+	if (!dc->caps.ips_support || dc->config.disable_ips == DMUB_IPS_DISABLE_ALL)
+		return;
+
+	guard(spinlock_irqsave)(&dm->sw_counter_lock);
+
+	if (!dm->use_sw_vblank_counter)
+		return;
+
+	for (int i = 0; i < MAX_PIPES; i++) {
+		u32 hw;
+
+		hw = dc_otg_get_vblank_counter(dc, i);
+		dm->otg_sw_counter[i].offset = (dm->otg_sw_counter[i].frozen - hw) & 0xffffff;
+	}
+
+	dm->use_sw_vblank_counter = false;
+}
 
 STATIC_IFN_KUNIT int dm_wait_for_idle(struct amdgpu_ip_block *ip_block)
 {
@@ -514,6 +594,7 @@ static int amdgpu_dm_init(struct amdgpu_device *adev)
 	mutex_init(&adev->dm.audio_lock);
 
 	spin_lock_init(&adev->dm.dmub_lock);
+	spin_lock_init(&adev->dm.sw_counter_lock);
 
 	if (amdgpu_dm_irq_init(adev)) {
 		drm_err(adev_to_drm(adev), "failed to initialize DM IRQ support.\n");
@@ -766,8 +847,10 @@ static int amdgpu_dm_init(struct amdgpu_device *adev)
 	if (adev->dm.dc->caps.max_links > 0) {
 		adev->dm.vblank_control_workqueue =
 			create_singlethread_workqueue("dm_vblank_control_workqueue");
-		if (!adev->dm.vblank_control_workqueue)
+		if (!adev->dm.vblank_control_workqueue) {
 			drm_err(adev_to_drm(adev), "failed to initialize vblank_workqueue.\n");
+			goto error;
+		}
 	}
 
 	if (adev->dm.dc->caps.ips_support &&
