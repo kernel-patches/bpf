@@ -1192,7 +1192,28 @@ struct map_info {
 	struct map_info *next;
 	struct mm_struct *mm;
 	unsigned long vaddr;
+	bool done;
 };
+
+/*
+ * Every fork() waits for dup_mmap_sem, so register_for_each_vma() must not
+ * sleep on mmap_lock while it holds dup_mmap_sem. It leaves mms with busy
+ * mmap_lock in ->busy, drops dup_mmap_sem, and only then waits for them.
+ *
+ * Such mm can fork before its turn comes. dup_mmap() holds its mmap_lock, so
+ * uprobe_dup_mmap() does what the walk is going to do to this mm, and
+ * the child has the same breakpoints as the child of mm that wasn't busy.
+ */
+struct uprobe_walk {
+	struct list_head list;
+	struct uprobe *uprobe;
+	struct uprobe_consumer *new;
+	struct map_info *busy;
+	int err;
+};
+
+/* dup_mmap_sem protects the list and ->busy of every walk in it */
+static LIST_HEAD(uprobe_walks);
 
 static inline struct map_info *free_map_info(struct map_info *info)
 {
@@ -1242,6 +1263,7 @@ build_map_info(struct address_space *mapping, loff_t offset, bool is_register)
 
 		info->mm = vma->vm_mm;
 		info->vaddr = offset_to_vaddr(vma, offset);
+		info->done = false;
 	}
 	i_mmap_unlock_read(mapping);
 
@@ -1271,26 +1293,79 @@ build_map_info(struct address_space *mapping, loff_t offset, bool is_register)
 	return curr;
 }
 
+/*
+ * mmap_lock of info->mm is held for writing. info->done is set under it.
+ * The walk also tests it without mmap_lock, to skip mm.
+ */
+static void register_one_mm(struct uprobe_walk *walk, struct map_info *info,
+			    bool in_fork)
+{
+	struct uprobe_consumer *new = walk->new;
+	struct uprobe *uprobe = walk->uprobe;
+	struct mm_struct *mm = info->mm;
+	struct vm_area_struct *vma;
+	bool is_register = !!new;
+	int err = 0;
+
+	if (info->done)
+		return;
+
+	if (is_register && READ_ONCE(walk->err))
+		goto done;
+
+	if (check_stable_address_space(mm))
+		goto done;
+
+	vma = find_vma(mm, info->vaddr);
+	if (!vma || !valid_vma(vma, is_register) ||
+	    file_inode(vma->vm_file) != uprobe->inode)
+		goto done;
+
+	if (vma->vm_start > info->vaddr ||
+	    vaddr_to_offset(vma, info->vaddr) != uprobe->offset)
+		goto done;
+
+	if (is_register) {
+		/* consult only the "caller", new consumer. */
+		if (consumer_filter(new, mm))
+			err = install_breakpoint(uprobe, vma, info->vaddr);
+	} else if (mm_flags_test(MMF_HAS_UPROBES, mm)) {
+		if (!filter_chain(uprobe, mm))
+			err = remove_breakpoint(uprobe, vma, info->vaddr);
+	}
+
+	if (err) {
+		/*
+		 * fork() was killed meanwhile. This is not the error of
+		 * the walk. See uprobe_dup_mmap().
+		 */
+		if (in_fork && fatal_signal_pending(current))
+			return;
+		WRITE_ONCE(walk->err, err);
+	}
+ done:
+	WRITE_ONCE(info->done, true);
+}
+
 static int
 register_for_each_vma(struct uprobe *uprobe, struct uprobe_consumer *new)
 {
-	bool is_register = !!new;
-	struct map_info *info;
-	int err = 0;
+	struct uprobe_walk walk = { .uprobe = uprobe, .new = new };
+	struct map_info *info, *next;
 
 	percpu_down_write(&dup_mmap_sem);
-	info = build_map_info(uprobe->inode->i_mapping,
-					uprobe->offset, is_register);
+	info = build_map_info(uprobe->inode->i_mapping, uprobe->offset, !!new);
 	if (IS_ERR(info)) {
-		err = PTR_ERR(info);
-		goto out;
+		percpu_up_write(&dup_mmap_sem);
+		return PTR_ERR(info);
 	}
 
-	while (info) {
+	for (; info; info = next) {
 		struct mm_struct *mm = info->mm;
-		struct vm_area_struct *vma;
 
-		if (err && is_register)
+		next = info->next;
+		/* If install failed the caller is going to undo it */
+		if (new && walk.err)
 			goto free;
 		/*
 		 * We take mmap_lock for writing to avoid the race with
@@ -1299,38 +1374,56 @@ register_for_each_vma(struct uprobe *uprobe, struct uprobe_consumer *new)
 		 * is_trap_at_addr() true right after find_uprobe_rcu()
 		 * returns NULL in find_active_uprobe_rcu().
 		 */
-		mmap_write_lock(mm);
-		if (check_stable_address_space(mm))
-			goto unlock;
-
-		vma = find_vma(mm, info->vaddr);
-		if (!vma || !valid_vma(vma, is_register) ||
-		    file_inode(vma->vm_file) != uprobe->inode)
-			goto unlock;
-
-		if (vma->vm_start > info->vaddr ||
-		    vaddr_to_offset(vma, info->vaddr) != uprobe->offset)
-			goto unlock;
-
-		if (is_register) {
-			/* consult only the "caller", new consumer. */
-			if (consumer_filter(new, mm))
-				err = install_breakpoint(uprobe, vma, info->vaddr);
-		} else if (mm_flags_test(MMF_HAS_UPROBES, mm)) {
-			if (!filter_chain(uprobe, mm))
-				err |= remove_breakpoint(uprobe, vma, info->vaddr);
+		if (!mmap_write_trylock(mm)) {
+			/*
+			 * uprobe_dup_mmap() compares info->mm until list_del().
+			 * Keep mm_struct, but not the memory of the process.
+			 */
+			mmgrab(mm);
+			mmput_async(mm);
+			info->next = walk.busy;
+			walk.busy = info;
+			continue;
 		}
-
- unlock:
+		register_one_mm(&walk, info, false);
 		mmap_write_unlock(mm);
  free:
 		/* exit_mmap() of the last user must not run under dup_mmap_sem */
 		mmput_async(mm);
-		info = free_map_info(info);
+		kfree(info);
 	}
- out:
+
+	if (!walk.busy) {
+		percpu_up_write(&dup_mmap_sem);
+		return walk.err;
+	}
+
+	list_add(&walk.list, &uprobe_walks);
 	percpu_up_write(&dup_mmap_sem);
-	return err;
+
+	for (info = walk.busy; info; info = info->next) {
+		struct mm_struct *mm = info->mm;
+
+		/* Don't wait for mm if its fork() did it or if install failed */
+		if (READ_ONCE(info->done) || (new && READ_ONCE(walk.err)))
+			continue;
+		/* All users are gone, like in build_map_info() */
+		if (!mmget_not_zero(mm))
+			continue;
+		mmap_write_lock(mm);
+		register_one_mm(&walk, info, false);
+		mmap_write_unlock(mm);
+		mmput(mm);
+	}
+
+	percpu_down_write(&dup_mmap_sem);
+	list_del(&walk.list);
+	percpu_up_write(&dup_mmap_sem);
+
+	for (info = walk.busy; info; info = free_map_info(info))
+		mmdrop(info->mm);
+
+	return walk.err;
 }
 
 /**
@@ -1841,6 +1934,21 @@ void uprobe_end_dup_mmap(void)
 
 void uprobe_dup_mmap(struct mm_struct *oldmm, struct mm_struct *newmm)
 {
+	struct uprobe_walk *walk;
+	struct map_info *info;
+
+	list_for_each_entry(walk, &uprobe_walks, list) {
+		/*
+		 * fork() that is being killed fails in copy_process().
+		 * There will be no child. Leave oldmm to the walk.
+		 */
+		if (fatal_signal_pending(current))
+			break;
+		for (info = walk->busy; info; info = info->next)
+			if (info->mm == oldmm)
+				register_one_mm(walk, info, true);
+	}
+
 	if (mm_flags_test(MMF_HAS_UPROBES, oldmm)) {
 		mm_flags_set(MMF_HAS_UPROBES, newmm);
 		/* unconditionally, dup_mmap() skips VM_DONTCOPY vmas */
