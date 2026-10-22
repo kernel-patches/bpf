@@ -1082,15 +1082,17 @@ static int aqr115c_get_features(struct phy_device *phydev)
 	linkmode_or(supported, supported, phy_gbit_features);
 	linkmode_set_bit(ETHTOOL_LINK_MODE_2500baseT_Full_BIT, supported);
 
-	return 0;
+	return genphy_c45_read_eee_abilities(phydev);
 }
 
 static int aqr111_get_features(struct phy_device *phydev)
 {
-	/* PHY supports speeds up to 5G with autoneg. PMA capabilities
-	 * are not useful.
-	 */
-	aqr115c_get_features(phydev);
+	int ret;
+
+	ret = aqr115c_get_features(phydev);
+	if (ret)
+		return ret;
+
 	linkmode_set_bit(ETHTOOL_LINK_MODE_5000baseT_Full_BIT,
 			 phydev->supported);
 
