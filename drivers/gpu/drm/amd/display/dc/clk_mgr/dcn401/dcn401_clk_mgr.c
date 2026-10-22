@@ -548,33 +548,18 @@ static int dcn401_set_hard_min_by_freq_optimized(struct clk_mgr_internal *clk_mg
 
 static void dcn401_update_clocks_update_dentist(
 		struct clk_mgr_internal *clk_mgr,
-		struct dc_state *context)
+		uint32_t new_dispclk_wdivider)
 {
-	(void)context;
-	uint32_t new_disp_divider = 0;
-	uint32_t new_dispclk_wdivider = 0;
 	uint32_t dentist_dispclk_wdivider_readback = 0;
-	struct dc *dc = clk_mgr->base.ctx->dc;
 
-	if (clk_mgr->base.clks.dispclk_khz == 0)
-		return;
+	REG_GET(DENTIST_DISPCLK_CNTL,
+			DENTIST_DISPCLK_WDIVIDER, &dentist_dispclk_wdivider_readback);
 
-	new_disp_divider = DENTIST_DIVIDER_RANGE_SCALE_FACTOR
-			* clk_mgr->base.dentist_vco_freq_khz / clk_mgr->base.clks.dispclk_khz;
-
-	new_dispclk_wdivider = dentist_get_did_from_divider(new_disp_divider);
-
-	if (dc->debug.override_dispclk_programming) {
-		REG_GET(DENTIST_DISPCLK_CNTL,
-				DENTIST_DISPCLK_WDIVIDER, &dentist_dispclk_wdivider_readback);
-
-		if (dentist_dispclk_wdivider_readback > new_dispclk_wdivider) {
-			REG_UPDATE(DENTIST_DISPCLK_CNTL,
-					DENTIST_DISPCLK_WDIVIDER, new_dispclk_wdivider);
-			REG_WAIT(DENTIST_DISPCLK_CNTL, DENTIST_DISPCLK_CHG_DONE, 1, 50, 2000);
-		}
+	if (dentist_dispclk_wdivider_readback > new_dispclk_wdivider) {
+		REG_UPDATE(DENTIST_DISPCLK_CNTL,
+				DENTIST_DISPCLK_WDIVIDER, new_dispclk_wdivider);
+		REG_WAIT(DENTIST_DISPCLK_CNTL, DENTIST_DISPCLK_CHG_DONE, 1, 50, 2000);
 	}
-
 }
 
 static void dcn401_execute_block_sequence(struct clk_mgr *clk_mgr_base, unsigned int num_steps)
@@ -678,7 +663,7 @@ static void dcn401_execute_block_sequence(struct clk_mgr *clk_mgr_base, unsigned
 		case CLK_MGR401_UPDATE_DENTIST:
 			dcn401_update_clocks_update_dentist(
 					clk_mgr_internal,
-					params->update_dentist_params.context);
+					params->update_dentist_params.dispclk_wdivider);
 			break;
 		case CLK_MGR401_UPDATE_PSR_WAIT_LOOP:
 			params->update_psr_wait_loop_params.dmcu->funcs->set_psr_wait_loop(
@@ -1009,6 +994,27 @@ static unsigned int dcn401_build_update_bandwidth_clocks_sequence(
 	return num_steps;
 }
 
+/* Outside the dispclk programming debug override, DENTIST is not reprogrammed here. */
+static unsigned int dcn401_add_update_dentist_step(
+		struct clk_mgr *clk_mgr_base,
+		struct dcn401_clk_mgr_block_sequence *block_sequence,
+		unsigned int num_steps)
+{
+	uint32_t new_disp_divider;
+
+	if (!clk_mgr_base->ctx->dc->debug.override_dispclk_programming ||
+			clk_mgr_base->clks.dispclk_khz == 0)
+		return num_steps;
+
+	new_disp_divider = DENTIST_DIVIDER_RANGE_SCALE_FACTOR
+			* clk_mgr_base->dentist_vco_freq_khz / clk_mgr_base->clks.dispclk_khz;
+
+	block_sequence[num_steps].params.update_dentist_params.dispclk_wdivider =
+			dentist_get_did_from_divider(new_disp_divider);
+	block_sequence[num_steps].func = CLK_MGR401_UPDATE_DENTIST;
+	return num_steps + 1;
+}
+
 static unsigned int dcn401_build_update_display_clocks_sequence(
 		struct clk_mgr *clk_mgr_base,
 		struct dc_state *context,
@@ -1119,9 +1125,7 @@ static unsigned int dcn401_build_update_display_clocks_sequence(
 			block_sequence[num_steps].func = CLK_MGR401_UPDATE_DPPCLK_DTO;
 			num_steps++;
 
-			block_sequence[num_steps].params.update_dentist_params.context = context;
-			block_sequence[num_steps].func = CLK_MGR401_UPDATE_DENTIST;
-			num_steps++;
+			num_steps = dcn401_add_update_dentist_step(clk_mgr_base, block_sequence, num_steps);
 
 			if (dcn401_is_ppclk_dpm_enabled(clk_mgr_internal, PPCLK_DPPCLK)) {
 				block_sequence[num_steps].params.update_hardmin_optimized_params.ppclk = PPCLK_DPPCLK;
@@ -1146,11 +1150,8 @@ static unsigned int dcn401_build_update_display_clocks_sequence(
 				num_steps++;
 			}
 
-			if (update_dppclk || update_dispclk) {
-				block_sequence[num_steps].params.update_dentist_params.context = context;
-				block_sequence[num_steps].func = CLK_MGR401_UPDATE_DENTIST;
-				num_steps++;
-			}
+			if (update_dppclk || update_dispclk)
+				num_steps = dcn401_add_update_dentist_step(clk_mgr_base, block_sequence, num_steps);
 
 			block_sequence[num_steps].params.update_dppclk_dto_params.ref_dppclk_khz = &clk_mgr_base->clks.actual_dppclk_khz;
 			clk_mgr_build_dpp_dto_targets(dc, context, safe_to_lower,

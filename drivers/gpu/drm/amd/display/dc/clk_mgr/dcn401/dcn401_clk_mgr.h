@@ -61,7 +61,7 @@ union dcn401_clk_mgr_block_sequence_params {
 	struct clk_mgr_dtbclk_dto_target update_dtbclk_dto_params;
 	struct {
 		/* inputs */
-		struct dc_state *context;
+		uint32_t dispclk_wdivider;
 	} update_dentist_params;
 	struct {
 		/* inputs */

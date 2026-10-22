@@ -52,10 +52,6 @@ union dcn60_clk_mgr_block_sequence_params {
 	struct clk_mgr_dtbclk_dto_target update_dtbclk_dto_params;
 	struct {
 		/* inputs */
-		struct dc_state *context;
-	} update_dentist_params;
-	struct {
-		/* inputs */
 		struct dmcu *dmcu;
 		unsigned int wait;
 	} update_psr_wait_loop_params;
