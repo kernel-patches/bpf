@@ -37,6 +37,30 @@ enum {
 	E0 = 1,
 };
 
+struct __sk_buff {
+	int len;
+	union {
+		int sk;
+	};
+} __attribute__((__bpf_static_offset));
+
+struct bpf_nf_ctx {
+	int f;
+} __attribute__((__bpf_relocatable));
+
+struct bpf_sk_lookup {
+	union {
+		union {
+			int cookie;
+		};
+		int family;
+	};
+} __attribute__((__bpf_static_offset));
+
+struct bpf_tcp_sock {
+	int snd_cwnd;
+} __attribute__((__bpf_static_offset));
+
 struct holey {
 	int c;
 	long: 32;
