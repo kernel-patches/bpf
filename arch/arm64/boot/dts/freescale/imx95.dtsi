@@ -1871,7 +1871,7 @@
 			power-domains = <&scmi_devpd IMX95_PD_HSIO_TOP>;
 		};
 
-		bus@4c100000 {
+		hsio-bus {
 			compatible = "simple-bus";
 			#address-cells = <2>;
 			#size-cells = <2>;
