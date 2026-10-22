@@ -49,11 +49,7 @@ union dcn60_clk_mgr_block_sequence_params {
 		int *ref_dppclk_khz;
 		struct clk_mgr_dpp_dto_targets targets;
 	} update_dppclk_dto_params;
-	struct {
-		/* inputs */
-		struct dc_state *context;
-		int *ref_dtbclk_khz;
-	} update_dtbclk_dto_params;
+	struct clk_mgr_dtbclk_dto_target update_dtbclk_dto_params;
 	struct {
 		/* inputs */
 		struct dc_state *context;

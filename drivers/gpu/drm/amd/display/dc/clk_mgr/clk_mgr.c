@@ -144,6 +144,43 @@ void clk_mgr_program_dpp_dto(
 	}
 }
 
+bool clk_mgr_build_dtbclk_dto_target(
+		const struct dc *dc,
+		struct dc_state *context,
+		const struct dc_stream_state *stream,
+		struct clk_mgr_dtbclk_dto_target *target)
+{
+	struct pipe_ctx *otg_master = resource_get_otg_master_for_stream(&context->res_ctx, stream);
+
+	ASSERT(otg_master);
+	if (!otg_master)
+		return false;
+
+	ASSERT(otg_master->clock_source);
+	ASSERT(otg_master->clock_source->funcs->program_pix_clk);
+	ASSERT(otg_master->stream_res.pix_clk_params.controller_id >= CONTROLLER_ID_D0);
+
+	if (!dc->link_srv->dp_is_128b_132b_signal(otg_master) &&
+			!dc_is_hdmi_frl_signal(otg_master->stream->signal))
+		return false;
+
+	if (otg_master->stream_res.pix_clk_params.controller_id <= CONTROLLER_ID_UNDEFINED)
+		return false;
+
+	target->clock_source = otg_master->clock_source;
+	target->pix_clk_params = otg_master->stream_res.pix_clk_params;
+	target->pll_settings = otg_master->pll_settings;
+	target->encoding = dc->link_srv->dp_get_encoding_format(
+			&otg_master->link_config.dp_link_settings);
+	return true;
+}
+
+void clk_mgr_program_dtbclk_dto(struct clk_mgr_dtbclk_dto_target *target)
+{
+	target->clock_source->funcs->program_pix_clk(target->clock_source,
+			&target->pix_clk_params, target->encoding, &target->pll_settings);
+}
+
 void clk_mgr_exit_optimized_pwr_state(const struct dc *dc, struct clk_mgr *clk_mgr)
 {
 	struct dc_link *edp_links[MAX_NUM_EDP];

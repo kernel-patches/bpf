@@ -5,7 +5,8 @@
 #ifndef __DCN401_CLK_MGR_H_
 #define __DCN401_CLK_MGR_H_
 
-#define DCN401_CLK_MGR_MAX_SEQUENCE_SIZE 30
+/* Leaves room for a DTBCLK DTO step per stream. */
+#define DCN401_CLK_MGR_MAX_SEQUENCE_SIZE (30 + MAX_PIPES - 1)
 
 union dcn401_clk_mgr_block_sequence_params {
 	struct {
@@ -57,11 +58,7 @@ union dcn401_clk_mgr_block_sequence_params {
 		int *ref_dppclk_khz;
 		struct clk_mgr_dpp_dto_targets targets;
 	} update_dppclk_dto_params;
-	struct {
-		/* inputs */
-		struct dc_state *context;
-		int *ref_dtbclk_khz;
-	} update_dtbclk_dto_params;
+	struct clk_mgr_dtbclk_dto_target update_dtbclk_dto_params;
 	struct {
 		/* inputs */
 		struct dc_state *context;

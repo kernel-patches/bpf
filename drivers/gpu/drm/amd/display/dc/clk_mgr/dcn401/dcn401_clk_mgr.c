@@ -523,43 +523,6 @@ static void dcn401_auto_dpm_test_log(
 	}
 }
 
-static void dcn401_update_clocks_update_dtb_dto(struct clk_mgr_internal *clk_mgr,
-			struct dc_state *context,
-			int ref_dtbclk_khz)
-{
-	(void)ref_dtbclk_khz;
-	int i;
-	struct dccg *dccg = clk_mgr->dccg;
-	struct pipe_ctx *otg_master;
-	bool use_hpo_encoder;
-
-
-	for (i = 0; i < context->stream_count; i++) {
-		otg_master = resource_get_otg_master_for_stream(
-				&context->res_ctx, context->streams[i]);
-		ASSERT(otg_master);
-		if (!otg_master)
-			continue;
-
-		ASSERT(otg_master->clock_source);
-		ASSERT(otg_master->clock_source->funcs->program_pix_clk);
-		ASSERT(otg_master->stream_res.pix_clk_params.controller_id >= CONTROLLER_ID_D0);
-
-		use_hpo_encoder = dccg->ctx->dc->link_srv->dp_is_128b_132b_signal(otg_master);
-		use_hpo_encoder |= dc_is_hdmi_frl_signal(otg_master->stream->signal);
-		if (!use_hpo_encoder)
-			continue;
-
-		if (otg_master->stream_res.pix_clk_params.controller_id > CONTROLLER_ID_UNDEFINED)
-			otg_master->clock_source->funcs->program_pix_clk(
-				otg_master->clock_source,
-				&otg_master->stream_res.pix_clk_params,
-				dccg->ctx->dc->link_srv->dp_get_encoding_format(
-					&otg_master->link_config.dp_link_settings),
-				&otg_master->pll_settings);
-	}
-}
-
 static int dcn401_set_hard_min_by_freq_optimized(struct clk_mgr_internal *clk_mgr, PPCLK_e clk, int requested_clk_khz)
 {
 	if (!clk_mgr->smu_present || !dcn401_is_ppclk_dpm_enabled(clk_mgr, clk))
@@ -710,10 +673,7 @@ static void dcn401_execute_block_sequence(struct clk_mgr *clk_mgr_base, unsigned
 					&params->update_dppclk_dto_params.targets);
 			break;
 		case CLK_MGR401_UPDATE_DTBCLK_DTO:
-			dcn401_update_clocks_update_dtb_dto(
-					clk_mgr_internal,
-					params->update_dtbclk_dto_params.context,
-					*params->update_dtbclk_dto_params.ref_dtbclk_khz);
+			clk_mgr_program_dtbclk_dto(&params->update_dtbclk_dto_params);
 			break;
 		case CLK_MGR401_UPDATE_DENTIST:
 			dcn401_update_clocks_update_dentist(
@@ -1119,10 +1079,13 @@ static unsigned int dcn401_build_update_display_clocks_sequence(
 		num_steps++;
 
 		/* Update DTO in DCCG */
-		block_sequence[num_steps].params.update_dtbclk_dto_params.context = context;
-		block_sequence[num_steps].params.update_dtbclk_dto_params.ref_dtbclk_khz = &clk_mgr_base->clks.ref_dtbclk_khz;
-		block_sequence[num_steps].func = CLK_MGR401_UPDATE_DTBCLK_DTO;
-		num_steps++;
+		for (i = 0; i < context->stream_count; i++) {
+			if (!clk_mgr_build_dtbclk_dto_target(dc, context, context->streams[i],
+					&block_sequence[num_steps].params.update_dtbclk_dto_params))
+				continue;
+			block_sequence[num_steps].func = CLK_MGR401_UPDATE_DTBCLK_DTO;
+			num_steps++;
+		}
 	}
 
 	if (should_set_clock(safe_to_lower, new_clocks->dppclk_khz, clk_mgr_base->clks.dppclk_khz)) {

@@ -624,6 +624,22 @@ void clk_mgr_program_dpp_dto(
 		int ref_dppclk_khz,
 		const struct clk_mgr_dpp_dto_targets *targets);
 
+/* DTBCLK DTO programming of one HPO stream, resolved from dc_state when a clock update is built. */
+struct clk_mgr_dtbclk_dto_target {
+	struct clock_source *clock_source;
+	struct pixel_clk_params pix_clk_params;
+	struct pll_settings pll_settings;
+	enum dp_link_encoding encoding;
+};
+
+bool clk_mgr_build_dtbclk_dto_target(
+		const struct dc *dc,
+		struct dc_state *context,
+		const struct dc_stream_state *stream,
+		struct clk_mgr_dtbclk_dto_target *target);
+
+void clk_mgr_program_dtbclk_dto(struct clk_mgr_dtbclk_dto_target *target);
+
 
 
 #endif //__DAL_CLK_MGR_INTERNAL_H__
