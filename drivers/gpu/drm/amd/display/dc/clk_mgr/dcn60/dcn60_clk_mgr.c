@@ -183,40 +183,6 @@ static bool dcn60_check_native_scaling(struct pipe_ctx *pipe)
 	return is_native_scaling;
 }
 
-static void dcn60_update_clocks_update_dpp_dto(struct clk_mgr_internal *clk_mgr,
-	struct dc_state *context, bool safe_to_lower, int ref_dppclk_khz)
-{
-	uint32_t i;
-
-	clk_mgr->dccg->ref_dppclk = ref_dppclk_khz;
-	for (i = 0; i < clk_mgr->base.ctx->dc->res_pool->pipe_count; i++) {
-		int dpp_inst = 0, dppclk_khz, prev_dppclk_khz;
-
-		dppclk_khz = context->res_ctx.pipe_ctx[i].plane_res.bw.dppclk_khz;
-
-		if (context->res_ctx.pipe_ctx[i].plane_res.dpp)
-			dpp_inst = context->res_ctx.pipe_ctx[i].plane_res.dpp->inst;
-		else if (!context->res_ctx.pipe_ctx[i].plane_res.dpp && dppclk_khz == 0) {
-			/* dpp == NULL && dppclk_khz == 0 is valid because of pipe harvesting.
-			 * In this case just continue in loop
-			 */
-			continue;
-		} else if (!context->res_ctx.pipe_ctx[i].plane_res.dpp && dppclk_khz > 0) {
-			/* The software state is not valid if dpp resource is NULL and
-			 * dppclk_khz > 0.
-			 */
-			ASSERT(false);
-			continue;
-		}
-
-		prev_dppclk_khz = clk_mgr->dccg->pipe_dppclk_khz[i];
-
-		if (safe_to_lower || prev_dppclk_khz < dppclk_khz)
-			clk_mgr->dccg->funcs->update_dpp_dto(
-				clk_mgr->dccg, dpp_inst, dppclk_khz);
-	}
-}
-
 static int dcn60_set_clock_freq_optimized(struct clk_mgr_internal *clk_mgr, PPCLK_e clk, int requested_clk_khz)
 {
 	if (!clk_mgr->smu_present || !dcn60_is_ppclk_dpm_enabled(clk_mgr, clk))
@@ -383,9 +349,9 @@ static unsigned int dcn60_build_update_display_clocks_sequence(
 	if (dc->config.forced_clocks == false || (force_reset && safe_to_lower)) {
 		if (dppclk_lowered) {
 			/* if clock is being lowered, increase DTO before lowering refclk */
-			block_sequence[num_steps].params.update_dppclk_dto_params.context = context;
 			block_sequence[num_steps].params.update_dppclk_dto_params.ref_dppclk_khz = &clk_mgr_base->clks.dppclk_khz;
-			block_sequence[num_steps].params.update_dppclk_dto_params.safe_to_lower = safe_to_lower;
+			clk_mgr_build_dpp_dto_targets(dc, context, safe_to_lower,
+					&block_sequence[num_steps].params.update_dppclk_dto_params.targets);
 			block_sequence[num_steps].func = CLK_MGR60_UPDATE_DPPCLK_DTO;
 			num_steps++;
 
@@ -396,9 +362,9 @@ static unsigned int dcn60_build_update_display_clocks_sequence(
 				block_sequence[num_steps].func = CLK_MGR60_SET_PPCLK_OPTIMIZED;
 				num_steps++;
 
-				block_sequence[num_steps].params.update_dppclk_dto_params.context = context;
 				block_sequence[num_steps].params.update_dppclk_dto_params.ref_dppclk_khz = &clk_mgr_base->clks.actual_dppclk_khz;
-				block_sequence[num_steps].params.update_dppclk_dto_params.safe_to_lower = safe_to_lower;
+				clk_mgr_build_dpp_dto_targets(dc, context, safe_to_lower,
+						&block_sequence[num_steps].params.update_dppclk_dto_params.targets);
 				block_sequence[num_steps].func = CLK_MGR60_UPDATE_DPPCLK_DTO;
 				num_steps++;
 			}
@@ -412,9 +378,9 @@ static unsigned int dcn60_build_update_display_clocks_sequence(
 				num_steps++;
 			}
 
-			block_sequence[num_steps].params.update_dppclk_dto_params.context = context;
 			block_sequence[num_steps].params.update_dppclk_dto_params.ref_dppclk_khz = &clk_mgr_base->clks.actual_dppclk_khz;
-			block_sequence[num_steps].params.update_dppclk_dto_params.safe_to_lower = safe_to_lower;
+			clk_mgr_build_dpp_dto_targets(dc, context, safe_to_lower,
+					&block_sequence[num_steps].params.update_dppclk_dto_params.targets);
 			block_sequence[num_steps].func = CLK_MGR60_UPDATE_DPPCLK_DTO;
 			num_steps++;
 		}
@@ -1225,11 +1191,9 @@ static void dcn60_execute_block_sequence(struct clk_mgr *clk_mgr_base, unsigned 
 					params->indicate_pstate_status_params.alt_ch_enable);
 			break;
 		case CLK_MGR60_UPDATE_DPPCLK_DTO:
-			dcn60_update_clocks_update_dpp_dto(
-					clk_mgr_internal,
-					params->update_dppclk_dto_params.context,
-					params->update_dppclk_dto_params.safe_to_lower,
-					*params->update_dppclk_dto_params.ref_dppclk_khz);
+			clk_mgr_program_dpp_dto(clk_mgr_internal->dccg,
+					*params->update_dppclk_dto_params.ref_dppclk_khz,
+					&params->update_dppclk_dto_params.targets);
 			break;
 		case CLK_MGR60_UPDATE_DTBCLK_DTO:
 			dcn60_update_clocks_update_dtb_dto(

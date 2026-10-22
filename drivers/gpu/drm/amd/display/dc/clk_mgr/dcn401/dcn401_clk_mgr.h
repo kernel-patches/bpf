@@ -53,9 +53,9 @@ union dcn401_clk_mgr_block_sequence_params {
 	} indicate_drr_status_params;
 	struct {
 		/* inputs */
-		struct dc_state *context;
+		/* clk_mgr's own clocks; an earlier step may store the PMFW-granted DPPCLK there. */
 		int *ref_dppclk_khz;
-		bool safe_to_lower;
+		struct clk_mgr_dpp_dto_targets targets;
 	} update_dppclk_dto_params;
 	struct {
 		/* inputs */

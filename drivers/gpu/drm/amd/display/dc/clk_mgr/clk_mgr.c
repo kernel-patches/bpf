@@ -98,6 +98,52 @@ int clk_mgr_helper_get_active_plane_cnt(
 	return total_plane_count;
 }
 
+void clk_mgr_build_dpp_dto_targets(
+		const struct dc *dc,
+		const struct dc_state *context,
+		bool safe_to_lower,
+		struct clk_mgr_dpp_dto_targets *targets)
+{
+	unsigned int i;
+
+	targets->safe_to_lower = safe_to_lower;
+	targets->count = 0;
+
+	for (i = 0; i < dc->res_pool->pipe_count; i++) {
+		const struct pipe_ctx *pipe = &context->res_ctx.pipe_ctx[i];
+		int dppclk_khz = pipe->plane_res.bw.dppclk_khz;
+
+		if (!pipe->plane_res.dpp) {
+			/* A harvested pipe has neither a DPP nor a DPP clock. */
+			ASSERT(dppclk_khz == 0);
+			continue;
+		}
+
+		targets->pipes[targets->count].pipe_idx = i;
+		targets->pipes[targets->count].dpp_inst = pipe->plane_res.dpp->inst;
+		targets->pipes[targets->count].dppclk_khz = dppclk_khz;
+		targets->count++;
+	}
+}
+
+void clk_mgr_program_dpp_dto(
+		struct dccg *dccg,
+		int ref_dppclk_khz,
+		const struct clk_mgr_dpp_dto_targets *targets)
+{
+	unsigned int i;
+
+	dccg->ref_dppclk = ref_dppclk_khz;
+	for (i = 0; i < targets->count; i++) {
+		int dppclk_khz = targets->pipes[i].dppclk_khz;
+
+		/* Unless lowering is safe, only raise over what DCCG last programmed. */
+		if (targets->safe_to_lower ||
+				dccg->pipe_dppclk_khz[targets->pipes[i].pipe_idx] < dppclk_khz)
+			dccg->funcs->update_dpp_dto(dccg, targets->pipes[i].dpp_inst, dppclk_khz);
+	}
+}
+
 void clk_mgr_exit_optimized_pwr_state(const struct dc *dc, struct clk_mgr *clk_mgr)
 {
 	struct dc_link *edp_links[MAX_NUM_EDP];

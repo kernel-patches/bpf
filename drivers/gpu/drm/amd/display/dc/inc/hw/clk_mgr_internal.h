@@ -602,6 +602,28 @@ int clk_mgr_helper_get_active_plane_cnt(
 		struct dc *dc,
 		struct dc_state *context);
 
+/* Per-pipe DPP DTO programming resolved from dc_state when a clock update is built. */
+struct clk_mgr_dpp_dto_targets {
+	bool safe_to_lower;
+	unsigned int count;
+	struct {
+		unsigned int pipe_idx;
+		int dpp_inst;
+		int dppclk_khz;
+	} pipes[MAX_PIPES];
+};
+
+void clk_mgr_build_dpp_dto_targets(
+		const struct dc *dc,
+		const struct dc_state *context,
+		bool safe_to_lower,
+		struct clk_mgr_dpp_dto_targets *targets);
+
+void clk_mgr_program_dpp_dto(
+		struct dccg *dccg,
+		int ref_dppclk_khz,
+		const struct clk_mgr_dpp_dto_targets *targets);
+
 
 
 #endif //__DAL_CLK_MGR_INTERNAL_H__
