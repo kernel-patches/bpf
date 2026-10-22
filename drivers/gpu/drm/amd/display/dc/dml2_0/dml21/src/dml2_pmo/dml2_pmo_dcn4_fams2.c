@@ -2361,9 +2361,10 @@ static bool should_relax_stutter_constraint_for_stream(const struct dml2_pmo_ini
 		unsigned int stream_index)
 {
 	// relax the stutter constraint when:
-	// 1. Stream has DRR fixed enabled (assumed blank is extended sufficiently beyond nominal)
+	// 1. Stream has fixed DRR or Ramless Idle static screen enabled (extended blank)
 	// 2. The option to relax stutter constraint is enabled in PMO options.
-	return in_out->base_display_config->display_config.stream_descriptors[stream_index].timing.drr_config.drr_active_fixed &&
+	return (in_out->base_display_config->display_config.stream_descriptors[stream_index].timing.drr_config.drr_active_fixed ||
+			in_out->base_display_config->display_config.stream_descriptors[stream_index].timing.drr_config.drr_active_idle_static_screen) &&
 			in_out->instance->options->relax_stutter_constraint_for_drr;
 }
 
