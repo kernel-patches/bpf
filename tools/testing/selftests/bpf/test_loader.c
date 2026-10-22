@@ -1506,7 +1506,7 @@ void run_subtest(struct test_loader *tester,
 					     tester->log_buf, tester->log_buf_sz);
 		if (err == -EOPNOTSUPP) {
 			printf("%s:SKIP: jited programs disassembly is not supported,\n", __func__);
-			printf("%s:SKIP: tests are built w/o LLVM development libs\n", __func__);
+			printf("%s:SKIP: rebuild with LLVM development libs installed\n", __func__);
 			test__skip();
 			goto tobj_cleanup;
 		}
