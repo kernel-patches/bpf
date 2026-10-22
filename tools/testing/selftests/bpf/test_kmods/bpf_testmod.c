@@ -2593,22 +2593,31 @@ static int bpf_testmod_init(void)
 	void **tramp;
 	int ret;
 
-	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_UNSPEC, &bpf_testmod_common_kfunc_set);
-	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_CLS, &bpf_testmod_kfunc_set);
-	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_TRACING, &bpf_testmod_kfunc_set);
-	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SYSCALL, &bpf_testmod_kfunc_set);
-	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS, &bpf_testmod_kfunc_set);
-	ret = ret ?: register_btf_fmodret_id_set(&bpf_testmod_trampoline_count_fmodret_set);
-	ret = ret ?: register_bpf_struct_ops(&bpf_bpf_testmod_ops, bpf_testmod_ops);
-	ret = ret ?: register_bpf_struct_ops(&bpf_testmod_ops2, bpf_testmod_ops2);
-	ret = ret ?: register_bpf_struct_ops(&bpf_testmod_ops3, bpf_testmod_ops3);
-	ret = ret ?: register_bpf_struct_ops(&testmod_st_ops, bpf_testmod_st_ops);
-	ret = ret ?: register_bpf_struct_ops(&testmod_multi_st_ops, bpf_testmod_multi_st_ops);
-	ret = ret ?: register_btf_id_dtor_kfuncs(bpf_testmod_dtors,
-						 ARRAY_SIZE(bpf_testmod_dtors),
-						 THIS_MODULE);
-	if (ret < 0)
-		return ret;
+#define TRY(expr)							\
+	do {								\
+		ret = (expr);						\
+		if (ret < 0) {						\
+			pr_err("%s: %s failed, ret %d\n",		\
+			       __func__, #expr, ret);			\
+			return ret;					\
+		}							\
+	} while (0)
+
+	TRY(register_btf_kfunc_id_set(BPF_PROG_TYPE_UNSPEC, &bpf_testmod_common_kfunc_set));
+	TRY(register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_CLS, &bpf_testmod_kfunc_set));
+	TRY(register_btf_kfunc_id_set(BPF_PROG_TYPE_TRACING, &bpf_testmod_kfunc_set));
+	TRY(register_btf_kfunc_id_set(BPF_PROG_TYPE_SYSCALL, &bpf_testmod_kfunc_set));
+	TRY(register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS, &bpf_testmod_kfunc_set));
+	TRY(register_btf_fmodret_id_set(&bpf_testmod_trampoline_count_fmodret_set));
+	TRY(register_bpf_struct_ops(&bpf_bpf_testmod_ops, bpf_testmod_ops));
+	TRY(register_bpf_struct_ops(&bpf_testmod_ops2, bpf_testmod_ops2));
+	TRY(register_bpf_struct_ops(&bpf_testmod_ops3, bpf_testmod_ops3));
+	TRY(register_bpf_struct_ops(&testmod_st_ops, bpf_testmod_st_ops));
+	TRY(register_bpf_struct_ops(&testmod_multi_st_ops, bpf_testmod_multi_st_ops));
+	TRY(register_btf_id_dtor_kfuncs(bpf_testmod_dtors,
+					ARRAY_SIZE(bpf_testmod_dtors),
+					THIS_MODULE));
+#undef TRY
 	if (bpf_fentry_test1(0) < 0)
 		return -EINVAL;
 	sock = NULL;
