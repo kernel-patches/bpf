@@ -16,9 +16,6 @@
 # the feature bit, so the failure looks like a machine-specific bug rather than
 # a missing patch.
 #
-# insn->alts exists only after objtool's check pass, so the pair goes through
-# that first -- the compiler emits none of this structure itself.
-#
 # Covers the same ground as corpus/x86_64/checksum-alt-group,
 # checksum-alt-no-group and checksum-alt-recursion-guard in Joe Lawrence's
 # klp-build unit test corpus.
@@ -31,7 +28,6 @@ check()
 {
 	build_pair checksum_alt.c "-D$1"
 	assert_input_section .altinstructions
-	run_objtool_check --mcount
 	run_checksum
 
 	assert_checksum_differs target

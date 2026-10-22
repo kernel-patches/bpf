@@ -15,7 +15,7 @@
 
 
 # section, entry size, relocations per entry
-for spec in "__bug_table 12 1" "__ex_table 12 2" "__mcount_loc 8 1"; do
+for spec in "__bug_table 12 1" "__ex_table 12 2"; do
 	set -- $spec
 	sec=$1
 
@@ -38,5 +38,15 @@ for spec in "__bug_table 12 1" "__ex_table 12 2" "__mcount_loc 8 1"; do
 
 	cleanup
 done
+
+# __mcount_loc comes from FTRACE_CFLAGS, not from the fixture.
+setup
+build_pair special_sections.c
+assert_input_section __mcount_loc
+run_diff
+
+assert_section __mcount_loc
+assert_reloc_sym __mcount_loc target
+assert_no_reloc_sym __mcount_loc other
 
 pass "__bug_table, __ex_table and __mcount_loc entries extracted"

@@ -41,7 +41,7 @@ OBJTOOL="${OBJTOOL:-$TESTS_DIR/../objtool}"
 #
 klp_preflight()
 {
-	local tmp tool cc_version arch host cc_arch
+	local tmp tool cc_version arch host cc_arch mcount=
 
 	bail() { echo "Bail out! $*" >&2; exit 1; }
 
@@ -99,6 +99,16 @@ klp_preflight()
 	*AArch64*)		cc_arch=arm64 ;;
 	*)			cc_arch= ;;
 	esac
+
+	# Same test as FTRACE_MCOUNT_USE_CC.
+	if [ "$cc_arch" = x86 ]; then
+		if $CC -pg -mfentry -mrecord-mcount -mnop-mcount -c \
+			-o "$tmp/probe.o" "$tmp/probe.c" 2>/dev/null; then
+			mcount=cc
+		else
+			mcount=objtool
+		fi
+	fi
 	rm -rf "$tmp"
 
 	# Normalize to the kernel's SRCARCH.
@@ -119,8 +129,9 @@ klp_preflight()
 		     "the $arch tests would run against the wrong architecture"
 
 	KLP_TEST_ARCH="$arch"
+	KLP_TEST_MCOUNT="$mcount"
 	KLP_TEST_PREFLIGHT=done
-	export OBJTOOL CC KLP_TEST_ARCH KLP_TEST_PREFLIGHT
+	export OBJTOOL CC KLP_TEST_ARCH KLP_TEST_MCOUNT KLP_TEST_PREFLIGHT
 
 	cc_version="$($CC --version 2>/dev/null | head -1)"
 	cat <<EOF
@@ -128,6 +139,7 @@ klp_preflight()
 #   objtool   $OBJTOOL (klp: yes)
 #   compiler  $cc_version
 #   arch      $KLP_TEST_ARCH$([ "$arch" = "$host" ] || echo "  (host $host, cross)")
+#   mcount    ${KLP_TEST_MCOUNT:-n/a}
 #   tmpdir    ${TMPDIR:-/tmp}  (each test builds in a fresh directory here)
 EOF
 }
@@ -152,6 +164,16 @@ EOF
 # A test overrides it; see tools/objtool/Documentation/klp-write-tests.txt.
 FIXTURE_CFLAGS="-O2 -ffunction-sections -fdata-sections -fno-common \
 		-fno-asynchronous-unwind-tables"
+
+# Build with ftrace, which livepatch depends on.  Objects not built with
+# build_one() need FTRACE_CFLAGS and record_mcount() too.
+FTRACE_CFLAGS=
+if [ "$KLP_TEST_ARCH" = x86 ]; then
+	FTRACE_CFLAGS="-pg -mfentry"
+	[ "$KLP_TEST_MCOUNT" = cc ] &&
+		FTRACE_CFLAGS="$FTRACE_CFLAGS -mrecord-mcount -mnop-mcount"
+fi
+FIXTURE_CFLAGS="$FIXTURE_CFLAGS $FTRACE_CFLAGS"
 
 test_name="$(basename "$0" .sh)"
 workdir=
@@ -343,6 +365,20 @@ build_one()
 
 	$CC -c $FIXTURE_CFLAGS "$@" -o "$out" "$fixture" 2>"$workdir/cc.log" ||
 		fail "$(basename "$fixture") does not build: $(tail -1 "$workdir/cc.log")"
+
+	record_mcount "$out"
+}
+
+# record_mcount <object>
+#
+# FTRACE_MCOUNT_USE_OBJTOOL.  CONFIG_KLP_BUILD always runs objtool with --link.
+record_mcount()
+{
+	[ "$KLP_TEST_MCOUNT" = objtool ] || return 0
+
+	"$OBJTOOL" --mcount --mnop --link "$1" 2>"$workdir/objtool.log" ||
+		fail "objtool --mcount failed on $(basename "$1"):" \
+		     "$(tail -1 "$workdir/objtool.log")"
 }
 
 # build_pair <fixture.c> [cflags...]
@@ -365,7 +401,7 @@ build_pair()
 # Run objtool's ordinary check pass over the pair, as the kernel build does.
 #
 # Some of what klp diff consumes is produced by this pass rather than by the
-# compiler: .static_call_sites, .mcount_loc, .ibt_endbr_seal, ORC.
+# compiler: .static_call_sites, .ibt_endbr_seal, ORC.
 #
 # Only module objects see it before klp-build -- with CONFIG_KLP_BUILD the
 # per-object pass is deferred, so built-in objects reach klp diff exactly as
