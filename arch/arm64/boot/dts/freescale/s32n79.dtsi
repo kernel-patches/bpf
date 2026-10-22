@@ -12,7 +12,7 @@
 	#address-cells = <2>;
 	#size-cells = <2>;
 
-	cis-bus {
+	cis-bus@4f200000 {
 		compatible = "simple-bus";
 		ranges = <0x4f200000 0x0 0x4f200000 0xc00000>;
 		#address-cells = <1>;
@@ -53,7 +53,7 @@
 		};
 	};
 
-	coss-bus {
+	coss-bus@4a000000 {
 		compatible = "simple-bus";
 		ranges = <0x4a000000 0x0 0x4a000000 0xff0000>,
 			 <0x4e000000 0x0 0x4e000000 0x1000000>;
@@ -330,7 +330,7 @@
 		};
 	};
 
-	fss-bus {
+	fss-bus@5b490000 {
 		compatible = "simple-bus";
 		ranges = <0x5b490000 0x0 0x5b490000 0x1000>;
 		#address-cells = <1>;
