@@ -61,7 +61,8 @@ TEST_GEN_PROGS_EXTENDED = \
 	xdp_synproxy \
 	xskxceiver
 
-TEST_GEN_FILES += $(TEST_KMODS) liburandom_read.so urandom_read sign-file uprobe_multi
+TEST_GEN_FILES += $(TEST_KMODS) liburandom_read.so urandom_read sign-file uprobe_multi \
+	uprobe_multi_stripped.so
 
 ifneq ($(V),1)
 submake_extras := feature_display=0
@@ -665,6 +666,10 @@ $(OUTPUT)/uprobe_multi: uprobe_multi.c uprobe_multi.ld
 	$(call msg,BINARY,,$@)
 	$(Q)$(CC) $(CFLAGS) -Wl,-T,uprobe_multi.ld -O0 $(LDFLAGS) 	\
 		$(filter-out %.ld,$^) $(LDLIBS) -o $@
+
+$(OUTPUT)/uprobe_multi_stripped.so: uprobe_multi_stripped.c
+	$(call msg,BINARY,,$@)
+	$(Q)$(CC) $(CFLAGS) -fPIC -shared -Wl,-s $(LDFLAGS) $< -o $@
 
 EXTRA_CLEAN := $(SCRATCH_DIR) $(HOST_SCRATCH_DIR)			\
 	prog_tests/tests.h map_tests/tests.h verifier/tests.h		\

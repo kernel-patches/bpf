@@ -374,6 +374,41 @@ static void test_attach_api_syms(void)
 	test_attach_api("/proc/self/exe", NULL, &opts);
 }
 
+static void test_attach_api_syms_stripped(void)
+{
+	LIBBPF_OPTS(bpf_uprobe_multi_opts, opts);
+	const char *syms[] = { "uprobe_multi_stripped_func" };
+	struct uprobe_multi *skel = NULL;
+	struct bpf_link *link = NULL;
+
+	opts.syms = syms;
+	opts.cnt = ARRAY_SIZE(syms);
+
+	skel = uprobe_multi__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "uprobe_multi__open_and_load"))
+		return;
+
+	link = bpf_program__attach_uprobe_multi(skel->progs.uprobe, -1,
+						"./uprobe_multi_stripped.so", NULL, &opts);
+	if (!ASSERT_OK_PTR(link, "attach_uprobe_multi_stripped")) {
+		link = NULL;
+		goto cleanup;
+	}
+	bpf_link__destroy(link);
+	link = NULL;
+
+	/* A missing symbol must still be reported as an error. */
+	syms[0] = "uprobe_multi_missing_func";
+	link = bpf_program__attach_uprobe_multi(skel->progs.uprobe, -1,
+						"./uprobe_multi_stripped.so", NULL, &opts);
+	if (!ASSERT_ERR_PTR(link, "attach_uprobe_multi_missing_symbol"))
+		bpf_link__destroy(link);
+	link = NULL;
+
+cleanup:
+	uprobe_multi__destroy(skel);
+}
+
 static void test_attach_api_fails(void)
 {
 	LIBBPF_OPTS(bpf_link_create_opts, opts);
@@ -1442,6 +1477,8 @@ void test_uprobe_multi_test(void)
 		test_attach_api_pattern();
 	if (test__start_subtest("attach_api_syms"))
 		test_attach_api_syms();
+	if (test__start_subtest("attach_api_syms_stripped"))
+		test_attach_api_syms_stripped();
 	if (test__start_subtest("link_api"))
 		test_link_api();
 	if (test__start_subtest("link_api_path_fd"))
