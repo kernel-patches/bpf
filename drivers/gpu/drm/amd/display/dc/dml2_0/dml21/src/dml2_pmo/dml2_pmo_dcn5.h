@@ -6,8 +6,8 @@
 #define __DML2_PMO_DCN5_H__
 #include "dml2_internal_shared_types.h"
 bool dml2_pmo_dcn5_initialize(struct dml2_pmo_initialize_in_out *in_out);
-int dml2_pmo_dcn5_get_ordered_mandatory_stage_optimizers(struct dml2_pmo_instance *pmo, struct dml2_pmo_stage_optimizer **optimers);
-int dml2_pmo_dcn5_get_ordered_optional_stages_optimizers(struct dml2_pmo_instance *pmo, struct dml2_pmo_stage_optimizer **optimers);
+int dml2_pmo_dcn5_get_ordered_mandatory_stage_optimizers(struct dml2_pmo_instance *pmo, struct dml2_pmo_stage_optimizer **stages);
+int dml2_pmo_dcn5_get_ordered_optional_stages_optimizers(struct dml2_pmo_instance *pmo, struct dml2_pmo_stage_optimizer **stages);
 void dml2_pmo_dcn5_initialize_worksheet(struct dml2_pmo_instance *pmo,
 		const struct dml2_display_cfg *dispcfg,
 		struct dml2_optimization_worksheet *worksheet);
