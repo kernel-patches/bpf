@@ -9768,6 +9768,39 @@ static int btf_check_iter_kfuncs(struct btf *btf, const char *func_name,
 	return 0;
 }
 
+/*
+ * A __derives_ret argument lends its lifetime to the kfunc's return. It has
+ * to be a pointer, there can only be one, and the kfunc has to return a
+ * pointer that is neither acquired nor released: an acquire returns a
+ * reference of its own, a release has nothing left to lend.
+ */
+static int btf_check_derives_ret_kfunc(struct btf *btf, const struct btf_type *func,
+				       u32 func_flags)
+{
+	const struct btf_param *args = btf_params(func);
+	const struct btf_type *t;
+	int i, n = 0;
+
+	for (i = 0; i < btf_type_vlen(func); i++) {
+		if (!btf_param_match_suffix(btf, &args[i], "__derives_ret"))
+			continue;
+		t = btf_type_skip_modifiers(btf, args[i].type, NULL);
+		if (!t || !btf_type_is_ptr(t) || n++)
+			return -EINVAL;
+	}
+	if (!n)
+		return 0;
+
+	if (func_flags & (KF_ACQUIRE | KF_RELEASE))
+		return -EINVAL;
+
+	t = btf_type_skip_modifiers(btf, func->type, NULL);
+	if (!t || !btf_type_is_ptr(t))
+		return -EINVAL;
+
+	return 0;
+}
+
 static int btf_check_kfunc_name(struct btf *btf, const char *func_name, u32 kind)
 {
 #ifdef CONFIG_DEBUG_INFO_BTF_MODULES
@@ -9828,7 +9861,7 @@ static int btf_check_kfunc_protos(struct btf *btf, u32 func_id, u32 func_flags)
 			return err;
 	}
 
-	return 0;
+	return btf_check_derives_ret_kfunc(btf, func, func_flags);
 }
 
 /* Kernel Function (kfunc) BTF ID set registration API */
