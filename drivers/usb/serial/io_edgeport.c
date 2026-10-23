@@ -2074,7 +2074,7 @@ static int send_iosp_ext_cmd(struct edgeport_port *edge_port,
 	int             length = 0;
 	int             status = 0;
 
-	buffer = kmalloc(10, GFP_ATOMIC);
+	buffer = kmalloc(10, GFP_KERNEL);
 	if (!buffer)
 		return -ENOMEM;
 
@@ -2109,7 +2109,7 @@ static int write_cmd_usb(struct edgeport_port *edge_port,
 	usb_serial_debug_data(dev, __func__, length, buffer);
 
 	/* Allocate our next urb */
-	urb = usb_alloc_urb(0, GFP_ATOMIC);
+	urb = usb_alloc_urb(0, GFP_KERNEL);
 	if (!urb)
 		return -ENOMEM;
 
@@ -2120,8 +2120,7 @@ static int write_cmd_usb(struct edgeport_port *edge_port,
 
 	edge_port->commandPending = true;
 	usb_anchor_urb(urb, &edge_serial->cmd_anchor);
-	status = usb_submit_urb(urb, GFP_ATOMIC);
-
+	status = usb_submit_urb(urb, GFP_KERNEL);
 	if (status) {
 		/* something went wrong */
 		dev_err(dev, "%s - usb_submit_urb(write command) failed, status = %d\n",
@@ -2178,7 +2177,7 @@ static int send_cmd_write_baud_rate(struct edgeport_port *edge_port,
 	}
 
 	/* Alloc memory for the string of commands. */
-	cmdBuffer =  kmalloc(0x100, GFP_ATOMIC);
+	cmdBuffer = kmalloc(0x100, GFP_KERNEL);
 	if (!cmdBuffer)
 		return -ENOMEM;
 
@@ -2272,7 +2271,7 @@ static int send_cmd_write_uart_register(struct edgeport_port *edge_port,
 	}
 
 	/* Alloc memory for the string of commands. */
-	cmdBuffer = kmalloc(0x10, GFP_ATOMIC);
+	cmdBuffer = kmalloc(0x10, GFP_KERNEL);
 	if (cmdBuffer == NULL)
 		return -ENOMEM;
 
