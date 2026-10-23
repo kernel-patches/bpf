@@ -318,14 +318,23 @@ static int proc_do_dev_weight(const struct ctl_table *table, int write,
 			   void *buffer, size_t *lenp, loff_t *ppos)
 {
 	static DEFINE_MUTEX(dev_weight_mutex);
-	int ret, weight;
+	int ret, weight, old, rx, tx;
 
 	mutex_lock(&dev_weight_mutex);
+	old = *(int *)table->data;
 	ret = proc_dointvec_minmax(table, write, buffer, lenp, ppos);
 	if (!ret && write) {
 		weight = READ_ONCE(weight_p);
-		WRITE_ONCE(net_hotdata.dev_rx_weight, weight * dev_weight_rx_bias);
-		WRITE_ONCE(net_hotdata.dev_tx_weight, weight * dev_weight_tx_bias);
+		if (check_mul_overflow(weight, dev_weight_rx_bias, &rx) ||
+		    check_mul_overflow(weight, dev_weight_tx_bias, &tx)) {
+			pr_warn("dev_weight(%d) * (rx_bias(%d) or tx_bias(%d)) overflows int\n",
+				weight, dev_weight_rx_bias, dev_weight_tx_bias);
+			WRITE_ONCE(*(int *)table->data, old);
+			ret = -EINVAL;
+		} else {
+			WRITE_ONCE(net_hotdata.dev_rx_weight, rx);
+			WRITE_ONCE(net_hotdata.dev_tx_weight, tx);
+		}
 	}
 	mutex_unlock(&dev_weight_mutex);
 
