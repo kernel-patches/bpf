@@ -1432,7 +1432,8 @@ static int ov08d10_get_hwcfg(struct ov08d10 *ov08d10)
 		goto check_hwcfg_error;
 	}
 
-	dev_dbg(dev, "Using %u data lanes\n", ov08d10->cur_mode->data_lanes);
+	dev_dbg(dev, "Using %u data lanes\n",
+		bus_cfg.bus.mipi_csi2.num_data_lanes);
 
 	ov08d10->priv_lane = &lane_cfg_2;
 	ov08d10->modes_size = ov08d10_modes_num(ov08d10);
