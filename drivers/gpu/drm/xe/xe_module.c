@@ -12,7 +12,7 @@
 #include <drm/drm_module.h>
 
 #include "xe_defaults.h"
-#include "xe_device_types.h"
+#include "xe_device.h"
 #include "xe_drv.h"
 #include "xe_configfs.h"
 #include "xe_hw_fence.h"
@@ -29,6 +29,7 @@ struct xe_modparam xe_modparam = {
 	.max_vfs =		XE_DEFAULT_MAX_VFS,
 #endif
 	.wedged_mode =		XE_DEFAULT_WEDGED_MODE,
+	.num_pf_work =		XE_DEFAULT_NUM_PF_WORK,
 	.svm_notifier_size =	XE_DEFAULT_SVM_NOTIFIER_SIZE,
 	/* the rest are 0 by default */
 };
@@ -81,6 +82,9 @@ MODULE_PARM_DESC(wedged_mode,
 		 "Module's default policy for the wedged mode (0=never, 1=upon-critical-error, 2=upon-any-hang-no-reset "
 		 "[default=" XE_DEFAULT_WEDGED_MODE_STR "])");
 
+module_param_named(num_pf_work, xe_modparam.num_pf_work, uint, 0600);
+MODULE_PARM_DESC(num_pf_work, "Number of page fault work threads, default=2, min=1, max=8");
+
 static int xe_check_nomodeset(void)
 {
 	if (drm_firmware_drivers_only())
@@ -110,8 +114,10 @@ static void xe_destroy_wq_module_exit(void)
  * xe_destroy_wq_queue() - Queue work on the destroy workqueue
  * @work: work item to queue
  *
- * The destroy workqueue has module lifetime and is used for GuC exec queue
- * teardown that can outlive a single xe_device. SVM pagemap destroy uses the
+ * The destroy workqueue has module lifetime, and is guaranteed to outlive
+ * any xe_device, and to be drained before the module is unloaded. It is used
+ * for GuC exec queue and xe_vm/xe_vma teardown that can be deferred past the
+ * lifetime of the xe_device that triggered it. SVM pagemap destroy uses the
  * per-device xe->destroy_wq instead.
  *
  * Return: %true if @work was queued, %false if it was already pending.
@@ -157,6 +163,22 @@ static const struct init_funcs init_funcs[] = {
 	{
 		.init = xe_destroy_wq_module_init,
 		.exit = xe_destroy_wq_module_exit,
+	},
+	/*
+	 * xe_destroy_wq_module_exit() must run after xe_device_exit()
+	 * (below), since freeing a device can still queue work on
+	 * xe_destroy_wq that must be drained before the module can safely
+	 * unload. At the same time, xe_device_exit() must run after
+	 * xe_unregister_pci_driver() (below), and xe_destroy_wq_module_exit()
+	 * must run before xe_sched_job_module_exit() and
+	 * xe_hw_fence_module_exit() (above), whose kmem_caches are still used
+	 * by work drained from xe_destroy_wq. Exit functions run in reverse
+	 * array order, so this entry must sit between the
+	 * xe_destroy_wq_module_init entry above and the xe_register_pci_driver
+	 * entry below.
+	 */
+	{
+		.exit = xe_device_exit,
 	},
 	{
 		.init = xe_register_pci_driver,

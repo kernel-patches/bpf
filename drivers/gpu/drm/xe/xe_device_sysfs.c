@@ -8,12 +8,14 @@
 #include <linux/pci.h>
 #include <linux/sysfs.h>
 
+#include "regs/xe_regs.h"
 #include "xe_device.h"
 #include "xe_device_sysfs.h"
 #include "xe_mmio.h"
 #include "xe_pcode_api.h"
 #include "xe_pcode.h"
 #include "xe_pm.h"
+#include "xe_shrinker.h"
 
 /**
  * DOC: Xe device sysfs
@@ -30,6 +32,12 @@
  *
  * lb_voltage_regulator_version - Voltage regulator version provisioned by late
  * binding. Exposed only if supported by the device.
+ *
+ * shrinker_non_purgeable_seeks - Report/change the cost, relative to
+ * purgeable buffer objects, of recreating non-purgeable buffer objects
+ * reclaimed by the shrinker. Higher values reduce reclaim pressure on
+ * non-purgeable buffer objects. Valid values are 1 to 64. Defaults to
+ * CONFIG_DRM_XE_SHRINKER_NON_PURGEABLE_SEEKS.
  */
 
 static ssize_t
@@ -264,10 +272,82 @@ static const struct attribute_group auto_link_downgrade_attr_group = {
 	.attrs = auto_link_downgrade_attrs,
 };
 
+/**
+ * DOC: Device Unique ID
+ *
+ * On supported platforms, Xe driver exposes a unique 64-bit GPU SOC
+ * device identifier through the 'device_uid' sysfs entry.
+ *
+ * See Documentation/ABI/testing/sysfs-driver-intel-xe-gpu for the ABI
+ * specification.
+ */
+
+static ssize_t
+device_uid_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct pci_dev *pdev = to_pci_dev(dev);
+	struct xe_device *xe = pdev_to_xe_device(pdev);
+
+	return sysfs_emit(buf, "0x%016llx\n", xe->device_uid);
+}
+static DEVICE_ATTR_ADMIN_RO(device_uid);
+
+static struct attribute *device_uid_attrs[] = {
+	&dev_attr_device_uid.attr,
+	NULL
+};
+
+static const struct attribute_group device_uid_attr_group = {
+	.attrs = device_uid_attrs,
+};
+
+static ssize_t
+shrinker_non_purgeable_seeks_show(struct device *dev,
+				  struct device_attribute *attr, char *buf)
+{
+	struct xe_device *xe = pdev_to_xe_device(to_pci_dev(dev));
+
+	return sysfs_emit(buf, "%d\n",
+			  xe_shrinker_non_purgeable_seeks(xe->mem.shrinker));
+}
+
+static ssize_t
+shrinker_non_purgeable_seeks_store(struct device *dev,
+				   struct device_attribute *attr,
+				   const char *buf, size_t count)
+{
+	struct xe_device *xe = pdev_to_xe_device(to_pci_dev(dev));
+	unsigned int seeks;
+	int ret;
+
+	ret = kstrtouint(buf, 0, &seeks);
+	if (ret)
+		return ret;
+
+	ret = xe_shrinker_set_non_purgeable_seeks(xe->mem.shrinker, seeks);
+
+	return ret ?: count;
+}
+
+static DEVICE_ATTR_RW(shrinker_non_purgeable_seeks);
+
+static struct attribute *shrinker_attrs[] = {
+	&dev_attr_shrinker_non_purgeable_seeks.attr,
+	NULL
+};
+
+static const struct attribute_group shrinker_attr_group = {
+	.attrs = shrinker_attrs,
+};
+
 int xe_device_sysfs_init(struct xe_device *xe)
 {
 	struct device *dev = xe->drm.dev;
 	int ret;
+
+	ret = devm_device_add_group(dev, &shrinker_attr_group);
+	if (ret)
+		return ret;
 
 	if (xe->d3cold.capable) {
 		ret = devm_device_add_group(dev, &vram_attr_group);
@@ -281,6 +361,12 @@ int xe_device_sysfs_init(struct xe_device *xe)
 			return ret;
 
 		ret = devm_device_add_group(dev, &late_bind_attr_group);
+		if (ret)
+			return ret;
+	}
+
+	if (xe->info.has_device_uid) {
+		ret = devm_device_add_group(dev, &device_uid_attr_group);
 		if (ret)
 			return ret;
 	}

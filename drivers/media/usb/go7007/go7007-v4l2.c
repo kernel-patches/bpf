@@ -12,7 +12,6 @@
 #include <linux/unistd.h>
 #include <linux/time.h>
 #include <linux/vmalloc.h>
-#include <linux/pagemap.h>
 #include <linux/i2c.h>
 #include <linux/mutex.h>
 #include <linux/uaccess.h>
@@ -252,7 +251,7 @@ static int set_capture_size(struct go7007 *go, struct v4l2_format *fmt, int try)
 		go->encoder_h_halve = 0;
 		go->encoder_v_halve = 0;
 		go->encoder_subsample = 0;
-		call_all(&go->v4l2_dev, pad, set_fmt, NULL, &format);
+		call_all(&go->v4l2_dev, pad, set_fmt, NULL, NULL, &format);
 	} else {
 		if (width <= sensor_width / 4) {
 			go->encoder_h_halve = 1;

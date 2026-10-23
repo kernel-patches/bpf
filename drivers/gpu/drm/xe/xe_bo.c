@@ -28,6 +28,7 @@
 #include "xe_ggtt.h"
 #include "xe_map.h"
 #include "xe_migrate.h"
+#include "xe_mmio_gem.h"
 #include "xe_pat.h"
 #include "xe_pm.h"
 #include "xe_preempt_fence.h"
@@ -40,6 +41,7 @@
 #include "xe_ttm_stolen_mgr.h"
 #include "xe_vm.h"
 #include "xe_vram_types.h"
+#include "xe_wedge.h"
 
 const char *const xe_mem_type_to_name[TTM_NUM_MEM_TYPES]  = {
 	[XE_PL_SYSTEM] = "system",
@@ -104,13 +106,16 @@ static bool resource_is_vram(struct ttm_resource *res)
 
 bool xe_bo_is_vram(struct xe_bo *bo)
 {
-	return resource_is_vram(bo->ttm.resource) ||
-		resource_is_stolen_vram(xe_bo_device(bo), bo->ttm.resource);
+	struct ttm_resource *res = bo->ttm.resource;
+
+	return  res && (resource_is_vram(res) || resource_is_stolen_vram(xe_bo_device(bo), res));
 }
 
 bool xe_bo_is_stolen(struct xe_bo *bo)
 {
-	return bo->ttm.resource->mem_type == XE_PL_STOLEN;
+	struct ttm_resource *res = bo->ttm.resource;
+
+	return res && res->mem_type == XE_PL_STOLEN;
 }
 
 /**
@@ -158,7 +163,13 @@ bool xe_bo_is_vm_bound(struct xe_bo *bo)
 	return !list_empty(&bo->ttm.base.gpuva.list);
 }
 
-static bool xe_bo_is_user(struct xe_bo *bo)
+/**
+ * xe_bo_is_user - Check if BO is user-created
+ * @bo: The BO
+ *
+ * Returns: true if @bo was created by userspace
+ */
+bool xe_bo_is_user(struct xe_bo *bo)
 {
 	return bo->flags & XE_BO_FLAG_USER;
 }
@@ -446,9 +457,9 @@ static void xe_ttm_tt_account_add(struct xe_device *xe, struct ttm_tt *tt)
 	struct xe_ttm_tt *xe_tt = container_of(tt, struct xe_ttm_tt, ttm);
 
 	if (xe_tt->purgeable)
-		xe_shrinker_mod_pages(xe->mem.shrinker, 0, tt->num_pages);
+		xe_shrinker_mod_pages(xe->mem.shrinker, 0, tt->num_pages, 1);
 	else
-		xe_shrinker_mod_pages(xe->mem.shrinker, tt->num_pages, 0);
+		xe_shrinker_mod_pages(xe->mem.shrinker, tt->num_pages, 0, 1);
 }
 
 static void xe_ttm_tt_account_subtract(struct xe_device *xe, struct ttm_tt *tt)
@@ -456,9 +467,9 @@ static void xe_ttm_tt_account_subtract(struct xe_device *xe, struct ttm_tt *tt)
 	struct xe_ttm_tt *xe_tt = container_of(tt, struct xe_ttm_tt, ttm);
 
 	if (xe_tt->purgeable)
-		xe_shrinker_mod_pages(xe->mem.shrinker, 0, -(long)tt->num_pages);
+		xe_shrinker_mod_pages(xe->mem.shrinker, 0, -(long)tt->num_pages, -1);
 	else
-		xe_shrinker_mod_pages(xe->mem.shrinker, -(long)tt->num_pages, 0);
+		xe_shrinker_mod_pages(xe->mem.shrinker, -(long)tt->num_pages, 0, -1);
 }
 
 static bool xe_ttm_bo_is_imported(struct ttm_buffer_object *tbo)
@@ -974,12 +985,44 @@ static void xe_bo_set_purgeable_shrinker(struct xe_bo *bo,
 	if (!xe_tt->purgeable && new_state == XE_MADV_PURGEABLE_DONTNEED) {
 		xe_tt->purgeable = true;
 		/* Transfer pages from shrinkable to purgeable count */
-		xe_shrinker_mod_pages(xe->mem.shrinker, -tt_pages, tt_pages);
+		xe_shrinker_mod_pages(xe->mem.shrinker, -tt_pages, tt_pages, 0);
 	} else if (xe_tt->purgeable && new_state == XE_MADV_PURGEABLE_WILLNEED) {
 		xe_tt->purgeable = false;
 		/* Transfer pages from purgeable to shrinkable count */
-		xe_shrinker_mod_pages(xe->mem.shrinker, tt_pages, -tt_pages);
+		xe_shrinker_mod_pages(xe->mem.shrinker, tt_pages, -tt_pages, 0);
 	}
+}
+
+/*
+ * Change @bo's TTM LRU priority to @priority. @bo's dma-resv must be held.
+ *
+ * Private, user BOs of non-fault-mode VMs have bo->ttm.bulk_move set to their
+ * VM's LRU bulk-move range (see xe_bo_create_user()), which tracks a
+ * contiguous [first, last] run of resources per (mem_type, priority) bucket.
+ * Writing bo->ttm.priority while the BO is still attached to that range would
+ * leave the resource linked in the old priority's bucket while the bulk-move
+ * code looks it up under the new one, corrupting both buckets. Temporarily
+ * detaching the BO from its bulk-move range moves it with a plain, non-bulk
+ * LRU update instead, and reattaching afterwards re-inserts it into the new
+ * priority's bucket.
+ */
+static void xe_bo_update_ttm_priority(struct xe_bo *bo, int priority)
+{
+	struct ttm_lru_bulk_move *bulk = bo->ttm.bulk_move;
+
+	xe_bo_assert_held(bo);
+
+	if (bo->ttm.priority == priority)
+		return;
+
+	if (bulk)
+		ttm_bo_set_bulk_move(&bo->ttm, NULL);
+
+	bo->ttm.priority = priority;
+	ttm_bo_move_to_lru_tail_unlocked(&bo->ttm);
+
+	if (bulk)
+		ttm_bo_set_bulk_move(&bo->ttm, bulk);
 }
 
 /**
@@ -991,6 +1034,10 @@ static void xe_bo_set_purgeable_shrinker(struct xe_bo *bo,
  * transitions. Once a BO is PURGED, it cannot transition to any other state.
  * Invalid transitions are caught with xe_assert(). Shrinker page accounting
  * is updated automatically.
+ *
+ * A WILLNEED -> DONTNEED transition also lowers the BO's TTM LRU priority to
+ * XE_BO_PRIORITY_LOW. Conversely, a DONTNEED -> WILLNEED transition restores
+ * XE_BO_PRIORITY_NORMAL.
  */
 void xe_bo_set_purgeable_state(struct xe_bo *bo,
 			       enum xe_madv_purgeable_state new_state)
@@ -1008,6 +1055,13 @@ void xe_bo_set_purgeable_state(struct xe_bo *bo,
 	xe_assert(xe, !(bo->purgeable.state == XE_MADV_PURGEABLE_PURGED &&
 			new_state != XE_MADV_PURGEABLE_PURGED));
 
+	if (new_state == XE_MADV_PURGEABLE_DONTNEED &&
+	    bo->purgeable.state == XE_MADV_PURGEABLE_WILLNEED)
+		xe_bo_update_ttm_priority(bo, XE_BO_PRIORITY_LOW);
+	else if (new_state == XE_MADV_PURGEABLE_WILLNEED &&
+		 bo->purgeable.state == XE_MADV_PURGEABLE_DONTNEED)
+		xe_bo_update_ttm_priority(bo, XE_BO_PRIORITY_NORMAL);
+
 	bo->purgeable.state = new_state;
 	xe_bo_set_purgeable_shrinker(bo, new_state);
 }
@@ -1024,16 +1078,13 @@ void xe_bo_set_purgeable_state(struct xe_bo *bo,
  *
  * Return: 0 on success, negative error code on failure
  */
-static int xe_ttm_bo_purge(struct ttm_buffer_object *ttm_bo, struct ttm_operation_ctx *ctx)
+int xe_ttm_bo_purge(struct ttm_buffer_object *ttm_bo, struct ttm_operation_ctx *ctx)
 {
 	struct xe_bo *bo = ttm_to_xe_bo(ttm_bo);
 	struct ttm_placement place = {};
 	int ret;
 
 	xe_bo_assert_held(bo);
-
-	if (!ttm_bo->ttm)
-		return 0;
 
 	if (!xe_bo_madv_is_dontneed(bo))
 		return 0;
@@ -1976,7 +2027,7 @@ static void xe_ttm_bo_destroy(struct ttm_buffer_object *ttm_bo)
 		xe_drm_client_remove_bo(bo);
 #endif
 
-	if (bo->vm && xe_bo_is_user(bo))
+	if (bo->vm && (xe_bo_is_user(bo) || bo->flags & XE_BO_FLAG_PAGETABLE))
 		xe_vm_put(bo->vm);
 
 	if (bo->parent_obj)
@@ -2196,7 +2247,7 @@ static vm_fault_t xe_bo_cpu_fault(struct vm_fault *vmf)
 	int err = 0;
 	int idx;
 
-	if (xe_device_wedged(xe) || !drm_dev_enter(&xe->drm, &idx))
+	if (xe_wedged(xe) || !drm_dev_enter(&xe->drm, &idx))
 		return ttm_bo_vm_dummy_page(vmf, vmf->vma->vm_page_prot);
 
 	ret = xe_bo_cpu_fault_fastpath(vmf, xe, bo, needs_rpm);
@@ -2663,7 +2714,7 @@ __xe_bo_create_locked(struct xe_device *xe,
 	 * by having all the vm's bo refereferences released at vm close
 	 * time.
 	 */
-	if (vm && xe_bo_is_user(bo))
+	if (vm && (xe_bo_is_user(bo) || bo->flags & XE_BO_FLAG_PAGETABLE))
 		xe_vm_get(vm);
 	bo->vm = vm;
 
@@ -3353,6 +3404,9 @@ void xe_bo_unpin(struct xe_bo *bo)
 	struct ttm_place *place = &bo->placements[0];
 	struct xe_device *xe = xe_bo_device(bo);
 
+	if (xe_bo_is_purged(bo))
+		return;
+
 	xe_assert(xe, !bo->ttm.base.import_attach);
 	xe_assert(xe, xe_bo_is_pinned(bo));
 
@@ -3742,6 +3796,39 @@ out_vm:
 	return err;
 }
 
+static int xe_gem_pci_barrier_mmap_offset(struct xe_device *xe, struct drm_file *file,
+					  struct drm_xe_gem_mmap_offset *args)
+{
+	struct xe_file *xef = file->driver_priv;
+	struct xe_mmio_gem **barrier = &xef->mmio_gem.pci_barrier;
+
+	if (XE_IOCTL_DBG(xe, !IS_DGFX(xe)))
+		return -EINVAL;
+
+	if (XE_IOCTL_DBG(xe, args->handle))
+		return -EINVAL;
+
+	scoped_guard(mutex, &xef->mmio_gem.lock) {
+		if (!*barrier) {
+			phys_addr_t phys_addr;
+
+#define LAST_DB_PAGE_OFFSET 0x7ff000
+			phys_addr = pci_resource_start(to_pci_dev(xe->drm.dev), 0) +
+				LAST_DB_PAGE_OFFSET;
+			*barrier = xe_mmio_gem_create(xe, file, phys_addr, SZ_4K);
+			if (IS_ERR(*barrier)) {
+				int err = PTR_ERR(*barrier);
+
+				*barrier = NULL;
+				return err;
+			}
+		}
+
+		args->offset = xe_mmio_gem_mmap_offset(*barrier);
+	}
+	return 0;
+}
+
 int xe_gem_mmap_offset_ioctl(struct drm_device *dev, void *data,
 			     struct drm_file *file)
 {
@@ -3757,21 +3844,8 @@ int xe_gem_mmap_offset_ioctl(struct drm_device *dev, void *data,
 			 ~DRM_XE_MMAP_OFFSET_FLAG_PCI_BARRIER))
 		return -EINVAL;
 
-	if (args->flags & DRM_XE_MMAP_OFFSET_FLAG_PCI_BARRIER) {
-		if (XE_IOCTL_DBG(xe, !IS_DGFX(xe)))
-			return -EINVAL;
-
-		if (XE_IOCTL_DBG(xe, args->handle))
-			return -EINVAL;
-
-		if (XE_IOCTL_DBG(xe, PAGE_SIZE > SZ_4K))
-			return -EINVAL;
-
-		BUILD_BUG_ON(((XE_PCI_BARRIER_MMAP_OFFSET >> XE_PTE_SHIFT) +
-			      SZ_4K) >= DRM_FILE_PAGE_OFFSET_START);
-		args->offset = XE_PCI_BARRIER_MMAP_OFFSET;
-		return 0;
-	}
+	if (args->flags & DRM_XE_MMAP_OFFSET_FLAG_PCI_BARRIER)
+		return xe_gem_pci_barrier_mmap_offset(xe, file, args);
 
 	gem_obj = drm_gem_object_lookup(file, args->handle);
 	if (XE_IOCTL_DBG(xe, !gem_obj))

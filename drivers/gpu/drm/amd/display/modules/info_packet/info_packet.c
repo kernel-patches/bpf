@@ -291,6 +291,21 @@ void set_vsc_packet_colorimetry_data(
 	info_packet->sb[18] = 0;
 }
 
+static void set_field_with_mask(unsigned char *dest, unsigned int mask, unsigned int value)
+{
+	unsigned int shift = 0;
+
+	if (!mask || !dest)
+		return;
+
+	while (!((mask >> shift) & 1))
+		shift++;
+
+	*dest = *dest & ~mask;
+	value = value & (mask >> shift);
+	*dest = *dest | (value << shift);
+}
+
 void mod_build_vsc_infopacket(const struct dc_stream_state *stream,
 		struct dc_info_packet *info_packet,
 		enum dc_color_space cs,
@@ -644,6 +659,100 @@ void mod_build_hf_vsif_infopacket(const struct dc_stream_state *stream,
 		info_packet->valid = true;
 }
 
+static void build_vtem_infopacket_data(const struct dc_stream_state *stream,
+		const struct mod_vrr_params *vrr, int fva_factor,
+		struct dc_info_packet *infopacket)
+{
+	unsigned int field_rate_in_hz;
+
+	/* FVA Factor setting */
+	set_field_with_mask(&infopacket->sb[VTEM_MD0], MASK_VTEM_MD0__FVA_FACTOR_M1,
+			(fva_factor > 0) ? (fva_factor - 1) : 0);
+	/* VRR Parameters */
+	if (vrr->state != VRR_STATE_DISABLED &&
+			vrr->state != VRR_STATE_UNSUPPORTED) {
+		set_field_with_mask(&infopacket->sb[VTEM_MD0], MASK_VTEM_MD0__VRR_EN, 1);
+	} else {
+		set_field_with_mask(&infopacket->sb[VTEM_MD0], MASK_VTEM_MD0__VRR_EN, 0);
+	}
+
+	if (vrr->state == VRR_STATE_ACTIVE_FIXED)
+		set_field_with_mask(&infopacket->sb[VTEM_MD0], MASK_VTEM_MD0__M_CONST, vrr->m_const);
+
+	if (!stream->timing.vic) {
+		set_field_with_mask(&infopacket->sb[VTEM_MD1], MASK_VTEM_MD1__BASE_VFRONT,
+				stream->timing.v_front_porch);
+
+
+		/* TODO: In dal2, we check mode flags for a reduced blanking timing.
+		 * Need a way to relay that information to this function.
+		 * if("ReducedBlanking")
+		 * {
+		 *   set_field_with_mask(&infopacket->sb[VRR_VTEM_MD2], MASK__VRR_VTEM_MD2__RB, 1;
+		 * }
+		 */
+
+		field_rate_in_hz = stream->timing.pix_clk_100hz * 100;
+		field_rate_in_hz /= stream->timing.h_total;
+		field_rate_in_hz = (field_rate_in_hz + stream->timing.v_total / 2)
+						/ stream->timing.v_total;
+
+		set_field_with_mask(&infopacket->sb[VTEM_MD2],  MASK_VTEM_MD2__BASE_REFRESH_RATE_98,
+				field_rate_in_hz >> 8);
+		set_field_with_mask(&infopacket->sb[VTEM_MD3], MASK_VTEM_MD3__BASE_REFRESH_RATE_07,
+				field_rate_in_hz);
+
+	}
+
+	/*
+	 * When no VTEM feature is enabled (neither VRR nor FVA), signal a
+	 * zero-length data set (MLDS) by clearing Data_Set_Length. HDMI 2.1
+	 * 10.10.2.4 requires the Source to either stop transmitting the VTEM
+	 * or set Data_Set_Length = 0 when no feature is enabled; keeping the
+	 * VTEM with Data_Set_Length = 0 preserves the every-MTW cadence while
+	 * staying compliant (e.g. HDMI GCTS HF1-58 step 6.2).
+	 */
+	if (vrr->state != VRR_STATE_ACTIVE_VARIABLE &&
+	    vrr->state != VRR_STATE_ACTIVE_FIXED && fva_factor == 0)
+		set_field_with_mask(&infopacket->sb[VTEM_PB6],
+				 MASK_VTEM_PB6__DATA_SET_LENGTH_LSB, 0);
+
+	infopacket->valid = true;
+}
+
+static void build_infopacket_header_vtem(enum signal_type signal,
+		struct dc_info_packet *infopacket)
+{
+	/* HEADER */
+
+	/* HB0, HB1, HB2 indicates PacketType VTEMPacket */
+	infopacket->hb0 = 0x7F;
+	infopacket->hb1 = 0xC0;
+	infopacket->hb2 = 0x00; /* sequence_index */
+
+	set_field_with_mask(&infopacket->sb[VTEM_PB0], MASK_VTEM_PB0__VFR, 1);
+	set_field_with_mask(&infopacket->sb[VTEM_PB2], MASK_VTEM_PB2__ORGANIZATION_ID, 1);
+	set_field_with_mask(&infopacket->sb[VTEM_PB3], MASK_VTEM_PB3__DATA_SET_TAG_MSB, 0);
+	set_field_with_mask(&infopacket->sb[VTEM_PB4], MASK_VTEM_PB4__DATA_SET_TAG_LSB, 1);
+	set_field_with_mask(&infopacket->sb[VTEM_PB5], MASK_VTEM_PB5__DATA_SET_LENGTH_MSB, 0);
+	set_field_with_mask(&infopacket->sb[VTEM_PB6], MASK_VTEM_PB6__DATA_SET_LENGTH_LSB, 4);
+}
+
+void mod_build_infopacket_vtem(const struct dc_stream_state *stream,
+		const struct mod_vrr_params *vrr, int fva_factor,
+		struct dc_info_packet *infopacket)
+{
+	/* VTEM info packet for HdmiVrr */
+
+	memset(infopacket, 0, sizeof(struct dc_info_packet));
+
+	/* VTEM Packet is structured differently */
+	build_infopacket_header_vtem(stream->signal, infopacket);
+	build_vtem_infopacket_data(stream, vrr, fva_factor, infopacket);
+
+	infopacket->valid = true;
+}
+
 void mod_build_adaptive_sync_infopacket(const struct dc_stream_state *stream,
 		enum adaptive_sync_type asType,
 		const struct AS_Df_params *param,
@@ -661,9 +770,12 @@ void mod_build_adaptive_sync_infopacket(const struct dc_stream_state *stream,
 	case FREESYNC_TYPE_PCON_IN_WHITELIST:
 	case ADAPTIVE_SYNC_TYPE_EDP:
 		if (stream && stream->link->replay_settings.config.replay_supported &&
-			stream->link->replay_settings.config.replay_version == DC_VESA_PANEL_REPLAY)
-			mod_build_adaptive_sync_infopacket_v2(stream, param, info_packet);
-		else
+			stream->link->replay_settings.config.replay_version == DC_VESA_PANEL_REPLAY) {
+			if (stream->link->dpcd_caps.adaptive_sync_caps.dp_adap_sync_caps.bits.AS_SDP_VERSION_3_SUPPORTED)
+				mod_build_adaptive_sync_infopacket_v3(stream, param, info_packet);
+			else
+				mod_build_adaptive_sync_infopacket_v2(stream, param, info_packet);
+		} else
 			mod_build_adaptive_sync_infopacket_v1(info_packet);
 		break;
 	case ADAPTIVE_SYNC_TYPE_NONE:
@@ -693,6 +805,31 @@ void mod_build_adaptive_sync_infopacket_v2(const struct dc_stream_state *stream,
 	info_packet->hb1 = 0x22;
 	info_packet->hb2 = AS_SDP_VER_2;
 	info_packet->hb3 = AS_DP_SDP_LENGTH;
+
+	if (param) {
+		//Payload
+		info_packet->sb[0] = param->supportMode; //1: AVT; 0: FAVT
+		info_packet->sb[1] = (stream->timing.v_total & 0x00FF);
+		info_packet->sb[2] = (stream->timing.v_total & 0xFF00) >> 8;
+		//info_packet->sb[3] = 0x00; Target RR, not use fot AVT
+		info_packet->sb[4] = (param->increase.support << 6 | param->decrease.support << 7);
+		info_packet->sb[5] = param->increase.frame_duration_hex;
+		info_packet->sb[6] = param->decrease.frame_duration_hex;
+	}
+}
+
+void mod_build_adaptive_sync_infopacket_v3(const struct dc_stream_state *stream,
+		const struct AS_Df_params *param,
+		struct dc_info_packet *info_packet)
+{
+	info_packet->valid = true;
+	// HEADER {HB0, HB1, HB2, HB3} = {00, Type, Version, Length}
+	// For eDP VESA Panel Replay the coasting vtotal (DB7-DB9) is filled by the
+	// DMUB firmware,so only the header is built.
+	info_packet->hb0 = 0x00;
+	info_packet->hb1 = 0x22;
+	info_packet->hb2 = AS_SDP_VER_3;
+	info_packet->hb3 = AS_DP_SDP_V3_LENGTH;
 
 	if (param) {
 		//Payload

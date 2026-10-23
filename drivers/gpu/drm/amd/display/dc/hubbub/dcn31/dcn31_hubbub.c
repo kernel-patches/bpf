@@ -838,9 +838,12 @@ static bool hubbub31_get_dcc_compression_cap(struct hubbub *hubbub,
 		else
 			dcc_control = dcc_control__256_64_64;
 	} else if (input->scan == SCAN_DIRECTION_VERTICAL) {
-		if (!req128_vert_wc)
-			dcc_control = dcc_control__256_256_xxx;
-		else if (segment_order_vert == segment_order__contiguous)
+		if (!req128_vert_wc) {
+			if (segment_order_vert == segment_order__non_contiguous)
+				dcc_control = dcc_control__256_64_64;
+			else
+				dcc_control = dcc_control__256_256_xxx;
+		} else if (segment_order_vert == segment_order__contiguous)
 			dcc_control = dcc_control__128_128_xxx;
 		else
 			dcc_control = dcc_control__256_64_64;
@@ -1048,11 +1051,6 @@ void hubbub31_init(struct hubbub *hubbub)
 				DISPCLK_R_DCHUBBUB_GATE_DIS, 1,
 				DCFCLK_R_DCHUBBUB_GATE_DIS, 1);
 	}
-
-	/*
-	only the DCN will determine when to connect the SDP port
-	*/
-	REG_UPDATE(DCHUBBUB_SDPIF_CFG0,	SDPIF_PORT_CONTROL, 1);
 }
 static const struct hubbub_funcs hubbub31_funcs = {
 	.update_dchub = hubbub2_update_dchub,
@@ -1085,6 +1083,7 @@ void hubbub31_construct(struct dcn20_hubbub *hubbub31,
 	int pixel_chunk_size_kb,
 	int config_return_buffer_size_kb)
 {
+	hubbub31->base.inst = 0;
 
 	hubbub3_construct(hubbub31, ctx, hubbub_regs, hubbub_shift, hubbub_mask);
 	hubbub31->base.funcs = &hubbub31_funcs;

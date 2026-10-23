@@ -59,6 +59,12 @@ bool dcn50_program_mcache_pipe_config(struct dc_state *context,
 
 /* HUBBUB */
 #define HUBBUB_REG_LIST_DCN60_RI(id)                                         \
+	SR(DCHVM_CTRL0),                                                         \
+	SR(DCHVM_MEM_CTRL),                                                      \
+	SR(DCHVM_CLK_CTRL),                                                      \
+	SR(DCHVM_RIOMMU_CTRL0),                                                  \
+	SR(DCHVM_RIOMMU_STAT0),                                                  \
+	SR(DCHVM_PREFETCH_VFID),                                                 \
 	SR(DCHUBBUB_ARB_DATA_URGENCY_WATERMARK_A),                               \
 	SR(DCHUBBUB_ARB_DATA_URGENCY_WATERMARK_B),                               \
 	SR(DCHUBBUB_ARB_WATERMARK_CHANGE_CNTL),                                  \
@@ -140,7 +146,8 @@ bool dcn50_program_mcache_pipe_config(struct dc_state *context,
 	SR(DC_PERFMON5_PERFMON_HI),                                              \
 	SR(DC_PERFMON5_PERFMON_LOW),                                             \
 	SR(FMON_CTRL),                                                           \
-	SR(DCHUBBUB_ARB_QOS_FORCE)
+	SR(DCHUBBUB_ARB_QOS_FORCE),                                              \
+	SR(UTM_CLIENT_TO_SYSTEM_PROFILE_MAPPING_0)
 
 /* HUBP */
 #define HUBP_REG_LIST_DCN60_RI(id)                                               \
@@ -363,6 +370,12 @@ bool dcn50_program_mcache_pipe_config(struct dc_state *context,
 	SRI_ARR(CM_TEST_DEBUG_DATA, CM, id),                                     \
 	SRI_ARR(FORMAT_CONTROL, CNVC_CFG, id),                                   \
 	SRI_ARR(CNVC_SURFACE_PIXEL_FORMAT, CNVC_CFG, id),                        \
+	SRI_ARR(CNVC_UPSP_CLAMP, CNVC_CFG, id),                                  \
+	SRI_ARR(CNVC_UPSP_MODE, CNVC_CFG, id),                                   \
+	SRI_ARR(CNVC_UPSP_H_COEF_P0, CNVC_CFG, id),                              \
+	SRI_ARR(CNVC_UPSP_H_COEF_P1, CNVC_CFG, id),                              \
+	SRI_ARR(CNVC_UPSP_V_COEF_P0, CNVC_CFG, id),                              \
+	SRI_ARR(CNVC_UPSP_V_COEF_P1, CNVC_CFG, id),                              \
 	SRI_ARR(CURSOR0_CONTROL, CM_CUR, id),                                    \
 	SRI_ARR(CURSOR0_COLOR0, CM_CUR, id),                                     \
 	SRI_ARR(CURSOR0_COLOR1, CM_CUR, id),                                     \

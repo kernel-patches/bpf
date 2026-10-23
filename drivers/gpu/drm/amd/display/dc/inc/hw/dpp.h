@@ -314,7 +314,8 @@ struct dpp_funcs {
 			enum expansion_mode mode,
 			struct dc_csc_transform input_csc_color_matrix,
 			enum dc_color_space input_color_space,
-			struct cnv_alpha_2bit_lut *alpha_2bit_lut);
+			struct cnv_alpha_2bit_lut *alpha_2bit_lut,
+			enum upsp_mode upsp_mode);
 
 	void (*dpp_full_bypass)(struct dpp *dpp_base);
 
@@ -329,6 +330,8 @@ struct dpp_funcs {
 			uint32_t width,
 			uint32_t height
 			);
+
+	void (*refresh_cursor_state)(struct dpp *dpp_base);
 
 	void (*dpp_set_hdr_multiplier)(
 			struct dpp *dpp_base,
@@ -378,7 +381,8 @@ struct dpp_funcs {
 	void (*dpp_set_pregam_state)(
 			struct dpp *dpp_base,
 			enum dc_transfer_func_predefined tr,
-			enum dc_scaling_linearity scaling);
+			enum dc_scaling_linearity scaling,
+			bool source_is_linear);
 	void (*dpp_program_upsp)(
 			struct dpp *dpp_base,
 			const struct dscl_prog_data *dscl_prog_data);

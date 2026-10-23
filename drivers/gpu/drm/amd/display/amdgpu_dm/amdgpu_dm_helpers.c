@@ -131,6 +131,14 @@ STATIC_IFN_KUNIT void apply_edid_quirks(struct dc_link *link, struct edid *edid,
 		drm_dbg_driver(dev, "Disabling VSC on monitor with panel id %X\n", panel_id);
 		edid_caps->panel_patch.disable_colorimetry = true;
 		break;
+	case drm_edid_encode_panel_id('S', 'D', 'C', 0x4203):
+	case drm_edid_encode_panel_id('S', 'D', 'C', 0x4197):
+		if (dc_is_embedded_signal(link->connector_signal)) {
+			drm_dbg_driver(dev, "Force PHY power down/up level 2 on panel id %X\n",
+				       panel_id);
+			link->ctx->dc->debug.psr_phy_force_phy_power_down_up_level_2 = true;
+		}
+		break;
 	/* Workaround for monitors that get corrupted by the PHY SSC reduction */
 	case drm_edid_encode_panel_id('D', 'E', 'L', 0x4147):
 		drm_dbg_driver(dev, "Skip PHY SSC reduction on panel id %X\n", panel_id);
@@ -146,6 +154,24 @@ STATIC_IFN_KUNIT void apply_edid_quirks(struct dc_link *link, struct edid *edid,
 	case drm_edid_encode_panel_id('A', 'P', 'P', 0xAE46):
 		drm_dbg_driver(dev, "Hiding secondary tile on panel id %X\n", panel_id);
 		edid_caps->panel_patch.disable_second_tile = true;
+		break;
+	/*
+	 * Workaround for the Acer Predator X34GS which reports a FreeSync
+	 * minimum refresh rate that does not operate reliably. Force the
+	 * FreeSync range minimum to 55 Hz.
+	 */
+	case drm_edid_encode_panel_id('A', 'C', 'R', 0x08AF):
+		drm_dbg_driver(dev, "Force FreeSync min to 55 Hz on panel id %X\n", panel_id);
+		edid_caps->panel_patch.force_freesync_min_hz = 55;
+		break;
+	/*
+	 * Workaround for the Lenovo G34w-30 which reports a FreeSync
+	 * minimum refresh rate (48 Hz) that fails to light up over DP.
+	 * Force the FreeSync range minimum to 60 Hz.
+	 */
+	case drm_edid_encode_panel_id('L', 'E', 'N', 0x66F1):
+		drm_dbg_driver(dev, "Force FreeSync min to 60 Hz on panel id %X\n", panel_id);
+		edid_caps->panel_patch.force_freesync_min_hz = 60;
 		break;
 	default:
 		return;
@@ -283,7 +309,7 @@ fill_dc_mst_payload_table_from_drm(struct dc_link *link,
 				break;
 			}
 		}
-		ASSERT(i != copy_of_link_table.stream_count);
+		/* Payload absent from HW table when never allocated: nothing to remove. */
 	}
 
 	/* Fill payload info*/
@@ -1334,6 +1360,8 @@ enum dc_edid_status dm_helpers_read_local_edid(
 
 	return edid_status;
 }
+EXPORT_IF_KUNIT(dm_helpers_read_local_edid);
+
 int dm_helper_dmub_aux_transfer_sync(
 		struct dc_context *ctx,
 		const struct dc_link *link,
@@ -1358,6 +1386,7 @@ int dm_helpers_dmub_set_config_sync(struct dc_context *ctx,
 	return amdgpu_dm_process_dmub_set_config_sync(ctx, link->link_index, payload,
 			operation_result);
 }
+EXPORT_IF_KUNIT(dm_helpers_dmub_set_config_sync);
 
 void dm_set_dcn_clocks(struct dc_context *ctx, struct dc_clocks *clks)
 {
@@ -1394,7 +1423,7 @@ void dm_helpers_init_panel_settings(
 	panel_config->pps.extra_post_OUI_ms = 0;
 	// Feature DSC
 	panel_config->dsc.disable_dsc_edp = false;
-	panel_config->dsc.force_dsc_edp_policy = 0;
+	panel_config->dsc.force_dsc_edp_policy = 1;
 }
 EXPORT_IF_KUNIT(dm_helpers_init_panel_settings);
 
@@ -1407,6 +1436,9 @@ void dm_helpers_override_panel_settings(
 	// Feature DSC
 	if (amdgpu_dc_debug_mask & DC_DISABLE_DSC)
 		link->panel_config.dsc.disable_dsc_edp = true;
+
+	if (!dc_link_should_enable_fec(link))
+		link->panel_config.dsc.force_dsc_edp_policy = 0;
 
 	if (dc_get_edp_link_panel_inst(ctx->dc, link, &panel_inst) && panel_inst == 1) {
 		link->panel_config.psr.disable_psr = true;
@@ -1426,6 +1458,7 @@ void *dm_helpers_allocate_gpu_mem(
 
 	return dm_allocate_gpu_mem(adev, type, size, addr);
 }
+EXPORT_IF_KUNIT(dm_helpers_allocate_gpu_mem);
 
 void dm_helpers_free_gpu_mem(
 		struct dc_context *ctx,
@@ -1436,6 +1469,7 @@ void dm_helpers_free_gpu_mem(
 
 	dm_free_gpu_mem(adev, type, pvMem);
 }
+EXPORT_IF_KUNIT(dm_helpers_free_gpu_mem);
 
 bool dm_helpers_dmub_outbox_interrupt_control(struct dc_context *ctx, bool enable)
 {
@@ -1912,3 +1946,4 @@ bool dm_helpers_submit_i2c_over_aux(struct ddc_service *ddc, uint32_t address, u
 	//TODO: Implement this
 	return false;
 }
+EXPORT_IF_KUNIT(dm_helpers_submit_i2c_over_aux);

@@ -34,6 +34,7 @@
 #include "amdgpu.h"
 #include "amdgpu_xgmi.h"
 #include "amdgpu_reset.h"
+#include "soc_v1_0.h"
 #include "kfd_priv.h"
 #include "kfd_svm.h"
 #include "kfd_migrate.h"
@@ -1253,7 +1254,7 @@ svm_range_get_pte_flags(struct kfd_node *node, struct amdgpu_vm *vm,
 	bool coherent = flags & (KFD_IOCTL_SVM_FLAG_COHERENT | KFD_IOCTL_SVM_FLAG_EXT_COHERENT);
 	bool ext_coherent = flags & KFD_IOCTL_SVM_FLAG_EXT_COHERENT;
 	unsigned int mtype_local, mtype_remote;
-	bool is_aid_a1, is_local;
+	bool is_aid_a1, is_local, is_spx;
 
 	if (domain == SVM_RANGE_VRAM_DOMAIN)
 		bo_node = prange->svm_bo->node;
@@ -1341,20 +1342,34 @@ svm_range_get_pte_flags(struct kfd_node *node, struct amdgpu_vm *vm,
 		mapping_flags |= AMDGPU_VM_MTYPE_NC;
 		break;
 	case IP_VERSION(12, 1, 0):
-		is_aid_a1 = (node->adev->rev_id & 0x10);
+		is_aid_a1 = SOC_V1_0_DIE_REV_AID(node->adev->rev_id) == 1;
 		is_local = (domain == SVM_RANGE_VRAM_DOMAIN) &&
 				(bo_node->adev == node->adev);
 
 		mtype_local = amdgpu_mtype_local == 0 ? AMDGPU_VM_MTYPE_RW :
 				amdgpu_mtype_local == 1 ? AMDGPU_VM_MTYPE_NC :
 				is_aid_a1 ? AMDGPU_VM_MTYPE_RW : AMDGPU_VM_MTYPE_NC;
-		mtype_remote = is_aid_a1 ? AMDGPU_VM_MTYPE_NC : AMDGPU_VM_MTYPE_UC;
+		/* Remote memory defaults to MTYPE_UC on GFX 12.1 and can be
+		 * overridden through the amdgpu_mtype_remote module parameter
+		 * (0 = MTYPE_NC, 1 = MTYPE_UC).
+		 */
+		mtype_remote = amdgpu_mtype_remote == 0 ? AMDGPU_VM_MTYPE_NC :
+				AMDGPU_VM_MTYPE_UC;
 		snoop = true;
 
-		if (is_local) /* local HBM  */ {
+		if (ext_coherent) {
+			is_spx = amdgpu_xcp_query_partition_mode(node->adev->xcp_mgr,
+								 AMDGPU_XCP_FL_NONE) ==
+				 AMDGPU_SPX_PARTITION_MODE;
+			/* AID A0 requires MTYPE_UC for extended-scope coherent
+			 * local memory in DPX/QPX/CPX modes.
+			 */
+			if (is_local && (is_aid_a1 || is_spx))
+				mapping_flags |= mtype_local;
+			else
+				mapping_flags |= AMDGPU_VM_MTYPE_UC;
+		} else if (is_local) /* local HBM  */ {
 			mapping_flags |= mtype_local;
-		} else if (ext_coherent) {
-			mapping_flags |= AMDGPU_VM_MTYPE_UC;
 		} else {
 			/* system memory or remote VRAM */
 			mapping_flags |= mtype_remote;
@@ -1369,7 +1384,13 @@ svm_range_get_pte_flags(struct kfd_node *node, struct amdgpu_vm *vm,
 		mapping_flags |= AMDGPU_VM_PAGE_EXECUTABLE;
 
 	pte_flags = AMDGPU_PTE_VALID;
-	pte_flags |= (domain == SVM_RANGE_VRAM_DOMAIN) ? 0 : AMDGPU_PTE_SYSTEM;
+	/* SPM-backed VRAM is accessed through the system memory path and
+	 * requires the SYSTEM bit.
+	 */
+	if (amdgpu_virt_vram_is_spm(node->adev))
+		pte_flags |= AMDGPU_PTE_SYSTEM;
+	else
+		pte_flags |= (domain == SVM_RANGE_VRAM_DOMAIN) ? 0 : AMDGPU_PTE_SYSTEM;
 	pte_flags |= snoop ? AMDGPU_PTE_SNOOPED : 0;
 	if (gc_ip_version >= IP_VERSION(12, 0, 0))
 		pte_flags |= AMDGPU_PTE_IS_PTE;
@@ -2137,14 +2158,25 @@ static struct svm_range *svm_range_clone(struct svm_range *old)
 		svm_range_free(new, false);
 		return NULL;
 	}
-	if (old->svm_bo) {
+
+	/* old->lock keeps old->svm_bo alive while taking the reference */
+	mutex_lock(&old->lock);
+	if (svm_bo_ref_unless_zero(old->svm_bo)) {
 		new->ttm_res = old->ttm_res;
 		new->offset = old->offset;
-		new->svm_bo = svm_range_bo_ref(old->svm_bo);
+		new->svm_bo = old->svm_bo;
 		spin_lock(&new->svm_bo->list_lock);
 		list_add(&new->svm_bo_list, &new->svm_bo->range_list);
 		spin_unlock(&new->svm_bo->list_lock);
 	}
+	mutex_unlock(&old->lock);
+
+	/* prange only holds an svm_bo reference while ttm_res is set, unref
+	 * outside old->lock, svm_range_bo_release takes it and would deadlock.
+	 */
+	if (new->svm_bo && !new->ttm_res)
+		svm_range_bo_unref(new->svm_bo);
+
 	new->flags = old->flags;
 	new->preferred_loc = old->preferred_loc;
 	new->prefetch_loc = old->prefetch_loc;

@@ -13,7 +13,6 @@
 #include <linux/clk.h>
 #include <linux/mm.h>
 #include <linux/module.h>
-#include <linux/pagemap.h>
 #include <linux/scatterlist.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
@@ -839,7 +838,7 @@ isp_video_get_selection(struct file *file, void *fh, struct v4l2_selection *sel)
 	 * implemented.
 	 */
 	sdsel.pad = pad;
-	ret = v4l2_subdev_call(subdev, pad, get_selection, NULL, &sdsel);
+	ret = v4l2_subdev_call(subdev, pad, get_selection, NULL, NULL, &sdsel);
 	if (!ret)
 		sel->r = sdsel.r;
 	if (ret != -ENOIOCTLCMD)
@@ -890,7 +889,7 @@ isp_video_set_selection(struct file *file, void *fh, struct v4l2_selection *sel)
 
 	sdsel.pad = pad;
 	mutex_lock(&video->mutex);
-	ret = v4l2_subdev_call(subdev, pad, set_selection, NULL, &sdsel);
+	ret = v4l2_subdev_call(subdev, pad, set_selection, NULL, NULL, &sdsel);
 	mutex_unlock(&video->mutex);
 	if (!ret)
 		sel->r = sdsel.r;

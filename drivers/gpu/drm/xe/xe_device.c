@@ -7,7 +7,7 @@
 
 #include <linux/aperture.h>
 #include <linux/delay.h>
-#include <linux/fault-inject.h>
+#include <linux/error-injection.h>
 #include <linux/units.h>
 
 #include <drm/drm_client.h>
@@ -27,6 +27,7 @@
 #include "xe_bo_evict.h"
 #include "xe_configfs.h"
 #include "xe_debugfs.h"
+#include "xe_cpu_bind.h"
 #include "xe_defaults.h"
 #include "xe_devcoredump.h"
 #include "xe_device_sysfs.h"
@@ -48,7 +49,9 @@
 #include "xe_i2c.h"
 #include "xe_irq.h"
 #include "xe_late_bind_fw.h"
+#include "xe_log.h"
 #include "xe_mmio.h"
+#include "xe_mmio_gem.h"
 #include "xe_module.h"
 #include "xe_nvm.h"
 #include "xe_oa.h"
@@ -78,6 +81,7 @@
 #include "xe_vsec.h"
 #include "xe_wait_user_fence.h"
 #include "xe_wa.h"
+#include "xe_wedge.h"
 
 #include <generated/xe_device_wa_oob.h>
 #include <generated/xe_wa_oob.h>
@@ -110,6 +114,8 @@ static int xe_file_open(struct drm_device *dev, struct drm_file *file)
 	mutex_init(&xef->exec_queue.lock);
 	xa_init_flags(&xef->exec_queue.xa, XA_FLAGS_ALLOC1);
 
+	mutex_init(&xef->mmio_gem.lock);
+
 	file->driver_priv = xef;
 	kref_init(&xef->refcount);
 
@@ -131,6 +137,8 @@ static void xe_file_destroy(struct kref *ref)
 	mutex_destroy(&xef->exec_queue.lock);
 	xa_destroy(&xef->vm.xa);
 	mutex_destroy(&xef->vm.lock);
+
+	mutex_destroy(&xef->mmio_gem.lock);
 
 	xe_drm_client_put(xef->client);
 	kfree(xef->process_name);
@@ -188,6 +196,13 @@ static void xe_file_close(struct drm_device *dev, struct drm_file *file)
 	xa_for_each(&xef->vm.xa, idx, vm)
 		xe_vm_close_and_put(vm);
 
+	scoped_guard(mutex, &xef->mmio_gem.lock) {
+		if (xef->mmio_gem.pci_barrier) {
+			xe_mmio_gem_destroy(xef->mmio_gem.pci_barrier, file);
+			xef->mmio_gem.pci_barrier = NULL;
+		}
+	}
+
 	xe_file_put(xef);
 }
 
@@ -224,7 +239,7 @@ static long xe_drm_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	struct xe_device *xe = to_xe_device(file_priv->minor->dev);
 	long ret;
 
-	if (xe_device_wedged(xe))
+	if (xe_wedged(xe))
 		return -ECANCELED;
 
 	ACQUIRE(xe_pm_runtime_ioctl, pm)(xe);
@@ -242,7 +257,7 @@ static long xe_drm_compat_ioctl(struct file *file, unsigned int cmd, unsigned lo
 	struct xe_device *xe = to_xe_device(file_priv->minor->dev);
 	long ret;
 
-	if (xe_device_wedged(xe))
+	if (xe_wedged(xe))
 		return -ECANCELED;
 
 	ACQUIRE(xe_pm_runtime_ioctl, pm)(xe);
@@ -257,95 +272,6 @@ static long xe_drm_compat_ioctl(struct file *file, unsigned int cmd, unsigned lo
 #define xe_drm_compat_ioctl NULL
 #endif
 
-static void barrier_open(struct vm_area_struct *vma)
-{
-	drm_dev_get(vma->vm_private_data);
-}
-
-static void barrier_close(struct vm_area_struct *vma)
-{
-	drm_dev_put(vma->vm_private_data);
-}
-
-static void barrier_release_dummy_page(struct drm_device *dev, void *res)
-{
-	struct page *dummy_page = (struct page *)res;
-
-	__free_page(dummy_page);
-}
-
-static vm_fault_t barrier_fault(struct vm_fault *vmf)
-{
-	struct drm_device *dev = vmf->vma->vm_private_data;
-	struct vm_area_struct *vma = vmf->vma;
-	vm_fault_t ret = VM_FAULT_NOPAGE;
-	pgprot_t prot;
-	int idx;
-
-	prot = vma_get_page_prot(vma);
-
-	if (drm_dev_enter(dev, &idx)) {
-		unsigned long pfn;
-
-#define LAST_DB_PAGE_OFFSET 0x7ff001
-		pfn = PHYS_PFN(pci_resource_start(to_pci_dev(dev->dev), 0) +
-				LAST_DB_PAGE_OFFSET);
-		ret = vmf_insert_pfn_prot(vma, vma->vm_start, pfn,
-					  pgprot_noncached(prot));
-		drm_dev_exit(idx);
-	} else {
-		struct page *page;
-
-		/* Allocate new dummy page to map all the VA range in this VMA to it*/
-		page = alloc_page(GFP_KERNEL | __GFP_ZERO);
-		if (!page)
-			return VM_FAULT_OOM;
-
-		/* Set the page to be freed using drmm release action */
-		if (drmm_add_action_or_reset(dev, barrier_release_dummy_page, page))
-			return VM_FAULT_OOM;
-
-		ret = vmf_insert_pfn_prot(vma, vma->vm_start, page_to_pfn(page),
-					  prot);
-	}
-
-	return ret;
-}
-
-static const struct vm_operations_struct vm_ops_barrier = {
-	.open = barrier_open,
-	.close = barrier_close,
-	.fault = barrier_fault,
-};
-
-static int xe_pci_barrier_mmap(struct file *filp,
-			       struct vm_area_struct *vma)
-{
-	struct drm_file *priv = filp->private_data;
-	struct drm_device *dev = priv->minor->dev;
-	struct xe_device *xe = to_xe_device(dev);
-
-	if (!IS_DGFX(xe))
-		return -EINVAL;
-
-	if (vma->vm_end - vma->vm_start > SZ_4K)
-		return -EINVAL;
-
-	if (vma_is_cow_mapping(vma))
-		return -EINVAL;
-
-	if (vma->vm_flags & (VM_READ | VM_EXEC))
-		return -EINVAL;
-
-	vm_flags_clear(vma, VM_MAYREAD | VM_MAYEXEC);
-	vm_flags_set(vma, VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP | VM_IO);
-	vma->vm_ops = &vm_ops_barrier;
-	vma->vm_private_data = dev;
-	drm_dev_get(vma->vm_private_data);
-
-	return 0;
-}
-
 static int xe_mmap(struct file *filp, struct vm_area_struct *vma)
 {
 	struct drm_file *priv = filp->private_data;
@@ -353,11 +279,6 @@ static int xe_mmap(struct file *filp, struct vm_area_struct *vma)
 
 	if (drm_dev_is_unplugged(dev))
 		return -ENODEV;
-
-	switch (vma->vm_pgoff) {
-	case XE_PCI_BARRIER_MMAP_OFFSET >> XE_PTE_SHIFT:
-		return xe_pci_barrier_mmap(filp, vma);
-	}
 
 	return drm_gem_mmap(filp, vma);
 }
@@ -453,6 +374,9 @@ bool xe_device_is_admin_only(const struct xe_device *xe)
 }
 #endif
 
+/* Number of allocated struct xe_device */
+static atomic_t xe_device_count;
+
 static void xe_device_destroy(struct drm_device *dev, void *dummy)
 {
 	struct xe_device *xe = to_xe_device(dev);
@@ -472,6 +396,9 @@ static void xe_device_destroy(struct drm_device *dev, void *dummy)
 		destroy_workqueue(xe->destroy_wq);
 
 	ttm_device_fini(&xe->ttm);
+
+	if (atomic_dec_and_test(&xe_device_count))
+		wake_up_var(&xe_device_count);
 }
 
 /**
@@ -513,6 +440,17 @@ struct xe_device *xe_device_create(struct pci_dev *pdev)
 }
 ALLOW_ERROR_INJECTION(xe_device_create, ERRNO); /* See xe_pci_probe() */
 
+static void xe_device_parse_modparam(struct xe_device *xe)
+{
+	xe->atomic_svm_timeslice_ms = 5;
+	xe->min_run_period_lr_ms = 5;
+	xe->info.num_pf_work = xe_modparam.num_pf_work;
+	if (xe->info.num_pf_work < 1)
+		xe->info.num_pf_work = 1;
+	else if (xe->info.num_pf_work > XE_PAGEFAULT_WORK_MAX)
+		xe->info.num_pf_work = XE_PAGEFAULT_WORK_MAX;
+}
+
 /**
  * xe_device_init_early() - Initialize a new &xe_device instance
  * @xe: the &xe_device to initialize
@@ -531,6 +469,7 @@ int xe_device_init_early(struct xe_device *xe)
 		return err;
 
 	xe_bo_dev_init(&xe->bo_device);
+	atomic_inc(&xe_device_count);
 	err = drmm_add_action_or_reset(&xe->drm, xe_device_destroy, NULL);
 	if (err)
 		return err;
@@ -539,8 +478,7 @@ int xe_device_init_early(struct xe_device *xe)
 	if (err)
 		return err;
 
-	xe->atomic_svm_timeslice_ms = 5;
-	xe->min_run_period_lr_ms = 5;
+	xe_device_parse_modparam(xe);
 
 	err = xe_irq_init(xe);
 	if (err)
@@ -742,6 +680,7 @@ static void vf_update_device_info(struct xe_device *xe)
 	xe->info.skip_guc_pc = 1;
 	xe->info.skip_pcode = 1;
 	xe->info.has_drm_ras = false;
+	xe->info.has_device_uid = false;
 }
 
 static int xe_device_vram_alloc(struct xe_device *xe)
@@ -818,12 +757,11 @@ int xe_device_probe_early(struct xe_device *xe)
 	 */
 	assert_lmem_ready(xe);
 
-	xe->wedged.mode = xe_device_validate_wedged_mode(xe, xe_modparam.wedged_mode) ?
-			  XE_DEFAULT_WEDGED_MODE : xe_modparam.wedged_mode;
-	drm_dbg(&xe->drm, "wedged_mode: setting mode (%u) %s\n",
-		xe->wedged.mode, xe_wedged_mode_to_string(xe->wedged.mode));
-
 	err = xe_device_vram_alloc(xe);
+	if (err)
+		return err;
+
+	err = xe_wedge_init(xe);
 	if (err)
 		return err;
 
@@ -913,14 +851,6 @@ static void detect_preproduction_hw(struct xe_device *xe)
 	}
 }
 
-static void xe_device_wedged_fini(struct drm_device *drm, void *arg)
-{
-	struct xe_device *xe = arg;
-
-	if (atomic_read(&xe->wedged.flag))
-		xe_pm_runtime_put(xe);
-}
-
 #ifdef CONFIG_DRM_XE_DEBUG_PAGE_SIZE
 static int xe_debug_page_size_alloc_ctrl_init(struct xe_device *xe)
 {
@@ -942,6 +872,12 @@ static int xe_debug_page_size_alloc_ctrl_init(struct xe_device *xe)
 }
 #endif
 
+static void xe_uid_probe(struct xe_device *xe)
+{
+	if (xe->info.has_device_uid)
+		xe->device_uid = xe_mmio_read64_2x32(xe_root_tile_mmio(xe), CRI_DEVICE_UID);
+}
+
 int xe_device_probe(struct xe_device *xe)
 {
 	struct xe_tile *tile;
@@ -949,7 +885,11 @@ int xe_device_probe(struct xe_device *xe)
 	int err;
 	u8 id;
 
-	xe_pat_init_early(xe);
+	xe_uid_probe(xe);
+
+	err = xe_pat_init_early(xe);
+	if (err)
+		return err;
 
 	err = xe_sriov_init(xe);
 	if (err)
@@ -1028,7 +968,9 @@ int xe_device_probe(struct xe_device *xe)
 	if (err)
 		return err;
 
-	xe_ras_init(xe);
+	err = xe_ras_init(xe);
+	if (err)
+		return err;
 
 	/*
 	 * Now that GT is initialized (TTM in particular),
@@ -1037,6 +979,10 @@ int xe_device_probe(struct xe_device *xe)
 	 * inside display.
 	 */
 	err = xe_display_init_early(xe);
+	if (err)
+		return err;
+
+	err = xe_vram_reserve_memtest_bo(xe);
 	if (err)
 		return err;
 
@@ -1055,6 +1001,14 @@ int xe_device_probe(struct xe_device *xe)
 		if (err)
 			return err;
 	}
+
+	err = xe_vram_memtest(xe);
+	if (err)
+		return err;
+
+	err = xe_cpu_bind_init(xe);
+	if (err)
+		return err;
 
 	err = xe_pagefault_init(xe);
 	if (err)
@@ -1136,17 +1090,6 @@ int xe_device_probe(struct xe_device *xe)
 		goto err_unregister_display;
 
 	detect_preproduction_hw(xe);
-
-	err = drmm_add_action_or_reset(&xe->drm, xe_device_wedged_fini, xe);
-	if (err)
-		goto err_unregister_display;
-
-	/*
-	 * Process and log any errors detected by hardware. Possible results can
-	 * include declaring the device as wedged, which must be done only after
-	 * xe_device_wedged_fini() is registered.
-	 */
-	xe_ras_process_errors(xe);
 
 	err = devm_add_action_or_reset(xe->drm.dev, xe_device_sanitize, xe);
 	if (err)
@@ -1259,7 +1202,7 @@ bool xe_device_is_l2_flush_optimized(struct xe_device *xe)
 	return false;
 }
 
-void xe_device_l2_flush(struct xe_device *xe)
+void xe_device_l2_flush(struct xe_device *xe, bool force)
 {
 	struct xe_gt *gt;
 
@@ -1267,7 +1210,7 @@ void xe_device_l2_flush(struct xe_device *xe)
 	if (!gt)
 		return;
 
-	if (!XE_GT_WA(gt, 16023588340))
+	if (!force && !XE_GT_WA(gt, 16023588340))
 		return;
 
 	CLASS(xe_force_wake, fw_ref)(gt_to_fw(gt), XE_FW_GT);
@@ -1322,7 +1265,7 @@ void xe_device_td_flush(struct xe_device *xe)
 
 	if (XE_GT_WA(root_gt, 16023588340)) {
 		/* A transient flush is not sufficient: flush the L2 */
-		xe_device_l2_flush(xe);
+		xe_device_l2_flush(xe, false);
 	} else {
 		xe_guc_pc_apply_flush_freq_limit(&root_gt->uc.guc.pc);
 		tdf_request_sync(xe);
@@ -1384,160 +1327,6 @@ u64 xe_device_uncanonicalize_addr(struct xe_device *xe, u64 address)
 }
 
 /**
- * DOC: Xe Device Wedging
- *
- * Xe driver uses drm device wedged uevent as documented in Documentation/gpu/drm-uapi.rst.
- * When device is in wedged state, every IOCTL will be blocked and GT cannot
- * be used. The conditions under which the driver declares the device wedged
- * depend on the wedged mode configuration (see &enum xe_wedged_mode). The
- * default recovery method for a wedged state is rebind/bus-reset.
- *
- * Another recovery method is vendor-specific. Below are the cases that send
- * ``WEDGED=vendor-specific`` recovery method in drm device wedged uevent.
- *
- * Case: Firmware Flash
- * --------------------
- *
- * Identification Hint
- * +++++++++++++++++++
- *
- * ``WEDGED=vendor-specific`` drm device wedged uevent with
- * :ref:`Runtime Survivability mode <xe-survivability-mode>` is used to notify
- * admin/userspace consumer about the need for a firmware flash.
- *
- * Recovery Procedure
- * ++++++++++++++++++
- *
- * Once ``WEDGED=vendor-specific`` drm device wedged uevent is received, follow
- * the below steps
- *
- * - Check Runtime Survivability mode sysfs.
- *   If enabled, firmware flash is required to recover the device.
- *
- *   /sys/bus/pci/devices/<device>/survivability_mode
- *
- * - Admin/userspace consumer can use firmware flashing tools like fwupd to flash
- *   firmware and restore device to normal operation.
- */
-
-/**
- * xe_device_set_wedged_method - Set wedged recovery method
- * @xe: xe device instance
- * @method: recovery method to set
- *
- * Set wedged recovery method to be sent in drm wedged uevent.
- */
-void xe_device_set_wedged_method(struct xe_device *xe, unsigned long method)
-{
-	xe->wedged.method = method;
-}
-
-/**
- * xe_device_declare_wedged - Declare device wedged
- * @xe: xe device instance
- *
- * This is a final state that can only be cleared with the recovery method
- * specified in the drm wedged uevent. The method can be set using
- * xe_device_set_wedged_method before declaring the device as wedged. If no method
- * is set, reprobe (unbind/re-bind) will be sent by default.
- *
- * In this state every IOCTL will be blocked so the GT cannot be used.
- * In general it will be called upon any critical error such as gt reset
- * failure or guc loading failure. Userspace will be notified of this state
- * through device wedged uevent.
- * If xe.wedged module parameter is set to 2, this function will be called
- * on every single execution timeout (a.k.a. GPU hang) right after devcoredump
- * snapshot capture. In this mode, GT reset won't be attempted so the state of
- * the issue is preserved for further debugging.
- */
-void xe_device_declare_wedged(struct xe_device *xe)
-{
-	struct xe_gt *gt;
-	u8 id;
-
-	if (xe->wedged.mode == XE_WEDGED_MODE_NEVER) {
-		drm_dbg(&xe->drm, "Wedged mode is forcibly disabled\n");
-		return;
-	}
-
-	if (!atomic_xchg(&xe->wedged.flag, 1)) {
-		xe->needs_flr_on_fini = true;
-		xe_pm_runtime_get_noresume(xe);
-		drm_err(&xe->drm,
-			"CRITICAL: Xe has declared device %s as wedged.\n"
-			"IOCTLs and executions are blocked.\n"
-			"For recovery procedure, refer to https://docs.kernel.org/gpu/drm-uapi.html#device-wedging\n"
-			"Please file a _new_ bug report at https://gitlab.freedesktop.org/drm/xe/kernel/issues/new\n",
-			dev_name(xe->drm.dev));
-	}
-
-	for_each_gt(gt, xe, id)
-		xe_gt_declare_wedged(gt);
-
-	if (xe_device_wedged(xe)) {
-		/*
-		 * XE_WEDGED_MODE_UPON_ANY_HANG_NO_RESET is intended for debugging
-		 * hangs, so wedge the device with 'none' recovery method and have
-		 * it available to the user for debugging.
-		 */
-		if (xe->wedged.mode == XE_WEDGED_MODE_UPON_ANY_HANG_NO_RESET)
-			xe_device_set_wedged_method(xe, DRM_WEDGE_RECOVERY_NONE);
-		/* If no wedge recovery method is set, use default */
-		else if (!xe->wedged.method)
-			xe_device_set_wedged_method(xe, DRM_WEDGE_RECOVERY_REBIND |
-						    DRM_WEDGE_RECOVERY_BUS_RESET);
-
-		/* Notify userspace of wedged device */
-		drm_dev_wedged_event(&xe->drm, xe->wedged.method, NULL);
-	}
-}
-
-/**
- * xe_device_validate_wedged_mode - Check if given mode is supported
- * @xe: the &xe_device
- * @mode: requested mode to validate
- *
- * Check whether the provided wedged mode is supported.
- *
- * Return: 0 if mode is supported, error code otherwise.
- */
-int xe_device_validate_wedged_mode(struct xe_device *xe, unsigned int mode)
-{
-	if (mode > XE_WEDGED_MODE_UPON_ANY_HANG_NO_RESET) {
-		drm_dbg(&xe->drm, "wedged_mode: invalid value (%u)\n", mode);
-		return -EINVAL;
-	} else if (mode == XE_WEDGED_MODE_UPON_ANY_HANG_NO_RESET && (IS_SRIOV_VF(xe) ||
-		   (IS_SRIOV_PF(xe) && !IS_ENABLED(CONFIG_DRM_XE_DEBUG)))) {
-		drm_dbg(&xe->drm, "wedged_mode: (%u) %s mode is not supported for %s\n",
-			mode, xe_wedged_mode_to_string(mode),
-			xe_sriov_mode_to_string(xe_device_sriov_mode(xe)));
-		return -EPERM;
-	}
-
-	return 0;
-}
-
-/**
- * xe_wedged_mode_to_string - Convert enum value to string.
- * @mode: the &xe_wedged_mode to convert
- *
- * Returns: wedged mode as a user friendly string.
- */
-const char *xe_wedged_mode_to_string(enum xe_wedged_mode mode)
-{
-	switch (mode) {
-	case XE_WEDGED_MODE_NEVER:
-		return "never";
-	case XE_WEDGED_MODE_UPON_CRITICAL_ERROR:
-		return "upon-critical-error";
-	case XE_WEDGED_MODE_UPON_ANY_HANG_NO_RESET:
-		return "upon-any-hang-no-reset";
-	default:
-		return "<invalid>";
-	}
-}
-
-/**
  * xe_device_asid_to_vm() - Find VM from ASID
  * @xe: the &xe_device
  * @asid: Address space ID
@@ -1560,4 +1349,26 @@ struct xe_vm *xe_device_asid_to_vm(struct xe_device *xe, u32 asid)
 	up_read(&xe->usm.lock);
 
 	return vm;
+}
+
+/**
+ * xe_device_exit() - Device subsystem exit function.
+ *
+ * Exit function to be called at module unload time.
+ */
+void xe_device_exit(void)
+{
+	/*
+	 * Wait for all devices to be freed. 20s is well above the typical
+	 * maximum dma_fence signalling time, so warn and keep waiting if
+	 * we're still not done by then, since it may indicate a leaked
+	 * xe_device reference is stalling module unload.
+	 */
+	if (!wait_var_event_timeout(&xe_device_count,
+				    !atomic_read(&xe_device_count),
+				    HZ * 20)) {
+		pr_warn("%s: Waiting for %d xe device(s) to be freed before unloading.\n",
+			DRIVER_NAME, atomic_read(&xe_device_count));
+		wait_var_event(&xe_device_count, !atomic_read(&xe_device_count));
+	}
 }

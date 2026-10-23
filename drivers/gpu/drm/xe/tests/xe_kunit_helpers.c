@@ -15,6 +15,7 @@
 #include "xe_device.h"
 #include "xe_device_types.h"
 #include "xe_pm.h"
+#include "xe_wedge.h"
 
 /**
  * xe_kunit_helper_alloc_xe_device - Allocate a &xe_device for a KUnit test.
@@ -39,6 +40,10 @@ struct xe_device *xe_kunit_helper_alloc_xe_device(struct kunit *test,
 					       struct xe_device,
 					       drm, DRIVER_GEM);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, xe);
+
+	dev_set_drvdata(xe->drm.dev, &xe->drm);
+	KUNIT_ASSERT_PTR_EQ(test, xe, kdev_to_xe_device(dev));
+
 	return xe;
 }
 EXPORT_SYMBOL_IF_KUNIT(xe_kunit_helper_alloc_xe_device);
@@ -119,7 +124,7 @@ int xe_kunit_helper_xe_device_live_test_init(struct kunit *test)
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, xe);
 	kunit_info(test, "running on %s device\n", xe->info.platform_name);
 
-	KUNIT_ASSERT_FALSE(test, xe_device_wedged(xe));
+	KUNIT_ASSERT_FALSE(test, xe_wedged(xe));
 	xe_pm_runtime_get(xe);
 	KUNIT_ASSERT_EQ(test, 0, kunit_add_action_or_reset(test, put_xe_pm_runtime, xe));
 

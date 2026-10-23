@@ -7,11 +7,13 @@
 
 #include "xe_device.h"
 #include "xe_gt.h"
+#include "xe_log.h"
 #include "xe_pci.h"
 #include "xe_pm.h"
 #include "xe_printk.h"
 #include "xe_ras.h"
 #include "xe_survivability_mode.h"
+#include "xe_wedge.h"
 
 static void prepare_device_for_reset(struct pci_dev *pdev)
 {
@@ -21,7 +23,7 @@ static void prepare_device_for_reset(struct pci_dev *pdev)
 
 	/*
 	 * Wedge the device to prevent userspace access but do not send the uevent.
-	 * xe_device_wedged_fini() releases runtime pm if wedged flag is set, so acquire a runtime
+	 * xe_wedge_fini() releases runtime pm if wedged flag is set, so acquire a runtime
 	 * pm reference to avoid underflow.
 	 */
 	if (!atomic_xchg(&xe->wedged.flag, 1))
@@ -29,8 +31,10 @@ static void prepare_device_for_reset(struct pci_dev *pdev)
 
 	xe_device_set_in_reset(xe);
 
-	for_each_gt(gt, xe, id)
-		xe_gt_declare_wedged(gt);
+	for_each_gt(gt, xe, id) {
+		xe_gt_wedge_declare(gt);
+		flush_work(&gt->wedge.worker);
+	}
 
 	pci_disable_device(pdev);
 }
@@ -60,7 +64,7 @@ static pci_ers_result_t xe_pci_error_detected(struct pci_dev *pdev, pci_channel_
 		return PCI_ERS_RESULT_DISCONNECT;
 
 	/* If the device is already wedged or in survivability mode, do not attempt recovery */
-	if (xe_survivability_mode_is_boot_enabled(xe) || xe_device_wedged(xe))
+	if (xe_survivability_mode_is_boot_enabled(xe) || xe_wedged(xe))
 		return PCI_ERS_RESULT_DISCONNECT;
 
 	switch (state) {
@@ -83,6 +87,12 @@ static pci_ers_result_t xe_pci_error_mmio_enabled(struct pci_dev *pdev)
 	xe_info(xe, "PCI error: MMIO enabled\n");
 	action = xe_ras_process_errors(xe);
 
+	/* User wants to debug the error, prevent reset */
+	if (xe->wedged.mode == XE_WEDGED_MODE_UPON_ANY_HANG_NO_RESET) {
+		xe_wedge_declare(xe, DRM_WEDGE_RECOVERY_NONE);
+		return PCI_ERS_RESULT_DISCONNECT;
+	}
+
 	return ras_action_to_pci_result(pdev, action);
 }
 
@@ -90,13 +100,15 @@ static pci_ers_result_t xe_pci_error_slot_reset(struct pci_dev *pdev)
 {
 	const struct pci_device_id *ent = pci_match_id(pdev->driver->id_table, pdev);
 	struct xe_device *xe = pdev_to_xe_device(pdev);
+	int err;
 
 	xe_info(xe, "PCI error: slot reset\n");
 
 	pci_restore_state(pdev);
 
-	if (pci_enable_device(pdev)) {
-		xe_err(xe, "Cannot re-enable PCI device after reset\n");
+	err = pci_enable_device(pdev);
+	if (err) {
+		xe_log_err_fatal(xe, PCI, err, "Cannot re-enable PCI device after reset\n");
 		return PCI_ERS_RESULT_DISCONNECT;
 	}
 

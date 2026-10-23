@@ -761,7 +761,7 @@ static int bmg160_write_event_config(struct iio_dev *indio_dev,
 	struct bmg160_data *data = iio_priv(indio_dev);
 	int ret;
 
-	if (state && data->ev_enable_state)
+	if (state == data->ev_enable_state)
 		return 0;
 
 	mutex_lock(&data->mutex);
@@ -897,8 +897,8 @@ static irqreturn_t bmg160_trigger_handler(int irq, void *p)
 	if (ret < 0)
 		goto err;
 
-	iio_push_to_buffers_with_timestamp(indio_dev, &data->scan,
-					   pf->timestamp);
+	iio_push_to_buffers_with_ts(indio_dev, &data->scan,
+				    sizeof(data->scan), pf->timestamp);
 err:
 	iio_trigger_notify_done(indio_dev->trig);
 

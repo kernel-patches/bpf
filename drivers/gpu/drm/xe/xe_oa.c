@@ -5,6 +5,7 @@
 
 #include <linux/anon_inodes.h>
 #include <linux/delay.h>
+#include <linux/error-injection.h>
 #include <linux/nospec.h>
 #include <linux/poll.h>
 
@@ -1750,6 +1751,19 @@ static const struct file_operations xe_oa_fops = {
 	.mmap		= xe_oa_mmap,
 };
 
+static bool oag_has_tail_address_wrap(struct xe_oa_stream *stream)
+{
+	return GRAPHICS_VER(stream->oa->xe) >= 20 &&
+		stream->oa_unit->type == DRM_XE_OA_UNIT_TYPE_OAG;
+}
+
+static bool oam_has_tail_address_wrap(struct xe_oa_stream *stream)
+{
+	return MEDIA_VER(stream->oa->xe) >= 30 &&
+		(stream->oa_unit->type == DRM_XE_OA_UNIT_TYPE_OAM ||
+		 stream->oa_unit->type == DRM_XE_OA_UNIT_TYPE_OAM_SAG);
+}
+
 static int xe_oa_stream_init(struct xe_oa_stream *stream,
 			     struct xe_oa_open_param *param)
 {
@@ -1774,12 +1788,13 @@ static int xe_oa_stream_init(struct xe_oa_stream *stream,
 	stream->syncs = param->syncs;
 
 	/*
-	 * For Xe2+, when overrun mode is enabled, there are no partial reports at the end
-	 * of buffer, making the OA buffer effectively a non-power-of-2 size circular
-	 * buffer whose size, circ_size, is a multiple of the report size
+	 * For Xe2+ OAG and Xe3+ OAM, when overrun mode is enabled, there are no
+	 * partial reports at the end of buffer, making the OA buffer effectively a
+	 * non-power-of-2 size circular buffer whose size, circ_size, is
+	 * a multiple of the report size.
 	 */
-	if (GRAPHICS_VER(stream->oa->xe) >= 20 &&
-	    stream->oa_unit->type == DRM_XE_OA_UNIT_TYPE_OAG && stream->sample)
+	if (stream->sample &&
+	    (oag_has_tail_address_wrap(stream) || oam_has_tail_address_wrap(stream)))
 		stream->oa_buffer.circ_size =
 			param->oa_buffer_size -
 			param->oa_buffer_size % stream->oa_buffer.format->size;
@@ -2590,10 +2605,11 @@ static u32 __hwe_oam_unit(struct xe_hw_engine *hwe)
 		return XE_OA_UNIT_INVALID;
 	else if (!IS_DGFX(gt_to_xe(hwe->gt)))
 		return XE_OAM_UNIT_SCMI_0;
-	else if (hwe->class == XE_ENGINE_CLASS_VIDEO_DECODE)
-		return (hwe->instance / 2 & 0x1) + 1;
-	else if (hwe->class == XE_ENGINE_CLASS_VIDEO_ENHANCE)
+	else if (hwe->class == XE_ENGINE_CLASS_VIDEO_ENHANCE &&
+		 MEDIA_VERx100(gt_to_xe(hwe->gt)) < 3500)
 		return (hwe->instance & 0x1) + 1;
+	else
+		return (hwe->instance / 2 & 0x1) + 1;
 
 	return XE_OA_UNIT_INVALID;
 }

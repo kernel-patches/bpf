@@ -296,6 +296,19 @@
 #define TRACE_SYSCALLS()
 #endif
 
+#ifdef CONFIG_KAPI_SPEC
+/*
+ * .kapi_specs is an array of pointers (see DEFINE_KERNEL_API_SPEC()). Align
+ * __start_kapi_specs to at least pointer alignment so that no padding
+ * separates it from the first entry.
+ */
+#define KAPI_SPECS()							\
+	. = ALIGN(8);							\
+	BOUNDED_SECTION_BY(.kapi_specs, _kapi_specs)
+#else
+#define KAPI_SPECS()
+#endif
+
 #ifdef CONFIG_BPF_EVENTS
 #define BPF_RAW_TP() STRUCT_ALIGN();				\
 	BOUNDED_SECTION_BY(__bpf_raw_tp_map, __bpf_raw_tp)
@@ -485,6 +498,7 @@
 		. = ALIGN(8);						\
 		BOUNDED_SECTION_BY(__tracepoints_ptrs, ___tracepoints_ptrs) \
 		*(__tracepoints_strings)/* Tracepoints: strings */	\
+		KAPI_SPECS()						\
 	}								\
 									\
 	.rodata1          : AT(ADDR(.rodata1) - LOAD_OFFSET) {		\
@@ -675,12 +689,43 @@
 /*
  * .BTF
  */
+#ifdef CONFIG_DEBUG_INFO_BTF_INLINE
+#define BTF_INLINE							\
+	. = ALIGN(PAGE_SIZE);						\
+	.BTF.inline : AT(ADDR(.BTF.inline) - LOAD_OFFSET) {		\
+		BOUNDED_SECTION_BY(.BTF.inline, _BTF_inline)		\
+	}
+#else
+#define BTF_INLINE
+#endif
+
+#ifdef CONFIG_DEBUG_INFO_BTF_INLINE_MODULE
+/* __MODULE_NAME_LEN + SHA-256 digest + u32 BTF size */
+#ifdef CONFIG_64BIT
+#define BTF_LINK_SIZE	(64 - 8 + 32 + 4)
+#else
+#define BTF_LINK_SIZE	(64 - 4 + 32 + 4)
+#endif
+#define BTF_INLINE_LINK						\
+	. = ALIGN(PAGE_SIZE);					\
+	.BTF.inline.link : AT(ADDR(.BTF.inline.link) - LOAD_OFFSET) { \
+		__start_BTF_inline_link = .;				\
+		BYTE(0)						\
+		. += BTF_LINK_SIZE - 1;					\
+		__stop_BTF_inline_link = .;				\
+	}
+#else
+#define BTF_INLINE_LINK
+#endif
+
 #ifdef CONFIG_DEBUG_INFO_BTF
 #define BTF								\
 	. = ALIGN(PAGE_SIZE);						\
 	.BTF : AT(ADDR(.BTF) - LOAD_OFFSET) {				\
 		BOUNDED_SECTION_BY(.BTF, _BTF)				\
 	}								\
+	BTF_INLINE							\
+	BTF_INLINE_LINK						\
 	. = ALIGN(PAGE_SIZE);						\
 	.BTF_ids : AT(ADDR(.BTF_ids) - LOAD_OFFSET) {			\
 		*(.BTF_ids)						\
@@ -855,7 +900,7 @@
 		KLP_SYMID
 
 #define MODINFO								\
-		.modinfo : { *(.modinfo) . = ALIGN(8); }
+		.modinfo (INFO) : { KEEP(*(.modinfo)) }
 
 #ifdef CONFIG_GENERIC_BUG
 #define BUG_TABLE							\

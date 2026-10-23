@@ -26,9 +26,9 @@
  */
 
 #include <linux/file.h>
-#include <linux/pagemap.h>
 #include <linux/sync_file.h>
 #include <linux/dma-buf.h>
+#include <linux/pm_runtime.h>
 
 #include <drm/amdgpu_drm.h>
 #include <drm/drm_syncobj.h>
@@ -1146,11 +1146,23 @@ static int amdgpu_cs_vm_handling(struct amdgpu_cs_parser *p)
 
 	if (fpriv->csa_va) {
 		bo_va = fpriv->csa_va;
-		if (!bo_va)
-			return -ENOMEM;
 		r = amdgpu_vm_bo_update(adev, bo_va, false);
 		if (r)
 			return r;
+
+		r = amdgpu_sync_fence(&p->sync, bo_va->last_pt_update,
+				      GFP_KERNEL);
+		if (r)
+			return r;
+	}
+
+	if (fpriv->seq64_va) {
+		bo_va = fpriv->seq64_va;
+		r = amdgpu_vm_bo_update(adev, bo_va, false);
+		if (r) {
+			DRM_ERROR("failed to do vm_bo_update on userq sem\n");
+			return r;
+		}
 
 		r = amdgpu_sync_fence(&p->sync, bo_va->last_pt_update,
 				      GFP_KERNEL);
@@ -1440,6 +1452,12 @@ int amdgpu_cs_ioctl(struct drm_device *dev, void *data, struct drm_file *filp)
 
 	if (!adev->accel_working)
 		return -EBUSY;
+
+	PM_RUNTIME_ACQUIRE_IF_ENABLED_AUTOSUSPEND(dev->dev, lock);
+
+	r = PM_RUNTIME_ACQUIRE_ERR(&lock);
+	if (r)
+		return r;
 
 	r = amdgpu_cs_parser_init(&parser, adev, filp, data);
 	if (r) {
@@ -1810,8 +1828,6 @@ int amdgpu_cs_find_mapping(struct amdgpu_cs_parser *parser,
 	struct amdgpu_vm *vm = &fpriv->vm;
 	struct amdgpu_bo_va_mapping *mapping;
 	int i, r;
-
-	addr /= AMDGPU_GPU_PAGE_SIZE;
 
 	mapping = amdgpu_vm_bo_lookup_mapping(vm, addr);
 	if (!mapping || !mapping->bo_va || !mapping->bo_va->base.bo)

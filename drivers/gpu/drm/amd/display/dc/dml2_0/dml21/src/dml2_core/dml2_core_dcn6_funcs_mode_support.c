@@ -3,12 +3,15 @@
 // Copyright 2025 Advanced Micro Devices, Inc.
 #include "dml2_core_dcn6_funcs_mode_support.h"
 #include "dml2_core_utils.h"
-#include "dml2_core_dcn5_calcs_dchub.h"
-#include "dml2_core_dcn5_calcs_display_pipe.h"
-#include "dml2_core_dcn6_calcs_dchub.h"
+#include "dml2_core_dcn6_calcs.h"
 #include "dml_top_types.h"
 
-static void dcn6_ms_check_input_sanity(
+static const struct dml2_core_dcn6_calcs *get_calcs(const struct dml2_core_calculate_ms_context *ctx)
+{
+	return ctx->calcs->dcn6;
+}
+
+void dcn6_ms_check_input_sanity(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -43,7 +46,7 @@ static void dcn6_ms_check_input_sanity(
 	DML_LOG_FUNC_EXIT();
 }
 
-static void dcn6_ms_calculate_desired_output_bpp(
+void dcn6_ms_calculate_desired_output_bpp(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -57,7 +60,7 @@ static void dcn6_ms_calculate_desired_output_bpp(
 	DML_LOG_FUNC_EXIT();
 }
 
-static void dcn6_ms_calculate_max_det_and_min_compressed_buffer_size(
+void dcn6_ms_calculate_max_det_and_min_compressed_buffer_size(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -66,7 +69,7 @@ static void dcn6_ms_calculate_max_det_and_min_compressed_buffer_size(
 	struct dml2_core_internal_mode_support *outputs = states;
 
 	DML_LOG_FUNC_ENTER();
-	dcn5_calculate_max_det_and_min_compressed_buffer_size(
+	get_calcs(ctx)->calculate_max_det_and_min_compressed_buffer_size(
 			ip->config_return_buffer_size_in_kbytes,
 			ip->config_return_buffer_segment_size_in_kbytes,
 			ip->rob_buffer_size_kbytes,
@@ -86,7 +89,7 @@ static void dcn6_ms_calculate_max_det_and_min_compressed_buffer_size(
 	DML_LOG_FUNC_EXIT();
 }
 
-static void dcn6_ms_calculate_effective_pixel_clock(
+void dcn6_ms_calculate_effective_pixel_clock(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -99,13 +102,14 @@ static void dcn6_ms_calculate_effective_pixel_clock(
 	 * This function should probably be removed since ptoi is never true, so the function is a noop; not really
 	 * obvious if the comment means DML2.1 doesn't support interlace today.
 	 */
-	dcn5_adjust_pixel_clock_for_progressive_to_interlace_unit(display_cfg, ip->ptoi_supported, outputs->PixelClockBackEnd);
+	get_calcs(ctx)->adjust_pixel_clock_for_progressive_to_interlace_unit(display_cfg, ip->ptoi_supported,
+			outputs->PixelClockBackEnd);
 
 	DML_LOG_DEBUG_ARRAY_DOUBLE(outputs->PixelClockBackEnd, display_cfg->num_planes);
 	DML_LOG_FUNC_EXIT();
 }
 
-static bool dcn6_ms_check_scaler_support(
+bool dcn6_ms_check_scaler_support(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -122,7 +126,8 @@ static bool dcn6_ms_check_scaler_support(
 	for (k = 0; k < display_cfg->num_planes; k++) {
 		plane = &display_cfg->plane_descriptors[k];
 		if (plane->composition.scaler_info.enabled == false
-				&& (dml2_core_utils_is_420(plane->pixel_format) || dml2_core_utils_is_422_planar(plane->pixel_format) || dml2_core_utils_is_422_packed(plane->pixel_format)
+			&& (((dml2_core_utils_is_420(plane->pixel_format) || dml2_core_utils_is_422_planar(plane->pixel_format)
+					|| dml2_core_utils_is_422_packed(plane->pixel_format)) && plane->composition.scaler_info.upsp_enabled == false)
 						|| plane->composition.scaler_info.plane0.h_ratio != 1.0
 						|| plane->composition.scaler_info.plane0.h_taps != 1.0
 						|| plane->composition.scaler_info.plane0.v_ratio != 1.0
@@ -159,7 +164,7 @@ static bool dcn6_ms_check_scaler_support(
 	return outputs->support.ScaleRatioAndTapsSupport;
 }
 
-static bool dcn6_ms_check_source_format_and_scan_direction(
+bool dcn6_ms_check_source_format_and_scan_direction(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -185,7 +190,7 @@ static bool dcn6_ms_check_source_format_and_scan_direction(
 	return outputs->support.SourceFormatPixelAndScanSupport;
 }
 
-static void dcn6_ms_calculate_byte_per_pixel_and_block_sizes(
+void dcn6_ms_calculate_byte_per_pixel_and_block_sizes(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -197,7 +202,7 @@ static void dcn6_ms_calculate_byte_per_pixel_and_block_sizes(
 	DML_LOG_FUNC_ENTER();
 	for (k = 0; k < display_cfg->num_planes; k++) {
 		plane = &display_cfg->plane_descriptors[k];
-		dcn5_calculate_byte_per_pixel_and_block_sizes(
+		get_calcs(ctx)->calculate_byte_per_pixel_and_block_sizes(
 				plane->pixel_format,
 				plane->surface.tiling,
 				plane->surface.plane0.pitch,
@@ -236,7 +241,7 @@ static void dcn6_ms_calculate_byte_per_pixel_and_block_sizes(
 	DML_LOG_FUNC_EXIT();
 }
 
-static void dcn6_ms_calculate_read_bandwidth(
+void dcn6_ms_calculate_read_bandwidth(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -288,7 +293,7 @@ static void dcn6_ms_calculate_read_bandwidth(
 	DML_LOG_FUNC_EXIT();
 }
 
-static void dcn6_ms_calculate_writeback_bandwidth(
+void dcn6_ms_calculate_writeback_bandwidth(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -328,7 +333,7 @@ static void dcn6_ms_calculate_writeback_bandwidth(
 	DML_LOG_FUNC_EXIT();
 }
 
-static bool dcn6_ms_check_writeback_bandwidth_latency_support(
+bool dcn6_ms_check_writeback_bandwidth_latency_support(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -368,7 +373,7 @@ static bool dcn6_ms_check_writeback_bandwidth_latency_support(
 	return outputs->support.WritebackLatencySupport;
 }
 
-static bool dcn6_ms_check_writeback_scale_ratio_and_taps_support(
+bool dcn6_ms_check_writeback_scale_ratio_and_taps_support(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -445,7 +450,7 @@ static bool dcn6_ms_check_writeback_scale_ratio_and_taps_support(
 	return outputs->support.WritebackScaleRatioAndTapsSupport;
 }
 
-static void dcn6_ms_calculate_single_pipe_dppclk_and_pscl_factor(
+void dcn6_ms_calculate_single_pipe_dppclk_and_pscl_factor(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -460,7 +465,7 @@ static void dcn6_ms_calculate_single_pipe_dppclk_and_pscl_factor(
 	for (k = 0; k < display_cfg->num_planes; k++) {
 		plane = &display_cfg->plane_descriptors[k];
 		stream = &display_cfg->stream_descriptors[plane->stream_index];
-		dcn5_calculate_single_pipe_dppclk_and_scl_throughput(
+		get_calcs(ctx)->calculate_single_pipe_dppclk_and_scl_throughput(
 				plane->composition.scaler_info.plane0.h_ratio,
 				plane->composition.scaler_info.plane1.h_ratio,
 				plane->composition.scaler_info.plane0.v_ratio,
@@ -486,7 +491,7 @@ static void dcn6_ms_calculate_single_pipe_dppclk_and_pscl_factor(
 	DML_LOG_FUNC_EXIT();
 }
 
-static void dcn6_ms_calculate_max_swath_widths(
+void dcn6_ms_calculate_max_swath_widths(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -570,7 +575,7 @@ static void dcn6_ms_calculate_max_swath_widths(
 	DML_LOG_FUNC_EXIT();
 }
 
-static bool dcn6_ms_check_cursor_support(
+bool dcn6_ms_check_cursor_support(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -599,7 +604,7 @@ static bool dcn6_ms_check_cursor_support(
 	return outputs->support.CursorSupport;
 }
 
-static bool dcn6_ms_check_surface_alginment_requirements(
+bool dcn6_ms_check_surface_alginment_requirements(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -747,14 +752,14 @@ static void dcn6_ms_calculate_swath_and_det_configuration_for_single_dpp(
 	p->ViewportSizeSupportPerSurface = outputs->SingleDPPViewportSizeSupportPerSurface;
 	p->ViewportSizeSupport = &dummies->dummy_boolean[1];
 	// This calls is just to find out if there is enough DET space to support full vp in 1 pipe.
-	dcn5_calculate_swath_and_det_configuration(ctx->func_params, p);
+	get_calcs(ctx)->calculate_swath_and_det_configuration(ctx->func_params, p);
 
 	DML_LOG_DEBUG_ARRAY_BOOL(outputs->SingleDPPViewportSizeSupportPerSurface, display_cfg->num_planes);
 	DML_LOG_FUNC_EXIT();
 
 }
 
-static void dcn6_ms_calculate_estimated_num_of_dsc_slices(
+void dcn6_ms_calculate_estimated_num_of_dsc_slices(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -794,7 +799,7 @@ static void dcn6_ms_calculate_estimated_num_of_dsc_slices(
 	DML_LOG_FUNC_EXIT();
 }
 
-static void dcn6_ms_calculate_output_link(
+void dcn6_ms_calculate_output_link(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -809,7 +814,7 @@ static void dcn6_ms_calculate_output_link(
 	DML_LOG_FUNC_ENTER();
 	for (k = 0; k < display_cfg->num_planes; k++) {
 		stream = &display_cfg->stream_descriptors[display_cfg->plane_descriptors[k].stream_index];
-		dcn5_calculate_output_link(
+		get_calcs(ctx)->calculate_output_link(
 				ctx->func_params,
 				((double) soc_bb->max_phyclk_khz / 1000),
 				((double) soc_bb->max_phyclk_d18_khz / 1000),
@@ -849,7 +854,7 @@ static void dcn6_ms_calculate_output_link(
 	DML_LOG_FUNC_EXIT();
 }
 
-static void dcn6_ms_calculate_odm_mode(
+void dcn6_ms_calculate_odm_mode(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -869,7 +874,7 @@ static void dcn6_ms_calculate_odm_mode(
 	for (k = 0; k < display_cfg->num_planes; k++) {
 		stream = &display_cfg->stream_descriptors[display_cfg->plane_descriptors[k].stream_index];
 
-		dcn5_calculate_odm_mode(
+		get_calcs(ctx)->calculate_odm_mode(
 				ip->maximum_pixels_per_line_per_dsc_unit,
 				stream->timing.h_active,
 				stream->output.output_format,
@@ -902,7 +907,7 @@ static void dcn6_ms_calculate_odm_mode(
 	DML_LOG_FUNC_EXIT();
 }
 
-static void dcn6_ms_calculate_num_of_dsc_slices(
+void dcn6_ms_calculate_num_of_dsc_slices(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -935,7 +940,7 @@ static void dcn6_ms_calculate_num_of_dsc_slices(
 	DML_LOG_FUNC_EXIT();
 }
 
-static bool dcn6_ms_check_num_of_dsc_slices_support(
+bool dcn6_ms_check_num_of_dsc_slices_support(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -988,12 +993,16 @@ static void dcn6_ms_calculate_num_of_dpp_required(
 	for (k = 0; k < display_cfg->num_planes; k++) {
 		plane = &display_cfg->plane_descriptors[k];
 		outputs->NoOfDPP[k] = 1;
+		outputs->NoOfOPP[k] = 1;
 		if (inputs->ODMMode[k] == dml2_odm_mode_combine_4to1) {
 			outputs->NoOfDPP[k] = 4;
+			outputs->NoOfOPP[k] = 4;
 		} else if (inputs->ODMMode[k] == dml2_odm_mode_combine_3to1) {
 			outputs->NoOfDPP[k] = 3;
+			outputs->NoOfOPP[k] = 3;
 		} else if (inputs->ODMMode[k] == dml2_odm_mode_combine_2to1) {
 			outputs->NoOfDPP[k] = 2;
+			outputs->NoOfOPP[k] = 2;
 		} else if (plane->overrides.mpcc_combine_factor == 2) {
 			outputs->MPCCombine[k] = true;
 			outputs->NoOfDPP[k] = 2;
@@ -1018,7 +1027,7 @@ static void dcn6_ms_calculate_num_of_dpp_required(
 	DML_LOG_FUNC_EXIT();
 }
 
-static bool dcn6_ms_check_total_available_pipes_support(
+bool dcn6_ms_check_total_available_pipes_support(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -1027,12 +1036,28 @@ static bool dcn6_ms_check_total_available_pipes_support(
 	struct dml2_core_internal_mode_support *inputs = states;
 	struct dml2_core_internal_mode_support *outputs = states;
 	unsigned int totalNumOfActiveDPP = 0;
-	unsigned int k;
+	unsigned int k, m;
 
 	DML_LOG_FUNC_ENTER();
 	for (k = 0; k < display_cfg->num_planes; k++)
 		totalNumOfActiveDPP += inputs->NoOfDPP[k];
-	outputs->support.TotalAvailablePipesSupport = totalNumOfActiveDPP <= (unsigned int)ip->max_num_dpp;
+
+
+	// TotalNumberOfActiveOPP is the sum of the per stream max NoOfOPP of all planes driving that stream
+	outputs->TotalNumberOfActiveOPP = 0;
+	for (k = 0; k < display_cfg->num_streams; k++) {
+		unsigned int NoOfOppPerStream = 0;
+
+		for (m = 0; m < display_cfg->num_planes; m++) {
+			if (display_cfg->plane_descriptors[m].stream_index == k)
+				NoOfOppPerStream = NoOfOppPerStream < inputs->NoOfOPP[m] ? inputs->NoOfOPP[m] : NoOfOppPerStream;
+		}
+
+		outputs->TotalNumberOfActiveOPP += NoOfOppPerStream;
+	}
+
+	outputs->support.TotalAvailablePipesSupport = totalNumOfActiveDPP <= (unsigned int)ip->max_num_dpp
+			&& outputs->TotalNumberOfActiveOPP <= (unsigned int)ip->max_num_opp;
 
 	DML_LOG_DEBUG_BOOL(outputs->support.TotalAvailablePipesSupport);
 	DML_LOG_FUNC_EXIT();
@@ -1040,7 +1065,7 @@ static bool dcn6_ms_check_total_available_pipes_support(
 	return outputs->support.TotalAvailablePipesSupport;
 }
 
-static bool dcn6_ms_check_total_available_TDLUT_33cube_support(
+bool dcn6_ms_check_total_available_TDLUT_33cube_support(
 	const struct dml2_core_calculate_ms_context *ctx,
 	struct dml2_core_internal_mode_support *states)
 {
@@ -1063,7 +1088,7 @@ static bool dcn6_ms_check_total_available_TDLUT_33cube_support(
 	return outputs->support.NumberOfTDLUT33cubeSupport;
 }
 
-static void dcn6_ms_calculate_total_num_of_single_dpp_surfaces(
+void dcn6_ms_calculate_total_num_of_single_dpp_surfaces(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -1082,7 +1107,7 @@ static void dcn6_ms_calculate_total_num_of_single_dpp_surfaces(
 	DML_LOG_FUNC_EXIT();
 }
 
-static void dcn6_ms_calculate_dispclk_and_dppclk_required(
+void dcn6_ms_calculate_dispclk_and_dppclk_required(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -1101,7 +1126,7 @@ static void dcn6_ms_calculate_dispclk_and_dppclk_required(
 	for (k = 0; k < display_cfg->num_planes; k++) {
 		stream = &display_cfg->stream_descriptors[display_cfg->plane_descriptors[k].stream_index];
 		for (j = 0; j < stream->writeback.active_writebacks_per_stream; ++j) {
-			writeback_required_dispclk = dcn5_calculate_write_back_dispclk(
+			writeback_required_dispclk = get_calcs(ctx)->calculate_write_back_dispclk(
 				stream->writeback.writeback_stream[j].pixel_format,
 				((double)stream->timing.pixel_clock_khz / 1000),
 				inputs->ODMMode[k],
@@ -1141,7 +1166,7 @@ static void dcn6_ms_calculate_dispclk_and_dppclk_required(
 	DML_LOG_FUNC_EXIT();
 }
 
-static bool dcn6_ms_check_dispclk_and_dppclk_support(
+bool dcn6_ms_check_dispclk_and_dppclk_support(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -1159,7 +1184,7 @@ static bool dcn6_ms_check_dispclk_and_dppclk_support(
 	return outputs->support.DISPCLK_DPPCLK_Support;
 }
 
-static bool dcn6_ms_check_otg_count_support(
+bool dcn6_ms_check_otg_count_support(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -1187,7 +1212,7 @@ static bool dcn6_ms_check_otg_count_support(
 	return outputs->support.NumberOfOTGSupport;
 }
 
-static bool dcn6_ms_check_hpo_frl_encoder_count_support(
+bool dcn6_ms_check_hpo_frl_encoder_count_support(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -1216,7 +1241,7 @@ static bool dcn6_ms_check_hpo_frl_encoder_count_support(
 	return outputs->support.NumberOfHDMIFRLSupport;
 }
 
-static bool dcn6_ms_check_hpo_dp_encoder_count_support(
+bool dcn6_ms_check_hpo_dp_encoder_count_support(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -1251,7 +1276,7 @@ static bool dcn6_ms_check_hpo_dp_encoder_count_support(
 	return outputs->support.NumberOfDP2p0Support;
 }
 
-static bool dcn6_ms_check_writeback_count_support(
+bool dcn6_ms_check_writeback_count_support(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -1272,10 +1297,6 @@ static bool dcn6_ms_check_writeback_count_support(
 
 		totalNumberOfActiveWriteback +=
 				display_cfg->stream_descriptors[display_cfg->plane_descriptors[k].stream_index].writeback.active_writebacks_per_stream;
-
-		/* >1 writeback per stream is currently not supported */
-		if (display_cfg->stream_descriptors[display_cfg->plane_descriptors[k].stream_index].writeback.active_writebacks_per_stream > 1)
-			writeback_per_stream_supported = false;
 	}
 	outputs->support.EnoughWritebackUnits = writeback_per_stream_supported &&
 			totalNumberOfActiveWriteback <= ip->max_num_wb;
@@ -1286,7 +1307,7 @@ static bool dcn6_ms_check_writeback_count_support(
 	return outputs->support.EnoughWritebackUnits;
 }
 
-static bool dcn6_ms_check_link_bandwidth_support(
+bool dcn6_ms_check_link_bandwidth_support(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -1314,7 +1335,7 @@ static bool dcn6_ms_check_link_bandwidth_support(
 	return outputs->support.LinkCapacitySupport;
 }
 
-static void dcn6_ms_check_misc_link_supports(
+void dcn6_ms_check_misc_link_supports(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -1370,7 +1391,7 @@ static void dcn6_ms_check_misc_link_supports(
 	DML_LOG_FUNC_EXIT();
 }
 
-static void dcn6_ms_calculate_dtbclk_required(
+void dcn6_ms_calculate_dtbclk_required(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -1385,7 +1406,7 @@ static void dcn6_ms_calculate_dtbclk_required(
 	for (k = 0; k < display_cfg->num_planes; k++) {
 		stream = &display_cfg->stream_descriptors[display_cfg->plane_descriptors[k].stream_index];
 		if (stream->output.output_encoder == dml2_hdmifrl) {
-			outputs->RequiredDTBCLK[k] = dcn5_calculate_required_dtbclk(
+			outputs->RequiredDTBCLK[k] = get_calcs(ctx)->calculate_required_dtbclk(
 				inputs->RequiresDSC[k],
 				inputs->PixelClockBackEnd[k],
 				stream->output.output_format,
@@ -1406,7 +1427,7 @@ static void dcn6_ms_calculate_dtbclk_required(
 	DML_LOG_FUNC_EXIT();
 }
 
-static bool dcn6_ms_check_dtbclk_support(
+bool dcn6_ms_check_dtbclk_support(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -1430,7 +1451,7 @@ static bool dcn6_ms_check_dtbclk_support(
 	return support;
 }
 
-static void dcn6_ms_calculate_dscclk_required(
+void dcn6_ms_calculate_dscclk_required(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -1484,7 +1505,7 @@ static void dcn6_ms_calculate_dscclk_required(
 	DML_LOG_FUNC_EXIT();
 }
 
-static bool dcn6_ms_check_dscclk_support(
+bool dcn6_ms_check_dscclk_support(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -1509,7 +1530,7 @@ static bool dcn6_ms_check_dscclk_support(
 	return !outputs->support.DSCCLKRequiredMoreThanSupported;
 }
 
-static void dcn6_ms_check_dsc_engine_supports(
+void dcn6_ms_check_dsc_engine_supports(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -1567,7 +1588,7 @@ static void dcn6_ms_check_dsc_engine_supports(
 	DML_LOG_FUNC_EXIT();
 }
 
-static void dcn6_ms_calculate_dsc_delay(
+void dcn6_ms_calculate_dsc_delay(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -1582,7 +1603,7 @@ static void dcn6_ms_calculate_dsc_delay(
 	/*DSC Delay per state*/
 	for (k = 0; k < display_cfg->num_planes; k++) {
 		stream = &display_cfg->stream_descriptors[display_cfg->plane_descriptors[k].stream_index];
-		outputs->DSCDelay[k] = dcn5_calculate_dsc_delay_requirement(
+		outputs->DSCDelay[k] = get_calcs(ctx)->calculate_dsc_delay_requirement(
 				inputs->RequiresDSC[k],
 				inputs->ODMMode[k],
 				ip->maximum_dsc_bits_per_component,
@@ -1669,7 +1690,7 @@ static void dcn6_ms_calculate_swath_and_det_configuration(
 	p->CompressedBufferSizeInkByte = &outputs->CompressedBufferSizeInkByte;
 	p->ViewportSizeSupportPerSurface = dummies->dummy_boolean_array[0];
 	p->ViewportSizeSupport = &outputs->support.ViewportSizeSupport;
-	dcn5_calculate_swath_and_det_configuration(ctx->func_params, p);
+	get_calcs(ctx)->calculate_swath_and_det_configuration(ctx->func_params, p);
 
 	DML_LOG_DEBUG_ARRAY_UINT(outputs->SwathWidthY, display_cfg->num_planes);
 	DML_LOG_DEBUG_UINT(outputs->CompressedBufferSizeInkByte);
@@ -1692,7 +1713,7 @@ static void dcn6_ms_calculate_swath_and_det_configuration(
 	DML_LOG_FUNC_EXIT();
 }
 
-static void dcn6_ms_calculate_total_num_of_dcc_active_dpp(
+void dcn6_ms_calculate_total_num_of_dcc_active_dpp(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -1716,7 +1737,7 @@ static void dcn6_ms_calculate_total_num_of_dcc_active_dpp(
 	DML_LOG_FUNC_EXIT();
 }
 
-static void dcn6_ms_calculate_vm_row_and_swath_and_calculate_dcc_meta_cache_requirements(
+void dcn6_ms_calculate_vm_row_and_swath_and_calculate_dcc_meta_cache_requirements(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -1844,7 +1865,7 @@ static void dcn6_ms_calculate_vm_row_and_swath_and_calculate_dcc_meta_cache_requ
 	p->meta_row_width_chroma = outputs->meta_row_width_chroma;
 	p->meta_row_height_chroma = outputs->meta_row_height_chroma;
 	p->meta_pte_bytes_per_frame_ub_c = outputs->meta_pte_bytes_per_frame_ub_c;
-	dcn5_calculate_vm_row_and_swath(ctx->func_params, p);
+	get_calcs(ctx)->calculate_vm_row_and_swath(ctx->func_params, p);
 
 	DML_LOG_DEBUG_ARRAY_BOOL(outputs->PTEBufferSizeNotExceeded, display_cfg->num_planes);
 	DML_LOG_DEBUG_ARRAY_UINT(outputs->dpte_row_width_luma_ub, display_cfg->num_planes);
@@ -1901,7 +1922,7 @@ static void dcn6_ms_calculate_vm_row_and_swath_and_calculate_dcc_meta_cache_requ
 	DML_LOG_FUNC_EXIT();
 }
 
-static bool dcn6_ms_check_pte_buffer_size_support(
+bool dcn6_ms_check_pte_buffer_size_support(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -1926,7 +1947,7 @@ static bool dcn6_ms_check_pte_buffer_size_support(
 	return outputs->support.PTEBufferSizeNotExceeded;
 }
 
-static bool dcn6_ms_check_dcc_meta_cache_support(
+bool dcn6_ms_check_dcc_meta_cache_support(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -1981,7 +2002,7 @@ static double dcn6_ms_pstate_type_to_blackout_us(
 	return blackout_us;
 }
 
-static void dcn6_ms_calculate_vactive_pstate_requirements(
+void dcn6_ms_calculate_vactive_pstate_requirements(
 	const struct dml2_core_calculate_ms_context *ctx,
 	struct dml2_core_internal_mode_support *states)
 {
@@ -2040,11 +2061,11 @@ static void dcn6_ms_calculate_vactive_pstate_requirements(
 		p->bytes_required_l = outputs->pstate_bytes_required_l[pstate_type];
 		p->bytes_required_c = outputs->pstate_bytes_required_c[pstate_type];
 
-		dcn5_calculate_bytes_to_fetch_required_to_hide_latency(p);
+		get_calcs(ctx)->calculate_bytes_to_fetch_required_to_hide_latency(p);
 	}
 
 	/* Excess VActive bandwidth required to fill DET */
-	dcn6_calculate_excess_vactive_bandwidth_required(display_cfg,
+	get_calcs(ctx)->calculate_excess_vactive_bandwidth_required(display_cfg,
 			outputs->pstate_bytes_required_l,
 			outputs->pstate_bytes_required_c,
 
@@ -2066,7 +2087,7 @@ static void dcn6_ms_calculate_vactive_pstate_requirements(
 }
 
 /* FIXME - break it down according the function name */
-static void dcn6_ms_calculate_det_buffer_time_value_urgent_burst_factor_and_urgent_latency_hiding(
+void dcn6_ms_calculate_det_buffer_time_value_urgent_burst_factor_and_urgent_latency_hiding(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -2088,7 +2109,7 @@ static void dcn6_ms_calculate_det_buffer_time_value_urgent_burst_factor_and_urge
 		stream = &display_cfg->stream_descriptors[plane->stream_index];
 		line_time_us = stream->timing.h_total / ((double) stream->timing.pixel_clock_khz / 1000);
 		cursor_not_enough_urgent_latency_hiding = 0;
-		dcn5_calculate_cursor_req_attributes(
+		get_calcs(ctx)->calculate_cursor_req_attributes(
 				plane->cursor.cursor_width,
 				plane->cursor.cursor_bpp,
 				// output
@@ -2096,7 +2117,7 @@ static void dcn6_ms_calculate_det_buffer_time_value_urgent_burst_factor_and_urge
 				&outputs->cursor_bytes_per_line[k],
 				&outputs->cursor_bytes_per_chunk[k],
 				&cursor_bytes);
-		dcn5_calculate_cursor_urgent_burst_factor(
+		get_calcs(ctx)->calculate_cursor_urgent_burst_factor(
 				ip->cursor_buffer_size,
 				plane->cursor.cursor_width,
 				outputs->cursor_bytes_per_chunk[k],
@@ -2112,7 +2133,7 @@ static void dcn6_ms_calculate_det_buffer_time_value_urgent_burst_factor_and_urge
 				plane->composition.scaler_info.plane0.v_ratio);
 		DML_LOG_VERBOSE("DML::%s: k=%d, VRatioChroma=%f\n", __func__, k,
 				plane->composition.scaler_info.plane1.v_ratio);
-		dcn5_calculate_urgent_burst_factor(
+		get_calcs(ctx)->calculate_urgent_burst_factor(
 				&display_cfg->plane_descriptors[k],
 				inputs->swath_width_luma_ub[k],
 				inputs->swath_width_chroma_ub[k],
@@ -2124,6 +2145,8 @@ static void dcn6_ms_calculate_det_buffer_time_value_urgent_burst_factor_and_urge
 				plane->composition.scaler_info.plane1.v_ratio,
 				inputs->BytePerPixelInDETY[k],
 				inputs->BytePerPixelInDETC[k],
+				inputs->UnboundedRequestEnabled,
+				inputs->CompressedBufferSizeInkByte,
 				inputs->DETBufferSizeY[k],
 				inputs->DETBufferSizeC[k],
 
@@ -2146,7 +2169,7 @@ static void dcn6_ms_calculate_det_buffer_time_value_urgent_burst_factor_and_urge
 	DML_LOG_FUNC_EXIT();
 }
 
-static void dcn6_ms_calculate_min_dcfclk_deepsleep_clock(
+void dcn6_ms_calculate_min_dcfclk_deepsleep_clock(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -2158,7 +2181,7 @@ static void dcn6_ms_calculate_min_dcfclk_deepsleep_clock(
 	double raw_dcfclk_deepsleep_mhz = 0;
 
 	DML_LOG_FUNC_ENTER();
-	dcn5_calculate_dcfclk_deep_sleep(
+	get_calcs(ctx)->calculate_dcfclk_deep_sleep(
 			display_cfg,
 			display_cfg->num_planes,
 			inputs->BytePerPixelY,
@@ -2180,7 +2203,7 @@ static void dcn6_ms_calculate_min_dcfclk_deepsleep_clock(
 	DML_LOG_FUNC_EXIT();
 }
 
-static void dcn6_ms_calculate_writeback_delay(
+void dcn6_ms_calculate_writeback_delay(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -2199,7 +2222,7 @@ static void dcn6_ms_calculate_writeback_delay(
 		for (j = 0; j < stream->writeback.active_writebacks_per_stream; j++) {
 			outputs->WritebackDelayTime[k] = math_max2(outputs->WritebackDelayTime[k],
 					soc_bb->writeback_base_latency_us
-					+ dcn5_calculate_write_back_delay(
+					+ get_calcs(ctx)->calculate_write_back_delay(
 							stream->writeback.writeback_stream[j].pixel_format,
 							stream->writeback.writeback_stream[j].h_ratio,
 							stream->writeback.writeback_stream[j].v_ratio,
@@ -2218,7 +2241,7 @@ static void dcn6_ms_calculate_writeback_delay(
 	DML_LOG_FUNC_EXIT();
 }
 
-static void dcn6_ms_calculate_alternate_params(const struct dml2_core_calculate_ms_context *ctx,
+void dcn6_ms_calculate_alternate_params(const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
 	struct dml2_core_internal_scratch *func_params = ctx->func_params;
@@ -2226,8 +2249,19 @@ static void dcn6_ms_calculate_alternate_params(const struct dml2_core_calculate_
 	const struct dml2_utm_soc_bb *soc_bb = ctx->soc_bb;
 	struct dml2_core_internal_mode_support *inputs = states;
 	struct dml2_core_internal_mode_support *outputs = states;
+	unsigned int i;
+	bool is_alternate_pstate_required = false;
 
 	DML_LOG_FUNC_ENTER();
+
+	for (i = 0; i < ctx->display_cfg->num_planes; i++) {
+		if (ctx->display_cfg->plane_descriptors[i].overrides.uclk_pstate_change_strategy ==
+				dml2_uclk_pstate_change_strategy_force_alternate) {
+			is_alternate_pstate_required = true;
+			break;
+		}
+	}
+
 	p->display_cfg = ctx->display_cfg;
 	p->dst_y_prefetch = inputs->dst_y_prefetch;
 	p->SwathHeightY = inputs->SwathHeightY;
@@ -2246,6 +2280,8 @@ static void dcn6_ms_calculate_alternate_params(const struct dml2_core_calculate_
 	p->Read256BlockHeightC = inputs->Read256BlockHeightC;
 	p->MacroTileWidthY = inputs->MacroTileWidthY;
 	p->MacroTileWidthC = inputs->MacroTileWidthC;
+	p->MacroTileHeightY = inputs->MacroTileHeightY;
+	p->MacroTileHeightC = inputs->MacroTileHeightC;
 	p->VInitPrefillY = inputs->PrefillY;
 	p->VInitPrefillC = inputs->PrefillC;
 	p->VRatioPrefetchY = inputs->VRatioPreY;
@@ -2253,16 +2289,17 @@ static void dcn6_ms_calculate_alternate_params(const struct dml2_core_calculate_
 	p->NoOfDPP = inputs->NoOfDPP;
 	p->max_num_dpp = ctx->ip->max_num_dpp;
 	p->dram_blackout_us = soc_bb->power_management_parameters.dram_clk_change_blackout_us;
-	p->VActiveLatencyHidingUs = inputs->VActiveLatencyHidingUs;
 	p->svp0_dst_lines = inputs->svp0_dst_lines;
 	p->svp1_dst_lines = inputs->svp1_dst_lines;
 	p->svp_req_limit = inputs->svp_req_limit;
-	p->dcn_non_urgent_bandwidth_kbps = inputs->support.bandwidth_upper_bound.dcn5.non_urgent_bandwidth_kbps;
+	p->dcn_non_urgent_bandwidth_kbps = **inputs->support.non_urg_bandwidth_required_flip * 1000;
+	p->max_lsdma_bandwidth_kbps = soc_bb->max_lsdma_bandwidth_kbps;
 	p->alt_chan_fw_delay_us = ctx->ip->alt_chan_fw_delay_us;
 	p->dst_y_per_vm_vblank = inputs->LinesForVM;
 	p->dst_y_per_row_vblank = inputs->LinesForDPTERow;
 	p->DSTYAfterScaler = inputs->DSTYAfterScaler;
 	p->ODMMode = inputs->ODMMode;
+	p->alt_chan_in_use = is_alternate_pstate_required;
 
 	p->svp0_max_bytes = &outputs->svp0_max_bytes;
 	p->svp1_max_bytes = &outputs->svp1_max_bytes;
@@ -2283,7 +2320,7 @@ static void dcn6_ms_calculate_alternate_params(const struct dml2_core_calculate_
 	p->max_prefetch_in_lines = outputs->max_prefetch_in_lines;
 	p->lsdma_bw_req_for_alt_kbps = &outputs->lsdma_bw_req_for_alt_kbps;
 
-	dcn6_calculate_alternate_params(p);
+	get_calcs(ctx)->calculate_alternate_params(p);
 
 	DML_LOG_DEBUG_UINT(outputs->svp0_max_bytes);
 	DML_LOG_DEBUG_UINT(outputs->svp1_max_bytes);
@@ -2306,7 +2343,7 @@ static void dcn6_ms_calculate_alternate_params(const struct dml2_core_calculate_
 	DML_LOG_FUNC_EXIT();
 }
 
-static void dcn6_ms_calculate_alternate_svp_lines(const struct dml2_core_calculate_ms_context *ctx,
+void dcn6_ms_calculate_alternate_svp_lines(const struct dml2_core_calculate_ms_context *ctx,
 	struct dml2_core_internal_mode_support *states)
 {
 	struct dml2_core_internal_scratch *func_params = ctx->func_params;
@@ -2316,6 +2353,7 @@ static void dcn6_ms_calculate_alternate_svp_lines(const struct dml2_core_calcula
 	struct dml2_core_internal_mode_support *outputs = states;
 
 	DML_LOG_FUNC_ENTER();
+
 	p->display_cfg = ctx->display_cfg;
 	p->SwathHeightY = inputs->SwathHeightY;
 	p->SwathHeightC = inputs->SwathHeightC;
@@ -2326,7 +2364,7 @@ static void dcn6_ms_calculate_alternate_svp_lines(const struct dml2_core_calcula
 	p->svp1_dst_lines = outputs->svp1_dst_lines;
 	p->svp_req_limit = outputs->svp_req_limit;
 
-	dcn6_calculate_alternate_svp_lines(p);
+	get_calcs(ctx)->calculate_alternate_svp_lines(p);
 
 	DML_LOG_DEBUG_ARRAY_UINT(outputs->svp0_dst_lines, ctx->display_cfg->num_streams);
 	DML_LOG_DEBUG_ARRAY_UINT(outputs->svp1_dst_lines, ctx->display_cfg->num_streams);
@@ -2334,7 +2372,7 @@ static void dcn6_ms_calculate_alternate_svp_lines(const struct dml2_core_calcula
 	DML_LOG_FUNC_EXIT();
 }
 
-static void dcn6_ms_calculate_max_vstartup(
+void dcn6_ms_calculate_max_vstartup(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -2350,7 +2388,7 @@ static void dcn6_ms_calculate_max_vstartup(
 	for (k = 0; k < display_cfg->num_planes; k++) {
 		stream_index = display_cfg->plane_descriptors[k].stream_index;
 		stream = &display_cfg->stream_descriptors[stream_index];
-		outputs->MaximumVStartup[k] = dcn6_calculate_max_vstartup(
+		outputs->MaximumVStartup[k] = get_calcs(ctx)->calculate_max_vstartup(
 				ip->ptoi_supported,
 				ip->vblank_nom_default_us,
 				&stream->timing,
@@ -2366,7 +2404,7 @@ static void dcn6_ms_calculate_max_vstartup(
 	DML_LOG_FUNC_EXIT();
 }
 
-static void dcn6_ms_check_average_latency_supports(
+void dcn6_ms_check_average_latency_supports(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -2380,6 +2418,13 @@ static void dcn6_ms_check_average_latency_supports(
 	DML_LOG_FUNC_ENTER();
 	outputs->support.OutstandingRequestsSupport = true;
 	outputs->support.OutstandingRequestsUrgencyAvoidance = true;
+	/* An SOP being capable of high bandwidth drives DCFCLK up, which shrinks the outstanding-request
+	 * buffer window below the request latency and (perversely) fails this check. For analysis of future
+	 * SoCs the ROB size / request limit is not yet fixed, so allow the check to be opted out. */
+	if (display_cfg->overrides.hw.outstanding_requests_check_disable) {
+		DML_LOG_FUNC_EXIT();
+		return;
+	}
 	for (k = 0; k < display_cfg->num_planes; k++) {
 		outstanding_latency_us = soc_bb->max_outstanding_reqs
 				* inputs->support.request_size_bytes_luma[k]
@@ -2415,7 +2460,7 @@ static void dcn6_ms_check_average_latency_supports(
 	DML_LOG_FUNC_EXIT();
 }
 
-static void dcn6_ms_calculate_mcache_setting(
+void dcn6_ms_calculate_mcache_setting(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -2491,7 +2536,7 @@ static void dcn6_ms_calculate_mcache_setting(
 			p->mall_comb_mcache_l = &outputs->mall_comb_mcache_l[k];
 			p->mall_comb_mcache_c = &outputs->mall_comb_mcache_c[k];
 			p->lc_comb_mcache = &outputs->lc_comb_mcache[k];
-			dcn5_calculate_mcache_setting(ctx->func_params, p);
+			get_calcs(ctx)->calculate_mcache_setting(ctx->func_params, p);
 		}
 	}
 
@@ -2517,7 +2562,7 @@ static void dcn6_ms_calculate_mcache_setting(
 	DML_LOG_FUNC_EXIT();
 }
 
-static void dcn6_ms_calculate_avg_bandwidth_and_dcfclk_lb_required(
+void dcn6_ms_calculate_avg_bandwidth_and_dcfclk_lb_required(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -2527,7 +2572,7 @@ static void dcn6_ms_calculate_avg_bandwidth_and_dcfclk_lb_required(
 
 	DML_LOG_FUNC_ENTER();
 	// Average BW support check
-	dcn5_calculate_avg_bandwidth_required(
+	get_calcs(ctx)->calculate_avg_bandwidth_required(
 			*outputs->support.avg_bandwidth_required,
 			// input
 			display_cfg->num_planes,
@@ -2544,7 +2589,7 @@ static void dcn6_ms_calculate_avg_bandwidth_and_dcfclk_lb_required(
 	DML_LOG_FUNC_EXIT();
 }
 
-static bool dcn6_ms_check_urgent_latency_hiding_support(
+bool dcn6_ms_check_urgent_latency_hiding_support(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -2569,7 +2614,7 @@ static bool dcn6_ms_check_urgent_latency_hiding_support(
 	return outputs->support.EnoughUrgentLatencyHidingSupport;
 }
 
-static void dcn6_ms_calculate_t_calc(
+void dcn6_ms_calculate_t_calc(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -2584,7 +2629,7 @@ static void dcn6_ms_calculate_t_calc(
 	DML_LOG_FUNC_EXIT();
 }
 
-static void dcn6_ms_calculate_hostvm_inefficiency_factor(
+void dcn6_ms_calculate_hostvm_inefficiency_factor(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -2594,7 +2639,7 @@ static void dcn6_ms_calculate_hostvm_inefficiency_factor(
 	struct dml2_core_internal_mode_support *outputs = states;
 
 	DML_LOG_FUNC_ENTER();
-	dcn5_calculate_hostvm_inefficiency_factor(
+	get_calcs(ctx)->calculate_hostvm_inefficiency_factor(
 			&outputs->HostVMInefficiencyFactor,
 			&outputs->HostVMInefficiencyFactorPrefetch,
 			display_cfg->gpuvm_enable,
@@ -2611,7 +2656,7 @@ static void dcn6_ms_calculate_hostvm_inefficiency_factor(
 
 // Using approximate ratio for VM bandwidth
 
-static void dcn6_ms_calculate_3dlut_settings(
+void dcn6_ms_calculate_3dlut_settings(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -2647,7 +2692,7 @@ static void dcn6_ms_calculate_3dlut_settings(
 		p->tdlut_opt_time = &outputs->tdlut_opt_time[k];
 		p->tdlut_drain_time = &outputs->tdlut_drain_time[k];
 		p->tdlut_bytes_per_group = &outputs->tdlut_bytes_per_group[k];
-		dcn5_calculate_tdlut_setting(ctx->func_params, p);
+		get_calcs(ctx)->calculate_tdlut_setting(ctx->func_params, p);
 	}
 
 	DML_LOG_DEBUG_ARRAY_UINT(outputs->tdlut_bytes_per_group, display_cfg->num_planes);
@@ -2659,7 +2704,7 @@ static void dcn6_ms_calculate_3dlut_settings(
 	DML_LOG_FUNC_EXIT();
 }
 
-static void dcn6_ms_calculate_urgent_latency(
+void dcn6_ms_calculate_urgent_latency(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -2670,7 +2715,7 @@ static void dcn6_ms_calculate_urgent_latency(
 	struct dml2_core_internal_mode_support *outputs = states;
 
 	DML_LOG_FUNC_ENTER();
-	dcn5_calculate_extra_latency(
+	get_calcs(ctx)->calculate_extra_latency(
 			display_cfg,
 			ip->rob_buffer_size_kbytes,
 			0,
@@ -2730,7 +2775,7 @@ static void dcn6_ms_calculate_prefetch_schedule(
 	for (k = 0; k < display_cfg->num_planes; k++) {
 		plane = &display_cfg->plane_descriptors[k];
 		stream = &display_cfg->stream_descriptors[plane->stream_index];
-		outputs->TWait[k] = dcn5_calculate_t_wait(
+		outputs->TWait[k] = get_calcs(ctx)->calculate_t_wait(
 				plane->overrides.reserved_vblank_time_ns,
 				inputs->UrgLatency,
 				inputs->TripToMemory,
@@ -2843,7 +2888,7 @@ static void dcn6_ms_calculate_prefetch_schedule(
 		p->Tpre_rounded = &Tpre_rounded;
 		p->Tpre_oto = &Tpre_oto;
 
-		outputs->NoTimeForPrefetch[k] = dcn5_calculate_prefetch_schedule(ctx->func_params, p);
+		outputs->NoTimeForPrefetch[k] = get_calcs(ctx)->calculate_prefetch_schedule(ctx->func_params, p);
 		DML_LOG_VERBOSE("DML::%s: k=%d, dst_y_per_vm_vblank = %f\n", __func__, k, *p->dst_y_per_vm_vblank);
 		DML_LOG_VERBOSE("DML::%s: k=%d, dst_y_per_row_vblank = %f\n", __func__, k, *p->dst_y_per_row_vblank);
 		outputs->VStartupMin[k] = inputs->MaxVStartupLines[k];
@@ -2879,7 +2924,7 @@ static void dcn6_ms_calculate_prefetch_schedule(
 	DML_LOG_FUNC_EXIT();
 }
 
-static bool dcn6_ms_check_prefetch_support(
+bool dcn6_ms_check_prefetch_support(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -2912,7 +2957,7 @@ static bool dcn6_ms_check_prefetch_support(
 	return outputs->support.PrefetchScheduleSupported;
 }
 
-static bool dcn6_ms_check_dynamic_metadata_support(
+bool dcn6_ms_check_dynamic_metadata_support(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -2935,7 +2980,7 @@ static bool dcn6_ms_check_dynamic_metadata_support(
 	return outputs->support.DynamicMetadataSupported;
 }
 
-static bool dcn6_ms_check_v_ratio_in_prefetch_support(
+bool dcn6_ms_check_v_ratio_in_prefetch_support(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -2962,7 +3007,7 @@ static bool dcn6_ms_check_v_ratio_in_prefetch_support(
 	return outputs->support.VRatioInPrefetchSupported;
 }
 
-static void dcn6_ms_calculate_urgent_burst_factor_for_prefetch(
+void dcn6_ms_calculate_urgent_burst_factor_for_prefetch(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -2980,7 +3025,7 @@ static void dcn6_ms_calculate_urgent_burst_factor_for_prefetch(
 		DML_LOG_VERBOSE("DML::%s: k=%d, Calling CalculateUrgentBurstFactor (for prefetch)\n", __func__, k);
 		DML_LOG_VERBOSE("DML::%s: k=%d, VRatioPreY=%f\n", __func__, k, inputs->VRatioPreY[k]);
 		DML_LOG_VERBOSE("DML::%s: k=%d, VRatioPreC=%f\n", __func__, k, inputs->VRatioPreC[k]);
-		dcn5_calculate_urgent_burst_factor(
+		get_calcs(ctx)->calculate_urgent_burst_factor(
 				&display_cfg->plane_descriptors[k],
 				inputs->swath_width_luma_ub[k],
 				inputs->swath_width_chroma_ub[k],
@@ -2992,6 +3037,8 @@ static void dcn6_ms_calculate_urgent_burst_factor_for_prefetch(
 				inputs->VRatioPreC[k],
 				inputs->BytePerPixelInDETY[k],
 				inputs->BytePerPixelInDETC[k],
+				inputs->UnboundedRequestEnabled,
+				inputs->CompressedBufferSizeInkByte,
 				inputs->DETBufferSizeY[k],
 				inputs->DETBufferSizeC[k],
 				/* Output */
@@ -3050,7 +3097,7 @@ static void dcn6_ms_calculate_peak_bandwidth_required(
 	p->urgent_burst_factor_prefetch_l = inputs->UrgentBurstFactorLumaPre;
 	p->urgent_burst_factor_prefetch_c = inputs->UrgentBurstFactorChromaPre;
 	p->urgent_burst_factor_prefetch_cursor = inputs->UrgentBurstFactorCursorPre;
-	dcn5_calculate_peak_bandwidth_required(ctx->func_params, p);
+	get_calcs(ctx)->calculate_peak_bandwidth_required(ctx->func_params, p);
 
 	p->urg_vactive_bandwidth_required = dummies->dummy_bw;
 	p->urg_bandwidth_required = outputs->support.urg_bandwidth_required_flip;
@@ -3058,7 +3105,7 @@ static void dcn6_ms_calculate_peak_bandwidth_required(
 	p->surface_avg_vactive_required_bw = dummies->surface_dummy_bw;
 	p->surface_peak_required_bw = outputs->surface_peak_required_bw;
 	p->inc_flip_bw = 1;
-	dcn5_calculate_peak_bandwidth_required(ctx->func_params, p);
+	get_calcs(ctx)->calculate_peak_bandwidth_required(ctx->func_params, p);
 
 	DML_LOG_DEBUG_2D_ARRAY_DOUBLE(outputs->support.urg_bandwidth_required,
 				dml2_core_internal_soc_state_max, dml2_core_internal_bw_max);
@@ -3073,7 +3120,7 @@ static void dcn6_ms_calculate_peak_bandwidth_required(
 	DML_LOG_FUNC_EXIT();
 }
 
-static bool dcn6_ms_check_final_prefetch_support(
+bool dcn6_ms_check_final_prefetch_support(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -3098,7 +3145,7 @@ static bool dcn6_ms_check_final_prefetch_support(
 	return outputs->support.PrefetchSupported;
 }
 
-static void dcn6_ms_calculate_flip_schedule(
+void dcn6_ms_calculate_flip_schedule(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -3115,7 +3162,7 @@ static void dcn6_ms_calculate_flip_schedule(
 	for (k = 0; k < display_cfg->num_planes; k++) {
 		plane = &display_cfg->plane_descriptors[k];
 		stream = &display_cfg->stream_descriptors[plane->stream_index];
-		dcn6_calculate_flip_schedule(
+		get_calcs(ctx)->calculate_flip_schedule(
 				ctx->func_params,
 				display_cfg->plane_descriptors[k].immediate_flip,
 				display_cfg->hostvm_enable,
@@ -3155,7 +3202,7 @@ static void dcn6_ms_calculate_flip_schedule(
 	DML_LOG_FUNC_EXIT();
 }
 
-static bool dcn6_ms_check_immediate_flip_support(const struct dml2_core_calculate_ms_context *ctx,
+bool dcn6_ms_check_immediate_flip_support(const struct dml2_core_calculate_ms_context *ctx,
 	struct dml2_core_internal_mode_support *states)
 {
 	const struct dml2_display_cfg *display_cfg = ctx->display_cfg;
@@ -3178,7 +3225,7 @@ static bool dcn6_ms_check_immediate_flip_support(const struct dml2_core_calculat
 	return outputs->support.ImmediateFlipSupport;
 }
 
-static void dcn6_ms_calculate_bandwidth_upper_bound(const struct dml2_core_calculate_ms_context *ctx,
+void dcn6_ms_calculate_bandwidth_upper_bound(const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
 	struct dml2_core_internal_mode_support *inputs = states;
@@ -3191,12 +3238,15 @@ static void dcn6_ms_calculate_bandwidth_upper_bound(const struct dml2_core_calcu
 		math_max3(**inputs->support.urg_bandwidth_required_flip,
 			**inputs->support.non_urg_bandwidth_required / ctx->soc_bb->fraction_of_urgent_bandwidth_nominal_target,
 			**inputs->support.non_urg_bandwidth_required_flip / ctx->soc_bb->fraction_of_urgent_bandwidth_flip_target) * 1000;
+	outputs->support.bandwidth_upper_bound.dcn5.lsdma_bandwidth_kbps = inputs->lsdma_bw_req_for_alt_kbps;
+
 	DML_LOG_DEBUG_DOUBLE(outputs->support.bandwidth_upper_bound.dcn5.non_urgent_bandwidth_kbps);
 	DML_LOG_DEBUG_DOUBLE(outputs->support.bandwidth_upper_bound.dcn5.urgent_bandwidth_kbps);
+	DML_LOG_DEBUG_DOUBLE(outputs->support.bandwidth_upper_bound.dcn5.lsdma_bandwidth_kbps);
 	DML_LOG_FUNC_EXIT();
 }
 
-static bool dcn6_ms_check_qos_bandwidth_support(
+bool dcn6_ms_check_qos_bandwidth_support(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -3214,7 +3264,7 @@ static bool dcn6_ms_check_qos_bandwidth_support(
 	return outputs->support.qos_bandwidth_support;
 }
 
-static bool dcn6_ms_check_reordering_support(
+bool dcn6_ms_check_reordering_support(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -3242,7 +3292,7 @@ static bool dcn6_ms_check_reordering_support(
 	return outputs->support.ROBSupport;
 }
 
-static void dcn6_ms_calculate_vactive_det_fill_latency(
+void dcn6_ms_calculate_vactive_det_fill_latency(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -3254,7 +3304,7 @@ static void dcn6_ms_calculate_vactive_det_fill_latency(
 	DML_LOG_FUNC_ENTER();
 	/* VActive fill time calculations (informative) */
 	for (pstate_type = 0; pstate_type < dml2_pstate_type_count; pstate_type++) {
-		dcn5_calculate_vactive_det_fill_latency(
+		get_calcs(ctx)->calculate_vactive_det_fill_latency(
 				display_cfg,
 				display_cfg->num_planes,
 				inputs->pstate_bytes_required_l[pstate_type],
@@ -3276,7 +3326,7 @@ static void dcn6_ms_calculate_vactive_det_fill_latency(
 	DML_LOG_FUNC_EXIT();
 }
 
-static bool dcn6_ms_check_mode_support(
+bool dcn6_ms_check_mode_support(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states,
 		enum dml2_status status)
@@ -3393,7 +3443,7 @@ fail:
 	return outputs->support.ModeSupport;
 }
 
-static void dcn6_ms_populate_informative(
+void dcn6_ms_populate_informative(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -3429,7 +3479,7 @@ static void dcn6_ms_populate_informative(
 	DML_LOG_FUNC_EXIT();
 }
 
-static void dcn6_ms_get_plane_support_info(
+void dcn6_ms_get_plane_support_info(
 		const struct dml2_core_calculate_ms_context *ctx,
 		const struct dml2_core_internal_mode_support *states,
 		struct core_plane_support_info *plane_support,
@@ -3462,7 +3512,7 @@ static void dcn6_ms_get_plane_support_info(
 	DML_LOG_FUNC_EXIT();
 }
 
-static void dcn6_ms_get_stream_support_info(
+void dcn6_ms_get_stream_support_info(
 		const struct dml2_core_calculate_ms_context *ctx,
 		const struct dml2_core_internal_mode_support *states,
 		struct core_stream_support_info *stream_support,
@@ -3476,7 +3526,7 @@ static void dcn6_ms_get_stream_support_info(
 	DML_LOG_FUNC_EXIT();
 }
 
-static void dcn6_ms_populate_mode_support_result(
+void dcn6_ms_populate_mode_support_result(
 		const struct dml2_core_calculate_ms_context *ctx,
 		const struct dml2_core_internal_mode_support *states,
 		struct dml2_core_mode_support_result *result)
@@ -3590,7 +3640,7 @@ static void dcn6_ms_populate_mode_support_result(
 	DML_LOG_FUNC_EXIT();
 }
 
-static bool dcn6_ms_check_dcfclk_support(
+bool dcn6_ms_check_dcfclk_support(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -3620,12 +3670,10 @@ static bool dcn6_ms_check_dcfclk_support(
 	return outputs->support.dcfclk_support;
 }
 
-static void dcn6_ms_check_alternate_channel_size_support(
+void dcn6_ms_check_alternate_channel_size_support(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
-	unsigned int i;
-	bool alt_chan_in_use = false;
 	const struct dml2_utm_soc_bb *soc_bb = ctx->soc_bb;
 	struct dml2_core_internal_mode_support *inputs = states;
 	struct dml2_core_internal_mode_support *outputs = states;
@@ -3635,16 +3683,8 @@ static void dcn6_ms_check_alternate_channel_size_support(
 	DML_LOG_FUNC_ENTER();
 	outputs->support.alternate_channel_size_support = true;
 
-	//Alternate Channel Size Support Check - only fail if alternate channels are used AND exceed carveout limit
-	for (i = 0; i < ctx->display_cfg->num_planes; i++) {
-		if (ctx->display_cfg->plane_descriptors[i].overrides.uclk_pstate_change_strategy == dml2_uclk_pstate_change_strategy_force_alternate) {
-			alt_chan_in_use = true;
-			break;
-		}
-	}
-
-	if (alt_chan_in_use && (inputs->svp0_max_bytes > alternate_carveout_size_bytes ||
-					inputs->svp1_max_bytes > alternate_carveout_size_bytes)) {
+	if (inputs->svp0_max_bytes > alternate_carveout_size_bytes ||
+			inputs->svp1_max_bytes > alternate_carveout_size_bytes) {
 		outputs->support.alternate_channel_size_support = false;
 	}
 
@@ -3656,7 +3696,7 @@ static void dcn6_ms_check_alternate_channel_size_support(
 	return;
 }
 
-static void dcn6_ms_calculate_watermarks(
+void dcn6_ms_calculate_watermarks(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -3740,7 +3780,7 @@ static void dcn6_ms_calculate_watermarks(
 	p->temp_read_or_ppt_support = outputs->support.temp_read_or_ppt_support;
 	p->VActiveLatencyHidingMargin = outputs->VActiveLatencyHidingMargin;
 	p->VActiveLatencyHidingUs = outputs->VActiveLatencyHidingUs;
-	dcn6_calculate_watermarks_and_dram_speed_change_support(ctx->func_params, p);
+	get_calcs(ctx)->calculate_watermarks_and_dram_speed_change_support(ctx->func_params, p);
 
 	DML_LOG_DEBUG_BOOL(outputs->support.global_dram_clock_change_supported);
 	DML_LOG_DEBUG_BOOL(outputs->support.global_fclk_change_supported);
@@ -3769,7 +3809,7 @@ static void dcn6_ms_calculate_watermarks(
 	DML_LOG_FUNC_EXIT();
 }
 
-static void dcn6_ms_calculate_pstate_schedule_windows(
+void dcn6_ms_calculate_pstate_schedule_windows(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -3798,7 +3838,7 @@ static void dcn6_ms_calculate_pstate_schedule_windows(
 
 	/* fclk pstate */
 	if (inputs->support.global_fclk_change_supported)
-		dcn6_calculate_pstate_schedule_windows(
+		get_calcs(ctx)->calculate_pstate_schedule_windows(
 			display_cfg->num_planes,
 			v_blank_start,
 			v_blank_end,
@@ -3813,7 +3853,7 @@ static void dcn6_ms_calculate_pstate_schedule_windows(
 
 	/* ppt pstate */
 	if (inputs->support.global_temp_read_or_ppt_supported)
-		dcn6_calculate_pstate_schedule_windows(
+		get_calcs(ctx)->calculate_pstate_schedule_windows(
 			display_cfg->num_planes,
 			v_blank_start,
 			v_blank_end,
@@ -3830,7 +3870,7 @@ static void dcn6_ms_calculate_pstate_schedule_windows(
 
 	/* temp read pstate */
 	if (inputs->support.global_temp_read_or_ppt_supported)
-		dcn6_calculate_pstate_schedule_windows(
+		get_calcs(ctx)->calculate_pstate_schedule_windows(
 			display_cfg->num_planes,
 			v_blank_start,
 			v_blank_end,
@@ -3852,7 +3892,7 @@ static void dcn6_ms_calculate_pstate_schedule_windows(
 	DML_LOG_FUNC_EXIT();
 }
 
-static bool dcn6_ms_check_pstate_schedule_admissibility(
+bool dcn6_ms_check_pstate_schedule_admissibility(
 		const struct dml2_core_calculate_ms_context *ctx,
 		struct dml2_core_internal_mode_support *states)
 {
@@ -3885,7 +3925,7 @@ static bool dcn6_ms_check_pstate_schedule_admissibility(
 	/* fclk pstate */
 	outputs->support.fclk_pstate_schedule_admissible = false;
 	if (inputs->support.global_fclk_change_supported)
-		dcn6_calculate_pstate_schedule_admissibility(
+		get_calcs(ctx)->calculate_pstate_schedule_admissibility(
 			display_cfg->num_planes,
 			ip->fams2_max_allow_delay_us,
 			ip->fams2_min_allow_width_us,
@@ -3905,7 +3945,7 @@ static bool dcn6_ms_check_pstate_schedule_admissibility(
 	/* ppt pstate */
 	outputs->support.ppt_pstate_schedule_admissible = false;
 	if (inputs->support.global_temp_read_or_ppt_supported)
-		dcn6_calculate_pstate_schedule_admissibility(
+		get_calcs(ctx)->calculate_pstate_schedule_admissibility(
 			display_cfg->num_planes,
 			ip->ppt_max_allow_delay_us,
 			ip->fams2_min_allow_width_us,
@@ -3925,7 +3965,7 @@ static bool dcn6_ms_check_pstate_schedule_admissibility(
 	/* temp read pstate */
 	outputs->support.temp_read_pstate_schedule_admissible = false;
 	if (inputs->support.global_temp_read_or_ppt_supported)
-		dcn6_calculate_pstate_schedule_admissibility(
+		get_calcs(ctx)->calculate_pstate_schedule_admissibility(
 			display_cfg->num_planes,
 			ip->temp_read_max_allow_delay_us,
 			ip->fams2_min_allow_width_us,
@@ -3950,7 +3990,7 @@ static bool dcn6_ms_check_pstate_schedule_admissibility(
 			&& (!inputs->temp_read_pstate_required || outputs->support.temp_read_pstate_schedule_admissible);
 }
 
-static void dcn6_ms_initialize_from_solution(struct dml2_core_internal_mode_support *outputs,
+void dcn6_ms_initialize_from_solution(struct dml2_core_internal_mode_support *outputs,
 		const struct dml2_display_solution *solution,
 		const struct dml2_utm_soc_bb *utm_soc_bb)
 {
@@ -4055,6 +4095,8 @@ static enum dml2_status dcn6_ms_validate_prefetch(
 
 		dcn6_ms_calculate_peak_bandwidth_required(ctx, states);
 
+		dcn6_ms_calculate_alternate_params(ctx, states);
+
 		dcn6_ms_calculate_bandwidth_upper_bound(ctx, states);
 
 		dcn6_ms_check_qos_bandwidth_support(ctx, states);
@@ -4068,8 +4110,6 @@ static enum dml2_status dcn6_ms_validate_prefetch(
 		dcn6_ms_check_reordering_support(ctx, states);
 
 		dcn6_ms_calculate_vactive_det_fill_latency(ctx, states);
-
-		dcn6_ms_calculate_alternate_params(ctx, states);
 
 		dcn6_ms_check_alternate_channel_size_support(ctx, states);
 
@@ -4194,6 +4234,21 @@ static enum dml2_status dcn6_mode_support(
 	return status;
 }
 
+void dcn6_ms_build_calculate_ms_context(struct dml2_core_calculate_ms_context *ctx,
+		struct dml2_core_instance *core,
+		const struct dml2_display_solution *solution)
+{
+	struct dml2_core_internal_display_mode_lib *mode_lib = &core->clean_me_up.mode_lib;
+
+	ctx->display_cfg = &solution->dispcfg;
+	ctx->ip = &mode_lib->ip;
+	ctx->soc_bb = core->utm_soc_bb;
+	ctx->clock_adjuster = core->clock_adjuster;
+	ctx->dummies = &mode_lib->scratch.dml_core_mode_support_locals;
+	ctx->func_params = &mode_lib->scratch;
+	ctx->calcs = &core->calcs;
+}
+
 enum dml2_status dml2_core_dcn6_funcs_validate_solution(struct dml2_core_instance *core,
 		const struct dml2_display_solution *solution,
 		struct dml2_validation_result *result)
@@ -4206,6 +4261,8 @@ enum dml2_status dml2_core_dcn6_funcs_validate_solution(struct dml2_core_instanc
 	unsigned int i;
 
 	DML_LOG_COMP_IF_ENTER();
+	dcn6_ms_build_calculate_ms_context(calc_ms_ctx, core, solution);
+
 	if (solution->unvalidated_change.bits.mpc_combine_overrides
 			|| solution->unvalidated_change.bits.odm_combine_overrides
 			|| solution->unvalidated_change.bits.reserved_vblank_time
@@ -4218,12 +4275,6 @@ enum dml2_status dml2_core_dcn6_funcs_validate_solution(struct dml2_core_instanc
 		result->is_prefetch_valid = false;
 
 	if (!result->is_mode_support_valid) {
-		calc_ms_ctx->display_cfg = &solution->dispcfg;
-		calc_ms_ctx->ip = &core->clean_me_up.mode_lib.ip;
-		calc_ms_ctx->soc_bb = core->utm_soc_bb;
-		calc_ms_ctx->clock_adjuster = core->clock_adjuster;
-		calc_ms_ctx->dummies = &mode_lib->scratch.dml_core_mode_support_locals;
-		calc_ms_ctx->func_params = &mode_lib->scratch;
 		memset(calc_ms_ctx->func_params, 0, sizeof(struct dml2_core_internal_scratch));
 		memset(&mode_lib->ms, 0, sizeof(struct dml2_core_internal_mode_support));
 

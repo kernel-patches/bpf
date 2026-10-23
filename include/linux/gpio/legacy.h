@@ -63,10 +63,6 @@ static inline int gpio_get_value_cansleep(unsigned gpio)
 {
 	return gpiod_get_raw_value_cansleep(gpio_to_desc(gpio));
 }
-static inline void gpio_set_value_cansleep(unsigned gpio, int value)
-{
-	gpiod_set_raw_value_cansleep(gpio_to_desc(gpio), value);
-}
 
 static inline int gpio_get_value(unsigned gpio)
 {
@@ -81,8 +77,6 @@ static inline int gpio_to_irq(unsigned gpio)
 {
 	return gpiod_to_irq(gpio_to_desc(gpio));
 }
-
-int gpio_request_one(unsigned gpio, unsigned long flags, const char *label);
 
 int devm_gpio_request_one(struct device *dev, unsigned gpio,
 			  unsigned long flags, const char *label);
@@ -100,12 +94,6 @@ static inline bool gpio_is_valid(int number)
 }
 
 static inline int gpio_request(unsigned gpio, const char *label)
-{
-	return -ENOSYS;
-}
-
-static inline int gpio_request_one(unsigned gpio,
-					unsigned long flags, const char *label)
 {
 	return -ENOSYS;
 }
@@ -146,12 +134,6 @@ static inline int gpio_get_value_cansleep(unsigned gpio)
 	/* GPIO can never have been requested or set as {in,out}put */
 	WARN_ON(1);
 	return 0;
-}
-
-static inline void gpio_set_value_cansleep(unsigned gpio, int value)
-{
-	/* GPIO can never have been requested or set as output */
-	WARN_ON(1);
 }
 
 static inline int gpio_to_irq(unsigned gpio)

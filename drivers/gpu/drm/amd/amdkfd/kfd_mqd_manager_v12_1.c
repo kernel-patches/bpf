@@ -31,6 +31,7 @@
 #include "gc/gc_12_1_0_sh_mask.h"
 #include "amdgpu_amdkfd.h"
 #include "kfd_device_queue_manager.h"
+#include "gmc_v12_1.h"
 
 static void update_mqd(struct mqd_manager *mm, void *mqd,
 		       struct queue_properties *q,
@@ -41,9 +42,9 @@ static inline struct v12_1_compute_mqd *get_mqd(void *mqd)
 	return (struct v12_1_compute_mqd *)mqd;
 }
 
-static inline struct v12_sdma_mqd *get_sdma_mqd(void *mqd)
+static inline struct v12_1_sdma_mqd *get_sdma_mqd(void *mqd)
 {
-	return (struct v12_sdma_mqd *)mqd;
+	return (struct v12_1_sdma_mqd *)mqd;
 }
 
 static void mqd_symmetrically_map_cu_mask_v12_1(struct mqd_manager *mm,
@@ -143,12 +144,31 @@ static struct kfd_mem_obj *allocate_mqd(struct mqd_manager *mm,
 	u32 mqd_size = AMDGPU_MQD_SIZE_ALIGN(mm->mqd_size);
 	struct kfd_node *node = mm->dev;
 	struct kfd_mem_obj *mqd_mem_obj;
+	int retval;
 
 	if (q->type == KFD_QUEUE_TYPE_COMPUTE)
 		mqd_size *= NUM_XCC(node->xcc_mask);
 
-	if (kfd_gtt_sa_allocate(node, mqd_size, &mqd_mem_obj))
-		return NULL;
+	if (node->kfd->cwsr_enabled && (q->type == KFD_QUEUE_TYPE_COMPUTE)) {
+		mqd_mem_obj = kzalloc(sizeof(struct kfd_mem_obj), GFP_KERNEL);
+		if (!mqd_mem_obj)
+			return NULL;
+		retval = amdgpu_amdkfd_alloc_kernel_mem(node->adev,
+			mqd_size,
+			AMDGPU_GEM_DOMAIN_GTT,
+			&(mqd_mem_obj->mem),
+			&(mqd_mem_obj->gpu_addr),
+			(void *)&(mqd_mem_obj->cpu_ptr), false);
+
+		if (retval) {
+			kfree(mqd_mem_obj);
+			return NULL;
+		}
+	} else {
+		retval = kfd_gtt_sa_allocate(node, mqd_size, &mqd_mem_obj);
+		if (retval)
+			return NULL;
+	}
 
 	return mqd_mem_obj;
 }
@@ -216,6 +236,12 @@ static void init_mqd(struct mqd_manager *mm, void **mqd,
 		m->cp_hqd_wg_state_offset = q->ctl_stack_size;
 	}
 
+	/*
+	 * coherent_aql_mtype (offset 509): program 0 when the driver maps local
+	 * or remote memory as MTYPE_NC, and 1 in all other cases.
+	 */
+	m->coherent_aql_mtype = gmc_v12_1_get_coherent_aql_mtype(mm->dev->adev);
+
 	*mqd = m;
 	if (gart_addr)
 		*gart_addr = addr;
@@ -248,6 +274,7 @@ static void update_mqd(struct mqd_manager *mm, void *mqd,
 	m->cp_hqd_pq_control |=
 			ffs(q->queue_size / sizeof(unsigned int)) - 1 - 1;
 	m->cp_hqd_pq_control |= CP_HQD_PQ_CONTROL__UNORD_DISPATCH_MASK;
+	m->cp_hqd_pq_control |= 3 << CP_HQD_PQ_CONTROL__SCOPE__SHIFT;
 	pr_debug("cp_hqd_pq_control 0x%x\n", m->cp_hqd_pq_control);
 
 	m->cp_hqd_pq_base_lo = lower_32_bits((uint64_t)q->queue_address >> 8);
@@ -381,9 +408,9 @@ static void init_mqd_sdma(struct mqd_manager *mm, void **mqd,
 		struct kfd_mem_obj *mqd_mem_obj, uint64_t *gart_addr,
 		struct queue_properties *q)
 {
-	struct v12_sdma_mqd *m;
+	struct v12_1_sdma_mqd *m;
 
-	m = (struct v12_sdma_mqd *) mqd_mem_obj->cpu_ptr;
+	m = (struct v12_1_sdma_mqd *) mqd_mem_obj->cpu_ptr;
 
 	memset(m, 0, PAGE_SIZE);
 
@@ -400,39 +427,41 @@ static void update_mqd_sdma(struct mqd_manager *mm, void *mqd,
 		struct queue_properties *q,
 		struct mqd_update_info *minfo)
 {
-	struct v12_sdma_mqd *m;
+	struct v12_1_sdma_mqd *m;
 
 	m = get_sdma_mqd(mqd);
-	m->sdmax_rlcx_rb_cntl = (ffs(q->queue_size / sizeof(unsigned int)) - 1)
+	m->sdmax_queuen_rb_cntl = (ffs(q->queue_size / sizeof(unsigned int)) - 1)
 		<< SDMA0_SDMA_QUEUE0_RB_CNTL__RB_SIZE__SHIFT |
 		q->vmid << SDMA0_SDMA_QUEUE0_RB_CNTL__RB_VMID__SHIFT |
 		1 << SDMA0_SDMA_QUEUE0_RB_CNTL__RPTR_WRITEBACK_ENABLE__SHIFT |
 		6 << SDMA0_SDMA_QUEUE0_RB_CNTL__RPTR_WRITEBACK_TIMER__SHIFT |
 		1 << SDMA0_SDMA_QUEUE0_RB_CNTL__MCU_WPTR_POLL_ENABLE__SHIFT;
 
-	m->sdmax_rlcx_rb_base = lower_32_bits(q->queue_address >> 8);
-	m->sdmax_rlcx_rb_base_hi = upper_32_bits(q->queue_address >> 8);
-	m->sdmax_rlcx_rb_rptr_addr_lo = lower_32_bits((uint64_t)q->read_ptr);
-	m->sdmax_rlcx_rb_rptr_addr_hi = upper_32_bits((uint64_t)q->read_ptr);
-	m->sdmax_rlcx_rb_wptr_poll_addr_lo = lower_32_bits((uint64_t)q->write_ptr);
-	m->sdmax_rlcx_rb_wptr_poll_addr_hi = upper_32_bits((uint64_t)q->write_ptr);
-	m->sdmax_rlcx_doorbell_offset =
+	m->sdmax_queuen_rb_base = lower_32_bits(q->queue_address >> 8);
+	m->sdmax_queuen_rb_base_hi = upper_32_bits(q->queue_address >> 8);
+	m->sdmax_queuen_rb_rptr_addr_lo = lower_32_bits((uint64_t)q->read_ptr);
+	m->sdmax_queuen_rb_rptr_addr_hi = upper_32_bits((uint64_t)q->read_ptr);
+	m->sdmax_queuen_rb_wptr_poll_addr_lo = lower_32_bits((uint64_t)q->write_ptr);
+	m->sdmax_queuen_rb_wptr_poll_addr_hi = upper_32_bits((uint64_t)q->write_ptr);
+	m->sdmax_queuen_doorbell_offset =
 		q->doorbell_off << SDMA0_SDMA_QUEUE0_DOORBELL_OFFSET__OFFSET__SHIFT;
 
-	m->sdmax_rlcx_sched_cntl = (amdgpu_sdma_phase_quantum
+	m->sdmax_queuen_sched_cntl = (amdgpu_sdma_phase_quantum
 		<< SDMA0_SDMA_QUEUE0_SCHEDULE_CNTL__CONTEXT_QUANTUM__SHIFT)
 		 & SDMA0_SDMA_QUEUE0_SCHEDULE_CNTL__CONTEXT_QUANTUM_MASK;
 
 	m->sdma_engine_id = q->sdma_engine_id;
 	m->sdma_queue_id = q->sdma_queue_id;
 
-	m->sdmax_rlcx_dummy_reg = SDMA_RLC_DUMMY_DEFAULT;
+	m->sdmax_queuen_dummy_reg = SDMA_RLC_DUMMY_DEFAULT;
+
+	m->sdmax_queuen_dummy_reg1 = 1;
 
 	/* Allow context switch so we don't cross-process starve with a massive
 	* command buffer of long-running SDMA commands
-	* sdmax_rlcx_ib_cntl represent SDMA_QUEUE0_IB_CNTL register
+	* sdmax_queuen_ib_cntl represent SDMA_QUEUE0_IB_CNTL register
 	*/
-	m->sdmax_rlcx_ib_cntl |= SDMA0_SDMA_QUEUE0_IB_CNTL__SWITCH_INSIDE_IB_MASK;
+	m->sdmax_queuen_ib_cntl |= SDMA0_SDMA_QUEUE0_IB_CNTL__SWITCH_INSIDE_IB_MASK;
 
 	q->is_active = QUEUE_IS_ACTIVE(*q);
 }
@@ -635,7 +664,7 @@ static int debugfs_show_mqd(struct seq_file *m, void *data)
 static int debugfs_show_mqd_sdma(struct seq_file *m, void *data)
 {
 	seq_hex_dump(m, "    ", DUMP_PREFIX_OFFSET, 32, 4,
-		     data, sizeof(struct v12_sdma_mqd), false);
+		     data, sizeof(struct v12_1_sdma_mqd), false);
 	return 0;
 }
 
@@ -779,7 +808,7 @@ struct mqd_manager *mqd_manager_init_v12_1(enum KFD_MQD_TYPE type,
 		mqd->update_mqd = update_mqd_sdma;
 		mqd->destroy_mqd = kfd_destroy_mqd_sdma;
 		mqd->is_occupied = kfd_is_occupied_sdma;
-		mqd->mqd_size = sizeof(struct v12_sdma_mqd);
+		mqd->mqd_size = sizeof(struct v12_1_sdma_mqd);
 		mqd->mqd_stride = kfd_mqd_stride;
 		mqd->restore_mqd = restore_mqd_sdma_v12_1;
 #if defined(CONFIG_DEBUG_FS)

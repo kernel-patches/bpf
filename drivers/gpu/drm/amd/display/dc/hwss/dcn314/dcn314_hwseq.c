@@ -110,13 +110,23 @@ static void update_dsc_on_stream(struct pipe_ctx *pipe_ctx, bool enable)
 		dsc_cfg.dc_dsc_cfg.num_slices_h /= opp_cnt;
 		dsc_cfg.dsc_padding = 0;
 
-		dsc->funcs->dsc_set_config(dsc, &dsc_cfg, &dsc_optc_cfg);
+		if (!dsc->funcs->dsc_prepare_config(dsc, &dsc_cfg, &dsc_optc_cfg)) {
+			ASSERT(false);
+			return;
+		}
+		dsc->funcs->dsc_set_config(dsc);
 		dsc->funcs->dsc_enable(dsc, pipe_ctx->stream_res.opp->inst);
 		for (odm_pipe = pipe_ctx->next_odm_pipe; odm_pipe; odm_pipe = odm_pipe->next_odm_pipe) {
 			struct display_stream_compressor *odm_dsc = odm_pipe->stream_res.dsc;
 
 			ASSERT(odm_dsc);
-			odm_dsc->funcs->dsc_set_config(odm_dsc, &dsc_cfg, &dsc_optc_cfg);
+			if (!odm_dsc)
+				return;
+			if (!odm_dsc->funcs->dsc_prepare_config(odm_dsc, &dsc_cfg, &dsc_optc_cfg)) {
+				ASSERT(false);
+				return;
+			}
+			odm_dsc->funcs->dsc_set_config(odm_dsc);
 			odm_dsc->funcs->dsc_enable(odm_dsc, odm_pipe->stream_res.opp->inst);
 		}
 		dsc_cfg.dc_dsc_cfg.num_slices_h *= opp_cnt;
@@ -455,14 +465,18 @@ void dcn314_resync_fifo_dccg_dio(struct dce_hwseq *hws, struct dc *dc, struct dc
 	}
 }
 
+bool dcn314_is_dpp_root_clock_control_supported(bool root_clock_optimization_dpp, bool clock_on)
+{
+	(void)clock_on;
+	return root_clock_optimization_dpp;
+}
+
 void dcn314_dpp_root_clock_control(struct dce_hwseq *hws, unsigned int dpp_inst, bool clock_on)
 {
-	if (!hws->ctx->dc->debug.root_clock_optimization.bits.dpp)
-		return;
-
 	if (hws->ctx->dc->res_pool->dccg->funcs->dpp_root_clock_control)
 		hws->ctx->dc->res_pool->dccg->funcs->dpp_root_clock_control(
-			hws->ctx->dc->res_pool->dccg, dpp_inst, clock_on);
+			hws->ctx->dc->res_pool->dccg, dpp_inst, clock_on,
+			hws->ctx->dc->debug.root_clock_optimization.bits.dpp);
 }
 
 static void apply_symclk_on_tx_off_wa(struct dc_link *link)

@@ -36,6 +36,7 @@ class CTransforms:
         (CMatch("CRYPTO_MINALIGN_ATTR"), ""),
         (CMatch("__private"), ""),
         (CMatch("__rcu"), ""),
+        (CMatch("__require_explicit_initialization"), ""),
         (CMatch("____cacheline_aligned_in_smp"), ""),
         (CMatch("____cacheline_aligned"), ""),
         (CMatch("__cacheline_group_(?:begin|end)"), ""),
@@ -45,6 +46,8 @@ class CTransforms:
         (CMatch("DECLARE_HASHTABLE"), r"unsigned long \1[1 << ((\2) - 1)]"),
         (CMatch("DECLARE_KFIFO"), r"\2 *\1"),
         (CMatch("DECLARE_KFIFO_PTR"), r"\2 *\1"),
+        (CMatch("DECLARE_KHOSER_PTR"), r"\2 \1"),
+        (CMatch("DECLARE_PIDS"), r"struct pid *\1[(\2) + 1]"),
         (CMatch("(?:__)?DECLARE_FLEX_ARRAY"), r"\1 \2[]"),
         (CMatch("DEFINE_DMA_UNMAP_ADDR"), r"dma_addr_t \1"),
         (CMatch("DEFINE_DMA_UNMAP_LEN"), r"__u32 \1"),
@@ -53,7 +56,7 @@ class CTransforms:
         (CMatch("__attribute__"), ""),
 
         #
-        # Macro __struct_group() creates an union with an anonymous
+        # Macro __struct_group() creates a union with an anonymous
         # and a non-anonymous struct, depending on the parameters. We only
         # need one of those at kernel-doc, as we won't be documenting the same
         # members twice.
@@ -62,6 +65,7 @@ class CTransforms:
         (CMatch("struct_group_attr"), r"struct { \3+ };"),
         (CMatch("struct_group_tagged"), r"struct { \3+ };"),
         (CMatch("__struct_group"), r"struct { \4+ };"),
+        (CMatch("context_lock_struct"), r"struct \1"),
     ]
 
     #: Transforms for function prototypes.

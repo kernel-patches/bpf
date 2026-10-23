@@ -13,6 +13,7 @@
  * the SpitFire page tables.
  */
 
+#include <asm/page.h>
 #include <asm-generic/pgtable-nop4d.h>
 #include <linux/compiler.h>
 #include <linux/const.h>
@@ -20,7 +21,6 @@
 #include <asm/spitfire.h>
 #include <asm/asi.h>
 #include <asm/adi.h>
-#include <asm/page.h>
 #include <asm/processor.h>
 
 /* The kernel image occupies 0x4000000 to 0x6000000 (4MB --> 96MB).
@@ -95,16 +95,6 @@ bool kern_addr_valid(unsigned long addr);
 #define PTRS_PER_PMD	(1UL << PMD_BITS)
 #define PTRS_PER_PUD	(1UL << PUD_BITS)
 #define PTRS_PER_PGD	(1UL << PGDIR_BITS)
-
-#define pmd_ERROR(e)							\
-	pr_err("%s:%d: bad pmd %p(%016lx) seen at (%pS)\n",		\
-	       __FILE__, __LINE__, &(e), pmd_val(e), __builtin_return_address(0))
-#define pud_ERROR(e)							\
-	pr_err("%s:%d: bad pud %p(%016lx) seen at (%pS)\n",		\
-	       __FILE__, __LINE__, &(e), pud_val(e), __builtin_return_address(0))
-#define pgd_ERROR(e)							\
-	pr_err("%s:%d: bad pgd %p(%016lx) seen at (%pS)\n",		\
-	       __FILE__, __LINE__, &(e), pgd_val(e), __builtin_return_address(0))
 
 #endif /* !(__ASSEMBLER__) */
 
@@ -946,6 +936,10 @@ static inline void set_ptes(struct mm_struct *mm, unsigned long addr,
 	set_pte_at((mm), (addr), (ptep), __pte(0UL))
 
 #ifdef DCACHE_ALIASING_POSSIBLE
+/* This flushes only the page the PTE maps, so it relies on move_ptes()
+ * calling it for one PTE at a time, which the default pte_batch_hint()
+ * guarantees.
+ */
 #define __HAVE_ARCH_MOVE_PTE
 #define move_pte(pte, old_addr, new_addr)				\
 ({									\
@@ -955,8 +949,8 @@ static inline void set_ptes(struct mm_struct *mm, unsigned long addr,
 									\
 		if (pfn_valid(this_pfn) &&				\
 		    (((old_addr) ^ (new_addr)) & (1 << 13)))		\
-			flush_dcache_folio_all(current->mm,		\
-				page_folio(pfn_to_page(this_pfn)));	\
+			flush_dcache_page_all(current->mm,		\
+					      pfn_to_page(this_pfn));	\
 	}								\
 	newpte;								\
 })

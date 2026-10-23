@@ -60,6 +60,7 @@
 #include "dpcd_defs.h"
 #include "dsc.h"
 #include "dc_dp_types.h"
+#include "dc_dmub_srv.h"
 /* include DCE11 register header files */
 #include "dce/dce_11_0_d.h"
 #include "dce/dce_11_0_sh_mask.h"
@@ -101,6 +102,7 @@ struct dce110_hw_seq_reg_offsets {
 	uint32_t crtc;
 };
 
+#if defined(CONFIG_DRM_AMD_DC_DCE)
 static const struct dce110_hw_seq_reg_offsets reg_offsets[] = {
 {
 	.crtc = (mmCRTC0_CRTC_GSL_CONTROL - mmCRTC_GSL_CONTROL),
@@ -121,6 +123,7 @@ static const struct dce110_hw_seq_reg_offsets reg_offsets[] = {
 
 #define HW_REG_CRTC(reg, id)\
 	(reg + reg_offsets[id].crtc)
+#endif
 
 #define MAX_WATERMARK 0xFFFF
 #define SAFE_NBP_MARK 0x7FFF
@@ -129,6 +132,7 @@ static const struct dce110_hw_seq_reg_offsets reg_offsets[] = {
  * Private definitions
  ******************************************************************************/
 /***************************PIPE_CONTROL***********************************/
+#if defined(CONFIG_DRM_AMD_DC_DCE)
 static void dce110_init_pte(struct dc_context *ctx)
 {
 	uint32_t addr;
@@ -195,6 +199,7 @@ static void dce110_init_pte(struct dc_context *ctx)
 		dm_write_reg(ctx, addr, value);
 	}
 }
+#endif
 /**************************************************************************/
 
 static void enable_display_pipe_clock_gating(
@@ -206,6 +211,7 @@ static void enable_display_pipe_clock_gating(
 	/*TODO*/
 }
 
+#if defined(CONFIG_DRM_AMD_DC_DCE)
 static bool dce110_enable_display_power_gating(
 	struct dc *dc,
 	uint8_t controller_id,
@@ -283,11 +289,10 @@ static void dce110_prescale_params(struct ipp_prescale_params *prescale_params,
 }
 
 static bool
-dce110_set_input_transfer_func(struct dc *dc, struct pipe_ctx *pipe_ctx,
-			       const struct dc_plane_state *plane_state)
+dce110_set_input_transfer_func(struct set_input_transfer_func_params *params)
 {
-	(void)dc;
-	struct input_pixel_processor *ipp = pipe_ctx->plane_res.ipp;
+	struct input_pixel_processor *ipp = params->ipp;
+	struct dc_plane_state *plane_state = params->plane_state;
 	const struct dc_transfer_func *tf = NULL;
 	struct ipp_prescale_params prescale_params = { 0 };
 	bool result = true;
@@ -631,6 +636,8 @@ dce110_set_output_transfer_func(struct set_output_transfer_func_params *params)
 	return true;
 }
 
+#endif
+
 void dce110_update_info_frame(struct pipe_ctx *pipe_ctx)
 {
 	bool is_hdmi_tmds;
@@ -698,6 +705,7 @@ dce110_external_encoder_control(enum bp_external_encoder_control_action action,
 		DC_LOG_ERROR("Failed to execute external encoder action: 0x%x\n", action);
 }
 
+#if defined(CONFIG_DRM_AMD_DC_DCE)
 static void
 dce110_prepare_ddc(struct dc_link *link)
 {
@@ -716,6 +724,8 @@ dce110_dac_load_detect(struct dc_link *link)
 			bios, link_enc->analog_engine, link->ext_enc_id);
 	return bp_result == BP_RESULT_OK;
 }
+
+#endif
 
 void dce110_enable_stream(struct pipe_ctx *pipe_ctx)
 {
@@ -1147,7 +1157,10 @@ void dce110_enable_audio_stream(struct pipe_ctx *pipe_ctx)
 			if (dc->current_state->res_ctx.pipe_ctx[i].stream_res.audio != NULL)
 				num_audio++;
 		}
-		if (num_audio >= 1 && clk_mgr->funcs->enable_pme_wa) {
+		if (dc->debug.dmub_send_az_pme_restore) {
+			/*wake AZ from D3 first before access az endpoint*/
+			dc_dmub_srv_nbif_az_pme_restore(dc->ctx, pipe_ctx->stream_res.audio->inst);
+		} else if (num_audio >= 1 && clk_mgr->funcs->enable_pme_wa) {
 			/*wake AZ from D3 first before access az endpoint*/
 			clk_mgr->funcs->enable_pme_wa(clk_mgr);
 		}
@@ -1185,10 +1198,13 @@ void dce110_disable_audio_stream(struct pipe_ctx *pipe_ctx)
 	if (pipe_ctx->stream_res.audio) {
 		pipe_ctx->stream_res.audio->enabled = false;
 
-		if (clk_mgr->funcs->enable_pme_wa)
-			/*this is the first audio. apply the PME w/a in order to wake AZ from D3*/
+		if (dc->debug.dmub_send_az_pme_restore) {
+			/*wake AZ from D3 first before access az endpoint*/
+			dc_dmub_srv_nbif_az_pme_restore(dc->ctx, pipe_ctx->stream_res.audio->inst);
+		} else if (clk_mgr->funcs->enable_pme_wa) {
+			/*wake AZ from D3 first before access az endpoint*/
 			clk_mgr->funcs->enable_pme_wa(clk_mgr);
-
+		}
 		/* TODO: notify audio driver for if audio modes list changed
 		 * add audio mode list change flag */
 		/* dal_audio_disable_azalia_audio_jack_presence(stream->audio,
@@ -1286,8 +1302,6 @@ void dce110_blank_stream(struct pipe_ctx *pipe_ctx)
 		return;
 
 	if (link->local_sink && link->local_sink->sink_signal == SIGNAL_TYPE_EDP) {
-		if (link->forced_psr_active)
-			return;
 		if (!link->skip_implict_edp_power_control && hws)
 			hws->funcs.edp_backlight_control(link, false);
 		link->dc->hwss.set_abm_immediate_disable(pipe_ctx);
@@ -1591,6 +1605,7 @@ void build_audio_output(
 	}
 }
 
+#if defined(CONFIG_DRM_AMD_DC_DCE)
 static void program_scaler(const struct dc *dc,
 		const struct pipe_ctx *pipe_ctx)
 {
@@ -1695,6 +1710,8 @@ static enum dc_status dce110_enable_stream_timing(
 
 	return DC_OK;
 }
+
+#endif
 
 enum dc_status dce110_apply_single_controller_ctx_to_hw(
 		struct pipe_ctx *pipe_ctx,
@@ -1816,9 +1833,7 @@ enum dc_status dce110_apply_single_controller_ctx_to_hw(
 			dc->link_srv->set_dsc_enable(pipe_ctx, true);
 	}
 
-	if (!stream->dpms_off &&
-	    !(link->connector_signal == SIGNAL_TYPE_EDP &&
-	      link->forced_psr_active))
+	if (!stream->dpms_off)
 		dc->link_srv->set_dpms_on(context, pipe_ctx);
 
 	/* DCN3.1 FPGA Workaround
@@ -2282,6 +2297,7 @@ void dce110_set_safe_displaymarks(
  * Public functions
  ******************************************************************************/
 
+#if defined(CONFIG_DRM_AMD_DC_DCE)
 static void set_drr(struct pipe_ctx **pipe_ctx,
 		int num_pipes, struct dc_crtc_timing_adjust adjust)
 {
@@ -2355,6 +2371,8 @@ static void set_static_screen_control(struct pipe_ctx **pipe_ctx,
 			set_static_screen_control(pipe_ctx[i]->stream_res.tg,
 					triggers, params->num_frames);
 }
+
+#endif
 
 /*
  *  Check if FBC can be enabled
@@ -2448,6 +2466,7 @@ void enable_fbc(
 	}
 }
 
+#if defined(CONFIG_DRM_AMD_DC_DCE)
 static void dce110_reset_hw_ctx_wrap(
 		struct dc *dc,
 		struct dc_state *context)
@@ -2519,6 +2538,8 @@ static void dce110_reset_hw_ctx_wrap(
 		}
 	}
 }
+
+#endif
 
 static void dce110_setup_audio_dto(
 		struct dc *dc,
@@ -2762,6 +2783,7 @@ enum dc_status dce110_apply_ctx_to_hw(
 /*******************************************************************************
  * Front End programming
  ******************************************************************************/
+#if defined(CONFIG_DRM_AMD_DC_DCE)
 static void set_default_colors(struct pipe_ctx *pipe_ctx)
 {
 	struct default_adjustment default_adjust = { 0 };
@@ -2891,12 +2913,15 @@ static void dce110_update_pending_status(struct pipe_ctx *pipe_ctx)
 	}
 }
 
+#endif
+
 void dce110_power_down(struct dc *dc)
 {
 	power_down_all_hw_blocks(dc);
 	disable_vga_and_power_gate_all_controllers(dc);
 }
 
+#if defined(CONFIG_DRM_AMD_DC_DCE)
 static bool wait_for_reset_trigger_to_occur(
 	struct dc_context *dc_ctx,
 	struct timing_generator *tg)
@@ -3103,6 +3128,8 @@ static void dce110_init_hw(struct dc *dc)
 }
 
 
+#endif
+
 void dce110_prepare_bandwidth(
 		struct dc *dc,
 		struct dc_state *context)
@@ -3132,6 +3159,7 @@ void dce110_optimize_bandwidth(
 				true);
 }
 
+#if defined(CONFIG_DRM_AMD_DC_DCE)
 static void dce110_program_front_end_for_pipe(
 		struct dc *dc, struct pipe_ctx *pipe_ctx)
 {
@@ -3140,7 +3168,6 @@ static void dce110_program_front_end_for_pipe(
 	struct xfm_grph_csc_adjustment adjust;
 	struct out_csc_color_matrix tbl_entry;
 	unsigned int i;
-	struct dce_hwseq *hws = dc->hwseq;
 
 	memset(&tbl_entry, 0, sizeof(tbl_entry));
 
@@ -3199,7 +3226,7 @@ static void dce110_program_front_end_for_pipe(
 	if (pipe_ctx->plane_state->update_bits.full_update ||
 			pipe_ctx->plane_state->update_bits.in_transfer_func_change ||
 			pipe_ctx->plane_state->update_bits.gamma_change)
-		hws->funcs.set_input_transfer_func(dc, pipe_ctx, pipe_ctx->plane_state);
+		hwss_set_input_transfer_func(dc, pipe_ctx);
 
 	if (pipe_ctx->plane_state->update_bits.full_update)
 		hwss_set_output_transfer_func(dc, pipe_ctx);
@@ -3410,6 +3437,8 @@ static void dce110_set_cursor_attribute(struct pipe_ctx *pipe_ctx)
 				pipe_ctx->plane_res.xfm, attributes);
 }
 
+#endif
+
 bool dce110_set_backlight_level(struct pipe_ctx *pipe_ctx,
 	struct set_backlight_level_params *backlight_level_params)
 {
@@ -3489,6 +3518,10 @@ void dce110_enable_tmds_link_output(struct dc_link *link,
 		uint32_t pixel_clock)
 {
 	(void)link_res;
+
+	if (!link->link_enc)
+		return;
+
 	link->link_enc->funcs->enable_tmds_output(
 			link->link_enc,
 			clock_source,
@@ -3499,16 +3532,17 @@ void dce110_enable_tmds_link_output(struct dc_link *link,
 
 	// For dongle Type 2 with no I2C support on board, setup sw mode of Ri/Pj check with proper aux instance
 	if (link->force_to_use_aux) {
-		if (link->link_enc && link->link_enc->funcs->setup_ri_pj_check_in_sw_or_hw_mode)
+		if (link->link_enc->funcs->setup_ri_pj_check_in_sw_or_hw_mode)
 			link->link_enc->funcs->setup_ri_pj_check_in_sw_or_hw_mode(link->link_enc,
 				link->aux_hw_inst, true);
 	} else
 		// For HDMI setup hw mode of Ri/Pj check with proper ddc pin instance
-		if (link->link_enc && link->link_enc->funcs->setup_ri_pj_check_in_sw_or_hw_mode)
+		if (link->link_enc->funcs->setup_ri_pj_check_in_sw_or_hw_mode)
 			link->link_enc->funcs->setup_ri_pj_check_in_sw_or_hw_mode(link->link_enc,
 				link->ddc_hw_inst, false);
 }
 
+#if defined(CONFIG_DRM_AMD_DC_DCE)
 static void dce110_enable_analog_link_output(
 		struct dc_link *link,
 		uint32_t pix_clk_100hz)
@@ -3517,6 +3551,8 @@ static void dce110_enable_analog_link_output(
 			link->link_enc,
 			pix_clk_100hz);
 }
+
+#endif
 
 void dce110_enable_dp_link_output(
 		struct dc_link *link,
@@ -3617,6 +3653,7 @@ void dce110_disable_link_output(struct dc_link *link,
 	dc->link_srv->dp_trace_source_sequence(link, DPCD_SOURCE_SEQ_AFTER_DISABLE_LINK_PHY);
 }
 
+#if defined(CONFIG_DRM_AMD_DC_DCE)
 static const struct hw_sequencer_funcs dce110_funcs = {
 	.program_gamut_remap = program_gamut_remap,
 	.program_output_csc = program_output_csc,
@@ -3638,9 +3675,10 @@ static const struct hw_sequencer_funcs dce110_funcs = {
 	.enable_audio_stream = dce110_enable_audio_stream,
 	.disable_audio_stream = dce110_disable_audio_stream,
 	.disable_plane = dce110_power_down_fe,
-	.pipe_control_lock = dce_pipe_control_lock,
+	.build_pipe_control_lock_sequence = dce_build_pipe_control_lock_sequence,
+	.tg_lock = dce_tg_lock,
 	.interdependent_update_lock = NULL,
-	.cursor_lock = dce_pipe_control_lock,
+	.cursor_lock = hwss_pipe_control_lock,
 	.prepare_bandwidth = dce110_prepare_bandwidth,
 	.optimize_bandwidth = dce110_optimize_bandwidth,
 	.set_drr = set_drr,
@@ -3652,7 +3690,7 @@ static const struct hw_sequencer_funcs dce110_funcs = {
 	.edp_backlight_control = dce110_edp_backlight_control,
 	.edp_power_control = dce110_edp_power_control,
 	.edp_wait_for_hpd_ready = dce110_edp_wait_for_hpd_ready,
-	.set_cursor_position = dce110_set_cursor_position,
+	.set_cursor_position_legacy = dce110_set_cursor_position,
 	.set_cursor_attribute = dce110_set_cursor_attribute,
 	.set_backlight_level = dce110_set_backlight_level,
 	.set_abm_immediate_disable = dce110_set_abm_immediate_disable,
@@ -3686,3 +3724,4 @@ void dce110_hw_sequencer_construct(struct dc *dc)
 	dc->hwseq->funcs = dce110_private_funcs;
 }
 
+#endif /* CONFIG_DRM_AMD_DC_DCE */
