@@ -2145,21 +2145,21 @@ static struct device *svs_add_device_link(struct svs_platform *svsp,
 					  const char *node_name)
 {
 	struct device *dev;
-	struct device_link *sup_link;
 
 	dev = svs_get_subsys_device(svsp, node_name);
 	if (IS_ERR(dev))
 		return dev;
 
-	sup_link = device_link_add(svsp->dev, dev,
-				   DL_FLAG_AUTOREMOVE_CONSUMER);
-	if (!sup_link) {
-		dev_err(svsp->dev, "sup_link is NULL\n");
+	if (!device_link_add(svsp->dev, dev, DL_FLAG_AUTOREMOVE_CONSUMER)) {
+		dev_err(svsp->dev, "device_link_add returns NULL\n");
+		put_device(dev);
 		return ERR_PTR(-EINVAL);
 	}
 
-	if (sup_link->supplier->links.status != DL_DEV_DRIVER_BOUND)
+	if (READ_ONCE(dev->links.status) != DL_DEV_DRIVER_BOUND) {
+		put_device(dev);
 		return ERR_PTR(-EPROBE_DEFER);
+	}
 
 	return dev;
 }
