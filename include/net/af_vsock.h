@@ -64,9 +64,10 @@ struct vsock_sock {
 	bool sent_request;
 	bool ignore_connecting_rst;
 	/*
-	 * Captured before the socket is published. This identifies AF_VSOCK's
-	 * native write-space callback after a consumer has replaced it.
+	 * Captured before the socket is published. These identify AF_VSOCK's
+	 * native readiness callbacks after a consumer has replaced them.
 	 */
+	void (*native_data_ready)(struct sock *sk);
 	void (*native_write_space)(struct sock *sk);
 
 	/* Protected by lock_sock(sk) */
@@ -84,7 +85,9 @@ s64 vsock_stream_has_data(struct vsock_sock *vsk);
 s64 vsock_stream_has_space(struct vsock_sock *vsk);
 struct sock *vsock_create_connected(struct sock *parent);
 void vsock_data_ready(struct sock *sk);
-bool vsock_write_space_is_native(const struct sock *sk);
+bool vsock_data_ready_pending(struct sock *sk);
+bool vsock_callbacks_are_native(const struct sock *sk);
+void vsock_call_native_data_ready(struct sock *sk);
 void vsock_call_native_write_space(struct sock *sk);
 
 /**** TRANSPORT ****/

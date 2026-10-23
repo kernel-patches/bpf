@@ -1598,7 +1598,8 @@ out:
 
 static int
 virtio_transport_recv_connected(struct sock *sk,
-				struct sk_buff *skb)
+				struct sk_buff *skb,
+				bool *data_ready_pending)
 {
 	struct virtio_vsock_hdr *hdr = virtio_vsock_hdr(skb);
 	struct vsock_sock *vsk = vsock_sk(sk);
@@ -1617,7 +1618,12 @@ virtio_transport_recv_connected(struct sock *sk,
 			vsock_remove_sock(vsk);
 			break;
 		}
-		vsock_data_ready(sk);
+		if (data_ready_pending) {
+			if (!*data_ready_pending && vsock_data_ready_pending(sk))
+				*data_ready_pending = true;
+		} else {
+			vsock_data_ready(sk);
+		}
 		return err;
 	case VIRTIO_VSOCK_OP_CREDIT_REQUEST:
 		virtio_transport_send_credit_update(vsk);
@@ -1874,20 +1880,19 @@ __virtio_transport_rx_batch_can_receive(struct virtio_transport *t,
 		return false;
 
 	/*
-	 * Sockmap can replace sk_prot or sk_write_space, and publish a psock,
-	 * without the socket lock. Coalescing is safe only for the native
-	 * write-space callback, so a boundary that sees a replacement returns to
-	 * the existing per-packet path.
+	 * Sockmap can replace sk_prot or either readiness callback, and publish a
+	 * psock, without the socket lock. Coalescing is safe only for native
+	 * callbacks, so a boundary that sees a replacement returns to the existing
+	 * per-packet path.
 	 */
 	return READ_ONCE(sk->sk_prot) == sk->sk_prot_creator &&
-	       vsock_write_space_is_native(sk) &&
+	       vsock_callbacks_are_native(sk) &&
 	       !virtio_transport_sock_has_psock(sk);
 }
 
 /*
- * Sockmap teardown restores the native protocol and write-space callback
- * under sk_callback_lock. Serialize each packet admission check with those
- * updates.
+ * Sockmap teardown restores the native protocol and callbacks under
+ * sk_callback_lock. Serialize each packet admission check with those updates.
  */
 static bool
 virtio_transport_rx_batch_can_receive(struct virtio_transport *t,
@@ -1905,9 +1910,8 @@ virtio_transport_rx_batch_can_receive(struct virtio_transport *t,
 /*
  * The caller holds sk's socket lock. If @batchable is non-NULL, update it
  * after processing @skb to say whether a native STREAM/RW batch can continue.
- * When @batch is non-NULL, record a native write-space notification for batch
- * finish. A writer cannot consume the updated credit until this lock is
- * released.
+ * When @batch is non-NULL, record native readiness notifications for batch
+ * finish. A reader or writer cannot make progress until this lock is released.
  */
 static void
 virtio_transport_recv_pkt_locked(struct virtio_transport *t,
@@ -1917,6 +1921,7 @@ virtio_transport_recv_pkt_locked(struct virtio_transport *t,
 {
 	struct virtio_vsock_hdr *hdr = virtio_vsock_hdr(skb);
 	struct vsock_sock *vsk = vsock_sk(sk);
+	bool *data_ready_pending;
 	struct sockaddr_vm src;
 	bool space_available;
 
@@ -1925,6 +1930,8 @@ virtio_transport_recv_pkt_locked(struct virtio_transport *t,
 
 	if (batchable)
 		*batchable = false;
+
+	data_ready_pending = batch ? &batch->data_ready_pending : NULL;
 
 	/*
 	 * The socket may have been closed or reassigned after lookup but before
@@ -1962,7 +1969,7 @@ virtio_transport_recv_pkt_locked(struct virtio_transport *t,
 		kfree_skb(skb);
 		break;
 	case TCP_ESTABLISHED:
-		virtio_transport_recv_connected(sk, skb);
+		virtio_transport_recv_connected(sk, skb, data_ready_pending);
 		break;
 	case TCP_CLOSING:
 		virtio_transport_recv_disconnecting(sk, skb);
@@ -2036,32 +2043,37 @@ EXPORT_SYMBOL_GPL(virtio_transport_recv_pkt);
 
 /*
  * Release an active RX batch. A non-empty batch holds the socket lock and the
- * reference returned by vsock_find_connected_socket_net(). Deliver any
- * deferred native write-space notification while holding the lock, preserving
- * the callback context of the regular receive path. An empty batch holds
- * neither.
+ * reference returned by vsock_find_connected_socket_net(). Release the lock,
+ * deliver deferred native write-space and data-ready notifications in that
+ * order, then drop the reference. An empty batch holds neither.
  */
 void virtio_transport_rx_batch_finish(struct virtio_transport_rx_batch *batch)
 {
 	bool write_space_pending = batch->write_space_pending;
+	bool data_ready_pending = batch->data_ready_pending;
 	struct sock *sk = batch->sk;
 
 	batch->sk = NULL;
 	batch->pkts = 0;
 	batch->bytes = 0;
 	batch->write_space_pending = false;
+	batch->data_ready_pending = false;
 
 	if (!sk)
 		return;
 
+	release_sock(sk);
+
 	/*
-	 * The packet was admitted with the native callback. Do not reload a current
+	 * Packets were admitted with native callbacks. Do not reload a current
 	 * callback here: sockmap can replace or remove its wrapper independently.
 	 */
 	if (write_space_pending)
 		vsock_call_native_write_space(sk);
 
-	release_sock(sk);
+	if (data_ready_pending)
+		vsock_call_native_data_ready(sk);
+
 	sock_put(sk);
 }
 EXPORT_SYMBOL_GPL(virtio_transport_rx_batch_finish);
