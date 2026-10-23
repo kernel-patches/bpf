@@ -340,7 +340,6 @@
 			reg = <0x000e3000 0x1000>;
 			clocks = <&gcc GCC_PRNG_AHB_CLK>;
 			clock-names = "core";
-			status = "disabled";
 		};
 
 		tsens: thermal-sensor@4a9000 {
