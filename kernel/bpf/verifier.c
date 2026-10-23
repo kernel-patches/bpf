@@ -6517,6 +6517,11 @@ BTF_TYPE_SAFE_RCU_OR_NULL(struct request_sock) {
 	struct sock *sk;
 };
 
+/* struct file is SLAB_TYPESAFE_BY_RCU. A reused file has f_inode == NULL. */
+BTF_TYPE_SAFE_RCU_OR_NULL(struct file) {
+	struct inode *f_inode;
+};
+
 /* full trusted: these fields are trusted even outside of RCU CS and never NULL */
 BTF_TYPE_SAFE_TRUSTED(struct bpf_iter_meta) {
 	struct seq_file *seq;
@@ -6593,6 +6598,7 @@ static bool type_is_rcu_or_null(struct bpf_verifier_env *env,
 	BTF_TYPE_EMIT(BTF_TYPE_SAFE_RCU_OR_NULL(struct mm_struct));
 	BTF_TYPE_EMIT(BTF_TYPE_SAFE_RCU_OR_NULL(struct sk_buff));
 	BTF_TYPE_EMIT(BTF_TYPE_SAFE_RCU_OR_NULL(struct request_sock));
+	BTF_TYPE_EMIT(BTF_TYPE_SAFE_RCU_OR_NULL(struct file));
 
 	return btf_nested_type_is_trusted(&env->log, reg, field_name, btf_id, "__safe_rcu_or_null");
 }
@@ -6798,10 +6804,14 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 		 *
 		 * A regular RCU-protected pointer with __rcu tag can also be deemed
 		 * trusted if we are in an RCU CS. Such pointer can be NULL.
+		 *
+		 * If the parent is not trusted, the field can't regain trusted status.
 		 */
-		if (type_is_trusted(env, reg, field_name, btf_id)) {
+		bool trusted = is_trusted_reg(env, reg);
+
+		if (trusted && type_is_trusted(env, reg, field_name, btf_id)) {
 			flag |= PTR_TRUSTED;
-		} else if (type_is_trusted_or_null(env, reg, field_name, btf_id)) {
+		} else if (trusted && type_is_trusted_or_null(env, reg, field_name, btf_id)) {
 			flag |= PTR_TRUSTED | PTR_MAYBE_NULL;
 		} else if (in_rcu_cs(env) && !type_may_be_null(reg->type)) {
 			if (type_is_rcu(env, reg, field_name, btf_id)) {
