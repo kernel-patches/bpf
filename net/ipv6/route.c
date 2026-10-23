@@ -5416,6 +5416,7 @@ static int ip6_route_multipath_add(struct fib6_config *cfg,
 	struct fib6_info *rt_notif = NULL, *rt_last = NULL;
 	struct nl_info *info = &cfg->fc_nlinfo;
 	struct rt6_nh *nh, *nh_safe;
+	struct fib6_table *table;
 	struct fib6_config r_cfg;
 	struct rtnexthop *rtnh;
 	LIST_HEAD(rt6_nh_list);
@@ -5502,10 +5503,12 @@ static int ip6_route_multipath_add(struct fib6_config *cfg,
 	 */
 	info->skip_notify_kernel = 1;
 
+	table = rt->fib6_table;
+	spin_lock_bh(&table->tb6_lock);
+
 	err_nh = NULL;
 	list_for_each_entry(nh, &rt6_nh_list, list) {
-		err = __ip6_ins_rt(nh->fib6_info, info, extack);
-
+		err = fib6_add(&table->tb6_root, nh->fib6_info, info, extack);
 		if (err) {
 			if (replace && nhn)
 				NL_SET_ERR_MSG_MOD(extack,
@@ -5560,11 +5563,12 @@ static int ip6_route_multipath_add(struct fib6_config *cfg,
 
 	/* success ... tell user about new route */
 	ip6_route_mpath_notify(rt_notif, rt_last, info, nlflags);
+	spin_unlock_bh(&table->tb6_lock);
 	goto cleanup;
 
 add_errout:
 	/* send notification for routes that were added so that
-	 * the delete notifications sent by ip6_route_del are
+	 * the delete notifications sent by fib6_del() are
 	 * coherent
 	 */
 	if (rt_notif)
@@ -5574,8 +5578,10 @@ add_errout:
 	list_for_each_entry(nh, &rt6_nh_list, list) {
 		if (err_nh == nh)
 			break;
-		ip6_route_del(&nh->r_cfg, extack);
+		fib6_del(nh->fib6_info, &nh->r_cfg.fc_nlinfo,
+			 RT_DEL_REASON_UNSPEC);
 	}
+	spin_unlock_bh(&table->tb6_lock);
 
 cleanup:
 	list_for_each_entry_safe(nh, nh_safe, &rt6_nh_list, list) {
