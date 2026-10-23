@@ -480,7 +480,7 @@ __bpf_kfunc int bpf_sock_read_xattr(struct socket *sock, const char *name__str,
 
 /**
  * bpf_real_data_inode - get the real inode hosting a file's data
- * @file: file to resolve
+ * @file__derives_ret: file to resolve, which keeps the returned inode alive
  *
  * Resolve @file to the inode that hosts its data. For a regular file on a
  * union/overlay filesystem this is the underlying (upper or lower) inode that
@@ -491,11 +491,14 @@ __bpf_kfunc int bpf_sock_read_xattr(struct socket *sock, const char *name__str,
  * inode itself is returned; for any file on a non-union filesystem the inode
  * attached to @file is returned.
  *
+ * The returned inode is only valid for as long as the file is: a program
+ * that acquired the file must not use the inode after releasing it.
+ *
  * Return: The inode hosting @file's data, or NULL.
  */
-__bpf_kfunc struct inode *bpf_real_data_inode(struct file *file)
+__bpf_kfunc struct inode *bpf_real_data_inode(struct file *file__derives_ret)
 {
-	return d_real_inode(file_dentry(file));
+	return d_real_inode(file_dentry(file__derives_ret));
 }
 
 __bpf_kfunc_end_defs();
