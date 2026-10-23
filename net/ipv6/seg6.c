@@ -447,18 +447,28 @@ static int __net_init seg6_net_init(struct net *net)
 	return 0;
 }
 
+static void __net_exit seg6_net_pre_exit(struct net *net)
+{
+	struct seg6_pernet_data *sdata = seg6_pernet(net);
+
+	/* Save tun_src for exit to free after the RCU grace period. */
+	sdata->tun_src_old = rcu_dereference_raw(sdata->tun_src);
+	RCU_INIT_POINTER(sdata->tun_src, NULL);
+}
+
 static void __net_exit seg6_net_exit(struct net *net)
 {
 	struct seg6_pernet_data *sdata = seg6_pernet(net);
 
 	seg6_hmac_net_exit(net);
 
-	kfree(rcu_dereference_raw(sdata->tun_src));
+	kfree(sdata->tun_src_old);
 	kfree(sdata);
 }
 
 static struct pernet_operations ip6_segments_ops = {
 	.init = seg6_net_init,
+	.pre_exit = seg6_net_pre_exit,
 	.exit = seg6_net_exit,
 };
 
