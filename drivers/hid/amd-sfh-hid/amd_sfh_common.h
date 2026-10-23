@@ -85,7 +85,7 @@ struct amd_mp2_ops {
 	void (*stop)(struct amd_mp2_dev *privdata, u16 sensor_idx);
 	void (*stop_all)(struct amd_mp2_dev *privdata);
 	int (*response)(struct amd_mp2_dev *mp2, u8 sid, u32 sensor_sts);
-	void (*clear_intr)(struct amd_mp2_dev *privdata);
+	bool (*clear_intr)(struct amd_mp2_dev *privdata);
 	int (*init_intr)(struct amd_mp2_dev *privdata);
 	int (*discovery_status)(struct amd_mp2_dev *privdata);
 	void (*suspend)(struct amd_mp2_dev *mp2);
@@ -100,9 +100,9 @@ struct amd_mp2_ops {
 
 void amd_sfh_work(struct work_struct *work);
 void amd_sfh_work_buffer(struct work_struct *work);
-void amd_sfh_clear_intr_v2(struct amd_mp2_dev *privdata);
+bool amd_sfh_clear_intr_v2(struct amd_mp2_dev *privdata);
 int amd_sfh_irq_init_v2(struct amd_mp2_dev *privdata);
-void amd_sfh_clear_intr(struct amd_mp2_dev *privdata);
+bool amd_sfh_clear_intr(struct amd_mp2_dev *privdata);
 int amd_sfh_irq_init(struct amd_mp2_dev *privdata);
 
 static inline u64 amd_get_c2p_val(struct amd_mp2_dev *mp2, u32 idx)
