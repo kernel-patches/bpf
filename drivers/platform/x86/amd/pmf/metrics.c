@@ -261,7 +261,7 @@ static int amd_pmf_get_smu_metrics(struct amd_pmf_dev *dev, struct amd_pmf_npu_m
 	switch (dev->cpu_id) {
 	case PCI_DEVICE_ID_AMD_1AH_M20H_ROOT:
 	case PCI_DEVICE_ID_AMD_1AH_M60H_ROOT:
-		ret = amd_pmf_set_dram_addr(dev, true);
+		ret = amd_pmf_set_dram_addr(dev, !dev->buf);
 		if (ret)
 			return ret;
 
