@@ -131,10 +131,28 @@ static __always_inline int buddy_cache_push(struct buddy_cache __arena *cache,
 	return 0;
 }
 
-void __arena *buddy_cache_alloc(struct buddy __arena *buddy, size_t order)
+/*
+ * Refill an empty cache with one trip to the buddy allocator. Kept out of line
+ * so that cache hits do not pay for the refill path.
+ */
+static __noinline void __arena *
+buddy_cache_refill(struct buddy __arena *buddy, struct buddy_cache __arena *cache,
+		   size_t size, int order)
+{
+	struct buddy_cache_order __arena *slots = &cache->orders[order];
+
+	if (buddy_alloc_bulk(buddy, size, BUDDY_CACHE_BATCH_ORDER,
+			     (void __arena * __arena *)slots->objects))
+		return NULL;
+
+	WRITE_ONCE(slots->elems, BUDDY_CACHE_BATCH_SIZE - 1);
+	return slots->objects[BUDDY_CACHE_BATCH_SIZE - 1];
+}
+
+void __arena *buddy_cache_alloc(struct buddy __arena *buddy, size_t size, size_t order)
 {
 	struct buddy_cache __arena *cache;
-	void __arena *address = NULL;
+	void __arena *address;
 
 	if (!buddy_order_cached(order))
 		return NULL;
@@ -143,7 +161,11 @@ void __arena *buddy_cache_alloc(struct buddy __arena *buddy, size_t order)
 	if (!cache)
 		return NULL;
 
+	/* NMIs cannot take the buddy lock, so they only use what is already cached. */
 	address = buddy_cache_pop(cache, order);
+	if (!address && !bpf_in_nmi())
+		address = buddy_cache_refill(buddy, cache, size, order);
+
 	buddy_cache_exit(cache);
 
 	return address;
@@ -1060,7 +1082,7 @@ void __arena *buddy_alloc(struct buddy __arena *buddy, size_t size)
 		return NULL;
 
 	order = size_to_order(size);
-	address = buddy_cache_alloc(buddy, order);
+	address = buddy_cache_alloc(buddy, size, order);
 	if (address)
 		return address;
 
