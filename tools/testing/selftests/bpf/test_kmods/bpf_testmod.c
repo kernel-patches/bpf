@@ -1073,9 +1073,9 @@ __bpf_kfunc int bpf_kfunc_call_test2(struct sock *sk, u32 a, u32 b)
 	return a + b;
 }
 
-__bpf_kfunc struct sock *bpf_kfunc_call_test3(struct sock *sk)
+__bpf_kfunc struct sock *bpf_kfunc_call_test3(struct sock *sk__derives_ret)
 {
-	return sk;
+	return sk__derives_ret;
 }
 
 __bpf_kfunc long noinline bpf_kfunc_call_test4(signed char a, short b, int c, long d)

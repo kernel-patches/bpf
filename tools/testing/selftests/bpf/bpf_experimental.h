@@ -65,6 +65,15 @@ extern struct file *bpf_get_task_exe_file(struct task_struct *task) __ksym;
 extern void bpf_put_file(struct file *file) __ksym;
 
 /* Description
+ *	Resolve the supplied file to the inode hosting its data. The supplied
+ *	file must be trusted/referenced; the inode is valid only as long as
+ *	the file is.
+ * Returns
+ *	The inode hosting the file's data, or NULL.
+ */
+extern struct inode *bpf_real_data_inode(struct file *file) __ksym;
+
+/* Description
  *	Resolve a pathname for the supplied path and store it in the supplied
  *	buffer. The supplied path must be trusted/referenced.
  * Returns
