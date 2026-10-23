@@ -31,6 +31,7 @@
 #include <linux/bpf.h>
 #include <linux/btf.h>
 #include <linux/filter.h>
+#include <linux/fs.h>
 #include <linux/limits.h>
 #include <linux/perf_event.h>
 #include <linux/bpf_perf_event.h>
@@ -57,6 +58,23 @@
 
 #ifndef BPF_FS_MAGIC
 #define BPF_FS_MAGIC		0xcafe4a11
+#endif
+
+#ifndef KALLSYMS_QUERY
+/* 'f' corresponds to PROCFS_IOCTL_MAGIC (include/uapi/linux/fs.h) */
+#define KALLSYMS_QUERY		_IOWR('f', 18, struct kallsyms_query)
+
+enum kallsyms_query_flags {
+	KALLSYMS_QUERY_BY_SYMBOL = 0x01,
+};
+
+struct kallsyms_query {
+	__u64 size;
+	__u64 query_flags;
+	__u64 sym_name_addr;
+	__u64 sym_addr;
+	__u64 sym_name_size;
+};
 #endif
 
 #define MAX_EVENT_NAME_LEN	64
@@ -9644,8 +9662,64 @@ static int kallsyms_cb(unsigned long long sym_addr, char sym_type,
 	return 0;
 }
 
-static int bpf_object__read_kallsyms_file(struct bpf_object *obj)
+static int bpf_object__query_ksyms(struct bpf_object *obj)
 {
+	struct kallsyms_query q;
+	struct extern_desc *ext;
+	int err = 0;
+	int fd;
+	int i;
+
+	fd = open("/proc/kallsyms", O_RDONLY | O_CLOEXEC);
+	if (fd < 0)
+		return -errno;
+
+	for (i = 0; i < obj->nr_extern; i++) {
+		ext = &obj->externs[i];
+		if (ext->type != EXT_KSYM || ext->ksym.type_id)
+			continue;
+
+		q = (struct kallsyms_query){
+			.size = sizeof(q),
+			.query_flags = KALLSYMS_QUERY_BY_SYMBOL,
+			.sym_name_addr = ptr_to_u64(ext->name),
+		};
+
+		if (ioctl(fd, KALLSYMS_QUERY, &q) < 0) {
+			err = -errno;
+			if (err == -ENOENT) {
+				err = 0;
+				continue;
+			}
+			if (err == -EADDRNOTAVAIL)
+				pr_warn("extern (ksym) '%s': resolution is ambiguous\n",
+					ext->name);
+			break;
+		}
+		ext->is_set = true;
+		ext->ksym.addr = q.sym_addr;
+		pr_debug("extern (ksym) '%s': resolved in kernel to 0x%llx\n",
+			 ext->name, ext->ksym.addr);
+	}
+	close(fd);
+	return err;
+}
+
+static int bpf_object__resolve_typeless_ksyms(struct bpf_object *obj)
+{
+	int err;
+
+	err = bpf_object__query_ksyms(obj);
+	/*
+	 * Fall back to parsing /proc/kallsyms only if the ioctl is not
+	 * accessible: not present (-ENOTTY on older kernels) or kallsyms
+	 * addresses hidden from this opener (-EPERM, e.g. kptr_restrict).
+	 */
+	if (err != -ENOTTY && err != -EPERM)
+		return err;
+
+	pr_debug("KALLSYMS_QUERY unavailable (%s), falling back to /proc/kallsyms\n",
+		 errstr(err));
 	return libbpf_kallsyms_parse(kallsyms_cb, obj);
 }
 
@@ -9922,7 +9996,7 @@ static int bpf_object__resolve_externs(struct bpf_object *obj,
 			return -EINVAL;
 	}
 	if (need_kallsyms) {
-		err = bpf_object__read_kallsyms_file(obj);
+		err = bpf_object__resolve_typeless_ksyms(obj);
 		if (err)
 			return -EINVAL;
 	}
