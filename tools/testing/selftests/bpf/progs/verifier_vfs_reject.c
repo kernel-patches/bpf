@@ -173,4 +173,55 @@ int BPF_PROG(inode_rename, struct inode *old_dir, struct dentry *old_dentry,
 		return -EACCES;
 	return 0;
 }
+
+__weak int subprog_trusted_inode(struct inode *inode __arg_trusted)
+{
+	return inode->i_ino;
+}
+
+SEC("lsm.s/bprm_committed_creds")
+__failure __msg("invalid mem access 'rcu_ptr_or_null_'")
+int BPF_PROG(trusted_field_of_rcu_parent_unchecked, struct linux_binprm *bprm)
+{
+	struct mm_struct *mm = bprm->mm;
+	struct file *file;
+	ino_t ino = 0;
+
+	if (!mm)
+		return 0;
+
+	bpf_rcu_read_lock();
+	file = mm->exe_file;
+	/* The file may have been recycled under RCU: f_inode can be NULL. */
+	if (file)
+		ino = file->f_inode->i_ino;
+	bpf_rcu_read_unlock();
+	__sink(ino);
+	return 0;
+}
+
+SEC("lsm.s/bprm_committed_creds")
+__failure __msg("R1 type=untrusted_ptr_ expected=ptr_, trusted_ptr_, rcu_ptr_")
+int BPF_PROG(trusted_field_escapes_rcu_cs, struct linux_binprm *bprm)
+{
+	struct mm_struct *mm = bprm->mm;
+	struct inode *inode;
+	struct file *file;
+
+	if (!mm)
+		return 0;
+
+	bpf_rcu_read_lock();
+	file = mm->exe_file;
+	if (!file) {
+		bpf_rcu_read_unlock();
+		return 0;
+	}
+	inode = file->f_inode;
+	bpf_rcu_read_unlock();
+
+	/* inode is an RCU pointer like file and is untrusted after unlock. */
+	subprog_trusted_inode(inode);
+	return 0;
+}
 char _license[] SEC("license") = "GPL";
