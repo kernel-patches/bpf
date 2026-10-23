@@ -622,6 +622,7 @@ static int pppoe_connect(struct socket *sock, struct sockaddr_unsized *uservaddr
 			dev_put(po->pppoe_dev);
 			po->pppoe_dev = NULL;
 		}
+		synchronize_net();
 
 		po->pppoe_ifindex = 0;
 		memset(&po->pppoe_pa, 0, sizeof(po->pppoe_pa));
