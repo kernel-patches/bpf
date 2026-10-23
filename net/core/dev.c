@@ -1648,6 +1648,12 @@ int dev_get_alias(const struct net_device *dev, char *name, size_t len)
 void netdev_features_change(struct net_device *dev)
 {
 	call_netdevice_notifiers(NETDEV_FEAT_CHANGE, dev);
+
+	/* Uppers reacting to the notification couldn't take our instance
+	 * lock to disable features they lack, do it now.
+	 */
+	if (__netdev_work_core_cancel(dev, NETDEV_WORK_SYNC_UPPERS))
+		netif_sync_upper_disables(dev);
 }
 EXPORT_SYMBOL(netdev_features_change);
 
@@ -11085,6 +11091,28 @@ static netdev_features_t netdev_sync_upper_features(struct net_device *lower,
 	return features;
 }
 
+/* Disable the features of @dev which any of its upper devices has disabled,
+ * deferred from netdev_sync_lower_features().
+ */
+void netif_sync_upper_disables(struct net_device *dev)
+{
+	netdev_features_t disable = 0;
+	struct net_device *upper;
+	struct list_head *iter;
+
+	netdev_for_each_upper_dev_rcu(dev, upper, iter)
+		disable |= ~upper->features;
+	disable &= NETIF_F_UPPER_DISABLES & dev->features;
+	if (!disable)
+		return;
+
+	dev->wanted_features &= ~disable;
+	netdev_update_features(dev);
+
+	if (unlikely(dev->features & disable))
+		netdev_WARN(dev, "failed to disable %pNF!\n", &disable);
+}
+
 static void netdev_sync_lower_features(struct net_device *upper,
 	struct net_device *lower, netdev_features_t features)
 {
@@ -11097,7 +11125,16 @@ static void netdev_sync_lower_features(struct net_device *upper,
 		if (!(features & feature) && (lower->features & feature)) {
 			netdev_dbg(upper, "Disabling feature %pNF on lower dev %s.\n",
 				   &feature, lower->name);
-			netdev_lock_ops(lower);
+			/* The caller may hold the lower's instance lock already,
+			 * e.g. when the upper reacts to NETDEV_FEAT_CHANGE of
+			 * the lower. Don't wait for it, let netdev_work disable
+			 * the feature instead.
+			 */
+			if (netdev_need_ops_lock(lower) && !netdev_trylock(lower)) {
+				__netdev_work_core_sched(lower,
+							 NETDEV_WORK_SYNC_UPPERS);
+				continue;
+			}
 			lower->wanted_features &= ~feature;
 			__netdev_update_features(lower);
 
