@@ -1325,10 +1325,13 @@ static int iucv_sock_recvmsg(struct socket *sock, struct msghdr *msg,
 		}
 
 		consume_skb(skb);
-		if (iucv->transport == AF_IUCV_TRANS_HIPER) {
+		/* The peer counts only the data it sends against its window;
+		 * the SHT's empty frame is not among them. Over the window,
+		 * close without a WARN: a peer reaches this from the network.
+		 */
+		if (iucv->transport == AF_IUCV_TRANS_HIPER && rlen) {
 			atomic_inc(&iucv->msg_recv);
 			if (atomic_read(&iucv->msg_recv) > iucv->msglimit) {
-				WARN_ON(1);
 				iucv_sock_close(sk);
 				return -EFAULT;
 			}
