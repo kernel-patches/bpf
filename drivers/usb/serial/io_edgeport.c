@@ -810,20 +810,13 @@ static void edge_bulk_out_cmd_callback(struct urb *urb)
 static int edge_open(struct tty_struct *tty, struct usb_serial_port *port)
 {
 	struct edgeport_port *edge_port = usb_get_serial_port_data(port);
+	struct usb_serial *serial = port->serial;
+	struct edgeport_serial *edge_serial = usb_get_serial_data(serial);
 	struct device *dev = &port->dev;
-	struct usb_serial *serial;
-	struct edgeport_serial *edge_serial;
 	int response;
-
-	if (edge_port == NULL)
-		return -ENODEV;
 
 	/* see if we've set up our endpoint info yet (can't set it up
 	   in edge_startup as the structures were not set up at that time.) */
-	serial = port->serial;
-	edge_serial = usb_get_serial_data(serial);
-	if (edge_serial == NULL)
-		return -ENODEV;
 	if (edge_serial->interrupt_in_buffer == NULL) {
 		struct usb_serial_port *port0 = serial->port[0];
 
@@ -1052,14 +1045,9 @@ static void block_until_tx_empty(struct edgeport_port *edge_port)
  *****************************************************************************/
 static void edge_close(struct usb_serial_port *port)
 {
-	struct edgeport_serial *edge_serial;
-	struct edgeport_port *edge_port;
+	struct edgeport_serial *edge_serial = usb_get_serial_data(port->serial);
+	struct edgeport_port *edge_port = usb_get_serial_port_data(port);
 	int status;
-
-	edge_serial = usb_get_serial_data(port->serial);
-	edge_port = usb_get_serial_port_data(port);
-	if (edge_serial == NULL || edge_port == NULL)
-		return;
 
 	/* block until tx is empty */
 	block_until_tx_empty(edge_port);
@@ -1124,9 +1112,6 @@ static int edge_write(struct tty_struct *tty, struct usb_serial_port *port,
 	int firsthalf;
 	int secondhalf;
 	unsigned long flags;
-
-	if (edge_port == NULL)
-		return -ENODEV;
 
 	/* get a pointer to the Tx fifo */
 	fifo = &edge_port->txfifo;
@@ -1384,9 +1369,6 @@ static void edge_throttle(struct tty_struct *tty)
 	struct edgeport_port *edge_port = usb_get_serial_port_data(port);
 	int status;
 
-	if (edge_port == NULL)
-		return;
-
 	if (!edge_port->open) {
 		dev_dbg(&port->dev, "%s - port not opened\n", __func__);
 		return;
@@ -1423,9 +1405,6 @@ static void edge_unthrottle(struct tty_struct *tty)
 	struct usb_serial_port *port = tty->driver_data;
 	struct edgeport_port *edge_port = usb_get_serial_port_data(port);
 	int status;
-
-	if (edge_port == NULL)
-		return;
 
 	if (!edge_port->open) {
 		dev_dbg(&port->dev, "%s - port not opened\n", __func__);
