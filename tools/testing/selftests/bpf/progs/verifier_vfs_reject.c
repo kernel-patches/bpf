@@ -224,4 +224,26 @@ int BPF_PROG(trusted_field_escapes_rcu_cs, struct linux_binprm *bprm)
 	subprog_trusted_inode(inode);
 	return 0;
 }
+
+SEC("lsm.s/file_open")
+__failure __msg("invalid mem access 'scalar'")
+int BPF_PROG(derived_inode_outlives_parent_reference)
+{
+	struct task_struct *task = bpf_get_current_task_btf();
+	struct file *file = bpf_get_task_exe_file(task);
+	struct inode *inode;
+
+	if (!file)
+		return 0;
+
+	inode = bpf_real_data_inode(file);
+	if (!inode) {
+		bpf_put_file(file);
+		return 0;
+	}
+	bpf_put_file(file);
+
+	/* inode was derived from file's reference and died with it. */
+	return inode->i_mode;
+}
 char _license[] SEC("license") = "GPL";

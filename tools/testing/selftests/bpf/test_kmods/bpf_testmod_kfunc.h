@@ -230,7 +230,7 @@ int bpf_testmod_ops3_call_test_nullable(void) __ksym;
 __u64 bpf_kfunc_call_test1(struct sock *sk, __u32 a, __u64 b,
 				__u32 c, __u64 d) __ksym;
 int bpf_kfunc_call_test2(struct sock *sk, __u32 a, __u32 b) __ksym;
-struct sock *bpf_kfunc_call_test3(struct sock *sk) __ksym;
+struct sock *bpf_kfunc_call_test3(struct sock *sk__derives_ret) __ksym;
 long bpf_kfunc_call_test4(signed char a, short b, int c, long d) __ksym;
 int bpf_kfunc_call_test5(__u8 a, __u16 b, __u32 c) __ksym;
 #ifdef __SIZEOF_INT128__
