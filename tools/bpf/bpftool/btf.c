@@ -1092,22 +1092,61 @@ static struct sort_datum *sort_btf_c(const struct btf *btf)
 	return datums;
 }
 
-static int dump_btf_c(const struct btf *btf,
+static int btf_c_annotate_records(struct btf *btf)
+{
+	__u32 i, cnt = btf__type_cnt(btf);
+	int err;
+
+	for (i = 1; i < cnt; i++) {
+		const struct btf_type *t = btf__type_by_id(btf, i);
+
+		if (!btf_is_composite(t))
+			continue;
+		err = btf__add_decl_attr(btf, "__bpf_relocatable", i, -1);
+		if (err < 0)
+			return err;
+	}
+
+	return 0;
+}
+
+static int dump_btf_c(struct btf *btf,
 		      __u32 *root_type_ids, int root_type_cnt, bool sort_dump)
 {
 	struct sort_datum *datums = NULL;
-	struct btf_dump *d;
+	struct btf_dump *d = NULL;
+	struct btf *split;
+	size_t ptr_sz;
 	int err = 0, i;
 
-	d = btf_dump__new(btf, btf_dump_printf, NULL, NULL);
-	if (!d)
+	split = btf__new_empty_split(btf);
+	if (!split)
 		return -errno;
+
+	/* Retain the native default if the pointer size cannot be inferred. */
+	ptr_sz = btf__pointer_size(btf);
+	if (ptr_sz)
+		btf__set_pointer_size(split, ptr_sz);
+
+	err = btf_c_annotate_records(split);
+	if (err)
+		goto done;
+
+	d = btf_dump__new(split, btf_dump_printf, NULL, NULL);
+	if (!d) {
+		err = -errno;
+		goto done;
+	}
 
 	printf("#ifndef __VMLINUX_H__\n");
 	printf("#define __VMLINUX_H__\n");
 	printf("\n");
-	printf("#ifndef BPF_NO_PRESERVE_ACCESS_INDEX\n");
-	printf("#pragma clang attribute push (__attribute__((preserve_access_index)), apply_to = record)\n");
+	printf("#ifndef __bpf_relocatable\n");
+	printf("#if !defined(BPF_NO_PRESERVE_ACCESS_INDEX) && __has_attribute(preserve_access_index)\n");
+	printf("#define __bpf_relocatable preserve_access_index\n");
+	printf("#else\n");
+	printf("#define __bpf_relocatable\n");
+	printf("#endif\n");
 	printf("#endif\n\n");
 	printf("#ifndef __ksym\n");
 	printf("#define __ksym __attribute__((section(\".ksyms\")))\n");
@@ -1130,10 +1169,10 @@ static int dump_btf_c(const struct btf *btf,
 				goto done;
 		}
 	} else {
-		int cnt = btf__type_cnt(btf);
+		int cnt = btf__type_cnt(split);
 
 		if (sort_dump)
-			datums = sort_btf_c(btf);
+			datums = sort_btf_c(split);
 		for (i = 0; i < cnt; i++) {
 			int idx = datums ? datums[i].index : i;
 
@@ -1146,20 +1185,17 @@ static int dump_btf_c(const struct btf *btf,
 				goto done;
 		}
 
-		err = dump_btf_kfuncs(d, btf);
+		err = dump_btf_kfuncs(d, split);
 		if (err)
 			goto done;
 	}
 
-	printf("#ifndef BPF_NO_PRESERVE_ACCESS_INDEX\n");
-	printf("#pragma clang attribute pop\n");
-	printf("#endif\n");
-	printf("\n");
 	printf("#endif /* __VMLINUX_H__ */\n");
 
 done:
 	free(datums);
 	btf_dump__free(d);
+	btf__free(split);
 	return err;
 }
 
