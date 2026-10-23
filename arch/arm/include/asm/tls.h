@@ -5,7 +5,7 @@
 #include <linux/compiler.h>
 #include <asm/thread_info.h>
 
-#ifdef __ASSEMBLY__
+#ifdef __ASSEMBLER__
 #include <asm/asm-offsets.h>
 	.macro switch_tls_none, base, tp, tpuser, tmp1, tmp2
 	.endm
@@ -68,7 +68,7 @@ ALT_UP_B(.L0_\@)
 #define switch_tls	switch_tls_software
 #endif
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 static inline void set_tls(unsigned long val)
 {

@@ -89,10 +89,10 @@
 #define	V7M_SCB_DCCISW		0x274	/* D-cache clean and invalidate by set-way */
 #define	V7M_SCB_BPIALL		0x278	/* D-cache clean and invalidate by set-way */
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 enum reboot_mode;
 
 void armv7m_restart(enum reboot_mode mode, const char *cmd);
 
-#endif /* __ASSEMBLY__ */
+#endif /* __ASSEMBLER__ */

@@ -5,7 +5,7 @@
 #ifndef __ASM_VDSO_CP15_H
 #define __ASM_VDSO_CP15_H
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 #ifdef CONFIG_CPU_CP15
 
@@ -33,6 +33,6 @@
 
 #endif /* CONFIG_CPU_CP15 */
 
-#endif /* __ASSEMBLY__ */
+#endif /* __ASSEMBLER__ */
 
 #endif /* __ASM_VDSO_CP15_H */

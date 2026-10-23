@@ -6,7 +6,7 @@
 #ifndef __ASM_ARM_OPCODES_H
 #define __ASM_ARM_OPCODES_H
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 #include <linux/linkage.h>
 extern asmlinkage unsigned int arm_check_condition(u32 opcode, u32 psr);
 #endif
@@ -71,7 +71,7 @@ extern asmlinkage unsigned int arm_check_condition(u32 opcode, u32 psr);
  * involving inline assembler.  For .S files, the normal __opcode_*() macros
  * should do the right thing.
  */
-#ifdef __ASSEMBLY__
+#ifdef __ASSEMBLER__
 
 #define ___opcode_swab32(x) ___asm_opcode_swab32(x)
 #define ___opcode_swab16(x) ___asm_opcode_swab16(x)
@@ -80,7 +80,7 @@ extern asmlinkage unsigned int arm_check_condition(u32 opcode, u32 psr);
 #define ___opcode_identity32(x) ___asm_opcode_identity32(x)
 #define ___opcode_identity16(x) ___asm_opcode_identity16(x)
 
-#else /* ! __ASSEMBLY__ */
+#else /* ! __ASSEMBLER__ */
 
 #include <linux/types.h>
 #include <linux/swab.h>
@@ -92,7 +92,7 @@ extern asmlinkage unsigned int arm_check_condition(u32 opcode, u32 psr);
 #define ___opcode_identity32(x) ((u32)(x))
 #define ___opcode_identity16(x) ((u16)(x))
 
-#endif /* ! __ASSEMBLY__ */
+#endif /* ! __ASSEMBLER__ */
 
 
 #ifdef CONFIG_CPU_ENDIAN_BE8
@@ -111,7 +111,7 @@ extern asmlinkage unsigned int arm_check_condition(u32 opcode, u32 psr);
 #define ___asm_opcode_to_mem_arm(x) ___asm_opcode_identity32(x)
 #define ___asm_opcode_to_mem_thumb16(x) ___asm_opcode_identity16(x)
 #ifdef CONFIG_CPU_ENDIAN_BE32
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 /*
  * On BE32 systems, using 32-bit accesses to store Thumb instructions will not
  * work in all cases, due to alignment constraints.  For now, a correct
@@ -219,7 +219,7 @@ extern __u32 __opcode_to_mem_thumb32(__u32);
 #endif
 
 /* Helpers for the helpers.  Don't use these directly. */
-#ifdef __ASSEMBLY__
+#ifdef __ASSEMBLER__
 #define ___inst_arm(x) .long x
 #define ___inst_thumb16(x) .short x
 #define ___inst_thumb32(first, second) .short first, second

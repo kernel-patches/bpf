@@ -168,7 +168,7 @@
 #define L_PTE_MT_VECTORS	(_AT(pteval_t, 0x0f) << 2)	/* 1111 */
 #define L_PTE_MT_MASK		(_AT(pteval_t, 0x0f) << 2)
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 /*
  * The "pud_xxx()" functions here are trivial when the pmd is folded into
@@ -235,6 +235,6 @@ static inline pmd_t *pmd_offset(pud_t *pud, unsigned long addr)
  */
 #define pmd_hugewillfault(pmd)	(0)
 
-#endif /* __ASSEMBLY__ */
+#endif /* __ASSEMBLER__ */
 
 #endif /* _ASM_PGTABLE_2LEVEL_H */
