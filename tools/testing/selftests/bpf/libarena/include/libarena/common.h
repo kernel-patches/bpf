@@ -22,6 +22,10 @@
 #define __maybe_unused __attribute__((__unused__))
 #endif
 
+#ifndef min
+#define min(a, b) ((a) < (b) ? (a) : (b))
+#endif
+
 #define private(name) SEC(".data." #name) __hidden __attribute__((aligned(8)))
 
 #define ARENA_PAGES (1UL << (32 - __builtin_ffs(__PAGE_SIZE) + 1))
