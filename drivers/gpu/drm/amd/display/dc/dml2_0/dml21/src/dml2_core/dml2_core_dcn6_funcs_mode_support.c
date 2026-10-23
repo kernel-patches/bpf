@@ -1018,6 +1018,7 @@ static void dcn6_ms_calculate_num_of_dpp_required(
 				outputs->NoOfDPP[k] = 2;
 			}
 		}
+		outputs->effective_number_of_dpp[k] = outputs->NoOfDPP[k];
 		DML_LOG_VERBOSE("DML::%s: k=%d, NoOfDPP = %d\n", __func__, k,
 			outputs->NoOfDPP[k]);
 	}
@@ -2205,7 +2206,7 @@ void dcn6_ms_calculate_min_dcfclk_deepsleep_clock(
 			inputs->BytePerPixelC,
 			inputs->SwathWidthY,
 			inputs->SwathWidthC,
-			inputs->NoOfDPP,
+			inputs->effective_number_of_dpp,
 			inputs->PSCL_FACTOR,
 			inputs->PSCL_FACTOR_CHROMA,
 			inputs->RequiredDPPCLK,
@@ -2742,7 +2743,7 @@ void dcn6_ms_calculate_urgent_latency(
 			ip->pixel_chunk_size_kbytes,
 			inputs->min_available_urgent_bandwidth_MBps,
 			display_cfg->num_planes,
-			inputs->NoOfDPP,
+			inputs->effective_number_of_dpp,
 			inputs->dpte_group_bytes,
 			inputs->tdlut_bytes_per_group,
 			inputs->HostVMInefficiencyFactor,
@@ -3781,7 +3782,7 @@ void dcn6_ms_calculate_watermarks(
 	//CalculateWatermarks_params->LBBitPerPixel = 57; // FIXME_STAGE2, need a new ip param?
 	p->SwathWidthY = inputs->SwathWidthY;
 	p->SwathWidthC = inputs->SwathWidthC;
-	p->DPPPerSurface = inputs->NoOfDPP;
+	p->DPPPerSurface = inputs->effective_number_of_dpp;
 	p->BytePerPixelDETY = inputs->BytePerPixelInDETY;
 	p->BytePerPixelDETC = inputs->BytePerPixelInDETC;
 	p->DSTXAfterScaler = inputs->DSTXAfterScaler;

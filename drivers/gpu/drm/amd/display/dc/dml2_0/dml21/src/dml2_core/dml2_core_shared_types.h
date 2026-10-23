@@ -586,6 +586,7 @@ struct dml2_core_internal_mode_support {
 	double surface_avg_vactive_required_bw[dml2_core_internal_soc_state_max][dml2_core_internal_bw_max][DML2_MAX_PLANES];
 	double surface_peak_required_bw[dml2_core_internal_soc_state_max][dml2_core_internal_bw_max][DML2_MAX_PLANES];
 
+	unsigned int effective_number_of_dpp[DML2_MAX_PLANES];
 	// Something that should be feedback to caller
 	enum dml2_odm_mode ODMMode[DML2_MAX_PLANES];
 	unsigned int SurfaceSizeInMALL[DML2_MAX_PLANES];
@@ -779,6 +780,7 @@ struct dml2_core_internal_mode_program {
 	double prefetch_vmrow_bw[DML2_MAX_PLANES];
 	double cursor_bw[DML2_MAX_PLANES];
 	double prefetch_cursor_bw[DML2_MAX_PLANES];
+	unsigned int effective_number_of_dpp[DML2_MAX_PLANES];
 	double WritebackDelay[DML2_MAX_PLANES];
 	unsigned int dpte_row_height[DML2_MAX_PLANES];
 	unsigned int dpte_row_height_linear[DML2_MAX_PLANES];

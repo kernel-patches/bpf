@@ -101,7 +101,7 @@ static void dcn6_mp_calculate_pixel_delivery_times(struct dml2_core_calculate_mp
 	//Display Pipeline Delivery Time in Prefetch, Groups
 	get_calcs(ctx)->calculate_pixel_delivery_times(
 			display_cfg,
-			inputs->NoOfDPP,
+			inputs->effective_number_of_dpp,
 			display_cfg->num_planes,
 			inputs->VRatioPrefetchY,
 			inputs->VRatioPrefetchC,
@@ -403,7 +403,7 @@ static void dcn6_mp_calculate_stutter_efficiency(struct dml2_core_calculate_mp_c
 	p->Z8StutterEnterPlusExitWatermark = inputs->Watermark.Z8StutterEnterPlusExitWatermark;
 	p->ProgressiveToInterlaceUnitInOPP = ip->ptoi_supported;
 	p->MinTTUVBlank = inputs->MinTTUVBlank;
-	p->DPPPerSurface = inputs->NoOfDPP;
+	p->DPPPerSurface = inputs->effective_number_of_dpp;
 	p->DETBufferSizeY = inputs->DETBufferSizeY;
 	p->BytePerPixelY = inputs->BytePerPixelY;
 	p->BytePerPixelDETY = inputs->BytePerPixelInDETY;
@@ -1079,6 +1079,7 @@ void dcn6_mp_initialize_from_solution(struct dml2_core_internal_mode_program *ou
 		outputs->immediate_flip_required = outputs->immediate_flip_required
 				|| plane->immediate_flip;
 		outputs->NoOfDPP[k] = plane_support_info->dpps_used;
+		outputs->effective_number_of_dpp[k] = outputs->NoOfDPP[k];
 		outputs->dsc_enable[k] = stream_support_info->dsc_enable;
 		outputs->num_dsc_slices[k] = stream_support_info->num_dsc_slices;
 	}
