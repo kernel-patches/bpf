@@ -1209,15 +1209,20 @@ static int bcm63xx_udc_dequeue(struct usb_ep *ep, struct usb_request *req)
 	int rc = 0;
 
 	spin_lock_irqsave(&udc->lock, flags);
-	if (list_empty(&bep->queue)) {
+
+	/* Make sure the request is actually queued on this endpoint */
+	list_for_each_entry(cur, &bep->queue, queue) {
+		if (cur == breq)
+			break;
+	}
+	if (&cur->queue == &bep->queue) {
 		rc = -EINVAL;
 		goto out;
 	}
 
-	cur = list_first_entry(&bep->queue, struct bcm63xx_req, queue);
 	usb_gadget_unmap_request(&udc->gadget, &breq->req, bep->iudma->is_tx);
 
-	if (breq == cur) {
+	if (breq == list_first_entry(&bep->queue, struct bcm63xx_req, queue)) {
 		iudma_reset_channel(udc, bep->iudma);
 		list_del(&breq->queue);
 
@@ -1235,8 +1240,11 @@ static int bcm63xx_udc_dequeue(struct usb_ep *ep, struct usb_request *req)
 out:
 	spin_unlock_irqrestore(&udc->lock, flags);
 
-	req->status = -ESHUTDOWN;
-	req->complete(ep, req);
+	/* Only complete the request if it was actually removed */
+	if (rc == 0) {
+		req->status = -ESHUTDOWN;
+		req->complete(ep, req);
+	}
 
 	return rc;
 }
