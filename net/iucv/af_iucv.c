@@ -450,9 +450,16 @@ static void __iucv_sock_close(struct sock *sk)
 	}
 
 	if (iucv->hs_dev) {
-		dev_put(iucv->hs_dev);
-		iucv->hs_dev = NULL;
-		sk->sk_bound_dev_if = 0;
+		struct net_device *dev = iucv->hs_dev;
+
+		/* afiucv_hs_rcv() matches frames on hs_dev under
+		 * iucv_sk_list.lock, not the socket lock: clear it before the
+		 * reference goes, so the match can no longer find a device
+		 * this socket does not hold.
+		 */
+		WRITE_ONCE(iucv->hs_dev, NULL);
+		WRITE_ONCE(sk->sk_bound_dev_if, 0);
+		dev_put(dev);
 	}
 
 	/* mark socket for deletion by iucv_sock_kill() */
@@ -638,7 +645,7 @@ static int iucv_sock_bind(struct socket *sock, struct sockaddr_unsized *addr,
 				__iucv_auto_name(iucv);
 			else
 				memcpy(iucv->src_name, sa->siucv_name, 8);
-			sk->sk_bound_dev_if = dev->ifindex;
+			WRITE_ONCE(sk->sk_bound_dev_if, dev->ifindex);
 			iucv->hs_dev = dev;
 			dev_hold(dev);
 			sk->sk_state = IUCV_BOUND;
@@ -1920,9 +1927,14 @@ static int afiucv_hs_callback_syn(struct sock *sk, struct sk_buff *skb)
 	memcpy(niucv->dst_user_id, trans_hdr->srcUserID, 8);
 	memcpy(niucv->src_name, iucv->src_name, 8);
 	memcpy(niucv->src_user_id, iucv->src_user_id, 8);
-	nsk->sk_bound_dev_if = sk->sk_bound_dev_if;
-	niucv->hs_dev = iucv->hs_dev;
-	dev_hold(niucv->hs_dev);
+	/* skb->dev is the device the lookup matched against the listener's
+	 * hs_dev; the listener's own fields are cleared by close() under
+	 * lock_sock(), which this softirq does not hold. nsk is in
+	 * iucv_sk_list already: hold, then publish.
+	 */
+	WRITE_ONCE(nsk->sk_bound_dev_if, skb->dev->ifindex);
+	dev_hold(skb->dev);
+	WRITE_ONCE(niucv->hs_dev, skb->dev);
 	afiucv_swap_src_dest(skb);
 	trans_hdr->flags = AF_IUCV_FLAG_SYN | AF_IUCV_FLAG_ACK;
 	trans_hdr->window = niucv->msglimit;
@@ -2095,7 +2107,11 @@ static int afiucv_hs_rcv(struct sk_buff *skb, struct net_device *dev,
 	sk = NULL;
 	read_lock(&iucv_sk_list.lock);
 	sk_for_each(sk, &iucv_sk_list.head) {
-		if (iucv_sk(sk)->hs_dev != dev)
+		/* Cleared before iucv_sock_close() drops the reference:
+		 * whichever value is read is a device the socket still
+		 * holds, or NULL.
+		 */
+		if (READ_ONCE(iucv_sk(sk)->hs_dev) != dev)
 			continue;
 		if (trans_hdr->flags == AF_IUCV_FLAG_SYN) {
 			if ((!memcmp(&iucv_sk(sk)->src_name,
