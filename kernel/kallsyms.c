@@ -31,6 +31,7 @@
 #include <linux/kernel.h>
 #include <linux/bsearch.h>
 #include <linux/btf_ids.h>
+#include <linux/uaccess.h>
 
 #include "kallsyms_internal.h"
 
@@ -922,11 +923,142 @@ const char *kdb_walk_kallsyms(loff_t *pos)
 }
 #endif	/* CONFIG_KGDB_KDB */
 
+struct kallsyms_mod_find_ctx {
+	const char *name;
+	unsigned long addr;
+	bool found;
+};
+
+static int kallsyms_mod_find_cb(void *data, const char *name, unsigned long addr)
+{
+	struct kallsyms_mod_find_ctx *ctx = data;
+
+	if (strcmp(name, ctx->name) != 0)
+		return 0;
+	if (ctx->found && ctx->addr != addr)
+		return -EADDRNOTAVAIL;
+	ctx->found = true;
+	ctx->addr = addr;
+	return 0;
+}
+
+static int do_kallsyms_query(struct kallsym_iter *iter, void __user *uarg)
+{
+	char namebuf[KSYM_NAME_LEN];
+	struct kallsyms_query karg;
+	unsigned long addr;
+	unsigned int start;
+	unsigned int end;
+	unsigned int i;
+	__u64 usize;
+	long len;
+	int err;
+
+	BUILD_BUG_ON(sizeof(struct kallsyms_query) != KALLSYMS_QUERY_SIZE_VER0);
+
+	/*
+	 * The text interface shows zero addresses to openers without permission.
+	 * A zeroed point query result is useless (and an address-to-symbol query
+	 * would leak KASLR), so fail instead.
+	 */
+	if (!iter->show_value)
+		return -EPERM;
+	if (copy_from_user(&usize, uarg, sizeof(usize)))
+		return -EFAULT;
+	if (usize > PAGE_SIZE)
+		return -E2BIG;
+	if (usize < KALLSYMS_QUERY_SIZE_VER0)
+		return -EINVAL;
+
+	err = copy_struct_from_user(&karg, sizeof(karg), uarg, usize);
+	if (err)
+		return err;
+
+	switch (karg.query_flags) {
+	case KALLSYMS_QUERY_BY_SYMBOL:
+		if (karg.sym_addr || karg.sym_name_size)
+			return -EINVAL;
+
+		len = strncpy_from_user(namebuf, u64_to_user_ptr(karg.sym_name_addr),
+					sizeof(namebuf));
+		if (len < 0)
+			return len;
+		if (len == 0)
+			return -EINVAL;
+		if (len == sizeof(namebuf))
+			return -ENAMETOOLONG;
+
+		if (kallsyms_lookup_names(namebuf, &start, &end)) {
+			struct kallsyms_mod_find_ctx ctx = { .name = namebuf };
+
+			err = module_kallsyms_on_each_symbol(NULL, kallsyms_mod_find_cb, &ctx);
+			/* Check first: maps -EOPNOTSUPP (CONFIG_MODULES=n) to -ENOENT. */
+			if (!ctx.found)
+				return -ENOENT;
+			if (err)
+				return err;
+			addr = ctx.addr;
+		} else {
+			addr = kallsyms_sym_address(get_symbol_seq(start));
+			for (i = start + 1; i <= end; i++) {
+				if (kallsyms_sym_address(get_symbol_seq(i)) != addr)
+					return -EADDRNOTAVAIL;
+			}
+		}
+
+		karg.sym_addr = addr;
+		break;
+	case KALLSYMS_QUERY_BY_ADDR:
+		if (!karg.sym_name_size)
+			return -EINVAL;
+		addr = karg.sym_addr;
+		/* Reject addresses that do not fit in unsigned long (32-bit). */
+		if (addr != karg.sym_addr)
+			return -ENOENT;
+		if (!kallsyms_lookup(addr, NULL, NULL, NULL, namebuf))
+			return -ENOENT;
+
+		len = strlen(namebuf) + 1;
+		if (karg.sym_name_size < len)
+			return -ENAMETOOLONG;
+		if (copy_to_user(u64_to_user_ptr(karg.sym_name_addr), namebuf, len))
+			return -EFAULT;
+
+		karg.sym_name_size = len;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	if (copy_to_user(uarg, &karg, min_t(size_t, sizeof(karg), usize)))
+		return -EFAULT;
+
+	return 0;
+}
+
+static long kallsyms_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+	struct seq_file *m = file->private_data;
+
+	switch (_IOC_NR(cmd)) {
+	case _IOC_NR(KALLSYMS_QUERY):
+		if (!extensible_ioctl_valid(cmd, KALLSYMS_QUERY, KALLSYMS_QUERY_SIZE_VER0))
+			return -ENOIOCTLCMD;
+		return do_kallsyms_query(m->private, (void __user *)arg);
+	default:
+		return -ENOIOCTLCMD;
+	}
+}
+
 static const struct proc_ops kallsyms_proc_ops = {
 	.proc_open	= kallsyms_open,
 	.proc_read	= seq_read,
 	.proc_lseek	= seq_lseek,
 	.proc_release	= seq_release_private,
+	.proc_ioctl	= kallsyms_ioctl,
+#ifdef CONFIG_COMPAT
+	.proc_compat_ioctl = compat_ptr_ioctl,
+#endif
 };
 
 static int __init kallsyms_init(void)
