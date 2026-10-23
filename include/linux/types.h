@@ -4,7 +4,7 @@
 
 #include <uapi/linux/types.h>
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 #define DECLARE_BITMAP(name,bits) \
 	unsigned long name[BITS_TO_LONGS(bits)]
@@ -288,5 +288,5 @@ struct rcuwait {
 	struct task_struct __rcu *task;
 };
 
-#endif /*  __ASSEMBLY__ */
+#endif /*  __ASSEMBLER__ */
 #endif /* _LINUX_TYPES_H */
