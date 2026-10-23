@@ -52,6 +52,7 @@
 #define MAX_NAME_LEN		64
 
 #define OPEN_TIMEOUT		(5*HZ)		/* 5 seconds */
+#define EDGE_CMD_TIMEOUT	5000		/* milliseconds */
 
 static const struct usb_device_id edgeport_2port_id_table[] = {
 	{ USB_DEVICE(USB_VENDOR_ID_ION, ION_DEVICE_ID_EDGEPORT_2) },
@@ -181,13 +182,11 @@ struct edgeport_port {
 
 	bool			open;
 	bool			openPending;
-	bool			commandPending;
 	bool			closePending;
 	bool			chaseResponsePending;
 
 	wait_queue_head_t	wait_chase;		/* for handling sleeping while waiting for chase to finish */
 	wait_queue_head_t	wait_open;		/* for handling sleeping while waiting for open to finish */
-	wait_queue_head_t	wait_command;		/* for handling sleeping while waiting for command to finish */
 
 	struct usb_serial_port	*port;			/* loop back to the owner of this object */
 };
@@ -226,7 +225,6 @@ struct edgeport_serial {
 	__u8			rxStatusParam;			/* the receive status parameter */
 	__s16			rxBytesRemaining;		/* the number of port bytes left to read */
 	struct usb_serial	*serial;			/* loop back to the owner of this object */
-	struct usb_anchor	cmd_anchor;
 };
 
 /* baud rate information */
@@ -761,39 +759,6 @@ static void edge_bulk_out_data_callback(struct urb *urb)
 	/* Check if more data needs to be sent */
 	send_more_port_data((struct edgeport_serial *)
 		(usb_get_serial_data(edge_port->port->serial)), edge_port);
-}
-
-
-/*****************************************************************************
- * BulkOutCmdCallback
- *	this is the callback function for when we have finished sending a
- *	command	on the bulk out endpoint.
- *****************************************************************************/
-static void edge_bulk_out_cmd_callback(struct urb *urb)
-{
-	struct edgeport_port *edge_port = urb->context;
-	struct device *dev = &urb->dev->dev;
-	int status = urb->status;
-
-	/* clean up the transfer buffer */
-	kfree(urb->transfer_buffer);
-
-	/* Free the command urb */
-	usb_free_urb(urb);
-
-	if (status) {
-		dev_dbg(dev, "%s - nonzero write bulk status received: %d\n",
-			__func__, status);
-		return;
-	}
-
-	/* tell the tty driver that something has changed */
-	if (edge_port->open)
-		tty_port_tty_wakeup(&edge_port->port->port);
-
-	/* we have completed the command */
-	edge_port->commandPending = false;
-	wake_up(&edge_port->wait_command);
 }
 
 
@@ -2084,10 +2049,8 @@ static int send_iosp_ext_cmd(struct edgeport_port *edge_port,
 			 command, param);
 
 	status = write_cmd_usb(edge_port, buffer, length);
-	if (status) {
-		/* something bad happened, let's free up the memory */
-		kfree(buffer);
-	}
+
+	kfree(buffer);
 
 	return status;
 }
@@ -2100,46 +2063,22 @@ static int send_iosp_ext_cmd(struct edgeport_port *edge_port,
 static int write_cmd_usb(struct edgeport_port *edge_port,
 					unsigned char *buffer, int length)
 {
-	struct edgeport_serial *edge_serial =
-				usb_get_serial_data(edge_port->port->serial);
+	struct usb_serial *serial = edge_port->port->serial;
+	struct edgeport_serial *edge_serial = usb_get_serial_data(serial);
 	struct device *dev = &edge_port->port->dev;
-	int status = 0;
-	struct urb *urb;
+	int status;
 
 	usb_serial_debug_data(dev, __func__, length, buffer);
 
-	/* Allocate our next urb */
-	urb = usb_alloc_urb(0, GFP_KERNEL);
-	if (!urb)
-		return -ENOMEM;
-
-	usb_fill_bulk_urb(urb, edge_serial->serial->dev,
-			usb_sndbulkpipe(edge_serial->serial->dev,
-					edge_serial->bulk_out_endpoint),
-			buffer, length, edge_bulk_out_cmd_callback, edge_port);
-
-	edge_port->commandPending = true;
-	usb_anchor_urb(urb, &edge_serial->cmd_anchor);
-	status = usb_submit_urb(urb, GFP_KERNEL);
+	status = usb_bulk_msg(serial->dev,
+			usb_sndbulkpipe(serial->dev, edge_serial->bulk_out_endpoint),
+			buffer, length, NULL, EDGE_CMD_TIMEOUT);
 	if (status) {
-		/* something went wrong */
-		dev_err(dev, "%s - usb_submit_urb(write command) failed, status = %d\n",
-			__func__, status);
-		usb_unanchor_urb(urb);
-		usb_free_urb(urb);
+		dev_err(dev, "failed to send command: %d\n", status);
 		return status;
 	}
 
-#if 0
-	wait_event(&edge_port->wait_command, !edge_port->commandPending);
-
-	if (edge_port->commandPending) {
-		/* command timed out */
-		dev_dbg(dev, "%s - command timed out\n", __func__);
-		status = -EINVAL;
-	}
-#endif
-	return status;
+	return 0;
 }
 
 
@@ -2195,10 +2134,8 @@ static int send_cmd_write_baud_rate(struct edgeport_port *edge_port,
 						edge_port->shadowLCR);
 
 	status = write_cmd_usb(edge_port, cmdBuffer, cmdLen);
-	if (status) {
-		/* something bad happened, let's free up the memory */
-		kfree(cmdBuffer);
-	}
+
+	kfree(cmdBuffer);
 
 	return status;
 }
@@ -2282,10 +2219,8 @@ static int send_cmd_write_uart_register(struct edgeport_port *edge_port,
 			   regNum, regValue);
 
 	status = write_cmd_usb(edge_port, cmdBuffer, cmdLen);
-	if (status) {
-		/* something bad happened, let's free up the memory */
-		kfree(cmdBuffer);
-	}
+
+	kfree(cmdBuffer);
 
 	return status;
 }
@@ -2683,7 +2618,6 @@ static int edge_startup(struct usb_serial *serial)
 
 	spin_lock_init(&edge_serial->es_lock);
 	edge_serial->serial = serial;
-	init_usb_anchor(&edge_serial->cmd_anchor);
 	usb_set_serial_data(serial, edge_serial);
 
 	/* get the name for the device from the device */
@@ -2888,8 +2822,6 @@ static void edge_disconnect(struct usb_serial *serial)
 {
 	struct edgeport_serial *edge_serial = usb_get_serial_data(serial);
 
-	usb_kill_anchored_urbs(&edge_serial->cmd_anchor);
-
 	if (edge_serial->is_epic) {
 		usb_kill_urb(edge_serial->interrupt_read_urb);
 		usb_kill_urb(edge_serial->read_urb);
@@ -2931,7 +2863,6 @@ static int edge_port_probe(struct usb_serial_port *port)
 
 	init_waitqueue_head(&edge_port->wait_open);
 	init_waitqueue_head(&edge_port->wait_chase);
-	init_waitqueue_head(&edge_port->wait_command);
 
 	/* must set this bit to enable interrupts */
 	edge_port->shadowMCR = MCR_MASTER_IE;
