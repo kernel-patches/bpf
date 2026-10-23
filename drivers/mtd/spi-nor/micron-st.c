@@ -182,6 +182,16 @@ static int mt35xu512aba_post_sfdp_fixup(struct spi_nor *nor)
 	nor->params->rdsr_addr_nbytes = 0;
 
 	/*
+	 * Some batches do not expose the 8D-8D-8D command information through
+	 * SFDP (see above), so spi_nor_parse_profile1() may not run and clear
+	 * the default SR2 read opcode(35h). Drop it here as well: it is not a
+	 * valid register read in 8D-8D-8D mode and would time out during
+	 * spi_nor_init(). Clearing it again when it was already cleared is
+	 * harmless.
+	 */
+	nor->params->opcodes.read_sr2 = 0;
+
+	/*
 	 * The BFPT quad enable field is set to a reserved value so the quad
 	 * enable function is ignored by spi_nor_parse_bfpt(). Make sure we
 	 * disable it.
