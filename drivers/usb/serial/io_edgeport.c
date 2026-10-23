@@ -870,11 +870,6 @@ static int edge_open(struct tty_struct *tty, struct usb_serial_port *port)
 	edge_port->openPending = true;
 	spin_unlock_irq(&edge_port->ep_lock);
 
-	/* Must always set this bit to enable ints! */
-	mutex_lock(&edge_port->mutex);
-	edge_port->shadowMCR = MCR_MASTER_IE;
-	mutex_unlock(&edge_port->mutex);
-
 	edge_port->chaseResponsePending = false;
 
 	/* send a open port command */
@@ -1563,6 +1558,23 @@ static int edge_break(struct tty_struct *tty, int break_state)
 	}
 
 	return status;
+}
+
+
+static void edge_dtr_rts(struct usb_serial_port *port, int on)
+{
+	struct edgeport_port *edge_port = usb_get_serial_port_data(port);
+
+	mutex_lock(&edge_port->mutex);
+
+	if (on)
+		edge_port->shadowMCR |= MCR_DTR | MCR_RTS;
+	else
+		edge_port->shadowMCR &= ~(MCR_DTR | MCR_RTS);
+
+	send_cmd_write_uart_register(edge_port, MCR, edge_port->shadowMCR);
+
+	mutex_unlock(&edge_port->mutex);
 }
 
 
@@ -2412,9 +2424,12 @@ static void edge_set_termios(struct tty_struct *tty, struct usb_serial_port *por
 
 	/* set up the MCR register and send it to the EdgePort */
 	mutex_lock(&edge_port->mutex);
-	edge_port->shadowMCR = MCR_MASTER_IE;
-	if (cflag & CBAUD)
-		edge_port->shadowMCR |= (MCR_DTR | MCR_RTS);
+	if (cflag & CBAUD) {
+		if (old_termios && (old_termios->c_cflag & CBAUD) == B0)
+			edge_port->shadowMCR |= MCR_DTR | MCR_RTS;
+	} else {
+		edge_port->shadowMCR &= ~(MCR_DTR | MCR_RTS);
+	}
 
 	status = send_cmd_write_uart_register(edge_port, MCR,
 						edge_port->shadowMCR);
@@ -2919,6 +2934,9 @@ static int edge_port_probe(struct usb_serial_port *port)
 	init_waitqueue_head(&edge_port->wait_chase);
 	init_waitqueue_head(&edge_port->wait_command);
 
+	/* must set this bit to enable interrupts */
+	edge_port->shadowMCR = MCR_MASTER_IE;
+
 	edge_port->port = port;
 
 	usb_set_serial_port_data(port, edge_port);
@@ -2959,6 +2977,7 @@ static struct usb_serial_driver edgeport_2port_device = {
 	.tiocmset		= edge_tiocmset,
 	.tiocmiwait		= usb_serial_generic_tiocmiwait,
 	.get_icount		= usb_serial_generic_get_icount,
+	.dtr_rts		= edge_dtr_rts,
 	.write			= edge_write,
 	.write_room		= edge_write_room,
 	.chars_in_buffer	= edge_chars_in_buffer,
@@ -2993,6 +3012,7 @@ static struct usb_serial_driver edgeport_4port_device = {
 	.tiocmset		= edge_tiocmset,
 	.tiocmiwait		= usb_serial_generic_tiocmiwait,
 	.get_icount		= usb_serial_generic_get_icount,
+	.dtr_rts		= edge_dtr_rts,
 	.write			= edge_write,
 	.write_room		= edge_write_room,
 	.chars_in_buffer	= edge_chars_in_buffer,
@@ -3027,6 +3047,7 @@ static struct usb_serial_driver edgeport_8port_device = {
 	.tiocmset		= edge_tiocmset,
 	.tiocmiwait		= usb_serial_generic_tiocmiwait,
 	.get_icount		= usb_serial_generic_get_icount,
+	.dtr_rts		= edge_dtr_rts,
 	.write			= edge_write,
 	.write_room		= edge_write_room,
 	.chars_in_buffer	= edge_chars_in_buffer,
@@ -3061,6 +3082,7 @@ static struct usb_serial_driver epic_device = {
 	.tiocmset		= edge_tiocmset,
 	.tiocmiwait		= usb_serial_generic_tiocmiwait,
 	.get_icount		= usb_serial_generic_get_icount,
+	.dtr_rts		= edge_dtr_rts,
 	.write			= edge_write,
 	.write_room		= edge_write_room,
 	.chars_in_buffer	= edge_chars_in_buffer,
