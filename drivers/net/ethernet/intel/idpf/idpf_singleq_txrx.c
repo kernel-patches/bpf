@@ -228,6 +228,8 @@ static void idpf_tx_singleq_dma_map_error(struct idpf_tx_queue *txq,
 
 	/* Update tail in case netdev_xmit_more was previously true */
 	idpf_tx_buf_hw_update(txq, idx, false);
+
+	dev_kfree_skb_any(skb);
 }
 
 /**
