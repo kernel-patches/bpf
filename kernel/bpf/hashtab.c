@@ -95,7 +95,8 @@ struct bpf_htab {
 	};
 	struct htab_elem *__percpu *extra_elems;
 	/* number of elements in non-preallocated hashtable are kept
-	 * in either pcount or count
+	 * in either pcount or count; with pcount, those added or removed
+	 * in NMI are in count, see is_map_full()
 	 */
 	struct percpu_counter pcount;
 	atomic_t count;
@@ -1160,11 +1161,23 @@ static void htab_put_fd_value(struct bpf_htab *htab, struct htab_elem *l)
 	}
 }
 
+/*
+ * With use_percpu_counter the elements added or removed in NMI are counted in
+ * @count, as percpu_counter takes a spinlock that the NMI could have
+ * interrupted the holder of.
+ */
 static bool is_map_full(struct bpf_htab *htab)
 {
-	if (htab->use_percpu_counter)
-		return __percpu_counter_compare(&htab->pcount, htab->map.max_entries,
+	if (htab->use_percpu_counter) {
+		/* percpu_counter_sum() takes that lock, so only read it in NMI */
+		if (in_nmi())
+			return percpu_counter_read(&htab->pcount) +
+			       atomic_read(&htab->count) >= htab->map.max_entries;
+		return __percpu_counter_compare(&htab->pcount,
+						(s64)htab->map.max_entries -
+						atomic_read(&htab->count),
 						PERCPU_COUNTER_BATCH) >= 0;
+	}
 	return atomic_read(&htab->count) >= htab->map.max_entries;
 }
 
@@ -1172,7 +1185,7 @@ static void inc_elem_count(struct bpf_htab *htab)
 {
 	bpf_map_inc_elem_count(&htab->map);
 
-	if (htab->use_percpu_counter)
+	if (htab->use_percpu_counter && !in_nmi())
 		percpu_counter_add_batch(&htab->pcount, 1, PERCPU_COUNTER_BATCH);
 	else
 		atomic_inc(&htab->count);
@@ -1182,7 +1195,7 @@ static void dec_elem_count(struct bpf_htab *htab)
 {
 	bpf_map_dec_elem_count(&htab->map);
 
-	if (htab->use_percpu_counter)
+	if (htab->use_percpu_counter && !in_nmi())
 		percpu_counter_add_batch(&htab->pcount, -1, PERCPU_COUNTER_BATCH);
 	else
 		atomic_dec(&htab->count);
@@ -2578,7 +2591,8 @@ static u64 htab_map_mem_usage(const struct bpf_map *map)
 #define LLIST_NODE_SZ sizeof(struct llist_node)
 
 		num_entries = htab->use_percpu_counter ?
-					  percpu_counter_sum(&htab->pcount) :
+					  percpu_counter_sum(&htab->pcount) +
+					  atomic_read(&htab->count) :
 					  atomic_read(&htab->count);
 		usage += (htab->elem_size + LLIST_NODE_SZ) * num_entries;
 		if (percpu) {
