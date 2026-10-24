@@ -3002,6 +3002,12 @@ static inline void skb_reset_mac_len(struct sk_buff *skb)
 static inline unsigned char *skb_inner_transport_header(const struct sk_buff
 							*skb)
 {
+	if (unlikely(skb->inner_transport_header ==
+		     (typeof(skb->inner_transport_header))~0U)) {
+		DEBUG_NET_WARN_ON_ONCE(1);
+		return skb->head + skb->inner_network_header;
+	}
+
 	return skb->head + skb->inner_transport_header;
 }
 
@@ -3088,7 +3094,11 @@ static inline void skb_unset_transport_header(struct sk_buff *skb)
 
 static inline unsigned char *skb_transport_header(const struct sk_buff *skb)
 {
-	DEBUG_NET_WARN_ON_ONCE(!skb_transport_header_was_set(skb));
+	if (unlikely(!skb_transport_header_was_set(skb))) {
+		DEBUG_NET_WARN_ON_ONCE(1);
+		return skb->head + skb->network_header;
+	}
+
 	return skb->head + skb->transport_header;
 }
 
