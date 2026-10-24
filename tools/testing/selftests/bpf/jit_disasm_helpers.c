@@ -247,7 +247,7 @@ out:
 int get_jited_program_text(int fd, char *text, size_t text_sz)
 {
 	if (env.verbosity >= VERBOSE_VERY)
-		printf("compiled w/o llvm development libraries, can't dis-assembly binary code");
+		printf("compiled w/o llvm development libraries, can't disassemble binary code\n");
 	return -EOPNOTSUPP;
 }
 
