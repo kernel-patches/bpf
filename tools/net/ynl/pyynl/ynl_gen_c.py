@@ -3409,9 +3409,11 @@ def render_scoped_consts(family, cw, scope):
 def _render_user_ntf_entry(ri, op):
     if not ri.family.is_classic():
         ri.cw.block_start(line=f"[{op.enum_name}] = ")
-    else:
+    elif op.rsp_value in ri.family.req_by_value:
         crud_op = ri.family.req_by_value[op.rsp_value]
         ri.cw.block_start(line=f"[{crud_op.enum_name}] = ")
+    else:
+        ri.cw.block_start(line=f"[{op.rsp_value}] = ")
     ri.cw.p(f".alloc_sz\t= sizeof({type_name(ri, 'event')}),")
     ri.cw.p(f".cb\t\t= {op_prefix(ri, 'reply', deref=True)}_parse,")
     ri.cw.p(f".policy\t\t= &{ri.struct['reply'].render_name}_nest,")
