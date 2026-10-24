@@ -759,6 +759,134 @@ out:
 	return XDP_DROP;
 }
 
+static __always_inline int fill_xdp(struct bpf_dynptr *ptr, __u32 start, __u32 n)
+{
+	__u8 b;
+	int i;
+
+	bpf_for(i, 0, n) {
+		b = (start + i) % 251;
+		if (bpf_dynptr_write(ptr, start + i, &b, 1, 0))
+			return 1;
+	}
+	return 0;
+}
+
+static __always_inline int check_xdp(struct bpf_dynptr *ptr, __u32 at, __u32 n, __u32 from)
+{
+	__u8 b;
+	int i;
+
+	bpf_for(i, 0, n) {
+		if (bpf_dynptr_read(&b, 1, ptr, at + i, 0))
+			return 1;
+		if (b != (__u8)((from + i) % 251))
+			return 1;
+	}
+	return 0;
+}
+
+SEC("?xdp")
+int test_dynptr_copy_xdp_overlap(struct xdp_md *xdp)
+{
+	void *data_end = (void *)(long)xdp->data_end;
+	void *data = (void *)(long)xdp->data;
+	__u32 off = data_end - data - 1000;
+	struct bpf_dynptr ptr;
+
+	bpf_dynptr_from_xdp(xdp, 0, &ptr);
+	if (fill_xdp(&ptr, off, 1300)) {
+		err = 1;
+		return XDP_DROP;
+	}
+	err = bpf_dynptr_copy(&ptr, off + 100, &ptr, off, 1200);
+	if (err)
+		return XDP_DROP;
+	if (check_xdp(&ptr, off + 100, 1200, off))
+		err = 2;
+	return XDP_DROP;
+}
+
+SEC("?xdp")
+int test_dynptr_read_xdp_overlap(struct xdp_md *xdp)
+{
+	void *data_end = (void *)(long)xdp->data_end;
+	void *data = (void *)(long)xdp->data;
+	__u32 lin = data_end - data;
+	struct bpf_dynptr ptr;
+	char *dst;
+
+	bpf_dynptr_from_xdp(xdp, 0, &ptr);
+	if (fill_xdp(&ptr, lin - 10, 84)) {
+		err = 1;
+		return XDP_DROP;
+	}
+	dst = bpf_dynptr_slice_rdwr(&ptr, lin + 10, NULL, 64);
+	if (!dst) {
+		err = 2;
+		return XDP_DROP;
+	}
+	err = bpf_dynptr_read(dst, 64, &ptr, lin - 10, 0);
+	if (err)
+		return XDP_DROP;
+	if (check_xdp(&ptr, lin + 10, 64, lin - 10))
+		err = 3;
+	return XDP_DROP;
+}
+
+SEC("?xdp")
+int test_dynptr_write_xdp_overlap(struct xdp_md *xdp)
+{
+	void *data_end = (void *)(long)xdp->data_end;
+	void *data = (void *)(long)xdp->data;
+	__u32 lin = data_end - data;
+	struct bpf_dynptr ptr;
+	char *src;
+
+	bpf_dynptr_from_xdp(xdp, 0, &ptr);
+	if (fill_xdp(&ptr, lin - 64, 118)) {
+		err = 1;
+		return XDP_DROP;
+	}
+	src = bpf_dynptr_slice_rdwr(&ptr, lin - 64, NULL, 64);
+	if (!src) {
+		err = 2;
+		return XDP_DROP;
+	}
+	err = bpf_dynptr_write(&ptr, lin - 10, src, 64, 0);
+	if (err)
+		return XDP_DROP;
+	if (check_xdp(&ptr, lin - 10, 64, lin - 64))
+		err = 3;
+	return XDP_DROP;
+}
+
+SEC("?tc")
+int test_dynptr_skb_load_overlap(struct __sk_buff *skb)
+{
+	struct bpf_dynptr ptr;
+	char ref[24];
+	char *dst;
+
+	bpf_dynptr_from_skb(skb, 0, &ptr);
+	if (bpf_dynptr_read(ref, 24, &ptr, 20, 0)) {
+		err = 1;
+		return 0;
+	}
+	dst = bpf_dynptr_slice_rdwr(&ptr, 10, NULL, 24);
+	if (!dst) {
+		err = 2;
+		return 0;
+	}
+	if (bpf_dynptr_read(dst, 24, &ptr, 20, 0)) {
+		err = 3;
+		return 0;
+	}
+	if (bpf_memcmp(dst, ref, 24))
+		err = 4;
+	return 0;
+}
+
 char memset_zero_data[] = "data to be zeroed";
 
 SEC("?tp/syscalls/sys_enter_nanosleep")
