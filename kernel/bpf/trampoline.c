@@ -1640,6 +1640,14 @@ static int register_fentry_multi(struct bpf_trampoline *tr, struct bpf_tramp_ima
 	if (ftrace_lookup_ip(data->reg, ip))
 		return -EINVAL;
 
+	/*
+	 * Different BTF ids get different trampolines, but they can still
+	 * resolve to the same address (aliases, functions of the same name).
+	 * There's only one call site to attach to.
+	 */
+	if (ftrace_lookup_ip(data->reg, ip))
+		return -EINVAL;
+
 	if (bpf_trampoline_use_jmp(tr->flags))
 		addr = ftrace_jmp_set(addr);
 
