@@ -2420,14 +2420,14 @@ amdgpu_dm_create_validate_stream_for_sink(struct drm_connector *connector,
 	 *  - A 420-only mode collapses the mask to YCbCr420 alone.
 	 *  - The debugfs force_yuv_pixel_format override pins the encoding to a
 	 *    single dc_pixel_encoding when set (PIXEL_ENCODING_UNDEFINED means
-	 *    "no override"). An explicit YCbCr420 force is honoured even on
-	 *    modes the sink only lists as RGB/4:4:4 capable
-	 *    (drm_mode_is_420_also() clear), as required for HDMI compliance
-	 *    testing; dc_validate_stream() still rejects anything the link
-	 *    genuinely cannot carry. The YCbCr422/YCbCr444 forces stay gated on
-	 *    the sink's advertised caps. An RGB force pins to RGB alone and is
-	 *    always honoured, since RGB is the mandatory baseline every sink
-	 *    (DP or HDMI) supports.
+	 *    "no override"). A YCbCr420 force is gated on the mode actually
+	 *    advertising 4:2:0 (drm_mode_is_420_only()/drm_mode_is_420_also());
+	 *    HDMI 2.0/CTA-861 only permit 4:2:0 on those VICs, so forcing it on
+	 *    an RGB/4:4:4-only mode would violate the "Y420 Not Allowed"
+	 *    compliance requirement (HF1-31/HF1-32). The YCbCr422/YCbCr444
+	 *    forces stay gated on the sink's advertised caps. An RGB force pins
+	 *    to RGB alone and is always honoured, since RGB is the mandatory
+	 *    baseline every sink (DP or HDMI) supports.
 	 */
 	want_420 = (aconnector->force_yuv_pixel_format == PIXEL_ENCODING_YCBCR420) ||
 		(drm_state && drm_state->color_format == DRM_CONNECTOR_COLOR_FORMAT_YCBCR420);
