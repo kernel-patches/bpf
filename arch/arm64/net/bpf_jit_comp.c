@@ -10,6 +10,7 @@
 #include <linux/arm-smccc.h>
 #include <linux/bitfield.h>
 #include <linux/bpf.h>
+#include <linux/bpf_throw.h>
 #include <linux/cfi.h>
 #include <linux/extable.h>
 #include <linux/filter.h>
@@ -422,69 +423,86 @@ static void find_used_callee_regs(struct jit_ctx *ctx)
 	ctx->nr_used_callee_reg = i;
 }
 
-/* Save callee-saved registers */
+/*
+ * Offset from the frame pointer of the @idx-th register pushed by push_callee_regs(). The
+ * frame record sits at the frame pointer, the tail call count pair right below it, and
+ * then the pushed pairs, each 16 bytes with its first register at the lower address.
+ */
+static int callee_reg_slot_off(int idx)
+{
+	return -32 - 16 * (idx / 2) + 8 * (idx % 2);
+}
+
+/*
+ * Record where the prologue saved the caller's callee-saved registers, relative to
+ * the frame pointer that arch_bpf_stack_walk() reports for this frame, for the
+ * exception unwinder. The registers are x19..x28 in the order of struct
+ * bpf_throw_regs, R6..R9 first: the tail call count pointer is saved with the frame
+ * record, the others where push_callee_regs() put them, and x23 and x24 nowhere,
+ * since JITed code leaves them alone.
+ */
+static void record_callee_reg_off(struct jit_ctx *ctx)
+{
+	struct bpf_prog_aux *aux = ctx->prog->aux;
+	int i, j;
+
+	BUILD_BUG_ON(BPF_THROW_NR_CALLEE_SAVED != 10);
+	for (i = 0; i < BPF_THROW_NR_CALLEE_SAVED; i++) {
+		u8 reg = A64_R(19 + i);
+
+		aux->callee_reg_off[i] = 0;
+		if (reg == bpf2a64[TCCNT_PTR]) {
+			aux->callee_reg_off[i] = -8;
+			continue;
+		}
+		for (j = 0; j < ctx->nr_used_callee_reg; j++) {
+			if (ctx->used_callee_reg[j] != reg)
+				continue;
+			aux->callee_reg_off[i] = callee_reg_slot_off(j);
+			break;
+		}
+	}
+}
+
+/*
+ * Save the callee-saved registers this function uses. An exception boundary
+ * saves nothing more: the unwinder recovers the registers of the frames it
+ * discards and hands them to the exception callback.
+ */
 static void push_callee_regs(struct jit_ctx *ctx)
 {
 	int reg1, reg2, i;
 
-	/*
-	 * Program acting as exception boundary should save all ARM64
-	 * Callee-saved registers as the exception callback needs to recover
-	 * all ARM64 Callee-saved registers in its epilogue.
-	 */
-	if (ctx->prog->aux->exception_boundary) {
-		emit(A64_PUSH(A64_R(19), A64_R(20), A64_SP), ctx);
-		emit(A64_PUSH(A64_R(21), A64_R(22), A64_SP), ctx);
-		emit(A64_PUSH(A64_R(23), A64_R(24), A64_SP), ctx);
-		emit(A64_PUSH(A64_R(25), A64_R(26), A64_SP), ctx);
-		emit(A64_PUSH(A64_R(27), A64_R(28), A64_SP), ctx);
-		ctx->fp_used = true;
-	} else {
-		find_used_callee_regs(ctx);
-		for (i = 0; i + 1 < ctx->nr_used_callee_reg; i += 2) {
-			reg1 = ctx->used_callee_reg[i];
-			reg2 = ctx->used_callee_reg[i + 1];
-			emit(A64_PUSH(reg1, reg2, A64_SP), ctx);
-		}
-		if (i < ctx->nr_used_callee_reg) {
-			reg1 = ctx->used_callee_reg[i];
-			/* keep SP 16-byte aligned */
-			emit(A64_PUSH(reg1, A64_ZR, A64_SP), ctx);
-		}
+	find_used_callee_regs(ctx);
+	for (i = 0; i + 1 < ctx->nr_used_callee_reg; i += 2) {
+		reg1 = ctx->used_callee_reg[i];
+		reg2 = ctx->used_callee_reg[i + 1];
+		emit(A64_PUSH(reg1, reg2, A64_SP), ctx);
 	}
+	if (i < ctx->nr_used_callee_reg) {
+		reg1 = ctx->used_callee_reg[i];
+		/* keep SP 16-byte aligned */
+		emit(A64_PUSH(reg1, A64_ZR, A64_SP), ctx);
+	}
+	record_callee_reg_off(ctx);
 }
 
 /* Restore callee-saved registers */
 static void pop_callee_regs(struct jit_ctx *ctx)
 {
-	struct bpf_prog_aux *aux = ctx->prog->aux;
 	int reg1, reg2, i;
 
-	/*
-	 * Program acting as exception boundary pushes R23 and R24 in addition
-	 * to BPF callee-saved registers. Exception callback uses the boundary
-	 * program's stack frame, so recover these extra registers in the above
-	 * two cases.
-	 */
-	if (aux->exception_boundary || aux->exception_cb) {
-		emit(A64_POP(A64_R(27), A64_R(28), A64_SP), ctx);
-		emit(A64_POP(A64_R(25), A64_R(26), A64_SP), ctx);
-		emit(A64_POP(A64_R(23), A64_R(24), A64_SP), ctx);
-		emit(A64_POP(A64_R(21), A64_R(22), A64_SP), ctx);
-		emit(A64_POP(A64_R(19), A64_R(20), A64_SP), ctx);
-	} else {
-		i = ctx->nr_used_callee_reg - 1;
-		if (ctx->nr_used_callee_reg % 2 != 0) {
-			reg1 = ctx->used_callee_reg[i];
-			emit(A64_POP(reg1, A64_ZR, A64_SP), ctx);
-			i--;
-		}
-		while (i > 0) {
-			reg1 = ctx->used_callee_reg[i - 1];
-			reg2 = ctx->used_callee_reg[i];
-			emit(A64_POP(reg1, reg2, A64_SP), ctx);
-			i -= 2;
-		}
+	i = ctx->nr_used_callee_reg - 1;
+	if (ctx->nr_used_callee_reg % 2 != 0) {
+		reg1 = ctx->used_callee_reg[i];
+		emit(A64_POP(reg1, A64_ZR, A64_SP), ctx);
+		i--;
+	}
+	while (i > 0) {
+		reg1 = ctx->used_callee_reg[i - 1];
+		reg2 = ctx->used_callee_reg[i];
+		emit(A64_POP(reg1, reg2, A64_SP), ctx);
+		i -= 2;
 	}
 }
 
@@ -585,24 +603,22 @@ static int build_prologue(struct jit_ctx *ctx, bool ebpf_from_cbpf)
 			/* BTI landing pad for the tail call, done with a BR */
 			emit_bti(A64_BTI_J, ctx);
 		}
-		push_callee_regs(ctx);
 	} else {
 		/*
-		 * Exception callback receives FP of Main Program as third
-		 * parameter
+		 * The exception callback receives the main program's frame
+		 * pointer as its third parameter and, as its fourth, the
+		 * callee-saved registers x19..x28 the unwinder recovered from
+		 * the frames it discarded: the values the main program's caller
+		 * expects back. Load them, then build the rest of the frame
+		 * below the main program's frame record like any function.
 		 */
+		for (int i = 0; i < BPF_THROW_NR_CALLEE_SAVED; i++)
+			emit(A64_LDR64I(A64_R(19 + i), A64_R(3), 8 * i), ctx);
 		emit(A64_MOV(1, A64_FP, A64_R(2)), ctx);
-		/*
-		 * Main Program already pushed the frame record and the
-		 * callee-saved registers. The exception callback will not push
-		 * anything and re-use the main program's stack.
-		 *
-		 * 12 registers are on the stack
-		 */
-		emit(A64_SUB_I(1, A64_SP, A64_FP, 96), ctx);
-		/* The callback may use its own BPF stack, set up fp for it. */
-		ctx->fp_used = true;
+		emit(A64_MOV(1, A64_SP, A64_FP), ctx);
+		prepare_bpf_tail_call_cnt(ctx);
 	}
+	push_callee_regs(ctx);
 
 	/* Stack must be multiples of 16B */
 	ctx->stack_size = round_up(prog->aux->stack_depth, 16);
@@ -3541,6 +3557,13 @@ bool bpf_jit_supports_timed_may_goto(void)
 {
 	return true;
 }
+
+#ifdef CONFIG_BPF_SYSCALL
+void *bpf_arch_throw_entry(void)
+{
+	return (void *)bpf_throw_entry;
+}
+#endif
 
 bool bpf_jit_inlines_helper_call(s32 imm)
 {
