@@ -223,6 +223,7 @@ static bool in_rcu_callback(struct bpf_verifier_env *env);
 static const char *non_sleepable_context_description(struct bpf_verifier_env *env);
 static void scalar32_min_max_add(struct bpf_reg_state *dst_reg, struct bpf_reg_state *src_reg);
 static void scalar_min_max_add(struct bpf_reg_state *dst_reg, struct bpf_reg_state *src_reg);
+static void zext_32_to_64(struct bpf_reg_state *reg);
 
 static void bpf_map_ptr_store(struct bpf_insn_aux_data *aux,
 			      struct bpf_map *map,
@@ -2080,6 +2081,7 @@ static void __mark_reg_known(struct bpf_reg_state *reg, u64 imm)
 	reg->id = 0;
 	reg->parent_id = 0;
 	reg->map_uid = 0;
+	reg->link_kind = BPF_REG_LINK_NONE;
 	___mark_reg_known(reg, imm);
 }
 
@@ -3812,12 +3814,6 @@ static bool __is_pointer_value(bool allow_ptr_leaks,
 	return is_pointer_regtype(reg->type);
 }
 
-static void clear_scalar_id(struct bpf_reg_state *reg)
-{
-	reg->id = 0;
-	reg->delta = 0;
-}
-
 static void assign_scalar_id_before_mov(struct bpf_verifier_env *env,
 					struct bpf_reg_state *src_reg)
 {
@@ -3828,8 +3824,8 @@ static void assign_scalar_id_before_mov(struct bpf_verifier_env *env,
 	 * rY->id has special linked register already.
 	 * Cleared it, since multiple rX += const are not supported.
 	 */
-	if (src_reg->id & BPF_ADD_CONST)
-		clear_scalar_id(src_reg);
+	if (src_reg->link_kind && src_reg->link_kind != BPF_REG_LINK_SEXT)
+		bpf_clear_scalar_id(src_reg);
 	/*
 	 * Ensure that src_reg has a valid ID that will be copied to
 	 * dst_reg and then will be used by sync_linked_regs() to
@@ -3973,15 +3969,46 @@ static int check_stack_write_fixed_off(struct bpf_verifier_env *env,
 	mark_stack_slot_scratched(env, spi);
 	if (reg && !(off % BPF_REG_SIZE) && reg->type == SCALAR_VALUE && env->bpf_capable) {
 		bool reg_value_fits;
+		bool subreg_link;
 
 		reg_value_fits = get_reg_width(reg) <= BITS_PER_BYTE * size;
+		/*
+		 * A narrowing spill stores the low 32 bits of the source, so
+		 * the slot is their zero-extension: record a low-32 link
+		 * rather than dropping the relation, as a 32-bit mov does.
+		 * A store never sign-extends, so there is only one link kind here.
+		 */
+		subreg_link = !reg_value_fits && size == 4;
+
 		/* Make sure that reg had an ID to build a relation on spill. */
-		if (reg_value_fits)
+		if (reg_value_fits || subreg_link)
 			assign_scalar_id_before_mov(env, reg);
 		save_register_state(env, state, spi, reg, size);
-		/* Break the relation on a narrowing spill. */
-		if (!reg_value_fits)
-			clear_scalar_id(&ss->spilled_ptr);
+		if (!reg_value_fits) {
+			if (subreg_link && reg->id) {
+				/*
+				 * save_register_state() copies the source
+				 * whole, but the store only wrote its low 32
+				 * bits, so truncate to those before recording
+				 * the kind: a slot asserting BPF_REG_LINK_ZEXT
+				 * over the source's wider bounds is a register
+				 * state that contradicts itself.
+				 *
+				 * Keep the source's delta, though: the slot
+				 * holds (u32)(base + delta), so resetting it to
+				 * 0 would record a relation off by that delta.
+				 */
+				zext_32_to_64(&ss->spilled_ptr);
+				ss->spilled_ptr.link_kind = BPF_REG_LINK_ZEXT;
+			} else {
+				/*
+				 * Nothing to relate: either the source has no
+				 * id to share, or the store is narrower than
+				 * the 32 bits a link can describe.
+				 */
+				bpf_clear_scalar_id(&ss->spilled_ptr);
+			}
+		}
 	} else if (!reg && !(off % BPF_REG_SIZE) && is_bpf_st_mem(insn) &&
 		   env->bpf_capable) {
 		struct bpf_reg_state *tmp_reg = &env->fake_reg[0];
@@ -4288,7 +4315,8 @@ static void bpf_diag_stack_read_invalid(struct bpf_verifier_env *env, int off, i
 static int check_stack_read_fixed_off(struct bpf_verifier_env *env,
 				      /* func where src register points to */
 				      struct bpf_func_state *reg_state,
-				      int off, int size, int dst_regno)
+				      int off, int size, int dst_regno,
+				      bool is_ldsx)
 {
 	struct bpf_verifier_state *vstate = env->cur_state;
 	struct bpf_func_state *state = vstate->frame[vstate->curframe];
@@ -4323,22 +4351,52 @@ static int check_stack_read_fixed_off(struct bpf_verifier_env *env,
 
 			if (size <= spill_size &&
 			    bpf_stack_narrow_access_ok(off, size, spill_size)) {
+				bool narrowing = get_reg_width(reg) > size * BITS_PER_BYTE;
+				/*
+				 * A narrowing fill keeps only the slot's low 32 bits,
+				 * so record a low-32 link rather than dropping the
+				 * relation, as a 32-bit mov from a wide source does.
+				 * Which link kind depends on how the load fills the high
+				 * half, hence is_ldsx.
+				 */
+				bool subreg_link = narrowing && size == 4;
+
 				if (dst_regno < 0)
 					return 0;
 
-				if (env->bpf_capable && size == 4 && spill_size == 4 &&
-				    get_reg_width(reg) <= 32)
+				if (env->bpf_capable && size == 4 &&
+				    (subreg_link || (spill_size == 4 && !narrowing)))
 					/* Ensure stack slot has an ID to build a relation
 					 * with the destination register on fill.
 					 */
 					assign_scalar_id_before_mov(env, reg);
 				state->regs[dst_regno] = *reg;
 
-				/* Break the relation on a narrowing fill.
-				 * coerce_reg_to_size will adjust the boundaries.
+				/*
+				 * A fill that is not narrowing copies the slot's link
+				 * kind verbatim, which a sign-extending load can
+				 * contradict. check_mem_access() runs after this and
+				 * drops any kind but BPF_REG_LINK_SEXT once it knows
+				 * the extension was not a no-op.
 				 */
-				if (get_reg_width(reg) > size * BITS_PER_BYTE)
-					clear_scalar_id(&state->regs[dst_regno]);
+				if (subreg_link && reg->id) {
+					/*
+					 * Keep the slot's delta: both
+					 * (u32)(base + d) and (s32)(base + d)
+					 * have low half base + d, so the fill
+					 * inherits it rather than resetting it.
+					 */
+					state->regs[dst_regno].link_kind =
+						is_ldsx ? BPF_REG_LINK_SEXT : BPF_REG_LINK_ZEXT;
+				} else if (narrowing) {
+					/*
+					 * Nothing to relate: either the slot has
+					 * no id to share, or the fill is narrower
+					 * than the 32 bits a link can describe.
+					 * coerce_reg_to_size adjusts the bounds.
+					 */
+					bpf_clear_scalar_id(&state->regs[dst_regno]);
+				}
 			} else {
 				int spill_cnt = 0, zero_cnt = 0;
 
@@ -4504,7 +4562,7 @@ static int check_stack_read_var_off(struct bpf_verifier_env *env, struct bpf_reg
  */
 static int check_stack_read(struct bpf_verifier_env *env,
 			    struct bpf_reg_state *reg, argno_t ptr_argno, int off, int size,
-			    int dst_regno)
+			    int dst_regno, bool is_ldsx)
 {
 	struct bpf_func_state *state = bpf_func(env, reg);
 	int err;
@@ -4543,7 +4601,7 @@ static int check_stack_read(struct bpf_verifier_env *env,
 	if (!var_off) {
 		off += reg->var_off.value;
 		err = check_stack_read_fixed_off(env, state, off, size,
-						 dst_regno);
+						 dst_regno, is_ldsx);
 	} else {
 		/* Variable offset stack reads need more conservative handling
 		 * than fixed offset ones. Note that dst_regno >= 0 on this
@@ -6136,6 +6194,25 @@ static void zext_32_to_64(struct bpf_reg_state *reg)
 	reg_set_urange64(reg, reg_u32_min(reg), reg_u32_max(reg));
 }
 
+/*
+ * The sign-extending counterpart. Signed bounds carry over directly because
+ * sign extension is monotonic over the signed 32-bit range.
+ */
+static void sext_32_to_64(struct bpf_reg_state *reg)
+{
+	/*
+	 * See comment at reg_step_check_unsigned(). Sign extension subtracts
+	 * 2^32 from every value with bit 31 set, which preserves a residue
+	 * mod step only when step divides 2^32, so the line cannot be kept.
+	 * The zero-extending twin calls reg_step_check_unsigned(reg, 32) for
+	 * the same reason; the unsigned form does not apply here because the
+	 * result is not the low 32 bits but the low 32 bits moved.
+	 */
+	reg_step_reset(reg);
+	reg->var_off = tnum_sext(reg->var_off, 4);
+	reg_set_srange64(reg, reg_s32_min(reg), reg_s32_max(reg));
+}
+
 /* truncate register to smaller size (in bytes)
  * must be called with size < BPF_REG_SIZE
  */
@@ -6256,6 +6333,7 @@ static void set_sext32_default_val(struct bpf_reg_state *reg, int size)
 static void coerce_subreg_to_size_sx(struct bpf_reg_state *reg, int size)
 {
 	s32 init_s32_max, init_s32_min, s32_max, s32_min, u32_val;
+	s32 field_smin, field_smax;
 	u32 top_smax_value, top_smin_value;
 	u32 num_bits = size * 8;
 
@@ -6264,6 +6342,27 @@ static void coerce_subreg_to_size_sx(struct bpf_reg_state *reg, int size)
 	 * sign extension is a noop.
 	 */
 	if (reg_umax(reg) < (1ULL << (num_bits - 1)))
+		return;
+
+	if (size == 1) {
+		field_smin = S8_MIN;
+		field_smax = S8_MAX;
+	} else {
+		/* size == 2 */
+		field_smin = S16_MIN;
+		field_smax = S16_MAX;
+	}
+
+	/*
+	 * The range already fits the field, so (sN)v == v for every value the
+	 * register can hold and the sign extension changes nothing. The test
+	 * above misses this once the range straddles zero: it only looks at
+	 * reg_umax(), which a negative smin makes huge.
+	 *
+	 * This has to precede reg_step_reset() below: the extension is a noop,
+	 * so the base/step line still holds and there is nothing to discard.
+	 */
+	if (reg_s32_min(reg) >= field_smin && reg_s32_max(reg) <= field_smax)
 		return;
 
 	/* See comment at reg_step_check_unsigned(). */
@@ -7385,7 +7484,7 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, struct b
 
 		if (t == BPF_READ)
 			err = check_stack_read(env, reg, argno, off, size,
-					       value_regno);
+					       value_regno, is_ldsx);
 		else
 			err = check_stack_write(env, reg, off, size,
 						value_regno, insn_idx);
@@ -7482,14 +7581,21 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, struct b
 			 * Sign-extension can change the register value relative
 			 * to a scalar it is linked with by id (e.g. a zero-
 			 * extending fill of the same spilled stack slot), thus
-			 * drop the shared id in that case.
+			 * drop the shared id in that case. Only a 4-byte
+			 * BPF_REG_LINK_SEXT link survives: it says the high
+			 * half is this very sign-extension. BPF_REG_LINK_ZEXT
+			 * says the opposite and would be a lie about the value
+			 * just produced, and an 8- or 16-bit sign extension is
+			 * a relation BPF_REG_LINK_SEXT cannot express at all --
+			 * it means (s32)(base + delta) specifically.
 			 */
 			bool no_sext = reg_umax(&regs[value_regno]) <
 					(1ULL << (size * BITS_PER_BYTE - 1));
 
 			coerce_reg_to_size_sx(&regs[value_regno], size);
-			if (!no_sext)
-				clear_scalar_id(&regs[value_regno]);
+			if (!no_sext &&
+			    !(size == 4 && regs[value_regno].link_kind == BPF_REG_LINK_SEXT))
+				bpf_clear_scalar_id(&regs[value_regno]);
 		}
 	}
 
@@ -17203,7 +17309,7 @@ static void scalar_byte_swap(struct bpf_reg_state *dst_reg, struct bpf_insn *ins
 	 * any existing ties and avoid incorrect bounds propagation.
 	 */
 	if (need_bswap || insn->imm == 16 || insn->imm == 32)
-		clear_scalar_id(dst_reg);
+		bpf_clear_scalar_id(dst_reg);
 
 	if (need_bswap) {
 		if (insn->imm == 16)
@@ -17601,13 +17707,6 @@ static int adjust_reg_min_max_vals(struct bpf_verifier_env *env,
 		verbose(env, "verifier internal error: no src_reg\n");
 		return -EFAULT;
 	}
-	/*
-	 * For alu32 linked register tracking, we need to check dst_reg's
-	 * umax_value before the ALU operation. After adjust_scalar_min_max_vals(),
-	 * alu32 ops will have zero-extended the result, making umax_value <= U32_MAX.
-	 */
-	u64 dst_umax = reg_umax(dst_reg);
-
 	err = adjust_scalar_min_max_vals(env, insn, dst_reg, *src_reg);
 	if (err)
 		return err;
@@ -17630,9 +17729,6 @@ static int adjust_reg_min_max_vals(struct bpf_verifier_env *env,
 		if (!alu32 && ((s64)val < S32_MIN || (s64)val > S32_MAX))
 			goto clear_id;
 
-		if (alu32 && (dst_umax > U32_MAX))
-			goto clear_id;
-
 		off = (s32)val;
 
 		if (BPF_OP(insn->code) == BPF_SUB) {
@@ -17642,18 +17738,35 @@ static int adjust_reg_min_max_vals(struct bpf_verifier_env *env,
 			off = -off;
 		}
 
-		if (dst_reg->id & BPF_ADD_CONST) {
+		if (dst_reg->link_kind) {
 			/*
-			 * If the register already went through rX += val
-			 * we cannot accumulate another val into rx->off.
+			 * Only the zero-extending link the mov above records,
+			 * BPF_REG_LINK_ZEXT with delta 0, can take a delta:
+			 * (u32)((u32)(base + 0) + off) is (u32)(base + off).
+			 * The add has to be 32-bit as well, since a 64-bit one
+			 * parts company with the link once the low half wraps.
+			 *
+			 * Everything else still drops the link. A zero delta
+			 * reached by an add rather than by the mov, say "r1 +=
+			 * r3" with r3 known to be 0, has already spent its
+			 * delta; composing onto it keeps a link alive across a
+			 * loop's increments, and since the delta is compared
+			 * for equality, every value the loop reaches becomes a
+			 * state of its own and stops pruning.
 			 */
+			if (dst_reg->link_kind != BPF_REG_LINK_ZEXT || !alu32 ||
+			    dst_reg->delta) {
+				/* also the target of the two gotos above */
 clear_id:
-			clear_scalar_id(dst_reg);
+				bpf_clear_scalar_id(dst_reg);
+			} else {
+				dst_reg->delta = off;
+			}
 		} else {
 			if (alu32)
-				dst_reg->id |= BPF_ADD_CONST32;
+				dst_reg->link_kind = BPF_REG_LINK_ZEXT;
 			else
-				dst_reg->id |= BPF_ADD_CONST64;
+				dst_reg->link_kind = BPF_REG_LINK_FULL;
 			dst_reg->delta = off;
 		}
 	} else {
@@ -17661,7 +17774,7 @@ clear_id:
 		 * Make sure ID is cleared otherwise dst_reg min/max could be
 		 * incorrectly propagated into other registers by sync_linked_regs()
 		 */
-		clear_scalar_id(dst_reg);
+		bpf_clear_scalar_id(dst_reg);
 	}
 	return 0;
 }
@@ -17851,13 +17964,30 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 						return -EACCES;
 					} else if (src_reg->type == SCALAR_VALUE) {
 						bool no_sext;
+						/*
+						 * A 32-bit sign extension keeps the low 32
+						 * bits, so dst shares them with whatever src
+						 * shares them with. Both base + d and
+						 * (u32)(base + d) have low half (base + d), so
+						 * dst is (s32)(base + d) either way: inherit
+						 * src's id and delta and record
+						 * BPF_REG_LINK_SEXT.
+						 */
+						bool subreg_link =
+							(insn->off >> 3) == 4 &&
+							(src_reg != dst_reg || src_reg->id);
 
 						no_sext = reg_umax(src_reg) < (1ULL << (insn->off - 1));
 						if (no_sext)
 							assign_scalar_id_before_mov(env, src_reg);
+						else if (subreg_link && !src_reg->id &&
+							 !tnum_is_const(src_reg->var_off))
+							src_reg->id = ++env->id_gen;
 						*dst_reg = *src_reg;
-						if (!no_sext)
-							clear_scalar_id(dst_reg);
+						if (!no_sext && subreg_link && src_reg->id)
+							dst_reg->link_kind = BPF_REG_LINK_SEXT;
+						else if (!no_sext)
+							bpf_clear_scalar_id(dst_reg);
 						coerce_reg_to_size_sx(dst_reg, insn->off >> 3);
 					} else {
 						mark_reg_unknown(env, regs, insn->dst_reg);
@@ -17873,16 +18003,43 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 				} else if (src_reg->type == SCALAR_VALUE) {
 					if (insn->off == 0) {
 						bool is_src_reg_u32 = get_reg_width(src_reg) <= 32;
+						/*
+						 * A wide src shares only its low 32 bits. A
+						 * full link would let dst's [0, U32_MAX]
+						 * propagate onto src's unknown high bits, so
+						 * record a low-32-only link instead. A
+						 * self-mov has nothing to link.
+						 */
+						bool subreg_link = !is_src_reg_u32 &&
+								   src_reg != dst_reg;
 
-						if (is_src_reg_u32)
+						if (is_src_reg_u32 || subreg_link)
 							assign_scalar_id_before_mov(env, src_reg);
 						*dst_reg = *src_reg;
-						/* Make sure ID is cleared if src_reg is not in u32
-						 * range otherwise dst_reg min/max could be incorrectly
-						 * propagated into src_reg by sync_linked_regs()
-						 */
-						if (!is_src_reg_u32)
-							clear_scalar_id(dst_reg);
+						if (subreg_link && src_reg->id) {
+							/*
+							 * Keep src's delta. It is
+							 * always zero here, since
+							 * assign_scalar_id_before_mov()
+							 * above has just dropped any
+							 * kind src carried; the
+							 * inheritance starts to matter
+							 * once BPF_REG_LINK_SEXT is
+							 * spared there, because dst is
+							 * (u32)(base + delta) whatever
+							 * kind src had --
+							 * (u32)((s32)(base + d)) ==
+							 * (u32)(base + d).
+							 */
+							dst_reg->link_kind = BPF_REG_LINK_ZEXT;
+						} else if (!is_src_reg_u32) {
+							/*
+							 * dst min/max could otherwise be
+							 * propagated back into a src that
+							 * is not in u32 range.
+							 */
+							bpf_clear_scalar_id(dst_reg);
+						}
 					} else {
 						/* case: W1 = (s8, s16)W2 */
 						bool no_sext = reg_umax(src_reg) < (1ULL << (insn->off - 1));
@@ -17891,7 +18048,7 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 							assign_scalar_id_before_mov(env, src_reg);
 						*dst_reg = *src_reg;
 						if (!no_sext)
-							clear_scalar_id(dst_reg);
+							bpf_clear_scalar_id(dst_reg);
 						coerce_subreg_to_size_sx(dst_reg, insn->off >> 3);
 					}
 				} else {
@@ -18697,7 +18854,7 @@ static void __collect_linked_regs(struct linked_regs *reg_set, struct bpf_reg_st
 {
 	struct linked_reg *e;
 
-	if (reg->type != SCALAR_VALUE || (reg->id & ~BPF_ADD_CONST) != id)
+	if (reg->type != SCALAR_VALUE || reg->id != id)
 		return;
 
 	e = linked_regs_push(reg_set);
@@ -18706,7 +18863,7 @@ static void __collect_linked_regs(struct linked_regs *reg_set, struct bpf_reg_st
 		e->is_reg = is_reg;
 		e->regno = spi_or_reg;
 	} else {
-		clear_scalar_id(reg);
+		bpf_clear_scalar_id(reg);
 	}
 }
 
@@ -18725,7 +18882,6 @@ static void collect_linked_regs(struct bpf_verifier_env *env,
 	u16 live_regs;
 	int i, j;
 
-	id = id & ~BPF_ADD_CONST;
 	for (i = vstate->curframe; i >= 0; i--) {
 		live_regs = aux[bpf_frame_insn_idx(vstate, i)].live_regs_before;
 		func = vstate->frame[i];
@@ -18763,20 +18919,74 @@ static void sync_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier_s
 				: &bpf_stack_slot(vstate->frame[e->frameno], e->spi)->spilled_ptr;
 		if (reg->type != SCALAR_VALUE || reg == known_reg)
 			continue;
-		if ((reg->id & ~BPF_ADD_CONST) != (known_reg->id & ~BPF_ADD_CONST))
+		if (reg->id != known_reg->id)
 			continue;
 		/*
-		 * Skip mixed 32/64-bit links: the delta relationship doesn't
-		 * hold across different ALU widths.
+		 * The reverse direction, from a narrow known_reg to a wider
+		 * reg, does not invert: neither (u32)(base + delta) nor
+		 * (s32)(base + delta) says anything about the base's high
+		 * half. It does still pin the low half, though -- both sides
+		 * are (base + delta) mod 2^32, differing only by their deltas
+		 * -- so recover that much and leave the high half alone.
 		 */
-		if (((reg->id ^ known_reg->id) & BPF_ADD_CONST) == BPF_ADD_CONST)
+		if ((known_reg->link_kind == BPF_REG_LINK_ZEXT ||
+		     known_reg->link_kind == BPF_REG_LINK_SEXT) &&
+		    reg->link_kind != BPF_REG_LINK_ZEXT &&
+		    reg->link_kind != BPF_REG_LINK_SEXT &&
+		    get_reg_width(reg) > 32) {
+			/*
+			 * Only @low's 32-bit half is meaningful: its var_off
+			 * is advanced over all 64 bits while r64 and the
+			 * base/step line are not, and nothing below reads
+			 * either. It is a scratch value, not a register state.
+			 */
+			struct bpf_reg_state low = *known_reg;
+			struct tnum low32;
+
+			fake_reg.type = SCALAR_VALUE;
+			__mark_reg_known(&fake_reg,
+					 (s64)reg->delta - (s64)known_reg->delta);
+			scalar32_min_max_add(&low, &fake_reg);
+			low.var_off = tnum_add(low.var_off, fake_reg.var_off);
+
+			cnum32_intersect_with(&reg->r32, low.r32);
+			low32 = tnum_intersect(tnum_subreg(reg->var_off),
+					       tnum_subreg(low.var_off));
+			reg->var_off = tnum_with_subreg(reg->var_off, low32);
+			reg_bounds_sync(reg);
+			goto scratched;
+		}
+		/*
+		 * Skip a pair of differing kinds. Where BPF_REG_LINK_FULL meets
+		 * a 32-bit kind the delta relationship does not hold over all
+		 * 64 bits: the deltas were added at different ALU widths. For a
+		 * wide member the low half still relates and the arm above has
+		 * already recovered it; a member that fits 32 bits does not
+		 * reach that arm and is skipped outright. BPF_REG_LINK_ZEXT
+		 * against BPF_REG_LINK_SEXT is not that case -- both are base +
+		 * delta in the low 32 bits, so narrowing one really does narrow
+		 * the other -- but that deduction is declined on purpose. It
+		 * makes an int loop counter a fresh constant on every
+		 * iteration, so no two iterations prune against each other and
+		 * the program runs to the instruction limit. See
+		 * sext_no_sync_from_zext_sibling.
+		 */
+		if (reg->link_kind && known_reg->link_kind &&
+		    reg->link_kind != known_reg->link_kind)
 			continue;
-		if ((!(reg->id & BPF_ADD_CONST) && !(known_reg->id & BPF_ADD_CONST)) ||
-		    reg->delta == known_reg->delta) {
+		/*
+		 * Only an unlinked pair is a plain copy. Anything carrying a
+		 * kind goes through the differencing arm below, which adds the
+		 * delta difference (zero when the deltas match) and then
+		 * re-applies whichever extension the kinds call for.
+		 */
+		if (!reg->link_kind && !known_reg->link_kind) {
 			*reg = *known_reg;
 		} else {
+			enum bpf_reg_link_kind saved_link_kind = reg->link_kind;
 			s32 saved_off = reg->delta;
 			u32 saved_id = reg->id;
+			struct bpf_reg_state prev = *reg;
 
 			fake_reg.type = SCALAR_VALUE;
 			__mark_reg_known(&fake_reg, (s64)reg->delta - (s64)known_reg->delta);
@@ -18784,20 +18994,61 @@ static void sync_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier_s
 			/* reg = known_reg; reg += delta */
 			*reg = *known_reg;
 			/*
-			 * Must preserve off and id, otherwise another sync_linked_regs()
-			 * will be incorrect.
+			 * Must preserve off, id and link_kind, otherwise another
+			 * sync_linked_regs() will be incorrect.
 			 */
 			reg->delta = saved_off;
 			reg->id = saved_id;
+			reg->link_kind = saved_link_kind;
 
 			scalar_step_add(reg, reg, &fake_reg);
 			scalar32_min_max_add(reg, &fake_reg);
 			scalar_min_max_add(reg, &fake_reg);
 			reg->var_off = tnum_add(reg->var_off, fake_reg.var_off);
-			if ((reg->id | known_reg->id) & BPF_ADD_CONST32)
+			if (reg->link_kind == BPF_REG_LINK_SEXT) {
+				sext_32_to_64(reg);
+			} else if (reg->link_kind == BPF_REG_LINK_ZEXT ||
+				   known_reg->link_kind == BPF_REG_LINK_ZEXT ||
+				   known_reg->link_kind == BPF_REG_LINK_SEXT) {
+				/*
+				 * Either @reg is itself the zero extension, or
+				 * @reg has no 32-bit kind and @known_reg does
+				 * -- the reverse direction, where the guard
+				 * above has already proved @reg fits 32 bits.
+				 * Then @reg is @known_reg's low half with
+				 * nothing above it, whichever way @known_reg
+				 * filled its own high half, so the zero
+				 * extension is the reconstruction for both
+				 * kinds. BPF_REG_LINK_FULL is not here on
+				 * purpose: it relates all 64 bits and must not
+				 * be truncated.
+				 */
 				zext_32_to_64(reg);
+			}
+			/*
+			 * Intersect rather than overwrite. A BPF_REG_LINK_ZEXT
+			 * link over a wide base does not propagate back, so the
+			 * base can be wider than what @reg has already proved
+			 * about itself; replacing it would lose that.
+			 */
+			cnum64_intersect_with(&reg->r64, prev.r64);
+			cnum32_intersect_with(&reg->r32, prev.r32);
+			reg->var_off = tnum_intersect(reg->var_off, prev.var_off);
+			/*
+			 * An empty intersection means the two sides contradict,
+			 * so this path is unreachable. Say nothing rather than
+			 * say it with an empty range: reg_bounds_sync() below
+			 * refuses to touch one, and the first later
+			 * reg_bounds_sanity_check() would report it as a
+			 * verifier bug, which it is not. Keeping the wider
+			 * pre-intersect state only costs precision on a path
+			 * that cannot be taken.
+			 */
+			if (range_bounds_violation(reg))
+				*reg = prev;
 			reg_bounds_sync(reg);
 		}
+scratched:
 		if (e->is_reg)
 			mark_reg_scratched(env, e->regno);
 		else
@@ -19908,7 +20159,7 @@ void bpf_clear_singular_ids(struct bpf_verifier_env *env,
 			continue;
 		if (!reg->id)
 			continue;
-		idset_cnt_inc(idset, reg->id & ~BPF_ADD_CONST);
+		idset_cnt_inc(idset, reg->id);
 	}));
 
 	bpf_for_each_reg_in_vstate(st, func, reg, ({
@@ -19916,8 +20167,8 @@ void bpf_clear_singular_ids(struct bpf_verifier_env *env,
 			continue;
 		if (!reg->id)
 			continue;
-		if (idset_cnt_get(idset, reg->id & ~BPF_ADD_CONST) == 1)
-			clear_scalar_id(reg);
+		if (idset_cnt_get(idset, reg->id) == 1)
+			bpf_clear_scalar_id(reg);
 	}));
 }
 

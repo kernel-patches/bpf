@@ -31,23 +31,23 @@ l1_%=:	exit;						\
 }
 
 SEC("socket")
-__description("check w reg not equal if r reg upper32 bits not 0")
-__failure __msg("R1 !read_ok")
+__description("check w reg equal if r reg upper32 bits not 0")
+__success
 __naked void subreg_equality_2(void)
 {
 	asm volatile ("					\
 	call %[bpf_ktime_get_ns];			\
 	r2 = r0;					\
-	/* Upper 4-bytes of r2 may not be 0, thus insn	\
-	 * w3 = w2 should not propagate reg id,	and	\
-	 * w2 < 9 comparison should not propagate	\
-	 * the range for r3 either.			\
+	/* Upper 4-bytes of r2 may not be 0, so r3 does	\
+	 * not equal r2. It does share r2's low 32 bits	\
+	 * though, so w2 < 9 still bounds r3: the	\
+	 * zero-extending mov leaves nothing above them.\
 	 */						\
 	w3 = w2;					\
 	if w2 < 9 goto l0_%=;				\
 	exit;						\
 l0_%=:	if r3 < 9 goto l1_%=;				\
-	/* r1 read is illegal at this point */		\
+	/* unreachable, so the r1 read is never made */	\
 	r0 -= r1;					\
 l1_%=:	exit;						\
 "	:

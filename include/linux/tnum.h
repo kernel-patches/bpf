@@ -63,6 +63,13 @@ struct tnum tnum_union(struct tnum t1, struct tnum t2);
 /* Return @a with all but the lowest @size bytes cleared */
 struct tnum tnum_cast(struct tnum a, u8 size);
 
+/*
+ * Return the lowest @size bytes of @a sign-extended to 64 bits. @size must
+ * be 1, 2 or 4: tnum_cast() above cannot express a 64-bit field, and the
+ * shift here would be by 64 for @size 0.
+ */
+struct tnum tnum_sext(struct tnum a, u8 size);
+
 /* Swap the bytes of a tnum */
 struct tnum tnum_bswap16(struct tnum a);
 struct tnum tnum_bswap32(struct tnum a);
