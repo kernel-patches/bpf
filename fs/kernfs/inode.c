@@ -254,6 +254,47 @@ struct inode *kernfs_get_inode(struct super_block *sb, struct kernfs_node *kn)
 	return inode;
 }
 
+static int kernfs_inode_test(struct inode *inode, void *data)
+{
+	return inode->i_ino == *(u64 *)data;
+}
+
+/**
+ * kernfs_get_inode_locked - attach a preallocated inode to @kn
+ * @inode: inode allocated with new_inode() on the target superblock
+ * @kn: kernfs_node to get the inode for
+ *
+ * The caller holds kernfs_rwsem for reading, so @kn cannot be removed
+ * while the inode is inserted and __kernfs_remove() always finds it to
+ * clear its i_nlink.  @inode is consumed.
+ *
+ * Returns the inode now attached to @kn, which is @inode unless one was
+ * already hashed for it (e.g. by a file handle decode), or NULL if @kn
+ * is no longer active.
+ */
+struct inode *kernfs_get_inode_locked(struct inode *inode,
+				      struct kernfs_node *kn)
+{
+	u64 ino = kernfs_ino(kn);
+	struct inode *res = NULL;
+
+	lockdep_assert_held_read(&kernfs_root(kn)->kernfs_rwsem);
+
+	if (!kernfs_active(kn))
+		goto out_iput;
+
+	inode->i_ino = ino;
+	res = inode_insert5(inode, ino, kernfs_inode_test, NULL, &ino);
+	if (res != inode)
+		goto out_iput;
+
+	kernfs_init_inode(kn, inode);
+	return inode;
+out_iput:
+	iput(inode);
+	return res;
+}
+
 /*
  * The kernfs_node serves as both an inode and a directory entry for
  * kernfs.  To prevent the kernfs inode numbers from being freed
