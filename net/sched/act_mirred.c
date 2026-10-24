@@ -316,6 +316,10 @@ static int tcf_mirred_to_dev(struct sk_buff *skb, struct tcf_mirred *m,
 		}
 	}
 
+	if (!expects_nh &&
+	    !pskb_may_pull(skb_to_send, dev->min_header_len))
+		goto err_cant_do;
+
 	skb_to_send->skb_iif = skb->dev->ifindex;
 	skb_to_send->dev = dev;
 
@@ -335,6 +339,8 @@ static int tcf_mirred_to_dev(struct sk_buff *skb, struct tcf_mirred *m,
 	return retval;
 
 err_cant_do:
+	if (skb_to_send != skb)
+		kfree_skb(skb_to_send);
 	if (is_redirect)
 		retval = TC_ACT_SHOT;
 	tcf_action_inc_overlimit_qstats(&m->common);
