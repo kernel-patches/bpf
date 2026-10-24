@@ -279,7 +279,8 @@ void l3mdev_update_flow(struct net *net, struct flowi *fl)
 		if (dev) {
 			if (!fl->flowi_l3mdev) {
 				fl->flowi_l3mdev = l3mdev_master_ifindex_rcu(dev);
-				fl->flowi_flags |= FLOWI_FLAG_L3MDEV_OIF;
+				if (fl->flowi_l3mdev)
+					fl->flowi_flags |= FLOWI_FLAG_L3MDEV_OIF;
 			}
 
 			/* oif set to L3mdev directs lookup to its table;
