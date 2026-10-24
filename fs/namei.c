@@ -4195,7 +4195,7 @@ int vfs_create_no_perm(const struct mnt_idmap *idmap, struct inode *dir,
 	int error;
 
 	if (!dir->i_op->create)
-		return -EACCES;
+		return -EOPNOTSUPP;
 
 	error = try_break_deleg(dir, LEASE_BREAK_DIR_CREATE, di);
 	if (error)
@@ -4218,7 +4218,7 @@ struct dentry *vfs_mkdir_no_perm(const struct mnt_idmap *idmap, struct inode *di
 	int error;
 
 	if (!dir->i_op->mkdir)
-		return ERR_PTR(-EPERM);
+		return ERR_PTR(-EOPNOTSUPP);
 
 	if (max_links && dir->i_nlink >= max_links)
 		return ERR_PTR(-EMLINK);
@@ -4264,7 +4264,7 @@ int vfs_create(const struct mnt_idmap *idmap, struct dentry *dentry, umode_t mod
 		return error;
 
 	if (!dir->i_op->create)
-		return -EACCES;	/* shouldn't it be ENOSYS? */
+		return -EOPNOTSUPP;
 
 	mode = vfs_prepare_mode(idmap, dir, mode, S_IALLUGO, S_IFREG);
 	error = security_inode_create(idmap, dir, dentry, mode);
@@ -5486,7 +5486,7 @@ struct dentry *vfs_mkdir(const struct mnt_idmap *idmap, struct inode *dir,
 	if (error)
 		goto err;
 
-	error = -EPERM;
+	error = -EOPNOTSUPP;
 	if (!dir->i_op->mkdir)
 		goto err;
 
