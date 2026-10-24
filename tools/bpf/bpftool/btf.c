@@ -6,6 +6,7 @@
 #endif
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/bitmap.h>
 #include <linux/err.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -1092,22 +1093,152 @@ static struct sort_datum *sort_btf_c(const struct btf *btf)
 	return datums;
 }
 
-static int dump_btf_c(const struct btf *btf,
+/*
+ * The verifier translates field accesses of some types into accesses
+ * to kernel structures, see bpf_convert_ctx_accesses().
+ * The translation keys on the immediate offset of each load or store,
+ * so offsets into these types must stay immediates.
+ */
+static const char * const btf_c_static_offset_types[] = {
+	"__sk_buff",
+	"bpf_perf_event_data",
+	"bpf_sk_lookup",
+	"bpf_sock",
+	"bpf_sock_addr",
+	"bpf_sock_ops",
+	"bpf_sockopt",
+	"bpf_sysctl",
+	"bpf_tcp_sock",
+	"bpf_xdp_sock",
+	"sk_msg_md",
+	"sk_reuseport_md",
+	"xdp_md",
+};
+
+static bool btf_c_needs_static_offset(const struct btf *btf, const struct btf_type *t)
+{
+	const char *name;
+	size_t i;
+
+	if (!btf_is_struct(t))
+		return false;
+
+	name = btf__name_by_offset(btf, t->name_off);
+	for (i = 0; i < ARRAY_SIZE(btf_c_static_offset_types); i++) {
+		if (!strcmp(name, btf_c_static_offset_types[i]))
+			return true;
+	}
+	return false;
+}
+
+/*
+ * Anonymous records within types that need static offsets must not start
+ * CO-RE access chains. Named records, typedefs and pointer targets are
+ * separate types.
+ */
+static void btf_c_mark_no_pai(const struct btf *btf, __u32 id, unsigned long *no_pai)
+{
+	const struct btf_type *t = btf__type_by_id(btf, id);
+	const struct btf_member *m = btf_members(t);
+	__u32 i;
+
+	__set_bit(id, no_pai);
+	for (i = 0; i < btf_vlen(t); i++, m++) {
+		const struct btf_type *mt;
+		__u32 mid = m->type;
+
+		mt = btf__type_by_id(btf, mid);
+		while (btf_is_array(mt) || btf_is_mod(mt)) {
+			mid = btf_is_array(mt) ? btf_array(mt)->type : mt->type;
+			mt = btf__type_by_id(btf, mid);
+		}
+		if (btf_is_composite(mt) && !mt->name_off && !test_bit(mid, no_pai))
+			btf_c_mark_no_pai(btf, mid, no_pai);
+	}
+}
+
+static int btf_c_annotate_records(struct btf *btf)
+{
+	__u32 i, cnt = btf__type_cnt(btf);
+	unsigned long *no_pai;
+	int err;
+
+	no_pai = bitmap_zalloc(cnt);
+	if (!no_pai)
+		return -ENOMEM;
+
+	for (i = 1; i < cnt; i++) {
+		if (btf_c_needs_static_offset(btf, btf__type_by_id(btf, i)))
+			btf_c_mark_no_pai(btf, i, no_pai);
+	}
+
+	for (i = 1; i < cnt; i++) {
+		const struct btf_type *t = btf__type_by_id(btf, i);
+		const char *attr;
+
+		if (!btf_is_composite(t))
+			continue;
+		if (!test_bit(i, no_pai))
+			attr = "__bpf_relocatable";
+		else if (btf_c_needs_static_offset(btf, t))
+			attr = "__bpf_static_offset";
+		else
+			continue;
+		err = btf__add_decl_attr(btf, attr, i, -1);
+		if (err < 0)
+			goto out;
+	}
+
+	err = 0;
+out:
+	bitmap_free(no_pai);
+	return err;
+}
+
+static int dump_btf_c(struct btf *btf,
 		      __u32 *root_type_ids, int root_type_cnt, bool sort_dump)
 {
 	struct sort_datum *datums = NULL;
-	struct btf_dump *d;
+	struct btf_dump *d = NULL;
+	struct btf *split;
+	size_t ptr_sz;
 	int err = 0, i;
 
-	d = btf_dump__new(btf, btf_dump_printf, NULL, NULL);
-	if (!d)
+	split = btf__new_empty_split(btf);
+	if (!split)
 		return -errno;
+
+	/* Retain the native default if the pointer size cannot be inferred. */
+	ptr_sz = btf__pointer_size(btf);
+	if (ptr_sz)
+		btf__set_pointer_size(split, ptr_sz);
+
+	err = btf_c_annotate_records(split);
+	if (err)
+		goto done;
+
+	d = btf_dump__new(split, btf_dump_printf, NULL, NULL);
+	if (!d) {
+		err = -errno;
+		goto done;
+	}
 
 	printf("#ifndef __VMLINUX_H__\n");
 	printf("#define __VMLINUX_H__\n");
 	printf("\n");
-	printf("#ifndef BPF_NO_PRESERVE_ACCESS_INDEX\n");
-	printf("#pragma clang attribute push (__attribute__((preserve_access_index)), apply_to = record)\n");
+	printf("#ifndef __bpf_relocatable\n");
+	printf("#if !defined(BPF_NO_PRESERVE_ACCESS_INDEX) && __has_attribute(preserve_access_index)\n");
+	printf("#define __bpf_relocatable preserve_access_index\n");
+	printf("#else\n");
+	printf("#define __bpf_relocatable\n");
+	printf("#endif\n");
+	printf("#endif\n\n");
+	printf("#ifndef __bpf_static_offset\n");
+	printf("#if __has_attribute(preserve_static_offset)\n");
+	printf("#define __bpf_static_offset preserve_static_offset\n");
+	printf("#else\n");
+	printf("#define __bpf_static_offset\n");
+	printf("#endif\n");
 	printf("#endif\n\n");
 	printf("#ifndef __ksym\n");
 	printf("#define __ksym __attribute__((section(\".ksyms\")))\n");
@@ -1130,10 +1261,10 @@ static int dump_btf_c(const struct btf *btf,
 				goto done;
 		}
 	} else {
-		int cnt = btf__type_cnt(btf);
+		int cnt = btf__type_cnt(split);
 
 		if (sort_dump)
-			datums = sort_btf_c(btf);
+			datums = sort_btf_c(split);
 		for (i = 0; i < cnt; i++) {
 			int idx = datums ? datums[i].index : i;
 
@@ -1146,20 +1277,17 @@ static int dump_btf_c(const struct btf *btf,
 				goto done;
 		}
 
-		err = dump_btf_kfuncs(d, btf);
+		err = dump_btf_kfuncs(d, split);
 		if (err)
 			goto done;
 	}
 
-	printf("#ifndef BPF_NO_PRESERVE_ACCESS_INDEX\n");
-	printf("#pragma clang attribute pop\n");
-	printf("#endif\n");
-	printf("\n");
 	printf("#endif /* __VMLINUX_H__ */\n");
 
 done:
 	free(datums);
 	btf_dump__free(d);
+	btf__free(split);
 	return err;
 }
 
