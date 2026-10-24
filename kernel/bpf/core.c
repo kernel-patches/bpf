@@ -1068,8 +1068,17 @@ void bpf_prog_pack_free(void *ptr, u32 size)
 	nbits = BPF_PROG_SIZE_TO_NBITS(size);
 	pos = ((unsigned long)ptr - (unsigned long)pack->ptr) >> BPF_PROG_CHUNK_SHIFT;
 
+	/*
+	 * arm64 sends IPI to all CPUs in bpf_arch_text_invalidate().
+	 * Don't hold pack_mutex across it. The bits are still set,
+	 * so the range cannot be reused and the pack cannot be freed.
+	 */
+	if (IS_ENABLED(CONFIG_ARM64))
+		mutex_unlock(&pack_mutex);
 	WARN_ONCE(bpf_arch_text_invalidate(ptr, size),
 		  "bpf_prog_pack bug: missing bpf_arch_text_invalidate?\n");
+	if (IS_ENABLED(CONFIG_ARM64))
+		mutex_lock(&pack_mutex);
 
 	bitmap_clear(pack->bitmap, pos, nbits);
 
