@@ -29,6 +29,11 @@
 #include <linux/task_work.h>
 #include <linux/irq_work.h>
 #include <linux/buildid.h>
+#include <linux/mm.h>
+#include <linux/mman.h>
+#include <linux/personality.h>
+#include <asm/cacheflush.h>
+#include <asm/tlb.h>
 
 #include "../../lib/kstrtox.h"
 
@@ -3739,6 +3744,112 @@ __bpf_kfunc int bpf_copy_from_user_mm(void *dst, u32 dst__sz,
 }
 
 /**
+ * bpf_copy_to_user_current() - Copy data to the current task's address space
+ * @unsafe_dst__ign: Destination address in the current task's address space
+ * @src__srcptr:      Source buffer in BPF-accessible memory
+ * @src__sz:          Number of bytes to copy
+ * @flags:            Reserved for future use; must be zero
+ *
+ * Copies data to the current task's address space. The operation may fault in
+ * destination pages. A failed copy may have written a prefix of the source.
+ *
+ * Return: 0 on success, -EINVAL if @flags is non-zero, -EFAULT if the copy is
+ * incomplete, or -EPERM if the current task cannot safely access userspace.
+ */
+__bpf_kfunc int bpf_copy_to_user_current(void __user *unsafe_dst__ign,
+						const void *src__srcptr,
+						u32 src__sz, u64 flags)
+{
+	if (unlikely(flags))
+		return -EINVAL;
+	if (!src__sz)
+		return 0;
+	if (unlikely(in_interrupt() || current->flags & (PF_KTHREAD | PF_EXITING)))
+		return -EPERM;
+	if (unlikely(!nmi_uaccess_okay()))
+		return -EPERM;
+	if (unlikely(!current->mm))
+		return -EFAULT;
+	if (copy_to_user(unsafe_dst__ign, src__srcptr, src__sz))
+		return -EFAULT;
+
+	return 0;
+}
+
+/**
+ * bpf_user_mmap() - Allocate non-executable anonymous memory in the current mm
+ * @len:  Length of the mapping
+ * @prot: Must be PROT_READ | PROT_WRITE
+ *
+ * Creates a private anonymous mapping in the current task's address space.
+ * The mapping cannot be made executable with mprotect(), including when the
+ * task has READ_IMPLIES_EXEC set. Pages are faulted in on first access.
+ *
+ * Return: The userspace address on success, or a negative error code.
+ */
+__bpf_kfunc long bpf_user_mmap(unsigned long len, unsigned long prot)
+{
+	const unsigned long flags = MAP_PRIVATE | MAP_ANONYMOUS;
+	struct mm_struct *mm = current->mm;
+	unsigned long addr, populate;
+	struct vm_area_struct *vma;
+	int err;
+
+	if (unlikely(in_interrupt() || current->flags & (PF_KTHREAD | PF_EXITING)))
+		return -EPERM;
+	if (unlikely(!nmi_uaccess_okay()))
+		return -EPERM;
+	if (unlikely(!mm))
+		return -EFAULT;
+	if (unlikely(!len || prot != (PROT_READ | PROT_WRITE)))
+		return -EINVAL;
+
+	err = security_mmap_file(NULL, prot, flags);
+	if (err)
+		return err;
+
+	if (mmap_write_lock_killable(mm))
+		return -EINTR;
+
+	addr = do_mmap(NULL, 0, len, prot, flags,
+		       mk_vma_flags(VMA_DONTEXPAND_BIT, VMA_DONTCOPY_BIT, VMA_DONTDUMP_BIT),
+		       0, &populate, NULL);
+	if (!IS_ERR_VALUE(addr)) {
+		/* Keep the mapping non-executable, including READ_IMPLIES_EXEC. */
+		vma = find_vma(mm, addr);
+		vma_start_write(vma);
+		vm_flags_clear(vma, VM_EXEC | VM_MAYEXEC);
+		vma_set_page_prot(vma);
+	}
+
+	mmap_write_unlock(mm);
+
+	if (!IS_ERR_VALUE(addr) && populate)
+		mm_populate(addr, populate);
+	return addr;
+}
+
+/**
+ * bpf_user_munmap() - Unmap memory from the current task's address space
+ * @addr: Start of the mapping
+ * @len:  Length of the mapping
+ *
+ * Return: 0 on success, or a negative error code.
+ */
+__bpf_kfunc int bpf_user_munmap(unsigned long addr, unsigned long len)
+{
+	if (unlikely(in_interrupt() || current->flags & (PF_KTHREAD | PF_EXITING)))
+		return -EPERM;
+	if (unlikely(!nmi_uaccess_okay()))
+		return -EPERM;
+	if (unlikely(!current->mm))
+		return -EFAULT;
+	if (!len)
+		return -EINVAL;
+	return vm_munmap(addr, len);
+}
+
+/**
  * bpf_copy_from_user_mm_str() - Copy a string from an address space
  * @dst:             Destination address, in kernel space. This buffer must be
  *                   at least @dst__sz bytes long
@@ -5139,6 +5250,26 @@ static const struct btf_kfunc_id_set generic_kfunc_set = {
 	.set   = &generic_btf_ids,
 };
 
+BTF_KFUNCS_START(user_mem_btf_ids)
+BTF_ID_FLAGS(func, bpf_copy_to_user_current, KF_SLEEPABLE | KF_PERFMON)
+BTF_ID_FLAGS(func, bpf_user_mmap, KF_SLEEPABLE | KF_PERFMON)
+BTF_ID_FLAGS(func, bpf_user_munmap, KF_SLEEPABLE | KF_PERFMON)
+BTF_KFUNCS_END(user_mem_btf_ids)
+
+static int user_mem_kfunc_filter(const struct bpf_prog *prog, u32 kfunc_id)
+{
+	(void)prog;
+	if (!btf_id_set8_contains(&user_mem_btf_ids, kfunc_id))
+		return 0;
+	return security_locked_down(LOCKDOWN_BPF_WRITE_USER);
+}
+
+static const struct btf_kfunc_id_set user_mem_kfunc_set = {
+	.owner = THIS_MODULE,
+	.set = &user_mem_btf_ids,
+	.filter = user_mem_kfunc_filter,
+};
+
 BTF_ID_LIST(generic_dtor_ids)
 BTF_ID(struct, task_struct)
 BTF_ID(func, bpf_task_release_dtor)
@@ -5266,6 +5397,7 @@ static int __init kfunc_init(void)
 	};
 
 	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_TRACING, &generic_kfunc_set);
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_KPROBE, &user_mem_kfunc_set);
 	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_CLS, &generic_kfunc_set);
 	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_XDP, &generic_kfunc_set);
 	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS, &generic_kfunc_set);
