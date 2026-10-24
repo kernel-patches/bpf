@@ -4210,47 +4210,58 @@ static const struct bpf_func_proto bpf_xdp_adjust_head_proto = {
 void bpf_xdp_copy_buf(struct xdp_buff *xdp, unsigned long off,
 		      void *buf, unsigned long len, bool flush)
 {
-	unsigned long ptr_len, ptr_off = 0;
+	unsigned long ptr_len, ptr_off, o, l;
 	skb_frag_t *next_frag, *end_frag;
 	struct skb_shared_info *sinfo;
+	u8 *ptr_buf, *b, *orig = buf;
 	void *src, *dst;
-	u8 *ptr_buf;
+	int pass;
 
 	if (likely(xdp->data_end - xdp->data >= off + len)) {
 		src = flush ? buf : xdp->data + off;
 		dst = flush ? xdp->data + off : buf;
-		memcpy(dst, src, len);
+		memmove(dst, src, len);
 		return;
 	}
 
 	sinfo = xdp_get_shared_info_from_buff(xdp);
 	end_frag = &sinfo->frags[sinfo->nr_frags];
-	next_frag = &sinfo->frags[0];
 
-	ptr_len = xdp->data_end - xdp->data;
-	ptr_buf = xdp->data;
+	for (pass = 0; pass < 2; pass++) {
+		o = off;
+		l = len;
+		b = buf;
+		ptr_off = 0;
+		ptr_len = xdp->data_end - xdp->data;
+		ptr_buf = xdp->data;
+		next_frag = &sinfo->frags[0];
 
-	while (true) {
-		if (off < ptr_off + ptr_len) {
-			unsigned long copy_off = off - ptr_off;
-			unsigned long copy_len = min(len, ptr_len - copy_off);
+		while (true) {
+			if (o < ptr_off + ptr_len) {
+				unsigned long copy_off = o - ptr_off;
+				unsigned long copy_len = min(l, ptr_len - copy_off);
+				bool self = orig >= ptr_buf && orig < ptr_buf + ptr_len;
+				bool turn = pass == flush;
 
-			src = flush ? buf : ptr_buf + copy_off;
-			dst = flush ? ptr_buf + copy_off : buf;
-			memcpy(dst, src, copy_len);
+				if (self == turn) {
+					src = flush ? b : ptr_buf + copy_off;
+					dst = flush ? ptr_buf + copy_off : b;
+					memmove(dst, src, copy_len);
+				}
 
-			off += copy_len;
-			len -= copy_len;
-			buf += copy_len;
+				o += copy_len;
+				l -= copy_len;
+				b += copy_len;
+			}
+
+			if (!l || next_frag == end_frag)
+				break;
+
+			ptr_off += ptr_len;
+			ptr_buf = skb_frag_address(next_frag);
+			ptr_len = skb_frag_size(next_frag);
+			next_frag++;
 		}
-
-		if (!len || next_frag == end_frag)
-			break;
-
-		ptr_off += ptr_len;
-		ptr_buf = skb_frag_address(next_frag);
-		ptr_len = skb_frag_size(next_frag);
-		next_frag++;
 	}
 }
 
