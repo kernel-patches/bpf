@@ -3386,6 +3386,16 @@ __bpf_kfunc void *bpf_rdonly_cast(const void *obj__ign, u32 btf_id__k)
 	return (void *)obj__ign;
 }
 
+__bpf_kfunc u64 bpf_rol64(u64 x, u32 n)
+{
+	return rol64(x, n);
+}
+
+__bpf_kfunc u64 bpf_select64(u64 cond, u64 a, u64 b)
+{
+	return cond ? a : b;
+}
+
 __bpf_kfunc void bpf_rcu_read_lock(void)
 {
 	rcu_read_lock();
@@ -5150,6 +5160,8 @@ BTF_ID(func, bpf_cgroup_release_dtor)
 BTF_KFUNCS_START(common_btf_ids)
 BTF_ID_FLAGS(func, bpf_cast_to_kern_ctx, KF_FASTCALL)
 BTF_ID_FLAGS(func, bpf_rdonly_cast, KF_FASTCALL | KF_PERFMON)
+BTF_ID_FLAGS(func, bpf_rol64, KF_FASTCALL)
+BTF_ID_FLAGS(func, bpf_select64, KF_FASTCALL)
 BTF_ID_FLAGS(func, bpf_rcu_read_lock)
 BTF_ID_FLAGS(func, bpf_rcu_read_unlock)
 BTF_ID_FLAGS(func, bpf_dynptr_slice, KF_RET_NULL)

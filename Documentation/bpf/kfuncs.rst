@@ -532,6 +532,32 @@ CAP_SYS_ADMIN, in the same way that the equivalent BPF helpers are gated in
 bpf_base_func_proto(). A program loaded with CAP_BPF alone is rejected at load
 time.
 
+2.5.11 KF_FASTCALL flag
+-----------------------
+
+The KF_FASTCALL flag is used for kfuncs that programs may call with the
+``bpf_fastcall`` convention, in which a call clobbers only R0 and the argument
+registers. Compilers that support the convention keep the other registers of
+R1-R5 that are live across the call by spilling them to the stack before the
+call and filling them after it. If the verifier or the JIT inlines the kfunc,
+the verifier removes these spills and fills. Otherwise the kfunc is called and
+they stay.
+
+The x86-64 and arm64 JITs inline a KF_FASTCALL kfunc by copying the code that
+the compiler generated for it, when the code is short, has no branches or calls
+and does not use the stack. For example, a call of
+
+.. code-block:: c
+
+	__bpf_kfunc u64 bpf_rol64(u64 x, u32 n)
+	{
+		return rol64(x, n);
+	}
+
+becomes a rotate instruction and the moves around it. The C function remains
+the only implementation of such a kfunc: where it cannot be copied, it is
+called.
+
 2.6 Registering the kfuncs
 --------------------------
 
