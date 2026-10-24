@@ -329,6 +329,14 @@ void unix_peek_fpl(struct scm_fp_list *fpl)
 	if (!fpl || !fpl->count_unix)
 		return;
 
+	/*
+	 * Pair with smp_mb__after_spinlock() in unix_gc(). get_file() in
+	 * scm_fp_dup() increments an atomic reference count, so this ensures
+	 * that either GC sees the new references or this thread sees
+	 * gc_in_progress and invalidates unix_peek_seq.
+	 */
+	smp_mb__after_atomic();
+
 	if (!READ_ONCE(gc_in_progress))
 		return;
 
@@ -614,6 +622,12 @@ static void unix_gc(struct work_struct *work)
 	WRITE_ONCE(gc_in_progress, true);
 
 	spin_lock(&unix_gc_lock);
+	/*
+	 * Pair with smp_mb__after_atomic() in unix_peek_fpl() to ensure that
+	 * either the file-count reads below see MSG_PEEK's increments or
+	 * MSG_PEEK sees gc_in_progress.
+	 */
+	smp_mb__after_spinlock();
 
 	if (unix_graph_state == UNIX_GRAPH_NOT_CYCLIC) {
 		spin_unlock(&unix_gc_lock);

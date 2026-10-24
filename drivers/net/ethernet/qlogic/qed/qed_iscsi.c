@@ -14,6 +14,7 @@
 #include <linux/kernel.h>
 #include <linux/log2.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/pci.h>
 #include <linux/slab.h>
 #include <linux/stddef.h>
@@ -117,6 +118,8 @@ struct qed_iscsi_conn {
 	u16 physical_q1;
 	u8 abortive_dsconnect;
 };
+
+static DEFINE_MUTEX(qed_iscsi_conn_lock);
 
 static int qed_iscsi_async_event(struct qed_hwfn *p_hwfn, u8 fw_event_code,
 				 __le16 echo, union event_ring_data *data,
@@ -1080,6 +1083,7 @@ static int qed_iscsi_stop(struct qed_dev *cdev)
 {
 	int rc;
 
+	guard(mutex)(&qed_iscsi_conn_lock);
 	if (!(cdev->flags & QED_FLAG_STORAGE_STARTED)) {
 		DP_NOTICE(cdev, "iscsi already stopped\n");
 		return 0;
@@ -1158,6 +1162,7 @@ static int qed_iscsi_acquire_conn(struct qed_dev *cdev,
 	struct qed_hash_iscsi_con *hash_con;
 	int rc;
 
+	guard(mutex)(&qed_iscsi_conn_lock);
 	/* Allocate a hashed connection */
 	hash_con = kzalloc_obj(*hash_con, GFP_ATOMIC);
 	if (!hash_con)
@@ -1188,6 +1193,7 @@ static int qed_iscsi_release_conn(struct qed_dev *cdev, u32 handle)
 {
 	struct qed_hash_iscsi_con *hash_con;
 
+	guard(mutex)(&qed_iscsi_conn_lock);
 	hash_con = qed_iscsi_get_hash(cdev, handle);
 	if (!hash_con) {
 		DP_NOTICE(cdev, "Failed to find connection for handle %d\n",
@@ -1209,6 +1215,7 @@ static int qed_iscsi_offload_conn(struct qed_dev *cdev,
 	struct qed_hash_iscsi_con *hash_con;
 	struct qed_iscsi_conn *con;
 
+	guard(mutex)(&qed_iscsi_conn_lock);
 	hash_con = qed_iscsi_get_hash(cdev, handle);
 	if (!hash_con) {
 		DP_NOTICE(cdev, "Failed to find connection for handle %d\n",
@@ -1284,6 +1291,7 @@ static int qed_iscsi_update_conn(struct qed_dev *cdev,
 	struct qed_hash_iscsi_con *hash_con;
 	struct qed_iscsi_conn *con;
 
+	guard(mutex)(&qed_iscsi_conn_lock);
 	hash_con = qed_iscsi_get_hash(cdev, handle);
 	if (!hash_con) {
 		DP_NOTICE(cdev, "Failed to find connection for handle %d\n",
@@ -1308,6 +1316,7 @@ static int qed_iscsi_clear_conn_sq(struct qed_dev *cdev, u32 handle)
 {
 	struct qed_hash_iscsi_con *hash_con;
 
+	guard(mutex)(&qed_iscsi_conn_lock);
 	hash_con = qed_iscsi_get_hash(cdev, handle);
 	if (!hash_con) {
 		DP_NOTICE(cdev, "Failed to find connection for handle %d\n",
@@ -1324,6 +1333,7 @@ static int qed_iscsi_destroy_conn(struct qed_dev *cdev,
 {
 	struct qed_hash_iscsi_con *hash_con;
 
+	guard(mutex)(&qed_iscsi_conn_lock);
 	hash_con = qed_iscsi_get_hash(cdev, handle);
 	if (!hash_con) {
 		DP_NOTICE(cdev, "Failed to find connection for handle %d\n",
@@ -1354,6 +1364,7 @@ static int qed_iscsi_change_mac(struct qed_dev *cdev,
 {
 	struct qed_hash_iscsi_con *hash_con;
 
+	guard(mutex)(&qed_iscsi_conn_lock);
 	hash_con = qed_iscsi_get_hash(cdev, handle);
 	if (!hash_con) {
 		DP_NOTICE(cdev, "Failed to find connection for handle %d\n",

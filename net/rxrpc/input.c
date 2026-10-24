@@ -33,7 +33,8 @@ static void rxrpc_congestion_management(struct rxrpc_call *call,
 					struct rxrpc_ack_summary *summary)
 {
 	summary->change = rxrpc_cong_no_change;
-	summary->in_flight = rxrpc_tx_in_flight(call);
+	summary->in_flight = call->tx_in_flight;
+	call->cong_in_recovery = false;
 
 	if (test_and_clear_bit(RXRPC_CALL_RETRANS_TIMEOUT, &call->flags)) {
 		summary->retrans_timeo = true;
@@ -106,12 +107,12 @@ static void rxrpc_congestion_management(struct rxrpc_call *call,
 		call->cong_extra = 0;
 		call->cong_dup_acks = 0;
 		summary->need_retransmit = true;
-		summary->in_fast_or_rto_recovery = true;
+		call->cong_in_recovery = true;
+		rxrpc_tlp_init(call);
 		goto out;
 
 	case RXRPC_CA_FAST_RETRANSMIT:
-		rxrpc_tlp_init(call);
-		summary->in_fast_or_rto_recovery = true;
+		call->cong_in_recovery = true;
 		if (!summary->new_low_snack) {
 			if (summary->nr_new_sacks == 0)
 				call->cong_cwnd += 1;
@@ -288,11 +289,11 @@ static bool rxrpc_rotate_tx_window(struct rxrpc_call *call, rxrpc_seq_t to,
 			trace_rxrpc_rotate(call, tq, summary, seq, rxrpc_rotate_trace_snak);
 		}
 
-		call->tx_nr_sent--;
+		if (__test_and_clear_bit(ix, &tq->in_flight))
+			call->tx_in_flight--;
 		if (__test_and_clear_bit(ix, &tq->segment_lost))
 			call->tx_nr_lost--;
-		if (__test_and_clear_bit(ix, &tq->segment_retransmitted))
-			call->tx_nr_resent--;
+		__clear_bit(ix, &tq->segment_retransmitted);
 		__clear_bit(ix, &tq->ever_retransmitted);
 
 		rxrpc_put_txbuf(tq->bufs[ix], rxrpc_txbuf_put_rotated);

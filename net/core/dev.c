@@ -1648,6 +1648,12 @@ int dev_get_alias(const struct net_device *dev, char *name, size_t len)
 void netdev_features_change(struct net_device *dev)
 {
 	call_netdevice_notifiers(NETDEV_FEAT_CHANGE, dev);
+
+	/* Uppers reacting to the notification couldn't take our instance
+	 * lock to disable features they lack, do it now.
+	 */
+	if (__netdev_work_core_cancel(dev, NETDEV_WORK_SYNC_UPPERS))
+		netif_sync_upper_disables(dev);
 }
 EXPORT_SYMBOL(netdev_features_change);
 
@@ -3041,7 +3047,7 @@ int __netif_set_xps_queue(struct net_device *dev, const unsigned long *mask,
 		goto out_no_old_maps;
 
 	for (j = 0; j < dev_maps->nr_ids; j++) {
-		for (i = num_tc, tci = j * dev_maps->num_tc; i--; tci++) {
+		for (i = dev_maps->num_tc, tci = j * dev_maps->num_tc; i--; tci++) {
 			map = xmap_dereference(dev_maps->attr_map[tci]);
 			if (!map)
 				continue;
@@ -3478,6 +3484,9 @@ static void __netif_reschedule(struct Qdisc *q)
 
 void __netif_schedule(struct Qdisc *q)
 {
+	if (unlikely(test_bit(__QDISC_STATE_DEACTIVATED, &q->state)))
+		return;
+
 	/* If q->defer_list is not empty, at least one thread is
 	 * in __dev_xmit_skb() before llist_del_all(&q->defer_list).
 	 * This thread will attempt to run the queue.
@@ -4283,7 +4292,7 @@ static enum skb_drop_reason qdisc_pkt_len_segs_init(struct sk_buff *skb)
 {
 	struct skb_shared_info *shinfo = skb_shinfo(skb);
 	unsigned int hdr_len, tlen;
-	u16 gso_segs;
+	u32 gso_segs;
 
 	qdisc_skb_cb(skb)->pkt_len = skb->len;
 	if (!shinfo->gso_size) {
@@ -4334,6 +4343,15 @@ static enum skb_drop_reason qdisc_pkt_len_segs_init(struct sk_buff *skb)
 		if (payload <= 0)
 			return SKB_DROP_REASON_SKB_BAD_GSO;
 		gso_segs = DIV_ROUND_UP(payload, shinfo->gso_size);
+		/* shinfo->gso_segs is a 16bit field.
+		 * Also make sure untrusted gso_size/hdr_len can not inflate
+		 * qdisc_pkt_len() beyond QDISC_PKT_LEN_MAX, or deficit
+		 * schedulers could spin in their refill loops.
+		 */
+		if (unlikely(gso_segs > GSO_MAX_SEGS ||
+			     skb->len + (u64)(gso_segs - 1) * hdr_len >
+			     QDISC_PKT_LEN_MAX))
+			return SKB_DROP_REASON_SKB_BAD_GSO;
 		shinfo->gso_segs = gso_segs;
 		qdisc_skb_cb(skb)->pkt_segs = gso_segs;
 	}
@@ -6306,6 +6324,8 @@ skip_classify:
 	}
 
 	if (unlikely(skb_vlan_tag_present(skb)) && !netdev_uses_dsa(skb->dev)) {
+		unsigned int priority_tag_depth = 1;
+
 check_vlan_id:
 		if (skb_vlan_tag_get_id(skb)) {
 			/* Vlan id is non 0 and vlan_do_receive() above couldn't
@@ -6317,6 +6337,12 @@ check_vlan_id:
 			 * 802.1Q or 802.1AD and vlan_do_receive() above could
 			 * not find vlan dev for vlan id 0.
 			 */
+			if (unlikely(priority_tag_depth >= VLAN_MAX_DEPTH)) {
+				drop_reason = SKB_DROP_REASON_RECURSION_LIMIT;
+				goto drop;
+			}
+
+			priority_tag_depth++;
 			__vlan_hwaccel_clear_tag(skb);
 			skb = skb_vlan_untag(skb);
 			if (unlikely(!skb))
@@ -11076,6 +11102,28 @@ static netdev_features_t netdev_sync_upper_features(struct net_device *lower,
 	return features;
 }
 
+/* Disable the features of @dev which any of its upper devices has disabled,
+ * deferred from netdev_sync_lower_features().
+ */
+void netif_sync_upper_disables(struct net_device *dev)
+{
+	netdev_features_t disable = 0;
+	struct net_device *upper;
+	struct list_head *iter;
+
+	netdev_for_each_upper_dev_rcu(dev, upper, iter)
+		disable |= ~upper->features;
+	disable &= NETIF_F_UPPER_DISABLES & dev->features;
+	if (!disable)
+		return;
+
+	dev->wanted_features &= ~disable;
+	netdev_update_features(dev);
+
+	if (unlikely(dev->features & disable))
+		netdev_WARN(dev, "failed to disable %pNF!\n", &disable);
+}
+
 static void netdev_sync_lower_features(struct net_device *upper,
 	struct net_device *lower, netdev_features_t features)
 {
@@ -11088,7 +11136,16 @@ static void netdev_sync_lower_features(struct net_device *upper,
 		if (!(features & feature) && (lower->features & feature)) {
 			netdev_dbg(upper, "Disabling feature %pNF on lower dev %s.\n",
 				   &feature, lower->name);
-			netdev_lock_ops(lower);
+			/* The caller may hold the lower's instance lock already,
+			 * e.g. when the upper reacts to NETDEV_FEAT_CHANGE of
+			 * the lower. Don't wait for it, let netdev_work disable
+			 * the feature instead.
+			 */
+			if (netdev_need_ops_lock(lower) && !netdev_trylock(lower)) {
+				__netdev_work_core_sched(lower,
+							 NETDEV_WORK_SYNC_UPPERS);
+				continue;
+			}
 			lower->wanted_features &= ~feature;
 			__netdev_update_features(lower);
 

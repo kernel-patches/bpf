@@ -2318,10 +2318,21 @@ static int netlink_dump(struct sock *sk, bool lock_taken)
 	if (!skb)
 		goto errout_skb;
 
+retry:
 	rcvbuf = READ_ONCE(sk->sk_rcvbuf);
 	rmem = atomic_add_return(skb->truesize, &sk->sk_rmem_alloc);
 	if (rmem != skb->truesize && rmem >= rcvbuf) {
 		atomic_sub(skb->truesize, &sk->sk_rmem_alloc);
+		/* A skb sized after max_recvmsg_len may not fit next to data
+		 * still charged to the socket, while a minimum size one does.
+		 */
+		if (alloc_size > alloc_min_size) {
+			kfree_skb(skb);
+			alloc_size = alloc_min_size;
+			skb = alloc_skb(alloc_size, GFP_KERNEL);
+			if (skb)
+				goto retry;
+		}
 		goto errout_skb;
 	}
 

@@ -76,6 +76,12 @@ static int red_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	unsigned int len;
 	int ret;
 
+	if (unlikely(qdisc_backlog_overflow(sch, skb))) {
+		qdisc_qstats_overlimit(sch);
+		return qdisc_drop_reason(skb, sch, to_free,
+					 QDISC_DROP_OVERLIMIT);
+	}
+
 	q->vars.qavg = red_calc_qavg(&q->parms,
 				     &q->vars,
 				     child->qstats.backlog);
@@ -136,14 +142,21 @@ static int red_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	}
 
 	len = qdisc_pkt_len(skb);
+	/* Reserve the length before the child sees the packet: netem
+	 * can re-enqueue a clone here before the backlog is updated.
+	 * Undo it if the child drops the packet.
+	 */
+	qstats_backlog_add(sch, len);
 	ret = qdisc_enqueue(skb, child, to_free);
 	if (likely(ret == NET_XMIT_SUCCESS)) {
-		qstats_backlog_add(sch, len);
 		qdisc_qlen_inc(sch);
-	} else if (net_xmit_drop_count(ret)) {
-		WRITE_ONCE(q->stats.pdrop,
-			   q->stats.pdrop + 1);
-		qdisc_qstats_drop(sch);
+	} else {
+		qstats_backlog_sub(sch, len);
+		if (net_xmit_drop_count(ret)) {
+			WRITE_ONCE(q->stats.pdrop,
+				   q->stats.pdrop + 1);
+			qdisc_qstats_drop(sch);
+		}
 	}
 	return ret;
 

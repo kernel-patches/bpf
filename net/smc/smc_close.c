@@ -155,6 +155,7 @@ void smc_close_active_abort(struct smc_sock *smc)
 		if (sk->sk_state != SMC_PEERABORTWAIT)
 			break;
 		sk->sk_state = SMC_CLOSED;
+		sk->sk_prot->unhash(sk);
 		smc_conn_free(&smc->conn);
 		release_clcsock = true;
 		sock_put(sk); /* passive closing */
@@ -166,6 +167,7 @@ void smc_close_active_abort(struct smc_sock *smc)
 		if (sk->sk_state != SMC_PEERABORTWAIT)
 			break;
 		sk->sk_state = SMC_CLOSED;
+		sk->sk_prot->unhash(sk);
 		smc_conn_free(&smc->conn);
 		release_clcsock = true;
 		break;
@@ -437,6 +439,7 @@ wakeup:
 		sk->sk_state_change(sk);
 		if ((sk->sk_state == SMC_CLOSED) &&
 		    (sock_flag(sk, SOCK_DEAD) || !sk->sk_socket)) {
+			sk->sk_prot->unhash(sk);
 			smc_conn_free(conn);
 			if (smc->clcsock)
 				release_clcsock = true;

@@ -122,6 +122,8 @@ static void netdev_work_run(struct net_device *dev, unsigned long events,
 
 	if (core & NETDEV_WORK_RX_MODE)
 		netif_rx_mode_run(dev);
+	if (core & NETDEV_WORK_SYNC_UPPERS)
+		netif_sync_upper_disables(dev);
 	if (events && dev->netdev_ops->ndo_work)
 		dev->netdev_ops->ndo_work(dev, events);
 }

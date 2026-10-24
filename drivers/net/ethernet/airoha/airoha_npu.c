@@ -441,6 +441,8 @@ static int airoha_npu_ppe_stats_setup(struct airoha_npu *npu,
 	if (!ppe_data)
 		return -ENOMEM;
 
+	npu->stats = NULL;
+
 	ppe_data->func_type = NPU_OP_SET;
 	ppe_data->func_id = PPE_FUNC_SET_WAIT_FLOW_STATS_SETUP;
 	ppe_data->stats_info.foe_stats_addr = foe_stats_addr;
@@ -449,6 +451,14 @@ static int airoha_npu_ppe_stats_setup(struct airoha_npu *npu,
 				  sizeof(*ppe_data));
 	if (err)
 		goto out;
+
+	/* The firmware reports success with a zero address when its SRAM
+	 * pool has no room left for the counters.
+	 */
+	if (!ppe_data->stats_info.npu_stats_addr) {
+		err = -ENOSPC;
+		goto out;
+	}
 
 	npu->stats = devm_ioremap(npu->dev,
 				  ppe_data->stats_info.npu_stats_addr,

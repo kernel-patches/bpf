@@ -1934,6 +1934,24 @@ rrs_checked:
 			break;
 		}
 		atl1c_clean_rfd(rfd_ring, rrs, rfd_num);
+
+		/* A peer with a larger L2 MTU than ours can hand us a frame
+		 * that does not fit the buffer allocated for this MTU.  The
+		 * driver used to skb_put() it anyway, which trips
+		 * skb_over_panic and takes the host down; drop it instead.
+		 */
+		if (unlikely(length < ETH_HLEN + ETH_FCS_LEN) ||
+		    unlikely(length - ETH_FCS_LEN > skb_tailroom(skb))) {
+			netdev->stats.rx_length_errors++;
+			netdev->stats.rx_dropped++;
+			if (netif_msg_rx_err(adapter))
+				dev_warn_ratelimited(&pdev->dev,
+						     "bad rx frame: len %u tailroom %d\n",
+						     length, skb_tailroom(skb));
+			dev_kfree_skb(skb);
+			continue;
+		}
+
 		skb_put(skb, length - ETH_FCS_LEN);
 		skb->protocol = eth_type_trans(skb, netdev);
 		atl1c_rx_checksum(adapter, skb, rrs);

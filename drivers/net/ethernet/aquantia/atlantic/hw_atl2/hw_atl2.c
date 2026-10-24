@@ -145,11 +145,7 @@ static int hw_atl2_hw_reset(struct aq_hw_s *self)
 	if (err)
 		return err;
 
-	memset(&priv->last_stats, 0, sizeof(priv->last_stats));
-	memset(priv->l3_v4_filters, 0, sizeof(priv->l3_v4_filters));
-	memset(priv->l3_v6_filters, 0, sizeof(priv->l3_v6_filters));
-	memset(priv->l4_filters, 0, sizeof(priv->l4_filters));
-	memset(priv->etype_policy, 0, sizeof(priv->etype_policy));
+	memset(priv, 0, sizeof(*priv));
 	for (i = 0; i < HW_ATL2_RPF_L3L4_FILTERS; i++) {
 		priv->l3l4_filters[i].l3_index = -1;
 		priv->l3l4_filters[i].l4_index = -1;

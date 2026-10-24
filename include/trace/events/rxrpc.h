@@ -2584,9 +2584,8 @@ TRACE_EVENT(rxrpc_rack,
 		    __field(rxrpc_serial_t,	ack_serial)
 		    __field(rxrpc_seq_t,	seq)
 		    __field(enum rxrpc_rack_timer_mode, mode)
-		    __field(unsigned short,	nr_sent)
+		    __field(unsigned short,	in_flight)
 		    __field(unsigned short,	nr_lost)
-		    __field(unsigned short,	nr_resent)
 		    __field(unsigned short,	nr_sacked)
 		    __field(ktime_t,		timo)
 			     ),
@@ -2596,18 +2595,16 @@ TRACE_EVENT(rxrpc_rack,
 		    __entry->ack_serial	= call->rx_serial;
 		    __entry->seq	= call->rack_end_seq;
 		    __entry->mode	= call->rack_timer_mode;
-		    __entry->nr_sent	= call->tx_nr_sent;
+		    __entry->in_flight	= call->tx_in_flight;
 		    __entry->nr_lost	= call->tx_nr_lost;
-		    __entry->nr_resent	= call->tx_nr_resent;
 		    __entry->nr_sacked	= call->acks_nr_sacks;
 		    __entry->timo	= timo;
 			   ),
 
-	    TP_printk("c=%08x r=%08x q=%08x %s slrs=%u,%u,%u,%u t=%lld",
+	    TP_printk("c=%08x r=%08x q=%08x %s fls=%u,%u,%u t=%lld",
 		      __entry->call, __entry->ack_serial, __entry->seq,
 		      __print_symbolic(__entry->mode, rxrpc_rack_timer_modes),
-		      __entry->nr_sent, __entry->nr_lost,
-		      __entry->nr_resent, __entry->nr_sacked,
+		      __entry->in_flight, __entry->nr_lost, __entry->nr_sacked,
 		      ktime_to_us(__entry->timo))
 	    );
 

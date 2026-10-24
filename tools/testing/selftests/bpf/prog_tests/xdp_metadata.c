@@ -6,9 +6,12 @@
 #include "xdp_metadata.h"
 #include "xsk.h"
 
+#include <arpa/inet.h>
 #include <bpf/btf.h>
 #include <linux/errqueue.h>
+#include <linux/if_ether.h>
 #include <linux/if_link.h>
+#include <linux/if_packet.h>
 #include <linux/net_tstamp.h>
 #include <netinet/udp.h>
 #include <sys/mman.h>
@@ -37,6 +40,22 @@
 #define RX_NETNS_NAME "xdp_metadata_rx"
 #define TX_MAC "00:00:00:00:00:01"
 #define RX_MAC "00:00:00:00:00:02"
+
+#define MB_TX_NAME "mb_tx0"
+#define MB_RX_NAME "mb_rx0"
+#define MB_NETNS_NAME "xdp_mb_csum"
+#define MB_UMEM_NUM 4
+#define MB_UMEM_FRAME_SIZE XSK_UMEM__DEFAULT_FRAME_SIZE
+#define MB_UMEM_SIZE (MB_UMEM_FRAME_SIZE * MB_UMEM_NUM)
+#define MB_METADATA_LEN sizeof(struct xsk_tx_metadata)
+#define MB_PAYLOAD_LEN 128
+#define MB_SPLIT_LEN 64
+#define MB_PKT_LEN (sizeof(struct ethhdr) + sizeof(struct iphdr) + \
+		    sizeof(struct udphdr) + MB_PAYLOAD_LEN)
+#define MB_TX_ADDR "10.1.0.1"
+#define MB_RX_ADDR "10.1.0.2"
+#define MB_SOURCE_PORT 1234
+#define MB_DEST_PORT 8080
 
 #define VLAN_ID 59
 #define VLAN_PROTO "802.1Q"
@@ -542,4 +561,284 @@ out:
 		close_netns(tok);
 	SYS_NOFAIL("ip netns del " RX_NETNS_NAME);
 	SYS_NOFAIL("ip netns del " TX_NETNS_NAME);
+}
+
+static int open_xsk_mb(int ifindex, struct xsk *xsk)
+{
+	const struct xsk_socket_config socket_config = {
+		.rx_size = XSK_RING_PROD__DEFAULT_NUM_DESCS,
+		.tx_size = XSK_RING_PROD__DEFAULT_NUM_DESCS,
+		.bind_flags = XDP_COPY | XDP_USE_SG,
+	};
+	const struct xsk_umem_config umem_config = {
+		.fill_size = XSK_RING_PROD__DEFAULT_NUM_DESCS,
+		.comp_size = XSK_RING_CONS__DEFAULT_NUM_DESCS,
+		.frame_size = MB_UMEM_FRAME_SIZE,
+		.flags = XDP_UMEM_UNALIGNED_CHUNK_FLAG | XDP_UMEM_TX_SW_CSUM |
+			 XDP_UMEM_TX_METADATA_LEN,
+		.tx_metadata_len = sizeof(struct xsk_tx_metadata),
+	};
+	int ret;
+
+	xsk->umem_area = mmap(NULL, MB_UMEM_SIZE, PROT_READ | PROT_WRITE,
+			      MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+	if (!ASSERT_NEQ(xsk->umem_area, MAP_FAILED, "mmap"))
+		return -1;
+
+	ret = xsk_umem__create(&xsk->umem, xsk->umem_area, MB_UMEM_SIZE,
+			       &xsk->fill, &xsk->comp, &umem_config);
+	if (!ASSERT_OK(ret, "xsk_umem__create"))
+		return ret;
+
+	ret = xsk_socket__create(&xsk->socket, ifindex, QUEUE_ID, xsk->umem,
+				 &xsk->rx, &xsk->tx, &socket_config);
+	if (!ASSERT_OK(ret, "xsk_socket__create"))
+		return ret;
+
+	return 0;
+}
+
+static void close_xsk_mb(struct xsk *xsk)
+{
+	if (xsk->socket)
+		xsk_socket__delete(xsk->socket);
+	if (xsk->umem)
+		xsk_umem__delete(xsk->umem);
+	if (xsk->umem_area && xsk->umem_area != MAP_FAILED)
+		munmap(xsk->umem_area, MB_UMEM_SIZE);
+}
+
+static __sum16 mb_build_packet(u8 *pkt)
+{
+	struct ethhdr *eth = (void *)pkt;
+	struct iphdr *iph = (void *)(eth + 1);
+	struct udphdr *udph = (void *)(iph + 1);
+	__sum16 expected;
+
+	memset(pkt, 0, MB_PKT_LEN);
+	memcpy(eth->h_dest, RX_MAC, ETH_ALEN);
+	memcpy(eth->h_source, TX_MAC, ETH_ALEN);
+	eth->h_proto = htons(ETH_P_IP);
+
+	iph->version = 4;
+	iph->ihl = 5;
+	iph->tot_len = htons((u16)(MB_PKT_LEN - sizeof(*eth)));
+	iph->id = htons(1);
+	iph->ttl = 64;
+	iph->protocol = IPPROTO_UDP;
+	iph->saddr = inet_addr(MB_TX_ADDR);
+	iph->daddr = inet_addr(MB_RX_ADDR);
+	iph->check = build_ip_csum(iph);
+
+	udph->source = htons(MB_SOURCE_PORT);
+	udph->dest = htons(MB_DEST_PORT);
+	udph->len = htons((u16)(sizeof(*udph) + MB_PAYLOAD_LEN));
+	memset(udph + 1, 0xaa, MB_PAYLOAD_LEN);
+
+	expected = build_udp_v4_csum(iph, udph);
+	udph->check = ~csum_tcpudp_magic(iph->saddr, iph->daddr,
+					 ntohs(udph->len), IPPROTO_UDP, 0);
+	return expected;
+}
+
+static int mb_send_packet(struct xsk *xsk, const u8 *pkt, bool split)
+{
+	struct xsk_tx_metadata *meta;
+	struct xdp_desc *tx_desc;
+	u32 idx, num = split ? 2 : 1;
+	u8 *frame;
+	int ret;
+
+	ret = xsk_ring_prod__reserve(&xsk->tx, num, &idx);
+	if (!ASSERT_EQ(ret, num, "xsk_ring_prod__reserve"))
+		return -1;
+
+	if (split) {
+		frame = xsk_umem__get_data(xsk->umem_area, MB_UMEM_FRAME_SIZE);
+		meta = (struct xsk_tx_metadata *)frame;
+		memcpy(frame + MB_METADATA_LEN, pkt, MB_SPLIT_LEN);
+
+		tx_desc = xsk_ring_prod__tx_desc(&xsk->tx, idx);
+		tx_desc->addr = MB_UMEM_FRAME_SIZE + MB_METADATA_LEN;
+		tx_desc->len = MB_SPLIT_LEN;
+		tx_desc->options = XDP_TX_METADATA | XDP_PKT_CONTD;
+
+		frame = xsk_umem__get_data(xsk->umem_area,
+					   2 * MB_UMEM_FRAME_SIZE);
+		memcpy(frame + MB_METADATA_LEN, pkt + MB_SPLIT_LEN,
+		       MB_PKT_LEN - MB_SPLIT_LEN);
+
+		tx_desc = xsk_ring_prod__tx_desc(&xsk->tx, idx + 1);
+		tx_desc->addr = 2 * MB_UMEM_FRAME_SIZE + MB_METADATA_LEN;
+		tx_desc->len = (u32)(MB_PKT_LEN - MB_SPLIT_LEN);
+		tx_desc->options = 0;
+	} else {
+		frame = xsk_umem__get_data(xsk->umem_area, 0);
+		meta = (struct xsk_tx_metadata *)frame;
+		memcpy(frame + MB_METADATA_LEN, pkt, MB_PKT_LEN);
+
+		tx_desc = xsk_ring_prod__tx_desc(&xsk->tx, idx);
+		tx_desc->addr = MB_METADATA_LEN;
+		tx_desc->len = (u32)MB_PKT_LEN;
+		tx_desc->options = XDP_TX_METADATA;
+	}
+
+	memset(meta, 0, sizeof(*meta));
+	meta->flags = XDP_TXMD_FLAGS_CHECKSUM;
+	meta->request.csum_start = (u16)(sizeof(struct ethhdr) + sizeof(struct iphdr));
+	meta->request.csum_offset = (u16)offsetof(struct udphdr, check);
+
+	xsk_ring_prod__submit(&xsk->tx, num);
+
+	ret = sendto(xsk_socket__fd(xsk->socket), NULL, 0, MSG_DONTWAIT,
+		     NULL, 0);
+	if (!ASSERT_GE(ret, 0, "sendto"))
+		return -1;
+
+	return 0;
+}
+
+static int mb_wait_completion(struct xsk *xsk, u32 num)
+{
+	struct pollfd pfd = {
+		.fd = xsk_socket__fd(xsk->socket),
+		.events = POLLOUT,
+	};
+	u32 idx;
+	int ret, i;
+
+	for (i = 0; i < 100; i++) {
+		ret = xsk_ring_cons__peek(&xsk->comp, num, &idx);
+		if (ret == num) {
+			xsk_ring_cons__release(&xsk->comp, num);
+			return 0;
+		}
+		poll(&pfd, 1, 1);
+	}
+
+	return -1;
+}
+
+static int mb_recv_packet(int fd, u8 *buf, size_t len)
+{
+	struct sockaddr_ll sll;
+	socklen_t sll_len;
+	struct pollfd pfd = {
+		.fd = fd,
+		.events = POLLIN,
+	};
+	struct ethhdr *eth;
+	struct iphdr *iph;
+	struct udphdr *udph;
+	int ret;
+
+	for (;;) {
+		ret = poll(&pfd, 1, 1000);
+		if (ret <= 0)
+			return -1;
+
+		sll_len = sizeof(sll);
+		ret = recvfrom(fd, buf, len, 0, (struct sockaddr *)&sll,
+			       &sll_len);
+		if (ret < 0)
+			return -1;
+		if (ret < (int)(sizeof(*eth) + sizeof(*iph) + sizeof(*udph)))
+			continue;
+
+		eth = (void *)buf;
+		if (eth->h_proto != htons(ETH_P_IP))
+			continue;
+		iph = (void *)(eth + 1);
+		if (iph->protocol != IPPROTO_UDP)
+			continue;
+		udph = (void *)(iph + 1);
+		if (udph->dest != htons(MB_DEST_PORT))
+			continue;
+
+		return ret;
+	}
+}
+
+void test_xdp_metadata_mb_csum(void)
+{
+	struct nstoken *tok = NULL;
+	struct sockaddr_ll sll = {};
+	struct udphdr *single_udp;
+	struct udphdr *multi_udp;
+	__sum16 expected_csum;
+	u8 pkt[MB_PKT_LEN];
+	u8 single[MB_PKT_LEN];
+	u8 multi[MB_PKT_LEN];
+	struct xsk xsk = {};
+	int tx_ifindex, rx_ifindex;
+	int pkt_fd = -1;
+	int single_len;
+	int multi_len;
+	int ret;
+
+	SYS_NOFAIL("ip netns del " MB_NETNS_NAME);
+	SYS(out, "ip netns add " MB_NETNS_NAME);
+	tok = open_netns(MB_NETNS_NAME);
+	if (!ASSERT_OK_PTR(tok, "setns"))
+		goto out;
+
+	SYS(out, "ip link add " MB_TX_NAME " type veth peer name " MB_RX_NAME);
+	SYS(out, "ip link set dev " MB_TX_NAME " up");
+	SYS(out, "ip link set dev " MB_RX_NAME " up");
+
+	tx_ifindex = if_nametoindex(MB_TX_NAME);
+	rx_ifindex = if_nametoindex(MB_RX_NAME);
+	if (!ASSERT_NEQ(tx_ifindex, 0, "if_nametoindex(tx)") ||
+	    !ASSERT_NEQ(rx_ifindex, 0, "if_nametoindex(rx)"))
+		goto out;
+
+	ret = open_xsk_mb(tx_ifindex, &xsk);
+	if (!ASSERT_OK(ret, "open_xsk_mb"))
+		goto out;
+
+	pkt_fd = socket(AF_PACKET, SOCK_RAW | SOCK_CLOEXEC, htons(ETH_P_ALL));
+	if (!ASSERT_GE(pkt_fd, 0, "socket(AF_PACKET)"))
+		goto out;
+
+	sll.sll_family = AF_PACKET;
+	sll.sll_protocol = htons(ETH_P_ALL);
+	sll.sll_ifindex = rx_ifindex;
+	if (!ASSERT_OK(bind(pkt_fd, (struct sockaddr *)&sll, sizeof(sll)),
+		       "bind(AF_PACKET)"))
+		goto out;
+
+	expected_csum = mb_build_packet(pkt);
+
+	if (!ASSERT_OK(mb_send_packet(&xsk, pkt, false), "send single"))
+		goto out;
+	single_len = mb_recv_packet(pkt_fd, single, sizeof(single));
+	if (!ASSERT_EQ(single_len, (int)MB_PKT_LEN, "recv single"))
+		goto out;
+	single_udp = (void *)(single + sizeof(struct ethhdr) + sizeof(struct iphdr));
+	if (!ASSERT_EQ(single_udp->check, expected_csum, "single checksum"))
+		goto out;
+	if (!ASSERT_OK(mb_wait_completion(&xsk, 1), "complete single"))
+		goto out;
+
+	if (!ASSERT_OK(mb_send_packet(&xsk, pkt, true), "send multi"))
+		goto out;
+	multi_len = mb_recv_packet(pkt_fd, multi, sizeof(multi));
+	if (!ASSERT_EQ(multi_len, (int)MB_PKT_LEN, "recv multi"))
+		goto out;
+	multi_udp = (void *)(multi + sizeof(struct ethhdr) + sizeof(struct iphdr));
+	if (!ASSERT_EQ(multi_udp->check, expected_csum, "multi checksum"))
+		goto out;
+	if (!ASSERT_OK(mb_wait_completion(&xsk, 2), "complete multi"))
+		goto out;
+
+	ASSERT_EQ(memcmp(single, multi, MB_PKT_LEN), 0,
+		  "single and multi-buffer packets differ");
+
+out:
+	if (pkt_fd >= 0)
+		close(pkt_fd);
+	close_xsk_mb(&xsk);
+	if (tok)
+		close_netns(tok);
+	SYS_NOFAIL("ip netns del " MB_NETNS_NAME);
 }

@@ -1,0 +1,108 @@
+// SPDX-License-Identifier: GPL-2.0
+// Test that tcp_wmem_schedule() clamps negative sk->sk_forward_alloc to 0
+// when sk_wmem_schedule() fails under memory pressure and
+// sk->sk_wmem_queued >= sysctl_tcp_wmem[0], returning EAGAIN rather than EFAULT.
+//
+// Buffer and segment sizes are tuned for 4 KB pages and standard
+// CONFIG_MAX_SKB_FRAGS values (17 to 45).
+
+--define=REQUIRES_PAGESIZE="4096"
+--mtu=65535
+--tolerance_usecs=100000
+
+`set -e
+./defaults.sh
+ip link set dev tun0 mtu 65535
+sysctl -q net.ipv4.tcp_rmem="4096 131072 6291456"
+sysctl -q net.ipv4.tcp_wmem="4096 16384 4194304"
+cgroot=$(mount -t cgroup2 | head -1 | awk '{print $3}')
+[ -n "$cgroot" ]
+echo +memory > "${cgroot}/cgroup.subtree_control"
+rmdir "${cgroot}/pkt_${PPID}" 2>/dev/null || true
+mkdir "${cgroot}/pkt_${PPID}"
+echo $PPID > "${cgroot}/pkt_${PPID}/cgroup.procs"
+`
+
+// Create listening socket in pkt_${PPID} memcg and establish connection
+0.000 socket(..., SOCK_STREAM, IPPROTO_TCP) = 3
++0.000 setsockopt(3, SOL_SOCKET, SO_REUSEADDR, [1], 4) = 0
++0.000 bind(3, ..., ...) = 0
++0.000 listen(3, 1) = 0
+
++0.000 < S 0:0(0) win 65535 <mss 35000,nop,wscale 7>
++0.000 > S. 0:0(0) ack 1 <...>
++0.000 < . 1:1(0) ack 1 win 512
++0.000 accept(3, ..., ...) = 4
+
+// Move packetdrill back to its original cgroup so subsequent packetdrill allocations are not charged to pkt_${PPID}
++0.000 `cgroot=$(mount -t cgroup2 | head -1 | awk '{print $3}')
+runner_pid=$(awk '/^PPid:/ {print $2}' /proc/$PPID/status)
+orig_cg=$(sed -n 's/^0:://p' /proc/$runner_pid/cgroup)
+echo $PPID > "${cgroot}${orig_cg}/cgroup.procs"`
+
++0.000 setsockopt(4, SOL_SOCKET, SO_SNDBUF, [200000], 4) = 0
++0.000 setsockopt(4, SOL_SOCKET, SO_RCVBUF, [112500], 4) = 0
+
+// 1. Warm up rcv_ssthresh to full window
++0.000 < P. 1:35001(35000) ack 1 win 512
++0.000 > . 1:1(0) ack 35001
++0.000 read(4, ..., 35000) = 35000
+
++0.000 < P. 35001:70001(35000) ack 1 win 512
++0.000 > . 1:1(0) ack 70001
++0.000 read(4, ..., 35000) = 35000
+
++0.000 < P. 70001:105001(35000) ack 1 win 512
++0.000 > . 1:1(0) ack 105001
++0.000 read(4, ..., 35000) = 35000
+
++0.000 < P. 105001:140001(35000) ack 1 win 512
++0.000 > . 1:1(0) ack 140001
++0.000 read(4, ..., 35000) = 35000
+
+// 2. Queue 79 KB on TX so sk_wmem_queued >= sysctl_tcp_wmem[0], while leaving
+//    both tail SKB space (26 KB) and sk_page_frag space (19.3 KB) >= 16 KB.
++0.000 write(4, ..., 79000) = 79000
+
+// 3a. Inject 6 high-density 35 KB segments (210 KB payload, 222.7 KB truesize
+//     across 8-page order-3 frags on both CONFIG_MAX_SKB_FRAGS=17 and 45) and
+//     read 100 bytes from the head SKB so before(skb->seq, tp->copied_seq) is true.
++0.000 < P. 140001:175001(35000) ack 1 win 512
++0.000 < P. 175001:210001(35000) ack 1 win 512
++0.000 read(4, ..., 100) = 100
+
++0.000 < P. 210001:245001(35000) ack 1 win 512
++0.000 < P. 245001:280001(35000) ack 1 win 512
++0.000 < P. 280001:315001(35000) ack 1 win 512
++0.000 < P. 315001:350001(35000) ack 1 win 512
+
+// 3b. Inject three smaller segments into the remaining advertised rcv_wnd.
+//     Their higher truesize pushes sk_rmem_alloc > sk_rcvbuf (225000) and
+//     exhausts sk_forward_alloc, triggering tcp_prune_queue() -> tcp_collapse()
+//     on the 3rd segment and driving sk->sk_forward_alloc <= -16.4 KB.
++0.000 < P. 350001:350801(800) ack 1 win 512
++0.000 < P. 350801:351601(800) ack 1 win 512
++0.000 < P. 351601:351901(300) ack 1 win 512
+
+// 4. Drain per-CPU memcg stock via memory.high=0, cap memory.max=0 (O_NONBLOCK
+//    avoids synchronous reclaim/OOM), and expect -EAGAIN on a 16 KB non-blocking
+//    write. Because copy (16 KB) minus sk_forward_alloc (<= -16.4 KB) exceeds
+//    PAGE_ALLOC_COSTLY_ORDER (32 KB), try_charge_memcg() fails without invoking
+//    the memcg OOM killer.
++0.010 `cgroot=$(mount -t cgroup2 | head -1 | awk '{print $3}')
+echo 0 > "${cgroot}/pkt_${PPID}/memory.high"
+printf 0 | dd of="${cgroot}/pkt_${PPID}/memory.max" oflag=nonblock status=none`
++0.000 fcntl(4, F_SETFL, O_RDWR|O_NONBLOCK) = 0
++0.000 write(4, ..., 16384) = -1 EAGAIN (Resource temporarily unavailable)
+
++0.000 close(4) = 0
++0.000 close(3) = 0
+
+// Untimed cleanup command executed by packetdrill on both pass and early failure.
+`cgroot=$(mount -t cgroup2 | head -1 | awk '{print $3}')
+[ -n "$cgroot" ] || exit 0
+runner_pid=$(awk '/^PPid:/ {print $2}' /proc/$PPID/status)
+orig_cg=$(sed -n 's/^0:://p' /proc/$runner_pid/cgroup)
+echo $PPID > "${cgroot}${orig_cg}/cgroup.procs" 2>/dev/null || true
+echo $$ > "${cgroot}${orig_cg}/cgroup.procs" 2>/dev/null || true
+rmdir "${cgroot}/pkt_${PPID}"`

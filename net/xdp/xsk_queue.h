@@ -344,6 +344,9 @@ static inline void __xskq_cons_peek(struct xsk_queue *q)
 {
 	/* Refresh the local pointer */
 	q->cached_prod = smp_load_acquire(&q->ring->producer);  /* C, matches B */
+	/* A malformed producer must not make us consume beyond the ring. */
+	if (q->cached_prod - q->cached_cons > q->nentries)
+		q->cached_prod = q->cached_cons;
 }
 
 static inline void xskq_cons_get_entries(struct xsk_queue *q)

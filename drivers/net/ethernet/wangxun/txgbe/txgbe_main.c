@@ -267,7 +267,7 @@ static void txgbe_disable_device(struct wx *wx)
 		wx_set_all_vfs(wx);
 	}
 
-	if (!(((wx->subsystem_device_id & WX_NCSI_MASK) == WX_NCSI_SUP) ||
+	if (!(wx->ncsi_enabled ||
 	      ((wx->subsystem_device_id & WX_WOL_MASK) == WX_WOL_SUP))) {
 		/* disable mac transmiter */
 		wr32m(wx, WX_MAC_TX_CFG, WX_MAC_TX_CFG_TE, 0);
@@ -295,8 +295,10 @@ void txgbe_down(struct wx *wx)
 		break;
 	case wx_mac_aml:
 		phylink_stop(wx->phylink);
-		/* Disable TX laser */
-		wr32m(wx, WX_GPIO_DR, TXGBE_GPIOBIT_1, TXGBE_GPIOBIT_1);
+		if (!wx->ncsi_enabled) {
+			/* Disable TX laser */
+			wr32m(wx, WX_GPIO_DR, TXGBE_GPIOBIT_1, TXGBE_GPIOBIT_1);
+		}
 		break;
 	case wx_mac_sp:
 		phylink_stop(wx->phylink);
@@ -381,6 +383,8 @@ static void txgbe_init_type_code(struct wx *wx)
 		wx->media_type = wx_media_unknown;
 		break;
 	}
+
+	wx->ncsi_enabled = ((wx->subsystem_device_id & WX_NCSI_MASK) == WX_NCSI_SUP);
 }
 
 /**

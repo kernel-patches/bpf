@@ -36,6 +36,7 @@ static inline void update_csum_diff16(struct sk_buff *skb, __be32 *from,
 struct seg6_pernet_data {
 	struct mutex lock;
 	struct in6_addr __rcu *tun_src;
+	struct in6_addr *tun_src_old;
 #ifdef CONFIG_IPV6_SEG6_HMAC
 	struct rhashtable hmac_infos;
 #endif

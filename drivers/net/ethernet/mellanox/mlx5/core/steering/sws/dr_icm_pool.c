@@ -33,6 +33,10 @@ struct mlx5dr_icm_pool {
 	u64 hot_memory_size;
 	/* hot memory size threshold for triggering sync */
 	u64 th;
+	/* Set when a sync to HW fails - no new chunks are served,
+	 * and freed chunks are no longer queued.
+	 */
+	bool sync_failed;
 };
 
 struct mlx5dr_icm_dm {
@@ -369,6 +373,12 @@ static int dr_icm_pool_sync_all_buddy_pools(struct mlx5dr_icm_pool *pool)
 	err = mlx5dr_cmd_sync_steering(pool->dmn->mdev);
 	if (err) {
 		mlx5dr_err(pool->dmn, "Failed to sync to HW (err: %d)\n", err);
+		/* The hot chunks could not be flushed. Put the pool in an error
+		 * state so that no further chunks are queued (which would
+		 * overflow hot_chunks_arr) or served (which could reuse ICM
+		 * that HW may still reference).
+		 */
+		pool->sync_failed = true;
 		return err;
 	}
 
@@ -475,6 +485,14 @@ void mlx5dr_icm_free_chunk(struct mlx5dr_icm_chunk *chunk)
 	/* move the chunk to the waiting chunks array, AKA "hot" memory */
 	mutex_lock(&pool->mutex);
 
+	/* If a previous sync to HW failed, the pool is in an error state.
+	 * The chunk must not be queued. ICM memory is not returned to the
+	 * buddy allocator - it is reclaimed only when the pool is destroyed.
+	 * Just free the chunk's bookkeeping struct.
+	 */
+	if (pool->sync_failed)
+		goto out;
+
 	pool->hot_memory_size += mlx5dr_icm_pool_get_chunk_byte_size(chunk);
 
 	hot_chunk = &pool->hot_chunks_arr[pool->hot_chunks_num++];
@@ -482,11 +500,12 @@ void mlx5dr_icm_free_chunk(struct mlx5dr_icm_chunk *chunk)
 	hot_chunk->seg = chunk->seg;
 	hot_chunk->size = chunk->size;
 
-	kmem_cache_free(chunks_cache, chunk);
-
 	/* Check if we have chunks that are waiting for sync-ste */
 	if (dr_icm_pool_is_sync_required(pool))
 		dr_icm_pool_sync_all_buddy_pools(pool);
+
+out:
+	kmem_cache_free(chunks_cache, chunk);
 
 	mutex_unlock(&pool->mutex);
 }
