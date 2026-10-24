@@ -1627,6 +1627,12 @@ static bool reg_is_referenced(struct bpf_verifier_env *env, const struct bpf_reg
 	return find_reference_state(env->cur_state, reg->id);
 }
 
+/* The reference that keeps @reg alive, or 0 if it is valid for the whole program. */
+static u32 reg_lifetime_id(struct bpf_verifier_env *env, const struct bpf_reg_state *reg)
+{
+	return reg_is_referenced(env, reg) ? reg->id : reg->parent_id;
+}
+
 static int release_lock_state(struct bpf_verifier_env *env, int type, int id, void *ptr)
 {
 	struct bpf_verifier_state *state = env->cur_state;
@@ -6517,6 +6523,11 @@ BTF_TYPE_SAFE_RCU_OR_NULL(struct request_sock) {
 	struct sock *sk;
 };
 
+/* struct file is SLAB_TYPESAFE_BY_RCU. A reused file has f_inode == NULL. */
+BTF_TYPE_SAFE_RCU_OR_NULL(struct file) {
+	struct inode *f_inode;
+};
+
 /* full trusted: these fields are trusted even outside of RCU CS and never NULL */
 BTF_TYPE_SAFE_TRUSTED(struct bpf_iter_meta) {
 	struct seq_file *seq;
@@ -6593,6 +6604,7 @@ static bool type_is_rcu_or_null(struct bpf_verifier_env *env,
 	BTF_TYPE_EMIT(BTF_TYPE_SAFE_RCU_OR_NULL(struct mm_struct));
 	BTF_TYPE_EMIT(BTF_TYPE_SAFE_RCU_OR_NULL(struct sk_buff));
 	BTF_TYPE_EMIT(BTF_TYPE_SAFE_RCU_OR_NULL(struct request_sock));
+	BTF_TYPE_EMIT(BTF_TYPE_SAFE_RCU_OR_NULL(struct file));
 
 	return btf_nested_type_is_trusted(&env->log, reg, field_name, btf_id, "__safe_rcu_or_null");
 }
@@ -6798,10 +6810,14 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 		 *
 		 * A regular RCU-protected pointer with __rcu tag can also be deemed
 		 * trusted if we are in an RCU CS. Such pointer can be NULL.
+		 *
+		 * If the parent is not trusted, the field can't regain trusted status.
 		 */
-		if (type_is_trusted(env, reg, field_name, btf_id)) {
+		bool trusted = is_trusted_reg(env, reg);
+
+		if (trusted && type_is_trusted(env, reg, field_name, btf_id)) {
 			flag |= PTR_TRUSTED;
-		} else if (type_is_trusted_or_null(env, reg, field_name, btf_id)) {
+		} else if (trusted && type_is_trusted_or_null(env, reg, field_name, btf_id)) {
 			flag |= PTR_TRUSTED | PTR_MAYBE_NULL;
 		} else if (in_rcu_cs(env) && !type_may_be_null(reg->type)) {
 			if (type_is_rcu(env, reg, field_name, btf_id)) {
@@ -9087,6 +9103,8 @@ static int process_arg_ptr_to_btf_id(struct bpf_verifier_env *env, struct bpf_re
 				     struct bpf_call_arg_meta *meta, int insn_idx);
 static bool is_kfunc_arg_nonown_allowed(const struct btf *btf,
 					const struct btf_param *arg);
+static bool is_kfunc_arg_derives_ret(const struct btf *btf,
+				     const struct btf_param *arg);
 static bool is_kfunc_arg_scalar_with_name(const struct btf *btf,
 					  const struct btf_param *arg,
 					  const char *name);
@@ -9837,6 +9855,13 @@ static int check_func_arg(struct bpf_verifier_env *env, u32 arg, u32 slot, u32 p
 
 	if (reg_is_referenced(env, reg))
 		update_ref_obj(&meta->ref_obj, reg);
+
+	/* The return of a __derives_ret kfunc lives exactly as long as this argument. */
+	if (btf_arg && is_kfunc_arg_derives_ret(meta->btf, btf_arg)) {
+		meta->derives_ret.found = true;
+		meta->derives_ret.rcu = is_rcu_reg(reg);
+		meta->derives_ret.parent_id = reg_lifetime_id(env, reg);
+	}
 
 	switch (base_type(arg_type)) {
 	case ARG_CONST_SCALAR:
@@ -13268,6 +13293,11 @@ static bool is_kfunc_arg_const_str(const struct btf *btf, const struct btf_param
 	return btf_param_match_suffix(btf, arg, "__str");
 }
 
+static bool is_kfunc_arg_derives_ret(const struct btf *btf, const struct btf_param *arg)
+{
+	return btf_param_match_suffix(btf, arg, "__derives_ret");
+}
+
 static bool is_kfunc_arg_irq_flag(const struct btf *btf, const struct btf_param *arg)
 {
 	return btf_param_match_suffix(btf, arg, "__irq_flag");
@@ -15780,14 +15810,16 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 				regs[BPF_REG_0].type |= MEM_RDONLY;
 
 			/* Ensures we don't access the memory after a release_reference() */
-			if (meta.ref_obj.id) {
+			if (meta.derives_ret.found) {
+				regs[BPF_REG_0].parent_id = meta.derives_ret.parent_id;
+			} else if (meta.ref_obj.id) {
 				err = validate_ref_obj(env, &meta.ref_obj);
 				if (err)
 					return err;
 				regs[BPF_REG_0].parent_id = meta.ref_obj.id;
 			}
 
-			if (is_kfunc_rcu_protected(&meta))
+			if (is_kfunc_rcu_protected(&meta) || meta.derives_ret.rcu)
 				regs[BPF_REG_0].type |= MEM_RCU;
 		} else {
 			enum bpf_reg_type type = PTR_TO_BTF_ID;
@@ -15809,6 +15841,12 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 				 * bpf_iter_task_next).
 				 */
 				type |= MEM_RCU;
+			} else if (meta.derives_ret.rcu) {
+				/*
+				 * Derived from an RCU-protected argument, so
+				 * only valid for as long as that is.
+				 */
+				type |= MEM_RCU;
 			} else {
 				/*
 				 * Any PTR_TO_BTF_ID that is returned from a BPF
@@ -15822,6 +15860,8 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			regs[BPF_REG_0].btf = desc_btf;
 			regs[BPF_REG_0].type = type;
 			regs[BPF_REG_0].btf_id = ptr_type_id;
+			if (meta.derives_ret.found)
+				regs[BPF_REG_0].parent_id = meta.derives_ret.parent_id;
 		}
 
 		if (is_kfunc_ret_null(&meta)) {

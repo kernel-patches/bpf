@@ -351,6 +351,37 @@ In this case, a program attached to the ``inode_init_security`` LSM hook
 can pass the hook's own ``xattr_count`` argument through to the kfunc,
 which claims xattr slots by writing through it.
 
+2.3.10 __derives_ret Annotation
+-------------------------------
+
+This annotation is used to indicate that the pointer the kfunc returns is
+derived from the annotated pointer argument: it points into, or is kept
+alive by, the object the argument refers to, and the kfunc takes no
+reference of its own on it. The returned pointer is therefore only valid
+for as long as the argument is. The verifier binds the return to whatever
+keeps the argument alive, so the two are invalidated together, e.g. when
+the reference that pins the argument is released.
+
+An example is given below::
+
+        __bpf_kfunc struct inode *bpf_real_data_inode(struct file *file__derives_ret)
+        {
+        ...
+        }
+
+Here the inode is kept alive by the file. A program that obtained the file
+from a KF_ACQUIRE kfunc may use the inode until it releases the file, and
+no longer afterwards. A return derived from an argument that is valid for
+the whole program, such as a tracepoint or struct_ops callback argument,
+is valid for the whole program as well. A return derived from an
+RCU-protected argument, which only a KF_RCU kfunc accepts, is itself
+RCU-protected and is only valid until the end of the RCU critical section.
+
+At most one argument of a kfunc can carry the annotation. The kfunc must
+return a pointer and must not be a KF_ACQUIRE or a KF_RELEASE kfunc: the
+former returns a reference of its own, the latter has nothing left to
+lend. Registering a kfunc that breaks these rules fails.
+
 .. _BPF_kfunc_nodef:
 
 2.4 Using an existing kernel function

@@ -1818,6 +1818,12 @@ struct bpf_call_arg_meta {
 	struct arg_constant_desc arg_constant;
 	/* The type of the dynptr that the kfunc writes through */
 	enum bpf_dynptr_type dynptr_write_type;
+	/* What keeps the __derives_ret argument alive, see reg_lifetime_id() */
+	struct {
+		bool found;
+		bool rcu;
+		u32 parent_id;
+	} derives_ret;
 
 	/* arg_{btf,btf_id,owning_ref} are used by kfunc-specific handling,
 	 * generally to pass info about user-defined local kptr types to later
