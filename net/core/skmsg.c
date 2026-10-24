@@ -716,7 +716,7 @@ static void sk_psock_backlog(struct work_struct *work)
 			if (!sock_flag(psock->sk, SOCK_DEAD))
 				ret = sk_psock_handle_skb(psock, skb, off,
 							  len, ingress);
-			if (ret <= 0) {
+			if (ret < 0 || (!ret && len)) {
 				if (ret == -EAGAIN) {
 					sk_psock_skb_state(psock, state, len, off);
 					/* Restore redir info we cleared before */
