@@ -79,6 +79,9 @@ TC_INDIRECT_SCOPE int tcf_mpls_act(struct sk_buff *skb,
 		if (skb_mpls_pop(skb, p->tcfm_proto, mac_len,
 				 skb->dev && skb->dev->type == ARPHRD_ETHER))
 			goto drop;
+		if (p->tcfm_proto == htons(ETH_P_TEB) &&
+		    !pskb_may_pull(skb, ETH_HLEN))
+			goto drop;
 		break;
 	case TCA_MPLS_ACT_PUSH:
 		new_lse = tcf_mpls_get_lse(NULL, p, !eth_p_mpls(skb_protocol(skb, true)));
