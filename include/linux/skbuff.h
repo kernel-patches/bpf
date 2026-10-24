@@ -3002,6 +3002,12 @@ static inline void skb_reset_mac_len(struct sk_buff *skb)
 static inline unsigned char *skb_inner_transport_header(const struct sk_buff
 							*skb)
 {
+	if (unlikely(skb->inner_transport_header ==
+		     (typeof(skb->inner_transport_header))~0U)) {
+		DEBUG_NET_WARN_ON_ONCE(1);
+		return skb->head + skb->inner_network_header;
+	}
+
 	return skb->head + skb->inner_transport_header;
 }
 
@@ -3050,6 +3056,13 @@ static inline bool skb_inner_network_header_was_set(const struct sk_buff *skb)
 	return skb->inner_network_header > 0;
 }
 
+static inline bool skb_inner_transport_header_was_set(const struct sk_buff *skb)
+{
+	typeof(skb->inner_transport_header) th = skb->inner_transport_header;
+
+	return th > 0 && th != (typeof(th))~0U;
+}
+
 static inline unsigned char *skb_inner_mac_header(const struct sk_buff *skb)
 {
 	return skb->head + skb->inner_mac_header;
@@ -3081,7 +3094,11 @@ static inline void skb_unset_transport_header(struct sk_buff *skb)
 
 static inline unsigned char *skb_transport_header(const struct sk_buff *skb)
 {
-	DEBUG_NET_WARN_ON_ONCE(!skb_transport_header_was_set(skb));
+	if (unlikely(!skb_transport_header_was_set(skb))) {
+		DEBUG_NET_WARN_ON_ONCE(1);
+		return skb->head + skb->network_header;
+	}
+
 	return skb->head + skb->transport_header;
 }
 
@@ -3257,6 +3274,29 @@ static inline unsigned char *skb_checksum_start(const struct sk_buff *skb)
 static inline int skb_transport_offset(const struct sk_buff *skb)
 {
 	return skb_transport_header(skb) - skb->data;
+}
+
+/* Is the (inner) transport header, as specified by
+ * skb->transport_header/inner_transport_header, in the linear data?
+ */
+static inline bool skb_transport_header_linear(const struct sk_buff *skb,
+					       unsigned int hlen)
+{
+	int thoff;
+
+	if (!skb_transport_header_was_set(skb))
+		return false;
+
+	if (skb->encapsulation) {
+		if (!skb_inner_transport_header_was_set(skb))
+			return false;
+
+		thoff = skb_inner_transport_offset(skb);
+	} else {
+		thoff = skb_transport_offset(skb);
+	}
+
+	return thoff >= 0 && thoff + hlen <= skb_headlen(skb);
 }
 
 static inline u32 skb_network_header_len(const struct sk_buff *skb)

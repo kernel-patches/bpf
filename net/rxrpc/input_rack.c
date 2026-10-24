@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-/* RACK-TLP [RFC8958] Implementation
+/* RACK-TLP [RFC8985] Implementation
  *
  * Copyright (C) 2024 Red Hat, Inc. All Rights Reserved.
  * Written by David Howells (dhowells@redhat.com)
@@ -23,13 +23,13 @@ static bool rxrpc_rack_sent_after(ktime_t t1, rxrpc_seq_t seq1,
 static void rxrpc_rack_mark_lost(struct rxrpc_call *call,
 				 struct rxrpc_txqueue *tq, unsigned int ix)
 {
-	if (__test_and_set_bit(ix, &tq->segment_lost)) {
-		if (__test_and_clear_bit(ix, &tq->segment_retransmitted))
-			call->tx_nr_resent--;
-	} else {
+	if (__test_and_set_bit(ix, &tq->segment_lost))
+		__clear_bit(ix, &tq->segment_retransmitted);
+	else
 		call->tx_nr_lost++;
-	}
-	tq->segment_xmit_ts[ix] = UINT_MAX;
+
+	if (__test_and_clear_bit(ix, &tq->in_flight))
+		call->tx_in_flight--;
 }
 
 /*
@@ -57,7 +57,7 @@ static unsigned long rxrpc_tq_nacks(const struct rxrpc_txqueue *tq)
 
 /*
  * Update the RACK state for the most recently sent packet that has been
- * delivered [RFC8958 6.2 Step 2].
+ * delivered [RFC8985 6.2 Step 2].
  */
 static void rxrpc_rack_update(struct rxrpc_call *call,
 			      struct rxrpc_ack_summary *summary,
@@ -98,7 +98,7 @@ static void rxrpc_rack_update(struct rxrpc_call *call,
 }
 
 /*
- * Detect data segment reordering [RFC8958 6.2 Step 3].
+ * Detect data segment reordering [RFC8985 6.2 Step 3].
  */
 static void rxrpc_rack_detect_reordering(struct rxrpc_call *call,
 					 struct rxrpc_ack_summary *summary,
@@ -136,6 +136,8 @@ void rxrpc_input_rack(struct rxrpc_call *call,
 		unsigned int ix = __ffs(new_acks);
 
 		__clear_bit(ix, &new_acks);
+		if (__test_and_clear_bit(ix, &tq->in_flight))
+			call->tx_in_flight--;
 		rxrpc_input_rack_one(call, summary, tq, ix);
 	}
 
@@ -143,7 +145,7 @@ void rxrpc_input_rack(struct rxrpc_call *call,
 }
 
 /*
- * Update the reordering window [RFC8958 6.2 Step 4].  Returns the updated
+ * Update the reordering window [RFC8985 6.2 Step 4].  Returns the updated
  * duration of the reordering window.
  *
  * Note that the Rx protocol doesn't have a 'DSACK option' per se, but ACKs can
@@ -181,7 +183,7 @@ static ktime_t rxrpc_rack_update_reo_wnd(struct rxrpc_call *call,
 	}
 
 	if (!call->rack_reordering_seen) {
-		if (summary->in_fast_or_rto_recovery)
+		if (call->cong_in_recovery)
 			return 0;
 		if (call->acks_nr_sacks >= dup_thresh)
 			return 0;
@@ -192,7 +194,7 @@ static ktime_t rxrpc_rack_update_reo_wnd(struct rxrpc_call *call,
 }
 
 /*
- * Detect losses [RFC8958 6.2 Step 5].
+ * Detect losses [RFC8985 6.2 Step 5].
  */
 static ktime_t rxrpc_rack_detect_loss(struct rxrpc_call *call,
 				      struct rxrpc_ack_summary *summary)
@@ -227,6 +229,7 @@ static ktime_t rxrpc_rack_detect_loss(struct rxrpc_call *call,
 				remaining = ktime_sub(ktime_add(xmit_ts, lost_after), now);
 				if (remaining <= 0) {
 					rxrpc_rack_mark_lost(call, tq, ix);
+					tq->segment_xmit_ts[ix] = UINT_MAX;
 					trace_rxrpc_rack_detect_loss(call, summary, seq);
 				} else {
 					timeout = max(remaining, timeout);
@@ -239,7 +242,7 @@ static ktime_t rxrpc_rack_detect_loss(struct rxrpc_call *call,
 }
 
 /*
- * Detect losses and set a timer to retry the detection [RFC8958 6.2 Step 5].
+ * Detect losses and set a timer to retry the detection [RFC8985 6.2 Step 5].
  */
 void rxrpc_rack_detect_loss_and_arm_timer(struct rxrpc_call *call,
 					  struct rxrpc_ack_summary *summary)
@@ -255,7 +258,7 @@ void rxrpc_rack_detect_loss_and_arm_timer(struct rxrpc_call *call,
 }
 
 /*
- * Handle RACK-TLP RTO expiration [RFC8958 6.3].
+ * Handle RACK-TLP RTO expiration [RFC8985 6.3].
  */
 static void rxrpc_rack_mark_losses_on_rto(struct rxrpc_call *call)
 {
@@ -285,11 +288,11 @@ static void rxrpc_rack_mark_losses_on_rto(struct rxrpc_call *call)
 }
 
 /*
- * Calculate the TLP loss probe timeout (PTO) [RFC8958 7.2].
+ * Calculate the TLP loss probe timeout (PTO) [RFC8985 7.2].
  */
 ktime_t rxrpc_tlp_calc_pto(struct rxrpc_call *call, ktime_t now)
 {
-	unsigned int flight_size = rxrpc_tx_in_flight(call);
+	unsigned int flight_size = call->tx_in_flight;
 	ktime_t rto_at = ktime_add(call->tx_last_sent,
 				   rxrpc_get_rto_backoff(call, false));
 	ktime_t pto;
@@ -297,7 +300,7 @@ ktime_t rxrpc_tlp_calc_pto(struct rxrpc_call *call, ktime_t now)
 	if (call->rtt_count > 0) {
 		/* Use 2*SRTT as the timeout. */
 		pto = ns_to_ktime(call->srtt_us * NSEC_PER_USEC / 4);
-		if (flight_size)
+		if (flight_size <= max(call->peer->pmtud_jumbo, 1))
 			pto = ktime_add(pto, call->tlp_max_ack_delay);
 	} else {
 		pto = NSEC_PER_SEC;
@@ -309,11 +312,11 @@ ktime_t rxrpc_tlp_calc_pto(struct rxrpc_call *call, ktime_t now)
 }
 
 /*
- * Send a TLP loss probe on PTO expiration [RFC8958 7.3].
+ * Send a TLP loss probe on PTO expiration [RFC8985 7.3].
  */
 void rxrpc_tlp_send_probe(struct rxrpc_call *call)
 {
-	unsigned int in_flight = rxrpc_tx_in_flight(call);
+	unsigned int in_flight = call->tx_in_flight;
 
 	if (after_eq(call->acks_hard_ack, call->tx_transmitted))
 		return; /* Everything we transmitted has been acked. */
@@ -333,7 +336,7 @@ void rxrpc_tlp_send_probe(struct rxrpc_call *call)
 			call->tlp_serial = call->tx_last_serial;
 			call->tlp_seq = call->tx_transmitted;
 			trace_rxrpc_tlp_probe(call, rxrpc_tlp_probe_trace_transmit_new);
-			in_flight = rxrpc_tx_in_flight(call);
+			in_flight = call->tx_in_flight;
 		} else {
 			/* Retransmit the highest-sequence DATA sent */
 			call->tx_last_serial = 0;
@@ -356,7 +359,7 @@ void rxrpc_tlp_send_probe(struct rxrpc_call *call)
 }
 
 /*
- * Detect losses using the ACK of a TLP loss probe [RFC8958 7.4].
+ * Detect losses using the ACK of a TLP loss probe [RFC8985 7.4].
  */
 void rxrpc_tlp_process_ack(struct rxrpc_call *call, struct rxrpc_ack_summary *summary)
 {

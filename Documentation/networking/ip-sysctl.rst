@@ -956,7 +956,9 @@ tcp_stdurg - BOOLEAN
 
 tcp_synack_retries - INTEGER
 	Number of times SYNACKs for a passive TCP connection attempt will
-	be retransmitted. Should not be higher than 255. Default value
+	be retransmitted. The sysctl accepts 0-255, but values above 127 are
+	silently capped by the SYN-ACK timers to match the 7-bit
+	request_sock::num_timeout field. Default value
 	is 5, which corresponds to 31seconds till the last retransmission
 	with the current initial RTO of 1second. With this the final timeout
 	for a passive TCP connection will happen after 63seconds.
@@ -1127,6 +1129,8 @@ tcp_tso_rtt_log - INTEGER
 	TSO packets, reducing their cpu costs.
 
 	If you want to use the old autosizing, set this sysctl to 0.
+
+	Possible values are [0, 31], inclusive.
 
 	Default: 9  (2^9 = 512 usec)
 

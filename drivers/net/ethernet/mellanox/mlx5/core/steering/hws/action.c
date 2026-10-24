@@ -1473,7 +1473,12 @@ mlx5hws_action_create_insert_header(struct mlx5hws_context *ctx,
 	int ret;
 	int i;
 
-	action = hws_action_create_generic(ctx, flags, MLX5HWS_ACTION_TYP_INSERT_HEADER);
+	if (!num_of_hdrs)
+		return NULL;
+
+	action = hws_action_create_generic_bulk(ctx, flags,
+						MLX5HWS_ACTION_TYP_INSERT_HEADER,
+						num_of_hdrs);
 	if (!action)
 		return NULL;
 

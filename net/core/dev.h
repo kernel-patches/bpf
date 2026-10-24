@@ -183,7 +183,10 @@ void netif_rx_mode_cancel_retry(struct net_device *dev);
 /* Events for the async netdev work, tracked in netdev->work_core_pending. */
 enum netdev_work_core {
 	NETDEV_WORK_RX_MODE	= BIT(0),	/* run the rx_mode update */
+	NETDEV_WORK_SYNC_UPPERS	= BIT(1),	/* disable features uppers lack */
 };
+
+void netif_sync_upper_disables(struct net_device *dev);
 
 void __netdev_work_core_sched(struct net_device *dev, unsigned long event);
 unsigned long

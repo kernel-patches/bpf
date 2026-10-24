@@ -201,6 +201,15 @@ static int fq_codel_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	}
 	idx--;
 
+	/* Drop before the flow is touched, so a dropped packet cannot
+	 * create or update flow state.
+	 */
+	if (unlikely(qdisc_backlog_overflow(sch, skb))) {
+		q->drop_overlimit++;
+		return qdisc_drop_reason(skb, sch, to_free,
+					 QDISC_DROP_OVERLIMIT);
+	}
+
 	codel_set_enqueue_time(skb);
 	flow = &q->flows[idx];
 	flow_queue_add(flow, skb);
@@ -739,7 +748,18 @@ static void fq_codel_walk(struct Qdisc *sch, struct qdisc_walker *arg)
 		return;
 
 	for (i = 0; i < q->flows_cnt; i++) {
-		if (list_empty(&q->flows[i].flowchain)) {
+		bool empty;
+
+		/* flowchain is spliced by the datapath (fq_codel_enqueue/
+		 * fq_codel_dequeue) under the qdisc root lock.  This walker
+		 * runs under rtnl_lock, which does not exclude those writers,
+		 * so read the membership under the same lock they use.
+		 */
+		sch_tree_lock(sch);
+		empty = list_empty(&q->flows[i].flowchain);
+		sch_tree_unlock(sch);
+
+		if (empty) {
 			arg->count++;
 			continue;
 		}

@@ -192,6 +192,14 @@ static void complete_skb(struct sk_buff *nskb, struct sk_buff *skb, int headln)
 	skb->destructor = NULL;
 	skb->sk = NULL;
 
+	/* nskb carries ciphertext now, but skb_copy_header() inherited the
+	 * plaintext original's decrypted bit. Clear it so the bit keeps meaning
+	 * "still-plaintext, needs an encryptor": a requeued nskb would otherwise
+	 * be re-validated and encrypted a second time on any re-entry into
+	 * tls_sw_fallback().
+	 */
+	nskb->decrypted = 0;
+
 	update_chksum(nskb, headln);
 
 	/* sock_efree means skb must gone through skb_orphan_partial() */
@@ -370,6 +378,17 @@ static struct sk_buff *tls_sw_fallback(struct sock *sk, struct sk_buff *skb)
 	int resync_sgs = 0;
 	s32 sync_size = 0;
 	u64 rcd_sn;
+
+	/* Only skbs carrying the decrypted bit hold plaintext that awaits
+	 * offload encryption; anything else needs no work here. That
+	 * includes this function's own output (complete_skb() clears the
+	 * bit skb_copy_header() inherited), which is seen again when a skb
+	 * is validated a second time, e.g. a bond master handing it to a
+	 * slave via bond_dev_queue_xmit(). fill_sg_in() would map it back
+	 * onto its own record by tcp_seq, reusing rcd_sn and IV.
+	 */
+	if (!skb_is_decrypted(skb))
+		return skb;
 
 	/* worst case is:
 	 * MAX_SKB_FRAGS in tls_record_info

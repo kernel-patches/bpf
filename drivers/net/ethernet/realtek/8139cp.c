@@ -554,11 +554,12 @@ rx_next:
 	/* if we did not reach work limit, then we're done with
 	 * this round of polling
 	 */
-	if (rx < budget && napi_complete_done(napi, rx)) {
+	if (rx < budget) {
 		unsigned long flags;
 
 		spin_lock_irqsave(&cp->lock, flags);
-		cpw16_f(IntrMask, cp_intr_mask);
+		if (napi_complete_done(napi, rx))
+			cpw16_f(IntrMask, cp_intr_mask);
 		spin_unlock_irqrestore(&cp->lock, flags);
 	}
 

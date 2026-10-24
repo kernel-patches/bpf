@@ -18,12 +18,12 @@ from lib.py import ksft_run, ksft_exit, ksft_pr
 from lib.py import ksft_true, ksft_eq, ksft_ne, ksft_gt, ksft_raises
 from lib.py import ksft_not_none
 from lib.py import ksft_variants, KsftNamedVariant
-from lib.py import KsftSkipEx, KsftFailEx
+from lib.py import KsftSkipEx, KsftFailEx, CmdExitFailure
 from lib.py import NetDrvEpEnv, NetDrvContEnv
 from lib.py import Netlink, NlError, PSPFamily, RtnlFamily
 from lib.py import NetNSEnter
 from lib.py import bkg, rand_port, wait_port_listen
-from lib.py import ip
+from lib.py import ip, tc
 
 TCP_ULP = 31
 
@@ -132,6 +132,57 @@ def _check_data_outq(s, exp_len, force_wait=False):
 
 def _get_stat(cfg, key):
     return cfg.pspnl.get_stats({'dev-id': cfg.psp_dev_id})[key]
+
+
+def _get_quiesced_stat(cfg, key, timeout=10):
+    """
+    Like _get_stat(), but wait till the value stops changing. Note
+    that some devices refresh flow counters periodically, e.g. once
+    per second with mlx5.
+    """
+    val = _get_stat(cfg, key)
+    end = time.monotonic() + timeout
+    while True:
+        time.sleep(1.5)
+        new = _get_stat(cfg, key)
+        if new == val:
+            return val
+        val = new
+        if time.monotonic() >= end:
+            ksft_pr(f"{key} still changing after {timeout}s: {val}")
+            return val
+
+
+def _remote_udp_from(cfg, src, dst):
+    """
+    Count what reaches the remote from @src to @dst as UDP, with a software
+    filter on its ingress (offloaded filter counters are refreshed
+    periodically). Returns a function reading the count, or None if the
+    filter can't be installed.
+    """
+    flt = (f"dev {cfg.remote_ifname} ingress protocol ipv6 pref 1 "
+           f"handle 0x5053 flower")
+    try:
+        qdiscs = tc(f"qdisc show dev {cfg.remote_ifname}", json=True,
+                    host=cfg.remote)
+        if not any(q['kind'] == 'clsact' for q in qdiscs):
+            tc(f"qdisc add dev {cfg.remote_ifname} clsact", host=cfg.remote)
+            defer(tc, f"qdisc del dev {cfg.remote_ifname} clsact",
+                  host=cfg.remote)
+        tc(f"filter add {flt} skip_hw src_ip {src} dst_ip {dst} "
+           f"ip_proto udp action drop", host=cfg.remote)
+    except CmdExitFailure as e:
+        ksft_pr(f"Can't count UDP on the remote: {e}")
+        return None
+    defer(tc, f"filter del {flt}", host=cfg.remote)
+
+    def count():
+        filters = tc(f"-s filter get {flt}", json=True, host=cfg.remote)
+        for f in filters:
+            for act in f.get("options", {}).get("actions", []):
+                return act["stats"]["packets"]
+        raise KsftFailEx("no action on the remote filter")
+    return count
 
 #
 # Test case boiler plate
@@ -656,6 +707,71 @@ def removal_device_bi(cfg):
         __nsim_psp_rereg(cfg)
     finally:
         _close_conn(cfg, s)
+
+
+def data_send_ipv6_exthdr(cfg):
+    """ Test that IPv6 packets with extension headers are dropped """
+    cfg.require_ipver("6")
+    _init_psp_dev(cfg)
+
+    s = _make_psp_conn(cfg, 0, "6")
+
+    rx_assoc = cfg.pspnl.rx_assoc({"version": 0,
+                                   "dev-id": cfg.psp_dev_id,
+                                   "sock-fd": s.fileno()})
+    tx = _spi_xchg(s, rx_assoc['rx-key'])
+    cfg.pspnl.tx_assoc({"dev-id": cfg.psp_dev_id,
+                        "version": 0,
+                        "tx-key": tx,
+                        "sock-fd": s.fileno()})
+    _check_data_outq(s, 0)
+
+    def wait_outq_empty():
+        for _ in range(100):
+            if _get_outq(s) == 0:
+                break
+            time.sleep(0.5)
+        _check_data_outq(s, 0)
+
+    # 1. No options: sent and counted
+    tx_pkts = _get_quiesced_stat(cfg, 'tx-packets')
+    total = _send_careful(cfg, s, 20)
+    wait_outq_empty()
+    ksft_gt(_get_quiesced_stat(cfg, 'tx-packets'), tx_pkts)
+    _check_data_rx(cfg, total)
+
+    # In happy path, PSP traffic arrives at the remote decrypted as TCP
+    remote_udp = _remote_udp_from(cfg, s.getsockname()[0],
+                                  s.getpeername()[0])
+
+    # An extension header with one PadN option, as destination options and
+    # as hop-by-hop options
+    for name, opt in (("IPV6_DSTOPTS", socket.IPV6_DSTOPTS),
+                      ("IPV6_HOPOPTS", socket.IPV6_HOPOPTS)):
+        # 2. With the option: dropped, not counted, and nothing reaches
+        # the peer. The data stays queued.
+        s.setsockopt(socket.IPPROTO_IPV6, opt,
+                     bytes([0, 0, 1, 4, 0, 0, 0, 0]))
+        tx_pkts = _get_quiesced_stat(cfg, 'tx-packets')
+        udp = remote_udp() if remote_udp else 0
+        queued = _send_careful(cfg, s, 20)
+        _check_data_outq(s, queued, force_wait=True)
+        ksft_eq(_get_quiesced_stat(cfg, 'tx-packets'), tx_pkts, comment=name)
+        if remote_udp:
+            ksft_eq(remote_udp(), udp, comment=f"{name}: UDP at the remote")
+        _check_data_rx(cfg, total)
+        total += queued
+
+        # 3. Option removed: the queued data, then new data, sent and
+        # counted
+        tx_pkts = _get_quiesced_stat(cfg, 'tx-packets')
+        s.setsockopt(socket.IPPROTO_IPV6, opt, b'')
+        wait_outq_empty()
+        total += _send_careful(cfg, s, 20)
+        wait_outq_empty()
+        ksft_gt(_get_quiesced_stat(cfg, 'tx-packets'), tx_pkts, comment=name)
+        _check_data_rx(cfg, total)
+    _close_psp_conn(cfg, s)
 
 
 def _get_psp_ver_ip_variants():

@@ -1397,6 +1397,7 @@ static int lpc_eth_drv_probe(struct platform_device *pdev)
 err_out_unregister_netdev:
 	unregister_netdev(ndev);
 err_out_dma_unmap:
+	of_node_put(pldat->phy_node);
 	if (!use_iram_for_net(dev) ||
 	    pldat->dma_buff_size > lpc32xx_return_iram(NULL, NULL))
 		dma_free_coherent(dev, pldat->dma_buff_size,
@@ -1435,6 +1436,7 @@ static void lpc_eth_drv_remove(struct platform_device *pdev)
 	mdiobus_free(pldat->mii_bus);
 	clk_disable_unprepare(pldat->clk);
 	clk_put(pldat->clk);
+	of_node_put(pldat->phy_node);
 	free_netdev(ndev);
 }
 

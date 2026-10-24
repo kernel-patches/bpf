@@ -563,6 +563,14 @@ static struct efx_channel *efx_alloc_channel(struct efx_nic *efx, int i)
 	return channel;
 }
 
+static void efx_free_channel(struct efx_channel *channel)
+{
+#ifdef CONFIG_RFS_ACCEL
+	cancel_delayed_work_sync(&channel->filter_work);
+#endif
+	kfree(channel);
+}
+
 int efx_siena_init_channels(struct efx_nic *efx)
 {
 	unsigned int i;
@@ -591,7 +599,7 @@ void efx_siena_fini_channels(struct efx_nic *efx)
 
 	for (i = 0; i < EFX_MAX_CHANNELS; i++)
 		if (efx->channel[i]) {
-			kfree(efx->channel[i]);
+			efx_free_channel(efx->channel[i]);
 			efx->channel[i] = NULL;
 		}
 }
@@ -932,7 +940,7 @@ out:
 		if (channel && channel->type->copy) {
 			efx_fini_napi_channel(channel);
 			efx_siena_remove_channel(channel);
-			kfree(channel);
+			efx_free_channel(channel);
 		}
 	}
 

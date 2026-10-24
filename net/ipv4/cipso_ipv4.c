@@ -1824,7 +1824,11 @@ static int cipso_v4_get_actual_opt_len(const unsigned char *data, int len)
 		} else if (data[iter] == IPOPT_NOP) {
 			iter++;
 		} else {
+			if (iter + 1 >= len || data[iter + 1] < 2)
+				return -EINVAL;
 			iter += data[iter + 1];
+			if (iter > len)
+				return -EINVAL;
 			optlen = iter;
 		}
 	}
@@ -2028,6 +2032,13 @@ static int cipso_v4_delopt(struct ip_options_rcu __rcu **opt_ptr)
 
 		optlen_new = cipso_v4_get_actual_opt_len(opt->opt.__data,
 							 opt->opt.optlen);
+		if (optlen_new < 0) {
+			/* malformed option stream, drop all the options */
+			*opt_ptr = NULL;
+			hdr_delta = opt->opt.optlen;
+			kfree_rcu(opt, rcu);
+			return hdr_delta;
+		}
 		hdr_delta = opt->opt.optlen;
 		opt->opt.optlen = (optlen_new + 3) & ~3;
 		hdr_delta -= opt->opt.optlen;
@@ -2249,7 +2260,7 @@ int cipso_v4_skbuff_setattr(struct sk_buff *skb,
 int cipso_v4_skbuff_delattr(struct sk_buff *skb)
 {
 	int ret_val, cipso_len, hdr_len_actual, new_hdr_len_actual, new_hdr_len,
-	    hdr_len_delta;
+	    hdr_len_delta, optlen;
 	struct iphdr *iph;
 	struct ip_options *opt = &IPCB(skb)->opt;
 	unsigned char *cipso_ptr;
@@ -2266,9 +2277,12 @@ int cipso_v4_skbuff_delattr(struct sk_buff *skb)
 	cipso_ptr = (unsigned char *)iph + opt->cipso;
 	cipso_len = cipso_ptr[1];
 
-	hdr_len_actual = sizeof(struct iphdr) +
-			 cipso_v4_get_actual_opt_len((unsigned char *)(iph + 1),
-						     opt->optlen);
+	optlen = cipso_v4_get_actual_opt_len((unsigned char *)(iph + 1),
+					     opt->optlen);
+	/* malformed option stream, leave the packet unchanged */
+	if (optlen < 0)
+		return -EINVAL;
+	hdr_len_actual = sizeof(struct iphdr) + optlen;
 	new_hdr_len_actual = hdr_len_actual - cipso_len;
 	new_hdr_len = (new_hdr_len_actual + 3) & ~3;
 	hdr_len_delta = (iph->ihl << 2) - new_hdr_len;

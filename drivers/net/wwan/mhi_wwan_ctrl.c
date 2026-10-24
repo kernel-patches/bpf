@@ -15,6 +15,8 @@ enum mhi_wwan_flags {
 	MHI_WWAN_DL_CAP,
 	MHI_WWAN_UL_CAP,
 	MHI_WWAN_RX_REFILL,
+	MHI_WWAN_DTR_SET,	/* ->dtr_rts has been called for this port */
+	MHI_WWAN_DTR_DROP,	/* a DTR drop is still to be sent */
 };
 
 #define MHI_WWAN_MAX_MTU	0x8000
@@ -43,6 +45,9 @@ struct mhi_wwan_dtr {
 };
 
 static LIST_HEAD(mhi_wwan_dtr_list);
+/* All ports, so an IP_CTRL channel that binds late can resend their state */
+static LIST_HEAD(mhi_wwan_port_list);
+/* Protects mhi_wwan_dtr_list and mhi_wwan_port_list */
 static DEFINE_MUTEX(mhi_wwan_dtr_lock);
 
 struct mhi_wwan_dev {
@@ -71,7 +76,10 @@ struct mhi_wwan_dev {
 	 * changes is coalesced and only the final state has to get through
 	 */
 	unsigned int dtr_mdmbits;
+	/* State to send for a DTR drop that a later raise would otherwise hide */
+	unsigned int dtr_drop_mdmbits;
 	struct delayed_work dtr_work;
+	struct list_head port_node;
 };
 
 /* Increment RX budget and schedule RX refill if necessary */
@@ -197,6 +205,21 @@ static void mhi_wwan_ctrl_dtr_work(struct work_struct *work)
 						    struct mhi_wwan_dev, dtr_work);
 	int ret;
 
+	/* A DTR drop matters on its own, e.g. to hang up a modem set to AT&D2,
+	 * so send it before the latest state if DTR has been raised again
+	 */
+	if (test_and_clear_bit(MHI_WWAN_DTR_DROP, &mhiwwan->flags) &&
+	    READ_ONCE(mhiwwan->dtr_mdmbits) & TIOCM_DTR) {
+		ret = mhi_wwan_ctrl_send_dtr(mhiwwan,
+					     READ_ONCE(mhiwwan->dtr_drop_mdmbits));
+		if (ret == -EAGAIN || ret == -ENOMEM) {
+			set_bit(MHI_WWAN_DTR_DROP, &mhiwwan->flags);
+			schedule_delayed_work(&mhiwwan->dtr_work,
+					      msecs_to_jiffies(10));
+			return;
+		}
+	}
+
 	ret = mhi_wwan_ctrl_send_dtr(mhiwwan, READ_ONCE(mhiwwan->dtr_mdmbits));
 	if (ret == -EAGAIN || ret == -ENOMEM)
 		schedule_delayed_work(&mhiwwan->dtr_work, msecs_to_jiffies(10));
@@ -209,9 +232,19 @@ static void mhi_wwan_ctrl_dtr_work(struct work_struct *work)
 static void mhi_wwan_ctrl_dtr_rts(struct wwan_port *port, unsigned int mdmbits)
 {
 	struct mhi_wwan_dev *mhiwwan = wwan_port_get_drvdata(port);
+	bool drop = (READ_ONCE(mhiwwan->dtr_mdmbits) & TIOCM_DTR) &&
+		    !(mdmbits & TIOCM_DTR);
 
+	if (drop)
+		WRITE_ONCE(mhiwwan->dtr_drop_mdmbits, mdmbits);
 	WRITE_ONCE(mhiwwan->dtr_mdmbits, mdmbits);
-	schedule_delayed_work(&mhiwwan->dtr_work, 0);
+	/* Publish the state before the flags the work tests */
+	smp_mb__before_atomic();
+	if (drop)
+		set_bit(MHI_WWAN_DTR_DROP, &mhiwwan->flags);
+	set_bit(MHI_WWAN_DTR_SET, &mhiwwan->flags);
+	/* Run now, even if a retry is already pending */
+	mod_delayed_work(system_wq, &mhiwwan->dtr_work, 0);
 }
 
 static int mhi_wwan_ctrl_start(struct wwan_port *port)
@@ -357,6 +390,10 @@ static int mhi_wwan_ctrl_probe(struct mhi_device *mhi_dev,
 
 	mhiwwan->wwan_port = port;
 
+	mutex_lock(&mhi_wwan_dtr_lock);
+	list_add(&mhiwwan->port_node, &mhi_wwan_port_list);
+	mutex_unlock(&mhi_wwan_dtr_lock);
+
 	return 0;
 };
 
@@ -365,6 +402,11 @@ static void mhi_wwan_ctrl_remove(struct mhi_device *mhi_dev)
 	struct mhi_wwan_dev *mhiwwan = dev_get_drvdata(&mhi_dev->dev);
 
 	wwan_remove_port(mhiwwan->wwan_port);
+
+	mutex_lock(&mhi_wwan_dtr_lock);
+	list_del(&mhiwwan->port_node);
+	mutex_unlock(&mhi_wwan_dtr_lock);
+
 	/* Give the DTR/RTS drop from removal one attempt, then stop the work */
 	flush_delayed_work(&mhiwwan->dtr_work);
 	disable_delayed_work_sync(&mhiwwan->dtr_work);
@@ -419,6 +461,7 @@ static void mhi_wwan_dtr_dl_xfer_cb(struct mhi_device *mhi_dev,
 static int mhi_wwan_dtr_probe(struct mhi_device *mhi_dev,
 			      const struct mhi_device_id *id)
 {
+	struct mhi_wwan_dev *mhiwwan;
 	struct mhi_wwan_dtr *dtr;
 	int ret;
 
@@ -449,6 +492,11 @@ static int mhi_wwan_dtr_probe(struct mhi_device *mhi_dev,
 
 	mutex_lock(&mhi_wwan_dtr_lock);
 	list_add(&dtr->node, &mhi_wwan_dtr_list);
+	/* Resend the state of ports that signalled DTR/RTS before IP_CTRL bound */
+	list_for_each_entry(mhiwwan, &mhi_wwan_port_list, port_node)
+		if (mhiwwan->mhi_dev->mhi_cntrl == dtr->cntrl &&
+		    test_bit(MHI_WWAN_DTR_SET, &mhiwwan->flags))
+			mod_delayed_work(system_wq, &mhiwwan->dtr_work, 0);
 	mutex_unlock(&mhi_wwan_dtr_lock);
 
 	return 0;
@@ -485,6 +533,7 @@ static const struct mhi_device_id mhi_wwan_ctrl_match_table[] = {
 	{ .chan = "DIAG", .driver_data = WWAN_PORT_QCDM },
 	{ .chan = "FIREHOSE", .driver_data = WWAN_PORT_FIREHOSE },
 	{ .chan = "NMEA", .driver_data = WWAN_PORT_NMEA },
+	{ .chan = "ADB", .driver_data = WWAN_PORT_ADB },
 	{},
 };
 MODULE_DEVICE_TABLE(mhi, mhi_wwan_ctrl_match_table);

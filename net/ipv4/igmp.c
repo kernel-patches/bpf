@@ -1566,9 +1566,15 @@ error:
 
 /*
  *	A socket has joined a multicast group on device dev.
+ *
+ *	Returns 0 if the interface now has a reference to the group, or
+ *	-ENOBUFS if the new group could not be allocated.  Callers that can
+ *	report an error to userspace must check it: a socket that reports a
+ *	successful join while the interface has no group cannot receive the
+ *	group's traffic.
  */
-static void ____ip_mc_inc_group(struct in_device *in_dev, __be32 addr,
-				unsigned int mode, gfp_t gfp)
+static int ____ip_mc_inc_group(struct in_device *in_dev, __be32 addr,
+			       unsigned int mode, gfp_t gfp)
 {
 	struct ip_mc_list __rcu **mc_hash;
 	struct ip_mc_list *im;
@@ -1595,12 +1601,12 @@ static void ____ip_mc_inc_group(struct in_device *in_dev, __be32 addr,
 	if  (im) {
 		WRITE_ONCE(im->users, im->users + 1);
 		ip_mc_add_src(in_dev, &addr, mode, 0, NULL, 0);
-		goto out;
+		return 0;
 	}
 
 	im = kzalloc_obj(*im, gfp);
 	if (!im)
-		goto out;
+		return -ENOBUFS;
 
 	WRITE_ONCE(im->users, 1);
 	im->interface = in_dev;
@@ -1630,13 +1636,18 @@ static void ____ip_mc_inc_group(struct in_device *in_dev, __be32 addr,
 	inet_ifmcaddr_notify(in_dev->dev, im, RTM_NEWMULTICAST);
 	if (!in_dev->dead)
 		ip_rt_multicast_event(in_dev);
-out:
-	return;
+	return 0;
 }
 
 void __ip_mc_inc_group(struct in_device *in_dev, __be32 addr, gfp_t gfp)
 {
-	____ip_mc_inc_group(in_dev, addr, MCAST_EXCLUDE, gfp);
+	/*
+	 * Legacy void interface: interface-up, init, bridge and tunnel
+	 * callers cannot report an allocation failure.  Keep the best-effort
+	 * behaviour.  A query does not recreate a missing group; only a later
+	 * successful inc_group call can.
+	 */
+	(void)____ip_mc_inc_group(in_dev, addr, MCAST_EXCLUDE, gfp);
 }
 EXPORT_SYMBOL(__ip_mc_inc_group);
 
@@ -2386,11 +2397,19 @@ static int __ip_mc_join_group(struct sock *sk, struct ip_mreqn *imr,
 		goto done;
 
 	memcpy(&iml->multi, imr, sizeof(*imr));
-	iml->next_rcu = inet->mc_list;
 	iml->sflist = NULL;
 	iml->sfmode = mode;
+	/*
+	 * Make the interface group exist before publishing the socket's
+	 * membership: success must mean the group can actually receive.
+	 */
+	err = ____ip_mc_inc_group(in_dev, addr, mode, GFP_KERNEL);
+	if (err) {
+		sock_kfree_s(sk, iml, sizeof(*iml));
+		goto done;
+	}
+	iml->next_rcu = inet->mc_list;
 	rcu_assign_pointer(inet->mc_list, iml);
-	____ip_mc_inc_group(in_dev, addr, mode, GFP_KERNEL);
 	err = 0;
 done:
 	return err;

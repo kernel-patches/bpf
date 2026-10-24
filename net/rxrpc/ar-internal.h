@@ -782,9 +782,8 @@ struct rxrpc_call {
 	rxrpc_seq_t		tx_top;		/* Highest Tx slot allocated. */
 	rxrpc_serial_t		tx_last_serial;	/* Serial of last DATA transmitted */
 	u16			tx_backoff;	/* Delay to insert due to Tx failure (ms) */
-	u16			tx_nr_sent;	/* Number of packets sent, but unacked */
+	u16			tx_in_flight;	/* Number of packets considered "in flight" */
 	u16			tx_nr_lost;	/* Number of packets marked lost */
-	u16			tx_nr_resent;	/* Number of packets resent, but unacked */
 	u16			tx_winsize;	/* Maximum size of Tx window */
 #define RXRPC_TX_MAX_WINDOW	128
 	u8			tx_jumbo_max;	/* Maximum subpkts peer will accept */
@@ -812,6 +811,7 @@ struct rxrpc_call {
 #define RXRPC_TX_SMSS		RXRPC_JUMBO_DATALEN
 #define RXRPC_MIN_CWND		4
 	enum rxrpc_ca_state	cong_ca_state;	/* Congestion control state */
+	bool			cong_in_recovery:1; /* If we're in Fast/RTO recovery */
 	u8			cong_extra;	/* Extra to send for congestion management */
 	u16			cong_cwnd;	/* Congestion window size */
 	u16			cong_ssthresh;	/* Slow-start threshold */
@@ -896,7 +896,6 @@ struct rxrpc_ack_summary {
 	bool		retrans_timeo:1;	/* T if reTx due to timeout happened */
 	bool		need_retransmit:1;	/* T if we need transmission */
 	bool		rtt_sample_avail:1;	/* T if RTT sample available */
-	bool		in_fast_or_rto_recovery:1;
 	bool		exiting_fast_or_rto_recovery:1;
 	bool		tlp_probe_acked:1;	/* T if the TLP probe seq was acked */
 	u8 /*enum rxrpc_congest_change*/ change;
@@ -980,6 +979,7 @@ struct rxrpc_txqueue {
 	unsigned long		segment_acked;	/* Bit-per-buf: Set if ACK'd */
 	unsigned long		segment_lost;	/* Bit-per-buf: Set if declared lost */
 	unsigned long		segment_retransmitted; /* Bit-per-buf: Set if retransmitted */
+	unsigned long		in_flight;	/* Bit-per-buf: Set if "in flight" */
 	unsigned long		rtt_samples;	/* Bit-per-buf: Set if available for RTT */
 	unsigned long		ever_retransmitted; /* Bit-per-buf: Set if ever retransmitted */
 
@@ -1264,7 +1264,7 @@ void rxrpc_tlp_send_probe(struct rxrpc_call *call);
 void rxrpc_tlp_process_ack(struct rxrpc_call *call, struct rxrpc_ack_summary *summary);
 void rxrpc_rack_timer_expired(struct rxrpc_call *call, ktime_t overran_by);
 
-/* Initialise TLP state [RFC8958 7.1]. */
+/* Initialise TLP state [RFC8985 7.1]. */
 static inline void rxrpc_tlp_init(struct rxrpc_call *call)
 {
 	call->tlp_serial = 0;
@@ -1599,20 +1599,6 @@ static inline unsigned int rxrpc_tx_window_space(const struct rxrpc_call *call)
 	int transmitted = call->tx_top - call->tx_bottom;
 
 	return max(winsize - transmitted, 0);
-}
-
-static inline unsigned int rxrpc_left_out(const struct rxrpc_call *call)
-{
-	return call->acks_nr_sacks + call->tx_nr_lost;
-}
-
-/*
- * Calculate the number of transmitted DATA packets assumed to be in flight
- * [approx RFC6675].
- */
-static inline unsigned int rxrpc_tx_in_flight(const struct rxrpc_call *call)
-{
-	return call->tx_nr_sent - rxrpc_left_out(call) + call->tx_nr_resent;
 }
 
 /*

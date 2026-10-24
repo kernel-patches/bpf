@@ -6,6 +6,11 @@
 #include "br_private.h"
 #include "br_private_mrp.h"
 
+static const struct netlink_range_validation br_mrp_in_id_range = {
+	.min = 0,
+	.max = U16_MAX,
+};
+
 static const struct nla_policy br_mrp_policy[IFLA_BRIDGE_MRP_MAX + 1] = {
 	[IFLA_BRIDGE_MRP_UNSPEC]	= { .type = NLA_REJECT },
 	[IFLA_BRIDGE_MRP_INSTANCE]	= { .type = NLA_NESTED },
@@ -241,7 +246,8 @@ static int br_mrp_start_test_parse(struct net_bridge *br, struct nlattr *attr,
 static const struct nla_policy
 br_mrp_in_state_policy[IFLA_BRIDGE_MRP_IN_STATE_MAX + 1] = {
 	[IFLA_BRIDGE_MRP_IN_STATE_UNSPEC]	= { .type = NLA_REJECT },
-	[IFLA_BRIDGE_MRP_IN_STATE_IN_ID]	= { .type = NLA_U32 },
+	[IFLA_BRIDGE_MRP_IN_STATE_IN_ID]	=
+		NLA_POLICY_FULL_RANGE(NLA_U32, &br_mrp_in_id_range),
 	[IFLA_BRIDGE_MRP_IN_STATE_STATE]	= { .type = NLA_U32 },
 };
 
@@ -315,7 +321,8 @@ static int br_mrp_in_role_parse(struct net_bridge *br, struct nlattr *attr,
 static const struct nla_policy
 br_mrp_start_in_test_policy[IFLA_BRIDGE_MRP_START_IN_TEST_MAX + 1] = {
 	[IFLA_BRIDGE_MRP_START_IN_TEST_UNSPEC]	= { .type = NLA_REJECT },
-	[IFLA_BRIDGE_MRP_START_IN_TEST_IN_ID]	= { .type = NLA_U32 },
+	[IFLA_BRIDGE_MRP_START_IN_TEST_IN_ID]	=
+		NLA_POLICY_FULL_RANGE(NLA_U32, &br_mrp_in_id_range),
 	[IFLA_BRIDGE_MRP_START_IN_TEST_INTERVAL]	= NLA_POLICY_MIN(NLA_U32, 1),
 	[IFLA_BRIDGE_MRP_START_IN_TEST_MAX_MISS]	= { .type = NLA_U32 },
 	[IFLA_BRIDGE_MRP_START_IN_TEST_PERIOD]	= { .type = NLA_U32 },

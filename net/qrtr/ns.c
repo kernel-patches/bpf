@@ -232,7 +232,7 @@ static int announce_servers(struct sockaddr_qrtr *sq)
 				continue;
 
 			pr_err("failed to announce new service\n");
-			return ret;
+			/* the remote needs the other servers no less */
 		}
 	}
 	return 0;
@@ -488,10 +488,12 @@ static int ctrl_cmd_new_server(struct sockaddr_qrtr *from,
 
 	if (srv->node == qrtr_ns.local_node) {
 		ret = service_announce_new(&qrtr_ns.bcast_sq, srv);
-		if (ret < 0) {
+		/*
+		 * A failed broadcast must not hide the server from the
+		 * lookups already registered for it.
+		 */
+		if (ret < 0)
 			pr_err("failed to announce new service\n");
-			return ret;
-		}
 	}
 
 	/* Notify any potential lookups about the new server */

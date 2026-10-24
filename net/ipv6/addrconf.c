@@ -529,6 +529,9 @@ static int inet6_netconf_msgsize_devconf(int type)
 	if (all || type == NETCONFA_IGNORE_ROUTES_WITH_LINKDOWN)
 		size += nla_total_size(4);
 
+	if (all || type == NETCONFA_FORCE_FORWARDING)
+		size += nla_total_size(4);
+
 	return size;
 }
 
@@ -576,6 +579,11 @@ static int inet6_netconf_fill_devconf(struct sk_buff *skb, int ifindex,
 	if ((all || type == NETCONFA_IGNORE_ROUTES_WITH_LINKDOWN) &&
 	    nla_put_s32(skb, NETCONFA_IGNORE_ROUTES_WITH_LINKDOWN,
 			READ_ONCE(devconf->ignore_routes_with_linkdown)) < 0)
+		goto nla_put_failure;
+
+	if ((all || type == NETCONFA_FORCE_FORWARDING) &&
+	    nla_put_s32(skb, NETCONFA_FORCE_FORWARDING,
+			READ_ONCE(devconf->force_forwarding)) < 0)
 		goto nla_put_failure;
 
 out:

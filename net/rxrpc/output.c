@@ -571,15 +571,16 @@ static size_t rxrpc_prepare_data_packet(struct rxrpc_call *call,
 
 		_debug("prep[%u] tq=%x q=%x", i, tq->qbase, seq);
 
+		if (!__test_and_set_bit(ix, &tq->in_flight))
+			call->tx_in_flight++;
+
 		/* Record (re-)transmission for RACK [RFC8985 6.1]. */
 		if (__test_and_clear_bit(ix, &tq->segment_lost))
 			call->tx_nr_lost--;
 		if (req->retrans) {
 			__set_bit(ix, &tq->ever_retransmitted);
 			__set_bit(ix, &tq->segment_retransmitted);
-			call->tx_nr_resent++;
 		} else {
-			call->tx_nr_sent++;
 			start_tlp = true;
 		}
 		tq->segment_xmit_ts[ix] = xmit_ts;

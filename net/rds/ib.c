@@ -115,6 +115,7 @@ static void rds_ib_dev_free(struct work_struct *work)
 
 	kfree(rds_ibdev->vector_load);
 
+	ib_device_put(rds_ibdev->dev);
 	kfree(rds_ibdev);
 }
 
@@ -142,6 +143,12 @@ static int rds_ib_add_one(struct ib_device *device)
 				 ibdev_to_node(device));
 	if (!rds_ibdev)
 		return -ENOMEM;
+	/* Keep the device registered until the deferred cleanup completes. */
+	if (!ib_device_try_get(device)) {
+		kfree(rds_ibdev);
+		return -ENODEV;
+	}
+	rds_ibdev->dev = device;
 
 	spin_lock_init(&rds_ibdev->spinlock);
 	refcount_set(&rds_ibdev->refcount, 1);
@@ -180,7 +187,6 @@ static int rds_ib_add_one(struct ib_device *device)
 		goto put_dev;
 	}
 
-	rds_ibdev->dev = device;
 	rds_ibdev->pd = ib_alloc_pd(device, 0);
 	if (IS_ERR(rds_ibdev->pd)) {
 		ret = PTR_ERR(rds_ibdev->pd);

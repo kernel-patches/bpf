@@ -282,6 +282,32 @@ void virtio_transport_destruct(struct vsock_sock *vsk);
 
 void virtio_transport_recv_pkt(struct virtio_transport *t,
 			       struct sk_buff *skb, struct net *net);
+
+/*
+ * Initialize a batch to zero before use. A non-empty batch owns @sk's socket
+ * lock and the reference returned by vsock_find_connected_socket_net(). The
+ * caller retains both until it calls virtio_transport_rx_batch_finish(). An
+ * empty batch owns neither. Pending native readiness notifications belong to
+ * the lock holder and are delivered by virtio_transport_rx_batch_finish().
+ */
+struct virtio_transport_rx_batch {
+	struct sock *sk;
+	unsigned int pkts;
+	size_t bytes;
+	bool write_space_pending;
+	bool data_ready_pending;
+};
+
+static inline bool
+virtio_transport_rx_batch_empty(const struct virtio_transport_rx_batch *batch)
+{
+	return !batch->sk;
+}
+
+void virtio_transport_recv_pkt_batch(struct virtio_transport *t,
+				     struct sk_buff *skb, struct net *net,
+				     struct virtio_transport_rx_batch *batch);
+void virtio_transport_rx_batch_finish(struct virtio_transport_rx_batch *batch);
 void virtio_transport_inc_tx_pkt(struct virtio_vsock_sock *vvs, struct sk_buff *skb);
 u32 virtio_transport_get_credit(struct virtio_vsock_sock *vvs, u32 wanted);
 void virtio_transport_put_credit(struct virtio_vsock_sock *vvs, u32 credit);

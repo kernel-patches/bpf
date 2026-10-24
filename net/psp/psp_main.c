@@ -246,7 +246,7 @@ static void psp_write_headers(struct net *net, struct sk_buff *skb, __be32 spi,
 }
 
 /* Encapsulate a TCP packet with PSP by adding the UDP+PSP headers and filling
- * them in.
+ * them in. IPv6 packets with extension headers are rejected.
  */
 bool psp_dev_encapsulate(struct net *net, struct sk_buff *skb, __be32 spi,
 			 u8 ver, __be16 sport)
@@ -257,6 +257,11 @@ bool psp_dev_encapsulate(struct net *net, struct sk_buff *skb, __be32 spi,
 
 	if (skb->protocol != htons(ETH_P_IP) &&
 	    skb->protocol != htons(ETH_P_IPV6))
+		return false;
+
+	/* extension headers not supported */
+	if (skb->protocol == htons(ETH_P_IPV6) &&
+	    network_len != sizeof(struct ipv6hdr))
 		return false;
 
 	if (skb_cow_head(skb, PSP_ENCAP_HLEN))

@@ -22,6 +22,8 @@
 #define ENETC_MAX_MTU		(ENETC_MAC_MAXFRM_SIZE - \
 				(ETH_FCS_LEN + ETH_HLEN + VLAN_HLEN))
 
+#define ENETC_MIN_BUFF_SIZE	16
+
 #define ENETC_CBD_DATA_MEM_ALIGN 64
 
 #define ENETC_MADDR_HASH_TBL_SZ	64
@@ -145,6 +147,8 @@ struct enetc_bdr_resource {
 	};
 	char *tso_headers;
 	dma_addr_t tso_headers_dma;
+	void *tx_pad;
+	dma_addr_t tx_pad_dma;
 };
 
 struct enetc_bdr {
@@ -182,6 +186,10 @@ struct enetc_bdr {
 	/* DMA buffer for TSO headers */
 	char *tso_headers;
 	dma_addr_t tso_headers_dma;
+
+	/* Shared read-only zero buffer to pad short frames to ETH_ZLEN */
+	void *tx_pad;
+	dma_addr_t tx_pad_dma;
 } ____cacheline_aligned_in_smp;
 
 static inline void enetc_bdr_idx_inc(struct enetc_bdr *bdr, int *i)

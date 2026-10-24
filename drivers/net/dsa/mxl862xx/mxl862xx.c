@@ -593,7 +593,16 @@ static int mxl862xx_allocate_bridge(struct mxl862xx_priv *priv)
 	if (ret)
 		return ret;
 
-	return le16_to_cpu(br_alloc.bridge_id);
+	/* Per the API spec, id 0 is not used for historic reasons. Accepting
+	 * it verbatim collides with MXL862XX_DEFAULT_BRIDGE (the CPU port),
+	 * silently merging the port's FID with the CPU port's filtering
+	 * domain.
+	 */
+	ret = le16_to_cpu(br_alloc.bridge_id);
+	if (ret == 0)
+		return -EIO;
+
+	return ret;
 }
 
 static void mxl862xx_free_bridge(struct dsa_switch *ds,
@@ -1497,18 +1506,33 @@ static int mxl862xx_port_fdb_del(struct dsa_switch *ds, int port,
 	return ret;
 }
 
+#define MXL862XX_MAC_TABLE_FDB_SIZE 16384
+
 static int mxl862xx_port_fdb_dump(struct dsa_switch *ds, int port,
 				  dsa_fdb_dump_cb_t *cb, void *data)
 {
 	struct mxl862xx_mac_table_read param = { .initial = 1 };
 	struct mxl862xx_priv *priv = ds->priv;
 	u32 entry_port_id;
+	unsigned long count = 0;
 	int ret;
 
 	while (true) {
 		ret = MXL862XX_API_READ(priv, MXL862XX_MAC_TABLEENTRYREAD, param);
 		if (ret)
 			return ret;
+
+		/* The exact MAC table capacity is not part of the public
+		 * driver API. Use a conservative upper bound: 16k entries is
+		 * well above any documented table size for this family, while
+		 * a device that stopped responding correctly (e.g. firmware
+		 * crash mid-walk) would otherwise keep us looping forever
+		 * with RTNL held.
+		 */
+		if (count++ >= MXL862XX_MAC_TABLE_FDB_SIZE) {
+			dev_err(ds->dev, "FDB dump exceeded table capacity\n");
+			return -EIO;
+		}
 
 		if (param.last)
 			break;

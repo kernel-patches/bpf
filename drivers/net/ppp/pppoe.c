@@ -460,6 +460,9 @@ static int pppoe_disc_rcv(struct sk_buff *skb, struct net_device *dev,
 	if (skb->pkt_type != PACKET_HOST)
 		goto abort;
 
+	if (skb_mac_header_len(skb) < ETH_HLEN)
+		goto abort;
+
 	if (!pskb_may_pull(skb, sizeof(struct pppoe_hdr)))
 		goto abort;
 
@@ -622,6 +625,7 @@ static int pppoe_connect(struct socket *sock, struct sockaddr_unsized *uservaddr
 			dev_put(po->pppoe_dev);
 			po->pppoe_dev = NULL;
 		}
+		synchronize_net();
 
 		po->pppoe_ifindex = 0;
 		memset(&po->pppoe_pa, 0, sizeof(po->pppoe_pa));
@@ -664,6 +668,7 @@ static int pppoe_connect(struct socket *sock, struct sockaddr_unsized *uservaddr
 		po->chan.private = sk;
 		po->chan.ops = &pppoe_chan_ops;
 		po->chan.direct_xmit = true;
+		po->chan.xmit_offload = true;
 
 		error = ppp_register_net_channel(dev_net(dev), &po->chan);
 		if (error) {
