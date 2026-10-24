@@ -233,20 +233,53 @@ enum libbpf_tristate {
 #endif
 
 #define ___bpf_fill0(arr, p, x) do {} while (0)
-#define ___bpf_fill1(arr, p, x) arr[p] = x
-#define ___bpf_fill2(arr, p, x, args...) arr[p] = x; ___bpf_fill1(arr, p + 1, args)
-#define ___bpf_fill3(arr, p, x, args...) arr[p] = x; ___bpf_fill2(arr, p + 1, args)
-#define ___bpf_fill4(arr, p, x, args...) arr[p] = x; ___bpf_fill3(arr, p + 1, args)
-#define ___bpf_fill5(arr, p, x, args...) arr[p] = x; ___bpf_fill4(arr, p + 1, args)
-#define ___bpf_fill6(arr, p, x, args...) arr[p] = x; ___bpf_fill5(arr, p + 1, args)
-#define ___bpf_fill7(arr, p, x, args...) arr[p] = x; ___bpf_fill6(arr, p + 1, args)
-#define ___bpf_fill8(arr, p, x, args...) arr[p] = x; ___bpf_fill7(arr, p + 1, args)
-#define ___bpf_fill9(arr, p, x, args...) arr[p] = x; ___bpf_fill8(arr, p + 1, args)
-#define ___bpf_fill10(arr, p, x, args...) arr[p] = x; ___bpf_fill9(arr, p + 1, args)
-#define ___bpf_fill11(arr, p, x, args...) arr[p] = x; ___bpf_fill10(arr, p + 1, args)
-#define ___bpf_fill12(arr, p, x, args...) arr[p] = x; ___bpf_fill11(arr, p + 1, args)
-#define ___bpf_fill(arr, args...) \
-	___bpf_apply(___bpf_fill, ___bpf_narg(args))(arr, 0, args)
+#define ___bpf_fill1(arr, p, x) (arr[p] = (unsigned long long)(x))
+#define ___bpf_fill2(arr, p, x, ...) do { \
+	arr[p] = (unsigned long long)(x); \
+	___bpf_fill1(arr, p + 1, __VA_ARGS__); \
+} while (0)
+#define ___bpf_fill3(arr, p, x, ...) do { \
+	arr[p] = (unsigned long long)(x); \
+	___bpf_fill2(arr, p + 1, __VA_ARGS__); \
+} while (0)
+#define ___bpf_fill4(arr, p, x, ...) do { \
+	arr[p] = (unsigned long long)(x); \
+	___bpf_fill3(arr, p + 1, __VA_ARGS__); \
+} while (0)
+#define ___bpf_fill5(arr, p, x, ...) do { \
+	arr[p] = (unsigned long long)(x); \
+	___bpf_fill4(arr, p + 1, __VA_ARGS__); \
+} while (0)
+#define ___bpf_fill6(arr, p, x, ...) do { \
+	arr[p] = (unsigned long long)(x); \
+	___bpf_fill5(arr, p + 1, __VA_ARGS__); \
+} while (0)
+#define ___bpf_fill7(arr, p, x, ...) do { \
+	arr[p] = (unsigned long long)(x); \
+	___bpf_fill6(arr, p + 1, __VA_ARGS__); \
+} while (0)
+#define ___bpf_fill8(arr, p, x, ...) do { \
+	arr[p] = (unsigned long long)(x); \
+	___bpf_fill7(arr, p + 1, __VA_ARGS__); \
+} while (0)
+#define ___bpf_fill9(arr, p, x, ...) do { \
+	arr[p] = (unsigned long long)(x); \
+	___bpf_fill8(arr, p + 1, __VA_ARGS__); \
+} while (0)
+#define ___bpf_fill10(arr, p, x, ...) do { \
+	arr[p] = (unsigned long long)(x); \
+	___bpf_fill9(arr, p + 1, __VA_ARGS__); \
+} while (0)
+#define ___bpf_fill11(arr, p, x, ...) do { \
+	arr[p] = (unsigned long long)(x); \
+	___bpf_fill10(arr, p + 1, __VA_ARGS__); \
+} while (0)
+#define ___bpf_fill12(arr, p, x, ...) do { \
+	arr[p] = (unsigned long long)(x); \
+	___bpf_fill11(arr, p + 1, __VA_ARGS__); \
+} while (0)
+#define ___bpf_fill(arr, ...) \
+	___bpf_apply(___bpf_fill, ___bpf_narg(__VA_ARGS__))(arr, 0, __VA_ARGS__)
 
 /*
  * Format strings are in a section of their own. When global data of the object
@@ -260,15 +293,12 @@ enum libbpf_tristate {
  * BPF_SEQ_PRINTF to wrap bpf_seq_printf to-be-printed values
  * in a structure.
  */
-#define BPF_SEQ_PRINTF(seq, fmt, args...)			\
+#define BPF_SEQ_PRINTF(seq, fmt, ...)			\
 ({								\
 	static const char ___fmt[] ___bpf_fmt_sec = fmt;	\
-	unsigned long long ___param[___bpf_narg(args)];		\
+	unsigned long long ___param[___bpf_narg(__VA_ARGS__)];		\
 								\
-	_Pragma("GCC diagnostic push")				\
-	_Pragma("GCC diagnostic ignored \"-Wint-conversion\"")	\
-	___bpf_fill(___param, args);				\
-	_Pragma("GCC diagnostic pop")				\
+	___bpf_fill(___param, __VA_ARGS__);				\
 								\
 	bpf_seq_printf(seq, ___fmt, sizeof(___fmt),		\
 		       ___param, sizeof(___param));		\
@@ -278,15 +308,12 @@ enum libbpf_tristate {
  * BPF_SNPRINTF wraps the bpf_snprintf helper with variadic arguments instead of
  * an array of u64.
  */
-#define BPF_SNPRINTF(out, out_size, fmt, args...)		\
+#define BPF_SNPRINTF(out, out_size, fmt, ...)		\
 ({								\
 	static const char ___fmt[] ___bpf_fmt_sec = fmt;	\
-	unsigned long long ___param[___bpf_narg(args)];		\
+	unsigned long long ___param[___bpf_narg(__VA_ARGS__)];		\
 								\
-	_Pragma("GCC diagnostic push")				\
-	_Pragma("GCC diagnostic ignored \"-Wint-conversion\"")	\
-	___bpf_fill(___param, args);				\
-	_Pragma("GCC diagnostic pop")				\
+	___bpf_fill(___param, __VA_ARGS__);				\
 								\
 	bpf_snprintf(out, out_size, ___fmt,			\
 		     ___param, sizeof(___param));		\
@@ -309,29 +336,23 @@ enum libbpf_tristate {
  * __bpf_vprintk wraps the bpf_trace_vprintk helper with variadic arguments
  * instead of an array of u64.
  */
-#define __bpf_vprintk(fmt, args...)				\
+#define __bpf_vprintk(fmt, ...)				\
 ({								\
 	static const char ___fmt[] ___bpf_fmt_sec = fmt;	\
-	unsigned long long ___param[___bpf_narg(args)];		\
+	unsigned long long ___param[___bpf_narg(__VA_ARGS__)];		\
 								\
-	_Pragma("GCC diagnostic push")				\
-	_Pragma("GCC diagnostic ignored \"-Wint-conversion\"")	\
-	___bpf_fill(___param, args);				\
-	_Pragma("GCC diagnostic pop")				\
+	___bpf_fill(___param, __VA_ARGS__);				\
 								\
 	bpf_trace_vprintk(___fmt, sizeof(___fmt),		\
 			  ___param, sizeof(___param));		\
 })
 
-#define bpf_stream_printk(stream_id, fmt, args...)					\
+#define bpf_stream_printk(stream_id, fmt, ...)					\
 ({											\
 	static const char ___fmt[] ___bpf_fmt_sec = fmt;				\
-	unsigned long long ___param[___bpf_narg(args)];					\
+	unsigned long long ___param[___bpf_narg(__VA_ARGS__)];					\
 											\
-	_Pragma("GCC diagnostic push")							\
-	_Pragma("GCC diagnostic ignored \"-Wint-conversion\"")				\
-	___bpf_fill(___param, args);							\
-	_Pragma("GCC diagnostic pop")							\
+	___bpf_fill(___param, __VA_ARGS__);							\
 											\
 	bpf_stream_vprintk(stream_id, ___fmt, ___param, sizeof(___param));		\
 })
@@ -346,7 +367,7 @@ enum libbpf_tristate {
 		   __bpf_printk /*1*/, __bpf_printk /*0*/)
 
 /* Helper macro to print out debug messages */
-#define bpf_printk(fmt, args...) ___bpf_pick_printk(args)(fmt, ##args)
+#define bpf_printk(fmt, ...) ___bpf_pick_printk(__VA_ARGS__)(fmt, ##__VA_ARGS__)
 
 struct bpf_iter_num;
 
@@ -382,16 +403,18 @@ extern void bpf_iter_num_destroy(struct bpf_iter_num *it) __weak __ksym;
  * extension: __attribute__((cleanup(<func>))), supported by both GCC and
  * Clang.
  */
-#define bpf_for_each(type, cur, args...) for (							\
+#define bpf_for_each(type, cur, ...) for (							\
 	/* initialize and define destructor */							\
 	struct bpf_iter_##type ___it __attribute__((aligned(8), /* enforce, just in case */,	\
 						    cleanup(bpf_iter_##type##_destroy))),	\
 	/* ___p pointer is just to call bpf_iter_##type##_new() *once* to init ___it */		\
 			       *___p __attribute__((unused)) = (				\
-					bpf_iter_##type##_new(&___it, ##args),			\
+						bpf_iter_##type##_new(&___it, \
+								       ##__VA_ARGS__), \
 	/* this is a workaround for Clang bug: it currently doesn't emit BTF */			\
 	/* for bpf_iter_##type##_destroy() when used from cleanup() attribute */		\
-					(void)bpf_iter_##type##_destroy, (void *)0);		\
+					(void)bpf_iter_##type##_destroy, \
+					(struct bpf_iter_##type *)0); \
 	/* iteration and termination check */							\
 	(((cur) = bpf_iter_##type##_next(&___it)));						\
 )

@@ -829,6 +829,11 @@ class PrinterHelpersHeader(Printer):
 /* Forward declarations of BPF structs */'''
 
         print(header)
+        print("#ifdef __cplusplus")
+        print("#define ___bpf_helper_stub(id, name) reinterpret_cast<decltype(+name)>(id)")
+        print("#else")
+        print("#define ___bpf_helper_stub(id, name) ((void *)(id))")
+        print("#endif")
         for fwd in self.type_fwds:
             print('%s;' % fwd)
         print('')
@@ -849,8 +854,7 @@ class PrinterHelpersHeader(Printer):
             print('')
 
     def print_footer(self):
-        footer = ''
-        print(footer)
+        print("#undef ___bpf_helper_stub")
 
     def map_type(self, t):
         if t in self.known_types:
@@ -908,7 +912,7 @@ class PrinterHelpersHeader(Printer):
             comma = ', '
             print(one_arg, end='')
 
-        print(') = (void *) %d;' % helper.enum_val)
+        print(') = ___bpf_helper_stub(%d, %s);' % (helper.enum_val, proto['name']))
         print('')
 
 
