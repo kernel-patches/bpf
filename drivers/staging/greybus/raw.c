@@ -111,9 +111,9 @@ static int gb_raw_request_handler(struct gb_operation *op)
 	}
 	receive = op->request->payload;
 	len = le32_to_cpu(receive->len);
-	if (len != (int)(op->request->payload_size - sizeof(__le32))) {
-		dev_err(dev, "raw receive request wrong size %d vs %d\n", len,
-			(int)(op->request->payload_size - sizeof(__le32)));
+	if (len != (op->request->payload_size - sizeof(__le32))) {
+		dev_err(dev, "raw receive request wrong size %u vs %zu\n", len,
+			(op->request->payload_size - sizeof(__le32)));
 		return -EINVAL;
 	}
 	if (len == 0) {
