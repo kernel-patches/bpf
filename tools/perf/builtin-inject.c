@@ -2464,12 +2464,11 @@ static int __cmd_inject(struct perf_inject *inject)
 		}
 	} else if (inject->itrace_synth_opts.vm_time_correlation) {
 		session->itrace_synth_opts = &inject->itrace_synth_opts;
-		memset(&inject->tool, 0, sizeof(inject->tool));
+		perf_tool__init(&inject->tool, /*ordered_events=*/true);
 		inject->tool.id_index	    = perf_event__process_id_index;
 		inject->tool.auxtrace_info  = perf_event__process_auxtrace_info;
 		inject->tool.auxtrace	    = perf_event__process_auxtrace;
 		inject->tool.auxtrace_error = perf_event__process_auxtrace_error;
-		inject->tool.ordered_events = true;
 		inject->tool.ordering_requires_timestamps = true;
 	} else if (inject->itrace_synth_opts.set) {
 		session->itrace_synth_opts = &inject->itrace_synth_opts;
