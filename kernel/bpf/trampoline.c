@@ -1340,7 +1340,15 @@ static __always_inline u64 notrace bpf_prog_start_time(void)
 static u64 notrace __bpf_prog_enter_recur(struct bpf_prog *prog, struct bpf_tramp_run_ctx *run_ctx)
 	__acquires(RCU)
 {
-	rcu_read_lock_dont_migrate();
+	if (IS_ENABLED(CONFIG_PREEMPT_RT)) {
+		rcu_read_lock_dont_migrate();
+	} else {
+		/* prog->active and the private stack are per-CPU: don't let
+		 * another task run on this CPU while we hold them.
+		 */
+		preempt_disable_notrace();
+		rcu_read_lock();
+	}
 
 	run_ctx->saved_run_ctx = bpf_set_run_ctx(&run_ctx->run_ctx);
 
@@ -1389,7 +1397,12 @@ static void notrace __bpf_prog_exit_recur(struct bpf_prog *prog, u64 start,
 
 	update_prog_stats(prog, start);
 	bpf_prog_put_recursion_context(prog);
-	rcu_read_unlock_migrate();
+	if (IS_ENABLED(CONFIG_PREEMPT_RT)) {
+		rcu_read_unlock_migrate();
+	} else {
+		rcu_read_unlock();
+		preempt_enable_notrace();
+	}
 }
 
 static u64 notrace __bpf_prog_enter_lsm_cgroup(struct bpf_prog *prog,
