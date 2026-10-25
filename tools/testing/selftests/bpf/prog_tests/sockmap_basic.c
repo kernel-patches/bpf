@@ -1325,6 +1325,78 @@ end:
 	test_sockmap_pass_prog__destroy(skel);
 }
 
+/* A bare FIN turns into an empty skb. When redirected to another socket,
+ * verify that it does not break the destination socket's psock. Data
+ * later redirected to the destination socket must still transmit.
+ */
+static void test_sockmap_skb_verdict_redir_fin(void)
+{
+	int c0 = -1, p0 = -1, c1 = -1, p1 = -1, c2 = -1, p2 = -1;
+	int err, map, zero = 0, one = 1, two = 2, sock_err;
+	struct test_sockmap_pass_prog *skel;
+	socklen_t len = sizeof(sock_err);
+	struct bpf_program *prog;
+	char buf = 'x', rcv;
+
+	skel = test_sockmap_pass_prog__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "open_and_load"))
+		return;
+
+	err = create_socket_pairs(AF_INET, SOCK_STREAM, &c0, &c1, &p0, &p1);
+	if (!ASSERT_OK(err, "create_socket_pairs()"))
+		goto end;
+	err = create_pair(AF_INET, SOCK_STREAM, &c2, &p2);
+	if (!ASSERT_OK(err, "create_pair()"))
+		goto end;
+
+	map = bpf_map__fd(skel->maps.sock_map_rx);
+	prog = skel->progs.prog_skb_verdict_egress;
+	err = bpf_prog_attach(bpf_program__fd(prog), map,
+			      BPF_SK_SKB_STREAM_VERDICT, 0);
+	if (!ASSERT_OK(err, "bpf_prog_attach verdict"))
+		goto end;
+
+	err = bpf_map_update_elem(map, &zero, &p0, BPF_ANY);
+	if (!ASSERT_OK(err, "bpf_map_update_elem(p0)"))
+		goto end;
+	err = bpf_map_update_elem(map, &one, &p1, BPF_ANY);
+	if (!ASSERT_OK(err, "bpf_map_update_elem(p1)"))
+		goto end;
+	err = bpf_map_update_elem(map, &two, &p2, BPF_ANY);
+	if (!ASSERT_OK(err, "bpf_map_update_elem(p2)"))
+		goto end;
+
+	if (!ASSERT_EQ(xsend(c0, &buf, 1, 0), 1, "xsend(c0)"))
+		goto end;
+	if (!ASSERT_EQ(recv_timeout(c1, &rcv, 1, 0, IO_TIMEOUT_SEC), 1,
+		       "recv_timeout(c1)"))
+		goto end;
+
+	err = shutdown(c0, SHUT_WR);
+	if (!ASSERT_OK(err, "shutdown(c0)"))
+		goto end;
+	if (!ASSERT_OK(recv_timeout(p0, &rcv, 1, 0, IO_TIMEOUT_SEC),
+		       "recv_timeout(p0) EOF"))
+		goto end;
+
+	if (!ASSERT_EQ(xsend(c2, &buf, 1, 0), 1, "xsend(c2)"))
+		goto end;
+	ASSERT_EQ(recv_timeout(c1, &rcv, 1, 0, IO_TIMEOUT_SEC), 1,
+		  "recv_timeout(c1) after FIN");
+
+	err = getsockopt(p1, SOL_SOCKET, SO_ERROR, &sock_err, &len);
+	if (ASSERT_OK(err, "getsockopt(SO_ERROR)"))
+		ASSERT_OK(sock_err, "p1 error");
+end:
+	close_fd(&c0);
+	close_fd(&p0);
+	close_fd(&c1);
+	close_fd(&p1);
+	close_fd(&c2);
+	close_fd(&p2);
+	test_sockmap_pass_prog__destroy(skel);
+}
+
 /* A socket in a sockmap without a verdict program keeps its ingress data
  * in sk_receive_queue: FIONREAD must account for it.
  */
@@ -1404,6 +1476,8 @@ void test_sockmap_basic(void)
 		test_sockmap_no_verdict_fionread();
 	if (test__start_subtest("sockmap skb_verdict fionread on drop"))
 		test_sockmap_skb_verdict_fionread(false);
+	if (test__start_subtest("sockmap skb_verdict redirect bare FIN"))
+		test_sockmap_skb_verdict_redir_fin();
 	if (test__start_subtest("sockmap skb_verdict change tail"))
 		test_sockmap_skb_verdict_change_tail();
 	if (test__start_subtest("sockmap msg_verdict pop_data overflow"))
