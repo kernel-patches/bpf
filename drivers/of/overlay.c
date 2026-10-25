@@ -463,11 +463,13 @@ static int add_changeset_node(struct overlay_changeset *ovcs,
 		if (phandle && (size == 4))
 			tchild->phandle = be32_to_cpup(phandle);
 
-		of_node_set_flag(tchild, OF_OVERLAY);
-
 		ret = of_changeset_attach_node(&ovcs->cset, tchild);
-		if (ret)
+		if (ret) {
+			of_node_put(tchild);
 			return ret;
+		}
+
+		of_node_set_flag(tchild, OF_OVERLAY);
 
 		target_child.np = tchild;
 		target_child.in_livetree = false;
