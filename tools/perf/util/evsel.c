@@ -3474,9 +3474,12 @@ int __evsel__parse_sample(struct evsel *evsel, union perf_event *event,
 	if (event->header.type == PERF_RECORD_CALLCHAIN_DEFERRED) {
 		const u64 max_callchain_nr = UINT64_MAX / sizeof(u64);
 
+		OVERFLOW_CHECK_u64(&event->callchain_deferred.nr);
 		data->callchain = (struct ip_callchain *)&event->callchain_deferred.nr;
 		if (data->callchain->nr > max_callchain_nr)
 			goto out_efault;
+		OVERFLOW_CHECK(event->callchain_deferred.ips,
+			       data->callchain->nr * sizeof(u64), max_size);
 
 		data->deferred_cookie = event->callchain_deferred.cookie;
 
