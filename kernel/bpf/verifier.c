@@ -16546,12 +16546,16 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env, struct bpf_insn
 			if (!known)
 				dst_reg->id = ++env->id_gen;
 			/*
-			 * Clear range for unknown addends since we can't know
-			 * where the pkt pointer ended up. Also clear AT_PKT_END /
-			 * BEYOND_PKT_END from prior comparison as any pointer
-			 * arithmetic invalidates them.
+			 * The range is what umax of the pointer may get to, see
+			 * check_packet_access(). umax of the addend was added to it
+			 * and the pointer moved by that much at most, so the range
+			 * holds. Clear it if the addend may be negative: umax says
+			 * nothing then, or if nothing is left of it. Also clear
+			 * AT_PKT_END / BEYOND_PKT_END from prior comparison as any
+			 * pointer arithmetic invalidates them.
 			 */
-			if (!known || dst_reg->range < 0)
+			if (dst_reg->range < 0 ||
+			    (!known && (smin_val < 0 || reg_umax(dst_reg) >= dst_reg->range)))
 				memset(&dst_reg->raw, 0, sizeof(dst_reg->raw));
 		}
 		break;
