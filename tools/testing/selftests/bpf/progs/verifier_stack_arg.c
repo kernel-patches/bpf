@@ -359,10 +359,99 @@ __naked void stack_arg_shared_store(void)
 	);
 }
 
+/* r1 - r5 and all 19 slots. There is no BTF for it: what it takes is seen in its code. */
+__naked __noinline __used
+static unsigned long subprog_24args(void)
+{
+	asm volatile (
+		"r0 = r1;"
+		"r0 += r2;"
+		"r0 += r3;"
+		"r0 += r4;"
+		"r0 += r5;"
+		"r1 = *(u64 *)(r11 + 8);"
+		"r0 += r1;"
+		"r1 = *(u64 *)(r11 + 16);"
+		"r0 += r1;"
+		"r1 = *(u64 *)(r11 + 24);"
+		"r0 += r1;"
+		"r1 = *(u64 *)(r11 + 32);"
+		"r0 += r1;"
+		"r1 = *(u64 *)(r11 + 40);"
+		"r0 += r1;"
+		"r1 = *(u64 *)(r11 + 48);"
+		"r0 += r1;"
+		"r1 = *(u64 *)(r11 + 56);"
+		"r0 += r1;"
+		"r1 = *(u64 *)(r11 + 64);"
+		"r0 += r1;"
+		"r1 = *(u64 *)(r11 + 72);"
+		"r0 += r1;"
+		"r1 = *(u64 *)(r11 + 80);"
+		"r0 += r1;"
+		"r1 = *(u64 *)(r11 + 88);"
+		"r0 += r1;"
+		"r1 = *(u64 *)(r11 + 96);"
+		"r0 += r1;"
+		"r1 = *(u64 *)(r11 + 104);"
+		"r0 += r1;"
+		"r1 = *(u64 *)(r11 + 112);"
+		"r0 += r1;"
+		"r1 = *(u64 *)(r11 + 120);"
+		"r0 += r1;"
+		"r1 = *(u64 *)(r11 + 128);"
+		"r0 += r1;"
+		"r1 = *(u64 *)(r11 + 136);"
+		"r0 += r1;"
+		"r1 = *(u64 *)(r11 + 144);"
+		"r0 += r1;"
+		"r1 = *(u64 *)(r11 + 152);"
+		"r0 += r1;"
+		"exit;"
+		::: __clobber_all
+	);
+}
+
+SEC("tc")
+__description("stack_arg: static subprog with 24 args")
+__success __retval(300)
+__naked void stack_arg_24args(void)
+{
+	asm volatile (
+		"r1 = 1;"
+		"r2 = 2;"
+		"r3 = 3;"
+		"r4 = 4;"
+		"r5 = 5;"
+		"*(u64 *)(r11 - 152) = 24;"
+		"*(u64 *)(r11 - 144) = 23;"
+		"*(u64 *)(r11 - 136) = 22;"
+		"*(u64 *)(r11 - 128) = 21;"
+		"*(u64 *)(r11 - 120) = 20;"
+		"*(u64 *)(r11 - 112) = 19;"
+		"*(u64 *)(r11 - 104) = 18;"
+		"*(u64 *)(r11 - 96) = 17;"
+		"*(u64 *)(r11 - 88) = 16;"
+		"*(u64 *)(r11 - 80) = 15;"
+		"*(u64 *)(r11 - 72) = 14;"
+		"*(u64 *)(r11 - 64) = 13;"
+		"*(u64 *)(r11 - 56) = 12;"
+		"*(u64 *)(r11 - 48) = 11;"
+		"*(u64 *)(r11 - 40) = 10;"
+		"*(u64 *)(r11 - 32) = 9;"
+		"*(u64 *)(r11 - 24) = 8;"
+		"*(u64 *)(r11 - 16) = 7;"
+		"*(u64 *)(r11 - 8) = 6;"
+		"call subprog_24args;"
+		"exit;"
+		::: __clobber_all
+	);
+}
+
 SEC("tc")
 __description("stack_arg: write beyond max outgoing depth")
 __failure
-__msg("stack arg write offset -80 exceeds max 7 stack args")
+__msg("stack arg write offset -160 exceeds max 19 stack args")
 __naked void stack_arg_write_beyond_max(void)
 {
 	asm volatile (
@@ -371,8 +460,8 @@ __naked void stack_arg_write_beyond_max(void)
 		"r3 = 3;"
 		"r4 = 4;"
 		"r5 = 5;"
-		/* Write to offset -80, way beyond any callee's needs */
-		"*(u64 *)(r11 - 80) = 99;"
+		/* Write to offset -160, way beyond any callee's needs */
+		"*(u64 *)(r11 - 160) = 99;"
 		"*(u64 *)(r11 - 16) = 20;"
 		"*(u64 *)(r11 - 8) = 10;"
 		"call subprog_7args;"
