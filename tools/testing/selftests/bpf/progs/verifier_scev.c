@@ -238,7 +238,7 @@ __naked void meet_agrees(void)
 }
 
 SEC("xdp")
-__failure
+__success __retval(0)
 __log_level(2)
 __msg_next("scev at header 1:")
 __msg_next("  r6=(any r6 (+ r6 1)) / ?")
@@ -1015,10 +1015,9 @@ POST_COND_TEST32(post32_lt_wrap,   "<",                    -4,    2,            
 SEC("xdp")
 __success
 __log_level(2)
-__flag(BPF_F_TEST_STATE_FREQ)
 __msg("loop header at 1, header_count is 10 ")
 __msg("loop header at 1, widening r0 to 0..9 step 1")
-__msg("processed 5 insns")
+__msg("processed 4 insns")
 __naked void post_cond_jlt(void)
 {
 	asm volatile ("					\
@@ -1030,8 +1029,8 @@ __naked void post_cond_jlt(void)
 }
 
 /*
- * Explore with r7=10 first, r7=4096 next.
- * Should trigger invalid stack read if r7 is marked precise.
+ * r7 is 10 on one path to the loop and 4096 on the other.
+ * Should trigger invalid stack read if the larger one counts.
  *
  *   r0 = 0;
  *   r6 = 0;
@@ -1046,11 +1045,7 @@ __naked void post_cond_jlt(void)
 SEC("xdp")
 __failure
 __log_level(2)
-__flag(BPF_F_TEST_STATE_FREQ)
-__msg("loop header at 6, header_count is 10 ")
-__msg("mark_precise: frame0: parent state regs=r6,r7 stack=:")
-__msg("loop header at 6, widening r0 to 0..9 step 1")
-__msg("loop header at 6, header_count is 4096 ")
+__msg("loop header at 6, header_count is [0..4096] ")
 __msg("loop header at 6, widening r0 to 0..4095 step 1")
 __msg("invalid variable-offset read from stack R2")
 __naked void mark_bound_precise(void)
@@ -1076,8 +1071,8 @@ __naked void mark_bound_precise(void)
 }
 
 /*
- * Explore with r6=4086 first, r6=0 next.
- * Should trigger invalid stack read if r6 is marked precise.
+ * r6 is 4086 on one path to the loop and 0 on the other.
+ * Should trigger invalid stack read if the smaller one counts.
  *
  *   r0 = 0;
  *   r6 = bpf_get_prandom_u32() == 42 ? 4086 : 0;
@@ -1091,11 +1086,7 @@ __naked void mark_bound_precise(void)
 SEC("xdp")
 __failure
 __log_level(2)
-__flag(BPF_F_TEST_STATE_FREQ)
-__msg("loop header at 5, header_count is 10 ")
-__msg("mark_precise: frame0: parent state regs=r6 stack=:")
-__msg("loop header at 5, widening r0 to 0..9 step 1")
-__msg("loop header at 5, header_count is 4096 ")
+__msg("loop header at 5, header_count is [0..4096] ")
 __msg("loop header at 5, widening r0 to 0..4095 step 1")
 __msg("invalid variable-offset read from stack R2")
 __naked void mark_base_precise(void)
@@ -1309,7 +1300,7 @@ __msg("scev at header 1:")
 __msg_next("r6=(+ r6 1) / (linear r6 1)")
 __msg_next("*fp-8=(any *fp-8 7) / (any *fp-8 7)")
 __msg("loop header at 1, widening r6 to 0..2 step 1")
-__msg("2: (7a) *(u64 *)(r10 -8) = 7          ; R10=fp0 fp-8=7 loop_stack=1")
+__msg("3: (79) r0 = *(u64 *)(r10 -8)         ; R0=scalar() R10=fp0 loop_stack=1")
 __naked void widen_any_unallocated_slot(void)
 {
 	asm volatile ("					\
@@ -1428,6 +1419,278 @@ __naked void latch_tests_a_32bit_copy(void)
 	"w1 = w6;"
 	"w6 += 1;"
 	"if w1 < 16 goto 1b;"
+	"r0 = 0;"
+	"exit;"
+	::: __clobber_all);
+}
+
+/* The same, and the first value is not known */
+SEC("socket")
+__success
+__log_level(2)
+__msg("loop header at 3, header_count is [0..17]")
+__naked void latch_32bit_copy_from_a_range(void)
+{
+	asm volatile (
+	"call %[bpf_get_prandom_u32];"
+	"w6 = w0;"
+	"if w6 > 16 goto 2f;"
+"1:"
+	"w1 = w6;"
+	"w6 += 1;"
+	"if w1 < 16 goto 1b;"
+"2:"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/* (u32)i the way clang does it for cpu v1 and v2: two 64-bit shifts by 32 */
+SEC("socket")
+__success __retval(16)
+__log_level(2)
+__msg("  r6=(zext32 (+ r6 1)) / (zext32 (linear r6 1))")
+__msg("loop header at 1, header_count is 16")
+__naked void two_shifts_by_32_are_zext32(void)
+{
+	asm volatile (
+	"r6 = 0;"
+"1:"
+	"r6 += 1;"
+	"r6 <<= 32;"
+	"r6 >>= 32;"
+	"if r6 < 16 goto 1b;"
+	"r0 = r6;"
+	"exit;"
+	::: __clobber_all);
+}
+
+const volatile __u64 rodata_32 = 32;
+
+/*
+ * A 32-bit shift by a register that has 32 in it shifts by 32 & 31 = 0. @shifts make 0 of r7,
+ * so r7 is 100 in the first iteration and 1 in the others. If they are taken for (u32)r7
+ * then r7 is in [100, 107] and the read of r9 looks like dead code.
+ */
+#define NO_ZEXT32_TEST(name, before, shifts)						\
+SEC("socket")										\
+__failure __msg("R9 !read_ok")								\
+__naked void name(void)									\
+{											\
+	asm volatile (									\
+	before										\
+	"r7 = 100;"									\
+	"r8 = 0;"									\
+"1:"											\
+	"if r7 >= 100 goto 2f;"								\
+	"r0 = *(u64 *)(r9 + 0);"							\
+"2:"											\
+	shifts										\
+	"w7 += 1;"									\
+	"r8 += 1;"									\
+	"if r8 < 8 goto 1b;"								\
+	"r0 = 0;"									\
+	"exit;"										\
+	:										\
+	: __imm_addr(rodata_32)								\
+	: __clobber_all);								\
+}
+
+NO_ZEXT32_TEST(rsh32_by_reg_32,      "",         "r7 <<= 32; r2 = 32; w7 >>= w2;")
+NO_ZEXT32_TEST(rsh32_by_wreg_32,     "",         "r7 <<= 32; w2 = 32; w7 >>= w2;")
+NO_ZEXT32_TEST(rsh32_by_16_plus_16,  "",         "r7 <<= 32; r2 = 16; r2 += 16; w7 >>= w2;")
+NO_ZEXT32_TEST(rsh32_by_32_or_32,    "",
+	       "r7 <<= 32; r2 = 32; if r8 == 5 goto +1; r2 = 32; w7 >>= w2;")
+NO_ZEXT32_TEST(rsh32_by_spilled_32,  "",
+	       "r7 <<= 32; r2 = 32; *(u64 *)(r10 - 8) = r2; r2 = *(u64 *)(r10 - 8); w7 >>= w2;")
+NO_ZEXT32_TEST(rsh32_by_stored_32,   "",
+	       "r7 <<= 32; *(u64 *)(r10 - 8) = 32; r2 = *(u32 *)(r10 - 8); w7 >>= w2;")
+NO_ZEXT32_TEST(rsh32_by_32_in_rodata, "",
+	       "r7 <<= 32; r2 = %[rodata_32] ll; r2 = *(u64 *)(r2 + 0); w7 >>= w2;")
+NO_ZEXT32_TEST(rsh32_by_32_set_before_the_loop, "r6 = 32;", "r7 <<= 32; w7 >>= w6;")
+NO_ZEXT32_TEST(rsh32_by_96,          "",         "r7 <<= 32; r2 = 96; w7 >>= w2;")
+NO_ZEXT32_TEST(rsh32_by_32_in_the_low_half, "",  "r7 <<= 32; r2 = 0x100000020 ll; w7 >>= w2;")
+NO_ZEXT32_TEST(arsh32_by_reg_32,     "",         "r7 <<= 32; r2 = 32; w7 s>>= w2;")
+/* here it's the shift to the left that does nothing */
+NO_ZEXT32_TEST(lsh32_by_reg_32,      "",         "r2 = 32; w7 <<= w2; r7 >>= 32;")
+
+/* 64-bit shifts by 32 do make (u32)r7 */
+#define IS_ZEXT32_TEST(name, msg, shifts)						\
+SEC("socket")										\
+__success __retval(108)									\
+__log_level(2)										\
+__msg("loop header at 2, " msg)							\
+__naked void name(void)									\
+{											\
+	asm volatile (									\
+	"r7 = 100;"									\
+	"r8 = 0;"									\
+"1:"											\
+	shifts										\
+	"w7 += 1;"									\
+	"r8 += 1;"									\
+	"if r8 < 8 goto 1b;"								\
+	"r0 = r7;"									\
+	"exit;"										\
+	::: __clobber_all);								\
+}
+
+IS_ZEXT32_TEST(shifts64_by_reg_32, "widening r7 to 100..107", "r2 = 32; r7 <<= r2; r7 >>= r2;")
+/* 96 & 63 is 32 as well, but the result of a shift by more than 63 is unknown to the verifier */
+IS_ZEXT32_TEST(rsh64_by_96,        "can't widen r7",          "r7 <<= 32; r2 = 96; r7 >>= r2;")
+/* and here nothing is shifted */
+IS_ZEXT32_TEST(shifts32_by_reg_32, "can't widen r7",          "r2 = 32; w7 <<= w2; w7 >>= w2;")
+
+/*
+ * The count is 32 for the cpu. The verifier doesn't know r0 after a shift by more than 63, so it
+ * goes on after the jump with r7 in [0, 1000]. A summary of r7 that starts at 0xffff and has the
+ * step -3 would have nothing in common with that.
+ */
+SEC("socket")
+__success __retval(0)
+__log_level(2)
+__msg("loop header at 2, can't widen r7")
+__naked void lsh64_by_96_makes_the_step(void)
+{
+	asm volatile (
+	"r7 = 0xffff;"
+	"r9 = 0;"
+"1:"
+	"r0 = 3;"
+	"r2 = 96;"
+	"r0 <<= r2;"
+	"r0 >>= 32;"
+	"w7 -= w0;"
+	"if w7 > 1000 goto 2f;"
+	"r9 += 1;"
+	"if r9 < 8 goto 1b;"
+"2:"
+	"r0 = 0;"
+	"exit;"
+	::: __clobber_all);
+}
+
+/* What the prog computes with '&' is left as it is */
+SEC("socket")
+__success __retval(70)
+__log_level(2)
+__msg("loop header at 2, can't widen r7, expr is (+ r7 (& 15 7))")
+__naked void and_of_constants_makes_the_step(void)
+{
+	asm volatile (
+	"r7 = 0;"
+	"r8 = 0;"
+"1:"
+	"r4 = 15;"
+	"r4 &= 7;"
+	"r7 += r4;"
+	"r8 += 1;"
+	"if r8 < 10 goto 1b;"
+	"r0 = r7;"
+	"exit;"
+	::: __clobber_all);
+}
+
+/*
+ * r3 is 0, not 7: r1 stays 0 and it's r9 that ends the loop, after 1000 iterations and not after
+ * 10. r6 is 8000 then.
+ */
+SEC("socket")
+__failure __msg("R8 !read_ok")
+__naked void rsh32_by_reg_32_makes_the_step(void)
+{
+	asm volatile (
+	"r1 = 0;"
+	"r6 = 0;"
+	"r9 = 0;"
+"1:"
+	"r6 += 8;"
+	"r3 = 7;"
+	"r3 <<= 32;"
+	"r2 = 32;"
+	"w3 >>= w2;"
+	"r1 += r3;"
+	"r9 += 1;"
+	"if r9 > 999 goto 2f;"
+	"if r1 < 70 goto 1b;"
+"2:"
+	"if r6 <= 80 goto 3f;"
+	"r0 = *(u64 *)(r8 + 0);"
+"3:"
+	"r0 = 0;"
+	"exit;"
+	::: __clobber_all);
+}
+
+/* The same when only the copy of r7 that is compared is shifted: r1 is 0 */
+SEC("socket")
+__failure __msg("R8 !read_ok")
+__naked void rsh32_by_reg_32_in_the_latch(void)
+{
+	asm volatile (
+	"r7 = 0;"
+	"r9 = 0;"
+"1:"
+	"r7 += 1;"
+	"r9 += 1;"
+	"if r9 > 999 goto 2f;"
+	"r1 = r7;"
+	"r1 <<= 32;"
+	"r2 = 32;"
+	"w1 >>= w2;"
+	"if r1 < 8 goto 1b;"
+"2:"
+	"if r7 <= 8 goto 3f;"
+	"r0 = *(u64 *)(r8 + 0);"
+"3:"
+	"r0 = 0;"
+	"exit;"
+	::: __clobber_all);
+}
+
+/* The bound r4 is 0, not 8: the loop ends when r7 is 0 */
+SEC("socket")
+__failure __msg("R8 !read_ok")
+__naked void rsh32_by_reg_32_makes_the_bound(void)
+{
+	asm volatile (
+	"r7 = 20;"
+"1:"
+	"r7 -= 1;"
+	"r4 = 8;"
+	"r4 <<= 32;"
+	"r2 = 32;"
+	"w4 >>= w2;"
+	"if r7 > r4 goto 1b;"
+	"if r7 >= 8 goto 2f;"
+	"r0 = *(u64 *)(r8 + 0);"
+"2:"
+	"r0 = 0;"
+	"exit;"
+	::: __clobber_all);
+}
+
+/*
+ * r7 is 1 at the jump, always: the loop has no count.
+ * The prog is not run: it never ends when it's loaded without may_goto.
+ */
+SEC("socket")
+__success
+__log_level(2)
+__msg("loop header at 1, can't compute iterations count")
+__not_msg("header_count is")
+__naked void rsh32_by_reg_32_never_ends(void)
+{
+	asm volatile (
+	"r7 = 100;"
+"1:"
+	"r7 <<= 32;"
+	"r2 = 32;"
+	"w7 >>= w2;"
+	"w7 += 1;"
+	"if w7 < 108 goto 1b;"
 	"r0 = 0;"
 	"exit;"
 	::: __clobber_all);
@@ -1574,11 +1837,10 @@ __naked void eval_expr_unallocated_stack_bound(void)
 SEC("xdp")
 __success
 __log_level(2)
-__flag(BPF_F_TEST_STATE_FREQ)
 __msg("loop header at 3, header_count is 8")
 __msg("loop header at 3, widening r0 to 2..9 step 1")
 __msg("3: R0=scalar(smin=umin=smin32=umin32=2,smax=umax=smax32=umax32=9,{{.*}})")
-__msg("processed 6 insns")
+__msg("processed 5 insns")
 __naked void post_cond_jlt_with_base(void)
 {
 	asm volatile ("					\
@@ -1612,11 +1874,10 @@ __naked void latch_base_differs_from_step(void)
 SEC("xdp")
 __success
 __log_level(2)
-__flag(BPF_F_TEST_STATE_FREQ)
 __msg("loop header at 1, header_count is 11")
 __msg("loop header at 1, widening r0 to 0..10 step 1")
 __msg("1: R0=scalar(smin=smin32=0,smax=umax=smax32=umax32=10,{{.*}})")
-__msg("processed 5 insns")
+__msg("processed 4 insns")
 __naked void post_cond_jle(void)
 {
 	asm volatile ("					\
@@ -1630,11 +1891,10 @@ __naked void post_cond_jle(void)
 SEC("xdp")
 __success
 __log_level(2)
-__flag(BPF_F_TEST_STATE_FREQ)
 __msg("loop header at 1, header_count is 10")
 __msg("loop header at 1, widening r0 to 0..9 step 1")
 __msg("1: R0=scalar(smin=smin32=0,smax=umax=smax32=umax32=9,{{.*}})")
-__msg("processed 6 insns")
+__msg("processed 5 insns")
 __naked void post_cond_jge(void)
 {
 	asm volatile ("					\
@@ -1649,11 +1909,10 @@ __naked void post_cond_jge(void)
 SEC("xdp")
 __success
 __log_level(2)
-__flag(BPF_F_TEST_STATE_FREQ)
 __msg("loop header at 1, header_count is 11")
 __msg("loop header at 1, widening r0 to 0..10 step 1")
 __msg("1: R0=scalar(smin=smin32=0,smax=umax=smax32=umax32=10,{{.*}})")
-__msg("processed 6 insns")
+__msg("processed 5 insns")
 __naked void pre_cond_jge(void)
 {
 	asm volatile ("					\
@@ -1668,7 +1927,6 @@ __naked void pre_cond_jge(void)
 SEC("xdp")
 __success
 __log_level(2)
-__flag(BPF_F_TEST_STATE_FREQ)
 __msg_next("scev at header 1:")
 __msg_next("  r0=(+ r0 1) / (linear r0 1)")
 __msg_next(" scev at latch 2:")
@@ -1677,10 +1935,9 @@ __msg("loop header at 1, widening r0")
 __msg("1: R0=scalar(smin=smin32=0,smax=umax=smax32=umax32=2,{{.*}})")
 __msg("1: (07) r0 += 1                       ; R0=scalar(smin=umin=smin32=umin32=1,smax=umax=smax32=umax32=3,{{.*}})")
 __msg("2: (55) if r0 != 0x3 goto pc-2")
-__msg("3: (95) exit")
 __msg("loop header at 1, clamping r0")
-__msg("from 2 to 1: safe")
-__msg("processed 5 insns")
+__msg("3: (95) exit")
+__msg("processed 4 insns")
 __naked void post_cond_jne(void)
 {
 	asm volatile ("					\
@@ -1694,16 +1951,15 @@ __naked void post_cond_jne(void)
 SEC("xdp")
 __success
 __log_level(2)
-__flag(BPF_F_TEST_STATE_FREQ)
 __msg_next("scev at header 1:")
 __msg_next("  r0=(+ r0 -1) / (linear r0 -1)")
 __msg_next(" scev at latch 2:")
 __msg_next("  r0=(+ r0 -1) / (linear (+ r0 -1) -1)")
 __msg("loop header at 1, header_count is 3 ")
 __msg("loop header at 1, widening r0 to 1..3 step 1")
-__msg("1: R0=scalar(smin=umin=smin32=umin32=1,smax=umax=smax32=umax32=3,var_off=(0x0; 0x3)) loop_stack=1")
+__msg("1: R0=scalar(smin=umin=smin32=umin32=1,smax=umax=smax32=umax32=3,var_off=(0x0; 0x3)) R10=fp0 loop_stack=1")
 __msg("loop header at 1, clamping r0 to 1..2 (s32 1..2) step 1")
-__msg("processed 5 insns")
+__msg("processed 4 insns")
 __naked void post_cond_jne_neg_step(void)
 {
 	asm volatile ("					\
@@ -1717,7 +1973,6 @@ __naked void post_cond_jne_neg_step(void)
 SEC("xdp")
 __success
 __log_level(2)
-__flag(BPF_F_TEST_STATE_FREQ)
 __msg_next("scev at header 1:")
 __msg_next("  r0=(+ r0 1) / (linear r0 1)")
 __msg_next(" scev at latch 1:")
@@ -1728,11 +1983,10 @@ __msg("1: (15) if r0 == 0x3 goto pc+2        ; R0=scalar(smin=smin32=0,smax=umax
 __msg("2: (07) r0 += 1                       ; R0=scalar(smin=umin=smin32=umin32=1,smax=umax=smax32=umax32=3,{{.*}})")
 __msg("3: (05) goto pc-3")
 __msg("loop header at 1, clamping r0")
-__msg("1: safe")
 __msg("from 1 to 4: R0=3")
 __msg("4: R0=3")
 __msg("4: (95) exit")
-__msg("processed 6 insns")
+__msg("processed 5 insns")
 __naked void pre_cond_je1(void)
 {
 	asm volatile ("					\
@@ -1747,7 +2001,6 @@ __naked void pre_cond_je1(void)
 SEC("xdp")
 __success
 __log_level(2)
-__flag(BPF_F_TEST_STATE_FREQ)
 __msg_next("scev at header 1:")
 __msg_next("  r0=(zext32 (+ r0 1)) / (zext32 (linear r0 1))")
 __msg_next(" scev at latch 2:")
@@ -1756,10 +2009,9 @@ __msg("loop header at 1, widening r0")
 __msg("1: R0=scalar(smin=smin32=0,smax=umax=smax32=umax32=2,{{.*}})")
 __msg("1: (04) w0 += 1                       ; R0=scalar(smin=umin=smin32=umin32=1,smax=umax=smax32=umax32=3,{{.*}})")
 __msg("2: (56) if w0 != 0x3 goto pc-2")
-__msg("3: (95) exit")
 __msg("loop header at 1, clamping r0")
-__msg("from 2 to 1: safe")
-__msg("processed 5 insns")
+__msg("3: (95) exit")
+__msg("processed 4 insns")
 __naked void post_cond_jne32(void)
 {
 	asm volatile ("					\
@@ -1995,7 +2247,6 @@ __naked void one_backedge_two_exits(void)
 SEC("xdp")
 __success
 __log_level(2)
-__flag(BPF_F_TEST_STATE_FREQ)
 __msg_next("scev at header 11:")
 __msg_next("  r0=(+ r0 1) / (linear r0 1)")
 __msg_next("  r1=(+ r1 2) / (linear r1 2)")
@@ -2005,18 +2256,15 @@ __msg_next("  r1=(+ r1 2) / (linear (+ r1 2) 2)")
 __msg("loop header at 11, widening r0")
 __msg("loop header at 11, widening r1")
 __msg("11: R0=scalar(smin=smin32=0,smax=umax=smax32=umax32=7,var_off=(0x0; 0x7)) R1=scalar(smin=smin32=0,smax=umax=smax32=umax32=14,var_off=(0x0; 0xe),step=0+2)")
-/* loop exit */
 __msg("16: (a5) if r0 < 0x8 goto pc-6")
-__msg("exiting loop 11")
-__msg("17: (95) exit")
 /* second iteration */
 __msg("loop header at 11, clamping r0")
 __msg("loop header at 11, clamping r1")
 /* iteration convergence */
-__msg("from 16 to 11: safe")
 __not_msg("{{^}}11:")
-/* map lookup error path */
-__msg("from 7 to 17: safe")
+/* loop exit */
+__msg("exiting loop 11")
+__msg("17: (95) exit")
 __naked void correlated_regs(void)
 {
 	asm volatile ("					\
@@ -2050,15 +2298,14 @@ __naked void correlated_regs(void)
  *     k += 1
  *     k <<= 1   // make SCEV construction not possible
  *     k >>= 1
- * map[k] = 1    // make k precise
+ * map[k] = 1    // k has to be known
  */
 SEC("xdp")
 __success
 __log_level(2)
-__flag(BPF_F_TEST_STATE_FREQ)
 __msg("19: (72) *(u8 *)(r4 +0) = 1           ; R4=map_value(id={{.*}},map=map,ks=4,vs=1024,imm=16)")
 __not_msg("19: ")
-__msg("processed 106 insns")
+__msg("processed 105 insns")
 __naked void nested_loops_precise_var1(void)
 {
 	asm volatile ("					\
@@ -2097,8 +2344,7 @@ __log_level(2)
 __msg("loop header at 2, header_count is 100 ")
 __msg("loop header at 4, header_count is [0..100] ")
 __msg("loop header at 6, header_count is [0..100] ")
-__msg("processed 20 insns")
-__flag(BPF_F_TEST_STATE_FREQ)
+__msg("processed 14 insns")
 __naked void nested_loop_with_two_exits(void)
 {
 	asm volatile ("					\
@@ -2159,14 +2405,14 @@ __msg("loop at 5")
 __msg("loop at 6, nested in 5")
 __msg("loop at 11, irreducible")
 __msg("loop at 12, nested in 11")
-/* entry via if r0 == 5 goto d_%= false branch */
-__msg("loop header at 12, header_count is 3 ")
-__msg("loop header at 12, widening r9 to 0..2 step 1")
-__msg("12: R8=1 R9=scalar(smin=smin32=0,smax=umax=smax32=umax32=2,var_off=(0x0; 0x3)) loop_stack=11,12")
 /* entry via if r0 == 5 goto d_%= true branch */
 __msg("loop header at 12, header_count is 3 ")
 __msg("loop header at 12, widening r9 to 0..2 step 1")
-__msg("from 8 to 12: R8=0 R9=scalar(smin=smin32=0,smax=umax=smax32=umax32=2,var_off=(0x0; 0x3)) R10=fp0 loop_stack=11,12")
+/* entry via if r0 == 5 goto d_%= false branch */
+__msg("loop header at 12, header_count is 3 ")
+__msg("loop header at 12, widening r9 to 0..2 step 1")
+__msg("12: R8=0 R9=scalar(smin=smin32=0,smax=umax=smax32=umax32=2,var_off=(0x0; 0x3)) R10=fp0 loop_stack=11,12")
+__msg("12: R8=1 R9=scalar(smin=smin32=0,smax=umax=smax32=umax32=2,var_off=(0x0; 0x3)) R10=fp0 loop_stack=11,12")
 __naked void enter_nested_loop_from_side(void)
 {
 	asm volatile ("					\
@@ -3459,12 +3705,23 @@ exit_%=:						\
  *        } while (r8 < 3);
  *    }
  *    return 0;
+ *
+ * The outer loop gets may_goto in front of the jump that leaves it, the inner loop doesn't.
+ * At run time it's may_goto that ends the prog.
  */
 SEC("xdp")
-__failure
-__log_level(2)
-__flag(BPF_F_TEST_STATE_FREQ)
-__msg("infinite loop detected at insn 6")
+__success __retval(0)
+__xlated("call unknown")
+__xlated("...")
+__xlated("if r0 == 0x2a goto pc+4")
+__xlated("r8 = 0")
+__xlated("r8 += 1")
+__xlated("if r8 < 0x3 goto pc-2")
+__xlated("goto pc-{{[0-9]+}}")
+__xlated("r0 = 0")
+__xlated("exit")
+__xlated("r0 = 0")
+__xlated("exit")
 __naked void nested_terminating_prune(void)
 {
 	asm volatile ("					\
@@ -3559,6 +3816,732 @@ __naked void dominating_exit_bounds_count(void)
 2:	r0 = 0;						\
 	exit;						\
 "	::: __clobber_all);
+}
+
+/*
+ * 'x &= e' has no linear formula. [0, max] that loses bits is in [0, max]: the state that enters the
+ * loop stands for all iterations.
+ */
+SEC("socket")
+__success __log_level(2)
+__msg("header_count is 16")
+__msg("r6 stays in 0..65535, it loses bits only")
+__naked void and_loses_bits(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r6 = r0;					\
+	r6 &= 0xffff;					\
+	r7 = 0;						\
+1:	r1 = 1;						\
+	r1 <<= r7;					\
+	r1 ^= -1;					\
+	r6 &= r1;					\
+	r7 += 1;					\
+	if r7 < 16 goto 1b;				\
+	if r6 > 0xffff goto 2f;				\
+	r0 = 0;						\
+	exit;						\
+2:	r0 = *(u64 *)(r6 + 0);				\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/* r7 enters as [0, max]. After the loop it's at most 'after'. */
+#define LOSES_BITS_TEST(name, init, op, count, max, after)			\
+SEC("socket")									\
+__success __log_level(2)							\
+__msg("header_count is " #count)						\
+__msg("r7 stays in 0.." #max ", it loses bits only")				\
+__naked void name(void)								\
+{										\
+	asm volatile (								\
+	"call %[bpf_get_prandom_u32];"						\
+	"r8 = r0;"								\
+	"call %[bpf_get_prandom_u32];"						\
+	init									\
+	"r6 = 0;"								\
+"1:"										\
+	op									\
+	"r6 += 1;"								\
+	"if r6 < " #count " goto 1b;"						\
+	"r5 = " #after " ll;"							\
+	"if r7 > r5 goto 2f;"							\
+	"r0 = 0;"								\
+	"exit;"									\
+"2:"										\
+	"r0 = *(u64 *)(r7 + 0);"						\
+	"exit;"									\
+	:									\
+	: __imm(bpf_get_prandom_u32)						\
+	: __clobber_all);							\
+}
+
+LOSES_BITS_TEST(and_reg, "r7 = r0; r7 &= 255;", "r7 &= r8;", 8, 255, 255)
+LOSES_BITS_TEST(and_reg32, "r7 = r0; r7 &= 255;", "w7 &= w8;", 8, 255, 255)
+LOSES_BITS_TEST(and_max_100, "r7 = r0; r7 %%= 101;", "r7 &= r8;", 8, 100, 100)
+LOSES_BITS_TEST(zext8, "r7 = r0; r7 &= 0xffff;", "r7 &= 255;", 8, 65535, 255)
+LOSES_BITS_TEST(zext32, "r7 = r0; r7 <<= 32; r7 |= r8; r7 >>= 8;", "w7 = w7;", 8,
+		72057594037927935, 0xffffffff)
+/* nothing, '&' in 32 bits and a zero extension, a zero extension: three paths */
+LOSES_BITS_TEST(masks_on_three_paths, "r7 = r0; r7 &= 0xffff;",
+		"if r8 == 0 goto +3; if r8 == 1 goto +1; w7 &= w8; r7 &= 0xfff;", 8, 65535, 65535)
+/* too long to unroll */
+LOSES_BITS_TEST(and_reg_long, "r7 = r0; r7 &= 255;", "r7 &= r8;", 1000000, 255, 255)
+
+/* The same in the stack. */
+SEC("socket")
+__success __log_level(2)
+__msg("header_count is 8")
+__msg("*fp-8 stays in 0..255, it loses bits only")
+__naked void and_reg_spilled(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r0 &= 255;					\
+	*(u64 *)(r10 - 8) = r0;				\
+	r6 = 0;						\
+1:	call %[bpf_get_prandom_u32];			\
+	r7 = *(u64 *)(r10 - 8);				\
+	r7 &= r0;					\
+	*(u64 *)(r10 - 8) = r7;				\
+	r6 += 1;					\
+	if r6 < 8 goto 1b;				\
+	r7 = *(u64 *)(r10 - 8);				\
+	if r7 > 255 goto 2f;				\
+	r0 = 0;						\
+	exit;						\
+2:	r0 = *(u64 *)(r7 + 0);				\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
+__failure __msg("R7 invalid mem access 'scalar'")
+__naked void and_reg_is_not_below_max(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r7 = r0;					\
+	r7 &= 255;					\
+	r6 = 0;						\
+1:	call %[bpf_get_prandom_u32];			\
+	r7 &= r0;					\
+	r6 += 1;					\
+	if r6 < 8 goto 1b;				\
+	if r7 > 254 goto 2f;				\
+	r0 = 0;						\
+	exit;						\
+2:	r0 = *(u64 *)(r7 + 0);				\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/* r8 is a copy of r7 in the first iteration only. */
+SEC("socket")
+__failure __msg("R7 invalid mem access 'scalar'")
+__naked void and_reg_is_not_its_copy(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r7 = r0;					\
+	r7 &= 255;					\
+	r8 = r7;					\
+	r6 = 0;						\
+1:	if r8 < 200 goto 3f;				\
+	if r7 >= 200 goto 2f;				\
+	r0 = *(u64 *)(r7 + 0);				\
+2:	call %[bpf_get_prandom_u32];			\
+	r7 &= r0;					\
+	r6 += 1;					\
+	if r6 < 8 goto 1b;				\
+3:	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * Shifts to the right, division and modulo don't make a number greater, but there is no formula
+ * for them: iterations one by one tell more.
+ */
+SEC("socket")
+__success __log_level(2)
+__msg("header_count is 8")
+__msg("can't widen r6, expr is (any")
+__not_msg("it loses bits only")
+__naked void shift_div_mod_are_unrolled(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r6 = r0;					\
+	r6 &= 0xfff;					\
+	call %[bpf_get_prandom_u32];			\
+	r8 = r0;					\
+	r7 = 0;						\
+1:	if r8 == 1 goto 2f;				\
+	if r8 == 2 goto 3f;				\
+	if r8 == 3 goto 4f;				\
+	r6 >>= 1;					\
+	goto 5f;					\
+2:	w6 /= w8;					\
+	goto 5f;					\
+3:	r6 %%= r8;					\
+	goto 5f;					\
+4:	w6 >>= 2;					\
+5:	r7 += 1;					\
+	if r7 < 8 goto 1b;				\
+	if r6 > 0xfff goto 6f;				\
+	r0 = 0;						\
+	exit;						\
+6:	r0 = *(u64 *)(r6 + 0);				\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/* The count and the divisor are registers, with bits that a 32-bit insn does not look at. */
+SEC("socket")
+__success __retval(0) __log_level(2)
+__msg("header_count is 8")
+__not_msg("it loses bits only")
+__naked void shift_div_mod_by_reg(void)
+{
+	asm volatile ("					\
+	r6 = 0x300000064 ll;				\
+	r7 = r6;					\
+	r8 = r6;					\
+	r9 = r6;					\
+	r1 = 0;						\
+1:	r2 = 33;					\
+	w6 >>= w2;					\
+	r2 = 65;					\
+	r7 >>= r2;					\
+	r2 = 0x100000000 ll;				\
+	w8 /= w2;					\
+	w9 %%= w2;					\
+	r1 += 1;					\
+	if r1 < 8 goto 1b;				\
+	r0 = 1;						\
+	if r6 != 0 goto 2f;				\
+	if r7 != 0x3000000 goto 2f;			\
+	if r8 != 0 goto 2f;				\
+	if r9 != 0x64 goto 2f;				\
+	r0 = 0;						\
+2:	exit;						\
+"	::: __clobber_all);
+}
+
+/* A shift to the left, an arithmetic shift and a signed division can make the number greater. */
+SEC("socket")
+__success __log_level(2)
+__msg("can't widen r6, expr is (<< r6 1)")
+__not_msg("it loses bits only")
+__naked void shift_left_grows(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r6 = r0;					\
+	r6 &= 0xf;					\
+	r7 = 0;						\
+1:	r6 <<= 1;					\
+	r7 += 1;					\
+	if r7 < 8 goto 1b;				\
+	r0 = r6;					\
+	r0 &= 1;					\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
+__success __log_level(2)
+__msg("can't widen r6, expr is (s>> r6 1)")
+__msg("can't widen r8, expr is (s/ r8 -1)")
+__not_msg("it loses bits only")
+__naked void signed_ops_grow(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r6 = r0;					\
+	r6 &= 0xf;					\
+	r8 = r6;					\
+	r7 = 0;						\
+1:	r6 s>>= 1;					\
+	r8 s/= -1;					\
+	r7 += 1;					\
+	if r7 < 8 goto 1b;				\
+	r0 = r6;					\
+	r0 += r8;					\
+	r0 &= 1;					\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * The size is never 0: bpf_skb_load_bytes() doesn't take 0. [0, max at the entry] has a 0 in it
+ * that is made up, so the loop is unrolled.
+ */
+#define SIZE_TEST(name, init, op, count, expr)					\
+SEC("tc")									\
+__success __log_level(2)							\
+__msg("header_count is " #count)						\
+__msg("can't widen r7, expr is " expr)						\
+__not_msg("it loses bits only")							\
+__naked void name(void)								\
+{										\
+	asm volatile (								\
+	"r9 = r1;"								\
+	"call %[bpf_get_prandom_u32];"						\
+	init									\
+	"r6 = 0;"								\
+"1:"										\
+	"r1 = r9;"								\
+	"r2 = 0;"								\
+	"r3 = r10;"								\
+	"r3 += -128;"								\
+	"r4 = r7;"								\
+	"call %[bpf_skb_load_bytes];"						\
+	op									\
+	"r6 += 1;"								\
+	"if r6 < " #count " goto 1b;"						\
+	"r0 = 0;"								\
+	"exit;"									\
+	:									\
+	: __imm(bpf_get_prandom_u32), __imm(bpf_skb_load_bytes)			\
+	: __clobber_all);							\
+}
+
+/* 8, 4, 2, 1 */
+SIZE_TEST(halve_const, "r7 = 8;", "r7 >>= 1;", 4, "(>> r7 1)")
+SIZE_TEST(halve_const32, "r7 = 64;", "w7 >>= 1;", 6, "(zext32 (>> r7 1))")
+SIZE_TEST(divide_const, "r7 = 100;", "r7 /= 10;", 3, "(/ r7 10)")
+/* [64, 127], [32, 63], [16, 31] */
+SIZE_TEST(halve_range, "r7 = r0; r7 &= 63; r7 |= 64;", "r7 >>= 1;", 3, "(>> r7 1)")
+/* 8 or 9 */
+SIZE_TEST(halve_two_values, "r7 = r0; r7 &= 1; r7 |= 8;", "r7 >>= 1;", 4, "(>> r7 1)")
+/* 8 or 16 */
+SIZE_TEST(halve_one_of_two, "r7 = 8; if r0 == 0 goto +1; r7 = 16;", "r7 >>= 1;", 4, "(>> r7 1)")
+/* it loses bits only, but it doesn't enter as [0, max]. The loop doesn't change it. */
+SIZE_TEST(mask_keeps_range, "r7 = r0; r7 &= 63; r7 |= 64;", "r7 &= 127;", 3, "(& r7 127)")
+SIZE_TEST(mov32_keeps_range, "r7 = r0; r7 &= 63; r7 |= 64;", "w7 = w7;", 3, "(zext32 r7)")
+
+/* The same, the size is in the stack. */
+SEC("tc")
+__success __log_level(2)
+__msg("header_count is 4")
+__msg("can't widen *fp-136, expr is (>> *fp-136 1)")
+__not_msg("it loses bits only")
+__naked void halve_const_spilled(void)
+{
+	asm volatile ("					\
+	r9 = r1;					\
+	r7 = 8;						\
+	*(u64 *)(r10 - 136) = r7;			\
+	r6 = 0;						\
+1:	r1 = r9;					\
+	r2 = 0;						\
+	r3 = r10;					\
+	r3 += -128;					\
+	r4 = *(u64 *)(r10 - 136);			\
+	call %[bpf_skb_load_bytes];			\
+	r7 = *(u64 *)(r10 - 136);			\
+	r7 >>= 1;					\
+	*(u64 *)(r10 - 136) = r7;			\
+	r6 += 1;					\
+	if r6 < 4 goto 1b;				\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_skb_load_bytes)
+	: __clobber_all);
+}
+
+/*
+ * A number that is divided gets smaller and smaller. Only iterations one by one tell how small it
+ * is after the loop, also when it enters as [0, max].
+ */
+#define DIVIDED_TEST(name, init, op, count, max)				\
+SEC("socket")									\
+__success __log_level(2)							\
+__msg("header_count is " #count)						\
+__msg("can't widen r7")								\
+__not_msg("it loses bits only")							\
+__naked void name(void)								\
+{										\
+	asm volatile (								\
+	"call %[bpf_get_prandom_u32];"						\
+	"r8 = r0;"								\
+	init									\
+	"r6 = 0;"								\
+"1:"										\
+	op									\
+	"r6 += 1;"								\
+	"if r6 < " #count " goto 1b;"						\
+	"if r7 > " #max " goto 2f;"						\
+	"r0 = 0;"								\
+	"exit;"									\
+"2:"										\
+	"r0 = *(u64 *)(r7 + 0);"						\
+	"exit;"									\
+	:									\
+	: __imm(bpf_get_prandom_u32)						\
+	: __clobber_all);							\
+}
+
+DIVIDED_TEST(shift_out_const, "r7 = 255;", "r7 >>= 1;", 8, 0)
+DIVIDED_TEST(shift_out_range, "r7 = r0; r7 &= 255;", "r7 >>= 1;", 8, 0)
+DIVIDED_TEST(shift_out_range32, "r7 = r0; r7 &= 255;", "w7 >>= 1;", 8, 0)
+DIVIDED_TEST(div10_range, "r7 = r0; r7 &= 0xffff;", "r7 /= 10;", 3, 65)
+DIVIDED_TEST(divided_on_all_paths, "r7 = r0; r7 &= 255;",
+	     "if r8 == 0 goto +2; r7 >>= 1; goto +1; w7 /= 3;", 8, 0)
+/* the other operand is a register */
+DIVIDED_TEST(shift_by_const_reg, "r7 = r0; r7 &= 255; r5 = 1;", "r7 >>= r5;", 8, 0)
+DIVIDED_TEST(div_by_const_reg, "r7 = r0; r7 &= 255; r5 = 2;", "r7 /= r5;", 8, 0)
+/* 0 + 1 + 2 + 3 + 4 bits */
+DIVIDED_TEST(shift_by_counter, "r7 = r0; r7 &= 255;", "r7 >>= r6;", 5, 0)
+/* the last one is % 1 */
+DIVIDED_TEST(mod_by_counter, "r7 = r0; r7 &= 255;", "r5 = 8; r5 -= r6; r7 %%= r5;", 8, 0)
+/* together with what loses bits */
+DIVIDED_TEST(shift_then_and, "r7 = r0; r7 &= 255;", "r7 >>= 1; r7 &= r8;", 8, 0)
+DIVIDED_TEST(and_then_shift, "r7 = r0; r7 &= 255;", "r7 &= r8; r7 >>= 1;", 8, 0)
+DIVIDED_TEST(shift_then_zext, "r7 = r0; r7 &= 255;", "r7 >>= 1; w7 = w7;", 8, 0)
+/* divided on one of two paths */
+DIVIDED_TEST(divided_on_one_path, "r7 = r0; r7 &= 255;", "if r8 == 0 goto +1; r7 >>= 1;", 8, 255)
+
+SEC("socket")
+__success __log_level(2)
+__msg("header_count is 3")
+__msg("can't widen *fp-8, expr is (/ *fp-8 10)")
+__not_msg("it loses bits only")
+__naked void div10_range_spilled(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r0 &= 0xffff;					\
+	*(u64 *)(r10 - 8) = r0;				\
+	r6 = 0;						\
+1:	r7 = *(u64 *)(r10 - 8);				\
+	r7 /= 10;					\
+	*(u64 *)(r10 - 8) = r7;				\
+	r6 += 1;					\
+	if r6 < 3 goto 1b;				\
+	r7 = *(u64 *)(r10 - 8);				\
+	if r7 > 65 goto 2f;				\
+	r0 = 0;						\
+	exit;						\
+2:	r0 = *(u64 *)(r7 + 0);				\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/* In the second iteration r7 is at most 9 at the head. */
+SEC("socket")
+__success __log_level(2)
+__msg("header_count is [0..3]")
+__msg("can't widen r7, expr is (% r7 10)")
+__naked void mod_at_the_head(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r7 = r0;					\
+	r7 &= 0xffff;					\
+	r6 = 0;						\
+1:	if r6 == 0 goto 2f;				\
+	if r7 > 9 goto 3f;				\
+2:	r7 %%= 10;					\
+	r6 += 1;					\
+	if r6 < 3 goto 1b;				\
+	r0 = 0;						\
+	exit;						\
+3:	r0 = *(u64 *)(r7 + 0);				\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/* r7 is 0 or 64, 'r7 &= r0' keeps it so. 1..63 are made up in [0, 64]. */
+SEC("socket")
+__success __log_level(2)
+__msg("header_count is 4")
+__msg("can't widen r7, expr is (& r7 ?)")
+__not_msg("it loses bits only")
+__naked void and_keeps_known_bits(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r7 = r0;					\
+	r7 &= 64;					\
+	r6 = 0;						\
+1:	call %[bpf_get_prandom_u32];			\
+	r7 &= r0;					\
+	r6 += 1;					\
+	if r6 < 4 goto 1b;				\
+	r7 &= 63;					\
+	if r7 != 0 goto 2f;				\
+	r0 = 0;						\
+	exit;						\
+2:	r0 = *(u64 *)(r7 + 0);				\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * r7 has no formula: the verifier has no bounds for 'x op= unknown'. The loop is unrolled, and
+ * the pointer in r6, which moves in each iteration, keeps its offset.
+ */
+#define PTR_TEST(name, op, add, count)						\
+SEC("socket")									\
+__success __log_level(2)							\
+__msg("header_count is " #count)						\
+__not_msg(": widened")								\
+__naked void name(void)								\
+{										\
+	asm volatile (								\
+	"r1 = 0;"								\
+	"*(u64*)(r10 - 8) = r1;"						\
+	"r2 = r10;"								\
+	"r2 += -8;"								\
+	"r1 = %[map] ll;"							\
+	"call %[bpf_map_lookup_elem];"						\
+	"if r0 == 0 goto 2f;"							\
+	"r6 = r0;"								\
+	"r9 = r0;"								\
+	"r7 = *(u64 *)(r9 + 512);"						\
+	"r7 &= 0xff;"								\
+	"r1 = 0;"								\
+"1:"										\
+	"*(u8 *)(r6 + 0) = r7;"							\
+	"r6 += " #add ";"							\
+	"r3 = *(u64 *)(r9 + 520);"						\
+	op									\
+	"r1 += 1;"								\
+	"if r1 < " #count " goto 1b;"						\
+"2:"										\
+	"r0 = 0;"								\
+	"exit;"									\
+	:									\
+	: __imm(bpf_map_lookup_elem), __imm_addr(map)				\
+	: __clobber_all);							\
+}
+
+PTR_TEST(ptr_rsh_2, "r7 >>= r3;", 8, 2)
+PTR_TEST(ptr_rsh32_2, "w7 >>= w3;", 8, 2)
+PTR_TEST(ptr_div_2, "r7 /= r3;", 8, 2)
+PTR_TEST(ptr_mod_2, "r7 %%= r3;", 8, 2)
+PTR_TEST(ptr_div_2_step1, "r7 /= r3;", 1, 2)
+PTR_TEST(ptr_div_2_step2, "r7 /= r3;", 2, 2)
+PTR_TEST(ptr_div_2_step3, "r7 /= r3;", 3, 2)
+PTR_TEST(ptr_div_3_step3, "r7 /= r3;", 3, 3)
+PTR_TEST(ptr_rsh_10, "r7 >>= r3;", 8, 10)
+/* what loses bits returns within [0, 255] */
+PTR_TEST(ptr_and_2, "r7 &= r3;", 8, 2)
+PTR_TEST(ptr_and32_2, "w7 &= w3;", 8, 2)
+PTR_TEST(ptr_zext8_2, "r7 &= 255;", 8, 2)
+
+/* The pointer is in the stack. */
+SEC("socket")
+__success __log_level(2)
+__msg("header_count is 2")
+__not_msg(": widened")
+__naked void ptr_rsh_2_spilled(void)
+{
+	asm volatile ("					\
+	r1 = 0;						\
+	*(u64*)(r10 - 8) = r1;				\
+	r2 = r10;					\
+	r2 += -8;					\
+	r1 = %[map] ll;					\
+	call %[bpf_map_lookup_elem];			\
+	if r0 == 0 goto 2f;				\
+	*(u64 *)(r10 - 16) = r0;			\
+	r9 = r0;					\
+	r7 = *(u64 *)(r9 + 512);			\
+	r7 &= 0xff;					\
+	r1 = 0;						\
+1:	r6 = *(u64 *)(r10 - 16);			\
+	*(u8 *)(r6 + 0) = r7;				\
+	r6 += 8;					\
+	*(u64 *)(r10 - 16) = r6;			\
+	r3 = *(u64 *)(r9 + 520);			\
+	r7 >>= r3;					\
+	r1 += 1;					\
+	if r1 < 2 goto 1b;				\
+2:	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_map_lookup_elem), __imm_addr(map)
+	: __clobber_all);
+}
+
+/*
+ * bpf_compute_const_regs() knows what r7 is in the whole loop, and r8 that is made of it. If r7 gets
+ * a range, or is forgotten because the loop is too long to unroll, then r8 can be 0, the jump finds
+ * that, and do_check() sees a constant that is not the one it has to be. r0 is 0 for the main
+ * pass only.
+ */
+#define CONST_REGS_TEST(name, init, op, probe, count, val)			\
+SEC("socket")									\
+__success __retval(val) __log_level(2)						\
+__msg("header_count is " #count)						\
+__not_msg("wid{{(ening|en)}} r7")						\
+__naked void name(void)								\
+{										\
+	asm volatile (								\
+	init									\
+	"r6 = 0;"								\
+"1:"										\
+	op									\
+	probe									\
+	"call %[bpf_get_prandom_u32];"						\
+	"if r0 != 0 goto 2f;"							\
+	"if r8 != r0 goto 2f;"							\
+	"*(u64 *)(r10 - 8) = r8;"						\
+"2:"										\
+	"r6 += 1;"								\
+	"if r6 < " #count " goto 1b;"						\
+	"r0 = r8;"								\
+	"exit;"									\
+	:									\
+	: __imm(bpf_get_prandom_u32)						\
+	: __clobber_all);							\
+}
+
+CONST_REGS_TEST(const_regs_and, "r7 = 17;", "r7 &= 31;", "r8 = r7;", 10, 17)
+CONST_REGS_TEST(const_regs_mov32, "r7 = 17;", "w7 = w7;", "r8 = r7;", 10, 17)
+CONST_REGS_TEST(const_regs_add_sub32, "r7 = 17;", "w7 += 1; w7 += -1;", "r8 = r7;", 10, 17)
+/* too long to unroll */
+CONST_REGS_TEST(const_regs_and_long, "r7 = 17;", "r7 &= 31;", "r8 = r7;", 1000000, 17)
+CONST_REGS_TEST(const_regs_mov32_long, "r7 = 17;", "w7 = w7;", "r8 = r7;", 1000000, 17)
+CONST_REGS_TEST(const_regs_add_add32_long, "r7 = 17;", "w7 += 0x80000000; w7 += 0x80000000;",
+		"r8 = r7;", 1000000, 17)
+/* r7 doesn't fit in 32 bits, r8 does */
+CONST_REGS_TEST(const_regs_neg_long, "r7 = -16;", "r7 &= -8;", "r8 = r7; r8 &= 255;", 1000000, 240)
+CONST_REGS_TEST(const_regs_wide_long, "r7 = 0xffffffff00000011 ll;", "r7 &= -239;",
+		"r8 = r7; r8 &= 255;", 1000000, 17)
+CONST_REGS_TEST(const_regs_wide_long32, "r7 = 0xffffffff00000011 ll;", "r7 &= -239;",
+		"w8 = w7;", 1000000, 17)
+CONST_REGS_TEST(const_regs_wide_reg_long, "r7 = 0x100000011 ll; r9 = 0x1000000ff ll;",
+		"r7 &= r9;", "r8 = r7; r8 &= 255;", 1000000, 17)
+
+/* A loop without a count around it. */
+SEC("socket")
+__success
+__naked void const_regs_and_nested(void)
+{
+	asm volatile ("					\
+	r7 = 17;					\
+1:	r6 = 0;						\
+2:	r7 &= 31;					\
+	call %[bpf_get_prandom_u32];			\
+	if r0 != 0 goto 3f;				\
+	if r7 != r0 goto 3f;				\
+	*(u64 *)(r10 - 8) = r7;				\
+3:	r6 += 1;					\
+	if r6 < 10 goto 2b;				\
+	call %[bpf_get_prandom_u32];			\
+	if r0 != 0 goto 1b;				\
+	r0 = r7;					\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/* 200 iterations are not too long, 200 x 200 are. */
+SEC("socket")
+__success __retval(240)
+__naked void const_regs_neg_nested(void)
+{
+	asm volatile ("					\
+	r7 = -16;					\
+	r9 = 0;						\
+1:	r6 = 0;						\
+2:	r7 &= -8;					\
+	r8 = r7;					\
+	r8 &= 255;					\
+	call %[bpf_get_prandom_u32];			\
+	if r0 != 0 goto 3f;				\
+	if r8 != r0 goto 3f;				\
+	*(u64 *)(r10 - 8) = r8;				\
+3:	r6 += 1;					\
+	if r6 < 200 goto 2b;				\
+	r9 += 1;					\
+	if r9 < 200 goto 1b;				\
+	r0 = r8;					\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+#ifdef __BPF_FEATURE_ADDR_SPACE_CAST
+struct {
+	__uint(type, BPF_MAP_TYPE_ARENA);
+	__uint(map_flags, BPF_F_MMAPABLE);
+	__uint(max_entries, 1);
+} arena SEC(".maps");
+
+/* The offset of a pointer to arena is not tracked. A loop that moves the pointer is not unrolled. */
+SEC("syscall")
+__success __log_level(2)
+__msg("header_count is 100")
+__not_msg("can't widen r6")
+__naked void arena_pointer_moves(void)
+{
+	asm volatile ("					\
+	r1 = %[arena] ll;				\
+	r6 = 0;						\
+	r6 = addr_space_cast(r6, 0, 1);			\
+	r7 = 0;						\
+1:	*(u64 *)(r6 + 0) = r7;				\
+	r6 += 8;					\
+	r7 += 1;					\
+	if r7 < 100 goto 1b;				\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm_addr(arena)
+	: __clobber_all);
+}
+#endif
+
+/* The pointer is not widened, see ptr_buf. The loop is counted: it is unrolled. */
+SEC("iter/bpf_map_elem")
+__success
+__log_level(2)
+__msg("header_count is 4 ")
+__msg("can't widen r6, expr is (+ r6 1)")
+__naked void ptr_buf_is_the_counter(void)
+{
+	asm volatile ("					\
+	r6 = *(u64 *)(r1 + %[value]);			\
+	if r6 == 0 goto 2f;				\
+	r7 = r6;					\
+	r7 += 4;					\
+1:	r6 += 1;					\
+	if r6 < r7 goto 1b;				\
+2:	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm_const(value, offsetof(struct bpf_iter__bpf_map_elem, value))
+	: __clobber_all);
 }
 
 /*
