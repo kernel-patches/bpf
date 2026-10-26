@@ -32,7 +32,8 @@ config KLP_BUILD
 	  Enable klp-build support
 
 config KLP_HAS_PROVIDES
-	def_bool n
+	def_bool y
+	depends on LIVEPATCH
 	help
 	  Compile-time marker for the livepatch provides/obsoletes support.
 	  It is always set when the kernel is built with the scoped atomic
