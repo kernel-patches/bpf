@@ -72,7 +72,7 @@ void isp4vid_handle_frame_done(struct isp4vid_dev *isp_vdev,
 	/* Fill the buffer */
 	isp4vid_buf->vb2.vb2_buf.timestamp = ktime_get_ns();
 	isp4vid_buf->vb2.sequence = isp_vdev->sequence++;
-	isp4vid_buf->vb2.field = V4L2_FIELD_ANY;
+	isp4vid_buf->vb2.field = V4L2_FIELD_NONE;
 
 	vb2_set_plane_payload(&isp4vid_buf->vb2.vb2_buf,
 			      0, isp_vdev->format.sizeimage);
