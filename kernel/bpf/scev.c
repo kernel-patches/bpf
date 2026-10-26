@@ -731,6 +731,14 @@ static int transfer(struct bpf_verifier_env *env, struct env *e, int idx)
 			else
 				goto mark_dst_unknown;
 
+			/*
+			 * The cpu takes the low 5 bits of the count: 'w1 >>= w2' with 32 in w2
+			 * shifts by 0. It must not look like 'r1 >>= 32'.
+			 */
+			if (class == BPF_ALU && x_or_k == BPF_X &&
+			    (op == BPF_LSH || op == BPF_RSH || op == BPF_ARSH))
+				id = expr2(scev, BPF_AND, id, imm_expr(scev, 31));
+
 			id = expr2(scev, op, reg2expr[dst], id);
 
 			if (class == BPF_ALU)
