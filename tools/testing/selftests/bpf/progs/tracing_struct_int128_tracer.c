@@ -74,4 +74,11 @@ int unreliable_entry(unsigned long long *ctx)
 	return 0;
 }
 
+/* The same, but only the code tells that there is a stack argument. */
+SEC("?fexit/callee_takes_more")
+int takes_more_exit(unsigned long long *ctx)
+{
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";

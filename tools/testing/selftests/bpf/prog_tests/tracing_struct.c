@@ -253,13 +253,13 @@ out:
  * A static function whose BTF is unreliable gets a trampoline that only knows
  * of the register arguments, so one taking stack arguments must be refused.
  */
-static void test_tgt_prog_unreliable(void)
+static void test_tgt_prog_unreliable(bool takes_more)
 {
 #if defined(__x86_64__) || defined(__aarch64__)
 	struct tracing_struct_int128_tracer *tracer = NULL;
 	struct tracing_struct_int128_tgt *tgt;
+	struct bpf_program *prog, *entry;
 	char log_buf[4096] = {};
-	struct bpf_program *prog;
 	int err, fd;
 
 	tgt = tracing_struct_int128_tgt__open_and_load();
@@ -277,9 +277,10 @@ static void test_tgt_prog_unreliable(void)
 
 	bpf_object__for_each_program(prog, tracer->obj)
 		bpf_program__set_autoload(prog, false);
-	bpf_program__set_autoload(tracer->progs.unreliable_entry, true);
-	bpf_program__set_log_buf(tracer->progs.unreliable_entry, log_buf, sizeof(log_buf));
-	err = bpf_program__set_attach_target(tracer->progs.unreliable_entry, fd,
+	entry = takes_more ? tracer->progs.takes_more_exit : tracer->progs.unreliable_entry;
+	bpf_program__set_autoload(entry, true);
+	bpf_program__set_log_buf(entry, log_buf, sizeof(log_buf));
+	err = bpf_program__set_attach_target(entry, fd, takes_more ? "callee_takes_more" :
 					     "callee_unreliable");
 	if (!ASSERT_OK(err, "set_attach_target"))
 		goto out;
@@ -389,7 +390,9 @@ void test_tracing_struct(void)
 	if (test__start_subtest("int128_tgt_prog"))
 		test_int128_tgt_prog();
 	if (test__start_subtest("tgt_prog_unreliable"))
-		test_tgt_prog_unreliable();
+		test_tgt_prog_unreliable(false);
+	if (test__start_subtest("tgt_prog_takes_more"))
+		test_tgt_prog_unreliable(true);
 	if (test__start_subtest("stack_arg_tailcall"))
 		test_stack_arg_tailcall();
 	if (test__start_subtest("union_args"))

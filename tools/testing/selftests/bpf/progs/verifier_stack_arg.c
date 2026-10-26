@@ -433,6 +433,111 @@ __naked void stack_arg_sequential_calls(void)
 	);
 }
 
+/*
+ * The prototype is what the source says. A compiler may pass a pair in two
+ * registers, add a pointer to the result, drop arguments that are not used.
+ */
+static __naked __noinline __used long takes_6_says_4(long a, long b, long c, long d)
+{
+	asm volatile (
+	"r0 = *(u64 *)(r11 + 8);"
+	"r0 += r5;"
+	"exit;"
+	::: __clobber_all);
+}
+
+SEC("tc")
+__description("stack_arg: static subprog takes more than its prototype says")
+__success __retval(11)
+__arch_x86_64
+/* takes_6_says_4() passes no stack arguments: rsp stays where it is */
+__jited("func #1")
+__jited("	endbr64")
+__jited("	nopl	(%rax,%rax)")
+__jited("	nopl	(%rax)")
+__jited("	pushq	%rbp")
+__jited("	movq	%rsp, %rbp")
+__jited("	endbr64")
+__jited("	movq	%r9, %rax")
+__naked void more_than_prototype(void)
+{
+	asm volatile (
+	"r1 = 1;"
+	"r2 = 2;"
+	"r3 = 3;"
+	"r4 = 4;"
+	"r5 = 5;"
+	"*(u64 *)(r11 - 8) = 6;"
+	"call takes_6_says_4;"
+	"exit;"
+	::: __clobber_all);
+}
+
+static __naked __noinline __used long cb_takes_6(long i, void *ctx)
+{
+	asm volatile (
+	"r0 = *(u64 *)(r11 + 8);"
+	"r0 = 0;"
+	"exit;"
+	::: __clobber_all);
+}
+
+SEC("tc")
+__description("stack_arg: helpers pass no stack arguments to a callback")
+__failure __msg("callback cb_takes_6() cannot have stack arguments")
+__naked void callback_takes_6(void)
+{
+	asm volatile (
+	"r1 = 1;"
+	"r2 = %[cb_takes_6];"
+	"r3 = 0;"
+	"r4 = 0;"
+	"call %[bpf_loop];"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm_ptr(cb_takes_6),
+	  __imm(bpf_loop)
+	: __clobber_common);
+}
+
+static __naked __noinline __used long takes_1_says_7(long a, long b, long c, long d, long e,
+						     long f, long g)
+{
+	asm volatile (
+	"r0 = r1;"
+	"exit;"
+	::: __clobber_all);
+}
+
+SEC("tc")
+__description("stack_arg: static subprog takes less than its prototype says")
+__success __retval(1)
+__naked void less_than_prototype(void)
+{
+	asm volatile (
+	"r1 = 1;"
+	"call takes_1_says_7;"
+	"exit;"
+	::: __clobber_all);
+}
+
+SEC("tc")
+__description("stack_arg: what the static subprog takes is not written")
+__failure __msg("callee expects 6 args, stack arg1 is not initialized")
+__naked void more_than_prototype_not_written(void)
+{
+	asm volatile (
+	"r1 = 1;"
+	"r2 = 2;"
+	"r3 = 3;"
+	"r4 = 4;"
+	"r5 = 5;"
+	"call takes_6_says_4;"
+	"exit;"
+	::: __clobber_all);
+}
+
 #else
 
 SEC("socket")

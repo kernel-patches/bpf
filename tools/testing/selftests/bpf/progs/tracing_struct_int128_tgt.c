@@ -8,7 +8,7 @@ struct int128_arg {
 };
 
 __u64 base;
-__u64 ret_odd, ret_stack, ret_split, ret_unreliable;
+__u64 ret_odd, ret_stack, ret_split, ret_unreliable, ret_takes_more;
 
 #if defined(__clang__)
 
@@ -68,6 +68,29 @@ static __noinline __u64 callee_unreliable(__u64 *p, __u64 b, __u64 c, __u64 d,
 	return *p + b * 2 + c * 3 + d * 4 + e * 5 + f * 6;
 }
 
+/* BTF says 4. The code takes 6, the last one on the stack. */
+static __attribute__((naked)) __noinline __attribute__((used))
+__u64 callee_takes_more(__u64 a, __u64 b, __u64 c, __u64 d)
+{
+	asm volatile (
+	"r0 = *(u64 *)(r11 + 8);"
+	"r0 += r5;"
+	"exit;");
+}
+
+static __attribute__((naked)) __noinline __u64 call_takes_more(void)
+{
+	asm volatile (
+	"r1 = 1;"
+	"r2 = 2;"
+	"r3 = 3;"
+	"r4 = 4;"
+	"r5 = 5;"
+	"*(u64 *)(r11 - 8) = 6;"
+	"call callee_takes_more;"
+	"exit;");
+}
+
 #else
 
 const volatile bool has_stack_arg = false;
@@ -93,6 +116,7 @@ int run(void *ctx)
 		ret_unreliable = callee_unreliable(&x, base + 2, base + 3,
 						   base + 4, base + 5, base + 6);
 	}
+	ret_takes_more = call_takes_more();
 #endif
 #endif
 	return 0;
