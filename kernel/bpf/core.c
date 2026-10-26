@@ -3632,11 +3632,34 @@ static noinline void bpf_prog_report_may_goto_violation(void)
 	prog = bpf_prog_find_from_stack();
 	if (!prog)
 		return;
+	WRITE_ONCE(prog->aux->unwound, true);
 	bpf_stream_stage(ss, prog, BPF_STDERR, ({
 		bpf_stream_printk(ss, "ERROR: Timeout detected for may_goto instruction\n");
 		bpf_stream_dump_stack(ss);
 	}));
 #endif
+}
+
+/*
+ * Nothing caught the unwinding. The prog or the async callback returns to the kernel.
+ * There is no return value that is right for every hook, so what to do about it is up
+ * to user space. Returns @ret: the caller has its return value there.
+ */
+u64 bpf_prog_report_unwound(u64 ret)
+{
+#ifdef CONFIG_BPF_SYSCALL
+	struct bpf_stream_stage ss;
+	struct bpf_prog *prog;
+
+	prog = bpf_prog_find_from_stack();
+	if (!prog)
+		return ret;
+	WRITE_ONCE(prog->aux->unwound, true);
+	bpf_stream_stage(ss, prog, BPF_STDERR, ({
+		bpf_stream_printk(ss, "ERROR: The program was unwound\n");
+	}));
+#endif
+	return ret;
 }
 
 /*

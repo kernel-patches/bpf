@@ -24349,6 +24349,9 @@ skip_full_check:
 		ret = bpf_do_misc_fixups(env);
 
 	if (ret == 0)
+		ret = bpf_insert_unwound_reports(env);
+
+	if (ret == 0)
 		ret = bpf_insert_arena_stack(env);
 
 	/* do 32-bit optimization after insn patching has done so those patched

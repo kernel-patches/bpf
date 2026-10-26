@@ -2523,7 +2523,7 @@ static u64 bpf_unwind_target(u64 ret_addr)
 	 * The verifier made sure that unwind_goto follows a call in a prog. When
 	 * the kernel called an async callback, it's exit.
 	 */
-	return e ? ret_addr + e->fixup : ret_addr;
+	return e ? ret_addr + e->fixup : bpf_prog_report_unwound(ret_addr);
 }
 
 /*

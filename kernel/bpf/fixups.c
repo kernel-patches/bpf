@@ -431,6 +431,33 @@ static int adjust_jmp_off(struct bpf_prog *prog, u32 tgt_idx, u32 delta)
 	return 0;
 }
 
+/*
+ * Say so when the main prog unwinds. JITs make exit of that, see bpf_prog_can_unwind().
+ * It's done after bpf_do_misc_fixups(), that takes a call for a call of a helper.
+ */
+int bpf_insert_unwound_reports(struct bpf_verifier_env *env)
+{
+	struct bpf_prog *new_prog;
+	struct bpf_insn buf[3];
+	int i;
+
+	if (env->prog->type == BPF_PROG_TYPE_EXT)
+		return 0;
+	for (i = 0; i < env->subprog_info[1].start; i++) {
+		if (!bpf_is_unwind_exit(&env->prog->insnsi[i]))
+			continue;
+		buf[0] = BPF_MOV64_REG(BPF_REG_1, BPF_REG_0);
+		buf[1] = BPF_EMIT_CALL(bpf_prog_report_unwound);
+		buf[2] = env->prog->insnsi[i];
+		new_prog = bpf_patch_insn_data(env, i, buf, 3);
+		if (!new_prog)
+			return -ENOMEM;
+		env->prog = new_prog;
+		i += 2;
+	}
+	return 0;
+}
+
 static int adjust_subprog_starts_after_remove(struct bpf_verifier_env *env,
 					      u32 off, u32 cnt)
 {

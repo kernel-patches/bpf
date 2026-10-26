@@ -435,6 +435,7 @@ static void print_prog_header_json(struct bpf_prog_info *info, int fd)
 		     info->tag[4], info->tag[5], info->tag[6], info->tag[7]);
 
 	jsonw_bool_field(json_wtr, "gpl_compatible", info->gpl_compatible);
+	jsonw_bool_field(json_wtr, "unwound", info->unwound);
 	if (info->run_time_ns) {
 		jsonw_uint_field(json_wtr, "run_time_ns", info->run_time_ns);
 		jsonw_uint_field(json_wtr, "run_cnt", info->run_cnt);
@@ -521,6 +522,7 @@ static void print_prog_header_plain(struct bpf_prog_info *info, int fd)
 	fprint_hex(stdout, info->tag, BPF_TAG_SIZE, "");
 	print_dev_plain(info->ifindex, info->netns_dev, info->netns_ino);
 	printf("%s", info->gpl_compatible ? "  gpl" : "");
+	printf("%s", info->unwound ? "  unwound" : "");
 	if (info->run_time_ns)
 		printf(" run_time_ns %llu run_cnt %llu",
 		       info->run_time_ns, info->run_cnt);

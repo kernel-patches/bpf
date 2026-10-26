@@ -5188,6 +5188,7 @@ static int bpf_prog_get_info_by_fd(struct file *file,
 	info.created_by_uid = from_kuid_munged(current_user_ns(),
 					       prog->aux->user->uid);
 	info.gpl_compatible = prog->gpl_compatible;
+	info.unwound = READ_ONCE(prog->aux->unwound);
 
 	memcpy(info.tag, prog->tag, sizeof(prog->tag));
 	memcpy(info.name, prog->aux->name, sizeof(prog->aux->name));

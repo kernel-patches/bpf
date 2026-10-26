@@ -1282,7 +1282,7 @@ static long bpf_unwind_fixup(u64 lr)
 	 * The verifier made sure that unwind_goto follows a call in a prog. When
 	 * the kernel called an async callback, it's exit.
 	 */
-	return e ? e->fixup : 0;
+	return e ? e->fixup : bpf_prog_report_unwound(0);
 }
 
 /*
