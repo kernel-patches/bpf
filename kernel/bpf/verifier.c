@@ -3654,8 +3654,8 @@ static void mark_non_stack_access(struct bpf_verifier_env *env, int idx)
 }
 
 /* Layout of one packed linked register in the jump history, see linked_regs_pack() */
-#define LR_FRAMENO_BITS	4
-#define LR_INDEX_BITS	11
+#define LR_FRAMENO_BITS	5
+#define LR_INDEX_BITS	10
 #define LR_FRAMENO_MASK	((1u << LR_FRAMENO_BITS) - 1)
 #define LR_IS_REG	BIT(LR_FRAMENO_BITS)
 #define LR_INDEX_OFF	(LR_FRAMENO_BITS + 1)

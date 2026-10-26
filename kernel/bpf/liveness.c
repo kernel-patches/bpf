@@ -814,7 +814,7 @@ static int print_instances(struct bpf_verifier_env *env)
 struct arg_track {
 	union {
 		s16 off[MAX_ARG_OFFSETS]; /* byte offsets; off_cnt says how many */
-		u16 mask;	/* arg bitmask when arg == ARG_IMPRECISE */
+		u32 mask;	/* arg bitmask when arg == ARG_IMPRECISE */
 	};
 	s8 frame;	/* absolute frame index, or enum arg_track_state */
 	s8 off_cnt;	/* 0 = offset-imprecise, 1-4 = # of precise offsets */
@@ -1175,7 +1175,7 @@ static struct arg_track fill_from_stack(struct bpf_insn *insn,
 					int depth)
 {
 	struct arg_track imp = {
-		.mask = (1u << (depth + 1)) - 1,
+		.mask = GENMASK(depth, 0),
 		.frame = ARG_IMPRECISE
 	};
 	struct arg_track result = { .frame = ARG_NONE };
