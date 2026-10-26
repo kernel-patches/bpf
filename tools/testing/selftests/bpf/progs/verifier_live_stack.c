@@ -380,9 +380,9 @@ __msg("10: (b7) r0 = 0{{$}}")
 __msg("11: (05) goto pc+0{{$}}")
 __msg("12: (95) exit")
 /*
- * Checkpoint at goto +0 fires because fp0-8 is dead → state pruning.
+ * fp0-8 is dead after goto +0, so one state stands for both.
  */
-__msg("12: safe")
+__msg("from 11 to 12: within")
 __naked void caller_stack_pruning(void)
 {
 	asm volatile (
@@ -497,7 +497,6 @@ struct {
 
 SEC("socket")
 __failure __msg("invalid read from stack R2 off=-4096 size=8")
-__flag(BPF_F_TEST_STATE_FREQ)
 __naked unsigned long caller_stack_write_tail_call(void)
 {
         asm volatile (
@@ -855,7 +854,7 @@ static __used __naked void maybe_clobber_key(void)
 
 /*
  * Demonstrate that subprog arg spill/reload breaks arg tracking,
- * inflating caller stack liveness and preventing state pruning.
+ * inflating caller stack liveness and keeping states apart.
  *
  * modifier2(fp-24) has two paths: one writes a scalar to *(r1+8)
  * = caller fp-16, the other leaves it as zero.  After modifier2
@@ -871,16 +870,15 @@ static __used __naked void maybe_clobber_key(void)
  * the reader never touches it.
  *
  * Result: at modifier2's return point two states with different
- * fp-16 values cannot be pruned.
+ * fp-16 values are kept apart.
  *
- * With correct (or old dynamic) liveness fp-16 is dead at that
- * point and the states prune → "6: safe" appears in the log.
+ * With correct liveness fp-16 is dead at that point and one state is
+ * within the other one.
  */
 SEC("socket")
-__flag(BPF_F_TEST_STATE_FREQ)
 __log_level(2)
 __success
-__msg("6: safe")
+__msg("from 16 to 6: within")
 __naked void spill_reload_inflates_stack_liveness(void)
 {
 	asm volatile (
@@ -1372,13 +1370,12 @@ __naked void half_spi_clean_preserves_stack_zero(void)
  *
  * Static liveness marks fp-8 dead at merge. clean_verifier_state()
  * converts path A's STACK_SPILL to STACK_INVALID. Path B has
- * STACK_INVALID. stacksafe() matches -> path B pruned -> "6: safe".
+ * STACK_INVALID. stacksafe() matches -> one state stands for both paths.
  */
 SEC("socket")
-__flag(BPF_F_TEST_STATE_FREQ)
 __success
 __log_level(2)
-__msg("6: safe")
+__msg("from 5 to 6: within")
 __naked void dead_spill_at_merge_enables_pruning(void)
 {
 	asm volatile (
@@ -1390,7 +1387,7 @@ __naked void dead_spill_at_merge_enables_pruning(void)
 	"call %[bpf_get_prandom_u32];"
 	"r6 = *(u64 *)(r10 - 8);"
 "l_skip%=:"
-	/* fp-8 dead. Path B pruned here -> "6: safe" */
+	/* fp-8 dead. The states of both paths are the same here */
 	"r0 = r6;"
 	"exit;"
 	:

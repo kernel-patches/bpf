@@ -587,14 +587,13 @@ __naked void stack_check_size_512_with_may_goto(void)
 #endif
 
 /*
- * Verify that old PTR_TO_STACK state is considered a super-set of
- * new PTR_TO_STACK state when new variable range is a sub-range
- * of the old range, e.g. old [-72, -16] vs new [-64, -16].
+ * Verify that a PTR_TO_STACK state is considered a super-set of
+ * another PTR_TO_STACK state when the variable range of that is a sub-range
+ * of its range, e.g. [-72, -16] vs [-64, -16].
  */
 SEC("socket")
 __success
 __log_level(2)
-__flag(BPF_F_TEST_STATE_FREQ)
 /*
  * r7 is widened to [-72, -16] at the loop header (insn 3),
  * the loop body sees [-64, -8] after 'r7 += 8'
@@ -602,12 +601,12 @@ __flag(BPF_F_TEST_STATE_FREQ)
 __msg("loop header at 3, widening r7 to -72..-16 step 8")
 __msg("R7=fp(smin=smin32=-64,smax=smax32=-8")
 /*
- * back-edge state is clamped to the remaining iterations and pruned
- * at the header, because [-64, -16] is within the widened [-72, -16]
+ * back-edge state is clamped to the remaining iterations and goes no further
+ * than the header, because [-64, -16] is within the widened [-72, -16]
  */
 __msg("loop header at 3, clamping r7 to -64..-16 (s32 -64..-8) step 8")
-__msg("from 5 to 3: safe")
-__msg("processed 9 insns")
+__msg("from 5 to 3: within")
+__msg("processed 8 insns")
 __naked void stack_ptr_subrange_in_loop(void)
 {
 	asm volatile ("					\
