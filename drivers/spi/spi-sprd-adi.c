@@ -339,10 +339,24 @@ static int sprd_adi_transfer_one(struct spi_controller *ctlr,
 	int ret;
 
 	if (t->rx_buf) {
+		/* ADI reads consume exactly one u32: reg in, value out. */
+		if (t->len != sizeof(u32)) {
+			dev_err_ratelimited(sadi->dev,
+					    "invalid read length %u\n",
+					    t->len);
+			return -EINVAL;
+		}
 		reg = *(u32 *)t->rx_buf;
 		ret = sprd_adi_read(sadi, reg, &val);
 		*(u32 *)t->rx_buf = val;
 	} else if (t->tx_buf) {
+		/* ADI writes consume exactly two u32: reg and value. */
+		if (t->len != 2 * sizeof(u32)) {
+			dev_err_ratelimited(sadi->dev,
+					    "invalid write length %u\n",
+					    t->len);
+			return -EINVAL;
+		}
 		u32 *p = (u32 *)t->tx_buf;
 		reg = *p++;
 		val = *p;
