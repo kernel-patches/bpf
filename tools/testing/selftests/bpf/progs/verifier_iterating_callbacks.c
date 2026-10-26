@@ -553,12 +553,16 @@ int cond_break5(const void *ctx)
 {
 	int cnt1 = zero, cnt2;
 
+	/*
+	 * The subprog first. There is one time slice for a run of the prog: a subprog that
+	 * is called when it's used up doesn't loop at all.
+	 */
+	cnt2 = static_subprog();
+
 	for (;;) {
 		cond_break;
 		cnt1++;
 	}
-
-	cnt2 = static_subprog();
 
 	/* main and subprog have to loop a bit */
 	return cnt1 > 1 && cnt2 > 1 ? 1 : 0;

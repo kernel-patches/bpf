@@ -294,4 +294,101 @@ __naked void may_goto_subprog_func_first(void)
 	: __clobber_all);
 }
 
+/*
+ * There is one time slice for a run of the prog, not one for every call of a subprog.
+ * The subprog uses it up and returns. Its caller calls it again, BPF_MAX_TIMED_LOOPS times
+ * before it looks at the clock.
+ */
+__naked __noinline __used
+static unsigned long spins_on_may_goto(void)
+{
+	asm volatile (
+	"1:"
+		".8byte %[may_goto_1];"
+		"goto 1b;"
+		"r0 = 0;"
+		"exit;"
+		:
+		: __imm_insn(may_goto_1, BPF_RAW_INSN(BPF_JMP | BPF_JCOND, 0, 0, 1, 0))
+	);
+}
+
+SEC("socket")
+__description("may_goto in a loop that calls a subprog that spins on may_goto")
+__arch_x86_64
+__arch_arm64
+__success __retval(1)
+__naked void loop_calls_subprog_with_may_goto(void)
+{
+	asm volatile (
+	"1:"
+		"call spins_on_may_goto;"
+		".8byte %[may_goto_1];"
+		"goto 1b;"
+		"r0 = 1;"
+		"exit;"
+		:
+		: __imm_insn(may_goto_1, BPF_RAW_INSN(BPF_JMP | BPF_JCOND, 0, 0, 1, 0))
+		: __clobber_all
+	);
+}
+
+/*
+ * The count is shared too. These subprogs make 60000 iterations per call, fewer than
+ * BPF_MAX_TIMED_LOOPS: with a count of its own for every call none of them looks at the clock,
+ * and their caller does after 65535 * 60000 * 60000 iterations.
+ */
+__naked __noinline __used
+static unsigned long loops_60000(void)
+{
+	asm volatile (
+		"r1 = 60000;"
+	"1:"
+		".8byte %[may_goto_2];"
+		"r1 += -1;"
+		"if r1 != 0 goto 1b;"
+		"r0 = 0;"
+		"exit;"
+		:
+		: __imm_insn(may_goto_2, BPF_RAW_INSN(BPF_JMP | BPF_JCOND, 0, 0, 2, 0))
+	);
+}
+
+__naked __noinline __used
+static unsigned long calls_60000_times(void)
+{
+	asm volatile (
+		"r6 = 60000;"
+	"1:"
+		"call loops_60000;"
+		".8byte %[may_goto_2];"
+		"r6 += -1;"
+		"if r6 != 0 goto 1b;"
+		"r0 = 0;"
+		"exit;"
+		:
+		: __imm_insn(may_goto_2, BPF_RAW_INSN(BPF_JMP | BPF_JCOND, 0, 0, 2, 0))
+	);
+}
+
+SEC("socket")
+__description("may_goto in three levels of loops that end before they look at the clock")
+__arch_x86_64
+__arch_arm64
+__success __retval(1)
+__naked void three_levels_of_short_loops(void)
+{
+	asm volatile (
+	"1:"
+		"call calls_60000_times;"
+		".8byte %[may_goto_1];"
+		"goto 1b;"
+		"r0 = 1;"
+		"exit;"
+		:
+		: __imm_insn(may_goto_1, BPF_RAW_INSN(BPF_JMP | BPF_JCOND, 0, 0, 1, 0))
+		: __clobber_all
+	);
+}
+
 char _license[] SEC("license") = "GPL";
