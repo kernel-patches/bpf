@@ -2157,6 +2157,13 @@ void get_fams2_visual_confirm_color(
 	struct pipe_ctx *pipe_ctx,
 	struct tg_color *color);
 
+/* False for modes whose confirm color DMCUB programs, so the driver leaves
+ * MPCC_BG alone instead of stomping it. Pass the state being programmed.
+ */
+bool should_driver_program_visual_confirm(
+	const struct dc *dc,
+	const struct dc_state *context);
+
 void get_mclk_switch_visual_confirm_color(
 		struct pipe_ctx *pipe_ctx,
 		struct tg_color *color);

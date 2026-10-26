@@ -2951,6 +2951,9 @@ void dcn10_update_visual_confirm_color(struct dc *dc,
 {
 	struct mpc *mpc = dc->res_pool->mpc;
 
+	if (!should_driver_program_visual_confirm(dc, dc->current_state))
+		return;
+
 	if (mpc->funcs->set_bg_color) {
 		mpc->funcs->set_bg_color(mpc, &(pipe_ctx->visual_confirm_color), mpcc_id);
 	}

@@ -806,6 +806,28 @@ void get_fams2_visual_confirm_color(
 	}
 }
 
+bool should_driver_program_visual_confirm(const struct dc *dc, const struct dc_state *context)
+{
+	switch (dc->debug.visual_confirm) {
+	case VISUAL_CONFIRM_DISABLE:
+		return false;
+	/* DMCUB owns the color for these modes. Programming ours stomps what FW
+	 * wrote, and FW only repaints across a modeset, so the bar stays stale.
+	 */
+	case VISUAL_CONFIRM_PSR:
+	case VISUAL_CONFIRM_FAMS:
+	case VISUAL_CONFIRM_REPLAY:
+		return false;
+	case VISUAL_CONFIRM_FAMS2:
+		/* FW owns the color only while FAMS2 runs. When it is not in use the
+		 * driver paints all pipes grey, and FW does not cover that case.
+		 */
+		return !dc_state_is_fams2_in_use(dc, context);
+	default:
+		return true;
+	}
+}
+
 static bool get_update_dchubp_dpp_flags_status(struct pipe_ctx *pipe)
 {
 	if (!pipe->plane_state) {
@@ -1644,7 +1666,7 @@ void hwss_build_fast_sequence(struct dc *dc,
 				block_sequence[*num_steps].func = DPP_SET_OUTPUT_TRANSFER_FUNC;
 				(*num_steps)++;
 			}
-			if (dc->debug.visual_confirm != VISUAL_CONFIRM_DISABLE &&
+			if (should_driver_program_visual_confirm(dc, context) &&
 				dc->hwss.update_visual_confirm_color) {
 				block_sequence[*num_steps].params.update_visual_confirm_params.mpc = dc->res_pool->mpc;
 				block_sequence[*num_steps].params.update_visual_confirm_params.color = &current_mpc_pipe->visual_confirm_color;
