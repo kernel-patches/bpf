@@ -807,6 +807,11 @@ struct bpf_insn_aux_data {
 	u64 cast_arena:1; /* addr_space_cast of an address in arena */
 	u64 cast_mov:1; /* addr_space_cast of a pointer that is not in arena, it's a move */
 	u64 bb_end:1; /* last instruction of a basic block */
+	u64 loop_guard:1; /* may_goto is added in front of this instruction */
+	u64 guard_place:1; /* it's the place for may_goto if the loop needs one */
+	u64 guard_at_header:1; /* there is no better place than the head of the loop */
+	u64 guard_unwind:1; /* the subprog unwinds when may_goto is out of budget */
+	u64 guard_no_unwind:1; /* it cannot unwind from here, at least sometimes */
 	u64 need_scev:1;
 	u64 alu_state:5; /* used in combination with alu_limit */
 	/* true if STX or LDX instruction is a part of a spill/fill
@@ -870,6 +875,11 @@ struct bpf_insn_aux_data {
 	 * For a loop header, identifies the parent loop instead.
 	 */
 	s32 loop_header;
+	/* where may_goto in front of this instruction goes */
+	s32 guard_to;
+	/* registers and stack slots that are set to 0 on the way: read there, not written here */
+	u16 guard_zero;
+	u64 guard_zero_slots;
 	/* additional information about the loop if this instruction is a loop header */
 	struct bpf_loop *loop;
 };
@@ -1010,6 +1020,8 @@ struct bpf_subprog_info {
 	 * a hidden pointer to the result, a pair in two registers, no dead arguments.
 	 */
 	bool stack_args_from_code: 1;
+	/* it can leave with unwind_exit: it has one, or unwind_goto follows every call of it */
+	bool bail_unwinds: 1;
 	u8 code_stack_args:4;
 	u8 arg_slot_cnt:4;
 
@@ -1450,6 +1462,7 @@ int bpf_states_join(struct bpf_verifier_env *env, struct bpf_verifier_state *dst
 		    bool widen);
 void bpf_join_free(struct bpf_verifier_env *env);
 
+int bpf_insert_loop_guards(struct bpf_verifier_env *env);
 int bpf_insert_unwound_reports(struct bpf_verifier_env *env);
 bool bpf_insn_leaves_loop(struct bpf_verifier_env *env, int h, int n);
 bool bpf_jump_leaves_loop(struct bpf_verifier_env *env, int h, int n);

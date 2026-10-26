@@ -393,6 +393,222 @@ static int bpf_adj_moved_insn(struct bpf_insn *insn, u32 delta)
 	return 0;
 }
 
+static bool jumps_to_itself(const struct bpf_insn *insn)
+{
+	u8 class = BPF_CLASS(insn->code), op = BPF_OP(insn->code);
+
+	return (class == BPF_JMP || class == BPF_JMP32) && op != BPF_CALL && op != BPF_EXIT &&
+	       insn->code != (BPF_JMP32 | BPF_JA) && insn->off == -1;
+}
+
+/* How a subprog leaves when it is out of budget, see push_budget_exit() */
+static struct bpf_insn budget_exit_insn(struct bpf_verifier_env *env, struct bpf_subprog_info *sub)
+{
+	if (!sub->bail_unwinds)
+		return BPF_EXIT_INSN();
+	sub->can_unwind = true;
+	env->prog->jit_required = 1;
+	return BPF_RAW_INSN(BPF_JMP | BPF_EXIT, 0, BPF_UNWIND_EXIT, 0, 0);
+}
+
+/*
+ * may_goto has 16 bits for the offset, and what is between it and its target is going
+ * to grow: may_goto itself becomes 7 insns.
+ */
+#define BPF_GUARD_NEAR	4096
+
+static bool guard_leaves_subprog(const struct bpf_insn_aux_data *aux)
+{
+	return aux->loop_guard && !aux->guard_no_unwind;
+}
+
+/*
+ * 'r0 = 0; exit' behind the last insn of the subprog, for all its guards that are near.
+ * Returns the number of insns that were added.
+ */
+static int append_budget_exit(struct bpf_verifier_env *env, int s)
+{
+	struct bpf_subprog_info *sub = &env->subprog_info[s];
+	int last = (sub + 1)->start - 1, n = 0, i;
+	struct bpf_prog *new_prog;
+	struct bpf_insn buf[4];
+
+	for (i = max_t(int, sub->start, last + 1 - BPF_GUARD_NEAR); i <= last; i++)
+		if (guard_leaves_subprog(&env->insn_aux_data[i]))
+			break;
+	if (i > last)
+		return 0;
+
+	buf[n++] = env->prog->insnsi[last];
+	buf[n++] = BPF_MOV64_IMM(BPF_REG_0, 0);
+	if (bpf_ret_reg_pair(env, s))
+		buf[n++] = BPF_MOV64_IMM(BPF_REG_2, 0);
+	buf[n++] = budget_exit_insn(env, sub);
+	new_prog = bpf_patch_insn_data(env, last, buf, n);
+	if (!new_prog)
+		return -ENOMEM;
+	env->prog = new_prog;
+	/* the original insn is the first one of the patch, not the last one */
+	swap(env->insn_aux_data[last], env->insn_aux_data[last + n - 1]);
+	for (i = last + 1; i < last + n; i++)
+		env->insn_aux_data[i].seen = 1;
+	return n - 1;
+}
+
+/*
+ * Add may_goto in front of the insns that the main pass marked, see
+ * check_loop_guard(). It verified the edge from the insn to where may_goto goes.
+ */
+int bpf_insert_loop_guards(struct bpf_verifier_env *env)
+{
+	struct bpf_insn_aux_data *aux = env->insn_aux_data;
+	int len = env->prog->len, i, r, s, to, n, jmp, delta = 0, err = 0;
+	struct bpf_insn *patch;
+	struct bpf_prog *new_prog;
+	u32 *before;
+	int *target, *leave, *moved;
+	u16 *zero;
+	u64 *slots;
+	s64 off;
+
+	for (i = 0; i < len; i++)
+		if (aux[i].loop_guard)
+			break;
+	if (i == len)
+		return 0;
+
+	/*
+	 * Where the subprog has 'r0 = 0; exit', 0 if it has none. And how far that moved
+	 * the subprog: guard_to is from the time before.
+	 */
+	leave = kvcalloc(2 * env->subprog_cnt, sizeof(int), GFP_KERNEL_ACCOUNT);
+	if (!leave)
+		return -ENOMEM;
+	moved = leave + env->subprog_cnt;
+	for (s = env->subprog_cnt - 1; s >= 0; s--) {
+		leave[s] = append_budget_exit(env, s);
+		if (leave[s] < 0) {
+			err = leave[s];
+			kvfree(leave);
+			return err;
+		}
+	}
+	for (s = 0, n = 0; s < env->subprog_cnt; s++) {
+		moved[s] = n;
+		n += leave[s];
+		if (leave[s])
+			leave[s] = env->subprog_info[s + 1].start - leave[s];
+	}
+	aux = env->insn_aux_data;
+	len = env->prog->len;
+
+	/* the number of insns added in front of the insn, where the guard of the insn goes */
+	before = kvcalloc(len + 1, sizeof(u32), GFP_KERNEL_ACCOUNT);
+	target = kvcalloc(len, sizeof(int), GFP_KERNEL_ACCOUNT);
+	zero = kvcalloc(len, sizeof(u16), GFP_KERNEL_ACCOUNT);
+	slots = kvcalloc(len, sizeof(u64), GFP_KERNEL_ACCOUNT);
+	patch = kvcalloc(80, sizeof(*patch), GFP_KERNEL_ACCOUNT);
+	if (!before || !target || !zero || !slots || !patch) {
+		err = -ENOMEM;
+		goto out;
+	}
+	for (i = 0; i < len; i++) {
+		s = bpf_find_containing_subprog(env, i) - env->subprog_info;
+		target[i] = aux[i].loop_guard ? aux[i].guard_to + moved[s] : -1;
+		zero[i] = aux[i].loop_guard ? aux[i].guard_zero : 0;
+		slots[i] = aux[i].loop_guard ? aux[i].guard_zero_slots : 0;
+		if (guard_leaves_subprog(&aux[i])) {
+			/* see push_budget_exit() */
+			slots[i] = 0;
+			if (leave[s] && leave[s] - i <= BPF_GUARD_NEAR) {
+				target[i] = leave[s];
+				zero[i] = 0;
+			} else {
+				target[i] = -2;
+				zero[i] = BIT(BPF_REG_0);
+				if (bpf_ret_reg_pair(env, s))
+					zero[i] |= BIT(BPF_REG_2);
+			}
+		}
+		before[i + 1] = before[i];
+		if (aux[i].loop_guard)
+			before[i + 1] += zero[i] || slots[i] ?
+					 3 + hweight16(zero[i]) + hweight64(slots[i]) : 1;
+	}
+
+	for (i = 0; i < len; i++) {
+		to = target[i];
+		if (to == -1)
+			continue;
+		/*
+		 *	may_goto to		or	may_goto +1
+		 *	insn				goto +N
+		 *					rX = 0, ...
+		 *					goto to, or exit
+		 *					insn
+		 */
+		n = 0;
+		if (zero[i] || slots[i]) {
+			patch[n++] = BPF_RAW_INSN(BPF_JMP | BPF_JCOND, 0, 0, 1, 0);
+			patch[n++] = BPF_JMP_A(hweight16(zero[i]) + hweight64(slots[i]) + 1);
+			for (r = BPF_REG_0; r < BPF_REG_FP; r++)
+				if (zero[i] & BIT(r))
+					patch[n++] = BPF_MOV64_IMM(r, 0);
+			for (r = 0; r < 64; r++)
+				if (slots[i] & BIT_ULL(r))
+					patch[n++] = BPF_ST_MEM(BPF_DW, BPF_REG_FP,
+								-(r + 1) * BPF_REG_SIZE, 0);
+		}
+		jmp = n++;
+		/*
+		 * What is behind moves with this patch and is adjusted by
+		 * the patches to come. What is in front is where it is going to be.
+		 */
+		if (to == -2)
+			off = 0;
+		else if (to > i)
+			off = to - i + n - jmp - 1;
+		else
+			off = (s64)to + before[to] - (i + delta + jmp) - 1;
+		if (!zero[i] && !slots[i] && (off > S16_MAX || off < S16_MIN)) {
+			verbose(env, "exit of the loop is too far from insn %d for may_goto\n", i);
+			err = -ERANGE;
+			break;
+		}
+		patch[jmp] = zero[i] || slots[i] ? BPF_JMP32_A(off) :
+			     BPF_RAW_INSN(BPF_JMP | BPF_JCOND, 0, 0, off, 0);
+		if (to == -2)
+			patch[jmp] = budget_exit_insn(env, bpf_find_containing_subprog(env,
+										      i + delta));
+		patch[n] = env->prog->insnsi[i + delta];
+		/* A jump to itself is a back edge. It goes through may_goto like the others. */
+		if (jumps_to_itself(&patch[n]))
+			patch[n].off -= n;
+		else
+			err = bpf_adj_moved_insn(&patch[n], n);
+		if (err) {
+			verbose(env, "insn %d cannot be patched due to 16-bit range\n", i);
+			break;
+		}
+		n++;
+		new_prog = bpf_patch_insn_data(env, i + delta, patch, n);
+		if (!new_prog) {
+			err = -ENOMEM;
+			break;
+		}
+		env->prog = new_prog;
+		delta += n - 1;
+	}
+out:
+	kvfree(leave);
+	kvfree(before);
+	kvfree(target);
+	kvfree(zero);
+	kvfree(slots);
+	kvfree(patch);
+	return err;
+}
+
 /*
  * For all jmp insns in a given 'prog' that point to 'tgt_idx' insn adjust the
  * jump offset by 'delta'.

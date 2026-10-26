@@ -24393,6 +24393,9 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	if (ret == 0 && env->callx_edges)
 		ret = sort_subprogs_topo(env);
 
+	if (ret == 0)
+		ret = bpf_insert_loop_guards(env);
+
 	if (ret == 0 && bpf_prog_is_offloaded(env->prog->aux))
 		ret = bpf_prog_offload_finalize(env);
 
