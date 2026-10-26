@@ -5861,6 +5861,7 @@ err_put:
 static int link_create(union bpf_attr *attr, bpfptr_t uattr, struct bpf_common_attr *attr_common,
 		       bpfptr_t uattr_common, u32 size_common)
 {
+	struct netlink_ext_ack extack = {};
 	struct bpf_verifier_log *log;
 	struct bpf_log_attr attr_log;
 	struct bpf_prog *prog;
@@ -5940,7 +5941,7 @@ static int link_create(union bpf_attr *attr, bpfptr_t uattr, struct bpf_common_a
 		break;
 #ifdef CONFIG_NET
 	case BPF_PROG_TYPE_XDP:
-		ret = bpf_xdp_link_attach(attr, prog);
+		ret = bpf_xdp_link_attach(attr, prog, &extack);
 		break;
 	case BPF_PROG_TYPE_SCHED_CLS:
 		if (attr->link_create.attach_type == BPF_TCX_INGRESS ||
@@ -5975,6 +5976,9 @@ static int link_create(union bpf_attr *attr, bpfptr_t uattr, struct bpf_common_a
 out:
 	if (ret < 0) {
 		int err;
+
+		if (extack._msg)
+			bpf_log(log, "%s\n", extack._msg);
 
 		err = bpf_log_attr_finalize(&attr_log, log);
 		ret = err ? err : ret;
