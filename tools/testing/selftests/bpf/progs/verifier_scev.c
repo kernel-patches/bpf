@@ -3484,4 +3484,335 @@ __naked void dominating_exit_bounds_count(void)
 "	::: __clobber_all);
 }
 
+/*
+ * r6 and r7 count together. At the head of the loop both are 0..9 and nothing says
+ * that they are equal: r7 = 9 gets through the first jump with r6 = 0..9 and
+ * r7 = 10 comes back with r6 = 1..9. There is no such iteration.
+ */
+SEC("socket")
+__success __retval(0)
+__log_level(2)
+__msg("loop header at 2, widening r7 to 0..9 step 1")
+__msg("loop header at 2, clamping r7 to 0..9 step 1")
+__naked void clamp_out_of_range(void)
+{
+	asm volatile (
+	"r6 = 0;"
+	"r7 = 0;"
+"1:"
+	"if r7 != 9 goto 2f;"
+	"r7 += 1;"
+	"r6 += 1;"
+	"if r6 < 10 goto 1b;"
+"2:"
+	"r0 = r7;"
+	"exit;"
+	::: __clobber_all);
+}
+
+/* If r7 is left as it is it's out of range in every trip that follows. */
+SEC("socket")
+__success __retval(0)
+__naked void clamp_out_of_range_1m(void)
+{
+	asm volatile (
+	"r6 = 0;"
+	"r7 = 0;"
+"1:"
+	"if r7 < 999999 goto 2f;"
+	"r7 += 1;"
+	"r6 += 1;"
+	"if r6 < 1000000 goto 1b;"
+"2:"
+	"r0 = r7;"
+	"exit;"
+	::: __clobber_all);
+}
+
+/* r7 is 0 or 256 at the head, 256 goes on, 512 comes back. */
+SEC("socket")
+__success __retval(0)
+__naked void clamp_out_of_range_step(void)
+{
+	asm volatile (
+	"r7 = 0;"
+	"r1 = 0;"
+"1:"
+	"if r7 s<= 18 goto 2f;"
+	"r7 += 256;"
+	"r1 += 1;"
+	"if r1 < 2 goto 1b;"
+"2:"
+	"r0 = r7;"
+	"exit;"
+	::: __clobber_all);
+}
+
+/* The variable is in the stack. */
+SEC("socket")
+__success __retval(0)
+__naked void clamp_out_of_range_stack(void)
+{
+	asm volatile (
+	"r6 = 0;"
+	"r1 = 0;"
+	"*(u64 *)(r10 - 8) = r1;"
+"1:"
+	"r1 = *(u64 *)(r10 - 8);"
+	"if r1 != 9 goto 2f;"
+	"r1 += 1;"
+	"*(u64 *)(r10 - 8) = r1;"
+	"r6 += 1;"
+	"if r6 < 10 goto 1b;"
+"2:"
+	"r0 = *(u64 *)(r10 - 8);"
+	"exit;"
+	::: __clobber_all);
+}
+
+/* The 64-bit ranges have 1..0x7ffffff9 in common, the 32-bit ranges nothing. */
+SEC("socket")
+__success __retval(0)
+__flag(BPF_F_TEST_REG_INVARIANTS)
+__naked void clamp_out_of_range_32(void)
+{
+	asm volatile (
+	"call %[bpf_get_prandom_u32];"
+	"r1 = r0;"
+	"if r1 > 3 goto 2f;"
+	"r3 = 0xffffffff7ffffffc ll;"
+	"r1 += r3;"
+	"r6 = 0;"
+"1:"
+	"if r1 & 0x80000007 goto 2f;"
+	"w1 += 1;"
+	"r6 += 1;"
+	"if r6 < 4 goto 1b;"
+"2:"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * r7 is 0, 3 .. 27 at the head. 'if r7 & 0x1a' forgets the step, 4 and 5 go on, 7 and 8 come
+ * back. They are in 0..27, but they are not a multiple of 3.
+ */
+SEC("socket")
+__success __retval(0)
+__flag(BPF_F_TEST_REG_INVARIANTS)
+__naked void clamp_out_of_range_off_step(void)
+{
+	asm volatile (
+	"r7 = 0;"
+	"r1 = 0;"
+"1:"
+	"if r7 & 0x1a goto 2f;"
+	"if r7 < 4 goto 2f;"
+	"r7 += 3;"
+	"r1 += 1;"
+	"if r1 < 10 goto 1b;"
+"2:"
+	"r0 = 0;"
+	"exit;"
+	::: __clobber_all);
+}
+
+/*
+ * r7 is 0xfffffffb .. 0x100000004 at the head. 101 and 2^32 + 101 come back. The 64-bit ranges
+ * have numbers in common, the 32-bit ranges too, but no number is in both.
+ */
+SEC("socket")
+__success __retval(0)
+__flag(BPF_F_TEST_REG_INVARIANTS)
+__naked void clamp_out_of_range_64_and_32(void)
+{
+	asm volatile (
+	"r7 = 0xfffffffb ll;"
+	"r1 = 0;"
+"1:"
+	"if r7 & 0x200 goto 2f;"
+	"if w7 != 100 goto 2f;"
+	"r7 += 1;"
+	"r1 += 1;"
+	"if r1 < 10 goto 1b;"
+"2:"
+	"r0 = 0;"
+	"exit;"
+	::: __clobber_all);
+}
+
+/*
+ * r7 is 2^33 - 5 + 3 * k at the head. 2^33 + 5 and 2^33 + 6 are in the 64-bit range and in the
+ * 32-bit range. 2^33 + 4 and 2^33 + 7 fit the step. Only all three together have no number.
+ */
+SEC("socket")
+__success __retval(0)
+__flag(BPF_F_TEST_REG_INVARIANTS)
+__naked void clamp_out_of_range_64_32_and_step(void)
+{
+	asm volatile (
+	"r7 = 0x1fffffffb ll;"
+	"r1 = 0;"
+"1:"
+	"if r7 & 0x200 goto 2f;"
+	"if w7 > 3 goto 2f;"
+	"if w7 < 2 goto 2f;"
+	"r7 += 3;"
+	"r1 += 1;"
+	"if r1 < 10 goto 1b;"
+"2:"
+	"r0 = 0;"
+	"exit;"
+	::: __clobber_all);
+}
+
+/* 8 comes back. It is in the range of the head and not a multiple of 3. It must not go on alone. */
+SEC("socket")
+__success __retval(0)
+__flag(BPF_F_TEST_REG_INVARIANTS)
+__naked void clamp_out_of_range_const_off_step(void)
+{
+	asm volatile (
+	"r7 = 0;"
+	"r1 = 0;"
+	"r6 = 0;"
+"1:"
+	"if r7 & 16 goto 3f;"
+	"if r7 != 5 goto 3f;"
+	"r6 = 1;"
+"3:"
+	"r7 += 3;"
+	"r1 += 1;"
+	"if r1 < 1000000 goto 1b;"
+	"r0 = r6;"
+	"exit;"
+	::: __clobber_all);
+}
+
+/*
+ *	for (i = 0, j = 0; i < 8; i++, j++)
+ *		val[j] = j == 7;
+ * val[8] is out of bounds: j = 8 must not go through the loop again.
+ */
+SEC("socket")
+__success __retval(1)
+__naked void clamp_out_of_range_index(void)
+{
+	asm volatile (
+	"r1 = 0;"
+	"*(u32 *)(r10 - 4) = r1;"
+	"r2 = r10;"
+	"r2 += -4;"
+	"r1 = %[small_map] ll;"
+	"call %[bpf_map_lookup_elem];"
+	"if r0 == 0 goto 3f;"
+	"r8 = r0;"
+	"r6 = 0;"
+	"r7 = 0;"
+"1:"
+	"r2 = 0;"
+	"if r7 != 7 goto 2f;"
+	"r2 = 1;"
+"2:"
+	"r1 = r8;"
+	"r1 += r7;"
+	"*(u8 *)(r1 + 0) = r2;"
+	"r7 += 1;"
+	"r6 += 1;"
+	"if r6 < 8 goto 1b;"
+	"r0 = *(u8 *)(r8 + 7);"
+"3:"
+	"exit;"
+	:
+	: __imm(bpf_map_lookup_elem), __imm_addr(small_map)
+	: __clobber_all);
+}
+
+/*
+ * Every iteration takes a reference, only the last one is released. The path with
+ * r7 = 9 is looked at first. If it ended at the head of the loop the path with
+ * r7 != 9 would be pruned at 2: and nobody would see a reference come back to the head.
+ */
+SEC("socket")
+__failure __msg("Unreleased reference")
+__flag(BPF_F_TEST_STATE_FREQ)
+__naked void clamp_out_of_range_leak(void)
+{
+	asm volatile (
+	"r6 = 0;"
+	"r7 = 0;"
+"1:"
+	"r1 = %[ringbuf] ll;"
+	"r2 = 8;"
+	"r3 = 0;"
+	"call %[bpf_ringbuf_reserve];"
+	"if r0 == 0 goto 3f;"
+	"r8 = r0;"
+	"if r7 != 9 goto 2f;"
+	"r0 = 0;"
+"2:"
+	"r7 += 1;"
+	"r6 += 1;"
+	"if r6 < 10 goto 1b;"
+	"r1 = r8;"
+	"r2 = 0;"
+	"call %[bpf_ringbuf_discard];"
+"3:"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm(bpf_ringbuf_reserve), __imm(bpf_ringbuf_discard), __imm_addr(ringbuf)
+	: __clobber_all);
+}
+
+/*
+ * r7 = 9 releases the memory. That is the last iteration when r7 starts from 0, which
+ * is looked at first, and the first one when it starts from 9: the other nine write to
+ * memory that is gone. If the first path ended at the head of the loop, because 10 is not
+ * in 0..9, the second one would be pruned at 2: with the same r7 = 9, although 10 is in 9..18.
+ */
+SEC("socket")
+__failure __msg("R8 invalid mem access 'scalar'")
+__naked void clamp_out_of_range_two_entries(void)
+{
+	asm volatile (
+	"r1 = %[ringbuf] ll;"
+	"r2 = 8;"
+	"r3 = 0;"
+	"call %[bpf_ringbuf_reserve];"
+	"if r0 == 0 goto 3f;"
+	"r8 = r0;"
+	"call %[bpf_get_prandom_u32];"
+	"r7 = 9;"
+	"if r0 == 0 goto 4f;"
+	"r7 = 0;"
+"4:"
+	"r6 = 0;"
+"1:"
+	"r1 = 0;"
+	"*(u8 *)(r8 + 0) = r1;"
+	"if r7 != 9 goto 2f;"
+	"r1 = r8;"
+	"r2 = 0;"
+	"call %[bpf_ringbuf_discard];"
+"2:"
+	"r7 += 1;"
+	"r6 += 1;"
+	"if r6 < 10 goto 1b;"
+	"if r7 == 10 goto 3f;"
+	"r1 = r8;"
+	"r2 = 0;"
+	"call %[bpf_ringbuf_discard];"
+"3:"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm(bpf_ringbuf_reserve), __imm(bpf_ringbuf_discard), __imm(bpf_get_prandom_u32),
+	  __imm_addr(ringbuf)
+	: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";
