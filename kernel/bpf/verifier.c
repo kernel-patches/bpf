@@ -17739,6 +17739,25 @@ int bpf_set_reg_range(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
 	return reg_bounds_sanity_check(env, reg, "bpf_set_reg_range");
 }
 
+/* Is there no number that is in @r64, in @r32 and equal to @base + k * @step? */
+bool bpf_reg_range_is_empty(struct cnum64 r64, struct cnum32 r32, u16 base, u16 step)
+{
+	struct bpf_reg_state reg = {
+		.type = SCALAR_VALUE,
+		.r64 = cnum64_intersect_linear(r64, base, step),
+		.r32 = r32,
+		.base = base,
+		.step = step,
+		.var_off = tnum_unknown,
+	};
+
+	if (range_bounds_violation(&reg))
+		return true;
+	/* Each pair of the three can have numbers in common when all three have none. */
+	reg_bounds_sync(&reg);
+	return range_bounds_violation(&reg);
+}
+
 /*
  * Checks if pointer and packet metadata matches between two registers.
  * For use with bpf_reg_union().

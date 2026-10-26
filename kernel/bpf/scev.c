@@ -2869,6 +2869,8 @@ int bpf_clamp_scev_regs(struct bpf_verifier_env *env, struct bpf_func_state *cur
 	struct linear_coefs coefs;
 	struct env *header_env;
 	struct bounds bounds;
+	struct cnum64 r64;
+	struct cnum32 r32;
 	u32 r;
 	int err;
 
@@ -2892,11 +2894,18 @@ int bpf_clamp_scev_regs(struct bpf_verifier_env *env, struct bpf_func_state *cur
 			continue;
 
 		linear_bounds(entry_reg, max_header_count, &coefs, &bounds);
-		bounds.r64 = cnum64_intersect(reg->r64, bounds.r64);
-		bounds.r32 = cnum32_intersect(reg->r32, bounds.r32);
-		if (cnum64_is_empty(bounds.r64)) {
-			verifier_bug(env, "scev clamp produced empty range for r%d", r);
-			return -EFAULT;
+		r64 = cnum64_intersect(reg->r64, bounds.r64);
+		r32 = cnum32_intersect(reg->r32, bounds.r32);
+		/*
+		 * The state at the head doesn't know how the variables depend on each other.
+		 * It lets r6 = 0, r7 = 9 into the loop when both count from 0, and r7 = 10
+		 * comes back. No run gets here like that, so any range is right for r7.
+		 * Take the one it has at the head: the rest of the state is still compared
+		 * with the head, and what was pruned on the way here relies on that.
+		 */
+		if (!bpf_reg_range_is_empty(r64, r32, bounds.base, bounds.step)) {
+			bounds.r64 = r64;
+			bounds.r32 = r32;
 		}
 		if (log->level & BPF_LOG_LEVEL2) {
 			bpf_log(log, "loop header at %d, clamping ", insn_idx);
