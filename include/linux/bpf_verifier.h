@@ -184,9 +184,7 @@ struct bpf_reg_state {
 	 * other registers. Kept outside the metadata union for ID remapping
 	 * during state comparisons.
 	 */
-	u32 map_uid:31;
-	/* if (!precise && SCALAR_VALUE) min/max/tnum don't affect safety */
-	u32 precise:1;
+	u32 map_uid;
 };
 
 static inline s64 reg_smin(const struct bpf_reg_state *reg)
@@ -334,7 +332,6 @@ struct bpf_retval_range {
 struct bpf_loop_iters {
 	u32 min_header_count;   /* min number of times header is executed */
 	u32 max_header_count;   /* max number of times header is executed */
-	unsigned long precise_regs[BITS_TO_LONGS(BPF_SCEV_REGS_NUM)];
 	/* live, changed by the loop, and there is no summary of how */
 	unsigned long forget_regs[BITS_TO_LONGS(BPF_SCEV_REGS_NUM)];
 	/* [0, max] at the entry, and the loop only clears bits */
@@ -460,44 +457,6 @@ struct bpf_func_state {
 
 #define MAX_CALL_FRAMES 32
 
-/* instruction history flags, used in bpf_jmp_history_entry.flags field.
- * Frame number and SPI are stored in dedicated fields of bpf_jmp_history_entry.
- */
-enum {
-	INSN_F_STACK_ACCESS = BIT(0),
-
-	INSN_F_DST_REG_STACK = BIT(1), /* dst_reg is PTR_TO_STACK */
-	INSN_F_SRC_REG_STACK = BIT(2), /* src_reg is PTR_TO_STACK */
-
-	INSN_F_STACK_ARG_ACCESS = BIT(3),
-};
-
-/* Registers linked to one jump condition that a history entry can record */
-#define BPF_LINKED_REGS_MAX	5
-
-struct bpf_jmp_history_entry {
-	/* insn idx can't be bigger than 1 million */
-	u32 idx : 20;
-	u32 frame : 5;	/* stack access frame number */
-	/* special INSN_F_xxx flags */
-	u32 flags : 4;
-	u32 : 3;
-	u32 prev_idx : 20;
-	u32 spi : 12;	/* stack slot index */
-	/*
-	 * Scalar registers and spilled scalars linked to the condition of
-	 * this jump, which need precision tracking together when the jump is
-	 * backtracked. Each is packed as 4 bits of frame number, one bit
-	 * telling a register from a stack slot and 11 bits of register or
-	 * slot index, see linked_regs_pack().
-	 */
-	u16 linked_regs[BPF_LINKED_REGS_MAX];
-	u8 linked_regs_cnt;
-};
-
-static_assert(MAX_CALL_FRAMES <= (1 << 5));
-static_assert(MAX_BPF_STACK_SLOTS <= (1 << 12));
-
 /* Maximum number of bpf_reg_state objects that can exist at once */
 #define MAX_STACK_ARG_SLOTS (MAX_BPF_STATIC_FUNC_ARGS - MAX_BPF_FUNC_REG_ARGS)
 #define BPF_ID_MAP_SIZE ((MAX_BPF_REG + MAX_BPF_STACK_SLOTS + MAX_STACK_ARG_SLOTS) * \
@@ -506,7 +465,6 @@ static_assert(MAX_BPF_STACK_SLOTS <= (1 << 12));
 struct bpf_verifier_state {
 	/* call stack tracking */
 	struct bpf_func_state *frame[MAX_CALL_FRAMES];
-	struct bpf_verifier_state *parent;
 	/* Acquired reference states */
 	struct bpf_reference_state *refs;
 	u32 insn_idx;
@@ -534,19 +492,8 @@ struct bpf_verifier_state {
 	 */
 	u32 flow_entry;
 
-	/*
-	 * First and last insn idx of this verifier state.
-	 * last_insn_idx is -1 if no instructions have been executed yet.
-	 */
-	u32 first_insn_idx;
+	/* The insn that the state comes from, -1 if no instructions have been executed yet. */
 	u32 last_insn_idx;
-	/* jmp history recorded from first to last.
-	 * backtracking is using it to go from last to first.
-	 * For most states jmp_history_cnt is [0-3].
-	 * For loops can go up to ~40.
-	 */
-	struct bpf_jmp_history_entry *jmp_history;
-	u32 jmp_history_cnt;
 };
 
 /* Number of BPF_REG_SIZE stack slots tracked for the frame so far. */
@@ -1022,14 +969,6 @@ static inline u16 bpf_in_stack_arg_cnt(const struct bpf_subprog_info *sub)
 struct bpf_diag;
 struct bpf_verifier_env;
 
-struct backtrack_state {
-	struct bpf_verifier_env *env;
-	u32 frame;
-	u32 reg_masks[MAX_CALL_FRAMES];
-	unsigned long stack_masks[MAX_CALL_FRAMES][BITS_TO_LONGS(MAX_BPF_STACK_SLOTS)];
-	u32 stack_arg_masks[MAX_CALL_FRAMES];
-};
-
 struct bpf_id_pair {
 	u32 old;
 	u32 cur;
@@ -1143,8 +1082,6 @@ struct bpf_verifier_env {
 		u32 gotox_edges;
 		bool subprog_jts_ready;
 	} cfg;
-	struct backtrack_state bt;
-	struct bpf_jmp_history_entry *cur_hist_ent;
 	/* Per-callsite snapshot of the parent's tracked spill slots for cross-frame fills. */
 	struct spill_snapshot **callsite_at_stack;
 	u32 pass_cnt; /* number of times do_check() was called */
@@ -1387,7 +1324,6 @@ int bpf_check_ext_prologue(struct bpf_verifier_log *log,
 			   const struct bpf_prog *tgt_prog, u32 btf_id);
 void bpf_free_kfunc_btf_tab(struct bpf_kfunc_btf_tab *tab);
 
-int mark_chain_precision(struct bpf_verifier_env *env, int regno);
 
 int bpf_clean_verifier_state(struct bpf_verifier_env *env, struct bpf_verifier_state *st);
 bool bpf_state_subsumes(struct bpf_verifier_env *env, struct bpf_verifier_state *old,
@@ -1431,25 +1367,15 @@ bool bpf_insn_leaves_loop(struct bpf_verifier_env *env, int h, int n);
 bool bpf_jump_leaves_loop(struct bpf_verifier_env *env, int h, int n);
 int bpf_insert_recursion_checks(struct bpf_verifier_env *env);
 
-void bpf_clear_jmp_history(struct bpf_verifier_state *state);
 int bpf_copy_verifier_state(struct bpf_verifier_state *dst_state,
 			    const struct bpf_verifier_state *src);
 void bpf_free_verifier_state(struct bpf_verifier_state *state, bool free_self);
-int bpf_push_jmp_history(struct bpf_verifier_env *env, struct bpf_verifier_state *cur,
-			 int insn_flags, int spi, int frame, const u16 *linked_regs,
-			 u8 linked_regs_cnt);
-void bpf_bt_sync_linked_regs(struct backtrack_state *bt, struct bpf_jmp_history_entry *hist);
 void bpf_mark_reg_not_init(const struct bpf_verifier_env *env,
 			   struct bpf_reg_state *reg);
 void bpf_mark_reg_known_scalar(struct bpf_reg_state *reg, u64 imm);
-void bpf_mark_reg_unknown_imprecise(struct bpf_reg_state *reg);
+void bpf_mark_reg_unknown(struct bpf_reg_state *reg);
 int bpf_grow_stack_state(struct bpf_verifier_env *env, struct bpf_func_state *state, int size);
-void bpf_mark_all_scalars_precise(struct bpf_verifier_env *env,
-				  struct bpf_verifier_state *st);
 void bpf_clear_singular_ids(struct bpf_verifier_env *env, struct bpf_verifier_state *st);
-int bpf_mark_chain_precision(struct bpf_verifier_env *env,
-			     struct bpf_verifier_state *starting_state,
-			     int regno, bool *changed);
 
 static inline int bpf_get_spi(s32 off)
 {
@@ -1524,31 +1450,6 @@ static inline bool bpf_is_spilled_scalar_reg(const struct bpf_stack_state *stack
 static inline bool bpf_register_is_null(struct bpf_reg_state *reg)
 {
 	return reg->type == SCALAR_VALUE && tnum_equals_const(reg->var_off, 0);
-}
-
-static inline void bpf_bt_set_frame_reg(struct backtrack_state *bt, u32 frame, u32 reg)
-{
-	bt->reg_masks[frame] |= 1 << reg;
-}
-
-static inline void bpf_bt_set_frame_slot(struct backtrack_state *bt, u32 frame, u32 slot)
-{
-	__set_bit(slot, bt->stack_masks[frame]);
-}
-
-static inline void bt_set_frame_stack_arg_slot(struct backtrack_state *bt, u32 frame, u32 slot)
-{
-	bt->stack_arg_masks[frame] |= 1 << slot;
-}
-
-static inline bool bt_is_frame_reg_set(struct backtrack_state *bt, u32 frame, u32 reg)
-{
-	return bt->reg_masks[frame] & (1 << reg);
-}
-
-static inline bool bt_is_frame_slot_set(struct backtrack_state *bt, u32 frame, u32 slot)
-{
-	return test_bit(slot, bt->stack_masks[frame]);
 }
 
 bool bpf_map_is_rdonly(const struct bpf_map *map);
@@ -1750,7 +1651,6 @@ struct bpf_subprog_info *bpf_find_containing_subprog(struct bpf_verifier_env *en
 const char *bpf_subprog_name(const struct bpf_verifier_env *env, int subprog);
 int bpf_jmp_offset(struct bpf_insn *insn);
 struct bpf_iarray *bpf_insn_successors(struct bpf_verifier_env *env, u32 idx);
-void bpf_fmt_stack_mask(char *buf, ssize_t buf_sz, const unsigned long *stack_mask);
 bool bpf_subprog_is_global(const struct bpf_verifier_env *env, int subprog);
 
 /* Kinds of member a by-value struct or union may be composed of. */
