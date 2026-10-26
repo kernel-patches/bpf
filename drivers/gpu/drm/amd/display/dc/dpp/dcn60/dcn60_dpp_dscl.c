@@ -288,6 +288,10 @@ void dpp60_dscl_program_upsp(struct dpp *dpp_base,
 {
 	struct dcn60_dpp *dpp = TO_DCN60_DPP(dpp_base);
 
+	/* UPSP block is not present on all ASICs */
+	if (!REG(CNVC_UPSP_MODE))
+		return;
+
 	REG_SET_8(CNVC_UPSP_MODE, 0,
 			UPSP_MODE, dscl_prog_data->upsp_mode,
 			UPSP_V_NUM_TAPS, dscl_prog_data->upsp_v_num_taps,
