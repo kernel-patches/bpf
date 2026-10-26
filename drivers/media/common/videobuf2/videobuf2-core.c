@@ -1763,6 +1763,46 @@ int vb2_core_prepare_buf(struct vb2_queue *q, struct vb2_buffer *vb, void *pb)
 }
 EXPORT_SYMBOL_GPL(vb2_core_prepare_buf);
 
+static void __vb2_buf_cancel(struct vb2_buffer *vb)
+{
+	struct media_request *req = vb->req_obj.req;
+
+	/*
+	 * If a request is associated with this buffer, then
+	 * call buf_request_cancel() to give the driver to complete()
+	 * related request objects. Otherwise those objects would
+	 * never complete.
+	 */
+	if (req) {
+		enum media_request_state state;
+		unsigned long flags;
+
+		spin_lock_irqsave(&req->lock, flags);
+		state = req->state;
+		spin_unlock_irqrestore(&req->lock, flags);
+
+		if (state == MEDIA_REQUEST_STATE_QUEUED)
+			call_void_vb_qop(vb, buf_request_complete, vb);
+	}
+
+	__vb2_buf_mem_finish(vb);
+
+	if (vb->prepared) {
+		call_void_vb_qop(vb, buf_finish, vb);
+		vb->prepared = 0;
+	}
+	__vb2_dqbuf(vb);
+
+	if (vb->req_obj.req) {
+		media_request_object_unbind(&vb->req_obj);
+		media_request_object_put(&vb->req_obj);
+	}
+	if (vb->request)
+		media_request_put(vb->request);
+	vb->request = NULL;
+	vb->copied_timestamp = 0;
+}
+
 int vb2_core_remove_bufs(struct vb2_queue *q, unsigned int start, unsigned int count)
 {
 	unsigned int i, ret = 0;
@@ -1792,6 +1832,10 @@ int vb2_core_remove_bufs(struct vb2_queue *q, unsigned int start, unsigned int c
 			goto unlock;
 		}
 	}
+
+	for (i = start; i < start + count; i++)
+		__vb2_buf_cancel(vb2_get_buffer(q, i));
+
 	__vb2_queue_free(q, start, count);
 	dprintk(q, 2, "%u buffers removed\n", count);
 
@@ -2299,48 +2343,10 @@ static void __vb2_queue_cancel(struct vb2_queue *q)
 	 * be changed, so we can't move the buf_finish() to __vb2_dqbuf().
 	 */
 	for (i = 0; i < q->max_num_buffers; i++) {
-		struct vb2_buffer *vb;
-		struct media_request *req;
+		struct vb2_buffer *vb = vb2_get_buffer(q, i);
 
-		vb = vb2_get_buffer(q, i);
-		if (!vb)
-			continue;
-
-		req = vb->req_obj.req;
-		/*
-		 * If a request is associated with this buffer, then
-		 * call buf_request_cancel() to give the driver to complete()
-		 * related request objects. Otherwise those objects would
-		 * never complete.
-		 */
-		if (req) {
-			enum media_request_state state;
-			unsigned long flags;
-
-			spin_lock_irqsave(&req->lock, flags);
-			state = req->state;
-			spin_unlock_irqrestore(&req->lock, flags);
-
-			if (state == MEDIA_REQUEST_STATE_QUEUED)
-				call_void_vb_qop(vb, buf_request_complete, vb);
-		}
-
-		__vb2_buf_mem_finish(vb);
-
-		if (vb->prepared) {
-			call_void_vb_qop(vb, buf_finish, vb);
-			vb->prepared = 0;
-		}
-		__vb2_dqbuf(vb);
-
-		if (vb->req_obj.req) {
-			media_request_object_unbind(&vb->req_obj);
-			media_request_object_put(&vb->req_obj);
-		}
-		if (vb->request)
-			media_request_put(vb->request);
-		vb->request = NULL;
-		vb->copied_timestamp = 0;
+		if (vb)
+			__vb2_buf_cancel(vb);
 	}
 }
 
