@@ -40,7 +40,6 @@ struct drm_connector;
 struct drm_device;
 struct drm_panel_follower;
 struct drm_panel;
-struct display_timing;
 
 enum drm_panel_orientation;
 
@@ -130,17 +129,6 @@ struct drm_panel_funcs {
 	 * This function is optional.
 	 */
 	enum drm_panel_orientation (*get_orientation)(struct drm_panel *panel);
-
-	/**
-	 * @get_timings:
-	 *
-	 * Copy display timings into the provided array and return
-	 * the number of display timings available.
-	 *
-	 * This function is optional.
-	 */
-	int (*get_timings)(struct drm_panel *panel, unsigned int num_timings,
-			   struct display_timing *timings);
 
 	/**
 	 * @debugfs_init:
