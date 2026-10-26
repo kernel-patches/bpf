@@ -104,9 +104,7 @@ struct bpf_reg_state {
 			 */
 			struct btf *btf;
 			u32 btf_id;
-			/* packing following two fields to fit iter state into 16 bytes */
-			enum bpf_iter_state state:2;
-			int depth:30;
+			enum bpf_iter_state state;
 		} iter;
 
 		/* For irq stack slots */

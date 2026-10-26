@@ -346,7 +346,6 @@ static bool join_special_slot(struct bpf_join_state *js, const struct bpf_stack_
 			return false;
 		break;
 	case STACK_ITER:
-		/* iter.depth is not a part of the state, see stacksafe() */
 		if (ra->type != rb->type || ra->iter.btf != rb->iter.btf ||
 		    ra->iter.btf_id != rb->iter.btf_id || ra->iter.state != rb->iter.state)
 			return false;
