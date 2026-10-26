@@ -1785,6 +1785,8 @@ struct bpf_func_info_aux {
 	bool called[BPF_FUNC_CTX_CNT];
 	bool verified[BPF_FUNC_CTX_CNT];
 	bool called_with_pkt_ptrs;
+	/* The code of a static function loads stack arguments */
+	bool stack_args;
 };
 
 enum bpf_jit_poke_reason {

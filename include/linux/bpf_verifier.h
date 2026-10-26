@@ -980,6 +980,13 @@ struct bpf_subprog_info {
 	bool uses_arena_sp: 1;
 	/* a callback that takes a stack in arena, like the main program does */
 	bool arena_stack_entry: 1;
+	/*
+	 * Static subprog: the number of arguments on the stack is what the code
+	 * loads. BTF describes the source. The compiler may pass something else:
+	 * a hidden pointer to the result, a pair in two registers, no dead arguments.
+	 */
+	bool stack_args_from_code: 1;
+	u8 code_stack_args:4;
 	u8 arg_slot_cnt:4;
 
 	enum priv_stack_mode priv_stack_mode;
@@ -990,6 +997,8 @@ struct bpf_subprog_info {
 
 static inline u16 bpf_in_stack_arg_cnt(const struct bpf_subprog_info *sub)
 {
+	if (sub->stack_args_from_code)
+		return sub->code_stack_args;
 	if (sub->arg_slot_cnt > MAX_BPF_FUNC_REG_ARGS)
 		return sub->arg_slot_cnt - MAX_BPF_FUNC_REG_ARGS;
 	return 0;

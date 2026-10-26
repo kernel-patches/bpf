@@ -8751,7 +8751,8 @@ static int btf_check_arg_slots(struct bpf_verifier_log *log, const char *tname,
 			tname, slot_cnt);
 		return -EFAULT;
 	}
-	sub->stack_arg_cnt = slot_cnt - MAX_BPF_FUNC_REG_ARGS;
+	if (!sub->stack_args_from_code)
+		sub->stack_arg_cnt = slot_cnt - MAX_BPF_FUNC_REG_ARGS;
 	return 0;
 }
 

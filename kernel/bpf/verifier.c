@@ -11362,7 +11362,7 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog, s
 	const struct btf_type *func, *func_proto;
 	struct bpf_call_arg_meta meta;
 	struct bpf_func_proto *fn;
-	int ret, err;
+	int ret;
 	u32 i;
 
 	memset(&meta, 0, sizeof(meta));
@@ -11371,16 +11371,13 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog, s
 	meta.func_name = bpf_subprog_name(env, subprog);
 
 	ret = btf_prepare_func_args(env, subprog);
-	if (ret) {
-		if (bpf_in_stack_arg_cnt(sub) > 0) {
-			err = check_outgoing_stack_args(env, caller, sub->arg_slot_cnt,
-							bpf_subprog_name(env, subprog),
-							NULL, NULL);
-			if (err)
-				return err;
-		}
+	if (ret)
 		return ret;
-	}
+	/* BTF doesn't describe what the code does */
+	if (sub->stack_args_from_code &&
+	    max_t(int, sub->arg_slot_cnt, MAX_BPF_FUNC_REG_ARGS) !=
+	    MAX_BPF_FUNC_REG_ARGS + bpf_in_stack_arg_cnt(sub))
+		return -EINVAL;
 
 	func = btf_type_by_id(btf, env->prog->aux->func_info[subprog].type_id);
 	func_proto = btf_type_by_id(btf, func->type);
@@ -11446,6 +11443,12 @@ static int push_callback_call(struct bpf_verifier_env *env, struct bpf_insn *ins
 	int err;
 
 	caller = state->frame[state->curframe];
+	/* helpers and kfuncs pass arguments to callbacks in registers */
+	if (bpf_in_stack_arg_cnt(&env->subprog_info[subprog])) {
+		verbose(env, "callback %s() cannot have stack arguments\n",
+			bpf_subprog_name(env, subprog));
+		return -EINVAL;
+	}
 	err = btf_check_subprog_call(env, subprog);
 	if (err == -EFAULT)
 		return err;
@@ -11545,6 +11548,11 @@ static int check_static_func_call(struct bpf_verifier_env *env, int subprog,
 	stack_arg_cnt = bpf_in_stack_arg_cnt(caller_info) + callee_incoming;
 	if (stack_arg_cnt > caller_info->stack_arg_cnt)
 		caller_info->stack_arg_cnt = stack_arg_cnt;
+
+	err = check_outgoing_stack_args(env, caller, MAX_BPF_FUNC_REG_ARGS + callee_incoming,
+					bpf_subprog_name(env, subprog), NULL, NULL);
+	if (err)
+		return err;
 
 	/*
 	 * For regular function entry setup new frame and continue
@@ -15204,12 +15212,31 @@ static bool try_btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 /* Prepare argument metadata for liveness; the main program is handled separately. */
 static void prepare_subprog_args(struct bpf_verifier_env *env)
 {
-	int i;
+	struct bpf_subprog_info *sub;
+	struct bpf_insn *insn;
+	int i, j, cnt;
 
 	for (i = 1; i < env->subprog_cnt; i++) {
+		sub = &env->subprog_info[i];
 		if (!try_btf_prepare_func_args(env, i) && bpf_subprog_is_global(env, i))
 			/* Keep all argument registers live if the prototype is unavailable. */
-			env->subprog_info[i].arg_slot_cnt = MAX_BPF_FUNC_REG_ARGS;
+			sub->arg_slot_cnt = MAX_BPF_FUNC_REG_ARGS;
+		if (bpf_subprog_is_global(env, i))
+			continue;
+		cnt = 0;
+		for (j = sub->start; j < (sub + 1)->start; j++) {
+			insn = &env->prog->insnsi[j];
+			if (is_stack_arg_ldx(insn))
+				cnt = max(cnt, insn->off / BPF_REG_SIZE);
+			if (bpf_is_ldimm64(insn))
+				j++;
+		}
+		sub->stack_args_from_code = true;
+		sub->code_stack_args = min(cnt, MAX_BPF_FUNC_ARGS - MAX_BPF_FUNC_REG_ARGS);
+		/* incoming + max outgoing. Calls add the latter. */
+		sub->stack_arg_cnt = sub->code_stack_args;
+		if (env->prog->aux->func_info_aux)
+			env->prog->aux->func_info_aux[i].stack_args = sub->code_stack_args;
 	}
 }
 
@@ -22630,18 +22657,21 @@ static int flatten_bpf_func_model(struct bpf_verifier_log *log, const char *tnam
 }
 
 /*
- * The verifier lets a static function use stack arguments counted from its
- * BTF, even if that BTF turns out unreliable. A trampoline on the function is
- * then given only MAX_BPF_FUNC_REG_ARGS u64 arguments and would lose the
- * stack arguments, so such a function cannot be attached to.
+ * The verifier lets a static function use the stack arguments that its code
+ * loads, whatever its BTF says. When BTF is unreliable a trampoline on
+ * the function is given only MAX_BPF_FUNC_REG_ARGS u64 arguments and would
+ * lose the stack arguments, so such a function cannot be attached to.
  */
 static int check_unreliable_func_args(struct bpf_verifier_log *log, struct btf *btf,
-				      const struct btf_type *func_proto, const char *tname)
+				      const struct btf_type *func_proto, const char *tname,
+				      bool stack_args)
 {
 	struct btf_func_model m;
 	u32 i, nslots = 0;
 
-	if (btf_distill_func_proto(NULL, btf, func_proto, tname, &m)) {
+	if (stack_args) {
+		nslots = MAX_BPF_FUNC_REG_ARGS + 1;
+	} else if (btf_distill_func_proto(NULL, btf, func_proto, tname, &m)) {
 		/* at least a slot for each argument */
 		nslots = btf_type_vlen(func_proto);
 	} else {
@@ -23012,7 +23042,10 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 
 		if (tgt_prog && conservative) {
 			if (subprog > 0) {
-				ret = check_unreliable_func_args(log, btf, t, tname);
+				struct bpf_func_info_aux *fa = tgt_prog->aux->func_info_aux;
+
+				ret = check_unreliable_func_args(log, btf, t, tname,
+								 fa[subprog].stack_args);
 				if (ret)
 					return ret;
 			}
