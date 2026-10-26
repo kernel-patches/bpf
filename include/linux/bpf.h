@@ -1851,6 +1851,15 @@ enum bpf_sig_keyring {
 	BPF_SIG_KEYRING_BPF,
 };
 
+/*
+ * What all frames of a run of a prog on this cpu share, see bpf_check_timed_may_goto().
+ * It's reset when a run begins, see bpf_prog_begin_run().
+ */
+struct bpf_may_goto_budget {
+	u64 start;	/* when may_goto looked at the clock for the first time, 0: it didn't yet */
+	u64 count;	/* what is left until the next look at the clock, 0: the time is up */
+};
+
 struct bpf_prog_aux {
 	atomic64_t refcnt;
 	u32 used_map_cnt;
@@ -1916,6 +1925,8 @@ struct bpf_prog_aux {
 	const char *attach_func_name;
 	struct bpf_prog **func;
 	struct bpf_prog_aux *main_prog_aux;
+	/* main prog: there when a subprog has may_goto */
+	struct bpf_may_goto_budget __percpu *may_goto_budget;
 	void *jit_data; /* JIT specific data. arch dependent */
 	struct bpf_jit_poke_descriptor *poke_tab;
 	struct bpf_kfunc_desc_tab *kfunc_tab;
@@ -3415,6 +3426,7 @@ void bpf_dynptr_init(struct bpf_dynptr_kern *ptr, void *data,
 void bpf_dynptr_set_null(struct bpf_dynptr_kern *ptr);
 void bpf_dynptr_set_rdonly(struct bpf_dynptr_kern *ptr);
 void bpf_prog_report_arena_violation(bool write, unsigned long addr, unsigned long fault_ip);
+void bpf_prog_begin_run(const struct bpf_prog *prog);
 
 static __always_inline u32
 bpf_prog_run_array_sleepable(const struct bpf_prog_array *array,

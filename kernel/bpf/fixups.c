@@ -1821,6 +1821,7 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 	struct bpf_map *map_ptr;
 	int i, ret, cnt, delta = 0, cur_subprog = 0;
 	struct bpf_subprog_info *subprogs = env->subprog_info;
+	struct bpf_may_goto_budget __percpu *budget = NULL;
 	u16 stack_depth = subprogs[cur_subprog].stack_depth;
 	u16 stack_depth_extra = 0;
 
@@ -2729,13 +2730,69 @@ next_insn:
 	}
 
 	env->prog->aux->stack_depth = subprogs[0].stack_depth;
+	/*
+	 * One time slice for all frames of a run, see bpf_check_timed_may_goto(). It finds
+	 * the prog with a walk of the stack, like bpf_throw() does. An extension is entered by
+	 * the prog that it extends, it has no way to tell one run from another.
+	 */
+	for (i = 1; i < env->subprog_cnt; i++) {
+		if (!subprogs[i].stack_extra || !bpf_jit_supports_timed_may_goto() ||
+		    !bpf_jit_supports_percpu_insn() || !bpf_jit_supports_exceptions() ||
+		    !prog->jit_requested || prog->type == BPF_PROG_TYPE_EXT)
+			continue;
+		budget = alloc_percpu_gfp(struct bpf_may_goto_budget, GFP_KERNEL_ACCOUNT);
+		if (!budget)
+			return -ENOMEM;
+		prog->aux->may_goto_budget = budget;
+		prog->jit_required = 1;
+		break;
+	}
+	/*
+	 * What a subprog has left of the count when it returns is what is left for the run,
+	 * unless its callees have left less, or the time is up. R1-R3 are dead at exit.
+	 */
+	for (i = 1; budget && i < env->subprog_cnt; i++) {
+		int off_count = offsetof(struct bpf_may_goto_budget, count);
+		struct bpf_insn ld[] = { BPF_LD_IMM64(BPF_REG_1, (long)budget) };
+		int j, cnt;
+
+		if (!subprogs[i].stack_extra)
+			continue;
+		for (j = subprogs[i].start; j < subprogs[i + 1].start; j++) {
+			if (bpf_is_ldimm64(&prog->insnsi[j])) {
+				j++;
+				continue;
+			}
+			if (prog->insnsi[j].code != (BPF_JMP | BPF_EXIT))
+				continue;
+			cnt = 0;
+			insn_buf[cnt++] = ld[0];
+			insn_buf[cnt++] = ld[1];
+			insn_buf[cnt++] = BPF_MOV64_PERCPU_REG(BPF_REG_1, BPF_REG_1);
+			insn_buf[cnt++] = BPF_LDX_MEM(BPF_DW, BPF_REG_2, BPF_REG_FP,
+						      -subprogs[i].stack_depth);
+			insn_buf[cnt++] = BPF_LDX_MEM(BPF_DW, BPF_REG_3, BPF_REG_1, off_count);
+			insn_buf[cnt++] = BPF_JMP_REG(BPF_JLE, BPF_REG_3, BPF_REG_2, 1);
+			insn_buf[cnt++] = BPF_STX_MEM(BPF_DW, BPF_REG_1, BPF_REG_2, off_count);
+			insn_buf[cnt++] = prog->insnsi[j];
+			new_prog = bpf_patch_insn_data(env, j, insn_buf, cnt);
+			if (!new_prog)
+				return -ENOMEM;
+			env->prog = prog = new_prog;
+			j += cnt - 1;
+		}
+	}
 	for (i = 0; i < env->subprog_cnt; i++) {
 		int delta = bpf_jit_supports_timed_may_goto() ? 2 : 1;
 		int subprog_start = subprogs[i].start;
 		int stack_slots = subprogs[i].stack_extra / 8;
+		int off_start = offsetof(struct bpf_may_goto_budget, start);
+		int off_count = offsetof(struct bpf_may_goto_budget, count);
+		/* a run begins. For async callbacks see bpf_prog_begin_run() */
+		bool entry = budget && !i;
 		int slots = delta, cnt = 0;
 
-		if (!stack_slots)
+		if (!stack_slots && !entry)
 			continue;
 		/* We need two slots in case timed may_goto is supported. */
 		if (stack_slots > slots) {
@@ -2744,7 +2801,26 @@ next_insn:
 		}
 
 		stack_depth = subprogs[i].stack_depth;
-		if (bpf_jit_supports_timed_may_goto()) {
+		if (budget) {
+			struct bpf_insn ld[] = { BPF_LD_IMM64(BPF_REG_0, (long)budget) };
+
+			/* R0 has nothing at the entry */
+			insn_buf[cnt++] = ld[0];
+			insn_buf[cnt++] = ld[1];
+			insn_buf[cnt++] = BPF_MOV64_PERCPU_REG(BPF_REG_0, BPF_REG_0);
+		}
+		if (entry) {
+			insn_buf[cnt++] = BPF_ST_MEM(BPF_DW, BPF_REG_0, off_start, 0);
+			insn_buf[cnt++] = BPF_ST_MEM(BPF_DW, BPF_REG_0, off_count,
+						     BPF_MAX_TIMED_LOOPS);
+		}
+		if (!stack_slots) {
+			/* nothing to count in this one */
+		} else if (budget && !entry) {
+			insn_buf[cnt++] = BPF_LDX_MEM(BPF_DW, BPF_REG_0, BPF_REG_0, off_count);
+			insn_buf[cnt++] = BPF_STX_MEM(BPF_DW, BPF_REG_FP, BPF_REG_0, -stack_depth);
+			insn_buf[cnt++] = BPF_ST_MEM(BPF_DW, BPF_REG_FP, -stack_depth + 8, 0);
+		} else if (bpf_jit_supports_timed_may_goto()) {
 			insn_buf[cnt++] = BPF_ST_MEM(BPF_DW, BPF_REG_FP, -stack_depth,
 						     BPF_MAX_TIMED_LOOPS);
 			insn_buf[cnt++] = BPF_ST_MEM(BPF_DW, BPF_REG_FP, -stack_depth + 8, 0);
@@ -2774,7 +2850,7 @@ next_insn:
 		 * to insn after BPF_ST that inits may_goto count.
 		 * Adjustment will succeed because bpf_patch_insn_data() didn't fail.
 		 */
-		WARN_ON(adjust_jmp_off(env->prog, subprog_start, delta));
+		WARN_ON(adjust_jmp_off(env->prog, subprog_start, cnt - 1));
 	}
 
 	/* Since poke tab is now finalized, publish aux to tracker. */

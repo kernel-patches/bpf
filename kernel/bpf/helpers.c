@@ -1242,6 +1242,7 @@ static enum hrtimer_restart bpf_timer_cb(struct hrtimer *hrtimer)
 
 	key = map_key_from_value(map, value, &idx);
 
+	bpf_prog_begin_run(READ_ONCE(t->cb.prog));
 	callback_fn((u64)(long)map, (u64)(long)key, (u64)(long)value, 0, 0);
 	/* The verifier checked that return value is zero. */
 
@@ -1273,6 +1274,7 @@ static void bpf_wq_work(struct work_struct *work)
 
 	migrate_disable();
 
+	bpf_prog_begin_run(READ_ONCE(cb->prog));
 	callback_fn((u64)(long)map, (u64)(long)key, (u64)(long)value, 0, 0);
 
 	migrate_enable();
@@ -4611,6 +4613,7 @@ static void bpf_task_work_callback(struct callback_head *cb)
 	key = (void *)map_key_from_value(ctx->map, ctx->map_val, &idx);
 
 	migrate_disable();
+	bpf_prog_begin_run(ctx->prog);
 	ctx->callback_fn((u64)(long)ctx->map, (u64)(long)key,
 			 (u64)(long)ctx->map_val, 0, 0);
 	migrate_enable();
@@ -4863,6 +4866,7 @@ static void bpf_rcu_run_callback(struct rcu_head *rcu)
 	smp_store_release(&rh->armed, 0);
 
 	rcu_read_lock_dont_migrate();
+	bpf_prog_begin_run(prog);
 	callback_fn((u64)(long)map, (u64)(long)key, (u64)(long)value, 0, 0);
 	rcu_read_unlock_migrate();
 

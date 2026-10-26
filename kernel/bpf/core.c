@@ -292,6 +292,7 @@ void __bpf_prog_free(struct bpf_prog *fp)
 		mutex_destroy(&fp->aux->used_maps_mutex);
 		mutex_destroy(&fp->aux->dst_mutex);
 		kfree(fp->aux->poke_tab);
+		free_percpu(fp->aux->may_goto_budget);
 		kfree(fp->aux);
 	}
 	free_percpu(fp->stats);
@@ -3625,21 +3626,78 @@ static noinline void bpf_prog_report_may_goto_violation(void)
 #endif
 }
 
+/*
+ * The kernel is about to call an async callback of @prog on this cpu: a run begins.
+ * The main prog does the same in its first insns.
+ */
+void bpf_prog_begin_run(const struct bpf_prog *prog)
+{
+	struct bpf_prog_aux *aux;
+
+	if (!prog)
+		return;
+	aux = prog->aux->main_prog_aux;
+	if (aux->may_goto_budget) {
+		this_cpu_write(aux->may_goto_budget->start, 0);
+		this_cpu_write(aux->may_goto_budget->count, BPF_MAX_TIMED_LOOPS);
+	}
+}
+
+static struct bpf_may_goto_budget *bpf_may_goto_budget(void)
+{
+#ifdef CONFIG_BPF_SYSCALL
+	struct bpf_prog *prog = bpf_prog_find_from_stack();
+
+	if (prog && prog->aux->may_goto_budget)
+		return this_cpu_ptr(prog->aux->may_goto_budget);
+#endif
+	return NULL;
+}
+
+/*
+ * The count and the timestamp are those of a stack frame. With nothing else every call of
+ * a subprog has a time slice of its own, and a loop that calls a subprog that uses up its slice
+ * goes on for BPF_MAX_TIMED_LOOPS slices before it looks at the clock itself.
+ *
+ * So there is one time slice for a run of the prog. It starts when the first frame gets here.
+ * When it's over the frames that are entered from then on start to count from 0: they leave
+ * their loops at once. The frames that are there find out when they get here.
+ *
+ * The count is shared as well. A subprog that makes fewer than BPF_MAX_TIMED_LOOPS iterations
+ * per call would never get here, and neither would a loop that calls it, for that many times as
+ * many iterations. Three levels of that take days. So a subprog starts from what is left for
+ * the run, and what it has left when it returns is what is left for the run. No more than
+ * BPF_MAX_TIMED_LOOPS iterations for every frame on the stack pass between two looks at the clock.
+ *
+ * Another run of the prog on this cpu, in an interrupt or after preemption, starts the slice
+ * anew. The slice of the frame is still there for that.
+ */
 u64 bpf_check_timed_may_goto(struct bpf_timed_may_goto *p)
 {
-	u64 time = ktime_get_mono_fast_ns();
+	struct bpf_may_goto_budget *run = bpf_may_goto_budget();
+	u64 time = ktime_get_mono_fast_ns(), start;
 
-	/* Populate the timestamp for this stack frame, and refresh count. */
-	if (!p->timestamp) {
+	/* Populate the timestamp for this stack frame. */
+	if (!p->timestamp)
 		p->timestamp = time;
-		return BPF_MAX_TIMED_LOOPS;
+	start = p->timestamp;
+	if (run) {
+		if (!run->start)
+			run->start = time;
+		start = min(start, run->start);
 	}
 	/* Check if we've exhausted our time slice, and zero count. */
-	if (unlikely(time - p->timestamp >= (NSEC_PER_SEC / 4))) {
-		bpf_prog_report_may_goto_violation();
+	if (unlikely(time - start >= (NSEC_PER_SEC / 4))) {
+		/* once per run */
+		if (!run || run->count)
+			bpf_prog_report_may_goto_violation();
+		if (run)
+			run->count = 0;
 		return 0;
 	}
-	/* Refresh the count for the stack frame. */
+	/* Refresh the count for the stack frame, and for the frames to come. */
+	if (run)
+		run->count = BPF_MAX_TIMED_LOOPS;
 	return BPF_MAX_TIMED_LOOPS;
 }
 
