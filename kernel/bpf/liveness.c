@@ -1426,10 +1426,12 @@ static void arg_track_xfer(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		} /* else if dst->frame is imprecise it stays so */
 	} else if (class == BPF_ALU64 && BPF_SRC(insn->code) == BPF_X) {
 		if (code == BPF_MOV) {
-			if (insn->off == 0) {
+			if (insn->off == 0 ||
+			    (insn->off == BPF_ADDR_SPACE_CAST && insn->imm == 1)) {
+				/* the cast of a pointer to stack to as(0) is a move */
 				*dst = *src;
 			} else {
-				/* addr_space_cast destroys a pointer */
+				/* the cast to as(1) and sign extension destroy a pointer */
 				*dst = none;
 			}
 		} else {
