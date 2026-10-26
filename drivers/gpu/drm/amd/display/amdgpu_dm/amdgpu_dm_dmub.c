@@ -382,10 +382,16 @@ int dm_dmub_hw_init(struct amdgpu_device *adev)
 		return -ENOMEM;
 	}
 
+	/* Load DMUB caps */
+	dc_dmub_srv_query_caps_cmd(adev->dm.dc->ctx->dmub_srv);
+
 	/* Cursor offload has to be enabled; prime it on every DMUB init,
 	 * including post-suspend and GPU-reset.
 	 */
 	dc_dmub_srv_cursor_offload_init(adev->dm.dc);
+
+	dmub_srv->lsdma_rb_fb = fb_info->fb[DMUB_WINDOW_LSDMA_BUFFER];
+	dmub_lsdma_init(adev->dm.dc->ctx->dmub_srv);
 
 	drm_info(adev_to_drm(adev), "DMUB hardware initialized: version=0x%08X\n",
 		 adev->dm.dmcub_fw_version);
