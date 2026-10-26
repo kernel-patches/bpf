@@ -12,6 +12,13 @@ struct {
 	__type(value, long long);
 } map_hash_8b SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, int);
+	__type(value, long long);
+} map_array_8b SEC(".maps");
+
 SEC("lwt_in")
 __description("variable-offset ctx access")
 __failure __msg("variable ctx access var_off=(0x0; 0x4)")
@@ -554,6 +561,553 @@ __naked void variable_offset_stack_access_ok(void)
 	: __imm(bpf_map_lookup_elem),
 	  __imm_addr(map_hash_8b)
 	: __clobber_all);
+}
+
+/*
+ * if (x) a[0] = p; else a[1] = p; with one store. The paths meet in front of it.
+ * The offset is known on each of them.
+ */
+SEC("tc")
+__description("pointer is spilled at one of two offsets")
+__success __retval(0)
+__naked void ptr_at_one_of_two_offsets(void)
+{
+	asm volatile ("					\
+	r1 = 0;						\
+	*(u32*)(r10 - 4) = r1;				\
+	r2 = r10;					\
+	r2 += -4;					\
+	r1 = %[map_array_8b] ll;			\
+	call %[bpf_map_lookup_elem];			\
+	if r0 == 0 goto l2_%=;				\
+	r6 = r0;					\
+	r1 = 0;						\
+	*(u64*)(r10 - 16) = r1;				\
+	*(u64*)(r10 - 24) = r1;				\
+	call %[bpf_get_prandom_u32];			\
+	r7 = 0;						\
+	if r0 > 100 goto l0_%=;				\
+	r7 = 8;						\
+l0_%=:	r2 = r10;					\
+	r2 += -24;					\
+	r2 += r7;					\
+	*(u64*)(r2 + 0) = r6;				\
+	if r7 != 0 goto l1_%=;				\
+	r3 = *(u64*)(r10 - 24);				\
+	r0 = *(u64*)(r3 + 0);				\
+	exit;						\
+l1_%=:	r3 = *(u64*)(r10 - 16);				\
+	r0 = *(u64*)(r3 + 0);				\
+	exit;						\
+l2_%=:	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32),
+	  __imm(bpf_map_lookup_elem),
+	  __imm_addr(map_array_8b)
+	: __clobber_all);
+}
+
+SEC("tc")
+__description("pointer is spilled at one of two offsets, the offset is spilled too")
+__success __retval(0)
+__naked void ptr_at_one_of_two_spilled_offsets(void)
+{
+	asm volatile ("					\
+	r1 = 0;						\
+	*(u32*)(r10 - 4) = r1;				\
+	r2 = r10;					\
+	r2 += -4;					\
+	r1 = %[map_array_8b] ll;			\
+	call %[bpf_map_lookup_elem];			\
+	if r0 == 0 goto l2_%=;				\
+	r6 = r0;					\
+	r1 = 0;						\
+	*(u64*)(r10 - 16) = r1;				\
+	*(u64*)(r10 - 24) = r1;				\
+	*(u64*)(r10 - 32) = r1;				\
+	call %[bpf_get_prandom_u32];			\
+	if r0 > 100 goto l0_%=;				\
+	r1 = 8;						\
+	*(u64*)(r10 - 32) = r1;				\
+l0_%=:	r7 = *(u64*)(r10 - 32);				\
+	r2 = r10;					\
+	r2 += -24;					\
+	r2 += r7;					\
+	*(u64*)(r2 + 0) = r6;				\
+	if r7 != 0 goto l1_%=;				\
+	r3 = *(u64*)(r10 - 24);				\
+	r0 = *(u64*)(r3 + 0);				\
+	exit;						\
+l1_%=:	r3 = *(u64*)(r10 - 16);				\
+	r0 = *(u64*)(r3 + 0);				\
+	exit;						\
+l2_%=:	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32),
+	  __imm(bpf_map_lookup_elem),
+	  __imm_addr(map_array_8b)
+	: __clobber_all);
+}
+
+static __naked __noinline __used void spill_r3_at_r1_plus_r2(void)
+{
+	asm volatile ("					\
+	r1 += r2;					\
+	*(u64*)(r1 + 0) = r3;				\
+	r0 = 0;						\
+	exit;						\
+"	::: __clobber_all);
+}
+
+SEC("tc")
+__description("pointer is spilled at one of two offsets by a subprog")
+__success __retval(0)
+__naked void ptr_at_one_of_two_offsets_subprog(void)
+{
+	asm volatile ("					\
+	r1 = 0;						\
+	*(u32*)(r10 - 4) = r1;				\
+	r2 = r10;					\
+	r2 += -4;					\
+	r1 = %[map_array_8b] ll;			\
+	call %[bpf_map_lookup_elem];			\
+	if r0 == 0 goto l2_%=;				\
+	r6 = r0;					\
+	r1 = 0;						\
+	*(u64*)(r10 - 16) = r1;				\
+	*(u64*)(r10 - 24) = r1;				\
+	call %[bpf_get_prandom_u32];			\
+	r7 = 0;						\
+	if r0 > 100 goto l0_%=;				\
+	r7 = 8;						\
+l0_%=:	r1 = r10;					\
+	r1 += -24;					\
+	r2 = r7;					\
+	r3 = r6;					\
+	call spill_r3_at_r1_plus_r2;			\
+	if r7 != 0 goto l1_%=;				\
+	r3 = *(u64*)(r10 - 24);				\
+	r0 = *(u64*)(r3 + 0);				\
+	exit;						\
+l1_%=:	r3 = *(u64*)(r10 - 16);				\
+	r0 = *(u64*)(r3 + 0);				\
+	exit;						\
+l2_%=:	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32),
+	  __imm(bpf_map_lookup_elem),
+	  __imm_addr(map_array_8b)
+	: __clobber_all);
+}
+
+#define PICK_OFF(slot)					\
+	"call %[bpf_get_prandom_u32];"			\
+	"r1 = 0;"					\
+	"if r0 > 100 goto +1;"				\
+	"r1 = 8;"					\
+	"*(u64*)(r10 - " #slot ") = r1;"
+
+#define USE_OFF(slot)					\
+	"r1 = *(u64*)(r10 - " #slot ");"		\
+	"r2 = r10;"					\
+	"r2 += -16;"					\
+	"r2 += r1;"					\
+	"*(u64*)(r2 + 0) = r0;"
+
+/* 4096 combinations of offsets that are known: not all of them are looked at */
+SEC("tc")
+__description("12 times one of two offsets")
+__success __retval(0)
+__naked void many_offsets(void)
+{
+	asm volatile (
+	"r1 = 0;"
+	"*(u64*)(r10 - 8) = r1;"
+	"*(u64*)(r10 - 16) = r1;"
+	PICK_OFF(24) PICK_OFF(32) PICK_OFF(40) PICK_OFF(48)
+	PICK_OFF(56) PICK_OFF(64) PICK_OFF(72) PICK_OFF(80)
+	PICK_OFF(88) PICK_OFF(96) PICK_OFF(104) PICK_OFF(112)
+	USE_OFF(24) USE_OFF(32) USE_OFF(40) USE_OFF(48)
+	USE_OFF(56) USE_OFF(64) USE_OFF(72) USE_OFF(80)
+	USE_OFF(88) USE_OFF(96) USE_OFF(104) USE_OFF(112)
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+extern int bpf_iter_num_new(struct bpf_iter_num *it, int start, int end) __ksym;
+extern int *bpf_iter_num_next(struct bpf_iter_num *it) __ksym;
+extern void bpf_iter_num_destroy(struct bpf_iter_num *it) __ksym;
+
+/* The verifier doesn't know what is in there */
+unsigned long zero;
+
+#define ITER_NEW	"r1 = r10; r1 += -24; w2 = 0; w3 = 100; call %[bpf_iter_num_new];"
+#define ITER_NEXT	"r1 = r10; r1 += -24; call %[bpf_iter_num_next];"
+#define ITER_DESTROY	"r1 = r10; r1 += -24; call %[bpf_iter_num_destroy];"
+#define __imm_iter	__imm(bpf_iter_num_new), __imm(bpf_iter_num_next), \
+			__imm(bpf_iter_num_destroy)
+
+/*
+ *	u8 stack[10], depth = 0;
+ *	loop {
+ *		if (x) { if (depth >= 10) break; stack[depth++] = 1; }
+ *		else { depth--; if (depth >= 10) break; y = stack[depth]; }
+ *	}
+ * depth is in a 32-bit register. 'depth & 255' is tested, and computed anew for the index.
+ */
+#define PUSH_OR_POP					\
+		"r1 = *(u64 *)(r6 + 0);"		\
+		"if r1 == 0 goto 2f;"			\
+		"w7 = w8;"				\
+		"w7 &= 255;"				\
+		"if w7 > 9 goto 9f;"			\
+		"r1 = r8;"				\
+		"r1 &= 255;"				\
+		"r2 = r10;"				\
+		"r2 += -10;"				\
+		"r2 += r1;"				\
+		"*(u8 *)(r2 + 0) = r1;"			\
+		"w8 += 1;"				\
+		"goto 1b;"				\
+	"2:"						\
+		"w8 += -1;"				\
+		"w2 = w8;"				\
+		"w2 &= 255;"				\
+		"if w2 > 9 goto 9f;"			\
+		"r2 = r8;"				\
+		"r2 &= 255;"				\
+		"r3 = r10;"				\
+		"r3 += -10;"				\
+		"r3 += r2;"				\
+		"r9 = *(u8 *)(r3 + 0);"			\
+		"goto 1b;"
+
+SEC("tc")
+__description("depth of a stack on the stack: a copy is tested")
+__success __retval(0)
+__naked void depth_copy_is_tested(void)
+{
+	asm volatile (
+		"r6 = %[zero] ll;"
+		"r1 = 0;"
+		"*(u64 *)(r10 - 8) = r1;"
+		"*(u64 *)(r10 - 16) = r1;"
+		"w8 = 0;"
+		ITER_NEW
+	"1:"
+		ITER_NEXT
+		"if r0 == 0 goto 9f;"
+		PUSH_OR_POP
+	"9:"
+		ITER_DESTROY
+		"r0 = 0;"
+		"exit;"
+		:
+		: __imm_addr(zero), __imm_iter
+		: __clobber_all);
+}
+
+/* Nothing of the prog stops the loop */
+SEC("tc")
+__description("depth of a stack on the stack: a copy is tested, no iterator")
+__success __retval(0)
+__naked void depth_copy_is_tested_no_iter(void)
+{
+	asm volatile (
+		"r6 = %[zero] ll;"
+		"r1 = 0;"
+		"*(u64 *)(r10 - 8) = r1;"
+		"*(u64 *)(r10 - 16) = r1;"
+		"w8 = 0;"
+	"1:"
+		PUSH_OR_POP
+	"9:"
+		"r0 = 0;"
+		"exit;"
+		:
+		: __imm_addr(zero)
+		: __clobber_all);
+}
+
+/*
+ * u32 stack[16]. The copy that is tested is volatile: it's stored once and read twice.
+ * depth takes 18 values: 0..16 and 255.
+ */
+SEC("tc")
+__description("depth of a stack on the stack: a volatile copy is tested")
+__success __retval(0)
+__naked void depth_volatile_copy_is_tested(void)
+{
+	asm volatile (
+		"r6 = %[zero] ll;"
+		"w8 = 0;"
+		ITER_NEW
+	"1:"
+		ITER_NEXT
+		"if r0 == 0 goto 9f;"
+		"r1 = *(u64 *)(r6 + 0);"
+		"if r1 == 0 goto 2f;"
+		"w2 = w8;"
+		"w2 &= 255;"
+		"if w2 > 15 goto 9f;"
+		"*(u8 *)(r10 - 32) = r8;"
+		"r2 = *(u8 *)(r10 - 32);"
+		"if w2 > 15 goto 9f;"
+		"r2 = *(u8 *)(r10 - 32);"
+		"r2 <<= 2;"
+		"r3 = r10;"
+		"r3 += -96;"
+		"r3 += r2;"
+		"*(u32 *)(r3 + 0) = r1;"
+		"w8 += 1;"
+		"goto 1b;"
+	"2:"
+		"*(u8 *)(r10 - 32) = r8;"
+		"r1 = *(u8 *)(r10 - 32);"
+		"r1 += -1;"
+		"*(u8 *)(r10 - 32) = r1;"
+		"r1 = *(u8 *)(r10 - 32);"
+		"if r1 > 15 goto 9f;"
+		"r1 = *(u8 *)(r10 - 32);"
+		"r1 <<= 2;"
+		"r3 = r10;"
+		"r3 += -96;"
+		"r3 += r1;"
+		"r7 = *(u32 *)(r3 + 0);"
+		"r8 = *(u8 *)(r10 - 32);"
+		"goto 1b;"
+	"9:"
+		ITER_DESTROY
+		"r0 = 0;"
+		"exit;"
+		:
+		: __imm_addr(zero), __imm_iter
+		: __clobber_all);
+}
+
+SEC("tc")
+__description("depth of a stack on the stack: no bound")
+__failure __msg("invalid variable-offset write to stack R2")
+__naked void depth_without_a_bound(void)
+{
+	asm volatile (
+		"r1 = 0;"
+		"*(u64 *)(r10 - 8) = r1;"
+		"*(u64 *)(r10 - 16) = r1;"
+		"w8 = 0;"
+		ITER_NEW
+	"1:"
+		ITER_NEXT
+		"if r0 == 0 goto 9f;"
+		"r1 = r8;"
+		"r1 &= 255;"
+		"r2 = r10;"
+		"r2 += -10;"
+		"r2 += r1;"
+		"*(u8 *)(r2 + 0) = r1;"
+		"w8 += 1;"
+		"goto 1b;"
+	"9:"
+		ITER_DESTROY
+		"r0 = 0;"
+		"exit;"
+		:
+		: __imm_iter
+		: __clobber_all);
+}
+
+/*
+ * The counters never come to rest, and go up by 1 or by 2, so that there is no summary of them.
+ * There are so many constants, then it's a range.
+ */
+#define UP(r)	"call %[bpf_get_prandom_u32]; " #r " += 1; if r0 > 100 goto +1; " #r " += 1;"
+
+SEC("tc")
+__description("counters without a bound are masked for an offset in the stack")
+__success __retval(0)
+__naked void masked_counters(void)
+{
+	asm volatile (
+		"r6 = %[zero] ll;"
+		"r1 = 0;"
+		"*(u64 *)(r10 - 8) = r1;"
+		"*(u64 *)(r10 - 16) = r1;"
+		"w7 = 0;"
+		"w8 = 0;"
+		"w9 = 0;"
+	"1:"
+		UP(w7)
+	"2:"
+		UP(w8)
+	"3:"
+		UP(w9)
+		"r1 = r7;"
+		"r1 += r8;"
+		"r1 += r9;"
+		"r1 &= 15;"
+		"r2 = r10;"
+		"r2 += -16;"
+		"r2 += r1;"
+		"*(u8 *)(r2 + 0) = r1;"
+		"r1 = *(u64 *)(r6 + 0);"
+		"if r1 == 1 goto 3b;"
+		"if r1 == 2 goto 2b;"
+		"if r1 == 3 goto 1b;"
+		"r0 = 0;"
+		"exit;"
+		:
+		: __imm_addr(zero), __imm(bpf_get_prandom_u32)
+		: __clobber_all);
+}
+
+/* BTF FUNC records are not generated for kfuncs referenced from inline assembly */
+void __kfunc_btf_root(void)
+{
+	bpf_iter_num_new(0, 0, 0);
+	bpf_iter_num_next(0);
+	bpf_iter_num_destroy(0);
+}
+
+/* u8 stack[40] and u8 stack[200]: depth takes 42 and 202 values */
+SEC("tc")
+__description("depth of a stack on the stack: 40 deep")
+__success __retval(0)
+__naked void depth_40(void)
+{
+	asm volatile (
+		"r6 = %[zero] ll;"
+		"r1 = 0;"
+		"*(u64 *)(r10 - 8) = r1;"
+		"*(u64 *)(r10 - 16) = r1;"
+		"*(u64 *)(r10 - 24) = r1;"
+		"*(u64 *)(r10 - 32) = r1;"
+		"*(u64 *)(r10 - 40) = r1;"
+		"w8 = 0;"
+	"1:"
+		"r1 = *(u64 *)(r6 + 0);"
+		"if r1 == 0 goto 2f;"
+		"w7 = w8;"
+		"w7 &= 255;"
+		"if w7 > 39 goto 9f;"
+		"r1 = r8;"
+		"r1 &= 255;"
+		"r2 = r10;"
+		"r2 += -40;"
+		"r2 += r1;"
+		"*(u8 *)(r2 + 0) = r1;"
+		"w8 += 1;"
+		"goto 1b;"
+	"2:"
+		"w8 += -1;"
+		"w2 = w8;"
+		"w2 &= 255;"
+		"if w2 > 39 goto 9f;"
+		"r2 = r8;"
+		"r2 &= 255;"
+		"r3 = r10;"
+		"r3 += -40;"
+		"r3 += r2;"
+		"r9 = *(u8 *)(r3 + 0);"
+		"goto 1b;"
+	"9:"
+		"r0 = 0;"
+		"exit;"
+		:: __imm_addr(zero) : __clobber_all);
+}
+
+SEC("tc")
+__description("depth of a stack on the stack: 200 deep")
+__success __retval(0)
+__naked void depth_200(void)
+{
+	asm volatile (
+		"r6 = %[zero] ll;"
+		"r1 = 0;"
+		"*(u64 *)(r10 - 8) = r1;"
+		"*(u64 *)(r10 - 16) = r1;"
+		"*(u64 *)(r10 - 24) = r1;"
+		"*(u64 *)(r10 - 32) = r1;"
+		"*(u64 *)(r10 - 40) = r1;"
+		"*(u64 *)(r10 - 48) = r1;"
+		"*(u64 *)(r10 - 56) = r1;"
+		"*(u64 *)(r10 - 64) = r1;"
+		"*(u64 *)(r10 - 72) = r1;"
+		"*(u64 *)(r10 - 80) = r1;"
+		"*(u64 *)(r10 - 88) = r1;"
+		"*(u64 *)(r10 - 96) = r1;"
+		"*(u64 *)(r10 - 104) = r1;"
+		"*(u64 *)(r10 - 112) = r1;"
+		"*(u64 *)(r10 - 120) = r1;"
+		"*(u64 *)(r10 - 128) = r1;"
+		"*(u64 *)(r10 - 136) = r1;"
+		"*(u64 *)(r10 - 144) = r1;"
+		"*(u64 *)(r10 - 152) = r1;"
+		"*(u64 *)(r10 - 160) = r1;"
+		"*(u64 *)(r10 - 168) = r1;"
+		"*(u64 *)(r10 - 176) = r1;"
+		"*(u64 *)(r10 - 184) = r1;"
+		"*(u64 *)(r10 - 192) = r1;"
+		"*(u64 *)(r10 - 200) = r1;"
+		"w8 = 0;"
+	"1:"
+		"r1 = *(u64 *)(r6 + 0);"
+		"if r1 == 0 goto 2f;"
+		"w7 = w8;"
+		"w7 &= 255;"
+		"if w7 > 199 goto 9f;"
+		"r1 = r8;"
+		"r1 &= 255;"
+		"r2 = r10;"
+		"r2 += -200;"
+		"r2 += r1;"
+		"*(u8 *)(r2 + 0) = r1;"
+		"w8 += 1;"
+		"goto 1b;"
+	"2:"
+		"w8 += -1;"
+		"w2 = w8;"
+		"w2 &= 255;"
+		"if w2 > 199 goto 9f;"
+		"r2 = r8;"
+		"r2 &= 255;"
+		"r3 = r10;"
+		"r3 += -200;"
+		"r3 += r2;"
+		"r9 = *(u8 *)(r3 + 0);"
+		"goto 1b;"
+	"9:"
+		"r0 = 0;"
+		"exit;"
+		:: __imm_addr(zero) : __clobber_all);
+}
+
+/* 2^20 combinations */
+SEC("tc")
+__description("20 times one of two offsets")
+__success __retval(0)
+__naked void many_more_offsets(void)
+{
+	asm volatile (
+	"r1 = 0;"
+	"*(u64*)(r10 - 8) = r1;"
+	"*(u64*)(r10 - 16) = r1;"
+	PICK_OFF(24) PICK_OFF(32) PICK_OFF(40) PICK_OFF(48) PICK_OFF(56) PICK_OFF(64) PICK_OFF(72)
+	PICK_OFF(80) PICK_OFF(88) PICK_OFF(96) PICK_OFF(104) PICK_OFF(112) PICK_OFF(120)
+	PICK_OFF(128) PICK_OFF(136) PICK_OFF(144) PICK_OFF(152) PICK_OFF(160) PICK_OFF(168)
+	PICK_OFF(176)
+	USE_OFF(24) USE_OFF(32) USE_OFF(40) USE_OFF(48) USE_OFF(56) USE_OFF(64) USE_OFF(72)
+	USE_OFF(80) USE_OFF(88) USE_OFF(96) USE_OFF(104) USE_OFF(112) USE_OFF(120)
+	USE_OFF(128) USE_OFF(136) USE_OFF(144) USE_OFF(152) USE_OFF(160) USE_OFF(168)
+	USE_OFF(176)
+	"r0 = 0;"
+	"exit;"
+	:: __imm(bpf_get_prandom_u32) : __clobber_all);
 }
 
 char _license[] SEC("license") = "GPL";
