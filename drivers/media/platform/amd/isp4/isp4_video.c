@@ -567,9 +567,11 @@ static int isp4vid_qops_start_streaming(struct vb2_queue *vq,
 		}
 	}
 
-	list_for_each_entry(isp4vid_buf, &isp_vdev->buf_list, list)
-		isp4sd_ioc_send_img_buf(isp_vdev->isp_sdev,
-					&isp4vid_buf->img_buf);
+	scoped_guard(mutex, &isp_vdev->buf_list_lock) {
+		list_for_each_entry(isp4vid_buf, &isp_vdev->buf_list, list)
+			isp4sd_ioc_send_img_buf(isp_vdev->isp_sdev,
+						&isp4vid_buf->img_buf);
+	}
 
 	isp_vdev->stream_started = true;
 
