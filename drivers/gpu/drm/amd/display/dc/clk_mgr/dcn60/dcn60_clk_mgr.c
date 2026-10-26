@@ -1370,6 +1370,7 @@ static void dcn60_make_bandwidth_clocks_update_action(
  * @block_sequence: output array of block sequence steps
  * @action: action struct populated by dcn60_make_bandwidth_clocks_update_action
  * @clk_mgr_base: current clock manager state (read-only, used for original values)
+ * @context: dc state with active plane information
  * @new_clocks: requested clock values for message parameters
  *
  * Return: number of steps written to block_sequence
@@ -1378,9 +1379,11 @@ static unsigned int dcn60_build_bandwidth_clocks_block_sequence_with_action(
 		struct dcn60_clk_mgr_block_sequence *block_sequence,
 		struct dcn60_bandwidth_clocks_update_action *action,
 		struct clk_mgr *clk_mgr_base,
+		struct dc_state *context,
 		struct dc_clocks *new_clocks)
 {
 	unsigned int num_steps = 0;
+	bool no_active_planes = clk_mgr_helper_get_active_plane_cnt(clk_mgr_base->ctx->dc, context) == 0;
 
 	/* CLK_MGR60_INDICATE_PSTATE_STATUS — enable */
 	if ((action->uclk_pstate.enable && action->uclk_pstate.send_message)
@@ -1394,14 +1397,11 @@ static unsigned int dcn60_build_bandwidth_clocks_block_sequence_with_action(
 				action->fclk_pstate.enable
 				|| clk_mgr_base->clks.fclk_p_state_change_support;
 		block_sequence[num_steps].params.indicate_pstate_status_params.drr_enable =
-				action->fams.enable
-				|| clk_mgr_base->clks.fw_based_mclk_switching;
-		block_sequence[num_steps].params.indicate_pstate_status_params.wait_resp =
-				action->fams.enable
-				|| clk_mgr_base->clks.fw_based_mclk_switching;
+				new_clocks->fw_based_mclk_switching;
 		block_sequence[num_steps].params.indicate_pstate_status_params.alt_ch_enable =
-				action->alt_ch.enable
-				|| clk_mgr_base->clks.alt_ch_pstate_switch;
+				new_clocks->alt_ch_pstate_switch;
+		block_sequence[num_steps].params.indicate_pstate_status_params.wait_resp =
+				new_clocks->fw_based_mclk_switching;
 		block_sequence[num_steps].func = CLK_MGR60_INDICATE_PSTATE_STATUS;
 		num_steps++;
 	}
@@ -1443,24 +1443,15 @@ static unsigned int dcn60_build_bandwidth_clocks_block_sequence_with_action(
 			|| (action->fams.disable && action->fams.send_message)
 			|| (action->alt_ch.disable && action->alt_ch.send_message)) {
 		block_sequence[num_steps].params.indicate_pstate_status_params.allow_uclk =
-				!action->uclk_pstate.disable
-				&& (action->uclk_pstate.enable
-						|| clk_mgr_base->clks.p_state_change_support);
+				new_clocks->p_state_change_support || no_active_planes;
 		block_sequence[num_steps].params.indicate_pstate_status_params.allow_fclk =
-				!action->fclk_pstate.disable
-				&& (action->fclk_pstate.enable
-						|| clk_mgr_base->clks.fclk_p_state_change_support);
+				new_clocks->fclk_p_state_change_support || no_active_planes;
 		block_sequence[num_steps].params.indicate_pstate_status_params.drr_enable =
-				!action->fams.disable
-				&& (action->fams.enable
-						|| clk_mgr_base->clks.fw_based_mclk_switching);
+				new_clocks->fw_based_mclk_switching;
 		block_sequence[num_steps].params.indicate_pstate_status_params.alt_ch_enable =
-				!action->alt_ch.disable
-				&& (action->alt_ch.enable
-						|| clk_mgr_base->clks.alt_ch_pstate_switch);
+				new_clocks->alt_ch_pstate_switch;
 		block_sequence[num_steps].params.indicate_pstate_status_params.wait_resp =
-				action->fams.enable
-				|| clk_mgr_base->clks.fw_based_mclk_switching;
+				new_clocks->fw_based_mclk_switching;
 		block_sequence[num_steps].func = CLK_MGR60_INDICATE_PSTATE_STATUS;
 		num_steps++;
 	}
@@ -1552,7 +1543,7 @@ static unsigned int dcn60_build_update_bandwidth_clocks_sequence(
 
 	num_steps = dcn60_build_bandwidth_clocks_block_sequence_with_action(
 			clk_mgr60->block_sequence, &action,
-			clk_mgr_base, new_clocks);
+			clk_mgr_base, context, new_clocks);
 
 	dcn60_update_bandwidth_clocks_state_with_action(clk_mgr_base, &action, new_clocks);
 
