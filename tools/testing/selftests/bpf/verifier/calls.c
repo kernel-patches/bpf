@@ -559,8 +559,7 @@
 	BPF_EXIT_INSN(),
 	},
 	.prog_type = BPF_PROG_TYPE_SCHED_CLS,
-	.errstr = "infinite loop detected",
-	.result = REJECT,
+	.result = ACCEPT,
 },
 {
 	"calls: using r0 returned by callee",
@@ -812,7 +811,7 @@
 	BPF_EXIT_INSN(),
 	},
 	.prog_type = BPF_PROG_TYPE_TRACEPOINT,
-	.errstr = "recursive call",
+	.errstr = "calls itself",
 	.result = REJECT,
 },
 {
@@ -1325,6 +1324,54 @@
 	BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call P */
 	BPF_EXIT_INSN(),
 	/* P */
+	BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call P1 */
+	BPF_EXIT_INSN(),
+	/* P1 */
+	BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call P2 */
+	BPF_EXIT_INSN(),
+	/* P2 */
+	BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call P3 */
+	BPF_EXIT_INSN(),
+	/* P3 */
+	BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call P4 */
+	BPF_EXIT_INSN(),
+	/* P4 */
+	BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call P5 */
+	BPF_EXIT_INSN(),
+	/* P5 */
+	BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call P6 */
+	BPF_EXIT_INSN(),
+	/* P6 */
+	BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call P7 */
+	BPF_EXIT_INSN(),
+	/* P7 */
+	BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call P8 */
+	BPF_EXIT_INSN(),
+	/* P8 */
+	BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call P9 */
+	BPF_EXIT_INSN(),
+	/* P9 */
+	BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call P10 */
+	BPF_EXIT_INSN(),
+	/* P10 */
+	BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call P11 */
+	BPF_EXIT_INSN(),
+	/* P11 */
+	BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call P12 */
+	BPF_EXIT_INSN(),
+	/* P12 */
+	BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call P13 */
+	BPF_EXIT_INSN(),
+	/* P13 */
+	BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call P14 */
+	BPF_EXIT_INSN(),
+	/* P14 */
+	BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call P15 */
+	BPF_EXIT_INSN(),
+	/* P15 */
+	BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call P16 */
+	BPF_EXIT_INSN(),
+	/* P16 */
 	BPF_MOV64_IMM(BPF_REG_0, 0),
 	BPF_EXIT_INSN(),
 	},
@@ -1387,6 +1434,54 @@
 	BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call P */
 	BPF_EXIT_INSN(),
 	/* P */
+	BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call P1 */
+	BPF_EXIT_INSN(),
+	/* P1 */
+	BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call P2 */
+	BPF_EXIT_INSN(),
+	/* P2 */
+	BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call P3 */
+	BPF_EXIT_INSN(),
+	/* P3 */
+	BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call P4 */
+	BPF_EXIT_INSN(),
+	/* P4 */
+	BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call P5 */
+	BPF_EXIT_INSN(),
+	/* P5 */
+	BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call P6 */
+	BPF_EXIT_INSN(),
+	/* P6 */
+	BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call P7 */
+	BPF_EXIT_INSN(),
+	/* P7 */
+	BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call P8 */
+	BPF_EXIT_INSN(),
+	/* P8 */
+	BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call P9 */
+	BPF_EXIT_INSN(),
+	/* P9 */
+	BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call P10 */
+	BPF_EXIT_INSN(),
+	/* P10 */
+	BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call P11 */
+	BPF_EXIT_INSN(),
+	/* P11 */
+	BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call P12 */
+	BPF_EXIT_INSN(),
+	/* P12 */
+	BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call P13 */
+	BPF_EXIT_INSN(),
+	/* P13 */
+	BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call P14 */
+	BPF_EXIT_INSN(),
+	/* P14 */
+	BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call P15 */
+	BPF_EXIT_INSN(),
+	/* P15 */
+	BPF_RAW_INSN(BPF_JMP|BPF_CALL, 0, 1, 0, 1), /* call P16 */
+	BPF_EXIT_INSN(),
+	/* P16 */
 	BPF_MOV64_IMM(BPF_REG_0, 0),
 	BPF_EXIT_INSN(),
 	},

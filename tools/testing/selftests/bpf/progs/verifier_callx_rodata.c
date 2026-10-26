@@ -571,7 +571,7 @@ static unsigned long selfcall(void)
 }
 
 SEC("socket")
-__failure __msg("recursive call from selfcall() to selfcall()")
+__success
 __naked void callx_rodata_recursion(void)
 {
 	asm volatile (

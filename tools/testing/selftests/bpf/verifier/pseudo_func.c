@@ -30,7 +30,7 @@
 	.prog_type = BPF_PROG_TYPE_TRACEPOINT,
 	.fixup_map_timer = { 3, 9 },
 	.result = REJECT,
-	.errstr = "callback function cannot be the main program",
+	.errstr = "recursive call of the main program",
 	.func_info = { { 0, 4 /* main_prog */ } },
 	.func_info_cnt = 1,
 	.btf_strings = "\0int\0ctx\0main_prog",

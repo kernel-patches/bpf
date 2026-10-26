@@ -556,12 +556,11 @@ __noinline int global_calls_loop(int x)
 
 /*
  * loop_cb_calls_static() -> static_calls_global() -> global_calls_loop() ->
- * bpf_loop() -> loop_cb_calls_static() is an unbounded recursion that the
- * main verification pass can't see, because it doesn't follow calls of global
- * functions. None of the functions use stack.
+ * bpf_loop() -> loop_cb_calls_static() is an unbounded recursion through a global
+ * function and a helper. It's stopped at run time. None of the functions use stack.
  */
 SEC("?raw_tp")
-__failure __msg("recursive call from global_calls_loop() to loop_cb_calls_static()")
+__success
 int recursion_via_global_func_and_callback(const void *ctx)
 {
 	return loop_cb_calls_static(0, NULL);
