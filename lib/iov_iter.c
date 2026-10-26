@@ -17,7 +17,7 @@ static __always_inline
 size_t copy_to_user_iter(void __user *iter_to, size_t progress,
 			 size_t len, void *from, void *priv2)
 {
-	if (should_fail_usercopy())
+	if (uaccess_should_fail())
 		return len;
 	if (access_ok(iter_to, len)) {
 		from += progress;
@@ -33,7 +33,7 @@ size_t copy_to_user_iter_nofault(void __user *iter_to, size_t progress,
 {
 	ssize_t res;
 
-	if (should_fail_usercopy())
+	if (uaccess_should_fail())
 		return len;
 
 	from += progress;
@@ -47,7 +47,7 @@ size_t copy_from_user_iter(void __user *iter_from, size_t progress,
 {
 	size_t res = len;
 
-	if (should_fail_usercopy())
+	if (uaccess_should_fail())
 		return len;
 	if (can_do_masked_user_access()) {
 		iter_from = mask_user_address(iter_from);

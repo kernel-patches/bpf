@@ -115,7 +115,7 @@ long strncpy_from_user(char *dst, const char __user *src, long count)
 	unsigned long max_addr, src_addr;
 
 	might_fault();
-	if (should_fail_usercopy())
+	if (uaccess_should_fail())
 		return -EFAULT;
 	if (unlikely(count <= 0))
 		return 0;

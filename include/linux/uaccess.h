@@ -51,6 +51,23 @@
 #endif
 
 /*
+ * Return true if a user copy must not be attempted, either because a failure
+ * is being injected, or because the current task has no mm.
+ *
+ * Accessing user memory without an mm (e.g. from a kernel thread that is not
+ * using kthread_use_mm(), or from a task that has already gone through
+ * exit_mm()) is always a bug: the user portion of the address space belongs to
+ * whatever mm happens to be lazily loaded, if any, so the access could
+ * silently hit another task's memory.
+ */
+static __always_inline bool uaccess_should_fail(void)
+{
+	if (WARN_ON_ONCE(!current->mm))
+		return true;
+	return should_fail_usercopy();
+}
+
+/*
  * Architectures should provide two primitives (raw_copy_{to,from}_user())
  * and get rid of their private instances of copy_{to,from}_user() and
  * __copy_{to,from}_user{,_inatomic}().
@@ -114,7 +131,7 @@ __copy_from_user(void *to, const void __user *from, unsigned long n)
 
 	might_fault();
 	instrument_copy_from_user_before(to, from, n);
-	if (should_fail_usercopy())
+	if (uaccess_should_fail())
 		return n;
 	check_object_size(to, n, false);
 	res = raw_copy_from_user(to, from, n);
@@ -138,7 +155,7 @@ __copy_from_user(void *to, const void __user *from, unsigned long n)
 static __always_inline __must_check unsigned long
 __copy_to_user_inatomic(void __user *to, const void *from, unsigned long n)
 {
-	if (should_fail_usercopy())
+	if (uaccess_should_fail())
 		return n;
 	instrument_copy_to_user(to, from, n);
 	check_object_size(from, n, true);
@@ -149,7 +166,7 @@ static __always_inline __must_check unsigned long
 __copy_to_user(void __user *to, const void *from, unsigned long n)
 {
 	might_fault();
-	if (should_fail_usercopy())
+	if (uaccess_should_fail())
 		return n;
 	instrument_copy_to_user(to, from, n);
 	check_object_size(from, n, true);
@@ -167,7 +184,7 @@ _inline_copy_from_user(void *to, const void __user *from, unsigned long n)
 {
 	unsigned long res = n;
 	might_fault();
-	if (should_fail_usercopy())
+	if (uaccess_should_fail())
 		goto fail;
 	if (can_do_masked_user_access())
 		from = mask_user_address(from);
@@ -195,7 +212,7 @@ static inline __must_check unsigned long
 _inline_copy_to_user(void __user *to, const void *from, unsigned long n)
 {
 	might_fault();
-	if (should_fail_usercopy())
+	if (uaccess_should_fail())
 		return n;
 	if (access_ok(to, n)) {
 		instrument_copy_to_user(to, from, n);
