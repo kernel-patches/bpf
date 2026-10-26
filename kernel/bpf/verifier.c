@@ -15088,6 +15088,14 @@ scan_all_maps:
 		 * analyzed separately.
 		 */
 		return (struct arg_access_info) {};
+	case ARG_ANYTHING:
+		/*
+		 * A number that the program is free to choose. bpf_probe_read_kernel() and
+		 * the like may read what it points to. Nothing in the kernel is written
+		 * through it: bpf_probe_write_user() takes addresses of user space only.
+		 */
+		info.may_write = false;
+		return info;
 	default:
 		return info;
 	}
