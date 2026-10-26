@@ -194,13 +194,14 @@ struct bpf_verifier_stack_elem {
 	struct bpf_verifier_state st;
 	int insn_idx;
 	int prev_insn_idx;
+	/* it goes there only if the guard at prev_insn_idx has to, see check_loop_guard() */
+	bool parked;
 	struct bpf_verifier_stack_elem *next;
 	/* length of verifier log at the time this state was pushed on stack */
 	u32 log_pos;
 	u64 diag_log_pos;
 };
 
-#define BPF_COMPLEXITY_LIMIT_JMP_SEQ	8192
 #define BPF_COMPLEXITY_LIMIT_STATES	64
 
 #define BPF_GLOBAL_PERCPU_MA_MAX_SIZE  512
@@ -1781,7 +1782,11 @@ int bpf_copy_verifier_state(struct bpf_verifier_state *dst_state,
 		return err;
 	dst_state->speculative = src->speculative;
 	dst_state->in_sleepable = src->in_sleepable;
+	dst_state->in_callback = src->in_callback;
+	dst_state->callers_unknown = src->callers_unknown;
 	dst_state->unwound = src->unwound;
+	dst_state->flow_entry = src->flow_entry;
+	dst_state->insn_idx = src->insn_idx;
 	dst_state->curframe = src->curframe;
 	dst_state->branches = src->branches;
 	dst_state->parent = src->parent;
@@ -1910,11 +1915,6 @@ static struct bpf_verifier_state *push_stack(struct bpf_verifier_env *env,
 	if (err)
 		return ERR_PTR(-ENOMEM);
 	elem->st.speculative |= speculative;
-	if (env->stack_size > BPF_COMPLEXITY_LIMIT_JMP_SEQ) {
-		verbose(env, "The sequence of %d jumps is too complex.\n",
-			env->stack_size);
-		return ERR_PTR(-E2BIG);
-	}
 	if (elem->st.parent) {
 		++elem->st.parent->branches;
 		/* WARN_ON(branches > 2) technically makes sense here,
@@ -2593,12 +2593,6 @@ static struct bpf_verifier_state *push_async_cb(struct bpf_verifier_env *env,
 	elem->diag_log_pos = bpf_diag_event_log_save(env);
 	env->head = elem;
 	env->stack_size++;
-	if (env->stack_size > BPF_COMPLEXITY_LIMIT_JMP_SEQ) {
-		verbose(env,
-			"The sequence of %d jumps is too complex for async cb.\n",
-			env->stack_size);
-		return ERR_PTR(-E2BIG);
-	}
 	/* Unlike push_stack() do not bpf_copy_verifier_state().
 	 * The caller state doesn't matter.
 	 * This is async callback. It starts in a fresh stack.
@@ -3454,7 +3448,17 @@ static int check_unwind_insns(struct bpf_verifier_env *env)
 	bool seen = false;
 	int i;
 
+	for (i = 0; i < env->subprog_cnt; i++)
+		env->subprog_info[i].bail_insn = -1;
+
 	for (i = 0; i < env->prog->len; i++, insn++) {
+		if (bpf_is_ldimm64(insn)) {
+			i++;
+			insn++;
+			continue;
+		}
+		if (insn->code == (BPF_JMP | BPF_EXIT))
+			bpf_find_containing_subprog(env, i)->bail_insn = i;
 		if (bpf_is_unwind_exit(insn)) {
 			bpf_find_containing_subprog(env, i)->can_unwind = true;
 			seen = true;
@@ -3552,20 +3556,19 @@ static int sort_subprogs_topo(struct bpf_verifier_env *env)
 				}
 				if (color[callee] == 2)
 					continue;
-				if (color[callee] == 1) {
-					if (bpf_pseudo_func(&insn[idx]))
-						continue;
-					verbose(env, "recursive call from %s() to %s()\n",
-						bpf_subprog_name(env, cur),
-						bpf_subprog_name(env, callee));
-					bpf_diag_program_structure(
-						env, idx, "recursive subprogram call",
-						"Rewrite the recursion as an explicit bounded loop, or split the logic so subprogram calls do not form a cycle.",
-						"This bpf2bpf call would make the subprogram call graph recursive. "
-						"The verifier requires a finite, acyclic call graph so it can bound stack depth and analysis.");
+				/*
+				 * The call that is its own target never returns. It is
+				 * also what libbpf leaves in place of a call that it
+				 * could not resolve.
+				 */
+				if (bpf_pseudo_call(&insn[idx]) && insn[idx].imm == -1) {
+					verbose(env, "call at insn %d calls itself\n", idx);
 					ret = -EINVAL;
 					goto out;
 				}
+				/* recursion: the order within the cycle is arbitrary */
+				if (color[callee] == 1)
+					continue;
 				color[callee] = 1;
 				dfs_stack[top++] = callee;
 				pushed = true;
@@ -4599,6 +4602,23 @@ static int check_stack_write(struct bpf_verifier_env *env,
 }
 
 /*
+ * The function that is verified on its own has no caller to look at. Its incoming
+ * arguments are in its stack_arg_regs until it is done with loading them.
+ */
+static void end_stack_arg_loads(struct bpf_verifier_env *env, struct bpf_func_state *state)
+{
+	int i;
+
+	if (state->no_stack_arg_load)
+		return;
+	state->no_stack_arg_load = true;
+	if (state->frameno)
+		return;
+	for (i = 0; i < state->out_stack_arg_cnt; i++)
+		bpf_mark_reg_not_init(env, &state->stack_arg_regs[i]);
+}
+
+/*
  * Write a value to the outgoing stack arg area.
  * off is a negative offset from r11 (e.g. -8 for arg6, -16 for arg7).
  */
@@ -4617,6 +4637,7 @@ static int check_stack_arg_write(struct bpf_verifier_env *env, struct bpf_func_s
 		return -EINVAL;
 	}
 
+	end_stack_arg_loads(env, state);
 	err = grow_stack_arg_slots(env, state, spi + 1);
 	if (err)
 		return err;
@@ -4636,7 +4657,6 @@ static int check_stack_arg_write(struct bpf_verifier_env *env, struct bpf_func_s
 		__mark_reg_known(arg, env->prog->insnsi[env->insn_idx].imm);
 	}
 	bpf_diag_mod_end(env);
-	state->no_stack_arg_load = true;
 	return bpf_push_jmp_history(env, env->cur_state,
 				    INSN_F_STACK_ARG_ACCESS, spi, 0, NULL, 0);
 }
@@ -4665,7 +4685,9 @@ static int check_stack_arg_read(struct bpf_verifier_env *env, struct bpf_func_st
 		return -EACCES;
 	}
 
-	caller = vstate->frame[vstate->curframe - 1];
+	caller = vstate->frame[vstate->curframe ? vstate->curframe - 1 : 0];
+	if (verifier_bug_if(spi >= caller->out_stack_arg_cnt, env, "no stack arg%d", spi + 1))
+		return -EFAULT;
 	arg = &caller->stack_arg_regs[spi];
 	cur = vstate->frame[vstate->curframe];
 	bpf_diag_mod_begin(env, &cur->regs[dst_regno], arg, BPF_DIAG_MOD_WRITE);
@@ -5746,6 +5768,9 @@ struct bpf_subprog_call_depth_info {
 	int callx_insn; /* callx instruction whose callees are being walked */
 	int callx_next; /* next callee of callx_insn to walk */
 	bool via_callx; /* the subprogram is entered via callx */
+	/* recursive subprog: the deepest it was entered, out of a callback and in one, plus 1 */
+	int seen_depth[2];
+	int seen_arena_depth[2];
 };
 
 /* starting from main bpf function walk all instructions of the function
@@ -5810,7 +5835,9 @@ process_func:
 			break;
 		}
 	}
-	arena_depth += subprog[idx].arena_stack_depth;
+	/* frames of recursive subprogs are counted at run time */
+	if (!subprog[idx].recursive)
+		arena_depth += subprog[idx].arena_stack_depth;
 	if (arena_depth > env->max_arena_stack_depth)
 		env->max_arena_stack_depth = arena_depth;
 	if (arena_depth > BPF_ARENA_STACK_MAX) {
@@ -5849,7 +5876,8 @@ process_func:
 			return -EACCES;
 		}
 	} else {
-		depth += subprog_depth;
+		if (!subprog[idx].recursive)
+			depth += subprog_depth;
 		if (depth > env->max_stack_depth)
 			env->max_stack_depth = depth;
 		if (depth > env->stack_limit) {
@@ -5930,17 +5958,37 @@ continue_func:
 		 * The main verification pass limits the depth of the recursion,
 		 * but it doesn't follow calls of global functions.
 		 */
-		for (tmp = idx; tmp >= 0; tmp = dinfo[tmp].caller) {
-			if (tmp != sidx)
+		for (tmp = idx; tmp >= 0; tmp = dinfo[tmp].caller)
+			if (tmp == sidx)
+				break;
+		/*
+		 * Recursion. How deep it goes is not known here. It's counted
+		 * at run time.
+		 */
+		if (tmp >= 0) {
+			if (bpf_is_callx(insn + i) || bpf_calls_callback(env, i))
+				i--;
+			continue;
+		}
+		/*
+		 * Any recursive subprog may follow any other when they call each other
+		 * through pointers. Don't walk all such chains: what is called from
+		 * here was looked at with at least as much on the stack.
+		 */
+		if (subprog[sidx].recursive) {
+			bool cb = subprog[sidx].is_cb;
+
+			for (tmp = idx; tmp >= 0 && !cb; tmp = dinfo[tmp].caller)
+				cb = subprog[tmp].is_cb;
+			if (depth < dinfo[sidx].seen_depth[cb] &&
+			    arena_depth < dinfo[sidx].seen_arena_depth[cb]) {
+				if (bpf_is_callx(insn + i) || bpf_calls_callback(env, i))
+					i--;
 				continue;
-			verbose(env, "recursive call from %s() to %s()\n",
-				bpf_subprog_name(env, idx), bpf_subprog_name(env, sidx));
-			bpf_diag_program_structure(
-				env, i, "recursive subprogram call",
-				"Rewrite the recursion as an explicit bounded loop, or split the logic so subprogram calls do not form a cycle.",
-				"This call or callback would make the subprogram call graph recursive. "
-				"The verifier requires a finite, acyclic call graph so it can bound stack depth and analysis.");
-			return -EINVAL;
+			}
+			dinfo[sidx].seen_depth[cb] = max(dinfo[sidx].seen_depth[cb], depth + 1);
+			dinfo[sidx].seen_arena_depth[cb] = max(dinfo[sidx].seen_arena_depth[cb],
+							       arena_depth + 1);
 		}
 
 		/* store caller info for after we return from callee */
@@ -5959,7 +6007,10 @@ continue_func:
 		/* sync tail_call_reachable with callee state on entry */
 		tail_call_reachable = subprog[idx].has_tail_call;
 
-		frame = bpf_subprog_is_global(env, idx) ? 0 : frame + 1;
+		if (bpf_subprog_is_global(env, idx))
+			frame = 0;
+		else if (!subprog[idx].recursive)
+			frame++;
 		if (frame >= MAX_CALL_FRAMES) {
 			verbose(env, "the call stack of %d frames is too deep !\n",
 				frame);
@@ -6003,11 +6054,12 @@ continue_func:
 	/* end of for() loop means the last insn of the 'subprog'
 	 * was reached. Doesn't matter whether it was JA or EXIT
 	 */
-	if (frame == 0 && dinfo[idx].caller < 0)
+	if (dinfo[idx].caller < 0)
 		return 0;
-	if (subprog[idx].priv_stack_mode != PRIV_STACK_ADAPTIVE)
+	if (subprog[idx].priv_stack_mode != PRIV_STACK_ADAPTIVE && !subprog[idx].recursive)
 		depth -= round_up_stack_depth(env, subprog[idx].stack_depth);
-	arena_depth -= subprog[idx].arena_stack_depth;
+	if (!subprog[idx].recursive)
+		arena_depth -= subprog[idx].arena_stack_depth;
 
 	/* pop caller idx from callee */
 	idx = dinfo[idx].caller;
@@ -6020,6 +6072,111 @@ continue_func:
 	tail_call_reachable = subprog[idx].tail_call_reachable;
 
 	goto continue_func;
+}
+
+/*
+ * Find the subprogs on cycles of the call graph. It is not known yet what callx
+ * calls: it may be any subprog whose address is taken. A subprog that is
+ * marked for no reason counts its frames for no reason, that is all.
+ */
+static int mark_recursive_subprogs(struct bpf_verifier_env *env)
+{
+	struct bpf_subprog_info *si = env->subprog_info;
+	struct bpf_insn *insn = env->prog->insnsi;
+	int cnt = env->subprog_cnt, words = BITS_TO_LONGS(cnt);
+	unsigned long *calls, *taken, *callx;
+	bool plain_callx = false;
+	int i, j, s, err = 0;
+
+	/* calls + s * words: the subprogs that s calls */
+	calls = kvcalloc((cnt + 2) * words, sizeof(long), GFP_KERNEL_ACCOUNT);
+	if (!calls)
+		return -ENOMEM;
+	taken = calls + cnt * words;
+	callx = taken + words;
+
+	for (s = 0; s < cnt; s++) {
+		for (i = si[s].start; i < si[s + 1].start; i++) {
+			if (bpf_is_callx(&insn[i])) {
+				__set_bit(s, callx);
+				if (!bpf_is_unwind_goto(&insn[i + 1]))
+					plain_callx = true;
+			}
+			if (bpf_pseudo_call(&insn[i]) || bpf_pseudo_func(&insn[i])) {
+				j = bpf_find_subprog(env, i + insn[i].imm + 1);
+				if (j < 0)
+					continue;
+				/* the helper that calls a callback doesn't expect it to unwind */
+				if (bpf_pseudo_func(&insn[i]) || !bpf_is_unwind_goto(&insn[i + 1]))
+					si[j].plain_call = true;
+				/* the helper that takes a callback calls it */
+				__set_bit(j, calls + s * words);
+				if (bpf_pseudo_func(&insn[i]))
+					__set_bit(j, taken);
+			}
+			if (bpf_is_ldimm64(&insn[i]))
+				i++;
+		}
+	}
+	for (i = 0; i < env->func_ptr_cnt; i++) {
+		j = bpf_find_subprog(env, env->func_ptrs[i].xlated_off);
+		if (j >= 0)
+			__set_bit(j, taken);
+	}
+	for_each_set_bit(s, callx, cnt)
+		bitmap_or(calls + s * words, calls + s * words, taken, cnt);
+
+	/*
+	 * Callers of a global subprog look at can_unwind before the subprog is verified.
+	 * The main prog returns to the kernel.
+	 */
+	for (s = 0; s < cnt; s++) {
+		if (plain_callx && test_bit(s, taken))
+			si[s].plain_call = true;
+		si[s].bail_unwinds = si[s].can_unwind ||
+				     (s && !si[s].plain_call && !bpf_subprog_is_global(env, s) &&
+				      bpf_jit_supports_unwind() &&
+				      !bpf_prog_is_offloaded(env->prog->aux));
+	}
+
+	for (j = 0; j < cnt; j++)
+		for (s = 0; s < cnt; s++)
+			if (test_bit(j, calls + s * words))
+				bitmap_or(calls + s * words, calls + s * words,
+					  calls + j * words, cnt);
+
+	for (s = 0; s < cnt; s++) {
+		if (!test_bit(s, calls + s * words))
+			continue;
+		err = -EINVAL;
+		if (!s) {
+			verbose(env, "recursive call of the main program\n");
+			break;
+		}
+		/* it has no way to tell one run from another, see bpf_prog_begin_run() */
+		if (env->prog->type == BPF_PROG_TYPE_EXT) {
+			verbose(env, "recursive %s() in an extension\n", bpf_subprog_name(env, s));
+			break;
+		}
+		if (si[s].has_tail_call || si[s].has_ld_abs) {
+			verbose(env, "recursive %s() cannot have %s\n", bpf_subprog_name(env, s),
+				si[s].has_tail_call ? "tail calls" : "LD_ABS");
+			break;
+		}
+		if (!bpf_jit_supports_percpu_insn()) {
+			verbose(env, "JIT does not support recursive calls\n");
+			err = -EOPNOTSUPP;
+			break;
+		}
+		if (si[s].bail_insn < 0) {
+			verbose(env, "recursive %s() has no exit\n", bpf_subprog_name(env, s));
+			break;
+		}
+		si[s].recursive = true;
+		err = 0;
+	}
+	kvfree(calls);
+	return err;
 }
 
 static int check_max_stack_depth(struct bpf_verifier_env *env)
@@ -6035,14 +6192,15 @@ static int check_max_stack_depth(struct bpf_verifier_env *env)
 		return -ENOMEM;
 
 	for (int i = 0; i < env->subprog_cnt; i++) {
-		if (si[i].has_tail_call) {
-			/* the stack in arena wouldn't be returned */
-			if (env->uses_arena_sp) {
-				verbose(env, "tail_calls are not allowed in programs that use R%d\n",
-					BPF_REG_ARENA_SP);
-				kvfree(dinfo);
-				return -EINVAL;
-			}
+		/* the stack in arena wouldn't be returned */
+		if (si[i].has_tail_call && env->uses_arena_sp) {
+			verbose(env, "tail_calls are not allowed in programs that use R%d\n",
+				BPF_REG_ARENA_SP);
+			kvfree(dinfo);
+			return -EINVAL;
+		}
+		/* the private stack has room for one frame of a subprog */
+		if (si[i].has_tail_call || si[i].recursive) {
 			priv_stack_mode = NO_PRIV_STACK;
 			break;
 		}
@@ -8962,12 +9120,33 @@ static struct bpf_reg_state *get_iter_from_state(struct bpf_verifier_state *cur_
  *     }
  *     bpf_iter_num_destroy(&it);
  */
+/*
+ * The program asks for the next element after it was told that there is none. So it didn't
+ * leave the loops around the call, and the iterator is not what stops them.
+ */
+static int iter_is_drained(struct bpf_verifier_env *env, int insn_idx)
+{
+	struct bpf_loop *loop;
+	int h;
+
+	for (h = bpf_loop_at_index(env, insn_idx); h >= 0; h = env->insn_aux_data[h].loop_header) {
+		loop = env->insn_aux_data[h].loop;
+		if (!loop->rt_bounded)
+			continue;
+		loop->rt_bounded = false;
+		env->restart = true;
+	}
+	return env->restart ? -EINVAL : 0;
+}
+
 static int process_iter_next_call(struct bpf_verifier_env *env, int insn_idx,
 				  struct bpf_call_arg_meta *meta)
 {
-	struct bpf_verifier_state *cur_st = env->cur_state, *queued_st, *prev_st;
+	struct bpf_verifier_state *cur_st = env->cur_state, *queued_st;
+	struct bpf_func_state *fr;
 	struct bpf_func_state *cur_fr = cur_st->frame[cur_st->curframe], *queued_fr;
 	struct bpf_reg_state *cur_iter, *queued_iter;
+	int err;
 
 	BTF_TYPE_EMIT(struct bpf_iter);
 
@@ -8980,21 +9159,18 @@ static int process_iter_next_call(struct bpf_verifier_env *env, int insn_idx,
 		return -EFAULT;
 	}
 
+	if (cur_iter->iter.state == BPF_ITER_STATE_DRAINED) {
+		err = iter_is_drained(env, insn_idx);
+		if (err)
+			return err;
+	}
+
 	if (cur_iter->iter.state == BPF_ITER_STATE_ACTIVE) {
-		/* Because iter_next() call is a checkpoint is_state_visitied()
-		 * should guarantee parent state with same call sites and insn_idx.
-		 */
-		if (!cur_st->parent || cur_st->parent->insn_idx != insn_idx ||
-		    !same_callsites(cur_st->parent, cur_st)) {
-			verifier_bug(env, "bad parent state for iter next call");
-			return -EFAULT;
-		}
-		/* Note cur_st->parent in the call below, it is necessary to skip
-		 * checkpoint created for cur_st by is_state_visited()
-		 * right at this instruction.
-		 */
-		prev_st = find_prev_entry(env, cur_st->parent, insn_idx);
 		/* branch out active iter state */
+		/* there is an element or there is none: a jump out of the loop, both ways */
+		fr = cur_st->frame[cur_st->curframe];
+		if (fr->loop_stack_cnt && fr->loop_stack[fr->loop_stack_cnt - 1].probe)
+			fr->loop_stack[fr->loop_stack_cnt - 1].undecided = true;
 		queued_st = push_stack(env, insn_idx + 1, insn_idx, false);
 		if (IS_ERR(queued_st))
 			return PTR_ERR(queued_st);
@@ -9002,8 +9178,6 @@ static int process_iter_next_call(struct bpf_verifier_env *env, int insn_idx,
 		queued_iter = get_iter_from_state(queued_st, meta);
 		queued_iter->iter.state = BPF_ITER_STATE_ACTIVE;
 		queued_iter->iter.depth++;
-		if (prev_st)
-			widen_imprecise_scalars(env, prev_st, queued_st);
 
 		queued_fr = queued_st->frame[queued_st->curframe];
 		mark_ptr_not_null_reg(&queued_fr->regs[BPF_REG_0]);
@@ -11311,6 +11485,9 @@ static int setup_func_entry(struct bpf_verifier_env *env, int subprog, int calls
 			callsite,
 			state->curframe + 1 /* frameno within this callchain */,
 			subprog /* subprog number within this prog */);
+	callee->entry_refs = state->acquired_refs;
+	callee->entry_rcu_locks = state->active_rcu_locks;
+	callee->entry_preempt_locks = state->active_preempt_locks;
 	err = set_callee_state_cb(env, caller, callee, callsite);
 	if (err)
 		goto err_out;
@@ -11365,7 +11542,7 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog, s
 	const struct btf_type *func, *func_proto;
 	struct bpf_call_arg_meta meta;
 	struct bpf_func_proto *fn;
-	int ret;
+	int ret, err;
 	u32 i;
 
 	memset(&meta, 0, sizeof(meta));
@@ -11374,13 +11551,22 @@ static int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog, s
 	meta.func_name = bpf_subprog_name(env, subprog);
 
 	ret = btf_prepare_func_args(env, subprog);
-	if (ret)
-		return ret;
-	/* BTF doesn't describe what the code does */
-	if (sub->stack_args_from_code &&
-	    max_t(int, sub->arg_slot_cnt, MAX_BPF_FUNC_REG_ARGS) !=
-	    MAX_BPF_FUNC_REG_ARGS + bpf_in_stack_arg_cnt(sub))
-		return -EINVAL;
+	if (ret || sub->stack_args_from_code) {
+		if (bpf_in_stack_arg_cnt(sub) > 0) {
+			err = check_outgoing_stack_args(env, caller, MAX_BPF_FUNC_REG_ARGS +
+							bpf_in_stack_arg_cnt(sub),
+							bpf_subprog_name(env, subprog),
+							NULL, NULL);
+			if (err)
+				return err;
+		}
+		if (ret)
+			return ret;
+		/* BTF doesn't describe what the code does */
+		if (max_t(int, sub->arg_slot_cnt, MAX_BPF_FUNC_REG_ARGS) !=
+		    MAX_BPF_FUNC_REG_ARGS + bpf_in_stack_arg_cnt(sub))
+			return -EINVAL;
+	}
 
 	func = btf_type_by_id(btf, env->prog->aux->func_info[subprog].type_id);
 	func_proto = btf_type_by_id(btf, func->type);
@@ -11523,13 +11709,362 @@ static int push_callback_call(struct bpf_verifier_env *env, struct bpf_insn *ins
 	return 0;
 }
 
+enum {
+	PROCESS_BPF_EXIT = 1,
+	INSN_IDX_UPDATED = 2,
+};
+
 static int process_bpf_exit_full(struct bpf_verifier_env *env,
 				 bool *do_print_state, bool exception_exit);
+static void account_current_path(struct bpf_verifier_env *env);
 
 /*
- * Call of a static subprog. The callee is verified in the context of
- * the caller, hence set up a new frame and continue from the first
- * instruction of the callee.
+ * The function can be verified on its own, for the state at its entry, when
+ * what it does depends on its arguments only and it cannot get to what its
+ * callers have: nothing points to their stack.
+ *
+ * What the callers hold, references, locks and so on, is a part of that state:
+ * it matters for what the function may do. Calls that differ in ids only
+ * have to get to the same state, so the ids of what is held are replaced with
+ * BPF_INHERITED_ID + the position for the function, and put back at the return.
+ * The same for other ids that the arguments have: BPF_INHERITED_ARG_ID + the position.
+ */
+#define BPF_INHERITED_ID	0x20000000
+#define BPF_INHERITED_ARG_ID	(BPF_INHERITED_ID + 0x10000)
+#define BPF_MAX_ARG_IDS		32
+
+static u32 inherited_id(const struct bpf_verifier_state *state, u32 id)
+{
+	int i;
+
+	/* the first one: the same lock can't be taken twice, the rest have ids of their own */
+	for (i = 0; id && i < state->acquired_refs; i++)
+		if (state->refs[i].id == id)
+			return BPF_INHERITED_ID + i;
+	return id;
+}
+
+static bool state_in_callback(const struct bpf_verifier_state *st)
+{
+	u32 fr;
+
+	if (st->in_callback)
+		return true;
+	for (fr = 0; fr <= st->curframe; fr++)
+		if (st->frame[fr]->in_callback_fn || st->frame[fr]->in_async_callback_fn ||
+		    st->frame[fr]->in_exception_callback_fn || st->frame[fr]->in_rcu_callback_fn)
+			return true;
+	return false;
+}
+
+static u32 add_arg_id(const struct bpf_verifier_state *state, u32 *ids, u32 n, u32 id)
+{
+	u32 i;
+
+	if (!id || n == BPF_MAX_ARG_IDS || inherited_id(state, id) != id)
+		return n;
+	for (i = 0; i < n; i++)
+		if (ids[i] == id)
+			return n;
+	ids[n] = id;
+	return n + 1;
+}
+
+/* The ids that the arguments of the call of @subprog in @state have, in the order of arguments */
+static u32 collect_arg_ids(struct bpf_verifier_env *env, const struct bpf_verifier_state *state,
+			   int subprog, u32 *ids)
+{
+	struct bpf_subprog_info *sub = &env->subprog_info[subprog];
+	u16 live = env->insn_aux_data[sub->start].live_regs_before;
+	const struct bpf_func_state *caller = state->frame[state->curframe];
+	const struct bpf_reg_state *reg;
+	u32 i, n = 0;
+
+	for (i = BPF_REG_1; i <= BPF_REG_5; i++) {
+		if (!(live & BIT(i)))
+			continue;
+		reg = &caller->regs[i];
+		n = add_arg_id(state, ids, n, reg->id & ~BPF_ADD_CONST);
+		n = add_arg_id(state, ids, n, reg->parent_id);
+	}
+	for (i = 0; i < bpf_in_stack_arg_cnt(sub) && i < caller->out_stack_arg_cnt; i++) {
+		reg = &caller->stack_arg_regs[i];
+		n = add_arg_id(state, ids, n, reg->id & ~BPF_ADD_CONST);
+		n = add_arg_id(state, ids, n, reg->parent_id);
+	}
+	return n;
+}
+
+static u32 callee_id(const struct bpf_verifier_state *state, const u32 *ids, u32 n, u32 id)
+{
+	u32 flags = id & BPF_ADD_CONST, i;
+
+	id &= ~BPF_ADD_CONST;
+	if (inherited_id(state, id) != id)
+		return inherited_id(state, id) | flags;
+	for (i = 0; i < n; i++)
+		if (ids[i] == id)
+			return (BPF_INHERITED_ARG_ID + i) | flags;
+	return id | flags;
+}
+
+static bool func_is_on_its_own(struct bpf_verifier_env *env, struct bpf_verifier_state *state,
+			       int subprog)
+{
+	struct bpf_func_state *caller = state->frame[state->curframe];
+	struct bpf_subprog_info *sub = &env->subprog_info[subprog];
+	u16 live = env->insn_aux_data[sub->start].live_regs_before;
+	u32 fr, i;
+
+	/*
+	 * Iterations that are kept apart would meet in the function.
+	 * There is no other way for a recursive one.
+	 */
+	for (fr = 0; fr <= state->curframe && !sub->recursive; fr++)
+		for (i = 0; i < state->frame[fr]->loop_stack_cnt; i++)
+			if (state->frame[fr]->loop_stack[i].apart)
+				return false;
+
+	if (sub->changes_pkt_data || sub->has_tail_call || sub->has_ld_abs ||
+	    sub->is_cb || sub->is_async_cb || sub->is_exception_cb)
+		return false;
+	if (state->speculative)
+		return false;
+	if (sub->releases_inherited &&
+	    (state->acquired_refs || state->active_rcu_locks || state->active_preempt_locks))
+		return false;
+	/* there is no other way for a recursive function */
+	if (state_in_callback(state) && !sub->recursive)
+		return false;
+	for (i = BPF_REG_1; i <= BPF_REG_5; i++) {
+		if (!(live & BIT(i)))
+			continue;
+		if (caller->regs[i].type == PTR_TO_STACK ||
+		    base_type(caller->regs[i].type) == CONST_PTR_TO_DYNPTR)
+			return false;
+		/* it checks how much of the packet is there, for the caller */
+		if (caller->regs[i].type == PTR_TO_PACKET_END && !sub->recursive)
+			return false;
+		/* or whether there is something to point to */
+		if (type_may_be_null(caller->regs[i].type) && !sub->recursive)
+			return false;
+	}
+	for (i = 0; i < bpf_in_stack_arg_cnt(sub); i++) {
+		if (caller->stack_arg_regs[i].type == PTR_TO_STACK ||
+		    base_type(caller->stack_arg_regs[i].type) == CONST_PTR_TO_DYNPTR)
+			return false;
+	}
+	return true;
+}
+
+static int call_func_on_its_own(struct bpf_verifier_env *env, int subprog, int insn_idx)
+{
+	u16 live = env->insn_aux_data[env->subprog_info[subprog].start].live_regs_before;
+	struct bpf_verifier_state *state = env->cur_state;
+	struct bpf_func_state *caller = state->frame[state->curframe], *callee;
+	struct bpf_verifier_state entry = {};
+	u32 ids[BPF_MAX_ARG_IDS], nids;
+	int i, err;
+
+	callee = kzalloc_obj(*callee, GFP_KERNEL_ACCOUNT);
+	if (!callee)
+		return -ENOMEM;
+	entry.frame[0] = callee;
+	entry.in_sleepable = state->in_sleepable;
+	entry.in_callback = state_in_callback(state);
+	entry.callers_unknown = state->callers_unknown;
+	init_func_state(env, callee, BPF_MAIN_FUNC, 0, subprog);
+	for (i = BPF_REG_1; i <= BPF_REG_5; i++)
+		if (live & BIT(i))
+			callee->regs[i] = caller->regs[i];
+	err = grow_stack_arg_slots(env, callee, bpf_in_stack_arg_cnt(&env->subprog_info[subprog]));
+	if (err) {
+		bpf_free_verifier_state(&entry, false);
+		return err;
+	}
+	for (i = 0; i < callee->out_stack_arg_cnt; i++)
+		callee->stack_arg_regs[i] = caller->stack_arg_regs[i];
+
+	err = copy_reference_state(&entry, state);
+	if (err) {
+		bpf_free_verifier_state(&entry, false);
+		return err;
+	}
+	for (i = 0; i < entry.acquired_refs; i++) {
+		/* the id of a lock is the id of the pointer to it, which may have none */
+		entry.refs[i].id = inherited_id(state, entry.refs[i].id);
+		if (entry.refs[i].type == REF_TYPE_PTR)
+			entry.refs[i].parent_id = inherited_id(state, entry.refs[i].parent_id);
+	}
+	entry.active_irq_id = inherited_id(state, entry.active_irq_id);
+	entry.active_lock_id = inherited_id(state, entry.active_lock_id);
+	callee->entry_refs = entry.acquired_refs;
+	callee->entry_rcu_locks = entry.active_rcu_locks;
+	callee->entry_preempt_locks = entry.active_preempt_locks;
+	nids = collect_arg_ids(env, state, subprog, ids);
+	for (i = BPF_REG_1; i <= BPF_REG_5; i++) {
+		callee->regs[i].id = callee_id(state, ids, nids, callee->regs[i].id);
+		callee->regs[i].parent_id = callee_id(state, ids, nids, callee->regs[i].parent_id);
+	}
+	for (i = 0; i < callee->out_stack_arg_cnt; i++) {
+		callee->stack_arg_regs[i].id =
+			callee_id(state, ids, nids, callee->stack_arg_regs[i].id);
+		callee->stack_arg_regs[i].parent_id =
+			callee_id(state, ids, nids, callee->stack_arg_regs[i].parent_id);
+	}
+
+	account_current_path(env);
+	env->subprog_info[subprog].on_its_own = true;
+	err = bpf_flow_call(env, state, &entry, subprog, insn_idx);
+	bpf_free_verifier_state(&entry, false);
+	/* the call waits, there is nothing to go on with */
+	return err ?: PROCESS_BPF_EXIT;
+}
+
+/* The current state is at exit of a function that is verified on its own. */
+static int exit_func_on_its_own(struct bpf_verifier_env *env)
+{
+	struct bpf_verifier_state *state = env->cur_state;
+	struct bpf_func_state *callee = state->frame[0];
+	u32 i, nregs;
+	int err;
+
+	nregs = bpf_ret_reg_pair(env, callee->subprogno) ? 2 : 1;
+	for (i = 0; i < nregs; i++) {
+		if (callee->regs[ret_regs[i]].type != PTR_TO_STACK)
+			continue;
+		verbose(env, "cannot return stack pointer to the caller\n");
+		return -EINVAL;
+	}
+	state->unwound |= bpf_is_unwind_exit(&env->prog->insnsi[env->insn_idx]);
+
+	/* Invalidate callee-local dynptrs and their slices before the frame goes away. */
+	err = destroy_dynptrs_in_stack_slots(env, callee, 0,
+					     callee->allocated_stack / BPF_REG_SIZE - 1);
+	if (err)
+		return err;
+
+	account_current_path(env);
+	err = bpf_flow_exit(env, state, env->insn_idx);
+	return err ?: PROCESS_BPF_EXIT;
+}
+
+static u32 fresh_id(struct bpf_verifier_env *env, struct bpf_idmap *idmap, u32 id)
+{
+	u32 flags = id & BPF_ADD_CONST, i;
+
+	id &= ~BPF_ADD_CONST;
+	if (!id)
+		return 0;
+	for (i = 0; i < idmap->cnt; i++)
+		if (idmap->map[i].old == id)
+			return idmap->map[i].cur | flags;
+	if (idmap->cnt == BPF_ID_MAP_SIZE)
+		return 0;
+	idmap->map[idmap->cnt].old = id;
+	idmap->map[idmap->cnt].cur = ++env->id_gen;
+	return idmap->map[idmap->cnt++].cur | flags;
+}
+
+/*
+ * @caller waits at the call at @call_idx and @exit is what came out of the
+ * function. Make @caller what it is after the call.
+ * Returns 1 if the call has to be verified in the context of the caller.
+ */
+int bpf_flow_return(struct bpf_verifier_env *env, struct bpf_verifier_state *caller,
+		    const struct bpf_verifier_state *exit, int call_idx)
+{
+	struct bpf_func_state *frame = caller->frame[caller->curframe];
+	const struct bpf_func_state *callee = exit->frame[0];
+	struct bpf_idmap *idmap = &env->idmap_scratch;
+	u32 caller_rcu = caller->active_rcu_locks, caller_preempt = caller->active_preempt_locks;
+	u32 ids[BPF_MAX_ARG_IDS], nids;
+	struct bpf_reference_state *held;
+	struct bpf_reg_state *reg;
+	u32 i, nregs, nheld, kept = 0, id;
+	int err;
+
+	if (exit->unwound && !bpf_is_unwind_goto(&env->prog->insnsi[call_idx + 1])) {
+		verbose(env, "unwind_exit, but no unwind_goto after the call at insn %d\n",
+			call_idx);
+		return -EINVAL;
+	}
+	caller->unwound = exit->unwound;
+
+	nids = collect_arg_ids(env, caller, callee->subprogno, ids);
+	for (i = 0; i < CALLER_SAVED_REGS; i++)
+		bpf_mark_reg_not_init(env, &frame->regs[caller_saved[i]]);
+	for (i = 0; i < frame->out_stack_arg_cnt; i++)
+		bpf_mark_reg_not_init(env, &frame->stack_arg_regs[i]);
+
+	/* what is held now is what was held at the call and what the function took */
+	held = caller->refs;
+	nheld = caller->acquired_refs;
+	caller->refs = NULL;
+	caller->acquired_refs = 0;
+	err = copy_reference_state(caller, exit);
+	if (err) {
+		kfree(held);
+		return err;
+	}
+	if (nheld > BPF_ID_MAP_SIZE / 2) {
+		kfree(held);
+		return -E2BIG;
+	}
+
+	/*
+	 * The same state comes out for every call. Ids in it have to be new
+	 * every time, or two calls in a row return the same object.
+	 */
+	idmap->cnt = 0;
+	for (i = 0; i < nheld; i++) {
+		idmap->map[idmap->cnt].old = BPF_INHERITED_ID + i;
+		idmap->map[idmap->cnt++].cur = held[i].id;
+	}
+	for (i = 0; i < nids; i++) {
+		idmap->map[idmap->cnt].old = BPF_INHERITED_ARG_ID + i;
+		idmap->map[idmap->cnt++].cur = ids[i];
+	}
+	/* What is taken is added at the end. What is released leaves no hole. */
+	for (i = 0; i < nheld && i < caller->acquired_refs; i++) {
+		id = held[i].id ? BPF_INHERITED_ID + i : 0;
+		if (caller->refs[i].id != id || caller->refs[i].type != held[i].type)
+			break;
+		caller->refs[i] = held[i];
+		kept++;
+	}
+	kfree(held);
+	/* What it means for the caller is found out in the context of the caller. */
+	if (kept != nheld || exit->active_rcu_locks < caller_rcu ||
+	    exit->active_preempt_locks < caller_preempt) {
+		if (env->log.level & BPF_LOG_LEVEL2)
+			verbose(env, "func#%d releases what its caller holds at insn %d\n",
+				callee->subprogno, call_idx);
+		env->subprog_info[callee->subprogno].releases_inherited = true;
+		return 1;
+	}
+	nregs = bpf_ret_reg_pair(env, callee->subprogno) ? 2 : 1;
+	for (i = 0; i < nregs; i++) {
+		reg = &frame->regs[ret_regs[i]];
+		*reg = callee->regs[ret_regs[i]];
+		reg->id = fresh_id(env, idmap, reg->id);
+		reg->parent_id = fresh_id(env, idmap, reg->parent_id);
+	}
+	/* those that were held are the first */
+	for (i = nheld; i < caller->acquired_refs; i++) {
+		caller->refs[i].id = fresh_id(env, idmap, caller->refs[i].id);
+		if (caller->refs[i].type == REF_TYPE_PTR)
+			caller->refs[i].parent_id = fresh_id(env, idmap, caller->refs[i].parent_id);
+	}
+	caller->active_irq_id = fresh_id(env, idmap, caller->active_irq_id);
+	caller->active_lock_id = fresh_id(env, idmap, caller->active_lock_id);
+	return 0;
+}
+
+/*
+ * Call of a static subprog. Unless the callee is verified on its own it is
+ * verified in the context of the caller, hence set up a new frame and
+ * continue from the first instruction of the callee.
  */
 static int check_static_func_call(struct bpf_verifier_env *env, int subprog,
 				  int *insn_idx)
@@ -11551,11 +12086,14 @@ static int check_static_func_call(struct bpf_verifier_env *env, int subprog,
 	stack_arg_cnt = bpf_in_stack_arg_cnt(caller_info) + callee_incoming;
 	if (stack_arg_cnt > caller_info->stack_arg_cnt)
 		caller_info->stack_arg_cnt = stack_arg_cnt;
-
+	/* btf_check_subprog_call() doesn't get to it when BTF is not reliable */
 	err = check_outgoing_stack_args(env, caller, MAX_BPF_FUNC_REG_ARGS + callee_incoming,
 					bpf_subprog_name(env, subprog), NULL, NULL);
 	if (err)
 		return err;
+
+	if (func_is_on_its_own(env, state, subprog))
+		return call_func_on_its_own(env, subprog, *insn_idx);
 
 	/*
 	 * For regular function entry setup new frame and continue
@@ -12162,7 +12700,7 @@ static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 	}
 
 	caller = state->frame[state->curframe - 1];
-	if (bpf_is_unwind_exit(&env->prog->insnsi[*insn_idx])) {
+	if (bpf_is_unwind_exit(&env->prog->insnsi[*insn_idx]) || state->unwound) {
 		/* the helper or the kfunc that called it doesn't expect that */
 		if (callee->in_callback_fn) {
 			verbose(env, "callback cannot unwind\n");
@@ -12179,6 +12717,16 @@ static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 		if (r0->type != SCALAR_VALUE) {
 			verbose(env, "R0 not a scalar value\n");
 			return -EACCES;
+		}
+
+		/* It's called any number of times. Nobody can release what it leaves behind. */
+		for (i = callee->entry_refs; i < state->acquired_refs; i++) {
+			if (state->refs[i].type != REF_TYPE_PTR)
+				continue;
+			verbose(env, "Unreleased reference id=%d alloc_insn=%d\n",
+				state->refs[i].id, state->refs[i].insn_idx);
+			bpf_diag_leak(env, state->refs[i].id, state->refs[i].insn_idx, *insn_idx);
+			return -EINVAL;
 		}
 
 		/* we are going to rely on register's precise value */
@@ -15113,6 +15661,51 @@ out:
 		info.must_write = false;
 	}
 	return info;
+}
+
+/* insn_aux_data->is_iter_next is not there before the main pass */
+bool bpf_insn_is_iter_next(struct bpf_verifier_env *env, struct bpf_insn *insn)
+{
+	struct bpf_call_arg_meta meta;
+
+	return bpf_pseudo_kfunc_call(insn) &&
+	       !bpf_fetch_kfunc_arg_meta(env, insn->imm, insn->off, &meta) &&
+	       bpf_is_iter_next_kfunc(&meta);
+}
+
+/* The registers in which the kfunc takes nothing but a known constant ("__k") */
+u16 bpf_kfunc_const_arg_regs(struct bpf_verifier_env *env, struct bpf_insn *insn)
+{
+	struct bpf_call_arg_meta meta;
+	const struct btf_param *args;
+	u32 i, slot, nargs;
+	u16 mask = 0;
+
+	if (bpf_fetch_kfunc_arg_meta(env, insn->imm, insn->off, &meta) < 0)
+		return 0;
+	args = btf_params(meta.func_proto);
+	nargs = btf_type_vlen(meta.func_proto);
+	for (i = 0, slot = 0; i < nargs && slot < MAX_BPF_FUNC_REG_ARGS; i++) {
+		if (is_kfunc_arg_constant(meta.btf, &args[i]))
+			mask |= BIT(BPF_REG_1 + slot);
+		slot += btf_arg_slots(btf_type_skip_modifiers(meta.btf, args[i].type, NULL));
+	}
+	return mask;
+}
+
+/* The same for a helper */
+u16 bpf_helper_const_arg_regs(struct bpf_verifier_env *env, struct bpf_insn *insn)
+{
+	const struct bpf_func_proto *fn;
+	u16 mask = 0;
+	u32 i;
+
+	if (bpf_get_helper_proto(env, insn->imm, &fn) < 0)
+		return 0;
+	for (i = 0; i < MAX_BPF_FUNC_REG_ARGS; i++)
+		if (fn->arg_type[i] == ARG_CONST_ALLOC_SIZE_OR_ZERO)
+			mask |= BIT(BPF_REG_1 + i);
+	return mask;
 }
 
 /*
@@ -19043,6 +19636,21 @@ static void sync_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier_s
 	}
 }
 
+/* The jump at env->insn_idx goes both ways */
+static void mark_loop_exit_undecided(struct bpf_verifier_env *env, struct bpf_verifier_state *st)
+{
+	struct bpf_func_state *frame = st->frame[st->curframe];
+	struct loop_stack_entry *entry;
+	u32 i;
+
+	for (i = 0; i < frame->loop_stack_cnt; i++) {
+		entry = &frame->loop_stack[i];
+		if (entry->apart && entry->probe &&
+		    bpf_jump_leaves_loop(env, entry->loop_id, env->insn_idx))
+			entry->undecided = true;
+	}
+}
+
 static int check_cond_jmp_op(struct bpf_verifier_env *env,
 			     struct bpf_insn *insn, int *insn_idx)
 {
@@ -19212,6 +19820,7 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 			return err;
 	}
 
+	mark_loop_exit_undecided(env, this_branch);
 	other_branch = push_stack(env, *insn_idx + insn->off + 1, *insn_idx, false);
 	if (IS_ERR(other_branch))
 		return PTR_ERR(other_branch);
@@ -20263,16 +20872,15 @@ static int save_aux_ptr_type(struct bpf_verifier_env *env, enum bpf_reg_type typ
 	return 0;
 }
 
-enum {
-	PROCESS_BPF_EXIT = 1,
-	INSN_IDX_UPDATED = 2,
-};
 
 static int process_bpf_exit_full(struct bpf_verifier_env *env,
 				 bool *do_print_state,
 				 bool exception_exit)
 {
 	struct bpf_func_state *cur_frame = cur_func(env);
+
+	if (!exception_exit && !env->cur_state->curframe && env->cur_state->flow_entry)
+		return exit_func_on_its_own(env);
 
 	/* We must do check_reference_leak here before
 	 * prepare_func_exit to handle the case when
@@ -20490,6 +21098,24 @@ static int check_arena_sp_insn(struct bpf_verifier_env *env, struct bpf_insn *in
 	return err ?: save_aux_ptr_type(env, PTR_TO_ARENA, false);
 }
 
+/*
+ * NULL is dereferenced. In a program that has arena take it for a pointer to arena:
+ * the compiler may have moved the cast to where the number was not known to be 0 yet,
+ * and what check_loop_guard() sets to 0 may be a pointer that was cast in the loop.
+ */
+static void null_to_arena(struct bpf_verifier_env *env, int regno)
+{
+	struct bpf_reg_state *reg;
+
+	if (!env->prog->aux->arena || regno >= BPF_REG_FP)
+		return;
+	reg = &cur_regs(env)[regno];
+	if (reg->type != SCALAR_VALUE || !tnum_equals_const(reg->var_off, 0))
+		return;
+	__mark_reg_const_zero(env, reg);
+	reg->type = PTR_TO_ARENA;
+}
+
 static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 {
 	int err;
@@ -20498,6 +21124,11 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 
 	if (is_arena_sp_insn(insn))
 		return check_arena_sp_insn(env, insn);
+
+	if (class == BPF_LDX)
+		null_to_arena(env, insn->src_reg);
+	else if (class == BPF_STX || class == BPF_ST)
+		null_to_arena(env, insn->dst_reg);
 
 	switch (class) {
 	case BPF_ALU:
@@ -20565,7 +21196,7 @@ static int do_check_insn(struct bpf_verifier_env *env, bool *do_print_state)
 			}
 			mark_reg_scratched(env, BPF_REG_0);
 			if (bpf_in_stack_arg_cnt(&env->subprog_info[cur_func(env)->subprogno]))
-				cur_func(env)->no_stack_arg_load = true;
+				end_stack_arg_loads(env, cur_func(env));
 			if (bpf_is_callx(insn))
 				return check_func_callx(env, insn, &env->insn_idx);
 			if (insn->src_reg == BPF_PSEUDO_CALL)
@@ -20659,6 +21290,11 @@ static int loop_stack_push(struct bpf_verifier_env *env, bool *pushed)
 
 	for (; num_missing; num_missing--, cnt++) {
 		h = missing_headers[num_missing - 1];
+		/* wherever it is entered: a loop can have more than one entry */
+		if (!aux[h].loop->exits_cnt) {
+			verbose(env, "loop at insn %d never exits\n", h);
+			return -EINVAL;
+		}
 		loop_stack[cnt] = (struct loop_stack_entry){ .loop_id = h };
 		if (env->log.level & BPF_LOG_LEVEL2)
 			verbose(env, "entering loop %d\n", h);
@@ -20728,18 +21364,66 @@ static int maybe_clamp_scev_regs(struct bpf_verifier_env *env)
 	return bpf_clamp_scev_regs(env, frame, env->insn_idx, entry);
 }
 
-static int handle_loop_entry_exit(struct bpf_verifier_env *env)
+/* How many insns it may take to go through the iterations of a loop one by one. */
+#define BPF_FLOW_MAX_WALK	100000
+/* The same when it is not known that the walk gets to the end of the loop. */
+#define BPF_FLOW_MAX_TRY	4096
+
+/* How many times the current insn is looked at because of the loops around it that are walked. */
+static u64 flow_walk_factor(const struct bpf_verifier_state *st)
 {
-	struct bpf_verifier_state *cur = env->cur_state;
+	const struct loop_stack_entry *e;
+	u64 factor = 1;
+	u32 fr, i;
+
+	for (fr = 0; fr <= st->curframe; fr++) {
+		for (i = 0; i < st->frame[fr]->loop_stack_cnt; i++) {
+			e = &st->frame[fr]->loop_stack[i];
+			if (e->apart)
+				factor = min_t(u64, factor * max(e->max_header_count, 1U), U32_MAX);
+		}
+	}
+	return factor;
+}
+
+/*
+ * The current state gets to env->insn_idx. Leave the loops that the insn is not in.
+ * @enters: the insn is the head of a loop that the state is not in yet.
+ */
+int bpf_flow_loop_leave(struct bpf_verifier_env *env, bool *enters)
+{
 	struct bpf_func_state *frame = cur_func(env);
-	struct loop_stack_entry *entry;
-	struct bpf_loop_iters iters;
-	bool pushed, terminates;
 	int err;
 
 	err = loop_stack_pop(env);
 	if (err)
 		return err;
+	*enters = env->insn_aux_data[env->insn_idx].loop &&
+		  (!frame->loop_stack_cnt ||
+		   frame->loop_stack[frame->loop_stack_cnt - 1].loop_id != env->insn_idx);
+	return 0;
+}
+
+/*
+ * Enter the loops that env->insn_idx is in.
+ *
+ * The state that enters a loop at its head is made to stand for all iterations:
+ * - When the number of iterations follows from the state, with the ranges that
+ *   induction variables have in that many iterations.
+ * - Otherwise the numbers that the loop changes are forgotten.
+ * The state that comes back to the head is then expected to be within it.
+ */
+int bpf_flow_loop_enter(struct bpf_verifier_env *env, bool *backedge, bool *drop)
+{
+	struct bpf_verifier_state *cur = env->cur_state, *entry_state;
+	const struct bpf_insn *insn = &env->prog->insnsi[env->insn_idx];
+	struct bpf_func_state *frame = cur_func(env);
+	struct loop_stack_entry *entry;
+	struct bpf_loop_iters iters;
+	struct bpf_loop *loop;
+	bool pushed;
+	u32 patience;
+	int err;
 
 	err = loop_stack_push(env, &pushed);
 	if (err)
@@ -20752,43 +21436,336 @@ static int handle_loop_entry_exit(struct bpf_verifier_env *env)
 	if (env->insn_idx != entry->loop_id)
 		return 0;
 
-	/* If nothing was pushed and env->insn_idx is a loop header, we've taken a backedge. */
-	if (!pushed)
-		return maybe_clamp_scev_regs(env);
+	/*
+	 * No edge goes from a call to itself: the call goes on with one function of a set, see
+	 * split_func_set(), in the same iteration.
+	 */
+	if (!pushed && cur->last_insn_idx == env->insn_idx &&
+	    BPF_CLASS(insn->code) == BPF_JMP && BPF_OP(insn->code) == BPF_CALL)
+		return 0;
 
-	err = bpf_compute_loop_iters(env, env->cur_state, &iters);
+	/* The callback came back to the helper that calls it, in the same iteration. */
+	if (frame->callback_depth)
+		return 0;
+
+	/* If nothing was pushed and env->insn_idx is a loop header, we've taken a backedge. */
+	if (!pushed) {
+		if (!entry->apart) {
+			*backedge = true;
+			return maybe_clamp_scev_regs(env);
+		}
+		/* the next iteration is another kind of state, there is no cycle */
+		if (!entry->undecided && ++entry->trip < entry->max_header_count &&
+		    (entry->counted ||
+		     env->insn_processed - entry->walk_start <= entry->walk_patience))
+			return 0;
+		/* there is no such iteration at run time */
+		if (entry->counted) {
+			*drop = true;
+			return 0;
+		}
+		/*
+		 * The walk doesn't get to the end of the loop. Make this state stand for
+		 * all iterations. It stands for those that were looked at as well.
+		 */
+		loop = env->insn_aux_data[env->insn_idx].loop;
+		if (!loop->rt_bounded && !loop->has_guards) {
+			verbose(env, "loop at insn %d never exits\n", env->insn_idx);
+			return -EINVAL;
+		}
+		entry->apart = false;
+		entry->probe = false;
+		entry->undecided = false;
+		entry->terminates = false;
+		entry->trip = 0;
+		entry->max_header_count = 0;
+		return bpf_scev_forget_regs(env, cur);
+	}
+
+	loop = env->insn_aux_data[env->insn_idx].loop;
+	err = bpf_compute_loop_iters(env, cur, &iters);
 	if (err < 0)
 		return err;
 
-	terminates = err == 1;
-	if (!terminates)
+	/*
+	 * There is no summary of what the loop does to something that is live.
+	 * Go through the iterations one by one if that is not too long.
+	 */
+	if (err == 2 && flow_walk_factor(cur) * iters.max_header_count * loop->nr_insns <=
+			BPF_FLOW_MAX_WALK) {
+		entry->max_header_count = iters.max_header_count;
+		entry->terminates = true;
+		entry->counted = true;
+		entry->apart = true;
 		return 0;
+	}
+	if (err == 2 && iters.spill_base)
+		err = 0;
+	/* The walk has to get to the end of the loop, so it is known to have one. */
+	/*
+	 * Or it's found out on the way: the walk goes on for as long as the jumps that
+	 * leave the loop are decided.
+	 */
+	patience = bpf_scev_latch_decided(env, cur) ? BPF_FLOW_MAX_TRY :
+		   env->allow_uninit_stack && !loop->rt_bounded && !loop->irreducible &&
+		   !loop->has_calls ? BPF_FLOW_MAX_TRY : 0;
+	/* Two trips for a loop of any length. Many a loop is left in the second one. */
+	if (patience && flow_walk_factor(cur) == 1)
+		patience = max_t(u64, patience, 2ULL * loop->nr_insns);
+	if (!err && flow_walk_factor(cur) * loop->nr_insns <= patience) {
+		entry->max_header_count = max_t(u32, patience /
+						(flow_walk_factor(cur) * loop->nr_insns), 1U);
+		entry->terminates = true;
+		entry->probe = !bpf_scev_latch_decided(env, cur);
+		entry->walk_start = env->insn_processed;
+		entry->walk_patience = patience;
+		entry->apart = true;
+		return 0;
+	}
 
-	/* Create a loop_entry checkpoint before widening */
-	err = bpf_split_cur_state(env);
-	if (err)
-		return err;
+	if (!err) {
+		if (!loop->rt_bounded && !loop->has_guards) {
+			verbose(env, "loop at insn %d never exits\n", env->insn_idx);
+			return -EINVAL;
+		}
+		return bpf_scev_forget_regs(env, cur);
+	}
+
+	/* What the ranges are derived from for as long as the loop is looked at. */
+	entry_state = bpf_flow_keep_state(env, cur);
+	if (!entry_state)
+		return -ENOMEM;
 
 	entry->min_header_count = iters.min_header_count;
 	entry->max_header_count = iters.max_header_count;
 	entry->iv_reg = iters.iv_reg;
 	entry->iv_range = iters.iv_range;
-	entry->entry_state = cur->parent;
+	entry->entry_state = entry_state;
 	entry->terminates = true;
-	err = bpf_widen_scev_regs(env, cur, cur->parent, &iters);
-	if (err < 0)
-		return err;
+	err = bpf_widen_scev_regs(env, cur, entry_state, &iters);
+	return err < 0 ? err : 0;
+}
+
+/* Can the main program return 0? */
+static bool zero_is_valid_retval(struct bpf_verifier_env *env)
+{
+	struct bpf_retval_range range;
+
+	if (program_returns_void(env) || !return_retval_range(env, &range))
+		return true;
+	return range.minval <= 0 && range.maxval >= 0;
+}
+
+/*
+ * A loop or a recursion is out of budget in the current frame of @st. What the
+ * program computed so far is not what it was meant to compute, so it's better
+ * not to go on. The way to stop is to unwind: 'r0 = 0; unwind_exit'. The landing
+ * pads of the callers are code like any other. They release what the callers
+ * hold, or the program is rejected.
+ *
+ * False when it cannot:
+ * - There is no landing pad for what this frame took itself.
+ * - There is a call of the subprog that unwind_goto doesn't follow. That is every
+ *   program that is compiled without unwinding.
+ * - A helper that calls a callback doesn't expect it to unwind.
+ * Then the program goes on along a path that it has, like after may_goto of
+ * its own. It releases what it holds there.
+ */
+static bool budget_can_unwind(struct bpf_verifier_env *env, const struct bpf_verifier_state *st)
+{
+	const struct bpf_func_state *frame = st->frame[st->curframe];
+	const struct bpf_subprog_info *sub = &env->subprog_info[frame->subprogno];
+	bool top;
+
+	if (sub->bail_insn < 0)
+		return false;
+	if (st->acquired_refs != frame->entry_refs ||
+	    st->active_rcu_locks != frame->entry_rcu_locks ||
+	    st->active_preempt_locks != frame->entry_preempt_locks)
+		return false;
+	if (frame->in_callback_fn || frame->in_exception_callback_fn)
+		return false;
+	/* the kernel called it: either exit ends it */
+	top = !st->curframe && !st->callers_unknown &&
+	      (!frame->subprogno || frame->in_async_callback_fn);
+	if (top && !frame->subprogno && !zero_is_valid_retval(env))
+		return false;
+	return top || sub->bail_unwinds;
+}
+
+/*
+ * The current frame leaves with 0 in place of the result: with unwind_exit if the subprog
+ * can do that, with exit otherwise. The insns are added when the main pass is over. Until
+ * then an exit that the subprog has stands for them.
+ */
+static int push_budget_exit(struct bpf_verifier_env *env)
+{
+	struct bpf_subprog_info *sub = &env->subprog_info[cur_func(env)->subprogno];
+	struct bpf_verifier_state *branch;
+	struct bpf_reg_state *regs;
+
+	branch = push_stack(env, sub->bail_insn, env->insn_idx, false);
+	if (IS_ERR(branch))
+		return PTR_ERR(branch);
+	branch->unwound = sub->bail_unwinds;
+	regs = branch->frame[branch->curframe]->regs;
+	__mark_reg_const_zero(env, &regs[BPF_REG_0]);
+	if (bpf_ret_reg_pair(env, cur_func(env)->subprogno))
+		__mark_reg_const_zero(env, &regs[BPF_REG_2]);
 	return 0;
 }
 
-static int do_check(struct bpf_verifier_env *env)
+/*
+ * The loop that is not counted and has nothing that stops it at run time gets
+ * may_goto in front of this insn. When it is out of budget the program goes
+ * where may_goto goes with the registers and the stack as they are here.
+ */
+static int check_loop_guard(struct bpf_verifier_env *env)
 {
-	bool pop_log = !(env->log.level & BPF_LOG_LEVEL2);
+	struct bpf_insn_aux_data *aux = &env->insn_aux_data[env->insn_idx];
+	struct bpf_func_state *frame = cur_func(env);
+	struct bpf_verifier_state *branch;
+	struct loop_stack_entry *entry;
+	struct bpf_func_state *func;
+	struct bpf_stack_state *slot;
+	struct bpf_reg_state *regs;
+	struct bpf_loop *loop;
+	int h, i, j, err;
+
+	h = bpf_loop_at_index(env, env->insn_idx);
+	if (h < 0 || !frame->loop_stack_cnt)
+		return 0;
+	loop = env->insn_aux_data[h].loop;
+	entry = &frame->loop_stack[frame->loop_stack_cnt - 1];
+	if (loop->rt_bounded || !env->insn_aux_data[env->insn_idx].guard_place ||
+	    entry->loop_id != h || entry->terminates)
+		return 0;
+
+	/*
+	 * A guard has one way out, and only that one is looked at.
+	 *
+	 * Leave the subprog, if that is possible every time the program gets here:
+	 *	do { p = lookup(); } while (!p); *p
+	 * The code that follows the loop counts on what the jump that leaves it has found out.
+	 *
+	 * Otherwise leave the loop:
+	 *	lock(); do { ... } while (...); unlock();
+	 * The code that follows the loop releases what is held.
+	 *
+	 * It's the same way for all states that get here. As long as they leave the subprog
+	 * what would leave the loop is put aside.
+	 */
+	if (!budget_can_unwind(env, env->cur_state))
+		aux->guard_no_unwind = true;
+	if (!aux->loop_guard && !aux->guard_no_unwind) {
+		aux->loop_guard = true;
+		aux->guard_unwind = true;
+	}
+	if (aux->guard_unwind && aux->guard_no_unwind) {
+		aux->guard_unwind = false;
+		bpf_flow_unpark(env, env->insn_idx);
+	}
+	if (!aux->guard_no_unwind) {
+		err = push_budget_exit(env);
+		if (err)
+			return err;
+	}
+	if (aux->guard_to < 0) {
+		if (aux->guard_unwind)
+			return 0;
+		verbose(env, "loop at insn %d never exits\n", h);
+		return -EINVAL;
+	}
+
+	branch = push_stack(env, env->insn_aux_data[env->insn_idx].guard_to, env->insn_idx, false);
+	if (IS_ERR(branch))
+		return PTR_ERR(branch);
+	env->head->parked = aux->guard_unwind;
+	aux->loop_guard = true;
+	if (!aux->guard_at_header)
+		return 0;
+	/*
+	 * The program doesn't leave the loop from here. What it computes in the loop
+	 * for the code that follows is not there. Nothing good comes out of a loop
+	 * that is cut short anyway. Let it be 0.
+	 */
+	regs = branch->frame[branch->curframe]->regs;
+	for (i = BPF_REG_0; i < BPF_REG_FP; i++)
+		if (regs[i].type == NOT_INIT &&
+		    (env->insn_aux_data[aux->guard_to].live_regs_before & BIT(i)))
+			aux->guard_zero |= BIT(i);
+	for (i = BPF_REG_0; i < BPF_REG_FP; i++)
+		if (aux->guard_zero & BIT(i))
+			__mark_reg_const_zero(env, &regs[i]);
+
+	func = branch->frame[branch->curframe];
+	branch->insn_idx = aux->guard_to;
+	err = bpf_live_stack_query_init(env, branch);
+	if (err)
+		return err;
+	for (i = 0; i < min_t(int, bpf_stack_nr_slots(func), 64); i++) {
+		if (!bpf_stack_slot_alive(env, branch->curframe, i * 2) &&
+		    !bpf_stack_slot_alive(env, branch->curframe, i * 2 + 1))
+			continue;
+		slot = bpf_stack_slot(func, i);
+		for (j = 0; j < BPF_REG_SIZE; j++)
+			if (slot->slot_type[j] == STACK_INVALID ||
+			    slot->slot_type[j] == STACK_POISON)
+				aux->guard_zero_slots |= BIT_ULL(i);
+	}
+	for (i = 0; i < min_t(int, bpf_stack_nr_slots(func), 64); i++) {
+		if (!(aux->guard_zero_slots & BIT_ULL(i)))
+			continue;
+		slot = bpf_stack_slot(func, i);
+		bpf_mark_reg_not_init(env, &slot->spilled_ptr);
+		for (j = 0; j < BPF_REG_SIZE; j++)
+			slot->slot_type[j] = STACK_ZERO;
+	}
+	return 0;
+}
+
+/* The states that the insn pushed go where they were pushed to. */
+static int flow_drain(struct bpf_verifier_env *env)
+{
+	struct bpf_verifier_stack_elem *elem;
+	int err = 0;
+
+	while ((elem = env->head)) {
+		env->head = elem->next;
+		env->stack_size--;
+		if (!err && elem->parked)
+			err = bpf_flow_park(env, &elem->st, elem->insn_idx, elem->prev_insn_idx);
+		else if (!err)
+			err = bpf_flow_deliver(env, &elem->st, elem->insn_idx,
+					       elem->prev_insn_idx);
+		bpf_free_verifier_state(&elem->st, false);
+		kfree(elem);
+	}
+	return err ?: bpf_flow_deliver_unparked(env);
+}
+
+/*
+ * A subprog on a cycle of the call graph counts its frames at run time, see
+ * bpf_insert_recursion_checks(). When there are too many it leaves at once
+ * with 0 in place of the result: it unwinds if it has unwind_exit, otherwise it
+ * returns and callers have to be fine with that.
+ */
+static int check_recursion_guard(struct bpf_verifier_env *env)
+{
+	struct bpf_subprog_info *sub = &env->subprog_info[cur_func(env)->subprogno];
+
+	if (!sub->recursive || env->insn_idx != sub->start)
+		return 0;
+	return push_budget_exit(env);
+}
+
+/* Process the current state until it gets to the start of a basic block. */
+static int do_check_block(struct bpf_verifier_env *env, int prev_insn_idx)
+{
 	struct bpf_verifier_state *state = env->cur_state;
 	struct bpf_insn *insns = env->prog->insnsi;
 	int insn_cnt = env->prog->len;
-	bool do_print_state = false;
-	int prev_insn_idx = -1;
+	bool do_print_state = true;
 
 	for (;;) {
 		struct bpf_insn *insn;
@@ -20800,9 +21777,6 @@ static int do_check(struct bpf_verifier_env *env)
 
 		if (need_resched())
 			cond_resched();
-
-		/* reset current history entry on each new instruction */
-		env->cur_hist_ent = NULL;
 
 		env->prev_insn_idx = prev_insn_idx;
 		if (env->insn_idx >= insn_cnt) {
@@ -20816,18 +21790,10 @@ static int do_check(struct bpf_verifier_env *env)
 
 		account_processed_insn(env);
 
-		if (env->insn_processed > BPF_COMPLEXITY_LIMIT_INSNS) {
-			verbose(env,
-				"BPF program is too large. Processed %d insn\n",
-				env->insn_processed);
-			return -E2BIG;
-		}
-
 		state->last_insn_idx = env->prev_insn_idx;
 		state->insn_idx = env->insn_idx;
 		/*
-		 * Record the incoming edge so active and queued paths use the same
-		 * branch-recording path. A zero-offset conditional has identical
+		 * Record the incoming edge. A zero-offset conditional has identical
 		 * successors, so its outcome cannot be reconstructed from the edge.
 		 */
 		if (!state->speculative && prev_insn_idx >= 0 && prev_insn_idx < insn_cnt) {
@@ -20847,40 +21813,6 @@ static int do_check(struct bpf_verifier_env *env)
 			}
 		}
 
-		/*
-		 * Possibly widen the registers before creating a checkpoint
-		 * in bpf_is_state_visited(). The next loop iteration will
-		 * have a chance to hit this checkpoint and converge.
-		 */
-		err = handle_loop_entry_exit(env);
-		if (err)
-			return err;
-
-		if (bpf_is_prune_point(env, env->insn_idx)) {
-			err = bpf_is_state_visited(env, env->insn_idx);
-			if (err < 0)
-				return err;
-			if (err == 1) {
-				/* found equivalent state, can prune the search */
-				if (env->log.level & BPF_LOG_LEVEL) {
-					if (do_print_state)
-						verbose(env, "\nfrom %d to %d%s: safe\n",
-							env->prev_insn_idx, env->insn_idx,
-							env->cur_state->speculative ?
-							" (speculative execution)" : "");
-					else
-						verbose(env, "%d: safe\n", env->insn_idx);
-				}
-				goto process_bpf_exit;
-			}
-		}
-
-		if (bpf_is_jmp_point(env, env->insn_idx)) {
-			err = bpf_push_jmp_history(env, state, 0, 0, 0, NULL, 0);
-			if (err)
-				return err;
-		}
-
 		if (env->log.level & BPF_LOG_LEVEL2 && do_print_state) {
 			verbose(env, "\nfrom %d to %d%s:",
 				env->prev_insn_idx, env->insn_idx,
@@ -20888,13 +21820,6 @@ static int do_check(struct bpf_verifier_env *env)
 				" (speculative execution)" : "");
 			print_verifier_state(env, state, state->curframe, true);
 			do_print_state = false;
-		}
-
-		if (bpf_loop_at_index(env, env->insn_idx) >= 0 &&
-		    cur_func(env)->loop_stack_cnt == 0) {
-			verifier_bug(env, "loop stack empty at %d, while inside the loop %d\n",
-				     env->insn_idx, bpf_loop_at_index(env, env->insn_idx));
-			return -EFAULT;
 		}
 
 		if (env->log.level & BPF_LOG_LEVEL) {
@@ -20947,6 +21872,14 @@ static int do_check(struct bpf_verifier_env *env)
 		if (state->speculative && insn_aux->nospec)
 			goto process_bpf_exit;
 
+		err = check_loop_guard(env);
+		if (err)
+			return err;
+
+		err = check_recursion_guard(env);
+		if (err)
+			return err;
+
 		err = do_check_insn(env, &do_print_state);
 		if (error_recoverable_with_nospec(err) && state->speculative) {
 			/* Prevent this speculative path from ever reaching the
@@ -20968,19 +21901,8 @@ static int do_check(struct bpf_verifier_env *env)
 		}
 
 		if (state->speculative && insn_aux->nospec_result) {
-			/* If we are on a path that performed a jump-op, this
-			 * may skip a nospec patched-in after the jump. This can
-			 * currently never happen because nospec_result is only
-			 * used for the write-ops
-			 * `*(size*)(dst_reg+off)=src_reg|imm32` and helper
-			 * calls. These must never skip the following insn
-			 * (i.e., bpf_insn_successors()'s opcode_info.can_jump
-			 * is false). Still, add a warning to document this in
-			 * case nospec_result is used elsewhere in the future.
-			 *
-			 * All non-branch instructions have a single
-			 * fall-through edge. For these, nospec_result should
-			 * already work.
+			/* All non-branch instructions have a single fall-through
+			 * edge. For these, nospec_result should already work.
 			 */
 			if (verifier_bug_if((BPF_CLASS(insn->code) == BPF_JMP ||
 					     BPF_CLASS(insn->code) == BPF_JMP32) &&
@@ -20990,23 +21912,40 @@ static int do_check(struct bpf_verifier_env *env)
 process_bpf_exit:
 			account_current_path(env);
 			mark_verifier_state_scratched(env);
-			err = bpf_update_branch_counts(env, env->cur_state);
-			if (err)
-				return err;
-			err = pop_stack(env, &prev_insn_idx, &env->insn_idx,
-					pop_log);
-			if (err < 0) {
-				if (err != -ENOENT)
-					return err;
-				break;
-			} else {
-				do_print_state = true;
-				continue;
-			}
+			bpf_free_verifier_state(state, false);
+			memset(state, 0, sizeof(*state));
+			return flow_drain(env);
+		}
+
+		err = flow_drain(env);
+		if (err)
+			return err;
+
+		if (env->insn_idx < insn_cnt && bpf_flow_is_point(env, env->insn_idx)) {
+			account_current_path(env);
+			mark_verifier_state_scratched(env);
+			return bpf_flow_deliver(env, state, env->insn_idx, prev_insn_idx);
 		}
 	}
+}
 
-	return 0;
+static int do_check(struct bpf_verifier_env *env)
+{
+	int prev_insn_idx = -1;
+	int err;
+
+	err = bpf_flow_deliver(env, env->cur_state, env->insn_idx, -1);
+	while (!err) {
+		err = bpf_flow_next(env, &prev_insn_idx);
+		if (err == -ENOENT)
+			return 0;
+		if (err)
+			break;
+		/* What is known about how the state came to be is not kept with it. */
+		bpf_diag_event_log_restore(env, 0);
+		err = do_check_block(env, prev_insn_idx);
+	}
+	return err;
 }
 
 static int find_btf_percpu_datasec(struct btf *btf)
@@ -22069,6 +23008,7 @@ static void free_states(struct bpf_verifier_env *env)
 	bpf_free_verifier_state(env->cur_state, true);
 	env->cur_state = NULL;
 	while (!pop_stack(env, NULL, NULL, false));
+	bpf_flow_reset(env);
 
 	list_for_each_safe(pos, tmp, &env->free_list) {
 		sl = container_of(pos, struct bpf_verifier_state_list, node);
@@ -22102,8 +23042,8 @@ static void free_states(struct bpf_verifier_env *env)
 	}
 }
 
-static int do_check_common(struct bpf_verifier_env *env, int subprog,
-			   enum bpf_func_context context)
+static int __do_check_common(struct bpf_verifier_env *env, int subprog,
+			     enum bpf_func_context context)
 {
 	bool pop_log = !(env->log.level & BPF_LOG_LEVEL2);
 	struct bpf_subprog_info *sub = subprog_info(env, subprog);
@@ -22124,6 +23064,8 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog,
 	state->speculative = false;
 	state->branches = 1;
 	state->in_sleepable = context == BPF_FUNC_CTX_SLEEPABLE;
+	/* nobody knows what the callers of a global function or of an extension hold */
+	state->callers_unknown = subprog || env->prog->type == BPF_PROG_TYPE_EXT;
 	env->no_rcu_read_lock = context == BPF_FUNC_CTX_NO_RCU_LOCK;
 	state->frame[0] = kzalloc_obj(struct bpf_func_state, GFP_KERNEL_ACCOUNT);
 	if (!state->frame[0]) {
@@ -22230,7 +23172,7 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog,
 		 * it's matching expected signature, and otherwise mark BTF
 		 * info for main program as unreliable
 		 */
-		if (env->prog->aux->func_info_aux) {
+		if (env->prog->aux->func_info_aux && !env->prog->aux->func_info_aux[0].unreliable) {
 			ret = btf_prepare_func_args(env, 0);
 			if (ret || sub->arg_slot_cnt != 1 ||
 			    sub->args[0].arg_type != ARG_PTR_TO_CTX) {
@@ -22277,6 +23219,26 @@ out:
 	 */
 	sub->insns_total = old_insns_total + (env->insn_processed - insn_processed);
 	return ret;
+}
+
+static int do_check_common(struct bpf_verifier_env *env, int subprog,
+			   enum bpf_func_context context)
+{
+	int insn_idx = env->insn_idx, tries = 0, ret;
+	u64 log_pos = env->log.end_pos;
+
+	for (;;) {
+		env->restart = false;
+		ret = __do_check_common(env, subprog, context);
+		if (!ret || !env->restart)
+			return ret;
+		if (++tries == 8) {
+			verbose(env, "verification was started again too many times\n");
+			return ret;
+		}
+		bpf_vlog_reset(&env->log, log_pos);
+		env->insn_idx = insn_idx;
+	}
 }
 
 /* Lazily verify all global functions based on their BTF, if they are called
@@ -22362,6 +23324,37 @@ static int do_check_main(struct bpf_verifier_env *env)
 	if (!ret)
 		env->prog->aux->stack_depth = env->subprog_info[0].stack_depth;
 	return ret;
+}
+
+/*
+ * What it took to verify a static subprog on its own is not in insns_total of its callers.
+ * Add it, once per caller. The main prog and global subprogs have all of it already.
+ */
+static void add_insns_of_callees(struct bpf_verifier_env *env)
+{
+	struct bpf_subprog_info *si = env->subprog_info;
+	struct bpf_insn *insn = env->prog->insnsi;
+	int *added, i, j, s, c;
+
+	added = kvcalloc(env->subprog_cnt, sizeof(*added), GFP_KERNEL_ACCOUNT);
+	if (!added)
+		return;
+	/* callees first */
+	for (i = 0; i < env->subprog_cnt; i++) {
+		s = env->subprog_topo_order[i];
+		if (!s || bpf_subprog_is_global(env, s))
+			continue;
+		for (j = si[s].start; j < si[s + 1].start; j++) {
+			if (!bpf_pseudo_call(&insn[j]))
+				continue;
+			c = bpf_find_subprog(env, j + insn[j].imm + 1);
+			if (c <= 0 || c == s || !si[c].on_its_own || added[c] == s)
+				continue;
+			added[c] = s;
+			si[s].insns_total += si[c].insns_total;
+		}
+	}
+	kvfree(added);
 }
 
 static void print_verification_stats(struct bpf_verifier_env *env)
@@ -24351,6 +25344,10 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	if (ret < 0)
 		goto skip_full_check;
 
+	ret = mark_recursive_subprogs(env);
+	if (ret < 0)
+		goto skip_full_check;
+
 	ret = sort_subprogs_topo(env);
 	if (ret < 0)
 		goto skip_full_check;
@@ -24389,6 +25386,10 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	if (ret < 0)
 		goto skip_full_check;
 
+	ret = bpf_flow_prepare(env);
+	if (ret < 0)
+		goto skip_full_check;
+
 	bpf_free_subprog_jts(env);
 
 	ret = mark_fastcall_patterns(env);
@@ -24397,10 +25398,9 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 
 	ret = do_check_main(env);
 	ret = ret ?: do_check_subprogs(env);
-
-	/* reject recursion through the callx edges found by the main pass */
-	if (ret == 0 && env->callx_edges)
-		ret = sort_subprogs_topo(env);
+	/* while the calls are what they are in the program */
+	if (env->log.level & BPF_LOG_STATS)
+		add_insns_of_callees(env);
 
 	if (ret == 0)
 		ret = bpf_insert_loop_guards(env);
@@ -24560,6 +25560,8 @@ err_free_env:
 	vfree(env->insn_aux_data);
 	kvfree(env->fd_array);
 	bpf_free_scev(env);
+	bpf_flow_free(env);
+	bpf_join_free(env);
 	bpf_stack_liveness_free(env);
 	kvfree(env->cfg.postorder_nums);
 	kvfree(env->cfg.insn_postorder);

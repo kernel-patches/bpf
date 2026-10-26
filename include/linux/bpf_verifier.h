@@ -353,8 +353,26 @@ struct loop_stack_entry {
 	struct bpf_verifier_state *entry_state;
 	u32 min_header_count;
 	u32 max_header_count;
-	u32 loop_id:31;
+	u32 loop_id:27;
 	u32 terminates:1;
+	/*
+	 * The iterations are kept apart: states with different @trip are not
+	 * compared and not joined for as long as they are in the loop.
+	 */
+	u32 apart:1;
+	/* max_header_count follows from the state at the entry, not from patience */
+	u32 counted:1;
+	/* the walk goes on for as long as the jumps that leave the loop are decided */
+	u32 probe:1;
+	/* one of them went both ways */
+	u32 undecided:1;
+	u32 trip;
+	/*
+	 * A walk on patience: env->insn_processed at its start and how much it may grow.
+	 * The size of the loop says nothing about the functions that it calls.
+	 */
+	u32 walk_start;
+	u32 walk_patience;
 	int iv_reg;
 	struct cnum64 iv_range;
 };
@@ -416,6 +434,10 @@ struct bpf_func_state {
 	 * subprogram (loops never cross subprogram boundaries).
 	 */
 	u32 loop_stack_cnt;
+	/* What was held when the frame was entered. More than that is for this frame to release. */
+	u32 entry_refs;
+	u32 entry_rcu_locks;
+	u32 entry_preempt_locks;
 
 	/* The following fields should be last. See copy_func_state() */
 	/* The state of the stack. Each element of the array describes BPF_REG_SIZE
@@ -546,8 +568,17 @@ struct bpf_verifier_state {
 
 	bool speculative;
 	bool in_sleepable;
+	/* a function that is verified on its own and is called from a callback */
+	bool in_callback;
+	/* a global function or an extension, and what it calls: exit of frame 0 is not the end */
+	bool callers_unknown;
 	/* The callee left with unwind_exit. Next insn is unwind_goto. */
 	bool unwound;
+	/*
+	 * Not zero in a function that is verified on its own: the call that the
+	 * state at its entry came from, see bpf_flow_call().
+	 */
+	u32 flow_entry;
 
 	/*
 	 * First and last insn idx of this verifier state.
@@ -1022,14 +1053,21 @@ struct bpf_subprog_info {
 	 * a hidden pointer to the result, a pair in two registers, no dead arguments.
 	 */
 	bool stack_args_from_code: 1;
+	/* it releases what its caller holds, so it's verified in the context of such caller */
+	bool releases_inherited: 1;
+	/* a call of it was verified on its own: its insns are not in insns_total of the caller */
+	bool on_its_own: 1;
 	/* it can leave with unwind_exit: it has one, or unwind_goto follows every call of it */
 	bool bail_unwinds: 1;
+	/* some call of it is not followed by unwind_goto */
+	bool plain_call: 1;
 	u8 code_stack_args:4;
 	u8 arg_slot_cnt:4;
 
 	enum priv_stack_mode priv_stack_mode;
 	struct bpf_subprog_arg_info args[MAX_BPF_FUNC_ARGS];
 	u32 recursion_weight; /* see bpf_insert_recursion_checks() */
+	int bail_insn; /* an exit of it, for the main pass. -1 if there is none */
 	u16 stack_arg_cnt; /* incoming + max outgoing */
 	u16 max_out_stack_arg_cnt;
 };
@@ -1131,6 +1169,7 @@ struct bpf_verifier_env {
 	bool test_state_freq;		/* test verifier with different pruning frequency */
 	bool test_reg_invariants;	/* fail verification on register invariants violations */
 	bool uses_arena_sp;		/* the program has insns with BPF_REG_ARENA_SP */
+	bool restart;			/* do the main pass again with what was found out */
 	u32 max_arena_stack_depth;	/* of all call chains */
 	struct bpf_verifier_state *cur_state; /* current verifier state */
 	/* Search pruning optimization, array of list_heads for
@@ -1275,6 +1314,7 @@ struct bpf_verifier_env {
 	struct bpf_iarray *gotox_tmp_buf;
 	int *idoms;
 	struct scev *scev;
+	struct bpf_flow *flow;
 	struct bpf_join_state *join;
 };
 
@@ -1459,15 +1499,44 @@ void bpf_free_kfunc_btf_tab(struct bpf_kfunc_btf_tab *tab);
 int mark_chain_precision(struct bpf_verifier_env *env, int regno);
 
 int bpf_is_state_visited(struct bpf_verifier_env *env, int insn_idx);
+int bpf_clean_verifier_state(struct bpf_verifier_env *env, struct bpf_verifier_state *st);
+bool bpf_state_subsumes(struct bpf_verifier_env *env, struct bpf_verifier_state *old,
+			struct bpf_verifier_state *cur);
+
 /* join.c */
 int bpf_states_join(struct bpf_verifier_env *env, struct bpf_verifier_state *dst,
 		    const struct bpf_verifier_state *a, const struct bpf_verifier_state *b,
 		    bool widen);
 void bpf_join_free(struct bpf_verifier_env *env);
 
+/* flow.c */
+int bpf_flow_prepare(struct bpf_verifier_env *env);
+void bpf_flow_reset(struct bpf_verifier_env *env);
+void bpf_flow_free(struct bpf_verifier_env *env);
+bool bpf_flow_is_point(struct bpf_verifier_env *env, int insn_idx);
+struct bpf_verifier_state *bpf_flow_keep_state(struct bpf_verifier_env *env,
+					       const struct bpf_verifier_state *st);
+int bpf_flow_deliver(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
+		     int insn_idx, int prev_insn_idx);
+int bpf_flow_park(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
+		  int insn_idx, int prev_insn_idx);
+void bpf_flow_unpark(struct bpf_verifier_env *env, int prev_insn_idx);
+int bpf_flow_deliver_unparked(struct bpf_verifier_env *env);
+int bpf_flow_next(struct bpf_verifier_env *env, int *prev_insn_idx);
+int bpf_flow_call(struct bpf_verifier_env *env, struct bpf_verifier_state *caller,
+		  struct bpf_verifier_state *entry, int subprog, int call_idx);
+int bpf_flow_exit(struct bpf_verifier_env *env, struct bpf_verifier_state *st, int exit_idx);
+/* verifier.c, for flow.c */
+int bpf_flow_loop_leave(struct bpf_verifier_env *env, bool *enters);
+int bpf_flow_loop_enter(struct bpf_verifier_env *env, bool *backedge, bool *drop);
+int bpf_flow_return(struct bpf_verifier_env *env, struct bpf_verifier_state *caller,
+		    const struct bpf_verifier_state *exit, int call_idx);
 int bpf_insert_loop_guards(struct bpf_verifier_env *env);
 int bpf_insert_recursion_reports(struct bpf_verifier_env *env);
 int bpf_insert_unwound_reports(struct bpf_verifier_env *env);
+u16 bpf_kfunc_const_arg_regs(struct bpf_verifier_env *env, struct bpf_insn *insn);
+u16 bpf_helper_const_arg_regs(struct bpf_verifier_env *env, struct bpf_insn *insn);
+bool bpf_insn_is_iter_next(struct bpf_verifier_env *env, struct bpf_insn *insn);
 bool bpf_insn_leaves_loop(struct bpf_verifier_env *env, int h, int n);
 bool bpf_jump_leaves_loop(struct bpf_verifier_env *env, int h, int n);
 int bpf_insert_recursion_checks(struct bpf_verifier_env *env);

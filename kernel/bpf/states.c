@@ -949,7 +949,9 @@ static bool loop_stack_safe(struct bpf_verifier_env *env, struct bpf_func_state 
 	for (i = 0; i < old->loop_stack_cnt; i++) {
 		if (old_stack[i].loop_id == cur_stack[i].loop_id &&
 		    old_stack[i].max_header_count == cur_stack[i].max_header_count &&
-		    old_stack[i].terminates == cur_stack[i].terminates)
+		    old_stack[i].terminates == cur_stack[i].terminates &&
+		    old_stack[i].apart == cur_stack[i].apart &&
+		    old_stack[i].trip == cur_stack[i].trip)
 			continue;
 		return false;
 	}
@@ -1041,6 +1043,9 @@ static bool states_equal(struct bpf_verifier_env *env,
 	 * must never prune a non-speculative execution one.
 	 */
 	if (old->speculative && !cur->speculative)
+		return false;
+
+	if (old->in_callback != cur->in_callback || old->callers_unknown != cur->callers_unknown)
 		return false;
 
 	if (old->in_sleepable != cur->in_sleepable)
@@ -1730,4 +1735,16 @@ miss:
 	 * will not be considered for equivalence until branches == 0.
 	 */
 	return bpf_split_cur_state(env);
+}
+
+int bpf_clean_verifier_state(struct bpf_verifier_env *env, struct bpf_verifier_state *st)
+{
+	return clean_verifier_state(env, st);
+}
+
+/* Everything that @cur describes is described by @old. */
+bool bpf_state_subsumes(struct bpf_verifier_env *env, struct bpf_verifier_state *old,
+			struct bpf_verifier_state *cur)
+{
+	return states_equal(env, old, cur, RANGE_WITHIN);
 }
