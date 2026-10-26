@@ -274,10 +274,6 @@ enum bpf_stack_slot_type {
 #define BPF_HALF_REG_SIZE	4
 #define STACK_SLOT_SZ		4
 
-#define BPF_REGMASK_ARGS ((1 << BPF_REG_1) | (1 << BPF_REG_2) | \
-			  (1 << BPF_REG_3) | (1 << BPF_REG_4) | \
-			  (1 << BPF_REG_5))
-
 #define BPF_MAIN_FUNC (-1)
 
 #define BPF_DYNPTR_SIZE		sizeof(struct bpf_dynptr_kern)
@@ -1088,8 +1084,6 @@ struct bpf_verifier_env {
 	 * memory consumption during verification
 	 */
 	u32 peak_states;
-	/* longest register parentage chain walked for liveness marking */
-	u32 longest_mark_read_walk;
 	/*
 	 * The program's fd_array comes in two shapes, told apart by whether
 	 * the caller passed fd_array_cnt. They are mutually exclusive:

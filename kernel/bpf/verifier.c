@@ -847,15 +847,12 @@ static int unmark_stack_slots_dynptr(struct bpf_verifier_env *env, struct bpf_re
 				      : reg->id);
 }
 
-static void __mark_reg_unknown(const struct bpf_verifier_env *env,
-			       struct bpf_reg_state *reg);
-
 static void mark_reg_invalid(const struct bpf_verifier_env *env, struct bpf_reg_state *reg)
 {
 	if (!env->allow_ptr_leaks)
 		bpf_mark_reg_not_init(env, reg);
 	else
-		__mark_reg_unknown(env, reg);
+		bpf_mark_reg_unknown(reg);
 }
 
 static int dynptr_ref_cnt(struct bpf_verifier_env *env, int v_parent_id)
@@ -1998,7 +1995,7 @@ static void __mark_reg_known_zero(struct bpf_reg_state *reg)
 	__mark_reg_known(reg, 0);
 }
 
-static void __mark_reg_const_zero(const struct bpf_verifier_env *env, struct bpf_reg_state *reg)
+static void __mark_reg_const_zero(struct bpf_reg_state *reg)
 {
 	__mark_reg_known(reg, 0);
 	reg->type = SCALAR_VALUE;
@@ -2343,16 +2340,10 @@ void bpf_mark_reg_unknown(struct bpf_reg_state *reg)
 	reg_step_reset(reg);
 }
 
-static void __mark_reg_unknown(const struct bpf_verifier_env *env,
-			       struct bpf_reg_state *reg)
-{
-	bpf_mark_reg_unknown(reg);
-}
-
 static void mark_reg_unknown(struct bpf_verifier_env *env,
 			     struct bpf_reg_state *regs, u32 regno)
 {
-	__mark_reg_unknown(env, regs + regno);
+	bpf_mark_reg_unknown(regs + regno);
 }
 
 static int __mark_reg_s32_range(struct bpf_verifier_env *env,
@@ -2378,7 +2369,7 @@ static int __mark_reg_s32_range(struct bpf_verifier_env *env,
 void bpf_mark_reg_not_init(const struct bpf_verifier_env *env,
 			   struct bpf_reg_state *reg)
 {
-	__mark_reg_unknown(env, reg);
+	bpf_mark_reg_unknown(reg);
 	reg->type = NOT_INIT;
 }
 
@@ -3973,7 +3964,7 @@ static void mark_reg_stack_read(struct bpf_verifier_env *env,
 		/* Any access_size read into register is zero extended,
 		 * so the whole register == const_zero.
 		 */
-		__mark_reg_const_zero(env, &state->regs[dst_regno]);
+		__mark_reg_const_zero(&state->regs[dst_regno]);
 	} else {
 		/* have read misc data from the stack */
 		mark_reg_unknown(env, state->regs, dst_regno);
@@ -4115,10 +4106,10 @@ static int check_stack_read_fixed_off(struct bpf_verifier_env *env,
 
 				if (spill_cnt == size &&
 				    tnum_is_const(reg->var_off) && reg->var_off.value == 0) {
-					__mark_reg_const_zero(env, &state->regs[dst_regno]);
+					__mark_reg_const_zero(&state->regs[dst_regno]);
 				} else if (zero_cnt == size) {
 					/* similarly to mark_reg_stack_read(), preserve zeroes */
-					__mark_reg_const_zero(env, &state->regs[dst_regno]);
+					__mark_reg_const_zero(&state->regs[dst_regno]);
 				} else {
 					mark_reg_stack_read(env, reg_state, off, off + size,
 							    dst_regno);
@@ -7744,7 +7735,7 @@ static int check_stack_range_initialized(
 		    (ss->spilled_ptr.type == SCALAR_VALUE ||
 		     env->allow_ptr_leaks)) {
 			if (clobber) {
-				__mark_reg_unknown(env, &ss->spilled_ptr);
+				bpf_mark_reg_unknown(&ss->spilled_ptr);
 				for (j = 0; j < BPF_REG_SIZE; j++)
 					scrub_spilled_slot(&ss->slot_type[j]);
 			}
@@ -8709,7 +8700,7 @@ static int process_iter_next_call(struct bpf_verifier_env *env, int insn_idx,
 
 	/* mark current iter state as drained and assume returned NULL */
 	cur_iter->iter.state = BPF_ITER_STATE_DRAINED;
-	__mark_reg_const_zero(env, &cur_fr->regs[BPF_REG_0]);
+	__mark_reg_const_zero(&cur_fr->regs[BPF_REG_0]);
 
 	return 0;
 }
@@ -15815,7 +15806,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		ret_nregs = mark_kfunc_ret_regs(env, regs, t->size);
 		if (meta.btf == btf_vmlinux && (meta.func_id == special_kfunc_list[KF_bpf_res_spin_lock] ||
 		    meta.func_id == special_kfunc_list[KF_bpf_res_spin_lock_irqsave]))
-			__mark_reg_const_zero(env, &regs[BPF_REG_0]);
+			__mark_reg_const_zero(&regs[BPF_REG_0]);
 	} else if (btf_type_is_struct(t)) {
 		struct btf_member_path path = {};
 		const char *member_note = "";
@@ -16445,14 +16436,14 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env, struct bpf_insn
 		/* Taint dst register if offset had invalid bounds derived from
 		 * e.g. dead branches.
 		 */
-		__mark_reg_unknown(env, dst_reg);
+		bpf_mark_reg_unknown(dst_reg);
 		return 0;
 	}
 
 	if (BPF_CLASS(insn->code) != BPF_ALU64 && !to_scalar) {
 		/* 32-bit ALU ops on pointers produce (meaningless) scalars */
 		if (opcode == BPF_SUB && env->allow_ptr_leaks) {
-			__mark_reg_unknown(env, dst_reg);
+			bpf_mark_reg_unknown(dst_reg);
 			return 0;
 		}
 
@@ -16516,7 +16507,7 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env, struct bpf_insn
 	}
 
 	if (to_scalar) {
-		__mark_reg_unknown(env, dst_reg);
+		bpf_mark_reg_unknown(dst_reg);
 		return 0;
 	}
 
@@ -17463,7 +17454,7 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 	int ret;
 
 	if (!is_safe_to_compute_dst_reg_range(insn, &src_reg)) {
-		__mark_reg_unknown(env, dst_reg);
+		bpf_mark_reg_unknown(dst_reg);
 		return 0;
 	}
 
@@ -19392,7 +19383,7 @@ static int check_ld_imm(struct bpf_verifier_env *env, struct bpf_insn *insn)
 	if (insn->src_reg == BPF_PSEUDO_MAP_VALUE ||
 	    insn->src_reg == BPF_PSEUDO_MAP_IDX_VALUE) {
 		if (map->map_type == BPF_MAP_TYPE_ARENA) {
-			__mark_reg_unknown(env, dst_reg);
+			bpf_mark_reg_unknown(dst_reg);
 			dst_reg->map_ptr = map;
 			bpf_diag_mod_end(env);
 			return 0;
@@ -20487,7 +20478,7 @@ static void null_to_arena(struct bpf_verifier_env *env, int regno)
 	reg = &cur_regs(env)[regno];
 	if (reg->type != SCALAR_VALUE || !tnum_equals_const(reg->var_off, 0))
 		return;
-	__mark_reg_const_zero(env, reg);
+	__mark_reg_const_zero(reg);
 	reg->type = PTR_TO_ARENA;
 }
 
@@ -20983,9 +20974,9 @@ static int push_budget_exit(struct bpf_verifier_env *env)
 		return PTR_ERR(branch);
 	branch->unwound = sub->bail_unwinds;
 	regs = branch->frame[branch->curframe]->regs;
-	__mark_reg_const_zero(env, &regs[BPF_REG_0]);
+	__mark_reg_const_zero(&regs[BPF_REG_0]);
 	if (bpf_ret_reg_pair(env, cur_func(env)->subprogno))
-		__mark_reg_const_zero(env, &regs[BPF_REG_2]);
+		__mark_reg_const_zero(&regs[BPF_REG_2]);
 	return 0;
 }
 
@@ -21070,7 +21061,7 @@ static int check_loop_guard(struct bpf_verifier_env *env)
 			aux->guard_zero |= BIT(i);
 	for (i = BPF_REG_0; i < BPF_REG_FP; i++)
 		if (aux->guard_zero & BIT(i))
-			__mark_reg_const_zero(env, &regs[i]);
+			__mark_reg_const_zero(&regs[i]);
 
 	func = branch->frame[branch->curframe];
 	branch->insn_idx = aux->guard_to;
@@ -22721,12 +22712,12 @@ static void print_verification_stats(struct bpf_verifier_env *env)
 				env->subprog_info[i].stack_depth);
 		}
 	}
-	/* user space parses this line. There is no limit. */
+	/* user space parses this line. There is no limit and there are no read marks. */
 	verbose(env, "processed %d insns (limit 0) max_states_per_insn %d "
-		"total_states %d peak_states %d mark_read %d\n",
+		"total_states %d peak_states %d mark_read 0\n",
 		env->insn_processed,
 		env->max_states_per_insn, env->total_states,
-		env->peak_states, env->longest_mark_read_walk);
+		env->peak_states);
 }
 
 int bpf_prog_ctx_arg_info_init(struct bpf_prog *prog,

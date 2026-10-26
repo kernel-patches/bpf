@@ -5,8 +5,6 @@
 #include <linux/cnum.h>
 #include <linux/filter.h>
 
-#define verbose(env, fmt, args...) bpf_verifier_log_write(env, fmt, ##args)
-
 /* check %cur's range satisfies %old's */
 static bool range_within(const struct bpf_reg_state *old,
 			 const struct bpf_reg_state *cur)
