@@ -816,7 +816,7 @@ static int ati_remote_probe(struct usb_interface *interface,
 	struct usb_endpoint_descriptor *endpoint_in, *endpoint_out;
 	struct ati_receiver_type *type = (struct ati_receiver_type *)id->driver_info;
 	struct ati_remote *ati_remote;
-	struct input_dev *input_dev;
+	struct input_dev *input_dev = NULL;
 	struct device *device = &interface->dev;
 	struct rc_dev *rc_dev;
 	int err = -ENOMEM;
@@ -896,37 +896,47 @@ static int ati_remote_probe(struct usb_interface *interface,
 	if (err)
 		goto exit_kill_urbs;
 
+	/*
+	 * Set up the mouse input device before registering the rc device:
+	 * opening the rc device submits the interrupt URB, and its
+	 * completion handler reports mouse events through
+	 * ati_remote->idev, so that pointer has to be valid before the rc
+	 * device can be opened.  input_event() may be called before
+	 * input_register_device(); such events are then simply not
+	 * delivered to any input handler.
+	 */
+	if (mouse) {
+		input_dev = input_allocate_device();
+		if (!input_dev) {
+			err = -ENOMEM;
+			goto exit_kill_urbs;
+		}
+
+		ati_remote->idev = input_dev;
+		ati_remote_input_init(ati_remote);
+	}
+
 	/* Set up and register rc device */
 	err = rc_register_device(ati_remote->rdev);
 	if (err)
 		goto exit_kill_urbs;
 
-	/* Set up and register mouse input device */
+	/* Register the mouse input device */
 	if (mouse) {
-		input_dev = input_allocate_device();
-		if (!input_dev) {
-			err = -ENOMEM;
-			goto exit_unregister_device;
-		}
-
-		ati_remote->idev = input_dev;
-		ati_remote_input_init(ati_remote);
 		err = input_register_device(input_dev);
-
 		if (err)
-			goto exit_free_input_device;
+			goto exit_unregister_device;
 	}
 
 	usb_set_intfdata(interface, ati_remote);
 	return 0;
 
- exit_free_input_device:
-	input_free_device(input_dev);
  exit_unregister_device:
 	rc_unregister_device(rc_dev);
  exit_kill_urbs:
 	usb_kill_urb(ati_remote->irq_urb);
 	usb_kill_urb(ati_remote->out_urb);
+	input_free_device(input_dev);
  exit_free_buffers:
 	ati_remote_free_buffers(ati_remote);
  exit_free_dev_rdev:
