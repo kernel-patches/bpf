@@ -1098,4 +1098,379 @@ l0_%=:	r0 = 0;						\
 	: __clobber_all);
 }
 
+/* 54 bytes are checked. What is added is 38 at most, so there are 16 left. */
+SEC("tc")
+__description("direct packet access: a number in a range is added to a checked pointer")
+__success __retval(0)
+__naked void pkt_add_range_keeps_range(void)
+{
+	asm volatile ("					\
+	r2 = *(u32*)(r1 + %[__sk_buff_data]);		\
+	r3 = *(u32*)(r1 + %[__sk_buff_data_end]);	\
+	r4 = *(u32*)(r1 + %[__sk_buff_mark]);		\
+	r5 = r2;					\
+	r5 += 54;					\
+	if r5 > r3 goto l0_%=;				\
+	if r4 > 38 goto l0_%=;				\
+	r2 += r4;					\
+	r0 = *(u64*)(r2 + 0);				\
+	r0 = *(u64*)(r2 + 8);				\
+l0_%=:	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm_const(__sk_buff_data, offsetof(struct __sk_buff, data)),
+	  __imm_const(__sk_buff_data_end, offsetof(struct __sk_buff, data_end)),
+	  __imm_const(__sk_buff_mark, offsetof(struct __sk_buff, mark))
+	: __clobber_all);
+}
+
+SEC("tc")
+__description("direct packet access: a number in a range is added, load past range")
+__failure __msg("invalid access to packet, off=47 size=8, R2(id={{[0-9]+}},off=47,r=54)")
+__naked void pkt_add_range_load_past_range(void)
+{
+	asm volatile ("					\
+	r2 = *(u32*)(r1 + %[__sk_buff_data]);		\
+	r3 = *(u32*)(r1 + %[__sk_buff_data_end]);	\
+	r4 = *(u32*)(r1 + %[__sk_buff_mark]);		\
+	r5 = r2;					\
+	r5 += 54;					\
+	if r5 > r3 goto l0_%=;				\
+	if r4 > 38 goto l0_%=;				\
+	r2 += r4;					\
+	r0 = *(u64*)(r2 + 9);				\
+l0_%=:	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm_const(__sk_buff_data, offsetof(struct __sk_buff, data)),
+	  __imm_const(__sk_buff_data_end, offsetof(struct __sk_buff, data_end)),
+	  __imm_const(__sk_buff_mark, offsetof(struct __sk_buff, mark))
+	: __clobber_all);
+}
+
+/* twice: 20 + 20, and a constant in between */
+SEC("tc")
+__description("direct packet access: two numbers in a range are added to a checked pointer")
+__failure __msg("invalid access to packet, off=47 size=8, R2(id={{[0-9]+}},off=47,r=54)")
+__naked void pkt_add_range_twice(void)
+{
+	asm volatile ("					\
+	r2 = *(u32*)(r1 + %[__sk_buff_data]);		\
+	r3 = *(u32*)(r1 + %[__sk_buff_data_end]);	\
+	r4 = *(u32*)(r1 + %[__sk_buff_mark]);		\
+	r5 = r2;					\
+	r5 += 54;					\
+	if r5 > r3 goto l0_%=;				\
+	if r4 > 20 goto l0_%=;				\
+	r2 += r4;					\
+	r2 += 1;					\
+	r2 += r4;					\
+	r0 = *(u64*)(r2 + 5);				\
+	r0 = *(u64*)(r2 + 6);				\
+l0_%=:	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm_const(__sk_buff_data, offsetof(struct __sk_buff, data)),
+	  __imm_const(__sk_buff_data_end, offsetof(struct __sk_buff, data_end)),
+	  __imm_const(__sk_buff_mark, offsetof(struct __sk_buff, mark))
+	: __clobber_all);
+}
+
+SEC("tc")
+__description("direct packet access: a number that may be negative is added to a checked pointer")
+__failure __msg("invalid access to packet, off=16 size=8, R2(id={{[0-9]+}},off=16,r=0)")
+__naked void pkt_add_negative_drops_range(void)
+{
+	asm volatile ("					\
+	r2 = *(u32*)(r1 + %[__sk_buff_data]);		\
+	r3 = *(u32*)(r1 + %[__sk_buff_data_end]);	\
+	r4 = *(u32*)(r1 + %[__sk_buff_mark]);		\
+	r5 = r2;					\
+	r5 += 54;					\
+	if r5 > r3 goto l0_%=;				\
+	r2 += 20;					\
+	if r4 > 8 goto l0_%=;				\
+	r4 += -4;					\
+	r2 += r4;					\
+	r0 = *(u64*)(r2 + 0);				\
+l0_%=:	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm_const(__sk_buff_data, offsetof(struct __sk_buff, data)),
+	  __imm_const(__sk_buff_data_end, offsetof(struct __sk_buff, data_end)),
+	  __imm_const(__sk_buff_mark, offsetof(struct __sk_buff, mark))
+	: __clobber_all);
+}
+
+/* off = x ? 38 : 22; the compiler makes one load of it */
+SEC("tc")
+__description("direct packet access: one of two offsets is added to a checked pointer")
+__success __retval(0)
+__naked void pkt_add_one_of_two_offsets(void)
+{
+	asm volatile ("					\
+	r6 = *(u32*)(r1 + %[__sk_buff_data]);		\
+	r3 = *(u32*)(r1 + %[__sk_buff_data_end]);	\
+	r5 = r6;					\
+	r5 += 54;					\
+	if r5 > r3 goto l0_%=;				\
+	call %[bpf_get_prandom_u32];			\
+	r1 = 38;					\
+	if r0 != 0 goto l1_%=;				\
+	r1 = 22;					\
+l1_%=:	r6 += r1;					\
+	r0 = *(u64*)(r6 + 0);				\
+l0_%=:	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32),
+	  __imm_const(__sk_buff_data, offsetof(struct __sk_buff, data)),
+	  __imm_const(__sk_buff_data_end, offsetof(struct __sk_buff, data_end))
+	: __clobber_all);
+}
+
+/*
+ * See commit b88822d2584f ("bpf: Fix packet range of pointers sharing an id").
+ * r5 keeps the range of r7, r6 is r5 + 8. umax of r6 has to be 58 and not 56.
+ */
+SEC("tc")
+__description("direct packet access: a range that is kept, var_off and umax of two pointers")
+__failure __msg("invalid access to packet")
+__naked void kept_range_var_off(void)
+{
+	asm volatile (
+	"r2 = *(u32 *)(r1 + %[__sk_buff_data]);"
+	"r3 = *(u32 *)(r1 + %[__sk_buff_data_end]);"
+	"r9 = r3; r7 = r2; r4 = r2; r4 += 51;"
+	"if r4 > r3 goto 1f;"		/* range 51 */
+	"call %[bpf_get_prandom_u32];"
+	"r4 = r0; r4 &= 0x38;"
+	"if r4 > 50 goto 1f;"		/* umax 50, var_off (0x0; 0x38) */
+	"r5 = r7; r5 += r4;"		/* umax 50 < 51: the range is kept */
+	"r6 = r5; r6 += 8;"		/* umax 58, or 56 */
+	"if r5 > r9 goto 1f;"		/* sets the range of the id from umax of r5 */
+	"r0 = *(u8 *)(r6 - 7);"		/* r5 + 1 */
+"1:	r0 = 0; exit;"
+	:
+	: __imm(bpf_get_prandom_u32),
+	  __imm_const(__sk_buff_data, offsetof(struct __sk_buff, data)),
+	  __imm_const(__sk_buff_data_end, offsetof(struct __sk_buff, data_end))
+	: __clobber_all);
+}
+
+SEC("tc")
+__description("direct packet access: a range that is kept, 0..7 or 0..15 are added")
+__failure __msg("invalid access to packet")
+__naked void kept_range_merge(void)
+{
+	asm volatile (
+	"r2 = *(u32 *)(r1 + %[__sk_buff_data]);"
+	"r3 = *(u32 *)(r1 + %[__sk_buff_data_end]);"
+	"r9 = r3; r7 = r2; r4 = r2; r4 += 64;"
+	"if r4 > r3 goto 3f;"
+	"call %[bpf_get_prandom_u32];"
+	"r6 = r0; r6 &= 15;"
+	"call %[bpf_get_prandom_u32];"
+	"if r0 == 0 goto 1f;"
+	"r6 &= 7;"
+"1:	r7 += r6;"			/* [0,7] or [0,15], range 64 */
+	"r0 = *(u8 *)(r7 + 49);"
+"3:	r0 = 0; exit;"
+	:
+	: __imm(bpf_get_prandom_u32),
+	  __imm_const(__sk_buff_data, offsetof(struct __sk_buff, data)),
+	  __imm_const(__sk_buff_data_end, offsetof(struct __sk_buff, data_end))
+	: __clobber_all);
+}
+
+SEC("tc")
+__description("direct packet access: a range that is kept, the sum is checked, the pointer is used")
+__failure __msg("invalid access to packet")
+__naked void kept_range_old_pointer(void)
+{
+	asm volatile (
+	"r2 = *(u32 *)(r1 + %[__sk_buff_data]);"
+	"r3 = *(u32 *)(r1 + %[__sk_buff_data_end]);"
+	"r9 = r3; r7 = r2; r8 = r2; r4 = r2; r4 += 16;"
+	"if r4 > r3 goto 1f;"		/* range 16 */
+	"call %[bpf_get_prandom_u32];"
+	"r0 &= 7;"
+	"r7 += r0;"			/* new id, range 16 */
+	"r4 = r7; r4 += 100;"
+	"if r4 > r9 goto 1f;"		/* r7 + 100 is there */
+	"r0 = *(u8 *)(r8 + 106);"	/* r8 + 100 is, r8 + 107 is not */
+"1:	r0 = 0; exit;"
+	:
+	: __imm(bpf_get_prandom_u32),
+	  __imm_const(__sk_buff_data, offsetof(struct __sk_buff, data)),
+	  __imm_const(__sk_buff_data_end, offsetof(struct __sk_buff, data_end))
+	: __clobber_all);
+}
+
+SEC("tc")
+__description("direct packet access: a range that is kept, a check of the sum")
+__success
+__naked void kept_range_new_check(void)
+{
+	asm volatile (
+	"r2 = *(u32 *)(r1 + %[__sk_buff_data]);"
+	"r3 = *(u32 *)(r1 + %[__sk_buff_data_end]);"
+	"r9 = r3; r7 = r2; r8 = r2; r4 = r2; r4 += 16;"
+	"if r4 > r3 goto 1f;"
+	"call %[bpf_get_prandom_u32];"
+	"r0 &= 7;"
+	"r7 += r0;"
+	"r4 = r7; r4 += 100;"
+	"if r4 > r9 goto 1f;"
+	"r0 = *(u8 *)(r7 + 99);"
+"1:	r0 = 0; exit;"
+	:
+	: __imm(bpf_get_prandom_u32),
+	  __imm_const(__sk_buff_data, offsetof(struct __sk_buff, data)),
+	  __imm_const(__sk_buff_data_end, offsetof(struct __sk_buff, data_end))
+	: __clobber_all);
+}
+
+/* Nobody knows how many times the loop ran, so r7 < data_end is not about r8 */
+SEC("tc")
+__description("direct packet access: one pointer moves in a loop, the other one is used")
+__failure __msg("invalid access to packet")
+__naked void loop_other_pointer(void)
+{
+	asm volatile (
+	"r2 = *(u32 *)(r1 + %[__sk_buff_data]);"
+	"r3 = *(u32 *)(r1 + %[__sk_buff_data_end]);"
+	"r7 = r2; r8 = r2; r9 = r3; r6 = 0;"
+"1:	if r6 >= 10 goto 2f;"
+	"call %[bpf_get_prandom_u32];"
+	"if r0 == 42 goto 2f;"
+	"r7 += 1; r6 += 1; goto 1b;"
+"2:	if r7 >= r9 goto 3f;"
+	"r0 = *(u8 *)(r8 + 4);"
+"3:	r0 = 0; exit;"
+	:
+	: __imm(bpf_get_prandom_u32),
+	  __imm_const(__sk_buff_data, offsetof(struct __sk_buff, data)),
+	  __imm_const(__sk_buff_data_end, offsetof(struct __sk_buff, data_end))
+	: __clobber_all);
+}
+
+SEC("tc")
+__description("direct packet access: a pointer that moved in a loop is checked and used")
+__success
+__naked void loop_same_pointer(void)
+{
+	asm volatile (
+	"r2 = *(u32 *)(r1 + %[__sk_buff_data]);"
+	"r3 = *(u32 *)(r1 + %[__sk_buff_data_end]);"
+	"r7 = r2; r8 = r2; r9 = r3; r6 = 0;"
+"1:	if r6 >= 10 goto 2f;"
+	"call %[bpf_get_prandom_u32];"
+	"if r0 == 42 goto 2f;"
+	"r7 += 1; r6 += 1; goto 1b;"
+"2:	if r7 >= r9 goto 3f;"
+	"r0 = *(u8 *)(r7 + 0);"
+"3:	r0 = 0; exit;"
+	:
+	: __imm(bpf_get_prandom_u32),
+	  __imm_const(__sk_buff_data, offsetof(struct __sk_buff, data)),
+	  __imm_const(__sk_buff_data_end, offsetof(struct __sk_buff, data_end))
+	: __clobber_all);
+}
+
+SEC("tc")
+__description("direct packet access: a pointer that becomes another one in a loop")
+__failure __msg("invalid access to packet")
+__naked void loop_one_of_two(void)
+{
+	asm volatile (
+	"r2 = *(u32 *)(r1 + %[__sk_buff_data]);"
+	"r3 = *(u32 *)(r1 + %[__sk_buff_data_end]);"
+	"r9 = r2; r7 = r2; r7 += 1000; r6 = 0;"
+"1:	if r6 >= 3 goto 3f;"
+	"if r2 > r3 goto 3f;"
+	"r0 = *(u8 *)(r9 + 999);"
+	"if r6 != 1 goto 2f;"
+	"r2 = r7;"
+"2:	r6 += 1; goto 1b;"
+"3:	r0 = 0; exit;"
+	:
+	: __imm(bpf_get_prandom_u32),
+	  __imm_const(__sk_buff_data, offsetof(struct __sk_buff, data)),
+	  __imm_const(__sk_buff_data_end, offsetof(struct __sk_buff, data_end))
+	: __clobber_all);
+}
+
+SEC("tc")
+__description("direct packet access: 8 are added on one path, the other pointer is used")
+__failure __msg("invalid access to packet")
+__naked void merge_const(void)
+{
+	asm volatile (
+	"r2 = *(u32 *)(r1 + %[__sk_buff_data]);"
+	"r3 = *(u32 *)(r1 + %[__sk_buff_data_end]);"
+	"r7 = r2; r8 = r2; r9 = r3;"
+	"call %[bpf_get_prandom_u32];"
+	"if r0 == 0 goto 1f;"
+	"r7 += 8;"
+"1:	if r7 > r9 goto 2f;"
+	"r0 = *(u8 *)(r8 + 7);"
+"2:	r0 = 0; exit;"
+	:
+	: __imm(bpf_get_prandom_u32),
+	  __imm_const(__sk_buff_data, offsetof(struct __sk_buff, data)),
+	  __imm_const(__sk_buff_data_end, offsetof(struct __sk_buff, data_end))
+	: __clobber_all);
+}
+
+SEC("tc")
+__description("direct packet access: 8 are added on one path, pointers that share an id")
+__failure __msg("invalid access to packet")
+__naked void merge_displacement(void)
+{
+	asm volatile (
+	"r2 = *(u32 *)(r1 + %[__sk_buff_data]);"
+	"r3 = *(u32 *)(r1 + %[__sk_buff_data_end]);"
+	"r9 = r3; r6 = r2;"
+	"call %[bpf_get_prandom_u32];"
+	"r0 &= 15;"
+	"r6 += r0;"			/* id N */
+	"r7 = r6; r8 = r6;"
+	"call %[bpf_get_prandom_u32];"
+	"if r0 == 0 goto 1f;"
+	"r7 += 8;"
+"1:	if r7 > r9 goto 2f;"
+	"r0 = *(u8 *)(r8 + 7);"
+"2:	r0 = 0; exit;"
+	:
+	: __imm(bpf_get_prandom_u32),
+	  __imm_const(__sk_buff_data, offsetof(struct __sk_buff, data)),
+	  __imm_const(__sk_buff_data_end, offsetof(struct __sk_buff, data_end))
+	: __clobber_all);
+}
+
+SEC("tc")
+__description("direct packet access: a number is added on one path, the other pointer is used")
+__failure __msg("invalid access to packet")
+__naked void merge_number(void)
+{
+	asm volatile (
+	"r2 = *(u32 *)(r1 + %[__sk_buff_data]);"
+	"r3 = *(u32 *)(r1 + %[__sk_buff_data_end]);"
+	"r9 = r3; r7 = r2; r8 = r2;"
+	"call %[bpf_get_prandom_u32];"
+	"r6 = r0; r6 &= 15;"
+	"call %[bpf_get_prandom_u32];"
+	"if r0 == 0 goto 1f;"
+	"r7 += r6;"
+"1:	if r7 > r9 goto 2f;"
+	"r0 = *(u8 *)(r8 + 7);"
+"2:	r0 = 0; exit;"
+	:
+	: __imm(bpf_get_prandom_u32),
+	  __imm_const(__sk_buff_data, offsetof(struct __sk_buff, data)),
+	  __imm_const(__sk_buff_data_end, offsetof(struct __sk_buff, data_end))
+	: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";
