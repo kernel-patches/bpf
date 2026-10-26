@@ -1507,6 +1507,10 @@ static int simplify(struct scev *scev, u32 id, void *priv)
 	if (is_zext32(scev, id, &l) && is_imm(scev, l, &imm1))
 		return imm_expr(scev, (u64)(u32)imm1);
 
+	/* (zext32 (zext32 x)) -> (zext32 x) */
+	if (is_zext32(scev, id, &l) && is_zext32(scev, l, &a))
+		return l;
+
 	/*
 	 * (zext32 (+ (zext32 $a) $b)) -> (zext32 (+ $a $b))
 	 * (zext32 (+ $a (zext32 $b))) -> (zext32 (+ $a $b))
