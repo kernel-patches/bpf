@@ -1411,6 +1411,29 @@ __naked void widened_reg_is_not_linked(void)
 	: __clobber_all);
 }
 
+const volatile __u32 rodata_bound = 10;
+
+/* for (i = 0; i < rodata_bound; i++): the bound is loaded in every iteration. */
+SEC("socket")
+__success
+__log_level(2)
+__msg("loop header at 3, header_count is 10")
+__naked void bound_from_rodata(void)
+{
+	asm volatile (
+	"r6 = 0;"
+	"r7 = %[rodata_bound] ll;"
+"1:"
+	"r6 += 1;"
+	"r1 = *(u32 *)(r7 + 0);"
+	"if r6 < r1 goto 1b;"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(rodata_bound)
+	: __clobber_all);
+}
+
 /* The unknown SCEV of an unbound STACK_MISC slot must not prevent widening. */
 SEC("tracepoint")
 __success
