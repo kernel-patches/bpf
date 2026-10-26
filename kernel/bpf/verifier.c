@@ -17867,6 +17867,73 @@ bool bpf_reg_union_compatible(const struct bpf_reg_state *a, const struct bpf_re
 	       a->id == b->id && a->parent_id == b->parent_id && a->map_uid == b->map_uid;
 }
 
+/* Nothing is known about the number or the variable part of the offset anymore. */
+void bpf_reg_forget_range(struct bpf_reg_state *reg)
+{
+	reg->var_off = tnum_unknown;
+	__mark_reg_unbounded(reg);
+	reg_step_reset(reg);
+}
+
+/*
+ * @reg is what @old became after a trip around a cycle, @old included. The end
+ * of the range that moved is going to move again. Put it where it may come
+ * to rest. There are few such places, so this is done a few times at most.
+ */
+void bpf_reg_widen_range(struct bpf_reg_state *reg, const struct bpf_reg_state *old)
+{
+	s64 min = reg_smin(reg), max = reg_smax(reg);
+
+	if (max > reg_smax(old))
+		max = max <= 0 ? 0 :
+		      max <= S32_MAX ? S32_MAX :
+		      max <= U32_MAX ? U32_MAX : S64_MAX;
+	if (min < reg_smin(old))
+		min = min >= 0 ? 0 :
+		      min >= S32_MIN ? S32_MIN : S64_MIN;
+	if (min == S64_MIN && max == S64_MAX) {
+		bpf_reg_forget_range(reg);
+		return;
+	}
+	/* every part has to include what it did before, hence no reg_bounds_sync() */
+	reg->r64 = cnum64_union(reg->r64, cnum64_from_srange(min, max));
+	if (min >= 0 && max <= U32_MAX) {
+		reg->r32 = cnum32_union(reg->r32, cnum32_from_urange(min, max));
+		reg->var_off = tnum_union(reg->var_off, tnum_range(min, max));
+	} else if (min >= S32_MIN && max <= S32_MAX) {
+		reg->r32 = cnum32_union(reg->r32, cnum32_from_srange(min, max));
+		reg->var_off = tnum_unknown;
+	} else {
+		reg->r32 = CNUM32_UNBOUNDED;
+		reg->var_off = min >= 0 ? tnum_union(reg->var_off, tnum_range(min, max))
+					: tnum_unknown;
+	}
+	reg_step_reset(reg);
+}
+
+void bpf_reg_union_range(struct bpf_reg_state *acc, const struct bpf_reg_state *src)
+{
+	u16 base, step;
+
+	acc->r64 = cnum64_union(acc->r64, src->r64);
+	acc->r32 = cnum32_union(acc->r32, src->r32);
+	acc->var_off = tnum_union(acc->var_off, src->var_off);
+
+	/* Retain a common congruence if the bases agree modulo the gcd. */
+	step = gcd(acc->step, src->step);
+	base = acc->base % step;
+	if (base != src->base % step) {
+		reg_step_reset(acc);
+	} else {
+		acc->base = base;
+		acc->step = step;
+	}
+	/*
+	 * No reg_bounds_sync(): every part of the result has to include that
+	 * part of both inputs, and an input is not always in sync.
+	 */
+}
+
 /*
  * Extends acc's scalar range to include src's scalar range.
  * Caller must ensure that other kinds of metadata is compatible.
