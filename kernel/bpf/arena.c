@@ -1385,6 +1385,62 @@ __bpf_kfunc u64 bpf_arena_memcpy(void *dst__arena, const void *src__arena, u64 s
 	memmove(dst__arena, src__arena, span);
 	return span;
 }
+
+/* bpf_alloc() keeps the number of pages in front of the memory it returns */
+#define ARENA_ALLOC_HDR	16
+
+/**
+ * bpf_alloc() - Allocate memory in arena of the program
+ * @size: The number of bytes
+ * @flags: Must be 0
+ * @aux: Implicit argument, set by the verifier
+ *
+ * The memory is zeroed and aligned to 16 bytes. Every allocation takes
+ * whole pages.
+ *
+ * Return: The address of the memory in arena or NULL.
+ */
+__bpf_kfunc void *bpf_alloc(u64 size, u64 flags, struct bpf_prog_aux *aux)
+{
+	struct bpf_arena *arena = aux->arena;
+	u64 page_cnt;
+	long uaddr;
+
+	if (!arena || flags || !size || size > SZ_4G)
+		return NULL;
+
+	page_cnt = DIV_ROUND_UP(size + ARENA_ALLOC_HDR, PAGE_SIZE);
+	uaddr = arena_alloc_pages(arena, 0, page_cnt, NUMA_NO_NODE, false);
+	if (!uaddr)
+		return NULL;
+
+	WRITE_ONCE(*(u64 *)(long)(bpf_arena_get_kern_vm_start(arena) + (u32)uaddr), page_cnt);
+	return (void *)(uaddr + ARENA_ALLOC_HDR);
+}
+
+/**
+ * bpf_free() - Free memory allocated by bpf_alloc()
+ * @ptr__arena__nullable: The address that bpf_alloc() returned or NULL
+ * @aux: Implicit argument, set by the verifier
+ *
+ * The program can write to the header that bpf_alloc() left. Then pages
+ * of arena that the header tells about are freed, nothing else.
+ */
+__bpf_kfunc void bpf_free(void *ptr__arena__nullable, struct bpf_prog_aux *aux)
+{
+	u64 *hdr;
+	u64 off;
+
+	if (!ptr__arena__nullable)
+		return;
+
+	hdr = ptr__arena__nullable - ARENA_ALLOC_HDR;
+	off = (u64)(long)hdr - bpf_arena_get_kern_vm_start(aux->arena);
+	if (off >= SZ_4G || (off & ~PAGE_MASK))
+		return;
+
+	arena_free_pages(aux->arena, off, (u32)READ_ONCE(*hdr), false);
+}
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(arena_kfuncs)
@@ -1393,6 +1449,8 @@ BTF_ID_FLAGS(func, bpf_arena_free_pages, KF_ARENA_ARG2 | KF_SPINLOCK_SAFE)
 BTF_ID_FLAGS(func, bpf_arena_reserve_pages, KF_ARENA_ARG2 | KF_SPINLOCK_SAFE)
 BTF_ID_FLAGS(func, bpf_arena_memcmp, KF_IMPLICIT_ARGS)
 BTF_ID_FLAGS(func, bpf_arena_memcpy, KF_IMPLICIT_ARGS)
+BTF_ID_FLAGS(func, bpf_alloc, KF_IMPLICIT_ARGS)
+BTF_ID_FLAGS(func, bpf_free, KF_IMPLICIT_ARGS)
 BTF_KFUNCS_END(arena_kfuncs)
 
 static const struct btf_kfunc_id_set common_kfunc_set = {
