@@ -8819,12 +8819,15 @@ int btf_prepare_func_args(struct bpf_verifier_env *env, int subprog)
 	}
 	args = (const struct btf_param *)(t + 1);
 	nargs = btf_type_vlen(t);
-	sub->arg_slot_cnt = nargs;
 	if (nargs > MAX_BPF_FUNC_ARGS) {
+		/* what a static function takes is seen in its code */
+		if (!is_global)
+			return -EINVAL;
 		bpf_log(log, "kernel supports at most %d parameters, function %s has %d\n",
 			MAX_BPF_FUNC_ARGS, tname, nargs);
 		return -EFAULT;
 	}
+	sub->arg_slot_cnt = nargs;
 	err = btf_check_arg_slots(log, tname, is_global, nargs, sub);
 	if (err)
 		return err;
