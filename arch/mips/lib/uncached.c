@@ -56,6 +56,13 @@ unsigned long run_uncached(void *func)
 		BUG();
 		usp = sp;
 	}
+
+	/*
+	 * "sp" may have been read before the prologue allocated the slots
+	 * for $16 and $31 spilled below; keep FUNC's stack clear of them.
+	 */
+	usp -= 2 * sizeof(long);
+
 	if (lfunc >= (long)CKSEG0 && lfunc < (long)CKSEG2)
 		ufunc = CKSEG1ADDR(lfunc);
 #ifdef CONFIG_64BIT
