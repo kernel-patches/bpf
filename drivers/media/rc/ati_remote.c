@@ -551,6 +551,9 @@ static void ati_remote_input_report(struct urb *urb)
 		}
 	}
 
+	if (index >= 0 && !dev)
+		return; /* no mouse device */
+
 	if (index >= 0 && ati_remote_tbl[index].kind == KIND_LITERAL) {
 		/*
 		 * The lsbit of the raw key code is a down/up flag.
