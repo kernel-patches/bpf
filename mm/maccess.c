@@ -121,6 +121,14 @@ long copy_from_user_nofault(void *dst, const void __user *src, size_t size)
 {
 	long ret = -EFAULT;
 
+	/*
+	 * The user nofault helpers may be called from any context, including
+	 * from tasks that have no user memory to access (e.g. kernel threads).
+	 * Fail quietly instead of tripping the warning in the uaccess helpers.
+	 */
+	if (!current->mm)
+		return ret;
+
 	if (!__access_ok(src, size))
 		return ret;
 
@@ -149,6 +157,9 @@ EXPORT_SYMBOL_GPL(copy_from_user_nofault);
 long copy_to_user_nofault(void __user *dst, const void *src, size_t size)
 {
 	long ret = -EFAULT;
+
+	if (!current->mm)
+		return ret;
 
 	if (access_ok(dst, size)) {
 		pagefault_disable();
@@ -188,6 +199,9 @@ long strncpy_from_user_nofault(char *dst, const void __user *unsafe_addr,
 	if (unlikely(count <= 0))
 		return 0;
 
+	if (!current->mm)
+		return -EFAULT;
+
 	pagefault_disable();
 	ret = strncpy_from_user(dst, unsafe_addr, count);
 	pagefault_enable();
@@ -221,6 +235,9 @@ long strncpy_from_user_nofault(char *dst, const void __user *unsafe_addr,
 long strnlen_user_nofault(const void __user *unsafe_addr, long count)
 {
 	int ret;
+
+	if (!current->mm)
+		return 0;
 
 	pagefault_disable();
 	ret = strnlen_user(unsafe_addr, count);

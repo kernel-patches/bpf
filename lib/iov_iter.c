@@ -33,7 +33,7 @@ size_t copy_to_user_iter_nofault(void __user *iter_to, size_t progress,
 {
 	ssize_t res;
 
-	if (uaccess_should_fail())
+	if (should_fail_usercopy())
 		return len;
 
 	from += progress;
