@@ -1411,6 +1411,27 @@ __naked void widened_reg_is_not_linked(void)
 	: __clobber_all);
 }
 
+/*
+ * for (i = 0; i < 17; i++), the way clang does it: the copy that is compared is made before
+ * the increment, all in 32 bit: (zext32 (zext32 (linear r6 1))).
+ */
+SEC("socket")
+__success
+__log_level(2)
+__msg("loop header at 1, header_count is 17")
+__naked void latch_tests_a_32bit_copy(void)
+{
+	asm volatile (
+	"w6 = 0;"
+"1:"
+	"w1 = w6;"
+	"w6 += 1;"
+	"if w1 < 16 goto 1b;"
+	"r0 = 0;"
+	"exit;"
+	::: __clobber_all);
+}
+
 const volatile __u32 rodata_bound = 10;
 
 /* for (i = 0; i < rodata_bound; i++): the bound is loaded in every iteration. */
