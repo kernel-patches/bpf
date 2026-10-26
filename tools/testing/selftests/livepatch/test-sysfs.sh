@@ -13,6 +13,7 @@ HAS_REPLACE_ATTR=0
 HAS_STACK_ORDER_ATTR=0
 
 setup_config
+detect_provides_attr
 
 # - load a livepatch and verifies the sysfs entries work as expected
 
@@ -154,7 +155,7 @@ livepatch: '$MOD_ATOMIC_REPLACE': unpatching complete
 % rmmod $MOD_ATOMIC_REPLACE"
 fi
 
-if [[ "$HAS_STACK_ORDER_ATTR" == "1" ]]; then
+if [[ "$HAS_STACK_ORDER_ATTR" == "1" && "$HAS_PROVIDES_ATTR" != "1" ]]; then
 	start_test "sysfs test stack_order value"
 
 	load_lp $MOD_LIVEPATCH
