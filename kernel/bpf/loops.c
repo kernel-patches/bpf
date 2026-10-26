@@ -457,6 +457,30 @@ bool bpf_is_nested_loop(struct bpf_verifier_env *env, int inner_header, int oute
 	return false;
 }
 
+/* Whether the conditional jump at @n, in the loop @h or in a loop nested in it, leaves @h */
+bool bpf_jump_leaves_loop(struct bpf_verifier_env *env, int h, int n)
+{
+	struct bpf_insn *insn = &env->prog->insnsi[n];
+	u8 class = BPF_CLASS(insn->code), op = BPF_OP(insn->code);
+	int t, f;
+
+	if ((class != BPF_JMP && class != BPF_JMP32) || op == BPF_JA || op == BPF_CALL ||
+	    op == BPF_EXIT || op == BPF_JCOND)
+		return false;
+	t = bpf_loop_at_index(env, n + insn->off + 1);
+	f = bpf_loop_at_index(env, n + 1);
+	return (t != h && !bpf_is_nested_loop(env, t, h)) ||
+	       (f != h && !bpf_is_nested_loop(env, f, h));
+}
+
+/* The same for an insn that is in the loop @h itself */
+bool bpf_insn_leaves_loop(struct bpf_verifier_env *env, int h, int n)
+{
+	if (bpf_loop_at_index(env, n) != h)
+		return false;
+	return bpf_jump_leaves_loop(env, h, n);
+}
+
 int bpf_compute_loops(struct bpf_verifier_env *env)
 {
 	int i, j, k, s, t, iloop, sloop, err = 0, len = env->prog->len;

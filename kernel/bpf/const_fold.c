@@ -285,7 +285,7 @@ redo:
 
 	/* Save computed constants into insn_aux[] if they fit into 32-bit */
 	for (i = 0; i < insn_cnt; i++) {
-		u16 mask = 0, map_mask = 0, subprog_mask = 0;
+		u16 mask = 0, wide_mask = 0, map_mask = 0, subprog_mask = 0;
 		struct bpf_insn_aux_data *aux = &insn_aux[i];
 		struct const_arg_info *ci = ci_in[i];
 
@@ -296,8 +296,10 @@ redo:
 			case CONST_ARG_CONST: {
 				u64 val = c->val;
 
-				if (val != (u32)val)
+				if (val != (u32)val) {
+					wide_mask |= BIT(r);
 					break;
+				}
 				mask |= BIT(r);
 				aux->const_reg_vals[r] = val;
 				break;
@@ -315,6 +317,7 @@ redo:
 			}
 		}
 		aux->const_reg_mask = mask;
+		aux->const_reg_wide_mask = wide_mask;
 		aux->const_reg_map_mask = map_mask;
 		aux->const_reg_subprog_mask = subprog_mask;
 	}

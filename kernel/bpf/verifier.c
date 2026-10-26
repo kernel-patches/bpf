@@ -19862,6 +19862,7 @@ bool bpf_get_call_summary(struct bpf_verifier_env *env, struct bpf_insn *call,
 				bpf_jit_inlines_helper_call(call->imm));
 		cs->is_void = fn->ret_type == RET_VOID;
 		cs->arg_slot_cnt = 0;
+		cs->implicit_slot_cnt = 0;
 		for (i = 0; i < ARRAY_SIZE(fn->arg_type); ++i) {
 			if (fn->arg_type[i] == ARG_UNUSED)
 				break;
@@ -19878,6 +19879,14 @@ bool bpf_get_call_summary(struct bpf_verifier_env *env, struct bpf_insn *call,
 			/* error would be reported later */
 			return false;
 		cs->arg_slot_cnt = btf_proto_slots(meta.btf, meta.func_proto);
+		cs->implicit_slot_cnt = 0;
+		if (meta.kfunc_flags & KF_IMPLICIT_ARGS) {
+			const struct btf_type *func = btf_type_by_id(meta.btf, meta.func_id);
+
+			/* the prototype without implicit args, see is_kfunc_arg_implicit() */
+			cs->implicit_slot_cnt = cs->arg_slot_cnt -
+				btf_proto_slots(meta.btf, btf_type_by_id(meta.btf, func->type));
+		}
 		cs->fastcall = meta.kfunc_flags & KF_FASTCALL;
 		cs->is_void = btf_type_is_void(btf_type_by_id(meta.btf, meta.func_proto->type));
 		return true;
@@ -20716,8 +20725,7 @@ static int maybe_clamp_scev_regs(struct bpf_verifier_env *env)
 	if (!entry->terminates)
 		return 0;
 
-	return bpf_clamp_scev_regs(env, frame, env->insn_idx, entry->entry_state,
-				   entry->max_header_count);
+	return bpf_clamp_scev_regs(env, frame, env->insn_idx, entry);
 }
 
 static int handle_loop_entry_exit(struct bpf_verifier_env *env)
@@ -20763,6 +20771,8 @@ static int handle_loop_entry_exit(struct bpf_verifier_env *env)
 
 	entry->min_header_count = iters.min_header_count;
 	entry->max_header_count = iters.max_header_count;
+	entry->iv_reg = iters.iv_reg;
+	entry->iv_range = iters.iv_range;
 	entry->entry_state = cur->parent;
 	entry->terminates = true;
 	err = bpf_widen_scev_regs(env, cur, cur->parent, &iters);
