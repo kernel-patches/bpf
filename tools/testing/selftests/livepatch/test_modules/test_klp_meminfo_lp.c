@@ -39,19 +39,19 @@ static struct klp_patch patch = {
 	/* set .replace in the init function below for demo purposes */
 };
 
-static int test_klp_atomic_replace_init(void)
+static int test_klp_meminfo_lp_init(void)
 {
 	patch.replace = replace;
 	return klp_enable_patch(&patch);
 }
 
-static void test_klp_atomic_replace_exit(void)
+static void test_klp_meminfo_lp_exit(void)
 {
 }
 
-module_init(test_klp_atomic_replace_init);
-module_exit(test_klp_atomic_replace_exit);
+module_init(test_klp_meminfo_lp_init);
+module_exit(test_klp_meminfo_lp_exit);
 MODULE_LICENSE("GPL");
 MODULE_INFO(livepatch, "Y");
 MODULE_AUTHOR("Joe Lawrence <joe.lawrence@redhat.com>");
-MODULE_DESCRIPTION("Livepatch test: atomic replace");
+MODULE_DESCRIPTION("Livepatch test: meminfo livepatch");

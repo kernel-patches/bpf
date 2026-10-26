@@ -93,7 +93,7 @@ static int livepatch_init(void)
 {
 	int ret;
 
-	klp_kobj = kobject_create_and_add("test_klp_syscall", kernel_kobj);
+	klp_kobj = kobject_create_and_add("test_klp_syscall_getpid", kernel_kobj);
 	if (!klp_kobj)
 		return -ENOMEM;
 
@@ -128,4 +128,4 @@ MODULE_INFO(livepatch, "Y");
 MODULE_AUTHOR("Libor Pechacek <lpechacek@suse.cz>");
 MODULE_AUTHOR("Nicolai Stange <nstange@suse.de>");
 MODULE_AUTHOR("Marcos Paulo de Souza <mpdesouza@suse.com>");
-MODULE_DESCRIPTION("Livepatch test: syscall transition");
+MODULE_DESCRIPTION("Livepatch test: syscall getpid transition");
