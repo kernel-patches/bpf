@@ -95,7 +95,7 @@ static const struct ipu_sensor_config ipu_supported_sensors[] = {
 	IPU_SENSOR_CONFIG("OVTI01AB", 1, 400000000),
 	IPU_SENSOR_CONFIG("OVTI01AS", 1, 400000000),
 	/* Omnivision OV02C10 */
-	IPU_SENSOR_CONFIG("OVTI02C1", 1, 400000000),
+	IPU_SENSOR_CONFIG("OVTI02C1", 2, 400000000, 399479167),
 	/* Omnivision OV02E10 */
 	IPU_SENSOR_CONFIG("OVTI02E1", 1, 360000000),
 	/* Omnivision ov05c10 */
