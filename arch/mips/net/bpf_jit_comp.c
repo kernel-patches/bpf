@@ -112,6 +112,7 @@
 #include <asm/cacheflush.h>
 #include <asm/cpu-features.h>
 #include <asm/isa-rev.h>
+#include <asm/r10k-llsc.h>
 #include <asm/uasm.h>
 
 #include "bpf_jit_comp.h"
@@ -459,7 +460,7 @@ void emit_atomic_r(struct jit_context *ctx, u8 dst, u8 src, s16 off, u8 code)
 		break;
 	}
 	emit(ctx, sc, MIPS_R_T8, off, dst);
-	emit(ctx, LLSC_beqz, MIPS_R_T8, -16 - LLSC_offset);
+	emit_llsc_beqz(ctx, MIPS_R_T8, -16 - LLSC_offset);
 	emit(ctx, nop); /* Delay slot */
 
 	if (code & BPF_FETCH) {
@@ -476,7 +477,7 @@ void emit_cmpxchg_r(struct jit_context *ctx, u8 dst, u8 src, u8 res, s16 off)
 	emit(ctx, bne, MIPS_R_T9, res, 12);
 	emit(ctx, move, MIPS_R_T8, src);     /* Delay slot */
 	emit(ctx, sc, MIPS_R_T8, off, dst);
-	emit(ctx, LLSC_beqz, MIPS_R_T8, -20 - LLSC_offset);
+	emit_llsc_beqz(ctx, MIPS_R_T8, -20 - LLSC_offset);
 	emit(ctx, move, res, MIPS_R_T9);     /* Delay slot */
 	clobber_reg(ctx, res);
 }

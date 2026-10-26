@@ -98,11 +98,13 @@ do {								\
 #define emit(...) __emit(__VA_ARGS__)
 
 /* Workaround for R10000 ll/sc errata */
-#ifdef CONFIG_WAR_R10000_LLSC
-#define LLSC_beqz	beqzl
-#else
-#define LLSC_beqz	beqz
-#endif
+static inline void emit_llsc_beqz(struct jit_context *ctx, u8 rs, s16 off)
+{
+	if (r10k_llsc_war)
+		emit(ctx, beqzl, rs, off);
+	else
+		emit(ctx, beqz, rs, off);
+}
 
 /* Workaround for Loongson-3 ll/sc errata */
 #ifdef CONFIG_CPU_LOONGSON3_WORKAROUNDS

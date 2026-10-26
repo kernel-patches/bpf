@@ -17,6 +17,7 @@
 #include <linux/bpf.h>
 #include <asm/cpu-features.h>
 #include <asm/isa-rev.h>
+#include <asm/r10k-llsc.h>
 #include <asm/uasm.h>
 
 #include "bpf_jit_comp.h"
@@ -484,7 +485,7 @@ static void emit_atomic_r64(struct jit_context *ctx,
 		break;
 	}
 	emit(ctx, scd, t2, off, dst);
-	emit(ctx, LLSC_beqz, t2, -16 - LLSC_offset);
+	emit_llsc_beqz(ctx, t2, -16 - LLSC_offset);
 	emit(ctx, nop); /* Delay slot */
 
 	if (code & BPF_FETCH) {
@@ -505,7 +506,7 @@ static void emit_cmpxchg_r64(struct jit_context *ctx, u8 dst, u8 src, s16 off)
 	emit(ctx, bne, t1, r0, 12);
 	emit(ctx, move, t2, src);      /* Delay slot */
 	emit(ctx, scd, t2, off, dst);
-	emit(ctx, LLSC_beqz, t2, -20 - LLSC_offset);
+	emit_llsc_beqz(ctx, t2, -20 - LLSC_offset);
 	emit(ctx, move, r0, t1);       /* Delay slot */
 
 	clobber_reg(ctx, r0);

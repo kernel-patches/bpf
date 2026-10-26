@@ -18,6 +18,7 @@
 #include <linux/bpf.h>
 #include <asm/cpu-features.h>
 #include <asm/isa-rev.h>
+#include <asm/r10k-llsc.h>
 #include <asm/uasm.h>
 
 #include "bpf_jit_comp.h"
