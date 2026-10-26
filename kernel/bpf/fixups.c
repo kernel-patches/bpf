@@ -648,6 +648,268 @@ static int adjust_jmp_off(struct bpf_prog *prog, u32 tgt_idx, u32 delta)
 }
 
 /*
+ * The room that the frame of a subprog takes besides its stack: what JIT saves at most.
+ * arm64: FP, LR, 8 registers, the tail call count: 96. loongarch: 96, riscv: 80.
+ * powerpc: 112 with ELF ABI v2, 192 with v1.
+ */
+#define BPF_FRAME_OVERHEAD	(IS_ENABLED(CONFIG_PPC64) ? 192 : 96)
+
+/* the room for the frames of recursive subprogs */
+#define BPF_RECURSION_STACK	4096
+/* the frames of the helper or the kfunc that is between a callback and its caller */
+#define BPF_CALLBACK_OVERHEAD	256
+
+static u32 recursive_frame_size(struct bpf_verifier_env *env, int s)
+{
+	struct bpf_subprog_info *sub = &env->subprog_info[s];
+	struct bpf_insn *insn = env->prog->insnsi;
+	u32 size, used = 0, may_goto = 0, cb = sub->is_cb ? BPF_CALLBACK_OVERHEAD : 0;
+	int i;
+
+	/* may_goto is yet to add its 16 bytes */
+	if (!IS_ENABLED(CONFIG_X86_64))
+		return round_up(sub->stack_depth + 16, 32) + BPF_FRAME_OVERHEAD + cb +
+		       sub->max_out_stack_arg_cnt * BPF_REG_SIZE;
+
+	for (i = sub->start; i < (sub + 1)->start; i++) {
+		if (insn[i].dst_reg >= BPF_REG_6 && insn[i].dst_reg <= BPF_REG_9)
+			used |= BIT(insn[i].dst_reg);
+		if (insn[i].src_reg >= BPF_REG_6 && insn[i].src_reg <= BPF_REG_9)
+			used |= BIT(insn[i].src_reg);
+		if (bpf_is_may_goto_insn(&insn[i]))
+			may_goto = 16;
+	}
+	/* the return address, rbp, the registers that are saved */
+	size = 16 + hweight32(used) * 8;
+	/* the base of arena, the slot for r12 */
+	if (env->prog->aux->arena)
+		size += 16;
+	/* the tail call count and the pointer to it */
+	if (sub->tail_call_reachable)
+		size += 16;
+	return size + cb + round_up(sub->stack_depth + may_goto, 8) +
+	       sub->max_out_stack_arg_cnt * BPF_REG_SIZE;
+}
+
+/* what the frames of recursive subprogs add up to at most */
+#define BPF_RECURSION_UNITS	65536
+
+/*
+ * How deep a recursion goes is not known, so it is counted at run time. In the same
+ * spirit as may_goto: the program goes on for as long as there is budget and
+ * takes a way out that was verified when there is none.
+ *
+ * Every subprog on a cycle of the call graph adds its weight to a per-cpu
+ * counter of the program when it is entered and takes it back at every exit.
+ * The weight is the part of the budget that its frame takes: of the stack
+ * room, or of the room in the stack in arena, whichever is larger. So these
+ * frames take no more than BPF_RECURSION_STACK, on top of the chain of calls
+ * without recursion that check_max_stack_depth() looked at.
+ *
+ * A subprog that calls itself twice doesn't have to go deep to go on forever. So
+ * the calls are counted too: BPF_MAX_LOOPS of them in a run of the prog, like the
+ * callbacks of bpf_loop(). Once they are used up every call returns at once, and
+ * the frames that are there come to an end.
+ *
+ * Another run of the program on the same cpu, in interrupt or after
+ * preemption, counts in the same counter. Then there is less for both.
+ */
+int bpf_insert_recursion_checks(struct bpf_verifier_env *env)
+{
+	struct bpf_subprog_info *si = env->subprog_info;
+	u32 frame, min_frame = U32_MAX, arena_frame = 0, arena_room = 0, weight;
+	u32 limit = BPF_RECURSION_STACK;
+	struct bpf_insn buf[24], first;
+	struct bpf_prog *new_prog;
+	struct bpf_recursion_budget __percpu *depth;
+	/* Only this cpu touches the counters */
+	int fetch_add = BPF_ADD | BPF_FETCH |
+			(bpf_jit_supports_local_atomics() ? BPF_ATOMIC_LOCAL : 0);
+	int i, s, n, bail, bail_len, err;
+
+	for (s = 0; s < env->subprog_cnt; s++) {
+		if (!si[s].recursive)
+			continue;
+		frame = recursive_frame_size(env, s);
+		si[s].recursion_weight = DIV_ROUND_UP(frame * BPF_RECURSION_UNITS, limit);
+		min_frame = min(min_frame, frame);
+		arena_frame = max(arena_frame, si[s].arena_stack_depth);
+	}
+	if (min_frame == U32_MAX)
+		return 0;
+	if (arena_frame) {
+		/*
+		 * One more frame is for the subprog that finds that there is no
+		 * budget: it has its frame by then.
+		 */
+		u32 room = BPF_ARENA_STACK_MAX - env->max_arena_stack_depth;
+
+		if (room < 2 * arena_frame) {
+			verbose(env, "no room in the stack in arena for recursion\n");
+			return -EACCES;
+		}
+		/* no more than the frames that fit in the stack can take */
+		arena_room = min(room - arena_frame, limit / min_frame * arena_frame);
+		env->max_arena_stack_depth += arena_room + arena_frame;
+	}
+	for (s = 0; s < env->subprog_cnt; s++) {
+		if (!si[s].recursive)
+			continue;
+		if (si[s].arena_stack_depth)
+			si[s].recursion_weight = max(si[s].recursion_weight,
+						     DIV_ROUND_UP(si[s].arena_stack_depth *
+								  BPF_RECURSION_UNITS, arena_room));
+		if (si[s].recursion_weight > BPF_RECURSION_UNITS) {
+			verbose(env, "the frame of recursive %s() is too large\n",
+				bpf_subprog_name(env, s));
+			return -EACCES;
+		}
+	}
+
+	depth = alloc_percpu_gfp(struct bpf_recursion_budget, GFP_KERNEL_ACCOUNT);
+	if (!depth)
+		return -ENOMEM;
+	env->prog->aux->call_depth = depth;
+	env->prog->jit_required = 1;
+
+	/* From the last one, so that nothing moves in those that are yet to be done. */
+	for (s = env->subprog_cnt - 1; s > 0; s--) {
+		if (!si[s].recursive)
+			continue;
+		/*
+		 * R0 has nothing at the entry. The address is not for AX:
+		 * blinding of constants takes ld_imm64 apart with the help of
+		 * AX. It leaves alone the insns that have AX in them.
+		 */
+		n = 0;
+		first = env->prog->insnsi[si[s].start];
+		/* The exit drops the frame in the stack in arena. Take it before the check. */
+		if (is_arena_sp_adj(&first)) {
+			buf[n++] = first;
+			first = BPF_JMP_A(0);
+		}
+		memcpy(buf + n, (struct bpf_insn[]){ BPF_LD_IMM64(BPF_REG_0, (long)depth) },
+		       2 * sizeof(buf[0]));
+		n += 2;
+		buf[n++] = BPF_MOV64_PERCPU_REG(BPF_REG_0, BPF_REG_0);
+		weight = si[s].recursion_weight;
+		bail_len = bpf_ret_reg_pair(env, s) ? 3 : 2;
+		buf[n++] = BPF_MOV64_IMM(BPF_REG_AX, weight);
+		buf[n++] = BPF_ATOMIC_OP(BPF_W, fetch_add, BPF_REG_0, BPF_REG_AX,
+					 offsetof(struct bpf_recursion_budget, depth));
+		buf[n++] = BPF_JMP_IMM(BPF_JGT, BPF_REG_AX, BPF_RECURSION_UNITS - weight, 3);
+		buf[n++] = BPF_MOV64_IMM(BPF_REG_AX, 1);
+		buf[n++] = BPF_ATOMIC_OP(BPF_W, fetch_add, BPF_REG_0, BPF_REG_AX,
+					 offsetof(struct bpf_recursion_budget, calls));
+		buf[n++] = BPF_JMP_IMM(BPF_JLT, BPF_REG_AX, BPF_MAX_LOOPS, bail_len);
+		bail = n;
+		buf[n++] = BPF_MOV64_IMM(BPF_REG_0, 0);
+		if (bpf_ret_reg_pair(env, s))
+			buf[n++] = BPF_MOV64_IMM(BPF_REG_2, 0);
+		buf[n++] = budget_exit_insn(env, &si[s]);
+		buf[n] = first;
+		err = bpf_adj_moved_insn(&buf[n], n);
+		if (err) {
+			verbose(env, "insn %d cannot be patched due to 16-bit range\n",
+				env->insn_aux_data[si[s].start].orig_idx);
+			return err;
+		}
+		n++;
+		new_prog = __bpf_patch_insn_data(env, si[s].start, buf, n, BPF_PATCH_MOVE_TARGET);
+		if (!new_prog)
+			return -ENOMEM;
+		env->prog = new_prog;
+		env->insn_aux_data[si[s].start + bail].recursion_bail = true;
+		/* calls get to the check, jumps to the first insn do not */
+		err = adjust_jmp_off(env->prog, si[s].start, n - 1);
+		if (err)
+			return err;
+	}
+
+	/*
+	 * The calls are counted anew when a run begins. For async callbacks see
+	 * bpf_prog_begin_run(). R0 has nothing at the entry.
+	 */
+	memcpy(buf, (struct bpf_insn[]){ BPF_LD_IMM64(BPF_REG_0, (long)depth) },
+	       2 * sizeof(buf[0]));
+	buf[2] = BPF_MOV64_PERCPU_REG(BPF_REG_0, BPF_REG_0);
+	/* calls and reported */
+	buf[3] = BPF_ST_MEM(BPF_DW, BPF_REG_0, 0, 0);
+	buf[4] = env->prog->insnsi[0];
+	err = bpf_adj_moved_insn(&buf[4], 4);
+	if (err) {
+		verbose(env, "insn %d cannot be patched due to 16-bit range\n",
+			env->insn_aux_data[0].orig_idx);
+		return err;
+	}
+	new_prog = __bpf_patch_insn_data(env, 0, buf, 5, BPF_PATCH_MOVE_TARGET);
+	if (!new_prog)
+		return -ENOMEM;
+	env->prog = new_prog;
+	/* a jump to the first insn doesn't begin a run */
+	err = adjust_jmp_off(env->prog, 0, 4);
+	if (err)
+		return err;
+
+	/* R1 is nothing to the caller. Jumps to exit get to what is added. */
+	for (i = 0; i < env->prog->len; i++) {
+		if (bpf_is_ldimm64(&env->prog->insnsi[i])) {
+			i++;
+			continue;
+		}
+		if (env->prog->insnsi[i].code != (BPF_JMP | BPF_EXIT) ||
+		    !bpf_find_containing_subprog(env, i)->recursive)
+			continue;
+		n = 0;
+		memcpy(buf, (struct bpf_insn[]){ BPF_LD_IMM64(BPF_REG_1, (long)depth) },
+		       2 * sizeof(buf[0]));
+		n += 2;
+		buf[n++] = BPF_MOV64_PERCPU_REG(BPF_REG_1, BPF_REG_1);
+		weight = bpf_find_containing_subprog(env, i)->recursion_weight;
+		buf[n++] = BPF_MOV64_IMM(BPF_REG_AX, -(int)weight);
+		buf[n++] = BPF_ATOMIC_OP(BPF_W, fetch_add, BPF_REG_1, BPF_REG_AX,
+					 offsetof(struct bpf_recursion_budget, depth));
+		buf[n++] = env->prog->insnsi[i];
+		new_prog = bpf_patch_insn_data(env, i, buf, n);
+		if (!new_prog)
+			return -ENOMEM;
+		env->prog = new_prog;
+		i += n - 1;
+	}
+	return 0;
+}
+
+/*
+ * Say so when a recursive subprog is out of budget, once in a run: from then on every call
+ * comes here. R0 is what bpf_insert_recursion_checks() left in it. The arguments are not
+ * needed any more.
+ * It's done after bpf_do_misc_fixups(), that takes a call for a call of a helper.
+ */
+int bpf_insert_recursion_reports(struct bpf_verifier_env *env)
+{
+	struct bpf_prog *new_prog;
+	struct bpf_insn buf[4];
+	int i;
+
+	for (i = 0; i < env->prog->len; i++) {
+		if (!env->insn_aux_data[i].recursion_bail)
+			continue;
+		env->insn_aux_data[i].recursion_bail = false;
+		buf[0] = BPF_LDX_MEM(BPF_W, BPF_REG_AX, BPF_REG_0,
+				     offsetof(struct bpf_recursion_budget, reported));
+		buf[1] = BPF_JMP_IMM(BPF_JNE, BPF_REG_AX, 0, 1);
+		buf[2] = BPF_EMIT_CALL(bpf_prog_report_recursion);
+		buf[3] = env->prog->insnsi[i];
+		new_prog = bpf_patch_insn_data(env, i, buf, 4);
+		if (!new_prog)
+			return -ENOMEM;
+		env->prog = new_prog;
+		i += 3;
+	}
+	return 0;
+}
+
+/*
  * Say so when the main prog unwinds. JITs make exit of that, see bpf_prog_can_unwind().
  * It's done after bpf_do_misc_fixups(), that takes a call for a call of a helper.
  */
@@ -1936,6 +2198,7 @@ static int jit_subprogs(struct bpf_verifier_env *env)
 		func[i]->aux->changes_pkt_data = env->subprog_info[i].changes_pkt_data;
 		func[i]->aux->might_sleep = env->subprog_info[i].might_sleep;
 		func[i]->aux->can_unwind = env->subprog_info[i].can_unwind;
+		func[i]->aux->recursive = env->subprog_info[i].recursion_weight;
 		func[i]->aux->token = prog->aux->token;
 		if (!i)
 			func[i]->aux->exception_boundary = env->seen_exception;

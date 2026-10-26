@@ -22925,6 +22925,15 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 			bpf_log(log, "Only fentry can attach to %s, which can unwind\n", tname);
 			return -EINVAL;
 		}
+		/*
+		 * A trampoline that calls the target stays on the stack at every level.
+		 * The check of the stack in the target does not count it.
+		 */
+		if (aux->func && aux->func[subprog]->aux->recursive && !prog_extension &&
+		    prog->expected_attach_type != BPF_TRACE_FENTRY) {
+			bpf_log(log, "Only fentry can attach to %s, which is recursive\n", tname);
+			return -EINVAL;
+		}
 		conservative = aux->func_info_aux[subprog].unreliable;
 		if (prog_extension) {
 			if (aux->func_info_aux[subprog].linkage != BTF_FUNC_GLOBAL ||
@@ -24415,6 +24424,10 @@ skip_full_check:
 	if (ret == 0)
 		ret = bpf_optimize_bpf_loop(env);
 
+	/* after what makes frames larger: inlined bpf_loop() takes 3 slots and 3 registers */
+	if (ret == 0)
+		ret = bpf_insert_recursion_checks(env);
+
 	if (ret == 0)
 		bpf_lower_cast_mov(env);
 
@@ -24436,6 +24449,9 @@ skip_full_check:
 
 	if (ret == 0)
 		ret = bpf_do_misc_fixups(env);
+
+	if (ret == 0)
+		ret = bpf_insert_recursion_reports(env);
 
 	if (ret == 0)
 		ret = bpf_insert_unwound_reports(env);

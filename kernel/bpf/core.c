@@ -292,6 +292,7 @@ void __bpf_prog_free(struct bpf_prog *fp)
 		mutex_destroy(&fp->aux->used_maps_mutex);
 		mutex_destroy(&fp->aux->dst_mutex);
 		kfree(fp->aux->poke_tab);
+		free_percpu(fp->aux->call_depth);
 		free_percpu(fp->aux->may_goto_budget);
 		kfree(fp->aux);
 	}
@@ -3640,6 +3641,32 @@ static noinline void bpf_prog_report_may_goto_violation(void)
 #endif
 }
 
+/* Called by a recursive subprog that is out of budget, see bpf_insert_recursion_checks() */
+u64 bpf_prog_report_recursion(void)
+{
+#ifdef CONFIG_BPF_SYSCALL
+	struct bpf_stream_stage ss;
+	struct bpf_prog *prog;
+	bool many;
+
+	prog = bpf_prog_find_from_stack();
+	if (!prog)
+		return 0;
+	WRITE_ONCE(prog->aux->unwound, true);
+	this_cpu_write(prog->aux->call_depth->reported, 1);
+	many = this_cpu_read(prog->aux->call_depth->calls) >= BPF_MAX_LOOPS;
+	/* the loops of the run come to an end as well */
+	if (prog->aux->may_goto_budget)
+		this_cpu_write(prog->aux->may_goto_budget->count, 0);
+	bpf_stream_stage(ss, prog, BPF_STDERR, ({
+		bpf_stream_printk(ss, many ? "ERROR: Too many calls of recursive functions\n" :
+				  "ERROR: No room in the stack for a call of a recursive function\n");
+		bpf_stream_dump_stack(ss);
+	}));
+#endif
+	return 0;
+}
+
 /*
  * Nothing caught the unwinding. The prog or the async callback returns to the kernel.
  * There is no return value that is right for every hook, so what to do about it is up
@@ -3676,6 +3703,10 @@ void bpf_prog_begin_run(const struct bpf_prog *prog)
 	if (aux->may_goto_budget) {
 		this_cpu_write(aux->may_goto_budget->start, 0);
 		this_cpu_write(aux->may_goto_budget->count, BPF_MAX_TIMED_LOOPS);
+	}
+	if (aux->call_depth) {
+		this_cpu_write(aux->call_depth->calls, 0);
+		this_cpu_write(aux->call_depth->reported, 0);
 	}
 }
 

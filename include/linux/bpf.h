@@ -1889,6 +1889,13 @@ struct bpf_may_goto_budget {
 	u64 count;	/* what is left until the next look at the clock, 0: the time is up */
 };
 
+/* What the recursive subprogs of a prog have used on this cpu, see bpf_insert_recursion_checks() */
+struct bpf_recursion_budget {
+	u32 calls;	/* the number of calls in this run of the prog */
+	u32 reported;	/* it was said that the run is out of budget */
+	u32 depth;	/* the weights of the frames that are there */
+};
+
 struct bpf_prog_aux {
 	atomic64_t refcnt;
 	u32 used_map_cnt;
@@ -1937,6 +1944,8 @@ struct bpf_prog_aux {
 	bool might_sleep;
 	bool can_unwind;
 	bool unwound; /* main prog: see bpf_prog_info */
+	/* on a cycle of the call graph: what it adds to call_depth of the main prog */
+	u32 recursive;
 	bool kprobe_write_ctx;
 	/* has insns that work with the arena base, see bpf_prog_has_arena_insns() */
 	bool uses_arena_insns;
@@ -1962,6 +1971,8 @@ struct bpf_prog_aux {
 	const char *attach_func_name;
 	struct bpf_prog **func;
 	struct bpf_prog_aux *main_prog_aux;
+	/* frames of recursive subprogs on this cpu, see bpf_insert_recursion_checks() */
+	struct bpf_recursion_budget __percpu *call_depth;
 	/* main prog: there when a subprog has may_goto */
 	struct bpf_may_goto_budget __percpu *may_goto_budget;
 	void *jit_data; /* JIT specific data. arch dependent */
@@ -3464,6 +3475,7 @@ void bpf_dynptr_set_null(struct bpf_dynptr_kern *ptr);
 void bpf_dynptr_set_rdonly(struct bpf_dynptr_kern *ptr);
 void bpf_prog_report_arena_violation(bool write, unsigned long addr, unsigned long fault_ip);
 void bpf_prog_begin_run(const struct bpf_prog *prog);
+u64 bpf_prog_report_recursion(void);
 u64 bpf_prog_report_unwound(u64 ret);
 
 static __always_inline u32

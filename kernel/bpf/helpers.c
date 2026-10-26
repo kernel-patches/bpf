@@ -3403,6 +3403,7 @@ struct bpf_throw_ctx {
 	u64 sp;
 	u64 bp;
 	int cnt;
+	u32 recursive;
 };
 
 static bool bpf_stack_walker(void *cookie, u64 ip, u64 sp, u64 bp)
@@ -3421,6 +3422,7 @@ static bool bpf_stack_walker(void *cookie, u64 ip, u64 sp, u64 bp)
 	if (!prog)
 		return !ctx->cnt;
 	ctx->cnt++;
+	ctx->recursive += prog->aux->recursive;
 	if (bpf_is_subprog(prog))
 		return true;
 	ctx->aux = prog->aux;
@@ -3439,6 +3441,12 @@ __bpf_kfunc void bpf_throw(u64 cookie)
 		WARN_ON_ONCE(!ctx.aux->exception_boundary);
 	WARN_ON_ONCE(!ctx.bp);
 	WARN_ON_ONCE(!ctx.cnt);
+	/*
+	 * The frames that go away do not get to their exits. Only these: another
+	 * run of the program may be in the middle of its recursion on this cpu.
+	 */
+	if (ctx.aux && ctx.recursive)
+		this_cpu_sub(ctx.aux->main_prog_aux->call_depth->depth, ctx.recursive);
 	/*
 	 * Prevent KASAN false positives for CONFIG_KASAN_STACK by unpoisoning
 	 * deeper stack depths than ctx.sp as we do not return from bpf_throw,
