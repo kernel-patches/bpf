@@ -51,20 +51,33 @@
 #endif
 
 /*
- * Return true if a user copy must not be attempted, either because a failure
- * is being injected, or because the current task has no mm.
+ * Return true, and warn, if the current task has no mm, in which case user
+ * memory must not be accessed.
  *
  * Accessing user memory without an mm (e.g. from a kernel thread that is not
  * using kthread_use_mm(), or from a task that has already gone through
  * exit_mm()) is always a bug: the user portion of the address space belongs to
  * whatever mm happens to be lazily loaded, if any, so the access could
  * silently hit another task's memory.
+ *
+ * Note that this only catches a missing mm. It cannot catch a valid mm that
+ * isn't the one the caller expects, e.g. when a file's release or ioctl
+ * handlers run in a different process than the one that created it. Code
+ * that keeps user addresses belonging to a specific mm must check
+ * current->mm against that mm itself (see e.g. KVM's kvm->mm checks).
+ */
+static __always_inline bool uaccess_without_mm(void)
+{
+	return WARN_ON_ONCE(!current->mm);
+}
+
+/*
+ * Return true if a user copy must not be attempted, either because the
+ * current task has no mm, or because a failure is being injected.
  */
 static __always_inline bool uaccess_should_fail(void)
 {
-	if (WARN_ON_ONCE(!current->mm))
-		return true;
-	return should_fail_usercopy();
+	return uaccess_without_mm() || should_fail_usercopy();
 }
 
 /*
@@ -117,6 +130,8 @@ __copy_from_user_inatomic(void *to, const void __user *from, unsigned long n)
 {
 	unsigned long res;
 
+	if (uaccess_without_mm())
+		return n;
 	instrument_copy_from_user_before(to, from, n);
 	check_object_size(to, n, false);
 	res = raw_copy_from_user(to, from, n);
