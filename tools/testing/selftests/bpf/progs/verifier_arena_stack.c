@@ -213,6 +213,54 @@ __naked void helper(void)
 	: __clobber_all);
 }
 
+static __naked __noinline __used long recurses(long n)
+{
+	asm volatile (
+	".8byte %[adj];"
+	".8byte %[stx32];"
+	".8byte %[stx8];"
+	"if r1 == 0 goto 1f;"
+	"r1 += -1;"
+	"call recurses;"
+"1:"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm_insn(adj, ADJ(32)),
+	  __imm_insn(stx32, STX(BPF_DW, -32, BPF_REG_1)),
+	  __imm_insn(stx8, STX(BPF_DW, -8, BPF_REG_1))
+	: __clobber_all);
+}
+
+SEC("syscall")
+__description("arena stack: r12 after the recursion ran out of budget")
+__success __retval(0)
+__naked void recursion(void)
+{
+	asm volatile (
+	".8byte %[adj];"
+	".8byte %[st];"		/* *(u64 *)(r12 - 8) = 4660 */
+	".8byte %[mov6];"	/* r6 = r12 */
+	"r1 = 100000;"
+	"call recurses;"
+	".8byte %[mov7];"	/* r7 = r12 */
+	"r0 = 1;"
+	"if r6 != r7 goto 1f;"
+	"r0 = 2;"
+	".8byte %[ldx];"	/* r1 = *(u64 *)(r12 - 8) */
+	"if r1 != 4660 goto 1f;"
+	"r0 = 0;"
+"1:"
+	"exit;"
+	:
+	: __imm_insn(adj, ADJ(16)),
+	  __imm_insn(st, ST(BPF_DW, -8, 4660)),
+	  __imm_insn(mov6, MOV(BPF_REG_6)),
+	  __imm_insn(mov7, MOV(BPF_REG_7)),
+	  __imm_insn(ldx, LDX(BPF_DW, BPF_REG_1, -8))
+	: __clobber_all);
+}
+
 static __naked __noinline __used long store_through(long addr)
 {
 	asm volatile (
