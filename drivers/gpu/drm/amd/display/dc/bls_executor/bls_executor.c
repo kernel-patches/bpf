@@ -486,6 +486,151 @@ static noinline_for_stack bool dc2_bls_step_supported(const struct dc2 *dc2,
 		return mpc && mpc->funcs && mpc->funcs->remove_mpcc &&
 				step->params.mpc_remove_mpcc_params.mpc_tree_params &&
 				step->params.mpc_remove_mpcc_params.mpcc_to_remove;
+	case MPC_INSERT_PLANE:
+		mpc = step->params.mpc_insert_plane_params.mpc;
+		return mpc && mpc->funcs && mpc->funcs->insert_plane &&
+				step->params.mpc_insert_plane_params.mpc_tree_params;
+	case MPC_UPDATE_BLENDING:
+		mpc = step->params.mpc_update_blending_params.mpc;
+		return mpc && mpc->funcs && mpc->funcs->update_blending;
+	case MPC_POWER_ON_MPC_MEM_PWR:
+		mpc = step->params.power_on_mpc_mem_pwr_params.mpc;
+		return mpc && mpc->funcs && mpc->funcs->power_on_mpc_mem_pwr;
+	case MPC_SET_OCSC_DEFAULT:
+		mpc = step->params.set_ocsc_default_params.mpc;
+		return mpc && mpc->funcs && mpc->funcs->set_ocsc_default;
+	case DPP_SET_SCALER:
+		dpp = step->params.dpp_set_scaler_params.dpp;
+		return dpp && dpp->funcs && dpp->funcs->dpp_set_scaler &&
+				step->params.dpp_set_scaler_params.scl_data;
+	case DPP_PROGRAM_BIAS_AND_SCALE:
+		dpp = step->params.program_bias_and_scale_params.dpp;
+		return dpp && dpp->funcs &&
+				dpp->funcs->dpp_program_bias_and_scale;
+	case DPP_SET_HDR_MULTIPLIER:
+		dpp = step->params.dpp_set_hdr_multiplier_params.dpp;
+		return dpp && dpp->funcs && dpp->funcs->dpp_set_hdr_multiplier;
+	case HUBP_INIT:
+		hubp = step->params.hubp_init_params.hubp;
+		return hubp && hubp->funcs && hubp->funcs->hubp_init;
+	case HUBP_VTG_SEL:
+		hubp = step->params.hubp_vtg_sel_params.hubp;
+		return hubp && hubp->funcs && hubp->funcs->hubp_vtg_sel;
+	case HUBP_SET_UNBOUNDED_REQUESTING:
+		hubp = step->params.hubp_set_unbounded_requesting_params.hubp;
+		return hubp && hubp->funcs &&
+				hubp->funcs->set_unbounded_requesting;
+	case HUBP_MEM_PROGRAM_VIEWPORT:
+		hubp = step->params.hubp_mem_program_viewport_params.hubp;
+		return hubp && hubp->funcs && hubp->funcs->mem_program_viewport &&
+				step->params.hubp_mem_program_viewport_params.viewport;
+	case HUBP_PROGRAM_TRIPLEBUFFER:
+		hubp = step->params.program_triplebuffer_params.hubp;
+		return hubp && hubp->funcs &&
+				hubp->funcs->hubp_enable_tripleBuffer;
+	case OPTC_PROGRAM_MANUAL_TRIGGER:
+		tg = step->params.program_manual_trigger_params.tg;
+		return tg && tg->funcs && tg->funcs->program_manual_trigger;
+	case DCCG_UPDATE_DPP_DTO:
+		dccg = step->params.dccg_update_dpp_dto_params.dccg;
+		return dccg && dccg->funcs && dccg->funcs->update_dpp_dto;
+	case TG_PROGRAM_GLOBAL_SYNC:
+		tg = step->params.tg_program_global_sync_params.tg;
+		return tg && tg->funcs && tg->funcs->program_global_sync;
+	case TG_SET_VTG_PARAMS:
+		tg = step->params.tg_set_vtg_params_params.tg;
+		return tg && tg->funcs && tg->funcs->set_vtg_params &&
+				step->params.tg_set_vtg_params_params.timing;
+	case TG_WAIT_FOR_ALL_PENDING_UPDATES: {
+		const struct tg_wait_for_all_pending_updates_params *p =
+				&step->params.tg_wait_for_all_pending_updates_params;
+
+		return p->tg && p->tg->funcs && p->tg->funcs->is_tg_enabled &&
+				p->polling_interval_us;
+	}
+	case DC_UDELAY:
+		return true;
+	case HUBBUB_FORCE_WM_PROPAGATE_TO_PIPES:
+		hubbub = step->params.hubbub_force_wm_propagate_to_pipes_params
+				.hubbub;
+		return hubbub && hubbub->funcs &&
+				hubbub->funcs->force_wm_propagate_to_pipes;
+	case HUBP_SETUP2: {
+		const struct hubp_setup2_params *p =
+				&step->params.hubp_setup2_params;
+
+		return p->hubp && p->hubp->funcs && p->hubp->funcs->hubp_setup2 &&
+				p->hubp_regs && p->global_sync && p->timing;
+	}
+	case HUBP_SETUP_INTERDEPENDENT2:
+		hubp = step->params.hubp_setup_interdependent2_params.hubp;
+		return hubp && hubp->funcs &&
+				hubp->funcs->hubp_setup_interdependent2 &&
+				step->params.hubp_setup_interdependent2_params
+				.hubp_regs;
+	case HUBP_PROGRAM_MCACHE_ID:
+		hubp = step->params.program_mcache_id_and_split_coordinate.hubp;
+		return hubp && hubp->funcs &&
+				hubp->funcs->hubp_program_mcache_id_and_split_coordinate &&
+				step->params.program_mcache_id_and_split_coordinate
+				.mcache_regs;
+	case HUBP_PROGRAM_SURFACE_CONFIG:
+		hubp = step->params.program_surface_config_params.hubp;
+		return hubp && hubp->funcs &&
+				hubp->funcs->hubp_program_surface_config &&
+				step->params.program_surface_config_params
+				.tiling_info &&
+				step->params.program_surface_config_params.dcc;
+	case HUBP_UPDATE_PLANE_ADDR:
+		hubp = step->params.update_plane_addr_params.hubp;
+		return hubp && hubp->funcs &&
+				hubp->funcs->hubp_program_surface_flip_and_addr;
+	case HUBP_WAIT_FLIP_PENDING:
+		hubp = step->params.hubp_wait_flip_pending_params.hubp;
+		return hubp && hubp->funcs && hubp->funcs->hubp_is_flip_pending &&
+				step->params.hubp_wait_flip_pending_params
+				.polling_interval_us;
+	case HUBP_PROGRAM_3DLUT_FL_CONFIG:
+		hubp = step->params.hubp_program_3dlut_fl_config_params.hubp;
+		return hubp && hubp->funcs &&
+				hubp->funcs->hubp_program_3dlut_fl_config &&
+				step->params.hubp_program_3dlut_fl_config_params
+				.config;
+	case HUBP_SET_3DLUT_FL:
+		hubp = step->params.hubp_set_3dlut_fl_params.hubp;
+		return hubp && hubp->funcs && hubp->funcs->hubp_enable_3dlut_fl;
+	case DPP_SETUP_DPP:
+		dpp = step->params.setup_dpp_params.dpp;
+		return dpp && dpp->funcs && dpp->funcs->dpp_setup;
+	case DPP_SET_CURSOR_MATRIX:
+		dpp = step->params.dpp_set_cursor_matrix_params.dpp;
+		return dpp && dpp->funcs && dpp->funcs->set_cursor_matrix &&
+				step->params.dpp_set_cursor_matrix_params
+				.cursor_csc_color_matrix;
+	case DPP_SET_PRE_DEGAM:
+		dpp = step->params.dpp_set_pre_degam_params.dpp;
+		return dpp && dpp->funcs && dpp->funcs->dpp_set_pre_degam &&
+				step->params.dpp_set_pre_degam_params
+				.in_transfer_func;
+	case DPP_PROGRAM_GAMCOR_LUT:
+		dpp = step->params.dpp_program_gamcor_lut_params.dpp;
+		return dpp && dpp->funcs && dpp->funcs->dpp_program_gamcor_lut;
+	case MPC_UPDATE_VISUAL_CONFIRM:
+		mpc = step->params.update_visual_confirm_params.mpc;
+		return mpc && mpc->funcs && mpc->funcs->set_bg_color &&
+				step->params.update_visual_confirm_params.color;
+	case MPC_SET_GAMUT_REMAP_BYPASS:
+		mpc = step->params.mpc_set_gamut_remap_bypass_params.mpc;
+		return mpc && mpc->funcs && mpc->funcs->set_gamut_remap;
+	case MPC_SET_MOVABLE_CM_LOCATION:
+		mpc = step->params.mpc_set_movable_cm_location_params.mpc;
+		return mpc && mpc->funcs && mpc->funcs->set_movable_cm_location;
+	case MPC_PROGRAM_LUT_MODE:
+		mpc = step->params.mpc_program_lut_mode_params.mpc;
+		return mpc && mpc->funcs && mpc->funcs->program_lut_mode;
+	case MPC_SET_OUTPUT_GAMMA:
+		mpc = step->params.mpc_set_output_gamma_params.mpc;
+		return mpc && mpc->funcs && mpc->funcs->set_output_gamma;
 	default:
 		return false;
 	}
@@ -562,6 +707,64 @@ static noinline_for_stack bool dc2_bls_wait_for_blank_complete(
 	}
 
 	return w->opp->funcs->dpg_is_blanked(w->opp);
+}
+
+static noinline_for_stack void dc2_bls_wait_for_all_pending_updates(
+		const struct tg_wait_for_all_pending_updates_params *w)
+{
+	struct timing_generator *tg = w->tg;
+	unsigned int waited_us;
+	bool pending;
+
+	if (!tg->funcs->is_tg_enabled(tg))
+		return;
+
+	for (waited_us = 0; waited_us < w->timeout_us;
+			waited_us += w->polling_interval_us) {
+		pending = false;
+		if (tg->funcs->get_optc_double_buffer_pending)
+			pending |= tg->funcs->get_optc_double_buffer_pending(tg);
+		if (tg->funcs->get_otg_double_buffer_pending)
+			pending |= tg->funcs->get_otg_double_buffer_pending(tg);
+		if (w->include_pipe_update && tg->funcs->get_pipe_update_pending)
+			pending |= tg->funcs->get_pipe_update_pending(tg);
+		if (!pending)
+			return;
+		udelay(w->polling_interval_us);
+	}
+}
+
+static noinline_for_stack void dc2_bls_wait_flip_pending(
+		const struct hubp_wait_flip_pending_params *w)
+{
+	const unsigned int timeout_us = 100000U;
+	unsigned int j;
+
+	for (j = 0; j < timeout_us / w->polling_interval_us &&
+			w->hubp->funcs->hubp_is_flip_pending(w->hubp); j++)
+		udelay(w->polling_interval_us);
+}
+
+static noinline_for_stack void dc2_bls_set_gamut_remap_bypass(
+		const struct mpc_set_gamut_remap_bypass_params *p)
+{
+	struct mpc_grph_gamut_adjustment adjust = {
+		.gamut_adjust_type = GRAPHICS_GAMUT_ADJUST_TYPE_BYPASS,
+		.mpcc_gamut_remap_block_id = p->block_id,
+	};
+
+	p->mpc->funcs->set_gamut_remap(p->mpc, p->mpcc_id, &adjust);
+}
+
+static noinline_for_stack void dc2_bls_program_surface_config(
+		const struct program_surface_config_params *p)
+{
+	struct plane_size size = p->plane_size;
+
+	p->hubp->funcs->hubp_program_surface_config(p->hubp, p->format,
+			p->tiling_info, &size, p->rotation, p->dcc,
+			p->horizontal_mirror, p->compat_level);
+	p->hubp->power_gated = false;
 }
 
 enum dc2_bls_exec_result dc2_bls_execute(
@@ -1276,6 +1479,269 @@ enum dc2_bls_exec_result dc2_bls_execute(
 
 			p->mpc->funcs->remove_mpcc(p->mpc, p->mpc_tree_params,
 					p->mpcc_to_remove);
+			break;
+		}
+		case MPC_INSERT_PLANE: {
+			const struct mpc_insert_plane_params *p =
+					&entry->params.mpc_insert_plane_params;
+			struct mpcc_blnd_cfg blnd_cfg = p->blnd_cfg;
+
+			p->mpc->funcs->insert_plane(p->mpc, p->mpc_tree_params,
+					&blnd_cfg, p->sm_cfg, p->insert_above_mpcc,
+					p->dpp_id, p->mpcc_id);
+			break;
+		}
+		case MPC_UPDATE_BLENDING: {
+			const struct mpc_update_blending_params *p =
+					&entry->params.mpc_update_blending_params;
+			struct mpcc_blnd_cfg blnd_cfg = p->blnd_cfg;
+
+			p->mpc->funcs->update_blending(p->mpc, &blnd_cfg,
+					p->mpcc_id);
+			break;
+		}
+		case MPC_POWER_ON_MPC_MEM_PWR: {
+			const struct power_on_mpc_mem_pwr_params *p =
+					&entry->params.power_on_mpc_mem_pwr_params;
+
+			p->mpc->funcs->power_on_mpc_mem_pwr(p->mpc, p->mpcc_id,
+					p->power_on);
+			break;
+		}
+		case MPC_SET_OCSC_DEFAULT: {
+			const struct set_ocsc_default_params *p =
+					&entry->params.set_ocsc_default_params;
+
+			p->mpc->funcs->set_ocsc_default(p->mpc, p->opp_id,
+					p->color_space, p->ocsc_mode);
+			break;
+		}
+		case DPP_SET_SCALER: {
+			const struct dpp_set_scaler_params *p =
+					&entry->params.dpp_set_scaler_params;
+
+			p->dpp->funcs->dpp_set_scaler(p->dpp, p->scl_data);
+			break;
+		}
+		case DPP_PROGRAM_BIAS_AND_SCALE: {
+			const struct program_bias_and_scale_params *p =
+					&entry->params.program_bias_and_scale_params;
+			struct dc_bias_and_scale bias_and_scale = p->bias_and_scale;
+
+			p->dpp->funcs->dpp_program_bias_and_scale(p->dpp,
+					&bias_and_scale);
+			break;
+		}
+		case DPP_SET_HDR_MULTIPLIER: {
+			const struct dpp_set_hdr_multiplier_params *p =
+					&entry->params.dpp_set_hdr_multiplier_params;
+
+			p->dpp->funcs->dpp_set_hdr_multiplier(p->dpp, p->hw_mult);
+			break;
+		}
+		case HUBP_INIT:
+			hubp = entry->params.hubp_init_params.hubp;
+			hubp->funcs->hubp_init(hubp);
+			break;
+		case HUBP_VTG_SEL: {
+			const struct hubp_vtg_sel_params *p =
+					&entry->params.hubp_vtg_sel_params;
+
+			p->hubp->funcs->hubp_vtg_sel(p->hubp, p->otg_inst);
+			break;
+		}
+		case HUBP_SET_UNBOUNDED_REQUESTING: {
+			const struct hubp_set_unbounded_requesting_params *p =
+					&entry->params.hubp_set_unbounded_requesting_params;
+
+			p->hubp->funcs->set_unbounded_requesting(p->hubp,
+					p->unbounded_req);
+			break;
+		}
+		case HUBP_MEM_PROGRAM_VIEWPORT: {
+			const struct hubp_mem_program_viewport_params *p =
+					&entry->params.hubp_mem_program_viewport_params;
+
+			p->hubp->funcs->mem_program_viewport(p->hubp, p->viewport,
+					p->viewport_c);
+			break;
+		}
+		case HUBP_PROGRAM_TRIPLEBUFFER: {
+			const struct program_triplebuffer_params *p =
+					&entry->params.program_triplebuffer_params;
+
+			p->hubp->funcs->hubp_enable_tripleBuffer(p->hubp,
+					p->enableTripleBuffer);
+			break;
+		}
+		case OPTC_PROGRAM_MANUAL_TRIGGER:
+			tg = entry->params.program_manual_trigger_params.tg;
+			tg->funcs->program_manual_trigger(tg);
+			break;
+		case DCCG_UPDATE_DPP_DTO: {
+			const struct dccg_update_dpp_dto_params *p =
+					&entry->params.dccg_update_dpp_dto_params;
+
+			p->dccg->funcs->update_dpp_dto(p->dccg, p->dpp_inst,
+					p->dppclk_khz);
+			break;
+		}
+		case TG_PROGRAM_GLOBAL_SYNC: {
+			const struct tg_program_global_sync_params *p =
+					&entry->params.tg_program_global_sync_params;
+
+			p->tg->funcs->program_global_sync(p->tg, p->vready_offset,
+					p->vstartup_lines, p->vupdate_offset_pixels,
+					p->vupdate_vupdate_width_pixels,
+					p->pstate_keepout_start_lines);
+			break;
+		}
+		case TG_SET_VTG_PARAMS: {
+			const struct tg_set_vtg_params_params *p =
+					&entry->params.tg_set_vtg_params_params;
+
+			p->tg->funcs->set_vtg_params(p->tg, p->timing,
+					p->program_fp2);
+			break;
+		}
+		case TG_WAIT_FOR_ALL_PENDING_UPDATES:
+			dc2_bls_wait_for_all_pending_updates(&entry->params
+					.tg_wait_for_all_pending_updates_params);
+			break;
+		case DC_UDELAY:
+			udelay(entry->params.dc_udelay_params.us);
+			break;
+		case HUBBUB_FORCE_WM_PROPAGATE_TO_PIPES: {
+			struct hubbub *hubbub = entry->params
+					.hubbub_force_wm_propagate_to_pipes_params
+					.hubbub;
+
+			hubbub->funcs->force_wm_propagate_to_pipes(hubbub);
+			break;
+		}
+		case HUBP_SETUP2: {
+			const struct hubp_setup2_params *p =
+					&entry->params.hubp_setup2_params;
+
+			p->hubp->funcs->hubp_setup2(p->hubp, p->hubp_regs,
+					p->global_sync, p->timing);
+			break;
+		}
+		case HUBP_SETUP_INTERDEPENDENT2: {
+			const struct hubp_setup_interdependent2_params *p =
+					&entry->params.hubp_setup_interdependent2_params;
+
+			p->hubp->funcs->hubp_setup_interdependent2(p->hubp,
+					p->hubp_regs);
+			break;
+		}
+		case HUBP_PROGRAM_MCACHE_ID: {
+			const struct program_mcache_id_and_split_coordinate *p =
+					&entry->params
+					.program_mcache_id_and_split_coordinate;
+
+			p->hubp->funcs->hubp_program_mcache_id_and_split_coordinate(
+					p->hubp, p->mcache_regs);
+			break;
+		}
+		case HUBP_PROGRAM_SURFACE_CONFIG:
+			dc2_bls_program_surface_config(&entry->params
+					.program_surface_config_params);
+			break;
+		case HUBP_UPDATE_PLANE_ADDR: {
+			const struct update_plane_addr_params *p =
+					&entry->params.update_plane_addr_params;
+
+			p->hubp->funcs->hubp_program_surface_flip_and_addr(p->hubp,
+					&p->address, p->flip_immediate, p->dcc);
+			break;
+		}
+		case HUBP_WAIT_FLIP_PENDING:
+			dc2_bls_wait_flip_pending(&entry->params
+					.hubp_wait_flip_pending_params);
+			break;
+		case HUBP_PROGRAM_3DLUT_FL_CONFIG: {
+			const struct hubp_program_3dlut_fl_config_params *p =
+					&entry->params
+					.hubp_program_3dlut_fl_config_params;
+
+			p->hubp->funcs->hubp_program_3dlut_fl_config(p->hubp,
+					p->config);
+			break;
+		}
+		case HUBP_SET_3DLUT_FL:
+			hubp = entry->params.hubp_set_3dlut_fl_params.hubp;
+			hubp->funcs->hubp_enable_3dlut_fl(hubp,
+					entry->params.hubp_set_3dlut_fl_params.enable);
+			break;
+		case DPP_SETUP_DPP: {
+			const struct setup_dpp_params *p =
+					&entry->params.setup_dpp_params;
+
+			p->dpp->funcs->dpp_setup(p->dpp, p->format,
+					EXPANSION_MODE_ZERO,
+					p->input_csc_color_matrix, p->color_space,
+					NULL, p->upsp_mode);
+			break;
+		}
+		case DPP_SET_CURSOR_MATRIX: {
+			const struct dpp_set_cursor_matrix_params *p =
+					&entry->params.dpp_set_cursor_matrix_params;
+
+			p->dpp->funcs->set_cursor_matrix(p->dpp, p->color_space,
+					*p->cursor_csc_color_matrix);
+			break;
+		}
+		case DPP_SET_PRE_DEGAM: {
+			const struct dpp_set_pre_degam_params *p =
+					&entry->params.dpp_set_pre_degam_params;
+
+			p->dpp->funcs->dpp_set_pre_degam(p->dpp,
+					p->in_transfer_func->type == TF_TYPE_PREDEFINED ?
+					p->in_transfer_func->tf :
+					TRANSFER_FUNCTION_UNITY);
+			break;
+		}
+		case DPP_PROGRAM_GAMCOR_LUT:
+			dpp = entry->params.dpp_program_gamcor_lut_params.dpp;
+			dpp->funcs->dpp_program_gamcor_lut(dpp,
+					entry->params.dpp_program_gamcor_lut_params
+					.params);
+			break;
+		case MPC_UPDATE_VISUAL_CONFIRM: {
+			const struct update_visual_confirm_params *p =
+					&entry->params.update_visual_confirm_params;
+
+			p->mpc->funcs->set_bg_color(p->mpc, p->color, p->mpcc_id);
+			break;
+		}
+		case MPC_SET_GAMUT_REMAP_BYPASS:
+			dc2_bls_set_gamut_remap_bypass(&entry->params
+					.mpc_set_gamut_remap_bypass_params);
+			break;
+		case MPC_SET_MOVABLE_CM_LOCATION: {
+			const struct mpc_set_movable_cm_location_params *p =
+					&entry->params
+					.mpc_set_movable_cm_location_params;
+
+			p->mpc->funcs->set_movable_cm_location(p->mpc, p->location,
+					p->mpcc_id);
+			break;
+		}
+		case MPC_PROGRAM_LUT_MODE: {
+			const struct mpc_program_lut_mode_params *p =
+					&entry->params.mpc_program_lut_mode_params;
+
+			p->mpc->funcs->program_lut_mode(p->mpc, p->id, p->enable,
+					p->lut_bank_a, p->size, p->mpcc_id);
+			break;
+		}
+		case MPC_SET_OUTPUT_GAMMA: {
+			const struct mpc_set_output_gamma_params *p =
+					&entry->params.mpc_set_output_gamma_params;
+
+			p->mpc->funcs->set_output_gamma(p->mpc, p->mpcc_id,
+					p->params);
 			break;
 		}
 		default:

@@ -423,6 +423,68 @@ struct bios_set_scratch_critical_state_params {
 	bool state;
 };
 
+struct tg_wait_for_all_pending_updates_params {
+	struct timing_generator *tg;
+	bool include_pipe_update;
+	unsigned int polling_interval_us;
+	unsigned int timeout_us;
+};
+
+struct dc_udelay_params {
+	unsigned int us;
+};
+
+struct hubbub_force_wm_propagate_to_pipes_params {
+	struct hubbub *hubbub;
+};
+
+struct mpc_set_gamut_remap_bypass_params {
+	struct mpc *mpc;
+	int mpcc_id;
+	enum mpcc_gamut_remap_id block_id;
+};
+
+struct mpc_set_movable_cm_location_params {
+	struct mpc *mpc;
+	enum mpcc_movable_cm_location location;
+	int mpcc_id;
+};
+
+struct mpc_program_lut_mode_params {
+	struct mpc *mpc;
+	enum MCM_LUT_ID id;
+	bool enable;
+	bool lut_bank_a;
+	enum dc_cm_lut_size size;
+	int mpcc_id;
+};
+
+struct mpc_set_output_gamma_params {
+	struct mpc *mpc;
+	int mpcc_id;
+	const struct pwl_params *params;
+};
+
+struct dpp_set_pre_degam_params {
+	struct dpp *dpp;
+	const struct dc_transfer_func *in_transfer_func;
+};
+
+struct dpp_program_gamcor_lut_params {
+	struct dpp *dpp;
+	const struct pwl_params *params;
+};
+
+struct hubp_program_3dlut_fl_config_params {
+	struct hubp *hubp;
+	const struct dc_3dlut_dma *config;
+};
+
+struct hubp_set_3dlut_fl_params {
+	struct hubp *hubp;
+	bool enable;
+};
+
 struct lsdma_send_pio_copy_params {
 	struct dc_dmub_srv *dc_dmub_srv;
 	uint64_t src_addr;
@@ -1525,6 +1587,22 @@ union block_sequence_params {
 	struct hubbub_program_watermarks_params hubbub_program_watermarks_params;
 	struct hubbub_program_arbiter_params hubbub_program_arbiter_params;
 	struct hubbub_program_compbuf_segments_params hubbub_program_compbuf_segments_params;
+	struct tg_wait_for_all_pending_updates_params
+			tg_wait_for_all_pending_updates_params;
+	struct dc_udelay_params dc_udelay_params;
+	struct hubbub_force_wm_propagate_to_pipes_params
+			hubbub_force_wm_propagate_to_pipes_params;
+	struct mpc_set_gamut_remap_bypass_params
+			mpc_set_gamut_remap_bypass_params;
+	struct mpc_set_movable_cm_location_params
+			mpc_set_movable_cm_location_params;
+	struct mpc_program_lut_mode_params mpc_program_lut_mode_params;
+	struct mpc_set_output_gamma_params mpc_set_output_gamma_params;
+	struct dpp_set_pre_degam_params dpp_set_pre_degam_params;
+	struct dpp_program_gamcor_lut_params dpp_program_gamcor_lut_params;
+	struct hubp_program_3dlut_fl_config_params
+			hubp_program_3dlut_fl_config_params;
+	struct hubp_set_3dlut_fl_params hubp_set_3dlut_fl_params;
 };
 
 enum block_sequence_func {
@@ -1754,6 +1832,17 @@ enum block_sequence_func {
 	DIO_LINK_ENC_ENABLE_DP_OUTPUT,
 	DIO_LINK_ENC_DISABLE_OUTPUT,
 	BIOS_SET_SCRATCH_CRITICAL_STATE,
+	TG_WAIT_FOR_ALL_PENDING_UPDATES,
+	DC_UDELAY,
+	HUBBUB_FORCE_WM_PROPAGATE_TO_PIPES,
+	MPC_SET_GAMUT_REMAP_BYPASS,
+	MPC_SET_MOVABLE_CM_LOCATION,
+	MPC_PROGRAM_LUT_MODE,
+	MPC_SET_OUTPUT_GAMMA,
+	DPP_SET_PRE_DEGAM,
+	DPP_PROGRAM_GAMCOR_LUT,
+	HUBP_PROGRAM_3DLUT_FL_CONFIG,
+	HUBP_SET_3DLUT_FL,
 	/* This must be the last value in this enum, add new ones above */
 	HWSS_BLOCK_SEQUENCE_FUNC_COUNT
 };

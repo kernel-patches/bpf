@@ -5,6 +5,7 @@
 
 #include "dm_services.h"
 #include "dc.h"
+#include "core_types.h"
 #include "dc_api_dispatch/api_shim.h"
 #include "core2/dc_core2.h"
 #include "inc/dc_core_interface.h"
@@ -36,4 +37,21 @@ enum dc_status api_shim_commit_state_hw(struct dc *dc, struct dc_state *context)
 	if (TO_DC2(dc)->selection == DC2_SELECTION_CORE2)
 		return core2_funcs()->commit_state_hw(dc, context);
 	return legacy_commit_state_hw(dc, context);
+}
+
+bool api_shim_update_state_supported(
+		const struct dc_update_scratch_space *scratch)
+{
+	if (TO_DC2(scratch->dc)->selection == DC2_SELECTION_CORE2)
+		return core2_funcs()->update_state_supported(scratch);
+	return true;
+}
+
+void api_shim_update_state_execute(
+		const struct dc_update_scratch_space *scratch)
+{
+	if (TO_DC2(scratch->dc)->selection == DC2_SELECTION_CORE2)
+		core2_funcs()->update_state_execute(scratch);
+	else
+		legacy_update_state_execute(scratch);
 }

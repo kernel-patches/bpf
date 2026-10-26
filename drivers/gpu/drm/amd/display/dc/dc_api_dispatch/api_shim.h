@@ -24,3 +24,7 @@ struct dc2 {
 
 void api_shim_construct(struct dc *dc, const struct dc_init_data *init_params);
 enum dc_status api_shim_commit_state_hw(struct dc *dc, struct dc_state *context);
+bool api_shim_update_state_supported(
+		const struct dc_update_scratch_space *scratch);
+void api_shim_update_state_execute(
+		const struct dc_update_scratch_space *scratch);

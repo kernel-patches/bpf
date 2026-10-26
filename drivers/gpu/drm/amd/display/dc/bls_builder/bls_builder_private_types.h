@@ -31,7 +31,55 @@ struct dcn401_commit_step_meta {
 		} hubbub_program_arbiter;
 		struct {
 			bool safe_to_lower;
+			/*
+			 * Set: program the current state's compbuf size, as
+			 * dcn401_program_outstanding_updates does. Clear:
+			 * program the new state's size.
+			 */
+			bool use_current_state_size;
 		} hubbub_program_compbuf_segments;
+		struct {
+			bool enable;
+		} hubbub_force_pstate_change_control;
+		struct {
+			bool enable;
+		} hubp_clk_cntl;
+		struct {
+			bool power_on;
+		} hubp_pg_control;
+		struct {
+			bool unblank;
+		} hubp_set_blank;
+		struct {
+			bool enable;
+		} dpp_dppclk_control;
+		struct {
+			bool unblank;
+		} opp_set_disp_pattern_generator;
+		struct {
+			/*
+			 * Set: program the pipe's hubp_regs.det_size, which
+			 * gives the HUBP its DET segments, as dcn401_program_pipe
+			 * does. Clear: program size 0, which releases the
+			 * HUBP's segments, as the DC1 plane disable does.
+			 */
+			bool allocate;
+		} hubp_program_det_segments;
+		struct {
+			/*
+			 * Set: program the MALL selection and cursor caching
+			 * that dcn401_program_mall_pipe_config_sequence computes
+			 * for the new state. Clear: program no MALL and no
+			 * cursor caching, as the DC1 plane disable does.
+			 */
+			bool from_new_state;
+		} hubp_update_mall_sel;
+		struct {
+			enum mpcc_gamut_remap_id block_id;
+		} mpc_set_gamut_remap_bypass;
+		struct {
+			enum MCM_LUT_ID id;
+		} mpc_program_lut_mode;
 		struct {
 			bool state;
 		} bios_set_scratch_critical_state;
@@ -63,6 +111,10 @@ struct dcn401_commit_step_meta {
 		bool stream_mode_unchanged;
 		/* The new state has a stream. */
 		bool new_state_has_stream;
+		/* dc->optimized_required is clear. */
+		bool optimized_not_required;
+		/* The plane has no address update, or skips the manual trigger. */
+		bool no_manual_trigger;
 	} skip_if;
 };
 

@@ -12,7 +12,7 @@
 #include "bls_builder/dmub_abi.h"
 #include "bls_builder/bls_builder_legacy_init.h"
 
-#define DC2_BLS_MAX_STEPS 64
+#define DC2_BLS_MAX_STEPS 128
 
 enum bls_builder_result {
 	BLS_BUILD_SUCCESS,
@@ -25,6 +25,7 @@ enum bls_builder_name {
 	DCN_DECL_INITIALIZATION,
 	DCN_DECL_INITIALIZATION_LEGACY,
 	DCN_DECL_NON_SEAMLESS_COMMIT,
+	DCN_DECL_SEAMLESS_UPDATE,
 	BLS_BUILDER_NAME_COUNT,
 };
 

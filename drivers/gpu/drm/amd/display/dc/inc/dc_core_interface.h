@@ -9,6 +9,7 @@
 
 struct dc;
 struct dc_state;
+struct dc_update_scratch_space;
 
 /*
  * Construction-time Core implementation selection. Zero is LEGACY so existing
@@ -28,9 +29,15 @@ struct dc2_funcs {
 	void (*hardware_init)(struct dc *dc);
 	void (*hardware_release)(struct dc *dc);
 	enum dc_status (*commit_state_hw)(struct dc *dc, struct dc_state *context);
+	/* Checked in prepare; execute returns void, so it cannot reject. */
+	bool (*update_state_supported)(
+			const struct dc_update_scratch_space *scratch);
+	void (*update_state_execute)(
+			const struct dc_update_scratch_space *scratch);
 };
 
 void legacy_hardware_init(struct dc *dc);
 void legacy_hardware_release(struct dc *dc);
 enum dc_status legacy_commit_state_hw(struct dc *dc, struct dc_state *context);
+void legacy_update_state_execute(const struct dc_update_scratch_space *scratch);
 const struct dc2_funcs *dc2_legacy_funcs(void);
