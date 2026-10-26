@@ -698,6 +698,8 @@ int bpf_arena_stack_init(struct bpf_arena *arena);
 void __percpu *bpf_arena_stack_percpu(struct bpf_arena *arena);
 u64 bpf_arena_stack_get(struct bpf_prog_aux *aux, u64 busy);
 void bpf_arena_stack_put(struct bpf_prog_aux *aux, u32 base);
+/* bpf_arena_memcmp() and bpf_arena_memcpy() work on that many bytes per call at most */
+#define BPF_ARENA_MEM_MAX	SZ_64K
 u64 bpf_arena_map_kern_vm_start(struct bpf_map *map);
 struct bpf_map *bpf_prog_arena(struct bpf_prog *prog);
 int bpf_obj_name_cpy(char *dst, const char *src, unsigned int size);

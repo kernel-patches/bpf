@@ -13719,6 +13719,8 @@ enum special_kfunc_type {
 	KF_bpf_call_rcu_tasks_trace,
 	KF_bpf_arena_alloc_pages,
 	KF_bpf_arena_free_pages,
+	KF_bpf_arena_memcmp,
+	KF_bpf_arena_memcpy,
 	KF_bpf_session_is_return,
 };
 
@@ -13812,7 +13814,11 @@ BTF_ID(func, bpf_call_rcu_tasks_trace)
 #if defined(CONFIG_MMU) && defined(CONFIG_64BIT)
 BTF_ID(func, bpf_arena_alloc_pages)
 BTF_ID(func, bpf_arena_free_pages)
+BTF_ID(func, bpf_arena_memcmp)
+BTF_ID(func, bpf_arena_memcpy)
 #else
+BTF_ID_UNUSED
+BTF_ID_UNUSED
 BTF_ID_UNUSED
 BTF_ID_UNUSED
 #endif
@@ -15550,6 +15556,14 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	err = check_func_args(env, &meta, insn_idx);
 	if (err < 0)
 		return err;
+
+	if ((meta.func_id == special_kfunc_list[KF_bpf_arena_memcmp] ||
+	     meta.func_id == special_kfunc_list[KF_bpf_arena_memcpy]) &&
+	    reg_umin(&regs[BPF_REG_3]) > BPF_ARENA_MEM_MAX) {
+		verbose(env, "R3 is more than %u bytes that %s() takes per call\n",
+			BPF_ARENA_MEM_MAX, func_name);
+		return -EINVAL;
+	}
 
 	err = mark_raw_stack(env, &meta, insn_idx);
 	if (err)

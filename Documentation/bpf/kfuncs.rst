@@ -965,3 +965,13 @@ the verifier. bpf_cgroup_ancestor() can be used as follows:
 BPF provides a set of kfuncs that can be used to query, allocate, mutate, and
 destroy struct cpumask * objects. Please refer to :ref:`cpumasks-header-label`
 for more details.
+
+4.4 Arena kfuncs
+----------------
+
+Compilers turn copies and comparisons of memory into calls to memcpy(),
+memmove() and memcmp(). Programs that keep all of their memory in arena,
+like the ones written in Rust, call the following kfuncs instead:
+
+.. kernel-doc:: kernel/bpf/arena.c
+   :identifiers: bpf_arena_memcmp bpf_arena_memcpy

@@ -47,6 +47,8 @@
 #define KERN_VM_SZ (SZ_4G + GUARD_SZ)
 
 static void arena_free_pages(struct bpf_arena *arena, long uaddr, long page_cnt, bool sleepable);
+static void __bpf_prog_report_arena_violation(struct bpf_prog *prog, bool write,
+					      unsigned long addr, unsigned long fault_ip);
 
 struct bpf_arena {
 	struct bpf_map map;
@@ -1296,12 +1298,101 @@ __bpf_kfunc int bpf_arena_reserve_pages(void *p__map, void *ptr__ign, u32 page_c
 
 	return arena_reserve_pages(arena, (long)ptr__ign, page_cnt);
 }
+
+/*
+ * The number of bytes at @ptr, @size at most, that are in pages of arena
+ * that are allocated. @ptr is what JIT made of __arena argument.
+ */
+static u64 arena_span(struct bpf_arena *arena, const void *ptr, u64 size)
+{
+	unsigned long start = (unsigned long)ptr, end;
+	struct page *page;
+
+	size = min(size, SZ_4G - (start - bpf_arena_get_kern_vm_start(arena)));
+	for (end = start; end < start + size; end = (end | ~PAGE_MASK) + 1) {
+		page = vmalloc_to_page((void *)end);
+		if (!page || page == arena->scratch_page)
+			break;
+	}
+	return min(size, end - start);
+}
+
+/*
+ * @size bytes at @a and at @b were asked for. Returns what there is,
+ * BPF_ARENA_MEM_MAX at most, and reports the page that is missing.
+ */
+static u64 arena_span2(struct bpf_prog_aux *aux, const void *a, const void *b, u64 size,
+		       bool write)
+{
+	const void *bad;
+	u64 span;
+
+	size = min_t(u64, size, BPF_ARENA_MEM_MAX);
+	span = min(arena_span(aux->arena, a, size), arena_span(aux->arena, b, size));
+	if (span < size) {
+		bad = arena_span(aux->arena, a, size) == span ? a : b;
+		__bpf_prog_report_arena_violation(aux->prog, write && bad == a,
+						  (unsigned long)bad + span -
+						  bpf_arena_get_kern_vm_start(aux->arena), 0);
+	}
+	return span;
+}
+
+/**
+ * bpf_arena_memcmp() - Compare two areas of arena
+ * @a__arena: One area
+ * @b__arena: Another area
+ * @size: The number of bytes to compare, BPF_ARENA_MEM_MAX at most
+ * @aux: Implicit argument, set by the verifier
+ *
+ * The comparison stops at the first page of either area that is not
+ * allocated. It's reported to the stream of the program as an access to
+ * that page.
+ *
+ * Return: 0 when the areas are equal. The difference between the first two
+ * bytes that differ, like memcmp() does, when they are not. -E2BIG when
+ * the areas are equal as far as they were compared and that is less than
+ * @size.
+ */
+__bpf_kfunc int bpf_arena_memcmp(const void *a__arena, const void *b__arena, u64 size,
+				 struct bpf_prog_aux *aux)
+{
+	u64 span = arena_span2(aux, a__arena, b__arena, size, false);
+	int ret = memcmp(a__arena, b__arena, span);
+
+	return ret || span == size ? ret : -E2BIG;
+}
+
+/**
+ * bpf_arena_memcpy() - Copy one area of arena to another
+ * @dst__arena: Where to copy to
+ * @src__arena: Where to copy from
+ * @size: The number of bytes to copy, BPF_ARENA_MEM_MAX at most
+ * @aux: Implicit argument, set by the verifier
+ *
+ * The areas may overlap. The copy stops at the first page of either area
+ * that is not allocated. It's reported to the stream of the program as
+ * an access to that page.
+ *
+ * Return: The number of bytes copied. The program copies more than
+ * BPF_ARENA_MEM_MAX in a loop.
+ */
+__bpf_kfunc u64 bpf_arena_memcpy(void *dst__arena, const void *src__arena, u64 size,
+				 struct bpf_prog_aux *aux)
+{
+	u64 span = arena_span2(aux, dst__arena, src__arena, size, true);
+
+	memmove(dst__arena, src__arena, span);
+	return span;
+}
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(arena_kfuncs)
 BTF_ID_FLAGS(func, bpf_arena_alloc_pages, KF_ARENA_RET | KF_ARENA_ARG2 | KF_SPINLOCK_SAFE)
 BTF_ID_FLAGS(func, bpf_arena_free_pages, KF_ARENA_ARG2 | KF_SPINLOCK_SAFE)
 BTF_ID_FLAGS(func, bpf_arena_reserve_pages, KF_ARENA_ARG2 | KF_SPINLOCK_SAFE)
+BTF_ID_FLAGS(func, bpf_arena_memcmp, KF_IMPLICIT_ARGS)
+BTF_ID_FLAGS(func, bpf_arena_memcpy, KF_IMPLICIT_ARGS)
 BTF_KFUNCS_END(arena_kfuncs)
 
 static const struct btf_kfunc_id_set common_kfunc_set = {
