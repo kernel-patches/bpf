@@ -16,10 +16,7 @@ struct {
 
 SEC("?raw_tp")
 __success __log_level(2)
-__msg("mark_precise: frame0: regs=r2 stack= before 3: (bf) r1 = r10")
-__msg("mark_precise: frame0: regs=r2 stack= before 2: (55) if r2 != 0xfffffff8 goto pc+2")
-__msg("mark_precise: frame0: regs=r2 stack= before 1: (87) r2 = -r2")
-__msg("mark_precise: frame0: regs=r2 stack= before 0: (b7) r2 = 8")
+__msg("1: (87) r2 = -r2                      ; R2=-8")
 __naked int bpf_neg(void)
 {
 	asm volatile (
@@ -36,10 +33,7 @@ __naked int bpf_neg(void)
 
 SEC("?raw_tp")
 __success __log_level(2)
-__msg("mark_precise: frame0: regs=r2 stack= before 3: (bf) r1 = r10")
-__msg("mark_precise: frame0: regs=r2 stack= before 2: (55) if r2 != 0x0 goto pc+2")
-__msg("mark_precise: frame0: regs=r2 stack= before 1: (d4) r2 = le16 r2")
-__msg("mark_precise: frame0: regs=r2 stack= before 0: (b7) r2 = 0")
+__msg("1: (d4) r2 = le16 r2                  ; R2=0")
 __naked int bpf_end_to_le(void)
 {
 	asm volatile (
@@ -57,10 +51,7 @@ __naked int bpf_end_to_le(void)
 
 SEC("?raw_tp")
 __success __log_level(2)
-__msg("mark_precise: frame0: regs=r2 stack= before 3: (bf) r1 = r10")
-__msg("mark_precise: frame0: regs=r2 stack= before 2: (55) if r2 != 0x0 goto pc+2")
-__msg("mark_precise: frame0: regs=r2 stack= before 1: (dc) r2 = be16 r2")
-__msg("mark_precise: frame0: regs=r2 stack= before 0: (b7) r2 = 0")
+__msg("1: (dc) r2 = be16 r2                  ; R2=0")
 __naked int bpf_end_to_be(void)
 {
 	asm volatile (
@@ -82,10 +73,7 @@ __naked int bpf_end_to_be(void)
 
 SEC("?raw_tp")
 __success __log_level(2)
-__msg("mark_precise: frame0: regs=r2 stack= before 3: (bf) r1 = r10")
-__msg("mark_precise: frame0: regs=r2 stack= before 2: (55) if r2 != 0x0 goto pc+2")
-__msg("mark_precise: frame0: regs=r2 stack= before 1: (d7) r2 = bswap16 r2")
-__msg("mark_precise: frame0: regs=r2 stack= before 0: (b7) r2 = 0")
+__msg("1: (d7) r2 = bswap16 r2               ; R2=0")
 __naked int bpf_end_bswap(void)
 {
 	asm volatile (
@@ -104,10 +92,8 @@ __naked int bpf_end_bswap(void)
 
 SEC("?raw_tp")
 __success __log_level(2)
-__msg("mark_precise: frame0: regs=r2 stack= before 3: (bf) r3 = r10")
-__msg("mark_precise: frame0: regs=r2 stack= before 2: (db) r2 = load_acquire((u64 *)(r10 -8))")
-__msg("mark_precise: frame0: regs= stack=-8 before 1: (7b) *(u64 *)(r10 -8) = r1")
-__msg("mark_precise: frame0: regs=r1 stack= before 0: (b7) r1 = 8")
+__msg("2: (db) r2 = load_acquire((u64 *)(r10 -8)){{ *}}; R2=8 R10=fp0 fp-8=8")
+__msg("4: (0f) r3 += r2                      ; R2=8 R3=fp8")
 __naked int bpf_load_acquire(void)
 {
 	asm volatile (
@@ -115,7 +101,7 @@ __naked int bpf_load_acquire(void)
 	"*(u64 *)(r10 - 8) = r1;"
 	".8byte %[load_acquire_insn];" /* r2 = load_acquire((u64 *)(r10 - 8)); */
 	"r3 = r10;"
-	"r3 += r2;" /* mark_precise */
+	"r3 += r2;"
 	"r0 = 0;"
 	"exit;"
 	:
@@ -126,10 +112,8 @@ __naked int bpf_load_acquire(void)
 
 SEC("?raw_tp")
 __success __log_level(2)
-__msg("mark_precise: frame0: regs=r1 stack= before 3: (bf) r2 = r10")
-__msg("mark_precise: frame0: regs=r1 stack= before 2: (79) r1 = *(u64 *)(r10 -8)")
-__msg("mark_precise: frame0: regs= stack=-8 before 1: (db) store_release((u64 *)(r10 -8), r1)")
-__msg("mark_precise: frame0: regs=r1 stack= before 0: (b7) r1 = 8")
+__msg("1: (db) store_release((u64 *)(r10 -8), r1){{ *}}; R1=8 R10=fp0 fp-8=8")
+__msg("4: (0f) r2 += r1                      ; R1=8 R2=fp8")
 __naked int bpf_store_release(void)
 {
 	asm volatile (
@@ -137,7 +121,7 @@ __naked int bpf_store_release(void)
 	".8byte %[store_release_insn];" /* store_release((u64 *)(r10 - 8), r1); */
 	"r1 = *(u64 *)(r10 - 8);"
 	"r2 = r10;"
-	"r2 += r1;" /* mark_precise */
+	"r2 += r1;"
 	"r0 = 0;"
 	"exit;"
 	:
@@ -184,10 +168,6 @@ __success __log_level(2)
 __msg("8: (bd) if r2 <= r10 goto pc+3")
 __msg("9: (35) if r1 >= 0xffe3fff8 goto pc+0")
 __msg("10: (b5) if r2 <= 0x8 goto pc+0")
-__msg("mark_precise: frame1: last_idx 10 first_idx 0 subseq_idx -1")
-__msg("mark_precise: frame1: regs=r2 stack= before 9: (35) if r1 >= 0xffe3fff8 goto pc+0")
-__msg("mark_precise: frame1: regs=r2 stack= before 8: (bd) if r2 <= r10 goto pc+3")
-__msg("mark_precise: frame1: regs=r2 stack= before 7: (05) goto pc+0")
 __naked void bpf_cond_op_r10(void)
 {
 	asm volatile (
@@ -203,9 +183,6 @@ __success __log_level(2)
 __msg("3: (bf) r3 = r10")
 __msg("4: (bd) if r3 <= r2 goto pc+1")
 __msg("5: (b5) if r2 <= 0x8 goto pc+2")
-__msg("mark_precise: frame0: last_idx 5 first_idx 0 subseq_idx -1")
-__msg("mark_precise: frame0: regs=r2 stack= before 4: (bd) if r3 <= r2 goto pc+1")
-__msg("mark_precise: frame0: regs=r2 stack= before 3: (bf) r3 = r10")
 __naked void bpf_cond_op_not_r10(void)
 {
 	asm volatile (
@@ -223,9 +200,6 @@ SEC("lsm.s/socket_connect")
 __success __log_level(2)
 __msg("0: (b7) r0 = 1                        ; R0=1")
 __msg("1: (84) w0 = -w0                      ; R0=0xffffffff")
-__msg("mark_precise: frame0: last_idx 2 first_idx 0 subseq_idx -1")
-__msg("mark_precise: frame0: regs=r0 stack= before 1: (84) w0 = -w0")
-__msg("mark_precise: frame0: regs=r0 stack= before 0: (b7) r0 = 1")
 __naked int bpf_neg_2(void)
 {
 	/*
@@ -258,9 +232,6 @@ SEC("lsm.s/socket_connect")
 __success __log_level(2)
 __msg("0: (b7) r0 = 1                        ; R0=1")
 __msg("1: (87) r0 = -r0                      ; R0=-1")
-__msg("mark_precise: frame0: last_idx 2 first_idx 0 subseq_idx -1")
-__msg("mark_precise: frame0: regs=r0 stack= before 1: (87) r0 = -r0")
-__msg("mark_precise: frame0: regs=r0 stack= before 0: (b7) r0 = 1")
 __naked int bpf_neg_4(void)
 {
 	/*
@@ -291,11 +262,8 @@ __naked int bpf_neg_5(void)
 
 SEC("?raw_tp")
 __success __log_level(2)
-__msg("mark_precise: frame0: regs=r2 stack= before 4: (bf) r3 = r10")
-__msg("mark_precise: frame0: regs=r2 stack= before 3: (db) r2 = atomic64_fetch_add((u64 *)(r10 -8), r2)")
-__msg("mark_precise: frame0: regs= stack=-8 before 2: (b7) r2 = 0")
-__msg("mark_precise: frame0: regs= stack=-8 before 1: (7b) *(u64 *)(r10 -8) = r1")
-__msg("mark_precise: frame0: regs=r1 stack= before 0: (b7) r1 = 8")
+__msg("3: (db) r2 = atomic64_fetch_add((u64 *)(r10 -8), r2){{ *}}; R2=8 R10=fp0 fp-8=mmmmmmmm")
+__msg("5: (0f) r3 += r2                      ; R2=8 R3=fp8")
 __naked int bpf_atomic_fetch_add_precision(void)
 {
 	asm volatile (
@@ -304,7 +272,7 @@ __naked int bpf_atomic_fetch_add_precision(void)
 	"r2 = 0;"
 	".8byte %[fetch_add_insn];"	/* r2 = atomic_fetch_add(*(u64 *)(r10 - 8), r2) */
 	"r3 = r10;"
-	"r3 += r2;"			/* mark_precise */
+	"r3 += r2;"
 	"r0 = 0;"
 	"exit;"
 	:
@@ -315,11 +283,8 @@ __naked int bpf_atomic_fetch_add_precision(void)
 
 SEC("?raw_tp")
 __success __log_level(2)
-__msg("mark_precise: frame0: regs=r2 stack= before 4: (bf) r3 = r10")
-__msg("mark_precise: frame0: regs=r2 stack= before 3: (db) r2 = atomic64_xchg((u64 *)(r10 -8), r2)")
-__msg("mark_precise: frame0: regs= stack=-8 before 2: (b7) r2 = 0")
-__msg("mark_precise: frame0: regs= stack=-8 before 1: (7b) *(u64 *)(r10 -8) = r1")
-__msg("mark_precise: frame0: regs=r1 stack= before 0: (b7) r1 = 8")
+__msg("3: (db) r2 = atomic64_xchg((u64 *)(r10 -8), r2){{ *}}; R2=8 R10=fp0 fp-8=mmmmmmmm")
+__msg("5: (0f) r3 += r2                      ; R2=8 R3=fp8")
 __naked int bpf_atomic_xchg_precision(void)
 {
 	asm volatile (
@@ -328,7 +293,7 @@ __naked int bpf_atomic_xchg_precision(void)
 	"r2 = 0;"
 	".8byte %[xchg_insn];"		/* r2 = atomic_xchg(*(u64 *)(r10 - 8), r2) */
 	"r3 = r10;"
-	"r3 += r2;"			/* mark_precise */
+	"r3 += r2;"
 	"r0 = 0;"
 	"exit;"
 	:
@@ -339,11 +304,8 @@ __naked int bpf_atomic_xchg_precision(void)
 
 SEC("?raw_tp")
 __success __log_level(2)
-__msg("mark_precise: frame0: regs=r2 stack= before 4: (bf) r3 = r10")
-__msg("mark_precise: frame0: regs=r2 stack= before 3: (db) r2 = atomic64_fetch_or((u64 *)(r10 -8), r2)")
-__msg("mark_precise: frame0: regs= stack=-8 before 2: (b7) r2 = 0")
-__msg("mark_precise: frame0: regs= stack=-8 before 1: (7b) *(u64 *)(r10 -8) = r1")
-__msg("mark_precise: frame0: regs=r1 stack= before 0: (b7) r1 = 8")
+__msg("3: (db) r2 = atomic64_fetch_or((u64 *)(r10 -8), r2){{ *}}; R2=8 R10=fp0 fp-8=mmmmmmmm")
+__msg("5: (0f) r3 += r2                      ; R2=8 R3=fp8")
 __naked int bpf_atomic_fetch_or_precision(void)
 {
 	asm volatile (
@@ -352,7 +314,7 @@ __naked int bpf_atomic_fetch_or_precision(void)
 	"r2 = 0;"
 	".8byte %[fetch_or_insn];"	/* r2 = atomic_fetch_or(*(u64 *)(r10 - 8), r2) */
 	"r3 = r10;"
-	"r3 += r2;"			/* mark_precise */
+	"r3 += r2;"
 	"r0 = 0;"
 	"exit;"
 	:
@@ -363,11 +325,8 @@ __naked int bpf_atomic_fetch_or_precision(void)
 
 SEC("?raw_tp")
 __success __log_level(2)
-__msg("mark_precise: frame0: regs=r2 stack= before 4: (bf) r3 = r10")
-__msg("mark_precise: frame0: regs=r2 stack= before 3: (db) r2 = atomic64_fetch_and((u64 *)(r10 -8), r2)")
-__msg("mark_precise: frame0: regs= stack=-8 before 2: (b7) r2 = 0")
-__msg("mark_precise: frame0: regs= stack=-8 before 1: (7b) *(u64 *)(r10 -8) = r1")
-__msg("mark_precise: frame0: regs=r1 stack= before 0: (b7) r1 = 8")
+__msg("3: (db) r2 = atomic64_fetch_and((u64 *)(r10 -8), r2){{ *}}; R2=8 R10=fp0 fp-8=mmmmmmmm")
+__msg("5: (0f) r3 += r2                      ; R2=8 R3=fp8")
 __naked int bpf_atomic_fetch_and_precision(void)
 {
 	asm volatile (
@@ -376,7 +335,7 @@ __naked int bpf_atomic_fetch_and_precision(void)
 	"r2 = 0;"
 	".8byte %[fetch_and_insn];"	/* r2 = atomic_fetch_and(*(u64 *)(r10 - 8), r2) */
 	"r3 = r10;"
-	"r3 += r2;"			/* mark_precise */
+	"r3 += r2;"
 	"r0 = 0;"
 	"exit;"
 	:
@@ -387,11 +346,8 @@ __naked int bpf_atomic_fetch_and_precision(void)
 
 SEC("?raw_tp")
 __success __log_level(2)
-__msg("mark_precise: frame0: regs=r2 stack= before 4: (bf) r3 = r10")
-__msg("mark_precise: frame0: regs=r2 stack= before 3: (db) r2 = atomic64_fetch_xor((u64 *)(r10 -8), r2)")
-__msg("mark_precise: frame0: regs= stack=-8 before 2: (b7) r2 = 0")
-__msg("mark_precise: frame0: regs= stack=-8 before 1: (7b) *(u64 *)(r10 -8) = r1")
-__msg("mark_precise: frame0: regs=r1 stack= before 0: (b7) r1 = 8")
+__msg("3: (db) r2 = atomic64_fetch_xor((u64 *)(r10 -8), r2){{ *}}; R2=8 R10=fp0 fp-8=mmmmmmmm")
+__msg("5: (0f) r3 += r2                      ; R2=8 R3=fp8")
 __naked int bpf_atomic_fetch_xor_precision(void)
 {
 	asm volatile (
@@ -400,7 +356,7 @@ __naked int bpf_atomic_fetch_xor_precision(void)
 	"r2 = 0;"
 	".8byte %[fetch_xor_insn];"	/* r2 = atomic_fetch_xor(*(u64 *)(r10 - 8), r2) */
 	"r3 = r10;"
-	"r3 += r2;"			/* mark_precise */
+	"r3 += r2;"
 	"r0 = 0;"
 	"exit;"
 	:
@@ -411,12 +367,8 @@ __naked int bpf_atomic_fetch_xor_precision(void)
 
 SEC("?raw_tp")
 __success __log_level(2)
-__msg("mark_precise: frame0: regs=r0 stack= before 5: (bf) r3 = r10")
-__msg("mark_precise: frame0: regs=r0 stack= before 4: (db) r0 = atomic64_cmpxchg((u64 *)(r10 -8), r0, r2)")
-__msg("mark_precise: frame0: regs= stack=-8 before 3: (b7) r2 = 0")
-__msg("mark_precise: frame0: regs= stack=-8 before 2: (b7) r0 = 0")
-__msg("mark_precise: frame0: regs= stack=-8 before 1: (7b) *(u64 *)(r10 -8) = r1")
-__msg("mark_precise: frame0: regs=r1 stack= before 0: (b7) r1 = 8")
+__msg("4: (db) r0 = atomic64_cmpxchg((u64 *)(r10 -8), r0, r2){{ *}}; R0=8 R2=0 R10=fp0 fp-8=mmmmmmmm")
+__msg("6: (0f) r3 += r0                      ; R0=8 R3=fp8")
 __naked int bpf_atomic_cmpxchg_precision(void)
 {
 	asm volatile (
@@ -426,7 +378,7 @@ __naked int bpf_atomic_cmpxchg_precision(void)
 	"r2 = 0;"
 	".8byte %[cmpxchg_insn];"	/* r0 = atomic_cmpxchg(*(u64 *)(r10 - 8), r0, r2) */
 	"r3 = r10;"
-	"r3 += r0;"			/* mark_precise */
+	"r3 += r0;"
 	"r0 = 0;"
 	"exit;"
 	:
@@ -435,19 +387,14 @@ __naked int bpf_atomic_cmpxchg_precision(void)
 	: __clobber_all);
 }
 
-/* Regression test for dual precision: Both the fetched value (r2) and
- * a reread of the same stack slot (r3) are tracked for precision. After
- * the atomic operation, the stack slot is STACK_MISC. Thus, the ldx at
- * insn 4 does NOT set INSN_F_STACK_ACCESS. Precision for the stack slot
- * propagates solely through the atomic fetch's load side (insn 3).
+/* Both the fetched value (r2) and a reread of the same stack slot (r3) are used.
+ * The fetched value is known. After the atomic operation, the stack slot is
+ * STACK_MISC, so what is reread is not.
  */
 SEC("?raw_tp")
 __success __log_level(2)
-__msg("mark_precise: frame0: regs=r2,r3 stack= before 4: (79) r3 = *(u64 *)(r10 -8)")
-__msg("mark_precise: frame0: regs=r2 stack= before 3: (db) r2 = atomic64_fetch_add((u64 *)(r10 -8), r2)")
-__msg("mark_precise: frame0: regs= stack=-8 before 2: (b7) r2 = 0")
-__msg("mark_precise: frame0: regs= stack=-8 before 1: (7b) *(u64 *)(r10 -8) = r1")
-__msg("mark_precise: frame0: regs=r1 stack= before 0: (b7) r1 = 8")
+__msg("5: (bf) r4 = r2                       ; R2=8 R4=8")
+__msg("6: (0f) r4 += r3                      ; R3=scalar() R4=scalar()")
 __naked int bpf_atomic_fetch_add_dual_precision(void)
 {
 	asm volatile (
@@ -460,7 +407,7 @@ __naked int bpf_atomic_fetch_add_dual_precision(void)
 	"r4 += r3;"
 	"r4 &= 7;"
 	"r5 = r10;"
-	"r5 += r4;"			/* mark_precise */
+	"r5 += r4;"
 	"r0 = 0;"
 	"exit;"
 	:
@@ -471,12 +418,8 @@ __naked int bpf_atomic_fetch_add_dual_precision(void)
 
 SEC("?raw_tp")
 __success __log_level(2)
-__msg("mark_precise: frame0: regs=r0,r3 stack= before 5: (79) r3 = *(u64 *)(r10 -8)")
-__msg("mark_precise: frame0: regs=r0 stack= before 4: (db) r0 = atomic64_cmpxchg((u64 *)(r10 -8), r0, r2)")
-__msg("mark_precise: frame0: regs= stack=-8 before 3: (b7) r2 = 0")
-__msg("mark_precise: frame0: regs= stack=-8 before 2: (b7) r0 = 8")
-__msg("mark_precise: frame0: regs= stack=-8 before 1: (7b) *(u64 *)(r10 -8) = r1")
-__msg("mark_precise: frame0: regs=r1 stack= before 0: (b7) r1 = 8")
+__msg("6: (bf) r4 = r0                       ; R0=8 R4=8")
+__msg("7: (0f) r4 += r3                      ; R3=scalar() R4=scalar()")
 __naked int bpf_atomic_cmpxchg_dual_precision(void)
 {
 	asm volatile (
@@ -490,7 +433,7 @@ __naked int bpf_atomic_cmpxchg_dual_precision(void)
 	"r4 += r3;"
 	"r4 &= 7;"
 	"r5 = r10;"
-	"r5 += r4;"			/* mark_precise */
+	"r5 += r4;"
 	"r0 = 0;"
 	"exit;"
 	:
@@ -501,9 +444,7 @@ __naked int bpf_atomic_cmpxchg_dual_precision(void)
 
 SEC("?raw_tp")
 __success __log_level(2)
-__msg("mark_precise: frame0: regs=r1 stack= before 10: (57) r1 &= 7")
-__msg("mark_precise: frame0: regs=r1 stack= before 9: (db) r1 = atomic64_fetch_add((u64 *)(r0 +0), r1)")
-__not_msg("falling back to forcing all scalars precise")
+__msg("9: (db) r1 = atomic64_fetch_add((u64 *)(r0 +0), r1){{ *}}; R0=map_value({{.*}}) R1=scalar()")
 __naked int bpf_atomic_fetch_add_map_precision(void)
 {
 	asm volatile (
@@ -518,7 +459,7 @@ __naked int bpf_atomic_fetch_add_map_precision(void)
 	".8byte %[fetch_add_insn];"	/* r1 = atomic_fetch_add(*(u64 *)(r0 + 0), r1) */
 	"r1 &= 7;"
 	"r2 = r10;"
-	"r2 += r1;"			/* mark_precise */
+	"r2 += r1;"
 	"1: r0 = 0;"
 	"exit;"
 	:
@@ -531,9 +472,7 @@ __naked int bpf_atomic_fetch_add_map_precision(void)
 
 SEC("?raw_tp")
 __success __log_level(2)
-__msg("mark_precise: frame0: regs=r0 stack= before 12: (57) r0 &= 7")
-__msg("mark_precise: frame0: regs=r0 stack= before 11: (db) r0 = atomic64_cmpxchg((u64 *)(r6 +0), r0, r1)")
-__not_msg("falling back to forcing all scalars precise")
+__msg("11: (db) r0 = atomic64_cmpxchg((u64 *)(r6 +0), r0, r1){{ *}}; R0=scalar() R1=0")
 __naked int bpf_atomic_cmpxchg_map_precision(void)
 {
 	asm volatile (
@@ -550,7 +489,7 @@ __naked int bpf_atomic_cmpxchg_map_precision(void)
 	".8byte %[cmpxchg_insn];"	/* r0 = atomic_cmpxchg(*(u64 *)(r6 + 0), r0, r1) */
 	"r0 &= 7;"
 	"r2 = r10;"
-	"r2 += r0;"			/* mark_precise */
+	"r2 += r0;"
 	"1: r0 = 0;"
 	"exit;"
 	:
@@ -563,9 +502,7 @@ __naked int bpf_atomic_cmpxchg_map_precision(void)
 
 SEC("?raw_tp")
 __success __log_level(2)
-__msg("mark_precise: frame0: regs=r1 stack= before 10: (57) r1 &= 7")
-__msg("mark_precise: frame0: regs=r1 stack= before 9: (c3) r1 = atomic_fetch_add((u32 *)(r0 +0), r1)")
-__not_msg("falling back to forcing all scalars precise")
+__msg("9: (c3) r1 = atomic_fetch_add((u32 *)(r0 +0), r1){{ *}}; R0=map_value({{.*}}) R1=scalar(smin=0,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff))")
 __naked int bpf_atomic_fetch_add_32bit_precision(void)
 {
 	asm volatile (
@@ -580,7 +517,7 @@ __naked int bpf_atomic_fetch_add_32bit_precision(void)
 	".8byte %[fetch_add_insn];"	/* r1 = atomic_fetch_add(*(u32 *)(r0 + 0), r1) */
 	"r1 &= 7;"
 	"r2 = r10;"
-	"r2 += r1;"			/* mark_precise */
+	"r2 += r1;"
 	"1: r0 = 0;"
 	"exit;"
 	:
@@ -593,9 +530,7 @@ __naked int bpf_atomic_fetch_add_32bit_precision(void)
 
 SEC("?raw_tp")
 __success __log_level(2)
-__msg("mark_precise: frame0: regs=r0 stack= before 12: (57) r0 &= 7")
-__msg("mark_precise: frame0: regs=r0 stack= before 11: (c3) r0 = atomic_cmpxchg((u32 *)(r6 +0), r0, r1)")
-__not_msg("falling back to forcing all scalars precise")
+__msg("11: (c3) r0 = atomic_cmpxchg((u32 *)(r6 +0), r0, r1){{ *}}; R0=scalar(smin=0,smax=umax=0xffffffff,var_off=(0x0; 0xffffffff)) R1=0")
 __naked int bpf_atomic_cmpxchg_32bit_precision(void)
 {
 	asm volatile (
@@ -612,7 +547,7 @@ __naked int bpf_atomic_cmpxchg_32bit_precision(void)
 	".8byte %[cmpxchg_insn];"	/* r0 = atomic_cmpxchg(*(u32 *)(r6 + 0), r0, r1) */
 	"r0 &= 7;"
 	"r2 = r10;"
-	"r2 += r0;"			/* mark_precise */
+	"r2 += r0;"
 	"1: r0 = 0;"
 	"exit;"
 	:
@@ -626,11 +561,9 @@ __naked int bpf_atomic_cmpxchg_32bit_precision(void)
 /*
  * Verification takes two paths: with r1 being scalar zero on path (1)
  * and with r1 being some other scalar on path (2).
- * Check that the verifier does not use checkpoints created
- * on path (1) to prune path (2).
+ * Check that the state of path (1) does not stand for path (2).
  */
 SEC("?tc")
-__flag(BPF_F_TEST_STATE_FREQ)
 __failure __msg("R1 type=scalar expected=fp")
 __naked int null_mem_arg_zero_size(void)
 {
@@ -667,11 +600,9 @@ __weak int subprog_mem_arg(int *p)
 /*
  * Verification takes two paths: with r1 being scalar zero on path (1)
  * and with r1 being some other scalar on path (2).
- * Check that the verifier does not use checkpoints created
- * on path (1) to prune path (2).
+ * Check that the state of path (1) does not stand for path (2).
  */
 SEC("?raw_tp")
-__flag(BPF_F_TEST_STATE_FREQ)
 __failure __msg("R1 type=scalar expected=fp")
 __naked int null_mem_arg_global_subprog(void)
 {
@@ -689,9 +620,8 @@ __naked int null_mem_arg_global_subprog(void)
 		: __clobber_all);
 }
 
-/* Same as above, check that path with r3 == 0 does not prune the path with r3 != 0 */
+/* Same as above, check that path with r3 == 0 does not stand for the path with r3 != 0 */
 SEC("?tc")
-__flag(BPF_F_TEST_STATE_FREQ)
 __failure __msg("R3 type=scalar expected=fp")
 int null_kfunc_arg_dynptr_slice(struct __sk_buff *skb)
 {
