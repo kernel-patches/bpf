@@ -1756,6 +1756,21 @@ int xe_guc_start(struct xe_guc *guc)
 }
 
 /**
+ * xe_guc_resume_early() - Early init for GuC resume
+ * @guc: the guc object
+ *
+ * GuC init after a suspend cycle
+ */
+void xe_guc_resume_early(struct xe_guc *guc)
+{
+	struct xe_device *xe = guc_to_xe(guc);
+
+	/* clear the g2g buffer which is marked as NORESTORE during alloc */
+	if (guc->g2g.bo && guc->g2g.owned)
+		xe_map_memset(xe, &guc->g2g.bo->vmap, 0, 0, xe_bo_size(guc->g2g.bo));
+}
+
+/**
  * xe_guc_runtime_suspend() - GuC runtime suspend
  * @guc: The GuC object
  *

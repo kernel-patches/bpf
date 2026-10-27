@@ -12,6 +12,7 @@
 #include "xe_gt_printk.h"
 #include "xe_gt_sriov_vf.h"
 #include "xe_guc.h"
+#include "xe_guc_ct.h"
 #include "xe_guc_pc.h"
 #include "xe_guc_rc.h"
 #include "xe_guc_engine_activity.h"
@@ -295,6 +296,20 @@ int xe_uc_suspend(struct xe_uc *uc)
 	xe_uc_stop(uc);
 
 	return xe_guc_suspend(&uc->guc);
+}
+
+/**
+ * xe_uc_resume_early() - Early init for UC resume
+ * @uc: the UC object
+ *
+ * UC init before a GT restart during resume.
+ */
+void xe_uc_resume_early(struct xe_uc *uc)
+{
+	if (!xe_device_uc_enabled(uc_to_xe(uc)))
+		return;
+
+	xe_guc_resume_early(&uc->guc);
 }
 
 /**

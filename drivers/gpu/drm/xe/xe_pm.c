@@ -247,7 +247,7 @@ int xe_pm_resume(struct xe_device *xe)
 		return err;
 
 	for_each_gt(gt, xe, id)
-		xe_gt_idle_disable_c6(gt);
+		xe_gt_resume_early(gt);
 
 	xe_display_pm_resume_early(xe);
 
@@ -682,7 +682,7 @@ int xe_pm_runtime_resume(struct xe_device *xe)
 			goto out;
 
 		for_each_gt(gt, xe, id)
-			xe_gt_idle_disable_c6(gt);
+			xe_gt_resume_early(gt);
 
 		xe_display_pm_resume_early(xe);
 
