@@ -835,10 +835,21 @@ static void connect(struct backend_info *be)
 	return;
 
 err:
-	if (be->vif->num_queues > 0)
+	if (be->vif->num_queues > 0) {
+		unsigned int num_queues = be->vif->num_queues;
+
 		xenvif_disconnect_data(be->vif); /* Clean up existing queues */
-	for (queue_index = 0; queue_index < be->vif->num_queues; ++queue_index)
-		xenvif_deinit_queue(&be->vif->queues[queue_index]);
+
+		/*
+		 * Mirror backend_disconnect(): publish num_queues == 0 and
+		 * synchronize_net() so RCU stats readers finish before the free.
+		 */
+		be->vif->num_queues = 0;
+		synchronize_net();
+
+		for (queue_index = 0; queue_index < num_queues; ++queue_index)
+			xenvif_deinit_queue(&be->vif->queues[queue_index]);
+	}
 	vfree(be->vif->queues);
 	be->vif->queues = NULL;
 	be->vif->num_queues = 0;
