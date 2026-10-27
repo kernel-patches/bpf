@@ -26,6 +26,13 @@
 #define A64_CBZ(sf, Rt, imm19) A64_COMP_BRANCH(sf, Rt, (imm19) << 2, ZERO)
 #define A64_CBNZ(sf, Rt, imm19) A64_COMP_BRANCH(sf, Rt, (imm19) << 2, NONZERO)
 
+/* Test bit & branch (immediate) */
+#define A64_TEST_BRANCH(Rt, bit, offset, type) \
+	aarch64_insn_gen_test_branch_imm(0, offset, Rt, bit, \
+		AARCH64_INSN_BRANCH_TEST_##type)
+#define A64_TBZ(Rt, bit, imm14) A64_TEST_BRANCH(Rt, bit, (imm14) << 2, ZERO)
+#define A64_TBNZ(Rt, bit, imm14) A64_TEST_BRANCH(Rt, bit, (imm14) << 2, NONZERO)
+
 /* Conditional branch (immediate) */
 #define A64_COND_BRANCH(cond, offset) \
 	aarch64_insn_gen_cond_branch_imm(0, offset, cond)
@@ -54,7 +61,7 @@
 
 /* Load/store register (register offset) */
 #define A64_LS_REG(Rt, Rn, Rm, size, type) \
-	aarch64_insn_gen_load_store_reg(Rt, Rn, Rm, \
+	aarch64_insn_gen_load_store_reg(Rt, Rn, Rm, AARCH64_INSN_EXTEND_UXTX, \
 		AARCH64_INSN_SIZE_##size, \
 		AARCH64_INSN_LDST_##type##_REG_OFFSET)
 #define A64_STRB(Wt, Xn, Xm)  A64_LS_REG(Wt, Xn, Xm, 8, STORE)
@@ -231,11 +238,26 @@
 #define A64_MOVK(sf, Rd, imm16, shift) A64_MOVEW(sf, Rd, imm16, shift, KEEP)
 
 /* Add/subtract (shifted register) */
-#define A64_ADDSUB_SREG(sf, Rd, Rn, Rm, type) \
-	aarch64_insn_gen_add_sub_shifted_reg(Rd, Rn, Rm, 0, \
+#define A64_ADDSUB_SHIFT(sf, Rd, Rn, Rm, stype, shift, type) \
+	aarch64_insn_gen_add_sub_shifted_reg(Rd, Rn, Rm, \
+		AARCH64_INSN_SHIFT_##stype, shift, \
 		A64_VARIANT(sf), AARCH64_INSN_ADSB_##type)
+#define A64_ADDSUB_SREG(sf, Rd, Rn, Rm, type) \
+	A64_ADDSUB_SHIFT(sf, Rd, Rn, Rm, LSL, 0, type)
 /* Rd = Rn OP Rm */
 #define A64_ADD(sf, Rd, Rn, Rm)  A64_ADDSUB_SREG(sf, Rd, Rn, Rm, ADD)
+/* Rd = Rn + (Rm << shift) */
+#define A64_ADD_LSL(sf, Rd, Rn, Rm, shift) \
+	A64_ADDSUB_SHIFT(sf, Rd, Rn, Rm, LSL, shift, ADD)
+/* Rd = Rn + (Rm >> shift) */
+#define A64_ADD_LSR(sf, Rd, Rn, Rm, shift) \
+	A64_ADDSUB_SHIFT(sf, Rd, Rn, Rm, LSR, shift, ADD)
+/* Rd = Rn - (Rm << shift) */
+#define A64_SUB_LSL(sf, Rd, Rn, Rm, shift) \
+	A64_ADDSUB_SHIFT(sf, Rd, Rn, Rm, LSL, shift, SUB)
+/* Rd = Rn - (Rm >> shift); signed */
+#define A64_SUB_ASR(sf, Rd, Rn, Rm, shift) \
+	A64_ADDSUB_SHIFT(sf, Rd, Rn, Rm, ASR, shift, SUB)
 #define A64_SUB(sf, Rd, Rn, Rm)  A64_ADDSUB_SREG(sf, Rd, Rn, Rm, SUB)
 #define A64_SUBS(sf, Rd, Rn, Rm) A64_ADDSUB_SREG(sf, Rd, Rn, Rm, SUB_SETFLAGS)
 /* Rd = -Rm */
