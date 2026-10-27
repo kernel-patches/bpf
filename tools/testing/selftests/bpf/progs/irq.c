@@ -11,6 +11,30 @@ extern void bpf_local_irq_save(unsigned long *) __weak __ksym;
 extern void bpf_local_irq_restore(unsigned long *) __weak __ksym;
 extern int bpf_copy_from_user_str(void *dst, u32 dst__sz, const void *unsafe_ptr__ign, u64 flags) __weak __ksym;
 
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+#define IRQ_FLAGS_REG_BYTE 0x01
+#else
+#define IRQ_FLAGS_REG_BYTE 0x10
+#endif
+
+SEC("?tc")
+__failure __msg("unknown opcode e2")
+__naked void irq_internal_save_rejected(void)
+{
+	asm volatile (".byte 0xe2, %[flags_reg]; .short 0; .long 0; r0 = 0; exit;"
+		      : : __imm_const(flags_reg, IRQ_FLAGS_REG_BYTE)
+		      : __clobber_all);
+}
+
+SEC("?tc")
+__failure __msg("unknown opcode e2")
+__naked void irq_internal_restore_rejected(void)
+{
+	asm volatile (".byte 0xe2, %[flags_reg]; .short 0; .long 1; r0 = 0; exit;"
+		      : : __imm_const(flags_reg, IRQ_FLAGS_REG_BYTE)
+		      : __clobber_all);
+}
+
 struct bpf_res_spin_lock lockA __hidden SEC(".data.A");
 struct bpf_res_spin_lock lockB __hidden SEC(".data.B");
 
