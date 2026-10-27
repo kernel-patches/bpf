@@ -812,6 +812,32 @@ void __arena *buddy_alloc_nogrow(struct buddy __arena *buddy, size_t size)
 	return buddy_alloc_maygrow(buddy, size, false);
 }
 
+__weak
+int buddy_grow(struct buddy __arena *buddy, size_t nr_chunks)
+{
+	struct buddy_chunk __arena *chunk;
+	unsigned long flags;
+	size_t chunk_index;
+
+	for (chunk_index = zero; chunk_index < nr_chunks && can_loop; chunk_index++) {
+		chunk = buddy_chunk_get(buddy);
+		if (!chunk)
+			return -ENOMEM;
+
+		if (buddy_lock(buddy, flags)) {
+			bpf_arena_free_pages(&arena, chunk, BUDDY_CHUNK_PAGES);
+			return -ENOMEM;
+		}
+
+		chunk->next = buddy->first_chunk;
+		buddy->first_chunk = chunk;
+
+		buddy_unlock(buddy, flags);
+	}
+
+	return 0;
+}
+
 static __always_inline int buddy_free_unlocked(struct buddy __arena *buddy, u64 addr)
 {
 	struct buddy_header __arena *header, *buddy_header;
