@@ -2837,6 +2837,9 @@ int bpf_widen_scev_regs(struct bpf_verifier_env *env, struct bpf_verifier_state 
 				bpf_log(log, "\n");
 			}
 			scratch_widened_reg_id(env, reg);
+			/* "at pkt_end" and "beyond pkt_end" are not valid in all iterations */
+			if (type_is_pkt_pointer(reg->type))
+				reg->range = max(reg->range, 0);
 			err = bpf_set_reg_range(env, reg, bounds.r64, bounds.r32,
 						bounds.base, bounds.step);
 			if (err)
