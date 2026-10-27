@@ -19,9 +19,12 @@ void *__s390_kernel_write(void *dst, const void *src, size_t size);
 
 static inline void *s390_kernel_write(void *dst, const void *src, size_t size)
 {
-	if (__is_defined(__DECOMPRESSOR))
-		return memcpy(dst, src, size);
+#ifdef __DECOMPRESSOR
+	return memcpy(dst, src, size);
+#else
+	lockdep_assert_held(&text_mutex);
 	return __s390_kernel_write(dst, src, size);
+#endif
 }
 
 #endif /* _ASM_S390_TEXT_PATCHING_H */
