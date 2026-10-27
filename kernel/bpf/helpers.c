@@ -133,6 +133,10 @@ const struct bpf_func_proto bpf_map_peek_elem_proto = {
 BPF_CALL_3(bpf_map_lookup_percpu_elem, struct bpf_map *, map, void *, key, u32, cpu)
 {
 	WARN_ON_ONCE(!bpf_rcu_lock_held());
+
+	if (cpu >= nr_cpu_ids || !cpu_possible(cpu))
+		return 0;
+
 	return (unsigned long) map->ops->map_lookup_percpu_elem(map, key, cpu);
 }
 
@@ -753,7 +757,7 @@ const struct bpf_func_proto bpf_copy_from_user_task_proto = {
 
 BPF_CALL_2(bpf_per_cpu_ptr, const void *, ptr, u32, cpu)
 {
-	if (cpu >= nr_cpu_ids)
+	if (cpu >= nr_cpu_ids || !cpu_possible(cpu))
 		return (unsigned long)NULL;
 
 	return (unsigned long)per_cpu_ptr((const void __percpu *)(const uintptr_t)ptr, cpu);
