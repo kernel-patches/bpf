@@ -462,6 +462,7 @@ int apply_relocate_add(Elf_Shdr *sechdrs, const char *strtab,
 	if (!early)
 		write = s390_kernel_write;
 
+	guard(mutex)(&text_mutex);
 	return __apply_relocate_add(sechdrs, strtab, symindex, relsec, me,
 				    write);
 }
