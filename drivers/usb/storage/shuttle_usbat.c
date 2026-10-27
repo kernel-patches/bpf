@@ -1328,7 +1328,12 @@ static int usbat_hp8200e_handle_read10(struct us_data *us,
 		srb->transfersize = len ? scsi_bufflen(srb) / len : 0;
 	}
 
-	if (!srb->transfersize)  {
+	/*
+	 * Passthrough requests set transfersize to the whole request size,
+	 * which can exceed the 64k-1 maximum read and leave no whole sector
+	 * to read per chunk.
+	 */
+	if (!srb->transfersize || srb->transfersize > 65535) {
 		srb->transfersize = 2048; /* A guess */
 		usb_stor_dbg(us, "transfersize 0, forcing %d\n",
 			     srb->transfersize);
