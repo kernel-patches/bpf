@@ -85,5 +85,3 @@ __weak void arena_free(void __arena *ptr)
 {
 	buddy_free(&buddy, ptr);
 }
-
-char _license[] SEC("license") = "GPL";
