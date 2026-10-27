@@ -258,21 +258,21 @@ void dcn42_update_clocks(struct clk_mgr *clk_mgr_base,
 			dcn42_smu_set_zstate_support(clk_mgr, DCN_ZSTATE_SUPPORT_DISALLOW);
 			clk_mgr_base->clks.zstate_support = new_clocks->zstate_support;
 		}
-		/* Only attempt to enable dtbclk if currently disabled AND new state requests it.
-		 * For dcn42b (no dtbclk hardware), init_clk_states sets dtbclk_en=false and
-		 * new_clocks->dtbclk_en should always be false, so this block never executes.
+		/* PMFW may stop dtbclk on idle, so re-read the actual frequency even when
+		 * clks.dtbclk_en is already set, and re-enable it if it has dropped.
 		 */
-		actual_dtbclk = dcn42_get_clock_freq_from_clkip(clk_mgr_base, clock_type_dtbclk);
-
-		if (new_clocks->dtbclk_en && actual_dtbclk < 590000) {
-
-			dcn42_update_clocks_update_dtb_dto(clk_mgr, context, new_clocks->ref_dtbclk_khz);
-			dcn42_smu_set_dtbclk(clk_mgr, true);
+		if (new_clocks->dtbclk_en) {
 			actual_dtbclk = dcn42_get_clock_freq_from_clkip(clk_mgr_base, clock_type_dtbclk);
 
-			if (actual_dtbclk > 590000) {
-				clk_mgr_base->clks.ref_dtbclk_khz = new_clocks->ref_dtbclk_khz;
-				clk_mgr_base->clks.dtbclk_en = new_clocks->dtbclk_en;
+			if (actual_dtbclk < 590000) {
+				dcn42_update_clocks_update_dtb_dto(clk_mgr, context, new_clocks->ref_dtbclk_khz);
+				dcn42_smu_set_dtbclk(clk_mgr, true);
+				actual_dtbclk = dcn42_get_clock_freq_from_clkip(clk_mgr_base, clock_type_dtbclk);
+
+				if (actual_dtbclk > 590000) {
+					clk_mgr_base->clks.ref_dtbclk_khz = new_clocks->ref_dtbclk_khz;
+					clk_mgr_base->clks.dtbclk_en = new_clocks->dtbclk_en;
+				}
 			}
 		}
 

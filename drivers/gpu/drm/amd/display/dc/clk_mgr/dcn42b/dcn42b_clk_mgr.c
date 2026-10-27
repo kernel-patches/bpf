@@ -393,18 +393,13 @@ uint32_t dcn42b_get_clock_freq_from_clkip(struct clk_mgr *clk_mgr_base, enum clo
 
 #define DCN42B_MIN_DCFCLK_MHZ 200
 #define DCN42B_MAX_DCFCLK_MHZ 600
-#define DCN42B_AC_MIN_DCFCLK_MHZ 300
 
 /*
  * dcn42b_update_clocks - DCN42B wrapper around dcn42_update_clocks.
  *
- * Establishes the DCN42B force-min-DCFCLK floor consumed by the shared
- * dcn42_update_clocks(), which applies it to new_clocks->dcfclk_khz:
- *   - a user override (dc->debug.force_min_dcfclk_mhz)
- *     wins, sanitized to the [200, 600] MHz supported range;
- *   - otherwise DCFCLK is floored at 300 MHz on wall power, and left
- *     unconstrained on battery.
- * dc->debug is restored afterwards so the override survives AC/DC transitions.
+ * Sanitizes the user force-min-DCFCLK override (dc->debug.force_min_dcfclk_mhz)
+ * to the [200, 600] MHz range supported by DCN42B before the shared
+ * dcn42_update_clocks() applies it to new_clocks->dcfclk_khz.
  */
 static void dcn42b_update_clocks(struct clk_mgr *clk_mgr_base,
 			struct dc_state *context,
