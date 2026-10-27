@@ -22,6 +22,7 @@
 #include <asm/cpufeature.h>
 #include <asm/debug-monitors.h>
 #include <asm/insn.h>
+#include <asm/irqflags.h>
 #include <asm/text-patching.h>
 
 #include "bpf_jit.h"
@@ -2026,6 +2027,33 @@ emit_cond_jmp:
 		}
 		break;
 
+	case BPF_ST | BPF_IRQ:
+	{
+		bool pmr = system_uses_irq_prio_masking();
+		u32 sysreg = pmr ? SYS_ICC_PMR_EL1 : sys_reg(3, 3, 4, 2, 1);
+
+		if (imm == BPF_IRQ_SAVE) {
+			emit(A64_MRS_SYSREG(tmp, sysreg), ctx);
+			if (pmr) {
+				emit(A64_CMP_I(1, tmp, GIC_PRIO_IRQON), ctx);
+				emit(A64_B_(A64_COND_NE, 3), ctx);
+				emit_a64_mov_i(1, tmp2, GIC_PRIO_IRQOFF, ctx);
+				emit(A64_MSR_SYSREG(tmp2, sysreg), ctx);
+			} else {
+				emit(A64_MSR_DAIFSET(3), ctx);
+			}
+			emit(A64_STR64I(tmp, dst, 0), ctx);
+		} else if (imm == BPF_IRQ_RESTORE) {
+			emit(A64_LDR64I(tmp, dst, 0), ctx);
+			emit(A64_MSR_SYSREG(tmp, sysreg), ctx);
+			if (pmr && !alternative_has_cap_likely(ARM64_HAS_GIC_PRIO_RELAXED_SYNC))
+				emit(aarch64_insn_gen_dsb(AARCH64_INSN_MB_SY), ctx);
+		} else {
+			return -EINVAL;
+		}
+		break;
+	}
+
 	/* ST: *(size *)(dst + off) = imm */
 	case BPF_ST | BPF_MEM | BPF_W:
 	case BPF_ST | BPF_MEM | BPF_H:
@@ -3524,6 +3552,12 @@ bool bpf_jit_supports_insn(struct bpf_insn *insn, bool in_arena)
 bool bpf_jit_supports_percpu_insn(void)
 {
 	return true;
+}
+
+bool bpf_jit_supports_irq_save_restore(void)
+{
+	return !IS_ENABLED(CONFIG_TRACE_IRQFLAGS) &&
+	       !IS_ENABLED(CONFIG_ARM64_DEBUG_PRIORITY_MASKING);
 }
 
 bool bpf_jit_bypass_spec_v4(void)

@@ -8,6 +8,7 @@
 #define _BPF_JIT_H
 
 #include <asm/insn.h>
+#include <asm/sysreg.h>
 
 /* 5-bit Register Operand */
 #define A64_R(x)	AARCH64_INSN_REG_##x
@@ -337,6 +338,13 @@
 	aarch64_insn_gen_mrs(Rt, AARCH64_INSN_SYSREG_TPIDR_EL2)
 #define A64_MRS_SP_EL0(Rt) \
 	aarch64_insn_gen_mrs(Rt, AARCH64_INSN_SYSREG_SP_EL0)
+
+#define A64_MRS_SYSREG(Rt, SysReg) \
+	(aarch64_insn_get_mrs_value() | (SysReg) | (Rt))
+#define A64_MSR_SYSREG(Rt, SysReg) \
+	(aarch64_insn_get_msr_reg_value() | (SysReg) | (Rt))
+#define A64_MSR_DAIFSET(Imm) \
+	(aarch64_insn_get_msr_imm_value() | pstate_field(3, 6) | ((Imm) << PSTATE_Imm_shift))
 
 /* Barriers */
 #define A64_SB aarch64_insn_get_sb_value()
