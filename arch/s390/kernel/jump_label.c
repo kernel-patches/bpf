@@ -5,6 +5,7 @@
  * Copyright IBM Corp. 2011
  * Author(s): Jan Glauber <jang@linux.vnet.ibm.com>
  */
+#include <linux/memory.h>
 #include <linux/uaccess.h>
 #include <linux/jump_label.h>
 #include <linux/module.h>
@@ -57,6 +58,7 @@ static void jump_label_transform(struct jump_entry *entry,
 		jump_label_make_branch(entry, &old);
 		jump_label_make_nop(entry, &new);
 	}
+	guard(mutex)(&text_mutex);
 	if (memcmp(code, &old, sizeof(old)))
 		jump_label_bug(entry, &old, &new);
 	s390_kernel_write(code, &new, sizeof(new));
