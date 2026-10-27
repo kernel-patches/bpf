@@ -78,5 +78,6 @@ int buddy_destroy(struct buddy __arena *buddy);
 int buddy_free(struct buddy __arena *buddy, void __arena *free);
 void __arena *buddy_alloc(struct buddy __arena *buddy, size_t size);
 void __arena *buddy_alloc_nogrow(struct buddy __arena *buddy, size_t size);
+int buddy_grow(struct buddy __arena *buddy, size_t nr_chunks);
 
 #endif /* __BPF__  */
