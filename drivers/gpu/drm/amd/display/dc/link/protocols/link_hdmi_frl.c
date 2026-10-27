@@ -514,8 +514,7 @@ static enum link_result hdmi_frl_perform_link_training(struct ddc_service *ddc_s
 
 	do {
 		flt_poll_curr = dm_get_timestamp(ddc_service->ctx);
-					elapsed = dm_get_elapse_time_in_ns(ddc_service->ctx,
-						flt_poll_curr, flt_poll_start);
+		elapsed = dm_get_elapse_time_in_ns(ddc_service->ctx, flt_poll_curr, flt_poll_start);
 		if (elapsed < (num_polls * wait_time_ns))
 			continue;
 		num_polls++;
@@ -622,8 +621,7 @@ static enum link_result hdmi_frl_perform_link_training(struct ddc_service *ddc_s
 
 		do {
 			flt_poll_curr = dm_get_timestamp(ddc_service->ctx);
-					elapsed = dm_get_elapse_time_in_ns(ddc_service->ctx,
-						flt_poll_curr, flt_poll_start);
+			elapsed = dm_get_elapse_time_in_ns(ddc_service->ctx, flt_poll_curr, flt_poll_start);
 			if (elapsed < (num_polls * wait_time_ns))
 				continue;
 			num_polls++;
