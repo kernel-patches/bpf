@@ -220,6 +220,9 @@
 /* Zero extend */
 #define A64_UXTH(sf, Rd, Rn) A64_UBFM(sf, Rd, Rn, 0, 15)
 #define A64_UXTW(sf, Rd, Rn) A64_UBFM(sf, Rd, Rn, 0, 31)
+/* Rd = (Rn & (2^width - 1)) << lsb */
+#define A64_UBFIZ(sf, Rd, Rn, lsb, width) \
+	A64_UBFM(sf, Rd, Rn, (unsigned int)-(lsb) % ((sf) ? 64 : 32), (width) - 1)
 
 /* Sign extend */
 #define A64_SXTB(sf, Rd, Rn) A64_SBFM(sf, Rd, Rn, 0, 7)
