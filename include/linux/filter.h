@@ -1483,6 +1483,17 @@ void bpf_jit_binary_pack_free(struct bpf_binary_header *ro_header,
 int bpf_jit_add_poke_descriptor(struct bpf_prog *prog,
 				struct bpf_jit_poke_descriptor *poke);
 
+#ifdef CONFIG_64BIT
+struct bpf_div_magic {
+	u64 m;		/* multiplier, sign extended for signed division */
+	int s;		/* shift of the high half of the product */
+	bool add;	/* multiplier has 65 bits, use the add sequence */
+};
+
+void bpf_magic_udiv(u64 d, int lz, struct bpf_div_magic *mag);
+void bpf_magic_sdiv(s64 d, struct bpf_div_magic *mag);
+#endif
+
 int bpf_jit_get_func_addr(const struct bpf_prog *prog,
 			  const struct bpf_insn *insn, bool extra_pass,
 			  u64 *func_addr, bool *func_addr_fixed);
