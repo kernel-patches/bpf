@@ -4,9 +4,9 @@
 #define pr_fmt(fmt)	"alt: " fmt
 #endif
 
+#include <linux/text-patching.h>
 #include <linux/hex.h>
 #include <linux/memory.h>
-#include <linux/uaccess.h>
 #include <linux/printk.h>
 #include <asm/nospec-branch.h>
 #include <asm/abs_lowcore.h>

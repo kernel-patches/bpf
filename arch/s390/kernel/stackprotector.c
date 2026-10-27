@@ -4,10 +4,10 @@
 #define pr_fmt(fmt)	"stackprot: " fmt
 #endif
 
+#include <linux/text-patching.h>
 #include <linux/export.h>
 #include <linux/hex.h>
 #include <linux/memory.h>
-#include <linux/uaccess.h>
 #include <linux/printk.h>
 #include <asm/abs_lowcore.h>
 #include <asm/sections.h>

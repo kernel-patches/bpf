@@ -10,6 +10,7 @@
  *  based on i386 version
  *    Copyright (C) 2001 Rusty Russell.
  */
+#include <linux/text-patching.h>
 #include <linux/module.h>
 #include <linux/elf.h>
 #include <linux/vmalloc.h>

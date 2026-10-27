@@ -6,6 +6,7 @@
  *
  */
 
+#include <linux/text-patching.h>
 #include <linux/uaccess.h>
 #include <linux/kernel.h>
 #include <linux/types.h>

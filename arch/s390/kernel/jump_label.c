@@ -6,7 +6,6 @@
  * Author(s): Jan Glauber <jang@linux.vnet.ibm.com>
  */
 #include <linux/memory.h>
-#include <linux/uaccess.h>
 #include <linux/jump_label.h>
 #include <linux/module.h>
 #include <asm/text-patching.h>

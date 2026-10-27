@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
+
+#include <linux/text-patching.h>
 #include <linux/memory.h>
 #include <linux/module.h>
 #include <linux/device.h>
