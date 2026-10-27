@@ -213,6 +213,8 @@ static void icssg_enable_fw_offload(struct prueth *prueth)
 
 	for (mac = PRUETH_MAC0; mac < PRUETH_NUM_MACS; mac++) {
 		emac = prueth->emac[mac];
+		if (!emac)
+			continue;
 		if (prueth->is_hsr_offload_mode) {
 			if (emac->ndev->features & NETIF_F_HW_HSR_TAG_RM)
 				icssg_set_port_state(emac, ICSSG_EMAC_HSR_RX_OFFLOAD_ENABLE);
@@ -288,23 +290,28 @@ static int prueth_emac_common_start(struct prueth *prueth)
 		ret = icssg_config(prueth, emac, slice);
 		if (ret)
 			goto disable_class;
+	}
 
-		/* Reset link state to force reconfiguration in
-		 * emac_adjust_link(). Without this, if the link was already up
-		 * before restart, emac_adjust_link() won't detect any state
-		 * change and will skip critical configuration like writing
-		 * speed to firmware.
-		 */
+	ret = prueth_emac_start(prueth);
+	if (ret)
+		goto disable_class;
+
+	/* Reset link state and reconfigure after firmware is running.
+	 * Must be done after prueth_emac_start() so that R30 commands
+	 * (e.g. ICSSG_EMAC_PORT_FORWARD from emac_adjust_link) reach
+	 * the PRU firmware instead of timing out with stale R30 values.
+	 */
+	for (slice = 0; slice < PRUETH_NUM_MACS; slice++) {
+		emac = prueth->emac[slice];
+		if (!emac)
+			continue;
+
 		emac->link = 0;
 
 		mutex_lock(&emac->ndev->phydev->lock);
 		emac_adjust_link(emac->ndev);
 		mutex_unlock(&emac->ndev->phydev->lock);
 	}
-
-	ret = prueth_emac_start(prueth);
-	if (ret)
-		goto disable_class;
 
 	emac = prueth->emac[ICSS_SLICE0] ? prueth->emac[ICSS_SLICE0] :
 	       prueth->emac[ICSS_SLICE1];
