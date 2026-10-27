@@ -1208,9 +1208,9 @@ static int ms_read_eraseblock(struct us_data *us, u32 PhyBlockAddr)
 
 static int ms_lib_check_disableblock(struct us_data *us, u16 PhyBlock)
 {
-	unsigned char *PageBuf = NULL;
+	__be16 *PageBuf = NULL;
 	u16 result = MS_STATUS_SUCCESS;
-	u16 blk, index = 0;
+	u16 blk, index;
 	struct ms_lib_type_extdat extdat;
 	struct ene_ub6250_info *info = (struct ene_ub6250_info *) us->extra;
 
@@ -1221,7 +1221,7 @@ static int ms_lib_check_disableblock(struct us_data *us, u16 PhyBlock)
 	}
 
 	ms_read_readpage(us, PhyBlock, 1, (u32 *)PageBuf, &extdat);
-	do {
+	for (index = 0; index < MS_BYTES_PER_PAGE / sizeof(*PageBuf); index++) {
 		blk = be16_to_cpu(PageBuf[index]);
 		if (blk == MS_LB_NOT_USED)
 			break;
@@ -1229,8 +1229,7 @@ static int ms_lib_check_disableblock(struct us_data *us, u16 PhyBlock)
 			result = MS_ERROR_FLASH_READ;
 			break;
 		}
-		index++;
-	} while (1);
+	}
 
 exit:
 	kfree(PageBuf);
