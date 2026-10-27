@@ -1325,7 +1325,7 @@ static int usbat_hp8200e_handle_read10(struct us_data *us,
 		len <<= 16;
 		len |= data[7+7];
 		usb_stor_dbg(us, "GPCMD_READ_CD: len %d\n", len);
-		srb->transfersize = scsi_bufflen(srb)/len;
+		srb->transfersize = len ? scsi_bufflen(srb) / len : 0;
 	}
 
 	if (!srb->transfersize)  {
