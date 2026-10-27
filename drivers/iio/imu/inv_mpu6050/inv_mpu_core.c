@@ -2225,7 +2225,7 @@ static int inv_mpu_resume(struct device *dev)
 	return result;
 }
 
-static int inv_mpu_suspend(struct device *dev)
+static int __inv_mpu_suspend(struct device *dev, bool *disable)
 {
 	struct iio_dev *indio_dev = dev_get_drvdata(dev);
 	struct inv_mpu6050_state *st = iio_priv(indio_dev);
@@ -2271,7 +2271,7 @@ static int inv_mpu_suspend(struct device *dev)
 		if (result)
 			return result;
 		enable_irq_wake(st->irq);
-		disable_irq(st->irq);
+		*disable = true;
 	} else {
 		result = inv_mpu6050_set_power_itg(st, false);
 		if (result)
@@ -2280,6 +2280,21 @@ static int inv_mpu_suspend(struct device *dev)
 	}
 
 	return 0;
+}
+
+static int inv_mpu_suspend(struct device *dev)
+{
+	struct inv_mpu6050_state *st = iio_priv(dev_get_drvdata(dev));
+	bool disable = false;
+	int result;
+
+	result = __inv_mpu_suspend(dev, &disable);
+
+	/* Not under st->lock: this waits for the handler, which takes it */
+	if (disable)
+		disable_irq(st->irq);
+
+	return result;
 }
 
 static int inv_mpu_runtime_suspend(struct device *dev)
