@@ -1257,6 +1257,9 @@ struct bpf_prog_offload {
 /* The argument is nullable. */
 #define BTF_FMODEL_NULLABLE_ARG		BIT(3)
 
+/* In ret_flags: the JIT inlines calls of this kfunc. */
+#define BTF_FMODEL_JIT_INLINE		BIT(4)
+
 struct btf_func_model {
 	u8 ret_size;
 	u8 ret_flags;
@@ -1696,6 +1699,8 @@ void bpf_jit_uncharge_modmem(u32 size);
 bool bpf_prog_has_trampoline(const struct bpf_prog *prog);
 bool bpf_insn_is_indirect_target(const struct bpf_verifier_env *env, const struct bpf_prog *prog,
 				 int insn_idx);
+u32 bpf_fastcall_spilled_regs(const struct bpf_verifier_env *env, const struct bpf_prog *prog,
+			      int insn_idx);
 u16 bpf_out_stack_arg_cnt(const struct bpf_verifier_env *env, const struct bpf_prog *prog);
 #else
 static inline int bpf_trampoline_link_prog(struct bpf_tramp_node *node,

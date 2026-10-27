@@ -1659,6 +1659,20 @@ bool bpf_insn_is_indirect_target(const struct bpf_verifier_env *env, const struc
 	return env->insn_aux_data[insn_idx].indirect_target;
 }
 
+/*
+ * The caller saved registers that must survive a bpf_fastcall call that the
+ * JIT inlines: the ones whose spill/fill the verifier removed, or all of R1-R5
+ * without the verifier.
+ */
+u32 bpf_fastcall_spilled_regs(const struct bpf_verifier_env *env, const struct bpf_prog *prog,
+			      int insn_idx)
+{
+	if (!env)
+		return GENMASK(BPF_REG_5, BPF_REG_1);
+	insn_idx += prog->aux->subprog_start;
+	return env->insn_aux_data[insn_idx].fastcall_spilled_regs;
+}
+
 u16 bpf_out_stack_arg_cnt(const struct bpf_verifier_env *env, const struct bpf_prog *prog)
 {
 	const struct bpf_subprog_info *sub;
@@ -3368,6 +3382,15 @@ bool __weak bpf_jit_bypass_spec_v4(void)
  * this returns true.
  */
 bool __weak bpf_jit_inlines_helper_call(s32 imm)
+{
+	return false;
+}
+
+/* Return TRUE if the JIT backend inlines the KF_FASTCALL kfunc at @addr
+ * without clobbering registers that bpf_fastcall contract doesn't allow.
+ * Otherwise the kfunc is called and spills/fills around the call stay.
+ */
+bool __weak bpf_jit_inlines_kfunc_call(unsigned long addr, const struct btf_func_model *m)
 {
 	return false;
 }
