@@ -5,6 +5,7 @@
 #endif
 
 #include <linux/hex.h>
+#include <linux/memory.h>
 #include <linux/uaccess.h>
 #include <linux/printk.h>
 #include <asm/nospec-branch.h>
@@ -55,6 +56,9 @@ void __apply_alternatives(struct alt_instr *start, struct alt_instr *end, unsign
 	bool debug, replace;
 	u8 *old, *new;
 
+#ifndef __DECOMPRESSOR
+	guard(mutex)(&text_mutex);
+#endif
 	/*
 	 * The scan order should be from start to end. A later scanned
 	 * alternative code can overwrite previously scanned alternative code.
