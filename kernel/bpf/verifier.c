@@ -23372,6 +23372,16 @@ int bpf_fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			     insn->imm);
 		return -EFAULT;
 	}
+	if (!desc->offset && bpf_jit_supports_irq_save_restore() &&
+	    (desc->func_id == special_kfunc_list[KF_bpf_local_irq_save] ||
+	     desc->func_id == special_kfunc_list[KF_bpf_local_irq_restore])) {
+		int irq_op = desc->func_id == special_kfunc_list[KF_bpf_local_irq_save] ?
+			     BPF_IRQ_SAVE : BPF_IRQ_RESTORE;
+
+		insn_buf[0] = BPF_IRQ_INSN(irq_op, BPF_REG_1);
+		*cnt = 1;
+		return 0;
+	}
 	base_desc_idx = desc - env->prog->aux->kfunc_tab->descs;
 
 	near_call = !bpf_jit_supports_far_kfunc_call();
