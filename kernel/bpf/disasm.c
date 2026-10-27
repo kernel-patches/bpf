@@ -9,6 +9,9 @@
 
 /* Only defined by the non-UAPI linux/filter.h, which this file cannot use. */
 #define BPF_PROBE_ATOMIC 0xe0
+#define BPF_IRQ 0xe0
+#define BPF_IRQ_SAVE 0
+#define BPF_IRQ_RESTORE 1
 
 #define __BPF_FUNC_STR_FN(x) [BPF_FUNC_ ## x] = __stringify(bpf_ ## x)
 static const char * const func_id_str[] = {
@@ -294,6 +297,11 @@ void print_bpf_insn(const struct bpf_insn_cbs *cbs,
 				insn->off, insn->imm);
 		} else if (BPF_MODE(insn->code) == 0xc0 /* BPF_NOSPEC, no UAPI */) {
 			verbose(cbs->private_data, "(%02x) nospec", insn->code);
+		} else if (insn->code == (BPF_ST | BPF_IRQ) &&
+			   (insn->imm == BPF_IRQ_SAVE || insn->imm == BPF_IRQ_RESTORE)) {
+			verbose(cbs->private_data, "(%02x) bpf_local_irq_%s(r%d)",
+				insn->code, insn->imm == BPF_IRQ_SAVE ? "save" : "restore",
+				insn->dst_reg);
 		} else {
 			verbose(cbs->private_data, "BUG_st_%02x", insn->code);
 		}

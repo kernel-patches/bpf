@@ -90,6 +90,10 @@ struct ctl_table_header;
  */
 #define BPF_NOSPEC	0xc0
 
+#define BPF_IRQ		0xe0
+#define BPF_IRQ_SAVE	0
+#define BPF_IRQ_RESTORE	1
+
 /* As per nm, we expose JITed images as text (code) section for
  * kallsyms. That way, tools like perf can find it to match
  * addresses.
@@ -597,6 +601,14 @@ static inline int bpf_atomic_load_reg(const struct bpf_insn *insn)
 		.src_reg = 0,					\
 		.off   = 0,					\
 		.imm   = 0 })
+
+#define BPF_IRQ_INSN(OP, FLAGS_REG)				\
+	((struct bpf_insn) {					\
+		.code  = BPF_ST | BPF_IRQ,			\
+		.dst_reg = FLAGS_REG,				\
+		.src_reg = 0,					\
+		.off   = 0,					\
+		.imm   = OP })
 
 /* Internal classic blocks for direct assignment */
 
@@ -1277,6 +1289,7 @@ bool bpf_jit_needs_zext(void);
 bool bpf_jit_inlines_helper_call(s32 imm);
 bool bpf_jit_supports_subprog_tailcalls(void);
 bool bpf_jit_supports_percpu_insn(void);
+bool bpf_jit_supports_irq_save_restore(void);
 bool bpf_jit_supports_kfunc_call(void);
 bool bpf_jit_supports_callx(void);
 bool bpf_jit_supports_kfunc_ret_reg_pair(void);

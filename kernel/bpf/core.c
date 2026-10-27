@@ -3383,6 +3383,11 @@ bool __weak bpf_jit_supports_percpu_insn(void)
 	return false;
 }
 
+bool __weak bpf_jit_supports_irq_save_restore(void)
+{
+	return false;
+}
+
 bool __weak bpf_jit_supports_kfunc_call(void)
 {
 	return false;
