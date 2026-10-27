@@ -53,20 +53,6 @@ void core2_destruct(struct dc *dc)
 	(void)dc;
 }
 
-/*
- * The VBIOS scratch read legacy_commit_state_hw makes
- * before it enables accelerated mode. The commit has no accelerated-mode
- * entries, so it runs only after init has left VBIOS mode. Remove when a
- * BLC exposes the accelerated-mode bit.
- */
-static bool core2_is_accelerated_mode(struct dc *dc)
-{
-	struct dc_bios *dcb = dc->ctx->dc_bios;
-
-	return dcb && dcb->funcs && dcb->funcs->is_accelerated_mode &&
-			dcb->funcs->is_accelerated_mode(dcb);
-}
-
 static struct pipe_ctx *core2_otg_master(struct dc_state *state)
 {
 	unsigned int i;
@@ -103,6 +89,43 @@ static bool core2_run_commit_sequence(struct dc *dc,
 	result = dc2_bls_execute(TO_DC2(dc), steps, *num_steps);
 	return result == DC2_BLS_EXEC_OK ||
 			result == DC2_BLS_EXEC_CONTINUED_ON_ERROR;
+}
+
+/*
+ * legacy_commit_state_hw reads this bit before it enables accelerated
+ * mode. The commit and the update have no accelerated-mode entries, so
+ * they run only after init has left VBIOS mode.
+ */
+static bool core2_query_accelerated_mode(struct dc *dc)
+{
+	const struct bls_builder *builder =
+			TO_DC2(dc)->builders[DCN_DECL_QUERY_ACCELERATED_MODE];
+	const struct workaround_manager *wam = dc2_workaround_manager_get();
+	struct bls_builder_output_targets out_targets = {0};
+	struct bls_builder_declarative_params *params;
+	bool accelerated_mode = false;
+
+	if (!builder || builder->kind != BLS_BUILDER_DECLARATIVE ||
+			!builder->build.declarative || !wam)
+		return false;
+
+	/* 256 block-sequence entries; keep them off the kernel stack. */
+	params = kvzalloc(sizeof(*params), GFP_KERNEL);
+	if (!params)
+		return false;
+	params->dc = dc;
+	params->current_state = dc->current_state;
+	out_targets.DCN_DECL_QUERY_ACCELERATED_MODE = &accelerated_mode;
+	params->out_targets = &out_targets;
+
+	if (builder->build.declarative(params) != BLS_BUILD_SUCCESS ||
+			params->tail_num_steps ||
+			!core2_run_commit_sequence(dc, builder, wam,
+			params->head_sequence, &params->head_num_steps))
+		accelerated_mode = false;
+
+	kvfree(params);
+	return accelerated_mode;
 }
 
 /*
@@ -196,7 +219,7 @@ static bool core2_builder_supports(struct dc *dc, enum bls_builder_name name,
 			builder->build.declarative &&
 			dc2_workaround_manager_get() &&
 			builder->check_capability(&check) &&
-			core2_is_accelerated_mode(dc);
+			core2_query_accelerated_mode(dc);
 }
 
 /* Never falls back to legacy_commit_state_hw: DC2 must not call DC1. */

@@ -26,6 +26,7 @@ enum bls_builder_name {
 	DCN_DECL_INITIALIZATION_LEGACY,
 	DCN_DECL_NON_SEAMLESS_COMMIT,
 	DCN_DECL_SEAMLESS_UPDATE,
+	DCN_DECL_QUERY_ACCELERATED_MODE,
 	BLS_BUILDER_NAME_COUNT,
 };
 
@@ -51,6 +52,7 @@ struct bls_builder_output_targets {
 	union {
 		struct bls_builder_output_init *DCN_DECL_INITIALIZATION;
 		struct bls_builder_legacy_hw_init_info *DCN_DECL_INITIALIZATION_LEGACY;
+		bool *DCN_DECL_QUERY_ACCELERATED_MODE;
 	};
 };
 
