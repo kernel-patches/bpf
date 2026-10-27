@@ -1037,24 +1037,20 @@ struct dc_ip_request_cntl_params {
 
 struct dsc_pg_status_params {
 	struct dce_hwseq *hws;
-	int dsc_inst;
-	bool is_ungated;
+	struct display_stream_compressor *dsc;
 };
 
 struct dsc_wait_disconnect_pending_clear_params {
 	struct display_stream_compressor *dsc;
-	bool *is_ungated;
 };
 
 struct dsc_disable_params {
 	struct display_stream_compressor *dsc;
-	bool *is_ungated;
 };
 
 struct dccg_set_ref_dscclk_params {
 	struct dccg *dccg;
-	int dsc_inst;
-	bool *is_ungated;
+	const struct display_stream_compressor *dsc;
 };
 
 struct dccg_update_dpp_dto_params {
@@ -2919,23 +2915,19 @@ void hwss_add_dpp_dppclk_control(struct block_sequence_state *seq_state,
 void hwss_add_disable_phantom_crtc(struct block_sequence_state *seq_state,
 		struct timing_generator *tg);
 
-void hwss_add_dsc_pg_status(struct block_sequence_state *seq_state,
+bool hwss_add_dsc_pg_status(struct block_sequence_state *seq_state,
 		struct dce_hwseq *hws,
-		int dsc_inst,
-		bool is_ungated);
+		struct display_stream_compressor *dsc);
 
 void hwss_add_dsc_wait_disconnect_pending_clear(struct block_sequence_state *seq_state,
-		struct display_stream_compressor *dsc,
-		bool *is_ungated);
+		struct display_stream_compressor *dsc);
 
 void hwss_add_dsc_disable(struct block_sequence_state *seq_state,
-		struct display_stream_compressor *dsc,
-		bool *is_ungated);
+		struct display_stream_compressor *dsc);
 
 void hwss_add_dccg_set_ref_dscclk(struct block_sequence_state *seq_state,
 		struct dccg *dccg,
-		int dsc_inst,
-		bool *is_ungated);
+		const struct display_stream_compressor *dsc);
 
 bool hwss_is_dpp_root_clock_control_allowed(struct dce_hwseq *hws, bool clock_on);
 

@@ -4033,22 +4033,16 @@ void hwss_disable_phantom_crtc(union block_sequence_params *params)
 void hwss_dsc_pg_status(union block_sequence_params *params)
 {
 	struct dce_hwseq *hws = params->dsc_pg_status_params.hws;
-	int dsc_inst = params->dsc_pg_status_params.dsc_inst;
+	struct display_stream_compressor *dsc = params->dsc_pg_status_params.dsc;
 
-	if (hws && hws->funcs.dsc_pg_status)
-		params->dsc_pg_status_params.is_ungated = hws->funcs.dsc_pg_status(hws, dsc_inst);
+	dsc->pg_ungated = hws->funcs.dsc_pg_status(hws, dsc->inst);
 }
 
 void hwss_dsc_wait_disconnect_pending_clear(union block_sequence_params *params)
 {
 	struct display_stream_compressor *dsc = params->dsc_wait_disconnect_pending_clear_params.dsc;
 
-	if (!params->dsc_wait_disconnect_pending_clear_params.is_ungated)
-		return;
-	if (*params->dsc_wait_disconnect_pending_clear_params.is_ungated == false)
-		return;
-
-	if (dsc && dsc->funcs->dsc_wait_disconnect_pending_clear)
+	if (dsc->pg_ungated)
 		dsc->funcs->dsc_wait_disconnect_pending_clear(dsc);
 }
 
@@ -4056,27 +4050,17 @@ void hwss_dsc_disable(union block_sequence_params *params)
 {
 	struct display_stream_compressor *dsc = params->dsc_disable_params.dsc;
 
-	if (!params->dsc_disable_params.is_ungated)
-		return;
-	if (*params->dsc_disable_params.is_ungated == false)
-		return;
-
-	if (dsc && dsc->funcs->dsc_disable)
+	if (dsc->pg_ungated)
 		dsc->funcs->dsc_disable(dsc);
 }
 
 void hwss_dccg_set_ref_dscclk(union block_sequence_params *params)
 {
 	struct dccg *dccg = params->dccg_set_ref_dscclk_params.dccg;
-	int dsc_inst = params->dccg_set_ref_dscclk_params.dsc_inst;
+	const struct display_stream_compressor *dsc = params->dccg_set_ref_dscclk_params.dsc;
 
-	if (!params->dccg_set_ref_dscclk_params.is_ungated)
-		return;
-	if (*params->dccg_set_ref_dscclk_params.is_ungated == false)
-		return;
-
-	if (dccg && dccg->funcs->set_ref_dscclk)
-		dccg->funcs->set_ref_dscclk(dccg, dsc_inst);
+	if (dsc->pg_ungated)
+		dccg->funcs->set_ref_dscclk(dccg, dsc->inst);
 }
 
 void hwss_dpp_pg_control(union block_sequence_params *params)
@@ -5457,54 +5441,65 @@ void hwss_add_disable_phantom_crtc(struct block_sequence_state *seq_state,
 	}
 }
 
-void hwss_add_dsc_pg_status(struct block_sequence_state *seq_state,
+bool hwss_add_dsc_pg_status(struct block_sequence_state *seq_state,
 		struct dce_hwseq *hws,
-		int dsc_inst,
-		bool is_ungated)
+		struct display_stream_compressor *dsc)
 {
-	if (*seq_state->num_steps < MAX_HWSS_BLOCK_SEQUENCE_SIZE) {
-		seq_state->steps[*seq_state->num_steps].func = DSC_PG_STATUS;
-		seq_state->steps[*seq_state->num_steps].params.dsc_pg_status_params.hws = hws;
-		seq_state->steps[*seq_state->num_steps].params.dsc_pg_status_params.dsc_inst = dsc_inst;
-		seq_state->steps[*seq_state->num_steps].params.dsc_pg_status_params.is_ungated = is_ungated;
-		(*seq_state->num_steps)++;
-	}
+	if (!seq_state || !seq_state->steps || !seq_state->num_steps ||
+	    !hws || !hws->funcs.dsc_pg_status || !dsc)
+		return false;
+
+	if (*seq_state->num_steps >= MAX_HWSS_BLOCK_SEQUENCE_SIZE)
+		return false;
+
+	seq_state->steps[*seq_state->num_steps].func = DSC_PG_STATUS;
+	seq_state->steps[*seq_state->num_steps].params.dsc_pg_status_params.hws = hws;
+	seq_state->steps[*seq_state->num_steps].params.dsc_pg_status_params.dsc = dsc;
+	(*seq_state->num_steps)++;
+
+	return true;
 }
 
 void hwss_add_dsc_wait_disconnect_pending_clear(struct block_sequence_state *seq_state,
-		struct display_stream_compressor *dsc,
-		bool *is_ungated)
+		struct display_stream_compressor *dsc)
 {
+	if (!seq_state || !seq_state->steps || !seq_state->num_steps ||
+	    !dsc || !dsc->funcs || !dsc->funcs->dsc_wait_disconnect_pending_clear)
+		return;
+
 	if (*seq_state->num_steps < MAX_HWSS_BLOCK_SEQUENCE_SIZE) {
 		seq_state->steps[*seq_state->num_steps].func = DSC_WAIT_DISCONNECT_PENDING_CLEAR;
 		seq_state->steps[*seq_state->num_steps].params.dsc_wait_disconnect_pending_clear_params.dsc = dsc;
-		seq_state->steps[*seq_state->num_steps].params.dsc_wait_disconnect_pending_clear_params.is_ungated = is_ungated;
 		(*seq_state->num_steps)++;
 	}
 }
 
 void hwss_add_dsc_disable(struct block_sequence_state *seq_state,
-		struct display_stream_compressor *dsc,
-		bool *is_ungated)
+		struct display_stream_compressor *dsc)
 {
+	if (!seq_state || !seq_state->steps || !seq_state->num_steps ||
+	    !dsc || !dsc->funcs || !dsc->funcs->dsc_disable)
+		return;
+
 	if (*seq_state->num_steps < MAX_HWSS_BLOCK_SEQUENCE_SIZE) {
 		seq_state->steps[*seq_state->num_steps].func = DSC_DISABLE;
 		seq_state->steps[*seq_state->num_steps].params.dsc_disable_params.dsc = dsc;
-		seq_state->steps[*seq_state->num_steps].params.dsc_disable_params.is_ungated = is_ungated;
 		(*seq_state->num_steps)++;
 	}
 }
 
 void hwss_add_dccg_set_ref_dscclk(struct block_sequence_state *seq_state,
 		struct dccg *dccg,
-		int dsc_inst,
-		bool *is_ungated)
+		const struct display_stream_compressor *dsc)
 {
+	if (!seq_state || !seq_state->steps || !seq_state->num_steps ||
+	    !dccg || !dccg->funcs || !dccg->funcs->set_ref_dscclk || !dsc)
+		return;
+
 	if (*seq_state->num_steps < MAX_HWSS_BLOCK_SEQUENCE_SIZE) {
 		seq_state->steps[*seq_state->num_steps].func = DCCG_SET_REF_DSCCLK;
 		seq_state->steps[*seq_state->num_steps].params.dccg_set_ref_dscclk_params.dccg = dccg;
-		seq_state->steps[*seq_state->num_steps].params.dccg_set_ref_dscclk_params.dsc_inst = dsc_inst;
-		seq_state->steps[*seq_state->num_steps].params.dccg_set_ref_dscclk_params.is_ungated = is_ungated;
+		seq_state->steps[*seq_state->num_steps].params.dccg_set_ref_dscclk_params.dsc = dsc;
 		(*seq_state->num_steps)++;
 	}
 }

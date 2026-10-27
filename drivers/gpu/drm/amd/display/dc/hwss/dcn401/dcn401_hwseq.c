@@ -1828,7 +1828,8 @@ static void dcn401_add_dsc_sequence_for_odm_change(struct dc *dc, struct dc_stat
 	if (otg_master->stream_res.dsc && otg_master->stream->timing.flags.DSC) {
 		if (!hwss_add_dsc_sequence_for_stream(seq_state, otg_master,
 				otg_master->dsc_padding_params.dsc_hactive_padding, NULL)) {
-			ASSERT(false);
+			/* DSC sequence is deliberately skipped while the stream is dpms off */
+			ASSERT(otg_master->stream->dpms_off);
 			return;
 		}
 	} else if (otg_master->stream_res.dsc && !otg_master->stream->timing.flags.DSC) {
@@ -3635,12 +3636,10 @@ void dcn401_post_unlock_reset_opp_sequence(
 	if (dc->hwss.wait_for_mpcc_disconnect_sequence)
 		dc->hwss.wait_for_mpcc_disconnect_sequence(dc, dc->res_pool, opp_head, seq_state);
 
-	if (dsc) {
-		bool *is_ungated = NULL;
-		/* Check DSC power gate status */
-		if (dc->hwseq && dc->hwseq->funcs.dsc_pg_status)
-			hwss_add_dsc_pg_status(seq_state, dc->hwseq, dsc->inst, false);
-
+	/* Check DSC power gate status; the result is kept in dsc->pg_ungated and
+	 * gates the steps below at execute time.
+	 */
+	if (dsc && hwss_add_dsc_pg_status(seq_state, dc->hwseq, dsc)) {
 		/* Seamless update specific where we will postpone non
 		 * double buffered DSCCLK disable logic in post unlock
 		 * sequence after DSC is disconnected from OPP but not
@@ -3648,14 +3647,13 @@ void dcn401_post_unlock_reset_opp_sequence(
 		 */
 
 		/* DSC wait disconnect pending clear */
-		hwss_add_dsc_wait_disconnect_pending_clear(seq_state, dsc, is_ungated);
+		hwss_add_dsc_wait_disconnect_pending_clear(seq_state, dsc);
 
 		/* DSC disable */
-		hwss_add_dsc_disable(seq_state, dsc, is_ungated);
+		hwss_add_dsc_disable(seq_state, dsc);
 
 		/* Set reference DSCCLK */
-		if (dccg && dccg->funcs->set_ref_dscclk)
-			hwss_add_dccg_set_ref_dscclk(seq_state, dccg, dsc->inst, 0);
+		hwss_add_dccg_set_ref_dscclk(seq_state, dccg, dsc);
 	}
 }
 
