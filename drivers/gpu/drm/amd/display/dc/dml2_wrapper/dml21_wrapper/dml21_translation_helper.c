@@ -170,6 +170,7 @@ static void populate_dml21_timing_config_from_stream_state(struct dml2_timing_cf
 	timing->drr_config.enabled = stream->ignore_msa_timing_param;
 	timing->drr_config.drr_active_variable = stream->vrr_active_variable;
 	timing->drr_config.drr_active_fixed = stream->vrr_active_fixed;
+	timing->drr_config.drr_active_idle_static_screen = stream->vrr_active_idle_static_screen;
 	timing->drr_config.disallowed = !stream->allow_freesync;
 
 	/* limit min refresh rate to DC cap */

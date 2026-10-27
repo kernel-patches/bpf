@@ -3300,6 +3300,10 @@ static struct dc_update_descriptor check_update_surfaces_for_stream(
 				stream_update->vrr_active_variable || stream_update->vrr_active_fixed))
 			su_flags->bits.fams_changed = 1;
 
+		/* Static-screen transitions change DML stutter constraints even if VRR stays variable. */
+		if (stream_update->vrr_active_idle_static_screen)
+			su_flags->bits.fams_changed = 1;
+
 		if (stream_update->scaler_sharpener_update) {
 			su_flags->bits.scaler_sharpener = 1;
 			elevate_update_type(&overall_type, UPDATE_TYPE_FULL, LOCK_DESCRIPTOR_STREAM);
@@ -3668,6 +3672,9 @@ static void copy_stream_update_to_stream(struct dc *dc,
 
 	if (update->vrr_active_fixed)
 		stream->vrr_active_fixed = *update->vrr_active_fixed;
+
+	if (update->vrr_active_idle_static_screen)
+		stream->vrr_active_idle_static_screen = *update->vrr_active_idle_static_screen;
 
 	if (update->crtc_timing_adjust) {
 		if (stream->adjust.v_total_min != update->crtc_timing_adjust->v_total_min ||
