@@ -133,42 +133,40 @@ static inline void emit_u32_data(const u32 data, struct jit_ctx *ctx)
 }
 
 /*
- * A 32-bit immediate, sign extended for the 64-bit variant: a single movz
- * or movn when one half is zero or all ones and the other half agrees with
- * the sign the 64-bit variant extends, a single orr when it is a bitmask
- * immediate, and the pair of a movz or movn with a movk otherwise.
+ * The single instruction for a 32-bit immediate, sign extended for the
+ * 64-bit variant: a movz or movn when one half is zero or all ones and the
+ * other half agrees with the sign the 64-bit variant extends, an orr when
+ * it is a bitmask immediate, else AARCH64_BREAK_FAULT.
  */
+static u32 a64_mov_i_single(const int is64, const int reg, const s32 val)
+{
+	u16 hi = val >> 16;
+	u16 lo = val & 0xffff;
+
+	if (hi == 0xffff)
+		return A64_MOVN(is64, reg, (u16)~lo, 0);
+	if (!hi)
+		return A64_MOVZ(is64, reg, lo, 0);
+	/* The 64-bit variant has the upper half set or clear with the sign */
+	if (!lo && (!is64 || !(hi & 0x8000)))
+		return A64_MOVZ(is64, reg, hi, 16);
+	if (lo == 0xffff && (!is64 || (hi & 0x8000)))
+		return A64_MOVN(is64, reg, (u16)~hi, 16);
+	return A64_ORR_I(is64, reg, A64_ZR, val);
+}
+
+/* A 32-bit immediate in its single instruction, or a movz or movn with a movk */
 static inline void emit_a64_mov_i(const int is64, const int reg,
 				  const s32 val, struct jit_ctx *ctx)
 {
 	u16 hi = val >> 16;
 	u16 lo = val & 0xffff;
-	u32 insn;
+	u32 insn = a64_mov_i_single(is64, reg, val);
 
-	if (hi == 0xffff) {
-		emit(A64_MOVN(is64, reg, (u16)~lo, 0), ctx);
-		return;
-	}
-	if (!hi) {
-		emit(A64_MOVZ(is64, reg, lo, 0), ctx);
-		return;
-	}
-	/* The 64-bit variant has the upper half set or clear with the sign */
-	if (!lo && (!is64 || !(hi & 0x8000))) {
-		emit(A64_MOVZ(is64, reg, hi, 16), ctx);
-		return;
-	}
-	if (lo == 0xffff && (!is64 || (hi & 0x8000))) {
-		emit(A64_MOVN(is64, reg, (u16)~hi, 16), ctx);
-		return;
-	}
-
-	insn = A64_ORR_I(is64, reg, A64_ZR, val);
 	if (insn != AARCH64_BREAK_FAULT) {
 		emit(insn, ctx);
 		return;
 	}
-
 	if (hi & 0x8000) {
 		emit(A64_MOVN(is64, reg, (u16)~hi, 16), ctx);
 		emit(A64_MOVK(is64, reg, lo, 0), ctx);
@@ -363,17 +361,50 @@ static bool is_addsub_imm(u32 imm)
 	return !(imm & ~0xfff) || !(imm & ~0xfff000);
 }
 
+/* An immediate below 2^24 that neither add nor sub takes goes in two of them */
+static bool is_addsub_imm24(u32 imm)
+{
+	return !(imm & ~0xffffff);
+}
+
+/*
+ * dst = src + imm, or src - imm: with the immediate when an add or sub takes
+ * it, with the negated one in the other, else in two of them with the upper
+ * 12 bits shifted and the lower 12 when the move of the immediate takes two
+ * instructions, one fewer at a cycle more on the path of src, as the two
+ * depend on each other. The rest takes the move, which is off the path, and
+ * the add or sub of the register.
+ */
+static void emit_a64_addsub_i(const bool is64, const int dst, const int src, const int tmp,
+			      const s32 imm, bool sub, struct jit_ctx *ctx)
+{
+	const enum aarch64_insn_adsb_type op = sub ? AARCH64_INSN_ADSB_SUB : AARCH64_INSN_ADSB_ADD;
+	const enum aarch64_insn_adsb_type neg = sub ? AARCH64_INSN_ADSB_ADD : AARCH64_INSN_ADSB_SUB;
+	const enum aarch64_insn_variant variant = A64_VARIANT(is64);
+	const bool split = a64_mov_i_single(is64, tmp, imm) == AARCH64_BREAK_FAULT;
+	const u32 nimm = -(u32)imm;
+
+	if (is_addsub_imm(imm)) {
+		emit(aarch64_insn_gen_add_sub_imm(dst, src, imm, variant, op), ctx);
+	} else if (is_addsub_imm(nimm)) {
+		emit(aarch64_insn_gen_add_sub_imm(dst, src, nimm, variant, neg), ctx);
+	} else if (split && is_addsub_imm24(imm)) {
+		emit(aarch64_insn_gen_add_sub_imm(dst, src, imm & 0xfff000, variant, op), ctx);
+		emit(aarch64_insn_gen_add_sub_imm(dst, dst, imm & 0xfff, variant, op), ctx);
+	} else if (split && is_addsub_imm24(nimm)) {
+		emit(aarch64_insn_gen_add_sub_imm(dst, src, nimm & 0xfff000, variant, neg), ctx);
+		emit(aarch64_insn_gen_add_sub_imm(dst, dst, nimm & 0xfff, variant, neg), ctx);
+	} else {
+		emit_a64_mov_i(is64, tmp, imm, ctx);
+		emit(aarch64_insn_gen_add_sub_shifted_reg(dst, src, tmp, AARCH64_INSN_SHIFT_LSL, 0,
+							  variant, op), ctx);
+	}
+}
+
 static inline void emit_a64_add_i(const bool is64, const int dst, const int src,
 				  const int tmp, const s32 imm, struct jit_ctx *ctx)
 {
-	if (is_addsub_imm(imm)) {
-		emit(A64_ADD_I(is64, dst, src, imm), ctx);
-	} else if (is_addsub_imm(-(u32)imm)) {
-		emit(A64_SUB_I(is64, dst, src, -imm), ctx);
-	} else {
-		emit_a64_mov_i(is64, tmp, imm, ctx);
-		emit(A64_ADD(is64, dst, src, tmp), ctx);
-	}
+	emit_a64_addsub_i(is64, dst, src, tmp, imm, false, ctx);
 }
 
 /*
@@ -2212,14 +2243,7 @@ emit_bswap_uxt:
 		break;
 	case BPF_ALU | BPF_SUB | BPF_K:
 	case BPF_ALU64 | BPF_SUB | BPF_K:
-		if (is_addsub_imm(imm)) {
-			emit(A64_SUB_I(is64, dst, dst, imm), ctx);
-		} else if (is_addsub_imm(-(u32)imm)) {
-			emit(A64_ADD_I(is64, dst, dst, -imm), ctx);
-		} else {
-			emit_a64_mov_i(is64, tmp, imm, ctx);
-			emit(A64_SUB(is64, dst, dst, tmp), ctx);
-		}
+		emit_a64_addsub_i(is64, dst, dst, tmp, imm, true, ctx);
 		break;
 	case BPF_ALU | BPF_AND | BPF_K:
 	case BPF_ALU64 | BPF_AND | BPF_K:
@@ -2429,6 +2453,17 @@ emit_cond_jmp:
 			emit(A64_CMP_I(is64, dst, cmp_imm), ctx);
 		} else if (is_addsub_imm(-(u32)cmp_imm)) {
 			emit(A64_CMN_I(is64, dst, -cmp_imm), ctx);
+		} else if ((jmp_op == BPF_JEQ || jmp_op == BPF_JNE) &&
+			   a64_mov_i_single(is64, tmp, imm) == AARCH64_BREAK_FAULT &&
+			   (is_addsub_imm24(imm) || is_addsub_imm24(-(u32)imm))) {
+			/* Equal when the lower 12 bits remain once the upper 12 are taken off */
+			if (is_addsub_imm24(imm)) {
+				emit(A64_SUB_I(is64, tmp, dst, imm & 0xfff000), ctx);
+				emit(A64_CMP_I(is64, tmp, imm & 0xfff), ctx);
+			} else {
+				emit(A64_ADD_I(is64, tmp, dst, -(u32)imm & 0xfff000), ctx);
+				emit(A64_CMN_I(is64, tmp, -(u32)imm & 0xfff), ctx);
+			}
 		} else {
 			emit_a64_mov_i(is64, tmp, cmp_imm, ctx);
 			emit(A64_CMP(is64, dst, tmp), ctx);
