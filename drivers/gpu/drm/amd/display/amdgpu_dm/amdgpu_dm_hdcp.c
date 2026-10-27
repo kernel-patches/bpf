@@ -883,7 +883,8 @@ struct hdcp_workqueue *hdcp_create_workqueue(struct amdgpu_device *adev,
 		    dc->ctx->dce_version == DCN_VERSION_3_5  ||
 		    dc->ctx->dce_version == DCN_VERSION_3_51 ||
 		    dc->ctx->dce_version == DCN_VERSION_3_6  ||
-		    dc->ctx->dce_version == DCN_VERSION_4_01)
+		    dc->ctx->dce_version == DCN_VERSION_4_01 ||
+		    dc->ctx->dce_version == DCN_VERSION_6_0)
 			config->psp.caps.dtm_v3_supported = 1;
 
 		config->ddc.handle = dc_get_link_at_index(dc, i);

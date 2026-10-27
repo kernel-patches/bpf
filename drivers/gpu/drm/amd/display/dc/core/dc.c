@@ -6850,6 +6850,10 @@ bool dc_is_dmub_outbox_supported(struct dc *dc)
 		break;
 	}
 
+	/* Fused IO replies (e.g. HDCP FW locality check) arrive via outbox notifications */
+	if (dc->caps.fused_io_supported)
+		return true;
+
 	/* dmub aux needs dmub notifications to be enabled */
 	return dc->debug.enable_dmub_aux_for_legacy_ddc;
 
