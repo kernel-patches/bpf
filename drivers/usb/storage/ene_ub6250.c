@@ -1803,7 +1803,8 @@ static int ms_scsi_write(struct us_data *us, struct scsi_cmnd *srb)
 				goto exit;
 			}
 
-			info->MS_Lib.Phy2LogMap[oldphy] = MS_LB_NOT_USED_ERASED;
+			if (oldphy < info->MS_Lib.NumberOfPhyBlock)
+				info->MS_Lib.Phy2LogMap[oldphy] = MS_LB_NOT_USED_ERASED;
 			ms_lib_force_setlogical_pair(us, PhyBlockAddr, newphy);
 
 			blen -= len;
