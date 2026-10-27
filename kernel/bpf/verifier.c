@@ -19605,6 +19605,12 @@ bool bpf_verifier_inlines_helper_call(struct bpf_verifier_env *env, s32 imm)
 	}
 }
 
+static bool is_bpf_local_irq_kfunc(u32 func_id)
+{
+	return func_id == special_kfunc_list[KF_bpf_local_irq_save] ||
+	       func_id == special_kfunc_list[KF_bpf_local_irq_restore];
+}
+
 /* If @call is a kfunc or helper call, fills @cs and returns true,
  * otherwise returns false.
  */
@@ -19641,6 +19647,8 @@ bool bpf_get_call_summary(struct bpf_verifier_env *env, struct bpf_insn *call,
 			return false;
 		cs->arg_slot_cnt = btf_proto_slots(meta.btf, meta.func_proto);
 		cs->fastcall = meta.kfunc_flags & KF_FASTCALL;
+		if (!call->off && is_bpf_local_irq_kfunc(meta.func_id))
+			cs->fastcall &= bpf_jit_supports_irq_save_restore();
 		cs->is_void = btf_type_is_void(btf_type_by_id(meta.btf, meta.func_proto->type));
 		return true;
 	}
@@ -23373,8 +23381,7 @@ int bpf_fixup_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		return -EFAULT;
 	}
 	if (!desc->offset && bpf_jit_supports_irq_save_restore() &&
-	    (desc->func_id == special_kfunc_list[KF_bpf_local_irq_save] ||
-	     desc->func_id == special_kfunc_list[KF_bpf_local_irq_restore])) {
+	    is_bpf_local_irq_kfunc(desc->func_id)) {
 		int irq_op = desc->func_id == special_kfunc_list[KF_bpf_local_irq_save] ?
 			     BPF_IRQ_SAVE : BPF_IRQ_RESTORE;
 
