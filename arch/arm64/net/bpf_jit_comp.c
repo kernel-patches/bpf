@@ -593,6 +593,141 @@ static bool adjust_cmp_imm(u8 *op, s32 *imm)
 	return true;
 }
 
+/*
+ * Divide dst by the immediate of a 64-bit division through a multiplication
+ * with the magic number from bpf_magic_udiv() or bpf_magic_sdiv(): the high
+ * half of the product from umulh or smulh, shifted, with the corrections per
+ * Hacker's Delight. The quotient is built in tmp with tmp2 as scratch, the
+ * dividend stays in dst until a modulo takes the quotient back with msub.
+ * Returns false for the divisors left to udiv and sdiv.
+ */
+static bool emit_div_const(const struct bpf_insn *insn, struct jit_ctx *ctx)
+{
+	const bool is_mod = BPF_OP(insn->code) == BPF_MOD;
+	const bool is_signed = insn->off == 1;
+	const u8 dst = bpf2a64[insn->dst_reg];
+	const u8 tmp = bpf2a64[TMP_REG_1];
+	const u8 tmp2 = bpf2a64[TMP_REG_2];
+	const u8 q = is_mod ? tmp : dst;
+	const s32 imm = insn->imm;
+	struct bpf_div_magic mag;
+	int corr = 0, pre = 0, s;
+
+	if (is_signed) {
+		const u64 ad = imm < 0 ? -(u64)(s64)imm : imm;
+
+		/* |d| >= 2, the verifier already rewrote d == -1 */
+		if (imm >= -1 && imm <= 1)
+			return false;
+		/*
+		 * By a power of two with shifts: 2^k - 1 added to a negative
+		 * dividend rounds the arithmetic shift toward zero, the bias
+		 * is the low k bits of the sign mask, the sign bit itself for
+		 * k = 1. The modulo clears the low k bits of the biased
+		 * dividend for the multiple to subtract. A negative divisor
+		 * negates the quotient off the shift and keeps the remainder.
+		 */
+		if (is_power_of_2(ad)) {
+			const int k = ilog2(ad);
+
+			if (k == 1) {
+				emit(A64_ADD_LSR(1, tmp, dst, dst, 63), ctx);
+			} else {
+				emit(A64_ASR(1, tmp, dst, 63), ctx);
+				emit(A64_ADD_LSR(1, tmp, dst, tmp, 64 - k), ctx);
+			}
+			if (is_mod) {
+				emit(A64_AND_I(1, tmp, tmp, ~(ad - 1)), ctx);
+				emit(A64_SUB(1, dst, dst, tmp), ctx);
+			} else if (imm > 0) {
+				emit(A64_ASR(1, dst, tmp, k), ctx);
+			} else {
+				emit(A64_SUB_ASR(1, dst, A64_ZR, tmp, k), ctx);
+			}
+			return true;
+		}
+		bpf_magic_sdiv(imm, &mag);
+		/* q += n for d > 0 and m < 0, q -= n for d < 0 and m > 0 */
+		if (imm > 0 && (s64)mag.m < 0)
+			corr = 1;
+		else if (imm < 0 && (s64)mag.m > 0)
+			corr = -1;
+	} else {
+		/* d >= 2, a negative imm is a divisor above 2^63 */
+		if (imm < 2)
+			return false;
+		if (is_power_of_2(imm)) {
+			if (is_mod)
+				emit(A64_AND_I(1, dst, dst, imm - 1), ctx);
+			else
+				emit(A64_LSR(1, dst, dst, ilog2(imm)), ctx);
+			return true;
+		}
+		bpf_magic_udiv(imm, 0, &mag);
+		/*
+		 * Shift the dividend by the trailing zeros of an even divisor
+		 * first, the magic number of the odd part then fits without
+		 * the add sequence.
+		 */
+		if (mag.add && !(imm & 1)) {
+			pre = __ffs(imm) & 31;
+			bpf_magic_udiv(imm >> pre, pre, &mag);
+			if (mag.add)
+				return false;
+		}
+	}
+	s = mag.s;
+	/*
+	 * The shift is at most 63, or 64 with the add sequence which shifts
+	 * by s - 1 and needs s >= 1. Never hit for d >= 2, kept as a guard
+	 * against an unencodable count.
+	 */
+	if (s > 64 - !mag.add || (mag.add && !s))
+		return false;
+
+	/* tmp = mulh(n >> pre, m) */
+	emit_a64_mov_i64(tmp, mag.m, ctx);
+	if (pre) {
+		emit(A64_LSR(1, tmp2, dst, pre), ctx);
+		emit(A64_UMULH(tmp, tmp2, tmp), ctx);
+	} else if (is_signed) {
+		emit(A64_SMULH(tmp, dst, tmp), ctx);
+	} else {
+		emit(A64_UMULH(tmp, dst, tmp), ctx);
+	}
+
+	if (is_signed) {
+		if (corr > 0)
+			emit(A64_ADD(1, tmp, tmp, dst), ctx);
+		else if (corr < 0)
+			emit(A64_SUB(1, tmp, tmp, dst), ctx);
+		if (s)
+			emit(A64_ASR(1, tmp, tmp, s), ctx);
+		/* q += q >>> 63 */
+		emit(A64_ADD_LSR(1, q, tmp, tmp, 63), ctx);
+	} else if (!mag.add) {
+		if (s)
+			emit(A64_LSR(1, q, tmp, s), ctx);
+		else if (q != tmp)
+			emit(A64_MOV(1, q, tmp), ctx);
+	} else {
+		/* q = (((n - t) >> 1) + t) >> (s - 1) */
+		emit(A64_SUB(1, tmp2, dst, tmp), ctx);
+		emit(A64_ADD_LSR(1, tmp, tmp, tmp2, 1), ctx);
+		if (s > 1)
+			emit(A64_LSR(1, q, tmp, s - 1), ctx);
+		else if (q != tmp)
+			emit(A64_MOV(1, q, tmp), ctx);
+	}
+
+	if (is_mod) {
+		/* dst = n - q * d */
+		emit_a64_mov_i(1, tmp2, imm, ctx);
+		emit(A64_MSUB(1, dst, dst, tmp, tmp2), ctx);
+	}
+	return true;
+}
+
 /* generated main prog prologue:
  *      bti c // if CONFIG_ARM64_BTI_KERNEL
  *      mov x9, lr
@@ -1930,6 +2065,8 @@ emit_bswap_uxt:
 		break;
 	case BPF_ALU | BPF_DIV | BPF_K:
 	case BPF_ALU64 | BPF_DIV | BPF_K:
+		if (is64 && emit_div_const(insn, ctx))
+			break;
 		emit_a64_mov_i(is64, tmp, imm, ctx);
 		if (!off)
 			emit(A64_UDIV(is64, dst, dst, tmp), ctx);
@@ -1938,6 +2075,8 @@ emit_bswap_uxt:
 		break;
 	case BPF_ALU | BPF_MOD | BPF_K:
 	case BPF_ALU64 | BPF_MOD | BPF_K:
+		if (is64 && emit_div_const(insn, ctx))
+			break;
 		emit_a64_mov_i(is64, tmp2, imm, ctx);
 		if (!off)
 			emit(A64_UDIV(is64, tmp, dst, tmp2), ctx);
