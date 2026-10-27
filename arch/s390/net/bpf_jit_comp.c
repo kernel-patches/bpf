@@ -22,6 +22,7 @@
 #include <linux/init.h>
 #include <linux/bpf.h>
 #include <linux/cfi.h>
+#include <linux/memory.h>
 #include <linux/mm.h>
 #include <linux/kernel.h>
 #include <asm/cacheflush.h>
@@ -2467,9 +2468,9 @@ bool bpf_jit_supports_far_kfunc_call(void)
 	return true;
 }
 
-int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type old_t,
-		       enum bpf_text_poke_type new_t, void *old_addr,
-		       void *new_addr)
+static int __bpf_arch_text_poke(void *ip, enum bpf_text_poke_type old_t,
+				enum bpf_text_poke_type new_t, void *old_addr,
+				void *new_addr)
 {
 	struct bpf_plt expected_plt, current_plt, new_plt, *plt;
 	struct {
@@ -2478,6 +2479,8 @@ int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type old_t,
 	} __packed insn;
 	char *ret;
 	int err;
+
+	guard(mutex)(&text_mutex);
 
 	/* Verify the branch to be patched. */
 	err = copy_from_kernel_nofault(&insn, ip, sizeof(insn));
@@ -2512,10 +2515,20 @@ int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type old_t,
 	/* Adjust the mask of the branch. */
 	insn.opc = 0xc004 | (new_addr ? 0xf0 : 0);
 	s390_kernel_write((char *)ip + 1, (char *)&insn.opc + 1, 1);
+	return 0;
+}
 
+int bpf_arch_text_poke(void *ip, enum bpf_text_poke_type old_t,
+		       enum bpf_text_poke_type new_t, void *old_addr,
+		       void *new_addr)
+{
+	int err;
+
+	err = __bpf_arch_text_poke(ip, old_t, new_t, old_addr, new_addr);
+	if (err)
+		return err;
 	/* Make the new code visible to the other CPUs. */
 	text_poke_sync_lock();
-
 	return 0;
 }
 
