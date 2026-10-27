@@ -854,7 +854,8 @@ static struct bpf_prog *bpf_get_anchor_prog(u32 flags, u32 id_or_fd)
 }
 
 static struct bpf_prog_list *get_prog_list(struct hlist_head *progs, struct bpf_prog *prog,
-					   struct bpf_cgroup_link *link, u32 flags, u32 id_or_fd)
+					   struct bpf_cgroup_link *link, u32 flags, u32 id_or_fd,
+					   struct bpf_verifier_log *log)
 {
 	bool is_link = flags & BPF_F_LINK, is_id = flags & BPF_F_ID;
 	struct bpf_prog_list *pltmp, *pl = ERR_PTR(-EINVAL);
@@ -867,20 +868,30 @@ static struct bpf_prog_list *get_prog_list(struct hlist_head *progs, struct bpf_
 	is_after = flags & BPF_F_AFTER;
 	if (is_link || is_id || id_or_fd) {
 		/* flags must have either BPF_F_BEFORE or BPF_F_AFTER */
-		if (is_before == is_after)
+		if (is_before == is_after) {
+			bpf_log(log, "Specify exactly one of BPF_F_BEFORE or BPF_F_AFTER.\n");
 			return ERR_PTR(-EINVAL);
-		if ((is_link && !link) || (!is_link && !prog))
+		}
+		if (is_link && !link)
 			return ERR_PTR(-EINVAL);
+		if (!is_link && !prog) {
+			bpf_log(log, "BPF_F_LINK is required for relative link attachment.\n");
+			return ERR_PTR(-EINVAL);
+		}
 	} else if (!hlist_empty(progs)) {
 		/* flags cannot have both BPF_F_BEFORE and BPF_F_AFTER */
-		if (is_before && is_after)
+		if (is_before && is_after) {
+			bpf_log(log, "BPF_F_BEFORE and BPF_F_AFTER are mutually exclusive.\n");
 			return ERR_PTR(-EINVAL);
+		}
 	}
 
 	if (is_link) {
 		anchor_link = bpf_get_anchor_link(flags, id_or_fd);
-		if (IS_ERR(anchor_link))
+		if (IS_ERR(anchor_link)) {
+			bpf_log(log, "Invalid relative link %s.\n", is_id ? "ID" : "FD");
 			return ERR_CAST(anchor_link);
+		}
 	} else if (is_id || id_or_fd) {
 		anchor_prog = bpf_get_anchor_prog(flags, id_or_fd);
 		if (IS_ERR(anchor_prog))
@@ -905,13 +916,16 @@ static struct bpf_prog_list *get_prog_list(struct hlist_head *progs, struct bpf_
 	hlist_for_each_entry(pltmp, progs, node) {
 		if ((anchor_prog && anchor_prog == pltmp->prog) ||
 		    (anchor_link && anchor_link == &pltmp->link->link)) {
-			if (!!(pltmp->flags & BPF_F_PREORDER) != preorder)
+			if (!!(pltmp->flags & BPF_F_PREORDER) != preorder) {
+				bpf_log(log, "Relative attachment BPF_F_PREORDER mismatch.\n");
 				goto out;
+			}
 			pl = pltmp;
 			goto out;
 		}
 	}
 
+	bpf_log(log, "Relative attachment not found in target cgroup.\n");
 	pl = ERR_PTR(-ENOENT);
 out:
 	if (anchor_link)
@@ -923,11 +937,11 @@ out:
 
 static int insert_pl_to_hlist(struct bpf_prog_list *pl, struct hlist_head *progs,
 			      struct bpf_prog *prog, struct bpf_cgroup_link *link,
-			      u32 flags, u32 id_or_fd)
+			      u32 flags, u32 id_or_fd, struct bpf_verifier_log *log)
 {
 	struct bpf_prog_list *pltmp;
 
-	pltmp = get_prog_list(progs, prog, link, flags, id_or_fd);
+	pltmp = get_prog_list(progs, prog, link, flags, id_or_fd, log);
 	if (IS_ERR(pltmp))
 		return PTR_ERR(pltmp);
 
@@ -952,6 +966,7 @@ static int insert_pl_to_hlist(struct bpf_prog_list *pl, struct hlist_head *progs
  * @flags: Option flags
  * @id_or_fd: Relative prog id or fd
  * @revision: bpf_prog_list revision
+ * @log: Optional log for attachment errors
  *
  * Exactly one of @prog or @link can be non-null.
  * Must be called with cgroup_mutex held.
@@ -960,7 +975,7 @@ static int __cgroup_bpf_attach(struct cgroup *cgrp,
 			       struct bpf_prog *prog, struct bpf_prog *replace_prog,
 			       struct bpf_cgroup_link *link,
 			       enum bpf_attach_type type, u32 flags, u32 id_or_fd,
-			       u64 revision)
+			       u64 revision, struct bpf_verifier_log *log)
 {
 	u32 saved_flags = (flags & (BPF_F_ALLOW_OVERRIDE | BPF_F_ALLOW_MULTI));
 	struct bpf_prog *old_prog = NULL;
@@ -991,23 +1006,33 @@ static int __cgroup_bpf_attach(struct cgroup *cgrp,
 	atype = bpf_cgroup_atype_find(type, new_prog->aux->attach_btf_id);
 	if (atype < 0)
 		return -EINVAL;
-	if (revision && revision != cgrp->bpf.revisions[atype])
+	if (revision && revision != cgrp->bpf.revisions[atype]) {
+		bpf_log(log, "Cgroup revision mismatch: expected %llu, actual %llu.\n",
+			revision, cgrp->bpf.revisions[atype]);
 		return -ESTALE;
+	}
 
 	progs = &cgrp->bpf.progs[atype];
 
-	if (!hierarchy_allows_attach(cgrp, atype))
+	if (!hierarchy_allows_attach(cgrp, atype)) {
+		bpf_log(log, "Cgroup hierarchy does not allow attachment.\n");
 		return -EPERM;
+	}
 
-	if (!hlist_empty(progs) && cgrp->bpf.flags[atype] != saved_flags)
+	if (!hlist_empty(progs) && cgrp->bpf.flags[atype] != saved_flags) {
 		/* Disallow attaching non-overridable on top
 		 * of existing overridable in this cgroup.
 		 * Disallow attaching multi-prog if overridable or none
 		 */
+		bpf_log(log, "Attachment flags conflict with existing flags.\n");
 		return -EPERM;
+	}
 
-	if (prog_list_length(progs, NULL) >= BPF_CGROUP_MAX_PROGS)
+	if (prog_list_length(progs, NULL) >= BPF_CGROUP_MAX_PROGS) {
+		bpf_log(log, "Too many programs attached to cgroup (limit %u).\n",
+			BPF_CGROUP_MAX_PROGS);
 		return -E2BIG;
+	}
 
 	pl = find_attach_entry(progs, prog, link, replace_prog,
 			       flags & BPF_F_ALLOW_MULTI);
@@ -1029,7 +1054,7 @@ static int __cgroup_bpf_attach(struct cgroup *cgrp,
 			return -ENOMEM;
 		}
 
-		err = insert_pl_to_hlist(pl, progs, prog, link, flags, id_or_fd);
+		err = insert_pl_to_hlist(pl, progs, prog, link, flags, id_or_fd, log);
 		if (err) {
 			kfree(pl);
 			bpf_cgroup_storages_free(new_storage);
@@ -1089,13 +1114,14 @@ static int cgroup_bpf_attach(struct cgroup *cgrp,
 			     struct bpf_prog *prog, struct bpf_prog *replace_prog,
 			     struct bpf_cgroup_link *link,
 			     enum bpf_attach_type type,
-			     u32 flags, u32 id_or_fd, u64 revision)
+			     u32 flags, u32 id_or_fd, u64 revision,
+			     struct bpf_verifier_log *log)
 {
 	int ret;
 
 	cgroup_lock();
 	ret = __cgroup_bpf_attach(cgrp, prog, replace_prog, link, type, flags,
-				  id_or_fd, revision);
+				  id_or_fd, revision, log);
 	cgroup_unlock();
 	return ret;
 }
@@ -1572,7 +1598,7 @@ int cgroup_bpf_prog_attach(const union bpf_attr *attr,
 
 	ret = cgroup_bpf_attach(cgrp, prog, replace_prog, NULL,
 				attr->attach_type, attr->attach_flags,
-				attr->relative_fd, attr->expected_revision);
+				attr->relative_fd, attr->expected_revision, NULL);
 
 	if (replace_prog)
 		bpf_prog_put(replace_prog);
@@ -1702,19 +1728,24 @@ static const struct bpf_link_ops bpf_cgroup_link_lops = {
 	 BPF_F_PREORDER |	\
 	 BPF_F_LINK)
 
-int cgroup_bpf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
+int cgroup_bpf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog,
+			   struct bpf_verifier_log *log)
 {
 	struct bpf_link_primer link_primer;
 	struct bpf_cgroup_link *link;
 	struct cgroup *cgrp;
 	int err;
 
-	if (attr->link_create.flags & (~BPF_F_LINK_ATTACH_MASK))
+	if (attr->link_create.flags & (~BPF_F_LINK_ATTACH_MASK)) {
+		bpf_log(log, "Invalid flags.\n");
 		return -EINVAL;
+	}
 
 	cgrp = cgroup_get_from_fd(attr->link_create.target_fd);
-	if (IS_ERR(cgrp))
+	if (IS_ERR(cgrp)) {
+		bpf_log(log, "Invalid target_fd.\n");
 		return PTR_ERR(cgrp);
+	}
 
 	link = kzalloc_obj(*link, GFP_USER);
 	if (!link) {
@@ -1734,7 +1765,7 @@ int cgroup_bpf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog)
 	err = cgroup_bpf_attach(cgrp, NULL, NULL, link,
 				link->link.attach_type, BPF_F_ALLOW_MULTI | attr->link_create.flags,
 				attr->link_create.cgroup.relative_fd,
-				attr->link_create.cgroup.expected_revision);
+				attr->link_create.cgroup.expected_revision, log);
 	if (err) {
 		bpf_link_cleanup(&link_primer);
 		goto out_put_cgroup;
@@ -3184,7 +3215,8 @@ int cgroup_bpf_struct_ops_attach(struct bpf_map *map, const union bpf_attr *attr
 	cgrp->bpf.flags[atype] = BPF_F_ALLOW_MULTI;
 
 	err = insert_pl_to_hlist(pl, progs, NULL, link,
-				 flags | BPF_F_ALLOW_MULTI, attr->link_create.cgroup.relative_fd);
+				 flags | BPF_F_ALLOW_MULTI,
+				 attr->link_create.cgroup.relative_fd, NULL);
 	if (err)
 		goto unlock;
 
