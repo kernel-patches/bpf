@@ -899,5 +899,3 @@ __weak int buddy_free(struct buddy __arena *buddy, void __arena *addr)
 
 	return ret;
 }
-
-__weak char _license[] SEC("license") = "GPL";
