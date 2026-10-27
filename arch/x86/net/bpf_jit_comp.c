@@ -3089,6 +3089,23 @@ div_done:
 			EMIT_LFENCE();
 			break;
 
+		case BPF_ST | BPF_IRQ:
+			if (imm32 == BPF_IRQ_SAVE) {
+				EMIT1(0x9c);
+				EMIT2(0x41, add_1reg(0x58, BPF_REG_AX));
+				EMIT1(0xfa);
+				emit_stx(&prog, BPF_DW, dst_reg, BPF_REG_AX, 0);
+			} else if (imm32 == BPF_IRQ_RESTORE) {
+				emit_ldx(&prog, BPF_DW, BPF_REG_AX, dst_reg, 0);
+				maybe_emit_1mod(&prog, BPF_REG_AX, true);
+				EMIT2_off32(0xf7, add_1reg(0xc0, BPF_REG_AX), X86_EFLAGS_IF);
+				EMIT2(X86_JE, 1);
+				EMIT1(0xfb);
+			} else {
+				return -EINVAL;
+			}
+			break;
+
 		case BPF_ST | BPF_MEM | BPF_B:
 		case BPF_ST | BPF_MEM | BPF_H:
 		case BPF_ST | BPF_MEM | BPF_W:
@@ -5114,6 +5131,11 @@ bool bpf_jit_supports_callx(void)
 bool bpf_jit_supports_kfunc_call(void)
 {
 	return true;
+}
+
+bool bpf_jit_supports_irq_save_restore(void)
+{
+	return !IS_ENABLED(CONFIG_TRACE_IRQFLAGS) && !IS_ENABLED(CONFIG_PARAVIRT_XXL);
 }
 
 bool bpf_jit_supports_kfunc_ret_reg_pair(void)
