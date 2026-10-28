@@ -5,6 +5,7 @@
 #include <linux/anon_inodes.h>
 #include <linux/filter.h>
 #include <linux/bpf.h>
+#include <linux/bpf_unwind.h>
 #include <linux/rcupdate_trace.h>
 
 struct bpf_iter_target_info {
@@ -749,7 +750,7 @@ const struct bpf_func_proto bpf_for_each_map_elem_proto = {
 	.arg4_type	= ARG_ANYTHING,
 };
 
-BPF_CALL_4(bpf_loop, u32, nr_loops, void *, callback_fn, void *, callback_ctx,
+BPF_CALL_x(4, noinline, bpf_loop, u32, nr_loops, void *, callback_fn, void *, callback_ctx,
 	   u64, flags)
 {
 	bpf_callback_t callback = (bpf_callback_t)callback_fn;
@@ -766,13 +767,18 @@ BPF_CALL_4(bpf_loop, u32, nr_loops, void *, callback_fn, void *, callback_ctx,
 		return -E2BIG;
 
 	for (i = 0; i < nr_loops; i++) {
-		ret = callback((u64)i, (u64)(long)callback_ctx, 0, 0, 0);
+		bpf_call_cb(callback, i, callback_ctx, 0, 0, 0, ret, unwound);
 		/* return value: 0 - continue, 1 - stop and return */
 		if (ret)
 			return i + 1;
 	}
 
 	return i;
+
+unwound:
+	/* The callback left with unwind_exit: the loop is over, and so is the helper */
+	bpf_unwind_leave();
+	return ret;
 }
 
 const struct bpf_func_proto bpf_loop_proto = {

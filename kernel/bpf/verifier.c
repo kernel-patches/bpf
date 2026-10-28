@@ -11402,10 +11402,15 @@ static int btf_check_subprog_call(struct bpf_verifier_env *env, int subprog)
 	return err;
 }
 
-/* The helper calls its callback with a pad, see bpf_call_cb(). None yet. */
+/* The helper calls its callback with a pad, see bpf_call_cb() */
 static bool helper_has_cb_pad(enum bpf_func_id func_id)
 {
-	return false;
+	switch (func_id) {
+	case BPF_FUNC_loop:
+		return true;
+	default:
+		return false;
+	}
 }
 
 /* The kfunc calls its callback with a pad. None yet. */
