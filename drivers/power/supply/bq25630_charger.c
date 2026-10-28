@@ -14,6 +14,7 @@
 #include <linux/power_supply.h>
 
 #define BQ25630_DRV_NAME "bq25630-charger"
+#define BQ25630_IRQ_CYCLE 256 /* µs */
 
 /* Registers. */
 #define BQ25630_REG_CHARGE_CURRENT_LIMIT	0x02
@@ -725,8 +726,8 @@ static int bq25630_reset(struct bq25630_data *data)
 	 * this register field to 0. Try reading it for some interrupt cycles.
 	 */
 	ret = regmap_field_read_poll_timeout(
-		data->regfields[BQ25630_REGF_REG_RST], regval, regval == 0, 256,
-		100000);
+		data->regfields[BQ25630_REGF_REG_RST], regval, regval == 0,
+		BQ25630_IRQ_CYCLE, 100000);
 	if (ret) {
 		dev_err(data->dev, "Could not read reset register field (%d)\n",
 			ret);
