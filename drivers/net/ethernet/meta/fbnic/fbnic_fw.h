@@ -67,7 +67,6 @@ struct fbnic_fw_cap {
 	struct {
 		struct fbnic_fw_ver mgmt, bootloader, undi;
 	} stored;
-	u8	active_slot;
 	u8	bmc_mac_addr[4][ETH_ALEN];
 	u8	link_speed;
 	u8	link_fec;

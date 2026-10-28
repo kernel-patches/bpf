@@ -725,8 +725,6 @@ static int fbnic_fw_parse_cap_resp(void *opaque, struct fbnic_tlv_msg **results)
 		    fbd->fw_cap.stored.undi.commit,
 		    FBNIC_FW_CAP_RESP_COMMIT_MAX_SIZE);
 
-	fbd->fw_cap.active_slot =
-		fta_get_uint(results, FBNIC_FW_CAP_RESP_ACTIVE_FW_SLOT);
 	fbd->fw_cap.link_speed =
 		fta_get_uint(results, FBNIC_FW_CAP_RESP_FW_LINK_SPEED);
 	fbd->fw_cap.link_fec =
