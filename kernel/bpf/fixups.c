@@ -2836,6 +2836,15 @@ next_insn:
 	return 0;
 }
 
+/*
+ * When the callback can unwind and unwind_goto follows the call of bpf_loop,
+ * unwind_goto follows the call of the callback, and the pad restores r6-r8 and
+ * jumps to the pad after the call of bpf_loop with the r0 of the callback, which
+ * the verifier has checked with the state of that r0. The unwind_goto that
+ * followed the call of bpf_loop doesn't follow a call anymore and becomes a
+ * no-op jump. A loop of no rounds never runs its callback, so the verifier asked
+ * for no unwind_goto there, and the insn after the call is some other insn.
+ */
 static struct bpf_prog *inline_bpf_loop(struct bpf_verifier_env *env,
 					int position,
 					s32 stack_base,
@@ -2848,6 +2857,8 @@ static struct bpf_prog *inline_bpf_loop(struct bpf_verifier_env *env,
 	int reg_loop_max = BPF_REG_6;
 	int reg_loop_cnt = BPF_REG_7;
 	int reg_loop_ctx = BPF_REG_8;
+	bool pad = env->subprog_info[callback_subprogno].can_unwind &&
+		   bpf_is_unwind_goto(&env->prog->insnsi[position + 1]);
 
 	struct bpf_insn *insn_buf = env->insn_buf;
 	struct bpf_prog *new_prog;
@@ -2865,7 +2876,7 @@ static struct bpf_prog *inline_bpf_loop(struct bpf_verifier_env *env,
 	 */
 	insn_buf[cnt++] = BPF_JMP_IMM(BPF_JLE, BPF_REG_1, BPF_MAX_LOOPS, 2);
 	insn_buf[cnt++] = BPF_MOV32_IMM(BPF_REG_0, -E2BIG);
-	insn_buf[cnt++] = BPF_JMP_IMM(BPF_JA, 0, 0, 16);
+	insn_buf[cnt++] = BPF_JMP_IMM(BPF_JA, 0, 0, pad ? 22 : 16);
 	/* spill R6, R7, R8 to use these as loop vars */
 	insn_buf[cnt++] = BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_6, r6_offset);
 	insn_buf[cnt++] = BPF_STX_MEM(BPF_DW, BPF_REG_10, BPF_REG_7, r7_offset);
@@ -2877,17 +2888,20 @@ static struct bpf_prog *inline_bpf_loop(struct bpf_verifier_env *env,
 	/* loop header,
 	 * if reg_loop_cnt >= reg_loop_max skip the loop body
 	 */
-	insn_buf[cnt++] = BPF_JMP_REG(BPF_JGE, reg_loop_cnt, reg_loop_max, 5);
+	insn_buf[cnt++] = BPF_JMP_REG(BPF_JGE, reg_loop_cnt, reg_loop_max, pad ? 6 : 5);
 	/* callback call,
 	 * correct callback offset would be set after patching
 	 */
 	insn_buf[cnt++] = BPF_MOV64_REG(BPF_REG_1, reg_loop_cnt);
 	insn_buf[cnt++] = BPF_MOV64_REG(BPF_REG_2, reg_loop_ctx);
 	insn_buf[cnt++] = BPF_CALL_REL(0);
+	if (pad)
+		/* to the pad below when the callback left with unwind_exit */
+		insn_buf[cnt++] = BPF_RAW_INSN(BPF_JMP | BPF_JCOND, 0, BPF_UNWIND_GOTO, 7, 0);
 	/* increment loop counter */
 	insn_buf[cnt++] = BPF_ALU64_IMM(BPF_ADD, reg_loop_cnt, 1);
 	/* jump to loop header if callback returned 0 */
-	insn_buf[cnt++] = BPF_JMP_IMM(BPF_JEQ, BPF_REG_0, 0, -6);
+	insn_buf[cnt++] = BPF_JMP_IMM(BPF_JEQ, BPF_REG_0, 0, pad ? -7 : -6);
 	/* return value of bpf_loop,
 	 * set R0 to the number of iterations
 	 */
@@ -2896,11 +2910,34 @@ static struct bpf_prog *inline_bpf_loop(struct bpf_verifier_env *env,
 	insn_buf[cnt++] = BPF_LDX_MEM(BPF_DW, BPF_REG_6, BPF_REG_10, r6_offset);
 	insn_buf[cnt++] = BPF_LDX_MEM(BPF_DW, BPF_REG_7, BPF_REG_10, r7_offset);
 	insn_buf[cnt++] = BPF_LDX_MEM(BPF_DW, BPF_REG_8, BPF_REG_10, r8_offset);
+	if (pad) {
+		/* over the pad */
+		insn_buf[cnt++] = BPF_JMP_IMM(BPF_JA, 0, 0, 4);
+		/* the pad: r0 is what the callback unwound with */
+		insn_buf[cnt++] = BPF_LDX_MEM(BPF_DW, BPF_REG_6, BPF_REG_10, r6_offset);
+		insn_buf[cnt++] = BPF_LDX_MEM(BPF_DW, BPF_REG_7, BPF_REG_10, r7_offset);
+		insn_buf[cnt++] = BPF_LDX_MEM(BPF_DW, BPF_REG_8, BPF_REG_10, r8_offset);
+		/*
+		 * To the pad of the caller, where the unwind_goto that follows
+		 * the patch goes. Its offset is known once the patch is in and
+		 * the jumps across it are adjusted, see below.
+		 */
+		insn_buf[cnt++] = BPF_JMP32_A(0);
+	}
 
 	*total_cnt = cnt;
 	new_prog = bpf_patch_insn_data(env, position, insn_buf, cnt);
 	if (!new_prog)
 		return new_prog;
+
+	if (pad) {
+		struct bpf_insn *unwind_goto = &new_prog->insnsi[position + cnt];
+
+		/* the jump of the pad, one insn before, takes the target of the unwind_goto */
+		new_prog->insnsi[position + cnt - 1].imm = unwind_goto->off + 1;
+		/* and the unwind_goto after the call of bpf_loop follows no call anymore */
+		*unwind_goto = BPF_JMP_A(0);
+	}
 
 	/* callback start is known only after patching */
 	callback_start = env->subprog_info[callback_subprogno].start;
