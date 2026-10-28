@@ -3406,6 +3406,16 @@ bool __weak bpf_jit_supports_unwind(void)
 }
 
 /*
+ * Where unwind_exit returns: to the pad of the caller when the caller has one,
+ * and where exit would otherwise. The JITs that support unwinding have the real
+ * one. Without it no callback unwinds, so a helper never asks.
+ */
+u64 __weak bpf_unwind_target(u64 ret_addr)
+{
+	return ret_addr;
+}
+
+/*
  * How this arch places a by-value kfunc argument, or NULL for one that has
  * not opted in and so only takes an argument of a single eightbyte, which
  * every convention places in slot order.
