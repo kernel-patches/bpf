@@ -477,8 +477,9 @@ struct fbnic_mac_addr *__fbnic_uc_sync(struct fbnic_dev *fbd,
 	/* Scan from middle of list to bottom, filling bottom up.
 	 * Skip the first entry which is reserved for dev_addr and
 	 * leave the last entry to use for promiscuous filtering.
+	 * The entry below the boundary is reserved for all-multi.
 	 */
-	for (i = fbd->mac_addr_boundary - 1;
+	for (i = fbd->mac_addr_boundary;
 	     i < FBNIC_RPC_TCAM_MACDA_HOST_ADDR_IDX; i++) {
 		struct fbnic_mac_addr *mac_addr = &fbd->mac_addr[i];
 
@@ -507,9 +508,10 @@ struct fbnic_mac_addr *__fbnic_mc_sync(struct fbnic_dev *fbd,
 
 	/* Scan from middle of list to top, filling top down.
 	 * Skip over the address reserved for the BMC MAC and
-	 * exclude index 0 as that belongs to the broadcast address
+	 * exclude index 0 as that belongs to the broadcast address.
+	 * The entry below the boundary is reserved for all-multi.
 	 */
-	for (i = fbd->mac_addr_boundary;
+	for (i = fbd->mac_addr_boundary - 1;
 	     --i > FBNIC_RPC_TCAM_MACDA_BROADCAST_IDX;) {
 		struct fbnic_mac_addr *mac_addr = &fbd->mac_addr[i];
 
