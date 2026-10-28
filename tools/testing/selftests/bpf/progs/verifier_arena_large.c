@@ -22,9 +22,9 @@ struct {
 
 SEC("syscall")
 __success __retval(0)
+__skip_without_arena
 int big_alloc1(void *ctx)
 {
-#if defined(__BPF_FEATURE_ADDR_SPACE_CAST)
 	volatile char __arena *page1, *page2, *no_page, *page3;
 	u64 base;
 
@@ -79,16 +79,15 @@ int big_alloc1(void *ctx)
 		return 13;
 	if (*(page2 - PAGE_SIZE) != 0)
 		return 14;
-#endif
 	return 0;
 }
 
 /* Try to access a reserved page. Behavior should be identical with accessing unallocated pages. */
 SEC("syscall")
 __success __retval(0)
+__skip_without_arena
 int access_reserved(void *ctx)
 {
-#if defined(__BPF_FEATURE_ADDR_SPACE_CAST)
 	volatile char __arena *page;
 	char __arena *base;
 	const size_t len = 4;
@@ -118,7 +117,6 @@ int access_reserved(void *ctx)
 		if (*page)
 			return 2 + 2 * i + 1;
 	}
-#endif
 	return 0;
 }
 
@@ -127,7 +125,6 @@ SEC("syscall")
 __success __retval(0)
 int request_partially_reserved(void *ctx)
 {
-#if defined(__BPF_FEATURE_ADDR_SPACE_CAST)
 	volatile char __arena *page;
 	char __arena *base;
 	int ret;
@@ -142,7 +139,6 @@ int request_partially_reserved(void *ctx)
 	page = bpf_arena_alloc_pages(&arena, base, 5, NUMA_NO_NODE, 0);
 	if ((u64)page != 0ULL)
 		return 2;
-#endif
 	return 0;
 }
 
@@ -150,7 +146,6 @@ SEC("syscall")
 __success __retval(0)
 int free_reserved(void *ctx)
 {
-#if defined(__BPF_FEATURE_ADDR_SPACE_CAST)
 	char __arena *addr;
 	char __arena *page;
 	int ret;
@@ -177,7 +172,6 @@ int free_reserved(void *ctx)
 	page = bpf_arena_alloc_pages(&arena, addr + __PAGE_SIZE, 2, NUMA_NO_NODE, 0);
 	if (!page)
 		return 3;
-#endif
 	return 0;
 }
 
@@ -292,7 +286,6 @@ SEC("socket")
 __success __retval(0)
 int big_alloc3(void *ctx)
 {
-#if defined(__BPF_FEATURE_ADDR_SPACE_CAST)
 	char __arena *pages;
 	u64 i;
 	int err = 0;
@@ -314,8 +307,6 @@ int big_alloc3(void *ctx)
 
 	bpf_arena_free_pages(&arena, pages, LARGE_PAGE_CNT);
 	return err;
-#endif
-	return 0;
 }
 
 /* SYSCALL programs are always sleepable. */
@@ -323,7 +314,6 @@ SEC("syscall")
 __success __retval(0)
 int big_alloc4(void *ctx)
 {
-#if defined(__BPF_FEATURE_ADDR_SPACE_CAST)
 	char __arena *pages;
 	u64 i;
 	int err = 0;
@@ -345,8 +335,6 @@ int big_alloc4(void *ctx)
 
 	bpf_arena_free_pages(&arena, pages, LARGE_PAGE_CNT);
 	return err;
-#endif
-	return 0;
 }
 #else
 
