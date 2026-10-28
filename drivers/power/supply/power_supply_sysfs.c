@@ -114,6 +114,7 @@ static const char * const POWER_SUPPLY_HEALTH_TEXT[] = {
 	[POWER_SUPPLY_HEALTH_NO_BATTERY]	    = "No battery",
 	[POWER_SUPPLY_HEALTH_BLOWN_FUSE]	    = "Blown fuse",
 	[POWER_SUPPLY_HEALTH_CELL_IMBALANCE]	    = "Cell imbalance",
+	[POWER_SUPPLY_HEALTH_LIQUID_DETECTED]	    = "Liquid detected",
 };
 
 static const char * const POWER_SUPPLY_TECHNOLOGY_TEXT[] = {

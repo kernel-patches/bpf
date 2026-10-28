@@ -460,7 +460,8 @@ Description:
 			      "Over voltage", "Under voltage", "Unspecified failure", "Cold",
 			      "Watchdog timer expire", "Safety timer expire",
 			      "Over current", "Calibration required", "Warm",
-			      "Cool", "Hot", "No battery", "Blown fuse", "Cell imbalance"
+			      "Cool", "Hot", "No battery", "Blown fuse", "Cell imbalance",
+			      "Liquid detected"
 
 What:		/sys/class/power_supply/<supply_name>/precharge_current
 Date:		June 2017
