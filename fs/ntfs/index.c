@@ -1584,9 +1584,9 @@ static int ntfs_ih_insert(struct index_header *ih, struct index_entry *orig_ie, 
 	ie_node = ntfs_ie_get_by_pos(ih, pos);
 	old_vcn = ntfs_ie_get_vcn(ie_node);
 	ntfs_ie_set_vcn(ie_node, new_vcn);
+	ntfs_ie_set_vcn(ie, old_vcn);
 
 	ntfs_ie_insert(ih, ie, ie_node);
-	ntfs_ie_set_vcn(ie_node, old_vcn);
 out:
 	kfree(ie);
 	return ret;
