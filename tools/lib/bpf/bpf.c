@@ -793,7 +793,7 @@ int bpf_link_create(int prog_fd, int target_fd,
 		    const struct bpf_link_create_opts *opts)
 {
 	const size_t attr_sz = offsetofend(union bpf_attr, link_create);
-	__u32 target_btf_id, iter_info_len, relative_id;
+	__u32 target_btf_id, iter_info_len, iter_len, relative_id;
 	union bpf_iter_link_info *iter_info = NULL;
 	struct bpf_log_opts *log_opts = NULL;
 	int fd, err, relative_fd;
@@ -804,14 +804,10 @@ int bpf_link_create(int prog_fd, int target_fd,
 
 	iter_info_len = OPTS_GET(opts, iter_info_len, 0);
 	target_btf_id = OPTS_GET(opts, target_btf_id, 0);
+	iter_len = OPTS_GET(opts, iter.len, 0);
 
 	if (iter_info_len && attach_type != BPF_TRACE_ITER)
 		return libbpf_err(-EINVAL);
-
-	if (iter_info_len)
-		iter_info = OPTS_GET(opts, iter_info, (void *)0);
-	else
-		log_opts = OPTS_GET(opts, log_opts, (void *)0);
 
 	/* validate we don't have unexpected combinations of non-zero fields */
 	if (iter_info_len || target_btf_id) {
@@ -819,6 +815,16 @@ int bpf_link_create(int prog_fd, int target_fd,
 			return libbpf_err(-EINVAL);
 		if (!OPTS_ZEROED(opts, target_btf_id))
 			return libbpf_err(-EINVAL);
+	}
+
+	if (iter_info_len) {
+		if (iter_len)
+			return libbpf_err(-EINVAL);
+		iter_info = OPTS_GET(opts, iter_info, (void *)0);
+	} else {
+		iter_info_len = iter_len;
+		iter_info = OPTS_GET(opts, iter.info, (void *)0);
+		log_opts = OPTS_GET(opts, log_opts, (void *)0);
 	}
 
 	memset(&attr, 0, attr_sz);
@@ -970,7 +976,7 @@ int bpf_link_create(int prog_fd, int target_fd,
 			return libbpf_err(-EINVAL);
 		break;
 	default:
-		if (!OPTS_ZEROED(opts, iter_info_len))
+		if (!OPTS_ZEROED(opts, log_opts))
 			return libbpf_err(-EINVAL);
 		break;
 	}
