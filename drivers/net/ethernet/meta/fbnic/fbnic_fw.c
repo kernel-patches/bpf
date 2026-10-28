@@ -7,6 +7,7 @@
 #include <linux/dev_printk.h>
 #include <linux/dma-mapping.h>
 #include <linux/gfp.h>
+#include <linux/iopoll.h>
 #include <linux/types.h>
 
 #include "fbnic.h"
@@ -187,10 +188,25 @@ static void fbnic_mbx_clean_desc_ring(struct fbnic_dev *fbd, int mbx_idx)
 
 void fbnic_mbx_clean(struct fbnic_dev *fbd)
 {
+	u32 flush_done = FBNIC_PUL_USER_IP_LINK_RST_STATUS_AR_FLUSH_DONE |
+			 FBNIC_PUL_USER_IP_LINK_RST_STATUS_AW_FLUSH_DONE;
+	u32 val;
 	int i;
 
 	for (i = 0; i < FBNIC_IPC_MBX_INDICES; i++)
 		fbnic_mbx_clean_desc_ring(fbd, i);
+
+	/* Arming the flush above only starts it. Wait for the outbound path
+	 * to retire the requests it still owns so none of them can complete
+	 * after the reset that follows. A lost link reads back as all ones,
+	 * which ends the poll on the first pass.
+	 */
+	if (read_poll_timeout_atomic(fbnic_rd32, val,
+				     (val & flush_done) == flush_done, 2, 1000,
+				     false, fbd,
+				     FBNIC_PUL_USER_IP_LINK_RST_STATUS))
+		dev_warn(fbd->dev, "Outbound flush did not complete: %08x\n",
+			 val);
 }
 
 #define FBNIC_MBX_MAX_PAGE_SIZE	FIELD_MAX(FBNIC_IPC_MBX_DESC_LEN_MASK)
