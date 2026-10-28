@@ -1308,7 +1308,7 @@ static int exfat_rename(const struct mnt_idmap *idmap,
 	else
 		mark_inode_dirty(old_inode);
 
-	if (S_ISDIR(old_inode->i_mode) && old_dir != new_dir) {
+	if (S_ISDIR(old_inode->i_mode) && (old_dir != new_dir || new_inode)) {
 		drop_nlink(old_dir);
 		if (!new_inode)
 			inc_nlink(new_dir);
