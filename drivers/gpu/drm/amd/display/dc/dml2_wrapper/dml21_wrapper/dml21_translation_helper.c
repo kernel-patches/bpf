@@ -79,7 +79,7 @@ void dml21_populate_dml_init_params(struct dml2_initialize_instance_in_out *dml_
 
 	if (config->use_native_soc_bb_construction) {
 		in_dc->soc_and_ip_translator->translator_funcs->get_soc_bb(&dml_init->soc_bb, in_dc, config);
-		in_dc->soc_and_ip_translator->translator_funcs->get_ip_caps(&dml_init->ip_caps);
+		in_dc->soc_and_ip_translator->translator_funcs->get_ip_caps(&dml_init->ip_caps, config);
 	} else {
 		dml_init->soc_bb = config->external_socbb_ip_params->soc_bb;
 		dml_init->ip_caps = config->external_socbb_ip_params->ip_params;

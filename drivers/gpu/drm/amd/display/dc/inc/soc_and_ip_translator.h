@@ -13,7 +13,9 @@ struct soc_and_ip_translator_funcs {
 			struct dml2_soc_bb *soc_bb,
 			const struct dc *dc,
 			const struct dml2_configuration_options *config);
-	void (*get_ip_caps)(struct dml2_ip_capabilities *dml_ip_caps);
+	void (*get_ip_caps)(
+			struct dml2_ip_capabilities *dml_ip_caps,
+			const struct dml2_configuration_options *config);
 };
 
 struct soc_and_ip_translator {
