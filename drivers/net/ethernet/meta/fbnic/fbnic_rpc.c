@@ -645,6 +645,9 @@ void fbnic_sift_macda(struct fbnic_dev *fbd)
 			memcpy(dest_addr, src_addr, sizeof(*src_addr));
 			src_addr->state = FBNIC_TCAM_S_DELETE;
 			dest_addr->state = FBNIC_TCAM_S_ADD;
+
+			/* dest_addr is taken, move on to the next free one */
+			break;
 		}
 	}
 }
