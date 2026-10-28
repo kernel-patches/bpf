@@ -45,9 +45,9 @@ enum rbtree_alloc {
  * the existing node.
  *
  * RB_DUPLICATE: Allow nodes with identical keys in the rbtree.
- * Finding/popping/removing a key acts on any of the nodes
- * with the appropriate key - there is no ordering by time
- * of insertion.
+ * Nodes with identical keys are kept in insertion order, so
+ * rb_least() and rb_pop() return the oldest of them. Finding
+ * or removing by key acts on any of them.
  */
 enum rbtree_insert_mode {
 	RB_DEFAULT,
