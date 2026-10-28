@@ -345,9 +345,14 @@ void fbnic_bmc_rpc_check(struct fbnic_dev *fbd)
 	if (test_and_clear_bit(FBNIC_FW_CAP_F_BMC_MACDA_SYNC,
 			       &fbd->fw_cap.state)) {
 		err = fbnic_fw_xmit_rpc_macda_sync(fbd);
-		if (err)
-			dev_warn(fbd->dev,
-				 "Writing MACDA table to FW failed, err: %d\n", err);
+		if (err) {
+			dev_warn_ratelimited(fbd->dev,
+					     "Writing MACDA table to FW failed, err: %d\n",
+					     err);
+			/* Leave FW to be synced on the next pass */
+			set_bit(FBNIC_FW_CAP_F_BMC_MACDA_SYNC,
+				&fbd->fw_cap.state);
+		}
 	}
 
 	netdev_unlock(fbd->netdev);
