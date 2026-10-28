@@ -14,7 +14,9 @@ Description:
 		Note: use /sys/class/power_supply/rt9471-\*/load_switch instead.
 
 		Access: Read, Write
+
 		Valid values:
+
 		- 1: enabled
 		- 0: disabled
 
@@ -29,6 +31,8 @@ Description:
 		datasheet for details. Normally controlled when TypeC/USBPD port integrated.
 
 		Access: Read, Write
+
 		Valid values:
+
 		- 1: enabled
 		- 0: disabled
