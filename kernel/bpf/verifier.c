@@ -11409,6 +11409,7 @@ static bool helper_has_cb_pad(enum bpf_func_id func_id)
 	case BPF_FUNC_loop:
 	case BPF_FUNC_for_each_map_elem:
 	case BPF_FUNC_find_vma:
+	case BPF_FUNC_user_ringbuf_drain:
 		return true;
 	default:
 		return false;

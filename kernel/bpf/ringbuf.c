@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <linux/bpf.h>
+#include <linux/bpf_unwind.h>
 #include <linux/btf.h>
 #include <linux/err.h>
 #include <linux/irq_work.h>
@@ -814,13 +815,14 @@ static void __bpf_user_ringbuf_sample_release(struct bpf_ringbuf *rb, size_t siz
 	smp_store_release(&rb->consumer_pos, consumer_pos + rounded_size);
 }
 
-BPF_CALL_4(bpf_user_ringbuf_drain, struct bpf_map *, map,
+BPF_CALL_x(4, noinline, bpf_user_ringbuf_drain, struct bpf_map *, map,
 	   void *, callback_fn, void *, callback_ctx, u64, flags)
 {
 	struct bpf_ringbuf *rb;
 	long samples, discarded_samples = 0, ret = 0;
 	bpf_callback_t callback = (bpf_callback_t)callback_fn;
 	u64 wakeup_flags = BPF_RB_NO_WAKEUP | BPF_RB_FORCE_WAKEUP;
+	bool unwound = false;
 	int busy = 0;
 
 	if (unlikely(flags & ~wakeup_flags))
@@ -852,8 +854,23 @@ BPF_CALL_4(bpf_user_ringbuf_drain, struct bpf_map *, map,
 		}
 
 		bpf_dynptr_init(&dynptr, sample, BPF_DYNPTR_TYPE_LOCAL, 0, size);
-		ret = callback((uintptr_t)&dynptr, (uintptr_t)callback_ctx, 0, 0, 0);
+		bpf_call_cb(callback, &dynptr, callback_ctx, 0, 0, 0, ret, unwound_at);
+		if (0) {
+unwound_at:
+			/*
+			 * The callback left with unwind_exit. The sample is
+			 * consumed and counted like after a return, so that
+			 * the wakeup below is sent for it, and the helper
+			 * leaves through the door below, as the error paths
+			 * do, with the r0 of the callback.
+			 */
+			unwound = true;
+		}
 		__bpf_user_ringbuf_sample_release(rb, size, flags);
+		if (unwound) {
+			samples++;
+			goto schedule_work_return;
+		}
 	}
 	ret = samples - discarded_samples;
 
@@ -867,6 +884,8 @@ schedule_work_return:
 		irq_work_queue(&rb->work);
 	else if (!(flags & BPF_RB_NO_WAKEUP) && samples > 0)
 		irq_work_queue(&rb->work);
+	if (unwound)
+		bpf_unwind_leave();
 	return ret;
 }
 
