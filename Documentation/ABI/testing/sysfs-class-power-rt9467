@@ -1,4 +1,4 @@
-What:		/sys/class/power_supply/rt9467-*/sysoff_enable
+What:		/sys/class/power_supply/rt9467-\*/sysoff_enable
 Date:		Feb 2023
 KernelVersion:	6.3
 Contact:	ChiaEn Wu <chiaen_wu@richtek.com>
@@ -13,7 +13,7 @@ Description:
 		'Disable' also can help to leave it, but it's more like to
 		abort the action before the device really enter shipping mode.
 
-		Note: use /sys/class/power_supply/rt9467-*/load_switch instead.
+		Note: use /sys/class/power_supply/rt9467-\*/load_switch instead.
 
 		Access: Read, Write
 		Valid values:
