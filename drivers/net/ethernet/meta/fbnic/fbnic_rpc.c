@@ -251,6 +251,8 @@ void fbnic_bmc_rpc_init(struct fbnic_dev *fbd)
 	int i = FBNIC_RPC_TCAM_MACDA_BMC_ADDR_IDX;
 	struct fbnic_act_tcam *act_tcam;
 	struct fbnic_mac_addr *mac_addr;
+	u8 bmc_mac_addr[4][ETH_ALEN];
+	unsigned int seq;
 	int j;
 
 	/* Start from nothing so a MAC the BMC no longer reports does not
@@ -262,9 +264,19 @@ void fbnic_bmc_rpc_init(struct fbnic_dev *fbd)
 	if (!fbnic_bmc_present(fbd))
 		return;
 
+	/* Snapshot the set, the mailbox can replace it under us. A message
+	 * that lands after this raises FBNIC_FW_CAP_F_BMC_TCAM_REINIT again,
+	 * so the next pass rebuilds from it.
+	 */
+	do {
+		seq = read_seqcount_begin(&fbd->fw_cap.bmc_mac_seq);
+		memcpy(bmc_mac_addr, fbd->fw_cap.bmc_mac_addr,
+		       sizeof(bmc_mac_addr));
+	} while (read_seqcount_retry(&fbd->fw_cap.bmc_mac_seq, seq));
+
 	/* Fetch BMC MAC addresses from firmware capabilities */
 	for (j = 0; j < 4; j++) {
-		u8 *bmc_mac = fbd->fw_cap.bmc_mac_addr[j];
+		u8 *bmc_mac = bmc_mac_addr[j];
 
 		/* Validate BMC MAC addresses */
 		if (is_zero_ether_addr(bmc_mac))

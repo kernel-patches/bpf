@@ -6,6 +6,7 @@
 
 #include <linux/completion.h>
 #include <linux/if_ether.h>
+#include <linux/seqlock.h>
 #include <linux/types.h>
 
 struct fbnic_dev;
@@ -67,6 +68,8 @@ struct fbnic_fw_cap {
 	struct {
 		struct fbnic_fw_ver mgmt, bootloader, undi;
 	} stored;
+	/* Keeps bmc_mac_addr whole for readers, the mailbox is the writer */
+	seqcount_t bmc_mac_seq;
 	u8	bmc_mac_addr[4][ETH_ALEN];
 	u8	link_speed;
 	u8	link_fec;

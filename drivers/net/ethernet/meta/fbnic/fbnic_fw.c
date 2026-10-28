@@ -104,6 +104,7 @@ void fbnic_mbx_init(struct fbnic_dev *fbd)
 
 	/* Reset FW Capabilities */
 	memset(&fbd->fw_cap, 0, sizeof(fbd->fw_cap));
+	seqcount_init(&fbd->fw_cap.bmc_mac_seq);
 
 	/* Reinitialize mailbox memory */
 	for (i = 0; i < FBNIC_IPC_MBX_INDICES; i++)
@@ -627,6 +628,7 @@ static int fbnic_fw_parse_bmc_addrs(u8 bmc_mac_addr[][ETH_ALEN],
 static int fbnic_fw_parse_bmc_cap(struct fbnic_dev *fbd,
 				  struct fbnic_tlv_msg **results)
 {
+	u8 bmc_mac_addr[4][ETH_ALEN] = {};
 	struct fbnic_tlv_msg *attr;
 	bool bmc_present = false;
 	u32 all_multi = 0;
@@ -639,18 +641,25 @@ static int fbnic_fw_parse_bmc_cap(struct fbnic_dev *fbd,
 	attr = results[FBNIC_FW_CAP_RESP_BMC_PRESENT] ?
 	       results[FBNIC_FW_CAP_RESP_BMC_MAC_ARRAY] : NULL;
 	if (attr) {
-		err = fbnic_fw_parse_bmc_addrs(fbd->fw_cap.bmc_mac_addr,
-					       attr, 4);
+		err = fbnic_fw_parse_bmc_addrs(bmc_mac_addr, attr, 4);
 		if (err)
 			return err;
 
 		all_multi = fta_get_uint(results,
 					 FBNIC_FW_CAP_RESP_BMC_ALL_MULTI);
 		bmc_present = true;
-	} else {
-		memset(fbd->fw_cap.bmc_mac_addr, 0,
-		       sizeof(fbd->fw_cap.bmc_mac_addr));
 	}
+
+	/* The service task can be reading the set in fbnic_bmc_rpc_init(),
+	 * so replace it whole. The mailbox Rx path is the only writer, so a
+	 * seqcount is enough; keep preemption off so a reader cannot spin on
+	 * a preempted update.
+	 */
+	preempt_disable();
+	write_seqcount_begin(&fbd->fw_cap.bmc_mac_seq);
+	memcpy(fbd->fw_cap.bmc_mac_addr, bmc_mac_addr, sizeof(bmc_mac_addr));
+	write_seqcount_end(&fbd->fw_cap.bmc_mac_seq);
+	preempt_enable();
 
 	/* all_multi is only read out of the message when a BMC is present, so
 	 * it is never set on its own and callers can test it without pairing
