@@ -136,7 +136,7 @@ int fbnic_tlv_attr_put_string(struct fbnic_tlv_msg *msg, u16 attr_id,
 struct fbnic_tlv_msg *fbnic_tlv_attr_nest_start(struct fbnic_tlv_msg *msg,
 						u16 attr_id);
 void fbnic_tlv_attr_nest_stop(struct fbnic_tlv_msg *msg);
-void fbnic_tlv_attr_addr_copy(u8 *dest, struct fbnic_tlv_msg *src);
+int fbnic_tlv_attr_addr_copy(u8 *dest, struct fbnic_tlv_msg *src);
 int fbnic_tlv_attr_parse_array(struct fbnic_tlv_msg *attr, int len,
 			       struct fbnic_tlv_msg **results,
 			       const struct fbnic_tlv_index *tlv_index,

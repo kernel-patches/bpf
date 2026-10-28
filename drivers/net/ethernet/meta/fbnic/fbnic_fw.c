@@ -596,6 +596,7 @@ static int fbnic_fw_parse_bmc_addrs(u8 bmc_mac_addr[][ETH_ALEN],
 {
 	int attr_len = le16_to_cpu(attr->hdr.len) / sizeof(u32) - 1;
 	struct fbnic_tlv_msg *mac_results[8];
+	u8 mac_addr[8][ETH_ALEN] = {};
 	int err, i = 0;
 
 	/* Make sure we have enough room to process all the MAC addresses */
@@ -609,13 +610,16 @@ static int fbnic_fw_parse_bmc_addrs(u8 bmc_mac_addr[][ETH_ALEN],
 	if (err)
 		return err;
 
-	/* Copy results into MAC addr array */
-	for (i = 0; i < len && mac_results[i]; i++)
-		fbnic_tlv_attr_addr_copy(bmc_mac_addr[i], mac_results[i]);
+	/* Stage the addresses so a bad one leaves the old set untouched.
+	 * Unused entries stay zeroed.
+	 */
+	for (i = 0; i < len && mac_results[i]; i++) {
+		err = fbnic_tlv_attr_addr_copy(mac_addr[i], mac_results[i]);
+		if (err)
+			return err;
+	}
 
-	/* Zero remaining unused addresses */
-	while (i < len)
-		eth_zero_addr(bmc_mac_addr[i++]);
+	memcpy(bmc_mac_addr, mac_addr, len * ETH_ALEN);
 
 	return 0;
 }
