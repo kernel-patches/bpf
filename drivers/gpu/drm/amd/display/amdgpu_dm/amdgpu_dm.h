@@ -1283,6 +1283,9 @@ int dm_update_plane_state(struct dc *dc,
 			  bool enable,
 			  bool *lock_and_validation_needed,
 			  bool *is_top_most_overlay);
+void dm_plane_inherit_flip_time(struct dc_plane_state *dc_plane_state,
+				struct drm_plane_state *old_plane_state,
+				struct drm_plane_state *new_plane_state);
 int amdgpu_dm_atomic_check(struct drm_device *dev,
 			   struct drm_atomic_commit *state);
 void amdgpu_dm_mod_power_update_streams(struct drm_atomic_commit *state,
