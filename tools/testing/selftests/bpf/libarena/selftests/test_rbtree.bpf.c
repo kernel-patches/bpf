@@ -425,6 +425,60 @@ __weak int test_rbtree_first_update(void)
 	return rb_destroy(rbtree);
 }
 
+#define NEXT_NR_NODES	64
+
+static struct rbnode __arena *next_nodes[NEXT_NR_NODES];
+
+SEC("syscall")
+__weak int test_rbtree_next(void)
+{
+	struct rbtree __arena *rbtree;
+	struct rbnode __arena *node;
+	u64 seed = 0xcafe;
+	int i;
+
+	rbtree = rb_create(RB_NOALLOC, RB_DUPLICATE);
+	if (!rbtree)
+		return 1;
+
+	/* Pseudo-random keys with repeats, so the walk crosses equal keys. */
+	for (i = 0; i < NEXT_NR_NODES && can_loop; i++) {
+		/* LCG using Knuth's MMIX constants for determinism. */
+		seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+		node = rb_node_alloc((seed >> 33) % 16, i);
+		if (!node)
+			return 2;
+
+		if (rb_insert_node(rbtree, node))
+			return 3;
+	}
+
+	node = rb_first(rbtree);
+	for (i = 0; i < NEXT_NR_NODES && can_loop; i++) {
+		if (!node)
+			return 4;
+
+		next_nodes[i] = node;
+		node = rb_next(node);
+	}
+
+	if (node)
+		return 5;
+
+	for (i = 0; i < NEXT_NR_NODES && can_loop; i++) {
+		node = rb_first(rbtree);
+		if (node != next_nodes[i])
+			return 6;
+
+		if (rb_remove_node(rbtree, node))
+			return 7;
+
+		rb_node_free(node);
+	}
+
+	return rb_destroy(rbtree);
+}
+
 struct rb_embed {
 	u64 pad;
 	struct rbtree tree;
