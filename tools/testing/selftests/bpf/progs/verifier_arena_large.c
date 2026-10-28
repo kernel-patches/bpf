@@ -348,5 +348,15 @@ int big_alloc4(void *ctx)
 #endif
 	return 0;
 }
+#else
+
+SEC("socket")
+__skip_without_arena
+__success
+int arena_unsupported(void)
+{
+	return 0;
+}
+
 #endif
 char _license[] SEC("license") = "GPL";
