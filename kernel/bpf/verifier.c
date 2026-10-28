@@ -11408,6 +11408,7 @@ static bool helper_has_cb_pad(enum bpf_func_id func_id)
 	switch (func_id) {
 	case BPF_FUNC_loop:
 	case BPF_FUNC_for_each_map_elem:
+	case BPF_FUNC_find_vma:
 		return true;
 	default:
 		return false;

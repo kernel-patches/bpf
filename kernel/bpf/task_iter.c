@@ -6,6 +6,7 @@
 #include <linux/pid_namespace.h>
 #include <linux/fs.h>
 #include <linux/filter.h>
+#include <linux/bpf_unwind.h>
 #include <linux/bpf_mem_alloc.h>
 #include <linux/btf_ids.h>
 #include <linux/mm_types.h>
@@ -754,7 +755,7 @@ static struct bpf_iter_reg task_vma_reg_info = {
 	.show_fdinfo		= bpf_iter_task_show_fdinfo,
 };
 
-BPF_CALL_5(bpf_find_vma, struct task_struct *, task, u64, start,
+BPF_CALL_x(5, noinline, bpf_find_vma, struct task_struct *, task, u64, start,
 	   bpf_callback_t, callback_fn, void *, callback_ctx, u64, flags)
 {
 	struct mmap_unlock_irq_work *work;
@@ -762,6 +763,7 @@ BPF_CALL_5(bpf_find_vma, struct task_struct *, task, u64, start,
 	bool __maybe_unused mmput_needed = false;
 	struct mm_struct *mm;
 	int ret = -ENOENT;
+	u64 r0;
 
 	if (flags)
 		return -EINVAL;
@@ -815,8 +817,7 @@ BPF_CALL_5(bpf_find_vma, struct task_struct *, task, u64, start,
 		 * verifier checks it as an RCU read-side critical section.
 		 */
 		rcu_read_lock();
-		callback_fn((u64)(long)task, (u64)(long)vma,
-			    (u64)(long)callback_ctx, 0, 0);
+		bpf_call_cb(callback_fn, task, vma, callback_ctx, 0, 0, r0, unwound);
 		rcu_read_unlock();
 		ret = 0;
 	}
@@ -827,6 +828,20 @@ out:
 		mmput_async(mm);
 #endif
 	return ret;
+
+unwound:
+	/*
+	 * The callback left with unwind_exit, under the mmap lock and in the
+	 * RCU section. The way out is the same as after a return.
+	 */
+	rcu_read_unlock();
+	bpf_mmap_unlock_mm(work, mm);
+#ifdef CONFIG_MMU
+	if (mmput_needed)
+		mmput_async(mm);
+#endif
+	bpf_unwind_leave();
+	return r0;
 }
 
 const struct bpf_func_proto bpf_find_vma_proto = {
