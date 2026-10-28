@@ -10,6 +10,7 @@
 #include <linux/btf_ids.h>
 #include <linux/vmalloc.h>
 #include <linux/pagemap.h>
+#include <linux/rculist.h>
 #include <asm/tlbflush.h>
 #include "range_tree.h"
 
@@ -46,10 +47,14 @@
 #define GUARD_SZ round_up(1ull << sizeof_field(struct bpf_insn, off) * 8, PAGE_SIZE << 1)
 #define KERN_VM_SZ (SZ_4G + GUARD_SZ)
 
+static LIST_HEAD(arena_list);
+static DEFINE_SPINLOCK(arena_list_lock);
+
 static void arena_free_pages(struct bpf_arena *arena, long uaddr, long page_cnt, bool sleepable);
 
 struct bpf_arena {
 	struct bpf_map map;
+	struct list_head list;
 	u64 user_vm_start;
 	u64 user_vm_end;
 	struct vm_struct *kern_vm;
@@ -332,6 +337,10 @@ static struct bpf_map *arena_map_alloc(union bpf_attr *attr)
 	if (err)
 		goto err_destroy_rt;
 
+	spin_lock(&arena_list_lock);
+	list_add_tail_rcu(&arena->list, &arena_list);
+	spin_unlock(&arena_list_lock);
+
 	return &arena->map;
 
 err_destroy_rt:
@@ -384,6 +393,12 @@ static void arena_map_free(struct bpf_map *map)
 	 */
 	if (WARN_ON_ONCE(!list_empty(&arena->vma_list)))
 		return;
+
+	spin_lock(&arena_list_lock);
+	list_del_rcu(&arena->list);
+	spin_unlock(&arena_list_lock);
+
+	synchronize_rcu();
 
 	/* Ensure no pending deferred frees */
 	irq_work_sync(&arena->free_irq);
@@ -1208,31 +1223,32 @@ bool bpf_arena_handle_page_fault(unsigned long addr, bool is_write, unsigned lon
 	struct bpf_prog *prog;
 	unsigned long kbase;
 	unsigned long page_addr = addr & PAGE_MASK;
-
-	prog = bpf_prog_find_from_stack();
-	if (!prog)
-		return false;
-
-	arena = prog->aux->arena;
-	/* a prog not using arena may be on stack, so arena can be NULL */
-	if (!arena)
-		return false;
-
-	kbase = bpf_arena_get_kern_vm_start(arena);
+	bool handled = false;
 
 	/*
 	 * Recovery covers the 4 GiB mappable band plus the upper half-guard.
 	 * Lower guard is unreachable from kfuncs; an address there indicates
 	 * a different bug class - leave it to the regular kernel oops path.
 	 */
-	if (page_addr < kbase || page_addr >= kbase + SZ_4G + GUARD_SZ / 2)
-		return false;
+	rcu_read_lock();
+	list_for_each_entry_rcu(arena, &arena_list, list) {
+		kbase = bpf_arena_get_kern_vm_start(arena);
+		if (page_addr < kbase || page_addr >= kbase + SZ_4G + GUARD_SZ / 2)
+			continue;
 
-	apply_to_page_range(&init_mm, page_addr, PAGE_SIZE,
-			    apply_range_set_scratch_cb, arena->scratch_page);
-	flush_vmap_cache(page_addr, PAGE_SIZE);
-	__bpf_prog_report_arena_violation(prog, is_write, page_addr - kbase, fault_ip);
-	return true;
+		apply_to_page_range(&init_mm, page_addr, PAGE_SIZE,
+				    apply_range_set_scratch_cb, arena->scratch_page);
+		flush_vmap_cache(page_addr, PAGE_SIZE);
+
+		prog = bpf_prog_find_from_stack();
+		if (prog && prog->aux->arena == arena)
+			__bpf_prog_report_arena_violation(prog, is_write,
+							  page_addr - kbase, fault_ip);
+		handled = true;
+		break;
+	}
+	rcu_read_unlock();
+	return handled;
 }
 
 void bpf_prog_report_arena_violation(bool write, unsigned long addr, unsigned long fault_ip)
