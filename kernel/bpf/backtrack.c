@@ -530,8 +530,13 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 			 */
 			if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL && insn->imm == 0)
 				return -ENOTSUPP;
-			/* regular helper call sets R0 */
-			bt_clear_reg(bt, BPF_REG_0);
+			/*
+			 * A regular helper call sets R0. When its callback unwound,
+			 * R0 is the callback's, from the unwind_exit of the callback,
+			 * see the BPF_EXIT case.
+			 */
+			if (!hist || !(hist->flags & INSN_F_UNWOUND))
+				bt_clear_reg(bt, BPF_REG_0);
 			/* kfunc might also set R2 */
 			bt_clear_reg(bt, BPF_REG_2);
 			if (bt_reg_mask(bt) & BPF_REGMASK_ARGS) {
@@ -548,7 +553,7 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 					return -EFAULT;
 			}
 		} else if (opcode == BPF_EXIT) {
-			bool from_subprog_call, r0_precise, r2_precise;
+			bool from_subprog_call, cb_unwinds, r0_precise, r2_precise;
 
 			/* BPF_EXIT in subprog or callback always returns
 			 * right after the call instruction, so by checking
@@ -562,8 +567,16 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 			from_subprog_call = subseq_idx - 1 >= 0 &&
 					    (bpf_pseudo_call(&env->prog->insnsi[subseq_idx - 1]) ||
 					     bpf_is_callx(&env->prog->insnsi[subseq_idx - 1]));
+			/*
+			 * unwind_exit of a callback goes back to the call of the
+			 * helper, which passes R0 on to the pad after it: R0 is
+			 * the callback's, as it is the subprog's after a call.
+			 */
+			cb_unwinds = !from_subprog_call && bpf_is_unwind_exit(insn) &&
+				     subseq_idx >= 0 &&
+				     bpf_is_sync_callback_calling_insn(&env->prog->insnsi[subseq_idx]);
 
-			r0_precise = from_subprog_call && bt_is_reg_set(bt, BPF_REG_0);
+			r0_precise = (from_subprog_call || cb_unwinds) && bt_is_reg_set(bt, BPF_REG_0);
 			r2_precise = from_subprog_call && bt_is_reg_set(bt, BPF_REG_2);
 
 			/* Backtracking to a nested function call, 'idx' is a part of
