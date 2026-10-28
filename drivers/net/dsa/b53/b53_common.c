@@ -841,11 +841,28 @@ int b53_enable_mcast_snooping(struct b53_device *dev)
 	u16 val16;
 	u32 val;
 	int ret;
+	u8 val8;
 
-	/* Older switches use different IGMP controls, not HL_PRTC_CTRL. */
-	if (is5325(dev) || is5365(dev) || dev->chip_id == BCM5389_DEVICE_ID ||
-	    is5397_98(dev) || is63xx(dev))
+	/* BCM5325M snooping uses the mirroring engine instead. */
+	if (is5325(dev) && !is5325e(dev))
 		return 0;
+
+	/* Older switches classify IGMP in the global management register.
+	 * They do not provide the separate MLD controls of newer switches.
+	 */
+	if (is5325e(dev) || is5365(dev) ||
+	    dev->chip_id == BCM5389_DEVICE_ID || is5397_98(dev) || is63xx(dev)) {
+		ret = b53_read8(dev, B53_MGMT_PAGE, B53_GLOBAL_CONFIG, &val8);
+		if (ret)
+			return ret;
+
+		val8 |= GC_IGMP_IP_EN;
+		/* Disable the separate IGMP redirection mode on BCM6318/63268. */
+		if (is6318_268(dev))
+			val8 &= ~GC_IGMP_RED_EN_6318_268;
+
+		return b53_write8(dev, B53_MGMT_PAGE, B53_GLOBAL_CONFIG, val8);
+	}
 
 	/* IGMPv2 and MLDv1 reports use the group's destination MAC. Once
 	 * the first listener is offloaded, ordinary multicast forwarding

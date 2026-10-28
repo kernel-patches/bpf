@@ -217,6 +217,8 @@
 #define B53_GLOBAL_CONFIG		0x00
 #define   GC_RESET_MIB			0x01
 #define   GC_RX_BPDU_EN			0x02
+#define   GC_IGMP_IP_EN			BIT(3)
+#define   GC_IGMP_RED_EN_6318_268		BIT(4)
 #define   GC_MIB_AC_HDR_EN		0x10
 #define   GC_MIB_AC_EN			0x20
 #define   GC_FRM_MGMT_PORT_M		0xC0
