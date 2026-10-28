@@ -16,6 +16,8 @@ Description:
 		Note: use /sys/class/power_supply/rt9467-\*/load_switch instead.
 
 		Access: Read, Write
+
 		Valid values:
+
 		- 1: enabled
 		- 0: disabled
