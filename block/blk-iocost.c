@@ -395,8 +395,14 @@ static int ioc_autop_idx(struct ioc *ioc, struct gendisk *disk)
 	if (idx < AUTOP_SSD_DFL)
 		return AUTOP_SSD_DFL;
 
-	/* if user is overriding anything, maintain what was there */
-	if (ioc->user_qos_params || ioc->user_cost_model)
+	/*
+	 * If user is overriding anything, or a BPF model is in use, maintain
+	 * what was there: with a BPF model the builtin cost coefficients are
+	 * inert, and stepping the profile would change the builtin parameters
+	 * that apply again after switching back, for no benefit in between.
+	 */
+	if (ioc->user_qos_params || ioc->user_cost_model ||
+	    ioc_bpf_model_locked(ioc))
 		return idx;
 
 	/* step up/down based on the vrate */
@@ -2178,7 +2184,9 @@ static u64 calc_vtime_cost(struct bio *bio, struct ioc_gq *iocg, bool is_merge)
 {
 	u64 cost;
 
-	calc_vtime_cost_builtin(bio, iocg, is_merge, &cost);
+	if (!ioc_model_calc_cost(iocg->ioc, bio, is_merge, &cost))
+		calc_vtime_cost_builtin(bio, iocg, is_merge, &cost);
+
 	return cost;
 }
 
@@ -2200,11 +2208,19 @@ static void calc_size_vtime_cost_builtin(struct request *rq, struct ioc *ioc,
 	}
 }
 
-static u64 calc_size_vtime_cost(struct request *rq, struct ioc *ioc)
+/*
+ * Called from the request completion path for READ and WRITE
+ * requests, where no ioc->lock is held; the model pointer is read
+ * under RCU, matching the bio-side calc_vtime_cost().
+ */
+static u64 calc_size_vtime_cost(struct request *rq, struct ioc *ioc,
+				bool is_read)
 {
 	u64 cost;
 
-	calc_size_vtime_cost_builtin(rq, ioc, &cost);
+	if (!ioc_model_size_cost(ioc, rq, is_read, &cost))
+		calc_size_vtime_cost_builtin(rq, ioc, &cost);
+
 	return cost;
 }
 
@@ -2474,7 +2490,8 @@ static void ioc_rqos_done(struct rq_qos *rqos, struct request *rq)
 
 	on_q_ns = blk_time_get_ns() - rq->alloc_time_ns;
 	rq_wait_ns = rq->start_time_ns - rq->alloc_time_ns;
-	size_nsec = div64_u64(calc_size_vtime_cost(rq, ioc), VTIME_PER_NSEC);
+	size_nsec = div64_u64(calc_size_vtime_cost(rq, ioc, pidx == QOS_RLAT),
+			       VTIME_PER_NSEC);
 
 	ccs = get_cpu_ptr(ioc->pcpu_stat);
 
@@ -2510,6 +2527,10 @@ static void ioc_rqos_exit(struct rq_qos *rqos)
 
 	timer_shutdown_sync(&ioc->timer);
 	free_percpu(ioc->pcpu_stat);
+
+	/* eject the model on device removal */
+	ioc_bpf_eject(ioc);
+
 	kfree(ioc);
 }
 
@@ -2522,7 +2543,7 @@ static const struct rq_qos_ops ioc_rqos_ops = {
 	.exit = ioc_rqos_exit,
 };
 
-static int blk_iocost_init(struct gendisk *disk)
+int blk_iocost_init(struct gendisk *disk)
 {
 	struct ioc *ioc;
 	int i, cpu, ret;
@@ -2660,6 +2681,35 @@ static void ioc_pd_init(struct blkg_policy_data *pd)
 	spin_unlock_irqrestore(&ioc->lock, flags);
 }
 
+/*
+ * iocg_init() delivery for the attached model. blkg_create() calls this only
+ * after the blkg has been inserted into the radix tree and the queue's blkg
+ * list, so a blkg whose insertion failed is never seen here and the init/free
+ * pairing cannot be broken by a model switch in between; the caller holds
+ * queue_lock, the same lock the attachment updates are serialized with.
+ */
+static void ioc_pd_online(struct blkg_policy_data *pd)
+{
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+	struct ioc_gq *iocg = pd_to_iocg(pd);
+	struct blkcg_gq *blkg = pd_to_blkg(pd);
+	struct ioc *ioc = iocg->ioc;
+	const struct iocost_model_ops *model;
+	unsigned long flags;
+
+	if (!ioc)
+		return;
+
+	spin_lock_irqsave(&ioc->lock, flags);
+	model = ioc_attached_model_locked(ioc);
+	if (model && model->iocg_init) {
+		model->iocg_init(blkg->blkcg, ioc->rqos.disk->queue);
+		iocg->bpf_iocg_inited = true;
+	}
+	spin_unlock_irqrestore(&ioc->lock, flags);
+#endif
+}
+
 static void iocg_release(struct rcu_head *rcu)
 {
 	struct blkg_policy_data *pd =
@@ -2679,6 +2729,25 @@ static void ioc_pd_free(struct blkg_policy_data *pd)
 
 	if (ioc) {
 		spin_lock_irqsave(&ioc->lock, flags);
+
+		/*
+		 * Gate the free on the delivered flag: a blkg which never went
+		 * online never received iocg_init(), and bios still holding
+		 * the blkg can be priced between its going offline and this
+		 * free, so iocg_free() follows pd_free() rather than
+		 * pd_offline.
+		 */
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+		if (iocg->bpf_iocg_inited) {
+			const struct iocost_model_ops *amodel =
+				ioc_attached_model_locked(ioc);
+
+			if (amodel && amodel->iocg_free)
+				amodel->iocg_free(blkg->blkcg,
+						  ioc->rqos.disk->queue);
+			iocg->bpf_iocg_inited = false;
+		}
+#endif
 
 		if (!list_empty(&iocg->active_list)) {
 			struct ioc_now now;
@@ -3042,16 +3111,19 @@ static u64 ioc_cost_model_prfill(struct seq_file *sf,
 	const char *dname = blkg_dev_name(pd->blkg);
 	struct ioc *ioc = pd_to_iocg(pd)->ioc;
 	u64 *u = ioc->params.i_lcoefs;
+	const struct iocost_model_ops *model;
 
 	if (!dname)
 		return 0;
 
 	spin_lock_irq(&ioc->lock);
-	seq_printf(sf, "%s ctrl=%s model=linear "
+	model = ioc_bpf_model_locked(ioc);
+	seq_printf(sf, "%s ctrl=%s model=%s "
 		   "rbps=%llu rseqiops=%llu rrandiops=%llu "
 		   "wbps=%llu wseqiops=%llu wrandiops=%llu "
 		   "flushiops=%llu\n",
 		   dname, ioc->user_cost_model ? "user" : "auto",
+		   model ? "bpf" : "linear",
 		   u[I_LCOEF_RBPS], u[I_LCOEF_RSEQIOPS], u[I_LCOEF_RRANDIOPS],
 		   u[I_LCOEF_WBPS], u[I_LCOEF_WSEQIOPS], u[I_LCOEF_WRANDIOPS],
 		   u[I_LCOEF_FLUSHIOPS]);
@@ -3096,6 +3168,10 @@ static ssize_t ioc_cost_model_write(struct kernfs_open_file *of, char *input,
 	bool user;
 	char *body, *p;
 	int ret;
+	const struct iocost_model_ops *new_model = NULL;
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+	bool model_write = false;
+#endif
 
 	blkg_conf_init(&ctx, input);
 
@@ -3148,9 +3224,30 @@ static ssize_t ioc_cost_model_write(struct kernfs_open_file *of, char *input,
 			continue;
 		case COST_MODEL:
 			match_strlcpy(buf, &args[0], sizeof(buf));
-			if (strcmp(buf, "linear"))
-				goto unlock;
-			continue;
+			if (!strcmp(buf, "linear")) {
+				/*
+				 * Staged and committed below, so a parse
+				 * error later in the same write leaves the
+				 * model selection untouched.
+				 */
+				new_model = NULL;
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+				model_write = true;
+#endif
+				continue;
+			}
+			if (!strcmp(buf, "bpf")) {
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+				new_model = rcu_dereference_protected(
+						ioc->attached,
+						lockdep_is_held(&ioc->lock));
+				model_write = true;
+#endif
+				if (!new_model)
+					goto unlock;
+				continue;
+			}
+			goto unlock;
 		}
 
 		tok = match_token(p, i_lcoef_tokens, args);
@@ -3168,6 +3265,10 @@ static ssize_t ioc_cost_model_write(struct kernfs_open_file *of, char *input,
 	} else {
 		ioc->user_cost_model = false;
 	}
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+	if (model_write)
+		rcu_assign_pointer(ioc->model, new_model);
+#endif
 	ioc_refresh_params(ioc, true);
 
 	ret = 0;
@@ -3211,6 +3312,7 @@ struct blkcg_policy blkcg_policy_iocost = {
 	.cpd_free_fn	= ioc_cpd_free,
 	.pd_alloc_fn	= ioc_pd_alloc,
 	.pd_init_fn	= ioc_pd_init,
+	.pd_online_fn	= ioc_pd_online,
 	.pd_free_fn	= ioc_pd_free,
 	.pd_stat_fn	= ioc_pd_stat,
 };

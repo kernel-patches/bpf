@@ -229,6 +229,10 @@ config BLK_ERROR_INJECTION
 
 	  See Documentation/block/error-injection.rst for details.
 
+config BLK_CGROUP_IOCOST_BPF
+	def_bool y
+	depends on BLK_CGROUP_IOCOST && BPF_SYSCALL && BPF_JIT && DEBUG_INFO_BTF
+
 source "block/Kconfig.iosched"
 
 endif # BLOCK

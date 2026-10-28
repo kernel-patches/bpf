@@ -6785,6 +6785,7 @@ T:	git git://git.kernel.org/pub/scm/linux/kernel/git/axboe/linux.git
 F:	Documentation/admin-guide/cgroup-v1/blkio-controller.rst
 F:	block/bfq-cgroup.c
 F:	block/blk-cgroup.c
+F:	block/blk-iocost-bpf.c
 F:	block/blk-iocost.c
 F:	block/blk-iocost.h
 F:	block/blk-iolatency.c

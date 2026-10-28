@@ -22,6 +22,79 @@
 #include <asm/local64.h>
 #include "blk-rq-qos.h"
 
+struct bpf_link;
+
+/*
+ * Pluggable cost model interface for blk-iocost.
+ *
+ * A BPF struct_ops implementation can take over the cost model of one device.
+ * The device is identified by the dev member, which is set from userspace
+ * before the program is loaded; the struct_ops core owns the program lifetime.
+ * Attaching creates the ioc if needed, like an io.cost.model write, and
+ * switches the device to the BPF model with the queue frozen before
+ * rq_qos_mutex, like an io.cost.qos write, and delivers iocg_init() to the
+ * cgroups which already exist on the device. Enabling and disabling the
+ * controller stays with io.cost.qos.
+ *
+ * While a model is attached, io.cost.model selects between it and the builtin
+ * model: "model=bpf" switches to the attached model and "model=linear" back to
+ * the builtin. Neither detaches the struct_ops; only detaching does. The
+ * builtin linear coefficients are kept while the BPF model is in use and take
+ * effect again when switched back.
+ *
+ * While in use, the BPF model prices every charged IO on the device, including
+ * flushes, from the bio charging path. calc_cost() is called from the IO
+ * submission path with RCU read lock held and must not sleep. It receives the
+ * bio itself so that the model can use what it needs (operation flags, size,
+ * sector, the issuing cgroup through bio->bi_blkg, which is guaranteed
+ * non-NULL) and returns the cost of the IO in vtime units, where 1 second
+ * of device time equals VTIME_PER_SEC (2^37,
+ * available to BPF programs through vmlinux.h). The return value is clamped to
+ * 1 second of device time per IO.
+ *
+ * The struct_ops also carries the transfer cost coefficients, vtime per page
+ * for reads and writes. While the BPF model is in use, they replace the
+ * builtin coefficients in the completion-time request sizing of READ and
+ * WRITE requests, with ZONE_APPEND counted as a write. Taking over the QoS
+ * side (latency tracking, vrate control) is left for later extensions.
+ *
+ * The cgroup callbacks are bound to the iocg policy lifetime, one (cgroup,
+ * device) pair per invocation. iocg_init() is delivered from ioc_pd_online()
+ * and on attach to the cgroups already online on the device; iocg_free() on
+ * detach to the cgroups which still exist then and at pd_free() time for the
+ * rest, so that init and free pair up exactly. iocg_free() is gated on a
+ * per-iocg delivered flag, as bios can still be priced between the blkg going
+ * offline and its free. Both callbacks are called with ioc->lock held and must
+ * not sleep; the delivery points nest inside queue_lock except for iocg_free()
+ * from ioc_pd_free() in blkg_free_workfn().
+ */
+
+/*
+ * Call metadata for calc_cost()'s model_flags; the merge indicator is not a
+ * property of the bio. An enum so that the value is exported through BTF and
+ * usable from vmlinux.h.
+ */
+enum {
+	IOCOST_COST_F_MERGE	= 1 << 0,	/* called from merge path */
+};
+
+struct iocost_model_ops {
+	/*
+	 * target device (major:minor), set from userspace before load
+	 * through the struct_ops map's initial value, in the userspace
+	 * dev_t encoding new_decode_dev() accepts
+	 */
+	dev_t dev;
+
+	/* vtime per page for the completion-time request sizing */
+	u64 read_vtime_per_page;
+	u64 write_vtime_per_page;
+
+	u64 (*calc_cost)(struct bio *bio, u64 model_flags);
+	void (*iocg_init)(struct blkcg *blkcg, struct request_queue *q);
+	void (*iocg_free)(struct blkcg *blkcg, struct request_queue *q);
+};
+
 enum {
 	MILLION			= 1000000,
 
@@ -260,7 +333,14 @@ struct ioc {
 	int				autop_idx;
 	bool				user_qos_params:1;
 	bool				user_cost_model:1;
-
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+	/* the struct_ops attached to this device, NULL = none */
+	const struct iocost_model_ops	__rcu *attached;
+	/* the link which owns the attachment, written with ioc->lock held */
+	struct bpf_link			*bpf_link;
+	/* the cost model in use, NULL = builtin linear model */
+	const struct iocost_model_ops	__rcu *model;
+#endif
 };
 
 struct iocg_pcpu_stat {
@@ -278,6 +358,10 @@ struct iocg_stat {
 struct ioc_gq {
 	struct blkg_policy_data		pd;
 	struct ioc			*ioc;
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+	/* whether the attached model's iocg_init() was delivered */
+	bool				bpf_iocg_inited;
+#endif
 
 	/*
 	 * A iocg can get its weight from two sources - an explicit
@@ -433,4 +517,99 @@ static inline struct ioc_cgrp *blkcg_to_iocc(struct blkcg *blkcg)
 			    struct ioc_cgrp, cpd);
 }
 
+/*
+ * The attached struct_ops and the model in use. The writers hold
+ * ioc->lock, the hot path readers are inside rcu_read_lock() and the
+ * map is not freed until after an RCU grace period, the slow readers
+ * hold ioc->lock.
+ */
+static inline const struct iocost_model_ops *
+ioc_attached_model_locked(struct ioc *ioc)
+{
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+	return rcu_dereference_protected(ioc->attached,
+					 lockdep_is_held(&ioc->lock));
+#else
+	return NULL;
+#endif
+}
+
+static inline const struct iocost_model_ops *
+ioc_bpf_model_locked(struct ioc *ioc)
+{
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+	return rcu_dereference_protected(ioc->model,
+					 lockdep_is_held(&ioc->lock));
+#else
+	return NULL;
+#endif
+}
+
+/*
+ * Price one charged IO with the model in use into *@cost and return
+ * true, or return false when no model is in use and the builtin model
+ * must price it. The model is read under rcu_read_lock(), which the
+ * helper takes and releases itself, and the returned cost is clamped
+ * to one second of device time. calc_cost() may be invoked for a
+ * (cgroup, device) pair before iocg_init() has been delivered for
+ * it; models relying on per-pair state must tolerate that window.
+ */
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+static inline bool ioc_model_calc_cost(struct ioc *ioc, struct bio *bio,
+				       bool is_merge, u64 *cost)
+{
+	const struct iocost_model_ops *model;
+
+	rcu_read_lock();
+	model = rcu_dereference(ioc->model);
+	if (model)
+		*cost = min(model->calc_cost(bio, is_merge ?
+			    IOCOST_COST_F_MERGE : 0), VTIME_PER_SEC);
+	rcu_read_unlock();
+	return model;
+}
+#else	/* CONFIG_BLK_CGROUP_IOCOST_BPF */
+static inline bool ioc_model_calc_cost(struct ioc *ioc, struct bio *bio,
+				       bool is_merge, u64 *cost)
+{
+	return false;
+}
+#endif	/* CONFIG_BLK_CGROUP_IOCOST_BPF */
+
+/*
+ * The same for the completion-time request sizing: the transfer cost
+ * is the model's vtime per page for the request direction, and the
+ * returned cost is clamped to one second of device time.
+ */
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+static inline bool ioc_model_size_cost(struct ioc *ioc, struct request *rq,
+				       bool is_read, u64 *cost)
+{
+	const struct iocost_model_ops *model;
+
+	rcu_read_lock();
+	model = rcu_dereference(ioc->model);
+	if (model)
+		*cost = min((is_read ? model->read_vtime_per_page :
+			     model->write_vtime_per_page) *
+			    (blk_rq_stats_sectors(rq) >> IOC_SECT_TO_PAGE_SHIFT),
+			    VTIME_PER_SEC);
+	rcu_read_unlock();
+	return model;
+}
+#else	/* CONFIG_BLK_CGROUP_IOCOST_BPF */
+static inline bool ioc_model_size_cost(struct ioc *ioc, struct request *rq,
+				       bool is_read, u64 *cost)
+{
+	return false;
+}
+#endif	/* CONFIG_BLK_CGROUP_IOCOST_BPF */
+
+int blk_iocost_init(struct gendisk *disk);
+
+#ifdef CONFIG_BLK_CGROUP_IOCOST_BPF
+void ioc_bpf_eject(struct ioc *ioc);
+#else	/* CONFIG_BLK_CGROUP_IOCOST_BPF */
+static inline void ioc_bpf_eject(struct ioc *ioc) { }
+#endif	/* CONFIG_BLK_CGROUP_IOCOST_BPF */
 #endif	/* _BLK_IOCOST_H */
