@@ -123,9 +123,12 @@ void fbnic_bmc_rpc_all_multi_config(struct fbnic_dev *fbd,
 			eth_broadcast_addr(mac_addr->mask.addr8);
 			mac_addr->value.addr8[0] ^= 1;
 			mac_addr->mask.addr8[0] ^= 1;
-			set_bit(FBNIC_MAC_ADDR_T_BMC, mac_addr->act_tcam);
 			mac_addr->state = FBNIC_TCAM_S_ADD;
 		}
+		/* Tag it even if valid, the host may have held on to it while
+		 * fbnic_bmc_rpc_disable() stripped the BMC tag.
+		 */
+		set_bit(FBNIC_MAC_ADDR_T_BMC, mac_addr->act_tcam);
 		assign_bit(FBNIC_MAC_ADDR_T_ALLMULTI, mac_addr->act_tcam,
 			   enable_host);
 	} else {
@@ -172,12 +175,88 @@ void fbnic_bmc_rpc_all_multi_config(struct fbnic_dev *fbd,
 	act_tcam->state = FBNIC_TCAM_S_UPDATE;
 }
 
+/**
+ * fbnic_bmc_rpc_disable - remove the BMC MAC and action rules
+ * @fbd: Pointer to fbnic device struct
+ *
+ * Strip everything a previous fbnic_bmc_rpc_init() programmed. Idempotent,
+ * and only marks shadow state; entries that are rebuilt before the next
+ * hardware write are rewritten in place rather than cleared and re-added.
+ */
+static void fbnic_bmc_rpc_disable(struct fbnic_dev *fbd)
+{
+	struct fbnic_act_tcam *act_tcam;
+	int idx;
+
+	/* Drop the BMC's claim; entries the host also uses survive */
+	for (idx = ARRAY_SIZE(fbd->mac_addr); idx--;) {
+		struct fbnic_mac_addr *mac_addr = &fbd->mac_addr[idx];
+
+		if (mac_addr->state == FBNIC_TCAM_S_DISABLED)
+			continue;
+
+		__fbnic_xc_unsync(mac_addr, FBNIC_MAC_ADDR_T_BMC);
+	}
+
+	/* Delete in any live state, not just VALID: init leaves it UPDATE and
+	 * ifdown demotes VALID to UPDATE.
+	 */
+	act_tcam = &fbd->act_tcam[FBNIC_RPC_ACT_TBL_BMC_OFFSET];
+	if (act_tcam->state != FBNIC_TCAM_S_DISABLED)
+		act_tcam->state = FBNIC_TCAM_S_DELETE;
+
+	/* fbnic_rss_reinit() only programs the host-unicast entries while a BMC
+	 * is present, and does not clear them otherwise. Delete them here and
+	 * let it put them back if they are still needed.
+	 */
+	for (idx = 0; idx < FBNIC_RSS_EN_NUM_UNICAST; idx++) {
+		act_tcam = &fbd->act_tcam[FBNIC_RPC_ACT_TBL_RSS_OFFSET + idx];
+		if (act_tcam->state != FBNIC_TCAM_S_DISABLED)
+			act_tcam->state = FBNIC_TCAM_S_DELETE;
+	}
+}
+
+/**
+ * fbnic_bmc_mc_reserved - find a BMC multicast entry in the BMC region
+ * @fbd: Pointer to fbnic device struct
+ * @addr: Multicast address to look for
+ *
+ * fbnic_sift_macda() moves a BMC-only multicast entry into a free BMC slot,
+ * and __fbnic_mc_sync() only pulls it back out when a shared slot is free.
+ *
+ * Return: the entry holding @addr, or NULL if there is none.
+ */
+static struct fbnic_mac_addr *fbnic_bmc_mc_reserved(struct fbnic_dev *fbd,
+						    const u8 *addr)
+{
+	int idx;
+
+	for (idx = FBNIC_RPC_TCAM_MACDA_BMC_ADDR_IDX + 1;
+	     idx < FBNIC_RPC_TCAM_MACDA_BROADCAST_IDX; idx++) {
+		struct fbnic_mac_addr *mac_addr = &fbd->mac_addr[idx];
+
+		if (mac_addr->state == FBNIC_TCAM_S_DISABLED)
+			continue;
+
+		if (is_zero_ether_addr(mac_addr->mask.addr8) &&
+		    ether_addr_equal(mac_addr->value.addr8, addr))
+			return mac_addr;
+	}
+
+	return NULL;
+}
+
 void fbnic_bmc_rpc_init(struct fbnic_dev *fbd)
 {
 	int i = FBNIC_RPC_TCAM_MACDA_BMC_ADDR_IDX;
 	struct fbnic_act_tcam *act_tcam;
 	struct fbnic_mac_addr *mac_addr;
 	int j;
+
+	/* Start from nothing so a MAC the BMC no longer reports does not
+	 * keep its tag, then rebuild from what firmware last sent.
+	 */
+	fbnic_bmc_rpc_disable(fbd);
 
 	/* Check if BMC is present */
 	if (!fbnic_bmc_present(fbd))
@@ -191,10 +270,16 @@ void fbnic_bmc_rpc_init(struct fbnic_dev *fbd)
 		if (is_zero_ether_addr(bmc_mac))
 			continue;
 
-		if (is_multicast_ether_addr(bmc_mac))
+		if (is_multicast_ether_addr(bmc_mac)) {
 			mac_addr = __fbnic_mc_sync(fbd, bmc_mac);
-		else
+			/* With the shared region full, keep the copy the
+			 * teardown left in the BMC region in place.
+			 */
+			if (!mac_addr)
+				mac_addr = fbnic_bmc_mc_reserved(fbd, bmc_mac);
+		} else {
 			mac_addr = &fbd->mac_addr[i++];
+		}
 
 		if (!mac_addr) {
 			netdev_err(fbd->netdev,
@@ -236,73 +321,6 @@ void fbnic_bmc_rpc_init(struct fbnic_dev *fbd)
 	act_tcam->state = FBNIC_TCAM_S_UPDATE;
 }
 
-/**
- * fbnic_bmc_rules_present - is the BMC currently programmed into the filters?
- * @fbd: Pointer to fbnic device struct
- *
- * The BMC tag is only set while a BMC is present, so it doubles as the state.
- *
- * Return: true if any MACDA entry carries the BMC tag, false otherwise.
- */
-static bool fbnic_bmc_rules_present(struct fbnic_dev *fbd)
-{
-	int idx;
-
-	for (idx = ARRAY_SIZE(fbd->mac_addr); idx--;) {
-		struct fbnic_mac_addr *mac_addr = &fbd->mac_addr[idx];
-
-		if (mac_addr->state == FBNIC_TCAM_S_DISABLED)
-			continue;
-
-		if (test_bit(FBNIC_MAC_ADDR_T_BMC, mac_addr->act_tcam))
-			return true;
-	}
-
-	return false;
-}
-
-/**
- * fbnic_bmc_rpc_disable - remove the BMC MAC and action rules
- * @fbd: Pointer to fbnic device struct
- *
- * Undo fbnic_bmc_rpc_init() when the BMC drops its NC-SI channel while the
- * host interface stays up. Only marks shadow state; the caller's
- * __fbnic_set_rx_mode() pushes it to hardware, so ordering here is moot.
- */
-static void fbnic_bmc_rpc_disable(struct fbnic_dev *fbd)
-{
-	struct fbnic_act_tcam *act_tcam;
-	int idx;
-
-	/* Drop the BMC's claim; entries the host also uses survive */
-	for (idx = ARRAY_SIZE(fbd->mac_addr); idx--;) {
-		struct fbnic_mac_addr *mac_addr = &fbd->mac_addr[idx];
-
-		if (mac_addr->state == FBNIC_TCAM_S_DISABLED)
-			continue;
-
-		__fbnic_xc_unsync(mac_addr, FBNIC_MAC_ADDR_T_BMC);
-	}
-
-	/* Delete in any live state, not just VALID: init leaves it UPDATE and
-	 * ifdown demotes VALID to UPDATE. A miss leaks the rule for good, as
-	 * fbnic_bmc_rules_present() keys off the MACDA tag just cleared above.
-	 */
-	act_tcam = &fbd->act_tcam[FBNIC_RPC_ACT_TBL_BMC_OFFSET];
-	if (act_tcam->state != FBNIC_TCAM_S_DISABLED)
-		act_tcam->state = FBNIC_TCAM_S_DELETE;
-
-	/* fbnic_rss_reinit() only programs the host-unicast entries while a BMC
-	 * is present, so the reinit after this would leave them stale and valid
-	 * in hardware. Delete them to converge on the no-BMC layout.
-	 */
-	for (idx = 0; idx < FBNIC_RSS_EN_NUM_UNICAST; idx++) {
-		act_tcam = &fbd->act_tcam[FBNIC_RPC_ACT_TBL_RSS_OFFSET + idx];
-		if (act_tcam->state != FBNIC_TCAM_S_DISABLED)
-			act_tcam->state = FBNIC_TCAM_S_DELETE;
-	}
-}
-
 void fbnic_bmc_rpc_check(struct fbnic_dev *fbd)
 {
 	struct fbnic_net *fbn = netdev_priv(fbd->netdev);
@@ -328,13 +346,10 @@ void fbnic_bmc_rpc_check(struct fbnic_dev *fbd)
 	 */
 	if (test_and_clear_bit(FBNIC_FW_CAP_F_BMC_TCAM_REINIT,
 			       &fbd->fw_cap.state)) {
-		if (!fbnic_bmc_present(fbd) && fbnic_bmc_rules_present(fbd))
-			fbnic_bmc_rpc_disable(fbd);
-		else
-			fbnic_bmc_rpc_init(fbd);
+		fbnic_bmc_rpc_init(fbd);
 
-		/* Neither path touches the RSS actions, which carry the mc/bc
-		 * copy to the BMC, so recompute them alongside.
+		/* The RSS actions carry the mc/bc copy to the BMC and depend on
+		 * its presence, so recompute them alongside.
 		 */
 		fbnic_rss_reinit(fbd, fbn);
 		netif_addr_lock_bh(fbd->netdev);
