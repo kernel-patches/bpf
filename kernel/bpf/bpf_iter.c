@@ -734,10 +734,30 @@ int bpf_iter_run_prog(struct bpf_prog *prog, void *ctx)
 	return ret == 0 ? 0 : -EAGAIN;
 }
 
-BPF_CALL_4(bpf_for_each_map_elem, struct bpf_map *, map, void *, callback_fn,
+/*
+ * The op has a pad for the callback and leaves like a callback does when it is
+ * taken, so it is called like one, with the kCFI check for its own type. The
+ * verifier calls the op directly when it knows the map.
+ */
+BPF_CB_PAD_TYPE(__bpf_for_each_op, typeof(*((struct bpf_map_ops *)0)->map_for_each_callback));
+
+BPF_CALL_x(4, noinline, bpf_for_each_map_elem, struct bpf_map *, map, void *, callback_fn,
 	   void *, callback_ctx, u64, flags)
 {
+#if BPF_HAS_CB_PADS
+	u64 ret;
+
+	__bpf_call_cb(__bpf_for_each_op, map->ops->map_for_each_callback, map, callback_fn,
+		      callback_ctx, flags, 0, ret, unwound);
+	return ret;
+
+unwound:
+	bpf_unwind_leave();
+	return ret;
+#else
+	/* The plain call, with the type of the op: the fallback of bpf_call_cb() has a callback's */
 	return map->ops->map_for_each_callback(map, callback_fn, callback_ctx, flags);
+#endif
 }
 
 const struct bpf_func_proto bpf_for_each_map_elem_proto = {
