@@ -4,6 +4,9 @@
 
 #define RB_MAXLVL_PRINT (16)
 
+/* Cache line size assumed for keeping the lockless fields apart. */
+#define RB_CACHELINE_SIZE (64)
+
 struct rbnode;
 
 struct rbnode {
@@ -56,13 +59,33 @@ enum rbtree_insert_mode {
 };
 
 struct rbtree {
+	/* Writer fields, on a cache line of their own. */
 	struct rbnode __arena *root;
 	enum rbtree_alloc alloc;
 	enum rbtree_insert_mode insert;
+
+	/*
+	 * The leftmost node and the node count on their own cache line.
+	 * The writer keeps them current, and readers may read them without
+	 * the writer's lock (see rb_first() and friends).
+	 */
+	struct {
+		struct rbnode __arena *first;
+		uint64_t nr;
+	} __attribute__((aligned(RB_CACHELINE_SIZE)));
 };
 
 #ifdef __BPF__
 struct rbtree __arena *rb_create(enum rbtree_alloc alloc, enum rbtree_insert_mode insert);
+
+/*
+ * Initialize and finalize a tree embedded in another arena object.
+ * rb_fini() frees the nodes of an RB_ALLOC tree and fails with -EBUSY on a
+ * non-empty RB_NOALLOC tree. It leaves the tree's memory to its owner.
+ */
+int rb_init(struct rbtree __arena *rbtree, enum rbtree_alloc alloc,
+	    enum rbtree_insert_mode insert);
+int rb_fini(struct rbtree __arena *rbtree);
 
 int rb_destroy(struct rbtree __arena *rbtree);
 int rb_insert(struct rbtree __arena *rbtree, u64 key, u64 value);
@@ -79,5 +102,35 @@ struct rbnode __arena *rb_node_alloc(u64 key, u64 value);
 void rb_node_free(struct rbnode __arena *rbnode);
 
 int rb_integrity_check(struct rbtree __arena *rbtree);
+
+/*
+ * Lockless reads of the head and the node count. They need not be called
+ * under the writer's lock, so they are advisory: the tree may change before
+ * the caller acts on the result. The node rb_first() returns may have
+ * left the tree, or been freed in an RB_ALLOC tree, by the time the
+ * caller reads it. The count is a separate read and need not agree
+ * with the head.
+ */
+static __always_inline struct rbnode __arena *rb_first(struct rbtree __arena *rbtree)
+{
+	return READ_ONCE(rbtree->first);
+}
+
+/* -ENOENT if the tree is empty, 0 with the leftmost key in @key otherwise. */
+static __always_inline int rb_first_key(struct rbtree __arena *rbtree, u64 *key)
+{
+	struct rbnode __arena *first = READ_ONCE(rbtree->first);
+
+	if (!first)
+		return -ENOENT;
+
+	*key = READ_ONCE(first->key);
+	return 0;
+}
+
+static __always_inline u64 rb_nr_nodes(struct rbtree __arena *rbtree)
+{
+	return READ_ONCE(rbtree->nr);
+}
 
 #endif /* __BPF__ */

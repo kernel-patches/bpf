@@ -285,6 +285,215 @@ __weak int test_rbtree_duplicate_fifo(void)
 	return rb_destroy(rbtree);
 }
 
+/*
+ * Check the lockless head and count against a walk to the leftmost node,
+ * which does not use the cached head.
+ */
+__weak int rbtree_check_first(struct rbtree __arena *rbtree, u64 nr)
+{
+	struct rbnode __arena *least = rbtree->root;
+	u64 key;
+
+	while (least && least->left && can_loop)
+		least = least->left;
+
+	if (rb_first(rbtree) != least)
+		return 1;
+
+	if (rb_nr_nodes(rbtree) != nr)
+		return 2;
+
+	if (!least)
+		return rb_first_key(rbtree, &key) == -ENOENT ? 0 : 3;
+
+	if (rb_first_key(rbtree, &key) || key != least->key)
+		return 4;
+
+	return 0;
+}
+
+#define FIRST_NR_NODES	64
+
+static struct rbnode __arena *first_nodes[FIRST_NR_NODES];
+
+SEC("syscall")
+__weak int test_rbtree_first(void)
+{
+	struct rbtree __arena *rbtree;
+	struct rbnode __arena *node;
+	u64 seed = 12345, nr = 0;
+	int ret, i;
+
+	rbtree = rb_create(RB_NOALLOC, RB_DUPLICATE);
+	if (!rbtree)
+		return 1;
+
+	ret = rbtree_check_first(rbtree, 0);
+	if (ret)
+		return 10 + ret;
+
+	/* Pseudo-random keys with repeats, so the head moves and gets ties. */
+	for (i = 0; i < FIRST_NR_NODES && can_loop; i++) {
+		seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+		node = rb_node_alloc((seed >> 33) % 32, i);
+		if (!node)
+			return 2;
+
+		first_nodes[i] = node;
+
+		ret = rb_insert_node(rbtree, node);
+		if (ret)
+			return 3;
+
+		ret = rbtree_check_first(rbtree, ++nr);
+		if (ret)
+			return 20 + ret;
+	}
+
+	/* Remove every other node in insertion order, head or not. */
+	for (i = 0; i < FIRST_NR_NODES && can_loop; i += 2) {
+		ret = rb_remove_node(rbtree, first_nodes[i]);
+		if (ret)
+			return 4;
+
+		rb_node_free(first_nodes[i]);
+
+		ret = rbtree_check_first(rbtree, --nr);
+		if (ret)
+			return 30 + ret;
+	}
+
+	/* Remove the head of the remaining half, emptying the tree. */
+	for (i = 0; i < FIRST_NR_NODES / 2 && can_loop; i++) {
+		node = rb_first(rbtree);
+		if (!node)
+			return 5;
+
+		ret = rb_remove_node(rbtree, node);
+		if (ret)
+			return 6;
+
+		rb_node_free(node);
+
+		ret = rbtree_check_first(rbtree, --nr);
+		if (ret)
+			return 40 + ret;
+	}
+
+	return rb_destroy(rbtree);
+}
+
+SEC("syscall")
+__weak int test_rbtree_first_update(void)
+{
+	struct rbtree __arena *rbtree;
+	struct rbnode __arena *node;
+	int ret;
+
+	rbtree = rb_create(RB_ALLOC, RB_UPDATE);
+	if (!rbtree)
+		return 1;
+
+	if (rb_insert(rbtree, 5, 1))
+		return 2;
+
+	if (rb_insert(rbtree, 5, 2))
+		return 3;
+
+	node = rb_first(rbtree);
+	if (!node || node->key != 5 || node->value != 2)
+		return 4;
+
+	ret = rbtree_check_first(rbtree, 1);
+	if (ret)
+		return 10 + ret;
+
+	if (rb_insert(rbtree, 3, 3))
+		return 5;
+
+	ret = rbtree_check_first(rbtree, 2);
+	if (ret)
+		return 20 + ret;
+
+	if (rb_remove(rbtree, 3) || rb_remove(rbtree, 5))
+		return 6;
+
+	ret = rbtree_check_first(rbtree, 0);
+	if (ret)
+		return 30 + ret;
+
+	return rb_destroy(rbtree);
+}
+
+struct rb_embed {
+	u64 pad;
+	struct rbtree tree;
+};
+
+SEC("syscall")
+__weak int test_rbtree_embedded(void)
+{
+	struct rb_embed __arena *embed;
+	struct rbtree __arena *rbtree;
+	struct rbnode __arena *node;
+	int ret, i;
+
+	embed = arena_malloc(sizeof(*embed));
+	if (!embed)
+		return 1;
+
+	rbtree = &embed->tree;
+
+	/* Poison the fields rb_init() must set. */
+	WRITE_ONCE(rbtree->root, (struct rbnode __arena *)~0ULL);
+	WRITE_ONCE(rbtree->first, (struct rbnode __arena *)~0ULL);
+	WRITE_ONCE(rbtree->nr, ~0ULL);
+
+	if (rb_init(rbtree, RB_NOALLOC, RB_DUPLICATE))
+		return 2;
+
+	ret = rbtree_check_first(rbtree, 0);
+	if (ret)
+		return 10 + ret;
+
+	for (i = 0; i < 4 && can_loop; i++) {
+		node = rb_node_alloc(4 - i, i);
+		if (!node)
+			return 3;
+
+		if (rb_insert_node(rbtree, node))
+			return 4;
+
+		ret = rbtree_check_first(rbtree, i + 1);
+		if (ret)
+			return 20 + ret;
+	}
+
+	if (rb_fini(rbtree) != -EBUSY)
+		return 7;
+
+	for (i = 0; i < 4 && can_loop; i++) {
+		node = rb_first(rbtree);
+		if (!node || node->key != i + 1)
+			return 5;
+
+		if (rb_remove_node(rbtree, node))
+			return 6;
+
+		rb_node_free(node);
+
+		ret = rbtree_check_first(rbtree, 3 - i);
+		if (ret)
+			return 30 + ret;
+	}
+
+	if (rb_fini(rbtree))
+		return 8;
+
+	arena_free(embed);
+	return 0;
+}
+
 static inline int
 clean_up_noalloc_tree(struct rbtree __arena *rbtree)
 {
