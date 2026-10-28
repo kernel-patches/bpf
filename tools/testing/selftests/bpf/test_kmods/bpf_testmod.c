@@ -88,6 +88,11 @@ struct bpf_testmod_oob {
 
 __bpf_hook_start();
 
+noinline int bpf_testmod_large_arg(struct prog_test_ret_big a)
+{
+	return a.a + a.b + a.c;
+}
+
 noinline int
 bpf_testmod_test_struct_arg_1(struct bpf_testmod_struct_arg_2 a, int b, int c) {
 	bpf_testmod_test_struct_arg_result = a.a + a.b  + b + c;
