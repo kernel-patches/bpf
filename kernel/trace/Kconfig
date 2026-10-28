@@ -87,7 +87,8 @@ config HAVE_DYNAMIC_FTRACE_WITH_JMP
 	bool
 	help
 	  If the architecture supports to replace the __fentry__ with a
-	  "jmp" instruction.
+	  "jmp" instruction. The top bit of its kernel text addresses must
+	  be set, as clearing it marks a direct trampoline to jmp to.
 
 config HAVE_SYSCALL_TRACEPOINTS
 	bool
