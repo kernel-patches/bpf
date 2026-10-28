@@ -4531,6 +4531,8 @@ struct bpf_task_work_kern {
 	struct bpf_task_work_ctx *ctx;
 };
 
+#define BPF_TASK_WORK_DEAD ERR_PTR(-ENOENT)
+
 static void bpf_task_work_ctx_reset(struct bpf_task_work_ctx *ctx)
 {
 	if (ctx->prog) {
@@ -4809,7 +4811,13 @@ release_prog:
  * @callback: pointer to BPF subprogram to call
  * @aux: pointer to bpf_prog_aux of the caller BPF program, implicitly set by the verifier
  *
- * Return: 0 if task work has been scheduled successfully, negative error code otherwise
+ * After deletion completes, a non-preallocated HASH/RHASH element rejects
+ * new context acquisition until its storage is allocated again. Replacing
+ * a non-preallocated HASH element has the same effect. Scheduling racing
+ * with retirement may succeed and then be cancelled.
+ *
+ * Return: 0 if scheduling irq_work was queued, -ENOENT for a retired slot,
+ * or another negative error code on failure.
  */
 __bpf_kfunc int bpf_task_work_schedule_signal(struct task_struct *task, struct bpf_task_work *tw,
 					      void *map__const_map, bpf_task_work_callback_t callback,
@@ -4827,7 +4835,10 @@ __bpf_kfunc int bpf_task_work_schedule_signal(struct task_struct *task, struct b
  * @callback: pointer to BPF subprogram to call
  * @aux: pointer to bpf_prog_aux of the caller BPF program, implicitly set by the verifier
  *
- * Return: 0 if task work has been scheduled successfully, negative error code otherwise
+ * See bpf_task_work_schedule_signal() for retired-element handling.
+ *
+ * Return: 0 if scheduling irq_work was queued, -ENOENT for a retired slot,
+ * or another negative error code on failure.
  */
 __bpf_kfunc int bpf_task_work_schedule_resume(struct task_struct *task, struct bpf_task_work *tw,
 					      void *map__const_map, bpf_task_work_callback_t callback,
@@ -5047,17 +5058,13 @@ static void bpf_task_work_cancel_scheduled(struct irq_work *irq_work)
 	bpf_task_work_ctx_put(ctx); /* and here we put map's own ref that was transferred to us */
 }
 
-void bpf_task_work_cancel_and_free(void *val)
+/* ctx must no longer be published in its map value's slot. */
+static void bpf_task_work_finish_cancel(struct bpf_task_work_ctx *ctx,
+					enum bpf_task_work_state state)
 {
-	struct bpf_task_work_kern *twk = val;
-	struct bpf_task_work_ctx *ctx;
-	enum bpf_task_work_state state;
-
-	ctx = xchg(&twk->ctx, NULL);
-	if (!ctx)
+	/* The first canceller owns the map's reference. */
+	if (state == BPF_TW_FREED)
 		return;
-
-	state = xchg(&ctx->state, BPF_TW_FREED);
 	if (state == BPF_TW_SCHEDULED) {
 		/* run in irq_work to avoid locks in NMI */
 		init_irq_work(&ctx->irq_work, bpf_task_work_cancel_scheduled);
@@ -5066,6 +5073,59 @@ void bpf_task_work_cancel_and_free(void *val)
 	}
 
 	bpf_task_work_ctx_put(ctx); /* put bpf map's ref */
+}
+
+void bpf_task_work_cancel_and_free(void *val)
+{
+	struct bpf_task_work_kern *twk = val;
+	struct bpf_task_work_ctx *ctx;
+	enum bpf_task_work_state state;
+
+	/* Another canceller can drop the map's reference. */
+	guard(rcu)();
+	ctx = READ_ONCE(twk->ctx);
+	if (IS_ERR_OR_NULL(ctx))
+		return;
+
+	/*
+	 * Stop new callbacks before detaching the context, so deletion cannot
+	 * miss a context that can still enter RUNNING. Preserve a concurrent
+	 * deletion's marker, or a context installed after element reuse.
+	 */
+	state = xchg(&ctx->state, BPF_TW_FREED);
+	(void)cmpxchg(&twk->ctx, ctx, NULL);
+	/* A failed CAS also means ctx was detached. Only now may it be freed. */
+	bpf_task_work_finish_cancel(ctx, state);
+}
+
+/* Called before returning an element to the allocator. */
+void bpf_task_work_free(struct bpf_map *map, void *value)
+{
+	struct bpf_task_work_kern *twk;
+	struct bpf_task_work_ctx *ctx;
+	enum bpf_task_work_state state;
+
+	if (!btf_record_has_field(map->record, BPF_TASK_WORK))
+		return;
+	twk = value + map->record->task_work_off;
+
+	guard(rcu)();
+	ctx = xchg(&twk->ctx, BPF_TASK_WORK_DEAD);
+	if (IS_ERR_OR_NULL(ctx))
+		return;
+	state = xchg(&ctx->state, BPF_TW_FREED);
+	bpf_task_work_finish_cancel(ctx, state);
+}
+
+/* Only allocator acquisition may reopen a retired task-work slot. */
+void bpf_task_work_init(struct bpf_map *map, void *value)
+{
+	struct bpf_task_work_kern *twk;
+
+	if (!btf_record_has_field(map->record, BPF_TASK_WORK))
+		return;
+	twk = value + map->record->task_work_off;
+	(void)cmpxchg(&twk->ctx, BPF_TASK_WORK_DEAD, NULL);
 }
 
 BTF_KFUNCS_START(generic_btf_ids)

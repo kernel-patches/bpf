@@ -1142,6 +1142,7 @@ find_first_elem:
 
 static void htab_elem_free(struct bpf_htab *htab, struct htab_elem *l)
 {
+	bpf_task_work_free(&htab->map, htab_elem_value(l, htab->map.key_size));
 	check_and_cancel_fields(htab, l);
 
 	if (htab->map.map_type == BPF_MAP_TYPE_PERCPU_HASH)
@@ -1317,6 +1318,7 @@ static struct htab_elem *alloc_htab_elem(struct bpf_htab *htab, void *key,
 			goto dec_count;
 		}
 		l_new = container + htab->elem_offset;
+		bpf_task_work_init(&htab->map, htab_elem_value(l_new, key_size));
 	}
 
 	if (htab_has_hash(htab))
@@ -3105,6 +3107,7 @@ static void rhtab_free_elem(void *ptr, void *arg)
 	struct bpf_rhtab *rhtab = arg;
 	struct rhtab_elem *elem = ptr;
 
+	bpf_task_work_free(&rhtab->map, rhtab_elem_value(elem, rhtab->map.key_size));
 	bpf_map_free_internal_structs(&rhtab->map, rhtab_elem_value(elem, rhtab->map.key_size));
 	bpf_mem_cache_free_rcu(&rhtab->ma, elem);
 }
@@ -3177,6 +3180,7 @@ static int rhtab_delete_elem(struct bpf_rhtab *rhtab, struct rhtab_elem *elem, v
 		rhtab_read_elem_value(&rhtab->map, copy, elem, flags);
 		check_and_init_map_value(&rhtab->map, copy);
 	}
+	bpf_task_work_free(&rhtab->map, rhtab_elem_value(elem, rhtab->map.key_size));
 	bpf_obj_cancel_fields(&rhtab->map,
 			      rhtab_elem_value(elem, rhtab->map.key_size));
 	bpf_mem_cache_free_rcu(&rhtab->ma, elem);
@@ -3277,6 +3281,7 @@ static long rhtab_map_update_elem(struct bpf_map *map, void *key, void *value, u
 	if (!elem)
 		return -ENOMEM;
 
+	bpf_task_work_init(map, rhtab_elem_value(elem, map->key_size));
 	memcpy(elem->data, key, map->key_size);
 	copy_map_value(map, rhtab_elem_value(elem, map->key_size), value);
 
@@ -3291,6 +3296,8 @@ static long rhtab_map_update_elem(struct bpf_map *map, void *key, void *value, u
 	bpf_enable_instrumentation();
 
 	if (tmp) {
+		/* A reader of a previous incarnation can still hold this value. */
+		bpf_task_work_free(map, rhtab_elem_value(elem, map->key_size));
 		bpf_mem_cache_free(&rhtab->ma, elem);
 		if (IS_ERR(tmp))
 			return PTR_ERR(tmp);
