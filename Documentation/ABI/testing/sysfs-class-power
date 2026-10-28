@@ -619,6 +619,25 @@ Description:
 		"Ship"    (4) Ship mode.
 		============= ==================================
 
+What:		/sys/class/power_supply/<supply_name>/liquid_detection_control
+Date:		October 2026
+Contact:	linux-pm@vger.kernel.org
+Description:
+		Devices can have built-in liquid detection functionality. This
+		can for example be used to mitigate port corrosion caused by
+		moisture. This entry controls a device's liquid detection.
+
+		Access: Read, Write
+
+		Valid values:
+
+		============= ===============================================
+		"Unknown" (0) Unknown state.
+		"Off"     (1) Liquid detection is disabled.
+		"Auto"    (2) Liquid detection is checked periodically.
+		"Once"    (3) Check for liquid once then transition to "Off".
+		============= ===============================================
+
 **USB Properties**
 
 What:		/sys/class/power_supply/<supply_name>/input_current_limit
