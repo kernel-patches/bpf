@@ -520,12 +520,16 @@ struct fbnic_mac_addr *__fbnic_mc_sync(struct fbnic_dev *fbd,
 	     --i > FBNIC_RPC_TCAM_MACDA_BROADCAST_IDX;) {
 		struct fbnic_mac_addr *mac_addr = &fbd->mac_addr[i];
 
-		if (mac_addr->state == FBNIC_TCAM_S_DISABLED) {
-			avail_addr = mac_addr;
-		} else if (ether_addr_equal(mac_addr->value.addr8, addr)) {
+		if (mac_addr->state != FBNIC_TCAM_S_DISABLED &&
+		    ether_addr_equal(mac_addr->value.addr8, addr)) {
 			avail_addr = mac_addr;
 			break;
 		}
+
+		/* An entry waiting to be deleted is as good as a free one */
+		if (mac_addr->state == FBNIC_TCAM_S_DISABLED ||
+		    mac_addr->state == FBNIC_TCAM_S_DELETE)
+			avail_addr = mac_addr;
 	}
 
 	/* Scan the BMC addresses to see if it may have already
@@ -551,9 +555,12 @@ struct fbnic_mac_addr *__fbnic_mc_sync(struct fbnic_dev *fbd,
 		break;
 	}
 
-	if (avail_addr && avail_addr->state == FBNIC_TCAM_S_DISABLED) {
+	if (avail_addr && (avail_addr->state == FBNIC_TCAM_S_DISABLED ||
+			   avail_addr->state == FBNIC_TCAM_S_DELETE)) {
 		ether_addr_copy(avail_addr->value.addr8, addr);
 		eth_zero_addr(avail_addr->mask.addr8);
+		bitmap_zero(avail_addr->act_tcam,
+			    FBNIC_RPC_TCAM_ACT_NUM_ENTRIES);
 		avail_addr->state = FBNIC_TCAM_S_ADD;
 	}
 
