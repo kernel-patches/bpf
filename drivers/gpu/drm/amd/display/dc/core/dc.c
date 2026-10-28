@@ -2850,6 +2850,8 @@ void dc_post_update_surfaces_to_stream(struct dc *dc)
 	else {
 		TRACE_DCN_CLOCK_STATE(&context->bw_ctx.bw.dcn.clk);
 
+		dc_exit_ips_for_hw_access(dc);
+
 		if (is_flip_pending_in_pipes(dc, context))
 			return;
 
