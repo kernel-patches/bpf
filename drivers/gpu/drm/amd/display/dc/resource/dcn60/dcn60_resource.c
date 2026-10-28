@@ -1956,7 +1956,8 @@ static struct resource_funcs dcn60_res_pool_funcs = {
 	.build_pipe_pix_clk_params = dcn60_build_pipe_pix_clk_params,
 	.get_power_profile = dcn60_get_power_profile,
 	.program_mcache_pipe_config = dcn60_program_mcache_pipe_config,
-	.get_default_tiling_info = dcn401_get_default_tiling_info
+	.get_default_tiling_info = dcn401_get_default_tiling_info,
+	.get_vstartup_for_pipe = dcn401_get_vstartup_for_pipe
 };
 
 static uint32_t read_pipe_fuses(struct dc_context *ctx)
@@ -2055,6 +2056,7 @@ static bool dcn60_resource_construct(
 	dc->caps.dmcub_support = true;
 	dc->caps.utm_support = true;
 	dc->caps.max_v_total = (1 << 15) - 1;
+	dc->caps.vtotal_limited_by_fp2 = true;
 
 	pool->base.ctx = ctx;
 
