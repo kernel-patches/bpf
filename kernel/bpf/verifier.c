@@ -11416,10 +11416,10 @@ static bool helper_has_cb_pad(enum bpf_func_id func_id)
 	}
 }
 
-/* The kfunc calls its callback with a pad. None yet. */
+/* The kfunc calls its callback with a pad */
 static bool kfunc_has_cb_pad(u32 btf_id)
 {
-	return false;
+	return is_bpf_rbtree_add_kfunc(btf_id);
 }
 
 static bool insn_has_cb_pad(struct bpf_insn *insn)
@@ -15738,7 +15738,21 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		id = regs[BPF_REG_2].id;
 		insn_aux->insert_off = regs[BPF_REG_2].var_off.value;
 		insn_aux->kptr_struct_meta = btf_find_struct_meta(meta.arg_btf, meta.arg_btf_id);
-		ref_convert_owning_non_owning(env, id);
+		/*
+		 * The comparator unwound: the node never went in, and the
+		 * kfunc dropped it on its way to the pad. The comparator was
+		 * handed the node too, and may have unwound with it in r0, so
+		 * every non-owning reference goes. Otherwise the node is in
+		 * the tree now.
+		 */
+		if (env->cur_state->unwound) {
+			invalidate_non_owning_refs(env);
+			err = release_reference(env, id);
+			if (err)
+				return err;
+		} else {
+			ref_convert_owning_non_owning(env, id);
+		}
 	}
 
 	if (meta.func_id == special_kfunc_list[KF_bpf_throw]) {

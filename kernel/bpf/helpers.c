@@ -2,6 +2,7 @@
 /* Copyright (c) 2011-2014 PLUMgrid, http://plumgrid.com
  */
 #include <linux/bpf.h>
+#include <linux/bpf_unwind.h>
 #include <linux/btf.h>
 #include <linux/bpf-cgroup.h>
 #include <linux/cgroup.h>
@@ -2761,17 +2762,20 @@ __bpf_kfunc struct bpf_rb_node *bpf_rbtree_remove(struct bpf_rb_root *root,
 	return (struct bpf_rb_node *)n;
 }
 
-/* Need to copy rbtree_add_cached's logic here because our 'less' is a BPF
- * program
+/*
+ * Need to copy rbtree_add_cached's logic here because our 'less' is a BPF
+ * program. The pad leaves from the frame that the BPF code called, so the body
+ * is inlined into both spellings of the kfunc.
  */
-static int __bpf_rbtree_add(struct bpf_rb_root *root,
-			    struct bpf_rb_node_kern *node,
-			    void *less, struct btf_record *rec, u64 off)
+static __always_inline long __bpf_rbtree_add(struct bpf_rb_root *root,
+					     struct bpf_rb_node_kern *node,
+					     void *less, struct btf_record *rec, u64 off)
 {
 	struct rb_node **link = &((struct rb_root_cached *)root)->rb_root.rb_node;
 	struct rb_node *parent = NULL, *n = &node->rb_node;
 	bpf_callback_t cb = (bpf_callback_t)less;
 	bool leftmost = true;
+	u64 r0;
 
 	/* node->owner != NULL implies !RB_EMPTY_NODE(n), no need to separately
 	 * check the latter
@@ -2784,7 +2788,8 @@ static int __bpf_rbtree_add(struct bpf_rb_root *root,
 
 	while (*link) {
 		parent = *link;
-		if (cb((uintptr_t)node, (uintptr_t)parent, 0, 0, 0)) {
+		bpf_call_cb(cb, node, parent, 0, 0, 0, r0, unwound);
+		if (r0) {
 			link = &parent->rb_left;
 		} else {
 			link = &parent->rb_right;
@@ -2796,6 +2801,15 @@ static int __bpf_rbtree_add(struct bpf_rb_root *root,
 	rb_insert_color_cached(n, (struct rb_root_cached *)root, leftmost);
 	WRITE_ONCE(node->owner, root);
 	return 0;
+
+unwound:
+	/*
+	 * The comparator left with unwind_exit. The node is not in the tree, and
+	 * the caller has let go of it: drop it, as the error path above does.
+	 */
+	__bpf_obj_drop_impl((void *)n - off, rec, false);
+	bpf_unwind_leave();
+	return r0;
 }
 
 /**
@@ -2809,24 +2823,28 @@ static int __bpf_rbtree_add(struct bpf_rb_root *root,
  * Insert @node into @root using @less. The verifier rewrites @meta and @off;
  * BPF programs do not set them.
  *
- * Return: 0 on success, or %-EINVAL if @node is already linked in a tree.
+ * Return: 0 on success, or %-EINVAL if @node is already linked in a tree. When
+ * @less unwinds, what it unwound with, to the pad after the call.
  */
-__bpf_kfunc int bpf_rbtree_add(struct bpf_rb_root *root,
-			       struct bpf_rb_node *node,
-			       bool (less)(struct bpf_rb_node *a, const struct bpf_rb_node *b),
-			       struct btf_struct_meta *meta,
-			       u64 off)
+__bpf_kfunc long bpf_rbtree_add(struct bpf_rb_root *root,
+				struct bpf_rb_node *node,
+				bool (less)(struct bpf_rb_node *a, const struct bpf_rb_node *b),
+				struct btf_struct_meta *meta,
+				u64 off)
 {
 	struct bpf_rb_node_kern *n = (void *)node;
 
 	return __bpf_rbtree_add(root, n, (void *)less, meta ? meta->record : NULL, off);
 }
 
-__bpf_kfunc int bpf_rbtree_add_impl(struct bpf_rb_root *root, struct bpf_rb_node *node,
-				    bool (less)(struct bpf_rb_node *a, const struct bpf_rb_node *b),
-				    void *meta__ign, u64 off)
+__bpf_kfunc long bpf_rbtree_add_impl(struct bpf_rb_root *root, struct bpf_rb_node *node,
+				     bool (less)(struct bpf_rb_node *a, const struct bpf_rb_node *b),
+				     void *meta__ign, u64 off)
 {
-	return bpf_rbtree_add(root, node, less, meta__ign, off);
+	struct btf_struct_meta *meta = meta__ign;
+	struct bpf_rb_node_kern *n = (void *)node;
+
+	return __bpf_rbtree_add(root, n, (void *)less, meta ? meta->record : NULL, off);
 }
 
 __bpf_kfunc struct bpf_rb_node *bpf_rbtree_first(struct bpf_rb_root *root)
