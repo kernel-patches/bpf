@@ -438,7 +438,7 @@ static int iter_misc_syslog_update_state(struct scmi_iterator_state *st,
 
 	st->num_returned = RETURNED(r->numlogflags);
 	st->num_remaining = REMAINING(r->numlogflags);
-	*p->size = st->num_returned + st->num_remaining;
+	*p->size = st->desc_index + st->num_returned;
 
 	return 0;
 }
