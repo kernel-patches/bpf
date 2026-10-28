@@ -178,6 +178,15 @@ static int caam_jr_shutdown(struct device *dev)
 	return ret;
 }
 
+static void caam_jr_platform_shutdown(struct platform_device *pdev)
+{
+	int ret;
+
+	ret = caam_jr_shutdown(&pdev->dev);
+	if (ret)
+		dev_err(&pdev->dev, "Failed to shut down job ring: %d\n", ret);
+}
+
 static void caam_jr_remove(struct platform_device *pdev)
 {
 	int ret;
@@ -812,7 +821,7 @@ static struct platform_driver caam_jr_driver = {
 	},
 	.probe       = caam_jr_probe,
 	.remove      = caam_jr_remove,
-	.shutdown    = caam_jr_remove,
+	.shutdown    = caam_jr_platform_shutdown,
 };
 
 static int __init jr_driver_init(void)
