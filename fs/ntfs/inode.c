@@ -2601,8 +2601,6 @@ int ntfs_extend_initialized_size(struct inode *vi, const loff_t offset,
 	mutex_lock(&mrec_ni->mrec_lock);
 	err = ntfs_attr_set_initialized_size(ni, new_size);
 	mutex_unlock(&mrec_ni->mrec_lock);
-	if (err)
-		truncate_setsize(vi, old_init_size);
 out:
 	filemap_invalidate_unlock(vi->i_mapping);
 	return err;
