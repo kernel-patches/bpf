@@ -20,6 +20,7 @@
 #include "xe_printk.h"
 #include "xe_ras.h"
 #include "xe_ras_types.h"
+#include "xe_trace_cper.h"
 
 static bool is_sigid(u32 sigid)
 {
@@ -193,7 +194,8 @@ static void cper_record_emit(struct xe_device *xe, u8 severity,
 	if (einfo && einfo_len)
 		memcpy((u8 *)rec + sizeof(*rec), einfo, einfo_len);
 
-	/* TODO: Emit trace event */
+	trace_xe_error_cper(xe, &rhdr->platform_id, &sdesc->fru_id, severity,
+			    &rec->intel_hdr, total_len, (u8 *)rec);
 
 	kfree(rec);
 }
@@ -250,6 +252,17 @@ static void cper_emit_hw_err(struct xe_device *xe, int cper_sev, enum xe_sigid s
  * @vaf: Formatted log message
  *
  * Emit a CPER record for a SIGID log entry
+ *
+ * Example trace output::
+ *
+ *   xe_error_cper: dev=0000:03:00.0 severity=2
+ *     platform_id=9046afe5-9041-5124-8614-92550d9e9da6
+ *     fru_id=91befe38-2f61-3d7b-0000-000000000000
+ *     intel_hdr_raw=
+ *       01 02 00 18 00 00 00 01 00 00 00 00 64 77 51 14 ...
+ *     cper_len=1772
+ *     cper_raw=
+ *       43 50 45 52 00 01 ff ff ff ff 01 00 02 00 00 00 ...
  */
 void xe_cper_emit(struct xe_device *xe, int cper_sev, enum xe_sigid sigid,
 		  u32 component, u32 location, const void *data, size_t len,
