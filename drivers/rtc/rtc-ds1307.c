@@ -1380,7 +1380,7 @@ static ssize_t ds3231_hwmon_show_temp(struct device *dev,
 	if (ret)
 		return ret;
 
-	return sprintf(buf, "%d\n", temp);
+	return sysfs_emit(buf, "%d\n", temp);
 }
 static SENSOR_DEVICE_ATTR(temp1_input, 0444, ds3231_hwmon_show_temp,
 			  NULL, 0);
