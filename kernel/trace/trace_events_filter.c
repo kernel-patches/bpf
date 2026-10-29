@@ -2445,6 +2445,30 @@ static int process_system_preds(struct trace_subsystem_dir *dir,
 	return ret;
 }
 
+/*
+ * Check that the rest of the input after the first newline contains no
+ * non-whitespace characters, and convert the newline to '\0'.
+ */
+static int filter_check_newline(char *str)
+{
+	char *nl, *p;
+
+	if (!str)
+		return 0;
+
+	nl = strchr(str, '\n');
+	if (!nl)
+		return 0;
+
+	for (p = nl + 1; *p; p++) {
+		if (!isspace(*p))
+			return -EINVAL;
+	}
+
+	*nl = '\0';
+	return 0;
+}
+
 static int create_filter_start(char *filter_string, bool set_str,
 			       struct filter_parse_error **pse,
 			       struct event_filter **filterp)
@@ -2455,6 +2479,10 @@ static int create_filter_start(char *filter_string, bool set_str,
 
 	if (WARN_ON_ONCE(*pse || *filterp))
 		return -EINVAL;
+
+	err = filter_check_newline(filter_string);
+	if (err)
+		return err;
 
 	filter = kzalloc_obj(*filter);
 	if (filter && set_str) {
@@ -2574,6 +2602,10 @@ int apply_event_filter(struct trace_event_file *file, char *filter_string)
 	if (file->flags & EVENT_FILE_FL_FREED)
 		return -ENODEV;
 
+	err = filter_check_newline(filter_string);
+	if (err)
+		return err;
+
 	if (!strcmp(strstrip(filter_string), "0")) {
 		filter_disable(file);
 		filter = event_filter(file);
@@ -2627,6 +2659,10 @@ int apply_subsystem_event_filter(struct trace_subsystem_dir *dir,
 	/* Make sure the system still has events */
 	if (!dir->nr_events)
 		return -ENODEV;
+
+	err = filter_check_newline(filter_string);
+	if (err)
+		return err;
 
 	if (!strcmp(strstrip(filter_string), "0")) {
 		filter_free_subsystem_preds(dir, tr);
