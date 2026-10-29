@@ -11,6 +11,7 @@
 #include <linux/memblock.h>
 #include <linux/platform_device.h>
 #include <linux/platform_data/simplefb.h>
+#include <linux/sizes.h>
 #include <linux/slab.h>
 
 #include <asm/bootinfo.h>
@@ -122,11 +123,13 @@ arch_initcall(n64_platform_init);
 void __init plat_mem_setup(void)
 {
 	iomem_resource_init();
-	memblock_add(0x0, 8 * 1024 * 1024); /* Bootloader blocks the 4mb config */
+
+	/* The bootloader requires an Expansion Pak (8 MiB of RAM in total). */
+	memblock_add(0x0, SZ_8M);
 }
 
 void __init plat_time_init(void)
 {
-	/* 93.75 MHz cpu, count register runs at half rate */
+	/* The count register runs at half the 93.75 MHz CPU clock rate. */
 	mips_hpt_frequency = 93750000 / 2;
 }
