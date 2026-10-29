@@ -628,8 +628,8 @@ DC_LOGGER_INIT(clk_mgr_base->ctx->logger);
 	 * DF C-state policy
 	 * D0 entry must NOT send a PMFW message, but must unconditionally clear
 	 * the cached vote so the next allow-side transition (prepare_bandwidth
-	 * or dc_power_down_on_boot) is guaranteed to issue a fresh
-	 * DfCstateDisable(Allow) and resync DAL with PMFW.
+	 * or dc_power_down_on_boot) always issues a fresh DfCstateDisable(Allow)
+	 * and resyncs DAL with PMFW.
 	 */
 	clk_mgr_base->clks.cstate_allow = false;
 

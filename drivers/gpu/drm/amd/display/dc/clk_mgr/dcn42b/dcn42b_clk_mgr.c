@@ -233,6 +233,15 @@ DC_LOGGER_INIT(clk_mgr_base->ctx->logger);
 
 	init_clk_states(clk_mgr_base);
 
+	/*
+	 * DF C-state policy
+	 * D0 entry must NOT send a PMFW message, but must unconditionally clear
+	 * the cached vote so the next allow-side transition (prepare_bandwidth
+	 * or dc_power_down_on_boot) always issues a fresh DfCstateDisable(Allow)
+	 * and resyncs DAL with PMFW.
+	 */
+	clk_mgr_base->clks.cstate_allow = false;
+
 	// to adjust dp_dto reference clock if ssc is enable otherwise to apply dprefclk
 	if (dcn42_is_spll_ssc_enabled(clk_mgr_base))
 		clk_mgr_base->dp_dto_source_clock_in_khz =
@@ -433,6 +442,7 @@ static struct clk_mgr_funcs dcn42b_funcs = {
 	.get_max_clock_khz = dcn42_get_max_clock_khz,
 	.get_dispclk_from_dentist = dcn42_get_dispclk_from_dentist,
 	.is_smu_present = dcn42_is_smu_present,
+	.notify_cstate_disable = dcn42_notify_cstate_disable,
 };
 
 typedef struct {
