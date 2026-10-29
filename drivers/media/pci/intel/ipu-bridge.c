@@ -363,10 +363,10 @@ static const struct acpi_device_id ivsc_acpi_ids[] = {
  * this list is complete.
  */
 static const struct acpi_device_id ivsc_only_acpi_ids[] = {
-	{ "INTC1059" },
-	{ "INTC1095" },
-	{ "INTC100A" },
-	{ "INTC10CF" },
+	{ .id = "INTC1059" },
+	{ .id = "INTC1095" },
+	{ .id = "INTC100A" },
+	{ .id = "INTC10CF" },
 	{ }
 };
 
