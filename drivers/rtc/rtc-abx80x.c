@@ -442,11 +442,11 @@ static ssize_t autocalibration_show(struct device *dev,
 	autocalibration = abx80x_rtc_get_autocalibration(dev->parent);
 	if (autocalibration < 0) {
 		dev_err(dev, "Failed to read RTC autocalibration\n");
-		sprintf(buf, "0\n");
+		sysfs_emit(buf, "0\n");
 		return autocalibration;
 	}
 
-	return sprintf(buf, "%d\n", autocalibration);
+	return sysfs_emit(buf, "%d\n", autocalibration);
 }
 
 static DEVICE_ATTR_RW(autocalibration);
@@ -490,14 +490,14 @@ static ssize_t oscillator_show(struct device *dev,
 
 	if (rc_mode < 0) {
 		dev_err(dev, "Failed to read RTC oscillator selection\n");
-		sprintf(buf, "\n");
+		sysfs_emit(buf, "\n");
 		return rc_mode;
 	}
 
 	if (rc_mode)
-		return sprintf(buf, "rc\n");
+		return sysfs_emit(buf, "rc\n");
 	else
-		return sprintf(buf, "xtal\n");
+		return sysfs_emit(buf, "xtal\n");
 }
 
 static DEVICE_ATTR_RW(oscillator);
