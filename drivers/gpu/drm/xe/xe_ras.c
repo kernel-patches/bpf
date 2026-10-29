@@ -6,6 +6,7 @@
 #include "xe_assert.h"
 #include "xe_bo.h"
 #include "xe_configfs.h"
+#include "xe_cper.h"
 #include "xe_debugfs.h"
 #include "xe_device.h"
 #include "xe_drm_ras.h"
@@ -110,7 +111,8 @@ static const char * const gpu_health_states[] = {
 };
 static_assert(ARRAY_SIZE(gpu_health_states) == XE_RAS_HEALTH_MAX);
 
-static int get_counter(struct xe_device *xe, struct xe_ras_error_class *counter, u32 *value);
+static int get_counter(struct xe_device *xe, struct xe_ras_error_class *counter,
+		       u32 *value, bool emit_cper);
 
 static u8 drm_to_xe_ras_severity(u8 severity)
 {
@@ -133,6 +135,20 @@ static u8 xe_to_drm_ras_severity(u8 severity)
 		return DRM_XE_RAS_ERR_SEV_UNCORRECTABLE;
 	default:
 		return DRM_XE_RAS_ERR_SEV_MAX;
+	}
+}
+
+static u8 ras_sev_to_cper_sev(u8 severity)
+{
+	switch (severity) {
+	case XE_RAS_SEV_CORRECTABLE:
+		return CPER_SEV_CORRECTED;
+	case XE_RAS_SEV_UNCORRECTABLE:
+		return CPER_SEV_RECOVERABLE;
+	case XE_RAS_SEV_INFORMATIONAL:
+		return CPER_SEV_INFORMATIONAL;
+	default:
+		return CPER_SEV_RECOVERABLE;
 	}
 }
 
@@ -169,6 +185,24 @@ static u8 xe_to_drm_ras_component(u8 component)
 		return DRM_XE_RAS_ERR_COMP_SOC_INTERNAL;
 	default:
 		return DRM_XE_RAS_ERR_COMP_MAX;
+	}
+}
+
+static enum xe_sigid ras_comp_to_hw_sigid(u8 component)
+{
+	switch (component) {
+	case XE_RAS_COMP_DEVICE_MEMORY:
+		return XE_SIGID_DEVICE_MEMORY;
+	case XE_RAS_COMP_CORE_COMPUTE:
+		return XE_SIGID_CORE_COMPUTE;
+	case XE_RAS_COMP_PCIE:
+		return XE_SIGID_PCIE;
+	case XE_RAS_COMP_FABRIC:
+		return XE_SIGID_FABRIC;
+	case XE_RAS_COMP_SOC_INTERNAL:
+		return XE_SIGID_SOC_INTERNAL;
+	default:
+		return XE_SIGID_HW;
 	}
 }
 
@@ -534,7 +568,7 @@ static void ras_send_error_event(struct xe_device *xe, u8 severity, u8 component
 	counter.common.severity = severity;
 	counter.common.component = component;
 
-	ret = get_counter(xe, &counter, &value);
+	ret = get_counter(xe, &counter, &value, false);
 	if (ret)
 		return;
 
@@ -676,7 +710,8 @@ void xe_ras_counter_threshold_crossed(struct xe_device *xe,
 	}
 }
 
-static int get_counter(struct xe_device *xe, struct xe_ras_error_class *counter, u32 *value)
+static int get_counter(struct xe_device *xe, struct xe_ras_error_class *counter,
+		       u32 *value, bool emit_cper)
 {
 	struct xe_ras_get_counter_response response = {0};
 	int ret;
@@ -686,7 +721,10 @@ static int get_counter(struct xe_device *xe, struct xe_ras_error_class *counter,
 		return ret;
 
 	*value = response.value;
-
+	if (emit_cper)
+		xe_cper_emit_counter(xe, ras_sev_to_cper_sev(counter->common.severity),
+				     ras_comp_to_hw_sigid(counter->common.component),
+				     counter, &response);
 	return 0;
 }
 
@@ -867,7 +905,7 @@ int xe_ras_get_counter(struct xe_device *xe, u8 severity, u8 component, u32 *val
 	counter.common.component = drm_to_xe_ras_component(component);
 
 	guard(xe_pm_runtime)(xe);
-	return get_counter(xe, &counter, value);
+	return get_counter(xe, &counter, value, READ_ONCE(xe->cper.on_query));
 }
 
 /**
@@ -1231,6 +1269,10 @@ int xe_ras_init(struct xe_device *xe)
 
 	xa_init(&state->offlined_pages);
 
+	ret = devm_add_action_or_reset(xe->drm.dev, ras_fini, xe);
+	if (ret)
+		return ret;
+
 	/* Fetch the offline list before queue to avoid duplication */
 	get_offline_list(xe);
 	get_offline_queue(xe);
@@ -1244,7 +1286,7 @@ int xe_ras_init(struct xe_device *xe)
 
 	ret = devm_device_add_group(xe->drm.dev, &gpu_health_group);
 	if (ret)
-		xe_err(xe, "Failed to create GPU health sysfs, err=%d\n", ret);
+		return ret;
 
-	return devm_add_action_or_reset(xe->drm.dev, ras_fini, xe);
+	return xe_cper_sysfs_init(xe);
 }

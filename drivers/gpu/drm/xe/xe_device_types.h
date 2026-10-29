@@ -12,6 +12,7 @@
 #include <drm/drm_file.h>
 #include <drm/ttm/ttm_device.h>
 
+#include "xe_cper_types.h"
 #include "xe_devcoredump_types.h"
 #include "xe_drm_ras_types.h"
 #include "xe_heci_gsc.h"
@@ -552,6 +553,9 @@ struct xe_device {
 		/** @ras.state: RAS device and firmware state */
 		struct xe_ras_state state;
 	} ras;
+
+	/** @cper: CPER state */
+	struct xe_cper cper;
 
 	/** @i2c: I2C host controller */
 	struct xe_i2c *i2c;

@@ -99,4 +99,12 @@ struct xe_device_guid_entry {
 	guid_t    guid;
 };
 
+/**
+ * struct xe_cper - Xe CPER state
+ */
+struct xe_cper {
+	/** @on_query: Emit a CPER record on each RAS counter query */
+	bool on_query;
+};
+
 #endif
