@@ -57,9 +57,13 @@
 #include <linux/io.h>
 #include <linux/uaccess.h>
 
+#include <scsi/sas.h>
+
 #include "mpt3sas_base.h"
 #include "mpt3sas_ctl.h"
 
+/* PHY operation byte in an SMP PHY Control request */
+#define SMP_PHY_CONTROL_OP_OFFSET	10
 
 static struct fasync_struct *async_queue;
 static DECLARE_WAIT_QUEUE_HEAD(ctl_poll_wait);
@@ -959,13 +963,17 @@ _ctl_do_mpt_command(struct MPT3SAS_ADAPTER *ioc, struct mpt3_ioctl_command karg,
 		Mpi2SmpPassthroughRequest_t *smp_request =
 		    (Mpi2SmpPassthroughRequest_t *)mpi_request;
 		u8 *data;
+		bool immediate;
 
 		if (!ioc->multipath_on_hba) {
 			/* ioc determines which port to use */
 			smp_request->PhysicalPort = 0xFF;
 		}
-		if (smp_request->PassthroughFlags &
-		    MPI2_SMP_PT_REQ_PT_FLAGS_IMMEDIATE)
+
+		immediate = smp_request->PassthroughFlags &
+			    MPI2_SMP_PT_REQ_PT_FLAGS_IMMEDIATE;
+
+		if (immediate)
 			data = (u8 *)&smp_request->SGL;
 		else {
 			if (unlikely(data_out == NULL)) {
@@ -978,7 +986,11 @@ _ctl_do_mpt_command(struct MPT3SAS_ADAPTER *ioc, struct mpt3_ioctl_command karg,
 			data = data_out;
 		}
 
-		if (data[1] == 0x91 && (data[10] == 1 || data[10] == 2)) {
+		if ((immediate ||
+		     data_out_sz >= SMP_PHY_CONTROL_OP_OFFSET + 1) &&
+		    data[1] == SMP_PHY_CONTROL &&
+		    (data[10] == PHY_FUNC_LINK_RESET ||
+		     data[10] == PHY_FUNC_HARD_RESET)) {
 			ioc->ioc_link_reset_in_progress = 1;
 			ioc->ignore_loginfos = 1;
 		}
