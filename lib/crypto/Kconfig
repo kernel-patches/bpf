@@ -197,8 +197,6 @@ config CRYPTO_LIB_POLY1305_ARCH
 	default y if ARM
 	default y if ARM64
 	default y if MIPS
-	# The PPC64 code needs to be fixed to work in softirq context.
-	default y if PPC64 && CPU_LITTLE_ENDIAN && VSX && BROKEN
 	default y if RISCV
 	default y if X86_64
 
@@ -209,9 +207,7 @@ config CRYPTO_LIB_POLY1305_ARCH
 config CRYPTO_LIB_POLY1305_GENERIC
 	bool
 	depends on CRYPTO_LIB_POLY1305
-	# Enable if there's no arch impl or the arch impl requires the generic
-	# impl as a fallback.  (Or if selected explicitly.)
-	default y if !CRYPTO_LIB_POLY1305_ARCH || PPC64
+	default y if !CRYPTO_LIB_POLY1305_ARCH
 
 config CRYPTO_LIB_POLY1305_RSIZE
 	int
