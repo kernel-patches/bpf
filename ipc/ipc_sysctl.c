@@ -51,21 +51,38 @@ static int proc_ipc_auto_msgmni(const struct ctl_table *table, int write,
 static int proc_ipc_sem_dointvec(const struct ctl_table *table, int write,
 	void *buffer, size_t *lenp, loff_t *ppos)
 {
+	struct ctl_table ipc_table;
 	struct ipc_namespace *ns =
 		container_of(table->data, struct ipc_namespace, sem_ctls);
-	int ret, semmni;
+	int sem_ctls[ARRAY_SIZE(ns->sem_ctls)];
+	size_t i;
+	int ret;
 
-	semmni = ns->sem_ctls[3];
-	ret = proc_dointvec(table, write, buffer, lenp, ppos);
+	if (!write)
+		return proc_dointvec(table, write, buffer, lenp, ppos);
 
-	if (!ret)
-		ret = sem_check_semmni(ns);
+	mutex_lock(&ns->sem_ctls_mutex);
+	for (i = 0; i < ARRAY_SIZE(sem_ctls); i++)
+		sem_ctls[i] = READ_ONCE(ns->sem_ctls[i]);
 
-	/*
-	 * Reset the semmni value if an error happens.
-	 */
+	ipc_table = *table;
+	ipc_table.data = sem_ctls;
+
+	ret = proc_dointvec(&ipc_table, write, buffer, lenp, ppos);
 	if (ret)
-		ns->sem_ctls[3] = semmni;
+		goto out_unlock;
+
+	if (sem_ctls[2] < 0 ||
+	    sem_ctls[3] < 0 || sem_ctls[3] > ipc_mni) {
+		ret = -ERANGE;
+		goto out_unlock;
+	}
+
+	for (i = 0; i < ARRAY_SIZE(sem_ctls); i++)
+		WRITE_ONCE(ns->sem_ctls[i], sem_ctls[i]);
+
+out_unlock:
+	mutex_unlock(&ns->sem_ctls_mutex);
 	return ret;
 }
 

@@ -248,6 +248,7 @@ static int sysvipc_sem_proc_show(struct seq_file *s, void *it);
 
 void sem_init_ns(struct ipc_namespace *ns)
 {
+	mutex_init(&ns->sem_ctls_mutex);
 	ns->sc_semmsl = SEMMSL;
 	ns->sc_semmns = SEMMNS;
 	ns->sc_semopm = SEMOPM;
