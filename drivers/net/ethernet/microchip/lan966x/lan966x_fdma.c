@@ -819,20 +819,20 @@ static int lan966x_fdma_reload(struct lan966x *lan966x, int new_mtu)
 	int page_order, max_mtu;
 	int err, i, j;
 
-	old_pages = kmemdup(lan966x->rx.page, sizeof(lan966x->rx.page),
-			   GFP_KERNEL);
+	old_pages = kmalloc_objs(*lan966x->rx.page, FDMA_DCB_MAX);
 	if (!old_pages)
 		return -ENOMEM;
-
-	/* Store these for later to free them */
-	memcpy(&fdma_rx_old, &lan966x->rx.fdma, sizeof(struct fdma));
-	page_pool = lan966x->rx.page_pool;
-	page_order = lan966x->rx.page_order;
-	max_mtu = lan966x->rx.max_mtu;
 
 	napi_synchronize(&lan966x->napi);
 	napi_disable(&lan966x->napi);
 	lan966x_fdma_stop_netdev(lan966x);
+
+	/* Store these for later to free them */
+	memcpy(old_pages, lan966x->rx.page, sizeof(lan966x->rx.page));
+	memcpy(&fdma_rx_old, &lan966x->rx.fdma, sizeof(struct fdma));
+	page_pool = lan966x->rx.page_pool;
+	page_order = lan966x->rx.page_order;
+	max_mtu = lan966x->rx.max_mtu;
 
 	lan966x_fdma_rx_disable(&lan966x->rx);
 	lan966x->rx.page_order = round_up(new_mtu, PAGE_SIZE) / PAGE_SIZE - 1;
