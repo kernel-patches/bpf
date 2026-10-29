@@ -3666,7 +3666,7 @@ static const struct ccs_device ccs_device = {};
 
 static const struct acpi_device_id ccs_acpi_table[] = {
 	{ .id = "MIPI0200", .driver_data = (unsigned long)&ccs_device },
-	{ },
+	{ }
 };
 MODULE_DEVICE_TABLE(acpi, ccs_acpi_table);
 
