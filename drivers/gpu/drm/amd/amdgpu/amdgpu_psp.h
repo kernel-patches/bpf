@@ -143,6 +143,7 @@ struct amdgpu_psp_irq_mgr;
 
 struct psp_funcs {
 	int (*init_microcode)(struct psp_context *psp);
+	bool (*is_sos_alive)(struct psp_context *psp);
 	int (*wait_for_bootloader)(struct psp_context *psp);
 	int (*bootloader_load_kdb)(struct psp_context *psp);
 	int (*bootloader_load_spl)(struct psp_context *psp);
@@ -528,6 +529,8 @@ struct amdgpu_psp_funcs {
 #define psp_ring_destroy(psp, type) ((psp)->funcs->ring_destroy((psp), (type)))
 #define psp_init_microcode(psp) \
 		((psp)->funcs->init_microcode ? (psp)->funcs->init_microcode((psp)) : 0)
+#define psp_is_sos_alive(psp) \
+		((psp)->funcs->is_sos_alive ? (psp)->funcs->is_sos_alive((psp)) : false)
 #define psp_bootloader_load_kdb(psp) \
 		((psp)->funcs->bootloader_load_kdb ? (psp)->funcs->bootloader_load_kdb((psp)) : 0)
 #define psp_bootloader_load_spl(psp) \

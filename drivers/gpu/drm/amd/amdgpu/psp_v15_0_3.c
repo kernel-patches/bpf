@@ -837,6 +837,7 @@ static int psp_v15_0_3_get_fw_type(struct amdgpu_firmware_info *ucode,
 
 static const struct psp_funcs psp_v15_0_3_funcs = {
 	.init_microcode = psp_v15_0_3_init_microcode,
+	.is_sos_alive = psp_v15_0_3_is_sos_alive,
 	.bootloader_load_kdb = psp_v15_0_3_bootloader_load_kdb,
 	.bootloader_load_spl = psp_v15_0_3_bootloader_load_spl,
 	.bootloader_load_sysdrv = psp_v15_0_3_bootloader_load_sysdrv,

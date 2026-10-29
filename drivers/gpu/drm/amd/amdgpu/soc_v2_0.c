@@ -35,7 +35,6 @@
 
 #include "gc/gc_13_0_1_offset.h"
 #include "gc/gc_13_0_1_sh_mask.h"
-#include "mp/mp_15_0_3_offset.h"
 
 #include "soc15.h"
 #include "soc15_common.h"
@@ -206,8 +205,6 @@ const struct amdgpu_ip_block_version soc_v2_0_common_ip_block = {
 
 static bool soc_v2_0_need_reset_on_init(struct amdgpu_device *adev)
 {
-	u32 sol_reg;
-
 	if (adev->flags & AMD_IS_APU)
 		return false;
 
@@ -216,12 +213,7 @@ static bool soc_v2_0_need_reset_on_init(struct amdgpu_device *adev)
 	 * driver and sOS are already loaded.
 	 */
 
-	sol_reg = RREG32_SOC15(MP0, 0,
-				regMPASP_PCRU0_MPASP_C2PMSG_81);
-	if (sol_reg)
-		return true;
-
-	return false;
+	return psp_is_sos_alive(&adev->psp);
 }
 
 static void soc_v2_0_init_doorbell_index(struct amdgpu_device *adev)
