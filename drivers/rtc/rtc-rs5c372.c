@@ -699,7 +699,7 @@ static ssize_t rs5c372_sysfs_show_trim(struct device *dev,
 	if (err)
 		return err;
 
-	return sprintf(buf, "%d\n", trim);
+	return sysfs_emit(buf, "%d\n", trim);
 }
 static DEVICE_ATTR(trim, S_IRUGO, rs5c372_sysfs_show_trim, NULL);
 
@@ -712,7 +712,7 @@ static ssize_t rs5c372_sysfs_show_osc(struct device *dev,
 	if (err)
 		return err;
 
-	return sprintf(buf, "%d.%03d KHz\n", osc / 1000, osc % 1000);
+	return sysfs_emit(buf, "%d.%03d KHz\n", osc / 1000, osc % 1000);
 }
 static DEVICE_ATTR(osc, S_IRUGO, rs5c372_sysfs_show_osc, NULL);
 
