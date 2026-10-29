@@ -1669,6 +1669,11 @@ static const char * const nand_xfer_types[] = {
 	[NAND_OMAP_PREFETCH_IRQ] = "prefetch-irq",
 };
 
+static void omap_put_elm_node(void *data)
+{
+	of_node_put(data);
+}
+
 static int omap_get_dt_info(struct device *dev, struct omap_nand_info *info)
 {
 	struct device_node *child = dev->of_node;
@@ -1690,6 +1695,10 @@ static int omap_get_dt_info(struct device *dev, struct omap_nand_info *info)
 		if (!info->elm_of_node)
 			dev_dbg(dev, "ti,elm-id not in DT\n");
 	}
+
+	i = devm_add_action_or_reset(dev, omap_put_elm_node, info->elm_of_node);
+	if (i)
+		return i;
 
 	/* select ecc-scheme for NAND */
 	if (of_property_read_string(child, "ti,nand-ecc-opt", &s)) {
