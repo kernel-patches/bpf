@@ -1789,7 +1789,7 @@ static void dcn401_add_step(struct block_sequence_state *sequence,
 				plane->input_csc_color_matrix;
 		p->setup_dpp_params.color_space = plane->color_space;
 		p->setup_dpp_params.upsp_mode = resource_is_upsp_required(
-				plane->format, plane->scaling_linearity);
+				(bool) plane->ctx->dc->caps.color.dpp.upsp_pre_scaler, plane->format, plane->scaling_linearity);
 		break;
 	case DPP_SET_CURSOR_MATRIX:
 		p->dpp_set_cursor_matrix_params.dpp = dpp;

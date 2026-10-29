@@ -26,9 +26,14 @@
 #include "sspl/dc_spl_types.h"
 #include "resource.h"
 
-enum upsp_mode resource_is_upsp_required(enum surface_pixel_format format,
+enum upsp_mode resource_is_upsp_required(bool upsp_pre_scaler,
+		enum surface_pixel_format format,
 		enum dc_scaling_linearity scaling_linearity)
 {
+	/* UPSP is not supported on all ASICs */
+	if (!upsp_pre_scaler)
+		return UPSP_BYPASS;
+
 	bool scaling_in_linear = (scaling_linearity == DC_SCALING_LINEARITY_LINEAR);
 	bool is_420_format = (format >= SURFACE_PIXEL_FORMAT_VIDEO_BEGIN &&
 		format <= SURFACE_PIXEL_FORMAT_VIDEO_420_10bpc_YCrCb);
