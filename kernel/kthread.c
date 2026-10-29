@@ -81,7 +81,7 @@ enum KTHREAD_BITS {
 
 static inline struct kthread *to_kthread(struct task_struct *k)
 {
-	WARN_ON(!(k->flags & PF_KTHREAD));
+	WARN_ON(!(READ_ONCE(k->flags) & PF_KTHREAD));
 	return k->worker_private;
 }
 
@@ -852,7 +852,7 @@ int kthread_affine_preferred(struct task_struct *p, const struct cpumask *mask)
 	if (!zalloc_cpumask_var(&affinity, GFP_KERNEL))
 		return -ENOMEM;
 
-	kthread->preferred_affinity = kzalloc(sizeof(struct cpumask), GFP_KERNEL);
+	kthread->preferred_affinity = kzalloc_obj(struct cpumask);
 	if (!kthread->preferred_affinity) {
 		ret = -ENOMEM;
 		goto out;

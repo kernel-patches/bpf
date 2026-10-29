@@ -396,7 +396,7 @@ static int mctp_frag_queue(struct mctp_sk_key *key, struct sk_buff *skb)
 		 * this will free the skb; callers can no longer access it
 		 * safely.
 		 */
-		key->reasm_head = skb_unshare(skb, GFP_ATOMIC);
+		key->reasm_head = skb_unclone_full(skb, GFP_ATOMIC);
 		if (!key->reasm_head)
 			return -ENOMEM;
 
@@ -825,7 +825,7 @@ static struct mctp_sk_key *mctp_lookup_prealloc_tag(struct mctp_sock *msk,
 
 	spin_lock_irqsave(&mns->keys_lock, flags);
 
-	hlist_for_each_entry(tmp, &mns->keys, hlist) {
+	hlist_for_each_entry(tmp, &msk->keys, sklist) {
 		if (tmp->net != netid)
 			continue;
 

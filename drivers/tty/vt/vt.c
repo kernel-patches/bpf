@@ -71,6 +71,7 @@
  * by Adam Tla/lka <atlka@pg.gda.pl>, Aug 2006
  */
 
+#include <linux/compiler.h>
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/sched/signal.h>
@@ -263,6 +264,119 @@ unsigned int vc_font_size(const struct vc_font *font)
 	return font_glyph_size(font->width, font->height) * font->charcount;
 }
 EXPORT_SYMBOL_GPL(vc_font_size);
+
+/*
+ * Cursors
+ */
+
+/**
+ * vc_cursor_valid_size - Computes a valid cursor size from the given value
+ * @cursor_size: The size constant of cursor pattern
+ *
+ * The argument given in @cursor_size is one of the CUR_ constants, as stored
+ * in struct @vc_data.vc_cursor_type. For unknown values, the helper draws the
+ * default cursor or an underline dash.
+ *
+ * Returns:
+ * A valid cursor size for the given size value
+ */
+unsigned int vc_cursor_valid_size(unsigned int cursor_size)
+{
+	const unsigned int cursor_default_size = CUR_SIZE(READ_ONCE(cur_default));
+
+	do {
+		switch (cursor_size) {
+		case CUR_NONE:
+		case CUR_UNDERLINE:
+		case CUR_LOWER_THIRD:
+		case CUR_LOWER_HALF:
+		case CUR_TWO_THIRDS:
+		case CUR_BLOCK:
+			return cursor_size;
+		default:
+			pr_warn_once("Unknown cursor %u\n", cursor_size);
+			fallthrough;
+		case CUR_DEF:
+			/*
+			 * Use user-given default size, or underline if
+			 * the given default is invalid.
+			 */
+			if (cursor_size != cursor_default_size)
+				cursor_size = cursor_default_size;
+			else
+				cursor_size = CUR_UNDERLINE;
+		}
+	} while (true);
+}
+EXPORT_SYMBOL_GPL(vc_cursor_valid_size);
+
+/**
+ * vc_cursor_start - Calculates the cursor's first scanline within a character cell
+ * @cell_height: The overall height of the character cell
+ * @cursor_size: The size constant of cursor pattern
+ *
+ * The parameter @cell_height is the height of the character cell as
+ * displayed by the console. The argument given in @cursor_size is one
+ * of the CUR_ constants. See vc_cursor_valid_size() for how to get a
+ * valid cursor-size constant.
+ *
+ * Returns:
+ * The index of the cursor's first scanline within the character cell
+ */
+unsigned int vc_cursor_start(unsigned int cell_height, unsigned int cursor_size)
+{
+	switch (cursor_size) {
+	case CUR_NONE:
+		return cell_height;
+	case CUR_UNDERLINE:
+	default:
+		if (cell_height < 10)
+			return cell_height - 1;
+		else
+			return cell_height - 3;
+	case CUR_LOWER_THIRD:
+		return cell_height - cell_height / 3;
+	case CUR_LOWER_HALF:
+		return cell_height - cell_height / 2;
+	case CUR_TWO_THIRDS:
+		return cell_height - (cell_height * 2) / 3;
+	case CUR_BLOCK:
+		return 0;
+	}
+}
+EXPORT_SYMBOL_GPL(vc_cursor_start);
+
+/**
+ * vc_cursor_end - Calculates the first scanline after the cursor within a character cell
+ * @cell_height: The overall height of the character cell
+ * @cursor_size: The size constant of cursor pattern
+ *
+ * The parameter @cell_height is the height of the character cell as
+ * displayed by the console. The argument given in @cursor_size is one
+ * of the CUR_ constants. See vc_cursor_valid_size() for how to get a
+ * valid cursor-size constant.
+ *
+ * Returns:
+ * The index of the first scanline after the cursor within the character cell
+ */
+unsigned int vc_cursor_end(unsigned int cell_height, unsigned int cursor_size)
+{
+	switch (cursor_size) {
+	case CUR_UNDERLINE:
+	default:
+		if (cell_height < 10)
+			return cell_height;
+		else
+			return cell_height - 1;
+	case CUR_NONE:
+	case CUR_LOWER_THIRD:
+	case CUR_LOWER_HALF:
+	case CUR_TWO_THIRDS:
+	case CUR_BLOCK:
+		return cell_height;
+	}
+}
+EXPORT_SYMBOL_GPL(vc_cursor_end);
 
 /*
  * /sys/class/tty/tty0/
@@ -1134,6 +1248,8 @@ int vc_allocate(unsigned int currcons)	/* return 0 on success */
 	return 0;
 err_free:
 	visual_deinit(vc);
+	if (*vc->uni_pagedict_loc)
+		con_free_unimap(vc);
 	kfree(vc);
 	vc_cons[currcons].d = NULL;
 	return err;
@@ -2860,7 +2976,8 @@ static void do_con_trol(struct tty_struct *tty, struct vc_data *vc, u8 c)
 			csi_J(vc, CSI_J_VISIBLE);
 			vc->vc_video_erase_char =
 				(vc->vc_video_erase_char & 0xff00) | ' ';
-			do_update_region(vc, vc->vc_origin, vc->vc_screenbuf_size / 2);
+			if (con_should_update(vc))
+				do_update_region(vc, vc->vc_origin, vc->vc_screenbuf_size / 2);
 		}
 		return;
 	case ESsetG0:	/* ESC ( */
@@ -4986,8 +5103,8 @@ static int con_font_set(struct vc_data *vc, const struct console_font_op *op)
 	if (!vc->vc_sw->con_font_set)
 		return -ENOSYS;
 
-	if (vc_is_sel(vc))
-		clear_selection();
+	/* hide selection and cursor prior font changes */
+	hide_cursor(vc);
 
 	return vc->vc_sw->con_font_set(vc, &font, vpitch, op->flags);
 }
@@ -5011,8 +5128,9 @@ static int con_font_default(struct vc_data *vc, struct console_font_op *op)
 		if (!vc->vc_sw->con_font_default)
 			return -ENOSYS;
 
-		if (vc_is_sel(vc))
-			clear_selection();
+		/* hide selection and cursor prior font changes */
+		hide_cursor(vc);
+
 		int ret = vc->vc_sw->con_font_default(vc, &font, s);
 		if (ret)
 			return ret;

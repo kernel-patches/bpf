@@ -1189,10 +1189,17 @@ static int blkcg_print_stat(struct seq_file *sf, void *v)
 	struct blkcg *blkcg = css_to_blkcg(seq_css(sf));
 	struct blkcg_gq *blkg;
 
-	if (!seq_css(sf)->parent)
+	if (!seq_css(sf)->parent) {
 		blkcg_fill_root_iostats();
-	else
+	} else {
+		/*
+		 * Descendant blkgs imply ancestor blkgs, so an empty
+		 * ->blkg_list has no stats to report.
+		 */
+		if (hlist_empty(&blkcg->blkg_list))
+			return 0;
 		css_rstat_flush(&blkcg->css);
+	}
 
 	guard(spinlock_irq)(&blkcg->lock);
 	hlist_for_each_entry(blkg, &blkcg->blkg_list, blkcg_node)
@@ -2091,6 +2098,7 @@ static inline struct blkcg_gq *blkg_tryget_closest(struct bio *bio,
 	struct request_queue *q = bio->bi_bdev->bd_queue;
 	struct blkcg *blkcg = css_to_blkcg(css);
 	struct blkcg_gq *blkg;
+	unsigned long flags;
 
 	rcu_read_lock();
 	blkg = blkg_lookup(blkcg, q);
@@ -2105,11 +2113,11 @@ static inline struct blkcg_gq *blkg_tryget_closest(struct bio *bio,
 	 * Fast path failed, we're probably issuing IO in this cgroup the first
 	 * time, hold lock to create new blkg.
 	 */
-	spin_lock_irq(&q->queue_lock);
+	spin_lock_irqsave(&q->queue_lock, flags);
 	blkg = blkg_lookup_create(blkcg, bio->bi_bdev->bd_disk);
 	if (blkg)
 		blkg = blkg_lookup_tryget(blkg);
-	spin_unlock_irq(&q->queue_lock);
+	spin_unlock_irqrestore(&q->queue_lock, flags);
 
 	return blkg;
 }

@@ -534,6 +534,7 @@ static ssize_t nvmet_ns_device_path_store(struct config_item *item,
 	struct nvmet_subsys *subsys = ns->subsys;
 	size_t len;
 	int ret;
+	char *new_path = NULL;
 
 	mutex_lock(&subsys->lock);
 	ret = -EBUSY;
@@ -545,11 +546,13 @@ static ssize_t nvmet_ns_device_path_store(struct config_item *item,
 	if (!len)
 		goto out_unlock;
 
-	kfree(ns->device_path);
 	ret = -ENOMEM;
-	ns->device_path = kmemdup_nul(page, len, GFP_KERNEL);
-	if (!ns->device_path)
+	new_path = kmemdup_nul(page, len, GFP_KERNEL);
+	if (!new_path)
 		goto out_unlock;
+
+	kfree(ns->device_path);
+	ns->device_path = new_path;
 
 	mutex_unlock(&subsys->lock);
 	return count;
@@ -814,7 +817,7 @@ static ssize_t nvmet_ns_resv_enable_store(struct config_item *item,
 
 	mutex_lock(&ns->subsys->lock);
 	if (ns->enabled) {
-		pr_err("the ns:%d is already enabled.\n", ns->nsid);
+		pr_err("the ns:%u is already enabled.\n", ns->nsid);
 		mutex_unlock(&ns->subsys->lock);
 		return -EINVAL;
 	}
@@ -880,7 +883,7 @@ static struct config_group *nvmet_ns_make(struct config_group *group,
 		goto out;
 	config_group_init_type_name(&ns->group, name, &nvmet_ns_type);
 
-	pr_info("adding nsid %d to subsystem %s\n", nsid, subsys->subsysnqn);
+	pr_info("adding nsid %u to subsystem %s\n", nsid, subsys->subsysnqn);
 
 	return &ns->group;
 out:
@@ -902,21 +905,34 @@ static ssize_t nvmet_passthru_device_path_show(struct config_item *item,
 		char *page)
 {
 	struct nvmet_subsys *subsys = to_subsys(item->ci_parent);
+	ssize_t ret;
 
-	return snprintf(page, PAGE_SIZE, "%s\n", subsys->passthru_ctrl_path);
+	mutex_lock(&subsys->lock);
+	ret = snprintf(page, PAGE_SIZE, "%s\n",
+		       subsys->passthru && subsys->passthru->ctrl_path ?
+		       subsys->passthru->ctrl_path : "");
+	mutex_unlock(&subsys->lock);
+	return ret;
 }
 
 static ssize_t nvmet_passthru_device_path_store(struct config_item *item,
 		const char *page, size_t count)
 {
 	struct nvmet_subsys *subsys = to_subsys(item->ci_parent);
+	struct nvmet_passthru *passthru;
 	size_t len;
 	int ret;
 
 	mutex_lock(&subsys->lock);
 
+	passthru = nvmet_subsys_passthru(subsys);
+	if (!passthru) {
+		ret = -ENOMEM;
+		goto out_unlock;
+	}
+
 	ret = -EBUSY;
-	if (subsys->passthru_ctrl)
+	if (passthru->ctrl)
 		goto out_unlock;
 
 	ret = -EINVAL;
@@ -924,10 +940,10 @@ static ssize_t nvmet_passthru_device_path_store(struct config_item *item,
 	if (!len)
 		goto out_unlock;
 
-	kfree(subsys->passthru_ctrl_path);
+	kfree(passthru->ctrl_path);
 	ret = -ENOMEM;
-	subsys->passthru_ctrl_path = kstrndup(page, len, GFP_KERNEL);
-	if (!subsys->passthru_ctrl_path)
+	passthru->ctrl_path = kstrndup(page, len, GFP_KERNEL);
+	if (!passthru->ctrl_path)
 		goto out_unlock;
 
 	mutex_unlock(&subsys->lock);
@@ -943,8 +959,13 @@ static ssize_t nvmet_passthru_enable_show(struct config_item *item,
 		char *page)
 {
 	struct nvmet_subsys *subsys = to_subsys(item->ci_parent);
+	ssize_t ret;
 
-	return sprintf(page, "%d\n", subsys->passthru_ctrl ? 1 : 0);
+	mutex_lock(&subsys->lock);
+	ret = sprintf(page, "%d\n",
+		subsys->passthru && subsys->passthru->ctrl ? 1 : 0);
+	mutex_unlock(&subsys->lock);
+	return ret;
 }
 
 static ssize_t nvmet_passthru_enable_store(struct config_item *item,
@@ -969,18 +990,34 @@ CONFIGFS_ATTR(nvmet_passthru_, enable);
 static ssize_t nvmet_passthru_admin_timeout_show(struct config_item *item,
 		char *page)
 {
-	return sprintf(page, "%u\n", to_subsys(item->ci_parent)->admin_timeout);
+	struct nvmet_subsys *subsys = to_subsys(item->ci_parent);
+	ssize_t ret;
+
+	mutex_lock(&subsys->lock);
+	ret = sprintf(page, "%u\n", subsys->passthru ?
+			subsys->passthru->admin_timeout : 0);
+	mutex_unlock(&subsys->lock);
+	return ret;
 }
 
 static ssize_t nvmet_passthru_admin_timeout_store(struct config_item *item,
 		const char *page, size_t count)
 {
 	struct nvmet_subsys *subsys = to_subsys(item->ci_parent);
+	struct nvmet_passthru *passthru;
 	unsigned int timeout;
 
 	if (kstrtouint(page, 0, &timeout))
 		return -EINVAL;
-	subsys->admin_timeout = timeout;
+
+	mutex_lock(&subsys->lock);
+	passthru = nvmet_subsys_passthru(subsys);
+	if (!passthru) {
+		mutex_unlock(&subsys->lock);
+		return -ENOMEM;
+	}
+	passthru->admin_timeout = timeout;
+	mutex_unlock(&subsys->lock);
 	return count;
 }
 CONFIGFS_ATTR(nvmet_passthru_, admin_timeout);
@@ -988,18 +1025,34 @@ CONFIGFS_ATTR(nvmet_passthru_, admin_timeout);
 static ssize_t nvmet_passthru_io_timeout_show(struct config_item *item,
 		char *page)
 {
-	return sprintf(page, "%u\n", to_subsys(item->ci_parent)->io_timeout);
+	struct nvmet_subsys *subsys = to_subsys(item->ci_parent);
+	ssize_t ret;
+
+	mutex_lock(&subsys->lock);
+	ret = sprintf(page, "%u\n",
+		subsys->passthru ? subsys->passthru->io_timeout : 0);
+	mutex_unlock(&subsys->lock);
+	return ret;
 }
 
 static ssize_t nvmet_passthru_io_timeout_store(struct config_item *item,
 		const char *page, size_t count)
 {
 	struct nvmet_subsys *subsys = to_subsys(item->ci_parent);
+	struct nvmet_passthru *passthru;
 	unsigned int timeout;
 
 	if (kstrtouint(page, 0, &timeout))
 		return -EINVAL;
-	subsys->io_timeout = timeout;
+
+	mutex_lock(&subsys->lock);
+	passthru = nvmet_subsys_passthru(subsys);
+	if (!passthru) {
+		mutex_unlock(&subsys->lock);
+		return -ENOMEM;
+	}
+	passthru->io_timeout = timeout;
+	mutex_unlock(&subsys->lock);
 	return count;
 }
 CONFIGFS_ATTR(nvmet_passthru_, io_timeout);
@@ -1007,18 +1060,34 @@ CONFIGFS_ATTR(nvmet_passthru_, io_timeout);
 static ssize_t nvmet_passthru_clear_ids_show(struct config_item *item,
 		char *page)
 {
-	return sprintf(page, "%u\n", to_subsys(item->ci_parent)->clear_ids);
+	struct nvmet_subsys *subsys = to_subsys(item->ci_parent);
+	ssize_t ret;
+
+	mutex_lock(&subsys->lock);
+	ret = sprintf(page, "%u\n",
+		subsys->passthru ? subsys->passthru->clear_ids : 0);
+	mutex_unlock(&subsys->lock);
+	return ret;
 }
 
 static ssize_t nvmet_passthru_clear_ids_store(struct config_item *item,
 		const char *page, size_t count)
 {
 	struct nvmet_subsys *subsys = to_subsys(item->ci_parent);
+	struct nvmet_passthru *passthru;
 	unsigned int clear_ids;
 
 	if (kstrtouint(page, 0, &clear_ids))
 		return -EINVAL;
-	subsys->clear_ids = clear_ids;
+
+	mutex_lock(&subsys->lock);
+	passthru = nvmet_subsys_passthru(subsys);
+	if (!passthru) {
+		mutex_unlock(&subsys->lock);
+		return -ENOMEM;
+	}
+	passthru->clear_ids = clear_ids;
+	mutex_unlock(&subsys->lock);
 	return count;
 }
 CONFIGFS_ATTR(nvmet_passthru_, clear_ids);
@@ -1369,6 +1438,34 @@ static ssize_t nvmet_subsys_attr_serial_store(struct config_item *item,
 }
 CONFIGFS_ATTR(nvmet_subsys_, attr_serial);
 
+static ssize_t nvmet_subsys_attr_tbkas_show(struct config_item *item,
+					     char *page)
+{
+	return snprintf(page, PAGE_SIZE, "%d\n", to_subsys(item)->tbkas);
+}
+
+static ssize_t nvmet_subsys_attr_tbkas_store(struct config_item *item,
+					      const char *page, size_t count)
+{
+	struct nvmet_subsys *subsys = to_subsys(item);
+	struct nvmet_ctrl *ctrl;
+	bool tbkas;
+
+	if (kstrtobool(page, &tbkas))
+		return -EINVAL;
+
+	down_write(&nvmet_config_sem);
+	subsys->tbkas = tbkas;
+
+	/* Force reconnect */
+	list_for_each_entry(ctrl, &subsys->ctrls, subsys_entry)
+		ctrl->ops->delete_ctrl(ctrl);
+	up_write(&nvmet_config_sem);
+
+	return count;
+}
+CONFIGFS_ATTR(nvmet_subsys_, attr_tbkas);
+
 static ssize_t nvmet_subsys_attr_cntlid_min_show(struct config_item *item,
 						 char *page)
 {
@@ -1706,6 +1803,7 @@ static struct configfs_attribute *nvmet_subsys_attrs[] = {
 	&nvmet_subsys_attr_attr_qid_max,
 	&nvmet_subsys_attr_attr_ieee_oui,
 	&nvmet_subsys_attr_attr_firmware,
+	&nvmet_subsys_attr_attr_tbkas,
 #ifdef CONFIG_BLK_DEV_INTEGRITY
 	&nvmet_subsys_attr_attr_pi_enable,
 #endif

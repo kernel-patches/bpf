@@ -447,16 +447,6 @@ static struct request *blk_mq_rq_ctx_init(struct blk_mq_alloc_data *data,
 	WRITE_ONCE(rq->deadline, 0);
 	req_ref_set(rq, 1);
 
-	if (rq->rq_flags & RQF_USE_SCHED) {
-		struct elevator_queue *e = data->q->elevator;
-
-		INIT_HLIST_NODE(&rq->hash);
-		RB_CLEAR_NODE(&rq->rb_node);
-
-		if (e->type->ops.prepare_request)
-			e->type->ops.prepare_request(rq);
-	}
-
 	return rq;
 }
 
@@ -498,6 +488,12 @@ __blk_mq_alloc_requests_batch(struct blk_mq_alloc_data *data)
 	return rq_list_pop(data->cached_rqs);
 }
 
+static bool blk_op_bypass_sched(blk_opf_t opf)
+{
+	return (opf & REQ_OP_MASK) == REQ_OP_FLUSH ||
+	       blk_op_is_passthrough(opf);
+}
+
 static void blk_mq_limit_depth(struct blk_mq_alloc_data *data)
 {
 	struct elevator_mq_ops *ops;
@@ -518,12 +514,10 @@ static void blk_mq_limit_depth(struct blk_mq_alloc_data *data)
 	 * Flush/passthrough requests are special and go directly to the
 	 * dispatch list, they are not subject to the async_depth limit.
 	 */
-	if ((data->cmd_flags & REQ_OP_MASK) == REQ_OP_FLUSH ||
-	    blk_op_is_passthrough(data->cmd_flags))
+	if (blk_op_bypass_sched(data->cmd_flags))
 		return;
 
 	WARN_ON_ONCE(data->flags & BLK_MQ_REQ_RESERVED);
-	data->rq_flags |= RQF_USE_SCHED;
 
 	/*
 	 * By default, sync requests have no limit, and async requests are
@@ -532,6 +526,29 @@ static void blk_mq_limit_depth(struct blk_mq_alloc_data *data)
 	ops = &data->q->elevator->type->ops;
 	if (ops->limit_depth)
 		ops->limit_depth(data->cmd_flags, data);
+}
+
+/*
+ * Finish initializing a request once it has been claimed for an operation.
+ * Cached requests are allocated before that operation is known.
+ */
+static void blk_mq_rq_late_init(struct request *rq, u64 alloc_time_ns)
+{
+	struct elevator_queue *e;
+
+	blk_mq_rq_time_init(rq, alloc_time_ns);
+
+	if (!(rq->rq_flags & RQF_SCHED_TAGS) || (rq->rq_flags & RQF_RESV) ||
+	    blk_op_bypass_sched(rq->cmd_flags))
+		return;
+
+	rq->rq_flags |= RQF_USE_SCHED;
+	INIT_HLIST_NODE(&rq->hash);
+	RB_CLEAR_NODE(&rq->rb_node);
+
+	e = rq->q->elevator;
+	if (e->type->ops.prepare_request)
+		e->type->ops.prepare_request(rq);
 }
 
 static struct request *__blk_mq_alloc_requests(struct blk_mq_alloc_data *data)
@@ -562,7 +579,7 @@ retry:
 	if (data->nr_tags > 1) {
 		rq = __blk_mq_alloc_requests_batch(data);
 		if (rq) {
-			blk_mq_rq_time_init(rq, alloc_time_ns);
+			blk_mq_rq_late_init(rq, alloc_time_ns);
 			return rq;
 		}
 		data->nr_tags = 1;
@@ -590,7 +607,7 @@ retry:
 	if (!(data->rq_flags & RQF_SCHED_TAGS))
 		blk_mq_inc_active_requests(data->hctx);
 	rq = blk_mq_rq_ctx_init(data, blk_mq_tags_from_data(data), tag);
-	blk_mq_rq_time_init(rq, alloc_time_ns);
+	blk_mq_rq_late_init(rq, alloc_time_ns);
 	return rq;
 }
 
@@ -637,8 +654,6 @@ static struct request *blk_mq_alloc_cached_request(struct request_queue *q,
 		if (plug->nr_ios == 1)
 			return NULL;
 		rq = blk_mq_rq_cache_fill(q, plug, opf, flags);
-		if (!rq)
-			return NULL;
 	} else {
 		rq = rq_list_peek(&plug->cached_rqs);
 		if (!rq || rq->q != q)
@@ -646,15 +661,13 @@ static struct request *blk_mq_alloc_cached_request(struct request_queue *q,
 
 		if (blk_mq_get_hctx_type(opf) != rq->mq_hctx->type)
 			return NULL;
-		if (op_is_flush(rq->cmd_flags) != op_is_flush(opf))
-			return NULL;
 
 		rq_list_pop(&plug->cached_rqs);
-		blk_mq_rq_time_init(rq, blk_time_get_ns());
+		rq->cmd_flags = opf;
+		INIT_LIST_HEAD(&rq->queuelist);
+		blk_mq_rq_late_init(rq, blk_time_get_ns());
 	}
 
-	rq->cmd_flags = opf;
-	INIT_LIST_HEAD(&rq->queuelist);
 	return rq;
 }
 
@@ -766,7 +779,7 @@ struct request *blk_mq_alloc_request_hctx(struct request_queue *q,
 	if (!(data.rq_flags & RQF_SCHED_TAGS))
 		blk_mq_inc_active_requests(data.hctx);
 	rq = blk_mq_rq_ctx_init(&data, blk_mq_tags_from_data(&data), tag);
-	blk_mq_rq_time_init(rq, alloc_time_ns);
+	blk_mq_rq_late_init(rq, alloc_time_ns);
 	rq->__data_len = 0;
 	rq->phys_gap_bit = 0;
 	rq->__sector = (sector_t) -1;
@@ -1384,6 +1397,7 @@ static void blk_add_rq_to_plug(struct blk_plug *plug, struct request *rq)
 		   (!blk_queue_nomerges(rq->q) &&
 		    blk_rq_bytes(last) >= BLK_PLUG_FLUSH_SIZE)) {
 		blk_mq_flush_plug_list(plug, false);
+		blk_plug_invalidate_ts();
 		last = NULL;
 		trace_block_plug(rq->q);
 	}
@@ -3060,8 +3074,6 @@ static struct request *blk_mq_get_cached_request(struct blk_plug *plug,
 	if (type != rq->mq_hctx->type &&
 	    (type != HCTX_TYPE_READ || rq->mq_hctx->type != HCTX_TYPE_DEFAULT))
 		return NULL;
-	if (op_is_flush(rq->cmd_flags) != op_is_flush(opf))
-		return NULL;
 	rq_list_pop(&plug->cached_rqs);
 	return rq;
 }
@@ -3138,6 +3150,12 @@ void blk_mq_submit_bio(struct bio *bio)
 		goto queue_exit;
 	}
 
+	if (unlikely(op_is_dmabuf(bio->bi_opf) &&
+		     bdev_has_integrity_csum(bio->bi_bdev))) {
+		bio_endio_status(bio, BLK_STS_NOTSUPP);
+		goto queue_exit;
+	}
+
 	if ((bio->bi_opf & REQ_POLLED) && !blk_mq_can_poll(q)) {
 		bio_endio_status(bio, BLK_STS_NOTSUPP);
 		goto queue_exit;
@@ -3163,9 +3181,9 @@ void blk_mq_submit_bio(struct bio *bio)
 new_request:
 	if (rq) {
 		rq_qos_throttle(rq->q, bio);
-		blk_mq_rq_time_init(rq, blk_time_get_ns());
 		rq->cmd_flags = bio->bi_opf;
 		INIT_LIST_HEAD(&rq->queuelist);
+		blk_mq_rq_late_init(rq, blk_time_get_ns());
 	} else {
 		rq = blk_mq_get_new_requests(q, plug, bio);
 		if (unlikely(!rq)) {
@@ -3496,14 +3514,14 @@ void blk_mq_free_rqs(struct blk_mq_tag_set *set, struct blk_mq_tags *tags,
 	 */
 }
 
-void blk_mq_free_rq_map(struct blk_mq_tag_set *set, struct blk_mq_tags *tags)
+void blk_mq_free_rq_map(struct blk_mq_tags *tags)
 {
 	kfree(tags->rqs);
 	tags->rqs = NULL;
 	kfree(tags->static_rqs);
 	tags->static_rqs = NULL;
 
-	blk_mq_free_tags(set, tags);
+	blk_mq_free_tags(tags);
 }
 
 static enum hctx_type hctx_idx_to_type(struct blk_mq_tag_set *set,
@@ -3565,7 +3583,7 @@ static struct blk_mq_tags *blk_mq_alloc_rq_map(struct blk_mq_tag_set *set,
 err_free_rqs:
 	kfree(tags->rqs);
 err_free_tags:
-	blk_mq_free_tags(set, tags);
+	blk_mq_free_tags(tags);
 	return NULL;
 }
 
@@ -3683,9 +3701,9 @@ static bool blk_mq_hctx_has_requests(struct blk_mq_hw_ctx *hctx)
 	};
 	int srcu_idx;
 
-	srcu_idx = srcu_read_lock(&hctx->queue->tag_set->tags_srcu);
+	srcu_idx = srcu_read_lock(&blk_mq_tags_srcu);
 	blk_mq_all_tag_iter(tags, blk_mq_has_request, &data);
-	srcu_read_unlock(&hctx->queue->tag_set->tags_srcu, srcu_idx);
+	srcu_read_unlock(&blk_mq_tags_srcu, srcu_idx);
 
 	return data.has_rq;
 }
@@ -3957,7 +3975,7 @@ static void blk_mq_exit_hctx(struct request_queue *q,
 	if (set->ops->exit_hctx)
 		set->ops->exit_hctx(hctx, hctx_idx);
 
-	call_srcu(&set->tags_srcu, &hctx->fq->rcu_head,
+	call_srcu(&blk_mq_tags_srcu, &hctx->fq->rcu_head,
 			blk_free_flush_queue_callback);
 	hctx->fq = NULL;
 
@@ -3991,6 +4009,7 @@ static int blk_mq_init_hctx(struct request_queue *q,
 		goto fail;
 
 	hctx->queue_num = hctx_idx;
+	clear_bit(BLK_MQ_S_INACTIVE, &hctx->state);
 
 	hctx->tags = set->tags[hctx_idx];
 
@@ -4118,7 +4137,7 @@ struct blk_mq_tags *blk_mq_alloc_map_and_rqs(struct blk_mq_tag_set *set,
 
 	ret = blk_mq_alloc_rqs(set, tags, hctx_idx, depth);
 	if (ret) {
-		blk_mq_free_rq_map(set, tags);
+		blk_mq_free_rq_map(tags);
 		return NULL;
 	}
 
@@ -4146,7 +4165,7 @@ void blk_mq_free_map_and_rqs(struct blk_mq_tag_set *set,
 {
 	if (tags) {
 		blk_mq_free_rqs(set, tags, hctx_idx);
-		blk_mq_free_rq_map(set, tags);
+		blk_mq_free_rq_map(tags);
 	}
 }
 
@@ -4884,9 +4903,6 @@ int blk_mq_alloc_tag_set(struct blk_mq_tag_set *set)
 		if (ret)
 			goto out_free_srcu;
 	}
-	ret = init_srcu_struct(&set->tags_srcu);
-	if (ret)
-		goto out_cleanup_srcu;
 
 	init_rwsem(&set->update_nr_hwq_lock);
 
@@ -4895,7 +4911,7 @@ int blk_mq_alloc_tag_set(struct blk_mq_tag_set *set)
 				 sizeof(struct blk_mq_tags *), GFP_KERNEL,
 				 set->numa_node);
 	if (!set->tags)
-		goto out_cleanup_tags_srcu;
+		goto out_cleanup_srcu;
 
 	for (i = 0; i < set->nr_maps; i++) {
 		set->map[i].mq_map = kcalloc_node(nr_cpu_ids,
@@ -4924,8 +4940,6 @@ out_free_mq_map:
 	}
 	kfree(set->tags);
 	set->tags = NULL;
-out_cleanup_tags_srcu:
-	cleanup_srcu_struct(&set->tags_srcu);
 out_cleanup_srcu:
 	if (set->flags & BLK_MQ_F_BLOCKING)
 		cleanup_srcu_struct(set->srcu);
@@ -4972,8 +4986,6 @@ void blk_mq_free_tag_set(struct blk_mq_tag_set *set)
 	kfree(set->tags);
 	set->tags = NULL;
 
-	srcu_barrier(&set->tags_srcu);
-	cleanup_srcu_struct(&set->tags_srcu);
 	if (set->flags & BLK_MQ_F_BLOCKING) {
 		srcu_barrier(set->srcu);
 		cleanup_srcu_struct(set->srcu);
