@@ -133,4 +133,14 @@ int tc_src(struct __sk_buff *skb)
 	return bpf_redirect_neigh(IFINDEX_DST, NULL, 0, 0);
 }
 
+SEC("tc")
+int tc_egress(struct __sk_buff *skb)
+{
+	if (skb->mark)
+		return TC_ACT_OK;
+
+	skb->mark = 1;
+	return bpf_redirect_neigh(skb->ifindex, NULL, 0, 0);
+}
+
 char __license[] SEC("license") = "GPL";

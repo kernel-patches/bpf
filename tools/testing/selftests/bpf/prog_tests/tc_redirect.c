@@ -407,6 +407,26 @@ fail:
 	return -1;
 }
 
+static int netns_load_egress_bpf(const struct bpf_program *prog,
+				 const char *ns, int ifindex)
+{
+	LIBBPF_OPTS(bpf_tc_hook, qdisc);
+	struct nstoken *nstoken;
+	int err;
+
+	nstoken = open_netns(ns);
+	if (!ASSERT_OK_PTR(nstoken, "setns egress"))
+		return -1;
+
+	QDISC_CLSACT_CREATE(&qdisc, ifindex);
+	XGRESS_FILTER_ADD(&qdisc, BPF_TC_EGRESS, prog, 0);
+	close_netns(nstoken);
+	return 0;
+fail:
+	close_netns(nstoken);
+	return -1;
+}
+
 static struct bpf_link *netns_attach_nk(const char *ns, int ifindex,
 					struct bpf_program *prog)
 {
@@ -1053,6 +1073,12 @@ static void test_tc_redirect_neigh(struct netns_setup_result *setup_result)
 
 	if (netns_load_bpf(skel->progs.tc_src, skel->progs.tc_dst,
 			   skel->progs.tc_chk, setup_result))
+		goto done;
+
+	if (netns_load_egress_bpf(skel->progs.tc_egress, NS_SRC,
+				  setup_result->ifindex_src) ||
+	    netns_load_egress_bpf(skel->progs.tc_egress, NS_DST,
+				  setup_result->ifindex_dst))
 		goto done;
 
 	if (!ASSERT_OK(set_forwarding(false), "disable forwarding"))
