@@ -462,6 +462,14 @@ static bool rq_is_open(struct rq *rq, u64 enq_flags)
 	 */
 
 	/*
+	 * A local insertion can raise next_class to ext while the donor is
+	 * still idle. Keep the rq open so that the local DSQ head is not
+	 * unnecessarily reenqueued before the CPU can pick it.
+	 */
+	if (rq->donor == rq->idle)
+		return true;
+
+	/*
 	 * If we're in the dispatch path holding rq lock, $donor may or may not
 	 * be ready depending on whether the on-going dispatch decides to extend
 	 * $donor's slice. We say yes here and resolve it at the end of dispatch.
