@@ -63,6 +63,7 @@ $(LIBBPF_BOOTSTRAP)-clean: FORCE | $(LIBBPF_BOOTSTRAP_OUTPUT)
 	$(Q)$(MAKE) -C $(BPF_DIR) OUTPUT=$(LIBBPF_BOOTSTRAP_OUTPUT) clean >/dev/null
 
 prefix ?= /usr/local
+libdir ?= $(prefix)/lib
 bash_compdir ?= /usr/share/bash-completion/completions
 
 CFLAGS += -O2
@@ -170,7 +171,7 @@ include $(wildcard $(OUTPUT)*.d)
 
 all: $(OUTPUT)bpftool
 
-SRCS := $(wildcard *.c)
+SRCS := $(filter-out llvm_disasm.c,$(wildcard *.c))
 
 ifeq ($(feature-llvm),1)
 ifneq ($(SKIP_LLVM),1)
@@ -186,10 +187,19 @@ ifeq ($(HAS_LLVM),1)
   # Makefile includes lib.mk which sets -D_GNU_SOURCE) which would cause
   # compilation error due to redefinition. Let's filter it out here.
   CFLAGS  += $(filter-out -D_GNU_SOURCE,$(shell $(LLVM_CONFIG) --cflags))
-  LIBS    += $(shell $(LLVM_CONFIG) --libs $(LLVM_CONFIG_LIB_COMPONENTS))
+  LLVM_LIBS := $(shell $(LLVM_CONFIG) --libs $(LLVM_CONFIG_LIB_COMPONENTS))
   ifeq ($(shell $(LLVM_CONFIG) --shared-mode),static)
+    # No libLLVM.so dependency to avoid, link the disassembler into bpftool
+    SRCS += llvm_disasm.c
+    LIBS += $(LLVM_LIBS)
     LIBS += $(shell $(LLVM_CONFIG) --system-libs $(LLVM_CONFIG_LIB_COMPONENTS))
     LIBS += -lstdc++
+  else
+    # Build the disassembler as a plugin, the only object linked against
+    # libLLVM, that bpftool loads only to disassemble JITed programs
+    LLVM_PLUGIN := $(OUTPUT)bpftool-llvm.so
+    CFLAGS += -DLLVM_PLUGIN_DIR='"$(libdir)/bpftool"'
+    LIBS += -ldl
   endif
   LDFLAGS += $(shell $(LLVM_CONFIG) --ldflags)
 else
@@ -290,6 +300,21 @@ $(BPFTOOL_BOOTSTRAP): $(BOOTSTRAP_OBJS) $(LIBBPF_BOOTSTRAP)
 $(OUTPUT)bpftool: $(OBJS) $(LIBBPF)
 	$(QUIET_LINK)$(CC) $(CFLAGS) $(LDFLAGS) $(OBJS) $(LIBS) -o $@
 
+ifneq ($(LLVM_PLUGIN),)
+all: $(LLVM_PLUGIN)
+
+$(LLVM_PLUGIN): CFLAGS += -fPIC
+$(LLVM_PLUGIN): $(OUTPUT)llvm_disasm.o
+	$(QUIET_LINK)$(CC) $(CFLAGS) $(LDFLAGS) -shared $< $(LLVM_LIBS) -o $@
+
+# The plugin directory, $(libdir)/bpftool, is compiled into jit_disasm.o.
+# Recompile it if libdir changes, e.g. on "make" then "make install libdir=...".
+$(OUTPUT)llvm-plugin-dir: FORCE
+	$(Q)echo '$(libdir)/bpftool' | cmp -s - $@ || echo '$(libdir)/bpftool' > $@
+
+$(OUTPUT)jit_disasm.o: $(OUTPUT)llvm-plugin-dir
+endif
+
 $(BOOTSTRAP_OUTPUT)%.o: %.c $(LIBBPF_BOOTSTRAP_INTERNAL_HDRS) | $(BOOTSTRAP_OUTPUT)
 	$(QUIET_CC)$(HOSTCC) $(HOST_CFLAGS) -c -MMD $< -o $@
 
@@ -303,16 +328,21 @@ feature-detect-clean:
 clean: $(LIBBPF)-clean $(LIBBPF_BOOTSTRAP)-clean feature-detect-clean
 	$(call QUIET_CLEAN, bpftool)
 	$(Q)$(RM) -- $(OUTPUT)bpftool $(OUTPUT)*.o $(OUTPUT)*.d
+	$(Q)$(RM) -- $(OUTPUT)bpftool-llvm.so $(OUTPUT)llvm-plugin-dir
 	$(Q)$(RM) -- $(OUTPUT)*.skel.h $(OUTPUT)vmlinux.h
 	$(Q)$(RM) -r -- $(LIBBPF_OUTPUT) $(BOOTSTRAP_OUTPUT)
 	$(call QUIET_CLEAN, core-gen)
 	$(Q)$(RM) -- $(OUTPUT)FEATURE-DUMP.bpftool
 	$(Q)$(RM) -r -- $(OUTPUT)feature/
 
-install-bin: $(OUTPUT)bpftool
+install-bin: $(OUTPUT)bpftool $(LLVM_PLUGIN)
 	$(call QUIET_INSTALL, bpftool)
 	$(Q)$(INSTALL) -m 0755 -d $(DESTDIR)$(prefix)/sbin
 	$(Q)$(INSTALL) $(OUTPUT)bpftool $(DESTDIR)$(prefix)/sbin/bpftool
+ifneq ($(LLVM_PLUGIN),)
+	$(call QUIET_INSTALL, bpftool-llvm.so)
+	$(Q)$(INSTALL) -m 0755 -D -t $(DESTDIR)$(libdir)/bpftool $(LLVM_PLUGIN)
+endif
 
 install: install-bin
 	$(Q)$(INSTALL) -m 0755 -d $(DESTDIR)$(bash_compdir)
@@ -321,6 +351,8 @@ install: install-bin
 uninstall:
 	$(call QUIET_UNINST, bpftool)
 	$(Q)$(RM) -- $(DESTDIR)$(prefix)/sbin/bpftool
+	$(call QUIET_UNINST, bpftool-llvm.so)
+	$(Q)$(RM) -r -- $(DESTDIR)$(libdir)/bpftool
 	$(Q)$(RM) -- $(DESTDIR)$(bash_compdir)/bpftool
 
 doc:
