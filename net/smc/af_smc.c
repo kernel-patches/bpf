@@ -2774,7 +2774,7 @@ int smc_accept(struct socket *sock, struct socket *new_sock,
 			if (skb_queue_empty(&clcsk->sk_receive_queue))
 				sk_wait_data(clcsk, &timeo, NULL);
 			release_sock(clcsk);
-		} else if (!atomic_read(&smc_sk(nsk)->conn.bytes_to_rcv)) {
+		} else if (!smc_rx_data_available(&smc_sk(nsk)->conn, 0)) {
 			lock_sock(nsk);
 			smc_rx_wait(smc_sk(nsk), &timeo, 0, smc_rx_data_available);
 			release_sock(nsk);
@@ -2939,7 +2939,7 @@ __poll_t smc_poll(struct file *file, struct socket *sock,
 						mask |= EPOLLOUT | EPOLLWRNORM;
 				}
 			}
-			if (atomic_read(&smc->conn.bytes_to_rcv))
+			if (smc_rx_data_available(&smc->conn, 0))
 				mask |= EPOLLIN | EPOLLRDNORM;
 			if (sk->sk_shutdown & RCV_SHUTDOWN)
 				mask |= EPOLLIN | EPOLLRDNORM | EPOLLRDHUP;
@@ -3237,7 +3237,7 @@ int smc_ioctl(struct socket *sock, unsigned int cmd,
 		    smc->sk.sk_state == SMC_CLOSED)
 			answ = 0;
 		else
-			answ = atomic_read(&smc->conn.bytes_to_rcv);
+			answ = smc_rx_data_available(&smc->conn, 0);
 		break;
 	case SIOCOUTQ:
 		/* output queue size (not send + not acked) */
