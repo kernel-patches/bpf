@@ -10,7 +10,6 @@
 #include <linux/memblock.h>
 #include <linux/platform_device.h>
 #include <linux/platform_data/simplefb.h>
-#include <linux/string.h>
 
 #include <asm/bootinfo.h>
 #include <asm/fw/fw.h>
@@ -77,7 +76,6 @@ static const u32 ntsc_320[] __initconst = {
 
 static int __init n64_platform_init(void)
 {
-	static const char simplefb_resname[] = "FB";
 	static const struct simplefb_platform_data mode = {
 		.width = W,
 		.height = H,
@@ -89,34 +87,16 @@ static int __init n64_platform_init(void)
 	unsigned long phys;
 	unsigned i;
 
-	memset(res, 0, sizeof(struct resource) * 3);
-	res[0].flags = IORESOURCE_MEM;
-	res[0].start = MI_REG_BASE;
-	res[0].end = MI_REG_BASE + NUM_MI_REGS * 4 - 1;
+	res[0] = DEFINE_RES_MEM(MI_REG_BASE, NUM_MI_REGS * 4);
+	res[1] = DEFINE_RES_MEM(AI_REG_BASE, NUM_AI_REGS * 4);
+	res[2] = DEFINE_RES_IRQ(RCP_IRQ);
+	platform_device_register_simple("n64audio", PLATFORM_DEVID_NONE, res, 3);
 
-	res[1].flags = IORESOURCE_MEM;
-	res[1].start = AI_REG_BASE;
-	res[1].end = AI_REG_BASE + NUM_AI_REGS * 4 - 1;
+	res[0] = DEFINE_RES_MEM(PI_REG_BASE, NUM_PI_REGS * 4);
+	platform_device_register_simple("n64cart", PLATFORM_DEVID_NONE, res, 1);
 
-	res[2].flags = IORESOURCE_IRQ;
-	res[2].start = RCP_IRQ;
-	res[2].end = RCP_IRQ;
-
-	platform_device_register_simple("n64audio", -1, res, 3);
-
-	memset(&res[0], 0, sizeof(res[0]));
-	res[0].flags = IORESOURCE_MEM;
-	res[0].start = PI_REG_BASE;
-	res[0].end = PI_REG_BASE + NUM_PI_REGS * 4 - 1;
-
-	platform_device_register_simple("n64cart", -1, res, 1);
-
-	memset(&res[0], 0, sizeof(res[0]));
-	res[0].flags = IORESOURCE_MEM;
-	res[0].start = SI_REG_BASE;
-	res[0].end = SI_REG_BASE + NUM_SI_REGS * 4 - 1;
-
-	platform_device_register_simple("n64joy", -1, res, 1);
+	res[0] = DEFINE_RES_MEM(SI_REG_BASE, NUM_SI_REGS * 4);
+	platform_device_register_simple("n64joy", PLATFORM_DEVID_NONE, res, 1);
 
 	/* The framebuffer needs 64-byte alignment */
 	orig = kzalloc(W * H * 2 + 63, GFP_DMA | GFP_KERNEL);
@@ -133,13 +113,7 @@ static int __init n64_platform_init(void)
 			n64rdp_write_reg(i, ntsc_320[i]);
 	}
 
-	/* setup IORESOURCE_MEM as framebuffer memory */
-	memset(&res[0], 0, sizeof(res[0]));
-	res[0].flags = IORESOURCE_MEM;
-	res[0].name = simplefb_resname;
-	res[0].start = phys;
-	res[0].end = phys + W * H * 2 - 1;
-
+	res[0] = DEFINE_RES_MEM_NAMED(phys, W * H * 2, "FB");
 	platform_device_register_resndata(NULL, "simple-framebuffer", 0,
 					  &res[0], 1, &mode, sizeof(mode));
 
