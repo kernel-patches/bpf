@@ -94,9 +94,9 @@ static ssize_t ds1343_show_glitchfilter(struct device *dev,
 	glitch_filt_status = !!(data & DS1343_EGFIL);
 
 	if (glitch_filt_status)
-		return sprintf(buf, "enabled\n");
+		return sysfs_emit(buf, "enabled\n");
 	else
-		return sprintf(buf, "disabled\n");
+		return sysfs_emit(buf, "disabled\n");
 }
 
 static ssize_t ds1343_store_glitchfilter(struct device *dev,
@@ -180,7 +180,7 @@ static ssize_t ds1343_show_tricklecharger(struct device *dev,
 		}
 	}
 
-	return sprintf(buf, "%s %s\n", diodes, resistors);
+	return sysfs_emit(buf, "%s %s\n", diodes, resistors);
 }
 
 static DEVICE_ATTR(trickle_charger, 0444, ds1343_show_tricklecharger, NULL);
