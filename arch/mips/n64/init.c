@@ -51,14 +51,12 @@ void __init prom_init(void)
 
 #define W 320
 #define H 240
-#define REG_BASE ((u32 __iomem *) CKSEG1ADDR(0x4400000))
+#define VI_REG_BASE ((u32 __iomem *)CKSEG1ADDR(0x4400000))
 
-static void __init n64rdp_write_reg(const u8 reg, const u32 value)
+static void __init n64_vi_write_reg(const u8 reg, const u32 value)
 {
-	__raw_writel(value, REG_BASE + reg);
+	__raw_writel(value, VI_REG_BASE + reg);
 }
-
-#undef REG_BASE
 
 static const u32 ntsc_320[] __initconst = {
 	0x00013212, 0x00000000, 0x00000140, 0x00000200,
@@ -107,9 +105,9 @@ static int __init n64_platform_init(void)
 
 	for (i = 0; i < ARRAY_SIZE(ntsc_320); i++) {
 		if (i == 1)
-			n64rdp_write_reg(i, phys);
+			n64_vi_write_reg(i, phys);
 		else
-			n64rdp_write_reg(i, ntsc_320[i]);
+			n64_vi_write_reg(i, ntsc_320[i]);
 	}
 
 	res[0] = DEFINE_RES_MEM_NAMED(phys, W * H * 2, "FB");
@@ -118,9 +116,6 @@ static int __init n64_platform_init(void)
 
 	return 0;
 }
-
-#undef W
-#undef H
 
 arch_initcall(n64_platform_init);
 
