@@ -601,7 +601,7 @@ static ssize_t rv3029_hwmon_show_temp(struct device *dev,
 	if (ret < 0)
 		return ret;
 
-	return sprintf(buf, "%d\n", temp_mC);
+	return sysfs_emit(buf, "%d\n", temp_mC);
 }
 
 static ssize_t rv3029_hwmon_set_update_interval(struct device *dev,
@@ -654,7 +654,7 @@ static ssize_t rv3029_hwmon_show_update_interval(struct device *dev,
 		interval_ms = 0;
 	}
 
-	return sprintf(buf, "%d\n", interval_ms);
+	return sysfs_emit(buf, "%d\n", interval_ms);
 }
 
 static SENSOR_DEVICE_ATTR(temp1_input, S_IRUGO, rv3029_hwmon_show_temp,
