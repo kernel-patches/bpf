@@ -1479,18 +1479,9 @@ static const char *ffs_dmabuf_get_timeline_name(struct dma_fence *fence)
 	return "";
 }
 
-static void ffs_dmabuf_fence_release(struct dma_fence *fence)
-{
-	struct ffs_dma_fence *dma_fence =
-		container_of(fence, struct ffs_dma_fence, base);
-
-	kfree(dma_fence);
-}
-
 static const struct dma_fence_ops ffs_dmabuf_fence_ops = {
 	.get_driver_name	= ffs_dmabuf_get_driver_name,
 	.get_timeline_name	= ffs_dmabuf_get_timeline_name,
-	.release		= ffs_dmabuf_fence_release,
 };
 
 static int ffs_dma_resv_lock(struct dma_buf *dmabuf, bool nonblock)
