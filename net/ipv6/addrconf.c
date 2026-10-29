@@ -60,7 +60,9 @@
 #endif
 #include <linux/capability.h>
 #include <linux/delay.h>
+#include <linux/math64.h>
 #include <linux/notifier.h>
+#include <linux/overflow.h>
 #include <linux/string.h>
 #include <linux/hash.h>
 
@@ -1376,10 +1378,19 @@ out:
 
 static unsigned long ipv6_get_regen_advance(const struct inet6_dev *idev)
 {
-	return READ_ONCE(idev->cnf.regen_min_advance) +
-		READ_ONCE(idev->cnf.regen_max_retry) *
-		READ_ONCE(idev->cnf.dad_transmits) *
-		max(NEIGH_VAR(idev->nd_parms, RETRANS_TIME), HZ/100) / HZ;
+	unsigned int retrans_time = max(NEIGH_VAR(idev->nd_parms,
+						 RETRANS_TIME), HZ / 100);
+	u32 min_advance = READ_ONCE(idev->cnf.regen_min_advance);
+	u32 retries = READ_ONCE(idev->cnf.regen_max_retry);
+	u32 dad = READ_ONCE(idev->cnf.dad_transmits);
+	u64 duration;
+
+	/* Preferred lifetimes are u32, so a larger advance cannot be used. */
+	if (check_mul_overflow((u64)retries * dad, (u64)retrans_time,
+			       &duration))
+		return U32_MAX;
+
+	return min_t(u64, (u64)min_advance + div_u64(duration, HZ), U32_MAX);
 }
 
 static int ipv6_create_tempaddr(struct inet6_ifaddr *ifp, bool block)
@@ -1391,8 +1402,10 @@ static int ipv6_create_tempaddr(struct inet6_ifaddr *ifp, bool block)
 	u32 if_public_preferred_lft;
 	s32 cnf_temp_preferred_lft;
 	struct inet6_ifaddr *ift;
+	u32 desync_factor_limit;
 	struct ifa6_config cfg;
 	long max_desync_factor;
+	u64 min_preferred_lft;
 	struct in6_addr addr;
 	int ret = 0;
 
@@ -1430,9 +1443,15 @@ retry:
 	 * idev->desync_factor if it's larger
 	 */
 	cnf_temp_preferred_lft = READ_ONCE(idev->cnf.temp_prefered_lft);
-	max_desync_factor = min_t(long,
-				  READ_ONCE(idev->cnf.max_desync_factor),
-				  cnf_temp_preferred_lft - regen_advance);
+	desync_factor_limit = max_t(s32, cnf_temp_preferred_lft, 0);
+	if (regen_advance >= desync_factor_limit)
+		desync_factor_limit = 0;
+	else
+		desync_factor_limit -= regen_advance;
+
+	max_desync_factor = clamp_t(long,
+				    READ_ONCE(idev->cnf.max_desync_factor),
+				    0, desync_factor_limit);
 
 	if (unlikely(idev->desync_factor > max_desync_factor)) {
 		if (max_desync_factor > 0) {
@@ -1485,15 +1504,16 @@ retry:
 	 * temporary addresses being generated.
 	 */
 	age = (now - tmp_tstamp + ADDRCONF_TIMER_FUZZ_MINUS) / HZ;
-	if (cfg.preferred_lft <= regen_advance + age) {
-		cfg.preferred_lft = regen_advance + age + 1;
-		if (cfg.preferred_lft > cfg.valid_lft ||
-		    cfg.preferred_lft > if_public_preferred_lft) {
+	min_preferred_lft = (u64)regen_advance + age + 1;
+	if (cfg.preferred_lft < min_preferred_lft) {
+		if (min_preferred_lft > cfg.valid_lft ||
+		    min_preferred_lft > if_public_preferred_lft) {
 			in6_ifa_put(ifp);
 			in6_dev_put(idev);
 			ret = -1;
 			goto out;
 		}
+		cfg.preferred_lft = min_preferred_lft;
 	}
 
 	cfg.ifa_flags = IFA_F_TEMPORARY;
@@ -4705,7 +4725,7 @@ restart:
 
 				unsigned long regen_advance = ipv6_get_regen_advance(ifp->idev);
 
-				if (age + regen_advance >= ifp->prefered_lft) {
+				if ((u64)age + regen_advance >= ifp->prefered_lft) {
 					struct inet6_ifaddr *ifpub = ifp->ifpub;
 					if (time_before(ifp->tstamp + ifp->prefered_lft * HZ, next))
 						next = ifp->tstamp + ifp->prefered_lft * HZ;
@@ -6921,7 +6941,8 @@ static const struct ctl_table addrconf_sysctl[] = {
 		.data		= &ipv6_devconf.dad_transmits,
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
-		.proc_handler	= proc_dointvec,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= SYSCTL_ZERO,
 	},
 	{
 		.procname	= "router_solicitations",
@@ -7001,14 +7022,16 @@ static const struct ctl_table addrconf_sysctl[] = {
 		.data           = &ipv6_devconf.regen_min_advance,
 		.maxlen         = sizeof(int),
 		.mode           = 0644,
-		.proc_handler   = proc_dointvec,
+		.proc_handler   = proc_dointvec_minmax,
+		.extra1         = SYSCTL_ZERO,
 	},
 	{
 		.procname	= "regen_max_retry",
 		.data		= &ipv6_devconf.regen_max_retry,
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
-		.proc_handler	= proc_dointvec,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= SYSCTL_ZERO,
 	},
 	{
 		.procname	= "max_desync_factor",

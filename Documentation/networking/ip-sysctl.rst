@@ -2874,6 +2874,7 @@ dad_transmits - INTEGER
 	The amount of Duplicate Address Detection probes to send.
 
 	Default: 1
+	Minimum: 0
 
 forwarding - INTEGER
 	Configure interface-specific Host/Router behaviour.
@@ -3025,12 +3026,14 @@ regen_min_advance - INTEGER
 	does not conform to RFC 8981.
 
 	Default: 2
+	Minimum: 0
 
 regen_max_retry - INTEGER
 	Number of attempts before give up attempting to generate
 	valid temporary addresses.
 
 	Default: 5
+	Minimum: 0
 
 max_addresses - INTEGER
 	Maximum number of autoconfigured addresses per interface.  Setting
