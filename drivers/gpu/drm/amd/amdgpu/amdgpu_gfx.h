@@ -523,6 +523,7 @@ struct amdgpu_gfx {
 	uint16_t 			xcc_mask;
 	uint32_t			num_xcc_per_xcp;
 	struct mutex			partition_mutex;
+	bool				px_switch_stopped;
 	bool				mcbp; /* mid command buffer preemption */
 
 	/* IP reg dump */

@@ -3764,6 +3764,58 @@ static void gfx_v12_1_emit_mem_sync(struct amdgpu_ring *ring)
 	amdgpu_ring_write(ring, gcr_cntl); /* GCR_CNTL */
 }
 
+/*
+ * A runtime partition switch does not pass through GFX hw_fini/hw_init.
+ * Stop the GFX compute path while the old partition is still programmed,
+ * then restore it after the new mode is committed.
+ */
+static int gfx_v12_1_pre_px_switch(struct amdgpu_ip_block *ip_block)
+{
+	struct amdgpu_device *adev = ip_block->adev;
+	int xcc_id, pipe, num_xcc = NUM_XCC(adev->gfx.xcc_mask);
+
+	if (!adev->enable_mes_kiq)
+		return 0;
+
+	for (xcc_id = 0; xcc_id < num_xcc; xcc_id++) {
+		if (!adev->mes.ring[MES_PIPE_INST(xcc_id,
+						  AMDGPU_MES_SCHED_PIPE)].sched.ready)
+			return 0;
+	}
+
+	for (xcc_id = 0; xcc_id < num_xcc; xcc_id++)
+		gfx_v12_1_xcc_fini(adev, xcc_id);
+
+	/*
+	 * MES firmware restarts with its read pointer at zero. Clear both
+	 * rings and their writeback pointers before bringing the GFX compute
+	 * path back up, otherwise firmware can replay stale packets.
+	 */
+	for (xcc_id = 0; xcc_id < num_xcc; xcc_id++) {
+		for (pipe = 0; pipe < AMDGPU_MAX_MES_PIPES; pipe++)
+			amdgpu_ring_clear_ring_and_ptrs(
+				&adev->mes.ring[MES_PIPE_INST(xcc_id, pipe)]);
+	}
+
+	adev->gfx.px_switch_stopped = true;
+	return 0;
+}
+
+static int gfx_v12_1_post_px_switch(struct amdgpu_ip_block *ip_block)
+{
+	struct amdgpu_device *adev = ip_block->adev;
+	uint16_t xcc_mask;
+
+	if (!adev->enable_mes_kiq || !adev->gfx.px_switch_stopped)
+		return 0;
+
+	/* Cleared first so a failed resume is not run a second time. */
+	adev->gfx.px_switch_stopped = false;
+	xcc_mask = GENMASK(NUM_XCC(adev->gfx.xcc_mask) - 1, 0);
+
+	return gfx_v12_1_xcc_cp_resume(adev, xcc_mask);
+}
+
 static const struct amd_ip_funcs gfx_v12_1_ip_funcs = {
 	.name = "gfx_v12_1",
 	.early_init = gfx_v12_1_early_init,
@@ -3779,6 +3831,8 @@ static const struct amd_ip_funcs gfx_v12_1_ip_funcs = {
 	.get_clockgating_state = gfx_v12_1_get_clockgating_state,
 	.dump_ip_state = gfx_v12_1_ip_dump,
 	.print_ip_state = gfx_v12_1_ip_print,
+	.pre_px_switch = gfx_v12_1_pre_px_switch,
+	.post_px_switch = gfx_v12_1_post_px_switch,
 };
 
 static const struct amdgpu_ring_funcs gfx_v12_1_ring_funcs_compute = {
