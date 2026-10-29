@@ -1886,6 +1886,10 @@ static int parse_pred(const char *str, void *data,
 		len = i - s;
 		if (q)
 			i++;
+		if (!q && !len) {
+			parse_error(pe, FILT_ERR_INVALID_VALUE, pos + i);
+			goto err_free;
+		}
 		if (len >= MAX_FILTER_STR_VAL) {
 			parse_error(pe, FILT_ERR_OPERAND_TOO_LONG, pos + i);
 			goto err_free;
