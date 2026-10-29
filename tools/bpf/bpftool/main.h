@@ -214,6 +214,9 @@ static inline int disasm_init(void)
 	return -1;
 }
 #endif
+#ifdef HAVE_LLVM_SUPPORT
+bool disasm_llvm_available(void);
+#endif
 void print_data_json(uint8_t *data, size_t len);
 void print_hex_data_json(uint8_t *data, size_t len);
 

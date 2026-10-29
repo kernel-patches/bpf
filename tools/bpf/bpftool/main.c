@@ -124,7 +124,8 @@ static int do_version(int argc, char **argv)
 	const bool has_libbfd = false;
 #endif
 #ifdef HAVE_LLVM_SUPPORT
-	const bool has_llvm = true;
+	/* The LLVM disassembler may be a plugin that is not installed */
+	const bool has_llvm = disasm_llvm_available();
 #else
 	const bool has_llvm = false;
 #endif
