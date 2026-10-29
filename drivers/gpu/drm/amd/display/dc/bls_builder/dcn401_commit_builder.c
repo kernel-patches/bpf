@@ -784,34 +784,6 @@ static bool check_no_flip_int(const struct dc *dc,
 			!pipe->plane_state->flip_int_enabled;
 }
 
-/* With an empty tree, DC1 removes no MPCC before the insert. */
-/*
- * Plane add needs an empty OPP tree. A kept-plane update removes the MPCC
- * that is already there, so a non-empty tree is fine.
- */
-static bool check_opp_tree_for_update(const struct dc *dc,
-		const struct dc_state *current_state,
-		const struct dc_state *new_state)
-{
-	const struct pipe_ctx *pipe = dcn401_otg_of(new_state);
-	const struct output_pixel_processor *opp;
-	unsigned int i;
-
-	(void)dc;
-	if (!pipe)
-		return false;
-	opp = pipe->stream_res.opp;
-	if (!opp)
-		return false;
-	for (i = 0; i < MAX_PIPES; i++) {
-		if (opp->mpcc_disconnect_pending[i])
-			return false;
-	}
-	if (dcn401_is_plane_kept(current_state, new_state))
-		return true;
-	return !opp->mpc_tree_params.opp_list;
-}
-
 /*
  * A kept-plane update does not yet emit scaler or viewport steps. Plane
  * add has no current plane, so those rects are not compared.
@@ -1061,8 +1033,6 @@ static enum bls_builder_result dcn401_check_seamless_update_support(
 	CHECK_CONDITION(no_flip_int, "flip interrupt is enabled");
 
 	/* update_dchubp_dpp. */
-	CHECK_CONDITION(opp_tree_for_update,
-			"opp tree is not ready for the update");
 	CHECK_CONDITION(no_plane_gamut_remap, "plane gamut remap is set");
 	CHECK_CONDITION(no_stream_gamut_remap, "stream gamut remap is set");
 	CHECK_CONDITION(no_output_csc, "output csc is set");
@@ -1330,79 +1300,82 @@ static const struct dcn401_commit_step bls_update_head_new_lock[] = {
 	{ .func = DC_UDELAY },
 };
 
-/* blank_pixel_data (unblank), dcn401_program_tg and update_odm. */
+/*
+ * blank_pixel_data (unblank), dcn401_program_tg and update_odm.
+ * First enable of the HUBP/DPP only.
+ */
 static const struct dcn401_commit_step bls_update_head_new_stream[] = {
 	{ .func = OPP_SET_DISP_PATTERN_GENERATOR,
-	  .meta.opp_set_disp_pattern_generator.unblank = true },
-	{ .func = TG_PROGRAM_GLOBAL_SYNC },
-	{ .func = TG_WAIT_FOR_STATE },
-	{ .func = TG_SET_VTG_PARAMS },
-	{ .func = TG_SETUP_VERTICAL_INTERRUPT2 },
-	{ .func = OPTC_SET_ODM_BYPASS },
-	{ .func = OPP_PIPE_CLOCK_CONTROL },
-	{ .func = OPP_PROGRAM_LEFT_EDGE_EXTRA_PIXEL },
+	  .meta.opp_set_disp_pattern_generator.unblank = true,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
+	{ .func = TG_PROGRAM_GLOBAL_SYNC,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
+	{ .func = TG_WAIT_FOR_STATE,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
+	{ .func = TG_SET_VTG_PARAMS,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
+	{ .func = TG_SETUP_VERTICAL_INTERRUPT2,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
+	{ .func = OPTC_SET_ODM_BYPASS,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
+	{ .func = OPP_PIPE_CLOCK_CONTROL,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
+	{ .func = OPP_PROGRAM_LEFT_EDGE_EXTRA_PIXEL,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
 };
 
 /* enable_plane, then the watermark propagate and the DET segments. */
 static const struct dcn401_commit_step bls_update_head_new_enable_plane[] = {
-	{ .func = DC_IP_REQUEST_CNTL, .meta.dc_ip_request_cntl.enable = true },
-	{ .func = HUBP_PG_CONTROL, .meta.hubp_pg_control.power_on = true },
-	{ .func = DC_IP_REQUEST_CNTL, .meta.dc_ip_request_cntl.enable = false },
-	{ .func = HUBP_CLK_CNTL, .meta.hubp_clk_cntl.enable = true },
-	{ .func = HUBP_INIT },
-	{ .func = OPP_PIPE_CLOCK_CONTROL },
-	{ .func = HUBBUB_FORCE_WM_PROPAGATE_TO_PIPES },
+	{ .func = DC_IP_REQUEST_CNTL, .meta.dc_ip_request_cntl.enable = true,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
+	{ .func = HUBP_PG_CONTROL, .meta.hubp_pg_control.power_on = true,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
+	{ .func = DC_IP_REQUEST_CNTL, .meta.dc_ip_request_cntl.enable = false,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
+	{ .func = HUBP_CLK_CNTL, .meta.hubp_clk_cntl.enable = true,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
+	{ .func = HUBP_INIT,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
+	{ .func = OPP_PIPE_CLOCK_CONTROL,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
+	{ .func = HUBBUB_FORCE_WM_PROPAGATE_TO_PIPES,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
 	{ .func = HUBP_PROGRAM_DET_SEGMENTS,
-	  .meta.hubp_program_det_segments.allocate = true },
-};
-
-/* update_dchubp_dpp, with the MPC insert from dcn401_update_mpcc. */
-static const struct dcn401_commit_step
-		bls_update_head_new_update_dchubp_dpp[] = {
-	{ .func = DPP_DPPCLK_CONTROL, .meta.dpp_dppclk_control.enable = true },
-	{ .func = DCCG_UPDATE_DPP_DTO },
-	{ .func = HUBP_VTG_SEL },
-	{ .func = HUBP_SETUP2 },
-	{ .func = HUBP_SET_UNBOUNDED_REQUESTING },
-	{ .func = HUBP_SETUP_INTERDEPENDENT2 },
-	{ .func = DPP_SETUP_DPP },
-	{ .func = DPP_SET_CURSOR_MATRIX },
-	{ .func = DPP_PROGRAM_BIAS_AND_SCALE },
-	/* insert_plane programs the blending; no update_blending follows. */
-	{ .func = MPC_INSERT_PLANE },
-	{ .func = MPC_UPDATE_VISUAL_CONFIRM },
-	{ .func = DPP_SET_SCALER },
-	{ .func = HUBP_MEM_PROGRAM_VIEWPORT },
-	{ .func = HUBP_PROGRAM_MCACHE_ID },
-	{ .func = MPC_SET_GAMUT_REMAP_BYPASS,
-	  .meta.mpc_set_gamut_remap_bypass.block_id =
-			MPCC_MCM_FIRST_GAMUT_REMAP },
-	{ .func = MPC_SET_GAMUT_REMAP_BYPASS,
-	  .meta.mpc_set_gamut_remap_bypass.block_id =
-			MPCC_MCM_SECOND_GAMUT_REMAP },
-	{ .func = MPC_SET_GAMUT_REMAP_BYPASS,
-	  .meta.mpc_set_gamut_remap_bypass.block_id = MPCC_OGAM_GAMUT_REMAP },
-	{ .func = MPC_POWER_ON_MPC_MEM_PWR },
-	{ .func = MPC_SET_OCSC_DEFAULT },
-	{ .func = HUBP_PROGRAM_SURFACE_CONFIG },
-	{ .func = HUBP_UPDATE_PLANE_ADDR },
-	{ .func = HUBP_SET_BLANK, .meta.hubp_set_blank.unblank = true },
+	  .meta.hubp_program_det_segments.allocate = true,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
 };
 
 /*
- * update_dchubp_dpp for a kept plane: surface and address only. No
- * enable_plane, no scaler, no viewport. DC1 remove+insert when the OPP
- * tree already holds the MPCC.
+ * update_dchubp_dpp. First enable runs the whole table. A reconfigure
+ * skips the steps that only bring the HUBP/DPP up, and removes the MPCC
+ * when the OPP tree already holds one.
  */
 static const struct dcn401_commit_step
-		bls_update_head_kept_update_dchubp_dpp[] = {
+		bls_update_head_new_update_dchubp_dpp[] = {
+	{ .func = DPP_DPPCLK_CONTROL, .meta.dpp_dppclk_control.enable = true,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
+	{ .func = DCCG_UPDATE_DPP_DTO,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
+	{ .func = HUBP_VTG_SEL,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
+	{ .func = HUBP_SETUP2,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
+	{ .func = HUBP_SET_UNBOUNDED_REQUESTING,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
+	{ .func = HUBP_SETUP_INTERDEPENDENT2,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
 	{ .func = DPP_SETUP_DPP },
 	{ .func = DPP_SET_CURSOR_MATRIX },
 	{ .func = DPP_PROGRAM_BIAS_AND_SCALE },
 	{ .func = MPC_REMOVE_MPCC,
 	  .meta.skip_if.opp_tree_empty = true },
+	/* insert_plane programs the blending; no update_blending follows. */
 	{ .func = MPC_INSERT_PLANE },
 	{ .func = MPC_UPDATE_VISUAL_CONFIRM },
+	{ .func = DPP_SET_SCALER,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
+	{ .func = HUBP_MEM_PROGRAM_VIEWPORT,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
 	{ .func = HUBP_PROGRAM_MCACHE_ID },
 	{ .func = MPC_SET_GAMUT_REMAP_BYPASS,
 	  .meta.mpc_set_gamut_remap_bypass.block_id =
@@ -1416,29 +1389,43 @@ static const struct dcn401_commit_step
 	{ .func = MPC_SET_OCSC_DEFAULT },
 	{ .func = HUBP_PROGRAM_SURFACE_CONFIG },
 	{ .func = HUBP_UPDATE_PLANE_ADDR },
+	{ .func = HUBP_SET_BLANK, .meta.hubp_set_blank.unblank = true,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
 };
 
 /*
  * set_hdr_multiplier, the input and MCM transfer functions, the output
- * transfer function and the OPP format.
+ * transfer function and the OPP format. First enable only.
  */
 static const struct dcn401_commit_step
 		bls_update_head_new_transfer_funcs[] = {
-	{ .func = DPP_SET_HDR_MULTIPLIER },
-	{ .func = DPP_SET_PRE_DEGAM },
-	{ .func = DPP_PROGRAM_GAMCOR_LUT },
-	{ .func = MPC_SET_MOVABLE_CM_LOCATION },
+	{ .func = DPP_SET_HDR_MULTIPLIER,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
+	{ .func = DPP_SET_PRE_DEGAM,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
+	{ .func = DPP_PROGRAM_GAMCOR_LUT,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
+	{ .func = MPC_SET_MOVABLE_CM_LOCATION,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
 	{ .func = MPC_PROGRAM_LUT_MODE,
-	  .meta.mpc_program_lut_mode.id = MCM_LUT_1DLUT },
+	  .meta.mpc_program_lut_mode.id = MCM_LUT_1DLUT,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
 	{ .func = MPC_PROGRAM_LUT_MODE,
-	  .meta.mpc_program_lut_mode.id = MCM_LUT_SHAPER },
+	  .meta.mpc_program_lut_mode.id = MCM_LUT_SHAPER,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
 	{ .func = MPC_PROGRAM_LUT_MODE,
-	  .meta.mpc_program_lut_mode.id = MCM_LUT_3DLUT },
-	{ .func = HUBP_PROGRAM_3DLUT_FL_CONFIG },
-	{ .func = HUBP_SET_3DLUT_FL },
-	{ .func = MPC_SET_OUTPUT_GAMMA },
-	{ .func = OPP_SET_DYN_EXPANSION },
-	{ .func = OPP_PROGRAM_FMT },
+	  .meta.mpc_program_lut_mode.id = MCM_LUT_3DLUT,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
+	{ .func = HUBP_PROGRAM_3DLUT_FL_CONFIG,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
+	{ .func = HUBP_SET_3DLUT_FL,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
+	{ .func = MPC_SET_OUTPUT_GAMMA,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
+	{ .func = OPP_SET_DYN_EXPANSION,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
+	{ .func = OPP_PROGRAM_FMT,
+	  .meta.skip_if.hubp_dpp_already_enabled = true },
 };
 
 /*
@@ -1470,18 +1457,7 @@ static_assert(
 		ARRAY_SIZE(bls_update_head_new_update_dchubp_dpp) +
 		ARRAY_SIZE(bls_update_head_new_transfer_funcs) +
 		ARRAY_SIZE(bls_update_head_new_unlock) <= DC2_BLS_MAX_STEPS,
-		"dcn401 seamless plane-add head exceeds DC2_BLS_MAX_STEPS");
-static_assert(
-		ARRAY_SIZE(
-		bls_update_head_per_stream_per_otg_master_pipe_preamble) +
-		ARRAY_SIZE(bls_update_head_global_preamble) +
-		ARRAY_SIZE(bls_head_per_state_new) +
-		ARRAY_SIZE(
-		bls_update_head_per_stream_per_otg_master_pipe_current_pending) +
-		ARRAY_SIZE(bls_update_head_new_lock) +
-		ARRAY_SIZE(bls_update_head_kept_update_dchubp_dpp) +
-		ARRAY_SIZE(bls_update_head_new_unlock) <= DC2_BLS_MAX_STEPS,
-		"dcn401 seamless kept-plane head exceeds DC2_BLS_MAX_STEPS");
+		"dcn401 seamless update head exceeds DC2_BLS_MAX_STEPS");
 
 /* pipe is NULL only for the bandwidth and p-state steps. */
 struct dcn401_commit_step_args {
@@ -2309,6 +2285,10 @@ static bool dcn401_skip_step(const struct dcn401_commit_step_args *args,
 			(!args->pipe->stream_res.opp ||
 			!args->pipe->stream_res.opp->mpc_tree_params.opp_list))
 		return true;
+	if (step->meta.skip_if.hubp_dpp_already_enabled &&
+			args->current_state->stream_count &&
+			args->current_state->stream_status[0].plane_count)
+		return true;
 	return false;
 }
 
@@ -2325,7 +2305,7 @@ static void dcn401_add_steps(struct block_sequence_state *sequence,
 }
 
 /* The support check found an OTG master for each stream of state. */
-static void dcn401_add_steps_per_stream_per_otg_master_pipe(
+static void dcn401_add_per_otg_master(
 		struct block_sequence_state *sequence,
 		const struct dcn401_commit_step_args *state_args,
 		struct dc_state *state,
@@ -2343,9 +2323,9 @@ static void dcn401_add_steps_per_stream_per_otg_master_pipe(
 
 #define DCN401_ADD_STEPS(sequence, args, steps) \
 	dcn401_add_steps(sequence, args, steps, ARRAY_SIZE(steps))
-#define DCN401_ADD_STEPS_PER_STREAM(sequence, args, state, steps) \
-	dcn401_add_steps_per_stream_per_otg_master_pipe(sequence, args, \
-			state, steps, ARRAY_SIZE(steps))
+#define DCN401_ADD_PER_OTG_MASTER(sequence, args, state, steps) \
+	dcn401_add_per_otg_master(sequence, args, state, steps, \
+			ARRAY_SIZE(steps))
 
 /*
  * Points the step arguments at the states and the sequence at
@@ -2384,12 +2364,12 @@ static enum bls_builder_result dcn401_build_non_seamless_commit(
 
 	dcn401_init_and_unpack_params(params, &state_args, &head);
 	DCN401_ADD_STEPS(&head, &state_args, bls_head_per_state_new);
-	DCN401_ADD_STEPS_PER_STREAM(&head, &state_args,
+	DCN401_ADD_PER_OTG_MASTER(&head, &state_args,
 			state_args.current_state,
 			bls_head_per_stream_per_otg_master_pipe_current);
-	DCN401_ADD_STEPS_PER_STREAM(&head, &state_args, state_args.new_state,
+	DCN401_ADD_PER_OTG_MASTER(&head, &state_args, state_args.new_state,
 			bls_head_per_stream_per_otg_master_pipe_new);
-	DCN401_ADD_STEPS_PER_STREAM(&head, &state_args, state_args.new_state,
+	DCN401_ADD_PER_OTG_MASTER(&head, &state_args, state_args.new_state,
 			bls_head_per_stream_per_otg_master_pipe_new_front_end);
 	DCN401_ADD_STEPS(&head, &state_args, bls_head_per_state_new_postamble);
 
@@ -2402,7 +2382,6 @@ static enum bls_builder_result dcn401_build_seamless_update(
 	struct dcn401_commit_step_args state_args;
 	struct block_sequence_state head;
 	enum bls_builder_result result;
-	bool plane_add;
 
 	if (!params)
 		return BLS_BUILD_ERROR_UNSUPPORTED_STATE_UPDATE;
@@ -2411,41 +2390,32 @@ static enum bls_builder_result dcn401_build_seamless_update(
 	if (result != BLS_BUILD_SUCCESS)
 		return result;
 
-	plane_add = dcn401_is_plane_add(params->current_state,
-			params->new_state);
 	dcn401_init_and_unpack_params(params, &state_args, &head);
-	DCN401_ADD_STEPS_PER_STREAM(&head, &state_args,
+	DCN401_ADD_PER_OTG_MASTER(&head, &state_args,
 			state_args.current_state,
 			bls_update_head_per_stream_per_otg_master_pipe_preamble);
 	DCN401_ADD_STEPS(&head, &state_args,
 			bls_update_head_global_preamble);
 	DCN401_ADD_STEPS(&head, &state_args, bls_head_per_state_new);
-	DCN401_ADD_STEPS_PER_STREAM(&head, &state_args,
+	DCN401_ADD_PER_OTG_MASTER(&head, &state_args,
 			state_args.current_state,
 			bls_update_head_per_stream_per_otg_master_pipe_current_pending);
 
-	/* One stream, so adding each table per stream keeps the DC1 order. */
-	DCN401_ADD_STEPS_PER_STREAM(&head, &state_args, state_args.new_state,
+	/*
+	 * One stream. skip_if drops first-enable steps when the HUBP/DPP
+	 * is already on, so a kept-plane surface update is the same table.
+	 */
+	DCN401_ADD_PER_OTG_MASTER(&head, &state_args, state_args.new_state,
 			bls_update_head_new_lock);
-	if (plane_add) {
-		DCN401_ADD_STEPS_PER_STREAM(&head, &state_args,
-				state_args.new_state,
-				bls_update_head_new_stream);
-		DCN401_ADD_STEPS_PER_STREAM(&head, &state_args,
-				state_args.new_state,
-				bls_update_head_new_enable_plane);
-		DCN401_ADD_STEPS_PER_STREAM(&head, &state_args,
-				state_args.new_state,
-				bls_update_head_new_update_dchubp_dpp);
-		DCN401_ADD_STEPS_PER_STREAM(&head, &state_args,
-				state_args.new_state,
-				bls_update_head_new_transfer_funcs);
-	} else {
-		DCN401_ADD_STEPS_PER_STREAM(&head, &state_args,
-				state_args.new_state,
-				bls_update_head_kept_update_dchubp_dpp);
-	}
-	DCN401_ADD_STEPS_PER_STREAM(&head, &state_args, state_args.new_state,
+	DCN401_ADD_PER_OTG_MASTER(&head, &state_args, state_args.new_state,
+			bls_update_head_new_stream);
+	DCN401_ADD_PER_OTG_MASTER(&head, &state_args, state_args.new_state,
+			bls_update_head_new_enable_plane);
+	DCN401_ADD_PER_OTG_MASTER(&head, &state_args, state_args.new_state,
+			bls_update_head_new_update_dchubp_dpp);
+	DCN401_ADD_PER_OTG_MASTER(&head, &state_args, state_args.new_state,
+			bls_update_head_new_transfer_funcs);
+	DCN401_ADD_PER_OTG_MASTER(&head, &state_args, state_args.new_state,
 			bls_update_head_new_unlock);
 
 	return BLS_BUILD_SUCCESS;

@@ -117,6 +117,11 @@ struct dcn401_commit_step_meta {
 		bool no_manual_trigger;
 		/* The OPP MPC tree has no plane yet. */
 		bool opp_tree_empty;
+		/*
+		 * The HUBP/DPP block is already on. The step is part of
+		 * enabling that block the first time, not of reconfiguring it.
+		 */
+		bool hubp_dpp_already_enabled;
 	} skip_if;
 };
 
