@@ -687,10 +687,17 @@ static int copy_compat_msqid_from_user(struct msqid64_ds *out, void __user *buf,
 			return -EFAULT;
 	} else {
 		struct compat_msqid_ds __user *p = buf;
+		compat_ulong_t qbytes;
+
 		if (get_compat_ipc_perm(&out->msg_perm, &p->msg_perm))
 			return -EFAULT;
-		if (get_user(out->msg_qbytes, &p->msg_qbytes))
+		if (get_user(qbytes, &p->msg_qbytes))
 			return -EFAULT;
+		if (qbytes == 0) {
+			if (get_user(qbytes, &p->msg_lqbytes))
+				return -EFAULT;
+		}
+		out->msg_qbytes = qbytes;
 	}
 	return 0;
 }
@@ -721,9 +728,23 @@ static int copy_compat_msqid_to_user(void __user *buf, struct msqid64_ds *in,
 		v.msg_stime = in->msg_stime;
 		v.msg_rtime = in->msg_rtime;
 		v.msg_ctime = in->msg_ctime;
-		v.msg_cbytes = in->msg_cbytes;
-		v.msg_qnum = in->msg_qnum;
-		v.msg_qbytes = in->msg_qbytes;
+		if (in->msg_cbytes > USHRT_MAX)
+			v.msg_cbytes = USHRT_MAX;
+		else
+			v.msg_cbytes = in->msg_cbytes;
+		v.msg_lcbytes = in->msg_cbytes;
+
+		if (in->msg_qnum > USHRT_MAX)
+			v.msg_qnum = USHRT_MAX;
+		else
+			v.msg_qnum = in->msg_qnum;
+
+		if (in->msg_qbytes > USHRT_MAX)
+			v.msg_qbytes = USHRT_MAX;
+		else
+			v.msg_qbytes = in->msg_qbytes;
+		v.msg_lqbytes = in->msg_qbytes;
+
 		v.msg_lspid = in->msg_lspid;
 		v.msg_lrpid = in->msg_lrpid;
 		return copy_to_user(buf, &v, sizeof(v));
