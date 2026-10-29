@@ -1802,7 +1802,7 @@ static const struct of_device_id ov7251_of_match[] = {
 MODULE_DEVICE_TABLE(of, ov7251_of_match);
 
 static const struct acpi_device_id ov7251_acpi_match[] = {
-	{ "INT347E" },
+	{ .id = "INT347E" },
 	{ }
 };
 MODULE_DEVICE_TABLE(acpi, ov7251_acpi_match);

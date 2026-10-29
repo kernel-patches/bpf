@@ -1117,8 +1117,8 @@ static const struct dev_pm_ops og01a1b_pm_ops = {
 
 #ifdef CONFIG_ACPI
 static const struct acpi_device_id og01a1b_acpi_ids[] = {
-	{"OVTI01AC"},
-	{}
+	{ .id = "OVTI01AC" },
+	{ }
 };
 
 MODULE_DEVICE_TABLE(acpi, og01a1b_acpi_ids);

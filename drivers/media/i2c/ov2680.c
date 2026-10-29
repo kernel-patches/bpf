@@ -1304,8 +1304,8 @@ static const struct of_device_id ov2680_dt_ids[] = {
 MODULE_DEVICE_TABLE(of, ov2680_dt_ids);
 
 static const struct acpi_device_id ov2680_acpi_ids[] = {
-	{ "OVTI2680" },
-	{ /* sentinel */ }
+	{ .id = "OVTI2680" },
+	{ }
 };
 MODULE_DEVICE_TABLE(acpi, ov2680_acpi_ids);
 

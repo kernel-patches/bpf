@@ -972,8 +972,8 @@ probe_error_v4l2_ctrl_handler_free:
 }
 
 static const struct acpi_device_id ov9734_acpi_ids[] = {
-	{ "OVTI9734", },
-	{}
+	{ .id = "OVTI9734" },
+	{ }
 };
 
 MODULE_DEVICE_TABLE(acpi, ov9734_acpi_ids);

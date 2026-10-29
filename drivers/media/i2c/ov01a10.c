@@ -1114,8 +1114,8 @@ static const struct ov01a10_sensor_cfg ov01a1b_cfg = {
 };
 
 static const struct acpi_device_id ov01a10_acpi_ids[] = {
-	{ "OVTI01A0", (uintptr_t)&ov01a10_cfg },
-	{ "OVTI01AB", (uintptr_t)&ov01a1b_cfg },
+	{ .id = "OVTI01A0", .driver_data = (uintptr_t)&ov01a10_cfg },
+	{ .id = "OVTI01AB", .driver_data = (uintptr_t)&ov01a1b_cfg },
 	{ }
 };
 

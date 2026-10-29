@@ -1043,8 +1043,8 @@ err_pm_disable:
 }
 
 static const struct acpi_device_id t4ka3_acpi_match[] = {
-	{ "XMCC0003" },
-	{}
+	{ .id = "XMCC0003" },
+	{ }
 };
 MODULE_DEVICE_TABLE(acpi, t4ka3_acpi_match);
 

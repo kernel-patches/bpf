@@ -1536,8 +1536,8 @@ static const struct dev_pm_ops imx258_pm_ops = {
 
 #ifdef CONFIG_ACPI
 static const struct acpi_device_id imx258_acpi_ids[] = {
-	{ "SONY258A" },
-	{ /* sentinel */ }
+	{ .id = "SONY258A" },
+	{ }
 };
 
 MODULE_DEVICE_TABLE(acpi, imx258_acpi_ids);

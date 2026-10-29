@@ -1422,9 +1422,9 @@ static const struct dev_pm_ops ov5693_pm_ops = {
 };
 
 static const struct acpi_device_id ov5693_acpi_match[] = {
-	{"INT33BE"},
-	{"OVTI5693"},
-	{},
+	{ .id = "INT33BE" },
+	{ .id = "OVTI5693" },
+	{ }
 };
 MODULE_DEVICE_TABLE(acpi, ov5693_acpi_match);
 

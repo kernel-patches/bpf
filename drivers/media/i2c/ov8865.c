@@ -3131,7 +3131,7 @@ static const struct dev_pm_ops ov8865_pm_ops = {
 };
 
 static const struct acpi_device_id ov8865_acpi_match[] = {
-	{"INT347A"},
+	{ .id = "INT347A" },
 	{ }
 };
 MODULE_DEVICE_TABLE(acpi, ov8865_acpi_match);

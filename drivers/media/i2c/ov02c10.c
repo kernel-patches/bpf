@@ -984,8 +984,8 @@ static DEFINE_RUNTIME_DEV_PM_OPS(ov02c10_pm_ops, ov02c10_power_off,
 
 #ifdef CONFIG_ACPI
 static const struct acpi_device_id ov02c10_acpi_ids[] = {
-	{ "OVTI02C1" },
-	{ /* sentinel */ }
+	{ .id = "OVTI02C1" },
+	{ }
 };
 
 MODULE_DEVICE_TABLE(acpi, ov02c10_acpi_ids);

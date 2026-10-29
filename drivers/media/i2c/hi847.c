@@ -2934,8 +2934,8 @@ probe_error_v4l2_ctrl_handler_free:
 
 #ifdef CONFIG_ACPI
 static const struct acpi_device_id hi847_acpi_ids[] = {
-	{"HYV0847"},
-	{}
+	{ .id = "HYV0847" },
+	{ }
 };
 
 MODULE_DEVICE_TABLE(acpi, hi847_acpi_ids);
