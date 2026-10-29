@@ -8105,11 +8105,13 @@ bool dc_get_qos_info(struct dc *dc, struct dc_qos_info *info)
 	if (dc->clk_mgr && dc->clk_mgr->funcs->get_requested_memory_qos) {
 		dc->clk_mgr->funcs->get_requested_memory_qos(dc->clk_mgr, &requested);
 		info->qos_bandwidth_lb_in_mbps    = requested.bandwidth_lb_in_mbps;
-		info->calculated_avg_bw_in_mbps   = requested.calculated_avg_bw_in_mbps;
-		info->qos_max_latency_ub_in_ns    = requested.max_latency_ub_in_ns;
-		info->qos_avg_latency_ub_in_ns    = requested.avg_latency_ub_in_ns;
 		info->qos_max_bw_budget_in_mbps   = requested.max_bw_budget_in_mbps;
 	}
+
+	/* The clk_mgr does not track these, so report the ones of the committed state. */
+	info->calculated_avg_bw_in_mbps = clk->required_avg_active_bandwidth_KBps / 1000;
+	info->qos_max_latency_ub_in_ns = clk->utm_nominal_max_latency_ub_ns;
+	info->qos_avg_latency_ub_in_ns = clk->utm_nominal_avg_latency_ub_ns;
 
 	return true;
 }

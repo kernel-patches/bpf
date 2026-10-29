@@ -1036,6 +1036,14 @@ void dml21_copy_clocks_to_dc_state(struct dml2_context *in_ctx, struct dc_state 
 	context->bw_ctx.bw.dcn.clk.utm_latency_ub_index = 0; /* TODO - derive from qos model */
 	context->bw_ctx.bw.dcn.clk.utm_nominal_bandwidth_lb_KBps = (unsigned int) in_ctx->v21.mode_programming.programming->qos_bound.bandwidth_lb.dcn5.non_urgent_bandwidth_kbps;
 	context->bw_ctx.bw.dcn.clk.utm_urgent_bandwidth_lb_KBps = (unsigned int) in_ctx->v21.mode_programming.programming->qos_bound.bandwidth_lb.dcn5.urgent_bandwidth_kbps;
+	/* DML latency upper bounds are in microseconds, the dc clocks fields are in nanoseconds. */
+	context->bw_ctx.bw.dcn.clk.utm_nominal_avg_latency_ub_ns = (unsigned int)(
+			in_ctx->v21.mode_programming.programming->qos_bound.latency_ub.dcn5.avg_req_latency_non_urg * 1000);
+	context->bw_ctx.bw.dcn.clk.utm_nominal_max_latency_ub_ns = (unsigned int)(
+			in_ctx->v21.mode_programming.programming->qos_bound.latency_ub.dcn5.max_req_latency_non_urg * 1000);
+	/* The average bandwidth DML calculated for the active state, converted from MBps to KBps. */
+	context->bw_ctx.bw.dcn.clk.required_avg_active_bandwidth_KBps = (unsigned int)(
+			in_ctx->v21.mode_programming.programming->informative.qos.avg_bw_required.sys_active.sdp_bw_mbps * 1000);
 	context->bw_ctx.bw.dcn.clk.stutter_efficiency.base_efficiency = (uint8_t)in_ctx->v21.mode_programming.programming->stutter.base_percent_efficiency;
 	context->bw_ctx.bw.dcn.clk.stutter_efficiency.low_power_efficiency = (uint8_t)in_ctx->v21.mode_programming.programming->stutter.low_power_percent_efficiency;
 	context->bw_ctx.bw.dcn.clk.stutter_efficiency.z8_stutter_efficiency = (uint8_t)in_ctx->v21.mode_programming.programming->informative.power_management.z8.stutter_efficiency;
@@ -1177,6 +1185,9 @@ void dml21_init_min_clocks_for_dc_state(struct dml2_context *in_ctx, struct dc_s
 	min_clocks->utm_latency_ub_index = 0; /* TODO - derive from qos model */
 	min_clocks->utm_nominal_bandwidth_lb_KBps = 0;
 	min_clocks->utm_urgent_bandwidth_lb_KBps = 0;
+	min_clocks->utm_nominal_max_latency_ub_ns = 0;
+	min_clocks->utm_nominal_avg_latency_ub_ns = 0;
+	min_clocks->required_avg_active_bandwidth_KBps = 0;
 	min_clocks->stutter_efficiency.base_efficiency = 1;
 	min_clocks->stutter_efficiency.low_power_efficiency = 1;
 	min_clocks->stutter_efficiency.z8_stutter_efficiency = 1;

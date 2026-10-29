@@ -1619,8 +1619,11 @@ static unsigned int dcn60_override_memory_bandwidth_request(
 	memcpy(&new_clocks, &clk_mgr_base->clks, sizeof(struct dc_clocks));
 
 	if (bw_kbps == 0) {
-		new_clocks.utm_nominal_bandwidth_lb_KBps = 0;
-		new_clocks.utm_urgent_bandwidth_lb_KBps  = 0;
+		/* Clearing the override restores the request of the committed mode. */
+		new_clocks.utm_nominal_bandwidth_lb_KBps =
+				dc->current_state->bw_ctx.bw.dcn.clk.utm_nominal_bandwidth_lb_KBps;
+		new_clocks.utm_urgent_bandwidth_lb_KBps =
+				dc->current_state->bw_ctx.bw.dcn.clk.utm_urgent_bandwidth_lb_KBps;
 	} else {
 		max_bw_kbps    = dcn60_get_max_active_utm_bandwidth_kbps(clk_mgr_base);
 		capped_bw_kbps = (bw_kbps > max_bw_kbps) ? max_bw_kbps : bw_kbps;
