@@ -295,7 +295,7 @@ static bool core2_update_state_supported(
 	if (scratch->update_type != UPDATE_TYPE_FULL ||
 			scratch->flow != UPDATE_V3_FLOW_NEW_CONTEXT_SEAMLESS)
 		return false;
-	/* The full-update builder adds one plane. */
+	/* The full-update builder adds or keeps one plane. */
 	if (scratch->surface_count != 1)
 		return false;
 	if (!core2_stream_update_supported(scratch->stream_update))

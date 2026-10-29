@@ -115,6 +115,8 @@ struct dcn401_commit_step_meta {
 		bool optimized_not_required;
 		/* The plane has no address update, or skips the manual trigger. */
 		bool no_manual_trigger;
+		/* The OPP MPC tree has no plane yet. */
+		bool opp_tree_empty;
 	} skip_if;
 };
 
