@@ -581,6 +581,7 @@ struct p9_rstatfs {
 struct p9_fcall {
 	u32 size;
 	u8 id;
+	bool zc;
 	u16 tag;
 
 	size_t offset;
@@ -588,7 +589,6 @@ struct p9_fcall {
 
 	struct kmem_cache *cache;
 	u8 *sdata;
-	bool zc;
 };
 
 int p9_errstr2errno(char *errstr, int len);
