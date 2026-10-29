@@ -486,7 +486,7 @@ static ssize_t rx8025_sysfs_show_clock_adjust(struct device *dev,
 	if (err)
 		return err;
 
-	return sprintf(buf, "%ld\n", -adj);
+	return sysfs_emit(buf, "%ld\n", -adj);
 }
 
 static ssize_t rx8025_sysfs_store_clock_adjust(struct device *dev,
