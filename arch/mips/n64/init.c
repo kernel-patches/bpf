@@ -4,12 +4,14 @@
  *
  *  Copyright (C) 2021	Lauri Kasanen
  */
+#include <linux/align.h>
 #include <linux/init.h>
 #include <linux/ioport.h>
 #include <linux/irq.h>
 #include <linux/memblock.h>
 #include <linux/platform_device.h>
 #include <linux/platform_data/simplefb.h>
+#include <linux/slab.h>
 
 #include <asm/bootinfo.h>
 #include <asm/fw/fw.h>
@@ -76,14 +78,14 @@ static const u32 ntsc_320[] __initconst = {
 
 static int __init n64_platform_init(void)
 {
-	static const struct simplefb_platform_data mode = {
+	const struct simplefb_platform_data mode = {
 		.width = W,
 		.height = H,
 		.stride = W * 2,
 		.format = "r5g5b5a1"
 	};
 	struct resource res[3];
-	void *orig;
+	void *fb;
 	unsigned long phys;
 	unsigned i;
 
@@ -98,13 +100,10 @@ static int __init n64_platform_init(void)
 	res[0] = DEFINE_RES_MEM(SI_REG_BASE, NUM_SI_REGS * 4);
 	platform_device_register_simple("n64joy", PLATFORM_DEVID_NONE, res, 1);
 
-	/* The framebuffer needs 64-byte alignment */
-	orig = kzalloc(W * H * 2 + 63, GFP_DMA | GFP_KERNEL);
-	if (!orig)
+	fb = kzalloc(ALIGN(W * H * 2, 64), GFP_DMA | GFP_KERNEL);
+	if (!fb)
 		return -ENOMEM;
-	phys = virt_to_phys(orig);
-	phys += 63;
-	phys &= ~63;
+	phys = virt_to_phys(fb);
 
 	for (i = 0; i < ARRAY_SIZE(ntsc_320); i++) {
 		if (i == 1)
