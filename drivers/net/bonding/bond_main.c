@@ -1175,7 +1175,6 @@ static struct slave *bond_find_best_slave(struct bonding *bond)
 /* must be called in RCU critical section or with RTNL held */
 static bool bond_should_notify_peers(struct bonding *bond)
 {
-	struct bond_up_slave *usable;
 	struct slave *slave = NULL;
 
 	if (!bond->send_peer_notif ||
@@ -1189,8 +1188,14 @@ static bool bond_should_notify_peers(struct bonding *bond)
 	 * It is safe to only check bond mode here.
 	 */
 	if (BOND_MODE(bond) == BOND_MODE_8023AD) {
-		usable = rcu_dereference_rtnl(bond->usable_slaves);
-		if (!usable || !READ_ONCE(usable->count))
+		struct bond_up_slave *usable;
+		bool can_notify;
+
+		rcu_read_lock();
+		usable = rcu_dereference(bond->usable_slaves);
+		can_notify = usable && READ_ONCE(usable->count);
+		rcu_read_unlock();
+		if (!can_notify)
 			return false;
 	} else {
 		slave = rcu_dereference_rtnl(bond->curr_active_slave);
@@ -1714,19 +1719,22 @@ static int bond_master_upper_dev_link(struct bonding *bond, struct slave *slave,
 	lag_upper_info.tx_type = type;
 	lag_upper_info.hash_type = bond_lag_hash_type(bond, type);
 
+	mutex_lock(&bond->slave_arr_lock);
 	err = netdev_master_upper_dev_link(slave->dev, bond->dev, slave,
 					   &lag_upper_info, extack);
-	if (err)
-		return err;
+	if (!err)
+		slave->dev->flags |= IFF_SLAVE;
+	mutex_unlock(&bond->slave_arr_lock);
 
-	slave->dev->flags |= IFF_SLAVE;
-	return 0;
+	return err;
 }
 
 static void bond_upper_dev_unlink(struct bonding *bond, struct slave *slave)
 {
+	mutex_lock(&bond->slave_arr_lock);
 	netdev_upper_dev_unlink(slave->dev, bond->dev);
 	slave->dev->flags &= ~IFF_SLAVE;
+	mutex_unlock(&bond->slave_arr_lock);
 }
 
 static void slave_kobj_release(struct kobject *kobj)
@@ -2332,10 +2340,17 @@ skip_mac_set:
 			bpf_prog_inc(bond->xdp_prog);
 	}
 
+	/* Publish only after all fallible setup, including XDP, is complete. */
+	mutex_lock(&bond->slave_arr_lock);
+	new_slave->array_ready = true;
+	mutex_unlock(&bond->slave_arr_lock);
+
 	/* broadcast mode uses the all_slaves to loop through slaves. */
 	if (bond_mode_can_use_xmit_hash(bond) ||
-	    BOND_MODE(bond) == BOND_MODE_BROADCAST)
-		bond_update_slave_arr(bond, NULL);
+	    BOND_MODE(bond) == BOND_MODE_BROADCAST) {
+		if (bond_update_slave_arr(bond, NULL) && netif_running(bond_dev))
+			bond_slave_arr_work_rearm(bond, 1);
+	}
 
 	bond_xdp_set_features(bond_dev);
 
@@ -4399,8 +4414,11 @@ static int bond_open(struct net_device *bond_dev)
 			static_branch_inc(&bond_bcast_neigh_enabled);
 	}
 
-	if (bond_mode_can_use_xmit_hash(bond))
-		bond_update_slave_arr(bond, NULL);
+	if (bond_mode_can_use_xmit_hash(bond) ||
+	    BOND_MODE(bond) == BOND_MODE_BROADCAST) {
+		if (bond_update_slave_arr(bond, NULL))
+			bond_slave_arr_work_rearm(bond, 1);
+	}
 
 	return 0;
 }
@@ -5068,35 +5086,26 @@ static netdev_tx_t bond_xmit_activebackup(struct sk_buff *skb,
 	return bond_tx_drop(bond_dev, skb);
 }
 
-/* Use this to update slave_array when (a) it's not appropriate to update
- * slave_array right away (note that update_slave_array() may sleep)
- * and / or (b) RTNL is not held.
+/* Retry array updates which failed, or defer them from atomic context.
+ * bond_update_slave_arr() may sleep but does not require RTNL.
  */
 void bond_slave_arr_work_rearm(struct bonding *bond, unsigned long delay)
 {
 	queue_delayed_work(bond->wq, &bond->slave_arr_work, delay);
 }
 
-/* Slave array work handler. Holds only RTNL */
+/* Retry failed array updates; the builder acquires slave_arr_lock. */
 static void bond_slave_arr_handler(struct work_struct *work)
 {
 	struct bonding *bond = container_of(work, struct bonding,
 					    slave_arr_work.work);
 	int ret;
 
-	if (!rtnl_trylock())
-		goto err;
-
 	ret = bond_update_slave_arr(bond, NULL);
-	rtnl_unlock();
 	if (ret) {
 		pr_warn_ratelimited("Failed to update slave array from WT\n");
-		goto err;
+		bond_slave_arr_work_rearm(bond, 1);
 	}
-	return;
-
-err:
-	bond_slave_arr_work_rearm(bond, 1);
 }
 
 static void bond_skip_slave(struct bond_up_slave *slaves,
@@ -5128,7 +5137,10 @@ static void bond_set_slave_arr(struct bonding *bond,
 {
 	struct bond_up_slave *usable, *all;
 
-	all = rtnl_dereference(bond->all_slaves);
+	lockdep_assert_held(&bond->slave_arr_lock);
+
+	all = rcu_dereference_protected(bond->all_slaves,
+					lockdep_is_held(&bond->slave_arr_lock));
 	rcu_assign_pointer(bond->all_slaves, all_slaves);
 	kfree_rcu(all, rcu);
 
@@ -5137,7 +5149,8 @@ static void bond_set_slave_arr(struct bonding *bond,
 		return;
 	}
 
-	usable = rtnl_dereference(bond->usable_slaves);
+	usable = rcu_dereference_protected(bond->usable_slaves,
+					   lockdep_is_held(&bond->slave_arr_lock));
 	rcu_assign_pointer(bond->usable_slaves, usable_slaves);
 	kfree_rcu(usable, rcu);
 }
@@ -5153,20 +5166,25 @@ static void bond_reset_slave_arr(struct bonding *bond)
  * (b) BOND_MODE_XOR
  * (c) (BOND_MODE_TLB || BOND_MODE_ALB) && tlb_dynamic_lb == 0
  *
- * The caller is expected to hold RTNL only and NO other lock!
+ * Acquires slave_arr_lock to stabilize membership and serialize writers.
+ * The caller must be in sleepable context without mode_lock or RCU held.
  */
 int bond_update_slave_arr(struct bonding *bond, struct slave *skipslave)
 {
 	struct bond_up_slave *usable_slaves = NULL, *all_slaves = NULL;
 	struct slave *slave;
 	struct list_head *iter;
+	unsigned int count;
 	int agg_id = 0;
 	int ret = 0;
 
 	might_sleep();
+	mutex_lock(&bond->slave_arr_lock);
 
-	usable_slaves = kzalloc_flex(*usable_slaves, arr, bond->slave_cnt);
-	all_slaves = kzalloc_flex(*all_slaves, arr, bond->slave_cnt);
+	/* Enslave counts before committing; release unlinks before uncounting. */
+	count = READ_ONCE(bond->slave_cnt);
+	usable_slaves = kzalloc_flex(*usable_slaves, arr, count);
+	all_slaves = kzalloc_flex(*all_slaves, arr, count);
 	if (!usable_slaves || !all_slaves) {
 		ret = -ENOMEM;
 		goto out;
@@ -5189,7 +5207,7 @@ int bond_update_slave_arr(struct bonding *bond, struct slave *skipslave)
 	}
 	rcu_read_lock();
 	bond_for_each_slave(bond, slave, iter) {
-		if (skipslave == slave)
+		if (skipslave == slave || !slave->array_ready)
 			continue;
 
 		all_slaves->arr[all_slaves->count++] = slave;
@@ -5211,17 +5229,21 @@ int bond_update_slave_arr(struct bonding *bond, struct slave *skipslave)
 	rcu_read_unlock();
 
 	bond_set_slave_arr(bond, usable_slaves, all_slaves);
-	return ret;
+	goto out_unlock;
 out:
 	if (ret != 0 && skipslave) {
-		bond_skip_slave(rtnl_dereference(bond->all_slaves),
+		bond_skip_slave(rcu_dereference_protected(bond->all_slaves,
+							  lockdep_is_held(&bond->slave_arr_lock)),
 				skipslave);
-		bond_skip_slave(rtnl_dereference(bond->usable_slaves),
+		bond_skip_slave(rcu_dereference_protected(bond->usable_slaves,
+							  lockdep_is_held(&bond->slave_arr_lock)),
 				skipslave);
 	}
 	kfree_rcu(all_slaves, rcu);
 	kfree_rcu(usable_slaves, rcu);
 
+out_unlock:
+	mutex_unlock(&bond->slave_arr_lock);
 	return ret;
 }
 
@@ -5994,6 +6016,7 @@ void bond_setup(struct net_device *bond_dev)
 	struct bonding *bond = netdev_priv(bond_dev);
 
 	spin_lock_init(&bond->mode_lock);
+	mutex_init(&bond->slave_arr_lock);
 	bond->params = bonding_defaults;
 
 	/* Initialize pointers */
@@ -6073,7 +6096,9 @@ static void bond_uninit(struct net_device *bond_dev)
 	mutex_destroy(&bond->ipsec_lock);
 #endif /* CONFIG_XFRM_OFFLOAD */
 
+	mutex_lock(&bond->slave_arr_lock);
 	bond_set_slave_arr(bond, NULL, NULL);
+	mutex_unlock(&bond->slave_arr_lock);
 
 	list_del_rcu(&bond->bond_list);
 

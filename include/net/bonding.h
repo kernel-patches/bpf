@@ -23,6 +23,7 @@
 #include <linux/etherdevice.h>
 #include <linux/reciprocal_div.h>
 #include <linux/if_link.h>
+#include <linux/mutex.h>
 
 #include <net/bond_3ad.h>
 #include <net/bond_alb.h>
@@ -75,7 +76,7 @@
  * @pos:	current slave
  * @iter:	list_head * iterator
  *
- * Caller must hold RTNL
+ * Caller must hold RTNL or slave_arr_lock to stabilize the lower list.
  */
 #define bond_for_each_slave(bond, pos, iter) \
 	netdev_for_each_lower_private((bond)->dev, pos, iter)
@@ -177,6 +178,7 @@ struct slave {
 	u32    speed;
 	u16    queue_id;
 	u8     perm_hwaddr[MAX_ADDR_LEN];
+	bool   array_ready; /* Enslave complete; protected by slave_arr_lock. */
 	int    prio;
 	struct ad_slave_info *ad_info;
 	struct tlb_slave_info tlb_info;
@@ -210,8 +212,8 @@ struct bond_ipsec {
 };
 
 /*
- * Here are the locking policies for the two bonding locks:
- * Get rcu_read_lock when reading or RTNL when writing slave list.
+ * Slave list changes hold RTNL and slave_arr_lock. Readers hold RCU,
+ * RTNL, or slave_arr_lock when only stabilizing the lower list.
  */
 struct bonding {
 	struct   net_device *dev; /* first - useful for panic debug */
@@ -220,6 +222,8 @@ struct bonding {
 	struct   slave __rcu *primary_slave;
 	struct   bond_up_slave __rcu *usable_slaves;
 	struct   bond_up_slave __rcu *all_slaves;
+	/* Protects the lower list, array_ready and both TX arrays. */
+	struct mutex slave_arr_lock;
 	bool     force_primary;
 	bool     notifier_ctx;
 	s32      slave_cnt; /* never change this value outside the attach/detach wrappers */

@@ -2616,8 +2616,8 @@ re_arm:
 	rcu_read_unlock();
 	spin_unlock_bh(&bond->mode_lock);
 
-	if (update_slave_arr)
-		bond_slave_arr_work_rearm(bond, 0);
+	if (update_slave_arr && bond_update_slave_arr(bond, NULL))
+		bond_slave_arr_work_rearm(bond, 1);
 
 	if (should_notify_rtnl && rtnl_trylock()) {
 		bond_slave_state_notify(bond);
