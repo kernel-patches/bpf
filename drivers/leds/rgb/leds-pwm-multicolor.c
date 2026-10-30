@@ -106,6 +106,11 @@ release_fwnode:
 	return ret;
 }
 
+static void led_pwm_mc_put_node(void *data)
+{
+	fwnode_handle_put(data);
+}
+
 static int led_pwm_mc_probe(struct platform_device *pdev)
 {
 	struct fwnode_handle *mcnode;
@@ -121,22 +126,22 @@ static int led_pwm_mc_probe(struct platform_device *pdev)
 		return dev_err_probe(&pdev->dev, -ENODEV,
 				     "expected multi-led node\n");
 
+	ret = devm_add_action_or_reset(&pdev->dev, led_pwm_mc_put_node, mcnode);
+	if (ret)
+		return ret;
+
 	/* count the nodes inside the multi-led node */
 	count = fwnode_get_child_node_count(mcnode);
 
 	priv = devm_kzalloc(&pdev->dev, struct_size(priv, leds, count),
 			    GFP_KERNEL);
-	if (!priv) {
-		ret = -ENOMEM;
-		goto release_mcnode;
-	}
+	if (!priv)
+		return -ENOMEM;
 	mutex_init(&priv->lock);
 
 	subled = devm_kcalloc(&pdev->dev, count, sizeof(*subled), GFP_KERNEL);
-	if (!subled) {
-		ret = -ENOMEM;
-		goto release_mcnode;
-	}
+	if (!subled)
+		return -ENOMEM;
 	priv->mc_cdev.subled_info = subled;
 
 	/* init the multicolor's LED class device */
@@ -144,14 +149,14 @@ static int led_pwm_mc_probe(struct platform_device *pdev)
 	ret = fwnode_property_read_u32(mcnode, "max-brightness",
 				 &cdev->max_brightness);
 	if (ret)
-		goto release_mcnode;
+		return ret;
 
 	cdev->flags = LED_CORE_SUSPENDRESUME;
 	cdev->brightness_set_blocking = led_pwm_mc_set;
 
 	ret = iterate_subleds(&pdev->dev, priv, mcnode);
 	if (ret)
-		goto release_mcnode;
+		return ret;
 
 	init_data.fwnode = mcnode;
 	ret = devm_led_classdev_multicolor_register_ext(&pdev->dev,
@@ -161,7 +166,7 @@ static int led_pwm_mc_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev,
 			"failed to register multicolor PWM led for %s: %d\n",
 			cdev->name, ret);
-		goto release_mcnode;
+		return ret;
 	}
 
 	ret = led_pwm_mc_set(cdev, cdev->brightness);
@@ -172,10 +177,6 @@ static int led_pwm_mc_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, priv);
 	return 0;
-
-release_mcnode:
-	fwnode_handle_put(mcnode);
-	return ret;
 }
 
 static const struct of_device_id of_pwm_leds_mc_match[] = {
