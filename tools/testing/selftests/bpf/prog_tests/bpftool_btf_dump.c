@@ -57,6 +57,38 @@ static struct btf *mk_btf(void)
 	return btf;
 }
 
+/*
+ * Older kernel BTF encodes the arena attribute as "address_space(1)":
+ *
+ *	int __attribute__((address_space(1))) *arena(void);
+ */
+static struct btf *mk_legacy_arena_btf(void)
+{
+	struct btf *btf;
+
+	btf = btf__new_empty();
+	if (!ASSERT_OK_PTR(btf, "new_empty"))
+		return NULL;
+
+	btf__add_int(btf, "int", 4, BTF_INT_SIGNED);
+	btf__add_type_attr(btf, "address_space(1)", 1);
+	btf__add_ptr(btf, 2);
+	btf__add_func_proto(btf, 3);
+	btf__add_func(btf, "arena", BTF_FUNC_GLOBAL, 4);
+	btf__add_decl_tag(btf, "bpf_kfunc", 5, -1);
+
+	VALIDATE_RAW_BTF(
+		btf,
+		"[1] INT 'int' size=4 bits_offset=0 nr_bits=32 encoding=SIGNED",
+		"[2] TYPE_TAG 'address_space(1)' type_id=1 kflag=1",
+		"[3] PTR '(anon)' type_id=2",
+		"[4] FUNC_PROTO '(anon)' ret_type_id=3 vlen=0",
+		"[5] FUNC 'arena' type_id=4 linkage=global",
+		"[6] DECL_TAG 'bpf_kfunc' type_id=5 component_idx=-1");
+
+	return btf;
+}
+
 static struct btf *mk_loc_btf(void)
 {
 	struct btf *btf;
@@ -234,6 +266,19 @@ out_dump:
 	free(dump);
 }
 
+static void test_legacy_arena(const char *btf_path)
+{
+	char *dump;
+
+	dump = dump_c(btf_path, true);
+	if (!dump)
+		return;
+
+	ASSERT_HAS_SUBSTR(dump, "int __attribute__((address_space(1))) *arena(void)",
+			  "arena_kfunc");
+	free(dump);
+}
+
 static void test_loc_dump(const char *btf_path)
 {
 	const char expected[] =
@@ -280,6 +325,12 @@ void test_bpftool_btf_dump(void)
 			test_dump(path, true);
 		if (test__start_subtest("c_unsorted"))
 			test_dump(path, false);
+		unlink(path);
+	}
+
+	if (!btf_to_tmpfile(mk_legacy_arena_btf, path)) {
+		if (test__start_subtest("legacy_arena"))
+			test_legacy_arena(path);
 		unlink(path);
 	}
 
