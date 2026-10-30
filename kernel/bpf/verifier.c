@@ -12967,7 +12967,8 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 			regs[BPF_REG_0].mem_size = tsize;
 		} else {
 			if (returns_cpu_specific_alloc_ptr) {
-				regs[BPF_REG_0].type = PTR_TO_BTF_ID | MEM_ALLOC | MEM_RCU;
+				regs[BPF_REG_0].type = PTR_TO_BTF_ID | MEM_ALLOC | MEM_RCU |
+						       (ret_flag & PTR_MAYBE_NULL);
 			} else {
 				/* MEM_RDONLY may be carried from ret_flag, but it
 				 * doesn't apply on PTR_TO_BTF_ID. Fold it, otherwise
