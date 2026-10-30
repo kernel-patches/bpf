@@ -304,6 +304,11 @@ void sctp_outq_tail(struct sctp_outq *q, struct sctp_chunk *chunk, gfp_t gfp)
 			SCTP_INC_STATS(net, SCTP_MIB_OUTUNORDERCHUNKS);
 		else
 			SCTP_INC_STATS(net, SCTP_MIB_OUTORDERCHUNKS);
+	} else if (sctp_chunk_pending(chunk)) {
+		/* A retransmitted control chunk may still be queued.
+		 * Drop the extra reference and retry the flush below.
+		 */
+		sctp_chunk_free(chunk);
 	} else {
 		list_add_tail(&chunk->list, &q->control_chunk_list);
 		SCTP_INC_STATS(net, SCTP_MIB_OUTCTRLCHUNKS);
