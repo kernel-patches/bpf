@@ -1968,16 +1968,21 @@ static int add_hidden_subprog(struct bpf_verifier_env *env, struct bpf_insn *pat
  * may_goto when it is zero, then the tail that updates the count.
  * Use gotol when the target is too far for 16-bit offset of a conditional jump.
  */
-static int may_goto_expand(struct bpf_insn *insn_buf, int off, int stack_off,
-			   const struct bpf_insn *tail, int tail_cnt)
+/*
+ * 'off' is the offset of may_goto, 'reach' how far it jumps once the patches
+ * in between are applied, which decides whether a 16-bit jump will do.
+ */
+static int may_goto_expand(struct bpf_insn *insn_buf, int off, int reach,
+			   int stack_off, const struct bpf_insn *tail, int tail_cnt)
 {
 	int cnt = 0;
 
 	/* Forward jump has to step over the tail */
 	off = off >= 0 ? off + tail_cnt : off - 1;
+	reach = reach >= 0 ? reach + tail_cnt : reach - 1;
 
 	insn_buf[cnt++] = BPF_LDX_MEM(BPF_DW, BPF_REG_AX, BPF_REG_10, stack_off);
-	if (off == (s16)off) {
+	if (reach == (s16)reach) {
 		insn_buf[cnt++] = BPF_JMP_IMM(BPF_JEQ, BPF_REG_AX, 0, off);
 	} else {
 		insn_buf[cnt++] = BPF_JMP_IMM(BPF_JNE, BPF_REG_AX, 0, 1);
@@ -1985,6 +1990,23 @@ static int may_goto_expand(struct bpf_insn *insn_buf, int off, int stack_off,
 	}
 	memcpy(insn_buf + cnt, tail, tail_cnt * sizeof(*tail));
 	return cnt + tail_cnt;
+}
+
+/* The offset of may_goto at 'idx' once the patches queued in front are applied. */
+static int may_goto_off(struct bpf_verifier_env *env, const struct bpf_insn *insn,
+			u32 idx)
+{
+	struct bpf_patch_list *pl = &env->patch_list;
+	u32 tgt = idx + insn->off + 1;
+	int off = insn->off;
+	u32 k = pl->cnt;
+
+	if (off >= 0)
+		return off;
+	/* all queued patches are in front of idx */
+	while (k > 0 && pl->patches[k - 1].off >= tgt)
+		off -= pl->patches[--k].len - 1;
+	return off;
 }
 
 /* Do various post-verification rewrites in a single program pass.
@@ -2281,8 +2303,9 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 			 * after subtraction, rinse and repeat.
 			 */
 			stack_depth_extra = 16;
-			cnt = may_goto_expand(insn_buf, insn->off, stack_off_cnt,
-					      tail, ARRAY_SIZE(tail));
+			cnt = may_goto_expand(insn_buf, insn->off,
+					      may_goto_off(env, insn, i + delta),
+					      stack_off_cnt, tail, ARRAY_SIZE(tail));
 
 			insn = bpf_patch_list_add(env, i + delta, insn_buf, cnt);
 			if (IS_ERR(insn))
@@ -2296,8 +2319,9 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 			};
 
 			stack_depth_extra = 8;
-			cnt = may_goto_expand(insn_buf, insn->off, stack_off,
-					      tail, ARRAY_SIZE(tail));
+			cnt = may_goto_expand(insn_buf, insn->off,
+					      may_goto_off(env, insn, i + delta),
+					      stack_off, tail, ARRAY_SIZE(tail));
 
 			insn = bpf_patch_list_add(env, i + delta, insn_buf, cnt);
 			if (IS_ERR(insn))
