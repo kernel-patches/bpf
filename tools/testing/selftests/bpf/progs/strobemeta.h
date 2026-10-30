@@ -367,7 +367,7 @@ static __always_inline uint64_t read_str_var(struct strobemeta_cfg *cfg,
 	data->str_lens[idx] = 0;
 	location = calc_location(&cfg->str_locs[idx], tls_base);
 	if (bpf_probe_read_user(value, sizeof(struct strobe_value_generic), location))
-		return 0;
+		return off;
 
 	len = bpf_probe_read_user_str(&data->payload[off], STROBE_MAX_STR_LEN, value->ptr);
 	/*
@@ -378,7 +378,7 @@ static __always_inline uint64_t read_str_var(struct strobemeta_cfg *cfg,
 	 * STROBE_MAX_STR_LEN
 	 */
 	if (len > STROBE_MAX_STR_LEN)
-		return 0;
+		return off;
 
 	data->str_lens[idx] = len;
 	return off + len;
