@@ -5699,6 +5699,10 @@ static enum priv_stack_mode bpf_enable_priv_stack(struct bpf_prog *prog)
 {
 	if (!bpf_jit_supports_private_stack())
 		return NO_PRIV_STACK;
+	if (prog->expected_attach_type == BPF_TRACE_UPROBE ||
+	    prog->expected_attach_type == BPF_TRACE_UPROBE_MULTI ||
+	    prog->expected_attach_type == BPF_TRACE_UPROBE_SESSION)
+		return NO_PRIV_STACK;
 
 	/* bpf_prog_check_recur() checks all prog types that use bpf trampoline
 	 * while kprobe/tp/perf_event/raw_tp don't use trampoline hence checked

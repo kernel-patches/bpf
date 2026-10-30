@@ -2800,6 +2800,12 @@ bpf_prog_load_check_attach(enum bpf_prog_type prog_type,
 		return -EINVAL;
 
 	switch (prog_type) {
+	case BPF_PROG_TYPE_KPROBE:
+		if (expected_attach_type == BPF_TRACE_UPROBE ||
+		    expected_attach_type == BPF_TRACE_UPROBE_MULTI ||
+		    expected_attach_type == BPF_TRACE_UPROBE_SESSION)
+			return 0;
+		return expected_attach_type ? -EINVAL : 0;
 	case BPF_PROG_TYPE_CGROUP_SOCK:
 		switch (expected_attach_type) {
 		case BPF_CGROUP_INET_SOCK_CREATE:

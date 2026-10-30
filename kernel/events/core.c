@@ -11835,6 +11835,19 @@ static int __perf_event_set_bpf_prog(struct perf_event *event,
 	    (is_syscall_tp && prog->type != BPF_PROG_TYPE_TRACEPOINT))
 		return -EINVAL;
 
+	/* Multi and session uprobes must use their BPF link attachment path. */
+	if (prog->expected_attach_type == BPF_TRACE_UPROBE_MULTI ||
+	    prog->expected_attach_type == BPF_TRACE_UPROBE_SESSION)
+		return -EINVAL;
+
+	if (prog->expected_attach_type == BPF_TRACE_UPROBE && !is_uprobe)
+		return -EINVAL;
+
+	/* XXX can we do this? */
+	/* A preempted uprobe can be re-entered and overwrite its private stack. */
+	if (is_uprobe && !prog->expected_attach_type && prog->aux->jits_use_priv_stack)
+		return -EINVAL;
+
 	if (prog->type == BPF_PROG_TYPE_KPROBE && prog->sleepable && !is_uprobe)
 		/* only uprobe programs are allowed to be sleepable */
 		return -EINVAL;
