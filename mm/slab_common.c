@@ -1233,17 +1233,9 @@ static const struct seq_operations slabinfo_op = {
 	.show = slab_show,
 };
 
-static int slabinfo_open(struct inode *inode, struct file *file)
-{
-	return seq_open(file, &slabinfo_op);
-}
-
 static const struct proc_ops slabinfo_proc_ops = {
 	.proc_flags	= PROC_ENTRY_PERMANENT,
-	.proc_open	= slabinfo_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= seq_release,
+	.proc_seq_ops	= &slabinfo_op,
 };
 
 static int __init slab_proc_init(void)

@@ -1448,11 +1448,6 @@ static int lcd_proc_show(struct seq_file *m, void *v)
 	return 0;
 }
 
-static int lcd_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, lcd_proc_show, pde_data(inode));
-}
-
 static int set_lcd_brightness(struct toshiba_acpi_dev *dev, int value)
 {
 	u32 result;
@@ -1509,10 +1504,7 @@ static ssize_t lcd_proc_write(struct file *file, const char __user *buf,
 }
 
 static const struct proc_ops lcd_proc_ops = {
-	.proc_open	= lcd_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
+	.proc_show	= lcd_proc_show,
 	.proc_write	= lcd_proc_write,
 };
 
@@ -1547,11 +1539,6 @@ static int video_proc_show(struct seq_file *m, void *v)
 	seq_printf(m, "tv_out:                  %d\n", is_tv);
 
 	return 0;
-}
-
-static int video_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, video_proc_show, pde_data(inode));
 }
 
 static ssize_t video_proc_write(struct file *file, const char __user *buf,
@@ -1614,10 +1601,7 @@ static ssize_t video_proc_write(struct file *file, const char __user *buf,
 }
 
 static const struct proc_ops video_proc_ops = {
-	.proc_open	= video_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
+	.proc_show	= video_proc_show,
 	.proc_write	= video_proc_write,
 };
 
@@ -1660,11 +1644,6 @@ static int fan_proc_show(struct seq_file *m, void *v)
 	return 0;
 }
 
-static int fan_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, fan_proc_show, pde_data(inode));
-}
-
 static ssize_t fan_proc_write(struct file *file, const char __user *buf,
 			      size_t count, loff_t *pos)
 {
@@ -1691,10 +1670,7 @@ static ssize_t fan_proc_write(struct file *file, const char __user *buf,
 }
 
 static const struct proc_ops fan_proc_ops = {
-	.proc_open	= fan_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
+	.proc_show	= fan_proc_show,
 	.proc_write	= fan_proc_write,
 };
 
@@ -1731,11 +1707,6 @@ static int keys_proc_show(struct seq_file *m, void *v)
 	return 0;
 }
 
-static int keys_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, keys_proc_show, pde_data(inode));
-}
-
 static ssize_t keys_proc_write(struct file *file, const char __user *buf,
 			       size_t count, loff_t *pos)
 {
@@ -1758,10 +1729,7 @@ static ssize_t keys_proc_write(struct file *file, const char __user *buf,
 }
 
 static const struct proc_ops keys_proc_ops = {
-	.proc_open	= keys_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
+	.proc_show	= keys_proc_show,
 	.proc_write	= keys_proc_write,
 };
 

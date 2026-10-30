@@ -213,16 +213,8 @@ static ssize_t dfscache_proc_write(struct file *file, const char __user *buffer,
 	return count;
 }
 
-static int dfscache_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, dfscache_proc_show, NULL);
-}
-
 const struct proc_ops dfscache_proc_ops = {
-	.proc_open	= dfscache_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
+	.proc_show	= dfscache_proc_show,
 	.proc_write	= dfscache_proc_write,
 };
 

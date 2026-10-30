@@ -275,17 +275,9 @@ lstats_write(struct file *file, const char __user *buf, size_t count,
 	return count;
 }
 
-static int lstats_open(struct inode *inode, struct file *filp)
-{
-	return single_open(filp, lstats_show, NULL);
-}
-
 static const struct proc_ops lstats_proc_ops = {
-	.proc_open	= lstats_open,
-	.proc_read	= seq_read,
+	.proc_show	= lstats_show,
 	.proc_write	= lstats_write,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
 };
 
 static int __init init_lstats_procfs(void)

@@ -797,17 +797,9 @@ static int lparcfg_data(struct seq_file *m, void *v)
 	return pseries_lparcfg_data(m, v);
 }
 
-static int lparcfg_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, lparcfg_data, NULL);
-}
-
 static const struct proc_ops lparcfg_proc_ops = {
-	.proc_read	= seq_read,
 	.proc_write	= lparcfg_write,
-	.proc_open	= lparcfg_open,
-	.proc_release	= single_release,
-	.proc_lseek	= seq_lseek,
+	.proc_show	= lparcfg_data,
 };
 
 static int __init lparcfg_init(void)

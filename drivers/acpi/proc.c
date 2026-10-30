@@ -121,19 +121,9 @@ acpi_system_write_wakeup_device(struct file *file,
 	return count;
 }
 
-static int
-acpi_system_wakeup_device_open_fs(struct inode *inode, struct file *file)
-{
-	return single_open(file, acpi_system_wakeup_device_seq_show,
-			   pde_data(inode));
-}
-
 static const struct proc_ops acpi_system_wakeup_device_proc_ops = {
-	.proc_open	= acpi_system_wakeup_device_open_fs,
-	.proc_read	= seq_read,
+	.proc_show	= acpi_system_wakeup_device_seq_show,
 	.proc_write	= acpi_system_write_wakeup_device,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
 };
 
 void __init acpi_sleep_proc_init(void)

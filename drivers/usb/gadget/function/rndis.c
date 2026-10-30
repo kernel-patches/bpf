@@ -1183,16 +1183,8 @@ static ssize_t rndis_proc_write(struct file *file, const char __user *buffer,
 	return count;
 }
 
-static int rndis_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, rndis_proc_show, pde_data(inode));
-}
-
 static const struct proc_ops rndis_proc_ops = {
-	.proc_open	= rndis_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
+	.proc_show	= rndis_proc_show,
 	.proc_write	= rndis_proc_write,
 };
 

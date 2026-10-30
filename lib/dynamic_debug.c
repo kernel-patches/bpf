@@ -1194,10 +1194,8 @@ static const struct file_operations ddebug_proc_fops = {
 };
 
 static const struct proc_ops proc_fops = {
-	.proc_open = ddebug_proc_open,
-	.proc_read = seq_read,
-	.proc_lseek = seq_lseek,
-	.proc_release = seq_release_private,
+	.proc_seq_ops = &ddebug_proc_seqops,
+	.proc_state_size = sizeof(struct ddebug_iter),
 	.proc_write = ddebug_proc_write
 };
 

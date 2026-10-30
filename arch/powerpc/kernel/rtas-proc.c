@@ -154,69 +154,29 @@ static ssize_t ppc_rtas_tone_volume_write(struct file *file,
 static int ppc_rtas_tone_volume_show(struct seq_file *m, void *v);
 static int ppc_rtas_rmo_buf_show(struct seq_file *m, void *v);
 
-static int poweron_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, ppc_rtas_poweron_show, NULL);
-}
-
 static const struct proc_ops ppc_rtas_poweron_proc_ops = {
-	.proc_open	= poweron_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
+	.proc_show	= ppc_rtas_poweron_show,
 	.proc_write	= ppc_rtas_poweron_write,
-	.proc_release	= single_release,
 };
-
-static int progress_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, ppc_rtas_progress_show, NULL);
-}
 
 static const struct proc_ops ppc_rtas_progress_proc_ops = {
-	.proc_open	= progress_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
+	.proc_show	= ppc_rtas_progress_show,
 	.proc_write	= ppc_rtas_progress_write,
-	.proc_release	= single_release,
 };
-
-static int clock_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, ppc_rtas_clock_show, NULL);
-}
 
 static const struct proc_ops ppc_rtas_clock_proc_ops = {
-	.proc_open	= clock_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
+	.proc_show	= ppc_rtas_clock_show,
 	.proc_write	= ppc_rtas_clock_write,
-	.proc_release	= single_release,
 };
-
-static int tone_freq_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, ppc_rtas_tone_freq_show, NULL);
-}
 
 static const struct proc_ops ppc_rtas_tone_freq_proc_ops = {
-	.proc_open	= tone_freq_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
+	.proc_show	= ppc_rtas_tone_freq_show,
 	.proc_write	= ppc_rtas_tone_freq_write,
-	.proc_release	= single_release,
 };
 
-static int tone_volume_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, ppc_rtas_tone_volume_show, NULL);
-}
-
 static const struct proc_ops ppc_rtas_tone_volume_proc_ops = {
-	.proc_open	= tone_volume_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
+	.proc_show	= ppc_rtas_tone_volume_show,
 	.proc_write	= ppc_rtas_tone_volume_write,
-	.proc_release	= single_release,
 };
 
 static int ppc_rtas_find_all_sensors(void);

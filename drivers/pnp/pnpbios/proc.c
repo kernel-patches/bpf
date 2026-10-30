@@ -171,11 +171,6 @@ static int pnpbios_proc_show(struct seq_file *m, void *v)
 	return 0;
 }
 
-static int pnpbios_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, pnpbios_proc_show, pde_data(inode));
-}
-
 static ssize_t pnpbios_proc_write(struct file *file, const char __user *buf,
 				  size_t count, loff_t *pos)
 {
@@ -211,10 +206,7 @@ out:
 }
 
 static const struct proc_ops pnpbios_proc_ops = {
-	.proc_open	= pnpbios_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
+	.proc_show	= pnpbios_proc_show,
 	.proc_write	= pnpbios_proc_write,
 };
 

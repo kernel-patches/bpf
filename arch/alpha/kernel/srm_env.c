@@ -81,11 +81,6 @@ static int srm_env_proc_show(struct seq_file *m, void *v)
 	return ret;
 }
 
-static int srm_env_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, srm_env_proc_show, pde_data(inode));
-}
-
 static ssize_t srm_env_proc_write(struct file *file, const char __user *buffer,
 				  size_t count, loff_t *pos)
 {
@@ -120,10 +115,7 @@ static ssize_t srm_env_proc_write(struct file *file, const char __user *buffer,
 }
 
 static const struct proc_ops srm_env_proc_ops = {
-	.proc_open	= srm_env_proc_open,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
+	.proc_show	= srm_env_proc_show,
 	.proc_write	= srm_env_proc_write,
 };
 

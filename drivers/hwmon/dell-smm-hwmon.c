@@ -694,16 +694,8 @@ static int i8k_proc_show(struct seq_file *seq, void *offset)
 	return 0;
 }
 
-static int i8k_open_fs(struct inode *inode, struct file *file)
-{
-	return single_open(file, i8k_proc_show, pde_data(inode));
-}
-
 static const struct proc_ops i8k_proc_ops = {
-	.proc_open	= i8k_open_fs,
-	.proc_read	= seq_read,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
+	.proc_show	= i8k_proc_show,
 	.proc_ioctl	= i8k_ioctl,
 };
 
