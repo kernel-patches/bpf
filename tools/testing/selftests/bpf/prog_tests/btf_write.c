@@ -620,7 +620,7 @@ static void test_btf_attrs(void)
 
 	btf__add_decl_tag(btf, "tag", 2, -1);
 	btf__add_decl_attr(btf, "tag", 2, -1);
-	btf__add_decl_attr(btf, "member_attr", 2, 0);
+	btf__add_decl_attr(btf, "__attribute__((aligned(4)))", 2, 0);
 	btf__add_type_tag(btf, "tag", 1);
 	btf__add_type_attr(btf, "tag", 1);
 
@@ -631,7 +631,7 @@ static void test_btf_attrs(void)
 		"\t'f' type_id=1 bits_offset=0",
 		"[3] DECL_TAG 'tag' type_id=2 component_idx=-1",
 		"[4] DECL_TAG 'tag' type_id=2 component_idx=-1 kflag=1",
-		"[5] DECL_TAG 'member_attr' type_id=2 component_idx=0 kflag=1",
+		"[5] DECL_TAG '__attribute__((aligned(4)))' type_id=2 component_idx=0 kflag=1",
 		"[6] TYPE_TAG 'tag' type_id=1",
 		"[7] TYPE_TAG 'tag' type_id=1 kflag=1");
 
