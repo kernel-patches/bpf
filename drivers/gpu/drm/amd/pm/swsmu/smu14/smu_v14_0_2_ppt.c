@@ -2277,8 +2277,11 @@ static ssize_t smu_v14_0_2_get_gpu_metrics(struct smu_context *smu,
 					       metrics->Vcn1ActivityPercentage);
 
 	gpu_metrics->average_socket_power = metrics->AverageSocketPower;
-	if (mp1_ver == IP_VERSION(14, 0, 3) && smu->smc_fw_version >= 0x00685000)
-	    gpu_metrics->energy_accumulator = metrics->EnergyAccumulator;
+	if ((mp1_ver == IP_VERSION(14, 0, 2) &&
+	     smu->smc_fw_version >= 0x00664800) ||
+	    (mp1_ver == IP_VERSION(14, 0, 3) &&
+	     smu->smc_fw_version >= 0x00685000))
+		gpu_metrics->energy_accumulator = metrics->EnergyAccumulator;
 
 	if (metrics->AverageGfxActivity <= SMU_14_0_2_BUSY_THRESHOLD)
 		gpu_metrics->average_gfxclk_frequency = metrics->AverageGfxclkFrequencyPostDs;
@@ -2599,10 +2602,6 @@ static int smu_v14_0_2_od_restore_table_single(struct smu_context *smu, long inp
 	case PP_OD_EDIT_FAN_ZERO_RPM_ENABLE:
 		od_table->OverDriveTable.FanZeroRpmEnable =
 					boot_overdrive_table->OverDriveTable.FanZeroRpmEnable;
-		break;
-	case PP_OD_EDIT_FAN_ZERO_RPM_STOP_TEMP:
-		od_table->OverDriveTable.FanZeroRpmStopTemp =
-					boot_overdrive_table->OverDriveTable.FanZeroRpmStopTemp;
 		break;
 	case PP_OD_EDIT_FAN_ZERO_RPM_STOP_TEMP:
 		od_table->OverDriveTable.FanZeroRpmStopTemp =
