@@ -1125,6 +1125,7 @@ static struct dst_entry *ip6_sk_dst_check(struct sock *sk,
 	    ip6_rt_check(&rt->rt6i_src, &fl6->saddr,
 			 np->saddr_cache ? &np->saddr : NULL) ||
 #endif
+	    fl6->flowi6_mark != READ_ONCE(sk->sk_mark) ||
 	   (fl6->flowi6_oif && fl6->flowi6_oif != dst_dev(dst)->ifindex)) {
 		dst_release(dst);
 		dst = NULL;
