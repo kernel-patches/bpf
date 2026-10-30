@@ -2301,8 +2301,8 @@ promote_secondaries - BOOLEAN
 	Default: 0 (disabled)
 
 drop_unicast_in_l2_multicast - BOOLEAN
-	Drop any unicast IP packets that are received in link-layer
-	multicast (or broadcast) frames.
+	Drop any unicast IP packets and non-GARP ARP replies that are
+	received in link-layer multicast (or broadcast) frames.
 
 	This behavior (for multicast) is actually a SHOULD in RFC
 	1122, but is disabled by default for compatibility reasons.

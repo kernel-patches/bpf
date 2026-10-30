@@ -794,6 +794,26 @@ static int arp_process(struct net *net, struct sock *sk, struct sk_buff *skb)
 	    (!IN_DEV_ROUTE_LOCALNET(in_dev) && ipv4_is_loopback(tip)))
 		goto out_free_skb;
 
+/*
+ * Hole-196 defense for ARP:
+ * If drop_unicast_in_l2_multicast is enabled, drop ARP Replies received
+ * in L2 BMC frames unless they are Gratuitous ARP (sip == tip).
+ *
+ * Standard ARP Replies are strictly unicast (PACKET_HOST). An ARP Reply
+ * in an L2 broadcast frame with (sip != tip) is an injected unicast packet.
+ * Legitimate GARP (sip == tip) is preserved and defers to DROP_GRATUITOUS_ARP.
+ * ARP Requests are left untouched per RFC 826.
+ */
+	if ((skb->pkt_type == PACKET_BROADCAST ||
+	     skb->pkt_type == PACKET_MULTICAST) &&
+	    IN_DEV_ORCONF(in_dev, DROP_UNICAST_IN_L2_MULTICAST)) {
+		if (arp->ar_op == htons(ARPOP_REPLY) && sip != tip) {
+			kfree_skb_reason(skb,
+					 SKB_DROP_REASON_UNICAST_IN_L2_MULTICAST);
+			return NET_RX_DROP;
+		}
+	}
+
  /*
   *	For some 802.11 wireless deployments (and possibly other networks),
   *	there will be an ARP proxy and gratuitous ARP frames are attacks
