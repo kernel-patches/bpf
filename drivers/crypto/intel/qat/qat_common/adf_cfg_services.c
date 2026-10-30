@@ -148,6 +148,9 @@ int adf_get_service_enabled(struct adf_accel_dev *accel_dev)
 	if (ret)
 		return ret;
 
+	if (test_bit(SVC_SYM, &mask) && test_bit(SVC_ASYM, &mask) && test_bit(SVC_DC, &mask))
+		return SVC_SYM_ASYM_DC;
+
 	if (test_bit(SVC_SYM, &mask) && test_bit(SVC_ASYM, &mask))
 		return SVC_SYM_ASYM;
 
