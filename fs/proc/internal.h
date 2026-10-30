@@ -51,6 +51,7 @@ struct proc_dir_entry {
 	proc_write_t write;
 	void *data;
 	unsigned int state_size;
+	unsigned int write_size;
 	unsigned int low_ino;
 	nlink_t nlink;
 	kuid_t uid;
@@ -107,6 +108,16 @@ static inline bool pde_has_proc_seq_ops(const struct proc_dir_entry *pde)
 static inline bool pde_has_proc_show(const struct proc_dir_entry *pde)
 {
 	return pde->flags & PROC_ENTRY_proc_show;
+}
+
+static inline bool pde_has_proc_write_buf(const struct proc_dir_entry *pde)
+{
+	return pde->flags & PROC_ENTRY_proc_write_buf;
+}
+
+static inline bool pde_has_short_writes(const struct proc_dir_entry *pde)
+{
+	return pde->flags & PROC_ENTRY_SHORT_WRITES;
 }
 
 /* procfs owns the seq_file, see pde_seq_start() */
