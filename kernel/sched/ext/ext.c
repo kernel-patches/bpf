@@ -462,6 +462,14 @@ static bool rq_is_open(struct rq *rq, u64 enq_flags)
 	 */
 
 	/*
+	 * A local insertion can raise next_class to ext while the donor is
+	 * still idle. Keep the rq open so that the local DSQ head is not
+	 * unnecessarily reenqueued before the CPU can pick it.
+	 */
+	if (rq->donor == rq->idle)
+		return true;
+
+	/*
 	 * If we're in the dispatch path holding rq lock, $donor may or may not
 	 * be ready depending on whether the on-going dispatch decides to extend
 	 * $donor's slice. We say yes here and resolve it at the end of dispatch.
@@ -3852,15 +3860,6 @@ static void kick_sync_wait_bal_cb(struct rq *rq)
 	unsigned long *ksyncs;
 	bool waited;
 	s32 cpu;
-
-	/*
-	 * This callback is queued once the pick is final and flushed within
-	 * @rq's own scheduling pass. If a lock taker on a foreign CPU ever
-	 * flushes it, the snapshots are unrelated to that CPU. Don't get in the
-	 * way and leave the wait pending for @rq's next pick.
-	 */
-	if (unlikely(cpu_of(rq) != smp_processor_id()))
-		return;
 
 	/*
 	 * Clear only when the wait actually runs. The callback can be dropped
