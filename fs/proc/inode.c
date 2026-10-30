@@ -23,6 +23,8 @@
 #include <linux/sysctl.h>
 #include <linux/seq_file.h>
 #include <linux/slab.h>
+#include <linux/sched/signal.h>
+#include <linux/uio.h>
 #include <linux/mount.h>
 #include <linux/bug.h>
 #include <linux/wait_bit.h>
@@ -377,11 +379,67 @@ static loff_t proc_reg_llseek(struct file *file, loff_t offset, int whence)
 	return rv;
 }
 
+/*
+ * The entry fills a kernel buffer and procfs copies that to userspace after
+ * unpinning the entry. A reader that faults on its buffer then doesn't hold
+ * up remove_proc_entry().
+ */
+static ssize_t pde_read_buf(struct proc_dir_entry *pde, struct kiocb *iocb,
+			    struct iov_iter *iter)
+{
+	struct file *file = iocb->ki_filp;
+	char *buf __free(kvfree) = NULL;
+	ssize_t rv, done = 0;
+	size_t len, count;
+	loff_t pos;
+
+	if (!iov_iter_count(iter))
+		return 0;
+	/* neither the allocation nor the entry can honor IOCB_NOWAIT */
+	if ((iocb->ki_flags & IOCB_NOWAIT) && !(file->f_flags & O_NONBLOCK))
+		return -EAGAIN;
+	len = min_t(size_t, iov_iter_count(iter), pde->read_size);
+	buf = kvmalloc(len, GFP_KERNEL);
+	if (!buf)
+		return -ENOMEM;
+
+	/* PROC_ENTRY_FULL_READS fills the read in pieces */
+	do {
+		count = min_t(size_t, iov_iter_count(iter), len);
+		pos = iocb->ki_pos;
+		if (!pde_pin(pde)) {
+			rv = -EIO;
+			break;
+		}
+		rv = pde->proc_ops->proc_read_buf(file, buf, count, &pos);
+		pde_unpin(pde);
+		if (rv <= 0)
+			break;
+		if (WARN_ON_ONCE(rv > count)) {
+			rv = -EIO;
+			break;
+		}
+		if (copy_to_iter(buf, rv, iter) != rv) {
+			rv = -EFAULT;
+			break;
+		}
+		iocb->ki_pos = pos;
+		done += rv;
+		if (!pde_has_full_reads(pde) || rv < count)
+			break;
+		cond_resched();
+	} while (iov_iter_count(iter) && !fatal_signal_pending(current));
+
+	return done ?: rv;
+}
+
 static ssize_t proc_reg_read_iter(struct kiocb *iocb, struct iov_iter *iter)
 {
 	struct proc_dir_entry *pde = PDE(file_inode(iocb->ki_filp));
 	ssize_t ret;
 
+	if (pde_has_proc_read_buf(pde))
+		return pde_read_buf(pde, iocb, iter);
 	if (!pde_pin(pde))
 		return -EIO;
 	ret = pde->proc_ops->proc_read_iter(iocb, iter);
@@ -793,7 +851,7 @@ struct inode *proc_get_inode(struct super_block *sb, struct proc_dir_entry *de)
 		inode->i_op = de->proc_iops;
 		if (pde_is_seq_file(de))
 			inode->i_fop = &proc_seq_file_ops;
-		else if (pde_has_proc_read_iter(de))
+		else if (pde_has_proc_read_iter(de) || pde_has_proc_read_buf(de))
 			inode->i_fop = &proc_iter_file_ops;
 		else
 			inode->i_fop = &proc_reg_file_ops;

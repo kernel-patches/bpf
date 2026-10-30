@@ -38,6 +38,13 @@ enum {
 	 * failing with -EINVAL.
 	 */
 	PROC_ENTRY_SHORT_WRITES		= 1U << 9,
+	PROC_ENTRY_proc_read_buf	= 1U << 10,
+
+	/*
+	 * Reads larger than ->proc_read_size are filled in pieces instead of
+	 * coming up short.
+	 */
+	PROC_ENTRY_FULL_READS		= 1U << 11,
 };
 
 struct proc_ops {
@@ -84,6 +91,15 @@ struct proc_ops {
 	 */
 	ssize_t	(*proc_write_buf)(struct file *, char *, size_t, loff_t *);
 	unsigned int proc_write_size;
+	/*
+	 * procfs calls ->proc_read_buf() to fill a kernel buffer of at most
+	 * ->proc_read_size bytes, PAGE_SIZE if that's 0, and copies it to
+	 * userspace afterwards. Larger reads come up short unless the entry
+	 * asks for PROC_ENTRY_FULL_READS. The position the entry moves to only
+	 * sticks if the copy works.
+	 */
+	ssize_t	(*proc_read_buf)(struct file *, char *, size_t, loff_t *);
+	unsigned int proc_read_size;
 } __randomize_layout;
 
 /* definitions for hide_pid field */
