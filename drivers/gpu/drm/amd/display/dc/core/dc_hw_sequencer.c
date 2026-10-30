@@ -2094,6 +2094,9 @@ void hwss_execute_sequence(struct dc *dc,
 		case DPP_ROOT_CLOCK_CONTROL:
 			hwss_dpp_root_clock_control(params);
 			break;
+		case DC_IP_REQUEST_STATUS:
+			hwss_dc_ip_request_status(params);
+			break;
 		case DC_IP_REQUEST_CNTL:
 			hwss_dc_ip_request_cntl(params);
 			break;
@@ -4066,11 +4069,11 @@ void hwss_dccg_set_ref_dscclk(union block_sequence_params *params)
 void hwss_dpp_pg_control(union block_sequence_params *params)
 {
 	struct dce_hwseq *hws = params->dpp_pg_control_params.hws;
-	unsigned int dpp_inst = params->dpp_pg_control_params.dpp_inst;
+	struct dpp *dpp = params->dpp_pg_control_params.dpp;
 	bool power_on = params->dpp_pg_control_params.power_on;
+	bool disable_power_gate = params->dpp_pg_control_params.disable_power_gate;
 
-	if (hws->funcs.dpp_pg_control)
-		hws->funcs.dpp_pg_control(hws, dpp_inst, power_on);
+	hws->funcs.dpp_pg_control(hws, dpp, power_on, disable_power_gate);
 }
 
 void hwss_hubp_pg_control(union block_sequence_params *params)
@@ -4078,9 +4081,10 @@ void hwss_hubp_pg_control(union block_sequence_params *params)
 	struct dce_hwseq *hws = params->hubp_pg_control_params.hws;
 	unsigned int hubp_inst = params->hubp_pg_control_params.hubp_inst;
 	bool power_on = params->hubp_pg_control_params.power_on;
+	bool disable_power_gate = params->hubp_pg_control_params.disable_power_gate;
+	bool ignore_pg = params->hubp_pg_control_params.ignore_pg;
 
-	if (hws->funcs.hubp_pg_control)
-		hws->funcs.hubp_pg_control(hws, hubp_inst, power_on);
+	hws->funcs.hubp_pg_control(hws, hubp_inst, power_on, disable_power_gate, ignore_pg);
 }
 
 void hwss_hubp_reset(union block_sequence_params *params)
@@ -4107,6 +4111,13 @@ void hwss_dpp_root_clock_control(union block_sequence_params *params)
 	bool root_clock_optimization_dpp = params->dpp_root_clock_control_params.root_clock_optimization_dpp;
 
 	dccg->funcs->dpp_root_clock_control(dccg, dpp_inst, clock_on, root_clock_optimization_dpp);
+}
+
+void hwss_dc_ip_request_status(union block_sequence_params *params)
+{
+	struct dce_hwseq *hws = params->dc_ip_request_status_params.hws;
+
+	hws->funcs.dc_ip_request_status(hws);
 }
 
 void hwss_dc_ip_request_cntl(union block_sequence_params *params)
@@ -5018,6 +5029,23 @@ void hwss_add_dpp_program_cm_hist(struct block_sequence_state *seq_state,
 	}
 }
 
+bool hwss_add_dc_ip_request_status(struct block_sequence_state *seq_state,
+		struct dce_hwseq *hws)
+{
+	if (!seq_state || !seq_state->steps || !seq_state->num_steps ||
+			!hws || !hws->funcs.dc_ip_request_status)
+		return false;
+
+	if (*seq_state->num_steps >= MAX_HWSS_BLOCK_SEQUENCE_SIZE)
+		return false;
+
+	seq_state->steps[*seq_state->num_steps].func = DC_IP_REQUEST_STATUS;
+	seq_state->steps[*seq_state->num_steps].params.dc_ip_request_status_params.hws = hws;
+	(*seq_state->num_steps)++;
+
+	return true;
+}
+
 void hwss_add_dc_ip_request_cntl(struct block_sequence_state *seq_state,
 		struct dc *dc,
 		bool enable)
@@ -5561,14 +5589,21 @@ void hwss_add_dpp_root_clock_control(struct block_sequence_state *seq_state,
 
 void hwss_add_dpp_pg_control(struct block_sequence_state *seq_state,
 		struct dce_hwseq *hws,
-		unsigned int dpp_inst,
-		bool power_on)
+		struct dpp *dpp,
+		bool power_on,
+		bool disable_power_gate)
 {
+	if (!seq_state || !seq_state->steps || !seq_state->num_steps || !hws ||
+			!hws->funcs.dpp_pg_control || !dpp)
+		return;
+
 	if (*seq_state->num_steps < MAX_HWSS_BLOCK_SEQUENCE_SIZE) {
 		seq_state->steps[*seq_state->num_steps].func = DPP_PG_CONTROL;
 		seq_state->steps[*seq_state->num_steps].params.dpp_pg_control_params.hws = hws;
-		seq_state->steps[*seq_state->num_steps].params.dpp_pg_control_params.dpp_inst = dpp_inst;
+		seq_state->steps[*seq_state->num_steps].params.dpp_pg_control_params.dpp = dpp;
 		seq_state->steps[*seq_state->num_steps].params.dpp_pg_control_params.power_on = power_on;
+		seq_state->steps[*seq_state->num_steps].params.dpp_pg_control_params.disable_power_gate =
+				disable_power_gate;
 		(*seq_state->num_steps)++;
 	}
 }
@@ -5576,13 +5611,22 @@ void hwss_add_dpp_pg_control(struct block_sequence_state *seq_state,
 void hwss_add_hubp_pg_control(struct block_sequence_state *seq_state,
 		struct dce_hwseq *hws,
 		unsigned int hubp_inst,
-		bool power_on)
+		bool power_on,
+		bool disable_power_gate,
+		bool ignore_pg)
 {
+	if (!seq_state || !seq_state->steps || !seq_state->num_steps || !hws ||
+			!hws->funcs.hubp_pg_control)
+		return;
+
 	if (*seq_state->num_steps < MAX_HWSS_BLOCK_SEQUENCE_SIZE) {
 		seq_state->steps[*seq_state->num_steps].func = HUBP_PG_CONTROL;
 		seq_state->steps[*seq_state->num_steps].params.hubp_pg_control_params.hws = hws;
 		seq_state->steps[*seq_state->num_steps].params.hubp_pg_control_params.hubp_inst = hubp_inst;
 		seq_state->steps[*seq_state->num_steps].params.hubp_pg_control_params.power_on = power_on;
+		seq_state->steps[*seq_state->num_steps].params.hubp_pg_control_params.disable_power_gate =
+				disable_power_gate;
+		seq_state->steps[*seq_state->num_steps].params.hubp_pg_control_params.ignore_pg = ignore_pg;
 		(*seq_state->num_steps)++;
 	}
 }

@@ -126,6 +126,8 @@ struct dcn401_commit_step_meta {
 		 * so a plane add always programs the scaler and viewport.
 		 */
 		bool scaling_unchanged;
+		/* funcs.pg_needs_ip_request() is false: no PG hook can gate. */
+		bool no_ip_request;
 	} skip_if;
 };
 

@@ -1005,14 +1005,17 @@ struct disable_phantom_crtc_params {
 
 struct dpp_pg_control_params {
 	struct dce_hwseq *hws;
-	unsigned int dpp_inst;
+	struct dpp *dpp;
 	bool power_on;
+	bool disable_power_gate;
 };
 
 struct hubp_pg_control_params {
 	struct dce_hwseq *hws;
 	unsigned int hubp_inst;
 	bool power_on;
+	bool disable_power_gate;
+	bool ignore_pg;
 };
 
 struct hubp_reset_params {
@@ -1028,6 +1031,10 @@ struct dpp_root_clock_control_params {
 	unsigned int dpp_inst;
 	bool clock_on;
 	bool root_clock_optimization_dpp;
+};
+
+struct dc_ip_request_status_params {
+	struct dce_hwseq *hws;
 };
 
 struct dc_ip_request_cntl_params {
@@ -1461,6 +1468,7 @@ union block_sequence_params {
 	struct hubp_reset_params hubp_reset_params;
 	struct dpp_reset_params dpp_reset_params;
 	struct dpp_root_clock_control_params dpp_root_clock_control_params;
+	struct dc_ip_request_status_params dc_ip_request_status_params;
 	struct dc_ip_request_cntl_params dc_ip_request_cntl_params;
 	struct dsc_pg_status_params dsc_pg_status_params;
 	struct dsc_wait_disconnect_pending_clear_params dsc_wait_disconnect_pending_clear_params;
@@ -1699,6 +1707,7 @@ enum block_sequence_func {
 	HUBP_RESET,
 	DPP_RESET,
 	DPP_ROOT_CLOCK_CONTROL,
+	DC_IP_REQUEST_STATUS,
 	DC_IP_REQUEST_CNTL,
 	DCCG_UPDATE_DPP_DTO,
 	HUBP_VTG_SEL,
@@ -2547,6 +2556,8 @@ void hwss_dpp_reset(union block_sequence_params *params);
 
 void hwss_dpp_root_clock_control(union block_sequence_params *params);
 
+void hwss_dc_ip_request_status(union block_sequence_params *params);
+
 void hwss_dc_ip_request_cntl(union block_sequence_params *params);
 
 void hwss_dccg_update_dpp_dto(union block_sequence_params *params);
@@ -2786,6 +2797,9 @@ void hwss_add_dpp_program_cm_hist(struct block_sequence_state *seq_state,
 		struct cm_hist_control cm_hist_control,
 		enum dc_color_space color_space);
 
+bool hwss_add_dc_ip_request_status(struct block_sequence_state *seq_state,
+		struct dce_hwseq *hws);
+
 void hwss_add_dc_ip_request_cntl(struct block_sequence_state *seq_state,
 		struct dc *dc,
 		bool enable);
@@ -2938,13 +2952,16 @@ void hwss_add_dpp_root_clock_control(struct block_sequence_state *seq_state,
 
 void hwss_add_dpp_pg_control(struct block_sequence_state *seq_state,
 		struct dce_hwseq *hws,
-		unsigned int dpp_inst,
-		bool power_on);
+		struct dpp *dpp,
+		bool power_on,
+		bool disable_power_gate);
 
 void hwss_add_hubp_pg_control(struct block_sequence_state *seq_state,
 		struct dce_hwseq *hws,
 		unsigned int hubp_inst,
-		bool power_on);
+		bool power_on,
+		bool disable_power_gate,
+		bool ignore_pg);
 
 void hwss_add_hubp_set_blank(struct block_sequence_state *seq_state,
 		struct hubp *hubp,

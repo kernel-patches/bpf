@@ -231,15 +231,14 @@ static const struct dcn401_commit_step
 	{ .func = HUBP_SET_FLIP_CONTROL_GSL },
 	{ .func = HUBP_CLK_CNTL },
 	{ .func = DPP_DPPCLK_CONTROL },
-	/*
-	 * dcn10_plane_atomic_power_down sets IP_REQUEST_EN only when it
-	 * reads 0. Every writer clears it again, so it always reads 0 here.
-	 */
-	{ .func = DC_IP_REQUEST_CNTL, .meta.dc_ip_request_cntl.enable = true },
+	{ .func = DC_IP_REQUEST_STATUS, .meta.skip_if.no_ip_request = true },
+	{ .func = DC_IP_REQUEST_CNTL, .meta.dc_ip_request_cntl.enable = true,
+	  .meta.skip_if.no_ip_request = true },
 	{ .func = HUBP_PG_CONTROL },
 	{ .func = HUBP_RESET },
 	{ .func = DPP_RESET },
-	{ .func = DC_IP_REQUEST_CNTL, .meta.dc_ip_request_cntl.enable = false },
+	{ .func = DC_IP_REQUEST_CNTL, .meta.dc_ip_request_cntl.enable = false,
+	  .meta.skip_if.no_ip_request = true },
 };
 
 static const struct dcn401_commit_step

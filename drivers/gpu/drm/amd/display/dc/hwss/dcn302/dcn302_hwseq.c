@@ -29,6 +29,7 @@
 
 #include "reg_helper.h"
 #include "dc.h"
+#include "core_types.h"
 
 #define DC_LOGGER_INIT(logger)
 
@@ -42,17 +43,18 @@
 	hws->shifts->field_name, hws->masks->field_name
 
 
-void dcn302_dpp_pg_control(struct dce_hwseq *hws, unsigned int dpp_inst, bool power_on)
+void dcn302_dpp_pg_control(struct dce_hwseq *hws, struct dpp *dpp, bool power_on,
+		bool disable_power_gate)
 {
 	uint32_t power_gate = power_on ? 0 : 1;
 	uint32_t pwr_status = power_on ? 0 : 2;
 
-	if (hws->ctx->dc->debug.disable_dpp_power_gate)
+	if (disable_power_gate)
 		return;
 	if (REG(DOMAIN1_PG_CONFIG) == 0)
 		return;
 
-	switch (dpp_inst) {
+	switch (dpp->inst) {
 	case 0: /* DPP0 */
 		REG_UPDATE(DOMAIN1_PG_CONFIG,
 				DOMAIN1_POWER_GATE, power_gate);
@@ -99,12 +101,15 @@ void dcn302_dpp_pg_control(struct dce_hwseq *hws, unsigned int dpp_inst, bool po
 	}
 }
 
-void dcn302_hubp_pg_control(struct dce_hwseq *hws, unsigned int hubp_inst, bool power_on)
+void dcn302_hubp_pg_control(struct dce_hwseq *hws, unsigned int hubp_inst, bool power_on,
+		bool disable_power_gate, bool ignore_pg)
 {
 	uint32_t power_gate = power_on ? 0 : 1;
 	uint32_t pwr_status = power_on ? 0 : 2;
 
-	if (hws->ctx->dc->debug.disable_hubp_power_gate)
+	(void)ignore_pg;
+
+	if (disable_power_gate)
 		return;
 	if (REG(DOMAIN0_PG_CONFIG) == 0)
 		return;

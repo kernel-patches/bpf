@@ -453,6 +453,9 @@ static noinline_for_stack bool dc2_bls_step_supported(const struct dc2 *dc2,
 	case HUBP_PG_CONTROL:
 		hws = step->params.hubp_pg_control_params.hws;
 		return hws && hws->funcs.hubp_pg_control;
+	case DC_IP_REQUEST_STATUS:
+		hws = step->params.dc_ip_request_status_params.hws;
+		return hws && hws->funcs.dc_ip_request_status;
 	case DC_IP_REQUEST_CNTL:
 		hws = step->params.dc_ip_request_cntl_params.hws;
 		return hws && hws->funcs.dc_ip_request_cntl;
@@ -1415,7 +1418,14 @@ enum dc2_bls_exec_result dc2_bls_execute(
 					&entry->params.hubp_pg_control_params;
 
 			p->hws->funcs.hubp_pg_control(p->hws, p->hubp_inst,
-					p->power_on);
+					p->power_on, p->disable_power_gate, p->ignore_pg);
+			break;
+		}
+		case DC_IP_REQUEST_STATUS: {
+			struct dce_hwseq *hws =
+					entry->params.dc_ip_request_status_params.hws;
+
+			hws->funcs.dc_ip_request_status(hws);
 			break;
 		}
 		case DC_IP_REQUEST_CNTL: {

@@ -14,6 +14,7 @@
 #include "dc_dmub_srv.h"
 #include "custom_float.h"
 #include "dcn32/dcn32_resource.h"
+#include "dce/dce_hwseq.h"
 #include "bls_builder/bls_builder_internal.h"
 #include "bls_builder/dcn401_init_builder.h"
 #include "bls_builder/bls_builder_private_types.h"
@@ -1001,12 +1002,17 @@ static const struct dcn401_commit_step bls_update_head_new_stream[] = {
 
 /* enable_plane, then the watermark propagate and the DET segments. */
 static const struct dcn401_commit_step bls_update_head_new_enable_plane[] = {
+	{ .func = DC_IP_REQUEST_STATUS,
+	  .meta.skip_if.hubp_dpp_already_enabled = true,
+	  .meta.skip_if.no_ip_request = true },
 	{ .func = DC_IP_REQUEST_CNTL, .meta.dc_ip_request_cntl.enable = true,
-	  .meta.skip_if.hubp_dpp_already_enabled = true },
+	  .meta.skip_if.hubp_dpp_already_enabled = true,
+	  .meta.skip_if.no_ip_request = true },
 	{ .func = HUBP_PG_CONTROL, .meta.hubp_pg_control.power_on = true,
 	  .meta.skip_if.hubp_dpp_already_enabled = true },
 	{ .func = DC_IP_REQUEST_CNTL, .meta.dc_ip_request_cntl.enable = false,
-	  .meta.skip_if.hubp_dpp_already_enabled = true },
+	  .meta.skip_if.hubp_dpp_already_enabled = true,
+	  .meta.skip_if.no_ip_request = true },
 	{ .func = HUBP_CLK_CNTL, .meta.hubp_clk_cntl.enable = true,
 	  .meta.skip_if.hubp_dpp_already_enabled = true },
 	{ .func = HUBP_INIT,
@@ -1690,6 +1696,9 @@ static void dcn401_add_step(struct block_sequence_state *sequence,
 		p->dpp_dppclk_control_params.enable =
 				m->dpp_dppclk_control.enable;
 		break;
+	case DC_IP_REQUEST_STATUS:
+		p->dc_ip_request_status_params.hws = dc->hwseq;
+		break;
 	case DC_IP_REQUEST_CNTL:
 		p->dc_ip_request_cntl_params.hws = dc->hwseq;
 		p->dc_ip_request_cntl_params.enable =
@@ -1701,6 +1710,9 @@ static void dcn401_add_step(struct block_sequence_state *sequence,
 				pipe->plane_res.hubp->inst;
 		p->hubp_pg_control_params.power_on =
 				m->hubp_pg_control.power_on;
+		p->hubp_pg_control_params.disable_power_gate =
+				dc->debug.disable_hubp_power_gate;
+		p->hubp_pg_control_params.ignore_pg = dc->debug.ignore_pg;
 		break;
 	case HUBP_RESET:
 		p->hubp_reset_params.hubp = pipe->plane_res.hubp;
@@ -1966,6 +1978,10 @@ static bool dcn401_skip_step(const struct dcn401_commit_step_args *args,
 			!args->pipe->plane_state->update_bits.scaling_change &&
 			!args->pipe->plane_state->update_bits.position_change &&
 			!args->pipe->stream->update_flags.bits.scaling)
+		return true;
+	if (step->meta.skip_if.no_ip_request &&
+			(!args->dc->hwseq->funcs.pg_needs_ip_request ||
+			!args->dc->hwseq->funcs.pg_needs_ip_request(args->dc)))
 		return true;
 	return false;
 }

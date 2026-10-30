@@ -459,12 +459,16 @@ void dcn31_z10_restore(const struct dc *dc)
 	dc_wake_and_execute_dmub_cmd(dc->ctx, &cmd, DM_DMUB_WAIT_TYPE_WAIT);
 }
 
-void dcn31_hubp_pg_control(struct dce_hwseq *hws, unsigned int hubp_inst, bool power_on)
+void dcn31_hubp_pg_control(struct dce_hwseq *hws, unsigned int hubp_inst, bool power_on,
+		bool disable_power_gate, bool ignore_pg)
 {
 	uint32_t power_gate = power_on ? 0 : 1;
 	uint32_t pwr_status = power_on ? 0 : 2;
 	uint32_t org_ip_request_cntl;
-	if (hws->ctx->dc->debug.disable_hubp_power_gate)
+
+	(void)ignore_pg;
+
+	if (disable_power_gate)
 		return;
 
 	if (REG(DOMAIN0_PG_CONFIG) == 0)

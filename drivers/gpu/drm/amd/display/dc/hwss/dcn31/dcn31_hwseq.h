@@ -46,7 +46,8 @@ void dcn31_update_info_frame(struct pipe_ctx *pipe_ctx);
 void dcn31_z10_restore(const struct dc *dc);
 void dcn31_z10_save_init(struct dc *dc);
 
-void dcn31_hubp_pg_control(struct dce_hwseq *hws, unsigned int hubp_inst, bool power_on);
+void dcn31_hubp_pg_control(struct dce_hwseq *hws, unsigned int hubp_inst, bool power_on,
+		bool disable_power_gate, bool ignore_pg);
 int dcn31_init_sys_ctx(struct dce_hwseq *hws, struct dc *dc, struct dc_phy_addr_space_config *pa_config);
 void dcn31_reset_hw_ctx_wrap(
 		struct dc *dc,

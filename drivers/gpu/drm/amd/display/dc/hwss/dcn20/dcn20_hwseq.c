@@ -556,18 +556,19 @@ void dcn20_dsc_pg_control(
 
 void dcn20_dpp_pg_control(
 		struct dce_hwseq *hws,
-		unsigned int dpp_inst,
-		bool power_on)
+		struct dpp *dpp,
+		bool power_on,
+		bool disable_power_gate)
 {
 	uint32_t power_gate = power_on ? 0 : 1;
 	uint32_t pwr_status = power_on ? 0 : 2;
 
-	if (hws->ctx->dc->debug.disable_dpp_power_gate)
+	if (disable_power_gate)
 		return;
 	if (REG(DOMAIN1_PG_CONFIG) == 0)
 		return;
 
-	switch (dpp_inst) {
+	switch (dpp->inst) {
 	case 0: /* DPP0 */
 		REG_UPDATE(DOMAIN1_PG_CONFIG,
 				DOMAIN1_POWER_GATE, power_gate);
@@ -622,11 +623,8 @@ void dcn20_dpp_pg_control(
 		 */
 
 		/* Force disable cursor on plane powerdown on DPP 5 using dpp_force_disable_cursor */
-		if (!power_on) {
-			struct dpp *dpp5 = hws->ctx->dc->res_pool->dpps[dpp_inst];
-			if (dpp5 && dpp5->funcs->dpp_force_disable_cursor)
-				dpp5->funcs->dpp_force_disable_cursor(dpp5);
-		}
+		if (!power_on && dpp->funcs->dpp_force_disable_cursor)
+			dpp->funcs->dpp_force_disable_cursor(dpp);
 
 		break;
 	default:
@@ -639,12 +637,16 @@ void dcn20_dpp_pg_control(
 void dcn20_hubp_pg_control(
 		struct dce_hwseq *hws,
 		unsigned int hubp_inst,
-		bool power_on)
+		bool power_on,
+		bool disable_power_gate,
+		bool ignore_pg)
 {
 	uint32_t power_gate = power_on ? 0 : 1;
 	uint32_t pwr_status = power_on ? 0 : 2;
 
-	if (hws->ctx->dc->debug.disable_hubp_power_gate)
+	(void)ignore_pg;
+
+	if (disable_power_gate)
 		return;
 	if (REG(DOMAIN0_PG_CONFIG) == 0)
 		return;
@@ -1321,10 +1323,13 @@ static void dcn20_power_on_plane_resources(
 					IP_REQUEST_EN, 1);
 
 		if (hws->funcs.dpp_pg_control)
-			hws->funcs.dpp_pg_control(hws, pipe_ctx->plane_res.dpp->inst, true);
+			hws->funcs.dpp_pg_control(hws, pipe_ctx->plane_res.dpp, true,
+					hws->ctx->dc->debug.disable_dpp_power_gate);
 
 		if (hws->funcs.hubp_pg_control)
-			hws->funcs.hubp_pg_control(hws, pipe_ctx->plane_res.hubp->inst, true);
+			hws->funcs.hubp_pg_control(hws, pipe_ctx->plane_res.hubp->inst, true,
+					hws->ctx->dc->debug.disable_hubp_power_gate,
+					hws->ctx->dc->debug.ignore_pg);
 
 		if (org_ip_request_cntl == 0)
 			REG_SET(DC_IP_REQUEST_CNTL, 0,

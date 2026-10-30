@@ -3191,10 +3191,11 @@ void dcn401_plane_atomic_power_down(struct dc *dc,
 	}
 
 	if (hws->funcs.dpp_pg_control)
-		hws->funcs.dpp_pg_control(hws, dpp->inst, false);
+		hws->funcs.dpp_pg_control(hws, dpp, false, dc->debug.disable_dpp_power_gate);
 
 	if (hws->funcs.hubp_pg_control)
-		hws->funcs.hubp_pg_control(hws, hubp->inst, false);
+		hws->funcs.hubp_pg_control(hws, hubp->inst, false,
+				dc->debug.disable_hubp_power_gate, dc->debug.ignore_pg);
 
 	hubp->funcs->hubp_reset(hubp);
 	dpp->funcs->dpp_reset(dpp);
@@ -3261,26 +3262,41 @@ void dcn401_update_cursor_offload_pipe(struct dmub_srv *dmub, uint32_t stream_id
 	cs->offload_streams[stream_idx].payloads[payload_idx].pipe_mask |= (1u << pipe_idx);
 }
 
+bool dcn401_pg_needs_ip_request(const struct dc *dc)
+{
+	const struct dce_hwseq *hws = dc->hwseq;
+
+	/* The status step and the pair need both hooks. */
+	ASSERT(!hws->funcs.dc_ip_request_cntl == !hws->funcs.dc_ip_request_status);
+	if (!hws->funcs.dc_ip_request_cntl || !hws->funcs.dc_ip_request_status)
+		return false;
+
+	/* dcn32_hubp_pg_control, bound on DCN401, also honors ignore_pg. */
+	return (hws->funcs.dpp_pg_control && !dc->debug.disable_dpp_power_gate) ||
+		(hws->funcs.hubp_pg_control && !dc->debug.disable_hubp_power_gate &&
+		 !dc->debug.ignore_pg);
+}
+
 void dcn401_plane_atomic_power_down_sequence(struct dc *dc,
 		struct dpp *dpp,
 		struct hubp *hubp,
 		struct block_sequence_state *seq_state)
 {
 	struct dce_hwseq *hws = dc->hwseq;
-	uint32_t org_ip_request_cntl = 0;
+	bool ip_request = false;
 
-	/* Check and set DC_IP_REQUEST_CNTL if needed */
-	if (REG(DC_IP_REQUEST_CNTL)) {
-		REG_GET(DC_IP_REQUEST_CNTL, IP_REQUEST_EN, &org_ip_request_cntl);
-		if (org_ip_request_cntl == 0)
-			hwss_add_dc_ip_request_cntl(seq_state, dc, true);
-	}
+	if (dcn401_pg_needs_ip_request(dc))
+		ip_request = hwss_add_dc_ip_request_status(seq_state, hws);
+
+	if (ip_request)
+		hwss_add_dc_ip_request_cntl(seq_state, dc, true);
 
 	/* DPP power gating control */
-	hwss_add_dpp_pg_control(seq_state, hws, dpp->inst, false);
+	hwss_add_dpp_pg_control(seq_state, hws, dpp, false, dc->debug.disable_dpp_power_gate);
 
 	/* HUBP power gating control */
-	hwss_add_hubp_pg_control(seq_state, hws, hubp->inst, false);
+	hwss_add_hubp_pg_control(seq_state, hws, hubp->inst, false,
+			dc->debug.disable_hubp_power_gate, dc->debug.ignore_pg);
 
 	/* HUBP reset */
 	hwss_add_hubp_reset(seq_state, hubp);
@@ -3288,8 +3304,7 @@ void dcn401_plane_atomic_power_down_sequence(struct dc *dc,
 	/* DPP reset */
 	hwss_add_dpp_reset(seq_state, dpp);
 
-	/* Restore DC_IP_REQUEST_CNTL if it was originally 0 */
-	if (org_ip_request_cntl == 0 && REG(DC_IP_REQUEST_CNTL))
+	if (ip_request)
 		hwss_add_dc_ip_request_cntl(seq_state, dc, false);
 
 	DC_LOG_DEBUG("Power gated front end %d\n", hubp->inst);
@@ -3672,12 +3687,39 @@ void dcn401_post_unlock_reset_opp_sequence(
 	}
 }
 
+/*
+ * Called in pairs after dcn401_dc_ip_request_status(). Writes nothing when
+ * IP_REQUEST_EN was already 1; the disable call clears that status.
+ */
 void dcn401_dc_ip_request_cntl(struct dce_hwseq *hws, bool enable)
 {
+	bool already_enabled;
+
 	if (!hws || !hws->ctx || !hws->regs || !hws->shifts || !hws->masks)
 		return;
+
+	already_enabled = hws->ip_request_already_enabled;
+
+	if (!enable)
+		hws->ip_request_already_enabled = false;
+
+	if (already_enabled || !REG(DC_IP_REQUEST_CNTL))
+		return;
+
+	REG_SET(DC_IP_REQUEST_CNTL, 0, IP_REQUEST_EN, enable ? 1 : 0);
+}
+
+void dcn401_dc_ip_request_status(struct dce_hwseq *hws)
+{
+	uint32_t ip_request_en = 0;
+
+	if (!hws || !hws->ctx || !hws->regs || !hws->shifts || !hws->masks)
+		return;
+
 	if (REG(DC_IP_REQUEST_CNTL))
-		REG_SET(DC_IP_REQUEST_CNTL, 0, IP_REQUEST_EN, enable ? 1 : 0);
+		REG_GET(DC_IP_REQUEST_CNTL, IP_REQUEST_EN, &ip_request_en);
+
+	hws->ip_request_already_enabled = ip_request_en != 0;
 }
 
 void dcn401_enable_plane_sequence(struct dc *dc, struct pipe_ctx *pipe_ctx,
@@ -3686,32 +3728,32 @@ void dcn401_enable_plane_sequence(struct dc *dc, struct pipe_ctx *pipe_ctx,
 {
 	(void)context;
 	struct dce_hwseq *hws = dc->hwseq;
-	uint32_t org_ip_request_cntl = 0;
+	bool ip_request = false;
 
 	if (!pipe_ctx->plane_res.dpp || !pipe_ctx->plane_res.hubp || !pipe_ctx->stream_res.opp)
 		return;
-
-	if (REG(DC_IP_REQUEST_CNTL))
-		REG_GET(DC_IP_REQUEST_CNTL, IP_REQUEST_EN, &org_ip_request_cntl);
 
 	/* Step 1: DPP root clock control - enable clock */
 	if (hws->funcs.dpp_root_clock_control)
 		hwss_add_dpp_root_clock_control(seq_state, hws, pipe_ctx->plane_res.dpp->inst, true);
 
 	/* Step 2: Enable DC IP request (if needed) */
-	if (hws->funcs.dc_ip_request_cntl)
+	if (dcn401_pg_needs_ip_request(dc))
+		ip_request = hwss_add_dc_ip_request_status(seq_state, hws);
+
+	if (ip_request)
 		hwss_add_dc_ip_request_cntl(seq_state, dc, true);
 
 	/* Step 3: DPP power gating control - power on */
-	if (REG(DC_IP_REQUEST_CNTL) && hws->funcs.dpp_pg_control)
-		hwss_add_dpp_pg_control(seq_state, hws, pipe_ctx->plane_res.dpp->inst, true);
+	hwss_add_dpp_pg_control(seq_state, hws, pipe_ctx->plane_res.dpp, true,
+			dc->debug.disable_dpp_power_gate);
 
 	/* Step 4: HUBP power gating control - power on */
-	if (REG(DC_IP_REQUEST_CNTL) && hws->funcs.hubp_pg_control)
-		hwss_add_hubp_pg_control(seq_state, hws, pipe_ctx->plane_res.hubp->inst, true);
+	hwss_add_hubp_pg_control(seq_state, hws, pipe_ctx->plane_res.hubp->inst, true,
+			dc->debug.disable_hubp_power_gate, dc->debug.ignore_pg);
 
-	/* Step 5: Disable DC IP request (restore state) */
-	if (org_ip_request_cntl == 0 && hws->funcs.dc_ip_request_cntl)
+	/* Step 5: Disable DC IP request */
+	if (ip_request)
 		hwss_add_dc_ip_request_cntl(seq_state, dc, false);
 
 	/* Step 6: HUBP clock control - enable DCFCLK */
