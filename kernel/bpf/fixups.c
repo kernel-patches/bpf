@@ -1865,7 +1865,8 @@ int bpf_fixup_call_args(struct bpf_verifier_env *env)
 static int add_hidden_subprog(struct bpf_verifier_env *env, struct bpf_insn *patch, int len)
 {
 	struct bpf_subprog_info *info = env->subprog_info;
-	int cnt = env->subprog_cnt;
+	int err, cnt = env->subprog_cnt;
+	struct bpf_insn *last;
 	struct bpf_prog *prog;
 
 	/* We only reserve one slot for hidden subprogs in subprog_info. */
@@ -1874,13 +1875,15 @@ static int add_hidden_subprog(struct bpf_verifier_env *env, struct bpf_insn *pat
 		return -EFAULT;
 	}
 	/* We're not patching any existing instruction, just appending the new
-	 * ones for the hidden subprog. Hence all of the adjustment operations
-	 * in bpf_patch_insn_data are no-ops.
+	 * ones for the hidden subprog.
 	 */
-	prog = bpf_patch_insn_data(env, env->prog->len - 1, patch, len);
-	if (!prog)
-		return -ENOMEM;
-	env->prog = prog;
+	last = bpf_patch_list_add(env, env->prog->len - 1, patch, len);
+	if (IS_ERR(last))
+		return PTR_ERR(last);
+	err = bpf_patch_list_commit(env);
+	if (err)
+		return err;
+	prog = env->prog;
 	info[cnt + 1].start = info[cnt].start;
 	info[cnt].start = prog->len - len + 1;
 	/* The patch ends with the exit. */
