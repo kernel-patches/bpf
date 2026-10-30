@@ -40,7 +40,7 @@ struct snd_info_entry_ops {
 	int (*release)(struct snd_info_entry *entry,
 		       unsigned short mode, void *file_private_data);
 	ssize_t (*read)(struct snd_info_entry *entry, void *file_private_data,
-			struct file *file, char __user *buf,
+			struct file *file, char *buf,
 			size_t count, loff_t pos);
 	ssize_t (*write)(struct snd_info_entry *entry, void *file_private_data,
 			 struct file *file, const char *buf,

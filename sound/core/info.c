@@ -139,7 +139,7 @@ static loff_t snd_info_entry_llseek(struct file *file, loff_t offset, int orig)
 	return offset;
 }
 
-static ssize_t snd_info_entry_read(struct file *file, char __user *buffer,
+static ssize_t snd_info_entry_read(struct file *file, char *buffer,
 				   size_t count, loff_t * offset)
 {
 	struct snd_info_private_data *data = file->private_data;
@@ -278,9 +278,9 @@ static int snd_info_entry_release(struct inode *inode, struct file *file)
 
 static const struct proc_ops snd_info_entry_operations =
 {
-	.proc_flags	= PROC_ENTRY_SHORT_WRITES,
+	.proc_flags	= PROC_ENTRY_SHORT_WRITES | PROC_ENTRY_FULL_READS,
 	.proc_lseek	= snd_info_entry_llseek,
-	.proc_read	= snd_info_entry_read,
+	.proc_read_buf	= snd_info_entry_read,
 	.proc_write_buf	= snd_info_entry_write,
 	.proc_write_size = PAGE_SIZE,
 	.proc_poll	= snd_info_entry_poll,
