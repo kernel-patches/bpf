@@ -1118,6 +1118,7 @@ int bpf_patch_list_build(const struct bpf_patch_list *pl, const struct bpf_prog 
 			 struct bpf_patch_image *img);
 void bpf_patch_image_free(struct bpf_patch_image *img);
 void bpf_patch_image_install(struct bpf_prog *prog, const struct bpf_patch_image *img);
+struct bpf_prog *bpf_patch_list_apply(struct bpf_prog *prog, struct bpf_patch_list *pl);
 
 /* single container for all structs
  * one verifier_env per bpf_check() call

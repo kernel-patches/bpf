@@ -880,6 +880,37 @@ void bpf_patch_image_install(struct bpf_prog *prog, const struct bpf_patch_image
 					      prog->aux->linfo[i].insn_off);
 }
 
+/*
+ * Apply the patches queued for 'prog' without a verifier env, which can't
+ * remove insns. Return the patched program, which may have moved.
+ */
+struct bpf_prog *bpf_patch_list_apply(struct bpf_prog *prog, struct bpf_patch_list *pl)
+{
+	struct bpf_patch_image img;
+	struct bpf_prog *new;
+	int err;
+
+	if (!pl->cnt)
+		return prog;
+
+	err = bpf_patch_list_build(pl, prog, &img);
+	if (!err && WARN_ON_ONCE(img.del))
+		err = -EINVAL;
+	if (!err) {
+		new = bpf_prog_realloc(prog, bpf_prog_size(img.new_cnt), GFP_USER);
+		if (new) {
+			prog = new;
+			bpf_patch_image_install(prog, &img);
+		} else {
+			err = -ENOMEM;
+		}
+	}
+
+	bpf_patch_image_free(&img);
+	bpf_patch_list_release(pl);
+	return err ? ERR_PTR(err) : prog;
+}
+
 static void bpf_prog_kallsyms_del_subprogs(struct bpf_prog *fp)
 {
 	int i;
