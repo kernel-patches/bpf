@@ -408,6 +408,22 @@ struct bpf_insn *bpf_patch_list_add(struct bpf_verifier_env *env, u32 off,
 	return __bpf_patch_list_add(pl, env->prog, off, patch, len);
 }
 
+/* Queue the removal of insn 'off' until bpf_patch_list_commit(). */
+int bpf_patch_list_del(struct bpf_verifier_env *env, u32 off)
+{
+	struct bpf_patch_list *pl = &env->patch_list;
+
+	if (bpf_rewrite_must_abort())
+		return -EINTR;
+
+	if (verifier_bug_if(off >= env->prog->len ||
+			    (pl->cnt && off <= pl->patches[pl->cnt - 1].off),
+			    env, "insn %u removed out of order", off))
+		return -EFAULT;
+
+	return __bpf_patch_list_del(pl, env->prog, off);
+}
+
 void bpf_patch_list_free(struct bpf_verifier_env *env)
 {
 	bpf_patch_list_release(&env->patch_list);
@@ -453,9 +469,79 @@ static void patch_list_adj_aux(struct bpf_prog *prog, struct bpf_insn_patch *p,
 }
 
 /*
- * Apply all queued patches in one go. Everything that names an insn of the
- * old image follows it to the new one, a patched insn is named by the first
- * insn of its patch, like with bpf_patch_insn_data().
+ * Drop the line info of removed insns. The last one before the next insn
+ * that stays moves to it, unless that insn has its own line info.
+ */
+static void patch_list_adj_linfo(struct bpf_verifier_env *env,
+				 const struct bpf_patch_image *img, u32 *linfo_map)
+{
+	struct bpf_prog_aux *aux = env->prog->aux;
+	struct bpf_line_info *linfo = aux->linfo;
+	u32 i, j, pos, next, nr = aux->nr_linfo;
+
+	for (i = 0, j = 0; i < nr; i++) {
+		pos = bpf_patch_image_remap(img, img->new_off, linfo[i].insn_off);
+		linfo_map[i] = j;
+		if (bpf_patch_image_deleted(img, linfo[i].insn_off)) {
+			next = i + 1 < nr ?
+			       bpf_patch_image_remap(img, img->new_off, linfo[i + 1].insn_off) :
+			       U32_MAX;
+			if (pos >= img->new_cnt || next == pos)
+				continue;
+		}
+		linfo[j] = linfo[i];
+		linfo[j++].insn_off = pos;
+	}
+	linfo_map[nr] = j;
+	aux->nr_linfo = j;
+
+	/* NOTE: fake 'exit' subprog should be updated as well. */
+	for (i = 0; i <= env->subprog_cnt; i++)
+		env->subprog_info[i].linfo_idx =
+			linfo_map[min(env->subprog_info[i].linfo_idx, nr)];
+}
+
+/* Remove the subprogs whose insns are all removed, with their func_info. */
+static void patch_list_del_subprogs(struct bpf_verifier_env *env,
+				    const u32 *new_off)
+{
+	struct bpf_subprog_info *info = env->subprog_info;
+	struct bpf_prog_aux *aux = env->prog->aux;
+	int i, j, exc_cb = env->exception_callback_subprog;
+
+	for (i = 0, j = 0; i < env->subprog_cnt; i++) {
+		if (new_off[info[i].start] == new_off[info[i + 1].start]) {
+			/* The exception callback is live, so it isn't removed. */
+			if (env->exception_callback_subprog > i)
+				exc_cb--;
+			continue;
+		}
+		if (i != j) {
+			info[j] = info[i];
+			if (aux->func_info)
+				aux->func_info[j] = aux->func_info[i];
+			if (aux->func_info_aux)
+				aux->func_info_aux[j] = aux->func_info_aux[i];
+		}
+		j++;
+	}
+	if (i == j)
+		return;
+
+	/* move fake 'exit' subprog as well */
+	info[j] = info[i];
+	/* func_info->insn_off is set after all code rewrites, in adjust_btf_func() */
+	if (aux->func_info)
+		aux->func_info_cnt -= i - j;
+	env->subprog_cnt = j;
+	env->exception_callback_subprog = exc_cb;
+}
+
+/*
+ * Apply all queued patches and removals in one go. Everything that names an
+ * insn of the old image follows it to the new one. A patched insn is named by
+ * the first insn of its patch, a removed insn by the next insn that stays,
+ * like with bpf_patch_insn_data().
  */
 int bpf_patch_list_commit(struct bpf_verifier_env *env)
 {
@@ -463,7 +549,8 @@ int bpf_patch_list_commit(struct bpf_verifier_env *env)
 	struct bpf_insn_aux_data *data = NULL;
 	struct bpf_prog *prog = env->prog;
 	struct bpf_patch_image img = {};
-	u32 i, k, end;
+	u32 *linfo_map = NULL;
+	u32 i, k, n, end;
 	struct bpf_insn_patch *p;
 	int err = 0;
 
@@ -488,20 +575,43 @@ int bpf_patch_list_commit(struct bpf_verifier_env *env)
 			 GFP_KERNEL_ACCOUNT | __GFP_ZERO);
 	if (!data)
 		goto out;
+	if (img.del && prog->aux->nr_linfo) {
+		linfo_map = kvmalloc_array(prog->aux->nr_linfo + 1,
+					   sizeof(*linfo_map), GFP_KERNEL_ACCOUNT);
+		if (!linfo_map)
+			goto out;
+	}
 
 	prog = bpf_prog_realloc(prog, bpf_prog_size(img.new_cnt), GFP_USER);
 	if (!prog)
 		goto out;
 	env->prog = prog;
 
+	if (img.del && bpf_prog_is_offloaded(prog->aux)) {
+		/* the aux data still describes the old image */
+		for (k = 0; k < pl->cnt; k = n) {
+			for (n = k; n < pl->cnt && !pl->patches[n].len &&
+			     pl->patches[n].off == pl->patches[k].off + n - k; n++)
+				;
+			if (n == k)
+				n++;
+			else
+				bpf_prog_offload_remove_insns(env, pl->patches[k].off,
+							      n - k);
+		}
+	}
+
 	bpf_patch_image_install(prog, &img);
 
 	for (i = 0, k = 0; i < img.cnt; i = end) {
 		if (k < pl->cnt && pl->patches[k].off == i) {
 			p = &pl->patches[k++];
-			patch_list_adj_aux(prog, p, &pl->insns[p->start],
-					   &env->insn_aux_data[i],
-					   &data[img.new_off[i]]);
+			if (p->len)
+				patch_list_adj_aux(prog, p, &pl->insns[p->start],
+						   &env->insn_aux_data[i],
+						   &data[img.new_off[i]]);
+			else
+				bpf_clear_insn_aux_data(env, i, 1);
 			end = i + 1;
 			continue;
 		}
@@ -514,18 +624,35 @@ int bpf_patch_list_commit(struct bpf_verifier_env *env)
 	env->insn_aux_data_len = img.new_cnt;
 	data = NULL;
 
+	/* before subprogs are removed, since it looks at them */
 	for (i = 0; i < env->func_ptr_cnt; i++) {
 		struct bpf_func_ptr *fp = &env->func_ptrs[i];
+		int subprog;
 
 		if (fp->xlated_off == BPF_FUNC_PTR_DELETED)
 			continue;
+		if (bpf_patch_image_deleted(&img, fp->xlated_off)) {
+			subprog = bpf_find_subprog(env, fp->xlated_off);
+			if (subprog <= 0 ||
+			    img.new_off[env->subprog_info[subprog].start] ==
+			    img.new_off[env->subprog_info[subprog + 1].start]) {
+				fp->xlated_off = BPF_FUNC_PTR_DELETED;
+				continue;
+			}
+		}
 		fp->xlated_off = bpf_patch_image_remap(&img, img.new_off, fp->xlated_off);
 	}
+
+	if (img.del)
+		patch_list_del_subprogs(env, img.new_off);
 
 	/* NOTE: fake 'exit' subprog should be updated as well. */
 	for (i = 0; i <= env->subprog_cnt; i++)
 		env->subprog_info[i].start =
 			bpf_patch_image_remap(&img, img.new_off, env->subprog_info[i].start);
+
+	if (linfo_map)
+		patch_list_adj_linfo(env, &img, linfo_map);
 
 	for (i = 0; i < env->insn_array_map_cnt; i++)
 		bpf_insn_array_remap(env->insn_array_maps[i], img.new_off,
@@ -533,6 +660,7 @@ int bpf_patch_list_commit(struct bpf_verifier_env *env)
 
 	err = 0;
 out:
+	kvfree(linfo_map);
 	vfree(data);
 	bpf_patch_image_free(&img);
 	bpf_patch_list_release(pl);

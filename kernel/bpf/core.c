@@ -658,6 +658,25 @@ struct bpf_insn *__bpf_patch_list_add(struct bpf_patch_list *pl,
 	return &pl->insns[p->start + len - 1];
 }
 
+/* Queue the removal of insn 'off'. Jumps to it land on the next insn that stays. */
+int __bpf_patch_list_del(struct bpf_patch_list *pl, const struct bpf_prog *prog,
+			 u32 off)
+{
+	struct bpf_insn_patch *p;
+	int err;
+
+	err = patch_list_reserve_patch(pl);
+	if (err)
+		return err;
+
+	p = &pl->patches[pl->cnt++];
+	p->off = off;
+	p->len = 0;
+	p->start = pl->insn_cnt;
+	p->orig = prog->insnsi[off];
+	return 0;
+}
+
 void bpf_patch_list_release(struct bpf_patch_list *pl)
 {
 	kvfree(pl->patches);
@@ -684,8 +703,10 @@ int bpf_patch_list_build(const struct bpf_patch_list *pl, const struct bpf_prog 
 
 	for (i = 0, k = 0; i <= cnt; i++) {
 		img->new_off[i] = i + img->grow;
-		if (k < pl->cnt && pl->patches[k].off == i)
+		if (k < pl->cnt && pl->patches[k].off == i) {
+			img->del |= !pl->patches[k].len;
 			img->grow += pl->patches[k++].len - 1;
+		}
 	}
 	img->new_cnt = cnt + img->grow;
 
@@ -724,7 +745,7 @@ void bpf_patch_image_free(struct bpf_patch_image *img)
 
 /*
  * Put the new image in 'prog', which has room for it, and move the poke
- * descriptors and the line info along.
+ * descriptors and, unless insns were removed, the line info along.
  */
 void bpf_patch_image_install(struct bpf_prog *prog, const struct bpf_patch_image *img)
 {
@@ -738,6 +759,8 @@ void bpf_patch_image_install(struct bpf_prog *prog, const struct bpf_patch_image
 			bpf_patch_image_remap(img, img->new_off,
 					      prog->aux->poke_tab[i].insn_idx);
 
+	if (img->del)
+		return;
 	for (i = 0; i < prog->aux->nr_linfo; i++)
 		prog->aux->linfo[i].insn_off =
 			bpf_patch_image_remap(img, img->new_off,
