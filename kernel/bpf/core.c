@@ -1050,6 +1050,10 @@ void bpf_prog_pack_free(void *ptr, u32 size)
 	unsigned int nbits;
 	unsigned long pos;
 
+	if (size <= BPF_PROG_PACK_SIZE)
+		WARN_ONCE(bpf_arch_text_invalidate(ptr, size),
+			  "bpf_prog_pack bug: missing bpf_arch_text_invalidate?\n");
+
 	mutex_lock(&pack_mutex);
 	if (size > BPF_PROG_PACK_SIZE) {
 		bpf_jit_free_exec(ptr);
@@ -1068,9 +1072,6 @@ void bpf_prog_pack_free(void *ptr, u32 size)
 
 	nbits = BPF_PROG_SIZE_TO_NBITS(size);
 	pos = ((unsigned long)ptr - (unsigned long)pack->ptr) >> BPF_PROG_CHUNK_SHIFT;
-
-	WARN_ONCE(bpf_arch_text_invalidate(ptr, size),
-		  "bpf_prog_pack bug: missing bpf_arch_text_invalidate?\n");
 
 	bitmap_clear(pack->bitmap, pos, nbits);
 
