@@ -391,13 +391,6 @@ static bool check_ids(u32 old_id, u32 cur_id, struct bpf_idmap *idmap)
  * and r7.id=0 (both independent), without temp IDs both would map old_id=X
  * to cur_id=0 and pass. With temp IDs: r6 maps X->temp1, r7 tries to map
  * X->temp2, but X is already mapped to temp1, so the check fails correctly.
- *
- * When old_id has BPF_ADD_CONST set, the compound id (base | flag) and the
- * base id (flag stripped) must both map consistently. Example: old has
- * r2.id=A, r3.id=A|flag (r3 = r2 + delta), cur has r2.id=B, r3.id=C|flag
- * (r3 derived from unrelated r4). Without the base check, idmap gets two
- * independent entries A->B and A|flag->C|flag, missing that A->C conflicts
- * with A->B. The base ID cross-check catches this.
  */
 static bool check_scalar_ids(u32 old_id, u32 cur_id, struct bpf_idmap *idmap)
 {
@@ -406,15 +399,7 @@ static bool check_scalar_ids(u32 old_id, u32 cur_id, struct bpf_idmap *idmap)
 
 	cur_id = cur_id ? cur_id : ++idmap->tmp_id_gen;
 
-	if (!check_ids(old_id, cur_id, idmap))
-		return false;
-	if (old_id & BPF_ADD_CONST) {
-		old_id &= ~BPF_ADD_CONST;
-		cur_id &= ~BPF_ADD_CONST;
-		if (!check_ids(old_id, cur_id, idmap))
-			return false;
-	}
-	return true;
+	return check_ids(old_id, cur_id, idmap);
 }
 
 static void __clean_func_state(struct bpf_verifier_env *env,
@@ -512,6 +497,7 @@ static bool regs_exact(const struct bpf_reg_state *rold,
 		       struct bpf_idmap *idmap)
 {
 	return memcmp(rold, rcur, offsetof(struct bpf_reg_state, id)) == 0 &&
+	       rold->link_kind == rcur->link_kind &&
 	       check_ids(rold->id, rcur->id, idmap) &&
 	       check_ids(rold->parent_id, rcur->parent_id, idmap) &&
 	       check_ids(rold->map_uid, rcur->map_uid, idmap);
@@ -566,6 +552,7 @@ static bool regsafe(struct bpf_verifier_env *env, struct bpf_reg_state *rold,
 			 * logic and requires everything to be strict
 			 */
 			return memcmp(rold, rcur, offsetof(struct bpf_reg_state, id)) == 0 &&
+			       rold->link_kind == rcur->link_kind &&
 			       check_scalar_ids(rold->id, rcur->id, idmap);
 		}
 		if (!rold->precise && exact == NOT_EXACT)
@@ -574,13 +561,14 @@ static bool regsafe(struct bpf_verifier_env *env, struct bpf_reg_state *rold,
 		 * Linked register tracking uses rold->id to detect relationships.
 		 * When rold->id == 0, the register is independent and any linking
 		 * in rcur only adds constraints. When rold->id != 0, we must verify
-		 * id mapping and (for BPF_ADD_CONST) offset consistency.
+		 * id mapping and that the link kinds agree, along with any delta
+		 * they carry.
 		 *
 		 * +------------------+-----------+------------------+---------------+
-		 * |                  | rold->id  | rold + ADD_CONST | rold->id == 0 |
+		 * |                  | rold->id  | rold linked kind | rold->id == 0 |
 		 * |------------------+-----------+------------------+---------------|
 		 * | rcur->id         | range,ids | false            | range         |
-		 * | rcur + ADD_CONST | false     | range,ids,off    | range         |
+		 * | rcur linked kind | false     | range,ids,delta  | range         |
 		 * | rcur->id == 0    | range,ids | false            | range         |
 		 * +------------------+-----------+------------------+---------------+
 		 *
@@ -610,17 +598,15 @@ static bool regsafe(struct bpf_verifier_env *env, struct bpf_reg_state *rold,
 		 */
 
 		/*
-		 * ADD_CONST flags must match exactly: BPF_ADD_CONST32 and
-		 * BPF_ADD_CONST64 have different linking semantics in
-		 * sync_linked_regs() (alu32 zero-extends, alu64 does not),
-		 * so pruning across different flag types is unsafe.
+		 * The link kinds must match: alu32 and alu64 adds have different
+		 * linking semantics in sync_linked_regs() (alu32 zero-extends,
+		 * alu64 does not), so pruning across them is unsafe.
 		 */
-		if (rold->id &&
-		    (rold->id & BPF_ADD_CONST) != (rcur->id & BPF_ADD_CONST))
+		if (rold->id && rold->link_kind != rcur->link_kind)
 			return false;
 
 		/* Both have offset linkage: offsets must match */
-		if ((rold->id & BPF_ADD_CONST) && rold->delta != rcur->delta)
+		if (rold->link_kind && rold->delta != rcur->delta)
 			return false;
 
 		if (!check_scalar_ids(rold->id, rcur->id, idmap))

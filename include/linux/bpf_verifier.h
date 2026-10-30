@@ -50,6 +50,29 @@ enum bpf_iter_state {
 	BPF_ITER_STATE_DRAINED,
 };
 
+/*
+ * Records how a register derives from the base of its ->id set. The kind
+ * says which bits are shared and how the rest are filled; ->delta says by
+ * how much, and is meaningful for every kind:
+ *
+ *   BPF_REG_LINK_FULL:  reg == base + delta
+ *   BPF_REG_LINK_ZEXT:  reg == (u32)(base + delta), for ANY base width
+ *   BPF_REG_LINK_SEXT:  reg == (s32)(base + delta), for ANY base width
+ *
+ *   r1 = r2;       r1 and r3 are linked to r2: id == N
+ *   r3 = r2;
+ *   r1 += 10;      r1 gets BPF_REG_LINK_FULL, delta 10
+ *   w3 += 10;      w3 gets BPF_REG_LINK_ZEXT, delta 10
+ *   w7 = w6;       r7 gets BPF_REG_LINK_ZEXT, delta 0  (r6 may be wide)
+ *   r8 = (s32)r7;  r8 gets BPF_REG_LINK_SEXT, delta 0
+ */
+enum bpf_reg_link_kind {
+	BPF_REG_LINK_NONE = 0,
+	BPF_REG_LINK_FULL,		/* all 64 bits shared */
+	BPF_REG_LINK_ZEXT,		/* low 32 shared, high half zero */
+	BPF_REG_LINK_SEXT,		/* low 32 shared, high half repeats bit 31 */
+};
+
 struct bpf_reg_state {
 	/* Ordering of fields matters.  See states_equal() */
 	enum bpf_reg_type type;
@@ -160,16 +183,9 @@ struct bpf_reg_state {
 	 * to a specific instance of bpf_iter.
 	 */
 	/*
-	 * Upper bit of ID is used to remember relationship between "linked"
-	 * registers. Example:
+	 * Registers sharing an ->id are "linked":
 	 * r1 = r2;    both will have r1->id == r2->id == N
-	 * r1 += 10;   r1->id == N | BPF_ADD_CONST and r1->delta == 10
-	 * r3 = r2;    both will have r3->id == r2->id == N
-	 * w3 += 10;   r3->id == N | BPF_ADD_CONST32 and r3->delta == 10
 	 */
-#define BPF_ADD_CONST64 (1U << 31)
-#define BPF_ADD_CONST32 (1U << 30)
-#define BPF_ADD_CONST (BPF_ADD_CONST64 | BPF_ADD_CONST32)
 	u32 id;
 	/*
 	 * Tracks the parent object this register was derived from.
@@ -184,10 +200,28 @@ struct bpf_reg_state {
 	 * other registers. Kept outside the metadata union for ID remapping
 	 * during state comparisons.
 	 */
-	u32 map_uid:31;
+	u32 map_uid:29;
 	/* if (!precise && SCALAR_VALUE) min/max/tnum don't affect safety */
 	u32 precise:1;
+	/*
+	 * How this register relates to the others sharing its ->id.
+	 * Non-zero only if ->id is. Shares the word above so that
+	 * bpf_reg_state stays 80 bytes.
+	 */
+	enum bpf_reg_link_kind link_kind:2;
 };
+
+/*
+ * Drop a scalar out of its ->id set. ->link_kind and ->delta are only
+ * meaningful next to an ->id, so all three have to go together; this is the
+ * only correct way to clear them.
+ */
+static inline void bpf_clear_scalar_id(struct bpf_reg_state *reg)
+{
+	reg->id = 0;
+	reg->delta = 0;
+	reg->link_kind = BPF_REG_LINK_NONE;
+}
 
 static inline s64 reg_smin(const struct bpf_reg_state *reg)
 {
