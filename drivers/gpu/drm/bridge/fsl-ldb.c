@@ -304,8 +304,6 @@ static const struct drm_bridge_funcs funcs = {
 static int fsl_ldb_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
-	struct device_node *panel_node;
-	struct device_node *remote1, *remote2;
 	struct fsl_ldb *fsl_ldb;
 	int dual_link;
 
@@ -328,19 +326,16 @@ static int fsl_ldb_probe(struct platform_device *pdev)
 	if (IS_ERR(fsl_ldb->regmap))
 		return PTR_ERR(fsl_ldb->regmap);
 
-	/* Locate the remote ports and the panel node */
-	remote1 = of_graph_get_remote_node(dev->of_node, 1, 0);
-	remote2 = of_graph_get_remote_node(dev->of_node, 2, 0);
+	/* Locate the remote ports */
+	struct device_node *remote1 __free(device_node) =
+				of_graph_get_remote_node(dev->of_node, 1, 0);
+	struct device_node *remote2 __free(device_node) =
+				of_graph_get_remote_node(dev->of_node, 2, 0);
 	fsl_ldb->ch0_enabled = (remote1 != NULL);
 	fsl_ldb->ch1_enabled = (remote2 != NULL);
-	panel_node = of_node_get(remote1 ? remote1 : remote2);
-	of_node_put(remote1);
-	of_node_put(remote2);
 
-	if (!fsl_ldb->ch0_enabled && !fsl_ldb->ch1_enabled) {
-		of_node_put(panel_node);
-		return dev_err_probe(dev, -ENXIO, "No panel node found");
-	}
+	if (!fsl_ldb->ch0_enabled && !fsl_ldb->ch1_enabled)
+		return dev_err_probe(dev, -ENXIO, "No next bridge node found\n");
 
 	dev_dbg(dev, "Using %s\n",
 		fsl_ldb_is_dual(fsl_ldb) ? "dual-link mode" :
@@ -349,19 +344,17 @@ static int fsl_ldb_probe(struct platform_device *pdev)
 	if (of_property_present(dev->of_node, "nxp,enable-termination-resistor"))
 		fsl_ldb->use_termination_resistor = true;
 
-	fsl_ldb->bridge.next_bridge = of_drm_find_and_get_bridge(panel_node);
-	of_node_put(panel_node);
+	fsl_ldb->bridge.next_bridge = of_drm_find_and_get_bridge(remote1 ?: remote2);
 	if (!fsl_ldb->bridge.next_bridge)
 		return -EPROBE_DEFER;
 
 	if (fsl_ldb_is_dual(fsl_ldb)) {
-		struct device_node *port1, *port2;
+		struct device_node *port1 __free(device_node) =
+				of_graph_get_port_by_id(dev->of_node, 1);
+		struct device_node *port2 __free(device_node) =
+				of_graph_get_port_by_id(dev->of_node, 2);
 
-		port1 = of_graph_get_port_by_id(dev->of_node, 1);
-		port2 = of_graph_get_port_by_id(dev->of_node, 2);
 		dual_link = drm_of_lvds_get_dual_link_pixel_order(port1, port2);
-		of_node_put(port1);
-		of_node_put(port2);
 
 		if (dual_link < 0)
 			return dev_err_probe(dev, dual_link,
