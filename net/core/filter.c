@@ -1476,6 +1476,32 @@ void bpf_prog_destroy(struct bpf_prog *fp)
 }
 EXPORT_SYMBOL_GPL(bpf_prog_destroy);
 
+/**
+ * bpf_prog_validate_classic - run the classic BPF verifier on kernel memory
+ * @insns: instruction array
+ * @len: number of instructions in @insns
+ *
+ * Run bpf_check_basics_ok() and bpf_check_classic() on a program that is
+ * already in kernel memory, without building a struct bpf_prog.  These are
+ * the checks bpf_prog_create() runs before it converts the program, so
+ * callers can reject a bad program when it is configured instead of when it
+ * is first attached to a socket.
+ *
+ * A program that passes here can still be refused by bpf_prog_create(), when
+ * it is converted to eBPF or when no runtime can be selected for it.
+ *
+ * Return: 0 if the program passes the classic verifier, -EINVAL if it does
+ * not, or -ENOMEM if the verifier cannot allocate its state.
+ */
+int bpf_prog_validate_classic(const struct sock_filter *insns, unsigned int len)
+{
+	if (!bpf_check_basics_ok(insns, len))
+		return -EINVAL;
+
+	return bpf_check_classic(insns, len);
+}
+EXPORT_SYMBOL_GPL(bpf_prog_validate_classic);
+
 static int __sk_attach_prog(struct bpf_prog *prog, struct sock *sk)
 {
 	struct sk_filter *fp, *old_fp;
@@ -1566,6 +1592,47 @@ int sk_attach_filter(struct sock_fprog *fprog, struct sock *sk)
 	return 0;
 }
 EXPORT_SYMBOL_GPL(sk_attach_filter);
+
+/**
+ * sk_attach_filter_kern - attach a classic BPF filter held in kernel memory
+ * @fprog: program to attach, with @fprog->filter pointing at kernel memory
+ * @sk: socket to attach the filter to
+ *
+ * Attach a copy of a classic BPF program that the kernel already holds, the
+ * way sk_attach_filter() does for one that still lives in user space. The
+ * caller must hold the socket lock; SOCK_FILTER_LOCKED is checked here.
+ *
+ * The program is built by bpf_prog_create(), which does not keep an original
+ * copy of the instructions, so sk_get_filter() returns -EACCES and sock_diag
+ * omits the filter for a socket that uses this helper.
+ *
+ * Return: 0 on success, or a negative errno: -EPERM if @sk has
+ * SOCK_FILTER_LOCKED set, otherwise whatever bpf_prog_create() or
+ * __sk_attach_prog() returned (for example -EINVAL for an invalid classic
+ * BPF program, -ENOMEM, or -ENOTSUPP when a JIT is required but is not
+ * available).
+ */
+int sk_attach_filter_kern(struct sock_fprog_kern *fprog, struct sock *sk)
+{
+	struct bpf_prog *prog;
+	int err;
+
+	if (sock_flag(sk, SOCK_FILTER_LOCKED))
+		return -EPERM;
+
+	err = bpf_prog_create(&prog, fprog);
+	if (err)
+		return err;
+
+	err = __sk_attach_prog(prog, sk);
+	if (err < 0) {
+		__bpf_prog_release(prog);
+		return err;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(sk_attach_filter_kern);
 
 int sk_reuseport_attach_filter(struct sock_fprog *fprog, struct sock *sk)
 {
