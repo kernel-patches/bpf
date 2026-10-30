@@ -172,4 +172,39 @@ l0_%=:							\
 }
 #endif
 
+/*
+ * may_goto jumps back by 8195 insns, by 32768 once each of the 8191
+ * divisions is guarded by a patch of 4 insns. That still fits the 16 bits of
+ * may_goto, but not the jump it expands to, which has to become gotol. Once
+ * the budget runs out, may_goto jumps back with r6 set and the program exits.
+ */
+SEC("raw_tp")
+__description("patch list: backward may_goto expanded to gotol")
+__arch_x86_64
+__success
+__xlated("...")
+__xlated("{{[0-9]+}}: gotol pc-{{[0-9]+}}")
+__naked void patch_list_may_goto_gotol(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r1 = r0;					\
+	r6 = 0;						\
+	goto 0f;					\
+1:	r0 = 0;						\
+	exit;						\
+0:	if r6 != 0 goto 1b;				\
+	.rept 8191;					\
+	r0 /= r1;					\
+	.endr;						\
+	r2 = 0;						\
+	r6 = 1;						\
+	may_goto 0b;					\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";
