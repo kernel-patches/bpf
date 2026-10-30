@@ -34,10 +34,10 @@
  * bandwidth lower, so no tail is needed.
  *
  * DCN_DECL_SEAMLESS_UPDATE either adds one plane to that stream, or keeps
- * one plane and programs its surface and address. The sequence follows
- * the full update in commit_planes_for_stream on dcn401, all in
- * head_sequence: the outstanding updates, prepare_bandwidth and the
- * pending-update waits, then the locked front-end programming and
+ * one plane and programs its surface, address, scaler and viewport. The
+ * sequence follows the full update in commit_planes_for_stream on dcn401,
+ * all in head_sequence: the outstanding updates, prepare_bandwidth and
+ * the pending-update waits, then the locked front-end programming and
  * post_unlock_program_front_end. A kept-plane update skips enable_plane
  * and the stream unblank. The bandwidth lower stays with
  * dc_post_update_surfaces_to_stream.
@@ -621,7 +621,7 @@ static bool dcn401_is_plane_kept(const struct dc_state *current_state,
 
 /*
  * The seamless update either adds the first plane, or keeps one plane and
- * programs its surface and address. Scaling and viewport stay rejected.
+ * programs its surface, address, scaler and viewport.
  */
 static bool check_plane_add_or_kept(const struct dc *dc,
 		const struct dc_state *current_state,
@@ -784,34 +784,6 @@ static bool check_no_flip_int(const struct dc *dc,
 			!pipe->plane_state->flip_int_enabled;
 }
 
-/*
- * A kept-plane update does not yet emit scaler or viewport steps. Plane
- * add has no current plane, so those rects are not compared.
- */
-static bool check_no_scale_or_viewport(const struct dc *dc,
-		const struct dc_state *current_state,
-		const struct dc_state *new_state)
-{
-	const struct pipe_ctx *current_pipe = dcn401_otg_of(current_state);
-	const struct pipe_ctx *new_pipe = dcn401_otg_of(new_state);
-	const struct dc_plane_state *current_plane;
-	const struct dc_plane_state *new_plane;
-
-	(void)dc;
-	if (dcn401_is_plane_add(current_state, new_state))
-		return true;
-	if (!current_pipe || !new_pipe || !current_pipe->plane_state ||
-			!new_pipe->plane_state)
-		return false;
-	current_plane = current_pipe->plane_state;
-	new_plane = new_pipe->plane_state;
-	return !memcmp(&current_plane->src_rect, &new_plane->src_rect,
-			sizeof(current_plane->src_rect)) &&
-			!memcmp(&current_plane->dst_rect, &new_plane->dst_rect,
-					sizeof(current_plane->dst_rect)) &&
-			!memcmp(&current_plane->clip_rect, &new_plane->clip_rect,
-					sizeof(current_plane->clip_rect));
-}
 
 /* The update bypasses the plane gamut remap. */
 static bool check_no_plane_gamut_remap(const struct dc *dc,
@@ -1017,8 +989,6 @@ static enum bls_builder_result dcn401_check_seamless_update_support(
 	CHECK_RESOURCE(pool_funcs, "resource pool or hubbub has no funcs");
 	CHECK_CONDITION(plane_instances, "mpcc or dpp is not the hubp instance");
 	CHECK_CONDITION(det_by_segments, "hubbub programs det size");
-	CHECK_CONDITION(no_scale_or_viewport,
-			"scaling or viewport changes");
 
 	/* Under the lock, before the pipe is programmed. */
 	CHECK_CONDITION(triple_buffer, "triple buffer is disabled");
@@ -1347,8 +1317,9 @@ static const struct dcn401_commit_step bls_update_head_new_enable_plane[] = {
 
 /*
  * update_dchubp_dpp. First enable runs the whole table. A reconfigure
- * skips the steps that only bring the HUBP/DPP up, and removes the MPCC
- * when the OPP tree already holds one.
+ * skips the steps that only bring the HUBP/DPP up, and programs the
+ * scaler and viewport only when scaling or position changed. The MPCC is
+ * removed when the OPP tree already holds one.
  */
 static const struct dcn401_commit_step
 		bls_update_head_new_update_dchubp_dpp[] = {
@@ -1373,9 +1344,9 @@ static const struct dcn401_commit_step
 	{ .func = MPC_INSERT_PLANE },
 	{ .func = MPC_UPDATE_VISUAL_CONFIRM },
 	{ .func = DPP_SET_SCALER,
-	  .meta.skip_if.hubp_dpp_already_enabled = true },
+	  .meta.skip_if.scaling_unchanged = true },
 	{ .func = HUBP_MEM_PROGRAM_VIEWPORT,
-	  .meta.skip_if.hubp_dpp_already_enabled = true },
+	  .meta.skip_if.scaling_unchanged = true },
 	{ .func = HUBP_PROGRAM_MCACHE_ID },
 	{ .func = MPC_SET_GAMUT_REMAP_BYPASS,
 	  .meta.mpc_set_gamut_remap_bypass.block_id =
@@ -2288,6 +2259,11 @@ static bool dcn401_skip_step(const struct dcn401_commit_step_args *args,
 	if (step->meta.skip_if.hubp_dpp_already_enabled &&
 			args->current_state->stream_count &&
 			args->current_state->stream_status[0].plane_count)
+		return true;
+	if (step->meta.skip_if.scaling_unchanged &&
+			!args->pipe->plane_state->update_bits.scaling_change &&
+			!args->pipe->plane_state->update_bits.position_change &&
+			!args->pipe->stream->update_flags.bits.scaling)
 		return true;
 	return false;
 }

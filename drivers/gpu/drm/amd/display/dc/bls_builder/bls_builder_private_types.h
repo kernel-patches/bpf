@@ -122,6 +122,12 @@ struct dcn401_commit_step_meta {
 		 * enabling that block the first time, not of reconfiguring it.
 		 */
 		bool hubp_dpp_already_enabled;
+		/*
+		 * Neither the plane scaling, the plane position nor the
+		 * stream scaling changed. A full update sets every plane bit,
+		 * so a plane add always programs the scaler and viewport.
+		 */
+		bool scaling_unchanged;
 	} skip_if;
 };
 
