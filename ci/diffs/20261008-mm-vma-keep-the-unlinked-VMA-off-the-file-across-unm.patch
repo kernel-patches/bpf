@@ -1,0 +1,46 @@
+From d73b450c56ad6a1babac968f01331d62f6807fa1 Mon Sep 17 00:00:00 2001
+From: Oleg Keri <okerixx@gmail.com>
+Date: Wed, 7 Oct 2026 21:47:08 +0200
+Subject: [PATCH] mm/vma: keep the unlinked VMA off the file across unmap on
+ mmap hook failure
+
+Since commit 2ceb21171dd9 ("mm: consistently validate VMA state after
+mmap[_prepare] hooks"), the mmap error path clears vma->vm_file only
+after unmap_region(), so free_pgtables() unlinks the never-linked VMA
+and drops i_mmap_writable. Once it goes negative, every later shared
+writable mmap of that file fails with -EPERM until reboot.
+
+Clear vm_file across unmap_region() only, so that free_pgtables() does
+not unlink a VMA that was never linked to the file, and restore it for
+vma_close(): when the hook succeeded and the validation failed, the
+driver's close() still runs and may use vma->vm_file.
+
+Fixes: 2ceb21171dd9 ("mm: consistently validate VMA state after mmap[_prepare] hooks")
+Signed-off-by: Oleg Keri <okerixx@gmail.com>
+---
+ mm/vma.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/mm/vma.c b/mm/vma.c
+index dfa45c64222c..531e4f53fdd7 100644
+--- a/mm/vma.c
++++ b/mm/vma.c
+@@ -2616,12 +2616,15 @@ static int __mmap_new_file_vma(struct mmap_state *map,
+ 	map->vm_file = vma->vm_file;
+ 
+ 	if (error) {
++		struct file *file = vma->vm_file;
+ 		UNMAP_STATE(unmap, vmi, vma, vma->vm_start, vma->vm_end,
+ 			    map->prev, map->next);
+ 
++		vma->vm_file = NULL;
+ 		vma_iter_set(vmi, vma->vm_end);
+ 		/* Undo any partial mapping done by a device driver. */
+ 		unmap_region(&unmap);
++		vma->vm_file = file;
+ 		/* Only safe once unmapped. */
+ 		vma_close(vma);
+ 
+-- 
+2.56.0
+
