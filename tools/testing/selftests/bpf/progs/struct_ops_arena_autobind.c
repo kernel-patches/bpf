@@ -42,6 +42,16 @@ int unrelated(void *ctx)
 	return 0;
 }
 
+/*
+ * These tests are not driven by test_loader, so __skip_without_arena
+ * cannot reach them; the host side reads this flag and skips instead.
+ */
+#ifdef __BPF_FEATURE_ADDR_SPACE_CAST
+bool skip_tests __attribute((__section__(".data"))) = false;
+#else
+bool skip_tests = true;
+#endif
+
 SEC("syscall")
 int trigger(void *ctx)
 {

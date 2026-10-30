@@ -31,6 +31,12 @@ static void arena_arg(void)
 	if (!ASSERT_OK_PTR(skel, "struct_ops_arena__open_and_load"))
 		return;
 
+	if (skel->data->skip_tests) {
+		printf("%s:SKIP: no addr_space_cast support in the BPF compiler\n", __func__);
+		test__skip();
+		goto out;
+	}
+
 	link = bpf_map__attach_struct_ops(skel->maps.testmod_arena);
 	if (!ASSERT_OK_PTR(link, "attach_struct_ops"))
 		goto out;
@@ -142,6 +148,13 @@ static void arena_member(void)
 	if (!ASSERT_OK_PTR(skel, "struct_ops_arena_member__open_and_load"))
 		return;
 
+	if (skel->data->skip_tests) {
+		printf("%s:SKIP: no addr_space_cast support in the BPF compiler\n", __func__);
+		test__skip();
+		struct_ops_arena_member__destroy(skel);
+		return;
+	}
+
 	attach_and_trigger(skel->maps.testmod_arena_member, skel->progs.trigger);
 	struct_ops_arena_member__destroy(skel);
 }
@@ -185,6 +198,13 @@ static void arena_autobind(void)
 		goto out;
 	assert_prog_map(bpf_program__fd(skel->progs.test_arena_cb), info.id, "test_arena_cb");
 	assert_prog_map(bpf_program__fd(skel->progs.unrelated), info.id, "unrelated");
+
+	if (skel->data->skip_tests) {
+		printf("%s:SKIP: no addr_space_cast support in the BPF compiler\n", __func__);
+		test__skip();
+		struct_ops_arena_autobind__destroy(skel);
+		return;
+	}
 
 	attach_and_trigger(skel->maps.testmod_arena_autobind, skel->progs.trigger);
 out:
@@ -267,6 +287,13 @@ static void arena_member_render(void)
 	skel = struct_ops_arena_member_render__open_and_load();
 	if (!ASSERT_OK_PTR(skel, "struct_ops_arena_member_render__open_and_load"))
 		return;
+
+	if (skel->data->skip_tests) {
+		printf("%s:SKIP: no addr_space_cast support in the BPF compiler\n", __func__);
+		test__skip();
+		struct_ops_arena_member_render__destroy(skel);
+		return;
+	}
 
 	attach_and_trigger(skel->maps.testmod_arena_member_render, skel->progs.trigger);
 	struct_ops_arena_member_render__destroy(skel);

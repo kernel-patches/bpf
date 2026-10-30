@@ -27,9 +27,9 @@ struct {
 
 SEC("socket")
 __success __retval(0)
+__skip_without_arena
 int basic_alloc1_nosleep(void *ctx)
 {
-#if defined(__BPF_FEATURE_ADDR_SPACE_CAST)
 	volatile int __arena *page1, *page2, *no_page;
 
 	page1 = bpf_arena_alloc_pages(&arena, NULL, 1, NUMA_NO_NODE, 0);
@@ -52,15 +52,14 @@ int basic_alloc1_nosleep(void *ctx)
 		return 6;
 	if (*page2 != 0 && *page2 != 2) /* use-after-free should return 0 or the stored value */
 		return 7;
-#endif
 	return 0;
 }
 
 SEC("syscall")
 __success __retval(0)
+__skip_without_arena
 int basic_alloc1(void *ctx)
 {
-#if defined(__BPF_FEATURE_ADDR_SPACE_CAST)
 	volatile int __arena *page1, *page2, *no_page, *page3;
 
 	page1 = bpf_arena_alloc_pages(&arena, NULL, 1, NUMA_NO_NODE, 0);
@@ -91,7 +90,6 @@ int basic_alloc1(void *ctx)
 		return 9;
 	if (*page1 != 1)
 		return 10;
-#endif
 	return 0;
 }
 
@@ -125,9 +123,9 @@ int free_scalar_below_arena(void *ctx)
 
 SEC("socket")
 __success __retval(0)
+__skip_without_arena
 int basic_alloc2_nosleep(void *ctx)
 {
-#if defined(__BPF_FEATURE_ADDR_SPACE_CAST)
 	volatile char __arena *page1, *page2, *page3, *page4;
 
 	page1 = bpf_arena_alloc_pages(&arena, NULL, 2, NUMA_NO_NODE, 0);
@@ -157,15 +155,14 @@ int basic_alloc2_nosleep(void *ctx)
 		return 7;
 	if (*page4 != 0)
 		return 8;
-#endif
 	return 0;
 }
 
 SEC("syscall")
 __success __retval(0)
+__skip_without_arena
 int basic_alloc2(void *ctx)
 {
-#if defined(__BPF_FEATURE_ADDR_SPACE_CAST)
 	volatile char __arena *page1, *page2, *page3, *page4;
 
 	page1 = bpf_arena_alloc_pages(&arena, NULL, 2, NUMA_NO_NODE, 0);
@@ -195,7 +192,6 @@ int basic_alloc2(void *ctx)
 		return 7;
 	if (*page4 != 0)
 		return 8;
-#endif
 	return 0;
 }
 
@@ -233,7 +229,6 @@ SEC("socket")
 __success __retval(0)
 int basic_reserve1_nosleep(void *ctx)
 {
-#if defined(__BPF_FEATURE_ADDR_SPACE_CAST)
 	char __arena *page;
 	int ret;
 
@@ -257,7 +252,6 @@ int basic_reserve1_nosleep(void *ctx)
 	page = bpf_arena_alloc_pages(&arena, NULL, 1, NUMA_NO_NODE, 0);
 	if (page)
 		return 4;
-#endif
 	return 0;
 }
 
@@ -265,7 +259,6 @@ SEC("syscall")
 __success __retval(0)
 int basic_reserve1(void *ctx)
 {
-#if defined(__BPF_FEATURE_ADDR_SPACE_CAST)
 	char __arena *page;
 	int ret;
 
@@ -289,7 +282,6 @@ int basic_reserve1(void *ctx)
 	page = bpf_arena_alloc_pages(&arena, NULL, 1, NUMA_NO_NODE, 0);
 	if (page)
 		return 4;
-#endif
 	return 0;
 }
 
@@ -297,7 +289,6 @@ SEC("socket")
 __success __retval(0)
 int basic_reserve2_nosleep(void *ctx)
 {
-#if defined(__BPF_FEATURE_ADDR_SPACE_CAST)
 	char __arena *page;
 	int ret;
 
@@ -309,7 +300,6 @@ int basic_reserve2_nosleep(void *ctx)
 	page = bpf_arena_alloc_pages(&arena, page, 1, NUMA_NO_NODE, 0);
 	if ((u64)page)
 		return 2;
-#endif
 	return 0;
 }
 
@@ -317,7 +307,6 @@ SEC("syscall")
 __success __retval(0)
 int basic_reserve2(void *ctx)
 {
-#if defined(__BPF_FEATURE_ADDR_SPACE_CAST)
 	char __arena *page;
 	int ret;
 
@@ -329,7 +318,6 @@ int basic_reserve2(void *ctx)
 	page = bpf_arena_alloc_pages(&arena, page, 1, NUMA_NO_NODE, 0);
 	if ((u64)page)
 		return 2;
-#endif
 	return 0;
 }
 
@@ -338,7 +326,6 @@ SEC("socket")
 __success __retval(0)
 int reserve_twice_nosleep(void *ctx)
 {
-#if defined(__BPF_FEATURE_ADDR_SPACE_CAST)
 	char __arena *page;
 	int ret;
 
@@ -351,7 +338,6 @@ int reserve_twice_nosleep(void *ctx)
 	ret = bpf_arena_reserve_pages(&arena, page, 1);
 	if (ret != -EBUSY)
 		return 2;
-#endif
 	return 0;
 }
 
@@ -359,7 +345,6 @@ SEC("syscall")
 __success __retval(0)
 int reserve_twice(void *ctx)
 {
-#if defined(__BPF_FEATURE_ADDR_SPACE_CAST)
 	char __arena *page;
 	int ret;
 
@@ -372,7 +357,6 @@ int reserve_twice(void *ctx)
 	ret = bpf_arena_reserve_pages(&arena, page, 1);
 	if (ret != -EBUSY)
 		return 2;
-#endif
 	return 0;
 }
 
@@ -381,7 +365,6 @@ SEC("socket")
 __success __retval(0)
 int reserve_invalid_region_nosleep(void *ctx)
 {
-#if defined(__BPF_FEATURE_ADDR_SPACE_CAST)
 	char __arena *page;
 	int ret;
 
@@ -403,7 +386,6 @@ int reserve_invalid_region_nosleep(void *ctx)
 	ret = bpf_arena_reserve_pages(&arena, page, (1ULL << 32) - 1);
 	if (ret != -EINVAL)
 		return 4;
-#endif
 	return 0;
 }
 
@@ -411,7 +393,6 @@ SEC("syscall")
 __success __retval(0)
 int reserve_invalid_region(void *ctx)
 {
-#if defined(__BPF_FEATURE_ADDR_SPACE_CAST)
 	char __arena *page;
 	int ret;
 
@@ -433,7 +414,6 @@ int reserve_invalid_region(void *ctx)
 	ret = bpf_arena_reserve_pages(&arena, page, (1ULL << 32) - 1);
 	if (ret != -EINVAL)
 		return 4;
-#endif
 	return 0;
 }
 
@@ -478,7 +458,6 @@ SEC("syscall")
 __success __retval(0)
 int arena_kfuncs_under_bpf_lock(void *ctx)
 {
-#if defined(__BPF_FEATURE_ADDR_SPACE_CAST)
 	char __arena *page;
 	int ret;
 
@@ -503,7 +482,6 @@ int arena_kfuncs_under_bpf_lock(void *ctx)
 	bpf_arena_free_pages(&arena, page, 1);
 
 	bpf_spin_unlock(&arena_bpf_test_lock);
-#endif
 
 	return 0;
 }
@@ -561,53 +539,58 @@ int arena_ptr_add_arena_ptr(void *ctx)
 	return 0;
 }
 
+/*
+ * The r9 load is never read; it is there so libbpf records the arena map
+ * as used, which is what lets the verifier accept addr_space_cast at all.
+ */
 SEC("syscall")
 __failure __msg("same insn cannot be used with and without arena pointer")
-int mixed_arena_scalar_alu64_scalar_first(void *ctx)
+__load_if_JITed()
+__naked void mixed_arena_scalar_alu64_scalar_first(void)
 {
-	volatile register __u64 reg asm("r3");
-	__u32 pick_arena = bpf_get_prandom_u32();
-
-	reg = 1ULL << 32;
-
-	if (pick_arena) {
-		asm volatile (
-			"r9 = %[arena] ll;"
-			"%[reg] = 0;"
-			"%[reg] = addr_space_cast(%[reg], 0x0, 0x1);"
-			: [reg] "=r"(reg)
-			: __imm_addr(arena)
-			: "r9"
-		);
-	}
-
-	reg += 1;
-
-	return 0;
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r6 = r0;					\
+	r3 = 1;						\
+	r3 <<= 32;					\
+	if w6 == 0 goto 1f;				\
+	r9 = %[arena] ll;				\
+	r3 = 0;						\
+	r3 = addr_space_cast(r3, 0, 1);			\
+1:	r3 += 1;					\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm_addr(arena),
+	  __imm(bpf_get_prandom_u32)
+	: __clobber_all);
 }
 
+/*
+ * The r9 load is never read; it is there so libbpf records the arena map
+ * as used, which is what lets the verifier accept addr_space_cast at all.
+ */
 SEC("syscall")
 __failure __msg("same insn cannot be used with and without arena pointer")
-int mixed_arena_scalar_alu64_arena_first(void *ctx)
+__load_if_JITed()
+__naked void mixed_arena_scalar_alu64_arena_first(void)
 {
-	volatile register __u64 reg asm("r3");
-	__u32 pick_scalar = bpf_get_prandom_u32();
-
-	asm volatile (
-		"r9 = %[arena] ll;"
-		"%[reg] = 0;"
-		"%[reg] = addr_space_cast(%[reg], 0x0, 0x1);"
-		: [reg] "=r"(reg)
-		: __imm_addr(arena)
-		: "r9"
-	);
-
-	if (pick_scalar)
-		reg = 1ULL << 32;
-
-	reg += 1;
-
-	return 0;
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r6 = r0;					\
+	r9 = %[arena] ll;				\
+	r3 = 0;						\
+	r3 = addr_space_cast(r3, 0, 1);			\
+	if w6 == 0 goto 1f;				\
+	r3 = 1;						\
+	r3 <<= 32;					\
+1:	r3 += 1;					\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm_addr(arena),
+	  __imm(bpf_get_prandom_u32)
+	: __clobber_all);
 }
 
 SEC("syscall")
@@ -728,6 +711,15 @@ __naked void mixed_arena_stack_atomic(void)
 	  __imm(bpf_get_prandom_u32)
 	: __clobber_all);
 }
+#else
+
+SEC("socket")
+__skip_without_arena
+__success
+int arena_unsupported(void)
+{
+	return 0;
+}
 
 #endif /* defined(__BPF_FEATURE_ADDR_SPACE_CAST) */
 
@@ -771,6 +763,7 @@ u32 __arena volatile *check_arena_arg_quals2(u32 volatile __arena *arg1, u32 __a
 
 SEC("syscall")
 __success __retval(0)
+__skip_without_arena
 int check_arena_arg_ret(void *ctx)
 {
 	u32 __arena *page = bpf_arena_alloc_pages(&arena, NULL, 1, NUMA_NO_NODE, 0);
