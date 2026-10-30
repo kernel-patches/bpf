@@ -429,7 +429,7 @@ int bpf_patch_list_insert(struct bpf_verifier_env *env, u32 off,
 		return -EINTR;
 
 	if (verifier_bug_if(!cnt || off >= env->prog->len ||
-			    (p && off <= p->off),
+			    (p && (off < p->off || (off == p->off && !p->len))),
 			    env, "insns inserted at %u out of order", off))
 		return -EFAULT;
 

@@ -746,24 +746,27 @@ int __bpf_patch_list_del(struct bpf_patch_list *pl, const struct bpf_prog *prog,
  * Queue 'insns[0..cnt)' to go in front of insn 'off'. Jumps to 'off',
  * instruction arrays and poke descriptors still name the insn at 'off', while
  * subprogs, line info, function pointers and calls that start at 'off' start
- * at the first inserted insn.
+ * at the first inserted insn. Inserting in front of a queued patch puts the
+ * insns in front of it.
  */
 int __bpf_patch_list_insert(struct bpf_patch_list *pl, const struct bpf_prog *prog,
 			    u32 off, const struct bpf_insn *insns, u32 cnt)
 {
-	struct bpf_insn_patch *p;
+	struct bpf_insn_patch *p = pl->cnt ? &pl->patches[pl->cnt - 1] : NULL;
 	int err;
 
-	err = patch_list_reserve_patch(pl) ?: patch_list_reserve_insns(pl, 1);
-	if (err)
-		return err;
-	p = &pl->patches[pl->cnt++];
-	p->off = off;
-	p->len = 1;
-	p->target = 0;
-	p->start = pl->insn_cnt;
-	p->orig = prog->insnsi[off];
-	pl->insns[pl->insn_cnt++] = p->orig;
+	if (!p || off != p->off) {
+		err = patch_list_reserve_patch(pl) ?: patch_list_reserve_insns(pl, 1);
+		if (err)
+			return err;
+		p = &pl->patches[pl->cnt++];
+		p->off = off;
+		p->len = 1;
+		p->target = 0;
+		p->start = pl->insn_cnt;
+		p->orig = prog->insnsi[off];
+		pl->insns[pl->insn_cnt++] = p->orig;
+	}
 
 	err = patch_list_reserve_insns(pl, cnt);
 	if (err)
