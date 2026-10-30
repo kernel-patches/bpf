@@ -1120,7 +1120,7 @@ static int viafb_dvp0_proc_show(struct seq_file *m, void *v)
 }
 
 static ssize_t viafb_dvp0_proc_write(struct file *file,
-	const char __user *buffer, size_t count, loff_t *pos)
+	char *buffer, size_t count, loff_t *pos)
 {
 	char buf[20], *value, *pbuf;
 	u8 reg_val = 0;
@@ -1128,8 +1128,7 @@ static ssize_t viafb_dvp0_proc_write(struct file *file,
 	if (count < 1)
 		return -EINVAL;
 	length = count > 20 ? 20 : count;
-	if (copy_from_user(&buf[0], buffer, length))
-		return -EFAULT;
+	memcpy(&buf[0], buffer, length);
 	buf[length - 1] = '\0';	/*Ensure end string */
 	pbuf = &buf[0];
 	for (i = 0; i < 3; i++) {
@@ -1168,7 +1167,7 @@ static ssize_t viafb_dvp0_proc_write(struct file *file,
 
 static const struct proc_ops viafb_dvp0_proc_ops = {
 	.proc_show	= viafb_dvp0_proc_show,
-	.proc_write	= viafb_dvp0_proc_write,
+	.proc_write_buf	= viafb_dvp0_proc_write,
 };
 
 static int viafb_dvp1_proc_show(struct seq_file *m, void *v)
@@ -1182,7 +1181,7 @@ static int viafb_dvp1_proc_show(struct seq_file *m, void *v)
 }
 
 static ssize_t viafb_dvp1_proc_write(struct file *file,
-	const char __user *buffer, size_t count, loff_t *pos)
+	char *buffer, size_t count, loff_t *pos)
 {
 	char buf[20], *value, *pbuf;
 	u8 reg_val = 0;
@@ -1190,8 +1189,7 @@ static ssize_t viafb_dvp1_proc_write(struct file *file,
 	if (count < 1)
 		return -EINVAL;
 	length = count > 20 ? 20 : count;
-	if (copy_from_user(&buf[0], buffer, length))
-		return -EFAULT;
+	memcpy(&buf[0], buffer, length);
 	buf[length - 1] = '\0';	/*Ensure end string */
 	pbuf = &buf[0];
 	for (i = 0; i < 3; i++) {
@@ -1224,7 +1222,7 @@ static ssize_t viafb_dvp1_proc_write(struct file *file,
 
 static const struct proc_ops viafb_dvp1_proc_ops = {
 	.proc_show	= viafb_dvp1_proc_show,
-	.proc_write	= viafb_dvp1_proc_write,
+	.proc_write_buf	= viafb_dvp1_proc_write,
 };
 
 static int viafb_dfph_proc_show(struct seq_file *m, void *v)
@@ -1236,11 +1234,11 @@ static int viafb_dfph_proc_show(struct seq_file *m, void *v)
 }
 
 static ssize_t viafb_dfph_proc_write(struct file *file,
-	const char __user *buffer, size_t count, loff_t *pos)
+	char *buffer, size_t count, loff_t *pos)
 {
 	int err;
 	u8 reg_val;
-	err = kstrtou8_from_user(buffer, count, 0, &reg_val);
+	err = kstrtou8(buffer, 0, &reg_val);
 	if (err)
 		return err;
 
@@ -1250,7 +1248,7 @@ static ssize_t viafb_dfph_proc_write(struct file *file,
 
 static const struct proc_ops viafb_dfph_proc_ops = {
 	.proc_show	= viafb_dfph_proc_show,
-	.proc_write	= viafb_dfph_proc_write,
+	.proc_write_buf	= viafb_dfph_proc_write,
 };
 
 static int viafb_dfpl_proc_show(struct seq_file *m, void *v)
@@ -1262,11 +1260,11 @@ static int viafb_dfpl_proc_show(struct seq_file *m, void *v)
 }
 
 static ssize_t viafb_dfpl_proc_write(struct file *file,
-	const char __user *buffer, size_t count, loff_t *pos)
+	char *buffer, size_t count, loff_t *pos)
 {
 	int err;
 	u8 reg_val;
-	err = kstrtou8_from_user(buffer, count, 0, &reg_val);
+	err = kstrtou8(buffer, 0, &reg_val);
 	if (err)
 		return err;
 
@@ -1276,7 +1274,7 @@ static ssize_t viafb_dfpl_proc_write(struct file *file,
 
 static const struct proc_ops viafb_dfpl_proc_ops = {
 	.proc_show	= viafb_dfpl_proc_show,
-	.proc_write	= viafb_dfpl_proc_write,
+	.proc_write_buf	= viafb_dfpl_proc_write,
 };
 
 static int viafb_vt1636_proc_show(struct seq_file *m, void *v)
@@ -1312,7 +1310,7 @@ static int viafb_vt1636_proc_show(struct seq_file *m, void *v)
 }
 
 static ssize_t viafb_vt1636_proc_write(struct file *file,
-	const char __user *buffer, size_t count, loff_t *pos)
+	char *buffer, size_t count, loff_t *pos)
 {
 	char buf[30], *value, *pbuf;
 	struct IODATA reg_val;
@@ -1320,8 +1318,7 @@ static ssize_t viafb_vt1636_proc_write(struct file *file,
 	if (count < 1)
 		return -EINVAL;
 	length = count > 30 ? 30 : count;
-	if (copy_from_user(&buf[0], buffer, length))
-		return -EFAULT;
+	memcpy(&buf[0], buffer, length);
 	buf[length - 1] = '\0';	/*Ensure end string */
 	pbuf = &buf[0];
 	switch (viaparinfo->chip_info->lvds_chip_info.lvds_chip_name) {
@@ -1403,7 +1400,7 @@ static ssize_t viafb_vt1636_proc_write(struct file *file,
 
 static const struct proc_ops viafb_vt1636_proc_ops = {
 	.proc_show	= viafb_vt1636_proc_show,
-	.proc_write	= viafb_vt1636_proc_write,
+	.proc_write_buf	= viafb_vt1636_proc_write,
 };
 
 #endif /* CONFIG_FB_VIA_DIRECT_PROCFS */
@@ -1415,7 +1412,7 @@ static int __maybe_unused viafb_sup_odev_proc_show(struct seq_file *m, void *v)
 	return 0;
 }
 
-static ssize_t odev_update(const char __user *buffer, size_t count, u32 *odev)
+static ssize_t odev_update(const char *buffer, size_t count, u32 *odev)
 {
 	char buf[64], *ptr = buf;
 	u32 devices;
@@ -1423,8 +1420,7 @@ static ssize_t odev_update(const char __user *buffer, size_t count, u32 *odev)
 
 	if (count < 1 || count > 63)
 		return -EINVAL;
-	if (copy_from_user(&buf[0], buffer, count))
-		return -EFAULT;
+	memcpy(&buf[0], buffer, count);
 	buf[count] = '\0';
 	add = buf[0] == '+';
 	sub = buf[0] == '-';
@@ -1451,7 +1447,7 @@ static int viafb_iga1_odev_proc_show(struct seq_file *m, void *v)
 }
 
 static ssize_t viafb_iga1_odev_proc_write(struct file *file,
-	const char __user *buffer, size_t count, loff_t *pos)
+	char *buffer, size_t count, loff_t *pos)
 {
 	u32 dev_on, dev_off, dev_old, dev_new;
 	ssize_t res;
@@ -1472,7 +1468,7 @@ static ssize_t viafb_iga1_odev_proc_write(struct file *file,
 
 static const struct proc_ops viafb_iga1_odev_proc_ops = {
 	.proc_show	= viafb_iga1_odev_proc_show,
-	.proc_write	= viafb_iga1_odev_proc_write,
+	.proc_write_buf	= viafb_iga1_odev_proc_write,
 };
 
 static int viafb_iga2_odev_proc_show(struct seq_file *m, void *v)
@@ -1482,7 +1478,7 @@ static int viafb_iga2_odev_proc_show(struct seq_file *m, void *v)
 }
 
 static ssize_t viafb_iga2_odev_proc_write(struct file *file,
-	const char __user *buffer, size_t count, loff_t *pos)
+	char *buffer, size_t count, loff_t *pos)
 {
 	u32 dev_on, dev_off, dev_old, dev_new;
 	ssize_t res;
@@ -1503,7 +1499,7 @@ static ssize_t viafb_iga2_odev_proc_write(struct file *file,
 
 static const struct proc_ops viafb_iga2_odev_proc_ops = {
 	.proc_show	= viafb_iga2_odev_proc_show,
-	.proc_write	= viafb_iga2_odev_proc_write,
+	.proc_write_buf	= viafb_iga2_odev_proc_write,
 };
 
 #define IS_VT1636(lvds_chip)	((lvds_chip).lvds_chip_name == VT1636_LVDS)
