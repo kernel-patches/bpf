@@ -21,8 +21,12 @@
 #include "bpf/libbpf_internal.h"
 #include "bpf_util.h"
 
-#define TRACEFS_PIPE	"/sys/kernel/tracing/trace_pipe"
-#define DEBUGFS_PIPE	"/sys/kernel/debug/tracing/trace_pipe"
+#define TRACEFS		"/sys/kernel/tracing"
+#define TRACEFS_PIPE	TRACEFS "/trace_pipe"
+#define DEBUGFS		"/sys/kernel/debug/tracing"
+#define DEBUGFS_PIPE	DEBUGFS "/trace_pipe"
+
+#define CHUNK_SIZE	128
 
 static struct ksyms *ksyms;
 static pthread_mutex_t ksyms_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -555,6 +559,245 @@ static void trace_pipe_cb(const char *str, void *data)
 void read_trace_pipe(void)
 {
 	read_trace_pipe_iter(trace_pipe_cb, NULL, 0);
+}
+
+static const char *tracefs_mountpoint(void)
+{
+	return access(TRACEFS_PIPE, F_OK) == 0 ? TRACEFS : DEBUGFS;
+}
+
+static int tracefs_path(char *buf, size_t size, const char *file)
+{
+	int ret = snprintf(buf, size, "%s/%s", tracefs_mountpoint(), file);
+
+	return ret < 0 ? ret : 0;
+}
+
+static int tracefs_read(int fd, char **content)
+{
+	size_t len = 0;
+	char tmp[CHUNK_SIZE];
+	char *buf = NULL;
+	ssize_t n;
+	int ret;
+
+	ret = lseek(fd, 0, SEEK_SET);
+	if (ret < 0)
+		return ret;
+
+	do {
+		n = read(fd, tmp, CHUNK_SIZE);
+		if (n < 0) {
+			if (buf)
+				free(buf);
+			return n;
+		}
+		if (!n)
+			break;
+		buf = realloc(buf, len + n + 1);
+		memcpy(buf + len, tmp, n);
+		len += n;
+	} while (1);
+
+	/* No data read at all, file was empty */
+	if (!buf) {
+		buf = malloc(1);
+		if (!buf)
+			return -ENOMEM;
+	}
+	buf[len] = '\0';
+	*content = buf;
+	return 0;
+}
+
+static int tracefs_write(int fd, const char *str)
+{
+	ssize_t ret;
+
+	ret = lseek(fd, 0, SEEK_SET);
+	if (ret < 0)
+		return ret;
+
+	ret = write(fd, str, strlen(str));
+	if (ret < 0)
+		return ret;
+	return 0;
+}
+
+static int tracefs_write_file(const char *path, const char *str)
+{
+	int fd, err;
+
+	fd = open(path, O_CLOEXEC | O_WRONLY | (*str ? 0 : O_TRUNC));
+	if (fd < 0)
+		return fd;
+
+	err = tracefs_write(fd, str);
+	close(fd);
+	return err;
+}
+
+enum tracefs_ctl_kind {
+	TRACEFS_CTL_FILTER,
+	TRACEFS_CTL_VALUE,
+};
+
+struct tracefs_ctl_entry {
+	char path[PATH_MAX];
+	char *old;
+	enum tracefs_ctl_kind kind;
+};
+
+struct tracefs_ctl {
+	struct tracefs_ctl_entry *entries;
+	size_t cnt;
+};
+
+struct tracefs_ctl *tracefs_ctl_init(void)
+{
+	return calloc(1, sizeof(struct tracefs_ctl));
+}
+
+static int tracefs_ctl_update(struct tracefs_ctl *ctl, const char *file,
+			      const char *str, enum tracefs_ctl_kind kind)
+{
+	struct tracefs_ctl_entry *entry, *tmp;
+	char path[PATH_MAX];
+	char *old = NULL;
+	bool recorded = false;
+	size_t i;
+	int fd, err;
+
+	if (!ctl)
+		return -EINVAL;
+
+	err = tracefs_path(path, sizeof(path), file);
+	if (err)
+		return err;
+
+	for (i = 0; i < ctl->cnt; i++) {
+		if (strcmp(ctl->entries[i].path, path))
+			continue;
+		if (ctl->entries[i].kind != kind)
+			return -EINVAL;
+		/* Already altered, keep the value read on the first write. */
+		return tracefs_write_file(ctl->entries[i].path, str);
+	}
+
+	fd = open(path, O_CLOEXEC | O_RDWR);
+	if (fd < 0)
+		return fd;
+
+	err = tracefs_read(fd, &old);
+	if (!err) {
+		tmp = realloc(ctl->entries, (ctl->cnt + 1) * sizeof(*tmp));
+		if (!tmp) {
+			free(old);
+			close(fd);
+			return -ENOMEM;
+		}
+		ctl->entries = tmp;
+		entry = &ctl->entries[ctl->cnt];
+		strcpy(entry->path, path);
+		entry->old = old;
+		entry->kind = kind;
+		recorded = true;
+	}
+
+	err = tracefs_write(fd, str);
+	close(fd);
+	if (err) {
+		free(old);
+		return err;
+	}
+
+	if (recorded)
+		ctl->cnt++;
+	return 0;
+}
+
+int tracefs_ctl_filter_write(struct tracefs_ctl *ctl, const char *file,
+			     const char *pattern)
+{
+	return tracefs_ctl_update(ctl, file, pattern, TRACEFS_CTL_FILTER);
+}
+
+int tracefs_ctl_set(struct tracefs_ctl *ctl, const char *file, const char *value)
+{
+	return tracefs_ctl_update(ctl, file, value, TRACEFS_CTL_VALUE);
+}
+
+static const char *tracefs_next_line(const char *content, char *buf, size_t size,
+				     int *err)
+{
+	const char *end;
+	size_t len;
+
+	*err = 0;
+	while (*content) {
+		end = strchrnul(content, '\n');
+		len = end - content;
+		content = *end ? end + 1 : end;
+
+		if (!len || end[-len] == '#')
+			continue;
+
+		if (len + 2 > size) {
+			*err = -ENAMETOOLONG;
+			return NULL;
+		}
+		memcpy(buf, end - len, len);
+		buf[len++] = '\n';
+		buf[len] = '\0';
+		return content;
+	}
+
+	return NULL;
+}
+
+static int tracefs_restore_file(const struct tracefs_ctl_entry *entry)
+{
+	char buf[CHUNK_SIZE];
+	const char *content = entry->old;
+	int err = 0;
+
+	if (!content)
+		return 0;
+
+	if (entry->kind == TRACEFS_CTL_FILTER) {
+		err = tracefs_write_file(entry->path, "");
+		if (err)
+			return err;
+	}
+
+	while ((content = tracefs_next_line(content, buf, sizeof(buf), &err))) {
+		err = tracefs_write_file(entry->path, buf);
+		if (err)
+			return err;
+	}
+
+	return err;
+}
+
+void tracefs_ctl_restore(struct tracefs_ctl *ctl)
+{
+	size_t i;
+	int err;
+
+	if (!ctl)
+		return;
+
+	for (i = ctl->cnt; i > 0; i--) {
+		struct tracefs_ctl_entry *entry = &ctl->entries[i - 1];
+
+		err = tracefs_restore_file(entry);
+		if (err)
+			fprintf(stderr, "Failed to restore %s: %s\n",
+				entry->path, strerror(-err));
+		free(entry->old);
+	}
+	free(ctl->entries);
+	free(ctl);
 }
 
 static size_t symbol_hash(long key, void *ctx __maybe_unused)
