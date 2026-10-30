@@ -243,14 +243,15 @@ static inline void udp_allow_gso(struct sock *sk)
 	udp_set_bit(ACCEPT_FRAGLIST, sk);
 }
 
-#define udp_portaddr_for_each_entry(__sk, list) \
-	hlist_for_each_entry(__sk, list, __sk_common.skc_portaddr_node)
+#define udp_portaddr_for_each_entry(__sk, node, list) \
+	hlist_nulls_for_each_entry(__sk, node, list, __sk_common.skc_portaddr_node)
 
 #define udp_portaddr_for_each_entry_from(__sk) \
-	hlist_for_each_entry_from(__sk, __sk_common.skc_portaddr_node)
+	for (; __sk; __sk = hlist_nulls_entry_safe((__sk)->__sk_common.skc_portaddr_node.next, \
+						   typeof(*(__sk)), __sk_common.skc_portaddr_node))
 
-#define udp_portaddr_for_each_entry_rcu(__sk, list) \
-	hlist_for_each_entry_rcu(__sk, list, __sk_common.skc_portaddr_node)
+#define udp_portaddr_for_each_entry_rcu(__sk, node, list) \
+	hlist_nulls_for_each_entry_rcu(__sk, node, list, __sk_common.skc_portaddr_node)
 
 #if !IS_ENABLED(CONFIG_BASE_SMALL)
 #define udp_lrpa_for_each_entry_rcu(__up, node, list) \

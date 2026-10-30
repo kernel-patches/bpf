@@ -56,10 +56,7 @@ struct udp_skb_cb {
  */
 struct udp_hslot {
 	union {
-		struct hlist_head	head;
-		/* hash4 uses hlist_nulls to avoid moving wrongly onto another
-		 * hlist, because rehash() can happen with lookup().
-		 */
+		struct hlist_nulls_head	head;
 		struct hlist_nulls_head	nulls_head;
 	};
 	int			count;
