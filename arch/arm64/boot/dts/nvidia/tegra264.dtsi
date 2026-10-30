@@ -3996,9 +3996,7 @@
 		#address-cells = <2>;
 		#size-cells = <2>;
 
-		ranges = <0x000 0x00000000 0x81 0x80000000 0x00 0x10000000>, /* MMIO (256 MiB) */
-			 <0x100 0x00000000 0x00 0x20000000 0x00 0x40000000>, /* non-prefetchable memory (32-bit) */
-			 <0x200 0x00000000 0xa8 0x80000000 0x57 0x80000000>; /* I/O, ECAM, prefetchable memory (64-bit) */
+		ranges = <0x000 0x00000000 0x81 0x80000000 0x00 0x10000000>; /* MMIO (256 MiB) */
 
 		host1x@1200000 {
 			compatible = "nvidia,tegra264-host1x";
