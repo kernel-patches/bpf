@@ -57,6 +57,15 @@ void read_trace_pipe(void);
 int read_trace_pipe_iter(void (*cb)(const char *str, void *data),
 			 void *data, int iter);
 
+struct tracefs_ctl;
+
+struct tracefs_ctl *tracefs_ctl_init(void);
+int tracefs_ctl_filter_write(struct tracefs_ctl *ctl, const char *file,
+			     const char *pattern);
+int tracefs_ctl_set(struct tracefs_ctl *ctl, const char *file,
+		    const char *value);
+void tracefs_ctl_restore(struct tracefs_ctl *ctl);
+
 ssize_t get_uprobe_offset(const void *addr);
 ssize_t get_rel_offset(uintptr_t addr);
 
