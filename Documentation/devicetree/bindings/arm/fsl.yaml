@@ -1222,6 +1222,13 @@ properties:
           - const: engicam,icore-mx8mp             # i.MX8MP Engicam i.Core MX8M Plus SoM
           - const: fsl,imx8mp
 
+      - description: Engicam i.Core MX8M Plus Fast Ethernet SoM based boards
+        items:
+          - enum:
+              - engicam,icore-mx8mp-fe-ctouch2     # i.MX8MP Engicam i.Core MX8M Plus FE C.TOUCH 2.0 Board
+          - const: engicam,icore-mx8mp-fe          # i.MX8MP Engicam i.Core MX8M Plus FE SoM
+          - const: fsl,imx8mp
+
       - description: Ka-Ro TX8P-ML81 SoM based boards
         items:
           - enum:
