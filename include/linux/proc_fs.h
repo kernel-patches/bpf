@@ -8,6 +8,7 @@
 #include <linux/compiler.h>
 #include <linux/types.h>
 #include <linux/fs.h>
+#include <linux/ioctl.h>
 
 struct proc_dir_entry;
 struct seq_file;
@@ -45,7 +46,28 @@ enum {
 	 * coming up short.
 	 */
 	PROC_ENTRY_FULL_READS		= 1U << 11,
+	PROC_ENTRY_proc_ioctl_buf	= 1U << 12,
 };
+
+/*
+ * How many bytes of the argument of @cmd procfs copies in before calling
+ * ->proc_ioctl_buf() and copies back out after it. A command that copies
+ * neither gets its argument as is.
+ */
+struct proc_ioctl_arg {
+	unsigned int cmd;
+	unsigned int in;
+	unsigned int out;
+};
+
+#define PROC_IOCTL_ARG(_cmd, _in, _out) \
+	{ .cmd = (_cmd), .in = (_in), .out = (_out) }
+
+/* A command that encodes the size and direction of its argument. */
+#define PROC_IOCTL_IOC(_cmd)						\
+	PROC_IOCTL_ARG(_cmd,						\
+		       (_IOC_DIR(_cmd) & _IOC_WRITE) ? _IOC_SIZE(_cmd) : 0, \
+		       (_IOC_DIR(_cmd) & _IOC_READ) ? _IOC_SIZE(_cmd) : 0)
 
 struct proc_ops {
 	unsigned int proc_flags;
@@ -100,6 +122,19 @@ struct proc_ops {
 	 */
 	ssize_t	(*proc_read_buf)(struct file *, char *, size_t, loff_t *);
 	unsigned int proc_read_size;
+	/*
+	 * procfs looks the command up in ->proc_ioctl_args, copies in what it
+	 * passes before pinning the entry, calls ->proc_ioctl_buf() with that
+	 * copy and copies out what it returns after unpinning the entry.
+	 * Commands that aren't in the table fail with -ENOTTY. 32-bit tasks
+	 * go through the same table. The copy is zeroed and as large as the
+	 * larger of the two sizes, it only goes back out if the ioctl
+	 * succeeded, and a command that copies neither gets its argument as
+	 * is.
+	 */
+	long	(*proc_ioctl_buf)(struct file *, unsigned int, void *);
+	const struct proc_ioctl_arg *proc_ioctl_args;
+	unsigned int proc_nr_ioctl_args;
 } __randomize_layout;
 
 /* definitions for hide_pid field */

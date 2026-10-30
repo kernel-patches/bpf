@@ -6,6 +6,7 @@
  */
 
 #include <linux/cache.h>
+#include <linux/compat.h>
 #include <linux/time.h>
 #include <linux/proc_fs.h>
 #include <linux/kernel.h>
@@ -548,11 +549,66 @@ static long pde_ioctl(struct proc_dir_entry *pde, struct file *file, unsigned in
 	return -ENOTTY;
 }
 
+/* the table lives in proc_ops, which goes away with the entry */
+static bool pde_ioctl_arg(struct proc_dir_entry *pde, unsigned int cmd,
+			  struct proc_ioctl_arg *arg)
+{
+	const struct proc_ops *proc_ops = pde->proc_ops;
+	bool found = false;
+
+	if (!pde_pin(pde))
+		return false;
+	for (unsigned int i = 0; i < proc_ops->proc_nr_ioctl_args; i++) {
+		if (proc_ops->proc_ioctl_args[i].cmd == cmd) {
+			*arg = proc_ops->proc_ioctl_args[i];
+			found = true;
+			break;
+		}
+	}
+	pde_unpin(pde);
+	return found;
+}
+
+/*
+ * procfs copies the argument in before it pins the entry and copies it back
+ * out after unpinning it. An ioctl that faults on its argument then doesn't
+ * hold up remove_proc_entry().
+ */
+static long pde_ioctl_buf(struct proc_dir_entry *pde, struct file *file,
+			  unsigned int cmd, void __user *uarg, unsigned long arg)
+{
+	void *buf __free(kvfree) = NULL;
+	struct proc_ioctl_arg a;
+	size_t size;
+	long rv;
+
+	if (!pde_ioctl_arg(pde, cmd, &a))
+		return -ENOTTY;
+	size = max(a.in, a.out);
+	if (size) {
+		buf = kvzalloc(size, GFP_KERNEL);
+		if (!buf)
+			return -ENOMEM;
+		if (a.in && copy_from_user(buf, uarg, a.in))
+			return -EFAULT;
+	}
+
+	if (!pde_pin(pde))
+		return -ENOTTY;
+	rv = pde->proc_ops->proc_ioctl_buf(file, cmd, buf ?: (void *)arg);
+	pde_unpin(pde);
+	if (rv >= 0 && a.out && copy_to_user(uarg, buf, a.out))
+		return -EFAULT;
+	return rv;
+}
+
 static long proc_reg_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	struct proc_dir_entry *pde = PDE(file_inode(file));
 	long rv;
 
+	if (pde_has_proc_ioctl_buf(pde))
+		return pde_ioctl_buf(pde, file, cmd, (void __user *)arg, arg);
 	if (!pde_pin(pde))
 		return -ENOTTY;
 	rv = pde_ioctl(pde, file, cmd, arg);
@@ -574,6 +630,8 @@ static long proc_reg_compat_ioctl(struct file *file, unsigned int cmd, unsigned 
 	struct proc_dir_entry *pde = PDE(file_inode(file));
 	long rv;
 
+	if (pde_has_proc_ioctl_buf(pde))
+		return pde_ioctl_buf(pde, file, cmd, compat_ptr(arg), arg);
 	if (!pde_pin(pde))
 		return -ENOTTY;
 	rv = pde_compat_ioctl(pde, file, cmd, arg);
