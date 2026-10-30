@@ -26,6 +26,7 @@
 /proc-remove-slow-reader
 /proc-remove-mapped
 /proc-remove-slow-readlink
+/proc-remove-slow-writer
 /read
 /self
 /setns-dcache
