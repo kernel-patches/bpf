@@ -15,14 +15,12 @@ static int rbnode_replace(struct rbtree __arena *rbtree,
 			  struct rbnode __arena *existing,
 			  struct rbnode __arena *replacement);
 
-struct rbtree __arena *rb_create(enum rbtree_alloc alloc,
-				 enum rbtree_insert_mode insert)
+__weak
+int rb_init(struct rbtree __arena *rbtree, enum rbtree_alloc alloc,
+	    enum rbtree_insert_mode insert)
 {
-	struct rbtree __arena *rbtree;
-
-	rbtree = arena_malloc(sizeof(*rbtree));
 	if (unlikely(!rbtree))
-		return NULL;
+		return -EINVAL;
 
 	/*
 	 * RB_UPDATE overwrites existing values in the nodes, but RB_NOALLOC
@@ -32,19 +30,51 @@ struct rbtree __arena *rb_create(enum rbtree_alloc alloc,
 	 */
 	if (alloc == RB_NOALLOC && insert == RB_UPDATE) {
 		arena_stderr("WARNING: Cannot combine RB_NOALLOC and RB_UPDATE");
+		return -EINVAL;
+	}
+
+	WRITE_ONCE(rbtree->root, NULL);
+	WRITE_ONCE(rbtree->alloc, alloc);
+	WRITE_ONCE(rbtree->insert, insert);
+	WRITE_ONCE(rbtree->first, NULL);
+	WRITE_ONCE(rbtree->nr, 0);
+
+	return 0;
+}
+
+/*
+ * arena_malloc() aligns a block to its power-of-two size, so the tree's
+ * lockless fields get a cache line of their own.
+ */
+struct rbtree __arena *rb_create(enum rbtree_alloc alloc,
+				 enum rbtree_insert_mode insert)
+{
+	struct rbtree __arena *rbtree;
+
+	rbtree = arena_malloc(sizeof(*rbtree));
+	if (unlikely(!rbtree))
+		return NULL;
+
+	if (rb_init(rbtree, alloc, insert)) {
 		arena_free(rbtree);
 		return NULL;
 	}
 
-	rbtree->alloc = alloc;
-	rbtree->insert = insert;
-	rbtree->root = NULL;
-
 	return rbtree;
 }
 
+static __always_inline void rb_set_first(struct rbtree __arena *rbtree,
+					 struct rbnode __arena *node)
+{
+	/*
+	 * Publish the new leftmost node with release ordering, so a lockless
+	 * reader that sees it also sees the node's fields.
+	 */
+	smp_store_release(&rbtree->first, node);
+}
+
 __weak
-int rb_destroy(struct rbtree __arena *rbtree)
+int rb_fini(struct rbtree __arena *rbtree)
 {
 	int ret = 0;
 
@@ -63,11 +93,11 @@ int rb_destroy(struct rbtree __arena *rbtree)
 		 * the now freed nodes. Throw an error instead.
 		 */
 		if (rbtree->root) {
-			arena_stderr("WARNING: Destroying RB_NOALLOC tree with > 0 nodes");
+			arena_stderr("WARNING: Finalizing RB_NOALLOC tree with > 0 nodes");
 			return -EBUSY;
 		}
 
-		goto out;
+		return 0;
 	}
 
 	while (rbtree->root && can_loop) {
@@ -76,9 +106,20 @@ int rb_destroy(struct rbtree __arena *rbtree)
 			break;
 	}
 
-out:
-	arena_free(rbtree);
 	return ret;
+}
+
+__weak
+int rb_destroy(struct rbtree __arena *rbtree)
+{
+	int ret;
+
+	ret = rb_fini(rbtree);
+	if (ret)
+		return ret;
+
+	arena_free(rbtree);
+	return 0;
 }
 
 static inline int rbnode_dir(struct rbnode __arena *node)
@@ -161,8 +202,14 @@ struct rbnode __arena *rbnode_find(struct rbnode __arena *subtree, u64 key)
 	return node;
 }
 
+/*
+ * Find the node to link @key under. Smaller keys go left and everything else
+ * right, so a new key lands after every node with an equal key and equal keys
+ * stay in insertion order. Rotations and removals preserve the in-order
+ * sequence, so they keep that order too.
+ */
 static
-struct rbnode __arena *rbnode_least_upper_bound(struct rbnode __arena *subtree, uint64_t key)
+struct rbnode __arena *rbnode_insert_parent(struct rbnode __arena *subtree, uint64_t key)
 {
 	struct rbnode __arena *node = subtree;
 	int dir;
@@ -171,7 +218,7 @@ struct rbnode __arena *rbnode_least_upper_bound(struct rbnode __arena *subtree, 
 		return NULL;
 
 	while (can_loop) {
-		dir = (key <= node->key) ? 0 : 1;
+		dir = (key < node->key) ? 0 : 1;
 
 		if (!node->child[dir])
 			break;
@@ -249,13 +296,15 @@ int rb_node_insert(struct rbtree __arena *rbtree,
 
 	if (!parent) {
 		rbtree->root = node;
+		rb_set_first(rbtree, node);
+		WRITE_ONCE(rbtree->nr, 1);
 		return 0;
 	}
 
 	if (rbtree->insert != RB_DUPLICATE)
 		parent = rbnode_find(parent, key);
 	else
-		parent = rbnode_least_upper_bound(parent, key);
+		parent = rbnode_insert_parent(parent, key);
 
 	if (key == parent->key && rbtree->insert != RB_DUPLICATE) {
 		if (rbtree->insert == RB_UPDATE) {
@@ -266,6 +315,10 @@ int rb_node_insert(struct rbtree __arena *rbtree,
 			ret = rbnode_replace(rbtree, parent, node);
 			if (ret)
 				return ret;
+
+			/* Same key and place, so only the head's identity changes. */
+			if (rbtree->first == parent)
+				rb_set_first(rbtree, node);
 
 			if (rbtree->alloc == RB_ALLOC)
 				rb_node_free(parent);
@@ -278,11 +331,19 @@ int rb_node_insert(struct rbtree __arena *rbtree,
 	}
 
 	node->parent = parent;
-	/* Also works if key == parent->key. */
-	if (key <= parent->key)
+	/* An equal key goes right, after the existing ones. */
+	if (key < parent->key)
 		parent->left = node;
 	else
 		parent->right = node;
+
+	/*
+	 * The node is the new head only if it went left of the old one. The
+	 * rotations below never change which node is leftmost.
+	 */
+	if (parent == rbtree->first && parent->left == node)
+		rb_set_first(rbtree, node);
+	WRITE_ONCE(rbtree->nr, rbtree->nr + 1);
 
 	while (can_loop) {
 		parent = node->parent;
@@ -404,7 +465,7 @@ __weak int rb_least(struct rbtree __arena *rbtree, u64 *key, u64 *value)
 	if (!rbtree->root)
 		return -ENOENT;
 
-	least = rbnode_least(rbtree->root);
+	least = rbtree->first;
 	if (key)
 		*key = least->key;
 	if (value)
@@ -572,8 +633,8 @@ static inline bool rbnode_has_red_children(struct rbnode __arena *node)
 }
 
 static
-int rb_node_remove(struct rbtree __arena *rbtree,
-		   struct rbnode __arena *node)
+int rbnode_remove(struct rbtree __arena *rbtree,
+		  struct rbnode __arena *node)
 {
 	struct rbnode __arena *parent, *sibling, *close_nephew, *distant_nephew;
 	bool free = (rbtree->alloc == RB_ALLOC);
@@ -759,6 +820,35 @@ int rb_node_remove(struct rbtree __arena *rbtree,
 	return 0;
 }
 
+/*
+ * Remove @node and keep the head and the node count current. The head has no
+ * left child, so if it is the node going away, its successor is the leftmost
+ * node of its right subtree, or else its parent. Take it before the tree
+ * changes; the removal and its fixups preserve the in-order sequence.
+ */
+static __always_inline
+int rb_node_remove(struct rbtree __arena *rbtree,
+		   struct rbnode __arena *node)
+{
+	struct rbnode __arena *next = NULL;
+	bool was_first;
+	int ret;
+
+	was_first = node == rbtree->first;
+	if (was_first)
+		next = node->right ? rbnode_least(node->right) : node->parent;
+
+	ret = rbnode_remove(rbtree, node);
+	if (ret)
+		return ret;
+
+	if (was_first)
+		rb_set_first(rbtree, next);
+	WRITE_ONCE(rbtree->nr, rbtree->nr - 1);
+
+	return 0;
+}
+
 __weak
 int rb_remove_node(struct rbtree __arena *rbtree,
 		   struct rbnode __arena *node)
@@ -807,7 +897,7 @@ int rb_pop(struct rbtree __arena *rbtree, u64 *key, u64 *value)
 	if (rbtree->alloc != RB_ALLOC)
 		return -EINVAL;
 
-	node = rbnode_least(rbtree->root);
+	node = rbtree->first;
 	if (unlikely(!node))
 		return -ENOENT;
 
