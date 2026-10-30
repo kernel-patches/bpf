@@ -1942,7 +1942,46 @@ select_insn:
 	ALU(AND,  &)
 	ALU(OR,   |)
 	ALU(XOR,  ^)
-	ALU(MUL,  *)
+	/*
+	 * MUL needs explicit handlers because ALU64 insn->off selects
+	 * low-half, unsigned high-half, or signed high-half multiplication.
+	 */
+	ALU64_MUL_X:
+		switch (OFF) {
+		case 0:
+			DST = DST * SRC;
+			break;
+		case BPF_UHMUL:
+			DST = bpf_uhmul64(DST, SRC);
+			break;
+		case BPF_SHMUL:
+			DST = bpf_shmul64((s64)DST, (s64)SRC);
+			break;
+		default:
+			goto default_label;
+		}
+		CONT;
+	ALU_MUL_X:
+		DST = (u32) DST * (u32) SRC;
+		CONT;
+	ALU64_MUL_K:
+		switch (OFF) {
+		case 0:
+			DST = DST * IMM;
+			break;
+		case BPF_UHMUL:
+			DST = bpf_uhmul64(DST, (u64)IMM);
+			break;
+		case BPF_SHMUL:
+			DST = bpf_shmul64((s64)DST, (s32)IMM);
+			break;
+		default:
+			goto default_label;
+		}
+		CONT;
+	ALU_MUL_K:
+		DST = (u32) DST * (u32) IMM;
+		CONT;
 	SHT(LSH, <<)
 	SHT(RSH, >>)
 #undef SHT
@@ -3399,6 +3438,12 @@ bool __weak bpf_jit_supports_kfunc_ret_reg_pair(void)
 
 /* unwind_goto and unwind_exit */
 bool __weak bpf_jit_supports_unwind(void)
+{
+	return false;
+}
+
+/* uhmul and shmul */
+bool __weak bpf_jit_supports_hmul(void)
 {
 	return false;
 }
