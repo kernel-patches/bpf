@@ -417,6 +417,29 @@ int bpf_patch_list_del(struct bpf_verifier_env *env, u32 off)
 	return __bpf_patch_list_del(pl, env->prog, off);
 }
 
+/* Queue insns to go in front of insn 'off', see __bpf_patch_list_insert(). */
+int bpf_patch_list_insert(struct bpf_verifier_env *env, u32 off,
+			  const struct bpf_insn *insns, u32 cnt)
+{
+	struct bpf_patch_list *pl = &env->patch_list;
+	struct bpf_insn_patch *p = pl->cnt ? &pl->patches[pl->cnt - 1] : NULL;
+	int err;
+
+	if (bpf_rewrite_must_abort())
+		return -EINTR;
+
+	if (verifier_bug_if(!cnt || off >= env->prog->len ||
+			    (p && off <= p->off),
+			    env, "insns inserted at %u out of order", off))
+		return -EFAULT;
+
+	err = __bpf_patch_list_insert(pl, env->prog, off, insns, cnt);
+	if (err == -ERANGE)
+		verbose(env, "insn %d cannot be patched due to 16-bit range\n",
+			env->insn_aux_data[off].orig_idx);
+	return err;
+}
+
 void bpf_patch_list_free(struct bpf_verifier_env *env)
 {
 	bpf_patch_list_release(&env->patch_list);
@@ -425,6 +448,7 @@ void bpf_patch_list_free(struct bpf_verifier_env *env)
 /*
  * Fill the aux data of the 'p->len' insns at 'slot' from the aux data 'old'
  * of the insn they replace, the same way as adjust_insn_aux_data() does.
+ * The insns in front of p->target were inserted, as with BPF_PATCH_MOVE_TARGET.
  */
 static void patch_list_adj_aux(struct bpf_prog *prog, struct bpf_insn_patch *p,
 			       struct bpf_insn *patch,
@@ -442,7 +466,7 @@ static void patch_list_adj_aux(struct bpf_prog *prog, struct bpf_insn_patch *p,
 	for (i = 0; i < p->len - 1; i++) {
 		slot[i].seen = last->seen;
 		slot[i].zext_dst = bpf_insn_def32(prog, &patch[i]) >= 0;
-		if (!memcmp(&patch[i], orig, sizeof(*orig))) {
+		if (i >= p->target && !memcmp(&patch[i], orig, sizeof(*orig))) {
 			slot[i].non_stack_access = last->non_stack_access;
 			last->non_stack_access = false;
 		} else if (bpf_is_mem_insn(&patch[i])) {
@@ -454,9 +478,9 @@ static void patch_list_adj_aux(struct bpf_prog *prog, struct bpf_insn_patch *p,
 	    memcmp(&patch[p->len - 1], orig, sizeof(*orig)))
 		last->non_stack_access = true;
 
-	/* indirect jumps to the replaced insn land on the first new one */
-	if (last->indirect_target) {
-		slot[0].indirect_target = 1;
+	/* indirect jumps to the replaced insn land on p->target */
+	if (last->indirect_target && p->target != p->len - 1) {
+		slot[p->target].indirect_target = 1;
 		last->indirect_target = 0;
 	}
 }
@@ -533,8 +557,9 @@ static void patch_list_del_subprogs(struct bpf_verifier_env *env,
 /*
  * Apply all queued patches and removals in one go. Everything that names an
  * insn of the old image follows it to the new one. A patched insn is named by
- * the first insn of its patch, a removed insn by the next insn that stays,
- * like with bpf_patch_insn_data().
+ * the first insn of its patch, or the insn itself if insns were inserted in
+ * front of it, a removed insn by the next insn that stays, like with
+ * bpf_patch_insn_data().
  */
 int bpf_patch_list_commit(struct bpf_verifier_env *env)
 {
@@ -649,7 +674,7 @@ int bpf_patch_list_commit(struct bpf_verifier_env *env)
 
 	for (i = 0; i < env->insn_array_map_cnt; i++)
 		bpf_insn_array_remap(env->insn_array_maps[i], img.new_off,
-				     img.cnt, img.grow);
+				     img.new_tgt, img.cnt, img.grow);
 
 	err = 0;
 out:
