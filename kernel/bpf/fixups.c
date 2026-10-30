@@ -382,7 +382,8 @@ struct bpf_prog *bpf_patch_insn_data(struct bpf_verifier_env *env, u32 off,
 
 /*
  * Queue the replacement of insn 'off' by 'patch[0..len)' until
- * bpf_patch_list_commit(), see __bpf_patch_list_add().
+ * bpf_patch_list_commit(), see __bpf_patch_list_add(). Replacing one insn by
+ * one moves nothing and is done right away.
  */
 struct bpf_insn *bpf_patch_list_add(struct bpf_verifier_env *env, u32 off,
 				    const struct bpf_insn *patch, u32 len)
@@ -396,6 +397,13 @@ struct bpf_insn *bpf_patch_list_add(struct bpf_verifier_env *env, u32 off,
 			    (pl->cnt && off <= pl->patches[pl->cnt - 1].off),
 			    env, "insn %u patched out of order", off))
 		return ERR_PTR(-EFAULT);
+
+	if (len == 1) {
+		env->prog->insnsi[off] = *patch;
+		adjust_insn_aux_data(env, env->prog, off, 1, NULL,
+				     BPF_PATCH_KEEP_TARGET);
+		return &env->prog->insnsi[off];
+	}
 
 	return __bpf_patch_list_add(pl, env->prog, off, patch, len);
 }
