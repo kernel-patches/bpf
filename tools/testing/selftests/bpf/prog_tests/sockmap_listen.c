@@ -646,6 +646,82 @@ close:
 	xclose(s);
 }
 
+struct update_delete_ctx {
+	unsigned int nr_iter;
+	unsigned int done;
+	int mapfd;
+};
+
+static void *delete_elem_thread(void *arg)
+{
+	struct update_delete_ctx *ctx = arg;
+	unsigned int i;
+
+	for (i = 0; i < ctx->nr_iter; i++) {
+		/* Expecting EINVAL (sockmap) or ENOENT (sockhash) when the
+		 * entry is already gone.
+		 */
+		if (bpf_map_delete_elem(ctx->mapfd, &(u32){0}) &&
+		    errno != EINVAL && errno != ENOENT) {
+			FAIL_ERRNO("map_delete");
+			break;
+		}
+	}
+
+	WRITE_ONCE(ctx->done, 1);
+	return NULL;
+}
+
+/* One thread keeps inserting a socket into a sockmap with an attached
+ * verdict program while another thread deletes the same map entry.
+ */
+static void test_update_delete_with_prog(struct test_sockmap_listen *skel,
+					 int family, int sotype, int mapfd)
+{
+	struct update_delete_ctx ctx = { 0 };
+	int err, s, verdict;
+	pthread_t t;
+	u64 value;
+
+	verdict = bpf_program__fd(skel->progs.prog_skb_verdict);
+	err = xbpf_prog_attach(verdict, mapfd, BPF_SK_SKB_VERDICT, 0);
+	if (err)
+		return;
+
+	s = xsocket(family, sotype, 0);
+	if (s < 0)
+		goto detach;
+
+	err = xlisten(s, 1);
+	if (err)
+		goto close;
+
+	ctx.mapfd = mapfd;
+	ctx.nr_iter = 10000;
+
+	err = xpthread_create(&t, NULL, delete_elem_thread, &ctx);
+	if (err)
+		goto close;
+
+	value = s;
+	while (!READ_ONCE(ctx.done)) {
+		/* Expecting EBUSY while a deleted socket's psock still
+		 * holds the verdict program.
+		 */
+		err = bpf_map_update_elem(mapfd, &(u32){0}, &value, BPF_ANY);
+		if (err && errno != EBUSY) {
+			FAIL_ERRNO("map_update");
+			break;
+		}
+	}
+
+	xpthread_join(t, NULL);
+close:
+	xclose(s);
+detach:
+	xbpf_prog_detach2(verdict, mapfd, BPF_SK_SKB_VERDICT);
+}
+
 static void zero_verdict_count(int mapfd)
 {
 	unsigned int zero = 0;
@@ -1289,6 +1365,7 @@ static void test_ops(struct test_sockmap_listen *skel, struct bpf_map *map,
 		TEST(test_destroy_orphan_child, SOCK_STREAM),
 		TEST(test_syn_recv_insert_delete, SOCK_STREAM),
 		TEST(test_race_insert_listen, SOCK_STREAM),
+		TEST(test_update_delete_with_prog, SOCK_STREAM),
 		/* child clone */
 		TEST(test_clone_after_delete, SOCK_STREAM),
 		TEST(test_accept_after_delete, SOCK_STREAM),
