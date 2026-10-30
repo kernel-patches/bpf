@@ -26,6 +26,7 @@
 
 #define KFUNC_DECL_TAG		"bpf_kfunc"
 #define FASTCALL_DECL_TAG	"bpf_fastcall"
+#define LEGACY_ARENA_TAG	"address_space(1)"
 
 #define MAX_ROOT_IDS		16
 #define MAX_BTF_FILES		64
@@ -1092,12 +1093,46 @@ static struct sort_datum *sort_btf_c(const struct btf *btf)
 	return datums;
 }
 
-static int dump_btf_c(const struct btf *btf,
+/*
+ * Older kernel BTF encodes kflagged arena type tags as "address_space(1)",
+ * which btf_dump prints as is. Rewrite them to the complete specifier.
+ */
+static int btf_c_fixup_legacy_arena_tags(struct btf *btf)
+{
+	__u32 i, cnt = btf__type_cnt(btf);
+	int off;
+
+	if (btf__base_btf(btf) ||
+	    btf__find_by_name_kind(btf, LEGACY_ARENA_TAG, BTF_KIND_TYPE_TAG) < 0)
+		return 0;
+
+	off = btf__add_str(btf, "__attribute__((address_space(1)))");
+	if (off < 0) {
+		p_err("failed to rewrite legacy arena type tags: %s", strerror(-off));
+		return off;
+	}
+
+	for (i = 1; i < cnt; i++) {
+		struct btf_type *t = (struct btf_type *)btf__type_by_id(btf, i);
+
+		if (btf_is_type_tag(t) && btf_kflag(t) &&
+		    !strcmp(btf__name_by_offset(btf, t->name_off), LEGACY_ARENA_TAG))
+			t->name_off = off;
+	}
+
+	return 0;
+}
+
+static int dump_btf_c(struct btf *btf,
 		      __u32 *root_type_ids, int root_type_cnt, bool sort_dump)
 {
 	struct sort_datum *datums = NULL;
 	struct btf_dump *d;
 	int err = 0, i;
+
+	err = btf_c_fixup_legacy_arena_tags(btf);
+	if (err)
+		return err;
 
 	d = btf_dump__new(btf, btf_dump_printf, NULL, NULL);
 	if (!d)
