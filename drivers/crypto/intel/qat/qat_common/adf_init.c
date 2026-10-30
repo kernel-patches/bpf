@@ -393,12 +393,8 @@ static void adf_dev_shutdown(struct adf_accel_dev *accel_dev)
 	}
 
 	if (test_bit(ADF_STATUS_AE_INITIALISED, &accel_dev->status)) {
-		if (adf_ae_shutdown(accel_dev))
-			dev_err(&GET_DEV(accel_dev),
-				"Failed to shutdown Accel Engine\n");
-		else
-			clear_bit(ADF_STATUS_AE_INITIALISED,
-				  &accel_dev->status);
+		adf_ae_shutdown(accel_dev);
+		clear_bit(ADF_STATUS_AE_INITIALISED, &accel_dev->status);
 	}
 
 	mutex_lock(&service_lock);

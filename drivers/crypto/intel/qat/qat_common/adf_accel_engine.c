@@ -204,16 +204,15 @@ int adf_ae_init(struct adf_accel_dev *accel_dev)
 	return 0;
 }
 
-int adf_ae_shutdown(struct adf_accel_dev *accel_dev)
+void adf_ae_shutdown(struct adf_accel_dev *accel_dev)
 {
 	struct adf_fw_loader_data *loader_data = accel_dev->fw_loader;
 	struct adf_hw_device_data *hw_device = accel_dev->hw_device;
 
 	if (!hw_device->fw_name)
-		return 0;
+		return;
 
 	qat_hal_deinit(loader_data->fw_loader);
 	kfree(accel_dev->fw_loader);
 	accel_dev->fw_loader = NULL;
-	return 0;
 }
