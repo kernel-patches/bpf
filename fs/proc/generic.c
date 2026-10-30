@@ -41,6 +41,7 @@ void pde_free(struct proc_dir_entry *pde)
 	if (pde->name != pde->inline_name)
 		kfree(pde->name);
 	kfree(pde->open);
+	kfree(pde->seq_direct);
 	kmem_cache_free(proc_dir_entry_cache, pde);
 }
 
@@ -436,19 +437,41 @@ static const struct inode_operations proc_dir_inode_operations = {
 	.setattr	= proc_setattr,
 };
 
-static void pde_set_flags(struct proc_dir_entry *pde)
+static int pde_set_flags(struct proc_dir_entry *pde)
 {
 	const struct proc_ops *proc_ops = pde->proc_ops;
 
 	if (!proc_ops)
-		return;
+		return 0;
 
 	if (proc_ops->proc_flags & PROC_ENTRY_PERMANENT)
 		pde->flags |= PROC_ENTRY_PERMANENT;
-	if (proc_ops->proc_read_iter)
-		pde->flags |= PROC_ENTRY_proc_read_iter;
-	if (proc_ops->proc_lseek)
+	if (proc_ops->proc_seq_ops) {
+		pde->seq_ops = proc_ops->proc_seq_ops;
+		pde->state_size = proc_ops->proc_state_size;
+		pde->flags |= PROC_ENTRY_proc_seq_ops;
+	} else if (proc_ops->proc_show) {
+		pde->single_show = proc_ops->proc_show;
+		pde->flags |= PROC_ENTRY_proc_show;
+	}
+	if (pde_is_seq_file(pde)) {
+		/* procfs reads and seeks through the seq_file itself */
+		if (WARN_ON_ONCE(proc_ops->proc_read || proc_ops->proc_read_iter ||
+				 proc_ops->proc_lseek))
+			return -EINVAL;
+		/* and frees it, see pde_seq_release() */
+		if (WARN_ON_ONCE(proc_ops->proc_release == seq_release ||
+				 proc_ops->proc_release == seq_release_private ||
+				 proc_ops->proc_release == single_release))
+			return -EINVAL;
 		pde->flags |= PROC_ENTRY_proc_lseek;
+	} else {
+		if (proc_ops->proc_read_iter)
+			pde->flags |= PROC_ENTRY_proc_read_iter;
+		if (proc_ops->proc_lseek)
+			pde->flags |= PROC_ENTRY_proc_lseek;
+	}
+	return 0;
 }
 
 /*
@@ -463,6 +486,32 @@ static bool pde_needs_open_node(const struct proc_dir_entry *pde)
 	return pde->proc_ops->proc_release;
 }
 
+/*
+ * The seq_operations of a seq_file entry: procfs's start and stop around the
+ * entry's own next and show, see pde_seq_start().
+ */
+static int pde_init_seq_direct(struct proc_dir_entry *pde)
+{
+	struct seq_operations *ops;
+
+	if (!pde_is_seq_file(pde))
+		return 0;
+	ops = kmalloc_obj(*ops);
+	if (!ops)
+		return -ENOMEM;
+	ops->start = pde_seq_start;
+	ops->stop = pde_seq_stop;
+	if (pde_has_proc_seq_ops(pde)) {
+		ops->next = pde->seq_ops->next;
+		ops->show = pde->seq_ops->show;
+	} else {
+		ops->next = pde_single_next;
+		ops->show = pde->single_show;
+	}
+	pde->seq_direct = ops;
+	return 0;
+}
+
 /* returns the registered entry, or frees dp and returns NULL on failure */
 struct proc_dir_entry *proc_register(struct proc_dir_entry *dir,
 		struct proc_dir_entry *dp)
@@ -470,14 +519,16 @@ struct proc_dir_entry *proc_register(struct proc_dir_entry *dir,
 	if (proc_alloc_inum(&dp->low_ino))
 		goto out_free_entry;
 
-	if (!S_ISDIR(dp->mode))
-		pde_set_flags(dp);
+	if (!S_ISDIR(dp->mode) && pde_set_flags(dp))
+		goto out_free_inum;
 	if (pde_needs_open_node(dp)) {
 		dp->open = kzalloc_obj(*dp->open);
 		if (!dp->open)
 			goto out_free_inum;
 		INIT_LIST_HEAD(&dp->open->files);
 	}
+	if (pde_init_seq_direct(dp))
+		goto out_free_inum;
 
 	write_lock(&proc_subdir_lock);
 	dp->parent = dir;

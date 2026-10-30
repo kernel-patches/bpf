@@ -46,6 +46,8 @@ struct proc_dir_entry {
 	};
 	/* the open files procfs has to know, see struct pde_open_node */
 	struct pde_open_node *open;
+	/* the seq_operations of the seq_file, see pde_init_seq_direct() */
+	struct seq_operations *seq_direct;
 	proc_write_t write;
 	void *data;
 	unsigned int state_size;
@@ -95,6 +97,22 @@ static inline bool pde_has_proc_read_iter(const struct proc_dir_entry *pde)
 static inline bool pde_has_proc_lseek(const struct proc_dir_entry *pde)
 {
 	return pde->flags & PROC_ENTRY_proc_lseek;
+}
+
+static inline bool pde_has_proc_seq_ops(const struct proc_dir_entry *pde)
+{
+	return pde->flags & PROC_ENTRY_proc_seq_ops;
+}
+
+static inline bool pde_has_proc_show(const struct proc_dir_entry *pde)
+{
+	return pde->flags & PROC_ENTRY_proc_show;
+}
+
+/* procfs owns the seq_file, see pde_seq_start() */
+static inline bool pde_is_seq_file(const struct proc_dir_entry *pde)
+{
+	return pde_has_proc_seq_ops(pde) || pde_has_proc_show(pde);
 }
 
 extern struct kmem_cache *proc_dir_entry_cache;
@@ -351,6 +369,9 @@ void proc_init_kmemcache(void);
 void proc_invalidate_siblings_dcache(struct hlist_head *inodes, spinlock_t *lock);
 void set_proc_pid_nlink(void);
 extern struct inode *proc_get_inode(struct super_block *, struct proc_dir_entry *);
+void *pde_seq_start(struct seq_file *m, loff_t *pos);
+void pde_seq_stop(struct seq_file *m, void *v);
+void *pde_single_next(struct seq_file *m, void *v, loff_t *pos);
 extern void proc_entry_rundown(struct proc_dir_entry *);
 
 /*
