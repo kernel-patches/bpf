@@ -4656,6 +4656,11 @@ static int check_stack_arg_read(struct bpf_verifier_env *env, struct bpf_func_st
 		return -EACCES;
 	}
 
+	if (vstate->curframe == 0 || state->in_callback_fn) {
+		verbose(env, "stack arg read from a callback frame\n");
+		return -EINVAL;
+	}
+
 	caller = vstate->frame[vstate->curframe - 1];
 	arg = bpf_get_spilled_stack_arg(spi, caller);
 	if (!arg) {
