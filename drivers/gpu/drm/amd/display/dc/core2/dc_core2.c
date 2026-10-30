@@ -60,7 +60,8 @@ static struct pipe_ctx *core2_otg_master(struct dc_state *state)
 	if (!state->stream_count)
 		return NULL;
 	for (i = 0; i < MAX_PIPES; i++) {
-		if (state->res_ctx.pipe_ctx[i].stream == state->streams[0])
+		if (state->res_ctx.pipe_ctx[i].stream == state->streams[0] &&
+				!state->res_ctx.pipe_ctx[i].top_pipe)
 			return &state->res_ctx.pipe_ctx[i];
 	}
 	return NULL;
@@ -159,8 +160,10 @@ static void core2_commit_enable_done(struct pipe_ctx *pipe)
 static void core2_commit_disable_done(struct dc *dc, struct pipe_ctx *pipe)
 {
 	struct dc_link *link = pipe->stream->link;
+	struct pipe_ctx *dpp_pipe;
 
-	pipe->plane_res.hubp->power_gated = true;
+	for (dpp_pipe = pipe; dpp_pipe; dpp_pipe = dpp_pipe->bottom_pipe)
+		dpp_pipe->plane_res.hubp->power_gated = true;
 	link->link_status.link_active = false;
 	link->phy_state.symclk_state = SYMCLK_OFF_TX_OFF;
 	pipe->stream->timing_adjust_pending = true;
@@ -295,8 +298,8 @@ static bool core2_update_state_supported(
 	if (scratch->update_type != UPDATE_TYPE_FULL ||
 			scratch->flow != UPDATE_V3_FLOW_NEW_CONTEXT_SEAMLESS)
 		return false;
-	/* The full-update builder adds or keeps one plane. */
-	if (scratch->surface_count != 1)
+	/* The full-update builder adds one or two planes, or keeps one. */
+	if (scratch->surface_count != 1 && scratch->surface_count != 2)
 		return false;
 	if (!core2_stream_update_supported(scratch->stream_update))
 		return false;
@@ -311,22 +314,24 @@ static bool core2_update_state_supported(
  */
 static void core2_update_done(struct dc *dc, struct dc_state *context)
 {
-	struct pipe_ctx *pipe = core2_otg_master(context);
+	struct pipe_ctx *pipe;
 	struct dc_plane_state *plane;
 	struct hubp *hubp;
 
-	if (!pipe || !pipe->plane_state || !pipe->plane_res.hubp ||
-			!pipe->stream_res.opp)
-		return;
-	plane = pipe->plane_state;
-	hubp = pipe->plane_res.hubp;
+	for (pipe = core2_otg_master(context); pipe; pipe = pipe->bottom_pipe) {
+		if (!pipe->plane_state || !pipe->plane_res.hubp ||
+				!pipe->stream_res.opp)
+			return;
+		plane = pipe->plane_state;
+		hubp = pipe->plane_res.hubp;
 
-	vm_helper_mark_vmid_used(dc->vm_helper, plane->address.vmid,
-			(uint8_t)hubp->inst);
-	plane->status.requested_address = plane->address;
-	hubp->opp_id = pipe->stream_res.opp->inst;
-	hubp->mpcc_id = hubp->inst;
-	hubp->power_gated = false;
+		vm_helper_mark_vmid_used(dc->vm_helper, plane->address.vmid,
+				(uint8_t)hubp->inst);
+		plane->status.requested_address = plane->address;
+		hubp->opp_id = pipe->stream_res.opp->inst;
+		hubp->mpcc_id = hubp->inst;
+		hubp->power_gated = false;
+	}
 	core2_commit_prepare_done(dc, context);
 }
 
@@ -339,14 +344,15 @@ static void core2_update_state_execute(
 
 	/*
 	 * The values DC1 computes into the context before it programs the
-	 * plane. The builder reads them from the context.
+	 * planes. The builder reads them from the context.
 	 */
 	if (!pipe || !pipe->plane_state)
 		return;
 	if (dc->res_pool->funcs->prepare_mcache_programming)
 		dc->res_pool->funcs->prepare_mcache_programming(dc, context);
-	pipe->plane_res.scl_data.lb_params.alpha_en =
-			pipe->plane_state->per_pixel_alpha;
+	for (; pipe; pipe = pipe->bottom_pipe)
+		pipe->plane_res.scl_data.lb_params.alpha_en =
+				pipe->plane_state->per_pixel_alpha;
 
 	if (core2_build_and_run(dc, DCN_DECL_SEAMLESS_UPDATE, context) != DC_OK) {
 		ASSERT(false);
