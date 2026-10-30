@@ -359,12 +359,12 @@ static int cifs_debug_dirs_proc_show(struct seq_file *m, void *v)
 #ifdef CONFIG_CIFS_DEBUG
 
 /* Drop all cached directory entries across all CIFS mounts. */
-static ssize_t cifs_debug_dirs_proc_write(struct file *file, const char __user *buffer,
+static ssize_t cifs_debug_dirs_proc_write(struct file *file, char *buffer,
 					  size_t count, loff_t *ppos)
 {
 	int rc, v;
 
-	rc = kstrtoint_from_user(buffer, count, 10, &v);
+	rc = kstrtoint(buffer, 10, &v);
 	if (rc)
 		return rc;
 
@@ -390,7 +390,7 @@ static ssize_t cifs_debug_dirs_proc_write(struct file *file, const char __user *
 
 static const struct proc_ops cifs_debug_dirs_proc_ops = {
 	.proc_show	= cifs_debug_dirs_proc_show,
-	.proc_write	= cifs_debug_dirs_proc_write,
+	.proc_write_buf	= cifs_debug_dirs_proc_write,
 };
 #endif /* CONFIG_CIFS_DEBUG */
 
@@ -713,8 +713,8 @@ static int cifs_debug_data_proc_show(struct seq_file *m, void *v)
 	return 0;
 }
 
-static ssize_t cifs_stats_proc_write(struct file *file,
-		const char __user *buffer, size_t count, loff_t *ppos)
+static ssize_t cifs_stats_proc_write(struct file *file, char *buffer,
+		size_t count, loff_t *ppos)
 {
 	bool bv;
 	int rc;
@@ -722,7 +722,7 @@ static ssize_t cifs_stats_proc_write(struct file *file,
 	struct cifs_ses *ses;
 	struct cifs_tcon *tcon;
 
-	rc = kstrtobool_from_user(buffer, count, &bv);
+	rc = kstrtobool(buffer, &bv);
 	if (rc == 0) {
 #ifdef CONFIG_CIFS_STATS2
 		int i;
@@ -854,16 +854,16 @@ static int cifs_stats_proc_show(struct seq_file *m, void *v)
 
 static const struct proc_ops cifs_stats_proc_ops = {
 	.proc_show	= cifs_stats_proc_show,
-	.proc_write	= cifs_stats_proc_write,
+	.proc_write_buf	= cifs_stats_proc_write,
 };
 
 #ifdef CONFIG_CIFS_SMB_DIRECT
 #define PROC_FILE_DEFINE(name) \
-static ssize_t name##_write(struct file *file, const char __user *buffer, \
+static ssize_t name##_write(struct file *file, char *buffer, \
 	size_t count, loff_t *ppos) \
 { \
 	int rc; \
-	rc = kstrtoint_from_user(buffer, count, 10, &name); \
+	rc = kstrtoint(buffer, 10, &name); \
 	if (rc) \
 		return rc; \
 	return count; \
@@ -876,7 +876,7 @@ static int name##_proc_show(struct seq_file *m, void *v) \
 \
 static const struct proc_ops cifs_##name##_proc_fops = { \
 	.proc_show	= name##_proc_show, \
-	.proc_write	= name##_write, \
+	.proc_write_buf	= name##_write, \
 }
 
 PROC_FILE_DEFINE(rdma_readwrite_threshold);
@@ -990,16 +990,12 @@ static int cifsFYI_proc_show(struct seq_file *m, void *v)
 	return 0;
 }
 
-static ssize_t cifsFYI_proc_write(struct file *file, const char __user *buffer,
+static ssize_t cifsFYI_proc_write(struct file *file, char *buffer,
 		size_t count, loff_t *ppos)
 {
-	char c[2] = { '\0' };
+	char c[2] = { buffer[0] };
 	bool bv;
-	int rc;
 
-	rc = get_user(c[0], buffer);
-	if (rc)
-		return rc;
 	if (kstrtobool(c, &bv) == 0)
 		cifsFYI = bv;
 	else if ((c[0] > '1') && (c[0] <= '9'))
@@ -1012,7 +1008,7 @@ static ssize_t cifsFYI_proc_write(struct file *file, const char __user *buffer,
 
 static const struct proc_ops cifsFYI_proc_ops = {
 	.proc_show	= cifsFYI_proc_show,
-	.proc_write	= cifsFYI_proc_write,
+	.proc_write_buf	= cifsFYI_proc_write,
 };
 
 static int cifs_linux_ext_proc_show(struct seq_file *m, void *v)
@@ -1021,12 +1017,12 @@ static int cifs_linux_ext_proc_show(struct seq_file *m, void *v)
 	return 0;
 }
 
-static ssize_t cifs_linux_ext_proc_write(struct file *file,
-		const char __user *buffer, size_t count, loff_t *ppos)
+static ssize_t cifs_linux_ext_proc_write(struct file *file, char *buffer,
+		size_t count, loff_t *ppos)
 {
 	int rc;
 
-	rc = kstrtobool_from_user(buffer, count, &linuxExtEnabled);
+	rc = kstrtobool(buffer, &linuxExtEnabled);
 	if (rc)
 		return rc;
 
@@ -1035,7 +1031,7 @@ static ssize_t cifs_linux_ext_proc_write(struct file *file,
 
 static const struct proc_ops cifs_linux_ext_proc_ops = {
 	.proc_show	= cifs_linux_ext_proc_show,
-	.proc_write	= cifs_linux_ext_proc_write,
+	.proc_write_buf	= cifs_linux_ext_proc_write,
 };
 
 static int cifs_lookup_cache_proc_show(struct seq_file *m, void *v)
@@ -1044,12 +1040,12 @@ static int cifs_lookup_cache_proc_show(struct seq_file *m, void *v)
 	return 0;
 }
 
-static ssize_t cifs_lookup_cache_proc_write(struct file *file,
-		const char __user *buffer, size_t count, loff_t *ppos)
+static ssize_t cifs_lookup_cache_proc_write(struct file *file, char *buffer,
+		size_t count, loff_t *ppos)
 {
 	int rc;
 
-	rc = kstrtobool_from_user(buffer, count, &lookupCacheEnabled);
+	rc = kstrtobool(buffer, &lookupCacheEnabled);
 	if (rc)
 		return rc;
 
@@ -1058,7 +1054,7 @@ static ssize_t cifs_lookup_cache_proc_write(struct file *file,
 
 static const struct proc_ops cifs_lookup_cache_proc_ops = {
 	.proc_show	= cifs_lookup_cache_proc_show,
-	.proc_write	= cifs_lookup_cache_proc_write,
+	.proc_write_buf	= cifs_lookup_cache_proc_write,
 };
 
 static int traceSMB_proc_show(struct seq_file *m, void *v)
@@ -1067,12 +1063,12 @@ static int traceSMB_proc_show(struct seq_file *m, void *v)
 	return 0;
 }
 
-static ssize_t traceSMB_proc_write(struct file *file, const char __user *buffer,
+static ssize_t traceSMB_proc_write(struct file *file, char *buffer,
 		size_t count, loff_t *ppos)
 {
 	int rc;
 
-	rc = kstrtobool_from_user(buffer, count, &traceSMB);
+	rc = kstrtobool(buffer, &traceSMB);
 	if (rc)
 		return rc;
 
@@ -1081,7 +1077,7 @@ static ssize_t traceSMB_proc_write(struct file *file, const char __user *buffer,
 
 static const struct proc_ops traceSMB_proc_ops = {
 	.proc_show	= traceSMB_proc_show,
-	.proc_write	= traceSMB_proc_write,
+	.proc_write_buf	= traceSMB_proc_write,
 };
 
 static int cifs_security_flags_proc_show(struct seq_file *m, void *v)
@@ -1111,20 +1107,14 @@ cifs_security_flags_handle_must_flags(unsigned int *flags)
 }
 
 static ssize_t cifs_security_flags_proc_write(struct file *file,
-		const char __user *buffer, size_t count, loff_t *ppos)
+		char *flags_string, size_t count, loff_t *ppos)
 {
 	int rc;
 	unsigned int flags;
-	char flags_string[12];
 	bool bv;
 
 	if ((count < 1) || (count > 11))
 		return -EINVAL;
-
-	memset(flags_string, 0, sizeof(flags_string));
-
-	if (copy_from_user(flags_string, buffer, count))
-		return -EFAULT;
 
 	if (count < 3) {
 		/* single char or single char followed by null */
@@ -1176,7 +1166,7 @@ static ssize_t cifs_security_flags_proc_write(struct file *file,
 
 static const struct proc_ops cifs_security_flags_proc_ops = {
 	.proc_show	= cifs_security_flags_proc_show,
-	.proc_write	= cifs_security_flags_proc_write,
+	.proc_write_buf	= cifs_security_flags_proc_write,
 };
 
 /* To make it easier to debug, can help to show mount params */
