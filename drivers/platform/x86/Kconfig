@@ -303,6 +303,7 @@ config WIRELESS_HOTKEY
 	tristate "Wireless hotkey button"
 	depends on ACPI
 	depends on INPUT
+	depends on LEDS_CLASS || !LEDS_CLASS
 	help
 	 This driver provides supports for the wireless buttons found on some AMD,
 	 HP, & Xiaomi laptops.
