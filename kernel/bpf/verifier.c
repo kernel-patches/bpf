@@ -320,7 +320,6 @@ static const char *btf_type_name(const struct btf *btf, u32 id)
 }
 
 static DEFINE_MUTEX(bpf_verifier_lock);
-static DEFINE_MUTEX(btf_vmlinux_lock);
 static DEFINE_MUTEX(bpf_percpu_ma_lock);
 
 __printf(2, 3) static void verbose(void *private_data, const char *fmt, ...)
@@ -23225,36 +23224,6 @@ int bpf_check_attach_btf_id_multi(struct btf *btf, struct bpf_prog *prog, u32 bt
 	}
 	tgt_info->tgt_addr = addr;
 	return 0;
-}
-
-struct btf *bpf_get_btf_vmlinux(void)
-{
-	/* Pairs with the smp_store_release() on the parse path below. */
-	struct btf *btf = smp_load_acquire(&btf_vmlinux);
-
-	if (!btf && IS_ENABLED(CONFIG_DEBUG_INFO_BTF)) {
-		mutex_lock(&btf_vmlinux_lock);
-		btf = btf_vmlinux;
-		if (!btf) {
-			btf = btf_parse_vmlinux();
-			/*
-			 * Order the parsed BTF contents and the globals the
-			 * parse populated (e.g. bpf_ctx_convert.t) before
-			 * the pointer publication. Pairs with the acquire
-			 * on the lockless fast path above.
-			 */
-			smp_store_release(&btf_vmlinux, btf);
-		}
-		mutex_unlock(&btf_vmlinux_lock);
-	}
-	return btf;
-}
-
-/* The vmlinux BTF if it is parsed already: for callers that cannot sleep */
-struct btf *bpf_peek_btf_vmlinux(void)
-{
-	/* Pairs with the smp_store_release() in bpf_get_btf_vmlinux() */
-	return smp_load_acquire(&btf_vmlinux);
 }
 
 /*
