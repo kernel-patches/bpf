@@ -7745,7 +7745,7 @@ struct vlan_type_depth __vlan_get_protocol_offset(const struct sk_buff *skb,
 
 		vh = skb_header_pointer(skb, mac_offset + vlan_depth,
 					sizeof(vhdr), &vhdr);
-		if (unlikely(!vh || !--parse_depth))
+		if (unlikely(!vh || !parse_depth--))
 			return (struct vlan_type_depth) { 0 };
 
 		type = vh->h_vlan_encapsulated_proto;
