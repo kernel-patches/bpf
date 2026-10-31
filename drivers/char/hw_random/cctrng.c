@@ -531,9 +531,8 @@ static int cctrng_probe(struct platform_device *pdev)
 	/* registration of the hwrng device */
 	rc = devm_hwrng_register(dev, &drvdata->rng);
 	if (rc) {
-		dev_err(dev, "Could not register hwrng device.\n");
-		cc_trng_pm_fini(drvdata);
-		return rc;
+		pm_runtime_put_noidle(dev);
+		return dev_err_probe(dev, rc, "Could not register hwrng device\n");
 	}
 
 	/* trigger HW to start generate data */
