@@ -6970,8 +6970,9 @@ __u32 btf_relocate_id(const struct btf *btf, __u32 id)
 
 #ifdef CONFIG_DEBUG_INFO_BTF_MODULES
 
+/* @data is a copy owned by the returned BTF; the caller frees it on error */
 static struct btf *btf_parse_split(struct btf_verifier_env *env,
-				   const char *name, const void *data,
+				   const char *name, void *data,
 				   unsigned int data_size, struct btf *base_btf)
 {
 	struct btf *btf;
@@ -6987,11 +6988,7 @@ static struct btf *btf_parse_split(struct btf_verifier_env *env,
 	btf->named_start_id = 0;
 	strscpy(btf->name, name);
 
-	btf->data = kvmemdup(data, data_size, GFP_KERNEL | __GFP_NOWARN);
-	if (!btf->data) {
-		err = -ENOMEM;
-		goto errout;
-	}
+	btf->data = data;
 	btf->data_size = data_size;
 
 	err = btf_parse_hdr(env);
@@ -7015,6 +7012,7 @@ static struct btf *btf_parse_split(struct btf_verifier_env *env,
 	return btf;
 
 errout:
+	btf->data = NULL;
 	btf_free(btf);
 	return ERR_PTR(err);
 }
@@ -7086,10 +7084,16 @@ static int btf_rebase_inline(struct btf *inline_btf,
 	return 0;
 }
 
-static struct btf *btf_parse_module(const char *module_name, const void *data,
+/*
+ * @data and @inline_data are copies made by the caller.  On success the
+ * returned BTF owns @data, and *@relocated_inline_data is @inline_data,
+ * relocated in place, unless the inline BTF is invalid.  The caller frees
+ * the copies this does not take.
+ */
+static struct btf *btf_parse_module(const char *module_name, void *data,
 				    unsigned int data_size, void *base_data,
 				    unsigned int base_data_size,
-				    const void *inline_data,
+				    void *inline_data,
 				    unsigned int inline_data_size,
 				    void **relocated_inline_data)
 {
@@ -7157,6 +7161,7 @@ static struct btf *btf_parse_module(const char *module_name, const void *data,
 		if (err) {
 			pr_warn("failed to relocate module [%s] inline BTF: %d\n",
 				module_name, err);
+			inline_btf->data = NULL;
 			btf_free(inline_btf);
 		} else {
 			*relocated_inline_data = inline_btf->data;
@@ -7180,12 +7185,16 @@ static struct btf *btf_parse_module(const char *module_name, const void *data,
 errout:
 	kvfree(module_str_map);
 	btf_verifier_env_free(env);
-	if (inline_btf)
+	if (inline_btf) {
+		inline_btf->data = NULL;
 		btf_free(inline_btf);
+	}
 	if (!IS_ERR(base_btf) && base_btf != vmlinux_btf)
 		btf_free(base_btf);
-	if (btf)
+	if (btf) {
+		btf->data = NULL;
 		btf_free(btf);
+	}
 	return ERR_PTR(err);
 }
 
@@ -9446,7 +9455,7 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 	struct module *mod = module;
 	struct bin_attribute *attr;
 	struct btf *btf;
-	void *inline_data = NULL, *relocated_inline_data = NULL;
+	void *data, *inline_data = NULL, *relocated_inline_data = NULL;
 	unsigned int inline_data_size = 0;
 	int err = 0;
 
@@ -9474,11 +9483,23 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 			err = -ENOMEM;
 			goto out;
 		}
-		btf = btf_parse_module(mod->name, mod->btf_data, mod->btf_data_size,
+		data = kvmemdup(mod->btf_data, mod->btf_data_size, GFP_KERNEL | __GFP_NOWARN);
+		if (inline_data) {
+			inline_data = kvmemdup(inline_data, inline_data_size,
+					       GFP_KERNEL | __GFP_NOWARN);
+			if (!inline_data)
+				pr_warn("failed to validate module [%s] inline BTF: %d\n",
+					mod->name, -ENOMEM);
+		}
+		btf = !data ? ERR_PTR(-ENOMEM) :
+		      btf_parse_module(mod->name, data, mod->btf_data_size,
 				       mod->btf_base_data, mod->btf_base_data_size,
-				       inline_data, inline_data_size,
+				       inline_data, inline_data ? inline_data_size : 0,
 				       &relocated_inline_data);
+		if (inline_data != relocated_inline_data)
+			kvfree(inline_data);
 		if (IS_ERR(btf)) {
+			kvfree(data);
 			kfree(btf_mod);
 			if (!IS_ENABLED(CONFIG_MODULE_ALLOW_BTF_MISMATCH)) {
 				pr_warn("failed to validate module [%s] BTF: %ld\n",
