@@ -898,6 +898,18 @@ int efx_siena_realloc_channels(struct efx_nic *efx, u32 rxq_entries,
 	efx_siena_stop_all(efx);
 	efx_soft_disable_interrupts(efx);
 
+#ifdef CONFIG_RFS_ACCEL
+	/* efx_copy_channel() copies the aRFS state without rps_mutex, so
+	 * all aRFS work must be quiescent before the channels are copied,
+	 * not just before the old ones are freed.  The detached net_device
+	 * rejects new insertion requests, and NAPI is stopped so efx_poll()
+	 * cannot re-arm filter_work.
+	 */
+	efx_siena_filter_rfs_flush(efx);
+	efx_for_each_channel(channel, efx)
+		cancel_delayed_work_sync(&channel->filter_work);
+#endif
+
 	/* Clone channels (where possible) */
 	memset(other_channel, 0, sizeof(other_channel));
 	for (i = 0; i < efx->n_channels; i++) {

@@ -1022,6 +1022,7 @@ int efx_siena_init_struct(struct efx_nic *efx,
 #ifdef CONFIG_RFS_ACCEL
 	mutex_init(&efx->rps_mutex);
 	spin_lock_init(&efx->rps_hash_lock);
+	efx_siena_filter_rfs_init(efx);
 	/* Failure to allocate is not fatal, but may degrade ARFS performance */
 	efx->rps_hash_table = kzalloc_objs(*efx->rps_hash_table,
 					   EFX_ARFS_HASH_TABLE_SIZE);
