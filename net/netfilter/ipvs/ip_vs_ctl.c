@@ -1749,6 +1749,15 @@ static void ip_vs_dest_trash_expire(struct timer_list *t)
 	spin_unlock(&ipvs->dest_trash_lock);
 }
 
+/* Convert seconds without overflowing or exceeding a safe jiffy delay. */
+static unsigned int ip_vs_svc_timeout(unsigned int timeout)
+{
+	unsigned long max_secs;
+
+	max_secs = min_t(unsigned long, UINT_MAX, MAX_JIFFY_OFFSET) / HZ;
+	return min_t(unsigned long, timeout, max_secs) * HZ;
+}
+
 /*
  *	Add a service into the service hash table
  */
@@ -1864,7 +1873,7 @@ ip_vs_add_service(struct netns_ipvs *ipvs, struct ip_vs_service_user_kern *u,
 	svc->port = u->port;
 	svc->fwmark = u->fwmark;
 	svc->flags = u->flags & ~IP_VS_SVC_F_HASHED;
-	svc->timeout = u->timeout * HZ;
+	svc->timeout = ip_vs_svc_timeout(u->timeout);
 	svc->netmask = u->netmask;
 	svc->ipvs = ipvs;
 
@@ -2031,7 +2040,7 @@ ip_vs_edit_service(struct ip_vs_service *svc, struct ip_vs_service_user_kern *u)
 	 * Set the flags and timeout value
 	 */
 	svc->flags = u->flags | IP_VS_SVC_F_HASHED;
-	svc->timeout = u->timeout * HZ;
+	svc->timeout = ip_vs_svc_timeout(u->timeout);
 	svc->netmask = u->netmask;
 
 	old_pe = rcu_dereference_protected(svc->pe, 1);
@@ -3064,9 +3073,9 @@ static int ip_vs_info_seq_show(struct seq_file *seq, void *v)
 		}
 
 		if (svc->flags & IP_VS_SVC_F_PERSISTENT)
-			seq_printf(seq, "persistent %d %08X\n",
-				svc->timeout,
-				ntohl(svc->netmask));
+			seq_printf(seq, "persistent %u %08X\n",
+				   svc->timeout,
+				   ntohl(svc->netmask));
 		else
 			seq_putc(seq, '\n');
 
