@@ -18,6 +18,7 @@
 #include <linux/fs.h>
 
 #include "trace.h"
+#include "trace_btf.h"
 
 static void tracing_start_function_trace(struct trace_array *tr);
 static void tracing_stop_function_trace(struct trace_array *tr);
@@ -115,6 +116,9 @@ void ftrace_destroy_function_files(struct trace_array *tr)
 
 static ftrace_func_t select_trace_function(u32 flags_val)
 {
+	if (flags_val & TRACE_FUNC_OPT_ARGS)
+		trace_btf_prepare();
+
 	switch (flags_val & TRACE_FUNC_OPT_MASK) {
 	case TRACE_FUNC_NO_OPTS:
 		return function_trace_call;

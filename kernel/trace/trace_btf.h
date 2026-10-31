@@ -23,9 +23,12 @@ const struct btf_member *btf_find_struct_member(struct btf *btf,
 #ifdef CONFIG_DEBUG_INFO_BTF
 void btf_trim_retval(unsigned long func, unsigned long *retval, bool *print_retval,
 		     int *fmt, bool hex);
+void trace_btf_prepare(void);
 #else
 static inline void btf_trim_retval(unsigned long func, unsigned long *retval,
 				   bool *print_retval, int *fmt, bool hex)
 {
 }
+
+static inline void trace_btf_prepare(void) { }
 #endif

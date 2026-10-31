@@ -474,6 +474,10 @@ static int graph_trace_init(struct trace_array *tr)
 {
 	int ret;
 
+	if (tracer_flags_is_set(tr, TRACE_GRAPH_ARGS) ||
+	    tracer_flags_is_set(tr, TRACE_GRAPH_PRINT_RETVAL))
+		trace_btf_prepare();
+
 	if (tracer_flags_is_set(tr, TRACE_GRAPH_ARGS))
 		tr->gops->entryfunc = trace_graph_entry_args;
 	else
@@ -507,10 +511,12 @@ static int ftrace_graph_trace_args(struct trace_array *tr, int set)
 {
 	trace_func_graph_ent_t entry;
 
-	if (set)
+	if (set) {
+		trace_btf_prepare();
 		entry = trace_graph_entry_args;
-	else
+	} else {
 		entry = trace_graph_entry;
+	}
 
 	/* See if there's any changes */
 	if (tr->gops->entryfunc == entry)
@@ -1746,6 +1752,11 @@ func_graph_set_flag(struct trace_array *tr, u32 old_flags, u32 bit, int set)
 
 	case TRACE_GRAPH_ARGS:
 		return ftrace_graph_trace_args(tr, set);
+
+	case TRACE_GRAPH_PRINT_RETVAL:
+		if (set)
+			trace_btf_prepare();
+		break;
 	}
 
 	return 0;

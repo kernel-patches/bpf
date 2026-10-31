@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
+#include <linux/bpf.h>
 #include <linux/btf.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
@@ -141,6 +142,34 @@ out:
 	return member;
 }
 
+static bool trace_btf_deferred;
+
+/*
+ * func-args, funcgraph-args and funcgraph-retval print arguments and return
+ * values by their BTF types, and the readers of the trace use the vmlinux
+ * BTF only if it is parsed already: parse it when such output is enabled.
+ * With CONFIG_DEBUG_INFO_BTF_LAZY that may be its first use, which should
+ * not happen in a reader that holds the trace read locks while the tracer
+ * records its work.
+ */
+void trace_btf_prepare(void)
+{
+	/* trace_options= on the command line is applied by early_trace_init() */
+	if (system_state < SYSTEM_SCHEDULING) {
+		trace_btf_deferred = true;
+		return;
+	}
+	bpf_get_btf_vmlinux();
+}
+
+static int __init trace_btf_init(void)
+{
+	if (trace_btf_deferred)
+		bpf_get_btf_vmlinux();
+	return 0;
+}
+core_initcall(trace_btf_init);
+
 void btf_trim_retval(unsigned long func, unsigned long *retval, bool *print_retval,
 			int *fmt, bool hex)
 {
@@ -151,6 +180,9 @@ void btf_trim_retval(unsigned long func, unsigned long *retval, bool *print_retv
 	bool signed_type;
 	int kind;
 
+	/* see trace_btf_prepare() */
+	if (IS_ERR_OR_NULL(bpf_peek_btf_vmlinux()))
+		return;
 	if (lookup_symbol_name(func, name))
 		return;
 

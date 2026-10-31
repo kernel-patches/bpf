@@ -23,6 +23,7 @@
 #include <linux/sort.h>
 #include <linux/slab.h>
 #include <linux/delay.h>
+#include <linux/bpf.h>
 #include <linux/btf.h>
 
 #include <kunit/visibility.h>
@@ -2281,6 +2282,9 @@ event_btf_ids_read(struct file *filp, char __user *ubuf, size_t cnt, loff_t *ppo
 	struct btf *btf;
 	char buf[128];
 	int len;
+
+	/* parse the vmlinux BTF, if this is its first use, without event_mutex */
+	bpf_get_btf_vmlinux();
 
 	/* Module unload could free call->class and ids[] mid-read. */
 	scoped_guard(mutex, &event_mutex) {
