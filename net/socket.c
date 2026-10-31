@@ -2709,7 +2709,7 @@ static int ____sys_sendmsg(struct socket *sock, struct msghdr *msg_sys,
 	    used_address->name_len == msg_sys->msg_namelen &&
 	    !memcmp(&used_address->name, msg_sys->msg_name,
 		    used_address->name_len)) {
-		err = sock_sendmsg_nosec(sock, msg_sys);
+		err = __sock_sendmsg(sock, msg_sys);
 		goto out_freectl;
 	}
 	err = __sock_sendmsg(sock, msg_sys);
