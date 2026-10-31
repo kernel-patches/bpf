@@ -159,6 +159,7 @@ static int tcp_v6_connect(struct sock *sk, struct sockaddr_unsized *uaddr,
 	struct flowi6 *fl6;
 	int addr_type;
 	int err;
+	int old_bound_dev_if = READ_ONCE(sk->sk_bound_dev_if);
 
 	if (addr_len < SIN6_LEN_RFC2133)
 		return -EINVAL;
@@ -364,6 +365,7 @@ late_failure:
 failure:
 	inet->inet_dport = 0;
 	sk->sk_route_caps = 0;
+	WRITE_ONCE(sk->sk_bound_dev_if, old_bound_dev_if);
 	return err;
 }
 
