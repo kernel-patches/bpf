@@ -666,7 +666,7 @@ ds1685_rtc_irq_handler(int irq, void *dev_id)
 	if (unlikely(!rtc))
 		return IRQ_HANDLED;
 
-	rtc_lock(rtc->dev);
+	guard(rtc_ops)(rtc->dev);
 
 	/* Ctrlb holds the interrupt-enable bits and ctrlc the flag bits. */
 	ctrlb = rtc->read(rtc, RTC_CTRL_B);
@@ -711,7 +711,6 @@ ds1685_rtc_irq_handler(int irq, void *dev_id)
 		}
 	}
 	rtc_update_irq(rtc->dev, num_irqs, events);
-	rtc_unlock(rtc->dev);
 
 	return events ? IRQ_HANDLED : IRQ_NONE;
 }
@@ -989,8 +988,8 @@ ds1685_rtc_sysfs_battery_show(struct device *dev,
 
 	ctrld = rtc->read(rtc, RTC_CTRL_D);
 
-	return sprintf(buf, "%s\n",
-			(ctrld & RTC_CTRL_D_VRT) ? "ok" : "not ok or N/A");
+	return sysfs_emit(buf, "%s\n",
+			  (ctrld & RTC_CTRL_D_VRT) ? "ok" : "not ok or N/A");
 }
 static DEVICE_ATTR(battery, S_IRUGO, ds1685_rtc_sysfs_battery_show, NULL);
 
@@ -1011,8 +1010,8 @@ ds1685_rtc_sysfs_auxbatt_show(struct device *dev,
 	ctrl4a = rtc->read(rtc, RTC_EXT_CTRL_4A);
 	ds1685_rtc_switch_to_bank0(rtc);
 
-	return sprintf(buf, "%s\n",
-			(ctrl4a & RTC_CTRL_4A_VRT2) ? "ok" : "not ok or N/A");
+	return sysfs_emit(buf, "%s\n",
+			  (ctrl4a & RTC_CTRL_4A_VRT2) ? "ok" : "not ok or N/A");
 }
 static DEVICE_ATTR(auxbatt, S_IRUGO, ds1685_rtc_sysfs_auxbatt_show, NULL);
 
@@ -1033,7 +1032,7 @@ ds1685_rtc_sysfs_serial_show(struct device *dev,
 	ds1685_rtc_get_ssn(rtc, ssn);
 	ds1685_rtc_switch_to_bank0(rtc);
 
-	return sprintf(buf, "%8phC\n", ssn);
+	return sysfs_emit(buf, "%8phC\n", ssn);
 }
 static DEVICE_ATTR(serial, S_IRUGO, ds1685_rtc_sysfs_serial_show, NULL);
 

@@ -31,13 +31,12 @@
  */
 
 #include <linux/dma-mapping.h>
+#include <linux/highmem.h>
 #include <linux/iommu.h>
-#include <linux/pagemap.h>
 #include <linux/sched/task.h>
 #include <linux/sched/mm.h>
 #include <linux/seq_file.h>
 #include <linux/slab.h>
-#include <linux/swap.h>
 #include <linux/dma-buf.h>
 #include <linux/sizes.h>
 #include <linux/module.h>
@@ -307,7 +306,7 @@ static int amdgpu_ttm_map_buffer(struct amdgpu_ttm_buffer_entity *entity,
  * move and different for a BO to BO copy.
  *
  */
-__attribute__((nonnull))
+__nonnull_args()
 static int amdgpu_ttm_copy_mem_to_mem(struct amdgpu_device *adev,
 				      struct amdgpu_ttm_buffer_entity *entity,
 				      const struct amdgpu_copy_mem *src,
@@ -784,7 +783,8 @@ int amdgpu_ttm_tt_get_user_pages(struct amdgpu_bo *bo,
 		goto out_unlock;
 	}
 	if (unlikely((gtt->userflags & AMDGPU_GEM_USERPTR_ANONONLY) &&
-		vma->vm_file)) {
+		     (vma->vm_file ||
+		      vma->vm_end < start + (u64)ttm->num_pages * PAGE_SIZE))) {
 		r = -EPERM;
 		goto out_unlock;
 	}
