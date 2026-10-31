@@ -394,6 +394,8 @@ struct klp_modinfo {
 };
 #endif
 
+struct static_call_site_index;
+
 struct module {
 	enum module_state state;
 
@@ -532,6 +534,7 @@ struct module {
 	unsigned int num_kprobe_blacklist;
 #endif
 #ifdef CONFIG_HAVE_STATIC_CALL_INLINE
+	struct static_call_site_index *static_call_site_index;
 	int num_static_call_sites;
 	struct static_call_site *static_call_sites;
 #endif

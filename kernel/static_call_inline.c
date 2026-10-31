@@ -15,6 +15,14 @@ extern struct static_call_site __start_static_call_sites[],
 extern struct static_call_tramp_key __start_static_call_tramp_key[],
 				    __stop_static_call_tramp_key[];
 
+struct static_call_site_index {
+	struct static_call_site *base;
+	unsigned int nr;
+	u32 entries[];
+};
+
+static struct static_call_site_index *static_call_site_index;
+
 int static_call_initialized;
 
 /*
@@ -41,7 +49,7 @@ static void static_call_unlock(void)
 	mutex_unlock(&static_call_mutex);
 }
 
-static inline void *static_call_addr(struct static_call_site *site)
+static inline void *static_call_addr(const struct static_call_site *site)
 {
 	return (void *)((long)site->addr + (long)&site->addr);
 }
@@ -301,6 +309,78 @@ static int addr_conflict(struct static_call_site *site, void *start, void *end)
 	return 0;
 }
 
+static int static_call_site_index_cmp(const void *a, const void *b, const void *priv)
+{
+	const struct static_call_site *base = priv;
+	unsigned int ia = *(u32 *)a;
+	unsigned int ib = *(u32 *)b;
+	unsigned long ca = (unsigned long)static_call_addr(base + ia);
+	unsigned long cb = (unsigned long)static_call_addr(base + ib);
+
+	return cmp_int(ca, cb);
+}
+
+static struct static_call_site_index *
+static_call_site_index_alloc(struct static_call_site *start,
+			     struct static_call_site *stop)
+{
+	struct static_call_site_index *index;
+	unsigned int nr = stop - start;
+	unsigned int i;
+
+	if (!nr)
+		return NULL;
+
+	index = kvmalloc_flex(*index, entries, nr, GFP_KERNEL);
+	if (!index)
+		return NULL;
+
+	index->nr = nr;
+	index->base = start;
+	for (i = 0; i < nr; i++)
+		index->entries[i] = i;
+
+	sort_r(index->entries, nr, sizeof(index->entries[0]),
+	       static_call_site_index_cmp, NULL, start);
+
+	return index;
+}
+
+static int
+static_call_site_index_text_reserved(struct static_call_site_index *index,
+				     void *start, void *end, bool init)
+{
+	unsigned long start_addr = (unsigned long)start;
+	unsigned long end_addr = (unsigned long)end;
+	unsigned int low = 0, high = index->nr, i;
+
+	while (low < high) {
+		unsigned int mid = low + (high - low) / 2;
+		unsigned long addr = (unsigned long)static_call_addr(
+			index->base + index->entries[mid]);
+
+		if (addr <= start_addr)
+			low = mid + 1;
+		else
+			high = mid;
+	}
+
+	if (low)
+		low--;
+
+	for (i = low; i < index->nr; i++) {
+		struct static_call_site *site = index->base + index->entries[i];
+
+		if ((unsigned long)static_call_addr(site) > end_addr)
+			break;
+		if ((init || !static_call_is_init(site)) &&
+		    addr_conflict(site, start, end))
+			return 1;
+	}
+
+	return 0;
+}
+
 static int __static_call_text_reserved(struct static_call_site *iter_start,
 				       struct static_call_site *iter_stop,
 				       void *start, void *end, bool init)
@@ -334,7 +414,12 @@ static int __static_call_mod_text_reserved(void *start, void *end)
 	if (!mod)
 		return 0;
 
-	ret = __static_call_text_reserved(mod->static_call_sites,
+	if (mod->static_call_site_index)
+		ret = static_call_site_index_text_reserved(
+			mod->static_call_site_index, start, end,
+			mod->state == MODULE_STATE_COMING);
+	else
+		ret = __static_call_text_reserved(mod->static_call_sites,
 			mod->static_call_sites + mod->num_static_call_sites,
 			start, end, mod->state == MODULE_STATE_COMING);
 
@@ -365,6 +450,7 @@ static int static_call_add_module(struct module *mod)
 	struct static_call_site *start = mod->static_call_sites;
 	struct static_call_site *stop = start + mod->num_static_call_sites;
 	struct static_call_site *site;
+	int ret;
 
 	for (site = start; site != stop; site++) {
 		unsigned long s_key = __static_call_key(site);
@@ -396,7 +482,11 @@ static int static_call_add_module(struct module *mod)
 		site->key = key - (long)&site->key;
 	}
 
-	return __static_call_init(mod, start, stop);
+	ret = __static_call_init(mod, start, stop);
+	if (!ret)
+		mod->static_call_site_index = static_call_site_index_alloc(start, stop);
+
+	return ret;
 }
 
 static void static_call_del_module(struct module *mod)
@@ -437,6 +527,8 @@ static void static_call_del_module(struct module *mod)
 		*prev = site_mod->next;
 		kfree(site_mod);
 	}
+	kvfree(mod->static_call_site_index);
+	mod->static_call_site_index = NULL;
 }
 
 static int static_call_module_notify(struct notifier_block *nb,
@@ -483,7 +575,13 @@ static inline int __static_call_mod_text_reserved(void *start, void *end)
 int static_call_text_reserved(void *start, void *end)
 {
 	bool init = system_state < SYSTEM_RUNNING;
-	int ret = __static_call_text_reserved(__start_static_call_sites,
+	int ret;
+
+	if (static_call_site_index)
+		ret = static_call_site_index_text_reserved(
+			static_call_site_index, start, end, init);
+	else
+		ret = __static_call_text_reserved(__start_static_call_sites,
 			__stop_static_call_sites, start, end, init);
 
 	if (ret)
@@ -521,6 +619,14 @@ int __init static_call_init(void)
 	return 0;
 }
 early_initcall(static_call_init);
+
+static int __init static_call_site_index_build(void)
+{
+	static_call_site_index = static_call_site_index_alloc(__start_static_call_sites,
+							      __stop_static_call_sites);
+	return 0;
+}
+late_initcall(static_call_site_index_build);
 
 #ifdef CONFIG_STATIC_CALL_SELFTEST
 
