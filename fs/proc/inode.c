@@ -508,23 +508,16 @@ static ssize_t proc_reg_read(struct file *file, char __user *buf, size_t count, 
 	return rv;
 }
 
-static ssize_t pde_write(struct proc_dir_entry *pde, struct file *file, const char __user *buf, size_t count, loff_t *ppos)
-{
-	const auto write = pde->proc_ops->proc_write;
-	if (write)
-		return write(file, buf, count, ppos);
-	return -EIO;
-}
-
 /*
  * procfs copies in what is written before it pins the entry. A writer that
  * faults on its buffer then doesn't hold up remove_proc_entry().
  */
-static ssize_t pde_write_buf(struct proc_dir_entry *pde, struct file *file,
-			     const char __user *ubuf, size_t count, loff_t *ppos)
+static ssize_t pde_write_buf(struct proc_dir_entry *pde, struct kiocb *iocb,
+			     struct iov_iter *from)
 {
+	struct file *file = iocb->ki_filp;
+	size_t count = iov_iter_count(from), size;
 	char *buf __free(kvfree) = NULL;
-	size_t size;
 	ssize_t rv;
 
 	size = pde->write_size;
@@ -536,29 +529,26 @@ static ssize_t pde_write_buf(struct proc_dir_entry *pde, struct file *file,
 	buf = kvmalloc(count + 1, GFP_KERNEL);
 	if (!buf)
 		return -ENOMEM;
-	if (copy_from_user(buf, ubuf, count))
+	if (copy_from_iter(buf, count, from) != count)
 		return -EFAULT;
 	buf[count] = '\0';
 
 	if (!pde_pin(pde))
 		return -EIO;
-	rv = pde->proc_ops->proc_write_buf(file, buf, count, ppos);
+	/* a stream has no position, like with ->write() */
+	rv = pde->proc_ops->proc_write_buf(file, buf, count,
+			(file->f_mode & FMODE_STREAM) ? NULL : &iocb->ki_pos);
 	pde_unpin(pde);
 	return rv;
 }
 
-static ssize_t proc_reg_write(struct file *file, const char __user *buf, size_t count, loff_t *ppos)
+static ssize_t proc_reg_write_iter(struct kiocb *iocb, struct iov_iter *from)
 {
-	struct proc_dir_entry *pde = PDE(file_inode(file));
-	ssize_t rv;
+	struct proc_dir_entry *pde = PDE(file_inode(iocb->ki_filp));
 
 	if (pde_has_proc_write_buf(pde))
-		return pde_write_buf(pde, file, buf, count, ppos);
-	if (!pde_pin(pde))
-		return -EIO;
-	rv = pde_write(pde, file, buf, count, ppos);
-	pde_unpin(pde);
-	return rv;
+		return pde_write_buf(pde, iocb, from);
+	return -EIO;
 }
 
 /*
@@ -986,7 +976,8 @@ static const struct file_operations proc_seq_file_ops = {
 	.llseek		= seq_lseek,
 	.read_iter	= seq_read_iter,
 	.splice_read	= copy_splice_read,
-	.write		= proc_reg_write,
+	.write_iter	= proc_reg_write_iter,
+	.splice_write	= iter_file_splice_write,
 	.poll		= proc_reg_poll,
 	.unlocked_ioctl	= proc_reg_unlocked_ioctl,
 	.compat_ioctl	= proc_reg_compat_ioctl,
@@ -1002,7 +993,8 @@ static const struct file_operations proc_seq_file_ops = {
 static const struct file_operations proc_reg_file_ops = {
 	.llseek		= proc_reg_llseek,
 	.read		= proc_reg_read,
-	.write		= proc_reg_write,
+	.write_iter	= proc_reg_write_iter,
+	.splice_write	= iter_file_splice_write,
 	.poll		= proc_reg_poll,
 	.unlocked_ioctl	= proc_reg_unlocked_ioctl,
 	.compat_ioctl	= proc_reg_compat_ioctl,
@@ -1018,7 +1010,8 @@ static const struct file_operations proc_reg_file_ops = {
 static const struct file_operations proc_iter_file_ops = {
 	.llseek		= proc_reg_llseek,
 	.read_iter	= proc_reg_read_iter,
-	.write		= proc_reg_write,
+	.write_iter	= proc_reg_write_iter,
+	.splice_write	= iter_file_splice_write,
 	.splice_read	= copy_splice_read,
 	.poll		= proc_reg_poll,
 	.unlocked_ioctl	= proc_reg_unlocked_ioctl,

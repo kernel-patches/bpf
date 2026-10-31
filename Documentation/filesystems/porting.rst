@@ -1434,3 +1434,14 @@ mapping with a ->close() is refused, and every mapping of an entry has
 to use the same vm_operations. Removing the entry unmaps the mappings
 in its own address space and a fault into one of them is SIGBUS from
 then on.
+
+---
+
+**mandatory**
+
+->proc_write() is gone. Implement ->proc_write_buf() instead. procfs
+copies what is written into a NUL-terminated kernel buffer of at most
+->proc_write_size bytes, PAGE_SIZE - 1 if that's 0, before it pins the
+entry and calls the method with it, so the method never touches
+userspace. Larger writes fail with -EINVAL unless the entry asks for
+PROC_ENTRY_SHORT_WRITES. The position is NULL for a stream.
