@@ -3069,6 +3069,18 @@ static int fetch_kfunc_meta(struct bpf_verifier_env *env,
 static int gen_kfunc_arg_proto(struct bpf_verifier_env *env, struct bpf_call_arg_meta *meta,
 			       const struct btf_func_model *fm, struct bpf_func_proto *proto);
 
+/*
+ * The vmlinux BTF failed to parse where a program first needs it: pass the
+ * error on, as bpf_check() did when it fetched the BTF up front.  It need
+ * not be for good: a parse on first use that runs out of memory is retried
+ * by the next caller.
+ */
+static int vmlinux_btf_err(struct bpf_verifier_env *env, const struct btf *btf)
+{
+	verbose(env, "in-kernel BTF could not be parsed: %ld\n", PTR_ERR(btf));
+	return PTR_ERR(btf);
+}
+
 int bpf_add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, u16 offset)
 {
 	struct bpf_call_arg_meta meta;
@@ -3085,7 +3097,11 @@ int bpf_add_kfunc_call(struct bpf_verifier_env *env, u32 func_id, u16 offset)
 	tab = prog_aux->kfunc_tab;
 	btf_tab = prog_aux->kfunc_btf_tab;
 	if (!tab) {
-		if (!btf_vmlinux) {
+		struct btf *btf = bpf_get_btf_vmlinux();
+
+		if (IS_ERR(btf))
+			return vmlinux_btf_err(env, btf);
+		if (!btf) {
 			verbose(env, "calling kernel function is not supported without CONFIG_DEBUG_INFO_BTF\n");
 			return -ENOTSUPP;
 		}
@@ -6867,13 +6883,9 @@ static int check_ptr_to_map_access(struct bpf_verifier_env *env,
 	enum bpf_type_flag flag = 0;
 	const struct btf_type *t;
 	const char *tname;
+	struct btf *btf;
 	u32 btf_id;
 	int ret;
-
-	if (!btf_vmlinux) {
-		verbose(env, "map_ptr access not supported without CONFIG_DEBUG_INFO_BTF\n");
-		return -ENOTSUPP;
-	}
 
 	if (!map->ops->map_btf_id || !*map->ops->map_btf_id) {
 		verbose(env, "map_ptr access not supported for map type %d\n",
@@ -6881,15 +6893,22 @@ static int check_ptr_to_map_access(struct bpf_verifier_env *env,
 		return -ENOTSUPP;
 	}
 
-	t = btf_type_by_id(btf_vmlinux, *map->ops->map_btf_id);
-	tname = btf_name_by_offset(btf_vmlinux, t->name_off);
-
+	/* before the BTF fetch: unprivileged loads must not parse it */
 	if (!env->allow_ptr_leaks) {
-		verbose(env,
-			"'struct %s' access is allowed only to CAP_PERFMON and CAP_SYS_ADMIN\n",
-			tname);
+		verbose(env, "map_ptr access is allowed only to CAP_PERFMON and CAP_SYS_ADMIN\n");
 		return -EPERM;
 	}
+
+	btf = bpf_get_btf_vmlinux();
+	if (IS_ERR(btf))
+		return vmlinux_btf_err(env, btf);
+	if (!btf) {
+		verbose(env, "map_ptr access not supported without CONFIG_DEBUG_INFO_BTF\n");
+		return -ENOTSUPP;
+	}
+
+	t = btf_type_by_id(btf, *map->ops->map_btf_id);
+	tname = btf_name_by_offset(btf, t->name_off);
 
 	if (off < 0) {
 		verbose(env, "%s is %s invalid negative access: off=%d\n",
@@ -12616,6 +12635,22 @@ static int release_reg(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
 	return err;
 }
 
+/* Does helper @fn bring kernel BTF types into the program? */
+static bool helper_uses_vmlinux_btf(enum bpf_func_id func_id, const struct bpf_func_proto *fn)
+{
+	int i;
+
+	/* these take a kernel type id in struct btf_ptr */
+	if (func_id == BPF_FUNC_snprintf_btf || func_id == BPF_FUNC_seq_printf_btf)
+		return true;
+	if (base_type(fn->ret_type) == RET_PTR_TO_BTF_ID)
+		return true;
+	for (i = 0; i < ARRAY_SIZE(fn->arg_type); i++)
+		if (base_type(fn->arg_type[i]) == ARG_PTR_TO_BTF_ID)
+			return true;
+	return false;
+}
+
 static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			     int *insn_idx_p)
 {
@@ -12683,6 +12718,14 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	if (err) {
 		verifier_bug(env, "incorrect func proto %s#%d", func_id_name(func_id), func_id);
 		return err;
+	}
+
+	if (IS_ENABLED(CONFIG_DEBUG_INFO_BTF) && helper_uses_vmlinux_btf(func_id, fn)) {
+		/* never NULL with CONFIG_DEBUG_INFO_BTF */
+		struct btf *btf = bpf_get_btf_vmlinux();
+
+		if (IS_ERR(btf))
+			return vmlinux_btf_err(env, btf);
 	}
 
 	if (fn->might_sleep && !in_sleepable_context(env)) {
@@ -13910,7 +13953,7 @@ BTF_SET_END(dynptr_write_kfuncs)
 
 static bool is_kfunc_dynptr_write(struct bpf_call_arg_meta *meta)
 {
-	return meta->btf == btf_vmlinux &&
+	return is_kfunc(meta) && meta->btf == btf_vmlinux &&
 	       btf_id_set_contains(&dynptr_write_kfuncs, meta->func_id);
 }
 
@@ -20960,12 +21003,14 @@ static int check_pseudo_btf_id(struct bpf_verifier_env *env,
 			return -EINVAL;
 		}
 	} else {
-		if (!btf_vmlinux) {
+		btf = bpf_get_btf_vmlinux();
+		if (IS_ERR(btf))
+			return vmlinux_btf_err(env, btf);
+		if (!btf) {
 			verbose(env, "kernel is missing BTF, make sure CONFIG_DEBUG_INFO_BTF=y is specified in Kconfig.\n");
 			return -EINVAL;
 		}
-		btf_get(btf_vmlinux);
-		btf = btf_vmlinux;
+		btf_get(btf);
 	}
 
 	err = __check_pseudo_btf_id(env, insn, aux, btf);
@@ -23205,6 +23250,13 @@ struct btf *bpf_get_btf_vmlinux(void)
 	return btf;
 }
 
+/* The vmlinux BTF if it is parsed already: for callers that cannot sleep */
+struct btf *bpf_peek_btf_vmlinux(void)
+{
+	/* Pairs with the smp_store_release() in bpf_get_btf_vmlinux() */
+	return smp_load_acquire(&btf_vmlinux);
+}
+
 /*
  * The add_fd_from_fd_array() is executed only if fd_array_cnt is non-zero. In
  * this case expect that every file descriptor in the array is either a map or
@@ -23928,7 +23980,12 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	if (ret)
 		goto err_prep;
 
-	bpf_get_btf_vmlinux();
+	/*
+	 * The vmlinux BTF is not fetched here but where kernel types enter
+	 * the program (attach_btf, kfuncs, ksyms, map_ptr, BTF-typed helpers,
+	 * CO-RE, kernel ctx types), so that programs which use none of them
+	 * do not need it (CONFIG_DEBUG_INFO_BTF_LAZY).
+	 */
 
 	/* Serialize verification of unprivileged programs. */
 	if (!is_priv)
@@ -23948,13 +24005,6 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 		goto skip_full_check;
 
 	mark_verifier_state_clean(env);
-
-	if (IS_ERR(btf_vmlinux)) {
-		/* Either gcc or pahole or kernel are broken. */
-		verbose(env, "in-kernel BTF is malformed\n");
-		ret = PTR_ERR(btf_vmlinux);
-		goto skip_full_check;
-	}
 
 	env->strict_alignment = !!(attr->prog_flags & BPF_F_STRICT_ALIGNMENT);
 	if (!IS_ENABLED(CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS))

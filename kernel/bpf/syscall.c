@@ -3048,8 +3048,12 @@ static int bpf_prog_load(union bpf_attr *attr, bpfptr_t uattr, struct bpf_log_at
 				goto put_token;
 			}
 		}
-	} else if (attr->attach_btf_id || multi_func) {
-		/* fall back to vmlinux BTF, if BTF type ID is specified */
+	} else if ((attr->attach_btf_id || multi_func) && bpf_cap) {
+		/*
+		 * fall back to vmlinux BTF, if BTF type ID is specified; only
+		 * program types that need CAP_BPF take one, and
+		 * bpf_prog_load_check_attach() refuses it for the others
+		 */
 		attach_btf = bpf_get_btf_vmlinux();
 		if (IS_ERR(attach_btf)) {
 			err = PTR_ERR(attach_btf);
