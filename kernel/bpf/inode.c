@@ -1059,6 +1059,13 @@ static int bpf_parse_param(struct fs_context *fc, struct fs_parameter *param)
 		char *p, *str;
 		int val;
 
+		/*
+		 * Setting delegation mount options requires privileges.  Check
+		 * before the lookup, which may have to parse the vmlinux BTF.
+		 */
+		if (!capable(CAP_SYS_ADMIN))
+			return -EPERM;
+
 		/* ignore errors, fallback to hex */
 		(void)find_bpffs_btf_enums(&info);
 
@@ -1099,10 +1106,6 @@ static int bpf_parse_param(struct fs_context *fc, struct fs_parameter *param)
 					return err;
 			}
 		}
-
-		/* Setting delegation mount options requires privileges */
-		if (msk && !capable(CAP_SYS_ADMIN))
-			return -EPERM;
 
 		*delegate_msk |= msk;
 		break;
