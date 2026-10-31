@@ -133,6 +133,35 @@ __naked void must_write_not_same_type(void)
 	: __clobber_all);
 }
 
+/*
+ * r1 is r10 or a pointer to map value. The store at r1 - 8 is not a certain write to fp-8:
+ * fp-8 is live in front of the store.
+ */
+SEC("socket")
+__success
+__flag(BPF_F_TEST_STATE_FREQ)
+__naked void must_write_r10_or_map_value(void)
+{
+	asm volatile (
+	"*(u64 *)(r10 - 8) = 0;"
+	"r2 = r10;"
+	"r2 += -8;"
+	"r1 = %[map] ll;"
+	"call %[bpf_map_lookup_elem];"
+	"r1 = r10;"
+	"if r0 == 0 goto 1f;"
+	"r1 = r0;"
+	"r1 += 8;"
+"1:"
+	"*(u64 *)(r1 - 8) = 42;"
+	"r0 = *(u64 *)(r10 - 8);"
+	"exit;"
+	:
+	: __imm(bpf_map_lookup_elem),
+	  __imm_addr(map)
+	: __clobber_all);
+}
+
 SEC("socket")
 __log_level(2)
 /* Callee writes fp[0]-8: the def is summarized as may_def at the call site */

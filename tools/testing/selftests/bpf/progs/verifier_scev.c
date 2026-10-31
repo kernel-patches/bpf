@@ -3936,4 +3936,115 @@ __naked void clamp_pkt_pointer_keeps_range_of_entry(void)
 	: __clobber_all);
 }
 
+/*
+ * r7 is r10 on one path and a pointer to map value on the other path. The store at r7 - 8 is not
+ * a certain store to fp-8: fp-8 still can hold &fp[-24], and the store through r8 changes fp-24.
+ */
+SEC("xdp")
+__failure __log_level(2)
+__msg("r7: fp0+0 + _ => fp0 ?")
+__msg("invalid access to map value, value_size=8 off=4096 size=1")
+__naked void join_of_r10_and_map_value(void)
+{
+	asm volatile (
+	"r1 = 0;"
+	"*(u32 *)(r10 - 4) = r1;"
+	"r1 = %[small_map] ll;"
+	"r2 = r10;"
+	"r2 += -4;"
+	"call %[bpf_map_lookup_elem];"
+	"if r0 == 0 goto 3f;"
+	"r9 = r0;"
+	"call %[bpf_get_prandom_u32];"
+	"r6 = r0;"
+	"r7 = r10;"
+	"if r6 == 0 goto 1f;"
+	"r7 = r9;"
+	"r7 += 8;"
+"1:"
+	"r1 = r10;"
+	"r1 += -24;"
+	"*(u64 *)(r10 - 8) = r1;"
+	"r0 = 0;"
+	"*(u64 *)(r7 - 8) = r0;"
+	"if r6 == 0 goto 3f;"
+	"r8 = *(u64 *)(r10 - 8);"
+	"r1 = 0;"
+	"*(u64 *)(r10 - 24) = r1;"
+	"r6 = 0;"
+"2:"
+	"r1 = *(u64 *)(r10 - 24);"
+	"r2 = r9;"
+	"r2 += r1;"
+	"r0 = *(u8 *)(r2 + 0);"
+	"r1 += 1;"
+	"*(u64 *)(r10 - 24) = r1;"
+	"r3 = 4096;"
+	"*(u64 *)(r8 + 0) = r3;"
+	"r6 += 1;"
+	"if r6 < 8 goto 2b;"
+"3:"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(small_map),
+	  __imm(bpf_map_lookup_elem),
+	  __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/* The same. The path with the pointer to map value reaches the join first. */
+SEC("xdp")
+__failure __log_level(2)
+__msg("r7: _ + fp0+0 => fp0 ?")
+__msg("invalid access to map value, value_size=8 off=4096 size=1")
+__naked void join_of_map_value_and_r10(void)
+{
+	asm volatile (
+	"r1 = 0;"
+	"*(u32 *)(r10 - 4) = r1;"
+	"r1 = %[small_map] ll;"
+	"r2 = r10;"
+	"r2 += -4;"
+	"call %[bpf_map_lookup_elem];"
+	"if r0 == 0 goto 3f;"
+	"r9 = r0;"
+	"call %[bpf_get_prandom_u32];"
+	"r6 = r0;"
+	"r7 = r9;"
+	"r7 += 8;"
+	"if r6 != 0 goto 1f;"
+	"r7 = r10;"
+"1:"
+	"r1 = r10;"
+	"r1 += -24;"
+	"*(u64 *)(r10 - 8) = r1;"
+	"r0 = 0;"
+	"*(u64 *)(r7 - 8) = r0;"
+	"if r6 == 0 goto 3f;"
+	"r8 = *(u64 *)(r10 - 8);"
+	"r1 = 0;"
+	"*(u64 *)(r10 - 24) = r1;"
+	"r6 = 0;"
+"2:"
+	"r1 = *(u64 *)(r10 - 24);"
+	"r2 = r9;"
+	"r2 += r1;"
+	"r0 = *(u8 *)(r2 + 0);"
+	"r1 += 1;"
+	"*(u64 *)(r10 - 24) = r1;"
+	"r3 = 4096;"
+	"*(u64 *)(r8 + 0) = r3;"
+	"r6 += 1;"
+	"if r6 < 8 goto 2b;"
+"3:"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(small_map),
+	  __imm(bpf_map_lookup_elem),
+	  __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";
