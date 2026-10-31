@@ -352,8 +352,10 @@ static int mxl862xx_setup_drop_meter(struct dsa_switch *ds)
 
 	/* meter_id=0 means auto-alloc */
 	ret = MXL862XX_API_READ(priv, MXL862XX_QOS_METERALLOC, meter);
-	if (ret)
+	if (ret < 0)
 		return ret;
+	if (ret > 0) /* firmware reported a non-zero result code */
+		return -EIO;
 
 	meter.enable = true;
 	meter.cbs = cpu_to_le32(64);
@@ -532,8 +534,10 @@ static int mxl862xx_evlan_block_alloc(struct mxl862xx_priv *priv,
 	param.number_of_entries = cpu_to_le16(blk->block_size);
 
 	ret = MXL862XX_API_READ(priv, MXL862XX_EXTENDEDVLAN_ALLOC, param);
-	if (ret)
+	if (ret < 0)
 		return ret;
+	if (ret > 0) /* firmware reported a non-zero result code */
+		return -EIO;
 
 	blk->block_id = le16_to_cpu(param.extended_vlan_block_id);
 	blk->allocated = true;
@@ -552,8 +556,10 @@ static int mxl862xx_vf_block_alloc(struct mxl862xx_priv *priv,
 	param.discard_unmatched_tagged = 1;
 
 	ret = MXL862XX_API_READ(priv, MXL862XX_VLANFILTER_ALLOC, param);
-	if (ret)
+	if (ret < 0)
 		return ret;
+	if (ret > 0) /* firmware reported a non-zero result code */
+		return -EIO;
 
 	*block_id = le16_to_cpu(param.vlan_filter_block_id);
 	return 0;
