@@ -1969,6 +1969,9 @@ static int spi_imx_dma_transfer(struct spi_imx_data *spi_imx,
 		spi_imx_dma_unmap(spi_imx, &spi_imx->dma_data[i]);
 
 		if (ret < 0) {
+			/* Earlier packages have already been transferred. */
+			if (i)
+				transfer->error &= ~SPI_TRANS_FAIL_NO_START;
 			dev_dbg(spi_imx->dev, "DMA %d transfer not really finish\n", i);
 			break;
 		}
