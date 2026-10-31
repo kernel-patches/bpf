@@ -8597,6 +8597,7 @@ static int btf_get_ptr_to_btf_id(struct bpf_verifier_log *log, int arg_idx,
 		.btf = btf,
 		.log = log,
 	};
+	struct btf *vmlinux_btf;
 	u32 kern_type_id, type_id;
 	int err = 0;
 
@@ -8608,6 +8609,10 @@ static int btf_get_ptr_to_btf_id(struct bpf_verifier_log *log, int arg_idx,
 		t = btf_type_by_id(btf, t->type);
 	}
 
+	/* parse it, if this is its first use, before taking cand_cache_mutex */
+	vmlinux_btf = bpf_get_btf_vmlinux();
+	if (IS_ERR(vmlinux_btf))
+		return PTR_ERR(vmlinux_btf);
 	mutex_lock(&cand_cache_mutex);
 	cc = bpf_core_find_cands(&ctx, type_id);
 	if (IS_ERR(cc)) {
@@ -10622,7 +10627,8 @@ bpf_core_find_cands(struct bpf_core_ctx *ctx, u32 local_type_id)
 	const char *name;
 	int id;
 
-	main_btf = bpf_get_btf_vmlinux();
+	/* callers parse it before taking cand_cache_mutex, see bpf_core_apply() */
+	main_btf = bpf_peek_btf_vmlinux();
 	if (IS_ERR(main_btf))
 		return ERR_CAST(main_btf);
 	if (!main_btf)
@@ -10725,8 +10731,18 @@ int bpf_core_apply(struct bpf_core_ctx *ctx, const struct bpf_core_relo *relo,
 
 	if (need_cands) {
 		struct bpf_cand_cache *cc;
+		struct btf *main_btf;
 		int i;
 
+		/*
+		 * Parsing the vmlinux BTF takes btf_module_mutex, which is
+		 * taken before cand_cache_mutex when a module goes away.
+		 */
+		main_btf = bpf_get_btf_vmlinux();
+		if (IS_ERR(main_btf)) {
+			kfree(specs);
+			return PTR_ERR(main_btf);
+		}
 		mutex_lock(&cand_cache_mutex);
 		cc = bpf_core_find_cands(ctx, relo->type_id);
 		if (IS_ERR(cc)) {
