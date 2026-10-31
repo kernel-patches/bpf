@@ -30,6 +30,11 @@
  */
 #define MXL862XX_STATS_POLL_INTERVAL	(2 * HZ)
 
+/* Conservative bound for the MAC table read loop: the exact capacity is
+ * not part of the public driver API (see mxl862xx_port_fdb_dump()).
+ */
+#define MXL862XX_MAC_TABLE_WALK_LIMIT	16384
+
 struct mxl862xx_mib_desc {
 	unsigned int size;
 	unsigned int offset;
@@ -347,8 +352,10 @@ static int mxl862xx_setup_drop_meter(struct dsa_switch *ds)
 
 	/* meter_id=0 means auto-alloc */
 	ret = MXL862XX_API_READ(priv, MXL862XX_QOS_METERALLOC, meter);
-	if (ret)
+	if (ret < 0)
 		return ret;
+	if (ret > 0) /* firmware reported a non-zero result code */
+		return -EIO;
 
 	meter.enable = true;
 	meter.cbs = cpu_to_le32(64);
@@ -527,8 +534,10 @@ static int mxl862xx_evlan_block_alloc(struct mxl862xx_priv *priv,
 	param.number_of_entries = cpu_to_le16(blk->block_size);
 
 	ret = MXL862XX_API_READ(priv, MXL862XX_EXTENDEDVLAN_ALLOC, param);
-	if (ret)
+	if (ret < 0)
 		return ret;
+	if (ret > 0) /* firmware reported a non-zero result code */
+		return -EIO;
 
 	blk->block_id = le16_to_cpu(param.extended_vlan_block_id);
 	blk->allocated = true;
@@ -547,8 +556,10 @@ static int mxl862xx_vf_block_alloc(struct mxl862xx_priv *priv,
 	param.discard_unmatched_tagged = 1;
 
 	ret = MXL862XX_API_READ(priv, MXL862XX_VLANFILTER_ALLOC, param);
-	if (ret)
+	if (ret < 0)
 		return ret;
+	if (ret > 0) /* firmware reported a non-zero result code */
+		return -EIO;
 
 	*block_id = le16_to_cpu(param.vlan_filter_block_id);
 	return 0;
@@ -584,16 +595,59 @@ static int mxl862xx_vf_alloc(struct mxl862xx_priv *priv,
 	return mxl862xx_vf_entry_discard(priv, vf->block_id, 0);
 }
 
+/* Firmware bridge ids are stored in priv->bridges[] (bridged ports)
+ * and priv->ports[].fid (standalone ports, which also allocate one),
+ * so a fresh allocation must not collide with either.
+ */
+static bool mxl862xx_bridge_id_in_use(struct mxl862xx_priv *priv, u16 id)
+{
+	int i;
+
+	for (i = 0; i <= MXL862XX_MAX_BRIDGES; i++)
+		if (priv->bridges[i] == id)
+			return true;
+
+	for (i = 0; i < MXL862XX_MAX_PORTS; i++)
+		if (priv->ports[i].fid == id)
+			return true;
+
+	return false;
+}
+
 static int mxl862xx_allocate_bridge(struct mxl862xx_priv *priv)
 {
 	struct mxl862xx_bridge_alloc br_alloc = {};
+	u16 id;
 	int ret;
 
+	/* MXL862XX_API_READ() returns the firmware result value (>= 0) on
+	 * success, not an errno. A non-zero result is a firmware-reported
+	 * error status: return a proper error instead of leaking it to the
+	 * callers, which only test ret < 0 and would otherwise store the
+	 * status as a bridge id.
+	 */
 	ret = MXL862XX_API_READ(priv, MXL862XX_BRIDGE_ALLOC, br_alloc);
-	if (ret)
+	if (ret < 0)
 		return ret;
+	if (ret > 0)
+		return -EIO;
 
-	return le16_to_cpu(br_alloc.bridge_id);
+	id = le16_to_cpu(br_alloc.bridge_id);
+
+	/* The API reserves id 0 ("not used for historic reasons"), which
+	 * also doubles as the "not allocated" value in priv->bridges[]
+	 * and priv->ports[].fid, and collides with
+	 * MXL862XX_DEFAULT_BRIDGE (the CPU port). It documents
+	 * INVALID_HANDLE for failed allocations without defining its
+	 * value; the MaxLinear GSW API uses 0xffff, so reject that too.
+	 * A duplicate id would collapse the FID isolation of two domains
+	 * (FDB and MDB entries are matched by FID, VID and MAC).
+	 * Firmware that follows the API never returns these values.
+	 */
+	if (!id || id == 0xffff || mxl862xx_bridge_id_in_use(priv, id))
+		return -EIO;
+
+	return id;
 }
 
 static void mxl862xx_free_bridge(struct dsa_switch *ds,
@@ -1503,6 +1557,7 @@ static int mxl862xx_port_fdb_dump(struct dsa_switch *ds, int port,
 	struct mxl862xx_mac_table_read param = { .initial = 1 };
 	struct mxl862xx_priv *priv = ds->priv;
 	u32 entry_port_id;
+	int count = 0;
 	int ret;
 
 	while (true) {
@@ -1512,6 +1567,22 @@ static int mxl862xx_port_fdb_dump(struct dsa_switch *ds, int port,
 
 		if (param.last)
 			break;
+
+		/* The exact MAC table capacity is not part of the public
+		 * driver API. Use a conservative read limit: 16k is well
+		 * above any documented table size for this family, while a
+		 * device that never sets last (or keeps answering with
+		 * entries for other ports, which never reach the callback)
+		 * would otherwise keep us walking forever with RTNL held.
+		 * Checked after the "last" test so that a correctly ended
+		 * walk of a full table is not rejected.
+		 */
+		if (count++ >= MXL862XX_MAC_TABLE_WALK_LIMIT) {
+			dev_err(ds->dev,
+				"FDB dump walk exceeded %d reads, aborting\n",
+				MXL862XX_MAC_TABLE_WALK_LIMIT);
+			return -EIO;
+		}
 
 		entry_port_id = le32_to_cpu(param.port_id);
 

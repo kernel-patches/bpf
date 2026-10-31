@@ -201,10 +201,14 @@ static struct sock *udp6_lib_lookup1(const struct net *net,
 {
 	unsigned int slot = udp_hashfn(net, hnum, udptable->mask);
 	struct udp_hslot *hslot = &udptable->hash[slot];
-	struct sock *sk, *result = NULL;
-	int score, badness = 0;
+	struct hlist_nulls_node *node;
+	struct sock *sk, *result;
+	int score, badness;
 
-	sk_for_each_rcu(sk, &hslot->head) {
+begin:
+	result = NULL;
+	badness = 0;
+	sk_nulls_for_each_rcu(sk, node, &hslot->head) {
 		score = compute_score(sk, net,
 				      saddr, sport, daddr, hnum, dif, sdif);
 		if (score > badness) {
@@ -212,6 +216,13 @@ static struct sock *udp6_lib_lookup1(const struct net *net,
 			badness = score;
 		}
 	}
+	/*
+	 * if the nulls value we got at the end of this lookup is
+	 * not the expected one, we must restart lookup.
+	 * We probably met an item that was moved to another chain.
+	 */
+	if (unlikely(get_nulls_value(node) != slot))
+		goto begin;
 
 	return result;
 }
@@ -223,13 +234,16 @@ static struct sock *udp6_lib_lookup2(const struct net *net,
 		int dif, int sdif, struct udp_hslot *hslot2,
 		struct sk_buff *skb)
 {
+	unsigned int slot2 = UDP_HSLOT_MAIN(hslot2) - net->ipv4.udp_table->hash2;
+	struct hlist_nulls_node *node;
 	struct sock *sk, *result;
 	int score, badness;
 	bool need_rescore;
 
+begin:
 	result = NULL;
 	badness = -1;
-	udp_portaddr_for_each_entry_rcu(sk, &hslot2->head) {
+	udp_portaddr_for_each_entry_rcu(sk, node, &hslot2->head) {
 		need_rescore = false;
 rescore:
 		score = compute_score(need_rescore ? result : sk, net, saddr,
@@ -270,6 +284,13 @@ rescore:
 			goto rescore;
 		}
 	}
+	/*
+	 * if the nulls value we got at the end of this lookup is
+	 * not the expected one, we must restart lookup.
+	 * We probably met an item that was moved to another chain.
+	 */
+	if (unlikely(get_nulls_value(node) != slot2))
+		goto begin;
 	return result;
 }
 
@@ -315,7 +336,7 @@ begin:
 	 * expected one, we must restart lookup. We probably met an item that
 	 * was moved to another chain due to rehash.
 	 */
-	if (get_nulls_value(node) != slot)
+	if (unlikely(get_nulls_value(node) != slot))
 		goto begin;
 
 	return NULL;
@@ -950,9 +971,9 @@ static int __udp6_lib_mcast_deliver(struct net *net, struct sk_buff *skb,
 	unsigned int hash2, hash2_any, offset;
 	unsigned short hnum = ntohs(uh->dest);
 	struct sock *sk, *first = NULL;
+	struct hlist_nulls_node *node;
 	int sdif = inet6_sdif(skb);
 	int dif = inet6_iif(skb);
-	struct hlist_node *node;
 	struct udp_hslot *hslot;
 	struct sk_buff *nskb;
 	bool use_hash2;
@@ -962,7 +983,7 @@ static int __udp6_lib_mcast_deliver(struct net *net, struct sk_buff *skb,
 	hash2 = 0;
 	hslot = udp_hashslot(udptable, net, hnum);
 	use_hash2 = hslot->count > 10;
-	offset = offsetof(typeof(*sk), sk_node);
+	offset = offsetof(typeof(*sk), sk_nulls_node);
 
 	if (use_hash2) {
 		hash2_any = ipv6_portaddr_hash(net, &in6addr_any, hnum) &
@@ -973,7 +994,13 @@ start_lookup:
 		offset = offsetof(typeof(*sk), __sk_common.skc_portaddr_node);
 	}
 
-	sk_for_each_entry_offset_rcu(sk, node, &hslot->head, offset) {
+	/* Note: a concurrent udp_lib_rehash() or udp_lib_unhash() can move a
+	 * socket to another chain while we traverse this one. Unlike the
+	 * unicast lookups, we can not restart the iteration here, because
+	 * skbs have already been cloned and delivered. This is the same
+	 * best-effort behavior as before the hlist_nulls conversion.
+	 */
+	sk_nulls_for_each_entry_offset_rcu(sk, node, &hslot->head, offset) {
 		if (!__udp_v6_is_mcast_sock(net, sk, uh->dest, daddr,
 					    uh->source, saddr, dif, sdif,
 					    hnum))
@@ -1199,6 +1226,7 @@ static struct sock *__udp6_lib_demux_lookup(struct net *net,
 {
 	struct udp_table *udptable = net->ipv4.udp_table;
 	unsigned short hnum = ntohs(loc_port);
+	struct hlist_nulls_node *node;
 	struct udp_hslot *hslot2;
 	unsigned int hash2;
 	__portpair ports;
@@ -1208,7 +1236,7 @@ static struct sock *__udp6_lib_demux_lookup(struct net *net,
 	hslot2 = udp_hashslot2(udptable, hash2);
 	ports = INET_COMBINED_PORTS(rmt_port, hnum);
 
-	udp_portaddr_for_each_entry_rcu(sk, &hslot2->head) {
+	udp_portaddr_for_each_entry_rcu(sk, node, &hslot2->head) {
 		if (sk->sk_state == TCP_ESTABLISHED &&
 		    inet6_match(net, sk, rmt_addr, loc_addr, ports, dif, sdif))
 			return sk;

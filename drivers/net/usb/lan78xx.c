@@ -4594,7 +4594,8 @@ static void lan78xx_disconnect(struct usb_interface *intf)
 	net = dev->net;
 
 	rtnl_lock();
-	phylink_stop(dev->phylink);
+	if (netif_running(net))
+		phylink_stop(dev->phylink);
 	phylink_disconnect_phy(dev->phylink);
 	rtnl_unlock();
 

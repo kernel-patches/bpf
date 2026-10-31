@@ -94,6 +94,7 @@ struct sockaddr_pair {
  * @peer: 'connected' peer for dgram/rdm
  * @node: hash table node
  * @mc_method: cookie for use between socket and broadcast layer
+ * @backlog_work: processes receive backlog under socket ownership
  * @rcu: rcu struct for tipc_sock
  * @group: TIPC communications group
  * @oneway: message count in one direction (FIXME)
@@ -128,6 +129,7 @@ struct tipc_sock {
 	struct sockaddr_tipc peer;
 	struct rhash_head node;
 	struct tipc_mc_method mc_method;
+	struct work_struct backlog_work;
 	struct rcu_head rcu;
 	struct tipc_group *group;
 	u32 oneway;
@@ -143,6 +145,7 @@ struct tipc_sock {
 };
 
 static int tipc_sk_backlog_rcv(struct sock *sk, struct sk_buff *skb);
+static void tipc_sk_backlog_work(struct work_struct *work);
 static void tipc_data_ready(struct sock *sk);
 static void tipc_write_space(struct sock *sk);
 static void tipc_sock_destruct(struct sock *sk);
@@ -499,6 +502,7 @@ static int tipc_sk_create(struct net *net, struct socket *sock,
 	/* Finish initializing socket data structures */
 	sock->ops = ops;
 	sock_init_data(sock, sk);
+	INIT_WORK(&tsk->backlog_work, tipc_sk_backlog_work);
 	tipc_set_sk_state(sk, TIPC_OPEN);
 	if (tipc_sk_insert(tsk)) {
 		sk_free(sk);
@@ -2428,6 +2432,17 @@ static int tipc_sk_backlog_rcv(struct sock *sk, struct sk_buff *skb)
 	return 0;
 }
 
+static void tipc_sk_backlog_work(struct work_struct *work)
+{
+	struct tipc_sock *tsk = container_of(work, struct tipc_sock,
+					     backlog_work);
+	struct sock *sk = &tsk->sk;
+
+	lock_sock(sk);
+	release_sock(sk);
+	sock_put(sk);
+}
+
 /**
  * tipc_sk_enqueue - extract all buffers with destination 'dport' from
  *                   inputq and try adding them to socket or backlog queue
@@ -2445,18 +2460,30 @@ static void tipc_sk_enqueue(struct sk_buff_head *inputq, struct sock *sk,
 	struct sk_buff *skb;
 	unsigned int lim;
 	atomic_t *dcnt;
+	bool deferred = false;
+	bool owned;
+	bool local_backlog;
 	u32 onode;
 
 	while (skb_queue_len(inputq)) {
 		if (unlikely(time_after_eq(jiffies, time_limit)))
-			return;
+			break;
 
 		skb = tipc_skb_dequeue(inputq, dport);
 		if (unlikely(!skb))
-			return;
+			break;
 
-		/* Add message directly to receive queue if possible */
-		if (!sock_owned_by_user(sk)) {
+		/*
+		 * A local Nagle backlog may loop back into this socket while its
+		 * spinlock is held.  Queue the triggering input for processing under
+		 * socket ownership, which keeps a concurrent sender from overtaking
+		 * the already queued output.
+		 */
+		owned = sock_owned_by_user(sk);
+		local_backlog = !owned && !skb_queue_empty(&sk->sk_write_queue) &&
+				in_own_node(sock_net(sk),
+					    tsk_peer_node(tipc_sk(sk)));
+		if (!owned && !local_backlog) {
 			tipc_sk_filter_rcv(sk, skb, xmitq);
 			continue;
 		}
@@ -2467,6 +2494,7 @@ static void tipc_sk_enqueue(struct sk_buff_head *inputq, struct sock *sk,
 			atomic_set(dcnt, 0);
 		lim = rcvbuf_limit(sk, skb) + atomic_read(dcnt);
 		if (likely(!sk_add_backlog(sk, skb, lim))) {
+			deferred |= !owned;
 			trace_tipc_sk_overlimit1(sk, skb, TIPC_DUMP_SK_BKLGQ,
 						 "bklg & rcvq >90% allocated!");
 			continue;
@@ -2482,6 +2510,12 @@ static void tipc_sk_enqueue(struct sk_buff_head *inputq, struct sock *sk,
 			__skb_queue_tail(xmitq, skb);
 		}
 		break;
+	}
+
+	if (deferred) {
+		sock_hold(sk);
+		if (!schedule_work(&tipc_sk(sk)->backlog_work))
+			sock_put(sk);
 	}
 }
 

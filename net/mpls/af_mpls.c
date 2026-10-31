@@ -453,6 +453,10 @@ static int mpls_forward(struct sk_buff *skb, struct net_device *dev,
 	if (skb_cow(skb, hh_len + new_header_size))
 		goto tx_err;
 
+	/* The aligned expansion must still fit the u16 header offsets. */
+	if (unlikely(skb_headroom(skb) > U16_MAX))
+		goto tx_err;
+
 	skb->dev = out_dev;
 	skb->protocol = htons(ETH_P_MPLS_UC);
 

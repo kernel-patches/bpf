@@ -7,6 +7,7 @@
 #include <linux/dev_printk.h>
 #include <linux/dma-mapping.h>
 #include <linux/gfp.h>
+#include <linux/iopoll.h>
 #include <linux/types.h>
 
 #include "fbnic.h"
@@ -104,6 +105,7 @@ void fbnic_mbx_init(struct fbnic_dev *fbd)
 
 	/* Reset FW Capabilities */
 	memset(&fbd->fw_cap, 0, sizeof(fbd->fw_cap));
+	seqcount_init(&fbd->fw_cap.bmc_mac_seq);
 
 	/* Reinitialize mailbox memory */
 	for (i = 0; i < FBNIC_IPC_MBX_INDICES; i++)
@@ -186,10 +188,25 @@ static void fbnic_mbx_clean_desc_ring(struct fbnic_dev *fbd, int mbx_idx)
 
 void fbnic_mbx_clean(struct fbnic_dev *fbd)
 {
+	u32 flush_done = FBNIC_PUL_USER_IP_LINK_RST_STATUS_AR_FLUSH_DONE |
+			 FBNIC_PUL_USER_IP_LINK_RST_STATUS_AW_FLUSH_DONE;
+	u32 val;
 	int i;
 
 	for (i = 0; i < FBNIC_IPC_MBX_INDICES; i++)
 		fbnic_mbx_clean_desc_ring(fbd, i);
+
+	/* Arming the flush above only starts it. Wait for the outbound path
+	 * to retire the requests it still owns so none of them can complete
+	 * after the reset that follows. A lost link reads back as all ones,
+	 * which ends the poll on the first pass.
+	 */
+	if (read_poll_timeout_atomic(fbnic_rd32, val,
+				     (val & flush_done) == flush_done, 2, 1000,
+				     false, fbd,
+				     FBNIC_PUL_USER_IP_LINK_RST_STATUS))
+		dev_warn(fbd->dev, "Outbound flush did not complete: %08x\n",
+			 val);
 }
 
 #define FBNIC_MBX_MAX_PAGE_SIZE	FIELD_MAX(FBNIC_IPC_MBX_DESC_LEN_MASK)
@@ -596,6 +613,7 @@ static int fbnic_fw_parse_bmc_addrs(u8 bmc_mac_addr[][ETH_ALEN],
 {
 	int attr_len = le16_to_cpu(attr->hdr.len) / sizeof(u32) - 1;
 	struct fbnic_tlv_msg *mac_results[8];
+	u8 mac_addr[8][ETH_ALEN] = {};
 	int err, i = 0;
 
 	/* Make sure we have enough room to process all the MAC addresses */
@@ -609,13 +627,16 @@ static int fbnic_fw_parse_bmc_addrs(u8 bmc_mac_addr[][ETH_ALEN],
 	if (err)
 		return err;
 
-	/* Copy results into MAC addr array */
-	for (i = 0; i < len && mac_results[i]; i++)
-		fbnic_tlv_attr_addr_copy(bmc_mac_addr[i], mac_results[i]);
+	/* Stage the addresses so a bad one leaves the old set untouched.
+	 * Unused entries stay zeroed.
+	 */
+	for (i = 0; i < len && mac_results[i]; i++) {
+		err = fbnic_tlv_attr_addr_copy(mac_addr[i], mac_results[i]);
+		if (err)
+			return err;
+	}
 
-	/* Zero remaining unused addresses */
-	while (i < len)
-		eth_zero_addr(bmc_mac_addr[i++]);
+	memcpy(bmc_mac_addr, mac_addr, len * ETH_ALEN);
 
 	return 0;
 }
@@ -623,6 +644,7 @@ static int fbnic_fw_parse_bmc_addrs(u8 bmc_mac_addr[][ETH_ALEN],
 static int fbnic_fw_parse_bmc_cap(struct fbnic_dev *fbd,
 				  struct fbnic_tlv_msg **results)
 {
+	u8 bmc_mac_addr[4][ETH_ALEN] = {};
 	struct fbnic_tlv_msg *attr;
 	bool bmc_present = false;
 	u32 all_multi = 0;
@@ -635,18 +657,25 @@ static int fbnic_fw_parse_bmc_cap(struct fbnic_dev *fbd,
 	attr = results[FBNIC_FW_CAP_RESP_BMC_PRESENT] ?
 	       results[FBNIC_FW_CAP_RESP_BMC_MAC_ARRAY] : NULL;
 	if (attr) {
-		err = fbnic_fw_parse_bmc_addrs(fbd->fw_cap.bmc_mac_addr,
-					       attr, 4);
+		err = fbnic_fw_parse_bmc_addrs(bmc_mac_addr, attr, 4);
 		if (err)
 			return err;
 
 		all_multi = fta_get_uint(results,
 					 FBNIC_FW_CAP_RESP_BMC_ALL_MULTI);
 		bmc_present = true;
-	} else {
-		memset(fbd->fw_cap.bmc_mac_addr, 0,
-		       sizeof(fbd->fw_cap.bmc_mac_addr));
 	}
+
+	/* The service task can be reading the set in fbnic_bmc_rpc_init(),
+	 * so replace it whole. The mailbox Rx path is the only writer, so a
+	 * seqcount is enough; keep preemption off so a reader cannot spin on
+	 * a preempted update.
+	 */
+	preempt_disable();
+	write_seqcount_begin(&fbd->fw_cap.bmc_mac_seq);
+	memcpy(fbd->fw_cap.bmc_mac_addr, bmc_mac_addr, sizeof(bmc_mac_addr));
+	write_seqcount_end(&fbd->fw_cap.bmc_mac_seq);
+	preempt_enable();
 
 	/* all_multi is only read out of the message when a BMC is present, so
 	 * it is never set on its own and callers can test it without pairing
@@ -721,8 +750,6 @@ static int fbnic_fw_parse_cap_resp(void *opaque, struct fbnic_tlv_msg **results)
 		    fbd->fw_cap.stored.undi.commit,
 		    FBNIC_FW_CAP_RESP_COMMIT_MAX_SIZE);
 
-	fbd->fw_cap.active_slot =
-		fta_get_uint(results, FBNIC_FW_CAP_RESP_ACTIVE_FW_SLOT);
 	fbd->fw_cap.link_speed =
 		fta_get_uint(results, FBNIC_FW_CAP_RESP_FW_LINK_SPEED);
 	fbd->fw_cap.link_fec =

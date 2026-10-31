@@ -109,6 +109,10 @@ static int mpls_xmit(struct sk_buff *skb)
 	if (skb_cow_head(skb, hh_len + new_header_size))
 		goto drop;
 
+	/* The aligned expansion must still fit the u16 header offsets. */
+	if (unlikely(skb_headroom(skb) > U16_MAX))
+		goto drop;
+
 	skb_set_inner_protocol(skb, skb->protocol);
 	skb_reset_inner_network_header(skb);
 

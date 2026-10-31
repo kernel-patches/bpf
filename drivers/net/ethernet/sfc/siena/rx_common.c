@@ -886,6 +886,14 @@ static void efx_filter_rfs_work(struct work_struct *data)
 	netdev_put(req->net_dev, &req->net_dev_tracker);
 }
 
+void efx_siena_filter_rfs_init(struct efx_nic *efx)
+{
+	int slot_idx;
+
+	for (slot_idx = 0; slot_idx < EFX_RPS_MAX_IN_FLIGHT; slot_idx++)
+		INIT_WORK(&efx->rps_slot[slot_idx].work, efx_filter_rfs_work);
+}
+
 int efx_siena_filter_rfs(struct net_device *net_dev, const struct sk_buff *skb,
 			 u16 rxq_index, u32 flow_id)
 {
@@ -896,6 +904,10 @@ int efx_siena_filter_rfs(struct net_device *net_dev, const struct sk_buff *skb,
 	int slot_idx;
 	bool new;
 	int rc;
+
+	/* Paired with synchronize_net() in efx_siena_filter_rfs_flush(). */
+	if (!netif_device_present(net_dev))
+		return -ENETDOWN;
 
 	/* find a free slot */
 	for (slot_idx = 0; slot_idx < EFX_RPS_MAX_IN_FLIGHT; slot_idx++)
@@ -977,7 +989,6 @@ int efx_siena_filter_rfs(struct net_device *net_dev, const struct sk_buff *skb,
 	/* Queue the request */
 	req->net_dev = net_dev;
 	netdev_hold(req->net_dev, &req->net_dev_tracker, GFP_ATOMIC);
-	INIT_WORK(&req->work, efx_filter_rfs_work);
 	req->rxq_index = rxq_index;
 	req->flow_id = flow_id;
 	schedule_work(&req->work);
@@ -987,6 +998,23 @@ out_unlock:
 out_clear:
 	clear_bit(slot_idx, &efx->rps_slot_map);
 	return rc;
+}
+
+/* The caller must keep the net_device detached until the channels are safe
+ * for new aRFS requests.  Requests can also come from deferred PTP receive
+ * processing after NAPI has stopped.
+ */
+void efx_siena_filter_rfs_flush(struct efx_nic *efx)
+{
+	int slot_idx;
+
+	/* ndo_rx_flow_steer() runs under rcu_read_lock().  Wait for callers
+	 * which saw the device before it was detached to finish queueing.
+	 */
+	synchronize_net();
+
+	for (slot_idx = 0; slot_idx < EFX_RPS_MAX_IN_FLIGHT; slot_idx++)
+		flush_work(&efx->rps_slot[slot_idx].work);
 }
 
 bool __efx_siena_filter_rfs_expire(struct efx_channel *channel,

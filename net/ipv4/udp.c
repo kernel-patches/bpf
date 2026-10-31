@@ -136,6 +136,7 @@ static int udp_lib_lport_inuse(struct net *net, __u16 num,
 			       unsigned long *bitmap,
 			       struct sock *sk, unsigned int log)
 {
+	struct hlist_nulls_node *node;
 	kuid_t uid = sk_uid(sk);
 	struct sock *sk2;
 
@@ -143,7 +144,7 @@ static int udp_lib_lport_inuse(struct net *net, __u16 num,
 	 * is marked, whatever reuse options the sockets have. Without it
 	 * we are checking a specific port and honour the reuse options.
 	 */
-	sk_for_each(sk2, &hslot->head) {
+	sk_nulls_for_each(sk2, node, &hslot->head) {
 		if (net_eq(sock_net(sk2), net) &&
 		    sk2 != sk &&
 		    (bitmap || udp_sk(sk2)->udp_port_hash == num) &&
@@ -172,12 +173,13 @@ static int udp_lib_lport_inuse2(struct net *net, __u16 num,
 				struct udp_hslot *hslot2,
 				struct sock *sk)
 {
+	struct hlist_nulls_node *node;
 	kuid_t uid = sk_uid(sk);
 	struct sock *sk2;
 	int res = 0;
 
 	spin_lock(&hslot2->lock);
-	udp_portaddr_for_each_entry(sk2, &hslot2->head) {
+	udp_portaddr_for_each_entry(sk2, node, &hslot2->head) {
 		if (net_eq(sock_net(sk2), net) &&
 		    sk2 != sk &&
 		    (udp_sk(sk2)->udp_port_hash == num) &&
@@ -202,10 +204,11 @@ static int udp_lib_lport_inuse2(struct net *net, __u16 num,
 static int udp_reuseport_add_sock(struct sock *sk, struct udp_hslot *hslot)
 {
 	struct net *net = sock_net(sk);
+	struct hlist_nulls_node *node;
 	kuid_t uid = sk_uid(sk);
 	struct sock *sk2;
 
-	sk_for_each(sk2, &hslot->head) {
+	sk_nulls_for_each(sk2, node, &hslot->head) {
 		if (net_eq(sock_net(sk2), net) &&
 		    sk2 != sk &&
 		    sk2->sk_family == sk->sk_family &&
@@ -324,7 +327,7 @@ found:
 
 		sock_set_flag(sk, SOCK_RCU_FREE);
 
-		sk_add_node_rcu(sk, &hslot->head);
+		sk_nulls_add_node_rcu(sk, &hslot->head);
 		hslot->count++;
 		sock_prot_inuse_add(sock_net(sk), sk->sk_prot, 1);
 
@@ -332,11 +335,11 @@ found:
 		spin_lock(&hslot2->lock);
 		if (IS_ENABLED(CONFIG_IPV6) && sk->sk_reuseport &&
 		    sk->sk_family == AF_INET6)
-			hlist_add_tail_rcu(&udp_sk(sk)->udp_portaddr_node,
-					   &hslot2->head);
+			hlist_nulls_add_tail_rcu(&udp_sk(sk)->udp_portaddr_node,
+						 &hslot2->head);
 		else
-			hlist_add_head_rcu(&udp_sk(sk)->udp_portaddr_node,
-					   &hslot2->head);
+			hlist_nulls_add_head_rcu(&udp_sk(sk)->udp_portaddr_node,
+						 &hslot2->head);
 		hslot2->count++;
 		spin_unlock(&hslot2->lock);
 	}
@@ -441,10 +444,14 @@ static struct sock *udp4_lib_lookup1(const struct net *net,
 {
 	unsigned int slot = udp_hashfn(net, hnum, udptable->mask);
 	struct udp_hslot *hslot = &udptable->hash[slot];
-	struct sock *sk, *result = NULL;
-	int score, badness = 0;
+	struct hlist_nulls_node *node;
+	struct sock *sk, *result;
+	int score, badness;
 
-	sk_for_each_rcu(sk, &hslot->head) {
+begin:
+	result = NULL;
+	badness = 0;
+	sk_nulls_for_each_rcu(sk, node, &hslot->head) {
 		score = compute_score(sk, net,
 				      saddr, sport, daddr, hnum, dif, sdif);
 		if (score > badness) {
@@ -452,6 +459,13 @@ static struct sock *udp4_lib_lookup1(const struct net *net,
 			badness = score;
 		}
 	}
+	/*
+	 * if the nulls value we got at the end of this lookup is
+	 * not the expected one, we must restart lookup.
+	 * We probably met an item that was moved to another chain.
+	 */
+	if (unlikely(get_nulls_value(node) != slot))
+		goto begin;
 
 	return result;
 }
@@ -464,13 +478,16 @@ static struct sock *udp4_lib_lookup2(const struct net *net,
 				     struct udp_hslot *hslot2,
 				     struct sk_buff *skb)
 {
+	unsigned int slot2 = UDP_HSLOT_MAIN(hslot2) - net->ipv4.udp_table->hash2;
+	struct hlist_nulls_node *node;
 	struct sock *sk, *result;
 	int score, badness;
 	bool need_rescore;
 
+begin:
 	result = NULL;
 	badness = 0;
-	udp_portaddr_for_each_entry_rcu(sk, &hslot2->head) {
+	udp_portaddr_for_each_entry_rcu(sk, node, &hslot2->head) {
 		need_rescore = false;
 rescore:
 		score = compute_score(need_rescore ? result : sk, net, saddr,
@@ -511,6 +528,13 @@ rescore:
 			goto rescore;
 		}
 	}
+	/*
+	 * if the nulls value we got at the end of this lookup is
+	 * not the expected one, we must restart lookup.
+	 * We probably met an item that was moved to another chain.
+	 */
+	if (unlikely(get_nulls_value(node) != slot2))
+		goto begin;
 	return result;
 }
 
@@ -563,7 +587,7 @@ begin:
 	 * expected one, we must restart lookup. We probably met an item that
 	 * was moved to another chain due to rehash.
 	 */
-	if (get_nulls_value(node) != slot)
+	if (unlikely(get_nulls_value(node) != slot))
 		goto begin;
 
 	return NULL;
@@ -2252,13 +2276,13 @@ void udp_lib_unhash(struct sock *sk)
 		spin_lock_bh(&hslot->lock);
 		if (rcu_access_pointer(sk->sk_reuseport_cb))
 			reuseport_detach_sock(sk);
-		if (sk_del_node_init_rcu(sk)) {
+		if (sk_nulls_del_node_init_rcu(sk)) {
 			hslot->count--;
 			inet_sk(sk)->inet_num = 0;
 			sock_prot_inuse_add(net, sk->sk_prot, -1);
 
 			spin_lock(&hslot2->lock);
-			hlist_del_init_rcu(&udp_sk(sk)->udp_portaddr_node);
+			hlist_nulls_del_init_rcu(&udp_sk(sk)->udp_portaddr_node);
 			hslot2->count--;
 			spin_unlock(&hslot2->lock);
 
@@ -2292,12 +2316,17 @@ void udp_lib_rehash(struct sock *sk, u16 newhash, u16 newhash4)
 
 			if (hslot2 != nhslot2) {
 				spin_lock(&hslot2->lock);
-				hlist_del_init_rcu(&udp_sk(sk)->udp_portaddr_node);
+				hlist_nulls_del_init_rcu(&udp_sk(sk)->udp_portaddr_node);
 				hslot2->count--;
 				spin_unlock(&hslot2->lock);
 
 				spin_lock(&nhslot2->lock);
-				hlist_add_head_rcu(&udp_sk(sk)->udp_portaddr_node,
+				/* Note: head insertion is required here, so
+				 * that a lockless reader parked on this socket
+				 * restarts from the head of the new chain
+				 * instead of hitting a nulls marker early.
+				 */
+				hlist_nulls_add_head_rcu(&udp_sk(sk)->udp_portaddr_node,
 							 &nhslot2->head);
 				nhslot2->count++;
 				spin_unlock(&nhslot2->lock);
@@ -2514,9 +2543,9 @@ static int __udp4_lib_mcast_deliver(struct net *net, struct sk_buff *skb,
 	unsigned int hash2, hash2_any, offset;
 	unsigned short hnum = ntohs(uh->dest);
 	struct sock *sk, *first = NULL;
+	struct hlist_nulls_node *node;
 	int dif = skb->dev->ifindex;
 	int sdif = inet_sdif(skb);
-	struct hlist_node *node;
 	struct udp_hslot *hslot;
 	struct sk_buff *nskb;
 	bool use_hash2;
@@ -2526,7 +2555,7 @@ static int __udp4_lib_mcast_deliver(struct net *net, struct sk_buff *skb,
 	hash2 = 0;
 	hslot = udp_hashslot(udptable, net, hnum);
 	use_hash2 = hslot->count > 10;
-	offset = offsetof(typeof(*sk), sk_node);
+	offset = offsetof(typeof(*sk), sk_nulls_node);
 
 	if (use_hash2) {
 		hash2_any = ipv4_portaddr_hash(net, htonl(INADDR_ANY), hnum) &
@@ -2537,7 +2566,13 @@ start_lookup:
 		offset = offsetof(typeof(*sk), __sk_common.skc_portaddr_node);
 	}
 
-	sk_for_each_entry_offset_rcu(sk, node, &hslot->head, offset) {
+	/* Note: a concurrent udp_lib_rehash() or udp_lib_unhash() can move a
+	 * socket to another chain while we traverse this one. Unlike the
+	 * unicast lookups, we can not restart the iteration here, because
+	 * skbs have already been cloned and delivered. This is the same
+	 * best-effort behavior as before the hlist_nulls conversion.
+	 */
+	sk_nulls_for_each_entry_offset_rcu(sk, node, &hslot->head, offset) {
 		if (!__udp_is_mcast_sock(net, sk, uh->dest, daddr,
 					 uh->source, saddr, dif, sdif, hnum))
 			continue;
@@ -2750,6 +2785,7 @@ static struct sock *__udp4_lib_mcast_demux_lookup(struct net *net,
 {
 	struct udp_table *udptable = net->ipv4.udp_table;
 	unsigned short hnum = ntohs(loc_port);
+	struct hlist_nulls_node *node;
 	struct sock *sk, *result;
 	struct udp_hslot *hslot;
 	unsigned int slot;
@@ -2761,8 +2797,9 @@ static struct sock *__udp4_lib_mcast_demux_lookup(struct net *net,
 	if (hslot->count > 10)
 		return NULL;
 
+begin:
 	result = NULL;
-	sk_for_each_rcu(sk, &hslot->head) {
+	sk_nulls_for_each_rcu(sk, node, &hslot->head) {
 		if (__udp_is_mcast_sock(net, sk, loc_port, loc_addr,
 					rmt_port, rmt_addr, dif, sdif, hnum)) {
 			if (result)
@@ -2770,6 +2807,13 @@ static struct sock *__udp4_lib_mcast_demux_lookup(struct net *net,
 			result = sk;
 		}
 	}
+	/*
+	 * if the nulls value we got at the end of this lookup is
+	 * not the expected one, we must restart lookup.
+	 * We probably met an item that was moved to another chain.
+	 */
+	if (unlikely(get_nulls_value(node) != slot))
+		goto begin;
 
 	return result;
 }
@@ -2786,6 +2830,7 @@ static struct sock *__udp4_lib_demux_lookup(struct net *net,
 	struct udp_table *udptable = net->ipv4.udp_table;
 	INET_ADDR_COOKIE(acookie, rmt_addr, loc_addr);
 	unsigned short hnum = ntohs(loc_port);
+	struct hlist_nulls_node *node;
 	struct udp_hslot *hslot2;
 	unsigned int hash2;
 	__portpair ports;
@@ -2795,7 +2840,7 @@ static struct sock *__udp4_lib_demux_lookup(struct net *net,
 	hslot2 = udp_hashslot2(udptable, hash2);
 	ports = INET_COMBINED_PORTS(rmt_port, hnum);
 
-	udp_portaddr_for_each_entry_rcu(sk, &hslot2->head) {
+	udp_portaddr_for_each_entry_rcu(sk, node, &hslot2->head) {
 		if (inet_match(net, sk, acookie, ports, dif, sdif))
 			return sk;
 		/* Only check first socket in chain */
@@ -3229,6 +3274,7 @@ static struct sock *udp_get_first(struct seq_file *seq, int start)
 {
 	struct udp_iter_state *state = seq->private;
 	struct net *net = seq_file_net(seq);
+	struct hlist_nulls_node *node;
 	struct udp_table *udptable;
 	struct sock *sk;
 
@@ -3238,11 +3284,11 @@ static struct sock *udp_get_first(struct seq_file *seq, int start)
 	     ++state->bucket) {
 		struct udp_hslot *hslot = &udptable->hash[state->bucket];
 
-		if (hlist_empty(&hslot->head))
+		if (hlist_nulls_empty(&hslot->head))
 			continue;
 
 		spin_lock_bh(&hslot->lock);
-		sk_for_each(sk, &hslot->head) {
+		sk_nulls_for_each(sk, node, &hslot->head) {
 			if (seq_sk_match(seq, sk))
 				goto found;
 		}
@@ -3260,7 +3306,7 @@ static struct sock *udp_get_next(struct seq_file *seq, struct sock *sk)
 	struct udp_table *udptable;
 
 	do {
-		sk = sk_next(sk);
+		sk = sk_nulls_next(sk);
 	} while (sk && !seq_sk_match(seq, sk));
 
 	if (!sk) {
@@ -3431,12 +3477,12 @@ again:
 	for (; state->bucket <= udptable->mask; state->bucket++) {
 		struct udp_hslot *hslot2 = &udptable->hash2[state->bucket].hslot;
 
-		if (hlist_empty(&hslot2->head))
+		if (hlist_nulls_empty(&hslot2->head))
 			goto next_bucket;
 
 		spin_lock_bh(&hslot2->lock);
-		sk = hlist_entry_safe(hslot2->head.first, struct sock,
-				      __sk_common.skc_portaddr_node);
+		sk = hlist_nulls_entry_safe(hslot2->head.first, struct sock,
+					    __sk_common.skc_portaddr_node);
 		/* Resume from the first (in iteration order) unseen socket from
 		 * the last batch that still exists in resume_bucket. Most of
 		 * the time this will just be where the last iteration left off
@@ -3488,9 +3534,9 @@ fill_batch:
 
 			/* Pick up where we left off. */
 			sk = iter->batch[iter->end_sk - 1].sk;
-			sk = hlist_entry_safe(sk->__sk_common.skc_portaddr_node.next,
-					      struct sock,
-					      __sk_common.skc_portaddr_node);
+			sk = hlist_nulls_entry_safe(sk->__sk_common.skc_portaddr_node.next,
+						    struct sock,
+						    __sk_common.skc_portaddr_node);
 			batch_sks = iter->end_sk;
 			goto fill_batch;
 		}
@@ -3717,12 +3763,12 @@ static void __init udp_table_init(struct udp_table *table, const char *name)
 
 	table->hash2 = (void *)(table->hash + (table->mask + 1));
 	for (i = 0; i <= table->mask; i++) {
-		INIT_HLIST_HEAD(&table->hash[i].head);
+		INIT_HLIST_NULLS_HEAD(&table->hash[i].head, i);
 		table->hash[i].count = 0;
 		spin_lock_init(&table->hash[i].lock);
 	}
 	for (i = 0; i <= table->mask; i++) {
-		INIT_HLIST_HEAD(&table->hash2[i].hslot.head);
+		INIT_HLIST_NULLS_HEAD(&table->hash2[i].hslot.head, i);
 		table->hash2[i].hslot.count = 0;
 		spin_lock_init(&table->hash2[i].hslot.lock);
 	}
@@ -3771,11 +3817,11 @@ static struct udp_table __net_init *udp_pernet_table_alloc(unsigned int hash_ent
 	udptable->log = ilog2(hash_entries);
 
 	for (i = 0; i < hash_entries; i++) {
-		INIT_HLIST_HEAD(&udptable->hash[i].head);
+		INIT_HLIST_NULLS_HEAD(&udptable->hash[i].head, i);
 		udptable->hash[i].count = 0;
 		spin_lock_init(&udptable->hash[i].lock);
 
-		INIT_HLIST_HEAD(&udptable->hash2[i].hslot.head);
+		INIT_HLIST_NULLS_HEAD(&udptable->hash2[i].hslot.head, i);
 		udptable->hash2[i].hslot.count = 0;
 		spin_lock_init(&udptable->hash2[i].hslot.lock);
 	}

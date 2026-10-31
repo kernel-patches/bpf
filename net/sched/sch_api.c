@@ -1247,10 +1247,6 @@ skip:
 		unsigned long cl;
 		int err;
 
-		/* Only support running class lockless if parent is lockless */
-		if (new && (new->flags & TCQ_F_NOLOCK) && !(parent->flags & TCQ_F_NOLOCK))
-			qdisc_clear_nolock(new);
-
 		if (!cops || !cops->graft)
 			return -EOPNOTSUPP;
 
@@ -1327,6 +1323,7 @@ static int qdisc_block_indexes_set(struct Qdisc *sch, struct nlattr **tca,
 
 static struct Qdisc *qdisc_create(struct net_device *dev,
 				  struct netdev_queue *dev_queue,
+				  struct Qdisc *parent_qdisc,
 				  u32 parent, u32 handle,
 				  struct nlattr **tca, int *errp,
 				  struct netlink_ext_ack *extack)
@@ -1404,6 +1401,11 @@ static struct Qdisc *qdisc_create(struct net_device *dev,
 		if (err != 0)
 			goto err_out4;
 	}
+
+	/* Only support running class lockless if parent is lockless */
+	if ((sch->flags & TCQ_F_NOLOCK) && parent_qdisc &&
+	    !(parent_qdisc->flags & TCQ_F_NOLOCK))
+		qdisc_clear_nolock(sch);
 
 	if (tca[TCA_RATE]) {
 		err = -EOPNOTSUPP;
@@ -1817,7 +1819,7 @@ create_n_graft:
 create_n_graft2:
 	if (clid == TC_H_INGRESS) {
 		if (dev_ingress_queue(dev)) {
-			q = qdisc_create(dev, dev_ingress_queue(dev),
+			q = qdisc_create(dev, dev_ingress_queue(dev), NULL,
 					 tcm->tcm_parent, tcm->tcm_parent,
 					 tca, &err, extack);
 		} else {
@@ -1834,7 +1836,7 @@ create_n_graft2:
 		else
 			dev_queue = netdev_get_tx_queue(dev, 0);
 
-		q = qdisc_create(dev, dev_queue,
+		q = qdisc_create(dev, dev_queue, p,
 				 tcm->tcm_parent, tcm->tcm_handle,
 				 tca, &err, extack);
 	}

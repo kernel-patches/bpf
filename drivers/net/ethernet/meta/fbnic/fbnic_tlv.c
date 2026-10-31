@@ -724,12 +724,25 @@ free_message:
 	return NULL;
 }
 
-void fbnic_tlv_attr_addr_copy(u8 *dest, struct fbnic_tlv_msg *src)
+/**
+ * fbnic_tlv_attr_addr_copy - Copy a MAC address out of an attribute
+ * @dest: Buffer of ETH_ALEN bytes to copy the address into
+ * @src: Attribute holding the address
+ *
+ * The validator accepts a binary attribute of any length up to the size in
+ * its index entry, so a short MAC address gets through it. Check the length
+ * here rather than read past the end of the attribute.
+ *
+ * Return: zero on success, or -EINVAL if the attribute is not ETH_ALEN long.
+ **/
+int fbnic_tlv_attr_addr_copy(u8 *dest, struct fbnic_tlv_msg *src)
 {
-	u8 *mac_addr;
+	if (le16_to_cpu(src->hdr.len) != sizeof(*src) + ETH_ALEN)
+		return -EINVAL;
 
-	mac_addr = fbnic_tlv_attr_get_value_ptr(src);
-	memcpy(dest, mac_addr, ETH_ALEN);
+	memcpy(dest, fbnic_tlv_attr_get_value_ptr(src), ETH_ALEN);
+
+	return 0;
 }
 
 /**

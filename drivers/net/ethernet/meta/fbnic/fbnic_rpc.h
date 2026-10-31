@@ -156,9 +156,9 @@ enum {
  * always go top-down with unicast, and bottom-up with multicast so that
  * there should be free-space in the middle between the two.
  *
- * The entry at MADCA_DEFAULT_BOUNDARY is a special case as it can be used
- * for the ALL MULTI address if the list is full, or the BMC has requested
- * it.
+ * The entry just below the boundary is reserved for the ALL MULTI address,
+ * used if the list is full, or the BMC has requested it. Neither the unicast
+ * nor the multicast list allocates it.
  */
 #define FBNIC_RPC_TCAM_MACDA_MULTICAST_IDX	5
 #define FBNIC_RPC_TCAM_MACDA_DEFAULT_BOUNDARY	24

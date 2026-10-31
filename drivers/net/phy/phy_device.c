@@ -332,21 +332,88 @@ out:
 	return !phydev->suspended;
 }
 
+static __maybe_unused enum phy_irq_wake
+phy_irq_wake_source(struct phy_device *phydev)
+{
+	struct net_device *netdev = phydev->attached_dev;
+	bool phy_wol;
+
+	if (!netdev)
+		return PHY_IRQ_WAKE_NONE;
+
+	/* phy_suspend() cached the answer of a suspended PHY, which may
+	 * not be reachable over MDIO.
+	 */
+	if (phydev->suspended && !phy_can_wakeup(phydev))
+		phy_wol = phydev->wol_enabled;
+	else
+		phy_wol = phy_may_wakeup(phydev);
+
+	if (netdev->ethtool->wol_enabled || phy_wol)
+		return PHY_IRQ_WAKE_SYSTEM;
+
+	/* A MAC that manages PHY PM stops the PHY itself: the link
+	 * interrupt that follows is not a wakeup.
+	 */
+	if (phydev->mac_managed_pm)
+		return PHY_IRQ_WAKE_NONE;
+
+	if (device_may_wakeup(&netdev->dev))
+		return PHY_IRQ_WAKE_NETDEV;
+
+	if (netdev->dev.parent && device_may_wakeup(netdev->dev.parent))
+		return PHY_IRQ_WAKE_PARENT;
+
+	return PHY_IRQ_WAKE_NONE;
+}
+
+/* Wakeup interrupts may occur during the system sleep transition when
+ * the PHY is inaccessible. Set flag to postpone handling until the PHY
+ * has resumed. Wait for concurrent interrupt handler to complete.
+ * Decide which wakeup event a postponed interrupt reports now, while
+ * the PHY can still be read.
+ */
+static __maybe_unused void mdio_bus_phy_suspend_irq(struct phy_device *phydev)
+{
+	if (!phy_interrupt_is_valid(phydev))
+		return;
+
+	phydev->irq_wake = phy_irq_wake_source(phydev);
+	/* Pairs with smp_load_acquire() in phy_interrupt() */
+	smp_store_release(&phydev->irq_suspended, true);
+	synchronize_irq(phydev->irq);
+}
+
+/* Rerun interrupts which were postponed by phy_interrupt()
+ * because they occurred during the system sleep transition.
+ */
+static __maybe_unused void mdio_bus_phy_resume_irq(struct phy_device *phydev)
+{
+	WRITE_ONCE(phydev->irq_suspended, false);
+	if (!phy_interrupt_is_valid(phydev))
+		return;
+
+	mutex_lock(&phydev->irq_pm_lock);
+	synchronize_irq(phydev->irq);
+	if (atomic_xchg(&phydev->irq_rerun, 0)) {
+		enable_irq(phydev->irq);
+		irq_wake_thread(phydev->irq, phydev);
+	}
+	mutex_unlock(&phydev->irq_pm_lock);
+}
+
 static __maybe_unused int mdio_bus_phy_suspend(struct device *dev)
 {
 	struct phy_device *phydev = to_phy_device(dev);
+	int ret;
+
+	/* An interrupt can fire while the MAC has the MDIO bus powered
+	 * down, whether or not the MAC manages PHY PM.
+	 */
+	mdio_bus_phy_suspend_irq(phydev);
 
 	if (phydev->mac_managed_pm)
 		return 0;
-
-	/* Wakeup interrupts may occur during the system sleep transition when
-	 * the PHY is inaccessible. Set flag to postpone handling until the PHY
-	 * has resumed. Wait for concurrent interrupt handler to complete.
-	 */
-	if (phy_interrupt_is_valid(phydev)) {
-		phydev->irq_suspended = 1;
-		synchronize_irq(phydev->irq);
-	}
 
 	/* We must stop the state machine manually, otherwise it stops out of
 	 * control, possibly with the phydev->lock held. Upon resume, netdev
@@ -359,9 +426,20 @@ static __maybe_unused int mdio_bus_phy_suspend(struct device *dev)
 	if (!mdio_bus_phy_may_suspend(phydev))
 		return 0;
 
+	ret = phy_suspend(phydev);
+	if (ret) {
+		/* The PM core skips the resume callback of a device whose
+		 * suspend callback failed.
+		 */
+		mdio_bus_phy_resume_irq(phydev);
+		if (phy_uses_state_machine(phydev))
+			phy_start_machine(phydev);
+		return ret;
+	}
+
 	phydev->suspended_by_mdio_bus = 1;
 
-	return phy_suspend(phydev);
+	return 0;
 }
 
 static __maybe_unused int mdio_bus_phy_resume(struct device *dev)
@@ -369,8 +447,10 @@ static __maybe_unused int mdio_bus_phy_resume(struct device *dev)
 	struct phy_device *phydev = to_phy_device(dev);
 	int ret;
 
-	if (phydev->mac_managed_pm)
+	if (phydev->mac_managed_pm) {
+		mdio_bus_phy_resume_irq(phydev);
 		return 0;
+	}
 
 	if (!phydev->suspended_by_mdio_bus)
 		goto no_resume;
@@ -387,30 +467,22 @@ static __maybe_unused int mdio_bus_phy_resume(struct device *dev)
 
 	ret = phy_init_hw(phydev);
 	if (ret < 0)
-		return ret;
+		goto err_resume_irq;
 
 	ret = phy_resume(phydev);
 	if (ret < 0)
-		return ret;
+		goto err_resume_irq;
 no_resume:
-	if (phy_interrupt_is_valid(phydev)) {
-		phydev->irq_suspended = 0;
-		synchronize_irq(phydev->irq);
-
-		/* Rerun interrupts which were postponed by phy_interrupt()
-		 * because they occurred during the system sleep transition.
-		 */
-		if (phydev->irq_rerun) {
-			phydev->irq_rerun = 0;
-			enable_irq(phydev->irq);
-			irq_wake_thread(phydev->irq, phydev);
-		}
-	}
+	mdio_bus_phy_resume_irq(phydev);
 
 	if (phy_uses_state_machine(phydev))
 		phy_start_machine(phydev);
 
 	return 0;
+
+err_resume_irq:
+	mdio_bus_phy_resume_irq(phydev);
+	return ret;
 }
 
 static SIMPLE_DEV_PM_OPS(mdio_bus_phy_pm_ops, mdio_bus_phy_suspend,
@@ -711,6 +783,7 @@ struct phy_device *phy_device_create(struct mii_bus *bus, int addr, u32 phy_id,
 	dev->max_n_ports = 1;
 
 	mutex_init(&dev->lock);
+	mutex_init(&dev->irq_pm_lock);
 	INIT_DELAYED_WORK(&dev->state_queue, phy_state_machine);
 
 	/* Request the appropriate module unconditionally; don't
@@ -1826,9 +1899,13 @@ static void phy_detach_internal(struct phy_device *phydev, bool notify_bus)
 		struct hwtstamp_provider *hwprov;
 
 		/* hwprov may technically be protected by ops lock but
-		 * not for devices with a phydev, see phy_link_topo_add_phy()
+		 * not for devices with a phydev, see phy_link_topo_add_phy().
+		 * Drivers may detach without RTNL while dev is unregistered,
+		 * but then nothing else can reach hwprov.
 		 */
-		hwprov = rtnl_dereference(dev->hwprov);
+		hwprov = rcu_dereference_protected(dev->hwprov,
+						   lockdep_rtnl_is_held() ||
+						   dev->reg_state != NETREG_REGISTERED);
 		/* Disable timestamp if it is the one selected */
 		if (hwprov && hwprov->phydev == phydev) {
 			rcu_assign_pointer(dev->hwprov, NULL);

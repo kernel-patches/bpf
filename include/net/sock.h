@@ -184,7 +184,7 @@ struct sock_common {
 	int			skc_bound_dev_if;
 	union {
 		struct hlist_node	skc_bind_node;
-		struct hlist_node	skc_portaddr_node;
+		struct hlist_nulls_node	skc_portaddr_node;
 	};
 	struct proto		*skc_prot;
 	possible_net_t		skc_net;
@@ -932,7 +932,11 @@ static inline void __sk_nulls_add_node_tail_rcu(struct sock *sk, struct hlist_nu
 static inline void sk_nulls_add_node_rcu(struct sock *sk, struct hlist_nulls_head *list)
 {
 	sock_hold(sk);
-	__sk_nulls_add_node_rcu(sk, list);
+	if (IS_ENABLED(CONFIG_IPV6) && sk->sk_reuseport &&
+	    sk->sk_family == AF_INET6)
+		__sk_nulls_add_node_tail_rcu(sk, list);
+	else
+		__sk_nulls_add_node_rcu(sk, list);
 }
 
 static inline void __sk_del_bind_node(struct sock *sk)
@@ -967,18 +971,19 @@ static inline void sk_add_bind_node(struct sock *sk,
 	hlist_for_each_entry_safe(__sk, tmp, list, sk_bind_node)
 
 /**
- * sk_for_each_entry_offset_rcu - iterate over a list at a given struct offset
+ * sk_nulls_for_each_entry_offset_rcu - iterate over a list at a given struct offset
  * @tpos:	the type * to use as a loop cursor.
- * @pos:	the &struct hlist_node to use as a loop cursor.
+ * @pos:	the &struct hlist_nulls_node to use as a loop cursor.
  * @head:	the head for your list.
- * @offset:	offset of hlist_node within the struct.
+ * @offset:	offset of hlist_nulls_node within the struct.
  *
  */
-#define sk_for_each_entry_offset_rcu(tpos, pos, head, offset)		       \
-	for (pos = rcu_dereference(hlist_first_rcu(head));		       \
-	     pos != NULL &&						       \
+#define sk_nulls_for_each_entry_offset_rcu(tpos, pos, head, offset)	       \
+	for (({ barrier(); }),						       \
+	     pos = rcu_dereference_raw(hlist_nulls_first_rcu(head));	       \
+	     (!is_a_nulls(pos)) &&					       \
 		({ tpos = (typeof(*tpos) *)((void *)pos - offset); 1;});       \
-	     pos = rcu_dereference(hlist_next_rcu(pos)))
+	     pos = rcu_dereference_raw(hlist_nulls_next_rcu(pos)))
 
 static inline struct user_namespace *sk_user_ns(const struct sock *sk)
 {

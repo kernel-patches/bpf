@@ -197,6 +197,7 @@ struct tun_struct {
 	int			sndbuf;
 	struct tap_filter	txflt;
 	struct sock_fprog	fprog;
+	struct sock_fprog_kern	fprog_kern;
 	/* protected by rtnl lock */
 	bool			filter_attached;
 	u32			msg_enable;
@@ -730,12 +731,69 @@ static void tun_force_wake_queue(struct tun_struct *tun,
 	spin_unlock_bh(&tfile->tx_ring.consumer_lock);
 }
 
+/* Copy the filter that @argp points at into the kernel, so that it can be
+ * installed again later, independent of the ioctl caller's address space.
+ * @fprog_kern receives the copy, which belongs to the caller until it is
+ * installed or freed, and @fprog receives the header, with the user pointer
+ * kept for TUNGETFILTER.
+ */
+static int tun_copy_filter(struct sock_fprog __user *argp,
+			   struct sock_fprog *fprog,
+			   struct sock_fprog_kern *fprog_kern)
+{
+	struct sock_fprog fp;
+	struct sock_filter *insns;
+	int err;
+
+	if (copy_from_user(&fp, argp, sizeof(fp)))
+		return -EFAULT;
+
+	if (!fp.len || fp.len > BPF_MAXINSNS)
+		return -EINVAL;
+
+	insns = kmalloc_array(fp.len, sizeof(struct sock_filter),
+			      GFP_KERNEL_ACCOUNT);
+	if (!insns)
+		return -ENOMEM;
+
+	if (copy_from_user(insns, fp.filter,
+			   fp.len * sizeof(struct sock_filter))) {
+		kfree(insns);
+		return -EFAULT;
+	}
+
+	/* The instructions are only verified when a program is built from
+	 * them, which happens when the filter is attached to a socket. Run
+	 * the classic verifier here as well, so that a bad program is
+	 * refused before it is saved and before any queue is touched.
+	 * bpf_prog_create() can still refuse the program later, when it is
+	 * converted to eBPF or when no runtime can be selected for it; the
+	 * attach path returns that error, and the saved program is not
+	 * replaced.
+	 */
+	err = bpf_prog_validate_classic(insns, fp.len);
+	if (err) {
+		kfree(insns);
+		return err;
+	}
+
+	/* Zero the whole header before filling it in. */
+	memset(fprog, 0, sizeof(*fprog));
+	fprog->len = fp.len;
+	fprog->filter = fp.filter;
+	fprog_kern->len = fp.len;
+	fprog_kern->filter = insns;
+
+	return 0;
+}
+
 static int tun_attach(struct tun_struct *tun, struct file *file,
 		      bool skip_filter, bool napi, bool napi_frags,
 		      bool publish_tun)
 {
 	struct tun_file *tfile = file->private_data;
 	struct net_device *dev = tun->dev;
+	bool rollback_filter = false;
 	int err;
 
 	err = security_tun_dev_attach(tfile->socket.sk, tun->security);
@@ -760,10 +818,11 @@ static int tun_attach(struct tun_struct *tun, struct file *file,
 	/* Re-attach the filter to persist device */
 	if (!skip_filter && (tun->filter_attached == true)) {
 		lock_sock(tfile->socket.sk);
-		err = sk_attach_filter(&tun->fprog, tfile->socket.sk);
+		err = sk_attach_filter_kern(&tun->fprog_kern, tfile->socket.sk);
 		release_sock(tfile->socket.sk);
-		if (!err)
+		if (err)
 			goto out;
+		rollback_filter = true;
 	}
 
 	if (!tfile->detached &&
@@ -825,6 +884,17 @@ static int tun_attach(struct tun_struct *tun, struct file *file,
 	WRITE_ONCE(tun->numqueues, tun->numqueues + 1);
 	tun_set_real_num_queues(tun);
 out:
+	if (err && rollback_filter) {
+		/* The filter was installed before the rest of the attach
+		 * ran, so drop it again if a later step failed. Any
+		 * program it replaced is already gone: this leaves the
+		 * queue without a filter rather than restoring the
+		 * previous one.
+		 */
+		lock_sock(tfile->socket.sk);
+		sk_detach_filter(tfile->socket.sk);
+		release_sock(tfile->socket.sk);
+	}
 	return err;
 }
 
@@ -2410,6 +2480,7 @@ static void tun_free_netdev(struct net_device *dev)
 	security_tun_dev_free_security(tun->security);
 	__tun_set_ebpf(tun, &tun->steering_prog, NULL);
 	__tun_set_ebpf(tun, &tun->filter_prog, NULL);
+	kfree(tun->fprog_kern.filter);
 }
 
 static void tun_setup(struct net_device *dev)
@@ -3080,10 +3151,14 @@ static void tun_detach_filter(struct tun_struct *tun, int n)
 		release_sock(tfile->socket.sk);
 	}
 
+	kfree(tun->fprog_kern.filter);
+	tun->fprog_kern.filter = NULL;
+	tun->fprog_kern.len = 0;
 	tun->filter_attached = false;
 }
 
-static int tun_attach_filter(struct tun_struct *tun)
+static int tun_attach_filter(struct tun_struct *tun,
+			     struct sock_fprog_kern *fprog_kern)
 {
 	int i, ret = 0;
 	struct tun_file *tfile;
@@ -3091,15 +3166,29 @@ static int tun_attach_filter(struct tun_struct *tun)
 	for (i = 0; i < tun->numqueues; i++) {
 		tfile = rtnl_dereference(tun->tfiles[i]);
 		lock_sock(tfile->socket.sk);
-		ret = sk_attach_filter(&tun->fprog, tfile->socket.sk);
+		ret = sk_attach_filter_kern(fprog_kern, tfile->socket.sk);
 		release_sock(tfile->socket.sk);
-		if (ret) {
-			tun_detach_filter(tun, i);
-			return ret;
-		}
+		if (ret)
+			goto out_detach;
 	}
 
 	tun->filter_attached = true;
+	return 0;
+
+out_detach:
+	/* Drop the copies already installed on queues 0..i-1, which leaves
+	 * them without a filter: their previous sk_filter, if any, was
+	 * already replaced and released. The caller does not replace the
+	 * saved program when this fails, so tun->fprog, tun->fprog_kern and
+	 * filter_attached keep their previous values.
+	 */
+	while (i--) {
+		tfile = rtnl_dereference(tun->tfiles[i]);
+		lock_sock(tfile->socket.sk);
+		sk_detach_filter(tfile->socket.sk);
+		release_sock(tfile->socket.sk);
+	}
+
 	return ret;
 }
 
@@ -3434,17 +3523,31 @@ static long __tun_chr_ioctl(struct file *file, unsigned int cmd,
 		tun_set_sndbuf(tun);
 		break;
 
-	case TUNATTACHFILTER:
+	case TUNATTACHFILTER: {
+		struct sock_fprog_kern fprog_kern;
+		struct sock_fprog fprog;
+
 		/* Can be set only for TAPs */
 		ret = -EINVAL;
 		if ((tun->flags & TUN_TYPE_MASK) != IFF_TAP)
 			break;
-		ret = -EFAULT;
-		if (copy_from_user(&tun->fprog, argp, sizeof(tun->fprog)))
+
+		ret = tun_copy_filter(argp, &fprog, &fprog_kern);
+		if (ret)
 			break;
 
-		ret = tun_attach_filter(tun);
+		ret = tun_attach_filter(tun, &fprog_kern);
+		if (ret) {
+			kfree(fprog_kern.filter);
+			break;
+		}
+
+		/* Install the copy only after every queue accepted it. */
+		kfree(tun->fprog_kern.filter);
+		tun->fprog_kern = fprog_kern;
+		tun->fprog = fprog;
 		break;
+	}
 
 	case TUNDETACHFILTER:
 		/* Can be set only for TAPs */

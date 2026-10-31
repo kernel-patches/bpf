@@ -86,10 +86,10 @@ static int fbnic_stop(struct net_device *netdev)
 {
 	struct fbnic_net *fbn = netdev_priv(netdev);
 
+	fbnic_down(fbn);
+
 	fbnic_mac_free_irq(fbn->fbd);
 	phylink_suspend(fbn->phylink, fbnic_bmc_present(fbn->fbd));
-
-	fbnic_down(fbn);
 
 	fbnic_time_stop(fbn);
 	fbnic_fw_xmit_ownership_msg(fbn->fbd, false);
@@ -170,7 +170,7 @@ static int fbnic_mc_unsync(struct net_device *netdev, const unsigned char *addr)
 	 * Skip over the address reserved for the BMC MAC and
 	 * exclude index 0 as that belongs to the broadcast address
 	 */
-	for (i = fbd->mac_addr_boundary, ret = -ENOENT;
+	for (i = fbd->mac_addr_boundary - 1, ret = -ENOENT;
 	     --i > FBNIC_RPC_TCAM_MACDA_BROADCAST_IDX && ret;) {
 		struct fbnic_mac_addr *mac_addr = &fbd->mac_addr[i];
 

@@ -217,6 +217,8 @@
 #define B53_GLOBAL_CONFIG		0x00
 #define   GC_RESET_MIB			0x01
 #define   GC_RX_BPDU_EN			0x02
+#define   GC_IGMP_IP_EN			BIT(3)
+#define   GC_IGMP_RED_EN_6318_268		BIT(4)
 #define   GC_MIB_AC_HDR_EN		0x10
 #define   GC_MIB_AC_EN			0x20
 #define   GC_FRM_MGMT_PORT_M		0xC0
@@ -273,6 +275,23 @@
 
 /* Revision ID register (8 bit) */
 #define B53_REV_ID			0x40
+
+/* High-level protocol control (16 bit on BCM5395, otherwise 32 bit) */
+#define B53_HL_PRTC_CTRL			0x50
+#define   HL_PRTC_ICMPV6_EN		BIT(4)
+#define   HL_PRTC_ICMPV6_FWD_MODE		BIT(5)
+#define   HL_PRTC_IGMP_IP_EN_5395		BIT(6)
+#define   HL_PRTC_IGMP_FWD_MODE_5395	BIT(8)
+#define   HL_PRTC_IGMP_RPTLVE_EN		BIT(9)
+#define   HL_PRTC_IGMP_RPTLVE_FWD_MODE	BIT(10)
+#define   HL_PRTC_IGMP_QRY_EN		BIT(11)
+#define   HL_PRTC_IGMP_QRY_FWD_MODE	BIT(12)
+#define   HL_PRTC_IGMP_UKN_EN		BIT(13)
+#define   HL_PRTC_IGMP_UKN_FWD_MODE	BIT(14)
+#define   HL_PRTC_MLD_RPTDONE_EN		BIT(15)
+#define   HL_PRTC_MLD_RPTDONE_FWD_MODE	BIT(16)
+#define   HL_PRTC_MLD_QRY_EN		BIT(17)
+#define   HL_PRTC_MLD_QRY_FWD_MODE		BIT(18)
 
 /* Broadcom header RX control (16 bit) */
 #define B53_BRCM_HDR_RX_DIS		0x60

@@ -213,6 +213,8 @@ static void icssg_enable_fw_offload(struct prueth *prueth)
 
 	for (mac = PRUETH_MAC0; mac < PRUETH_NUM_MACS; mac++) {
 		emac = prueth->emac[mac];
+		if (!emac)
+			continue;
 		if (prueth->is_hsr_offload_mode) {
 			if (emac->ndev->features & NETIF_F_HW_HSR_TAG_RM)
 				icssg_set_port_state(emac, ICSSG_EMAC_HSR_RX_OFFLOAD_ENABLE);
@@ -240,6 +242,16 @@ static void icssg_enable_fw_offload(struct prueth *prueth)
 				if (prueth->is_switch_mode)
 					icssg_set_port_state(emac, ICSSG_EMAC_PORT_VLAN_AWARE_ENABLE);
 			}
+		}
+
+		/* Re-apply flooding state cleared by firmware restart.
+		 * Not needed in switch mode; FDB handles forwarding there.
+		 */
+		if (!prueth->is_switch_mode && netif_running(emac->ndev)) {
+			if (emac->uc_flooding_enabled)
+				icssg_set_port_state(emac, ICSSG_EMAC_PORT_UC_FLOODING_ENABLE);
+			if (emac->mc_flooding_enabled)
+				icssg_set_port_state(emac, ICSSG_EMAC_PORT_MC_FLOODING_ENABLE);
 		}
 	}
 }
@@ -278,23 +290,28 @@ static int prueth_emac_common_start(struct prueth *prueth)
 		ret = icssg_config(prueth, emac, slice);
 		if (ret)
 			goto disable_class;
+	}
 
-		/* Reset link state to force reconfiguration in
-		 * emac_adjust_link(). Without this, if the link was already up
-		 * before restart, emac_adjust_link() won't detect any state
-		 * change and will skip critical configuration like writing
-		 * speed to firmware.
-		 */
+	ret = prueth_emac_start(prueth);
+	if (ret)
+		goto disable_class;
+
+	/* Reset link state and reconfigure after firmware is running.
+	 * Must be done after prueth_emac_start() so that R30 commands
+	 * (e.g. ICSSG_EMAC_PORT_FORWARD from emac_adjust_link) reach
+	 * the PRU firmware instead of timing out with stale R30 values.
+	 */
+	for (slice = 0; slice < PRUETH_NUM_MACS; slice++) {
+		emac = prueth->emac[slice];
+		if (!emac)
+			continue;
+
 		emac->link = 0;
 
 		mutex_lock(&emac->ndev->phydev->lock);
 		emac_adjust_link(emac->ndev);
 		mutex_unlock(&emac->ndev->phydev->lock);
 	}
-
-	ret = prueth_emac_start(prueth);
-	if (ret)
-		goto disable_class;
 
 	emac = prueth->emac[ICSS_SLICE0] ? prueth->emac[ICSS_SLICE0] :
 	       prueth->emac[ICSS_SLICE1];
@@ -1288,13 +1305,20 @@ static void emac_ndo_set_rx_mode_work(struct work_struct *work)
 	if (promisc) {
 		icssg_set_port_state(emac, ICSSG_EMAC_PORT_UC_FLOODING_ENABLE);
 		icssg_set_port_state(emac, ICSSG_EMAC_PORT_MC_FLOODING_ENABLE);
+		emac->uc_flooding_enabled = true;
+		emac->mc_flooding_enabled = true;
 		return;
 	}
 
 	if (allmulti) {
 		icssg_set_port_state(emac, ICSSG_EMAC_PORT_MC_FLOODING_ENABLE);
+		emac->mc_flooding_enabled = true;
+		emac->uc_flooding_enabled = false;
 		return;
 	}
+
+	emac->uc_flooding_enabled = false;
+	emac->mc_flooding_enabled = false;
 
 	if (emac->prueth->is_hsr_offload_mode) {
 		/* Track basic add/delete via callbacks */
@@ -1919,7 +1943,8 @@ static int prueth_netdevice_port_link(struct net_device *ndev,
 		    prueth->br_members & BIT(PRUETH_PORT_MII1)) {
 			prueth->is_switch_mode = true;
 			prueth->default_vlan = PRUETH_DFLT_VLAN_SW;
-			emac->port_vlan = prueth->default_vlan;
+			prueth->emac[PRUETH_MAC0]->port_vlan = prueth->default_vlan;
+			prueth->emac[PRUETH_MAC1]->port_vlan = prueth->default_vlan;
 			icssg_change_mode(prueth);
 		}
 	}
@@ -2258,13 +2283,15 @@ static int prueth_probe(struct platform_device *pdev)
 	prueth->miig_rt = syscon_regmap_lookup_by_phandle(np, "ti,mii-g-rt");
 	if (IS_ERR(prueth->miig_rt)) {
 		dev_err(dev, "couldn't get ti,mii-g-rt syscon regmap\n");
-		return -ENODEV;
+		ret = -ENODEV;
+		goto put_cores;
 	}
 
 	prueth->mii_rt = syscon_regmap_lookup_by_phandle(np, "ti,mii-rt");
 	if (IS_ERR(prueth->mii_rt)) {
 		dev_err(dev, "couldn't get ti,mii-rt syscon regmap\n");
-		return -ENODEV;
+		ret = -ENODEV;
+		goto put_cores;
 	}
 
 	prueth->pa_stats = syscon_regmap_lookup_by_phandle(np, "ti,pa-stats");

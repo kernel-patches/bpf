@@ -701,7 +701,7 @@ static int nfnl_cthelper_del(struct sk_buff *skb, const struct nfnl_info *info,
 	struct nf_conntrack_tuple tuple;
 	bool tuple_set = false, found = false;
 	struct nfnl_cthelper *nlcth, *n;
-	int j = 0, ret;
+	int ret;
 
 	if (!capable(CAP_NET_ADMIN))
 		return -EPERM;
@@ -720,7 +720,6 @@ static int nfnl_cthelper_del(struct sk_buff *skb, const struct nfnl_info *info,
 	ret = -ENOENT;
 	list_for_each_entry_safe(nlcth, n, &nfnl_cthelper_list, list) {
 		cur = nlcth->helper;
-		j++;
 
 		if (helper_name &&
 		    strncmp(cur->name, helper_name, NF_CT_HELPER_NAME_LEN))
@@ -739,7 +738,9 @@ static int nfnl_cthelper_del(struct sk_buff *skb, const struct nfnl_info *info,
 	}
 
 	/* Make sure we return success if we flush and there is no helpers */
-	return (found || j == 0) ? 0 : ret;
+	if (found || (!helper_name && !tuple_set))
+		return 0;
+	return ret;
 }
 
 static const struct nla_policy nfnl_cthelper_policy[NFCTH_MAX+1] = {

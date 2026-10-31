@@ -242,6 +242,10 @@ struct prueth_emac {
 	bool offload_fwd_mark;
 	int port_vlan;
 
+	/* UC/MC flooding state - preserved across firmware restarts */
+	unsigned int uc_flooding_enabled : 1;
+	unsigned int mc_flooding_enabled : 1;
+
 	struct delayed_work stats_work;
 	u64 stats[ICSSG_NUM_MIIG_STATS];
 	u64 pa_stats[ICSSG_NUM_PA_STATS];
