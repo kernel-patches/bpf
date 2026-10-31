@@ -1276,6 +1276,36 @@ format.::
             .long   58
             .long   8206                    # Line 8 Col 14
 
+6.1 Compressed vmlinux BTF
+--------------------------
+
+With ``CONFIG_DEBUG_INFO_BTF_LAZY``, the kernel image carries the vmlinux BTF
+zstd-compressed, at about a quarter of its size, and the kernel decompresses
+and parses it when something first needs it: a BPF program or map that uses
+kernel types, ``BPF_BTF_GET_NEXT_ID``, tracing options that print arguments or
+return values by their BTF types.
+``/sys/kernel/btf/vmlinux`` has its full size from the start; reading or
+mapping it decompresses the BTF but does not parse it. Systems that never use
+BTF keep only the compressed copy in memory. The vmlinux file keeps the
+uncompressed ``.BTF`` section, not loaded, for tools and module builds.
+The option is available on x86 and arm64.
+
+Kernel function, destructor kfunc and struct_ops registrations made before the
+first use, and the BTF of modules loaded before it, are kept and applied by the
+task that parses the vmlinux BTF, before anyone else can see it. Errors of
+those registrations then only show in the kernel log, and a module whose BTF
+fails validation at that point stays loaded without BTF and without its files
+in ``/sys/kernel/btf``. A first use that runs out of memory fails with
+``-ENOMEM`` and leaves all of this as it was, for the next one to start over.
+The vmlinux BTF gets the next free BTF id, not necessarily 1, and the image has
+no ``__start_BTF``/``__stop_BTF`` symbols. The inline BTF
+(``CONFIG_DEBUG_INFO_BTF_INLINE``) is not compressed.
+
+Users of kernel types during boot still parse it during boot, for example BPF
+LSM programs, the iterators of ``CONFIG_BPF_PRELOAD`` (loaded at boot, or at the
+first bpffs mount if ``bpf_preload`` is a module), or a module with a
+``.BTF.base`` section.
+
 7. Testing
 ==========
 
