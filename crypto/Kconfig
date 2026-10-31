@@ -602,19 +602,6 @@ config CRYPTO_ADIANTUM
 
 	  If unsure, say N.
 
-config CRYPTO_ARC4
-	tristate "ARC4 (Alleged Rivest Cipher 4)"
-	depends on CRYPTO_USER_API_ENABLE_OBSOLETE
-	select CRYPTO_SKCIPHER
-	select CRYPTO_LIB_ARC4
-	help
-	  ARC4 cipher algorithm
-
-	  ARC4 is a stream cipher using keys ranging from 8 bits to 2048
-	  bits in length.  This algorithm is required for driver-based
-	  WEP, but it should not be for other purposes because of the
-	  weakness of the algorithm.
-
 config CRYPTO_CHACHA20
 	tristate "ChaCha"
 	select CRYPTO_LIB_CHACHA
