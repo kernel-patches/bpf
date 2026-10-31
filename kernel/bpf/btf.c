@@ -9383,10 +9383,13 @@ enum {
 struct btf_module {
 	struct list_head list;
 	struct module *module;
-	struct btf *btf;
+	struct btf *btf;	/* NULL while kept, see btf_module_keep() */
+	void *data;		/* kept copy of .BTF, adopted by btf once parsed */
+	u32 data_size;
 	struct bin_attribute *sysfs_attr;
 	struct bin_attribute *sysfs_inline_attr;
 	void *btf_inline_data;
+	u32 btf_inline_data_size;
 	int flags;
 };
 
@@ -9395,6 +9398,149 @@ static DEFINE_MUTEX(btf_module_mutex);
 
 static void purge_cand_cache(struct btf *btf);
 static void btf_drop_deferred_regs(struct module *owner);
+
+/* /sys/kernel/btf/<module> and <module>.inline */
+static void btf_module_add_files(struct btf_module *btf_mod, const char *name,
+				 void *data, u32 data_size)
+{
+	char inline_name[MODULE_NAME_LEN + sizeof(".inline")];
+	struct bin_attribute *attr;
+
+	attr = sysfs_btf_add(name, data, data_size, false, NULL);
+	if (IS_ERR(attr))
+		return;
+	btf_mod->sysfs_attr = attr;
+
+	if (!btf_mod->btf_inline_data)
+		return;
+	snprintf(inline_name, sizeof(inline_name), "%s.inline", name);
+	attr = sysfs_btf_add(inline_name, btf_mod->btf_inline_data,
+			     btf_mod->btf_inline_data_size, false, NULL);
+	if (IS_ERR(attr)) {
+		kvfree(btf_mod->btf_inline_data);
+		btf_mod->btf_inline_data = NULL;
+		return;
+	}
+	btf_mod->sysfs_inline_attr = attr;
+}
+
+/*
+ * CONFIG_DEBUG_INFO_BTF_LAZY: module BTF is split BTF on top of the vmlinux
+ * BTF.  Until that is parsed, keep the module's copies of its BTF and inline
+ * BTF as they are, serve them in sysfs, and let btf_parse_kept_modules()
+ * parse them with the vmlinux BTF.  Distilled base BTF (.BTF.base) needs
+ * relocation, which needs the vmlinux BTF, so it is parsed right away.
+ *
+ * TODO: defer modules with distilled base BTF as well: keep them here and
+ * relocate them in btf_parse_kept_modules().  Their raw BTF is not usable
+ * before that, so their sysfs files would have to wait for the first use.
+ */
+static bool btf_module_keep(struct btf_module *btf_mod, struct module *mod,
+			    void *data, void *inline_data, u32 inline_data_size)
+{
+	if (!IS_ENABLED(CONFIG_DEBUG_INFO_BTF_LAZY) || mod->btf_base_data)
+		return false;
+	guard(mutex)(&btf_vmlinux_lock);
+	if (btf_vmlinux)
+		return false;
+	btf_mod->module = mod;
+	btf_mod->data = data;
+	btf_mod->data_size = mod->btf_data_size;
+	btf_mod->btf_inline_data = inline_data;
+	btf_mod->btf_inline_data_size = inline_data ? inline_data_size : 0;
+	/* before btf_parse_kept_modules() can see the entry */
+	btf_module_add_files(btf_mod, mod->name, data, mod->btf_data_size);
+	mutex_lock(&btf_module_mutex);
+	list_add(&btf_mod->list, &btf_modules);
+	mutex_unlock(&btf_module_mutex);
+	return true;
+}
+
+/* A kept module without BTF: no entry and no files, as if refused at load */
+static void btf_module_drop_kept(struct btf_module *btf_mod)
+{
+	list_del(&btf_mod->list);
+	if (btf_mod->sysfs_attr)
+		sysfs_btf_remove(btf_mod->sysfs_attr);
+	if (btf_mod->sysfs_inline_attr)
+		sysfs_btf_remove(btf_mod->sysfs_inline_attr);
+	kvfree(btf_mod->btf_inline_data);
+	kvfree(btf_mod->data);
+	kfree(btf_mod);
+}
+
+/* Undo btf_parse_kept_modules() of a round that is not published */
+static void btf_unparse_kept_modules(void)
+{
+	struct btf_module *btf_mod;
+
+	lockdep_assert_held(&btf_module_mutex);
+	list_for_each_entry(btf_mod, &btf_modules, list) {
+		if (!btf_mod->data || !btf_mod->btf)
+			continue;
+		btf_mod->btf->data = NULL;	/* the kept copy */
+		btf_put(btf_mod->btf);
+		btf_mod->btf = NULL;
+	}
+}
+
+/*
+ * Called under btf_vmlinux_lock by the task that parses the vmlinux BTF,
+ * before that is published.  Parses the kept module BTFs in place, oldest
+ * first so that ids follow the load order as without
+ * CONFIG_DEBUG_INFO_BTF_LAZY; in-tree module BTF and its inline BTF need no
+ * relocation, so sysfs serves the same bytes before and after.  A module
+ * whose BTF fails validation cannot be refused any more: it stays loaded
+ * without BTF, and its files go away; an invalid inline BTF loses its file.
+ * Returns -ENOMEM, with this round's module BTFs freed again, if memory ran
+ * out.
+ */
+static int btf_parse_kept_modules(void)
+{
+	struct btf_module *btf_mod, *tmp;
+	void *inline_data;
+	struct btf *btf;
+	int err;
+
+	lockdep_assert_held(&btf_vmlinux_lock);
+	guard(mutex)(&btf_module_mutex);
+	list_for_each_entry_safe_reverse(btf_mod, tmp, &btf_modules, list) {
+		if (btf_mod->btf || !btf_mod->data)
+			continue;
+		btf = btf_parse_module(btf_mod->module->name, btf_mod->data,
+				       btf_mod->data_size, NULL, 0,
+				       btf_mod->btf_inline_data,
+				       btf_mod->btf_inline_data_size, &inline_data);
+		if (!IS_ERR(btf)) {
+			err = btf_alloc_id(btf);
+			if (err) {
+				btf->data = NULL;	/* the kept copy */
+				btf_free(btf);
+				btf = ERR_PTR(err);
+			}
+		}
+		if (btf == ERR_PTR(-ENOMEM)) {
+			btf_unparse_kept_modules();
+			return -ENOMEM;
+		}
+		if (IS_ERR(btf)) {
+			pr_warn("failed to validate module [%s] BTF: %ld\n",
+				btf_mod->module->name, PTR_ERR(btf));
+			btf_module_drop_kept(btf_mod);
+			continue;
+		}
+		btf_mod->btf = btf;
+		if (btf_mod->btf_inline_data && !inline_data) {
+			if (btf_mod->sysfs_inline_attr)
+				sysfs_btf_remove(btf_mod->sysfs_inline_attr);
+			btf_mod->sysfs_inline_attr = NULL;
+			kvfree(btf_mod->btf_inline_data);
+			btf_mod->btf_inline_data = NULL;
+			btf_mod->btf_inline_data_size = 0;
+		}
+	}
+	return 0;
+}
 
 #if IS_MODULE(CONFIG_DEBUG_INFO_BTF_INLINE)
 extern char __start_BTF_inline_link[];
@@ -9505,7 +9651,6 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 {
 	struct btf_module *btf_mod, *tmp;
 	struct module *mod = module;
-	struct bin_attribute *attr;
 	struct btf *btf;
 	void *data, *inline_data = NULL, *relocated_inline_data = NULL;
 	unsigned int inline_data_size = 0;
@@ -9543,6 +9688,9 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 				pr_warn("failed to validate module [%s] inline BTF: %d\n",
 					mod->name, -ENOMEM);
 		}
+		if (data && btf_module_keep(btf_mod, mod, data, inline_data,
+					    inline_data_size))
+			break;
 		btf = !data ? ERR_PTR(-ENOMEM) :
 		      btf_parse_module(mod->name, data, mod->btf_data_size,
 				       mod->btf_base_data, mod->btf_base_data_size,
@@ -9575,30 +9723,12 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 		btf_mod->module = module;
 		btf_mod->btf = btf;
 		btf_mod->btf_inline_data = relocated_inline_data;
+		btf_mod->btf_inline_data_size = relocated_inline_data ? inline_data_size : 0;
 		list_add(&btf_mod->list, &btf_modules);
 		mutex_unlock(&btf_module_mutex);
 
-		attr = sysfs_btf_add(btf->name, btf->data, btf->data_size, false, NULL);
-		if (IS_ERR(attr)) {
-			err = 0;
-			goto out;
-		}
-		btf_mod->sysfs_attr = attr;
-
-		if (relocated_inline_data) {
-			char name[MODULE_NAME_LEN + sizeof(".inline")];
-
-			snprintf(name, sizeof(name), "%s.inline", mod->name);
-			attr = sysfs_btf_add(name, relocated_inline_data,
-					     inline_data_size, false, NULL);
-			if (IS_ERR(attr)) {
-				kvfree(relocated_inline_data);
-				btf_mod->btf_inline_data = NULL;
-				err = 0;
-				break;
-			}
-			btf_mod->sysfs_inline_attr = attr;
-		}
+		/* data: the same as btf->data */
+		btf_module_add_files(btf_mod, mod->name, data, mod->btf_data_size);
 		break;
 	case MODULE_STATE_LIVE:
 		if (!mod->btf_data_size)
@@ -9621,6 +9751,11 @@ static int btf_module_notify(struct notifier_block *nb, unsigned long op,
 		list_for_each_entry_safe(btf_mod, tmp, &btf_modules, list) {
 			if (btf_mod->module != module)
 				continue;
+
+			if (!btf_mod->btf) {	/* kept, see btf_module_keep() */
+				btf_module_drop_kept(btf_mod);
+				break;
+			}
 
 			/*
 			 * For modules, we do the freeing of BTF IDR as soon as
@@ -9706,9 +9841,12 @@ struct btf *btf_get_module_btf(const struct module *module)
 	}
 
 #ifdef CONFIG_DEBUG_INFO_BTF_MODULES
+	/* kept module BTF is parsed together with the vmlinux BTF */
+	if (!module->btf_data_size || IS_ERR_OR_NULL(bpf_get_btf_vmlinux()))
+		return NULL;
 	mutex_lock(&btf_module_mutex);
 	list_for_each_entry_safe(btf_mod, tmp, &btf_modules, list) {
-		if (btf_mod->module != module)
+		if (btf_mod->module != module || !btf_mod->btf)
 			continue;
 
 		btf_get(btf_mod->btf);
@@ -9899,7 +10037,7 @@ static int btf_check_kfunc_name(struct btf *btf, const char *func_name, u32 kind
 #ifdef CONFIG_DEBUG_INFO_BTF_MODULES
 	guard(mutex)(&btf_module_mutex);
 	list_for_each_entry_safe(btf_mod, tmp, &btf_modules, list) {
-		if (btf_mod->btf == btf)
+		if (btf_mod->btf == btf || !btf_mod->btf)
 			continue;
 		id = btf_find_by_name_kind(btf_mod->btf, func_name, kind);
 		if (id >= 0) {
@@ -11181,8 +11319,8 @@ static void btf_free_deferred_reg(struct btf_deferred_reg *reg)
 
 /*
  * Called under btf_vmlinux_lock, by the task that parsed the vmlinux BTF and
- * before it publishes it, so that nothing sees the BTF without its kfuncs
- * and struct_ops.  bpf_get_btf_vmlinux() returns the new BTF to
+ * before it publishes it, so that nothing sees the BTF without its module
+ * BTFs, kfuncs and struct_ops.  bpf_get_btf_vmlinux() returns the new BTF to
  * this task, so the registrations are applied as if they were made now, and
  * any they make in turn (a struct_ops ->init() may register kfuncs) too.
  * They run in whichever task needs the BTF first, with the locks it holds:
@@ -11199,6 +11337,11 @@ static int btf_apply_deferred(void)
 	struct btf_deferred_reg *reg, *tmp;
 	int err;
 
+#ifdef CONFIG_DEBUG_INFO_BTF_MODULES
+	err = btf_parse_kept_modules();
+	if (err)
+		return err;
+#endif
 	list_for_each_entry(reg, &btf_deferred_regs, list) {
 		/* a going module's exit() runs before GOING drops its entries */
 		if (!try_module_get(reg->owner))
@@ -11218,8 +11361,13 @@ static int btf_apply_deferred(void)
 			break;
 		}
 		module_put(reg->owner);
-		if (err == -ENOMEM)
+		if (err == -ENOMEM) {
+#ifdef CONFIG_DEBUG_INFO_BTF_MODULES
+			guard(mutex)(&btf_module_mutex);
+			btf_unparse_kept_modules();
+#endif
 			return err;
+		}
 		if (err)
 			pr_warn("failed to apply deferred BTF registration for %s: %d\n",
 				reg->owner ? reg->owner->name : "vmlinux", err);

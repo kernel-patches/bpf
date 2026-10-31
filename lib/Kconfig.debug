@@ -422,6 +422,14 @@ config DEBUG_INFO_BTF_LAZY
 	  milliseconds once.  The vmlinux file keeps the uncompressed BTF as
 	  a non-loaded section for tools.  Building needs the zstd tool.
 
+	  Users of kernel types at boot still parse it at boot: BPF LSM
+	  programs, the iterators of BPF_PRELOAD (loaded at boot, or at the
+	  first bpffs mount if bpf_preload is a module), and modules with
+	  distilled base BTF.  Kernel function and struct_ops registrations
+	  made before the first use are applied then and report errors only
+	  in the kernel log; a module BTF that fails validation then leaves
+	  the module loaded without BTF.
+
 	  If unsure, say N.
 
 config PAHOLE_HAS_BTF_TAG
