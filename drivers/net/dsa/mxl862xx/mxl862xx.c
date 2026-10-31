@@ -589,16 +589,59 @@ static int mxl862xx_vf_alloc(struct mxl862xx_priv *priv,
 	return mxl862xx_vf_entry_discard(priv, vf->block_id, 0);
 }
 
+/* Firmware bridge ids are stored in priv->bridges[] (bridged ports)
+ * and priv->ports[].fid (standalone ports, which also allocate one),
+ * so a fresh allocation must not collide with either.
+ */
+static bool mxl862xx_bridge_id_in_use(struct mxl862xx_priv *priv, u16 id)
+{
+	int i;
+
+	for (i = 0; i <= MXL862XX_MAX_BRIDGES; i++)
+		if (priv->bridges[i] == id)
+			return true;
+
+	for (i = 0; i < MXL862XX_MAX_PORTS; i++)
+		if (priv->ports[i].fid == id)
+			return true;
+
+	return false;
+}
+
 static int mxl862xx_allocate_bridge(struct mxl862xx_priv *priv)
 {
 	struct mxl862xx_bridge_alloc br_alloc = {};
+	u16 id;
 	int ret;
 
+	/* MXL862XX_API_READ() returns the firmware result value (>= 0) on
+	 * success, not an errno. A non-zero result is a firmware-reported
+	 * error status: return a proper error instead of leaking it to the
+	 * callers, which only test ret < 0 and would otherwise store the
+	 * status as a bridge id.
+	 */
 	ret = MXL862XX_API_READ(priv, MXL862XX_BRIDGE_ALLOC, br_alloc);
-	if (ret)
+	if (ret < 0)
 		return ret;
+	if (ret > 0)
+		return -EIO;
 
-	return le16_to_cpu(br_alloc.bridge_id);
+	id = le16_to_cpu(br_alloc.bridge_id);
+
+	/* The API reserves id 0 ("not used for historic reasons"), which
+	 * also doubles as the "not allocated" value in priv->bridges[]
+	 * and priv->ports[].fid, and collides with
+	 * MXL862XX_DEFAULT_BRIDGE (the CPU port). It documents
+	 * INVALID_HANDLE for failed allocations without defining its
+	 * value; the MaxLinear GSW API uses 0xffff, so reject that too.
+	 * A duplicate id would collapse the FID isolation of two domains
+	 * (FDB and MDB entries are matched by FID, VID and MAC).
+	 * Firmware that follows the API never returns these values.
+	 */
+	if (!id || id == 0xffff || mxl862xx_bridge_id_in_use(priv, id))
+		return -EIO;
+
+	return id;
 }
 
 static void mxl862xx_free_bridge(struct dsa_switch *ds,
