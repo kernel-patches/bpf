@@ -6558,20 +6558,46 @@ static u8 bpf_ctx_convert_map[] = {
 #undef BPF_MAP_TYPE
 #undef BPF_LINK_TYPE
 
-static const struct btf_type *find_canonical_prog_ctx_type(enum bpf_prog_type prog_type)
-{
-	const struct btf_type *conv_struct;
-	const struct btf_member *ctx_type;
+#define BPF_MAP_TYPE(_id, _ops)
+#define BPF_LINK_TYPE(_id, _name)
+#define BPF_PROG_TYPE(_id, _name, prog_ctx_type, kern_ctx_type) \
+	[_id] = #prog_ctx_type,
+static const char * const bpf_prog_ctx_tname[] = {
+#include <linux/bpf_types.h>
+};
+#undef BPF_PROG_TYPE
+#undef BPF_MAP_TYPE
+#undef BPF_LINK_TYPE
 
-	conv_struct = bpf_ctx_convert.t;
-	if (!conv_struct)
+struct user_regs_struct;
+struct user_pt_regs;
+
+/*
+ * Name of the context struct of @prog_type, as written in bpf_types.h, or NULL
+ * if it has none ("void *").  Only names are compared against the program's
+ * BTF, so the vmlinux BTF is not needed.  *@alt is set to the struct behind
+ * the bpf_user_pt_regs_t typedef.  Typedefs of integers (__u64, __u32) never
+ * match a struct name.
+ */
+static const char *prog_ctx_tname(enum bpf_prog_type prog_type, const char **alt)
+{
+	const char *name = prog_type < ARRAY_SIZE(bpf_prog_ctx_tname) ?
+			   bpf_prog_ctx_tname[prog_type] : NULL;
+
+	*alt = NULL;
+	if (!name || strchr(name, '*'))
 		return NULL;
-	/* prog_type is valid bpf program type. No need for bounds check. */
-	ctx_type = btf_type_member(conv_struct) + bpf_ctx_convert_map[prog_type] * 2;
-	/* ctx_type is a pointer to prog_ctx_type in vmlinux.
-	 * Like 'struct __sk_buff'
-	 */
-	return btf_type_by_id(btf_vmlinux, ctx_type->type);
+	if (str_has_prefix(name, "struct "))
+		return name + strlen("struct ");
+	if (!strcmp(name, "bpf_user_pt_regs_t")) {
+		if (__builtin_types_compatible_p(bpf_user_pt_regs_t, struct pt_regs))
+			*alt = "pt_regs";
+		else if (__builtin_types_compatible_p(bpf_user_pt_regs_t, struct user_pt_regs))
+			*alt = "user_pt_regs";
+		else if (__builtin_types_compatible_p(bpf_user_pt_regs_t, struct user_regs_struct))
+			*alt = "user_regs_struct";
+	}
+	return name;
 }
 
 static int find_kern_ctx_type_id(enum bpf_prog_type prog_type)
@@ -6579,9 +6605,10 @@ static int find_kern_ctx_type_id(enum bpf_prog_type prog_type)
 	const struct btf_type *conv_struct;
 	const struct btf_member *ctx_type;
 
-	conv_struct = bpf_ctx_convert.t;
-	if (!conv_struct)
+	/* bpf_ctx_convert.t is set when the vmlinux BTF is parsed */
+	if (IS_ERR_OR_NULL(bpf_get_btf_vmlinux()))
 		return -EFAULT;
+	conv_struct = bpf_ctx_convert.t;
 	/* prog_type is valid bpf program type. No need for bounds check. */
 	ctx_type = btf_type_member(conv_struct) + bpf_ctx_convert_map[prog_type] * 2 + 1;
 	/* ctx_type is a pointer to prog_ctx_type in vmlinux.
@@ -6603,8 +6630,7 @@ bool btf_is_prog_ctx_type(struct bpf_verifier_log *log, const struct btf *btf,
 			  const struct btf_type *t, enum bpf_prog_type prog_type,
 			  int arg)
 {
-	const struct btf_type *ctx_type;
-	const char *tname, *ctx_tname;
+	const char *tname, *ctx_tname, *alt;
 
 	t = btf_type_by_id(btf, t->type);
 
@@ -6638,21 +6664,9 @@ bool btf_is_prog_ctx_type(struct bpf_verifier_log *log, const struct btf *btf,
 		return false;
 	}
 
-	ctx_type = find_canonical_prog_ctx_type(prog_type);
-	if (!ctx_type) {
-		bpf_log(log, "btf_vmlinux is malformed\n");
-		/* should not happen */
-		return false;
-	}
-again:
-	ctx_tname = btf_name_by_offset(btf_vmlinux, ctx_type->name_off);
-	if (!ctx_tname) {
-		/* should not happen */
-		bpf_log(log, "Please fix kernel include/linux/bpf_types.h\n");
-		return false;
-	}
 	/* program types without named context types work only with arg:ctx tag */
-	if (ctx_tname[0] == '\0')
+	ctx_tname = prog_ctx_tname(prog_type, &alt);
+	if (!ctx_tname)
 		return false;
 	/* only compare that prog's ctx type name is the same as
 	 * kernel expects. No need to compare field by field.
@@ -6661,37 +6675,18 @@ again:
 	 * int socket_filter_bpf_prog(struct __sk_buff *skb)
 	 * { // no fields of skb are ever used }
 	 */
-	if (btf_is_projection_of(ctx_tname, tname))
+	if (btf_is_projection_of(ctx_tname, tname) || !strcmp(ctx_tname, tname))
 		return true;
-	if (strcmp(ctx_tname, tname)) {
-		/* bpf_user_pt_regs_t is a typedef, so resolve it to
-		 * underlying struct and check name again
-		 */
-		if (!btf_type_is_modifier(ctx_type))
-			return false;
-		while (btf_type_is_modifier(ctx_type))
-			ctx_type = btf_type_by_id(btf_vmlinux, ctx_type->type);
-		goto again;
-	}
-	return true;
+	/* bpf_user_pt_regs_t is a typedef, check the underlying struct too */
+	return alt && !strcmp(alt, tname);
 }
-
-/* forward declarations for arch-specific underlying types of
- * bpf_user_pt_regs_t; this avoids the need for arch-specific #ifdef
- * compilation guards below for BPF_PROG_TYPE_PERF_EVENT checks, but still
- * works correctly with __builtin_types_compatible_p() on respective
- * architectures
- */
-struct user_regs_struct;
-struct user_pt_regs;
 
 static int btf_validate_prog_ctx_type(struct bpf_verifier_log *log, const struct btf *btf,
 				      const struct btf_type *t, int arg,
 				      enum bpf_prog_type prog_type,
 				      enum bpf_attach_type attach_type)
 {
-	const struct btf_type *ctx_type;
-	const char *tname, *ctx_tname;
+	const char *tname, *ctx_tname, *alt;
 
 	if (!btf_is_ptr(t)) {
 		bpf_log(log, "arg#%d type isn't a pointer\n", arg);
@@ -6791,27 +6786,20 @@ static int btf_validate_prog_ctx_type(struct bpf_verifier_log *log, const struct
 		break;
 	}
 
-	ctx_type = find_canonical_prog_ctx_type(prog_type);
-	if (!ctx_type) {
-		/* should not happen */
-		bpf_log(log, "btf_vmlinux is malformed\n");
-		return -EINVAL;
-	}
-
 	/* resolve typedefs and check that underlying structs are matching as well */
-	while (btf_type_is_modifier(ctx_type))
-		ctx_type = btf_type_by_id(btf_vmlinux, ctx_type->type);
+	ctx_tname = prog_ctx_tname(prog_type, &alt);
+	if (ctx_tname && !str_has_prefix(bpf_prog_ctx_tname[prog_type], "struct "))
+		ctx_tname = alt;
 
 	/* if program type doesn't have distinctly named struct type for
 	 * context, then __arg_ctx argument can only be `void *`, which we
 	 * already checked above
 	 */
-	if (!__btf_type_is_struct(ctx_type)) {
+	if (!ctx_tname) {
 		bpf_log(log, "arg#%d should be void pointer\n", arg);
 		return -EINVAL;
 	}
 
-	ctx_tname = btf_name_by_offset(btf_vmlinux, ctx_type->name_off);
 	if (!__btf_type_is_struct(t) || strcmp(ctx_tname, tname) != 0) {
 		bpf_log(log, "arg#%d should be `struct %s *`\n", arg, ctx_tname);
 		return -EINVAL;
@@ -6838,6 +6826,8 @@ int get_kern_ctx_btf_id(struct bpf_verifier_log *log, enum bpf_prog_type prog_ty
 	const struct btf_type *kctx_type;
 	u32 kctx_type_id;
 
+	if (IS_ERR_OR_NULL(bpf_get_btf_vmlinux()))
+		return -EINVAL;
 	conv_struct = bpf_ctx_convert.t;
 	/* get member for kernel ctx type */
 	kctx_member = btf_type_member(conv_struct) + bpf_ctx_convert_map[prog_type] * 2 + 1;
