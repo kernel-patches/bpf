@@ -452,6 +452,22 @@ static int genl_allocate_reserve_groups(int n_groups, int *first_id)
 
 static struct genl_family genl_ctrl;
 
+static void genl_clear_mc_users(const struct genl_family *family)
+{
+	struct net *net;
+	int i;
+
+	netlink_table_grab();
+	rcu_read_lock();
+	for_each_net_rcu(net) {
+		for (i = 0; i < family->n_mcgrps; i++)
+			__netlink_clear_multicast_users(net->genl_sock,
+							family->mcgrp_offset + i);
+	}
+	rcu_read_unlock();
+	netlink_table_ungrab();
+}
+
 static int genl_validate_assign_mc_groups(struct genl_family *family)
 {
 	int first_id;
@@ -527,23 +543,18 @@ static int genl_validate_assign_mc_groups(struct genl_family *family)
 			clear_bit(family->mcgrp_offset + i, mc_groups);
 	}
 
+	/* drop sockets that joined the IDs while no family owned them */
+	if (!err)
+		genl_clear_mc_users(family);
+
 	return err;
 }
 
 static void genl_unregister_mc_groups(const struct genl_family *family)
 {
-	struct net *net;
 	int i;
 
-	netlink_table_grab();
-	rcu_read_lock();
-	for_each_net_rcu(net) {
-		for (i = 0; i < family->n_mcgrps; i++)
-			__netlink_clear_multicast_users(
-				net->genl_sock, family->mcgrp_offset + i);
-	}
-	rcu_read_unlock();
-	netlink_table_ungrab();
+	genl_clear_mc_users(family);
 
 	for (i = 0; i < family->n_mcgrps; i++) {
 		int grp_id = family->mcgrp_offset + i;
