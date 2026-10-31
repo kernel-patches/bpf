@@ -470,8 +470,10 @@ static void pt_kunit_iommu_exit(struct kunit *test)
 	 * Look for memory leaks, assumes kunit is running isolated and nothing
 	 * else is using secondary page tables.
 	 */
-	KUNIT_ASSERT_EQ(test, priv->orig_nr_secondary_pagetable,
-			global_node_page_state(NR_SECONDARY_PAGETABLE));
+	/* Per-CPU vmstat batching can cause false leak reports on SMP. */
+	if (!IS_ENABLED(CONFIG_SMP))
+		KUNIT_ASSERT_EQ(test, priv->orig_nr_secondary_pagetable,
+				global_node_page_state(NR_SECONDARY_PAGETABLE));
 	kunit_kfree(test, test->priv);
 }
 
