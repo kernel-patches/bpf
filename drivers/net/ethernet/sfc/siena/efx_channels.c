@@ -563,6 +563,14 @@ static struct efx_channel *efx_alloc_channel(struct efx_nic *efx, int i)
 	return channel;
 }
 
+static void efx_free_channel(struct efx_channel *channel)
+{
+#ifdef CONFIG_RFS_ACCEL
+	cancel_delayed_work_sync(&channel->filter_work);
+#endif
+	kfree(channel);
+}
+
 int efx_siena_init_channels(struct efx_nic *efx)
 {
 	unsigned int i;
@@ -591,7 +599,7 @@ void efx_siena_fini_channels(struct efx_nic *efx)
 
 	for (i = 0; i < EFX_MAX_CHANNELS; i++)
 		if (efx->channel[i]) {
-			kfree(efx->channel[i]);
+			efx_free_channel(efx->channel[i]);
 			efx->channel[i] = NULL;
 		}
 }
@@ -890,6 +898,18 @@ int efx_siena_realloc_channels(struct efx_nic *efx, u32 rxq_entries,
 	efx_siena_stop_all(efx);
 	efx_soft_disable_interrupts(efx);
 
+#ifdef CONFIG_RFS_ACCEL
+	/* efx_copy_channel() copies the aRFS state without rps_mutex, so
+	 * all aRFS work must be quiescent before the channels are copied,
+	 * not just before the old ones are freed.  The detached net_device
+	 * rejects new insertion requests, and NAPI is stopped so efx_poll()
+	 * cannot re-arm filter_work.
+	 */
+	efx_siena_filter_rfs_flush(efx);
+	efx_for_each_channel(channel, efx)
+		cancel_delayed_work_sync(&channel->filter_work);
+#endif
+
 	/* Clone channels (where possible) */
 	memset(other_channel, 0, sizeof(other_channel));
 	for (i = 0; i < efx->n_channels; i++) {
@@ -932,9 +952,20 @@ out:
 		if (channel && channel->type->copy) {
 			efx_fini_napi_channel(channel);
 			efx_siena_remove_channel(channel);
-			kfree(channel);
+			efx_free_channel(channel);
 		}
 	}
+
+#ifdef CONFIG_RFS_ACCEL
+	/* Re-arm the expiry work on the channels now in use: the copies on
+	 * success, the originals after a rollback.  The copies inherit the
+	 * aRFS filters, so they must inherit the expiry too, or a channel
+	 * that gets no further NAPI polls would never expire its filters.
+	 */
+	efx_for_each_channel(channel, efx)
+		if (channel->rfs_filter_count)
+			schedule_delayed_work(&channel->filter_work, 30 * HZ);
+#endif
 
 	rc2 = efx_soft_enable_interrupts(efx);
 	if (rc2) {

@@ -1411,27 +1411,39 @@ int phy_disable_interrupts(struct phy_device *phydev)
 static irqreturn_t phy_interrupt(int irq, void *phy_dat)
 {
 	struct phy_device *phydev = phy_dat;
+	bool postponed;
 	irqreturn_t ret;
+
+	/* Pairs with smp_store_release() in mdio_bus_phy_suspend_irq() */
+	postponed = smp_load_acquire(&phydev->irq_suspended);
 
 	/* Wakeup interrupts may occur during a system sleep transition.
 	 * Postpone handling until the PHY has resumed.
 	 */
-	if (IS_ENABLED(CONFIG_PM_SLEEP) && phydev->irq_suspended) {
+	if (IS_ENABLED(CONFIG_PM_SLEEP) && postponed) {
 		struct net_device *netdev = phydev->attached_dev;
 
-		if (netdev) {
-			struct device *parent = netdev->dev.parent;
-
-			if (netdev->ethtool->wol_enabled)
-				pm_system_wakeup();
-			else if (device_may_wakeup(&netdev->dev))
+		switch (phydev->irq_wake) {
+		case PHY_IRQ_WAKE_SYSTEM:
+			pm_system_wakeup();
+			break;
+		case PHY_IRQ_WAKE_NETDEV:
+			if (netdev)
 				pm_wakeup_dev_event(&netdev->dev, 0, true);
-			else if (parent && device_may_wakeup(parent))
-				pm_wakeup_dev_event(parent, 0, true);
+			break;
+		case PHY_IRQ_WAKE_PARENT:
+			if (netdev && netdev->dev.parent)
+				pm_wakeup_dev_event(netdev->dev.parent, 0, true);
+			break;
+		case PHY_IRQ_WAKE_NONE:
+			break;
 		}
 
-		phydev->irq_rerun = 1;
-		disable_irq_nosync(irq);
+		/* Disable the line only once: an edge can rerun the thread, and
+		 * phy_free_interrupt() presets irq_rerun to keep it enabled.
+		 */
+		if (!atomic_xchg(&phydev->irq_rerun, 1))
+			disable_irq_nosync(irq);
 		return IRQ_HANDLED;
 	}
 
@@ -1507,7 +1519,19 @@ EXPORT_SYMBOL(phy_request_interrupt);
 void phy_free_interrupt(struct phy_device *phydev)
 {
 	phy_disable_interrupts(phydev);
+
+	/* Re-enable a line left disabled by a postponed interrupt while it
+	 * is still ours, and keep later postponed interrupts from disabling it.
+	 */
+	mutex_lock(&phydev->irq_pm_lock);
+	if (atomic_xchg(&phydev->irq_rerun, 1)) {
+		/* Wait for the handler that set irq_rerun to disable the line */
+		synchronize_irq(phydev->irq);
+		enable_irq(phydev->irq);
+	}
 	free_irq(phydev->irq, phydev);
+	atomic_set(&phydev->irq_rerun, 0);
+	mutex_unlock(&phydev->irq_pm_lock);
 }
 EXPORT_SYMBOL(phy_free_interrupt);
 

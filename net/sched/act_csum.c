@@ -137,8 +137,10 @@ static void *tcf_csum_skb_nextlayer(struct sk_buff *skb,
 {
 	int ntkoff = skb_network_offset(skb);
 	int hl = ihl + jhl;
+	s64 pull_len = (s64)ipl + ntkoff;
 
-	if (!pskb_may_pull(skb, ipl + ntkoff) || (ipl < hl) ||
+	if (ipl < hl || pull_len < 0 || pull_len > (s64)skb->len ||
+	    !pskb_may_pull(skb, (unsigned int)pull_len) ||
 	    skb_try_make_writable(skb, hl + ntkoff))
 		return NULL;
 	else

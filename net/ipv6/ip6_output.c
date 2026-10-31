@@ -1125,6 +1125,7 @@ static struct dst_entry *ip6_sk_dst_check(struct sock *sk,
 	    ip6_rt_check(&rt->rt6i_src, &fl6->saddr,
 			 np->saddr_cache ? &np->saddr : NULL) ||
 #endif
+	    fl6->flowi6_mark != READ_ONCE(sk->sk_mark) ||
 	   (fl6->flowi6_oif && fl6->flowi6_oif != dst_dev(dst)->ifindex)) {
 		dst_release(dst);
 		dst = NULL;
@@ -1477,7 +1478,7 @@ static int __ip6_append_data(struct sock *sk,
 	bool paged, hold_tskey = false, extra_uref = false;
 	struct ipv6_txoptions *opt = v6_cork->opt;
 	int csummode = CHECKSUM_NONE;
-	unsigned int maxnonfragsize, headersize;
+	unsigned int maxnonfragsize, headersize, reserved_headerlen;
 	unsigned int wmem_alloc_delta = 0;
 
 	skb = skb_peek_tail(queue);
@@ -1499,8 +1500,11 @@ static int __ip6_append_data(struct sock *sk,
 		     (opt ? opt->opt_flen + opt->opt_nflen : 0) +
 		     rt->rt6i_nfheader_len;
 
-	if (mtu <= fragheaderlen ||
-	    ((mtu - fragheaderlen) & ~7) + fragheaderlen <= sizeof(struct frag_hdr))
+	reserved_headerlen = fragheaderlen;
+	if (!skb && !(rt->dst.flags & DST_XFRM_TUNNEL))
+		reserved_headerlen += rt->dst.header_len;
+
+	if (mtu < reserved_headerlen + sizeof(struct frag_hdr) + 8)
 		goto emsgsize;
 
 	maxfraglen = ((mtu - fragheaderlen) & ~7) + fragheaderlen -

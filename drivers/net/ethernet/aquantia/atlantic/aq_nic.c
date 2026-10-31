@@ -1448,6 +1448,12 @@ int aq_nic_stop(struct aq_nic_s *self)
 
 	aq_ptp_ring_stop(self);
 
+	/* Link updates and TX completion may have woken queues after the
+	 * first disable. Drain SKB transmit again before the rings are freed.
+	 */
+	netif_tx_disable(self->ndev);
+	netif_carrier_off(self->ndev);
+
 	return self->aq_hw_ops->hw_stop(self->aq_hw);
 }
 

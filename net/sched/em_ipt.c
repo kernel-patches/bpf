@@ -168,6 +168,11 @@ static int em_ipt_change(struct net *net, void *data, int data_len,
 
 	im->match = match;
 	im->hook = nla_get_u32(tb[TCA_EM_IPT_HOOK]);
+	if (im->hook >= NF_INET_NUMHOOKS) {
+		ret = -EINVAL;
+		goto err;
+	}
+
 	im->nfproto = nfproto;
 	nla_memcpy(im->match_data, tb[TCA_EM_IPT_MATCH_DATA], mdata_len);
 
