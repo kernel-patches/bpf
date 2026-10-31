@@ -574,6 +574,20 @@ struct phy_oatc14_sqi_capability {
 };
 
 /**
+ * enum phy_irq_wake - wakeup event a postponed PHY interrupt reports
+ * @PHY_IRQ_WAKE_NONE: none
+ * @PHY_IRQ_WAKE_SYSTEM: pm_system_wakeup(), Wake-on-LAN is enabled
+ * @PHY_IRQ_WAKE_NETDEV: pm_wakeup_dev_event() for the attached netdev
+ * @PHY_IRQ_WAKE_PARENT: pm_wakeup_dev_event() for the netdev's parent
+ */
+enum phy_irq_wake {
+	PHY_IRQ_WAKE_NONE,
+	PHY_IRQ_WAKE_SYSTEM,
+	PHY_IRQ_WAKE_NETDEV,
+	PHY_IRQ_WAKE_PARENT,
+};
+
+/**
  * struct phy_device - An instance of a PHY
  *
  * @mdio: MDIO bus this PHY is on
@@ -649,10 +663,13 @@ struct phy_oatc14_sqi_capability {
  * @mdix_ctrl: User setting of crossover
  * @pma_extable: Cached value of PMA/PMD Extended Abilities Register
  * @interrupts: Flag interrupts have been enabled
- * @irq_suspended: Flag indicating PHY is suspended and therefore interrupt
- *                 handling shall be postponed until PHY has resumed
+ * @irq_suspended: Flag indicating a system sleep transition in progress, so
+ *                 interrupt handling shall be postponed until
+ *                 mdio_bus_phy_resume()
  * @irq_rerun: Set by the postponed interrupt that disabled the line, and
  *             by phy_free_interrupt() to keep the line enabled
+ * @irq_wake: Wakeup event a postponed interrupt reports, decided by
+ *            mdio_bus_phy_suspend()
  * @irq_pm_lock: Serializes phy_free_interrupt() against the rerun of a
  *               postponed interrupt, so that only one of them re-enables
  *               the line; never taken by phy_interrupt()
@@ -732,6 +749,7 @@ struct phy_device {
 	/* Written without phydev->lock, so not bitfields */
 	bool irq_suspended;
 	atomic_t irq_rerun;
+	enum phy_irq_wake irq_wake;
 	/* Serializes phy_free_interrupt() against mdio_bus_phy_resume_irq() */
 	struct mutex irq_pm_lock;
 
