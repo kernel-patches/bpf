@@ -30,6 +30,11 @@
  */
 #define MXL862XX_STATS_POLL_INTERVAL	(2 * HZ)
 
+/* Conservative bound for the MAC table read loop: the exact capacity is
+ * not part of the public driver API (see mxl862xx_port_fdb_dump()).
+ */
+#define MXL862XX_MAC_TABLE_WALK_LIMIT	16384
+
 struct mxl862xx_mib_desc {
 	unsigned int size;
 	unsigned int offset;
@@ -1503,6 +1508,7 @@ static int mxl862xx_port_fdb_dump(struct dsa_switch *ds, int port,
 	struct mxl862xx_mac_table_read param = { .initial = 1 };
 	struct mxl862xx_priv *priv = ds->priv;
 	u32 entry_port_id;
+	int count = 0;
 	int ret;
 
 	while (true) {
@@ -1512,6 +1518,22 @@ static int mxl862xx_port_fdb_dump(struct dsa_switch *ds, int port,
 
 		if (param.last)
 			break;
+
+		/* The exact MAC table capacity is not part of the public
+		 * driver API. Use a conservative read limit: 16k is well
+		 * above any documented table size for this family, while a
+		 * device that never sets last (or keeps answering with
+		 * entries for other ports, which never reach the callback)
+		 * would otherwise keep us walking forever with RTNL held.
+		 * Checked after the "last" test so that a correctly ended
+		 * walk of a full table is not rejected.
+		 */
+		if (count++ >= MXL862XX_MAC_TABLE_WALK_LIMIT) {
+			dev_err(ds->dev,
+				"FDB dump walk exceeded %d reads, aborting\n",
+				MXL862XX_MAC_TABLE_WALK_LIMIT);
+			return -EIO;
+		}
 
 		entry_port_id = le32_to_cpu(param.port_id);
 
