@@ -1430,7 +1430,9 @@ static irqreturn_t phy_interrupt(int irq, void *phy_dat)
 				pm_wakeup_dev_event(parent, 0, true);
 		}
 
-		/* Disable the line only once: an edge can rerun the thread. */
+		/* Disable the line only once: an edge can rerun the thread, and
+		 * phy_free_interrupt() presets irq_rerun to keep it enabled.
+		 */
 		if (!atomic_xchg(&phydev->irq_rerun, 1))
 			disable_irq_nosync(irq);
 		return IRQ_HANDLED;
@@ -1508,7 +1510,19 @@ EXPORT_SYMBOL(phy_request_interrupt);
 void phy_free_interrupt(struct phy_device *phydev)
 {
 	phy_disable_interrupts(phydev);
+
+	/* Re-enable a line left disabled by a postponed interrupt while it
+	 * is still ours, and keep later postponed interrupts from disabling it.
+	 */
+	mutex_lock(&phydev->irq_pm_lock);
+	if (atomic_xchg(&phydev->irq_rerun, 1)) {
+		/* Wait for the handler that set irq_rerun to disable the line */
+		synchronize_irq(phydev->irq);
+		enable_irq(phydev->irq);
+	}
 	free_irq(phydev->irq, phydev);
+	atomic_set(&phydev->irq_rerun, 0);
+	mutex_unlock(&phydev->irq_pm_lock);
 }
 EXPORT_SYMBOL(phy_free_interrupt);
 
