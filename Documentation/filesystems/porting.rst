@@ -1445,3 +1445,16 @@ copies what is written into a NUL-terminated kernel buffer of at most
 entry and calls the method with it, so the method never touches
 userspace. Larger writes fail with -EINVAL unless the entry asks for
 PROC_ENTRY_SHORT_WRITES. The position is NULL for a stream.
+
+---
+
+**mandatory**
+
+->proc_ioctl() and ->proc_compat_ioctl() are gone. Implement
+->proc_ioctl_buf() and list the commands in ->proc_ioctl_args with how
+many bytes each copies in and out, PROC_IOCTL_IOC() fills that in for a
+command that encodes its argument. procfs copies the argument in before
+it pins the entry, calls the method with the kernel copy and copies it
+back out after unpinning the entry if the ioctl succeeded. A command
+that isn't in the table fails with -ENOTTY, 32-bit tasks go through the
+same table.
