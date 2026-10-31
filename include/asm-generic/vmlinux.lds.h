@@ -553,7 +553,7 @@
 									\
 	RO_EXCEPTION_TABLE						\
 	NOTES								\
-	BTF								\
+	RO_BTF								\
 									\
 	. = ALIGN((align));						\
 	__end_rodata = .;
@@ -704,12 +704,24 @@
 #define BTF_INLINE_LINK
 #endif
 
-#ifdef CONFIG_DEBUG_INFO_BTF
-#define BTF								\
+#ifdef CONFIG_DEBUG_INFO_BTF_LAZY
+/* compressed BTF in init data (see sysfs_btf.c), raw BTF not loaded */
+#define BTF_LOADED
+#define BTF_ZST		. = ALIGN(8); BOUNDED_SECTION_BY(.init.BTF.zst, _BTF_zst)
+#define BTF_RAW		.BTF 0 : { *(.BTF) }
+#else
+#define BTF_LOADED							\
 	. = ALIGN(PAGE_SIZE);						\
 	.BTF : AT(ADDR(.BTF) - LOAD_OFFSET) {				\
 		BOUNDED_SECTION_BY(.BTF, _BTF)				\
-	}								\
+	}
+#define BTF_ZST
+#define BTF_RAW
+#endif
+
+#ifdef CONFIG_DEBUG_INFO_BTF
+#define RO_BTF								\
+	BTF_LOADED							\
 	BTF_INLINE							\
 	BTF_INLINE_LINK						\
 	. = ALIGN(PAGE_SIZE);						\
@@ -717,7 +729,7 @@
 		*(.BTF_ids)						\
 	}
 #else
-#define BTF
+#define RO_BTF
 #endif
 
 /*
@@ -748,6 +760,7 @@
 	KERNEL_CTORS()							\
 	MCOUNT_REC()							\
 	*(.init.rodata .init.rodata.*)					\
+	BTF_ZST								\
 	FTRACE_EVENTS()							\
 	TRACE_SYSCALLS()						\
 	KPROBE_BLACKLIST()						\
@@ -880,6 +893,7 @@
 /* Required sections not related to debugging. */
 #define ELF_DETAILS							\
 		.comment 0 : { *(.comment) }				\
+		BTF_RAW							\
 		.symtab 0 : { *(.symtab) }				\
 		.strtab 0 : { *(.strtab) }				\
 		.shstrtab 0 : { *(.shstrtab) }				\

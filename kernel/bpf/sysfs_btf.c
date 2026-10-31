@@ -12,11 +12,126 @@
 #include <linux/vmalloc.h>
 #include <linux/io.h>
 #include <linux/btf.h>
+#include <linux/zstd.h>
 
+#ifdef CONFIG_DEBUG_INFO_BTF_LAZY
+/* See scripts/gen-btf.sh, gen_btf_o() for details */
+extern char __start_BTF_zst[];
+extern char __stop_BTF_zst[];
+
+static DEFINE_MUTEX(btf_vmlinux_data_lock);
+static void *btf_vmlinux_raw;
+static u32 btf_vmlinux_raw_size;
+static bool btf_vmlinux_broken;
+/* Compressed BTF: init data until btf_vmlinux_keep_zst(), freed once decompressed */
+static void *btf_zst = __start_BTF_zst;
+
+static u32 btf_vmlinux_size(void)
+{
+	zstd_frame_header hdr;
+
+	guard(mutex)(&btf_vmlinux_data_lock);
+	if (!btf_vmlinux_raw_size && btf_zst &&
+	    !zstd_get_frame_header(&hdr, btf_zst, __stop_BTF_zst - __start_BTF_zst) &&
+	    hdr.frameContentSize < U32_MAX)
+		btf_vmlinux_raw_size = hdr.frameContentSize;
+	return btf_vmlinux_raw_size;
+}
+
+static void btf_vmlinux_drop_zst(void)
+{
+	if (btf_zst != __start_BTF_zst)
+		vfree(btf_zst);
+	btf_zst = NULL;
+}
+
+/*
+ * The raw vmlinux BTF, decompressed on first use and never freed, or
+ * ERR_PTR(-ENOMEM) if that cannot be done (now: memory; for good: no copy of
+ * the compressed BTF), or ERR_PTR(-EINVAL) if it is broken.
+ */
+void *btf_vmlinux_data(u32 *size)
+{
+	size_t ret, ws_size = zstd_dctx_workspace_bound();
+	void *raw, *ws;
+
+	/* Pairs with smp_store_release() below */
+	raw = smp_load_acquire(&btf_vmlinux_raw);
+	if (raw) {
+		*size = btf_vmlinux_raw_size;
+		return raw;
+	}
+
+	*size = btf_vmlinux_size();
+	guard(mutex)(&btf_vmlinux_data_lock);
+	if (btf_vmlinux_raw)
+		return btf_vmlinux_raw;
+	if (!btf_zst)
+		return ERR_PTR(btf_vmlinux_broken ? -EINVAL : -ENOMEM);
+	if (!*size) {
+		pr_err("BTF: no size in the compressed vmlinux BTF\n");
+		btf_vmlinux_broken = true;
+		btf_vmlinux_drop_zst();
+		return ERR_PTR(-EINVAL);
+	}
+	/* vmalloc_user(): btf_sysfs_vmlinux_mmap() maps it to user space */
+	raw = vmalloc_user(*size);
+	ws = kvmalloc(ws_size, GFP_KERNEL);
+	if (raw && ws) {
+		ret = zstd_decompress_dctx(zstd_init_dctx(ws, ws_size), raw, *size,
+					   btf_zst, __stop_BTF_zst - __start_BTF_zst);
+		if (!zstd_is_error(ret) && ret == *size) {
+			/* Pairs with smp_load_acquire() above */
+			smp_store_release(&btf_vmlinux_raw, raw);
+		} else {
+			pr_err("BTF: cannot decompress the vmlinux BTF: %s\n",
+			       zstd_is_error(ret) ? zstd_get_error_name(ret) : "size mismatch");
+			btf_vmlinux_broken = true;
+		}
+		btf_vmlinux_drop_zst();
+	}
+	kvfree(ws);
+	if (btf_vmlinux_raw)
+		return btf_vmlinux_raw;
+	vfree(raw);
+	return ERR_PTR(btf_vmlinux_broken ? -EINVAL : -ENOMEM);
+}
+
+/* Keep a copy of the compressed BTF before init memory is freed */
+static int __init btf_vmlinux_keep_zst(void)
+{
+	size_t size = __stop_BTF_zst - __start_BTF_zst;
+
+	guard(mutex)(&btf_vmlinux_data_lock);
+	if (btf_zst) {
+		/* vmalloc(): kmalloc() would round up to a power of 2 */
+		btf_zst = vmalloc(size);
+		if (btf_zst)
+			memcpy(btf_zst, __start_BTF_zst, size);
+		else
+			pr_err("BTF: out of memory, vmlinux BTF unavailable\n");
+	}
+	return 0;
+}
+late_initcall_sync(btf_vmlinux_keep_zst);
+#else
 /* See scripts/link-vmlinux.sh, gen_btf() func for details */
 extern char __start_BTF[];
 extern char __stop_BTF[];
 
+static u32 btf_vmlinux_size(void)
+{
+	return __stop_BTF - __start_BTF;
+}
+
+void *btf_vmlinux_data(u32 *size)
+{
+	*size = btf_vmlinux_size();
+	return __start_BTF;
+}
+#endif
+
+#ifdef CONFIG_SYSFS
 static int btf_sysfs_mmap_check(void *data, size_t size, struct vm_area_struct *vma)
 {
 	unsigned long pages = PAGE_ALIGN(size) >> PAGE_SHIFT;
@@ -61,10 +176,49 @@ static int btf_sysfs_mmap_image(struct file *filp, struct kobject *kobj,
 	return remap_pfn_range(vma, vma->vm_start, pfn, vm_size, vma->vm_page_prot);
 }
 
+#ifdef CONFIG_DEBUG_INFO_BTF_LAZY
+/* Reading or mapping the file decompresses the BTF but does not parse it */
+static int btf_sysfs_vmlinux_mmap(struct file *filp, struct kobject *kobj,
+				  const struct bin_attribute *attr,
+				  struct vm_area_struct *vma)
+{
+	void *data;
+	u32 size;
+	int err;
+
+	data = btf_vmlinux_data(&size);
+	if (IS_ERR(data))
+		return PTR_ERR(data);
+
+	err = btf_sysfs_mmap_check(data, attr->size, vma);
+	if (err)
+		return err;
+
+	return remap_vmalloc_range(vma, data, 0);
+}
+
+static ssize_t btf_sysfs_vmlinux_read(struct file *filp, struct kobject *kobj,
+				      const struct bin_attribute *attr, char *buf,
+				      loff_t off, size_t count)
+{
+	void *data;
+	u32 size;
+
+	data = btf_vmlinux_data(&size);
+	if (IS_ERR(data))
+		return PTR_ERR(data);
+
+	return memory_read_from_buffer(buf, count, &off, data, size);
+}
+#else
+#define btf_sysfs_vmlinux_read	sysfs_bin_attr_simple_read
+#define btf_sysfs_vmlinux_mmap	btf_sysfs_mmap_image
+#endif
+
 static struct bin_attribute bin_attr_btf_vmlinux __ro_after_init = {
 	.attr = { .name = "vmlinux", .mode = 0444, },
-	.read = sysfs_bin_attr_simple_read,
-	.mmap = btf_sysfs_mmap_image,
+	.read = btf_sysfs_vmlinux_read,
+	.mmap = btf_sysfs_vmlinux_mmap,
 };
 
 struct kobject *btf_kobj;
@@ -180,8 +334,12 @@ void sysfs_btf_remove(struct bin_attribute *attr)
 
 static int __init btf_vmlinux_init(void)
 {
-	bin_attr_btf_vmlinux.private = __start_BTF;
-	bin_attr_btf_vmlinux.size = __stop_BTF - __start_BTF;
+	u32 size;
+
+	/* with CONFIG_DEBUG_INFO_BTF_LAZY the read and mmap handlers get it */
+	if (!IS_ENABLED(CONFIG_DEBUG_INFO_BTF_LAZY))
+		bin_attr_btf_vmlinux.private = btf_vmlinux_data(&size);
+	bin_attr_btf_vmlinux.size = btf_vmlinux_size();
 
 	if (bin_attr_btf_vmlinux.size == 0)
 		return 0;
@@ -194,3 +352,4 @@ static int __init btf_vmlinux_init(void)
 }
 
 subsys_initcall(btf_vmlinux_init);
+#endif /* CONFIG_SYSFS */

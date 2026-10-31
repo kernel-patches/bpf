@@ -86,13 +86,24 @@ gen_btf_o()
 	btf_data=${ELF_FILE}.btf.o
 
 	# Create ${btf_data} which contains just BTF sections but no symbols. Add
-	# SHF_ALLOC because .BTF will be part of the vmlinux image. --strip-all
-	# deletes all symbols including __start_BTF and __stop_BTF, which will
-	# be redefined in the linker script.
+	# SHF_ALLOC to the sections that will be part of the vmlinux image.
+	# --strip-all deletes all symbols including __start_BTF and __stop_BTF,
+	# which will be redefined in the linker script.
 	echo "" | ${CC} ${CLANG_FLAGS} ${KBUILD_CPPFLAGS} ${KBUILD_CFLAGS} -fno-lto -c -x c -o ${btf_data} -
-	${OBJCOPY} --add-section .BTF=${ELF_FILE}.BTF \
-		--set-section-flags .BTF=alloc,readonly ${btf_data}
-	ONLY_SEC="--only-section=.BTF"
+	if is_enabled CONFIG_DEBUG_INFO_BTF_LAZY; then
+		# The image gets compressed BTF as init data, .BTF stays in
+		# the ELF file for tools.
+		${ZSTD} -q -f -19 ${ELF_FILE}.BTF -o ${ELF_FILE}.BTF.zst
+		${OBJCOPY} --add-section .BTF=${ELF_FILE}.BTF \
+			--set-section-flags .BTF=readonly \
+			--add-section .init.BTF.zst=${ELF_FILE}.BTF.zst \
+			--set-section-flags .init.BTF.zst=alloc,readonly ${btf_data}
+		ONLY_SEC="--only-section=.BTF --only-section=.init.BTF.zst"
+	else
+		${OBJCOPY} --add-section .BTF=${ELF_FILE}.BTF \
+			--set-section-flags .BTF=alloc,readonly ${btf_data}
+		ONLY_SEC="--only-section=.BTF"
+	fi
 	btf_inline=${ELF_FILE}.BTF.inline
 	if [ "${BTF_INLINE}" = "m" ]; then
 		if [ -f "${btf_inline}" ]; then
@@ -145,7 +156,7 @@ embed_btf_data()
 cleanup()
 {
 	rm -f "${ELF_FILE}.BTF.1"
-	rm -f "${ELF_FILE}.BTF"
+	rm -f "${ELF_FILE}.BTF" "${ELF_FILE}.BTF.zst"
 	rm -f "${ELF_FILE}.BTF.inline"
 	rm -f "${ELF_FILE}.BTF.inline.link"
 	if [ "${BTFGEN_MODE}" = "module" ]; then

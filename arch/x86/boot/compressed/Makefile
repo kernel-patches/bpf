@@ -116,7 +116,7 @@ endif
 $(obj)/vmlinux: $(vmlinux-objs-y) $(vmlinux-libs-y) FORCE
 	$(call if_changed,ld)
 
-OBJCOPYFLAGS_vmlinux.bin :=  -R .comment -S
+OBJCOPYFLAGS_vmlinux.bin :=  -R .comment $(if $(CONFIG_DEBUG_INFO_BTF_LAZY),-R .BTF) -S
 $(obj)/vmlinux.bin: vmlinux FORCE
 	$(call if_changed,objcopy)
 

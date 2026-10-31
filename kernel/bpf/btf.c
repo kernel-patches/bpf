@@ -1902,7 +1902,8 @@ static void btf_free(struct btf *btf)
 	kvfree(btf->resolved_sizes);
 	kvfree(btf->resolved_ids);
 	/* vmlinux does not allocate btf->data, it simply points it at
-	 * __start_BTF.
+	 * __start_BTF, or at the decompressed copy with
+	 * CONFIG_DEBUG_INFO_BTF_LAZY, which is never freed either.
 	 */
 	if (!btf_is_vmlinux(btf))
 		kvfree(btf->data);
@@ -6524,8 +6525,6 @@ errout_free:
 	return ERR_PTR(err);
 }
 
-extern char __start_BTF[];
-extern char __stop_BTF[];
 extern struct btf *btf_vmlinux;
 
 #define BPF_MAP_TYPE(_id, _ops)
@@ -6901,7 +6900,13 @@ struct btf *btf_parse_vmlinux(void)
 	struct btf_verifier_env *env = NULL;
 	struct bpf_verifier_log *log;
 	struct btf *btf;
+	void *data;
+	u32 size;
 	int err;
+
+	data = btf_vmlinux_data(&size);
+	if (IS_ERR(data))
+		return ERR_CAST(data);
 
 	env = kzalloc_obj(*env, GFP_KERNEL | __GFP_NOWARN);
 	if (!env)
@@ -6909,7 +6914,7 @@ struct btf *btf_parse_vmlinux(void)
 
 	log = &env->log;
 	log->level = BPF_LOG_KERNEL;
-	btf = btf_parse_base(env, "vmlinux", __start_BTF, __stop_BTF - __start_BTF);
+	btf = btf_parse_base(env, "vmlinux", data, size);
 	if (IS_ERR(btf))
 		goto err_out;
 
