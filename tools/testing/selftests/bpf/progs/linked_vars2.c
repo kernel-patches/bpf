@@ -8,7 +8,7 @@
 extern int LINUX_KERNEL_VERSION __kconfig;
 /* when an extern is defined as both strong and weak, resulting symbol will be strong */
 extern bool CONFIG_BPF_SYSCALL __kconfig;
-extern const void __start_BTF __ksym;
+extern const void bpf_map_fops __ksym;
 
 int input_bss2;
 int input_data2 = 2;
@@ -47,7 +47,7 @@ int BPF_PROG(handler2)
 	 */
 	output_sink2 = LINUX_KERNEL_VERSION
 		       + CONFIG_BPF_SYSCALL
-		       + (long)&__start_BTF;
+		       + (long)&bpf_map_fops;
 
 	return 0;
 }

@@ -10,7 +10,7 @@ void test_ksyms(void)
 	const char *btf_path = "/sys/kernel/btf/vmlinux";
 	struct test_ksyms *skel;
 	struct test_ksyms__data *data;
-	__u64 link_fops_addr, per_cpu_start_addr;
+	__u64 link_fops_addr, per_cpu_start_addr, btf_start_addr;
 	struct stat st;
 	__u64 btf_size;
 	int err;
@@ -30,6 +30,12 @@ void test_ksyms(void)
 	if (!ASSERT_OK(stat(btf_path, &st), "stat_btf"))
 		return;
 	btf_size = st.st_size;
+	/*
+	 * With CONFIG_DEBUG_INFO_BTF_LAZY the image has the vmlinux BTF only
+	 * compressed and no __start_BTF/__stop_BTF: the weak ksyms are 0.
+	 */
+	if (kallsyms_find("__start_BTF", &btf_start_addr) == -ENOENT)
+		btf_size = 0;
 
 	skel = test_ksyms__open_and_load();
 	if (!ASSERT_OK_PTR(skel, "test_ksyms__open_and_load"))
