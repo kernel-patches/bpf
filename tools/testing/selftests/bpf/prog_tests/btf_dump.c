@@ -952,6 +952,87 @@ static void test_btf_dump_enum_data(struct btf *btf, struct btf_dump *d,
 				sizeof(enum bpf_cmd) - 1, "", BPF_MAP_CREATE);
 }
 
+static void test_btf_dump_enum_values(void)
+{
+	LIBBPF_OPTS(btf_dump_type_data_opts, opts,
+		    .compact = true,
+		    .skip_names = true);
+	struct {
+		const char *name;
+		__u32 size;
+		__s64 enum_value;
+		union {
+			__u8 u8;
+			__u16 u16;
+			__u32 u32;
+			__u64 u64;
+		} data;
+		const char *expected;
+	} cases[] = {
+		{ "unsigned_byte", 1, 0xff, { .u8 = 0xff }, "VALUE" },
+		{ "unsigned_short", 2, 0xffff, { .u16 = 0xffff }, "VALUE" },
+		{ "unsigned_high", 4, 0x80000000LL,
+		  { .u32 = 0x80000000U }, "VALUE" },
+		{ "unsigned_max", 4, 0xffffffffLL,
+		  { .u32 = 0xffffffffU }, "VALUE" },
+		{ "signed_value", 4, -1, { .u32 = (__u32)-1 }, "VALUE" },
+		{ "signed_unknown", 4, -1, { .u32 = (__u32)-22 }, "-22" },
+		/* Old BTF stores negative enum values without setting kflag. */
+		{ "legacy_wide", 8, (__u32)-1, { .u64 = (__u64)-1 }, "VALUE" },
+		{ "unsigned_wide", 8, 0xffffffffLL,
+		  { .u64 = 0xffffffffULL }, "VALUE" },
+		/*
+		 * An unrelated 64-bit value must not match an ENUM32 by its
+		 * low 32 bits. Do not constrain the numeric fallback's width.
+		 */
+		{ "wide_unknown", 8, (__u32)-1,
+		  { .u64 = 0x1ffffffffULL }, NULL },
+		{ "unknown_byte", 1, (__u32)-1, { .u8 = (__u8)-22 }, "234" },
+		{ "unknown_short", 2, (__u32)-1, { .u16 = (__u16)-22 }, "65514" },
+		{ "unknown_word", 4, (__u32)-1,
+		  { .u32 = (__u32)-22 }, "4294967274" },
+	};
+	struct btf_dump *d;
+	struct btf *btf;
+	int ids[ARRAY_SIZE(cases)];
+	char str[STRSIZE];
+	int err, i;
+
+	btf = btf__new_empty();
+	if (!ASSERT_OK_PTR(btf, "new_empty"))
+		return;
+	for (i = 0; i < ARRAY_SIZE(cases); i++) {
+		ids[i] = btf__add_enum(btf, cases[i].name, cases[i].size);
+		if (!ASSERT_GT(ids[i], 0, "add_enum"))
+			goto free_btf;
+		err = btf__add_enum_value(btf, "VALUE", cases[i].enum_value);
+		if (!ASSERT_OK(err, "add_enum_value"))
+			goto free_btf;
+	}
+
+	d = btf_dump__new(btf, btf_dump_snprintf, str, NULL);
+	if (!ASSERT_OK_PTR(d, "btf_dump__new"))
+		goto free_btf;
+
+	for (i = 0; i < ARRAY_SIZE(cases); i++) {
+		str[0] = '\0';
+		err = btf_dump__dump_type_data(d, ids[i], &cases[i].data,
+					       cases[i].size, &opts);
+		ASSERT_EQ(err, cases[i].size, cases[i].name);
+		if (cases[i].expected) {
+			ASSERT_STREQ(str, cases[i].expected, cases[i].name);
+		} else {
+			ASSERT_NEQ(str[0], '\0', cases[i].name);
+			ASSERT_EQ(strspn(str, "0123456789"), strlen(str),
+				  cases[i].name);
+		}
+	}
+
+	btf_dump__free(d);
+free_btf:
+	btf__free(btf);
+}
+
 static void test_btf_dump_struct_data(struct btf *btf, struct btf_dump *d,
 				      char *str)
 {
@@ -1395,6 +1476,9 @@ void test_btf_dump() {
 
 	if (test__start_subtest("btf_dump: type_tags"))
 		test_btf_dump_type_tags();
+
+	if (test__start_subtest("btf_dump: enum_values"))
+		test_btf_dump_enum_values();
 
 	btf = libbpf_find_kernel_btf();
 	if (!ASSERT_OK_PTR(btf, "no kernel BTF found"))
