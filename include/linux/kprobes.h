@@ -95,6 +95,11 @@ struct kprobe {
 	u32 flags;
 };
 
+struct kprobe_iter {
+	struct kprobe *next;
+	unsigned long end;
+};
+
 /* Kprobe status flags */
 #define KPROBE_FLAG_GONE	1 /* breakpoint has already gone */
 #define KPROBE_FLAG_DISABLED	2 /* probe is temporarily disabled */
@@ -385,6 +390,14 @@ static inline void kprobe_ftrace_kill(void) {}
 
 /* Get the kprobe at this addr (if any) - called with preemption disabled */
 struct kprobe *get_kprobe(void *addr);
+
+struct kprobe *kprobe_iter_start(struct kprobe_iter *iter,
+				 unsigned long start, unsigned long end);
+struct kprobe *kprobe_iter_next(struct kprobe_iter *iter);
+
+#define for_each_kprobe(iter, p, start, end)			\
+	for ((p) = kprobe_iter_start(&(iter), (start), (end));	\
+	     (p); (p) = kprobe_iter_next(&(iter)))
 
 /* kprobe_running() will just return the current_kprobe on this CPU */
 static inline struct kprobe *kprobe_running(void)

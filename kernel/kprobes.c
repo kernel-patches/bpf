@@ -435,6 +435,48 @@ static void kprobe_tree_replace(struct kprobe *old, struct kprobe *new)
 	RB_CLEAR_NODE(&old->rb_node);
 }
 
+struct kprobe *kprobe_iter_start(struct kprobe_iter *iter, unsigned long start,
+				 unsigned long end)
+{
+	struct rb_node *node = kprobe_tree.rb_node;
+	struct kprobe *kp, *next = NULL;
+
+	lockdep_assert_held(&kprobe_mutex);
+	iter->next = NULL;
+	iter->end = end;
+	if (start > end)
+		return NULL;
+
+	while (node) {
+		kp = rb_entry(node, struct kprobe, rb_node);
+		if ((unsigned long)kp->addr >= start) {
+			next = kp;
+			node = node->rb_left;
+		} else {
+			node = node->rb_right;
+		}
+	}
+
+	iter->next = next;
+	return kprobe_iter_next(iter);
+}
+
+struct kprobe *kprobe_iter_next(struct kprobe_iter *iter)
+{
+	struct kprobe *kp = iter->next;
+	struct rb_node *node;
+
+	lockdep_assert_held(&kprobe_mutex);
+	if (!kp || (unsigned long)kp->addr > iter->end) {
+		iter->next = NULL;
+		return NULL;
+	}
+
+	node = rb_next(&kp->rb_node);
+	iter->next = node ? rb_entry(node, struct kprobe, rb_node) : NULL;
+	return kp;
+}
+
 static int aggr_pre_handler(struct kprobe *p, struct pt_regs *regs);
 
 /* Return true if 'p' is an aggregator */
