@@ -6640,8 +6640,13 @@ void btf_set_base_btf(struct btf *btf, const struct btf *base_btf)
 
 int btf__relocate(struct btf *btf, const struct btf *base_btf)
 {
-	int err = btf_relocate(btf, base_btf, NULL, NULL);
+	int err;
 
+	err = btf_ensure_modifiable(btf);
+	if (err)
+		return libbpf_err(err);
+
+	err = btf_relocate(btf, base_btf, NULL, NULL);
 	if (!err)
 		btf->owns_base = false;
 	return libbpf_err(err);
