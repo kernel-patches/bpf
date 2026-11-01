@@ -1943,11 +1943,15 @@ static __used __naked void grandchild_deref(void)
 	::: __clobber_all);
 }
 
+/*
+ * The callee gets a pointer to the frame that holds the spills. It can store a pointer
+ * that is not FP-derived over them: after the call each of them is "fp-N or not FP-derived".
+ */
 SEC("socket")
 __log_level(2)
 __success
-__msg("14: (79) r1 = *(u64 *)(r10 -8) // r6=fp0-8 r7=fp1-16 fp-8=fp1-16 fp-16=fp0-8")
-__msg("15: (79) r0 = *(u64 *)(r1 +0) // r1=fp1-16 r6=fp0-8 r7=fp1-16 fp-8=fp1-16 fp-16=fp0-8")
+__msg("14: (79) r1 = *(u64 *)(r10 -8) // r6=fp0-8 r7=fp1-16 fp-8=fp1-16|fp1+0 fp-16=fp0-8|fp0+0")
+__msg("15: (79) r0 = *(u64 *)(r1 +0) // r1=fp1-16|fp1+0 r6=fp0-8 r7=fp1-16 fp-8=fp1-16|fp1+0")
 __msg("stack use/def subprog#1 mid_two_fp_threshold (d1,cs2):")
 __msg("14: (79) r1 = *(u64 *)(r10 -8)        ; use: fp1-8")
 __msg("15: (79) r0 = *(u64 *)(r1 +0)         ; use: fp1-16")
@@ -1992,8 +1996,8 @@ static __used __naked void inner_nop_fptest(void)
 SEC("socket")
 __log_level(2)
 __success
-__msg("13: (79) r1 = *(u64 *)(r10 -8) // r6=fp0-8 r7=fp1-16 fp-8=fp1-16 fp-16=fp0-8")
-__msg("14: (79) r0 = *(u64 *)(r1 +0) // r1=fp1-16 r6=fp0-8 r7=fp1-16 fp-8=fp1-16 fp-16=fp0-8")
+__msg("13: (79) r1 = *(u64 *)(r10 -8) // r6=fp0-8 r7=fp1-16 fp-8=fp1-16|fp1+0 fp-16=fp0-8|fp0+0")
+__msg("14: (79) r0 = *(u64 *)(r1 +0) // r1=fp1-16|fp1+0 r6=fp0-8 r7=fp1-16 fp-8=fp1-16|fp1+0")
 __msg("stack use/def subprog#1 mid_one_fp_threshold (d1,cs2):")
 __msg("13: (79) r1 = *(u64 *)(r10 -8)        ; use: fp1-8")
 __msg("14: (79) r0 = *(u64 *)(r1 +0)         ; use: fp1-16")
@@ -3443,4 +3447,222 @@ __naked void helper_bloom_peek_input(void)
 	"exit;"
 	:: __imm_addr(bloom_8b), __imm(bpf_map_peek_elem)
 	: __clobber_all);
+}
+
+static __used __naked void store_second_param(void)
+{
+	asm volatile (
+	"*(u64 *)(r1 + 0) = r2;"
+	"r0 = 0;"
+	"exit;"
+	::: __clobber_all);
+}
+
+/*
+ * fp-16 holds &fp[-8], and the callee stores a pointer to map value over it. The store through
+ * the filled pointer goes to the map value. It is not a certain write to fp-8: fp-8 is live
+ * in front of the store.
+ */
+SEC("socket")
+__success __retval(0)
+__flag(BPF_F_TEST_STATE_FREQ)
+__log_level(2)
+__msg("r1 = *(u64 *)(r10 -16) // fp-16=fp0-8|fp0+0")
+__msg("*(u64 *)(r1 +0) = 42{{ +}}; may_def: fp0-8")
+__naked void callee_overwrites_spilled_fp(void)
+{
+	asm volatile (
+	"*(u64 *)(r10 - 8) = 0;"
+	"r1 = %[array_map_8b] ll;"
+	"r2 = r10;"
+	"r2 += -8;"
+	"call %[bpf_map_lookup_elem];"
+	"if r0 == 0 goto 1f;"
+	"r1 = r10;"
+	"r1 += -8;"
+	"*(u64 *)(r10 - 16) = r1;"
+	"r1 = r10;"
+	"r1 += -16;"
+	"r2 = r0;"
+	"call store_second_param;"
+	"r1 = *(u64 *)(r10 - 16);"
+	"*(u64 *)(r1 + 0) = 42;"
+	"r0 = *(u64 *)(r10 - 8);"
+"1:"
+	"exit;"
+	:
+	: __imm(bpf_map_lookup_elem),
+	  __imm_addr(array_map_8b)
+	: __clobber_all);
+}
+
+static __used __naked void store_second_param_at_16(void)
+{
+	asm volatile (
+	"*(u64 *)(r1 + 16) = r2;"
+	"r0 = 0;"
+	"exit;"
+	::: __clobber_all);
+}
+
+/* The same, but the callee gets &fp[-32] and reaches fp-16 from it. */
+SEC("socket")
+__success __retval(0)
+__flag(BPF_F_TEST_STATE_FREQ)
+__naked void callee_overwrites_spilled_fp_in_other_slot(void)
+{
+	asm volatile (
+	"*(u64 *)(r10 - 8) = 0;"
+	"r1 = %[array_map_8b] ll;"
+	"r2 = r10;"
+	"r2 += -8;"
+	"call %[bpf_map_lookup_elem];"
+	"if r0 == 0 goto 1f;"
+	"r1 = r10;"
+	"r1 += -8;"
+	"*(u64 *)(r10 - 16) = r1;"
+	"r1 = r10;"
+	"r1 += -32;"
+	"r2 = r0;"
+	"call store_second_param_at_16;"
+	"r1 = *(u64 *)(r10 - 16);"
+	"*(u64 *)(r1 + 0) = 42;"
+	"r0 = *(u64 *)(r10 - 8);"
+"1:"
+	"exit;"
+	:
+	: __imm(bpf_map_lookup_elem),
+	  __imm_addr(array_map_8b)
+	: __clobber_all);
+}
+
+/* ctx[1] = ctx[0] */
+static __used __naked void cb_copy_first_to_second(void)
+{
+	asm volatile (
+	"r1 = *(u64 *)(r2 + 0);"
+	"*(u64 *)(r2 + 8) = r1;"
+	"r0 = 0;"
+	"exit;"
+	::: __clobber_all);
+}
+
+/* The same, but a callback of bpf_loop() overwrites fp-16. */
+SEC("socket")
+__success __retval(0)
+__flag(BPF_F_TEST_STATE_FREQ)
+__naked void callback_overwrites_spilled_fp(void)
+{
+	asm volatile (
+	"*(u64 *)(r10 - 8) = 0;"
+	"r1 = %[array_map_8b] ll;"
+	"r2 = r10;"
+	"r2 += -8;"
+	"call %[bpf_map_lookup_elem];"
+	"if r0 == 0 goto 1f;"
+	"*(u64 *)(r10 - 24) = r0;"
+	"r1 = r10;"
+	"r1 += -8;"
+	"*(u64 *)(r10 - 16) = r1;"
+	"r1 = 1;"
+	"r2 = %[cb_copy_first_to_second] ll;"
+	"r3 = r10;"
+	"r3 += -24;"
+	"r4 = 0;"
+	"call %[bpf_loop];"
+	"r1 = *(u64 *)(r10 - 16);"
+	"*(u64 *)(r1 + 0) = 42;"
+	"r0 = *(u64 *)(r10 - 8);"
+"1:"
+	"exit;"
+	:
+	: __imm(bpf_map_lookup_elem),
+	  __imm(bpf_loop),
+	  __imm_addr(array_map_8b),
+	  __imm_addr(cb_copy_first_to_second)
+	: __clobber_all);
+}
+
+/*
+ * r7 is a pointer to map value, as above. The store through r7 doesn't overwrite fp-8:
+ * fp-8 still holds &fp[-24], and the store through r8 changes the counter of the loop.
+ */
+SEC("socket")
+__failure __msg("invalid access to map value, value_size=8 off=4096 size=1")
+__naked void callee_overwrites_spilled_fp_hidden_store(void)
+{
+	asm volatile (
+	"*(u64 *)(r10 - 8) = 0;"
+	"r1 = %[array_map_8b] ll;"
+	"r2 = r10;"
+	"r2 += -8;"
+	"call %[bpf_map_lookup_elem];"
+	"if r0 == 0 goto 2f;"
+	"r9 = r0;"
+	"r1 = r10;"
+	"r1 += -8;"
+	"*(u64 *)(r10 - 16) = r1;"
+	"r1 = r10;"
+	"r1 += -16;"
+	"r2 = r9;"
+	"call store_second_param;"
+	"r7 = *(u64 *)(r10 - 16);"
+	"r1 = r10;"
+	"r1 += -24;"
+	"*(u64 *)(r10 - 8) = r1;"
+	"r0 = 0;"
+	"*(u64 *)(r7 + 0) = r0;"
+	"r8 = *(u64 *)(r10 - 8);"
+	"r1 = 0;"
+	"*(u64 *)(r10 - 24) = r1;"
+	"r6 = 0;"
+"1:"
+	"r1 = *(u64 *)(r10 - 24);"
+	"r2 = r9;"
+	"r2 += r1;"
+	"r0 = *(u8 *)(r2 + 0);"
+	"r1 += 1;"
+	"*(u64 *)(r10 - 24) = r1;"
+	"r3 = 4096;"
+	"*(u64 *)(r8 + 0) = r3;"
+	"r6 += 1;"
+	"if r6 < 8 goto 1b;"
+"2:"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm(bpf_map_lookup_elem),
+	  __imm_addr(array_map_8b)
+	: __clobber_all);
+}
+
+struct cursor {
+	__u64 *pos;
+};
+
+__u64 cursor_seed;
+
+static __noinline int move_cursor(struct cursor *c, __u64 *to)
+{
+	if (cursor_seed & 8)
+		c->pos = to;
+	return 0;
+}
+
+/* The same in C: a cursor starts at a local variable, and the callee can move it to a map value. */
+SEC("socket")
+__success __retval(1)
+int callee_moves_cursor(void *ctx)
+{
+	__u64 x = cursor_seed & 7;
+	struct cursor c = { .pos = &x };
+	__u32 key = 0;
+	__u64 *val;
+
+	val = bpf_map_lookup_elem(&array_map_8b, &key);
+	if (!val)
+		return 0;
+	move_cursor(&c, val);
+	*c.pos = 1;
+	return x;
 }

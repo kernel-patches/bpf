@@ -289,6 +289,52 @@ __naked void callx_callee_writes_caller_stack(void)
 		: __clobber_all);
 }
 
+__naked __noinline __used
+static unsigned long store_second_param(void)
+{
+	asm volatile (
+		"*(u64 *)(r1 + 0) = r2;"
+		"r0 = 0;"
+		"exit;"
+	);
+}
+
+/*
+ * fp-16 holds &fp[-8], and the callee stores a pointer to map value over it. The store through
+ * the filled pointer is not a certain write to fp-8: fp-8 is live in front of the store.
+ */
+SEC("socket")
+__success __retval(0)
+__flag(BPF_F_TEST_STATE_FREQ)
+__naked void callx_callee_overwrites_spilled_fp(void)
+{
+	asm volatile (
+		"*(u64 *)(r10 - 8) = 0;"
+		"r1 = %[map_array] ll;"
+		"r2 = r10;"
+		"r2 += -8;"
+		"call %[bpf_map_lookup_elem];"
+		"if r0 == 0 goto 1f;"
+		"r1 = r10;"
+		"r1 += -8;"
+		"*(u64 *)(r10 - 16) = r1;"
+		"r1 = r10;"
+		"r1 += -16;"
+		"r2 = r0;"
+		"r3 = %[store_second_param] ll;"
+		"callx r3;"
+		"r1 = *(u64 *)(r10 - 16);"
+		"*(u64 *)(r1 + 0) = 42;"
+		"r0 = *(u64 *)(r10 - 8);"
+	"1:"
+		"exit;"
+		:
+		: __imm(bpf_map_lookup_elem),
+		  __imm_addr(map_array),
+		  __imm_addr(store_second_param)
+		: __clobber_all);
+}
+
 SEC("socket")
 __failure __msg("R1 has type scalar, expected func")
 __naked void callx_scalar(void)
