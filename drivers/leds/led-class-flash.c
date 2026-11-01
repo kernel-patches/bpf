@@ -71,7 +71,7 @@ static ssize_t flash_brightness_show(struct device *dev,
 	/* no lock needed for this */
 	led_update_flash_brightness(fled_cdev);
 
-	return sprintf(buf, "%u\n", fled_cdev->brightness.val);
+	return sysfs_emit(buf, "%u\n", fled_cdev->brightness.val);
 }
 static DEVICE_ATTR_RW(flash_brightness);
 
@@ -81,7 +81,7 @@ static ssize_t max_flash_brightness_show(struct device *dev,
 	struct led_classdev *led_cdev = dev_get_drvdata(dev);
 	struct led_classdev_flash *fled_cdev = lcdev_to_flcdev(led_cdev);
 
-	return sprintf(buf, "%u\n", fled_cdev->brightness.max);
+	return sysfs_emit(buf, "%u\n", fled_cdev->brightness.max);
 }
 static DEVICE_ATTR_RO(max_flash_brightness);
 
@@ -129,7 +129,7 @@ static ssize_t flash_strobe_show(struct device *dev,
 	if (ret < 0)
 		return ret;
 
-	return sprintf(buf, "%u\n", state);
+	return sysfs_emit(buf, "%u\n", state);
 }
 static DEVICE_ATTR_RW(flash_strobe);
 
@@ -168,7 +168,7 @@ static ssize_t flash_timeout_show(struct device *dev,
 	struct led_classdev *led_cdev = dev_get_drvdata(dev);
 	struct led_classdev_flash *fled_cdev = lcdev_to_flcdev(led_cdev);
 
-	return sprintf(buf, "%u\n", fled_cdev->timeout.val);
+	return sysfs_emit(buf, "%u\n", fled_cdev->timeout.val);
 }
 static DEVICE_ATTR_RW(flash_timeout);
 
@@ -178,7 +178,7 @@ static ssize_t max_flash_timeout_show(struct device *dev,
 	struct led_classdev *led_cdev = dev_get_drvdata(dev);
 	struct led_classdev_flash *fled_cdev = lcdev_to_flcdev(led_cdev);
 
-	return sprintf(buf, "%u\n", fled_cdev->timeout.max);
+	return sysfs_emit(buf, "%u\n", fled_cdev->timeout.max);
 }
 static DEVICE_ATTR_RO(max_flash_timeout);
 
