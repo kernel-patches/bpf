@@ -123,15 +123,14 @@ struct ntb_epf_dev {
 
 #define ntb_ndev(__ntb) container_of(__ntb, struct ntb_epf_dev, ntb)
 
-static int ntb_epf_send_command(struct ntb_epf_dev *ndev, u32 command,
-				u32 argument)
+static int ntb_epf_send_command_locked(struct ntb_epf_dev *ndev, u32 command,
+				       u32 argument)
 {
 	ktime_t timeout;
 	bool timedout;
 	int ret = 0;
 	u32 status;
 
-	mutex_lock(&ndev->cmd_lock);
 	writel(argument, ndev->ctrl_reg + NTB_EPF_ARGUMENT);
 	writel(command, ndev->ctrl_reg + NTB_EPF_COMMAND);
 
@@ -157,6 +156,17 @@ static int ntb_epf_send_command(struct ntb_epf_dev *ndev, u32 command,
 	}
 
 	writew(0, ndev->ctrl_reg + NTB_EPF_CMD_STATUS);
+
+	return ret;
+}
+
+static int ntb_epf_send_command(struct ntb_epf_dev *ndev, u32 command,
+				u32 argument)
+{
+	int ret;
+
+	mutex_lock(&ndev->cmd_lock);
+	ret = ntb_epf_send_command_locked(ndev, command, argument);
 	mutex_unlock(&ndev->cmd_lock);
 
 	return ret;
@@ -494,11 +504,13 @@ static int ntb_epf_mw_set_trans(struct ntb_dev *ntb, int pidx, int idx,
 		return -EINVAL;
 	}
 
+	mutex_lock(&ndev->cmd_lock);
 	writel(lower_32_bits(addr), ndev->ctrl_reg + NTB_EPF_LOWER_ADDR);
 	writel(upper_32_bits(addr), ndev->ctrl_reg + NTB_EPF_UPPER_ADDR);
 	writel(lower_32_bits(size), ndev->ctrl_reg + NTB_EPF_LOWER_SIZE);
 	writel(upper_32_bits(size), ndev->ctrl_reg + NTB_EPF_UPPER_SIZE);
-	ntb_epf_send_command(ndev, CMD_CONFIGURE_MW, idx);
+	ntb_epf_send_command_locked(ndev, CMD_CONFIGURE_MW, idx);
+	mutex_unlock(&ndev->cmd_lock);
 
 	return 0;
 }
