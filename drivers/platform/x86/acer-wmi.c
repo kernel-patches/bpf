@@ -406,6 +406,7 @@ struct quirk_entry {
 	bool hwmon;
 	bool platform_profile;
 	bool pwm;
+	bool commun_bluetooth;
 };
 
 static struct quirk_entry *quirks;
@@ -430,6 +431,11 @@ static void __init set_quirks(void)
 
 	if (quirks->pwm)
 		interface->capability |= ACER_CAP_PWM;
+
+	if (quirks->commun_bluetooth) {
+		commun_func_bitmap |= ACER_WMID3_GDS_BLUETOOTH;
+		interface->capability |= ACER_CAP_BLUETOOTH;
+	}
 }
 
 static int __init dmi_matched(const struct dmi_system_id *dmi)
@@ -452,6 +458,11 @@ static struct quirk_entry quirk_unknown = {
 
 static struct quirk_entry quirk_acer_aspire_1520 = {
 	.brightness = -1,
+};
+
+/* The type AAh table omits the internal Bluetooth device */
+static struct quirk_entry quirk_acer_aspire_e5_573 = {
+	.commun_bluetooth = true,
 };
 
 static struct quirk_entry quirk_acer_aspire_a315_58g = {
@@ -662,6 +673,15 @@ static const struct dmi_system_id acer_quirks[] __initconst = {
 			DMI_MATCH(DMI_PRODUCT_NAME, "Aspire A315-58G"),
 		},
 		.driver_data = &quirk_acer_aspire_a315_58g,
+	},
+	{
+		.callback = dmi_matched,
+		.ident = "Acer Aspire E5-573",
+		.matches = {
+			DMI_EXACT_MATCH(DMI_SYS_VENDOR, "Acer"),
+			DMI_EXACT_MATCH(DMI_PRODUCT_NAME, "Aspire E5-573"),
+		},
+		.driver_data = &quirk_acer_aspire_e5_573,
 	},
 	{
 		.callback = dmi_matched,
