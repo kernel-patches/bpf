@@ -601,6 +601,68 @@ cleanup:
 	btf__free(base);
 }
 
+/*
+ * Raw data cached by btf__raw_data() before btf__relocate() must not be
+ * returned afterwards; serialized split BTF should carry relocated ids.
+ */
+static void test_distilled_relocate_raw_data(void)
+{
+	struct btf *btf1 = NULL, *btf2 = NULL, *btf3 = NULL, *btf4 = NULL;
+	const void *raw_data;
+	__u32 size;
+
+	btf1 = btf__new_empty();
+	if (!ASSERT_OK_PTR(btf1, "empty_main_btf"))
+		return;
+	btf__add_int(btf1, "int", 4, BTF_INT_SIGNED);	/* [1] int */
+	btf2 = btf__new_empty_split(btf1);
+	if (!ASSERT_OK_PTR(btf2, "empty_split_btf"))
+		goto cleanup;
+	btf__add_ptr(btf2, 1);				/* [2] ptr to int */
+	VALIDATE_RAW_BTF(
+		btf2,
+		"[1] INT 'int' size=4 bits_offset=0 nr_bits=32 encoding=SIGNED",
+		"[2] PTR '(anon)' type_id=1");
+
+	/* populate raw data cache before relocation */
+	raw_data = btf__raw_data(btf2, &size);
+	if (!ASSERT_OK_PTR(raw_data, "btf__raw_data #1"))
+		goto cleanup;
+
+	/* new base where int has a different type id */
+	btf3 = btf__new_empty();
+	if (!ASSERT_OK_PTR(btf3, "empty_new_base_btf"))
+		goto cleanup;
+	btf__add_int(btf3, "padding", 4, BTF_INT_SIGNED);	/* [1] padding */
+	btf__add_int(btf3, "int", 4, BTF_INT_SIGNED);		/* [2] int */
+
+	if (!ASSERT_EQ(btf__relocate(btf2, btf3), 0, "relocate_split"))
+		goto cleanup;
+	VALIDATE_RAW_BTF(
+		btf2,
+		"[1] INT 'padding' size=4 bits_offset=0 nr_bits=32 encoding=SIGNED",
+		"[2] INT 'int' size=4 bits_offset=0 nr_bits=32 encoding=SIGNED",
+		"[3] PTR '(anon)' type_id=2");
+
+	/* serialized split BTF must match relocated in-memory BTF */
+	raw_data = btf__raw_data(btf2, &size);
+	if (!ASSERT_OK_PTR(raw_data, "btf__raw_data #2"))
+		goto cleanup;
+	btf4 = btf__new_split(raw_data, size, btf3);
+	if (!ASSERT_OK_PTR(btf4, "btf__new_split"))
+		goto cleanup;
+	VALIDATE_RAW_BTF(
+		btf4,
+		"[1] INT 'padding' size=4 bits_offset=0 nr_bits=32 encoding=SIGNED",
+		"[2] INT 'int' size=4 bits_offset=0 nr_bits=32 encoding=SIGNED",
+		"[3] PTR '(anon)' type_id=2");
+cleanup:
+	btf__free(btf4);
+	btf__free(btf3);
+	btf__free(btf2);
+	btf__free(btf1);
+}
+
 /* If a needed composite type, which is the member of composite type
  * in the split BTF, has a different size in the base BTF we wish to
  * relocate with, btf__relocate() should error out.
@@ -793,6 +855,8 @@ void test_btf_distill(void)
 		test_distilled_base_vmlinux();
 	if (test__start_subtest("distilled_endianness"))
 		test_distilled_endianness();
+	if (test__start_subtest("distilled_relocate_raw_data"))
+		test_distilled_relocate_raw_data();
 	if (test__start_subtest("distilled_loc"))
 		test_distilled_loc();
 }
