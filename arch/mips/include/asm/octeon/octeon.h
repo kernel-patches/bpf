@@ -298,6 +298,7 @@ static inline void octeon_npi_write32(uint64_t address, uint32_t val)
 
 #ifdef CONFIG_SMP
 void octeon_setup_smp(void);
+void octeon_send_ipi_single(int cpu, unsigned int action);
 #else
 static inline void octeon_setup_smp(void) {}
 #endif
