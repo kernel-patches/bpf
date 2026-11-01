@@ -148,37 +148,50 @@ static int btf_dumper_enum(const struct btf_dumper *d,
 			    const struct btf_type *t,
 			    const void *data)
 {
-	const struct btf_enum *enums = btf_enum(t);
-	__s64 value;
+	const struct btf_enum *enums = btf_enum(t), *match = NULL;
+	bool is_signed = btf_kflag(t);
+	__s64 value, legacy_value;
 	__u32 i;
 
 	switch (t->size) {
 	case 8:
-		value = *(__s64 *)data;
+		legacy_value = *(__s64 *)data;
+		value = legacy_value;
 		break;
 	case 4:
-		value = *(__s32 *)data;
+		legacy_value = *(__s32 *)data;
+		value = is_signed ? legacy_value : *(__u32 *)data;
 		break;
 	case 2:
-		value = *(__s16 *)data;
+		legacy_value = *(__s16 *)data;
+		value = is_signed ? legacy_value : *(__u16 *)data;
 		break;
 	case 1:
-		value = *(__s8 *)data;
+		legacy_value = *(__s8 *)data;
+		value = is_signed ? legacy_value : *(__u8 *)data;
 		break;
 	default:
 		return -EINVAL;
 	}
 
+	/* Prefer existing name matches, including signed enums without kflag. */
 	for (i = 0; i < btf_vlen(t); i++) {
-		if (value == enums[i].val) {
-			jsonw_string(d->jw,
-				     btf__name_by_offset(d->btf,
-							 enums[i].name_off));
-			return 0;
+		if (legacy_value == enums[i].val) {
+			match = &enums[i];
+			break;
 		}
+		if (!match && value == btf_enum_value(t, &enums[i]))
+			match = &enums[i];
+	}
+	if (match) {
+		jsonw_string(d->jw, btf__name_by_offset(d->btf, match->name_off));
+		return 0;
 	}
 
-	jsonw_int(d->jw, value);
+	if (is_signed)
+		jsonw_int(d->jw, value);
+	else
+		jsonw_uint(d->jw, value);
 	return 0;
 }
 
@@ -204,7 +217,10 @@ static int btf_dumper_enum64(const struct btf_dumper *d,
 		}
 	}
 
-	jsonw_int(d->jw, value);
+	if (btf_kflag(t))
+		jsonw_int(d->jw, value);
+	else
+		jsonw_uint(d->jw, value);
 	return 0;
 }
 
