@@ -28,6 +28,7 @@
 #include <linux/ftrace.h>
 #include <linux/objpool.h>
 #include <linux/rethook.h>
+#include <linux/rbtree.h>
 #include <asm/kprobes.h>
 
 #ifdef CONFIG_KPROBES
@@ -58,6 +59,7 @@ typedef int (*kretprobe_handler_t) (struct kretprobe_instance *,
 
 struct kprobe {
 	struct hlist_node hlist;
+	struct rb_node rb_node;
 
 	/* list of kprobes for multi-handler support */
 	struct list_head list;
