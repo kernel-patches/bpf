@@ -31,6 +31,11 @@ extern int mips_sc_init(void);
 extern void (*r4k_blast_dcache)(void);
 extern void (*r4k_blast_icache)(void);
 
+extern int register_co_cache_error_notifier(struct notifier_block *nb);
+extern int unregister_co_cache_error_notifier(struct notifier_block *nb);
+extern void cache_parity_error_octeon_recoverable(void);
+extern void cache_parity_error_octeon_non_recoverable(void);
+
 /*
  * This macro return a properly sign-extended address suitable as base address
  * for indexed cache operations.  Two issues here:
