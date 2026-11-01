@@ -48,6 +48,7 @@ extern void octeon_user_io_init(void);
 extern void octeon_init_cvmcount(void);
 extern void octeon_setup_delays(void);
 extern void octeon_io_clk_delay(unsigned long);
+void __init octeon_fill_mac_addresses(void);
 
 #define OCTEON_ARGV_MAX_ARGS	64
 #define OCTEON_SERIAL_LEN	20

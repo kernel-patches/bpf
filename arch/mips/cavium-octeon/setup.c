@@ -1156,8 +1156,6 @@ void __init prom_free_prom_memory(void)
 	}
 }
 
-void __init octeon_fill_mac_addresses(void);
-
 void __init device_tree_init(void)
 {
 	const void *fdt = NULL;
