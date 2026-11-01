@@ -91,6 +91,8 @@ static void drop_sysctl_table(struct ctl_table_header *header);
 static int sysctl_follow_link(struct ctl_table_header **phead,
 	const struct ctl_table **pentry);
 static int insert_links(struct ctl_table_header *head);
+static struct ctl_table_set *lookup_header_set(struct ctl_table_root *root);
+static struct ctl_dir *xlate_dir(struct ctl_table_set *set, struct ctl_dir *dir);
 static void put_links(struct ctl_table_header *header);
 
 static void sysctl_print_dir(struct ctl_dir *dir)
@@ -367,87 +369,97 @@ static const struct ctl_table *lookup_entry(struct ctl_table_header **phead,
 	return entry;
 }
 
-static struct ctl_node *first_usable_entry(struct rb_node *node)
+/*
+ * What readdir takes along for an entry between the trips through
+ * sysctl_lock: the header pinned, which keeps its memory and nothing else,
+ * the entry and its name. For a link the header and entry are the
+ * ones it stands for in the caller's set.
+ */
+struct sysctl_dirent {
+	struct ctl_table_header *head;
+	const struct ctl_table *table;
+	struct ctl_node *node;		/* the entry's node in the directory, NULL for a link */
+	ino_t ino;
+	unsigned int type;
+	bool skip;
+	int len;
+	char name[NAME_MAX + 1];
+};
+
+/* A reference on the memory of @head, like an inode made for it holds. */
+static void sysctl_pin(struct ctl_table_header *head)
+{
+	lockdep_assert_held(&sysctl_lock);
+	head->count++;
+}
+
+static void sysctl_unpin(struct ctl_table_header *head)
+{
+	lockdep_assert_held(&sysctl_lock);
+	if (!--head->count)
+		kfree_rcu(head, rcu);
+}
+
+/* the first entry from @node on whose table isn't being unregistered */
+static struct ctl_node *first_live_entry(struct rb_node *node)
 {
 	struct ctl_node *ctl_node;
 
-	for (;node; node = rb_next(node)) {
+	lockdep_assert_held(&sysctl_lock);
+	for (; node; node = rb_next(node)) {
 		ctl_node = rb_entry(node, struct ctl_node, node);
-		if (use_table(ctl_node->header))
+		if (!ctl_node->header->unregistering)
 			return ctl_node;
 	}
 	return NULL;
 }
 
-static void first_entry(struct ctl_dir *dir,
-	struct ctl_table_header **phead, const struct ctl_table **pentry)
-{
-	struct ctl_table_header *head = NULL;
-	const struct ctl_table *entry = NULL;
-	struct ctl_node *ctl_node;
-
-	spin_lock(&sysctl_lock);
-	ctl_node = first_usable_entry(rb_first(&dir->root));
-	spin_unlock(&sysctl_lock);
-	if (ctl_node) {
-		head = ctl_node->header;
-		entry = &head->ctl_table[ctl_node - head->node];
-	}
-	*phead = head;
-	*pentry = entry;
-}
-
-static void next_entry(struct ctl_table_header **phead, const struct ctl_table **pentry)
-{
-	struct ctl_table_header *head = *phead;
-	const struct ctl_table *entry = *pentry;
-	struct ctl_node *ctl_node = &head->node[entry - head->ctl_table];
-
-	spin_lock(&sysctl_lock);
-	unuse_table(head);
-
-	ctl_node = first_usable_entry(rb_next(&ctl_node->node));
-	spin_unlock(&sysctl_lock);
-	head = NULL;
-	if (ctl_node) {
-		head = ctl_node->header;
-		entry = &head->ctl_table[ctl_node - head->node];
-	}
-	*phead = head;
-	*pentry = entry;
-}
-
 /*
- * The first usable entry of @dir after @name, or the first one at all for a
- * NULL @name. The entries are sorted by name, so that is where a listing
- * resumes when entries in front of it came or went in between. -ENOENT if
- * the directory is being unregistered.
+ * Fill @d with the entry of @dir behind the one it holds, letting go of that
+ * one, or with the first live entry after @name, or the first one at all for
+ * a NULL @name. While the entry @d holds is still registered its node is
+ * still in the tree and the next one is right behind it. Once it is gone the
+ * entries are found by name, they are sorted by it, so that is also where a
+ * listing resumes when entries in front of it came or went in between.
+ * 1 with the next entry pinned in @d, 0 at the end of the directory and
+ * -ENOENT once @dir itself is being unregistered.
+ *
+ * Everything that reads the tables happens under sysctl_lock, where an entry
+ * is erased when it is unregistered, since nothing holds the tables in use.
  */
-static int entry_after(struct ctl_dir *dir, const char *name, int namelen,
-		       struct ctl_table_header **phead,
-		       const struct ctl_table **pentry)
+static int sysctl_dir_next(struct ctl_dir *dir, struct sysctl_dirent *d,
+			   const char *name, int namelen)
 {
-	struct ctl_table_header *head = NULL;
-	const struct ctl_table *entry = NULL;
 	struct rb_node *node, *after = NULL;
+	struct ctl_table_header *head;
+	const struct ctl_table *entry;
 	struct ctl_node *ctl_node;
+	bool by_name = true;
+	int ret = 0;
 
 	spin_lock(&sysctl_lock);
-	if (unlikely(dir->header.unregistering)) {
-		spin_unlock(&sysctl_lock);
-		return -ENOENT;
+	if (d->head) {
+		if (d->node && !d->head->unregistering) {
+			after = rb_next(&d->node->node);
+			by_name = false;
+		}
+		sysctl_unpin(d->head);
+		d->head = NULL;
 	}
-	if (!name) {
+	if (unlikely(dir->header.unregistering)) {
+		ret = -ENOENT;
+		goto out;
+	}
+	if (!by_name) {
+		/* behind the entry @d held */
+	} else if (!name) {
 		after = rb_first(&dir->root);
 	} else {
 		for (node = dir->root.rb_node; node;) {
-			const struct ctl_table *table;
-			struct ctl_table_header *h;
-
 			ctl_node = rb_entry(node, struct ctl_node, node);
-			h = ctl_node->header;
-			table = &h->ctl_table[ctl_node - h->node];
-			if (namecmp(table->procname, strlen(table->procname),
+			head = ctl_node->header;
+			entry = &head->ctl_table[ctl_node - head->node];
+			if (namecmp(entry->procname, strlen(entry->procname),
 				    name, namelen) > 0) {
 				after = node;
 				node = node->rb_left;
@@ -456,15 +468,55 @@ static int entry_after(struct ctl_dir *dir, const char *name, int namelen,
 			}
 		}
 	}
-	ctl_node = first_usable_entry(after);
-	spin_unlock(&sysctl_lock);
-	if (ctl_node) {
-		head = ctl_node->header;
-		entry = &head->ctl_table[ctl_node - head->node];
+	ctl_node = first_live_entry(after);
+	if (!ctl_node)
+		goto out;
+	head = ctl_node->header;
+	entry = &head->ctl_table[ctl_node - head->node];
+
+	d->len = strlen(entry->procname);
+	if (d->len > NAME_MAX) {
+		ret = -ENAMETOOLONG;
+		goto out;
 	}
-	*phead = head;
-	*pentry = entry;
-	return 0;
+	memcpy(d->name, entry->procname, d->len);
+	d->skip = false;
+	d->node = ctl_node;
+	if (unlikely(S_ISLNK(entry->mode))) {
+		/* the entry it stands for in the caller's set, or nothing */
+		struct ctl_table_root *root = entry->data;
+		struct ctl_table_set *set = lookup_header_set(root);
+		struct ctl_dir *xdir = xlate_dir(set, head->parent);
+		struct ctl_table_header *xhead = NULL;
+		const struct ctl_table *xentry = NULL;
+
+		if (!IS_ERR(xdir))
+			xentry = find_entry(&xhead, xdir, d->name, d->len);
+		if (!xentry || xhead->unregistering) {
+			d->skip = true;
+		} else {
+			head = xhead;
+			entry = xentry;
+		}
+		d->node = NULL;
+	}
+	sysctl_pin(head);
+	d->head = head;
+	d->table = entry;
+	ret = 1;
+out:
+	spin_unlock(&sysctl_lock);
+	return ret;
+}
+
+static void sysctl_dir_done(struct sysctl_dirent *d)
+{
+	if (!d->head)
+		return;
+	spin_lock(&sysctl_lock);
+	sysctl_unpin(d->head);
+	spin_unlock(&sysctl_lock);
+	d->head = NULL;
 }
 
 /*
@@ -770,112 +822,71 @@ static void sysctl_cursor_set(struct file *file, const char *name, int len,
 	memcpy(cursor->name, name, len);
 }
 
-static bool proc_sys_fill_cache(struct file *file,
-				struct dir_context *ctx,
-				struct ctl_table_header *head,
-				const struct ctl_table *table)
+/*
+ * The inode number and type of the entry @d holds, instantiating its dentry
+ * if there is none. Needs the header pinned, proc_sys_make_inode() checks
+ * for itself that the table is still registered.
+ */
+static int proc_sys_fill_dirent(struct file *file, struct sysctl_dirent *d)
 {
 	struct dentry *child, *dir = file->f_path.dentry;
 	struct inode *inode;
 	struct qstr qname;
-	ino_t ino = 0;
-	unsigned type = DT_UNKNOWN;
 
-	qname.name = table->procname;
-	qname.len  = strlen(table->procname);
+	qname.name = d->name;
+	qname.len  = d->len;
 	qname.hash = full_name_hash(dir, qname.name, qname.len);
 
 	child = d_lookup(dir, &qname);
 	if (!child) {
 		child = d_alloc_parallel(dir, &qname);
 		if (IS_ERR(child))
-			return false;
+			return PTR_ERR(child);
 		if (d_in_lookup(child)) {
 			struct dentry *res;
-			inode = proc_sys_make_inode(dir->d_sb, head, table);
+			inode = proc_sys_make_inode(dir->d_sb, d->head, d->table);
 			res = d_splice_alias_ops(inode, child,
 						 &proc_sys_dentry_operations);
 			d_lookup_done(child);
 			if (unlikely(res)) {
 				dput(child);
 
-				/* skip an entry whose table is being unregistered */
-				if (res == ERR_PTR(-ENOENT))
-					return true;
 				if (IS_ERR(res))
-					return false;
+					return PTR_ERR(res);
 
 				child = res;
 			}
 		}
 	}
 	inode = d_inode(child);
-	ino  = inode->i_ino;
-	type = inode->i_mode >> 12;
+	d->ino = inode->i_ino;
+	d->type = inode->i_mode >> 12;
 	dput(child);
-	return dir_emit(ctx, qname.name, qname.len, ino, type);
+	return 0;
 }
 
-static bool proc_sys_link_fill_cache(struct file *file,
-				    struct dir_context *ctx,
-				    struct ctl_table_header *head,
-				    const struct ctl_table *table)
-{
-	bool ret = true;
-
-	head = sysctl_head_grab(head);
-	if (IS_ERR(head))
-		return false;
-
-	/* It is not an error if we can not follow the link ignore it */
-	if (sysctl_follow_link(&head, &table))
-		goto out;
-
-	ret = proc_sys_fill_cache(file, ctx, head, table);
-out:
-	sysctl_head_finish(head);
-	return ret;
-}
-
-static int scan(struct ctl_table_header *head, const struct ctl_table *table,
-		unsigned long *pos, struct file *file,
-		struct dir_context *ctx)
-{
-	bool res;
-
-	if ((*pos)++ < ctx->pos)
-		return true;
-
-	if (unlikely(S_ISLNK(table->mode)))
-		res = proc_sys_link_fill_cache(file, ctx, head, table);
-	else
-		res = proc_sys_fill_cache(file, ctx, head, table);
-
-	if (res) {
-		ctx->pos = *pos;
-		sysctl_cursor_set(file, table->procname, strlen(table->procname),
-				  ctx->pos);
-	}
-
-	return res;
-}
-
+/*
+ * Unregistering a table waits until nobody uses it anymore and a copy to
+ * userspace can take as long as userspace wants. So a listing doesn't take
+ * any table into use. It pins the memory of the entry it is at, finds the
+ * next one under sysctl_lock and emits with nothing held, like
+ * kernfs_fop_readdir() and proc_readdir_de() do. Between calls a listing
+ * resumes after the name of the last entry it emitted.
+ */
 static int proc_sys_readdir(struct file *file, struct dir_context *ctx)
 {
-	struct ctl_table_header *head = grab_header(file_inode(file));
+	struct ctl_table_header *head = PROC_I(file_inode(file))->sysctl;
 	struct sysctl_cursor *cursor = file->private_data;
-	struct ctl_table_header *h = NULL;
-	const struct ctl_table *entry;
+	struct sysctl_dirent d = {};
 	struct ctl_dir *ctl_dir;
-	unsigned long pos;
+	int err;
 
-	if (IS_ERR(head))
-		return PTR_ERR(head);
-
+	if (!head)
+		head = &sysctl_table_root.default_set.dir.header;
 	ctl_dir = container_of(head, struct ctl_dir, header);
 
 	if (!dir_emit_dots(file, ctx))
-		goto out;
+		return 0;
 
 	/*
 	 * Resume after the last entry the previous call emitted. Only a seek
@@ -883,22 +894,32 @@ static int proc_sys_readdir(struct file *file, struct dir_context *ctx)
 	 * seeking to an arbitrary position always did.
 	 */
 	if (cursor && cursor->pos == ctx->pos) {
-		entry_after(ctl_dir, cursor->name, cursor->len, &h, &entry);
-		pos = ctx->pos;
+		err = sysctl_dir_next(ctl_dir, &d, cursor->name, cursor->len);
 	} else {
-		first_entry(ctl_dir, &h, &entry);
-		pos = 2;
-	}
+		loff_t pos = 2;
 
-	for (; h; next_entry(&h, &entry)) {
-		if (!scan(h, entry, &pos, file, ctx)) {
-			sysctl_head_finish(h);
-			break;
-		}
+		err = sysctl_dir_next(ctl_dir, &d, NULL, 0);
+		while (err > 0 && pos++ < ctx->pos)
+			err = sysctl_dir_next(ctl_dir, &d, d.name, d.len);
 	}
-out:
-	sysctl_head_finish(head);
-	return 0;
+	if (err < 0)
+		return err;
+
+	while (err > 0) {
+		if (!d.skip) {
+			err = proc_sys_fill_dirent(file, &d);
+			/* skip an entry whose table is being unregistered */
+			if (err && err != -ENOENT)
+				break;
+			if (!err && !dir_emit(ctx, d.name, d.len, d.ino, d.type))
+				break;
+		}
+		ctx->pos++;
+		sysctl_cursor_set(file, d.name, d.len, ctx->pos);
+		err = sysctl_dir_next(ctl_dir, &d, d.name, d.len);
+	}
+	sysctl_dir_done(&d);
+	return err;
 }
 
 static int proc_sys_dir_release(struct inode *inode, struct file *file)
