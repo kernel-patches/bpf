@@ -801,9 +801,49 @@ static void brcmf_pcie_attach(struct brcmf_pciedev_info *devinfo)
 }
 
 
+/* ChipCommon chipcontrol bit selecting the discrete FEM control pin mode */
+#define BRCMF_CC_CHIPCTL_4360_DISCRETE_FEMCTRL_MODE	BIT(4)
+
+/* On the Apple boards below, 5 GHz on the BCM43602 only works with the
+ * discrete FEM control pin mode selected in the ChipCommon chipcontrol
+ * register. The bit is set after a reboot, but a power-on reset of the chip
+ * (e.g. over S3) clears it and the firmware does not set it again. Restore
+ * it before the firmware is started. Other Apple boards may not use this
+ * mode (a MacBookPro11,5 boots with the bit clear), so they are left alone.
+ */
+static void brcmf_pcie_43602_apple_femctrl(struct brcmf_pciedev_info *devinfo)
+{
+	const struct pci_dev *pdev = devinfo->pdev;
+	u32 val;
+
+	if (pdev->subsystem_vendor != PCI_VENDOR_ID_APPLE)
+		return;
+
+	switch (pdev->subsystem_device) {
+	case 0x0157:	/* MacBookPro14,2, possibly others */
+	case 0x015a:	/* MacBookPro13,3 */
+	case 0x0173:	/* MacBookPro14,3 */
+		break;
+	default:
+		return;
+	}
+
+	brcmf_pcie_select_core(devinfo, BCMA_CORE_CHIPCOMMON);
+	val = READCC32(devinfo, chipcontrol);
+	if (val & BRCMF_CC_CHIPCTL_4360_DISCRETE_FEMCTRL_MODE)
+		return;
+
+	brcmf_dbg(PCIE, "chipcontrol 0x%08x, setting discrete FEM control mode\n",
+		  val);
+	WRITECC32(devinfo, chipcontrol,
+		  val | BRCMF_CC_CHIPCTL_4360_DISCRETE_FEMCTRL_MODE);
+}
+
 static int brcmf_pcie_enter_download_state(struct brcmf_pciedev_info *devinfo)
 {
 	if (devinfo->ci->chip == BRCM_CC_43602_CHIP_ID) {
+		brcmf_pcie_43602_apple_femctrl(devinfo);
+
 		brcmf_pcie_select_core(devinfo, BCMA_CORE_ARM_CR4);
 		brcmf_pcie_write_reg32(devinfo, BRCMF_PCIE_ARMCR4REG_BANKIDX,
 				       5);
