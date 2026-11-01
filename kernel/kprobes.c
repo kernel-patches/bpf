@@ -591,23 +591,25 @@ bool kprobe_disarmed(struct kprobe *p)
  */
 static struct kprobe *get_optimized_kprobe(kprobe_opcode_t *addr)
 {
-	int i;
-	struct kprobe *p;
+	unsigned long offset = MAX_OPTIMIZED_LENGTH / sizeof(kprobe_opcode_t) - 1;
+	unsigned long addr_val = (unsigned long)addr;
+	struct kprobe *p, *candidate = NULL;
 	struct optimized_kprobe *op;
+	struct kprobe_iter iter;
 
-	/* Don't check i == 0, since that is a breakpoint case. */
-	for (i = 1; i < MAX_OPTIMIZED_LENGTH / sizeof(kprobe_opcode_t); i++) {
-		p = get_kprobe(addr - i);
+	/* Don't check addr itself, since that is a breakpoint case. */
+	for_each_kprobe(iter, p, addr_val - offset, addr_val - 1) {
 		/* A disabled probe can have prepared, but inactive, optinsns. */
-		if (!p || !kprobe_optready(p) || kprobe_disarmed(p))
+		if (!kprobe_optready(p) || kprobe_disarmed(p))
 			continue;
 
+		/* The iterator walks low to high; keep the nearest matching probe. */
 		op = container_of(p, struct optimized_kprobe, kp);
 		if (arch_within_optimized_kprobe(op, addr))
-			return p;
+			candidate = p;
 	}
 
-	return NULL;
+	return candidate;
 }
 
 #define OPTPROBE_GEN_MAX 2
