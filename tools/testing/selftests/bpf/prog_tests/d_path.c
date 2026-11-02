@@ -4,6 +4,7 @@
 #include <sys/stat.h>
 #include <linux/sched.h>
 #include <sys/syscall.h>
+#include <sys/mman.h>
 
 #define MAX_PATH_LEN		128
 #define MAX_FILES		7
@@ -221,7 +222,6 @@ static void test_d_path_check_types(void)
 static void test_d_path_mem_access(void)
 {
 	int localfd = -1;
-	char path_template[] = "/dev/shm/d_path_loadgen.XXXXXX";
 	struct test_d_path__bss *bss;
 	struct test_d_path *skel;
 
@@ -231,13 +231,12 @@ static void test_d_path_mem_access(void)
 
 	bss = skel->bss;
 
-	localfd = mkstemp(path_template);
-	if (CHECK(localfd < 0, "trigger", "mkstemp failed\n"))
+	localfd = memfd_create("d_path_loadgen", 0);
+	if (CHECK(localfd < 0, "trigger", "memfd_create failed\n"))
 		goto cleanup;
 
 	if (CHECK(fallocate(localfd, 0, 0, 1024) < 0, "trigger", "fallocate failed\n"))
 		goto cleanup;
-	remove(path_template);
 
 	if (CHECK(!bss->path_match_fallocate, "check",
 		  "failed to read fallocate path"))
