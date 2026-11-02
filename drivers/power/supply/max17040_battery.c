@@ -406,6 +406,9 @@ static int max17040_set_property(struct power_supply *psy,
 			break;
 		}
 		ret = max17040_set_low_soc_alert(chip, val->intval);
+		if (ret)
+			return ret;
+
 		chip->low_soc_alert = val->intval;
 		break;
 	default:
