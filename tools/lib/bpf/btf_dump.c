@@ -2533,6 +2533,12 @@ static int btf_dump_type_data_check_zero(struct btf_dump *d,
 		 * non-zero because the string is terminated.
 		 */
 		for (i = 0; i < array->nelems; i++) {
+			/* Check overflow first, as the dump path does. */
+			err = btf_dump_type_data_check_overflow(d, elem_type,
+				elem_type_id, data + (i * elem_size),
+				bits_offset, 0);
+			if (err < 0)
+				return err;
 			if (i == 0 && ischar && *(char *)data == 0)
 				return -ENODATA;
 			err = btf_dump_type_data_check_zero(d, elem_type,
@@ -2565,6 +2571,12 @@ static int btf_dump_type_data_check_zero(struct btf_dump *d,
 			 * of member can retrieve it.
 			 */
 			bit_sz = btf_member_bitfield_size(t, i);
+			/* Check overflow first, as the dump path does. */
+			err = btf_dump_type_data_check_overflow(d, mtype, m->type,
+							       data + moffset / 8,
+							       moffset % 8, bit_sz);
+			if (err < 0)
+				return err;
 			err = btf_dump_type_data_check_zero(d, mtype, m->type, data + moffset / 8,
 							    moffset % 8, bit_sz);
 			if (err != -ENODATA)
