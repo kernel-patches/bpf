@@ -44,34 +44,39 @@ static inline bool mlx5r_umr_can_load_pas(struct mlx5_ib_dev *dev,
 	return true;
 }
 
-/*
- * true if an existing MR can be reconfigured to new access_flags using UMR.
- * Older HW cannot use UMR to update certain elements of the MKC. See
- * get_umr_update_access_mask() and umr_check_mkey_mask()
- */
+/* Return subset of access_flags whose mkey fields can't be updated via UMR. */
+static inline unsigned int
+mlx5r_umr_get_unchangeable_access_flags(struct mlx5_ib_dev *dev,
+					unsigned int access_flags)
+{
+	unsigned int ret = 0;
+
+	if ((access_flags & IB_ACCESS_REMOTE_ATOMIC) &&
+	    MLX5_CAP_GEN(dev->mdev, atomic) &&
+	    MLX5_CAP_GEN(dev->mdev, umr_modify_atomic_disabled))
+		ret |= IB_ACCESS_REMOTE_ATOMIC;
+
+	if ((access_flags & IB_ACCESS_RELAXED_ORDERING) &&
+	    MLX5_CAP_GEN(dev->mdev, mkc_order_write_after_write_ro) &&
+	    !MLX5_CAP_GEN(dev->mdev, order_write_after_write_umr))
+		ret |= IB_ACCESS_RELAXED_ORDERING;
+
+	if ((access_flags & IB_ACCESS_RELAXED_ORDERING) &&
+	    (MLX5_CAP_GEN(dev->mdev, pci_relaxed_ordered_read) ||
+	     MLX5_CAP_GEN(dev->mdev, relaxed_ordering_read_pci_enabled)) &&
+	    !MLX5_CAP_GEN(dev->mdev, pci_relaxed_ordered_read_umr))
+		ret |= IB_ACCESS_RELAXED_ORDERING;
+
+	return ret;
+}
+
+/* true if an existing MR can be reconfigured to new access_flags using UMR. */
 static inline bool mlx5r_umr_can_reconfig(struct mlx5_ib_dev *dev,
 					  unsigned int current_access_flags,
 					  unsigned int target_access_flags)
 {
-	unsigned int diffs = current_access_flags ^ target_access_flags;
-
-	if ((diffs & IB_ACCESS_REMOTE_ATOMIC) &&
-	    MLX5_CAP_GEN(dev->mdev, atomic) &&
-	    MLX5_CAP_GEN(dev->mdev, umr_modify_atomic_disabled))
-		return false;
-
-	if ((diffs & IB_ACCESS_RELAXED_ORDERING) &&
-	    MLX5_CAP_GEN(dev->mdev, mkc_order_write_after_write_ro) &&
-	    !MLX5_CAP_GEN(dev->mdev, order_write_after_write_umr))
-		return false;
-
-	if ((diffs & IB_ACCESS_RELAXED_ORDERING) &&
-	    (MLX5_CAP_GEN(dev->mdev, pci_relaxed_ordered_read) ||
-	     MLX5_CAP_GEN(dev->mdev, relaxed_ordering_read_pci_enabled)) &&
-	    !MLX5_CAP_GEN(dev->mdev, pci_relaxed_ordered_read_umr))
-		return false;
-
-	return true;
+	return mlx5r_umr_get_unchangeable_access_flags(
+		dev, current_access_flags ^ target_access_flags) == 0;
 }
 
 static inline u64 mlx5r_umr_get_xlt_octo(u64 bytes)
