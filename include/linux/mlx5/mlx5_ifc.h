@@ -2005,7 +2005,9 @@ struct mlx5_ifc_cmd_hca_cap_bits {
 	u8         roce_rw_supported[0x1];
 	u8         log_max_current_uc_list_wr_supported[0x1];
 	u8         log_max_stride_sz_rq[0x5];
-	u8         reserved_at_3a8[0x3];
+	u8         mkc_order_read_after_write[0x1];
+	u8         mkc_order_write_after_write_ro_only[0x1];
+	u8         reserved_at_3aa[0x1];
 	u8         log_min_stride_sz_rq[0x5];
 	u8         reserved_at_3b0[0x2];
 	u8         qp_latency_sensitive_disable[0x1];
@@ -4522,6 +4524,10 @@ enum {
 	MLX5_MKC_PCIE_TPH_NO_STEERING_TAG_INDEX = 0,
 };
 
+enum {
+	MLX5_MKC_ORDER_READ_AFTER_WRITE_RO = 1,
+};
+
 struct mlx5_ifc_mkc_bits {
 	u8         reserved_at_0[0x1];
 	u8         free[0x1];
@@ -4569,7 +4575,9 @@ struct mlx5_ifc_mkc_bits {
 
 	u8         translations_octword_size[0x20];
 
-	u8         reserved_at_1c0[0x19];
+	u8         reserved_at_1c0[0x16];
+	u8         order_read_after_write[0x2];
+	u8         reserved_at_1d8[0x1];
 	u8         pci_relaxed_ordered_read[0x1];
 	u8         log_page_size[0x6];
 
