@@ -1474,6 +1474,10 @@ void run_subtest(struct test_loader *tester,
 			goto tobj_cleanup;
 		}
 	} else {
+		if (err < 0 && errno == EOPNOTSUPP) {
+			test__skip();
+			goto tobj_cleanup;
+		}
 		if (!ASSERT_OK(err, "unexpected_load_failure")) {
 			emit_verifier_log(tester->log_buf, true /*force*/);
 			goto tobj_cleanup;
