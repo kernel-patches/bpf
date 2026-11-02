@@ -21,6 +21,7 @@
 #include <linux/slab.h>
 #include <linux/types.h>
 #include <linux/firmware/qcom/qcom_scm.h>
+#include <dt-bindings/interrupt-controller/arm-gic.h>
 
 #define PDC_MAX_IRQS			256
 #define IRQ_ENABLE_BANK_MAX		BITS_TO_BYTES(PDC_MAX_IRQS)
@@ -597,8 +598,14 @@ static int qcom_pdc_alloc(struct irq_domain *domain, unsigned int virq,
 
 	parent_fwspec.fwnode      = domain->parent->fwnode;
 	parent_fwspec.param_count = 3;
-	parent_fwspec.param[0]    = 0;
-	parent_fwspec.param[1]    = pin_to_hwirq(region, hwirq);
+	/* GIC ESPIs start at 4096 */
+	if (pin_to_hwirq(region, hwirq) >= 4096) {
+		parent_fwspec.param[0] = GIC_ESPI;
+		parent_fwspec.param[1] = pin_to_hwirq(region, hwirq) - 4096;
+	} else {
+		parent_fwspec.param[0] = GIC_SPI;
+		parent_fwspec.param[1] = pin_to_hwirq(region, hwirq);
+	}
 	parent_fwspec.param[2]    = type;
 
 	return irq_domain_alloc_irqs_parent(domain, virq, nr_irqs, &parent_fwspec);
