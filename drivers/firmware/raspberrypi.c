@@ -257,7 +257,8 @@ static void rpi_register_rtc_driver(struct device *dev, struct rpi_firmware *fw)
 	 * Check if our model of Raspberry Pi board is from the 5th gen
 	 * as the RTC is only present on that model.
 	 */
-	if (!of_machine_is_compatible("brcm,bcm2712"))
+	if (!(of_machine_is_compatible("brcm,bcm2712") ||
+	      of_machine_is_compatible("brcm,bcm2712-d0")))
 		return;
 
 	pdev = platform_device_register_data(dev, "raspberrypi-rtc",
