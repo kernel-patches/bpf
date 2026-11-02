@@ -5,7 +5,6 @@
  * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 #include <linux/auxiliary_bus.h>
-#include <linux/devm-helpers.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/nvmem-consumer.h>
@@ -342,12 +341,22 @@ struct qcom_battmgr {
 	 * firmware, as it then stops responding.
 	 */
 	struct mutex lock;
+
+	/* Set under @lock once @client is about to be released */
+	bool client_gone;
 };
 
 static int qcom_battmgr_request(struct qcom_battmgr *battmgr, void *data, size_t len)
 {
 	unsigned long left;
 	int ret;
+
+	/*
+	 * Callers hold @lock, except enable_work, which is disabled before
+	 * client_gone is set.
+	 */
+	if (battmgr->client_gone)
+		return -ENODEV;
 
 	reinit_completion(&battmgr->ack);
 
@@ -1744,6 +1753,17 @@ static void qcom_battmgr_enable_worker(struct work_struct *work)
 		dev_err(battmgr->dev, "failed to request power notifications\n");
 }
 
+static void qcom_battmgr_release_client(void *data)
+{
+	struct qcom_battmgr *battmgr = data;
+
+	disable_work_sync(&battmgr->enable_work);
+
+	mutex_lock(&battmgr->lock);
+	battmgr->client_gone = true;
+	mutex_unlock(&battmgr->lock);
+}
+
 static void qcom_battmgr_pdr_notify(void *priv, int state)
 {
 	struct qcom_battmgr *battmgr = priv;
@@ -1795,6 +1815,7 @@ static int qcom_battmgr_probe(struct auxiliary_device *adev,
 	psy_cfg_supply.supplied_to = qcom_battmgr_battery;
 	psy_cfg_supply.num_supplicants = 1;
 
+	INIT_WORK(&battmgr->enable_work, qcom_battmgr_enable_worker);
 	mutex_init(&battmgr->lock);
 	init_completion(&battmgr->ack);
 
@@ -1857,17 +1878,23 @@ static int qcom_battmgr_probe(struct auxiliary_device *adev,
 					     "failed to register wireless charing power supply\n");
 	}
 
-	ret = devm_work_autocancel(dev, &battmgr->enable_work,
-				   qcom_battmgr_enable_worker);
-	if (ret)
-		return ret;
-
 	battmgr->client = devm_pmic_glink_client_alloc(dev, PMIC_GLINK_OWNER_BATTMGR,
 						       qcom_battmgr_callback,
 						       qcom_battmgr_pdr_notify,
 						       battmgr);
 	if (IS_ERR(battmgr->client))
 		return PTR_ERR(battmgr->client);
+
+	/*
+	 * Registered after the client, so that on unbind it runs before the
+	 * client is released. The client callbacks may fire until then, so
+	 * disable rather than cancel enable_work to keep it from being
+	 * requeued, and stop the power supplies, which are unregistered only
+	 * after the client is gone, from using it.
+	 */
+	ret = devm_add_action_or_reset(dev, qcom_battmgr_release_client, battmgr);
+	if (ret)
+		return ret;
 
 	pmic_glink_client_register(battmgr->client);
 
