@@ -61,14 +61,14 @@ static inline bool mlx5r_umr_can_reconfig(struct mlx5_ib_dev *dev,
 		return false;
 
 	if ((diffs & IB_ACCESS_RELAXED_ORDERING) &&
-	    MLX5_CAP_GEN(dev->mdev, relaxed_ordering_write) &&
-	    !MLX5_CAP_GEN(dev->mdev, relaxed_ordering_write_umr))
+	    MLX5_CAP_GEN(dev->mdev, mkc_order_write_after_write_ro) &&
+	    !MLX5_CAP_GEN(dev->mdev, order_write_after_write_umr))
 		return false;
 
 	if ((diffs & IB_ACCESS_RELAXED_ORDERING) &&
-	    (MLX5_CAP_GEN(dev->mdev, relaxed_ordering_read) ||
+	    (MLX5_CAP_GEN(dev->mdev, pci_relaxed_ordered_read) ||
 	     MLX5_CAP_GEN(dev->mdev, relaxed_ordering_read_pci_enabled)) &&
-	    !MLX5_CAP_GEN(dev->mdev, relaxed_ordering_read_umr))
+	    !MLX5_CAP_GEN(dev->mdev, pci_relaxed_ordered_read_umr))
 		return false;
 
 	return true;

@@ -1711,15 +1711,15 @@ struct mlx5_ifc_cmd_hca_cap_bits {
 
 	u8         max_sgl_for_optimized_performance[0x8];
 	u8         log_max_cq_sz[0x8];
-	u8         relaxed_ordering_write_umr[0x1];
-	u8         relaxed_ordering_read_umr[0x1];
+	u8         order_write_after_write_umr[0x1];
+	u8         pci_relaxed_ordered_read_umr[0x1];
 	u8         reserved_at_d2[0x7];
 	u8         virtio_net_device_emualtion_manager[0x1];
 	u8         virtio_blk_device_emualtion_manager[0x1];
 	u8         log_max_cq[0x5];
 
 	u8         log_max_eq_sz[0x8];
-	u8         relaxed_ordering_write[0x1];
+	u8         mkc_order_write_after_write_ro[0x1];
 	u8         relaxed_ordering_read_pci_enabled[0x1];
 	u8         log_max_mkey[0x6];
 	u8         reserved_at_f0[0x6];
@@ -1951,7 +1951,7 @@ struct mlx5_ifc_cmd_hca_cap_bits {
 	u8         reserved_at_320[0x3];
 	u8         log_max_transport_domain[0x5];
 	u8         reserved_at_328[0x2];
-	u8	   relaxed_ordering_read[0x1];
+	u8         pci_relaxed_ordered_read[0x1];
 	u8         log_max_pd[0x5];
 	u8         dp_ordering_ooo_all_ud[0x1];
 	u8         dp_ordering_ooo_all_uc[0x1];
@@ -4528,7 +4528,7 @@ struct mlx5_ifc_mkc_bits {
 	u8         reserved_at_2[0x1];
 	u8         access_mode_4_2[0x3];
 	u8         reserved_at_6[0x7];
-	u8         relaxed_ordering_write[0x1];
+	u8         order_write_after_write[0x1];
 	u8         reserved_at_e[0x1];
 	u8         small_fence_on_rdma_read_response[0x1];
 	u8         umr_en[0x1];
@@ -4570,7 +4570,7 @@ struct mlx5_ifc_mkc_bits {
 	u8         translations_octword_size[0x20];
 
 	u8         reserved_at_1c0[0x19];
-	u8         relaxed_ordering_read[0x1];
+	u8         pci_relaxed_ordered_read[0x1];
 	u8         log_page_size[0x6];
 
 	u8         reserved_at_1e0[0x5];
