@@ -2779,7 +2779,7 @@ static const struct qmp_combo_offsets qmp_combo_usb43dp_offsets_v8 = {
 };
 
 static const struct qmp_phy_cfg sar2130p_usb3dpphy_cfg = {
-	.offsets		= &qmp_combo_offsets_v3,
+	.offsets		= &qmp_combo_offsets_v6,
 
 	.serdes_tbl		= sar2130p_usb3_serdes_tbl,
 	.serdes_tbl_num		= ARRAY_SIZE(sar2130p_usb3_serdes_tbl),
@@ -3210,7 +3210,7 @@ static const struct qmp_phy_cfg sm8350_usb3dpphy_cfg = {
 };
 
 static const struct qmp_phy_cfg sm8475_usb3dpphy_cfg = {
-	.offsets		= &qmp_combo_offsets_v3,
+	.offsets		= &qmp_combo_offsets_v6,
 
 	.serdes_tbl		= sar2130p_usb3_serdes_tbl,
 	.serdes_tbl_num		= ARRAY_SIZE(sar2130p_usb3_serdes_tbl),
@@ -3255,7 +3255,7 @@ static const struct qmp_phy_cfg sm8475_usb3dpphy_cfg = {
 };
 
 static const struct qmp_phy_cfg sm8550_usb3dpphy_cfg = {
-	.offsets		= &qmp_combo_offsets_v3,
+	.offsets		= &qmp_combo_offsets_v6,
 
 	.serdes_tbl		= sm8550_usb3_serdes_tbl,
 	.serdes_tbl_num		= ARRAY_SIZE(sm8550_usb3_serdes_tbl),
@@ -3300,7 +3300,7 @@ static const struct qmp_phy_cfg sm8550_usb3dpphy_cfg = {
 };
 
 static const struct qmp_phy_cfg sm8650_usb3dpphy_cfg = {
-	.offsets		= &qmp_combo_offsets_v3,
+	.offsets		= &qmp_combo_offsets_v6,
 
 	.serdes_tbl		= sm8550_usb3_serdes_tbl,
 	.serdes_tbl_num		= ARRAY_SIZE(sm8550_usb3_serdes_tbl),
