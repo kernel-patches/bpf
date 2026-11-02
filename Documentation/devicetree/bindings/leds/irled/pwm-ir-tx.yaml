@@ -23,6 +23,10 @@ properties:
   pwms:
     maxItems: 1
 
+  power-supply:
+    description:
+      The regulator controlling the current to the LED.
+
 required:
   - compatible
   - pwms
