@@ -243,7 +243,7 @@ a ``v*-rc1`` after the merge window, we continue processing of bpf-next.
 For non-subscribers to kernel mailing lists, there is also a status
 page run by David S. Miller on net-next that provides guidance:
 
-  http://vger.kernel.org/~davem/net-next.html
+  https://netdev.bots.linux.dev/net-next.html
 
 Q: Verifier changes and test cases
 ----------------------------------
