@@ -33,6 +33,7 @@
 
 #include <linux/acpi.h>
 #include <linux/acpi_dma.h>
+#include <linux/dcache.h>
 #include <linux/device.h>
 #include <linux/dma-mapping.h>
 #include <linux/dmaengine.h>
@@ -70,8 +71,24 @@ static struct dentry *rootdir;
 
 static void dmaengine_debug_register(struct dma_device *dma_dev)
 {
-	dma_dev->dbg_dev_root = debugfs_create_dir(dev_name(dma_dev->dev),
-						   rootdir);
+	const char *name = dev_name(dma_dev->dev);
+	struct dentry *dentry;
+	char *uniq;
+
+	dentry = debugfs_lookup(name, rootdir);
+	if (dentry) {
+		dput(dentry);
+
+		uniq = kasprintf(GFP_KERNEL, "%s.%d", name, dma_dev->dev_id);
+		if (!uniq)
+			return;
+
+		dma_dev->dbg_dev_root = debugfs_create_dir(uniq, rootdir);
+		kfree(uniq);
+	} else {
+		dma_dev->dbg_dev_root = debugfs_create_dir(name, rootdir);
+	}
+
 	if (IS_ERR(dma_dev->dbg_dev_root))
 		dma_dev->dbg_dev_root = NULL;
 }
