@@ -172,6 +172,21 @@ ip_forward_update_priority - INTEGER
 	- 0 - Do not update priority.
 	- 1 - Update priority.
 
+ip_process_options - INTEGER
+	Control processing of IPv4 options (source routing, record route,
+	timestamp, etc.) in received packets.
+
+	Possible values:
+
+	- 0 - Ignore options. Packets are accepted or forwarded as if they
+	  carried no options; forwarded packets keep their options unchanged.
+	- 1 - Process options.
+	- 2 - Drop packets carrying options and send an ICMP "packet
+	  filtered" error. Note that this includes packets carrying only
+	  the Router Alert option (e.g. IGMP), which can break multicast.
+
+	Default: 1
+
 route/max_size - INTEGER
 	Maximum number of routes allowed in the kernel.  Increase
 	this when using large numbers of interfaces and/or routes.
