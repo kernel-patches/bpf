@@ -1295,22 +1295,17 @@ static u32 calc_checksum(struct page *page)
 }
 
 static int write_protect_page(struct vm_area_struct *vma, struct folio *folio,
-			      pte_t *orig_pte)
+			      unsigned long addr, pte_t *orig_pte)
 {
 	struct mm_struct *mm = vma->vm_mm;
-	DEFINE_FOLIO_VMA_WALK(pvmw, folio, vma, 0, 0);
+	DEFINE_FOLIO_VMA_WALK(pvmw, folio, vma, addr, 0);
 	int swapped;
 	int err = -EFAULT;
 	struct mmu_notifier_range range;
 	bool anon_exclusive;
 	pte_t entry;
 
-	if (WARN_ON_ONCE(folio_test_large(folio)))
-		return err;
-
-	pvmw.address = page_address_in_vma(folio, folio_page(folio, 0), vma);
-	if (pvmw.address == -EFAULT)
-		goto out;
+	VM_WARN_ON_ONCE(folio_test_large(folio) || folio_test_ksm(folio));
 
 	mmu_notifier_range_init(&range, MMU_NOTIFY_CLEAR, 0, mm, pvmw.address,
 				pvmw.address + PAGE_SIZE);
@@ -1381,7 +1376,6 @@ out_unlock:
 	page_vma_mapped_walk_done(&pvmw);
 out_mn:
 	mmu_notifier_invalidate_range_end(&range);
-out:
 	return err;
 }
 
@@ -1390,12 +1384,13 @@ out:
  * @vma:      vma that holds the pte pointing to page
  * @page:     the page we are replacing by kpage
  * @kpage:    the ksm page we replace page by
+ * @addr:     the address at which @page is mapped
  * @orig_pte: the original value of the pte
  *
  * Returns 0 on success, -EFAULT on failure.
  */
 static int replace_page(struct vm_area_struct *vma, struct page *page,
-			struct page *kpage, pte_t orig_pte)
+		struct page *kpage, unsigned long addr, pte_t orig_pte)
 {
 	struct folio *kfolio = page_folio(kpage);
 	struct mm_struct *mm = vma->vm_mm;
@@ -1405,13 +1400,8 @@ static int replace_page(struct vm_area_struct *vma, struct page *page,
 	pte_t *ptep;
 	pte_t newpte;
 	spinlock_t *ptl;
-	unsigned long addr;
 	int err = -EFAULT;
 	struct mmu_notifier_range range;
-
-	addr = page_address_in_vma(folio, page, vma);
-	if (addr == -EFAULT)
-		goto out;
 
 	pmd = mm_find_pmd(mm, addr);
 	if (!pmd)
@@ -1500,6 +1490,7 @@ out:
 /*
  * try_to_merge_one_page - take two pages and merge them into one
  * @vma: the vma that holds the pte pointing to page
+ * @addr:     the address at which @page is mapped
  * @page: the PageAnon page that we want to replace with kpage
  * @kpage: the KSM page that we want to map instead of page,
  *         or NULL the first time when we want to use page as kpage.
@@ -1507,7 +1498,7 @@ out:
  * This function returns 0 if the pages were merged, -EFAULT otherwise.
  */
 static int try_to_merge_one_page(struct vm_area_struct *vma,
-				 struct page *page, struct page *kpage)
+		unsigned long addr, struct page *page, struct page *kpage)
 {
 	struct folio *folio = page_folio(page);
 	pte_t orig_pte = __pte(0);
@@ -1516,7 +1507,7 @@ static int try_to_merge_one_page(struct vm_area_struct *vma,
 	if (page == kpage)			/* ksm page forked */
 		return 0;
 
-	if (!folio_test_anon(folio))
+	if (!folio_test_anon(folio) || folio_test_ksm(folio))
 		goto out;
 
 	/*
@@ -1540,7 +1531,7 @@ static int try_to_merge_one_page(struct vm_area_struct *vma,
 	 * ptes are necessarily already write-protected.  But in either
 	 * case, we need to lock and check page_count is not raised.
 	 */
-	if (write_protect_page(vma, folio, &orig_pte) == 0) {
+	if (write_protect_page(vma, folio, addr, &orig_pte) == 0) {
 		if (!kpage) {
 			/*
 			 * While we hold folio lock, upgrade folio from
@@ -1557,7 +1548,7 @@ static int try_to_merge_one_page(struct vm_area_struct *vma,
 				folio_mark_dirty(folio);
 			err = 0;
 		} else if (pages_identical(page, kpage))
-			err = replace_page(vma, page, kpage, orig_pte);
+			err = replace_page(vma, page, kpage, addr, orig_pte);
 	}
 
 out_unlock:
@@ -1573,6 +1564,7 @@ out:
 static int try_to_merge_with_zero_page(struct ksm_rmap_item *rmap_item,
 				       struct page *page)
 {
+	const unsigned long addr = rmap_item->address & PAGE_MASK;
 	struct mm_struct *mm = rmap_item->mm;
 	int err = -EFAULT;
 
@@ -1584,13 +1576,12 @@ static int try_to_merge_with_zero_page(struct ksm_rmap_item *rmap_item,
 		struct vm_area_struct *vma;
 
 		mmap_read_lock(mm);
-		vma = find_mergeable_vma(mm, rmap_item->address);
+		vma = find_mergeable_vma(mm, addr);
 		if (vma) {
-			err = try_to_merge_one_page(vma, page,
-					ZERO_PAGE(rmap_item->address));
-			trace_ksm_merge_one_page(
-				page_to_pfn(ZERO_PAGE(rmap_item->address)),
-				rmap_item, mm, err);
+			err = try_to_merge_one_page(vma, addr, page,
+						    ZERO_PAGE(addr));
+			trace_ksm_merge_one_page(page_to_pfn(ZERO_PAGE(addr)),
+						 rmap_item, mm, err);
 		} else {
 			/*
 			 * If the vma is out of date, we do not need to
@@ -1613,16 +1604,17 @@ static int try_to_merge_with_zero_page(struct ksm_rmap_item *rmap_item,
 static int try_to_merge_with_ksm_page(struct ksm_rmap_item *rmap_item,
 				      struct page *page, struct page *kpage)
 {
+	const unsigned long addr = rmap_item->address & PAGE_MASK;
 	struct mm_struct *mm = rmap_item->mm;
 	struct vm_area_struct *vma;
 	int err = -EFAULT;
 
 	mmap_read_lock(mm);
-	vma = find_mergeable_vma(mm, rmap_item->address);
+	vma = find_mergeable_vma(mm, addr);
 	if (!vma)
 		goto out;
 
-	err = try_to_merge_one_page(vma, page, kpage);
+	err = try_to_merge_one_page(vma, addr, page, kpage);
 	if (err)
 		goto out;
 
