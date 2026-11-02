@@ -52,6 +52,7 @@ struct {
 
 __u32 ok;
 __u32 ok_sleepable;
+__u32 wq_cb_run;
 
 static int test_elem_callback(void *map, int *key,
 		int (callback_fn)(void *map, int *key, void *value))
@@ -130,11 +131,12 @@ static int wq_cb_sleepable(void *map, int *key, void *value)
 	struct elem *data = (struct elem *)value;
 	int offset = data->ok_offset;
 
-	if (*key != offset)
-		return 0;
+	if (*key == offset) {
+		bpf_kfunc_call_test_sleepable();
+		ok_sleepable |= (1 << offset);
+	}
 
-	bpf_kfunc_call_test_sleepable();
-	ok_sleepable |= (1 << offset);
+	wq_cb_run++;
 	return 0;
 }
 
