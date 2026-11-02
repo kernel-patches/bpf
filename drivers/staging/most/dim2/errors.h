@@ -9,9 +9,7 @@
 #ifndef _MOST_DIM_ERRORS_H
 #define _MOST_DIM_ERRORS_H
 
-/**
- * MOST DIM errors.
- */
+/* MOST DIM errors. */
 enum dim_errors_t {
 	/** Not an error */
 	DIM_NO_ERROR = 0,
