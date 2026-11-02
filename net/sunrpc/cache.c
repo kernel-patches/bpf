@@ -404,7 +404,6 @@ void sunrpc_init_cache_detail(struct cache_detail *cd)
 	INIT_LIST_HEAD(&cd->requests);
 	INIT_LIST_HEAD(&cd->readers);
 	spin_lock_init(&cd->queue_lock);
-	init_waitqueue_head(&cd->queue_wait);
 	cd->next_seqno = 1;
 	spin_lock(&cache_list_lock);
 	cd->nextcheck = 0;
@@ -965,13 +964,20 @@ out:
 	return ret;
 }
 
+/*
+ * Not in struct cache_detail: poll and epoll waiters stay queued until
+ * their file is closed, but a channel file in procfs can stay open after
+ * the cache_detail of its dying network namespace has been freed.
+ */
+static DECLARE_WAIT_QUEUE_HEAD(queue_wait);
+
 static __poll_t cache_poll(struct file *filp, poll_table *wait,
 			       struct cache_detail *cd)
 {
 	__poll_t mask;
 	struct cache_reader *rp = filp->private_data;
 
-	poll_wait(filp, &cd->queue_wait, wait);
+	poll_wait(filp, &queue_wait, wait);
 
 	/* alway allow write */
 	mask = EPOLLOUT | EPOLLWRNORM;
@@ -1236,7 +1242,7 @@ static int cache_do_upcall(struct cache_detail *detail, struct cache_head *h)
 	spin_unlock(&detail->queue_lock);
 	if (ret != -EAGAIN && detail->cache_notify)
 		detail->cache_notify(detail, h);
-	wake_up(&detail->queue_wait);
+	wake_up(&queue_wait);
 	if (ret == -EAGAIN) {
 		kfree(buf);
 		kfree(crq);
