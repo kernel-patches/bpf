@@ -171,15 +171,20 @@ unsigned int __cgroup_bpf_run_lsm_socket(const void *ctx,
 	const struct bpf_prog *shim_prog;
 	struct socket *sock;
 	struct cgroup *cgrp;
+	struct sock *sk;
 	int ret = 0;
 	u64 *args;
 
 	args = (u64 *)ctx;
 	sock = (void *)(unsigned long)args[0];
+	sk = sock ? sock->sk : NULL;
+	/* NULL from ip_cmsg_recv_security(), no sk yet in sock_create_lite() */
+	if (unlikely(!sk))
+		return __cgroup_bpf_run_lsm_current(ctx, insn);
 	/*shim_prog = container_of(insn, struct bpf_prog, insnsi);*/
 	shim_prog = (const struct bpf_prog *)((void *)insn - offsetof(struct bpf_prog, insnsi));
 
-	cgrp = sock_cgroup_ptr(&sock->sk->sk_cgrp_data);
+	cgrp = sock_cgroup_ptr(&sk->sk_cgrp_data);
 	if (likely(cgrp))
 		ret = bpf_prog_run_array_cg(&cgrp->bpf,
 					    shim_prog->aux->cgroup_atype,
