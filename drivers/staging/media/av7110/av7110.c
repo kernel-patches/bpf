@@ -1274,7 +1274,9 @@ static int av7110_register(struct av7110 *av7110)
 	dvbdemux->dmx.capabilities = (DMX_TS_FILTERING | DMX_SECTION_FILTERING |
 				      DMX_MEMORY_BASED_FILTERING);
 
-	dvb_dmx_init(&av7110->demux);
+	ret = dvb_dmx_init(&av7110->demux);
+	if (ret < 0)
+		goto err_registered;
 	av7110->demux.dmx.get_stc = dvb_get_stc;
 
 	av7110->dmxdev.filternum = (av7110->full_ts) ? 256 : 32;
@@ -1288,19 +1290,19 @@ static int av7110_register(struct av7110 *av7110)
 	ret = dvbdemux->dmx.add_frontend(&dvbdemux->dmx, &av7110->hw_frontend);
 
 	if (ret < 0)
-		return ret;
+		goto err_dmxdev_release;
 
 	av7110->mem_frontend.source = DMX_MEMORY_FE;
 
 	ret = dvbdemux->dmx.add_frontend(&dvbdemux->dmx, &av7110->mem_frontend);
 
 	if (ret < 0)
-		return ret;
+		goto err_dmxdev_release;
 
 	ret = dvbdemux->dmx.connect_frontend(&dvbdemux->dmx,
 					     &av7110->hw_frontend);
 	if (ret < 0)
-		return ret;
+		goto err_dmxdev_release;
 
 	av7110_av_register(av7110);
 	av7110_ca_register(av7110);
@@ -1327,7 +1329,9 @@ static int av7110_register(struct av7110 *av7110)
 		dvbdemux1->dmx.capabilities = (DMX_TS_FILTERING | DMX_SECTION_FILTERING |
 					       DMX_MEMORY_BASED_FILTERING);
 
-		dvb_dmx_init(&av7110->demux1);
+		ret = dvb_dmx_init(&av7110->demux1);
+		if (ret < 0)
+			goto err_unregister;
 
 		av7110->dmxdev1.filternum = 256;
 		av7110->dmxdev1.demux = &dvbdemux1->dmx;
@@ -1339,6 +1343,18 @@ static int av7110_register(struct av7110 *av7110)
 		pr_info("additional demux1 for budget-patch registered\n");
 	}
 	return 0;
+
+err_unregister:
+	dvb_net_release(&av7110->dvb_net);
+	dvb_unregister_device(av7110->osd_dev);
+	av7110_ca_unregister(av7110);
+	av7110_av_unregister(av7110);
+err_dmxdev_release:
+	dvb_dmxdev_release(&av7110->dmxdev);
+	dvb_dmx_release(&av7110->demux);
+err_registered:
+	av7110->registered = 0;
+	return ret;
 }
 
 static void dvb_unregister(struct av7110 *av7110)
