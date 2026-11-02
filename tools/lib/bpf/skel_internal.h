@@ -47,6 +47,10 @@ struct bpf_prog_desc {
 	int prog_fd;
 };
 
+struct bpf_link_desc {
+	int link_fd;
+};
+
 enum {
 	BPF_SKEL_KERNEL = (1ULL << 0),
 };
