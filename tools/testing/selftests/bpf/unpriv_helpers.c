@@ -161,3 +161,8 @@ bool get_kasan_multi_shot_enabled(void)
 {
 	return cmdline_contains("kasan_multi_shot");
 }
+
+bool get_unaligned_access_enabled(void)
+{
+	return config_contains("CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS=y") == 1;
+}

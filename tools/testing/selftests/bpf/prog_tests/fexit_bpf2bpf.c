@@ -3,6 +3,7 @@
 #include <test_progs.h>
 #include <network_helpers.h>
 #include <bpf/btf.h>
+#include <unpriv_helpers.h>
 #include "bind4_prog.skel.h"
 #include "freplace_progmap.skel.h"
 #include "fentry_sleepable.skel.h"
@@ -76,6 +77,11 @@ static void test_fexit_bpf2bpf_common(const char *obj_file,
 
 	err = bpf_prog_test_load(target_obj_file, BPF_PROG_TYPE_UNSPEC,
 			    &tgt_obj, &tgt_fd);
+	if (err < 0 && errno == EACCES && !get_unaligned_access_enabled()) {
+		test__skip();
+		return;
+	}
+
 	if (!ASSERT_OK(err, "tgt_prog_load"))
 		return;
 
@@ -297,6 +303,11 @@ static void test_fmod_ret_freplace(void)
 
 	err = bpf_prog_test_load(tgt_name, BPF_PROG_TYPE_UNSPEC,
 			    &pkt_obj, &pkt_fd);
+	if (err < 0 && errno == EACCES && !get_unaligned_access_enabled()) {
+		test__skip();
+		return;
+	}
+
 	/* the target prog should load fine */
 	if (CHECK(err, "tgt_prog_load", "file %s err %d errno %d\n",
 		  tgt_name, err, errno))
