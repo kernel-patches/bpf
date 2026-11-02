@@ -822,21 +822,16 @@ void remove_proc_entry(const char *name, struct proc_dir_entry *parent)
 }
 EXPORT_SYMBOL(remove_proc_entry);
 
-int remove_proc_subtree(const char *name, struct proc_dir_entry *parent)
+/*
+ * Remove @root and everything below it, unless it is gone already, maybe
+ * along with its parent. Called with proc_subdir_lock held for writing,
+ * returns with it dropped.
+ */
+static int __remove_proc_subtree(struct proc_dir_entry *root)
 {
-	struct proc_dir_entry *root = NULL, *de, *next;
-	const char *fn = name;
-	unsigned int len;
+	struct proc_dir_entry *de = root, *next;
 
-	write_lock(&proc_subdir_lock);
-	if (__xlate_proc_name(name, &parent, &fn) != 0) {
-		write_unlock(&proc_subdir_lock);
-		return -ENOENT;
-	}
-	len = strlen(fn);
-
-	root = pde_subdir_find(parent, fn, len);
-	if (!root) {
+	if (RB_EMPTY_NODE(&root->subdir_node)) {
 		write_unlock(&proc_subdir_lock);
 		return -ENOENT;
 	}
@@ -846,9 +841,8 @@ int remove_proc_subtree(const char *name, struct proc_dir_entry *parent)
 			root->parent->name, root->name);
 		return -EINVAL;
 	}
-	pde_erase(root, parent);
+	pde_erase(root, root->parent);
 
-	de = root;
 	while (1) {
 		next = pde_subdir_first(de);
 		if (next) {
@@ -876,6 +870,27 @@ int remove_proc_subtree(const char *name, struct proc_dir_entry *parent)
 	pde_put(root);
 	return 0;
 }
+
+int remove_proc_subtree(const char *name, struct proc_dir_entry *parent)
+{
+	struct proc_dir_entry *root = NULL;
+	const char *fn = name;
+	unsigned int len;
+
+	write_lock(&proc_subdir_lock);
+	if (__xlate_proc_name(name, &parent, &fn) != 0) {
+		write_unlock(&proc_subdir_lock);
+		return -ENOENT;
+	}
+	len = strlen(fn);
+
+	root = pde_subdir_find(parent, fn, len);
+	if (!root) {
+		write_unlock(&proc_subdir_lock);
+		return -ENOENT;
+	}
+	return __remove_proc_subtree(root);
+}
 EXPORT_SYMBOL(remove_proc_subtree);
 
 void *proc_get_parent_data(const struct inode *inode)
@@ -887,8 +902,11 @@ EXPORT_SYMBOL_GPL(proc_get_parent_data);
 
 void proc_remove(struct proc_dir_entry *de)
 {
-	if (de)
-		remove_proc_subtree(de->name, de->parent);
+	if (!de)
+		return;
+
+	write_lock(&proc_subdir_lock);
+	__remove_proc_subtree(de);
 }
 EXPORT_SYMBOL(proc_remove);
 
