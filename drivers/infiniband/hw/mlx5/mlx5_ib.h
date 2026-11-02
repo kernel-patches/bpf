@@ -1675,6 +1675,13 @@ static inline bool mlx5_umem_needs_ats(struct mlx5_ib_dev *dev,
 	return access_flags & IB_ACCESS_RELAXED_ORDERING;
 }
 
+static inline enum mlx5_mkey_order mlx5r_access_to_mkey_order(int access_flags)
+{
+	if (access_flags & IB_ACCESS_RELAXED_ORDERING)
+		return MLX5_MKEY_ORDER_RELAXED;
+	return MLX5_MKEY_ORDER_STRICT;
+}
+
 int set_roce_addr(struct mlx5_ib_dev *dev, u32 port_num,
 		  unsigned int index, const union ib_gid *gid,
 		  const struct ib_gid_attr *attr);

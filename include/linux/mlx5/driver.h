@@ -697,6 +697,12 @@ enum mlx5_sw_icm_type {
 	MLX5_SW_ICM_TYPE_SW_ENCAP,
 };
 
+enum mlx5_mkey_order {
+	MLX5_MKEY_ORDER_STRICT,
+	MLX5_MKEY_ORDER_RELAXED,
+	MLX5_MKEY_ORDER_UNORDERED,
+};
+
 #define MLX5_MAX_RESERVED_GIDS 8
 
 struct mlx5_rsvd_gids {
@@ -1037,6 +1043,8 @@ void mlx5_trigger_health_work(struct mlx5_core_dev *dev);
 int mlx5_frag_buf_alloc_node(struct mlx5_core_dev *dev, int size,
 			     struct mlx5_frag_buf *buf, int node);
 void mlx5_frag_buf_free(struct mlx5_core_dev *dev, struct mlx5_frag_buf *buf);
+void mlx5_core_mkey_set_ordering(struct mlx5_core_dev *dev, void *mkc,
+				 enum mlx5_mkey_order order);
 int mlx5_core_create_mkey(struct mlx5_core_dev *dev, u32 *mkey, u32 *in,
 			  int inlen);
 int mlx5_core_destroy_mkey(struct mlx5_core_dev *dev, u32 mkey);
