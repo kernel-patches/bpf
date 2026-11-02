@@ -8411,6 +8411,13 @@ enum drm_mode_status intel_mode_valid(struct drm_device *dev,
 	if (mode->clock > max_dotclock(display))
 		return MODE_CLOCK_HIGH;
 
+	/*
+	 * Somewhat arbitrary low limit of 10 MHz to
+	 * reject completely bogus modes early on.
+	 */
+	if (mode->clock < 10000)
+		return MODE_CLOCK_LOW;
+
 	/* Transcoder timing limits */
 	if (DISPLAY_VER(display) >= 11) {
 		hdisplay_max = 16384;
