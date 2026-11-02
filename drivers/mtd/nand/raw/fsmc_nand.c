@@ -522,8 +522,7 @@ static int dma_xfer(struct fsmc_nand_data *host, void *buffer, int len,
 		goto unmap_dma;
 	}
 
-	tx->callback = dma_complete;
-	tx->callback_param = host;
+	dmaengine_desc_set_callback(tx, dma_complete, NULL, host);
 	cookie = dmaengine_submit(tx);
 
 	ret = dma_submit_error(cookie);

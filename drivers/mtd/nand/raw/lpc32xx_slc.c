@@ -460,8 +460,7 @@ static int lpc32xx_xmit_dma(struct mtd_info *mtd, dma_addr_t dma,
 	}
 
 	init_completion(&host->comp);
-	desc->callback = lpc32xx_dma_complete_func;
-	desc->callback_param = &host->comp;
+	dmaengine_desc_set_callback(desc, lpc32xx_dma_complete_func, NULL, &host->comp);
 
 	dmaengine_submit(desc);
 	dma_async_issue_pending(host->dma_chan);

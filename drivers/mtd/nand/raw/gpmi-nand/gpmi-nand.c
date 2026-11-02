@@ -2638,8 +2638,7 @@ static int gpmi_nfc_exec_op(struct nand_chip *chip,
 		       this->resources.bch_regs + HW_BCH_FLASH0LAYOUT1);
 	}
 
-	desc->callback = dma_irq_callback;
-	desc->callback_param = this;
+	dmaengine_desc_set_callback(desc, dma_irq_callback, NULL, this);
 	dma_completion = &this->dma_done;
 	bch_completion = NULL;
 

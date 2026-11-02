@@ -405,8 +405,7 @@ static inline int omap_nand_dma_transfer(struct nand_chip *chip,
 	if (!tx)
 		goto out_copy_unmap;
 
-	tx->callback = omap_nand_dma_callback;
-	tx->callback_param = &info->comp;
+	dmaengine_desc_set_callback(tx, omap_nand_dma_callback, NULL, &info->comp);
 	dmaengine_submit(tx);
 
 	init_completion(&info->comp);

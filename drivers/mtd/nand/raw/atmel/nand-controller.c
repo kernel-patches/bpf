@@ -394,8 +394,7 @@ static int atmel_nand_dma_transfer(struct atmel_nand_controller *nc,
 		goto err_unmap;
 	}
 
-	tx->callback = atmel_nand_dma_transfer_finished;
-	tx->callback_param = &finished;
+	dmaengine_desc_set_callback(tx, atmel_nand_dma_transfer_finished, NULL, &finished);
 
 	cookie = dmaengine_submit(tx);
 	if (dma_submit_error(cookie)) {

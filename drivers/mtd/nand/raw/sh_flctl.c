@@ -407,8 +407,7 @@ static int flctl_dma_fifo0_transfer(struct sh_flctl *flctl, unsigned long *buf,
 		reg |= DREQ0EN;
 		writel(reg, FLINTDMACR(flctl));
 
-		desc->callback = flctl_dma_complete;
-		desc->callback_param = flctl;
+		dmaengine_desc_set_callback(desc, flctl_dma_complete, NULL, flctl);
 		cookie = dmaengine_submit(desc);
 		if (dma_submit_error(cookie)) {
 			ret = dma_submit_error(cookie);
