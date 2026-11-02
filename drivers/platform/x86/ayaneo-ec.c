@@ -147,6 +147,14 @@ static const struct dmi_system_id dmi_table[] = {
 		.driver_data = (void *)&quirk_ayaneo3,
 	},
 	{
+		/* AYANEO NEXT 2 */
+		.matches = {
+			DMI_EXACT_MATCH(DMI_BOARD_VENDOR, "AYA"),
+			DMI_EXACT_MATCH(DMI_BOARD_NAME, "AB09"),
+		},
+		.driver_data = (void *)&quirk_charge_limit,
+	},
+	{
 		.matches = {
 			DMI_EXACT_MATCH(DMI_SYS_VENDOR, "Mysten Labs, Inc."),
 			DMI_EXACT_MATCH(DMI_PRODUCT_NAME, "SuiPlay0X1"),
