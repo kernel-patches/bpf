@@ -3173,6 +3173,12 @@ __bpf_kfunc void *bpf_dynptr_slice(const struct bpf_dynptr *p, u64 offset,
  * Please note that, as in the example above, the user must check that the
  * returned pointer is not null before using it.
  *
+ * Please also note that when the buffer is on the stack, the verifier invalidates
+ * the returned pointer when the program stores to the buffer (helpers and kfuncs
+ * may fill it), or returns from the function that has it. Change the data through
+ * the returned pointer, and before the comparison with the buffer, as in the
+ * example above: after it the compiler may use one pointer in place of the other.
+ *
  * Please also note that in the case of skb and xdp dynptrs, bpf_dynptr_slice_rdwr
  * does not change the underlying packet data pointers, so a call to
  * bpf_dynptr_slice_rdwr will not invalidate any ctx->data/data_end pointers in
