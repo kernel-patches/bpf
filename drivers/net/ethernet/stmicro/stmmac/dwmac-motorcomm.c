@@ -30,6 +30,7 @@
 #define OOB_WOL_CTRL				0x1010
 #define  OOB_WOL_CTRL_DIS			BIT(0)
 #define MGMT_INT_CTRL0				0x1100
+#define  MGMT_INT_CTRL0_MASK_MISC		BIT(21)
 #define INT_MODERATION				0x1108
 #define  INT_MODERATION_RX			GENMASK(11, 0)
 #define  INT_MODERATION_TX			GENMASK(27, 16)
@@ -172,7 +173,11 @@ static void motorcomm_reset(struct dwmac_motorcomm_priv *priv)
 
 static void motorcomm_init(struct dwmac_motorcomm_priv *priv)
 {
-	writel(0x0, priv->base + MGMT_INT_CTRL0);
+	/*
+	 * Nothing services the MISC source, and once raised it never
+	 * deasserts, so keep it masked.
+	 */
+	writel(MGMT_INT_CTRL0_MASK_MISC, priv->base + MGMT_INT_CTRL0);
 
 	writel(FIELD_PREP(INT_MODERATION_RX, 200) |
 	       FIELD_PREP(INT_MODERATION_TX, 200),
