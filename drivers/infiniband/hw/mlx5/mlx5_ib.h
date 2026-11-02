@@ -1672,11 +1672,13 @@ static inline bool mlx5_umem_needs_ats(struct mlx5_ib_dev *dev,
 {
 	if (!MLX5_CAP_GEN(dev->mdev, ats) || !umem->is_dmabuf)
 		return false;
-	return access_flags & IB_ACCESS_RELAXED_ORDERING;
+	return access_flags & (IB_ACCESS_RELAXED_ORDERING | IB_ACCESS_UNORDERED);
 }
 
 static inline enum mlx5_mkey_order mlx5r_access_to_mkey_order(int access_flags)
 {
+	if (access_flags & IB_ACCESS_UNORDERED)
+		return MLX5_MKEY_ORDER_UNORDERED;
 	if (access_flags & IB_ACCESS_RELAXED_ORDERING)
 		return MLX5_MKEY_ORDER_RELAXED;
 	return MLX5_MKEY_ORDER_STRICT;

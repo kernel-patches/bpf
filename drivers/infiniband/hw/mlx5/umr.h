@@ -49,7 +49,7 @@ static inline unsigned int
 mlx5r_umr_get_unchangeable_access_flags(struct mlx5_ib_dev *dev,
 					unsigned int access_flags)
 {
-	unsigned int ret = 0;
+	unsigned int ret = access_flags & IB_ACCESS_UNORDERED;
 
 	if ((access_flags & IB_ACCESS_REMOTE_ATOMIC) &&
 	    MLX5_CAP_GEN(dev->mdev, atomic) &&
