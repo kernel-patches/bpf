@@ -1094,7 +1094,7 @@ static int au0828_v4l2_close(struct file *filp)
 			pr_info("Au0828 can't set alternate to 0!\n");
 	}
 end:
-	_vb2_fop_release(filp, NULL);
+	_vb2_fop_release(filp, vdev->queue->lock);
 	dev->users--;
 	mutex_unlock(&dev->lock);
 	return 0;
