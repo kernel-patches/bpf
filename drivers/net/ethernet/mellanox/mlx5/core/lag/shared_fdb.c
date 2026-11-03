@@ -126,7 +126,8 @@ err:
 		if (j == master_idx)
 			continue;
 		slave_esw = mlx5_lag_fn(ldev, j)->dev->priv.eswitch;
-		mlx5_eswitch_offloads_vport_lag_del_one(master_esw, slave_esw);
+		mlx5_eswitch_offloads_vport_lag_del_one(master_esw, slave_esw,
+							ldev->max_fns);
 	}
 	return err;
 }
@@ -153,7 +154,8 @@ int mlx5_lag_destroy_vport_lag(struct mlx5_lag *ldev, u32 group_id)
 			continue;
 		dev = mlx5_lag_fn(ldev, i)->dev;
 		mlx5_eswitch_offloads_vport_lag_del_one(master_esw,
-							dev->priv.eswitch);
+							dev->priv.eswitch,
+							ldev->max_fns);
 	}
 	return 0;
 }

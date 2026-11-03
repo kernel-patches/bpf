@@ -957,7 +957,8 @@ bool mlx5_esw_offloads_controller_valid(const struct mlx5_eswitch *esw, u32 cont
 int mlx5_eswitch_offloads_vport_lag_add_one(struct mlx5_eswitch *master_esw,
 					    struct mlx5_eswitch *slave_esw);
 void mlx5_eswitch_offloads_vport_lag_del_one(struct mlx5_eswitch *master_esw,
-					     struct mlx5_eswitch *slave_esw);
+					     struct mlx5_eswitch *slave_esw,
+					     int max_slaves);
 int mlx5_eswitch_offloads_single_fdb_add_one(struct mlx5_eswitch *master_esw,
 					     struct mlx5_eswitch *slave_esw, int max_slaves);
 void mlx5_eswitch_offloads_single_fdb_del_one(struct mlx5_eswitch *master_esw,

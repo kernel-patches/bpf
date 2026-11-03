@@ -3381,12 +3381,32 @@ void mlx5_eswitch_offloads_single_fdb_del_one(struct mlx5_eswitch *master_esw,
 int mlx5_eswitch_offloads_vport_lag_add_one(struct mlx5_eswitch *master_esw,
 					    struct mlx5_eswitch *slave_esw)
 {
-	return esw_set_slave_egress_rule(master_esw->dev, slave_esw->dev);
+	int err;
+
+	err = esw_set_slave_egress_rule(master_esw->dev, slave_esw->dev);
+	if (err)
+		return err;
+
+	esw_unset_master_egress_rule(master_esw->dev, slave_esw->dev);
+
+	return 0;
 }
 
 void mlx5_eswitch_offloads_vport_lag_del_one(struct mlx5_eswitch *master_esw,
-					     struct mlx5_eswitch *slave_esw)
+					     struct mlx5_eswitch *slave_esw,
+					     int max_slaves)
 {
+	int err;
+
+	if (mlx5_sd_is_primary(slave_esw->dev)) {
+		err = esw_set_master_egress_rule(master_esw->dev,
+						 slave_esw->dev, max_slaves);
+		if (err)
+			esw_warn(master_esw->dev,
+				 "Failed to restore master egress rule (%d)\n",
+				 err);
+	}
+
 	esw_unset_slave_egress_rule(master_esw->dev, slave_esw->dev);
 }
 
