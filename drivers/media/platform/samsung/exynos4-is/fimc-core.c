@@ -606,6 +606,8 @@ int fimc_ctrls_create(struct fimc_ctx *ctx)
 	if (!handler->error) {
 		v4l2_ctrl_cluster(2, &ctrls->colorfx);
 		ctrls->ready = true;
+	} else {
+		v4l2_ctrl_handler_free(handler);
 	}
 
 	return handler->error;
