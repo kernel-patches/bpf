@@ -33,18 +33,24 @@ static int orangefs_writepage_locked(struct folio *folio,
 	if (folio->private) {
 		wr = folio->private;
 		off = wr->pos;
-		if ((off + wr->len > len) && (off <= len))
+		/*
+		 * The private range can start at or past i_size after a
+		 * truncate. Nothing there is written. Restoring wr->len
+		 * would write past EOF.
+		 */
+		if (off >= len)
+			wlen = 0;
+		else if (off + wr->len > len)
 			wlen = len - off;
 		else
-			wlen = wr->len;
-		if (wlen == 0)
 			wlen = wr->len;
 	} else {
 		WARN_ON(1);
 		off = folio_pos(folio);
 		wlen = folio_size(folio);
-
-		if (wlen > len - off)
+		if (off >= len)
+			wlen = 0;
+		else if (wlen > len - off)
 			wlen = len - off;
 	}
 
@@ -97,15 +103,26 @@ static int orangefs_writepages_work(struct orangefs_writepages *ow,
 	}
 	iov_iter_bvec(&iter, ITER_SOURCE, ow->bv, ow->nfolios, ow->len);
 
+	/*
+	 * The packed range can start at or past i_size after a truncate.
+	 * Keep the warning. Do not post: ow->len is a size_t, so a start
+	 * past EOF wraps, and a 0-byte post does not complete on an old
+	 * client. The folios are still cleaned below.
+	 */
 	WARN_ON(ow->off >= len);
-	if (ow->off + ow->len > len)
+	if (ow->off >= len)
+		ow->len = 0;
+	else if (ow->off + ow->len > len)
 		ow->len = len - ow->off;
 
 	off = ow->off;
 	wr.uid = ow->uid;
 	wr.gid = ow->gid;
-	ret = wait_for_direct_io(ORANGEFS_IO_WRITE, inode, &off, &iter, ow->len,
-	    0, &wr, NULL, NULL);
+	if (ow->len)
+		ret = wait_for_direct_io(ORANGEFS_IO_WRITE, inode, &off, &iter,
+		    ow->len, 0, &wr, NULL, NULL);
+	else
+		ret = 0;
 	if (ret < 0)
 		mapping_set_error(ow->mapping, ret);
 	else
