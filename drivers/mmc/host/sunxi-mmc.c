@@ -470,10 +470,12 @@ static void sunxi_mmc_send_manual_stop(struct sunxi_mmc_host *host,
 	if (!(ri & SDXC_COMMAND_DONE) || (ri & SDXC_INTERRUPT_ERROR_BIT)) {
 		dev_err(mmc_dev(host->mmc), "send stop command failed\n");
 		if (req->stop)
-			req->stop->resp[0] = -ETIMEDOUT;
+			req->stop->error = -ETIMEDOUT;
 	} else {
-		if (req->stop)
+		if (req->stop) {
 			req->stop->resp[0] = mmc_readl(host, REG_RESP0);
+			req->stop->error = 0;
+		}
 	}
 
 	mmc_writel(host, REG_RINTR, 0xffff);
