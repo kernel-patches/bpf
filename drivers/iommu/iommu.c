@@ -3985,7 +3985,7 @@ int iommu_replace_group_handle(struct iommu_group *group,
 			       struct iommu_domain *new_domain,
 			       struct iommu_attach_handle *handle)
 {
-	void *curr, *entry;
+	void *curr, *entry, *old;
 	int ret;
 
 	if (!new_domain || !handle)
@@ -3993,22 +3993,25 @@ int iommu_replace_group_handle(struct iommu_group *group,
 
 	mutex_lock(&group->mutex);
 	entry = iommu_make_pasid_array_entry(new_domain, handle);
-	ret = xa_reserve(&group->pasid_array, IOMMU_NO_PASID, GFP_KERNEL);
-	if (ret)
+	/*
+	 * iommu_attach_handle_get() runs without the group mutex, so unpublish
+	 * the old handle before the driver callback: a fault must not resolve
+	 * to either domain while the switch is in progress. This reserves the
+	 * slot too, so the store below cannot fail.
+	 */
+	old = xa_store(&group->pasid_array, IOMMU_NO_PASID, XA_ZERO_ENTRY,
+		       GFP_KERNEL);
+	if (xa_is_err(old)) {
+		ret = xa_err(old);
 		goto err_unlock;
+	}
 
 	ret = __iommu_group_set_domain(group, new_domain);
 	if (ret)
-		goto err_release;
+		entry = old; /* Restore the old handle */
 
 	curr = xa_store(&group->pasid_array, IOMMU_NO_PASID, entry, GFP_KERNEL);
 	WARN_ON(xa_is_err(curr));
-
-	mutex_unlock(&group->mutex);
-
-	return 0;
-err_release:
-	xa_release(&group->pasid_array, IOMMU_NO_PASID);
 err_unlock:
 	mutex_unlock(&group->mutex);
 	return ret;
