@@ -668,18 +668,19 @@ static int get_max_srate(const int *srates)
 	return max_srate;
 }
 
-static int get_max_bw_for_bint(const struct f_uac2_opts *uac2_opts,
+static u32 get_max_bw_for_bint(const struct f_uac2_opts *uac2_opts,
 	u8 bint, unsigned int factor, bool is_playback)
 {
-	int chmask, srate, ssize;
-	u16 max_size_bw;
+	unsigned int channels;
+	int srate, ssize;
+	u32 max_size_bw;
 
 	if (is_playback) {
-		chmask = uac2_opts->p_chmask;
+		channels = num_channels(uac2_opts->p_chmask);
 		srate = get_max_srate(uac2_opts->p_srates);
 		ssize = uac2_opts->p_ssize;
 	} else {
-		chmask = uac2_opts->c_chmask;
+		channels = num_channels(uac2_opts->c_chmask);
 		srate = get_max_srate(uac2_opts->c_srates);
 		ssize = uac2_opts->c_ssize;
 	}
@@ -689,11 +690,11 @@ static int get_max_bw_for_bint(const struct f_uac2_opts *uac2_opts,
 		// Win10 requires max packet size + 1 frame
 		srate = srate * (1000 + uac2_opts->fb_max) / 1000;
 		// updated srate is always bigger, therefore DIV_ROUND_UP always yields +1
-		max_size_bw = num_channels(chmask) * ssize *
+		max_size_bw = channels * ssize *
 			(DIV_ROUND_UP(srate, factor / (1 << (bint - 1))));
 	} else {
 		// adding 1 frame provision for Win10
-		max_size_bw = num_channels(chmask) * ssize *
+		max_size_bw = channels * ssize *
 			(DIV_ROUND_UP(srate, factor / (1 << (bint - 1))) + 1);
 	}
 	return max_size_bw;
@@ -703,7 +704,8 @@ static int set_ep_max_packet_size_bint(struct device *dev, const struct f_uac2_o
 	struct usb_endpoint_descriptor *ep_desc,
 	enum usb_device_speed speed, bool is_playback)
 {
-	u16 max_size_bw, max_size_ep;
+	u32 max_size_bw;
+	u16 max_size_ep;
 	u8 bint, opts_bint;
 	char *dir;
 
@@ -749,11 +751,11 @@ static int set_ep_max_packet_size_bint(struct device *dev, const struct f_uac2_o
 
 	if (max_size_bw <= max_size_ep)
 		dev_dbg(dev,
-			"%s %s: Would use wMaxPacketSize %d and bInterval %d\n",
+			"%s %s: Would use wMaxPacketSize %u and bInterval %d\n",
 			speed_names[speed], dir, max_size_bw, bint);
 	else {
 		dev_warn(dev,
-			"%s %s: Req. wMaxPacketSize %d at bInterval %d > max ISOC %d, may drop data!\n",
+			"%s %s: Req. wMaxPacketSize %u at bInterval %d > max ISOC %d, may drop data!\n",
 			speed_names[speed], dir, max_size_bw, bint, max_size_ep);
 		max_size_bw = max_size_ep;
 	}
