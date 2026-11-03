@@ -977,11 +977,11 @@ static int fimc_probe(struct platform_device *pdev)
 
 	ret = clk_set_rate(fimc->clock[CLK_BUS], lclk_freq);
 	if (ret < 0)
-		return ret;
+		goto err_clk_put;
 
 	ret = clk_enable(fimc->clock[CLK_BUS]);
 	if (ret < 0)
-		return ret;
+		goto err_clk_put;
 
 	ret = devm_request_irq(dev, irq, fimc_irq_handler,
 			       0, dev_name(dev), fimc);
@@ -1012,6 +1012,7 @@ err_sd:
 	fimc_unregister_capture_subdev(fimc);
 err_sclk:
 	clk_disable(fimc->clock[CLK_BUS]);
+err_clk_put:
 	fimc_clk_put(fimc);
 	return ret;
 }
