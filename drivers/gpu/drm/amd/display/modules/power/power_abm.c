@@ -409,34 +409,23 @@ static unsigned int backlight_pwm_to_millipercent_legacy(
 			break;
 	}
 
-	/* In this case, exact match is not found. Check if mid/min/max
-	 * value is actually closer.
-	 */
+	/* No exact match, so on a sorted LUT lut[max] < pwm < lut[min] */
 	if (max < min) {
-		unsigned int min_delta;
-		unsigned int mid_delta;
-		unsigned int max_delta;
+		unsigned int lower = core_power->bl_prop[inst].backlight_lut[max];
+		unsigned int upper = core_power->bl_prop[inst].backlight_lut[min];
+		unsigned long long span, den;
 
-		min_delta = (core_power->bl_prop[inst].backlight_lut[min] > pwm) ?
-				core_power->bl_prop[inst].backlight_lut[min] - pwm :
-				pwm - core_power->bl_prop[inst].backlight_lut[min];
+		if (pwm <= lower || pwm >= upper)
+			return BACKLIGHT_MILLIPERCENT_MAX * mid / max_index;
 
-		mid_delta = (core_power->bl_prop[inst].backlight_lut[mid] > pwm) ?
-				core_power->bl_prop[inst].backlight_lut[mid] - pwm :
-				pwm - core_power->bl_prop[inst].backlight_lut[mid];
+		span = upper - lower;
+		den = span * max_index;
 
-		max_delta = (core_power->bl_prop[inst].backlight_lut[max] > pwm) ?
-				core_power->bl_prop[inst].backlight_lut[max] - pwm :
-				pwm - core_power->bl_prop[inst].backlight_lut[max];
-
-		if ((min_delta < mid_delta) && (min_delta < max_delta))
-			mid = min;
-
-		if ((max_delta < mid_delta) && (max_delta < min_delta))
-			mid = max;
+		/* LUT entries fit in 16 bits, so this stays far below 2^64 */
+		return (unsigned int)div64_u64((max * span + pwm - lower) *
+					       BACKLIGHT_MILLIPERCENT_MAX + den / 2, den);
 	}
 
-	/* No interpolation, just take closest index */
 	millipercent = BACKLIGHT_MILLIPERCENT_MAX * mid / max_index;
 
 	return millipercent;
