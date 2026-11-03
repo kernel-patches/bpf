@@ -3751,8 +3751,13 @@ int iommu_replace_device_pasid(struct iommu_domain *domain,
 	}
 
 	entry = iommu_make_pasid_array_entry(domain, handle);
-	curr = xa_cmpxchg(&group->pasid_array, pasid, NULL,
-			  XA_ZERO_ENTRY, GFP_KERNEL);
+	/*
+	 * iommu_attach_handle_get() runs without the group mutex, so unpublish
+	 * the old handle before the driver callback: a fault must not resolve
+	 * to either domain while the switch is in progress. This reserves the
+	 * slot too, so the store below cannot fail.
+	 */
+	curr = xa_store(&group->pasid_array, pasid, XA_ZERO_ENTRY, GFP_KERNEL);
 	if (xa_is_err(curr)) {
 		ret = xa_err(curr);
 		goto out_unlock;
@@ -3776,7 +3781,7 @@ int iommu_replace_device_pasid(struct iommu_domain *domain,
 	if (curr == entry) {
 		WARN_ON(1);
 		ret = -EINVAL;
-		goto out_unlock;
+		goto out_store;
 	}
 
 	curr_domain = pasid_array_entry_to_domain(curr);
@@ -3786,16 +3791,16 @@ int iommu_replace_device_pasid(struct iommu_domain *domain,
 		ret = __iommu_set_group_pasid(domain, group,
 					      pasid, curr_domain);
 		if (ret)
-			goto out_unlock;
+			entry = curr; /* restore the old handle */
 	}
 
+out_store:
 	/*
-	 * The above xa_cmpxchg() reserved the memory, and the
-	 * group->mutex is held, this cannot fail.
+	 * The xa_store() above reserved the memory, and the group->mutex
+	 * is held, this cannot fail.
 	 */
 	WARN_ON(xa_is_err(xa_store(&group->pasid_array,
 				   pasid, entry, GFP_KERNEL)));
-
 out_unlock:
 	mutex_unlock(&group->mutex);
 	return ret;
