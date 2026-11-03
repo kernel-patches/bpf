@@ -5742,6 +5742,11 @@ static enum priv_stack_mode bpf_enable_priv_stack(struct bpf_prog *prog)
 	 */
 	switch (prog->type) {
 	case BPF_PROG_TYPE_KPROBE:
+		/* Disable private stack for uprobe programs. */
+		if (prog->expected_attach_type == BPF_TRACE_UPROBE_MULTI ||
+		    prog->expected_attach_type == BPF_TRACE_UPROBE_SESSION)
+			return NO_PRIV_STACK;
+		fallthrough;
 	case BPF_PROG_TYPE_TRACEPOINT:
 	case BPF_PROG_TYPE_PERF_EVENT:
 	case BPF_PROG_TYPE_RAW_TRACEPOINT:
