@@ -191,10 +191,11 @@ static __poll_t snd_info_entry_poll(struct file *file, poll_table *wait)
 	struct snd_info_entry *entry = data->entry;
 	__poll_t mask = 0;
 
+	pde_poll_wait(file, wait);
 	if (entry->c.ops->poll)
 		return entry->c.ops->poll(entry,
 					  data->file_private_data,
-					  file, wait);
+					  file);
 	if (entry->c.ops->read)
 		mask |= EPOLLIN | EPOLLRDNORM;
 	if (entry->c.ops->write)
