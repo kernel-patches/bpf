@@ -1747,11 +1747,19 @@ bool resource_build_scaling_params(struct pipe_ctx *pipe_ctx)
 	 * recout before the viewport was computed.
 	 */
 	if (pipe_ctx->stream->ctx->dc->debug.visual_confirm_full_viewport) {
-		adjust_recout_for_visual_confirm(
-				&pipe_ctx->plane_res.scl_data.recout, pipe_ctx);
+		/* A zero-area recout is the disabled-pipe sentinel (no overlap with this
+		 * ODM slice); only shrink a recout that actually draws, else the height
+		 * offset drives it negative and the pipe no longer reads as disabled.
+		 */
+		if (pipe_ctx->plane_res.scl_data.recout.width > 0 &&
+				pipe_ctx->plane_res.scl_data.recout.height > 0)
+			adjust_recout_for_visual_confirm(
+					&pipe_ctx->plane_res.scl_data.recout, pipe_ctx);
 		/* SPL programs the HW recout from dscl_prog_data, not scl_data.recout */
 		if (pipe_ctx->stream->ctx->dc->config.use_spl &&
-				!pipe_ctx->stream->ctx->dc->debug.disable_spl)
+				!pipe_ctx->stream->ctx->dc->debug.disable_spl &&
+				pipe_ctx->plane_res.scl_data.dscl_prog_data.recout.width > 0 &&
+				pipe_ctx->plane_res.scl_data.dscl_prog_data.recout.height > 0)
 			adjust_recout_for_visual_confirm((struct rect *)
 					&pipe_ctx->plane_res.scl_data.dscl_prog_data.recout,
 					pipe_ctx);
