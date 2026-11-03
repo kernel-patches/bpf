@@ -12493,9 +12493,12 @@ static void netdev_napi_exit(struct net_device *dev)
 	if (!list_empty(&dev->napi_list)) {
 		struct napi_struct *p, *n;
 
+		/* unregister has waited for a grace period after napi_disable() */
 		netdev_lock(dev);
-		list_for_each_entry_safe(p, n, &dev->napi_list, dev_list)
+		list_for_each_entry_safe(p, n, &dev->napi_list, dev_list) {
+			hrtimer_cancel(&p->timer);
 			__netif_napi_del_locked(p);
+		}
 		netdev_unlock(dev);
 
 		synchronize_net();

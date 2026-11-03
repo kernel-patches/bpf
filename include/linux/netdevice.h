@@ -3013,8 +3013,13 @@ static inline void __netif_napi_del(struct napi_struct *napi)
 
 static inline void netif_napi_del_locked(struct napi_struct *napi)
 {
+	bool listed = test_bit(NAPI_STATE_LISTED, &napi->state);
+
 	__netif_napi_del_locked(napi);
 	synchronize_net();
+	/* napi->timer can be started until a grace period after napi_disable() */
+	if (listed)
+		hrtimer_cancel(&napi->timer);
 }
 
 /**
@@ -3025,8 +3030,12 @@ static inline void netif_napi_del_locked(struct napi_struct *napi)
  */
 static inline void netif_napi_del(struct napi_struct *napi)
 {
+	bool listed = test_bit(NAPI_STATE_LISTED, &napi->state);
+
 	__netif_napi_del(napi);
 	synchronize_net();
+	if (listed)
+		hrtimer_cancel(&napi->timer);
 }
 
 int netif_enable_cpu_rmap(struct net_device *dev, unsigned int num_irqs);
