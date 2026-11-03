@@ -778,10 +778,15 @@ static int ipu6_isys_fw_pin_cfg(struct ipu6_isys_video *av,
 		ipu6_isys_get_isys_format(ipu6_isys_get_format(av), 0);
 	struct v4l2_rect v4l2_crop;
 	struct ipu6_isys *isys = av->isys;
-	int input_pins = cfg->nof_input_pins++;
+	int input_pins;
 	int output_pins;
 	u32 src_stream;
 
+	if (cfg->nof_input_pins >= IPU6_MAX_IPINS ||
+	    cfg->nof_output_pins >= IPU6_MAX_OPINS)
+		return -ENOSPC;
+
+	input_pins = cfg->nof_input_pins++;
 	src_stream = __ipu6_isys_get_src_stream_by_src_pad(state, src_pad->index);
 	fmt = v4l2_subdev_state_get_format(state, src_pad->index, src_stream);
 	v4l2_crop = *v4l2_subdev_state_get_crop(state, src_pad->index, src_stream);
