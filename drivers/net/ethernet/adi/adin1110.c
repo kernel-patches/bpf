@@ -19,6 +19,7 @@
 #include <linux/mii.h>
 #include <linux/module.h>
 #include <linux/netdevice.h>
+#include <linux/oa_tc6.h>
 #include <linux/regulator/consumer.h>
 #include <linux/phy.h>
 #include <linux/property.h>
@@ -114,6 +115,8 @@
 #define ADIN_MAC_P2_ADDR_SLOT			3
 #define ADIN_MAC_FDB_ADDR_SLOT			4
 
+#define ADIN1110_MMS0_LIMIT			0x30
+
 DECLARE_CRC8_TABLE(adin1110_crc_table);
 
 enum adin1110_chips_id {
@@ -145,6 +148,7 @@ struct adin1110_port_priv {
 	u32				nr;
 	u32				state;
 	struct adin1110_cfg		*cfg;
+	struct oa_tc6			*tc6;
 };
 
 struct adin1110_priv {
@@ -161,6 +165,9 @@ struct adin1110_priv {
 	struct adin1110_port_priv	*ports[ADIN_MAC_MAX_PORTS];
 	char				mii_bus_name[MII_BUS_ID_SIZE];
 	u8				data[ADIN1110_MAX_BUFF] ____cacheline_aligned;
+
+	int (*read_reg)(struct adin1110_priv *priv, u16 reg, u32 *val);
+	int (*write_reg)(struct adin1110_priv *priv, u16 reg, u32 val);
 };
 
 struct adin1110_switchdev_event_work {
@@ -192,7 +199,18 @@ static u8 adin1110_crc_data(u8 *data, u32 len)
 	return crc8(adin1110_crc_table, data, len, 0);
 }
 
-static int adin1110_read_reg(struct adin1110_priv *priv, u16 reg, u32 *val)
+static int adin1110_read_reg_tc6(struct adin1110_priv *priv, u16 reg, u32 *val)
+{
+	struct adin1110_port_priv *port_priv = priv->ports[0];
+
+	if (reg >= ADIN1110_MMS0_LIMIT)
+		return oa_tc6_read_register_mms(port_priv->tc6, OA_TC6_MAC_MMS1,
+						 reg, val);
+
+	return oa_tc6_read_register(port_priv->tc6, reg, val);
+}
+
+static int adin1110_read_reg_generic_spi(struct adin1110_priv *priv, u16 reg, u32 *val)
 {
 	u32 header_len = ADIN1110_RD_HEADER_LEN;
 	u32 read_len = ADIN1110_REG_LEN;
@@ -240,7 +258,23 @@ static int adin1110_read_reg(struct adin1110_priv *priv, u16 reg, u32 *val)
 	return ret;
 }
 
-static int adin1110_write_reg(struct adin1110_priv *priv, u16 reg, u32 val)
+static int adin1110_read_reg(struct adin1110_priv *priv, u16 reg, u32 *val)
+{
+	return priv->read_reg(priv, reg, val);
+}
+
+static int adin1110_write_reg_tc6(struct adin1110_priv *priv, u16 reg, u32 val)
+{
+	struct adin1110_port_priv *port_priv = priv->ports[0];
+
+	if (reg >= ADIN1110_MMS0_LIMIT)
+		return oa_tc6_write_register_mms(port_priv->tc6, OA_TC6_MAC_MMS1,
+						  reg, val);
+
+	return oa_tc6_write_register(port_priv->tc6, reg, val);
+}
+
+static int adin1110_write_reg_generic_spi(struct adin1110_priv *priv, u16 reg, u32 val)
 {
 	u32 header_len = ADIN1110_WR_HEADER_LEN;
 	u32 write_len = ADIN1110_REG_LEN;
@@ -261,6 +295,11 @@ static int adin1110_write_reg(struct adin1110_priv *priv, u16 reg, u32 val)
 	}
 
 	return spi_write(priv->spidev, &priv->data[0], header_len + write_len);
+}
+
+static int adin1110_write_reg(struct adin1110_priv *priv, u16 reg, u32 val)
+{
+	return priv->write_reg(priv, reg, val);
 }
 
 static int adin1110_set_bits(struct adin1110_priv *priv, u16 reg,
@@ -881,6 +920,22 @@ static void adin1110_set_rx_mode(struct net_device *dev)
 	spin_unlock(&priv->state_lock);
 }
 
+static int adin1110_set_rx_mode_tc6(struct net_device *dev,
+				    struct netdev_hw_addr_list *uc,
+				    struct netdev_hw_addr_list *mc)
+{
+	struct adin1110_port_priv *port_priv = netdev_priv(dev);
+	struct adin1110_priv *priv = port_priv->priv;
+	int ret;
+
+	mutex_lock(&priv->lock);
+	port_priv->flags = dev->flags;
+	ret = adin1110_setup_rx_mode(port_priv);
+	mutex_unlock(&priv->lock);
+
+	return ret;
+}
+
 static int adin1110_net_open(struct net_device *net_dev)
 {
 	struct adin1110_port_priv *port_priv = netdev_priv(net_dev);
@@ -938,6 +993,31 @@ out:
 	return 0;
 }
 
+static int adin1110_net_open_tc6(struct net_device *net_dev)
+{
+	struct adin1110_port_priv *port_priv = netdev_priv(net_dev);
+	struct adin1110_priv *priv = port_priv->priv;
+	int ret;
+
+	mutex_lock(&priv->lock);
+
+	/* Needed for the broadcast/multicast filters to forward to the host */
+	port_priv->state = BR_STATE_FORWARDING;
+
+	ret = adin1110_set_mac_address(net_dev, net_dev->dev_addr);
+	mutex_unlock(&priv->lock);
+	if (ret < 0) {
+		netdev_err(net_dev, "Could not set MAC address: %pM, %d\n",
+			   net_dev->dev_addr, ret);
+		return ret;
+	}
+
+	phy_start(net_dev->phydev);
+	netif_start_queue(net_dev);
+
+	return 0;
+}
+
 static int adin1110_net_stop(struct net_device *net_dev)
 {
 	struct adin1110_port_priv *port_priv = netdev_priv(net_dev);
@@ -957,6 +1037,14 @@ static int adin1110_net_stop(struct net_device *net_dev)
 	netif_stop_queue(port_priv->netdev);
 	flush_work(&port_priv->tx_work);
 	phy_stop(port_priv->phydev);
+
+	return 0;
+}
+
+static int adin1110_net_stop_tc6(struct net_device *net_dev)
+{
+	netif_stop_queue(net_dev);
+	phy_stop(net_dev->phydev);
 
 	return 0;
 }
@@ -1004,6 +1092,18 @@ static netdev_tx_t adin1110_start_xmit(struct sk_buff *skb, struct net_device *d
 	schedule_work(&port_priv->tx_work);
 
 	return netdev_ret;
+}
+
+static netdev_tx_t adin1110_start_xmit_tc6(struct sk_buff *skb, struct net_device *dev)
+{
+	struct adin1110_port_priv *port_priv = netdev_priv(dev);
+
+	if (skb_put_padto(skb, ETH_ZLEN)) {
+		dev->stats.tx_dropped++;
+		return NETDEV_TX_OK;
+	}
+
+	return oa_tc6_start_xmit(port_priv->tc6, skb);
 }
 
 static void adin1110_ndo_get_stats64(struct net_device *dev,
@@ -1054,6 +1154,16 @@ static const struct net_device_ops adin1110_netdev_ops = {
 	.ndo_get_stats64	= adin1110_ndo_get_stats64,
 	.ndo_get_port_parent_id	= adin1110_port_get_port_parent_id,
 	.ndo_get_phys_port_name	= adin1110_ndo_get_phys_port_name,
+};
+
+static const struct net_device_ops adin1110_tc6_netdev_ops = {
+	.ndo_open		= adin1110_net_open_tc6,
+	.ndo_stop		= adin1110_net_stop_tc6,
+	.ndo_eth_ioctl		= adin1110_ioctl,
+	.ndo_start_xmit		= adin1110_start_xmit_tc6,
+	.ndo_set_mac_address	= adin1110_ndo_set_mac_address,
+	.ndo_set_rx_mode_async	= adin1110_set_rx_mode_tc6,
+	.ndo_validate_addr	= eth_validate_addr,
 };
 
 static void adin1110_get_drvinfo(struct net_device *dev,
@@ -1121,6 +1231,69 @@ static int adin1110_check_spi(struct adin1110_priv *priv)
 	}
 
 	return 0;
+}
+
+static void adin1110_oa_tc6_remove(void *data)
+{
+	oa_tc6_exit(data);
+}
+
+static int adin1110_oa_tc6_probe(struct adin1110_priv *priv)
+{
+	struct adin1110_port_priv *port_priv;
+	struct oa_tc6_quirks quirks = {0};
+	struct net_device *netdev;
+	struct device *dev;
+	int ret;
+
+	dev = &priv->spidev->dev;
+
+	if (priv->cfg->id == ADIN2111_MAC)
+		return dev_err_probe(dev, -EOPNOTSUPP,
+				     "OA TC6 isn't supported for ADIN2111\n");
+
+	netdev = devm_alloc_etherdev(dev, sizeof(*port_priv));
+	if (!netdev)
+		return -ENOMEM;
+
+	port_priv = netdev_priv(netdev);
+	port_priv->netdev = netdev;
+	port_priv->priv = priv;
+	port_priv->cfg = priv->cfg;
+	port_priv->nr = 0;
+	priv->ports[0] = port_priv;
+	SET_NETDEV_DEV(netdev, dev);
+
+	quirks.reset_settle_us = 50000;
+
+	port_priv->tc6 = oa_tc6_init(priv->spidev, netdev, &quirks);
+	if (IS_ERR(port_priv->tc6))
+		return PTR_ERR(port_priv->tc6);
+
+	priv->read_reg = adin1110_read_reg_tc6;
+	priv->write_reg = adin1110_write_reg_tc6;
+
+	ret = devm_add_action_or_reset(dev, adin1110_oa_tc6_remove,
+				       port_priv->tc6);
+	if (ret)
+		return ret;
+
+	/* The OA TC6 framework doesn't append the FCS, let the MAC do it. */
+	ret = adin1110_set_bits(priv, ADIN1110_CONFIG2, ADIN1110_CRC_APPEND,
+				ADIN1110_CRC_APPEND);
+	if (ret < 0)
+		return ret;
+
+	if (device_get_ethdev_address(dev, netdev))
+		eth_hw_addr_random(netdev);
+
+	netdev->if_port = IF_PORT_10BASET;
+	netdev->netdev_ops = &adin1110_tc6_netdev_ops;
+	netdev->ethtool_ops = &adin1110_ethtool_ops;
+	netdev->priv_flags |= IFF_UNICAST_FLT;
+	netdev->netns_immutable = true;
+
+	return devm_register_netdev(dev, netdev);
 }
 
 static int adin1110_hw_forwarding(struct adin1110_priv *priv, bool enable)
@@ -1649,6 +1822,7 @@ static int adin1110_probe(struct spi_device *spi)
 	const struct spi_device_id *dev_id = spi_get_device_id(spi);
 	struct device *dev = &spi->dev;
 	struct adin1110_priv *priv;
+	bool oa_tc6_protocol;
 	int ret;
 
 	priv = devm_kzalloc(dev, sizeof(struct adin1110_priv), GFP_KERNEL);
@@ -1663,10 +1837,18 @@ static int adin1110_probe(struct spi_device *spi)
 	mutex_init(&priv->lock);
 	spin_lock_init(&priv->state_lock);
 
+	oa_tc6_protocol = device_property_read_bool(dev, "adi,spi-oa-tc6");
+
+	if (oa_tc6_protocol)
+		return adin1110_oa_tc6_probe(priv);
+
 	/* use of CRC on control and data transactions is pin dependent */
 	priv->append_crc = device_property_read_bool(dev, "adi,spi-crc");
 	if (priv->append_crc)
 		crc8_populate_msb(adin1110_crc_table, 0x7);
+
+	priv->read_reg = adin1110_read_reg_generic_spi;
+	priv->write_reg = adin1110_write_reg_generic_spi;
 
 	ret = adin1110_check_spi(priv);
 	if (ret < 0) {

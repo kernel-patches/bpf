@@ -79,6 +79,7 @@
 #define OA_TC6_PHY_C45_AUTO_NEG_MMS5		5	/* MMD 7 */
 #define OA_TC6_PHY_C45_POWER_UNIT_MMS6		6	/* MMD 13 */
 
+struct mii_bus;
 struct oa_tc6;
 
 enum oa_tc6_quirk_flag {
