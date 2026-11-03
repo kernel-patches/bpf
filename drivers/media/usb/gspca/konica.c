@@ -173,6 +173,9 @@ static int sd_start(struct gspca_dev *gspca_dev)
 	struct usb_host_interface *alt;
 	struct usb_interface *intf;
 
+	/* The previous stream's URBs have been destroyed. */
+	sd->last_data_urb = NULL;
+
 	intf = usb_ifnum_to_if(sd->gspca_dev.dev, sd->gspca_dev.iface);
 	alt = usb_altnum_to_altsetting(intf, sd->gspca_dev.alt);
 	if (!alt) {
