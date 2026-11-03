@@ -287,6 +287,8 @@ static inline bool is_exception_insn(struct insn *insn)
 static bool can_probe(unsigned long paddr)
 {
 	unsigned long addr, __addr, offset = 0;
+	struct kprobe_iter iter;
+	struct kprobe *kp;
 	struct insn insn;
 	kprobe_opcode_t buf[MAX_INSN_SIZE];
 
@@ -295,7 +297,9 @@ static bool can_probe(unsigned long paddr)
 
 	/* Decode instructions */
 	addr = paddr - offset;
-	while (addr < paddr) {
+	for_each_addr_kprobe(iter, kp, addr, paddr) {
+		if (addr == paddr)
+			break;
 		/*
 		 * Check if the instruction has been modified by another
 		 * kprobe, in which case we replace the breakpoint by the
@@ -304,7 +308,7 @@ static bool can_probe(unsigned long paddr)
 		 * relative-jump. Since the relative-jump itself is
 		 * normally used, we just go through if there is no kprobe.
 		 */
-		__addr = recover_probed_instruction(buf, addr, NULL);
+		__addr = recover_probed_instruction(buf, addr, &kp);
 		if (!__addr)
 			return false;
 
@@ -327,7 +331,7 @@ static bool can_probe(unsigned long paddr)
 	if (addr != paddr)
 		return false;
 
-	__addr = recover_probed_instruction(buf, addr, NULL);
+	__addr = recover_probed_instruction(buf, addr, &kp);
 	if (!__addr)
 		return false;
 
