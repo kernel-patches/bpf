@@ -3651,6 +3651,48 @@ static u32 mlx5_esw_match_metadata_reserved(struct mlx5_eswitch *esw)
 	return MLX5_ESW_METADATA_RSVD_UPLINK;
 }
 
+/* Nested (virt LAG) source-port metadata layout: the upper ESW_NESTED_IDX_BITS
+ * hold the VF/SF's slot in the LAG and the lower ESW_NESTED_VPORT_BITS hold a
+ * vport id unique within its eswitch. The two fields still sum to
+ * ESW_SOURCE_PORT_METADATA_BITS. The LAG slot (0-254, per the xa_alloc() limit
+ * in mlx5_ldev_add_mdev()) fits in ESW_NESTED_IDX_BITS; slots 0xf0 and up would
+ * drive the PFNUM bits to the 0xf reserved by internal port offload, so only
+ * 0-239 are used.
+ */
+#define ESW_NESTED_VPORT_BITS 8
+#define ESW_NESTED_IDX_BITS (ESW_SOURCE_PORT_METADATA_BITS - ESW_NESTED_VPORT_BITS)
+
+static u32 mlx5_nested_esw_match_metadata_alloc(struct mlx5_eswitch *esw)
+{
+	u32 vport_end_ida = (1 << ESW_NESTED_VPORT_BITS) - 1;
+	u32 max_idx = (1 << ESW_NESTED_IDX_BITS) -
+		      (1 << (ESW_NESTED_IDX_BITS - ESW_PFNUM_BITS)) - 1;
+	int idx;
+	int id;
+
+	idx = mlx5_lag_get_member_idx(esw->dev);
+	if (idx < 0 || idx > max_idx)
+		return 0;
+
+	/* Use only non-zero id's (2-255). */
+	id = ida_alloc_range(&esw->offloads.vport_metadata_ida,
+			     MLX5_ESW_METADATA_RSVD_UPLINK + 1,
+			     vport_end_ida, GFP_KERNEL);
+	if (id < 0)
+		return 0;
+	id = (idx << ESW_NESTED_VPORT_BITS) | id;
+	return id;
+}
+
+static void mlx5_nested_esw_match_metadata_free(struct mlx5_eswitch *esw,
+						u32 metadata)
+{
+	u32 vport_bit_mask = (1 << ESW_NESTED_VPORT_BITS) - 1;
+
+	/* Metadata holds only ESW_NESTED_VPORT_BITS of actual ida id. */
+	ida_free(&esw->offloads.vport_metadata_ida, metadata & vport_bit_mask);
+}
+
 u32 mlx5_esw_match_metadata_alloc(struct mlx5_eswitch *esw)
 {
 	u32 vport_end_ida = (1 << ESW_VPORT_BITS) - 1;
@@ -3658,6 +3700,9 @@ u32 mlx5_esw_match_metadata_alloc(struct mlx5_eswitch *esw)
 	u32 max_pf_num = (1 << ESW_PFNUM_BITS) - 2;
 	int pf_num;
 	int id;
+
+	if (!mlx5_core_is_pf(esw->dev) && !mlx5_virt_lag_nonmember(esw->dev))
+		return mlx5_nested_esw_match_metadata_alloc(esw);
 
 	/* Only 4 bits of pf_num */
 	pf_num = mlx5_sd_pf_num_get(esw->dev);
@@ -3678,6 +3723,9 @@ u32 mlx5_esw_match_metadata_alloc(struct mlx5_eswitch *esw)
 void mlx5_esw_match_metadata_free(struct mlx5_eswitch *esw, u32 metadata)
 {
 	u32 vport_bit_mask = (1 << ESW_VPORT_BITS) - 1;
+
+	if (!mlx5_core_is_pf(esw->dev) && !mlx5_virt_lag_nonmember(esw->dev))
+		return mlx5_nested_esw_match_metadata_free(esw, metadata);
 
 	/* Metadata contains only 12 bits of actual ida id */
 	ida_free(&esw->offloads.vport_metadata_ida, metadata & vport_bit_mask);
