@@ -611,6 +611,31 @@ static inline int __must_check mmap_read_lock_killable(struct mm_struct *mm)
 	return ret;
 }
 
+/**
+ * mmap_read_lock_killable_nosteal() - Acquire a killable mmap read lock, but
+ * yield to any queued write locks.
+ * @mm: The mm whose mmap read lock is required.
+ *
+ * If an mmap write lock is queued behind readers, but its handoff timeout has
+ * yet to expire, releasing then re-acquiring a read lock can steal the lock
+ * from it.
+ *
+ * mmap_read_lock_killable_nosteal() will queue in this case instead, which is
+ * useful when releasing the mmap read lock specifically to relieve lock
+ * contention.
+ *
+ * Returns: 0 on success, or an error otherwise.
+ */
+static inline int __must_check mmap_read_lock_killable_nosteal(struct mm_struct *mm)
+{
+	int ret;
+
+	__mmap_lock_trace_start_locking(mm, false);
+	ret = down_read_killable_nosteal(&mm->mmap_lock);
+	__mmap_lock_trace_acquire_returned(mm, false, ret == 0);
+	return ret;
+}
+
 static inline bool __must_check mmap_read_trylock(struct mm_struct *mm)
 {
 	bool ret;
@@ -619,6 +644,25 @@ static inline bool __must_check mmap_read_trylock(struct mm_struct *mm)
 	ret = down_read_trylock(&mm->mmap_lock) != 0;
 	__mmap_lock_trace_acquire_returned(mm, false, ret);
 	return ret;
+}
+
+/**
+ * mmap_read_lock_nosteal() - Acquire the mmap read lock, but yield to
+ * any queued write locks.
+ * @mm: The mm whose mmap read lock is required.
+ *
+ * If an mmap write lock is queued behind readers, but its handoff timeout has
+ * yet to expire, releasing then re-acquiring a read lock can steal the lock
+ * from it.
+ *
+ * mmap_read_lock_nosteal() will queue in this case instead, which is useful when
+ * releasing the mmap read lock specifically to relieve lock contention.
+ */
+static inline void mmap_read_lock_nosteal(struct mm_struct *mm)
+{
+	__mmap_lock_trace_start_locking(mm, false);
+	down_read_nosteal(&mm->mmap_lock);
+	__mmap_lock_trace_acquire_returned(mm, false, true);
 }
 
 static inline void mmap_read_unlock(struct mm_struct *mm)

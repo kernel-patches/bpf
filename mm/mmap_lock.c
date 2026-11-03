@@ -410,7 +410,7 @@ static struct vm_area_struct *lock_next_vma_under_mmap_lock(struct mm_struct *mm
 	struct vm_area_struct *vma;
 	int ret;
 
-	ret = mmap_read_lock_killable(mm);
+	ret = mmap_read_lock_killable_nosteal(mm);
 	if (ret)
 		return ERR_PTR(ret);
 

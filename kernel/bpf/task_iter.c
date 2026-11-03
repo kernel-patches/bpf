@@ -486,7 +486,7 @@ task_vma_seq_get_next(struct bpf_iter_seq_task_vma_info *info)
 			info->prev_vm_end = curr_vma->vm_end;
 			op = task_vma_iter_find_vma;
 			mmap_read_unlock(curr_mm);
-			if (mmap_read_lock_killable(curr_mm)) {
+			if (mmap_read_lock_killable_nosteal(curr_mm)) {
 				mmput(curr_mm);
 				goto finish;
 			}
