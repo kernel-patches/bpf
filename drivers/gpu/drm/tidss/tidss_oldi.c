@@ -478,14 +478,153 @@ void tidss_oldi_deinit(struct tidss_device *tidss)
 	}
 }
 
-int tidss_oldi_init(struct tidss_device *tidss)
+static int tidss_oldi_init_one(struct tidss_device *tidss,
+			       struct device_node *oldi_tx)
 {
 	struct tidss_oldi *oldi;
-	struct device_node *child;
 	struct drm_bridge *bridge;
 	u32 parent_vp, oldi_instance;
 	int companion_instance = -1;
 	enum tidss_oldi_link_type link_type = OLDI_MODE_UNSUPPORTED;
+	int ret;
+
+	ret = get_parent_dss_vp(oldi_tx, &parent_vp);
+	if (ret) {
+		if (ret == -ENODEV) {
+			/*
+			 * ENODEV means that this particular OLDI node
+			 * is not connected with the DSS, which is not
+			 * a harmful case. There could be another OLDI
+			 * which may still be connected.
+			 * Continue to search for that.
+			 */
+			return 0;
+		}
+		return ret;
+	}
+
+	ret = of_property_read_u32(oldi_tx, "reg", &oldi_instance);
+	if (ret)
+		return ret;
+
+	/*
+	 * Now that it's confirmed that OLDI is connected with DSS,
+	 * let's continue getting the OLDI sinks ahead and other OLDI
+	 * properties.
+	 */
+	bridge = devm_drm_of_get_bridge(tidss->dev, oldi_tx,
+					OLDI_OUTPUT_PORT, 0);
+	if (IS_ERR(bridge)) {
+		/*
+		 * Either there was no OLDI sink in the devicetree, or
+		 * the OLDI sink has not been added yet. In any case,
+		 * return.
+		 * We don't want to have an OLDI node connected to DSS
+		 * but not to any sink.
+		 */
+		ret = dev_err_probe(tidss->dev, PTR_ERR(bridge),
+				    "no panel/bridge for OLDI%u.\n",
+				    oldi_instance);
+		return ret;
+	}
+
+	link_type = get_oldi_mode(oldi_tx, &companion_instance);
+	if (link_type == OLDI_MODE_UNSUPPORTED) {
+		ret = dev_err_probe(tidss->dev, -EINVAL,
+				    "OLDI%u: Unsupported OLDI connection.\n",
+				    oldi_instance);
+		return ret;
+	} else if ((link_type == OLDI_MODE_SECONDARY_CLONE_SINGLE_LINK) ||
+		   (link_type == OLDI_MODE_CLONE_SINGLE_LINK)) {
+		/*
+		 * The OLDI driver cannot support OLDI clone mode
+		 * properly at present.
+		 * The clone mode requires 2 working encoder-bridge
+		 * pipelines, generating from the same crtc. The DRM
+		 * framework does not support this at present. If
+		 * there were to be, say, 2 OLDI sink bridges each
+		 * connected to an OLDI TXes, they couldn't both be
+		 * supported simultaneously.
+		 * This driver still has some code pertaining to OLDI
+		 * clone mode configuration in DSS hardware for future,
+		 * when there is a better infrastructure in the DRM
+		 * framework to support 2 encoder-bridge pipelines
+		 * simultaneously.
+		 * Till that time, this driver shall error out if it
+		 * detects a clone mode configuration.
+		 */
+		ret = dev_err_probe(tidss->dev, -EOPNOTSUPP,
+				    "The OLDI driver does not support Clone Mode at present.\n");
+		return ret;
+	} else if (link_type == OLDI_MODE_SECONDARY_DUAL_LINK) {
+		/*
+		 * This is the secondary OLDI node, which serves as a
+		 * companion to the primary OLDI, when it is configured
+		 * for the dual-link mode. Since the primary OLDI will
+		 * be a part of bridge chain, no need to put this one
+		 * too. Continue onto the next OLDI node.
+		 */
+		return 0;
+	}
+
+	oldi = devm_drm_bridge_alloc(tidss->dev, struct tidss_oldi, bridge,
+				     &tidss_oldi_bridge_funcs);
+	if (IS_ERR(oldi)) {
+		ret = PTR_ERR(oldi);
+		return ret;
+	}
+
+	oldi->parent_vp = parent_vp;
+	oldi->oldi_instance = oldi_instance;
+	oldi->companion_instance = companion_instance;
+	oldi->link_type = link_type;
+	oldi->dev = tidss->dev;
+	oldi->next_bridge = bridge;
+
+	/*
+	 * Only the primary OLDI needs to reference the io-ctrl system
+	 * registers, and the serial clock.
+	 * We don't require a check for secondary OLDI in dual-link mode
+	 * because the driver will not create a drm_bridge instance.
+	 * But the driver will need to create a drm_bridge instance,
+	 * for secondary OLDI in clone mode (once it is supported).
+	 */
+	if (link_type != OLDI_MODE_SECONDARY_CLONE_SINGLE_LINK) {
+		oldi->io_ctrl = syscon_regmap_lookup_by_phandle(oldi_tx,
+								"ti,oldi-io-ctrl");
+		if (IS_ERR(oldi->io_ctrl)) {
+			ret = dev_err_probe(oldi->dev, PTR_ERR(oldi->io_ctrl),
+					    "OLDI%u: syscon_regmap_lookup_by_phandle failed.\n",
+					    oldi_instance);
+			return ret;
+		}
+
+		oldi->serial = devm_get_clk_from_child(tidss->dev, oldi_tx,
+						       "serial");
+		if (IS_ERR(oldi->serial)) {
+			ret = dev_err_probe(oldi->dev, PTR_ERR(oldi->serial),
+					    "OLDI%u: Failed to get serial clock.\n",
+					    oldi_instance);
+			return ret;
+		}
+	}
+
+	/* Register the bridge. */
+	oldi->bridge.of_node = oldi_tx;
+	oldi->bridge.driver_private = oldi;
+
+	tidss->oldis[tidss->num_oldis++] = oldi;
+	tidss->is_ext_vp_clk[oldi->parent_vp] = true;
+	oldi->tidss = tidss;
+
+	drm_bridge_add(&oldi->bridge);
+
+	return 0;
+}
+
+int tidss_oldi_init(struct tidss_device *tidss)
+{
+	struct device_node *child;
 	struct device_node *oldi_parent;
 	int ret = 0;
 
@@ -497,136 +636,9 @@ int tidss_oldi_init(struct tidss_device *tidss)
 		return 0;
 
 	for_each_available_child_of_node(oldi_parent, child) {
-		ret = get_parent_dss_vp(child, &parent_vp);
-		if (ret) {
-			if (ret == -ENODEV) {
-				/*
-				 * ENODEV means that this particular OLDI node
-				 * is not connected with the DSS, which is not
-				 * a harmful case. There could be another OLDI
-				 * which may still be connected.
-				 * Continue to search for that.
-				 */
-				continue;
-			}
-			goto err_put_node;
-		}
-
-		ret = of_property_read_u32(child, "reg", &oldi_instance);
+		ret = tidss_oldi_init_one(tidss, child);
 		if (ret)
 			goto err_put_node;
-
-		/*
-		 * Now that it's confirmed that OLDI is connected with DSS,
-		 * let's continue getting the OLDI sinks ahead and other OLDI
-		 * properties.
-		 */
-		bridge = devm_drm_of_get_bridge(tidss->dev, child,
-						OLDI_OUTPUT_PORT, 0);
-		if (IS_ERR(bridge)) {
-			/*
-			 * Either there was no OLDI sink in the devicetree, or
-			 * the OLDI sink has not been added yet. In any case,
-			 * return.
-			 * We don't want to have an OLDI node connected to DSS
-			 * but not to any sink.
-			 */
-			ret = dev_err_probe(tidss->dev, PTR_ERR(bridge),
-					    "no panel/bridge for OLDI%u.\n",
-					    oldi_instance);
-			goto err_put_node;
-		}
-
-		link_type = get_oldi_mode(child, &companion_instance);
-		if (link_type == OLDI_MODE_UNSUPPORTED) {
-			ret = dev_err_probe(tidss->dev, -EINVAL,
-					    "OLDI%u: Unsupported OLDI connection.\n",
-					    oldi_instance);
-			goto err_put_node;
-		} else if ((link_type == OLDI_MODE_SECONDARY_CLONE_SINGLE_LINK) ||
-			   (link_type == OLDI_MODE_CLONE_SINGLE_LINK)) {
-			/*
-			 * The OLDI driver cannot support OLDI clone mode
-			 * properly at present.
-			 * The clone mode requires 2 working encoder-bridge
-			 * pipelines, generating from the same crtc. The DRM
-			 * framework does not support this at present. If
-			 * there were to be, say, 2 OLDI sink bridges each
-			 * connected to an OLDI TXes, they couldn't both be
-			 * supported simultaneously.
-			 * This driver still has some code pertaining to OLDI
-			 * clone mode configuration in DSS hardware for future,
-			 * when there is a better infrastructure in the DRM
-			 * framework to support 2 encoder-bridge pipelines
-			 * simultaneously.
-			 * Till that time, this driver shall error out if it
-			 * detects a clone mode configuration.
-			 */
-			ret = dev_err_probe(tidss->dev, -EOPNOTSUPP,
-					    "The OLDI driver does not support Clone Mode at present.\n");
-			goto err_put_node;
-		} else if (link_type == OLDI_MODE_SECONDARY_DUAL_LINK) {
-			/*
-			 * This is the secondary OLDI node, which serves as a
-			 * companion to the primary OLDI, when it is configured
-			 * for the dual-link mode. Since the primary OLDI will
-			 * be a part of bridge chain, no need to put this one
-			 * too. Continue onto the next OLDI node.
-			 */
-			continue;
-		}
-
-		oldi = devm_drm_bridge_alloc(tidss->dev, struct tidss_oldi, bridge,
-					     &tidss_oldi_bridge_funcs);
-		if (IS_ERR(oldi)) {
-			ret = PTR_ERR(oldi);
-			goto err_put_node;
-		}
-
-		oldi->parent_vp = parent_vp;
-		oldi->oldi_instance = oldi_instance;
-		oldi->companion_instance = companion_instance;
-		oldi->link_type = link_type;
-		oldi->dev = tidss->dev;
-		oldi->next_bridge = bridge;
-
-		/*
-		 * Only the primary OLDI needs to reference the io-ctrl system
-		 * registers, and the serial clock.
-		 * We don't require a check for secondary OLDI in dual-link mode
-		 * because the driver will not create a drm_bridge instance.
-		 * But the driver will need to create a drm_bridge instance,
-		 * for secondary OLDI in clone mode (once it is supported).
-		 */
-		if (link_type != OLDI_MODE_SECONDARY_CLONE_SINGLE_LINK) {
-			oldi->io_ctrl = syscon_regmap_lookup_by_phandle(child,
-									"ti,oldi-io-ctrl");
-			if (IS_ERR(oldi->io_ctrl)) {
-				ret = dev_err_probe(oldi->dev, PTR_ERR(oldi->io_ctrl),
-						    "OLDI%u: syscon_regmap_lookup_by_phandle failed.\n",
-						    oldi_instance);
-				goto err_put_node;
-			}
-
-			oldi->serial = devm_get_clk_from_child(tidss->dev, child,
-							       "serial");
-			if (IS_ERR(oldi->serial)) {
-				ret = dev_err_probe(oldi->dev, PTR_ERR(oldi->serial),
-						    "OLDI%u: Failed to get serial clock.\n",
-						    oldi_instance);
-				goto err_put_node;
-			}
-		}
-
-		/* Register the bridge. */
-		oldi->bridge.of_node = child;
-		oldi->bridge.driver_private = oldi;
-
-		tidss->oldis[tidss->num_oldis++] = oldi;
-		tidss->is_ext_vp_clk[oldi->parent_vp] = true;
-		oldi->tidss = tidss;
-
-		drm_bridge_add(&oldi->bridge);
 	}
 
 	of_node_put(child);
