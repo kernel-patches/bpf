@@ -546,9 +546,34 @@ static int pde_init_seq_direct(struct proc_dir_entry *pde)
 	return 0;
 }
 
+static void pde_lockdep_init(struct proc_dir_entry *pde,
+			     struct lock_class_key *key)
+{
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+	const void *k = key;
+
+	if (!pde_lockdep(pde))
+		return;
+	/*
+	 * To lockdep the pin is a read lock that proc_entry_rundown() takes
+	 * the write side of, see use_pde(). The entries that share
+	 * seq_operations or proc_ops run the same code pinned, so they share
+	 * a class, and those are static objects that lockdep takes as its
+	 * key. The entries that only share a show function get a key per
+	 * registration site instead, see proc_create_single_data(), or the
+	 * key the creator handed in, see proc_create_data_key().
+	 */
+	if (!k)
+		k = pde_has_proc_seq_ops(pde) ? (const void *)pde->seq_ops :
+						pde->proc_ops;
+	lockdep_init_map(&pde->dep_map, "pde->in_use",
+			 (struct lock_class_key *)k, 0);
+#endif
+}
+
 /* returns the registered entry, or frees dp and returns NULL on failure */
 struct proc_dir_entry *proc_register(struct proc_dir_entry *dir,
-		struct proc_dir_entry *dp)
+		struct proc_dir_entry *dp, struct lock_class_key *key)
 {
 	if (proc_alloc_inum(&dp->low_ino))
 		goto out_free_entry;
@@ -563,6 +588,7 @@ struct proc_dir_entry *proc_register(struct proc_dir_entry *dir,
 	}
 	if (pde_init_seq_direct(dp))
 		goto out_free_inum;
+	pde_lockdep_init(dp, key);
 
 	write_lock(&proc_subdir_lock);
 	dp->parent = dir;
@@ -664,7 +690,7 @@ struct proc_dir_entry *proc_symlink(const char *name,
 		ent->data = kmemdup(dest, ent->size + 1, GFP_KERNEL);
 		if (ent->data) {
 			ent->proc_iops = &proc_link_inode_operations;
-			ent = proc_register(parent, ent);
+			ent = proc_register(parent, ent, NULL);
 		} else {
 			pde_free(ent);
 			ent = NULL;
@@ -690,7 +716,7 @@ struct proc_dir_entry *_proc_mkdir(const char *name, umode_t mode,
 		if (force_lookup) {
 			pde_force_lookup(ent);
 		}
-		ent = proc_register(parent, ent);
+		ent = proc_register(parent, ent, NULL);
 	}
 	return ent;
 }
@@ -727,7 +753,7 @@ struct proc_dir_entry *proc_create_mount_point(const char *name)
 		ent->data = NULL;
 		ent->proc_dir_ops = NULL;
 		ent->proc_iops = NULL;
-		ent = proc_register(parent, ent);
+		ent = proc_register(parent, ent, NULL);
 	}
 	return ent;
 }
@@ -763,9 +789,24 @@ struct proc_dir_entry *proc_create_data(const char *name, umode_t mode,
 	if (!p)
 		return NULL;
 	p->proc_ops = proc_ops;
-	return proc_register(parent, p);
+	return proc_register(parent, p, NULL);
 }
 EXPORT_SYMBOL(proc_create_data);
+
+struct proc_dir_entry *proc_create_data_key(const char *name, umode_t mode,
+		struct proc_dir_entry *parent,
+		const struct proc_ops *proc_ops, void *data,
+		struct lock_class_key *key)
+{
+	struct proc_dir_entry *p;
+
+	p = proc_create_reg(name, mode, &parent, data);
+	if (!p)
+		return NULL;
+	p->proc_ops = proc_ops;
+	return proc_register(parent, p, key);
+}
+EXPORT_SYMBOL_GPL(proc_create_data_key);
  
 struct proc_dir_entry *proc_create(const char *name, umode_t mode,
 				   struct proc_dir_entry *parent,
@@ -793,13 +834,14 @@ struct proc_dir_entry *proc_create_seq_private(const char *name, umode_t mode,
 	p->seq_ops = ops;
 	p->state_size = state_size;
 	p->flags |= PROC_ENTRY_proc_seq_ops;
-	return proc_register(parent, p);
+	return proc_register(parent, p, NULL);
 }
 EXPORT_SYMBOL(proc_create_seq_private);
 
-struct proc_dir_entry *proc_create_single_data(const char *name, umode_t mode,
+struct proc_dir_entry *__proc_create_single_data(const char *name, umode_t mode,
 		struct proc_dir_entry *parent,
-		int (*show)(struct seq_file *, void *), void *data)
+		int (*show)(struct seq_file *, void *), void *data,
+		struct lock_class_key *key)
 {
 	struct proc_dir_entry *p;
 
@@ -809,9 +851,9 @@ struct proc_dir_entry *proc_create_single_data(const char *name, umode_t mode,
 	p->proc_ops = &proc_seq_ops;
 	p->single_show = show;
 	p->flags |= PROC_ENTRY_proc_show;
-	return proc_register(parent, p);
+	return proc_register(parent, p, key);
 }
-EXPORT_SYMBOL(proc_create_single_data);
+EXPORT_SYMBOL(__proc_create_single_data);
 
 void proc_set_size(struct proc_dir_entry *de, loff_t size)
 {

@@ -115,7 +115,7 @@ struct proc_dir_entry *proc_create_net_data(const char *name, umode_t mode,
 	p->seq_ops = ops;
 	p->state_size = state_size;
 	p->flags |= PROC_ENTRY_proc_seq_ops;
-	return proc_register(parent, p);
+	return proc_register(parent, p, NULL);
 }
 EXPORT_SYMBOL_GPL(proc_create_net_data);
 
@@ -162,7 +162,7 @@ struct proc_dir_entry *proc_create_net_data_write(const char *name, umode_t mode
 	p->state_size = state_size;
 	p->flags |= PROC_ENTRY_proc_seq_ops;
 	p->write = write;
-	return proc_register(parent, p);
+	return proc_register(parent, p, NULL);
 }
 EXPORT_SYMBOL_GPL(proc_create_net_data_write);
 
@@ -190,9 +190,10 @@ static const struct proc_ops proc_net_single_ops = {
 	.proc_release	= single_release_net,
 };
 
-struct proc_dir_entry *proc_create_net_single(const char *name, umode_t mode,
+struct proc_dir_entry *__proc_create_net_single(const char *name, umode_t mode,
 		struct proc_dir_entry *parent,
-		int (*show)(struct seq_file *, void *), void *data)
+		int (*show)(struct seq_file *, void *), void *data,
+		struct lock_class_key *key)
 {
 	struct proc_dir_entry *p;
 
@@ -203,18 +204,19 @@ struct proc_dir_entry *proc_create_net_single(const char *name, umode_t mode,
 	p->proc_ops = &proc_net_single_ops;
 	p->single_show = show;
 	p->flags |= PROC_ENTRY_proc_show;
-	return proc_register(parent, p);
+	return proc_register(parent, p, key);
 }
-EXPORT_SYMBOL_GPL(proc_create_net_single);
+EXPORT_SYMBOL_GPL(__proc_create_net_single);
 
 /**
- * proc_create_net_single_write - Create a writable net_ns-specific proc file
+ * __proc_create_net_single_write - Create a writable net_ns-specific proc file
  * @name: The name of the file.
  * @mode: The file's access mode.
  * @parent: The parent directory in which to create.
  * @show: The seqfile show method with which to read the file.
  * @write: The write method with which to 'modify' the file.
  * @data: Data for retrieval by pde_data().
+ * @key: The lockdep class of the entry's pin, see proc_create_net_single_write().
  *
  * Create a network-namespaced proc file in the @parent directory with the
  * specified @name and @mode that allows reading of a file that displays a
@@ -232,11 +234,12 @@ EXPORT_SYMBOL_GPL(proc_create_net_single);
  * pde_data() on the file inode.  The network namespace must be accessed by
  * calling seq_file_single_net() on the seq_file struct.
  */
-struct proc_dir_entry *proc_create_net_single_write(const char *name, umode_t mode,
-						    struct proc_dir_entry *parent,
-						    int (*show)(struct seq_file *, void *),
-						    proc_write_t write,
-						    void *data)
+struct proc_dir_entry *__proc_create_net_single_write(const char *name, umode_t mode,
+						      struct proc_dir_entry *parent,
+						      int (*show)(struct seq_file *, void *),
+						      proc_write_t write,
+						      void *data,
+						      struct lock_class_key *key)
 {
 	struct proc_dir_entry *p;
 
@@ -248,9 +251,9 @@ struct proc_dir_entry *proc_create_net_single_write(const char *name, umode_t mo
 	p->single_show = show;
 	p->flags |= PROC_ENTRY_proc_show;
 	p->write = write;
-	return proc_register(parent, p);
+	return proc_register(parent, p, key);
 }
-EXPORT_SYMBOL_GPL(proc_create_net_single_write);
+EXPORT_SYMBOL_GPL(__proc_create_net_single_write);
 
 static struct net *get_proc_task_net(struct inode *dir)
 {

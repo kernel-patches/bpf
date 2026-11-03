@@ -199,13 +199,24 @@ const struct super_operations proc_sops = {
 
 enum {BIAS = -1U<<31};
 
+/*
+ * To lockdep the pin is a read lock and proc_entry_rundown() takes the write
+ * side, see pde_lockdep_init(). So a method that takes a lock while pinned
+ * and a removal under that lock are the deadlock lockdep knows how to report.
+ */
 static inline int use_pde(struct proc_dir_entry *pde)
 {
-	return likely(atomic_inc_unless_negative(&pde->in_use));
+	if (unlikely(!atomic_inc_unless_negative(&pde->in_use)))
+		return 0;
+	if (pde_lockdep(pde))
+		rwsem_acquire_read(&pde->dep_map, 0, 1, _RET_IP_);
+	return 1;
 }
 
 static void unuse_pde(struct proc_dir_entry *pde)
 {
+	if (pde_lockdep(pde))
+		rwsem_release(&pde->dep_map, _RET_IP_);
 	if (unlikely(atomic_dec_return(&pde->in_use) == BIAS))
 		wake_up_var(&pde->in_use);
 }
@@ -362,9 +373,21 @@ static void close_pdeo(struct proc_dir_entry *pde, struct pde_opener *pdeo,
 
 void proc_entry_rundown(struct proc_dir_entry *de)
 {
-	/* Wait until all existing callers into module are done. */
-	if (atomic_add_return(BIAS, &de->in_use) != BIAS)
+	/*
+	 * Wait until all existing callers into module are done. That's the
+	 * write side of the pin to lockdep, see use_pde().
+	 */
+	if (pde_lockdep(de))
+		rwsem_acquire(&de->dep_map, 0, 0, _RET_IP_);
+	if (atomic_add_return(BIAS, &de->in_use) != BIAS) {
+		if (pde_lockdep(de))
+			lock_contended(&de->dep_map, _RET_IP_);
 		wait_var_event(&de->in_use, atomic_read_acquire(&de->in_use) == BIAS);
+	}
+	if (pde_lockdep(de)) {
+		lock_acquired(&de->dep_map, _RET_IP_);
+		rwsem_release(&de->dep_map, _RET_IP_);
+	}
 
 	/* ->open->files can't grow from now on. */
 	if (!de->open)

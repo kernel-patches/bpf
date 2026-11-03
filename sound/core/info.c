@@ -15,6 +15,7 @@
 #include <sound/info.h>
 #include <linux/utsname.h>
 #include <linux/proc_fs.h>
+#include <linux/lockdep.h>
 #include <linux/mutex.h>
 
 int snd_info_check_reserved_words(const char *str)
@@ -677,6 +678,8 @@ snd_info_create_entry(const char *name, struct snd_info_entry *parent,
 		kfree(entry);
 		return NULL;
 	}
+	/* one lockdep class per entry, the text entries share a proc_ops */
+	lockdep_register_key(&entry->lockdep_key);
 	entry->mode = S_IFREG | 0444;
 	entry->content = SNDRV_INFO_CONTENT_TEXT;
 	mutex_init(&entry->access);
@@ -785,6 +788,7 @@ void snd_info_free_entry(struct snd_info_entry * entry)
 	kfree(entry->name);
 	if (entry->private_free)
 		entry->private_free(entry);
+	lockdep_unregister_key(&entry->lockdep_key);
 	kfree(entry);
 }
 EXPORT_SYMBOL(snd_info_free_entry);
@@ -809,8 +813,8 @@ static int __snd_info_register(struct snd_info_entry *entry)
 			ops = &snd_info_entry_operations;
 		else
 			ops = &snd_info_text_entry_ops;
-		p = proc_create_data(entry->name, entry->mode, root,
-				     ops, entry);
+		p = proc_create_data_key(entry->name, entry->mode, root,
+					 ops, entry, &entry->lockdep_key);
 		if (!p)
 			return -ENOMEM;
 		proc_set_size(p, entry->size);

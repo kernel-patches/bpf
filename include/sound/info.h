@@ -8,6 +8,7 @@
  */
 
 #include <linux/poll.h>
+#include <linux/lockdep_types.h>
 #include <linux/seq_file.h>
 #include <sound/core.h>
 
@@ -71,6 +72,7 @@ struct snd_info_entry {
 	void *private_data;
 	void (*private_free)(struct snd_info_entry *entry);
 	struct proc_dir_entry *p;
+	struct lock_class_key lockdep_key;	/* lockdep class of @p's pin */
 	struct mutex access;
 	struct list_head children;
 	struct list_head list;

@@ -9,6 +9,7 @@
 #include <linux/proc_ns.h>
 #include <linux/refcount.h>
 #include <linux/spinlock.h>
+#include <linux/lockdep.h>
 #include <linux/atomic.h>
 #include <linux/binfmts.h>
 #include <linux/sched/coredump.h>
@@ -67,6 +68,9 @@ struct proc_dir_entry {
 	umode_t mode;
 	u16 flags;
 	u8 namelen;
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+	struct lockdep_map dep_map;	/* the pin as a lock, see use_pde() */
+#endif
 	char inline_name[];
 } __randomize_layout;
 
@@ -140,6 +144,16 @@ static inline bool pde_has_proc_ioctl_buf(const struct proc_dir_entry *pde)
 static inline bool pde_is_seq_file(const struct proc_dir_entry *pde)
 {
 	return pde_has_proc_seq_ops(pde) || pde_has_proc_show(pde);
+}
+
+/* Only regular files are pinned, and only their map is initialized. */
+static inline bool pde_lockdep(const struct proc_dir_entry *pde)
+{
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+	return S_ISREG(pde->mode);
+#else
+	return false;
+#endif
 }
 
 extern struct kmem_cache *proc_dir_entry_cache;
@@ -326,7 +340,8 @@ bool proc_fill_cache(struct file *, struct dir_context *, const char *, unsigned
 struct proc_dir_entry *proc_create_reg(const char *name, umode_t mode,
 		struct proc_dir_entry **parent, void *data);
 struct proc_dir_entry *proc_register(struct proc_dir_entry *dir,
-		struct proc_dir_entry *dp);
+		struct proc_dir_entry *dp,
+		struct lock_class_key *key);
 extern struct dentry *proc_lookup(struct inode *, struct dentry *, unsigned int);
 struct dentry *proc_lookup_de(struct inode *, struct dentry *, struct proc_dir_entry *);
 extern int proc_readdir(struct file *, struct dir_context *);
