@@ -86,7 +86,8 @@ extern unsigned long recover_probed_instruction(kprobe_opcode_t *buf,
  * Copy an instruction and adjust the displacement if the instruction
  * uses the %rip-relative addressing mode.
  */
-extern int __copy_instruction(u8 *dest, u8 *src, u8 *real, struct insn *insn);
+extern int __copy_instruction(u8 *dest, u8 *src, u8 *real, struct insn *insn,
+			      struct kprobe **kp);
 
 /* Generate a relative-jump/call instruction */
 extern void synthesize_reljump(void *dest, void *from, void *to);

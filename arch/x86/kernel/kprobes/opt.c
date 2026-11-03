@@ -201,14 +201,19 @@ NOKPROBE_SYMBOL(optimized_callback);
 
 static int copy_optimized_instructions(u8 *dest, u8 *src, u8 *real)
 {
+	struct kprobe_iter iter;
+	unsigned long addr;
+	struct kprobe *kp;
 	struct insn insn;
 	int len = 0, ret;
 
-	while (len < JMP32_INSN_SIZE) {
-		ret = __copy_instruction(dest + len, src + len, real + len, &insn);
+	addr = (unsigned long)src;
+	for_each_addr_kprobe(iter, kp, addr, (unsigned long)src + JMP32_INSN_SIZE - 1) {
+		ret = __copy_instruction(dest + len, src + len, real + len, &insn, &kp);
 		if (!ret || !can_boost(&insn, src + len))
 			return -EINVAL;
 		len += ret;
+		addr += ret;
 	}
 	/* Check whether the address range is reserved */
 	if (ftrace_text_reserved(src, src + len - 1) ||
