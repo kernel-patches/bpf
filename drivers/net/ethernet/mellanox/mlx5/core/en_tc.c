@@ -491,6 +491,8 @@ mlx5e_tc_rule_offload(struct mlx5e_priv *priv,
 		      struct mlx5_flow_attr *attr)
 {
 	struct mlx5_eswitch *esw = priv->mdev->priv.eswitch;
+	struct mlx5_flow_handle *rule;
+	bool meter_added = false;
 	int err;
 
 	if (!is_mdev_switchdev_mode(priv->mdev))
@@ -503,9 +505,14 @@ mlx5e_tc_rule_offload(struct mlx5e_priv *priv,
 		err = mlx5e_tc_add_flow_meter(priv, attr);
 		if (err)
 			return ERR_PTR(err);
+		meter_added = true;
 	}
 
-	return mlx5_eswitch_add_offloaded_rule(esw, spec, attr);
+	rule = mlx5_eswitch_add_offloaded_rule(esw, spec, attr);
+	if (IS_ERR(rule) && meter_added)
+		mlx5e_tc_del_flow_meter(esw, attr);
+
+	return rule;
 }
 
 void
