@@ -242,11 +242,11 @@ static void sd_stopN(struct gspca_dev *gspca_dev)
 #if IS_ENABLED(CONFIG_INPUT)
 	/* Don't keep the button in the pressed state "forever" if it was
 	   pressed when streaming is stopped */
-	if (sd->snapshot_pressed) {
+	if (sd->snapshot_pressed && gspca_dev->input_dev) {
 		input_report_key(gspca_dev->input_dev, KEY_CAMERA, 0);
 		input_sync(gspca_dev->input_dev);
-		sd->snapshot_pressed = 0;
 	}
+	sd->snapshot_pressed = 0;
 #endif
 }
 
