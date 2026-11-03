@@ -1349,14 +1349,6 @@ enum drm_mode_status dispc_vp_mode_valid(struct dispc_device *dispc,
 	struct tidss_device *tidss = dispc->tidss;
 	struct drm_device *dev = &tidss->ddev;
 	u32 hsw, hfp, hbp, vsw, vfp, vbp;
-	enum dispc_vp_bus_type bus_type;
-
-	bus_type = dispc->feat->vp_bus_type[hw_videoport];
-
-	if (WARN_ON(bus_type == DISPC_VP_TIED_OFF)) {
-		drm_dbg(dev, "Invalid bus type\n");
-		return MODE_BAD;
-	}
 
 	if (mode->hdisplay > 4096) {
 		drm_dbg(dev, "Number of active horizontal pixels above hardware limits\n");
