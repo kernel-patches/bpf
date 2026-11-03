@@ -510,14 +510,14 @@ static int pde_set_flags(struct proc_dir_entry *pde)
 
 /*
  * procfs has to know the open files of an entry whose ->proc_release() it
- * calls at removal. A permanent entry is never removed and skips all that,
- * see proc_reg_open().
+ * calls at removal and whose mappings it undoes then. A permanent entry is
+ * never removed and skips all that, see proc_reg_open().
  */
 static bool pde_needs_open_node(const struct proc_dir_entry *pde)
 {
 	if (!S_ISREG(pde->mode) || pde_is_permanent(pde))
 		return false;
-	return pde->proc_ops->proc_release;
+	return pde->proc_ops->proc_release || pde->proc_ops->proc_mmap;
 }
 
 /*

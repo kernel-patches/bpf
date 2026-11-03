@@ -312,7 +312,8 @@ static void pde_seq_release(struct proc_dir_entry *pde, struct inode *inode,
  *
  * PDE is locked on entry, unlocked on exit.
  */
-static void close_pdeo(struct proc_dir_entry *pde, struct pde_opener *pdeo)
+static void close_pdeo(struct proc_dir_entry *pde, struct pde_opener *pdeo,
+		       bool rundown)
 	__releases(&pde->pde_unload_lock)
 {
 	/*
@@ -336,7 +337,17 @@ static void close_pdeo(struct proc_dir_entry *pde, struct pde_opener *pdeo)
 		spin_unlock(&pde->pde_unload_lock);
 
 		file = pdeo->file;
-		pde->proc_ops->proc_release(file_inode(file), file);
+		/*
+		 * A mapping of a removed entry faults, see proc_vm_ops. Like
+		 * kernfs this unmaps the entry's own address space. A file
+		 * that maps through another one, /proc/bus/pci through the
+		 * iomem address space of /dev/mem, keeps its mappings like a
+		 * sysfs resource file does.
+		 */
+		if (rundown && pde->open->vm_ops)
+			unmap_mapping_range(file_inode(file)->i_mapping, 0, 0, 1);
+		if (pde->proc_ops->proc_release)
+			pde->proc_ops->proc_release(file_inode(file), file);
 
 		spin_lock(&pde->pde_unload_lock);
 		/* Strictly after ->proc_release, see above. */
@@ -362,7 +373,7 @@ void proc_entry_rundown(struct proc_dir_entry *de)
 	while (!list_empty(&de->open->files)) {
 		struct pde_opener *pdeo;
 		pdeo = list_first_entry(&de->open->files, struct pde_opener, lh);
-		close_pdeo(de, pdeo);
+		close_pdeo(de, pdeo, true);
 		spin_lock(&de->pde_unload_lock);
 	}
 	spin_unlock(&de->pde_unload_lock);
@@ -642,12 +653,106 @@ static long proc_reg_compat_ioctl(struct file *file, unsigned int cmd, unsigned 
 #define proc_reg_compat_ioctl NULL
 #endif
 
-static int pde_mmap(struct proc_dir_entry *pde, struct file *file, struct vm_area_struct *vma)
+/*
+ * The vm_operations of an entry's mappings run with the entry pinned, like
+ * the entry's file methods do, and a mapping of a removed entry faults.
+ * proc_entry_rundown() unmaps the mappings of every open file and a fault
+ * after that finds the entry gone. Like kernfs_vm_ops, and like there only
+ * these four methods of the entry's vm_operations are called.
+ */
+static void proc_vma_open(struct vm_area_struct *vma)
+{
+	struct proc_dir_entry *pde = PDE(file_inode(vma->vm_file));
+	const struct vm_operations_struct *vm_ops = pde->open->vm_ops;
+
+	if (!pde_pin(pde))
+		return;
+	if (vm_ops->open)
+		vm_ops->open(vma);
+	pde_unpin(pde);
+}
+
+static vm_fault_t proc_vma_fault(struct vm_fault *vmf)
+{
+	struct proc_dir_entry *pde = PDE(file_inode(vmf->vma->vm_file));
+	const struct vm_operations_struct *vm_ops = pde->open->vm_ops;
+	vm_fault_t ret = VM_FAULT_SIGBUS;
+
+	if (!pde_pin(pde))
+		return VM_FAULT_SIGBUS;
+	if (vm_ops->fault)
+		ret = vm_ops->fault(vmf);
+	pde_unpin(pde);
+	return ret;
+}
+
+static vm_fault_t proc_vma_page_mkwrite(struct vm_fault *vmf)
+{
+	struct proc_dir_entry *pde = PDE(file_inode(vmf->vma->vm_file));
+	const struct vm_operations_struct *vm_ops = pde->open->vm_ops;
+	vm_fault_t ret = 0;
+
+	if (!pde_pin(pde))
+		return VM_FAULT_SIGBUS;
+	if (vm_ops->page_mkwrite)
+		ret = vm_ops->page_mkwrite(vmf);
+	else
+		file_update_time(vmf->vma->vm_file);
+	pde_unpin(pde);
+	return ret;
+}
+
+static int proc_vma_access(struct vm_area_struct *vma, unsigned long addr,
+			   void *buf, int len, int write)
+{
+	struct proc_dir_entry *pde = PDE(file_inode(vma->vm_file));
+	const struct vm_operations_struct *vm_ops = pde->open->vm_ops;
+	int ret = -EINVAL;
+
+	if (!pde_pin(pde))
+		return -EINVAL;
+	if (vm_ops->access)
+		ret = vm_ops->access(vma, addr, buf, len, write);
+	pde_unpin(pde);
+	return ret;
+}
+
+static const struct vm_operations_struct proc_vm_ops = {
+	.open		= proc_vma_open,
+	.fault		= proc_vma_fault,
+	.page_mkwrite	= proc_vma_page_mkwrite,
+	.access		= proc_vma_access,
+};
+
+static int pde_mmap(struct proc_dir_entry *pde, struct file *file,
+		    struct vm_area_struct *vma)
 {
 	const auto mmap = pde->proc_ops->proc_mmap;
-	if (mmap)
-		return mmap(file, vma);
-	return -EIO;
+	struct pde_open_node *on = pde->open;
+	int rv;
+
+	if (!mmap)
+		return -EIO;
+	rv = mmap(file, vma);
+	if (rv || pde_is_permanent(pde))
+		return rv;
+	/* the entry mapped something else, that isn't ours to wrap */
+	if (vma->vm_file != file)
+		return 0;
+	/*
+	 * ->close() can't be wrapped, it runs when the mapping goes away and
+	 * that can be after the entry is gone, see close_pdeo().
+	 */
+	if (!vma->vm_ops || vma->vm_ops->close)
+		return -EINVAL;
+
+	/* every mapping of an entry uses the same vm_operations, see above */
+	guard(spinlock)(&pde->pde_unload_lock);
+	if (on->vm_ops && on->vm_ops != vma->vm_ops)
+		return -EINVAL;
+	on->vm_ops = vma->vm_ops;
+	vma->vm_ops = &proc_vm_ops;
+	return 0;
 }
 
 static int proc_reg_mmap(struct file *file, struct vm_area_struct *vma)
@@ -743,8 +848,9 @@ static int proc_reg_open(struct inode *inode, struct file *file)
 	 * 2) rmmod isn't blocked by opening file in /proc and sitting on
 	 *    the descriptor (including "rmmod foo </proc/foo" scenario).
 	 *
-	 * Save every "struct file" with custom ->release hook. Those entries
-	 * have an open node, see proc_register().
+	 * Save every "struct file" with custom ->release hook, and every
+	 * one that can be mapped, proc_entry_rundown() unmaps those. Those
+	 * entries have an open node, see proc_register().
 	 */
 	if (!use_pde(pde))
 		return -ENOENT;
@@ -794,7 +900,7 @@ static int proc_reg_release(struct inode *inode, struct file *file)
 	spin_lock(&pde->pde_unload_lock);
 	list_for_each_entry(pdeo, &pde->open->files, lh) {
 		if (pdeo->file == file) {
-			close_pdeo(pde, pdeo);
+			close_pdeo(pde, pdeo, false);
 			goto out;
 		}
 	}

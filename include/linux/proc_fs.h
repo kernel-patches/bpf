@@ -86,6 +86,21 @@ struct proc_ops {
 #ifdef CONFIG_COMPAT
 	long	(*proc_compat_ioctl)(struct file *, unsigned int, unsigned long);
 #endif
+	/*
+	 * procfs pins the entry around ->proc_mmap() and wraps the
+	 * vm_operations of the mapping so that ->open(), ->fault(),
+	 * ->page_mkwrite() and ->access() run with the entry pinned as well.
+	 * Nothing else of them is called, like for a kernfs file. Every
+	 * mapping of an entry has to use the same vm_operations. A ->close()
+	 * can't be wrapped, it runs when the mapping goes away and that can
+	 * be after the entry is gone, so a mapping that has one is refused.
+	 * Removing the entry unmaps the mappings in its own address space,
+	 * like kernfs does, and a fault into one of them is SIGBUS from then
+	 * on. A file that maps through another address space, /proc/bus/pci
+	 * through the one of /dev/mem, keeps its mappings like a sysfs
+	 * resource file does. The mappings of a permanent entry are left
+	 * alone.
+	 */
 	int	(*proc_mmap)(struct file *, struct vm_area_struct *);
 	unsigned long (*proc_get_unmapped_area)(struct file *, unsigned long, unsigned long, unsigned long, unsigned long);
 	/*

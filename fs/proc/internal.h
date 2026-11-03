@@ -381,12 +381,15 @@ struct pde_opener {
 } __randomize_layout;
 
 /*
- * The open files of an entry whose ->proc_release() procfs has to call when
- * the entry is removed while they are still open. Allocated with the entry,
- * see proc_register().
+ * The open files of an entry whose ->proc_release() procfs has to call and
+ * whose mappings it has to undo when the entry is removed while they are
+ * still open, that is of an entry with a ->proc_release() or a
+ * ->proc_mmap(). Allocated with the entry, see proc_register().
  */
 struct pde_open_node {
 	struct list_head files;		/* who did ->open, but not ->release */
+	/* of its mappings, the same for all of them, see pde_mmap() */
+	const struct vm_operations_struct *vm_ops;
 };
 extern const struct inode_operations proc_link_inode_operations;
 extern const struct inode_operations proc_pid_link_inode_operations;
