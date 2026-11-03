@@ -6764,6 +6764,7 @@ void tcp_init_transfer(struct sock *sk, int bpf_op, struct sk_buff *skb)
 	struct tcp_sock *tp = tcp_sk(sk);
 
 	tcp_mtup_init(sk);
+	tcp_sync_mss(sk, icsk->icsk_pmtu_cookie);
 	icsk->icsk_af_ops->rebuild_header(sk);
 	tcp_init_metrics(sk);
 
