@@ -546,9 +546,10 @@ static __poll_t proc_reg_poll(struct file *file, struct poll_table_struct *pts)
 
 	if (!pde_has_proc_poll(pde))
 		return DEFAULT_POLLMASK;
+	poll_wait(file, &pde->open->poll, pts);
 	if (!pde_pin(pde))
 		return DEFAULT_POLLMASK | EPOLLERR | EPOLLPRI;
-	rv = pde->proc_ops->proc_poll(file, pts);
+	rv = pde->proc_ops->proc_poll(file);
 	pde_unpin(pde);
 	return rv;
 }
@@ -570,26 +571,6 @@ void proc_poll_notify(struct proc_dir_entry *pde)
 	wake_up_interruptible_all(&pde->open->poll);
 }
 EXPORT_SYMBOL_GPL(proc_poll_notify);
-
-/**
- * pde_poll_wait - sleep a poller on the wait queue procfs owns for an entry
- * @file: the file ->proc_poll() was called with
- * @pts: the poll_table ->proc_poll() was called with
- *
- * For a ->proc_poll() whose owner wakes the pollers with proc_poll_notify().
- * procfs doesn't do this for every entry yet: one that still sleeps its
- * pollers on a queue of its own would be on two queues for one poll then,
- * and Linux AIO supports one queue per file, see aio_poll_queue_proc(). Once
- * every entry sleeps on the procfs queue the poll_wait() moves into
- * proc_reg_poll().
- */
-void pde_poll_wait(struct file *file, struct poll_table_struct *pts)
-{
-	struct proc_dir_entry *pde = PDE(file_inode(file));
-
-	poll_wait(file, &pde->open->poll, pts);
-}
-EXPORT_SYMBOL_GPL(pde_poll_wait);
 
 /* the table lives in proc_ops, which goes away with the entry */
 static bool pde_ioctl_arg(struct proc_dir_entry *pde, unsigned int cmd,

@@ -1471,3 +1471,12 @@ userspace. Larger reads come up short unless the entry asks for
 PROC_ENTRY_FULL_READS. seq_file entries are read by procfs itself, see
 proc_create_seq() and friends. An initializer that still names
 ->proc_read fails to build, seq_read() included.
+
+---
+
+**mandatory**
+
+->proc_poll() takes the file only. procfs owns a wait queue for the
+entry and does the poll_wait() on it before it calls the method, which
+only reports the mask. Wake the pollers with proc_poll_notify(). A poll
+on a removed entry reports EPOLLERR | EPOLLPRI.

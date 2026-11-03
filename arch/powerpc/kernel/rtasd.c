@@ -343,9 +343,8 @@ out:
 	return error;
 }
 
-static __poll_t rtas_log_poll(struct file *file, poll_table * wait)
+static __poll_t rtas_log_poll(struct file *file)
 {
-	pde_poll_wait(file, wait);
 	if (rtas_log_size)
 		return EPOLLIN | EPOLLRDNORM;
 	return 0;

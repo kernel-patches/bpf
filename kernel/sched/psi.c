@@ -1606,12 +1606,11 @@ static ssize_t psi_cpu_write(struct file *file, char *buf, size_t nbytes,
 	return psi_write(file, buf, nbytes, PSI_CPU);
 }
 
-static __poll_t psi_fop_poll(struct file *file, poll_table *wait)
+static __poll_t psi_fop_poll(struct file *file)
 {
 	struct seq_file *seq = file->private_data;
 
-	pde_poll_wait(file, wait);
-	return psi_trigger_poll(&seq->private, wait);
+	return psi_trigger_poll(&seq->private, NULL);
 }
 
 static int psi_fop_release(struct inode *inode, struct file *file)
