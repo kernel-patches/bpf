@@ -182,4 +182,5 @@ const struct pvr_fw_defs pvr_fw_defs_riscv = {
 	.irq_pending = pvr_riscv_irq_pending,
 	.irq_clear = pvr_riscv_irq_clear,
 	.has_fixed_data_addr = false,
+	.multi_dm_thread_assoc = false,
 };

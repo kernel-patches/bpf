@@ -185,12 +185,38 @@ struct pvr_fw_defs {
 	void (*irq_clear)(struct pvr_device *pvr_dev);
 
 	/**
+	 * @must_wait_fw_idle: Check if the FW stop sequence should wait for hardware
+	 *                     to report FW idle before proceeding.
+	 *
+	 * @pvr_dev: Target PowerVR device.
+	 * @wait[out]: Whether the FW stop sequence should wait for FW idle.
+	 *
+	 * This function is optional. The assumption is that we must always wait
+	 * for the firmware to reach idle; implement this function and return
+	 * %false to alter this behavior.
+	 *
+	 * Returns:
+	 *  * 0 on success.
+	 *  * Any appropriate error on failure.
+	 */
+	int (*must_wait_fw_idle)(struct pvr_device *pvr_dev, bool *wait);
+
+	/**
 	 * @has_fixed_data_addr: Specify whether the firmware fixed data must be loaded at the
 	 *                       address given by the firmware layout table.
 	 *
 	 * This value is mandatory.
 	 */
 	bool has_fixed_data_addr;
+
+	/**
+	 * @multi_dm_thread_assoc: Specify that all threads must be associated
+	 *                         with the DM separately rather than just the
+	 *                         first thread (the default behaviour).
+	 *
+	 * This value is mandatory.
+	 */
+	bool multi_dm_thread_assoc;
 };
 
 /**

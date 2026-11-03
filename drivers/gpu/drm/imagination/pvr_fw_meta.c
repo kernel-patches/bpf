@@ -4,10 +4,11 @@
 #include "pvr_device.h"
 #include "pvr_fw.h"
 #include "pvr_fw_info.h"
-#include "pvr_fw_meta.h"
 #include "pvr_gem.h"
 #include "pvr_rogue_cr_defs.h"
-#include "pvr_rogue_meta.h"
+#define PVR_ROGUE_META_INTERNAL_H_EXPLICIT_INCLUDE
+#include "pvr_rogue_meta_internal.h"
+#undef PVR_ROGUE_META_INTERNAL_H_EXPLICIT_INCLUDE
 #include "pvr_vm.h"
 
 #include <linux/compiler.h>
@@ -32,7 +33,7 @@
  *  * 0 on success, or
  *  * Any error returned by pvr_cr_poll_reg32().
  */
-int
+static int
 pvr_meta_cr_read32(struct pvr_device *pvr_dev, u32 reg_addr, u32 *reg_value_out)
 {
 	int err;
@@ -562,6 +563,25 @@ pvr_meta_irq_clear(struct pvr_device *pvr_dev)
 		       ROGUE_CR_META_SP_MSLVIRQSTATUS_TRIGVECT2_CLRMSK);
 }
 
+static int
+pvr_meta_must_wait_fw_idle(struct pvr_device *pvr_dev, bool *wait)
+{
+	u32 reg_value;
+	int err;
+
+	err = pvr_meta_cr_read32(pvr_dev, META_CR_TxVECINT_BHALT, &reg_value);
+	if (err)
+		return err;
+
+	/*
+	 * Wait for Sidekick/Jones to signal IDLE including the Garten
+	 * Wrapper if there is no debugger attached (TxVECINT_BHALT = 0x0).
+	 */
+	*wait = !reg_value;
+
+	return 0;
+}
+
 const struct pvr_fw_defs pvr_fw_defs_meta = {
 	.init = pvr_meta_init,
 	.fini = pvr_meta_fini,
@@ -572,5 +592,7 @@ const struct pvr_fw_defs pvr_fw_defs_meta = {
 	.wrapper_init = pvr_meta_wrapper_init,
 	.irq_pending = pvr_meta_irq_pending,
 	.irq_clear = pvr_meta_irq_clear,
+	.must_wait_fw_idle = pvr_meta_must_wait_fw_idle,
 	.has_fixed_data_addr = false,
+	.multi_dm_thread_assoc = true,
 };

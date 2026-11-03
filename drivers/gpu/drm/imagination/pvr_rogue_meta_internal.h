@@ -1,8 +1,12 @@
 /* SPDX-License-Identifier: GPL-2.0-only OR MIT */
 /* Copyright (c) 2023 Imagination Technologies Ltd. */
 
-#ifndef PVR_ROGUE_META_H
-#define PVR_ROGUE_META_H
+#ifndef PVR_ROGUE_META_INTERNAL_H
+#define PVR_ROGUE_META_INTERNAL_H
+
+#ifndef PVR_ROGUE_META_INTERNAL_H_EXPLICIT_INCLUDE
+#error This file may only be included if explicitly defined
+#endif
 
 /***** The META HW register definitions in the file are updated manually *****/
 
@@ -353,4 +357,4 @@ struct rogue_meta_ldr_cfg_blk {
 
 #define ROGUE_FW_PROCESSOR_META "META"
 
-#endif /* PVR_ROGUE_META_H */
+#endif /* PVR_ROGUE_META_INTERNAL_H */
