@@ -1185,13 +1185,17 @@ void pse_controller_unregister(struct pse_controller_dev *pcdev)
 	 */
 	if (pcdev->irq)
 		disable_irq(pcdev->irq);
+	/* Unlink before tearing down: of_pse_control_get() walks the list
+	 * and reads pcdev->pi[], and must not hand out a new control for a
+	 * controller that is going away.
+	 */
+	mutex_lock(&pse_list_mutex);
+	list_del(&pcdev->list);
+	mutex_unlock(&pse_list_mutex);
 	cancel_work_sync(&pcdev->ntf_work);
 	pse_flush_pw_ds(pcdev);
 	pse_release_pis(pcdev);
 	kfifo_free(&pcdev->ntf_fifo);
-	mutex_lock(&pse_list_mutex);
-	list_del(&pcdev->list);
-	mutex_unlock(&pse_list_mutex);
 }
 EXPORT_SYMBOL_GPL(pse_controller_unregister);
 
