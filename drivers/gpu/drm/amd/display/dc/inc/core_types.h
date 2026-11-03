@@ -42,6 +42,7 @@
 #include "panel_cntl.h"
 #include "dmub/inc/dmub_cmd.h"
 #include "bls_builder/bls_builder_legacy_init.h"
+#include "bls_builder/bls_builder.h"
 #include "pg_cntl.h"
 #include "sspl/dc_spl.h"
 
@@ -730,6 +731,8 @@ struct dc_state {
 	 * outputs of each stage run so far
 	 */
 	struct bls_builder_legacy_hw_init_info hw_init_info;
+
+	struct bls_builder_initialization bls_builder_initialization;
 };
 
 struct replay_context {

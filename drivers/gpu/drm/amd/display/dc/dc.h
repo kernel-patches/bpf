@@ -1414,6 +1414,7 @@ struct dc_init_data {
 	uint32_t *clk_reg_offsets;
 	void *bb_from_dmub;
 	enum dc2_selection dc2_selection;
+	enum dc2_init_method dc2_init_method;
 };
 
 struct dc_callback_init {

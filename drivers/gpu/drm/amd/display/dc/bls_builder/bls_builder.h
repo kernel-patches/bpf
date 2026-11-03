@@ -11,6 +11,7 @@
 #include "hwss/hw_sequencer.h"
 #include "bls_builder/dmub_abi.h"
 #include "bls_builder/bls_builder_legacy_init.h"
+#include "pmfw_messenger/pmfw_messenger.h"
 
 #define DC2_BLS_MAX_STEPS 192
 
@@ -18,7 +19,6 @@ enum bls_builder_result {
 	BLS_BUILD_SUCCESS,
 	BLS_BUILD_ERROR_UNSUPPORTED_STATE_UPDATE,
 	BLS_BUILD_ERROR_RESOURCE_MAPPING,
-	BLS_BUILD_ERROR_DMUB_ABI_UNRESOLVED,
 };
 
 enum bls_builder_name {
@@ -35,22 +35,59 @@ enum bls_builder_kind {
 	BLS_BUILDER_IMPERATIVE,
 };
 
-struct bls_builder_output_init {
+#define BLS_BUILDER_INIT_MAX_STAGE_COUNT 4
+
+struct bls_builder_dpm {
+	uint32_t num_levels;
+	uint32_t dpm_level[PMFW_MAX_NUM_DPM_LVL];
+	uint32_t dc_mode_max;
+};
+
+struct bls_builder_dpm_levels {
+	uint32_t levels[PMFW_MAX_NUM_DPM_LVL];
+};
+
+struct dcn401_bls_builder_initialization_stage_1 {
+	unsigned int xtalin_clock_inKhz;
+	unsigned int dccg_ref_clock_inKhz;
+	struct dmub_feature_caps feature_caps;
+	uint32_t smu_version;
+	uint32_t num_umc_channels;
+	uint32_t dpm_level_count[PMFW_CLOCK_COUNT];
+	int32_t dc_mode_max[PMFW_CLOCK_COUNT];
+};
+
+struct dcn401_bls_builder_initialization_stage_2 {
+	unsigned int dchub_ref_clock_inKhz;
+	struct bls_builder_dpm_levels dpm_levels[PMFW_CLOCK_COUNT];
+};
+
+struct bls_builder_initialization_output {
+	struct dmub_abi dmub_abi;
+	uint32_t smu_version;
+	uint32_t num_umc_channels;
 	unsigned int xtalin_clock_inKhz;
 	unsigned int dccg_ref_clock_inKhz;
 	unsigned int dchub_ref_clock_inKhz;
-	unsigned int dchub_ref_clock_inKhz_before;
-	unsigned int backlight;
-	bool dcmode_power_limits_present;
-	unsigned int dmub_stop_fw_response;
-	struct dmub_abi dmub_abi;
-	union dmub_rb_cmd dmub_query_feature_caps_cmd;
-	union dmub_rb_cmd dmub_initialize_dcn_cmd;
+	struct bls_builder_dpm dpm_clocks[PMFW_CLOCK_COUNT];
+};
+
+struct dcn401_bls_builder_initialization_stages {
+	struct dcn401_bls_builder_initialization_stage_1 stage_1;
+	struct dcn401_bls_builder_initialization_stage_2 stage_2;
+};
+
+struct bls_builder_initialization {
+	uint32_t stage;
+	union {
+		struct dcn401_bls_builder_initialization_stages dcn401_stages;
+	};
+	struct bls_builder_initialization_output output;
 };
 
 struct bls_builder_output_targets {
 	union {
-		struct bls_builder_output_init *DCN_DECL_INITIALIZATION;
+		struct bls_builder_initialization *DCN_DECL_INITIALIZATION;
 		struct bls_builder_legacy_hw_init_info *DCN_DECL_INITIALIZATION_LEGACY;
 		bool *DCN_DECL_QUERY_ACCELERATED_MODE;
 	};
@@ -66,16 +103,6 @@ struct bls_builder_declarative_params {
 	struct dc *dc;
 	const struct dc_state *current_state;
 	const struct dc_state *new_state;
-	const struct dmub_abi *dmub_abi;
-	const struct dmub_srv_hw_params *dmub_hw_params;
-	/*
-	 * Filled when the caller does not pass dmub_hw_params and dmub_srv
-	 * already retained framebuffer windows. fb_info on dmub_srv is
-	 * const, so the window table is copied here before the PSP entry
-	 * points at owned_dmub_hw_params.
-	 */
-	struct dmub_srv_hw_params owned_dmub_hw_params;
-	struct dmub_srv_fb_info owned_dmub_fb_info;
 	struct bls_builder_output_targets *out_targets;
 	struct block_sequence head_sequence[DC2_BLS_MAX_STEPS];
 	unsigned int head_num_steps;
@@ -89,6 +116,8 @@ typedef bool (*bls_builder_check_capability)(
 typedef enum bls_builder_result (*bls_builder_build_declarative)(
 		struct bls_builder_declarative_params *params);
 
+typedef void (*bls_builder_postprocess)(struct bls_builder_declarative_params *params);
+
 struct bls_builder {
 	enum bls_builder_name name;
 	enum bls_builder_kind kind;
@@ -96,6 +125,7 @@ struct bls_builder {
 	union {
 		bls_builder_build_declarative declarative;
 	} build;
+	bls_builder_postprocess postprocess;
 };
 
 const struct bls_builder *bls_builder_create(struct dc *dc,

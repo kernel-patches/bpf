@@ -46,6 +46,8 @@ void core2_construct(struct dc *dc)
 
 	for (name = 0; name < BLS_BUILDER_NAME_COUNT; name++)
 		dc2->builders[name] = bls_builder_create(dc, name);
+
+	pmfw_messenger_construct(&dc2->pmfw_messenger, dc->ctx);
 }
 
 void core2_destruct(struct dc *dc)

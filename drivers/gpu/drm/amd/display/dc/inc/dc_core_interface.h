@@ -21,6 +21,12 @@ enum dc2_selection {
 	DC2_SELECTION_CORE2,
 };
 
+/* Temporary: picks the CORE2 hardware init flow for bring-up testing. */
+enum dc2_init_method {
+	DC2_INIT_METHOD_LEGACY = 0,
+	DC2_INIT_METHOD_WRAPPED,
+};
+
 enum dc2_hw_ownership {
 	DC2_HW_OWNERSHIP_RELEASED = 0,
 	DC2_HW_OWNERSHIP_OWNED,

@@ -38,6 +38,7 @@
 #include "link_service_types.h"
 #include "dmub/inc/dmub_cmd.h"
 #include "dc_dmub_srv.h"
+#include "pmfw_messenger/pmfw_messenger.h"
 
 struct pipe_ctx;
 struct dc_state;
@@ -143,6 +144,13 @@ struct program_manual_trigger_params {
 struct send_dmcub_cmd_params {
 	struct dc_context *ctx;
 	union dmub_rb_cmd *cmd;
+	enum dm_dmub_wait_type wait_type;
+	bool continue_on_error;
+};
+
+struct send_dmcub_cmd2_params {
+	struct dc_context *ctx;
+	union dmub_rb_cmd cmd;
 	enum dm_dmub_wait_type wait_type;
 	bool continue_on_error;
 };
@@ -1350,6 +1358,12 @@ struct dccg_initialize_clocks_params {
 	struct dccg *dccg;
 };
 
+struct pmfw_send_and_wait_params {
+	struct pmfw_message message;
+	struct pmfw_response response;
+	bool continue_on_error;
+};
+
 struct hubbub_program_watermarks_params {
 	struct hubbub *hubbub;
 	/* Workaround: watermarks by value would add ~160 B to every step (~158 KiB per dc_state).
@@ -1398,6 +1412,7 @@ union block_sequence_params {
 	struct update_info_frame_params update_info_frame_params;
 	struct program_manual_trigger_params program_manual_trigger_params;
 	struct send_dmcub_cmd_params send_dmcub_cmd_params;
+	struct send_dmcub_cmd2_params send_dmcub_cmd2_params;
 	struct lsdma_send_pio_copy_params lsdma_send_pio_copy_params;
 	struct setup_dpp_params setup_dpp_params;
 	struct program_bias_and_scale_params program_bias_and_scale_params;
@@ -1634,6 +1649,7 @@ union block_sequence_params {
 	struct hubp_program_3dlut_fl_config_params
 			hubp_program_3dlut_fl_config_params;
 	struct hubp_set_3dlut_fl_params hubp_set_3dlut_fl_params;
+	struct pmfw_send_and_wait_params pmfw_send_and_wait_params;
 };
 
 enum block_sequence_func {
@@ -1811,7 +1827,6 @@ enum block_sequence_func {
 	DMUB_GPINT_SEND_AND_WAIT,
 	DMUB_HALT_FW,
 	PSP_RELOAD_DMUB_FW,
-	DMUB_INITIALIZE_DCN,
 	OPTC_SET_ODM_MEM_POWER,
 	MMHUBBUB_SET_MEM_POWER,
 	DCCG_GET_REF_FREQ,
@@ -1879,6 +1894,8 @@ enum block_sequence_func {
 	DPP_PROGRAM_GAMCOR_LUT,
 	HUBP_PROGRAM_3DLUT_FL_CONFIG,
 	HUBP_SET_3DLUT_FL,
+	PMFW_SEND_MESSAGE_AND_WAIT,
+	DMUB_SEND_DMCUB_CMD2,
 	/* This must be the last value in this enum, add new ones above */
 	HWSS_BLOCK_SEQUENCE_FUNC_COUNT
 };

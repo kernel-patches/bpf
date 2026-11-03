@@ -14,6 +14,7 @@ void api_shim_construct(struct dc *dc, const struct dc_init_data *init_params)
 {
 	/* DM override today; ASIC allow-list later. Owned only by this shim. */
 	TO_DC2(dc)->selection = init_params->dc2_selection;
+	TO_DC2(dc)->init_method = init_params->dc2_init_method;
 }
 
 void dc_hardware_init(struct dc *dc)

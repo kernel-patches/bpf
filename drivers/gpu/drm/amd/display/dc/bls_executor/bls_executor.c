@@ -66,6 +66,16 @@ static noinline_for_stack bool dc2_bls_step_supported(const struct dc2 *dc2,
 		ctx = step->params.send_dmcub_cmd_params.ctx;
 		if (!ctx || !ctx->dmub_srv || !ctx->dmub_srv->dmub ||
 				!step->params.send_dmcub_cmd_params.cmd ||
+				!step->params.send_dmcub_cmd_params.cmd->cmd_common
+				.header.type ||
+				(ctx->dmub_srv->idle_allowed && !ctx->dc))
+			return false;
+		return true;
+	case DMUB_SEND_DMCUB_CMD2:
+		ctx = step->params.send_dmcub_cmd2_params.ctx;
+		if (!ctx || !ctx->dmub_srv || !ctx->dmub_srv->dmub ||
+				!step->params.send_dmcub_cmd2_params.cmd.cmd_common
+				.header.type ||
 				(ctx->dmub_srv->idle_allowed && !ctx->dc))
 			return false;
 		return true;
@@ -89,15 +99,6 @@ static noinline_for_stack bool dc2_bls_step_supported(const struct dc2 *dc2,
 				hw_params && hw_params->fb_info &&
 				hw_params->fb_info->num_fb >= DMUB_WINDOW_TOTAL;
 	}
-	case DMUB_INITIALIZE_DCN:
-		ctx = step->params.send_dmcub_cmd_params.ctx;
-		if (!ctx || !ctx->dmub_srv || !ctx->dmub_srv->dmub ||
-				!step->params.send_dmcub_cmd_params.cmd ||
-				!step->params.send_dmcub_cmd_params.cmd->cmd_common
-				.header.type ||
-				(ctx->dmub_srv->idle_allowed && !ctx->dc))
-			return false;
-		return true;
 	case OPTC_SET_ODM_MEM_POWER: {
 		struct dce_hwseq *hws = step->params.hwseq_reg_control_params.hws;
 
@@ -638,6 +639,11 @@ static noinline_for_stack bool dc2_bls_step_supported(const struct dc2 *dc2,
 	case MPC_SET_OUTPUT_GAMMA:
 		mpc = step->params.mpc_set_output_gamma_params.mpc;
 		return mpc && mpc->funcs && mpc->funcs->set_output_gamma;
+	case PMFW_SEND_MESSAGE_AND_WAIT:
+		return dc2 && dc2->pmfw_messenger.funcs &&
+				dc2->pmfw_messenger.funcs->send_message_and_wait &&
+				step->params.pmfw_send_and_wait_params.message
+				.param_count <= PMFW_MESSENGER_MAX_MESSAGE_PARAMS;
 	default:
 		return false;
 	}
@@ -662,27 +668,54 @@ static noinline_for_stack void dc2_bls_exec_initialize_min_clocks(
 }
 
 static noinline_for_stack enum dc2_bls_exec_result dc2_bls_exec_dmub_send(
-		const struct block_sequence *entry)
+		struct block_sequence *entry)
 {
 	struct dmub_messenger messenger;
 	struct dmub_messenger_init_data init_data;
 	struct dmub_send_cmd_params params;
 	struct dc_context *ctx;
+	bool continue_on_error;
 
-	ctx = entry->params.send_dmcub_cmd_params.ctx;
+	if (entry->func == DMUB_SEND_DMCUB_CMD2) {
+		struct send_dmcub_cmd2_params *send = &entry->params.send_dmcub_cmd2_params;
+
+		ctx = send->ctx;
+		params.cmd = &send->cmd;
+		params.wait_type = send->wait_type;
+		continue_on_error = send->continue_on_error;
+	} else {
+		struct send_dmcub_cmd_params *send = &entry->params.send_dmcub_cmd_params;
+
+		ctx = send->ctx;
+		params.cmd = send->cmd;
+		params.wait_type = send->wait_type;
+		continue_on_error = send->continue_on_error;
+	}
 	init_data.ctx = ctx;
 	init_data.dc_dmub_srv = ctx->dmub_srv;
-	params.cmd = entry->params.send_dmcub_cmd_params.cmd;
-	params.wait_type = entry->params.send_dmcub_cmd_params.wait_type;
 
 	dmub_messenger_construct(&messenger, &init_data);
 	if (messenger.funcs->inbox_cmd_send_and_wait(&messenger, &params) !=
 			DMUB_MSG_OK)
-		return entry->params.send_dmcub_cmd_params.continue_on_error ?
+		return continue_on_error ?
 				DC2_BLS_EXEC_CONTINUED_ON_ERROR :
 				DC2_BLS_EXEC_ERROR;
 
 	return DC2_BLS_EXEC_OK;
+}
+
+static noinline_for_stack enum dc2_bls_exec_result dc2_bls_exec_pmfw_send_and_wait(
+		struct dc2 *dc2, struct block_sequence *entry)
+{
+	struct pmfw_send_and_wait_params *p = &entry->params.pmfw_send_and_wait_params;
+	struct pmfw_messenger *messenger = &dc2->pmfw_messenger;
+
+	if (messenger->funcs->send_message_and_wait(messenger, p->message,
+			&p->response) == PMFW_MSG_OK)
+		return DC2_BLS_EXEC_OK;
+
+	return p->continue_on_error ? DC2_BLS_EXEC_CONTINUED_ON_ERROR :
+			DC2_BLS_EXEC_ERROR;
 }
 
 static noinline_for_stack enum dc2_bls_exec_result dc2_bls_exec_dmub_gpint(
@@ -776,11 +809,11 @@ static noinline_for_stack void dc2_bls_program_surface_config(
 
 enum dc2_bls_exec_result dc2_bls_execute(
 		struct dc2 *dc2,
-		const struct block_sequence *steps,
+		struct block_sequence *steps,
 		unsigned int num_steps)
 {
 	enum dc2_bls_exec_result result = DC2_BLS_EXEC_OK;
-	const struct block_sequence *entry;
+	struct block_sequence *entry;
 	enum dc2_bls_exec_result sent;
 	struct timing_generator *tg;
 	struct output_pixel_processor *opp;
@@ -826,6 +859,7 @@ enum dc2_bls_exec_result dc2_bls_execute(
 					entry->params.dccg_initialize_clocks_params.dccg);
 			break;
 		case DMUB_SEND_DMCUB_CMD:
+		case DMUB_SEND_DMCUB_CMD2:
 			sent = dc2_bls_exec_dmub_send(entry);
 			if (sent == DC2_BLS_EXEC_ERROR)
 				return DC2_BLS_EXEC_ERROR;
@@ -842,10 +876,6 @@ enum dc2_bls_exec_result dc2_bls_execute(
 					entry->params.psp_reload_dmub_fw_params.dmub,
 					entry->params.psp_reload_dmub_fw_params.hw_params) !=
 					DMUB_STATUS_OK)
-				return DC2_BLS_EXEC_ERROR;
-			break;
-		case DMUB_INITIALIZE_DCN:
-			if (dc2_bls_exec_dmub_send(entry) != DC2_BLS_EXEC_OK)
 				return DC2_BLS_EXEC_ERROR;
 			break;
 		/*
@@ -1769,6 +1799,13 @@ enum dc2_bls_exec_result dc2_bls_execute(
 					p->params);
 			break;
 		}
+		case PMFW_SEND_MESSAGE_AND_WAIT:
+			sent = dc2_bls_exec_pmfw_send_and_wait(dc2, entry);
+			if (sent == DC2_BLS_EXEC_ERROR)
+				return DC2_BLS_EXEC_ERROR;
+			if (sent == DC2_BLS_EXEC_CONTINUED_ON_ERROR)
+				result = DC2_BLS_EXEC_CONTINUED_ON_ERROR;
+			break;
 		default:
 			ASSERT(false);
 			return DC2_BLS_EXEC_ERROR;
