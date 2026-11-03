@@ -6,9 +6,9 @@
 #include "pvr_device.h"
 #include "pvr_drv.h"
 #include "pvr_gem.h"
+#include "pvr_heap_config.h"
 #include "pvr_mmu.h"
 #include "pvr_rogue_fwif.h"
-#include "pvr_rogue_heap_config.h"
 
 #include <drm/drm_exec.h>
 #include <drm/drm_gem.h>
@@ -933,20 +933,20 @@ static const struct drm_pvr_static_data_area static_data_areas[] = {
  */
 static const struct drm_pvr_heap pvr_heaps[] = {
 	[DRM_PVR_HEAP_GENERAL] = {
-		.base = ROGUE_GENERAL_HEAP_BASE,
-		.size = ROGUE_GENERAL_HEAP_SIZE,
+		.base = PVR_GENERAL_HEAP_BASE,
+		.size = PVR_GENERAL_HEAP_SIZE,
 		.flags = 0,
 		.page_size_log2 = PVR_DEVICE_PAGE_SHIFT,
 	},
 	[DRM_PVR_HEAP_PDS_CODE_DATA] = {
-		.base = ROGUE_PDSCODEDATA_HEAP_BASE,
-		.size = ROGUE_PDSCODEDATA_HEAP_SIZE,
+		.base = PVR_PDSCODEDATA_HEAP_BASE,
+		.size = PVR_PDSCODEDATA_HEAP_SIZE,
 		.flags = 0,
 		.page_size_log2 = PVR_DEVICE_PAGE_SHIFT,
 	},
 	[DRM_PVR_HEAP_USC_CODE] = {
-		.base = ROGUE_USCCODE_HEAP_BASE,
-		.size = ROGUE_USCCODE_HEAP_SIZE,
+		.base = PVR_USCCODE_HEAP_BASE,
+		.size = PVR_USCCODE_HEAP_SIZE,
 		.flags = 0,
 		.page_size_log2 = PVR_DEVICE_PAGE_SHIFT,
 	},
@@ -957,8 +957,8 @@ static const struct drm_pvr_heap pvr_heaps[] = {
 		.page_size_log2 = PVR_DEVICE_PAGE_SHIFT,
 	},
 	[DRM_PVR_HEAP_VIS_TEST] = {
-		.base = ROGUE_VISTEST_HEAP_BASE,
-		.size = ROGUE_VISTEST_HEAP_SIZE,
+		.base = PVR_VISTEST_HEAP_BASE,
+		.size = PVR_VISTEST_HEAP_SIZE,
 		.flags = 0,
 		.page_size_log2 = PVR_DEVICE_PAGE_SHIFT,
 	},

@@ -4,7 +4,7 @@
 #ifndef PVR_GEM_H
 #define PVR_GEM_H
 
-#include "pvr_rogue_heap_config.h"
+#include "pvr_heap_config.h"
 #include "pvr_rogue_meta.h"
 
 #include <uapi/drm/pvr_drm.h>

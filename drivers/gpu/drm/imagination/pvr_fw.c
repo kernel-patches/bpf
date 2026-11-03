@@ -10,9 +10,8 @@
 #include "pvr_fw_startstop.h"
 #include "pvr_fw_trace.h"
 #include "pvr_gem.h"
+#include "pvr_heap_config.h"
 #include "pvr_power.h"
-#include "pvr_rogue_fwif_dev_info.h"
-#include "pvr_rogue_heap_config.h"
 #include "pvr_vm.h"
 
 #include <drm/drm_drv.h>
@@ -342,8 +341,8 @@ fw_sysinit_init(void *cpu_ptr, void *priv)
 	WARN_ON(pvr_fw_object_get_dma_addr(fw_mem->fault_page_obj, 0, &fault_dma_addr));
 	fwif_sysinit->fault_phys_addr = (u64)fault_dma_addr;
 
-	fwif_sysinit->pds_exec_base = ROGUE_PDSCODEDATA_HEAP_BASE;
-	fwif_sysinit->usc_exec_base = ROGUE_USCCODE_HEAP_BASE;
+	fwif_sysinit->pds_exec_base = PVR_PDSCODEDATA_HEAP_BASE;
+	fwif_sysinit->usc_exec_base = PVR_USCCODE_HEAP_BASE;
 
 	pvr_fw_object_get_fw_addr(fw_mem->runtime_cfg_obj, &fwif_sysinit->runtime_cfg_fw_addr);
 	pvr_fw_object_get_fw_addr(fw_dev->fw_trace.tracebuf_ctrl_obj,
