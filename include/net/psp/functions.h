@@ -46,6 +46,12 @@ psp_enqueue_set_decrypted(struct sock *sk, struct sk_buff *skb)
 		skb->decrypted = 1;
 }
 
+/* The device decrypted @skb with psp, on receive */
+static inline bool psp_skb_is_decrypted(const struct sk_buff *skb)
+{
+	return skb_ext_find(skb, SKB_EXT_PSP);
+}
+
 static inline unsigned long
 __psp_skb_coalesce_diff(const struct sk_buff *one, const struct sk_buff *two,
 			unsigned long diffs)
@@ -164,6 +170,11 @@ static inline struct psp_assoc *psp_sk_assoc(const struct sock *sk)
 
 static inline void
 psp_enqueue_set_decrypted(struct sock *sk, struct sk_buff *skb) { }
+
+static inline bool psp_skb_is_decrypted(const struct sk_buff *skb)
+{
+	return false;
+}
 
 static inline unsigned long
 __psp_skb_coalesce_diff(const struct sk_buff *one, const struct sk_buff *two,
