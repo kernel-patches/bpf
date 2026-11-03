@@ -1149,13 +1149,13 @@ static netdev_tx_t tbnet_start_xmit(struct sk_buff *skb,
 	struct tbnet_frame *frames[MAX_SKB_FRAGS];
 	u16 frame_id = atomic_read(&net->frame_id);
 	struct thunderbolt_ip_frame_header *hdr;
+	bool unmap = false, index_used = false;
 	unsigned int len = skb_headlen(skb);
 	unsigned int data_len = skb->len;
 	unsigned int nframes, i;
 	unsigned int frag = 0;
 	void *src = skb->data;
 	u32 frame_index = 0;
-	bool unmap = false;
 	void *dest;
 
 	trace_tbnet_tx_skb(skb);
@@ -1209,6 +1209,7 @@ static netdev_tx_t tbnet_start_xmit(struct sk_buff *skb,
 				src = tbnet_kmap_frag(skb, frag++, &len);
 				unmap = true;
 			} else if (unlikely(size_left > 0)) {
+				index_used = true;
 				goto err_drop;
 			}
 		} while (size_left > 0);
@@ -1245,6 +1246,7 @@ static netdev_tx_t tbnet_start_xmit(struct sk_buff *skb,
 			src = tbnet_kmap_frag(skb, frag++, &len);
 			unmap = true;
 		} else if (unlikely(data_len > 0)) {
+			index_used = true;
 			goto err_drop;
 		}
 	}
@@ -1254,8 +1256,10 @@ static netdev_tx_t tbnet_start_xmit(struct sk_buff *skb,
 	if (unmap)
 		kunmap_local(src);
 
-	if (!tbnet_xmit_csum_and_map(net, skb, frames, frame_index + 1))
+	if (!tbnet_xmit_csum_and_map(net, skb, frames, frame_index + 1)) {
+		index_used = true;
 		goto err_drop;
+	}
 
 	for (i = 0; i < frame_index + 1; i++)
 		tb_ring_tx_more(net->tx_ring.ring, &frames[i]->frame);
@@ -1275,6 +1279,9 @@ static netdev_tx_t tbnet_start_xmit(struct sk_buff *skb,
 err_drop:
 	/* We can re-use the buffers */
 	net->tx_ring.cons -= frame_index;
+	/* Return back the current slot as well */
+	if (index_used)
+		net->tx_ring.cons--;
 
 	dev_kfree_skb_any(skb);
 	net->stats.tx_errors++;
