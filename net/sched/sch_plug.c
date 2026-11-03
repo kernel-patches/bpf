@@ -202,6 +202,18 @@ static int plug_change(struct Qdisc *sch, struct nlattr *opt,
 	return 0;
 }
 
+static void plug_reset(struct Qdisc *sch)
+{
+	struct plug_sched_data *q = qdisc_priv(sch);
+
+	qdisc_reset_queue(sch);
+	q->pkts_current_epoch = 0;
+	q->pkts_last_epoch = 0;
+	q->pkts_to_release = 0;
+	q->unplug_indefinite = false;
+	q->throttled = true;
+}
+
 static struct Qdisc_ops plug_qdisc_ops __read_mostly = {
 	.id          =       "plug",
 	.priv_size   =       sizeof(struct plug_sched_data),
@@ -210,7 +222,7 @@ static struct Qdisc_ops plug_qdisc_ops __read_mostly = {
 	.peek        =       qdisc_peek_dequeued,
 	.init        =       plug_init,
 	.change      =       plug_change,
-	.reset       =	     qdisc_reset_queue,
+	.reset       =	     plug_reset,
 	.owner       =       THIS_MODULE,
 };
 MODULE_ALIAS_NET_SCH("plug");
