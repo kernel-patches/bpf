@@ -266,6 +266,15 @@ static inline void mlx5_lag_set_vports_agg_speed(struct mlx5_lag *ldev) {}
 static inline void mlx5_lag_reset_vports_speed(struct mlx5_lag *ldev) {}
 #endif
 
+static inline bool mlx5_virt_lag_is_supported(const struct mlx5_core_dev *dev)
+{
+	if (!MLX5_CAP_GEN(dev, multi_uplink_eswitch) ||
+	    !MLX5_CAP_GEN(dev, lag_master) ||
+	    MLX5_CAP_GEN(dev, num_lag_ports) >= 2)
+		return false;
+	return true;
+}
+
 static inline bool mlx5_lag_is_supported(struct mlx5_core_dev *dev)
 {
 	if (!MLX5_CAP_GEN(dev, vport_group_manager) ||
