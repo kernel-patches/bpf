@@ -1425,24 +1425,28 @@ nxpwifi_cmd_sta_cfg_data(struct nxpwifi_private *priv,
 			 u16 cmd_action, u32 cmd_type)
 {
 	struct nxpwifi_adapter *adapter = priv->adapter;
+	struct host_cmd_ds_802_11_cfg_data *pcfg_data = &cmd->params.cfg_data;
 	u32 len;
-	u8 *data = (u8 *)cmd + S_DS_GEN;
 
 	if (!adapter->cal_data || !adapter->cal_data->data ||
 	    !adapter->cal_data->size)
 		return -EINVAL;
 
 	len = nxpwifi_parse_cal_cfg((const char *)adapter->cal_data->data,
-				    adapter->cal_data->size, data,
-				    NXPWIFI_SIZE_OF_CMD_BUFFER - S_DS_GEN);
+				    adapter->cal_data->size, pcfg_data->data,
+				    NXPWIFI_SIZE_OF_CMD_BUFFER - S_DS_GEN -
+				    sizeof(*pcfg_data));
 	if (!len)
 		return -EINVAL;
 
+	pcfg_data->action = cpu_to_le16(cmd_action);
+	pcfg_data->type = cpu_to_le16(NXPWIFI_CFG_TYPE_CAL);
+	pcfg_data->data_len = cpu_to_le16(len);
 	nxpwifi_dbg(adapter, INFO,
 		    "download cfg_data from config file\n");
 
 	cmd->command = cpu_to_le16(HOST_CMD_CFG_DATA);
-	cmd->size = cpu_to_le16(S_DS_GEN + len);
+	cmd->size = cpu_to_le16(S_DS_GEN + sizeof(*pcfg_data) + len);
 
 	return 0;
 }
