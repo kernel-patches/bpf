@@ -8,6 +8,8 @@
 #include <linux/kref.h>
 #include <linux/wait.h>
 
+struct proc_dir_entry;
+
 #ifdef CONFIG_PSI
 
 /* Tracked task states */
@@ -132,11 +134,11 @@ struct psi_trigger {
 	/* Backpointer needed during trigger destruction */
 	struct psi_group *group;
 
-	/* Wait queue for polling */
-	wait_queue_head_t event_wait;
-
 	/* Kernfs file for cgroup triggers */
 	struct kernfs_open_file *of;
+
+	/* /proc/pressure file for system triggers, see proc_poll_notify() */
+	struct proc_dir_entry *pde;
 
 	/* Pending event flag */
 	int event;
