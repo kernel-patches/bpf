@@ -2812,6 +2812,15 @@ int unpoison_memory(unsigned long pfn)
 		goto unlock_mutex;
 	}
 
+	/*
+	 * A hugetlb folio without reliable raw error info is leaked once it
+	 * is freed, and its hugetlb flag may be cleared by then.  Check the
+	 * flag in folio->private, which stays set on the leaked folio.
+	 */
+	if (folio_test_large(folio) &&
+	    folio_test_hugetlb_raw_hwp_unreliable(folio))
+		goto unlock_mutex;
+
 	ghp = get_hwpoison_page(p, MF_UNPOISON);
 	if (!ghp) {
 		guard(vmemmap_remap)();
