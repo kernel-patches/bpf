@@ -2454,7 +2454,7 @@ TEST_F(iommufd, map_cmd)
 	struct vfio_iommu_type1_dma_map map_cmd = {
 		.iova = MOCK_APERTURE_START,
 		.size = PAGE_SIZE,
-		.vaddr = (__u64)buffer,
+		.vaddr = (__u64)(uintptr_t)buffer,
 	};
 
 	map_cmd.argsz = 1;
