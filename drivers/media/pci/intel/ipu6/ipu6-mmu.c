@@ -668,7 +668,7 @@ static void ipu6_mmu_destroy(struct ipu6_mmu *mmu)
 	free_dummy_page(mmu_info);
 	dma_unmap_single(mmu_info->dev, TBL_PHYS_ADDR(mmu_info->l1_pt_dma),
 			 PAGE_SIZE, DMA_BIDIRECTIONAL);
-	free_page((unsigned long)mmu_info->dummy_l2_pt);
+	free_dummy_l2_pt(mmu_info);
 	free_page((unsigned long)mmu_info->l1_pt);
 	kfree(mmu_info);
 }
