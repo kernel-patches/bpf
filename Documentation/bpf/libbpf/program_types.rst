@@ -90,15 +90,15 @@ described in more detail in the footnotes.
 |                                           |                                        | ``ksyscall+`` [#ksyscall]_       |           |
 +                                           +                                        +----------------------------------+-----------+
 |                                           |                                        |  ``kretsyscall+`` [#ksyscall]_   |           |
-+                                           +                                        +----------------------------------+-----------+
-|                                           |                                        | ``uprobe+`` [#uprobe]_           |           |
++                                           +----------------------------------------+----------------------------------+-----------+
+|                                           | ``BPF_TRACE_UPROBE``                   | ``uprobe+`` [#uprobe]_           |           |
 +                                           +                                        +----------------------------------+-----------+
 |                                           |                                        | ``uprobe.s+`` [#uprobe]_         | Yes       |
 +                                           +                                        +----------------------------------+-----------+
 |                                           |                                        | ``uretprobe+`` [#uprobe]_        |           |
 +                                           +                                        +----------------------------------+-----------+
 |                                           |                                        | ``uretprobe.s+`` [#uprobe]_      | Yes       |
-+                                           +                                        +----------------------------------+-----------+
++                                           +----------------------------------------+----------------------------------+-----------+
 |                                           |                                        | ``usdt+`` [#usdt]_               |           |
 +                                           +                                        +----------------------------------+-----------+
 |                                           |                                        | ``usdt.s+`` [#usdt]_             | Yes       |
@@ -239,6 +239,8 @@ described in more detail in the footnotes.
              non-negative integer.
 .. [#ksyscall] The ``ksyscall`` attach format is ``ksyscall/<syscall>``.
 .. [#uprobe] The ``uprobe`` attach format is ``uprobe[.s]/<path>:<function>[+<offset>]``.
+             libbpf uses ``BPF_TRACE_UPROBE`` for these sections when the kernel supports it;
+             otherwise it loads them with an unspecified attach type for compatibility.
 .. [#upmul] The ``uprobe.multi`` attach format is ``uprobe.multi[.s]/<path>:<function-pattern>``
             where ``function-pattern`` supports ``*`` and ``?`` wildcards.
 .. [#usdt] The ``usdt`` attach format is ``usdt/<path>:<provider>:<name>``.

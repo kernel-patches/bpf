@@ -366,6 +366,8 @@ enum kern_feature_id {
 	FEAT_ARRAY_MMAP,
 	/* kernel support for expected_attach_type in BPF_PROG_LOAD */
 	FEAT_EXP_ATTACH_TYPE,
+	/* BPF_TRACE_UPROBE expected attach type for KPROBE programs */
+	FEAT_UPROBE_ATTACH_TYPE,
 	/* bpf_probe_read_{kernel,user}[_str] helpers */
 	FEAT_PROBE_READ_KERN,
 	/* BPF_PROG_BIND_MAP is supported */

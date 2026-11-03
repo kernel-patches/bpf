@@ -318,6 +318,24 @@ static int probe_kern_exp_attach_type(int token_fd)
 	return probe_fd(fd);
 }
 
+static int probe_kern_uprobe_attach_type(int token_fd)
+{
+	LIBBPF_OPTS(bpf_prog_load_opts, opts,
+		.expected_attach_type = BPF_TRACE_UPROBE,
+		.token_fd = token_fd,
+		.prog_flags = token_fd ? BPF_F_TOKEN_FD : 0,
+	);
+	struct bpf_insn insns[] = {
+		BPF_MOV64_IMM(BPF_REG_0, 0),
+		BPF_EXIT_INSN(),
+	};
+	int fd;
+
+	fd = bpf_prog_load(BPF_PROG_TYPE_KPROBE, NULL, "GPL", insns,
+			   ARRAY_SIZE(insns), &opts);
+	return probe_fd(fd);
+}
+
 static int probe_kern_probe_read_kernel(int token_fd)
 {
 	LIBBPF_OPTS(bpf_prog_load_opts, opts,
@@ -760,6 +778,10 @@ static struct kern_feature_desc {
 	[FEAT_EXP_ATTACH_TYPE] = {
 		"BPF_PROG_LOAD expected_attach_type attribute",
 		probe_kern_exp_attach_type,
+	},
+	[FEAT_UPROBE_ATTACH_TYPE] = {
+		"BPF_TRACE_UPROBE expected attach type",
+		probe_kern_uprobe_attach_type,
 	},
 	[FEAT_PROBE_READ_KERN] = {
 		"bpf_probe_read_kernel() helper", probe_kern_probe_read_kernel,
