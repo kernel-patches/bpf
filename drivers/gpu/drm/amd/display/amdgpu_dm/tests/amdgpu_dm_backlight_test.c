@@ -1455,6 +1455,45 @@ static void dm_test_brightness_from_user_midrange(struct kunit *test)
 }
 
 /**
+ * dm_test_brightness_from_user_curve_min - Test Custom curve adds the minimum once
+ * @test: The KUnit test context
+ *
+ * On the AUX range of 1..512 nits with points (50, 20%) and (200, 80%), a
+ * request for 0 must give the 1000 millinit minimum, where adding the
+ * minimum twice gave 1998. Half the scale is signal 128, luminance 51%,
+ * so 51 * 128 / 101 = 65 of 255, which is 1000 + 511000 * 65 / 255 =
+ * 131255. A request for 0 on the PWM range with min_input_signal 12 must
+ * give 12 * 0x101
+ */
+static void dm_test_brightness_from_user_curve_min(struct kunit *test)
+{
+	struct amdgpu_dm_backlight_caps caps = {};
+	uint saved_mask = amdgpu_dm_get_dc_debug_mask();
+
+	amdgpu_dm_set_dc_debug_mask(amdgpu_dm_get_dc_debug_mask() &
+				    ~DC_DISABLE_CUSTOM_BRIGHTNESS_CURVE);
+
+	caps.aux_support = true;
+	caps.aux_min_input_signal = 1;
+	caps.aux_max_input_signal = 512;
+	caps.min_input_signal = 12;
+	caps.max_input_signal = AMDGPU_DM_DEFAULT_MAX_BACKLIGHT;
+	caps.data_points = 2;
+	caps.luminance_data[0].input_signal = 50;
+	caps.luminance_data[0].luminance = 20;
+	caps.luminance_data[1].input_signal = 200;
+	caps.luminance_data[1].luminance = 80;
+
+	KUNIT_EXPECT_EQ(test, convert_brightness_from_user(&caps, 0), 1000U);
+	KUNIT_EXPECT_EQ(test, convert_brightness_from_user(&caps, 256000), 131255U);
+
+	caps.aux_support = false;
+	KUNIT_EXPECT_EQ(test, convert_brightness_from_user(&caps, 0), 12U * 0x101);
+
+	amdgpu_dm_set_dc_debug_mask(saved_mask);
+}
+
+/**
  * dm_test_brightness_from_user_with_curve - Test Brightness from user with custom curve active
  * @test: The KUnit test context
  */
@@ -2053,6 +2092,7 @@ static struct kunit_case dm_backlight_test_cases[] = {
 	KUNIT_CASE(dm_test_brightness_to_user_above_max),
 	KUNIT_CASE(dm_test_brightness_from_user_midrange),
 	KUNIT_CASE(dm_test_brightness_from_user_with_curve),
+	KUNIT_CASE(dm_test_brightness_from_user_curve_min),
 	KUNIT_CASE(dm_test_brightness_range_zero_signals),
 	/* amdgpu_dm_backlight_fill_props */
 	KUNIT_CASE(dm_test_backlight_fill_props_ac_linear),
