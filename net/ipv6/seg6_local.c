@@ -136,7 +136,11 @@ struct bpf_lwt_prog {
 
 #define SEG6_LOCAL_END_FLV_SUPP_OPS	(SEG6_F_LOCAL_FLV_NEXT_CSID | \
 					 SEG6_LOCAL_FLV8986_SUPP_OPS)
-#define SEG6_LOCAL_END_X_FLV_SUPP_OPS	SEG6_F_LOCAL_FLV_NEXT_CSID
+#define SEG6_LOCAL_END_X_FLV_SUPP_OPS	(SEG6_F_LOCAL_FLV_NEXT_CSID | \
+					 SEG6_F_LOCAL_FLV_PSP | \
+					 SEG6_F_LOCAL_FLV_USP)
+#define SEG6_LOCAL_END_T_FLV_SUPP_OPS	(SEG6_F_LOCAL_FLV_PSP | \
+					 SEG6_F_LOCAL_FLV_USP)
 
 /* The USD Flavor applies to the SRv6 End behaviors that perform the
  * decapsulation of the packet (e.g., End.DX4, End.DX6, End.DT4, End.DT6,
@@ -591,6 +595,9 @@ static int seg6_flv_supp_ops_by_action(int action, __u32 *fops)
 	case SEG6_LOCAL_ACTION_END_X:
 		*fops = SEG6_LOCAL_END_X_FLV_SUPP_OPS;
 		break;
+	case SEG6_LOCAL_ACTION_END_T:
+		*fops = SEG6_LOCAL_END_T_FLV_SUPP_OPS;
+		break;
 	case SEG6_LOCAL_ACTION_END_DX4:
 	case SEG6_LOCAL_ACTION_END_DX6:
 	case SEG6_LOCAL_ACTION_END_DT4:
@@ -993,14 +1000,31 @@ static int input_action_end_x(struct sk_buff *skb, struct seg6_local_lwt *slwt)
 	const struct seg6_flavors_info *finfo = &slwt->flv_info;
 	__u32 fops = finfo->flv_ops;
 
+	if (!fops)
+		return input_action_end_x_core(skb, slwt);
+
 	/* check for the presence of NEXT-C-SID since it applies first */
 	if (seg6_next_csid_enabled(fops))
 		return end_x_next_csid_core(skb, slwt);
 
-	return input_action_end_x_core(skb, slwt);
+	/* the specific processing function to be performed on the packet
+	 * depends on the combination of flavors defined in RFC8986 and some
+	 * information extracted from the packet, e.g. presence/absence of SRH,
+	 * Segment Left = 0, etc.
+	 */
+	return end_flv8986_core(skb, slwt, input_action_end_x_finish);
 }
 
-static int input_action_end_t(struct sk_buff *skb, struct seg6_local_lwt *slwt)
+static int input_action_end_t_finish(struct sk_buff *skb,
+				     struct seg6_local_lwt *slwt)
+{
+	seg6_lookup_nexthop(skb, NULL, slwt->table);
+
+	return dst_input(skb);
+}
+
+static int input_action_end_t_core(struct sk_buff *skb,
+				   struct seg6_local_lwt *slwt)
 {
 	enum skb_drop_reason reason = SKB_DROP_REASON_NOT_SPECIFIED;
 	struct ipv6_sr_hdr *srh;
@@ -1016,13 +1040,26 @@ static int input_action_end_t(struct sk_buff *skb, struct seg6_local_lwt *slwt)
 		goto drop;
 	}
 
-	seg6_lookup_nexthop(skb, NULL, slwt->table);
-
-	return dst_input(skb);
+	return input_action_end_t_finish(skb, slwt);
 
 drop:
 	kfree_skb_reason(skb, reason);
 	return err;
+}
+
+static int input_action_end_t(struct sk_buff *skb, struct seg6_local_lwt *slwt)
+{
+	const struct seg6_flavors_info *finfo = &slwt->flv_info;
+	__u32 fops = finfo->flv_ops;
+
+	/* The End.T behavior supports the PSP and USP flavors. In all the
+	 * cases where these flavors do not apply (i.e., SRH with SL > 1),
+	 * the packet is processed as the "standard" End.T behavior.
+	 */
+	if (fops & (SEG6_F_LOCAL_FLV_PSP | SEG6_F_LOCAL_FLV_USP))
+		return end_flv8986_core(skb, slwt, input_action_end_t_finish);
+
+	return input_action_end_t_core(skb, slwt);
 }
 
 /* decapsulate and forward inner L2 frame on specified interface */
@@ -1716,7 +1753,8 @@ static struct seg6_action_desc seg6_action_table[] = {
 	{
 		.action		= SEG6_LOCAL_ACTION_END_T,
 		.attrs		= SEG6_F_ATTR(SEG6_LOCAL_TABLE),
-		.optattrs	= SEG6_F_LOCAL_COUNTERS,
+		.optattrs	= SEG6_F_LOCAL_COUNTERS |
+				  SEG6_F_LOCAL_FLAVORS,
 		.input		= input_action_end_t,
 	},
 	{
