@@ -336,7 +336,7 @@ bool mlx5_lag_is_mpesw(struct mlx5_core_dev *dev)
 	struct mlx5_lag *ldev = mlx5_lag_dev(dev);
 
 	return ldev && ldev->mode == MLX5_LAG_MODE_MPESW &&
-	       __mlx5_lag_dev_is_port(ldev, dev);
+	       (ldev->virt_lag || __mlx5_lag_dev_is_port(ldev, dev));
 }
 EXPORT_SYMBOL(mlx5_lag_is_mpesw);
 

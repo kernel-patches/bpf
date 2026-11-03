@@ -366,6 +366,7 @@ static struct mlx5_lag *mlx5_lag_dev_alloc(struct mlx5_core_dev *dev)
 
 	ldev->ports = MLX5_CAP_GEN(dev, num_lag_ports);
 	ldev->buckets = 1;
+	ldev->virt_lag = mlx5_virt_lag_is_supported(dev);
 	ldev->v2p_map = kcalloc(ldev->ports * MLX5_LAG_MAX_HASH_BUCKETS,
 				sizeof(*ldev->v2p_map), GFP_KERNEL);
 	if (!ldev->v2p_map)
@@ -381,7 +382,7 @@ static struct mlx5_lag *mlx5_lag_dev_alloc(struct mlx5_core_dev *dev)
 	INIT_DELAYED_WORK(&ldev->bond_work, mlx5_do_bond_work);
 	INIT_WORK(&ldev->speed_update_work, mlx5_mpesw_speed_update_work);
 
-	if (!mlx5_sd_is_supported(dev)) {
+	if (!mlx5_sd_is_supported(dev) && !ldev->virt_lag) {
 		ldev->nb.notifier_call = mlx5_lag_netdev_event;
 		write_pnet(&ldev->net, mlx5_core_net(dev));
 		if (register_netdevice_notifier_net(read_pnet(&ldev->net),
@@ -468,7 +469,9 @@ int mlx5_lag_get_dev_index_by_seq(struct mlx5_lag *ldev, int seq)
 /* Return the appropriate iterator filter for a device in LAG:
  * - SD shared FDB active: iterate only the device's SD group
  * - SD group exists but shared FDB not active: iterate all devices
- * - No SD: iterate ports only
+ * - Virt LAG: iterate all devices, since its members are not marked as
+ *   ports, as they do not represent a physical port
+ * - Otherwise: iterate ports only
  */
 static u32 mlx5_lag_get_filter(struct mlx5_lag *ldev, struct mlx5_core_dev *dev)
 {
@@ -476,7 +479,7 @@ static u32 mlx5_lag_get_filter(struct mlx5_lag *ldev, struct mlx5_core_dev *dev)
 
 	if (fn && fn->sd_fdb_active)
 		return fn->group_id;
-	if (fn && fn->group_id)
+	if (fn && (fn->group_id || ldev->virt_lag))
 		return MLX5_LAG_FILTER_ALL;
 	return MLX5_LAG_FILTER_PORTS;
 }
@@ -2399,7 +2402,7 @@ int mlx5_ldev_add_mdev(struct mlx5_lag *ldev,
 	fn->group_id = group_id;
 	dev->priv.lag = ldev;
 
-	if (group_id)
+	if (group_id || ldev->virt_lag)
 		return 0;
 
 	xa_set_mark(&ldev->fns, idx, MLX5_LAG_XA_MARK_PORT);
@@ -2548,7 +2551,7 @@ void mlx5_lag_add_mdev(struct mlx5_core_dev *dev)
 {
 	int err;
 
-	if (!mlx5_lag_is_supported(dev))
+	if (!mlx5_lag_is_supported(dev) && !mlx5_virt_lag_is_supported(dev))
 		return;
 
 	if (mlx5_lag_register_hca_devcom_comp(dev))
@@ -2583,6 +2586,9 @@ void mlx5_lag_remove_netdev(struct mlx5_core_dev *dev,
 	if (!ldev)
 		return;
 
+	if (ldev->virt_lag)
+		return;
+
 	mutex_lock(&ldev->lock);
 	mlx5_ldev_remove_netdev(ldev, netdev);
 	clear_bit(MLX5_LAG_FLAG_NDEVS_READY, &ldev->state_flags);
@@ -2602,6 +2608,9 @@ void mlx5_lag_add_netdev(struct mlx5_core_dev *dev,
 
 	ldev = mlx5_lag_dev(dev);
 	if (!ldev)
+		return;
+
+	if (ldev->virt_lag)
 		return;
 
 	mutex_lock(&ldev->lock);
@@ -2887,7 +2896,7 @@ u8 mlx5_lag_get_num_ports(struct mlx5_core_dev *dev)
 	if (!ldev)
 		return 0;
 
-	return ldev->ports;
+	return max_t(u8, ldev->ports, 1);
 }
 EXPORT_SYMBOL(mlx5_lag_get_num_ports);
 
