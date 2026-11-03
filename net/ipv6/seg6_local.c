@@ -116,6 +116,7 @@ struct bpf_lwt_prog {
 #define SEG6_F_LOCAL_FLV_NEXT_CSID	SEG6_F_LOCAL_FLV_OP(NEXT_CSID)
 #define SEG6_F_LOCAL_FLV_PSP		SEG6_F_LOCAL_FLV_OP(PSP)
 #define SEG6_F_LOCAL_FLV_USP		SEG6_F_LOCAL_FLV_OP(USP)
+#define SEG6_F_LOCAL_FLV_USD		SEG6_F_LOCAL_FLV_OP(USD)
 
 /* Supported RFC8986 Flavor operations are reported in this bitmask.
  *
@@ -124,6 +125,11 @@ struct bpf_lwt_prog {
  * data plane. For this reason, it contains only the Flavor operations
  * (i.e., PSP and USP) that are supported by the SRv6 End behaviors
  * which rely on such a table for the processing of the packets.
+ *
+ * The USD Flavor does not appear in this bitmask since it applies to
+ * SRv6 End behaviors that perform decapsulation. Such behaviors do not
+ * make use of the action table: see SEG6_LOCAL_END_DECAP_FLV_SUPP_OPS
+ * for more details.
  */
 #define SEG6_LOCAL_FLV8986_SUPP_OPS	(SEG6_F_LOCAL_FLV_PSP | \
 					 SEG6_F_LOCAL_FLV_USP)
@@ -131,6 +137,18 @@ struct bpf_lwt_prog {
 #define SEG6_LOCAL_END_FLV_SUPP_OPS	(SEG6_F_LOCAL_FLV_NEXT_CSID | \
 					 SEG6_LOCAL_FLV8986_SUPP_OPS)
 #define SEG6_LOCAL_END_X_FLV_SUPP_OPS	SEG6_F_LOCAL_FLV_NEXT_CSID
+
+/* The USD Flavor applies to the SRv6 End behaviors that perform the
+ * decapsulation of the packet (e.g., End.DX4, End.DX6, End.DT4, End.DT6,
+ * End.DT46).
+ * In this case, the removal of the SRH is carried out as part of the
+ * decapsulation process and, therefore, no additional processing is
+ * required on the data plane with respect to the "standard" behaviors.
+ * The Flavor is reported to user space only for completeness and to
+ * ease the interoperability with control planes (e.g., IS-IS, BGP)
+ * which can advertise SIDs with the USD Flavor.
+ */
+#define SEG6_LOCAL_END_DECAP_FLV_SUPP_OPS	SEG6_F_LOCAL_FLV_USD
 
 struct seg6_flavors_info {
 	/* Flavor operations */
@@ -572,6 +590,22 @@ static int seg6_flv_supp_ops_by_action(int action, __u32 *fops)
 		break;
 	case SEG6_LOCAL_ACTION_END_X:
 		*fops = SEG6_LOCAL_END_X_FLV_SUPP_OPS;
+		break;
+	case SEG6_LOCAL_ACTION_END_DX4:
+	case SEG6_LOCAL_ACTION_END_DX6:
+	case SEG6_LOCAL_ACTION_END_DT4:
+	case SEG6_LOCAL_ACTION_END_DT6:
+	case SEG6_LOCAL_ACTION_END_DT46:
+		/* the USD flavor applies to the SRv6 End behaviors that
+		 * decapsulate the packet. Since such behaviors already
+		 * remove the outer IPv6 header (and, as a consequence, the
+		 * SRH too) as part of the decapsulation process, the USD
+		 * flavor requires no additional processing on the data
+		 * plane. The flavor is supported for completeness and to
+		 * ease the interoperability with control planes that may
+		 * advertise SIDs with the USD flavor.
+		 */
+		*fops = SEG6_LOCAL_END_DECAP_FLV_SUPP_OPS;
 		break;
 	default:
 		return -EOPNOTSUPP;
@@ -1694,19 +1728,22 @@ static struct seg6_action_desc seg6_action_table[] = {
 	{
 		.action		= SEG6_LOCAL_ACTION_END_DX6,
 		.attrs		= SEG6_F_ATTR(SEG6_LOCAL_NH6),
-		.optattrs	= SEG6_F_LOCAL_COUNTERS,
+		.optattrs	= SEG6_F_LOCAL_COUNTERS |
+				  SEG6_F_LOCAL_FLAVORS,
 		.input		= input_action_end_dx6,
 	},
 	{
 		.action		= SEG6_LOCAL_ACTION_END_DX4,
 		.attrs		= SEG6_F_ATTR(SEG6_LOCAL_NH4),
-		.optattrs	= SEG6_F_LOCAL_COUNTERS,
+		.optattrs	= SEG6_F_LOCAL_COUNTERS |
+				  SEG6_F_LOCAL_FLAVORS,
 		.input		= input_action_end_dx4,
 	},
 	{
 		.action		= SEG6_LOCAL_ACTION_END_DT4,
 		.attrs		= SEG6_F_ATTR(SEG6_LOCAL_VRFTABLE),
-		.optattrs	= SEG6_F_LOCAL_COUNTERS,
+		.optattrs	= SEG6_F_LOCAL_COUNTERS |
+				  SEG6_F_LOCAL_FLAVORS,
 #ifdef CONFIG_NET_L3_MASTER_DEV
 		.input		= input_action_end_dt4,
 		.slwt_ops	= {
@@ -1720,20 +1757,23 @@ static struct seg6_action_desc seg6_action_table[] = {
 		.attrs		= 0,
 		.optattrs	= SEG6_F_LOCAL_COUNTERS		|
 				  SEG6_F_ATTR(SEG6_LOCAL_TABLE) |
-				  SEG6_F_ATTR(SEG6_LOCAL_VRFTABLE),
+				  SEG6_F_ATTR(SEG6_LOCAL_VRFTABLE) |
+				  SEG6_F_LOCAL_FLAVORS,
 		.slwt_ops	= {
 					.build_state = seg6_end_dt6_build,
 				  },
 #else
 		.attrs		= SEG6_F_ATTR(SEG6_LOCAL_TABLE),
-		.optattrs	= SEG6_F_LOCAL_COUNTERS,
+		.optattrs	= SEG6_F_LOCAL_COUNTERS |
+				  SEG6_F_LOCAL_FLAVORS,
 #endif
 		.input		= input_action_end_dt6,
 	},
 	{
 		.action		= SEG6_LOCAL_ACTION_END_DT46,
 		.attrs		= SEG6_F_ATTR(SEG6_LOCAL_VRFTABLE),
-		.optattrs	= SEG6_F_LOCAL_COUNTERS,
+		.optattrs	= SEG6_F_LOCAL_COUNTERS |
+				  SEG6_F_LOCAL_FLAVORS,
 #ifdef CONFIG_NET_L3_MASTER_DEV
 		.input		= input_action_end_dt46,
 		.slwt_ops	= {
