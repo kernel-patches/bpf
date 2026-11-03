@@ -77,6 +77,8 @@
 #define A64_LDRSW(Xt, Xn, Xm) A64_LS_REG(Xt, Xn, Xm, 32, SIGNED_LOAD)
 #define A64_STR64(Xt, Xn, Xm) A64_LS_REG(Xt, Xn, Xm, 64, STORE)
 #define A64_LDR64(Xt, Xn, Xm) A64_LS_REG(Xt, Xn, Xm, 64, LOAD)
+/* Xt = *(Xn + ((u32)Wm << 3)) */
+#define A64_LDR64_UXTW3(Xt, Xn, Wm) A64_LS_REG_EXT(Xt, Xn, Wm, UXTW, true, 64, LOAD)
 
 /* Load/store register (immediate offset) */
 #define A64_LS_IMM(Rt, Rn, imm, size, type) \
