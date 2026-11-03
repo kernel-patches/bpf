@@ -364,7 +364,7 @@ static unsigned int f2fs_add_fsync_node_entry(struct f2fs_sb_info *sbi,
 
 	spin_lock_irqsave(&sbi->fsync_node_lock, flags);
 	list_add_tail(&fn->list, &sbi->fsync_node_list);
-	fn->seq_id = sbi->fsync_seg_id++;
+	fn->seq_id = ++sbi->fsync_seg_id;
 	seq_id = fn->seq_id;
 	sbi->fsync_node_num++;
 	spin_unlock_irqrestore(&sbi->fsync_node_lock, flags);
