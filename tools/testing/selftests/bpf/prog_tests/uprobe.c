@@ -44,6 +44,10 @@ static void test_uprobe_attach(void)
 	skel = test_uprobe__open_and_load();
 	if (!ASSERT_OK_PTR(skel, "skel_open"))
 		return;
+	ASSERT_EQ(bpf_program__expected_attach_type(skel->progs.test1),
+		  BPF_TRACE_UPROBE, "uprobe_attach_type");
+	ASSERT_EQ(bpf_program__expected_attach_type(skel->progs.test3),
+		  BPF_TRACE_UPROBE, "uretprobe_attach_type");
 
 	urand_pipe = urand_spawn(&urand_pid);
 	if (!ASSERT_OK_PTR(urand_pipe, "urand_spawn"))
