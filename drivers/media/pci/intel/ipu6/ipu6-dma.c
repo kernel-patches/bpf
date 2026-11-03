@@ -443,7 +443,10 @@ int ipu6_dma_map_sg(struct ipu6_bus_device *sys, struct scatterlist *sglist,
 	return nents;
 
 out_fail:
-	ipu6_dma_unmap_sg(sys, sglist, i, dir, attrs);
+	if (i)
+		ipu6_dma_unmap_sg(sys, sglist, i, dir, attrs);
+	else
+		__free_iova(&mmu->dmap->iovad, iova);
 
 	return ret;
 }
