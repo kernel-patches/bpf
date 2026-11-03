@@ -902,8 +902,13 @@ void hdmi_frl_verify_link_cap(struct dc_link *link,
 	if (link->frl_flags.force_frl_rate == 0xF)
 		return;
 
+	/* Only honour the force FRL monitor patch when VBIOS reports the encoder
+	 * as FRL capable, otherwise the stream would be forced to a signal type
+	 * the ASIC cannot drive.
+	 */
 	if (link->local_sink &&
-		link->local_sink->edid_caps.panel_patch.force_frl)
+		link->local_sink->edid_caps.panel_patch.force_frl &&
+		link->link_enc->features.flags.bits.IS_HDMI_FRL_CAPABLE)
 			link->frl_flags.force_frl_always = true;
 
 	if (!link->frl_flags.force_frl_max &&
