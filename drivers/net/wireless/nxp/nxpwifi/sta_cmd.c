@@ -5,6 +5,8 @@
  * Copyright 2011-2024 NXP
  */
 
+#include <linux/hex.h>
+
 #include "cfg.h"
 #include "util.h"
 #include "fw.h"
@@ -1391,9 +1393,11 @@ nxpwifi_ret_sta_mem_access(struct nxpwifi_private *priv,
 	return 0;
 }
 
-static u32 nxpwifi_parse_cal_cfg(u8 *src, size_t len, u8 *dst)
+static u32 nxpwifi_parse_cal_cfg(const char *src, size_t len, u8 *dst,
+				 size_t dst_size)
 {
-	u8 *s = src, *d = dst;
+	const char *s = src;
+	u8 *d = dst;
 
 	while (s - src < len) {
 		if (*s && (isspace(*s) || *s == '\t')) {
@@ -1401,7 +1405,8 @@ static u32 nxpwifi_parse_cal_cfg(u8 *src, size_t len, u8 *dst)
 			continue;
 		}
 		if (isxdigit(*s)) {
-			if (kstrtou8(s, 16, d))
+			if (d - dst >= dst_size || src + len - s < 2 ||
+			    hex2bin(d, s, 1))
 				return 0;
 			d++;
 			s += 2;
@@ -1423,14 +1428,18 @@ nxpwifi_cmd_sta_cfg_data(struct nxpwifi_private *priv,
 	u32 len;
 	u8 *data = (u8 *)cmd + S_DS_GEN;
 
-	if (adapter->cal_data->data && adapter->cal_data->size > 0) {
-		len = nxpwifi_parse_cal_cfg((u8 *)adapter->cal_data->data,
-					    adapter->cal_data->size, data);
-		nxpwifi_dbg(adapter, INFO,
-			    "download cfg_data from config file\n");
-	} else {
+	if (!adapter->cal_data || !adapter->cal_data->data ||
+	    !adapter->cal_data->size)
 		return -EINVAL;
-	}
+
+	len = nxpwifi_parse_cal_cfg((const char *)adapter->cal_data->data,
+				    adapter->cal_data->size, data,
+				    NXPWIFI_SIZE_OF_CMD_BUFFER - S_DS_GEN);
+	if (!len)
+		return -EINVAL;
+
+	nxpwifi_dbg(adapter, INFO,
+		    "download cfg_data from config file\n");
 
 	cmd->command = cpu_to_le16(HOST_CMD_CFG_DATA);
 	cmd->size = cpu_to_le16(S_DS_GEN + len);
