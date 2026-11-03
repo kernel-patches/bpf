@@ -3000,6 +3000,26 @@ static int esw_set_slave_root_fdb(struct mlx5_core_dev *master,
 	return err;
 }
 
+static void mlx5_esw_set_spec_source_port_vhca(struct mlx5_flow_spec *spec,
+					       u16 vport, u16 vhca_id)
+{
+	void *misc;
+
+	spec->match_criteria_enable = MLX5_MATCH_MISC_PARAMETERS;
+
+	misc = MLX5_ADDR_OF(fte_match_param, spec->match_value,
+			    misc_parameters);
+	MLX5_SET(fte_match_set_misc, misc, source_port, vport);
+	MLX5_SET(fte_match_set_misc, misc, source_eswitch_owner_vhca_id,
+		 vhca_id);
+
+	misc = MLX5_ADDR_OF(fte_match_param, spec->match_criteria,
+			    misc_parameters);
+	MLX5_SET_TO_ONES(fte_match_set_misc, misc, source_port);
+	MLX5_SET_TO_ONES(fte_match_set_misc, misc,
+			 source_eswitch_owner_vhca_id);
+}
+
 static int __esw_set_master_egress_rule(struct mlx5_core_dev *master,
 					struct mlx5_core_dev *slave,
 					struct mlx5_vport *vport,
@@ -3011,22 +3031,22 @@ static int __esw_set_master_egress_rule(struct mlx5_core_dev *master,
 	struct mlx5_flow_act flow_act = {};
 	struct mlx5_flow_spec *spec;
 	int err = 0;
-	void *misc;
+
+	if (mlx5_virt_lag_is_supported(master) &&
+	    !mlx5_eswitch_vport_match_metadata_enabled(slave->priv.eswitch))
+		return -EINVAL;
 
 	spec = kvzalloc_obj(*spec);
 	if (!spec)
 		return -ENOMEM;
 
-	spec->match_criteria_enable = MLX5_MATCH_MISC_PARAMETERS;
-	misc = MLX5_ADDR_OF(fte_match_param, spec->match_value,
-			    misc_parameters);
-	MLX5_SET(fte_match_set_misc, misc, source_port, MLX5_VPORT_UPLINK);
-	MLX5_SET(fte_match_set_misc, misc, source_eswitch_owner_vhca_id, slave_index);
-
-	misc = MLX5_ADDR_OF(fte_match_param, spec->match_criteria, misc_parameters);
-	MLX5_SET_TO_ONES(fte_match_set_misc, misc, source_port);
-	MLX5_SET_TO_ONES(fte_match_set_misc, misc,
-			 source_eswitch_owner_vhca_id);
+	if (mlx5_virt_lag_is_supported(master) &&
+	    mlx5_eswitch_vport_match_metadata_enabled(slave->priv.eswitch))
+		mlx5_esw_set_spec_source_port(slave->priv.eswitch,
+					      MLX5_VPORT_UPLINK, spec);
+	else
+		mlx5_esw_set_spec_source_port_vhca(spec, MLX5_VPORT_UPLINK,
+						   slave_index);
 
 	flow_act.action = MLX5_FLOW_CONTEXT_ACTION_FWD_DEST;
 	dest.type = MLX5_FLOW_DESTINATION_TYPE_VPORT;
@@ -3179,6 +3199,21 @@ static void esw_unset_slave_egress_rule(struct mlx5_core_dev *master,
 	esw_slave_egress_destroy_resources(slave_vport);
 }
 
+static void mlx5_esw_set_flow_group_source_port_vhca(u32 *flow_group_in)
+{
+	void *match_criteria = MLX5_ADDR_OF(create_flow_group_in,
+					    flow_group_in, match_criteria);
+
+	MLX5_SET_TO_ONES(fte_match_param, match_criteria,
+			 misc_parameters.source_port);
+	MLX5_SET_TO_ONES(fte_match_param, match_criteria,
+			 misc_parameters.source_eswitch_owner_vhca_id);
+	MLX5_SET(create_flow_group_in, flow_group_in,
+		 match_criteria_enable, MLX5_MATCH_MISC_PARAMETERS);
+	MLX5_SET(create_flow_group_in, flow_group_in,
+		 source_eswitch_owner_vhca_id_valid, 1);
+}
+
 static int esw_master_egress_create_resources(struct mlx5_eswitch *esw,
 					      struct mlx5_flow_namespace *egress_ns,
 					      struct mlx5_vport *vport, size_t count)
@@ -3189,12 +3224,15 @@ static int esw_master_egress_create_resources(struct mlx5_eswitch *esw,
 	};
 	struct mlx5_flow_table *acl;
 	struct mlx5_flow_group *g;
-	void *match_criteria;
 	u32 *flow_group_in;
 	int err;
 
 	if (vport->egress.acl)
 		return 0;
+
+	if (mlx5_virt_lag_is_supported(esw->dev) &&
+	    !mlx5_eswitch_vport_match_metadata_enabled(esw))
+		return -EINVAL;
 
 	flow_group_in = kvzalloc(inlen, GFP_KERNEL);
 	if (!flow_group_in)
@@ -3209,17 +3247,11 @@ static int esw_master_egress_create_resources(struct mlx5_eswitch *esw,
 		goto out;
 	}
 
-	match_criteria = MLX5_ADDR_OF(create_flow_group_in, flow_group_in,
-				      match_criteria);
-	MLX5_SET_TO_ONES(fte_match_param, match_criteria,
-			 misc_parameters.source_port);
-	MLX5_SET_TO_ONES(fte_match_param, match_criteria,
-			 misc_parameters.source_eswitch_owner_vhca_id);
-	MLX5_SET(create_flow_group_in, flow_group_in, match_criteria_enable,
-		 MLX5_MATCH_MISC_PARAMETERS);
-
-	MLX5_SET(create_flow_group_in, flow_group_in,
-		 source_eswitch_owner_vhca_id_valid, 1);
+	if (mlx5_virt_lag_is_supported(esw->dev) &&
+	    mlx5_eswitch_vport_match_metadata_enabled(esw))
+		mlx5_esw_set_flow_group_source_port(esw, flow_group_in, 0);
+	else
+		mlx5_esw_set_flow_group_source_port_vhca(flow_group_in);
 	MLX5_SET(create_flow_group_in, flow_group_in, start_flow_index, 0);
 	MLX5_SET(create_flow_group_in, flow_group_in, end_flow_index, count);
 
