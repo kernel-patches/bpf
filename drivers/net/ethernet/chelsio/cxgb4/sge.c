@@ -1523,12 +1523,9 @@ static netdev_tx_t cxgb4_eth_xmit(struct sk_buff *skb, struct net_device *dev)
 
 	qidx = skb_get_queue_mapping(skb);
 	if (ptp_enabled) {
-		if (!(adap->ptp_tx_skb)) {
-			skb_shinfo(skb)->tx_flags |= SKBTX_IN_PROGRESS;
-			adap->ptp_tx_skb = skb_get(skb);
-		} else {
+		if (adap->ptp_tx_skb)
 			goto out_free;
-		}
+		skb_shinfo(skb)->tx_flags |= SKBTX_IN_PROGRESS;
 		q = &adap->sge.ptptxq;
 	} else {
 		q = &adap->sge.ethtxq[qidx + pi->first_qset];
@@ -1706,6 +1703,9 @@ static netdev_tx_t cxgb4_eth_xmit(struct sk_buff *skb, struct net_device *dev)
 	cpl->ctrl1 = cpu_to_be64(cntrl);
 
 	skb_tx_timestamp(skb);
+
+	if (ptp_enabled)
+		adap->ptp_tx_skb = skb_get(skb);
 
 	if (immediate) {
 		cxgb4_inline_tx_skb(skb, &q->q, sgl);
