@@ -524,6 +524,9 @@ static unsigned int backlight_millipercent_to_pwm_legacy(
 {
 	unsigned int pwm = (unsigned int)-1;
 	unsigned int index = 0;
+	unsigned int lower, upper;
+	unsigned long long scaled;
+	unsigned int remainder;
 
 	if (core_power == NULL)
 		return 0;
@@ -541,17 +544,33 @@ static unsigned int backlight_millipercent_to_pwm_legacy(
 		return pwm;
 	}
 
-	if (millipercent >= (100 * 1000))
+	if (millipercent >= BACKLIGHT_MILLIPERCENT_MAX)
 		return core_power->bl_prop[inst].backlight_lut[core_power->bl_prop[inst].num_backlight_levels - 1];
 
-	/* This will give the floor index. */
-	index = ((core_power->bl_prop[inst].num_backlight_levels - 1) *
-						millipercent) / 100000;
 	/* Null check otherwise eDP doesn't lightup when connected to DP1 */
 	if (core_power->bl_prop[inst].backlight_lut == NULL)
 		return pwm;
 
-	pwm = core_power->bl_prop[inst].backlight_lut[index];
+	if (core_power->bl_prop[inst].num_backlight_levels < 2)
+		return pwm;
+
+	/*
+	 * Interpolate between the two LUT entries around millipercent.
+	 * backlight_lut has num_backlight_levels entries, and millipercent is
+	 * below BACKLIGHT_MILLIPERCENT_MAX here, so index + 1 stays within it
+	 */
+	scaled = (unsigned long long)(core_power->bl_prop[inst].num_backlight_levels - 1) *
+		 millipercent;
+	index = (unsigned int)div_u64_rem(scaled, BACKLIGHT_MILLIPERCENT_MAX, &remainder);
+	lower = core_power->bl_prop[inst].backlight_lut[index];
+	upper = core_power->bl_prop[inst].backlight_lut[index + 1];
+
+	if (upper <= lower)
+		return lower;
+
+	pwm = lower + (unsigned int)div_u64((unsigned long long)(upper - lower) * remainder +
+					    BACKLIGHT_MILLIPERCENT_MAX / 2,
+					    BACKLIGHT_MILLIPERCENT_MAX);
 
 	return pwm;
 }
