@@ -1403,6 +1403,8 @@ static void extron_disconnect(struct serio *serio)
 	extron->serio = NULL;
 	serio_set_drvdata(serio, NULL);
 	serio_close(serio);
+	v4l2_device_unregister(&extron->v4l2_dev);
+	kfree(extron);
 }
 
 static int extron_setup(struct extron *extron)
