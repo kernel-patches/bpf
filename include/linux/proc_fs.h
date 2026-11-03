@@ -27,6 +27,7 @@ enum {
 #endif
 
 	PROC_ENTRY_proc_read_iter	= 1U << 1,
+	PROC_ENTRY_proc_fops		= 1U << 2,
 	PROC_ENTRY_proc_lseek		= 1U << 3,
 	PROC_ENTRY_proc_seq_ops		= 1U << 4,
 	PROC_ENTRY_proc_show		= 1U << 5,
@@ -234,6 +235,9 @@ extern struct proc_dir_entry *proc_create_data(const char *, umode_t,
 					       struct proc_dir_entry *,
 					       const struct proc_ops *,
 					       void *);
+struct proc_dir_entry *proc_create_fops(const char *name, umode_t mode,
+		struct proc_dir_entry *parent,
+		const struct file_operations *fops);
 /* @key instead of the proc_ops as the lockdep class of the pin, for a
  * creator that serves different things behind one proc_ops. */
 struct proc_dir_entry *proc_create_data_key(const char *name, umode_t mode,
@@ -347,6 +351,10 @@ proc_create(const char *name, umode_t mode, struct proc_dir_entry *parent,
 static inline struct proc_dir_entry *
 proc_create_data(const char *name, umode_t mode, struct proc_dir_entry *parent,
 		 const struct proc_ops *proc_ops, void *data)
+{ return NULL; }
+static inline struct proc_dir_entry *
+proc_create_fops(const char *name, umode_t mode, struct proc_dir_entry *parent,
+		 const struct file_operations *fops)
 { return NULL; }
 
 static inline struct proc_dir_entry *

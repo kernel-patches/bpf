@@ -441,6 +441,9 @@ static int pde_set_flags(struct proc_dir_entry *pde)
 {
 	const struct proc_ops *proc_ops = pde->proc_ops;
 
+	/* nothing of this applies to these, see proc_create_fops() */
+	if (pde_has_proc_fops(pde))
+		return 0;
 	if (!proc_ops)
 		return 0;
 
@@ -519,7 +522,7 @@ static int pde_init_open_node(struct proc_dir_entry *pde)
 {
 	struct pde_open_node *on;
 
-	if (!S_ISREG(pde->mode))
+	if (!S_ISREG(pde->mode) || pde_has_proc_fops(pde))
 		return 0;
 	if (!pde_has_proc_poll(pde) && !pde_tracks_files(pde))
 		return 0;
@@ -823,6 +826,26 @@ struct proc_dir_entry *proc_create(const char *name, umode_t mode,
 	return proc_create_data(name, mode, parent, proc_ops, NULL);
 }
 EXPORT_SYMBOL(proc_create);
+
+/*
+ * For the built-in entries that read straight into userspace and are never
+ * removed, kcore, kmsg, the kpage files and profile. procfs doesn't mediate
+ * these at all, their file_operations go into the inode as they are. Not
+ * exported on purpose, everything else uses struct proc_ops.
+ */
+struct proc_dir_entry *proc_create_fops(const char *name, umode_t mode,
+		struct proc_dir_entry *parent, const struct file_operations *fops)
+{
+	struct proc_dir_entry *p;
+
+	p = proc_create_reg(name, mode, &parent, NULL);
+	if (!p)
+		return NULL;
+	p->proc_fops = fops;
+	p->flags |= PROC_ENTRY_proc_fops;
+	pde_make_permanent(p);
+	return proc_register(parent, p, NULL);
+}
 
 /* procfs owns the seq_file of these, see pde_seq_start() */
 static const struct proc_ops proc_seq_ops = {

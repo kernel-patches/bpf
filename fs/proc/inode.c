@@ -1082,7 +1082,9 @@ struct inode *proc_get_inode(struct super_block *sb, struct proc_dir_entry *de)
 
 	if (S_ISREG(inode->i_mode)) {
 		inode->i_op = de->proc_iops;
-		if (pde_is_seq_file(de))
+		if (pde_has_proc_fops(de))
+			inode->i_fop = de->proc_fops;
+		else if (pde_is_seq_file(de))
 			inode->i_fop = &proc_seq_file_ops;
 		else if (pde_has_proc_read_iter(de) || pde_has_proc_read_buf(de))
 			inode->i_fop = &proc_iter_file_ops;
