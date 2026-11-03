@@ -826,6 +826,8 @@ static int it6625_get_detected_timings(struct it6625 *it6625,
 
 	bt->interlaced = val & B_INTERLACE ?
 			 V4L2_DV_INTERLACED : V4L2_DV_PROGRESSIVE;
+	bt->polarities = (val & B_VSWPOL ? V4L2_DV_VSYNC_POS_POL : 0) |
+			 (val & B_HSWPOL ? V4L2_DV_HSYNC_POS_POL : 0);
 
 	if (it6625_read_bytes(it6625, REG_H_ACTIVE_1, (u8 *)&active, sizeof(active)) < 0)
 		return -EIO;
