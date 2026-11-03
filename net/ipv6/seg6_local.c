@@ -115,9 +115,18 @@ struct bpf_lwt_prog {
 #define SEG6_F_LOCAL_FLV_OP(flvname)	BIT(SEG6_LOCAL_FLV_OP_##flvname)
 #define SEG6_F_LOCAL_FLV_NEXT_CSID	SEG6_F_LOCAL_FLV_OP(NEXT_CSID)
 #define SEG6_F_LOCAL_FLV_PSP		SEG6_F_LOCAL_FLV_OP(PSP)
+#define SEG6_F_LOCAL_FLV_USP		SEG6_F_LOCAL_FLV_OP(USP)
 
-/* Supported RFC8986 Flavor operations are reported in this bitmask */
-#define SEG6_LOCAL_FLV8986_SUPP_OPS	SEG6_F_LOCAL_FLV_PSP
+/* Supported RFC8986 Flavor operations are reported in this bitmask.
+ *
+ * The bitmask is used as a mask for the RFC8986 Flavor operations that
+ * can be processed through the action table (flv8986_act_tbl) on the
+ * data plane. For this reason, it contains only the Flavor operations
+ * (i.e., PSP and USP) that are supported by the SRv6 End behaviors
+ * which rely on such a table for the processing of the packets.
+ */
+#define SEG6_LOCAL_FLV8986_SUPP_OPS	(SEG6_F_LOCAL_FLV_PSP | \
+					 SEG6_F_LOCAL_FLV_USP)
 
 #define SEG6_LOCAL_END_FLV_SUPP_OPS	(SEG6_F_LOCAL_FLV_NEXT_CSID | \
 					 SEG6_LOCAL_FLV8986_SUPP_OPS)
@@ -664,6 +673,7 @@ enum seg6_local_flv_action {
 
 /* shorthand for improving readability */
 #define F_PSP	SEG6_F_LOCAL_FLV_PSP
+#define F_USP	SEG6_F_LOCAL_FLV_USP
 
 /* The table contains, for each combination of the pktinfo data and
  * flavors, the action that should be taken on a packet (e.g.
@@ -674,13 +684,32 @@ enum seg6_local_flv_action {
  * discarding the processed packet.
  */
 static const u8 flv8986_act_tbl[FLV8986_ACT_TBL_SIZE] = {
-	/* PSP variant for packet where SRH with SL = 1 */
+	/* PSP flavor: the penultimate segment pops the outer SID
+	 * (i.e., the Segment Left pointer) from the SRH.
+	 */
 	tbl_cfg(PSP, SL_ONE, F_PSP),
-	/* End for packet where the SRH with SL > 1*/
 	tbl_cfg(END, SL_MORE, F_PSP),
+
+	/* USP flavor: the ultimate (i.e., final) segment of the SRv6 path
+	 * removes the SRH from the packet. In all the other cases, the
+	 * packet is processed as the "standard" End behavior.
+	 */
+	tbl_cfg(END, SL_ONE, F_USP),
+	tbl_cfg(END, SL_MORE, F_USP),
+	tbl_cfg(USP, SL_ZERO, F_USP),
+
+	/* When the PSP and USP flavors are combined, the PSP operation
+	 * takes place if SL=1 (i.e., the node is the penultimate segment),
+	 * while the USP operation is applied when SL=0 (i.e., the node is
+	 * the final segment of the SRv6 path).
+	 */
+	tbl_cfg(PSP, SL_ONE, F_PSP | F_USP),
+	tbl_cfg(END, SL_MORE, F_PSP | F_USP),
+	tbl_cfg(USP, SL_ZERO, F_PSP | F_USP),
 };
 
 #undef F_PSP
+#undef F_USP
 #undef tbl_cfg
 
 /* For each flavor defined in RFC8986 (or a combination of them) an action is
@@ -823,8 +852,15 @@ pull:
 
 /* process the packet on the basis of the RFC8986 flavors set for the given
  * SRv6 End behavior instance.
+ *
+ * The @finish callback takes care of the "final" processing of the packet,
+ * which depends on the specific End* behavior. For instance, the End
+ * behavior performs a nexthop lookup in the default routing table, while
+ * the End.X behavior forwards the packet to the precomputed L2 adjacency.
  */
-static int end_flv8986_core(struct sk_buff *skb, struct seg6_local_lwt *slwt)
+static int end_flv8986_core(struct sk_buff *skb, struct seg6_local_lwt *slwt,
+			    int (*finish)(struct sk_buff *skb,
+					  struct seg6_local_lwt *slwt))
 {
 	enum skb_drop_reason reason = SKB_DROP_REASON_NOT_SPECIFIED;
 	const struct seg6_flavors_info *finfo = &slwt->flv_info;
@@ -871,6 +907,15 @@ static int end_flv8986_core(struct sk_buff *skb, struct seg6_local_lwt *slwt)
 		if (unlikely(!seg6_pop_srh(skb, srhoff)))
 			goto drop;
 		break;
+	case SEG6_LOCAL_FLV_ACT_USP:
+		/* the node is the final segment of the SRv6 path: remove
+		 * the SRH from the packet without updating the IPv6 DA,
+		 * which is already pointing to the last SID (i.e.,
+		 * Segments[0]).
+		 */
+		if (unlikely(!seg6_pop_srh(skb, srhoff)))
+			goto drop;
+		break;
 	case SEG6_LOCAL_FLV_ACT_UNSPEC:
 		fallthrough;
 	default:
@@ -880,7 +925,7 @@ static int end_flv8986_core(struct sk_buff *skb, struct seg6_local_lwt *slwt)
 		goto drop;
 	}
 
-	return input_action_end_finish(skb, slwt);
+	return finish(skb, slwt);
 
 drop:
 	kfree_skb_reason(skb, reason);
@@ -905,7 +950,7 @@ static int input_action_end(struct sk_buff *skb, struct seg6_local_lwt *slwt)
 	 * information extracted from the packet, e.g. presence/absence of SRH,
 	 * Segment Left = 0, etc.
 	 */
-	return end_flv8986_core(skb, slwt);
+	return end_flv8986_core(skb, slwt, input_action_end_finish);
 }
 
 /* regular endpoint, and forward to specified nexthop */
