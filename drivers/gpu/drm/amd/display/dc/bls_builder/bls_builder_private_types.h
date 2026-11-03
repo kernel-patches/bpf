@@ -107,8 +107,6 @@ struct dcn401_commit_step_meta {
 		} dc_ip_request_cntl;
 	};
 	struct {
-		/* The OTG master's stream has mode_changed clear. */
-		bool stream_mode_unchanged;
 		/* The new state has a stream. */
 		bool new_state_has_stream;
 		/* dc->optimized_required is clear. */

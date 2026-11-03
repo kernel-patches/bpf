@@ -318,9 +318,10 @@ static const struct dcn401_commit_step
 /*
  * Net effect: finish the head for the new OTG master. program_front_end
  * for a master with no plane, then stereo, then the waits that complete
- * the head's double buffering. legacy_commit_state_hw sets up stereo for
- * a mode-changed stream, then dc_enable_stereo sets it up again for every
- * stream; dcn10_setup_stereo with no 3D format is the two STEREO calls.
+ * the head's double buffering. DC1 sets up stereo twice for a
+ * mode-changed stream, in legacy_commit_state_hw and dc_enable_stereo,
+ * with the same result; one dcn10_setup_stereo with no 3D format, the two
+ * STEREO calls, matches it.
  * The bandwidth lower starts only after these waits.
  */
 static const struct dcn401_commit_step
@@ -335,10 +336,6 @@ static const struct dcn401_commit_step
 	{ .func = TG_LOCK, .meta.tg_lock.lock = false },
 	{ .func = HUBBUB_FORCE_PSTATE_CHANGE_CONTROL },
 
-	{ .func = OPP_PROGRAM_STEREO,
-	  .meta.skip_if.stream_mode_unchanged = true },
-	{ .func = TG_PROGRAM_STEREO,
-	  .meta.skip_if.stream_mode_unchanged = true },
 	{ .func = OPP_PROGRAM_STEREO },
 	{ .func = TG_PROGRAM_STEREO },
 

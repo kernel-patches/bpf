@@ -1944,9 +1944,6 @@ static void dcn401_add_step(struct block_sequence_state *sequence,
 static bool dcn401_skip_step(const struct dcn401_commit_step_args *args,
 		const struct dcn401_commit_step *step)
 {
-	if (step->meta.skip_if.stream_mode_unchanged &&
-			!args->pipe->stream->mode_changed)
-		return true;
 	if (step->meta.skip_if.new_state_has_stream &&
 			args->new_state->stream_count)
 		return true;
