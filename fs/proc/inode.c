@@ -271,12 +271,13 @@ void proc_entry_rundown(struct proc_dir_entry *de)
 	if (atomic_add_return(BIAS, &de->in_use) != BIAS)
 		wait_var_event(&de->in_use, atomic_read_acquire(&de->in_use) == BIAS);
 
-	/* ->pde_openers list can't grow from now on. */
-
+	/* ->open->files can't grow from now on. */
+	if (!de->open)
+		return;
 	spin_lock(&de->pde_unload_lock);
-	while (!list_empty(&de->pde_openers)) {
+	while (!list_empty(&de->open->files)) {
 		struct pde_opener *pdeo;
-		pdeo = list_first_entry(&de->pde_openers, struct pde_opener, lh);
+		pdeo = list_first_entry(&de->open->files, struct pde_opener, lh);
 		close_pdeo(de, pdeo);
 		spin_lock(&de->pde_unload_lock);
 	}
@@ -499,13 +500,13 @@ static int proc_reg_open(struct inode *inode, struct file *file)
 	 * 2) rmmod isn't blocked by opening file in /proc and sitting on
 	 *    the descriptor (including "rmmod foo </proc/foo" scenario).
 	 *
-	 * Save every "struct file" with custom ->release hook.
+	 * Save every "struct file" with custom ->release hook. Those entries
+	 * have an open node, see proc_register().
 	 */
 	if (!use_pde(pde))
 		return -ENOENT;
 
-	const auto release = pde->proc_ops->proc_release;
-	if (release) {
+	if (pde->open) {
 		pdeo = kmem_cache_alloc(pde_opener_cache, GFP_KERNEL);
 		if (!pdeo) {
 			rv = -ENOMEM;
@@ -517,14 +518,14 @@ static int proc_reg_open(struct inode *inode, struct file *file)
 	if (open)
 		rv = open(inode, file);
 
-	if (release) {
+	if (pde->open) {
 		if (rv == 0) {
 			/* To know what to release. */
 			pdeo->file = file;
 			pdeo->closing = false;
 			pdeo->c = NULL;
 			spin_lock(&pde->pde_unload_lock);
-			list_add(&pdeo->lh, &pde->pde_openers);
+			list_add(&pdeo->lh, &pde->open->files);
 			spin_unlock(&pde->pde_unload_lock);
 		} else
 			kmem_cache_free(pde_opener_cache, pdeo);
@@ -547,8 +548,10 @@ static int proc_reg_release(struct inode *inode, struct file *file)
 		return 0;
 	}
 
+	if (!pde->open)
+		return 0;
 	spin_lock(&pde->pde_unload_lock);
-	list_for_each_entry(pdeo, &pde->pde_openers, lh) {
+	list_for_each_entry(pdeo, &pde->open->files, lh) {
 		if (pdeo->file == file) {
 			close_pdeo(pde, pdeo);
 			return 0;

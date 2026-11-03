@@ -40,6 +40,7 @@ void pde_free(struct proc_dir_entry *pde)
 		kfree(pde->data);
 	if (pde->name != pde->inline_name)
 		kfree(pde->name);
+	kfree(pde->open);
 	kmem_cache_free(proc_dir_entry_cache, pde);
 }
 
@@ -450,6 +451,18 @@ static void pde_set_flags(struct proc_dir_entry *pde)
 		pde->flags |= PROC_ENTRY_proc_lseek;
 }
 
+/*
+ * procfs has to know the open files of an entry whose ->proc_release() it
+ * calls at removal. A permanent entry is never removed and skips all that,
+ * see proc_reg_open().
+ */
+static bool pde_needs_open_node(const struct proc_dir_entry *pde)
+{
+	if (!S_ISREG(pde->mode) || pde_is_permanent(pde))
+		return false;
+	return pde->proc_ops->proc_release;
+}
+
 /* returns the registered entry, or frees dp and returns NULL on failure */
 struct proc_dir_entry *proc_register(struct proc_dir_entry *dir,
 		struct proc_dir_entry *dp)
@@ -459,6 +472,12 @@ struct proc_dir_entry *proc_register(struct proc_dir_entry *dir,
 
 	if (!S_ISDIR(dp->mode))
 		pde_set_flags(dp);
+	if (pde_needs_open_node(dp)) {
+		dp->open = kzalloc_obj(*dp->open);
+		if (!dp->open)
+			goto out_free_inum;
+		INIT_LIST_HEAD(&dp->open->files);
+	}
 
 	write_lock(&proc_subdir_lock);
 	dp->parent = dir;
@@ -537,7 +556,6 @@ static struct proc_dir_entry *__proc_create(struct proc_dir_entry **parent,
 	ent->subdir = RB_ROOT;
 	refcount_set(&ent->refcnt, 1);
 	spin_lock_init(&ent->pde_unload_lock);
-	INIT_LIST_HEAD(&ent->pde_openers);
 	proc_set_user(ent, (*parent)->uid, (*parent)->gid);
 
 	/* Revalidate everything under /proc/${pid}/net */

@@ -35,9 +35,6 @@ struct proc_dir_entry {
 	 */
 	atomic_t in_use;
 	refcount_t refcnt;
-	struct list_head pde_openers;	/* who did ->open, but not ->release */
-	/* protects ->pde_openers and all struct pde_opener instances */
-	spinlock_t pde_unload_lock;
 	const struct inode_operations *proc_iops;
 	union {
 		const struct proc_ops *proc_ops;
@@ -47,6 +44,8 @@ struct proc_dir_entry {
 		const struct seq_operations *seq_ops;
 		int (*single_show)(struct seq_file *, void *);
 	};
+	/* the open files procfs has to know, see struct pde_open_node */
+	struct pde_open_node *open;
 	proc_write_t write;
 	void *data;
 	unsigned int state_size;
@@ -54,6 +53,8 @@ struct proc_dir_entry {
 	nlink_t nlink;
 	kuid_t uid;
 	kgid_t gid;
+	/* protects ->open->files and all struct pde_opener instances */
+	spinlock_t pde_unload_lock;
 	loff_t size;
 	struct proc_dir_entry *parent;
 	struct rb_root subdir;
@@ -333,6 +334,15 @@ struct pde_opener {
 	bool closing;
 	struct completion *c;
 } __randomize_layout;
+
+/*
+ * The open files of an entry whose ->proc_release() procfs has to call when
+ * the entry is removed while they are still open. Allocated with the entry,
+ * see proc_register().
+ */
+struct pde_open_node {
+	struct list_head files;		/* who did ->open, but not ->release */
+};
 extern const struct inode_operations proc_link_inode_operations;
 extern const struct inode_operations proc_pid_link_inode_operations;
 extern const struct super_operations proc_sops;
