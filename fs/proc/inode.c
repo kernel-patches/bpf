@@ -413,6 +413,9 @@ static loff_t proc_reg_llseek(struct file *file, loff_t offset, int whence)
 	struct proc_dir_entry *pde = PDE(file_inode(file));
 	loff_t rv;
 
+	/* procfs seeks through the seq_file itself, see pde_seq_start() */
+	if (pde_is_seq_file(pde))
+		return seq_lseek(file, offset, whence);
 	if (!pde_pin(pde))
 		return -EINVAL;
 	rv = pde->proc_ops->proc_lseek(file, offset, whence);
@@ -477,35 +480,13 @@ static ssize_t pde_read_buf(struct proc_dir_entry *pde, struct kiocb *iocb,
 static ssize_t proc_reg_read_iter(struct kiocb *iocb, struct iov_iter *iter)
 {
 	struct proc_dir_entry *pde = PDE(file_inode(iocb->ki_filp));
-	ssize_t ret;
 
+	/* procfs reads through the seq_file itself, see pde_seq_start() */
+	if (pde_is_seq_file(pde))
+		return seq_read_iter(iocb, iter);
 	if (pde_has_proc_read_buf(pde))
 		return pde_read_buf(pde, iocb, iter);
-	if (!pde_pin(pde))
-		return -EIO;
-	ret = pde->proc_ops->proc_read_iter(iocb, iter);
-	pde_unpin(pde);
-	return ret;
-}
-
-static ssize_t pde_read(struct proc_dir_entry *pde, struct file *file, char __user *buf, size_t count, loff_t *ppos)
-{
-	const auto read = pde->proc_ops->proc_read;
-	if (read)
-		return read(file, buf, count, ppos);
 	return -EIO;
-}
-
-static ssize_t proc_reg_read(struct file *file, char __user *buf, size_t count, loff_t *ppos)
-{
-	struct proc_dir_entry *pde = PDE(file_inode(file));
-	ssize_t rv;
-
-	if (!pde_pin(pde))
-		return -EIO;
-	rv = pde_read(pde, file, buf, count, ppos);
-	pde_unpin(pde);
-	return rv;
 }
 
 /*
@@ -945,43 +926,7 @@ out:
 	return 0;
 }
 
-/* For seq_file entries, see pde_seq_ops. */
-static const struct file_operations proc_seq_file_ops = {
-	.llseek		= seq_lseek,
-	.read_iter	= seq_read_iter,
-	.splice_read	= copy_splice_read,
-	.write_iter	= proc_reg_write_iter,
-	.splice_write	= iter_file_splice_write,
-	.poll		= proc_reg_poll,
-	.unlocked_ioctl	= proc_reg_unlocked_ioctl,
-	.compat_ioctl	= proc_reg_compat_ioctl,
-	.mmap		= proc_reg_mmap,
-	.get_unmapped_area = proc_reg_get_unmapped_area,
-#ifndef CONFIG_MMU
-	.mmap_capabilities = proc_reg_mmap_capabilities,
-#endif
-	.open		= proc_reg_open,
-	.release	= proc_reg_release,
-};
-
 static const struct file_operations proc_reg_file_ops = {
-	.llseek		= proc_reg_llseek,
-	.read		= proc_reg_read,
-	.write_iter	= proc_reg_write_iter,
-	.splice_write	= iter_file_splice_write,
-	.poll		= proc_reg_poll,
-	.unlocked_ioctl	= proc_reg_unlocked_ioctl,
-	.compat_ioctl	= proc_reg_compat_ioctl,
-	.mmap		= proc_reg_mmap,
-	.get_unmapped_area = proc_reg_get_unmapped_area,
-#ifndef CONFIG_MMU
-	.mmap_capabilities = proc_reg_mmap_capabilities,
-#endif
-	.open		= proc_reg_open,
-	.release	= proc_reg_release,
-};
-
-static const struct file_operations proc_iter_file_ops = {
 	.llseek		= proc_reg_llseek,
 	.read_iter	= proc_reg_read_iter,
 	.write_iter	= proc_reg_write_iter,
@@ -1051,10 +996,6 @@ struct inode *proc_get_inode(struct super_block *sb, struct proc_dir_entry *de)
 		inode->i_op = de->proc_iops;
 		if (pde_has_proc_fops(de))
 			inode->i_fop = de->proc_fops;
-		else if (pde_is_seq_file(de))
-			inode->i_fop = &proc_seq_file_ops;
-		else if (pde_has_proc_read_iter(de) || pde_has_proc_read_buf(de))
-			inode->i_fop = &proc_iter_file_ops;
 		else
 			inode->i_fop = &proc_reg_file_ops;
 	} else if (S_ISDIR(inode->i_mode)) {

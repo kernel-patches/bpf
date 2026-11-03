@@ -1458,3 +1458,16 @@ it pins the entry, calls the method with the kernel copy and copies it
 back out after unpinning the entry if the ioctl succeeded. A command
 that isn't in the table fails with -ENOTTY, 32-bit tasks go through the
 same table.
+
+---
+
+**mandatory**
+
+->proc_read() and ->proc_read_iter() are gone. Implement
+->proc_read_buf() instead. It fills a kernel buffer of at most
+->proc_read_size bytes, PAGE_SIZE if that's 0, which procfs copies to
+userspace after it unpinned the entry, so the method never touches
+userspace. Larger reads come up short unless the entry asks for
+PROC_ENTRY_FULL_READS. seq_file entries are read by procfs itself, see
+proc_create_seq() and friends. An initializer that still names
+->proc_read fails to build, seq_read() included.

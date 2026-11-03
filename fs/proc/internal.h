@@ -103,11 +103,6 @@ static inline bool pde_has_proc_fops(const struct proc_dir_entry *pde)
 	return pde->flags & PROC_ENTRY_proc_fops;
 }
 
-static inline bool pde_has_proc_read_iter(const struct proc_dir_entry *pde)
-{
-	return pde->flags & PROC_ENTRY_proc_read_iter;
-}
-
 static inline bool pde_has_proc_lseek(const struct proc_dir_entry *pde)
 {
 	return pde->flags & PROC_ENTRY_proc_lseek;

@@ -459,8 +459,7 @@ static int pde_set_flags(struct proc_dir_entry *pde)
 	}
 	if (pde_is_seq_file(pde)) {
 		/* procfs reads and seeks through the seq_file itself */
-		if (WARN_ON_ONCE(proc_ops->proc_read || proc_ops->proc_read_iter ||
-				 proc_ops->proc_lseek))
+		if (WARN_ON_ONCE(proc_ops->proc_lseek))
 			return -EINVAL;
 		/* and frees it, see pde_seq_release() */
 		if (WARN_ON_ONCE(proc_ops->proc_release == seq_release ||
@@ -468,11 +467,8 @@ static int pde_set_flags(struct proc_dir_entry *pde)
 				 proc_ops->proc_release == single_release))
 			return -EINVAL;
 		pde->flags |= PROC_ENTRY_proc_lseek;
-	} else {
-		if (proc_ops->proc_read_iter)
-			pde->flags |= PROC_ENTRY_proc_read_iter;
-		if (proc_ops->proc_lseek)
-			pde->flags |= PROC_ENTRY_proc_lseek;
+	} else if (proc_ops->proc_lseek) {
+		pde->flags |= PROC_ENTRY_proc_lseek;
 	}
 	if (proc_ops->proc_poll)
 		pde->flags |= PROC_ENTRY_proc_poll;
@@ -487,8 +483,8 @@ static int pde_set_flags(struct proc_dir_entry *pde)
 			pde->flags |= PROC_ENTRY_SHORT_WRITES;
 	}
 	if (proc_ops->proc_read_buf) {
-		if (WARN_ON_ONCE(pde_is_seq_file(pde) || proc_ops->proc_read ||
-				 proc_ops->proc_read_iter))
+		/* procfs reads through the seq_file itself */
+		if (WARN_ON_ONCE(pde_is_seq_file(pde)))
 			return -EINVAL;
 		pde->flags |= PROC_ENTRY_proc_read_buf;
 		pde->read_size = proc_ops->proc_read_size ?: PAGE_SIZE;
