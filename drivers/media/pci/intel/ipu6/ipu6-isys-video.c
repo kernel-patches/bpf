@@ -521,6 +521,7 @@ int ipu6_isys_start_stream_firmware(struct ipu6_isys_stream *stream,
 				   capture);
 	if (ret < 0) {
 		dev_err(dev, "can't start streaming (%d)\n", ret);
+		ipu6_put_fw_msg_buf(stream->isys, msg);
 		goto out_stream_close;
 	}
 

@@ -359,8 +359,10 @@ static void buf_queue(struct vb2_buffer *vb)
 	ipu6_isys_buffer_list_queue(&bl, IPU6_ISYS_BUFFER_LIST_FL_ACTIVE, 0);
 
 	ret = fw_ops->stream_capture(stream->isys, stream->stream_handle, msg);
-	if (ret < 0)
+	if (ret < 0) {
 		dev_err(dev, "send stream capture failed\n");
+		ipu6_put_fw_msg_buf(stream->isys, msg);
+	}
 
 out:
 	mutex_unlock(&stream->mutex);
