@@ -3445,6 +3445,22 @@ STATIC_IFN_KUNIT int amdgpu_dm_i2c_xfer(struct i2c_adapter *i2c_adap,
 	int i;
 	int result = -EIO;
 
+	if (!i2c->oem) {
+		struct dc_link *link = ddc_service->link;
+		struct amdgpu_dm_connector *aconnector = link->priv;
+
+		/*
+		 * DDC to a native DisplayPort sink is tunneled over the AUX
+		 * channel; the physical i2c pins only reach DVI/HDMI sinks
+		 * (e.g. DP++ with a passive adapter).  Route accordingly so
+		 * the connector's single "ddc" bus works for either sink.
+		 */
+		if (aconnector && link->local_sink &&
+		    dc_is_dp_signal(link->local_sink->sink_signal) &&
+		    aconnector->dm_dp_aux.aux.ddc.algo)
+			return i2c_transfer(&aconnector->dm_dp_aux.aux.ddc, msgs, num);
+	}
+
 	if (!ddc_service->ddc_pin)
 		return result;
 
