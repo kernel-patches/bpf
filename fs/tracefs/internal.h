@@ -2,11 +2,16 @@
 #ifndef _TRACEFS_INTERNAL_H
 #define _TRACEFS_INTERNAL_H
 
+extern const struct dentry_operations tracefs_dentry_operations;
+extern const struct super_operations eventfs_ro_super_operations;
+extern struct file_system_type eventfs_ro_fs_type;
+
 enum {
 	TRACEFS_EVENT_INODE		= BIT(1),
 	TRACEFS_GID_PERM_SET		= BIT(2),
 	TRACEFS_UID_PERM_SET		= BIT(3),
 	TRACEFS_INSTANCE_INODE		= BIT(4),
+	TRACEFS_RO_EVENT_INODE		= BIT(5),
 };
 
 struct tracefs_inode {
@@ -72,6 +77,8 @@ struct dentry *tracefs_start_creating(const char *name, struct dentry *parent);
 struct dentry *tracefs_end_creating(struct dentry *dentry);
 struct dentry *tracefs_failed_creating(struct dentry *dentry);
 struct inode *tracefs_get_inode(struct super_block *sb);
+
+struct dentry *eventfs_ro_get_root(void);
 
 void eventfs_remount(struct tracefs_inode *ti, bool update_uid, bool update_gid);
 void eventfs_d_release(struct dentry *dentry);
