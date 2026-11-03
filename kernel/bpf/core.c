@@ -1519,6 +1519,153 @@ void __weak bpf_jit_free(struct bpf_prog *fp)
 	bpf_prog_unlock_free(fp);
 }
 
+#ifdef CONFIG_64BIT
+/*
+ * Multiplier and shift for an unsigned division by the constant d, with
+ * 2 <= d < 2^64 and a dividend below 2^(64 - lz): n / d == (mulhu(n, m)
+ * >> s), or with the add sequence when m needs 65 bits, (((n - t) >> 1)
+ * + t) >> (s - 1) with t = mulhu(n, m). Hacker's Delight, 2nd ed., figure
+ * 10-2.
+ */
+static void bpf_magic_udiv(u64 d, int lz, struct bpf_div_magic *mag)
+{
+	u64 mask = ~0ULL >> (lz & 63);
+	u64 nc, delta, q1, r1, q2, r2;
+	int p;
+
+	mag->add = false;
+	/* Largest value with nc mod d == d - 1 */
+	nc = mask - (mask % d + 1) % d;
+	p = 63;
+	q1 = (1ULL << 63) / nc;			/* 2^p / nc */
+	r1 = (1ULL << 63) - q1 * nc;		/* 2^p mod nc */
+	q2 = (~0ULL >> 1) / d;			/* (2^p - 1) / d */
+	r2 = (~0ULL >> 1) - q2 * d;		/* (2^p - 1) mod d */
+	do {
+		p++;
+		if (r1 >= nc - r1) {
+			q1 = 2 * q1 + 1;
+			r1 = 2 * r1 - nc;
+		} else {
+			q1 = 2 * q1;
+			r1 = 2 * r1;
+		}
+		if (r2 + 1 >= d - r2) {
+			if (q2 >= (~0ULL >> 1))
+				mag->add = true;
+			q2 = 2 * q2 + 1;
+			r2 = 2 * r2 + 1 - d;
+		} else {
+			if (q2 >= (1ULL << 63))
+				mag->add = true;
+			q2 = 2 * q2;
+			r2 = 2 * r2 + 1;
+		}
+		delta = d - 1 - r2;
+	} while (p < 128 && (q1 < delta || (q1 == delta && r1 == 0)));
+
+	mag->m = q2 + 1;
+	mag->s = p - 64;
+}
+
+/*
+ * Multiplier and shift for a signed division by the constant d, with
+ * 2 <= |d| < 2^63: q = mulhs(n, m), q += n if d > 0 and m < 0, q -= n
+ * if d < 0 and m > 0, q >>= s (arithmetic), n / d == q + (q >>> 63).
+ * Hacker's Delight, 2nd ed., figure 10-1.
+ */
+static void bpf_magic_sdiv(s64 d, struct bpf_div_magic *mag)
+{
+	u64 ad = d < 0 ? -(u64)d : (u64)d;
+	u64 t, anc, delta, q1, r1, q2, r2;
+	int p;
+
+	t = (1ULL << 63) + (d < 0);
+	anc = t - 1 - t % ad;			/* |nc| */
+	p = 63;
+	q1 = (1ULL << 63) / anc;		/* 2^p / |nc| */
+	r1 = (1ULL << 63) - q1 * anc;		/* 2^p mod |nc| */
+	q2 = (1ULL << 63) / ad;			/* 2^p / |d| */
+	r2 = (1ULL << 63) - q2 * ad;		/* 2^p mod |d| */
+	do {
+		p++;
+		q1 = 2 * q1;
+		r1 = 2 * r1;
+		if (r1 >= anc) {
+			q1++;
+			r1 -= anc;
+		}
+		q2 = 2 * q2;
+		r2 = 2 * r2;
+		if (r2 >= ad) {
+			q2++;
+			r2 -= ad;
+		}
+		delta = ad - r2;
+	} while (q1 < delta || (q1 == delta && r1 == 0));
+
+	mag->m = q2 + 1;
+	if (d < 0)
+		mag->m = -mag->m;
+	mag->s = p - 64;
+	mag->add = false;
+}
+
+/*
+ * Magic number for the 64-bit division or modulo by the constant d of a
+ * BPF_DIV or BPF_MOD with BPF_K, signed per is_signed, as the JITs emit it:
+ * the high half of the product of the dividend, shifted right by pre for an
+ * unsigned division, and the multiplier m, shifted right by s, the add
+ * sequence of bpf_magic_udiv() instead when add is set, and for a signed
+ * division with the dividend added for corr > 0 or subtracted for corr < 0
+ * before the arithmetic shift and the sign bit of the quotient added after
+ * it. The dividend of an even unsigned divisor is shifted by the trailing
+ * zeros first when the magic number needs 65 bits otherwise, the one of the
+ * odd part then fits without the add sequence. Returns false for the
+ * divisors left to the division instruction: 0 and +-1, the unsigned ones
+ * above 2^63, which a negative d stands for, and a shift the sequences do
+ * not take, which d >= 2 never gives.
+ */
+bool bpf_magic_div(s32 d, bool is_signed, struct bpf_div_magic *mag)
+{
+	mag->pre = 0;
+	mag->corr = 0;
+	if (is_signed) {
+		/* |d| >= 2, the verifier already rewrote d == -1 */
+		if (d >= -1 && d <= 1)
+			return false;
+		bpf_magic_sdiv(d, mag);
+		/* q += n for d > 0 and m < 0, q -= n for d < 0 and m > 0 */
+		if (d > 0 && (s64)mag->m < 0)
+			mag->corr = 1;
+		else if (d < 0 && (s64)mag->m > 0)
+			mag->corr = -1;
+	} else {
+		/* d >= 2, a negative d is a divisor above 2^63 */
+		if (d < 2)
+			return false;
+		bpf_magic_udiv(d, 0, mag);
+		/*
+		 * Shift the dividend by the trailing zeros of an even divisor
+		 * first, the magic number of the odd part then fits without
+		 * the add sequence.
+		 */
+		if (mag->add && !(d & 1)) {
+			mag->pre = __ffs(d) & 31;
+			bpf_magic_udiv(d >> mag->pre, mag->pre, mag);
+			if (mag->add)
+				return false;
+		}
+	}
+	/*
+	 * The shift is at most 63, or 64 with the add sequence which shifts
+	 * by s - 1 and needs s >= 1. Never hit for d >= 2, kept as a guard
+	 * against an unencodable count.
+	 */
+	return mag->s <= 64 - !mag->add && (!mag->add || mag->s);
+}
+#endif /* CONFIG_64BIT */
+
 int bpf_jit_get_func_addr(const struct bpf_prog *prog,
 			  const struct bpf_insn *insn, bool extra_pass,
 			  u64 *func_addr, bool *func_addr_fixed)
