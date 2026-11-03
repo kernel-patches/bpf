@@ -13,6 +13,8 @@
 #include "realtek.h"
 
 #define RTL8365MB_TABLE_ENTRY_MAX_SIZE			10
+/* Family D has only ports 0..7 in the LUT */
+#define RTL8365MB_D_L2_MAX_PORT				7
 
 /*
  * enum rtl8365mb_table - available switch tables
