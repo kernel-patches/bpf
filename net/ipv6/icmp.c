@@ -55,6 +55,7 @@
 #include <net/ip6_checksum.h>
 #include <net/ping.h>
 #include <net/protocol.h>
+#include <net/psp/functions.h>
 #include <net/raw.h>
 #include <net/rawv6.h>
 #include <net/seg6.h>
@@ -649,7 +650,8 @@ void icmp6_send(struct sk_buff *skb, u8 type, u8 code, __u32 info,
 	struct ipv6_pinfo *np;
 	const struct in6_addr *saddr = NULL;
 	bool apply_ratelimit = false;
-	struct sk_buff *ext_skb;
+	struct sk_buff *ext_skb = NULL;
+	bool decrypted = false;
 	struct dst_entry *dst;
 	unsigned int room;
 	struct icmp6hdr tmp_hdr;
@@ -778,6 +780,23 @@ void icmp6_send(struct sk_buff *skb, u8 type, u8 code, __u32 info,
 
 	np = inet6_sk(sk);
 
+	/* Don't send the decrypted part of a received skb onto the network */
+	if (unlikely(skb_is_decrypted(skb)) && skb->skb_iif) {
+		/* PSP encrypts the transport header too, so it should not be
+		 * quoted. But an error whose quote is truncated to fewer than
+		 * 8 bytes of the transport header won't be processed on the
+		 * receive side, so just skip it.
+		 */
+		if (psp_skb_is_decrypted(skb))
+			goto out_unlock;
+		/* TLS offload leaves the tcp header in the clear and so can be
+		 * quoted up to its end. A psp skb whose inner tunnel was
+		 * decapsulated also ends up here, since skb_scrub_packet()
+		 * drops SKB_EXT_PSP.
+		 */
+		decrypted = true;
+	}
+
 	if (!icmpv6_xrlim_allow(sk, type, &fl6, apply_ratelimit))
 		goto out_unlock;
 
@@ -799,6 +818,15 @@ void icmp6_send(struct sk_buff *skb, u8 type, u8 code, __u32 info,
 	if (IS_ERR(dst))
 		goto out_unlock;
 
+	/* A locally originated skb to be encrypted. Permit the packet to be
+	 * quoted if the packets source address is local.
+	 */
+	if (unlikely(skb_is_decrypted(skb)) && !skb->skb_iif &&
+	    !(dst_rt6_info(dst)->rt6i_flags & RTF_LOCAL)) {
+		dst_release(dst);
+		goto out_unlock;
+	}
+
 	ipc6.hlimit = ip6_sk_dst_hoplimit(np, &fl6, dst);
 
 	msg.skb = skb;
@@ -806,9 +834,34 @@ void icmp6_send(struct sk_buff *skb, u8 type, u8 code, __u32 info,
 	msg.type = type;
 
 	room = IPV6_MIN_MTU - sizeof(struct ipv6hdr) - sizeof(struct icmp6hdr);
-	ext_skb = icmp6_ext_append(net, skb, &tmp_hdr, room, parm->iif);
-	if (ext_skb)
-		msg.skb = ext_skb;
+	if (unlikely(decrypted)) {
+		u8 nexthdr = hdr->nexthdr;
+		const struct tcphdr *th;
+		struct tcphdr _th;
+		__be16 frag_off;
+		int hlen, tlen = 8;
+
+		/* Quote the IPv6 header, its extension headers, and the L4
+		 * header. The RFC 4884 extension would carry the payload too.
+		 */
+		hlen = ipv6_skip_exthdr(skb, msg.offset + sizeof(*hdr),
+					&nexthdr, &frag_off);
+		if (hlen < 0) {
+			hlen = msg.offset + sizeof(*hdr);
+		} else if (nexthdr == IPPROTO_TCP) {
+			th = skb_header_pointer(skb, hlen, sizeof(_th), &_th);
+			if (th)
+				tlen = max_t(int, th->doff * 4, 8);
+		}
+		room = min_t(unsigned int, room, hlen - msg.offset + tlen);
+		if (type == ICMPV6_DEST_UNREACH || type == ICMPV6_TIME_EXCEED)
+			tmp_hdr.icmp6_datagram_len = 0;
+	} else {
+		ext_skb = icmp6_ext_append(net, skb, &tmp_hdr, room,
+					   parm->iif);
+		if (ext_skb)
+			msg.skb = ext_skb;
+	}
 
 	len = msg.skb->len - msg.offset;
 	len = min_t(unsigned int, len, room);
