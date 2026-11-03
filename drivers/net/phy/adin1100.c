@@ -232,6 +232,15 @@ static int adin_soft_reset(struct phy_device *phydev)
 {
 	int ret;
 
+	/* On the ADIN1110/ADIN2111 MAC-PHYs, CRSM_SFT_RST resets the whole
+	 * chip, undoing the MAC driver's setup, and MDIO reads return stale
+	 * data until it completes. The MAC driver has already reset the
+	 * chip, so skip it here.
+	 */
+	if (phy_id_compare_model(phydev->phy_id, PHY_ID_ADIN1110) ||
+	    phy_id_compare_model(phydev->phy_id, PHY_ID_ADIN2111))
+		return 0;
+
 	ret = phy_set_bits_mmd(phydev, MDIO_MMD_VEND1, ADIN_CRSM_SFT_RST, ADIN_CRSM_SFT_RST_EN);
 	if (ret < 0)
 		return ret;
