@@ -7,6 +7,7 @@
 #include <libvfio/iova_allocator.h>
 #include <libvfio/kmsg.h>
 #include <libvfio/sysfs.h>
+#include <libvfio/uuid.h>
 #include <libvfio/vfio_pci_device.h>
 #include <libvfio/vfio_pci_driver.h>
 
