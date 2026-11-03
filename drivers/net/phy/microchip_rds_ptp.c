@@ -1318,8 +1318,10 @@ struct mchp_rds_ptp_clock *mchp_rds_ptp_probe(struct phy_device *phydev, u8 mmd,
 	clock->phydev = phydev;
 
 	rc = mchp_rds_ptp_init(clock);
-	if (rc < 0)
+	if (rc < 0) {
+		ptp_clock_unregister(clock->ptp_clock);
 		return ERR_PTR(rc);
+	}
 
 	return clock;
 }
