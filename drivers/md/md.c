@@ -351,12 +351,23 @@ static bool check_new_feature = true;
  *  start array, stop array, error, add device, remove device,
  *  start build, activate spare
  */
-static DECLARE_WAIT_QUEUE_HEAD(md_event_waiters);
+/*
+ * The entry is opaque outside procfs and rcu_dereference() can't typeof()
+ * an incomplete type with gcc 8. So the RCU pointer is a void pointer.
+ */
+static void __rcu *mdstat_entry;
 static atomic_t md_event_count;
 void md_new_event(void)
 {
+	struct proc_dir_entry *pde;
+
 	atomic_inc(&md_event_count);
-	wake_up(&md_event_waiters);
+	/* cleared under RCU by md_exit() before the removal */
+	rcu_read_lock();
+	pde = rcu_dereference(mdstat_entry);
+	if (pde)
+		proc_poll_notify(pde);
+	rcu_read_unlock();
 }
 EXPORT_SYMBOL_GPL(md_new_event);
 
@@ -9176,15 +9187,12 @@ static int md_seq_open(struct inode *inode, struct file *file)
 	return 0;
 }
 
-static int md_unloading;
 static __poll_t mdstat_poll(struct file *filp, poll_table *wait)
 {
 	struct seq_file *seq = filp->private_data;
 	__poll_t mask;
 
-	if (md_unloading)
-		return EPOLLIN|EPOLLRDNORM|EPOLLERR|EPOLLPRI;
-	poll_wait(filp, &md_event_waiters, wait);
+	pde_poll_wait(filp, wait);
 
 	/* always allow read */
 	mask = EPOLLIN | EPOLLRDNORM;
@@ -10765,7 +10773,8 @@ static void md_geninit(void)
 {
 	pr_debug("md: sizeof(mdp_super_t) = %d\n", (int)sizeof(mdp_super_t));
 
-	proc_create("mdstat", S_IRUGO, NULL, &mdstat_proc_ops);
+	rcu_assign_pointer(mdstat_entry,
+			   proc_create("mdstat", S_IRUGO, NULL, &mdstat_proc_ops));
 }
 
 static int __init md_init(void)
@@ -11074,23 +11083,19 @@ void md_autostart_arrays(int part)
 static __exit void md_exit(void)
 {
 	struct mddev *mddev;
-	int delay = 1;
 
 	unregister_blkdev(MD_MAJOR,"md");
 	unregister_blkdev(mdp_major, "mdp");
 	unregister_reboot_notifier(&md_notifier);
 	unregister_sysctl_table(raid_table_header);
 
-	/* We cannot unload the modules while some process is
-	 * waiting for us in select() or poll() - wake them up
+	/*
+	 * md_new_event() can still run: take the entry away from it, then
+	 * remove it before the arrays go, the removal waits for a reader that
+	 * holds one.
 	 */
-	md_unloading = 1;
-	while (waitqueue_active(&md_event_waiters)) {
-		/* not safe to leave yet */
-		wake_up(&md_event_waiters);
-		msleep(delay);
-		delay += delay;
-	}
+	RCU_INIT_POINTER(mdstat_entry, NULL);
+	synchronize_rcu();
 	remove_proc_entry("mdstat", NULL);
 
 	spin_lock(&all_mddevs_lock);
