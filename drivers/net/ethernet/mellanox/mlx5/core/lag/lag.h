@@ -280,6 +280,11 @@ static inline bool mlx5_virt_lag_is_supported(const struct mlx5_core_dev *dev)
 	return true;
 }
 
+static inline bool mlx5_virt_lag_nonmember(struct mlx5_core_dev *dev)
+{
+	return mlx5_virt_lag_is_supported(dev) && !mlx5_lag_dev(dev);
+}
+
 static inline bool mlx5_lag_is_supported(struct mlx5_core_dev *dev)
 {
 	if (!MLX5_CAP_GEN(dev, vport_group_manager) ||
