@@ -14420,14 +14420,21 @@ SYSCALL_DEFINE5(perf_event_open,
 
 	mutex_unlock(&ctx->mutex);
 
+	/*
+	 * Publish the event on the owner's list before dropping
+	 * exec_update_lock. Otherwise a concurrent exec() can run
+	 * perf_event_remove_on_exec() and clear event->owner before
+	 * owner_entry is linked, leaving an ownerless event on
+	 * current->perf_event_list that perf_release() won't unlink.
+	 */
+	mutex_lock(&current->perf_event_mutex);
+	list_add_tail(&event->owner_entry, &current->perf_event_list);
+	mutex_unlock(&current->perf_event_mutex);
+
 	if (task) {
 		up_read(&task->signal->exec_update_lock);
 		put_task_struct(task);
 	}
-
-	mutex_lock(&current->perf_event_mutex);
-	list_add_tail(&event->owner_entry, &current->perf_event_list);
-	mutex_unlock(&current->perf_event_mutex);
 
 	/*
 	 * File reference in group guarantees that group_leader has been
