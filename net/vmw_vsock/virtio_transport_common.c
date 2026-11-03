@@ -33,6 +33,15 @@
 #define MAX_COLLAPSE_LEN \
 	SKB_MAX_ORDER(VIRTIO_VSOCK_SKB_HEADROOM, PAGE_ALLOC_COSTLY_ORDER)
 
+/*
+ * Bound the interval that an RX worker owns a socket lock. One maximum packet
+ * buffer (64 KiB) bounds payload in one uninterrupted ownership interval.
+ * Small and zero-length packets need a packet limit to bound per-packet work;
+ * the 64-packet policy uses VHOST_NET_BATCH as a reference.
+ */
+#define VIRTIO_TRANSPORT_RX_BATCH_MAX_PKTS	64
+#define VIRTIO_TRANSPORT_RX_BATCH_MAX_BYTES	VIRTIO_VSOCK_MAX_PKT_BUF_SIZE
+
 static void virtio_transport_cancel_close_work(struct vsock_sock *vsk,
 					       bool cancel_timeout);
 static s64 virtio_transport_has_space(struct virtio_vsock_sock *vvs);
@@ -1793,13 +1802,94 @@ virtio_transport_find_socket(struct sockaddr_vm *src,
 	return sk;
 }
 
+static void
+virtio_transport_trace_recv_pkt(const struct virtio_vsock_hdr *hdr,
+				const struct sockaddr_vm *src,
+				const struct sockaddr_vm *dst)
+{
+	trace_virtio_transport_recv_pkt(src->svm_cid, src->svm_port,
+					dst->svm_cid, dst->svm_port,
+					le32_to_cpu(hdr->len),
+					le16_to_cpu(hdr->type),
+					le16_to_cpu(hdr->op),
+					le32_to_cpu(hdr->flags),
+					le32_to_cpu(hdr->buf_alloc),
+					le32_to_cpu(hdr->fwd_cnt));
+}
+
+static bool
+virtio_transport_recv_pkt_set_owner(struct sk_buff *skb, struct sock *sk)
+{
+	if (skb_set_owner_sk_safe(skb, sk))
+		return true;
+
+	WARN_ONCE(1, "receiving vsock socket has sk_refcnt == 0\n");
+	return false;
+}
+
+static bool
+virtio_transport_sock_has_psock(const struct sock *sk)
+{
+	return (uintptr_t)rcu_access_pointer(__sk_user_data(sk)) &
+	       SK_USER_DATA_PSOCK;
+}
+
+/* The caller holds sk's socket lock. */
+static bool
+virtio_transport_rx_batch_can_continue(struct virtio_transport *t,
+				       struct sock *sk, u32 len)
+{
+	struct virtio_vsock_sock *vvs;
+	struct vsock_sock *vsk;
+
+	vsk = vsock_sk(sk);
+	vvs = vsk->trans;
+
+	/*
+	 * Keep a connected lookup reference only for the native, established
+	 * STREAM path. Sockets outside ESTABLISHED can change table membership;
+	 * a completed or reassigned socket must resume the per-packet path.
+	 */
+	if (sk->sk_state != TCP_ESTABLISHED ||
+	    sk->sk_type != SOCK_STREAM ||
+	    sock_flag(sk, SOCK_DONE) ||
+	    vsk->transport != &t->transport || !vvs)
+		return false;
+
+	/*
+	 * Do not admit a packet that would hit an existing RX limit while the
+	 * worker owns the socket lock. The caller holds that lock, so no reader can
+	 * dequeue until the batch is released.
+	 */
+	return (u64)vvs->buf_used + len <= vvs->buf_alloc &&
+	       !virtio_transport_rx_buf_full(vvs);
+}
+
+/* The caller holds sk's socket lock. */
+static bool
+virtio_transport_rx_batch_can_receive(struct virtio_transport *t,
+				      struct sock *sk, u32 len)
+{
+	if (!virtio_transport_rx_batch_can_continue(t, sk, len))
+		return false;
+
+	/*
+	 * Sockmap can replace sk_prot and publish a psock without the socket lock.
+	 * Check both at each packet boundary; a boundary that sees a replacement
+	 * returns to the existing per-packet path.
+	 */
+	return READ_ONCE(sk->sk_prot) == sk->sk_prot_creator &&
+	       !virtio_transport_sock_has_psock(sk);
+}
+
 /*
- * The caller holds sk's socket lock.
+ * The caller holds sk's socket lock. If @batchable is non-NULL, update it
+ * after processing @skb to say whether a native STREAM/RW batch can continue.
  */
 static void
 virtio_transport_recv_pkt_locked(struct virtio_transport *t,
 				 struct sk_buff *skb, struct sock *sk,
-				 struct net *net)
+				 struct net *net, bool *batchable)
 {
 	struct virtio_vsock_hdr *hdr = virtio_vsock_hdr(skb);
 	struct vsock_sock *vsk = vsock_sk(sk);
@@ -1808,6 +1898,9 @@ virtio_transport_recv_pkt_locked(struct virtio_transport *t,
 
 	vsock_addr_init(&src, le64_to_cpu(hdr->src_cid),
 			le32_to_cpu(hdr->src_port));
+
+	if (batchable)
+		*batchable = false;
 
 	/*
 	 * The socket may have been closed or reassigned after lookup but before
@@ -1852,6 +1945,9 @@ virtio_transport_recv_pkt_locked(struct virtio_transport *t,
 		kfree_skb(skb);
 		break;
 	}
+
+	if (batchable)
+		*batchable = virtio_transport_rx_batch_can_receive(t, sk, 0);
 }
 
 /* We are under the virtio-vsock's vsock->rx_lock or vhost-vsock's vq->mutex
@@ -1869,14 +1965,7 @@ void virtio_transport_recv_pkt(struct virtio_transport *t,
 	vsock_addr_init(&dst, le64_to_cpu(hdr->dst_cid),
 			le32_to_cpu(hdr->dst_port));
 
-	trace_virtio_transport_recv_pkt(src.svm_cid, src.svm_port,
-					dst.svm_cid, dst.svm_port,
-					le32_to_cpu(hdr->len),
-					le16_to_cpu(hdr->type),
-					le16_to_cpu(hdr->op),
-					le32_to_cpu(hdr->flags),
-					le32_to_cpu(hdr->buf_alloc),
-					le32_to_cpu(hdr->fwd_cnt));
+	virtio_transport_trace_recv_pkt(hdr, &src, &dst);
 
 	if (!virtio_transport_valid_type(le16_to_cpu(hdr->type))) {
 		(void)virtio_transport_reset_no_sock(t, skb, net);
@@ -1898,13 +1987,11 @@ void virtio_transport_recv_pkt(struct virtio_transport *t,
 		goto free_pkt;
 	}
 
-	if (!skb_set_owner_sk_safe(skb, sk)) {
-		WARN_ONCE(1, "receiving vsock socket has sk_refcnt == 0\n");
+	if (!virtio_transport_recv_pkt_set_owner(skb, sk))
 		goto free_pkt;
-	}
 
 	lock_sock(sk);
-	virtio_transport_recv_pkt_locked(t, skb, sk, net);
+	virtio_transport_recv_pkt_locked(t, skb, sk, net, NULL);
 
 	release_sock(sk);
 
@@ -1918,6 +2005,194 @@ free_pkt:
 	kfree_skb(skb);
 }
 EXPORT_SYMBOL_GPL(virtio_transport_recv_pkt);
+
+/*
+ * Release an active RX batch. A non-empty batch holds the socket lock and the
+ * reference returned by vsock_find_connected_socket_net(). An empty batch
+ * holds neither.
+ */
+void virtio_transport_rx_batch_finish(struct virtio_transport_rx_batch *batch)
+{
+	struct sock *sk = batch->sk;
+
+	batch->sk = NULL;
+	batch->pkts = 0;
+	batch->bytes = 0;
+
+	if (!sk)
+		return;
+
+	release_sock(sk);
+	sock_put(sk);
+}
+EXPORT_SYMBOL_GPL(virtio_transport_rx_batch_finish);
+
+static bool
+virtio_transport_rx_batch_matches(const struct virtio_transport_rx_batch *batch,
+				  const struct sockaddr_vm *src,
+				  const struct sockaddr_vm *dst,
+				  struct net *net)
+{
+	struct vsock_sock *vsk = vsock_sk(batch->sk);
+
+	/* The connected table is keyed by peer address and local port. */
+	return vsock_addr_equals_addr(src, &vsk->remote_addr) &&
+	       dst->svm_port == vsk->local_addr.svm_port &&
+	       vsock_net_check_mode(sock_net(batch->sk), net);
+}
+
+static bool
+virtio_transport_rx_batch_can_add(const struct virtio_transport_rx_batch *batch,
+				  u32 len)
+{
+	if (batch->pkts >= VIRTIO_TRANSPORT_RX_BATCH_MAX_PKTS ||
+	    batch->bytes >= VIRTIO_TRANSPORT_RX_BATCH_MAX_BYTES)
+		return false;
+
+	return len <= VIRTIO_TRANSPORT_RX_BATCH_MAX_BYTES - batch->bytes;
+}
+
+static void
+virtio_transport_rx_batch_account(struct virtio_transport_rx_batch *batch,
+				  u32 len)
+{
+	batch->pkts++;
+	batch->bytes += len;
+}
+
+static void
+virtio_transport_rx_batch_process(struct virtio_transport *t,
+				  struct sk_buff *skb, struct net *net,
+				  struct virtio_transport_rx_batch *batch,
+				  const struct sockaddr_vm *src,
+				  const struct sockaddr_vm *dst)
+{
+	struct virtio_vsock_hdr *hdr = virtio_vsock_hdr(skb);
+	bool batchable;
+	u32 len;
+
+	len = le32_to_cpu(hdr->len);
+	virtio_transport_trace_recv_pkt(hdr, src, dst);
+
+	if (!virtio_transport_recv_pkt_set_owner(skb, batch->sk)) {
+		virtio_transport_rx_batch_finish(batch);
+		kfree_skb(skb);
+		return;
+	}
+
+	virtio_transport_recv_pkt_locked(t, skb, batch->sk, net, &batchable);
+	if (!batchable) {
+		virtio_transport_rx_batch_finish(batch);
+		return;
+	}
+
+	virtio_transport_rx_batch_account(batch, len);
+	if (!virtio_transport_rx_batch_can_add(batch, 0))
+		virtio_transport_rx_batch_finish(batch);
+}
+
+void virtio_transport_recv_pkt_batch(struct virtio_transport *t,
+				     struct sk_buff *skb, struct net *net,
+				     struct virtio_transport_rx_batch *batch)
+{
+	struct virtio_vsock_hdr *hdr = virtio_vsock_hdr(skb);
+	struct sockaddr_vm src, dst;
+	struct sock *sk;
+	bool batchable;
+	u32 len;
+
+	/*
+	 * Batch only STREAM data packets. Control packets can change connection
+	 * state or send a reply. Keep SEQPACKET on its existing path: its EOM/EOR
+	 * record-boundary semantics have not been separately evaluated for batching.
+	 */
+	if (le16_to_cpu(hdr->type) != VIRTIO_VSOCK_TYPE_STREAM ||
+	    le16_to_cpu(hdr->op) != VIRTIO_VSOCK_OP_RW) {
+		virtio_transport_rx_batch_finish(batch);
+		goto recv_pkt;
+	}
+
+	len = le32_to_cpu(hdr->len);
+	vsock_addr_init(&src, le64_to_cpu(hdr->src_cid),
+			le32_to_cpu(hdr->src_port));
+	vsock_addr_init(&dst, le64_to_cpu(hdr->dst_cid),
+			le32_to_cpu(hdr->dst_port));
+
+	if (!virtio_transport_rx_batch_empty(batch)) {
+		/* A post-processing check cannot bound a packet already admitted. */
+		if (!virtio_transport_rx_batch_can_add(batch, len) ||
+		    !virtio_transport_rx_batch_matches(batch, &src, &dst, net)) {
+			virtio_transport_rx_batch_finish(batch);
+		} else if (!virtio_transport_rx_batch_can_receive(t, batch->sk,
+							   len)) {
+			virtio_transport_rx_batch_finish(batch);
+			goto recv_pkt;
+		}
+	}
+
+	if (!virtio_transport_rx_batch_empty(batch)) {
+		virtio_transport_rx_batch_process(t, skb, net, batch, &src, &dst);
+		return;
+	}
+
+	/*
+	 * A packet larger than the byte cap must take the regular path. Starting a
+	 * one-packet batch would already exceed the bound on socket-lock ownership.
+	 */
+	if (!virtio_transport_rx_batch_can_add(batch, len))
+		goto recv_pkt;
+
+	sk = vsock_find_connected_socket_net(&src, &dst, net);
+	if (!sk) {
+		/*
+		 * A connected lookup miss can still match a bound socket in
+		 * virtio_transport_recv_pkt().
+		 */
+		goto recv_pkt;
+	}
+
+	if (virtio_transport_get_type(sk) != le16_to_cpu(hdr->type)) {
+		/* Let the regular receive path send the type-mismatch reset. */
+		sock_put(sk);
+		goto recv_pkt;
+	}
+
+	lock_sock(sk);
+	/*
+	 * Serialize initial admission with sockmap's callback updates. Later
+	 * packet boundaries recheck native state and end a batch when they
+	 * observe a replacement.
+	 */
+	read_lock_bh(&sk->sk_callback_lock);
+	batchable = virtio_transport_rx_batch_can_receive(t, sk, len);
+	read_unlock_bh(&sk->sk_callback_lock);
+	if (!batchable) {
+		/* State or receive-buffer failures keep the regular lookup path. */
+		if (!virtio_transport_rx_batch_can_continue(t, sk, len)) {
+			release_sock(sk);
+			sock_put(sk);
+			goto recv_pkt;
+		}
+
+		virtio_transport_trace_recv_pkt(hdr, &src, &dst);
+		if (virtio_transport_recv_pkt_set_owner(skb, sk))
+			virtio_transport_recv_pkt_locked(t, skb, sk, net, NULL);
+		else
+			kfree_skb(skb);
+
+		release_sock(sk);
+		sock_put(sk);
+		return;
+	}
+
+	batch->sk = sk;
+	virtio_transport_rx_batch_process(t, skb, net, batch, &src, &dst);
+	return;
+
+recv_pkt:
+	virtio_transport_recv_pkt(t, skb, net);
+}
+EXPORT_SYMBOL_GPL(virtio_transport_recv_pkt_batch);
 
 /* Remove skbs found in a queue that have a vsk that matches.
  *
