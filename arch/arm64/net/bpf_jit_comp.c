@@ -92,6 +92,7 @@ struct jit_ctx {
 	bool fp_used;
 	bool priv_sp_used;
 	bool write;
+	unsigned long *tb;
 };
 
 struct bpf_plt {
@@ -325,8 +326,13 @@ static inline int bpf2a64_offset(int bpf_insn, int off,
 	/*
 	 * Whereas arm64 branch instructions encode the offset
 	 * from the branch itself, so we must subtract 1 from the
-	 * instruction offset.
+	 * instruction offset. A branch back takes its own position,
+	 * the next one emitted, as the offsets from the next
+	 * instruction on are still those of the previous pass,
+	 * see emit_tb().
 	 */
+	if (off < 0)
+		return ctx->offset[bpf_insn + off] - ctx->idx;
 	return ctx->offset[bpf_insn + off] - (ctx->offset[bpf_insn] - 1);
 }
 
@@ -601,6 +607,94 @@ static bool adjust_cmp_imm(u8 *op, s32 *imm)
 	}
 	*op = new_op;
 	*imm = c;
+	return true;
+}
+
+/*
+ * A compare against zero or minus one for the sign, an unsigned 32-bit
+ * compare at the sign bit and a test of a single bit test a bit of the
+ * register: returns the bit, with *nonzero set when the branch is taken
+ * with it set, or -1.
+ */
+static int tb_bit(u8 op, bool is64, s32 imm, bool *nonzero)
+{
+	const int sign = is64 ? 63 : 31;
+	u64 mask;
+
+	switch (op) {
+	case BPF_JSLT:
+	case BPF_JSGE:
+		/* x < 0, x >= 0 */
+		if (imm)
+			return -1;
+		*nonzero = op == BPF_JSLT;
+		return sign;
+	case BPF_JSGT:
+	case BPF_JSLE:
+		/* x > -1, x <= -1 */
+		if (imm != -1)
+			return -1;
+		*nonzero = op == BPF_JSLE;
+		return sign;
+	case BPF_JGT:
+	case BPF_JLE:
+		/* x > 0x7fffffff, x <= 0x7fffffff in 32 bits */
+		if (is64 || imm != 0x7fffffff)
+			return -1;
+		*nonzero = op == BPF_JGT;
+		return 31;
+	case BPF_JGE:
+	case BPF_JLT:
+		/* x >= 0x80000000, x < 0x80000000 in 32 bits */
+		if (is64 || imm != INT_MIN)
+			return -1;
+		*nonzero = op == BPF_JGE;
+		return 31;
+	case BPF_JSET:
+		mask = is64 ? (u64)(s64)imm : (u32)imm;
+		if (!is_power_of_2(mask))
+			return -1;
+		*nonzero = true;
+		return ilog2(mask);
+	default:
+		return -1;
+	}
+}
+
+/*
+ * The test bit and branch reaches 8K instructions either way. Whether a
+ * test takes it is decided in the pass over the image which settles the
+ * offsets, see bpf_int_jit_compile(): the sizing pass takes the compare and
+ * the conditional branch for every test and the indirect form for every
+ * call, so the distance to an instruction ahead known from it is the
+ * largest it gets in any later pass, the distance back is exact in the pass
+ * itself, and a test that fits there fits in the image. The extra pass of a
+ * program with subprograms starts from the offsets of the first image, which
+ * bound no later layout, as a call of a helper can leave the reach of the
+ * direct call when the code in front of it shrinks and take the indirect
+ * form again, so it keeps the decisions for the tests ahead and takes only
+ * those for the tests back again, which can leave the image a word or two
+ * larger than the first one, within the maximum image size. The decisions
+ * are kept in the tb bitmap for the pass which writes the image. Returns
+ * false without emitting for the compare and conditional branch to take
+ * over.
+ */
+static bool emit_tb(bool nonzero, u8 reg, int bit, int i, s16 off, bool extra_pass,
+		    struct jit_ctx *ctx)
+{
+	int jmp_offset;
+
+	if (!ctx->image)
+		return false;
+	jmp_offset = bpf2a64_offset(i, off, ctx);
+	if (!ctx->write && (off < 0 || !extra_pass))
+		__assign_bit(i, ctx->tb, jmp_offset >= -SZ_8K && jmp_offset < SZ_8K);
+	if (!test_bit(i, ctx->tb))
+		return false;
+	if (nonzero)
+		emit(A64_TBNZ(reg, bit, jmp_offset), ctx);
+	else
+		emit(A64_TBZ(reg, bit, jmp_offset), ctx);
 	return true;
 }
 
@@ -1844,6 +1938,8 @@ static int build_insn(const struct bpf_verifier_env *env, const struct bpf_insn 
 	u8 jmp_cond;
 	s32 jmp_offset;
 	u32 a64_insn;
+	bool nonzero;
+	int bit;
 	int ret;
 
 	if (bpf_insn_is_indirect_target(env, ctx->prog, i))
@@ -2199,6 +2295,20 @@ emit_cond_jmp:
 	case BPF_JMP32 | BPF_JSLT | BPF_K:
 	case BPF_JMP32 | BPF_JSGE | BPF_K:
 	case BPF_JMP32 | BPF_JSLE | BPF_K:
+		/* A test of the sign within reach is a test bit and branch */
+		bit = tb_bit(jmp_op, is64, imm, &nonzero);
+		if (bit >= 0 && emit_tb(nonzero, dst, bit, i, off, extra_pass, ctx))
+			break;
+		/* A compare against zero for equality is a compare and branch */
+		if (!imm && (jmp_op == BPF_JEQ || jmp_op == BPF_JNE)) {
+			jmp_offset = bpf2a64_offset(i, off, ctx);
+			check_imm19(jmp_offset);
+			if (jmp_op == BPF_JEQ)
+				emit(A64_CBZ(is64, dst, jmp_offset), ctx);
+			else
+				emit(A64_CBNZ(is64, dst, jmp_offset), ctx);
+			break;
+		}
 		if (!is_addsub_imm(imm) && !is_addsub_imm(-(u32)imm))
 			adjust_cmp_imm(&jmp_op, &cmp_imm);
 		if (is_addsub_imm(cmp_imm)) {
@@ -2212,6 +2322,10 @@ emit_cond_jmp:
 		goto emit_cond_jmp;
 	case BPF_JMP | BPF_JSET | BPF_K:
 	case BPF_JMP32 | BPF_JSET | BPF_K:
+		/* A test of a single bit within reach is a test bit and branch */
+		bit = tb_bit(jmp_op, is64, imm, &nonzero);
+		if (bit >= 0 && emit_tb(nonzero, dst, bit, i, off, extra_pass, ctx))
+			break;
 		a64_insn = A64_TST_I(is64, dst, imm);
 		if (a64_insn != AARCH64_BREAK_FAULT) {
 			emit(a64_insn, ctx);
@@ -2567,6 +2681,7 @@ struct arm64_jit_data {
 	u8 *ro_image;
 	struct bpf_binary_header *ro_header;
 	struct jit_ctx ctx;
+	int max_idx;
 };
 
 struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_prog *prog)
@@ -2628,6 +2743,9 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_pr
 	ctx.offset = kvzalloc_objs(int, prog->len + 1);
 	if (ctx.offset == NULL)
 		goto out_off;
+	ctx.tb = kvzalloc_objs(unsigned long, BITS_TO_LONGS(prog->len));
+	if (ctx.tb == NULL)
+		goto out_off;
 
 	if (bpf_prog_uses_arena_insns(prog)) {
 		ctx.user_vm_start = bpf_arena_get_user_vm_start(prog->aux->arena);
@@ -2649,6 +2767,11 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_pr
 	 *
 	 * BPF line info needs ctx->offset[i] to be the offset of
 	 * instruction[i] in jited image, so build prologue first.
+	 *
+	 * The sign and bit tests take the compare and the conditional branch
+	 * here, the pass over the image decides which take the test bit and
+	 * branch instead, see emit_tb(), which leaves one or two instructions
+	 * of the image unused per test, as a direct call leaves three.
 	 */
 	if (build_prologue(&ctx, was_classic))
 		goto out_off;
@@ -2666,6 +2789,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_pr
 
 	/* Now we know the maximum image size. */
 	prog_size = sizeof(u32) * ctx.idx;
+	jit_data->max_idx = ctx.idx;
 	/* also allocate space for plt target */
 	extable_offset = round_up(prog_size + PLT_TARGET_SIZE, extable_align);
 	image_size = extable_offset + extable_size;
@@ -2675,7 +2799,10 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_pr
 	if (!ro_header)
 		goto out_off;
 
-	/* Pass 2: Determine jited position and result for each instruction */
+	/*
+	 * Pass 2: Determine jited position and result for each instruction,
+	 * and the sign and bit tests which take the test bit and branch
+	 */
 
 	/*
 	 * Use the image(RW) for writing the JITed instructions. But also save
@@ -2731,11 +2858,13 @@ skip_init_ctx:
 	if (!prog->is_func || extra_pass) {
 		/* The jited image may shrink since the jited result for
 		 * BPF_CALL to subprog may be changed from indirect call
-		 * to direct call.
+		 * to direct call, and grow back by a test back which takes
+		 * the compare and branch again, see emit_tb(), within the
+		 * maximum image size.
 		 */
-		if (extra_pass && ctx.idx > jit_data->ctx.idx) {
+		if (extra_pass && ctx.idx > jit_data->max_idx) {
 			pr_err_once("multi-func JIT bug %d > %d\n",
-				    ctx.idx, jit_data->ctx.idx);
+				    ctx.idx, jit_data->max_idx);
 			goto out_free_hdr;
 		}
 		if (WARN_ON(bpf_jit_binary_pack_finalize(ro_header, header))) {
@@ -2775,6 +2904,7 @@ out_off:
 			prog->aux->priv_stack_ptr = NULL;
 		}
 		kvfree(ctx.offset);
+		kvfree(ctx.tb);
 out_priv_stack:
 		kfree(jit_data);
 		prog->aux->jit_data = NULL;
@@ -3837,6 +3967,7 @@ void bpf_jit_free(struct bpf_prog *prog)
 		if (jit_data) {
 			bpf_jit_binary_pack_finalize(jit_data->ro_header, jit_data->header);
 			kvfree(jit_data->ctx.offset);
+			kvfree(jit_data->ctx.tb);
 			kfree(jit_data);
 		}
 		prog->bpf_func = (void *)prog->bpf_func - cfi_get_offset();
