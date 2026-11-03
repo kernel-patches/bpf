@@ -471,6 +471,12 @@ static int pde_set_flags(struct proc_dir_entry *pde)
 		if (proc_ops->proc_lseek)
 			pde->flags |= PROC_ENTRY_proc_lseek;
 	}
+	if (proc_ops->proc_poll)
+		pde->flags |= PROC_ENTRY_proc_poll;
+	if (proc_ops->proc_release)
+		pde->flags |= PROC_ENTRY_proc_release;
+	if (proc_ops->proc_mmap)
+		pde->flags |= PROC_ENTRY_proc_mmap;
 	if (proc_ops->proc_write_buf) {
 		if (WARN_ON_ONCE(proc_ops->proc_write))
 			return -EINVAL;
@@ -508,16 +514,22 @@ static int pde_set_flags(struct proc_dir_entry *pde)
 	return 0;
 }
 
-/*
- * procfs has to know the open files of an entry whose ->proc_release() it
- * calls at removal and whose mappings it undoes then. A permanent entry is
- * never removed and skips all that, see proc_reg_open().
- */
-static bool pde_needs_open_node(const struct proc_dir_entry *pde)
+/* The open node, see struct pde_open_node. */
+static int pde_init_open_node(struct proc_dir_entry *pde)
 {
-	if (!S_ISREG(pde->mode) || pde_is_permanent(pde))
-		return false;
-	return pde->proc_ops->proc_release || pde->proc_ops->proc_mmap;
+	struct pde_open_node *on;
+
+	if (!S_ISREG(pde->mode))
+		return 0;
+	if (!pde_has_proc_poll(pde) && !pde_tracks_files(pde))
+		return 0;
+	on = kzalloc_obj(*on);
+	if (!on)
+		return -ENOMEM;
+	INIT_LIST_HEAD(&on->files);
+	init_waitqueue_head(&on->poll);
+	pde->open = on;
+	return 0;
 }
 
 /*
@@ -580,12 +592,8 @@ struct proc_dir_entry *proc_register(struct proc_dir_entry *dir,
 
 	if (!S_ISDIR(dp->mode) && pde_set_flags(dp))
 		goto out_free_inum;
-	if (pde_needs_open_node(dp)) {
-		dp->open = kzalloc_obj(*dp->open);
-		if (!dp->open)
-			goto out_free_inum;
-		INIT_LIST_HEAD(&dp->open->files);
-	}
+	if (pde_init_open_node(dp))
+		goto out_free_inum;
 	if (pde_init_seq_direct(dp))
 		goto out_free_inum;
 	pde_lockdep_init(dp, key);

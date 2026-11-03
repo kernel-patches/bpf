@@ -389,8 +389,14 @@ void proc_entry_rundown(struct proc_dir_entry *de)
 		rwsem_release(&de->dep_map, _RET_IP_);
 	}
 
-	/* ->open->files can't grow from now on. */
 	if (!de->open)
+		return;
+	/* a poll of a removed entry reports EPOLLERR, see proc_reg_poll() */
+	if (pde_has_proc_poll(de))
+		wake_up_interruptible_all(&de->open->poll);
+
+	/* ->open->files can't grow from now on. */
+	if (!pde_tracks_files(de))
 		return;
 	spin_lock(&de->pde_unload_lock);
 	while (!list_empty(&de->open->files)) {
@@ -555,25 +561,64 @@ static ssize_t proc_reg_write(struct file *file, const char __user *buf, size_t 
 	return rv;
 }
 
-static __poll_t pde_poll(struct proc_dir_entry *pde, struct file *file, struct poll_table_struct *pts)
-{
-	const auto poll = pde->proc_ops->proc_poll;
-	if (poll)
-		return poll(file, pts);
-	return DEFAULT_POLLMASK;
-}
-
+/*
+ * The pollers of an entry sleep on a wait queue procfs owns, which is there
+ * for as long as the entry's inode is, however the entry's owner goes away.
+ * The owner wakes them through proc_poll_notify(), and procfs does when the
+ * entry is removed: a poll of a removed entry reports EPOLLERR | EPOLLPRI,
+ * like kernfs_fop_poll().
+ */
 static __poll_t proc_reg_poll(struct file *file, struct poll_table_struct *pts)
 {
 	struct proc_dir_entry *pde = PDE(file_inode(file));
 	__poll_t rv;
 
-	if (!pde_pin(pde))
+	if (!pde_has_proc_poll(pde))
 		return DEFAULT_POLLMASK;
-	rv = pde_poll(pde, file, pts);
+	if (!pde_pin(pde))
+		return DEFAULT_POLLMASK | EPOLLERR | EPOLLPRI;
+	rv = pde->proc_ops->proc_poll(file, pts);
 	pde_unpin(pde);
 	return rv;
 }
+
+/**
+ * proc_poll_notify - wake up the pollers of an entry
+ * @pde: an entry with a ->proc_poll(), may be NULL
+ *
+ * May be called from any context, as long as the entry is still registered.
+ * procfs doesn't pin it here, the caller keeps it alive like it does for
+ * every other use of the pointer proc_create() returned.
+ */
+void proc_poll_notify(struct proc_dir_entry *pde)
+{
+	if (!pde)
+		return;
+	if (WARN_ON_ONCE(!pde_has_proc_poll(pde)))
+		return;
+	wake_up_interruptible_all(&pde->open->poll);
+}
+EXPORT_SYMBOL_GPL(proc_poll_notify);
+
+/**
+ * pde_poll_wait - sleep a poller on the wait queue procfs owns for an entry
+ * @file: the file ->proc_poll() was called with
+ * @pts: the poll_table ->proc_poll() was called with
+ *
+ * For a ->proc_poll() whose owner wakes the pollers with proc_poll_notify().
+ * procfs doesn't do this for every entry yet: one that still sleeps its
+ * pollers on a queue of its own would be on two queues for one poll then,
+ * and Linux AIO supports one queue per file, see aio_poll_queue_proc(). Once
+ * every entry sleeps on the procfs queue the poll_wait() moves into
+ * proc_reg_poll().
+ */
+void pde_poll_wait(struct file *file, struct poll_table_struct *pts)
+{
+	struct proc_dir_entry *pde = PDE(file_inode(file));
+
+	poll_wait(file, &pde->open->poll, pts);
+}
+EXPORT_SYMBOL_GPL(pde_poll_wait);
 
 static long pde_ioctl(struct proc_dir_entry *pde, struct file *file, unsigned int cmd, unsigned long arg)
 {
@@ -878,7 +923,8 @@ static int proc_reg_open(struct inode *inode, struct file *file)
 	if (!use_pde(pde))
 		return -ENOENT;
 
-	if (pde->open) {
+	const bool track = pde_tracks_files(pde);
+	if (track) {
 		pdeo = kmem_cache_alloc(pde_opener_cache, GFP_KERNEL);
 		if (!pdeo) {
 			rv = -ENOMEM;
@@ -888,7 +934,7 @@ static int proc_reg_open(struct inode *inode, struct file *file)
 
 	rv = pde_open(pde, inode, file);
 
-	if (pde->open) {
+	if (track) {
 		if (rv == 0) {
 			/* To know what to release. */
 			pdeo->file = file;
@@ -918,7 +964,7 @@ static int proc_reg_release(struct inode *inode, struct file *file)
 		goto out;
 	}
 
-	if (!pde->open)
+	if (!pde_tracks_files(pde))
 		goto out;
 	spin_lock(&pde->pde_unload_lock);
 	list_for_each_entry(pdeo, &pde->open->files, lh) {

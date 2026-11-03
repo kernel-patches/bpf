@@ -15,6 +15,7 @@
 #include <linux/sched/coredump.h>
 #include <linux/sched/task.h>
 #include <linux/mm.h>
+#include <linux/wait.h>
 
 struct ctl_table_header;
 struct mempolicy;
@@ -138,6 +139,26 @@ static inline bool pde_has_full_reads(const struct proc_dir_entry *pde)
 static inline bool pde_has_proc_ioctl_buf(const struct proc_dir_entry *pde)
 {
 	return pde->flags & PROC_ENTRY_proc_ioctl_buf;
+}
+
+static inline bool pde_has_proc_poll(const struct proc_dir_entry *pde)
+{
+	return pde->flags & PROC_ENTRY_proc_poll;
+}
+
+/*
+ * procfs has to know the open files of an entry whose ->proc_release() it
+ * calls at removal and whose mappings it undoes then. A permanent entry is
+ * never removed and skips all that, see proc_reg_open(). This looks at the
+ * flags and not at the proc_ops: the last close of a file can come after
+ * the entry was removed and the proc_ops freed with their module, see
+ * proc_reg_release().
+ */
+static inline bool pde_tracks_files(const struct proc_dir_entry *pde)
+{
+	if (pde_is_permanent(pde))
+		return false;
+	return pde->flags & (PROC_ENTRY_proc_release | PROC_ENTRY_proc_mmap);
 }
 
 /* procfs owns the seq_file, see pde_seq_start() */
@@ -396,15 +417,19 @@ struct pde_opener {
 } __randomize_layout;
 
 /*
- * The open files of an entry whose ->proc_release() procfs has to call and
- * whose mappings it has to undo when the entry is removed while they are
- * still open, that is of an entry with a ->proc_release() or a
- * ->proc_mmap(). Allocated with the entry, see proc_register().
+ * What procfs keeps for the open files of an entry: the files themselves if
+ * it has to call their ->proc_release() and undo their mappings when the
+ * entry is removed, that is for an entry with a ->proc_release() or a
+ * ->proc_mmap(), and the wait queue their pollers sleep on for an entry with
+ * a ->proc_poll(). Allocated with the entry, see proc_register().
  */
 struct pde_open_node {
-	struct list_head files;		/* who did ->open, but not ->release */
+	/* who did ->open, but not ->release, see pde_tracks_files() */
+	struct list_head files;
 	/* of its mappings, the same for all of them, see pde_mmap() */
 	const struct vm_operations_struct *vm_ops;
+	/* what poll() and epoll wait on, see proc_poll_notify() */
+	wait_queue_head_t poll;
 };
 extern const struct inode_operations proc_link_inode_operations;
 extern const struct inode_operations proc_pid_link_inode_operations;

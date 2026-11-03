@@ -47,6 +47,9 @@ enum {
 	 */
 	PROC_ENTRY_FULL_READS		= 1U << 11,
 	PROC_ENTRY_proc_ioctl_buf	= 1U << 12,
+	PROC_ENTRY_proc_poll		= 1U << 13,
+	PROC_ENTRY_proc_release		= 1U << 14,
+	PROC_ENTRY_proc_mmap		= 1U << 15,
 };
 
 /*
@@ -81,6 +84,12 @@ struct proc_ops {
 	 */
 	loff_t	(*proc_lseek)(struct file *, loff_t, int);
 	int	(*proc_release)(struct inode *, struct file *);
+	/*
+	 * procfs owns a wait queue for an entry with a ->proc_poll(). The
+	 * method sleeps the poller on it with pde_poll_wait() and the owner
+	 * wakes the pollers with proc_poll_notify(). A poll on a removed
+	 * entry reports EPOLLERR | EPOLLPRI.
+	 */
 	__poll_t (*proc_poll)(struct file *, struct poll_table_struct *);
 	long	(*proc_ioctl)(struct file *, unsigned int, unsigned long);
 #ifdef CONFIG_COMPAT
@@ -248,6 +257,8 @@ extern void *proc_get_parent_data(const struct inode *);
 extern void proc_remove(struct proc_dir_entry *);
 extern void remove_proc_entry(const char *, struct proc_dir_entry *);
 extern int remove_proc_subtree(const char *, struct proc_dir_entry *);
+void proc_poll_notify(struct proc_dir_entry *pde);
+void pde_poll_wait(struct file *file, struct poll_table_struct *pts);
 
 struct proc_dir_entry *proc_create_net_data(const char *name, umode_t mode,
 		struct proc_dir_entry *parent, const struct seq_operations *ops,
@@ -352,6 +363,8 @@ static inline void *proc_get_parent_data(const struct inode *inode) { BUG(); ret
 static inline void proc_remove(struct proc_dir_entry *de) {}
 #define remove_proc_entry(name, parent) do {} while (0)
 static inline int remove_proc_subtree(const char *name, struct proc_dir_entry *parent) { return 0; }
+static inline void proc_poll_notify(struct proc_dir_entry *pde) {}
+static inline void pde_poll_wait(struct file *file, struct poll_table_struct *pts) {}
 
 #define proc_create_net_data(name, mode, parent, ops, state_size, data) ({NULL;})
 #define proc_create_net_data_write(name, mode, parent, ops, write, state_size, data) ({NULL;})
