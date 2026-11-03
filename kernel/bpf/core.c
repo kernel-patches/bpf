@@ -951,7 +951,6 @@ static struct bpf_prog_pack *alloc_new_pack(bpf_jit_fill_hole_t bpf_fill_ill_ins
 		if (err)
 			goto out;
 	}
-	list_add_tail(&pack->list, &pack_list);
 	return pack;
 
 out:
@@ -963,11 +962,10 @@ out:
 void *bpf_prog_pack_alloc(u32 size, bpf_jit_fill_hole_t bpf_fill_ill_insns, bool was_classic)
 {
 	unsigned int nbits = BPF_PROG_SIZE_TO_NBITS(size);
-	struct bpf_prog_pack *pack, *fallback_pack = NULL;
-	unsigned long pos, fallback_pos = 0;
+	struct bpf_prog_pack *pack, *fallback_pack, *new_pack = NULL;
+	unsigned long pos, fallback_pos;
 	void *ptr = NULL;
 
-	mutex_lock(&pack_mutex);
 	if (size > BPF_PROG_PACK_SIZE) {
 		/*
 		 * Allocations larger than a pack get their own pages, and
@@ -991,8 +989,13 @@ void *bpf_prog_pack_alloc(u32 size, bpf_jit_fill_hole_t bpf_fill_ill_insns, bool
 				ptr = NULL;
 			}
 		}
-		goto out;
+		return ptr;
 	}
+
+	mutex_lock(&pack_mutex);
+again:
+	fallback_pack = NULL;
+	fallback_pos = 0;
 	list_for_each_entry(pack, &pack_list, list) {
 		pos = bitmap_find_next_zero_area(pack->bitmap, BPF_PROG_CHUNK_COUNT, 0,
 						 nbits, 0);
@@ -1021,11 +1024,21 @@ void *bpf_prog_pack_alloc(u32 size, bpf_jit_fill_hole_t bpf_fill_ill_insns, bool
 		goto found_free_area;
 	}
 
-	pack = alloc_new_pack(bpf_fill_ill_insns);
-	if (!pack)
-		goto out;
+	if (new_pack) {
+		list_add_tail(&new_pack->list, &pack_list);
+		pack = new_pack;
+		new_pack = NULL;
+		pos = 0;
+		goto found_free_area;
+	}
 
-	pos = 0;
+	mutex_unlock(&pack_mutex);
+	new_pack = alloc_new_pack(bpf_fill_ill_insns);
+	if (!new_pack)
+		return NULL;
+
+	mutex_lock(&pack_mutex);
+	goto again;
 
 found_free_area:
 	/* Flush only for cBPF as it may contain a crafted gadget */
@@ -1040,9 +1053,12 @@ found_free_area:
 	}
 	bitmap_set(pack->bitmap, pos, nbits);
 	ptr = (void *)(pack->ptr) + (pos << BPF_PROG_CHUNK_SHIFT);
-
-out:
 	mutex_unlock(&pack_mutex);
+
+	if (new_pack) {
+		bpf_jit_free_exec(new_pack->ptr);
+		kfree(new_pack);
+	}
 	return ptr;
 }
 
@@ -1052,12 +1068,12 @@ void bpf_prog_pack_free(void *ptr, u32 size)
 	unsigned int nbits;
 	unsigned long pos;
 
-	mutex_lock(&pack_mutex);
 	if (size > BPF_PROG_PACK_SIZE) {
 		bpf_jit_free_exec(ptr);
-		goto out;
+		return;
 	}
 
+	mutex_lock(&pack_mutex);
 	list_for_each_entry(tmp, &pack_list, list) {
 		if (ptr >= tmp->ptr && (tmp->ptr + BPF_PROG_PACK_SIZE) > ptr) {
 			pack = tmp;
@@ -1079,13 +1095,17 @@ void bpf_prog_pack_free(void *ptr, u32 size)
 	if (static_branch_unlikely(&bpf_pred_flush_enabled))
 		pack->arch_flush_needed = true;
 	if (bitmap_find_next_zero_area(pack->bitmap, BPF_PROG_CHUNK_COUNT, 0,
-				       BPF_PROG_CHUNK_COUNT, 0) == 0) {
+				       BPF_PROG_CHUNK_COUNT, 0) == 0)
 		list_del(&pack->list);
+	else
+		pack = NULL;
+out:
+	mutex_unlock(&pack_mutex);
+
+	if (pack) {
 		bpf_jit_free_exec(pack->ptr);
 		kfree(pack);
 	}
-out:
-	mutex_unlock(&pack_mutex);
 }
 
 static atomic_long_t bpf_jit_current;
