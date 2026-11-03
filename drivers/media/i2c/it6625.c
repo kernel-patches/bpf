@@ -847,8 +847,15 @@ static int it6625_get_detected_timings(struct it6625 *it6625,
 
 	bt->pixelclock = it6625_get_pclk(it6625);
 	if (bt->interlaced == V4L2_DV_INTERLACED) {
+		/*
+		 * The vertical registers hold the first field. As in the
+		 * CEA-861 interlaced formats, the second field has the same
+		 * front porch and sync, and one more back-porch line.
+		 */
 		bt->height *= 2;
-		bt->il_vsync = bt->vsync + 1;
+		bt->il_vfrontporch = bt->vfrontporch;
+		bt->il_vsync = bt->vsync;
+		bt->il_vbackporch = bt->vbackporch + 1;
 	}
 
 	return 0;
