@@ -3144,11 +3144,14 @@ static int rhtab_delete_elem(struct bpf_rhtab *rhtab, struct rhtab_elem *elem, v
 	int err;
 
 	/*
-	 * disable_instrumentation() mitigates the deadlock for programs running in NMI context.
-	 * rhashtable locks bucket with local_irq_save(). Only NMI programs may reenter
-	 * rhashtable code, bpf_disable_instrumentation() disables programs running in NMI, except
-	 * raw tracepoints, which we don't have in rhashtable.
+	 * rhashtable takes its bucket bit locks with IRQs disabled and can't
+	 * detect re-entry. With IRQs already disabled this CPU may already
+	 * hold one, e.g., in NMI or in a program attached inside the resize
+	 * worker's locked section.
 	 */
+	if (irqs_disabled())
+		return -EBUSY;
+
 	bpf_disable_instrumentation();
 
 	if (rhtab->map.key_size == sizeof(long))
@@ -3261,6 +3264,10 @@ static long rhtab_map_update_elem(struct bpf_map *map, void *key, void *value, u
 	if (atomic_read(&rhtab->ht.nelems) >= map->max_entries)
 		return -E2BIG;
 
+	/* see rhtab_delete_elem() */
+	if (irqs_disabled())
+		return -EBUSY;
+
 	elem = bpf_mem_cache_alloc(&rhtab->ma);
 	if (!elem)
 		return -ENOMEM;
@@ -3268,7 +3275,6 @@ static long rhtab_map_update_elem(struct bpf_map *map, void *key, void *value, u
 	memcpy(elem->data, key, map->key_size);
 	copy_map_value(map, rhtab_elem_value(elem, map->key_size), value);
 
-	/* Prevent deadlock for NMI programs attempting to take bucket lock */
 	bpf_disable_instrumentation();
 
 	if (map->key_size == sizeof(long))
