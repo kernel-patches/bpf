@@ -363,15 +363,16 @@ static int hexium_attach(struct saa7146_dev *dev, struct saa7146_pci_extension_d
 	ret = saa7146_vv_init(dev, &vv_data);
 	if (ret) {
 		pr_err("Error in saa7146_vv_init()\n");
-		return ret;
+		goto err_i2c;
 	}
 
 	vv_data.vid_ops.vidioc_enum_input = vidioc_enum_input;
 	vv_data.vid_ops.vidioc_g_input = vidioc_g_input;
 	vv_data.vid_ops.vidioc_s_input = vidioc_s_input;
-	if (0 != saa7146_register_device(&hexium->video_dev, dev, "hexium orion", VFL_TYPE_VIDEO)) {
+	ret = saa7146_register_device(&hexium->video_dev, dev, "hexium orion", VFL_TYPE_VIDEO);
+	if (ret) {
 		pr_err("cannot register capture v4l2 device. skipping.\n");
-		return -1;
+		goto err_vv;
 	}
 
 	pr_err("found 'hexium orion' frame grabber-%d\n", hexium_num);
@@ -383,6 +384,14 @@ static int hexium_attach(struct saa7146_dev *dev, struct saa7146_pci_extension_d
 	hexium_set_input(hexium, 0);
 
 	return 0;
+
+err_vv:
+	saa7146_vv_release(dev);
+err_i2c:
+	i2c_del_adapter(&hexium->i2c_adapter);
+	kfree(hexium);
+	dev->ext_priv = NULL;
+	return ret;
 }
 
 static int hexium_detach(struct saa7146_dev *dev)
