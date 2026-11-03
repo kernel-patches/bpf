@@ -3951,8 +3951,12 @@ void iommu_detach_group_handle(struct iommu_domain *domain,
 			       struct iommu_group *group)
 {
 	mutex_lock(&group->mutex);
-	__iommu_group_set_core_domain(group);
+	/*
+	 * Unpublish the handle first, so it would not resolve to the detaching
+	 * domain once the driver is detaching it.
+	 */
 	xa_erase(&group->pasid_array, IOMMU_NO_PASID);
+	__iommu_group_set_core_domain(group);
 	mutex_unlock(&group->mutex);
 }
 EXPORT_SYMBOL_NS_GPL(iommu_detach_group_handle, "IOMMUFD_INTERNAL");
