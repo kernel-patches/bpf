@@ -1012,7 +1012,7 @@ static int bcm63xx_init_udc_hw(struct bcm63xx_udc *udc)
 	if (rc)
 		bcm63xx_uninit_udc_hw(udc);
 
-	return 0;
+	return rc;
 }
 
 /***********************************************************************
