@@ -1557,8 +1557,7 @@ static int ntb_async_rx_submit(struct ntb_queue_entry *entry, void *offset)
 	if (!txd)
 		goto err_get_unmap;
 
-	txd->callback_result = ntb_rx_copy_callback;
-	txd->callback_param = entry;
+	dmaengine_desc_set_callback(txd, NULL, ntb_rx_copy_callback, entry);
 	dma_set_unmap(txd, unmap);
 
 	cookie = dmaengine_submit(txd);
@@ -1889,8 +1888,7 @@ static int ntb_async_tx_submit(struct ntb_transport_qp *qp,
 	if (!txd)
 		goto err_get_unmap;
 
-	txd->callback_result = ntb_tx_copy_callback;
-	txd->callback_param = entry;
+	dmaengine_desc_set_callback(txd, NULL, ntb_tx_copy_callback, entry);
 	dma_set_unmap(txd, unmap);
 
 	cookie = dmaengine_submit(txd);
