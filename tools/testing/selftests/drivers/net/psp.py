@@ -26,6 +26,8 @@ from lib.py import bkg, rand_port, wait_port_listen
 from lib.py import ip, tc
 
 TCP_ULP = 31
+IP_MTU_DISCOVER = 10
+IP_PMTUDISC_OMIT = 5
 
 
 def _get_outq(s):
@@ -793,6 +795,87 @@ def data_send_ipv6_exthdr(cfg, opt, val):
         wait_outq_empty()
         ksft_gt(_get_quiesced_stat(cfg, 'tx-packets'), tx_pkts)
         _check_data_rx(cfg, total)
+    finally:
+        _close_psp_conn(cfg, s)
+
+
+def _ipv4_snmp(key):
+    """ An Ip: counter of this netns, from /proc/net/snmp """
+    with open("/proc/net/snmp", encoding="utf-8") as f:
+        ip_lines = [line.split() for line in f if line.startswith("Ip:")]
+    return int(ip_lines[1][ip_lines[0].index(key)])
+
+
+def _ipv4_route_mtu(dst, mtu, host=None):
+    """ Add a route to @dst with @mtu, keeping the device and source of
+    the current one, which must be on-link. Returns the defer removing it.
+    """
+    route = ip(f"-4 route get {dst}", json=True, host=host)[0]
+    if route.get("gateway"):
+        raise KsftSkipEx(f"{dst} isn't on-link")
+    try:
+        ip(f"route add {dst}/32 dev {route['dev']} src {route['prefsrc']} "
+           f"mtu {mtu}", host=host)
+    except CmdExitFailure as e:
+        raise KsftSkipEx(f"can't set the route mtu to {dst}: {e}") from e
+    return defer(ip, f"route del {dst}/32 dev {route['dev']}", host=host)
+
+
+def data_send_ipv4_frags(cfg):
+    """ Test that IPv4 packets of a PSP TCP socket aren't fragmented """
+    cfg.require_ipver("4")
+    _init_psp_dev(cfg)
+
+    # Fragments which get out reach the remote. Set up the count before
+    # connecting, so a skip doesn't leave the responder mid key exchange.
+    loc, rem = cfg.addr_v["4"], cfg.remote_addr_v["4"]
+    remote_frags = _remote_count(cfg, "ip",
+                                 f"src_ip {loc} dst_ip {rem} ip_flags frag")
+    if not remote_frags:
+        raise KsftSkipEx("can't count fragments on the remote")
+
+    # TCP sizes its segments from the route MTU. With IP_PMTUDISC_OMIT, IP
+    # fragments them to the device MTU. Set a route MTU above the device
+    # MTU on both ends, since the peer's MSS limits ours too. While both
+    # are in place, a new ssh connection to the remote over these addresses
+    # can stall, so add the local one last, and remove it first.
+    mtu = min(2 * max(cfg.dev['mtu'], cfg.remote_dev['mtu']), 65535)
+    _ipv4_route_mtu(loc, mtu, host=cfg.remote)
+    local_route = _ipv4_route_mtu(rem, mtu)
+
+    s = _make_psp_conn(cfg, 0, "4")
+    try:
+        rx_assoc = cfg.pspnl.rx_assoc({"version": 0,
+                                       "dev-id": cfg.psp_dev_id,
+                                       "sock-fd": s.fileno()})
+        tx = _spi_xchg(s, rx_assoc['rx-key'])
+        cfg.pspnl.tx_assoc({"dev-id": cfg.psp_dev_id,
+                            "version": 0,
+                            "tx-key": tx,
+                            "sock-fd": s.fileno()})
+        s.setsockopt(socket.IPPROTO_IP, IP_MTU_DISCOVER, IP_PMTUDISC_OMIT)
+        mss = s.getsockopt(socket.IPPROTO_TCP, socket.TCP_MAXSEG)
+        if mss + 40 <= cfg.dev['mtu']:
+            raise KsftSkipEx(f"mss {mss} needs no fragmenting")
+
+        fails = _ipv4_snmp("FragFails")
+        # The packets are dropped, so the send may not complete (with a
+        # jumbo device MTU, the socket buffer can take all of it)
+        s.settimeout(3)
+        try:
+            s.sendall(b'f' * 200000)
+        except socket.timeout:
+            pass
+        fails = _ipv4_snmp("FragFails") - fails
+
+        # Before the next ssh to the remote, see above
+        local_route.exec()
+
+        # Fragments would go out unencrypted: the packets must be dropped
+        # instead of fragmented. FragFails is per netns, so it only
+        # confirms the drop: the remote count is what decides.
+        ksft_eq(remote_frags(), 0, comment="fragments reached the remote")
+        ksft_gt(fails, 0, comment="packets dropped instead of fragmented")
     finally:
         _close_psp_conn(cfg, s)
 
