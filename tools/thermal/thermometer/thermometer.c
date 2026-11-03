@@ -83,8 +83,15 @@ static struct tz_regex *configuration_tz_match(const char *expr,
 
 static int configuration_default_init(struct configuration *config)
 {
-	config->tz_regex = realloc(config->tz_regex, sizeof(*config->tz_regex) *
-				   (config->nr_tz_regex + 1));
+	struct tz_regex *tmp;
+
+	tmp = realloc(config->tz_regex, sizeof(*config->tz_regex) *
+		      (config->nr_tz_regex + 1));
+	if (!tmp) {
+		ERROR("Failed to allocate memory for thermal zone regex\n");
+		return -1;
+	}
+	config->tz_regex = tmp;
 
 	if (regcomp(&config->tz_regex[config->nr_tz_regex].regex, ".*",
 		    REG_NOSUB | REG_EXTENDED)) {
