@@ -2393,6 +2393,17 @@ int ksz_parse_dt_phy_config(struct ksz_device *dev, struct mii_bus *bus,
 }
 
 /**
+ * ksz_mdio_put_parent_bus - Drop the reference on a parent MDIO bus
+ * @data: mii_bus obtained from of_mdio_find_bus()
+ */
+static void ksz_mdio_put_parent_bus(void *data)
+{
+	struct mii_bus *bus = data;
+
+	put_device(&bus->dev);
+}
+
+/**
  * ksz_mdio_register - Register and configure the MDIO bus for the KSZ device.
  * @dev: Pointer to the KSZ device structure.
  *
@@ -2430,6 +2441,12 @@ int ksz_mdio_register(struct ksz_device *dev)
 
 			goto put_mdio_node;
 		}
+
+		ret = devm_add_action_or_reset(ds->dev,
+					       ksz_mdio_put_parent_bus,
+					       parent_bus);
+		if (ret)
+			goto put_mdio_node;
 
 		dev->parent_mdio_bus = parent_bus;
 	}
