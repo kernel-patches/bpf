@@ -1014,7 +1014,8 @@ static inline void rwsem_cond_wake_waiter(struct rw_semaphore *sem, long count,
  * Wait for the read lock to be granted
  */
 static struct rw_semaphore __sched *
-rwsem_down_read_slowpath(struct rw_semaphore *sem, long count, unsigned int state)
+rwsem_down_read_slowpath(struct rw_semaphore *sem, long count, unsigned int state,
+			 bool steal)
 {
 	long adjustment = -RWSEM_READER_BIAS;
 	long rcnt = (count >> RWSEM_READER_SHIFT);
@@ -1023,17 +1024,16 @@ rwsem_down_read_slowpath(struct rw_semaphore *sem, long count, unsigned int stat
 
 	/*
 	 * To prevent a constant stream of readers from starving a sleeping
-	 * writer, don't attempt optimistic lock stealing if the lock is
-	 * very likely owned by readers.
+	 * writer, only attempt optimistic lock stealing if the lock is
+	 * unlikely to be owned by readers.
 	 */
-	if ((atomic_long_read(&sem->owner) & RWSEM_READER_OWNED) &&
-	    (rcnt > 1) && !(count & RWSEM_WRITER_LOCKED))
-		goto queue;
+	steal &= !(atomic_long_read(&sem->owner) & RWSEM_READER_OWNED) ||
+		rcnt <= 1;
 
 	/*
 	 * Reader optimistic lock stealing.
 	 */
-	if (!(count & (RWSEM_WRITER_LOCKED | RWSEM_FLAG_HANDOFF))) {
+	if (steal && !(count & (RWSEM_WRITER_LOCKED | RWSEM_FLAG_HANDOFF))) {
 		rwsem_set_reader_owned(sem);
 		lockevent_inc(rwsem_rlock_steal);
 
@@ -1052,7 +1052,6 @@ rwsem_down_read_slowpath(struct rw_semaphore *sem, long count, unsigned int stat
 		return sem;
 	}
 
-queue:
 	waiter.task = current;
 	waiter.type = RWSEM_WAITING_FOR_READ;
 	waiter.timeout = jiffies + RWSEM_WAIT_TIMEOUT;
@@ -1281,14 +1280,15 @@ static struct rw_semaphore *rwsem_downgrade_wake(struct rw_semaphore *sem)
 /*
  * lock for reading
  */
-static __always_inline int __down_read_common(struct rw_semaphore *sem, int state)
+static __always_inline int __down_read_common(struct rw_semaphore *sem, int state,
+					      bool steal)
 {
 	int ret = 0;
 	long count;
 
 	preempt_disable();
 	if (!rwsem_read_trylock(sem, &count)) {
-		if (IS_ERR(rwsem_down_read_slowpath(sem, count, state))) {
+		if (IS_ERR(rwsem_down_read_slowpath(sem, count, state, steal))) {
 			ret = -EINTR;
 			goto out;
 		}
@@ -1301,17 +1301,27 @@ out:
 
 static __always_inline void __down_read(struct rw_semaphore *sem)
 {
-	__down_read_common(sem, TASK_UNINTERRUPTIBLE);
+	__down_read_common(sem, TASK_UNINTERRUPTIBLE, true);
+}
+
+static __always_inline void __down_read_nosteal(struct rw_semaphore *sem)
+{
+	__down_read_common(sem, TASK_UNINTERRUPTIBLE, false);
 }
 
 static __always_inline int __down_read_interruptible(struct rw_semaphore *sem)
 {
-	return __down_read_common(sem, TASK_INTERRUPTIBLE);
+	return __down_read_common(sem, TASK_INTERRUPTIBLE, true);
 }
 
 static __always_inline int __down_read_killable(struct rw_semaphore *sem)
 {
-	return __down_read_common(sem, TASK_KILLABLE);
+	return __down_read_common(sem, TASK_KILLABLE, true);
+}
+
+static __always_inline int __down_read_killable_nosteal(struct rw_semaphore *sem)
+{
+	return __down_read_common(sem, TASK_KILLABLE, false);
 }
 
 static inline int __down_read_trylock(struct rw_semaphore *sem)
@@ -1502,6 +1512,11 @@ static inline void __down_read(struct rw_semaphore *sem)
 	rwbase_read_lock(&sem->rwbase, TASK_UNINTERRUPTIBLE);
 }
 
+static inline void __down_read_nosteal(struct rw_semaphore *sem)
+{
+	__down_read(sem);
+}
+
 static inline int __down_read_interruptible(struct rw_semaphore *sem)
 {
 	return rwbase_read_lock(&sem->rwbase, TASK_INTERRUPTIBLE);
@@ -1510,6 +1525,11 @@ static inline int __down_read_interruptible(struct rw_semaphore *sem)
 static inline int __down_read_killable(struct rw_semaphore *sem)
 {
 	return rwbase_read_lock(&sem->rwbase, TASK_KILLABLE);
+}
+
+static inline int __down_read_killable_nosteal(struct rw_semaphore *sem)
+{
+	return __down_read_killable(sem);
 }
 
 static inline int __down_read_trylock(struct rw_semaphore *sem)
@@ -1577,6 +1597,16 @@ void __sched down_read(struct rw_semaphore *sem)
 }
 EXPORT_SYMBOL(down_read);
 
+void __sched down_read_nosteal(struct rw_semaphore *sem)
+	__no_context_analysis
+{
+	might_sleep();
+	rwsem_acquire_read(&sem->dep_map, 0, 0, _RET_IP_);
+
+	LOCK_CONTENDED(sem, __down_read_trylock, __down_read_nosteal);
+}
+EXPORT_SYMBOL(down_read_nosteal);
+
 int __sched down_read_interruptible(struct rw_semaphore *sem)
 	__no_context_analysis
 {
@@ -1606,6 +1636,21 @@ int __sched down_read_killable(struct rw_semaphore *sem)
 	return 0;
 }
 EXPORT_SYMBOL(down_read_killable);
+
+int __sched down_read_killable_nosteal(struct rw_semaphore *sem)
+	__no_context_analysis
+{
+	might_sleep();
+	rwsem_acquire_read(&sem->dep_map, 0, 0, _RET_IP_);
+
+	if (LOCK_CONTENDED_RETURN(sem, __down_read_trylock, __down_read_killable_nosteal)) {
+		rwsem_release(&sem->dep_map, _RET_IP_);
+		return -EINTR;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL(down_read_killable_nosteal);
 
 /*
  * trylock for reading -- returns 1 if successful, 0 if contention
