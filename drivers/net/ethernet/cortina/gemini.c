@@ -2194,6 +2194,10 @@ static int gmac_open(struct net_device *netdev)
 	struct gemini_ethernet_port *port = netdev_priv(netdev);
 	int err;
 
+	hrtimer_setup(&port->rx_coalesce_timer,
+		      &gmac_coalesce_delay_expired,
+		      CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+
 	err = request_irq(netdev->irq, gmac_irq,
 			  IRQF_SHARED, netdev->name, netdev);
 	if (err) {
@@ -2229,9 +2233,6 @@ static int gmac_open(struct net_device *netdev)
 	gmac_enable_irq(netdev, 1);
 	gmac_enable_tx_rx(netdev);
 	netif_tx_start_all_queues(netdev);
-
-	hrtimer_setup(&port->rx_coalesce_timer, &gmac_coalesce_delay_expired, CLOCK_MONOTONIC,
-		      HRTIMER_MODE_REL);
 
 	netdev_dbg(netdev, "opened\n");
 
@@ -2269,6 +2270,7 @@ static int gmac_stop(struct net_device *netdev)
 
 	phy_stop(netdev->phydev);
 	free_irq(netdev->irq, netdev);
+	hrtimer_cancel(&port->rx_coalesce_timer);
 
 	gmac_update_hw_stats(netdev);
 	return 0;
