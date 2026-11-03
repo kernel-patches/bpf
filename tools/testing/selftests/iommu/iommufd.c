@@ -2154,7 +2154,7 @@ FIXTURE_SETUP(iommufd_dirty_tracking)
 
 	rc = posix_memalign(&self->buffer, HUGEPAGE_SIZE, mmap_buffer_size);
 	if (rc || !self->buffer) {
-		SKIP(return, "Skipping buffer_size=%lu due to errno=%d",
+		SKIP(return, "Skipping buffer_size=%zu due to errno=%d",
 			   mmap_buffer_size, rc);
 	}
 	assert((uintptr_t)self->buffer % HUGEPAGE_SIZE == 0);
