@@ -66,6 +66,12 @@ static DEFINE_READ_MOSTLY_HASHTABLE(mm_slots_hash, MM_SLOTS_HASH_BITS);
 
 static struct kmem_cache *mm_slot_cache __ro_after_init;
 
+/*
+ * The number of VMAs with nothing to scan to walk before dropping and
+ * reacquiring the mmap_lock to relieve lock contention.
+ */
+#define KHUGEPAGED_MAX_SKIP_BATCH 1024
+
 /**
  * struct khugepaged_mm_slot - khugepaged information per mm that is being scanned
  * @slot: hash lookup from mm to mm_slot
@@ -2906,6 +2912,7 @@ static void collapse_scan_mm_slot(unsigned int progress_max,
 	struct mm_struct *mm;
 	struct vm_area_struct *vma;
 	unsigned int progress_prev = cc->progress;
+	unsigned int skipped = 0;
 
 	lockdep_assert_held(&khugepaged_mm_lock);
 	*result = SCAN_FAIL;
@@ -2947,6 +2954,14 @@ static void collapse_scan_mm_slot(unsigned int progress_max,
 			/* Unable to collapse, skip to the next candidate. */
 			mm_slot->address = ALIGN(vma->vm_end, HPAGE_PMD_SIZE);
 			cc->progress++;
+			if (++skipped >= KHUGEPAGED_MAX_SKIP_BATCH) {
+				/* Skipped a lot of VMAs, so wait for writers. */
+				mmap_read_unlock(mm);
+				cond_resched();
+				mmap_read_lock_nosteal(mm);
+				vma_iter_set(&vmi, mm_slot->address);
+				skipped = 0;
+			}
 			continue;
 		}
 		hstart = ALIGN(vma->vm_start, HPAGE_PMD_SIZE);
