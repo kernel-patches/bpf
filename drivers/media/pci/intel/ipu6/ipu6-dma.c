@@ -392,7 +392,7 @@ int ipu6_dma_map_sg(struct ipu6_bus_device *sys, struct scatterlist *sglist,
 	struct iova *iova;
 	size_t npages = 0;
 	unsigned long iova_addr;
-	int i;
+	int i, ret;
 
 	for_each_sg(sglist, sg, nents, i) {
 		if (sg->offset) {
@@ -422,7 +422,6 @@ int ipu6_dma_map_sg(struct ipu6_bus_device *sys, struct scatterlist *sglist,
 	iova_addr = iova->pfn_lo;
 	for_each_sg(sglist, sg, nents, i) {
 		phys_addr_t iova_pa;
-		int ret;
 
 		iova_pa = PFN_PHYS(iova_addr);
 		dev_dbg(dev, "mapping entry %d: iova %pap phy %pap size %d\n",
@@ -446,7 +445,7 @@ int ipu6_dma_map_sg(struct ipu6_bus_device *sys, struct scatterlist *sglist,
 out_fail:
 	ipu6_dma_unmap_sg(sys, sglist, i, dir, attrs);
 
-	return 0;
+	return ret;
 }
 EXPORT_SYMBOL_NS_GPL(ipu6_dma_map_sg, "INTEL_IPU6");
 
