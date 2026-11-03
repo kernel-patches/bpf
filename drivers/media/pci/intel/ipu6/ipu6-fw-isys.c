@@ -350,6 +350,7 @@ static int ipu6_fw_isys_init(struct ipu6_isys *isys, unsigned int num_streams)
 	ret = ipu6_fw_com_open(isys->fwctx);
 	if (ret) {
 		dev_err(dev, "isys fw com open failed %d\n", ret);
+		ipu6_fw_isys_cleanup(isys);
 		return ret;
 	}
 
