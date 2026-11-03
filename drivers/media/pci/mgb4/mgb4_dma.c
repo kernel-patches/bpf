@@ -55,8 +55,7 @@ int mgb4_dma_transfer(struct mgb4_dev *mgbdev, u32 channel, bool write,
 		return -EIO;
 	}
 
-	tx->callback = chan_irq;
-	tx->callback_param = chan;
+	dmaengine_desc_set_callback(tx, chan_irq, NULL, chan);
 
 	ret = dma_submit_error(dmaengine_submit(tx));
 	if (ret) {
