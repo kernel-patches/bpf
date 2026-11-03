@@ -1998,17 +1998,19 @@ mlx5e_tc_add_fdb_flow(struct mlx5e_priv *priv,
 			goto err_out;
 		}
 
-		int_port = mlx5e_tc_int_port_get(mlx5e_get_int_port_priv(priv),
-						 parse_attr->filter_dev->ifindex,
-						 flow_flag_test(flow, EGRESS) ?
-						 MLX5E_TC_INT_PORT_EGRESS :
-						 MLX5E_TC_INT_PORT_INGRESS);
-		if (IS_ERR(int_port)) {
-			err = PTR_ERR(int_port);
-			goto err_out;
-		}
+		if (!esw_attr->int_port) {
+			int_port = mlx5e_tc_int_port_get(mlx5e_get_int_port_priv(priv),
+							 parse_attr->filter_dev->ifindex,
+							 flow_flag_test(flow, EGRESS) ?
+							 MLX5E_TC_INT_PORT_EGRESS :
+							 MLX5E_TC_INT_PORT_INGRESS);
+			if (IS_ERR(int_port)) {
+				err = PTR_ERR(int_port);
+				goto err_out;
+			}
 
-		esw_attr->int_port = int_port;
+			esw_attr->int_port = int_port;
+		}
 	}
 
 	err = post_process_attr(flow, attr, extack);
