@@ -286,6 +286,31 @@ extern struct dentry *proc_lookup(struct inode *, struct dentry *, unsigned int)
 struct dentry *proc_lookup_de(struct inode *, struct dentry *, struct proc_dir_entry *);
 extern int proc_readdir(struct file *, struct dir_context *);
 int proc_readdir_de(struct file *, struct dir_context *, struct proc_dir_entry *);
+
+/*
+ * Where the next readdir resumes. The entries are counted, so one that is
+ * added or removed in front of the position would shift what the next call
+ * returns. The name of the last entry emitted doesn't move. The directory's
+ * file keeps it, see proc_dir_release().
+ */
+struct proc_dir_cursor {
+	loff_t pos;			/* the position behind the entry */
+	unsigned int len;
+	char name[NAME_MAX + 1];
+};
+
+/* The entry to resume after, if the position is still the one behind it. */
+static inline const struct proc_dir_cursor *
+proc_dir_cursor_at(struct file *file, loff_t pos)
+{
+	const struct proc_dir_cursor *cursor = file->private_data;
+
+	if (cursor && cursor->pos == pos)
+		return cursor;
+	return NULL;
+}
+void proc_dir_cursor_set(struct file *file, const char *name, unsigned int len,
+			 loff_t pos);
 int proc_dir_release(struct inode *, struct file *);
 
 static inline void pde_get(struct proc_dir_entry *pde)

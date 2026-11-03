@@ -301,22 +301,16 @@ struct dentry *proc_lookup(struct inode *dir, struct dentry *dentry,
 }
 
 /*
- * Where the next readdir resumes. The entries are counted, so one that is
- * added or removed in front of the position would shift what the next call
- * returns. The name of the last entry emitted doesn't move.
+ * Remember @name as the entry the listing is behind at @pos. If this can't
+ * the next call counts from the start.
  */
-struct proc_dir_cursor {
-	loff_t pos;			/* the position behind the entry */
-	unsigned int len;
-	char name[NAME_MAX + 1];
-};
-
-/* If this can't remember the entry the next call counts from the start. */
-static void proc_dir_cursor_set(struct file *file, struct proc_dir_entry *de,
-				loff_t pos)
+void proc_dir_cursor_set(struct file *file, const char *name, unsigned int len,
+			 loff_t pos)
 {
 	struct proc_dir_cursor *cursor = file->private_data;
 
+	if (len > NAME_MAX)
+		return;
 	if (!cursor) {
 		cursor = kmalloc_obj(*cursor, GFP_KERNEL_ACCOUNT);
 		if (!cursor)
@@ -324,8 +318,8 @@ static void proc_dir_cursor_set(struct file *file, struct proc_dir_entry *de,
 		file->private_data = cursor;
 	}
 	cursor->pos = pos;
-	cursor->len = de->namelen;
-	memcpy(cursor->name, de->name, de->namelen);
+	cursor->len = len;
+	memcpy(cursor->name, name, len);
 }
 
 int proc_dir_release(struct inode *inode, struct file *file)
@@ -343,7 +337,7 @@ int proc_dir_release(struct inode *inode, struct file *file)
 int proc_readdir_de(struct file *file, struct dir_context *ctx,
 		    struct proc_dir_entry *de)
 {
-	struct proc_dir_cursor *cursor = file->private_data;
+	const struct proc_dir_cursor *cursor;
 	struct proc_dir_entry *dir = de;
 	int i;
 
@@ -351,7 +345,8 @@ int proc_readdir_de(struct file *file, struct dir_context *ctx,
 		return 0;
 
 	read_lock(&proc_subdir_lock);
-	if (cursor && cursor->pos == ctx->pos) {
+	cursor = proc_dir_cursor_at(file, ctx->pos);
+	if (cursor) {
 		/* Resume after the last entry emitted, wherever it is now. */
 		de = pde_subdir_after(dir, cursor->name, cursor->len);
 	} else {
@@ -375,7 +370,7 @@ int proc_readdir_de(struct file *file, struct dir_context *ctx,
 			return 0;
 		}
 		ctx->pos++;
-		proc_dir_cursor_set(file, de, ctx->pos);
+		proc_dir_cursor_set(file, de->name, de->namelen, ctx->pos);
 		read_lock(&proc_subdir_lock);
 		/* Removed in the meantime, go on after its name. */
 		if (RB_EMPTY_NODE(&de->subdir_node))
