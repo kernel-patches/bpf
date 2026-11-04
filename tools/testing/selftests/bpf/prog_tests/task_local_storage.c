@@ -495,6 +495,91 @@ done:
 	uptr_map_failure__destroy(skel);
 }
 
+static int create_task_storage_map(__u32 value_size)
+{
+	LIBBPF_OPTS(bpf_map_create_opts, create_attr);
+	struct btf *btf;
+	int int_id, char_id, arr_id, err, saved_errno;
+	int map_fd = -1;
+
+	btf = btf__new_empty();
+	if (!ASSERT_OK_PTR(btf, "btf__new"))
+		goto done;
+
+	int_id = btf__add_int(btf, "int", 4, BTF_INT_SIGNED);
+	char_id = btf__add_int(btf, "char", 1, 0);
+	arr_id = btf__add_array(btf, int_id, char_id, value_size);
+	err = btf__load_into_kernel(btf);
+	if (!ASSERT_OK(err, "btf__load_into_kernel"))
+		goto done;
+
+	create_attr.map_flags = BPF_F_NO_PREALLOC;
+	create_attr.btf_fd = btf__fd(btf);
+	create_attr.btf_key_type_id = int_id;
+	create_attr.btf_value_type_id = arr_id;
+	map_fd = bpf_map_create(BPF_MAP_TYPE_TASK_STORAGE, "big_ls_map",
+				sizeof(int), value_size, 0, &create_attr);
+
+done:
+	saved_errno = errno;
+	btf__free(btf);
+	errno = saved_errno;
+	return map_fd;
+}
+
+/* Return the largest value_size the kernel accepts for a local storage
+ * map, or -1 on an unexpected error.
+ */
+static int find_max_value_size(void)
+{
+	int lo = 1, hi = 65535, mid, map_fd;
+
+	while (lo < hi) {
+		mid = lo + (hi - lo + 1) / 2;
+
+		map_fd = create_task_storage_map(mid);
+		if (map_fd >= 0) {
+			close(map_fd);
+			lo = mid;
+		} else {
+			if (!ASSERT_EQ(errno, E2BIG, "create_task_storage_map errno"))
+				return -1;
+			hi = mid - 1;
+		}
+	}
+	return lo;
+}
+
+static void test_local_storage_max_value_size(void)
+{
+	int map_fd, task_fd = -1, max_size, err;
+	void *buf = NULL;
+
+	max_size = find_max_value_size();
+	if (!ASSERT_GE(max_size, 4096, "find_max_value_size"))
+		return;
+
+	map_fd = create_task_storage_map(max_size);
+	if (!ASSERT_OK_FD(map_fd, "create_task_storage_map"))
+		return;
+
+	task_fd = sys_pidfd_open(getpid(), 0);
+	if (!ASSERT_OK_FD(task_fd, "sys_pidfd_open"))
+		goto out;
+
+	buf = calloc(1, max_size);
+	if (!ASSERT_OK_PTR(buf, "calloc"))
+		goto out;
+	err = bpf_map_update_elem(map_fd, &task_fd, buf, 0);
+	ASSERT_OK(err, "bpf_map_update_elem");
+
+out:
+	free(buf);
+	if (task_fd >= 0)
+		close(task_fd);
+	close(map_fd);
+}
+
 void test_task_local_storage(void)
 {
 	if (test__start_subtest("sys_enter_exit"))
@@ -521,5 +606,7 @@ void test_task_local_storage(void)
 		test_uptr_map_failure("empty_uptr_map", EINVAL);
 	if (test__start_subtest("uptr_map_failure_kstruct"))
 		test_uptr_map_failure("kstruct_uptr_map", EINVAL);
+	if (test__start_subtest("local_storage_max_value_size"))
+		test_local_storage_max_value_size();
 	RUN_TESTS(uptr_failure);
 }
