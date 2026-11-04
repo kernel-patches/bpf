@@ -1625,13 +1625,21 @@ static int gve_adminq_process_rss_query(struct gve_priv *priv,
 					struct ethtool_rxfh_param *rxfh)
 {
 	u32 total_memory_length;
-	u16 hash_lut_length;
+	u32 hash_lut_length;
 	void *rss_info_addr;
 	__be32 *lut;
 	u16 i;
 
 	total_memory_length = be32_to_cpu(descriptor->total_length);
 	hash_lut_length = priv->rss_lut_size * sizeof(*rxfh->indir);
+
+	if (sizeof(*descriptor) + priv->rss_key_size + hash_lut_length >
+	    GVE_ADMINQ_BUFFER_SIZE) {
+		dev_err(&priv->dev->dev,
+			"rss sizes from device do not fit the adminq buffer: key %u lut %u\n",
+			priv->rss_key_size, priv->rss_lut_size);
+		return -EINVAL;
+	}
 
 	if (sizeof(*descriptor) + priv->rss_key_size + hash_lut_length != total_memory_length) {
 		dev_err(&priv->dev->dev,
