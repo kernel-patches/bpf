@@ -2405,6 +2405,11 @@ static int btf_dump_type_data_check_zero(struct btf_dump *d,
 	     !d->typed_dump->is_array_char))
 		return 0;
 
+	/* members and elements get here without a check against data_end */
+	err = btf_dump_type_data_check_overflow(d, t, id, data, bits_offset, bit_sz);
+	if (err < 0)
+		return err;
+
 	t = skip_mods_and_typedefs(d->btf, id, NULL);
 
 	switch (btf_kind(t)) {
@@ -2434,14 +2439,12 @@ static int btf_dump_type_data_check_zero(struct btf_dump *d,
 		 * non-zero because the string is terminated.
 		 */
 		for (i = 0; i < array->nelems; i++) {
-			if (i == 0 && ischar && *(char *)data == 0)
-				return -ENODATA;
 			err = btf_dump_type_data_check_zero(d, elem_type,
 							    elem_type_id,
 							    data +
 							    (i * elem_size),
 							    bits_offset, 0);
-			if (err != -ENODATA)
+			if (err != -ENODATA || ischar)
 				return err;
 		}
 		return -ENODATA;
