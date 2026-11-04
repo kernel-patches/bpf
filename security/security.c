@@ -2744,6 +2744,40 @@ int security_file_receive(struct file *file)
 }
 
 /**
+ * security_file_open_name() - Authorize a pathname open before lookup
+ * @name: kernel copy of the unresolved pathname, which may be empty
+ * @base: starting path selected by the lookup
+ * @flags: effective open flags
+ * @mode: creation mode, including the file type, before applying the umask
+ * @lookup_flags: current pathname lookup flags, including LOOKUP_RCU
+ *
+ * Check the original pathname before lookup, creation, or opening the file.
+ * The pathname and @base are borrowed for the duration of the hook.  The walk
+ * starts from @base for this attempt even if the cwd or directory descriptor
+ * changes during the hook.  A lookup retry selects and checks its base again.
+ * The base is the process root for ordinary absolute names and the selected
+ * directory for relative names or LOOKUP_IN_ROOT.  For kernel opens with an
+ * explicit root, the base is the supplied path.  An empty pathname opens the
+ * base itself, which may be a non-directory.  No separately resolved target
+ * is supplied.
+ * This hook also covers O_PATH opens and io_uring retry attempts.
+ *
+ * This hook must not sleep.  With LOOKUP_RCU, @base is protected by RCU rather
+ * than path references.  Return -ECHILD if the check requires a referenced
+ * base; the lookup will retry without LOOKUP_RCU unless LOOKUP_CACHED forbids
+ * it.  Without LOOKUP_RCU, the lookup holds path references.
+ *
+ * Return: Returns 0 if permission is granted, or a negative error code.
+ */
+int security_file_open_name(const struct filename *name,
+			    const struct path *base, int flags, umode_t mode,
+			    unsigned int lookup_flags)
+{
+	return call_int_hook(file_open_name, name, base, flags, mode,
+			     lookup_flags);
+}
+
+/**
  * security_file_open() - Save open() time state for late use by the LSM
  * @file:
  *
