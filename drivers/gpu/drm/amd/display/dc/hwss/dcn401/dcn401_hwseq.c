@@ -2591,6 +2591,7 @@ void dcn401_program_front_end_for_ctx(
 	unsigned int i;
 	unsigned int prev_hubp_count = 0;
 	unsigned int hubp_count = 0;
+	unsigned int min_ttu_vblank = UINT_MAX;
 	struct dce_hwseq *hws = dc->hwseq;
 	struct pipe_ctx *pipe = NULL;
 
@@ -2623,17 +2624,31 @@ void dcn401_program_front_end_for_ctx(
 	}
 
 	for (i = 0; i < dc->res_pool->pipe_count; i++) {
+		pipe = &context->res_ctx.pipe_ctx[i];
+
 		if (dc->current_state->res_ctx.pipe_ctx[i].plane_state)
 			prev_hubp_count++;
-		if (context->res_ctx.pipe_ctx[i].plane_state)
+		if (pipe->plane_state) {
 			hubp_count++;
+			min_ttu_vblank = min(min_ttu_vblank,
+				pipe->hubp_regs.ttu_regs.min_ttu_vblank);
+		}
 	}
 
 	if (prev_hubp_count == 0 && hubp_count > 0) {
-		if (dc->res_pool->hubbub->funcs->force_pstate_change_control)
-			dc->res_pool->hubbub->funcs->force_pstate_change_control(
-				dc->res_pool->hubbub, true, false);
-		udelay(500);
+		struct hubbub *hubbub = dc->res_pool->hubbub;
+		unsigned int pstate_wm_a;
+
+		/* WM_A is only raised in prepare_bandwidth, so HW holds the max of old and new */
+		pstate_wm_a = max(context->bw_ctx.bw.dcn.watermarks.dcn4x.a.uclk_pstate,
+			dc->current_state->bw_ctx.bw.dcn.watermarks.dcn4x.a.uclk_pstate);
+
+		/* MIN_TTU_VBLANK and UCLK_PSTATE_CHANGE_WATERMARK_A are both in refclk cycles */
+		if (min_ttu_vblank < pstate_wm_a) {
+			if (hubbub->funcs->force_pstate_change_control)
+				hubbub->funcs->force_pstate_change_control(hubbub, true, false);
+			udelay(500);
+		}
 	}
 
 	/* Set pipe update flags and lock pipes */
