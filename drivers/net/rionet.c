@@ -387,8 +387,10 @@ static int rionet_close(struct net_device *ndev)
 			rio_send_doorbell(peer->rdev, RIONET_DOORBELL_LEAVE);
 			nets[netid].active[peer->rdev->destid] = NULL;
 		}
-		if (peer->res)
+		if (peer->res) {
 			rio_release_outb_dbell(peer->rdev, peer->res);
+			peer->res = NULL;
+		}
 	}
 	spin_unlock_irqrestore(&nets[netid].lock, flags);
 
