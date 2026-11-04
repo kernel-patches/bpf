@@ -201,6 +201,7 @@ static int etf_enqueue_timesortedlist(struct sk_buff *nskb, struct Qdisc *sch,
 static void timesortedlist_drop(struct Qdisc *sch, struct sk_buff *skb,
 				ktime_t now)
 {
+	unsigned int dropped_pkts = 0, dropped_bytes = 0;
 	struct etf_sched_data *q = qdisc_priv(sch);
 	struct sk_buff *to_free = NULL;
 	struct sk_buff *tmp = NULL;
@@ -220,6 +221,8 @@ static void timesortedlist_drop(struct Qdisc *sch, struct sk_buff *skb,
 
 		report_sock_error(skb, ECANCELED, SO_EE_CODE_TXTIME_MISSED);
 
+		dropped_pkts++;
+		dropped_bytes += qdisc_pkt_len(skb);
 		qdisc_qstats_backlog_dec(sch, skb);
 		qdisc_drop(skb, sch, &to_free);
 		qdisc_qstats_overlimit(sch);
@@ -227,6 +230,7 @@ static void timesortedlist_drop(struct Qdisc *sch, struct sk_buff *skb,
 	}
 
 	kfree_skb_list(to_free);
+	qdisc_tree_reduce_backlog(sch, dropped_pkts, dropped_bytes);
 }
 
 static void timesortedlist_remove(struct Qdisc *sch, struct sk_buff *skb)
