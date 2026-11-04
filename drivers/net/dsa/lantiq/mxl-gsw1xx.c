@@ -11,6 +11,7 @@
 
 #include <linux/bits.h>
 #include <linux/delay.h>
+#include <linux/gpio/consumer.h>
 #include <linux/jiffies.h>
 #include <linux/module.h>
 #include <linux/of_device.h>
@@ -719,6 +720,7 @@ static int gsw1xx_serdes_pcs_init(struct gsw1xx_priv *priv)
 static int gsw1xx_probe(struct mdio_device *mdiodev)
 {
 	struct device *dev = &mdiodev->dev;
+	struct gpio_desc *reset_gpio;
 	struct gsw1xx_priv *priv;
 	u32 version, val;
 	u8 shellver;
@@ -736,6 +738,20 @@ static int gsw1xx_probe(struct mdio_device *mdiodev)
 	priv->gswip.hw_info = of_device_get_match_data(dev);
 	if (!priv->gswip.hw_info)
 		return -EINVAL;
+
+	/* The MDIO core handles reset-gpios only for PHYs. Reset the switch
+	 * here, so it does not run with whatever the bootloader configured.
+	 */
+	reset_gpio = devm_gpiod_get_optional(dev, "reset", GPIOD_OUT_HIGH);
+	if (IS_ERR(reset_gpio))
+		return dev_err_probe(dev, PTR_ERR(reset_gpio),
+				     "failed to get reset GPIO\n");
+
+	if (reset_gpio) {
+		fsleep(GSW1XX_RESET_ASSERT_US);
+		gpiod_set_value_cansleep(reset_gpio, 0);
+		fsleep(GSW1XX_RESET_DEASSERT_US);
+	}
 
 	priv->gswip.gswip = gsw1xx_regmap_init(priv, "switch",
 					       GSW1XX_SWITCH_BASE, 0xfff);
