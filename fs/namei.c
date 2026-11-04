@@ -749,6 +749,7 @@ struct nameidata {
 	} *stack, internal[EMBEDDED_LEVELS];
 	struct filename	*name;
 	const char *pathname;
+	const struct open_flags *open;
 	struct nameidata *saved;
 	unsigned	root_seq;
 	int		dfd;
@@ -768,6 +769,7 @@ static void __set_nameidata(struct nameidata *p, int dfd, struct filename *name)
 	p->dfd = dfd;
 	p->name = name;
 	p->pathname = likely(name) ? name->name : "";
+	p->open = NULL;
 	p->path.mnt = NULL;
 	p->path.dentry = NULL;
 	p->total_link_count = old ? old->total_link_count : 0;
@@ -2716,7 +2718,7 @@ static const char *path_init(struct nameidata *nd, unsigned flags)
 		} else {
 			path_get(&nd->path);
 		}
-		return s;
+		goto out;
 	}
 
 	nd->root.mnt = NULL;
@@ -2726,7 +2728,7 @@ static const char *path_init(struct nameidata *nd, unsigned flags)
 		error = nd_jump_root(nd);
 		if (unlikely(error))
 			return ERR_PTR(error);
-		return s;
+		goto out;
 	}
 
 	/* Relative pathname -- get the starting-point it is relative to. */
@@ -2783,6 +2785,14 @@ static const char *path_init(struct nameidata *nd, unsigned flags)
 			path_get(&nd->root);
 			nd->state |= ND_ROOT_GRABBED;
 		}
+	}
+out:
+	if (nd->open) {
+		error = security_file_open_name(nd->name, &nd->path,
+						nd->open->open_flag, nd->open->mode,
+						nd->flags);
+		if (error)
+			return ERR_PTR(error);
 	}
 	return s;
 }
@@ -4999,6 +5009,7 @@ static struct file *path_openat(struct nameidata *nd,
 	struct file *file;
 	int error;
 
+	nd->open = op;
 	file = alloc_empty_file(op->open_flag, current_cred());
 	if (IS_ERR(file))
 		return file;
