@@ -713,11 +713,36 @@ static const struct software_node gpio_hog_input_swnode =
 	SOFTWARE_NODE("hog-input", gpio_hog_input_properties,
 		      &gpio_test_provider_swnode);
 
+/* A single non-OF hog may describe lines with different polarities. */
+static const struct software_node gpio_mixed_hog_provider_swnode = {
+	.name = "gpio-mixed-hog-provider",
+};
+
+static const u32 gpio_mixed_hog_gpios[] = {
+	0, GPIO_ACTIVE_LOW,
+	1, GPIO_ACTIVE_HIGH,
+	2, GPIO_ACTIVE_LOW,
+	3, GPIO_ACTIVE_HIGH,
+};
+
+static const struct property_entry gpio_mixed_hog_properties[] = {
+	PROPERTY_ENTRY_U32_ARRAY("gpios", gpio_mixed_hog_gpios),
+	PROPERTY_ENTRY_BOOL("output-high"),
+	PROPERTY_ENTRY_BOOL("gpio-hog"),
+	{ }
+};
+
+static const struct software_node gpio_mixed_hog_swnode =
+	SOFTWARE_NODE("mixed-hog", gpio_mixed_hog_properties,
+		      &gpio_mixed_hog_provider_swnode);
+
 static const struct software_node *const gpio_hog_swnodes[] = {
 	&gpio_test_provider_swnode,
 	&gpio_hog_output_high_swnode,
 	&gpio_hog_output_low_swnode,
 	&gpio_hog_input_swnode,
+	&gpio_mixed_hog_provider_swnode,
+	&gpio_mixed_hog_swnode,
 	NULL
 };
 
@@ -809,6 +834,41 @@ static void gpio_hog_input(struct kunit *test)
 	gpio_hog_assert(test, GPIO_HOG_INPUT_OFFSET, GPIO_LINE_DIRECTION_IN);
 }
 
+static void gpio_hog_mixed_polarities(struct kunit *test)
+{
+	struct platform_device_info pdevinfo = {
+		.name = GPIO_TEST_PROVIDER,
+		.id = PLATFORM_DEVID_NONE,
+		.fwnode = software_node_fwnode(&gpio_mixed_hog_provider_swnode),
+	};
+	struct platform_device *pdev;
+	struct gpio_device *gdev;
+	struct gpio_desc *desc;
+	bool active_low;
+	int ret;
+
+	pdev = kunit_platform_device_register_full(test, &pdevinfo);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, pdev);
+
+	wait_for_device_probe();
+
+	gdev = gpio_device_find_by_label(GPIO_TEST_PROVIDER);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, gdev);
+
+	ret = kunit_add_action_or_reset(test, gpio_device_put_wrapper, gdev);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+
+	for (unsigned int i = 0; i < GPIO_TEST_PROVIDER_NGPIO; i++) {
+		desc = gpio_device_get_desc(gdev, i);
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test, desc);
+
+		active_low = gpio_mixed_hog_gpios[i * 2 + 1] == GPIO_ACTIVE_LOW;
+		KUNIT_EXPECT_EQ(test, gpiod_is_active_low(desc), active_low);
+		/* A logical high must drive the inverse level on active-low lines. */
+		KUNIT_EXPECT_EQ(test, gpiod_get_raw_value_cansleep(desc), !active_low);
+	}
+}
+
 static int gpio_hog_suite_init(struct kunit_suite *suite)
 {
 	return software_node_register_node_group(gpio_hog_swnodes);
@@ -823,6 +883,7 @@ static struct kunit_case gpio_swnode_hog_tests[] = {
 	KUNIT_CASE(gpio_hog_output_high),
 	KUNIT_CASE(gpio_hog_output_low),
 	KUNIT_CASE(gpio_hog_input),
+	KUNIT_CASE(gpio_hog_mixed_polarities),
 	{ }
 };
 
