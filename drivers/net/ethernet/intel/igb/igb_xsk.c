@@ -91,7 +91,20 @@ struct xsk_buff_pool *igb_xsk_pool(struct igb_adapter *adapter,
 	if (!igb_xdp_is_enabled(adapter))
 		return NULL;
 
-	return (pool && pool->dev) ? pool : NULL;
+	if (!pool || !pool->dev)
+		return NULL;
+
+	/* the MTU check in igb_change_mtu() does not see a pool on a queue
+	 * that was hidden at the time, for example by SR-IOV
+	 */
+	if (!igb_xsk_frame_fits(pool, adapter->max_frame_size)) {
+		netdev_warn_once(adapter->netdev,
+				 "XSK frame size is too small for the MTU, queue %d is not used in zero-copy mode\n",
+				 qid);
+		return NULL;
+	}
+
+	return pool;
 }
 
 static int igb_xsk_pool_enable(struct igb_adapter *adapter,
@@ -109,6 +122,10 @@ static int igb_xsk_pool_enable(struct igb_adapter *adapter,
 	if (qid >= netdev->real_num_rx_queues ||
 	    qid >= netdev->real_num_tx_queues)
 		return -EINVAL;
+
+	/* igb_change_mtu() keeps this true while the pool is bound */
+	if (!igb_xsk_frame_fits(pool, adapter->max_frame_size))
+		return -EOPNOTSUPP;
 
 	err = xsk_pool_dma_map(pool, &adapter->pdev->dev, IGB_RX_DMA_ATTR);
 	if (err)
