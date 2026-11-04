@@ -660,15 +660,15 @@ static inline bool acpi_device_enumerated(struct acpi_device *adev)
 /*
  * Bind physical devices with ACPI devices
  */
-struct acpi_bus_type {
+struct acpi_dev_type {
 	struct list_head list;
 	const char *name;
 	bool (*match)(struct device *dev);
 	struct acpi_device * (*find_companion)(struct device *);
 	void (*setup)(struct device *);
 };
-int register_acpi_bus_type(struct acpi_bus_type *);
-int unregister_acpi_bus_type(struct acpi_bus_type *);
+int register_acpi_dev_type(struct acpi_dev_type *type);
+int unregister_acpi_dev_type(struct acpi_dev_type *type);
 int acpi_bind_one(struct device *dev, struct acpi_device *adev);
 void acpi_unbind_one(struct device *dev);
 
@@ -979,8 +979,8 @@ static inline struct device *acpi_bus_get_primary_device(struct acpi_device *ade
 	return NULL;
 }
 
-static inline int register_acpi_bus_type(void *bus) { return 0; }
-static inline int unregister_acpi_bus_type(void *bus) { return 0; }
+static inline int register_acpi_dev_type(void *type) { return 0; }
+static inline int unregister_acpi_dev_type(void *type) { return 0; }
 
 static inline int acpi_wait_for_acpi_ipmi(void) { return 0; }
 

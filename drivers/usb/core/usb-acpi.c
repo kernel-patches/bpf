@@ -364,23 +364,23 @@ static struct acpi_device *usb_acpi_find_companion(struct device *dev)
 	return NULL;
 }
 
-static bool usb_acpi_bus_match(struct device *dev)
+static bool usb_acpi_dev_type_match(struct device *dev)
 {
 	return is_usb_device(dev) || is_usb_port(dev);
 }
 
-static struct acpi_bus_type usb_acpi_bus = {
+static struct acpi_dev_type usb_acpi_dev_type = {
 	.name = "USB",
-	.match = usb_acpi_bus_match,
+	.match = usb_acpi_dev_type_match,
 	.find_companion = usb_acpi_find_companion,
 };
 
 int usb_acpi_register(void)
 {
-	return register_acpi_bus_type(&usb_acpi_bus);
+	return register_acpi_dev_type(&usb_acpi_dev_type);
 }
 
 void usb_acpi_unregister(void)
 {
-	unregister_acpi_bus_type(&usb_acpi_bus);
+	unregister_acpi_dev_type(&usb_acpi_dev_type);
 }

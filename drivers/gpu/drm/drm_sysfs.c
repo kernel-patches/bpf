@@ -64,7 +64,7 @@ static struct device_type drm_sysfs_device_connector = {
 struct class *drm_class;
 
 #ifdef CONFIG_ACPI
-static bool drm_connector_acpi_bus_match(struct device *dev)
+static bool drm_connector_acpi_dev_type_match(struct device *dev)
 {
 	return dev->type == &drm_sysfs_device_connector;
 }
@@ -76,20 +76,20 @@ static struct acpi_device *drm_connector_acpi_find_companion(struct device *dev)
 	return to_acpi_device_node(connector->fwnode);
 }
 
-static struct acpi_bus_type drm_connector_acpi_bus = {
+static struct acpi_dev_type drm_connector_acpi_dev_type = {
 	.name = "drm_connector",
-	.match = drm_connector_acpi_bus_match,
+	.match = drm_connector_acpi_dev_type_match,
 	.find_companion = drm_connector_acpi_find_companion,
 };
 
 static void drm_sysfs_acpi_register(void)
 {
-	register_acpi_bus_type(&drm_connector_acpi_bus);
+	register_acpi_dev_type(&drm_connector_acpi_dev_type);
 }
 
 static void drm_sysfs_acpi_unregister(void)
 {
-	unregister_acpi_bus_type(&drm_connector_acpi_bus);
+	unregister_acpi_dev_type(&drm_connector_acpi_dev_type);
 }
 #else
 static void drm_sysfs_acpi_register(void) { }

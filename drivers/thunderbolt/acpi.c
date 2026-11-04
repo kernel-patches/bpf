@@ -280,7 +280,7 @@ int tb_acpi_power_off_retimers(struct tb_port *port)
 	return tb_acpi_retimer_set_power(port, false);
 }
 
-static bool tb_acpi_bus_match(struct device *dev)
+static bool tb_acpi_dev_type_match(struct device *dev)
 {
 	return tb_is_switch(dev) || tb_is_usb4_port_device(dev);
 }
@@ -351,19 +351,19 @@ static void tb_acpi_setup(struct device *dev)
 		usb4->can_offline = true;
 }
 
-static struct acpi_bus_type tb_acpi_bus = {
+static struct acpi_dev_type tb_acpi_dev_type = {
 	.name = "thunderbolt",
-	.match = tb_acpi_bus_match,
+	.match = tb_acpi_dev_type_match,
 	.find_companion = tb_acpi_find_companion,
 	.setup = tb_acpi_setup,
 };
 
 int tb_acpi_init(void)
 {
-	return register_acpi_bus_type(&tb_acpi_bus);
+	return register_acpi_dev_type(&tb_acpi_dev_type);
 }
 
 void tb_acpi_exit(void)
 {
-	unregister_acpi_bus_type(&tb_acpi_bus);
+	unregister_acpi_dev_type(&tb_acpi_dev_type);
 }
