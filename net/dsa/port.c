@@ -876,18 +876,22 @@ int dsa_port_ageing_time(struct dsa_port *dp, clock_t ageing_clock)
 {
 	unsigned long ageing_jiffies = clock_t_to_jiffies(ageing_clock);
 	unsigned int ageing_time = jiffies_to_msecs(ageing_jiffies);
+	unsigned int old_ageing_time = dp->ageing_time;
 	struct dsa_notifier_ageing_time_info info;
 	int err;
 
 	info.ageing_time = ageing_time;
 
-	err = dsa_port_notify(dp, DSA_NOTIFIER_AGEING_TIME, &info);
-	if (err)
-		return err;
-
+	/* dsa_switch_fastest_ageing_time() takes the minimum over the cached
+	 * values of all ports, so update this port's value first.
+	 */
 	dp->ageing_time = ageing_time;
 
-	return 0;
+	err = dsa_port_notify(dp, DSA_NOTIFIER_AGEING_TIME, &info);
+	if (err)
+		dp->ageing_time = old_ageing_time;
+
+	return err;
 }
 
 int dsa_port_mst_enable(struct dsa_port *dp, bool on,
