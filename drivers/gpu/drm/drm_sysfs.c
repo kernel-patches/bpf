@@ -64,11 +64,6 @@ static struct device_type drm_sysfs_device_connector = {
 struct class *drm_class;
 
 #ifdef CONFIG_ACPI
-static bool drm_connector_acpi_dev_type_match(struct device *dev)
-{
-	return dev->type == &drm_sysfs_device_connector;
-}
-
 static struct acpi_device *drm_connector_acpi_find_companion(struct device *dev)
 {
 	struct drm_connector *connector = to_drm_connector(dev);
@@ -77,8 +72,7 @@ static struct acpi_device *drm_connector_acpi_find_companion(struct device *dev)
 }
 
 static struct acpi_dev_type drm_connector_acpi_dev_type = {
-	.name = "drm_connector",
-	.match = drm_connector_acpi_dev_type_match,
+	.dev_type = &drm_sysfs_device_connector,
 	.find_companion = drm_connector_acpi_find_companion,
 };
 

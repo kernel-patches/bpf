@@ -662,11 +662,11 @@ static inline bool acpi_device_enumerated(struct acpi_device *adev)
  */
 struct acpi_dev_type {
 	struct list_head list;
-	const char *name;
-	bool (*match)(struct device *dev);
+	const struct device_type *dev_type;
 	struct acpi_device * (*find_companion)(struct device *);
 	void (*setup)(struct device *);
 };
+
 void register_acpi_dev_type(struct acpi_dev_type *type);
 void unregister_acpi_dev_type(struct acpi_dev_type *type);
 int acpi_bind_one(struct device *dev, struct acpi_device *adev);

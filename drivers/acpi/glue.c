@@ -31,29 +31,32 @@ static DECLARE_RWSEM(dev_type_sem);
 
 void register_acpi_dev_type(struct acpi_dev_type *type)
 {
-	if (acpi_disabled)
+	if (acpi_disabled || !type)
 		return;
 
-	if (type && type->match && type->find_companion) {
-		down_write(&dev_type_sem);
-		list_add_tail(&type->list, &dev_type_list);
-		up_write(&dev_type_sem);
-		pr_info("device type %s registered\n", type->name);
-	}
+	INIT_LIST_HEAD(&type->list);
+
+	if (!type->dev_type || !type->find_companion)
+		return;
+
+	guard(rwsem_write)(&dev_type_sem);
+
+	list_add_tail(&type->list, &dev_type_list);
+
+	pr_info("Device type %s added to lookup list\n", type->dev_type->name);
 }
 EXPORT_SYMBOL_GPL(register_acpi_dev_type);
 
 void unregister_acpi_dev_type(struct acpi_dev_type *type)
 {
-	if (acpi_disabled)
+	if (acpi_disabled || !type || !type->dev_type || !type->find_companion)
 		return;
 
-	if (type) {
-		down_write(&dev_type_sem);
-		list_del_init(&type->list);
-		up_write(&dev_type_sem);
-		pr_info("device type %s unregistered\n", type->name);
-	}
+	guard(rwsem_write)(&dev_type_sem);
+
+	list_del(&type->list);
+
+	pr_info("Device type %s removed from lookup list\n", type->dev_type->name);
 }
 EXPORT_SYMBOL_GPL(unregister_acpi_dev_type);
 
@@ -69,7 +72,7 @@ static struct acpi_device *acpi_companion_lookup(struct device *dev)
 	list_for_each_entry(type, &dev_type_list, list) {
 		struct acpi_device *adev;
 
-		if (!type->match(dev))
+		if (type->dev_type != dev->type)
 			continue;
 
 		adev = type->find_companion(dev);
