@@ -18,7 +18,7 @@ SYNOPSIS
 
 *OPTIONS* := { |COMMON_OPTIONS| | { **-L** | **--use-loader** } | [ { **-S** | **--sign** } {**-k** <private_key.pem>} **-i** <certificate.x509> ] }
 
-*COMMAND* := { **object** | **skeleton** | **help** }
+*COMMAND* := { **object** | **skeleton** | **subskeleton** | **min_core_btf** | **help** }
 
 GEN COMMANDS
 =============

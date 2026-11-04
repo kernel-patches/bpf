@@ -23,7 +23,7 @@ SYNOPSIS
 
 *COMMANDS* :=
 { **show** | **list** | **dump xlated** | **dump jited** | **pin** | **load** |
-**loadall** | **help** }
+**loadall** | **attach** | **detach** | **tracelog** | **run** | **profile** | **help** }
 
 PROG COMMANDS
 =============

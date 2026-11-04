@@ -21,34 +21,37 @@ SYNOPSIS
 **bpftool** **version**
 
 *OBJECT* := { **map** | **prog** | **link** | **cgroup** | **perf** | **net** | **feature** |
-**btf** | **gen** | **struct_ops** | **iter** }
+**btf** | **gen** | **struct_ops** | **iter** | **token** }
 
 *OPTIONS* := { { **-V** | **--version** } | |COMMON_OPTIONS| }
 
 *MAP-COMMANDS* :=
 { **show** | **list** | **create** | **dump** | **update** | **lookup** | **getnext** |
-**delete** | **pin** | **event_pipe** | **help** }
+**delete** | **pin** | **event_pipe** | **peek** | **push** | **pop** | **enqueue** | **dequeue** |
+**freeze** | **help** }
 
 *PROG-COMMANDS* := { **show** | **list** | **dump jited** | **dump xlated** | **pin** |
-**load** | **attach** | **detach** | **help** }
+**load** | **loadall** | **attach** | **detach** | **run** | **profile** | **tracelog** | **help** }
 
 *LINK-COMMANDS* := { **show** | **list** | **pin** | **detach** | **help** }
 
-*CGROUP-COMMANDS* := { **show** | **list** | **attach** | **detach** | **help** }
+*CGROUP-COMMANDS* := { **show** | **list** | **tree** | **attach** | **detach** | **help** }
 
 *PERF-COMMANDS* := { **show** | **list** | **help** }
 
-*NET-COMMANDS* := { **show** | **list** | **help** }
+*NET-COMMANDS* := { **show** | **list** | **attach** | **detach** | **help** }
 
-*FEATURE-COMMANDS* := { **probe** | **help** }
+*FEATURE-COMMANDS* := { **probe** | **list_builtins** | **help** }
 
 *BTF-COMMANDS* := { **show** | **list** | **dump** | **help** }
 
-*GEN-COMMANDS* := { **object** | **skeleton** | **min_core_btf** | **help** }
+*GEN-COMMANDS* := { **object** | **skeleton** | **subskeleton** | **min_core_btf** | **help** }
 
 *STRUCT-OPS-COMMANDS* := { **show** | **list** | **dump** | **register** | **unregister** | **help** }
 
 *ITER-COMMANDS* := { **pin** | **help** }
+
+*TOKEN-COMMANDS* := { **show** | **list** | **help** }
 
 DESCRIPTION
 ===========

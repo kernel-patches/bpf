@@ -35,7 +35,7 @@ bpftool token { show | list }
     **bpf**\ () system call commands, maps, programs, and attach types for the
     token.
 
-bpftool prog help
+bpftool token help
     Print short help message.
 
 OPTIONS
