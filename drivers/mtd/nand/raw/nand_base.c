@@ -3537,16 +3537,6 @@ read_retry:
 				memcpy(buf, bufpoi + col, bytes);
 			}
 
-			if (unlikely(oob)) {
-				int toread = min(oobreadlen, max_oobsize);
-
-				if (toread) {
-					oob = nand_transfer_oob(chip, oob, ops,
-								toread);
-					oobreadlen -= toread;
-				}
-			}
-
 			nand_wait_readrdy(chip);
 
 			if (mtd->ecc_stats.failed - ecc_stats.failed) {
@@ -3563,6 +3553,16 @@ read_retry:
 				} else {
 					/* No more retry modes; real failure */
 					ecc_fail = true;
+				}
+			}
+
+			if (unlikely(oob)) {
+				int toread = min(oobreadlen, max_oobsize);
+
+				if (toread) {
+					oob = nand_transfer_oob(chip, oob, ops,
+								toread);
+					oobreadlen -= toread;
 				}
 			}
 
