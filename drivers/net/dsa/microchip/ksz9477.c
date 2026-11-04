@@ -1289,13 +1289,16 @@ static void ksz9477_phylink_get_caps(struct dsa_switch *ds, int port,
 	ksz_phylink_get_caps(ds, port, config);
 }
 
+/* No pulse length in the datasheet; this one worked on a KSZ9893. */
+#define KSZ9477_FAST_AGE_PULSE_US	(2 * USEC_PER_MSEC)
+
 static int ksz9477_set_ageing_time(struct dsa_switch *ds, unsigned int msecs)
 {
 	struct ksz_device *dev = ds->priv;
+	u8 data, mult, value, old_period;
+	u32 old_secs, new_secs, max_val;
 	u32 secs = msecs / 1000;
-	u8 data, mult, value;
-	u32 max_val;
-	int ret;
+	int ret, err;
 
 #define MAX_TIMER_VAL	((1 << 8) - 1)
 
@@ -1314,8 +1317,13 @@ static int ksz9477_set_ageing_time(struct dsa_switch *ds, unsigned int msecs)
 	if (ret < 0)
 		return ret;
 
+	ret = ksz_read8(dev, REG_SW_LUE_CTRL_3, &old_period);
+	if (ret < 0)
+		return ret;
+
 	/* Check whether there is need to update the multiplier. */
 	mult = FIELD_GET(SW_AGE_CNT_M, value);
+	old_secs = mult * old_period;
 	max_val = MAX_TIMER_VAL;
 	if (mult > 0) {
 		/* Try to use the same multiplier already in the register as
@@ -1337,7 +1345,27 @@ static int ksz9477_set_ageing_time(struct dsa_switch *ds, unsigned int msecs)
 	}
 
 	value = DIV_ROUND_UP(secs, data);
-	return ksz_write8(dev, REG_SW_LUE_CTRL_3, value);
+	ret = ksz_write8(dev, REG_SW_LUE_CTRL_3, value);
+	if (ret < 0)
+		return ret;
+
+	/* On a KSZ9893 a new period applies only when the running one ends,
+	 * and entries keep the Age Count they were stored with. If the total
+	 * time or the Age Count got smaller, pulse Fast Aging; on a KSZ9893
+	 * that removed the dynamic entries and started the new period.
+	 */
+	new_secs = data * value;
+	if (new_secs >= old_secs && data >= mult)
+		return 0;
+
+	ret = ksz_rmw8(dev, REG_SW_LUE_CTRL_1, SW_FAST_AGING, SW_FAST_AGING);
+	if (!ret)
+		fsleep(KSZ9477_FAST_AGE_PULSE_US);
+
+	/* Clear the bit even after an error. */
+	err = ksz_rmw8(dev, REG_SW_LUE_CTRL_1, SW_FAST_AGING, 0);
+
+	return ret ?: err;
 }
 
 void ksz9477_port_queue_split(struct ksz_device *dev, int port)
