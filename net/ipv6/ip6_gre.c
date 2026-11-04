@@ -306,6 +306,9 @@ static struct ip6_tnl *ip6gre_tunnel_find(struct net *net,
 	head = __ip6gre_bucket(ign, parms);
 
 	hlist_for_each_entry(t, head, hash_node) {
+		if (t->parms.collect_md)
+			continue;
+
 		if (ipv6_addr_equal(local, &t->parms.laddr) &&
 		    ipv6_addr_equal(remote, &t->parms.raddr) &&
 		    key == t->parms.i_key &&
@@ -2055,7 +2058,7 @@ ip6gre_changelink_common(struct net_device *dev, struct nlattr *tb[],
 
 	ip6gre_netlink_parms(data, p_p);
 
-	t = ip6gre_tunnel_locate(net, p_p, 0);
+	t = ip6gre_tunnel_find(net, p_p, dev->type);
 
 	if (t) {
 		if (t->dev != dev)
