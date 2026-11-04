@@ -127,6 +127,7 @@ config SND_SOC_ALL_CODECS
 	imply SND_SOC_ES9356
 	imply SND_SOC_ES7134
 	imply SND_SOC_ES7241
+	imply SND_SOC_FM34NE_DSP
 	imply SND_SOC_FRAMER
 	imply SND_SOC_FS210X
 	imply SND_SOC_GTM601
@@ -1337,6 +1338,17 @@ config SND_SOC_ES9356
 	depends on SOUNDWIRE
 	select REGMAP_SOUNDWIRE
 	select REGMAP_SOUNDWIRE_MBQ
+
+config SND_SOC_FM34NE_DSP
+	tristate "DSP FM34NE driver"
+	depends on I2C && GPIOLIB
+	help
+	  Say Y here if you want to add support for Fortemedia FM34NE DSP
+	  mainly used in ASUS T20/T30 Transformers for input noise
+	  processing.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called snd-soc-fm34ne-dsp.
 
 config SND_SOC_FRAMER
 	tristate "Framer codec"
