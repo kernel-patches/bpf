@@ -131,7 +131,7 @@ bpftool cgroup attach *CGROUP* *ATTACH_TYPE* *PROG* [*ATTACH_FLAGS*]
 bpftool cgroup detach *CGROUP* *ATTACH_TYPE* *PROG*
     Detach *PROG* from the cgroup *CGROUP* and attach type *ATTACH_TYPE*.
 
-bpftool prog help
+bpftool cgroup help
     Print short help message.
 
 OPTIONS

@@ -18,7 +18,7 @@ SYNOPSIS
 
 *OPTIONS* := { |COMMON_OPTIONS| | { **-f** | **--bpffs** } | { **-n** | **--nomount** } }
 
-*COMMANDS* := { **show** | **list** | **pin** | **help** }
+*COMMANDS* := { **show** | **list** | **pin** | **detach** | **help** }
 
 LINK COMMANDS
 =============
