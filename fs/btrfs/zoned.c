@@ -2680,6 +2680,43 @@ int btrfs_zone_finish(struct btrfs_block_group *block_group)
 	return do_zone_finish(block_group, false);
 }
 
+/*
+ * Finish the zones of a block group emptied by relocation, before removing it.
+ *
+ * btrfs_relocate_block_group() tries this before relocating, but gets -EAGAIN
+ * while tree blocks allocated in the block group are not written yet, and for
+ * the data relocation block group. If the block group is then removed with its
+ * zones still active, it stays on fs_info->zone_active_bgs and, for metadata
+ * and system, its share of reserved_active_zones is never given back. After a
+ * few balances the reservation is negative and data writeback fails with
+ * -ENOSPC.
+ *
+ * Here nothing is left to write: the block group is read-only and empty,
+ * relocation waited for its reservations and ordered extents, and
+ * relocate_block_group() committed the transaction. So only wait for extent
+ * buffer writeback and finish it as fully written. do_zone_finish(bg, false)
+ * would take it read-only again, which for a system block group can allocate
+ * a system chunk under ro_block_group_mutex and finish another block group to
+ * activate it, taking the mutex again.
+ */
+void btrfs_zone_finish_relocated(struct btrfs_block_group *block_group)
+{
+	struct btrfs_fs_info *fs_info = block_group->fs_info;
+	int ret;
+
+	if (!btrfs_is_zoned(fs_info))
+		return;
+
+	if (block_group->flags & (BTRFS_BLOCK_GROUP_METADATA | BTRFS_BLOCK_GROUP_SYSTEM))
+		wait_eb_writebacks(block_group);
+
+	ret = do_zone_finish(block_group, true);
+	if (ret)
+		btrfs_warn(fs_info,
+			   "failed to finish zones of relocated block group %llu: %d",
+			   block_group->start, ret);
+}
+
 bool btrfs_can_activate_zone(struct btrfs_fs_devices *fs_devices, u64 flags)
 {
 	struct btrfs_fs_info *fs_info = fs_devices->fs_info;

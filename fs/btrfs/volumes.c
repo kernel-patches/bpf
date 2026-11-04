@@ -3720,6 +3720,7 @@ static int btrfs_relocate_chunk_finish(struct btrfs_fs_info *fs_info,
 
 	btrfs_discard_cancel_work(&fs_info->discard_ctl, bg);
 	length = bg->length;
+	btrfs_zone_finish_relocated(bg);
 	btrfs_put_block_group(bg);
 
 	/*
