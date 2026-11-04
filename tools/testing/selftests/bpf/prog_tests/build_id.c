@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /* Copyright (c) 2024 Meta Platforms, Inc. and affiliates. */
+#include <sys/syscall.h>
 #include <test_progs.h>
 
 #include "test_build_id.skel.h"
@@ -104,6 +105,89 @@ cleanup:
 	test_build_id__destroy(skel);
 }
 
+static bool stack_has_build_id(const struct bpf_stack_build_id *stack, int frame_cnt,
+			       const char *id, int id_sz)
+{
+	int i;
+
+	for (i = 0; i < frame_cnt; i++)
+		if (stack[i].status == BPF_STACK_BUILD_ID_VALID &&
+		    !memcmp(stack[i].build_id, id, id_sz))
+			return true;
+
+	return false;
+}
+
+static bool stack_has_ip(const struct bpf_stack_build_id *stack, int frame_cnt)
+{
+	int i;
+
+	for (i = 0; i < frame_cnt; i++)
+		if (stack[i].status == BPF_STACK_BUILD_ID_IP)
+			return true;
+
+	return false;
+}
+
+static void subtest_raw_tp(bool sleepable)
+{
+	struct test_build_id *skel;
+	struct bpf_stack_build_id *stack;
+	int frame_cnt, status, res;
+
+	skel = test_build_id__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "skel_open"))
+		return;
+
+	if (sleepable) {
+		skel->links.rawtp_sleepable = bpf_program__attach(skel->progs.rawtp_sleepable);
+		if (!ASSERT_OK_PTR(skel->links.rawtp_sleepable, "attach_rawtp_sleepable"))
+			goto cleanup;
+	} else {
+		skel->links.rawtp_nofault = bpf_program__attach(skel->progs.rawtp_nofault);
+		if (!ASSERT_OK_PTR(skel->links.rawtp_nofault, "attach_rawtp_nofault"))
+			goto cleanup;
+	}
+
+	skel->bss->target_syscall = SYS_getpgid;
+	status = system("./uprobe_multi paged-out-syscall");
+	if (!ASSERT_NEQ(status, -1, "trigger_uprobe_multi"))
+		goto cleanup;
+	if (WIFEXITED(status) && WEXITSTATUS(status) == 2) {
+		/* could not evict the build ID page, nothing to test */
+		test__skip();
+		goto cleanup;
+	}
+	if (!ASSERT_OK(status, "trigger_uprobe_multi"))
+		goto cleanup;
+
+	if (sleepable) {
+		res = skel->bss->res_rawtp_sleepable;
+		stack = skel->bss->stack_rawtp_sleepable;
+	} else {
+		res = skel->bss->res_rawtp_nofault;
+		stack = skel->bss->stack_rawtp_nofault;
+	}
+	if (!ASSERT_GT(res, 0, "res"))
+		goto cleanup;
+
+	frame_cnt = res / sizeof(struct bpf_stack_build_id);
+	if (env.verbosity >= VERBOSE_NORMAL)
+		print_stack(stack, frame_cnt);
+
+	if (sleepable) {
+		ASSERT_TRUE(stack_has_build_id(stack, frame_cnt, build_id, build_id_sz),
+			    "sleepable_build_id");
+	} else {
+		ASSERT_TRUE(stack_has_ip(stack, frame_cnt), "nofault_has_ip");
+		ASSERT_FALSE(stack_has_build_id(stack, frame_cnt, build_id, build_id_sz),
+			     "nofault_has_build_id");
+	}
+
+cleanup:
+	test_build_id__destroy(skel);
+}
+
 void serial_test_build_id(void)
 {
 	build_id_sz = read_build_id("uprobe_multi", build_id, sizeof(build_id));
@@ -115,4 +199,8 @@ void serial_test_build_id(void)
 		subtest_nofault(true /* resident */);
 	if (test__start_subtest("sleepable"))
 		subtest_sleepable();
+	if (test__start_subtest("raw-tp-nofault-paged-out"))
+		subtest_raw_tp(false /* non-sleepable */);
+	if (test__start_subtest("raw-tp-sleepable-paged-out"))
+		subtest_raw_tp(true /* sleepable */);
 }
