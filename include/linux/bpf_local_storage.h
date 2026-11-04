@@ -117,13 +117,13 @@ bpf_local_storage_unpin_owner(struct bpf_local_storage *local_storage)
 	last = refcount_dec_and_test(&local_storage->owner_refcnt);
 }
 
-/* U16_MAX is much more than enough for sk local storage
- * considering a tcp_sock is ~2k.
+/* Elements come from kmalloc_nolock() where the max size
+ * is KMALLOC_MAX_CACHE_SIZE.
  */
-#define BPF_LOCAL_STORAGE_MAX_VALUE_SIZE				       \
+#define BPF_LOCAL_STORAGE_MAX_VALUE_SIZE                                       \
 	min_t(u32,                                                             \
-	      (KMALLOC_MAX_SIZE - MAX_BPF_STACK -                              \
-	       sizeof(struct bpf_local_storage_elem)),                         \
+	      (KMALLOC_MAX_CACHE_SIZE -                                        \
+	       offsetof(struct bpf_local_storage_elem, sdata.data)),           \
 	      (U16_MAX - sizeof(struct bpf_local_storage_elem)))
 
 #define SELEM(_SDATA)                                                          \
