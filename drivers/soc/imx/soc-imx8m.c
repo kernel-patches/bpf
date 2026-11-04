@@ -290,7 +290,7 @@ static int imx8m_soc_probe(struct platform_device *pdev)
 	if (IS_ERR(soc_dev))
 		return PTR_ERR(soc_dev);
 
-	ret = devm_add_action(dev, imx8m_unregister_soc, soc_dev);
+	ret = devm_add_action_or_reset(dev, imx8m_unregister_soc, soc_dev);
 	if (ret)
 		return ret;
 
@@ -302,7 +302,7 @@ static int imx8m_soc_probe(struct platform_device *pdev)
 		if (IS_ERR(cpufreq_dev))
 			return dev_err_probe(dev, PTR_ERR(cpufreq_dev),
 					     "Failed to register imx-cpufreq-dev device\n");
-		ret = devm_add_action(dev, imx8m_unregister_cpufreq, cpufreq_dev);
+		ret = devm_add_action_or_reset(dev, imx8m_unregister_cpufreq, cpufreq_dev);
 		if (ret)
 			return ret;
 	}
