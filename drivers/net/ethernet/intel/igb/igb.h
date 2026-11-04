@@ -393,6 +393,7 @@ enum e1000_ring_flags_t {
 	IGB_RING_FLAG_TX_DETECT_HANG,
 	IGB_RING_FLAG_TX_DISABLED,
 	IGB_RING_FLAG_RX_ALLOC_FAILED,
+	IGB_RING_FLAG_RX_XSK_DISCARD,
 };
 
 #define ring_uses_large_buffer(ring) \

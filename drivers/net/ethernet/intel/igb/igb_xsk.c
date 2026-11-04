@@ -269,6 +269,8 @@ void igb_clean_rx_ring_zc(struct igb_ring *rx_ring)
 	u16 ntc = rx_ring->next_to_clean;
 	u16 ntu = rx_ring->next_to_use;
 
+	clear_bit(IGB_RING_FLAG_RX_XSK_DISCARD, &rx_ring->flags);
+
 	while (ntc != ntu) {
 		struct xdp_buff *xdp = rx_ring->rx_buffer_info_zc[ntc];
 
@@ -390,6 +392,27 @@ int igb_clean_rx_irq_zc(struct igb_q_vector *q_vector,
 		dma_rmb();
 
 		xdp = rx_ring->rx_buffer_info_zc[ntc];
+
+		/* A frame should never span several buffers here, see
+		 * igb_xsk_frame_fits(). If one does, drop all its buffers.
+		 */
+		if (unlikely(!igb_test_staterr(rx_desc, E1000_RXD_STAT_EOP) ||
+			     test_bit(IGB_RING_FLAG_RX_XSK_DISCARD,
+				      &rx_ring->flags))) {
+			if (igb_test_staterr(rx_desc, E1000_RXD_STAT_EOP))
+				clear_bit(IGB_RING_FLAG_RX_XSK_DISCARD,
+					  &rx_ring->flags);
+			else
+				set_bit(IGB_RING_FLAG_RX_XSK_DISCARD,
+					&rx_ring->flags);
+
+			xsk_buff_free(xdp);
+			ntc++;
+			if (ntc == rx_ring->count)
+				ntc = 0;
+			continue;
+		}
+
 		xsk_buff_set_size(xdp, size);
 		xsk_buff_dma_sync_for_cpu(xdp);
 
