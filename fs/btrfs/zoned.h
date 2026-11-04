@@ -38,7 +38,11 @@ struct btrfs_zoned_device_info {
 	u32 nr_zones;
 	unsigned int max_active_zones;
 	/*
-	 * Reserved active zones for one metadata and one system block group.
+	 * Reserved active zones for one metadata, one tree-log and one system
+	 * block group: the reservation made at mount minus the zones of such
+	 * block groups active on this device now. It is negative when more of
+	 * them are active than were reserved, which does not mean that there
+	 * are extra active zones.
 	 * It can vary per-device depending on the allocation status.
 	 */
 	int reserved_active_zones;
