@@ -5402,11 +5402,16 @@ static int adap_init0(struct adapter *adap, int vpd_skip)
 bye:
 	adap_free_hma_mem(adap);
 	kfree(adap->sge.egr_map);
+	adap->sge.egr_map = NULL;
 	kfree(adap->sge.ingr_map);
+	adap->sge.ingr_map = NULL;
 	bitmap_free(adap->sge.starving_fl);
+	adap->sge.starving_fl = NULL;
 	bitmap_free(adap->sge.txq_maperr);
+	adap->sge.txq_maperr = NULL;
 #ifdef CONFIG_DEBUG_FS
 	bitmap_free(adap->sge.blocked_fl);
+	adap->sge.blocked_fl = NULL;
 #endif
 	if (ret != -ETIMEDOUT && ret != -EIO)
 		t4_fw_bye(adap, adap->mbox);
