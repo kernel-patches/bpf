@@ -667,8 +667,8 @@ struct acpi_dev_type {
 	struct acpi_device * (*find_companion)(struct device *);
 	void (*setup)(struct device *);
 };
-int register_acpi_dev_type(struct acpi_dev_type *type);
-int unregister_acpi_dev_type(struct acpi_dev_type *type);
+void register_acpi_dev_type(struct acpi_dev_type *type);
+void unregister_acpi_dev_type(struct acpi_dev_type *type);
 int acpi_bind_one(struct device *dev, struct acpi_device *adev);
 void acpi_unbind_one(struct device *dev);
 
@@ -979,8 +979,8 @@ static inline struct device *acpi_bus_get_primary_device(struct acpi_device *ade
 	return NULL;
 }
 
-static inline int register_acpi_dev_type(void *type) { return 0; }
-static inline int unregister_acpi_dev_type(void *type) { return 0; }
+static inline void register_acpi_dev_type(void *type) { }
+static inline void unregister_acpi_dev_type(void *type) { }
 
 static inline int acpi_wait_for_acpi_ipmi(void) { return 0; }
 

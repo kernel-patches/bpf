@@ -375,9 +375,9 @@ static struct acpi_dev_type usb_acpi_dev_type = {
 	.find_companion = usb_acpi_find_companion,
 };
 
-int usb_acpi_register(void)
+void usb_acpi_register(void)
 {
-	return register_acpi_dev_type(&usb_acpi_dev_type);
+	register_acpi_dev_type(&usb_acpi_dev_type);
 }
 
 void usb_acpi_unregister(void)

@@ -358,9 +358,9 @@ static struct acpi_dev_type tb_acpi_dev_type = {
 	.setup = tb_acpi_setup,
 };
 
-int tb_acpi_init(void)
+void tb_acpi_init(void)
 {
-	return register_acpi_dev_type(&tb_acpi_dev_type);
+	register_acpi_dev_type(&tb_acpi_dev_type);
 }
 
 void tb_acpi_exit(void)

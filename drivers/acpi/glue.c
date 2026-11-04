@@ -29,33 +29,31 @@ static DECLARE_RWSEM(dev_type_sem);
 #define PHYSICAL_NODE_STRING "physical_node"
 #define PHYSICAL_NODE_NAME_SIZE (sizeof(PHYSICAL_NODE_STRING) + 10)
 
-int register_acpi_dev_type(struct acpi_dev_type *type)
+void register_acpi_dev_type(struct acpi_dev_type *type)
 {
 	if (acpi_disabled)
-		return -ENODEV;
+		return;
+
 	if (type && type->match && type->find_companion) {
 		down_write(&dev_type_sem);
 		list_add_tail(&type->list, &dev_type_list);
 		up_write(&dev_type_sem);
 		pr_info("device type %s registered\n", type->name);
-		return 0;
 	}
-	return -ENODEV;
 }
 EXPORT_SYMBOL_GPL(register_acpi_dev_type);
 
-int unregister_acpi_dev_type(struct acpi_dev_type *type)
+void unregister_acpi_dev_type(struct acpi_dev_type *type)
 {
 	if (acpi_disabled)
-		return 0;
+		return;
+
 	if (type) {
 		down_write(&dev_type_sem);
 		list_del_init(&type->list);
 		up_write(&dev_type_sem);
 		pr_info("device type %s unregistered\n", type->name);
-		return 0;
 	}
-	return -ENODEV;
 }
 EXPORT_SYMBOL_GPL(unregister_acpi_dev_type);
 
