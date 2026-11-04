@@ -3470,6 +3470,15 @@ static int igb_set_priv_flags(struct net_device *netdev, u32 priv_flags)
 		flags |= IGB_FLAG_RX_LEGACY;
 
 	if (flags != adapter->flags) {
+		/* the Rx buffer size depends on this flag, see
+		 * igb_xdp_setup()
+		 */
+		if (igb_xdp_is_enabled(adapter)) {
+			netdev_warn(netdev,
+				    "Cannot change legacy-rx while XDP is attached\n");
+			return -EOPNOTSUPP;
+		}
+
 		adapter->flags = flags;
 
 		/* reset interface to repopulate queues */

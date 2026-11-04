@@ -1965,6 +1965,54 @@ static void igb_setup_tx_mode(struct igb_adapter *adapter)
 }
 
 /**
+ *  igb_set_rlpml - set the receive length limits
+ *  @adapter: private board structure
+ *
+ *  Called from igb_configure() while Rx is stopped. igb_set_rx_mode() can
+ *  also run without RTNL, so it does not change these limits.
+ **/
+static void igb_set_rlpml(struct igb_adapter *adapter)
+{
+	u32 rlpml = MAX_JUMBO_FRAME_SIZE, pool_rlpml = MAX_JUMBO_FRAME_SIZE;
+	unsigned int vfn = adapter->vfs_allocated_count;
+	struct e1000_hw *hw = &adapter->hw;
+	u32 vmolr;
+
+#if (PAGE_SIZE < 8192)
+	/* restrict as needed to support build_skb */
+	if (adapter->max_frame_size <= IGB_MAX_FRAME_BUILD_SKB) {
+		pool_rlpml = IGB_MAX_FRAME_BUILD_SKB;
+		if (!vfn)
+			rlpml = IGB_MAX_FRAME_BUILD_SKB;
+	}
+#endif
+	/* XDP does not support frames that span more than one Rx buffer.
+	 * With VFs the global limit stays large and the PF pool is limited
+	 * through VMOLR.
+	 */
+	if (igb_xdp_is_enabled(adapter)) {
+		pool_rlpml = min(pool_rlpml, adapter->max_frame_size);
+		if (!vfn)
+			rlpml = min(rlpml, adapter->max_frame_size);
+	}
+	wr32(E1000_RLPML, rlpml);
+
+	/* the PF pool's VMOLR is used on these MACs, see igb_set_rx_mode() */
+	if (hw->mac.type < e1000_82576 || hw->mac.type > e1000_i350)
+		return;
+
+	/* igb_set_rx_mode() also updates this register, and the core calls
+	 * it under the address lock
+	 */
+	netif_addr_lock_bh(adapter->netdev);
+	vmolr = rd32(E1000_VMOLR(vfn));
+	vmolr &= ~E1000_VMOLR_RLPML_MASK;
+	vmolr |= pool_rlpml | E1000_VMOLR_LPE;
+	wr32(E1000_VMOLR(vfn), vmolr);
+	netif_addr_unlock_bh(adapter->netdev);
+}
+
+/**
  *  igb_configure - configure the hardware for RX and TX
  *  @adapter: private board structure
  **/
@@ -1981,6 +2029,7 @@ static void igb_configure(struct igb_adapter *adapter)
 
 	igb_setup_tctl(adapter);
 	igb_setup_mrqc(adapter);
+	igb_set_rlpml(adapter);
 	igb_setup_rctl(adapter);
 
 	igb_nfc_filter_restore(adapter);
@@ -2468,6 +2517,14 @@ void igb_reset(struct igb_adapter *adapter)
 static netdev_features_t igb_fix_features(struct net_device *netdev,
 	netdev_features_t features)
 {
+	struct igb_adapter *adapter = netdev_priv(netdev);
+
+	/* with rx-all the MAC also stores frames longer than RLPML, which
+	 * XDP cannot handle
+	 */
+	if (igb_xdp_is_enabled(adapter))
+		features &= ~NETIF_F_RXALL;
+
 	/* Since there is no support for separate Rx/Tx vlan accel
 	 * enable/disable make sure Tx flag is always in same state as Rx.
 	 */
@@ -2886,6 +2943,27 @@ static int igb_setup_tc(struct net_device *dev, enum tc_setup_type type,
 	}
 }
 
+/* Check that a frame fits in one Rx buffer together with the inline Rx
+ * timestamp header, for the buffer size igb_set_rx_buffer_len() selects.
+ * The ring flags are only updated when the rings are configured, so they
+ * are not used here. For build_skb rings the frame is limited to
+ * IGB_MAX_FRAME_BUILD_SKB, which is below the 2 KiB hardware buffer size
+ * even with the header.
+ */
+static bool igb_xdp_frame_fits(struct igb_adapter *adapter, int max_frame)
+{
+#if (PAGE_SIZE < 8192)
+	if (!(adapter->flags & IGB_FLAG_RX_LEGACY)) {
+		if (max_frame <= IGB_MAX_FRAME_BUILD_SKB &&
+		    !IGB_2K_TOO_SMALL_WITH_PADDING)
+			return true;
+
+		return max_frame + IGB_TS_HDR_LEN <= IGB_RXBUFFER_3072;
+	}
+#endif
+	return max_frame + IGB_TS_HDR_LEN <= IGB_RXBUFFER_2048;
+}
+
 static int igb_xdp_setup(struct net_device *dev, struct netdev_bpf *bpf)
 {
 	int i, frame_size = dev->mtu + IGB_ETH_PKT_HDR_PAD;
@@ -2894,17 +2972,21 @@ static int igb_xdp_setup(struct net_device *dev, struct netdev_bpf *bpf)
 	bool running = netif_running(dev);
 	bool need_reset;
 
-	/* verify igb ring attributes are sufficient for XDP */
-	for (i = 0; i < adapter->num_rx_queues; i++) {
-		struct igb_ring *ring = adapter->rx_ring[i];
+	/* with rx-all the MAC also stores frames longer than RLPML */
+	if (prog && (dev->features & NETIF_F_RXALL)) {
+		NL_SET_ERR_MSG_MOD(bpf->extack, "XDP is not supported with rx-all");
+		return -EOPNOTSUPP;
+	}
 
-		if (frame_size > igb_rx_bufsz(ring)) {
-			NL_SET_ERR_MSG_MOD(bpf->extack,
-					   "The RX buffer size is too small for the frame size");
-			netdev_warn(dev, "XDP RX buffer size %d is too small for the frame size %d\n",
-				    igb_rx_bufsz(ring), frame_size);
-			return -EINVAL;
-		}
+	/* verify igb ring attributes are sufficient for XDP, leaving room
+	 * for the inline Rx timestamp header
+	 */
+	if (prog && !igb_xdp_frame_fits(adapter, frame_size)) {
+		NL_SET_ERR_MSG_MOD(bpf->extack,
+				   "The RX buffer size is too small for the frame size");
+		netdev_warn(dev, "XDP RX buffer size is too small for the frame size %d\n",
+			    frame_size);
+		return -EINVAL;
 	}
 
 	old_prog = xchg(&adapter->xdp_prog, prog);
@@ -2934,6 +3016,10 @@ static int igb_xdp_setup(struct net_device *dev, struct netdev_bpf *bpf)
 
 	if (running)
 		igb_open(dev);
+
+	/* rx-all may have been requested while XDP was attached */
+	if (!prog && (dev->wanted_features & NETIF_F_RXALL))
+		netdev_update_features(dev);
 
 	return 0;
 }
@@ -5324,7 +5410,7 @@ static void igb_set_rx_mode(struct net_device *netdev)
 	struct igb_adapter *adapter = netdev_priv(netdev);
 	struct e1000_hw *hw = &adapter->hw;
 	unsigned int vfn = adapter->vfs_allocated_count;
-	u32 rctl = 0, vmolr = 0, rlpml = MAX_JUMBO_FRAME_SIZE;
+	u32 rctl = 0, vmolr = 0;
 	int count;
 
 	/* Check for Promiscuous and All Multicast modes */
@@ -5381,14 +5467,6 @@ static void igb_set_rx_mode(struct net_device *netdev)
 				     E1000_RCTL_VFE);
 	wr32(E1000_RCTL, rctl);
 
-#if (PAGE_SIZE < 8192)
-	if (!adapter->vfs_allocated_count) {
-		if (adapter->max_frame_size <= IGB_MAX_FRAME_BUILD_SKB)
-			rlpml = IGB_MAX_FRAME_BUILD_SKB;
-	}
-#endif
-	wr32(E1000_RLPML, rlpml);
-
 	/* In order to support SR-IOV and eventually VMDq it is necessary to set
 	 * the VMOLR to enable the appropriate modes.  Without this workaround
 	 * we will have issues with VLAN tag stripping not being done for frames
@@ -5400,18 +5478,9 @@ static void igb_set_rx_mode(struct net_device *netdev)
 	/* set UTA to appropriate mode */
 	igb_set_uta(adapter, !!(vmolr & E1000_VMOLR_ROPE));
 
+	/* keep the receive length limit set by igb_set_rlpml() */
 	vmolr |= rd32(E1000_VMOLR(vfn)) &
 		 ~(E1000_VMOLR_ROPE | E1000_VMOLR_MPME | E1000_VMOLR_ROMPE);
-
-	/* enable Rx jumbo frames, restrict as needed to support build_skb */
-	vmolr &= ~E1000_VMOLR_RLPML_MASK;
-#if (PAGE_SIZE < 8192)
-	if (adapter->max_frame_size <= IGB_MAX_FRAME_BUILD_SKB)
-		vmolr |= IGB_MAX_FRAME_BUILD_SKB;
-	else
-#endif
-		vmolr |= MAX_JUMBO_FRAME_SIZE;
-	vmolr |= E1000_VMOLR_LPE;
 
 	wr32(E1000_VMOLR(vfn), vmolr);
 
@@ -6708,19 +6777,12 @@ static int igb_change_mtu(struct net_device *netdev, int new_mtu)
 	struct igb_adapter *adapter = netdev_priv(netdev);
 	int max_frame = new_mtu + IGB_ETH_PKT_HDR_PAD;
 
-	if (igb_xdp_is_enabled(adapter)) {
-		int i;
-
-		for (i = 0; i < adapter->num_rx_queues; i++) {
-			struct igb_ring *ring = adapter->rx_ring[i];
-
-			if (max_frame > igb_rx_bufsz(ring)) {
-				netdev_warn(adapter->netdev,
-					    "Requested MTU size is not supported with XDP. Max frame size is %d\n",
-					    max_frame);
-				return -EINVAL;
-			}
-		}
+	if (igb_xdp_is_enabled(adapter) &&
+	    !igb_xdp_frame_fits(adapter, max_frame)) {
+		netdev_warn(adapter->netdev,
+			    "Requested MTU size is not supported with XDP. Frame size is %d\n",
+			    max_frame);
+		return -EINVAL;
 	}
 
 	/* adjust max frame to be at least the size of a standard frame */
