@@ -414,7 +414,10 @@ static void dsa_port_switchdev_unsync_attrs(struct dsa_port *dp,
 
 	/* Ageing time may be global to the switch chip, so don't change it
 	 * here because we have no good reason (or value) to change it to.
+	 * But forget the port's value, so that the shortest ageing time of
+	 * the ports still in a bridge is the one programmed next time.
 	 */
+	dp->ageing_time = 0;
 }
 
 static int dsa_port_bridge_create(struct dsa_port *dp,
