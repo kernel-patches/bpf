@@ -69,7 +69,7 @@ properties:
   SPKVDD2-supply: true
 
   '#sound-dai-cells':
-    const: 0
+    enum: [0, 1]
 
   wlf,gpio-cfg:
     $ref: /schemas/types.yaml#/definitions/uint32-array
