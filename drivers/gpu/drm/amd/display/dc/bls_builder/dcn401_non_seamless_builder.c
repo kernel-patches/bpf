@@ -139,24 +139,23 @@ static enum bls_builder_result dcn401_check_commit_state_support(
 	return BLS_BUILD_SUCCESS;
 }
 
-static bool check_stream_not_kept(const struct dc *dc,
-		const struct dc_state *current_state,
-		const struct dc_state *new_state)
-{
-	(void)dc;
-	/* A stream is either removed or added, never kept. */
-	return !current_state->stream_count || !new_state->stream_count;
-}
-
+/*
+ * The current stream is disabled before the new one is enabled, so the
+ * link may be active when it carries the current stream.
+ */
 static bool check_link_not_active(const struct dc *dc,
 		const struct dc_state *current_state,
 		const struct dc_state *new_state)
 {
+	const struct dc_link *link;
+
 	(void)dc;
-	(void)current_state;
 	if (!new_state->stream_count)
 		return true;
-	return !new_state->streams[0]->link->link_status.link_active;
+	link = new_state->streams[0]->link;
+	return !link->link_status.link_active ||
+			(current_state->stream_count &&
+			current_state->streams[0]->link == link);
 }
 
 static enum bls_builder_result dcn401_check_non_seamless_commit_support(
@@ -180,8 +179,7 @@ static enum bls_builder_result dcn401_check_non_seamless_commit_support(
 	if (result != BLS_BUILD_SUCCESS)
 		return result;
 
-	CHECK_CONDITION(stream_not_kept, "stream is kept across the commit");
-	CHECK_CONDITION(link_not_active, "link is already active");
+	CHECK_CONDITION(link_not_active, "link is active on another stream");
 	return BLS_BUILD_SUCCESS;
 }
 
