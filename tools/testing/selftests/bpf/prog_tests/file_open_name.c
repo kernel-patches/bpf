@@ -3,6 +3,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <io_uring/mini_liburing.h>
 #include "file_open_name.skel.h"
 
 static void check_open_result(int fd, int error, const char *name)
@@ -90,7 +91,55 @@ out:
 	free(handle);
 }
 
-void test_file_open_name(void)
+static void check_uring(struct file_open_name *skel, int dfd, const char *name, int flags, int error)
+{
+	struct io_uring_cqe *cqe;
+	struct io_uring_sqe *sqe;
+	struct io_uring ring;
+	int err, result;
+
+	err = io_uring_queue_init(1, &ring, 0);
+	if (err == -1 && (errno == ENOSYS || errno == EPERM)) {
+		printf("%s:SKIP:io_uring is unavailable: %s\n", __func__, strerror(errno));
+		test__skip();
+		return;
+	}
+	if (!ASSERT_OK(err, "io_uring setup"))
+		return;
+	skel->bss->deny = error != 0;
+	skel->bss->calls = 0;
+	sqe = io_uring_get_sqe(&ring);
+	if (!ASSERT_OK_PTR(sqe, "get sqe"))
+		goto out;
+	memset(sqe, 0, sizeof(*sqe));
+	sqe->opcode = IORING_OP_OPENAT;
+	sqe->fd = dfd;
+	sqe->addr = (unsigned long)name;
+	sqe->open_flags = flags;
+	sqe->len = 0600;
+	sqe->flags = IOSQE_ASYNC;
+	skel->bss->check_enabled = true;
+	if (!ASSERT_EQ(io_uring_submit(&ring), 1, "submit"))
+		goto out;
+	if (!ASSERT_OK(io_uring_wait_cqe(&ring, &cqe), "wait cqe"))
+		goto out;
+	skel->bss->check_enabled = false;
+	result = cqe->res;
+	io_uring_cqe_seen(&ring);
+	if (error)
+		ASSERT_EQ(result, -error, "cqe error");
+	else
+		ASSERT_OK_FD(result, "cqe success");
+	if (result >= 0)
+		close(result);
+	ASSERT_GT(skel->bss->calls, 0, "io_uring hook count");
+	ASSERT_STREQ(skel->bss->pathname, name, "hook pathname");
+out:
+	skel->bss->check_enabled = false;
+	io_uring_queue_exit(&ring);
+}
+
+static void *run_file_open_name(void *arg)
 {
 	char dir[] = "/tmp/file_open_name.XXXXXX";
 	struct file_open_name *skel = NULL;
@@ -98,7 +147,7 @@ void test_file_open_name(void)
 	struct stat st;
 
 	if (!ASSERT_OK_PTR(mkdtemp(dir), "mkdtemp"))
-		return;
+		return NULL;
 	dfd = open(dir, O_RDONLY | O_DIRECTORY);
 	if (!ASSERT_OK_FD(dfd, "open directory"))
 		goto out;
@@ -135,6 +184,13 @@ void test_file_open_name(void)
 		check_open(skel, dfd, "alias", O_PATH, 0, EPERM);
 	if (test__start_subtest("deny_tmpfile"))
 		check_open(skel, dfd, ".", O_TMPFILE | O_RDWR, 0600, EPERM);
+	if (test__start_subtest("uring_worker"))
+		check_uring(skel, dfd, "./alias", O_RDONLY, 0);
+	if (test__start_subtest("uring_deny")) {
+		check_uring(skel, dfd, "uring_new", O_CREAT | O_RDWR, EPERM);
+		ASSERT_EQ(fstatat(dfd, "uring_new", &st, 0), -1, "io_uring file not created");
+		ASSERT_EQ(errno, ENOENT, "io_uring missing file");
+	}
 	if (test__start_subtest("handle_open"))
 		check_handle_open(skel, dfd, fd);
 out:
@@ -144,8 +200,21 @@ out:
 	if (dfd >= 0) {
 		unlinkat(dfd, "alias", 0);
 		unlinkat(dfd, "new", 0);
+		unlinkat(dfd, "uring_new", 0);
 		unlinkat(dfd, "target", 0);
 		close(dfd);
 	}
 	rmdir(dir);
+	return NULL;
+}
+
+void test_file_open_name(void)
+{
+	pthread_t thread;
+	int err;
+
+	/* Thread exit tears down io_uring workers before the next test runs. */
+	err = pthread_create(&thread, NULL, run_file_open_name, NULL);
+	if (ASSERT_OK(err, "pthread_create"))
+		ASSERT_OK(pthread_join(thread, NULL), "pthread_join");
 }
