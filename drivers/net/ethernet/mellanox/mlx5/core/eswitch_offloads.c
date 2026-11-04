@@ -1693,6 +1693,11 @@ esw_chains_create(struct mlx5_eswitch *esw, struct mlx5_flow_table *miss_fdb)
 		goto nf_ft_err;
 	}
 
+	/* Set the end table before opening the root, so the root's miss
+	 * rule points to the nf flowtable chain and not to the slow path.
+	 */
+	mlx5_chains_set_end_ft(chains, nf_ft);
+
 	/* Always open the root for fast path */
 	ft = mlx5_chains_get_table(chains, 0, 1, 0);
 	if (IS_ERR(ft)) {
@@ -1706,8 +1711,6 @@ esw_chains_create(struct mlx5_eswitch *esw, struct mlx5_flow_table *miss_fdb)
 		if (err)
 			goto level_1_err;
 	}
-
-	mlx5_chains_set_end_ft(chains, nf_ft);
 
 	return 0;
 
