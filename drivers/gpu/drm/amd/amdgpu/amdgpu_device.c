@@ -2822,9 +2822,9 @@ static int amdgpu_device_ip_late_init(struct amdgpu_device *adev)
 	amdgpu_device_set_pg_state(adev, AMD_PG_STATE_GATE);
 	amdgpu_gfx_perfmon_clk_restore(adev);
 
-	r = amdgpu_dpm_reapply_umd_profile(adev);
+	r = amdgpu_dpm_reapply_performance_level(adev);
 	if (r) {
-		dev_err(adev->dev, "Failed to restore UMD profile state: %d\n", r);
+		dev_err(adev->dev, "Failed to restore performance level: %d\n", r);
 		return r;
 	}
 
