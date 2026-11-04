@@ -13,12 +13,10 @@ properties:
   compatible:
     oneOf:
       - const: faraday,ftgmac100
-      - items:
-          - enum:
-              - aspeed,ast2400-mac
-              - aspeed,ast2500-mac
-              - aspeed,ast2600-mac
-          - const: faraday,ftgmac100
+      - enum:
+          - aspeed,ast2400-mac
+          - aspeed,ast2500-mac
+          - aspeed,ast2600-mac
 
   reg:
     maxItems: 1
@@ -94,14 +92,14 @@ unevaluatedProperties: false
 examples:
   - |
     ethernet@1e660000 {
-        compatible = "aspeed,ast2500-mac", "faraday,ftgmac100";
+        compatible = "aspeed,ast2500-mac";
         reg = <0x1e660000 0x180>;
         interrupts = <2>;
         use-ncsi;
     };
 
     ethernet@1e680000 {
-        compatible = "aspeed,ast2500-mac", "faraday,ftgmac100";
+        compatible = "aspeed,ast2500-mac";
         reg = <0x1e680000 0x180>;
         interrupts = <2>;
 
