@@ -4663,12 +4663,13 @@ void igb_setup_rctl(struct igb_adapter *adapter)
 	wr32(E1000_RCTL, rctl);
 }
 
-static inline int igb_set_vf_rlpml(struct igb_adapter *adapter, int size,
+static inline int igb_set_vf_rlpml(struct igb_adapter *adapter, u32 size,
 				   int vfn)
 {
 	struct e1000_hw *hw = &adapter->hw;
 	u32 vmolr;
 
+	/* size comes from the VF, keep it within the RLPML field */
 	if (size > MAX_JUMBO_FRAME_SIZE)
 		size = MAX_JUMBO_FRAME_SIZE;
 
