@@ -226,6 +226,8 @@ static int run_bpf_prog(char *prog, int cg_id)
 			do_error("gettimeofday failed", true);
 		t_last = t0;
 		fin = fopen("/sys/class/net/eth0/statistics/tx_bytes", "r");
+		if (!fin)
+			do_error("fopen fails", true);
 		if (fscanf(fin, "%llu", &last_eth_tx_bytes) != 1)
 			do_error("fscanf fails", false);
 		fclose(fin);
@@ -245,6 +247,8 @@ static int run_bpf_prog(char *prog, int cg_id)
 			t_last = t_new;
 			fin = fopen("/sys/class/net/eth0/statistics/tx_bytes",
 				    "r");
+			if (!fin)
+				do_error("fopen fails", true);
 			if (fscanf(fin, "%llu", &new_eth_tx_bytes) != 1)
 				do_error("fscanf fails", false);
 			fclose(fin);
