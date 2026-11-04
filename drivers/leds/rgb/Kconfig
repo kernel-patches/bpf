@@ -4,7 +4,7 @@ if LEDS_CLASS_MULTICOLOR
 
 config LEDS_ASUS_AURA_SCSI
 	tristate "ASUS Aura RGB LEDs on ROG external NVMe enclosures"
-	depends on SCSI
+	depends on SCSI && SCSI_DH
 	help
 	  Say Y here if you want to control the RGB LEDs of ASUS ROG
 	  external NVMe enclosures such as the ROG STRIX Arion. The LEDs
