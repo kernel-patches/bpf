@@ -427,16 +427,17 @@ static int ionic_get_fecparam(struct net_device *netdev,
 	switch (lif->ionic->idev.port_info->config.fec_type) {
 	case IONIC_PORT_FEC_TYPE_NONE:
 		fec->active_fec = ETHTOOL_FEC_OFF;
+		fec->fec = ETHTOOL_FEC_OFF;
 		break;
 	case IONIC_PORT_FEC_TYPE_RS:
 		fec->active_fec = ETHTOOL_FEC_RS;
+		fec->fec = ETHTOOL_FEC_RS;
 		break;
 	case IONIC_PORT_FEC_TYPE_FC:
 		fec->active_fec = ETHTOOL_FEC_BASER;
+		fec->fec = ETHTOOL_FEC_BASER;
 		break;
 	}
-
-	fec->fec = ETHTOOL_FEC_OFF | ETHTOOL_FEC_RS | ETHTOOL_FEC_BASER;
 
 	return 0;
 }
