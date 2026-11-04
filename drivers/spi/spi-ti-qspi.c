@@ -902,7 +902,6 @@ static void ti_qspi_remove(struct platform_device *pdev)
 
 	spi_unregister_controller(qspi->host);
 
-	pm_runtime_put_sync(&pdev->dev);
 	pm_runtime_disable(&pdev->dev);
 
 	ti_qspi_dma_cleanup(qspi);
