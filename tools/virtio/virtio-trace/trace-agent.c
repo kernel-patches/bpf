@@ -130,7 +130,7 @@ static const char *make_path(int cpu_num, bool this_is_write_path)
 
 	if (ret <= 0) {
 		pr_err("Failed to generate %s path(CPU#%d):%d\n",
-			this_is_write_path ? "read" : "write", cpu_num, ret);
+			this_is_write_path ? "write" : "read", cpu_num, ret);
 		goto error;
 	}
 
