@@ -197,6 +197,13 @@ int BPF_PROG(sleepable_lsm_cgroup)
 	return 0;
 }
 
+SEC("lsm.s/file_open_name")
+__failure __msg("bpf_lsm_file_open_name is not sleepable")
+int BPF_PROG(file_open_name_sleepable_rejected)
+{
+	return 0;
+}
+
 SEC("lsm/file_mprotect")
 __description("lsm retval load must reset stale register bounds")
 __failure __msg("div by zero")
