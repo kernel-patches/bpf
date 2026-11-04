@@ -2744,6 +2744,32 @@ int security_file_receive(struct file *file)
 }
 
 /**
+ * security_file_open_name() - Authorize a pathname open before lookup
+ * @name: kernel copy of the unresolved pathname, which may be empty
+ * @base: starting path selected by the lookup
+ * @flags: effective open flags
+ * @mode: creation mode, including the file type, before applying the umask
+ * @lookup_flags: current pathname lookup flags, including LOOKUP_RCU
+ *
+ * Check the original pathname before lookup, creation, or opening the file.
+ * @base is the starting path for this attempt, or the file itself for an empty
+ * pathname.  This hook also covers O_PATH and io_uring opens.
+ *
+ * This hook must not sleep.  @name and @base are borrowed for the call.  With
+ * LOOKUP_RCU, @base is RCU-protected; otherwise it holds path references.
+ * Return -ECHILD to retry with references unless LOOKUP_CACHED forbids it.
+ *
+ * Return: Returns 0 if permission is granted.
+ */
+int security_file_open_name(const struct filename *name,
+			    const struct path *base, int flags, umode_t mode,
+			    unsigned int lookup_flags)
+{
+	return call_int_hook(file_open_name, name, base, flags, mode,
+			     lookup_flags);
+}
+
+/**
  * security_file_open() - Save open() time state for late use by the LSM
  * @file:
  *
