@@ -98,6 +98,47 @@ out:
 	close(dfd);
 }
 
+static void check_bases(struct file_open_name *skel, int dfd, const char *dir,
+			const char *resolved_dir)
+{
+	struct open_how how = { .resolve = RESOLVE_IN_ROOT };
+	int cwd = -1, fd;
+	char absolute[256];
+	struct stat st;
+
+	if (!ASSERT_OK(fstat(dfd, &st), "stat base"))
+		return;
+	snprintf(absolute, sizeof(absolute), "%s/target", dir);
+	if (test__start_subtest("cwd_base")) {
+		cwd = open(".", O_PATH | O_DIRECTORY);
+		if (!ASSERT_OK_FD(cwd, "save cwd"))
+			goto out;
+		if (!ASSERT_OK(fchdir(dfd), "enter base"))
+			goto out;
+		check_open(skel, AT_FDCWD, "./alias", O_RDONLY, 0, 0);
+		ASSERT_STREQ(skel->bss->base_path, resolved_dir, "cwd path");
+		ASSERT_EQ(skel->bss->base_ino, st.st_ino, "cwd inode");
+		ASSERT_OK(fchdir(cwd), "restore cwd");
+	}
+	if (test__start_subtest("absolute_base")) {
+		check_open(skel, -1, absolute, O_RDONLY, 0, 0);
+		ASSERT_STREQ(skel->bss->base_path, "/", "process root");
+	}
+	if (test__start_subtest("in_root_base")) {
+		skel->bss->check_enabled = true;
+		fd = syscall(__NR_openat2, dfd, "/target", &how, sizeof(how));
+		skel->bss->check_enabled = false;
+		if (ASSERT_OK_FD(fd, "open in root"))
+			close(fd);
+		ASSERT_STREQ(skel->bss->pathname, "/target", "absolute raw name");
+		ASSERT_STREQ(skel->bss->base_path, resolved_dir, "scoped root");
+		ASSERT_EQ(skel->bss->base_ino, st.st_ino, "scoped root inode");
+	}
+out:
+	if (cwd >= 0)
+		close(cwd);
+}
+
 static void check_handle_open(struct file_open_name *skel, int dfd, int target_fd)
 {
 	static const struct {
@@ -284,6 +325,7 @@ static void *run_file_open_name(void *arg)
 		if (ASSERT_OK(fstat(dfd, &st), "stat directory"))
 			ASSERT_EQ(skel->bss->base_ino, st.st_ino, "directory inode");
 	}
+	check_bases(skel, dfd, dir, resolved_dir);
 
 	skel->bss->deny = true;
 	if (test__start_subtest("deny_create")) {
