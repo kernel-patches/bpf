@@ -168,7 +168,7 @@ EXPORT_IF_KUNIT(dm_register_dmub_notify_callback);
  *
  * Reads both apertures before populating the DMUB parameters and DML2 config.
  * Translates their base addresses into MC space for DML2. If either aperture
- * is unavailable, the feature remains disabled.
+ * is unavailable, the feature remains disabled. Only DCN 6.0 supports the feature.
  */
 static void
 dm_get_alt_channel_pstate_switch_aperture(struct amdgpu_device *adev,
@@ -182,6 +182,13 @@ dm_get_alt_channel_pstate_switch_aperture(struct amdgpu_device *adev,
 	u64 aperture_mc_bases[ARRAY_SIZE(region_ids)];
 	u32 i;
 	int r;
+
+	switch (amdgpu_ip_version(adev, DCE_HWIP, 0)) {
+	case IP_VERSION(6, 0, 0):
+		break;
+	default:
+		return;
+	}
 
 	/* Region IDs 5 and 6 identify the p-state switch apertures 1 and 2.
 	 * Do not publish partial aperture configuration if either lookup fails.
