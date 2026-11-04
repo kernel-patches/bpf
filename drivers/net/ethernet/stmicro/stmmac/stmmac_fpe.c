@@ -173,9 +173,16 @@ void stmmac_fpe_init(struct stmmac_priv *priv)
 	ethtool_mmsv_init(&priv->fpe_cfg.mmsv, priv->dev,
 			  &stmmac_mmsv_ops);
 
-	if ((!priv->fpe_cfg.reg || !priv->hw->mac->fpe_map_preemption_class) &&
-	    priv->dma_cap.fpesel)
-		dev_info(priv->device, "FPE is not supported by driver.\n");
+	if (!stmmac_fpe_supported(priv)) {
+		if (priv->dma_cap.fpesel)
+			dev_info(priv->device, "FPE is not supported by driver.\n");
+		return;
+	}
+
+	/* The preemptive MAC in DWMAC is always enabled, so initialize
+	 * pmac_enabled to true to reflect the hardware state.
+	 */
+	priv->fpe_cfg.mmsv.pmac_enabled = true;
 }
 
 int stmmac_fpe_get_add_frag_size(struct stmmac_priv *priv)
