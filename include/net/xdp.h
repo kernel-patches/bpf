@@ -389,6 +389,42 @@ struct sk_buff *xdp_build_skb_from_frame(struct xdp_frame *xdpf,
 					 struct net_device *dev);
 struct xdp_frame *xdpf_clone(struct xdp_frame *xdpf);
 
+/**
+ * xdp_convert_skb_to_buff - build an xdp_buff on top of an skb
+ * @skb: skb to describe, packet data is taken from its MAC header onwards
+ * @xdp: xdp_buff to initialize
+ * @xdp_rxq: Rx queue info to attach to @xdp
+ *
+ * The memory type set on @xdp_rxq is only used to release fragments that
+ * the XDP program consumes; the head can not be freed from under the skb.
+ * A non-linear @skb is expected to have gone through skb_pp_cow_data(), so
+ * all of its fragments are page_pool backed.
+ */
+static inline
+void xdp_convert_skb_to_buff(struct sk_buff *skb, struct xdp_buff *xdp,
+			     struct xdp_rxq_info *xdp_rxq)
+{
+	u32 frame_sz, pkt_len;
+
+	/* SKB "head" area always have tailroom for skb_shared_info */
+	frame_sz = skb_end_pointer(skb) - skb->head;
+	frame_sz += SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
+	pkt_len = skb_tail_pointer(skb) - skb_mac_header(skb);
+
+	xdp_init_buff(xdp, frame_sz, xdp_rxq);
+	xdp_prepare_buff(xdp, skb->head, skb->mac_header, pkt_len, true);
+
+	if (skb_is_nonlinear(skb)) {
+		skb_shinfo(skb)->xdp_frags_size = skb->data_len;
+		xdp_buff_set_frags_flag(xdp);
+	} else {
+		xdp_buff_clear_frags_flag(xdp);
+	}
+
+	DEBUG_NET_WARN_ON_ONCE(skb_is_nonlinear(skb) && !skb->pp_recycle);
+	xdp->rxq->mem.type = MEM_TYPE_PAGE_POOL;
+}
+
 static inline
 void xdp_convert_frame_to_buff(const struct xdp_frame *frame,
 			       struct xdp_buff *xdp)
