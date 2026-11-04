@@ -12,6 +12,7 @@
 #include "ionic.h"
 #include "ionic_bus.h"
 #include "ionic_lif.h"
+#include "ionic_stats.h"
 #include "ionic_debugfs.h"
 
 MODULE_DESCRIPTION(IONIC_DRV_DESCRIPTION);
@@ -727,7 +728,9 @@ int ionic_port_init(struct ionic *ionic)
 	struct ionic_identity *ident = &ionic->ident;
 	struct ionic_dev *idev = &ionic->idev;
 	bool allocated = false;
+	__le64 *stat;
 	size_t sz;
+	size_t i;
 	int err;
 
 	if (!idev->port_info) {
@@ -745,8 +748,9 @@ int ionic_port_init(struct ionic *ionic)
 	/* If the driver knows about more "extra stats" than the firmware,
 	 * make sure these stats are marked as invalid.
 	 */
-	memset(&idev->port_info->extra_stats, 0xff,
-	       sizeof(idev->port_info->extra_stats));
+	stat = (__le64 *)&idev->port_info->extra_stats;
+	for (i = 0; i < sizeof(idev->port_info->extra_stats) / sizeof(*stat); i++)
+		WRITE_ONCE(stat[i], IONIC_STAT_INVALID);
 
 	WRITE_ONCE(idev->link_down_count_init, false);
 
