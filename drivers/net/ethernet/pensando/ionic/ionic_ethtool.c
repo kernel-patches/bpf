@@ -442,8 +442,10 @@ static int ionic_get_fecparam(struct net_device *netdev,
 	lif = netdev_priv(netdev);
 	port_info = lif->ionic->idev.port_info;
 
-	fec->active_fec = ionic_fec_type_to_ethtool(port_info->config.fec_type);
-	fec->fec = ionic_fec_type_to_ethtool(port_info->config.fec_type);
+	fec->active_fec =
+		ionic_fec_type_to_ethtool(READ_ONCE(port_info->status.fec_type));
+	fec->fec =
+		ionic_fec_type_to_ethtool(READ_ONCE(port_info->config.fec_type));
 
 	return 0;
 }
