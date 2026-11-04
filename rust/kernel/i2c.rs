@@ -392,8 +392,22 @@ kernel::impl_device_context_into_aref!(I2cAdapter);
 unsafe impl AlwaysRefCounted for I2cAdapter {
     #[inline]
     fn inc_ref(&self) {
-        // SAFETY: The existence of a shared reference guarantees that the refcount is non-zero.
-        unsafe { bindings::i2c_get_adapter(self.index()) };
+        let adapter = self.as_raw();
+
+        // SAFETY:
+        // - By the `I2cAdapter` type invariant, `adapter` points to a valid
+        //   `struct i2c_adapter` whose device reference remains held for the
+        //   lifetime of `self`.
+        // - When module unloading is enabled, an existing reference to the
+        //   adapter's owner is also held, so `__module_get()` may acquire another
+        //   one. It also accepts a null owner for built-in adapters.
+        // - The existing device reference prevents `adapter->dev` from being
+        //   released, so `get_device()` may safely acquire another reference.
+        unsafe {
+            #[cfg(CONFIG_MODULE_UNLOAD)]
+            bindings::__module_get((*adapter).owner);
+            bindings::get_device(&raw mut (*adapter).dev);
+        }
     }
 
     #[inline]
