@@ -6729,6 +6729,7 @@ M:	Vishal Verma <vishal.l.verma@intel.com>
 R:	Ira Weiny <iweiny@kernel.org>
 R:	Li Ming <ming.li@zohomail.com>
 R:	Richard Cheng <icheng@nvidia.com>
+R:	Ben Cheatham <benjamin.cheatham@amd.com>
 L:	linux-cxl@vger.kernel.org
 S:	Maintained
 F:	Documentation/driver-api/cxl
