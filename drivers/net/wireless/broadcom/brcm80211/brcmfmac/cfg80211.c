@@ -88,6 +88,7 @@
 #define BRCMF_ND_INFO_TIMEOUT		msecs_to_jiffies(2000)
 
 #define BRCMF_PS_MAX_TIMEOUT_MS		2000
+#define BRCMF_PS_DEFAULT_TIMEOUT_MS	200
 
 /* Dump obss definitions */
 #define ACS_MSRMNT_DELAY		80
@@ -3323,6 +3324,9 @@ brcmf_cfg80211_set_power_mgmt(struct wiphy *wiphy, struct net_device *ndev,
 			bphy_err(drvr, "error (%d)\n", err);
 	}
 
+	/* cfg80211 passes -1 when userspace asks for no particular timeout */
+	if (timeout < 0)
+		timeout = BRCMF_PS_DEFAULT_TIMEOUT_MS;
 	err = brcmf_fil_iovar_int_set(ifp, "pm2_sleep_ret",
 				min_t(u32, timeout, BRCMF_PS_MAX_TIMEOUT_MS));
 	if (err)
