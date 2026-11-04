@@ -1293,6 +1293,11 @@ static void dm_test_crtc_with_stream(struct kunit *test,
 	adev->mode_info.num_crtc = 1;
 	adev->mode_info.crtcs[0] = acrtc;
 	acrtc->dm_irq_params.stream = stream;
+
+	/* dm_vblank_get_counter()/dm_crtc_get_scanoutpos() take this unconditionally
+	 * once a stream is set.
+	 */
+	spin_lock_init(&adev->dm.sw_counter_lock);
 }
 
 /**
