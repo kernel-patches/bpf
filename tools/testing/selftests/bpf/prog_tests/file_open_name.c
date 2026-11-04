@@ -3,6 +3,7 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <io_uring/mini_liburing.h>
 #include "file_open_name.skel.h"
 
 static void check_sleepable_rejected(void)
@@ -112,7 +113,76 @@ out:
 	free(handle);
 }
 
-void test_file_open_name(void)
+static void check_uring(struct file_open_name *skel, int dfd)
+{
+	static const struct {
+		const char *test;
+		const char *name;
+		int flags;
+		int error;
+	} cases[] = {
+		{ "uring_worker", "./alias", O_RDONLY },
+		{ "uring_deny", "uring_new", O_CREAT | O_RDWR, EPERM },
+	};
+	struct io_uring_cqe *cqe;
+	struct io_uring_sqe *sqe;
+	struct io_uring ring;
+	bool initialized = false;
+	int err, i, result;
+	struct stat st;
+
+	for (i = 0; i < ARRAY_SIZE(cases); i++) {
+		if (!test__start_subtest(cases[i].test))
+			continue;
+		if (!initialized) {
+			err = io_uring_queue_init(1, &ring, 0);
+			if (err == -1 && (errno == ENOSYS || errno == EPERM)) {
+				printf("%s:SKIP:io_uring is unavailable: %s\n", __func__, strerror(errno));
+				test__skip();
+				continue;
+			}
+			if (!ASSERT_OK(err, "io_uring setup"))
+				return;
+			initialized = true;
+		}
+		skel->bss->deny = cases[i].error != 0;
+		skel->bss->calls = 0;
+		sqe = io_uring_get_sqe(&ring);
+		if (!ASSERT_OK_PTR(sqe, "get sqe"))
+			break;
+		memset(sqe, 0, sizeof(*sqe));
+		sqe->opcode = IORING_OP_OPENAT;
+		sqe->fd = dfd;
+		sqe->addr = (unsigned long)cases[i].name;
+		sqe->open_flags = cases[i].flags;
+		sqe->len = 0600;
+		sqe->flags = IOSQE_ASYNC;
+		skel->bss->check_enabled = true;
+		if (!ASSERT_EQ(io_uring_submit(&ring), 1, "submit"))
+			break;
+		if (!ASSERT_OK(io_uring_wait_cqe(&ring, &cqe), "wait cqe"))
+			break;
+		skel->bss->check_enabled = false;
+		result = cqe->res;
+		io_uring_cqe_seen(&ring);
+		if (cases[i].error)
+			ASSERT_EQ(result, -cases[i].error, "cqe error");
+		else
+			ASSERT_OK_FD(result, "cqe success");
+		if (result >= 0)
+			close(result);
+		ASSERT_GT(skel->bss->calls, 0, "io_uring hook count");
+		ASSERT_STREQ(skel->bss->pathname, cases[i].name, "hook pathname");
+	}
+	if (!initialized)
+		return;
+	skel->bss->check_enabled = false;
+	io_uring_queue_exit(&ring);
+	ASSERT_EQ(fstatat(dfd, "uring_new", &st, 0), -1, "io_uring file not created");
+	ASSERT_EQ(errno, ENOENT, "io_uring missing file");
+}
+
+static void *run_file_open_name(void *arg)
 {
 	char dir[] = "/tmp/file_open_name.XXXXXX";
 	struct file_open_name *skel = NULL;
@@ -123,7 +193,7 @@ void test_file_open_name(void)
 		check_sleepable_rejected();
 
 	if (!ASSERT_OK_PTR(mkdtemp(dir), "mkdtemp"))
-		return;
+		return NULL;
 	dfd = open(dir, O_RDONLY | O_DIRECTORY);
 	if (!ASSERT_OK_FD(dfd, "open directory"))
 		goto out;
@@ -163,6 +233,7 @@ void test_file_open_name(void)
 		check_open(skel, dfd, "alias", O_PATH, 0, EPERM);
 	if (test__start_subtest("deny_tmpfile"))
 		check_open(skel, dfd, ".", O_TMPFILE | O_RDWR, 0600, EPERM);
+	check_uring(skel, dfd);
 	if (test__start_subtest("handle_open"))
 		check_handle_open(skel, dfd, fd);
 out:
@@ -172,8 +243,21 @@ out:
 	if (dfd >= 0) {
 		unlinkat(dfd, "alias", 0);
 		unlinkat(dfd, "new", 0);
+		unlinkat(dfd, "uring_new", 0);
 		unlinkat(dfd, "target", 0);
 		close(dfd);
 	}
 	rmdir(dir);
+	return NULL;
+}
+
+void test_file_open_name(void)
+{
+	pthread_t thread;
+	int err;
+
+	/* Thread exit tears down io_uring workers before the next test runs. */
+	err = pthread_create(&thread, NULL, run_file_open_name, NULL);
+	if (ASSERT_OK(err, "pthread_create"))
+		ASSERT_OK(pthread_join(thread, NULL), "pthread_join");
 }
