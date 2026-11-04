@@ -18,6 +18,15 @@
 #define LOCAL_STORAGE_CREATE_FLAG_MASK					\
 	(BPF_F_NUMA_NODE | BPF_F_ACCESS_MASK)
 
+/* Cgroup storage allocates with kmalloc() where the max size is
+ * larger than kmalloc_nolock() used by other local storages.
+ */
+#define BPF_CGROUP_STORAGE_MAX_VALUE_SIZE                                      \
+	min_t(u32,                                                             \
+	      (KMALLOC_MAX_SIZE - MAX_BPF_STACK -                              \
+	       sizeof(struct bpf_local_storage_elem)),                         \
+	      (U16_MAX - sizeof(struct bpf_local_storage_elem)))
+
 struct bpf_cgroup_storage_map {
 	struct bpf_map map;
 
@@ -296,12 +305,12 @@ enoent:
 
 static struct bpf_map *cgroup_storage_map_alloc(union bpf_attr *attr)
 {
-	__u32 max_value_size = BPF_LOCAL_STORAGE_MAX_VALUE_SIZE;
+	__u32 max_value_size = BPF_CGROUP_STORAGE_MAX_VALUE_SIZE;
 	int numa_node = bpf_map_attr_numa_node(attr);
 	struct bpf_cgroup_storage_map *map;
 
 	/* percpu is bound by PCPU_MIN_UNIT_SIZE, non-percu
-	 * is the same as other local storages.
+	 * uses the cgroup storage limit above
 	 */
 	if (attr->map_type == BPF_MAP_TYPE_PERCPU_CGROUP_STORAGE)
 		max_value_size = min_t(__u32, max_value_size,
