@@ -361,10 +361,12 @@ config MICROSEMI_PHY
 
 config MOTORCOMM_PHY
 	tristate "Motorcomm PHYs"
+	select PHY_PACKAGE
 	help
 	  Enables support for Motorcomm network PHYs.
 	  Currently supports YT85xx Gigabit Ethernet PHYs, YT861x PHYs
-	  integrated in YT921x switches, and YT8821 2.5Gbps PHYs.
+	  integrated in YT921x switches, YT8821 2.5Gbps PHYs and YT8824 4 * 2.5G
+	  PHYs.
 
 config NATIONAL_PHY
 	tristate "National Semiconductor PHYs"
