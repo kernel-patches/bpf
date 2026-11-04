@@ -198,7 +198,9 @@
 #define MCOUNT_REC()	. = ALIGN(8);				\
 			__start_mcount_loc = .;			\
 			KEEP(*(__mcount_loc))			\
+			__start_patchable_function_entries = .;	\
 			KEEP_PATCHABLE				\
+			__stop_patchable_function_entries = .;	\
 			__stop_mcount_loc = .;			\
 			FTRACE_STUB_HACK			\
 			ftrace_ops_list_func = arch_ftrace_ops_list_func;
