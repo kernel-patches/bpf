@@ -10,6 +10,7 @@
 
 #include <linux/delay.h>
 #include <linux/regmap.h>
+#include <linux/workqueue.h>
 #include <linux/gpio/consumer.h>
 #include <linux/leds.h>
 #include <linux/dsa/tag_qca.h>
@@ -459,6 +460,17 @@ struct qca8k_priv {
 	struct mii_bus *internal_mdio_bus;
 	struct dsa_switch *ds;
 	struct mutex reg_mutex;
+	/* Serializes writes to QCA8K_REG_PORT_STATUS and the MTU update. Taken
+	 * from phylink MAC callbacks: do not access a PHY or call into phylink
+	 * with it held.
+	 */
+	struct mutex port_status_lock;
+	/* Committed frame size, 0 if unknown; protected by port_status_lock. */
+	u32 max_frame_size;
+	struct delayed_work port_status_work;
+	/* Nonzero masks mark pending writes; protected by port_status_lock. */
+	u32 port_status_mask[QCA8K_NUM_PORTS];
+	u32 port_status_value[QCA8K_NUM_PORTS];
 	struct device *dev;
 	struct gpio_desc *reset_gpio;
 	struct net_device *mgmt_conduit; /* Track if mdio/mib Ethernet is available */
@@ -502,6 +514,9 @@ static inline u32 qca8k_port_to_phy(int port)
 extern const struct qca8k_mib_desc ar8327_mib[];
 extern const struct regmap_access_table qca8k_readable_table;
 int qca8k_mib_init(struct qca8k_priv *priv);
+void qca8k_port_status_work(struct work_struct *work);
+void qca8k_port_status_update(struct qca8k_priv *priv, int port,
+			      u32 mask, u32 val);
 void qca8k_port_set_status(struct qca8k_priv *priv, int port, int enable);
 int qca8k_read_switch_id(struct qca8k_priv *priv);
 

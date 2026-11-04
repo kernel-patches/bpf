@@ -1494,7 +1494,9 @@ qca8k_phylink_mac_link_up(struct phylink_config *config,
 
 	reg |= QCA8K_PORT_STATUS_TXMAC | QCA8K_PORT_STATUS_RXMAC;
 
-	qca8k_write(priv, QCA8K_REG_PORT_STATUS(port), reg);
+	mutex_lock(&priv->port_status_lock);
+	qca8k_port_status_update(priv, port, U32_MAX, reg);
+	mutex_unlock(&priv->port_status_lock);
 }
 
 static struct qca8k_pcs *pcs_to_qca8k_pcs(struct phylink_pcs *pcs)
@@ -2006,6 +2008,7 @@ qca8k_setup(struct dsa_switch *ds)
 
 	/* Setup our port MTUs to match power on defaults */
 	ret = qca8k_write(priv, QCA8K_MAX_FRAME_SIZE, ETH_FRAME_LEN + ETH_FCS_LEN);
+	priv->max_frame_size = ret ? 0 : ETH_FRAME_LEN + ETH_FCS_LEN;
 	if (ret)
 		dev_warn(priv->dev, "failed setting MTU settings");
 
@@ -2065,6 +2068,13 @@ static const struct dsa_switch_ops qca8k_switch_ops = {
 	.conduit_state_change	= qca8k_conduit_change,
 	.connect_tag_protocol	= qca8k_connect_tag_protocol,
 };
+
+static void qca8k_port_status_stop(void *data)
+{
+	struct qca8k_priv *priv = data;
+
+	disable_delayed_work_sync(&priv->port_status_work);
+}
 
 static int
 qca8k_sw_probe(struct mdio_device *mdiodev)
@@ -2127,6 +2137,11 @@ qca8k_sw_probe(struct mdio_device *mdiodev)
 	priv->ds->ops = &qca8k_switch_ops;
 	priv->ds->phylink_mac_ops = &qca8k_phylink_mac_ops;
 	mutex_init(&priv->reg_mutex);
+	mutex_init(&priv->port_status_lock);
+	INIT_DELAYED_WORK(&priv->port_status_work, qca8k_port_status_work);
+	ret = devm_add_action_or_reset(priv->dev, qca8k_port_status_stop, priv);
+	if (ret)
+		return ret;
 	dev_set_drvdata(&mdiodev->dev, priv);
 
 	return dsa_register_switch(priv->ds);
@@ -2141,6 +2156,7 @@ qca8k_sw_remove(struct mdio_device *mdiodev)
 	if (!priv)
 		return;
 
+	qca8k_port_status_stop(priv);
 	for (i = 0; i < QCA8K_NUM_PORTS; i++)
 		qca8k_port_set_status(priv, i, 0);
 
@@ -2154,6 +2170,7 @@ static void qca8k_sw_shutdown(struct mdio_device *mdiodev)
 	if (!priv)
 		return;
 
+	qca8k_port_status_stop(priv);
 	dsa_switch_shutdown(priv->ds);
 
 	dev_set_drvdata(&mdiodev->dev, NULL);
@@ -2176,13 +2193,24 @@ qca8k_set_pm(struct qca8k_priv *priv, int enable)
 	}
 }
 
+static void qca8k_port_status_start(struct qca8k_priv *priv)
+{
+	enable_delayed_work(&priv->port_status_work);
+	schedule_delayed_work(&priv->port_status_work, 0);
+}
+
 static int qca8k_suspend(struct device *dev)
 {
 	struct qca8k_priv *priv = dev_get_drvdata(dev);
+	int ret;
 
+	qca8k_port_status_stop(priv);
 	qca8k_set_pm(priv, 0);
+	ret = dsa_switch_suspend(priv->ds);
+	if (ret)
+		qca8k_port_status_start(priv);
 
-	return dsa_switch_suspend(priv->ds);
+	return ret;
 }
 
 static int qca8k_resume(struct device *dev)
@@ -2190,6 +2218,7 @@ static int qca8k_resume(struct device *dev)
 	struct qca8k_priv *priv = dev_get_drvdata(dev);
 
 	qca8k_set_pm(priv, 1);
+	qca8k_port_status_start(priv);
 
 	return dsa_switch_resume(priv->ds);
 }
