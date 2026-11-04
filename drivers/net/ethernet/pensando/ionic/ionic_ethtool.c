@@ -419,25 +419,31 @@ static int ionic_set_pauseparam(struct net_device *netdev,
 	return 0;
 }
 
+static u32 ionic_fec_type_to_ethtool(u8 fec_type)
+{
+	switch (fec_type) {
+	case IONIC_PORT_FEC_TYPE_NONE:
+		return ETHTOOL_FEC_OFF;
+	case IONIC_PORT_FEC_TYPE_RS:
+		return ETHTOOL_FEC_RS;
+	case IONIC_PORT_FEC_TYPE_FC:
+		return ETHTOOL_FEC_BASER;
+	default:
+		return 0;
+	}
+}
+
 static int ionic_get_fecparam(struct net_device *netdev,
 			      struct ethtool_fecparam *fec)
 {
-	struct ionic_lif *lif = netdev_priv(netdev);
+	struct ionic_port_info *port_info;
+	struct ionic_lif *lif;
 
-	switch (lif->ionic->idev.port_info->config.fec_type) {
-	case IONIC_PORT_FEC_TYPE_NONE:
-		fec->active_fec = ETHTOOL_FEC_OFF;
-		fec->fec = ETHTOOL_FEC_OFF;
-		break;
-	case IONIC_PORT_FEC_TYPE_RS:
-		fec->active_fec = ETHTOOL_FEC_RS;
-		fec->fec = ETHTOOL_FEC_RS;
-		break;
-	case IONIC_PORT_FEC_TYPE_FC:
-		fec->active_fec = ETHTOOL_FEC_BASER;
-		fec->fec = ETHTOOL_FEC_BASER;
-		break;
-	}
+	lif = netdev_priv(netdev);
+	port_info = lif->ionic->idev.port_info;
+
+	fec->active_fec = ionic_fec_type_to_ethtool(port_info->config.fec_type);
+	fec->fec = ionic_fec_type_to_ethtool(port_info->config.fec_type);
 
 	return 0;
 }
