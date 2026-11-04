@@ -2320,6 +2320,7 @@ static int phylink_bringup_phy(struct phylink *pl, struct phy_device *phy,
 	pl->phy_state.duplex = DUPLEX_UNKNOWN;
 	pl->phy_state.rate_matching = RATE_MATCH_NONE;
 	linkmode_copy(pl->supported, supported);
+	linkmode_and(config.advertising, config.advertising, pl->link_config.advertising);
 	linkmode_copy(pl->link_config.advertising, config.advertising);
 
 	/* Restrict the phy advertisement according to the MAC support. */
