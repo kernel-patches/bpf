@@ -326,18 +326,7 @@ static struct platform_driver cdf_pinctrl_driver = {
 		.pm = pm_sleep_ptr(&intel_pinctrl_pm_ops),
 	},
 };
-
-static int __init cdf_pinctrl_init(void)
-{
-	return platform_driver_register(&cdf_pinctrl_driver);
-}
-subsys_initcall(cdf_pinctrl_init);
-
-static void __exit cdf_pinctrl_exit(void)
-{
-	platform_driver_unregister(&cdf_pinctrl_driver);
-}
-module_exit(cdf_pinctrl_exit);
+subsys_platform_driver(cdf_pinctrl_driver);
 
 MODULE_AUTHOR("Mika Westerberg <mika.westerberg@linux.intel.com>");
 MODULE_DESCRIPTION("Intel Cedar Fork PCH pinctrl/GPIO driver");

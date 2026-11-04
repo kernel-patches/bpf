@@ -833,18 +833,7 @@ static struct platform_driver lp_gpio_driver = {
 		.acpi_match_table = lynxpoint_gpio_acpi_match,
 	},
 };
-
-static int __init lp_gpio_init(void)
-{
-	return platform_driver_register(&lp_gpio_driver);
-}
-subsys_initcall(lp_gpio_init);
-
-static void __exit lp_gpio_exit(void)
-{
-	platform_driver_unregister(&lp_gpio_driver);
-}
-module_exit(lp_gpio_exit);
+subsys_platform_driver(lp_gpio_driver);
 
 MODULE_AUTHOR("Mathias Nyman (Intel)");
 MODULE_AUTHOR("Andy Shevchenko (Intel)");

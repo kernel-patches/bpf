@@ -579,18 +579,7 @@ static struct platform_driver spt_pinctrl_driver = {
 		.pm = pm_sleep_ptr(&intel_pinctrl_pm_ops),
 	},
 };
-
-static int __init spt_pinctrl_init(void)
-{
-	return platform_driver_register(&spt_pinctrl_driver);
-}
-subsys_initcall(spt_pinctrl_init);
-
-static void __exit spt_pinctrl_exit(void)
-{
-	platform_driver_unregister(&spt_pinctrl_driver);
-}
-module_exit(spt_pinctrl_exit);
+subsys_platform_driver(spt_pinctrl_driver);
 
 MODULE_AUTHOR("Mathias Nyman <mathias.nyman@linux.intel.com>");
 MODULE_AUTHOR("Mika Westerberg <mika.westerberg@linux.intel.com>");

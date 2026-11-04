@@ -1768,18 +1768,7 @@ static struct platform_driver chv_pinctrl_driver = {
 		.acpi_match_table = chv_pinctrl_acpi_match,
 	},
 };
-
-static int __init chv_pinctrl_init(void)
-{
-	return platform_driver_register(&chv_pinctrl_driver);
-}
-subsys_initcall(chv_pinctrl_init);
-
-static void __exit chv_pinctrl_exit(void)
-{
-	platform_driver_unregister(&chv_pinctrl_driver);
-}
-module_exit(chv_pinctrl_exit);
+subsys_platform_driver(chv_pinctrl_driver);
 
 MODULE_AUTHOR("Mika Westerberg <mika.westerberg@linux.intel.com>");
 MODULE_DESCRIPTION("Intel Cherryview/Braswell pinctrl driver");
