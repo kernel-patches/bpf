@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include <test_progs.h>
 #include <fcntl.h>
+#include <linux/mount.h>
+#include <linux/openat2.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <io_uring/mini_liburing.h>
@@ -28,6 +30,72 @@ static void check_open(struct file_open_name *skel, int dfd, const char *name,
 	ASSERT_STREQ(skel->bss->pathname, name, "raw pathname");
 	ASSERT_EQ(skel->bss->observed_flags & flags, flags, "open flags");
 	ASSERT_EQ(skel->bss->observed_mode & 0777, mode, "creation mode");
+	ASSERT_GT(skel->bss->base_path_ret, 0, "format base");
+}
+
+static int create_tmpfs(void)
+{
+	int fsfd, mntfd, err;
+
+	fsfd = syscall(__NR_fsopen, "tmpfs", FSOPEN_CLOEXEC);
+	if (fsfd < 0)
+		return -errno;
+	if (syscall(__NR_fsconfig, fsfd, FSCONFIG_CMD_CREATE, NULL, NULL, 0)) {
+		err = -errno;
+		close(fsfd);
+		return err;
+	}
+	mntfd = syscall(__NR_fsmount, fsfd, FSMOUNT_CLOEXEC, 0);
+	err = mntfd < 0 ? -errno : mntfd;
+	close(fsfd);
+	return err;
+}
+
+static void check_rcu_open(struct file_open_name *skel, bool cached,
+			   bool require_ref)
+{
+	struct open_how how = { .resolve = cached ? RESOLVE_CACHED : 0 };
+	int error = require_ref ? (cached ? EAGAIN : EPERM) : 0;
+	int dfd, target_fd;
+	int fd, saved_errno;
+
+	/* Keep cached lookup independent of the host filesystem. */
+	dfd = create_tmpfs();
+	if (dfd == -ENOSYS || dfd == -ENODEV || dfd == -EPERM || dfd == -EACCES) {
+		printf("%s:SKIP:tmpfs is unavailable: %s\n", __func__, strerror(-dfd));
+		test__skip();
+		return;
+	}
+	if (!ASSERT_OK_FD(dfd, "create tmpfs"))
+		return;
+	target_fd = openat(dfd, "target", O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC, 0600);
+	if (!ASSERT_OK_FD(target_fd, "create cached target"))
+		goto out;
+
+	skel->bss->deny = require_ref;
+	skel->bss->calls = 0;
+	skel->bss->rcu_calls = 0;
+	skel->bss->require_ref = require_ref;
+	skel->bss->check_enabled = true;
+	fd = syscall(__NR_openat2, dfd, "target", &how, sizeof(how));
+	skel->bss->check_enabled = false;
+	skel->bss->require_ref = false;
+	saved_errno = errno;
+	if (fd >= 0)
+		close(fd);
+	if (error) {
+		ASSERT_EQ(fd, -1, "open rejected");
+		ASSERT_EQ(saved_errno, error, "open errno");
+	} else {
+		ASSERT_OK_FD(fd, "cached open");
+	}
+	ASSERT_EQ(skel->bss->calls, require_ref && !cached ? 2 : 1, "hook count");
+	ASSERT_EQ(skel->bss->rcu_calls, 1, "RCU attempt");
+	ASSERT_GT(skel->bss->base_path_ret, 0, "format base");
+out:
+	if (target_fd >= 0)
+		close(target_fd);
+	close(dfd);
 }
 
 static void check_handle_open(struct file_open_name *skel, int dfd, int target_fd)
@@ -78,6 +146,7 @@ static void check_handle_open(struct file_open_name *skel, int dfd, int target_f
 	for (i = 0; i < ARRAY_SIZE(cases); i++) {
 		skel->bss->deny = cases[i].error != 0;
 		skel->bss->calls = 0;
+		skel->bss->rcu_calls = 0;
 		skel->bss->check_enabled = true;
 		fd = syscall(__NR_open_by_handle_at, dfd, handle, cases[i].flags);
 		skel->bss->check_enabled = false;
@@ -91,7 +160,10 @@ static void check_handle_open(struct file_open_name *skel, int dfd, int target_f
 			ASSERT_OK_FD(fd, cases[i].name);
 		}
 		ASSERT_EQ(skel->bss->calls, 1, "handle hook count");
+		ASSERT_EQ(skel->bss->rcu_calls, 0, "referenced handle base");
 		ASSERT_STREQ(skel->bss->pathname, "", "empty handle pathname");
+		ASSERT_EQ(skel->bss->base_ino, before.st_ino, "handle base inode");
+		ASSERT_GT(skel->bss->base_path_ret, 0, "format handle base");
 		ASSERT_EQ(skel->bss->observed_flags & cases[i].flags,
 			  cases[i].flags, "handle open flags");
 		ASSERT_EQ(skel->bss->observed_mode, 0, "handle open mode");
@@ -162,6 +234,9 @@ static void check_uring(struct file_open_name *skel, int dfd)
 		if (result >= 0)
 			close(result);
 		ASSERT_GT(skel->bss->calls, 0, "io_uring hook count");
+		ASSERT_GT(skel->bss->base_path_ret, 0, "format io_uring base");
+		if (ASSERT_OK(fstat(dfd, &st), "stat io_uring base"))
+			ASSERT_EQ(skel->bss->base_ino, st.st_ino, "io_uring base inode");
 		ASSERT_STREQ(skel->bss->pathname, cases[i].name, "hook pathname");
 	}
 	if (!initialized)
@@ -176,11 +251,15 @@ void test_file_open_name(void)
 {
 	char dir[] = "/tmp/file_open_name.XXXXXX";
 	struct file_open_name *skel = NULL;
+	char *resolved_dir = NULL;
 	int dfd = -1, fd = -1;
 	struct stat st;
 
 	if (!ASSERT_OK_PTR(mkdtemp(dir), "mkdtemp"))
 		return;
+	resolved_dir = realpath(dir, NULL);
+	if (!ASSERT_OK_PTR(resolved_dir, "resolve directory"))
+		goto out;
 	dfd = open(dir, O_RDONLY | O_DIRECTORY);
 	if (!ASSERT_OK_FD(dfd, "open directory"))
 		goto out;
@@ -199,8 +278,12 @@ void test_file_open_name(void)
 	if (!ASSERT_OK(file_open_name__attach(skel), "attach"))
 		goto out;
 
-	if (test__start_subtest("raw_symlink"))
+	if (test__start_subtest("raw_symlink")) {
 		check_open(skel, dfd, "./alias", O_RDONLY, 0, 0);
+		ASSERT_STREQ(skel->bss->base_path, resolved_dir, "directory path");
+		if (ASSERT_OK(fstat(dfd, &st), "stat directory"))
+			ASSERT_EQ(skel->bss->base_ino, st.st_ino, "directory inode");
+	}
 
 	skel->bss->deny = true;
 	if (test__start_subtest("deny_create")) {
@@ -217,6 +300,12 @@ void test_file_open_name(void)
 		check_open(skel, dfd, "alias", O_PATH, 0, EPERM);
 	if (test__start_subtest("deny_tmpfile"))
 		check_open(skel, dfd, ".", O_TMPFILE | O_RDWR, 0600, EPERM);
+	if (test__start_subtest("cached_open"))
+		check_rcu_open(skel, true, false);
+	if (test__start_subtest("rcu_retry"))
+		check_rcu_open(skel, false, true);
+	if (test__start_subtest("cached_rcu_retry"))
+		check_rcu_open(skel, true, true);
 	check_uring(skel, dfd);
 	if (test__start_subtest("handle_open"))
 		check_handle_open(skel, dfd, fd);
@@ -231,5 +320,6 @@ out:
 		unlinkat(dfd, "target", 0);
 		close(dfd);
 	}
+	free(resolved_dir);
 	rmdir(dir);
 }
