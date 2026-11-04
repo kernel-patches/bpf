@@ -384,13 +384,33 @@ static int orangefs_write_end(const struct kiocb *iocb,
 			      struct folio *folio, void *fsdata)
 {
 	struct inode *inode = folio->mapping->host;
+	struct orangefs_write_range *wr = folio_get_private(folio);
 	loff_t last_pos = pos + copied;
+
+	/*
+	 * write_begin records the whole request before any byte is
+	 * copied. Keep only the copied bytes. A copy that moves
+	 * nothing on a new range leaves wr starting at i_size, and
+	 * the retry launders it and warns.
+	 */
+	if (wr && copied < len &&
+	    wr->pos <= pos && wr->pos + wr->len == pos + len) {
+		wr->len -= len - copied;
+		if (wr->len == 0) {
+			kfree(folio_detach_private(folio));
+			folio_cancel_dirty(folio);
+			folio_unlock(folio);
+			folio_put(folio);
+			return 0;
+		}
+	}
 
 	/*
 	 * No need to use i_size_read() here, the i_size
 	 * cannot change under us because we hold the i_mutex.
+	 * A copy that moved nothing must not move i_size either.
 	 */
-	if (last_pos > inode->i_size)
+	if (copied > 0 && last_pos > inode->i_size)
 		i_size_write(inode, last_pos);
 
 	/* zero the stale part of the folio if we did a short copy */
