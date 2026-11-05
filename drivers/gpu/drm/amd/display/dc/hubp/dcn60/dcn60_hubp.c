@@ -409,6 +409,40 @@ void hubp60_read_state(struct hubp *hubp)
 	s->flip_control = REG_READ(DCSURF_FLIP_CONTROL);
 }
 
+/**
+ * hubp60_get_outstanding_req_status() - Sample the outstanding request status of HUBP.
+ * @hubp: hubp instance
+ *
+ * Reads DCHUBP_CNTL once. The no-outstanding fields read 1 when idle, so they are inverted
+ * into HUBP_OUTSTANDING_* bits that are set when something is outstanding.
+ *
+ * Return: HUBP_OUTSTANDING_* and HUBP_NOT_IN_BLANK bits
+ */
+static uint32_t hubp60_get_outstanding_req_status(struct hubp *hubp)
+{
+       struct dcn20_hubp *hubp2 = TO_DCN20_HUBP(hubp);
+       uint32_t no_outstanding_req = 0;
+       uint32_t xrq_no_outstanding_req = 0;
+       uint32_t in_blank = 0;
+       uint32_t status = 0;
+
+       REG_GET_3(DCHUBP_CNTL,
+		HUBP_NO_OUTSTANDING_REQ, &no_outstanding_req,
+		HUBP_XRQ_NO_OUTSTANDING_REQ, &xrq_no_outstanding_req,
+		HUBP_IN_BLANK, &in_blank);
+
+       if (!no_outstanding_req)
+		status |= HUBP_OUTSTANDING_ANY;
+       if (!(xrq_no_outstanding_req & HUBP_XRQ_NO_OUTSTANDING_DRQ))
+		status |= HUBP_OUTSTANDING_DRQ;
+       if (!(xrq_no_outstanding_req & HUBP_XRQ_NO_OUTSTANDING_CRQ_TRQ))
+		status |= HUBP_OUTSTANDING_CRQ_TRQ;
+       if (!in_blank)
+		status |= HUBP_NOT_IN_BLANK;
+
+       return status;
+}
+
 static struct hubp_funcs dcn60_hubp_funcs = {
 	.hubp_enable_tripleBuffer = hubp2_enable_triplebuffer,
 	.hubp_is_triplebuffer_enabled = hubp2_is_triplebuffer_enabled,
@@ -438,6 +472,7 @@ static struct hubp_funcs dcn60_hubp_funcs = {
 	.hubp_soft_reset = hubp31_soft_reset,
 	.hubp_set_flip_int = hubp401_set_flip_int,
 	.hubp_in_blank = hubp401_in_blank,
+	.hubp_get_outstanding_req_status = hubp60_get_outstanding_req_status,
 	.phantom_hubp_post_enable = hubp32_phantom_hubp_post_enable,
 	.hubp_update_mall_sel = NULL,
 	.hubp_prepare_subvp_buffering = hubp32_prepare_subvp_buffering,

@@ -671,6 +671,18 @@ struct tg_wait_for_state_params {
 	enum crtc_state state;
 };
 
+struct tg_wait_for_position_params {
+	struct timing_generator *tg;
+	unsigned int line;
+	unsigned int window_start; /* start line of the window that line ends, used with window_valid */
+	bool *window_valid;        /* optional, cleared when line was already passed on entry */
+};
+
+struct hubp_get_outstanding_req_params {
+	struct hubp *hubp;
+	uint32_t *status;
+};
+
 struct tg_set_vtg_params_params {
 	struct timing_generator *tg;
 	struct dc_crtc_timing *timing;
@@ -926,6 +938,10 @@ struct hubbub_perfmon_start_urgent_assertion_count_params {
 	struct hubbub *hubbub;
 };
 
+struct hubbub_perfmon_start_urgent_request_count_params {
+	struct hubbub *hubbub;
+};
+
 struct hubbub_perfmon_start_urgent_ramp_latency_params {
 	struct hubbub *hubbub;
 	struct hubbub_urgent_latency_params latency_params;
@@ -960,6 +976,12 @@ struct hubbub_perfmon_get_urgent_assertion_count_params {
 	struct hubbub *hubbub;
 	uint32_t       refclk_mhz;
 	uint32_t      *assertion_count;
+	uint32_t      *deassertion_count;
+};
+
+struct hubbub_perfmon_get_urgent_request_count_params {
+	struct hubbub *hubbub;
+	uint32_t      *request_count;
 };
 
 struct hubbub_perfmon_get_prefetch_data_size_params {
@@ -1407,6 +1429,8 @@ union block_sequence_params {
 	struct dsc_enable_with_opp_params dsc_enable_with_opp_params;
 	struct tg_program_global_sync_params tg_program_global_sync_params;
 	struct tg_wait_for_state_params tg_wait_for_state_params;
+	struct tg_wait_for_position_params tg_wait_for_position_params;
+	struct hubp_get_outstanding_req_params hubp_get_outstanding_req_params;
 	struct tg_set_vtg_params_params tg_set_vtg_params_params;
 	struct tg_setup_vertical_interrupt2_params tg_setup_vertical_interrupt2_params;
 	struct dpp_set_hdr_multiplier_params dpp_set_hdr_multiplier_params;
@@ -1450,12 +1474,14 @@ union block_sequence_params {
 	struct hubbub_perfmon_start_in_order_bw_params hubbub_perfmon_start_in_order_bw_params;
 	struct hubbub_perfmon_start_memory_latencies_params hubbub_perfmon_start_memory_latencies_params;
 	struct hubbub_perfmon_start_urgent_assertion_count_params hubbub_perfmon_start_urgent_assertion_count_params;
+	struct hubbub_perfmon_start_urgent_request_count_params hubbub_perfmon_start_urgent_request_count_params;
 	struct hubbub_perfmon_start_urgent_ramp_latency_params hubbub_perfmon_start_urgent_ramp_latency_params;
 	struct hubbub_perfmon_start_prefetch_data_size_params hubbub_perfmon_start_prefetch_data_size_params;
 	struct hubbub_perfmon_get_out_of_order_bw_params hubbub_perfmon_get_out_of_order_bw_params;
 	struct hubbub_perfmon_get_in_order_bw_params hubbub_perfmon_get_in_order_bw_params;
 	struct hubbub_perfmon_get_memory_latencies_params hubbub_perfmon_get_memory_latencies_params;
 	struct hubbub_perfmon_get_urgent_assertion_count_params hubbub_perfmon_get_urgent_assertion_count_params;
+	struct hubbub_perfmon_get_urgent_request_count_params hubbub_perfmon_get_urgent_request_count_params;
 	struct hubbub_perfmon_get_prefetch_data_size_params hubbub_perfmon_get_prefetch_data_size_params;
 	struct hubbub_perfmon_get_urgent_ramp_latency_params hubbub_perfmon_get_urgent_ramp_latency_params;
 	struct hubp_clk_cntl_params hubp_clk_cntl_params;
@@ -1657,6 +1683,8 @@ enum block_sequence_func {
 	DSC_ENABLE_WITH_OPP,
 	TG_PROGRAM_GLOBAL_SYNC,
 	TG_WAIT_FOR_STATE,
+	TG_WAIT_FOR_POSITION,
+	HUBP_GET_OUTSTANDING_REQ,
 	TG_SET_VTG_PARAMS,
 	TG_SETUP_VERTICAL_INTERRUPT2,
 	HUBP_PROGRAM_DET_SIZE,
@@ -1767,12 +1795,14 @@ enum block_sequence_func {
 	HUBBUB_PERFMON_START_IN_ORDER_BW,
 	HUBBUB_PERFMON_START_MEMORY_LATENCIES,
 	HUBBUB_PERFMON_START_URGENT_ASSERTION_COUNT,
+	HUBBUB_PERFMON_START_URGENT_REQUEST_COUNT,
 	HUBBUB_PERFMON_START_URGENT_RAMP_LATENCY,
 	HUBBUB_PERFMON_START_PREFETCH_DATA_SIZE,
 	HUBBUB_PERFMON_GET_OUT_OF_ORDER_BW,
 	HUBBUB_PERFMON_GET_IN_ORDER_BW,
 	HUBBUB_PERFMON_GET_MEMORY_LATENCIES,
 	HUBBUB_PERFMON_GET_URGENT_ASSERTION_COUNT,
+	HUBBUB_PERFMON_GET_URGENT_REQUEST_COUNT,
 	HUBBUB_PERFMON_GET_PREFETCH_DATA_SIZE,
 	HUBBUB_PERFMON_GET_URGENT_RAMP_LATENCY,
 	LEGACY_CLK_MGR_INIT_CLOCKS,
@@ -2425,6 +2455,10 @@ void hwss_tg_program_global_sync(union block_sequence_params *params);
 
 void hwss_tg_wait_for_state(union block_sequence_params *params);
 
+void hwss_tg_wait_for_position(union block_sequence_params *params);
+
+void hwss_hubp_get_outstanding_req(union block_sequence_params *params);
+
 void hwss_tg_set_vtg_params(union block_sequence_params *params);
 
 void hwss_hubp_enable_3dlut_fl(union block_sequence_params *params);
@@ -2518,6 +2552,8 @@ void hwss_hubbub_perfmon_start_memory_latencies(union block_sequence_params *par
 
 void hwss_hubbub_perfmon_start_urgent_assertion_count(union block_sequence_params *params);
 
+void hwss_hubbub_perfmon_start_urgent_request_count(union block_sequence_params *params);
+
 void hwss_hubbub_perfmon_start_urgent_ramp_latency(union block_sequence_params *params);
 
 void hwss_hubbub_perfmon_start_prefetch_data_size(union block_sequence_params *params);
@@ -2529,6 +2565,8 @@ void hwss_hubbub_perfmon_get_in_order_bw(union block_sequence_params *params);
 void hwss_hubbub_perfmon_get_memory_latencies(union block_sequence_params *params);
 
 void hwss_hubbub_perfmon_get_urgent_assertion_count(union block_sequence_params *params);
+
+void hwss_hubbub_perfmon_get_urgent_request_count(union block_sequence_params *params);
 
 void hwss_hubbub_perfmon_get_prefetch_data_size(union block_sequence_params *params);
 
@@ -2710,6 +2748,13 @@ void hwss_add_tg_program_global_sync(struct block_sequence_state *seq_state,
 
 void hwss_add_tg_wait_for_state(struct block_sequence_state *seq_state,
 		struct timing_generator *tg, enum crtc_state state);
+
+void hwss_add_tg_wait_for_position(struct block_sequence_state *seq_state,
+		struct timing_generator *tg, unsigned int line,
+		unsigned int window_start, bool *window_valid);
+
+void hwss_add_hubp_get_outstanding_req(struct block_sequence_state *seq_state,
+		struct hubp *hubp, uint32_t *status);
 
 void hwss_add_tg_set_vtg_params(struct block_sequence_state *seq_state,
 		struct timing_generator *tg, struct dc_crtc_timing *dc_crtc_timing, bool program_fp2);
@@ -2895,6 +2940,9 @@ void hwss_add_hubbub_perfmon_start_memory_latencies(struct block_sequence_state 
 void hwss_add_hubbub_perfmon_start_urgent_assertion_count(struct block_sequence_state *seq_state,
 		struct hubbub *hubbub);
 
+void hwss_add_hubbub_perfmon_start_urgent_request_count(struct block_sequence_state *seq_state,
+		struct hubbub *hubbub);
+
 void hwss_add_hubbub_perfmon_start_urgent_ramp_latency(struct block_sequence_state *seq_state,
 		struct hubbub *hubbub,
 		const struct hubbub_urgent_latency_params *latency_params);
@@ -2916,7 +2964,10 @@ void hwss_add_hubbub_perfmon_get_memory_latencies(struct block_sequence_state *s
 
 void hwss_add_hubbub_perfmon_get_urgent_assertion_count(struct block_sequence_state *seq_state,
 		struct hubbub *hubbub, uint32_t refclk_mhz,
-		uint32_t *assertion_count);
+		uint32_t *assertion_count, uint32_t *deassertion_count);
+
+void hwss_add_hubbub_perfmon_get_urgent_request_count(struct block_sequence_state *seq_state,
+		struct hubbub *hubbub, uint32_t *request_count);
 
 void hwss_add_hubbub_perfmon_get_prefetch_data_size(struct block_sequence_state *seq_state,
 		struct hubbub *hubbub, uint32_t *prefetch_data_size);

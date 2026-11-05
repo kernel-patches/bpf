@@ -294,6 +294,9 @@ struct hubbub_funcs {
 				uint32_t *assertion_count,
 				uint32_t *deassertion_count,
 				uint32_t *timestamp_us);
+		void (*start_measuring_urgent_request_count)(
+				struct hubbub *hubbub);
+		uint32_t (*get_urgent_request_count)(struct hubbub *hubbub);
 		void (*start_measuring_urgent_ramp_latency)(
 				struct hubbub *hubbub,
 				const struct hubbub_urgent_latency_params *params);

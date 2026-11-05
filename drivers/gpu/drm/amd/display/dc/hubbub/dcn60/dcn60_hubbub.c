@@ -1098,6 +1098,82 @@ static bool hubbub60_perfmon_get_urgent_assertion_count(
 }
 
 /**
+ * hubbub60_perfmon_start_measuring_urgent_request_count() - Start counting urgent DF requests.
+ * @hubbub: hubbub instance
+ *
+ * Counts SDPIF request-valid events whose UTM QoS profile matches the urgent
+ * profile (event 256, filtered_sdpif_req_vld), over all request types and all
+ * Unit IDs. Counter 0 accumulates at level mode and runs from the moment
+ * PERFMON_STATE is set to run until the counters are reset, so the caller
+ * defines the measurement window in software.
+ */
+static void hubbub60_perfmon_start_measuring_urgent_request_count(
+		struct hubbub *hubbub)
+{
+	struct dcn20_hubbub *hubbub2 = TO_DCN20_HUBBUB(hubbub);
+
+	/* configure measurement control */
+	REG_SET_5(DCHUBBUB_PERFORMANCE_MEASUREMENT_CNTL, 0,
+			DCHUBBUB_LATENCY_CNT_EN, 0x1,
+			DCHUBBUB_DF_REQ_CMD_LATENCY_SEL, 0x1, // cacheable
+			ARB_LATENCY_REQ_TYPE_SEL, 0x7, // all request types
+			REQ_UNIT_ID_MASK, 0x0, // all Unit IDs
+			REQ_UNIT_ID_SEL, 0x0);
+	REG_SET_2(DCHUBBUB_PERFORMANCE_MEASUREMENT_CNTL2, 0,
+			LATENCY_SOURCE_SEL, 0x2, // df latency
+			UTM_FILTER_SEL, 0x1); // urgent only
+
+	/* program counter 0 to count filtered urgent requests */
+	REG_SET_8(DC_PERFMON5_PERFCOUNTER_CNTL, 0,
+			PERFCOUNTER_CNTL_SEL, 0x0,
+			PERFCOUNTER_EVENT_SEL, 256, // filtered_sdpif_req_vld
+			PERFCOUNTER_CVALUE_SEL, 0x0,
+			PERFCOUNTER_INC_MODE, 0x2, // count LSB level
+			PERFCOUNTER_HW_CNTL_SEL, 0x0,
+			PERFCOUNTER_RUNEN_MODE, 0x0,
+			PERFCOUNTER_RESTART_EN, 0x0,
+			PERFCOUNTER_ACTIVE, 1);
+	REG_SET_4(DC_PERFMON5_PERFCOUNTER_CNTL2, 0,
+			PERFCOUNTER_CNTL2_SEL, 0x0,
+			PERFCOUNTER_COUNTED_VALUE_TYPE, 0x0, // accumulated
+			PERFCOUNTER_HW_STOP1_SEL, 0x0,
+			PERFCOUNTER_HW_STOP2_SEL, 0x0);
+
+	REG_WRITE(DC_PERFMON5_PERFCOUNTER_STATE, 0);
+
+	/* software controlled window, no OTG start/stop event */
+	REG_SET_2(DC_PERFMON5_PERFMON_CNTL2, 0,
+			PERFMON_RUN_ENABLE_START_SEL, 0x0,
+			PERFMON_RUN_ENABLE_STOP_SEL, 0x0);
+
+	/* start the counter */
+	REG_SET_2(DC_PERFMON5_PERFMON_CNTL, 0,
+			PERFMON_STATE, 0x1,
+			PERFMON_RPT_COUNT, 0xFFFFF);
+}
+
+/**
+ * hubbub60_perfmon_get_urgent_request_count() - Read the urgent request count.
+ * @hubbub: hubbub instance
+ *
+ * Reads the running counter, which keeps counting until the counters are reset.
+ *
+ * Return: number of urgent requests counted since
+ * hubbub60_perfmon_start_measuring_urgent_request_count().
+ */
+static uint32_t hubbub60_perfmon_get_urgent_request_count(
+		struct hubbub *hubbub)
+{
+	struct dcn20_hubbub *hubbub2 = TO_DCN20_HUBBUB(hubbub);
+	uint32_t count0 = 0;
+
+	REG_SET(DC_PERFMON5_PERFMON_HI, 0, PERFMON_READ_SEL, 0x0);
+	REG_GET(DC_PERFMON5_PERFMON_LOW, PERFMON_LOW, &count0);
+
+	return count0;
+}
+
+/**
  * @brief Configures the performance monitor to measure the urgent ramp
  * latency.
  *
@@ -1952,6 +2028,10 @@ static const struct hubbub_funcs hubbub60_funcs = {
 			hubbub60_perfmon_start_measuring_urgent_assertion_count,
 		.get_urgent_assertion_count =
 			hubbub60_perfmon_get_urgent_assertion_count,
+		.start_measuring_urgent_request_count =
+			hubbub60_perfmon_start_measuring_urgent_request_count,
+		.get_urgent_request_count =
+			hubbub60_perfmon_get_urgent_request_count,
 		.start_measuring_urgent_ramp_latency =
 			hubbub60_perfmon_start_measuring_urgent_ramp_latency,
 		.get_urgent_ramp_latency_ns =

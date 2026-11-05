@@ -100,6 +100,16 @@ enum hubp_3dlut_fl_crossbar_bit_slice {
 	hubp_3dlut_fl_crossbar_bit_slice_48_63 = 3
 };
 
+/* Bits returned by hubp_get_outstanding_req_status(), decoded from DCHUBP_CNTL. */
+#define HUBP_OUTSTANDING_ANY		0x1	/* a request is outstanding in HUBP */
+#define HUBP_OUTSTANDING_DRQ		0x2	/* a data request is outstanding */
+#define HUBP_OUTSTANDING_CRQ_TRQ	0x4	/* a chunk/meta or translation request is outstanding */
+#define HUBP_NOT_IN_BLANK		0x8	/* HUBP has not finished requesting for the frame */
+
+/* Request types in the HUBP_XRQ_NO_OUTSTANDING_REQ field of DCHUBP_CNTL, a bit reads 1 when idle. */
+#define HUBP_XRQ_NO_OUTSTANDING_DRQ	0x1
+#define HUBP_XRQ_NO_OUTSTANDING_CRQ_TRQ	0x8
+
 struct hubp {
 	const struct hubp_funcs *funcs;
 	struct dc_context *ctx;
@@ -261,6 +271,8 @@ struct hubp_funcs {
 		struct hubp *hubp,
 		bool enable);
 	bool (*hubp_in_blank)(struct hubp *hubp);
+	/* Decoded outstanding request and blank status, see HUBP_OUTSTANDING_*. */
+	uint32_t (*hubp_get_outstanding_req_status)(struct hubp *hubp);
 	void (*hubp_soft_reset)(struct hubp *hubp, bool reset);
 
 	void (*hubp_set_flip_int)(struct hubp *hubp);

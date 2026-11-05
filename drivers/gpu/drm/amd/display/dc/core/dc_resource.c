@@ -4635,33 +4635,53 @@ enum dc_status resource_validate_probe_set(struct dc *dc,
 		return DC_NOT_SUPPORTED;
 
 	for (i = 0; i < probe_count; i++) {
-		switch (probes[i].type) {
+		const struct dc_probe_state *probe = &probes[i];
+		bool supports_polling = false;
+		bool supports_stream = false;
+
+		switch (probe->type) {
 		/* These global probes support a one-frame measurement and reset. */
 		case DC_PROBE_PEAK_MEM_BW:
 		case DC_PROBE_PEAK_MEM_BW_STRESSED:
 		case DC_PROBE_AVG_MEM_BW:
 		case DC_PROBE_MEM_LATENCY:
 		case DC_PROBE_PREFETCH_DATA_SIZE:
-			if (probes[i].scope.type != DC_PROBE_SCOPE_GLOBAL)
-				return DC_NOT_SUPPORTED;
-			if (probes[i].target_state != DC_PROBE_NOT_MEASURING &&
-					probes[i].target_state != DC_PROBE_MEASURED)
+			break;
+		/* The urgent counters additionally support polling, and a stream scope. */
+		case DC_PROBE_URGENT_ASSERTION_COUNT:
+		case DC_PROBE_URGENT_REQUEST_COUNT:
+			supports_polling = true;
+			supports_stream = true;
+			break;
+		default:
+			return DC_NOT_SUPPORTED;
+		}
+
+		if (probe->scope.type != DC_PROBE_SCOPE_GLOBAL
+				&& !(probe->scope.type == DC_PROBE_SCOPE_STREAM && supports_stream))
+			return DC_NOT_SUPPORTED;
+
+		switch (probe->target_state) {
+		case DC_PROBE_NOT_MEASURING:
+			/* A release names the probe by its type only, so it has no stream. */
+			if (probe->scope.type != DC_PROBE_SCOPE_GLOBAL)
 				return DC_NOT_SUPPORTED;
 			break;
-		/* The global urgent assertion counter additionally supports polling. */
-		case DC_PROBE_URGENT_ASSERTION_COUNT:
-			if (probes[i].scope.type != DC_PROBE_SCOPE_GLOBAL)
+		case DC_PROBE_MEASURING:
+			/* Polling cannot be limited to a window, a counter only stops when it is reset. */
+			if (!supports_polling || dc_probe_scope_is_windowed(&probe->scope))
 				return DC_NOT_SUPPORTED;
-			if (probes[i].target_state != DC_PROBE_NOT_MEASURING &&
-					probes[i].target_state != DC_PROBE_MEASURING &&
-					probes[i].target_state != DC_PROBE_MEASURED)
+			break;
+		case DC_PROBE_MEASURED:
+			/* A window must end on a line. Without lines, one whole frame is measured. */
+			if (dc_probe_scope_is_windowed(&probe->scope) && probe->scope.u.stream.end_line == 0)
 				return DC_NOT_SUPPORTED;
 			break;
 		default:
 			return DC_NOT_SUPPORTED;
 		}
 
-		if (probes[i].type == DC_PROBE_PEAK_MEM_BW_STRESSED &&
+		if (probe->type == DC_PROBE_PEAK_MEM_BW_STRESSED &&
 				!dc->res_pool->lsdma_scratch.buffer)
 			return DC_NO_DRAM_BUFFER_RESOURCE;
 	}

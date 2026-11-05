@@ -1895,6 +1895,12 @@ void hwss_execute_sequence(struct dc *dc,
 		case TG_WAIT_FOR_STATE:
 			hwss_tg_wait_for_state(params);
 			break;
+		case TG_WAIT_FOR_POSITION:
+			hwss_tg_wait_for_position(params);
+			break;
+		case HUBP_GET_OUTSTANDING_REQ:
+			hwss_hubp_get_outstanding_req(params);
+			break;
 		case TG_SET_VTG_PARAMS:
 			hwss_tg_set_vtg_params(params);
 			break;
@@ -2025,6 +2031,9 @@ void hwss_execute_sequence(struct dc *dc,
 		case HUBBUB_PERFMON_START_URGENT_ASSERTION_COUNT:
 			hwss_hubbub_perfmon_start_urgent_assertion_count(params);
 			break;
+		case HUBBUB_PERFMON_START_URGENT_REQUEST_COUNT:
+			hwss_hubbub_perfmon_start_urgent_request_count(params);
+			break;
 		case HUBBUB_PERFMON_START_URGENT_RAMP_LATENCY:
 			hwss_hubbub_perfmon_start_urgent_ramp_latency(params);
 			break;
@@ -2042,6 +2051,9 @@ void hwss_execute_sequence(struct dc *dc,
 			break;
 		case HUBBUB_PERFMON_GET_URGENT_ASSERTION_COUNT:
 			hwss_hubbub_perfmon_get_urgent_assertion_count(params);
+			break;
+		case HUBBUB_PERFMON_GET_URGENT_REQUEST_COUNT:
+			hwss_hubbub_perfmon_get_urgent_request_count(params);
 			break;
 		case HUBBUB_PERFMON_GET_PREFETCH_DATA_SIZE:
 			hwss_hubbub_perfmon_get_prefetch_data_size(params);
@@ -2722,6 +2734,46 @@ void hwss_add_tg_wait_for_state(struct block_sequence_state *seq_state,
 		seq_state->steps[*seq_state->num_steps].params.tg_wait_for_state_params.tg = tg;
 		seq_state->steps[*seq_state->num_steps].params.tg_wait_for_state_params.state = state;
 		seq_state->steps[*seq_state->num_steps].func = TG_WAIT_FOR_STATE;
+		(*seq_state->num_steps)++;
+	}
+}
+
+/*
+ * Helper function to add TG wait for a vertical position (OTG line) to block sequence
+ */
+/*
+ * Helper function to add a wait for an OTG line to block sequence. When
+ * window_valid is set, line is the end of the window that starts at window_start,
+ * and if the position has already left the window when the step runs, the window
+ * is missed: *window_valid is cleared and the step does not wait out a whole frame.
+ */
+void hwss_add_tg_wait_for_position(struct block_sequence_state *seq_state,
+		struct timing_generator *tg,
+		unsigned int line,
+		unsigned int window_start,
+		bool *window_valid)
+{
+	if (*seq_state->num_steps < MAX_HWSS_BLOCK_SEQUENCE_SIZE) {
+		seq_state->steps[*seq_state->num_steps].params.tg_wait_for_position_params.tg = tg;
+		seq_state->steps[*seq_state->num_steps].params.tg_wait_for_position_params.line = line;
+		seq_state->steps[*seq_state->num_steps].params.tg_wait_for_position_params.window_start = window_start;
+		seq_state->steps[*seq_state->num_steps].params.tg_wait_for_position_params.window_valid = window_valid;
+		seq_state->steps[*seq_state->num_steps].func = TG_WAIT_FOR_POSITION;
+		(*seq_state->num_steps)++;
+	}
+}
+
+/*
+ * Helper function to add a HUBP outstanding request sample to block sequence
+ */
+void hwss_add_hubp_get_outstanding_req(struct block_sequence_state *seq_state,
+		struct hubp *hubp,
+		uint32_t *status)
+{
+	if (*seq_state->num_steps < MAX_HWSS_BLOCK_SEQUENCE_SIZE) {
+		seq_state->steps[*seq_state->num_steps].params.hubp_get_outstanding_req_params.hubp = hubp;
+		seq_state->steps[*seq_state->num_steps].params.hubp_get_outstanding_req_params.status = status;
+		seq_state->steps[*seq_state->num_steps].func = HUBP_GET_OUTSTANDING_REQ;
 		(*seq_state->num_steps)++;
 	}
 }
@@ -3529,6 +3581,93 @@ void hwss_tg_wait_for_state(union block_sequence_params *params)
 		tg->funcs->wait_for_state(tg, state);
 }
 
+/*
+ * Poll the TG vertical position until it reaches the target OTG line, at its
+ * next occurrence approached from below. The OTG vertical counter is 0-based
+ * and wraps at v_total, with active starting at OTG_V_BLANK_END (not 0), so the
+ * vblank region can straddle the wrap. The initial position decides the phases,
+ * and is not sampled again to change that decision:
+ *   below target_line - skip phase 1, only phase 2 is needed,
+ *   at or above it    - phase 1 first, which waits out the wrap.
+ * and then the phases:
+ *   phase 1 - advance until the counter is below target_line,
+ *   phase 2 - advance until the counter reaches target_line.
+ * With a window, the initial position must be inside the window, so being at or
+ * above the end line is only valid for a window that crosses the wrap.
+ * target_line must be in [1, v_total-1], 0 and v_total are degenerate and will
+ * simply run out the guard. Each phase is bounded so a stalled or non-moving TG
+ * can never hang the block sequence.
+ */
+void hwss_tg_wait_for_position(union block_sequence_params *params)
+{
+	struct timing_generator *tg = params->tg_wait_for_position_params.tg;
+	unsigned int target_line = params->tg_wait_for_position_params.line;
+	struct crtc_position position = {0};
+	unsigned int initial_line;
+	unsigned int guard;
+
+	if (!tg->funcs->get_position)
+		return;
+
+	tg->funcs->get_position(tg, &position);
+	initial_line = position.vertical_count;
+
+	/*
+	 * Arming takes longer than a line. If the position already left the window,
+	 * the end line would only be reached a whole frame later, so report the window
+	 * as missed instead. A window with start at or after end crosses the wrap.
+	 */
+	if (params->tg_wait_for_position_params.window_valid) {
+		unsigned int start_line = params->tg_wait_for_position_params.window_start;
+		bool in_window;
+
+		if (start_line < target_line)
+			in_window = initial_line >= start_line
+					&& initial_line < target_line;
+		else
+			in_window = initial_line >= start_line
+					|| initial_line < target_line;
+
+		if (!in_window) {
+			*params->tg_wait_for_position_params.window_valid = false;
+			return;
+		}
+	}
+
+	/* phase 1: only if the initial position is at or above the target, wait out the wrap */
+	if (initial_line >= target_line) {
+		guard = 100000; /* 100000 * 1us = 100ms cap */
+		do {
+			tg->funcs->get_position(tg, &position);
+			if (position.vertical_count < target_line)
+				break;
+			udelay(1);
+		} while (--guard);
+	}
+
+	/* phase 2: climb to the target */
+	guard = 100000;
+	do {
+		tg->funcs->get_position(tg, &position);
+		if (position.vertical_count >= target_line)
+			break;
+		udelay(1);
+	} while (--guard);
+}
+
+/*
+ * Get the HUBP outstanding request status once and OR it into the caller's
+ * sink, so a sink cleared before a window accumulates everything seen in it.
+ */
+void hwss_hubp_get_outstanding_req(union block_sequence_params *params)
+{
+	struct hubp *hubp = params->hubp_get_outstanding_req_params.hubp;
+	uint32_t *status = params->hubp_get_outstanding_req_params.status;
+
+	if (hubp && status && hubp->funcs->hubp_get_outstanding_req_status)
+		*status |= hubp->funcs->hubp_get_outstanding_req_status(hubp);
+}
+
 void hwss_tg_set_vtg_params(union block_sequence_params *params)
 {
 	struct timing_generator *tg = params->tg_set_vtg_params_params.tg;
@@ -3974,6 +4113,14 @@ void hwss_hubbub_perfmon_start_urgent_assertion_count(union block_sequence_param
 		hubbub->funcs->perfmon.start_measuring_urgent_assertion_count(hubbub);
 }
 
+void hwss_hubbub_perfmon_start_urgent_request_count(union block_sequence_params *params)
+{
+	struct hubbub *hubbub = params->hubbub_perfmon_start_urgent_request_count_params.hubbub;
+
+	if (hubbub && hubbub->funcs->perfmon.start_measuring_urgent_request_count)
+		hubbub->funcs->perfmon.start_measuring_urgent_request_count(hubbub);
+}
+
 void hwss_hubbub_perfmon_start_urgent_ramp_latency(union block_sequence_params *params)
 {
 	struct hubbub *hubbub = params->hubbub_perfmon_start_urgent_ramp_latency_params.hubbub;
@@ -4033,10 +4180,20 @@ void hwss_hubbub_perfmon_get_urgent_assertion_count(union block_sequence_params 
 	struct hubbub *hubbub   = params->hubbub_perfmon_get_urgent_assertion_count_params.hubbub;
 	uint32_t refclk_mhz    = params->hubbub_perfmon_get_urgent_assertion_count_params.refclk_mhz;
 	uint32_t *count         = params->hubbub_perfmon_get_urgent_assertion_count_params.assertion_count;
+	uint32_t *deassertion_count = params->hubbub_perfmon_get_urgent_assertion_count_params.deassertion_count;
 
 	if (hubbub && hubbub->funcs->perfmon.get_urgent_assertion_count)
 		hubbub->funcs->perfmon.get_urgent_assertion_count(
-				hubbub, refclk_mhz, count, NULL, NULL);
+				hubbub, refclk_mhz, count, deassertion_count, NULL);
+}
+
+void hwss_hubbub_perfmon_get_urgent_request_count(union block_sequence_params *params)
+{
+	struct hubbub *hubbub = params->hubbub_perfmon_get_urgent_request_count_params.hubbub;
+	uint32_t *count       = params->hubbub_perfmon_get_urgent_request_count_params.request_count;
+
+	if (hubbub && count && hubbub->funcs->perfmon.get_urgent_request_count)
+		*count = hubbub->funcs->perfmon.get_urgent_request_count(hubbub);
 }
 
 void hwss_hubbub_perfmon_get_prefetch_data_size(union block_sequence_params *params)
@@ -5415,6 +5572,16 @@ void hwss_add_hubbub_perfmon_start_urgent_assertion_count(struct block_sequence_
 	}
 }
 
+void hwss_add_hubbub_perfmon_start_urgent_request_count(struct block_sequence_state *seq_state,
+		struct hubbub *hubbub)
+{
+	if (*seq_state->num_steps < MAX_HWSS_BLOCK_SEQUENCE_SIZE) {
+		seq_state->steps[*seq_state->num_steps].func = HUBBUB_PERFMON_START_URGENT_REQUEST_COUNT;
+		seq_state->steps[*seq_state->num_steps].params.hubbub_perfmon_start_urgent_request_count_params.hubbub = hubbub;
+		(*seq_state->num_steps)++;
+	}
+}
+
 void hwss_add_hubbub_perfmon_start_urgent_ramp_latency(struct block_sequence_state *seq_state,
 		struct hubbub *hubbub,
 		const struct hubbub_urgent_latency_params *latency_params)
@@ -5482,13 +5649,25 @@ void hwss_add_hubbub_perfmon_get_memory_latencies(struct block_sequence_state *s
 
 void hwss_add_hubbub_perfmon_get_urgent_assertion_count(struct block_sequence_state *seq_state,
 		struct hubbub *hubbub, uint32_t refclk_mhz,
-		uint32_t *assertion_count)
+		uint32_t *assertion_count, uint32_t *deassertion_count)
 {
 	if (*seq_state->num_steps < MAX_HWSS_BLOCK_SEQUENCE_SIZE) {
 		seq_state->steps[*seq_state->num_steps].func = HUBBUB_PERFMON_GET_URGENT_ASSERTION_COUNT;
 		seq_state->steps[*seq_state->num_steps].params.hubbub_perfmon_get_urgent_assertion_count_params.hubbub = hubbub;
 		seq_state->steps[*seq_state->num_steps].params.hubbub_perfmon_get_urgent_assertion_count_params.refclk_mhz = refclk_mhz;
 		seq_state->steps[*seq_state->num_steps].params.hubbub_perfmon_get_urgent_assertion_count_params.assertion_count = assertion_count;
+		seq_state->steps[*seq_state->num_steps].params.hubbub_perfmon_get_urgent_assertion_count_params.deassertion_count = deassertion_count;
+		(*seq_state->num_steps)++;
+	}
+}
+
+void hwss_add_hubbub_perfmon_get_urgent_request_count(struct block_sequence_state *seq_state,
+		struct hubbub *hubbub, uint32_t *request_count)
+{
+	if (*seq_state->num_steps < MAX_HWSS_BLOCK_SEQUENCE_SIZE) {
+		seq_state->steps[*seq_state->num_steps].func = HUBBUB_PERFMON_GET_URGENT_REQUEST_COUNT;
+		seq_state->steps[*seq_state->num_steps].params.hubbub_perfmon_get_urgent_request_count_params.hubbub = hubbub;
+		seq_state->steps[*seq_state->num_steps].params.hubbub_perfmon_get_urgent_request_count_params.request_count = request_count;
 		(*seq_state->num_steps)++;
 	}
 }
