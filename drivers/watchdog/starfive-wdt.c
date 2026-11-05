@@ -390,7 +390,10 @@ static int starfive_wdt_pm_stop(struct watchdog_device *wdd)
 	struct starfive_wdt *wdt = watchdog_get_drvdata(wdd);
 
 	starfive_wdt_stop(wdt);
-	return pm_runtime_put_sync(wdd->parent);
+	if (pm_runtime_enabled(wdd->parent))
+		pm_runtime_put_sync(wdd->parent);
+
+	return 0;
 }
 
 static int starfive_wdt_set_timeout(struct watchdog_device *wdd,
@@ -526,8 +529,10 @@ static void starfive_wdt_remove(struct platform_device *pdev)
 {
 	struct starfive_wdt *wdt = platform_get_drvdata(pdev);
 
-	starfive_wdt_stop(wdt);
 	watchdog_unregister_device(&wdt->wdd);
+
+	if (watchdog_hw_running(&wdt->wdd))
+		starfive_wdt_stop(wdt);
 
 	if (pm_runtime_enabled(&pdev->dev))
 		pm_runtime_disable(&pdev->dev);
@@ -536,22 +541,17 @@ static void starfive_wdt_remove(struct platform_device *pdev)
 		starfive_wdt_disable_clock(wdt);
 }
 
-static void starfive_wdt_shutdown(struct platform_device *pdev)
-{
-	struct starfive_wdt *wdt = platform_get_drvdata(pdev);
-
-	starfive_wdt_pm_stop(&wdt->wdd);
-}
-
 static int starfive_wdt_suspend(struct device *dev)
 {
 	struct starfive_wdt *wdt = dev_get_drvdata(dev);
 
-	/* Save watchdog state, and turn it off. */
-	wdt->reload = starfive_wdt_get_count(wdt);
+	if (watchdog_hw_running(&wdt->wdd)) {
+		/* Save watchdog state, and turn it off. */
+		wdt->reload = starfive_wdt_get_count(wdt);
 
-	/* Note that WTCNT doesn't need to be saved. */
-	starfive_wdt_stop(wdt);
+		/* Note that WTCNT doesn't need to be saved. */
+		starfive_wdt_stop(wdt);
+	}
 
 	return pm_runtime_force_suspend(dev);
 }
@@ -565,13 +565,14 @@ static int starfive_wdt_resume(struct device *dev)
 	if (ret)
 		return ret;
 
-	starfive_wdt_unlock(wdt);
-	/* Restore watchdog state. */
-	starfive_wdt_set_reload_count(wdt, wdt->reload);
-	starfive_wdt_lock(wdt);
+	if (watchdog_hw_running(&wdt->wdd)) {
+		starfive_wdt_unlock(wdt);
+		/* Restore watchdog state. */
+		starfive_wdt_set_reload_count(wdt, wdt->reload);
+		starfive_wdt_lock(wdt);
 
-	if (watchdog_active(&wdt->wdd))
 		return starfive_wdt_start(wdt);
+	}
 
 	return 0;
 }
@@ -607,7 +608,6 @@ MODULE_DEVICE_TABLE(of, starfive_wdt_match);
 static struct platform_driver starfive_wdt_driver = {
 	.probe = starfive_wdt_probe,
 	.remove = starfive_wdt_remove,
-	.shutdown = starfive_wdt_shutdown,
 	.driver = {
 		.name = "starfive-wdt",
 		.pm = pm_ptr(&starfive_wdt_pm_ops),
