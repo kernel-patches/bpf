@@ -10,6 +10,7 @@
 /proc-net-dev-lseek
 /proc-readdir-churn
 /proc-empty-vm
+/proc-pid-setuid-exec
 /proc-pid-vm
 /proc-self-map-files-001
 /proc-self-map-files-002
