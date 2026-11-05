@@ -520,4 +520,59 @@ static inline void ptp_read_system_postts(struct ptp_system_timestamp *sts)
 		ktime_get_snapshot_id(sts->clockid, &sts->post_sts);
 }
 
+static inline void __ptp_adjust_snapshot(clockid_t clockid,
+					 struct system_time_snapshot *snap,
+					 s64 ns)
+{
+	s64 sys_ns;
+
+	if (!snap->valid)
+		return;
+	if (ns < 0)
+		sys_ns = -(s64)ktime_scale_raw_ns(clockid, -ns);
+	else
+		sys_ns = ktime_scale_raw_ns(clockid, ns);
+	snap->systime = ktime_add_ns(snap->systime, sys_ns);
+	snap->monoraw = ktime_add_ns(snap->monoraw, ns);
+	/* No counter value corresponds to the adjusted times. */
+	snap->cycles = 0;
+	snap->cs_id = CSID_GENERIC;
+	snap->hw_cycles = 0;
+	snap->hw_csid = CSID_GENERIC;
+}
+
+/**
+ * ptp_adjust_system_prets - Shift the lower system timestamp bound
+ * @sts: system timestamps, or NULL
+ * @ns: CLOCK_MONOTONIC_RAW nanoseconds to add
+ *
+ * Add @ns to the CLOCK_MONOTONIC_RAW time of the lower bound, and @ns
+ * scaled by the selected clock's current frequency relative to
+ * CLOCK_MONOTONIC_RAW to its time, and clear its clocksource counter
+ * values.
+ */
+static inline void ptp_adjust_system_prets(struct ptp_system_timestamp *sts,
+					   s64 ns)
+{
+	if (sts)
+		__ptp_adjust_snapshot(sts->clockid, &sts->pre_sts, ns);
+}
+
+/**
+ * ptp_adjust_system_postts - Shift the upper system timestamp bound
+ * @sts: system timestamps, or NULL
+ * @ns: CLOCK_MONOTONIC_RAW nanoseconds to add
+ *
+ * Add @ns to the CLOCK_MONOTONIC_RAW time of the upper bound, and @ns
+ * scaled by the selected clock's current frequency relative to
+ * CLOCK_MONOTONIC_RAW to its time, and clear its clocksource counter
+ * values.
+ */
+static inline void ptp_adjust_system_postts(struct ptp_system_timestamp *sts,
+					    s64 ns)
+{
+	if (sts)
+		__ptp_adjust_snapshot(sts->clockid, &sts->post_sts, ns);
+}
+
 #endif
