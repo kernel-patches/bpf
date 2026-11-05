@@ -92,12 +92,25 @@ int kvm_arch_ptp_get_clock(struct timespec64 *ts)
 	return 0;
 }
 
+/*
+ * *cs_id selects the clocksource @cycle is reported in: CSID_X86_TSC returns
+ * the paired TSC value as is, anything else converts it to kvm-clock units.
+ * On return, *cs_id holds the clocksource actually used.
+ */
 int kvm_arch_ptp_get_crosststamp(u64 *cycle, struct timespec64 *tspec,
 			      enum clocksource_ids *cs_id)
 {
 	struct pvclock_vcpu_time_info *src;
 	unsigned int version;
 	long ret;
+
+	if (*cs_id == CSID_X86_TSC) {
+		ret = kvm_arch_ptp_get_clock(tspec);
+		if (ret)
+			return ret;
+		*cycle = clock_pair->tsc;
+		return 0;
+	}
 
 	src = this_cpu_pvti();
 
