@@ -191,6 +191,7 @@ static int psp_early_init(struct amdgpu_ip_block *ip_block)
 
 	psp->autoload_supported = true;
 	psp->boot_time_tmr = true;
+	psp->adev = adev;
 
 	switch (amdgpu_ip_version(adev, MP0_HWIP, 0)) {
 	case IP_VERSION(9, 0, 0):
@@ -297,8 +298,6 @@ static int psp_early_init(struct amdgpu_ip_block *ip_block)
 	default:
 		return -EINVAL;
 	}
-
-	psp->adev = adev;
 
 	adev->psp_timeout = 20000;
 
