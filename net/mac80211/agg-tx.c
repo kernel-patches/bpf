@@ -990,8 +990,7 @@ void ieee80211_process_addba_resp(struct ieee80211_local *local,
 
 	ieee80211_retrieve_addba_ext_data(sta,
 					  mgmt->u.action.addba_resp.variable,
-					  len - offsetof(typeof(*mgmt),
-							 u.action.addba_resp.variable),
+					  len - offsetofp(mgmt, u.action.addba_resp.variable),
 					  &buf_size);
 
 	buf_size = min(buf_size, local->hw.max_tx_aggregation_subframes);

@@ -1042,7 +1042,7 @@ static int parse_reparse_wsl_symlink(struct reparse_wsl_symlink_data_buffer *buf
 				     struct cifs_open_info_data *data)
 {
 	int len = le16_to_cpu(buf->ReparseDataLength);
-	int data_offset = offsetof(typeof(*buf), Target) - offsetof(typeof(*buf), Version);
+	int data_offset = offsetofp(buf, Target) - offsetofp(buf, Version);
 	int symname_utf8_len;
 	__le16 *symname_utf16;
 	int symname_utf16_len;

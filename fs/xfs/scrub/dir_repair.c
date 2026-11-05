@@ -501,7 +501,7 @@ xrep_dir_recover_entry(
 	int				error;
 
 	/* must have namelen */
-	advance = offsetof(typeof(*dep), name);
+	advance = offsetofp(dep, name);
 	if (offset + advance >= end)
 		return 0;
 
@@ -546,7 +546,7 @@ xrep_dir_recover_data(
 			return error;
 
 		/* must have freetag */
-		advance = offsetof(typeof(*dup), length);
+		advance = offsetofp(dup, length);
 		if (offset + advance >= end)
 			break;
 

@@ -493,8 +493,7 @@ void ieee80211_process_addba_request(struct ieee80211_local *local,
 		ieee80211_retrieve_addba_ext_data(sta,
 						  mgmt->u.action.addba_req.variable,
 						  len -
-						  offsetof(typeof(*mgmt),
-							   u.action.addba_req.variable),
+						  offsetofp(mgmt, u.action.addba_req.variable),
 						  &buf_size);
 
 	__ieee80211_start_rx_ba_session(sta, dialog_token, timeout,

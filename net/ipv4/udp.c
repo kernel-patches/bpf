@@ -2526,7 +2526,7 @@ static int __udp4_lib_mcast_deliver(struct net *net, struct sk_buff *skb,
 	hash2 = 0;
 	hslot = udp_hashslot(udptable, net, hnum);
 	use_hash2 = hslot->count > 10;
-	offset = offsetof(typeof(*sk), sk_node);
+	offset = offsetofp(sk, sk_node);
 
 	if (use_hash2) {
 		hash2_any = ipv4_portaddr_hash(net, htonl(INADDR_ANY), hnum) &
@@ -2534,7 +2534,7 @@ static int __udp4_lib_mcast_deliver(struct net *net, struct sk_buff *skb,
 		hash2 = ipv4_portaddr_hash(net, daddr, hnum) & udptable->mask;
 start_lookup:
 		hslot = &udptable->hash2[hash2].hslot;
-		offset = offsetof(typeof(*sk), __sk_common.skc_portaddr_node);
+		offset = offsetofp(sk, __sk_common.skc_portaddr_node);
 	}
 
 	sk_for_each_entry_offset_rcu(sk, node, &hslot->head, offset) {

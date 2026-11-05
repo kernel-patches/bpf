@@ -3195,7 +3195,7 @@ struct inode *cifs_create_reparse_inode(struct cifs_open_info_data *data,
 	io_req->ParameterCount = io_req->TotalParameterCount;
 	io_req->ParameterOffset = cpu_to_le32(0);
 	io_req->DataCount = io_req->TotalDataCount;
-	io_req->DataOffset = cpu_to_le32(offsetof(typeof(*io_req), Data));
+	io_req->DataOffset = cpu_to_le32(offsetofp(io_req, Data));
 	io_req->SetupCount = 4;
 	io_req->SubCommand = cpu_to_le16(NT_TRANSACT_IOCTL);
 	io_req->FunctionCode = cpu_to_le32(FSCTL_SET_REPARSE_POINT);
@@ -5968,7 +5968,7 @@ SetTimesRetry:
 	param_offset = offsetof(struct smb_com_transaction2_spi_req,
 				InformationLevel);
 	offset = param_offset + params;
-	data_offset = (char *)pSMB + offsetof(typeof(*pSMB), hdr.Protocol) + offset;
+	data_offset = (char *)pSMB + offsetofp(pSMB, hdr.Protocol) + offset;
 	pSMB->ParameterOffset = cpu_to_le16(param_offset);
 	pSMB->DataOffset = cpu_to_le16(offset);
 	pSMB->SetupCount = 1;

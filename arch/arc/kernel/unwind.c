@@ -310,11 +310,11 @@ static void init_unwind_hdr(struct unwind_table *table,
 	header->fde_count_enc = DW_EH_PE_abs | DW_EH_PE_data4;
 	header->table_enc = DW_EH_PE_abs | DW_EH_PE_native;
 	put_unaligned((unsigned long)table->address, &header->eh_frame_ptr);
-	BUILD_BUG_ON(offsetof(typeof(*header), fde_count)
+	BUILD_BUG_ON(offsetofp(header, fde_count)
 		     % __alignof(typeof(header->fde_count)));
 	header->fde_count = n;
 
-	BUILD_BUG_ON(offsetof(typeof(*header), table)
+	BUILD_BUG_ON(offsetofp(header, table)
 		     % __alignof(typeof(*header->table)));
 	for (fde = table->address, tableSize = table->size, n = 0;
 	     tableSize;

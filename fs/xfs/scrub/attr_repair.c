@@ -294,7 +294,7 @@ xrep_xattr_salvage_local_attr(
 	 * Decode the leaf local entry format.  If something seems wrong, we
 	 * junk the attribute.
 	 */
-	name_end = (char *)lentry + offsetof(typeof(*lentry), nameval[0]);
+	name_end = (char *)lentry + offsetofp(lentry, nameval[0]);
 	if (name_end > buf_end)
 		return 0;
 	value = &lentry->nameval[lentry->namelen];
@@ -348,7 +348,7 @@ xrep_xattr_salvage_remote_attr(
 	 * junk the attribute.  Note that we should never find a zero-length
 	 * remote attribute value.
 	 */
-	name_end = (char *)rentry + offsetof(typeof(*rentry), name[0]);
+	name_end = (char *)rentry + offsetofp(rentry, name[0]);
 	if (name_end > buf_end)
 		return 0;
 	namesize = xfs_attr_leaf_entsize_remote(rentry->namelen);

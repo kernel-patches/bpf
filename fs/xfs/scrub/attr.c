@@ -306,7 +306,7 @@ xchk_xattr_local_entry(
 	char				*name_end;
 	unsigned int			namesize;
 
-	name_end = (char *)lentry + offsetof(typeof(*lentry), nameval[0]);
+	name_end = (char *)lentry + offsetofp(lentry, nameval[0]);
 	if (name_end > buf_end) {
 		xchk_da_set_corrupt(ds, level);
 		return 0;
@@ -341,7 +341,7 @@ xchk_xattr_remote_entry(
 	char				*name_end;
 	unsigned int			namesize;
 
-	name_end = (char *)rentry + offsetof(typeof(*rentry), name[0]);
+	name_end = (char *)rentry + offsetofp(rentry, name[0]);
 	if (name_end > buf_end) {
 		xchk_da_set_corrupt(ds, level);
 		return 0;

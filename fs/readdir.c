@@ -22,7 +22,7 @@
 #include <linux/compat.h>
 #include <linux/uaccess.h>
 
-#define dirent_size(dirent, len) offsetof(typeof(*(dirent)), d_name[len])
+#define dirent_size(dirent, len) offsetofp((dirent), d_name[len])
 
 /*
  * Some filesystems were never converted to '->iterate_shared()'

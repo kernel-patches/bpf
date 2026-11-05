@@ -364,7 +364,7 @@ xchk_dir_check_entry(
 	unsigned int			advance;
 
 	/* must have namelen */
-	advance = offsetof(typeof(*dep), name);
+	advance = offsetofp(dep, name);
 	if (iter_off + advance >= end) {
 		xchk_fblock_set_corrupt(ds->sc, XFS_DATA_FORK, rec_bno);
 		return -1;
@@ -464,7 +464,7 @@ xchk_dir_rec(
 		int				advance;
 
 		/* must have freetag */
-		advance = offsetof(typeof(*dup), length);
+		advance = offsetofp(dup, length);
 		if (iter_off + advance >= end) {
 			xchk_fblock_set_corrupt(ds->sc, XFS_DATA_FORK, rec_bno);
 			goto out_relse;

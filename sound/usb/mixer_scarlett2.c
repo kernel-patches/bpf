@@ -9656,7 +9656,7 @@ static long scarlett2_hwdep_write(struct snd_hwdep *hw,
 
 	/* Calculate the maximum permitted in data[] */
 	const size_t max_data_size = SCARLETT2_FLASH_RW_MAX -
-				     offsetof(typeof(*req), data);
+				     offsetofp(req, data);
 
 	/* If erasing, wait for it to complete */
 	if (private->flash_write_state ==
