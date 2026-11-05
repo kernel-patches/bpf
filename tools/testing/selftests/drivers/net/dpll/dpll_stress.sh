@@ -1,0 +1,164 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-2.0
+#
+# DPLL subsystem stress test. Uses dpllsim to exercise rapid device
+# registration/unregistration, concurrent operations from multiple
+# processes, pin state change flooding and notification load, then
+# verifies via ref_tracker that no references leaked.
+#
+# Copyright (c) 2026 Red Hat, Inc.
+
+SCRIPTDIR=$(dirname "$(readlink -e "${BASH_SOURCE[0]}")")
+
+source "$SCRIPTDIR/../../../net/lib.sh"
+source "$SCRIPTDIR/../lib/sh/dpll_lib.sh"
+
+ALL_TESTS="
+	test_rapid_create_delete
+	test_deploy_cycle
+"
+
+STRESS_ITERATIONS=${STRESS_ITERATIONS:-20}
+
+CREATED_DEVICES=()
+
+track_device()
+{
+	CREATED_DEVICES+=("$1")
+}
+
+untrack_device()
+{
+	local name=$1 dev
+	local remaining=()
+
+	for dev in "${CREATED_DEVICES[@]}"; do
+		[ "$dev" = "$name" ] || remaining+=("$dev")
+	done
+	CREATED_DEVICES=("${remaining[@]}")
+}
+
+cleanup()
+{
+	local dev
+
+	# A second signal must not abort the teardown half way.
+	trap '' INT TERM
+
+	for dev in "${CREATED_DEVICES[@]}"; do
+		dpllsim_delete_device "$dev" ||
+			log_info "cannot delete device $dev"
+	done
+	# The device whose creation a signal interrupted is recorded by the
+	# library alone, a double delete of a tracked one is harmless.
+	if [ -n "$DPLLSIM_CREATED_NAME" ]; then
+		dpllsim_delete_device "$DPLLSIM_CREATED_NAME" ||
+			log_info "cannot delete device $DPLLSIM_CREATED_NAME"
+	fi
+	dpll_lib_cleanup
+}
+
+# Create a device named after the given clock-id and deploy it. Sets
+# DPLLSIM_CREATED_NAME.
+create_stress_device()
+{
+	local clock_id=$1
+	local name="st$clock_id"
+
+	dpllsim_create_device "$name" "$clock_id" || return 1
+
+	if ! dpllsim_deploy "$name"; then
+		dpllsim_delete_device "$name"
+		return 1
+	fi
+}
+
+##############################################################################
+
+test_rapid_create_delete()
+{
+	local i clock_id name
+
+	RET=0
+
+	for i in $(seq 1 "$STRESS_ITERATIONS"); do
+		dpllsim_alloc_clock_id; clock_id=$DPLLSIM_CLOCK_ID
+
+		if ! create_stress_device "$clock_id"; then
+			check_err 1 "failed to create device (iteration $i)"
+			break
+		fi
+		name=$DPLLSIM_CREATED_NAME
+		track_device "$name"
+
+		if ! dpllsim_delete_device "$name"; then
+			check_err 1 "failed to delete device (iteration $i)"
+			break
+		fi
+		untrack_device "$name"
+	done
+
+	log_test "DPLL rapid create/delete ($STRESS_ITERATIONS iterations)"
+}
+
+test_deploy_cycle()
+{
+	local clock_id name i
+
+	RET=0
+
+	dpllsim_alloc_clock_id; clock_id=$DPLLSIM_CLOCK_ID
+	name="cycle$clock_id"
+	if ! dpllsim_create_device "$name" "$clock_id"; then
+		check_err 1 "cannot create device"
+		log_test "DPLL deploy/undeploy cycling"
+		return
+	fi
+	track_device "$name"
+
+	for i in $(seq 1 "$STRESS_ITERATIONS"); do
+		if ! dpllsim_deploy "$name"; then
+			check_err 1 "deploy failed (iteration $i)"
+			break
+		fi
+		if ! dpll_device_wait_by_clock_id "$clock_id" dpllsim \
+		     > /dev/null; then
+			check_err 1 "device not on netlink (iteration $i)"
+			break
+		fi
+		if ! dpllsim_undeploy "$name"; then
+			check_err 1 "undeploy failed (iteration $i)"
+			break
+		fi
+		if ! dpll_device_wait_gone_by_clock_id "$clock_id" dpllsim; then
+			check_err 1 "device still on netlink (iteration $i)"
+			break
+		fi
+	done
+
+	if dpllsim_delete_device "$name"; then
+		untrack_device "$name"
+	else
+		check_err 1 "cannot delete device $name"
+	fi
+
+	log_test "DPLL deploy/undeploy cycling"
+}
+
+##############################################################################
+
+dpll_lib_check_prereqs
+# Another run would find the devices of this one left behind, see the
+# lock in the library.
+dpll_lib_lock
+
+# The module check may mount configfs, so the exit trap that unmounts it
+# again has to be in place before. INT and TERM exit through it as well,
+# so that a timeout imposed by the harness still removes the devices.
+trap cleanup EXIT
+trap 'exit 1' INT TERM
+dpllsim_check_module
+
+tests_run
+
+exit $EXIT_STATUS

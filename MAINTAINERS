@@ -8113,6 +8113,8 @@ L:	netdev@vger.kernel.org
 S:	Maintained
 F:	Documentation/driver-api/dpllsim.rst
 F:	drivers/dpll/dpllsim/
+F:	tools/testing/selftests/drivers/net/dpll/
+F:	tools/testing/selftests/drivers/net/lib/sh/dpll_lib.sh
 
 DPLL SUBSYSTEM
 M:	Vadim Fedorenko <vadim.fedorenko@linux.dev>
