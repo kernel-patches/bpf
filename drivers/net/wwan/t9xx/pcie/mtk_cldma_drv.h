@@ -78,8 +78,17 @@ struct cldma_drv_info {
 	struct dma_pool *gpd_dma_pool;
 	struct workqueue_struct *wq;
 	const struct cldma_hw_regs *hw_regs;
+	struct work_struct err_work;
+	atomic_t tx_err_qs;
+	atomic_t rx_err_qs;
+	/* a ring could not be stopped and was leaked on free */
+	bool ring_leaked;
+	/* this instance's interrupt and workers have already been retired;
+	 * makes the quiesce safe to repeat on the teardown path
+	 */
+	bool quiesced;
 	/* serialises the instance reset and re-arm against queue kicks and
-	 * RX resume/restart: no queue is kicked while it has no address
+	 * RX resume/restart, and re-arming against setting quiesced
 	 */
 	struct mutex rearm_lock;
 };
