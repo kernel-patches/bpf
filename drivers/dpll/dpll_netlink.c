@@ -1768,6 +1768,7 @@ int dpll_nl_pin_get_dumpit(struct sk_buff *skb, struct netlink_callback *cb)
 	int ret = 0;
 
 	mutex_lock(&dpll_lock);
+	cb->seq = dpll_generation;
 	xa_for_each_marked_start(&dpll_pin_xa, i, pin, DPLL_REGISTERED,
 				 ctx->idx) {
 		if (!dpll_pin_available(pin))
@@ -1789,6 +1790,7 @@ int dpll_nl_pin_get_dumpit(struct sk_buff *skb, struct netlink_callback *cb)
 			}
 			break;
 		}
+		genl_dump_check_consistent(cb, hdr);
 		genlmsg_end(skb, hdr);
 	}
 	mutex_unlock(&dpll_lock);
@@ -1990,6 +1992,7 @@ int dpll_nl_device_get_dumpit(struct sk_buff *skb, struct netlink_callback *cb)
 	int ret = 0;
 
 	mutex_lock(&dpll_lock);
+	cb->seq = dpll_generation;
 	xa_for_each_marked_start(&dpll_device_xa, i, dpll, DPLL_REGISTERED,
 				 ctx->idx) {
 		hdr = genlmsg_put(skb, NETLINK_CB(cb->skb).portid,
@@ -2004,6 +2007,7 @@ int dpll_nl_device_get_dumpit(struct sk_buff *skb, struct netlink_callback *cb)
 			genlmsg_cancel(skb, hdr);
 			break;
 		}
+		genl_dump_check_consistent(cb, hdr);
 		genlmsg_end(skb, hdr);
 	}
 	mutex_unlock(&dpll_lock);

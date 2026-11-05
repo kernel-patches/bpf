@@ -22,6 +22,12 @@
 /* Mutex lock to protect DPLL subsystem devices and pins */
 DEFINE_MUTEX(dpll_lock);
 
+/* Changes with the topology of devices and pins, so that netlink dumps can
+ * detect it. Never 0, as netlink takes that for no sequence. Protected by
+ * dpll_lock.
+ */
+unsigned int dpll_generation = 1;
+
 DEFINE_XARRAY_FLAGS(dpll_device_xa, XA_FLAGS_ALLOC);
 DEFINE_XARRAY_FLAGS(dpll_pin_xa, XA_FLAGS_ALLOC);
 
@@ -52,6 +58,13 @@ struct dpll_pin_registration {
 	void *cookie;
 	dpll_tracker tracker;
 };
+
+static void dpll_generation_inc(void)
+{
+	lockdep_assert_held(&dpll_lock);
+	while (++dpll_generation == 0)
+		;
+}
 
 static int call_dpll_notifiers(unsigned long action, void *info)
 {
@@ -510,6 +523,7 @@ int dpll_device_register(struct dpll_device *dpll, enum dpll_type type,
 	}
 
 	xa_set_mark(&dpll_device_xa, dpll->id, DPLL_REGISTERED);
+	dpll_generation_inc();
 	dpll_device_create_ntf(dpll);
 	mutex_unlock(&dpll_lock);
 
@@ -549,6 +563,7 @@ void dpll_device_unregister(struct dpll_device *dpll,
 		return;
 	}
 	xa_clear_mark(&dpll_device_xa, dpll->id, DPLL_REGISTERED);
+	dpll_generation_inc();
 	mutex_unlock(&dpll_lock);
 }
 EXPORT_SYMBOL_GPL(dpll_device_unregister);
@@ -851,6 +866,7 @@ __dpll_pin_register(struct dpll_device *dpll, struct dpll_pin *pin,
 	if (ret)
 		goto ref_pin_del;
 	xa_set_mark(&dpll_pin_xa, pin->id, DPLL_REGISTERED);
+	dpll_generation_inc();
 	dpll_pin_create_ntf(pin, dpll->clock_id);
 
 	return ret;
@@ -941,6 +957,7 @@ __dpll_pin_unregister(struct dpll_device *dpll, struct dpll_pin *pin,
 	dpll_pin_delete_ntf(pin, dpll->clock_id);
 	dpll_xa_ref_pin_del(&dpll->pin_refs, pin, ops, priv, cookie);
 	dpll_xa_ref_dpll_del(&pin->dpll_refs, dpll, ops, priv, cookie);
+	dpll_generation_inc();
 	if (xa_empty(&pin->dpll_refs)) {
 		dpll_pin_ref_sync_pair_del(pin->id);
 		xa_clear_mark(&dpll_pin_xa, pin->id, DPLL_REGISTERED);
@@ -1005,6 +1022,7 @@ int dpll_pin_on_pin_register(struct dpll_pin *parent, struct dpll_pin *pin,
 	ret = dpll_xa_ref_pin_add(&pin->parent_refs, parent, ops, priv, pin);
 	if (ret)
 		goto unlock;
+	dpll_generation_inc();
 	xa_for_each(&parent->dpll_refs, i, ref) {
 		ret = __dpll_pin_register(ref->dpll, pin, ops, priv, parent);
 		if (ret) {
@@ -1057,6 +1075,7 @@ void dpll_pin_on_pin_unregister(struct dpll_pin *parent, struct dpll_pin *pin,
 		__dpll_pin_unregister(ref->dpll, pin, ops, priv, parent);
 	}
 	dpll_xa_ref_pin_del(&pin->parent_refs, parent, ops, priv, pin);
+	dpll_generation_inc();
 	mutex_unlock(&dpll_lock);
 }
 EXPORT_SYMBOL_GPL(dpll_pin_on_pin_unregister);
