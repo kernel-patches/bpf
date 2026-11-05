@@ -312,6 +312,9 @@ static unsigned int starfive_wdt_get_timeleft(struct watchdog_device *wdd)
 	struct starfive_wdt *wdt = watchdog_get_drvdata(wdd);
 	u32 count;
 
+	if (!watchdog_hw_running(wdd))
+		return 0;
+
 	/*
 	 * If the watchdog takes twice timeout and set half count value,
 	 * timeleft value should add the count value before first timeout.
