@@ -33,6 +33,22 @@ enum {
 	(offsetof(TYPE, MEMBER)	+ sizeof_field(TYPE, MEMBER))
 
 /**
+ * offsetofp() - Get the offset of a struct field from a pointer to the struct
+ *
+ * @P: Pointer to the structure
+ * @MEMBER: The member within the structure to get the start offset of
+ */
+#define offsetofp(P, MEMBER) offsetof(typeof(*(P)), MEMBER)
+
+/**
+ * offsetofendp() - Get the end of a struct field from a pointer to the struct
+ *
+ * @P: Pointer to the structure
+ * @MEMBER: The member within the structure to get the end offset of
+ */
+#define offsetofendp(P, MEMBER) offsetofend(typeof(*(P)), MEMBER)
+
+/**
  * struct_group() - Wrap a set of declarations in a mirrored struct
  *
  * @NAME: The identifier name of the mirrored sub-struct
