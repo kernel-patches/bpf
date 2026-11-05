@@ -5,7 +5,8 @@
 # tool and around the dpllsim configfs interface for creating virtual DPLL
 # devices. Sourcing this file has no side effects; call
 # dpll_lib_check_prereqs and dpll_lib_init explicitly. net/lib.sh must be
-# sourced first, it provides ksft_skip, busywait and log_info.
+# sourced first, it provides ksft_skip, busywait and log_info to the
+# library and defer to the scripts.
 #
 # Copyright (c) 2026 Red Hat, Inc.
 #
@@ -84,6 +85,44 @@ dpll_lib_lock()
 		echo "SKIP: another dpll selftest run is in progress"
 		exit "$ksft_skip"
 	fi
+}
+
+# Print the usage block of the given command of the given object from
+# the help of the dpll tool, "dpll pin set" for instance. The help lists
+# one usage per command, each starting with "Usage: dpll <obj> <cmd>" or
+# with "dpll <obj> <cmd>" indented under the first, possibly wrapped
+# over further lines. The block starts at the line that names the
+# command, with a space after the name so that a command whose name
+# merely begins the same way does not match, and ends before the next
+# line that names another command of the object, or at the end of the
+# help when none follows. Return 1 when the help has no usage for the
+# command, in which case nothing is printed.
+__dpll_usage_block()
+{
+	local obj=$1
+	local cmd=$2
+
+	dpll "$obj" help 2>&1 | \
+		awk -v start="[[:space:]]dpll $obj $cmd([[:space:]]|$)" \
+		    -v other="[[:space:]]dpll $obj [a-z-]+([[:space:]]|$)" \
+		    '$0 ~ start { s = 1; print; next }
+		     s && $0 ~ other { exit }
+		     s { print }
+		     END { exit !s }'
+}
+
+# Return 0 when the dpll tool knows the given "pin set" keyword, such as
+# state or frequency. A test that sets something checks its keyword
+# first and skips on a tool that is too old for it. Only the "pin set"
+# usage is searched, a keyword that only "pin show" knows must not
+# count, and the keyword must stand on its own between blanks or
+# brackets, a hyphenated compound that contains it does not count.
+dpll_pin_set_supports()
+{
+	local usage
+
+	usage=$(__dpll_usage_block pin set) || return 1
+	grep -qE "(^|[[:space:][])$1([[:space:]]|$)" <<< "$usage"
 }
 
 # Detect the DPLL device to test. DPLL_DEV_ID may be set by the user to
@@ -321,6 +360,41 @@ dpll_pin_get_frequency()
 dpll_pin_get_state()
 {
 	__dpll_pin_dev_field "$1" "$2" '.state'
+}
+
+# Return 0 when the pin advertises the given capability, named as
+# iproute2 prints it (state-can-change, priority-can-change, ...).
+dpll_pin_has_capability()
+{
+	local pin_id=$1
+	local name=$2
+	local out
+
+	out=$(dpll pin show id "$pin_id" -j 2>/dev/null) || return 1
+	jq -e --arg name "$name" \
+	   '(.pin[0]? // .) | .capabilities | index($name) != null' \
+	   <<< "$out" &> /dev/null
+}
+
+##############################################################################
+# Pin setters
+#
+# Every setter returns the status of the tool and keeps what the tool
+# printed on stderr in DPLL_LAST_ERR, the "Error: ..." line that carries
+# the extack message of the kernel, so that a caller can tell a refusal
+# it may skip on from a failure.
+
+DPLL_LAST_ERR=""
+
+# $3: connected / disconnected / selectable
+dpll_pin_set_state()
+{
+	local dev_id=$1
+	local pin_id=$2
+	local state=$3
+
+	DPLL_LAST_ERR=$(dpll pin set id "$pin_id" parent-device "$dev_id" \
+			     state "$state" 2>&1 >/dev/null)
 }
 
 ##############################################################################
