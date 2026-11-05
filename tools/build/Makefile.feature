@@ -5,10 +5,11 @@ ifneq ($(OUTPUT),)
   OUTPUT_FEATURES = $(OUTPUT)feature/
   $(shell mkdir -p $(OUTPUT_FEATURES))
 endif
+RUST_OUTPUT ?= $(abspath $(or $(OUTPUT),$(CURDIR)))/
 
 feature_check = $(eval $(feature_check_code))
 define feature_check_code
-  feature-$(1) := $(shell $(MAKE) OUTPUT=$(OUTPUT_FEATURES) CC="$(CC)" CXX="$(CXX)" CFLAGS="$(EXTRA_CFLAGS) $(FEATURE_CHECK_CFLAGS-$(1))" CXXFLAGS="$(EXTRA_CXXFLAGS) $(FEATURE_CHECK_CXXFLAGS-$(1))" LDFLAGS="$(LDFLAGS) $(FEATURE_CHECK_LDFLAGS-$(1))" -C $(feature_dir) $(OUTPUT_FEATURES)test-$1.bin >/dev/null 2>/dev/null && echo 1 || echo 0)
+  feature-$(1) := $(shell $(MAKE) OUTPUT=$(OUTPUT_FEATURES) RUST_OUTPUT="$(RUST_OUTPUT)" CC="$(CC)" CXX="$(CXX)" CARGO="$(CARGO)" RUSTC="$(RUSTC)" $(if $(PKG_CONFIG),PKG_CONFIG="$(PKG_CONFIG)") CFLAGS="$(CLANG_CROSS_FLAGS) $(EXTRA_CFLAGS) $(FEATURE_CHECK_CFLAGS-$(1))" CXXFLAGS="$(CLANG_CROSS_FLAGS) $(EXTRA_CXXFLAGS) $(FEATURE_CHECK_CXXFLAGS-$(1))" RUST_FLAGS="$(RUST_FLAGS)" LDFLAGS="$(LDFLAGS) $(FEATURE_CHECK_LDFLAGS-$(1))" -C $(feature_dir) $(OUTPUT_FEATURES)test-$1.bin >/dev/null 2>/dev/null && echo 1 || echo 0)
 endef
 
 feature_set = $(eval $(feature_set_code))
@@ -128,6 +129,8 @@ FEATURE_TESTS_EXTRA :=                  \
          libdebuginfod			\
          clang-bpf-co-re		\
          bpftool-skeletons		\
+         zlib-rs			\
+         rust				\
          libunwind			\
          libunwind-debug-frame		\
          $(foreach arch,$(LIBUNWIND_ARCHS),libunwind-$(arch) libunwind-debug-frame-$(arch))
@@ -149,6 +152,7 @@ FEATURE_DISPLAY ?=              \
          libcapstone            \
          llvm-perf              \
          zlib                   \
+         zlib-rs                \
          lzma                   \
          bpf			\
          libaio			\
@@ -216,6 +220,12 @@ ifeq ($(feature-all), 1)
   $(call feature_check,compile-x32)
   $(call feature_check,bionic)
   $(call feature_check,babeltrace2-ctf-writer)
+  ifneq ($(filter zlib-rs,$(FEATURE_TESTS)),)
+    $(call feature_check,zlib-rs)
+  endif
+  ifneq ($(filter rust,$(FEATURE_TESTS)),)
+    $(call feature_check,rust)
+  endif
   $(call feature_check,libunwind)
   $(call feature_check,libunwind-debug-frame)
   $(foreach arch,$(LIBUNWIND_ARCHS),$(call feature_check,libunwind-$(arch)))

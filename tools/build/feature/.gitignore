@@ -2,3 +2,4 @@
 *.d
 *.bin
 *.output
+libz_rs/

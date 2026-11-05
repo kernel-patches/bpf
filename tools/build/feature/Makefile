@@ -50,6 +50,7 @@ FILES=                                          \
          test-compile-32.bin                    \
          test-compile-x32.bin                   \
          test-zlib.bin                          \
+         test-zlib-rs.bin                       \
          test-lzma.bin                          \
          test-bpf.bin                           \
          test-libbpf.bin                        \
@@ -100,7 +101,7 @@ else
 endif
 
 ifeq ($(findstring -static,${LDFLAGS}),-static)
-  PKG_CONFIG += --static
+  override PKG_CONFIG += --static
 endif
 
 all: $(FILES)
@@ -301,6 +302,11 @@ $(OUTPUT)test-compile-x32.bin:
 $(OUTPUT)test-zlib.bin:
 	$(BUILD) -lz
 
+include ../Makefile.rust
+
+$(OUTPUT)test-zlib-rs.bin: $(FEATURE_STATIC-zlib-rs)
+	$(BUILD) $(FEATURE_CFLAGS-zlib-rs) $(FEATURE_LIBS-zlib-rs)
+
 $(OUTPUT)test-lzma.bin:
 	$(BUILD) -llzma
 
@@ -374,4 +380,5 @@ $(OUTPUT)test-rust.bin:
 ###############################
 
 clean:
-	rm -f $(FILES) $(OUTPUT)*.d $(FILES:.bin=.make.output)
+	rm -f $(FILES) $(OUTPUT)*.d $(OUTPUT)*.make.output
+	rm -rf $(LIBZ_RS_OUTPUT)

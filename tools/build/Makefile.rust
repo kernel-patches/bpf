@@ -1,0 +1,166 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# Shared rules and helpers for discovering and building Rust libraries
+# (either from pre-installed packages/pkg-config or from distro Cargo
+# registry sources via offline Cargo) for tools/ builds and feature detection.
+
+ifeq ($(pound),)
+include $(dir $(lastword $(MAKEFILE_LIST)))../scripts/Makefile.include
+endif
+
+ifneq ($(CROSS_COMPILE),)
+  ifeq ($(filter --target=%,$(RUST_FLAGS)),)
+    ifneq ($(RUST_TARGET_FLAGS_$(ARCH)),)
+      override RUST_FLAGS += --target=$(RUST_TARGET_FLAGS_$(ARCH))
+    endif
+  endif
+endif
+
+ifeq ($(PKG_CONFIG),)
+  ifneq (, $(shell which $(CROSS_COMPILE)pkg-config 2>/dev/null))
+    PKG_CONFIG := $(CROSS_COMPILE)pkg-config
+  else
+    PKG_CONFIG := pkg-config
+
+    ifdef CROSS_COMPILE
+      ifeq ($(PKG_CONFIG_LIBDIR)$(PKG_CONFIG_PATH)$(PKG_CONFIG_SYSROOT_DIR),)
+        CROSS_ARCH = $(notdir $(CROSS_COMPILE:%-=%))
+        PKG_CONFIG_LIBDIR := /usr/local/$(CROSS_ARCH)/lib/pkgconfig/
+        PKG_CONFIG_LIBDIR := $(PKG_CONFIG_LIBDIR):/usr/local/lib/$(CROSS_ARCH)/pkgconfig/
+        PKG_CONFIG_LIBDIR := $(PKG_CONFIG_LIBDIR):/usr/lib/$(CROSS_ARCH)/pkgconfig/
+        PKG_CONFIG_LIBDIR := $(PKG_CONFIG_LIBDIR):/usr/local/share/pkgconfig/
+        PKG_CONFIG_LIBDIR := $(PKG_CONFIG_LIBDIR):/usr/share/pkgconfig/
+        export PKG_CONFIG_LIBDIR
+      endif
+    endif
+  endif
+endif
+
+ifeq ($(findstring -static,${LDFLAGS}),-static)
+  ifeq ($(findstring --static,$(PKG_CONFIG)),)
+    override PKG_CONFIG += --static
+  endif
+endif
+
+# Helper targets invoked by $(call feature_rust_lib,<name>) to query the
+# resolved compiler and linker flags for a Rust library feature.
+%-cflags:
+	@echo $(FEATURE_CFLAGS-$*)
+
+%-libs:
+	@echo $(FEATURE_LIBS-$*)
+
+# Place compiled Rust library artifacts in their own subdirectory under the
+# build output root (e.g. $(OUTPUT)libz_rs/, alongside libapi/, libbpf/, etc.)
+# rather than inside $(OUTPUT)feature/.
+RUST_OUTPUT ?= $(OUTPUT)
+LIBZ_RS_OUTPUT ?= $(RUST_OUTPUT)libz_rs/
+
+$(LIBZ_RS_OUTPUT):
+	$(Q)mkdir -p $@
+
+# Use the system Cargo registry (e.g. /usr/share/cargo/registry from
+# Debian/Ubuntu librust-*-dev or Fedora rust-*-devel packages) offline via
+# Cargo so Cargo resolves compatible crate versions, dependency graphs,
+# features, and build scripts without touching ~/.cargo or the network.
+#
+# Upstream /usr/bin/cargo only searches crates.io by default; distros do not
+# point /usr/bin/cargo at /usr/share/cargo/registry globally because Cargo's
+# directory source mechanism replaces crates.io entirely, which would break
+# normal user builds. Instead, distro package builders (such as Debian's
+# /usr/share/cargo/bin/cargo wrapper and Fedora's %cargo_prep macro) configure
+# source.crates-io.replace-with to point at /usr/share/cargo/registry. We pass
+# the same source replacement via --config and set CARGO_HOME to a temporary
+# directory so ~/.cargo is neither read nor modified.
+CARGO_REGISTRY_DIR ?= /usr/share/cargo/registry
+CARGO_OFFLINE_FLAGS = --offline \
+	--config 'source.crates-io.replace-with="system-registry"' \
+	--config 'source.system-registry.directory="$(CARGO_REGISTRY_DIR)"'
+
+# cargo build takes --target=<triple> as a CLI flag (which also places the
+# output in target/<triple>/release/) and compiler flags via RUSTFLAGS.
+# Build with -C relocation-model=pic so libz_rs.a can be linked into PIE
+# binaries.
+CARGO_TARGET := $(patsubst --target=%,%,$(firstword $(filter --target=%,$(RUST_FLAGS))))
+CARGO_RUSTFLAGS := $(filter-out --target=%,$(RUST_FLAGS)) -C relocation-model=pic
+
+# Build libz_rs.a and stage its headers into $(LIBZ_RS_OUTPUT)include/:
+# - Cargo writes Cargo.lock next to Cargo.toml, so the synthetic manifest and
+#   lib.rs are generated inside the writable $(LIBZ_RS_OUTPUT) directory rather
+#   than in $(srctree), and removed once the build finishes (any stale
+#   Cargo.lock from an interrupted build is also removed upfront so a distro
+#   package upgrade in $(CARGO_REGISTRY_DIR) is not blocked by an old lockfile).
+# - Enable export-symbols (unprefixed zlib C ABI symbols), c-allocator, std,
+#   and gz (gzopen/gzopen64/gzread/etc.) on libz-rs-sys.
+# - Query cargo metadata for the resolved libz-rs-sys crate path so we copy
+#   the matching zlib.h and zconf.h headers that Cargo selected.
+$(LIBZ_RS_OUTPUT)libz_rs.a: $(wildcard $(CARGO_REGISTRY_DIR)) | $(LIBZ_RS_OUTPUT)
+	$(Q){ \
+		rm -f $(LIBZ_RS_OUTPUT)Cargo.lock && \
+		printf '[package]\nname = "z_rs"\nversion = "0.1.0"\nedition = "2021"\n\n[lib]\nname = "z_rs"\npath = "lib.rs"\ncrate-type = ["staticlib"]\n\n[dependencies]\nlibz-rs-sys = { version = "*", default-features = false, features = ["export-symbols", "c-allocator", "std", "gz"] }\n' > $(LIBZ_RS_OUTPUT)Cargo.toml && \
+		printf 'pub use libz_rs_sys::*;\n' > $(LIBZ_RS_OUTPUT)lib.rs && \
+		inc_dir=$$(CARGO_HOME="$(LIBZ_RS_OUTPUT)cargo_home" $(CARGO) metadata $(CARGO_OFFLINE_FLAGS) --format-version 1 --manifest-path $(LIBZ_RS_OUTPUT)Cargo.toml | sed -n 's/.*"name":"libz_rs_sys","src_path":"\([^"]*\)\/src\/lib\.rs".*/\1/p') && \
+		test -n "$$inc_dir" && test -d "$$inc_dir/include" && \
+		mkdir -p $(LIBZ_RS_OUTPUT)include && \
+		cp -f "$$inc_dir"/include/*.h $(LIBZ_RS_OUTPUT)include/ && \
+		CARGO_HOME="$(LIBZ_RS_OUTPUT)cargo_home" RUSTC="$(RUSTC)" RUSTFLAGS="$(CARGO_RUSTFLAGS)" \
+			$(CARGO) build $(CARGO_OFFLINE_FLAGS) --release \
+			--manifest-path $(LIBZ_RS_OUTPUT)Cargo.toml \
+			--target-dir $(LIBZ_RS_OUTPUT)target \
+			$(if $(CARGO_TARGET),--target=$(CARGO_TARGET)) && \
+		mv -f $(LIBZ_RS_OUTPUT)target/$(if $(CARGO_TARGET),$(CARGO_TARGET)/)release/libz_rs.a $@ && \
+		rm -rf $(LIBZ_RS_OUTPUT)Cargo.toml $(LIBZ_RS_OUTPUT)Cargo.lock \
+			$(LIBZ_RS_OUTPUT)lib.rs $(LIBZ_RS_OUTPUT)target \
+			$(LIBZ_RS_OUTPUT)cargo_home; \
+	} > $(@:.a=.make.output) 2>&1 || { \
+		rm -rf $(LIBZ_RS_OUTPUT)Cargo.toml $(LIBZ_RS_OUTPUT)Cargo.lock \
+			$(LIBZ_RS_OUTPUT)lib.rs $(LIBZ_RS_OUTPUT)include \
+			$(LIBZ_RS_OUTPUT)target $(LIBZ_RS_OUTPUT)cargo_home $@; \
+		false; \
+	}
+
+# Only evaluate zlib-rs pkg-config / Cargo flags when building a zlib-rs target
+# (or 'all'), avoiding unnecessary shell calls during 'clean' or unrelated
+# feature tests in tools/build/feature/Makefile.
+# Note: GNU Make's $(filter ...) only supports a single '%' wildcard per
+# pattern, so $(findstring zlib-rs,...) is used to match targets like
+# $(OUTPUT)test-zlib-rs.bin, zlib-rs-cflags, and zlib-rs-libs.
+ifneq ($(if $(MAKECMDGOALS),$(or $(findstring zlib-rs,$(MAKECMDGOALS)),$(filter all %libz_rs.a,$(MAKECMDGOALS))),all),)
+  # Resolve zlib-rs flags and libraries in priority order:
+  #   1. Explicit LIBZ_RS_DIR=/path/to/prefix override
+  #   2. pkg-config (libz-rs-sys-cdylib when not linking -static since it only
+  #      provides a shared library, zlib-rs, or z_rs)
+  #   3. System Cargo registry built via Cargo into $(LIBZ_RS_OUTPUT)libz_rs.a
+  #      (linked with -lpthread -ldl -lm required by the embedded Rust libstd)
+  ifdef LIBZ_RS_DIR
+    FEATURE_CFLAGS-zlib-rs := -I$(LIBZ_RS_DIR)/include
+    FEATURE_LIBS-zlib-rs := -L$(LIBZ_RS_DIR)/lib -lz_rs
+  endif
+
+  ifeq ($(FEATURE_LIBS-zlib-rs),)
+    ZLIB_RS_PC := $(shell ($(if $(findstring -static,${LDFLAGS}),false,$(PKG_CONFIG) --exists libz-rs-sys-cdylib 2>/dev/null && echo libz-rs-sys-cdylib)) || \
+                          ($(PKG_CONFIG) --exists zlib-rs 2>/dev/null && echo zlib-rs) || \
+                          ($(PKG_CONFIG) --exists z_rs 2>/dev/null && echo z_rs))
+    ifneq ($(ZLIB_RS_PC),)
+      FEATURE_CFLAGS-zlib-rs := $(shell $(PKG_CONFIG) --cflags $(ZLIB_RS_PC) 2>/dev/null)
+      FEATURE_LIBS-zlib-rs := $(shell $(PKG_CONFIG) --libs $(ZLIB_RS_PC) 2>/dev/null)
+    endif
+  endif
+
+  ifeq ($(FEATURE_LIBS-zlib-rs),)
+    ifneq ($(wildcard $(CARGO_REGISTRY_DIR)),)
+      FEATURE_CFLAGS-zlib-rs := -I$(LIBZ_RS_OUTPUT)include
+      FEATURE_STATIC-zlib-rs := $(LIBZ_RS_OUTPUT)libz_rs.a
+      # Pass -Wl,--exclude-libs,libz_rs.a so symbols pulled into the executable
+      # from libz_rs.a are marked HIDDEN and not exported into .dynsym. That
+      # prevents shared libraries linked against system libz.so.1 (e.g.
+      # libelf.so, libdw.so, libcurl.so) from partially binding some zlib
+      # calls to the executable's libz_rs.a and others to libz.so.1.
+      FEATURE_LIBS-zlib-rs := $(FEATURE_STATIC-zlib-rs) \
+        -Wl,--exclude-libs,libz_rs.a -lpthread -ldl -lm
+    endif
+  endif
+endif
+
+zlib-rs-cflags: $(FEATURE_STATIC-zlib-rs)
+zlib-rs-libs: $(FEATURE_STATIC-zlib-rs)

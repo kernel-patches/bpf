@@ -109,7 +109,32 @@ CC_NO_CLANG := $(shell if command -v $(firstword $(CC)) >/dev/null 2>&1; then $(
 # Some tools require bpftool
 SYSTEM_BPFTOOL	?= bpftool
 
+CARGO		?= cargo
 RUSTC		?= rustc
+
+# Map kernel ARCH to rustc --target triples when cross-compiling tools/.
+ifneq ($(CROSS_COMPILE),)
+  RUST_TARGET_FLAGS_arm		:= arm-unknown-linux-gnueabi
+  RUST_TARGET_FLAGS_arm64	:= aarch64-unknown-linux-gnu
+  RUST_TARGET_FLAGS_loongarch	:= loongarch64-unknown-linux-gnu
+  RUST_TARGET_FLAGS_m68k	:= m68k-unknown-linux-gnu
+  RUST_TARGET_FLAGS_mips	:= mipsel-unknown-linux-gnu
+  RUST_TARGET_FLAGS_powerpc	:= powerpc64le-unknown-linux-gnu
+  RUST_TARGET_FLAGS_riscv	:= riscv64gc-unknown-linux-gnu
+  RUST_TARGET_FLAGS_s390	:= s390x-unknown-linux-gnu
+  RUST_TARGET_FLAGS_x86		:= x86_64-unknown-linux-gnu
+  RUST_TARGET_FLAGS_x86_64	:= x86_64-unknown-linux-gnu
+endif
+
+# Query tools/build/Makefile.rust for a Rust library feature's CFLAGS and LIBS
+# (building any required staticlib such as libz_rs.a under $(RUST_OUTPUT)), and
+# populate FEATURE_CFLAGS-<feat> and FEATURE_LIBS-<feat>.
+define feature_rust_lib_code
+  RUST_OUTPUT ?= $$(abspath $$(or $$(OUTPUT),$$(CURDIR)))/
+  FEATURE_CFLAGS-$(1) := $$(shell $$(MAKE) -s --no-print-directory -f $$(srctree)/tools/build/Makefile.rust RUST_OUTPUT="$$(RUST_OUTPUT)" $$(if $$(PKG_CONFIG),PKG_CONFIG="$$(PKG_CONFIG)") CARGO="$$(CARGO)" RUSTC="$$(RUSTC)" RUST_FLAGS="$$(RUST_FLAGS)" LDFLAGS="$$(LDFLAGS)" $(1)-cflags)
+  FEATURE_LIBS-$(1) := $$(shell $$(MAKE) -s --no-print-directory -f $$(srctree)/tools/build/Makefile.rust RUST_OUTPUT="$$(RUST_OUTPUT)" $$(if $$(PKG_CONFIG),PKG_CONFIG="$$(PKG_CONFIG)") CARGO="$$(CARGO)" RUSTC="$$(RUSTC)" RUST_FLAGS="$$(RUST_FLAGS)" LDFLAGS="$$(LDFLAGS)" $(1)-libs)
+endef
+feature_rust_lib = $(eval $(feature_rust_lib_code))
 
 ifeq ($(CC_NO_CLANG), 1)
 EXTRA_WARNINGS += -Wstrict-aliasing=3
