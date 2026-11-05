@@ -322,6 +322,11 @@ void hdmi4_cec_set_phys_addr(struct hdmi_core_data *core, u16 pa)
 	cec_s_phys_addr(core->adap, pa, false);
 }
 
+void hdmi4_cec_phys_addr_invalidate(struct hdmi_core_data *core)
+{
+	cec_phys_addr_invalidate(core->adap);
+}
+
 int hdmi4_cec_init(struct platform_device *pdev, struct hdmi_core_data *core,
 		  struct hdmi_wp_data *wp)
 {
