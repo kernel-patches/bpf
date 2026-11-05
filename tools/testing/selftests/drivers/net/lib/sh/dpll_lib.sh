@@ -54,8 +54,10 @@ dpll_lib_check_prereqs()
 # The scripts that create dpllsim devices share the one dpllsim directory
 # and cannot run alongside each other, so each takes a lock on
 # DPLL_LOCK_FILE before it mounts or creates anything and skips when
-# another run holds it. The file lives under /run rather than in the
-# world-writable /tmp, where a planted symlink could redirect the open.
+# another run holds it. The workers a script forks inherit the open file
+# and keep the lock until they exit. The file lives under /run rather
+# than in the world-writable /tmp, where a planted symlink could
+# redirect the open.
 DPLL_RUN_DIR="/run/dpll-selftest"
 DPLL_LOCK_FILE="$DPLL_RUN_DIR/lock"
 DPLL_LOCK_FD=""
@@ -545,8 +547,12 @@ dpllsim_undeploy()
 
 # Take the device offline and remove it together with all its pins.
 # Every step is attempted even when an earlier one failed, the return
-# value is non-zero when any did. A device that does not exist counts as
-# deleted.
+# value is non-zero when any did. A device that does not exist counts
+# as deleted, and so does a part of it that is gone by the time its
+# step runs, the live file of the undeploy and the pin or device
+# directory of an rmdir, so that a removal running concurrently, or an
+# earlier one whose later steps failed, does not turn into a spurious
+# failure here.
 dpllsim_delete_device()
 {
 	local dev_path="$DPLLSIM_CFG/$1"
@@ -554,12 +560,12 @@ dpllsim_delete_device()
 
 	[ -d "$dev_path" ] || return 0
 
-	dpllsim_undeploy "$1" || ret=1
+	dpllsim_undeploy "$1" || [ ! -e "$dev_path/live" ] || ret=1
 	for pin_path in "$dev_path"/pins/*/; do
 		[ -d "$pin_path" ] || continue
-		rmdir "$pin_path" || ret=1
+		rmdir "$pin_path" || [ ! -d "$pin_path" ] || ret=1
 	done
-	rmdir "$dev_path" || ret=1
+	rmdir "$dev_path" || [ ! -d "$dev_path" ] || ret=1
 
 	return "$ret"
 }
@@ -570,6 +576,16 @@ dpllsim_delete_device()
 dpllsim_alloc_clock_id()
 {
 	DPLLSIM_CLOCK_ID=$((DPLLSIM_NEXT_CLOCK_ID++))
+}
+
+# Set DPLLSIM_CLOCK_ID to the first of $1 consecutive clock-ids unique
+# within this test run and move the allocator past them, for a worker
+# that derives the clock-ids of its devices from it. A device the parent
+# creates afterwards cannot collide with one of the worker.
+dpllsim_alloc_clock_id_range()
+{
+	DPLLSIM_CLOCK_ID=$DPLLSIM_NEXT_CLOCK_ID
+	DPLLSIM_NEXT_CLOCK_ID=$((DPLLSIM_NEXT_CLOCK_ID + $1))
 }
 
 # Create a device with the standard 3-pin layout, deploy it and resolve

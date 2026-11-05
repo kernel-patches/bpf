@@ -15,13 +15,24 @@ source "$SCRIPTDIR/../lib/sh/dpll_lib.sh"
 
 ALL_TESTS="
 	test_rapid_create_delete
+	test_concurrent_workers
 	test_pin_state_flooding
+	test_max_devices
 	test_deploy_cycle
 "
 
 STRESS_ITERATIONS=${STRESS_ITERATIONS:-20}
+STRESS_DEVICES=${STRESS_DEVICES:-5}
+# The simulator accepts up to 128 pins per device (DPLLSIM_MAX_PINS)
+STRESS_PINS_PER_DEVICE=${STRESS_PINS_PER_DEVICE:-10}
+STRESS_CONCURRENT_PROCS=${STRESS_CONCURRENT_PROCS:-4}
+STRESS_WORKER_ITERATIONS=${STRESS_WORKER_ITERATIONS:-10}
 
 CREATED_DEVICES=()
+BACKGROUND_PIDS=()
+# Base clock-ids of the workers in flight, their devices are named
+# st<base + iteration>
+WORKER_BASES=()
 
 track_device()
 {
@@ -39,17 +50,102 @@ untrack_device()
 	CREATED_DEVICES=("${remaining[@]}")
 }
 
+# Remove whatever a worker started from the given base clock-id left
+# behind, which is the device in flight when the worker had to be killed.
+# A device that does not exist counts as deleted.
+delete_worker_devices()
+{
+	local base=$1
+	local i name
+
+	for i in $(seq 1 "$STRESS_WORKER_ITERATIONS"); do
+		name="st$((base + i))"
+		dpllsim_delete_device "$name" ||
+			log_info "cannot delete device $name"
+	done
+}
+
+# Return 0 while the process still runs. A process that has exited but
+# has not been reaped yet is a zombie, state Z in /proc/<pid>/stat, and
+# counts as gone, or a wait on it would spin until the forced kill.
+pid_running()
+{
+	local stat
+
+	kill -0 "$1" 2>/dev/null || return 1
+	# The state follows the parenthesized command name, which may
+	# contain spaces and parentheses. The ".*" is greedy, so the
+	# expression strips everything up to the last ") " of the line, and
+	# a ")" inside the name is harmless.
+	stat=$(sed 's/^.*) //' "/proc/$1/stat" 2>/dev/null) || return 1
+	[ "${stat%% *}" != "Z" ]
+}
+
+# Return 0 once none of the given processes runs any more, 1 when some
+# still does after about five seconds.
+pids_gone()
+{
+	local i pid alive
+
+	for i in $(seq 1 50); do
+		alive=0
+		for pid in "$@"; do
+			pid_running "$pid" && alive=1
+		done
+		[ "$alive" -eq 0 ] && return 0
+		sleep 0.1
+	done
+	return 1
+}
+
 cleanup()
 {
-	local dev
+	local pid dev base
+	local pids=() shell_jobs=()
 
 	# A second signal must not abort the teardown half way.
 	trap '' INT TERM
+
+	# A worker forked right before the signal arrived may not be
+	# recorded yet, so the jobs of the shell are taken as well. The
+	# jobs builtin reports them from a subshell only when it is the
+	# whole command of that subshell.
+	mapfile -t shell_jobs < <(jobs -p)
+	mapfile -t pids < <(printf '%s\n' "${BACKGROUND_PIDS[@]}" \
+				   "${shell_jobs[@]}" | grep . | sort -u)
+	for pid in "${pids[@]}"; do
+		kill "$pid" 2>/dev/null
+	done
+	# Give the workers a few seconds to run their exit traps, then
+	# force the survivors and give those a few seconds to die. The
+	# kernel cannot recycle the pid of a child until it is reaped,
+	# which the wait below does, so the forced kill cannot hit a
+	# process that reused one. A worker stuck in the kernel does not
+	# die of the forced kill before whatever it waits for returns, so
+	# only the workers that are gone are waited for, which reaps them,
+	# and the teardown goes on without the rest. The removal of what
+	# such a worker left behind can then fail or race with it, which
+	# is logged like any other failed removal.
+	pids_gone "${pids[@]}"
+	for pid in "${pids[@]}"; do
+		kill -KILL "$pid" 2>/dev/null
+	done
+	pids_gone "${pids[@]}"
+	for pid in "${pids[@]}"; do
+		if pid_running "$pid"; then
+			log_info "worker $pid did not exit, giving up"
+		else
+			wait "$pid" 2>/dev/null
+		fi
+	done
 
 	defer_scopes_cleanup
 	for dev in "${CREATED_DEVICES[@]}"; do
 		dpllsim_delete_device "$dev" ||
 			log_info "cannot delete device $dev"
+	done
+	for base in "${WORKER_BASES[@]}"; do
+		delete_worker_devices "$base"
 	done
 	# The device whose creation a signal interrupted is recorded by the
 	# library alone, a double delete of a tracked one is harmless.
@@ -138,6 +234,83 @@ test_rapid_create_delete()
 	log_test "DPLL rapid create/delete ($STRESS_ITERATIONS iterations)"
 }
 
+# The exit trap of a worker. The worker runs in a subshell, so
+# track_device() cannot reach CREATED_DEVICES of the parent. Remove the
+# device in flight from the exit trap instead, or killing the worker
+# leaks it. The trap saves the exit status first, so that the removal
+# cannot mask a failed iteration, and drops the traps, since bash runs
+# the EXIT trap again when a signal handler exits.
+worker_exit()
+{
+	local status=$?
+
+	trap - EXIT TERM INT
+	if [ -n "$DPLLSIM_CREATED_NAME" ]; then
+		dpllsim_delete_device "$DPLLSIM_CREATED_NAME"
+		DPLLSIM_CREATED_NAME=""
+	fi
+	exit "$status"
+}
+
+# Create and delete STRESS_WORKER_ITERATIONS devices with clock-ids
+# following the given base, in a subshell. Each worker derives its own
+# unique clock-ids from a range reserved for it, so its devices can never
+# be confused with those of another worker or of the parent. The parent
+# records the base of every worker, so that the device a killed worker
+# left behind can be removed by name.
+concurrent_worker()
+{
+	# The workers inherit the state of the generator from the parent
+	# and would draw the same pin layouts, so reseed it with the pid of
+	# the subshell first.
+	RANDOM=$BASHPID
+	local base=$1
+	local i name failed=0
+
+	trap worker_exit EXIT TERM INT
+
+	for i in $(seq 1 "$STRESS_WORKER_ITERATIONS"); do
+		if ! create_stress_device $((base + i)) 3; then
+			failed=$((failed + 1))
+			continue
+		fi
+		name=$DPLLSIM_CREATED_NAME
+		dpllsim_delete_device "$name" ||
+			failed=$((failed + 1))
+	done
+
+	[ "$failed" -eq 0 ]
+}
+
+test_concurrent_workers()
+{
+	local pid base failed=0
+
+	RET=0
+
+	for _ in $(seq 1 "$STRESS_CONCURRENT_PROCS"); do
+		dpllsim_alloc_clock_id_range $((STRESS_WORKER_ITERATIONS + 1))
+		base=$DPLLSIM_CLOCK_ID
+		WORKER_BASES+=("$base")
+		concurrent_worker "$base" &
+		BACKGROUND_PIDS+=($!)
+	done
+
+	for pid in "${BACKGROUND_PIDS[@]}"; do
+		wait "$pid" || failed=1
+	done
+	BACKGROUND_PIDS=()
+
+	check_err "$failed" "some concurrent workers failed"
+
+	for base in "${WORKER_BASES[@]}"; do
+		delete_worker_devices "$base"
+	done
+	WORKER_BASES=()
+
+	log_test "DPLL concurrent workers ($STRESS_CONCURRENT_PROCS processes)"
+}
+
 test_pin_state_flooding()
 {
 	local clock_id name dev_id pin_id i last state fails=0
@@ -191,6 +364,50 @@ test_pin_state_flooding()
 	fi
 
 	log_test "DPLL pin state flooding"
+}
+
+test_max_devices()
+{
+	local i clock_id created=0 visible
+	local test_devs=() clock_ids=()
+
+	RET=0
+
+	for i in $(seq 1 "$STRESS_DEVICES"); do
+		dpllsim_alloc_clock_id; clock_id=$DPLLSIM_CLOCK_ID
+		create_stress_device "$clock_id" \
+				     "$STRESS_PINS_PER_DEVICE" || break
+		track_device "$DPLLSIM_CREATED_NAME"
+		test_devs+=("$DPLLSIM_CREATED_NAME")
+		clock_ids+=("$clock_id")
+		created=$((created + 1))
+	done
+
+	if [ "$created" -lt "$STRESS_DEVICES" ]; then
+		check_err 1 "created only $created of $STRESS_DEVICES devices"
+	fi
+
+	# Every created device must be visible on netlink.
+	visible=0
+	for clock_id in "${clock_ids[@]}"; do
+		if dpll_device_wait_by_clock_id "$clock_id" dpllsim \
+		   > /dev/null; then
+			visible=$((visible + 1))
+		fi
+	done
+	if [ "$visible" -ne "$created" ]; then
+		check_err 1 "only $visible of $created devices visible"
+	fi
+
+	for i in "${test_devs[@]}"; do
+		if dpllsim_delete_device "$i"; then
+			untrack_device "$i"
+		else
+			check_err 1 "cannot delete device $i"
+		fi
+	done
+
+	log_test "DPLL maximum devices ($STRESS_DEVICES devices)"
 }
 
 test_deploy_cycle()
