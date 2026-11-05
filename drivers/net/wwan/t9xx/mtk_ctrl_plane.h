@@ -10,6 +10,52 @@
 
 #include "mtk_dev.h"
 
+#define Q_MTU_3_5K	(0xE00)
+
+enum mtk_ccci_ch {
+	/* to sAP */
+	CCCI_SAP_CONTROL_RX = 0x1000,
+	CCCI_SAP_CONTROL_TX = 0x1001,
+	/* to MD */
+	CCCI_CONTROL_RX = 0x2000,
+	CCCI_CONTROL_TX = 0x2001,
+};
+
+enum mtk_trb_cmd_type {
+	TRB_CMD_MIN,
+	TRB_CMD_ENABLE,
+	TRB_CMD_TX,
+	TRB_CMD_DISABLE,
+	TRB_CMD_STOP,
+	TRB_CMD_RECOVER,
+	TRB_CMD_MAX,
+};
+
+enum mtk_hif_dev_ctrl_cmd {
+	HIF_CTRL_CMD_CHECK_TX_FULL,
+};
+
+struct trb_open_priv {
+	u8 log_rg_offset;
+	u32 tx_mtu;
+	/* consumes the skb; the return value is informational */
+	int (*rx_done)(struct sk_buff *skb, void *priv);
+};
+
+struct trb {
+	u32 channel_id;
+	enum mtk_trb_cmd_type cmd;
+	int status;
+	void *priv;
+	int (*trb_complete)(struct sk_buff *skb);
+};
+
+static_assert(sizeof(struct trb) <= sizeof_field(struct sk_buff, cb));
+
+union ctrl_hif_cmd_data {
+	u32 rx_ch;
+};
+
 struct mtk_ctrl_blk {
 	struct mtk_md_dev *mdev;
 	void *ctrl_hw_priv;
