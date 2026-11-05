@@ -208,7 +208,7 @@ DECLARE_EVENT_CLASS(net_dev_rx_verbose_template,
 
 	TP_fast_assign(
 		__assign_str(name);
-#ifdef CONFIG_NET_RX_BUSY_POLL
+#ifdef CONFIG_SKB_MARK_NAPI_ID
 		__entry->napi_id = napi_id_valid(skb->napi_id) ?
 				   skb->napi_id : 0;
 #else

@@ -278,9 +278,14 @@ SOF_TIMESTAMPING_OPT_PKTINFO:
   packets with hardware timestamps. The message contains struct
   scm_ts_pktinfo, which supplies the index of the real interface which
   received the packet and its length at layer 2. A valid (non-zero)
-  interface index will be returned only if CONFIG_NET_RX_BUSY_POLL is
-  enabled and the driver is using NAPI. The struct contains also two
-  other fields, but they are reserved and undefined.
+  interface index will be returned only if CONFIG_SKB_MARK_NAPI_ID is
+  enabled and the driver is using NAPI. This hidden configuration is
+  selected automatically by busy-poll support and by drivers that need
+  skb NAPI IDs to resolve deferred hardware timestamps. Drivers that
+  use deferred timestamp conversion must select it so the networking
+  stack can find the device and call its timestamp callback even when
+  busy polling is disabled. The struct contains also two other fields,
+  but they are reserved and undefined.
 
 SOF_TIMESTAMPING_OPT_TX_SWHW:
   Request both hardware and software timestamps for outgoing packets

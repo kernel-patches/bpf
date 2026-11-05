@@ -346,9 +346,13 @@ config CGROUP_NET_CLASSID
 	  Cgroup subsystem for use as general purpose socket classid marker that is
 	  being used in cls_cgroup and for netfilter matching.
 
+config SKB_MARK_NAPI_ID
+	bool
+
 config NET_RX_BUSY_POLL
 	bool
 	default y if !PREEMPT_RT || (PREEMPT_RT && !NETCONSOLE)
+	select SKB_MARK_NAPI_ID
 
 config BQL
 	bool

@@ -376,6 +376,7 @@ config IGC
 	depends on PCI
 	depends on PTP_1588_CLOCK_OPTIONAL
 	depends on ETHTOOL_NETLINK
+	select SKB_MARK_NAPI_ID
 	help
 	  This driver supports Intel(R) Ethernet Controller I225-LM/I225-V
 	  family of adapters.
