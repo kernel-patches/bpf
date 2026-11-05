@@ -11,26 +11,12 @@
  * own execution.  It also attempts to have as few dependencies
  * on kernel features as possible.
  *
- * It should be statically linked, with startup libs avoided.  It uses
- * no library calls except the syscall() function for the following 3
- * syscalls:
- *   sysinfo(), write(), and _exit()
- *
- * For output, it avoids printf (which in some C libraries
- * has large external dependencies) by  implementing it's own
- * number output and print routines, and using __builtin_strlen()
- *
- * The test may crash if any of the above syscalls fails because in some
- * libc implementations (e.g. the GNU C Library) errno is saved in
- * thread-local storage, which does not get initialized due to avoiding
- * startup libs.
+ * It is statically linked with nolibc startup and syscall wrappers.
+ * For output, it avoids printf by implementing its own print routines.
  */
 
-#include <sys/sysinfo.h>
-#include <unistd.h>
-#include <sys/syscall.h>
-
-#define STDOUT_FILENO 1
+#include <nolibc.h>
+#include <linux/sysinfo.h>
 
 static int print(const char *s)
 {
@@ -39,7 +25,7 @@ static int print(const char *s)
 	while (s[len] != '\0')
 		len++;
 
-	return syscall(SYS_write, STDOUT_FILENO, s, len);
+	return write(STDOUT_FILENO, s, len);
 }
 
 static inline char *num_to_str(unsigned long num, char *buf, int len)
@@ -80,8 +66,7 @@ static int print_k_value(const char *s, unsigned long num, unsigned long units)
 	return ccode;
 }
 
-/* this program has no main(), as startup libraries are not used */
-void _start(void)
+int main(void)
 {
 	int ccode;
 	struct sysinfo info;
@@ -91,12 +76,12 @@ void _start(void)
 	print("TAP version 13\n");
 	print("# Testing system size.\n");
 
-	ccode = syscall(SYS_sysinfo, &info);
+	ccode = syscall(__NR_sysinfo, &info);
 	if (ccode < 0) {
 		print("not ok 1");
 		print(test_name);
 		print(" ---\n reason: \"could not get sysinfo\"\n ...\n");
-		syscall(SYS_exit, ccode);
+		return 1;
 	}
 	print("ok 1");
 	print(test_name);
@@ -112,5 +97,5 @@ void _start(void)
 	print(" ...\n");
 	print("1..1\n");
 
-	syscall(SYS_exit, 0);
+	return 0;
 }
