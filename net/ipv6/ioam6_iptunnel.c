@@ -340,6 +340,7 @@ static int ioam6_output(struct net *net, struct sock *sk, struct sk_buff *skb)
 	struct dst_entry *orig_dst = skb_dst(skb);
 	struct dst_entry *dst = NULL;
 	struct ioam6_lwt *ilwt;
+	int tail_len = -1;
 	int err = -EINVAL;
 	u32 pkt_cnt;
 
@@ -375,9 +376,15 @@ do_inline:
 		if (ipv6_hdr(skb)->nexthdr == NEXTHDR_HOP)
 			goto out;
 
+		if (skb_transport_header_was_set(skb))
+			tail_len = skb->len - skb_transport_offset(skb);
+
 		err = ioam6_do_inline(net, skb, &ilwt->tuninfo, dst);
 		if (unlikely(err))
 			goto drop;
+
+		if (tail_len >= 0)
+			skb_set_transport_header(skb, skb->len - tail_len);
 
 		break;
 	case IOAM6_IPTUNNEL_MODE_ENCAP:
