@@ -24670,6 +24670,9 @@ skip_full_check:
 		ret = bpf_optimize_bpf_loop(env);
 
 	if (ret == 0)
+		ret = bpf_insert_recursion_checks(env);
+
+	if (ret == 0)
 		bpf_lower_cast_mov(env);
 
 	if (is_priv) {
