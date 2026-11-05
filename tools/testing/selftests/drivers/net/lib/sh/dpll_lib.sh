@@ -376,6 +376,11 @@ dpll_pin_has_capability()
 	   <<< "$out" &> /dev/null
 }
 
+dpll_pin_get_prio()
+{
+	__dpll_pin_dev_field "$1" "$2" '.prio'
+}
+
 ##############################################################################
 # Pin setters
 #
@@ -395,6 +400,16 @@ dpll_pin_set_state()
 
 	DPLL_LAST_ERR=$(dpll pin set id "$pin_id" parent-device "$dev_id" \
 			     state "$state" 2>&1 >/dev/null)
+}
+
+dpll_pin_set_prio()
+{
+	local dev_id=$1
+	local pin_id=$2
+	local prio=$3
+
+	DPLL_LAST_ERR=$(dpll pin set id "$pin_id" parent-device "$dev_id" \
+			     prio "$prio" 2>&1 >/dev/null)
 }
 
 ##############################################################################
@@ -478,7 +493,9 @@ dpllsim_create_device()
 
 # $1: device name, $2: pin name (becomes the board-label), $3: type (gnss,
 # int-oscillator, ext, synce-eth-port, mux), $4: frequency in Hz,
-# $5: direction (input/output)
+# $5: direction (input/output), $6: prio (optional, input pins only).
+# The priority is written only when one is given, so a pin without one
+# keeps the default of the simulator.
 dpllsim_add_pin()
 {
 	local dev=$1
@@ -486,13 +503,16 @@ dpllsim_add_pin()
 	local type=$3
 	local frequency=$4
 	local direction=$5
+	local prio=${6:-}
 	local pin_path="$DPLLSIM_CFG/$dev/pins/$pin"
 
 	mkdir "$pin_path" 2>/dev/null || return 1
 
 	if ! echo "$type" 2>/dev/null > "$pin_path/type" ||
 	   ! echo "$frequency" 2>/dev/null > "$pin_path/frequency" ||
-	   ! echo "$direction" 2>/dev/null > "$pin_path/direction"; then
+	   ! echo "$direction" 2>/dev/null > "$pin_path/direction" ||
+	   { [ -n "$prio" ] &&
+	     ! echo "$prio" 2>/dev/null > "$pin_path/prio"; }; then
 		rmdir "$pin_path" 2>/dev/null
 		return 1
 	fi
@@ -540,8 +560,8 @@ dpllsim_alloc_clock_id()
 # Create a device with the standard 3-pin layout, deploy it and resolve
 # the netlink device id. Sets DPLLSIM_CREATED_NAME, DPLLSIM_CLOCK_ID and
 # DPLLSIM_DEV_ID.
-#   gnss0: GNSS, 1 Hz, input
-#   ext0: EXT, 10 MHz, input
+#   gnss0: GNSS, 1 Hz, input, prio 0 (active reference)
+#   ext0: EXT, 10 MHz, input, prio 1
 #   out0: EXT, 10 MHz, output
 # shellcheck disable=SC2120 # the argument is optional
 dpllsim_setup_standard_device()
@@ -553,8 +573,8 @@ dpllsim_setup_standard_device()
 	name="std$clock_id"
 	dpllsim_create_device "$name" "$clock_id" || return 1
 
-	if ! dpllsim_add_pin "$name" gnss0 gnss 1 input ||
-	   ! dpllsim_add_pin "$name" ext0 ext 10000000 input ||
+	if ! dpllsim_add_pin "$name" gnss0 gnss 1 input 0 ||
+	   ! dpllsim_add_pin "$name" ext0 ext 10000000 input 1 ||
 	   ! dpllsim_add_pin "$name" out0 ext 10000000 output; then
 		dpllsim_delete_device "$name"
 		return 1
