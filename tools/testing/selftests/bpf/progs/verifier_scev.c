@@ -4412,6 +4412,65 @@ __naked void post_cond_jlt32_copy(void)
 }
 
 /*
+ * Every iteration takes a reference, only the last one is released. The state that comes back
+ * to the head of the loop has a reference that nothing holds.
+ */
+SEC("socket")
+__failure __msg("Unreleased reference")
+__naked void loop_takes_reference_every_time(void)
+{
+	asm volatile (
+	"r6 = 0;"
+"1:"
+	"r1 = %[ringbuf] ll;"
+	"r2 = 8;"
+	"r3 = 0;"
+	"call %[bpf_ringbuf_reserve];"
+	"if r0 == 0 goto 2f;"
+	"r8 = r0;"
+	"r6 += 1;"
+	"if r6 < 10 goto 1b;"
+	"r1 = r8;"
+	"r2 = 0;"
+	"call %[bpf_ringbuf_discard];"
+"2:"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm(bpf_ringbuf_reserve), __imm(bpf_ringbuf_discard), __imm_addr(ringbuf)
+	: __clobber_all);
+}
+
+/*
+ * The first iteration that has something to say takes a reference, the rest use it. The state
+ * that comes back to the head has a reference more than the state that entered, once.
+ */
+__u64 nr_vals, vals[64];
+
+SEC("socket")
+__success __retval(0)
+int loop_takes_reference_once(void *ctx)
+{
+	__u64 *sum = NULL;
+	int i;
+
+	bpf_for(i, 0, nr_vals) {
+		if (i >= 64 || !vals[i])
+			continue;
+		if (!sum) {
+			sum = bpf_ringbuf_reserve(&ringbuf, sizeof(*sum), 0);
+			if (!sum)
+				break;
+			*sum = 0;
+		}
+		*sum += vals[i];
+	}
+	if (sum)
+		bpf_ringbuf_submit(sum, 0);
+	return 0;
+}
+
+/*
  * r6 is a pointer to ringbuf memory with a step of 1. bpf_ringbuf_discard() in the first iteration
  * makes a number of it. The offsets 0..1 of the pointer are not the range of this number: it's an
  * address. The flag in the 32-bit spill is not widened, so the second iteration is verified
