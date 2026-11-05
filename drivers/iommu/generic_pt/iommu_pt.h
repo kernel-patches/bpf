@@ -83,8 +83,13 @@ static void gather_range_pending(struct iommupt_pending_gather *pending,
 	 * For NO_GAPS the user gets to pick if flushing all or doing micro
 	 * flushes is better for their work load by choosing DMA vs DMA-FQ
 	 * operation. Drivers should also see shadow_on_flush.
+	 *
+	 * A zero length unmap (len == 0) means nothing was unmapped and must
+	 * not create a gather range: iova + len - 1 wraps around, and at IOVA 0
+	 * the resulting degenerate range [0, ULONG_MAX] would turn into a full
+	 * IOTLB flush.
 	 */
-	if (!iommu_iotlb_gather_queued(iotlb_gather)) {
+	if (len && !iommu_iotlb_gather_queued(iotlb_gather)) {
 		if (pt_feature(common, PT_FEAT_FLUSH_RANGE_NO_GAPS) &&
 		    iommu_iotlb_gather_is_disjoint(iotlb_gather, iova, len)) {
 			iommu_iotlb_sync(&iommu_table->domain, iotlb_gather);
