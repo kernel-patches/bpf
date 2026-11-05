@@ -38,7 +38,6 @@ test_cpp
 *.tmp
 xdp_redirect_multi
 xdp_synproxy
-xdp_hw_metadata
 xdp_features
 verification_cert.h
 *.BTF

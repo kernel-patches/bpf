@@ -228,6 +228,15 @@ TEST_GEN_PROGS += $(YNL_GEN_PROGS)
 
 TEST_GEN_FILES += $(patsubst %.c,%.o,$(wildcard *.bpf.c))
 
+# xdp_hw_metadata needs a working bpftool to generate its skeleton
+BPFTOOL ?= bpftool
+HAS_BPFTOOL := $(shell $(BPFTOOL) version >/dev/null 2>&1 && echo y)
+ifeq ($(HAS_BPFTOOL),y)
+TEST_GEN_FILES += xdp_hw_metadata
+else
+$(warning excluding xdp_hw_metadata, bpftool not installed or not working)
+endif
+
 TEST_INCLUDES := forwarding/lib.sh
 
 include ../lib.mk
@@ -251,3 +260,12 @@ $(OUTPUT)/bind_bhash: LDLIBS += -lpthread
 $(OUTPUT)/io_uring_zerocopy_tx: CFLAGS += -I../../../include/
 
 include bpf.mk
+
+# Reference tool for checking XDP RX/TX metadata on real HW, built with
+# the AF_XDP library of net/lib/xsk.
+$(OUTPUT)/xdp_hw_metadata: xdp_hw_metadata.c xdp_metadata.h lib/xsk/xsk.c \
+			   lib/xsk/xsk.h $(OUTPUT)/xdp_hw_metadata.skel.h $(BPFOBJ)
+	$(call msg,CC,,$@)
+	$(Q)$(CC) -I$(top_srcdir)/tools/include $(CFLAGS) -I$(OUTPUT) \
+		-I$(SCRATCH_DIR)/include \
+		$(filter %.c,$^) $(BPFOBJ) $(LDLIBS) -lelf -lz -o $@
