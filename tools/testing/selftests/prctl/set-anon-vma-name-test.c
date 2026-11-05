@@ -93,6 +93,9 @@ FIXTURE_SETUP(vma) {
 					MAP_PRIVATE, self->fd_not_anon, 0);
 	ASSERT_NE(self->ptr_not_anon, MAP_FAILED);
 	close(self->fd_not_anon);
+
+	if (rename_vma((unsigned long)self->ptr_anon, AREA_SIZE, NULL) == -EINVAL)
+		SKIP(return, "PR_SET_VMA_ANON_NAME is not supported");
 }
 
 FIXTURE_TEARDOWN(vma) {
