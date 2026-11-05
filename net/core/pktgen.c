@@ -476,16 +476,13 @@ struct pktgen_thread {
 	struct pktgen_net *net;
 };
 
-#define REMOVE 1
-#define FIND   0
-
 static const char version[] =
 	"Packet Generator for packet performance testing. Version: " VERSION "\n";
 
 static int pktgen_remove_device(struct pktgen_thread *t, struct pktgen_dev *i);
 static int pktgen_add_device(struct pktgen_thread *t, const char *ifname);
 static struct pktgen_dev *pktgen_find_dev(struct pktgen_thread *t,
-					  const char *ifname, bool exact);
+					  const char *ifname);
 static int pktgen_device_event(struct notifier_block *, unsigned long, void *);
 static void pktgen_run_all_threads(struct pktgen_net *pn);
 static void pktgen_reset_all_threads(struct pktgen_net *pn);
@@ -2026,24 +2023,37 @@ static const struct proc_ops pktgen_thread_proc_ops = {
 };
 
 /* Think find or remove for NN */
-static bool __pktgen_NN_threads(const struct pktgen_net *pn,
-				const char *ifname, int remove)
+/* a device added under this name, on any thread */
+static bool pktgen_name_in_use(const struct pktgen_net *pn, const char *ifname)
+{
+	struct pktgen_thread *t;
+
+	list_for_each_entry(t, &pn->pktgen_threads, th_list)
+		if (pktgen_find_dev(t, ifname))
+			return true;
+	return false;
+}
+
+/* mark every use of @dev for removal, on any thread */
+static bool pktgen_mark_dev(const struct pktgen_net *pn,
+			    const struct net_device *dev)
 {
 	struct pktgen_thread *t;
 	struct pktgen_dev *pkt_dev;
-	bool exact = (remove == FIND);
+	bool marked = false;
 
 	list_for_each_entry(t, &pn->pktgen_threads, th_list) {
-		pkt_dev = pktgen_find_dev(t, ifname, exact);
-		if (pkt_dev) {
-			if (remove) {
-				pkt_dev->removal_mark = 1;
-				t->control |= T_REMDEV;
-			}
-			return true;
+		rcu_read_lock();
+		list_for_each_entry_rcu(pkt_dev, &t->if_list, list) {
+			if (pkt_dev->odev != dev)
+				continue;
+			pkt_dev->removal_mark = 1;
+			t->control |= T_REMDEV;
+			marked = true;
 		}
+		rcu_read_unlock();
 	}
-	return false;
+	return marked;
 }
 
 /*
@@ -2077,28 +2087,29 @@ static bool pktgen_proc_name_taken(const struct pktgen_net *pn,
 /*
  * mark a device for removal
  */
-static void pktgen_mark_device(const struct pktgen_net *pn, const char *ifname)
+static void pktgen_mark_device(const struct pktgen_net *pn,
+			       const struct net_device *dev)
 {
 	const int max_tries = 10, msec_per_try = 125;
 	int i = 0;
 
 	mutex_lock(&pktgen_thread_lock);
-	pr_debug("%s: marking %s for removal\n", __func__, ifname);
+	pr_debug("%s: marking %s for removal\n", __func__, dev->name);
 
 	while (1) {
 
-		if (!__pktgen_NN_threads(pn, ifname, REMOVE))
+		if (!pktgen_mark_dev(pn, dev))
 			break;	/* success */
 
 		mutex_unlock(&pktgen_thread_lock);
 		pr_debug("%s: waiting for %s to disappear....\n",
-			 __func__, ifname);
+			 __func__, dev->name);
 		schedule_timeout_interruptible(msecs_to_jiffies(msec_per_try));
 		mutex_lock(&pktgen_thread_lock);
 
 		if (++i >= max_tries) {
 			pr_err("%s: timed out after waiting %d msec for device %s to be removed\n",
-			       __func__, msec_per_try * i, ifname);
+			       __func__, msec_per_try * i, dev->name);
 			break;
 		}
 
@@ -2165,7 +2176,7 @@ static int pktgen_device_event(struct notifier_block *unused,
 		break;
 
 	case NETDEV_UNREGISTER:
-		pktgen_mark_device(pn, dev->name);
+		pktgen_mark_device(pn, dev);
 		break;
 	}
 
@@ -3808,18 +3819,13 @@ static int pktgen_thread_worker(void *arg)
 }
 
 static struct pktgen_dev *pktgen_find_dev(struct pktgen_thread *t,
-					  const char *ifname, bool exact)
+					  const char *ifname)
 {
 	struct pktgen_dev *p, *pkt_dev = NULL;
-	size_t len = strlen(ifname);
 
 	rcu_read_lock();
 	list_for_each_entry_rcu(p, &t->if_list, list)
-		if (strncmp(p->odevname, ifname, len) == 0) {
-			if (p->odevname[len]) {
-				if (exact || p->odevname[len] != '@')
-					continue;
-			}
+		if (!strcmp(p->odevname, ifname)) {
 			pkt_dev = p;
 			break;
 		}
@@ -3876,7 +3882,7 @@ static int pktgen_add_device(struct pktgen_thread *t, const char *ifname)
 
 	/* We don't allow a device to be on several threads */
 
-	if (__pktgen_NN_threads(t->net, ifname, FIND)) {
+	if (pktgen_name_in_use(t->net, ifname)) {
 		pr_err("ERROR: interface already used\n");
 		return -EBUSY;
 	}
