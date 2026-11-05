@@ -146,6 +146,9 @@ fedora_pkg_for() {
 	zlib)
 		echo "zlib-devel"
 		;;
+	zlib-rs)
+		echo "cargo rust-libz-rs-sys-devel"
+		;;
 	lzma)
 		echo "xz-devel"
 		;;
@@ -304,6 +307,9 @@ debian_pkg_for() {
 		;;
 	zlib)
 		echo "zlib1g-dev"
+		;;
+	zlib-rs)
+		echo "cargo librust-libz-rs-sys-dev"
 		;;
 	lzma)
 		echo "liblzma-dev"
