@@ -1820,7 +1820,14 @@ static void in_intr(struct virtqueue *vq)
 
 	wake_up_interruptible(&port->waitqueue);
 
-	if (is_console_port(port) && hvc_poll(port->cons.hvc))
+	/*
+	 * Leave HVC polling to the khvcd thread: it walks its adapter list
+	 * under hvc_structs_mutex, which also serializes adapter
+	 * destruction, so it cannot poll a removed adapter.  Do not touch
+	 * the adapter here: hvc_remove() can free it concurrently during
+	 * port unplug and this callback holds no reference to it.
+	 */
+	if (!IS_ERR_OR_NULL(READ_ONCE(port->cons.hvc)))
 		hvc_kick();
 
 	kref_put(&port->kref, remove_port);
