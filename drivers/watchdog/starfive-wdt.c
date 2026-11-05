@@ -344,7 +344,7 @@ exit:
 	return ret;
 }
 
-static int starfive_wdt_start(struct starfive_wdt *wdt)
+static int starfive_wdt_start(struct starfive_wdt *wdt, u32 count)
 {
 	int ret;
 
@@ -357,7 +357,9 @@ static int starfive_wdt_start(struct starfive_wdt *wdt)
 	if (ret)
 		goto exit;
 
-	starfive_wdt_set_count(wdt, wdt->count);
+	starfive_wdt_set_reload_count(wdt, count);
+	if (count != wdt->count)
+		starfive_wdt_set_count(wdt, wdt->count);
 	starfive_wdt_enable(wdt);
 
 exit:
@@ -381,7 +383,7 @@ static int starfive_wdt_pm_start(struct watchdog_device *wdd)
 	if (ret < 0)
 		return ret;
 
-	ret = starfive_wdt_start(wdt);
+	ret = starfive_wdt_start(wdt, wdt->count);
 	if (ret)
 		pm_runtime_put_sync(wdd->parent);
 
@@ -412,11 +414,13 @@ static int starfive_wdt_set_timeout(struct watchdog_device *wdd,
 	wdt->count = count;
 	wdd->timeout = timeout;
 
-	starfive_wdt_unlock(wdt);
-	starfive_wdt_disable(wdt);
-	starfive_wdt_set_reload_count(wdt, wdt->count);
-	starfive_wdt_enable(wdt);
-	starfive_wdt_lock(wdt);
+	if (watchdog_hw_running(wdd)) {
+		starfive_wdt_unlock(wdt);
+		starfive_wdt_disable(wdt);
+		starfive_wdt_set_reload_count(wdt, wdt->count);
+		starfive_wdt_enable(wdt);
+		starfive_wdt_lock(wdt);
+	}
 
 	return 0;
 }
@@ -497,7 +501,7 @@ static int starfive_wdt_probe(struct platform_device *pdev)
 	watchdog_stop_ping_on_suspend(&wdt->wdd);
 
 	if (early_enable) {
-		ret = starfive_wdt_start(wdt);
+		ret = starfive_wdt_start(wdt, wdt->count);
 		if (ret)
 			goto err_exit;
 		set_bit(WDOG_HW_RUNNING, &wdt->wdd.status);
@@ -575,14 +579,8 @@ static int starfive_wdt_resume(struct device *dev)
 	if (ret)
 		return ret;
 
-	if (watchdog_hw_running(&wdt->wdd)) {
-		starfive_wdt_unlock(wdt);
-		/* Restore watchdog state. */
-		starfive_wdt_set_reload_count(wdt, wdt->reload);
-		starfive_wdt_lock(wdt);
-
-		return starfive_wdt_start(wdt);
-	}
+	if (watchdog_hw_running(&wdt->wdd))
+		return starfive_wdt_start(wdt, wdt->reload);
 
 	return 0;
 }
