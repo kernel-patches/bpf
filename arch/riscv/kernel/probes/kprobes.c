@@ -12,6 +12,7 @@
 #include <asm/sections.h>
 #include <asm/cacheflush.h>
 #include <asm/bug.h>
+#include <asm/insn.h>
 #include <asm/text-patching.h>
 
 #include "decode-insn.h"
@@ -49,9 +50,17 @@ static void __kprobes arch_simulate_insn(struct kprobe *p, struct pt_regs *regs)
 	post_kprobe_handler(p, kcb, regs);
 }
 
+/*
+ * Walk the instructions from the enclosing symbol up to addr. This checks
+ * that addr is an instruction boundary and that it does not lie inside an
+ * LR/SC sequence: the breakpoint trap drops the reservation, so the SC
+ * would fail and the loop would hit the probe again on every retry.
+ */
 static bool __kprobes arch_check_kprobe(unsigned long addr)
 {
 	unsigned long tmp, offset;
+	bool in_lrsc = false;
+	u32 insn;
 
 	/* start iterating at the closest preceding symbol */
 	if (!kallsyms_lookup_size_offset(addr, NULL, &offset))
@@ -61,9 +70,18 @@ static bool __kprobes arch_check_kprobe(unsigned long addr)
 
 	while (tmp <= addr) {
 		if (tmp == addr)
-			return true;
+			return !in_lrsc;
 
-		tmp += GET_INSN_LENGTH(*(u16 *)tmp);
+		insn = *(u16 *)tmp;
+		if (GET_INSN_LENGTH(insn) == 4) {
+			insn |= (u32)*(u16 *)(tmp + 2) << 16;
+			if (riscv_insn_is_lr(insn))
+				in_lrsc = true;
+			else if (riscv_insn_is_sc(insn))
+				in_lrsc = false;
+		}
+
+		tmp += GET_INSN_LENGTH(insn);
 	}
 
 	return false;
