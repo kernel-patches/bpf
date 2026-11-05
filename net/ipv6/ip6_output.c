@@ -662,6 +662,23 @@ int ip6_forward(struct sk_buff *skb)
 
 	__IP6_INC_STATS(net, ip6_dst_idev(dst), IPSTATS_MIB_OUTFORWDATAGRAMS);
 
+	if (skb_is_gso(skb)) {
+		if (skb->ip_summed == CHECKSUM_PARTIAL && !skb->encapsulation) {
+			skb_set_transport_header(skb,
+						 skb_checksum_start_offset(skb));
+		} else if (ipv6_ext_hdr(hdr->nexthdr)) {
+			u8 nexthdr = hdr->nexthdr;
+			__be16 frag_off;
+			int thoff;
+
+			thoff = ipv6_skip_exthdr(skb, skb_network_offset(skb) +
+						 sizeof(*hdr), &nexthdr,
+						 &frag_off);
+			if (thoff >= 0)
+				skb_set_transport_header(skb, thoff);
+		}
+	}
+
 	mtu = ip6_dst_mtu_maybe_forward(dst, true);
 	if (mtu < IPV6_MIN_MTU)
 		mtu = IPV6_MIN_MTU;
