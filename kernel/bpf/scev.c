@@ -1676,6 +1676,20 @@ static int compute_header_scevs(struct bpf_verifier_env *env, struct env *header
 	}
 	return 0;
 }
+
+/* Find the registers and stack slots that get a constant added in every iteration of the loop */
+static void scev_compute_linear_regs(struct scev *scev, struct bpf_loop *loop,
+				     struct env *header_env)
+{
+	u32 r, same, base, slope;
+	bool zext32;
+
+	for (r = 0; r < REGS_NUM; r++)
+		if (is_linear_or_linear32(scev, header_env->reg2scev[r], &base, &slope, &zext32) &&
+		    is_reg(scev, base, &same) && same == r)
+			__set_bit(r, zext32 ? loop->linear32_regs : loop->linear_regs);
+}
+
 static int instantiate_header_scevs(struct scev *scev, u32 id, void *priv)
 {
 	u32 reg, *reg2scev = priv;
@@ -1784,6 +1798,9 @@ int bpf_compute_scev(struct bpf_verifier_env *env)
 					   find_loop_env(scev, header, idx));
 		if (err)
 			return err;
+		if (aux[idx].loop)
+			scev_compute_linear_regs(scev, aux[idx].loop,
+						 find_header_env(scev, header));
 	}
 
 	for (i = 0; i < env->prog->len; i++)

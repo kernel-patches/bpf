@@ -760,6 +760,9 @@ struct bpf_loop {
 	 * loops.
 	 */
 	unsigned long store_base_regs[BITS_TO_LONGS(BPF_SCEV_REGS_NUM)];
+	/* what gets a constant added in every iteration, in 64 and in 32 bits */
+	unsigned long linear_regs[BITS_TO_LONGS(BPF_SCEV_REGS_NUM)];
+	unsigned long linear32_regs[BITS_TO_LONGS(BPF_SCEV_REGS_NUM)];
 };
 
 struct bpf_insn_aux_data {
