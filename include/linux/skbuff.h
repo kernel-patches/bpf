@@ -1059,7 +1059,7 @@ struct sk_buff {
 			__u16	vlan_tci;
 		};
 	};
-#if defined(CONFIG_NET_RX_BUSY_POLL) || defined(CONFIG_XPS)
+#if defined(CONFIG_SKB_MARK_NAPI_ID) || defined(CONFIG_XPS)
 	union {
 		unsigned int	napi_id;
 		unsigned int	sender_cpu;
@@ -1267,7 +1267,7 @@ static inline bool skb_pkt_type_ok(u32 ptype)
  */
 static inline unsigned int skb_napi_id(const struct sk_buff *skb)
 {
-#ifdef CONFIG_NET_RX_BUSY_POLL
+#ifdef CONFIG_SKB_MARK_NAPI_ID
 	return skb->napi_id;
 #else
 	return 0;

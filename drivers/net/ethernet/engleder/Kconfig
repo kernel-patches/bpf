@@ -22,6 +22,7 @@ config TSNEP
 	depends on PTP_1588_CLOCK_OPTIONAL
 	select PHYLIB
 	select PAGE_POOL
+	select SKB_MARK_NAPI_ID
 	help
 	  Support for the Engleder TSN endpoint Ethernet MAC IP Core.
 

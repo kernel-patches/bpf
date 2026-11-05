@@ -130,7 +130,7 @@ static inline void sk_busy_loop(struct sock *sk, int nonblock)
 static inline void __skb_mark_napi_id(struct sk_buff *skb,
 				      const struct gro_node *gro)
 {
-#ifdef CONFIG_NET_RX_BUSY_POLL
+#ifdef CONFIG_SKB_MARK_NAPI_ID
 	/* If the skb was already marked with a valid NAPI ID, avoid overwriting
 	 * it.
 	 */
