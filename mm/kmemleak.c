@@ -2532,12 +2532,13 @@ static void kmemleak_do_cleanup(struct work_struct *work)
 	 * function.
 	 */
 	kmemleak_free_enabled = 0;
-	mutex_unlock(&scan_mutex);
 
+	/* Serialize the lockless cleanup with report readers. */
 	if (!kmemleak_found_leaks)
 		__kmemleak_do_cleanup();
 	else
 		pr_info("Kmemleak disabled without freeing internal data. Reclaim the memory with \"echo clear > /sys/kernel/debug/kmemleak\".\n");
+	mutex_unlock(&scan_mutex);
 }
 
 static DECLARE_WORK(cleanup_work, kmemleak_do_cleanup);
