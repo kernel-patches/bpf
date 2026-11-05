@@ -745,8 +745,15 @@ static void emac_full_tx_reset(struct emac_instance *dev)
 
 	emac_tx_disable(dev);
 	mal_disable_tx_channel(dev->mal, dev->mal_tx_chan);
+
+	/* MAL NAPI runs emac_poll_tx() even while polling of this EMAC is
+	 * disabled. A cleaned descriptor reads as completed, so clean the
+	 * ring under the TX lock or emac_poll_tx() frees the skbs again.
+	 */
+	netif_tx_lock_bh(dev->ndev);
 	emac_clean_tx_ring(dev);
 	dev->tx_cnt = dev->tx_slot = dev->ack_slot = 0;
+	netif_tx_unlock_bh(dev->ndev);
 
 	emac_configure(dev);
 
