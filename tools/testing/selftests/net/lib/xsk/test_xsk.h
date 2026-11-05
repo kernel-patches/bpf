@@ -5,7 +5,7 @@
 #include <linux/ethtool.h>
 #include <linux/if_xdp.h>
 
-#include "../kselftest.h"
+#include "kselftest.h"
 #include "xsk.h"
 
 #ifndef SO_PREFER_BUSY_POLL
