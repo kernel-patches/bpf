@@ -960,12 +960,13 @@ static int recover_orphan_inode(struct f2fs_sb_info *sbi, nid_t ino)
 
 	inode = f2fs_iget_retry(sbi->sb, ino);
 	if (IS_ERR(inode)) {
-		/*
-		 * there should be a bug that we can't find the entry
-		 * to orphan inode.
-		 */
-		f2fs_bug_on(sbi, PTR_ERR(inode) == -ENOENT);
-		return PTR_ERR(inode);
+		if (PTR_ERR(inode) != -ENOENT)
+			return PTR_ERR(inode);
+		/* The orphan area lists an inode that does not exist. */
+		f2fs_err(sbi, "orphan inode %u does not exist", ino);
+		set_sbi_flag(sbi, SBI_NEED_FSCK);
+		f2fs_handle_error(sbi, ERROR_INCONSISTENT_ORPHAN);
+		return -EFSCORRUPTED;
 	}
 
 	err = f2fs_dquot_initialize(inode);
