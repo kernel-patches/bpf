@@ -731,9 +731,8 @@
 					     <GIC_SPI 130 IRQ_TYPE_LEVEL_HIGH>;
 				interrupt-controller;
 				#interrupt-cells = <2>;
-				clocks = <&pcc4 IMX8ULP_CLK_RGPIOE>,
-					 <&pcc4 IMX8ULP_CLK_PCTLE>;
-				clock-names = "gpio", "port";
+				clocks = <&pcc4 IMX8ULP_CLK_RGPIOE>;
+				clock-names = "gpio";
 				gpio-ranges = <&iomuxc1 0 32 24>;
 				ngpios = <24>;
 		};
@@ -747,9 +746,8 @@
 					     <GIC_SPI 132 IRQ_TYPE_LEVEL_HIGH>;
 				interrupt-controller;
 				#interrupt-cells = <2>;
-				clocks = <&pcc4 IMX8ULP_CLK_RGPIOF>,
-					 <&pcc4 IMX8ULP_CLK_PCTLF>;
-				clock-names = "gpio", "port";
+				clocks = <&pcc4 IMX8ULP_CLK_RGPIOF>;
+				clock-names = "gpio";
 				gpio-ranges = <&iomuxc1 0 64 32>;
 				ngpios = <32>;
 		};
@@ -986,9 +984,8 @@
 				     <GIC_SPI 128 IRQ_TYPE_LEVEL_HIGH>;
 			interrupt-controller;
 			#interrupt-cells = <2>;
-			clocks = <&pcc5 IMX8ULP_CLK_RGPIOD>,
-				 <&pcc5 IMX8ULP_CLK_RGPIOD>;
-			clock-names = "gpio", "port";
+			clocks = <&pcc5 IMX8ULP_CLK_RGPIOD>;
+			clock-names = "gpio";
 			gpio-ranges = <&iomuxc1 0 0 24>;
 			ngpios = <24>;
 		};
