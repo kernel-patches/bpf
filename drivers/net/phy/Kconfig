@@ -505,4 +505,15 @@ config XILINX_GMII2RGMII
 	  the Reduced Gigabit Media Independent Interface(RGMII) between
 	  Ethernet physical media devices and the Gigabit Ethernet controller.
 
+config ZTE_ZX279128S_PHY
+	tristate "ZTE ZX279128S internal Gigabit PHY"
+	help
+	  Support for the four Gigabit Ethernet PHYs integrated in the ZTE
+	  ZX279128S SoC (PHY ID 0x84b95031), found in the ZTE ZXHN H3600
+	  router. The driver powers the PHY's LDO and enables the copper
+	  TX DAC drive, without which the PHYs link but do not transmit.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called zte-zx279128s.
+
 endif # PHYLIB
