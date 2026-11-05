@@ -36,6 +36,12 @@ Again this is to simulate what is actually on disk, this allows us to detect
 cases where a power failure at a particular point in time would create an
 inconsistent file system.
 
+If a later REQ_PREFLUSH request completes while an earlier one is still in
+flight, the WRITEs attached to the earlier request are logged then, ahead of the
+later request's own WRITEs. They completed before the later REQ_PREFLUSH was
+issued, so they are on disk as well. The earlier FLUSH is logged when it
+completes.
+
 Any REQ_FUA requests bypass this flushing mechanism and are logged as soon as
 they complete as those requests will obviously bypass the device cache.
 
