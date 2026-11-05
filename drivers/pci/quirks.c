@@ -5132,6 +5132,21 @@ static bool pci_quirk_intel_spt_pch_acs_match(struct pci_dev *dev)
 
 #define INTEL_SPT_ACS_CTRL (PCI_ACS_CAP + 4)
 
+int pci_dev_specific_read_acs_ctrl(struct pci_dev *dev, u16 *ctrl)
+{
+	u32 val = ~0;
+	int ret;
+
+	if (dev->vendor != PCI_VENDOR_ID_INTEL || !dev->acs_cap ||
+	    !pci_quirk_intel_spt_pch_acs_match(dev))
+		return -ENOTTY;
+
+	ret = pci_read_config_dword(dev, dev->acs_cap + INTEL_SPT_ACS_CTRL,
+				   &val);
+	*ctrl = val;
+	return ret;
+}
+
 static int pci_quirk_intel_spt_pch_acs(struct pci_dev *dev, u16 acs_flags)
 {
 	int pos;

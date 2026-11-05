@@ -1100,12 +1100,18 @@ resource_size_t pci_min_window_alignment(struct pci_bus *bus,
 void pci_acs_init(struct pci_dev *dev);
 void pci_enable_acs(struct pci_dev *dev);
 #ifdef CONFIG_PCI_QUIRKS
+int pci_dev_specific_read_acs_ctrl(struct pci_dev *dev, u16 *ctrl);
 int pci_dev_specific_acs_enabled(struct pci_dev *dev, u16 acs_flags);
 int pci_dev_specific_enable_acs(struct pci_dev *dev);
 int pci_dev_specific_disable_acs_redir(struct pci_dev *dev);
 void pci_disable_broken_acs_cap(struct pci_dev *pdev);
 int pcie_failed_link_retrain(struct pci_dev *dev);
 #else
+static inline int pci_dev_specific_read_acs_ctrl(struct pci_dev *dev, u16 *ctrl)
+{
+	return -ENOTTY;
+}
+
 static inline int pci_dev_specific_acs_enabled(struct pci_dev *dev,
 					       u16 acs_flags)
 {
