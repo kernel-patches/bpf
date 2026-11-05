@@ -517,8 +517,14 @@ static int starfive_wdt_probe(struct platform_device *pdev)
 
 err_unregister_wdt:
 	watchdog_unregister_device(&wdt->wdd);
+	goto err_disable_pm;
 err_exit:
-	starfive_wdt_disable_clock(wdt);
+	if (watchdog_hw_running(&wdt->wdd))
+		starfive_wdt_stop(wdt);
+	if (pm_runtime_enabled(&pdev->dev))
+		pm_runtime_put_sync(&pdev->dev);
+	else
+		starfive_wdt_disable_clock(wdt);
 err_disable_pm:
 	pm_runtime_disable(&pdev->dev);
 
@@ -531,8 +537,11 @@ static void starfive_wdt_remove(struct platform_device *pdev)
 
 	watchdog_unregister_device(&wdt->wdd);
 
-	if (watchdog_hw_running(&wdt->wdd))
+	if (watchdog_hw_running(&wdt->wdd)) {
 		starfive_wdt_stop(wdt);
+		if (pm_runtime_enabled(&pdev->dev))
+			pm_runtime_put_sync(&pdev->dev);
+	}
 
 	if (pm_runtime_enabled(&pdev->dev))
 		pm_runtime_disable(&pdev->dev);
