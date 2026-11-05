@@ -18,6 +18,7 @@ ALL_TESTS="
 	test_pin_state_transitions
 	test_pin_priority_get_set
 	test_pin_frequency_set_get
+	test_pin_phase_adjust_set_get
 "
 
 ##############################################################################
@@ -164,6 +165,90 @@ test_pin_state_transitions()
 	fi
 
 	log_test "DPLL pin state transitions"
+}
+
+test_pin_phase_adjust_set_get()
+{
+	local before target after json min max gran reason
+
+	RET=0
+
+	if [ -z "$PIN_TUNE_ID" ]; then
+		dpll_log_test_skip_or_fail "DPLL pin phase-adjust set/get" \
+		    "no spare input pin"
+		return
+	fi
+	if ! dpll_pin_set_supports phase-adjust; then
+		log_test_skip "DPLL pin phase-adjust set/get" \
+		    "dpll tool lacks pin set phase-adjust"
+		return
+	fi
+
+	before=$(dpll_pin_get_phase_adjust "$PIN_TUNE_ID")
+	if [ -z "$before" ]; then
+		dpll_log_test_skip_or_fail "DPLL pin phase-adjust set/get" \
+		    "phase adjust not reported"
+		return
+	fi
+
+	# Pick a target inside the advertised range different from the
+	# current value, a multiple of the granularity, which is taken as 1
+	# when the driver reports none.
+	json=$(dpll_pin_json "$PIN_TUNE_ID")
+	min=$(jq -r '.["phase-adjust-min"] // empty' <<< "$json")
+	max=$(jq -r '.["phase-adjust-max"] // empty' <<< "$json")
+	gran=$(jq -r '.["phase-adjust-gran"] // empty' <<< "$json")
+	if [ -z "$min" ] || [ -z "$max" ]; then
+		dpll_log_test_skip_or_fail "DPLL pin phase-adjust set/get" \
+		    "no adjust range"
+		return
+	fi
+	# A current value that is not a granularity multiple could not be
+	# written back, so bail out before the restore is scheduled.
+	if [ -n "$gran" ] && [ $((before % gran)) -ne 0 ]; then
+		dpll_log_test_skip_or_fail "DPLL pin phase-adjust set/get" \
+		    "current phase adjust not a granularity multiple"
+		return
+	fi
+	[ -n "$gran" ] || gran=1
+	defer dpll_pin_set_phase_adjust "$PIN_TUNE_ID" "$before"
+
+	# Shell division truncates towards zero, so round the bounds towards
+	# the inside of the range explicitly, which matters for negative ones.
+	target=$((max / gran * gran))
+	[ "$target" -gt "$max" ] && target=$((target - gran))
+	if [ "$target" = "$before" ]; then
+		target=$((min / gran * gran))
+		[ "$target" -lt "$min" ] && target=$((target + gran))
+	fi
+	if [ "$target" = "$before" ] || [ "$target" -gt "$max" ] ||
+	   [ "$target" -lt "$min" ]; then
+		log_test_skip "DPLL pin phase-adjust set/get" "range too narrow"
+		return
+	fi
+
+	# A driver may enforce a granularity it does not report or another
+	# constraint, a skip on a device the user provided, the simulator
+	# accepts every value its range and granularity allow.
+	if ! dpll_pin_set_phase_adjust "$PIN_TUNE_ID" "$target"; then
+		reason=${DPLL_LAST_ERR%%$'\n'*}
+		dpll_log_test_skip_or_fail "DPLL pin phase-adjust set/get" \
+		    "cannot set phase-adjust=$target${reason:+, $reason}"
+		return
+	fi
+	after=$(dpll_pin_get_phase_adjust "$PIN_TUNE_ID")
+	if [ "$after" != "$target" ]; then
+		check_err 1 "phase-adjust expected $target, got '$after'"
+	fi
+
+	dpll_pin_set_phase_adjust "$PIN_TUNE_ID" "$before"
+	check_err $? "cannot restore phase-adjust"
+	after=$(dpll_pin_get_phase_adjust "$PIN_TUNE_ID")
+	if [ "$after" != "$before" ]; then
+		check_err 1 "phase-adjust not restored, got '$after'"
+	fi
+
+	log_test "DPLL pin phase-adjust set/get"
 }
 
 test_pin_frequency_set_get()
