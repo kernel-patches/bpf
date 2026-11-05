@@ -1335,6 +1335,60 @@ void ktime_get_snapshot_id(clockid_t clock_id, struct system_time_snapshot *syst
 }
 EXPORT_SYMBOL_GPL(ktime_get_snapshot_id);
 
+/**
+ * ktime_scale_raw_ns - Scale a monotonic raw duration by a clock's frequency
+ * @clock_id:	The clock ID whose frequency to scale by
+ * @ns:		Duration in nanoseconds of the monotonic raw clock related
+ *		to @clock_id
+ *
+ * Multiply a duration measured in monotonic raw time by the current
+ * frequency of @clock_id relative to monotonic raw.
+ *
+ * Return: @ns scaled by the frequency of @clock_id relative to monotonic
+ * raw. @ns unchanged for CLOCK_MONOTONIC_RAW, or if @clock_id is an AUX
+ * clock that is not enabled.
+ */
+u64 ktime_scale_raw_ns(clockid_t clock_id, u64 ns)
+{
+	u32 mult_sys, mult_raw;
+	struct timekeeper *tk;
+	struct tk_data *tkd;
+	unsigned int seq;
+
+	switch (clock_id) {
+	case CLOCK_REALTIME:
+	case CLOCK_MONOTONIC:
+	case CLOCK_BOOTTIME:
+		tkd = &tk_core;
+		break;
+	case CLOCK_MONOTONIC_RAW:
+		return ns;
+	case CLOCK_AUX ... CLOCK_AUX_LAST:
+		tkd = aux_get_tk_data(clock_id);
+		if (!tkd)
+			return ns;
+		break;
+	default:
+		WARN_ON_ONCE(1);
+		return ns;
+	}
+
+	tk = &tkd->timekeeper;
+
+	do {
+		seq = read_seqcount_begin(&tkd->seq);
+
+		if (!tk->clock_valid)
+			return ns;
+
+		mult_sys = tk->tkr_mono.mult;
+		mult_raw = tk->tkr_raw.mult;
+	} while (read_seqcount_retry(&tkd->seq, seq));
+
+	return mul_u64_u32_div(ns, mult_sys, mult_raw);
+}
+EXPORT_SYMBOL_GPL(ktime_scale_raw_ns);
+
 /* Scale base by mult/div checking for overflow */
 static int scale64_check_overflow(u64 mult, u64 div, u64 *base)
 {
