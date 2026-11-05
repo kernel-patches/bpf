@@ -6,6 +6,7 @@
 #ifndef __MTK_CTRL_PLANE_H__
 #define __MTK_CTRL_PLANE_H__
 
+#include <linux/kref.h>
 #include <linux/skbuff.h>
 
 #include "mtk_dev.h"
@@ -46,6 +47,11 @@ struct trb {
 	u32 channel_id;
 	enum mtk_trb_cmd_type cmd;
 	int status;
+	/* Store-release by the completion callback, load-acquire by the
+	 * waiter: seeing it set means seeing everything the callback wrote.
+	 */
+	bool done;
+	struct kref kref;
 	void *priv;
 	int (*trb_complete)(struct sk_buff *skb);
 };
@@ -56,12 +62,16 @@ union ctrl_hif_cmd_data {
 	u32 rx_ch;
 };
 
+struct mtk_port_layer_cfg;
+struct mtk_port_mngr;
+
 struct mtk_ctrl_blk {
 	struct mtk_md_dev *mdev;
+	struct mtk_port_mngr *port_mngr;
 	void *ctrl_hw_priv;
 };
 
-int mtk_ctrl_init(struct mtk_md_dev *mdev);
+int mtk_ctrl_init(struct mtk_md_dev *mdev, struct mtk_port_layer_cfg *port_layer_cfg);
 void mtk_ctrl_exit(struct mtk_md_dev *mdev);
 
 #endif /* __MTK_CTRL_PLANE_H__ */
