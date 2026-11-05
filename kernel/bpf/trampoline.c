@@ -577,6 +577,8 @@ static void __bpf_tramp_image_put_deferred(struct work_struct *work)
 	bpf_trampoline_put(tr);
 }
 
+extern struct workqueue_struct *bpf_prog_free_wq __ro_after_init;
+
 /* callback, fexit step 3 or fentry step 2 */
 static void __bpf_tramp_image_put_rcu(struct rcu_head *rcu)
 {
@@ -584,7 +586,7 @@ static void __bpf_tramp_image_put_rcu(struct rcu_head *rcu)
 
 	im = container_of(rcu, struct bpf_tramp_image, rcu);
 	INIT_WORK(&im->work, __bpf_tramp_image_put_deferred);
-	schedule_work(&im->work);
+	queue_work(bpf_prog_free_wq, &im->work);
 }
 
 /* callback, fexit step 2. Called after percpu_ref_kill confirms. */

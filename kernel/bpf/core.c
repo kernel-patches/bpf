@@ -24,6 +24,7 @@
 #include <linux/skbuff.h>
 #include <linux/static_call.h>
 #include <linux/vmalloc.h>
+#include <linux/workqueue.h>
 #include <linux/prandom.h>
 #include <linux/bpf.h>
 #include <linux/btf.h>
@@ -3143,6 +3144,17 @@ static void bpf_free_used_btfs(struct bpf_prog_aux *aux)
 	kfree(aux->used_btfs);
 }
 
+struct workqueue_struct *bpf_prog_free_wq __ro_after_init;
+
+static int __init bpf_prog_free_wq_init(void)
+{
+	bpf_prog_free_wq = alloc_workqueue("bpf_prog_free", WQ_UNBOUND, 1);
+	if (!bpf_prog_free_wq)
+		panic("Failed to allocate BPF program free workqueue\n");
+	return 0;
+}
+early_initcall(bpf_prog_free_wq_init);
+
 static void bpf_prog_free_images(struct work_struct *work)
 {
 	struct bpf_prog_aux *aux;
@@ -3198,7 +3210,7 @@ static void bpf_prog_free_deferred(struct work_struct *work)
 	/* The symbols are looked up under rcu_read_lock() */
 	INIT_RCU_WORK(&aux->rwork, bpf_prog_free_images);
 	if (ksyms)
-		queue_rcu_work(system_percpu_wq, &aux->rwork);
+		queue_rcu_work(bpf_prog_free_wq, &aux->rwork);
 	else
 		bpf_prog_free_images(&aux->rwork.work);
 }
@@ -3211,7 +3223,12 @@ void bpf_prog_free(struct bpf_prog *fp)
 		bpf_prog_put(aux->dst_prog);
 	bpf_token_put(aux->token);
 	INIT_WORK(&aux->work, bpf_prog_free_deferred);
-	schedule_work(&aux->work);
+	/*
+	 * A pack_mutex holder may wait for vmalloc work on system_percpu_wq.
+	 * Keep program frees off that queue so mutex waiters cannot exhaust
+	 * the active slots needed by the vmalloc work.
+	 */
+	queue_work(bpf_prog_free_wq, &aux->work);
 }
 
 /* RNG for unprivileged user space with separated state from prandom_u32(). */
