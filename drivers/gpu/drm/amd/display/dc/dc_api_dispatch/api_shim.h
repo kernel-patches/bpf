@@ -3,7 +3,8 @@
  * Copyright 2026 Advanced Micro Devices, Inc.
  */
 
-#pragma once
+#ifndef DC_API_DISPATCH_API_SHIM_H_
+#define DC_API_DISPATCH_API_SHIM_H_
 
 #include "dc.h"
 #include "inc/dc_core_interface.h"
@@ -28,3 +29,5 @@ bool api_shim_update_state_supported(
 		const struct dc_update_scratch_space *scratch);
 void api_shim_update_state_execute(
 		const struct dc_update_scratch_space *scratch);
+
+#endif /* DC_API_DISPATCH_API_SHIM_H_ */

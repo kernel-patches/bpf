@@ -3,7 +3,8 @@
  * Copyright 2026 Advanced Micro Devices, Inc.
  */
 
-#pragma once
+#ifndef DC_CORE_INTERFACE_H_
+#define DC_CORE_INTERFACE_H_
 
 #include "core_status.h"
 
@@ -41,3 +42,5 @@ void legacy_hardware_release(struct dc *dc);
 enum dc_status legacy_commit_state_hw(struct dc *dc, struct dc_state *context);
 void legacy_update_state_execute(const struct dc_update_scratch_space *scratch);
 const struct dc2_funcs *dc2_legacy_funcs(void);
+
+#endif /* DC_CORE_INTERFACE_H_ */
