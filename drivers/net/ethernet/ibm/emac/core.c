@@ -249,7 +249,7 @@ static void emac_rx_enable(struct emac_instance *dev)
 		if (unlikely(!(r & EMAC_MR0_RXI))) {
 			/* Wait if previous async disable is still in progress */
 			int n = dev->stop_timeout;
-			while (!(r = in_be32(&p->mr0) & EMAC_MR0_RXI) && n) {
+			while (!((r = in_be32(&p->mr0)) & EMAC_MR0_RXI) && n) {
 				udelay(1);
 				--n;
 			}
