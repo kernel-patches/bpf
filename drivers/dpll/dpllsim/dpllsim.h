@@ -9,10 +9,39 @@
 
 #include <linux/configfs.h>
 #include <linux/dpll.h>
+#include <linux/list.h>
 #include <linux/mutex.h>
+
+#define DPLLSIM_MAX_PINS			128
+
+struct dpllsim_dev;
+
+struct dpllsim_pin {
+	struct config_item item;
+	struct list_head list;
+	struct dpllsim_dev *dev;
+
+	/* Configuration, writable only until dpllsim_dev_frozen() */
+	enum dpll_pin_type type;
+	enum dpll_pin_direction direction;
+	u64 frequency;
+
+	/* Resolved at live=1 */
+	int idx;
+	struct dpll_pin *dpll_pin;
+	const struct dpll_pin_ops *ops;
+	dpll_tracker tracker;
+	bool registered;
+
+	/* Simulated state, guarded by dev->lock */
+	enum dpll_pin_state state;
+};
 
 struct dpllsim_dev {
 	struct config_group group;
+	struct config_group pins_group;
+	/* Pin items, guarded by the configfs subsystem mutex */
+	struct list_head pin_list;
 
 	/*
 	 * Set from the start of a live transition until the device is
@@ -27,6 +56,9 @@ struct dpllsim_dev {
 	 * the live attribute reports, see dpllsim_dev_live().
 	 */
 	bool registered;
+	/* Pins in registration order, valid while @dpll is set */
+	struct dpllsim_pin **pins;
+	int num_pins;
 
 	/* Guarded by the subsystem mutex */
 	u64 clock_id;
