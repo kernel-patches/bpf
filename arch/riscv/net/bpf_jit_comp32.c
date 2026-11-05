@@ -874,11 +874,67 @@ static int emit_load_r64(const s8 *dst, const s8 *src, s16 off,
 	return 0;
 }
 
-static int emit_bpf_atomic(s8 dst, const s8 *src, const s8 *rs,
-			   struct rv_jit_context *ctx,
-			   const struct bpf_insn *insn)
+/*
+ * Read-modify-write via lr/sc for kernels built without Zaamo. T0 holds
+ * the address. T1/T2 are not BPF registers; the address was copied out of
+ * lo(rd) before this is called, so clobbering T2 is fine.
+ */
+static int emit_bpf_atomic_lrsc(s8 dst, const s8 *rs, s32 imm,
+				struct rv_jit_context *ctx)
 {
-	s32 imm = insn->imm;
+	bool is_fetch = (imm & BPF_FETCH) || (imm == BPF_XCHG);
+	bool xchg = imm == BPF_XCHG;
+	u8 aq = is_fetch ? 1 : 0;
+	u8 rl = is_fetch ? 1 : 0;
+	u8 old = RV_REG_T1;
+	u8 tmp = RV_REG_T2;
+	int lr_off, jmp_off;
+	s32 op = xchg ? BPF_XCHG : imm & ~BPF_FETCH;
+
+	switch (op) {
+	case BPF_ADD:
+	case BPF_AND:
+	case BPF_OR:
+	case BPF_XOR:
+	case BPF_XCHG:
+		break;
+	default:
+		return -1;
+	}
+
+	lr_off = ctx->ninsns;
+	emit(rv_lr_w(old, 0, dst, aq, rl), ctx);
+
+	switch (op) {
+	case BPF_ADD:
+		emit(rv_add(tmp, old, lo(rs)), ctx);
+		break;
+	case BPF_AND:
+		emit(rv_and(tmp, old, lo(rs)), ctx);
+		break;
+	case BPF_OR:
+		emit(rv_or(tmp, old, lo(rs)), ctx);
+		break;
+	case BPF_XOR:
+		emit(rv_xor(tmp, old, lo(rs)), ctx);
+		break;
+	}
+
+	if (xchg)
+		emit(rv_sc_w(tmp, lo(rs), dst, aq, rl), ctx);
+	else
+		emit(rv_sc_w(tmp, tmp, dst, aq, rl), ctx);
+
+	jmp_off = ninsns_rvoff(lr_off - ctx->ninsns);
+	emit(rv_bne(tmp, RV_REG_ZERO, jmp_off >> 1), ctx);
+	if (is_fetch)
+		emit(rv_addi(lo(rs), old, 0), ctx);
+	return 0;
+}
+
+static int emit_bpf_atomic_amo(s8 dst, const s8 *rs, s32 imm,
+			       struct rv_jit_context *ctx)
+{
 	bool is_fetch = (imm & BPF_FETCH) || (imm == BPF_XCHG);
 	s8 fetch_reg = is_fetch ? lo(rs) : RV_REG_ZERO;
 	int aq = is_fetch ? 1 : 0;
@@ -907,6 +963,23 @@ static int emit_bpf_atomic(s8 dst, const s8 *src, const s8 *rs,
 	default:
 		return -1;
 	}
+	return 0;
+}
+
+static int emit_bpf_atomic(s8 dst, const s8 *src, const s8 *rs,
+			   struct rv_jit_context *ctx,
+			   const struct bpf_insn *insn)
+{
+	s32 imm = insn->imm;
+	bool is_fetch = (imm & BPF_FETCH) || (imm == BPF_XCHG);
+	int ret;
+
+	if (IS_ENABLED(CONFIG_RISCV_ISA_ZAAMO))
+		ret = emit_bpf_atomic_amo(dst, rs, imm, ctx);
+	else
+		ret = emit_bpf_atomic_lrsc(dst, rs, imm, ctx);
+	if (ret)
+		return ret;
 
 	if (is_fetch) {
 		emit(rv_addi(hi(rs), RV_REG_ZERO, 0), ctx);

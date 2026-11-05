@@ -622,6 +622,79 @@ static int emit_atomic_ld_st(u8 rd, u8 rs, const struct bpf_insn *insn,
 	return 0;
 }
 
+/*
+ * Read-modify-write via lr/sc for kernels built without Zaamo, matching
+ * the Zalrsc sequences in arch/riscv/include/asm/atomic.h. A relaxed op
+ * discards the old value. A fetch op (including XCHG) uses .aqrl and
+ * writes that value back to val. T2/T3 are not BPF registers; addr may
+ * already be T1.
+ */
+static void emit_atomic_lrsc(u8 addr, u8 val, bool is64, s32 imm,
+			     struct rv_jit_context *ctx)
+{
+	bool fetch = imm & BPF_FETCH;
+	u8 aq = fetch ? 1 : 0;
+	u8 rl = fetch ? 1 : 0;
+	u8 old = RV_REG_T2;
+	u8 tmp = RV_REG_T3;
+	int lr_off, jmp_off;
+	s32 op = imm == BPF_XCHG ? BPF_XCHG : imm & ~BPF_FETCH;
+
+	lr_off = ctx->ninsns;
+	ctx->ex_insn_off = ctx->ninsns;
+	emit(is64 ? rv_lr_d(old, 0, addr, aq, rl) :
+	     rv_lr_w(old, 0, addr, aq, rl), ctx);
+
+	if (op != BPF_XCHG) {
+		if (!is64 && op == BPF_ADD)
+			emit(rv_addw(tmp, old, val), ctx);
+		else if (op == BPF_ADD)
+			emit_add(tmp, old, val, ctx);
+		else if (op == BPF_AND)
+			emit_and(tmp, old, val, ctx);
+		else if (op == BPF_OR)
+			emit_or(tmp, old, val, ctx);
+		else if (op == BPF_XOR)
+			emit_xor(tmp, old, val, ctx);
+
+		ctx->ex_sc_off = ctx->ninsns;
+		emit(is64 ? rv_sc_d(tmp, tmp, addr, aq, rl) :
+		     rv_sc_w(tmp, tmp, addr, aq, rl), ctx);
+	} else {
+		ctx->ex_sc_off = ctx->ninsns;
+		emit(is64 ? rv_sc_d(tmp, val, addr, aq, rl) :
+		     rv_sc_w(tmp, val, addr, aq, rl), ctx);
+	}
+
+	/* Branch offset is relative to this instruction, back to the lr. */
+	jmp_off = ninsns_rvoff(lr_off - ctx->ninsns);
+	emit(rv_bne(tmp, RV_REG_ZERO, jmp_off >> 1), ctx);
+
+	if (fetch) {
+		emit_mv(val, old, ctx);
+		if (!is64)
+			emit_zextw(val, val, ctx);
+	}
+	ctx->ex_jmp_off = ctx->ninsns;
+}
+
+static bool is_atomic_lrsc_op(s32 imm)
+{
+	switch (imm) {
+	case BPF_ADD:
+	case BPF_AND:
+	case BPF_OR:
+	case BPF_XOR:
+	case BPF_ADD | BPF_FETCH:
+	case BPF_AND | BPF_FETCH:
+	case BPF_OR | BPF_FETCH:
+	case BPF_XOR | BPF_FETCH:
+	case BPF_XCHG:
+		return true;
+	}
+	return false;
+}
+
 static int emit_atomic_rmw(u8 rd, u8 rs, const struct bpf_insn *insn,
 			   struct rv_jit_context *ctx)
 {
@@ -648,6 +721,12 @@ static int emit_atomic_rmw(u8 rd, u8 rs, const struct bpf_insn *insn,
 	if (BPF_MODE(code) == BPF_PROBE_ATOMIC) {
 		emit_add(RV_REG_T1, rd, RV_REG_ARENA, ctx);
 		rd = RV_REG_T1;
+	}
+
+	/* Without Zaamo, every op except cmpxchg is an lr/sc loop. */
+	if (!IS_ENABLED(CONFIG_RISCV_ISA_ZAAMO) && is_atomic_lrsc_op(imm)) {
+		emit_atomic_lrsc(rd, rs, is64, imm, ctx);
+		return 0;
 	}
 
 	switch (imm) {
@@ -781,8 +860,8 @@ bool ex_handler_bpf(const struct exception_table_entry *ex,
 }
 
 /* For accesses to BTF pointers, add an entry to the exception table */
-static int add_exception_handler(const struct bpf_insn *insn, int dst_reg,
-				 struct rv_jit_context *ctx)
+static int add_exception_handler_one(const struct bpf_insn *insn, int dst_reg,
+				     struct rv_jit_context *ctx)
 {
 	struct exception_table_entry *ex;
 	unsigned long pc;
@@ -853,6 +932,31 @@ static int add_exception_handler(const struct bpf_insn *insn, int dst_reg,
 	ctx->ex_jmp_off = 0;
 	ctx->nexentries++;
 	return 0;
+}
+
+/*
+ * An lr/sc pair faults on either instruction. Both entries share the fixup
+ * that follows the loop, so a probe fault skips the retry and the result move.
+ */
+static int add_exception_handler(const struct bpf_insn *insn, int dst_reg,
+				 struct rv_jit_context *ctx)
+{
+	int sc_off = ctx->ex_sc_off;
+	int jmp_off = ctx->ex_jmp_off;
+	int ret;
+
+	ctx->ex_sc_off = 0;
+	/* Offset discovery runs before the image exists. Entries are added later. */
+	if (!ctx->insns)
+		return 0;
+
+	ret = add_exception_handler_one(insn, dst_reg, ctx);
+	if (ret || sc_off <= 0)
+		return ret;
+
+	ctx->ex_insn_off = sc_off;
+	ctx->ex_jmp_off = jmp_off;
+	return add_exception_handler_one(insn, dst_reg, ctx);
 }
 
 static int gen_jump_or_nops(void *target, void *ip, u32 *insns, bool is_call)

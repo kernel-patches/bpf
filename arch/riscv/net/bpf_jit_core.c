@@ -16,6 +16,34 @@
 /* Number of iterations to try until offsets converge. */
 #define NR_JIT_ITERATIONS	32
 
+/*
+ * The verifier reserves one extable slot per BPF_PROBE_ATOMIC. Without
+ * Zaamo a read-modify-write atomic is an lr/sc loop that can fault on
+ * either instruction, so reserve a second slot for the sc.
+ */
+static void rv_jit_add_lrsc_exentries(struct bpf_prog *prog)
+{
+	const struct bpf_insn *insn = prog->insnsi;
+	int i;
+
+	if (IS_ENABLED(CONFIG_RISCV_ISA_ZAAMO) || __riscv_xlen != 64)
+		return;
+
+	for (i = 0; i < prog->len; i++, insn++) {
+		if (BPF_CLASS(insn->code) != BPF_STX ||
+		    BPF_MODE(insn->code) != BPF_PROBE_ATOMIC ||
+		    bpf_atomic_is_load_store(insn))
+			continue;
+		if (BPF_SIZE(insn->code) != BPF_W &&
+		    BPF_SIZE(insn->code) != BPF_DW)
+			continue;
+		/* amocas is a single faulting instruction. */
+		if (insn->imm == BPF_CMPXCHG && rv_ext_enabled(ZACAS))
+			continue;
+		prog->aux->num_exentries++;
+	}
+}
+
 static int build_body(struct rv_jit_context *ctx, bool extra_pass, int *offset)
 {
 	const struct bpf_prog *prog = ctx->prog;
@@ -112,6 +140,7 @@ struct bpf_prog *bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_pr
 		if (ctx->ninsns == prev_ninsns) {
 			if (jit_data->header)
 				break;
+			rv_jit_add_lrsc_exentries(prog);
 			/* obtain the actual image size */
 			extable_size = prog->aux->num_exentries *
 				sizeof(struct exception_table_entry);

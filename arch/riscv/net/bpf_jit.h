@@ -82,6 +82,7 @@ struct rv_jit_context {
 	int nexentries;
 	int ex_insn_off;
 	int ex_jmp_off;
+	int ex_sc_off;		/* sc in an lr/sc pair; 0 if unused */
 	unsigned long flags;
 	int stack_size;
 	int tcc_offset;
