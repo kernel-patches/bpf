@@ -258,9 +258,22 @@ struct drm_pvr_dev_query_enhancements {
  * enum drm_pvr_heap_id - Array index for heap info data returned by
  * %DRM_PVR_DEV_QUERY_HEAP_INFO_GET.
  *
- * For compatibility reasons all indices will be present in the returned array,
- * however some heaps may not be present. These are indicated where
- * &struct drm_pvr_heap.size is set to zero.
+ * Userspace and the kernel may have different values for @DRM_PVR_HEAP_COUNT.
+ * In this case:
+ *
+ *  - If KMD(@DRM_PVR_HEAP_COUNT) > UMD(@DRM_PVR_HEAP_COUNT), then userspace
+ *    should either:
+ *
+ *    a. explicitly request a number of heaps by specifying a value less than
+ *       or equal to UMD(@DRM_PVR_HEAP_COUNT) heaps, and the kernel must
+ *       ignore heaps whose ID is greater than or equal to this value, or
+ *    b. ignore heap IDs greater than or equal to UMD(@DRM_PVR_HEAP_COUNT) by,
+ *       e.g. capping the value returned by the kernel.
+ *
+ *  - If KMD(@DRM_PVR_HEAP_COUNT) < UMD(@DRM_PVR_HEAP_COUNT), then the maximum
+ *    number of heaps is capped by the kernel at KMD(@DRM_PVR_HEAP_COUNT) and
+ *    userspace must ignore heaps whose ID is greater than or equal to
+ *    KMD(@DRM_PVR_HEAP_COUNT).
  */
 enum drm_pvr_heap_id {
 	/** @DRM_PVR_HEAP_GENERAL: General purpose heap. */
@@ -269,7 +282,7 @@ enum drm_pvr_heap_id {
 	DRM_PVR_HEAP_PDS_CODE_DATA,
 	/** @DRM_PVR_HEAP_USC_CODE: USC code heap. */
 	DRM_PVR_HEAP_USC_CODE,
-	/** @DRM_PVR_HEAP_RGNHDR: Region header heap. Only used if GPU has BRN63142. */
+	/** @DRM_PVR_HEAP_RGNHDR: Region header heap (optional). Only used if GPU has BRN63142. */
 	DRM_PVR_HEAP_RGNHDR,
 	/** @DRM_PVR_HEAP_VIS_TEST: Visibility test heap. */
 	DRM_PVR_HEAP_VIS_TEST,
@@ -310,9 +323,13 @@ struct drm_pvr_heap {
  * struct drm_pvr_dev_query_heap_info - Container used to fetch information
  * about heaps supported by the device driver.
  *
- * Please note all driver-supported heaps will be returned up to &heaps.count.
- * Some heaps will not be present in all devices, which will be indicated by
- * &struct drm_pvr_heap.size being set to zero.
+ * Please note that drivers may not need all the heaps that are returned up to
+ * &heaps.count in &heaps.array. Unlike for required heaps, optional heaps are
+ * used on some GPU cores only. The kernel indicates when optional heaps are not
+ * needed by setting &struct drm_pvr_heap.size to zero.
+ *
+ * The kernel copies all requested heaps into &heaps.array matching the order
+ * of heap indices as they are listed in &enum drm_pvr_heap_id.
  *
  * When fetching this type &struct drm_pvr_ioctl_dev_query_args.type must be set
  * to %DRM_PVR_DEV_QUERY_HEAP_INFO_GET.
