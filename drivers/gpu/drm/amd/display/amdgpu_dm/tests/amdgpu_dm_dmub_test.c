@@ -1816,13 +1816,14 @@ static void dm_test_dmub_sw_init_asic_mapping(struct kunit *test)
 }
 
 /**
- * dm_test_dmub_sw_init_gtt_only_asic - Test the GTT-only memory domain
+ * dm_test_dmub_sw_init_framebuffer_domain - Test the framebuffer memory domain
  * @test: The KUnit test context
  *
- * DCN32 and DCN321 keep the DMUB framebuffer in GTT; every other ASIC also
- * allows VRAM.
+ * dm_dmub_sw_init() allows both VRAM and GTT for every ASIC, including
+ * DCN32. The allocation is forced to fail so the test records the domain
+ * and stops.
  */
-static void dm_test_dmub_sw_init_gtt_only_asic(struct kunit *test)
+static void dm_test_dmub_sw_init_framebuffer_domain(struct kunit *test)
 {
 	struct amdgpu_device *adev = dm_test_alloc_adev_for_sw_init(test);
 
@@ -1830,7 +1831,8 @@ static void dm_test_dmub_sw_init_gtt_only_asic(struct kunit *test)
 	dm_test_bo.create_ret = -ENOMEM;
 
 	KUNIT_EXPECT_EQ(test, dm_dmub_sw_init(adev), -ENOMEM);
-	KUNIT_EXPECT_EQ(test, dm_test_bo.create_domain, (u32)AMDGPU_GEM_DOMAIN_GTT);
+	KUNIT_EXPECT_EQ(test, dm_test_bo.create_domain,
+			(u32)(AMDGPU_GEM_DOMAIN_GTT | AMDGPU_GEM_DOMAIN_VRAM));
 
 	dm_test_free_sw_init(adev);
 
@@ -2000,7 +2002,7 @@ static struct kunit_case amdgpu_dm_dmub_hw_access_tests[] = {
 	KUNIT_CASE(dm_test_init_microcode_request_fails),
 	/* dm_dmub_sw_init() */
 	KUNIT_CASE(dm_test_dmub_sw_init_asic_mapping),
-	KUNIT_CASE(dm_test_dmub_sw_init_gtt_only_asic),
+	KUNIT_CASE(dm_test_dmub_sw_init_framebuffer_domain),
 	KUNIT_CASE(dm_test_dmub_sw_init_success),
 	KUNIT_CASE(dm_test_dmub_sw_init_bss_data),
 	KUNIT_CASE(dm_test_dmub_sw_init_psp_load),
