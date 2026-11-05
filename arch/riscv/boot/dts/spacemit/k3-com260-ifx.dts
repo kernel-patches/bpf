@@ -122,7 +122,6 @@
 	no-sdio;
 	disable-wp;
 	cap-sd-highspeed;
-	vmmc-supply = <&aldo4>;
 	vqmmc-supply = <&aldo1>;
 	sd-uhs-sdr25;
 	sd-uhs-sdr50;
