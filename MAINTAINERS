@@ -8107,6 +8107,13 @@ F:	Documentation/networking/device_drivers/ethernet/freescale/dpaa2/switch-drive
 F:	drivers/net/ethernet/freescale/dpaa2/dpaa2-switch*
 F:	drivers/net/ethernet/freescale/dpaa2/dpsw*
 
+DPLL SIMULATOR DRIVER (dpllsim)
+M:	Petr Oros <poros@redhat.com>
+L:	netdev@vger.kernel.org
+S:	Maintained
+F:	Documentation/driver-api/dpllsim.rst
+F:	drivers/dpll/dpllsim/
+
 DPLL SUBSYSTEM
 M:	Vadim Fedorenko <vadim.fedorenko@linux.dev>
 M:	Arkadiusz Kubalewski <arkadiusz.kubalewski@intel.com>

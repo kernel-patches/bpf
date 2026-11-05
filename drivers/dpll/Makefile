@@ -9,3 +9,4 @@ dpll-y                  += dpll_netlink.o
 dpll-y                  += dpll_nl.o
 
 obj-$(CONFIG_ZL3073X)	+= zl3073x/
+obj-$(CONFIG_DPLLSIM)	+= dpllsim/
