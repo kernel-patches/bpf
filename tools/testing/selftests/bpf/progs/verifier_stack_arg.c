@@ -445,6 +445,91 @@ __naked void stack_arg_shared_store(void)
 	);
 }
 
+/* What it stores is what it got: the path that stores nothing looks the same at the call. */
+static __naked __noinline __used long stores_same_on_one_path(long a, long b, long c, long d,
+							      long e, long f, long g)
+{
+	asm volatile (
+	"r6 = *(u64 *)(r11 + 8);"
+	"r7 = *(u64 *)(r11 + 16);"
+	"if r1 == 0 goto l0_%=;"
+	"*(u64 *)(r11 - 8) = r6;"
+	"*(u64 *)(r11 - 16) = r7;"
+"l0_%=:"
+	"r1 = 0;"
+	"r2 = 0;"
+	"r3 = 0;"
+	"r4 = 0;"
+	"r5 = 0;"
+	"call subprog_7args;"
+	"exit;"
+	::: __clobber_all);
+}
+
+SEC("tc")
+__description("stack_arg: incoming args are not taken for outgoing args, same values")
+__failure __msg("callee expects 7 args, stack arg1 is not initialized")
+__naked void incoming_for_outgoing_same(void)
+{
+	asm volatile (
+	"call %[bpf_get_prandom_u32];"
+	"r1 = r0;"
+	"r2 = 2;"
+	"r3 = 3;"
+	"r4 = 4;"
+	"r5 = 5;"
+	"*(u64 *)(r11 - 8) = 6;"
+	"*(u64 *)(r11 - 16) = 7;"
+	"call stores_same_on_one_path;"
+	"exit;"
+	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+static __naked __noinline __used long sixth_is_there(long a, long b, long c, long d, long e,
+						     long *f)
+{
+	asm volatile (
+	"r0 = *(u64 *)(r11 + 8);"
+	"if r0 == 0 goto l0_%=;"
+	"r0 = 1;"
+"l0_%=:"
+	"exit;"
+	::: __clobber_all);
+}
+
+SEC("tc")
+__description("stack_arg: subprog does the NULL check for its caller")
+__success
+__naked void null_check_of_stack_arg(void)
+{
+	asm volatile (
+	"r1 = 0;"
+	"*(u64 *)(r10 - 8) = r1;"
+	"r2 = r10;"
+	"r2 += -8;"
+	"r1 = %[map_hash_8b] ll;"
+	"call %[bpf_map_lookup_elem];"
+	"r6 = r0;"
+	"r1 = 1;"
+	"r2 = 2;"
+	"r3 = 3;"
+	"r4 = 4;"
+	"r5 = 5;"
+	"*(u64 *)(r11 - 8) = r6;"
+	"call sixth_is_there;"
+	"if r0 == 0 goto l0_%=;"
+	"r0 = *(u64 *)(r6 + 0);"
+"l0_%=:"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm(bpf_map_lookup_elem),
+	  __imm_addr(map_hash_8b)
+	: __clobber_all);
+}
+
 /* r1 - r5 and all 19 slots. Its prototype has no parameters: what it takes is seen in its code. */
 __naked __noinline __used
 static unsigned long subprog_24args(void)
