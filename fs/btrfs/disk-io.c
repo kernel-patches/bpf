@@ -3353,6 +3353,7 @@ static void invalidate_and_check_btree_folios(struct btrfs_fs_info *fs_info)
 {
 	unsigned long index = 0;
 	struct extent_buffer *eb;
+	bool found_err = false;
 	int ret;
 
 	ret = invalidate_inode_pages2(fs_info->btree_inode->i_mapping);
@@ -3391,17 +3392,18 @@ static void invalidate_and_check_btree_folios(struct btrfs_fs_info *fs_info)
 		 * of the loop, one for the ownership in the buffer tree.
 		 */
 		if (unlikely(refs > 2 || extent_buffer_under_io(eb))) {
-			WARN_ON_ONCE(IS_ENABLED(CONFIG_BTRFS_DEBUG));
 			btrfs_warn(fs_info,
 			"unable to release extent buffer %llu owner %llu gen %llu refs %u flags 0x%lx",
 				   eb->start, btrfs_header_owner(eb),
 				   btrfs_header_generation(eb),
 				   refs, eb->bflags);
+			found_err = true;
 		}
 		free_extent_buffer(eb);
 		rcu_read_lock();
 	}
 	rcu_read_unlock();
+	WARN_ON_ONCE(IS_ENABLED(CONFIG_BTRFS_DEBUG) && found_err);
 	invalidate_inode_pages2(fs_info->btree_inode->i_mapping);
 }
 
