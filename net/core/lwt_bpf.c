@@ -13,6 +13,7 @@
 #include <net/gre.h>
 #include <net/ip.h>
 #include <net/ip6_route.h>
+#include <net/tcp.h>
 
 struct bpf_lwt_prog {
 	struct bpf_prog *prog;
@@ -676,6 +677,14 @@ int bpf_lwt_push_ip_encap(struct sk_buff *skb, void *hdr, u32 len, bool ingress)
 	} else {
 		return -EINVAL;
 	}
+
+	/*
+	 * The MSS is lowered by len. Leave the least that the stack lets a
+	 * TCP GSO packet have, or gso_size can wrap.
+	 */
+	if (skb_is_gso(skb) &&
+	    skb_shinfo(skb)->gso_size < len + TCP_MIN_GSO_SIZE)
+		return -ENOTSUPP;
 
 	if (ingress)
 		err = skb_cow_head(skb, len + skb->mac_len);
