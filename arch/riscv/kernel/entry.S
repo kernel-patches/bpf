@@ -73,7 +73,14 @@
 	beq	a2, zero, .Lnew_valid_map_cpus_restore_context
 
 	/* Atomically reset the current cpu bit in new_valid_map_cpus */
+#ifdef CONFIG_RISCV_ISA_ZAAMO
 	amoxor.d	a0, a1, (a0)
+#else
+1:	lr.d	a2, (a0)
+	xor	a2, a1, a2
+	sc.d	a2, a2, (a0)
+	bnez	a2, 1b
+#endif
 
 	/*
 	 * A sfence.vma is required here. Even if we had Svvptc, there's no

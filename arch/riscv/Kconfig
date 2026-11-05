@@ -737,6 +737,59 @@ config RISCV_ISA_ZACAS
 
 	  If you don't know what to do here, say Y.
 
+config TOOLCHAIN_HAS_ZALRSC_ZAAMO
+	bool
+	default y
+	depends on !64BIT || $(cc-option,-mabi=lp64 -march=rv64im_zaamo_zalrsc)
+	depends on !32BIT || $(cc-option,-mabi=ilp32 -march=rv32im_zaamo_zalrsc)
+
+config RISCV_ISA_ZAAMO
+	bool "Zaamo extension support for AMO atomics" if TOOLCHAIN_HAS_ZALRSC_ZAAMO
+	default y
+	help
+	  Use AMO instructions for kernel atomic memory operations. When
+	  disabled, those operations are built from LR/SC and the kernel
+	  is compiled with zalrsc instead of the A extension.
+
+	  Disable this for a CPU where AMO is much slower than LR/SC. That
+	  is the case when AMO instructions are emulated by a trap into
+	  M-mode, as on the MIPS P8700: an emulated atomic costs hundreds
+	  of cycles where LR/SC costs tens. Such a CPU still advertises
+	  the A extension, and userspace still sees it.
+
+	  A kernel built without Zaamo runs on any CPU that implements the
+	  A extension; it only does not use AMO.
+
+	  The compiler must accept _zaamo and _zalrsc in -march to make
+	  this choice. GCC 15.1 is the first release that does. With an
+	  older compiler the option stays enabled and -march keeps the A
+	  extension.
+
+	  If you don't know what to do here, say Y.
+
+config RISCV_ISA_ZALRSC
+	def_bool y
+	help
+	  Zalrsc provides LR/SC. cmpxchg and the conditional atomics are
+	  LR/SC sequences, so this is always enabled.
+
+	  It exists because asm/hwcap.h already has RISCV_ISA_EXT_ZALRSC
+	  next to RISCV_ISA_EXT_ZAAMO, and the kernel pairs each
+	  RISCV_ISA_EXT_<ext> it can be built for with a
+	  CONFIG_RISCV_ISA_<ext>; rv_ext_enabled() in the BPF JIT, for
+	  example, tests both.
+
+	  Zaamo plus Zacas could provide every atomic as well, with CAS
+	  loops in place of LR/SC. This option is where that would go,
+	  by allowing it to be disabled.
+
+config RISCV_ISA_A
+	def_bool RISCV_ISA_ZAAMO && RISCV_ISA_ZALRSC
+	help
+	  The A extension is Zaamo plus Zalrsc. This is the Kconfig
+	  counterpart of RISCV_ISA_EXT_A, for the same reason as
+	  RISCV_ISA_ZALRSC above, and puts "a" in -march.
+
 config TOOLCHAIN_HAS_ZBB
 	bool
 	default y
