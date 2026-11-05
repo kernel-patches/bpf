@@ -15,6 +15,8 @@
 
 CONFIGFS_DIR="/sys/kernel/config"
 DPLLSIM_CFG="$CONFIGFS_DIR/dpllsim"
+DEBUGFS_DIR="/sys/kernel/debug"
+DPLL_REF_TRACKER_DIR="$DEBUGFS_DIR/ref_tracker"
 
 # Next clock-id handed out by dpllsim_alloc_clock_id. The lookups of the
 # dpllsim helpers match on the module name as well, which is what keeps
@@ -52,12 +54,12 @@ dpll_lib_check_prereqs()
 }
 
 # The scripts that create dpllsim devices share the one dpllsim directory
-# and cannot run alongside each other, so each takes a lock on
-# DPLL_LOCK_FILE before it mounts or creates anything and skips when
-# another run holds it. The workers a script forks inherit the open file
-# and keep the lock until they exit. The file lives under /run rather
-# than in the world-writable /tmp, where a planted symlink could
-# redirect the open.
+# and the leak check attributes every new ref_tracker entry to the run,
+# so each takes a lock on DPLL_LOCK_FILE before it mounts or creates
+# anything and skips when another run holds it. The workers a script
+# forks inherit the open file and keep the lock until they exit. The
+# files live under /run rather than in the world-writable /tmp, where a
+# planted symlink could redirect the open.
 DPLL_RUN_DIR="/run/dpll-selftest"
 DPLL_LOCK_FILE="$DPLL_RUN_DIR/lock"
 DPLL_LOCK_FD=""
@@ -438,9 +440,10 @@ dpll_pin_set_phase_adjust()
 # structure (pins, clock_id, pin attributes) can only be changed while the
 # device is not live.
 #
-# dpllsim_available mounts configfs when nothing else did, which is the
-# one side effect the library has outside the dpllsim directory. Scripts
-# call dpll_lib_cleanup last from their exit trap to undo it.
+# dpllsim_available mounts configfs when nothing else did, like
+# dpll_debugfs_available below does for debugfs, which are the only side
+# effects the library has outside the dpllsim directory. Scripts call
+# dpll_lib_cleanup last from their exit trap to undo them.
 
 DPLLSIM_MOUNTED_CONFIGFS=0
 
@@ -456,24 +459,38 @@ dpllsim_available()
 	[ -d "$DPLLSIM_CFG" ]
 }
 
-# Unmount configfs again when dpllsim_available mounted it. Call after
-# the devices of the script are gone. A dpllsim device the script could
-# not remove keeps the mount, so that what is left can be looked at.
+__dpll_lib_umount()
+{
+	umount "$1" 2>/dev/null || log_info "cannot unmount $1"
+}
+
+# Unmount configfs and debugfs again when the library mounted them. Call
+# after the devices of the script are gone. A dpllsim device the script
+# could not remove keeps both mounted, so that what is left can be
+# looked at, the device in configfs and the references it still holds
+# in the ref_tracker entries of debugfs.
 dpll_lib_cleanup()
 {
-	local dev_path name
+	local dev_path name dir kept
+	local mounted=()
 
-	[ "$DPLLSIM_MOUNTED_CONFIGFS" -eq 1 ] || return 0
+	[ "$DPLLSIM_MOUNTED_CONFIGFS" -eq 1 ] && mounted+=("$CONFIGFS_DIR")
+	[ "$DPLL_MOUNTED_DEBUGFS" -eq 1 ] && mounted+=("$DEBUGFS_DIR")
 	DPLLSIM_MOUNTED_CONFIGFS=0
+	DPLL_MOUNTED_DEBUGFS=0
+	[ "${#mounted[@]}" -gt 0 ] || return 0
 
 	for dev_path in "$DPLLSIM_CFG"/*/; do
 		[ -d "$dev_path" ] || continue
 		name=$(basename "$dev_path")
-		log_info "device $name left behind, $CONFIGFS_DIR kept mounted"
+		kept=${mounted[*]}
+		kept="${kept/ / and } kept mounted"
+		log_info "device $name left behind, $kept"
 		return
 	done
-	umount "$CONFIGFS_DIR" 2>/dev/null ||
-		log_info "cannot unmount $CONFIGFS_DIR"
+	for dir in "${mounted[@]}"; do
+		__dpll_lib_umount "$dir"
+	done
 }
 
 dpllsim_check_module()
@@ -621,4 +638,213 @@ dpllsim_setup_standard_device()
 		dpllsim_delete_device "$name"
 		return 1
 	fi
+}
+
+##############################################################################
+# ref_tracker leak checking
+#
+# With CONFIG_DPLL_REFCNT_TRACKER=y the DPLL core creates regular files
+# named dpll_device@<ptr> / dpll_pin@<ptr> under the ref_tracker debugfs
+# dir. Reading one prints the stack traces of currently unreleased
+# references; an empty (or removed) file means no leaks.
+#
+# The entries do not name their owner, so leaks are attributed by
+# snapshot, a non-empty entry whose name is not in the snapshot taken
+# before the test created its devices is a leak, an entry that is in it
+# belongs to another driver and is ignored even when its content changed.
+
+DPLL_MOUNTED_DEBUGFS=0
+# The snapshot files are kept in DPLL_RUN_DIR, see the lock above for
+# why that is not /tmp, as refsnap.<pid>.<random>.
+DPLL_REF_SNAPSHOT_PREFIX="$DPLL_RUN_DIR/refsnap"
+# Name of the probe device while it exists, so that the cleanup handler
+# of a script can remove it when the probe could not.
+DPLLSIM_PROBE_DEVICE=""
+
+# Create the file a snapshot is recorded in and print its name. The
+# scripts take the lock first, which creates DPLL_RUN_DIR. A run that
+# is killed with SIGKILL cannot remove its file, so the files of earlier
+# runs whose process is gone are removed first, the pid of the run is
+# the component after the first dot of the name. A pid that was reused
+# by a process that lives long would keep such a file forever, so files
+# older than a day are removed whatever their pid is. Return 1 when the
+# file cannot be created.
+dpll_ref_tracker_snapshot_file()
+{
+	local file pid
+
+	find "$DPLL_RUN_DIR" -maxdepth 1 \
+	     -name "${DPLL_REF_SNAPSHOT_PREFIX##*/}.*" -mmin +1440 -delete \
+	     2>/dev/null
+	for file in "$DPLL_REF_SNAPSHOT_PREFIX".*; do
+		[ -f "$file" ] || continue
+		pid=${file#"$DPLL_REF_SNAPSHOT_PREFIX".}
+		pid=${pid%%.*}
+		[[ "$pid" =~ ^[0-9]+$ ]] || continue
+		[ -d "/proc/$pid" ] || rm -f "$file"
+	done
+	mktemp "$DPLL_REF_SNAPSHOT_PREFIX.$$.XXXXXX"
+}
+
+# Mount debugfs when nothing else did, so that the ref_tracker entries
+# can be read, and remember that for dpll_lib_cleanup. Return 0 when
+# debugfs is mounted afterwards, whether the tracker dir exists is for
+# the caller to check.
+dpll_debugfs_available()
+{
+	if ! mountpoint -q "$DEBUGFS_DIR"; then
+		mount -t debugfs none "$DEBUGFS_DIR" &> /dev/null &&
+			DPLL_MOUNTED_DEBUGFS=1
+	fi
+	mountpoint -q "$DEBUGFS_DIR"
+}
+
+__dpll_ref_tracker_hash()
+{
+	printf '%s' "$1" | md5sum | cut -d' ' -f1
+}
+
+# Write "<name> <content hash>" for every existing dpll_device@* /
+# dpll_pin@* entry to the given file, one entry per line. The file ends
+# up empty when the tracker dir is missing.
+dpll_ref_tracker_snapshot()
+{
+	local file=$1
+	local entry content
+
+	for entry in "$DPLL_REF_TRACKER_DIR"/dpll_device@* \
+		     "$DPLL_REF_TRACKER_DIR"/dpll_pin@*; do
+		[ -f "$entry" ] || continue
+		content=$(cat "$entry" 2>/dev/null)
+		echo "$(basename "$entry")" \
+		     "$(__dpll_ref_tracker_hash "$content")"
+	done > "$file"
+}
+
+# Print the leak candidates, the non-empty entries whose name is not in
+# the snapshot, each followed by its content. Prints nothing when there
+# is no candidate.
+__dpll_ref_tracker_new_entries()
+{
+	local file=$1
+	local entry name content
+
+	for entry in "$DPLL_REF_TRACKER_DIR"/dpll_device@* \
+		     "$DPLL_REF_TRACKER_DIR"/dpll_pin@*; do
+		[ -f "$entry" ] || continue
+		name=$(basename "$entry")
+		grep -q "^$name " "$file" && continue
+		content=$(cat "$entry" 2>/dev/null)
+		[ -n "$content" ] || continue
+		echo "Unreleased references in $name:"
+		echo "$content"
+	done
+}
+
+# Return 0 when there is no leak candidate. Otherwise print the
+# candidates and return 1, busywait hands the output of its last failed
+# check to the caller when it times out.
+__dpll_ref_tracker_settled()
+{
+	local leaks
+
+	leaks=$(__dpll_ref_tracker_new_entries "$1")
+	[ -z "$leaks" ] && return 0
+
+	echo "$leaks"
+	return 1
+}
+
+# Log the entries of the snapshot whose content changed since and record
+# the new content, so that the same change is logged once.
+__dpll_ref_tracker_note_changed()
+{
+	local file=$1
+	local entry name content hash changed=""
+
+	for entry in "$DPLL_REF_TRACKER_DIR"/dpll_device@* \
+		     "$DPLL_REF_TRACKER_DIR"/dpll_pin@*; do
+		[ -f "$entry" ] || continue
+		name=$(basename "$entry")
+		grep -q "^$name " "$file" || continue
+		content=$(cat "$entry" 2>/dev/null)
+		hash=$(__dpll_ref_tracker_hash "$content")
+		grep -qx "$name $hash" "$file" && continue
+		sed -i "s/^$name .*/$name $hash/" "$file"
+		changed="$changed $name"
+	done
+
+	[ -n "$changed" ] && log_info \
+		"references of another driver changed (ignored):$changed"
+	return 0
+}
+
+# $1: snapshot file written by dpll_ref_tracker_snapshot before the
+# objects under test were created. Return 0 when no reference to an
+# object created since the snapshot is held any more. A concurrent dump
+# holds references for a moment, so wait for the candidates to drain. A
+# timeout means the references never drained, the candidates seen by the
+# last check are then printed and count as leaked.
+dpll_ref_tracker_check_leaks()
+{
+	local file=$1
+	local leaks ret=0
+
+	[ -d "$DPLL_REF_TRACKER_DIR" ] || return 0
+
+	if ! leaks=$(busywait "$BUSYWAIT_TIMEOUT" __dpll_ref_tracker_settled \
+			      "$file"); then
+		echo "References not released within $BUSYWAIT_TIMEOUT ms:"
+		echo "$leaks"
+		ret=1
+	fi
+	__dpll_ref_tracker_note_changed "$file"
+
+	return "$ret"
+}
+
+# Probe whether the kernel tracks DPLL references with a throwaway
+# dpllsim device, the entries that exist before it are recorded in the
+# scratch file $1. Return 0 when the tracker works, 1 when no entry
+# appeared (no CONFIG_DPLL_REFCNT_TRACKER), 2 when the probe device
+# could not be created or deployed, 3 when its entries did not drain
+# after its deletion and 4 when it could not be deleted, its name then
+# stays in DPLLSIM_PROBE_DEVICE for the cleanup handler to retry. Must
+# not be called from a subshell, it allocates clock-ids.
+dpll_ref_tracker_probe()
+{
+	local file=$1
+	local name attempt ret=2
+
+	dpll_ref_tracker_snapshot "$file"
+
+	# A directory of that name left behind by an earlier run takes a
+	# fresh clock-id, anything else is a broken simulator.
+	for attempt in 1 2 3; do
+		dpllsim_alloc_clock_id
+		name="probe$DPLLSIM_CLOCK_ID"
+		dpllsim_create_device "$name" "$DPLLSIM_CLOCK_ID" && break
+		[ -d "$DPLLSIM_CFG/$name" ] || return 2
+		[ "$attempt" -lt 3 ] || return 2
+	done
+	DPLLSIM_PROBE_DEVICE=$name
+
+	if dpllsim_add_pin "$name" ext0 ext 10000000 input &&
+	   dpllsim_deploy "$name"; then
+		ret=1
+		[ -n "$(__dpll_ref_tracker_new_entries "$file")" ] && ret=0
+	fi
+
+	if dpllsim_delete_device "$name"; then
+		DPLLSIM_PROBE_DEVICE=""
+	else
+		log_info "cannot delete device $name"
+		return 4
+	fi
+	if [ "$ret" -eq 0 ] &&
+	   ! busywait "$BUSYWAIT_TIMEOUT" __dpll_ref_tracker_settled "$file" \
+		      > /dev/null; then
+		ret=3
+	fi
+	return "$ret"
 }

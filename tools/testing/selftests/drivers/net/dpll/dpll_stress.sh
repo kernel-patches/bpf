@@ -14,11 +14,13 @@ source "$SCRIPTDIR/../../../net/lib.sh"
 source "$SCRIPTDIR/../lib/sh/dpll_lib.sh"
 
 ALL_TESTS="
+	test_ref_tracker_probe
 	test_rapid_create_delete
 	test_concurrent_workers
 	test_pin_state_flooding
 	test_max_devices
 	test_deploy_cycle
+	test_ref_leaks
 "
 
 STRESS_ITERATIONS=${STRESS_ITERATIONS:-20}
@@ -153,6 +155,11 @@ cleanup()
 		dpllsim_delete_device "$DPLLSIM_CREATED_NAME" ||
 			log_info "cannot delete device $DPLLSIM_CREATED_NAME"
 	fi
+	if [ -n "$DPLLSIM_PROBE_DEVICE" ]; then
+		dpllsim_delete_device "$DPLLSIM_PROBE_DEVICE" ||
+			log_info "cannot delete device $DPLLSIM_PROBE_DEVICE"
+	fi
+	[ -n "$REF_SNAPSHOT" ] && rm -f "$REF_SNAPSHOT"
 	dpll_lib_cleanup
 }
 
@@ -207,6 +214,60 @@ create_stress_device()
 }
 
 ##############################################################################
+
+# Probe for the reference tracker and record the entries that exist
+# before the first test that creates devices, so that the final check
+# attributes every entry that appears from here on to this script. A
+# probe device that cannot be created says nothing about the tracker,
+# the simulator is broken. A probe device whose references do not drain
+# is the kind of leak the final check looks for, found before the first
+# test. One that cannot be deleted is a failure too, it stays recorded
+# for the cleanup handler to try again. REF_TRACKER tells the leak
+# check whether the tracker was seen at work.
+test_ref_tracker_probe()
+{
+	RET=0
+
+	REF_TRACKER=0
+	if ! dpll_debugfs_available || ! [ -d "$DPLL_REF_TRACKER_DIR" ]; then
+		log_test_skip "DPLL ref_tracker probe" \
+			      "ref_tracker debugfs not available"
+		return
+	fi
+
+	# The snapshot file doubles as the scratch file of the probe, so
+	# it is needed before anything is recorded.
+	if ! REF_SNAPSHOT=$(dpll_ref_tracker_snapshot_file); then
+		check_err 1 "cannot create a temporary file for the snapshot"
+		log_test "DPLL ref_tracker probe"
+		return
+	fi
+
+	dpll_ref_tracker_probe "$REF_SNAPSHOT"
+	case $? in
+	0)
+		REF_TRACKER=1
+		;;
+	1)
+		log_test_skip "DPLL ref_tracker probe" \
+			      "CONFIG_DPLL_REFCNT_TRACKER not enabled"
+		return
+		;;
+	3)
+		REF_TRACKER=1
+		check_err 1 "references of the probe device not released"
+		;;
+	4)
+		check_err 1 "cannot delete the dpllsim probe device"
+		;;
+	*)
+		check_err 1 "cannot create dpllsim probe device"
+		;;
+	esac
+	dpll_ref_tracker_snapshot "$REF_SNAPSHOT"
+
+	log_test "DPLL ref_tracker probe"
+}
 
 test_rapid_create_delete()
 {
@@ -462,16 +523,36 @@ test_deploy_cycle()
 	log_test "DPLL deploy/undeploy cycling"
 }
 
+test_ref_leaks()
+{
+	RET=0
+
+	# The probe test found the tracker inactive or could not run.
+	if [ "$REF_TRACKER" -eq 0 ]; then
+		log_test_skip "DPLL stress ref_tracker check" \
+			      "DPLL reference tracker not available"
+		return
+	fi
+
+	dpll_ref_tracker_check_leaks "$REF_SNAPSHOT"
+	check_err $? "leaked DPLL references after stress"
+
+	log_test "DPLL stress ref_tracker check"
+}
+
 ##############################################################################
 
 dpll_lib_check_prereqs
-# Another run would find the devices of this one left behind, see the
-# lock in the library.
+# Another run would find the devices of this one left behind and see
+# them as leaks, see the lock in the library.
 dpll_lib_lock
 
-# The module check may mount configfs, so the exit trap that unmounts it
-# again has to be in place before. INT and TERM exit through it as well,
-# so that a timeout imposed by the harness still removes the devices.
+REF_SNAPSHOT=""
+REF_TRACKER=0
+# The module check and the probe test may mount configfs and debugfs, so
+# the exit trap that unmounts them again has to be in place before. INT
+# and TERM exit through it as well, so that a timeout imposed by the
+# harness still removes the devices.
 trap cleanup EXIT
 trap 'exit 1' INT TERM
 dpllsim_check_module

@@ -9,6 +9,7 @@ TEST_INCLUDES := \
 TEST_PROGS := \
 	dpll_basic.sh \
 	dpll_features.sh \
+	dpll_reftrack.sh \
 	dpll_stress.sh \
 # end of TEST_PROGS
 
