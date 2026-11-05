@@ -250,7 +250,7 @@ int bpf_compute_const_regs(struct bpf_verifier_env *env)
 	struct const_arg_info ci_out[MAX_BPF_REG];
 	struct bpf_iarray *succ;
 	bool changed;
-	int i, r;
+	int i, r, t;
 
 	/* kvzalloc zeroes memory, so all entries start as CONST_ARG_UNVISITED (0) */
 	ci_in = kvzalloc_objs(*ci_in, insn_cnt, GFP_KERNEL_ACCOUNT);
@@ -263,6 +263,12 @@ int bpf_compute_const_regs(struct bpf_verifier_env *env)
 
 		for (r = 0; r < MAX_BPF_REG; r++)
 			ci_in[start][r] = unknown;
+	}
+	/* The same from the head of a loop to where the loop is left, once the loops are known. */
+	for (i = 0; i < insn_cnt; i++) {
+		t = bpf_head_guard_target(env, i);
+		for (r = 0; r < MAX_BPF_REG && t >= 0; r++)
+			ci_in[t][r] = unknown;
 	}
 
 redo:
