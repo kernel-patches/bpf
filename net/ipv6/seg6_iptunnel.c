@@ -676,6 +676,7 @@ static int seg6_output_core(struct net *net, struct sock *sk,
 	struct dst_entry *orig_dst = skb_dst(skb);
 	struct dst_entry *dst = NULL;
 	struct seg6_lwt *slwt;
+	int tail_len = -1;
 	int err;
 
 	slwt = seg6_lwt_lwtunnel(orig_dst->lwtstate);
@@ -684,9 +685,16 @@ static int seg6_output_core(struct net *net, struct sock *sk,
 	dst = dst_cache_get(&slwt->cache_output);
 	local_bh_enable();
 
+	if (slwt->tuninfo->mode == SEG6_IPTUN_MODE_INLINE &&
+	    skb_transport_header_was_set(skb))
+		tail_len = skb->len - skb_transport_offset(skb);
+
 	err = seg6_do_srh(skb, dst);
 	if (unlikely(err))
 		goto drop;
+
+	if (tail_len >= 0)
+		skb_set_transport_header(skb, skb->len - tail_len);
 
 	if (unlikely(!dst)) {
 		struct ipv6hdr *hdr = ipv6_hdr(skb);
