@@ -333,7 +333,7 @@ static int validate_beacon_head(const struct nlattr *attr,
 	unsigned int fixedlen, hdrlen;
 	bool s1g_bcn;
 
-	if (len < offsetofend(typeof(*mgmt), frame_control))
+	if (len < offsetofendp(mgmt, frame_control))
 		goto err;
 
 	s1g_bcn = ieee80211_is_s1g_beacon(mgmt->frame_control);

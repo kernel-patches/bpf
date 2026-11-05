@@ -704,7 +704,7 @@ static bool valid_country(const u8 *data, unsigned int size,
 	unsigned int i;
 
 	/* make sure we can read len/n_rules */
-	if ((u8 *)coll + offsetofend(typeof(*coll), n_rules) > data + size)
+	if ((u8 *)coll + offsetofendp(coll, n_rules) > data + size)
 		return false;
 
 	/* make sure base struct and all rules fit */

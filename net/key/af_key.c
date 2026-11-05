@@ -384,7 +384,7 @@ static int verify_address_len(const void *p)
 	int len;
 
 	if (sp->sadb_address_len <
-	    DIV_ROUND_UP(sizeof(*sp) + offsetofend(typeof(*addr), sa_family),
+	    DIV_ROUND_UP(sizeof(*sp) + offsetofendp(addr, sa_family),
 			 sizeof(uint64_t)))
 		return -EINVAL;
 

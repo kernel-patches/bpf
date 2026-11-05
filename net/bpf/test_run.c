@@ -1613,7 +1613,7 @@ int bpf_prog_test_run_sk_lookup(struct bpf_prog *prog, const union bpf_attr *kat
 	if (user_ctx->sk)
 		goto out;
 
-	if (!range_is_zero(user_ctx, offsetofend(typeof(*user_ctx), local_port), sizeof(*user_ctx)))
+	if (!range_is_zero(user_ctx, offsetofendp(user_ctx, local_port), sizeof(*user_ctx)))
 		goto out;
 
 	if (user_ctx->local_port > U16_MAX) {

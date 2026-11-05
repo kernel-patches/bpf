@@ -93,7 +93,7 @@ static int current_check_access_socket(struct socket *const sock,
 		return 0;
 
 	/* Checks for minimal header length to safely read sa_family. */
-	if (addrlen < (int)offsetofend(typeof(*address), sa_family))
+	if (addrlen < (int) offsetofendp(address, sa_family))
 		return -EINVAL;
 
 	/*
@@ -382,7 +382,7 @@ static int hook_socket_connect(struct socket *const sock,
 	 * should never be restricted.
 	 */
 	if (ret == 0 && sk_is_udp(sock->sk) &&
-	    addrlen >= offsetofend(typeof(*address), sa_family) &&
+	    addrlen >= offsetofendp(address, sa_family) &&
 	    address->sa_family != AF_UNSPEC)
 		ret = current_check_autobind_udp_socket(sock);
 
