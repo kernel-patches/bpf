@@ -339,7 +339,7 @@ static const unsigned int sh_mtu2_channel_offsets[] = {
 static int sh_mtu2_setup_channel(struct sh_mtu2_channel *ch, unsigned int index,
 				 struct sh_mtu2_device *mtu)
 {
-	char name[6];
+	char name[16];
 	int irq;
 	int ret;
 
