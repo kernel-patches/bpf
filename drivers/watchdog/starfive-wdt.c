@@ -454,12 +454,12 @@ static int starfive_wdt_probe(struct platform_device *pdev)
 	if (pm_runtime_enabled(&pdev->dev)) {
 		ret = pm_runtime_resume_and_get(&pdev->dev);
 		if (ret < 0)
-			return ret;
+			goto err_disable_pm;
 	} else {
 		/* runtime PM is disabled but clocks need to be enabled */
 		ret = starfive_wdt_enable_clock(wdt);
 		if (ret)
-			return ret;
+			goto err_disable_pm;
 	}
 
 	ret = starfive_wdt_reset_init(&pdev->dev);
@@ -516,6 +516,7 @@ err_unregister_wdt:
 	watchdog_unregister_device(&wdt->wdd);
 err_exit:
 	starfive_wdt_disable_clock(wdt);
+err_disable_pm:
 	pm_runtime_disable(&pdev->dev);
 
 	return ret;
