@@ -12,6 +12,9 @@
 #include <linux/list.h>
 #include <linux/mutex.h>
 
+#define DPLLSIM_DEFAULT_PIN_PRIO		128
+#define DPLLSIM_PIN_PRIO_MAX			255
+
 #define DPLLSIM_MAX_PINS			128
 
 struct dpllsim_dev;
@@ -21,10 +24,15 @@ struct dpllsim_pin {
 	struct list_head list;
 	struct dpllsim_dev *dev;
 
-	/* Configuration, writable only until dpllsim_dev_frozen() */
+	/*
+	 * Configuration, set through configfs only until
+	 * dpllsim_dev_frozen(). The netlink prio setter changes prio at
+	 * runtime under dev->lock.
+	 */
 	enum dpll_pin_type type;
 	enum dpll_pin_direction direction;
 	u64 frequency;
+	u32 prio;
 
 	/* Resolved at live=1 */
 	int idx;
