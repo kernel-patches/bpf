@@ -18,6 +18,9 @@
 #include <linux/pid_namespace.h>
 #include <linux/poison.h>
 #include <linux/proc_ns.h>
+#include <linux/nsproxy.h>
+#include <net/net_namespace.h>
+#include <net/sock.h>
 #include <linux/sched/task.h>
 #include <linux/security.h>
 #include <linux/btf_ids.h>
@@ -2991,6 +2994,77 @@ __bpf_kfunc long bpf_task_under_cgroup(struct task_struct *task,
 	return ret;
 }
 
+#ifdef CONFIG_NET
+/**
+ * bpf_task_is_init_net - check whether task belongs to initial network namespace
+ * @task: the task to be tested
+ *
+ * Returns true if @task belongs to the initial network namespace (init_net),
+ * or false otherwise (or if @task or its nsproxy is NULL).
+ */
+__bpf_kfunc bool bpf_task_is_init_net(const struct task_struct *task)
+{
+	struct nsproxy *nsproxy;
+	struct net *net;
+	bool ret = false;
+
+	if (!task)
+		return false;
+
+	rcu_read_lock();
+	nsproxy = rcu_dereference(task->nsproxy);
+	if (nsproxy) {
+		net = READ_ONCE(nsproxy->net_ns);
+		ret = (net == &init_net);
+	}
+	rcu_read_unlock();
+
+	return ret;
+}
+
+/**
+ * bpf_task_get_netns_inum - get inode number of task's network namespace
+ * @task: the task to inspect
+ *
+ * Returns the inode number (inum) of @task's network namespace, or 0 if
+ * @task, its nsproxy, or net_ns is NULL.
+ */
+__bpf_kfunc u32 bpf_task_get_netns_inum(const struct task_struct *task)
+{
+	struct nsproxy *nsproxy;
+	struct net *net;
+	u32 inum = 0;
+
+	if (!task)
+		return 0;
+
+	rcu_read_lock();
+	nsproxy = rcu_dereference(task->nsproxy);
+	if (nsproxy) {
+		net = READ_ONCE(nsproxy->net_ns);
+		if (net)
+			inum = net->ns.inum;
+	}
+	rcu_read_unlock();
+
+	return inum;
+}
+
+/**
+ * bpf_sock_is_init_net - check whether socket belongs to initial network namespace
+ * @sk: the socket to be tested
+ *
+ * Returns true if @sk belongs to init_net, or false otherwise (or if @sk is NULL).
+ */
+__bpf_kfunc bool bpf_sock_is_init_net(const struct sock *sk)
+{
+	if (!sk)
+		return false;
+
+	return net_eq(sock_net(sk), &init_net);
+}
+#endif /* CONFIG_NET */
+
 BPF_CALL_2(bpf_current_task_under_cgroup, struct bpf_map *, map, u32, idx)
 {
 	struct bpf_array *array = container_of(map, struct bpf_array, map);
@@ -5150,6 +5224,11 @@ BTF_ID_FLAGS(func, bpf_cgroup_ancestor, KF_ACQUIRE | KF_RCU | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_cgroup_from_id, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_task_under_cgroup, KF_RCU)
 BTF_ID_FLAGS(func, bpf_task_get_cgroup1, KF_ACQUIRE | KF_RCU | KF_RET_NULL)
+#endif
+#ifdef CONFIG_NET
+BTF_ID_FLAGS(func, bpf_task_is_init_net, KF_RCU)
+BTF_ID_FLAGS(func, bpf_task_get_netns_inum, KF_RCU)
+BTF_ID_FLAGS(func, bpf_sock_is_init_net, KF_RCU)
 #endif
 BTF_ID_FLAGS(func, bpf_task_from_pid, KF_ACQUIRE | KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_task_from_vpid, KF_ACQUIRE | KF_RET_NULL)
