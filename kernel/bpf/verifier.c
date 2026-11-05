@@ -20025,6 +20025,18 @@ bool bpf_verifier_inlines_helper_call(struct bpf_verifier_env *env, s32 imm)
 	}
 }
 
+/* True if bpf_fixup_kfunc_call() or the JIT replaces the kfunc call */
+static bool kfunc_call_inlined(struct bpf_verifier_env *env, struct bpf_insn *call)
+{
+	struct bpf_kfunc_desc *desc;
+
+	if (call->imm == special_kfunc_list[KF_bpf_cast_to_kern_ctx] ||
+	    call->imm == special_kfunc_list[KF_bpf_rdonly_cast])
+		return true;
+	desc = find_kfunc_desc(env->prog, call->imm, call->off);
+	return desc && bpf_jit_inlines_kfunc_call((void *)desc->addr);
+}
+
 /* If @call is a kfunc or helper call, fills @cs and returns true,
  * otherwise returns false.
  */
@@ -20069,7 +20081,8 @@ bool bpf_get_call_summary(struct bpf_verifier_env *env, struct bpf_insn *call,
 			cs->implicit_slot_cnt = cs->arg_slot_cnt -
 				btf_proto_slots(meta.btf, btf_type_by_id(meta.btf, func->type));
 		}
-		cs->fastcall = meta.kfunc_flags & KF_FASTCALL;
+		cs->fastcall = (meta.kfunc_flags & KF_FASTCALL) &&
+			       kfunc_call_inlined(env, call);
 		cs->is_void = btf_type_is_void(btf_type_by_id(meta.btf, meta.func_proto->type));
 		return true;
 	}

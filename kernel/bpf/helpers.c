@@ -3426,6 +3426,21 @@ __bpf_kfunc void bpf_rcu_read_unlock(void)
 	rcu_read_unlock();
 }
 
+__bpf_kfunc void bpf_smp_mb(void)
+{
+	smp_mb();
+}
+
+__bpf_kfunc void bpf_smp_rmb(void)
+{
+	smp_rmb();
+}
+
+__bpf_kfunc void bpf_smp_wmb(void)
+{
+	smp_wmb();
+}
+
 struct bpf_throw_ctx {
 	struct bpf_prog_aux *aux;
 	u64 sp;
@@ -5188,6 +5203,9 @@ BTF_ID_FLAGS(func, bpf_cast_to_kern_ctx, KF_FASTCALL)
 BTF_ID_FLAGS(func, bpf_rdonly_cast, KF_FASTCALL | KF_PERFMON)
 BTF_ID_FLAGS(func, bpf_rcu_read_lock)
 BTF_ID_FLAGS(func, bpf_rcu_read_unlock)
+BTF_ID_FLAGS(func, bpf_smp_mb, KF_FASTCALL)
+BTF_ID_FLAGS(func, bpf_smp_rmb, KF_FASTCALL)
+BTF_ID_FLAGS(func, bpf_smp_wmb, KF_FASTCALL)
 BTF_ID_FLAGS(func, bpf_dynptr_slice, KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_dynptr_slice_rdwr, KF_RET_NULL)
 BTF_ID_FLAGS(func, bpf_iter_num_new, KF_ITER_NEW | KF_SPINLOCK_SAFE)

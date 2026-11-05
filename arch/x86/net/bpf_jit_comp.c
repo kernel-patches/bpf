@@ -3543,6 +3543,15 @@ populate_extable:
 			bool arena_sp_args = false;
 
 			func = (u8 *) __bpf_call_base + imm32;
+			if (src_reg == BPF_PSEUDO_KFUNC_CALL && bpf_jit_inlines_kfunc_call(func)) {
+				/* smp_rmb() and smp_wmb() are compiler barriers on x86 */
+				if (func == (u8 *)bpf_smp_mb) {
+					/* lock addl $0,-4(%rsp) */
+					EMIT3(0xF0, 0x83, 0x44);
+					EMIT3(0x24, 0xFC, 0x00);
+				}
+				break;
+			}
 			if (src_reg == BPF_PSEUDO_CALL && tail_call_reachable) {
 				u8 *tcc_load = prog;
 
@@ -5177,6 +5186,12 @@ bool bpf_jit_supports_callx(void)
 	 * callx doesn't do that yet.
 	 */
 	return cfi_mode != CFI_FINEIBT;
+}
+
+bool bpf_jit_inlines_kfunc_call(void *func)
+{
+	return func == (void *)bpf_smp_mb || func == (void *)bpf_smp_rmb ||
+	       func == (void *)bpf_smp_wmb;
 }
 
 bool bpf_jit_supports_kfunc_call(void)
