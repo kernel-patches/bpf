@@ -494,6 +494,7 @@ static int starfive_wdt_probe(struct platform_device *pdev)
 	watchdog_set_nowayout(&wdt->wdd, nowayout);
 	watchdog_stop_on_reboot(&wdt->wdd);
 	watchdog_stop_on_unregister(&wdt->wdd);
+	watchdog_stop_ping_on_suspend(&wdt->wdd);
 
 	if (early_enable) {
 		ret = starfive_wdt_start(wdt);
