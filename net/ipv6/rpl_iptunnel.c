@@ -206,6 +206,7 @@ static int rpl_output(struct net *net, struct sock *sk, struct sk_buff *skb)
 	struct dst_entry *orig_dst = skb_dst(skb);
 	struct dst_entry *dst = NULL;
 	struct rpl_lwt *rlwt;
+	int tail_len = -1;
 	int err;
 
 	rlwt = rpl_lwt_lwtunnel(orig_dst->lwtstate);
@@ -214,9 +215,15 @@ static int rpl_output(struct net *net, struct sock *sk, struct sk_buff *skb)
 	dst = dst_cache_get(&rlwt->cache);
 	local_bh_enable();
 
+	if (skb_transport_header_was_set(skb))
+		tail_len = skb->len - skb_transport_offset(skb);
+
 	err = rpl_do_srh(skb, rlwt, dst);
 	if (unlikely(err))
 		goto drop;
+
+	if (tail_len >= 0)
+		skb_set_transport_header(skb, skb->len - tail_len);
 
 	if (unlikely(!dst)) {
 		struct ipv6hdr *hdr = ipv6_hdr(skb);
