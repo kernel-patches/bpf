@@ -250,7 +250,7 @@ static void run_test(struct vdev_info *dev, struct vq_info *vq,
 
 				started = completed;
 				while (completed > next_reset)
-					next_reset += completed;
+					next_reset += reset_n;
 			}
 		} while (r == 0);
 		if (completed == completed_before && started == started_before)
