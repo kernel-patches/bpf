@@ -240,6 +240,7 @@ static char *pkt_flag_names[] = {
 #define PKTGEN_MAGIC 0xbe9be955
 #define PG_PROC_DIR "pktgen"
 #define PGCTRL	    "pgctrl"
+#define PG_THREAD_PREFIX "kpktgend_"
 
 #define MAX_CFLOWS  65536
 
@@ -416,6 +417,7 @@ struct pktgen_dev {
 				  */
 	netdevice_tracker dev_tracker;
 	char odevname[32];
+	char procname[32];	/* the name of ->entry in /proc/net/pktgen */
 	struct flow_state *flows;
 	unsigned int cflows;	/* Concurrent flows (config) */
 	unsigned int lflow;		/* Flow length  (config) */
@@ -2045,6 +2047,34 @@ static bool __pktgen_NN_threads(const struct pktgen_net *pn,
 }
 
 /*
+ * A device can be named like pgctrl or a thread file. Threads are still
+ * being created while the first thread file is writable, so match thread
+ * names by prefix. Called with pktgen_thread_lock held.
+ */
+static bool pktgen_proc_name_taken(const struct pktgen_net *pn,
+				   const char *name)
+{
+	const struct pktgen_thread *t;
+	const struct pktgen_dev *pkt_dev;
+
+	lockdep_assert_held(&pktgen_thread_lock);
+
+	if (!strcmp(name, PGCTRL) || str_has_prefix(name, PG_THREAD_PREFIX))
+		return true;
+	rcu_read_lock();
+	list_for_each_entry(t, &pn->pktgen_threads, th_list) {
+		list_for_each_entry_rcu(pkt_dev, &t->if_list, list) {
+			if (pkt_dev->entry && !strcmp(name, pkt_dev->procname)) {
+				rcu_read_unlock();
+				return true;
+			}
+		}
+	}
+	rcu_read_unlock();
+	return false;
+}
+
+/*
  * mark a device for removal
  */
 static void pktgen_mark_device(const struct pktgen_net *pn, const char *ifname)
@@ -2091,13 +2121,22 @@ static void pktgen_change_name(const struct pktgen_net *pn, struct net_device *d
 			if (pkt_dev->odev != dev)
 				continue;
 
+			/* renamed back to the name the file kept */
+			if (pkt_dev->entry && !strcmp(pkt_dev->procname, dev->name))
+				break;
+			if (pktgen_proc_name_taken(pn, dev->name)) {
+				pr_err("can't move proc entry for '%s', the name is taken\n",
+				       dev->name);
+				break;
+			}
 			proc_remove(pkt_dev->entry);
-
 			pkt_dev->entry = proc_create_data(dev->name, 0600,
 							  pn->proc_dir,
 							  &pktgen_if_proc_ops,
 							  pkt_dev);
-			if (!pkt_dev->entry)
+			if (pkt_dev->entry)
+				strscpy(pkt_dev->procname, dev->name);
+			else
 				pr_err("can't move proc entry for '%s'\n",
 				       dev->name);
 			break;
@@ -3841,6 +3880,10 @@ static int pktgen_add_device(struct pktgen_thread *t, const char *ifname)
 		pr_err("ERROR: interface already used\n");
 		return -EBUSY;
 	}
+	if (pktgen_proc_name_taken(t->net, ifname)) {
+		pr_err("ERROR: %s/%s is taken\n", PG_PROC_DIR, ifname);
+		return -EEXIST;
+	}
 
 	pkt_dev = kzalloc_node(sizeof(struct pktgen_dev), GFP_KERNEL, node);
 	if (!pkt_dev)
@@ -3888,6 +3931,7 @@ static int pktgen_add_device(struct pktgen_thread *t, const char *ifname)
 		err = -EINVAL;
 		goto out2;
 	}
+	strscpy(pkt_dev->procname, ifname);
 #ifdef CONFIG_XFRM
 	pkt_dev->ipsmode = XFRM_MODE_TRANSPORT;
 	pkt_dev->ipsproto = IPPROTO_ESP;
@@ -3937,7 +3981,8 @@ static int __net_init pktgen_create_thread(int cpu, struct pktgen_net *pn)
 	list_add_tail(&t->th_list, &pn->pktgen_threads);
 	init_completion(&t->start_done);
 
-	p = kthread_create_on_cpu(pktgen_thread_worker, t, cpu, "kpktgend_%d");
+	p = kthread_create_on_cpu(pktgen_thread_worker, t, cpu,
+				  PG_THREAD_PREFIX "%d");
 	if (IS_ERR(p)) {
 		pr_err("kthread_create_on_node() failed for cpu %d\n", t->cpu);
 		list_del(&t->th_list);
