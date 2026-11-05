@@ -599,6 +599,9 @@ static inline int au0828_isoc_copy(struct au0828_dev *dev, struct urb *urb)
 			dma_q->pos = 0;
 		}
 
+		if (len <= 0)
+			continue;
+
 		vbi_field_size = dev->vbi_width * dev->vbi_height * 2;
 		if (dev->vbi_read < vbi_field_size) {
 			remain  = vbi_field_size - dev->vbi_read;
