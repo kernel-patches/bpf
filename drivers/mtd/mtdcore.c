@@ -1670,6 +1670,10 @@ static int mtd_check_oob_ops(struct mtd_info *mtd, loff_t offs,
 	if (ops->ooblen) {
 		size_t maxooblen;
 
+		if (mtd_div_by_ws(offs, mtd) >=
+		    mtd_div_by_ws(mtd->size, mtd))
+			return -EINVAL;
+
 		if (ops->ooboffs >= mtd_oobavail(mtd, ops))
 			return -EINVAL;
 
