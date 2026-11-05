@@ -1493,14 +1493,15 @@ done:
 }
 EXPORT_SYMBOL_IF_KUNIT(calc_map_type_and_dist);
 
-static unsigned int pci_p2pdma_client_tlp_flags(struct pci_dev *client,
-						unsigned int tlp_flags)
+VISIBLE_IF_KUNIT unsigned int
+pci_p2pdma_client_tlp_flags(struct pci_dev *client, unsigned int tlp_flags)
 {
 	if (client->ats_enabled)
 		return tlp_flags | PCI_P2PDMA_TLP_TRANSLATED;
 
 	return tlp_flags & ~PCI_P2PDMA_TLP_TRANSLATED;
 }
+EXPORT_SYMBOL_IF_KUNIT(pci_p2pdma_client_tlp_flags);
 
 /*
  * A client that translates every address it is handed cannot be handed a bus
@@ -1512,7 +1513,7 @@ static unsigned int pci_p2pdma_client_tlp_flags(struct pci_dev *client,
  * Take the Address Type from @tlp_flags rather than reading the ATS Enable
  * bit again, so the policy and the class it applies to always agree.
  */
-static enum pci_p2pdma_map_type
+VISIBLE_IF_KUNIT enum pci_p2pdma_map_type
 pci_p2pdma_client_map_type(struct pci_dev *provider, struct pci_dev *client,
 			   bool per_mapping, unsigned int tlp_flags,
 			   enum pci_p2pdma_map_type type)
@@ -1531,6 +1532,7 @@ pci_p2pdma_client_map_type(struct pci_dev *provider, struct pci_dev *client,
 
 	return PCI_P2PDMA_MAP_NOT_SUPPORTED;
 }
+EXPORT_SYMBOL_IF_KUNIT(pci_p2pdma_client_map_type);
 
 /* Whether the driver of @client called pcim_p2pdma_set_ats_per_mapping(). */
 static bool pci_p2pdma_client_per_mapping(struct pci_dev *client)
