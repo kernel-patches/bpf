@@ -66,6 +66,7 @@ struct link_training_settings;
 struct dc_link;
 struct dc_crtc_timing;
 struct dmub_srv_hw_params;
+struct audio_output;
 
 struct tg_lock_params {
 	struct dc *dc;
@@ -2315,6 +2316,13 @@ void hwss_wait_for_all_blank_complete(struct dc *dc,
 
 void hwss_wait_for_odm_update_pending_complete(struct dc *dc,
 		struct dc_state *context);
+
+void hwss_restart_otg_for_dp_test_link_retrain(struct dc *dc,
+		struct dc_state *context,
+		struct pipe_ctx **otg_masters,
+		uint8_t otg_master_count,
+		bool program_pix_clk,
+		struct audio_output *audio_output);
 
 void hwss_wait_for_no_pipes_pending(struct dc *dc,
 		struct dc_state *context);

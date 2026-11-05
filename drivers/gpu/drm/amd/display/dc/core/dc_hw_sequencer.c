@@ -3195,6 +3195,90 @@ void hwss_wait_for_odm_update_pending_complete(struct dc *dc, struct dc_state *c
 	hwss_wait_for_all_blank_complete(dc, context);
 }
 
+/**
+ * hwss_restart_otg_for_dp_test_link_retrain - restart the OTGs of a link retrained
+ * by a DP test request, with the stream's planes left attached
+ *
+ * Disables the OTGs, programs the pixel clock and audio if requested, restores
+ * the ODM combine configuration cleared by disable_crtc, then re-enables the
+ * OTGs. The caller must have already turned DPMS off and updated the stream and
+ * link resources in @context for the new link settings.
+ *
+ * @dc: [in] dc reference
+ * @context: [in] hardware context in use
+ * @otg_masters: [in] OTG master pipes of the streams being retrained
+ * @otg_master_count: [in] number of entries in @otg_masters
+ * @program_pix_clk: [in] program pixel clock and audio, needed when the link encoding changes
+ * @audio_output: [in] audio output per OTG master, used if @program_pix_clk
+ */
+void hwss_restart_otg_for_dp_test_link_retrain(struct dc *dc,
+		struct dc_state *context,
+		struct pipe_ctx **otg_masters,
+		uint8_t otg_master_count,
+		bool program_pix_clk,
+		struct audio_output *audio_output)
+{
+	int i;
+
+	// TODO: Confirm with HW docs if disable/re-enable is actually required here
+	for (i = 0; i < otg_master_count; i++)
+		otg_masters[i]->stream_res.tg->funcs->disable_crtc(otg_masters[i]->stream_res.tg);
+
+	if (program_pix_clk) {
+		for (i = 0; i < otg_master_count; i++) {
+			struct pipe_ctx *pipe = otg_masters[i];
+			struct audio *audio = pipe->stream_res.audio;
+
+			if (pipe->stream_res.pix_clk_params.controller_id != CONTROLLER_ID_UNDEFINED)
+				pipe->clock_source->funcs->program_pix_clk(
+						pipe->clock_source,
+						&pipe->stream_res.pix_clk_params,
+						dc->link_srv->dp_get_encoding_format(&pipe->link_config.dp_link_settings),
+						&pipe->pll_settings);
+
+			if (audio != NULL) {
+				const struct link_hwss *link_hwss = get_link_hwss(
+						pipe->stream->link, &pipe->link_res);
+
+				link_hwss->setup_audio_output(pipe, &audio_output[i], audio->inst);
+
+				audio->funcs->az_configure(
+						audio,
+						pipe->stream->signal,
+						&audio_output[i].crtc_info,
+						&pipe->stream->audio_info,
+						&audio_output[i].dp_link_info);
+
+				if (dc->config.disable_hbr_audio_dp2 &&
+						audio->funcs->az_disable_hbr_audio &&
+						dc->link_srv->dp_is_128b_132b_signal(pipe))
+					audio->funcs->az_disable_hbr_audio(audio);
+			}
+		}
+	}
+
+	for (i = 0; i < otg_master_count; i++) {
+		struct pipe_ctx *pipe = otg_masters[i];
+
+		/* disable_crtc cleared the ODM segment config */
+		if (pipe->next_odm_pipe) {
+			struct pipe_ctx *opp_heads[MAX_PIPES];
+			int opp_inst[MAX_PIPES] = {0};
+			int opp_head_count = resource_get_opp_heads_for_otg_master(pipe, &context->res_ctx, opp_heads);
+			int j;
+
+			for (j = 0; j < opp_head_count; j++)
+				opp_inst[j] = opp_heads[j]->stream_res.opp->inst;
+
+			pipe->stream_res.tg->funcs->set_odm_combine(pipe->stream_res.tg, opp_inst, opp_head_count,
+					resource_get_odm_slice_dst_width(pipe, false),
+					resource_get_odm_slice_dst_width(pipe, true));
+		}
+
+		pipe->stream_res.tg->funcs->enable_crtc(pipe->stream_res.tg);
+	}
+}
+
 void hwss_reset_unused_det(struct dc *dc, struct dc_state *context)
 {
 	struct hubbub *hubbub = dc->res_pool->hubbub;
