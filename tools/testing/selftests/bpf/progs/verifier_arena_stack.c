@@ -199,6 +199,55 @@ __naked void call_through(void)
 	: __clobber_all);
 }
 
+unsigned long first_r12, last_r12;
+
+/* 1024 bytes in the stack in arena, nothing in the kernel stack */
+static __naked __noinline __used long goes_down(void)
+{
+	asm volatile (
+	".8byte %[adj];"
+	".8byte %[mov];"	/* r1 = r12 */
+	"r2 = %[last_r12] ll;"
+	"*(u64 *)(r2 + 0) = r1;"
+	"call goes_down;"
+	"exit;"
+	:
+	: __imm_addr(last_r12),
+	  __imm_insn(adj, ADJ(1024)),
+	  __imm_insn(mov, MOV(BPF_REG_1))
+	: __clobber_all);
+}
+
+/* The check of a recursion looks at the kernel stack. It fails before 32K of arena are used. */
+SEC("syscall")
+__description("arena stack: recursion ends in the stack")
+__success __retval(1)
+__naked void recursion(void)
+{
+	asm volatile (
+	".8byte %[adj];"
+	".8byte %[mov];"	/* r1 = r12 */
+	"r2 = %[first_r12] ll;"
+	"*(u64 *)(r2 + 0) = r1;"
+	"call goes_down;"
+	"r1 = %[last_r12] ll;"
+	"r1 = *(u64 *)(r1 + 0);"
+	"r2 = %[first_r12] ll;"
+	"r2 = *(u64 *)(r2 + 0);"
+	"r1 -= r2;"
+	"r0 = 0;"
+	"if r1 < 8192 goto +2;"
+	"if r1 > 32736 goto +1;"
+	"r0 = 1;"
+	"exit;"
+	:
+	: __imm_addr(first_r12),
+	  __imm_addr(last_r12),
+	  __imm_insn(adj, ADJ(32)),
+	  __imm_insn(mov, MOV(BPF_REG_1))
+	: __clobber_all);
+}
+
 SEC("syscall")
 __description("arena stack: helpers don't change r12")
 __success __retval(3)
