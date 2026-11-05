@@ -1728,12 +1728,25 @@ static void detect_edp_presence(struct dc *dc)
 	}
 }
 
+static void sync_current_state_clocks_from_clk_mgr(struct dc *dc)
+{
+	if (!dc->current_state || !dc->clk_mgr)
+		return;
+
+	if (!(dc->ctx->dce_version == DCN_VERSION_4_2 || dc->ctx->dce_version == DCN_VERSION_4_2B))
+		return;
+
+	dc->current_state->bw_ctx.bw.dcn.clk = dc->clk_mgr->clks;
+}
+
 void legacy_hardware_init(struct dc *dc)
 {
 
 	detect_edp_presence(dc);
-	if (dc->ctx->dce_environment != DCE_ENV_VIRTUAL_HW)
+	if (dc->ctx->dce_environment != DCE_ENV_VIRTUAL_HW) {
 		dc->hwss.init_hw(dc);
+		sync_current_state_clocks_from_clk_mgr(dc);
+	}
 	dc_dmub_srv_notify_fw_dc_power_state(dc->ctx->dmub_srv, DC_ACPI_CM_POWER_STATE_D0);
 }
 
@@ -6435,6 +6448,7 @@ void dc_set_power_state(struct dc *dc, enum dc_acpi_cm_power_state power_state)
 		dc_dmub_srv_notify_fw_dc_power_state(dc->ctx->dmub_srv, power_state);
 
 		dc->hwss.init_hw(dc);
+		sync_current_state_clocks_from_clk_mgr(dc);
 
 		invalidate_drr_adjust(dc);
 
