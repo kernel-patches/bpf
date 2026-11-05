@@ -285,6 +285,13 @@ static int mtk_port_tx_complete(struct sk_buff *skb)
 				     "Failed to send data: status:%d, port:%s\n",
 				     trb->status, port->info.name);
 
+	/* The hook may sleep, but it also runs from HIF teardown with
+	 * trans->submit_lock held, so it must not take a lock that is ever
+	 * held across a call into the HIF.
+	 */
+	if (mtk_port_get_ops(port->info.type)->tx_complete)
+		mtk_port_get_ops(port->info.type)->tx_complete(port);
+
 	/* Pairs with the smp_load_acquire() of trb->done in the waiters. */
 	smp_store_release(&trb->done, true);
 	wake_up_all(&port->trb_wq);
@@ -626,6 +633,27 @@ int mtk_port_ch_disable(struct mtk_port *port)
 	return ret;
 }
 
+static void mtk_port_enable_by_type(struct mtk_port_mngr *port_mngr, int tbl_type)
+{
+	struct radix_tree_iter iter;
+	struct mtk_port *port;
+	void __rcu **slot;
+
+	radix_tree_for_each_slot(slot, &port_mngr->port_tbl[tbl_type],
+				 &iter, 0) {
+		port = mtk_port_tbl_slot(&slot, &iter);
+		if (!port)
+			continue;
+		/* Consumed, so a later boot acts only on what its own port
+		 * enumeration advertised.
+		 */
+		if (port->enable) {
+			port->enable = false;
+			mtk_port_get_ops(port->info.type)->enable(port);
+		}
+	}
+}
+
 static void mtk_port_disable(struct mtk_port_mngr *port_mngr)
 {
 	struct radix_tree_iter iter;
@@ -657,6 +685,9 @@ void mtk_port_mngr_fsm_state_handler(struct mtk_fsm_param *fsm_param, void *arg)
 	switch (fsm_param->to) {
 	case FSM_STATE_OFF:
 		mtk_port_disable(port_mngr);
+		break;
+	case FSM_STATE_READY:
+		mtk_port_enable_by_type(port_mngr, PORT_TBL_MD);
 		break;
 	default:
 		break;

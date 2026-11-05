@@ -11,6 +11,7 @@
 #include <linux/radix-tree.h>
 #include <linux/skbuff.h>
 #include <linux/types.h>
+#include <linux/wwan.h>
 
 #include "mtk_ctrl_plane.h"
 #include "mtk_dev.h"
@@ -58,12 +59,24 @@ enum mtk_port_tbl {
 
 enum mtk_port_type {
 	PORT_TYPE_INTERNAL,
+	PORT_TYPE_WWAN,
 	PORT_TYPE_MAX
 };
 
 struct mtk_internal_port {
 	void *arg;
 	int (*recv_cb)(void *arg, struct sk_buff *skb);
+};
+
+struct mtk_wwan_port {
+	/* w_lock serialises w_port and PORT_S_OPEN against the receive path,
+	 * and txoff/txon against TX completion.  It is a leaf: TX completion
+	 * can take it with trans->submit_lock held, so it is never held
+	 * across a call into the HIF.
+	 */
+	struct mutex w_lock;
+	enum wwan_port_type w_type;
+	struct wwan_port *w_port;
 };
 
 struct mtk_port_cfg {
@@ -91,6 +104,7 @@ struct mtk_port {
 	wait_queue_head_t trb_wq;
 	struct mtk_port_mngr *port_mngr;
 	struct mtk_internal_port i_priv;
+	struct mtk_wwan_port w_priv;
 };
 
 struct mtk_port_mngr {
