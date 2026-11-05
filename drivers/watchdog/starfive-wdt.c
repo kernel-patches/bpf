@@ -499,28 +499,25 @@ static int starfive_wdt_probe(struct platform_device *pdev)
 		set_bit(WDOG_HW_RUNNING, &wdt->wdd.status);
 	} else {
 		starfive_wdt_stop(wdt);
+		if (pm_runtime_enabled(&pdev->dev))
+			pm_runtime_put_sync(&pdev->dev);
 	}
 
 	ret = watchdog_register_device(&wdt->wdd);
-	if (ret)
-		goto err_exit;
-
-	if (!early_enable) {
-		if (pm_runtime_enabled(&pdev->dev)) {
-			ret = pm_runtime_put_sync(&pdev->dev);
-			if (ret)
-				goto err_unregister_wdt;
+	if (ret) {
+		if (watchdog_hw_running(&wdt->wdd)) {
+			starfive_wdt_stop(wdt);
+			if (pm_runtime_enabled(&pdev->dev))
+				pm_runtime_put_sync(&pdev->dev);
 		}
+		if (!pm_runtime_enabled(&pdev->dev))
+			starfive_wdt_disable_clock(wdt);
+		goto err_disable_pm;
 	}
 
 	return 0;
 
-err_unregister_wdt:
-	watchdog_unregister_device(&wdt->wdd);
-	goto err_disable_pm;
 err_exit:
-	if (watchdog_hw_running(&wdt->wdd))
-		starfive_wdt_stop(wdt);
 	if (pm_runtime_enabled(&pdev->dev))
 		pm_runtime_put_sync(&pdev->dev);
 	else
