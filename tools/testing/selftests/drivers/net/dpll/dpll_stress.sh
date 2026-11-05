@@ -58,14 +58,46 @@ cleanup()
 	dpll_lib_cleanup
 }
 
-# Create a device named after the given clock-id and deploy it. Sets
-# DPLLSIM_CREATED_NAME.
+# Pin type and a frequency the simulator supports for it.
+STRESS_PIN_KINDS=(
+	"gnss 1"
+	"ext 10000000"
+	"ext 25000000"
+	"synce-eth-port 10000000"
+	"int-oscillator 25000000"
+	"mux 2048000"
+)
+
+# Create a device named after the given clock-id with the given pin count
+# and deploy it. Sets DPLLSIM_CREATED_NAME.
 create_stress_device()
 {
 	local clock_id=$1
+	local num_pins=$2
 	local name="st$clock_id"
+	local i type freq dir
+	local dirs=(input output)
 
 	dpllsim_create_device "$name" "$clock_id" || return 1
+
+	# Always have at least one plain input pin, then random ones
+	if ! dpllsim_add_pin "$name" ext0 ext 10000000 input; then
+		dpllsim_delete_device "$name"
+		return 1
+	fi
+	for i in $(seq 1 $((num_pins - 1))); do
+		read -r type freq <<< \
+			"${STRESS_PIN_KINDS[RANDOM % ${#STRESS_PIN_KINDS[@]}]}"
+		# A MUX pin is an input selector, the simulator rejects an
+		# output one
+		dir=${dirs[RANDOM % 2]}
+		[ "$type" = mux ] && dir=input
+		if ! dpllsim_add_pin "$name" "pin$i" "$type" "$freq" \
+				     "$dir"; then
+			dpllsim_delete_device "$name"
+			return 1
+		fi
+	done
 
 	if ! dpllsim_deploy "$name"; then
 		dpllsim_delete_device "$name"
@@ -84,7 +116,7 @@ test_rapid_create_delete()
 	for i in $(seq 1 "$STRESS_ITERATIONS"); do
 		dpllsim_alloc_clock_id; clock_id=$DPLLSIM_CLOCK_ID
 
-		if ! create_stress_device "$clock_id"; then
+		if ! create_stress_device "$clock_id" 5; then
 			check_err 1 "failed to create device (iteration $i)"
 			break
 		fi
@@ -115,6 +147,14 @@ test_deploy_cycle()
 		return
 	fi
 	track_device "$name"
+
+	if ! dpllsim_add_pin "$name" gnss0 gnss 1 input ||
+	   ! dpllsim_add_pin "$name" ext0 ext 10000000 input ||
+	   ! dpllsim_add_pin "$name" out0 ext 10000000 output; then
+		check_err 1 "cannot add pins"
+		log_test "DPLL deploy/undeploy cycling"
+		return
+	fi
 
 	for i in $(seq 1 "$STRESS_ITERATIONS"); do
 		if ! dpllsim_deploy "$name"; then

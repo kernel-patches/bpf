@@ -44,6 +44,10 @@ dpll_lib_check_prereqs()
 		echo "SKIP: dpll tool too old, missing 'device show'"
 		exit "$ksft_skip"
 	fi
+	if ! dpll pin help 2>&1 | grep -q "show"; then
+		echo "SKIP: dpll tool too old, missing 'pin show'"
+		exit "$ksft_skip"
+	fi
 }
 
 # The scripts that create dpllsim devices share the one dpllsim directory
@@ -108,14 +112,39 @@ dpll_lib_init()
 	fi
 }
 
+# Name of the dpllsim device a script created as the device under test,
+# set by the script next to DPLL_DEV_ID. Empty when the user provided
+# the device.
+DPLL_CREATED_DEVICE=""
+
+# The layout and the capabilities of the device a script created are
+# known, so a missing pin, attribute or capability on it can only mean a
+# failed query or broken tooling. Report such a condition as a failure
+# on the created device and as a skip on a device the user provided,
+# where it is a property of the hardware.
+# $1: test name, $2: reason
+dpll_log_test_skip_or_fail()
+{
+	local name=$1
+	local reason=$2
+
+	if [ -n "$DPLL_CREATED_DEVICE" ]; then
+		check_err 1 "$reason on the device created by the test"
+		log_test "$name"
+	else
+		log_test_skip "$name" "$reason"
+	fi
+}
+
 ##############################################################################
 # Device queries
 #
 # "dpll device show id X -j" may print either a flat object or a dump-style
 # {"device":[...]} wrapper depending on the iproute2 version, so normalize
-# with (.device[0]? // .) before extracting fields. The tool is run first
-# and jq only on what it printed, so that a failed query returns its
-# status instead of the empty output a missing field produces too.
+# with (.device[0]? // .) before extracting fields, same for pins. The
+# device helpers run the tool first and jq only on what it printed, so
+# that a failed query returns its status instead of the empty output a
+# missing field produces too.
 
 dpll_device_json()
 {
@@ -198,11 +227,109 @@ dpll_device_wait_gone_by_clock_id()
 }
 
 ##############################################################################
+# Pin queries
+#
+# Attributes of the pin itself are read by pin id alone. Attributes that
+# live in the parent-device nest (state, prio, ...) take the device id in
+# addition, to select the nest of the device under test. The helpers
+# that work on the full pin dump normalize its shape like the id-based
+# ones do, with (.pin? // [.]), so that a flat object would work too.
+# Like the device queries, every helper runs the tool first and jq only
+# on what it printed, and returns 1 when the tool failed.
+
+dpll_pin_json()
+{
+	local pin_id=$1
+	local out
+
+	out=$(dpll pin show id "$pin_id" -j 2>/dev/null) || return 1
+	jq '(.pin[0]? // .)' <<< "$out"
+}
+
+__dpll_pin_field()
+{
+	local pin_id=$1; shift
+	local out
+
+	out=$(dpll pin show id "$pin_id" -j 2>/dev/null) || return 1
+	jq -r "(.pin[0]? // .) | $1 // empty" <<< "$out"
+}
+
+# Fields living in the parent-device nest matching the given device
+__dpll_pin_dev_field()
+{
+	local dev_id=$1
+	local pin_id=$2; shift 2
+	local out
+
+	out=$(dpll pin show id "$pin_id" -j 2>/dev/null) || return 1
+	jq -r --argjson dev "$dev_id" \
+	   "(.pin[0]? // .) | .[\"parent-device\"][]? |
+	    select(.[\"parent-id\"] == \$dev) | $1 // empty" <<< "$out"
+}
+
+# Print ids of all pins belonging to the device, one per line: pins
+# registered on the device directly plus pins registered on those pins
+# (MUX children), followed recursively so that children of children are
+# included too. Older iproute2 lacks the "pin show device <id>" filter,
+# so filter the full dump with jq.
+dpll_pin_get_ids()
+{
+	local dev_id=$1
+	local out
+
+	out=$(dpll pin show -j 2>/dev/null) || return 1
+	jq -r --argjson dev "$dev_id" '
+		(.pin? // [.]) as $pins |
+		def children($ids):
+			[$pins[] | select(any(.["parent-pin"][]?;
+					     .["parent-id"] as $p |
+					     $ids | index($p))) | .id];
+		def closure($ids):
+			(($ids + children($ids)) | unique) as $n |
+			if ($n | length) == ($ids | length) then $ids
+			else closure($n) end;
+		closure([$pins[] |
+			 select(any(.["parent-device"][]?;
+				    .["parent-id"] == $dev)) | .id])
+		as $all |
+		$pins[] | select(.id as $i | $all | index($i)) | .id' \
+		<<< "$out"
+}
+
+# Print ids of all non-MUX pins of the device with the given direction
+# (input/output), one per line. Direction lives in the parent-device nest.
+dpll_pin_find_by_direction()
+{
+	local dev_id=$1
+	local dir=$2
+	local out
+
+	out=$(dpll pin show -j 2>/dev/null) || return 1
+	jq -r --argjson dev "$dev_id" --arg dir "$dir" \
+	   '(.pin? // [.])[] | select(.type != "mux") |
+	    select(.["parent-device"][]? |
+		   (.["parent-id"] == $dev and .direction == $dir)) |
+	    .id' <<< "$out"
+}
+
+dpll_pin_get_frequency()
+{
+	__dpll_pin_field "$1" '.frequency'
+}
+
+dpll_pin_get_state()
+{
+	__dpll_pin_dev_field "$1" "$2" '.state'
+}
+
+##############################################################################
 # dpllsim configfs interface
 #
-# Each directory under $DPLLSIM_CFG is one simulated device. Writing 1 to
-# <dev>/live registers the device with the DPLL core, writing 0
-# unregisters it. The structure (clock_id) can only be changed while the
+# Each directory under $DPLLSIM_CFG is one simulated device; its pins are
+# directories under <dev>/pins/. Writing 1 to <dev>/live registers the
+# device and its pins with the DPLL core, writing 0 unregisters them. The
+# structure (pins, clock_id, pin attributes) can only be changed while the
 # device is not live.
 #
 # dpllsim_available mounts configfs when nothing else did, which is the
@@ -275,6 +402,28 @@ dpllsim_create_device()
 	fi
 }
 
+# $1: device name, $2: pin name (becomes the board-label), $3: type (gnss,
+# int-oscillator, ext, synce-eth-port, mux), $4: frequency in Hz,
+# $5: direction (input/output)
+dpllsim_add_pin()
+{
+	local dev=$1
+	local pin=$2
+	local type=$3
+	local frequency=$4
+	local direction=$5
+	local pin_path="$DPLLSIM_CFG/$dev/pins/$pin"
+
+	mkdir "$pin_path" 2>/dev/null || return 1
+
+	if ! echo "$type" 2>/dev/null > "$pin_path/type" ||
+	   ! echo "$frequency" 2>/dev/null > "$pin_path/frequency" ||
+	   ! echo "$direction" 2>/dev/null > "$pin_path/direction"; then
+		rmdir "$pin_path" 2>/dev/null
+		return 1
+	fi
+}
+
 dpllsim_deploy()
 {
 	echo 1 2>/dev/null > "$DPLLSIM_CFG/$1/live"
@@ -285,17 +434,22 @@ dpllsim_undeploy()
 	echo 0 2>/dev/null > "$DPLLSIM_CFG/$1/live"
 }
 
-# Take the device offline and remove it. Every step is attempted even
-# when an earlier one failed, the return value is non-zero when any did.
-# A device that does not exist counts as deleted.
+# Take the device offline and remove it together with all its pins.
+# Every step is attempted even when an earlier one failed, the return
+# value is non-zero when any did. A device that does not exist counts as
+# deleted.
 dpllsim_delete_device()
 {
 	local dev_path="$DPLLSIM_CFG/$1"
-	local ret=0
+	local pin_path ret=0
 
 	[ -d "$dev_path" ] || return 0
 
 	dpllsim_undeploy "$1" || ret=1
+	for pin_path in "$dev_path"/pins/*/; do
+		[ -d "$pin_path" ] || continue
+		rmdir "$pin_path" || ret=1
+	done
 	rmdir "$dev_path" || ret=1
 
 	return "$ret"
@@ -309,8 +463,12 @@ dpllsim_alloc_clock_id()
 	DPLLSIM_CLOCK_ID=$((DPLLSIM_NEXT_CLOCK_ID++))
 }
 
-# Create a device, deploy it and resolve the netlink device id. Sets
-# DPLLSIM_CREATED_NAME, DPLLSIM_CLOCK_ID and DPLLSIM_DEV_ID.
+# Create a device with the standard 3-pin layout, deploy it and resolve
+# the netlink device id. Sets DPLLSIM_CREATED_NAME, DPLLSIM_CLOCK_ID and
+# DPLLSIM_DEV_ID.
+#   gnss0: GNSS, 1 Hz, input
+#   ext0: EXT, 10 MHz, input
+#   out0: EXT, 10 MHz, output
 # shellcheck disable=SC2120 # the argument is optional
 dpllsim_setup_standard_device()
 {
@@ -320,6 +478,13 @@ dpllsim_setup_standard_device()
 	clock_id=$DPLLSIM_CLOCK_ID
 	name="std$clock_id"
 	dpllsim_create_device "$name" "$clock_id" || return 1
+
+	if ! dpllsim_add_pin "$name" gnss0 gnss 1 input ||
+	   ! dpllsim_add_pin "$name" ext0 ext 10000000 input ||
+	   ! dpllsim_add_pin "$name" out0 ext 10000000 output; then
+		dpllsim_delete_device "$name"
+		return 1
+	fi
 
 	if ! dpllsim_deploy "$name"; then
 		dpllsim_delete_device "$name"
