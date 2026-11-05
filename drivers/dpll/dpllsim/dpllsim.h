@@ -43,6 +43,7 @@ struct dpllsim_pin {
 
 	/* Simulated state, guarded by dev->lock */
 	enum dpll_pin_state state;
+	s32 phase_adjust;
 };
 
 struct dpllsim_dev {
