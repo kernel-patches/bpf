@@ -1480,3 +1480,13 @@ proc_create_seq() and friends. An initializer that still names
 entry and does the poll_wait() on it before it calls the method, which
 only reports the mask. Wake the pollers with proc_poll_notify(). A poll
 on a removed entry reports EPOLLERR | EPOLLPRI.
+
+---
+
+**mandatory**
+
+pde_make_permanent() and proc_make_permanent() are gone. An entry that is
+never removed is created with the flag already set, PROC_ENTRY_PERMANENT
+in ->proc_flags for a proc_ops entry, proc_create_seq_permanent() or
+proc_create_single_permanent() for a seq_file one, so that nothing can
+pin it before it is permanent.

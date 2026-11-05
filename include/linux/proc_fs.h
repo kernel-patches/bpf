@@ -399,16 +399,16 @@ static inline struct pid_namespace *proc_pid_ns(struct super_block *sb)
 
 bool proc_ns_file(const struct file *file);
 
+/*
+ * Entries that are never removed. Built-in code only, modules' /proc files
+ * aren't permanent because modules aren't permanent.
+ */
 #if defined CONFIG_PROC_FS && !defined MODULE
-void impl_proc_make_permanent(struct proc_dir_entry *pde);
+struct proc_dir_entry *proc_create_seq_permanent(const char *name, umode_t mode,
+		struct proc_dir_entry *parent, const struct seq_operations *ops);
+struct proc_dir_entry *proc_create_single_permanent(const char *name,
+		umode_t mode, struct proc_dir_entry *parent,
+		int (*show)(struct seq_file *, void *));
 #endif
-
-static inline void proc_make_permanent(struct proc_dir_entry *pde)
-{
-	/* Don't give matches to modules. */
-#if defined CONFIG_PROC_FS && !defined MODULE
-	impl_proc_make_permanent(pde);
-#endif
-}
 
 #endif /* _LINUX_PROC_FS_H */

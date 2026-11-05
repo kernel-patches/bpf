@@ -90,14 +90,6 @@ static inline bool pde_is_permanent(const struct proc_dir_entry *pde)
 	return pde->flags & PROC_ENTRY_PERMANENT;
 }
 
-/* This is for builtin code, not even for modules which are compiled in. */
-static inline void pde_make_permanent(struct proc_dir_entry *pde)
-{
-	/* Ensure magic flag does something. */
-	static_assert(PROC_ENTRY_PERMANENT != 0);
-	pde->flags |= PROC_ENTRY_PERMANENT;
-}
-
 static inline bool pde_has_proc_fops(const struct proc_dir_entry *pde)
 {
 	return pde->flags & PROC_ENTRY_proc_fops;

@@ -16,8 +16,7 @@ static int __init proc_cmdline_init(void)
 {
 	struct proc_dir_entry *pde;
 
-	pde = proc_create_single("cmdline", 0, NULL, cmdline_proc_show);
-	pde_make_permanent(pde);
+	pde = proc_create_single_permanent("cmdline", 0, NULL, cmdline_proc_show);
 	pde->size = saved_command_line_len + 1;
 	return 0;
 }

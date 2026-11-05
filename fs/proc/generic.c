@@ -829,8 +829,7 @@ struct proc_dir_entry *proc_create_fops(const char *name, umode_t mode,
 	if (!p)
 		return NULL;
 	p->proc_fops = fops;
-	p->flags |= PROC_ENTRY_proc_fops;
-	pde_make_permanent(p);
+	p->flags |= PROC_ENTRY_proc_fops | PROC_ENTRY_PERMANENT;
 	return proc_register(parent, p, NULL);
 }
 
@@ -855,6 +854,41 @@ struct proc_dir_entry *proc_create_seq_private(const char *name, umode_t mode,
 	return proc_register(parent, p, NULL);
 }
 EXPORT_SYMBOL(proc_create_seq_private);
+
+/*
+ * The seq_file entries that are never removed and so never pinned, see
+ * pde_pin(). The flag has to be set before proc_register() publishes the
+ * entry. Not exported, modules' /proc files aren't permanent because modules
+ * aren't permanent.
+ */
+struct proc_dir_entry *proc_create_seq_permanent(const char *name, umode_t mode,
+		struct proc_dir_entry *parent, const struct seq_operations *ops)
+{
+	struct proc_dir_entry *p;
+
+	p = proc_create_reg(name, mode, &parent, NULL);
+	if (!p)
+		return NULL;
+	p->proc_ops = &proc_seq_ops;
+	p->seq_ops = ops;
+	p->flags |= PROC_ENTRY_proc_seq_ops | PROC_ENTRY_PERMANENT;
+	return proc_register(parent, p, NULL);
+}
+
+struct proc_dir_entry *proc_create_single_permanent(const char *name,
+		umode_t mode, struct proc_dir_entry *parent,
+		int (*show)(struct seq_file *, void *))
+{
+	struct proc_dir_entry *p;
+
+	p = proc_create_reg(name, mode, &parent, NULL);
+	if (!p)
+		return NULL;
+	p->proc_ops = &proc_seq_ops;
+	p->single_show = show;
+	p->flags |= PROC_ENTRY_proc_show | PROC_ENTRY_PERMANENT;
+	return proc_register(parent, p, NULL);
+}
 
 struct proc_dir_entry *__proc_create_single_data(const char *name, umode_t mode,
 		struct proc_dir_entry *parent,
@@ -1045,14 +1079,4 @@ ssize_t proc_simple_write(struct file *f, char *buf, size_t size, loff_t *_pos)
 		return -EINVAL;
 	ret = pde->write(f, buf, size);
 	return ret == 0 ? size : ret;
-}
-
-/*
- * Not exported to modules:
- * modules' /proc files aren't permanent because modules aren't permanent.
- */
-void impl_proc_make_permanent(struct proc_dir_entry *pde)
-{
-	if (pde)
-		pde_make_permanent(pde);
 }
