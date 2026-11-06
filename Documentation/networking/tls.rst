@@ -228,6 +228,25 @@ The number of successful and failed key updates is tracked in the
 ``TlsRxRekeyError`` statistics. The ``TlsRxRekeyReceived`` statistic
 counts KeyUpdate handshake messages that have been received.
 
+Record number exhaustion
+------------------------
+
+A record number must not wrap under the same key. When it would, the
+connection is aborted with ``EBADMSG``. On transmit, the record that
+uses the last 64-bit record number is not sent, and the send that
+completes it doesn't count its data as sent. On receive, that record is
+still delivered, but no record after it is. Either way, no further
+record data is sent, not even the rest of a partially sent record.
+Unlike other socket errors, this one is not cleared when it is reported,
+by ``SO_ERROR`` or otherwise: every later send, and every receive that
+needs another record, fails with ``EBADMSG``, and a new key does not
+change that. ``poll()`` reports ``EPOLLERR``, and ``EPOLLIN`` only while
+data that was already decrypted remains; that data can still be read.
+
+A TLS 1.3 KeyUpdate may be the last record received under a key. In
+that case receive is paused as for any other KeyUpdate, and continues
+once the new key is provided.
+
 Integrating in to userspace TLS library
 ---------------------------------------
 

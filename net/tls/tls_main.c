@@ -190,7 +190,7 @@ retry:
 		bvec_set_page(&bvec, p, size, offset);
 		iov_iter_bvec(&msg.msg_iter, ITER_SOURCE, &bvec, 1, size);
 
-		ret = tcp_sendmsg_locked(sk, &msg, size);
+		ret = tls_final_err(ctx) ?: tcp_sendmsg_locked(sk, &msg, size);
 
 		if (ret != size) {
 			if (ret > 0) {
@@ -414,8 +414,12 @@ static __poll_t tls_sk_poll(struct file *file, struct socket *sock,
 	tls_ctx = tls_get_ctx(sk);
 	ctx = tls_sw_ctx_rx(tls_ctx);
 
+	/* the final abort outlives sk_err, only decrypted data is readable */
+	if (unlikely(tls_final_err(tls_ctx)))
+		mask |= EPOLLERR;
+
 	if ((skb_queue_empty_lockless(&ctx->rx_list) &&
-	     !tls_strp_msg_ready(ctx)) ||
+	     (!tls_strp_msg_ready(ctx) || tls_final_err(tls_ctx))) ||
 	    READ_ONCE(ctx->key_update_pending))
 		mask &= ~(EPOLLIN | EPOLLRDNORM);
 

@@ -2421,6 +2421,203 @@ TEST_F(tls, rekey_poll_delay)
 	}
 }
 
+/* Record number exhaustion, TLS 1.3 only. The record number only enters
+ * the nonce there, so a TX key whose IV is XORed with N sends record
+ * number N at its own record number 0, and TX never has to wrap.
+ */
+FIXTURE(tls_recseq)
+{
+	int fd, cfd;
+	bool notls;
+};
+
+FIXTURE_SETUP(tls_recseq)
+{
+	ulp_sock_pair(_metadata, &self->fd, &self->cfd, &self->notls);
+}
+
+FIXTURE_TEARDOWN(tls_recseq)
+{
+	close(self->fd);
+	close(self->cfd);
+}
+
+static void tls_recseq_keys(struct tls_crypto_info_keys *tls,
+			    uint64_t rec_seq, uint64_t iv_xor)
+{
+	int i;
+
+	tls_crypto_info_init(TLS_1_3_VERSION, TLS_CIPHER_AES_GCM_128, tls, 0);
+	for (i = 0; i < 8; i++) {
+		tls->aes128.rec_seq[i] = rec_seq >> (56 - 8 * i);
+		tls->aes128.iv[i] ^= iv_xor >> (56 - 8 * i);
+	}
+}
+
+/* RX starts at the second to last record number, TX sends it and the
+ * last one at its record numbers 0 and 1.
+ */
+static void tls_recseq_set_keys(struct __test_metadata *_metadata,
+				int fd, int cfd)
+{
+	struct tls_crypto_info_keys tls;
+
+	tls_recseq_keys(&tls, 0, UINT64_MAX - 1);
+	ASSERT_EQ(setsockopt(fd, SOL_TLS, TLS_TX, &tls, tls.len), 0);
+	tls_recseq_keys(&tls, UINT64_MAX - 1, 0);
+	ASSERT_EQ(setsockopt(cfd, SOL_TLS, TLS_RX, &tls, tls.len), 0);
+}
+
+/* Silent rekey to the same key, so TX sends the wrapped record number 0 */
+static void tls_recseq_tx_wrapped(struct __test_metadata *_metadata, int fd)
+{
+	struct tls_crypto_info_keys tls;
+
+	tls_recseq_keys(&tls, 0, 0);
+	ASSERT_EQ(setsockopt(fd, SOL_TLS, TLS_TX, &tls, tls.len), 0);
+}
+
+static int tls_so_error(struct __test_metadata *_metadata, int fd)
+{
+	socklen_t len = sizeof(int);
+	int err = -1;
+
+	EXPECT_EQ(getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len), 0);
+	return err;
+}
+
+/* All three records are queued, only the first two may be received */
+TEST_F(tls_recseq, rx_wrap)
+{
+	struct pollfd pfd = { .events = POLLIN };
+	char const *test_str = "test_read";
+	int send_len = strlen(test_str) + 1;
+	char buf[3 * 10];
+
+	if (self->notls)
+		SKIP(return, "no TLS support");
+
+	tls_recseq_set_keys(_metadata, self->fd, self->cfd);
+	EXPECT_EQ(send(self->fd, test_str, send_len, 0), send_len);
+	EXPECT_EQ(send(self->fd, test_str, send_len, 0), send_len);
+	tls_recseq_tx_wrapped(_metadata, self->fd);
+	EXPECT_EQ(send(self->fd, test_str, send_len, 0), send_len);
+
+	EXPECT_EQ(recv(self->cfd, buf, sizeof(buf), 0), 2 * send_len);
+	EXPECT_EQ(memcmp(buf, test_str, send_len), 0);
+	EXPECT_EQ(memcmp(buf + send_len, test_str, send_len), 0);
+
+	EXPECT_EQ(recv(self->cfd, buf, sizeof(buf), 0), -1);
+	EXPECT_EQ(errno, EBADMSG);
+
+	/* reading SO_ERROR clears sk_err, the abort stays */
+	EXPECT_EQ(tls_so_error(_metadata, self->cfd), EBADMSG);
+	EXPECT_EQ(tls_so_error(_metadata, self->cfd), 0);
+	EXPECT_EQ(recv(self->cfd, buf, sizeof(buf), MSG_DONTWAIT), -1);
+	EXPECT_EQ(errno, EBADMSG);
+
+	/* the parsed third record isn't readable */
+	pfd.fd = self->cfd;
+	EXPECT_EQ(poll(&pfd, 1, 0), 1);
+	EXPECT_EQ(pfd.revents, POLLERR);
+}
+
+TEST_F(tls_recseq, rx_wrap_splice)
+{
+	char const *test_str = "test_read";
+	int send_len = strlen(test_str) + 1;
+	char buf[10];
+	int p[2];
+
+	if (self->notls)
+		SKIP(return, "no TLS support");
+
+	ASSERT_GE(pipe(p), 0);
+
+	tls_recseq_set_keys(_metadata, self->fd, self->cfd);
+	EXPECT_EQ(send(self->fd, test_str, send_len, 0), send_len);
+	EXPECT_EQ(send(self->fd, test_str, send_len, 0), send_len);
+	tls_recseq_tx_wrapped(_metadata, self->fd);
+	EXPECT_EQ(send(self->fd, test_str, send_len, 0), send_len);
+
+	EXPECT_EQ(splice(self->cfd, NULL, p[1], NULL, send_len, 0), send_len);
+	EXPECT_EQ(splice(self->cfd, NULL, p[1], NULL, send_len, 0), send_len);
+	EXPECT_EQ(read(p[0], buf, send_len), send_len);
+	EXPECT_EQ(memcmp(buf, test_str, send_len), 0);
+	EXPECT_EQ(read(p[0], buf, send_len), send_len);
+	EXPECT_EQ(memcmp(buf, test_str, send_len), 0);
+
+	EXPECT_EQ(tls_so_error(_metadata, self->cfd), EBADMSG);
+	EXPECT_EQ(splice(self->cfd, NULL, p[1], NULL, send_len,
+			 SPLICE_F_NONBLOCK), -1);
+	EXPECT_EQ(errno, EBADMSG);
+
+	close(p[0]);
+	close(p[1]);
+}
+
+/* A KeyUpdate may use the last record number, then a new key takes over */
+TEST_F(tls_recseq, rx_keyupdate)
+{
+	struct tls_crypto_info_keys tls12_1;
+	char const *test_str = "test_read";
+	int send_len = strlen(test_str) + 1;
+	char buf[10];
+
+	if (self->notls)
+		SKIP(return, "no TLS support");
+
+	tls_crypto_info_init(TLS_1_3_VERSION, TLS_CIPHER_AES_GCM_128,
+			     &tls12_1, 1);
+
+	tls_recseq_set_keys(_metadata, self->fd, self->cfd);
+	EXPECT_EQ(send(self->fd, test_str, send_len, 0), send_len);
+	tls_send_keyupdate(_metadata, self->fd);
+	ASSERT_EQ(setsockopt(self->fd, SOL_TLS, TLS_TX, &tls12_1,
+			     tls12_1.len), 0);
+	EXPECT_EQ(send(self->fd, test_str, send_len, 0), send_len);
+
+	EXPECT_EQ(recv(self->cfd, buf, sizeof(buf), 0), send_len);
+	EXPECT_EQ(memcmp(buf, test_str, send_len), 0);
+	tls_recv_keyupdate(_metadata, self->cfd, 0);
+
+	EXPECT_EQ(recv(self->cfd, buf, sizeof(buf), MSG_DONTWAIT), -1);
+	EXPECT_EQ(errno, EKEYEXPIRED);
+	EXPECT_EQ(tls_so_error(_metadata, self->cfd), 0);
+
+	ASSERT_EQ(setsockopt(self->cfd, SOL_TLS, TLS_RX, &tls12_1,
+			     tls12_1.len), 0);
+	EXPECT_EQ(recv(self->cfd, buf, sizeof(buf), 0), send_len);
+	EXPECT_EQ(memcmp(buf, test_str, send_len), 0);
+}
+
+/* The record using the last record number is never sent */
+TEST_F(tls_recseq, tx_wrap)
+{
+	struct tls_crypto_info_keys tls;
+	char const *test_str = "test_read";
+	int send_len = strlen(test_str) + 1;
+	char buf[10];
+
+	if (self->notls)
+		SKIP(return, "no TLS support");
+
+	tls_recseq_keys(&tls, UINT64_MAX, 0);
+	ASSERT_EQ(setsockopt(self->fd, SOL_TLS, TLS_TX, &tls, tls.len), 0);
+	ASSERT_EQ(setsockopt(self->cfd, SOL_TLS, TLS_RX, &tls, tls.len), 0);
+
+	EXPECT_EQ(send(self->fd, test_str, send_len, 0), -1);
+	EXPECT_EQ(errno, EBADMSG);
+
+	/* reading SO_ERROR clears sk_err, the abort stays */
+	EXPECT_EQ(tls_so_error(_metadata, self->fd), EBADMSG);
+	EXPECT_EQ(send(self->fd, test_str, send_len, 0), -1);
+	EXPECT_EQ(errno, EBADMSG);
+
+	EXPECT_EQ(recv(self->cfd, buf, sizeof(buf), MSG_DONTWAIT), -1);
+	EXPECT_EQ(errno, EAGAIN);
+}
+
 struct raw_rec {
 	unsigned int plain_len;
 	unsigned char plain_data[100];

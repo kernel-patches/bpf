@@ -430,6 +430,7 @@ static int tls_push_data(struct sock *sk,
 	int tls_push_record_flags;
 	struct page_frag *pfrag;
 	size_t orig_size = size;
+	size_t rec_size = size;
 	u32 max_open_record_len;
 	bool more = false;
 	bool done = false;
@@ -443,6 +444,10 @@ static int tls_push_data(struct sock *sk,
 
 	if ((flags & (MSG_MORE | MSG_EOR)) == (MSG_MORE | MSG_EOR))
 		return -EINVAL;
+
+	rc = tls_final_err(tls_ctx);
+	if (unlikely(rc))
+		return rc;
 
 	if (unlikely(sk->sk_err))
 		return -sk->sk_err;
@@ -550,8 +555,13 @@ last_record:
 					     ctx,
 					     record,
 					     tls_push_record_flags);
-			if (rc < 0)
+			if (rc < 0) {
+				/* the refused record isn't sent, don't count it */
+				if (tls_final_err(tls_ctx))
+					size = rec_size;
 				break;
+			}
+			rec_size = size;
 		}
 	} while (!done);
 

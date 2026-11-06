@@ -78,6 +78,18 @@ noinline void tls_err_abort(struct sock *sk, int err)
 	sk_error_report(sk);
 }
 
+/* Like tls_err_abort(), but the error can't be cleared: SO_ERROR and
+ * sock_error() consume sk_err, final_err keeps failing reads and sends.
+ */
+void tls_err_abort_final(struct sock *sk, int err)
+{
+	struct tls_context *ctx = tls_get_ctx(sk);
+
+	if (!tls_final_err(ctx))
+		WRITE_ONCE(ctx->final_err, err);
+	tls_err_abort(sk, err);
+}
+
 static int __skb_nsg(struct sk_buff *skb, int offset, int len,
                      unsigned int recursion_level)
 {
@@ -458,7 +470,9 @@ int tls_tx_records(struct sock *sk, int flags)
 	}
 
 tx_err:
-	if (rc < 0 && rc != -EAGAIN && rc != -EINTR && rc != -ERESTARTSYS)
+	/* a final abort already reported its error */
+	if (rc < 0 && rc != -EAGAIN && rc != -EINTR && rc != -ERESTARTSYS &&
+	    !tls_final_err(tls_ctx))
 		tls_err_abort(sk, rc);
 
 	return rc;
@@ -627,6 +641,11 @@ static int tls_push_record(struct sock *sk, int flags,
 	struct aead_request *req;
 	int rc;
 	u32 i;
+
+	/* tls_push_sg() would refuse it, don't encrypt it */
+	rc = tls_final_err(tls_ctx);
+	if (unlikely(rc))
+		return rc;
 
 	if (!rec)
 		return 0;
@@ -802,6 +821,13 @@ static int tls_sw_sendmsg_locked(struct sock *sk, struct msghdr *msg,
 	}
 
 	while (msg_data_left(msg)) {
+		int err = tls_final_err(tls_ctx);
+
+		if (unlikely(err)) {
+			ret = err;
+			goto send_end;
+		}
+
 		if (sk->sk_err) {
 			ret = -sk->sk_err;
 			goto send_end;
@@ -1105,6 +1131,11 @@ tls_rx_rec_wait(struct sock *sk, bool nonblock, bool released, bool has_copied)
 	/* a rekey is pending, let userspace deal with it */
 	if (unlikely(ctx->key_update_pending))
 		return -EKEYEXPIRED;
+
+	/* checked even if a record is ready, unlike sk_err below */
+	ret = tls_final_err(tls_ctx);
+	if (unlikely(ret))
+		return ret;
 
 	timeo = sock_rcvtimeo(sk, nonblock);
 
@@ -1582,9 +1613,14 @@ static int tls_rx_one_record(struct sock *sk, struct msghdr *msg,
 	rxm = strp_msg(darg->skb);
 	rxm->offset += prot->prepend_size;
 	rxm->full_len -= prot->overhead_size;
-	tls_advance_record_sn(sk, prot, &tls_ctx->rx);
 
-	return tls_check_pending_rekey(sk, tls_ctx, darg->skb);
+	err = tls_check_pending_rekey(sk, tls_ctx, darg->skb);
+	/* A KeyUpdate in the last record retires the key as usual */
+	if (__tls_advance_record_sn(prot, &tls_ctx->rx) &&
+	    !tls_sw_ctx_rx(tls_ctx)->key_update_pending)
+		tls_err_abort_final(sk, -EBADMSG);
+
+	return err;
 }
 
 int decrypt_skb(struct sock *sk, struct scatterlist *sgout)
@@ -2182,7 +2218,7 @@ bool tls_sw_sock_is_readable(struct sock *sk)
 	struct tls_context *tls_ctx = tls_get_ctx(sk);
 	struct tls_sw_context_rx *ctx = tls_sw_ctx_rx(tls_ctx);
 
-	return tls_strp_msg_ready(ctx) ||
+	return (tls_strp_msg_ready(ctx) && !tls_final_err(tls_ctx)) ||
 		!skb_queue_empty(&ctx->rx_list);
 }
 
