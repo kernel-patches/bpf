@@ -71,6 +71,12 @@ static void amdgpu_bo_destroy(struct ttm_buffer_object *tbo)
 	kvfree(bo);
 }
 
+/* A function of its own, the page tables are told apart by it */
+static void amdgpu_bo_vm_destroy(struct ttm_buffer_object *tbo)
+{
+	amdgpu_bo_destroy(tbo);
+}
+
 static void amdgpu_bo_user_destroy(struct ttm_buffer_object *tbo)
 {
 	struct amdgpu_bo *bo = ttm_to_amdgpu_bo(tbo);
@@ -94,11 +100,26 @@ static void amdgpu_bo_user_destroy(struct ttm_buffer_object *tbo)
 bool amdgpu_bo_is_amdgpu_bo(struct ttm_buffer_object *bo)
 {
 	if (bo->destroy == &amdgpu_bo_destroy ||
+	    bo->destroy == &amdgpu_bo_vm_destroy ||
 	    bo->destroy == &amdgpu_bo_user_destroy ||
 	    bo->destroy == &svm_range_bo_destroy)
 		return true;
 
 	return false;
+}
+
+/**
+ * amdgpu_bo_is_vm_bo - check if the buffer object is a page directory or table
+ * @bo: buffer object to be checked
+ *
+ * Uses the destroy function amdgpu_bo_create_vm() sets for the object.
+ *
+ * Returns:
+ * true if the object is a PD or PT of a VM, false if not.
+ */
+bool amdgpu_bo_is_vm_bo(struct amdgpu_bo *bo)
+{
+	return bo->tbo.destroy == &amdgpu_bo_vm_destroy;
 }
 
 /**
@@ -813,6 +834,7 @@ int amdgpu_bo_create_vm(struct amdgpu_device *adev,
 	 * num of amdgpu_vm_pt entries.
 	 */
 	BUG_ON(bp->bo_ptr_size < sizeof(struct amdgpu_bo_vm));
+	bp->destroy = &amdgpu_bo_vm_destroy;
 	r = amdgpu_bo_create(adev, bp, &bo_ptr);
 	if (r)
 		return r;

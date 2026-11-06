@@ -162,7 +162,7 @@ amdgpu_vm_bo_lock_lists(struct amdgpu_vm_bo_base *vm_bo)
 		/* No extra locking needed, protected by the root PD resv lock */
 		amdgpu_vm_assert_locked(vm);
 
-		if (bo->tbo.type == ttm_bo_type_kernel)
+		if (amdgpu_bo_is_vm_bo(bo))
 			return &vm->kernel;
 
 		return &vm->always_valid;
