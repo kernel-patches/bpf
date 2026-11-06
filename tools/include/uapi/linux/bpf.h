@@ -5468,6 +5468,8 @@ union bpf_attr {
  *		**-EBUSY** if *timer* is already initialized.
  *		**-EINVAL** if invalid *flags* are passed.
  *		**-EPERM** if *timer* is in a map that doesn't have any user references.
+ *		**-ENOENT** if the current map lookup does not return this value
+ *		when the membership check is reached.
  *		The user space should either hold a file descriptor to a map with timers
  *		or pin such map in bpffs. When map is unpinned or file descriptor is
  *		closed all timers in the map will be cancelled and freed.
@@ -5477,7 +5479,8 @@ union bpf_attr {
  *		Configure the timer to call *callback_fn* static function.
  *	Return
  *		0 on success.
- *		**-EINVAL** if *timer* was not initialized with bpf_timer_init() earlier.
+ *		**-EINVAL** if *timer* was not initialized with bpf_timer_init() earlier,
+ *		or if the value containing it is no longer linked in the map.
  *		**-EPERM** if *timer* is in a map that doesn't have any user references.
  *		The user space should either hold a file descriptor to a map with timers
  *		or pin such map in bpffs. When map is unpinned or file descriptor is

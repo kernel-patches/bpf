@@ -1451,8 +1451,7 @@ static int __bpf_async_init(struct bpf_async_kern *async, struct bpf_map *map, u
 		bpf_async_cancel_cb(async, cb);
 		return -EPERM;
 	}
-	if (type == BPF_ASYNC_TYPE_WQ &&
-	    !bpf_map_value_is_linked(map, cb->value)) {
+	if (!bpf_map_value_is_linked(map, cb->value)) {
 		bpf_async_cancel_cb(async, cb);
 		return -ENOENT;
 	}
@@ -1575,8 +1574,7 @@ static int __bpf_async_set_callback(struct bpf_async_kern *async, void *callback
 		return -EINVAL;
 	if (!atomic64_read(&map->usercnt))
 		return -EPERM;
-	if (cb->type == BPF_ASYNC_TYPE_WQ &&
-	    !bpf_map_value_is_linked(map, cb->value))
+	if (!bpf_map_value_is_linked(map, cb->value))
 		return -EINVAL;
 
 	return bpf_async_update_prog_callback(cb, prog, callback_fn);

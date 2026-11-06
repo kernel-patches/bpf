@@ -6,6 +6,7 @@
 
 #define CLOCK_MONOTONIC 1
 #define TIMER_NSEC (60ULL * 1000 * 1000 * 1000)
+#define LIVE_TIMER_NSEC 1000ULL
 
 struct timer_value {
 	struct bpf_timer timer;
@@ -20,18 +21,22 @@ struct {
 	__type(value, struct timer_value);
 } timer_map SEC(".maps");
 
-u64 armed;
-u64 cancelled;
+u64 live_armed;
+u64 live_cancelled;
+u64 live_cb_cnt;
 long timer_init_err;
-long timer_set_callback_err;
-long timer_start_err;
-long timer_cancel_err;
+long live_init_err;
+long live_set_callback_err;
+long live_start_err;
+long live_cancel_err;
 
 static int timer_cb(void *map, u64 *key, struct timer_value *value)
 {
+	__sync_fetch_and_add(&live_cb_cnt, 1);
 	return 0;
 }
 
+/* Initialize through a retained pointer after deleting the element. */
 static long arm_timer_cb(struct bpf_map *map, u64 *key,
 			 struct timer_value *value, void *ctx)
 {
@@ -43,41 +48,8 @@ static long arm_timer_cb(struct bpf_map *map, u64 *key,
 		return 1;
 
 	err = bpf_timer_init(&value->timer, map, CLOCK_MONOTONIC);
-	if (err) {
-		timer_init_err = err;
-		return 1;
-	}
-
-	err = bpf_timer_set_callback(&value->timer, timer_cb);
-	if (err) {
-		timer_set_callback_err = err;
-		return 1;
-	}
-
-	err = bpf_timer_start(&value->timer, TIMER_NSEC, BPF_F_TIMER_CPU_PIN);
-	if (err) {
-		timer_start_err = err;
-		return 1;
-	}
-
-	__sync_fetch_and_add(&armed, 1);
-	return 1;
-}
-
-static long cancel_timer_cb(struct bpf_map *map, u64 *key,
-			    struct timer_value *value, void *ctx)
-{
-	long err;
-
-	err = bpf_timer_cancel(&value->timer);
-	if (err == -EINVAL)
-		return 1;
-	if (err < 0) {
-		timer_cancel_err = err;
-		return 1;
-	}
-
-	__sync_fetch_and_add(&cancelled, 1);
+	timer_init_err = err;
+	/* Do not configure or start the deleted value, even on an unfixed kernel. */
 	return 1;
 }
 
@@ -88,10 +60,58 @@ int arm_deleted_timer(void *ctx)
 	return 0;
 }
 
+/* Arm a live timer; the host waits for its callback before cancellation. */
 SEC("syscall")
-int cancel_recycled_timer(void *ctx)
+int live_arm_timer(void *ctx)
 {
-	bpf_for_each_map_elem(&timer_map, cancel_timer_cb, NULL, 0);
+	struct timer_value *v;
+	u64 key = 0;
+	long err;
+
+	v = bpf_map_lookup_elem(&timer_map, &key);
+	if (!v)
+		return -EINVAL;
+
+	err = bpf_timer_init(&v->timer, &timer_map, CLOCK_MONOTONIC);
+	if (err) {
+		live_init_err = err;
+		return err;
+	}
+
+	err = bpf_timer_set_callback(&v->timer, timer_cb);
+	if (err) {
+		live_set_callback_err = err;
+		return err;
+	}
+
+	err = bpf_timer_start(&v->timer, LIVE_TIMER_NSEC, 0);
+	if (err) {
+		live_start_err = err;
+		return err;
+	}
+
+	__sync_fetch_and_add(&live_armed, 1);
+	return 0;
+}
+
+SEC("syscall")
+int cancel_live_timer(void *ctx)
+{
+	struct timer_value *v;
+	u64 key = 0;
+	long err;
+
+	v = bpf_map_lookup_elem(&timer_map, &key);
+	if (!v)
+		return -EINVAL;
+
+	err = bpf_timer_cancel(&v->timer);
+	if (err < 0) {
+		live_cancel_err = err;
+		return err;
+	}
+
+	__sync_fetch_and_add(&live_cancelled, 1);
 	return 0;
 }
 
