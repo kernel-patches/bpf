@@ -379,6 +379,10 @@
 	};
 };
 
+&hdmi0_sound {
+	status = "okay";
+};
+
 &hdmi1 {
 	frl-enable-gpios = <&gpio4 RK_PB2 GPIO_ACTIVE_LOW>;
 	pinctrl-0 = <&hdmim2_tx1_cec &hdmim0_tx1_hpd
@@ -397,6 +401,10 @@
 	hdmi1_out_con: endpoint {
 		remote-endpoint = <&hdmi1_con_in>;
 	};
+};
+
+&hdmi1_sound {
+	status = "okay";
 };
 
 &hdmi_receiver_cma {
@@ -511,6 +519,14 @@
 		     &i2s0_sdi0
 		     &i2s0_sdo0>;
 	pinctrl-names = "default";
+	status = "okay";
+};
+
+&i2s5_8ch {
+	status = "okay";
+};
+
+&i2s6_8ch {
 	status = "okay";
 };
 
