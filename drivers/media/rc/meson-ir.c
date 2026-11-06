@@ -165,6 +165,7 @@ struct meson_ir {
 	const struct meson_ir_param *param;
 	struct regmap	*reg;
 	struct rc_dev	*rc;
+	int		irq;
 	spinlock_t	lock;
 };
 
@@ -475,6 +476,8 @@ static int meson_ir_probe(struct platform_device *pdev)
 	if (irq < 0)
 		return irq;
 
+	ir->irq = irq;
+
 	if (ir->param->support_hw_decoder)
 		ir->rc = devm_rc_allocate_device(&pdev->dev,
 						 RC_DRIVER_SCANCODE);
@@ -522,6 +525,8 @@ static int meson_ir_probe(struct platform_device *pdev)
 		dev_err(dev, "failed to request irq\n");
 		return ret;
 	}
+
+	device_init_wakeup(dev, of_property_read_bool(node, "wakeup-source"));
 
 	dev_info(dev, "receiver initialized\n");
 
@@ -571,6 +576,9 @@ static __maybe_unused int meson_ir_resume(struct device *dev)
 {
 	struct meson_ir *ir = dev_get_drvdata(dev);
 
+	if (device_may_wakeup(dev))
+		disable_irq_wake(ir->irq);
+
 	if (ir->param->support_hw_decoder)
 		meson_ir_hw_decoder_init(ir->rc, &ir->rc->enabled_protocols);
 	else
@@ -583,6 +591,15 @@ static __maybe_unused int meson_ir_suspend(struct device *dev)
 {
 	struct meson_ir *ir = dev_get_drvdata(dev);
 	unsigned long flags;
+
+	/*
+	 * Leave the receiver running when it is meant to wake the system up,
+	 * otherwise there is nothing left to notice the remote.
+	 */
+	if (device_may_wakeup(dev)) {
+		enable_irq_wake(ir->irq);
+		return 0;
+	}
 
 	spin_lock_irqsave(&ir->lock, flags);
 	regmap_update_bits(ir->reg, IR_DEC_REG1, IR_DEC_REG1_ENABLE, 0);
