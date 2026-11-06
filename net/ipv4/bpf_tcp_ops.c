@@ -370,10 +370,9 @@ __bpf_kfunc int bpf_tcp_ops_set_rcvlowat(struct sock *sk, int rcvlowat,
 	if (moff == offsetof(struct bpf_tcp_ops, dequeue_rcvq))
 		wakeup = true;
 
-	if (rcvlowat < 0)
-		rcvlowat = INT_MAX;
-
-	return __tcp_set_rcvlowat(sk, rcvlowat, wakeup);
+	/* Reassigning @rcvlowat can make pahole drop this kfunc from BTF. */
+	return __tcp_set_rcvlowat(sk, rcvlowat < 0 ? INT_MAX : rcvlowat,
+				  wakeup);
 }
 
 __bpf_kfunc_end_defs();
