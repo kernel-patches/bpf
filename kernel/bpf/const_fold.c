@@ -250,7 +250,7 @@ int bpf_compute_const_regs(struct bpf_verifier_env *env)
 	struct const_arg_info ci_out[MAX_BPF_REG];
 	struct bpf_iarray *succ;
 	bool changed;
-	int i, r;
+	int i, r, t;
 
 	/* kvzalloc zeroes memory, so all entries start as CONST_ARG_UNVISITED (0) */
 	ci_in = kvzalloc_objs(*ci_in, insn_cnt, GFP_KERNEL_ACCOUNT);
@@ -263,6 +263,12 @@ int bpf_compute_const_regs(struct bpf_verifier_env *env)
 
 		for (r = 0; r < MAX_BPF_REG; r++)
 			ci_in[start][r] = unknown;
+	}
+	/* The same from the head of a loop to where the loop is left, once the loops are known. */
+	for (i = 0; i < insn_cnt; i++) {
+		t = bpf_head_guard_target(env, i);
+		for (r = 0; r < MAX_BPF_REG && t >= 0; r++)
+			ci_in[t][r] = unknown;
 	}
 
 redo:
@@ -342,6 +348,126 @@ static int eval_const_branch(u8 opcode, u64 dst_val, u64 src_val)
 	case BPF_JSET:	return (bool)(dst_val & src_val);
 	default:	return -1;
 	}
+}
+
+/* 1: the registers @ci take the conditional jump @insn, 0: they don't, -1: not known */
+static int const_branch_taken(const struct bpf_insn *insn, const struct const_arg_info *ci)
+{
+	u64 dst = ci[insn->dst_reg].val, src = insn->imm;
+
+	if (!ci_is_const(&ci[insn->dst_reg]))
+		return -1;
+	if (BPF_SRC(insn->code) == BPF_X) {
+		if (!ci_is_const(&ci[insn->src_reg]))
+			return -1;
+		src = ci[insn->src_reg].val;
+	}
+	/* see bpf_prune_dead_branches() */
+	if (BPF_CLASS(insn->code) == BPF_JMP32) {
+		dst = (s32)dst;
+		src = (s32)src;
+	}
+	return eval_const_branch(insn->code, dst, src);
+}
+
+/* The registers in front of the insn @idx on the paths that got there so far */
+struct edge_state {
+	int idx;
+	struct const_arg_info ci[MAX_BPF_REG];
+};
+
+#define EDGE_OPEN	8	/* insns that wait for their turn */
+
+/*
+ * Does the program leave the loop at @h when the conditional jump at @n goes on at @t?
+ * It does when @t is not in the loop. A compiler also makes
+ *	w1 = 0; if w7 > 255 goto l; ...; w1 = 1; l: ...; w1 &= 1; if w1 != 0 goto head;
+ * of 'do { ...; more = ++i < 256 && ...; ...; } while (more);'. The jump that leaves the loop
+ * looks at 1 or 0. The jump that counts stays in the loop on both edges.
+ *
+ * So propagate constants once more, over what can be reached from this edge only. Start with
+ * the constants at @n. A jump that the constants decide has one successor. Two paths that
+ * meet are joined: both started at the edge. If nothing leads to @h the edge leaves the loop.
+ *
+ * The insn that is first in reverse post order goes first. A cycle without @h is a nested
+ * loop, so all that leads to the insn was looked at and every insn has one turn.
+ *
+ * Every edge that the program has at run time must be followed, the edges of may_goto that the
+ * verifier adds too. May_goto of @h and of the loops around it leaves @h. A nested loop can get
+ * one in front of a jump that the constants decide the other way. So don't go into a nested loop.
+ *
+ * @budget: the insns to look at. 0: look at @t only. An edge is followed once: a jump can
+ * dominate more than one back edge. Returns 1, 0, or an error.
+ */
+int bpf_edge_leaves_loop(struct bpf_verifier_env *env, int h, int n, int t, int *budget)
+{
+	struct bpf_insn_aux_data *aux = &env->insn_aux_data[n];
+	struct bpf_insn *insns = env->prog->insnsi, *insn;
+	int *nums = env->cfg.postorder_nums;
+	int i, l, s, first, taken, cnt = 1;
+	u8 *seen = &aux->edge_leaves[t != n + 1];
+	struct edge_state *open, *cur;
+	struct bpf_iarray *succ;
+	int ret = 0;
+
+	l = bpf_loop_at_index(env, t);
+	if (l != h)
+		return !bpf_is_nested_loop(env, l, h);
+	if (*seen)
+		return *seen - 1;
+	if (t == h || !*budget)
+		return 0;
+
+	open = kcalloc(EDGE_OPEN + 1, sizeof(*open), GFP_KERNEL_ACCOUNT);
+	if (!open)
+		return -ENOMEM;
+	cur = &open[EDGE_OPEN];
+	open[0].idx = t;
+	for (i = 0; i < MAX_BPF_REG; i++) {
+		open[0].ci[i].state = CONST_ARG_UNKNOWN;
+		if (i < ARRAY_SIZE(aux->const_reg_vals) && (aux->const_reg_mask & BIT(i))) {
+			open[0].ci[i].state = CONST_ARG_CONST;
+			open[0].ci[i].val = aux->const_reg_vals[i];
+		}
+	}
+	while (cnt) {
+		for (i = 1, first = 0; i < cnt; i++)
+			if (nums[open[i].idx] > nums[open[first].idx])
+				first = i;
+		*cur = open[first];
+		open[first] = open[--cnt];
+		if (!*budget)
+			goto out;
+		--*budget;
+		insn = &insns[cur->idx];
+		const_reg_xfer(env, cur->ci, insn, insns, cur->idx);
+		taken = bpf_insn_is_cond_jump(insn->code) ? const_branch_taken(insn, cur->ci) : -1;
+		succ = bpf_insn_successors(env, cur->idx);
+		iarray_for_each(s, succ) {
+			if (taken >= 0 && s != cur->idx + 1 + (taken ? insn->off : 0))
+				continue;
+			l = bpf_loop_at_index(env, s);
+			if (s == h || bpf_is_nested_loop(env, l, h))
+				goto out;
+			if (l != h)
+				continue;
+			for (i = 0; i < cnt && open[i].idx != s; i++)
+				;
+			if (i == EDGE_OPEN)
+				goto out;
+			if (i < cnt) {
+				const_reg_join(open[i].ci, cur->ci);
+				continue;
+			}
+			open[cnt] = *cur;
+			open[cnt++].idx = s;
+		}
+	}
+	ret = 1;
+out:
+	*seen = ret + 1;
+	kfree(open);
+	return ret;
 }
 
 /*

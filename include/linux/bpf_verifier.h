@@ -810,6 +810,8 @@ struct bpf_backedge {
 	 */
 	int latches[MAX_LATCHES];
 	u8 latches_cnt;
+	/* bit k: the loop is left on the edge of latches[k] that is taken, not on the other one */
+	u8 taken_leaves;
 };
 
 struct bpf_loop_exit {
@@ -976,6 +978,8 @@ struct bpf_insn_aux_data {
 	u16 const_reg_map_mask;
 	u16 const_reg_subprog_mask;
 	u32 const_reg_vals[10];
+	/* bpf_edge_leaves_loop() + 1 for the edge that is not taken and for the one that is */
+	u8 edge_leaves[2];
 	/*
 	 * Header index of the innermost loop containing this instruction, -1 if none.
 	 * For a loop header, identifies the parent loop instead.
@@ -1700,7 +1704,8 @@ u16 bpf_call_const_arg_regs(struct bpf_verifier_env *env, struct bpf_insn *insn)
 u16 bpf_call_checked_arg_regs(struct bpf_verifier_env *env, struct bpf_insn *insn);
 bool bpf_insn_is_iter_next(struct bpf_verifier_env *env, struct bpf_insn *insn);
 bool bpf_insn_leaves_loop(struct bpf_verifier_env *env, int h, int n);
-bool bpf_edge_leaves_loop(struct bpf_verifier_env *env, int h, int n, int t);
+int bpf_edge_leaves_loop(struct bpf_verifier_env *env, int h, int n, int t, int *budget);
+int bpf_find_latches(struct bpf_verifier_env *env, bool flags);
 bool bpf_jump_leaves_loop(struct bpf_verifier_env *env, int h, int n);
 int bpf_insert_recursion_checks(struct bpf_verifier_env *env);
 int bpf_split_cur_state(struct bpf_verifier_env *env);
