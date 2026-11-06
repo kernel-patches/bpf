@@ -5749,6 +5749,15 @@ static enum priv_stack_mode bpf_enable_priv_stack(struct bpf_prog *prog)
 	 */
 	switch (prog->type) {
 	case BPF_PROG_TYPE_KPROBE:
+		/*
+		 * Uprobe progs are preemptible and don't check for recursion.
+		 * Two tasks can run the same prog on the same cpu. A prog
+		 * without attach type is either kprobe or uprobe.
+		 */
+		if (prog->expected_attach_type != BPF_TRACE_KPROBE_MULTI &&
+		    prog->expected_attach_type != BPF_TRACE_KPROBE_SESSION)
+			return NO_PRIV_STACK;
+		fallthrough;
 	case BPF_PROG_TYPE_TRACEPOINT:
 	case BPF_PROG_TYPE_PERF_EVENT:
 	case BPF_PROG_TYPE_RAW_TRACEPOINT:
