@@ -2807,7 +2807,10 @@ static int unix_stream_recv_urg(struct unix_stream_read_state *state)
 
 	mutex_unlock(&u->iolock);
 
-	consume_skb(read_skb);
+	if (read_skb) {
+		scm_stat_del(sk, read_skb);
+		consume_skb(read_skb);
+	}
 
 	if (chunk < 0)
 		return -EFAULT;
@@ -2867,8 +2870,14 @@ static struct sk_buff *manage_oob(struct sk_buff *skb, struct sk_buff **last,
 unlock:
 	spin_unlock(&sk->sk_receive_queue.lock);
 
-	consume_skb(read_skb);
-	kfree_skb_reason(unread_skb, SKB_DROP_REASON_UNIX_SKIP_OOB);
+	if (read_skb) {
+		scm_stat_del(sk, read_skb);
+		consume_skb(read_skb);
+	}
+	if (unread_skb) {
+		scm_stat_del(sk, unread_skb);
+		kfree_skb_reason(unread_skb, SKB_DROP_REASON_UNIX_SKIP_OOB);
+	}
 
 	return skb;
 }
@@ -2906,6 +2915,7 @@ static int unix_stream_read_skb(struct sock *sk, skb_read_actor_t recv_actor)
 		spin_unlock(&queue->lock);
 		mutex_unlock(&u->iolock);
 
+		scm_stat_del(sk, skb);
 		kfree_skb_reason(skb, SKB_DROP_REASON_UNIX_SKIP_OOB);
 		return -EAGAIN;
 	}
