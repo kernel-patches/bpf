@@ -3,7 +3,6 @@
 #ifndef _VKMS_LUTS_H_
 #define _VKMS_LUTS_H_
 
-extern const struct vkms_color_lut linear_eotf;
 extern const struct vkms_color_lut srgb_eotf;
 extern const struct vkms_color_lut srgb_inv_eotf;
 

@@ -126,10 +126,10 @@ static void vkms_color_test_lerp(struct kunit *test)
 
 static void vkms_color_test_linear(struct kunit *test)
 {
-	for (int i = 0; i < linear_eotf.lut_length; i++) {
-		int linear = apply_lut_to_channel_value(&linear_eotf, i * 0x101, LUT_RED);
+	for (int i = 0; i < test_linear_lut.lut_length; i++) {
+		int linear = apply_lut_to_channel_value(&test_linear_lut, i * 0x1111, LUT_RED);
 
-		KUNIT_EXPECT_EQ(test, DIV_ROUND_CLOSEST(linear, 0x101), i);
+		KUNIT_EXPECT_EQ(test, DIV_ROUND_CLOSEST(linear, 0x1111), i);
 	}
 }
 
