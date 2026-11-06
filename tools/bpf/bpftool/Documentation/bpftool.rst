@@ -21,7 +21,7 @@ SYNOPSIS
 **bpftool** **version**
 
 *OBJECT* := { **map** | **prog** | **link** | **cgroup** | **perf** | **net** | **feature** |
-**btf** | **gen** | **struct_ops** | **iter** }
+**btf** | **gen** | **struct_ops** | **iter** | **fmodret** }
 
 *OPTIONS* := { { **-V** | **--version** } | |COMMON_OPTIONS| }
 
