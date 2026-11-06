@@ -318,7 +318,7 @@ tcp_friendliness:
 	ca->cnt = max(ca->cnt, 2U);
 }
 
-__bpf_kfunc static void cubictcp_cong_avoid(struct sock *sk, u32 ack, u32 acked)
+static noinline void __cubictcp_cong_avoid(struct sock *sk, u32 ack, u32 acked)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct bictcp *ca = inet_csk_ca(sk);
@@ -333,6 +333,20 @@ __bpf_kfunc static void cubictcp_cong_avoid(struct sock *sk, u32 ack, u32 acked)
 	}
 	bictcp_update(ca, tcp_snd_cwnd(tp), acked);
 	tcp_cong_avoid_ai(tp, ca->cnt, acked);
+}
+
+/* BPF congestion controls can store any value in tp->snd_cwnd.
+ * bictcp_update() would loop forever with cwnd == 0, or with a cwnd
+ * large enough for cwnd * beta_scale to wrap.
+ * Native callers do not need this check.
+ */
+__bpf_kfunc static void cubictcp_cong_avoid(struct sock *sk, u32 ack, u32 acked)
+{
+	u32 cwnd = tcp_snd_cwnd(tcp_sk(sk));
+
+	if (unlikely(!cwnd || cwnd > TCP_MAX_SND_CWND))
+		return;
+	__cubictcp_cong_avoid(sk, ack, acked);
 }
 
 __bpf_kfunc static u32 cubictcp_recalc_ssthresh(struct sock *sk)
@@ -475,7 +489,7 @@ __bpf_kfunc static void cubictcp_acked(struct sock *sk, const struct ack_sample 
 static struct tcp_congestion_ops cubictcp __read_mostly = {
 	.init		= cubictcp_init,
 	.ssthresh	= cubictcp_recalc_ssthresh,
-	.cong_avoid	= cubictcp_cong_avoid,
+	.cong_avoid	= __cubictcp_cong_avoid,
 	.set_state	= cubictcp_state,
 	.undo_cwnd	= tcp_reno_undo_cwnd,
 	.cwnd_event_tx_start = cubictcp_cwnd_event_tx_start,

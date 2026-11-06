@@ -251,8 +251,15 @@ static void tcp_reinit_congestion_control(struct sock *sk,
 					  const struct tcp_congestion_ops *ca)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
+	struct tcp_sock *tp = tcp_sk(sk);
 
 	tcp_cleanup_congestion_control(sk);
+
+	/* A BPF congestion control could have stored any value
+	 * in tp->snd_cwnd. Native ones expect a sane value.
+	 */
+	tcp_snd_cwnd_set(tp, clamp(tcp_snd_cwnd(tp), 1U, tp->snd_cwnd_clamp));
+
 	WRITE_ONCE(icsk->icsk_ca_ops, ca);
 	icsk->icsk_ca_setsockopt = 1;
 	memset(icsk->icsk_ca_priv, 0, sizeof(icsk->icsk_ca_priv));
