@@ -104,6 +104,21 @@ static bool vhost_transport_has_remote_cid(struct vsock_sock *vsk, u32 cid)
 	return found;
 }
 
+/* Undo the send accounting of an undelivered skb; true if tx may restart. */
+static bool vhost_vsock_drop_skb(struct vhost_vsock *vsock, struct sk_buff *skb)
+{
+	bool restart_tx = false;
+
+	if (virtio_vsock_skb_reply(skb)) {
+		int val = atomic_dec_return(&vsock->queued_replies);
+
+		restart_tx = val + 1 == vsock->vqs[VSOCK_VQ_TX].num;
+	}
+	virtio_transport_consume_skb_sent(skb, false);
+	kfree_skb(skb);
+	return restart_tx;
+}
+
 static void
 vhost_transport_do_send_pkt(struct vhost_vsock *vsock,
 			    struct vhost_virtqueue *vq)
@@ -162,14 +177,14 @@ vhost_transport_do_send_pkt(struct vhost_vsock *vsock,
 		}
 
 		if (out) {
-			kfree_skb(skb);
+			restart_tx |= vhost_vsock_drop_skb(vsock, skb);
 			vq_err(vq, "Expected 0 output buffers, got %u\n", out);
 			break;
 		}
 
 		iov_len = iov_length(&vq->iov[out], in);
 		if (iov_len < sizeof(*hdr)) {
-			kfree_skb(skb);
+			restart_tx |= vhost_vsock_drop_skb(vsock, skb);
 			vq_err(vq, "Buffer len [%zu] too small\n", iov_len);
 			break;
 		}
@@ -212,7 +227,7 @@ vhost_transport_do_send_pkt(struct vhost_vsock *vsock,
 
 		nbytes = copy_to_iter(hdr, sizeof(*hdr), &iov_iter);
 		if (nbytes != sizeof(*hdr)) {
-			kfree_skb(skb);
+			restart_tx |= vhost_vsock_drop_skb(vsock, skb);
 			vq_err(vq, "Faulted on copying pkt hdr\n");
 			break;
 		}
@@ -221,7 +236,7 @@ vhost_transport_do_send_pkt(struct vhost_vsock *vsock,
 					   offset,
 					   &iov_iter,
 					   payload_len)) {
-			kfree_skb(skb);
+			restart_tx |= vhost_vsock_drop_skb(vsock, skb);
 			vq_err(vq, "Faulted on copying pkt buf\n");
 			break;
 		}
