@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+menuconfig LLVM_PLUGINS
+	bool "LLVM plugins"
+	depends on CC_IS_CLANG
+	depends on $(success,$(LLVM_CONFIG) --version)
+	# The plugins are built against the headers of llvm-config and loaded
+	# by clang, so both must come from the same LLVM release
+	depends on $(success,test "$(shell,$(LLVM_CONFIG) --version 2>/dev/null | cut -d. -f1)" = "$(shell,$(CC) -dumpversion | cut -d. -f1)")
+	# The host C++ compiler must accept the LLVM headers and flags
+	depends on $(success,echo '#include <llvm/Config/llvm-config.h>' | $(HOSTCXX) $(shell,$(LLVM_CONFIG) --cxxflags 2>/dev/null) -x c++ -fsyntax-only -)
+	default y
+	help
+	  LLVM plugins add compiler passes to kernel and module builds.
+	  Building them requires LLVM development headers and llvm-config
+	  of the same major version as clang. Each plugin has its own option
+	  below and is built only if that option is enabled.
