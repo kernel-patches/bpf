@@ -523,25 +523,6 @@ struct bpf_program {
 	__u32 subprog_cnt;
 };
 
-struct bpf_struct_ops {
-	struct bpf_program **progs;
-	__u32 *kern_func_off;
-	/* e.g. struct tcp_congestion_ops in bpf_prog's btf format */
-	void *data;
-	/* e.g. struct bpf_struct_ops_tcp_congestion_ops in
-	 *      btf_vmlinux's format.
-	 * struct bpf_struct_ops_tcp_congestion_ops {
-	 *	[... some other kernel fields ...]
-	 *	struct tcp_congestion_ops data;
-	 * }
-	 * kern_vdata-size == sizeof(struct bpf_struct_ops_tcp_congestion_ops)
-	 * bpf_map__init_kern_struct_ops() will populate the "kern_vdata"
-	 * from "data".
-	 */
-	void *kern_vdata;
-	__u32 type_id;
-};
-
 #define DATA_SEC ".data"
 #define PERCPU_SEC ".percpu"
 #define BSS_SEC ".bss"
@@ -1462,7 +1443,7 @@ static int bpf_map__init_kern_struct_ops(struct bpf_map *map)
 static int bpf_object__init_kern_struct_ops_maps(struct bpf_object *obj)
 {
 	struct bpf_map *map;
-	size_t i;
+	size_t i, j;
 	int err;
 
 	for (i = 0; i < obj->nr_maps; i++) {
@@ -1474,9 +1455,25 @@ static int bpf_object__init_kern_struct_ops_maps(struct bpf_object *obj)
 		if (!map->autocreate)
 			continue;
 
-		err = bpf_map__init_kern_struct_ops(map);
-		if (err)
-			return err;
+		if (obj->gen_loader) {
+			const struct btf_type *type;
+
+			bpf_gen__init_kern_struct_ops(obj->gen_loader, obj->btf,
+						      map->st_ops,
+						      &map->btf_vmlinux_value_type_id,
+						      &map->def.value_size);
+			map->mod_btf_fd = -1;
+			type = btf__type_by_id(obj->btf, map->st_ops->type_id);
+			for (j = 0; j < btf_vlen(type); j++) {
+				if (map->st_ops->progs[j])
+					map->st_ops->progs[j]->attach_btf_id =
+						map->st_ops->type_id_off;
+			}
+		} else {
+			err = bpf_map__init_kern_struct_ops(map);
+			if (err)
+				return err;
+		}
 	}
 
 	return 0;

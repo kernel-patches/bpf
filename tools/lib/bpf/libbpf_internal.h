@@ -293,6 +293,30 @@ struct btf_map_def {
 	__u64 map_extra;
 };
 
+struct bpf_struct_ops {
+	struct bpf_program **progs;
+	__u32 *kern_func_off;
+	/* e.g. struct tcp_congestion_ops in bpf_prog's btf format */
+	void *data;
+	/* e.g. struct bpf_struct_ops_tcp_congestion_ops in
+	 *      btf_vmlinux's format.
+	 * struct bpf_struct_ops_tcp_congestion_ops {
+	 *	[... some other kernel fields ...]
+	 *	struct tcp_congestion_ops data;
+	 * }
+	 * kern_vdata-size == sizeof(struct bpf_struct_ops_tcp_congestion_ops)
+	 * In standard mode, bpf_map__init_kern_struct_ops() will populate the
+	 * "kern_vdata" buffer from "data".
+	 * In gen_loader mode, bpf_gen__init_kern_struct_ops() will allocate
+	 * space for "kern_vdata" in the loader data blob and record its offset
+	 * in "kern_vdata_off".
+	 */
+	void *kern_vdata;
+	int kern_vdata_off;
+	int type_id_off;
+	__u32 type_id;
+};
+
 int parse_btf_map_def(const char *map_name, struct btf *btf,
 		      const struct btf_type *def_t, bool strict,
 		      struct btf_map_def *map_def, struct btf_map_def *inner_def);

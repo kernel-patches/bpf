@@ -14,11 +14,14 @@
 #include "hashmap.h"
 #include "bpf_gen_internal.h"
 #include "skel_internal.h"
+#include "relo_core.h"
 
 #define MAX_USED_MAPS	64
 #define MAX_USED_PROGS	32
 #define MAX_KFUNC_DESCS 256
 #define MAX_FD_ARRAY_SZ (MAX_USED_MAPS + MAX_KFUNC_DESCS)
+#define STRUCT_OPS_VALUE_PREFIX "bpf_struct_ops_"
+#define KERN_VDATA_MAX_SIZE 4096
 
 /* The following structure describes the stack layout of the loader program.
  * In addition R6 contains the pointer to context.
@@ -1337,4 +1340,198 @@ void bpf_gen__map_freeze(struct bpf_gen *gen, int map_idx)
 	emit_sys_bpf(gen, BPF_MAP_FREEZE, map_freeze_attr, attr_size);
 	debug_ret(gen, "map_freeze");
 	emit_check_err(gen);
+}
+
+/* Expects:
+ * BPF_REG_8 - (btf_obj_fd << 32) | btf_id
+ *
+ * Overwrites BPF_REG_{0, 1, 2, 3, 4, 7}
+ * Returns result in BPF_REG_7
+ */
+static void emit_bpf_get_struct_member_info(struct bpf_gen *gen, const char *mname)
+{
+	emit(gen, BPF_MOV32_REG(BPF_REG_1, BPF_REG_8));
+	emit(gen, BPF_MOV64_REG(BPF_REG_2, BPF_REG_8));
+	emit(gen, BPF_ALU64_IMM(BPF_RSH, BPF_REG_2, 32));
+	if (mname) {
+		int mname_len = strlen(mname) + 1;
+		int mname_off = add_data(gen, mname, mname_len);
+
+		emit2(gen, BPF_LD_IMM64_RAW_FULL(BPF_REG_3, BPF_PSEUDO_MAP_IDX_VALUE,
+						 0, 0, 0, mname_off));
+		emit(gen, BPF_MOV64_IMM(BPF_REG_4, mname_len));
+	} else {
+		emit(gen, BPF_MOV64_IMM(BPF_REG_3, 0));
+		emit(gen, BPF_MOV64_IMM(BPF_REG_4, 0));
+	}
+	emit(gen, BPF_EMIT_CALL(BPF_FUNC_btf_get_struct_member_info));
+	emit(gen, BPF_MOV64_REG(BPF_REG_7, BPF_REG_0));
+	debug_ret(gen, "get_struct_member_info(%s)", mname ?: "NULL");
+	emit_check_err(gen);
+}
+
+/* Expects:
+ * BPF_REG_8 - (btf_obj_fd << 32) | kern_type_id
+ * BPF_REG_9 - kern_data_off
+ */
+static void emit_st_ops_member_val(struct bpf_gen *gen, const char *mname,
+				   const void *mdata, __u32 msize,
+				   int kern_vdata_off)
+{
+	int mdata_off;
+
+	if (libbpf_is_mem_zeroed(mdata, msize))
+		return;
+
+	if (msize > KERN_VDATA_MAX_SIZE) {
+		gen->error = -E2BIG;
+		return;
+	}
+
+	mdata_off = add_data(gen, mdata, msize);
+	emit_bpf_get_struct_member_info(gen, mname);
+
+	/* Extract member byte offset (lower 32 bits of R7), add kern_data_off, and bound it */
+	emit(gen, BPF_MOV32_REG(BPF_REG_2, BPF_REG_7));
+	emit(gen, BPF_ALU32_REG(BPF_ADD, BPF_REG_2, BPF_REG_9));
+	emit(gen, BPF_JMP_IMM(BPF_JLE, BPF_REG_2, KERN_VDATA_MAX_SIZE - msize, 2));
+	emit(gen, BPF_MOV64_IMM(BPF_REG_7, -E2BIG));
+	emit_check_err(gen);
+
+	/* Copy msize bytes from mdata_off into kern_vdata_off + offset */
+	emit2(gen, BPF_LD_IMM64_RAW_FULL(BPF_REG_1, BPF_PSEUDO_MAP_IDX_VALUE,
+					 0, 0, 0, kern_vdata_off));
+	emit(gen, BPF_ALU64_REG(BPF_ADD, BPF_REG_1, BPF_REG_2));
+	emit(gen, BPF_MOV64_IMM(BPF_REG_2, msize));
+	emit2(gen, BPF_LD_IMM64_RAW_FULL(BPF_REG_3, BPF_PSEUDO_MAP_IDX_VALUE,
+					 0, 0, 0, mdata_off));
+	emit(gen, BPF_EMIT_CALL(BPF_FUNC_probe_read_kernel));
+}
+
+/* Expects:
+ * BPF_REG_8 - (btf_obj_fd << 32) | kern_type_id
+ * BPF_REG_9 - kern_data_off
+ */
+static void emit_st_ops_member_prog(struct bpf_gen *gen, const char *mname,
+				    struct bpf_struct_ops *st_ops, __u32 member_idx,
+				    struct bpf_program *prog)
+{
+	int attach_type_off;
+
+	if (st_ops->progs[member_idx] && st_ops->progs[member_idx] != prog)
+		bpf_program__set_autoload(st_ops->progs[member_idx], false);
+	st_ops->progs[member_idx] = prog;
+
+	if (!prog)
+		return;
+
+	st_ops->kern_func_off[member_idx] = add_data(gen, NULL, sizeof(__u32));
+	attach_type_off = add_data(gen, NULL, sizeof(__u32));
+	bpf_program__set_expected_attach_type(prog, attach_type_off);
+
+	emit_bpf_get_struct_member_info(gen, mname);
+
+	/* 1. Store member byte offset (lower 32 bits of R7 + kern_data_off)
+	 * into st_ops->kern_func_off[member_idx]
+	 */
+	emit(gen, BPF_MOV32_REG(BPF_REG_2, BPF_REG_7));
+	emit(gen, BPF_ALU32_REG(BPF_ADD, BPF_REG_2, BPF_REG_9));
+	emit2(gen, BPF_LD_IMM64_RAW_FULL(BPF_REG_1, BPF_PSEUDO_MAP_IDX_VALUE,
+					 0, 0, 0, st_ops->kern_func_off[member_idx]));
+	emit(gen, BPF_STX_MEM(BPF_W, BPF_REG_1, BPF_REG_2, 0));
+
+	/* 2. Store member index (upper 32 bits of R7) into attach_type_off */
+	emit(gen, BPF_MOV64_REG(BPF_REG_2, BPF_REG_7));
+	emit(gen, BPF_ALU64_IMM(BPF_RSH, BPF_REG_2, 32));
+	emit2(gen, BPF_LD_IMM64_RAW_FULL(BPF_REG_1, BPF_PSEUDO_MAP_IDX_VALUE,
+					 0, 0, 0, attach_type_off));
+	emit(gen, BPF_STX_MEM(BPF_W, BPF_REG_1, BPF_REG_2, 0));
+}
+
+void bpf_gen__init_kern_struct_ops(struct bpf_gen *gen, struct btf *btf,
+				   struct bpf_struct_ops *st_ops,
+				   __u32 *vtype_id_off,
+				   unsigned int *val_sz_off)
+{
+	struct ksym_relo_desc relo = { .kind = BTF_KIND_STRUCT };
+	const struct btf_member *member;
+	const struct btf_type *type;
+	char tname[192], stname[256];
+	const char *tname_raw;
+	__u32 i;
+
+	type = btf__type_by_id(btf, st_ops->type_id);
+	tname_raw = btf__name_by_offset(btf, type->name_off);
+	snprintf(tname, sizeof(tname), "%.*s",
+		 (int)bpf_core_essential_name_len(tname_raw), tname_raw);
+	snprintf(stname, sizeof(stname), "%s%s", STRUCT_OPS_VALUE_PREFIX, tname);
+
+	/* 1. Resolve BTF ID of struct bpf_struct_ops_<tname> */
+	*vtype_id_off = add_data(gen, NULL, sizeof(__u64));
+	relo.name = stname;
+	emit_bpf_find_by_name_kind(gen, &relo);
+	emit_check_err(gen);
+	emit(gen, BPF_MOV64_REG(BPF_REG_8, BPF_REG_7));
+	emit2(gen, BPF_LD_IMM64_RAW_FULL(BPF_REG_1, BPF_PSEUDO_MAP_IDX_VALUE,
+					 0, 0, 0, *vtype_id_off));
+	emit(gen, BPF_STX_MEM(BPF_DW, BPF_REG_1, BPF_REG_7, 0));
+
+	/* 2. Use the BTF ID to find the struct_ops value struct size and "data" offset */
+	*val_sz_off = add_data(gen, NULL, sizeof(__u32));
+	emit_bpf_get_struct_member_info(gen, NULL);
+	emit2(gen, BPF_LD_IMM64_RAW_FULL(BPF_REG_1, BPF_PSEUDO_MAP_IDX_VALUE,
+					 0, 0, 0, *val_sz_off));
+	emit(gen, BPF_STX_MEM(BPF_W, BPF_REG_1, BPF_REG_7, 0));
+
+	emit_bpf_get_struct_member_info(gen, "data");
+	emit(gen, BPF_MOV32_REG(BPF_REG_9, BPF_REG_7));
+
+	/* 3. Resolve BTF ID of struct <tname> */
+	st_ops->type_id_off = add_data(gen, NULL, sizeof(__u64));
+	relo.name = tname;
+	emit_bpf_find_by_name_kind(gen, &relo);
+	emit_check_err(gen);
+	emit(gen, BPF_MOV64_REG(BPF_REG_8, BPF_REG_7));
+	emit2(gen, BPF_LD_IMM64_RAW_FULL(BPF_REG_1, BPF_PSEUDO_MAP_IDX_VALUE,
+					 0, 0, 0, st_ops->type_id_off));
+	emit(gen, BPF_STX_MEM(BPF_DW, BPF_REG_1, BPF_REG_7, 0));
+
+	/* 4. Allocate and populate space in the data blob for kern_vdata */
+	st_ops->kern_vdata_off = add_data(gen, NULL, KERN_VDATA_MAX_SIZE);
+	member = btf_members(type);
+	for (i = 0; i < btf_vlen(type); i++, member++) {
+		const struct btf_type *mtype;
+		const char *mname;
+		void *mdata;
+		__s64 msize;
+		__u32 moff;
+
+		mname = btf__name_by_offset(btf, member->name_off);
+		if (btf_member_bitfield_size(type, i)) {
+			pr_warn("struct_ops init_kern: bitfield %s is not supported\n",
+				mname);
+			gen->error = -ENOTSUP;
+			return;
+		}
+
+		moff = member->offset / 8;
+		mdata = st_ops->data + moff;
+		msize = btf__resolve_size(btf, member->type);
+		if (msize < 0) {
+			pr_warn("struct_ops init_kern: failed to resolve the size of member %s\n",
+				mname);
+			gen->error = msize;
+			return;
+		}
+
+		mtype = skip_mods_and_typedefs(btf, member->type, NULL);
+		if (btf_is_ptr(mtype)) {
+			struct bpf_program *prog = *(void **)mdata;
+
+			emit_st_ops_member_prog(gen, mname, st_ops, i, prog);
+		} else {
+			emit_st_ops_member_val(gen, mname, mdata, msize,
+					       st_ops->kern_vdata_off);
+		}
+	}
 }
