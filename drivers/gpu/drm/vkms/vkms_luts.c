@@ -12,7 +12,7 @@
  * https://gitlab.freedesktop.org/hwentland/lutgen
  */
 
-static struct drm_color_lut linear_array[LUT_SIZE] = {
+static struct drm_color_lut linear_array[] = {
 	{ 0x0, 0x0, 0x0, 0 },
 	{ 0x101, 0x101, 0x101, 0 },
 	{ 0x202, 0x202, 0x202, 0 },
@@ -273,12 +273,12 @@ static struct drm_color_lut linear_array[LUT_SIZE] = {
 
 const struct vkms_color_lut linear_eotf = {
 	.base = linear_array,
-	.lut_length = LUT_SIZE,
+	.lut_length = ARRAY_SIZE(linear_array),
 	.channel_value2index_ratio = 0xff00ffll
 };
 EXPORT_SYMBOL(linear_eotf);
 
-static struct drm_color_lut srgb_array[LUT_SIZE] = {
+static struct drm_color_lut srgb_array[] = {
 	{ 0x0, 0x0, 0x0, 0 },
 	{ 0x13, 0x13, 0x13, 0 },
 	{ 0x27, 0x27, 0x27, 0 },
@@ -539,12 +539,12 @@ static struct drm_color_lut srgb_array[LUT_SIZE] = {
 
 const struct vkms_color_lut srgb_eotf = {
 	.base = srgb_array,
-	.lut_length = LUT_SIZE,
+	.lut_length = ARRAY_SIZE(srgb_array),
 	.channel_value2index_ratio = 0xff00ffll
 };
 EXPORT_SYMBOL(srgb_eotf);
 
-static struct drm_color_lut srgb_inv_array[LUT_SIZE] = {
+static struct drm_color_lut srgb_inv_array[] = {
 	{ 0x0, 0x0, 0x0, 0 },
 	{ 0xcc2, 0xcc2, 0xcc2, 0 },
 	{ 0x15be, 0x15be, 0x15be, 0 },
@@ -805,7 +805,7 @@ static struct drm_color_lut srgb_inv_array[LUT_SIZE] = {
 
 const struct vkms_color_lut srgb_inv_eotf = {
 	.base = srgb_inv_array,
-	.lut_length = LUT_SIZE,
+	.lut_length = ARRAY_SIZE(srgb_inv_array),
 	.channel_value2index_ratio = 0xff00ffll
 };
 EXPORT_SYMBOL(srgb_inv_eotf);

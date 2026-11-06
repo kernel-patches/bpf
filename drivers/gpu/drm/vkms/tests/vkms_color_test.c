@@ -128,7 +128,7 @@ static void vkms_color_test_lerp(struct kunit *test)
 
 static void vkms_color_test_linear(struct kunit *test)
 {
-	for (int i = 0; i < LUT_SIZE; i++) {
+	for (int i = 0; i < linear_eotf.lut_length; i++) {
 		int linear = apply_lut_to_channel_value(&linear_eotf, i * 0x101, LUT_RED);
 
 		KUNIT_EXPECT_EQ(test, DIV_ROUND_CLOSEST(linear, 0x101), i);
@@ -139,7 +139,7 @@ static void vkms_color_srgb_inv_srgb(struct kunit *test)
 {
 	u16 srgb, final;
 
-	for (int i = 0; i < LUT_SIZE; i++) {
+	for (int i = 0; i < srgb_eotf.lut_length; i++) {
 		srgb = apply_lut_to_channel_value(&srgb_eotf, i * 0x101, LUT_RED);
 		final = apply_lut_to_channel_value(&srgb_inv_eotf, srgb, LUT_RED);
 
