@@ -581,7 +581,7 @@ __le64 *irdma_qp_get_next_send_wqe(struct irdma_qp_uk *qp, u32 *wqe_idx,
 				   struct irdma_post_sq_info *info);
 __le64 *irdma_srq_get_next_recv_wqe(struct irdma_srq_uk *srq, u32 *wqe_idx);
 __le64 *irdma_qp_get_next_recv_wqe(struct irdma_qp_uk *qp, u32 *wqe_idx);
-void irdma_uk_clean_cq(void *q, struct irdma_cq_uk *cq);
+void irdma_uk_clean_cq(struct irdma_qp_uk *qp, struct irdma_cq_uk *cq);
 int irdma_nop(struct irdma_qp_uk *qp, u64 wr_id, bool signaled, bool post_sq);
 int irdma_fragcnt_to_quanta_sq(u32 frag_cnt, u16 *quanta);
 int irdma_fragcnt_to_wqesize_rq(u32 frag_cnt, u16 *wqe_size);
