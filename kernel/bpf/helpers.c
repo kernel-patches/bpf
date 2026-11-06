@@ -1377,7 +1377,8 @@ static void bpf_async_refcount_put(struct bpf_async_cb *cb)
 	}
 }
 
-static void bpf_async_cancel_and_free(struct bpf_async_kern *async);
+static void bpf_async_cancel_cb(struct bpf_async_kern *async,
+				struct bpf_async_cb *cb);
 static void bpf_async_irq_worker(struct irq_work *work);
 
 static int __bpf_async_init(struct bpf_async_kern *async, struct bpf_map *map, u64 flags,
@@ -1439,17 +1440,15 @@ static int __bpf_async_init(struct bpf_async_kern *async, struct bpf_map *map, u
 		kfree_nolock(cb);
 		return -EBUSY;
 	}
-	/* Guarantee the order between async->cb and map->usercnt. So
-	 * when there are concurrent uref release and bpf timer init, either
-	 * bpf_timer_cancel_and_free() called by uref release reads a no-NULL
-	 * timer or atomic64_read() below returns a zero usercnt.
+	/*
+	 * Pair with uref cancellation: it sees cb or init sees usercnt=0.
 	 */
 	smp_mb();
 	if (!atomic64_read(&map->usercnt)) {
 		/* maps with timers must be either held by user space
 		 * or pinned in bpffs.
 		 */
-		bpf_async_cancel_and_free(async);
+		bpf_async_cancel_cb(async, cb);
 		return -EPERM;
 	}
 
@@ -1556,10 +1555,21 @@ static int __bpf_async_set_callback(struct bpf_async_kern *async, void *callback
 				    struct bpf_prog *prog)
 {
 	struct bpf_async_cb *cb;
+	struct bpf_map *map;
 
 	cb = READ_ONCE(async->cb);
 	if (!cb)
 		return -EINVAL;
+	/*
+	 * Pair with cancellation even if another CPU published cb and has
+	 * not finished its init checks.
+	 */
+	smp_mb();
+	map = READ_ONCE(cb->map);
+	if (!map)
+		return -EINVAL;
+	if (!atomic64_read(&map->usercnt))
+		return -EPERM;
 
 	return bpf_async_update_prog_callback(cb, prog, callback_fn);
 }
@@ -1747,19 +1757,16 @@ static void bpf_async_irq_worker(struct irq_work *work)
 	this_cpu_write(async_cb_running, NULL);
 }
 
-static void bpf_async_cancel_and_free(struct bpf_async_kern *async)
+/* The caller's read-side section must keep cb alive. */
+static void bpf_async_cancel_cb(struct bpf_async_kern *async,
+				struct bpf_async_cb *cb)
 {
-	struct bpf_async_cb *cb;
-
-	if (!READ_ONCE(async->cb))
-		return;
-
-	cb = xchg(&async->cb, NULL);
-	if (!cb)
-		return;
-
-	/* Callbacks that run after this see NULL and return. */
+	/* Make cb unusable before detaching it. */
 	WRITE_ONCE(cb->map, NULL);
+	/* Only the successful detacher consumes the slot's reference. */
+	if (cmpxchg(&async->cb, cb, NULL) != cb)
+		return;
+
 	bpf_async_update_prog_callback(cb, NULL, NULL);
 	/*
 	 * No refcount_inc_not_zero(&cb->refcnt) here. Dropping the last
@@ -1777,6 +1784,19 @@ static void bpf_async_cancel_and_free(struct bpf_async_kern *async)
 		 * callback will do additional timer/wq_cancel due to races anyway.
 		 */
 	}
+}
+
+static void bpf_async_cancel_and_free(struct bpf_async_kern *async)
+{
+	struct bpf_async_cb *cb;
+
+	guard(rcu)();
+	/* Order unlink/uref release before the slot read, including NULL. */
+	smp_mb();
+	/* Pair with the detach following cb->map = NULL. */
+	cb = smp_load_acquire(&async->cb);
+	if (cb)
+		bpf_async_cancel_cb(async, cb);
 }
 
 /*
@@ -3493,6 +3513,18 @@ __bpf_kfunc void bpf_throw(u64 cookie)
 	WARN(1, "A call to BPF exception callback should never return\n");
 }
 
+/**
+ * bpf_wq_init - Initialize a bpf_wq inside a map value.
+ * @wq: pointer to the bpf_wq field
+ * @p__const_map: the map containing @wq
+ * @flags: must be zero
+ *
+ * Success does not prevent concurrent cancellation.
+ *
+ * Return: 0 on success; -EINVAL for invalid flags; -EBUSY if already
+ * initialized; -ENOMEM on allocation failure; -EPERM if the map has no user
+ * reference.
+ */
 __bpf_kfunc int bpf_wq_init(struct bpf_wq *wq, void *p__const_map, unsigned int flags)
 {
 	struct bpf_async_kern *async = (struct bpf_async_kern *)wq;
@@ -3531,6 +3563,19 @@ __bpf_kfunc int bpf_wq_start(struct bpf_wq *wq, unsigned int flags)
 	}
 }
 
+/**
+ * bpf_wq_set_callback - Configure the callback of a bpf_wq.
+ * @wq: pointer to the bpf_wq field
+ * @callback_fn: callback function
+ * @flags: must be zero
+ * @aux: implicit program argument
+ *
+ * Success does not prevent concurrent cancellation.
+ *
+ * Return: 0 on success; -EINVAL for invalid flags, if @wq was not initialized,
+ * or if its containing value was already invalidated; -EPERM if the map has
+ * no user references.
+ */
 __bpf_kfunc int bpf_wq_set_callback(struct bpf_wq *wq,
 				    int (callback_fn)(void *map, int *key, void *value),
 				    unsigned int flags,
