@@ -761,5 +761,88 @@
                 1
             ]
         ]
+    },
+    {
+        "id": "b4f8",
+        "name": "Add gact action with random netrand and get it",
+        "category": [
+            "actions",
+            "gact"
+        ],
+        "plugins": {
+           "requires": "nsPlugin"
+        },
+        "setup": [
+            [
+                "$TC actions flush action gact",
+                0,
+                1,
+                255
+            ]
+        ],
+        "cmdUnderTest": "$TC actions add action pass random netrand drop 20 index 91",
+        "expExitCode": "0",
+        "verifyCmd": "$TC actions get action gact index 91",
+        "matchPattern": "action order [0-9]*: gact action pass.*random type netrand drop val 20.*index 91 ref",
+        "matchCount": "1",
+        "teardown": [
+            "$TC actions flush action gact"
+        ]
+    },
+    {
+        "id": "e3d7",
+        "name": "Replace gact action without probability with random determ and get it",
+        "category": [
+            "actions",
+            "gact"
+        ],
+        "plugins": {
+           "requires": "nsPlugin"
+        },
+        "setup": [
+            [
+                "$TC actions flush action gact",
+                0,
+                1,
+                255
+            ],
+            "$TC actions add action pass index 92"
+        ],
+        "cmdUnderTest": "$TC actions replace action pass random determ drop 5 index 92",
+        "expExitCode": "0",
+        "verifyCmd": "$TC actions get action gact index 92",
+        "matchPattern": "action order [0-9]*: gact action pass.*random type determ drop val 5.*index 92 ref",
+        "matchCount": "1",
+        "teardown": [
+            "$TC actions flush action gact"
+        ]
+    },
+    {
+        "id": "c2a9",
+        "name": "Get gact action without probability",
+        "category": [
+            "actions",
+            "gact"
+        ],
+        "plugins": {
+           "requires": "nsPlugin"
+        },
+        "setup": [
+            [
+                "$TC actions flush action gact",
+                0,
+                1,
+                255
+            ],
+            "$TC actions add action pass index 93"
+        ],
+        "cmdUnderTest": "$TC actions get action gact index 93",
+        "expExitCode": "0",
+        "verifyCmd": "$TC actions get action gact index 93",
+        "matchPattern": "action order [0-9]*: gact action pass.*random type none.*index 93 ref",
+        "matchCount": "1",
+        "teardown": [
+            "$TC actions flush action gact"
+        ]
     }
 ]
