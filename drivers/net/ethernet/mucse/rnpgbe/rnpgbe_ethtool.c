@@ -131,6 +131,93 @@ static int rnpgbe_get_link_ksettings(struct net_device *netdev,
 	return 0;
 }
 
+static u32 rnpgbe_fw_link_modes(const unsigned long *modes)
+{
+	u32 fw_modes = 0;
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(rnpgbe_tp_modes); i++) {
+		if (linkmode_test_bit(rnpgbe_tp_modes[i].ethtool_mode, modes))
+			fw_modes |= rnpgbe_tp_modes[i].fw_mode;
+	}
+
+	return fw_modes;
+}
+
+static int rnpgbe_set_link_ksettings(struct net_device *netdev,
+				     const struct ethtool_link_ksettings *cmd)
+{
+	struct ethtool_link_ksettings settings = {};
+	struct mucse *mucse = netdev_priv(netdev);
+	u8 mdix = cmd->base.eth_tp_mdix_ctrl;
+	u32 advertising, mode, supported;
+	bool autoneg;
+	int err;
+
+	if (cmd->base.autoneg != AUTONEG_ENABLE &&
+	    cmd->base.autoneg != AUTONEG_DISABLE)
+		return -EINVAL;
+	autoneg = cmd->base.autoneg == AUTONEG_ENABLE;
+	if (!mdix)
+		mdix = mucse->hw.mdix_ctrl;
+	if (mdix != ETH_TP_MDI && mdix != ETH_TP_MDI_X &&
+	    mdix != ETH_TP_MDI_AUTO)
+		return -EINVAL;
+
+	err = rnpgbe_get_link_ksettings(netdev, &settings);
+	if (err)
+		return err;
+	if (settings.base.port != PORT_TP)
+		return -EOPNOTSUPP;
+
+	supported = rnpgbe_fw_link_modes(settings.link_modes.supported);
+	advertising = rnpgbe_fw_link_modes(settings.link_modes.advertising);
+	if (autoneg) {
+		if (!linkmode_subset(cmd->link_modes.advertising,
+				     settings.link_modes.supported))
+			return -EINVAL;
+		advertising = rnpgbe_fw_link_modes(cmd->link_modes.advertising);
+		if (!advertising)
+			return -EINVAL;
+	} else {
+		if (cmd->base.duplex != DUPLEX_FULL &&
+		    cmd->base.duplex != DUPLEX_HALF)
+			return -EINVAL;
+		switch (cmd->base.speed) {
+		case SPEED_10:
+			mode = cmd->base.duplex == DUPLEX_FULL ?
+				RNPGBE_FW_ADV_10_FULL : RNPGBE_FW_ADV_10_HALF;
+			break;
+		case SPEED_100:
+			mode = cmd->base.duplex == DUPLEX_FULL ?
+				RNPGBE_FW_ADV_100_FULL : RNPGBE_FW_ADV_100_HALF;
+			break;
+		default:
+			return -EINVAL;
+		}
+		if (!(supported & mode))
+			return -EINVAL;
+	}
+
+	err = mucse_mbx_set_link(&mucse->hw, advertising, autoneg,
+				 autoneg ? 0 : cmd->base.speed,
+				 autoneg ? 0 : cmd->base.duplex, mdix);
+	if (!err) {
+		mucse->hw.mdix_ctrl = mdix;
+		mucse->hw.link_config.advertising = advertising;
+		mucse->hw.link_config.speed = autoneg ?
+			SPEED_UNKNOWN : cmd->base.speed;
+		mucse->hw.link_config.duplex = autoneg ?
+			DUPLEX_UNKNOWN : cmd->base.duplex;
+		if (autoneg)
+			mucse->hw.link_config.status |= MUCSE_LINK_AUTONEG;
+		else
+			mucse->hw.link_config.status &= ~MUCSE_LINK_AUTONEG;
+	}
+
+	return err;
+}
+
 static void rnpgbe_get_drvinfo(struct net_device *netdev,
 			       struct ethtool_drvinfo *info)
 {
@@ -148,4 +235,5 @@ const struct ethtool_ops rnpgbe_ethtool_ops = {
 	.get_drvinfo = rnpgbe_get_drvinfo,
 	.get_link = ethtool_op_get_link,
 	.get_link_ksettings = rnpgbe_get_link_ksettings,
+	.set_link_ksettings = rnpgbe_set_link_ksettings,
 };

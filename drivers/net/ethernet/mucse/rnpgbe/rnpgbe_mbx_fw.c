@@ -236,7 +236,7 @@ int mucse_mbx_set_link(struct mucse_hw *hw, u32 advertising, bool autoneg,
 
 	len = le16_to_cpu(req.r.datalen);
 	mutex_lock(&hw->mbx.lock);
-	err = mucse_write_and_wait_ack_mbx(hw, req.dwords, len);
+	err = mucse_write_mbx_coalesce_event(hw, req.dwords, len);
 	mutex_unlock(&hw->mbx.lock);
 
 	return err;
