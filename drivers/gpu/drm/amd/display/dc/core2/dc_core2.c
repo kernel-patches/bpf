@@ -61,7 +61,8 @@ static struct pipe_ctx *core2_otg_master(struct dc_state *state)
 		return NULL;
 	for (i = 0; i < MAX_PIPES; i++) {
 		if (state->res_ctx.pipe_ctx[i].stream == state->streams[0] &&
-				!state->res_ctx.pipe_ctx[i].top_pipe)
+				!state->res_ctx.pipe_ctx[i].top_pipe &&
+				!state->res_ctx.pipe_ctx[i].prev_odm_pipe)
 			return &state->res_ctx.pipe_ctx[i];
 	}
 	return NULL;
@@ -160,10 +161,12 @@ static void core2_commit_enable_done(struct pipe_ctx *pipe)
 static void core2_commit_disable_done(struct dc *dc, struct pipe_ctx *pipe)
 {
 	struct dc_link *link = pipe->stream->link;
-	struct pipe_ctx *dpp_pipe;
+	struct pipe_ctx *dpp_pipes[MAX_PIPES];
+	int i, n = resource_get_dpp_pipes_for_stream(pipe->stream,
+			&dc->current_state->res_ctx, dpp_pipes);
 
-	for (dpp_pipe = pipe; dpp_pipe; dpp_pipe = dpp_pipe->bottom_pipe)
-		dpp_pipe->plane_res.hubp->power_gated = true;
+	for (i = 0; i < n; i++)
+		dpp_pipes[i]->plane_res.hubp->power_gated = true;
 	link->link_status.link_active = false;
 	link->phy_state.symclk_state = SYMCLK_OFF_TX_OFF;
 	pipe->stream->timing_adjust_pending = true;
@@ -314,11 +317,15 @@ static bool core2_update_state_supported(
  */
 static void core2_update_done(struct dc *dc, struct dc_state *context)
 {
+	struct pipe_ctx *dpp_pipes[MAX_PIPES];
 	struct pipe_ctx *pipe;
 	struct dc_plane_state *plane;
 	struct hubp *hubp;
+	int i, n = context->stream_count ? resource_get_dpp_pipes_for_stream(
+			context->streams[0], &context->res_ctx, dpp_pipes) : 0;
 
-	for (pipe = core2_otg_master(context); pipe; pipe = pipe->bottom_pipe) {
+	for (i = 0; i < n; i++) {
+		pipe = dpp_pipes[i];
 		if (!pipe->plane_state || !pipe->plane_res.hubp ||
 				!pipe->stream_res.opp)
 			return;
@@ -341,6 +348,8 @@ static void core2_update_state_execute(
 	struct dc *dc = scratch->dc;
 	struct dc_state *context = scratch->new_context;
 	struct pipe_ctx *pipe = core2_otg_master(context);
+	struct pipe_ctx *dpp_pipes[MAX_PIPES];
+	int i, n;
 
 	/*
 	 * The values DC1 computes into the context before it programs the
@@ -350,9 +359,11 @@ static void core2_update_state_execute(
 		return;
 	if (dc->res_pool->funcs->prepare_mcache_programming)
 		dc->res_pool->funcs->prepare_mcache_programming(dc, context);
-	for (; pipe; pipe = pipe->bottom_pipe)
-		pipe->plane_res.scl_data.lb_params.alpha_en =
-				pipe->plane_state->per_pixel_alpha;
+	n = resource_get_dpp_pipes_for_stream(pipe->stream, &context->res_ctx,
+			dpp_pipes);
+	for (i = 0; i < n; i++)
+		dpp_pipes[i]->plane_res.scl_data.lb_params.alpha_en =
+				dpp_pipes[i]->plane_state->per_pixel_alpha;
 
 	if (core2_build_and_run(dc, DCN_DECL_SEAMLESS_UPDATE, context) != DC_OK) {
 		ASSERT(false);

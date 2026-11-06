@@ -2174,6 +2174,38 @@ int resource_get_dpp_pipes_for_opp_head(const struct pipe_ctx *opp_head,
 	return i;
 }
 
+int resource_get_opp_heads_for_stream(const struct dc_stream_state *stream,
+		struct resource_context *res_ctx,
+		struct pipe_ctx *opp_heads[MAX_PIPES])
+{
+	struct pipe_ctx *otg_master = resource_get_otg_master_for_stream(
+			res_ctx, stream);
+
+	if (!otg_master)
+		return 0;
+	return resource_get_opp_heads_for_otg_master(otg_master, res_ctx,
+			opp_heads);
+}
+
+int resource_get_dpp_pipes_for_stream(const struct dc_stream_state *stream,
+		struct resource_context *res_ctx,
+		struct pipe_ctx *dpp_pipes[MAX_PIPES])
+{
+	struct pipe_ctx *opp_heads[MAX_PIPES];
+	struct pipe_ctx *slice_pipes[MAX_PIPES];
+	int opp_head_count = resource_get_opp_heads_for_stream(stream, res_ctx,
+			opp_heads);
+	int i, j, slice_count, count = 0;
+
+	for (i = 0; i < opp_head_count; i++) {
+		slice_count = resource_get_dpp_pipes_for_opp_head(opp_heads[i],
+				res_ctx, slice_pipes);
+		for (j = 0; j < slice_count && count < MAX_PIPES; j++)
+			dpp_pipes[count++] = slice_pipes[j];
+	}
+	return count;
+}
+
 int resource_get_dpp_pipes_for_plane(const struct dc_plane_state *plane,
 		struct resource_context *res_ctx,
 		struct pipe_ctx *dpp_pipes[MAX_PIPES])
