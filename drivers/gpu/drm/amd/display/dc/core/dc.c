@@ -1072,7 +1072,11 @@ static bool dc_construct_ctx(struct dc *dc,
 
 	dc->ctx = dc_ctx;
 
-	dc->link_srv = link_create_link_service();
+	const struct link_service_options link_service_options = {
+		.enable_dpms_v2 = dc->config.enable_dpms_v2,
+	};
+
+	dc->link_srv = link_create_link_service(link_service_options);
 	if (!dc->link_srv)
 		return false;
 

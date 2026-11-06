@@ -645,6 +645,7 @@ struct dc_config {
 	// Set by the DM around a commit that runs where allocation is not
 	// permitted; requires preallocate_scratch_state.
 	bool use_preallocated_state;
+	bool enable_dpms_v2;
 };
 
 enum visual_confirm {

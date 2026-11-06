@@ -77,7 +77,11 @@
  */
 #include "core_types.h"
 
-struct link_service *link_create_link_service(void);
+struct link_service_options {
+	bool enable_dpms_v2;
+};
+
+struct link_service *link_create_link_service(struct link_service_options options);
 void link_destroy_link_service(struct link_service **link_srv);
 
 struct link_init_data {

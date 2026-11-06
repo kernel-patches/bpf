@@ -31,6 +31,7 @@
 #include "link_resource.h"
 #include "link_validation.h"
 #include "link_dpms_v1.h"
+#include "link_dpms_v2.h"
 #include "accessories/link_dp_cts.h"
 #include "accessories/link_dp_trace.h"
 #include "protocols/link_ddc.h"
@@ -111,10 +112,16 @@ static void construct_link_service_validation(struct link_service *link_srv)
  * with the link and link's enable/disable sequences as result of the stream's
  * dpms state change.
  */
-static void construct_link_service_dpms(struct link_service *link_srv)
+static void construct_link_service_dpms(struct link_service *link_srv, struct link_service_options options)
 {
-	link_srv->set_dpms_on = link_set_dpms_on_v1;
-	link_srv->set_dpms_off = link_set_dpms_off_v1;
+	if (options.enable_dpms_v2) {
+		link_srv->set_dpms_on = link_set_dpms_on_v2;
+		link_srv->set_dpms_off = link_set_dpms_off_v2;
+	} else {
+		link_srv->set_dpms_on = link_set_dpms_on_v1;
+		link_srv->set_dpms_off = link_set_dpms_off_v1;
+	}
+
 	link_srv->resume = link_resume;
 	link_srv->blank_all_dp_displays = link_blank_all_dp_displays;
 	link_srv->blank_all_edp_displays = link_blank_all_edp_displays;
@@ -305,7 +312,7 @@ static void construct_link_service_dp_trace(struct link_service *link_srv)
 	link_srv->dp_trace_source_sequence = dp_trace_source_sequence;
 }
 
-static void construct_link_service(struct link_service *link_srv)
+static void construct_link_service(struct link_service *link_srv, struct link_service_options options)
 {
 	/* All link service functions should fall under some sub categories.
 	 * If a new function doesn't perfectly fall under an existing sub
@@ -318,7 +325,7 @@ static void construct_link_service(struct link_service *link_srv)
 	construct_link_service_detection(link_srv);
 	construct_link_service_resource(link_srv);
 	construct_link_service_validation(link_srv);
-	construct_link_service_dpms(link_srv);
+	construct_link_service_dpms(link_srv, options);
 	construct_link_service_ddc(link_srv);
 	construct_link_service_dp_capability(link_srv);
 	construct_link_service_dp_phy_or_dpia(link_srv);
@@ -330,14 +337,14 @@ static void construct_link_service(struct link_service *link_srv)
 	construct_link_service_dp_trace(link_srv);
 }
 
-struct link_service *link_create_link_service(void)
+struct link_service *link_create_link_service(struct link_service_options options)
 {
 	struct link_service *link_srv = kzalloc_obj(*link_srv);
 
 	if (link_srv == NULL)
 		goto fail;
 
-	construct_link_service(link_srv);
+	construct_link_service(link_srv, options);
 
 	return link_srv;
 fail:
