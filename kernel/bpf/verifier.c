@@ -11586,9 +11586,13 @@ static u32 inherited_id(const struct bpf_verifier_state *state, u32 id)
 }
 
 /* What func_is_on_its_own() asks of an argument, be it in a register or on the stack */
-static bool arg_needs_caller(const struct bpf_verifier_state *state,
+static bool arg_needs_caller(struct bpf_verifier_env *env, const struct bpf_verifier_state *state,
 			     const struct bpf_subprog_info *sub, const struct bpf_reg_state *reg)
 {
+	/* the id of a __ref argument is kept in ctx_arg_info[], see __check_ctx_access() */
+	if (reg->type == PTR_TO_CTX && state->acquired_refs &&
+	    env->prog->type == BPF_PROG_TYPE_STRUCT_OPS)
+		return true;
 	/* only the ids of what is held have names */
 	if (reg->type != SCALAR_VALUE &&
 	    ((reg->id && !inherited_id(state, reg->id)) ||
@@ -11637,7 +11641,7 @@ static bool func_is_on_its_own(struct bpf_verifier_env *env, struct bpf_verifier
 		if (caller->regs[i].type == PTR_TO_STACK ||
 		    base_type(caller->regs[i].type) == CONST_PTR_TO_DYNPTR)
 			return false;
-		if (arg_needs_caller(state, sub, &caller->regs[i]))
+		if (arg_needs_caller(env, state, sub, &caller->regs[i]))
 			return false;
 	}
 	/* callx of one function of a set asks before it is checked that the arguments are there */
@@ -11645,7 +11649,7 @@ static bool func_is_on_its_own(struct bpf_verifier_env *env, struct bpf_verifier
 		if (caller->stack_arg_regs[i].type == PTR_TO_STACK ||
 		    base_type(caller->stack_arg_regs[i].type) == CONST_PTR_TO_DYNPTR)
 			return false;
-		if (arg_needs_caller(state, sub, &caller->stack_arg_regs[i]))
+		if (arg_needs_caller(env, state, sub, &caller->stack_arg_regs[i]))
 			return false;
 	}
 	return true;
