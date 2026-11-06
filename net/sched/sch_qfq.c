@@ -1103,17 +1103,24 @@ static void qfq_schedule_agg(struct qfq_sched *q, struct qfq_aggregate *agg);
 static struct sk_buff *qfq_dequeue(struct Qdisc *sch)
 {
 	struct qfq_sched *q = qdisc_priv(sch);
-	struct qfq_aggregate *in_serv_agg = q->in_serv_agg;
+	struct qfq_aggregate *in_serv_agg;
 	struct qfq_class *cl;
 	struct sk_buff *skb = NULL;
 	/* next-packet len, 0 means no more active classes in in-service agg */
 	unsigned int len = 0;
 
+restart:
+	in_serv_agg = q->in_serv_agg;
+	skb = NULL;
+	len = 0;
 	if (in_serv_agg == NULL)
 		return NULL;
 
-	if (!list_empty(&in_serv_agg->active))
+	if (!list_empty(&in_serv_agg->active)) {
 		skb = qfq_peek_skb(in_serv_agg, &cl, &len);
+		if (unlikely(in_serv_agg != q->in_serv_agg || cl->agg != in_serv_agg))
+			goto restart;
+	}
 
 	/*
 	 * If there are no active classes in the in-service aggregate,
@@ -1151,6 +1158,8 @@ static struct sk_buff *qfq_dequeue(struct Qdisc *sch)
 		 */
 		in_serv_agg = q->in_serv_agg = qfq_choose_next_agg(q);
 		skb = qfq_peek_skb(in_serv_agg, &cl, &len);
+		if (unlikely(in_serv_agg != q->in_serv_agg || cl->agg != in_serv_agg))
+			goto restart;
 	}
 	if (!skb)
 		return NULL;
@@ -1274,9 +1283,10 @@ static int qfq_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	/* if the class is active, then done here */
 	if (cl_is_active(cl)) {
 		if (unlikely(skb == cl->qdisc->ops->peek(cl->qdisc)) &&
-		    list_first_entry(&agg->active, struct qfq_class, alist)
+		    cl_is_active(cl) &&
+		    list_first_entry(&cl->agg->active, struct qfq_class, alist)
 		    == cl && cl->deficit < len)
-			list_move_tail(&cl->alist, &agg->active);
+			list_move_tail(&cl->alist, &cl->agg->active);
 
 		return err;
 	}
