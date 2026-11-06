@@ -826,8 +826,12 @@ static int find_rsb_dir(struct dlm_ls *ls, const void *name, int len,
 
 	if (from_local && (r->res_master_nodeid != our_nodeid)) {
 		/* Because we have held no locks on this rsb,
-		   res_master_nodeid could have become stale. */
-		rsb_set_flag(r, RSB_MASTER_UNCERTAIN);
+		 * res_master_nodeid could have become stale.  If no master
+		 * was ever set, there is nothing to confirm and set_master()
+		 * must resolve it as for a new rsb.
+		 */
+		if (r->res_master_nodeid)
+			rsb_set_flag(r, RSB_MASTER_UNCERTAIN);
 		r->res_first_lkid = 0;
 	}
 
