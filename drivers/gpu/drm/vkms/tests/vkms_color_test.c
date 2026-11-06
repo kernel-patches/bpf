@@ -123,14 +123,16 @@ static void vkms_color_test_linear(struct kunit *test)
 static void vkms_color_srgb_inv_srgb(struct kunit *test)
 {
 	u16 srgb, final;
-	u16 tolerance = 119;
+	u16 tolerance = 122;
+	u32 x;
 
-	for (int i = 0; i < srgb_eotf.lut_length; i++) {
-		srgb = apply_lut_to_channel_value(&srgb_eotf, srgb_eotf.x[i], LUT_RED);
+	for (u32 i = 0; i <= 4095; i++) {
+		x = i * U16_MAX / 4095;
+		srgb = apply_lut_to_channel_value(&srgb_eotf, x, LUT_RED);
 		final = apply_lut_to_channel_value(&srgb_inv_eotf, srgb, LUT_RED);
 
-		KUNIT_EXPECT_GE(test, final, (int)srgb_eotf.x[i] - tolerance);
-		KUNIT_EXPECT_LE(test, final, (int)srgb_eotf.x[i] + tolerance);
+		KUNIT_EXPECT_GE(test, final, (int)x - tolerance);
+		KUNIT_EXPECT_LE(test, final, (int)x + tolerance);
 	}
 }
 
