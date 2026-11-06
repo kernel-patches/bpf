@@ -1967,8 +1967,10 @@ scev_reg_for_read(struct bpf_verifier_env *env, const struct bpf_func_state *st,
 
 /*
  * Materialize a writable value in the current state, growing its stack if needed.
- * This does not go through check_stack_write(). The callers skip is_unbound_scev_reg() slots,
- * thus the buffer of a live dynptr slice, see bpf_reg_state::buf, does not become a spill here.
+ * This does not go through check_stack_write(). The buffer of a live dynptr slice, see
+ * bpf_reg_state::buf, does not become a spill here. The callers skip the slots that are
+ * is_unbound_scev_reg() when the loop is entered. A slot that a call in the loop may write
+ * has no description: it is in forget_regs, and they skip these too.
  */
 static int scev_reg_for_write(struct bpf_verifier_env *env, struct bpf_func_state *st,
 			      u32 r, struct bpf_reg_state **out)
@@ -3345,7 +3347,7 @@ int bpf_compute_loop_iters(struct bpf_verifier_env *env, struct bpf_verifier_sta
 	struct bpf_loop *loop;
 	int insn_idx = st->insn_idx;
 	u64 until, false_until;
-	bool same = true;
+	bool same = true, walk = false;
 	int err, i;
 	u32 r;
 
@@ -3438,10 +3440,12 @@ int bpf_compute_loop_iters(struct bpf_verifier_env *env, struct bpf_verifier_sta
 	if (err)
 		return err;
 
+	bitmap_zero(iters->forget_regs, REGS_NUM);
 	bitmap_zero(iters->mask_regs, REGS_NUM);
+	iters->spill_base = false;
 	header_env = find_header_env(scev, insn_idx);
 	for (r = 0; r < REGS_NUM; r++) {
-		struct bpf_reg_state *reg;
+		struct bpf_reg_state *reg = NULL;
 		u32 ra, r_scev, r_expr;
 		bool spill_base = false;
 
@@ -3488,13 +3492,14 @@ int bpf_compute_loop_iters(struct bpf_verifier_env *env, struct bpf_verifier_sta
 
 		reg = scev_reg_for_linear(cur_func, r);
 		/*
-		 * The offset of a pointer to arena is not tracked: what enters the loop stands
-		 * for all iterations. If the loop makes something else of it the state that
-		 * returns to the head is not covered by the state at the head, and the body is
-		 * verified again from that state.
+		 * The offset of a pointer to arena is not tracked, so there is nothing to lose.
+		 * If the loop makes something else of it the state that returns to the head
+		 * is not covered by the state at the head.
 		 */
-		if (reg && reg->type == PTR_TO_ARENA)
+		if (reg && reg->type == PTR_TO_ARENA) {
+			__set_bit(r, iters->forget_regs);
 			continue;
+		}
 		/* If SCEV for r is (linear <reg> <slope>) */
 		if (reg && is_simple_linear(scev, r_scev, &coefs) && is_widenable_reg_type(reg)) {
 			/* 32-bit ALU operations on pointers convert them to scalars */
@@ -3543,10 +3548,69 @@ cant_widen:
 				bpf_log(log, ", requires exact stack-offset tracking");
 			bpf_log(log, "\n");
 		}
-		return 0;
+		/* the count stands, it is this one that is not known in the loop */
+		if (spill_base) {
+			iters->spill_base = true;
+			walk = true;
+			continue;
+		}
+		__set_bit(r, iters->forget_regs);
+		/*
+		 * Only a walk through the iterations tells what it is in each of them. That is not
+		 * worth it for a number that nothing looks at: a sum, a hash, what a call leaves in
+		 * r1 - r5. It's not known in the loop then. A pointer, or a slot that holds
+		 * something else than a register, would be of no use any more.
+		 */
+		if (!reg || (reg->type != SCALAR_VALUE && reg->type != NOT_INIT) ||
+		    bpf_flow_is_needed(env, insn_idx, r)) {
+			walk = true;
+			continue;
+		}
+		if (log->level & BPF_LOG_LEVEL2)
+			bpf_log(log, "loop header at %d, nothing looks at it\n", insn_idx);
 	}
 
-	return 1;
+	/* 2: the count is known, what some of the live registers are is not and it matters */
+	return walk ? 2 : 1;
+}
+
+/* The loop changes @r in a way that has no summary. If it is a number it is not known. */
+static void scev_forget_reg(struct bpf_verifier_env *env, struct bpf_func_state *func, u32 r)
+{
+	struct bpf_stack_state *stack;
+	int i;
+
+	if (r < MAX_BPF_REG) {
+		if (func->regs[r].type == SCALAR_VALUE) {
+			bpf_mark_reg_unknown_imprecise(&func->regs[r]);
+			mark_scev_reg_scratched(env, r);
+		} else if (func->regs[r].type == PTR_TO_ARENA) {
+			/* NULL or not is all that is known about it */
+			bpf_reg_forget_range(&func->regs[r]);
+			mark_scev_reg_scratched(env, r);
+		}
+		return;
+	}
+	stack = scev_regno_to_stack(func, r);
+	if (!stack)
+		return;
+	if (bpf_is_spilled_reg(stack) && stack->spilled_ptr.type == PTR_TO_ARENA) {
+		bpf_reg_forget_range(&stack->spilled_ptr);
+		mark_scev_reg_scratched(env, r);
+		return;
+	}
+	if (bpf_is_spilled_reg(stack) && stack->spilled_ptr.type != SCALAR_VALUE)
+		return;
+	for (i = 0; i < BPF_REG_SIZE; i++)
+		if (stack->slot_type[i] == STACK_SPILL || stack->slot_type[i] == STACK_ZERO)
+			break;
+	if (i == BPF_REG_SIZE)
+		return;
+	for (i = 0; i < BPF_REG_SIZE; i++)
+		if (stack->slot_type[i] == STACK_SPILL || stack->slot_type[i] == STACK_ZERO)
+			stack->slot_type[i] = STACK_MISC;
+	bpf_mark_reg_not_init(env, &stack->spilled_ptr);
+	mark_scev_reg_scratched(env, r);
 }
 
 /* bpf_compute_loop_iters() checked that every leaf can be unioned into acc. */
@@ -3591,6 +3655,11 @@ static int union_any_reg(struct bpf_verifier_env *env, struct bpf_func_state *lo
 	return 0;
 }
 
+/*
+ * Make @st, which is at the head of a counted loop, stand for all iterations. @loop_entry is the
+ * state that entered the loop and @iters is what bpf_compute_loop_iters() says about it.
+ * @st is a copy of @loop_entry.
+ */
 int bpf_widen_scev_regs(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
 			struct bpf_verifier_state *loop_entry, struct bpf_loop_iters *iters)
 {
@@ -3621,14 +3690,16 @@ int bpf_widen_scev_regs(struct bpf_verifier_env *env, struct bpf_verifier_state 
 		if (!scev_reg_alive(env, st, r))
 			continue;
 
+		if (test_bit(r, iters->forget_regs)) {
+			scev_forget_reg(env, cur_func, r);
+			continue;
+		}
+
 		r_expr = header_env->reg2scev[r];
 		spill32 = spill32_counter(scev, cur_func, r_expr, r, &coefs);
-		if (!spill32 && (is_unbound_scev_reg(env, cur_func, r) ||
+		/* @iters says nothing about a register that is not known in @loop_entry */
+		if (!spill32 && (is_unbound_scev_reg(env, entry_func, r) ||
 				 is_const_scev_reg(env, insn_idx, r)))
-			continue;
-
-		reg = scev_reg_for_linear(cur_func, r);
-		if (reg && reg->type == PTR_TO_ARENA)
 			continue;
 
 		if (test_bit(r, iters->mask_regs)) {
