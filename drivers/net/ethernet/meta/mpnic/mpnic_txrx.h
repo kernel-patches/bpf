@@ -90,6 +90,8 @@ struct mpnic_queue_stats {
 		struct {
 			u64_stats_t dropped;
 			u64_stats_t csum_partial;
+			u64_stats_t hw_gso;
+			u64_stats_t hw_gso_wire;
 			u64_stats_t stop;
 		} twq;
 		struct {

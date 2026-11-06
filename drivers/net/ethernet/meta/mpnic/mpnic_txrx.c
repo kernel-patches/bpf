@@ -16,11 +16,14 @@
 
 struct mpnic_xmit_cb {
 	u32 bytecount;
+	u16 gso_segs;
 	u8 desc_count;
 };
 
 struct mpnic_tx_hdrs {
 	unsigned int i3len;
+	unsigned int l3_type;
+	unsigned int l4_type;
 };
 
 #define MPNIC_XMIT_CB(__skb) ((struct mpnic_xmit_cb *)((__skb)->cb))
@@ -215,30 +218,82 @@ err_dma:
 
 static void mpnic_tx_fill_hdrs(struct sk_buff *skb, struct mpnic_tx_hdrs *hdrs)
 {
-	hdrs->i3len = skb_checksum_start(skb) - skb_network_header(skb);
+	if (!skb_is_gso(skb)) {
+		hdrs->i3len = skb_checksum_start(skb) - skb_network_header(skb);
+		return;
+	}
+
+	hdrs->l4_type = MPNIC_TWD_L4_TYPE_TCP;
+	hdrs->i3len = skb_transport_offset(skb) - skb_network_offset(skb);
+	hdrs->l3_type = ip_hdr(skb)->version == 4 ?
+			MPNIC_TWD_L3_TYPE_IPV4 : MPNIC_TWD_L3_TYPE_IPV6;
 }
 
-static void
+static bool
+mpnic_tx_lso(struct mpnic_ring *ring, struct sk_buff *skb, __le64 *meta)
+{
+	struct skb_shared_info *shinfo;
+	unsigned int l4len, hdrlen;
+	struct tcphdr *tcph;
+	__be16 payload_len;
+
+	if (skb_cow_head(skb, 0))
+		return true;
+
+	shinfo = skb_shinfo(skb);
+
+	tcph = (struct tcphdr *)skb_checksum_start(skb);
+	l4len = __tcp_hdrlen(tcph);
+	payload_len = cpu_to_be16(skb->len - skb_checksum_start_offset(skb));
+	csum_replace_by_diff(&tcph->check, (__force __wsum)payload_len);
+
+	*meta |= cpu_to_le64(FIELD_PREP(MPNIC_TWD_L4_HLEN, l4len / 4) |
+			     FIELD_PREP(MPNIC_TWD_MSS, shinfo->gso_size) |
+			     MPNIC_TWD_FLAG_REQ_LSO);
+
+	hdrlen = skb_checksum_start_offset(skb) + l4len;
+	MPNIC_XMIT_CB(skb)->bytecount += (shinfo->gso_segs - 1) * hdrlen;
+	MPNIC_XMIT_CB(skb)->gso_segs = shinfo->gso_segs;
+
+	u64_stats_update_begin(&ring->stats.syncp);
+	u64_stats_inc(&ring->stats.twq.hw_gso);
+	u64_stats_add(&ring->stats.twq.hw_gso_wire, shinfo->gso_segs);
+	u64_stats_update_end(&ring->stats.syncp);
+
+	return false;
+}
+
+static bool
 mpnic_tx_offloads(struct mpnic_ring *ring, struct sk_buff *skb, __le64 *meta)
 {
 	struct mpnic_tx_hdrs hdrs = {};
 
 	if (skb->ip_summed != CHECKSUM_PARTIAL)
-		return;
+		return false;
 
 	mpnic_tx_fill_hdrs(skb, &hdrs);
 
 	*meta |= cpu_to_le64(FIELD_PREP(MPNIC_TWD_CSUM_OFFSET,
-					skb->csum_offset / 2) |
-			     MPNIC_TWD_FLAG_REQ_CSO);
+					skb->csum_offset / 2));
 
-	u64_stats_update_begin(&ring->stats.syncp);
-	u64_stats_inc(&ring->stats.twq.csum_partial);
-	u64_stats_update_end(&ring->stats.syncp);
+	if (skb_is_gso(skb)) {
+		if (mpnic_tx_lso(ring, skb, meta))
+			return true;
+	} else {
+		*meta |= cpu_to_le64(MPNIC_TWD_FLAG_REQ_CSO);
+
+		u64_stats_update_begin(&ring->stats.syncp);
+		u64_stats_inc(&ring->stats.twq.csum_partial);
+		u64_stats_update_end(&ring->stats.syncp);
+	}
 
 	*meta |= cpu_to_le64(FIELD_PREP(MPNIC_TWD_L2_HLEN,
 					skb_mac_header_len(skb) / 2) |
-			     FIELD_PREP(MPNIC_TWD_L3_IHLEN, hdrs.i3len / 2));
+			     FIELD_PREP(MPNIC_TWD_L3_IHLEN, hdrs.i3len / 2) |
+			     FIELD_PREP(MPNIC_TWD_L3_TYPE, hdrs.l3_type) |
+			     FIELD_PREP(MPNIC_TWD_L4_TYPE, hdrs.l4_type));
+
+	return false;
 }
 
 #define MPNIC_MIN_FRAME_LEN	60
@@ -261,9 +316,11 @@ static netdev_tx_t mpnic_xmit_frame_ring(struct sk_buff *skb,
 	*meta = cpu_to_le64(MPNIC_TWD_FLAG_DEST_MAC);
 
 	MPNIC_XMIT_CB(skb)->bytecount = skb->len;
+	MPNIC_XMIT_CB(skb)->gso_segs = 1;
 	MPNIC_XMIT_CB(skb)->desc_count = 0;
 
-	mpnic_tx_offloads(ring, skb, meta);
+	if (mpnic_tx_offloads(ring, skb, meta))
+		goto err_free;
 
 	if (mpnic_tx_map(ring, skb, meta))
 		goto err_free;
@@ -312,6 +369,10 @@ netdev_features_t mpnic_features_check(struct sk_buff *skb,
 	    l2len + i3len + sizeof(struct tcphdr) + MAX_TCP_OPTION_SPACE > 256)
 		return features & ~(NETIF_F_CSUM_MASK | NETIF_F_GSO_MASK);
 
+	if (skb_is_gso(skb) &&
+	    !FIELD_FIT(MPNIC_TWD_MSS, skb_shinfo(skb)->gso_size))
+		return features & ~NETIF_F_GSO_MASK;
+
 	return features;
 }
 
@@ -357,7 +418,7 @@ static void mpnic_clean_twq0(struct mpnic_napi_vector *nv, int napi_budget,
 		}
 
 		total_bytes += MPNIC_XMIT_CB(skb)->bytecount;
-		total_packets++;
+		total_packets += MPNIC_XMIT_CB(skb)->gso_segs;
 
 		napi_consume_skb(skb, napi_budget);
 	}
@@ -811,6 +872,8 @@ static void mpnic_aggregate_ring_twq_counters(struct mpnic_base_stats *base,
 {
 	base->tx.dropped += u64_stats_read(&twq->stats.twq.dropped);
 	base->tx.csum_partial += u64_stats_read(&twq->stats.twq.csum_partial);
+	base->tx.hw_gso += u64_stats_read(&twq->stats.twq.hw_gso);
+	base->tx.hw_gso_wire += u64_stats_read(&twq->stats.twq.hw_gso_wire);
 	base->tx.stop += u64_stats_read(&twq->stats.twq.stop);
 }
 
