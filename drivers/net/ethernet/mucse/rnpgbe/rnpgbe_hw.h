@@ -36,8 +36,10 @@
 #define RNPGBE_LINK_ST                 0x000c
 #define RNPGBE_DMA_AXI_EN              0x0010
 #define RNPGBE_TX_MIN_PKT_LEN          33
+#define RNPGBE_DMA_RX_MULTICAST(_n)    (0x4018 + 0x100 * (_n))
 
 #define MUCSE_ETH_OFF(_n)              (0x10000 + (_n))
+#define RNPGBE_ETH_RX_FCS_ERRORS       MUCSE_ETH_OFF(0x8954)
 #define RNPGBE_RX_RAR_LOW(_n)          MUCSE_ETH_OFF(0xa000 + 4 * (_n))
 #define RNPGBE_RX_RAR_HIGH(_n)         MUCSE_ETH_OFF(0xa400 + 4 * (_n))
 #define RNPGBE_RX_MCAST_HASH(_n)       MUCSE_ETH_OFF(0xac00 + 4 * (_n))

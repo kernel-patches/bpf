@@ -236,4 +236,7 @@ const struct ethtool_ops rnpgbe_ethtool_ops = {
 	.get_link = ethtool_op_get_link,
 	.get_link_ksettings = rnpgbe_get_link_ksettings,
 	.set_link_ksettings = rnpgbe_set_link_ksettings,
+	.get_sset_count = rnpgbe_get_sset_count,
+	.get_strings = rnpgbe_get_strings,
+	.get_ethtool_stats = rnpgbe_get_ethtool_stats,
 };

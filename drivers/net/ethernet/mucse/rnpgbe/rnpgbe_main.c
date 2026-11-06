@@ -177,8 +177,11 @@ static void rnpgbe_sw_init(struct mucse *mucse)
 	for (i = 0; i < RNPGBE_MAX_QUEUES; i++) {
 		u64_stats_init(&mucse->tx_stats[i].syncp);
 		atomic64_set(&mucse->tx_stats[i].dropped, 0);
+		atomic64_set(&mucse->tx_stats[i].dma_map_failures, 0);
 		u64_stats_init(&mucse->rx_stats[i].syncp);
 		atomic64_set(&mucse->rx_stats[i].dropped, 0);
+		atomic64_set(&mucse->rx_stats[i].page_alloc_failures, 0);
+		atomic64_set(&mucse->rx_stats[i].skb_alloc_failures, 0);
 	}
 }
 
@@ -255,6 +258,7 @@ static int rnpgbe_add_adapter(struct pci_dev *pdev,
 
 	netdev->netdev_ops = &rnpgbe_netdev_ops;
 	netdev->ethtool_ops = &rnpgbe_ethtool_ops;
+	netdev->stat_ops = &rnpgbe_stat_ops;
 	netdev->priv_flags |= IFF_UNICAST_FLT | IFF_LIVE_ADDR_CHANGE;
 	rnpgbe_sw_init(mucse);
 	err = rnpgbe_reset_hw(hw);
@@ -314,6 +318,7 @@ static int rnpgbe_add_adapter(struct pci_dev *pdev,
 	}
 
 	netif_carrier_off(netdev);
+	rnpgbe_init_stats(mucse);
 	err = register_netdev(netdev);
 	if (err)
 		goto err_remove_mbx;
