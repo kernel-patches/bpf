@@ -636,22 +636,11 @@ static struct platform_driver sh_tmu_device_driver = {
 	.id_table	= sh_tmu_id_table,
 };
 
-static int __init sh_tmu_init(void)
-{
-	return platform_driver_register(&sh_tmu_device_driver);
-}
-
-static void __exit sh_tmu_exit(void)
-{
-	platform_driver_unregister(&sh_tmu_device_driver);
-}
+subsys_platform_driver(sh_tmu_device_driver);
 
 #ifdef CONFIG_SUPERH
 sh_early_platform_init("earlytimer", &sh_tmu_device_driver);
 #endif
-
-subsys_initcall(sh_tmu_init);
-module_exit(sh_tmu_exit);
 
 MODULE_AUTHOR("Magnus Damm");
 MODULE_DESCRIPTION("SuperH TMU Timer Driver");
