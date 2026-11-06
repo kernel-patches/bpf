@@ -411,7 +411,7 @@
 
 &gpio2 {
 	gpio-line-names = "", "", "", "",
-		"", "", "", "", "", "",
+		"", "", "X_SD1_DATA4", "X_SD1_DATA5", "", "X_SD1_DATA7",
 		"", "", "X_SD2_CD_B", "", "", "",
 		"", "", "", "SD2_RESET_B", "LVDS1_BL_EN";
 };
@@ -427,12 +427,13 @@
 	gpio-line-names = "", "", "", "",
 		"", "", "", "", "", "",
 		"", "", "", "", "", "",
-		"", "", "X_PMIC_IRQ_B", "nRTC_INT", "nENET0_INT_PWDN";
+		"", "", "X_PMIC_IRQ_B", "nRTC_INT", "nENET0_INT_PWDN", "",
+		"X_SAI2_RXC", "", "", "", "", "", "X_SAI3_RXFS";
 };
 
 &gpio5 {
-	gpio-line-names = "", "", "", "",
-		"", "", "", "", "", "X_ECSPI1_SSO";
+	gpio-line-names = "", "X_SAI3_TXD", "", "",
+		"", "PWM1_OUT", "", "", "", "X_ECSPI1_SSO";
 };
 
 &iomuxc {
