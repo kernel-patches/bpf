@@ -159,7 +159,7 @@ struct vkms_plane {
 };
 
 struct vkms_color_lut {
-	struct drm_color_lut *base;
+	struct drm_color_lut *y;
 	size_t lut_length;
 	s64 channel_value2index_ratio;
 };

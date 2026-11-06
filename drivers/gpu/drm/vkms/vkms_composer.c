@@ -114,12 +114,12 @@ VISIBLE_IF_KUNIT u16 apply_lut_to_channel_value(const struct vkms_color_lut *lut
 	 */
 	static_assert(sizeof(struct drm_color_lut) == sizeof(__u16) * 4);
 
-	lut_y_floor = &lut->base[drm_fixp2int(lut_index)];
+	lut_y_floor = &lut->y[drm_fixp2int(lut_index)];
 	if (drm_fixp2int(lut_index) == (lut->lut_length - 1))
 		/* We're at the end of the LUT array, use same value for ceil and floor */
 		lut_y_ceil = lut_y_floor;
 	else
-		lut_y_ceil = &lut->base[drm_fixp2int_ceil(lut_index)];
+		lut_y_ceil = &lut->y[drm_fixp2int_ceil(lut_index)];
 
 	floor_channel_value = lut_channel_value(lut_y_floor, channel);
 	ceil_channel_value = lut_channel_value(lut_y_ceil, channel);
@@ -132,7 +132,7 @@ EXPORT_SYMBOL_IF_KUNIT(apply_lut_to_channel_value);
 
 static void apply_lut(const struct vkms_crtc_state *crtc_state, struct line_buffer *output_buffer)
 {
-	if (!crtc_state->gamma_lut.base)
+	if (!crtc_state->gamma_lut.y)
 		return;
 
 	if (!crtc_state->gamma_lut.lut_length)
@@ -647,7 +647,7 @@ void vkms_composer_worker(struct work_struct *work)
 		s64 max_lut_index_fp;
 		s64 u16_max_fp = drm_int2fixp(0xffff);
 
-		crtc_state->gamma_lut.base = (struct drm_color_lut *)crtc->state->gamma_lut->data;
+		crtc_state->gamma_lut.y = (struct drm_color_lut *)crtc->state->gamma_lut->data;
 		crtc_state->gamma_lut.lut_length =
 			crtc->state->gamma_lut->length / sizeof(struct drm_color_lut);
 		max_lut_index_fp = drm_int2fixp(crtc_state->gamma_lut.lut_length - 1);
@@ -655,7 +655,7 @@ void vkms_composer_worker(struct work_struct *work)
 									       u16_max_fp);
 
 	} else {
-		crtc_state->gamma_lut.base = NULL;
+		crtc_state->gamma_lut.y = NULL;
 	}
 
 	spin_unlock_irq(&out->composer_lock);

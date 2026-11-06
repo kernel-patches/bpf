@@ -272,7 +272,7 @@ static struct drm_color_lut srgb_array[] = {
 };
 
 const struct vkms_color_lut srgb_eotf = {
-	.base = srgb_array,
+	.y = srgb_array,
 	.lut_length = ARRAY_SIZE(srgb_array),
 	.channel_value2index_ratio = 0xff00ffll
 };
@@ -538,7 +538,7 @@ static struct drm_color_lut srgb_inv_array[] = {
 };
 
 const struct vkms_color_lut srgb_inv_eotf = {
-	.base = srgb_inv_array,
+	.y = srgb_inv_array,
 	.lut_length = ARRAY_SIZE(srgb_inv_array),
 	.channel_value2index_ratio = 0xff00ffll
 };

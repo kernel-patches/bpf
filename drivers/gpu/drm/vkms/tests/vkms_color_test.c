@@ -81,7 +81,7 @@ static const struct vkms_color_test_lerp_params color_test_lerp_cases[] = {
 };
 
 static const struct vkms_color_lut test_linear_lut = {
-	.base = test_linear_array,
+	.y = test_linear_array,
 	.lut_length = ARRAY_SIZE(test_linear_array),
 	.channel_value2index_ratio = 0xf000fll
 };
