@@ -20,7 +20,7 @@ static void hinic3_net_dim(struct hinic3_nic_dev *nic_dev,
 	struct dim_sample sample = {};
 
 	if (!test_bit(HINIC3_INTF_UP, &nic_dev->flags) ||
-	    !nic_dev->adaptive_rx_coal)
+	    !READ_ONCE(nic_dev->adaptive_rx_coal))
 		return;
 
 	dim_update_sample(irq_cfg->total_events, rxq->rxq_stats.packets,
