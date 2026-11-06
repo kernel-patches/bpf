@@ -93,26 +93,80 @@ static inline u16 lut_channel_value(const struct drm_color_lut *lut,
 	return 0;
 }
 
+static u16 apply_non_uniform_lut(const struct vkms_color_lut *lut,
+				 u16 channel_value,
+				 enum lut_channel channel)
+{
+	const struct drm_color_lut *lut_y_lo, *lut_y_hi;
+	u16 y_lo, y_hi;
+	u16 x_lo, x_hi;
+	unsigned int lo, hi, mid;
+	s64 t;
+
+	/*
+	 * Handle values out of LUT domain.
+	 */
+	if (channel_value <= lut->x[0])
+		return lut_channel_value(&lut->y[0], channel);
+	if (channel_value >= lut->x[lut->lut_length - 1])
+		return lut_channel_value(&lut->y[lut->lut_length - 1], channel);
+
+	/*
+	 * Binary search to find the largest index lo such that
+	 * x[lo] <= channel_value.
+	 */
+	lo = 0;
+	hi = lut->lut_length - 1;
+	while (lo < hi) {
+		mid = lo + (hi - lo + 1) / 2;
+		if (lut->x[mid] <= channel_value)
+			lo = mid;
+		else
+			hi = mid - 1;
+	}
+	lut_y_lo = &lut->y[lo];
+
+	/*
+	 * As x[0] < channel_value < x[lut_length - 1] and
+	 * x[lo] <= channel_value, lo + 1 is a valid index.
+	 */
+	lut_y_hi = &lut->y[lo + 1];
+
+	x_lo = lut->x[lo];
+	x_hi = lut->x[lo + 1];
+	y_lo = lut_channel_value(lut_y_lo, channel);
+	y_hi = lut_channel_value(lut_y_hi, channel);
+
+	/* Avoid division by zero when two consecutive x values are equal. */
+	if (x_hi == x_lo)
+		return y_lo;
+
+	t = drm_fixp_div(drm_int2fixp(channel_value - x_lo),
+			 drm_int2fixp(x_hi - x_lo));
+
+	return lerp_u16(y_lo, y_hi, t);
+}
+
 VISIBLE_IF_KUNIT s64 get_uniform_lut_index(const struct vkms_color_lut *lut, u16 channel_value)
 {
 	s64 color_channel_fp = drm_int2fixp(channel_value);
+
+	if (lut->x) {
+		DRM_DEBUG_DRIVER("Non-uniform LUT should not use get_uniform_lut_index()");
+		return 0;
+	}
 
 	return drm_fixp_mul(color_channel_fp, lut->channel_value2index_ratio);
 }
 EXPORT_SYMBOL_IF_KUNIT(get_uniform_lut_index);
 
-VISIBLE_IF_KUNIT u16 apply_lut_to_channel_value(const struct vkms_color_lut *lut, u16 channel_value,
-						enum lut_channel channel)
+static u16 apply_uniform_lut(const struct vkms_color_lut *lut,
+			     u16 channel_value,
+			     enum lut_channel channel)
 {
 	const struct drm_color_lut *lut_y_floor, *lut_y_ceil;
 	s64 lut_index = get_uniform_lut_index(lut, channel_value);
 	u16 floor_channel_value, ceil_channel_value;
-
-	/*
-	 * This checks if `struct drm_color_lut` has any gap added by the compiler
-	 * between the struct fields.
-	 */
-	static_assert(sizeof(struct drm_color_lut) == sizeof(__u16) * 4);
 
 	lut_y_floor = &lut->y[drm_fixp2int(lut_index)];
 	if (drm_fixp2int(lut_index) == (lut->lut_length - 1))
@@ -126,6 +180,21 @@ VISIBLE_IF_KUNIT u16 apply_lut_to_channel_value(const struct vkms_color_lut *lut
 
 	return lerp_u16(floor_channel_value, ceil_channel_value,
 			lut_index & DRM_FIXED_DECIMAL_MASK);
+}
+
+VISIBLE_IF_KUNIT u16 apply_lut_to_channel_value(const struct vkms_color_lut *lut, u16 channel_value,
+						enum lut_channel channel)
+{
+	/*
+	 * This checks if `struct drm_color_lut` has any gap added by the compiler
+	 * between the struct fields.
+	 */
+	static_assert(sizeof(struct drm_color_lut) == sizeof(__u16) * 4);
+
+	if (lut->x)
+		return apply_non_uniform_lut(lut, channel_value, channel);
+
+	return apply_uniform_lut(lut, channel_value, channel);
 }
 EXPORT_SYMBOL_IF_KUNIT(apply_lut_to_channel_value);
 

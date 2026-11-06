@@ -158,7 +158,16 @@ struct vkms_plane {
 	struct drm_plane base;
 };
 
+/**
+ * struct vkms_color_lut - Driver specific color LUT representation
+ * @x: LUT x-values, must be non-decreasing and may be non-uniformly spaced.
+ *     Only required for non-uniform LUTs.
+ * @y: LUT y-values.
+ * @lut_length: The LUT length.
+ * @channel_value2index_ratio: helper for uniform LUTs (no x-values).
+ */
 struct vkms_color_lut {
+	u16 *x;
 	struct drm_color_lut *y;
 	size_t lut_length;
 	s64 channel_value2index_ratio;
