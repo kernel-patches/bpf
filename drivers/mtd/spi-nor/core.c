@@ -653,6 +653,8 @@ static int spi_nor_wait_till_ready_with_timeout(struct spi_nor *nor,
 	deadline = jiffies + timeout_jiffies;
 
 	while (!timeout) {
+		cond_resched();
+
 		if (time_after_eq(jiffies, deadline))
 			timeout = 1;
 
@@ -661,8 +663,6 @@ static int spi_nor_wait_till_ready_with_timeout(struct spi_nor *nor,
 			return ret;
 		if (ret)
 			return 0;
-
-		cond_resched();
 	}
 
 	dev_dbg(nor->dev, "flash operation timed out\n");
