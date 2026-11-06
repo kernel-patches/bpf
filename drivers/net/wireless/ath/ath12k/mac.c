@@ -4926,14 +4926,18 @@ skip_vdev_up:
 		ath12k_control_beaconing(arvif, info);
 
 		if (arvif->is_up && info->he_support) {
-			/* TODO: Extend to support 1024 BA Bitmap size */
+			param_id = WMI_VDEV_PARAM_BA_MODE;
+			param_value = info->eht_support ?
+				      WMI_BA_MODE_BUFFER_SIZE_1024 :
+				      WMI_BA_MODE_BUFFER_SIZE_256;
+
 			ret = ath12k_wmi_vdev_set_param_cmd(ar, arvif->vdev_id,
-							    WMI_VDEV_PARAM_BA_MODE,
-							    WMI_BA_MODE_BUFFER_SIZE_256);
+							    param_id, param_value);
 			if (ret)
 				ath12k_warn(ar->ab,
-					    "failed to set BA BUFFER SIZE 256 for vdev: %d\n",
-					    arvif->vdev_id);
+					    "failed to set BA BUFFER SIZE %u for vdev %d: %d\n",
+					    info->eht_support ? 1024 : 256,
+					    arvif->vdev_id, ret);
 
 			if (info->he_oper.params) {
 				param_id = WMI_VDEV_PARAM_HEOPS_0_31;

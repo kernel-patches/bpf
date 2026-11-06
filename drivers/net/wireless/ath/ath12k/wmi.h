@@ -171,6 +171,7 @@ struct wmi_tlv {
 #define WMI_APPEND_TO_EXISTING_CHAN_LIST_FLAG 1
 
 #define WMI_BA_MODE_BUFFER_SIZE_256  3
+#define WMI_BA_MODE_BUFFER_SIZE_1024 6
 
 /* HW mode config type replicated from FW header
  * @WMI_HOST_HW_MODE_SINGLE: Only one PHY is active.
