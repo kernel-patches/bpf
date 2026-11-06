@@ -5206,41 +5206,66 @@ static void gpiochip_free_hogs(struct gpio_chip *gc)
 		gpiochip_free_own_desc(desc);
 }
 
-static struct gpio_descs *gpio_descs_alloc(unsigned int count, struct gpio_desc *first_desc)
+static void gpio_descs_free_fastpath(struct gpio_descs *descs)
+{
+	struct gpio_array *array_info;
+
+	array_info = descs->info;
+	if (!array_info)
+		return;
+
+	bitmap_free(array_info->get_mask);
+	bitmap_free(array_info->set_mask);
+	bitmap_free(array_info->invert_mask);
+	descs->info = NULL;
+}
+
+static struct gpio_descs *gpio_descs_alloc(unsigned int count,
+					   struct gpio_desc *first_desc)
 {
 	struct gpio_device *gdev = gpiod_to_gpio_device(first_desc);
 	struct gpio_array *array_info;
-	struct gpio_descs *descs;
 	size_t descs_size, alloc_size;
-	unsigned int bitmap_size;
+	unsigned int nbits;
 
 	/*
 	 * If pin hardware number of array member 0 is also 0, select
 	 * its chip as a candidate for fast bitmap processing path.
 	 */
 	if (gpiod_hwgpio(first_desc) != 0)
-		return kzalloc_flex(*descs, desc, count);
+		return kzalloc_flex(struct gpio_descs, desc, count);
 
-	descs_size = struct_size(descs, desc, count);
-	bitmap_size = BITS_TO_LONGS(max(gdev->ngpio, count));
-	alloc_size = descs_size + struct_size(array_info, invert_mask, 3 * bitmap_size);
+	descs_size = struct_size_t(struct gpio_descs, desc, count);
+	alloc_size = descs_size + sizeof(*array_info);
 
-	descs = kzalloc(alloc_size, GFP_KERNEL);
+	struct gpio_descs *descs __free(gpiod_put_array) = kzalloc(alloc_size, GFP_KERNEL);
 	if (!descs)
 		return NULL;
 
 	array_info = (void *)descs + descs_size;
-	array_info->get_mask = array_info->invert_mask + bitmap_size;
-	array_info->set_mask = array_info->get_mask + bitmap_size;
+	descs->info = array_info;
+
+	nbits = max(gdev->ngpio, count);
+
+	array_info->get_mask = bitmap_zalloc(nbits, GFP_KERNEL);
+	if (!array_info->get_mask)
+		return NULL;
+
+	array_info->set_mask = bitmap_zalloc(nbits, GFP_KERNEL);
+	if (!array_info->set_mask)
+		return NULL;
+
+	array_info->invert_mask = bitmap_zalloc(nbits, GFP_KERNEL);
+	if (!array_info->invert_mask)
+		return NULL;
 
 	array_info->desc = descs->desc;
 	array_info->size = count;
 	array_info->gdev = gdev;
 	bitmap_set(array_info->get_mask, 0, count);
 	bitmap_set(array_info->set_mask, 0, count);
-	descs->info = array_info;
 
-	return descs;
+	return_ptr(descs);
 }
 
 static void gpio_descs_check_fastpath(struct gpio_descs *descs,
@@ -5272,7 +5297,7 @@ static void gpio_descs_check_fastpath(struct gpio_descs *descs,
 		 * hardware number is different from its array index.
 		 */
 		if (bitmap_full(array_info->get_mask, idx)) {
-			descs->info = NULL;
+			gpio_descs_free_fastpath(descs);
 		} else {
 			__clear_bit(idx, array_info->get_mask);
 			__clear_bit(idx, array_info->set_mask);
@@ -5396,6 +5421,7 @@ void gpiod_put_array(struct gpio_descs *descs)
 	for (i = 0; i < descs->ndescs; i++)
 		gpiod_put(descs->desc[i]);
 
+	gpio_descs_free_fastpath(descs);
 	kfree(descs);
 }
 EXPORT_SYMBOL_GPL(gpiod_put_array);
