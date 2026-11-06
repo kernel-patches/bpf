@@ -2886,9 +2886,17 @@ struct sctp_chunk *sctp_make_asconf_update_ip(struct sctp_association *asoc,
 
 		addr_buf += af->sockaddr_len;
 		if (asoc->asconf_addr_del_pending && !del_pickup) {
-			/* reuse the parameter length from the same scope one */
+			/* The DEL_IP parameter is serialized from the
+			 * pending address itself below; account for its
+			 * own address family, which may differ from the
+			 * added one.
+			 */
+			addr = asoc->asconf_addr_del_pending;
+			af = sctp_get_af_specific(addr->v4.sin_family);
+
 			totallen += paramlen;
-			totallen += addr_param_len;
+			totallen += af->to_addr_param(addr, &addr_param);
+
 			del_pickup = 1;
 
 			pr_debug("%s: picked same-scope del_pending addr, "
