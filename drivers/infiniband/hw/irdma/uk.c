@@ -1220,11 +1220,11 @@ int irdma_uk_cq_poll_cmpl(struct irdma_cq_uk *cq,
 	is_srq = (u8)FIELD_GET(IRDMA_CQ_SRQ, qword3);
 	info->error = (bool)FIELD_GET(IRDMA_CQ_ERROR, qword3);
 	info->ipv4 = (bool)FIELD_GET(IRDMACQ_IPV4, qword3);
-	get_64bit_val(cqe, 8, &comp_ctx);
 	if (is_srq)
-		get_64bit_val(cqe, 40, (u64 *)&qp);
+		get_64bit_val(cqe, 40, &comp_ctx);
 	else
-		qp = (struct irdma_qp_uk *)(unsigned long)comp_ctx;
+		get_64bit_val(cqe, 8, &comp_ctx);
+	qp = (struct irdma_qp_uk *)(unsigned long)comp_ctx;
 	if (info->error) {
 		info->major_err = FIELD_GET(IRDMA_CQ_MAJERR, qword3);
 		info->minor_err = FIELD_GET(IRDMA_CQ_MINERR, qword3);
@@ -1268,10 +1268,7 @@ int irdma_uk_cq_poll_cmpl(struct irdma_cq_uk *cq,
 	info->qp_id = (u32)FIELD_GET(IRDMACQ_QPID, qword2);
 	info->ud_src_qpn = (u32)FIELD_GET(IRDMACQ_UDSRCQPN, qword2);
 
-	get_64bit_val(cqe, 8, &comp_ctx);
-
 	info->solicited_event = (bool)FIELD_GET(IRDMACQ_SOEVENT, qword3);
-	qp = (struct irdma_qp_uk *)(unsigned long)comp_ctx;
 	if (!qp || qp->destroy_pending) {
 		ret_code = -EFAULT;
 		goto exit;
