@@ -733,10 +733,10 @@ static enum flow_kind flow_returned_kind(struct bpf_verifier_env *env, int idx)
 		t = btf_type_skip_modifiers(meta.btf, meta.func_proto->type, NULL);
 		if (!btf_type_is_ptr(t))
 			return FLOW_IS_PLAIN;
-		/* void * is a number, unless the verifier knows the kfunc. Such kfunc may fail. */
+		/* void * is a number, unless the verifier knows the kfunc: it may fail, or casts */
 		t = btf_type_skip_modifiers(meta.btf, t->type, NULL);
-		return btf_type_is_void(t) && !(meta.kfunc_flags & KF_RET_NULL) ? FLOW_IS_PLAIN :
-										  FLOW_IS_OTHER;
+		return btf_type_is_void(t) && !(meta.kfunc_flags & KF_RET_NULL) &&
+		       !bpf_is_cast_kfunc(&meta) ? FLOW_IS_PLAIN : FLOW_IS_OTHER;
 	}
 	if (bpf_get_helper_proto(env, insn->imm, &fn) < 0)
 		return FLOW_IS_OTHER;
