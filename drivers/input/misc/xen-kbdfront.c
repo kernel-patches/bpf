@@ -91,22 +91,28 @@ static void xenkbd_handle_key_event(struct xenkbd_info *info,
 {
 	struct input_dev *dev;
 	int value = key->pressed;
+	u32 keycode = READ_ONCE(key->keycode);
 
-	if (test_bit(key->keycode, info->ptr->keybit)) {
+	if (keycode >= KEY_MAX) {
+		pr_warn("unhandled keycode 0x%x\n", keycode);
+		return;
+	}
+
+	if (test_bit(keycode, info->ptr->keybit)) {
 		dev = info->ptr;
-	} else if (test_bit(key->keycode, info->kbd->keybit)) {
+	} else if (test_bit(keycode, info->kbd->keybit)) {
 		dev = info->kbd;
-		if (key->pressed && test_bit(key->keycode, info->kbd->key))
+		if (value && test_bit(keycode, info->kbd->key))
 			value = 2; /* Mark as autorepeat */
 	} else {
-		pr_warn("unhandled keycode 0x%x\n", key->keycode);
+		pr_warn("unhandled keycode 0x%x\n", keycode);
 		return;
 	}
 
 	if (unlikely(!dev))
 		return;
 
-	input_event(dev, EV_KEY, key->keycode, value);
+	input_event(dev, EV_KEY, keycode, value);
 	input_sync(dev);
 }
 
