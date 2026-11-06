@@ -1279,7 +1279,8 @@ static void ipv4_send_dest_unreach(struct sk_buff *skb)
 
 	memset(&parm, 0, sizeof(parm));
 	if (ip_hdr(skb)->ihl > 5) {
-		if (!pskb_network_may_pull(skb, ip_hdr(skb)->ihl * 4))
+		if (!pskb_network_may_pull(skb, ip_hdr(skb)->ihl * 4) ||
+		    skb_unclone(skb, GFP_ATOMIC))
 			return;
 		parm.opt.optlen = ip_hdr(skb)->ihl * 4 - sizeof(struct iphdr);
 
