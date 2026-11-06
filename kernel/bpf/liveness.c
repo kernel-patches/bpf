@@ -2880,6 +2880,11 @@ int bpf_compute_live_registers(struct bpf_verifier_env *env)
 		 */
 		insn_aux[i].zext_dst = def32 >= 0 && (mask_hi(out) & BIT(def32));
 	}
+	/* the exit that stands for 'r0 = 0; exit' may be dead code, see push_budget_exit() */
+	for (i = 0; i < env->subprog_cnt; i++)
+		if (env->subprog_info[i].bail_insn >= 0)
+			insn_aux[env->subprog_info[i].bail_insn].live_regs_before |=
+				BIT(BPF_REG_0) | (bpf_ret_reg_pair(env, i) ? BIT(BPF_REG_2) : 0);
 
 	/*
 	 * Forward pass: resolve stack access through FP-derived pointers.
