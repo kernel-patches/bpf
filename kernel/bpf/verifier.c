@@ -18425,7 +18425,7 @@ void bpf_reg_widen_range(struct bpf_reg_state *reg, const struct bpf_reg_state *
 		     reg->r32.base != old->r32.base || reg->r32.size != old->r32.size;
 	s64 min = reg_smin(reg), max = reg_smax(reg);
 
-	/* Only the step is gone, see bpf_reg_union_range() */
+	/* Only the step got weaker. It comes to rest without help, see below. */
 	if (!moved && reg->var_off.value == old->var_off.value &&
 	    reg->var_off.mask == old->var_off.mask)
 		return;
@@ -18462,14 +18462,36 @@ void bpf_reg_widen_range(struct bpf_reg_state *reg, const struct bpf_reg_state *
 		reg->var_off = min >= 0 ? tnum_union(reg->var_off, tnum_range(min, max))
 					: tnum_unknown;
 	}
+	/*
+	 * No range moved: the known bits or the step got weaker. The step comes to rest without
+	 * help: it gives way to one of its divisors only.
+	 *	off = n * 4; do { sum += *(u32 *)(a + off); off -= 4; } while (off != -4);
+	 * counts on "a multiple of 4".
+	 */
+	if (moved)
+		reg_step_reset(reg);
 }
 
 void bpf_reg_union_range(struct bpf_reg_state *acc, const struct bpf_reg_state *src)
 {
+	bool acc_const = cnum64_is_const(acc->r64), src_const = cnum64_is_const(src->r64);
+	/* A constant is its own base. Its step is 0: every number divides 0. */
+	s64 a = acc_const ? cnum64_smin(acc->r64) : acc->base;
+	s64 b = src_const ? cnum64_smin(src->r64) : src->base;
+	u16 step = gcd(acc_const ? 0 : acc->step, src_const ? 0 : src->step);
+	s64 diff;
+
 	acc->r64 = cnum64_union(acc->r64, src->r64);
 	acc->r32 = cnum32_union(acc->r32, src->r32);
 	acc->var_off = tnum_union(acc->var_off, src->var_off);
-	reg_step_reset(acc);
+
+	/* a + s * k and b + t * k are both of the form a + gcd(s, t, a - b) * k */
+	if (check_sub_overflow(a, b, &diff) || (!step && (diff > U16_MAX || diff < -U16_MAX)))
+		step = 1;
+	else
+		step = (step ? gcd(step, imod(diff, step)) : abs(diff)) ?: 1;
+	acc->step = step;
+	acc->base = imod(a, step);
 	/*
 	 * No reg_bounds_sync(): every part of the result has to include that
 	 * part of both inputs, and an input is not always in sync.
