@@ -162,7 +162,7 @@ static bool mod_power_update_replay_active_status(unsigned int active_replay_eve
 	ASSERT(link->replay_settings.frame_skip_number_table[PR_COASTING_TYPE_NOM] <= 0xFFFF);
 	*frame_skip_number = (uint16_t)link->replay_settings.frame_skip_number_table[PR_COASTING_TYPE_NOM];
 
-	link->replay_settings.config.replay_timing_sync_supported = false;
+	link->replay_settings.config.replay_timing_sync_supported = true;
 
 	*is_full_screen_video = false;
 
