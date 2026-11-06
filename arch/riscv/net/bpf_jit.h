@@ -14,6 +14,8 @@
 
 #define RV_MAX_REG_ARGS		8
 #define RV_EXTRA_STK_ARGS	(RV_MAX_REG_ARGS - MAX_BPF_FUNC_REG_ARGS)
+#define PRIV_STACK_GUARD_SZ	16
+#define PRIV_STACK_GUARD_VAL	0xEB9F12345678eb9fULL
 
 /* verify runtime detection extension status */
 #define rv_ext_enabled(ext) \
