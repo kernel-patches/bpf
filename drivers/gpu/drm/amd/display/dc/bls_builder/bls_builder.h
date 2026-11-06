@@ -12,7 +12,7 @@
 #include "bls_builder/dmub_abi.h"
 #include "bls_builder/bls_builder_legacy_init.h"
 
-#define DC2_BLS_MAX_STEPS 128
+#define DC2_BLS_MAX_STEPS 192
 
 enum bls_builder_result {
 	BLS_BUILD_SUCCESS,

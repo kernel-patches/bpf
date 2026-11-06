@@ -14,8 +14,12 @@
  * table into BLS entries.
  */
 
-/* The support check allows the OTG master and one MPC bottom pipe. */
-#define DCN401_MAX_DPP_PIPES 2
+/*
+ * The support check allows the OTG master and one MPC bottom pipe, or up to
+ * three ODM slices with one DPP pipe each.
+ */
+#define DCN401_MAX_OPP_HEADS 3
+#define DCN401_MAX_DPP_PIPES DCN401_MAX_OPP_HEADS
 
 void dcn401_commit_check_failed(const struct dc *dc, const char *msg);
 
@@ -54,10 +58,6 @@ const struct pipe_ctx *dcn401_checked_otg_master(const struct dc *dc,
 		const struct dc_state *current_state,
 		const struct dc_state *new_state);
 
-/* Each DPP pipe under the OTG master of state, top pipe first. */
-#define DCN401_FOR_EACH_DPP_PIPE(dc, state, pipe) \
-	for ((pipe) = dcn401_otg_of(dc, state); (pipe); \
-			(pipe) = (pipe)->bottom_pipe)
 
 /* What both builders need of the dc, before either state. */
 enum bls_builder_result dcn401_check_dc_support(const struct dc *dc);
@@ -74,27 +74,30 @@ struct dcn401_commit_step_args {
 	struct pipe_ctx *pipe;
 };
 
-void dcn401_add_steps(struct block_sequence_state *sequence,
-		const struct dcn401_commit_step_args *args,
-		const struct dcn401_commit_step *steps, unsigned int count);
-/* The support check found an OTG master for each stream of state. */
-void dcn401_add_per_otg_master(struct block_sequence_state *sequence,
+/*
+ * A sub-sequence names the state its steps read and how they expand: once,
+ * or once per OTG master, OPP head (ODM slice) or DPP pipe of each stream
+ * of that state, the OTG master first. A builder lists its sub-sequences
+ * in emission order.
+ */
+#define DCN401_CURRENT_STATE			(1u << 0)
+#define DCN401_NEW_STATE			(1u << 1)
+#define DCN401_PER_STREAM_PER_OTG_MASTER	(1u << 2)
+#define DCN401_PER_STREAM_PER_OPP_HEAD		(1u << 3)
+#define DCN401_PER_STREAM_PER_DPP_PIPE		(1u << 4)
+
+struct dcn401_sub_sequence {
+	uint32_t flags;
+	const struct dcn401_commit_step *steps;
+	unsigned int count;
+};
+
+/* The support check found an OTG master for each stream it expands. */
+void dcn401_add_sub_sequences(struct block_sequence_state *sequence,
 		const struct dcn401_commit_step_args *state_args,
-		struct dc_state *state,
-		const struct dcn401_commit_step *steps, unsigned int count);
-/* Each DPP pipe of each stream, the OTG master first. */
-void dcn401_add_per_dpp_pipe(struct block_sequence_state *sequence,
-		const struct dcn401_commit_step_args *state_args,
-		struct dc_state *state,
-		const struct dcn401_commit_step *steps, unsigned int count);
-#define DCN401_ADD_STEPS(sequence, args, steps) \
-	dcn401_add_steps(sequence, args, steps, ARRAY_SIZE(steps))
-#define DCN401_ADD_PER_OTG_MASTER(sequence, args, state, steps) \
-	dcn401_add_per_otg_master(sequence, args, state, steps, \
-			ARRAY_SIZE(steps))
-#define DCN401_ADD_PER_DPP_PIPE(sequence, args, state, steps) \
-	dcn401_add_per_dpp_pipe(sequence, args, state, steps, \
-			ARRAY_SIZE(steps))
+		const struct dcn401_sub_sequence *subs, unsigned int count);
+#define DCN401_ADD_SUB_SEQUENCES(sequence, args, subs) \
+	dcn401_add_sub_sequences(sequence, args, subs, ARRAY_SIZE(subs))
 
 /*
  * Points the step arguments at the states and the sequence at

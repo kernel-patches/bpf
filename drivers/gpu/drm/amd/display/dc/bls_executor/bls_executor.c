@@ -353,6 +353,10 @@ static noinline_for_stack bool dc2_bls_step_supported(const struct dc2 *dc2,
 	case TG_SETUP_VERTICAL_INTERRUPT2:
 		tg = step->params.tg_setup_vertical_interrupt2_params.tg;
 		return tg && tg->funcs && tg->funcs->setup_vertical_interrupt2;
+	case OPTC_SET_ODM_COMBINE:
+		tg = step->params.set_odm_combine_params.tg;
+		return tg && tg->funcs && tg->funcs->set_odm_combine &&
+				step->params.set_odm_combine_params.opp_head_count > 1;
 	case OPTC_SET_ODM_BYPASS:
 		tg = step->params.set_odm_bypass_params.tg;
 		return tg && tg->funcs && tg->funcs->set_odm_bypass &&
@@ -1230,6 +1234,17 @@ enum dc2_bls_exec_result dc2_bls_execute(
 			tg->funcs->setup_vertical_interrupt2(tg, entry->params
 					.tg_setup_vertical_interrupt2_params.start_line);
 			break;
+		case OPTC_SET_ODM_COMBINE: {
+			const struct set_odm_combine_params *p =
+					&entry->params.set_odm_combine_params;
+			int opp_inst[MAX_PIPES];
+
+			memcpy(opp_inst, p->opp_inst, sizeof(opp_inst));
+			p->tg->funcs->set_odm_combine(p->tg, opp_inst,
+					p->opp_head_count, p->odm_slice_width,
+					p->last_odm_slice_width);
+			break;
+		}
 		case OPTC_SET_ODM_BYPASS:
 			tg = entry->params.set_odm_bypass_params.tg;
 			tg->funcs->set_odm_bypass(tg,

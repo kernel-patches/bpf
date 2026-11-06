@@ -260,8 +260,8 @@ static bool check_abm(const struct dc *dc,
 
 /*
  * The OTG master for this state's one stream, or NULL when the stream has
- * more than one. An MPC bottom pipe of the stream is not an OTG master;
- * check_mpc_blend bounds it.
+ * more than one. An MPC bottom pipe or an ODM slice of the stream is not
+ * an OTG master; check_mpc_blend and check_odm_combine bound them.
  */
 static const struct pipe_ctx *dcn401_state_otg_master(const struct dc *dc,
 		const struct dc_state *state, bool *not_one_pipe)
@@ -276,7 +276,8 @@ static const struct pipe_ctx *dcn401_state_otg_master(const struct dc *dc,
 
 		if (!pipe->stream)
 			continue;
-		if (pipe->stream == state->streams[0] && pipe->top_pipe)
+		if (pipe->stream == state->streams[0] &&
+				(pipe->top_pipe || pipe->prev_odm_pipe))
 			continue;
 		if (pipe->stream != state->streams[0] || otg_master) {
 			*not_one_pipe = true;
@@ -325,14 +326,19 @@ static bool check_otg_master_present(const struct dc *dc,
 	return dcn401_checked_otg_master(dc, current_state, new_state) != NULL;
 }
 
+/* At most DCN401_MAX_OPP_HEADS ODM slices, each with an OPP. */
 static bool check_odm_combine(const struct dc *dc,
 		const struct dc_state *current_state,
 		const struct dc_state *new_state)
 {
-	const struct pipe_ctx *pipe = dcn401_checked_otg_master(dc,
+	const struct pipe_ctx *odm = dcn401_checked_otg_master(dc,
 			current_state, new_state);
+	unsigned int count = 0;
 
-	return pipe && !pipe->next_odm_pipe && !pipe->prev_odm_pipe;
+	for (; odm; odm = odm->next_odm_pipe)
+		if (!odm->stream_res.opp || ++count > DCN401_MAX_OPP_HEADS)
+			return false;
+	return count;
 }
 
 static bool check_mpc_blend(const struct dc *dc,
@@ -348,11 +354,15 @@ static bool check_mpc_blend(const struct dc *dc,
 		return false;
 	dc_state_facts_derive(dcn401_checked_state(current_state, new_state),
 			&facts);
-	/* At most one bottom pipe, on the master's OTG and OPP, and no ODM. */
+	/*
+	 * At most one bottom pipe, on the master's OTG and OPP. A bottom pipe
+	 * and ODM do not go together.
+	 */
 	return facts.global.blend_tree[0].dpp_pipe_count <= 2 &&
 			facts.global.blend_tree[0].on_otg_master_blocks &&
+			(facts.global.blend_tree[0].dpp_pipe_count == 1 ||
 			!dc_state_facts_any_pipe(&facts, 0,
-			DC_TRAIT_MATCH(DC_PIPE_TRAIT_ODM, 0));
+			DC_TRAIT_MATCH(DC_PIPE_TRAIT_ODM, 0)));
 }
 
 static bool check_otg_master_blocks(const struct dc *dc,
@@ -434,9 +444,9 @@ enum bls_builder_result dcn401_check_stream_support(const struct dc *dc,
 	CHECK_CONDITION(abm, "ABM level is set");
 	CHECK_CONDITION(one_otg_pipe, "stream is not on one pipe");
 	CHECK_RESOURCE(otg_master_present, "stream has no otg master");
-	CHECK_CONDITION(odm_combine, "odm is set");
+	CHECK_CONDITION(odm_combine, "odm is not bypass, 2:1 or 3:1");
 	CHECK_CONDITION(mpc_blend,
-			"more than one bottom pipe, or it is off the otg or opp");
+			"more than one bottom pipe, off the otg or opp, or with odm");
 	CHECK_RESOURCE(otg_master_blocks,
 			"otg master is missing a stream resource or pixel clock");
 	CHECK_CONDITION(pipe_audio, "audio is set");
@@ -501,10 +511,16 @@ static bool check_same_otg_master_blocks(const struct dc *dc,
 	const struct pipe_ctx *current_pipe = dcn401_otg_of(dc, current_state);
 	const struct pipe_ctx *new_pipe = dcn401_otg_of(dc, new_state);
 
-	if (!current_pipe || !new_pipe)
+	if (!current_pipe || !new_pipe ||
+			current_pipe->stream_res.tg != new_pipe->stream_res.tg)
 		return false;
-	return current_pipe->stream_res.tg == new_pipe->stream_res.tg &&
-			current_pipe->stream_res.opp == new_pipe->stream_res.opp;
+	/* The same OPP for each ODM slice. */
+	for (; current_pipe && new_pipe;
+			current_pipe = current_pipe->next_odm_pipe,
+			new_pipe = new_pipe->next_odm_pipe)
+		if (current_pipe->stream_res.opp != new_pipe->stream_res.opp)
+			return false;
+	return !current_pipe && !new_pipe;
 }
 
 static bool check_new_plane_blocks(const struct dc *dc,
@@ -628,15 +644,19 @@ static bool check_no_flip_int(const struct dc *dc,
 		const struct dc_state *current_state,
 		const struct dc_state *new_state)
 {
-	const struct pipe_ctx *pipe;
+	struct pipe_ctx *dpp_pipes[MAX_PIPES];
+	int i, n = new_state && new_state->stream_count ?
+			resource_get_dpp_pipes_for_stream(new_state->streams[0],
+			(struct resource_context *)&new_state->res_ctx,
+			dpp_pipes) : 0;
 
+	(void)dc;
 	(void)current_state;
-	if (!dcn401_otg_of(dc, new_state))
+	if (!n)
 		return false;
-	DCN401_FOR_EACH_DPP_PIPE(dc, new_state, pipe) {
-		if (!pipe->plane_state || pipe->plane_state->flip_int_enabled)
+	for (i = 0; i < n; i++)
+		if (dpp_pipes[i]->plane_state->flip_int_enabled)
 			return false;
-	}
 	return true;
 }
 
@@ -645,16 +665,19 @@ static bool check_no_plane_gamut_remap(const struct dc *dc,
 		const struct dc_state *current_state,
 		const struct dc_state *new_state)
 {
-	const struct pipe_ctx *pipe;
+	struct pipe_ctx *dpp_pipes[MAX_PIPES];
+	int i, n = new_state && new_state->stream_count ?
+			resource_get_dpp_pipes_for_stream(new_state->streams[0],
+			(struct resource_context *)&new_state->res_ctx,
+			dpp_pipes) : 0;
 
+	(void)dc;
 	(void)current_state;
-	if (!dcn401_otg_of(dc, new_state))
+	if (!n)
 		return false;
-	DCN401_FOR_EACH_DPP_PIPE(dc, new_state, pipe) {
-		if (!pipe->plane_state ||
-				pipe->plane_state->gamut_remap_matrix.enable_remap)
+	for (i = 0; i < n; i++)
+		if (dpp_pipes[i]->plane_state->gamut_remap_matrix.enable_remap)
 			return false;
-	}
 	return true;
 }
 
@@ -847,7 +870,7 @@ static enum bls_builder_result dcn401_check_seamless_update_support(
 	CHECK_CONDITION(stream_kept, "stream is not kept across the update");
 	CHECK_CONDITION(plane_add_or_kept,
 			"update is not a plane add or a kept-plane surface update");
-	CHECK_CONDITION(same_otg_master_blocks, "otg or opp changes");
+	CHECK_CONDITION(same_otg_master_blocks, "otg, opp or odm changes");
 	CHECK_RESOURCE(new_plane_blocks, "plane is missing hubp or dpp");
 	CHECK_RESOURCE(pool_funcs, "resource pool or hubbub has no funcs");
 	CHECK_CONDITION(det_by_segments, "hubbub programs det size");
@@ -885,29 +908,12 @@ static enum bls_builder_result dcn401_check_seamless_update_support(
 	return BLS_BUILD_SUCCESS;
 }
 
-static struct pipe_ctx *get_otg_master_from_state_by_stream(
-		const struct dc *dc, struct dc_state *state,
-		const struct dc_stream_state *stream)
-{
-	unsigned int i;
-
-	(void)dc;
-
-	for (i = 0; i < MAX_PIPES; i++) {
-		struct pipe_ctx *pipe = &state->res_ctx.pipe_ctx[i];
-
-		if (pipe->stream == stream && !pipe->top_pipe)
-			return pipe;
-	}
-	return NULL;
-}
-
 /*
  * Net effect: dcn401_prepare_bandwidth without FAMS2, SubVP or DC-mode
  * softmax.
  */
 static const struct dcn401_commit_step
-bls_update_head_per_state_new_prepare_bandwidth[] = {
+prepare_bandwidth[] = {
 	{ .func = CLK_MGR_UPDATE_CLOCKS_FOR_STATE,
 	  .meta.clk_mgr_update_clocks_for_state.safe_to_lower = false },
 	{ .func = HUBBUB_PROGRAM_WATERMARKS,
@@ -923,8 +929,7 @@ bls_update_head_per_state_new_prepare_bandwidth[] = {
  * which commit_planes_for_stream runs while optimized_required is set.
  * The OTG master has no plane yet, so no MPCC disconnect is pending.
  */
-static const struct dcn401_commit_step
-		bls_update_head_per_stream_per_otg_master_pipe_preamble[] = {
+static const struct dcn401_commit_step preamble[] = {
 	{ .func = TG_WAIT_FOR_ALL_PENDING_UPDATES,
 	  .meta.skip_if.optimized_not_required = true },
 	{ .func = TG_WAIT_ODM_DOUBLEBUFFER_PENDING_CLEAR,
@@ -934,7 +939,7 @@ static const struct dcn401_commit_step
 };
 
 /* Net effect: dcn401_program_outstanding_updates on the current state. */
-static const struct dcn401_commit_step bls_update_head_global_preamble[] = {
+static const struct dcn401_commit_step global_preamble[] = {
 	{ .func = HUBBUB_PROGRAM_COMPBUF_SEGMENTS,
 	  .meta.hubbub_program_compbuf_segments.safe_to_lower = true,
 	  .meta.hubbub_program_compbuf_segments.use_current_state_size = true,
@@ -945,8 +950,7 @@ static const struct dcn401_commit_step bls_update_head_global_preamble[] = {
  * Net effect: hwss_wait_for_outstanding_hw_updates on the current state,
  * which a full update runs before it takes the pipe lock.
  */
-static const struct dcn401_commit_step
-		bls_update_head_per_stream_per_otg_master_pipe_current_pending[] = {
+static const struct dcn401_commit_step pending[] = {
 	{ .func = TG_WAIT_FOR_ALL_PENDING_UPDATES },
 	{ .func = TG_WAIT_ODM_DOUBLEBUFFER_PENDING_CLEAR },
 	{ .func = OPP_WAIT_FOR_BLANK_COMPLETE },
@@ -961,29 +965,32 @@ static const struct dcn401_commit_step
  * dcn401_program_front_end_for_ctx, then the forced p-state and delay for
  * the first HUBP.
  */
-static const struct dcn401_commit_step bls_update_head_new_lock[] = {
+static const struct dcn401_commit_step lock[] = {
 	{ .func = TG_LOCK, .meta.tg_lock.lock = true },
 };
 
-static const struct dcn401_commit_step bls_update_head_new_dpp_lock[] = {
+static const struct dcn401_commit_step dpp_lock[] = {
 	{ .func = HUBP_PROGRAM_TRIPLEBUFFER },
 	{ .func = HUBP_PROGRAM_TRIPLEBUFFER },
 };
 
-static const struct dcn401_commit_step bls_update_head_new_first_hubp[] = {
+static const struct dcn401_commit_step first_hubp[] = {
 	{ .func = HUBBUB_FORCE_PSTATE_CHANGE_CONTROL,
 	  .meta.hubbub_force_pstate_change_control.enable = true },
 	{ .func = DC_UDELAY },
 };
 
 /*
- * blank_pixel_data (unblank), dcn401_program_tg and update_odm.
- * First enable of the HUBP/DPP only.
+ * blank_pixel_data (unblank) on each ODM slice, dcn401_program_tg and
+ * update_odm. First enable of the HUBP/DPP only.
  */
-static const struct dcn401_commit_step bls_update_head_new_stream[] = {
+static const struct dcn401_commit_step opp_unblank[] = {
 	{ .func = OPP_SET_DISP_PATTERN_GENERATOR,
 	  .meta.opp_set_disp_pattern_generator.unblank = true,
 	  .meta.skip_if.hubp_dpp_already_enabled = true },
+};
+
+static const struct dcn401_commit_step global_sync[] = {
 	{ .func = TG_PROGRAM_GLOBAL_SYNC,
 	  .meta.skip_if.hubp_dpp_already_enabled = true },
 	{ .func = TG_WAIT_FOR_STATE,
@@ -992,8 +999,11 @@ static const struct dcn401_commit_step bls_update_head_new_stream[] = {
 	  .meta.skip_if.hubp_dpp_already_enabled = true },
 	{ .func = TG_SETUP_VERTICAL_INTERRUPT2,
 	  .meta.skip_if.hubp_dpp_already_enabled = true },
-	{ .func = OPTC_SET_ODM_BYPASS,
+	{ .func = OPTC_SET_ODM_COMBINE,
 	  .meta.skip_if.hubp_dpp_already_enabled = true },
+};
+
+static const struct dcn401_commit_step opp_odm[] = {
 	{ .func = OPP_PIPE_CLOCK_CONTROL,
 	  .meta.skip_if.hubp_dpp_already_enabled = true },
 	{ .func = OPP_PROGRAM_LEFT_EDGE_EXTRA_PIXEL,
@@ -1001,7 +1011,7 @@ static const struct dcn401_commit_step bls_update_head_new_stream[] = {
 };
 
 /* enable_plane, then the watermark propagate and the DET segments. */
-static const struct dcn401_commit_step bls_update_head_new_enable_plane[] = {
+static const struct dcn401_commit_step enable_plane[] = {
 	{ .func = DC_IP_REQUEST_STATUS,
 	  .meta.skip_if.hubp_dpp_already_enabled = true,
 	  .meta.skip_if.no_ip_request = true },
@@ -1106,47 +1116,48 @@ static const struct dcn401_commit_step bls_update_head_new_enable_plane[] = {
  * flip-pending wait, the p-state release and the MALL selection. Last,
  * the manual trigger.
  */
-static const struct dcn401_commit_step bls_update_head_new_unlock[] = {
+static const struct dcn401_commit_step unlock[] = {
 	{ .func = TG_LOCK, .meta.tg_lock.lock = false },
 };
 
-static const struct dcn401_commit_step bls_update_head_new_dpp_flip[] = {
+static const struct dcn401_commit_step dpp_flip[] = {
 	{ .func = HUBP_WAIT_FLIP_PENDING },
 };
 
-static const struct dcn401_commit_step bls_update_head_new_pstate[] = {
+static const struct dcn401_commit_step pstate[] = {
 	{ .func = HUBBUB_FORCE_PSTATE_CHANGE_CONTROL },
 };
 
-static const struct dcn401_commit_step bls_update_head_new_dpp_mall[] = {
+static const struct dcn401_commit_step dpp_mall[] = {
 	{ .func = HUBP_UPDATE_MALL_SEL,
 	  .meta.hubp_update_mall_sel.from_new_state = true },
 };
 
-static const struct dcn401_commit_step bls_update_head_new_trigger[] = {
+static const struct dcn401_commit_step trigger[] = {
 	{ .func = OPTC_PROGRAM_MANUAL_TRIGGER,
 	  .meta.skip_if.no_manual_trigger = true },
 };
 
 /* The support check allows one stream, kept across the update. */
 static_assert(
-		ARRAY_SIZE(
-		bls_update_head_per_stream_per_otg_master_pipe_preamble) +
-		ARRAY_SIZE(bls_update_head_global_preamble) +
-		ARRAY_SIZE(bls_update_head_per_state_new_prepare_bandwidth) +
-		ARRAY_SIZE(
-		bls_update_head_per_stream_per_otg_master_pipe_current_pending) +
-		ARRAY_SIZE(bls_update_head_new_lock) +
-		ARRAY_SIZE(bls_update_head_new_first_hubp) +
-		ARRAY_SIZE(bls_update_head_new_stream) +
-		ARRAY_SIZE(bls_update_head_new_unlock) +
-		ARRAY_SIZE(bls_update_head_new_pstate) +
-		ARRAY_SIZE(bls_update_head_new_trigger) +
+		ARRAY_SIZE(preamble) +
+		ARRAY_SIZE(global_preamble) +
+		ARRAY_SIZE(prepare_bandwidth) +
+		ARRAY_SIZE(pending) +
+		ARRAY_SIZE(lock) +
+		ARRAY_SIZE(first_hubp) +
+		ARRAY_SIZE(global_sync) +
+		DCN401_MAX_OPP_HEADS * (
+		ARRAY_SIZE(opp_unblank) +
+		ARRAY_SIZE(opp_odm)) +
+		ARRAY_SIZE(unlock) +
+		ARRAY_SIZE(pstate) +
+		ARRAY_SIZE(trigger) +
 		DCN401_MAX_DPP_PIPES * (
-		ARRAY_SIZE(bls_update_head_new_dpp_lock) +
-		ARRAY_SIZE(bls_update_head_new_enable_plane) +
-		ARRAY_SIZE(bls_update_head_new_dpp_flip) +
-		ARRAY_SIZE(bls_update_head_new_dpp_mall)) <= DC2_BLS_MAX_STEPS,
+		ARRAY_SIZE(dpp_lock) +
+		ARRAY_SIZE(enable_plane) +
+		ARRAY_SIZE(dpp_flip) +
+		ARRAY_SIZE(dpp_mall)) <= DC2_BLS_MAX_STEPS,
 		"dcn401 seamless update head exceeds DC2_BLS_MAX_STEPS");
 
 /* enable_stream_timing_calc: manual mode unless every span is even. */
@@ -1190,14 +1201,15 @@ static uint32_t dcn401_early_cntl(const struct pipe_ctx *pipe)
 }
 
 /*
- * dcn20_blank_pixel_data: sRGB black over the whole OTG, or the video
- * on unblank.
+ * dcn20_blank_pixel_data: sRGB black over the ODM slice of this OPP head,
+ * or the video on unblank.
  */
 static void dcn401_opp_blank_params(const struct dc *dc,
-		const struct pipe_ctx *pipe, bool unblank,
+		struct pipe_ctx *pipe, bool unblank,
 		struct opp_set_disp_pattern_generator_params *p)
 {
 	const struct dc_crtc_timing *timing = &pipe->stream->timing;
+	struct rect slice = resource_get_odm_slice_src_rect(pipe);
 
 	p->opp = pipe->stream_res.opp;
 	p->test_pattern = unblank ? CONTROLLER_DP_TEST_PATTERN_VIDEOMODE :
@@ -1205,12 +1217,30 @@ static void dcn401_opp_blank_params(const struct dc *dc,
 	p->color_space = CONTROLLER_DP_COLOR_SPACE_UDEFINED;
 	p->color_depth = timing->display_color_depth;
 	p->use_solid_color = true;
-	p->width = timing->h_addressable + timing->h_border_left +
-			timing->h_border_right;
-	p->height = timing->v_addressable + timing->v_border_top +
-			timing->v_border_bottom;
+	p->width = slice.width;
+	p->height = slice.height;
+	p->offset = slice.x;
 	p->disable_dyn_exp_for_test_pattern =
 			dc->debug.disable_dynamic_expansion_for_test_pattern;
+}
+
+/*
+ * dcn401_update_odm: one OPP per ODM slice, in slice order. A table's
+ * OPTC_SET_ODM_COMBINE programs the ODM unconditionally: N:1 combine for
+ * N > 1 slices, else bypass.
+ */
+static void dcn401_odm_combine_params(struct pipe_ctx *otg_master,
+		struct set_odm_combine_params *p)
+{
+	struct pipe_ctx *odm;
+
+	p->tg = otg_master->stream_res.tg;
+	for (odm = otg_master; odm; odm = odm->next_odm_pipe)
+		p->opp_inst[p->opp_head_count++] = odm->stream_res.opp->inst;
+	p->odm_slice_width = resource_get_odm_slice_dst_width(otg_master,
+			false);
+	p->last_odm_slice_width = resource_get_odm_slice_dst_width(otg_master,
+			true);
 }
 
 static void dcn401_program_timing_params(const struct pipe_ctx *pipe,
@@ -1534,6 +1564,16 @@ static void dcn401_add_step(struct block_sequence_state *sequence,
 		p->tg_program_stereo_params.tg = pipe->stream_res.tg;
 		p->tg_program_stereo_params.timing = &pipe->stream->timing;
 		break;
+	case OPTC_SET_ODM_COMBINE:
+		if (pipe->next_odm_pipe) {
+			dcn401_odm_combine_params(pipe,
+					&p->set_odm_combine_params);
+			break;
+		}
+		entry->func = OPTC_SET_ODM_BYPASS;
+		p->set_odm_bypass_params.tg = pipe->stream_res.tg;
+		p->set_odm_bypass_params.timing = &pipe->stream->timing;
+		break;
 	case OPTC_SET_ODM_BYPASS:
 		p->set_odm_bypass_params.tg = pipe->stream_res.tg;
 		p->set_odm_bypass_params.timing = &pipe->stream->timing;
@@ -1548,7 +1588,7 @@ static void dcn401_add_step(struct block_sequence_state *sequence,
 		p->opp_program_left_edge_extra_pixel_params.pixel_encoding =
 				pipe->stream->timing.pixel_encoding;
 		p->opp_program_left_edge_extra_pixel_params.is_otg_master =
-				true;
+				!pipe->prev_odm_pipe;
 		break;
 	case OPP_PROGRAM_FMT:
 		p->opp_program_fmt_params.opp = pipe->stream_res.opp;
@@ -1986,7 +2026,7 @@ static bool dcn401_skip_step(const struct dcn401_commit_step_args *args,
 	return false;
 }
 
-void dcn401_add_steps(struct block_sequence_state *sequence,
+static void dcn401_add_steps(struct block_sequence_state *sequence,
 		const struct dcn401_commit_step_args *args,
 		const struct dcn401_commit_step *steps, unsigned int count)
 {
@@ -1998,7 +2038,7 @@ void dcn401_add_steps(struct block_sequence_state *sequence,
 	}
 }
 
-void dcn401_add_per_otg_master(struct block_sequence_state *sequence,
+static void dcn401_add_per_otg_master(struct block_sequence_state *sequence,
 		const struct dcn401_commit_step_args *state_args,
 		struct dc_state *state,
 		const struct dcn401_commit_step *steps, unsigned int count)
@@ -2007,25 +2047,77 @@ void dcn401_add_per_otg_master(struct block_sequence_state *sequence,
 	unsigned int i;
 
 	for (i = 0; i < state->stream_count; i++) {
-		args.pipe = get_otg_master_from_state_by_stream(args.dc,
-				state, state->streams[i]);
+		args.pipe = resource_get_otg_master_for_stream(
+				&state->res_ctx, state->streams[i]);
 		dcn401_add_steps(sequence, &args, steps, count);
 	}
 }
 
-void dcn401_add_per_dpp_pipe(struct block_sequence_state *sequence,
+static void dcn401_add_per_opp_head(struct block_sequence_state *sequence,
 		const struct dcn401_commit_step_args *state_args,
 		struct dc_state *state,
 		const struct dcn401_commit_step *steps, unsigned int count)
 {
 	struct dcn401_commit_step_args args = *state_args;
+	struct pipe_ctx *opp_heads[MAX_PIPES];
 	unsigned int i;
+	int j, n;
 
 	for (i = 0; i < state->stream_count; i++) {
-		for (args.pipe = get_otg_master_from_state_by_stream(args.dc,
-				state, state->streams[i]); args.pipe;
-				args.pipe = args.pipe->bottom_pipe)
+		n = resource_get_opp_heads_for_stream(state->streams[i],
+				&state->res_ctx, opp_heads);
+		for (j = 0; j < n; j++) {
+			args.pipe = opp_heads[j];
 			dcn401_add_steps(sequence, &args, steps, count);
+		}
+	}
+}
+
+static void dcn401_add_per_dpp_pipe(struct block_sequence_state *sequence,
+		const struct dcn401_commit_step_args *state_args,
+		struct dc_state *state,
+		const struct dcn401_commit_step *steps, unsigned int count)
+{
+	struct dcn401_commit_step_args args = *state_args;
+	struct pipe_ctx *dpp_pipes[MAX_PIPES];
+	unsigned int i;
+	int j, n;
+
+	for (i = 0; i < state->stream_count; i++) {
+		n = resource_get_dpp_pipes_for_stream(state->streams[i],
+				&state->res_ctx, dpp_pipes);
+		for (j = 0; j < n; j++) {
+			args.pipe = dpp_pipes[j];
+			dcn401_add_steps(sequence, &args, steps, count);
+		}
+	}
+}
+
+void dcn401_add_sub_sequences(struct block_sequence_state *sequence,
+		const struct dcn401_commit_step_args *state_args,
+		const struct dcn401_sub_sequence *subs, unsigned int count)
+{
+	const struct dcn401_sub_sequence *sub;
+	struct dc_state *state;
+	unsigned int i;
+
+	for (i = 0; i < count; i++) {
+		sub = &subs[i];
+		state = sub->flags & DCN401_CURRENT_STATE ?
+				state_args->current_state :
+				state_args->new_state;
+		if (sub->flags & DCN401_PER_STREAM_PER_OTG_MASTER)
+			dcn401_add_per_otg_master(sequence, state_args, state,
+					sub->steps, sub->count);
+		else if (sub->flags & DCN401_PER_STREAM_PER_OPP_HEAD)
+			dcn401_add_per_opp_head(sequence, state_args, state,
+					sub->steps, sub->count);
+		else if (sub->flags & DCN401_PER_STREAM_PER_DPP_PIPE)
+			dcn401_add_per_dpp_pipe(sequence, state_args, state,
+					sub->steps, sub->count);
+		else
+			dcn401_add_steps(sequence, state_args, sub->steps,
+					sub->count);
 	}
 }
 
@@ -2045,6 +2137,63 @@ void dcn401_init_and_unpack_params(
 	head->num_steps = &params->head_num_steps;
 }
 
+/*
+ * One stream. skip_if drops first-enable steps when the HUBP/DPP is
+ * already on, so a kept-plane surface update is the same table. The
+ * enable_plane list runs per DPP pipe, top pipe first, so the top MPCC is
+ * inserted before the bottom one.
+ */
+static const struct dcn401_sub_sequence bls_update_head[] = {
+	{ .flags = DCN401_CURRENT_STATE | DCN401_PER_STREAM_PER_OTG_MASTER,
+	  .steps = preamble,
+	  .count = ARRAY_SIZE(preamble) },
+	{ .flags = DCN401_NEW_STATE,
+	  .steps = global_preamble,
+	  .count = ARRAY_SIZE(global_preamble) },
+	{ .flags = DCN401_NEW_STATE,
+	  .steps = prepare_bandwidth,
+	  .count = ARRAY_SIZE(prepare_bandwidth) },
+	{ .flags = DCN401_CURRENT_STATE | DCN401_PER_STREAM_PER_OTG_MASTER,
+	  .steps = pending,
+	  .count = ARRAY_SIZE(pending) },
+	{ .flags = DCN401_NEW_STATE | DCN401_PER_STREAM_PER_OTG_MASTER,
+	  .steps = lock,
+	  .count = ARRAY_SIZE(lock) },
+	{ .flags = DCN401_NEW_STATE | DCN401_PER_STREAM_PER_DPP_PIPE,
+	  .steps = dpp_lock,
+	  .count = ARRAY_SIZE(dpp_lock) },
+	{ .flags = DCN401_NEW_STATE | DCN401_PER_STREAM_PER_OTG_MASTER,
+	  .steps = first_hubp,
+	  .count = ARRAY_SIZE(first_hubp) },
+	{ .flags = DCN401_NEW_STATE | DCN401_PER_STREAM_PER_OPP_HEAD,
+	  .steps = opp_unblank,
+	  .count = ARRAY_SIZE(opp_unblank) },
+	{ .flags = DCN401_NEW_STATE | DCN401_PER_STREAM_PER_OTG_MASTER,
+	  .steps = global_sync,
+	  .count = ARRAY_SIZE(global_sync) },
+	{ .flags = DCN401_NEW_STATE | DCN401_PER_STREAM_PER_OPP_HEAD,
+	  .steps = opp_odm,
+	  .count = ARRAY_SIZE(opp_odm) },
+	{ .flags = DCN401_NEW_STATE | DCN401_PER_STREAM_PER_DPP_PIPE,
+	  .steps = enable_plane,
+	  .count = ARRAY_SIZE(enable_plane) },
+	{ .flags = DCN401_NEW_STATE | DCN401_PER_STREAM_PER_OTG_MASTER,
+	  .steps = unlock,
+	  .count = ARRAY_SIZE(unlock) },
+	{ .flags = DCN401_NEW_STATE | DCN401_PER_STREAM_PER_DPP_PIPE,
+	  .steps = dpp_flip,
+	  .count = ARRAY_SIZE(dpp_flip) },
+	{ .flags = DCN401_NEW_STATE | DCN401_PER_STREAM_PER_OTG_MASTER,
+	  .steps = pstate,
+	  .count = ARRAY_SIZE(pstate) },
+	{ .flags = DCN401_NEW_STATE | DCN401_PER_STREAM_PER_DPP_PIPE,
+	  .steps = dpp_mall,
+	  .count = ARRAY_SIZE(dpp_mall) },
+	{ .flags = DCN401_NEW_STATE | DCN401_PER_STREAM_PER_OTG_MASTER,
+	  .steps = trigger,
+	  .count = ARRAY_SIZE(trigger) },
+};
+
 static enum bls_builder_result dcn401_build_seamless_update(
 		struct bls_builder_declarative_params *params)
 {
@@ -2060,45 +2209,7 @@ static enum bls_builder_result dcn401_build_seamless_update(
 		return result;
 
 	dcn401_init_and_unpack_params(params, &state_args, &head);
-	DCN401_ADD_PER_OTG_MASTER(&head, &state_args,
-			state_args.current_state,
-			bls_update_head_per_stream_per_otg_master_pipe_preamble);
-	DCN401_ADD_STEPS(&head, &state_args,
-			bls_update_head_global_preamble);
-	DCN401_ADD_STEPS(&head, &state_args,
-			bls_update_head_per_state_new_prepare_bandwidth);
-	DCN401_ADD_PER_OTG_MASTER(&head, &state_args,
-			state_args.current_state,
-			bls_update_head_per_stream_per_otg_master_pipe_current_pending);
-
-	/*
-	 * One stream. skip_if drops first-enable steps when the HUBP/DPP
-	 * is already on, so a kept-plane surface update is the same table.
-	 */
-	DCN401_ADD_PER_OTG_MASTER(&head, &state_args, state_args.new_state,
-			bls_update_head_new_lock);
-	DCN401_ADD_PER_DPP_PIPE(&head, &state_args, state_args.new_state,
-			bls_update_head_new_dpp_lock);
-	DCN401_ADD_PER_OTG_MASTER(&head, &state_args, state_args.new_state,
-			bls_update_head_new_first_hubp);
-	DCN401_ADD_PER_OTG_MASTER(&head, &state_args, state_args.new_state,
-			bls_update_head_new_stream);
-	/*
-	 * One step list per DPP pipe, top pipe first, so the top MPCC is
-	 * inserted before the bottom one.
-	 */
-	DCN401_ADD_PER_DPP_PIPE(&head, &state_args, state_args.new_state,
-			bls_update_head_new_enable_plane);
-	DCN401_ADD_PER_OTG_MASTER(&head, &state_args, state_args.new_state,
-			bls_update_head_new_unlock);
-	DCN401_ADD_PER_DPP_PIPE(&head, &state_args, state_args.new_state,
-			bls_update_head_new_dpp_flip);
-	DCN401_ADD_PER_OTG_MASTER(&head, &state_args, state_args.new_state,
-			bls_update_head_new_pstate);
-	DCN401_ADD_PER_DPP_PIPE(&head, &state_args, state_args.new_state,
-			bls_update_head_new_dpp_mall);
-	DCN401_ADD_PER_OTG_MASTER(&head, &state_args, state_args.new_state,
-			bls_update_head_new_trigger);
+	DCN401_ADD_SUB_SEQUENCES(&head, &state_args, bls_update_head);
 
 	return BLS_BUILD_SUCCESS;
 }
