@@ -222,13 +222,13 @@ struct vkms_output *vkms_crtc_init(struct drm_device *dev, struct drm_plane *pri
 
 	drm_crtc_helper_add(crtc, &vkms_crtc_helper_funcs);
 
-	ret = drm_mode_crtc_set_gamma_size(crtc, VKMS_LUT_SIZE);
+	ret = drm_mode_crtc_set_gamma_size(crtc, VKMS_GAMMA_LUT_SIZE);
 	if (ret) {
 		DRM_ERROR("Failed to set gamma size\n");
 		return ERR_PTR(ret);
 	}
 
-	drm_crtc_enable_color_mgmt(crtc, 0, false, VKMS_LUT_SIZE);
+	drm_crtc_enable_color_mgmt(crtc, 0, false, VKMS_GAMMA_LUT_SIZE);
 
 	drm_crtc_attach_background_color_property(crtc);
 
