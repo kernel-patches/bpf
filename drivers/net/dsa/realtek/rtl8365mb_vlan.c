@@ -42,7 +42,8 @@
  *    may be useful for ACL rules which specify alternative forwarding
  *    decisions.
  *
- * VLANMC index 0 is reserved as a neutral PVID, used for standalone ports.
+ * VLANMC index 0 is reserved as a neutral PVID, used for standalone ports and
+ * for the ports of a VLAN-unaware bridge.
  *
  */
 
@@ -780,35 +781,41 @@ rtl8365mb_vlan_port_set_framefilter(struct realtek_priv *priv,
 }
 
 /*
- * rtl8365mb_vlan_pvid_port_set() - Configure a port's PVID and associated
- * VLANMC entry
+ * rtl8365mb_vlan_pvid_port_commit() - Program a port's PVID and frame filter
  * @ds: dsa switch instance
  * @port: port index
- * @vid: target VID
+ * @vid: VID to use as PVID, or 0 for the neutral PVID (VLANMC index 0)
+ * @vlan_filtering: whether the port filters VLANs
  * @extack: netlink extended ACK for error reporting
  *
- * Allocates or reuses a hardware VLANMC entry to map the given port to its new
- * PVID. Gracefully unwinds and restores previous configuration if a hardware
- * write operation fails during execution.
+ * Points the port at the VLANMC entry of @vid, allocating it if needed, and
+ * drops the port from the VLANMC entry of its previous PVID, which is freed
+ * once no port uses it anymore. Untagged frames are accepted unless the port
+ * filters VLANs and has no PVID. Restores the previous configuration if a
+ * write fails.
  *
  * Context: Can sleep. Must be called with &priv->vlan_lock held.
  * Takes and releases &priv->map_lock.
  * Return: 0 on success, or a negative error code on failure.
  */
-int rtl8365mb_vlan_pvid_port_set(struct dsa_switch *ds, int port, u16 vid,
-				 struct netlink_ext_ack *extack)
+int rtl8365mb_vlan_pvid_port_commit(struct dsa_switch *ds, int port, u16 vid,
+				    bool vlan_filtering,
+				    struct netlink_ext_ack *extack)
 {
 	enum rtl8365mb_frame_ingress accepted_frame, prev_accepted_frame;
 	struct realtek_priv *priv = ds->priv;
-	struct rtl8365mb_vlanmc prev_vlanmc = {0};
+	struct rtl8365mb_vlanmc prev_vlanmc;
 	u8 _unused_first_free_idx;
+	u8 vlanmc_idx = 0;
 	u8 prev_vlanmc_idx;
-	u8 vlanmc_idx;
+	bool vid_changed;
 	int ret;
 
 	lockdep_assert_held(&priv->vlan_lock);
 
-	/* Read the old PVID exclusively to undo in case of error */
+	/* The VLANMC entry of a PVID always has a non-zero VID, so the previous
+	 * VID reads as 0 if the port used the neutral PVID.
+	 */
 	ret = rtl8365mb_vlan_get_pvid_mc(priv, port, &prev_vlanmc_idx,
 					 &prev_vlanmc);
 	if (ret) {
@@ -823,45 +830,57 @@ int rtl8365mb_vlan_pvid_port_set(struct dsa_switch *ds, int port, u16 vid,
 		return ret;
 	}
 
-	/* Find or allocate a new vlan MC and add port to members,
-	 * although members are not checked by the HW in vlan MC.
-	 */
-	ret = rtl8365mb_vlan_mc_port_set(ds, port, vid, true, extack, true);
-	if (ret)
-		return ret;
+	vid_changed = vid != prev_vlanmc.evid;
 
-	/* look for existing entry */
-	ret = rtl8365mb_vlan_mc_find(priv, vid, &vlanmc_idx,
-				     &_unused_first_free_idx);
-	if (ret) {
-		dev_err(priv->dev, "Failed to find a VLAN MC table index\n");
-		goto undo_vlan_mc_port_set;
+	if (vid_changed && vid) {
+		/* Find or allocate a VLANMC entry and add the port to its
+		 * members, which only serve as a reference count.
+		 */
+		ret = rtl8365mb_vlan_mc_port_set(ds, port, vid, true, extack,
+						 true);
+		if (ret)
+			return ret;
+
+		ret = rtl8365mb_vlan_mc_find(priv, vid, &vlanmc_idx,
+					     &_unused_first_free_idx);
+		if (ret) {
+			dev_err(priv->dev,
+				"Failed to find a VLAN MC table index\n");
+			goto undo_vlan_mc_port_set;
+		}
+
+		if (!vlanmc_idx) {
+			dev_err(priv->dev,
+				"VLAN should already exist in VLAN MC\n");
+			ret = -ENOENT;
+			goto undo_vlan_mc_port_set;
+		}
 	}
 
-	if (!vlanmc_idx) {
-		dev_err(priv->dev, "VLAN should already exist in VLAN MC\n");
-		ret = -ENOENT;
-		goto undo_vlan_mc_port_set;
+	if (vid_changed) {
+		ret = rtl8365mb_vlan_port_set_pvid(priv, port, vlanmc_idx);
+		if (ret) {
+			dev_err(priv->dev, "Failed to set port PVID\n");
+			goto undo_vlan_mc_port_set;
+		}
 	}
 
-	ret = rtl8365mb_vlan_port_set_pvid(priv, port, vlanmc_idx);
-	if (ret) {
-		dev_err(priv->dev, "Failed to set port PVID\n");
-		goto undo_vlan_mc_port_set;
+	if (vlan_filtering && !vid)
+		accepted_frame = RTL8365MB_FRAME_TYPE_TAGGED_ONLY;
+	else
+		accepted_frame = RTL8365MB_FRAME_TYPE_ANY_FRAME;
+
+	if (accepted_frame != prev_accepted_frame) {
+		ret = rtl8365mb_vlan_port_set_framefilter(priv, port,
+							  accepted_frame);
+		if (ret) {
+			dev_err(priv->dev, "Failed to set port frame filter\n");
+			goto undo_vlan_port_set_pvid;
+		}
 	}
 
-	/* Changing accept frame is what enables PVID (if not enabled before) */
-	accepted_frame = RTL8365MB_FRAME_TYPE_ANY_FRAME;
-	ret = rtl8365mb_vlan_port_set_framefilter(priv, port, accepted_frame);
-	if (ret) {
-		dev_err(priv->dev, "Failed to set port frame filter\n");
-		goto undo_vlan_port_set_pvid;
-	}
-
-	/* A VLAN can be added with PVID without removing from the old
-	 * PVID VLAN. Clear PVID from the old VLAN MC (if needed).
-	 */
-	if (prev_vlanmc_idx && (prev_vlanmc.evid != vid)) {
+	/* Drop the port from the VLANMC entry of its previous PVID */
+	if (vid_changed && prev_vlanmc_idx) {
 		ret = rtl8365mb_vlan_mc_port_set(ds, port, prev_vlanmc.evid,
 						 false, NULL, false);
 		if (ret) {
@@ -873,103 +892,18 @@ int rtl8365mb_vlan_pvid_port_set(struct dsa_switch *ds, int port, u16 vid,
 	return 0;
 
 undo_set_framefilter:
-	(void)rtl8365mb_vlan_port_set_framefilter(priv, port,
-						  prev_accepted_frame);
-
-undo_vlan_port_set_pvid:
-	(void)rtl8365mb_vlan_port_set_pvid(priv, port, prev_vlanmc_idx);
-
-undo_vlan_mc_port_set:
-	if (prev_vlanmc.evid != vid)
-		(void)rtl8365mb_vlan_mc_port_set(ds, port, vid, false, NULL,
-						 false);
-
-	return ret;
-}
-
-/*
- * rtl8365mb_vlan_pvid_port_clear() - Remove a port's PVID configuration
- * @ds: dsa switch instance
- * @port: port index
- * @vid:  VLAN VID for PVID
- *
- * Resets the target port's hardware PVID allocation to 0. Cleans up and frees
- * the associated VLANMC entry if no other ports are referencing it.
- *
- * Context: Can sleep. Must be called with &priv->vlan_lock held.
- * Takes and releases &priv->map_lock.
- * Return: 0 on success, or a negative error code on failure.
- */
-int rtl8365mb_vlan_pvid_port_clear(struct dsa_switch *ds, int port, u16 vid)
-{
-	enum rtl8365mb_frame_ingress accepted_frame, prev_accepted_frame;
-	struct realtek_priv *priv = ds->priv;
-	struct rtl8365mb_vlanmc vlanmc = {0};
-	u8 vlanmc_idx;
-	int ret;
-
-	lockdep_assert_held(&priv->vlan_lock);
-
-	ret = rtl8365mb_vlan_get_pvid_mc(priv, port, &vlanmc_idx,
-					 &vlanmc);
-	if (ret) {
-		dev_err(priv->dev, "Failed to read current VLAN MC\n");
-		return ret;
-	}
-
-	/* Port is not using PVID. Nothing to remove. */
-	if (!vlanmc_idx)
-		return 0;
-
-	/* We are leaving a non PVID vlan, Nothing to remove. */
-	if (vlanmc.evid != vid)
-		return 0;
-
-	ret = rtl8365mb_vlan_port_get_framefilter(priv, port,
-						  &prev_accepted_frame);
-	if (ret) {
-		dev_err(priv->dev, "Failed to get current framefilter\n");
-		return ret;
-	}
-
-	/* Changing accept frame is what really removes PVID. But only do
-	 * that if we are filtering vlan
-	 */
-	if (dsa_port_is_vlan_filtering(dsa_to_port(ds, port))) {
-		accepted_frame = RTL8365MB_FRAME_TYPE_TAGGED_ONLY;
-
-		ret = rtl8365mb_vlan_port_set_framefilter(priv, port,
-							  accepted_frame);
-		if (ret) {
-			dev_err(priv->dev, "Failed to set port frame filter\n");
-			return ret;
-		}
-	} else {
-		/* skip undo_set_framefilter */
-		accepted_frame = prev_accepted_frame;
-	}
-
-	ret = rtl8365mb_vlan_port_set_pvid(priv, port, 0);
-	if (ret) {
-		dev_err(priv->dev, "Failed to set port PVID to 0\n");
-		goto undo_set_framefilter;
-	}
-
-	/* Clears the VLAN MC membership and maybe VLAN MC entry if empty */
-	ret = rtl8365mb_vlan_mc_port_set(ds, port, vlanmc.evid,
-					 false, NULL, false);
-	if (ret)
-		goto undo_port_set_pvid;
-
-	return 0;
-
-undo_port_set_pvid:
-	(void)rtl8365mb_vlan_port_set_pvid(priv, port, vlanmc_idx);
-
-undo_set_framefilter:
-	if (prev_accepted_frame != accepted_frame)
+	if (accepted_frame != prev_accepted_frame)
 		(void)rtl8365mb_vlan_port_set_framefilter(priv, port,
 							  prev_accepted_frame);
+
+undo_vlan_port_set_pvid:
+	if (vid_changed)
+		(void)rtl8365mb_vlan_port_set_pvid(priv, port, prev_vlanmc_idx);
+
+undo_vlan_mc_port_set:
+	if (vid_changed && vid)
+		(void)rtl8365mb_vlan_mc_port_set(ds, port, vid, false, NULL,
+						 false);
 
 	return ret;
 }

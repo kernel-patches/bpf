@@ -34,7 +34,7 @@ int rtl8365mb_vlan_4k_port_add(struct dsa_switch *ds, int port,
 			       struct netlink_ext_ack *extack);
 int rtl8365mb_vlan_4k_port_del(struct dsa_switch *ds, int port,
 			       const struct switchdev_obj_port_vlan *vlan);
-int rtl8365mb_vlan_pvid_port_set(struct dsa_switch *ds, int port, u16 vid,
-				 struct netlink_ext_ack *extack);
-int rtl8365mb_vlan_pvid_port_clear(struct dsa_switch *ds, int port, u16 vid);
+int rtl8365mb_vlan_pvid_port_commit(struct dsa_switch *ds, int port, u16 vid,
+				    bool vlan_filtering,
+				    struct netlink_ext_ack *extack);
 #endif /* _REALTEK_RTL8365MB_VLAN_H */
