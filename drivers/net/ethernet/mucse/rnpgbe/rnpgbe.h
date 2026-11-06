@@ -269,6 +269,7 @@ int rnpgbe_init_hw(struct mucse_hw *hw, int board_type);
 int rnpgbe_set_rx_mode(struct net_device *netdev,
 		       struct netdev_hw_addr_list *uc,
 		       struct netdev_hw_addr_list *mc);
+int rnpgbe_set_mac_address(struct net_device *netdev, void *addr);
 void rnpgbe_set_link(struct mucse_hw *hw, bool linkup);
 
 extern const struct ethtool_ops rnpgbe_ethtool_ops;
