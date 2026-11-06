@@ -204,6 +204,15 @@
 		regulator-max-microvolt = <12000000>;
 	};
 
+	vcc3v3_lcd_mipi: regulator-vcc3v3-lcd-mipi {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc3v3_lcd_mipi";
+		regulator-boot-on;
+		enable-active-high;
+		gpio = <&gpio1 RK_PC4 GPIO_ACTIVE_HIGH>;
+		vin-supply = <&vcc_3v3_s0>;
+	};
+
 	vcc3v3_pcie30: regulator-vcc3v3-pcie30 {
 		compatible = "regulator-fixed";
 		regulator-name = "vcc3v3_pcie30";
@@ -336,6 +345,43 @@
 
 &cpu_l3 {
 	cpu-supply = <&vdd_cpu_lit_s0>;
+};
+
+&dsi0 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+
+	panel@0 {
+		compatible = "wanchanglong,w552793baa", "raydium,rm67200";
+		reg = <0>;
+		backlight = <&backlight>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&lcd_rst_gpio>;
+		vdd-supply = <&vcc3v3_lcd_mipi>;
+		iovcc-supply = <&vcc3v3_lcd_mipi>;
+		vsp-supply = <&vcc5v0_sys>;
+		vsn-supply = <&vcc5v0_sys>;
+		reset-gpios = <&gpio2 RK_PB4 GPIO_ACTIVE_LOW>;
+
+		port {
+			mipi_panel_in: endpoint {
+				remote-endpoint = <&dsi0_out_panel>;
+			};
+		};
+	};
+};
+
+&dsi0_in {
+	dsi0_in_vp3: endpoint {
+		remote-endpoint = <&vp3_out_dsi0>;
+	};
+};
+
+&dsi0_out {
+	dsi0_out_panel: endpoint {
+		remote-endpoint = <&mipi_panel_in>;
+	};
 };
 
 &gmac0 {
@@ -495,6 +541,22 @@
 	};
 };
 
+&i2c6 {
+	status = "okay";
+
+	gt1x: touchscreen@14 {
+		compatible = "goodix,gt1158";
+		reg = <0x14>;
+		interrupt-parent = <&gpio0>;
+		interrupts = <RK_PD3 IRQ_TYPE_LEVEL_LOW>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&touchscreen_pins>;
+		reset-gpios = <&gpio0 RK_PD2 GPIO_ACTIVE_HIGH>;
+		AVDD28-supply = <&vcc3v3_lcd_mipi>;
+		VDDIO-supply = <&vcc3v3_lcd_mipi>;
+	};
+};
+
 &i2c7 {
 	status = "okay";
 
@@ -541,6 +603,10 @@
 		reset-deassert-us = <100000>;
 		reset-gpios = <&gpio4 RK_PB3 GPIO_ACTIVE_LOW>;
 	};
+};
+
+&mipidcphy0 {
+	status = "okay";
 };
 
 &pcie2x1l0 {
@@ -664,6 +730,12 @@
 		};
 	};
 
+	mipi_dsi {
+		lcd_rst_gpio: lcd-rst {
+			rockchip,pins = <2 RK_PB4 RK_FUNC_GPIO &pcfg_pull_up>;
+		};
+	};
+
 	pcie2 {
 		pcie2_0_rst: pcie2-0-rst {
 			rockchip,pins = <4 RK_PA5 RK_FUNC_GPIO &pcfg_pull_none>;
@@ -689,6 +761,14 @@
 
 		vcc3v3_pcie30_en: vcc3v3-pcie30-en {
 			rockchip,pins = <3 RK_PC3 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+	};
+
+	touchscreen {
+		touchscreen_pins: touchscreen-pins {
+			rockchip,pins =
+				<0 RK_PD2 RK_FUNC_GPIO &pcfg_pull_up>,
+				<0 RK_PD3 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
 
@@ -1532,5 +1612,15 @@
 	vp1_out_hdmi1: endpoint@ROCKCHIP_VOP2_EP_HDMI1 {
 		reg = <ROCKCHIP_VOP2_EP_HDMI1>;
 		remote-endpoint = <&hdmi1_in_vp1>;
+	};
+};
+
+&vp3 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	vp3_out_dsi0: endpoint@ROCKCHIP_VOP2_EP_MIPI0 {
+		reg = <ROCKCHIP_VOP2_EP_MIPI0>;
+		remote-endpoint = <&dsi0_in_vp3>;
 	};
 };
