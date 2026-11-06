@@ -11805,8 +11805,8 @@ int map_set_for_each_callback_args(struct bpf_verifier_env *env,
 }
 
 /* The arg points into the stack frame of the helper that calls the callback */
-static void mark_frame_scoped_arg(struct bpf_verifier_env *env,
-				  struct bpf_func_state *callee, u32 regno)
+void mark_frame_scoped_arg(struct bpf_verifier_env *env,
+			   struct bpf_func_state *callee, u32 regno)
 {
 	if (!callee->frame_id)
 		callee->frame_id = ++env->id_gen;
