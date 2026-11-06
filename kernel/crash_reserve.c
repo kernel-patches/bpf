@@ -16,6 +16,7 @@
 #include <linux/kmemleak.h>
 #include <linux/cma.h>
 #include <linux/crash_reserve.h>
+#include <linux/hugetlb.h>
 
 #include <asm/page.h>
 #include <asm/sections.h>
@@ -340,9 +341,9 @@ int __init parse_crashkernel(char *cmdline,
 	 * optional CMA reservation
 	 * cma_base is ignored
 	 */
-	if (cma_size)
-		__parse_crashkernel(cmdline, 0, cma_size,
-			&cma_base, suffix_tbl[SUFFIX_CMA]);
+	if (cma_size && __parse_crashkernel(cmdline, 0, cma_size,
+					    &cma_base, suffix_tbl[SUFFIX_CMA]))
+		*cma_size = 0;
 #endif
 	if (!*crash_size)
 		ret = -EINVAL;
@@ -470,21 +471,42 @@ retry:
 }
 
 struct range crashk_cma_ranges[CRASHKERNEL_CMA_RANGES_MAX];
+static unsigned long long crashkernel_cma_size __initdata;
+
+void __init crashkernel_cma_set_size(unsigned long long cma_size)
+{
+	crashkernel_cma_size = cma_size;
+}
+
 #ifdef CRASHKERNEL_CMA
 int crashk_cma_cnt;
-void __init reserve_crashkernel_cma(unsigned long long cma_size)
+void __init reserve_crashkernel_cma(void)
 {
-	unsigned long long request_size = roundup(cma_size, PAGE_SIZE);
-	unsigned long long reserved_size = 0;
+	unsigned long long cma_size = crashkernel_cma_size;
+	unsigned long long request_size, reserved_size, reused_size;
 
-	if (!cma_size)
+	if (!cma_size || crashk_res.start >= crashk_res.end)
 		return;
+
+	if (cma_size > ULLONG_MAX - (PAGE_SIZE - 1)) {
+		pr_warn("crashkernel CMA size is too large\n");
+		return;
+	}
+	cma_size = roundup(cma_size, PAGE_SIZE);
+	reused_size = hugetlb_cma_add_crashkernel_ranges(cma_size,
+							 crashk_cma_ranges,
+							 &crashk_cma_cnt,
+							 CRASHKERNEL_CMA_RANGES_MAX);
+	reserved_size = reused_size;
+	request_size = cma_size - reused_size;
 
 	while (cma_size > reserved_size &&
 	       crashk_cma_cnt < CRASHKERNEL_CMA_RANGES_MAX) {
 
 		char name[CMA_MAX_NAME];
 		struct cma *res;
+
+		request_size = min(request_size, cma_size - reserved_size);
 
 		/* CMA area names show up in sysfs and debugfs, keep them unique */
 		if (crashk_cma_cnt)
@@ -507,21 +529,23 @@ void __init reserve_crashkernel_cma(unsigned long long cma_size)
 			crashk_cma_ranges[crashk_cma_cnt].start +
 			cma_get_size(res) - 1;
 		++crashk_cma_cnt;
-		reserved_size += request_size;
+		reserved_size += cma_get_size(res);
 	}
 
 	if (cma_size > reserved_size)
-		pr_warn("crashkernel CMA reservation failed: %lld MB requested, %lld MB reserved in %d ranges\n",
-			cma_size >> 20, reserved_size >> 20, crashk_cma_cnt);
+		pr_warn("crashkernel CMA reservation failed: %llu MB requested, %llu MB reused, %llu MB newly reserved in %d ranges\n",
+			cma_size >> 20, reused_size >> 20,
+			(reserved_size - reused_size) >> 20, crashk_cma_cnt);
 	else
-		pr_info("crashkernel CMA reserved: %lld MB in %d ranges\n",
-			reserved_size >> 20, crashk_cma_cnt);
+		pr_info("crashkernel CMA: %llu MB reused, %llu MB newly reserved in %d ranges\n",
+			reused_size >> 20, (reserved_size - reused_size) >> 20,
+			crashk_cma_cnt);
 }
 
 #else /* CRASHKERNEL_CMA */
-void __init reserve_crashkernel_cma(unsigned long long cma_size)
+void __init reserve_crashkernel_cma(void)
 {
-	if (cma_size)
+	if (crashkernel_cma_size)
 		pr_warn("crashkernel CMA reservation not supported\n");
 }
 #endif

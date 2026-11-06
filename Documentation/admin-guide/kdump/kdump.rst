@@ -313,9 +313,25 @@ crashkernel syntax
 
 4) crashkernel=size,cma
 
-	Reserve additional crash kernel memory from CMA. This reservation is
-	usable by the first system's userspace memory and kernel movable
-	allocations (memory balloon, zswap). Pages allocated from this memory
+	Reserve additional crash kernel memory from CMA. Existing HugeTLB CMA
+	memory is used first, and dedicated CMA areas are reserved for any
+	remaining amount. For example, this reuses 2G from the existing 6G pool
+	without reserving additional CMA memory::
+
+	    hugetlb_cma=6G crashkernel=256M crashkernel=2G,cma
+
+	With a smaller HugeTLB CMA pool, the remainder is reserved separately::
+
+	    hugetlb_cma=2G crashkernel=256M crashkernel=4G,cma
+
+	This reuses the existing 2G and reserves another 2G of dedicated CMA.
+	Both kinds of area use the same limit of four physical ranges. If there
+	is insufficient memory or too few range slots, the kernel reports the
+	shortfall. Normal CMA alignment applies to dedicated reservations.
+
+	The selected memory remains usable by the first system's userspace,
+	including HugeTLB allocations, and kernel movable allocations
+	(memory balloon, zswap). Pages allocated from this memory
 	range will not be included in the vmcore so this should not be used if
 	dumping of userspace memory is intended and it has to be expected that
 	some movable kernel pages may be missing from the dump.
