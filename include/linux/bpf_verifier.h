@@ -377,6 +377,8 @@ struct bpf_func_state {
 	 * reused after returns, while this ID is preserved across state clones.
 	 */
 	u32 diag_frame_id;
+	/* parent_id of the args that are gone when this frame returns */
+	u32 frame_id;
 	/* subprog number == index within subprog_info
 	 * zero == main subprog
 	 */
