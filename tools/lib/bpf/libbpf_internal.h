@@ -317,6 +317,8 @@ struct bpf_struct_ops {
 	__u32 type_id;
 };
 
+int bpf_program_idx(const struct bpf_program *prog);
+
 int parse_btf_map_def(const char *map_name, struct btf *btf,
 		      const struct btf_type *def_t, bool strict,
 		      struct btf_map_def *map_def, struct btf_map_def *inner_def);

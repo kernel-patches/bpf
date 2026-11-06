@@ -1573,3 +1573,61 @@ void bpf_gen__init_kern_struct_ops(struct bpf_gen *gen, struct btf *btf,
 		}
 	}
 }
+
+void bpf_gen__struct_ops_update_elem(struct bpf_gen *gen, int map_idx,
+				     struct btf *btf,
+				     struct bpf_struct_ops *st_ops)
+{
+	int attr_size = offsetofend(union bpf_attr, flags);
+	const struct btf_type *type;
+	union bpf_attr attr;
+	int key, zero = 0;
+	__u32 i;
+
+	/* 1. Close attach_btf_obj_fd (upper 32 bits of st_ops->type_id_off) */
+	emit2(gen, BPF_LD_IMM64_RAW_FULL(BPF_REG_0, BPF_PSEUDO_MAP_IDX_VALUE,
+					 0, 0, 0, st_ops->type_id_off));
+	emit(gen, BPF_LDX_MEM(BPF_DW, BPF_REG_1, BPF_REG_0, 0));
+	emit(gen, BPF_ALU64_IMM(BPF_RSH, BPF_REG_1, 32));
+	__emit_sys_close(gen);
+
+	/* 2. Populate prog_fd into kern_vdata for all callback members */
+	type = btf__type_by_id(btf, st_ops->type_id);
+	for (i = 0; i < btf_vlen(type); i++) {
+		struct bpf_program *prog = st_ops->progs[i];
+		int prog_idx, off_slot;
+
+		if (!prog)
+			continue;
+
+		prog_idx = bpf_program_idx(prog);
+		off_slot = st_ops->kern_func_off[i];
+
+		/* R2 = dynamic kernel member offset from off_slot */
+		emit2(gen, BPF_LD_IMM64_RAW_FULL(BPF_REG_1, BPF_PSEUDO_MAP_IDX_VALUE,
+						 0, 0, 0, off_slot));
+		emit(gen, BPF_LDX_MEM(BPF_W, BPF_REG_2, BPF_REG_1, 0));
+		emit(gen, BPF_JMP_IMM(BPF_JLE, BPF_REG_2,
+				      KERN_VDATA_MAX_SIZE - sizeof(__u64), 2));
+		emit(gen, BPF_MOV64_IMM(BPF_REG_7, -E2BIG));
+		emit_check_err(gen);
+
+		/* R1 = kern_vdata_off + offset */
+		emit2(gen, BPF_LD_IMM64_RAW_FULL(BPF_REG_1, BPF_PSEUDO_MAP_IDX_VALUE,
+						 0, 0, 0, st_ops->kern_vdata_off));
+		emit(gen, BPF_ALU64_REG(BPF_ADD, BPF_REG_1, BPF_REG_2));
+
+		/* R0 = prog_fd from stack (stack_off(prog_fd[prog_idx])) */
+		emit(gen, BPF_LDX_MEM(BPF_W, BPF_REG_0, BPF_REG_10,
+				      stack_off(prog_fd[prog_idx])));
+
+		/* Store prog_fd (R0) into kern_vdata + offset (R1) */
+		emit(gen, BPF_STX_MEM(BPF_DW, BPF_REG_1, BPF_REG_0, 0));
+	}
+
+	/* 3. Emit BPF_MAP_UPDATE_ELEM command for struct_ops map */
+	memset(&attr, 0, attr_size);
+	key = add_data(gen, &zero, sizeof(zero));
+	emit_map_update_elem(gen, map_idx, &attr, attr_size, key,
+			     st_ops->kern_vdata_off, KERN_VDATA_MAX_SIZE);
+}

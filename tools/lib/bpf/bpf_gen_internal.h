@@ -88,5 +88,8 @@ void bpf_gen__init_kern_struct_ops(struct bpf_gen *gen, struct btf *btf,
 				   struct bpf_struct_ops *st_ops,
 				   __u32 *vtype_id_off,
 				   unsigned int *val_sz_off);
+void bpf_gen__struct_ops_update_elem(struct bpf_gen *gen, int map_idx,
+				     struct btf *btf,
+				     struct bpf_struct_ops *st_ops);
 
 #endif

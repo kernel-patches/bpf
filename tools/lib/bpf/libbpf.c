@@ -9772,9 +9772,14 @@ static int bpf_object_prepare_struct_ops(struct bpf_object *obj)
 		if (!map->autocreate)
 			continue;
 
-		err = bpf_map_prepare_vdata(map);
-		if (err)
-			return err;
+		if (obj->gen_loader) {
+			bpf_gen__struct_ops_update_elem(obj->gen_loader, i,
+							obj->btf, map->st_ops);
+		} else {
+			err = bpf_map_prepare_vdata(map);
+			if (err)
+				return err;
+		}
 	}
 
 	return 0;
@@ -10718,6 +10723,11 @@ int bpf_program__set_expected_attach_type(struct bpf_program *prog,
 
 	prog->expected_attach_type = type;
 	return 0;
+}
+
+int bpf_program_idx(const struct bpf_program *prog)
+{
+	return prog - prog->obj->programs;
 }
 
 __u32 bpf_program__flags(const struct bpf_program *prog)
