@@ -196,6 +196,7 @@ static inline struct mock_dev *to_mock_dev(struct device *dev)
 struct selftest_obj {
 	struct iommufd_object obj;
 	enum selftest_obj_type type;
+	struct ida pasids;
 
 	union {
 		struct {
@@ -1058,6 +1059,7 @@ static int iommufd_test_mock_domain(struct iommufd_ucmd *ucmd,
 	sobj = iommufd_object_alloc(ucmd->ictx, sobj, IOMMUFD_OBJ_SELFTEST);
 	if (IS_ERR(sobj))
 		return PTR_ERR(sobj);
+	ida_init(&sobj->pasids);
 
 	sobj->idev.ictx = ucmd->ictx;
 	sobj->type = TYPE_IDEV;
@@ -1879,17 +1881,32 @@ static int iommufd_test_pasid_attach(struct iommufd_ucmd *ucmd,
 	if (IS_ERR(sobj))
 		return PTR_ERR(sobj);
 
-	down_write(&sobj->idev.mock_dev->iopf_rwsem);
-	rc = iommufd_device_attach(sobj->idev.idev, cmd->pasid_attach.pasid,
-				   &cmd->pasid_attach.pt_id);
-	up_write(&sobj->idev.mock_dev->iopf_rwsem);
-	if (rc)
-		goto out_sobj;
+	scoped_guard(rwsem_write, &sobj->idev.mock_dev->iopf_rwsem) {
+		if (ida_exists(&sobj->pasids, cmd->pasid_attach.pasid)) {
+			rc = -EBUSY;
+			goto out_sobj;
+		}
+
+		rc = ida_alloc_range(&sobj->pasids, cmd->pasid_attach.pasid,
+				     cmd->pasid_attach.pasid, GFP_KERNEL);
+		if (rc < 0)
+			goto out_sobj;
+
+		rc = iommufd_device_attach(sobj->idev.idev,
+					   cmd->pasid_attach.pasid,
+					   &cmd->pasid_attach.pt_id);
+		if (rc) {
+			ida_free(&sobj->pasids, cmd->pasid_attach.pasid);
+			goto out_sobj;
+		}
+	}
 
 	rc = iommufd_ucmd_respond(ucmd, sizeof(*cmd));
 	if (rc) {
 		down_write(&sobj->idev.mock_dev->iopf_rwsem);
 		iommufd_device_detach(sobj->idev.idev, cmd->pasid_attach.pasid);
+		if (ida_exists(&sobj->pasids, cmd->pasid_attach.pasid))
+			ida_free(&sobj->pasids, cmd->pasid_attach.pasid);
 		up_write(&sobj->idev.mock_dev->iopf_rwsem);
 	}
 
@@ -1933,6 +1950,8 @@ static int iommufd_test_pasid_detach(struct iommufd_ucmd *ucmd,
 
 	down_write(&sobj->idev.mock_dev->iopf_rwsem);
 	iommufd_device_detach(sobj->idev.idev, cmd->pasid_detach.pasid);
+	if (ida_exists(&sobj->pasids, cmd->pasid_detach.pasid))
+		ida_free(&sobj->pasids, cmd->pasid_detach.pasid);
 	up_write(&sobj->idev.mock_dev->iopf_rwsem);
 	iommufd_put_object(ucmd->ictx, &sobj->obj);
 	return 0;
@@ -1941,10 +1960,15 @@ static int iommufd_test_pasid_detach(struct iommufd_ucmd *ucmd,
 void iommufd_selftest_destroy(struct iommufd_object *obj)
 {
 	struct selftest_obj *sobj = to_selftest_obj(obj);
+	int pasid;
 
 	switch (sobj->type) {
 	case TYPE_IDEV:
 		down_write(&sobj->idev.mock_dev->iopf_rwsem);
+		while ((pasid = ida_find_first(&sobj->pasids)) >= 0) {
+			iommufd_device_detach(sobj->idev.idev, pasid);
+			ida_free(&sobj->pasids, pasid);
+		}
 		iommufd_device_detach(sobj->idev.idev, IOMMU_NO_PASID);
 		up_write(&sobj->idev.mock_dev->iopf_rwsem);
 		iommufd_device_unbind(sobj->idev.idev);
