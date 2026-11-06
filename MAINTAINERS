@@ -28126,6 +28126,7 @@ TI LM51772 BUCK-BOOST REGULATOR DRIVER
 M:	Paul Louvel <paul.louvel@bootlin.com>
 S:	Maintained
 F:	Documentation/devicetree/bindings/regulator/ti,lm51772.yaml
+F:	drivers/regulator/lm51772-regulator.c
 
 TI LMP92064 ADC DRIVER
 M:	Leonard Göhrs <l.goehrs@pengutronix.de>
