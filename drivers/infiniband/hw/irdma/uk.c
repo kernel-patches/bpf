@@ -1225,6 +1225,10 @@ int irdma_uk_cq_poll_cmpl(struct irdma_cq_uk *cq,
 	else
 		get_64bit_val(cqe, 8, &comp_ctx);
 	qp = (struct irdma_qp_uk *)(unsigned long)comp_ctx;
+	if (!qp || qp->destroy_pending) {
+		ret_code = -EFAULT;
+		goto exit;
+	}
 	if (info->error) {
 		info->major_err = FIELD_GET(IRDMA_CQ_MAJERR, qword3);
 		info->minor_err = FIELD_GET(IRDMA_CQ_MINERR, qword3);
@@ -1269,10 +1273,6 @@ int irdma_uk_cq_poll_cmpl(struct irdma_cq_uk *cq,
 	info->ud_src_qpn = (u32)FIELD_GET(IRDMACQ_UDSRCQPN, qword2);
 
 	info->solicited_event = (bool)FIELD_GET(IRDMACQ_SOEVENT, qword3);
-	if (!qp || qp->destroy_pending) {
-		ret_code = -EFAULT;
-		goto exit;
-	}
 	wqe_idx = (u32)FIELD_GET(IRDMA_CQ_WQEIDX, qword3);
 	info->qp_handle = (irdma_qp_handle)(unsigned long)qp;
 	info->op_type = (u8)FIELD_GET(IRDMACQ_OP, qword3);
