@@ -760,6 +760,7 @@ static int mock_hw_queue_init_phys(struct iommufd_hw_queue *hw_queue, u32 index,
 
 	mock_hw_queue->prev = prev;
 	mock_hw_queue->mock_viommu = mock_viommu;
+	mock_hw_queue->index = index;
 	mock_viommu->hw_queue[index] = mock_hw_queue;
 
 	hw_queue->destroy = &mock_hw_queue_destroy;
