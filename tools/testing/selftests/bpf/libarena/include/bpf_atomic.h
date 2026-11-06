@@ -61,27 +61,13 @@ extern bool CONFIG_X86_64 __kconfig __weak;
 
 #define try_cmpxchg_acquire(p, pold, new) try_cmpxchg(p, pold, new)
 
-#define smp_mb()                                 \
-	({                                       \
-		volatile unsigned long __val;    \
-		__sync_fetch_and_add(&__val, 0); \
-	})
+extern __bpf_fastcall void bpf_smp_mb(void) __ksym;
+extern __bpf_fastcall void bpf_smp_rmb(void) __ksym;
+extern __bpf_fastcall void bpf_smp_wmb(void) __ksym;
 
-#define smp_rmb()                   \
-	({                          \
-		if (!CONFIG_X86_64) \
-			smp_mb();   \
-		else                \
-			barrier();  \
-	})
-
-#define smp_wmb()                   \
-	({                          \
-		if (!CONFIG_X86_64) \
-			smp_mb();   \
-		else                \
-			barrier();  \
-	})
+#define smp_mb() bpf_smp_mb()
+#define smp_rmb() bpf_smp_rmb()
+#define smp_wmb() bpf_smp_wmb()
 
 /* Control dependency provides LOAD->STORE, provide LOAD->LOAD */
 #define smp_acquire__after_ctrl_dep() ({ smp_rmb(); })

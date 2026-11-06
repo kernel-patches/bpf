@@ -757,6 +757,10 @@ void bpf_map_free_internal_structs(struct bpf_map *map, void *obj);
 int bpf_dynptr_from_file_sleepable(struct file *file, u32 flags,
 				   struct bpf_dynptr *ptr__uninit);
 
+void bpf_smp_mb(void);
+void bpf_smp_rmb(void);
+void bpf_smp_wmb(void);
+
 #if defined(CONFIG_MMU) && defined(CONFIG_64BIT)
 void *bpf_arena_alloc_pages_non_sleepable(void *p__map, void *addr__ign, u32 page_cnt, int node_id,
 					  u64 flags);

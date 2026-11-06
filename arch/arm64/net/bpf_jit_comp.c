@@ -1858,6 +1858,16 @@ emit_cond_jmp:
 					    &func_addr, &func_addr_fixed);
 		if (ret < 0)
 			return ret;
+		if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL &&
+		    bpf_jit_inlines_kfunc_call((void *)func_addr)) {
+			if (func_addr == (u64)bpf_smp_mb)
+				emit(A64_DMB_ISH, ctx);
+			else if (func_addr == (u64)bpf_smp_rmb)
+				emit(A64_DMB_ISHLD, ctx);
+			else
+				emit(A64_DMB_ISHST, ctx);
+			break;
+		}
 		if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
 			const struct btf_func_model *fm;
 
@@ -2576,6 +2586,12 @@ bool bpf_jit_supports_private_stack(void)
 bool bpf_jit_supports_arena_stack(void)
 {
 	return true;
+}
+
+bool bpf_jit_inlines_kfunc_call(void *func)
+{
+	return func == (void *)bpf_smp_mb || func == (void *)bpf_smp_rmb ||
+	       func == (void *)bpf_smp_wmb;
 }
 
 bool bpf_jit_supports_kfunc_call(void)

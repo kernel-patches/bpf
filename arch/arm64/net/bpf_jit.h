@@ -331,6 +331,8 @@
 
 /* DMB */
 #define A64_DMB_ISH aarch64_insn_gen_dmb(AARCH64_INSN_MB_ISH)
+#define A64_DMB_ISHLD aarch64_insn_gen_dmb(AARCH64_INSN_MB_ISHLD)
+#define A64_DMB_ISHST aarch64_insn_gen_dmb(AARCH64_INSN_MB_ISHST)
 
 /* ADR */
 #define A64_ADR(Rd, offset) \
