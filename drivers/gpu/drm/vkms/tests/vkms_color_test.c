@@ -123,7 +123,7 @@ static void vkms_color_test_linear(struct kunit *test)
 static void vkms_color_srgb_inv_srgb(struct kunit *test)
 {
 	u16 srgb, final;
-	u16 tolerance = 122;
+	u16 tolerance = 11;
 	u32 x;
 
 	for (u32 i = 0; i <= 4095; i++) {
