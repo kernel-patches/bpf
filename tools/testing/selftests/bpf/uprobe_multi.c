@@ -5,8 +5,11 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <sys/mman.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 #include <sdt.h>
+
+#include "build_id.h"
 
 #ifndef MADV_POPULATE_READ
 #define MADV_POPULATE_READ 22
@@ -95,12 +98,12 @@ static int usdt(void)
 extern char build_id_start[];
 extern char build_id_end[];
 
-int __attribute__((weak)) trigger_uprobe(bool build_id_resident)
+/* Returns 2 if the build ID page could not be evicted. */
+static int prep_build_id_page(bool build_id_resident)
 {
 	int page_sz = sysconf(_SC_PAGESIZE);
-	void *addr;
-
 	unsigned char vec[1];
+	void *addr;
 	int poll = 0;
 
 	/* page-align build ID start */
@@ -123,8 +126,34 @@ int __attribute__((weak)) trigger_uprobe(bool build_id_resident)
 			poll++;
 			usleep(100);
 		} while (poll < 500);
+		if (vec[0] & 1)
+			return 2;
 	}
+	return 0;
+}
+
+int __attribute__((weak)) trigger_uprobe(bool build_id_resident)
+{
+	(void)prep_build_id_page(build_id_resident);
+
 	(void)uprobe();
+
+	return 0;
+}
+
+int __attribute__((weak)) trigger_syscall(void)
+{
+	int err = prep_build_id_page(false /* page-out build ID */);
+
+	if (err)
+		return err;
+
+	/*
+	 * The BPF program under test filters on this syscall and its argument
+	 * and records only the first hit, so no other syscall can overwrite
+	 * the captured stack.
+	 */
+	(void)syscall(SYS_getpgid, TARGET_SYSCALL_ARG);
 
 	return 0;
 }
@@ -142,10 +171,12 @@ int main(int argc, char **argv)
 		return trigger_uprobe(false /* page-out build ID */);
 	if (!strcmp("uprobe-paged-in", argv[1]))
 		return trigger_uprobe(true /* page-in build ID */);
+	if (!strcmp("paged-out-syscall", argv[1]))
+		return trigger_syscall();
 
 error:
 	fprintf(stderr,
-		"usage: %s <bench|usdt|uprobe-paged-out|uprobe-paged-in>\n",
+		"usage: %s <bench|usdt|uprobe-paged-{in,out}|paged-out-syscall>\n",
 		argv[0]);
 	return -1;
 }
