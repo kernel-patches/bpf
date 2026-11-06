@@ -473,6 +473,7 @@ static void tls_encrypt_done(void *data, int err)
 	struct scatterlist *sge;
 	struct sk_msg *msg_en;
 	struct sock *sk;
+	int sk_err;
 
 	if (err == -EINPROGRESS) /* see the comment in tls_decrypt_done() */
 		return;
@@ -489,12 +490,13 @@ static void tls_encrypt_done(void *data, int err)
 	sge->length += prot->prepend_size;
 
 	/* Check if error is previously set on socket */
-	if (err || sk->sk_err) {
+	sk_err = READ_ONCE(sk->sk_err);
+	if (err || sk_err) {
 		rec = NULL;
 
 		/* If err is already set on socket, return the same code */
-		if (sk->sk_err) {
-			ctx->async_wait.err = -sk->sk_err;
+		if (sk_err) {
+			ctx->async_wait.err = -sk_err;
 		} else {
 			ctx->async_wait.err = err;
 			tls_err_abort(sk, err);
