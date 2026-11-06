@@ -5,6 +5,7 @@
 #include <linux/linkage.h>
 #include <linux/elfcore.h>
 #include <linux/elf.h>
+#include <linux/range.h>
 #ifdef CONFIG_ARCH_HAS_GENERIC_CRASHKERNEL_RESERVATION
 #include <asm/crash_reserve.h>
 #endif
@@ -31,7 +32,18 @@ int __init parse_crashkernel(char *cmdline, unsigned long long system_ram,
 		unsigned long long *low_size, unsigned long long *cma_size,
 		bool *high);
 
-void __init reserve_crashkernel_cma(unsigned long long cma_size);
+#if defined(CONFIG_CRASH_RESERVE) && defined(CONFIG_ARCH_HAS_GENERIC_CRASHKERNEL_RESERVATION)
+void __init crashkernel_cma_set_size(unsigned long long size);
+void __init reserve_crashkernel_cma(void);
+#else
+static inline void __init crashkernel_cma_set_size(unsigned long long size)
+{
+}
+
+static inline void __init reserve_crashkernel_cma(void)
+{
+}
+#endif
 
 #ifdef CONFIG_ARCH_HAS_GENERIC_CRASHKERNEL_RESERVATION
 #ifndef arch_add_crash_res_to_iomem
