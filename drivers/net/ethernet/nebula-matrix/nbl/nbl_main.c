@@ -269,24 +269,36 @@ static int nbl_probe(struct pci_dev *pdev,
 	/* never return fail when DMA_BIT_MASK(64) */
 	dma_set_mask_and_coherent(dev, DMA_BIT_MASK(64));
 
-	pci_set_master(pdev);
-
+	/*
+	 * Bus mastering is enabled only after nbl_core_init() returns.
+	 *
+	 * FUNCTION_MSIX_MAP survives a kexec or a forced unload without
+	 * FLR and there is no .shutdown callback to scrub it, so at this
+	 * point every map entry left VALID by a previous kernel still
+	 * holds a DMA address that this kernel has already reallocated.
+	 * Those entries tag their table fetches as bus-master reads, and
+	 * the only thing standing between such a fetch and a read of
+	 * reused memory is Bus Master Enable, which the PCI core cleared
+	 * on the way into this kernel.  nbl_intr_setup_mgt() invalidates
+	 * the entries from inside nbl_core_init(); enabling bus mastering
+	 * before that would re-open the window.  Everything up to that
+	 * point is host-side setup plus MMIO and nothing in it waits for
+	 * the device, so it does not need bus mastering.
+	 */
 	err = nbl_probe_chip_deps(pdev, param.caps.has_ctrl);
 	if (err)
-		goto out_clear_master;
+		return err;
 
 	adapter = nbl_core_init(pdev, &param);
 	if (IS_ERR(adapter)) {
 		dev_err(dev, "Nbl adapter init fail: %pe\n", adapter);
-		err = PTR_ERR(adapter);
-		goto out_clear_master;
+		return PTR_ERR(adapter);
 	}
+
+	pci_set_master(pdev);
 	pci_set_drvdata(pdev, adapter);
 
 	return 0;
-out_clear_master:
-	pci_clear_master(pdev);
-	return err;
 }
 
 static void nbl_remove(struct pci_dev *pdev)
@@ -296,9 +308,27 @@ static void nbl_remove(struct pci_dev *pdev)
 	if (!adapter)
 		return;
 	pci_set_drvdata(pdev, NULL);
-	nbl_core_remove(adapter);
 
+	/*
+	 * Stop bus mastering before any teardown runs.
+	 *
+	 * nbl_core_remove() releases the coherent MSI-X map tables whose
+	 * DMA addresses are still programmed in FUNCTION_MSIX_MAP, and the
+	 * only thing standing between a late pcompleter fetch and a read
+	 * of freed memory is a bounded best-effort delay - the chip
+	 * exposes no completion status for those fetches (see
+	 * nbl_intr_quiesce_wait()).  Clearing Bus Master Enable first
+	 * keeps the device from starting a new fetch at all, so that
+	 * residual window only covers requests already in flight.
+	 *
+	 * nbl_core_stop() above has already torn down this function's own
+	 * map, so what is left to protect here is the control PF's table of
+	 * per-function entries, freed from nbl_intr_mgt_stop() inside
+	 * nbl_core_remove().
+	 */
 	pci_clear_master(pdev);
+
+	nbl_core_remove(adapter);
 }
 
 /*
