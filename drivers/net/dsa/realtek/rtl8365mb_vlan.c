@@ -323,6 +323,37 @@ rtl8365mb_vlan_4k_port_set(struct dsa_switch *ds, int port,
 }
 
 /*
+ * rtl8365mb_vlan_4k_setup_neutral() - Use IVL in the neutral VLAN
+ * @priv: realtek_priv pointer
+ *
+ * Untagged frames of standalone ports and of ports in a VLAN-unaware bridge
+ * are classified to VID 0, the VID of the neutral PVID. No bridge VLAN sets
+ * up its VLAN4k entry, which by default uses Shared VLAN Learning, so the
+ * switch would learn these frames by FID while the driver installs its FDB
+ * and MDB entries for VID 0 with Independent VLAN Learning. Use IVL in VID 0
+ * as in every other VLAN.
+ *
+ * Context: Can sleep. Must be called with &priv->vlan_lock held.
+ * Takes and releases &priv->map_lock.
+ * Return: 0 on success, or a negative error code on failure.
+ */
+int rtl8365mb_vlan_4k_setup_neutral(struct realtek_priv *priv)
+{
+	struct rtl8365mb_vlan4k vlan4k = {0};
+	int ret;
+
+	lockdep_assert_held(&priv->vlan_lock);
+
+	ret = rtl8365mb_vlan_4k_read(priv, 0, &vlan4k);
+	if (ret)
+		return ret;
+
+	vlan4k.ivl_en = true;
+
+	return rtl8365mb_vlan_4k_write(priv, &vlan4k);
+}
+
+/*
  * rtl8365mb_vlan_4k_port_add() - Add a port to a VLAN 4K table entry
  * @ds: dsa switch instance
  * @port: port index

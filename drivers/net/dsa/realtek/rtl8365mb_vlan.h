@@ -28,6 +28,7 @@ int
 rtl8365mb_vlan_port_set_framefilter(struct realtek_priv *priv,
 				    int port,
 				    enum rtl8365mb_frame_ingress frame_type);
+int rtl8365mb_vlan_4k_setup_neutral(struct realtek_priv *priv);
 int rtl8365mb_vlan_4k_port_add(struct dsa_switch *ds, int port,
 			       const struct switchdev_obj_port_vlan *vlan,
 			       struct netlink_ext_ack *extack);
