@@ -6,6 +6,17 @@
 #include <linux/pci.h>
 #include "nbl_dev.h"
 
+static void nbl_dev_clean_mailbox_schedule(struct nbl_dev_mgt *dev_mgt);
+
+/* ----------  Interrupt config  ---------- */
+static irqreturn_t nbl_dev_clean_mailbox(int irq __always_unused, void *data)
+{
+	struct nbl_dev_mgt *dev_mgt = (struct nbl_dev_mgt *)data;
+
+	nbl_dev_clean_mailbox_schedule(dev_mgt);
+	return IRQ_HANDLED;
+}
+
 static void nbl_dev_init_msix_cnt(struct nbl_dev_mgt *dev_mgt)
 {
 	struct nbl_dev_common *dev_common = dev_mgt->common_dev;
@@ -17,6 +28,243 @@ static void nbl_dev_init_msix_cnt(struct nbl_dev_mgt *dev_mgt)
 	 * count.
 	 */
 	msix_info->serv_info[NBL_MSIX_MAILBOX_TYPE].num = 1;
+}
+
+static int nbl_dev_request_mailbox_irq(struct nbl_dev_mgt *dev_mgt)
+{
+	struct nbl_dev_common *dev_common = dev_mgt->common_dev;
+	struct nbl_msix_info *msix_info = &dev_common->msix_info;
+	struct nbl_common_info *common = dev_mgt->common;
+	u16 lvec;
+	int irq_num;
+	int err;
+
+	if (!msix_info->serv_info[NBL_MSIX_MAILBOX_TYPE].num)
+		return 0;
+
+	lvec = msix_info->serv_info[NBL_MSIX_MAILBOX_TYPE].base_vector_id;
+	irq_num = pci_irq_vector(common->pdev, lvec);
+	if (irq_num < 0) {
+		dev_err(common->dev, "Failed to get mailbox IRQ vector: %d\n",
+			irq_num);
+		return irq_num;
+	}
+
+	snprintf(dev_common->mailbox_name, sizeof(dev_common->mailbox_name),
+		 "nbl_mailbox@pci:%s", pci_name(common->pdev));
+	err = request_irq(irq_num, nbl_dev_clean_mailbox, 0,
+			  dev_common->mailbox_name, dev_mgt);
+	if (err)
+		return err;
+
+	return 0;
+}
+
+static void nbl_dev_free_mailbox_irq(struct nbl_dev_mgt *dev_mgt)
+{
+	struct nbl_dev_common *dev_common = dev_mgt->common_dev;
+	struct nbl_msix_info *msix_info = &dev_common->msix_info;
+	struct nbl_common_info *common = dev_mgt->common;
+	u16 lvec;
+	int irq_num;
+
+	if (!msix_info->serv_info[NBL_MSIX_MAILBOX_TYPE].num)
+		return;
+
+	lvec = msix_info->serv_info[NBL_MSIX_MAILBOX_TYPE].base_vector_id;
+	irq_num = pci_irq_vector(common->pdev, lvec);
+	if (irq_num >= 0)
+		free_irq(irq_num, dev_mgt);
+}
+
+static int nbl_dev_enable_mailbox_irq(struct nbl_dev_mgt *dev_mgt)
+{
+	struct nbl_dispatch_ops *disp_ops = dev_mgt->disp_ops_tbl->ops;
+	struct nbl_channel_ops *chan_ops = dev_mgt->chan_ops_tbl->ops;
+	struct nbl_dev_common *dev_common = dev_mgt->common_dev;
+	struct nbl_msix_info *msix_info = &dev_common->msix_info;
+	u16 lvec;
+	int ret;
+
+	if (!msix_info->serv_info[NBL_MSIX_MAILBOX_TYPE].num)
+		return 0;
+
+	lvec = msix_info->serv_info[NBL_MSIX_MAILBOX_TYPE].base_vector_id;
+	/*
+	 * Enable sequence: perform set_mailbox_irq RPC in polling mode first.
+	 * Only set NBL_CHAN_IRQ_RDY after RPC succeeds, mirroring disable path.
+	 * This avoids waiting for an interrupt which has not been armed yet.
+	 */
+	ret = disp_ops->set_mailbox_irq(dev_mgt->disp_ops_tbl->priv,
+					lvec, true);
+	if (ret)
+		return ret;
+	chan_ops->set_queue_state(dev_mgt->chan_ops_tbl->priv,
+				  NBL_CHAN_IRQ_RDY,
+				  NBL_CHAN_TYPE_MAILBOX, true);
+	return 0;
+}
+
+static int nbl_dev_disable_mailbox_irq(struct nbl_dev_mgt *dev_mgt)
+{
+	struct nbl_dispatch_ops *disp_ops = dev_mgt->disp_ops_tbl->ops;
+	struct nbl_channel_ops *chan_ops = dev_mgt->chan_ops_tbl->ops;
+	struct nbl_dev_common *dev_common = dev_mgt->common_dev;
+	struct nbl_msix_info *msix_info = &dev_common->msix_info;
+	u16 lvec;
+
+	if (!msix_info->serv_info[NBL_MSIX_MAILBOX_TYPE].num)
+		return 0;
+
+	lvec = msix_info->serv_info[NBL_MSIX_MAILBOX_TYPE].base_vector_id;
+	/*
+	 * Disable sequence invariant: clear the software READY flag first,
+	 * then mask the hardware interrupt. Must not reverse the order.
+	 *
+	 * Clearing NBL_CHAN_IRQ_RDY is what makes an interrupt-mode sender
+	 * fail fast: nbl_chan_set_queue_state() wakes every per-slot wait
+	 * queue on the transition, and nbl_chan_send_msg() tests the flag
+	 * ahead of its timeout branch, so the sender returns -EIO right
+	 * away instead of waiting out NBL_CHAN_ACK_WAIT_TIME (3s) and
+	 * reporting a bogus -ETIMEDOUT / "Channel waiting ack failed".
+	 * Masking first would leave the sleeper blocked on an interrupt
+	 * that is already masked, i.e. guaranteed to time out.
+	 *
+	 * This does NOT preserve in-flight ACKs, and must not be described
+	 * as doing so: the woken sender gives up and resets its slot to
+	 * IDLE, so an ACK arriving afterwards finds a non-WAITING slot and
+	 * is dropped by the receive path ("Skip ack invalid status").
+	 * Interrupt mode is being torn down here; the guarantee is a
+	 * bounded, deterministic failure, not delivery.  In this driver
+	 * every ACK-requesting sender runs from probe/remove and the clean
+	 * task only sends ACK-less replies, so nothing depends on the
+	 * stronger claim today.
+	 *
+	 * The only caller is nbl_dev_stop(): free_irq() blocks until
+	 * any in-flight hardirq handler completes and prevents new interrupts.
+	 * cancel_work_sync() then waits for any already running mailbox cleanup
+	 * work to finish, or cancels queued but unstarted work items before
+	 * final channel destruction. No stuck descriptors linger.
+	 *
+	 * nbl_dev_start()'s unwind path does not reach here: err_free_irq runs
+	 * before IRQ_RDY is set, so only nbl_dev_free_mailbox_irq() applies
+	 * there and no set_mailbox_irq(false) is sent - see the comment on
+	 * that label.
+	 */
+	chan_ops->set_queue_state(dev_mgt->chan_ops_tbl->priv,
+				  NBL_CHAN_IRQ_RDY,
+				  NBL_CHAN_TYPE_MAILBOX, false);
+
+	return disp_ops->set_mailbox_irq(dev_mgt->disp_ops_tbl->priv,
+					 lvec, false);
+}
+
+static int nbl_dev_cfg_msix_map(struct nbl_dev_mgt *dev_mgt)
+{
+	struct nbl_dispatch_ops *disp_ops = dev_mgt->disp_ops_tbl->ops;
+	struct nbl_dev_common *dev_common = dev_mgt->common_dev;
+	struct nbl_msix_info *msix_info = &dev_common->msix_info;
+	bool mask_en = msix_info->serv_info[NBL_MSIX_NET_TYPE].hw_self_mask_en;
+	u16 msix_net_num = msix_info->serv_info[NBL_MSIX_NET_TYPE].num;
+	u16 msix_not_net_num = 0;
+	int err, i;
+
+	msix_info->serv_info[NBL_MSIX_NET_TYPE].base_vector_id = 0;
+	/*
+	 * Calculate base_vector_id for each MSIX service type.
+	 * This relies on NBL_MSIX_TYPE enum being ordered sequentially,
+	 * starting from NBL_MSIX_NET_TYPE.
+	 */
+	for (i = NBL_MSIX_NET_TYPE + 1; i < NBL_MSIX_TYPE_MAX; i++)
+		msix_info->serv_info[i].base_vector_id =
+			msix_info->serv_info[i - 1].base_vector_id +
+			msix_info->serv_info[i - 1].num;
+
+	for (i = 0; i < NBL_MSIX_TYPE_MAX; i++) {
+		if (i == NBL_MSIX_NET_TYPE)
+			continue;
+		msix_not_net_num += msix_info->serv_info[i].num;
+	}
+
+	err = disp_ops->cfg_msix_map(dev_mgt->disp_ops_tbl->priv,
+				     msix_net_num, msix_not_net_num,
+				     mask_en);
+
+	return err;
+}
+
+static int nbl_dev_destroy_msix_map(struct nbl_dev_mgt *dev_mgt)
+{
+	struct nbl_dispatch_ops *disp_ops = dev_mgt->disp_ops_tbl->ops;
+
+	return disp_ops->destroy_msix_map(dev_mgt->disp_ops_tbl->priv);
+}
+
+static int nbl_dev_init_interrupt_scheme(struct nbl_dev_mgt *dev_mgt)
+{
+	struct nbl_dev_common *dev_common = dev_mgt->common_dev;
+	struct nbl_msix_info *msix_info = &dev_common->msix_info;
+	struct nbl_common_info *common = dev_mgt->common;
+	struct irq_affinity affd = { 0 };
+	int needed = 0;
+	int err;
+	int i;
+
+	for (i = 0; i < NBL_MSIX_TYPE_MAX; i++)
+		needed += msix_info->serv_info[i].num;
+
+	/*
+	 * The mailbox vector is the trailing administrative vector;
+	 * reserve it via post_vectors so it is excluded from managed
+	 * affinity spreading. A managed vector can be shut down when
+	 * its last assigned CPU goes offline, which would stall every
+	 * mailbox RPC while NBL_CHAN_IRQ_RDY stays set.
+	 */
+	affd.post_vectors = msix_info->serv_info[NBL_MSIX_MAILBOX_TYPE].num;
+
+	err = pci_alloc_irq_vectors_affinity(common->pdev, needed, needed,
+					     PCI_IRQ_MSIX | PCI_IRQ_AFFINITY,
+					     &affd);
+	if (err < 0) {
+		dev_err(common->dev,
+			"pci_alloc_irq_vectors failed, err = %d\n", err);
+		return err;
+	}
+	if (err != needed) {
+		dev_err(common->dev, "pci_alloc_irq_vectors got %d vecs, need %d\n",
+			err, needed);
+		return -ENOSPC;
+	}
+	return 0;
+}
+
+/*
+ * Release the kernel-side MSI-X vectors here, before the hardware
+ * pcompleter map is destroyed.  pci_free_irq_vectors() ends in
+ * pci_msix_shutdown(), which masks every descriptor by writing the
+ * vector control word in the MSI-X table and then reads mask_base
+ * back to flush that write; those MMIO accesses should reach the
+ * function while FUNCTION_MSIX_MAP is still valid.  This mirrors
+ * nbl_dev_start(), where cfg_msix_map runs before
+ * pci_alloc_irq_vectors_affinity(): the opposite order leaves the
+ * core poking the MSI-X table after destroy_msix_map() has cleared
+ * the valid bit, invalidated the info entries and freed the map
+ * table, and how the device reacts to that is hardware-specific.
+ *
+ * This is not a double free of the devres action.  probe uses
+ * pcim_enable_device(), so pci_alloc_irq_vectors() also registers
+ * pcim_msi_release, but that only calls pci_free_irq_vectors()
+ * again, and pci_disable_msix() returns early once msix_enabled is
+ * clear.
+ *
+ * The handler is expected to be gone by now: both callers run
+ * nbl_dev_free_mailbox_irq() first.
+ */
+static void nbl_dev_clear_interrupt_scheme(struct nbl_dev_mgt *dev_mgt)
+{
+	struct nbl_common_info *common = dev_mgt->common;
+
+	pci_free_irq_vectors(common->pdev);
 }
 
 /* ----------  Channel config  ---------- */
@@ -84,6 +332,14 @@ static void nbl_dev_clean_mailbox_task(struct work_struct *work)
 
 	chan_ops->clean_queue_subtask(dev_mgt->chan_ops_tbl->priv,
 				      NBL_CHAN_TYPE_MAILBOX);
+}
+
+static void nbl_dev_clean_mailbox_schedule(struct nbl_dev_mgt *dev_mgt)
+{
+	struct nbl_dev_common *common_dev = dev_mgt->common_dev;
+	struct nbl_common_info *common = dev_mgt->common;
+
+	queue_work(common->wq, &common_dev->clean_mbx_task);
 }
 
 /* ----------  Dev init process  ---------- */
@@ -252,15 +508,16 @@ int nbl_dev_init(struct nbl_adapter *adapter)
 	 */
 	ret = nbl_dev_setup_common_dev(adapter);
 	if (ret)
-		goto setup_err;
+		return ret;
 
 	if (common->has_ctrl) {
 		ret = nbl_dev_setup_ctrl_dev(adapter);
 		if (ret)
-			goto setup_ctrl_dev_fail;
+			goto out_remove_common_dev;
 	}
 
 	return 0;
+
 /*
  * A failure after the QINFO routing was programmed leaves those entries
  * in hardware: driver_status never goes 1 -> 0 on these paths, so
@@ -269,9 +526,8 @@ int nbl_dev_init(struct nbl_adapter *adapter)
  * bind until this probe succeeds.  The next successful probe overwrites
  * the entries, and a chip reset clears them.
  */
-setup_ctrl_dev_fail:
+out_remove_common_dev:
 	nbl_dev_remove_common_dev(adapter);
-setup_err:
 	return ret;
 }
 
@@ -300,4 +556,172 @@ void nbl_dev_remove(struct nbl_adapter *adapter)
 	nbl_dev_remove_common_dev(adapter);
 	if (common->has_ctrl)
 		nbl_dev_remove_ctrl_dev(adapter);
+}
+
+/* ----------  Dev start process  ---------- */
+int nbl_dev_start(struct nbl_adapter *adapter)
+{
+	struct nbl_dev_mgt *dev_mgt = adapter->core.dev_mgt;
+	struct nbl_dispatch_ops *disp_ops = dev_mgt->disp_ops_tbl->ops;
+	struct nbl_dispatch_mgt *priv = dev_mgt->disp_ops_tbl->priv;
+	struct nbl_dev_common *common_dev = dev_mgt->common_dev;
+	struct nbl_common_info *common = dev_mgt->common;
+	int cleanup_ret;
+	int ret;
+
+	/*
+	 * Startup RPC failures are reported as they are, including the
+	 * -ETIMEDOUT of a 5-6s polling wait against an unresponsive peer.
+	 * nbl_probe() already deferred this PF in nbl_probe_chip_deps()
+	 * until the control PF reached DL_DEV_DRIVER_BOUND, and the core
+	 * only marks a device bound once its whole probe - including the
+	 * control PF's own nbl_core_start() - has returned.  That state,
+	 * not nbl_dev_init(), is what makes a timeout here a real failure
+	 * instead of a "supplier not ready yet" condition: on the control
+	 * PF inbound mailbox work only runs from clean_mbx_task, queued
+	 * by the mailbox hardirq, by the task's own self-requeue, or by
+	 * this function's polling sends - and the control PF uses the
+	 * local dispatch ops, so it sends none.  The responder is armed
+	 * by set_mailbox_irq(true) at the very end of the peer's
+	 * nbl_dev_start(); relaxing the dependency to "func 0 finished
+	 * nbl_dev_init()" would let every sibling RPC sit out the full
+	 * 5-6s polling wait.  Turning -ETIMEDOUT into -EPROBE_DEFER would
+	 * hide it behind dev_dbg() and leave the retry to the next
+	 * unrelated device bind, paying that wait again on every retry.
+	 */
+	ret = nbl_dev_cfg_msix_map(dev_mgt);
+	if (ret)
+		goto err_destroy_map;
+
+	/* Fetch VSI/ETH identity after cfg_msix_map */
+	ret = disp_ops->get_vsi_id(priv, NBL_VSI_DATA, &common->vsi_id);
+	if (ret)
+		goto err_destroy_map;
+	ret = disp_ops->get_eth_id(priv, common->vsi_id, &common->eth_num,
+				   &common->eth_id, &common->logic_eth_id);
+	if (ret)
+		goto err_destroy_map;
+
+	ret = nbl_dev_init_interrupt_scheme(dev_mgt);
+	if (ret)
+		goto err_destroy_map;
+
+	ret = nbl_dev_request_mailbox_irq(dev_mgt);
+	if (ret)
+		goto err_destroy_map;
+
+	ret = nbl_dev_enable_mailbox_irq(dev_mgt);
+	if (ret)
+		goto err_free_irq;
+
+	return 0;
+
+err_free_irq:
+	/*
+	 * nbl_dev_enable_mailbox_irq() only fails before it sets
+	 * NBL_CHAN_IRQ_RDY - the flag is set after its RPC returns - so
+	 * there is no interrupt-mode sender to release and no software
+	 * state to revoke.  The peer-side mailbox routing, if the failed
+	 * RPC did land, is switched off by the destroy_msix_map() below: its
+	 * prepare phase, __nbl_res_intr_prepare_destroy_msix_map(), disables
+	 * mailbox IRQ routing for any CONFIGURED function before the map is
+	 * torn down.  That is what makes skipping set_mailbox_irq(false)
+	 * correct here, whatever way the enable failed - a local
+	 * -ESHUTDOWN/-ENODEV/-EINVAL on the control PF as much as a
+	 * polling-mode -ETIMEDOUT against an unresponsive peer.
+	 */
+	nbl_dev_free_mailbox_irq(dev_mgt);
+err_destroy_map:
+	/*
+	 * Always ask the peer to drop this function's MSI-X map, even when
+	 * the cfg RPC above failed: the teardown prepare phase returns 0
+	 * for a function that is not NBL_INTR_FUNC_CONFIGURED, so it is a
+	 * no-op when nothing landed, but a -ETIMEDOUT only means the ACK
+	 * never arrived - the responder runs to completion before it ACKs.
+	 * In that case the map entry, the intr_net/other_bmap bits, the
+	 * kcalloc()ed vector array and the coherent map table are all
+	 * still owned by the control PF, i.e. host resources of its
+	 * driver, released only when this function is configured again or
+	 * when nbl_intr_mgt_stop() tears the control PF down.  They are not
+	 * firmware state, so skipping the destroy would strand them for a
+	 * PF that has no driver to ever ask for them again.
+	 *
+	 * Kernel vectors are released first, by the
+	 * nbl_dev_clear_interrupt_scheme() below: the PCI core's MSI-X
+	 * shutdown writes the MSI-X table and reads it back, and those
+	 * accesses should land while this function's pcompleter map entry
+	 * is still valid.  The destroy then masks all hardware vectors
+	 * and clears that entry.
+	 *
+	 * For non-control PFs this is a polling-mode mailbox RPC:
+	 * NBL_CHAN_IRQ_RDY is never set on any rollback path, since
+	 * enabling it is the last step of nbl_dev_start().
+	 *
+	 * Note: pci_clear_master() runs in nbl_probe() core_start_err path;
+	 * on a non-control PF it cannot stop DMA using the management PF's
+	 * BDF, this is a known limitation.
+	 */
+	nbl_dev_clear_interrupt_scheme(dev_mgt);
+	cleanup_ret = nbl_dev_destroy_msix_map(dev_mgt);
+	if (cleanup_ret)
+		dev_err(dev_mgt->common->dev,
+			"rollback: destroy MSI-X map failed: %d\n",
+			cleanup_ret);
+
+	cancel_work_sync(&common_dev->clean_mbx_task);
+	return ret;
+}
+
+void nbl_dev_stop(struct nbl_adapter *adapter)
+{
+	struct nbl_dev_mgt *dev_mgt = adapter->core.dev_mgt;
+	struct nbl_dev_common *common_dev = dev_mgt->common_dev;
+	int ret;
+
+	ret = nbl_dev_disable_mailbox_irq(dev_mgt);
+	if (ret)
+		dev_err(dev_mgt->common->dev,
+			"Failed to disable mailbox IRQ: %d\n", ret);
+	nbl_dev_free_mailbox_irq(dev_mgt);
+
+	/*
+	 * Release the kernel vectors before destroying the hardware map:
+	 * the PCI core's MSI-X shutdown writes the MSI-X table and reads
+	 * it back, and those accesses should land while this function's
+	 * pcompleter map entry is still valid (see
+	 * nbl_dev_clear_interrupt_scheme).
+	 */
+	nbl_dev_clear_interrupt_scheme(dev_mgt);
+
+	/*
+	 * Destroy the hardware MSI-X map: masks all device vectors and
+	 * clears the pcompleter map entry.
+	 *
+	 * Best-effort: if the destroy RPC fails, the control PF still owns
+	 * this function's map entry, its intr_net/other_bmap bits and its
+	 * coherent map table.  Those are host resources of that driver,
+	 * released either by a later successful configuration of this
+	 * function - nbl_res_intr_cfg_msix_map() invalidates and rewrites
+	 * the entry on its had_config path - or by nbl_intr_mgt_stop()
+	 * when the control PF is removed, which walks every
+	 * NBL_INTR_FUNC_CONFIGURED function through
+	 * __nbl_res_intr_prepare_destroy_msix_map() and clears the
+	 * FUNCTION_MSIX_MAP valid bit.  Both rewrite the hardware entry
+	 * without a chip reset; nothing else collects it, so a stranded
+	 * one just stays as it is, and nothing requests one.
+	 *
+	 * pci_clear_master() on a non-control PF cannot stop DMA using the
+	 * management PF's BDF.
+	 */
+	ret = nbl_dev_destroy_msix_map(dev_mgt);
+	if (ret)
+		dev_err(dev_mgt->common->dev,
+			"Failed to destroy MSI-X map: %d\n", ret);
+
+	/*
+	 * destroy_msix_map() sends ack-requested messages which may
+	 * requeue clean_mbx_task via polling send path.  Drain work
+	 * after the operation.
+	 */
+	cancel_work_sync(&common_dev->clean_mbx_task);
 }

@@ -25,6 +25,15 @@
 #define NBL_MGT_LOCK_RETRY_MIN_US	1000
 #define NBL_MGT_LOCK_RETRY_MAX_US	2000
 #define NBL_MGT_LOCK_MAX_RETRIES	50
+int nbl_core_start(struct nbl_adapter *adapter)
+{
+	return nbl_dev_start(adapter);
+}
+
+void nbl_core_stop(struct nbl_adapter *adapter)
+{
+	nbl_dev_stop(adapter);
+}
 
 struct nbl_adapter *nbl_core_init(struct pci_dev *pdev,
 				  struct nbl_init_param *param)
@@ -277,6 +286,25 @@ static int nbl_probe(struct pci_dev *pdev,
 	int err;
 
 	nbl_get_func_param(pdev, id->driver_data, &param);
+	/*
+	 * Reject a function with neither capability before touching any
+	 * hardware.  nbl_disp_refresh_ctrl_ops() leaves every dispatch op NULL
+	 * for such a function, while nbl_dev_start() reaches cfg_msix_map,
+	 * get_vsi_id, get_eth_id and (on unwind) destroy_msix_map through
+	 * those pointers.  The state is reachable through driver_override:
+	 * binding this driver to a function that is not in nbl_id_table (a VF,
+	 * or a non-func-0 PF) makes pci_match_device() pass the dummy ID whose
+	 * driver_data 0 leaves has_ctrl and has_net both clear.  A foreign
+	 * device at func 0 is unaffected: nbl_get_func_param() gives any
+	 * func 0 device has_ctrl, so it is not rejected here and still runs
+	 * nbl_core_init() with the local control dispatch ops, as it did
+	 * before this check existed.
+	 */
+	if (!param.caps.has_ctrl && !param.caps.has_net) {
+		dev_err(dev, "Function has neither ctrl nor net capability\n");
+		return -EOPNOTSUPP;
+	}
+
 	err = pcim_enable_device(pdev);
 	if (err) {
 		dev_err(&pdev->dev, "Failed to enable PCI dev, err=%d\n", err);
@@ -314,8 +342,12 @@ static int nbl_probe(struct pci_dev *pdev,
 
 	pci_set_master(pdev);
 	pci_set_drvdata(pdev, adapter);
-
-	return 0;
+	err = nbl_core_start(adapter);
+	if (err) {
+		nbl_core_remove(adapter);
+		pci_clear_master(pdev);
+	}
+	return err;
 }
 
 static void nbl_remove(struct pci_dev *pdev)
@@ -326,6 +358,7 @@ static void nbl_remove(struct pci_dev *pdev)
 		return;
 	pci_set_drvdata(pdev, NULL);
 
+	nbl_core_stop(adapter);
 	/*
 	 * Stop bus mastering before any teardown runs.
 	 *
