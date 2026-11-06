@@ -403,6 +403,15 @@ static void tidss_crtc_destroy(struct drm_crtc *crtc)
 	kfree(tcrtc);
 }
 
+static void tidss_crtc_atomic_print_state(struct drm_printer *p,
+					  const struct drm_crtc_state *state)
+{
+	const struct tidss_crtc_state *tstate = to_tidss_crtc_state(state);
+
+	drm_printf_indent(p, 1, "bus_format=0x%08x\n", tstate->bus_format);
+	drm_printf_indent(p, 1, "bus_flags=0x%08x\n", tstate->bus_flags);
+}
+
 static const struct drm_crtc_funcs tidss_crtc_funcs = {
 	.destroy = tidss_crtc_destroy,
 	.set_config = drm_atomic_helper_set_config,
@@ -410,6 +419,7 @@ static const struct drm_crtc_funcs tidss_crtc_funcs = {
 	.atomic_create_state = tidss_crtc_create_state,
 	.atomic_duplicate_state = tidss_crtc_duplicate_state,
 	.atomic_destroy_state = tidss_crtc_destroy_state,
+	.atomic_print_state = tidss_crtc_atomic_print_state,
 	.enable_vblank = tidss_crtc_enable_vblank,
 	.disable_vblank = tidss_crtc_disable_vblank,
 };
