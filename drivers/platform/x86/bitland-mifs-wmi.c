@@ -114,6 +114,18 @@ static const struct bitland_mifs_quirks default_quirks = {
 	.num_profile_entries = ARRAY_SIZE(default_profile_entries),
 };
 
+static const struct bitland_profile_entry tm2135_profile_entries[] = {
+	{ PLATFORM_PROFILE_LOW_POWER,		0x02 },
+	{ PLATFORM_PROFILE_BALANCED,		0x01 },
+	{ PLATFORM_PROFILE_PERFORMANCE,		0x03 },
+};
+
+static const struct bitland_mifs_quirks tm2135_quirks = {
+	.profile_entries = tm2135_profile_entries,
+	.num_profile_entries = ARRAY_SIZE(tm2135_profile_entries),
+	.skip_ac_type_check = true,
+};
+
 static const struct bitland_profile_entry tm2424_profile_entries[] = {
 	{ PLATFORM_PROFILE_LOW_POWER,   0x02 },
 	{ PLATFORM_PROFILE_LOW_POWER,   0x0a, true },
@@ -129,6 +141,13 @@ static const struct bitland_mifs_quirks tm2424_quirks = {
 };
 
 static const struct dmi_system_id bitland_mifs_dmi_table[] = {
+	{
+		.matches = {
+			DMI_EXACT_MATCH(DMI_SYS_VENDOR, "TIMI"),
+			DMI_EXACT_MATCH(DMI_BOARD_NAME, "TM2135"),
+		},
+		.driver_data = (void *)&tm2135_quirks,
+	},
 	{
 		.matches = {
 			DMI_EXACT_MATCH(DMI_SYS_VENDOR, "XIAOMI"),
