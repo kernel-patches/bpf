@@ -8,11 +8,9 @@
 #include "../vkms_drv.h"
 #include "../vkms_luts.h"
 
-#define TEST_LUT_SIZE 16
-
 MODULE_IMPORT_NS("EXPORTED_FOR_KUNIT_TESTING");
 
-static struct drm_color_lut test_linear_array[TEST_LUT_SIZE] = {
+static struct drm_color_lut test_linear_array[] = {
 	{ 0x0, 0x0, 0x0, 0 },
 	{ 0x1111, 0x1111, 0x1111, 0 },
 	{ 0x2222, 0x2222, 0x2222, 0 },
@@ -84,7 +82,7 @@ static const struct vkms_color_test_lerp_params color_test_lerp_cases[] = {
 
 static const struct vkms_color_lut test_linear_lut = {
 	.base = test_linear_array,
-	.lut_length = TEST_LUT_SIZE,
+	.lut_length = ARRAY_SIZE(test_linear_array),
 	.channel_value2index_ratio = 0xf000fll
 };
 
@@ -96,7 +94,7 @@ static void vkms_color_test_get_lut_index(struct kunit *test)
 	lut_index = get_lut_index(&test_linear_lut, test_linear_array[0].red);
 	KUNIT_EXPECT_EQ(test, drm_fixp2int(lut_index), 0);
 
-	for (i = 0; i < TEST_LUT_SIZE; i++) {
+	for (i = 0; i < test_linear_lut.lut_length; i++) {
 		lut_index = get_lut_index(&test_linear_lut, test_linear_array[i].red);
 		KUNIT_EXPECT_EQ(test, drm_fixp2int_ceil(lut_index), i);
 	}
