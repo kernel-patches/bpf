@@ -326,6 +326,7 @@ struct net_device *mpnic_netdev_alloc(struct mpnic_dev *mpd)
 	mpn->num_napi = queues;
 
 	netdev->features |=
+		NETIF_F_GSO_IPXIP6 |
 		NETIF_F_SG |
 		NETIF_F_HW_CSUM |
 		NETIF_F_RXCSUM |
@@ -336,6 +337,7 @@ struct net_device *mpnic_netdev_alloc(struct mpnic_dev *mpd)
 
 	netdev->hw_features |= netdev->features;
 	netdev->vlan_features |= netdev->features;
+	netdev->hw_enc_features |= netdev->features;
 
 	netdev->min_mtu = IPV6_MIN_MTU;
 	netdev->max_mtu = MPNIC_MAX_JUMBO_FRAME_SIZE - ETH_HLEN;
