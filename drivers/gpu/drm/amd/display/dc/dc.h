@@ -556,6 +556,7 @@ struct dc_update_descriptor {
 struct dc;
 struct dc_plane_state;
 struct dc_state;
+struct link_dpms_ctx;
 
 struct dc_cap_funcs {
 	bool (*get_dcc_compression_cap)(const struct dc *dc,
@@ -1931,6 +1932,7 @@ struct dc_scratch_space {
 	void *priv;
 
 	struct ddc_service *ddc;
+	struct link_dpms_ctx *dpms_ctx;
 
 	enum dp_panel_mode panel_mode;
 	bool panel_mode_initialized;
