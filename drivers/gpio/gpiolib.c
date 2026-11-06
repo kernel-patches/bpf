@@ -5360,10 +5360,11 @@ struct gpio_descs *__must_check gpiod_get_array(struct device *dev,
 	}
 	if (descs->info)
 		dev_dbg(dev,
-			"GPIO array info: chip=%s, size=%d, get_mask=%lx, set_mask=%lx, invert_mask=%lx\n",
+			"GPIO array info: chip=%s, size=%d, get_mask=%*pb, set_mask=%*pb, invert_mask=%*pb\n",
 			descs->info->gdev->label, descs->info->size,
-			*descs->info->get_mask, *descs->info->set_mask,
-			*descs->info->invert_mask);
+			descs->info->size, descs->info->get_mask,
+			descs->info->size, descs->info->set_mask,
+			descs->info->size, descs->info->invert_mask);
 	return_ptr(descs);
 }
 EXPORT_SYMBOL_GPL(gpiod_get_array);
