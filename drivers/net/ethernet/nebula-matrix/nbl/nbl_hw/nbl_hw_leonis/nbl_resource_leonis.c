@@ -13,6 +13,8 @@ static struct nbl_resource_ops res_ops = {
 	.cfg_msix_map = nbl_res_intr_cfg_msix_map,
 	.destroy_msix_map = nbl_res_intr_destroy_msix_map,
 	.set_mailbox_irq = nbl_res_intr_set_mailbox_irq,
+	.init_module = nbl_res_chip_init_module,
+	.deinit_module = nbl_res_chip_deinit_module,
 };
 
 static struct nbl_resource_mgt *
@@ -46,7 +48,8 @@ nbl_res_setup_ops(struct device *dev, struct nbl_resource_mgt *res_mgt)
 		return ERR_PTR(-ENOMEM);
 	if (!res_ops.get_vsi_id || !res_ops.get_eth_id ||
 	    !res_ops.cfg_msix_map || !res_ops.destroy_msix_map ||
-	    !res_ops.set_mailbox_irq)
+	    !res_ops.set_mailbox_irq || !res_ops.init_module ||
+	    !res_ops.deinit_module)
 		return ERR_PTR(-EINVAL);
 	res_ops_tbl->ops = &res_ops;
 	res_ops_tbl->priv = res_mgt;
