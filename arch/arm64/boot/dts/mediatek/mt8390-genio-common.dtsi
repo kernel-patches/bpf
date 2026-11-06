@@ -1539,10 +1539,10 @@
 	#address-cells = <1>;
 	#size-cells = <0>;
 
-	hub_2_0: hub@1 {
+	hub_3_0: hub@1 {
 		compatible = "usb451,8025";
 		reg = <1>;
-		peer-hub = <&hub_3_0>;
+		peer-hub = <&hub_2_0>;
 		reset-gpios = <&pio 7 GPIO_ACTIVE_HIGH>;
 		vdd-supply = <&usb_hub_fixed_3v3>;
 
@@ -1560,10 +1560,10 @@
 		};
 	};
 
-	hub_3_0: hub@2 {
+	hub_2_0: hub@2 {
 		compatible = "usb451,8027";
 		reg = <2>;
-		peer-hub = <&hub_2_0>;
+		peer-hub = <&hub_3_0>;
 		reset-gpios = <&pio 7 GPIO_ACTIVE_HIGH>;
 		vdd-supply = <&usb_hub_fixed_3v3>;
 
