@@ -29,7 +29,7 @@
 #include "link/protocols/link_dp_phy.h"
 #include "link/protocols/link_dp_training_fixed_vs_pe_retimer.h"
 #include "link/protocols/link_dp_capability.h"
-#include "link/link_dpms.h"
+#include "link/link_dpms_v1.h"
 #include "resource.h"
 #include "dm_helpers.h"
 #include "dc_dmub_srv.h"
@@ -91,7 +91,7 @@ static void dp_retrain_link_dp_test(struct dc_link *link,
 	link_get_master_pipes_with_dpms_on(link, state, &count, pipes);
 
 	for (i = 0; i < count; i++) {
-		link_set_dpms_off(pipes[i]);
+		link->dc->link_srv->set_dpms_off(pipes[i]);
 		pipes[i]->link_config.dp_link_settings = *link_setting;
 		update_dp_encoder_resources_for_test_harness(
 				link->dc,

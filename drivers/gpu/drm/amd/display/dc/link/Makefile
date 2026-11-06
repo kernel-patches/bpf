@@ -23,7 +23,7 @@
 # It abstracts the control and status of back end pipe such as DIO, HPO, DPIA,
 # PHY, HPD, DDC and etc).
 
-LINK = link_detection.o link_dpms.o link_factory.o link_resource.o \
+LINK = link_detection.o link_dpms_v1.o link_factory.o link_resource.o \
 link_validation.o
 
 AMD_DAL_LINK = $(addprefix $(AMDDALPATH)/dc/link/, \

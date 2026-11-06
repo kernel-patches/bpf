@@ -35,7 +35,7 @@
  * boundary between link and stream is not clearly defined.
  */
 
-#include "link_dpms.h"
+#include "link_dpms_v1.h"
 #include "link_hwss.h"
 #include "link_validation.h"
 #include "accessories/link_dp_trace.h"
@@ -2403,7 +2403,7 @@ static struct vpg *get_vpg(struct pipe_ctx *pipe_ctx)
 		return pipe_ctx->stream_res.stream_enc->vpg;
 }
 
-enum dc_status link_set_dpms_off(struct pipe_ctx *pipe_ctx)
+enum dc_status link_set_dpms_off_v1(struct pipe_ctx *pipe_ctx)
 {
 	DC_LOGGER_INIT(pipe_ctx->stream->ctx->logger);
 	struct dc_stream_state *stream = pipe_ctx->stream;
@@ -2794,7 +2794,7 @@ static enum dc_status link_set_dpms_on_post_enable_link(
 	return DC_DPMS_SUCCESS;
 }
 
-enum dc_status link_set_dpms_on(
+enum dc_status link_set_dpms_on_v1(
 		struct dc_state *state,
 		struct pipe_ctx *pipe_ctx
 )

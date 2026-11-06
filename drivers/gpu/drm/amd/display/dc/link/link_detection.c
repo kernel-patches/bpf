@@ -30,7 +30,7 @@
  * directly from connected receivers.
  */
 
-#include "link_dpms.h"
+#include "link_dpms_v1.h"
 #include "link_detection.h"
 #include "link_hwss.h"
 #include "protocols/link_edp_panel_control.h"

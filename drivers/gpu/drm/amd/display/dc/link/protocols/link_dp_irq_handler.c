@@ -36,7 +36,7 @@
 #include "link_edp_panel_control.h"
 #include "link_dp_panel_replay.h"
 #include "link/accessories/link_dp_trace.h"
-#include "link/link_dpms.h"
+#include "link/link_dpms_v1.h"
 #include "dm_helpers.h"
 #include "link_dp_dpia_bw.h"
 
@@ -332,7 +332,7 @@ void dp_handle_link_loss(struct dc_link *link)
 	link_get_master_pipes_with_dpms_on(link, state, &count, pipes);
 
 	for (i = 0; i < count; i++)
-		link_set_dpms_off(pipes[i]);
+		link->dc->link_srv->set_dpms_off(pipes[i]);
 
 	for (i = count - 1; i >= 0; i--) {
 		// Always use max settings here for DP 1.4a LL Compliance CTS
@@ -344,7 +344,7 @@ void dp_handle_link_loss(struct dc_link *link)
 			pipes[i]->link_config.dp_link_settings.link_spread =
 					link->verified_link_cap.link_spread;
 		}
-		link_set_dpms_on(link->dc->current_state, pipes[i]);
+		link->dc->link_srv->set_dpms_on(link->dc->current_state, pipes[i]);
 	}
 }
 

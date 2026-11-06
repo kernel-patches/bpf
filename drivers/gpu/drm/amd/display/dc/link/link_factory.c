@@ -30,7 +30,7 @@
 #include "link_detection.h"
 #include "link_resource.h"
 #include "link_validation.h"
-#include "link_dpms.h"
+#include "link_dpms_v1.h"
 #include "accessories/link_dp_cts.h"
 #include "accessories/link_dp_trace.h"
 #include "protocols/link_ddc.h"
@@ -113,8 +113,8 @@ static void construct_link_service_validation(struct link_service *link_srv)
  */
 static void construct_link_service_dpms(struct link_service *link_srv)
 {
-	link_srv->set_dpms_on = link_set_dpms_on;
-	link_srv->set_dpms_off = link_set_dpms_off;
+	link_srv->set_dpms_on = link_set_dpms_on_v1;
+	link_srv->set_dpms_off = link_set_dpms_off_v1;
 	link_srv->resume = link_resume;
 	link_srv->blank_all_dp_displays = link_blank_all_dp_displays;
 	link_srv->blank_all_edp_displays = link_blank_all_edp_displays;
