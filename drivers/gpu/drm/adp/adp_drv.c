@@ -515,7 +515,7 @@ static int adp_drm_bind(struct device *dev)
 
 	writel(ADP_CTRL_FIFO_ON, adp->fe + ADP_CTRL);
 
-	adp->next_bridge = drmm_of_get_bridge(&adp->drm, dev->of_node, 0, 0);
+	adp->next_bridge = of_drm_get_bridge_by_endpoint(dev->of_node, 0, 0);
 	if (IS_ERR(adp->next_bridge)) {
 		dev_err(dev, "failed to find next bridge");
 		return PTR_ERR(adp->next_bridge);
@@ -523,17 +523,21 @@ static int adp_drm_bind(struct device *dev)
 
 	err = adp_setup_mode_config(adp);
 	if (err < 0)
-		return err;
+		goto err_put_next_bridge;
 
 	err = request_irq(adp->fe_irq, adp_fe_irq, 0, "adp-fe", adp);
 	if (err)
-		return err;
+		goto err_put_next_bridge;
 
 	err = drm_dev_register(&adp->drm, 0);
 	if (err)
-		return err;
+		goto err_put_next_bridge;
 
 	return 0;
+
+err_put_next_bridge:
+	drm_bridge_clear_and_put(&adp->next_bridge);
+	return err;
 }
 
 static void adp_drm_unbind(struct device *dev)
@@ -544,6 +548,7 @@ static void adp_drm_unbind(struct device *dev)
 	drm_dev_unregister(drm);
 	drm_atomic_helper_shutdown(drm);
 	free_irq(adp->fe_irq, adp);
+	drm_bridge_clear_and_put(&adp->next_bridge);
 }
 
 static const struct component_master_ops adp_master_ops = {
