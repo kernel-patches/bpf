@@ -85,6 +85,7 @@ TARGETS += mount_setattr
 TARGETS += move_mount_set_group
 TARGETS += mqueue
 TARGETS += mseal_system_mappings
+TARGETS += namespaces
 TARGETS += nci
 TARGETS += net
 TARGETS += net/af_unix
