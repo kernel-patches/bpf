@@ -35,5 +35,6 @@ resolve-btfids-flags-y :=
 resolve-btfids-flags-$(CONFIG_WERROR) += --fatal_warnings
 resolve-btfids-flags-$(if $(KBUILD_EXTMOD),y) += --distill_base
 resolve-btfids-flags-$(if $(KBUILD_VERBOSE),y) += --verbose
+resolve-btfids-flags-$(CONFIG_FTRACE_MCOUNT_USE_PATCHABLE_FUNCTION_ENTRY) += --patchable_ftrace
 
 export RESOLVE_BTFIDS_FLAGS := $(resolve-btfids-flags-y)
