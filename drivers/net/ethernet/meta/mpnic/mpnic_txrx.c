@@ -223,29 +223,44 @@ static void mpnic_tx_fill_hdrs(struct sk_buff *skb, struct mpnic_tx_hdrs *hdrs)
 		return;
 	}
 
-	hdrs->l4_type = MPNIC_TWD_L4_TYPE_TCP;
+	if (skb_shinfo(skb)->gso_type & (SKB_GSO_TCPV4 | SKB_GSO_TCPV6))
+		hdrs->l4_type = MPNIC_TWD_L4_TYPE_TCP;
+	else
+		hdrs->l4_type = MPNIC_TWD_L4_TYPE_UDP;
+
 	hdrs->i3len = skb_transport_offset(skb) - skb_network_offset(skb);
 	hdrs->l3_type = ip_hdr(skb)->version == 4 ?
 			MPNIC_TWD_L3_TYPE_IPV4 : MPNIC_TWD_L3_TYPE_IPV6;
 }
 
 static bool
-mpnic_tx_lso(struct mpnic_ring *ring, struct sk_buff *skb, __le64 *meta)
+mpnic_tx_lso(struct mpnic_ring *ring, struct sk_buff *skb, __le64 *meta,
+	     const struct mpnic_tx_hdrs *hdrs)
 {
 	struct skb_shared_info *shinfo;
 	unsigned int l4len, hdrlen;
-	struct tcphdr *tcph;
-	__be16 payload_len;
+	unsigned char *l4hdr;
 
 	if (skb_cow_head(skb, 0))
 		return true;
 
 	shinfo = skb_shinfo(skb);
+	l4hdr = skb_checksum_start(skb);
 
-	tcph = (struct tcphdr *)skb_checksum_start(skb);
-	l4len = __tcp_hdrlen(tcph);
-	payload_len = cpu_to_be16(skb->len - skb_checksum_start_offset(skb));
-	csum_replace_by_diff(&tcph->check, (__force __wsum)payload_len);
+	if (hdrs->l4_type == MPNIC_TWD_L4_TYPE_TCP) {
+		struct tcphdr *tcph = (struct tcphdr *)l4hdr;
+		__be16 payload_len;
+
+		l4len = __tcp_hdrlen(tcph);
+		payload_len = cpu_to_be16(skb->len -
+					  skb_checksum_start_offset(skb));
+		csum_replace_by_diff(&tcph->check, (__force __wsum)payload_len);
+	} else {
+		struct udphdr *udph = (struct udphdr *)l4hdr;
+
+		l4len = sizeof(*udph);
+		csum_replace_by_diff(&udph->check, (__force __wsum)udph->len);
+	}
 
 	*meta |= cpu_to_le64(FIELD_PREP(MPNIC_TWD_L4_HLEN, l4len / 4) |
 			     FIELD_PREP(MPNIC_TWD_MSS, shinfo->gso_size) |
@@ -277,7 +292,7 @@ mpnic_tx_offloads(struct mpnic_ring *ring, struct sk_buff *skb, __le64 *meta)
 					skb->csum_offset / 2));
 
 	if (skb_is_gso(skb)) {
-		if (mpnic_tx_lso(ring, skb, meta))
+		if (mpnic_tx_lso(ring, skb, meta, &hdrs))
 			return true;
 	} else {
 		*meta |= cpu_to_le64(MPNIC_TWD_FLAG_REQ_CSO);
