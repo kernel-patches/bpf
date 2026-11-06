@@ -1577,7 +1577,12 @@ int kvm_pgtable_stage2_split(struct kvm_pgtable *pgt, u64 addr, u64 size,
 {
 	struct kvm_pgtable_walker walker = {
 		.cb	= stage2_split_walker,
-		.flags	= KVM_PGTABLE_WALK_LEAF,
+			  /*
+			   * Skip level 3 mappings as we're only interested in
+			   * splitting hugepages.
+			   */
+		.flags	= KVM_PGTABLE_WALK_LEAF |
+			  FIELD_PREP(KVM_PGTABLE_WALK_SKIP_OFFSET, 1),
 		.arg	= mc,
 	};
 	int ret;
