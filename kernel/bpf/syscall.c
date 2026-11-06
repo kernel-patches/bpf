@@ -6756,6 +6756,8 @@ syscall_prog_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		       ? NULL : &bpf_sys_bpf_proto;
 	case BPF_FUNC_btf_find_by_name_kind:
 		return &bpf_btf_find_by_name_kind_proto;
+	case BPF_FUNC_btf_get_struct_member_info:
+		return &bpf_btf_get_struct_member_info_proto;
 	case BPF_FUNC_sys_close:
 		return &bpf_sys_close_proto;
 	case BPF_FUNC_kallsyms_lookup_name:

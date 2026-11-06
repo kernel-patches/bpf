@@ -6065,6 +6065,18 @@ union bpf_attr {
  *		0 on success.
  *
  *		**-ENOENT** if the bpf_local_storage cannot be found.
+ *
+ * long bpf_btf_get_struct_member_info(u32 btf_id, int btf_obj_fd, const char *name, int name_sz)
+ *	Description
+ *		Find a struct member with given *name* in the struct type identified
+ *		by *btf_id* in the BTF object referenced by *btf_obj_fd* (or in
+ *		vmlinux BTF if *btf_obj_fd* is 0). If *name* is **NULL** (and
+ *		*name_sz* is 0), return the size of the struct instead.
+ *	Return
+ *		Returns the member's byte offset in the lower 32 bits and the
+ *		member's index in the upper 32 bits when *name* is non-**NULL**,
+ *		or the byte size of the struct when *name* is **NULL**. On error, a
+ *		negative error code is returned.
  */
 #define ___BPF_FUNC_MAPPER(FN, ctx...)			\
 	FN(unspec, 0, ##ctx)				\
@@ -6279,6 +6291,7 @@ union bpf_attr {
 	FN(user_ringbuf_drain, 209, ##ctx)		\
 	FN(cgrp_storage_get, 210, ##ctx)		\
 	FN(cgrp_storage_delete, 211, ##ctx)		\
+	FN(btf_get_struct_member_info, 212, ##ctx)	\
 	/* This helper list is effectively frozen. If you are trying to	\
 	 * add a new helper, you should add a kfunc instead which has	\
 	 * less stability guarantees. See Documentation/bpf/kfuncs.rst	\

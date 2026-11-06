@@ -9682,6 +9682,79 @@ const struct bpf_func_proto bpf_btf_find_by_name_kind_proto = {
 	.arg4_type	= ARG_ANYTHING,
 };
 
+BPF_CALL_4(bpf_btf_get_struct_member_info, u32, btf_id, int, btf_obj_fd,
+	   const char *, name, int, name_sz)
+{
+	const struct btf_member *member;
+	const struct btf_type *t;
+	struct btf *btf;
+	long ret = -EINVAL;
+	u32 i;
+
+	if (!name) {
+		if (name_sz)
+			return -EINVAL;
+	} else if (name_sz <= 1 || !*name || name[name_sz - 1]) {
+		return -EINVAL;
+	}
+
+	if (btf_obj_fd) {
+		btf = btf_get_by_fd(btf_obj_fd);
+		if (IS_ERR(btf))
+			return PTR_ERR(btf);
+	} else {
+		btf = bpf_get_btf_vmlinux();
+		if (IS_ERR(btf))
+			return PTR_ERR(btf);
+		if (!btf)
+			return -EINVAL;
+		btf_get(btf);
+	}
+
+	t = btf_type_by_id(btf, btf_id);
+	if (!t || !__btf_type_is_struct(t))
+		goto out;
+
+	if (!name) {
+		ret = t->size;
+		goto out;
+	}
+
+	ret = -ENOENT;
+	for_each_member(i, t, member) {
+		const char *mname = btf_name_by_offset(btf, member->name_off);
+
+		if (!mname || !*mname)
+			continue;
+		if (!strcmp(mname, name)) {
+			u32 moff;
+
+			if (__btf_member_bitfield_size(t, member)) {
+				ret = -EOPNOTSUPP;
+				goto out;
+			}
+			moff = __btf_member_bit_offset(t, member) / 8;
+			ret = moff | (((u64)i) << 32);
+			goto out;
+		}
+	}
+
+out:
+	btf_put(btf);
+	return ret;
+}
+
+const struct bpf_func_proto bpf_btf_get_struct_member_info_proto = {
+	.func		= bpf_btf_get_struct_member_info,
+	.gpl_only	= false,
+	.might_sleep	= true,
+	.ret_type	= RET_INTEGER,
+	.arg1_type	= ARG_ANYTHING,
+	.arg2_type	= ARG_ANYTHING,
+	.arg3_type	= ARG_PTR_TO_MEM | MEM_RDONLY | PTR_MAYBE_NULL,
+	.arg4_type	= ARG_MEM_SIZE_OR_ZERO,
+};
+
 BTF_ID_LIST_GLOBAL(btf_tracing_ids, MAX_BTF_TRACING_TYPE)
 #define BTF_TRACING_TYPE(name, type) BTF_ID(struct, type)
 BTF_TRACING_TYPE_xxx
