@@ -4673,7 +4673,7 @@ int xfrm_migrate(const struct xfrm_selector *sel, u8 dir, u8 type,
 		 struct xfrm_encap_tmpl *encap, u32 if_id,
 		 struct netlink_ext_ack *extack, struct xfrm_user_offload *xuo)
 {
-	int i, err, nx_cur = 0, nx_new = 0;
+	int i, j, err, nx_cur = 0, nx_new = 0;
 	struct xfrm_policy *pol = NULL;
 	struct xfrm_state *x, *xc;
 	struct xfrm_state *x_cur[XFRM_MAX_DEPTH];
@@ -4702,6 +4702,17 @@ int xfrm_migrate(const struct xfrm_selector *sel, u8 dir, u8 type,
 	/* Stage 2 - find and update state(s) */
 	for (i = 0, mp = m; i < num_migrate; i++, mp++) {
 		if ((x = xfrm_migrate_state_find(mp, net, if_id))) {
+			for (j = 0; j < nx_cur; j++) {
+				if (x_cur[j] == x)
+					break;
+			}
+			if (j < nx_cur) {
+				xfrm_state_put(x);
+				NL_SET_ERR_MSG(extack,
+					       "Multiple MIGRATE entries resolve to the same SA");
+				err = -EINVAL;
+				goto restore_state;
+			}
 			x_cur[nx_cur] = x;
 			nx_cur++;
 			mp->encap = encap;
