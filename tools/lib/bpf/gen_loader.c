@@ -1151,6 +1151,20 @@ void bpf_gen__prog_load(struct bpf_gen *gen,
 		emit(gen, BPF_STX_MEM(BPF_W, BPF_REG_0, BPF_REG_7,
 				      offsetof(union bpf_attr, attach_btf_obj_fd)));
 	}
+	if (prog_type == BPF_PROG_TYPE_STRUCT_OPS) {
+		move_blob2blob(gen, attr_field(prog_load_attr, expected_attach_type), 4,
+			       load_attr->expected_attach_type);
+		emit2(gen, BPF_LD_IMM64_RAW_FULL(BPF_REG_1, BPF_PSEUDO_MAP_IDX_VALUE,
+						 0, 0, 0, load_attr->attach_btf_id));
+		emit(gen, BPF_LDX_MEM(BPF_DW, BPF_REG_7, BPF_REG_1, 0));
+		emit2(gen, BPF_LD_IMM64_RAW_FULL(BPF_REG_0, BPF_PSEUDO_MAP_IDX_VALUE,
+						 0, 0, 0, prog_load_attr));
+		emit(gen, BPF_STX_MEM(BPF_W, BPF_REG_0, BPF_REG_7,
+				      offsetof(union bpf_attr, attach_btf_id)));
+		emit(gen, BPF_ALU64_IMM(BPF_RSH, BPF_REG_7, 32));
+		emit(gen, BPF_STX_MEM(BPF_W, BPF_REG_0, BPF_REG_7,
+				      offsetof(union bpf_attr, attach_btf_obj_fd)));
+	}
 	emit_relos(gen, insns_off);
 	/* emit PROG_LOAD command */
 	emit_sys_bpf(gen, BPF_PROG_LOAD, prog_load_attr, attr_size);
