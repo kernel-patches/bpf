@@ -732,6 +732,11 @@ okay:
 
 	file_update_time(vmf->vma->vm_file);
 	if (folio->mapping != inode->i_mapping) {
+		/*
+		 * Truncate already dropped this folio. Drop the write
+		 * range too, or reclaim will read it as a buffer_head.
+		 */
+		kfree(folio_detach_private(folio));
 		folio_unlock(folio);
 		ret = VM_FAULT_LOCKED|VM_FAULT_NOPAGE;
 		goto out;
