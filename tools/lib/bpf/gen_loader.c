@@ -508,7 +508,7 @@ void bpf_gen__map_create(struct bpf_gen *gen,
 			 __u32 key_size, __u32 value_size, __u32 max_entries,
 			 struct bpf_map_create_opts *map_attr, int map_idx)
 {
-	int attr_size = offsetofend(union bpf_attr, map_extra);
+	int attr_size = offsetofend(union bpf_attr, value_type_btf_obj_fd);
 	bool close_inner_map_fd = false;
 	int map_create_attr, idx;
 	union bpf_attr attr;
@@ -532,7 +532,7 @@ void bpf_gen__map_create(struct bpf_gen *gen,
 		 map_name, map_idx, map_type, map_attr->btf_value_type_id,
 		 map_create_attr, attr_size);
 
-	if (map_attr->btf_value_type_id)
+	if (map_attr->btf_value_type_id || map_attr->btf_vmlinux_value_type_id)
 		/* populate union bpf_attr with btf_fd saved in the stack earlier */
 		move_stack2blob(gen, attr_field(map_create_attr, btf_fd), 4,
 				stack_off(btf_fd));
@@ -542,6 +542,27 @@ void bpf_gen__map_create(struct bpf_gen *gen,
 		move_stack2blob(gen, attr_field(map_create_attr, inner_map_fd), 4,
 				stack_off(inner_map_fd));
 		close_inner_map_fd = true;
+		break;
+	case BPF_MAP_TYPE_STRUCT_OPS:
+		move_blob2blob(gen, attr_field(map_create_attr, value_size), 4,
+			       value_size);
+		emit2(gen, BPF_LD_IMM64_RAW_FULL(BPF_REG_1, BPF_PSEUDO_MAP_IDX_VALUE,
+						 0, 0, 0, map_attr->btf_vmlinux_value_type_id));
+		emit(gen, BPF_LDX_MEM(BPF_DW, BPF_REG_0, BPF_REG_1, 0));
+		emit2(gen, BPF_LD_IMM64_RAW_FULL(BPF_REG_1, BPF_PSEUDO_MAP_IDX_VALUE,
+						 0, 0, 0, map_create_attr));
+		emit(gen, BPF_STX_MEM(BPF_W, BPF_REG_1, BPF_REG_0,
+				      offsetof(union bpf_attr, btf_vmlinux_value_type_id)));
+		emit(gen, BPF_ALU64_IMM(BPF_RSH, BPF_REG_0, 32));
+		emit(gen, BPF_JMP_IMM(BPF_JEQ, BPF_REG_0, 0, 4));
+		emit(gen, BPF_STX_MEM(BPF_W, BPF_REG_1, BPF_REG_0,
+				      offsetof(union bpf_attr, value_type_btf_obj_fd)));
+		emit(gen, BPF_LDX_MEM(BPF_W, BPF_REG_0, BPF_REG_1,
+				      offsetof(union bpf_attr, map_flags)));
+		emit(gen, BPF_ALU32_IMM(BPF_OR, BPF_REG_0,
+					tgt_endian(BPF_F_VTYPE_BTF_OBJ_FD)));
+		emit(gen, BPF_STX_MEM(BPF_W, BPF_REG_1, BPF_REG_0,
+				      offsetof(union bpf_attr, map_flags)));
 		break;
 	default:
 		break;
@@ -568,6 +589,9 @@ void bpf_gen__map_create(struct bpf_gen *gen,
 	debug_ret(gen, "map_create %s idx %d type %d value_size %d value_btf_id %d",
 		  map_name, map_idx, map_type, value_size,
 		  map_attr->btf_value_type_id);
+	if (map_type == BPF_MAP_TYPE_STRUCT_OPS)
+		emit_sys_close_blob(gen,
+				    attr_field(map_create_attr, value_type_btf_obj_fd));
 	emit_check_err(gen);
 	/* remember map_fd in the stack, if successful */
 	if (map_idx < 0) {
