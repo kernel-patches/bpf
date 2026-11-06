@@ -7,9 +7,6 @@ $schema: http://devicetree.org/meta-schemas/core.yaml#
 
 title: TI DP83867 ethernet PHY
 
-allOf:
-  - $ref: ethernet-phy.yaml#
-
 # only the PHY ID, not every PHY with the c22 fallback
 select:
   properties:
@@ -67,11 +64,6 @@ properties:
     description: |
       MAC Interface Impedance control to set the programmable output impedance
       to a maximum value (70 ohms).
-      Note: Specifying an io_impedance_ctrl nvmem cell or one of the
-        ti,min-output-impedance, ti,max-output-impedance properties
-        are mutually exclusive. If more than one is present, an nvmem
-        cell takes precedence over ti,max-output-impedance, which in
-        turn takes precedence over ti,min-output-impedance.
 
   tx-fifo-depth:
     $ref: /schemas/types.yaml#/definitions/uint32
@@ -132,6 +124,15 @@ properties:
     description: |
       Transmitt FIFO depth- see dt-bindings/net/ti-dp83867.h for applicable
       values.
+
+allOf:
+  - $ref: ethernet-phy.yaml#
+  - not:
+      required: [nvmem-cells, "ti,min-output-impedance"]
+  - not:
+      required: [nvmem-cells, "ti,max-output-impedance"]
+  - not:
+      required: ["ti,min-output-impedance", "ti,max-output-impedance"]
 
 required:
   - reg
