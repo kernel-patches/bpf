@@ -2328,9 +2328,9 @@ again:
 		}
 		if (!widen && flow_cmp_pkt_range(s, t))
 			continue;
-		if (!widen && flow_has_room(env, *nr_states) &&
+		if (flow_has_room(env, *nr_states) &&
 		    (flow_unset_differs(&t->st, &s->st) ||
-		     flow_join_makes_up(flow, &t->st, &s->st)))
+		     (!widen && flow_join_makes_up(flow, &t->st, &s->st))))
 			continue;
 		/*
 		 * Around a loop too:
@@ -2516,8 +2516,8 @@ static int flow_end_walk(struct bpf_verifier_env *env, struct flow_set *set, str
 
 	list_for_each_entry_reverse(t, &set->list, node) {
 		/*
-		 * The rules that hold for what comes around a loop, see flow_merge(). And one
-		 * more: the iteration has set a register, see flow_unset_differs(). The join
+		 * The rules that hold for what comes around a loop, see flow_merge(). One of
+		 * them: the iteration has set a register, see flow_unset_differs(). The join
 		 * would be without it.
 		 */
 		if (flow_trips_behind(&t->st, &s->st) ||
