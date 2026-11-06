@@ -317,13 +317,18 @@ static void ppkb_close(struct input_dev *input)
 	ppkb_set_scan(client, false);
 }
 
+static void ppkb_put_fwnode(void *data)
+{
+	fwnode_handle_put(data);
+}
+
 static int ppkb_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
 	unsigned int phys_rows, phys_cols;
 	struct pinephone_keyboard *ppkb;
 	u8 info[PPKB_MATRIX_SIZE + 1];
-	struct device_node *i2c_bus;
+	struct fwnode_handle *fwnode;
 	int ret;
 	int error;
 
@@ -371,14 +376,19 @@ static int ppkb_probe(struct i2c_client *client)
 
 	i2c_set_clientdata(client, ppkb);
 
-	i2c_bus = of_get_child_by_name(dev->of_node, "i2c");
-	if (i2c_bus) {
+	fwnode = device_get_named_child_node(dev, "i2c");
+	if (fwnode) {
 		ppkb->adapter.owner = THIS_MODULE;
 		ppkb->adapter.algo = &ppkb_adap_algo;
 		ppkb->adapter.algo_data = client;
 		ppkb->adapter.dev.parent = dev;
-		ppkb->adapter.dev.of_node = i2c_bus;
 		strscpy(ppkb->adapter.name, DRV_NAME, sizeof(ppkb->adapter.name));
+
+		error = devm_add_action_or_reset(dev, ppkb_put_fwnode, fwnode);
+		if (error)
+			return error;
+
+		device_set_node(&ppkb->adapter.dev, fwnode);
 
 		error = devm_i2c_add_adapter(dev, &ppkb->adapter);
 		if (error) {
