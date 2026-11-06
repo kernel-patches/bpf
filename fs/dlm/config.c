@@ -533,8 +533,17 @@ static struct config_group *make_space(struct config_group *g, const char *name)
 static void drop_space(struct config_group *g, struct config_item *i)
 {
 	struct dlm_space *sp = config_item_to_space(i);
+	struct dlm_member_gone *mb_gone, *mb_safe;
 
 	/* assert list_empty(&sp->members) */
+
+	mutex_lock(&sp->members_lock);
+	list_for_each_entry_safe(mb_gone, mb_safe, &sp->members_gone, list) {
+		list_del(&mb_gone->list);
+		sp->members_gone_count--;
+		kfree(mb_gone);
+	}
+	mutex_unlock(&sp->members_lock);
 
 	configfs_remove_default_groups(&sp->group);
 	config_item_put(i);
