@@ -1432,6 +1432,52 @@ static int check_interleave_cap(struct cxl_decoder *cxld, int iw, int ig)
 	return 0;
 }
 
+static int check_root_interleave(struct cxl_region *cxlr)
+{
+	struct cxl_decoder *cxld = &cxlr->cxlrd->cxlsd.cxld;
+	struct cxl_region_params *p = &cxlr->params;
+	int root_ig = cxld->interleave_granularity;
+	int root_iw = cxld->interleave_ways;
+
+	if (root_iw == 1)
+		return 0;
+
+	if (p->interleave_granularity > root_ig) {
+		dev_dbg(&cxlr->dev,
+			"granularity %d exceeds root decoder granularity %d\n",
+			p->interleave_granularity, root_ig);
+		return -ENXIO;
+	}
+
+	/*
+	 * A same-granularity region below a power-of-two root may repeat
+	 * the root targets, spanning a multiple of the root span.
+	 */
+	if (is_power_of_2(root_iw) && p->interleave_granularity == root_ig)
+		return 0;
+
+	/* Span is one complete pass through the interleave pattern */
+	if (root_iw * root_ig != p->interleave_ways * p->interleave_granularity) {
+		dev_dbg(&cxlr->dev,
+			"region span %d (%d ways at %d) does not match root span %d (%d ways at %d)\n",
+			p->interleave_ways * p->interleave_granularity,
+			p->interleave_ways, p->interleave_granularity,
+			root_iw * root_ig, root_iw, root_ig);
+		return -ENXIO;
+	}
+
+	return 0;
+}
+
+/* Region IG is finer than the IG of its interleaving root decoder */
+static bool cxl_region_is_finer_than_root(struct cxl_region *cxlr)
+{
+	struct cxl_decoder *cxld = &cxlr->cxlrd->cxlsd.cxld;
+
+	return cxld->interleave_ways > 1 &&
+	       cxld->interleave_granularity > cxlr->params.interleave_granularity;
+}
+
 /*
  * The "distance" between peer downstream ports represents which
  * endpoint positions in the region interleave a given port can
@@ -1448,6 +1494,14 @@ static int cxl_port_peer_distance(struct cxl_port *port, struct cxl_region *cxlr
 	struct cxl_region_ref *cxl_rr_iter;
 	struct cxl_port *iter = port;
 	int distance = 1;
+
+	/*
+	 * A finer-than-root region refines toward the endpoints, so peer
+	 * targets at the finest interleaving level occupy consecutive region
+	 * positions.
+	 */
+	if (cxl_region_is_finer_than_root(cxlr))
+		return 1;
 
 	do {
 		cxl_rr_iter = cxl_rr_load(iter, cxlr);
@@ -1476,15 +1530,17 @@ static int cxl_port_parent_interleave(struct cxl_port *port,
 	int parent_iw, parent_ig;
 
 	if (is_cxl_root(parent_port)) {
-		/*
-		 * Root decoder IG is always set to value in CFMWS which
-		 * may be different than this region's IG.  We can use the
-		 * region's IG here since interleave_granularity_store()
-		 * does not allow interleaved host-bridges with
-		 * root IG != region IG.
-		 */
-		parent_ig = p->interleave_granularity;
 		parent_iw = cxlrd->cxlsd.cxld.interleave_ways;
+		if (parent_iw > 1) {
+			parent_ig = cxlrd->cxlsd.cxld.interleave_granularity;
+		} else {
+			/*
+			 * A single-way root does not interleave, so its
+			 * granularity does not constrain the region interleave.
+			 * Use the region granularity instead.
+			 */
+			parent_ig = p->interleave_granularity;
+		}
 		if (!is_power_of_2(parent_iw))
 			parent_iw /= 3;
 	} else {
@@ -1521,7 +1577,7 @@ static int cxl_port_calc_interleave(struct cxl_port *port, struct cxl_region *cx
 				    struct cxl_region_ref *cxl_rr, int *out_iw,
 				    int *out_ig)
 {
-	struct cxl_port *parent_port = to_cxl_port(port->dev.parent);
+	struct cxl_region_params *p = &cxlr->params;
 	struct cxl_decoder *cxld = cxl_rr->decoder;
 	int parent_iw, parent_ig, iw, ig, rc;
 	struct cxl_switch_decoder *cxlsd;
@@ -1537,16 +1593,24 @@ static int cxl_port_calc_interleave(struct cxl_port *port, struct cxl_region *cx
 		return -EINVAL;
 	}
 
-	/*
-	 * Interleave granularity is a multiple of @parent_port granularity.
-	 * Multiplier is the parent port interleave ways.
-	 */
-	ig = parent_ig * parent_iw;
+	/* Finer-than-root regions refine granularity toward the endpoints */
+	if (cxl_region_is_finer_than_root(cxlr)) {
+		ig = parent_ig / iw;
+
+		if (ig < p->interleave_granularity) {
+			dev_dbg(&cxlr->dev,
+				"%s:%s: granularity %d is finer than region granularity %d\n",
+				dev_name(port->uport_dev), dev_name(&port->dev),
+				ig, p->interleave_granularity);
+			return -ENXIO;
+		}
+	} else {
+		ig = parent_ig * parent_iw;
+	}
 
 	if (!granularity_valid(ig)) {
-		dev_dbg(&cxlr->dev,
-			"%s: invalid granularity calculation (%d * %d)\n",
-			dev_name(&parent_port->dev), parent_ig, parent_iw);
+		dev_dbg(&cxlr->dev, "%s:%s: invalid granularity: %d\n",
+			dev_name(port->uport_dev), dev_name(&port->dev), ig);
 		return -EINVAL;
 	}
 
@@ -2185,6 +2249,10 @@ static int cxl_region_attach(struct cxl_region *cxlr,
 		dev_dbg(&cxlr->dev, "interleave config missing\n");
 		return -ENXIO;
 	}
+
+	rc = check_root_interleave(cxlr);
+	if (rc)
+		return rc;
 
 	if (p->nr_targets >= p->interleave_ways) {
 		dev_dbg(&cxlr->dev, "region already has %d endpoints\n",
@@ -3590,8 +3658,8 @@ static int unaligned_region_offset_to_dpa_result(struct cxl_region *cxlr,
 	 * a dpa_offset independent of the target device and then enumerate
 	 * and test that dpa_offset against each candidate endpoint decoder.
 	 */
-	gran = cxld->interleave_granularity;
-	interleave_width = gran * cxld->interleave_ways;
+	gran = p->interleave_granularity;
+	interleave_width = gran * p->interleave_ways;
 	interleave_index = div64_u64(offset, interleave_width);
 	gran_offset = do_div(tmp, gran);
 
