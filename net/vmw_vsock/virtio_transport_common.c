@@ -1046,14 +1046,17 @@ EXPORT_SYMBOL_GPL(virtio_transport_seqpacket_has_data);
 
 static s64 virtio_transport_has_space(struct virtio_vsock_sock *vvs)
 {
+	s64 tx_buf_size = virtio_transport_tx_buf_size(vvs);
 	s64 bytes;
 
 	/* Use s64 arithmetic so if the peer shrinks peer_buf_alloc while
 	 * we have bytes in flight (tx_cnt - peer_fwd_cnt), the subtraction
 	 * does not underflow.
 	 */
-	bytes = (s64)virtio_transport_tx_buf_size(vvs) -
-		(vvs->tx_cnt - vvs->peer_fwd_cnt);
+	bytes = tx_buf_size - (vvs->tx_cnt - vvs->peer_fwd_cnt);
+
+	/* peer_fwd_cnt is peer-controlled, bytes_unsent is not. */
+	bytes = min_t(s64, bytes, tx_buf_size - (s64)vvs->bytes_unsent);
 	if (bytes < 0)
 		bytes = 0;
 
