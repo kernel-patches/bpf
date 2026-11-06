@@ -50,47 +50,54 @@ static union acpi_object *apmf_if_call(struct amd_pmf_dev *pdev, int fn, struct 
 	return buffer.pointer;
 }
 
+static int amd_pmf_if_verify_buffer(struct amd_pmf_dev *pdev,
+				    union acpi_object *info, size_t out_sz)
+{
+	size_t size;
+
+	if (info->type != ACPI_TYPE_BUFFER) {
+		dev_err(pdev->dev, "object is not a buffer\n");
+		return -EINVAL;
+	}
+
+	if (!info->buffer.pointer || info->buffer.length < 2) {
+		dev_err(pdev->dev, "buffer pointer is NULL or too small\n");
+		return -EINVAL;
+	}
+
+	size = *(u16 *)info->buffer.pointer;
+	if (info->buffer.length < size) {
+		dev_err(pdev->dev, "buffer smaller than headersize %u < %zu\n",
+			info->buffer.length, size);
+		return -EINVAL;
+	}
+
+	if (size < out_sz) {
+		dev_err(pdev->dev, "buffer too small %zu\n", size);
+		return -EINVAL;
+	}
+
+	return (int)size;
+}
+
 int apmf_if_call_store_buffer(struct amd_pmf_dev *pdev, int fn, void *dest, size_t out_sz)
 {
 	union acpi_object *info;
-	size_t size;
-	int err = 0;
+	int size;
 
 	info = apmf_if_call(pdev, fn, NULL);
 	if (!info)
 		return -EIO;
 
-	if (info->type != ACPI_TYPE_BUFFER) {
-		dev_err(pdev->dev, "object is not a buffer\n");
-		err = -EINVAL;
+	size = amd_pmf_if_verify_buffer(pdev, info, out_sz);
+	if (size < 0)
 		goto out;
-	}
-
-	if (info->buffer.length < 2) {
-		dev_err(pdev->dev, "buffer too small\n");
-		err = -EINVAL;
-		goto out;
-	}
-
-	size = *(u16 *)info->buffer.pointer;
-	if (info->buffer.length < size) {
-		dev_err(pdev->dev, "buffer smaller then headersize %u < %zu\n",
-			info->buffer.length, size);
-		err = -EINVAL;
-		goto out;
-	}
-
-	if (size < out_sz) {
-		dev_err(pdev->dev, "buffer too small %zu\n", size);
-		err = -EINVAL;
-		goto out;
-	}
 
 	memcpy(dest, info->buffer.pointer, out_sz);
 
 out:
 	kfree(info);
-	return err;
+	return size < 0 ? size : 0;
 }
 
 static union acpi_object *apts_if_call(struct amd_pmf_dev *pdev, u32 state_index)
@@ -124,37 +131,20 @@ static union acpi_object *apts_if_call(struct amd_pmf_dev *pdev, u32 state_index
 int apts_if_call_store_buffer(struct amd_pmf_dev *pdev, u32 index, void *data, size_t out_sz)
 {
 	union acpi_object *info;
-	size_t size;
-	int err = 0;
+	int size;
 
 	info = apts_if_call(pdev, index);
 	if (!info)
 		return -EIO;
 
-	if (info->type != ACPI_TYPE_BUFFER) {
-		dev_err(pdev->dev, "object is not a buffer\n");
-		err = -EINVAL;
+	size = amd_pmf_if_verify_buffer(pdev, info, out_sz);
+	if (size < 0)
 		goto out;
-	}
-
-	size = *(u16 *)info->buffer.pointer;
-	if (info->buffer.length < size) {
-		dev_err(pdev->dev, "buffer smaller than header size %u < %zu\n",
-			info->buffer.length, size);
-		err = -EINVAL;
-		goto out;
-	}
-
-	if (size < out_sz) {
-		dev_err(pdev->dev, "buffer too small %zu\n", size);
-		err = -EINVAL;
-		goto out;
-	}
 
 	memcpy(data, info->buffer.pointer, out_sz);
 out:
 	kfree(info);
-	return err;
+	return size < 0 ? size : 0;
 }
 
 int apmf_os_power_slider_update(struct amd_pmf_dev *pdev, u8 event)
