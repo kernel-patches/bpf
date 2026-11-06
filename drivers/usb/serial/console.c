@@ -15,6 +15,7 @@
 #include <linux/slab.h>
 #include <linux/tty.h>
 #include <linux/console.h>
+#include <linux/ctype.h>
 #include <linux/serial.h>
 #include <linux/usb.h>
 #include <linux/usb/serial.h>
@@ -70,7 +71,7 @@ static int usb_console_setup(struct console *co, char *options)
 	if (options) {
 		baud = simple_strtoul(options, NULL, 10);
 		s = options;
-		while (*s >= '0' && *s <= '9')
+		while (isdigit(*s))
 			s++;
 		if (*s)
 			parity = *s++;
