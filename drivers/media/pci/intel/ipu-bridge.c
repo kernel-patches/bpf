@@ -126,6 +126,8 @@ static const struct ipu_sensor_config ipu_supported_sensors[] = {
 	IPU_SENSOR_CONFIG("SONY471A", 1, 200000000),
 	/* Sony IMX471 (found on Lenovo X1 Carbon G14) */
 	IPU_SENSOR_CONFIG("TBE20A0", 1, 200000000),
+	/* Sony IMX681 */
+	IPU_SENSOR_CONFIG("SONY0681", 1, 969600000),
 	/* STMicroelectronics VD55G1 (found on Lenovo X1 Carbon G14) */
 	IPU_SENSOR_CONFIG("TBE20A1", 1, 402000000),
 	/* Toshiba T4KA3 */
