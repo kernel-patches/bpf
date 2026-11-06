@@ -61,8 +61,17 @@
 			thermal-sensor@4c {
 				compatible = "ti,tmp451";
 				reg = <0x4c>;
+				vcc-supply = <&vdd_1v8_ao>;
 			};
 		};
+	};
+
+	vdd_1v8_ao: regulator-vdd-1v8-ao {
+		compatible = "regulator-fixed";
+		regulator-name = "VDD_1V8_AO";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+		regulator-always-on;
 	};
 
 	thermal-zones {
