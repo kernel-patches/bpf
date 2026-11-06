@@ -11602,7 +11602,8 @@ static bool arg_needs_caller(const struct bpf_verifier_state *state,
 	if (reg_is_pkt_pointer(reg) && reg->id)
 		return true;
 	/* it checks how much of the packet is there, for the caller */
-	if (reg->type == PTR_TO_PACKET_END && !sub->recursive)
+	if ((reg->type == PTR_TO_PACKET_END ||
+	     (reg->type == PTR_TO_PACKET && sub->loads_pkt_end)) && !sub->recursive)
 		return true;
 	/* or whether there is something to point to */
 	return type_may_be_null(reg->type) && !sub->recursive;

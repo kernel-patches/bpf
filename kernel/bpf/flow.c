@@ -714,6 +714,8 @@ static enum flow_kind flow_loaded_kind(struct bpf_verifier_env *env, const struc
 		env->ops->is_valid_access(insn->off, size, BPF_READ, env->prog, &info);
 	/* it notes what the prog reads, and this is a question */
 	env->prog->tstamp_type_access = tstamp;
+	if (valid && info.reg_type == PTR_TO_PACKET_END)
+		bpf_find_containing_subprog(env, insn - env->prog->insnsi)->loads_pkt_end = true;
 	/*
 	 * Only the context has pointers that are shorter than a register. A base that nothing is
 	 * known about can be the context: it came out of a struct, or only some paths have it.
