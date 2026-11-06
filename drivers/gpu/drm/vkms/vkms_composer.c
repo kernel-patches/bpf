@@ -75,6 +75,24 @@ VISIBLE_IF_KUNIT u16 lerp_u16(u16 a, u16 b, s64 t)
 }
 EXPORT_SYMBOL_IF_KUNIT(lerp_u16);
 
+static inline u16 lut_channel_value(const struct drm_color_lut *lut,
+				    enum lut_channel channel)
+{
+	switch (channel) {
+	case LUT_RED:
+		return lut->red;
+	case LUT_BLUE:
+		return lut->blue;
+	case LUT_GREEN:
+		return lut->green;
+	case LUT_RESERVED:
+		DRM_DEBUG_DRIVER("LUT_RESERVED channel should not be accessed");
+		return 0;
+	}
+	DRM_DEBUG_DRIVER("unknown LUT channel");
+	return 0;
+}
+
 VISIBLE_IF_KUNIT s64 get_lut_index(const struct vkms_color_lut *lut, u16 channel_value)
 {
 	s64 color_channel_fp = drm_int2fixp(channel_value);
@@ -86,8 +104,8 @@ EXPORT_SYMBOL_IF_KUNIT(get_lut_index);
 VISIBLE_IF_KUNIT u16 apply_lut_to_channel_value(const struct vkms_color_lut *lut, u16 channel_value,
 						enum lut_channel channel)
 {
+	const struct drm_color_lut *lut_y_floor, *lut_y_ceil;
 	s64 lut_index = get_lut_index(lut, channel_value);
-	u16 *floor_lut_value, *ceil_lut_value;
 	u16 floor_channel_value, ceil_channel_value;
 
 	/*
@@ -96,15 +114,15 @@ VISIBLE_IF_KUNIT u16 apply_lut_to_channel_value(const struct vkms_color_lut *lut
 	 */
 	static_assert(sizeof(struct drm_color_lut) == sizeof(__u16) * 4);
 
-	floor_lut_value = (__u16 *)&lut->base[drm_fixp2int(lut_index)];
+	lut_y_floor = &lut->base[drm_fixp2int(lut_index)];
 	if (drm_fixp2int(lut_index) == (lut->lut_length - 1))
 		/* We're at the end of the LUT array, use same value for ceil and floor */
-		ceil_lut_value = floor_lut_value;
+		lut_y_ceil = lut_y_floor;
 	else
-		ceil_lut_value = (__u16 *)&lut->base[drm_fixp2int_ceil(lut_index)];
+		lut_y_ceil = &lut->base[drm_fixp2int_ceil(lut_index)];
 
-	floor_channel_value = floor_lut_value[channel];
-	ceil_channel_value = ceil_lut_value[channel];
+	floor_channel_value = lut_channel_value(lut_y_floor, channel);
+	ceil_channel_value = lut_channel_value(lut_y_ceil, channel);
 
 	return lerp_u16(floor_channel_value, ceil_channel_value,
 			lut_index & DRM_FIXED_DECIMAL_MASK);
