@@ -1451,6 +1451,11 @@ static int __bpf_async_init(struct bpf_async_kern *async, struct bpf_map *map, u
 		bpf_async_cancel_cb(async, cb);
 		return -EPERM;
 	}
+	if (type == BPF_ASYNC_TYPE_WQ &&
+	    !bpf_map_value_is_linked(map, cb->value)) {
+		bpf_async_cancel_cb(async, cb);
+		return -ENOENT;
+	}
 
 	return 0;
 }
@@ -1570,6 +1575,9 @@ static int __bpf_async_set_callback(struct bpf_async_kern *async, void *callback
 		return -EINVAL;
 	if (!atomic64_read(&map->usercnt))
 		return -EPERM;
+	if (cb->type == BPF_ASYNC_TYPE_WQ &&
+	    !bpf_map_value_is_linked(map, cb->value))
+		return -EINVAL;
 
 	return bpf_async_update_prog_callback(cb, prog, callback_fn);
 }
@@ -3523,7 +3531,8 @@ __bpf_kfunc void bpf_throw(u64 cookie)
  *
  * Return: 0 on success; -EINVAL for invalid flags; -EBUSY if already
  * initialized; -ENOMEM on allocation failure; -EPERM if the map has no user
- * reference.
+ * reference; -ENOENT if the current map lookup does not return this value
+ * when the membership check is reached.
  */
 __bpf_kfunc int bpf_wq_init(struct bpf_wq *wq, void *p__const_map, unsigned int flags)
 {
@@ -3573,8 +3582,8 @@ __bpf_kfunc int bpf_wq_start(struct bpf_wq *wq, unsigned int flags)
  * Success does not prevent concurrent cancellation.
  *
  * Return: 0 on success; -EINVAL for invalid flags, if @wq was not initialized,
- * or if its containing value was already invalidated; -EPERM if the map has
- * no user references.
+ * if its containing value was already invalidated, or if the current map
+ * lookup does not return that value; -EPERM if the map has no user references.
  */
 __bpf_kfunc int bpf_wq_set_callback(struct bpf_wq *wq,
 				    int (callback_fn)(void *map, int *key, void *value),
