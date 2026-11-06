@@ -476,7 +476,6 @@ transparently, and the are deprecated.
 
 The funcions to remove are:
  - devm_drm_of_get_bridge()
- - drmm_of_get_bridge()
  - drm_panel_bridge_remove()
  - drmm_drm_panel_bridge_release()
  - devm_drm_panel_bridge_release()
