@@ -1725,6 +1725,9 @@ void cipso_v4_error(struct sk_buff *skb, int error, u32 gateway)
 	 * so we can not use icmp_send and IPCB here.
 	 */
 
+	if (skb_unclone(skb, GFP_ATOMIC))
+		return;
+
 	memset(&parm, 0, sizeof(parm));
 	parm.opt.optlen = ip_hdr(skb)->ihl * 4 - sizeof(struct iphdr);
 	rcu_read_lock();
