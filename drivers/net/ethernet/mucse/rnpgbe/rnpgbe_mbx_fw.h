@@ -15,6 +15,7 @@ enum MUCSE_FW_CMD {
 	GET_MAC_ADDRESS = 0x0602,
 	RESET_HW        = 0x0603,
 	LINK_CHANGE_EVT = 0x0608,
+	GET_LANE_STATUS = 0x0610,
 	LINK_REPORT_EN  = 0x0613,
 	PHY_LINK_SET    = 0x0630,
 	SET_PHY_UP      = 0x0800,
@@ -26,6 +27,25 @@ enum MUCSE_FW_CMD {
 #define RNPGBE_FW_ADV_1000_FULL		BIT(4)
 #define RNPGBE_FW_ADV_10_HALF		BIT(10)
 #define RNPGBE_FW_ADV_100_HALF		BIT(11)
+
+struct mucse_link_info {
+	u8 reserved0[4];
+	__le16 status;
+	u8 phy_addr;
+	u8 reserved1;
+	__le32 speed;
+	__le32 reserved2[4];
+	__le32 supported;
+	__le32 phy_id;
+	__le32 advertising;
+} __packed;
+
+#define MUCSE_LINK_UP		BIT(0)
+#define MUCSE_LINK_FULL_DUPLEX	BIT(1)
+#define MUCSE_LINK_AUTONEG	BIT(2)
+#define MUCSE_LINK_TP		BIT(7)
+#define MUCSE_LINK_BACKPLANE	BIT(12)
+#define MUCSE_LINK_MDIX		GENMASK(14, 13)
 
 struct mucse_hw_info {
 	u8 link_stat;
@@ -47,6 +67,7 @@ struct mucse_hw_info {
 } __packed;
 
 #define ST_STATUS_LLDP_STATUS_MASK        BIT(12)
+#define ST_STATUS_MDIX_MASK               GENMASK(11, 10)
 
 #define DUPLEX_BIT                        BIT(0)
 struct st_status {
@@ -88,6 +109,9 @@ struct mbx_fw_cmd_req {
 			__le32 tp_mdix_ctrl;
 		} phy_link_set;
 		struct {
+			__le32 port;
+		} get_link;
+		struct {
 			/* LINK_REPORT_EN uses its own 16-bit payload layout:
 			 * status precedes port_mask.
 			 */
@@ -123,6 +147,7 @@ struct mbx_fw_cmd_reply {
 			} addrs[4];
 		} mac_addr;
 		struct mucse_hw_info hw_info;
+		struct mucse_link_info link_info;
 	};
 } __packed;
 
@@ -156,6 +181,7 @@ int mucse_mbx_get_macaddr(struct mucse_hw *hw, int pfvfnum,
 			  u8 *mac_addr, int port);
 int mucse_mbx_set_link(struct mucse_hw *hw, u32 advertising, bool autoneg,
 		       u32 speed, u32 duplex, u32 mdix_ctrl);
+int mucse_mbx_get_link(struct mucse_hw *hw, struct mucse_link_info *info);
 int mucse_mbx_phyup(struct mucse_hw *hw, bool is_phyup);
 int mucse_mbx_link_report(struct mucse_hw *hw, bool is_report);
 void mucse_fw_irq_handler(struct mucse_hw *hw);

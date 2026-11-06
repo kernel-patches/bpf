@@ -39,11 +39,21 @@ enum {
 	mucse_fw_link_report_en,
 };
 
+struct mucse_link_config {
+	u32 supported;
+	u32 advertising;
+	u32 speed;
+	u16 status;
+	u8 phy_addr;
+	u8 duplex;
+};
+
 struct mucse_hw {
 	void __iomem *hw_addr;
 	void __iomem *ring_msix_base;
 	struct pci_dev *pdev;
 	struct mucse_mbx_info mbx;
+	struct mucse_link_config link_config;
 	int port;
 	int speed;
 	u32 fw_version;
@@ -51,6 +61,8 @@ struct mucse_hw {
 	u16 cycles_per_us;
 	u8 pfvfnum;
 	u8 duplex;
+	u8 mdix_ctrl;
+	u8 mdix;
 };
 
 struct rnpgbe_tx_desc {
@@ -249,6 +261,7 @@ struct mucse {
 int rnpgbe_get_permanent_mac(struct mucse_hw *hw, u8 *perm_addr);
 int rnpgbe_reset_hw(struct mucse_hw *hw);
 int rnpgbe_setup_default_link(struct mucse_hw *hw);
+int rnpgbe_init_link_config(struct mucse_hw *hw);
 int rnpgbe_send_notify(struct mucse_hw *hw,
 		       bool enable,
 		       int mode);
