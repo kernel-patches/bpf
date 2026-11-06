@@ -8,6 +8,7 @@
 #include <linux/slab.h>
 #include <net/netdev_lock.h>
 #include <net/page_pool/helpers.h>
+#include <net/tcp.h>
 
 #include "mpnic.h"
 #include "mpnic_netdev.h"
@@ -16,6 +17,10 @@
 struct mpnic_xmit_cb {
 	u32 bytecount;
 	u8 desc_count;
+};
+
+struct mpnic_tx_hdrs {
+	unsigned int i3len;
 };
 
 #define MPNIC_XMIT_CB(__skb) ((struct mpnic_xmit_cb *)((__skb)->cb))
@@ -208,6 +213,34 @@ err_dma:
 	return true;
 }
 
+static void mpnic_tx_fill_hdrs(struct sk_buff *skb, struct mpnic_tx_hdrs *hdrs)
+{
+	hdrs->i3len = skb_checksum_start(skb) - skb_network_header(skb);
+}
+
+static void
+mpnic_tx_offloads(struct mpnic_ring *ring, struct sk_buff *skb, __le64 *meta)
+{
+	struct mpnic_tx_hdrs hdrs = {};
+
+	if (skb->ip_summed != CHECKSUM_PARTIAL)
+		return;
+
+	mpnic_tx_fill_hdrs(skb, &hdrs);
+
+	*meta |= cpu_to_le64(FIELD_PREP(MPNIC_TWD_CSUM_OFFSET,
+					skb->csum_offset / 2) |
+			     MPNIC_TWD_FLAG_REQ_CSO);
+
+	u64_stats_update_begin(&ring->stats.syncp);
+	u64_stats_inc(&ring->stats.twq.csum_partial);
+	u64_stats_update_end(&ring->stats.syncp);
+
+	*meta |= cpu_to_le64(FIELD_PREP(MPNIC_TWD_L2_HLEN,
+					skb_mac_header_len(skb) / 2) |
+			     FIELD_PREP(MPNIC_TWD_L3_IHLEN, hdrs.i3len / 2));
+}
+
 #define MPNIC_MIN_FRAME_LEN	60
 
 static netdev_tx_t mpnic_xmit_frame_ring(struct sk_buff *skb,
@@ -229,6 +262,8 @@ static netdev_tx_t mpnic_xmit_frame_ring(struct sk_buff *skb,
 
 	MPNIC_XMIT_CB(skb)->bytecount = skb->len;
 	MPNIC_XMIT_CB(skb)->desc_count = 0;
+
+	mpnic_tx_offloads(ring, skb, meta);
 
 	if (mpnic_tx_map(ring, skb, meta))
 		goto err_free;
@@ -254,6 +289,30 @@ netdev_tx_t mpnic_xmit_frame(struct sk_buff *skb, struct net_device *dev)
 	struct mpnic_net *mpn = netdev_priv(dev);
 
 	return mpnic_xmit_frame_ring(skb, mpn->tx[skb_get_queue_mapping(skb)]);
+}
+
+netdev_features_t mpnic_features_check(struct sk_buff *skb,
+				       struct net_device *dev,
+				       netdev_features_t features)
+{
+	unsigned int l2len, i3len;
+
+	if (skb->ip_summed != CHECKSUM_PARTIAL)
+		return features;
+
+	l2len = skb_mac_header_len(skb);
+	if (skb_vlan_tag_present(skb))
+		l2len += VLAN_HLEN;
+	i3len = skb_checksum_start(skb) - skb_network_header(skb);
+
+	if ((l2len | i3len | skb->csum_offset) % 2 ||
+	    !FIELD_FIT(MPNIC_TWD_L2_HLEN, l2len / 2) ||
+	    !FIELD_FIT(MPNIC_TWD_L3_IHLEN, i3len / 2) ||
+	    !FIELD_FIT(MPNIC_TWD_CSUM_OFFSET, skb->csum_offset / 2) ||
+	    l2len + i3len + sizeof(struct tcphdr) + MAX_TCP_OPTION_SPACE > 256)
+		return features & ~(NETIF_F_CSUM_MASK | NETIF_F_GSO_MASK);
+
+	return features;
 }
 
 static void mpnic_clean_twq0(struct mpnic_napi_vector *nv, int napi_budget,
@@ -721,6 +780,7 @@ static void mpnic_aggregate_ring_twq_counters(struct mpnic_base_stats *base,
 					      struct mpnic_ring *twq)
 {
 	base->tx.dropped += u64_stats_read(&twq->stats.twq.dropped);
+	base->tx.csum_partial += u64_stats_read(&twq->stats.twq.csum_partial);
 	base->tx.stop += u64_stats_read(&twq->stats.twq.stop);
 }
 

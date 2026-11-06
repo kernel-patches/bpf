@@ -144,6 +144,7 @@ static const struct net_device_ops mpnic_netdev_ops = {
 	.ndo_stop		= mpnic_stop,
 	.ndo_validate_addr	= eth_validate_addr,
 	.ndo_start_xmit		= mpnic_xmit_frame,
+	.ndo_features_check	= mpnic_features_check,
 	.ndo_get_stats64	= mpnic_get_stats64,
 };
 
@@ -200,6 +201,7 @@ static void mpnic_get_queue_stats_tx(struct net_device *dev, int idx,
 	u64 bytes, packets, stop, wake;
 	struct mpnic_q_triad *qt;
 	unsigned int start;
+	u64 csum_partial;
 
 	if (!txr)
 		return;
@@ -217,11 +219,13 @@ static void mpnic_get_queue_stats_tx(struct net_device *dev, int idx,
 	stats = &txr->stats;
 	do {
 		start = u64_stats_fetch_begin(&stats->syncp);
+		csum_partial = u64_stats_read(&stats->twq.csum_partial);
 		stop = u64_stats_read(&stats->twq.stop);
 	} while (u64_stats_fetch_retry(&stats->syncp, start));
 
 	tx->bytes = bytes;
 	tx->packets = packets;
+	tx->needs_csum = csum_partial;
 	tx->stop = stop;
 	tx->wake = wake;
 }
@@ -237,6 +241,7 @@ static void mpnic_get_base_stats(struct net_device *dev,
 
 	tx->bytes = base->tx.bytes;
 	tx->packets = base->tx.packets;
+	tx->needs_csum = base->tx.csum_partial;
 	tx->stop = base->tx.stop;
 	tx->wake = base->tx.wake;
 
@@ -303,7 +308,10 @@ struct net_device *mpnic_netdev_alloc(struct mpnic_dev *mpd)
 	mpn->num_rx_queues = queues;
 	mpn->num_napi = queues;
 
-	netdev->features |= NETIF_F_SG;
+	netdev->features |=
+		NETIF_F_SG |
+		NETIF_F_HW_CSUM;
+
 	netdev->hw_features |= netdev->features;
 	netdev->vlan_features |= netdev->features;
 
