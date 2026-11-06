@@ -569,6 +569,8 @@ static void codegen_asserts(struct bpf_object *obj, const char *obj_name)
 static void codegen_attach_detach(struct bpf_object *obj, const char *obj_name)
 {
 	struct bpf_program *prog;
+	struct bpf_map *map;
+	char ident[256];
 
 	bpf_object__for_each_program(prog, obj) {
 		const char *tp_name;
@@ -608,6 +610,30 @@ static void codegen_attach_detach(struct bpf_object *obj, const char *obj_name)
 			", bpf_program__name(prog));
 	}
 
+	bpf_object__for_each_map(map, obj) {
+		if (!get_map_ident(map, ident, sizeof(ident)))
+			continue;
+		if (bpf_map__type(map) != BPF_MAP_TYPE_STRUCT_OPS)
+			continue;
+		if (!(bpf_map__map_flags(map) & BPF_F_LINK))
+			continue;
+
+		codegen("\
+			\n\
+			\n\
+			static inline int					    \n\
+			%1$s__%2$s__attach(struct %1$s *skel)			    \n\
+			{							    \n\
+				int map_fd = skel->maps.%2$s.map_fd;		    \n\
+				int fd = skel_link_create(map_fd, 0, BPF_STRUCT_OPS);\n\
+										    \n\
+				if (fd > 0)					    \n\
+					skel->links.%2$s_fd = fd;		    \n\
+				return fd;					    \n\
+			}							    \n\
+			", obj_name, ident);
+	}
+
 	codegen("\
 		\n\
 									    \n\
@@ -625,6 +651,20 @@ static void codegen_attach_detach(struct bpf_object *obj, const char *obj_name)
 			", obj_name, bpf_program__name(prog));
 	}
 
+	bpf_object__for_each_map(map, obj) {
+		if (!get_map_ident(map, ident, sizeof(ident)))
+			continue;
+		if (bpf_map__type(map) != BPF_MAP_TYPE_STRUCT_OPS)
+			continue;
+		if (!(bpf_map__map_flags(map) & BPF_F_LINK))
+			continue;
+
+		codegen("\
+			\n\
+				ret = ret < 0 ? ret : %1$s__%2$s__attach(skel);   \n\
+			", obj_name, ident);
+	}
+
 	codegen("\
 		\n\
 			return ret < 0 ? ret : 0;			    \n\
@@ -640,6 +680,20 @@ static void codegen_attach_detach(struct bpf_object *obj, const char *obj_name)
 			\n\
 				skel_closenz(skel->links.%1$s_fd);	    \n\
 			", bpf_program__name(prog));
+	}
+
+	bpf_object__for_each_map(map, obj) {
+		if (!get_map_ident(map, ident, sizeof(ident)))
+			continue;
+		if (bpf_map__type(map) != BPF_MAP_TYPE_STRUCT_OPS)
+			continue;
+		if (!(bpf_map__map_flags(map) & BPF_F_LINK))
+			continue;
+
+		codegen("\
+			\n\
+				skel_closenz(skel->links.%1$s_fd);	    \n\
+			", ident);
 	}
 
 	codegen("\
@@ -1323,8 +1377,15 @@ static int do_skeleton(int argc, char **argv)
 			continue;
 		}
 
-		if (bpf_map__type(map) == BPF_MAP_TYPE_STRUCT_OPS)
+		if (bpf_map__type(map) == BPF_MAP_TYPE_STRUCT_OPS) {
+			if (use_loader && !(bpf_map__map_flags(map) & BPF_F_LINK)) {
+				p_err("struct_ops map '%s' requires BPF_F_LINK for light skeleton",
+				      bpf_map__name(map));
+				err = -ENOTSUP;
+				goto out;
+			}
 			attach_map_cnt++;
+		}
 
 		map_cnt++;
 	}
@@ -1385,9 +1446,11 @@ static int do_skeleton(int argc, char **argv)
 	}
 
 	btf = bpf_object__btf(obj);
-	err = gen_st_ops_shadow(obj_name, btf, obj);
-	if (err)
-		goto out;
+	if (!use_loader) {
+		err = gen_st_ops_shadow(obj_name, btf, obj);
+		if (err)
+			goto out;
+	}
 
 	if (prog_cnt) {
 		printf("\tstruct {\n");
