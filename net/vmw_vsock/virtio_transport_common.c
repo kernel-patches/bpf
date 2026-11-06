@@ -2261,6 +2261,7 @@ int virtio_transport_purge_skbs(void *vsk, struct sk_buff_head *queue)
 			continue;
 
 		__skb_unlink(skb, queue);
+		__virtio_vsock_skb_untrack(skb);
 		__skb_queue_tail(&freeme, skb);
 
 		if (virtio_vsock_skb_reply(skb))

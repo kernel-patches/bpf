@@ -99,12 +99,70 @@ virtio_vsock_skb_queue_head(struct sk_buff_head *list, struct sk_buff *skb)
 	spin_unlock_bh(&list->lock);
 }
 
+/* Called with list->lock held. Returns true if @skb, a credit update, was
+ * folded into the socket's newest packet in @list and must be freed.
+ */
+static inline bool
+__virtio_vsock_skb_fold_credit_update(struct sk_buff_head *list,
+				      struct sk_buff *skb)
+{
+	struct virtio_vsock_hdr *hdr = virtio_vsock_hdr(skb);
+	struct virtio_vsock_hdr *old_hdr;
+	struct vsock_sock *vsk;
+	struct sk_buff *old;
+
+	if (!skb->sk)
+		return false;
+	vsk = vsock_sk(skb->sk);
+
+	if (le16_to_cpu(hdr->op) != VIRTIO_VSOCK_OP_CREDIT_UPDATE) {
+		WRITE_ONCE(vsk->credit_update, NULL);
+		return false;
+	}
+
+	old = READ_ONCE(vsk->credit_update);
+	if (!old || READ_ONCE(vsk->credit_update_queue) != list) {
+		WRITE_ONCE(vsk->credit_update_queue, list);
+		WRITE_ONCE(vsk->credit_update, skb);
+		return false;
+	}
+
+	old_hdr = virtio_vsock_hdr(old);
+	if ((s32)(le32_to_cpu(hdr->fwd_cnt) - le32_to_cpu(old_hdr->fwd_cnt)) >= 0) {
+		old_hdr->fwd_cnt = hdr->fwd_cnt;
+		old_hdr->buf_alloc = hdr->buf_alloc;
+	}
+	return true;
+}
+
+/* Called with the lock held of the queue @skb is being removed from. Every
+ * removal from a send queue must call it, as the helpers below do.
+ */
+static inline void __virtio_vsock_skb_untrack(struct sk_buff *skb)
+{
+	struct vsock_sock *vsk;
+
+	if (!skb->sk)
+		return;
+	vsk = vsock_sk(skb->sk);
+	if (READ_ONCE(vsk->credit_update) == skb)
+		WRITE_ONCE(vsk->credit_update, NULL);
+}
+
+/* May free @skb: the caller must not touch it afterwards. */
 static inline void
 virtio_vsock_skb_queue_tail(struct sk_buff_head *list, struct sk_buff *skb)
 {
+	bool folded;
+
 	spin_lock_bh(&list->lock);
-	__skb_queue_tail(list, skb);
+	folded = __virtio_vsock_skb_fold_credit_update(list, skb);
+	if (!folded)
+		__skb_queue_tail(list, skb);
 	spin_unlock_bh(&list->lock);
+
+	if (folded)
+		consume_skb(skb);
 }
 
 static inline struct sk_buff *virtio_vsock_skb_dequeue(struct sk_buff_head *list)
@@ -113,6 +171,8 @@ static inline struct sk_buff *virtio_vsock_skb_dequeue(struct sk_buff_head *list
 
 	spin_lock_bh(&list->lock);
 	skb = __skb_dequeue(list);
+	if (skb)
+		__virtio_vsock_skb_untrack(skb);
 	spin_unlock_bh(&list->lock);
 
 	return skb;
@@ -120,7 +180,11 @@ static inline struct sk_buff *virtio_vsock_skb_dequeue(struct sk_buff_head *list
 
 static inline void virtio_vsock_skb_queue_purge(struct sk_buff_head *list)
 {
+	struct sk_buff *skb;
+
 	spin_lock_bh(&list->lock);
+	skb_queue_walk(list, skb)
+		__virtio_vsock_skb_untrack(skb);
 	__skb_queue_purge(list);
 	spin_unlock_bh(&list->lock);
 }

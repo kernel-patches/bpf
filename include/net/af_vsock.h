@@ -76,6 +76,12 @@ struct vsock_sock {
 	u64 buffer_max_size;
 	bool recvmsg_inq;
 
+	/* virtio: queued credit update to fold into, and its send queue.
+	 * Here, as connect() may free trans while packets are queued.
+	 */
+	struct sk_buff *credit_update;
+	struct sk_buff_head *credit_update_queue;
+
 	/* Private to transport. */
 	void *trans;
 };
