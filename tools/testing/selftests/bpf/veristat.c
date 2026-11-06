@@ -1074,6 +1074,69 @@ static int parse_verif_log(char * const buf, size_t buf_sz, struct verif_stats *
 	return 0;
 }
 
+static void print_reject_msg(const char *file, const char *prog, int err, const char *buf)
+{
+        const char *end = strstr(buf, "verification time ");
+        int len = end ? end - buf : strlen(buf);
+
+        while (len > 0 && buf[len - 1] == '\n')
+                len--;
+        fprintf(stderr, "%s/%s: %d: %.*s\n", file, prog, err, len, buf);
+}
+
+#define REPORT_INSNS 0
+
+static void print_reject_report(struct bpf_program *prog)
+{
+        enum { NONE, SOURCE, INSNS } blk = NONE;
+        char *cur, *next, *bar, *c;
+        bool num;
+
+        verif_log_buf[0] = '\0';
+        bpf_program__set_log_buf(prog, verif_log_buf, sizeof(verif_log_buf));
+        bpf_program__set_log_level(prog, 1 | 4);
+        if (bpf_program__load(prog) == 0) {
+                bpf_program__unload(prog);
+                return;
+        }
+        verif_log_buf[sizeof(verif_log_buf) - 1] = '\0';
+
+        cur = NULL;
+        for (c = verif_log_buf; (c = strstr(c, "\nVerification failed:")); c++)
+                cur = c + 1;
+        if (!cur)
+                cur = strstr(verif_log_buf, "verification time ");
+
+        for (; cur && *cur; cur = next) {
+                next = strchr(cur, '\n');
+                if (next)
+                        *next++ = '\0';
+                if (!*cur)
+                        continue;
+                if (!strcmp(cur, "  Source context:")) {
+                        blk = SOURCE;
+                        continue;
+                }
+                if (!strcmp(cur, "  Instruction context:")) {
+                        blk = INSNS;
+                        if (!REPORT_INSNS)
+                                continue;
+                }
+                bar = blk == NONE ? NULL : strchr(cur, '|');
+                if (!bar && strcmp(cur, "  Instruction context:"))
+                        blk = NONE;
+                if (bar && blk == INSNS && !REPORT_INSNS)
+                        continue;
+                if (bar && blk == SOURCE) {
+                        for (num = false, c = cur; c < bar; c++)
+                                num |= isdigit(*c);
+                        if (num)
+                                continue;
+                }
+                fprintf(stderr, "    %s\n", cur);
+        }
+}
+
 struct line_cnt {
 	char *line;
 	int cnt;
@@ -1759,6 +1822,11 @@ static int process_prog(const char *filename, struct bpf_object *obj, struct bpf
 	}
 
 	parse_verif_log(buf, buf_sz, stats);
+	if (err && !env.verbose && env.top_src_lines == 0) {
+                print_reject_msg(base_filename, prog_name, err, buf);
+                print_reject_report(prog);
+        }
+
 
 	if (env.verbose) {
 		printf("PROCESSING %s/%s, DURATION US: %ld, VERDICT: %s, VERIFIER LOG:\n%s\n",
