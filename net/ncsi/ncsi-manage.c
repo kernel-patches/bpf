@@ -1960,14 +1960,21 @@ void ncsi_unregister_dev(struct ncsi_dev *nd)
 
 	dev_remove_pack(&ndp->ptype);
 
+	/*
+	 * Quiesce the state-machine work before freeing any channel or
+	 * package it may still be dereferencing (via the channel_queue /
+	 * package lists).  Commit a0ffa68c70b3 added this disable only
+	 * ahead of kfree(ndp), i.e. after the channels and packages had
+	 * already been freed below, leaving that use-after-free window.
+	 */
+	disable_work_sync(&ndp->work);
+
 	list_for_each_entry_safe(np, tmp, &ndp->packages, node)
 		ncsi_remove_package(np);
 
 	spin_lock_irqsave(&ncsi_dev_lock, flags);
 	list_del_rcu(&ndp->node);
 	spin_unlock_irqrestore(&ncsi_dev_lock, flags);
-
-	disable_work_sync(&ndp->work);
 
 	kfree(ndp);
 }
