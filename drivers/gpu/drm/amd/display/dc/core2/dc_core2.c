@@ -55,21 +55,6 @@ void core2_destruct(struct dc *dc)
 	(void)dc;
 }
 
-static struct pipe_ctx *core2_otg_master(struct dc_state *state)
-{
-	unsigned int i;
-
-	if (!state->stream_count)
-		return NULL;
-	for (i = 0; i < MAX_PIPES; i++) {
-		if (state->res_ctx.pipe_ctx[i].stream == state->streams[0] &&
-				!state->res_ctx.pipe_ctx[i].top_pipe &&
-				!state->res_ctx.pipe_ctx[i].prev_odm_pipe)
-			return &state->res_ctx.pipe_ctx[i];
-	}
-	return NULL;
-}
-
 static bool core2_run_commit_sequence(struct dc *dc,
 		const struct bls_builder *builder,
 		const struct workaround_manager *wam,
@@ -177,7 +162,8 @@ static void core2_commit_disable_done(struct dc *dc, struct pipe_ctx *pipe)
 
 /* Builds and runs one declarative builder from dc->current_state to new_state. */
 static enum dc_status core2_build_and_run(struct dc *dc,
-		enum bls_builder_name name, struct dc_state *new_state)
+		enum bls_builder_name name, struct dc_state *new_state,
+		const struct dc_stream_state *stream)
 {
 	const struct bls_builder *builder = TO_DC2(dc)->builders[name];
 	const struct workaround_manager *wam = dc2_workaround_manager_get();
@@ -191,6 +177,7 @@ static enum dc_status core2_build_and_run(struct dc *dc,
 	params->dc = dc;
 	params->current_state = dc->current_state;
 	params->new_state = new_state;
+	params->stream = stream;
 
 	/*
 	 * A tail runs on the vsync after the head, so Core would have to wait
@@ -213,13 +200,14 @@ out:
 }
 
 static bool core2_builder_supports(struct dc *dc, enum bls_builder_name name,
-		struct dc_state *new_state)
+		struct dc_state *new_state, const struct dc_stream_state *stream)
 {
 	const struct bls_builder *builder = TO_DC2(dc)->builders[name];
 	struct bls_builder_check_capability_params check = {
 		.dc = dc,
 		.current_state = dc->current_state,
 		.new_state = new_state,
+		.stream = stream,
 	};
 
 	return builder && builder->check_capability &&
@@ -233,33 +221,36 @@ static bool core2_builder_supports(struct dc *dc, enum bls_builder_name name,
 /* Never falls back to legacy_commit_state_hw: DC2 must not call DC1. */
 enum dc_status core2_commit_state_hw(struct dc *dc, struct dc_state *context)
 {
-	struct pipe_ctx *old_pipe;
-	struct pipe_ctx *new_pipe;
+	struct dc_state *current_state = dc->current_state;
 	enum dc_status status;
+	int i;
 
-	if (!core2_builder_supports(dc, DCN_DECL_NON_SEAMLESS_COMMIT, context))
+	if (!core2_builder_supports(dc, DCN_DECL_NON_SEAMLESS_COMMIT, context,
+			NULL))
 		return DC_NOT_SUPPORTED;
-
-	old_pipe = core2_otg_master(dc->current_state);
-	new_pipe = core2_otg_master(context);
 
 	/*
 	 * link_set_dpms_on builds the info frame into the
 	 * pipe before it programs the packets. Remove when the builder
 	 * computes it.
 	 */
-	if (new_pipe)
-		resource_build_info_frame(new_pipe);
+	for (i = 0; i < context->stream_count; i++)
+		resource_build_info_frame(resource_get_otg_master_for_stream(
+				&context->res_ctx, context->streams[i]));
 
-	status = core2_build_and_run(dc, DCN_DECL_NON_SEAMLESS_COMMIT, context);
+	status = core2_build_and_run(dc, DCN_DECL_NON_SEAMLESS_COMMIT, context,
+			NULL);
 	if (status != DC_OK)
 		return status;
 
 	core2_commit_prepare_done(dc, context);
-	if (old_pipe)
-		core2_commit_disable_done(dc, old_pipe);
-	if (new_pipe)
-		core2_commit_enable_done(new_pipe);
+	for (i = 0; i < current_state->stream_count; i++)
+		core2_commit_disable_done(dc, resource_get_otg_master_for_stream(
+				&current_state->res_ctx,
+				current_state->streams[i]));
+	for (i = 0; i < context->stream_count; i++)
+		core2_commit_enable_done(resource_get_otg_master_for_stream(
+				&context->res_ctx, context->streams[i]));
 	return DC_OK;
 }
 
@@ -309,7 +300,7 @@ static bool core2_update_state_supported(
 	if (!core2_stream_update_supported(scratch->stream_update))
 		return false;
 	return core2_builder_supports(scratch->dc, DCN_DECL_SEAMLESS_UPDATE,
-			scratch->new_context);
+			scratch->new_context, scratch->stream);
 }
 
 /*
@@ -317,14 +308,15 @@ static bool core2_update_state_supported(
  * the plane. The swap to the new context stays in
  * dc_update_state_cleanup.
  */
-static void core2_update_done(struct dc *dc, struct dc_state *context)
+static void core2_update_done(struct dc *dc, struct dc_state *context,
+		struct dc_stream_state *stream)
 {
 	struct pipe_ctx *dpp_pipes[MAX_PIPES];
 	struct pipe_ctx *pipe;
 	struct dc_plane_state *plane;
 	struct hubp *hubp;
-	int i, n = context->stream_count ? resource_get_dpp_pipes_for_stream(
-			context->streams[0], &context->res_ctx, dpp_pipes) : 0;
+	int i, n = resource_get_dpp_pipes_for_stream(stream, &context->res_ctx,
+			dpp_pipes);
 
 	for (i = 0; i < n; i++) {
 		pipe = dpp_pipes[i];
@@ -349,7 +341,8 @@ static void core2_update_state_execute(
 {
 	struct dc *dc = scratch->dc;
 	struct dc_state *context = scratch->new_context;
-	struct pipe_ctx *pipe = core2_otg_master(context);
+	struct pipe_ctx *pipe = resource_get_otg_master_for_stream(
+			&context->res_ctx, scratch->stream);
 	struct pipe_ctx *dpp_pipes[MAX_PIPES];
 	int i, n;
 
@@ -361,15 +354,16 @@ static void core2_update_state_execute(
 		return;
 	if (dc->res_pool->funcs->prepare_mcache_programming)
 		dc->res_pool->funcs->prepare_mcache_programming(dc, context);
-	n = resource_get_dpp_pipes_for_stream(pipe->stream, &context->res_ctx,
+	n = resource_get_dpp_pipes_for_stream(scratch->stream, &context->res_ctx,
 			dpp_pipes);
 	for (i = 0; i < n; i++)
 		dpp_pipes[i]->plane_res.scl_data.lb_params.alpha_en =
 				dpp_pipes[i]->plane_state->per_pixel_alpha;
 
-	if (core2_build_and_run(dc, DCN_DECL_SEAMLESS_UPDATE, context) != DC_OK) {
+	if (core2_build_and_run(dc, DCN_DECL_SEAMLESS_UPDATE, context,
+			scratch->stream) != DC_OK) {
 		ASSERT(false);
 		return;
 	}
-	core2_update_done(dc, context);
+	core2_update_done(dc, context, scratch->stream);
 }

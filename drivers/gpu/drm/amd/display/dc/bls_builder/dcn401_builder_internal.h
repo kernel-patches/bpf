@@ -44,6 +44,23 @@ void dcn401_commit_check_failed(const struct dc *dc, const char *msg);
 		} \
 	} while (0)
 
+/* Each check_<name> stream helper takes the state and a stream index. */
+#define CHECK_STREAM_CONDITION(name, msg) \
+	do { \
+		if (!check_##name(dc, state, i)) { \
+			dcn401_commit_check_failed(dc, msg); \
+			return BLS_BUILD_ERROR_UNSUPPORTED_STATE_UPDATE; \
+		} \
+	} while (0)
+
+#define CHECK_STREAM_RESOURCE(name, msg) \
+	do { \
+		if (!check_##name(dc, state, i)) { \
+			dcn401_commit_check_failed(dc, msg); \
+			return BLS_BUILD_ERROR_RESOURCE_MAPPING; \
+		} \
+	} while (0)
+
 static inline const struct dc_state *dcn401_checked_state(
 		const struct dc_state *current_state,
 		const struct dc_state *new_state)
@@ -51,26 +68,37 @@ static inline const struct dc_state *dcn401_checked_state(
 	return current_state ? current_state : new_state;
 }
 
-/* The OTG master of state's one stream, or NULL when it is not one pipe. */
-const struct pipe_ctx *dcn401_otg_of(const struct dc *dc,
-		const struct dc_state *state);
-const struct pipe_ctx *dcn401_checked_otg_master(const struct dc *dc,
-		const struct dc_state *current_state,
-		const struct dc_state *new_state);
+/* The one OTG master of stream in state, or NULL when it has none or more. */
+const struct pipe_ctx *dcn401_otg_master(const struct dc_state *state,
+		const struct dc_stream_state *stream);
+/* The index of stream in state, or -1. */
+int dcn401_stream_index(const struct dc_state *state,
+		const struct dc_stream_state *stream);
+/*
+ * stream is in both states on the same pipes, each with the same plane
+ * and blocks.
+ */
+bool dcn401_stream_unchanged(const struct dc_state *current_state,
+		const struct dc_state *new_state,
+		const struct dc_stream_state *stream);
 
 
 /* What both builders need of the dc, before either state. */
 enum bls_builder_result dcn401_check_dc_support(const struct dc *dc);
-/* What both builders need of a state's stream, apart from its planes. */
+/* What both builders need of each stream of a state, apart from its planes. */
 enum bls_builder_result dcn401_check_stream_support(const struct dc *dc,
 		const struct dc_state *current_state,
 		const struct dc_state *new_state);
 
-/* pipe is NULL only for the bandwidth and p-state steps. */
+/*
+ * pipe is NULL only for the bandwidth and p-state steps. The walkers
+ * expand only stream when it is set.
+ */
 struct dcn401_commit_step_args {
 	struct dc *dc;
 	struct dc_state *current_state;
 	struct dc_state *new_state;
+	const struct dc_stream_state *stream;
 	struct pipe_ctx *pipe;
 };
 
@@ -78,7 +106,8 @@ struct dcn401_commit_step_args {
  * A sub-sequence names the state its steps read and how they expand: once,
  * or once per OTG master, OPP head (ODM slice) or DPP pipe of each stream
  * of that state, the OTG master first. A builder lists its sub-sequences
- * in emission order.
+ * in emission order. A sequence longer than DC2_BLS_MAX_STEPS keeps its
+ * count and only the first entries; Core rejects it.
  */
 #define DCN401_CURRENT_STATE			(1u << 0)
 #define DCN401_NEW_STATE			(1u << 1)
