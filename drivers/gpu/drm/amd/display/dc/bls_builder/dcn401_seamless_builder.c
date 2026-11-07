@@ -2152,6 +2152,15 @@ static void dcn401_add_steps(struct block_sequence_state *sequence,
 	}
 }
 
+static bool dcn401_walks_stream(const struct dcn401_commit_step_args *args,
+		const struct dc_stream_state *stream)
+{
+	if (args->stream)
+		return stream == args->stream;
+	return !dcn401_stream_unchanged(args->current_state, args->new_state,
+			stream);
+}
+
 static void dcn401_add_per_otg_master(struct block_sequence_state *sequence,
 		const struct dcn401_commit_step_args *state_args,
 		struct dc_state *state,
@@ -2161,7 +2170,7 @@ static void dcn401_add_per_otg_master(struct block_sequence_state *sequence,
 	unsigned int i;
 
 	for (i = 0; i < state->stream_count; i++) {
-		if (args.stream && state->streams[i] != args.stream)
+		if (!dcn401_walks_stream(&args, state->streams[i]))
 			continue;
 		args.pipe = resource_get_otg_master_for_stream(
 				&state->res_ctx, state->streams[i]);
@@ -2180,7 +2189,7 @@ static void dcn401_add_per_opp_head(struct block_sequence_state *sequence,
 	int j, n;
 
 	for (i = 0; i < state->stream_count; i++) {
-		if (args.stream && state->streams[i] != args.stream)
+		if (!dcn401_walks_stream(&args, state->streams[i]))
 			continue;
 		n = resource_get_opp_heads_for_stream(state->streams[i],
 				&state->res_ctx, opp_heads);
@@ -2202,7 +2211,7 @@ static void dcn401_add_per_dpp_pipe(struct block_sequence_state *sequence,
 	int j, n;
 
 	for (i = 0; i < state->stream_count; i++) {
-		if (args.stream && state->streams[i] != args.stream)
+		if (!dcn401_walks_stream(&args, state->streams[i]))
 			continue;
 		n = resource_get_dpp_pipes_for_stream(state->streams[i],
 				&state->res_ctx, dpp_pipes);

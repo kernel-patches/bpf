@@ -245,12 +245,18 @@ enum dc_status core2_commit_state_hw(struct dc *dc, struct dc_state *context)
 
 	core2_commit_prepare_done(dc, context);
 	for (i = 0; i < current_state->stream_count; i++)
-		core2_commit_disable_done(dc, resource_get_otg_master_for_stream(
-				&current_state->res_ctx,
-				current_state->streams[i]));
+		if (!dcn401_stream_unchanged(current_state, context,
+				current_state->streams[i]))
+			core2_commit_disable_done(dc,
+					resource_get_otg_master_for_stream(
+					&current_state->res_ctx,
+					current_state->streams[i]));
 	for (i = 0; i < context->stream_count; i++)
-		core2_commit_enable_done(resource_get_otg_master_for_stream(
-				&context->res_ctx, context->streams[i]));
+		if (!dcn401_stream_unchanged(current_state, context,
+				context->streams[i]))
+			core2_commit_enable_done(
+					resource_get_otg_master_for_stream(
+					&context->res_ctx, context->streams[i]));
 	return DC_OK;
 }
 

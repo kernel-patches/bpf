@@ -74,13 +74,6 @@ const struct pipe_ctx *dcn401_otg_master(const struct dc_state *state,
 /* The index of stream in state, or -1. */
 int dcn401_stream_index(const struct dc_state *state,
 		const struct dc_stream_state *stream);
-/*
- * stream is in both states on the same pipes, each with the same plane
- * and blocks.
- */
-bool dcn401_stream_unchanged(const struct dc_state *current_state,
-		const struct dc_state *new_state,
-		const struct dc_stream_state *stream);
 
 
 /* What both builders need of the dc, before either state. */
@@ -92,7 +85,8 @@ enum bls_builder_result dcn401_check_stream_support(const struct dc *dc,
 
 /*
  * pipe is NULL only for the bandwidth and p-state steps. The walkers
- * expand only stream when it is set.
+ * expand only stream when it is set, else each stream that is not
+ * unchanged.
  */
 struct dcn401_commit_step_args {
 	struct dc *dc;

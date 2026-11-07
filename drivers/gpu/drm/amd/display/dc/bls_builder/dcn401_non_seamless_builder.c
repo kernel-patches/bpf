@@ -10,10 +10,11 @@
 #include "state_facts/state_facts.h"
 
 /*
- * DCN_DECL_NON_SEAMLESS_COMMIT for virtual streams without planes. It
- * disables every current stream, each with one or two planes, one per DPP
- * pipe, then enables every new stream, each with no plane. Planes are
- * added later by DCN_DECL_SEAMLESS_UPDATE, not by this commit. Each
+ * DCN_DECL_NON_SEAMLESS_COMMIT for virtual streams. It disables every
+ * current stream, each with one or two planes, one per DPP pipe, then
+ * enables every new stream, each with no plane. A stream that is
+ * unchanged keeps its pipes and planes, and the commit programs none of
+ * them. Planes are added later by DCN_DECL_SEAMLESS_UPDATE. Each
  * stream is in ODM bypass, 2:1 or 3:1, with one OPP head and at most one
  * DPP pipe per slice.
  *
@@ -120,19 +121,23 @@ static enum bls_builder_result dcn401_check_new_stream(
 
 static enum bls_builder_result dcn401_check_commit_state_support(
 		const struct dc *dc, const struct dc_state *current_state,
-		const struct dc_state *new_state)
+		const struct dc_state *new_state, bool is_current)
 {
-	const struct dc_state *state = dcn401_checked_state(current_state,
-			new_state);
+	const struct dc_state *state = is_current ? current_state : new_state;
 	enum bls_builder_result result;
 	unsigned int i;
 
-	result = dcn401_check_stream_support(dc, current_state, new_state);
+	result = dcn401_check_stream_support(dc, is_current ? state : NULL,
+			is_current ? NULL : state);
 	for (i = 0; result == BLS_BUILD_SUCCESS && i < state->stream_count;
-			i++)
-		result = current_state ?
+			i++) {
+		if (dcn401_stream_unchanged(current_state, new_state,
+				state->streams[i]))
+			continue;
+		result = is_current ?
 				dcn401_check_current_stream(dc, state, i) :
 				dcn401_check_new_stream(dc, state, i);
+	}
 	return result;
 }
 
@@ -175,10 +180,12 @@ static enum bls_builder_result dcn401_check_non_seamless_commit_support(
 		return result;
 	CHECK_CONDITION(stream_config_update, "stream config update is set");
 
-	result = dcn401_check_commit_state_support(dc, current_state, NULL);
+	result = dcn401_check_commit_state_support(dc, current_state,
+			new_state, true);
 	if (result != BLS_BUILD_SUCCESS)
 		return result;
-	result = dcn401_check_commit_state_support(dc, NULL, new_state);
+	result = dcn401_check_commit_state_support(dc, current_state,
+			new_state, false);
 	if (result != BLS_BUILD_SUCCESS)
 		return result;
 
