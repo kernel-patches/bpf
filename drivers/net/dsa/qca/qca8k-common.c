@@ -463,7 +463,7 @@ exit:
 	return ret;
 }
 
-void qca8k_port_set_status(struct qca8k_priv *priv, int port, int enable)
+static u32 qca8k_port_status_mask(int port)
 {
 	u32 mask = QCA8K_PORT_STATUS_TXMAC | QCA8K_PORT_STATUS_RXMAC;
 
@@ -471,7 +471,77 @@ void qca8k_port_set_status(struct qca8k_priv *priv, int port, int enable)
 	if (port > 0 && port < 6)
 		mask |= QCA8K_PORT_STATUS_LINK_AUTO;
 
-	regmap_assign_bits(priv->regmap, QCA8K_REG_PORT_STATUS(port), mask, enable);
+	return mask;
+}
+
+static int qca8k_port_status_restore(struct qca8k_priv *priv, int port)
+{
+	u32 mask = priv->port_status_mask[port];
+	int ret;
+
+	lockdep_assert_held(&priv->port_status_lock);
+
+	if (!mask)
+		return 0;
+
+	if (mask == U32_MAX)
+		ret = qca8k_write(priv, QCA8K_REG_PORT_STATUS(port),
+				  priv->port_status_value[port]);
+	else
+		ret = regmap_update_bits(priv->regmap,
+					 QCA8K_REG_PORT_STATUS(port), mask,
+					 priv->port_status_value[port] & mask);
+	if (ret) {
+		dev_err_ratelimited(priv->dev,
+				    "failed to restore port %d status: %d\n",
+				    port, ret);
+		schedule_delayed_work(&priv->port_status_work, HZ);
+	} else {
+		priv->port_status_mask[port] = 0;
+	}
+
+	return ret;
+}
+
+void qca8k_port_status_update(struct qca8k_priv *priv, int port,
+			      u32 mask, u32 val)
+{
+	lockdep_assert_held(&priv->port_status_lock);
+
+	/* A newer decision supersedes pending bits, even if it fails too. */
+	priv->port_status_value[port] &= ~mask;
+	priv->port_status_value[port] |= val & mask;
+	priv->port_status_mask[port] |= mask;
+	qca8k_port_status_restore(priv, port);
+}
+
+void qca8k_port_status_work(struct work_struct *work)
+{
+	struct qca8k_priv *priv = container_of(to_delayed_work(work),
+					       struct qca8k_priv,
+					       port_status_work);
+	int port;
+
+	mutex_lock(&priv->port_status_lock);
+	for (port = 0; port < QCA8K_NUM_PORTS; port++)
+		qca8k_port_status_restore(priv, port);
+	mutex_unlock(&priv->port_status_lock);
+}
+
+static void __qca8k_port_set_status(struct qca8k_priv *priv, int port,
+				    int enable)
+{
+	u32 mask = qca8k_port_status_mask(port);
+
+	lockdep_assert_held(&priv->port_status_lock);
+	qca8k_port_status_update(priv, port, mask, enable ? mask : 0);
+}
+
+void qca8k_port_set_status(struct qca8k_priv *priv, int port, int enable)
+{
+	mutex_lock(&priv->port_status_lock);
+	__qca8k_port_set_status(priv, port, enable);
+	mutex_unlock(&priv->port_status_lock);
 }
 
 void qca8k_get_strings(struct dsa_switch *ds, int port, u32 stringset,
@@ -742,8 +812,10 @@ int qca8k_port_enable(struct dsa_switch *ds, int port,
 {
 	struct qca8k_priv *priv = ds->priv;
 
-	qca8k_port_set_status(priv, port, 1);
+	mutex_lock(&priv->port_status_lock);
+	__qca8k_port_set_status(priv, port, 1);
 	priv->port_enabled_map |= BIT(port);
+	mutex_unlock(&priv->port_status_lock);
 
 	if (dsa_is_user_port(ds, port))
 		phy_support_asym_pause(phy);
@@ -755,14 +827,19 @@ void qca8k_port_disable(struct dsa_switch *ds, int port)
 {
 	struct qca8k_priv *priv = ds->priv;
 
-	qca8k_port_set_status(priv, port, 0);
+	mutex_lock(&priv->port_status_lock);
+	__qca8k_port_set_status(priv, port, 0);
 	priv->port_enabled_map &= ~BIT(port);
+	mutex_unlock(&priv->port_status_lock);
 }
 
 int qca8k_port_change_mtu(struct dsa_switch *ds, int port, int new_mtu)
 {
+	u32 frame_size = new_mtu + ETH_HLEN + ETH_FCS_LEN;
+	u32 status[QCA8K_NUM_PORTS] = { 0 };
 	struct qca8k_priv *priv = ds->priv;
-	int ret;
+	unsigned long ports, stopped = 0;
+	int ret, i;
 
 	/* We have only have a general MTU setting.
 	 * DSA always set the CPU port's MTU to the largest MTU of the user
@@ -773,27 +850,59 @@ int qca8k_port_change_mtu(struct dsa_switch *ds, int port, int new_mtu)
 	if (!dsa_is_cpu_port(ds, port))
 		return 0;
 
-	/* To change the MAX_FRAME_SIZE the cpu ports must be off or
-	 * the switch panics.
-	 * Turn off both cpu ports before applying the new value to prevent
-	 * this.
+	/* To change MAX_FRAME_SIZE, pause enabled ports 0 and 6.
+	 * Serialize with phylink and restore the saved MAC state.
 	 */
-	if (priv->port_enabled_map & BIT(0))
-		qca8k_port_set_status(priv, 0, 0);
+	mutex_lock(&priv->port_status_lock);
 
-	if (priv->port_enabled_map & BIT(6))
-		qca8k_port_set_status(priv, 6, 0);
+	/* DSA calls us for every CPU port, but the frame size is global. */
+	if (priv->max_frame_size == frame_size) {
+		ret = 0;
+		goto unlock;
+	}
 
-	/* Include L2 header / FCS length */
-	ret = qca8k_write(priv, QCA8K_MAX_FRAME_SIZE, new_mtu +
-			  ETH_HLEN + ETH_FCS_LEN);
+	ports = BIT(0) | BIT(6);
 
-	if (priv->port_enabled_map & BIT(0))
-		qca8k_port_set_status(priv, 0, 1);
+	/* Do not mistake a failed restore for a new link-down decision. */
+	for_each_set_bit(i, &ports, QCA8K_NUM_PORTS) {
+		ret = qca8k_port_status_restore(priv, i);
+		if (ret)
+			goto unlock;
+	}
 
-	if (priv->port_enabled_map & BIT(6))
-		qca8k_port_set_status(priv, 6, 1);
+	ports &= priv->port_enabled_map;
+	for_each_set_bit(i, &ports, QCA8K_NUM_PORTS) {
+		ret = regmap_read(priv->regmap, QCA8K_REG_PORT_STATUS(i),
+				  &status[i]);
+		if (ret)
+			goto unlock;
+	}
 
+	for_each_set_bit(i, &ports, QCA8K_NUM_PORTS) {
+		u32 mask = qca8k_port_status_mask(i);
+
+		if (!(status[i] & mask))
+			continue;
+
+		__set_bit(i, &stopped);
+		ret = regmap_clear_bits(priv->regmap, QCA8K_REG_PORT_STATUS(i),
+					mask);
+		if (ret)
+			goto restore;
+	}
+
+	ret = qca8k_write(priv, QCA8K_MAX_FRAME_SIZE, frame_size);
+	if (!ret)
+		priv->max_frame_size = frame_size;
+
+restore:
+	/* A failed restore must not reject a committed frame size. */
+	for_each_set_bit(i, &stopped, QCA8K_NUM_PORTS)
+		qca8k_port_status_update(priv, i, qca8k_port_status_mask(i),
+					 status[i]);
+
+unlock:
+	mutex_unlock(&priv->port_status_lock);
 	return ret;
 }
 

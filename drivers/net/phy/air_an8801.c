@@ -560,7 +560,7 @@ static int an8801r_led_init(struct phy_device *phydev, u8 *led_cfg)
 	return ret;
 }
 
-static int an8801r_reset_wake(struct phy_device *phydev)
+static int an8801r_reset_wake(struct phy_device *phydev, bool suspend)
 {
 	struct an8801r_priv *priv = phydev->priv;
 	u32 reg_val = 0;
@@ -584,7 +584,10 @@ static int an8801r_reset_wake(struct phy_device *phydev)
 	if (priv->wake_magic_enabled)
 		reg_val |= AN8801_WOL_WAKE_MAGIC_EN;
 
-	if (priv->wake_lnkchg_enabled)
+	/* The link change event is needed for link state interrupts while
+	 * running, but must only wake the system up if WAKE_PHY is enabled.
+	 */
+	if (priv->wake_lnkchg_enabled || !suspend)
 		reg_val |= AN8801_WOL_WAKE_LNKCHG_EN;
 
 	ret = an8801_buckpbus_reg_write(phydev, AN8801_BPBUS_REG_WAKEUP_CTL1,
@@ -603,7 +606,7 @@ static int an8801r_ack_interrupt(struct phy_device *phydev)
 	int ret;
 
 	/* Reset wake status */
-	ret = an8801r_reset_wake(phydev);
+	ret = an8801r_reset_wake(phydev, phydev->suspended);
 	if (ret)
 		return ret;
 
@@ -651,6 +654,7 @@ static int an8801r_config_intr(struct phy_device *phydev)
 
 static irqreturn_t an8801r_handle_interrupt(struct phy_device *phydev)
 {
+	struct an8801r_priv *priv = phydev->priv;
 	u32 irq_status = 0;
 	bool irq_handled = false;
 	int ret;
@@ -670,6 +674,8 @@ static irqreturn_t an8801r_handle_interrupt(struct phy_device *phydev)
 	}
 
 	if (irq_status & AN8801_IRQ_WAKE_LNKCHG) {
+		if (priv->wake_lnkchg_enabled)
+			pm_wakeup_event(&phydev->mdio.dev, 0);
 		phy_trigger_machine(phydev);
 		irq_handled = true;
 	}
@@ -680,6 +686,7 @@ static irqreturn_t an8801r_handle_interrupt(struct phy_device *phydev)
 static void an8801r_get_wol(struct phy_device *phydev,
 			    struct ethtool_wolinfo *wol)
 {
+	struct an8801r_priv *priv = phydev->priv;
 	u32 reg_val;
 	int ret;
 
@@ -691,8 +698,11 @@ static void an8801r_get_wol(struct phy_device *phydev,
 		return;
 	}
 
-	wol->supported = WAKE_MAGIC;
+	wol->supported = WAKE_MAGIC | WAKE_PHY;
 	wol->wolopts = 0;
+
+	if (priv->wake_lnkchg_enabled)
+		wol->wolopts |= WAKE_PHY;
 
 	ret = an8801_buckpbus_reg_read(phydev, AN8801_BPBUS_REG_WAKEUP_CTL1,
 				       &reg_val);
@@ -717,7 +727,7 @@ static int an8801r_set_wol(struct phy_device *phydev,
 	if (!device_can_wakeup(&phydev->mdio.dev))
 		return -EOPNOTSUPP;
 
-	if (wol->wolopts & ~WAKE_MAGIC)
+	if (wol->wolopts & ~(WAKE_MAGIC | WAKE_PHY))
 		return -EINVAL;
 
 	if (wol->wolopts & WAKE_MAGIC) {
@@ -775,9 +785,11 @@ static int an8801r_set_wol(struct phy_device *phydev,
 	}
 
 	priv->wake_magic_enabled = !!(wol->wolopts & WAKE_MAGIC);
+	priv->wake_lnkchg_enabled = !!(wol->wolopts & WAKE_PHY);
 
 	return device_set_wakeup_enable(&phydev->mdio.dev,
-					priv->wake_magic_enabled);
+					priv->wake_magic_enabled ||
+					priv->wake_lnkchg_enabled);
 }
 
 static int an8801r_of_init_leds(struct phy_device *phydev, u8 *led_cfg)
@@ -1040,8 +1052,6 @@ static int an8801r_probe(struct phy_device *phydev)
 	if (!priv)
 		return -ENOMEM;
 
-	priv->wake_lnkchg_enabled = true;
-
 	phydev->priv = priv;
 
 	/* Mark this PHY as wakeup capable and register the interrupt as a
@@ -1063,12 +1073,11 @@ static int an8801r_suspend(struct phy_device *phydev)
 	int ret;
 
 	/* If the PHY may wake up by a Wake-on-LAN (WOL) event, disable the link
-	 * interrupt to only keep the WOL magic interrupt enabled
+	 * interrupt unless wake on link change (WAKE_PHY) is enabled
 	 */
 	if (device_may_wakeup(&phydev->mdio.dev)) {
-		priv->wake_lnkchg_enabled = false;
-
-		if (phydev->interrupts == PHY_INTERRUPT_ENABLED) {
+		if (!priv->wake_lnkchg_enabled &&
+		    phydev->interrupts == PHY_INTERRUPT_ENABLED) {
 			ret = an8801_buckpbus_reg_clear_bits(phydev,
 							     AN8801_BPBUS_REG_WAKE_IRQ_EN,
 							     AN8801_IRQ_WAKE_LNKCHG);
@@ -1077,7 +1086,7 @@ static int an8801r_suspend(struct phy_device *phydev)
 		}
 
 		/* Reset WOL status */
-		ret = an8801r_reset_wake(phydev);
+		ret = an8801r_reset_wake(phydev, true);
 		if (ret)
 			return ret;
 	}
@@ -1090,7 +1099,6 @@ static int an8801r_suspend(struct phy_device *phydev)
 
 static int an8801r_resume(struct phy_device *phydev)
 {
-	struct an8801r_priv *priv = phydev->priv;
 	int ret;
 
 	ret = genphy_resume(phydev);
@@ -1101,8 +1109,6 @@ static int an8801r_resume(struct phy_device *phydev)
 	 * state interrupts.
 	 */
 	if (device_may_wakeup(&phydev->mdio.dev)) {
-		priv->wake_lnkchg_enabled = true;
-
 		ret = an8801_buckpbus_reg_set_bits(phydev,
 						   AN8801_BPBUS_REG_WAKEUP_CTL1,
 						   AN8801_WOL_WAKE_LNKCHG_EN);

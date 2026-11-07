@@ -4,6 +4,7 @@ import fnmatch
 import functools
 import getopt
 import inspect
+import json
 import os
 import signal
 import sys
@@ -16,6 +17,7 @@ from . import utils
 KSFT_RESULT = None
 KSFT_RESULT_ALL = True
 KSFT_DISRUPTIVE = True
+KSFT_METRICS = []
 
 
 class KsftFailEx(Exception):
@@ -91,6 +93,31 @@ def ksft_pr(*objs, **kwargs):
     text = sep.join(str(obj) for obj in objs)
     prefixed = f"\n{pfx} ".join(text.split('\n'))
     print(pfx, prefixed, **kwargs)
+
+
+def ksft_metric(name, value, *, goal):
+    """
+    Report a numeric measurement of the current test case.
+
+    Metrics are printed right before the result of the test case. They do
+    not affect the result.
+
+    Args:
+      name - name of the metric, e.g. "throughput"
+      value - the measured number
+      goal - "higher" or "lower" for a performance metric, depending on
+             which way is better, "zero" for an error metric, which must
+             be zero
+    """
+    KSFT_METRICS.append({"name": name, "value": value, "goal": goal})
+
+
+def _ksft_flush_metrics():
+    for metric in KSFT_METRICS:
+        payload = json.dumps(metric, allow_nan=False, separators=(",", ":"),
+                             sort_keys=True)
+        ksft_pr(f"ktap-metric-json: {payload}")
+    KSFT_METRICS.clear()
 
 
 def _fail(*args):
@@ -450,6 +477,7 @@ def ksft_run(cases=None, globs=None, case_pfx=None, args=()):
         if not cnt_key:
             cnt_key = 'pass' if KSFT_RESULT else 'fail'
 
+        _ksft_flush_metrics()
         ktap_result(KSFT_RESULT, cnt, name, comment=comment)
         totals[cnt_key] += 1
 

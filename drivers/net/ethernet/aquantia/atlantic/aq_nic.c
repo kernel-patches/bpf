@@ -597,6 +597,8 @@ int aq_nic_start(struct aq_nic_s *self)
 
 		netdev_set_tc_queue(self->ndev, i, self->aq_vecs, offset);
 	}
+	/* Publish the initialized rings to external XDP transmitters. */
+	smp_store_release(&self->xdp_tx_enabled, true);
 	netif_tx_start_all_queues(self->ndev);
 
 err_exit:
@@ -1428,6 +1430,8 @@ int aq_nic_stop(struct aq_nic_s *self)
 {
 	unsigned int i = 0U;
 
+	WRITE_ONCE(self->xdp_tx_enabled, false);
+
 	netif_tx_disable(self->ndev);
 	netif_carrier_off(self->ndev);
 
@@ -1447,6 +1451,17 @@ int aq_nic_stop(struct aq_nic_s *self)
 		aq_vec_stop(self->aq_vec[i]);
 
 	aq_ptp_ring_stop(self);
+
+	/* Drain external XDP transmitters that passed the admission gate.
+	 * They can wake TX queues, so wait before the final queue stop.
+	 */
+	synchronize_net();
+
+	/* Service work, IRQs, NAPI and external XDP can no longer wake
+	 * queues. Drain SKB transmit before aq_nic_deinit() frees rings.
+	 */
+	netif_tx_disable(self->ndev);
+	netif_carrier_off(self->ndev);
 
 	return self->aq_hw_ops->hw_stop(self->aq_hw);
 }

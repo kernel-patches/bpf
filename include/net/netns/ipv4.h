@@ -162,6 +162,7 @@ struct netns_ipv4 {
 
 	u8 sysctl_ip_default_ttl;
 	u8 sysctl_ip_no_pmtu_disc;
+	u8 sysctl_ip_process_options;
 	u8 sysctl_ip_fwd_update_priority;
 	u8 sysctl_ip_nonlocal_bind;
 	u8 sysctl_ip_autobind_reuse;
@@ -258,9 +259,9 @@ struct netns_ipv4 {
 #endif
 
 	u8 sysctl_igmp_llm_reports;
+	u8 sysctl_igmp_qrv;
 	int sysctl_igmp_max_memberships;
 	int sysctl_igmp_max_msf;
-	int sysctl_igmp_qrv;
 
 	struct ping_group_range ping_group_range;
 	u16			ping_port_rover;

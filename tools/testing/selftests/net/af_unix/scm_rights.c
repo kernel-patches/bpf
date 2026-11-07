@@ -378,6 +378,36 @@ TEST_F(scm_rights, backtrack_from_scc)
 	close_sockets(10);
 }
 
+static int count_scm_fds(struct __test_metadata *_metadata, int fd)
+{
+	char path[64], *line = NULL;
+	int scm_fds = -1, ret;
+	size_t unused;
+	FILE *f;
+
+	snprintf(path, sizeof(path), "/proc/self/fdinfo/%d", fd);
+
+	f = fopen(path, "r");
+	ASSERT_NE(NULL, f);
+
+	while (getline(&line, &unused, f) != -1) {
+		if (strncmp(line, "scm_fds:", 8))
+			continue;
+
+		ret = sscanf(line + 8, "%d", &scm_fds);
+		ASSERT_EQ(1, ret);
+
+		break;
+	}
+
+	free(line);
+
+	ret = fclose(f);
+	ASSERT_EQ(0, ret);
+
+	return scm_fds;
+}
+
 TEST_F(scm_rights, mixed_lowpoint)
 {
 	create_sockets(6);
@@ -393,6 +423,84 @@ TEST_F(scm_rights, mixed_lowpoint)
 	send_fd(4, 3);
 
 	close_sockets(6);
+}
+
+TEST_F(scm_rights, oob_fdinfo)
+{
+	int recv_fd, ret;
+	char buf[2];
+
+	if (!(variant->flags & MSG_OOB) || variant->disabled)
+		return;
+
+	create_sockets(2);
+
+	if (variant->test_listener) {
+		recv_fd = accept(self->fd[0], NULL, NULL);
+		ASSERT_LE(0, recv_fd);
+	} else {
+		recv_fd = self->fd[0];
+	}
+
+	/* 1. Unconsumed OOB skb skipped by normal recv() in manage_oob() */
+	send_fd(0, 0);
+	ASSERT_EQ(2, count_scm_fds(_metadata, recv_fd));
+	ret = send(self->fd[1], "a", 1, 0);
+	ASSERT_EQ(1, ret);
+	ret = recv(recv_fd, buf, 1, 0);
+	ASSERT_EQ(1, ret);
+	ASSERT_EQ(0, count_scm_fds(_metadata, recv_fd));
+
+	/* 2. Consumed OOB skb freed by normal recv() in manage_oob() */
+	send_fd(0, 0);
+	ASSERT_EQ(2, count_scm_fds(_metadata, recv_fd));
+	ret = recv(recv_fd, buf, 1, MSG_OOB);
+	ASSERT_EQ(1, ret);
+	ret = send(self->fd[1], "a", 1, 0);
+	ASSERT_EQ(1, ret);
+	ret = recv(recv_fd, buf, 1, 0);
+	ASSERT_EQ(1, ret);
+	ASSERT_EQ(0, count_scm_fds(_metadata, recv_fd));
+
+	/* 3. Consumed OOB skb freed by consecutive recv(MSG_OOB) */
+	send_fd(0, 0);
+	ASSERT_EQ(2, count_scm_fds(_metadata, recv_fd));
+	ret = recv(recv_fd, buf, 1, MSG_OOB);
+	ASSERT_EQ(1, ret);
+	ret = send(self->fd[1], "y", 1, MSG_OOB);
+	ASSERT_EQ(1, ret);
+	ret = recv(recv_fd, buf, 1, MSG_OOB);
+	ASSERT_EQ(1, ret);
+	ASSERT_EQ(0, count_scm_fds(_metadata, recv_fd));
+
+	if (variant->test_listener) {
+		ret = close(recv_fd);
+		ASSERT_EQ(0, ret);
+	}
+
+	close_sockets(2);
+}
+
+TEST_F(scm_rights, dgram_disconnect_fdinfo)
+{
+	struct sockaddr addr = {
+		.sa_family = AF_UNSPEC,
+	};
+	int ret;
+
+	if (variant->type != SOCK_DGRAM || variant->disabled)
+		return;
+
+	create_sockets(2);
+
+	send_fd(0, 0);
+	ASSERT_EQ(2, count_scm_fds(_metadata, self->fd[0]));
+
+	ret = connect(self->fd[0], &addr, sizeof(addr.sa_family));
+	ASSERT_EQ(0, ret);
+	ASSERT_EQ(0, count_scm_fds(_metadata, self->fd[0]));
+
+	close_sockets(2);
 }
 
 TEST_HARNESS_MAIN

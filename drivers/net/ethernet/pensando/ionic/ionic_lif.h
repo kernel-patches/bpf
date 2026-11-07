@@ -180,6 +180,12 @@ struct ionic_qtype_info {
 
 struct ionic_phc;
 
+enum ionic_aux_type {
+	IONIC_AUX_RDMA,
+	IONIC_AUX_HWMON,
+	IONIC_AUX_MAX,
+};
+
 #define IONIC_LIF_NAME_MAX_SZ		32
 struct ionic_lif {
 	struct net_device *netdev;
@@ -225,7 +231,7 @@ struct ionic_lif {
 	dma_addr_t info_pa;
 	u32 info_sz;
 	struct ionic_qtype_info qtype_info[IONIC_QTYPE_MAX];
-	struct ionic_aux_dev *ionic_adev;
+	struct ionic_aux_dev *aux_devs[IONIC_AUX_MAX];
 	struct mutex adev_lock;	/* lock for aux_dev actions */
 
 	u8 rss_hash_key[IONIC_RSS_HASH_KEY_SIZE];
@@ -288,6 +294,16 @@ static inline void ionic_init_queue_params(struct ionic_lif *lif,
 	qparam->intr_split = test_bit(IONIC_LIF_F_SPLIT_INTR, lif->state);
 	qparam->cmb_tx = test_bit(IONIC_LIF_F_CMB_TX_RINGS, lif->state);
 	qparam->cmb_rx = test_bit(IONIC_LIF_F_CMB_RX_RINGS, lif->state);
+}
+
+static inline void ionic_lif_set_ntxq_descs(struct ionic_lif *lif,
+					    unsigned int descs)
+{
+	if (descs == lif->ntxq_descs)
+		return;
+
+	lif->ntxq_descs = descs;
+	netif_set_tso_max_segs(lif->netdev, descs - 1);
 }
 
 static inline void ionic_set_queue_params(struct ionic_lif *lif,

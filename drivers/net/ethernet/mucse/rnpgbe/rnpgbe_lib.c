@@ -4,6 +4,7 @@
 #include <linux/pci.h>
 #include <linux/netdevice.h>
 #include <linux/iopoll.h>
+#include <linux/jiffies.h>
 #include <linux/etherdevice.h>
 #include <linux/vmalloc.h>
 #include <net/netdev_queues.h>
@@ -201,8 +202,10 @@ static bool mucse_alloc_mapped_page(struct mucse_ring *rx_ring,
 	}
 
 	page = page_pool_dev_alloc_pages(rx_ring->page_pool);
-	if (unlikely(!page))
+	if (unlikely(!page)) {
+		atomic64_inc(&rx_ring->stats->page_alloc_failures);
 		return false;
+	}
 	dma = page_pool_get_dma_addr(page);
 
 	bi->dma = dma;
@@ -468,6 +471,7 @@ static int rnpgbe_clean_rx_irq(struct mucse_q_vector *q_vector,
 			       struct mucse_ring *rx_ring,
 			       int budget)
 {
+	unsigned int delivered_bytes = 0, delivered_packets = 0;
 	unsigned int total_rx_bytes = 0, total_rx_packets = 0;
 	u16 cleaned_count = mucse_desc_unused_rx(rx_ring);
 	unsigned int total_rx_length_errors = 0;
@@ -571,6 +575,7 @@ static int rnpgbe_clean_rx_irq(struct mucse_q_vector *q_vector,
 			skb = rnpgbe_build_skb(rx_buffer, size);
 
 		if (!skb) {
+			atomic64_inc(&rx_ring->stats->skb_alloc_failures);
 			cleaned_count++;
 
 			/* drop until eop if multiple descriptors */
@@ -615,6 +620,8 @@ static int rnpgbe_clean_rx_irq(struct mucse_q_vector *q_vector,
 
 		/* probably a little skewed due to removing CRC */
 		total_rx_bytes += skb->len;
+		delivered_bytes += skb->len;
+		delivered_packets++;
 		rnpgbe_process_skb_fields(rx_ring, skb);
 		rx_desc->wb.cmd = 0;
 		napi_gro_receive(&q_vector->napi, skb);
@@ -626,6 +633,8 @@ static int rnpgbe_clean_rx_irq(struct mucse_q_vector *q_vector,
 	u64_stats_update_begin(&rx_ring->stats->syncp);
 	rx_ring->stats->packets += total_rx_packets;
 	rx_ring->stats->bytes += total_rx_bytes;
+	rx_ring->stats->delivered_packets += delivered_packets;
+	rx_ring->stats->delivered_bytes += delivered_bytes;
 	rx_ring->stats->length_errors += total_rx_length_errors;
 	atomic64_add(total_rx_dropped, &rx_ring->stats->dropped);
 	u64_stats_update_end(&rx_ring->stats->syncp);
@@ -1456,7 +1465,7 @@ void rnpgbe_down(struct mucse *mucse)
 	int err;
 
 	spin_lock_irqsave(&mucse->link_lock, flags);
-	mucse->link_event_ready = false;
+	WRITE_ONCE(mucse->link_event_ready, false);
 	mucse->link_pending = false;
 	hw->link = false;
 	hw->speed = 0;
@@ -1491,6 +1500,7 @@ void rnpgbe_down(struct mucse *mucse)
 			 err);
 		dev_warn(&hw->pdev->dev, "Port is not truly down\n");
 	}
+	rnpgbe_update_stats(mucse);
 	rnpgbe_clean_all_rx_rings(mucse);
 }
 
@@ -1527,7 +1537,7 @@ int rnpgbe_up_complete(struct mucse *mucse)
 	hw->speed = 0;
 	hw->duplex = 0;
 	mucse_hw_wr32(hw, RNPGBE_LINK_ST, M_DEFAULT_ST);
-	mucse->link_event_ready = true;
+	WRITE_ONCE(mucse->link_event_ready, true);
 	spin_unlock_irqrestore(&mucse->link_lock, flags);
 	/* Firmware checks RNPGBE_LINK_ST (driver's last-received link state)
 	 * and only asserts LINK_CHANGE_EVT when it differs from the actual link
@@ -1541,6 +1551,7 @@ int rnpgbe_up_complete(struct mucse *mucse)
 		return err;
 	}
 
+	schedule_delayed_work(&mucse->serv_task, HZ);
 	return 0;
 }
 
@@ -1760,8 +1771,10 @@ static int rnpgbe_tx_map(struct mucse_ring *tx_ring,
 	dma_unmap_addr_set(tx_buffer, dma, 0);
 
 	for (;; frag_idx++) {
-		if (dma_mapping_error(tx_ring->dev, dma))
+		if (dma_mapping_error(tx_ring->dev, dma)) {
+			atomic64_inc(&tx_ring->stats->dma_map_failures);
 			goto err_unmap;
+		}
 
 		/* record length, and DMA address */
 		dma_unmap_len_set(tx_buffer, len, size);
@@ -1961,6 +1974,8 @@ void rnpgbe_get_stats64(struct net_device *netdev,
 		stats->rx_errors += length_errors;
 		stats->rx_length_errors += length_errors;
 	}
+
+	rnpgbe_get_hw_stats(mucse, stats);
 }
 
 static int mucse_alloc_page_pool(struct mucse_ring *rx_ring)
@@ -2259,4 +2274,9 @@ void rnpgbe_service_task(struct work_struct *work)
 	struct mucse *mucse = container_of(work, struct mucse, serv_task.work);
 
 	rnpgbe_process_link_subtask(mucse);
+	rnpgbe_update_stats(mucse);
+
+	/* Leave an immediate invocation queued by a link event unchanged. */
+	if (READ_ONCE(mucse->link_event_ready))
+		schedule_delayed_work(&mucse->serv_task, HZ);
 }

@@ -1175,7 +1175,6 @@ static struct slave *bond_find_best_slave(struct bonding *bond)
 /* must be called in RCU critical section or with RTNL held */
 static bool bond_should_notify_peers(struct bonding *bond)
 {
-	struct bond_up_slave *usable;
 	struct slave *slave = NULL;
 
 	if (!bond->send_peer_notif ||
@@ -1189,8 +1188,14 @@ static bool bond_should_notify_peers(struct bonding *bond)
 	 * It is safe to only check bond mode here.
 	 */
 	if (BOND_MODE(bond) == BOND_MODE_8023AD) {
-		usable = rcu_dereference_rtnl(bond->usable_slaves);
-		if (!usable || !READ_ONCE(usable->count))
+		struct bond_up_slave *usable;
+		bool can_notify;
+
+		rcu_read_lock();
+		usable = rcu_dereference(bond->usable_slaves);
+		can_notify = usable && READ_ONCE(usable->count);
+		rcu_read_unlock();
+		if (!can_notify)
 			return false;
 	} else {
 		slave = rcu_dereference_rtnl(bond->curr_active_slave);
@@ -2305,7 +2310,7 @@ skip_mac_set:
 			SLAVE_NL_ERR(bond_dev, slave_dev, extack,
 				     "Slave does not support XDP");
 			res = -EOPNOTSUPP;
-			goto err_sysfs_del;
+			goto err_dec_slave_cnt;
 		}
 	} else if (bond->xdp_prog) {
 		struct netdev_bpf xdp = {
@@ -2319,23 +2324,30 @@ skip_mac_set:
 			SLAVE_NL_ERR(bond_dev, slave_dev, extack,
 				     "Slave has XDP program loaded, please unload before enslaving");
 			res = -EOPNOTSUPP;
-			goto err_sysfs_del;
+			goto err_dec_slave_cnt;
 		}
 
 		res = dev_xdp_propagate(slave_dev, &xdp);
 		if (res < 0) {
 			/* ndo_bpf() sets extack error message */
 			slave_dbg(bond_dev, slave_dev, "Error %d calling ndo_bpf\n", res);
-			goto err_sysfs_del;
+			goto err_dec_slave_cnt;
 		}
 		if (bond->xdp_prog)
 			bpf_prog_inc(bond->xdp_prog);
 	}
 
+	/* Publish only after all fallible setup, including XDP, is complete. */
+	mutex_lock(&bond->slave_arr_lock);
+	new_slave->array_ready = true;
+	mutex_unlock(&bond->slave_arr_lock);
+
 	/* broadcast mode uses the all_slaves to loop through slaves. */
 	if (bond_mode_can_use_xmit_hash(bond) ||
-	    BOND_MODE(bond) == BOND_MODE_BROADCAST)
-		bond_update_slave_arr(bond, NULL);
+	    BOND_MODE(bond) == BOND_MODE_BROADCAST) {
+		if (bond_update_slave_arr(bond, NULL) && netif_running(bond_dev))
+			bond_slave_arr_work_rearm(bond, 1);
+	}
 
 	bond_xdp_set_features(bond_dev);
 
@@ -2348,6 +2360,9 @@ skip_mac_set:
 	return 0;
 
 /* Undo stages on error */
+err_dec_slave_cnt:
+	WRITE_ONCE(bond->slave_cnt, bond->slave_cnt - 1);
+
 err_sysfs_del:
 	bond_sysfs_slave_del(new_slave);
 
@@ -2779,6 +2794,27 @@ static void bond_miimon_link_change(struct bonding *bond,
 	}
 }
 
+static bool bond_miimon_slave_down(struct bonding *bond,
+				   struct slave *slave)
+{
+	if (slave->link_failure_count < UINT_MAX)
+		slave->link_failure_count++;
+
+	bond_set_slave_link_state(slave, BOND_LINK_DOWN,
+				  BOND_SLAVE_NOTIFY_NOW);
+
+	if (BOND_MODE(bond) == BOND_MODE_ACTIVEBACKUP ||
+	    BOND_MODE(bond) == BOND_MODE_8023AD)
+		bond_set_slave_inactive_flags(slave,
+					      BOND_SLAVE_NOTIFY_NOW);
+
+	slave_info(bond->dev, slave->dev, "link status definitely down, disabling slave\n");
+
+	bond_miimon_link_change(bond, slave, BOND_LINK_DOWN);
+
+	return slave == rcu_access_pointer(bond->curr_active_slave);
+}
+
 static void bond_miimon_commit(struct bonding *bond)
 {
 	struct slave *slave, *primary, *active;
@@ -2807,10 +2843,22 @@ static void bond_miimon_commit(struct bonding *bond)
 			err = bond_update_speed_duplex(slave);
 			netdev_unlock_ops(slave->dev);
 			if (err && bond_needs_speed_duplex(bond)) {
-				slave->link = BOND_LINK_DOWN;
 				if (net_ratelimit())
 					slave_warn(bond->dev, slave->dev,
 						   "failed to get link speed/duplex\n");
+				/* Coming from FAIL/UP, the slave may still be
+				 * in use and may be curr_active_slave, so take
+				 * it through the full down path. Coming from
+				 * DOWN/BACK, it was never brought up, so just
+				 * revert it to DOWN.
+				 */
+				if (slave->link == BOND_LINK_FAIL ||
+				    slave->link == BOND_LINK_UP) {
+					if (bond_miimon_slave_down(bond, slave))
+						do_failover = true;
+					continue;
+				}
+				slave->link = BOND_LINK_DOWN;
 				continue;
 			}
 			bond_set_slave_link_state(slave, BOND_LINK_UP,
@@ -2839,28 +2887,13 @@ static void bond_miimon_commit(struct bonding *bond)
 			continue;
 
 		case BOND_LINK_DOWN:
-			if (slave->link_failure_count < UINT_MAX)
-				slave->link_failure_count++;
-
-			bond_set_slave_link_state(slave, BOND_LINK_DOWN,
-						  BOND_SLAVE_NOTIFY_NOW);
-
-			if (BOND_MODE(bond) == BOND_MODE_ACTIVEBACKUP ||
-			    BOND_MODE(bond) == BOND_MODE_8023AD)
-				bond_set_slave_inactive_flags(slave,
-							      BOND_SLAVE_NOTIFY_NOW);
-
-			slave_info(bond->dev, slave->dev, "link status definitely down, disabling slave\n");
-
-			bond_miimon_link_change(bond, slave, BOND_LINK_DOWN);
-
-			if (slave == rcu_access_pointer(bond->curr_active_slave))
+			if (bond_miimon_slave_down(bond, slave))
 				do_failover = true;
-
 			continue;
 
 		case BOND_LINK_FAIL:
 		case BOND_LINK_BACK:
+			bond_commit_link_state(slave, BOND_SLAVE_NOTIFY_LATER);
 			slave_dbg(bond->dev, slave->dev, "link_new_state %d on slave\n",
 				  slave->link_new_state);
 			continue;
@@ -2894,8 +2927,6 @@ static void bond_mii_monitor(struct work_struct *work)
 {
 	struct bonding *bond = container_of(work, struct bonding,
 					    mii_work.work);
-	struct list_head *iter;
-	struct slave *slave;
 	unsigned long delay;
 	bool commit;
 
@@ -2917,13 +2948,8 @@ static void bond_mii_monitor(struct work_struct *work)
 			goto re_arm;
 		}
 
-		if (commit) {
-			bond_for_each_slave(bond, slave, iter) {
-				bond_commit_link_state(slave,
-						       BOND_SLAVE_NOTIFY_LATER);
-			}
+		if (commit)
 			bond_miimon_commit(bond);
-		}
 
 		if (bond->send_peer_notif)
 			bond_peer_notify_may_events(bond, true);
@@ -3973,18 +3999,13 @@ static int bond_slave_netdev_event(unsigned long event,
 	case NETDEV_CHANGE:
 		/* For 802.3ad mode only:
 		 * Getting invalid Speed/Duplex values here will put slave
-		 * in weird state. Mark it as link-fail if the link was
-		 * previously up or link-down if it hasn't yet come up, and
-		 * let link-monitoring (miimon) set it right when correct
-		 * speeds/duplex are available.
+		 * in weird state. Mark an up slave as link-fail and let
+		 * miimon set it right when correct speed/duplex are available.
 		 */
 		if (bond_update_speed_duplex(slave) &&
-		    BOND_MODE(bond) == BOND_MODE_8023AD) {
-			if (slave->last_link_up)
-				slave->link = BOND_LINK_FAIL;
-			else
-				slave->link = BOND_LINK_DOWN;
-		}
+		    BOND_MODE(bond) == BOND_MODE_8023AD &&
+		    slave->link == BOND_LINK_UP)
+			slave->link = BOND_LINK_FAIL;
 
 		if (BOND_MODE(bond) == BOND_MODE_8023AD)
 			bond_3ad_adapter_speed_duplex_changed(slave);
@@ -4399,8 +4420,11 @@ static int bond_open(struct net_device *bond_dev)
 			static_branch_inc(&bond_bcast_neigh_enabled);
 	}
 
-	if (bond_mode_can_use_xmit_hash(bond))
-		bond_update_slave_arr(bond, NULL);
+	if (bond_mode_can_use_xmit_hash(bond) ||
+	    BOND_MODE(bond) == BOND_MODE_BROADCAST) {
+		if (bond_update_slave_arr(bond, NULL))
+			bond_slave_arr_work_rearm(bond, 1);
+	}
 
 	return 0;
 }
@@ -5068,35 +5092,24 @@ static netdev_tx_t bond_xmit_activebackup(struct sk_buff *skb,
 	return bond_tx_drop(bond_dev, skb);
 }
 
-/* Use this to update slave_array when (a) it's not appropriate to update
- * slave_array right away (note that update_slave_array() may sleep)
- * and / or (b) RTNL is not held.
- */
+/* Retry failed array updates without requiring RTNL. */
 void bond_slave_arr_work_rearm(struct bonding *bond, unsigned long delay)
 {
 	queue_delayed_work(bond->wq, &bond->slave_arr_work, delay);
 }
 
-/* Slave array work handler. Holds only RTNL */
+/* Retry failed array updates; the builder acquires slave_arr_lock. */
 static void bond_slave_arr_handler(struct work_struct *work)
 {
 	struct bonding *bond = container_of(work, struct bonding,
 					    slave_arr_work.work);
 	int ret;
 
-	if (!rtnl_trylock())
-		goto err;
-
 	ret = bond_update_slave_arr(bond, NULL);
-	rtnl_unlock();
 	if (ret) {
 		pr_warn_ratelimited("Failed to update slave array from WT\n");
-		goto err;
+		bond_slave_arr_work_rearm(bond, 1);
 	}
-	return;
-
-err:
-	bond_slave_arr_work_rearm(bond, 1);
 }
 
 static void bond_skip_slave(struct bond_up_slave *slaves,
@@ -5128,7 +5141,10 @@ static void bond_set_slave_arr(struct bonding *bond,
 {
 	struct bond_up_slave *usable, *all;
 
-	all = rtnl_dereference(bond->all_slaves);
+	lockdep_assert_held(&bond->slave_arr_lock);
+
+	all = rcu_dereference_protected(bond->all_slaves,
+					lockdep_is_held(&bond->slave_arr_lock));
 	rcu_assign_pointer(bond->all_slaves, all_slaves);
 	kfree_rcu(all, rcu);
 
@@ -5137,7 +5153,8 @@ static void bond_set_slave_arr(struct bonding *bond,
 		return;
 	}
 
-	usable = rtnl_dereference(bond->usable_slaves);
+	usable = rcu_dereference_protected(bond->usable_slaves,
+					   lockdep_is_held(&bond->slave_arr_lock));
 	rcu_assign_pointer(bond->usable_slaves, usable_slaves);
 	kfree_rcu(usable, rcu);
 }
@@ -5147,26 +5164,28 @@ static void bond_reset_slave_arr(struct bonding *bond)
 	bond_set_slave_arr(bond, NULL, NULL);
 }
 
-/* Build the usable slaves array in control path for modes that use xmit-hash
- * to determine the slave interface -
- * (a) BOND_MODE_8023AD
- * (b) BOND_MODE_XOR
- * (c) (BOND_MODE_TLB || BOND_MODE_ALB) && tlb_dynamic_lb == 0
+/* Rebuild both transmit arrays for 802.3ad, XOR, TLB/ALB and broadcast.
  *
- * The caller is expected to hold RTNL only and NO other lock!
+ * Serializes writers and array_ready commits with slave_arr_lock.
+ * Walks the lower list under RCU; membership may change concurrently.
+ * The caller must be in sleepable context without mode_lock or RCU held.
  */
 int bond_update_slave_arr(struct bonding *bond, struct slave *skipslave)
 {
 	struct bond_up_slave *usable_slaves = NULL, *all_slaves = NULL;
 	struct slave *slave;
 	struct list_head *iter;
+	unsigned int count;
 	int agg_id = 0;
 	int ret = 0;
 
 	might_sleep();
+	mutex_lock(&bond->slave_arr_lock);
 
-	usable_slaves = kzalloc_flex(*usable_slaves, arr, bond->slave_cnt);
-	all_slaves = kzalloc_flex(*all_slaves, arr, bond->slave_cnt);
+	/* Enslave counts before committing; release updates before uncounting. */
+	count = READ_ONCE(bond->slave_cnt);
+	usable_slaves = kzalloc_flex(*usable_slaves, arr, count);
+	all_slaves = kzalloc_flex(*all_slaves, arr, count);
 	if (!usable_slaves || !all_slaves) {
 		ret = -ENOMEM;
 		goto out;
@@ -5188,8 +5207,8 @@ int bond_update_slave_arr(struct bonding *bond, struct slave *skipslave)
 		agg_id = ad_info.aggregator_id;
 	}
 	rcu_read_lock();
-	bond_for_each_slave(bond, slave, iter) {
-		if (skipslave == slave)
+	bond_for_each_slave_rcu(bond, slave, iter) {
+		if (skipslave == slave || !slave->array_ready)
 			continue;
 
 		all_slaves->arr[all_slaves->count++] = slave;
@@ -5211,17 +5230,21 @@ int bond_update_slave_arr(struct bonding *bond, struct slave *skipslave)
 	rcu_read_unlock();
 
 	bond_set_slave_arr(bond, usable_slaves, all_slaves);
-	return ret;
+	goto out_unlock;
 out:
 	if (ret != 0 && skipslave) {
-		bond_skip_slave(rtnl_dereference(bond->all_slaves),
+		bond_skip_slave(rcu_dereference_protected(bond->all_slaves,
+							  lockdep_is_held(&bond->slave_arr_lock)),
 				skipslave);
-		bond_skip_slave(rtnl_dereference(bond->usable_slaves),
+		bond_skip_slave(rcu_dereference_protected(bond->usable_slaves,
+							  lockdep_is_held(&bond->slave_arr_lock)),
 				skipslave);
 	}
 	kfree_rcu(all_slaves, rcu);
 	kfree_rcu(usable_slaves, rcu);
 
+out_unlock:
+	mutex_unlock(&bond->slave_arr_lock);
 	return ret;
 }
 
@@ -5986,6 +6009,7 @@ static void bond_destructor(struct net_device *bond_dev)
 	if (bond->wq)
 		destroy_workqueue(bond->wq);
 
+	mutex_destroy(&bond->slave_arr_lock);
 	free_percpu(bond->rr_tx_counter);
 }
 
@@ -6073,7 +6097,9 @@ static void bond_uninit(struct net_device *bond_dev)
 	mutex_destroy(&bond->ipsec_lock);
 #endif /* CONFIG_XFRM_OFFLOAD */
 
+	mutex_lock(&bond->slave_arr_lock);
 	bond_set_slave_arr(bond, NULL, NULL);
+	mutex_unlock(&bond->slave_arr_lock);
 
 	list_del_rcu(&bond->bond_list);
 
@@ -6486,6 +6512,7 @@ static int bond_init(struct net_device *bond_dev)
 	if (!bond->wq)
 		return -ENOMEM;
 
+	mutex_init(&bond->slave_arr_lock);
 	bond->notifier_ctx = false;
 
 	spin_lock_init(&bond->stats_lock);

@@ -23,12 +23,13 @@ struct kvm_ptp_clock {
 };
 
 static DEFINE_SPINLOCK(kvm_ptp_lock);
+static enum clocksource_ids kvm_ptp_cs_id = CSID_GENERIC;
 
 static int ptp_kvm_get_time_fn(ktime_t *device_time,
 			       struct system_counterval_t *system_counter,
 			       void *ctx)
 {
-	enum clocksource_ids cs_id;
+	enum clocksource_ids cs_id = *(enum clocksource_ids *)ctx;
 	struct timespec64 tspec;
 	u64 cycle;
 	int ret;
@@ -58,8 +59,29 @@ static int ptp_kvm_get_time_fn(ktime_t *device_time,
 static int ptp_kvm_getcrosststamp(struct ptp_clock_info *ptp,
 				  struct system_device_crosststamp *xtstamp)
 {
-	return get_device_system_crosststamp(ptp_kvm_get_time_fn, NULL,
-					     NULL, xtstamp);
+	enum clocksource_ids cs_id = READ_ONCE(kvm_ptp_cs_id);
+	struct system_time_snapshot snapshot;
+	int ret;
+
+	ret = get_device_system_crosststamp(ptp_kvm_get_time_fn, &cs_id, NULL,
+					    xtstamp);
+	/*
+	 * The paired counter value is not in the units of the current
+	 * clocksource. If the clocksource differs from the one this request
+	 * asked for, ask for the counter in the new units and retry once.
+	 */
+	if (ret == -ENODEV) {
+		ktime_get_snapshot_id(CLOCK_REALTIME, &snapshot);
+		if (snapshot.valid && snapshot.cs_id != cs_id) {
+			cs_id = snapshot.cs_id;
+			WRITE_ONCE(kvm_ptp_cs_id, cs_id);
+			ret = get_device_system_crosststamp(ptp_kvm_get_time_fn,
+							    &cs_id, NULL,
+							    xtstamp);
+		}
+	}
+
+	return ret;
 }
 
 /*

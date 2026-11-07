@@ -136,6 +136,8 @@ struct aq_nic_s {
 	unsigned int packet_filter;
 	unsigned int power_state;
 	u8 port;
+	/* Admission gate for ndo_xdp_xmit, drained with synchronize_net(). */
+	bool xdp_tx_enabled;
 	const struct aq_hw_ops *aq_hw_ops;
 	const struct aq_fw_ops *aq_fw_ops;
 	struct aq_nic_cfg_s aq_nic_cfg;

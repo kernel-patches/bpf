@@ -2736,6 +2736,13 @@ static void hso_free_shared_int(struct hso_shared_int *mux)
 	kfree(mux);
 }
 
+/* Release a shared interrupt state which no muxed serial device took over */
+static void hso_free_unused_shared_int(struct hso_shared_int *shared_int)
+{
+	mutex_lock(&shared_int->shared_int_lock);
+	hso_free_shared_int(shared_int);
+}
+
 static
 struct hso_shared_int *hso_create_shared_int(struct usb_interface *interface)
 {
@@ -2853,8 +2860,9 @@ static int hso_probe(struct usb_interface *interface,
 	int mux, i, if_num, port_spec;
 	unsigned char port_mask;
 	struct hso_device *hso_dev = NULL;
-	struct hso_shared_int *shared_int;
+	struct hso_shared_int *shared_int = NULL;
 	struct hso_device *tmp_dev = NULL;
+	int mux_count = 0;
 
 	if (interface->cur_altsetting->desc.bInterfaceClass != 0xFF) {
 		dev_err(&interface->dev, "Not our interface\n");
@@ -2912,11 +2920,16 @@ static int hso_probe(struct usb_interface *interface,
 						interface, i, shared_int);
 				if (!hso_dev)
 					goto exit;
+				mux_count++;
 			}
 		}
 
 		if (tmp_dev)
 			hso_dev = tmp_dev;
+
+		/* No muxed port took over the shared interrupt state */
+		if (!mux_count)
+			hso_free_unused_shared_int(shared_int);
 		break;
 
 	case HSO_INTF_BULK:
@@ -2943,6 +2956,11 @@ static int hso_probe(struct usb_interface *interface,
 	return 0;
 exit:
 	hso_free_interface(interface);
+
+	/* No muxed port took over the shared interrupt state */
+	if (shared_int && !mux_count)
+		hso_free_unused_shared_int(shared_int);
+
 	return -ENODEV;
 }
 

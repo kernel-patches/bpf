@@ -456,7 +456,7 @@ void tcp_init_sock(struct sock *sk)
 	 * initialization of these values.
 	 */
 	tp->snd_ssthresh = TCP_INFINITE_SSTHRESH;
-	tp->snd_cwnd_clamp = ~0;
+	tp->snd_cwnd_clamp = TCP_MAX_SND_CWND;
 	tp->mss_cache = TCP_MSS_DEFAULT;
 
 	tp->reordering = READ_ONCE(sock_net(sk)->ipv4.sysctl_tcp_reordering);
@@ -1878,6 +1878,13 @@ void tcp_set_rcvbuf(struct sock *sk, int val)
 	tcp_set_window_clamp(sk, tcp_win_from_space(sk, val));
 }
 
+static bool tcp_want_rx_tstamp(const struct sock *sk,
+			       const struct sk_buff *skb)
+{
+	return TCP_SKB_CB(skb)->has_rxtstamp &&
+		tcp_want_rx_tstamp_cmsg(sk);
+}
+
 #ifdef CONFIG_MMU
 static const struct vm_operations_struct tcp_vm_ops = {
 };
@@ -2069,7 +2076,7 @@ static int tcp_zc_handle_leftover(struct tcp_zerocopy_receive *zc,
 		offset = *seq - TCP_SKB_CB(skb)->seq;
 	} else {
 		skb = tcp_recv_skb(sk, *seq, &offset);
-		if (TCP_SKB_CB(skb)->has_rxtstamp) {
+		if (tcp_want_rx_tstamp(sk, skb)) {
 			tcp_update_recv_tstamps(skb, tss);
 			zc->msg_flags |= TCP_CMSG_TS;
 		}
@@ -2280,7 +2287,7 @@ static int tcp_zerocopy_receive(struct sock *sk,
 			if (!skb_frags_readable(skb))
 				break;
 
-			if (TCP_SKB_CB(skb)->has_rxtstamp) {
+			if (tcp_want_rx_tstamp(sk, skb)) {
 				tcp_update_recv_tstamps(skb, tss);
 				zc->msg_flags |= TCP_CMSG_TS;
 			}
@@ -2893,7 +2900,7 @@ skip_copy:
 			tcp_fast_path_check(sk);
 		}
 
-		if (TCP_SKB_CB(skb)->has_rxtstamp) {
+		if (tcp_want_rx_tstamp(sk, skb)) {
 			tcp_update_recv_tstamps(skb, tss);
 			*cmsg_flags |= TCP_CMSG_TS;
 		}
@@ -3490,6 +3497,7 @@ int tcp_disconnect(struct sock *sk, int flags)
 	tp->rx_opt.dsack = 0;
 	tp->rx_opt.num_sacks = 0;
 	tp->rcv_ooopack = 0;
+	tp->rcv_collapse_credit = 0;
 
 
 	/* Clean up fastopen related fields */
@@ -5308,6 +5316,7 @@ static void __init tcp_struct_check(void)
 	CACHELINE_ASSERT_GROUP_MEMBER(struct tcp_sock, tcp_sock_write_rx, rcv_rtt_last_tsecr);
 	CACHELINE_ASSERT_GROUP_MEMBER(struct tcp_sock, tcp_sock_write_rx, delivered_ecn_bytes);
 	CACHELINE_ASSERT_GROUP_MEMBER(struct tcp_sock, tcp_sock_write_rx, pkts_acked_ewma);
+	CACHELINE_ASSERT_GROUP_MEMBER(struct tcp_sock, tcp_sock_write_rx, rcv_collapse_credit);
 	CACHELINE_ASSERT_GROUP_MEMBER(struct tcp_sock, tcp_sock_write_rx, rcv_rtt_est);
 	CACHELINE_ASSERT_GROUP_MEMBER(struct tcp_sock, tcp_sock_write_rx, rcvq_space);
 }

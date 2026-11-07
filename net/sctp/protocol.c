@@ -645,6 +645,14 @@ static void sctp_addr_wq_timeout_handler(struct timer_list *t)
 			if (!sctp_is_ep_boundall(sk))
 				continue;
 			bh_lock_sock(sk);
+			if (sock_owned_by_user(sk)) {
+				bh_unlock_sock(sk);
+				spin_unlock_bh(&net->sctp.addr_wq_lock);
+				/* Try again later. */
+				mod_timer(&net->sctp.addr_wq_timer,
+					jiffies + msecs_to_jiffies(SCTP_ADDRESS_TICK_DELAY));
+				return;
+			}
 			if (sctp_asconf_mgmt(sp, addrw) < 0)
 				pr_debug("%s: sctp_asconf_mgmt failed\n", __func__);
 			bh_unlock_sock(sk);

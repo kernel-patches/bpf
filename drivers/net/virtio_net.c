@@ -315,6 +315,8 @@ struct send_queue {
 
 	struct xsk_buff_pool *xsk_pool;
 
+	/* All-zero header shared by the AF_XDP packets sent on this queue */
+	struct virtio_net_common_hdr *xsk_hdr;
 	dma_addr_t xsk_hdr_dma_addr;
 };
 
@@ -499,8 +501,6 @@ struct virtio_net_common_hdr {
 		struct virtio_net_hdr_v1_hash_tunnel tnl_hdr;
 	};
 };
-
-static struct virtio_net_common_hdr xsk_hdr;
 
 static void virtnet_sq_free_unused_buf(struct virtqueue *vq, void *buf);
 static void virtnet_sq_free_unused_buf_done(struct virtqueue *vq);
@@ -2533,7 +2533,7 @@ static void virtnet_receive_done(struct virtnet_info *vi, struct receive_queue *
 
 	skb->dev = dev;
 	skb_set_network_header(skb, ETH_HLEN);
-	if (virtio_net_hdr_tnl_to_skb(skb, &hdr->tnl_hdr, vi->rx_tnl,
+	if (virtio_net_hdr_tnl_to_skb(skb, &hdr->tnl_hdr, true, vi->rx_tnl,
 				      vi->rx_tnl_csum,
 				      virtio_is_little_endian(vi->vdev))) {
 		net_warn_ratelimited("%s: bad gso: type: %x, size: %u, flags %x tunnel %d tnl csum %d\n",
@@ -4973,7 +4973,8 @@ drv_stats:
 static int __virtnet_get_hw_stats(struct virtnet_info *vi,
 				  struct virtnet_stats_ctx *ctx,
 				  struct virtio_net_ctrl_queue_stats *req,
-				  int req_size, void *reply, int res_size)
+				  int req_size, void *reply, int res_size,
+				  int first_vq, int last_vq, bool enable_cvq)
 {
 	struct virtio_net_stats_reply_hdr *hdr;
 	struct scatterlist sgs_in, sgs_out;
@@ -4994,6 +4995,13 @@ static int __virtnet_get_hw_stats(struct virtnet_info *vi,
 	for (p = reply; p - reply < res_size; p += le16_to_cpu(hdr->size)) {
 		hdr = p;
 		qid = le16_to_cpu(hdr->vq_index);
+		/* The vqs of the queue pairs beyond curr_queue_pairs lie
+		 * between last_vq and the control vq.
+		 */
+		if ((qid < first_vq || qid > last_vq) &&
+		    !(enable_cvq && qid == vi->max_queue_pairs * 2))
+			return -EINVAL;
+
 		virtnet_fill_stats(vi, qid, ctx, p, false, hdr->type);
 	}
 
@@ -5073,7 +5081,8 @@ static int virtnet_get_hw_stats(struct virtnet_info *vi,
 	if (enable_cvq)
 		virtnet_make_stat_req(vi, ctx, req, vi->max_queue_pairs * 2, &j);
 
-	ok = __virtnet_get_hw_stats(vi, ctx, req, sizeof(*req) * j, reply, res_size);
+	ok = __virtnet_get_hw_stats(vi, ctx, req, sizeof(*req) * j, reply, res_size,
+				    first_vq, last_vq, enable_cvq);
 
 	kfree(req);
 	kfree(reply);
@@ -5971,11 +5980,21 @@ static int virtnet_xsk_pool_enable(struct net_device *dev,
 	if (!rq->xsk_buffs)
 		return -ENOMEM;
 
-	hdr_dma = virtqueue_map_single_attrs(sq->vq, &xsk_hdr, vi->hdr_len,
+	/*
+	 * Don't map a static header: the kernel image is not in the linear
+	 * map on all architectures (e.g. arm64), so it can't be DMA mapped.
+	 */
+	sq->xsk_hdr = kzalloc_obj(*sq->xsk_hdr);
+	if (!sq->xsk_hdr) {
+		err = -ENOMEM;
+		goto err_free_buffs;
+	}
+
+	hdr_dma = virtqueue_map_single_attrs(sq->vq, sq->xsk_hdr, vi->hdr_len,
 					     DMA_TO_DEVICE, 0);
 	if (virtqueue_map_mapping_error(sq->vq, hdr_dma)) {
 		err = -ENOMEM;
-		goto err_free_buffs;
+		goto err_free_hdr;
 	}
 
 	err = xsk_pool_dma_map(pool, dma_dev, 0);
@@ -6004,6 +6023,9 @@ err_rq:
 err_xsk_map:
 	virtqueue_unmap_single_attrs(rq->vq, hdr_dma, vi->hdr_len,
 				     DMA_TO_DEVICE, 0);
+err_free_hdr:
+	kfree(sq->xsk_hdr);
+	sq->xsk_hdr = NULL;
 err_free_buffs:
 	kvfree(rq->xsk_buffs);
 	return err;
@@ -6024,6 +6046,9 @@ static int virtnet_xsk_pool_disable(struct net_device *dev, u16 qid)
 	rq = &vi->rq[qid];
 
 	pool = rq->xsk_pool;
+	/* Not bound to the driver, e.g. if rebinding it on restore failed */
+	if (!pool)
+		return 0;
 
 	err = virtnet_rq_bind_xsk_pool(vi, rq, NULL);
 	err |= virtnet_sq_bind_xsk_pool(vi, sq, NULL);
@@ -6032,9 +6057,47 @@ static int virtnet_xsk_pool_disable(struct net_device *dev, u16 qid)
 
 	virtqueue_unmap_single_attrs(sq->vq, sq->xsk_hdr_dma_addr,
 				     vi->hdr_len, DMA_TO_DEVICE, 0);
+	kfree(sq->xsk_hdr);
+	sq->xsk_hdr = NULL;
 	kvfree(rq->xsk_buffs);
 
 	return err;
+}
+
+/*
+ * Freeze frees the receive and send queues while the AF_XDP sockets stay
+ * bound to the device, so release the driver side of the zero-copy pools
+ * before and bind them again after restore.
+ */
+static void __maybe_unused virtnet_xsk_pools_unbind(struct virtnet_info *vi)
+{
+	int i;
+
+	ASSERT_RTNL();
+
+	for (i = 0; i < vi->max_queue_pairs; i++)
+		if (vi->rq[i].xsk_pool)
+			virtnet_xsk_pool_disable(vi->dev, i);
+}
+
+static void __maybe_unused virtnet_xsk_pools_rebind(struct virtnet_info *vi)
+{
+	struct xsk_buff_pool *pool;
+	int i, err;
+
+	ASSERT_RTNL();
+
+	for (i = 0; i < vi->curr_queue_pairs; i++) {
+		pool = xsk_get_pool_from_qid(vi->dev, i);
+		if (!pool || !pool->umem->zc)
+			continue;
+
+		err = virtnet_xsk_pool_enable(vi->dev, pool, i);
+		if (err)
+			netdev_warn(vi->dev,
+				    "failed to rebind AF_XDP pool to queue %d: %d\n",
+				    i, err);
+	}
 }
 
 static int virtnet_xsk_pool_setup(struct net_device *dev, struct netdev_bpf *xdp)
@@ -7231,6 +7294,10 @@ static __maybe_unused int virtnet_freeze(struct virtio_device *vdev)
 {
 	struct virtnet_info *vi = vdev->priv;
 
+	rtnl_lock();
+	virtnet_xsk_pools_unbind(vi);
+	rtnl_unlock();
+
 	virtnet_cpu_notif_remove(vi);
 	virtnet_freeze_down(vdev);
 	remove_vq_common(vi);
@@ -7254,6 +7321,10 @@ static __maybe_unused int virtnet_restore(struct virtio_device *vdev)
 		remove_vq_common(vi);
 		return err;
 	}
+
+	rtnl_lock();
+	virtnet_xsk_pools_rebind(vi);
+	rtnl_unlock();
 
 	return 0;
 }

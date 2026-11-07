@@ -416,9 +416,12 @@ static int vlan_dev_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 	ifrr.ifr_ifru = ifr->ifr_ifru;
 
 	switch (cmd) {
+	case SIOCSMIIREG:
+		if (!net_eq(dev_net(dev), dev_net(real_dev)))
+			break;
+		fallthrough;
 	case SIOCGMIIPHY:
 	case SIOCGMIIREG:
-	case SIOCSMIIREG:
 		err = dev_eth_ioctl(real_dev, &ifrr, cmd);
 		break;
 	}

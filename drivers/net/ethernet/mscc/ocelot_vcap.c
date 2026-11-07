@@ -970,8 +970,11 @@ ocelot_vcap_filter_add_aux_resources(struct ocelot *ocelot,
 	if (filter->block_id == VCAP_IS2 && filter->action.police_ena) {
 		ret = ocelot_vcap_policer_add(ocelot, filter->action.pol_ix,
 					      &filter->action.pol);
-		if (ret)
+		if (ret) {
+			if (filter->action.mirror_ena)
+				ocelot_mirror_put(ocelot);
 			return ret;
+		}
 	}
 
 	return 0;

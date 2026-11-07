@@ -2616,8 +2616,8 @@ re_arm:
 	rcu_read_unlock();
 	spin_unlock_bh(&bond->mode_lock);
 
-	if (update_slave_arr)
-		bond_slave_arr_work_rearm(bond, 0);
+	if (update_slave_arr && bond_update_slave_arr(bond, NULL))
+		bond_slave_arr_work_rearm(bond, 1);
 
 	if (should_notify_rtnl && rtnl_trylock()) {
 		bond_slave_state_notify(bond);
@@ -2816,9 +2816,7 @@ void bond_3ad_handle_link_change(struct slave *slave, char link)
 		  port->actor_port_number,
 		  link == BOND_LINK_UP ? "UP" : "DOWN");
 
-	/* RTNL is held and mode_lock is released so it's safe
-	 * to update slave_array here.
-	 */
+	/* mode_lock is released; the array update may sleep. */
 	bond_update_slave_arr(slave->bond, NULL);
 }
 

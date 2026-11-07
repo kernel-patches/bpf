@@ -333,12 +333,6 @@ int mii_ethtool_set_link_ksettings(struct mii_if_info *mii,
 	struct net_device *dev = mii->dev;
 	u32 speed = cmd->base.speed;
 
-	if (speed != SPEED_10 &&
-	    speed != SPEED_100 &&
-	    speed != SPEED_1000)
-		return -EINVAL;
-	if (cmd->base.duplex != DUPLEX_HALF && cmd->base.duplex != DUPLEX_FULL)
-		return -EINVAL;
 	if (cmd->base.port != PORT_MII)
 		return -EINVAL;
 	if (cmd->base.phy_address != mii->phy_id)
@@ -346,8 +340,19 @@ int mii_ethtool_set_link_ksettings(struct mii_if_info *mii,
 	if (cmd->base.autoneg != AUTONEG_DISABLE &&
 	    cmd->base.autoneg != AUTONEG_ENABLE)
 		return -EINVAL;
-	if ((speed == SPEED_1000) && (!mii->supports_gmii))
-		return -EINVAL;
+
+	/* Speed is SPEED_UNKNOWN while the link is down; autoneg ignores it */
+	if (cmd->base.autoneg == AUTONEG_DISABLE) {
+		if (speed != SPEED_10 &&
+		    speed != SPEED_100 &&
+		    speed != SPEED_1000)
+			return -EINVAL;
+		if (cmd->base.duplex != DUPLEX_HALF &&
+		    cmd->base.duplex != DUPLEX_FULL)
+			return -EINVAL;
+		if ((speed == SPEED_1000) && (!mii->supports_gmii))
+			return -EINVAL;
+	}
 
 	/* ignore supported, maxtxpkt, maxrxpkt */
 

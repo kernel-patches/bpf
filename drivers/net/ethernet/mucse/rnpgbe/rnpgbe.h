@@ -13,6 +13,7 @@
 #include <linux/workqueue.h>
 
 #include "rnpgbe_hw.h"
+#include "rnpgbe_stats.h"
 
 enum rnpgbe_boards {
 	board_n500,
@@ -39,17 +40,30 @@ enum {
 	mucse_fw_link_report_en,
 };
 
+struct mucse_link_config {
+	u32 supported;
+	u32 advertising;
+	u32 speed;
+	u16 status;
+	u8 phy_addr;
+	u8 duplex;
+};
+
 struct mucse_hw {
 	void __iomem *hw_addr;
 	void __iomem *ring_msix_base;
 	struct pci_dev *pdev;
 	struct mucse_mbx_info mbx;
+	struct mucse_link_config link_config;
 	int port;
 	int speed;
+	u32 fw_version;
 	bool link;
 	u16 cycles_per_us;
 	u8 pfvfnum;
 	u8 duplex;
+	u8 mdix_ctrl;
+	u8 mdix;
 };
 
 struct rnpgbe_tx_desc {
@@ -106,8 +120,13 @@ struct mucse_tx_buffer {
 struct mucse_queue_stats {
 	u64 packets;
 	u64 bytes;
+	u64 delivered_packets;
+	u64 delivered_bytes;
 	u64 length_errors;
 	atomic64_t dropped;
+	atomic64_t page_alloc_failures;
+	atomic64_t skb_alloc_failures;
+	atomic64_t dma_map_failures;
 	struct u64_stats_sync syncp;
 } ____cacheline_aligned_in_smp;
 
@@ -218,6 +237,7 @@ struct mucse {
 	struct net_device *netdev;
 	struct pci_dev *pdev;
 	struct mucse_hw hw;
+	struct mucse_hw_stats hw_stats;
 	struct mucse_ring *tx_ring[RNPGBE_MAX_QUEUES]
 		____cacheline_aligned_in_smp;
 	struct mucse_ring *rx_ring[RNPGBE_MAX_QUEUES]
@@ -248,6 +268,7 @@ struct mucse {
 int rnpgbe_get_permanent_mac(struct mucse_hw *hw, u8 *perm_addr);
 int rnpgbe_reset_hw(struct mucse_hw *hw);
 int rnpgbe_setup_default_link(struct mucse_hw *hw);
+int rnpgbe_init_link_config(struct mucse_hw *hw);
 int rnpgbe_send_notify(struct mucse_hw *hw,
 		       bool enable,
 		       int mode);
@@ -255,7 +276,10 @@ int rnpgbe_init_hw(struct mucse_hw *hw, int board_type);
 int rnpgbe_set_rx_mode(struct net_device *netdev,
 		       struct netdev_hw_addr_list *uc,
 		       struct netdev_hw_addr_list *mc);
+int rnpgbe_set_mac_address(struct net_device *netdev, void *addr);
 void rnpgbe_set_link(struct mucse_hw *hw, bool linkup);
+
+extern const struct ethtool_ops rnpgbe_ethtool_ops;
 
 /* Device IDs */
 #define PCI_VENDOR_ID_MUCSE               0x8848

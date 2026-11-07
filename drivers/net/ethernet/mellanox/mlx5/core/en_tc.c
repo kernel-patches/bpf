@@ -491,6 +491,8 @@ mlx5e_tc_rule_offload(struct mlx5e_priv *priv,
 		      struct mlx5_flow_attr *attr)
 {
 	struct mlx5_eswitch *esw = priv->mdev->priv.eswitch;
+	struct mlx5_flow_handle *rule;
+	bool meter_added = false;
 	int err;
 
 	if (!is_mdev_switchdev_mode(priv->mdev))
@@ -503,9 +505,14 @@ mlx5e_tc_rule_offload(struct mlx5e_priv *priv,
 		err = mlx5e_tc_add_flow_meter(priv, attr);
 		if (err)
 			return ERR_PTR(err);
+		meter_added = true;
 	}
 
-	return mlx5_eswitch_add_offloaded_rule(esw, spec, attr);
+	rule = mlx5_eswitch_add_offloaded_rule(esw, spec, attr);
+	if (IS_ERR(rule) && meter_added)
+		mlx5e_tc_del_flow_meter(esw, attr);
+
+	return rule;
 }
 
 void
@@ -1998,17 +2005,19 @@ mlx5e_tc_add_fdb_flow(struct mlx5e_priv *priv,
 			goto err_out;
 		}
 
-		int_port = mlx5e_tc_int_port_get(mlx5e_get_int_port_priv(priv),
-						 parse_attr->filter_dev->ifindex,
-						 flow_flag_test(flow, EGRESS) ?
-						 MLX5E_TC_INT_PORT_EGRESS :
-						 MLX5E_TC_INT_PORT_INGRESS);
-		if (IS_ERR(int_port)) {
-			err = PTR_ERR(int_port);
-			goto err_out;
-		}
+		if (!esw_attr->int_port) {
+			int_port = mlx5e_tc_int_port_get(mlx5e_get_int_port_priv(priv),
+							 parse_attr->filter_dev->ifindex,
+							 flow_flag_test(flow, EGRESS) ?
+							 MLX5E_TC_INT_PORT_EGRESS :
+							 MLX5E_TC_INT_PORT_INGRESS);
+			if (IS_ERR(int_port)) {
+				err = PTR_ERR(int_port);
+				goto err_out;
+			}
 
-		esw_attr->int_port = int_port;
+			esw_attr->int_port = int_port;
+		}
 	}
 
 	err = post_process_attr(flow, attr, extack);
@@ -4005,6 +4014,7 @@ parse_branch_ctrl(struct flow_action_entry *act, struct mlx5e_tc_act *tc_act,
 
 err_branch_false:
 	free_branch_attr(flow, attr->branch_true);
+	attr->branch_true = NULL;
 out_err:
 	return err;
 }
@@ -4836,16 +4846,19 @@ static bool is_tc_ipsec_order_check_needed(struct net_device *filter, struct mlx
 static int mlx5e_tc_block_ipsec_offload(struct net_device *filter, struct mlx5e_priv *priv)
 {
 	struct mlx5_core_dev *mdev = priv->mdev;
+	int ret = 0;
 
 	if (!is_tc_ipsec_order_check_needed(filter, priv))
 		return 0;
 
-	if (mdev->num_block_tc)
-		return -EBUSY;
+	spin_lock_bh(&mdev->offload_block.lock);
+	if (mdev->offload_block.num_block_tc)
+		ret = -EBUSY;
+	else
+		mdev->offload_block.num_block_ipsec++;
+	spin_unlock_bh(&mdev->offload_block.lock);
 
-	mdev->num_block_ipsec++;
-
-	return 0;
+	return ret;
 }
 
 static void mlx5e_tc_unblock_ipsec_offload(struct net_device *filter, struct mlx5e_priv *priv)
@@ -4853,7 +4866,10 @@ static void mlx5e_tc_unblock_ipsec_offload(struct net_device *filter, struct mlx
 	if (!is_tc_ipsec_order_check_needed(filter, priv))
 		return;
 
-	priv->mdev->num_block_ipsec--;
+	spin_lock_bh(&priv->mdev->offload_block.lock);
+	if (!WARN_ON_ONCE(!priv->mdev->offload_block.num_block_ipsec))
+		priv->mdev->offload_block.num_block_ipsec--;
+	spin_unlock_bh(&priv->mdev->offload_block.lock);
 }
 
 int mlx5e_configure_flower(struct net_device *dev, struct mlx5e_priv *priv,

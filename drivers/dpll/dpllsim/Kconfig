@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+config DPLLSIM
+	tristate "DPLL simulator driver"
+	depends on NET
+	select DPLL
+	select CONFIGFS_FS
+	help
+	  This driver provides simulated DPLL devices for testing and
+	  development of the DPLL subsystem and its userspace tooling
+	  without real hardware. Devices with arbitrary pin topologies
+	  are created and configured at runtime through configfs,
+	  similar to what gpio-sim provides for GPIO.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called dpllsim.

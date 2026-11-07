@@ -105,9 +105,12 @@ static void tipc_group_proto_xmit(struct tipc_group *grp, struct tipc_member *m,
 static void tipc_group_open(struct tipc_member *m, bool *wakeup)
 {
 	*wakeup = false;
-	if (list_empty(&m->small_win))
-		return;
-	list_del_init(&m->small_win);
+	if (list_empty(&m->small_win)) {
+		if (m->state != MBR_JOINED || *m->group->open)
+			return;
+	} else {
+		list_del_init(&m->small_win);
+	}
 	*m->group->open = true;
 	*wakeup = true;
 }
@@ -145,7 +148,8 @@ u16 tipc_group_bc_snd_nxt(struct tipc_group *grp)
 
 static bool tipc_group_is_receiver(struct tipc_member *m)
 {
-	return m && m->state != MBR_JOINING && m->state != MBR_LEAVING;
+	return m && m->state != MBR_JOINING && m->state != MBR_PUBLISHED &&
+	       m->state != MBR_LEAVING;
 }
 
 static bool tipc_group_is_sender(struct tipc_member *m)

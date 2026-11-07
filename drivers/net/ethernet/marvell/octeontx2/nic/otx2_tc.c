@@ -1237,6 +1237,13 @@ free_mcam_flow:
 	return 0;
 }
 
+static void otx2_tc_put_mark_flow(struct otx2_nic *nic,
+				  struct npc_install_flow_req *req)
+{
+	if (req->match_id)
+		refcount_dec(&nic->flow_cfg->mark_flows);
+}
+
 static int otx2_tc_add_flow(struct otx2_nic *nic,
 			    struct flow_cls_offload *tc_flow_cmd)
 {
@@ -1273,6 +1280,7 @@ static int otx2_tc_add_flow(struct otx2_nic *nic,
 
 	rc = otx2_tc_prepare_flow(nic, new_node, tc_flow_cmd, &dummy);
 	if (rc) {
+		otx2_tc_put_mark_flow(nic, &dummy);
 		kfree_rcu(new_node, rcu);
 		return rc;
 	}
@@ -1287,6 +1295,7 @@ static int otx2_tc_add_flow(struct otx2_nic *nic,
 		if (rc) {
 			NL_SET_ERR_MSG_MOD(extack,
 					   "MCAM rule allocation failed");
+			otx2_tc_put_mark_flow(nic, &dummy);
 			kfree_rcu(new_node, rcu);
 			return rc;
 		}
@@ -1331,6 +1340,7 @@ static int otx2_tc_add_flow(struct otx2_nic *nic,
 	return 0;
 
 free_leaf:
+	otx2_tc_put_mark_flow(nic, &dummy);
 	if (is_cn20k(nic->pdev))
 		cn20k_tc_free_mcam_entry(nic, new_node->entry);
 	otx2_tc_del_from_flow_list(flow_cfg, new_node);

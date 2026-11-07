@@ -19,6 +19,7 @@
 #include <linux/bpf_trace.h>
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
+#include <linux/rcupdate.h>
 
 static void aq_get_rxpages_xdp(struct aq_ring_buff_s *buff,
 			       struct xdp_buff *xdp)
@@ -422,6 +423,14 @@ int aq_xdp_xmit(struct net_device *dev, int num_frames,
 	struct aq_nic_cfg_s *aq_cfg;
 	struct aq_ring_s *ring;
 
+	/* Cover configuration and ring lookups as well as transmission. */
+	rcu_read_lock();
+	/* Pair with aq_nic_start() to observe initialized rings. */
+	if (unlikely(!smp_load_acquire(&aq_nic->xdp_tx_enabled))) {
+		rcu_read_unlock();
+		return -ENETDOWN;
+	}
+
 	aq_cfg = aq_nic_get_cfg(aq_nic);
 	vec = cpu % aq_cfg->vecs;
 	ring = aq_nic->aq_ring_tx[AQ_NIC_CFG_TCVEC2RING(aq_cfg, 0, vec)];
@@ -432,6 +441,8 @@ int aq_xdp_xmit(struct net_device *dev, int num_frames,
 		if (aq_nic_xmit_xdpf(aq_nic, ring, xdpf) == NETDEV_TX_BUSY)
 			drop++;
 	}
+
+	rcu_read_unlock();
 
 	return num_frames - drop;
 }

@@ -78,6 +78,7 @@
 #include <net/ip.h>
 #include <net/route.h>
 #include <net/protocol.h>
+#include <net/psp/functions.h>
 #include <net/icmp.h>
 #include <net/tcp.h>
 #include <net/udp.h>
@@ -823,7 +824,8 @@ void __icmp_send(struct sk_buff *skb_in, int type, int code, __be32 info,
 	int room;
 	struct rtable *rt = skb_rtable(skb_in);
 	bool apply_ratelimit = false;
-	struct sk_buff *ext_skb;
+	struct sk_buff *ext_skb = NULL;
+	bool decrypted = false;
 	struct ipcm_cookie ipc;
 	struct flowi4 fl4;
 	__be32 saddr;
@@ -979,6 +981,32 @@ void __icmp_send(struct sk_buff *skb_in, int type, int code, __be32 info,
 	if (rt->rt_flags & (RTCF_BROADCAST | RTCF_MULTICAST))
 		goto ende;
 
+	/* Don't send the decrypted part of an skb onto the network */
+	if (unlikely(skb_is_decrypted(skb_in))) {
+		if (!skb_in->skb_iif) {
+			/* A locally originated skb to be encrypted. Permit
+			 * the packet to be quoted, if its source address is
+			 * local. otherwise skip.
+			 */
+			if (!(rt->rt_flags & RTCF_LOCAL))
+				goto ende;
+		} else if (psp_skb_is_decrypted(skb_in)) {
+			/* PSP encrypts the transport header too, so it should
+			 * not be quoted. But an error whose quote is truncated
+			 * to fewer than 8 bytes of the transport header won't
+			 * be processed, so just skip it.
+			 */
+			goto ende;
+		} else {
+			/* TLS offload leaves the tcp header in the clear and
+			 * so can be quoted up to its end. A psp skb whose inner
+			 * tunnel was decapsulated also ends up here, since
+			 * skb_scrub_packet() drops SKB_EXT_PSP.
+			 */
+			decrypted = true;
+		}
+	}
+
 	/* peer icmp_ratelimit */
 	if (!icmpv4_xrlim_allow(net, rt, &fl4, type, code, apply_ratelimit))
 		goto ende;
@@ -996,10 +1024,26 @@ void __icmp_send(struct sk_buff *skb_in, int type, int code, __be32 info,
 	if (room <= (int)sizeof(struct iphdr))
 		goto ende;
 
-	ext_skb = icmp_ext_append(net, skb_in, &icmp_param->data.icmph, room,
-				  parm->iif);
-	if (ext_skb)
-		icmp_param->skb = ext_skb;
+	if (unlikely(decrypted)) {
+		/* Quote up to the end of the tcp header. The RFC 4884
+		 * extension would carry the payload too.
+		 */
+		int len = iph->ihl * 4 + 8;
+		const struct tcphdr *th;
+		struct tcphdr _th;
+
+		th = skb_header_pointer(skb_in, skb_network_offset(skb_in) +
+					iph->ihl * 4, sizeof(_th), &_th);
+		if (th && iph->protocol == IPPROTO_TCP)
+			len = iph->ihl * 4 + max_t(int, th->doff * 4, 8);
+		room = min_t(int, room, len);
+	} else {
+		ext_skb = icmp_ext_append(net, skb_in,
+					  &icmp_param->data.icmph, room,
+					  parm->iif);
+		if (ext_skb)
+			icmp_param->skb = ext_skb;
+	}
 
 	icmp_param->data_len = icmp_param->skb->len - icmp_param->offset;
 	if (icmp_param->data_len > room)

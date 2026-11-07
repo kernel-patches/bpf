@@ -757,6 +757,27 @@ void mana_gd_free_service_wq(struct gdma_context *gc)
 	gc->service_wq = NULL;
 }
 
+static void mana_gd_schedule_eq_cqs(struct gdma_queue *eq)
+{
+	struct gdma_context *gc = eq->gdma_dev->gdma_context;
+	struct gdma_queue *cq;
+	u8 i;
+
+	for (i = 0; i < GDMA_EQ_MAX_CHILD_CQ; i++) {
+		cq = rcu_dereference(eq->eq.child_cq[i]);
+
+		if (!cq)
+			continue;
+
+		if (cq->id >= READ_ONCE(gc->max_num_cqs) ||
+		    !gc->cq_table || gc->cq_table[cq->id] != cq)
+			continue;
+
+		if (cq->cq.callback)
+			cq->cq.callback(cq->cq.context, cq);
+	}
+}
+
 static void mana_gd_process_eqe(struct gdma_queue *eq)
 {
 	u32 head = eq->head % (eq->queue_size / GDMA_EQE_SIZE);
@@ -785,6 +806,14 @@ static void mana_gd_process_eqe(struct gdma_queue *eq)
 		if (cq->cq.callback)
 			cq->cq.callback(cq->cq.context, cq);
 
+		break;
+
+	case GDMA_EQE_THROTTLE:
+		u64_stats_update_begin(&eq->eq.stats.syncp);
+		u64_stats_inc(&eq->eq.stats.throttle_count);
+		u64_stats_update_end(&eq->eq.stats.syncp);
+
+		mana_gd_schedule_eq_cqs(eq);
 		break;
 
 	case GDMA_EQE_TEST_EVENT:
@@ -1032,6 +1061,8 @@ static int mana_gd_create_eq(struct gdma_dev *gd,
 	queue->eq.msix_index = INVALID_PCI_MSIX_INDEX;
 	queue->id = INVALID_QUEUE_ID;
 
+	u64_stats_init(&queue->eq.stats.syncp);
+
 	log2_num_entries = ilog2(queue->queue_size / GDMA_EQE_SIZE);
 
 	if (spec->eq.log2_throttle_limit > log2_num_entries) {
@@ -1073,25 +1104,66 @@ static void mana_gd_create_cq(const struct gdma_queue_spec *spec,
 			      struct gdma_queue *queue)
 {
 	u32 log2_num_entries = ilog2(spec->queue_size / GDMA_CQE_SIZE);
+	struct gdma_queue *parent;
+	u8 i;
 
 	queue->head |= INITIALIZED_OWNER_BIT(log2_num_entries);
-	queue->cq.parent = spec->cq.parent_eq;
+	parent = spec->cq.parent_eq;
+	queue->cq.parent = parent;
 	queue->cq.context = spec->cq.context;
 	queue->cq.callback = spec->cq.callback;
+
+	if (!parent)
+		return;
+
+	/* For throttled EQE store the child CQ */
+	for (i = 0; i < GDMA_EQ_MAX_CHILD_CQ; i++) {
+		if (!rcu_access_pointer(parent->eq.child_cq[i])) {
+			rcu_assign_pointer(parent->eq.child_cq[i], queue);
+			return;
+		}
+	}
+
+	WARN_ONCE(1, "mana: EQ %u has no free child CQ slot\n", parent->id);
+}
+
+/* Unlink queue from its parent EQ's child_cq[] and from gc->cq_table[].
+ *
+ * Return: true if queue was in the parent EQ's child_cq[]. In that case the
+ * caller must wait for an RCU grace period before freeing queue, because
+ * mana_gd_intr() may still be handling a throttle EQE for it.
+ */
+bool mana_gd_detach_cq(struct gdma_context *gc, struct gdma_queue *queue)
+{
+	struct gdma_queue *eq = queue->cq.parent;
+	bool attached = false;
+	u32 id = queue->id;
+	u8 i;
+
+	if (eq) {
+		for (i = 0; i < GDMA_EQ_MAX_CHILD_CQ; i++) {
+			if (rcu_access_pointer(eq->eq.child_cq[i]) == queue) {
+				RCU_INIT_POINTER(eq->eq.child_cq[i], NULL);
+				attached = true;
+			}
+		}
+	}
+
+	/* Check if CQ might have been detached already, only clear if
+	 * it still points to same queue .
+	 */
+	if (id < gc->max_num_cqs && READ_ONCE(gc->cq_table[id]) == queue)
+		WRITE_ONCE(gc->cq_table[id], NULL);
+
+	return attached;
 }
 
 static void mana_gd_destroy_cq(struct gdma_context *gc,
 			       struct gdma_queue *queue)
 {
-	u32 id = queue->id;
-
-	if (id >= gc->max_num_cqs)
-		return;
-
-	if (!gc->cq_table[id])
-		return;
-
-	gc->cq_table[id] = NULL;
+	/* Wait for irq reader holding the cq */
+	if (mana_gd_detach_cq(gc, queue))
+		synchronize_net();
 }
 
 int mana_gd_create_hwc_queue(struct gdma_dev *gd,
@@ -1835,44 +1907,45 @@ struct gdma_irq_context *mana_gd_get_gic(struct gdma_context *gc,
 	const struct gdma_bus_ops *ops = gc->bus_ops;
 	struct gdma_irq_context *gic;
 	bool dyn_msix = false;
-	int msi, irq, err;
+	int msix_index, irq, err;
 
 	mutex_lock(&gc->gic_mutex);
 
 	if (use_msi_bitmap) {
-		msi = find_first_zero_bit(gc->msi_bitmap, gc->num_msix_usable);
-		if (msi >= gc->num_msix_usable) {
+		msix_index = find_first_zero_bit(gc->msi_bitmap,
+						 gc->num_msix_usable);
+		if (msix_index >= gc->num_msix_usable) {
 			dev_err(gc->dev, "No free MSI vectors available\n");
 			gic = ERR_PTR(-ENOSPC);
 			goto out;
 		}
-		*msi_requested = msi;
+		*msi_requested = msix_index;
 	} else {
-		msi = *msi_requested;
+		msix_index = *msi_requested;
 	}
 
-	gic = xa_load(&gc->irq_contexts, msi);
+	gic = xa_load(&gc->irq_contexts, msix_index);
 	if (gic) {
 		refcount_inc(&gic->refcount);
 		if (use_msi_bitmap) {
 			gic->bitmap_refs++;
-			set_bit(msi, gc->msi_bitmap);
+			set_bit(msix_index, gc->msi_bitmap);
 		}
 		goto out;
 	}
 
-	irq = ops->msix_virq(gc, msi);
+	irq = ops->msix_virq(gc, msix_index);
 	if (irq == -EINVAL) {
 		/* A bus that sizes its vector pool up front has nothing left
 		 * to hand out once every vector has been claimed.
 		 */
 		if (!ops->msix_alloc_at) {
-			dev_err(gc->dev, "No IRQ for MSI %d\n", msi);
+			dev_err(gc->dev, "No IRQ for MSI %d\n", msix_index);
 			gic = ERR_PTR(-ENOENT);
 			goto out;
 		}
 
-		irq = ops->msix_alloc_at(gc, &msi);
+		irq = ops->msix_alloc_at(gc, &msix_index);
 		if (irq < 0) {
 			dev_err(gc->dev, "Failed to alloc irq msi %d err %d\n",
 				*msi_requested, irq);
@@ -1881,19 +1954,19 @@ struct gdma_irq_context *mana_gd_get_gic(struct gdma_context *gc,
 		}
 
 		dyn_msix = true;
-		*msi_requested = msi;
+		*msi_requested = msix_index;
 	}
 
 	gic = kzalloc_obj(*gic);
 	if (!gic) {
 		gic = ERR_PTR(-ENOMEM);
 		if (dyn_msix)
-			ops->msix_free(gc, msi, irq);
+			ops->msix_free(gc, msix_index, irq);
 		goto out;
 	}
 
 	gic->handler = mana_gd_process_eq_events;
-	gic->msi = msi;
+	gic->msi = msix_index;
 	gic->irq = irq;
 	INIT_LIST_HEAD(&gic->eq_list);
 	spin_lock_init(&gic->lock);
@@ -1912,28 +1985,41 @@ struct gdma_irq_context *mana_gd_get_gic(struct gdma_context *gc,
 		kfree(gic);
 		gic = ERR_PTR(err);
 		if (dyn_msix)
-			ops->msix_free(gc, msi, irq);
+			ops->msix_free(gc, msix_index, irq);
 		goto out;
+	}
+
+	if (dyn_msix && ops->setup_dyn_affinity) {
+		err = ops->setup_dyn_affinity(gc, irq, msix_index);
+		if (err) {
+			free_irq(irq, gic);
+			kfree(gic);
+			gic = ERR_PTR(err);
+			ops->msix_free(gc, msix_index, irq);
+			goto out;
+		}
 	}
 
 	gic->dyn_msix = dyn_msix;
 	refcount_set(&gic->refcount, 1);
 	gic->bitmap_refs = use_msi_bitmap ? 1 : 0;
 
-	err = xa_err(xa_store(&gc->irq_contexts, msi, gic, GFP_KERNEL));
+	err = xa_err(xa_store(&gc->irq_contexts, msix_index, gic, GFP_KERNEL));
 	if (err) {
 		dev_err(gc->dev, "Failed to store irq context for msi %d: %d\n",
-			msi, err);
+			msix_index, err);
+		if (dyn_msix)
+			irq_update_affinity_hint(irq, NULL);
 		free_irq(irq, gic);
 		kfree(gic);
 		gic = ERR_PTR(err);
 		if (dyn_msix)
-			ops->msix_free(gc, msi, irq);
+			ops->msix_free(gc, msix_index, irq);
 		goto out;
 	}
 
 	if (use_msi_bitmap)
-		set_bit(msi, gc->msi_bitmap);
+		set_bit(msix_index, gc->msi_bitmap);
 
 out:
 	mutex_unlock(&gc->gic_mutex);

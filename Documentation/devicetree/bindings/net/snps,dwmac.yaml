@@ -98,6 +98,7 @@ properties:
         - rockchip,rk3588-gmac
         - rockchip,rv1108-gmac
         - rockchip,rv1126-gmac
+        - siflower,sf19a2890-gmac
         - snps,dwmac
         - snps,dwmac-3.40a
         - snps,dwmac-3.50a

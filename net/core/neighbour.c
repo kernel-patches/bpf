@@ -1339,6 +1339,9 @@ static void neigh_update_process_arp_queue(struct neighbour *neigh)
 			if (n2)
 				n1 = n2;
 		}
+		/* headerless outputs (teql, shaper) transmit on skb->dev */
+		if (!n1->dev->header_ops)
+			skb->dev = n1->dev;
 		READ_ONCE(n1->output)(n1, skb);
 		if (n2)
 			neigh_release(n2);
@@ -3592,6 +3595,9 @@ static void __neigh_notify(struct neighbour *n, int type, int flags,
 	struct sk_buff *skb;
 	int err = -ENOBUFS;
 	struct net *net;
+
+	if (n->dead && type != RTM_DELNEIGH)
+		return;
 
 	rcu_read_lock();
 	net = dev_net_rcu(n->dev);

@@ -1,0 +1,110 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/net/siflower,sf19a2890-gmac.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Siflower SF19A2890 GMAC
+
+maintainers:
+  - Joseph Telaak <joseph@telaak.dev>
+
+description:
+  The Siflower SF19A2890 has a Synopsys DesignWare GMAC 3.73a. Its
+  interface type and RGMII clock delays are set in a configuration block
+  of their own. The MAC adds an RGMII delay only where the
+  rx-internal-delay-ps or tx-internal-delay-ps property says so.
+
+select:
+  properties:
+    compatible:
+      contains:
+        const: siflower,sf19a2890-gmac
+  required:
+    - compatible
+
+properties:
+  compatible:
+    items:
+      - const: siflower,sf19a2890-gmac
+      - const: snps,dwmac
+
+  reg:
+    items:
+      - description: MAC registers
+      - description: Interface configuration registers
+
+  interrupts:
+    maxItems: 3
+
+  interrupt-names:
+    items:
+      - const: macirq
+      - const: eth_wake_irq
+      - const: eth_lpi
+
+  clocks:
+    items:
+      - description: GMAC main clock
+      - description: Peripheral registers interface clock
+      - description: PTP reference clock
+      - description: RGMII transmit reference clock
+
+  clock-names:
+    items:
+      - const: stmmaceth
+      - const: pclk
+      - const: ptp_ref
+      - const: byp_ref
+
+  rx-internal-delay-ps:
+    description:
+      Applied in steps of about 55 ps, rounded to the nearest step.
+    maximum: 14025
+
+  tx-internal-delay-ps:
+    description:
+      Applied in steps of about 55 ps, rounded to the nearest step.
+    maximum: 14025
+
+required:
+  - compatible
+  - reg
+  - interrupts
+  - interrupt-names
+  - clocks
+  - clock-names
+  - resets
+  - reset-names
+
+allOf:
+  - $ref: snps,dwmac.yaml#
+
+unevaluatedProperties: false
+
+examples:
+  - |
+    #include <dt-bindings/interrupt-controller/irq.h>
+    #include <dt-bindings/interrupt-controller/mips-gic.h>
+
+    ethernet@10800000 {
+        compatible = "siflower,sf19a2890-gmac", "snps,dwmac";
+        reg = <0x10800000 0x200000>, <0x19e04440 0x10>;
+        interrupt-parent = <&gic>;
+        interrupts = <GIC_SHARED 32 IRQ_TYPE_LEVEL_HIGH>,
+                     <GIC_SHARED 34 IRQ_TYPE_LEVEL_HIGH>,
+                     <GIC_SHARED 33 IRQ_TYPE_LEVEL_HIGH>;
+        interrupt-names = "macirq", "eth_wake_irq", "eth_lpi";
+        clocks = <&gmac_crm 0>, <&gmac_crm 1>, <&gmac_crm 3>, <&gmac_crm 2>;
+        clock-names = "stmmaceth", "pclk", "ptp_ref", "byp_ref";
+        resets = <&gmac_crm 0>;
+        reset-names = "stmmaceth";
+        phy-mode = "rgmii-id";
+        rx-internal-delay-ps = <550>;
+        tx-internal-delay-ps = <935>;
+
+        fixed-link {
+            speed = <1000>;
+            full-duplex;
+        };
+    };

@@ -91,7 +91,20 @@ struct xsk_buff_pool *igb_xsk_pool(struct igb_adapter *adapter,
 	if (!igb_xdp_is_enabled(adapter))
 		return NULL;
 
-	return (pool && pool->dev) ? pool : NULL;
+	if (!pool || !pool->dev)
+		return NULL;
+
+	/* the MTU check in igb_change_mtu() does not see a pool on a queue
+	 * that was hidden at the time, for example by SR-IOV
+	 */
+	if (!igb_xsk_frame_fits(pool, adapter->max_frame_size)) {
+		netdev_warn_once(adapter->netdev,
+				 "XSK frame size is too small for the MTU, queue %d is not used in zero-copy mode\n",
+				 qid);
+		return NULL;
+	}
+
+	return pool;
 }
 
 static int igb_xsk_pool_enable(struct igb_adapter *adapter,
@@ -109,6 +122,10 @@ static int igb_xsk_pool_enable(struct igb_adapter *adapter,
 	if (qid >= netdev->real_num_rx_queues ||
 	    qid >= netdev->real_num_tx_queues)
 		return -EINVAL;
+
+	/* igb_change_mtu() keeps this true while the pool is bound */
+	if (!igb_xsk_frame_fits(pool, adapter->max_frame_size))
+		return -EOPNOTSUPP;
 
 	err = xsk_pool_dma_map(pool, &adapter->pdev->dev, IGB_RX_DMA_ATTR);
 	if (err)
@@ -252,6 +269,8 @@ void igb_clean_rx_ring_zc(struct igb_ring *rx_ring)
 	u16 ntc = rx_ring->next_to_clean;
 	u16 ntu = rx_ring->next_to_use;
 
+	clear_bit(IGB_RING_FLAG_RX_XSK_DISCARD, &rx_ring->flags);
+
 	while (ntc != ntu) {
 		struct xdp_buff *xdp = rx_ring->rx_buffer_info_zc[ntc];
 
@@ -373,6 +392,27 @@ int igb_clean_rx_irq_zc(struct igb_q_vector *q_vector,
 		dma_rmb();
 
 		xdp = rx_ring->rx_buffer_info_zc[ntc];
+
+		/* A frame should never span several buffers here, see
+		 * igb_xsk_frame_fits(). If one does, drop all its buffers.
+		 */
+		if (unlikely(!igb_test_staterr(rx_desc, E1000_RXD_STAT_EOP) ||
+			     test_bit(IGB_RING_FLAG_RX_XSK_DISCARD,
+				      &rx_ring->flags))) {
+			if (igb_test_staterr(rx_desc, E1000_RXD_STAT_EOP))
+				clear_bit(IGB_RING_FLAG_RX_XSK_DISCARD,
+					  &rx_ring->flags);
+			else
+				set_bit(IGB_RING_FLAG_RX_XSK_DISCARD,
+					&rx_ring->flags);
+
+			xsk_buff_free(xdp);
+			ntc++;
+			if (ntc == rx_ring->count)
+				ntc = 0;
+			continue;
+		}
+
 		xsk_buff_set_size(xdp, size);
 		xsk_buff_dma_sync_for_cpu(xdp);
 

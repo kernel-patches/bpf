@@ -3331,7 +3331,7 @@ static int lan743x_netdev_open(struct net_device *netdev)
 
 	ret = lan743x_ptp_open(adapter);
 	if (ret)
-		goto close_mac;
+		goto close_phylink;
 
 	lan743x_rfe_open(adapter);
 
@@ -3374,6 +3374,8 @@ close_rx:
 			lan743x_rx_close(&adapter->rx[index]);
 	}
 	lan743x_ptp_close(adapter);
+
+close_phylink:
 	if (adapter->phylink)
 		lan743x_phylink_disconnect(adapter);
 

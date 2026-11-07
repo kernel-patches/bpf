@@ -131,6 +131,8 @@ static void vsock_loopback_work(struct work_struct *work)
 
 	spin_lock_bh(&vsock->pkt_queue.lock);
 	skb_queue_splice_init(&vsock->pkt_queue, &pkts);
+	skb_queue_walk(&pkts, skb)
+		__virtio_vsock_skb_untrack(skb);
 	spin_unlock_bh(&vsock->pkt_queue.lock);
 
 	while ((skb = __skb_dequeue(&pkts))) {

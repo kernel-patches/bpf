@@ -190,9 +190,13 @@ static inline int sctp_cacc_skip(struct sctp_transport *primary,
  */
 void sctp_outq_init(struct sctp_association *asoc, struct sctp_outq *q)
 {
+	const struct sctp_sched_ops *sched = q->sched;
+
 	memset(q, 0, sizeof(struct sctp_outq));
 
 	q->asoc = asoc;
+	/* Retain the scheduler to allow freeing its per-stream state. */
+	q->sched = sched;
 	INIT_LIST_HEAD(&q->out_chunk_list);
 	INIT_LIST_HEAD(&q->control_chunk_list);
 	INIT_LIST_HEAD(&q->retransmit);

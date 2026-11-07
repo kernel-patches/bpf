@@ -1542,14 +1542,20 @@ static int gve_adminq_process_flow_rules_query(struct gve_priv *priv, u16 query_
 {
 	struct gve_flow_rules_cache *flow_rules_cache = &priv->flow_rules_cache;
 	u32 num_queried_rules, total_memory_len, rule_info_len;
+	u32 rule_info_max_len;
 	void *rule_info;
 
 	total_memory_len = be32_to_cpu(descriptor->total_length);
 	num_queried_rules = be32_to_cpu(descriptor->num_queried_rules);
 	rule_info = (void *)(descriptor + 1);
+	rule_info_max_len = GVE_ADMINQ_BUFFER_SIZE - sizeof(*descriptor);
 
 	switch (query_opcode) {
 	case GVE_FLOW_RULE_QUERY_RULES:
+		if (num_queried_rules >
+		    rule_info_max_len / sizeof(*flow_rules_cache->rules_cache))
+			return -EINVAL;
+
 		rule_info_len = num_queried_rules * sizeof(*flow_rules_cache->rules_cache);
 		if (sizeof(*descriptor) + rule_info_len != total_memory_len) {
 			dev_err(&priv->dev->dev, "flow rules query is out of memory.\n");
@@ -1560,6 +1566,10 @@ static int gve_adminq_process_flow_rules_query(struct gve_priv *priv, u16 query_
 		flow_rules_cache->rules_cache_num = num_queried_rules;
 		break;
 	case GVE_FLOW_RULE_QUERY_IDS:
+		if (num_queried_rules >
+		    rule_info_max_len / sizeof(*flow_rules_cache->rule_ids_cache))
+			return -EINVAL;
+
 		rule_info_len = num_queried_rules * sizeof(*flow_rules_cache->rule_ids_cache);
 		if (sizeof(*descriptor) + rule_info_len != total_memory_len) {
 			dev_err(&priv->dev->dev, "flow rule ids query is out of memory.\n");
@@ -1615,13 +1625,21 @@ static int gve_adminq_process_rss_query(struct gve_priv *priv,
 					struct ethtool_rxfh_param *rxfh)
 {
 	u32 total_memory_length;
-	u16 hash_lut_length;
+	u32 hash_lut_length;
 	void *rss_info_addr;
 	__be32 *lut;
 	u16 i;
 
 	total_memory_length = be32_to_cpu(descriptor->total_length);
 	hash_lut_length = priv->rss_lut_size * sizeof(*rxfh->indir);
+
+	if (sizeof(*descriptor) + priv->rss_key_size + hash_lut_length >
+	    GVE_ADMINQ_BUFFER_SIZE) {
+		dev_err(&priv->dev->dev,
+			"rss sizes from device do not fit the adminq buffer: key %u lut %u\n",
+			priv->rss_key_size, priv->rss_lut_size);
+		return -EINVAL;
+	}
 
 	if (sizeof(*descriptor) + priv->rss_key_size + hash_lut_length != total_memory_length) {
 		dev_err(&priv->dev->dev,

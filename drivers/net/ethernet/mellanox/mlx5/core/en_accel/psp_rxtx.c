@@ -160,6 +160,19 @@ void mlx5e_psp_handle_tx_wqe(struct mlx5e_tx_wqe *wqe,
 	inlseg->byte_count = cpu_to_be32(psp_st->tailen | MLX5_INLINE_SEG);
 }
 
+/* psp_dev_encapsulate() inserts udp+psp at the transport header, rewrites the
+ * protocol of the fixed l3 header to udp, and writes tcp as the psp next
+ * header. thus tcp must directly follow the fixed header.
+ */
+static bool mlx5e_psp_l4_is_tcp(const struct sk_buff *skb)
+{
+	if (skb->protocol == htons(ETH_P_IP))
+		return ip_hdr(skb)->protocol == IPPROTO_TCP;
+	if (skb->protocol == htons(ETH_P_IPV6))
+		return ipv6_hdr(skb)->nexthdr == IPPROTO_TCP;
+	return false;
+}
+
 bool mlx5e_psp_handle_tx_skb(struct net_device *netdev,
 			     struct sk_buff *skb,
 			     struct mlx5e_accel_tx_psp_state *psp_st)
@@ -170,25 +183,23 @@ bool mlx5e_psp_handle_tx_skb(struct net_device *netdev,
 	if (!mlx5e_psp_set_state(priv, skb, psp_st))
 		return true;
 
-	/* psp_encap of the packet */
-	if (!psp_dev_encapsulate(net, skb, psp_st->spi, psp_st->ver, 0)) {
+	/* psp_encap of the packet. only tcp right after the ip header */
+	if (unlikely(!mlx5e_psp_l4_is_tcp(skb)) ||
+	    !psp_dev_encapsulate(net, skb, psp_st->spi, psp_st->ver, 0)) {
 		kfree_skb_reason(skb, SKB_DROP_REASON_PSP_OUTPUT);
 		atomic_inc(&priv->psp->tx_drop);
 		return false;
 	}
 	if (skb_is_gso(skb)) {
-		int len = skb_shinfo(skb)->gso_size + inner_tcp_hdrlen(skb);
-		struct tcphdr *th = inner_tcp_hdr(skb);
+		u32 seg_len = skb_shinfo(skb)->gso_size + inner_tcp_hdrlen(skb);
+		u32 len = skb->len - skb_inner_transport_offset(skb);
 
-		if (skb->protocol == htons(ETH_P_IP)) {
-			const struct iphdr *ip = ip_hdr(skb);
-
-			th->check = ~tcp_v4_check(len, ip->saddr, ip->daddr, 0);
-		} else {
-			const struct ipv6hdr *ip6 = ipv6_hdr(skb);
-
-			th->check = ~tcp_v6_check(len, &ip6->saddr, &ip6->daddr, 0);
-		}
+		/* update just the length component of the checksum seed
+		 * tcp computed the seed with the total length, but mlx5
+		 * devices are expecting the segment length
+		 */
+		inet_proto_csum_replace4(&inner_tcp_hdr(skb)->check, skb,
+					 htonl(len), htonl(seg_len), true);
 	}
 
 	return true;

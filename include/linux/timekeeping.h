@@ -367,6 +367,12 @@ extern int get_device_system_crosststamp(
 extern void ktime_get_snapshot_id(clockid_t clock_id, struct system_time_snapshot *systime_snapshot);
 
 /*
+ * Scale a monotonic raw duration by the frequency of a given clock
+ * relative to monotonic raw.
+ */
+extern u64 ktime_scale_raw_ns(clockid_t clock_id, u64 ns);
+
+/*
  * Persistent clock related interfaces
  */
 extern int persistent_clock_is_local;

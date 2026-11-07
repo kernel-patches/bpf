@@ -958,6 +958,8 @@ static struct sock *__vsock_create(struct net *net,
 		sk->sk_type = type;
 
 	vsk = vsock_sk(sk);
+	vsk->native_data_ready = sk->sk_data_ready;
+	vsk->native_write_space = sk->sk_write_space;
 	vsock_addr_init(&vsk->local_addr, VMADDR_CID_ANY, VMADDR_PORT_ANY);
 	vsock_addr_init(&vsk->remote_addr, VMADDR_CID_ANY, VMADDR_PORT_ANY);
 
@@ -1115,15 +1117,44 @@ s64 vsock_stream_has_space(struct vsock_sock *vsk)
 }
 EXPORT_SYMBOL_GPL(vsock_stream_has_space);
 
-void vsock_data_ready(struct sock *sk)
+bool vsock_data_ready_pending(struct sock *sk)
 {
 	struct vsock_sock *vsk = vsock_sk(sk);
 
-	if (vsock_stream_has_data(vsk) >= sk->sk_rcvlowat ||
-	    sock_flag(sk, SOCK_DONE))
+	return vsock_stream_has_data(vsk) >= sk->sk_rcvlowat ||
+	       sock_flag(sk, SOCK_DONE);
+}
+EXPORT_SYMBOL_GPL(vsock_data_ready_pending);
+
+void vsock_data_ready(struct sock *sk)
+{
+	if (vsock_data_ready_pending(sk))
 		sk->sk_data_ready(sk);
 }
 EXPORT_SYMBOL_GPL(vsock_data_ready);
+
+bool vsock_callbacks_are_native(const struct sock *sk)
+{
+	const struct vsock_sock *vsk = vsock_sk(sk);
+
+	return READ_ONCE(sk->sk_data_ready) ==
+	       READ_ONCE(vsk->native_data_ready) &&
+	       READ_ONCE(sk->sk_write_space) ==
+	       READ_ONCE(vsk->native_write_space);
+}
+EXPORT_SYMBOL_GPL(vsock_callbacks_are_native);
+
+void vsock_call_native_data_ready(struct sock *sk)
+{
+	vsock_sk(sk)->native_data_ready(sk);
+}
+EXPORT_SYMBOL_GPL(vsock_call_native_data_ready);
+
+void vsock_call_native_write_space(struct sock *sk)
+{
+	vsock_sk(sk)->native_write_space(sk);
+}
+EXPORT_SYMBOL_GPL(vsock_call_native_write_space);
 
 /* Dummy callback required by sockmap.
  * See unconditional call of saved_close() in sock_map_close().
@@ -2156,7 +2187,8 @@ static int vsock_connectible_setsockopt(struct socket *sock,
 					     optname == SO_VM_SOCKETS_CONNECT_TIMEOUT_OLD);
 		if (err)
 			break;
-		if (tv.tv_sec >= 0 && tv.tv_usec < USEC_PER_SEC &&
+		if (tv.tv_sec >= 0 && tv.tv_usec >= 0 &&
+		    tv.tv_usec < USEC_PER_SEC &&
 		    tv.tv_sec < (MAX_SCHEDULE_TIMEOUT / HZ - 1)) {
 			vsk->connect_timeout = tv.tv_sec * HZ +
 				DIV_ROUND_UP((unsigned long)tv.tv_usec, (USEC_PER_SEC / HZ));
