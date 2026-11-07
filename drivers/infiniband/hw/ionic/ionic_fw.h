@@ -11,6 +11,11 @@
 
 #define IONIC_EXP_DBELL_SZ		8
 
+/* ionic_lif_identity.rdma.cap bits */
+enum ionic_gen_cap_flags {
+	IONIC_GEN_CAP_DMA_MR = BIT(0),
+};
+
 enum ionic_mrid_bits {
 	IONIC_MRID_INDEX_SHIFT		= 8,
 };
@@ -46,6 +51,17 @@ enum ionic_mr_flags {
 	IONIC_MRF_ON_DEMAND		= BIT(6),
 	IONIC_MRF_PB			= BIT(7),
 	IONIC_MRF_ACCESS_MASK		= BIT(12) - 1,
+
+	/*
+	 * DMA_MR is an MR type selector, not an access permission. It
+	 * sits in an otherwise-unused bit inside the access-mask range
+	 * to_ionic_mr_flags() does not derive this bit from IB access
+	 * flags. Firmware tests it before decoding access bits and takes
+	 * a dedicated path.
+	 *
+	 * DMA_MR: identity map of the full address space, bound to a pd.
+	 */
+	IONIC_MRF_DMA_MR		= BIT(8),
 
 	/* bits that determine mr type */
 	IONIC_MRF_UKEY_EN		= BIT(13),

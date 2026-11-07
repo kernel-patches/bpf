@@ -910,20 +910,50 @@ static int ionic_destroy_mr_cmd(struct ionic_ibdev *dev, u32 mrid)
 
 struct ib_mr *ionic_get_dma_mr(struct ib_pd *ibpd, int access)
 {
+	struct ionic_ibdev *dev = to_ionic_ibdev(ibpd->device);
 	struct ionic_pd *pd = to_ionic_pd(ibpd);
 	struct ionic_mr *mr;
+	int rc;
 
 	mr = kzalloc_obj(*mr);
 	if (!mr)
 		return ERR_PTR(-ENOMEM);
 
-	mr->ibmr.lkey = IONIC_DMA_LKEY;
-	mr->ibmr.rkey = IONIC_DMA_RKEY;
-
-	if (pd)
+	if (!(dev->lif_cfg.cap & IONIC_GEN_CAP_DMA_MR)) {
+		mr->ibmr.lkey = IONIC_DMA_LKEY;
 		pd->flags |= IONIC_QPF_PRIVILEGED;
 
+		return &mr->ibmr;
+	}
+
+	rc = ionic_get_mrid(dev, &mr->mrid);
+	if (rc)
+		goto err_mrid;
+
+	mr->ibmr.lkey = mr->mrid;
+	mr->ibmr.rkey = mr->mrid;
+
+	/*
+	 * Identity map of the whole address space, bound to this pd.
+	 * Firmware owns that extent, so the VA, length, and map_count
+	 * stay zero.
+	 */
+	mr->flags = IONIC_MRF_DMA_MR | to_ionic_mr_flags(access);
+
+	rc = ionic_create_mr_cmd(dev, pd, mr, 0, 0);
+	if (rc)
+		goto err_cmd;
+
+	pd->flags |= IONIC_QPF_PRIVILEGED;
+
 	return &mr->ibmr;
+
+err_cmd:
+	ionic_put_mrid(dev, mr->mrid);
+err_mrid:
+	kfree(mr);
+
+	return ERR_PTR(rc);
 }
 
 struct ib_mr *ionic_reg_user_mr(struct ib_pd *ibpd, u64 start, u64 length,
