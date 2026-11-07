@@ -578,6 +578,33 @@ static int dw_spi_poll_transfer(struct dw_spi *dws,
 	return 0;
 }
 
+static int dw_spi_prepare_message(struct spi_controller *ctlr,
+				  struct spi_message *msg)
+{
+	struct dw_spi *dws = spi_controller_get_devdata(ctlr);
+	struct spi_device *spi = msg->spi;
+	struct dw_spi_cfg cfg = {
+		.tmode = DW_SPI_CTRLR0_TMOD_TR,
+		.dfs = spi->bits_per_word,
+		.freq = spi->max_speed_hz,
+		.spi_frf = DW_SPI_CTRLR0_SPI_FRF_STD_SPI,
+	};
+
+	/*
+	 * For GPIO CS case, set CPOL/CPHA before the SPI core asserts GPIO CS.
+	 * transfer_one() will configure any per-transfer word size or speed
+	 * overrides.
+	 */
+	if (spi_is_csgpiod(spi)) {
+		dw_spi_enable_chip(dws, 0);
+		dw_spi_update_config(dws, spi, &cfg, NULL);
+		dw_spi_mask_intr(dws, 0xff);
+		dw_spi_enable_chip(dws, 1);
+	}
+
+	return 0;
+}
+
 static int dw_spi_transfer_one(struct spi_controller *ctlr,
 			       struct spi_device *spi,
 			       struct spi_transfer *transfer)
@@ -1507,6 +1534,7 @@ int dw_spi_add_controller(struct device *dev, struct dw_spi *dws)
 
 	if (!target) {
 		ctlr->use_gpio_descriptors = true;
+		ctlr->prepare_message = dw_spi_prepare_message;
 		ctlr->mode_bits |= SPI_LOOP;
 		if (dws->set_cs)
 			ctlr->set_cs = dws->set_cs;
