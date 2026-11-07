@@ -1054,7 +1054,10 @@ static int ionic_prep_atomic(struct ionic_qp *qp,
 	wqe->atomic.sge.len = cpu_to_be32(8);
 	wqe->atomic.sge.lkey = cpu_to_be32(wr->wr.sg_list[0].lkey);
 
-	return ionic_prep_common(qp, &wr->wr, meta, wqe);
+	meta->len = 8;
+	ionic_prep_base(qp, &wr->wr, meta, wqe);
+
+	return 0;
 }
 
 static int ionic_prep_inv(struct ionic_qp *qp,
