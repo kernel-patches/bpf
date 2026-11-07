@@ -675,6 +675,37 @@ _bpftool()
                     ;;
             esac
             ;;
+        fmodret)
+            case $command in
+                list|show)
+                    case $prev in
+                        file)
+                            _filedir
+                            ;;
+                        module)
+                            COMPREPLY=( $( compgen -W "$( command ls \
+                                /sys/kernel/btf 2>/dev/null | \
+                                command grep -vx -e vmlinux -e '.*\.inline' )" \
+                                -- "$cur" ) )
+                            ;;
+                        name|id)
+                            ;;
+                        *)
+                            if [[ $prev == show ]]; then
+                                COMPREPLY=( $( compgen -W 'name id' -- "$cur" ) )
+                            else
+                                _bpftool_one_of_list 'file vmlinux module'
+                            fi
+                            ;;
+                    esac
+                    return 0
+                    ;;
+                *)
+                    [[ $prev == $object ]] && \
+                        COMPREPLY=( $( compgen -W 'help list show' -- "$cur" ) )
+                    ;;
+            esac
+            ;;
         map)
             case $command in
                 show|list|dump|peek|pop|dequeue|freeze)

@@ -13561,6 +13561,14 @@ static int check_helper_call(struct bpf_verifier_env *env, struct bpf_insn *insn
 	}
 
 	if (func_id == BPF_FUNC_tail_call) {
+		/*
+		 * The program which a tail call jumps to returns for this one,
+		 * and a program array does not check the values it may return.
+		 */
+		if (env->prog->aux->fmodret_retvals) {
+			verbose(env, "tail calls are not allowed in fmod_ret programs with restricted return values\n");
+			return -EINVAL;
+		}
 		if (env->cur_state->curframe) {
 			struct bpf_verifier_state *branch;
 
@@ -20257,6 +20265,73 @@ static bool program_returns_void(struct bpf_verifier_env *env)
 	return false;
 }
 
+/*
+ * A function which the build found by analysing its code has a
+ * "bpf_fmodret_retval:" decl tag with the values it returns on paths without
+ * side effects, for example "bpf_fmodret_retval:-22,-12". See the comment at
+ * the top of tools/bpf/resolve_btfids/main.c. An fmod_ret program attached to
+ * it may return only these values, or 0 to call the function.
+ */
+#define BTF_FMODRET_RETVAL_TAG "bpf_fmodret_retval:"
+
+/* Parse the next value of the list at *LIST and move *LIST past it */
+static int fmodret_retval_next(const char **list, s64 *value)
+{
+	const char *end = strchrnul(*list, ',');
+	size_t len = end - *list;
+	char buf[24];
+
+	if (!len || len >= sizeof(buf) || (*end && !end[1]))
+		return -EINVAL;
+	memcpy(buf, *list, len);
+	buf[len] = 0;
+	*list = *end ? end + 1 : end;
+	return kstrtos64(buf, 10, value);
+}
+
+static bool fmodret_retval_allowed(const struct bpf_prog_aux *aux, u64 value)
+{
+	const struct btf_type *t;
+	u32 i;
+
+	/* "w0 = -22" zero-extends, the caller of an int function sees -22 */
+	t = btf_type_skip_modifiers(aux->attach_btf, aux->attach_func_proto->type, NULL);
+	if (t->size == 4 && !upper_32_bits(value))
+		value = (s32)value;
+	if (!value)
+		return true;
+	for (i = 0; i < aux->fmodret_retval_cnt; i++) {
+		if (aux->fmodret_retvals[i] == (s64)value)
+			return true;
+	}
+	return false;
+}
+
+/* The program must return a constant: 0 or one of the values of the tag */
+static int check_fmodret_retval(struct bpf_verifier_env *env, int regno,
+				const char *exit_ctx, const char *reg_name)
+{
+	const struct bpf_prog_aux *aux = env->prog->aux;
+	struct bpf_reg_state *reg = reg_state(env, regno);
+	int err;
+	u32 i;
+
+	if (reg->type == SCALAR_VALUE) {
+		err = mark_chain_precision(env, regno);
+		if (err)
+			return err;
+		if (tnum_is_const(reg->var_off) &&
+		    fmodret_retval_allowed(aux, reg->var_off.value))
+			return 0;
+	}
+
+	verbose(env, "%s the register %s must be a constant, it should be 0 or one of", exit_ctx, reg_name);
+	for (i = 0; i < aux->fmodret_retval_cnt; i++)
+		verbose(env, "%s%lld", i ? "," : " ", aux->fmodret_retvals[i]);
+	verbose(env, "\n");
+	return -EINVAL;
+}
+
 static int check_return_code(struct bpf_verifier_env *env, int regno, const char *reg_name)
 {
 	const char *exit_ctx = "At program exit";
@@ -20312,6 +20387,9 @@ static int check_return_code(struct bpf_verifier_env *env, int regno, const char
 
 	if (prog_type == BPF_PROG_TYPE_CGROUP_SKB && (env->prog->expected_attach_type == BPF_CGROUP_INET_EGRESS))
 		enforce_attach_type_range = tnum_range(2, 3);
+
+	if (env->prog->aux->fmodret_retvals)
+		return check_fmodret_retval(env, regno, exit_ctx, reg_name);
 
 	if (!return_retval_range(env, &range))
 		return 0;
@@ -23740,6 +23818,61 @@ static int check_attach_modify_return(unsigned long addr, const char *func_name)
 
 #endif /* CONFIG_FUNCTION_ERROR_INJECTION */
 
+/*
+ * Programs attached to a function found by the analysis may return only the
+ * values of its "bpf_fmodret_retval:" tag. A function which the static rules
+ * allow stays unrestricted.
+ */
+static int fmodret_retval_init(struct bpf_verifier_env *env, u32 btf_id,
+			       unsigned long addr, const char *tname)
+{
+	struct bpf_prog_aux *aux = env->prog->aux;
+	const struct btf *btf = aux->attach_btf;
+	const struct btf_type *t = btf_type_by_id(btf, btf_id);
+	s64 *retvals = NULL;
+	const char *values, *list;
+	u32 cnt, size = 0;
+	s64 v;
+
+	if (!check_attach_modify_return(addr, tname))
+		return 0;
+	values = btf_find_decl_tag_value(btf, t, -1, BTF_FMODRET_RETVAL_TAG);
+	if (IS_ERR(values))
+		return PTR_ERR(values) == -ENOENT ? 0 : PTR_ERR(values);
+
+	t = btf_type_by_id(btf, t->type);
+	t = t ? btf_type_skip_modifiers(btf, t->type, NULL) : NULL;
+	if (t && (btf_type_is_int(t) || btf_is_any_enum(t)))
+		size = t->size;
+	if (size != 4 && size != 8)
+		goto invalid;
+
+	for (list = values, cnt = 1; *list; list++)
+		cnt += *list == ',';
+	retvals = kmalloc_array(cnt, sizeof(*retvals), GFP_KERNEL_ACCOUNT);
+	if (!retvals)
+		return -ENOMEM;
+	for (list = values, cnt = 0; *list;) {
+		if (fmodret_retval_next(&list, &v) || v >= 0 || (size == 4 && v < S32_MIN))
+			goto invalid;
+		retvals[cnt++] = v;
+	}
+	if (!cnt)
+		goto invalid;
+
+	aux->fmodret_retvals = retvals;
+	aux->fmodret_retval_cnt = cnt;
+	/* The interpreter returns only 32 bits */
+	if (size == 8)
+		env->prog->jit_required = 1;
+	return 0;
+
+invalid:
+	kfree(retvals);
+	verbose(env, "invalid %s%s tag of %s()\n", BTF_FMODRET_RETVAL_TAG, values, tname);
+	return -EINVAL;
+}
+
 static bool is_tracing_multi_id(const struct bpf_prog *prog, u32 btf_id)
 {
 	return is_tracing_multi(prog->expected_attach_type) && bpf_multi_func_btf_id[0] == btf_id;
@@ -24154,6 +24287,15 @@ int bpf_check_attach_target(struct bpf_verifier_log *log,
 			bpf_log(log, "Cannot extend fentry/fexit/fsession\n");
 			return -EINVAL;
 		}
+		/*
+		 * An extension could return any value for an fmod_ret program
+		 * whose return values are restricted. This is also checked when
+		 * an extension is attached to another program than at load.
+		 */
+		if (prog_extension && tgt_prog->aux->fmodret_retvals) {
+			bpf_log(log, "Cannot extend an fmod_ret program with restricted return values\n");
+			return -EINVAL;
+		}
 	} else {
 		if (prog_extension) {
 			bpf_log(log, "Cannot replace kernel functions\n");
@@ -24531,6 +24673,13 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 		verbose(env, "Attaching fexit/fsession/fmod_ret to __noreturn function '%s' is rejected.\n",
 			tgt_info.tgt_name);
 		return -EINVAL;
+	}
+
+	/* Only a kernel function has a "bpf_fmodret_retval:" tag */
+	if (prog->expected_attach_type == BPF_MODIFY_RETURN && !tgt_prog) {
+		ret = fmodret_retval_init(env, btf_id, tgt_info.tgt_addr, tgt_info.tgt_name);
+		if (ret)
+			return ret;
 	}
 
 	/*

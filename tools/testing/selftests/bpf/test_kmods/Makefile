@@ -23,7 +23,16 @@ MODULES = bpf_testmod.ko bpf_test_no_cfi.ko bpf_test_modorder_x.ko \
 
 $(foreach m,$(MODULES),$(eval obj-m += $(m:.ko=.o)))
 
-CFLAGS_bpf_testmod.o = -I$(src)
+bpf_testmod-y := bpf_testmod_main.o
+# The functions for bpf_scan_ir use clang extensions and need the plugin
+bpf_testmod-$(CONFIG_CLANG_PLUGIN_BPF_SCAN_IR) += bpf_testmod_retval.o \
+						  bpf_testmod_retval_strong.o
+# Coverage instrumentation makes every path of the fixtures dirty
+GCOV_PROFILE_bpf_testmod_retval.o := n
+KCOV_INSTRUMENT_bpf_testmod_retval.o := n
+KMSAN_SANITIZE_bpf_testmod_retval.o := n
+
+CFLAGS_bpf_testmod_main.o = -I$(src)
 
 # When BPF_STRICT_BUILD != 0, a missing KDIR is fatal (the default).
 # When permissive, skip silently.

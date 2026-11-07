@@ -66,6 +66,7 @@ hostprogs += unifdef gen_packed_field_checks
 targets += module.lds
 
 subdir-$(CONFIG_GCC_PLUGINS) += gcc-plugins
+subdir-$(CONFIG_LLVM_PLUGINS) += llvm-plugins
 subdir-$(CONFIG_GENKSYMS) += genksyms
 subdir-$(CONFIG_GENDWARFKSYMS) += gendwarfksyms
 subdir-$(CONFIG_SECURITY_SELINUX) += selinux

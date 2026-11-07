@@ -198,7 +198,9 @@
 #define MCOUNT_REC()	. = ALIGN(8);				\
 			__start_mcount_loc = .;			\
 			KEEP(*(__mcount_loc))			\
+			__start_patchable_function_entries = .;	\
 			KEEP_PATCHABLE				\
+			__stop_patchable_function_entries = .;	\
 			__stop_mcount_loc = .;			\
 			FTRACE_STUB_HACK			\
 			ftrace_ops_list_func = arch_ftrace_ops_list_func;
@@ -714,7 +716,7 @@
 	BTF_INLINE_LINK						\
 	. = ALIGN(PAGE_SIZE);						\
 	.BTF_ids : AT(ADDR(.BTF_ids) - LOAD_OFFSET) {			\
-		*(.BTF_ids)						\
+		KEEP(*(.BTF_ids))					\
 	}
 #else
 #define BTF
@@ -886,7 +888,8 @@
 		KLP_SYMID
 
 #define MODINFO								\
-		.modinfo (INFO) : { KEEP(*(.modinfo)) }
+		.modinfo (INFO) : { KEEP(*(.modinfo)) }	\
+		.BTF_fmodret_candidates 0 (INFO) : { KEEP(*(.BTF_fmodret_candidates)) }
 
 #ifdef CONFIG_GENERIC_BUG
 #define BUG_TABLE							\
