@@ -10455,13 +10455,19 @@ static u32 bpf_convert_ctx_access(enum bpf_access_type type,
 	case offsetof(struct __sk_buff, remote_port):
 		BUILD_BUG_ON(sizeof_field(struct sock_common, skc_dport) != 2);
 
+		/*
+		 * The converted value is 4 bytes wide, not 2: on little
+		 * endian the 16-bit port is shifted into the high half.
+		 * Don't use bpf_target_off() here, it would report the
+		 * member size and the narrow-load masking in the fixup
+		 * pass would be skipped.
+		 */
+		*target_size = 4;
 		*insn++ = BPF_LDX_MEM(BPF_FIELD_SIZEOF(struct sk_buff, sk),
 				      si->dst_reg, si->src_reg,
 				      offsetof(struct sk_buff, sk));
 		*insn++ = BPF_LDX_MEM(BPF_H, si->dst_reg, si->dst_reg,
-				      bpf_target_off(struct sock_common,
-						     skc_dport,
-						     2, target_size));
+				      offsetof(struct sock_common, skc_dport));
 #ifndef __BIG_ENDIAN_BITFIELD
 		*insn++ = BPF_ALU32_IMM(BPF_LSH, si->dst_reg, 16);
 #endif
