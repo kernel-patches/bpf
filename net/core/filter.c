@@ -13073,11 +13073,20 @@ BTF_KFUNCS_START(bpf_sk_iter_kfunc_ids)
 BTF_ID_FLAGS(func, bpf_sock_destroy)
 BTF_KFUNCS_END(bpf_sk_iter_kfunc_ids)
 
+BTF_SET_START(bpf_sk_iter_locked_ids)
+#if defined(CONFIG_INET) && defined(CONFIG_PROC_FS)
+BTF_ID(func, bpf_iter_tcp)
+BTF_ID(func, bpf_iter_udp)
+#endif
+BTF_SET_END(bpf_sk_iter_locked_ids)
+
 static int tracing_iter_filter(const struct bpf_prog *prog, u32 kfunc_id)
 {
 	if (btf_id_set8_contains(&bpf_sk_iter_kfunc_ids, kfunc_id) &&
-	    prog->expected_attach_type != BPF_TRACE_ITER)
+	    (prog->expected_attach_type != BPF_TRACE_ITER ||
+	     !btf_id_set_contains(&bpf_sk_iter_locked_ids, prog->aux->attach_btf_id)))
 		return -EACCES;
+
 	return 0;
 }
 
