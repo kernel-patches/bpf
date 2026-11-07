@@ -595,15 +595,5 @@ static struct platform_driver vpif_driver = {
 	.probe = vpif_probe,
 };
 
-static void vpif_exit(void)
-{
-	platform_driver_unregister(&vpif_driver);
-}
-
-static int __init vpif_init(void)
-{
-	return platform_driver_register(&vpif_driver);
-}
-subsys_initcall(vpif_init);
-module_exit(vpif_exit);
+subsys_platform_driver(vpif_driver);
 
