@@ -792,6 +792,9 @@ out:
 static void rfd_ftl_remove_dev(struct mtd_blktrans_dev *dev)
 {
 	struct partition *part = container_of(dev, struct partition, mbd);
+	u_long *sector_map = part->sector_map;
+	u16 *header_cache = part->header_cache;
+	struct block *blocks = part->blocks;
 	int i;
 
 	for (i=0; i<part->total_blocks; i++) {
@@ -799,10 +802,10 @@ static void rfd_ftl_remove_dev(struct mtd_blktrans_dev *dev)
 			part->mbd.mtd->name, i, part->blocks[i].erases);
 	}
 
-	vfree(part->sector_map);
-	kfree(part->header_cache);
-	kfree(part->blocks);
 	del_mtd_blktrans_dev(&part->mbd);
+	vfree(sector_map);
+	kfree(header_cache);
+	kfree(blocks);
 }
 
 static struct mtd_blktrans_ops rfd_ftl_tr = {
