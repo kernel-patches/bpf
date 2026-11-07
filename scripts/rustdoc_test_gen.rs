@@ -127,6 +127,7 @@ fn main() {
 
     let mut tests = String::new();
     let mut body = String::new();
+    let mut warned = false;
     let mut last_file = String::new();
     let mut number = 0;
     let mut valid_paths: Vec<PathBuf> = Vec::new();
@@ -167,6 +168,33 @@ fn main() {
             .take_while(|line| !line.contains("fn main() {"))
             .count()
             + 1;
+
+        // `rustdoc` moves the crate-level attributes (`#![...]`) of the test out of its body and
+        // places them before `main`, after its own `#![allow(unused)]`. Subtract the moved lines,
+        // since the rest of the body is shifted by that amount with respect to the original source.
+        //
+        // Only single-line attributes are handled. If `rustdoc` stops starting its output with
+        // `#![allow(unused)]`, this computation needs to be revisited, so warn (once) rather than
+        // silently reporting wrong line numbers, but keep going since the tests themselves still
+        // work.
+        let hoisted_lines = if body.starts_with("#![allow(unused)]\n") {
+            body.lines()
+                .take(body_offset - 1)
+                .filter(|line| line.starts_with("#!["))
+                .count()
+                - 1
+        } else {
+            if !warned {
+                eprintln!(
+                    "warning: `{name}` does not start with `#![allow(unused)]`: line numbers \
+                    reported by doctests may be wrong, please update \
+                    `scripts/rustdoc_test_gen.rs`."
+                );
+                warned = true;
+            }
+            0
+        };
+        let body_offset = body_offset - hoisted_lines;
 
         use std::fmt::Write;
         write!(
