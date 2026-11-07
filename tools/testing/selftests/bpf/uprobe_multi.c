@@ -4,7 +4,9 @@
 #include <string.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <signal.h>
 #include <sys/mman.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 #include <sdt.h>
 
@@ -95,12 +97,12 @@ static int usdt(void)
 extern char build_id_start[];
 extern char build_id_end[];
 
-int __attribute__((weak)) trigger_uprobe(bool build_id_resident)
+/* Returns 2 if the build ID page could not be evicted. */
+static int prep_build_id_page(bool build_id_resident)
 {
 	int page_sz = sysconf(_SC_PAGESIZE);
-	void *addr;
-
 	unsigned char vec[1];
+	void *addr;
 	int poll = 0;
 
 	/* page-align build ID start */
@@ -123,8 +125,35 @@ int __attribute__((weak)) trigger_uprobe(bool build_id_resident)
 			poll++;
 			usleep(100);
 		} while (poll < 500);
+		if (vec[0] & 1)
+			return 2;
 	}
+	return 0;
+}
+
+int __attribute__((weak)) trigger_uprobe(bool build_id_resident)
+{
+	(void)prep_build_id_page(build_id_resident);
+
 	(void)uprobe();
+
+	return 0;
+}
+
+int __attribute__((weak)) trigger_stop(void)
+{
+	int err = prep_build_id_page(false /* page-out build ID */);
+
+	if (err)
+		return err;
+
+	/*
+	 * Make one syscall that the BPF program under test filters on, then
+	 * stop this process so that the recorded stack cannot be overwritten
+	 * by another syscall while the caller inspects it.
+	 */
+	(void)syscall(SYS_getpid);
+	raise(SIGSTOP);
 
 	return 0;
 }
@@ -142,6 +171,8 @@ int main(int argc, char **argv)
 		return trigger_uprobe(false /* page-out build ID */);
 	if (!strcmp("uprobe-paged-in", argv[1]))
 		return trigger_uprobe(true /* page-in build ID */);
+	if (!strcmp("uprobe-paged-out-stop", argv[1]))
+		return trigger_stop();
 
 error:
 	fprintf(stderr,
