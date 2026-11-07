@@ -8,6 +8,7 @@
  */
 #include <linux/memory.h>
 #include <linux/uaccess.h>
+#include <linux/cache.h>
 #include <linux/module.h>
 #include <linux/list.h>
 #include <linux/slab.h>
@@ -21,6 +22,14 @@
 
 /* mutex to protect coming/going of the jump_label table */
 static DEFINE_MUTEX(jump_label_mutex);
+
+struct jump_entry_index {
+	struct jump_entry *base;
+	unsigned int nr;
+	u32 entries[];
+};
+
+static struct jump_entry_index *jump_entry_index;
 
 void jump_label_lock(void)
 {
@@ -381,6 +390,78 @@ static int addr_conflict(struct jump_entry *entry, void *start, void *end)
 	return 0;
 }
 
+static int jump_entry_index_cmp(const void *a, const void *b, const void *priv)
+{
+	const struct jump_entry *base = priv;
+	unsigned int ia = *(u32 *)a;
+	unsigned int ib = *(u32 *)b;
+	unsigned long ca = jump_entry_code(base + ia);
+	unsigned long cb = jump_entry_code(base + ib);
+
+	if (ca < cb)
+		return -1;
+	if (ca > cb)
+		return 1;
+	return 0;
+}
+
+static struct jump_entry_index *
+jump_entry_index_alloc(struct jump_entry *start, struct jump_entry *stop)
+{
+	unsigned int i, nr = stop - start;
+	struct jump_entry_index *index;
+
+	if (!nr)
+		return NULL;
+
+	index = kvmalloc_flex(*index, entries, nr, GFP_KERNEL);
+	if (!index)
+		return NULL;
+
+	index->nr = nr;
+	index->base = start;
+	for (i = 0; i < nr; i++)
+		index->entries[i] = i;
+
+	sort_r(index->entries, nr, sizeof(index->entries[0]),
+	       jump_entry_index_cmp, NULL, start);
+	return index;
+}
+
+static int jump_entry_index_text_reserved(struct jump_entry_index *index,
+					  void *start, void *end, bool init)
+{
+	unsigned long start_addr = (unsigned long)start;
+	unsigned long end_addr = (unsigned long)end;
+	unsigned int low = 0, high = index->nr, i;
+
+	/* Find the first entry after @start. */
+	while (low < high) {
+		unsigned int mid = low + (high - low) / 2;
+
+		if (jump_entry_code(index->base + index->entries[mid]) <= start_addr)
+			low = mid + 1;
+		else
+			high = mid;
+	}
+
+	/* The preceding entry may start before @start and overlap it. */
+	if (low)
+		low--;
+
+	for (i = low; i < index->nr; i++) {
+		struct jump_entry *entry = index->base + index->entries[i];
+
+		if (jump_entry_code(entry) > end_addr)
+			break;
+		if ((init || !jump_entry_is_init(entry)) &&
+		    addr_conflict(entry, start, end))
+			return 1;
+	}
+
+	return 0;
+}
+
 static int __jump_label_text_reserved(struct jump_entry *iter_start,
 		struct jump_entry *iter_stop, void *start, void *end, bool init)
 {
@@ -653,9 +734,14 @@ static int __jump_label_mod_text_reserved(void *start, void *end)
 	if (!mod)
 		return 0;
 
-	ret = __jump_label_text_reserved(mod->jump_entries,
-				mod->jump_entries + mod->num_jump_entries,
+	if (mod->jump_entry_index)
+		ret = jump_entry_index_text_reserved(mod->jump_entry_index,
 				start, end, mod->state == MODULE_STATE_COMING);
+	else
+		ret = __jump_label_text_reserved(mod->jump_entries,
+					mod->jump_entries + mod->num_jump_entries,
+					start, end,
+					mod->state == MODULE_STATE_COMING);
 
 	module_put(mod);
 
@@ -700,6 +786,7 @@ static int jump_label_add_module(struct module *mod)
 		return 0;
 
 	jump_label_sort_entries(iter_start, iter_stop);
+	mod->jump_entry_index = jump_entry_index_alloc(iter_start, iter_stop);
 
 	for (iter = iter_start; iter < iter_stop; iter++) {
 		struct static_key *iterk;
@@ -810,6 +897,9 @@ static void jump_label_del_module(struct module *mod)
 			kfree(jlm);
 		}
 	}
+
+	kvfree(mod->jump_entry_index);
+	mod->jump_entry_index = NULL;
 }
 
 static int
@@ -870,7 +960,13 @@ early_initcall(jump_label_init_module);
 int jump_label_text_reserved(void *start, void *end)
 {
 	bool init = system_state < SYSTEM_RUNNING;
-	int ret = __jump_label_text_reserved(__start___jump_table,
+	int ret;
+
+	if (jump_entry_index)
+		ret = jump_entry_index_text_reserved(jump_entry_index,
+			start, end, init);
+	else
+		ret = __jump_label_text_reserved(__start___jump_table,
 			__stop___jump_table, start, end, init);
 
 	if (ret)
@@ -908,6 +1004,16 @@ static void jump_label_update(struct static_key *key)
 	if (entry)
 		__jump_label_update(key, entry, stop, init);
 }
+
+static int __init jump_entry_index_build(void)
+{
+	jump_label_lock();
+	jump_entry_index = jump_entry_index_alloc(__start___jump_table, __stop___jump_table);
+	jump_label_unlock();
+
+	return 0;
+}
+late_initcall(jump_entry_index_build);
 
 #ifdef CONFIG_STATIC_KEYS_SELFTEST
 static DEFINE_STATIC_KEY_TRUE(sk_true);

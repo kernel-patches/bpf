@@ -38,11 +38,10 @@ unsigned long __recover_optprobed_insn(kprobe_opcode_t *buf, unsigned long addr)
 {
 	struct optimized_kprobe *op;
 	struct kprobe *kp;
+	struct kprobe_iter iter;
 	long offs;
-	int i;
 
-	for (i = 0; i < JMP32_INSN_SIZE; i++) {
-		kp = get_kprobe((void *)addr - i);
+	for_each_kprobe(iter, kp, addr - (JMP32_INSN_SIZE - 1), addr) {
 		/* This function only handles jump-optimized kprobe */
 		if (kp && kprobe_optimized(kp)) {
 			op = container_of(kp, struct optimized_kprobe, kp);

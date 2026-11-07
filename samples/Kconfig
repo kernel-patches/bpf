@@ -80,6 +80,15 @@ config SAMPLE_KRETPROBES
 	default m
 	depends on SAMPLE_KPROBES && KRETPROBES
 
+config SAMPLE_KPROBES_MANY
+	tristate "Build batch kprobe example -- x86 loadable module only"
+	depends on SAMPLE_KPROBES && X86 && m
+	help
+	  This builds a sample module that registers kprobes in the middle of
+	  10000 generated x86 functions using the batch kprobe interface. The
+	  kernel_functions module parameter selects generated kernel functions
+	  instead of the functions defined by the sample module.
+
 config SAMPLE_HW_BREAKPOINT
 	tristate "Build kernel hardware breakpoint examples -- loadable module only"
 	depends on HAVE_HW_BREAKPOINT && m

@@ -15,6 +15,7 @@
 #include <linux/types.h>
 #include <linux/export.h>
 #include <linux/extable.h>
+#include <linux/bug.h>
 #include <linux/module.h>
 #include <linux/proc_fs.h>
 #include <linux/binfmts.h>
@@ -1046,6 +1047,7 @@ void start_kernel(void)
 	char *command_line;
 	char *after_dashes;
 
+	sort_main_bug_table();
 	set_task_stack_end_magic(&init_task);
 	smp_setup_processor_id();
 	debug_objects_early_init();
