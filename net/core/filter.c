@@ -12392,6 +12392,10 @@ const struct bpf_func_proto bpf_skc_to_tcp_timewait_sock_proto = {
 
 BPF_CALL_1(bpf_skc_to_tcp_request_sock, struct sock *, sk)
 {
+	/* Ensure BTF for the structs exists even with CONFIG_INET=n. */
+	BTF_TYPE_EMIT(struct inet_request_sock);
+	BTF_TYPE_EMIT(struct tcp_request_sock);
+
 #ifdef CONFIG_INET
 	if (sk && sk->sk_prot == &tcp_prot && sk->sk_state == TCP_NEW_SYN_RECV)
 		return (unsigned long)sk;
