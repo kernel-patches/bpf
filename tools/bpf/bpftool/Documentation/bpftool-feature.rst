@@ -18,7 +18,7 @@ SYNOPSIS
 
 *OPTIONS* := { |COMMON_OPTIONS| }
 
-*COMMANDS* := { **probe** | **help** }
+*COMMANDS* := { **probe** | **list_builtins** | **help** }
 
 FEATURE COMMANDS
 ================

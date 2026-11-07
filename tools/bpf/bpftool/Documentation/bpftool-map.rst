@@ -20,7 +20,8 @@ SYNOPSIS
 
 *COMMANDS* :=
 { **show** | **list** | **create** | **dump** | **update** | **lookup** | **getnext** |
-**delete** | **pin** | **help** }
+**delete** | **pin** | **event_pipe** | **peek** | **push** | **pop** | **enqueue** | **dequeue** |
+**freeze** | **help** }
 
 MAP COMMANDS
 =============

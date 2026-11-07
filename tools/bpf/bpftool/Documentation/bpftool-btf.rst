@@ -18,7 +18,7 @@ SYNOPSIS
 
 *OPTIONS* := { |COMMON_OPTIONS| | [{ **-B** | **--base-btf**} *FILE*]...  }
 
-*COMMANDS* := { **dump** | **help** }
+*COMMANDS* := { **show** | **list** | **dump** | **help** }
 
 BTF COMMANDS
 =============
