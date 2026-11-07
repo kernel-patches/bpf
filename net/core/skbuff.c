@@ -1581,7 +1581,7 @@ static void __copy_skb_header(struct sk_buff *new, const struct sk_buff *old)
 #ifdef CONFIG_NETWORK_SECMARK
 	CHECK_SKB_FIELD(secmark);
 #endif
-#ifdef CONFIG_NET_RX_BUSY_POLL
+#ifdef CONFIG_SKB_MARK_NAPI_ID
 	CHECK_SKB_FIELD(napi_id);
 #endif
 #ifdef CONFIG_XPS

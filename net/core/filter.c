@@ -10366,7 +10366,7 @@ static u32 bpf_convert_ctx_access(enum bpf_access_type type,
 		break;
 
 	case offsetof(struct __sk_buff, napi_id):
-#if defined(CONFIG_NET_RX_BUSY_POLL)
+#if defined(CONFIG_SKB_MARK_NAPI_ID)
 		*insn++ = BPF_LDX_MEM(BPF_W, si->dst_reg, si->src_reg,
 				      bpf_target_off(struct sk_buff, napi_id, 4,
 						     target_size));
