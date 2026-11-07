@@ -2884,6 +2884,10 @@ static int ionic_cmb_reconfig(struct ionic_lif *lif,
 			}
 		}
 
+		if (lif->ntxq_descs != start_qparams.ntxq_descs)
+			netif_set_tso_max_segs(lif->netdev,
+					       lif->ntxq_descs - 1);
+
 		err = ionic_start_queues_reconfig(lif);
 		if (err) {
 			dev_err(lif->ionic->dev,
@@ -3065,7 +3069,7 @@ int ionic_reconfigure_queues(struct ionic_lif *lif,
 
 	/* swap new desc_info and rings, keeping existing interrupt config */
 	if (tx_qcqs) {
-		lif->ntxq_descs = qparam->ntxq_descs;
+		ionic_lif_set_ntxq_descs(lif, qparam->ntxq_descs);
 		for (i = 0; i < qparam->nxqs; i++)
 			ionic_swap_queues(lif->txqcqs[i], tx_qcqs[i]);
 	}
@@ -3284,10 +3288,10 @@ int ionic_lif_alloc(struct ionic *ionic)
 	lif->index = 0;
 
 	if (is_kdump_kernel()) {
-		lif->ntxq_descs = IONIC_MIN_TXRX_DESC;
+		ionic_lif_set_ntxq_descs(lif, IONIC_MIN_TXRX_DESC);
 		lif->nrxq_descs = IONIC_MIN_TXRX_DESC;
 	} else {
-		lif->ntxq_descs = IONIC_DEF_TXRX_DESC;
+		ionic_lif_set_ntxq_descs(lif, IONIC_DEF_TXRX_DESC);
 		lif->nrxq_descs = IONIC_DEF_TXRX_DESC;
 	}
 

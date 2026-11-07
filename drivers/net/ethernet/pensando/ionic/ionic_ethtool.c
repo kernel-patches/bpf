@@ -780,6 +780,7 @@ static int ionic_set_ringparam(struct net_device *netdev,
 			       struct netlink_ext_ack *extack)
 {
 	struct ionic_lif *lif = netdev_priv(netdev);
+	unsigned int ntxq_descs = lif->ntxq_descs;
 	struct ionic_queue_params qparam;
 	int err;
 
@@ -838,11 +839,12 @@ static int ionic_set_ringparam(struct net_device *netdev,
 		netdev_info(netdev, "Changing Rx ring size from %d to %d\n",
 			    lif->nrxq_descs, ring->rx_pending);
 
-	/* if we're not running, just set the values and return */
+	/* if we're not running, just set the values */
 	if (!netif_running(lif->netdev)) {
-		lif->ntxq_descs = ring->tx_pending;
+		ionic_lif_set_ntxq_descs(lif, ring->tx_pending);
 		lif->nrxq_descs = ring->rx_pending;
-		return 0;
+		err = 0;
+		goto out;
 	}
 
 	mutex_lock(&lif->queue_lock);
@@ -850,6 +852,10 @@ static int ionic_set_ringparam(struct net_device *netdev,
 	mutex_unlock(&lif->queue_lock);
 	if (err)
 		netdev_info(netdev, "Ring reconfiguration failed, changes canceled: %d\n", err);
+
+out:
+	if (lif->ntxq_descs != ntxq_descs)
+		netdev_features_change(netdev);
 
 	return err;
 }
