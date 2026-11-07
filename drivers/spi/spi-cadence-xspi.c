@@ -4,6 +4,8 @@
 
 #include <linux/completion.h>
 #include <linux/delay.h>
+#include <linux/dmaengine.h>
+#include <linux/dma-mapping.h>
 #include <linux/err.h>
 #include <linux/errno.h>
 #include <linux/interrupt.h>
@@ -19,12 +21,14 @@
 #include <linux/bitfield.h>
 #include <linux/limits.h>
 #include <linux/log2.h>
+#include <linux/mm.h>
 #include <linux/bitrev.h>
 #include <linux/util_macros.h>
 
 #define CDNS_XSPI_MAGIC_NUM_VALUE	0x6522
 #define CDNS_XSPI_MAX_BANKS		8
 #define CDNS_XSPI_NAME			"cadence-xspi"
+#define CDNS_XSPI_DMA_TIMEOUT_MS		5000
 
 /*
  * Note: below are additional auxiliary registers to
@@ -334,6 +338,10 @@ struct cdns_xspi_dev {
 	int cur_cs;
 	unsigned int sdmasize;
 	unsigned int sdma_xfer_len;
+	struct dma_chan *dma_chan;
+	dma_addr_t dma_addr;
+	struct completion dma_complete;
+	bool dma_error;
 
 	struct completion cmd_complete;
 	struct completion auto_cmd_complete;
@@ -354,6 +362,122 @@ struct cdns_xspi_dev {
 	bool xfer_in_progress;
 	int current_xfer_qword;
 };
+
+static void cdns_xspi_dma_cleanup(void *data)
+{
+	struct cdns_xspi_dev *cdns_xspi = data;
+
+	dma_unmap_resource(dmaengine_get_dma_device(cdns_xspi->dma_chan),
+			   cdns_xspi->dma_addr, cdns_xspi->sdmasize,
+			   DMA_BIDIRECTIONAL, 0);
+}
+
+static int cdns_xspi_dma_init(struct cdns_xspi_dev *cdns_xspi,
+			      phys_addr_t sdma_phys)
+{
+	struct device *dev = cdns_xspi->dev;
+	struct dma_chan *chan;
+	struct device *dma_dev;
+	dma_addr_t dma_addr;
+
+	/* The Marvell overlay has additional SDMA access-width restrictions. */
+	if (cdns_xspi->driver_data->mrvl_hw_overlay)
+		return 0;
+
+	chan = devm_dma_request_chan(dev, "memcpy");
+	if (IS_ERR(chan)) {
+		if (PTR_ERR(chan) == -EPROBE_DEFER)
+			return -EPROBE_DEFER;
+		dev_dbg(dev, "DMA unavailable, using CPU transfers\n");
+		return 0;
+	}
+	if (!dma_has_cap(DMA_MEMCPY, chan->device->cap_mask)) {
+		dev_dbg(dev, "DMA channel does not support memcpy, using CPU transfers\n");
+		return 0;
+	}
+
+	/* Map the aperture once; only the RAM buffer changes between transfers. */
+	dma_dev = dmaengine_get_dma_device(chan);
+	dma_addr = dma_map_resource(dma_dev, sdma_phys, cdns_xspi->sdmasize,
+				    DMA_BIDIRECTIONAL, 0);
+	if (dma_mapping_error(dma_dev, dma_addr)) {
+		dev_dbg(dev, "Failed to map SDMA aperture, using CPU transfers\n");
+		return 0;
+	}
+
+	cdns_xspi->dma_chan = chan;
+	cdns_xspi->dma_addr = dma_addr;
+	init_completion(&cdns_xspi->dma_complete);
+
+	return devm_add_action_or_reset(dev, cdns_xspi_dma_cleanup, cdns_xspi);
+}
+
+static void cdns_xspi_dma_callback(void *data, const struct dmaengine_result *result)
+{
+	struct cdns_xspi_dev *cdns_xspi = data;
+
+	cdns_xspi->dma_error = result->result != DMA_TRANS_NOERROR || result->residue;
+	complete(&cdns_xspi->dma_complete);
+}
+
+/* -EAGAIN means no DMA was issued, so the caller can use the CPU path. */
+static int cdns_xspi_dma_transfer(struct cdns_xspi_dev *cdns_xspi,
+				  size_t len, bool read)
+{
+	struct dma_chan *chan = cdns_xspi->dma_chan;
+	dma_addr_t port_addr = cdns_xspi->dma_addr;
+	enum dma_data_direction dir = read ? DMA_FROM_DEVICE : DMA_TO_DEVICE;
+	void *buf = read ? cdns_xspi->in_buffer : (void *)cdns_xspi->out_buffer;
+	struct dma_async_tx_descriptor *desc;
+	struct device *dma_dev;
+	dma_addr_t buf_addr;
+	dma_cookie_t cookie;
+	int ret = -EAGAIN;
+
+	if (!chan || len < cdns_xspi->dma_data_width ||
+	    len > cdns_xspi->sdmasize || !virt_addr_valid(buf))
+		return -EAGAIN;
+
+	dma_dev = dmaengine_get_dma_device(chan);
+	buf_addr = dma_map_single(dma_dev, buf, len, dir);
+	if (dma_mapping_error(dma_dev, buf_addr))
+		return -EAGAIN;
+	if (!is_dma_copy_aligned(chan->device, port_addr, buf_addr, len))
+		goto unmap;
+
+	desc = dmaengine_prep_dma_memcpy(chan, read ? buf_addr : port_addr,
+					 read ? port_addr : buf_addr, len,
+					 DMA_PREP_INTERRUPT | DMA_CTRL_ACK);
+	if (!desc)
+		goto unmap;
+
+	reinit_completion(&cdns_xspi->dma_complete);
+	cdns_xspi->dma_error = false;
+	desc->callback_result = cdns_xspi_dma_callback;
+	desc->callback_param = cdns_xspi;
+	cookie = dmaengine_submit(desc);
+	if (dma_submit_error(cookie)) {
+		dmaengine_terminate_sync(chan);
+		goto unmap;
+	}
+	dma_async_issue_pending(chan);
+
+	if (!wait_for_completion_timeout(&cdns_xspi->dma_complete,
+					msecs_to_jiffies(CDNS_XSPI_DMA_TIMEOUT_MS))) {
+		dmaengine_terminate_sync(chan);
+		dev_err(cdns_xspi->dev, "SDMA %s DMA timeout\n", read ? "read" : "write");
+		ret = -ETIMEDOUT;
+	} else if (cdns_xspi->dma_error) {
+		dmaengine_terminate_sync(chan);
+		ret = -EIO;
+	} else {
+		ret = 0;
+	}
+
+unmap:
+	dma_unmap_single(dma_dev, buf_addr, len, dir);
+	return ret;
+}
 
 static int cdns_xspi_wait_for_controller_idle(struct cdns_xspi_dev *cdns_xspi)
 {
@@ -502,6 +626,7 @@ static int cdns_xspi_sdma_handle(struct cdns_xspi_dev *cdns_xspi)
 {
 	u32 sdma_size, sdma_trd_info;
 	u8 sdma_dir;
+	int ret;
 
 	sdma_size = readl(cdns_xspi->iobase + CDNS_XSPI_SDMA_SIZE_REG);
 	sdma_trd_info = readl(cdns_xspi->iobase + CDNS_XSPI_SDMA_TRD_INFO_REG);
@@ -513,6 +638,10 @@ static int cdns_xspi_sdma_handle(struct cdns_xspi_dev *cdns_xspi)
 			sdma_size, cdns_xspi->sdma_xfer_len);
 		return -EINVAL;
 	}
+	ret = cdns_xspi_dma_transfer(cdns_xspi, sdma_size,
+				     sdma_dir == CDNS_XSPI_SDMA_DIR_READ);
+	if (ret != -EAGAIN)
+		return ret;
 
 	switch (sdma_dir) {
 	case CDNS_XSPI_SDMA_DIR_READ:
@@ -543,6 +672,8 @@ static int cdns_xspi_send_stig_command(struct cdns_xspi_dev *cdns_xspi,
 	writel(FIELD_PREP(CDNS_XSPI_CTRL_WORK_MODE, CDNS_XSPI_WORK_MODE_STIG),
 	       cdns_xspi->iobase + CDNS_XSPI_CTRL_CONFIG_REG);
 
+	reinit_completion(&cdns_xspi->cmd_complete);
+	reinit_completion(&cdns_xspi->sdma_complete);
 	cdns_xspi->set_interrupts_handler(cdns_xspi, true);
 	cdns_xspi->sdma_error = false;
 
@@ -580,9 +711,9 @@ static int cdns_xspi_send_stig_command(struct cdns_xspi_dev *cdns_xspi,
 			return -EIO;
 		}
 		ret = cdns_xspi->sdma_handler(cdns_xspi);
-		if (ret) {
+		if (ret || cdns_xspi->sdma_error) {
 			cdns_xspi->set_interrupts_handler(cdns_xspi, false);
-			return ret;
+			return ret ?: -EIO;
 		}
 	}
 
@@ -1276,6 +1407,10 @@ static int cdns_xspi_probe(struct platform_device *pdev)
 			return PTR_ERR(cdns_xspi->sdmabase);
 	}
 	cdns_xspi->sdmasize = resource_size(res);
+
+	ret = cdns_xspi_dma_init(cdns_xspi, res->start);
+	if (ret)
+		return ret;
 
 	cdns_xspi->auxbase = devm_platform_ioremap_resource_byname(pdev, "aux");
 	if (IS_ERR(cdns_xspi->auxbase)) {
