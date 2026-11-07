@@ -495,6 +495,20 @@ struct ionic_v1_atomic_bdy {
 	struct ionic_sge		sge;
 };
 
+/* v2 atomic wqe body */
+struct ionic_v2_atomic_bdy {
+	__be32				remote_va_high;
+	__be32				remote_va_low;
+	__be32				remote_rkey;
+	__be32				swap_add_high;
+	__be32				swap_add_low;
+	__be32				compare_high;
+	__be32				compare_low;
+	__be32				lkey;
+	__be64				local_va;
+	__u8				rsvd_expdb[8];
+};
+
 /* v1 reg mr wqe body */
 struct ionic_v1_reg_mr_bdy {
 	__be64				va;
@@ -524,6 +538,7 @@ struct ionic_v1_wqe {
 		struct ionic_v1_recv_bdy	recv;
 		struct ionic_v1_common_bdy	common;
 		struct ionic_v1_atomic_bdy	atomic;
+		struct ionic_v2_atomic_bdy	atomic_v2;
 		struct ionic_v1_reg_mr_bdy	reg_mr;
 		struct ionic_v1_bind_mw_bdy	bind_mw;
 	};

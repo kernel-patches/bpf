@@ -1050,9 +1050,15 @@ static int ionic_prep_atomic(struct ionic_qp *qp,
 	wqe->atomic.remote_rkey = cpu_to_be32(wr->rkey);
 
 	wqe->base.num_sge_key = 1;
-	wqe->atomic.sge.va = cpu_to_be64(wr->wr.sg_list[0].addr);
-	wqe->atomic.sge.len = cpu_to_be32(8);
-	wqe->atomic.sge.lkey = cpu_to_be32(wr->wr.sg_list[0].lkey);
+
+	if (dev->lif_cfg.rdma_version >= 2) {
+		wqe->atomic_v2.local_va = cpu_to_be64(wr->wr.sg_list[0].addr);
+		wqe->atomic_v2.lkey = cpu_to_be32(wr->wr.sg_list[0].lkey);
+	} else {
+		wqe->atomic.sge.va = cpu_to_be64(wr->wr.sg_list[0].addr);
+		wqe->atomic.sge.len = cpu_to_be32(8);
+		wqe->atomic.sge.lkey = cpu_to_be32(wr->wr.sg_list[0].lkey);
+	}
 
 	meta->len = 8;
 	ionic_prep_base(qp, &wr->wr, meta, wqe);
