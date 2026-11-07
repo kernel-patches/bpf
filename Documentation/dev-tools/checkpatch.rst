@@ -389,7 +389,7 @@ API usage
     See: https://www.kernel.org/doc/html/latest/driver-api/driver-model/device.html#attributes
 
   **DEVICE_ATTR_WO**
-    The DEVICE_AATR_WO(name) helper macro can be used instead of
+    The DEVICE_ATTR_WO(name) helper macro can be used instead of
     DEVICE_ATTR(name, 0200, NULL, name_store);
 
     Note that the macro automatically appends _store to the
