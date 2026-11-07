@@ -218,6 +218,28 @@ static bool core2_builder_supports(struct dc *dc, enum bls_builder_name name,
 			core2_query_accelerated_mode(dc);
 }
 
+/*
+ * The values DC1 computes into the context before it programs the planes.
+ * The builder reads them from the context.
+ */
+static void core2_update_prepare(struct dc *dc, struct dc_state *context,
+		const struct dc_stream_state *stream)
+{
+	struct pipe_ctx *dpp_pipes[MAX_PIPES];
+	int i, n;
+
+	if (dc->res_pool->funcs->prepare_mcache_programming)
+		dc->res_pool->funcs->prepare_mcache_programming(dc, context);
+	n = resource_get_dpp_pipes_for_stream(stream, &context->res_ctx,
+			dpp_pipes);
+	for (i = 0; i < n; i++)
+		dpp_pipes[i]->plane_res.scl_data.lb_params.alpha_en =
+				dpp_pipes[i]->plane_state->per_pixel_alpha;
+}
+
+static void core2_update_done(struct dc *dc, struct dc_state *context,
+		struct dc_stream_state *stream);
+
 /* Never falls back to legacy_commit_state_hw: DC2 must not call DC1. */
 enum dc_status core2_commit_state_hw(struct dc *dc, struct dc_state *context)
 {
@@ -234,9 +256,16 @@ enum dc_status core2_commit_state_hw(struct dc *dc, struct dc_state *context)
 	 * pipe before it programs the packets. Remove when the builder
 	 * computes it.
 	 */
-	for (i = 0; i < context->stream_count; i++)
-		resource_build_info_frame(resource_get_otg_master_for_stream(
-				&context->res_ctx, context->streams[i]));
+	for (i = 0; i < context->stream_count; i++) {
+		struct pipe_ctx *otg_master = resource_get_otg_master_for_stream(
+				&context->res_ctx, context->streams[i]);
+
+		if (otg_master)
+			resource_build_info_frame(otg_master);
+		if (dcn401_stream_kept(dc, current_state, context,
+				context->streams[i]))
+			core2_update_prepare(dc, context, context->streams[i]);
+	}
 
 	status = core2_build_and_run(dc, DCN_DECL_NON_SEAMLESS_COMMIT, context,
 			NULL);
@@ -244,16 +273,20 @@ enum dc_status core2_commit_state_hw(struct dc *dc, struct dc_state *context)
 		return status;
 
 	core2_commit_prepare_done(dc, context);
-	for (i = 0; i < current_state->stream_count; i++)
-		if (!dcn401_stream_unchanged(current_state, context,
-				current_state->streams[i]))
-			core2_commit_disable_done(dc,
-					resource_get_otg_master_for_stream(
-					&current_state->res_ctx,
-					current_state->streams[i]));
+	for (i = 0; i < current_state->stream_count; i++) {
+		struct pipe_ctx *otg_master = resource_get_otg_master_for_stream(
+				&current_state->res_ctx,
+				current_state->streams[i]);
+
+		if (otg_master && !dcn401_stream_kept(dc, current_state,
+				context, current_state->streams[i]))
+			core2_commit_disable_done(dc, otg_master);
+	}
 	for (i = 0; i < context->stream_count; i++)
-		if (!dcn401_stream_unchanged(current_state, context,
+		if (dcn401_stream_kept(dc, current_state, context,
 				context->streams[i]))
+			core2_update_done(dc, context, context->streams[i]);
+		else
 			core2_commit_enable_done(
 					resource_get_otg_master_for_stream(
 					&context->res_ctx, context->streams[i]));
@@ -321,9 +354,15 @@ static void core2_update_done(struct dc *dc, struct dc_state *context,
 	struct pipe_ctx *pipe;
 	struct dc_plane_state *plane;
 	struct hubp *hubp;
-	int i, n = resource_get_dpp_pipes_for_stream(stream, &context->res_ctx,
-			dpp_pipes);
+	int i, n = resource_get_dpp_pipes_for_stream(stream,
+			&dc->current_state->res_ctx, dpp_pipes);
 
+	/* The update powers down the pipes that leave the stream. */
+	for (i = 0; i < n; i++)
+		if (dpp_pipes[i]->plane_res.hubp)
+			dpp_pipes[i]->plane_res.hubp->power_gated = true;
+	n = resource_get_dpp_pipes_for_stream(stream, &context->res_ctx,
+			dpp_pipes);
 	for (i = 0; i < n; i++) {
 		pipe = dpp_pipes[i];
 		if (!pipe->plane_state || !pipe->plane_res.hubp ||
@@ -349,22 +388,10 @@ static void core2_update_state_execute(
 	struct dc_state *context = scratch->new_context;
 	struct pipe_ctx *pipe = resource_get_otg_master_for_stream(
 			&context->res_ctx, scratch->stream);
-	struct pipe_ctx *dpp_pipes[MAX_PIPES];
-	int i, n;
 
-	/*
-	 * The values DC1 computes into the context before it programs the
-	 * planes. The builder reads them from the context.
-	 */
 	if (!pipe || !pipe->plane_state)
 		return;
-	if (dc->res_pool->funcs->prepare_mcache_programming)
-		dc->res_pool->funcs->prepare_mcache_programming(dc, context);
-	n = resource_get_dpp_pipes_for_stream(scratch->stream, &context->res_ctx,
-			dpp_pipes);
-	for (i = 0; i < n; i++)
-		dpp_pipes[i]->plane_res.scl_data.lb_params.alpha_en =
-				dpp_pipes[i]->plane_state->per_pixel_alpha;
+	core2_update_prepare(dc, context, scratch->stream);
 
 	if (core2_build_and_run(dc, DCN_DECL_SEAMLESS_UPDATE, context,
 			scratch->stream) != DC_OK) {

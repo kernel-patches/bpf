@@ -29,16 +29,17 @@
  * DCN_DECL_SEAMLESS_UPDATE for one of the virtual streams that
  * DCN_DECL_NON_SEAMLESS_COMMIT (dcn401_non_seamless_builder.c) enabled.
  * The other streams keep their pipes and planes, and the update programs
- * none of them. The update either adds one plane, or two MPC-blended
- * planes, to the stream, or keeps its planes and programs their surface,
- * address, scaler and viewport, and may add a second plane below a kept
- * one. The sequence follows the full update in
+ * none of them. The stream ends with one or two planes. Each of its pipes
+ * keeps a plane on its HUBP, DPP and OPP, is added on a free pipe, or leaves
+ * the stream, so the update can add and remove planes and change the ODM
+ * and MPC layout on the same OTG. The sequence follows the full update in
  * commit_planes_for_stream on dcn401, all in head_sequence: the
  * outstanding updates, prepare_bandwidth and the pending-update waits,
  * then the locked front-end programming and
- * post_unlock_program_front_end. A kept plane skips the first-enable steps
- * of enable_plane, and a stream that had a plane skips the unblank. The
- * bandwidth lower stays with dc_post_update_surfaces_to_stream.
+ * post_unlock_program_front_end. Under the lock, a removed pipe leaves its
+ * MPCC; after it, the pipe powers down. A kept pipe skips the first-enable
+ * steps of enable_plane. The bandwidth lower stays with
+ * dc_post_update_surfaces_to_stream.
  *
  * This file also holds what both builders share: the dc and stream
  * support checks, and the step walkers that turn a table into BLS entries.
@@ -500,93 +501,73 @@ static bool check_streams_kept(const struct dc *dc,
 	return true;
 }
 
-static unsigned int dcn401_current_plane_count(
-		const struct dc_state *current_state,
-		const struct dc_state *new_state, unsigned int i)
+bool dcn401_pipe_kept(const struct pipe_ctx *current_pipe,
+		const struct pipe_ctx *new_pipe)
 {
-	return current_state->stream_status[dcn401_stream_index(current_state,
-			new_state->streams[i])].plane_count;
-}
-
-/* Both planes of an MPO state are added together, by one update. */
-static bool dcn401_is_plane_add(const struct dc_state *current_state,
-		const struct dc_state *new_state, unsigned int i)
-{
-	unsigned int planes = new_state->stream_status[i].plane_count;
-
-	return !dcn401_current_plane_count(current_state, new_state, i) &&
-			(planes == 1 || planes == 2);
+	return current_pipe->plane_state &&
+			current_pipe->stream == new_pipe->stream &&
+			new_pipe->plane_state &&
+			current_pipe->plane_res.hubp == new_pipe->plane_res.hubp &&
+			current_pipe->plane_res.dpp == new_pipe->plane_res.dpp &&
+			current_pipe->stream_res.opp == new_pipe->stream_res.opp;
 }
 
 /*
- * Each current plane stays on its pipe, HUBP and DPP, and at most one
- * plane is added under them.
+ * The stream shows one or two planes. Each of its pipes was free, or kept
+ * its OPP and either had no plane or keeps a plane on its HUBP and DPP. A
+ * current pipe that does neither is removed.
  */
-static bool dcn401_is_plane_kept(const struct dc_state *current_state,
+static bool check_pipes_kept_or_free(const struct dc *dc,
+		const struct dc_state *current_state,
 		const struct dc_state *new_state, unsigned int i)
 {
-	unsigned int planes = dcn401_current_plane_count(current_state,
-			new_state, i);
+	unsigned int planes = new_state->stream_status[i].plane_count;
 	const struct pipe_ctx *cur, *new;
+	struct dc_state_facts facts;
 	unsigned int j;
 
-	if (!planes || new_state->stream_status[i].plane_count < planes ||
-			new_state->stream_status[i].plane_count > 2)
+	(void)dc;
+	if (planes < 1 || planes > 2)
 		return false;
 	for (j = 0; j < MAX_PIPES; j++) {
 		cur = &current_state->res_ctx.pipe_ctx[j];
 		new = &new_state->res_ctx.pipe_ctx[j];
-		if (cur->stream != new_state->streams[i] || !cur->plane_state)
+		if (new->stream != new_state->streams[i] || !cur->stream)
 			continue;
-		if (new->stream != cur->stream ||
-				new->plane_state != cur->plane_state ||
-				new->plane_res.hubp != cur->plane_res.hubp ||
-				new->plane_res.dpp != cur->plane_res.dpp ||
-				!new->top_pipe != !cur->top_pipe)
+		if (cur->stream != new->stream ||
+				cur->stream_res.opp != new->stream_res.opp ||
+				(cur->plane_state && !dcn401_pipe_kept(cur, new)))
 			return false;
 	}
-	return true;
-}
-
-/*
- * The seamless update either adds the first one or two planes, or keeps
- * the planes and programs their surface, address, scaler and viewport,
- * and may add a second plane below one. Each plane has its own DPP pipe.
- */
-static bool check_plane_add_or_kept(const struct dc *dc,
-		const struct dc_state *current_state,
-		const struct dc_state *new_state, unsigned int i)
-{
-	struct dc_state_facts facts;
-
-	(void)dc;
-	if (!dcn401_is_plane_add(current_state, new_state, i) &&
-			!dcn401_is_plane_kept(current_state, new_state, i))
-		return false;
 	dc_state_facts_derive(new_state, &facts);
-	return facts.global.blend_tree[i].dpp_pipe_count ==
-			new_state->stream_status[i].plane_count;
+	return facts.global.blend_tree[i].dpp_pipe_count == planes;
 }
 
-static bool check_same_otg_master_blocks(const struct dc *dc,
+static bool check_same_otg(const struct dc *dc,
 		const struct dc_state *current_state,
 		const struct dc_state *new_state, unsigned int i)
 {
-	const struct pipe_ctx *current_pipe = dcn401_otg_master(current_state,
+	const struct pipe_ctx *cur = dcn401_otg_master(current_state,
 			new_state->streams[i]);
-	const struct pipe_ctx *new_pipe = dcn401_otg_master(new_state,
+	const struct pipe_ctx *new = dcn401_otg_master(new_state,
 			new_state->streams[i]);
 
 	(void)dc;
-	if (current_pipe->stream_res.tg != new_pipe->stream_res.tg)
-		return false;
-	/* The same OPP for each ODM slice. */
-	for (; current_pipe && new_pipe;
-			current_pipe = current_pipe->next_odm_pipe,
-			new_pipe = new_pipe->next_odm_pipe)
-		if (current_pipe->stream_res.opp != new_pipe->stream_res.opp)
+	return cur && new && cur->stream_res.tg == new->stream_res.tg;
+}
+
+/* stream has the same OPP for each ODM slice in both states. */
+static bool dcn401_same_opp_heads(const struct dc_state *current_state,
+		const struct dc_state *new_state,
+		const struct dc_stream_state *stream)
+{
+	const struct pipe_ctx *cur = dcn401_otg_master(current_state, stream);
+	const struct pipe_ctx *new = dcn401_otg_master(new_state, stream);
+
+	for (; cur && new; cur = cur->next_odm_pipe, new = new->next_odm_pipe)
+		if (cur->stream_res.opp != new->stream_res.opp)
 			return false;
-	return !current_pipe && !new_pipe;
+	return !cur && !new;
 }
 
 static bool check_new_plane_blocks(const struct dc *dc,
@@ -960,12 +941,32 @@ static enum bls_builder_result dcn401_check_seamless_update_support(
 	if (result != BLS_BUILD_SUCCESS)
 		return result;
 
-	/* The transition: streams kept; add a plane or keep one plane. */
 	CHECK_UPDATE(streams_kept,
 			"a stream is not kept, or another stream changes");
-	CHECK_UPDATE(plane_add_or_kept,
-			"update is not a plane add, or keeps a plane off its pipe");
-	CHECK_UPDATE(same_otg_master_blocks, "otg, opp or odm changes");
+	return dcn401_check_stream_update(dc, current_state, new_state, i);
+}
+
+bool dcn401_stream_kept(const struct dc *dc,
+		const struct dc_state *current_state,
+		const struct dc_state *new_state,
+		const struct dc_stream_state *stream)
+{
+	int i = dcn401_stream_index(new_state, stream);
+
+	if (i < 0 || dcn401_stream_index(current_state, stream) < 0)
+		return false;
+	return dcn401_stream_unchanged(current_state, new_state, stream) ||
+			dcn401_check_stream_update(dc, current_state, new_state,
+			(unsigned int)i) == BLS_BUILD_SUCCESS;
+}
+
+enum bls_builder_result dcn401_check_stream_update(const struct dc *dc,
+		const struct dc_state *current_state,
+		const struct dc_state *new_state, unsigned int i)
+{
+	CHECK_UPDATE(pipes_kept_or_free,
+			"a pipe moves, or the stream has no or too many planes");
+	CHECK_UPDATE(same_otg, "otg changes");
 	CHECK_UPDATE_RESOURCE(new_plane_blocks, "plane is missing hubp or dpp");
 	CHECK_RESOURCE(pool_funcs, "resource pool or hubbub has no funcs");
 	CHECK_CONDITION(det_by_segments, "hubbub programs det size");
@@ -1022,7 +1023,8 @@ prepare_bandwidth[] = {
 /*
  * Net effect: hwss_process_outstanding_hw_updates on the current state,
  * which commit_planes_for_stream runs while optimized_required is set.
- * The OTG master has no plane yet, so no MPCC disconnect is pending.
+ * The update disconnects its removed pipes itself, so no MPCC disconnect
+ * is pending.
  */
 static const struct dcn401_commit_step preamble[] = {
 	{ .func = TG_WAIT_FOR_ALL_PENDING_UPDATES,
@@ -1095,14 +1097,44 @@ static const struct dcn401_commit_step global_sync[] = {
 	{ .func = TG_SETUP_VERTICAL_INTERRUPT2,
 	  .meta.skip_if.hubp_dpp_already_enabled = true },
 	{ .func = OPTC_SET_ODM_COMBINE,
-	  .meta.skip_if.hubp_dpp_already_enabled = true },
+	  .meta.skip_if.odm_kept = true },
 };
 
 static const struct dcn401_commit_step opp_odm[] = {
 	{ .func = OPP_PIPE_CLOCK_CONTROL,
-	  .meta.skip_if.hubp_dpp_already_enabled = true },
+	  .meta.skip_if.odm_kept = true },
 	{ .func = OPP_PROGRAM_LEFT_EDGE_EXTRA_PIXEL,
-	  .meta.skip_if.hubp_dpp_already_enabled = true },
+	  .meta.skip_if.odm_kept = true },
+};
+
+/*
+ * Under the lock, each current pipe that the update removes leaves its
+ * MPCC and returns its DET segments, as DC1 disconnects a disabled pipe.
+ */
+const struct dcn401_commit_step dcn401_disconnect[DCN401_DISCONNECT_STEPS] = {
+	{ .func = HUBP_PROGRAM_DET_SEGMENTS, .meta.skip_if.no_plane_removed = true },
+	{ .func = MPC_REMOVE_MPCC, .meta.skip_if.no_plane_removed = true },
+};
+
+/* After the unlock, disable_plane on each removed pipe. */
+const struct dcn401_commit_step dcn401_power_down[DCN401_POWER_DOWN_STEPS] = {
+	{ .func = MPC_ASSERT_IDLE_MPCC, .meta.skip_if.no_plane_removed = true },
+	{ .func = HUBP_SET_BLANK, .meta.skip_if.no_plane_removed = true },
+	{ .func = HUBP_UPDATE_MALL_SEL, .meta.skip_if.no_plane_removed = true },
+	{ .func = HUBP_SET_FLIP_CONTROL_GSL, .meta.skip_if.no_plane_removed = true },
+	{ .func = HUBP_CLK_CNTL, .meta.skip_if.no_plane_removed = true },
+	{ .func = DPP_DPPCLK_CONTROL, .meta.skip_if.no_plane_removed = true },
+	{ .func = DC_IP_REQUEST_STATUS, .meta.skip_if.no_ip_request = true,
+	  .meta.skip_if.no_plane_removed = true },
+	{ .func = DC_IP_REQUEST_CNTL, .meta.dc_ip_request_cntl.enable = true,
+	  .meta.skip_if.no_ip_request = true,
+	  .meta.skip_if.no_plane_removed = true },
+	{ .func = HUBP_PG_CONTROL, .meta.skip_if.no_plane_removed = true },
+	{ .func = HUBP_RESET, .meta.skip_if.no_plane_removed = true },
+	{ .func = DPP_RESET, .meta.skip_if.no_plane_removed = true },
+	{ .func = DC_IP_REQUEST_CNTL, .meta.dc_ip_request_cntl.enable = false,
+	  .meta.skip_if.no_ip_request = true,
+	  .meta.skip_if.no_plane_removed = true },
 };
 
 /* enable_plane, then the watermark propagate and the DET segments. */
@@ -1228,12 +1260,26 @@ static const struct dcn401_commit_step dpp_mall[] = {
 	  .meta.hubp_update_mall_sel.from_new_state = true },
 };
 
+/* A changed ODM layout takes effect before the update returns. */
+static const struct dcn401_commit_step odm_wait[] = {
+	{ .func = TG_WAIT_ODM_DOUBLEBUFFER_PENDING_CLEAR,
+	  .meta.skip_if.same_opp_heads = true },
+};
+
 static const struct dcn401_commit_step trigger[] = {
 	{ .func = OPTC_PROGRAM_MANUAL_TRIGGER,
 	  .meta.skip_if.no_manual_trigger = true },
 };
 
-/* The support check allows one stream, kept across the update. */
+/*
+ * The update programs one stream. A pipe that leaves the stream emits
+ * fewer steps than a pipe the update programs, so the bound counts every
+ * pipe as programmed. dcn401_add_step catches a longer sequence.
+ */
+static_assert(ARRAY_SIZE(dcn401_disconnect) + ARRAY_SIZE(dcn401_power_down) <=
+		ARRAY_SIZE(dpp_lock) + ARRAY_SIZE(enable_plane) +
+		ARRAY_SIZE(dpp_flip) + ARRAY_SIZE(dpp_mall),
+		"a removed pipe emits more than a programmed pipe");
 static_assert(
 		ARRAY_SIZE(preamble) +
 		ARRAY_SIZE(global_preamble) +
@@ -1247,6 +1293,7 @@ static_assert(
 		ARRAY_SIZE(opp_odm)) +
 		ARRAY_SIZE(unlock) +
 		ARRAY_SIZE(pstate) +
+		ARRAY_SIZE(odm_wait) +
 		ARRAY_SIZE(trigger) +
 		DCN401_MAX_DPP_PIPES * (
 		ARRAY_SIZE(dpp_lock) +
@@ -2093,25 +2140,26 @@ static void dcn401_add_step(struct block_sequence_state *sequence,
 	}
 }
 
-static bool dcn401_pipe_already_enabled(
-		const struct dcn401_commit_step_args *args)
-{
-	const struct pipe_ctx *cur =
-			&args->current_state->res_ctx.pipe_ctx[args->pipe->pipe_idx];
-
-	return cur->plane_state && cur->stream == args->pipe->stream &&
-			cur->plane_res.hubp == args->pipe->plane_res.hubp;
-}
-
 static bool dcn401_skip_step(const struct dcn401_commit_step_args *args,
 		const struct dcn401_commit_step *step)
 {
+	const struct pipe_ctx *cur, *new;
+
 	if (step->meta.skip_if.new_state_has_stream &&
 			args->new_state->stream_count)
 		return true;
 	if (step->meta.skip_if.optimized_not_required &&
 			!args->dc->optimized_required)
 		return true;
+	if (step->meta.skip_if.no_ip_request &&
+			(!args->dc->hwseq->funcs.pg_needs_ip_request ||
+			!args->dc->hwseq->funcs.pg_needs_ip_request(args->dc)))
+		return true;
+	/* The remaining conditions are for per-pipe steps. */
+	if (!args->pipe)
+		return false;
+	cur = &args->current_state->res_ctx.pipe_ctx[args->pipe->pipe_idx];
+	new = &args->new_state->res_ctx.pipe_ctx[args->pipe->pipe_idx];
 	if (step->meta.skip_if.no_manual_trigger &&
 			(!args->pipe->plane_state->update_bits.addr_update ||
 			args->pipe->plane_state->skip_manual_trigger))
@@ -2121,21 +2169,29 @@ static bool dcn401_skip_step(const struct dcn401_commit_step_args *args,
 			!args->pipe->stream_res.opp->mpc_tree_params.opp_list))
 		return true;
 	if (step->meta.skip_if.hubp_dpp_already_enabled &&
-			dcn401_pipe_already_enabled(args))
+			dcn401_pipe_kept(cur, new))
 		return true;
-	if (step->meta.skip_if.det_unchanged &&
-			dcn401_pipe_already_enabled(args) &&
-			args->current_state->res_ctx.pipe_ctx[args->pipe->pipe_idx]
-			.hubp_regs.det_size == args->pipe->hubp_regs.det_size)
+	if (step->meta.skip_if.no_plane_removed &&
+			(!cur->plane_state || dcn401_pipe_kept(cur, new)))
+		return true;
+	if (step->meta.skip_if.det_unchanged && dcn401_pipe_kept(cur, new) &&
+			cur->hubp_regs.det_size == new->hubp_regs.det_size)
+		return true;
+	if (step->meta.skip_if.odm_kept && dcn401_pipe_kept(cur, new) &&
+			dcn401_same_opp_heads(args->current_state,
+			args->new_state, args->pipe->stream))
+		return true;
+	if (step->meta.skip_if.same_opp_heads &&
+			dcn401_same_opp_heads(args->current_state,
+			args->new_state, args->pipe->stream))
 		return true;
 	if (step->meta.skip_if.scaling_unchanged &&
 			!args->pipe->plane_state->update_bits.scaling_change &&
 			!args->pipe->plane_state->update_bits.position_change &&
-			!args->pipe->stream->update_flags.bits.scaling)
-		return true;
-	if (step->meta.skip_if.no_ip_request &&
-			(!args->dc->hwseq->funcs.pg_needs_ip_request ||
-			!args->dc->hwseq->funcs.pg_needs_ip_request(args->dc)))
+			!args->pipe->stream->update_flags.bits.scaling &&
+			(!dcn401_pipe_kept(cur, new) ||
+			!memcmp(&cur->plane_res.scl_data, &new->plane_res.scl_data,
+			sizeof(cur->plane_res.scl_data))))
 		return true;
 	return false;
 }
@@ -2157,8 +2213,8 @@ static bool dcn401_walks_stream(const struct dcn401_commit_step_args *args,
 {
 	if (args->stream)
 		return stream == args->stream;
-	return !dcn401_stream_unchanged(args->current_state, args->new_state,
-			stream);
+	return !dcn401_stream_kept(args->dc, args->current_state,
+			args->new_state, stream);
 }
 
 static void dcn401_add_per_otg_master(struct block_sequence_state *sequence,
@@ -2268,10 +2324,10 @@ void dcn401_init_and_unpack_params(
 }
 
 /*
- * The updated stream only. skip_if drops first-enable steps on a pipe
- * that already showed its plane, so a kept-plane surface update is the
- * same table. The enable_plane list runs per DPP pipe, top pipe first, so the
- * top MPCC is inserted before the bottom one.
+ * The waits and the bandwidth raise, then the updated stream only.
+ * skip_if drops the steps a kept pipe or ODM layout does not need, so
+ * every transition is the same table. The enable_plane list runs per DPP
+ * pipe, top pipe first, so the top MPCC is inserted before the bottom one.
  */
 static const struct dcn401_sub_sequence bls_update_head[] = {
 	{ .flags = DCN401_CURRENT_STATE | DCN401_PER_STREAM_PER_OTG_MASTER,
@@ -2283,6 +2339,10 @@ static const struct dcn401_sub_sequence bls_update_head[] = {
 	{ .flags = DCN401_NEW_STATE,
 	  .steps = prepare_bandwidth,
 	  .count = ARRAY_SIZE(prepare_bandwidth) },
+};
+
+/* The front end of one stream, which a commit also runs for a kept stream. */
+static const struct dcn401_sub_sequence bls_stream_update[] = {
 	{ .flags = DCN401_CURRENT_STATE | DCN401_PER_STREAM_PER_OTG_MASTER,
 	  .steps = pending,
 	  .count = ARRAY_SIZE(pending) },
@@ -2292,6 +2352,9 @@ static const struct dcn401_sub_sequence bls_update_head[] = {
 	{ .flags = DCN401_NEW_STATE | DCN401_PER_STREAM_PER_DPP_PIPE,
 	  .steps = dpp_lock,
 	  .count = ARRAY_SIZE(dpp_lock) },
+	{ .flags = DCN401_CURRENT_STATE | DCN401_PER_STREAM_PER_DPP_PIPE,
+	  .steps = dcn401_disconnect,
+	  .count = ARRAY_SIZE(dcn401_disconnect) },
 	{ .flags = DCN401_NEW_STATE | DCN401_PER_STREAM_PER_OTG_MASTER,
 	  .steps = first_hubp,
 	  .count = ARRAY_SIZE(first_hubp) },
@@ -2310,6 +2373,9 @@ static const struct dcn401_sub_sequence bls_update_head[] = {
 	{ .flags = DCN401_NEW_STATE | DCN401_PER_STREAM_PER_OTG_MASTER,
 	  .steps = unlock,
 	  .count = ARRAY_SIZE(unlock) },
+	{ .flags = DCN401_CURRENT_STATE | DCN401_PER_STREAM_PER_DPP_PIPE,
+	  .steps = dcn401_power_down,
+	  .count = ARRAY_SIZE(dcn401_power_down) },
 	{ .flags = DCN401_NEW_STATE | DCN401_PER_STREAM_PER_DPP_PIPE,
 	  .steps = dpp_flip,
 	  .count = ARRAY_SIZE(dpp_flip) },
@@ -2320,9 +2386,18 @@ static const struct dcn401_sub_sequence bls_update_head[] = {
 	  .steps = dpp_mall,
 	  .count = ARRAY_SIZE(dpp_mall) },
 	{ .flags = DCN401_NEW_STATE | DCN401_PER_STREAM_PER_OTG_MASTER,
+	  .steps = odm_wait,
+	  .count = ARRAY_SIZE(odm_wait) },
+	{ .flags = DCN401_NEW_STATE | DCN401_PER_STREAM_PER_OTG_MASTER,
 	  .steps = trigger,
 	  .count = ARRAY_SIZE(trigger) },
 };
+
+void dcn401_add_stream_update(struct block_sequence_state *sequence,
+		const struct dcn401_commit_step_args *args)
+{
+	DCN401_ADD_SUB_SEQUENCES(sequence, args, bls_stream_update);
+}
 
 static enum bls_builder_result dcn401_build_seamless_update(
 		struct bls_builder_declarative_params *params)
@@ -2342,6 +2417,7 @@ static enum bls_builder_result dcn401_build_seamless_update(
 	state_args.stream = dcn401_updated_stream(params->new_state,
 			params->stream);
 	DCN401_ADD_SUB_SEQUENCES(&head, &state_args, bls_update_head);
+	dcn401_add_stream_update(&head, &state_args);
 
 	return BLS_BUILD_SUCCESS;
 }

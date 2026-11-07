@@ -76,6 +76,27 @@ int dcn401_stream_index(const struct dc_state *state,
 		const struct dc_stream_state *stream);
 
 
+/*
+ * stream is in both states on the same pipes, each with the same plane
+ * and blocks.
+ */
+bool dcn401_stream_unchanged(const struct dc_state *current_state,
+		const struct dc_state *new_state,
+		const struct dc_stream_state *stream);
+/*
+ * The pipe shows a plane on the same HUBP, DPP and OPP. The plane may be a
+ * new dc_plane_state; the update reprograms its contents.
+ */
+bool dcn401_pipe_kept(const struct pipe_ctx *current_pipe,
+		const struct pipe_ctx *new_pipe);
+/*
+ * What the seamless update needs of stream i of new_state, apart from the
+ * other streams.
+ */
+enum bls_builder_result dcn401_check_stream_update(const struct dc *dc,
+		const struct dc_state *current_state,
+		const struct dc_state *new_state, unsigned int i);
+
 /* What both builders need of the dc, before either state. */
 enum bls_builder_result dcn401_check_dc_support(const struct dc *dc);
 /* What both builders need of each stream of a state, apart from its planes. */
@@ -121,6 +142,21 @@ void dcn401_add_sub_sequences(struct block_sequence_state *sequence,
 		const struct dcn401_sub_sequence *subs, unsigned int count);
 #define DCN401_ADD_SUB_SEQUENCES(sequence, args, subs) \
 	dcn401_add_sub_sequences(sequence, args, subs, ARRAY_SIZE(subs))
+
+#define DCN401_DISCONNECT_STEPS 2
+#define DCN401_POWER_DOWN_STEPS 12
+/*
+ * Per current DPP pipe that leaves the stream: the MPCC and DET disconnect
+ * under the lock, and disable_plane after it.
+ */
+extern const struct dcn401_commit_step
+		dcn401_disconnect[DCN401_DISCONNECT_STEPS];
+extern const struct dcn401_commit_step
+		dcn401_power_down[DCN401_POWER_DOWN_STEPS];
+
+/* The seamless update's front end for args->stream, between the waits. */
+void dcn401_add_stream_update(struct block_sequence_state *sequence,
+		const struct dcn401_commit_step_args *args);
 
 /*
  * Points the step arguments at the states and the sequence at

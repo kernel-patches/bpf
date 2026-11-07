@@ -135,9 +135,11 @@ const struct bls_builder *bls_builder_create(struct dc *dc,
 		enum bls_builder_name name);
 
 /*
- * stream is in both states on the same pipes, each with the same plane
- * and blocks. DCN_DECL_NON_SEAMLESS_COMMIT leaves such a stream alone.
+ * stream is in both states and keeps its OTG, and the seamless update can
+ * program its front end. DCN_DECL_NON_SEAMLESS_COMMIT neither disables nor
+ * enables such a stream; it runs that front end when the stream changes.
  */
-bool dcn401_stream_unchanged(const struct dc_state *current_state,
+bool dcn401_stream_kept(const struct dc *dc,
+		const struct dc_state *current_state,
 		const struct dc_state *new_state,
 		const struct dc_stream_state *stream);

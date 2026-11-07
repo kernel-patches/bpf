@@ -12,11 +12,11 @@
 /*
  * DCN_DECL_NON_SEAMLESS_COMMIT for virtual streams. It disables every
  * current stream, each with one or two planes, one per DPP pipe, then
- * enables every new stream, each with no plane. A stream that is
- * unchanged keeps its pipes and planes, and the commit programs none of
- * them. Planes are added later by DCN_DECL_SEAMLESS_UPDATE. Each
- * stream is in ODM bypass, 2:1 or 3:1, with one OPP head and at most one
- * DPP pipe per slice.
+ * enables every new stream, each with no plane. A kept stream keeps its
+ * OTG, and the commit runs the seamless update's front end for it when its
+ * pipes or planes change. Planes are added later by
+ * DCN_DECL_SEAMLESS_UPDATE. Each stream is in ODM bypass, 2:1 or 3:1, with
+ * one OPP head and at most one DPP pipe per slice.
  *
  * The sequence follows legacy_commit_state_hw on dcn401: the same leaf
  * calls in the same order, including the calls DC1 repeats. Everything is
@@ -131,7 +131,7 @@ static enum bls_builder_result dcn401_check_commit_state_support(
 			is_current ? NULL : state);
 	for (i = 0; result == BLS_BUILD_SUCCESS && i < state->stream_count;
 			i++) {
-		if (dcn401_stream_unchanged(current_state, new_state,
+		if (dcn401_stream_kept(dc, current_state, new_state,
 				state->streams[i]))
 			continue;
 		result = is_current ?
@@ -229,30 +229,8 @@ static const struct dcn401_commit_step blank[] = {
 	{ .func = OPP_SET_DISP_PATTERN_GENERATOR },
 };
 
-static const struct dcn401_commit_step disconnect[] = {
-	{ .func = HUBP_PROGRAM_DET_SEGMENTS },
-	{ .func = MPC_REMOVE_MPCC },
-};
-
 static const struct dcn401_commit_step unlock[] = {
 	{ .func = TG_LOCK, .meta.tg_lock.lock = false },
-};
-
-static const struct dcn401_commit_step power_down[] = {
-	{ .func = MPC_ASSERT_IDLE_MPCC },
-	{ .func = HUBP_SET_BLANK },
-	{ .func = HUBP_UPDATE_MALL_SEL },
-	{ .func = HUBP_SET_FLIP_CONTROL_GSL },
-	{ .func = HUBP_CLK_CNTL },
-	{ .func = DPP_DPPCLK_CONTROL },
-	{ .func = DC_IP_REQUEST_STATUS, .meta.skip_if.no_ip_request = true },
-	{ .func = DC_IP_REQUEST_CNTL, .meta.dc_ip_request_cntl.enable = true,
-	  .meta.skip_if.no_ip_request = true },
-	{ .func = HUBP_PG_CONTROL },
-	{ .func = HUBP_RESET },
-	{ .func = DPP_RESET },
-	{ .func = DC_IP_REQUEST_CNTL, .meta.dc_ip_request_cntl.enable = false,
-	  .meta.skip_if.no_ip_request = true },
 };
 
 static const struct dcn401_commit_step stream_off[] = {
@@ -390,9 +368,9 @@ static const struct dcn401_commit_step postamble[] = {
 static_assert(ARRAY_SIZE(prepare_bandwidth) +
 		ARRAY_SIZE(lock) +
 		DCN401_MAX_OPP_HEADS * ARRAY_SIZE(blank) +
-		DCN401_MAX_DPP_PIPES * ARRAY_SIZE(disconnect) +
+		DCN401_MAX_DPP_PIPES * ARRAY_SIZE(dcn401_disconnect) +
 		ARRAY_SIZE(unlock) +
-		DCN401_MAX_DPP_PIPES * ARRAY_SIZE(power_down) +
+		DCN401_MAX_DPP_PIPES * ARRAY_SIZE(dcn401_power_down) +
 		ARRAY_SIZE(stream_off) +
 		ARRAY_SIZE(postamble) <=
 		DC2_BLS_MAX_STEPS,
@@ -422,14 +400,14 @@ static const struct dcn401_sub_sequence bls_head[] = {
 	  .steps = blank,
 	  .count = ARRAY_SIZE(blank) },
 	{ .flags = DCN401_CURRENT_STATE | DCN401_PER_STREAM_PER_DPP_PIPE,
-	  .steps = disconnect,
-	  .count = ARRAY_SIZE(disconnect) },
+	  .steps = dcn401_disconnect,
+	  .count = ARRAY_SIZE(dcn401_disconnect) },
 	{ .flags = DCN401_CURRENT_STATE | DCN401_PER_STREAM_PER_OTG_MASTER,
 	  .steps = unlock,
 	  .count = ARRAY_SIZE(unlock) },
 	{ .flags = DCN401_CURRENT_STATE | DCN401_PER_STREAM_PER_DPP_PIPE,
-	  .steps = power_down,
-	  .count = ARRAY_SIZE(power_down) },
+	  .steps = dcn401_power_down,
+	  .count = ARRAY_SIZE(dcn401_power_down) },
 	{ .flags = DCN401_CURRENT_STATE | DCN401_PER_STREAM_PER_OTG_MASTER,
 	  .steps = stream_off,
 	  .count = ARRAY_SIZE(stream_off) },
@@ -460,6 +438,9 @@ static const struct dcn401_sub_sequence bls_head[] = {
 	{ .flags = DCN401_NEW_STATE | DCN401_PER_STREAM_PER_OTG_MASTER,
 	  .steps = front_end,
 	  .count = ARRAY_SIZE(front_end) },
+};
+
+static const struct dcn401_sub_sequence bls_postamble[] = {
 	{ .flags = DCN401_NEW_STATE,
 	  .steps = postamble,
 	  .count = ARRAY_SIZE(postamble) },
@@ -471,6 +452,7 @@ static enum bls_builder_result dcn401_build_non_seamless_commit(
 	struct dcn401_commit_step_args state_args;
 	struct block_sequence_state head;
 	enum bls_builder_result result;
+	unsigned int i;
 
 	if (!params)
 		return BLS_BUILD_ERROR_UNSUPPORTED_STATE_UPDATE;
@@ -481,6 +463,16 @@ static enum bls_builder_result dcn401_build_non_seamless_commit(
 
 	dcn401_init_and_unpack_params(params, &state_args, &head);
 	DCN401_ADD_SUB_SEQUENCES(&head, &state_args, bls_head);
+	for (i = 0; i < state_args.new_state->stream_count; i++) {
+		state_args.stream = state_args.new_state->streams[i];
+		if (dcn401_stream_kept(params->dc, params->current_state,
+				params->new_state, state_args.stream) &&
+				!dcn401_stream_unchanged(params->current_state,
+				params->new_state, state_args.stream))
+			dcn401_add_stream_update(&head, &state_args);
+	}
+	state_args.stream = NULL;
+	DCN401_ADD_SUB_SEQUENCES(&head, &state_args, bls_postamble);
 
 	return BLS_BUILD_SUCCESS;
 }

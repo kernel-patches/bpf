@@ -124,6 +124,15 @@ struct dcn401_commit_step_meta {
 		/* As hubp_dpp_already_enabled, and the DET size is the same. */
 		bool det_unchanged;
 		/*
+		 * The current pipe had no plane, or keeps its plane, HUBP, DPP
+		 * and OPP in the new state.
+		 */
+		bool no_plane_removed;
+		/* As hubp_dpp_already_enabled, and each ODM slice keeps its OPP. */
+		bool odm_kept;
+		/* Each ODM slice of the stream keeps its OPP. */
+		bool same_opp_heads;
+		/*
 		 * Neither the plane scaling, the plane position nor the
 		 * stream scaling changed. A full update sets every plane bit,
 		 * so a plane add always programs the scaler and viewport.
