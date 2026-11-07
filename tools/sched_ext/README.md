@@ -185,6 +185,19 @@ where this could be particularly useful is running VMs, where running with
 infinite slices and no timer ticks allows the VM to avoid unnecessary expensive
 vmexits.
 
+## scx_tickbug
+
+A scheduler whose only job is to keep one task runnable on a CPU that is in the
+idle loop, for a length of time given on the command line. That state - the
+idle task running while the run queue is not empty - is reachable by several of
+the schedulers here, but none of them holds it long enough to observe what
+depends on it. Tasks named "spin" are parked on the target CPU's run queue and
+released only by a periodic timer; everything else runs through a shared DSQ so
+the machine stays usable.
+
+This is a test scheduler, not a policy. It exists so that the idle-time
+bookkeeping skipped by an interrupt taken in that state can be measured.
+
 ## scx_flatcg
 
 A flattened cgroup hierarchy scheduler. This scheduler implements hierarchical
