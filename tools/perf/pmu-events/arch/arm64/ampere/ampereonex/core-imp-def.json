@@ -84,10 +84,10 @@
         "BriefDescription": "Predictable branch speculatively executed, unpredicted, that mispredict"
     },
     {
-        "PublicDescription": "Preditable branch update the BTB region buffer entry",
+        "PublicDescription": "Predictable branch update the BTB region buffer entry",
         "EventCode": "0x11c",
         "EventName": "BPU_BTB_UPDATE",
-        "BriefDescription": "Preditable branch update the BTB region buffer entry"
+        "BriefDescription": "Predictable branch update the BTB region buffer entry"
     },
     {
         "PublicDescription": "Count predict pipe stalls due to speculative return address predictor full",
@@ -438,10 +438,10 @@
         "BriefDescription": "Fill buffer full"
     },
     {
-        "PublicDescription": "Load satisified from store forwarded data",
+        "PublicDescription": "Load satisfied from store forwarded data",
         "EventCode": "0xD605",
         "EventName": "LD_FROM_ST_FWD",
-        "BriefDescription": "Load satisified from store forwarded data"
+        "BriefDescription": "Load satisfied from store forwarded data"
     },
     {
         "PublicDescription": "Store retirement pipe stall",
