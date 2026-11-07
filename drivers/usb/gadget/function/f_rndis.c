@@ -852,7 +852,7 @@ USB_ETHER_CONFIGFS_ITEM_ATTR_U8_RW(rndis, subclass);
 /* f_rndis_opts_protocol */
 USB_ETHER_CONFIGFS_ITEM_ATTR_U8_RW(rndis, protocol);
 
-static struct configfs_attribute *rndis_attrs[] = {
+static const struct configfs_attribute *const rndis_attrs[] = {
 	&rndis_opts_attr_dev_addr,
 	&rndis_opts_attr_host_addr,
 	&rndis_opts_attr_qmult,
@@ -865,7 +865,7 @@ static struct configfs_attribute *rndis_attrs[] = {
 
 static const struct config_item_type rndis_func_type = {
 	.ct_item_ops	= &rndis_item_ops,
-	.ct_attrs	= rndis_attrs,
+	.ct_attrs_const	= rndis_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 

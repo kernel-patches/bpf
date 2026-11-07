@@ -401,14 +401,14 @@ static ssize_t f_obex_port_num_show(struct config_item *item, char *page)
 
 CONFIGFS_ATTR_RO(f_obex_, port_num);
 
-static struct configfs_attribute *acm_attrs[] = {
+static const struct configfs_attribute *const acm_attrs[] = {
 	&f_obex_attr_port_num,
 	NULL,
 };
 
 static const struct config_item_type obex_func_type = {
 	.ct_item_ops	= &obex_item_ops,
-	.ct_attrs	= acm_attrs,
+	.ct_attrs_const	= acm_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 

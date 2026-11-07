@@ -1463,7 +1463,7 @@ static ssize_t f_hid_opts_dev_show(struct config_item *item, char *page)
 
 CONFIGFS_ATTR_RO(f_hid_opts_, dev);
 
-static struct configfs_attribute *hid_attrs[] = {
+static const struct configfs_attribute *const hid_attrs[] = {
 	&f_hid_opts_attr_subclass,
 	&f_hid_opts_attr_protocol,
 	&f_hid_opts_attr_no_out_endpoint,
@@ -1479,7 +1479,7 @@ static struct configfs_attribute *hid_attrs[] = {
 
 static const struct config_item_type hid_func_type = {
 	.ct_item_ops	= &hidg_item_ops,
-	.ct_attrs	= hid_attrs,
+	.ct_attrs_const	= hid_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 

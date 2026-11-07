@@ -2291,7 +2291,7 @@ static ssize_t f_midi2_block_opts_name_store(struct config_item *item,
 
 CONFIGFS_ATTR(f_midi2_block_opts_, name);
 
-static struct configfs_attribute *f_midi2_block_attrs[] = {
+static const struct configfs_attribute *const f_midi2_block_attrs[] = {
 	&f_midi2_block_opts_attr_direction,
 	&f_midi2_block_opts_attr_first_group,
 	&f_midi2_block_opts_attr_num_groups,
@@ -2320,7 +2320,7 @@ static const struct configfs_item_operations f_midi2_block_item_ops = {
 
 static const struct config_item_type f_midi2_block_type = {
 	.ct_item_ops	= &f_midi2_block_item_ops,
-	.ct_attrs	= f_midi2_block_attrs,
+	.ct_attrs_const	= f_midi2_block_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 
@@ -2456,7 +2456,7 @@ F_MIDI2_EP_OPT(sw_revision, "0x%x", 0, 0xffffffff);
 F_MIDI2_EP_STR_OPT(ep_name, 128);
 F_MIDI2_EP_STR_OPT(product_id, 128);
 
-static struct configfs_attribute *f_midi2_ep_attrs[] = {
+static const struct configfs_attribute *const f_midi2_ep_attrs[] = {
 	&f_midi2_ep_opts_attr_protocol,
 	&f_midi2_ep_opts_attr_protocol_caps,
 	&f_midi2_ep_opts_attr_ep_name,
@@ -2490,7 +2490,7 @@ static const struct configfs_group_operations f_midi2_ep_group_ops = {
 static const struct config_item_type f_midi2_ep_type = {
 	.ct_item_ops	= &f_midi2_ep_item_ops,
 	.ct_group_ops	= &f_midi2_ep_group_ops,
-	.ct_attrs	= f_midi2_ep_attrs,
+	.ct_attrs_const	= f_midi2_ep_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 
@@ -2603,7 +2603,7 @@ static ssize_t f_midi2_opts_iface_name_store(struct config_item *item,
 
 CONFIGFS_ATTR(f_midi2_opts_, iface_name);
 
-static struct configfs_attribute *f_midi2_attrs[] = {
+static const struct configfs_attribute *const f_midi2_attrs[] = {
 	&f_midi2_opts_attr_process_ump,
 	&f_midi2_opts_attr_static_block,
 	&f_midi2_opts_attr_iface_name,
@@ -2629,7 +2629,7 @@ static const struct configfs_group_operations f_midi2_group_ops = {
 static const struct config_item_type f_midi2_func_type = {
 	.ct_item_ops	= &f_midi2_item_ops,
 	.ct_group_ops	= &f_midi2_group_ops,
-	.ct_attrs	= f_midi2_attrs,
+	.ct_attrs_const	= f_midi2_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 

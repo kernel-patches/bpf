@@ -1328,7 +1328,7 @@ end:
 
 CONFIGFS_ATTR(f_printer_opts_, q_len);
 
-static struct configfs_attribute *printer_attrs[] = {
+static const struct configfs_attribute *const printer_attrs[] = {
 	&f_printer_opts_attr_pnp_string,
 	&f_printer_opts_attr_q_len,
 	NULL,
@@ -1336,7 +1336,7 @@ static struct configfs_attribute *printer_attrs[] = {
 
 static const struct config_item_type printer_func_type = {
 	.ct_item_ops	= &printer_item_ops,
-	.ct_attrs	= printer_attrs,
+	.ct_attrs_const	= printer_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 

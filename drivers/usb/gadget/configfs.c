@@ -363,7 +363,7 @@ CONFIGFS_ATTR(gadget_dev_desc_, bcdUSB);
 CONFIGFS_ATTR(gadget_dev_desc_, UDC);
 CONFIGFS_ATTR(gadget_dev_desc_, max_speed);
 
-static struct configfs_attribute *gadget_root_attrs[] = {
+static const struct configfs_attribute *const gadget_root_attrs[] = {
 	&gadget_dev_desc_attr_bDeviceClass,
 	&gadget_dev_desc_attr_bDeviceSubClass,
 	&gadget_dev_desc_attr_bDeviceProtocol,
@@ -573,7 +573,7 @@ static ssize_t gadget_config_desc_bmAttributes_store(struct config_item *item,
 CONFIGFS_ATTR(gadget_config_desc_, MaxPower);
 CONFIGFS_ATTR(gadget_config_desc_, bmAttributes);
 
-static struct configfs_attribute *gadget_config_attrs[] = {
+static const struct configfs_attribute *const gadget_config_attrs[] = {
 	&gadget_config_desc_attr_MaxPower,
 	&gadget_config_desc_attr_bmAttributes,
 	NULL,
@@ -581,13 +581,13 @@ static struct configfs_attribute *gadget_config_attrs[] = {
 
 static const struct config_item_type gadget_config_type = {
 	.ct_item_ops	= &gadget_config_item_ops,
-	.ct_attrs	= gadget_config_attrs,
+	.ct_attrs_const	= gadget_config_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 
 static const struct config_item_type gadget_root_type = {
 	.ct_item_ops	= &gadget_root_item_ops,
-	.ct_attrs	= gadget_root_attrs,
+	.ct_attrs_const	= gadget_root_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 
@@ -675,7 +675,7 @@ static const struct config_item_type functions_type = {
 
 GS_STRINGS_RW(gadget_config_name, configuration);
 
-static struct configfs_attribute *gadget_config_name_langid_attrs[] = {
+static const struct configfs_attribute *const gadget_config_name_langid_attrs[] = {
 	&gadget_config_name_attr_configuration,
 	NULL,
 };
@@ -780,7 +780,7 @@ GS_STRINGS_RW(gadget_language, manufacturer);
 GS_STRINGS_RW(gadget_language, product);
 GS_STRINGS_RW(gadget_language, serialnumber);
 
-static struct configfs_attribute *gadget_language_langid_attrs[] = {
+static const struct configfs_attribute *const gadget_language_langid_attrs[] = {
 	&gadget_language_attr_manufacturer,
 	&gadget_language_attr_product,
 	&gadget_language_attr_serialnumber,
@@ -839,7 +839,7 @@ static ssize_t gadget_string_s_store(struct config_item *item, const char *page,
 }
 CONFIGFS_ATTR(gadget_string_, s);
 
-static struct configfs_attribute *gadget_string_attrs[] = {
+static const struct configfs_attribute *const gadget_string_attrs[] = {
 	&gadget_string_attr_id,
 	&gadget_string_attr_s,
 	NULL,
@@ -858,7 +858,7 @@ static const struct configfs_item_operations gadget_string_item_ops = {
 
 static const struct config_item_type gadget_string_type = {
 	.ct_item_ops	= &gadget_string_item_ops,
-	.ct_attrs	= gadget_string_attrs,
+	.ct_attrs_const	= gadget_string_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 
@@ -909,7 +909,7 @@ static const struct configfs_group_operations gadget_language_langid_group_ops =
 static const struct config_item_type gadget_language_type = {
 	.ct_item_ops	= &gadget_language_langid_item_ops,
 	.ct_group_ops	= &gadget_language_langid_group_ops,
-	.ct_attrs	= gadget_language_langid_attrs,
+	.ct_attrs_const	= gadget_language_langid_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 
@@ -1104,7 +1104,7 @@ CONFIGFS_ATTR(webusb_, bVendorCode);
 CONFIGFS_ATTR(webusb_, bcdVersion);
 CONFIGFS_ATTR(webusb_, landingPage);
 
-static struct configfs_attribute *webusb_attrs[] = {
+static const struct configfs_attribute *const webusb_attrs[] = {
 	&webusb_attr_use,
 	&webusb_attr_bcdVersion,
 	&webusb_attr_bVendorCode,
@@ -1113,7 +1113,7 @@ static struct configfs_attribute *webusb_attrs[] = {
 };
 
 static const struct config_item_type webusb_type = {
-	.ct_attrs	= webusb_attrs,
+	.ct_attrs_const	= webusb_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 
@@ -1211,7 +1211,7 @@ CONFIGFS_ATTR(os_desc_, use);
 CONFIGFS_ATTR(os_desc_, b_vendor_code);
 CONFIGFS_ATTR(os_desc_, qw_sign);
 
-static struct configfs_attribute *os_desc_attrs[] = {
+static const struct configfs_attribute *const os_desc_attrs[] = {
 	&os_desc_attr_use,
 	&os_desc_attr_b_vendor_code,
 	&os_desc_attr_qw_sign,
@@ -1273,7 +1273,7 @@ static const struct configfs_item_operations os_desc_ops = {
 
 static const struct config_item_type os_desc_type = {
 	.ct_item_ops	= &os_desc_ops,
-	.ct_attrs	= os_desc_attrs,
+	.ct_attrs_const	= os_desc_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 
@@ -1378,7 +1378,7 @@ static ssize_t ext_prop_data_store(struct config_item *item,
 CONFIGFS_ATTR(ext_prop_, type);
 CONFIGFS_ATTR(ext_prop_, data);
 
-static struct configfs_attribute *ext_prop_attrs[] = {
+static const struct configfs_attribute *const ext_prop_attrs[] = {
 	&ext_prop_attr_type,
 	&ext_prop_attr_data,
 	NULL,
@@ -1417,7 +1417,7 @@ static struct config_item *ext_prop_make(
 
 	desc = container_of(group, struct usb_os_desc, group);
 	ext_prop_type->ct_item_ops = &ext_prop_ops;
-	ext_prop_type->ct_attrs = ext_prop_attrs;
+	ext_prop_type->ct_attrs_const = ext_prop_attrs;
 	ext_prop_type->ct_owner = desc->owner;
 
 	config_item_init_type_name(&ext_prop->item, name, ext_prop_type);
@@ -1516,7 +1516,7 @@ static ssize_t interf_grp_sub_compatible_id_store(struct config_item *item,
 CONFIGFS_ATTR(interf_grp_, compatible_id);
 CONFIGFS_ATTR(interf_grp_, sub_compatible_id);
 
-static struct configfs_attribute *interf_grp_attrs[] = {
+static const struct configfs_attribute *const interf_grp_attrs[] = {
 	&interf_grp_attr_compatible_id,
 	&interf_grp_attr_sub_compatible_id,
 	NULL
@@ -1550,7 +1550,7 @@ struct config_group *usb_os_desc_prepare_interf_dir(
 	configfs_add_default_group(os_desc_group, parent);
 
 	interface_type->ct_group_ops = &interf_grp_ops;
-	interface_type->ct_attrs = interf_grp_attrs;
+	interface_type->ct_attrs_const = interf_grp_attrs;
 	interface_type->ct_owner = owner;
 
 	while (n_interf--) {

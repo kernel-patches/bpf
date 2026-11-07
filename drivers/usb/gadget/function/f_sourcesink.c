@@ -1266,7 +1266,7 @@ end:
 
 CONFIGFS_ATTR(f_ss_opts_, iso_qlen);
 
-static struct configfs_attribute *ss_attrs[] = {
+static const struct configfs_attribute *const ss_attrs[] = {
 	&f_ss_opts_attr_pattern,
 	&f_ss_opts_attr_isoc_interval,
 	&f_ss_opts_attr_isoc_maxpacket,
@@ -1281,7 +1281,7 @@ static struct configfs_attribute *ss_attrs[] = {
 
 static const struct config_item_type ss_func_type = {
 	.ct_item_ops    = &ss_item_ops,
-	.ct_attrs	= ss_attrs,
+	.ct_attrs_const	= ss_attrs,
 	.ct_owner       = THIS_MODULE,
 };
 

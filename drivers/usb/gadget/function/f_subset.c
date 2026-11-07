@@ -392,7 +392,7 @@ USB_ETHERNET_CONFIGFS_ITEM_ATTR_QMULT(gether);
 /* f_gether_opts_ifname */
 USB_ETHERNET_CONFIGFS_ITEM_ATTR_IFNAME(gether);
 
-static struct configfs_attribute *gether_attrs[] = {
+static const struct configfs_attribute *const gether_attrs[] = {
 	&gether_opts_attr_dev_addr,
 	&gether_opts_attr_host_addr,
 	&gether_opts_attr_qmult,
@@ -402,7 +402,7 @@ static struct configfs_attribute *gether_attrs[] = {
 
 static const struct config_item_type gether_func_type = {
 	.ct_item_ops	= &gether_item_ops,
-	.ct_attrs	= gether_attrs,
+	.ct_attrs_const	= gether_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 

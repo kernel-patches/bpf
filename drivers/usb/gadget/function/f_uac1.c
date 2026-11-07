@@ -1699,7 +1699,7 @@ UAC1_ATTRIBUTE_STRING(c_it_ch_name);
 UAC1_ATTRIBUTE_STRING(c_ot_name);
 UAC1_ATTRIBUTE_STRING(c_fu_vol_name);
 
-static struct configfs_attribute *f_uac1_attrs[] = {
+static const struct configfs_attribute *const f_uac1_attrs[] = {
 	&f_uac1_opts_attr_c_chmask,
 	&f_uac1_opts_attr_c_srate,
 	&f_uac1_opts_attr_c_ssize,
@@ -1737,7 +1737,7 @@ static struct configfs_attribute *f_uac1_attrs[] = {
 
 static const struct config_item_type f_uac1_func_type = {
 	.ct_item_ops	= &f_uac1_item_ops,
-	.ct_attrs	= f_uac1_attrs,
+	.ct_attrs_const	= f_uac1_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 

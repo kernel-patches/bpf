@@ -852,7 +852,7 @@ out:
 
 CONFIGFS_ATTR(f_acm_, protocol);
 
-static struct configfs_attribute *acm_attrs[] = {
+static const struct configfs_attribute *const acm_attrs[] = {
 #ifdef CONFIG_U_SERIAL_CONSOLE
 	&f_acm_attr_console,
 #endif
@@ -863,7 +863,7 @@ static struct configfs_attribute *acm_attrs[] = {
 
 static const struct config_item_type acm_func_type = {
 	.ct_item_ops    = &acm_item_ops,
-	.ct_attrs	= acm_attrs,
+	.ct_attrs_const	= acm_attrs,
 	.ct_owner       = THIS_MODULE,
 };
 

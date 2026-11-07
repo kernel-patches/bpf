@@ -2130,7 +2130,7 @@ UAC2_ATTRIBUTE(s16, p_terminal_type);
 UAC2_ATTRIBUTE(s16, c_terminal_type);
 
 
-static struct configfs_attribute *f_uac2_attrs[] = {
+static const struct configfs_attribute *const f_uac2_attrs[] = {
 	&f_uac2_opts_attr_p_chmask,
 	&f_uac2_opts_attr_p_srate,
 	&f_uac2_opts_attr_p_ssize,
@@ -2178,7 +2178,7 @@ static struct configfs_attribute *f_uac2_attrs[] = {
 
 static const struct config_item_type f_uac2_func_type = {
 	.ct_item_ops	= &f_uac2_item_ops,
-	.ct_attrs	= f_uac2_attrs,
+	.ct_attrs_const	= f_uac2_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 

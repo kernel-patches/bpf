@@ -36,7 +36,7 @@ static const struct configfs_item_operations struct_in##_langid_item_ops = {	\
 									\
 static const struct config_item_type struct_in##_langid_type = {	\
 	.ct_item_ops	= &struct_in##_langid_item_ops,			\
-	.ct_attrs	= struct_in##_langid_attrs,			\
+	.ct_attrs_const	= struct_in##_langid_attrs,			\
 	.ct_owner	= THIS_MODULE,					\
 }
 

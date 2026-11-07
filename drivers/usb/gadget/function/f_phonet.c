@@ -605,14 +605,14 @@ static ssize_t f_phonet_ifname_show(struct config_item *item, char *page)
 
 CONFIGFS_ATTR_RO(f_phonet_, ifname);
 
-static struct configfs_attribute *phonet_attrs[] = {
+static const struct configfs_attribute *const phonet_attrs[] = {
 	&f_phonet_attr_ifname,
 	NULL,
 };
 
 static const struct config_item_type phonet_func_type = {
 	.ct_item_ops	= &phonet_item_ops,
-	.ct_attrs	= phonet_attrs,
+	.ct_attrs_const	= phonet_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 

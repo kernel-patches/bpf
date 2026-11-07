@@ -894,7 +894,7 @@ UAC1_INT_ATTRIBUTE(req_buf_size);
 UAC1_INT_ATTRIBUTE(req_count);
 UAC1_INT_ATTRIBUTE(audio_buf_size);
 
-static struct configfs_attribute *f_uac1_attrs[] = {
+static const struct configfs_attribute *const f_uac1_attrs[] = {
 	&f_uac1_opts_attr_req_buf_size,
 	&f_uac1_opts_attr_req_count,
 	&f_uac1_opts_attr_audio_buf_size,
@@ -903,7 +903,7 @@ static struct configfs_attribute *f_uac1_attrs[] = {
 
 static const struct config_item_type f_uac1_func_type = {
 	.ct_item_ops	= &f_uac1_item_ops,
-	.ct_attrs	= f_uac1_attrs,
+	.ct_attrs_const	= f_uac1_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 

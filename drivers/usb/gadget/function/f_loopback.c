@@ -544,7 +544,7 @@ end:
 
 CONFIGFS_ATTR(f_lb_opts_, bulk_buflen);
 
-static struct configfs_attribute *lb_attrs[] = {
+static const struct configfs_attribute *const lb_attrs[] = {
 	&f_lb_opts_attr_qlen,
 	&f_lb_opts_attr_bulk_buflen,
 	NULL,
@@ -552,7 +552,7 @@ static struct configfs_attribute *lb_attrs[] = {
 
 static const struct config_item_type lb_func_type = {
 	.ct_item_ops    = &lb_item_ops,
-	.ct_attrs	= lb_attrs,
+	.ct_attrs_const	= lb_attrs,
 	.ct_owner       = THIS_MODULE,
 };
 

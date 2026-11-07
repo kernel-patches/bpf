@@ -22,7 +22,7 @@
  */
 
 #define UVC_ATTR(prefix, cname, aname) \
-static struct configfs_attribute prefix##attr_##cname = { \
+static const struct configfs_attribute prefix##attr_##cname = { \
 	.ca_name	= __stringify(aname),				\
 	.ca_mode	= S_IRUGO | S_IWUGO,				\
 	.ca_owner	= THIS_MODULE,					\
@@ -31,7 +31,7 @@ static struct configfs_attribute prefix##attr_##cname = { \
 }
 
 #define UVC_ATTR_RO(prefix, cname, aname) \
-static struct configfs_attribute prefix##attr_##cname = { \
+static const struct configfs_attribute prefix##attr_##cname = { \
 	.ca_name	= __stringify(aname),				\
 	.ca_mode	= S_IRUGO,					\
 	.ca_owner	= THIS_MODULE,					\
@@ -244,7 +244,7 @@ UVCG_CTRL_HDR_ATTR(dw_clock_frequency, dwClockFrequency, 32, 0x7fffffff);
 
 #undef UVCG_CTRL_HDR_ATTR
 
-static struct configfs_attribute *uvcg_control_header_attrs[] = {
+static const struct configfs_attribute *const uvcg_control_header_attrs[] = {
 	&uvcg_control_header_attr_bcd_uvc,
 	&uvcg_control_header_attr_dw_clock_frequency,
 	NULL,
@@ -252,7 +252,7 @@ static struct configfs_attribute *uvcg_control_header_attrs[] = {
 
 static const struct config_item_type uvcg_control_header_type = {
 	.ct_item_ops	= &uvcg_config_item_ops,
-	.ct_attrs	= uvcg_control_header_attrs,
+	.ct_attrs_const	= uvcg_control_header_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 
@@ -403,7 +403,7 @@ static ssize_t uvcg_default_processing_bm_controls_show(
 
 UVC_ATTR(uvcg_default_processing_, bm_controls, bmControls);
 
-static struct configfs_attribute *uvcg_default_processing_attrs[] = {
+static const struct configfs_attribute *const uvcg_default_processing_attrs[] = {
 	&uvcg_default_processing_attr_b_unit_id,
 	&uvcg_default_processing_attr_b_source_id,
 	&uvcg_default_processing_attr_w_max_multiplier,
@@ -415,7 +415,7 @@ static struct configfs_attribute *uvcg_default_processing_attrs[] = {
 static const struct uvcg_config_group_type uvcg_default_processing_type = {
 	.type = {
 		.ct_item_ops	= &uvcg_config_item_ops,
-		.ct_attrs	= uvcg_default_processing_attrs,
+		.ct_attrs_const	= uvcg_default_processing_attrs,
 		.ct_owner	= THIS_MODULE,
 	},
 	.name = "default",
@@ -560,7 +560,7 @@ static ssize_t uvcg_default_camera_bm_controls_show(
 
 UVC_ATTR(uvcg_default_camera_, bm_controls, bmControls);
 
-static struct configfs_attribute *uvcg_default_camera_attrs[] = {
+static const struct configfs_attribute *const uvcg_default_camera_attrs[] = {
 	&uvcg_default_camera_attr_b_terminal_id,
 	&uvcg_default_camera_attr_w_terminal_type,
 	&uvcg_default_camera_attr_b_assoc_terminal,
@@ -575,7 +575,7 @@ static struct configfs_attribute *uvcg_default_camera_attrs[] = {
 static const struct uvcg_config_group_type uvcg_default_camera_type = {
 	.type = {
 		.ct_item_ops	= &uvcg_config_item_ops,
-		.ct_attrs	= uvcg_default_camera_attrs,
+		.ct_attrs_const	= uvcg_default_camera_attrs,
 		.ct_owner	= THIS_MODULE,
 	},
 	.name = "default",
@@ -680,7 +680,7 @@ static ssize_t uvcg_default_output_b_source_id_store(struct config_item *item,
 }
 UVC_ATTR(uvcg_default_output_, b_source_id, bSourceID);
 
-static struct configfs_attribute *uvcg_default_output_attrs[] = {
+static const struct configfs_attribute *const uvcg_default_output_attrs[] = {
 	&uvcg_default_output_attr_b_terminal_id,
 	&uvcg_default_output_attr_w_terminal_type,
 	&uvcg_default_output_attr_b_assoc_terminal,
@@ -692,7 +692,7 @@ static struct configfs_attribute *uvcg_default_output_attrs[] = {
 static const struct uvcg_config_group_type uvcg_default_output_type = {
 	.type = {
 		.ct_item_ops	= &uvcg_config_item_ops,
-		.ct_attrs	= uvcg_default_output_attrs,
+		.ct_attrs_const	= uvcg_default_output_attrs,
 		.ct_owner	= THIS_MODULE,
 	},
 	.name = "default",
@@ -1085,7 +1085,7 @@ unlock:
 
 UVC_ATTR(uvcg_extension_, bm_controls, bmControls);
 
-static struct configfs_attribute *uvcg_extension_attrs[] = {
+static const struct configfs_attribute *const uvcg_extension_attrs[] = {
 	&uvcg_extension_attr_b_length,
 	&uvcg_extension_attr_b_unit_id,
 	&uvcg_extension_attr_b_num_controls,
@@ -1163,7 +1163,7 @@ static const struct configfs_item_operations uvcg_extension_item_ops = {
 
 static const struct config_item_type uvcg_extension_type = {
 	.ct_item_ops	= &uvcg_extension_item_ops,
-	.ct_attrs	= uvcg_extension_attrs,
+	.ct_attrs_const	= uvcg_extension_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 
@@ -1445,7 +1445,7 @@ static ssize_t uvcg_default_control_enable_interrupt_ep_store(
 }
 UVC_ATTR(uvcg_default_control_, enable_interrupt_ep, enable_interrupt_ep);
 
-static struct configfs_attribute *uvcg_default_control_attrs[] = {
+static const struct configfs_attribute *const uvcg_default_control_attrs[] = {
 	&uvcg_default_control_attr_b_interface_number,
 	&uvcg_default_control_attr_enable_interrupt_ep,
 	NULL,
@@ -1454,7 +1454,7 @@ static struct configfs_attribute *uvcg_default_control_attrs[] = {
 static const struct uvcg_config_group_type uvcg_control_grp_type = {
 	.type = {
 		.ct_item_ops	= &uvcg_config_item_ops,
-		.ct_attrs	= uvcg_default_control_attrs,
+		.ct_attrs_const	= uvcg_default_control_attrs,
 		.ct_owner	= THIS_MODULE,
 	},
 	.name = "control",
@@ -1781,7 +1781,7 @@ UVCG_STREAMING_HEADER_ATTR(b_trigger_usage, bTriggerUsage, 8);
 
 #undef UVCG_STREAMING_HEADER_ATTR
 
-static struct configfs_attribute *uvcg_streaming_header_attrs[] = {
+static const struct configfs_attribute *const uvcg_streaming_header_attrs[] = {
 	&uvcg_streaming_header_attr_bm_info,
 	&uvcg_streaming_header_attr_b_terminal_link,
 	&uvcg_streaming_header_attr_b_still_capture_method,
@@ -1792,7 +1792,7 @@ static struct configfs_attribute *uvcg_streaming_header_attrs[] = {
 
 static const struct config_item_type uvcg_streaming_header_type = {
 	.ct_item_ops	= &uvcg_streaming_header_item_ops,
-	.ct_attrs	= uvcg_streaming_header_attrs,
+	.ct_attrs_const	= uvcg_streaming_header_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 
@@ -2001,7 +2001,7 @@ end:
 
 UVC_ATTR(uvcg_frame_, dw_frame_interval, dwFrameInterval);
 
-static struct configfs_attribute *uvcg_frame_attrs1[] = {
+static const struct configfs_attribute *const uvcg_frame_attrs1[] = {
 	&uvcg_frame_attr_b_frame_index,
 	&uvcg_frame_attr_bm_capabilities,
 	&uvcg_frame_attr_w_width,
@@ -2014,7 +2014,7 @@ static struct configfs_attribute *uvcg_frame_attrs1[] = {
 	NULL,
 };
 
-static struct configfs_attribute *uvcg_frame_attrs2[] = {
+static const struct configfs_attribute *const uvcg_frame_attrs2[] = {
 	&uvcg_frame_attr_b_frame_index,
 	&uvcg_frame_attr_bm_capabilities,
 	&uvcg_frame_attr_w_width,
@@ -2029,13 +2029,13 @@ static struct configfs_attribute *uvcg_frame_attrs2[] = {
 
 static const struct config_item_type uvcg_frame_type1 = {
 	.ct_item_ops	= &uvcg_config_item_ops,
-	.ct_attrs	= uvcg_frame_attrs1,
+	.ct_attrs_const	= uvcg_frame_attrs1,
 	.ct_owner	= THIS_MODULE,
 };
 
 static const struct config_item_type uvcg_frame_type2 = {
 	.ct_item_ops    = &uvcg_config_item_ops,
-	.ct_attrs       = uvcg_frame_attrs2,
+	.ct_attrs_const       = uvcg_frame_attrs2,
 	.ct_owner       = THIS_MODULE,
 };
 
@@ -2311,7 +2311,7 @@ uvcg_uncompressed_bma_controls_store(struct config_item *item,
 
 UVC_ATTR(uvcg_uncompressed_, bma_controls, bmaControls);
 
-static struct configfs_attribute *uvcg_uncompressed_attrs[] = {
+static const struct configfs_attribute *const uvcg_uncompressed_attrs[] = {
 	&uvcg_uncompressed_attr_b_format_index,
 	&uvcg_uncompressed_attr_guid_format,
 	&uvcg_uncompressed_attr_b_bits_per_pixel,
@@ -2326,7 +2326,7 @@ static struct configfs_attribute *uvcg_uncompressed_attrs[] = {
 static const struct config_item_type uvcg_uncompressed_type = {
 	.ct_item_ops	= &uvcg_format_item_operations,
 	.ct_group_ops	= &uvcg_uncompressed_group_ops,
-	.ct_attrs	= uvcg_uncompressed_attrs,
+	.ct_attrs_const	= uvcg_uncompressed_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 
@@ -2498,7 +2498,7 @@ uvcg_mjpeg_bma_controls_store(struct config_item *item,
 
 UVC_ATTR(uvcg_mjpeg_, bma_controls, bmaControls);
 
-static struct configfs_attribute *uvcg_mjpeg_attrs[] = {
+static const struct configfs_attribute *const uvcg_mjpeg_attrs[] = {
 	&uvcg_mjpeg_attr_b_format_index,
 	&uvcg_mjpeg_attr_b_default_frame_index,
 	&uvcg_mjpeg_attr_bm_flags,
@@ -2512,7 +2512,7 @@ static struct configfs_attribute *uvcg_mjpeg_attrs[] = {
 static const struct config_item_type uvcg_mjpeg_type = {
 	.ct_item_ops	= &uvcg_format_item_operations,
 	.ct_group_ops	= &uvcg_mjpeg_group_ops,
-	.ct_attrs	= uvcg_mjpeg_attrs,
+	.ct_attrs_const	= uvcg_mjpeg_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 
@@ -2725,7 +2725,7 @@ uvcg_framebased_bma_controls_store(struct config_item *item,
 
 UVC_ATTR(uvcg_framebased_, bma_controls, bmaControls);
 
-static struct configfs_attribute *uvcg_framebased_attrs[] = {
+static const struct configfs_attribute *const uvcg_framebased_attrs[] = {
 	&uvcg_framebased_attr_b_format_index,
 	&uvcg_framebased_attr_b_default_frame_index,
 	&uvcg_framebased_attr_b_bits_per_pixel,
@@ -2740,7 +2740,7 @@ static struct configfs_attribute *uvcg_framebased_attrs[] = {
 static const struct config_item_type uvcg_framebased_type = {
 	.ct_item_ops    = &uvcg_config_item_ops,
 	.ct_group_ops   = &uvcg_framebased_group_ops,
-	.ct_attrs       = uvcg_framebased_attrs,
+	.ct_attrs_const = uvcg_framebased_attrs,
 	.ct_owner       = THIS_MODULE,
 };
 
@@ -2869,7 +2869,7 @@ UVCG_COLOR_MATCHING_ATTR(b_matrix_coefficients, bMatrixCoefficients, 8);
 
 #undef UVCG_COLOR_MATCHING_ATTR
 
-static struct configfs_attribute *uvcg_color_matching_attrs[] = {
+static const struct configfs_attribute *const uvcg_color_matching_attrs[] = {
 	&uvcg_color_matching_attr_b_color_primaries,
 	&uvcg_color_matching_attr_b_transfer_characteristics,
 	&uvcg_color_matching_attr_b_matrix_coefficients,
@@ -2890,7 +2890,7 @@ static const struct configfs_item_operations uvcg_color_matching_item_ops = {
 
 static const struct config_item_type uvcg_color_matching_type = {
 	.ct_item_ops	= &uvcg_color_matching_item_ops,
-	.ct_attrs	= uvcg_color_matching_attrs,
+	.ct_attrs_const	= uvcg_color_matching_attrs,
 	.ct_owner	= THIS_MODULE,
 };
 
@@ -3427,7 +3427,7 @@ static ssize_t uvcg_default_streaming_b_interface_number_show(
 
 UVC_ATTR_RO(uvcg_default_streaming_, b_interface_number, bInterfaceNumber);
 
-static struct configfs_attribute *uvcg_default_streaming_attrs[] = {
+static const struct configfs_attribute *const uvcg_default_streaming_attrs[] = {
 	&uvcg_default_streaming_attr_b_interface_number,
 	NULL,
 };
@@ -3435,7 +3435,7 @@ static struct configfs_attribute *uvcg_default_streaming_attrs[] = {
 static const struct uvcg_config_group_type uvcg_streaming_grp_type = {
 	.type = {
 		.ct_item_ops	= &uvcg_config_item_ops,
-		.ct_attrs	= uvcg_default_streaming_attrs,
+		.ct_attrs_const	= uvcg_default_streaming_attrs,
 		.ct_owner	= THIS_MODULE,
 	},
 	.name = "streaming",
@@ -3619,7 +3619,7 @@ UVCG_OPTS_STRING_ATTR(function_name, function_name);
 
 #undef UVCG_OPTS_STRING_ATTR
 
-static struct configfs_attribute *uvc_attrs[] = {
+static const struct configfs_attribute *const uvc_attrs[] = {
 	&f_uvc_opts_attr_streaming_interval,
 	&f_uvc_opts_attr_streaming_maxpacket,
 	&f_uvc_opts_attr_streaming_maxburst,
@@ -3630,7 +3630,7 @@ static struct configfs_attribute *uvc_attrs[] = {
 static const struct uvcg_config_group_type uvc_func_type = {
 	.type = {
 		.ct_item_ops	= &uvc_func_item_ops,
-		.ct_attrs	= uvc_attrs,
+		.ct_attrs_const	= uvc_attrs,
 		.ct_owner	= THIS_MODULE,
 	},
 	.name = "",
