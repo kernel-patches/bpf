@@ -579,6 +579,7 @@ static int icss_iep_pps_enable(struct icss_iep *iep, int on)
 {
 	struct ptp_clock_request rq;
 	struct timespec64 ts;
+	bool drain_work = false;
 	int ret = 0;
 	u64 ns;
 
@@ -607,7 +608,7 @@ static int icss_iep_pps_enable(struct icss_iep *iep, int on)
 	} else {
 		ret = icss_iep_perout_enable_hw(iep, &rq.perout, on);
 		if (iep->cap_cmp_irq)
-			cancel_work_sync(&iep->work);
+			drain_work = true;
 	}
 
 	if (!ret)
@@ -615,6 +616,15 @@ static int icss_iep_pps_enable(struct icss_iep *iep, int on)
 
 exit:
 	mutex_unlock(&iep->ptp_clk_mutex);
+
+	/*
+	 * Drain the capture-compare work only after dropping ptp_clk_mutex.
+	 * icss_iep_cap_cmp_work() acquires ptp_clk_mutex itself, so calling
+	 * cancel_work_sync() while the mutex is held deadlocks when a handler
+	 * instance is already running and waiting for that same mutex.
+	 */
+	if (drain_work)
+		cancel_work_sync(&iep->work);
 
 	return ret;
 }
