@@ -129,7 +129,6 @@ __acquires(ep->musb->lock)
 {
 	struct musb_request	*req;
 	struct musb		*musb;
-	int			busy = ep->busy;
 
 	req = to_musb_request(request);
 
@@ -138,7 +137,7 @@ __acquires(ep->musb->lock)
 		req->request.status = status;
 	musb = req->musb;
 
-	ep->busy = 1;
+	ep->busy++;
 	spin_unlock(&musb->lock);
 
 	if (!dma_mapping_error(&musb->g.dev, request->dma))
@@ -147,7 +146,7 @@ __acquires(ep->musb->lock)
 	trace_musb_req_gb(req);
 	usb_gadget_giveback_request(&req->ep->end_point, &req->request);
 	spin_lock(&musb->lock);
-	ep->busy = busy;
+	ep->busy--;
 }
 
 /* ----------------------------------------------------------------------- */
@@ -162,7 +161,7 @@ static void nuke(struct musb_ep *ep, const int status)
 	struct musb_request	*req = NULL;
 	void __iomem *epio = ep->musb->endpoints[ep->current_epnum].regs;
 
-	ep->busy = 1;
+	ep->busy++;
 
 	if (is_dma_capable() && ep->dma) {
 		struct dma_controller	*c = ep->musb->dma_controller;
@@ -195,6 +194,8 @@ static void nuke(struct musb_ep *ep, const int status)
 		req = list_first_entry(&ep->req_list, struct musb_request, list);
 		musb_g_giveback(ep, &req->request, status);
 	}
+
+	ep->busy--;
 }
 
 /* ----------------------------------------------------------------------- */
@@ -1061,7 +1062,6 @@ static int musb_gadget_enable(struct usb_ep *ep,
 		musb_ep->dma = NULL;
 
 	musb_ep->desc = desc;
-	musb_ep->busy = 0;
 	musb_ep->wedged = 0;
 	status = 0;
 
