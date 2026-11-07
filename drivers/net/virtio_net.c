@@ -6046,6 +6046,9 @@ static int virtnet_xsk_pool_disable(struct net_device *dev, u16 qid)
 	rq = &vi->rq[qid];
 
 	pool = rq->xsk_pool;
+	/* Not bound to the driver, e.g. if rebinding it on restore failed */
+	if (!pool)
+		return 0;
 
 	err = virtnet_rq_bind_xsk_pool(vi, rq, NULL);
 	err |= virtnet_sq_bind_xsk_pool(vi, sq, NULL);
@@ -6059,6 +6062,42 @@ static int virtnet_xsk_pool_disable(struct net_device *dev, u16 qid)
 	kvfree(rq->xsk_buffs);
 
 	return err;
+}
+
+/*
+ * Freeze frees the receive and send queues while the AF_XDP sockets stay
+ * bound to the device, so release the driver side of the zero-copy pools
+ * before and bind them again after restore.
+ */
+static void __maybe_unused virtnet_xsk_pools_unbind(struct virtnet_info *vi)
+{
+	int i;
+
+	ASSERT_RTNL();
+
+	for (i = 0; i < vi->max_queue_pairs; i++)
+		if (vi->rq[i].xsk_pool)
+			virtnet_xsk_pool_disable(vi->dev, i);
+}
+
+static void __maybe_unused virtnet_xsk_pools_rebind(struct virtnet_info *vi)
+{
+	struct xsk_buff_pool *pool;
+	int i, err;
+
+	ASSERT_RTNL();
+
+	for (i = 0; i < vi->curr_queue_pairs; i++) {
+		pool = xsk_get_pool_from_qid(vi->dev, i);
+		if (!pool || !pool->umem->zc)
+			continue;
+
+		err = virtnet_xsk_pool_enable(vi->dev, pool, i);
+		if (err)
+			netdev_warn(vi->dev,
+				    "failed to rebind AF_XDP pool to queue %d: %d\n",
+				    i, err);
+	}
 }
 
 static int virtnet_xsk_pool_setup(struct net_device *dev, struct netdev_bpf *xdp)
@@ -7255,6 +7294,10 @@ static __maybe_unused int virtnet_freeze(struct virtio_device *vdev)
 {
 	struct virtnet_info *vi = vdev->priv;
 
+	rtnl_lock();
+	virtnet_xsk_pools_unbind(vi);
+	rtnl_unlock();
+
 	virtnet_cpu_notif_remove(vi);
 	virtnet_freeze_down(vdev);
 	remove_vq_common(vi);
@@ -7278,6 +7321,10 @@ static __maybe_unused int virtnet_restore(struct virtio_device *vdev)
 		remove_vq_common(vi);
 		return err;
 	}
+
+	rtnl_lock();
+	virtnet_xsk_pools_rebind(vi);
+	rtnl_unlock();
 
 	return 0;
 }
