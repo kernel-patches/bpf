@@ -492,7 +492,7 @@ static struct page *ena_alloc_map_page(struct ena_ring *rx_ring,
 	/* To enable NIC-side port-mirroring, AKA SPAN port,
 	 * we make the buffer readable from the nic as well
 	 */
-	*dma = dma_map_page(rx_ring->dev, page, 0, ENA_PAGE_SIZE,
+	*dma = dma_map_page(rx_ring->dev, page, 0, PAGE_SIZE,
 			    DMA_BIDIRECTIONAL);
 	if (unlikely(dma_mapping_error(rx_ring->dev, *dma))) {
 		ena_increase_stat(&rx_ring->rx_stats.dma_mapping_err, 1,
@@ -544,7 +544,7 @@ static void ena_unmap_rx_buff_attrs(struct ena_ring *rx_ring,
 				    struct ena_rx_buffer *rx_info,
 				    unsigned long attrs)
 {
-	dma_unmap_page_attrs(rx_ring->dev, rx_info->dma_addr, ENA_PAGE_SIZE, DMA_BIDIRECTIONAL,
+	dma_unmap_page_attrs(rx_ring->dev, rx_info->dma_addr, PAGE_SIZE, DMA_BIDIRECTIONAL,
 			     attrs);
 }
 
@@ -926,19 +926,27 @@ static struct sk_buff *ena_alloc_skb(struct ena_ring *rx_ring, void *first_frag,
 	return skb;
 }
 
-static bool ena_try_rx_buf_page_reuse(struct ena_rx_buffer *rx_info, u16 buf_len,
+static bool ena_try_rx_buf_page_reuse(struct ena_ring *rx_ring,
+				      struct ena_rx_buffer *rx_info, u16 buf_len,
 				      u16 len, int pkt_offset)
 {
+	int tailroom = SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
 	struct ena_com_buf *ena_buf = &rx_info->ena_buf;
+	unsigned long room;
+
+	/* Room left up to the end of the page. On 64kB page kernels this
+	 * can be more than ena_buf->len, which is capped at ENA_PAGE_SIZE.
+	 */
+	room = PAGE_SIZE - rx_info->page_offset - rx_ring->rx_headroom - tailroom;
 
 	/* More than ENA_MIN_RX_BUF_SIZE left in the reused buffer
 	 * for data + headroom + tailroom.
 	 */
-	if (SKB_DATA_ALIGN(len + pkt_offset) + ENA_MIN_RX_BUF_SIZE <= ena_buf->len) {
+	if (SKB_DATA_ALIGN(len + pkt_offset) + ENA_MIN_RX_BUF_SIZE <= room) {
 		page_ref_inc(rx_info->page);
 		rx_info->page_offset += buf_len;
 		ena_buf->paddr += buf_len;
-		ena_buf->len -= buf_len;
+		ena_buf->len = min(room - buf_len, ENA_PAGE_SIZE);
 		return true;
 	}
 
@@ -1011,7 +1019,7 @@ static struct sk_buff *ena_rx_skb(struct ena_ring *rx_ring,
 
 	/* If XDP isn't loaded try to reuse part of the RX buffer */
 	reuse_rx_buf_page = !is_xdp_loaded &&
-			    ena_try_rx_buf_page_reuse(rx_info, buf_len, len, pkt_offset);
+			    ena_try_rx_buf_page_reuse(rx_ring, rx_info, buf_len, len, pkt_offset);
 
 	if (!reuse_rx_buf_page)
 		ena_unmap_rx_buff_attrs(rx_ring, rx_info, DMA_ATTR_SKIP_CPU_SYNC);
@@ -1055,7 +1063,8 @@ static struct sk_buff *ena_rx_skb(struct ena_ring *rx_ring,
 		pre_reuse_paddr = dma_unmap_addr(&rx_info->ena_buf, paddr);
 
 		reuse_rx_buf_page = !is_xdp_loaded &&
-				    ena_try_rx_buf_page_reuse(rx_info, buf_len, len, pkt_offset);
+				    ena_try_rx_buf_page_reuse(rx_ring, rx_info,
+							      buf_len, len, pkt_offset);
 
 		dma_sync_single_for_cpu(rx_ring->dev,
 					pre_reuse_paddr + pkt_offset,

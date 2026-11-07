@@ -84,7 +84,8 @@ xt_dnat_target_v0(struct sk_buff *skb, const struct xt_action_param *par)
 
 	ct = nf_ct_get(skb, &ctinfo);
 	WARN_ON(!(ct != NULL &&
-		 (ctinfo == IP_CT_NEW || ctinfo == IP_CT_RELATED)));
+		 (ctinfo == IP_CT_NEW || ctinfo == IP_CT_RELATED ||
+		  ctinfo == IP_CT_RELATED_REPLY)));
 
 	xt_nat_convert_range(&range, &mr->range[0]);
 	return nf_nat_setup_info(ct, &range, NF_NAT_MANIP_DST);
@@ -119,7 +120,8 @@ xt_dnat_target_v1(struct sk_buff *skb, const struct xt_action_param *par)
 
 	ct = nf_ct_get(skb, &ctinfo);
 	WARN_ON(!(ct != NULL &&
-		 (ctinfo == IP_CT_NEW || ctinfo == IP_CT_RELATED)));
+		 (ctinfo == IP_CT_NEW || ctinfo == IP_CT_RELATED ||
+		  ctinfo == IP_CT_RELATED_REPLY)));
 
 	memcpy(&range, range_v1, sizeof(*range_v1));
 	memset(&range.base_proto, 0, sizeof(range.base_proto));
@@ -151,7 +153,8 @@ xt_dnat_target_v2(struct sk_buff *skb, const struct xt_action_param *par)
 
 	ct = nf_ct_get(skb, &ctinfo);
 	WARN_ON(!(ct != NULL &&
-		 (ctinfo == IP_CT_NEW || ctinfo == IP_CT_RELATED)));
+		 (ctinfo == IP_CT_NEW || ctinfo == IP_CT_RELATED ||
+		  ctinfo == IP_CT_RELATED_REPLY)));
 
 	return nf_nat_setup_info(ct, range, NF_NAT_MANIP_DST);
 }

@@ -251,6 +251,7 @@ struct tls_context {
 
 	bool splicing_pages;
 	bool pending_open_record_frags;
+	int final_err; /* set by tls_err_abort_final(), never cleared */
 
 	struct mutex tx_lock; /* protects partially_sent_* fields and
 			       * per-type TX fields

@@ -87,6 +87,7 @@ Subsystem-specific APIs
    crypto/index
    dmaengine/index
    dpll
+   dpllsim
    edac
    extcon
    firmware/index

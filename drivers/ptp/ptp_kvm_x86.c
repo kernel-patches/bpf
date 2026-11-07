@@ -36,7 +36,7 @@ int kvm_arch_ptp_init(void)
 		clock_pair = page_address(p);
 		ret = set_memory_decrypted((unsigned long)clock_pair, 1);
 		if (ret) {
-			__free_page(p);
+			/* The page may be left shared, so leak it. */
 			clock_pair = NULL;
 			goto nofree;
 		}
@@ -68,8 +68,9 @@ nofree:
 void kvm_arch_ptp_exit(void)
 {
 	if (cc_platform_has(CC_ATTR_GUEST_MEM_ENCRYPT)) {
-		WARN_ON(set_memory_encrypted((unsigned long)clock_pair, 1));
-		free_page((unsigned long)clock_pair);
+		/* Leak the page if it cannot be made private again. */
+		if (!WARN_ON(set_memory_encrypted((unsigned long)clock_pair, 1)))
+			free_page((unsigned long)clock_pair);
 		clock_pair = NULL;
 	}
 }
@@ -92,12 +93,25 @@ int kvm_arch_ptp_get_clock(struct timespec64 *ts)
 	return 0;
 }
 
+/*
+ * *cs_id selects the clocksource @cycle is reported in: CSID_X86_TSC returns
+ * the paired TSC value as is, anything else converts it to kvm-clock units.
+ * On return, *cs_id holds the clocksource actually used.
+ */
 int kvm_arch_ptp_get_crosststamp(u64 *cycle, struct timespec64 *tspec,
 			      enum clocksource_ids *cs_id)
 {
 	struct pvclock_vcpu_time_info *src;
 	unsigned int version;
 	long ret;
+
+	if (*cs_id == CSID_X86_TSC) {
+		ret = kvm_arch_ptp_get_clock(tspec);
+		if (ret)
+			return ret;
+		*cycle = clock_pair->tsc;
+		return 0;
+	}
 
 	src = this_cpu_pvti();
 

@@ -65,6 +65,7 @@ config MHI_WWAN_MBIM
 config QCOM_BAM_DMUX
 	tristate "Qualcomm BAM-DMUX WWAN network driver"
 	depends on (DMA_ENGINE && PM && QCOM_SMEM_STATE) || COMPILE_TEST
+	select QCOM_SCM
 	help
 	  The BAM Data Multiplexer provides access to the network data channels
 	  of modems integrated into many older Qualcomm SoCs, e.g. Qualcomm
@@ -118,6 +119,17 @@ config MTK_T7XX
 
 	  To compile this driver as a module, choose M here: the module will be
 	  called mtk_t7xx.
+
+	  If unsure, say N.
+
+config MTK_T9XX
+	tristate "MediaTek PCIe 5G WWAN modem T9xx device"
+	depends on PCI_MSI && ACPI
+	help
+	  Enables MediaTek PCIe based 5G WWAN modem (T9xx series) device.
+
+	  To compile this driver as a module, choose M here: the module will be
+	  called mtk_t9xx.
 
 	  If unsure, say N.
 

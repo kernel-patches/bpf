@@ -68,8 +68,32 @@ int rnpgbe_reset_hw(struct mucse_hw *hw)
  **/
 int rnpgbe_setup_default_link(struct mucse_hw *hw)
 {
-	return mucse_mbx_set_link(hw, RNPGBE_DEFAULT_ADV, true, 0, 0,
-				  ETH_TP_MDI_AUTO);
+	u32 advertising = hw->link_config.supported & RNPGBE_DEFAULT_ADV;
+	bool autoneg = hw->link_config.status & MUCSE_LINK_TP;
+	u8 duplex = DUPLEX_UNKNOWN;
+	u32 speed = SPEED_UNKNOWN;
+	int err;
+
+	if (!autoneg) {
+		advertising &= RNPGBE_FW_ADV_1000_FULL;
+		speed = SPEED_1000;
+		duplex = DUPLEX_FULL;
+	}
+
+	err = mucse_mbx_set_link(hw, advertising, autoneg,
+				 autoneg ? 0 : speed, autoneg ? 0 : duplex,
+				 ETH_TP_MDI_AUTO);
+	if (!err) {
+		hw->link_config.advertising = advertising;
+		hw->link_config.speed = speed;
+		hw->link_config.duplex = duplex;
+		if (autoneg)
+			hw->link_config.status |= MUCSE_LINK_AUTONEG;
+		else
+			hw->link_config.status &= ~MUCSE_LINK_AUTONEG;
+	}
+
+	return err;
 }
 
 /**
@@ -206,6 +230,29 @@ static void rnpgbe_clear_rar(struct mucse_hw *hw, u32 index)
 
 	mucse_hw_wr32(hw, RNPGBE_RX_RAR_HIGH(index), 0);
 	mucse_hw_wr32(hw, RNPGBE_RX_RAR_LOW(index), 0);
+}
+
+/**
+ * rnpgbe_set_mac_address - Change the interface's primary MAC address
+ * @netdev: network interface
+ * @addr: socket address containing the new MAC address
+ *
+ * Return: 0 on success, negative errno for an invalid address
+ */
+int rnpgbe_set_mac_address(struct net_device *netdev, void *addr)
+{
+	struct mucse *mucse = netdev_priv(netdev);
+	struct sockaddr *sa = addr;
+	int err;
+
+	err = eth_prepare_mac_addr_change(netdev, addr);
+	if (err)
+		return err;
+
+	rnpgbe_set_rar(&mucse->hw, 0, sa->sa_data);
+	eth_commit_mac_addr_change(netdev, addr);
+
+	return 0;
 }
 
 int rnpgbe_set_rx_mode(struct net_device *netdev,

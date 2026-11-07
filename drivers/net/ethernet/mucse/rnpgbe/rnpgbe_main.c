@@ -2,6 +2,7 @@
 /* Copyright(c) 2020 - 2025 Mucse Corporation. */
 
 #include <linux/pci.h>
+#include <linux/ethtool.h>
 #include <linux/skbuff.h>
 #include <net/rtnetlink.h>
 #include <linux/etherdevice.h>
@@ -159,6 +160,8 @@ static const struct net_device_ops rnpgbe_netdev_ops = {
 	.ndo_stop		 = rnpgbe_close,
 	.ndo_start_xmit		 = rnpgbe_xmit_frame,
 	.ndo_set_rx_mode_async = rnpgbe_set_rx_mode,
+	.ndo_set_mac_address	 = rnpgbe_set_mac_address,
+	.ndo_validate_addr	 = eth_validate_addr,
 	.ndo_get_stats64	 = rnpgbe_get_stats64,
 };
 
@@ -169,12 +172,16 @@ static void rnpgbe_sw_init(struct mucse *mucse)
 	mucse->tx_ring_item_count = M_DEFAULT_TXD;
 	mucse->rx_ring_item_count = M_DEFAULT_RXD;
 	mucse->tx_work_limit = M_DEFAULT_TX_WORK;
+	mucse->hw.mdix_ctrl = ETH_TP_MDI_AUTO;
 
 	for (i = 0; i < RNPGBE_MAX_QUEUES; i++) {
 		u64_stats_init(&mucse->tx_stats[i].syncp);
 		atomic64_set(&mucse->tx_stats[i].dropped, 0);
+		atomic64_set(&mucse->tx_stats[i].dma_map_failures, 0);
 		u64_stats_init(&mucse->rx_stats[i].syncp);
 		atomic64_set(&mucse->rx_stats[i].dropped, 0);
+		atomic64_set(&mucse->rx_stats[i].page_alloc_failures, 0);
+		atomic64_set(&mucse->rx_stats[i].skb_alloc_failures, 0);
 	}
 }
 
@@ -250,11 +257,18 @@ static int rnpgbe_add_adapter(struct pci_dev *pdev,
 	}
 
 	netdev->netdev_ops = &rnpgbe_netdev_ops;
-	netdev->priv_flags |= IFF_UNICAST_FLT;
+	netdev->ethtool_ops = &rnpgbe_ethtool_ops;
+	netdev->stat_ops = &rnpgbe_stat_ops;
+	netdev->priv_flags |= IFF_UNICAST_FLT | IFF_LIVE_ADDR_CHANGE;
 	rnpgbe_sw_init(mucse);
 	err = rnpgbe_reset_hw(hw);
 	if (err) {
 		dev_err(&pdev->dev, "Hw reset failed %d\n", err);
+		goto err_powerdown;
+	}
+	err = rnpgbe_init_link_config(hw);
+	if (err) {
+		dev_err(&pdev->dev, "Get link capabilities failed %d\n", err);
 		goto err_powerdown;
 	}
 	err = rnpgbe_setup_default_link(hw);
@@ -304,6 +318,7 @@ static int rnpgbe_add_adapter(struct pci_dev *pdev,
 	}
 
 	netif_carrier_off(netdev);
+	rnpgbe_init_stats(mucse);
 	err = register_netdev(netdev);
 	if (err)
 		goto err_remove_mbx;

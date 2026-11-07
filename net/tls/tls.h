@@ -142,6 +142,7 @@ void update_sk_prot(struct sock *sk, struct tls_context *ctx);
 
 int wait_on_pending_writer(struct sock *sk, long *timeo);
 void tls_err_abort(struct sock *sk, int err);
+void tls_err_abort_final(struct sock *sk, int err);
 void tls_strp_abort_strp(struct tls_strparser *strp, int err);
 
 int init_prot_info(struct tls_prot_info *prot,
@@ -307,17 +308,30 @@ static inline void tls_bigint_subtract(unsigned char *seq, int  n)
 	*p = cpu_to_be64(rcd_sn - n);
 }
 
-static inline void
-tls_advance_record_sn(struct sock *sk, struct tls_prot_info *prot,
-		      struct cipher_context *ctx)
+static inline bool
+__tls_advance_record_sn(struct tls_prot_info *prot, struct cipher_context *ctx)
 {
-	if (tls_bigint_increment(ctx->rec_seq, prot->rec_seq_size))
-		tls_err_abort(sk, -EBADMSG);
+	bool wrapped = tls_bigint_increment(ctx->rec_seq, prot->rec_seq_size);
 
 	if (prot->version != TLS_1_3_VERSION &&
 	    prot->cipher_type != TLS_CIPHER_CHACHA20_POLY1305)
 		tls_bigint_increment(ctx->iv + prot->salt_size,
 				     prot->iv_size);
+
+	return wrapped;
+}
+
+static inline void
+tls_advance_record_sn(struct sock *sk, struct tls_prot_info *prot,
+		      struct cipher_context *ctx)
+{
+	if (__tls_advance_record_sn(prot, ctx))
+		tls_err_abort_final(sk, -EBADMSG);
+}
+
+static inline int tls_final_err(const struct tls_context *ctx)
+{
+	return READ_ONCE(ctx->final_err);
 }
 
 static inline void

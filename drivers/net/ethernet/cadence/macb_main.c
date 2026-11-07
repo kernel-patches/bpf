@@ -444,6 +444,112 @@ mdio_pm_exit:
 	return status;
 }
 
+static u32 macb_mdc_divisor(struct macb *bp, u32 config)
+{
+	static const u16 gem_divisors[] = {
+		[GEM_CLK_DIV8] = 8,
+		[GEM_CLK_DIV16] = 16,
+		[GEM_CLK_DIV32] = 32,
+		[GEM_CLK_DIV48] = 48,
+		[GEM_CLK_DIV64] = 64,
+		[GEM_CLK_DIV96] = 96,
+		[GEM_CLK_DIV128] = 128,
+		[GEM_CLK_DIV224] = 224,
+	};
+	static const u16 macb_divisors[] = {
+		[MACB_CLK_DIV8] = 8,
+		[MACB_CLK_DIV16] = 16,
+		[MACB_CLK_DIV32] = 32,
+		[MACB_CLK_DIV64] = 64,
+	};
+
+	if (macb_is_gem(&bp->info))
+		return gem_divisors[GEM_BFEXT(CLK, config)];
+	return macb_divisors[MACB_BFEXT(CLK, config)];
+}
+
+/* write_sts runs under the MDIO bus lock, so it can't call
+ * clk_get_rate(): that takes the clock framework's prepare_lock, and a
+ * clock provider that does MDIO accesses, such as air_en8811h's, takes
+ * the two locks in the other order. So record the MDC rate when the
+ * divisor is chosen.
+ */
+static void macb_record_mdc_rate(struct macb *bp, unsigned long pclk_hz,
+				 u32 config)
+{
+	unsigned long rate = pclk_hz / macb_mdc_divisor(bp, config);
+
+	if (rate)
+		WRITE_ONCE(bp->mdc_rate, rate);
+}
+
+static void macb_mdio_sts_delays(struct macb *bp, u64 *pre_ns, u64 *post_ns)
+{
+	u64 rate2 = 2ULL * READ_ONCE(bp->mdc_rate);
+	u64 half_periods = 2ULL * MDIO_C22_FRAME_BITS - 1;
+
+	/* The MDC edge that clocks the last bit comes half a period
+	 * before the end of the frame. A MAC with MACB_CAPS_MDC_WRITE_SYNC
+	 * starts the frame with the command write. Otherwise MDC may run
+	 * freely, so the frame starts up to one period after the command
+	 * write.
+	 */
+	*pre_ns = div64_u64(half_periods * NSEC_PER_SEC, rate2);
+	if (!(bp->caps & MACB_CAPS_MDC_WRITE_SYNC))
+		half_periods += 2;
+	*post_ns = div64_u64(half_periods * NSEC_PER_SEC + rate2 - 1, rate2);
+}
+
+static int macb_mdio_write_c22_sts(struct mii_bus *bus, int mii_id, int regnum,
+				   u16 value, struct ptp_system_timestamp *sts)
+{
+	struct macb *bp = bus->priv;
+	u64 pre_ns, post_ns;
+	unsigned long flags;
+	int status;
+	u32 cmd;
+
+	status = pm_runtime_resume_and_get(&bp->pdev->dev);
+	if (status < 0)
+		goto mdio_pm_exit;
+
+	status = macb_mdio_wait_for_idle(bp);
+	if (status < 0)
+		goto mdio_write_exit;
+
+	cmd = MACB_BF(SOF, MACB_MAN_C22_SOF)
+	      | MACB_BF(RW, MACB_MAN_C22_WRITE)
+	      | MACB_BF(PHYA, mii_id)
+	      | MACB_BF(REGA, regnum)
+	      | MACB_BF(CODE, MACB_MAN_C22_CODE)
+	      | MACB_BF(DATA, value);
+	macb_mdio_sts_delays(bp, &pre_ns, &post_ns);
+
+	local_irq_save(flags);
+	ptp_read_system_prets(sts);
+	/* macb_writel() is relaxed; order it after the timestamp. */
+	mb();
+	macb_writel(bp, MAN, cmd);
+	/* Flush the posted write before taking the upper bound. */
+	macb_readl(bp, NSR);
+	/* Order the read-back before the system timestamp. */
+	rmb();
+	ptp_read_system_postts(sts);
+	local_irq_restore(flags);
+
+	ptp_adjust_system_prets(sts, pre_ns);
+	ptp_adjust_system_postts(sts, post_ns);
+
+	status = macb_mdio_wait_for_idle(bp);
+	if (status < 0)
+		goto mdio_write_exit;
+
+mdio_write_exit:
+	pm_runtime_put_autosuspend(&bp->pdev->dev);
+mdio_pm_exit:
+	return status;
+}
+
 static int macb_mdio_write_c45(struct mii_bus *bus, int mii_id,
 			       int devad, int regnum,
 			       u16 value)
@@ -1231,6 +1337,8 @@ static int macb_mii_init(struct macb *bp)
 	bp->mii_bus->name = "MACB_mii_bus";
 	bp->mii_bus->read = &macb_mdio_read_c22;
 	bp->mii_bus->write = &macb_mdio_write_c22;
+	if (bp->mdc_rate)
+		bp->mii_bus->write_sts = &macb_mdio_write_c22_sts;
 	bp->mii_bus->read_c45 = &macb_mdio_read_c45;
 	bp->mii_bus->write_c45 = &macb_mdio_write_c45;
 	snprintf(bp->mii_bus->id, MII_BUS_ID_SIZE, "%s-%x",
@@ -3196,6 +3304,8 @@ static u32 gem_mdc_clk_div(struct macb *bp)
 	else
 		config = GEM_BF(CLK, GEM_CLK_DIV224);
 
+	macb_record_mdc_rate(bp, pclk_hz, config);
+
 	return config;
 }
 
@@ -3216,6 +3326,8 @@ static u32 macb_mdc_clk_div(struct macb *bp)
 		config = MACB_BF(CLK, MACB_CLK_DIV32);
 	else
 		config = MACB_BF(CLK, MACB_CLK_DIV64);
+
+	macb_record_mdc_rate(bp, pclk_hz, config);
 
 	return config;
 }
@@ -6182,7 +6294,8 @@ static const struct macb_config raspberrypi_rp1_config = {
 		MACB_CAPS_JUMBO |
 		MACB_CAPS_GEM_HAS_PTP |
 		MACB_CAPS_EEE |
-		MACB_CAPS_USRIO_HAS_MII,
+		MACB_CAPS_USRIO_HAS_MII |
+		MACB_CAPS_MDC_WRITE_SYNC,
 	.dma_burst_length = 16,
 	.usrio = &at91_default_usrio,
 	.jumbo_max_len = 10240,

@@ -271,6 +271,20 @@ ip_rcv_options(struct sk_buff *skb, struct net_device *dev)
 	const struct iphdr *iph;
 	struct ip_options *opt;
 
+	switch (READ_ONCE(dev_net(dev)->ipv4.sysctl_ip_process_options)) {
+	case 0:
+		/* Ignore options: IPCB(skb)->opt was zeroed in ip_rcv_core(),
+		 * so the packet is handled as if it carried no options.
+		 */
+		return SKB_NOT_DROPPED_YET;
+	case 2:
+		__IP_INC_STATS(dev_net(dev), IPSTATS_MIB_INHDRERRORS);
+		icmp_send(skb, ICMP_DEST_UNREACH, ICMP_PKT_FILTERED, 0);
+		return SKB_DROP_REASON_IP_INHDR;
+	default:	/* 1: process options */
+		break;
+	}
+
 	/* It looks as overkill, because not all
 	   IP options require packet mangling.
 	   But it is the easiest for now, especially taking

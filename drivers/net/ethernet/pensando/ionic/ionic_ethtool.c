@@ -419,26 +419,117 @@ static int ionic_set_pauseparam(struct net_device *netdev,
 	return 0;
 }
 
+static u32 ionic_fec_type_to_ethtool(u8 fec_type)
+{
+	switch (fec_type) {
+	case IONIC_PORT_FEC_TYPE_NONE:
+		return ETHTOOL_FEC_OFF;
+	case IONIC_PORT_FEC_TYPE_RS:
+		return ETHTOOL_FEC_RS;
+	case IONIC_PORT_FEC_TYPE_FC:
+		return ETHTOOL_FEC_BASER;
+	default:
+		return 0;
+	}
+}
+
 static int ionic_get_fecparam(struct net_device *netdev,
 			      struct ethtool_fecparam *fec)
 {
-	struct ionic_lif *lif = netdev_priv(netdev);
+	struct ionic_port_info *port_info;
+	struct ionic_lif *lif;
 
-	switch (lif->ionic->idev.port_info->config.fec_type) {
-	case IONIC_PORT_FEC_TYPE_NONE:
-		fec->active_fec = ETHTOOL_FEC_OFF;
-		break;
-	case IONIC_PORT_FEC_TYPE_RS:
-		fec->active_fec = ETHTOOL_FEC_RS;
-		break;
-	case IONIC_PORT_FEC_TYPE_FC:
-		fec->active_fec = ETHTOOL_FEC_BASER;
-		break;
-	}
+	lif = netdev_priv(netdev);
+	port_info = lif->ionic->idev.port_info;
 
-	fec->fec = ETHTOOL_FEC_OFF | ETHTOOL_FEC_RS | ETHTOOL_FEC_BASER;
+	fec->active_fec =
+		ionic_fec_type_to_ethtool(READ_ONCE(port_info->status.fec_type));
+	fec->fec =
+		ionic_fec_type_to_ethtool(READ_ONCE(port_info->config.fec_type));
 
 	return 0;
+}
+
+#define IONIC_FEC_STAT(dst, src)			\
+	do {						\
+		__le64 __val = READ_ONCE(src);		\
+							\
+		if (__val != IONIC_STAT_INVALID)	\
+			(dst) = le64_to_cpu(__val);	\
+	} while (0)
+
+static const struct ethtool_fec_hist_range ionic_fec_hist_ranges[] = {
+	{ 0, 0},
+	{ 1, 1},
+	{ 2, 2},
+	{ 3, 3},
+	{ 4, 4},
+	{ 5, 5},
+	{ 6, 6},
+	{ 7, 7},
+	{ 8, 8},
+	{ 9, 9},
+	{ 10, 10},
+	{ 11, 11},
+	{ 12, 12},
+	{ 13, 13},
+	{ 14, 14},
+	{ 15, 15},
+	{ 0, 0},
+};
+
+static void
+ionic_fill_fec_hist(const struct ionic_port_extra_stats *port_extra_stats,
+		    struct ethtool_fec_hist *hist)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_SIZE(port_extra_stats->fec_codeword_error_bin); i++) {
+		__le64 val = READ_ONCE(port_extra_stats->fec_codeword_error_bin[i]);
+
+		if (val == IONIC_STAT_INVALID)
+			return;
+
+		hist->values[i].sum = le64_to_cpu(val);
+	}
+
+	hist->ranges = ionic_fec_hist_ranges;
+}
+
+static void ionic_get_fec_stats(struct net_device *netdev,
+				struct ethtool_fec_stats *fec_stats,
+				struct ethtool_fec_hist *hist)
+{
+	struct ionic_lif *lif = netdev_priv(netdev);
+	struct ionic_port_info *port_info;
+
+	if (lif->ionic->pdev->is_virtfn)
+		return;
+
+	if (test_bit(IONIC_LIF_F_FW_RESET, lif->state))
+		return;
+
+	if (!(lif->ionic->ident.dev.capabilities &
+	      cpu_to_le64(IONIC_DEV_CAP_EXTRA_STATS)))
+		return;
+
+	port_info = lif->ionic->idev.port_info;
+	if (!port_info) {
+		netdev_err_once(netdev, "port_info not initialized\n");
+		return;
+	}
+
+	if (READ_ONCE(port_info->status.fec_type) != IONIC_PORT_FEC_TYPE_RS)
+		return;
+
+	IONIC_FEC_STAT(fec_stats->corrected_blocks.total,
+		       port_info->extra_stats.rsfec_correctable_blocks);
+	IONIC_FEC_STAT(fec_stats->uncorrectable_blocks.total,
+		       port_info->extra_stats.rsfec_uncorrectable_blocks);
+	IONIC_FEC_STAT(fec_stats->corrected_bits.total,
+		       port_info->extra_stats.fec_corrected_bits_total);
+
+	ionic_fill_fec_hist(&port_info->extra_stats, hist);
 }
 
 static int ionic_set_fecparam(struct net_device *netdev,
@@ -689,6 +780,7 @@ static int ionic_set_ringparam(struct net_device *netdev,
 			       struct netlink_ext_ack *extack)
 {
 	struct ionic_lif *lif = netdev_priv(netdev);
+	unsigned int ntxq_descs = lif->ntxq_descs;
 	struct ionic_queue_params qparam;
 	int err;
 
@@ -705,6 +797,13 @@ static int ionic_set_ringparam(struct net_device *netdev,
 	if (!is_power_of_2(ring->tx_pending) ||
 	    !is_power_of_2(ring->rx_pending)) {
 		netdev_info(netdev, "Descriptor count must be a power of 2\n");
+		return -EINVAL;
+	}
+
+	if (ring->tx_pending < IONIC_MIN_TXRX_DESC) {
+		NL_SET_ERR_MSG_FMT_MOD(extack,
+				       "Tx descriptor count must be at least %d",
+				       IONIC_MIN_TXRX_DESC);
 		return -EINVAL;
 	}
 
@@ -740,11 +839,12 @@ static int ionic_set_ringparam(struct net_device *netdev,
 		netdev_info(netdev, "Changing Rx ring size from %d to %d\n",
 			    lif->nrxq_descs, ring->rx_pending);
 
-	/* if we're not running, just set the values and return */
+	/* if we're not running, just set the values */
 	if (!netif_running(lif->netdev)) {
-		lif->ntxq_descs = ring->tx_pending;
+		ionic_lif_set_ntxq_descs(lif, ring->tx_pending);
 		lif->nrxq_descs = ring->rx_pending;
-		return 0;
+		err = 0;
+		goto out;
 	}
 
 	mutex_lock(&lif->queue_lock);
@@ -752,6 +852,10 @@ static int ionic_set_ringparam(struct net_device *netdev,
 	mutex_unlock(&lif->queue_lock);
 	if (err)
 		netdev_info(netdev, "Ring reconfiguration failed, changes canceled: %d\n", err);
+
+out:
+	if (lif->ntxq_descs != ntxq_descs)
+		netdev_features_change(netdev);
 
 	return err;
 }
@@ -1175,6 +1279,7 @@ static const struct ethtool_ops ionic_ethtool_ops = {
 	.get_module_eeprom_by_page	= ionic_get_module_eeprom_by_page,
 	.get_pauseparam		= ionic_get_pauseparam,
 	.set_pauseparam		= ionic_set_pauseparam,
+	.get_fec_stats		= ionic_get_fec_stats,
 	.get_fecparam		= ionic_get_fecparam,
 	.set_fecparam		= ionic_set_fecparam,
 	.get_ts_info		= ionic_get_ts_info,

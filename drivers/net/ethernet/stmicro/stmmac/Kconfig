@@ -201,6 +201,17 @@ config DWMAC_S32
 	  SOCs GMAC ethernet controller, ie. S32G2xx, S32G3xx and
 	  S32R45.
 
+config DWMAC_SF19A2890
+	tristate "Siflower SF19A2890 GMAC support"
+	default MACH_SIFLOWER_MIPS
+	depends on OF && (MACH_SIFLOWER_MIPS || COMPILE_TEST)
+	help
+	  Support for the Ethernet controller of the Siflower SF19A2890 SoC.
+
+	  This selects the SF19A2890 glue layer support for the stmmac
+	  device driver. It sets the interface type and the RGMII clock
+	  delays in the GMAC's configuration block.
+
 config DWMAC_SOCFPGA
 	tristate "SOCFPGA dwmac support"
 	default ARCH_INTEL_SOCFPGA

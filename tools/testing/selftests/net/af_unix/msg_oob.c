@@ -5,6 +5,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include <linux/sockios.h>
 #include <netinet/in.h>
 #include <sys/epoll.h>
 #include <sys/ioctl.h>
@@ -336,8 +337,17 @@ static void __resetpair(struct __test_metadata *_metadata,
 {
 	int i;
 
-	for (i = 0; i < 2; i++)
+	for (i = 0; i < 2; i++) {
+		if (!reset) {
+			int inq, ret;
+
+			ret = ioctl(self->fd[i * 2 + 1], SIOCINQ, &inq);
+			ASSERT_EQ(ret, 0);
+			ASSERT_EQ(inq, 0);
+		}
+
 		close(self->fd[i * 2 + 1]);
+	}
 
 	__recvpair(_metadata, self, "", reset ? -ECONNRESET : 0, 1,
 		   variant->peek ? MSG_PEEK : 0, true);

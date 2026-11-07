@@ -43,6 +43,12 @@ properties:
       Enable CRC8 checks on SPI read/writes.
     type: boolean
 
+  adi,spi-oa-tc6:
+    description: |
+      The device is configured, through the SPI_CFG1 pin, for the
+      Open Alliance TC6 protocol instead of the generic SPI one.
+    type: boolean
+
   interrupts:
     maxItems: 1
 

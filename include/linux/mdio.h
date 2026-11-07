@@ -11,6 +11,7 @@
 
 struct gpio_desc;
 struct mii_bus;
+struct ptp_system_timestamp;
 struct reset_control;
 
 /* Multiple levels of nesting are possible. However typically this is
@@ -155,6 +156,12 @@ struct mdio_if_info {
 #define MDIO_SUPPORTS_C22		1
 #define MDIO_SUPPORTS_C45		2
 #define MDIO_EMULATE_C22		4
+
+/* Bits in a clause 22 frame, from the start of its preamble to the end
+ * of its data, and bits in the preamble (IEEE 802.3 22.2.4.5).
+ */
+#define MDIO_C22_FRAME_BITS		64
+#define MDIO_PREAMBLE_BITS		32
 
 struct ethtool_cmd;
 struct ethtool_pauseparam;
@@ -574,6 +581,9 @@ static inline void mii_c73_mod_linkmode(unsigned long *adv, u16 *lpa)
 
 int __mdiobus_read(struct mii_bus *bus, int addr, u32 regnum);
 int __mdiobus_write(struct mii_bus *bus, int addr, u32 regnum, u16 val);
+int __mdiobus_write_sts(struct mii_bus *bus, int addr, u32 regnum, u16 val,
+			u32 event_delay_ns, struct ptp_system_timestamp *sts);
+bool mdiobus_supports_write_sts(struct mii_bus *bus);
 int __mdiobus_modify(struct mii_bus *bus, int addr, u32 regnum, u16 mask,
 		     u16 set);
 int __mdiobus_modify_changed(struct mii_bus *bus, int addr, u32 regnum,

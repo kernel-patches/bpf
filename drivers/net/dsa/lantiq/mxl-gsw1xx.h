@@ -19,6 +19,10 @@
 
 #define GSW1XX_SYS_CLK_FREQ			340000000
 
+/* Hardware reset timing, as the vendor driver for the GSW150 does it */
+#define GSW1XX_RESET_ASSERT_US			2000
+#define GSW1XX_RESET_DEASSERT_US		100000
+
 /* SMDIO switch register base address */
 #define GSW1XX_SMDIO_BADR			0x1f
 #define  GSW1XX_SMDIO_BADR_UNKNOWN		-1

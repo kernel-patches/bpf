@@ -662,6 +662,23 @@ int ip6_forward(struct sk_buff *skb)
 
 	__IP6_INC_STATS(net, ip6_dst_idev(dst), IPSTATS_MIB_OUTFORWDATAGRAMS);
 
+	if (skb_is_gso(skb)) {
+		if (skb->ip_summed == CHECKSUM_PARTIAL && !skb->encapsulation) {
+			skb_set_transport_header(skb,
+						 skb_checksum_start_offset(skb));
+		} else if (ipv6_ext_hdr(hdr->nexthdr)) {
+			u8 nexthdr = hdr->nexthdr;
+			__be16 frag_off;
+			int thoff;
+
+			thoff = ipv6_skip_exthdr(skb, skb_network_offset(skb) +
+						 sizeof(*hdr), &nexthdr,
+						 &frag_off);
+			if (thoff >= 0)
+				skb_set_transport_header(skb, thoff);
+		}
+	}
+
 	mtu = ip6_dst_mtu_maybe_forward(dst, true);
 	if (mtu < IPV6_MIN_MTU)
 		mtu = IPV6_MIN_MTU;
@@ -1477,7 +1494,7 @@ static int __ip6_append_data(struct sock *sk,
 	bool paged, hold_tskey = false, extra_uref = false;
 	struct ipv6_txoptions *opt = v6_cork->opt;
 	int csummode = CHECKSUM_NONE;
-	unsigned int maxnonfragsize, headersize;
+	unsigned int maxnonfragsize, headersize, reserved_headerlen;
 	unsigned int wmem_alloc_delta = 0;
 
 	skb = skb_peek_tail(queue);
@@ -1499,8 +1516,7 @@ static int __ip6_append_data(struct sock *sk,
 		     (opt ? opt->opt_flen + opt->opt_nflen : 0) +
 		     rt->rt6i_nfheader_len;
 
-	if (mtu <= fragheaderlen ||
-	    ((mtu - fragheaderlen) & ~7) + fragheaderlen <= sizeof(struct frag_hdr))
+	if (mtu <= fragheaderlen)
 		goto emsgsize;
 
 	maxfraglen = ((mtu - fragheaderlen) & ~7) + fragheaderlen -
@@ -1532,6 +1548,29 @@ emsgsize:
 		ipv6_local_error(sk, EMSGSIZE, fl6, pmtu);
 		return -EMSGSIZE;
 	}
+
+	/*
+	 * If the datagram has to be fragmented, each non-final fragment
+	 * must leave room for at least 8 bytes of payload after the
+	 * fragment header, matching the minimum ip6_fragment() enforces
+	 * once skb->len > mtu.  This rejects the MTUs that make maxfraglen
+	 * underflow below fragheaderlen and defeat the datalen clamp,
+	 * which leads to skb_over_panic() from skb_put().
+	 *
+	 * reserved_headerlen accounts for the first fragment's xfrm header
+	 * space (with a transport-mode xfrm bundle, ESP/AH bytes counted
+	 * in dst.header_len are not part of fragheaderlen), regardless of
+	 * whether this append is the first one on the cork: a subsequent
+	 * append that pushes an initially unfragmented datagram past mtu
+	 * still fragments, and ip6_append_data_mtu() subtracts
+	 * dst.header_len from mtu for the first fragment.
+	 */
+	reserved_headerlen = fragheaderlen;
+	if (!(rt->dst.flags & DST_XFRM_TUNNEL))
+		reserved_headerlen += rt->dst.header_len;
+	if (reserved_headerlen + cork->length + length > mtu &&
+	    mtu < reserved_headerlen + sizeof(struct frag_hdr) + 8)
+		goto emsgsize;
 
 	/* CHECKSUM_PARTIAL only with no extension headers and when
 	 * we are not going to fragment

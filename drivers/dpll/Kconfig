@@ -24,5 +24,6 @@ config DPLL_REFCNT_TRACKER
 	  If unsure, say N.
 
 source "drivers/dpll/zl3073x/Kconfig"
+source "drivers/dpll/dpllsim/Kconfig"
 
 endmenu

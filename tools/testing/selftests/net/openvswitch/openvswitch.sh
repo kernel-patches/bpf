@@ -24,6 +24,7 @@ tests="
 	nat_connect_v4				ip4-nat-xon: Basic ipv4 tcp connection via NAT
 	nat_related_v4				ip4-nat-related: ICMP related matches work with SNAT
 	netlink_checks				ovsnl: validate netlink attrs and settings
+	dp_features				ovsdp: keep the set features
 	upcall_interfaces			ovs: test the upcall interfaces
 	tunnel_metadata				ovs: test extraction of tunnel metadata
 	drop_reason				drop: test drop reasons are emitted
@@ -1406,6 +1407,69 @@ test_netlink_checks () {
 		info "failed - error not generated"
 		return 1
 	fi
+	return 0
+}
+
+test_dp_features() {
+	dp_features_check() {
+		python3 $ovs_base/ovs-dpctl.py show "$1" |
+			grep -q "features: 0x$2\$"
+	}
+
+	dp_features_set() {
+		python3 $ovs_base/ovs-dpctl.py set-dp "$@"
+	}
+
+	sbx_add "test_dp_features" || return $?
+	ovs_add_dp "test_dp_features" dpfeat || return 1
+
+	# 8 is OVS_DP_F_DISPATCH_UPCALL_PER_CPU, the bit that makes the
+	# kernel read per-cpu-pids.
+	info "clear the datapath features"
+	ovs_sbx "test_dp_features" dp_features_set dpfeat --features 0 \
+	    || return 1
+	ovs_sbx "test_dp_features" dp_features_check dpfeat 0 \
+	    || { info "features were not cleared"; return 1; }
+
+	info "a set with the dispatch bit and pids is accepted"
+	ovs_sbx "test_dp_features" dp_features_set dpfeat --features 8 \
+	    --per-cpu-pids 1,2 || return 1
+	ovs_sbx "test_dp_features" dp_features_check dpfeat 8 \
+	    || { info "the accepted set was not applied"; return 1; }
+
+	ovs_sbx "test_dp_features" dp_features_set dpfeat --features 0 \
+	    || return 1
+
+	info "a set with an empty per-cpu-pids is rejected"
+	ovs_sbx "test_dp_features" dp_features_set dpfeat --features 8 \
+	    --per-cpu-pids "" &> /dev/null
+	[ $? -eq 22 ] \
+	    || { info "the empty per-cpu-pids set did not fail with EINVAL"; \
+		 return 1; }
+
+	info "the rejected set keeps the features it had"
+	ovs_sbx "test_dp_features" dp_features_check dpfeat 0 \
+	    || { info "the rejected set was recorded"; return 1; }
+
+	# 4 is OVS_DP_F_TC_RECIRC_SHARING, which only exists when the tc skb
+	# extension is compiled in. A rejected set that drops the bit must
+	# leave the key alone, so the features have to stay as they were.
+	ovs_sbx "test_dp_features" dp_features_set dpfeat --features 4 \
+	    &> /dev/null
+	if [ $? -eq 0 ]; then
+		info "a rejected set does not drop the recirc bit"
+		ovs_sbx "test_dp_features" dp_features_set dpfeat --features 8 \
+		    --per-cpu-pids "" &> /dev/null
+		[ $? -eq 22 ] \
+		    || { info "the clearing set did not fail with EINVAL"; \
+			 return 1; }
+		ovs_sbx "test_dp_features" dp_features_check dpfeat 4 \
+		    || { info "the rejected set dropped the recirc bit"; \
+			 return 1; }
+	else
+		info "tc skb extension is not available, skipping recirc"
+	fi
+
 	return 0
 }
 

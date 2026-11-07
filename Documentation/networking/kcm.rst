@@ -167,6 +167,11 @@ The kcm_attach structure contains:
   - fd: file descriptor for TCP socket being attached
   - bpf_prog_fd: file descriptor for compiled BPF program downloaded
 
+The transport socket must be a TCP socket (SOCK_STREAM) with no upper
+layer protocol (TCP_ULP, e.g. kTLS) installed; otherwise the attach fails
+with EOPNOTSUPP. Attaching marks the transport socket with a "kcm" ULP of
+its own, see below.
+
 Unattach transport sockets
 --------------------------
 
@@ -185,6 +190,17 @@ Unattaching a transport socket from a multiplexor is straightforward. An
   info.fd = cfd;
 
   ioctl(fd, SIOCKCMUNATTACH, &info);
+
+The "kcm" ULP installed by the attach is not removed by the unattach. A
+socket that was attached once can be attached to a multiplexor again, but
+for the rest of its life:
+
+  - setting TCP_ULP fails with EEXIST, so kTLS cannot be enabled on it
+  - getsockopt(TCP_ULP) and inet_diag report "kcm"
+  - listen() fails with EINVAL
+  - adding it to a sockmap or sockhash fails with EINVAL
+  - PSP RX association is refused
+  - the kcm module cannot be unloaded while the socket exists
 
 Disabling receive on KCM socket
 -------------------------------

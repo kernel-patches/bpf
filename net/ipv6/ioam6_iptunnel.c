@@ -166,7 +166,7 @@ static int ioam6_build_state(struct net *net, struct nlattr *nla,
 		return -ENOMEM;
 
 	ilwt = ioam6_lwt_state(lwt);
-	err = dst_cache_init(&ilwt->cache, GFP_ATOMIC);
+	err = dst_cache_init(&ilwt->cache, GFP_KERNEL);
 	if (err)
 		goto free_lwt;
 
@@ -276,12 +276,12 @@ static int ioam6_do_inline(struct net *net, struct sk_buff *skb,
 
 	hdr = ipv6_hdr(skb);
 	memmove(hdr, oldhdr, sizeof(*oldhdr));
-	tuninfo->eh.nexthdr = hdr->nexthdr;
 
 	skb_set_transport_header(skb, sizeof(*hdr));
 	skb_postpush_rcsum(skb, hdr, sizeof(*hdr) + hdrlen);
 
 	memcpy(skb_transport_header(skb), (u8 *)tuninfo, hdrlen);
+	((struct ipv6_opt_hdr *)skb_transport_header(skb))->nexthdr = hdr->nexthdr;
 
 	hdr->nexthdr = NEXTHDR_HOP;
 	hdr->payload_len = cpu_to_be16(skb->len - sizeof(*hdr));
@@ -314,8 +314,8 @@ static int ioam6_do_encap(struct net *net, struct sk_buff *skb,
 	skb_mac_header_rebuild(skb);
 	skb_set_transport_header(skb, sizeof(*hdr));
 
-	tuninfo->eh.nexthdr = NEXTHDR_IPV6;
 	memcpy(skb_transport_header(skb), (u8 *)tuninfo, hdrlen);
+	((struct ipv6_opt_hdr *)skb_transport_header(skb))->nexthdr = NEXTHDR_IPV6;
 
 	hdr = ipv6_hdr(skb);
 	memcpy(hdr, inner_hdr, sizeof(*hdr));
@@ -340,6 +340,7 @@ static int ioam6_output(struct net *net, struct sock *sk, struct sk_buff *skb)
 	struct dst_entry *orig_dst = skb_dst(skb);
 	struct dst_entry *dst = NULL;
 	struct ioam6_lwt *ilwt;
+	int tail_len = -1;
 	int err = -EINVAL;
 	u32 pkt_cnt;
 
@@ -375,9 +376,15 @@ do_inline:
 		if (ipv6_hdr(skb)->nexthdr == NEXTHDR_HOP)
 			goto out;
 
+		if (skb_transport_header_was_set(skb))
+			tail_len = skb->len - skb_transport_offset(skb);
+
 		err = ioam6_do_inline(net, skb, &ilwt->tuninfo, dst);
 		if (unlikely(err))
 			goto drop;
+
+		if (tail_len >= 0)
+			skb_set_transport_header(skb, skb->len - tail_len);
 
 		break;
 	case IOAM6_IPTUNNEL_MODE_ENCAP:

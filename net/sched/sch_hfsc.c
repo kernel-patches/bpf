@@ -1488,6 +1488,7 @@ hfsc_reset_class(struct hfsc_class *cl)
 	cl->cl_myf          = 0;
 	cl->cl_cfmin        = 0;
 	cl->cl_nactive      = 0;
+	RB_CLEAR_NODE(&cl->el_node);
 
 	cl->vt_tree = RB_ROOT;
 	cl->cf_tree = RB_ROOT;
