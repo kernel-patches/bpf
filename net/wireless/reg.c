@@ -680,6 +680,9 @@ static bool valid_rule(const u8 *data, unsigned int size, u16 rule_ptr)
 	/* mandatory fields */
 	if (rule->len < offsetofend(struct fwdb_rule, max_bw))
 		return false;
+	/* the rule must lie entirely within the database */
+	if ((u8 *)rule + rule->len > data + size)
+		return false;
 	if (rule->len >= offsetofend(struct fwdb_rule, wmm_ptr)) {
 		u32 wmm_ptr = be16_to_cpu(rule->wmm_ptr) << 2;
 		struct fwdb_wmm_rule *wmm;
@@ -1147,11 +1150,13 @@ static const struct ieee80211_regdomain *reg_get_regdomain(struct wiphy *wiphy)
 
 	/*
 	 * Follow the driver's regulatory domain, if present, unless a country
-	 * IE has been processed or a user wants to help compliance further
+	 * IE has been processed or a user wants to help compliance further.
+	 * Self-managed wiphys always use their own regulatory domain.
 	 */
-	if (lr->initiator != NL80211_REGDOM_SET_BY_COUNTRY_IE &&
-	    lr->initiator != NL80211_REGDOM_SET_BY_USER &&
-	    wiphy->regd)
+	if (wiphy->regd &&
+	    ((wiphy->regulatory_flags & REGULATORY_WIPHY_SELF_MANAGED) ||
+	     (lr->initiator != NL80211_REGDOM_SET_BY_COUNTRY_IE &&
+	      lr->initiator != NL80211_REGDOM_SET_BY_USER)))
 		return get_wiphy_regdom(wiphy);
 
 	return get_cfg80211_regdom();

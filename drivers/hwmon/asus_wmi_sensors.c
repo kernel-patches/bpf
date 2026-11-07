@@ -155,7 +155,7 @@ struct asus_wmi_sensor_info {
 };
 
 struct asus_wmi_wmi_info {
-	unsigned long source_last_updated[3];	/* in jiffies */
+	u64 source_last_updated[3];	/* in jiffies */
 	int sensor_count;
 
 	const struct asus_wmi_sensor_info **info[hwmon_max];
@@ -164,6 +164,7 @@ struct asus_wmi_wmi_info {
 
 struct asus_wmi_sensors {
 	struct asus_wmi_wmi_info wmi;
+	struct hwmon_chip_info chip_info;
 	/* lock access to internal cache */
 	struct mutex lock;
 };
@@ -422,7 +423,8 @@ static int asus_wmi_get_cached_value_or_update(const struct asus_wmi_sensor_info
 
 	mutex_lock(&sensor_data->lock);
 
-	if (time_after(jiffies, sensor_data->wmi.source_last_updated[sensor->source] + HZ)) {
+	if (time_after64(get_jiffies_64(),
+			 sensor_data->wmi.source_last_updated[sensor->source] + HZ)) {
 		ret = asus_wmi_update_buffer(sensor->source);
 		if (ret)
 			goto unlock;
@@ -431,7 +433,7 @@ static int asus_wmi_get_cached_value_or_update(const struct asus_wmi_sensor_info
 		if (ret)
 			goto unlock;
 
-		sensor_data->wmi.source_last_updated[sensor->source] = jiffies;
+		sensor_data->wmi.source_last_updated[sensor->source] = get_jiffies_64();
 	}
 
 	*value = sensor->cached_value;
@@ -496,11 +498,6 @@ static const struct hwmon_ops asus_wmi_hwmon_ops = {
 	.read_string = asus_wmi_hwmon_read_string,
 };
 
-static struct hwmon_chip_info asus_wmi_chip_info = {
-	.ops = &asus_wmi_hwmon_ops,
-	.info = NULL,
-};
-
 static int asus_wmi_configure_sensor_setup(struct device *dev,
 					   struct asus_wmi_sensors *sensor_data)
 {
@@ -508,7 +505,7 @@ static int asus_wmi_configure_sensor_setup(struct device *dev,
 	struct hwmon_channel_info *asus_wmi_hwmon_chan;
 	int nr_count[hwmon_max] = {}, nr_types = 0;
 	struct asus_wmi_sensor_info *temp_sensor;
-	const struct hwmon_chip_info *chip_info;
+	struct hwmon_chip_info *chip_info;
 	enum hwmon_sensor_types type;
 	struct device *hwdev;
 	int i, idx;
@@ -549,8 +546,9 @@ static int asus_wmi_configure_sensor_setup(struct device *dev,
 	if (!ptr_asus_wmi_ci)
 		return -ENOMEM;
 
-	asus_wmi_chip_info.info = ptr_asus_wmi_ci;
-	chip_info = &asus_wmi_chip_info;
+	chip_info = &sensor_data->chip_info;
+	chip_info->ops = &asus_wmi_hwmon_ops;
+	chip_info->info = ptr_asus_wmi_ci;
 
 	sensor_data->wmi.info_by_id = devm_kcalloc(dev, sensor_data->wmi.sensor_count,
 						   sizeof(*sensor_data->wmi.info_by_id),

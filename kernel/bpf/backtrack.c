@@ -223,7 +223,7 @@ static inline unsigned long *bt_stack_mask(struct backtrack_state *bt)
 	return bt_frame_stack_mask(bt, bt->frame);
 }
 
-static inline u8 bt_stack_arg_mask(struct backtrack_state *bt)
+static inline u32 bt_stack_arg_mask(struct backtrack_state *bt)
 {
 	return bt->stack_arg_masks[bt->frame];
 }
@@ -325,7 +325,7 @@ static int backtrack_insn(struct bpf_verifier_env *env, int idx, int subseq_idx,
 				 * sreg needs precision before this insn
 				 */
 				bt_clear_reg(bt, dreg);
-				if (sreg != BPF_REG_FP)
+				if (sreg != BPF_REG_FP && sreg != BPF_REG_ARENA_SP)
 					bt_set_reg(bt, sreg);
 			} else {
 				/* dreg = K

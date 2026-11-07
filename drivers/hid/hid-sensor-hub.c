@@ -4,7 +4,9 @@
  * Copyright (c) 2012, Intel Corporation.
  */
 
+#include <linux/cleanup.h>
 #include <linux/device.h>
+#include <linux/device/devres.h>
 #include <linux/hid.h>
 #include <linux/module.h>
 #include <linux/slab.h>
@@ -173,7 +175,14 @@ int sensor_hub_remove_callback(struct hid_sensor_hub_device *hsdev,
 	struct sensor_hub_data *pdata = hid_get_drvdata(hsdev->hdev);
 	unsigned long flags;
 
-	spin_lock_irqsave(&pdata->dyn_callback_lock, flags);
+	/*
+	 * sensor_hub_raw_event() holds pdata->lock while it looks up a
+	 * callback and calls it.  Taking it here too means no report is
+	 * still using the callback once it is unlinked, so its owner may
+	 * free it as soon as this returns.
+	 */
+	spin_lock_irqsave(&pdata->lock, flags);
+	spin_lock(&pdata->dyn_callback_lock);
 	list_for_each_entry(callback, &pdata->dyn_callback_list, list)
 		if (callback->usage_id == usage_id &&
 						callback->hsdev == hsdev) {
@@ -181,11 +190,45 @@ int sensor_hub_remove_callback(struct hid_sensor_hub_device *hsdev,
 			kfree(callback);
 			break;
 		}
-	spin_unlock_irqrestore(&pdata->dyn_callback_lock, flags);
+	spin_unlock(&pdata->dyn_callback_lock);
+	spin_unlock_irqrestore(&pdata->lock, flags);
 
 	return 0;
 }
 EXPORT_SYMBOL_GPL(sensor_hub_remove_callback);
+
+DEFINE_FREE(devres_free, struct sensor_hub_cb_devres *, if (_T) devres_free(_T))
+
+static void devm_sensor_hub_remove_callback(struct device *dev, void *res)
+{
+	struct sensor_hub_cb_devres *dr = res;
+
+	sensor_hub_remove_callback(dr->hsdev, dr->usage_id);
+}
+
+int devm_sensor_hub_register_callback(struct device *dev,
+				      struct hid_sensor_hub_device *hsdev,
+				      u32 usage_id,
+				      struct hid_sensor_hub_callbacks *usage_callback)
+{
+	int ret;
+
+	struct sensor_hub_cb_devres *dr __free(devres_free) =
+		devres_alloc(devm_sensor_hub_remove_callback, sizeof(*dr), GFP_KERNEL);
+	if (!dr)
+		return -ENOMEM;
+
+	ret = sensor_hub_register_callback(hsdev, usage_id, usage_callback);
+	if (ret)
+		return ret;
+
+	dr->hsdev = hsdev;
+	dr->usage_id = usage_id;
+	devres_add(dev, no_free_ptr(dr));
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(devm_sensor_hub_register_callback);
 
 int sensor_hub_set_feature(struct hid_sensor_hub_device *hsdev, u32 report_id,
 			   u32 field_index, int buffer_size, void *buffer)

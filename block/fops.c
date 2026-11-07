@@ -6,6 +6,7 @@
  */
 #include <linux/init.h>
 #include <linux/mm.h>
+#include <linux/writeback.h>
 #include <linux/blkdev.h>
 #include <linux/blk-integrity.h>
 #include <linux/buffer_head.h>
@@ -1017,8 +1018,6 @@ static int blkdev_init_dma_buf_io_ctx(struct file *file,
 	if (ctx->dmabuf->size > UINT_MAX)
 		return -EINVAL;
 	if (!disk->fops->init_dma_buf_io_ctx)
-		return -EOPNOTSUPP;
-	if (bdev_has_integrity_csum(bdev))
 		return -EOPNOTSUPP;
 	return disk->fops->init_dma_buf_io_ctx(bdev, ctx);
 }

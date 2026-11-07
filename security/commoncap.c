@@ -10,13 +10,10 @@
 #include <linux/file.h>
 #include <linux/mm.h>
 #include <linux/mman.h>
-#include <linux/pagemap.h>
-#include <linux/swap.h>
 #include <linux/skbuff.h>
 #include <linux/netlink.h>
 #include <linux/ptrace.h>
 #include <linux/xattr.h>
-#include <linux/hugetlb.h>
 #include <linux/mount.h>
 #include <linux/sched.h>
 #include <linux/prctl.h>
@@ -1169,11 +1166,13 @@ int cap_task_fix_setuid(struct cred *new, const struct cred *old, int flags)
 		break;
 
 	case LSM_SETID_FS:
-		/* juggle the capabilities to follow FSUID changes, unless
-		 * otherwise suppressed
+		/* Juggle the capabilities to follow FSUID changes, unless
+		 * otherwise suppressed.
 		 *
-		 * FIXME - is fsuser used for all CAP_FS_MASK capabilities?
-		 *          if not, we might be a bit too harsh here.
+		 * CAP_FS_SET is exactly the set of capabilities that an
+		 * fsuid of 0 historically granted (see CAP_FS_MASK in
+		 * <linux/capability.h>), so we drop that set when fsuid
+		 * leaves 0.
 		 */
 		if (!issecure(SECURE_NO_SETUID_FIXUP)) {
 			kuid_t root_uid = make_kuid(old->user_ns, 0);

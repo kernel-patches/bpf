@@ -3365,7 +3365,7 @@ move_next:
 
 		rcu_read_lock();
 		peer = ath12k_dp_link_peer_find_by_peerid(pdev_dp, ppdu_info->peer_id);
-		if (!peer || !peer->sta) {
+		if (!ath12k_dp_link_peer_get_sta(peer)) {
 			ath12k_dbg(ab, ATH12K_DBG_DATA,
 				   "failed to find the peer with monitor peer_id %d\n",
 				   ppdu_info->peer_id);

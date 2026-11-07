@@ -8,7 +8,7 @@
  * instruction. Tracks 64-bit constant values in R0-R9 through the program,
  * using a fixed-point iteration in reverse postorder. Records which registers
  * hold known constants and their values in
- * env->insn_aux_data[].{const_reg_mask, const_reg_vals}.
+ * env->insn_aux_data[].{const_reg_mask, const_reg_wide_mask, const_reg_vals}.
  */
 
 enum const_arg_state {
@@ -62,6 +62,13 @@ static void const_reg_xfer(struct bpf_verifier_env *env, struct const_arg_info *
 	if (is_stack_arg_st(insn) || is_stack_arg_stx(insn))
 		return;
 	if (is_stack_arg_ldx(insn)) {
+		ci_out[insn->dst_reg] = unknown;
+		return;
+	}
+	/* r12 is outside of it too */
+	if (is_arena_sp_adj(insn) || is_arena_sp_st(insn))
+		return;
+	if (is_arena_sp_mov(insn) || is_arena_sp_ldx(insn)) {
 		ci_out[insn->dst_reg] = unknown;
 		return;
 	}
@@ -276,9 +283,9 @@ redo:
 	if (changed)
 		goto redo;
 
-	/* Save computed constants into insn_aux[] if they fit into 32-bit */
+	/* Save computed constants into insn_aux[]: the value if it fits into 32-bit */
 	for (i = 0; i < insn_cnt; i++) {
-		u16 mask = 0, map_mask = 0, subprog_mask = 0;
+		u16 mask = 0, wide_mask = 0, map_mask = 0, subprog_mask = 0;
 		struct bpf_insn_aux_data *aux = &insn_aux[i];
 		struct const_arg_info *ci = ci_in[i];
 
@@ -289,8 +296,10 @@ redo:
 			case CONST_ARG_CONST: {
 				u64 val = c->val;
 
-				if (val != (u32)val)
+				if (val != (u32)val) {
+					wide_mask |= BIT(r);
 					break;
+				}
 				mask |= BIT(r);
 				aux->const_reg_vals[r] = val;
 				break;
@@ -308,6 +317,7 @@ redo:
 			}
 		}
 		aux->const_reg_mask = mask;
+		aux->const_reg_wide_mask = wide_mask;
 		aux->const_reg_map_mask = map_mask;
 		aux->const_reg_subprog_mask = subprog_mask;
 	}

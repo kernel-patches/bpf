@@ -61,6 +61,8 @@ static const int bpf2a64[] = {
 	[BPF_REG_9] = A64_R(22),
 	/* read-only frame pointer to access stack */
 	[BPF_REG_FP] = A64_R(25),
+	/* callee saved register for the pointer to the stack in arena */
+	[BPF_REG_ARENA_SP] = A64_R(23),
 	/* temporary registers for BPF JIT */
 	[TMP_REG_1] = A64_R(10),
 	[TMP_REG_2] = A64_R(11),
@@ -142,6 +144,17 @@ static inline void emit_a64_mov_i(const int is64, const int reg,
 		if (hi)
 			emit(A64_MOVK(is64, reg, hi, 16), ctx);
 	}
+}
+
+static inline void emit_a64_mul(const bool is64, const u8 dst, const u8 src,
+				const s16 off, struct jit_ctx *ctx)
+{
+	if (is64 && off == BPF_UHMUL)
+		emit(A64_UMULH(dst, dst, src), ctx);
+	else if (is64 && off == BPF_SHMUL)
+		emit(A64_SMULH(dst, dst, src), ctx);
+	else
+		emit(A64_MUL(is64, dst, dst, src), ctx);
 }
 
 static int i64_i16_blocks(const u64 val, bool inverse)
@@ -418,6 +431,11 @@ static void find_used_callee_regs(struct jit_ctx *ctx)
 
 	if (ctx->arena_vm_start)
 		ctx->used_callee_reg[i++] = bpf2a64[ARENA_VM_START];
+
+	/* subprogs get it from the caller and leave it as it was, unless the kernel calls them */
+	if (prog->aux->arena_stack_size &&
+	    (!bpf_is_subprog(prog) || prog->aux->arena_stack_entry))
+		ctx->used_callee_reg[i++] = bpf2a64[BPF_REG_ARENA_SP];
 
 	ctx->nr_used_callee_reg = i;
 }
@@ -1531,7 +1549,7 @@ static int build_insn(const struct bpf_verifier_env *env, const struct bpf_insn 
 		break;
 	case BPF_ALU | BPF_MUL | BPF_X:
 	case BPF_ALU64 | BPF_MUL | BPF_X:
-		emit(A64_MUL(is64, dst, dst, src), ctx);
+		emit_a64_mul(is64, dst, src, off, ctx);
 		break;
 	case BPF_ALU | BPF_DIV | BPF_X:
 	case BPF_ALU64 | BPF_DIV | BPF_X:
@@ -1655,7 +1673,7 @@ emit_bswap_uxt:
 	case BPF_ALU | BPF_MUL | BPF_K:
 	case BPF_ALU64 | BPF_MUL | BPF_K:
 		emit_a64_mov_i(is64, tmp, imm, ctx);
-		emit(A64_MUL(is64, dst, dst, tmp), ctx);
+		emit_a64_mul(is64, dst, tmp, off, ctx);
 		break;
 	case BPF_ALU | BPF_DIV | BPF_K:
 	case BPF_ALU64 | BPF_DIV | BPF_K:
@@ -1954,6 +1972,24 @@ emit_cond_jmp:
 		} else {
 			src_adj = src;
 			off_adj = off;
+		}
+		if (BPF_MODE(insn->code) == BPF_PROBE_MEM ||
+		    BPF_MODE(insn->code) == BPF_PROBE_MEMSX) {
+			/*
+			 * Read zero instead of user memory. Bit 55 of an address
+			 * selects the user or the kernel page table. The bits
+			 * above it don't tell: the CPU ignores the top byte of
+			 * a user address.
+			 */
+			if (off) {
+				emit_a64_add_i(1, tmp2, src, tmp, off, ctx);
+				src_adj = tmp2;
+				off_adj = 0;
+			}
+			emit(A64_TST_I(1, src_adj, BIT(55)), ctx);
+			emit(A64_B_(A64_COND_NE, 3), ctx);
+			emit(A64_MOVZ(1, dst, 0, 0), ctx);
+			emit(A64_B(2), ctx);
 		}
 		sign_extend = (BPF_MODE(insn->code) == BPF_MEMSX ||
 				BPF_MODE(insn->code) == BPF_PROBE_MEMSX ||
@@ -2537,6 +2573,11 @@ bool bpf_jit_supports_private_stack(void)
 	return true;
 }
 
+bool bpf_jit_supports_arena_stack(void)
+{
+	return true;
+}
+
 bool bpf_jit_supports_kfunc_call(void)
 {
 	return true;
@@ -2586,6 +2627,11 @@ bool bpf_jit_supports_subprog_tailcalls(void)
 }
 
 bool bpf_jit_supports_callx(void)
+{
+	return true;
+}
+
+bool bpf_jit_supports_hmul(void)
 {
 	return true;
 }
@@ -3485,6 +3531,12 @@ out:
 bool bpf_jit_supports_ptr_xchg(void)
 {
 	return true;
+}
+
+/* The JIT emits its own code to filter user addresses */
+u64 bpf_arch_uaddress_limit(void)
+{
+	return 0;
 }
 
 bool bpf_jit_supports_exceptions(void)

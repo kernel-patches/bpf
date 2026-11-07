@@ -2567,7 +2567,7 @@ xfs_btree_lshift(
 		if (XFS_IS_CORRUPT(tcur->bc_mp, i != 1)) {
 			xfs_btree_mark_sick(cur);
 			error = -EFSCORRUPTED;
-			goto error0;
+			goto error1;
 		}
 
 		error = xfs_btree_decrement(tcur, level, &i);
@@ -2737,7 +2737,7 @@ xfs_btree_rshift(
 	if (XFS_IS_CORRUPT(tcur->bc_mp, i != 1)) {
 		xfs_btree_mark_sick(cur);
 		error = -EFSCORRUPTED;
-		goto error0;
+		goto error1;
 	}
 
 	error = xfs_btree_increment(tcur, level, &i);
@@ -3009,10 +3009,6 @@ xfs_btree_split_worker(
 						struct xfs_btree_split_args, work);
 	unsigned int		nofs_flags;
 
-	/*
-	 * Don't use xfs_trans_set_context() here: it would overwrite the
-	 * caller's saved NOFS state in tp->t_pflags. Use a local scope.
-	 */
 	nofs_flags = memalloc_nofs_save();
 
 	args->result = __xfs_btree_split(args->cur, args->level, args->ptrp,
@@ -3712,8 +3708,7 @@ error0:
  */
 int
 xfs_btree_insert(
-	struct xfs_btree_cur	*cur,
-	int			*stat)
+	struct xfs_btree_cur	*cur)
 {
 	int			error;	/* error return value */
 	int			i;	/* result value, 0 for failure */
@@ -3782,7 +3777,6 @@ xfs_btree_insert(
 		}
 	} while (!xfs_btree_ptr_is_null(cur, &nptr));
 
-	*stat = i;
 	return 0;
 error0:
 	return error;
@@ -4541,8 +4535,7 @@ error0:
  */
 int					/* error */
 xfs_btree_delete(
-	struct xfs_btree_cur	*cur,
-	int			*stat)	/* success/failure */
+	struct xfs_btree_cur	*cur)
 {
 	int			error;	/* error return value */
 	int			level;
@@ -4584,7 +4577,12 @@ xfs_btree_delete(
 		}
 	}
 
-	*stat = i;
+	if (XFS_IS_CORRUPT(cur->bc_mp, i != 1)) {
+		xfs_btree_mark_sick(cur);
+		error = -EFSCORRUPTED;
+		goto error0;
+	}
+
 	return 0;
 error0:
 	return error;

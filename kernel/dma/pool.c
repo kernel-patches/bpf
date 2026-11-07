@@ -99,7 +99,7 @@ static int atomic_pool_expand(struct dma_gen_pool *dma_pool, size_t pool_size,
 		pool_size = 1 << (PAGE_SHIFT + order);
 		if (cma_in_zone(gfp))
 			page = dma_alloc_from_contiguous(NULL, 1 << order,
-							 order, false);
+							 order, true);
 		if (!page)
 			page = alloc_pages(gfp | __GFP_NOWARN, order);
 	} while (!page && order-- > 0);
@@ -152,7 +152,8 @@ remove_mapping:
 	dma_common_free_remap(addr, pool_size);
 free_page:
 #endif
-	if (!leak_pages)
+	if (!leak_pages &&
+	    !dma_release_from_contiguous(NULL, page, 1 << order))
 		__free_pages(page, order);
 out:
 	return ret;

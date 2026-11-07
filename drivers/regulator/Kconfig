@@ -1210,6 +1210,7 @@ config REGULATOR_QCOM_SMD_RPM
 config REGULATOR_QCOM_SPMI
 	tristate "Qualcomm SPMI regulator driver"
 	depends on SPMI || COMPILE_TEST
+	select REGMAP_MMIO
 	help
 	  If you say yes to this option, support will be included for the
 	  regulators found in Qualcomm SPMI PMICs.
@@ -1623,7 +1624,7 @@ config REGULATOR_SY7636A
 	tristate "Silergy SY7636A voltage regulator"
 	depends on MFD_SY7636A
 	help
-	  This driver supports Silergy SY3686A voltage regulator.
+	  This driver supports Silergy SY7636A voltage regulator.
 
 config REGULATOR_SY8106A
 	tristate "Silergy SY8106A regulator"
@@ -1914,5 +1915,13 @@ config REGULATOR_QCOM_LABIBB
 	  based PMIC implementations. LAB can be used as positive
 	  boost regulator and IBB can be used as a negative boost regulator
 	  for LCD display panel.
+
+config REGULATOR_QCOM_LCDB
+	tristate "Qualcomm LCDB regulator support"
+	depends on SPMI || COMPILE_TEST
+	help
+	  This driver supports the LCDB (LCD bias) block found on Qualcomm
+	  PMICs such as PMI632, PM6150L and PM8150L. It provides the positive
+	  (LDO) and negative (NCP) bias rails for LCD panels.
 
 endif

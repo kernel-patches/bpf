@@ -1555,6 +1555,7 @@ void exit_mmap(struct mm_struct *mm)
 		delete_vma(mm, vma);
 		cond_resched();
 	}
+	mm_flags_set(MMF_OOM_SKIP, mm);
 	__mt_destroy(&mm->mm_mt);
 	mmap_write_unlock(mm);
 }
@@ -1887,7 +1888,7 @@ subsys_initcall(init_admin_reserve);
 
 int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
 {
-	mmap_write_lock(oldmm);
+	mmap_assert_write_locked(oldmm);
 	dup_mm_exe_file(mm, oldmm);
 	mmap_write_unlock(oldmm);
 	return 0;
