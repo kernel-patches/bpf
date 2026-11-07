@@ -7715,6 +7715,16 @@ enum ramless_lobf_enable_cmd {
 };
 
 /**
+ * enum ramless_lobf_state - Ramless LOBF FSM states visible in firmware state.
+ */
+enum ramless_lobf_state {
+	LOBF_STATE_DISABLED                   = 0x00, /**< Feature completely disabled */
+	LOBF_STATE_LINK_ON                    = 0x10, /**< Link is ON; Vline interrupt registered for Vblank start */
+	LOBF_STATE_ALPM_SLEEP_ENGAGED         = 0x20, /**< ALPM Sleep pattern sent; transitioning to PHY Off */
+	LOBF_STATE_INVALID                    = 0xFF, /**< Invalid / uninitialized */
+};
+
+/**
  * enum ramless_lobf_phy_mode - PHY power-state mode for Ramless LOBF.
  */
 enum ramless_lobf_phy_mode {
