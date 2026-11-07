@@ -4698,9 +4698,4 @@ static struct platform_driver ingenic_pinctrl_driver = {
 	},
 };
 
-static int __init ingenic_pinctrl_drv_register(void)
-{
-	return platform_driver_probe(&ingenic_pinctrl_driver,
-				     ingenic_pinctrl_probe);
-}
-subsys_initcall(ingenic_pinctrl_drv_register);
+subsys_platform_driver_probe(ingenic_pinctrl_driver, ingenic_pinctrl_probe);
