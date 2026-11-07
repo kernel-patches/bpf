@@ -2818,6 +2818,8 @@ static int musb_suspend(struct device *dev)
 		;
 	musb->flush_irq_work = false;
 
+	musb_gadget_disable_rx_kicks(musb);
+
 	if (!(musb->ops->quirks & MUSB_PRESERVE_SESSION))
 		musb_writeb(musb->mregs, MUSB_DEVCTL, 0);
 
@@ -2877,6 +2879,7 @@ static int musb_resume(struct device *dev)
 	}
 
 	spin_lock_irqsave(&musb->lock, flags);
+	musb_gadget_enable_rx_kicks(musb);
 	error = musb_run_resume_work(musb);
 	if (error)
 		dev_err(musb->controller, "resume work failed with %i\n",

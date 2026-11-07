@@ -11,6 +11,7 @@
 #define __MUSB_GADGET_H
 
 #include <linux/list.h>
+#include <linux/workqueue.h>
 
 #if IS_ENABLED(CONFIG_USB_MUSB_GADGET) || IS_ENABLED(CONFIG_USB_MUSB_DUAL_ROLE)
 extern irqreturn_t musb_g_ep0_irq(struct musb *);
@@ -23,6 +24,8 @@ extern void musb_g_wakeup(struct musb *);
 extern void musb_g_disconnect(struct musb *);
 extern void musb_gadget_cleanup(struct musb *);
 extern int musb_gadget_setup(struct musb *);
+void musb_gadget_disable_rx_kicks(struct musb *musb);
+void musb_gadget_enable_rx_kicks(struct musb *musb);
 
 #else
 static inline irqreturn_t musb_g_ep0_irq(struct musb *musb)
@@ -42,6 +45,9 @@ static inline int musb_gadget_setup(struct musb *musb)
 {
 	return 0;
 }
+
+static inline void musb_gadget_disable_rx_kicks(struct musb *musb)	{}
+static inline void musb_gadget_enable_rx_kicks(struct musb *musb)	{}
 #endif
 
 enum buffer_map_state {
@@ -92,6 +98,9 @@ struct musb_ep {
 
 	/* number of givebacks in progress; req_list may not be advanced */
 	u8				busy;
+
+	struct work_struct		rx_kick;
+	bool				rx_kick_deferred;
 
 	u8				hb_mult;
 };
