@@ -750,7 +750,7 @@ mtdchar_read_ioctl(struct mtd_info *mtd, struct mtd_read_req __user *argp)
 	}
 
 	while (req.len > 0 || (!usr_data && req.ooblen > 0)) {
-		struct mtd_req_stats stats;
+		struct mtd_req_stats stats = {};
 		struct mtd_oob_ops ops = {
 			.mode = req.mode,
 			.len = min_t(size_t, req.len, datbuf_len),
