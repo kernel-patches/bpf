@@ -69,6 +69,7 @@ enum sk_psock_state_bits {
 	SK_PSOCK_TX_ENABLED,
 	SK_PSOCK_RX_STRP_ENABLED,
 	SK_PSOCK_STRP_DONE_PENDING,
+	SK_PSOCK_TX_BUSY,
 };
 
 struct sk_psock_link {
