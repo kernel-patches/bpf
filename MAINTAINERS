@@ -9378,7 +9378,7 @@ F:	include/drm/ttm/
 GPU BUDDY ALLOCATOR
 M:	Matthew Auld <matthew.auld@intel.com>
 M:	Arun Pravin <arunpravin.paneerselvam@amd.com>
-R:	Joel Fernandes <joelagnelf@nvidia.com>
+R:	Joel Fernandes <jfern@kernel.org>
 L:	dri-devel@lists.freedesktop.org
 S:	Maintained
 T:	git https://gitlab.freedesktop.org/drm/misc/kernel.git
@@ -15463,7 +15463,7 @@ M:	Luc Maranget <luc.maranget@inria.fr>
 M:	"Paul E. McKenney" <paulmck@kernel.org>
 R:	Akira Yokosawa <akiyks@gmail.com>
 R:	Daniel Lustig <dlustig@nvidia.com>
-R:	Joel Fernandes <joelagnelf@nvidia.com>
+R:	Joel Fernandes <jfern@kernel.org>
 L:	linux-kernel@vger.kernel.org
 L:	linux-arch@vger.kernel.org
 L:	lkmm@lists.linux.dev
@@ -23572,7 +23572,7 @@ READ-COPY UPDATE (RCU)
 M:	"Paul E. McKenney" <paulmck@kernel.org>
 M:	Frederic Weisbecker <frederic@kernel.org> (kernel/rcu/tree_nocb.h)
 M:	Neeraj Upadhyay <neeraj.upadhyay@kernel.org> (kernel/rcu/tasks.h)
-M:	Joel Fernandes <joelagnelf@nvidia.com>
+M:	Joel Fernandes <jfern@kernel.org>
 M:	Josh Triplett <josh@joshtriplett.org>
 M:	Boqun Feng <boqun@kernel.org>
 M:	Uladzislau Rezki <urezki@gmail.com>
@@ -24685,7 +24685,7 @@ F:	rust/kernel/generated_arch_reachable_asm.rs.S
 F:	rust/kernel/generated_arch_warn_asm.rs.S
 
 RUST [INTEROP]
-M:	Joel Fernandes <joelagnelf@nvidia.com>
+M:	Joel Fernandes <jfern@kernel.org>
 M:	Alexandre Courbot <acourbot@nvidia.com>
 L:	rust-for-linux@vger.kernel.org
 S:	Maintained
@@ -28339,6 +28339,7 @@ TORTURE-TEST MODULES
 M:	Davidlohr Bueso <dave@stgolabs.net>
 M:	"Paul E. McKenney" <paulmck@kernel.org>
 M:	Josh Triplett <josh@joshtriplett.org>
+M:	Joel Fernandes <jfern@kernel.org>
 L:	linux-kernel@vger.kernel.org
 S:	Supported
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/rcu/linux.git rcu/dev
@@ -28347,6 +28348,7 @@ F:	kernel/locking/locktorture.c
 F:	kernel/rcu/rcuscale.c
 F:	kernel/rcu/rcutorture.c
 F:	kernel/rcu/refscale.c
+F:	kernel/scftorture.c
 F:	kernel/torture.c
 
 TOSHIBA ACPI EXTRAS DRIVER
