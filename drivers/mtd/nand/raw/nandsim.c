@@ -16,6 +16,7 @@
 #include <linux/types.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
+#include <linux/overflow.h>
 #include <linux/vmalloc.h>
 #include <linux/math64.h>
 #include <linux/slab.h>
@@ -2284,21 +2285,21 @@ static int __init ns_init_module(void)
 	}
 
 	if (overridesize) {
-		uint64_t new_size = (uint64_t)nsmtd->erasesize << overridesize;
 		struct nand_memory_organization *memorg;
+		unsigned int eraseblocks;
 		u64 targetsize;
 
 		memorg = nanddev_get_memorg(&chip->base);
 
-		if (new_size >> overridesize != nsmtd->erasesize) {
+		if (check_shl_overflow(1U, overridesize, &eraseblocks)) {
 			NS_ERR("overridesize is too big\n");
 			ret = -EINVAL;
 			goto cleanup_nand;
 		}
 
 		/* N.B. This relies on nand_scan not doing anything with the size before we change it */
-		nsmtd->size = new_size;
-		memorg->eraseblocks_per_lun = 1 << overridesize;
+		nsmtd->size = (u64)nsmtd->erasesize * eraseblocks;
+		memorg->eraseblocks_per_lun = eraseblocks;
 		targetsize = nanddev_target_size(&chip->base);
 		chip->chip_shift = ffs(nsmtd->erasesize) + overridesize - 1;
 		chip->pagemask = (targetsize >> chip->page_shift) - 1;
