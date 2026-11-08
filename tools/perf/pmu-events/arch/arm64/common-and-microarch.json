@@ -1340,32 +1340,32 @@
     {
         "EventCode": "0x812A",
         "EventName": "SAMPLE_FEED_BR",
-        "BriefDescription": "Statisical Profiling sample taken, branch"
+        "BriefDescription": "Statistical Profiling sample taken, branch"
     },
     {
         "EventCode": "0x812B",
         "EventName": "SAMPLE_FEED_LD",
-        "BriefDescription": "Statisical Profiling sample taken, load"
+        "BriefDescription": "Statistical Profiling sample taken, load"
     },
     {
         "EventCode": "0x812C",
         "EventName": "SAMPLE_FEED_ST",
-        "BriefDescription": "Statisical Profiling sample taken, store"
+        "BriefDescription": "Statistical Profiling sample taken, store"
     },
     {
         "EventCode": "0x812D",
         "EventName": "SAMPLE_FEED_OP",
-        "BriefDescription": "Statisical Profiling sample taken, matching operation type"
+        "BriefDescription": "Statistical Profiling sample taken, matching operation type"
     },
     {
         "EventCode": "0x812E",
         "EventName": "SAMPLE_FEED_EVENT",
-        "BriefDescription": "Statisical Profiling sample taken, matching events"
+        "BriefDescription": "Statistical Profiling sample taken, matching events"
     },
     {
         "EventCode": "0x812F",
         "EventName": "SAMPLE_FEED_LAT",
-        "BriefDescription": "Statisical Profiling sample taken, exceeding minimum latency"
+        "BriefDescription": "Statistical Profiling sample taken, exceeding minimum latency"
     },
     {
         "EventCode": "0x8130",
