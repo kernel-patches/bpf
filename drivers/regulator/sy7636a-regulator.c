@@ -90,6 +90,10 @@ static int sy7636a_enable(struct regulator_dev *rdev)
 	if (ret)
 		return ret;
 
+	/* already on, e.g. a boot-on regulator left on by the bootloader */
+	if (gpiod_get_value_cansleep(data->pgood_gpio) > 0)
+		return 0;
+
 	wait_for_completion_timeout(&data->pgood_completion,
 				    msecs_to_jiffies(PGOOD_TIMEOUT_MSECS));
 	ret = gpiod_get_value_cansleep(data->pgood_gpio);
