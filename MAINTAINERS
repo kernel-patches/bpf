@@ -25718,6 +25718,7 @@ M:	Nizat Mikayilli <nacht@dxdmail.cc>
 L:	linux-pm@vger.kernel.org
 S:	Maintained
 F:	Documentation/devicetree/bindings/power/supply/siliconmitus,sm5714-fuel-gauge.yaml
+F:	drivers/power/supply/sm5714-battery.c
 
 SILICON MOTION SM712 FRAME BUFFER DRIVER
 M:	Sudip Mukherjee <sudipm.mukherjee@gmail.com>

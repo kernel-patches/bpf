@@ -240,6 +240,16 @@ config BATTERY_S2MU005
 
 	  This driver, if built as a module, will be called s2mu005-fuel-gauge.
 
+config BATTERY_SM5714
+	tristate "Silicon Mitus SM5714 fuel gauge driver"
+	depends on I2C
+	help
+	  Say Y to enable support for the fuel gauge of the Silicon Mitus
+	  SM5714, which reports the battery state of charge, voltage and
+	  current.
+
+	  This driver, if built as a module, will be called sm5714-battery.
+
 config BATTERY_COLLIE
 	tristate "Sharp SL-5500 (collie) battery"
 	depends on SA1100_COLLIE && MCP_UCB1200
