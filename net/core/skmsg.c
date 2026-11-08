@@ -574,9 +574,6 @@ static int sk_psock_skb_ingress_enqueue(struct sk_buff *skb,
 			return num_sge;
 	}
 
-#if IS_ENABLED(CONFIG_BPF_STREAM_PARSER)
-	psock->ingress_bytes += len;
-#endif
 	copied = len;
 	msg->sg.start = 0;
 	msg->sg.size = copied;
@@ -642,8 +639,21 @@ static int sk_psock_skb_ingress_self(struct sk_psock *psock, struct sk_buff *skb
 	 */
 	msg->sk = sk;
 	err = sk_psock_skb_ingress_enqueue(skb, off, len, psock, sk, msg, take_ref);
-	if (err < 0)
+	if (err < 0) {
 		kfree(msg);
+		/*
+		 * A strparser skb comes in without an owner and read_sock counts
+		 * it as consumed once it is left to the backlog. Drop the owner
+		 * again, or sk_psock_skb_ingress() takes the skb->sk == sk path
+		 * and recvmsg() counts it a second time.
+		 */
+		if (skb_bpf_strparser(skb))
+			skb_orphan(skb);
+	}
+#if IS_ENABLED(CONFIG_BPF_STREAM_PARSER)
+	else
+		psock->ingress_bytes += len;
+#endif
 	return err;
 }
 
