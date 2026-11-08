@@ -2185,7 +2185,6 @@ exit_free_irq:
 exit_destroy_wq:
 	destroy_workqueue(tqspi->wq);
 exit_pm_disable:
-	pm_runtime_dont_use_autosuspend(&pdev->dev);
 	pm_runtime_force_suspend(&pdev->dev);
 	tegra_qspi_deinit_dma(tqspi);
 	return ret;
@@ -2205,7 +2204,6 @@ static void tegra_qspi_remove(struct platform_device *pdev)
 	spi_unregister_controller(host);
 	free_irq(tqspi->irq, tqspi);
 	destroy_workqueue(tqspi->wq);
-	pm_runtime_dont_use_autosuspend(&pdev->dev);
 	pm_runtime_force_suspend(&pdev->dev);
 	tegra_qspi_deinit_dma(tqspi);
 }
