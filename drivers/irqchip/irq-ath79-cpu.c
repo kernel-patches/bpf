@@ -10,7 +10,7 @@
  *  Parts of this file are based on Atheros' 2.6.15/2.6.31 BSP
  */
 
-#include <linux/bitops.h>
+#include <linux/bits.h>
 #include <linux/interrupt.h>
 #include <linux/irqchip.h>
 #include <linux/of.h>
@@ -44,8 +44,8 @@ static u32 irq_wb_chans[8];
 
 asmlinkage void plat_irq_dispatch(void)
 {
-	unsigned long pending, chans;
-	int irq, chan;
+	unsigned long pending;
+	int irq;
 
 	pending = read_c0_status() & read_c0_cause() & ST0_IM;
 
@@ -57,11 +57,8 @@ asmlinkage void plat_irq_dispatch(void)
 	pending >>= CAUSEB_IP;
 	while (pending) {
 		irq = fls(pending) - 1;
-		if (irq < ARRAY_SIZE(irq_wb_chans)) {
-			chans = irq_wb_chans[irq];
-			for_each_set_bit(chan, &chans, 32)
-				ath79_ddr_wb_flush(chan);
-		}
+		if (irq < ARRAY_SIZE(irq_wb_chans) && irq_wb_chans[irq])
+			ath79_ddr_wb_flush(irq_wb_chans[irq]);
 		do_IRQ(MIPS_CPU_IRQ_BASE + irq);
 		pending &= ~BIT(irq);
 	}
