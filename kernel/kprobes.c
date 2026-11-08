@@ -477,6 +477,31 @@ struct kprobe *kprobe_iter_next(struct kprobe_iter *iter)
 	return kp;
 }
 
+/* Address iteration retains the candidate in iter->next until addr passes it. */
+struct kprobe *kprobe_addr_iter_start(struct kprobe_iter *iter,
+				      unsigned long start, unsigned long end)
+{
+	iter->next = kprobe_iter_start(iter, start, end);
+	return kprobe_addr_iter_next(iter, start);
+}
+
+/* Addresses must be nondecreasing; return NULL at addresses without a probe. */
+struct kprobe *kprobe_addr_iter_next(struct kprobe_iter *iter,
+				     unsigned long addr)
+{
+	struct kprobe *kp = iter->next;
+
+	lockdep_assert_held(&kprobe_mutex);
+	while (kp && (unsigned long)kp->addr < addr) {
+		kprobe_iter_next(iter);
+		kp = iter->next;
+	}
+	if (!kp || (unsigned long)kp->addr > iter->end)
+		return NULL;
+
+	return (unsigned long)kp->addr == addr ? kp : NULL;
+}
+
 static int aggr_pre_handler(struct kprobe *p, struct pt_regs *regs);
 
 /* Return true if 'p' is an aggregator */
