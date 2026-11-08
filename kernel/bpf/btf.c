@@ -8056,6 +8056,21 @@ error:
 	return -EINVAL;
 }
 
+static bool btf_field_is_accessed(const struct bpf_reg_state *reg,
+				  s64 min_off, s64 max_off, int size,
+				  const struct btf_field *field)
+{
+	s64 first, last;
+
+	first = max_t(s64, min_off, (s64)field->offset - size + 1);
+	last = min_t(s64, max_off, (s64)field->offset + field->size - 1);
+	if (first > last)
+		return false;
+
+	first += imod(min_off - first, reg->step);
+	return first <= last;
+}
+
 int btf_struct_access(struct bpf_verifier_log *log,
 		      const struct bpf_reg_state *reg,
 		      int _off, int size, enum bpf_access_type atype __maybe_unused,
@@ -8091,15 +8106,28 @@ int btf_struct_access(struct bpf_verifier_log *log,
 		if (!meta)
 			break;
 		rec = meta->record;
+		if (min_off == max_off) {
+			for (i = 0; i < rec->cnt; i++) {
+				struct btf_field *field = &rec->fields[i];
+				u32 offset = field->offset;
+
+				if (off < offset + field->size && offset < off + size) {
+					bpf_log(log, "direct access to %s is disallowed\n",
+						btf_field_type_name(field->type));
+					return -EACCES;
+				}
+			}
+			break;
+		}
+
 		for (i = 0; i < rec->cnt; i++) {
 			struct btf_field *field = &rec->fields[i];
-			u32 offset = field->offset;
-			if (off < offset + field->size && offset < off + size) {
-				bpf_log(log,
-					"direct access to %s is disallowed\n",
-					btf_field_type_name(field->type));
-				return -EACCES;
-			}
+
+			if (!btf_field_is_accessed(reg, min_off, max_off, size, field))
+				continue;
+			bpf_log(log, "direct access to %s is disallowed\n",
+				btf_field_type_name(field->type));
+			return -EACCES;
 		}
 		break;
 	}
