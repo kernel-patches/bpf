@@ -16,9 +16,11 @@
 #include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/idr.h>
+#include <linux/kref.h>
 #include <linux/miscdevice.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
+#include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/uaccess.h>
 #include <linux/uio.h>
@@ -82,6 +84,8 @@ struct pfru_device {
 	u32 rev_id, index;
 	struct device *parent_dev;
 	struct miscdevice miscdev;
+	struct kref kref;
+	bool removed;
 };
 
 static DEFINE_IDA(pfru_ida);
@@ -428,6 +432,9 @@ static long pfru_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	u32 rev;
 	int ret;
 
+	if (READ_ONCE(pfru_dev->removed))
+		return -ENODEV;
+
 	switch (cmd) {
 	case PFRU_IOC_QUERY_CAP:
 		ret = query_capability(&cap_hdr, pfru_dev);
@@ -476,6 +483,9 @@ static ssize_t pfru_write(struct file *file, const char __user *buf,
 	char *buf_ptr;
 	int ret;
 
+	if (READ_ONCE(pfru_dev->removed))
+		return -ENODEV;
+
 	ret = query_buffer(&buf_info, pfru_dev);
 	if (ret)
 		return ret;
@@ -518,8 +528,39 @@ unmap:
 	return ret ?: len;
 }
 
+static void pfru_free(struct kref *kref)
+{
+	struct pfru_device *pfru_dev =
+		container_of(kref, struct pfru_device, kref);
+
+	put_device(pfru_dev->parent_dev);
+	kfree(pfru_dev);
+}
+
+static void pfru_put(void *data)
+{
+	struct pfru_device *pfru_dev = data;
+
+	kref_put(&pfru_dev->kref, pfru_free);
+}
+
+/* misc_open() holds misc_mtx here, and misc_deregister() takes it. */
+static int pfru_open(struct inode *inode, struct file *file)
+{
+	kref_get(&to_pfru_dev(file)->kref);
+	return 0;
+}
+
+static int pfru_release(struct inode *inode, struct file *file)
+{
+	pfru_put(to_pfru_dev(file));
+	return 0;
+}
+
 static const struct file_operations acpi_pfru_fops = {
 	.owner		= THIS_MODULE,
+	.open		= pfru_open,
+	.release	= pfru_release,
 	.write		= pfru_write,
 	.unlocked_ioctl = pfru_ioctl,
 	.llseek		= noop_llseek,
@@ -530,6 +571,7 @@ static void acpi_pfru_remove(struct platform_device *pdev)
 	struct pfru_device *pfru_dev = platform_get_drvdata(pdev);
 
 	misc_deregister(&pfru_dev->miscdev);
+	WRITE_ONCE(pfru_dev->removed, true);
 }
 
 static void pfru_put_idx(void *data)
@@ -554,9 +596,15 @@ static int acpi_pfru_probe(struct platform_device *pdev)
 		return -ENODEV;
 	}
 
-	pfru_dev = devm_kzalloc_obj(&pdev->dev, *pfru_dev);
+	pfru_dev = kzalloc_obj(*pfru_dev);
 	if (!pfru_dev)
 		return -ENOMEM;
+
+	kref_init(&pfru_dev->kref);
+	pfru_dev->parent_dev = get_device(&pdev->dev);
+	ret = devm_add_action_or_reset(&pdev->dev, pfru_put, pfru_dev);
+	if (ret)
+		return ret;
 
 	ret = ida_alloc(&pfru_ida, GFP_KERNEL);
 	if (ret < 0)
@@ -568,7 +616,6 @@ static int acpi_pfru_probe(struct platform_device *pdev)
 		return ret;
 
 	pfru_dev->rev_id = PFRU_DEFAULT_REV_ID;
-	pfru_dev->parent_dev = &pdev->dev;
 
 	pfru_dev->miscdev.minor = MISC_DYNAMIC_MINOR;
 	pfru_dev->miscdev.name = devm_kasprintf(&pdev->dev, GFP_KERNEL,
