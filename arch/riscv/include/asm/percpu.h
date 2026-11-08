@@ -9,8 +9,11 @@
 #include <asm/alternative-macros.h>
 #include <asm/cmpxchg.h>
 #include <asm/cpufeature-macros.h>
+#include <asm/current.h>
 #include <asm/hwcap.h>
 #include <asm/irqflags.h>
+
+#include <linux/thread_info.h>
 
 #define PERCPU_RW_OPS(sz)						\
 static inline unsigned long __percpu_read_##sz(void *ptr)		\
@@ -556,6 +559,8 @@ static inline u128 __percpu_generic_cmpxchg128(void *ptr, u128 old_val,
 	ret__;								\
 })
 #endif
+
+#define __my_cpu_offset (((struct thread_info *)current)->pcpu_offset)
 
 #undef PERCPU_RW_OPS
 #undef __PERCPU_AMO_OP_CASE
