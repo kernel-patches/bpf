@@ -95,7 +95,7 @@ static const struct dmi_system_id dmi_table[] = {
 			DMI_MATCH(DMI_BOARD_VENDOR, "AYANEO"),
 			DMI_MATCH(DMI_BOARD_NAME, "FLIP"),
 		},
-		.driver_data = (void *)&quirk_fan,
+		.driver_data = (void *)&quirk_charge_limit,
 	},
 	{
 		.matches = {
