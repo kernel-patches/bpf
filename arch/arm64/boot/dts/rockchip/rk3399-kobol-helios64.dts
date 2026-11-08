@@ -384,28 +384,6 @@
 	};
 };
 
-/*
- * The system doesn't run stable with cpu freq enabled, so disallow the lower
- * frequencies until this problem is properly understood and resolved.
- */
-&cluster0_opp {
-	/delete-node/ opp00;
-	/delete-node/ opp01;
-	/delete-node/ opp02;
-	/delete-node/ opp03;
-	/delete-node/ opp04;
-};
-
-&cluster1_opp {
-	/delete-node/ opp00;
-	/delete-node/ opp01;
-	/delete-node/ opp02;
-	/delete-node/ opp03;
-	/delete-node/ opp04;
-	/delete-node/ opp05;
-	/delete-node/ opp06;
-};
-
 &cpu_b0 {
 	cpu-supply = <&vdd_cpu_b>;
 };
@@ -605,7 +583,7 @@
 		regulator-boot-on;
 		regulator-min-microvolt = <712500>;
 		regulator-max-microvolt = <1500000>;
-		regulator-ramp-delay = <1000>;
+		regulator-ramp-delay = <40000>;
 		vin-supply = <&vcc5v0_sys>;
 
 		regulator-state-mem {
