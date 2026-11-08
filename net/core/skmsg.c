@@ -879,6 +879,18 @@ static void sk_psock_destroy(struct work_struct *work)
 {
 	struct sk_psock *psock = container_of(to_rcu_work(work),
 					      struct sk_psock, rwork);
+
+	if (sk_psock_test_state(psock, SK_PSOCK_STRP_DONE_PENDING)) {
+		/* Parser link gone, other links keep the psock alive */
+		sk_psock_done_strp(psock);
+		write_lock_bh(&psock->sk->sk_callback_lock);
+		sk_psock_clear_state(psock, SK_PSOCK_RX_STRP_ENABLED);
+		sk_psock_clear_state(psock, SK_PSOCK_STRP_DONE_PENDING);
+		write_unlock_bh(&psock->sk->sk_callback_lock);
+		sk_psock_put(psock->sk, psock);
+		return;
+	}
+
 	/* No sk_callback_lock since already detached. */
 
 	sk_psock_done_strp(psock);
@@ -1206,6 +1218,18 @@ void sk_psock_stop_strp(struct sock *sk, struct sk_psock *psock)
 	WRITE_ONCE(sk->sk_data_ready, psock->saved_data_ready);
 	WRITE_ONCE(psock->saved_data_ready, NULL);
 	strp_stop(&psock->strp);
+}
+
+/* Called with sk_callback_lock held while a link still holds the psock */
+void sk_psock_queue_strp_done(struct sk_psock *psock)
+{
+	if (!sk_psock_test_state(psock, SK_PSOCK_RX_STRP_ENABLED) ||
+	    test_and_set_bit(SK_PSOCK_STRP_DONE_PENDING, &psock->state))
+		return;
+
+	refcount_inc(&psock->refcnt);
+	INIT_WORK(&psock->rwork.work, sk_psock_destroy);
+	schedule_work(&psock->rwork.work);
 }
 
 static void sk_psock_done_strp(struct sk_psock *psock)
