@@ -2544,7 +2544,6 @@ err_pm_disable:
 	pm_runtime_disable(&pdev->dev);
 	pm_runtime_put_noidle(&pdev->dev);
 	pm_runtime_set_suspended(&pdev->dev);
-	pm_runtime_dont_use_autosuspend(&pdev->dev);
 
 	if (spi->mdma_rx)
 		dma_release_channel(spi->mdma_rx);
@@ -2574,7 +2573,6 @@ static void stm32_spi_remove(struct platform_device *pdev)
 	pm_runtime_disable(&pdev->dev);
 	pm_runtime_put_noidle(&pdev->dev);
 	pm_runtime_set_suspended(&pdev->dev);
-	pm_runtime_dont_use_autosuspend(&pdev->dev);
 
 	if (ctrl->dma_tx)
 		dma_release_channel(ctrl->dma_tx);
