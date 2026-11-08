@@ -730,7 +730,6 @@ err_dma:
 	pm_runtime_put_noidle(dev);
 	pm_runtime_disable(dev);
 	pm_runtime_set_suspended(dev);
-	pm_runtime_dont_use_autosuspend(dev);
 err_irq:
 	clk_disable_unprepare(sfc->clk);
 err_clk:
@@ -749,7 +748,6 @@ static void rockchip_sfc_remove(struct platform_device *pdev)
 	pm_runtime_put_noidle(&pdev->dev);
 	pm_runtime_disable(&pdev->dev);
 	pm_runtime_set_suspended(&pdev->dev);
-	pm_runtime_dont_use_autosuspend(&pdev->dev);
 	if (sfc->use_dma) {
 		dma_unmap_single(&pdev->dev, sfc->dma_buffer, sfc->max_iosize,
 				 DMA_BIDIRECTIONAL);
