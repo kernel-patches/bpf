@@ -1570,7 +1570,8 @@ static void bq27xxx_battery_settings(struct bq27xxx_device_info *di)
 
 	/* assume min == 0 */
 	max = di->dm_regs[BQ27XXX_DM_DESIGN_ENERGY].max;
-	if (info->energy_full_design_uwh > max * 1000) {
+	if (info->energy_full_design_uwh != -EINVAL &&
+	    info->energy_full_design_uwh > max * 1000) {
 		dev_err(di->dev, "invalid battery:energy-full-design-microwatt-hours %d\n",
 			info->energy_full_design_uwh);
 		info->energy_full_design_uwh = -EINVAL;
@@ -1578,7 +1579,8 @@ static void bq27xxx_battery_settings(struct bq27xxx_device_info *di)
 
 	/* assume min == 0 */
 	max = di->dm_regs[BQ27XXX_DM_DESIGN_CAPACITY].max;
-	if (info->charge_full_design_uah > max * 1000) {
+	if (info->charge_full_design_uah != -EINVAL &&
+	    info->charge_full_design_uah > max * 1000) {
 		dev_err(di->dev, "invalid battery:charge-full-design-microamp-hours %d\n",
 			info->charge_full_design_uah);
 		info->charge_full_design_uah = -EINVAL;
