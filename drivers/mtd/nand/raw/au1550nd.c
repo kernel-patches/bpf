@@ -276,7 +276,7 @@ static int au1550nd_probe(struct platform_device *pdev)
 		ret = -ENODEV;
 		goto out1;
 	}
-	if (request_mem_region(r->start, resource_size(r), "au1550-nand")) {
+	if (!request_mem_region(r->start, resource_size(r), "au1550-nand")) {
 		dev_err(&pdev->dev, "cannot claim NAND memory area\n");
 		ret = -ENOMEM;
 		goto out1;
