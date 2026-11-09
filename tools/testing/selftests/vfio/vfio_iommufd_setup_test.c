@@ -67,6 +67,8 @@ FIXTURE(vfio_cdev) {
 
 FIXTURE_SETUP(vfio_cdev)
 {
+	SKIP_IF_IOMMU_MODE_UNAVAILABLE(return, MODE_IOMMUFD);
+
 	ASSERT_LE(0, (self->cdev_fd = open(cdev_path, O_RDWR, 0)));
 	ASSERT_LE(0, (self->iommufd = open(iommu_dev_path, O_RDWR, 0)));
 }

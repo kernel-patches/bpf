@@ -126,6 +126,26 @@ static const struct iommu_mode *iommu_mode_lookup(const char *iommu_mode)
 	VFIO_FAIL("Unrecognized IOMMU mode: %s\n", iommu_mode);
 }
 
+bool iommu_mode_is_available(const char *iommu_mode)
+{
+	if (!iommu_mode)
+		return iommu_mode_detect();
+
+	return iommu_mode_probe(iommu_mode_lookup(iommu_mode));
+}
+
+const char *iommu_mode_unavailable_msg(const char *iommu_mode)
+{
+	static char msg[128];
+
+	if (!iommu_mode)
+		return NO_IOMMU_MODE_AVAILABLE_MSG;
+
+	snprintf(msg, sizeof(msg), "IOMMU mode '%s' is not available",
+		 iommu_mode);
+	return msg;
+}
+
 int __iommu_hva2iova(struct iommu *iommu, void *vaddr, iova_t *iova)
 {
 	struct dma_region *region;

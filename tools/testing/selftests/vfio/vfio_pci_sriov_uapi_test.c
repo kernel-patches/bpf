@@ -90,6 +90,8 @@ FIXTURE_VARIANT_ADD_ALL_IOMMU_MODES(null_uuid, NULL);
 
 FIXTURE_SETUP(vfio_pci_sriov_uapi_test)
 {
+	SKIP_IF_IOMMU_MODE_UNAVAILABLE(return, variant->iommu_mode);
+
 	self->iommu = iommu_init(variant->iommu_mode);
 
 	self->pf_token = UUID_1;
@@ -162,6 +164,8 @@ TEST(failed_second_open_does_not_clobber_token)
 	struct vfio_pci_device *pf = NULL, *pf_second_fd = NULL, *vf = NULL;
 	struct iommu *iommu;
 	int ret;
+
+	SKIP_IF_IOMMU_MODE_UNAVAILABLE(return, MODE_IOMMUFD);
 
 	iommu = iommu_init(MODE_IOMMUFD);
 

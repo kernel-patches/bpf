@@ -119,6 +119,8 @@ FIXTURE_VARIANT_ADD_ALL_IOMMU_MODES(anonymous_hugetlb_1gb, SZ_1G, MAP_HUGETLB | 
 
 FIXTURE_SETUP(vfio_dma_mapping_test)
 {
+	SKIP_IF_IOMMU_MODE_UNAVAILABLE(return, variant->iommu_mode);
+
 	self->iommu = iommu_init(variant->iommu_mode);
 	self->device = vfio_pci_device_init(device_bdf, self->iommu);
 	self->iova_allocator = iova_allocator_init(self->iommu);
@@ -227,6 +229,8 @@ FIXTURE_SETUP(vfio_dma_map_limit_test)
 	u64 region_size = getpagesize();
 	iova_t last_iova;
 	u32 nranges;
+
+	SKIP_IF_IOMMU_MODE_UNAVAILABLE(return, variant->iommu_mode);
 
 	/*
 	 * Over-allocate mmap by double the size to provide enough backing vaddr
