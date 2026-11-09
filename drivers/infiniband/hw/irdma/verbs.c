@@ -2114,6 +2114,10 @@ static int irdma_destroy_srq(struct ib_srq *ibsrq, struct ib_udata *udata)
 	if (ret)
 		return ret;
 
+	xa_erase_irq(&iwdev->rf->srq_xa, iwsrq->srq_num);
+	irdma_srq_rem_ref(iwsrq);
+	wait_for_completion(&iwsrq->free_srq);
+
 	irdma_srq_wq_destroy(iwdev->rf, srq);
 	irdma_srq_free_rsrc(iwdev->rf, iwsrq);
 	return 0;
@@ -2575,6 +2579,7 @@ static int irdma_create_srq(struct ib_srq *ibsrq,
 		return -EINVAL;
 
 	refcount_set(&iwsrq->refcnt, 1);
+	init_completion(&iwsrq->free_srq);
 	spin_lock_init(&iwsrq->lock);
 	err_code = irdma_alloc_rsrc(rf, rf->allocated_srqs, rf->max_srq,
 				    &iwsrq->srq_num, &rf->next_srq);
@@ -2642,6 +2647,11 @@ static int irdma_create_srq(struct ib_srq *ibsrq,
 		if (err_code)
 			goto srq_destroy;
 	}
+
+	err_code = xa_insert_irq(&rf->srq_xa, iwsrq->srq_num, iwsrq,
+				 GFP_KERNEL);
+	if (err_code)
+		goto srq_destroy;
 
 	return 0;
 

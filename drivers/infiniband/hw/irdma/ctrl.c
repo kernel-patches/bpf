@@ -514,7 +514,8 @@ static int irdma_sc_srq_create(struct irdma_sc_srq *srq, u64 scratch,
 		      FIELD_PREP(IRDMA_CQPSQ_SRQ_SRQ_LIMIT, srq->srq_limit) |
 		      FIELD_PREP(IRDMA_CQPSQ_SRQ_RQSIZE, srq->hw_srq_size) |
 		      FIELD_PREP(IRDMA_CQPSQ_SRQ_RQ_WQE_SIZE, srq->srq_uk.wqe_size));
-	set_64bit_val(wqe, 8, (uintptr_t)srq);
+	set_64bit_val(wqe, 8,
+		      FIELD_PREP(IRDMA_CQPSQ_SRQ_SRQCTX, srq->srq_uk.srq_id));
 	set_64bit_val(wqe, 16,
 		      FIELD_PREP(IRDMA_CQPSQ_SRQ_PD_ID, srq->pd->pd_id));
 	set_64bit_val(wqe, 32,
@@ -632,7 +633,8 @@ static int irdma_sc_srq_destroy(struct irdma_sc_srq *srq, u64 scratch,
 	if (!wqe)
 		return -ENOMEM;
 
-	set_64bit_val(wqe, 8, (uintptr_t)srq);
+	set_64bit_val(wqe, 8,
+		      FIELD_PREP(IRDMA_CQPSQ_SRQ_SRQCTX, srq->srq_uk.srq_id));
 
 	hdr = srq->srq_uk.srq_id |
 	      FIELD_PREP(IRDMA_CQPSQ_OPCODE, IRDMA_CQP_OP_DESTROY_SRQ) |
@@ -4730,7 +4732,6 @@ int irdma_sc_get_next_aeqe(struct irdma_sc_aeq *aeq,
 	switch (info->ae_id) {
 	case IRDMA_AE_SRQ_LIMIT:
 		info->srq = true;
-		/* [63:6] from CMPL_CTXT, [5:0] from WQDESCIDX. */
 		info->compl_ctx = compl_ctx;
 		ae_src = IRDMA_AE_SOURCE_RSVD;
 		break;

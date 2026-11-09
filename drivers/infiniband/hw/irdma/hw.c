@@ -285,8 +285,9 @@ static void irdma_process_aeq(struct irdma_pci_f *rf)
 	struct irdma_sc_qp *qp = NULL;
 	struct irdma_qp_host_ctx_info *ctx_info = NULL;
 	struct irdma_device *iwdev = rf->iwdev;
-	struct irdma_sc_srq *srq;
+	struct irdma_srq *iwsrq;
 	unsigned long flags;
+	u32 srq_id;
 
 	u32 aeqcnt = 0;
 
@@ -437,8 +438,19 @@ static void irdma_process_aeq(struct irdma_pci_f *rf)
 			irdma_cq_rem_ref(&iwcq->ibcq);
 			break;
 		case IRDMA_AE_SRQ_LIMIT:
-			srq = (struct irdma_sc_srq *)(uintptr_t)info->compl_ctx;
-			irdma_srq_event(srq);
+			srq_id = FIELD_GET(IRDMA_CQPSQ_SRQ_SRQCTX,
+					   info->compl_ctx);
+			xa_lock_irqsave(&rf->srq_xa, flags);
+			iwsrq = xa_load(&rf->srq_xa, srq_id);
+			if (!iwsrq) {
+				xa_unlock_irqrestore(&rf->srq_xa, flags);
+				continue;
+			}
+			refcount_inc(&iwsrq->refcnt);
+			xa_unlock_irqrestore(&rf->srq_xa, flags);
+
+			irdma_srq_event(&iwsrq->sc_srq);
+			irdma_srq_rem_ref(iwsrq);
 			break;
 		case IRDMA_AE_SRQ_CATASTROPHIC_ERROR:
 			break;
@@ -2119,6 +2131,7 @@ static void irdma_set_hw_rsrc(struct irdma_pci_f *rf)
 	spin_lock_init(&rf->arp_lock);
 	spin_lock_init(&rf->qptable_lock);
 	spin_lock_init(&rf->cqtable_lock);
+	xa_init_flags(&rf->srq_xa, XA_FLAGS_LOCK_IRQ);
 	spin_lock_init(&rf->qh_list_lock);
 }
 

@@ -834,6 +834,16 @@ void irdma_cq_rem_ref(struct ib_cq *ibcq)
 	complete(&iwcq->free_cq);
 }
 
+/**
+ * irdma_srq_rem_ref() - drop a reference to an SRQ
+ * @iwsrq: SRQ
+ */
+void irdma_srq_rem_ref(struct irdma_srq *iwsrq)
+{
+	if (refcount_dec_and_test(&iwsrq->refcnt))
+		complete(&iwsrq->free_srq);
+}
+
 struct ib_device *to_ibdev(struct irdma_sc_dev *dev)
 {
 	return &(container_of(dev, struct irdma_pci_f, sc_dev))->iwdev->ibdev;
