@@ -271,6 +271,10 @@ LOOP(copy_bad, "r8 = 0; r9 = r8;", COPY(2047))
 BAD("a copy of the counter, another number at the entry")
 LOOP(copy_other_const, "r8 = 2047; r9 = 0; r6 += 2047;", COPY(2046))
 
+/* the latch exits one iteration later than for an induction variable that starts from 1 */
+NO_COUNT("a copy of the counter, one more at the entry")
+LOOP(copy_ahead, "r8 = 0; r9 = 1;", COPY(2047))
+
 OK("a copy of the counter, a range", "[0..2]")
 LOOP(copy_range, "r5 = r6; r8 = r7; r8 &= 1; r8 += 2045; r9 = r8;", COPY(2045) AT_R8)
 
@@ -297,13 +301,13 @@ LOOP(copy_bounds_both, "r5 = r6; if r7 > 2047 goto 9f; r8 = r7; r9 = r8;",
 	"r4 = r5; r4 += r9; *(u8 *)(r4 " off ") = r1; 2: r9 = r8; if r7 != 0 goto 1b;"
 
 OK("a copy of the counter, one less behind the jump", "[0..2048]")
-LOOP(copy_less, "r5 = r6; r8 = 0; r9 = r8;", NOT_EQUAL(1, "> 2046", "< 2", "- 1"))
+LOOP(copy_less, "r5 = r6; r8 = 0; r9 = r8;", NOT_EQUAL(1, "> 2046", "< 2", "+ 0"))
 
 BAD("a copy of the counter, one less behind the jump, not equal")
 LOOP(copy_less_bad, "r5 = r6; r8 = 0; r9 = r8;", NOT_EQUAL(1, "> 2046", "< 2", "- 2"))
 
 OK("a copy of the counter, one more behind the jump", "[0..2047]")
-LOOP(copy_more, "r5 = r6; r8 = 2047; r9 = r8;", NOT_EQUAL(-1, "s< 2", "> 2045", "+ 1"))
+LOOP(copy_more, "r5 = r6; r8 = 2047; r9 = r8;", NOT_EQUAL(-1, "s< 2", "> 2045", "+ 0"))
 
 BAD("a copy of the counter, one more behind the jump, not equal")
 LOOP(copy_more_bad, "r5 = r6; r8 = 2047; r9 = r8;", NOT_EQUAL(-1, "s< 2", "> 2045", "+ 2"))
