@@ -2658,7 +2658,7 @@ static void *htab_percpu_map_lookup_percpu_elem(struct bpf_map *map, void *key, 
 {
 	struct htab_elem *l;
 
-	if (cpu >= nr_cpu_ids)
+	if (cpu >= nr_cpu_ids || !cpu_possible(cpu))
 		return NULL;
 
 	l = __htab_map_lookup_elem(map, key);
@@ -2684,7 +2684,7 @@ static void *htab_lru_percpu_map_lookup_percpu_elem(struct bpf_map *map, void *k
 {
 	struct htab_elem *l;
 
-	if (cpu >= nr_cpu_ids)
+	if (cpu >= nr_cpu_ids || !cpu_possible(cpu))
 		return NULL;
 
 	l = __htab_map_lookup_elem(map, key);
