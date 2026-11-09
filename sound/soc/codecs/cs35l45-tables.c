@@ -77,6 +77,12 @@ static const struct reg_default cs35l45_defaults[] = {
 	{ CS35L45_DSP1RX6_INPUT,		0x00000028 },
 	{ CS35L45_DSP1RX7_INPUT,		0x0000003A },
 	{ CS35L45_DSP1RX8_INPUT,		0x00000028 },
+	{ CS35L45_BPE_INST_THLD,		0x5A46321E },
+	{ CS35L45_BPE_INST_ATTN,		0x060C1218 },
+	{ CS35L45_BPE_INST_ATK_RATE,		0x06060606 },
+	{ CS35L45_BPE_INST_HOLD_TIME,		0x02020202 },
+	{ CS35L45_BPE_INST_RLS_RATE,		0x05050505 },
+	{ CS35L45_BPE_MISC_CONFIG,		0x0000005A },
 	{ CS35L45_LDPM_CONFIG,			0x00003636 },
 	{ CS35L45_AMP_PCM_CONTROL,		0x00100000 },
 	{ CS35L45_AMP_GAIN,			0x00002300 },
@@ -164,6 +170,12 @@ static bool cs35l45_readable_reg(struct device *dev, unsigned int reg)
 	case CS35L45_DSP1RX6_INPUT:
 	case CS35L45_DSP1RX7_INPUT:
 	case CS35L45_DSP1RX8_INPUT:
+	case CS35L45_BPE_INST_THLD:
+	case CS35L45_BPE_INST_ATTN:
+	case CS35L45_BPE_INST_ATK_RATE:
+	case CS35L45_BPE_INST_HOLD_TIME:
+	case CS35L45_BPE_INST_RLS_RATE:
+	case CS35L45_BPE_MISC_CONFIG:
 	case CS35L45_HVLV_CONFIG:
 	case CS35L45_LDPM_CONFIG:
 	case CS35L45_AMP_PCM_CONTROL:
@@ -392,3 +404,39 @@ int cs35l45_get_ldpm_delay(u32 delay_ms)
 	return -EINVAL;
 }
 EXPORT_SYMBOL_NS_GPL(cs35l45_get_ldpm_delay, "SND_SOC_CS35L45");
+
+static const u32 cs35l45_bpe_hold_times_us[] = {
+	0, 250, 500, 1000, 5000, 10000, 25000, 50000, 100000, 250000, 500000, 1000000, 2500000,
+	5000000, 10000000,
+};
+
+int cs35l45_bpe_pack_hold_times(u32 *hold_times, u32 *packed_code)
+{
+	int i, j;
+
+	for (i = 0; i < CS35L45_BPE_NUM_LEVELS; i++) {
+		for (j = 0; j < ARRAY_SIZE(cs35l45_bpe_hold_times_us); j++)
+			if (hold_times[i] == cs35l45_bpe_hold_times_us[j])
+				break;
+
+		if (j == ARRAY_SIZE(cs35l45_bpe_hold_times_us))
+			return -EINVAL;
+
+		*packed_code |= CS35L45_BPE_PACK_CODE(j, i);
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL_NS_GPL(cs35l45_bpe_pack_hold_times, "SND_SOC_CS35L45");
+
+static const char * const cs35l45_bpe_attenuation_props[] = {
+	[BPE_MODE_LOGARITHMIC] = "cirrus,amplifier-bpe-attenuation-levels-db",
+	[BPE_MODE_LINEAR_VOLTAGE] = "cirrus,amplifier-bpe-attenuation-levels-microvolt",
+	[BPE_MODE_LINEAR_POWER] = "cirrus,amplifier-bpe-attenuation-levels-microwatt",
+};
+
+const char *cs35l45_bpe_get_attn_prop(const enum bpe_modes mode)
+{
+	return cs35l45_bpe_attenuation_props[mode];
+}
+EXPORT_SYMBOL_NS_GPL(cs35l45_bpe_get_attn_prop, "SND_SOC_CS35L45");

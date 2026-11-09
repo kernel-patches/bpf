@@ -1148,6 +1148,225 @@ static void cs35l45_apply_sync_property_config(struct cs35l45_private *cs35l45)
 				   CS35L45_SYNC_SW_TXID_MASK, val);
 }
 
+static int cs35l45_bpe_read_array(struct cs35l45_private *cs35l45, const char *property,
+				  u32 *values, size_t count)
+{
+	int num_values, ret;
+
+	if (!device_property_present(cs35l45->dev, property))
+		return dev_err_probe(cs35l45->dev, -EINVAL, "Missing %s\n", property);
+
+	num_values = device_property_count_u32(cs35l45->dev, property);
+	if (num_values < 0)
+		return dev_err_probe(cs35l45->dev, num_values, "Failed to count %s\n", property);
+
+	if (num_values != count)
+		return dev_err_probe(cs35l45->dev, -EINVAL, "%s must contain exactly %zu values\n",
+				     property, count);
+
+	ret = device_property_read_u32_array(cs35l45->dev, property, values, count);
+	if (ret)
+		return dev_err_probe(cs35l45->dev, ret, "Failed to read %s\n", property);
+
+	return 0;
+}
+
+static int cs35l45_bpe_set_rls_rate(struct cs35l45_private *cs35l45)
+{
+	u32 values[CS35L45_BPE_NUM_LEVELS];
+	u32 packed = 0;
+	int i, ret;
+
+	ret = cs35l45_bpe_read_array(cs35l45, "cirrus,amplifier-bpe-release-rates", values,
+				     ARRAY_SIZE(values));
+	if (ret)
+		return ret;
+
+	for (i = 0; i < CS35L45_BPE_NUM_LEVELS; i++) {
+		if (values[i] > CS35L45_BPE_INST_RLS_RATE_MAX) {
+			dev_err(cs35l45->dev, "invalid ABPE release rate at level %d\n",
+				NUM_BPE_MODE - i);
+			return -EINVAL;
+		}
+
+		packed |= CS35L45_BPE_PACK_CODE(values[i], i);
+	}
+
+	return regmap_write(cs35l45->regmap, CS35L45_BPE_INST_RLS_RATE, packed);
+}
+
+static int cs35l45_bpe_set_hold_times(struct cs35l45_private *cs35l45)
+{
+	u32 values[CS35L45_BPE_NUM_LEVELS];
+	u32 packed = 0;
+	int ret;
+
+	ret = cs35l45_bpe_read_array(cs35l45, "cirrus,amplifier-bpe-hold-times-us", values,
+				     ARRAY_SIZE(values));
+	if (ret)
+		return ret;
+
+	ret = cs35l45_bpe_pack_hold_times(values, &packed);
+	if (ret)
+		return ret;
+
+	return regmap_write(cs35l45->regmap, CS35L45_BPE_INST_HOLD_TIME, packed);
+}
+
+static int cs35l45_bpe_set_atk_rate(struct cs35l45_private *cs35l45)
+{
+	u32 values[CS35L45_BPE_NUM_LEVELS];
+	u32 packed = 0;
+	int i, ret;
+
+	ret = cs35l45_bpe_read_array(cs35l45, "cirrus,amplifier-bpe-attack-rates", values,
+				     ARRAY_SIZE(values));
+	if (ret)
+		return ret;
+
+	for (i = 0; i < CS35L45_BPE_NUM_LEVELS; i++) {
+		if (values[i] > CS35L45_BPE_INST_ATK_RATE_MAX) {
+			dev_err(cs35l45->dev, "invalid ABPE attack rate at level %d\n",
+				NUM_BPE_MODE - i);
+			return -EINVAL;
+		}
+
+		packed |= CS35L45_BPE_PACK_CODE(values[i], i);
+	}
+
+	return regmap_write(cs35l45->regmap, CS35L45_BPE_INST_ATK_RATE, packed);
+}
+
+static int cs35l45_bpe_set_attn(struct cs35l45_private *cs35l45, const enum bpe_modes mode)
+{
+	u32 values[CS35L45_BPE_NUM_LEVELS];
+	const char *prop_name;
+	u32 code, packed = 0;
+	int i, ret;
+
+	prop_name = cs35l45_bpe_get_attn_prop(mode);
+	ret = cs35l45_bpe_read_array(cs35l45, prop_name, values, ARRAY_SIZE(values));
+	if (ret)
+		return ret;
+
+	for (i = 0; i < CS35L45_BPE_NUM_LEVELS; i++) {
+		switch (mode) {
+		case BPE_MODE_LOGARITHMIC:
+			if (values[i] > CS35L45_BPE_INST_ATTN_LOG_MAX_DB)
+				return -EINVAL;
+			code = values[i] * 2;
+			break;
+		case BPE_MODE_LINEAR_VOLTAGE:
+			if (!in_range(values[i], CS35L45_BPE_INST_ATTN_VOLT_MIN_UV,
+				      CS35L45_BPE_INST_ATTN_VOLT_LEN_UV))
+				return -EINVAL;
+			code = (CS35L45_BPE_INST_ATTN_VOLT_MAX_UV - values[i]) /
+				CS35L45_BPE_INST_ATTN_STEP;
+			break;
+		case BPE_MODE_LINEAR_POWER:
+			if (!in_range(values[i], CS35L45_BPE_INST_ATTN_POWER_MIN_UW,
+				      CS35L45_BPE_INST_ATTN_POWER_LEN_UW))
+				return -EINVAL;
+			code = (CS35L45_BPE_INST_ATTN_POWER_MAX_UW - values[i]) /
+				CS35L45_BPE_INST_ATTN_STEP;
+			break;
+		default:
+			return -EINVAL;
+		}
+
+		packed |= CS35L45_BPE_PACK_CODE(code, i);
+	}
+
+	return regmap_write(cs35l45->regmap, CS35L45_BPE_INST_ATTN, packed);
+}
+
+static int cs35l45_bpe_set_thld(struct cs35l45_private *cs35l45)
+{
+	u32 values[CS35L45_BPE_NUM_LEVELS];
+	u32 code, packed = 0;
+	int i, ret;
+
+	ret = cs35l45_bpe_read_array(cs35l45, "cirrus,amplifier-bpe-thresholds-microvolt", values,
+				     ARRAY_SIZE(values));
+	if (ret)
+		return ret;
+
+	for (i = 0; i < CS35L45_BPE_NUM_LEVELS; i++) {
+		if (!in_range(values[i], CS35L45_BPE_INST_THLD_MIN_UV,
+			     CS35L45_BPE_INST_THLD_LEN_UV)) {
+			dev_err(cs35l45->dev, "invalid ABPE threshold at level %d\n",
+				NUM_BPE_MODE - i);
+			return -EINVAL;
+		}
+
+		code = (values[i] - CS35L45_BPE_INST_THLD_MIN_UV) / CS35L45_BPE_INST_THLD_STEP_UV;
+		packed |= CS35L45_BPE_PACK_CODE(code, i);
+	}
+
+	return regmap_write(cs35l45->regmap, CS35L45_BPE_INST_THLD, packed);
+}
+
+static int cs35l45_bpe_set_mode(struct cs35l45_private *cs35l45, enum bpe_modes *mode)
+{
+	const char *prop;
+	int i, ret;
+
+	ret = device_property_read_u32(cs35l45->dev, "cirrus,amplifier-bpe-response-mode",
+				       (u32 *)mode);
+	if (ret || *mode >= NUM_BPE_MODE) {
+		dev_err(cs35l45->dev, "invalid ABPE response mode\n");
+		return -EINVAL;
+	}
+
+	for (i = 0; i < NUM_BPE_MODE; i++) {
+		prop = cs35l45_bpe_get_attn_prop(i);
+
+		if (i != *mode && device_property_present(cs35l45->dev, prop)) {
+			dev_err(cs35l45->dev, "ABPE attenuation property does not match mode\n");
+			return -EINVAL;
+		}
+	}
+
+	return regmap_update_bits(cs35l45->regmap, CS35L45_BPE_MISC_CONFIG,
+				  CS35L45_BPE_MODE_SEL_MASK,
+				  FIELD_PREP(CS35L45_BPE_MODE_SEL_MASK, *mode));
+}
+
+static int cs35l45_apply_abpe_config(struct cs35l45_private *cs35l45)
+{
+	enum bpe_modes mode;
+	int ret;
+
+	if (!device_property_read_bool(cs35l45->dev, "cirrus,amplifier-bpe-enable"))
+		return 0;
+
+	ret = cs35l45_bpe_set_mode(cs35l45, &mode);
+	if (ret)
+		return ret;
+
+	ret = cs35l45_bpe_set_thld(cs35l45);
+	if (ret)
+		return ret;
+
+	ret = cs35l45_bpe_set_attn(cs35l45, mode);
+	if (ret)
+		return ret;
+
+	ret = cs35l45_bpe_set_atk_rate(cs35l45);
+	if (ret)
+		return ret;
+
+	ret = cs35l45_bpe_set_hold_times(cs35l45);
+	if (ret)
+		return ret;
+
+	ret = cs35l45_bpe_set_rls_rate(cs35l45);
+	if (ret)
+		return ret;
+
+	return regmap_set_bits(cs35l45->regmap, CS35L45_BLOCK_ENABLES2, CS35L45_ABPE_EN_MASK);
+}
+
 static int cs35l45_apply_ldpm_config(struct cs35l45_private *cs35l45)
 {
 	char prop_name[CS35L45_LDPM_PROP_NAME_MAX];
@@ -1300,6 +1519,10 @@ static int cs35l45_apply_property_config(struct cs35l45_private *cs35l45)
 	}
 
 	ret = cs35l45_apply_ldpm_config(cs35l45);
+	if (ret < 0)
+		return ret;
+
+	ret = cs35l45_apply_abpe_config(cs35l45);
 	if (ret < 0)
 		return ret;
 
