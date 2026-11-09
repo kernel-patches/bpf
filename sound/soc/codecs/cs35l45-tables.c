@@ -54,6 +54,18 @@ static const struct reg_default cs35l45_defaults[] = {
 	{ CS35L45_SYNC_TX_RX_ENABLES,		0x00000200 },
 	{ CS35L45_SYNC_SW_TX_ID,		0x00000000 },
 	{ CS35L45_BOOST_LPMODE_CFG,		0x00000002 },
+	{ CS35L45_BST_BPE_INST_THLD,		0x5A46321E },
+	{ CS35L45_BST_BPE_INST_ILIM,		0x3C140C04 },
+	{ CS35L45_BST_BPE_INST_ATK_RATE,	0x06060600 },
+	{ CS35L45_BST_BPE_INST_HOLD_TIME,	0x02020202 },
+	{ CS35L45_BST_BPE_INST_RLS_RATE,	0x06060606 },
+	{ CS35L45_BST_BPE_MISC_CONFIG,		0x00008000 },
+	{ CS35L45_BST_BPE_IL_LIM_THLD,		0x0006022C },
+	{ CS35L45_BST_BPE_IL_LIM_DLY,		0x0000040C },
+	{ CS35L45_BST_BPE_IL_LIM_ATK_RATE,	0x00000000 },
+	{ CS35L45_BST_BPE_IL_LIM_RLS_RATE,	0x00000000 },
+	{ CS35L45_BST_BPE_OUT_ATK_RATE,		0x00000002 },
+	{ CS35L45_BST_BPE_OUT_RLS_RATE,		0x00000002 },
 	{ CS35L45_ASP_ENABLES1,			0x00000000 },
 	{ CS35L45_ASP_CONTROL1,			0x00000028 },
 	{ CS35L45_ASP_CONTROL2,			0x18180200 },
@@ -143,6 +155,18 @@ static bool cs35l45_readable_reg(struct device *dev, unsigned int reg)
 	case CS35L45_WKI2C_CTL:
 	case CS35L45_PWRMGT_STS:
 	case CS35L45_REFCLK_INPUT:
+	case CS35L45_BST_BPE_INST_THLD:
+	case CS35L45_BST_BPE_INST_ILIM:
+	case CS35L45_BST_BPE_INST_ATK_RATE:
+	case CS35L45_BST_BPE_INST_HOLD_TIME:
+	case CS35L45_BST_BPE_INST_RLS_RATE:
+	case CS35L45_BST_BPE_MISC_CONFIG:
+	case CS35L45_BST_BPE_IL_LIM_THLD:
+	case CS35L45_BST_BPE_IL_LIM_DLY:
+	case CS35L45_BST_BPE_IL_LIM_ATK_RATE:
+	case CS35L45_BST_BPE_IL_LIM_RLS_RATE:
+	case CS35L45_BST_BPE_OUT_ATK_RATE:
+	case CS35L45_BST_BPE_OUT_RLS_RATE:
 	case CS35L45_GLOBAL_SAMPLE_RATE:
 	case CS35L45_SYNC_TX_RX_ENABLES:
 	case CS35L45_SYNC_SW_TX_ID:
@@ -440,3 +464,26 @@ const char *cs35l45_bpe_get_attn_prop(const enum bpe_modes mode)
 	return cs35l45_bpe_attenuation_props[mode];
 }
 EXPORT_SYMBOL_NS_GPL(cs35l45_bpe_get_attn_prop, "SND_SOC_CS35L45");
+
+static const u32 cs35l45_bst_bpe_hold_times_us[] = {
+	0, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000,
+};
+
+int cs35l45_bst_bpe_pack_hold_times(const u32 *hold_times, u32 *packed_code)
+{
+	int i, j;
+
+	for (i = 0; i < CS35L45_BST_BPE_NUM_LEVELS; i++) {
+		for (j = 0; j < ARRAY_SIZE(cs35l45_bst_bpe_hold_times_us); j++)
+			if (hold_times[i] == cs35l45_bst_bpe_hold_times_us[j])
+				break;
+
+		if (j == ARRAY_SIZE(cs35l45_bst_bpe_hold_times_us))
+			return -EINVAL;
+
+		*packed_code |= CS35L45_BST_BPE_PACK_CODE(j, i);
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL_NS_GPL(cs35l45_bst_bpe_pack_hold_times, "SND_SOC_CS35L45");
