@@ -2941,6 +2941,10 @@ attribute-sets:
         byte-order: big-endian
         enum: flower-key-ctrl-flags
         enum-as-flags: true
+      -
+        name: key-enc-key-id-mask
+        type: u32
+        byte-order: big-endian
   -
     name: flower-key-enc-opts-attrs
     name-prefix: tca-flower-key-enc-opts-
