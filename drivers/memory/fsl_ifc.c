@@ -63,6 +63,23 @@ int fsl_ifc_find(phys_addr_t addr_base)
 }
 EXPORT_SYMBOL(fsl_ifc_find);
 
+static u32 fsl_ifc_ctrl_in32(struct fsl_ifc_ctrl *ctrl, void __iomem *addr)
+{
+	if (ctrl->little_endian)
+		return ioread32(addr);
+
+	return ioread32be(addr);
+}
+
+static void fsl_ifc_ctrl_out32(struct fsl_ifc_ctrl *ctrl, u32 val,
+			       void __iomem *addr)
+{
+	if (ctrl->little_endian)
+		iowrite32(val, addr);
+	else
+		iowrite32be(val, addr);
+}
+
 static int fsl_ifc_ctrl_init(struct fsl_ifc_ctrl *ctrl)
 {
 	struct fsl_ifc_global __iomem *ifc = ctrl->gregs;
@@ -70,16 +87,18 @@ static int fsl_ifc_ctrl_init(struct fsl_ifc_ctrl *ctrl)
 	/*
 	 * Clear all the common status and event registers
 	 */
-	if (ifc_in32(&ifc->cm_evter_stat) & IFC_CM_EVTER_STAT_CSER)
-		ifc_out32(IFC_CM_EVTER_STAT_CSER, &ifc->cm_evter_stat);
+	if (fsl_ifc_ctrl_in32(ctrl, &ifc->cm_evter_stat) & IFC_CM_EVTER_STAT_CSER)
+		fsl_ifc_ctrl_out32(ctrl, IFC_CM_EVTER_STAT_CSER,
+				   &ifc->cm_evter_stat);
 
 	/* enable all error and events */
-	ifc_out32(IFC_CM_EVTER_EN_CSEREN, &ifc->cm_evter_en);
+	fsl_ifc_ctrl_out32(ctrl, IFC_CM_EVTER_EN_CSEREN, &ifc->cm_evter_en);
 
 	/* enable all error and event interrupts */
-	ifc_out32(IFC_CM_EVTER_INTR_EN_CSERIREN, &ifc->cm_evter_intr_en);
-	ifc_out32(0x0, &ifc->cm_erattr0);
-	ifc_out32(0x0, &ifc->cm_erattr1);
+	fsl_ifc_ctrl_out32(ctrl, IFC_CM_EVTER_INTR_EN_CSERIREN,
+			   &ifc->cm_evter_intr_en);
+	fsl_ifc_ctrl_out32(ctrl, 0x0, &ifc->cm_erattr0);
+	fsl_ifc_ctrl_out32(ctrl, 0x0, &ifc->cm_erattr1);
 
 	return 0;
 }
@@ -231,7 +250,8 @@ static int fsl_ifc_ctrl_probe(struct platform_device *dev)
 		dev_dbg(&dev->dev, "IFC REGISTERS are BIG endian\n");
 	}
 
-	version = ifc_in32(&ctrl->gregs->ifc_rev) & FSL_IFC_VERSION_MASK;
+	version = fsl_ifc_ctrl_in32(ctrl, &ctrl->gregs->ifc_rev) &
+		  FSL_IFC_VERSION_MASK;
 
 	banks = (version == FSL_IFC_VERSION_1_0_0) ? 4 : 8;
 	dev_info(&dev->dev, "IFC version %d.%d, %d banks\n",
