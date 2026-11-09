@@ -2154,7 +2154,6 @@ static u32 irdma_calc_mem_rsrc_size(struct irdma_pci_f *rf)
 	rsrc_size += sizeof(unsigned long) * BITS_TO_LONGS(rf->max_mcg);
 	rsrc_size += sizeof(struct irdma_qp **) * rf->max_qp;
 	rsrc_size += sizeof(struct irdma_cq **) * rf->max_cq;
-	rsrc_size += sizeof(struct irdma_srq **) * rf->max_srq;
 
 	return rsrc_size;
 }
