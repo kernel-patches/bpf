@@ -283,6 +283,46 @@ static int pool_active[] = { 1, 1, 0, 0, 1};
 
 #define IBM_VETH_INVALID_MAP ((u16)0xffff)
 
+/*
+ * Per-queue RX counters. No field has two concurrent writers:
+ * interrupts is written only from this queue's IRQ handler; polls,
+ * packets, bytes, large_packets, invalid_buffers and dropped only from
+ * its NAPI poll (polls not from netpoll's budget-0 call);
+ * replenish_* only under its replenish_lock; and no_buffer_drops and
+ * no_buffer_retired only under that lock. Readers snapshot that pair
+ * under the same lock. No atomic or u64_stats_sync is therefore
+ * needed: the driver is PPC64-only, so 64-bit loads and stores do not
+ * tear. Readers still run locklessly on other CPUs, so writers use
+ * IBMVETH_STAT_INC()/IBMVETH_STAT_ADD() and readers READ_ONCE(), which
+ * keeps the compiler from splitting or refetching the accesses.
+ */
+struct ibmveth_rx_queue_stats {
+	u64 packets;
+	u64 bytes;
+	u64 interrupts;
+	u64 polls;
+	u64 large_packets;
+	u64 invalid_buffers;
+	u64 dropped;
+	/* PHYP's per-page absolute drop count for the live page. */
+	u64 no_buffer_drops;
+	/* Absolutes from pages this queue has already retired. */
+	u64 no_buffer_retired;
+	u64 replenish_task_cycles;
+	u64 replenish_no_mem;
+	u64 replenish_add_buff_failure;
+	u64 replenish_add_buff_success;
+} ____cacheline_aligned_in_smp;
+
+/* Per-queue TX counters; serialized by the stack's per-queue TX lock. */
+struct ibmveth_tx_queue_stats {
+	u64 packets;
+	u64 bytes;
+	u64 large_packets;
+	u64 dropped_packets;
+	u64 send_failures;
+} ____cacheline_aligned_in_smp;
+
 struct ibmveth_buff_pool {
     u32 size;
     u32 index;
@@ -347,17 +387,17 @@ struct ibmveth_adapter {
 	u64 fw_ipv6_csum_support;
 	u64 fw_ipv4_csum_support;
 	u64 fw_large_send_support;
-	/* adapter specific stats */
-	u64 replenish_task_cycles;
-	u64 replenish_no_mem;
-	u64 replenish_add_buff_failure;
-	u64 replenish_add_buff_success;
-	u64 rx_invalid_buffer;
-	u64 rx_no_buffer;
+	/*
+	 * Every other ethtool -S counter lives in rx_qstats/tx_qstats and is
+	 * summed on read. tx_map_failed predates multi-queue, has never been
+	 * updated by any code path, and is kept only so the key keeps
+	 * reporting the zero userspace already sees.
+	 */
 	u64 tx_map_failed;
-	u64 tx_send_failed;
-	u64 tx_large_packets;
-	u64 rx_large_packets;
+
+	struct ibmveth_rx_queue_stats *rx_qstats;
+	struct ibmveth_tx_queue_stats *tx_qstats;
+
 	/* Ethtool settings */
 	u8 duplex;
 	u32 speed;
