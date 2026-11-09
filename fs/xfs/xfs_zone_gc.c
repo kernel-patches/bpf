@@ -337,7 +337,6 @@ xfs_zone_gc_query(
 	if (iter->next_startblock == rtg_blocks(rtg))
 		goto done;
 
-	ASSERT(iter->next_startblock < rtg_blocks(rtg));
 	ri_low.rm_startblock = iter->next_startblock;
 	memset(&ri_high, 0xFF, sizeof(ri_high));
 
