@@ -64,6 +64,10 @@ enum expr_op {
  * value number of its own.
  * In the env of loop H a phi at H merges the backedge values only, the header phi itself is
  * (REG r). In the env of the enclosing loop a phi at H merges the entering edges.
+ * Op and params of a def by an insn are what that insn computes, see alu64_with_def():
+ * set_expr_base() looks through such an add, split_const_offset() checks prevent_zext of the insn.
+ * Those of a phi are the shape that its operands share, no insn computes them: nothing looks
+ * through a phi.
  */
 struct expr_def {
 	u32 set:1;	/* 0: the expression has no def */
@@ -79,6 +83,8 @@ struct expr {
 	u16 op;
 	/* A value number: all SCEV registers of an env that have this id hold the same value */
 	bool is_vn;
+	/* expr == base + off (mod 2^bits), see split_const_offset() */
+	u8 bits;
 	/*
 	 * UNKNOWN, OPAQUE and ANY don't describe a value. With a def the id stands for one value,
 	 * see struct expr_def. Without a def every use of the id can be another value.
@@ -88,6 +94,13 @@ struct expr {
 		u32 params[2];
 		s64 imm;
 	};
+	u32 base;
+	/*
+	 * id of the first add on the way to 'base' whose insn may still become ALU32, see
+	 * prevent_zext. 0: none
+	 */
+	u32 arena_add;
+	s64 off;
 };
 
 struct env {
@@ -96,8 +109,17 @@ struct env {
 	u32 reg2scev[REGS_NUM];
 };
 
+/* A SCEV register and the id of its expression before a conditional jump */
+struct scev_linked_reg {
+	u32 reg;
+	u32 id;
+};
+
 struct insn_envs {
 	u32 cnt;
+	/* The linked registers of a jump, see find_linked_regs(): linked_cnt of scev->linked[] */
+	u32 linked_first;
+	u32 linked_cnt;
 	struct {
 		int loop_header;
 		struct env *env;
@@ -118,6 +140,8 @@ struct scev {
 	/* Read-only representatives for stack slots without a saved register. */
 	struct bpf_reg_state zero_reg;
 	struct bpf_reg_state unknown_reg;
+	/* r -> (REG r): before the first insn of a loop every SCEV register is its header phi */
+	struct env identity_env;
 	/*
 	 * Expressions are identified by id, exprs_ht ensures that
 	 * each expression exists as a unique instance.
@@ -130,6 +154,9 @@ struct scev {
 	struct scev_worklist worklist;
 	struct insn_envs **envs;
 	struct expr *exprs;
+	struct scev_linked_reg *linked;
+	/* The stack slots that a store through a dynptr slice may alias, see expr_is_vn() */
+	DECLARE_BITMAP(slice_slots, MAX_BPF_STACK_SLOTS);
 	/*
 	 * Loops are analyzed one by one, this array keeps track if a particular
 	 * instruction was visited on a current pass.
@@ -137,6 +164,8 @@ struct scev {
 	u32 *discovered;
 	int exprs_cnt;
 	int exprs_cap;
+	u32 linked_cnt;
+	u32 linked_cap;
 	int envs_cnt;
 	int stack_sz;
 	int simplify_depth;
@@ -199,10 +228,17 @@ static u32 op_params_num(u32 op);
 
 static bool expr_is_vn(struct scev *scev, struct expr *e)
 {
-	u32 i;
+	u32 i, reg = e->def.reg;
 
+	/*
+	 * bpf_dynptr_slice_rdwr() can return the buffer that it got. A store through that slice may
+	 * alias the slots of the buffer and is in no bpf_may_write_mask(): it is no def, so a def
+	 * of such a slot is no value number. A spill through r10 has the expression of the
+	 * register, and invalidate_stack_slices() invalidates the slices there. The next slice
+	 * comes from a call that may write to the slot.
+	 */
 	if (e->def.set)
-		return true;
+		return reg < MAX_BPF_REG || !test_bit(reg - MAX_BPF_REG, scev->slice_slots);
 	switch (e->op) {
 	case UNKNOWN:
 	case OPAQUE:
@@ -220,6 +256,37 @@ static bool expr_is_vn(struct scev *scev, struct expr *e)
 		if (!scev->exprs[e->params[i]].is_vn)
 			return false;
 	return true;
+}
+
+static u32 op_low_bits(u32 op);
+
+/*
+ * @e gets the id @id. (+ x imm), an extension and a partial spill of x have the base of x, which
+ * was constructed earlier. Every other expression is its own base. So split_const_offset() does not
+ * traverse the expression.
+ */
+static void set_expr_base(struct scev *scev, struct expr *e, u32 id)
+{
+	u32 low = op_low_bits(e->op);
+	struct expr *x;
+	s64 imm = 0;
+
+	e->base = id;
+	e->off = 0;
+	e->bits = 64;
+	e->arena_add = 0;
+	/* nothing looks through a phi, see struct expr_def */
+	if (e->def.phi)
+		return;
+	if (e->op == BPF_ADD && scev->exprs[e->params[1]].op == IMM)
+		imm = scev->exprs[e->params[1]].imm;
+	else if (!low || e->def.set)
+		return;
+	x = &scev->exprs[e->params[0]];
+	e->base = x->base;
+	e->off = (u64)x->off + imm;
+	e->bits = low ? min(x->bits, low) : x->bits;
+	e->arena_add = e->def.set ? id : x->arena_add;
 }
 
 static int add_expr(struct scev *scev, struct expr e)
@@ -241,6 +308,7 @@ static int add_expr(struct scev *scev, struct expr e)
 
 	id = scev->exprs_cnt++;
 	e.is_vn = expr_is_vn(scev, &e);
+	set_expr_base(scev, &e, id);
 	scev->exprs[id] = e;
 	exprs_ht_add(scev, id);
 	return id;
@@ -589,6 +657,9 @@ static bool expr_next(struct scev *scev, u32 *id, u32 *order)
  *	%r8.7=phi(1, 2)		the phi of r8 before insn 7
  *	%r0.7=phi(_)		a phi of distinct OPAQUE values
  *	%r6.9=phi(?)		a phi of distinct UNKNOWN values, or of more than 8 values
+ *	%r2.12=(+ x 4)		insn 12 defines r2, see alu64_with_def()
+ *	%r2.25=phi((+ x 4))	two adds of one shape, each may have been converted to ALU32:
+ *				the phi is not (+ x 4)
  * A name is unique within the env of one loop. In the env of loop H a phi at H merges the backedge
  * values only, the header phi itself is (REG r): in 'scev at header 1: r6=%r6.1=phi(r6, (+ r6 1))'
  * one backedge leaves r6 as it is, the other one adds 1.
@@ -753,7 +824,7 @@ static struct env *get_loop_env(struct scev *scev, int loop_header, int insn_idx
 	if (!e)
 		return NULL;
 
-	tmp = krealloc(envs, struct_size(envs, entries, cnt + 1), GFP_KERNEL_ACCOUNT);
+	tmp = krealloc(envs, struct_size(envs, entries, cnt + 1), GFP_KERNEL_ACCOUNT | __GFP_ZERO);
 	if (!tmp) {
 		kfree(e);
 		return NULL;
@@ -780,7 +851,7 @@ static void free_loop_env(struct scev *scev, int loop_header, int insn_idx)
 		envs->entries[i] = envs->entries[--envs->cnt];
 		break;
 	}
-	if (envs->cnt)
+	if (envs->cnt || envs->linked_cnt)
 		return;
 	kfree(envs);
 	scev->envs[insn_idx] = NULL;
@@ -832,7 +903,7 @@ static int forget_call_regs(struct bpf_verifier_env *env, struct env *e, int idx
 
 static u32 spill_spi(struct bpf_insn *insn)
 {
-	return -insn->off / BPF_REG_SIZE - 1;
+	return (-insn->off - 1) / BPF_REG_SIZE;
 }
 
 static u32 off_to_reg(struct bpf_insn *insn)
@@ -873,18 +944,39 @@ static int mk_spill(struct scev *scev, u8 size, int id)
 	return UNKNOWN_EXPR_ID;
 }
 
-static int mk_fill(struct scev *scev, int id, u8 code)
+/* The size of the spill in a slot with the expression @id. It holds the low bytes of *@x. */
+static u32 expr_spill_size(struct scev *scev, u32 id, u32 *x)
 {
-	bool sx = BPF_MODE(code) == BPF_MEMSX;
+	struct expr *e = &scev->exprs[id];
+	bool partial = e->op == SPILL8 || e->op == SPILL16 || e->op == SPILL32;
 
+	*x = partial ? e->params[0] : id;
+	return partial ? op_low_bits(e->op) / BITS_PER_BYTE : BPF_REG_SIZE;
+}
+
+/* -ENOENT: the value of the fill is not known */
+static int mk_fill(struct scev *scev, int id, struct bpf_insn *insn)
+{
+	u32 x, spill_size = expr_spill_size(scev, id, &x);
+	u32 size = bpf_size_to_bytes(BPF_SIZE(insn->code));
+	bool sx = BPF_MODE(insn->code) == BPF_MEMSX;
+
+	/* The fill reads the low bytes of the spill, as in check_stack_read_fixed_off() */
+	if (size <= spill_size && bpf_stack_narrow_access_ok(insn->off, size, spill_size))
+		id = x;
+	else if (!is_spill_off(insn->off))
+		return -ENOENT;
 #ifdef __BIG_ENDIAN
+	/* No register becomes (spillN x): its low bits would not be those of x */
+	else if (spill_size < BPF_REG_SIZE)
+		return -ENOENT;
 	/* A narrow fill reads the high bits of the slot on big-endian. */
-	if (BPF_SIZE(code) != BPF_DW)
+	else
 		return expr2(scev, sx ? BPF_ARSH : BPF_RSH, id,
-			     imm_expr(scev, 64 - BITS_PER_BYTE * bpf_size_to_bytes(BPF_SIZE(code))));
+			     imm_expr(scev, BITS_PER_BYTE * (BPF_REG_SIZE - size)));
 #endif
 
-	switch (BPF_SIZE(code)) {
+	switch (BPF_SIZE(insn->code)) {
 	case BPF_B:  return expr1(scev, sx ? SEXT8  : ZEXT8,  id);
 	case BPF_H:  return expr1(scev, sx ? SEXT16 : ZEXT16, id);
 	case BPF_W:  return expr1(scev, sx ? SEXT32 : ZEXT32, id);
@@ -906,10 +998,13 @@ static int maybe_store_fp(struct scev *scev, struct env *e, struct bpf_insn *ins
 
 static int maybe_load_fp(struct scev *scev, struct env *e, struct bpf_insn *insn, int idx)
 {
-	if (insn->src_reg != BPF_REG_FP || !is_spill_off(insn->off))
+	int id = -ENOENT;
+
+	if (insn->src_reg == BPF_REG_FP && insn->off < 0 && insn->off >= -MAX_BPF_STACK_JIT)
+		id = mk_fill(scev, e->reg2expr[off_to_reg(insn)], insn);
+	if (id == -ENOENT)
 		return forget_reg(scev, e, insn->dst_reg, OPAQUE_EXPR_ID, idx);
-	return replace_reg(scev, e, insn->dst_reg,
-			   mk_fill(scev, e->reg2expr[off_to_reg(insn)], insn->code));
+	return replace_reg(scev, e, insn->dst_reg, id);
 }
 
 /*
@@ -944,10 +1039,28 @@ static void alu32_operands(struct scev *scev, u32 op, int *a, int *b)
 	}
 }
 
+/*
+ * In a prog with an arena an ALU64 insn is converted to ALU32 at fixup if an operand is a pointer
+ * to the arena, see adjust_reg_min_max_vals(). Types are not known here. So @id, what the insn at
+ * @idx computes from @a, gets a def: the value of @dst after the insn, converted or not. See
+ * split_const_offset() for when the op can be trusted. Constant operands are scalars in every
+ * state.
+ */
+static int alu64_with_def(struct scev *scev, int id, int a, int idx, u32 dst)
+{
+	s64 imm;
+
+	if (id < 0 || is_imm(scev, id, &imm))
+		return id;
+	/* (+ x 0) is x only if the insn stays ALU64 */
+	return expr_with_def(scev, id == a ? UNKNOWN_EXPR_ID : id, insn_def(idx, dst));
+}
+
 static int transfer(struct bpf_verifier_env *env, struct env *e, int idx)
 {
 	const bool little_endian = htons(0x3412) == 0x1234;
 	struct bpf_insn *insn = &env->prog->insnsi[idx];
+	bool arena = env->prog->aux->arena;
 	struct scev *scev = env->scev;
 	u32 *reg2expr = e->reg2expr;
 	u8 class = BPF_CLASS(insn->code);
@@ -956,7 +1069,7 @@ static int transfer(struct bpf_verifier_env *env, struct env *e, int idx)
 	u8 mode = BPF_MODE(insn->code);
 	u32 dst = insn->dst_reg;
 	u32 src = insn->src_reg;
-	u32 op, sext, l, r;
+	u32 op, sext;
 	bool need_bswap;
 	int i, id, a;
 	s64 imm;
@@ -1022,13 +1135,6 @@ static int transfer(struct bpf_verifier_env *env, struct env *e, int idx)
 			else
 				goto mark_dst_unknown;
 
-			/* 'r1 <<= 32; r1 >>= 32' is (u32)r1 for cpu v1 and v2 */
-			if (class == BPF_ALU64 && op == BPF_RSH && id >= 0 &&
-			    is_imm(scev, id, &imm) && imm == 32 &&
-			    is_binop(scev, BPF_LSH, reg2expr[dst], &l, &r) &&
-			    is_imm(scev, r, &imm) && imm == 32)
-				return replace_reg(scev, e, dst, expr1(scev, ZEXT32, l));
-
 			a = reg2expr[dst];
 			if (class == BPF_ALU)
 				alu32_operands(scev, op, &a, &id);
@@ -1036,6 +1142,8 @@ static int transfer(struct bpf_verifier_env *env, struct env *e, int idx)
 
 			if (class == BPF_ALU)
 				id = expr1(scev, ZEXT32, id);
+			else if (arena)
+				id = alu64_with_def(scev, id, a, idx, dst);
 
 			return replace_reg(scev, e, dst, id);
 
@@ -1655,6 +1763,227 @@ static int join_added_edges(struct bpf_verifier_env *env, struct bpf_subprog_inf
 }
 
 /*
+ * @id == *@base + *@off (mod 2^*@bits): constant offsets, extensions and partial spills are
+ * stripped, see set_expr_base(). An add with a def holds modulo 2^32 whether its insn is converted
+ * to ALU32 or not, see alu64_with_def(). It holds modulo 2^64 once the main pass has set
+ * prevent_zext: it verified the insn without a pointer to the arena and rejects a state that brings
+ * one. The def dominates every use, and prevent_zext is only ever set: such an add is not checked
+ * again.
+ */
+static void split_const_offset(struct bpf_verifier_env *env, u32 id, u32 *base, s64 *off, u32 *bits)
+{
+	struct scev *scev = env->scev;
+	struct expr *add, *e = &scev->exprs[id];
+
+	*base = e->base;
+	*off = e->off;
+	*bits = e->bits;
+	while (e->arena_add) {
+		add = &scev->exprs[e->arena_add];
+		if (!env->insn_aux_data[add->def.idx].prevent_zext) {
+			*bits = min(*bits, 32);
+			break;
+		}
+		e->arena_add = scev->exprs[add->params[0]].arena_add;
+	}
+}
+
+static bool const_diff_at_header(struct bpf_verifier_env *env, int h, u32 ra, u32 rb, s64 *delta);
+
+/*
+ * @id_a and @id_b are expressions of one env of the loop at @h, or of a subprog: @h is -1. Do they
+ * have a constant difference, @id_b == @id_a + *@delta (mod 2^*@bits)?
+ */
+static bool const_diff(struct bpf_verifier_env *env, int h, u32 id_a, u32 id_b, s64 *delta,
+		       u32 *bits)
+{
+	struct scev *scev = env->scev;
+	u32 base_a, base_b, bits_a, ra, rb;
+	s64 off_a, c;
+
+	split_const_offset(env, id_a, &base_a, &off_a, &bits_a);
+	split_const_offset(env, id_b, &base_b, delta, bits);
+	*delta = (u64)*delta - off_a;
+	*bits = min(*bits, bits_a);
+	/* copies are equal in all bits */
+	if (id_a == id_b && scev->exprs[id_a].is_vn) {
+		*bits = 64;
+		return true;
+	}
+	if (base_a == base_b)
+		return scev->exprs[base_a].is_vn;
+	if (h < 0 || !is_reg(scev, base_a, &ra) || !is_reg(scev, base_b, &rb) ||
+	    !const_diff_at_header(env, h, ra, rb, &c))
+		return false;
+	*delta = (u64)*delta + c;
+	return true;
+}
+
+/*
+ *	old = i = 0; do { i++; if (old > 1021) break; c = buf[old]; old = i; } while (c);
+ * Does @rb == @ra + *@delta hold at the header of the loop at @h in every iteration? It does if it
+ * holds at loop entry, by the env of the enclosing loop at @h, and every backedge preserves it: the
+ * backedge values have this constant difference, or both are the header phi plus one constant.
+ * Loops nest LOOP_STACK_SIZE deep at most, see bpf_flow_place_guards().
+ */
+static bool const_diff_at_header(struct bpf_verifier_env *env, int h, u32 ra, u32 rb, s64 *delta)
+{
+	int outer_header = env->insn_aux_data[h].loop_header;
+	struct env *entry_env = find_loop_env(env->scev, outer_header, h);
+	struct env *header_env = find_header_env(env->scev, h);
+	u32 base_a, base_b, bits_a, bits;
+	s64 off_a, c;
+
+	if (!entry_env || !can_compute_loop_scev(env->insn_aux_data[h].loop) ||
+	    !const_diff(env, outer_header, entry_env->reg2expr[ra], entry_env->reg2expr[rb],
+			delta, &bits) || bits != 64)
+		return false;
+	if (const_diff(env, -1, header_env->reg2expr[ra], header_env->reg2expr[rb], &c, &bits))
+		return bits == 64 && c == *delta;
+	split_const_offset(env, header_env->reg2expr[ra], &base_a, &off_a, &bits_a);
+	split_const_offset(env, header_env->reg2expr[rb], &base_b, &c, &bits);
+	return base_a == REG_EXPR_ID(ra) && base_b == REG_EXPR_ID(rb) && off_a == c &&
+	       bits_a == 64 && bits == 64;
+}
+
+/* The first bytes of a stack slot are its high bits */
+static bool is_big_endian_slot(u32 reg)
+{
+	return IS_ENABLED(CONFIG_CPU_BIG_ENDIAN) && reg >= MAX_BPF_REG;
+}
+
+/*
+ * const_diff() for the SCEV register @reg, which has the expression @id_b. A fill from byte
+ * *@fill_off of a slot reads these bits. On big endian the low bytes of a spill are the last ones,
+ * and a narrow fill from the start of a slot is a right shift, see mk_fill().
+ */
+static bool const_diff_reg(struct bpf_verifier_env *env, int h, u32 id_a, u32 reg, u32 id_b,
+			   u32 *fill_off, s64 *delta, u32 *bits)
+{
+	struct scev *scev = env->scev;
+	struct expr *e;
+	u32 x;
+	s64 k;
+
+	*fill_off = 0;
+	if (const_diff(env, h, id_a, id_b, delta, bits)) {
+		if (is_big_endian_slot(reg))
+			*fill_off = expr_spill_size(scev, id_b, &x) - *bits / BITS_PER_BYTE;
+		return true;
+	}
+	if (!is_big_endian_slot(reg) || !scev->exprs[id_b].is_vn)
+		return false;
+	split_const_offset(env, id_a, &x, delta, bits);
+	e = &scev->exprs[x];
+	if ((e->op != BPF_RSH && e->op != BPF_ARSH) || e->def.set || e->params[0] != id_b ||
+	    !is_imm(scev, e->params[1], &k) || (k != 32 && k != 48 && k != 56))
+		return false;
+	*delta = -(u64)*delta;
+	*bits = min_t(u32, *bits, 64 - k);
+	*fill_off = (64 - k - *bits) / BITS_PER_BYTE;
+	return true;
+}
+
+/*
+ *	n = bpf_get_stack(..); m = n; if (n < 0) ..; use(m);
+ * The main pass refines the registers that the conditional jump at @idx tests. Find the live SCEV
+ * registers that are linked to one of them in @e, the env before the jump, and keep them with their
+ * expressions: what bpf_scev_next_linked_reg() needs of @e.
+ */
+static int find_linked_regs(struct bpf_verifier_env *env, struct env *e, int h, int idx)
+{
+	struct bpf_insn_aux_data *aux = &env->insn_aux_data[idx];
+	struct bpf_insn *insn = &env->prog->insnsi[idx];
+	u32 dst = e->reg2expr[insn->dst_reg], src = dst;
+	struct insn_envs *envs = env->scev->envs[idx];
+	struct scev *scev = env->scev;
+	u32 r, id, fill_off, base, base_dst, base_src, bits, cap, tested = 0;
+	u32 first = scev->linked_cnt;
+	DECLARE_BITMAP(live, REGS_NUM) = {};
+	void *tmp;
+	s64 delta;
+
+	if (!bpf_insn_is_cond_jump(insn->code) || BPF_OP(insn->code) == BPF_JCOND)
+		return 0;
+	if (BPF_SRC(insn->code) == BPF_X)
+		src = e->reg2expr[insn->src_reg];
+	bitmap_copy(live, aux->live_stack_before, MAX_BPF_STACK_SLOTS);
+	bitmap_shift_left(live, live, MAX_BPF_REG, REGS_NUM);
+	live[0] |= aux->live_regs_before;
+	split_const_offset(env, dst, &base_dst, &delta, &bits);
+	split_const_offset(env, src, &base_src, &delta, &bits);
+	for_each_set_bit(r, live, REGS_NUM) {
+		id = e->reg2expr[r];
+		/* most are not linked */
+		split_const_offset(env, id, &base, &delta, &bits);
+		if (base != base_dst && base != base_src && (h < 0 || !is_op(scev, base, REG)) &&
+		    !is_big_endian_slot(r))
+			continue;
+		if (!const_diff_reg(env, h, dst, r, id, &fill_off, &delta, &bits) &&
+		    (src == dst || !const_diff_reg(env, h, src, r, id, &fill_off, &delta, &bits)))
+			continue;
+		if (scev->linked_cnt == scev->linked_cap) {
+			cap = max(scev->linked_cap * 2, 16);
+			tmp = kvrealloc(scev->linked, array_size(cap, sizeof(*scev->linked)),
+					GFP_KERNEL_ACCOUNT);
+			if (!tmp)
+				return -ENOMEM;
+			scev->linked = tmp;
+			scev->linked_cap = cap;
+		}
+		tested += r == insn->dst_reg || (src != dst && r == insn->src_reg);
+		scev->linked[scev->linked_cnt].reg = r;
+		scev->linked[scev->linked_cnt++].id = id;
+	}
+	/* nothing but the tested registers */
+	if (scev->linked_cnt - first == tested) {
+		scev->linked_cnt = first;
+		return 0;
+	}
+	if (!envs) {
+		envs = kzalloc(sizeof(*envs), GFP_KERNEL_ACCOUNT);
+		if (!envs)
+			return -ENOMEM;
+		scev->envs[idx] = envs;
+	}
+	envs->linked_first = first;
+	envs->linked_cnt = scev->linked_cnt - first;
+	return 0;
+}
+
+/*
+ * Find the next SCEV register that is linked to @regno at the conditional jump at @insn_idx: on
+ * every path to the jump *@linked_regno == @regno + *@delta (mod 2^*@bits). It is live there and of
+ * the same frame. It is a register, or MAX_BPF_REG + the index of a stack slot: a fill from byte
+ * *@fill_off of the slot reads these bits. *@pos is the position of the search, 0 at first. False:
+ * no more links are known. Types are not known here: the caller checks them in its state.
+ */
+bool bpf_scev_next_linked_reg(struct bpf_verifier_env *env, int insn_idx, u32 regno, u32 *pos,
+			      u32 *linked_regno, u32 *fill_off, s64 *delta, u32 *bits)
+{
+	struct insn_envs *envs = env->scev->envs[insn_idx];
+	int h = bpf_loop_at_index(env, insn_idx);
+	struct scev_linked_reg *linked;
+	u32 i;
+
+	if (!envs || !envs->linked_cnt)
+		return false;
+	linked = &env->scev->linked[envs->linked_first];
+	/* registers come first */
+	for (i = 0; linked[i].reg != regno; i++)
+		if (i + 1 == envs->linked_cnt || linked[i].reg > regno)
+			return false;
+	for (; *pos < envs->linked_cnt; ++*pos) {
+		*linked_regno = linked[*pos].reg;
+		if (*pos != i &&
+		    const_diff_reg(env, h, linked[i].id, *linked_regno, linked[*pos].id, fill_off,
+				   delta, bits))
+			return true;
+	}
+	return false;
+}
+
+/*
  * @cur_header and @first are a loop header. Or -1 and the first insn of a subprog: the subprog is
  * the outermost loop, which runs once. (REG r) is the entry value of r, the loops in it are single
  * instructions.
@@ -1778,6 +2107,12 @@ static int compute_scev_for_loop(struct bpf_verifier_env *env, int cur_header, i
 								cur_loop->store_base_regs);
 					collect_tested_regs(env, cur_env, idx,
 							    cur_loop->tested_regs);
+				}
+				/* the others wait for the envs of all loop headers */
+				if (!aux[idx].need_scev) {
+					err = find_linked_regs(env, cur_env, -1, idx);
+					if (err)
+						goto out;
 				}
 				err = transfer(env, cur_env, idx);
 				if (err)
@@ -1920,12 +2255,19 @@ static int simplify(struct scev *scev, u32 id)
 	if (is_add(scev, id, &l, &r) && is_imm(scev, r, &imm1) && !imm1)
 		return l;
 
-	/* (+ (+ x imm) imm) -> (+ x imm) */
+	/* (+ (+ x imm) imm) -> (+ x imm). Not through a def, see alu64_with_def() */
 	if (is_add(scev, id, &l, &r) &&
 	    is_imm(scev, r, &imm2) &&
 	    is_add(scev, l, &a, &b) &&
-	    is_imm(scev, b, &imm1))
+	    is_imm(scev, b, &imm1) && !scev->exprs[l].def.set)
 		return expr2(scev, BPF_ADD, a, imm_expr(scev, (s64)((u64)imm1 + (u64)imm2)));
+
+	/* 'r1 <<= 32; r1 >>= 32' is (u32)r1 for cpu v1 and v2: (>> (<< x 32) 32) -> (zext32 x) */
+	if (is_binop(scev, BPF_RSH, id, &l, &r) &&
+	    is_imm(scev, r, &imm2) && imm2 == 32 &&
+	    is_binop(scev, BPF_LSH, l, &a, &b) &&
+	    is_imm(scev, b, &imm1) && imm1 == 32 && !scev->exprs[l].def.set)
+		return expr1(scev, ZEXT32, a);
 
 	/* (+ (linear base slope) imm) -> (linear (+ base imm) slope) */
 	if (is_add(scev, id, &l, &r) &&
@@ -1983,6 +2325,17 @@ static int simplify(struct scev *scev, u32 id)
 	return id;
 }
 
+static int instantiate_header_scevs(struct scev *scev, u32 id, void *priv)
+{
+	u32 reg, *reg2scev = priv;
+
+	/* (reg r) -> ... equation at header ... */
+	if (is_reg(scev, id, &reg))
+		return reg2scev[reg];
+	/* keep expression shapes */
+	return id;
+}
+
 static int compute_header_scevs(struct bpf_verifier_env *env, struct env *header_env)
 {
 	struct scev *scev = env->scev;
@@ -2006,6 +2359,12 @@ static int compute_header_scevs(struct bpf_verifier_env *env, struct env *header
 	 */
 	for (ra = 0; ra < REGS_NUM; ra++) {
 		ra_expr = header_env->reg2expr[ra];
+		/* Constructed again it has no defs, see alu64_with_def(): they hide the shape */
+		if (env->prog->aux->arena)
+			ra_expr = transform_expr_once(scev, 0, ra_expr, scev->identity_env.reg2expr,
+						      instantiate_header_scevs);
+		if (ra_expr < 0)
+			return ra_expr;
 		/* rA = (+ rA IMM) -> (linear rA IMM) */
 		if (is_add(scev, ra_expr, &l, &r) &&
 		    is_reg(scev, l, &rb) &&
@@ -2136,17 +2495,6 @@ static void scev_compute_linear_regs(struct scev *scev, struct bpf_loop *loop,
 	}
 }
 
-static int instantiate_header_scevs(struct scev *scev, u32 id, void *priv)
-{
-	u32 reg, *reg2scev = priv;
-
-	/* (reg r) -> ... equation at header ... */
-	if (is_reg(scev, id, &reg))
-		return reg2scev[reg];
-	/* keep expression shapes */
-	return id;
-}
-
 static int compute_insn_scevs(struct bpf_verifier_env *env, struct env *eheader, struct env *einsn)
 {
 	struct scev *scev = env->scev;
@@ -2196,6 +2544,27 @@ static int log_scevs(struct bpf_verifier_env *env)
 	return 0;
 }
 
+/*
+ * A slice comes from a call that may write to the buffer: the kfunc, or a subprog that calls it.
+ * See expr_is_vn().
+ */
+static void find_slice_slots(struct bpf_verifier_env *env)
+{
+	struct bpf_insn *insn = env->prog->insnsi;
+	struct scev *scev = env->scev;
+	bool slices = false;
+	u32 i, spi;
+
+	for (i = 0; i < env->prog->len; i++)
+		slices |= bpf_is_dynptr_slice_rdwr_kfunc(&insn[i]);
+	for (i = 0; slices && i < env->prog->len; i++)
+		if (BPF_CLASS(insn[i].code) == BPF_JMP && BPF_OP(insn[i].code) == BPF_CALL)
+			bitmap_or(scev->slice_slots, scev->slice_slots, bpf_may_write_mask(env, i),
+				  MAX_BPF_STACK_SLOTS);
+	for_each_set_bit(spi, scev->slice_slots, MAX_BPF_STACK_SLOTS)
+		scev->exprs[REG_EXPR_ID(MAX_BPF_REG + spi)].is_vn = false;
+}
+
 int bpf_compute_scev(struct bpf_verifier_env *env)
 {
 	struct bpf_insn_aux_data *aux = env->insn_aux_data;
@@ -2204,6 +2573,7 @@ int bpf_compute_scev(struct bpf_verifier_env *env)
 	int cnt = env->cfg.cur_postorder;
 	int i, idx, err, header;
 
+	find_slice_slots(env);
 	mark_latches(env);
 	/*
 	 * Visit loop headers in postorder, to guarantee that scevs
@@ -2232,6 +2602,9 @@ int bpf_compute_scev(struct bpf_verifier_env *env)
 		idx = postorder[i];
 		if (!aux[idx].need_scev)
 			continue;
+		if (signal_pending(current))
+			return -EAGAIN;
+		cond_resched();
 		header = bpf_loop_at_index(env, idx);
 		err = aux[idx].loop
 		      ? compute_header_scevs(env, find_header_env(scev, header))
@@ -2243,6 +2616,10 @@ int bpf_compute_scev(struct bpf_verifier_env *env)
 		if (aux[idx].loop)
 			scev_compute_linear_regs(scev, aux[idx].loop,
 						 find_header_env(scev, header));
+		err = find_linked_regs(env, aux[idx].loop ? &scev->identity_env :
+				       find_loop_env(scev, header, idx), header, idx);
+		if (err)
+			return err;
 	}
 
 	/* Now it's known which jumps test a counter: the places of a back edge are for them */
@@ -2257,6 +2634,17 @@ int bpf_compute_scev(struct bpf_verifier_env *env)
 	}
 
 	return 0;
+}
+
+/* Are all slots of [off, off + size) in slice_slots? */
+bool bpf_scev_in_slice_slots(struct bpf_verifier_env *env, int off, u32 size)
+{
+	int spi;
+
+	for (spi = bpf_get_spi(off + size - 1); spi <= bpf_get_spi(off); spi++)
+		if (!test_bit(spi, env->scev->slice_slots))
+			return false;
+	return true;
 }
 
 void bpf_free_scev(struct bpf_verifier_env *env)
@@ -2281,6 +2669,7 @@ void bpf_free_scev(struct bpf_verifier_env *env)
 	kvfree(scev->worklist.data);
 	kvfree(scev->envs);
 	kvfree(scev->exprs);
+	kvfree(scev->linked);
 	kvfree(scev->discovered);
 	kfree(scev);
 	env->scev = NULL;
@@ -2297,6 +2686,7 @@ int bpf_init_scev(struct bpf_verifier_env *env)
 	env->scev = scev;
 	bpf_mark_reg_known_scalar(&scev->zero_reg, 0);
 	bpf_mark_reg_unknown(&scev->unknown_reg);
+	setup_initial_loop_env(&scev->identity_env);
 	if (grow_exprs(scev, roundup_pow_of_two(REG_EXPR_ID(REGS_NUM))))
 		goto nomem;
 	scev->exprs[UNKNOWN_EXPR_ID] = (struct expr){ .op = UNKNOWN };
@@ -2304,6 +2694,8 @@ int bpf_init_scev(struct bpf_verifier_env *env)
 	for (r = 0; r < REGS_NUM; r++)
 		scev->exprs[REG_EXPR_ID(r)] = (struct expr){ .op = REG, .is_vn = true,
 							     .params = { r, 0 } };
+	for (r = 0; r < REG_EXPR_ID(REGS_NUM); r++)
+		set_expr_base(scev, &scev->exprs[r], r);
 	scev->exprs_cnt = REG_EXPR_ID(REGS_NUM);
 	scev->envs = kvcalloc(env->prog->len, sizeof(*scev->envs), GFP_KERNEL_ACCOUNT);
 	scev->discovered = kvcalloc(env->prog->len, sizeof(*scev->discovered), GFP_KERNEL_ACCOUNT);
@@ -2372,6 +2764,10 @@ static struct bpf_reg_state *scev_reg_for_spill32(struct bpf_func_state *st, u32
 {
 	struct bpf_stack_state *stack = scev_regno_to_stack(st, r);
 
+#ifdef __BIG_ENDIAN
+	/* a 32-bit spill is in the upper 32 bits of the slot */
+	return NULL;
+#endif
 	if (!stack || bpf_spill_size(stack) != 4 || stack->spilled_ptr.type != SCALAR_VALUE)
 		return NULL;
 	return &stack->spilled_ptr;

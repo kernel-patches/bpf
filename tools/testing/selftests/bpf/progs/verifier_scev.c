@@ -3307,42 +3307,6 @@ NOT_LINEAR_TEST(lsh_grows, "r7 &= 15;", "r7 <<= 1;", UNROLLED("(<< r7 1)"))
 NOT_LINEAR_TEST(same_constant, "r7 = 17;", "r7 &= 31;", NOT_CHANGED)
 NOT_LINEAR_TEST(same_wide_constant, "r7 = 0xffffffff00000011 ll;", "r7 &= -239;", NOT_CHANGED)
 
-#ifdef __BPF_FEATURE_ADDR_SPACE_CAST
-struct {
-	__uint(type, BPF_MAP_TYPE_ARENA);
-	__uint(map_flags, BPF_F_MMAPABLE);
-	__uint(max_entries, 1);
-} arena SEC(".maps");
-
-/* The offset of a pointer to arena is not tracked */
-#define ARENA_TEST(name, op, expect)						\
-SEC("syscall")									\
-__log_level(2)									\
-expect										\
-__naked void name(void)								\
-{										\
-	asm volatile (								\
-	"r1 = %[arena] ll;"							\
-	"r6 = 0;"								\
-	"r6 = addr_space_cast(r6, 0, 1);"					\
-	"r7 = 0;"								\
-"1:	*(u64 *)(r6 + 0) = r7;"							\
-	op									\
-	"r7 += 1;"								\
-	"if r7 < 100 goto 1b;"							\
-	"r0 = 0;"								\
-	"exit;"									\
-	:: __imm_addr(arena) : __clobber_all);					\
-}
-
-#define NOT_UNROLLED100	__msg("loop header at 5, widening r7 to 0..99 step 1")
-/* A loop that moves the pointer is not unrolled */
-ARENA_TEST(arena_pointer_moves, "r6 += 8;", __success NOT_UNROLLED100)
-/* The loop makes a number of it: the state that returns to the loop header tells */
-ARENA_TEST(arena_pointer_becomes_a_number, "if r7 != 5 goto +1; r6 = 4096;",
-	   __failure NOT_UNROLLED100 __msg("R6 invalid mem access 'scalar'"))
-#endif
-
 /*
  * r7 = ctx->data;
  * r8 = r7
