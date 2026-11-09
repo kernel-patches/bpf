@@ -154,7 +154,7 @@ static int ti_qspi_setup(struct spi_device *spi)
 
 	ret = pm_runtime_resume_and_get(qspi->dev);
 	if (ret < 0) {
-		dev_err(qspi->dev, "pm_runtime_get_sync() failed\n");
+		dev_err(qspi->dev, "pm_runtime_resume_and_get() failed\n");
 		return ret;
 	}
 
@@ -843,6 +843,7 @@ static int ti_qspi_probe(struct platform_device *pdev)
 	if (IS_ERR(qspi->fclk)) {
 		ret = PTR_ERR(qspi->fclk);
 		dev_err(&pdev->dev, "could not get clk: %d\n", ret);
+		return ret;
 	}
 
 	pm_runtime_use_autosuspend(&pdev->dev);
@@ -912,7 +913,6 @@ static void ti_qspi_remove(struct platform_device *pdev)
 
 	spi_unregister_controller(qspi->host);
 
-	pm_runtime_put_sync(&pdev->dev);
 	pm_runtime_disable(&pdev->dev);
 
 	ti_qspi_dma_cleanup(qspi);
