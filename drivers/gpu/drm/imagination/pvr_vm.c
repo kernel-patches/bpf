@@ -984,8 +984,14 @@ pvr_static_data_areas_get(const struct pvr_device *pvr_dev,
 		return err;
 
 	if (!query.static_data_areas.array) {
+		u32 *stride = &query.static_data_areas.stride;
+
+		if (!query.static_data_areas.stride)
+			*stride = DRM_PVR_STATIC_DATA_AREA_STRIDE_MIN_SUPPORTED;
+		else
+			*stride = sizeof(struct drm_pvr_static_data_area);
+
 		query.static_data_areas.count = ARRAY_SIZE(static_data_areas);
-		query.static_data_areas.stride = sizeof(struct drm_pvr_static_data_area);
 		goto copy_out;
 	}
 
@@ -1024,8 +1030,12 @@ pvr_heap_info_get(const struct pvr_device *pvr_dev,
 		return err;
 
 	if (!query.heaps.array) {
+		if (!query.heaps.stride)
+			query.heaps.stride = DRM_PVR_HEAP_STRIDE_MIN_SUPPORTED;
+		else
+			query.heaps.stride = sizeof(struct drm_pvr_heap);
+
 		query.heaps.count = ARRAY_SIZE(pvr_heaps);
-		query.heaps.stride = sizeof(struct drm_pvr_heap);
 		goto copy_out;
 	}
 

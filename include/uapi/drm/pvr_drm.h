@@ -336,9 +336,19 @@ struct drm_pvr_heap {
  */
 struct drm_pvr_dev_query_heap_info {
 	/**
-	 * @heaps: Array of &struct drm_pvr_heap. If pointer is NULL, the count
-	 * and stride will be updated with those known to the driver version, to
-	 * facilitate allocation by the caller.
+	 * @heaps: Array of &struct drm_pvr_heap. To facilitate allocation by
+	 * the caller:
+	 *
+	 * - if &heaps.array is NULL, the count will be updated with the count
+	 *   of heaps known to the kernel driver.
+	 *
+	 * - If &heaps.array is NULL and &heaps.stride is set by the caller, the
+	 *   stride will be updated to the size of &struct drm_pvr_heap known to
+	 *   the kernel driver.
+	 *
+	 * - If &heaps.array is NULL and &heaps.stride is zero, the stride will
+	 *   be updated with a value that is the minimum supported by the kernel
+	 *   and this may differ based on the GPU ID.
 	 */
 	struct drm_pvr_obj_array heaps;
 };
@@ -444,9 +454,20 @@ struct drm_pvr_static_data_area {
  */
 struct drm_pvr_dev_query_static_data_areas {
 	/**
-	 * @static_data_areas: Array of &struct drm_pvr_static_data_area. If
-	 * pointer is NULL, the count and stride will be updated with those
-	 * known to the driver version, to facilitate allocation by the caller.
+	 * @static_data_areas: Array of &struct drm_pvr_static_data_area. To
+	 * facilitate allocation by the caller:
+	 *
+	 * - if &static_data_areas.array is NULL, the count will be updated with
+	 *   the count of static areas known to the kernel driver.
+	 *
+	 * - If &static_data_areas.array is NULL and &static_data_areas.stride
+	 *   is set by the caller, the stride will be updated to the size of
+	 *   &struct drm_pvr_static_data_area known to the kernel driver.
+	 *
+	 * - If &static_data_areas.array is NULL and &static_data_areas.stride
+	 *   is zero, the stride will be updated with a value that is the
+	 *   minimum supported by the kernel and this may differ based on the
+	 *   GPU ID.
 	 */
 	struct drm_pvr_obj_array static_data_areas;
 };

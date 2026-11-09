@@ -72,6 +72,27 @@ int pvr_set_uobj_array(const struct drm_pvr_obj_array *out, u32 min_stride, u32 
 	PVR_UOBJ_DECL(struct drm_pvr_dev_query_fw_info, _padding_4) \
 	)
 
+/*
+ * Minimum supported values that are fetched by DRM_PVR_DEV_QUERY_HEAP_INFO_GET
+ * and DRM_PVR_DEV_QUERY_STATIC_DATA_AREAS_GET ioctl calls from userspace.
+ *
+ * These values may depend on the GPU hardware and they must not change for
+ * cores that are already supported. However, new cores (and architectures)
+ * may have different minimum values and they should be introduced
+ * respecting the semantics described in the UAPI for Rogue.
+ */
+
+/* Size of the first released version of struct drm_pvr_heap for Rogue cores. */
+#define DRM_PVR_HEAP_STRIDE_MIN_SUPPORTED \
+	PVR_UOBJ_MIN_SIZE_INTERNAL(struct drm_pvr_heap, page_size_log2)
+
+/*
+ * Size of the first released version of struct drm_pvr_static_data_area for
+ * Rogue cores.
+ */
+#define DRM_PVR_STATIC_DATA_AREA_STRIDE_MIN_SUPPORTED \
+	PVR_UOBJ_MIN_SIZE_INTERNAL(struct drm_pvr_static_data_area, offset)
+
 /**
  * PVR_UOBJ_GET() - Copies from _src_usr_ptr to &_dest_obj.
  * @_dest_obj: The destination container object in kernel space.
