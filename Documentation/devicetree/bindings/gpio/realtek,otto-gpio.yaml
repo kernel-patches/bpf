@@ -15,6 +15,7 @@ description: |
   of two banks of 32 GPIOs. These GPIOs can generate edge-triggered interrupts.
   Each bank's interrupts are cascased into one interrupt line on the parent
   interrupt controller, if provided.
+  The Arm-based RTL9311B has the same controller, with one bank.
   This binding allows defining a single bank in the devicetree. The interrupt
   controller is not supported on the fallback compatible name, which only
   allows for GPIO port use.
@@ -24,14 +25,19 @@ properties:
     pattern: "^gpio@[0-9a-f]+$"
 
   compatible:
-    items:
-      - enum:
-          - realtek,rtl8380-gpio
-          - realtek,rtl8390-gpio
-          - realtek,rtl9300-gpio
-          - realtek,rtl9310-gpio
-          - realtek,rtl9607-gpio
-      - const: realtek,otto-gpio
+    oneOf:
+      - items:
+          - enum:
+              - realtek,rtl8380-gpio
+              - realtek,rtl8390-gpio
+              - realtek,rtl9300-gpio
+              - realtek,rtl9310-gpio
+              - realtek,rtl9607-gpio
+          - const: realtek,otto-gpio
+      - items:
+          - const: realtek,rtl9311b-gpio
+          - const: realtek,rtl9310-gpio
+          - const: realtek,otto-gpio
 
   reg: true
 
