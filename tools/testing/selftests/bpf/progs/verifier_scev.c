@@ -1170,6 +1170,50 @@ RANGE_TEST(range_ne_step2,  "",  0,  3,     2,   3,  8,  PRE("=="),   NO_COUNT)
 RANGE_TEST(range_ne_behind, "",  0,  4,     1,   3,  8,  PRE("=="),   NO_COUNT)
 
 /*
+ *    char buf[8];
+ *    for (int i = first; ...; i++)
+ *        sum += buf[i - first];
+ *
+ * GCC adds in 32 bits and keeps the sign extension of the result: a sign-extended 32-bit induction
+ * variable. r6 or fp-16 is i, r7 is first, r9 counts the iterations. r8 is 0, which the verifier
+ * doesn't know. In place of an out-of-bounds access to buf r5 is read, which is not initialized.
+ */
+#define SEXT32_TEST(name, _first, loop, expect)							\
+SEC("socket")											\
+__log_level(2)											\
+expect												\
+__naked void name(void)										\
+{												\
+	asm volatile (										\
+		"r6 = %[first] ll; r7 = r6; r8 = 0; r9 = 0;"					\
+		"*(u64 *)(r10 - 8) = r8; lock *(u64 *)(r10 - 8) += r8; r8 = *(u64 *)(r10 - 8);"	\
+		"*(u64 *)(r10 - 16) = r6;"							\
+		loop										\
+		"2: r0 = r9; exit;"								\
+		:										\
+		: __imm_const(first, _first)							\
+		: __clobber_all);								\
+}
+#define BUF(i)		"r9 += 1; r2 = " i "; r2 -= r7; if r2 <= 7 goto +1; r0 = *(u64 *)(r5 + 0);"
+#define OOB		__failure __msg("R5 !read_ok")
+#define ALL_OF_S32	"0xffffffff80000000..0x7fffffff "
+#define SEXT32_INC	"w1 = w6; w1 += 1; r6 = (s32)r1;"
+#define SEXT32_LOOP(bound)	"1:" BUF("r6") SEXT32_INC "if w1 != " #bound " goto 1b;"
+
+SEXT32_TEST(sext32_iv, -4, SEXT32_LOOP(4), __success __retval(8)
+	    __msg("  r6=(sext32 (+ r6 1)) / (sext32 (linear r6 1))")
+	    __msg("header_count is 8 ") __msg("widening r6 to -4..3 "))
+SEXT32_TEST(sext32_iv_oob, -4, SEXT32_LOOP(5), OOB)
+/* i wraps from INT32_MAX to INT32_MIN. The latch tests 0x7ffffffd .. 0x80000004. */
+SEXT32_TEST(sext32_iv_wraps, INT32_MAX - 3, SEXT32_LOOP(0x80000004),
+	    __msg("header_count is 8 ") __msg("widening r6 to " ALL_OF_S32) OOB)
+/* 'i < n' implies the unsigned range 1 .. 0x80000000. Its last value is negative in r6. */
+SEXT32_TEST(sext32_iv_unsigned_bound, 0,
+	    "r8 &= 1; r6 += r8; r4 = 0x80000001 ll;"
+	    "1:" SEXT32_INC "if w1 < w4 goto 1b; if r6 s>= 0 goto 2f; r0 = *(u64 *)(r5 + 0);",
+	    __msg("widening r6 to " ALL_OF_S32) OOB)
+
+/*
  * Two back edges:
  *
  *    do {
@@ -3197,6 +3241,14 @@ RANGE_TEST(spill32_first_is_precise, "", 0, 0, 1, 0, 1,
 RANGE_TEST(spill32_first_is_64bit, "", 0, 0, 1, 5, 5,
 	   "*(u64 *)(r10 - 8) = r6; 1:" LIMIT_ITERATIONS SPILL32_INC "if w1 != w7 goto 1b;",
 	   SPILL32_COUNTED(5, "0..4"))
+/* A 64-bit spill of i. Its upper 32 bits are dead: the low 32 bits are the induction variable. */
+#define SEXT32_SPILL_LOOP(bound)								\
+	"1:" BUF("*(u32 *)(r10 - 16)") "w1 = *(u32 *)(r10 - 16); w1 += 1; r3 = (s32)r1;"	\
+	"*(u64 *)(r10 - 16) = r3; if w1 != " #bound " goto 1b;"
+SEXT32_TEST(sext32_iv_hi32_dead, 0, SEXT32_SPILL_LOOP(8), __success __retval(8)
+	    __msg("  *fp-16=(sext32 (+ *fp-16 1)) / (spill32 (linear (zext32 *fp-16) 1))")
+	    __msg("header_count is 8 ") __msg("widening *fp-16 to 0..7 "))
+SEXT32_TEST(sext32_iv_hi32_dead_oob, 0, SEXT32_SPILL_LOOP(9), OOB)
 /* The counter makes the address of a spill. Such a loop is not summarized, as with a register. */
 PARTIAL_SPILL_TEST(spill32_is_a_stack_offset, u32, 4,
 	"can't widen *fp-8, expr is (spill32 (+ *fp-8 8)), requires exact stack-offset tracking",
