@@ -66,6 +66,7 @@ struct mlx5e_tc_update_priv {
 struct mlx5_nic_flow_attr {
 	u32 flow_tag;
 	u32 hairpin_tirn;
+	u32 rx_tirn;
 	struct mlx5_flow_table *hairpin_ft;
 };
 

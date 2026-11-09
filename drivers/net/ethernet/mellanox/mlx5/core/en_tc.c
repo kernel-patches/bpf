@@ -1267,6 +1267,10 @@ mlx5e_add_offloaded_nic_rule(struct mlx5e_priv *priv,
 		dest[dest_ix].type = MLX5_FLOW_DESTINATION_TYPE_TIR;
 		dest[dest_ix].tir_num = nic_attr->hairpin_tirn;
 		dest_ix++;
+	} else if (nic_attr->rx_tirn) {
+		dest[dest_ix].type = MLX5_FLOW_DESTINATION_TYPE_TIR;
+		dest[dest_ix].tir_num = nic_attr->rx_tirn;
+		dest_ix++;
 	} else if (attr->action & MLX5_FLOW_CONTEXT_ACTION_FWD_DEST) {
 		dest[dest_ix].type = MLX5_FLOW_DESTINATION_TYPE_FLOW_TABLE;
 		if (attr->dest_chain) {
