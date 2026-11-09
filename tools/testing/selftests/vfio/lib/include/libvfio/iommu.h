@@ -52,6 +52,15 @@ bool iommu_mode_is_available(const char *iommu_mode);
  */
 const char *iommu_mode_unavailable_msg(const char *iommu_mode);
 
+/* Returns a comma-separated list of the names of all IOMMU modes. */
+const char *iommu_mode_names_all(void);
+
+/*
+ * Returns a comma-separated list of the names of the IOMMU modes that are
+ * available on the current system, or "none" if no IOMMU mode is available.
+ */
+const char *iommu_mode_names_available(void);
+
 int __iommu_map(struct iommu *iommu, struct dma_region *region);
 
 static inline void iommu_map(struct iommu *iommu, struct dma_region *region)

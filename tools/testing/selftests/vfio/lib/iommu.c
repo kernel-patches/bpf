@@ -105,6 +105,38 @@ static const struct iommu_mode *iommu_mode_detect(void)
 	return NULL;
 }
 
+static const char *iommu_mode_names(bool include_unavailable)
+{
+	static char all_names[256];
+	static char avl_names[sizeof(all_names)];
+	char *names = include_unavailable ? all_names : avl_names;
+	int i, len = 0;
+
+	if (names[0])
+		return names;
+
+	for (i = 0; i < ARRAY_SIZE(iommu_modes); i++) {
+		if (!include_unavailable && !iommu_mode_probe(&iommu_modes[i]))
+			continue;
+
+		len += snprintf(names + len, sizeof(all_names) - len, "%s%s",
+				names[0] ? ", " : "", iommu_modes[i].name);
+		VFIO_ASSERT_LT(len, (int)sizeof(all_names));
+	}
+
+	return names[0] ? names : "none";
+}
+
+const char *iommu_mode_names_all(void)
+{
+	return iommu_mode_names(true);
+}
+
+const char *iommu_mode_names_available(void)
+{
+	return iommu_mode_names(false);
+}
+
 /*
  * Returns the IOMMU mode with the given name, or if iommu_mode is NULL, the
  * most preferred IOMMU mode that is available (or NULL if none).
@@ -123,7 +155,8 @@ static const struct iommu_mode *iommu_mode_lookup(const char *iommu_mode)
 		return &iommu_modes[i];
 	}
 
-	VFIO_FAIL("Unrecognized IOMMU mode: %s\n", iommu_mode);
+	VFIO_FAIL("Unrecognized IOMMU mode '%s'.  Known modes: %s.\n",
+		  iommu_mode, iommu_mode_names_all());
 }
 
 bool iommu_mode_is_available(const char *iommu_mode)
@@ -136,13 +169,14 @@ bool iommu_mode_is_available(const char *iommu_mode)
 
 const char *iommu_mode_unavailable_msg(const char *iommu_mode)
 {
-	static char msg[128];
+	static char msg[512];
 
-	if (!iommu_mode)
+	if (!iommu_mode || !iommu_mode_detect())
 		return NO_IOMMU_MODE_AVAILABLE_MSG;
 
-	snprintf(msg, sizeof(msg), "IOMMU mode '%s' is not available",
-		 iommu_mode);
+	snprintf(msg, sizeof(msg),
+		 "IOMMU mode '%s' is not available.  Available modes: %s.",
+		 iommu_mode, iommu_mode_names_available());
 	return msg;
 }
 
