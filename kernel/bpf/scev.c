@@ -56,7 +56,8 @@ enum expr_op {
  * An SSA name for a value that no expression describes: the def of the SCEV register 'reg'
  * - by the insn at 'idx'. An insn that may write defines too (may_def in liveness.c). A nested loop
  *   defines at its header what it leaves.
- * - by a phi before the insn at 'idx': a join point, a loop header.
+ * - by a phi before the insn at 'idx': a join point, a loop header, in an unsupported loop the
+ *   start of a basic block.
  * Without its backedges and with nested loops collapsed the body of a loop is acyclic: an insn
  * executes at most once per iteration, so a def is one value per iteration. A name is unique within
  * the env of one loop.
@@ -650,7 +651,8 @@ static bool expr_next(struct scev *scev, u32 *id, u32 *order)
  *	%fp-8.8?		insn 8 may write fp-8. The value is UNKNOWN, '?' without a def
  *	%r8.7=phi(1, 2)		the phi of r8 before insn 7
  *	%r0.7=phi(_)		a phi of distinct OPAQUE values
- *	%r6.9=phi(?)		a phi of distinct UNKNOWN values, or of more than 8 values
+ *	%r6.9=phi(?)		a phi of distinct UNKNOWN values, or of more than 8 values, or
+ *				a live-in of a basic block
  *	%r2.12=(+ x 4)		insn 12 defines r2, see alu64_with_def()
  *	%r2.25=phi((+ x 4))	two adds of one shape, each may have been converted to ALU32:
  *				the phi is not (+ x 4)
@@ -1997,6 +1999,49 @@ static int find_linked_regs(struct bpf_verifier_env *env, struct env *e, int h, 
 }
 
 /*
+ *	for (..) { if (i >= n) ..; pod = actor->pods[i]; .. }
+ * with i on the stack is 'fill, test, fill again'. clang can emit an irreducible loop for it.
+ * Unsupported loops, see can_compute_loop_scev(), get local value numbering: a live-in of a basic
+ * block is a phi whose operands are not known, %r6.9=phi(?).
+ */
+static int find_linked_regs_in_bb(struct bpf_verifier_env *env)
+{
+	struct bpf_insn_aux_data *aux = env->insn_aux_data;
+	struct bpf_insn *insn = env->prog->insnsi;
+	bool bb_start = true;
+	int i, h, err = 0;
+	struct env *e;
+	u32 r;
+
+	e = kzalloc(sizeof(*e), GFP_KERNEL_ACCOUNT);
+	if (!e)
+		return -ENOMEM;
+	for (i = 0; i < env->prog->len && !err; i += bpf_is_ldimm64(&insn[i]) ? 2 : 1) {
+		h = bpf_loop_at_index(env, i);
+		if (h < 0 || can_compute_loop_scev(aux[h].loop)) {
+			bb_start = true;
+			continue;
+		}
+		if (signal_pending(current))
+			err = -EAGAIN;
+		cond_resched();
+		for (r = 0; bb_start && r < REGS_NUM && !err; r++) {
+			e->reg2expr[r] = UNKNOWN_EXPR_ID;
+			if (reg_alive_at(env, r, i))
+				err = replace_reg(env->scev, e, r,
+						  expr_with_def(env->scev, UNKNOWN_EXPR_ID,
+								phi_def(i, r)));
+		}
+		err = err ?: find_linked_regs(env, e, -1, i);
+		err = err ?: transfer(env, e, i);
+		err = err ?: reset_scevs_at_indirect_writes(env, e, i);
+		bb_start = aux[i].bb_end || bpf_insn_successors(env, i)->cnt != 1;
+	}
+	kfree(e);
+	return err;
+}
+
+/*
  * Find the next SCEV register that is linked to @regno at the conditional jump at @insn_idx: on
  * every path to the jump *@linked_regno == @regno + *@delta (mod 2^*@bits). It is live there and of
  * the same frame. It is a register, or MAX_BPF_REG + the index of a stack slot: a fill from byte
@@ -2715,6 +2760,9 @@ int bpf_compute_scev(struct bpf_verifier_env *env)
 		if (err)
 			return err;
 	}
+	err = find_linked_regs_in_bb(env);
+	if (err)
+		return err;
 
 	/*
 	 * Compute scevs from exprs collected on a previous step. Iterate instructions in

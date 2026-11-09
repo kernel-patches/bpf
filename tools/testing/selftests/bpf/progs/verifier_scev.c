@@ -3424,6 +3424,19 @@ LINKED(linked_at_loop_entry_only, __failure,
 	LOOP_HEADER("r3 = r8; r2 = r8; r2 += 1; r2 += 1;", "r2 += 2; r3 += 1;"))
 
 /*
+ * In an irreducible loop registers are linked within a basic block only. In the second test the
+ * fall-through predecessor of 'm' makes r2 a copy of r8. The other predecessor does not.
+ */
+LINKED(irreducible_loop, VALID,
+	"if r7 > 5 goto m_%=; l_%=: r7 += 1;"
+	"m_%=: r2 = r8; r2 += 1; r2 += 1; if r8 > 61 goto out_%=; r1 = r6; r1 += r2;"
+	"r0 = *(u8 *)(r1 + 0); if r7 < 10 goto l_%=;")
+LINKED(irreducible_loop_fallthrough_pred, UNBOUND,
+	"r2 = r7; if r7 > 5 goto m_%=; l_%=: r7 += 1; r2 = r8;"
+	"m_%=: if r8 > 63 goto out_%=; r1 = r6; r1 += r2;"
+	"r0 = *(u8 *)(r1 + 0); if r7 < 10 goto l_%=;")
+
+/*
  * No exit of the inner loop dominates its backedges: may_goto is added before its header. The prog
  * holds a reference, so may_goto goes to the exit of the outer loop: an edge that the verifier
  * adds. Every iteration of the outer loop restores r3. At the header of the inner one it is r7.
