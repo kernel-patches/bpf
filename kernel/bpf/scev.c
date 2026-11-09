@@ -14,6 +14,8 @@
 #define REGS_NUM BPF_SCEV_REGS_NUM
 #define UNKNOWN_EXPR_ID 0
 #define OPAQUE_EXPR_ID  1
+/* (REG r). UNKNOWN, OPAQUE and (REG r) have fixed ids and are not in the hash table. */
+#define REG_EXPR_ID(r)  (2 + (r))
 
 /*
  * BPF instructions use 'code', 'src_reg', 'off' and 'imm' fields for instruction encoding.
@@ -58,12 +60,6 @@ struct expr {
 	};
 };
 
-struct expr_bucket {
-	u32 cnt;
-	u32 cap;
-	u32 ids[];
-};
-
 struct env {
 	bool empty;
 	u32 reg2expr[REGS_NUM];
@@ -96,8 +92,11 @@ struct scev {
 	 * Expressions are identified by id, exprs_ht ensures that
 	 * each expression exists as a unique instance.
 	 * This allows for fast equivalence check: id1 === id2.
+	 * exprs_ht[hash] is the first id of a chain, exprs_next[id] is the next one, 0 ends it.
+	 * Both have exprs_cap elements, like exprs[].
 	 */
-	struct expr_bucket **exprs_ht;
+	u32 *exprs_ht;
+	u32 *exprs_next;
 	struct scev_worklist worklist;
 	struct insn_envs **envs;
 	struct expr *exprs;
@@ -106,7 +105,6 @@ struct scev {
 	 * instruction was visited on a current pass.
 	 */
 	u32 *discovered;
-	u32 exprs_ht_cnt;
 	int exprs_cnt;
 	int exprs_cap;
 	int envs_cnt;
@@ -125,44 +123,58 @@ static int expr_eq(struct expr *a, struct expr *b)
 	return a->op == b->op && a->imm == b->imm;
 }
 
+static void exprs_ht_add(struct scev *scev, u32 id)
+{
+	u32 *bucket = &scev->exprs_ht[expr_hash(&scev->exprs[id]) & (scev->exprs_cap - 1)];
+
+	scev->exprs_next[id] = *bucket;
+	*bucket = id;
+}
+
+/* @cap is a power of two. No warning for a size that kvmalloc() rejects. */
+static int grow_exprs(struct scev *scev, u32 cap)
+{
+	gfp_t gfp = GFP_KERNEL_ACCOUNT | __GFP_NOWARN;
+	void *tmp;
+	u32 id;
+
+	tmp = kvrealloc(scev->exprs, array_size(cap, sizeof(*scev->exprs)), gfp);
+	if (!tmp)
+		return -ENOMEM;
+	scev->exprs = tmp;
+	tmp = kvrealloc(scev->exprs_next, array_size(cap, sizeof(u32)), gfp);
+	if (!tmp)
+		return -ENOMEM;
+	scev->exprs_next = tmp;
+	tmp = kvrealloc(scev->exprs_ht, array_size(cap, sizeof(u32)), gfp);
+	if (!tmp)
+		return -ENOMEM;
+	scev->exprs_ht = tmp;
+	scev->exprs_cap = cap;
+	memset(scev->exprs_ht, 0, array_size(cap, sizeof(u32)));
+	for (id = REG_EXPR_ID(REGS_NUM); id < scev->exprs_cnt; id++)
+		exprs_ht_add(scev, id);
+	return 0;
+}
+
 static int add_expr(struct scev *scev, struct expr e)
 {
-	struct expr_bucket *bucket;
-	u32 i, id, hash, new_cap;
-	void *tmp;
+	u32 id;
 
-	hash = expr_hash(&e) & (scev->exprs_ht_cnt - 1);
-	bucket = scev->exprs_ht[hash];
+	if (e.op == REG)
+		return REG_EXPR_ID(e.params[0]);
 
-	if (bucket) {
-		for (i = 0; i < bucket->cnt; i++) {
-			id = bucket->ids[i];
-			if (expr_eq(&e, &scev->exprs[id]))
-				return id;
-		}
-	}
+	id = scev->exprs_ht[expr_hash(&e) & (scev->exprs_cap - 1)];
+	for (; id; id = scev->exprs_next[id])
+		if (expr_eq(&e, &scev->exprs[id]))
+			return id;
 
-	if (!bucket || bucket->cap == bucket->cnt) {
-		new_cap = bucket ? bucket->cap * 2 : 4;
-		bucket = kvrealloc(bucket, sizeof(*bucket) + sizeof(u32) * new_cap, GFP_KERNEL_ACCOUNT | __GFP_ZERO);
-		if (!bucket)
-			return -ENOMEM;
-		scev->exprs_ht[hash] = bucket;
-		bucket->cap = new_cap;
-	}
-
-	if (scev->exprs_cnt == scev->exprs_cap) {
-		new_cap = scev->exprs_cap ? scev->exprs_cap * 2 : 256;
-		tmp = kvrealloc(scev->exprs, sizeof(struct expr) * new_cap, GFP_KERNEL_ACCOUNT);
-		if (!tmp)
-			return -ENOMEM;
-		scev->exprs = tmp;
-		scev->exprs_cap = new_cap;
-	}
+	if (scev->exprs_cnt == scev->exprs_cap && grow_exprs(scev, scev->exprs_cap * 2))
+		return -ENOMEM;
 
 	id = scev->exprs_cnt++;
 	scev->exprs[id] = e;
-	bucket->ids[bucket->cnt++] = id;
+	exprs_ht_add(scev, id);
 	return id;
 }
 
@@ -180,11 +192,6 @@ static int expr1(struct scev *scev, u32 op, int a)
 	if (a < 0)
 		return a;
 	return expr2(scev, op, a, 0);
-}
-
-static int expr0(struct scev *scev, u32 op)
-{
-	return expr2(scev, op, 0, 0);
 }
 
 static int imm_expr(struct scev *scev, s64 value)
@@ -576,10 +583,9 @@ static int replace_reg(struct scev *scev, struct env *e, u32 reg, int id)
 	return 0;
 }
 
-static int setup_initial_loop_env(struct bpf_verifier_env *env, struct env *e, int insn_idx)
+static void setup_initial_loop_env(struct env *e)
 {
-	struct scev *scev = env->scev;
-	int i, err;
+	int i;
 
 	/*
 	 * Initial assignments are of form rX -> rX are needed as seeds for subsequent
@@ -587,12 +593,8 @@ static int setup_initial_loop_env(struct bpf_verifier_env *env, struct env *e, i
 	 * join() will overwrite the them. compute_header_scevs() accounts for register
 	 * states at loop entry.
 	 */
-	for (i = 0; i < REGS_NUM; i++) {
-		err = replace_reg(scev, e, i, expr1(scev, REG, i));
-		if (err)
-			return err;
-	}
-	return 0;
+	for (i = 0; i < REGS_NUM; i++)
+		e->reg2expr[i] = REG_EXPR_ID(i);
 }
 
 static void forget_call_regs(struct env *e)
@@ -1404,9 +1406,7 @@ static int compute_scev_for_loop(struct bpf_verifier_env *env, int cur_header)
 	header_env = get_loop_env(scev, cur_header, cur_header);
 	if (!header_env)
 		goto nomem;
-	err = setup_initial_loop_env(env, header_env, cur_header);
-	if (err)
-		goto out;
+	setup_initial_loop_env(header_env);
 	err = worklist_push(env, cur_header, cur_header);
 	if (err)
 		goto out;
@@ -1966,10 +1966,8 @@ void bpf_free_scev(struct bpf_verifier_env *env)
 			kfree(envs->entries[j].env);
 		kfree(envs);
 	}
-	if (scev->exprs_ht)
-		for (i = 0; i < scev->exprs_ht_cnt; i++)
-			kvfree(scev->exprs_ht[i]);
 	kvfree(scev->exprs_ht);
+	kvfree(scev->exprs_next);
 	kvfree(scev->worklist.data);
 	kvfree(scev->envs);
 	kvfree(scev->exprs);
@@ -1981,6 +1979,7 @@ void bpf_free_scev(struct bpf_verifier_env *env)
 int bpf_init_scev(struct bpf_verifier_env *env)
 {
 	struct scev *scev;
+	u32 r;
 
 	scev = kzalloc(sizeof(struct scev), GFP_KERNEL_ACCOUNT);
 	if (!scev)
@@ -1988,13 +1987,13 @@ int bpf_init_scev(struct bpf_verifier_env *env)
 	env->scev = scev;
 	bpf_mark_reg_known_scalar(&scev->zero_reg, 0);
 	bpf_mark_reg_unknown(&scev->unknown_reg);
-	/* A power of two for hash & (exprs_ht_cnt - 1)` indexing. */
-	scev->exprs_ht_cnt = roundup_pow_of_two(max(256U, DIV_ROUND_UP(env->prog->len, 4)));
-	scev->exprs_ht = kvcalloc(scev->exprs_ht_cnt, sizeof(*scev->exprs_ht), GFP_KERNEL_ACCOUNT);
-	if (!scev->exprs_ht)
+	if (grow_exprs(scev, roundup_pow_of_two(REG_EXPR_ID(REGS_NUM))))
 		goto nomem;
-	if (expr0(scev, UNKNOWN) < 0 || expr0(scev, OPAQUE)  < 0)
-		goto nomem;
+	scev->exprs[UNKNOWN_EXPR_ID] = (struct expr){ .op = UNKNOWN };
+	scev->exprs[OPAQUE_EXPR_ID] = (struct expr){ .op = OPAQUE };
+	for (r = 0; r < REGS_NUM; r++)
+		scev->exprs[REG_EXPR_ID(r)] = (struct expr){ .op = REG, .params = { r, 0 } };
+	scev->exprs_cnt = REG_EXPR_ID(REGS_NUM);
 	scev->envs = kvcalloc(env->prog->len, sizeof(*scev->envs), GFP_KERNEL_ACCOUNT);
 	scev->discovered = kvcalloc(env->prog->len, sizeof(*scev->discovered), GFP_KERNEL_ACCOUNT);
 	if (!scev->envs || !scev->discovered)
