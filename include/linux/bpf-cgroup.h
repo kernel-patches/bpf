@@ -4,6 +4,7 @@
 
 #include <linux/bpf.h>
 #include <linux/bpf-cgroup-defs.h>
+#include <linux/bpf_verifier.h>
 #include <linux/errno.h>
 #include <linux/jump_label.h>
 #include <linux/percpu.h>
@@ -425,7 +426,8 @@ int cgroup_bpf_prog_attach(const union bpf_attr *attr,
 			   enum bpf_prog_type ptype, struct bpf_prog *prog);
 int cgroup_bpf_prog_detach(const union bpf_attr *attr,
 			   enum bpf_prog_type ptype);
-int cgroup_bpf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog);
+int cgroup_bpf_link_attach(const union bpf_attr *attr, struct bpf_prog *prog,
+			   struct bpf_verifier_log *log);
 int cgroup_bpf_prog_query(const union bpf_attr *attr,
 			  union bpf_attr __user *uattr, u32 uattr_size);
 
@@ -452,7 +454,8 @@ static inline int cgroup_bpf_prog_detach(const union bpf_attr *attr,
 }
 
 static inline int cgroup_bpf_link_attach(const union bpf_attr *attr,
-					 struct bpf_prog *prog)
+					 struct bpf_prog *prog,
+					 struct bpf_verifier_log *log)
 {
 	return -EINVAL;
 }
