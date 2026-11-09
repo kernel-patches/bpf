@@ -1462,9 +1462,10 @@ static int scanf_one_line(const char *file, int fields_expected, const char *fmt
 	if (!f)
 		return -1;
 
-	va_start(ap, fmt);
 	while (getline(&line, &line_len, f) > 0) {
+		va_start(ap, fmt);
 		res = vsscanf(line, fmt, ap);
+		va_end(ap);
 		if (res == fields_expected)
 			goto out;
 	}
@@ -1474,7 +1475,6 @@ static int scanf_one_line(const char *file, int fields_expected, const char *fmt
 	}
 
 out:
-	va_end(ap);
 	free(line);
 	fclose(f);
 	errno = saved_errno;
