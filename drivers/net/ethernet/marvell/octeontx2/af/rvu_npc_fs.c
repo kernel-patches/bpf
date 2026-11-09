@@ -1930,15 +1930,28 @@ static int npc_delete_flow(struct rvu *rvu, struct rvu_npc_mcam_rule *rule,
 	return rvu_mbox_handler_npc_mcam_dis_entry(rvu, &dis_req, &dis_rsp);
 }
 
-int rvu_mbox_handler_npc_delete_flow(struct rvu *rvu,
-				     struct npc_delete_flow_req *req,
-				     struct npc_delete_flow_rsp *rsp)
+int rvu_mbox_handler_npc_mcam_get_features(struct rvu *rvu,
+					   struct msg_req *req,
+					   struct npc_mcam_get_features_rsp *rsp)
+{
+	struct npc_mcam *mcam = &rvu->hw->mcam;
+
+	mutex_lock(&mcam->lock);
+	rsp->rx_features = mcam->rx_features;
+	rsp->tx_features = mcam->tx_features;
+	mutex_unlock(&mcam->lock);
+
+	return 0;
+}
+
+int npc_delete_flow_rules(struct rvu *rvu, struct npc_delete_flow_req *req,
+			  struct npc_delete_flow_rsp *rsp)
 {
 	struct npc_mcam *mcam = &rvu->hw->mcam;
 	struct rvu_npc_mcam_rule *iter, *tmp;
 	u16 pcifunc = req->hdr.pcifunc;
 	struct list_head del_list;
-	int blkaddr;
+	int blkaddr, err;
 
 	req->entry = npc_cn20k_vidx2idx(req->entry);
 	req->start = npc_cn20k_vidx2idx(req->start);
@@ -1969,16 +1982,30 @@ int rvu_mbox_handler_npc_delete_flow(struct rvu *rvu,
 	}
 	mutex_unlock(&mcam->lock);
 
+	err = 0;
 	list_for_each_entry_safe(iter, tmp, &del_list, list) {
 		u16 entry = iter->entry;
 
 		/* clear the mcam entry target pcifunc */
 		mcam->entry2target_pffunc[entry] = 0x0;
-		if (npc_delete_flow(rvu, iter, pcifunc))
+		if (npc_delete_flow(rvu, iter, pcifunc)) {
 			dev_err(rvu->dev, "rule deletion failed for entry:%u",
 				entry);
+			err = -EINVAL;
+		}
 	}
 
+	return err;
+}
+
+int rvu_mbox_handler_npc_delete_flow(struct rvu *rvu,
+				     struct npc_delete_flow_req *req,
+				     struct npc_delete_flow_rsp *rsp)
+{
+	/* Rules are gone from the AF list either way; keep reporting
+	 * success to existing callers, as before.
+	 */
+	npc_delete_flow_rules(rvu, req, rsp);
 	return 0;
 }
 
