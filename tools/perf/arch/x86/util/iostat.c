@@ -315,8 +315,10 @@ static int iostat_event_group(struct evlist *evl,
 	int metrics_count = iostat_metrics_count();
 	char *iostat_cmd = calloc(len_template, 1);
 
-	if (!iostat_cmd)
-		return -ENOMEM;
+	if (!iostat_cmd) {
+		ret = -ENOMEM;
+		goto err;
+	}
 
 	for (idx = 0; idx < list->nr_entries; idx++) {
 		sprintf(iostat_cmd, iostat_cmd_template,
