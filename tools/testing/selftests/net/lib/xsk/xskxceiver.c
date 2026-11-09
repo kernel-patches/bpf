@@ -81,6 +81,7 @@
 #include <linux/netdev.h>
 #include <linux/ethtool.h>
 #include <linux/align.h>
+#include <linux/kernel.h>
 #include <arpa/inet.h>
 #include <net/if.h>
 #include <locale.h>
@@ -91,7 +92,7 @@
 #include <sys/mman.h>
 #include <sys/types.h>
 
-#include "prog_tests/test_xsk.h"
+#include "test_xsk.h"
 #include "xsk_xdp_progs.skel.h"
 #include "xsk.h"
 #include "xskxceiver.h"
@@ -100,13 +101,9 @@
 #include "kselftest.h"
 #include "xsk_xdp_common.h"
 
-#include <network_helpers.h>
-
 static bool opt_print_tests;
 static enum test_mode opt_mode = TEST_MODE_ALL;
 static u32 opt_run_test = RUN_ALL_TESTS;
-
-void test__fail(void) { /* for network_helpers.c */ }
 
 static void __exit_with_error(int error, const char *file, const char *func, int line)
 {
