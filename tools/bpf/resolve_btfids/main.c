@@ -75,6 +75,12 @@
  * and also "bpf_fmodret_sleepable" when KF_SLEEPABLE is set, so the sleepable
  * tag never comes alone. The kernel builds the set of fmod_ret targets from
  * these tags when it loads BTF.
+ *
+ * Functions which the analysis of the compiler plugin records, see fmodret.c,
+ * get "bpf_fmodret" too, and "bpf_fmodret_retval:" with the values they
+ * return on paths without side effects, such as "bpf_fmodret_retval:-22,-12".
+ * The verifier lets programs attached to them return only these values or 0.
+ * A function in a BTF_FMODRET set keeps only its own tags.
  */
 
 #define  _GNU_SOURCE
@@ -96,6 +102,7 @@
 #include <bpf/btf.h>
 #include <bpf/libbpf.h>
 #include "btf_colors.h"
+#include "fmodret.h"
 #include <subcmd/parse-options.h>
 
 #define BTF_IDS_SECTION	".BTF_ids"
@@ -154,6 +161,11 @@ struct object {
 	struct btf *orig_btf;
 	bool distill_base;
 	bool extract_inline;
+	/* The ftrace call sites are in __patchable_function_entries */
+	bool patchable_ftrace;
+
+	/* Functions found by the analysis of the compiler plugin, see fmodret.c */
+	struct fmodret_retvals fmodret_retvals;
 
 	struct {
 		int		 fd;
@@ -205,6 +217,7 @@ struct btf_links {
 #define DECL_TAG_KFUNC "bpf_kfunc"
 #define DECL_TAG_FMODRET "bpf_fmodret"
 #define DECL_TAG_FMODRET_SLEEPABLE "bpf_fmodret_sleepable"
+#define DECL_TAG_FMODRET_RETVAL "bpf_fmodret_retval:"
 
 #define KF_SLEEPABLE	(1 << 5)
 #define KF_FASTCALL	(1 << 12)
@@ -1792,6 +1805,40 @@ static int add_decl_tag(struct btf2btf_context *ctx, const char *tag_name,
 	return push_decl_tag_id(ctx, new_id);
 }
 
+static bool has_set_func(const struct rb_root *root, u32 btf_id)
+{
+	const struct rb_node *node = root->rb_node;
+
+	while (node) {
+		const struct kfunc *k = rb_entry(node, struct kfunc, rb_node);
+
+		if (btf_id < k->btf_id)
+			node = node->rb_left;
+		else if (btf_id > k->btf_id)
+			node = node->rb_right;
+		else
+			return true;
+	}
+	return false;
+}
+
+static int add_fmodret_retval_tags(struct btf2btf_context *ctx,
+				   const struct fmodret_retval *retval)
+{
+	char *tag;
+	int err;
+
+	err = add_decl_tag(ctx, DECL_TAG_FMODRET, retval->btf_id, -1);
+	if (err)
+		return err;
+
+	if (asprintf(&tag, "%s%s", DECL_TAG_FMODRET_RETVAL, retval->values) < 0)
+		return -ENOMEM;
+	err = add_decl_tag(ctx, tag, retval->btf_id, -1);
+	free(tag);
+	return err;
+}
+
 static int btf2btf(struct object *obj)
 {
 	struct btf2btf_context ctx = {};
@@ -1839,6 +1886,16 @@ static int btf2btf(struct object *obj)
 			if (err)
 				goto out;
 		}
+	}
+
+	for (size_t i = 0; i < obj->fmodret_retvals.cnt; i++) {
+		const struct fmodret_retval *retval = &obj->fmodret_retvals.retvals[i];
+
+		if (has_set_func(&ctx.fmodrets, retval->btf_id))
+			continue;
+		err = add_fmodret_retval_tags(&ctx, retval);
+		if (err)
+			goto out;
 	}
 
 	err = 0;
@@ -2194,6 +2251,8 @@ int main(int argc, const char **argv)
 			    "distill --btf_base and emit .BTF.base section data"),
 		OPT_BOOLEAN(0, "inline", &obj.extract_inline,
 			    "extract location BTF into a .BTF.inline file"),
+		OPT_BOOLEAN(0, "patchable_ftrace", &obj.patchable_ftrace,
+			    "ftrace call sites are in __patchable_function_entries"),
 		OPT_CALLBACK(0, "btf_link", &btf_links, "section:module:btf-file",
 			     "patch a BTF link with --patch_btfids", parse_btf_link),
 		OPT_STRING(0, "patch_btfids", &btfids_path, "file",
@@ -2250,6 +2309,10 @@ int main(int argc, const char **argv)
 			goto out;
 
 	if (load_btf(&obj))
+		goto out;
+
+	if (fmodret_collect(obj.efile.elf, obj.btf, &obj.fmodret_retvals,
+			    obj.patchable_ftrace, verbose))
 		goto out;
 
 	if (btf2btf(&obj))
@@ -2309,6 +2372,7 @@ out:
 	btf_id__free_all(&obj.funcs);
 	btf_id__free_all(&obj.sets);
 	free(obj.addr_syms);
+	fmodret_free(&obj.fmodret_retvals);
 	free(obj.efile.func_symbols);
 	if (obj.efile.elf) {
 		elf_end(obj.efile.elf);

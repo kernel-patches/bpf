@@ -5070,6 +5070,7 @@ L:	bpf@vger.kernel.org
 S:	Maintained
 F:	scripts/bpf/
 F:	scripts/llvm-plugins/bpf_*
+F:	tools/bpf/resolve_btfids/fmodret.*
 
 BPF [CORE]
 M:	Alexei Starovoitov <ast@kernel.org>
