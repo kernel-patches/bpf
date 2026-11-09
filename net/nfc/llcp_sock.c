@@ -302,21 +302,20 @@ static int nfc_llcp_setsockopt(struct socket *sock, int level, int optname,
 }
 
 static int nfc_llcp_getsockopt(struct socket *sock, int level, int optname,
-			       char __user *optval, int __user *optlen)
+			       sockopt_t *opt)
 {
 	struct nfc_llcp_local *local;
 	struct sock *sk = sock->sk;
 	struct nfc_llcp_sock *llcp_sock = nfc_llcp_sock(sk);
+	u32 miux, remote_miu, remote_lto, remote_rw, rw;
 	int len, err = 0;
-	u32 miux, remote_miu, rw;
 
 	pr_debug("%p optname %d\n", sk, optname);
 
 	if (level != SOL_NFC)
 		return -ENOPROTOOPT;
 
-	if (get_user(len, optlen))
-		return -EFAULT;
+	len = opt->optlen;
 
 	if (len < 0)
 		return -EINVAL;
@@ -337,7 +336,7 @@ static int nfc_llcp_getsockopt(struct socket *sock, int level, int optname,
 	switch (optname) {
 	case NFC_LLCP_RW:
 		rw = llcp_sock->rw > LLCP_MAX_RW ? local->rw : llcp_sock->rw;
-		if (put_user(rw, (u32 __user *) optval))
+		if (copy_to_iter(&rw, len, &opt->iter_out) != len)
 			err = -EFAULT;
 
 		break;
@@ -346,7 +345,7 @@ static int nfc_llcp_getsockopt(struct socket *sock, int level, int optname,
 		miux = be16_to_cpu(llcp_sock->miux) > LLCP_MAX_MIUX ?
 			be16_to_cpu(local->miux) : be16_to_cpu(llcp_sock->miux);
 
-		if (put_user(miux, (u32 __user *) optval))
+		if (copy_to_iter(&miux, len, &opt->iter_out) != len)
 			err = -EFAULT;
 
 		break;
@@ -355,19 +354,21 @@ static int nfc_llcp_getsockopt(struct socket *sock, int level, int optname,
 		remote_miu = llcp_sock->remote_miu > LLCP_MAX_MIU ?
 				local->remote_miu : llcp_sock->remote_miu;
 
-		if (put_user(remote_miu, (u32 __user *) optval))
+		if (copy_to_iter(&remote_miu, len, &opt->iter_out) != len)
 			err = -EFAULT;
 
 		break;
 
 	case NFC_LLCP_REMOTE_LTO:
-		if (put_user(local->remote_lto / 10, (u32 __user *) optval))
+		remote_lto = local->remote_lto / 10;
+		if (copy_to_iter(&remote_lto, len, &opt->iter_out) != len)
 			err = -EFAULT;
 
 		break;
 
 	case NFC_LLCP_REMOTE_RW:
-		if (put_user(llcp_sock->remote_rw, (u32 __user *) optval))
+		remote_rw = llcp_sock->remote_rw;
+		if (copy_to_iter(&remote_rw, len, &opt->iter_out) != len)
 			err = -EFAULT;
 
 		break;
@@ -379,8 +380,7 @@ static int nfc_llcp_getsockopt(struct socket *sock, int level, int optname,
 
 	release_sock(sk);
 
-	if (put_user(len, optlen))
-		return -EFAULT;
+	opt->optlen = len;
 
 	return err;
 }
@@ -966,7 +966,7 @@ static const struct proto_ops llcp_sock_ops = {
 	.listen         = llcp_sock_listen,
 	.shutdown       = sock_no_shutdown,
 	.setsockopt     = nfc_llcp_setsockopt,
-	.getsockopt     = nfc_llcp_getsockopt,
+	.getsockopt_iter = nfc_llcp_getsockopt,
 	.sendmsg        = llcp_sock_sendmsg,
 	.recvmsg        = llcp_sock_recvmsg,
 	.mmap           = sock_no_mmap,
