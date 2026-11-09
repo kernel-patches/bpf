@@ -1969,6 +1969,12 @@ struct bpf_prog_aux {
 	const struct btf_type *attach_func_proto;
 	/* function name for valid attach_btf_id */
 	const char *attach_func_name;
+	/*
+	 * The values which an fmod_ret program may return besides 0, from the
+	 * "bpf_fmodret_retval:" tag of its target, or NULL
+	 */
+	s64 *fmodret_retvals;
+	u32 fmodret_retval_cnt;
 	struct bpf_prog **func;
 	struct bpf_prog_aux *main_prog_aux;
 	/* main prog: there when the prog has timed may_goto */
