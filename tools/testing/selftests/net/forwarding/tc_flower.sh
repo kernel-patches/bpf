@@ -3,6 +3,7 @@
 
 ALL_TESTS="match_dst_mac_test match_src_mac_test match_dst_ip_test \
 	match_src_ip_test match_ip_flags_test match_pcp_test match_vlan_test \
+	match_enc_key_id_mask_test \
 	match_ip_tos_test match_indev_test match_ip_ttl_test
 	match_mpls_label_test \
 	match_mpls_tc_test match_mpls_bos_test match_mpls_ttl_test \
@@ -278,6 +279,62 @@ match_vlan_test()
 	vlan_destroy $h2 85
 
 	log_test "VLAN match ($tcflags)"
+}
+
+enc_key_id_mask_check()
+{
+	tc filter show dev gt-ex ingress pref 1 | grep -q "enc_key_id 256/0xf00"
+	check_err $? "Did not dump the mask"
+
+	$MZ gt1 -c 1 -p 64 -a "$(mac_get gt1)" -b $h2mac -t ip -q
+
+	tc_check_packets "dev gt-ex ingress" 101 1
+	check_err $? "Did not match a key inside the mask"
+
+	$MZ gt2 -c 1 -p 64 -a "$(mac_get gt2)" -b $h2mac -t ip -q
+
+	tc_check_packets "dev gt-ex ingress" 102 1
+	check_err $? "Did not receive the key outside the mask"
+
+	tc_check_packets "dev gt-ex ingress" 101 1
+	check_err $? "Matched a key outside the mask"
+
+	log_test "enc_key_id mask match ($tcflags)"
+}
+
+match_enc_key_id_mask_test()
+{
+	RET=0
+
+	if ! tc filter add dev $h2 ingress flower help 2>&1 | grep -q MASKED-KEY-ID; then
+		echo "SKIP: iproute2 too old; tc is missing the enc_key_id mask"
+		return 0
+	fi
+
+	tunnel_create gt1 gretap 192.0.2.1 192.0.2.2 dev $h1 key 300
+	tunnel_create gt2 gretap 192.0.2.1 192.0.2.2 dev $h1 key 600
+	ip link set dev gt1 master v$h1
+	ip link set dev gt2 master v$h1
+	ip link add gt-ex type gretap external # To collect tunnel info
+	ip link set dev gt-ex up
+	ip link set dev gt-ex master v$h2
+	tc qdisc add dev gt-ex clsact
+
+	# A device may refuse a partial mask but software must take it
+	tc filter add dev gt-ex ingress protocol ip pref 1 handle 101 flower \
+		$tcflags enc_key_id 256/0xf00 action drop
+	if [[ $? -ne 0 && $tcflags == "skip_sw" ]]; then
+		log_info "Device refuses the enc_key_id mask"
+	else
+		tc filter add dev gt-ex ingress protocol ip pref 2 handle 102 \
+			flower $tcflags enc_key_id 600 action drop
+		enc_key_id_mask_check
+	fi
+
+	tc qdisc del dev gt-ex clsact
+	tunnel_destroy gt-ex
+	tunnel_destroy gt2
+	tunnel_destroy gt1
 }
 
 match_ip_tos_test()
