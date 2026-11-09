@@ -197,6 +197,10 @@ HCALL_TABLE = {
 	# Key wrapping hcalls
 	1168: 'H_PKS_WRAP_OBJECT',
 	1172: 'H_PKS_UNWRAP_OBJECT',
+	# Logical LAN multi-queue RX (PAPR 11.20.00)
+	1180: 'H_REG_LOGICAL_LAN_QUEUE',
+	1184: 'H_ADD_LOGICAL_LAN_BUFFERS_QUEUE',
+	1192: 'H_FREE_LOGICAL_LAN_QUEUE',
 	# Platform-specific hcalls used by the Ultravisor
 	61184: 'H_SVM_PAGE_IN',
 	61188: 'H_SVM_PAGE_OUT',
