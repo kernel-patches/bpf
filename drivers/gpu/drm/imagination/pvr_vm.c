@@ -927,6 +927,9 @@ static const struct drm_pvr_static_data_area static_data_areas[] = {
 /*
  * The values given to GET_RESERVED_SIZE() are taken from the last entry in the corresponding
  * static data area for each heap.
+ *
+ * The pvr_heaps array **must** initialize **all** heaps that are enumerated in the UAPI with
+ * enum drm_pvr_heap_id.
  */
 static const struct drm_pvr_heap pvr_heaps[] = {
 	[DRM_PVR_HEAP_GENERAL] = {
@@ -967,6 +970,8 @@ static const struct drm_pvr_heap pvr_heaps[] = {
 	},
 };
 
+static_assert(ARRAY_SIZE(pvr_heaps) == DRM_PVR_HEAP_COUNT, "Invalid number of PVR heaps");
+
 int
 pvr_static_data_areas_get(const struct pvr_device *pvr_dev,
 			  struct drm_pvr_ioctl_dev_query_args *args)
@@ -985,13 +990,18 @@ pvr_static_data_areas_get(const struct pvr_device *pvr_dev,
 
 	if (!query.static_data_areas.array) {
 		u32 *stride = &query.static_data_areas.stride;
+		u32 *count = &query.static_data_areas.count;
 
 		if (!query.static_data_areas.stride)
 			*stride = DRM_PVR_STATIC_DATA_AREA_STRIDE_MIN_SUPPORTED;
 		else
 			*stride = sizeof(struct drm_pvr_static_data_area);
 
-		query.static_data_areas.count = ARRAY_SIZE(static_data_areas);
+		if (!query.static_data_areas.count)
+			*count = DRM_PVR_STATIC_DATA_AREA_COUNT_MIN_SUPPORTED;
+		else
+			*count = ARRAY_SIZE(static_data_areas);
+
 		goto copy_out;
 	}
 
@@ -1035,7 +1045,11 @@ pvr_heap_info_get(const struct pvr_device *pvr_dev,
 		else
 			query.heaps.stride = sizeof(struct drm_pvr_heap);
 
-		query.heaps.count = ARRAY_SIZE(pvr_heaps);
+		if (!query.heaps.count)
+			query.heaps.count = DRM_PVR_HEAP_COUNT_MIN_SUPPORTED;
+		else
+			query.heaps.count = ARRAY_SIZE(pvr_heaps);
+
 		goto copy_out;
 	}
 

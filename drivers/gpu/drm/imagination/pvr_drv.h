@@ -93,6 +93,18 @@ int pvr_set_uobj_array(const struct drm_pvr_obj_array *out, u32 min_stride, u32 
 #define DRM_PVR_STATIC_DATA_AREA_STRIDE_MIN_SUPPORTED \
 	PVR_UOBJ_MIN_SIZE_INTERNAL(struct drm_pvr_static_data_area, offset)
 
+/*
+ * Value of DRM_PVR_HEAP_COUNT in the first released version of enum
+ * drm_pvr_heap_id for Rogue cores.
+ */
+#define DRM_PVR_HEAP_COUNT_MIN_SUPPORTED (DRM_PVR_HEAP_TRANSFER_FRAG + 1)
+
+/*
+ * Count of static areas in the first released version of struct
+ * drm_pvr_static_data_area static_data_areas[] for Rogue cores.
+ */
+#define DRM_PVR_STATIC_DATA_AREA_COUNT_MIN_SUPPORTED 5U
+
 /**
  * PVR_UOBJ_GET() - Copies from _src_usr_ptr to &_dest_obj.
  * @_dest_obj: The destination container object in kernel space.

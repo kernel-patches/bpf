@@ -339,8 +339,13 @@ struct drm_pvr_dev_query_heap_info {
 	 * @heaps: Array of &struct drm_pvr_heap. To facilitate allocation by
 	 * the caller:
 	 *
-	 * - if &heaps.array is NULL, the count will be updated with the count
-	 *   of heaps known to the kernel driver.
+	 * - if &heaps.array is NULL and &heaps.count is set by the caller, the
+	 *   count will be updated with the value of @DRM_PVR_HEAP_COUNT that
+	 *   is known to the kernel driver.
+	 *
+	 * - if &heaps.array is NULL and &heaps.count is zero, the count will
+	 *   be updated with a value that is the minimum supported by the kernel
+	 *   and this may differ based on the GPU ID.
 	 *
 	 * - If &heaps.array is NULL and &heaps.stride is set by the caller, the
 	 *   stride will be updated to the size of &struct drm_pvr_heap known to
@@ -349,6 +354,11 @@ struct drm_pvr_dev_query_heap_info {
 	 * - If &heaps.array is NULL and &heaps.stride is zero, the stride will
 	 *   be updated with a value that is the minimum supported by the kernel
 	 *   and this may differ based on the GPU ID.
+	 *
+	 * - If &heaps.array, &heaps.stride and &heaps.count are set by the
+	 *   caller, then the kernel will try to honor the value of count and
+	 *   this may be clamped to the value of @DRM_PVR_HEAP_COUNT known by
+	 *   the kernel.
 	 */
 	struct drm_pvr_obj_array heaps;
 };
@@ -457,8 +467,13 @@ struct drm_pvr_dev_query_static_data_areas {
 	 * @static_data_areas: Array of &struct drm_pvr_static_data_area. To
 	 * facilitate allocation by the caller:
 	 *
-	 * - if &static_data_areas.array is NULL, the count will be updated with
-	 *   the count of static areas known to the kernel driver.
+	 * - if &static_data_areas.array is NULL and &static_data_areas.count is
+	 *   set by the caller, the count will be updated with the maximum count
+	 *   that is known to the kernel driver.
+	 *
+	 * - If &static_data_areas.array is NULL and &static_data_areas.count is
+	 *   zero, the count will be updated with a value that is the minimum
+	 *   supported by the kernel and this may differ based on the GPU ID.
 	 *
 	 * - If &static_data_areas.array is NULL and &static_data_areas.stride
 	 *   is set by the caller, the stride will be updated to the size of
@@ -468,6 +483,11 @@ struct drm_pvr_dev_query_static_data_areas {
 	 *   is zero, the stride will be updated with a value that is the
 	 *   minimum supported by the kernel and this may differ based on the
 	 *   GPU ID.
+	 *
+	 * - If &static_data_areas.array, &static_data_areas.stride and
+	 *   &static_data_areas.count are set by the caller, then the kernel
+	 *   will try to honor the value of count and this may be clamped to the
+	 *   maximum supported by the kernel.
 	 */
 	struct drm_pvr_obj_array static_data_areas;
 };
