@@ -17,6 +17,8 @@
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/interrupt-controller/irq.h>
 
+#include "imx6ull-imx7-colibri-tdx-panel-cap-touch-7inch-parallel.dtsi"
+
 &atmel_mxt_ts {
 	pinctrl-0 = <&pinctrl_atmel_connector>;
 	/* SODIMM 107 / TOUCH_INT# */
@@ -24,20 +26,6 @@
 	interrupts = <15 IRQ_TYPE_EDGE_FALLING>;
 	/* SODIMM 106 / TOUCH_RST# */
 	reset-gpios = <&gpio2 28 GPIO_ACTIVE_LOW>;
-
-	status = "okay";
-};
-
-&backlight {
-	status = "okay";
-};
-
-&lcdif {
-	status = "okay";
-};
-
-&panel_dpi {
-	compatible = "logictechno,lt161010-2nhc";
 
 	status = "okay";
 };
