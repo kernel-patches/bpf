@@ -19775,6 +19775,39 @@ static struct bpf_reg_state *scev_reg_for_fill(struct bpf_func_state *frame, u32
 }
 
 /*
+ *	p = buf + i; if (i > 100) return 0; *p = 0;
+ * p is @dst_reg, x is @ptr_reg, i is @off_reg. Scalar evolution says that p == x + i. So the insns
+ * 'p = x; p += i' are a no-op at run time, and a state that is sound before them is sound after
+ * them: apply their transfer function. Type, object and offset of p are taken from x as it is now;
+ * how p was computed does not matter.
+ * The old p is replaced, not intersected: a state does not distinguish two values of one hash map,
+ * and the intersection of an offset into the one with an offset into the other holds for neither.
+ * It is replaced only if the new range is a subset of the old one.
+ */
+static bool recompute_ptr(struct bpf_verifier_env *env, struct bpf_reg_state *dst_reg,
+			  const struct bpf_reg_state *ptr_reg, const struct bpf_reg_state *off_reg)
+{
+	struct bpf_reg_state sum = *ptr_reg;
+
+	/* the cpu can speculate past the jump with an out-of-bounds index */
+	if (!env->bypass_spec_v1)
+		return false;
+	/* 'p += i' assigns a new id to a packet pointer */
+	if (ptr_reg->type == SCALAR_VALUE || type_is_pkt_pointer(ptr_reg->type) ||
+	    !bpf_is_widenable_reg_type(ptr_reg))
+		return false;
+	__mark_reg32_unbounded(&sum);
+	scalar_step_add(&sum, ptr_reg, off_reg);
+	sum.r64 = cnum64_add(ptr_reg->r64, off_reg->r64);
+	sum.var_off = tnum_add(ptr_reg->var_off, off_reg->var_off);
+	reg_bounds_sync(&sum);
+	if (!bpf_reg_union_compatible(dst_reg, &sum) || !cnum64_is_subset(dst_reg->r64, sum.r64))
+		return false;
+	*dst_reg = sum;
+	return true;
+}
+
+/*
  * The jump at @idx refined @regno. A register that scalar evolution links to it holds
  * @regno + delta on every path to the jump: intersect the two. The intersection is empty: no
  * execution gets here with this state (the path is infeasible), the register is left as it is.
@@ -19783,22 +19816,29 @@ static void refine_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier
 			       int idx, u32 regno)
 {
 	struct bpf_func_state *frame = vstate->frame[vstate->curframe];
-	struct bpf_reg_state *reg, implied, saved;
+	struct bpf_reg_state *reg, *base_reg, implied, saved;
 	u32 pos, linked_regno, fill_off, bits;
+	int base_regno;
 	s64 delta;
 
 	if (frame->regs[regno].type != SCALAR_VALUE)
 		return;
 	for (pos = 0;
-	     bpf_scev_next_linked_reg(env, idx, regno, &pos, &linked_regno, &fill_off, &delta,
-				      &bits);
+	     bpf_scev_next_linked_reg(env, idx, regno, &pos, &linked_regno, &fill_off, &base_regno,
+				      &delta, &bits);
 	     pos++) {
 		reg = scev_reg_for_fill(frame, linked_regno, fill_off, bits);
-		if (!reg || reg->type != SCALAR_VALUE)
+		if (!reg || (base_regno < 0 && reg->type != SCALAR_VALUE))
 			continue;
 
 		implied = frame->regs[regno];
 		add_scalar_to_reg(&implied, delta);
+		if (base_regno >= 0) {
+			base_reg = scev_reg_for_fill(frame, base_regno, 0, 64);
+			if (base_reg && bits == 64 && recompute_ptr(env, reg, base_reg, &implied))
+				goto scratch;
+			continue;
+		}
 		if (regs_fit_in_bits(reg, &implied, bits))
 			bits = 64;
 		if (bits < 32)
@@ -19811,6 +19851,7 @@ static void refine_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier
 			*reg = saved;
 			continue;
 		}
+scratch:
 		if (linked_regno < MAX_BPF_REG)
 			mark_reg_scratched(env, linked_regno);
 		else

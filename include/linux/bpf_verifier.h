@@ -2226,7 +2226,9 @@ void bpf_free_scev(struct bpf_verifier_env *env);
 int bpf_compute_scev(struct bpf_verifier_env *env);
 int bpf_scev_jump_counts(struct bpf_verifier_env *env, int header, int n, bool taken_leaves);
 bool bpf_scev_next_linked_reg(struct bpf_verifier_env *env, int insn_idx, u32 regno, u32 *pos,
-			      u32 *linked_regno, u32 *fill_off, s64 *delta, u32 *bits);
+			      u32 *linked_regno, u32 *fill_off, int *base_regno, s64 *delta,
+			      u32 *bits);
+bool bpf_is_widenable_reg_type(const struct bpf_reg_state *reg);
 bool bpf_scev_in_slice_slots(struct bpf_verifier_env *env, int off, u32 size);
 
 int bpf_compute_loop_iters(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
