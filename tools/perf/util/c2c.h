@@ -33,7 +33,7 @@ struct c2c_hist_entry {
 	unsigned long		*nodeset;
 	struct c2c_stats	*node_stats;
 	unsigned int		 cacheline_idx;
-	unsigned int		 mem_region;
+	unsigned long		 regionset;
 
 	struct compute_stats	 cstats;
 
@@ -41,6 +41,7 @@ struct c2c_hist_entry {
 	unsigned long		 paddr_cnt;
 	bool			 paddr_zero;
 	char			*nodestr;
+	char			*regionstr;
 
 	/*
 	 * must be at the end,

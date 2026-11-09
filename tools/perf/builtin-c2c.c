@@ -164,6 +164,7 @@ static void c2c_he_free(void *he)
 	zfree(&c2c_he->nodeset);
 	zfree(&c2c_he->nodestr);
 	zfree(&c2c_he->node_stats);
+	zfree(&c2c_he->regionstr);
 	free(c2c_he);
 }
 
@@ -260,7 +261,7 @@ static void c2c_he__set_mem_region(struct c2c_hist_entry *c2c_he,
 
 	/* Update mem_region only if it really accesses memory */
 	if (mem_region >= PERF_MEM_REGION_MMIO)
-		c2c_he->mem_region = mem_region;
+		c2c_he->regionset |= BIT(mem_region);
 }
 
 static void compute_stats(struct c2c_hist_entry *c2c_he,
@@ -565,37 +566,12 @@ dcacheline_node_mem_region(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
 {
 	int width = c2c_width(fmt, hpp, he->hists);
 	struct c2c_hist_entry *c2c_he;
-	unsigned int mem_region;
-	char buf[20];
 
 	c2c_he = container_of(he, struct c2c_hist_entry, he);
-	mem_region = c2c_he->mem_region;
+	if (WARN_ON_ONCE(!c2c_he->regionstr))
+		return 0;
 
-	switch (mem_region) {
-	case PERF_MEM_REGION_NA:
-	case PERF_MEM_REGION_RSVD:
-		scnprintf(buf, sizeof(buf), "N/A");
-		break;
-	case PERF_MEM_REGION_MMIO:
-		scnprintf(buf, sizeof(buf), "MMIO");
-		break;
-	case PERF_MEM_REGION_MEM0:
-	case PERF_MEM_REGION_MEM1:
-	case PERF_MEM_REGION_MEM2:
-	case PERF_MEM_REGION_MEM3:
-	case PERF_MEM_REGION_MEM4:
-	case PERF_MEM_REGION_MEM5:
-	case PERF_MEM_REGION_MEM6:
-	case PERF_MEM_REGION_MEM7:
-		scnprintf(buf, sizeof(buf), "Mem-%d",
-			  mem_region - PERF_MEM_REGION_MEM0);
-		break;
-	default:
-		scnprintf(buf, sizeof(buf), "N/A");
-		break;
-	}
-
-	return scnprintf(hpp->buf, hpp->size, "%*s", width, buf);
+	return scnprintf(hpp->buf, hpp->size, "%*s", width, c2c_he->regionstr);
 }
 
 static int offset_entry(struct perf_hpp_fmt *fmt, struct perf_hpp *hpp,
@@ -2281,6 +2257,56 @@ static int set_nodestr(struct c2c_hist_entry *c2c_he)
 	return c2c_he->nodestr ? 0 : -ENOMEM;
 }
 
+#define PERF_MEM_REGION_MASK	\
+	GENMASK(PERF_MEM_REGION_MEM7, PERF_MEM_REGION_MEM0)
+#define PERF_MEM_REGION_NUM	\
+	(PERF_MEM_REGION_MEM7 - PERF_MEM_REGION_MEM0 + 1)
+
+static void set_mem_region_width(struct c2c_hist_entry *c2c_he, int len)
+{
+	struct c2c_dimension *dim;
+
+	dim = c2c_he__is_main_hist(c2c_he) ?
+	      &dim_dcacheline_mem_region : &dim_offset_mem_region;
+
+	if (len > dim->width)
+		dim->width = len;
+}
+
+static int set_mem_region_str(struct c2c_hist_entry *c2c_he)
+{
+	char buf[32];
+	int len = 0;
+
+	if (c2c_he->regionstr)
+		return 0;
+
+	if (!c2c_he->regionset) {
+		len = scnprintf(buf, sizeof(buf), "N/A");
+		goto out;
+	}
+
+	if (c2c_he->regionset & BIT(PERF_MEM_REGION_MMIO)) {
+		len = scnprintf(buf, sizeof(buf), "MMIO");
+		if (c2c_he->regionset & PERF_MEM_REGION_MASK)
+			len += scnprintf(buf + len, sizeof(buf) - len, ",");
+	}
+
+	if (c2c_he->regionset & PERF_MEM_REGION_MASK) {
+		unsigned long regionset =
+			c2c_he->regionset >> PERF_MEM_REGION_MEM0;
+
+		len += bitmap_scnprintf(&regionset, PERF_MEM_REGION_NUM,
+					buf + len, sizeof(buf) - len);
+	}
+
+out:
+	set_mem_region_width(c2c_he, len);
+	c2c_he->regionstr = strdup(buf);
+
+	return c2c_he->regionstr ? 0 : -ENOMEM;
+}
+
 static void calc_width(struct c2c_hist_entry *c2c_he)
 {
 	struct c2c_hists *c2c_hists;
@@ -2288,6 +2314,7 @@ static void calc_width(struct c2c_hist_entry *c2c_he)
 	c2c_hists = container_of(c2c_he->he.hists, struct c2c_hists, hists);
 	hists__calc_col_len(&c2c_hists->hists, &c2c_he->he);
 	set_nodestr(c2c_he);
+	set_mem_region_str(c2c_he);
 }
 
 static int filter_cb(struct hist_entry *he, void *arg __maybe_unused)
