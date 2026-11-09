@@ -197,11 +197,11 @@ static int vctrl_set_voltage_sel(struct regulator_dev *rdev,
 				vctrl->vtable[next_sel].ctrl);
 			goto err;
 		}
-		vctrl->sel = next_sel;
 
 		delay = DIV_ROUND_UP(vctrl->vtable[vctrl->sel].out -
 				     vctrl->vtable[next_sel].out,
 				     vctrl->min_slew_down_rate);
+		vctrl->sel = next_sel;
 		usleep_range(delay, delay + DIV_ROUND_UP(delay, 10));
 	}
 
