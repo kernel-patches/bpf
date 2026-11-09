@@ -148,22 +148,6 @@ static void kvm_set_empty_gsi_routing(struct kvm_vm *vm)
 	vm_ioctl(vm, KVM_SET_GSI_ROUTING, &routing);
 }
 
-static const char *probe_iommu_type(void)
-{
-	int io_fd;
-
-	io_fd = open("/dev/iommu", O_RDONLY);
-	if (io_fd >= 0) {
-		close(io_fd);
-		return MODE_IOMMUFD;
-	}
-
-	io_fd = __open_path_or_exit("/dev/vfio/vfio", O_RDONLY,
-				    "Is VFIO (or IOMMUFD) loaded and enabled?");
-	close(io_fd);
-	return MODE_VFIO_TYPE1_IOMMU;
-}
-
 static void help(const char *name)
 {
 	printf("Usage: %s [-a] [-d <segment:bus:device.function>] [-e] [-h] [-i nr_irqs] [-m] [-n] [-t iommu_type] [-v nr_vcpus] [-x]\n", name);
@@ -205,7 +189,7 @@ int main(int argc, char **argv)
 	int nr_irqs = 1000, nr_vcpus = 1;
 	bool set_empty_routing = false;
 	const char *device_bdf = NULL;
-	const char *iommu_type = NULL;
+	const char *iommu_mode = NULL;
 	int i, j, c, msix, eventfd;
 	bool migrate_vcpus = false;
 	cpu_set_t available_cpus;
@@ -235,7 +219,7 @@ int main(int argc, char **argv)
 			use_nmi = true;
 			break;
 		case 't':
-			iommu_type = optarg;
+			iommu_mode = optarg;
 			break;
 		case 'v':
 			nr_vcpus = atoi_positive("Number of vCPUS", optarg);
@@ -266,9 +250,9 @@ int main(int argc, char **argv)
 	}
 
 	if (device_bdf) {
-		if (!iommu_type)
-			iommu_type = probe_iommu_type();
-		iommu = iommu_init(iommu_type);
+		__TEST_REQUIRE(iommu_mode_is_available(iommu_mode), "%s",
+			       iommu_mode_unavailable_msg(iommu_mode));
+		iommu = iommu_init(iommu_mode);
 		device = vfio_pci_device_init(device_bdf, iommu);
 		msix = vfio_setup_msi(device);
 		irq = vfio_msix_to_host_irq(device_bdf, msix);
