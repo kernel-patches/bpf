@@ -5064,6 +5064,14 @@ S:	Supported
 F:	arch/x86/net/
 X:	arch/x86/net/bpf_jit_comp32.c
 
+BPF [COMPILER PLUGINS]
+M:	Anton Protopopov <a.s.protopopov@gmail.com>
+L:	bpf@vger.kernel.org
+S:	Maintained
+F:	scripts/bpf/
+F:	scripts/llvm-plugins/bpf_*
+F:	tools/bpf/resolve_btfids/fmodret.*
+
 BPF [CORE]
 M:	Alexei Starovoitov <ast@kernel.org>
 M:	Daniel Borkmann <daniel@iogearbox.net>
@@ -6562,7 +6570,9 @@ C:	irc://irc.libera.chat/clangbuiltlinux
 F:	Documentation/kbuild/llvm.rst
 F:	include/linux/compiler-clang.h
 F:	scripts/Makefile.clang
+F:	scripts/Makefile.llvm-plugins
 F:	scripts/clang-tools/
+F:	scripts/llvm-plugins/
 K:	\b(?i:clang|llvm)\b
 
 CLK API
