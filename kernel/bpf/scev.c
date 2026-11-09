@@ -52,8 +52,38 @@ enum expr_op {
 	COPY_SCEV,
 };
 
+/*
+ * An SSA name for a value that no expression describes: the def of the SCEV register 'reg'
+ * - by the insn at 'idx'. An insn that may write defines too (may_def in liveness.c). A nested loop
+ *   defines at its header what it leaves.
+ * - by a phi before the insn at 'idx': a join point, a loop header.
+ * Without its backedges and with nested loops collapsed the body of a loop is acyclic: an insn
+ * executes at most once per iteration, so a def is one value per iteration. A name is unique within
+ * the env of one loop.
+ * The operands of a phi are a set, 8 at most; a phi(a, b) among them is expanded. Every phi is a
+ * value number of its own.
+ * In the env of loop H a phi at H merges the backedge values only, the header phi itself is
+ * (REG r). In the env of the enclosing loop a phi at H merges the entering edges.
+ */
+struct expr_def {
+	u32 set:1;	/* 0: the expression has no def */
+	u32 phi:1;
+	u32 reg:9;
+	u32 idx:21;
+};
+static_assert(REGS_NUM <= 1 << 9 && BPF_COMPLEXITY_LIMIT_INSNS <= 1 << 21);
+
+static const struct expr_def no_def;
+
 struct expr {
-	u32 op;
+	u16 op;
+	/* A value number: all SCEV registers of an env that have this id hold the same value */
+	bool is_vn;
+	/*
+	 * UNKNOWN, OPAQUE and ANY don't describe a value. With a def the id stands for one value,
+	 * see struct expr_def. Without a def every use of the id can be another value.
+	 */
+	struct expr_def def;
 	union {
 		u32 params[2];
 		s64 imm;
@@ -116,12 +146,19 @@ struct scev {
 
 static u32 expr_hash(struct expr *e)
 {
-	return jhash_3words(e->op, e->params[0], e->params[1], 0);
+	/* def.phi is not hashed: the def by an insn and the phi before it share a chain */
+	return jhash_3words(e->op, e->params[0], e->params[1],
+			    e->def.idx * REGS_NUM + e->def.reg);
+}
+
+static bool same_def(struct expr_def a, struct expr_def b)
+{
+	return a.set == b.set && a.phi == b.phi && a.reg == b.reg && a.idx == b.idx;
 }
 
 static int expr_eq(struct expr *a, struct expr *b)
 {
-	return a->op == b->op && a->imm == b->imm;
+	return a->op == b->op && a->imm == b->imm && same_def(a->def, b->def);
 }
 
 static void exprs_ht_add(struct scev *scev, u32 id)
@@ -158,12 +195,41 @@ static int grow_exprs(struct scev *scev, u32 cap)
 	return 0;
 }
 
+static u32 op_params_num(u32 op);
+
+static bool expr_is_vn(struct scev *scev, struct expr *e)
+{
+	u32 i;
+
+	if (e->def.set)
+		return true;
+	switch (e->op) {
+	case UNKNOWN:
+	case OPAQUE:
+	case ANY:
+	/* a partial spill: the other bits of the slot are not known */
+	case SPILL8:
+	case SPILL16:
+	case SPILL32:
+	/* a function of the iteration number */
+	case LINEAR_SCEV:
+	case COPY_SCEV:
+		return false;
+	}
+	for (i = 0; i < op_params_num(e->op); i++)
+		if (!scev->exprs[e->params[i]].is_vn)
+			return false;
+	return true;
+}
+
 static int add_expr(struct scev *scev, struct expr e)
 {
 	u32 id;
 
 	if (e.op == REG)
 		return REG_EXPR_ID(e.params[0]);
+	if (!e.def.set && !e.imm && (e.op == UNKNOWN || e.op == OPAQUE))
+		return e.op == UNKNOWN ? UNKNOWN_EXPR_ID : OPAQUE_EXPR_ID;
 
 	id = scev->exprs_ht[expr_hash(&e) & (scev->exprs_cap - 1)];
 	for (; id; id = scev->exprs_next[id])
@@ -174,6 +240,7 @@ static int add_expr(struct scev *scev, struct expr e)
 		return -ENOMEM;
 
 	id = scev->exprs_cnt++;
+	e.is_vn = expr_is_vn(scev, &e);
 	scev->exprs[id] = e;
 	exprs_ht_add(scev, id);
 	return id;
@@ -215,6 +282,33 @@ static int expr1(struct scev *scev, u32 op, int a)
 static int imm_expr(struct scev *scev, s64 value)
 {
 	return add_expr(scev, (struct expr){ .op = IMM, .imm = value });
+}
+
+/*
+ * The insn at @idx defines @reg. Without its backedges and with nested loops collapsed the body is
+ * acyclic: an insn executes at most once per iteration, so a def is one value per iteration.
+ */
+static struct expr_def insn_def(int idx, u32 reg)
+{
+	return (struct expr_def){ .set = 1, .reg = reg, .idx = idx };
+}
+
+/* The phi of @reg before the insn at @idx. One value per iteration for the same reason. */
+static struct expr_def phi_def(int idx, u32 reg)
+{
+	return (struct expr_def){ .set = 1, .phi = 1, .reg = reg, .idx = idx };
+}
+
+/* @id with another def */
+static int expr_with_def(struct scev *scev, int id, struct expr_def def)
+{
+	struct expr e;
+
+	if (id < 0)
+		return id;
+	e = scev->exprs[id];
+	e.def = def;
+	return add_expr(scev, e);
 }
 
 static bool same_exprs(struct scev *scev, int id_a, int id_b)
@@ -486,27 +580,69 @@ static bool expr_next(struct scev *scev, u32 *id, u32 *order)
 	return expr_next(scev, id, order);
 }
 
+/*
+ * An SSA name is printed as '%', the SCEV register, '.', the insn. A def is printed in full at
+ * every use: (+ %r8.7=phi(1, 2) 4).
+ *	%r0.6			insn 6 defines r0. The value is OPAQUE, '_' without a def
+ *	%fp-8.8?		insn 8 may write fp-8. The value is UNKNOWN, '?' without a def
+ *	%r8.7=phi(1, 2)		the phi of r8 before insn 7
+ *	%r0.7=phi(_)		a phi of distinct OPAQUE values
+ *	%r6.9=phi(?)		a phi of distinct UNKNOWN values, or of more than 8 values
+ * A name is unique within the env of one loop. In the env of loop H a phi at H merges the backedge
+ * values only, the header phi itself is (REG r): in 'scev at header 1: r6=%r6.1=phi(r6, (+ r6 1))'
+ * one backedge leaves r6 as it is, the other one adds 1.
+ * '%' in front of r or fp is a name, followed by a blank it is BPF_MOD.
+ */
+static void log_def(struct bpf_verifier_env *env, struct expr_def def)
+{
+	if (!def.set)
+		return;
+	if (def.reg < MAX_BPF_REG)
+		bpf_log(&env->log, "%%r%d.%d", def.reg, def.idx);
+	else
+		bpf_log(&env->log, "%%fp%d.%d", (MAX_BPF_REG - def.reg - 1) * 8, def.idx);
+}
+
 static void log_expr(struct bpf_verifier_env *env, u32 id)
 {
 	struct bpf_verifier_log *log = &env->log;
+	bool operand, bare, first = false;
 	struct scev *scev = env->scev;
+	u32 order, d, bare_any = 0;
+	struct expr_def def;
 	struct expr *expr;
 	const char *str;
-	u32 order;
 
 	scev->stack_sz = 0;
 	expr_stack_push(scev, id);
 	while (expr_next(scev, &id, &order)) {
-		if ((order & PRE) && scev->stack_sz > 1)
-			bpf_log(log, " ");
 		expr = &scev->exprs[id];
+		def = expr->def;
+		/* the depth of @id in expr_stack[], expr_next() pops it before POST */
+		d = order & PRE ? scev->stack_sz - 1 : scev->stack_sz;
+		operand = d && (bare_any & BIT(d - 1));
+		/* No '(any' for the operands of phi(a, b). (any a b) among them is expanded. */
+		if (order & PRE) {
+			bare_any &= ~BIT(d);
+			if (expr->op == ANY && (def.set ? def.phi : operand))
+				bare_any |= BIT(d);
+		}
+		bare = bare_any & BIT(d);
+		if ((order & PRE) && (def.set || !bare)) {
+			if (d)
+				bpf_log(log, "%s", !operand ? " " : first ? "" : ", ");
+			log_def(env, def);
+			if (def.phi)
+				bpf_log(log, "=phi(");
+			first = bare;
+		}
 		switch (expr->op) {
 		case UNKNOWN:
 			if (order & PRE)
 				bpf_log(log, "?");
 			break;
 		case OPAQUE:
-			if (order & PRE)
+			if ((order & PRE) && (!def.set || def.phi))
 				bpf_log(log, "_");
 			break;
 		case REG:
@@ -518,19 +654,23 @@ static void log_expr(struct bpf_verifier_env *env, u32 id)
 				bpf_log(log, "%lld", expr->imm);
 			break;
 		default:
-			if (order & PRE) {
+			if ((order & PRE) && !bare) {
 				str = op_str(expr->op);
-				bpf_log(log, "(");
+				bpf_log(log, def.set && !def.phi ? "=(" : "(");
 				if (str)
 					bpf_log(log, "%s", str);
 				else
 					bpf_log(log, "bad-expr-op %x", expr->op);
 			}
-			if (order & DEPTH_LIMIT)
-				bpf_log(log, "...");
-			if (order & POST)
+			if (order & DEPTH_LIMIT) {
+				bpf_log(log, bare && !def.set && !first ? ", ..." : "...");
+				first = false;
+			}
+			if ((order & POST) && !bare)
 				bpf_log(log, ")");
 		}
+		if ((order & POST) && def.phi)
+			bpf_log(log, ")");
 	}
 }
 
@@ -570,7 +710,7 @@ static void print_env(struct bpf_verifier_env *env, struct env *e, u32 insn_idx)
 		log_reg(env, i);
 		bpf_log(log, "=");
 		log_expr(env, e->reg2expr[i]);
-		if (e->reg2expr[i] != UNKNOWN_EXPR_ID) {
+		if (!is_op(scev, e->reg2expr[i], UNKNOWN)) {
 			bpf_log(log, " / ");
 			log_expr(env, e->reg2scev[i]);
 		}
@@ -634,6 +774,12 @@ static int replace_reg(struct scev *scev, struct env *e, u32 reg, int id)
 	return 0;
 }
 
+/* The insn at @idx defines @reg. The value is not tracked: @id is UNKNOWN or OPAQUE. */
+static int forget_reg(struct scev *scev, struct env *e, u32 reg, int id, int idx)
+{
+	return replace_reg(scev, e, reg, expr_with_def(scev, id, insn_def(idx, reg)));
+}
+
 static void setup_initial_loop_env(struct env *e)
 {
 	int i;
@@ -648,12 +794,20 @@ static void setup_initial_loop_env(struct env *e)
 		e->reg2expr[i] = REG_EXPR_ID(i);
 }
 
-static void forget_call_regs(struct env *e)
+/* A subprog can return a pair in r0 and r2: a call defines r1 - r5 too if they are live after it */
+static int forget_call_regs(struct bpf_verifier_env *env, struct env *e, int idx)
 {
-	int i;
+	int i, err;
 
-	for (i = BPF_REG_0; i <= BPF_REG_5; i++)
+	for (i = BPF_REG_0; i <= BPF_REG_5; i++) {
 		e->reg2expr[i] = UNKNOWN_EXPR_ID;
+		if (idx + 1 >= env->prog->len || !reg_alive_at(env, i, idx + 1))
+			continue;
+		err = forget_reg(env->scev, e, i, UNKNOWN_EXPR_ID, idx);
+		if (err)
+			return err;
+	}
+	return 0;
 }
 
 static u32 spill_spi(struct bpf_insn *insn)
@@ -673,16 +827,19 @@ static bool is_spill_off(int off)
 	       off >= -MAX_BPF_STACK_JIT;
 }
 
-static void mark_opaque(struct env *e, int off, int size)
+static int mark_opaque(struct scev *scev, struct env *e, int idx, int off, int size)
 {
-	int b, spi;
+	int b, spi, err;
 
 	for (b = off; b < off + size; b++) {
 		if (b >= 0 || b < -MAX_BPF_STACK_JIT)
 			continue;
 		spi = (-b - 1) / BPF_REG_SIZE;
-		e->reg2expr[MAX_BPF_REG + spi] = OPAQUE_EXPR_ID;
+		err = forget_reg(scev, e, MAX_BPF_REG + spi, OPAQUE_EXPR_ID, idx);
+		if (err)
+			return err;
 	}
+	return 0;
 }
 
 static int mk_spill(struct scev *scev, u8 size, int id)
@@ -716,7 +873,7 @@ static int mk_fill(struct scev *scev, int id, u8 code)
 	return UNKNOWN_EXPR_ID;
 }
 
-static int maybe_store_fp(struct scev *scev, struct env *e, struct bpf_insn *insn, int id)
+static int maybe_store_fp(struct scev *scev, struct env *e, struct bpf_insn *insn, int idx, int id)
 {
 	u8 size = BPF_SIZE(insn->code);
 
@@ -724,19 +881,15 @@ static int maybe_store_fp(struct scev *scev, struct env *e, struct bpf_insn *ins
 		return 0;
 	if (is_spill_off(insn->off))
 		return replace_reg(scev, e, off_to_reg(insn), mk_spill(scev, size, id));
-	mark_opaque(e, insn->off, bpf_size_to_bytes(size));
-	return 0;
+	return mark_opaque(scev, e, idx, insn->off, bpf_size_to_bytes(size));
 }
 
-static int maybe_load_fp(struct scev *scev, struct env *e, struct bpf_insn *insn)
+static int maybe_load_fp(struct scev *scev, struct env *e, struct bpf_insn *insn, int idx)
 {
-	int id;
-
-	if (insn->src_reg == BPF_REG_FP && is_spill_off(insn->off))
-		id = mk_fill(scev, e->reg2expr[off_to_reg(insn)], insn->code);
-	else
-		id = OPAQUE_EXPR_ID;
-	return replace_reg(scev, e, insn->dst_reg, id);
+	if (insn->src_reg != BPF_REG_FP || !is_spill_off(insn->off))
+		return forget_reg(scev, e, insn->dst_reg, OPAQUE_EXPR_ID, idx);
+	return replace_reg(scev, e, insn->dst_reg,
+			   mk_fill(scev, e->reg2expr[off_to_reg(insn)], insn->code));
 }
 
 /*
@@ -912,30 +1065,34 @@ static int transfer(struct bpf_verifier_env *env, struct env *e, int idx)
 				imm = env->insn_aux_data[idx + 1].const_reg_vals[dst];
 				return replace_reg(scev, e, dst, imm_expr(scev, imm));
 			}
-			return maybe_load_fp(scev, e, insn);
+			return maybe_load_fp(scev, e, insn, idx);
 		default:
 			goto mark_dst_unknown;
 		}
 	case BPF_STX:
 		switch (mode) {
 		case BPF_MEM:
-			return maybe_store_fp(scev, e, insn, reg2expr[src]);
+			return maybe_store_fp(scev, e, insn, idx, reg2expr[src]);
 		case BPF_ATOMIC:
 			if (insn->imm == BPF_LOAD_ACQ)
-				return maybe_load_fp(scev, e, insn);
+				return maybe_load_fp(scev, e, insn, idx);
 			if (insn->imm == BPF_STORE_REL) {
-				return maybe_store_fp(scev, e, insn, reg2expr[src]);
+				return maybe_store_fp(scev, e, insn, idx, reg2expr[src]);
 			}
 			/*
 			 * verifier does not track other atomic ops precisely,
 			 * hence mark the results as opaque.
 			 */
-			if (insn->dst_reg == BPF_REG_FP)
-				mark_opaque(e, insn->off, bpf_size_to_bytes(BPF_SIZE(insn->code)));
+			if (insn->dst_reg == BPF_REG_FP) {
+				id = mark_opaque(scev, e, idx, insn->off,
+						 bpf_size_to_bytes(BPF_SIZE(insn->code)));
+				if (id < 0)
+					return id;
+			}
 			if (insn->imm == BPF_CMPXCHG)
-				return replace_reg(scev, e, BPF_REG_0, OPAQUE_EXPR_ID);
+				return forget_reg(scev, e, BPF_REG_0, OPAQUE_EXPR_ID, idx);
 			if (insn->imm & BPF_FETCH)
-				return replace_reg(scev, e, src, OPAQUE_EXPR_ID);
+				return forget_reg(scev, e, src, OPAQUE_EXPR_ID, idx);
 			break;
 		}
 		break;
@@ -944,15 +1101,17 @@ static int transfer(struct bpf_verifier_env *env, struct env *e, int idx)
 			id = imm_expr(scev, insn->imm);
 			if (id < 0)
 				return id;
-			return maybe_store_fp(scev, e, insn, id);
+			return maybe_store_fp(scev, e, insn, idx, id);
 		}
 		break;
 	case BPF_JMP:
 	case BPF_JMP32:
 		if (opcode == BPF_CALL) {
-			forget_call_regs(e);
+			id = forget_call_regs(env, e, idx);
+			if (id < 0)
+				return id;
 			/* made anew, like what is loaded. The parameter tells the two apart. */
-			return replace_reg(scev, e, BPF_REG_0, expr1(scev, OPAQUE, 1));
+			return forget_reg(scev, e, BPF_REG_0, expr1(scev, OPAQUE, 1), idx);
 		}
 		/* for non-CALL there are no changes in register states */
 		break;
@@ -966,12 +1125,11 @@ static int transfer(struct bpf_verifier_env *env, struct env *e, int idx)
 			}
 			/* map, map value, BTF id, function */
 			if (BPF_SIZE(insn->code) == BPF_DW)
-				return replace_reg(scev, e, dst, OPAQUE_EXPR_ID);
+				return forget_reg(scev, e, dst, OPAQUE_EXPR_ID, idx);
 			goto mark_dst_unknown;
 		case BPF_ABS:
 		case BPF_IND:
-			forget_call_regs(e);
-			break;
+			return forget_call_regs(env, e, idx);
 		default:
 			goto mark_dst_unknown;
 		}
@@ -985,18 +1143,18 @@ static int transfer(struct bpf_verifier_env *env, struct env *e, int idx)
 	return 0;
 
 mark_dst_unknown:
-	reg2expr[dst] = UNKNOWN_EXPR_ID;
-	return 0;
+	return forget_reg(scev, e, dst, UNKNOWN_EXPR_ID, idx);
 }
 
 /*
  * Construct minimal 'ANY' expression by traversing 'a' and 'b'
  * and accumulating non-duplicated non-ANY entries.
+ * 'def' is the def of the result, no_def if it has none.
  */
-static int mk_any(struct scev *scev, int a, int b)
+static int mk_any(struct scev *scev, int a, int b, struct expr_def def)
 {
 	struct expr_stack_elt *elt;
-	struct expr *expr;
+	struct expr *expr, *other;
 	u32 i, j, ids_buf_sz;
 	u32 roots[2] = {a, b};
 	int id;
@@ -1016,14 +1174,23 @@ static int mk_any(struct scev *scev, int a, int b)
 			if (expr->op == ANY) {
 				if (!expr_stack_push(scev, expr->params[1]) ||
 				    !expr_stack_push(scev, expr->params[0]))
-					return UNKNOWN_EXPR_ID;
+					return expr_with_def(scev, UNKNOWN_EXPR_ID, def);
 			} else {
 				for (j = 0; j < ids_buf_sz; j++) {
 					if (same_exprs(scev, scev->ids_buf[j], id))
 						goto next;
+					/* two defs of one shape: the shape without a def */
+					other = &scev->exprs[scev->ids_buf[j]];
+					if (other->op != expr->op || other->imm != expr->imm)
+						continue;
+					id = expr_with_def(scev, id, no_def);
+					if (id < 0)
+						return id;
+					scev->ids_buf[j] = id;
+					goto next;
 				}
 				if (ids_buf_sz == ARRAY_SIZE(scev->ids_buf))
-					return UNKNOWN_EXPR_ID;
+					return expr_with_def(scev, UNKNOWN_EXPR_ID, def);
 				scev->ids_buf[ids_buf_sz++] = id;
 			}
 next:;
@@ -1037,7 +1204,7 @@ next:;
 		if (id < 0)
 			return id;
 	}
-	return id;
+	return expr_with_def(scev, id, def);
 }
 
 /* @acc is the env before the insn at @idx */
@@ -1056,7 +1223,8 @@ static int join(struct bpf_verifier_env *env, struct env *acc, struct env *cur, 
 		if (!same_exprs(scev, acc->reg2expr[i], cur->reg2expr[i])) {
 			/* no phi for a dead register: pruned SSA */
 			id = reg_alive_at(env, i, idx) ?
-			     mk_any(scev, acc->reg2expr[i], cur->reg2expr[i]) : UNKNOWN_EXPR_ID;
+			     mk_any(scev, acc->reg2expr[i], cur->reg2expr[i],
+				    phi_def(idx, i)) : UNKNOWN_EXPR_ID;
 			if (id < 0)
 				return id;
 			acc->reg2expr[i] = id;
@@ -1078,12 +1246,12 @@ static void forget_modified_regs(struct scev *scev, struct env *acc, struct env 
 }
 
 /* For a loop H at `header`, mark any register modified as a result of H execution as unknown. */
-static void forget_non_invariants(struct bpf_verifier_env *env, struct env *acc, int header)
+static int forget_non_invariants(struct bpf_verifier_env *env, struct env *acc, int header)
 {
 	struct bpf_insn_aux_data *aux = env->insn_aux_data;
 	struct bpf_loop *loop = aux[header].loop;
 	struct scev *scev = env->scev;
-	int i, idx, h;
+	int i, idx, h, err;
 
 	acc->empty = false;
 	forget_modified_regs(scev, acc, find_header_env(scev, header));
@@ -1120,6 +1288,15 @@ static void forget_non_invariants(struct bpf_verifier_env *env, struct env *acc,
 		 */
 		forget_modified_regs(scev, acc, find_loop_env(scev, header, idx));
 	}
+	/* the nested loop defines them at its header */
+	for (i = 0; i < REGS_NUM; i++) {
+		if (acc->reg2expr[i] != UNKNOWN_EXPR_ID)
+			continue;
+		err = forget_reg(scev, acc, i, UNKNOWN_EXPR_ID, header);
+		if (err)
+			return err;
+	}
+	return 0;
 }
 
 /* Order worklist in reverse post-order. */
@@ -1236,7 +1413,7 @@ static bool is_probe_read_helper(u32 func_id)
  * If instruction is an indirect write to stack, invalidate SCEVs for spi's
  * that this instruction can touch.
  */
-static void reset_scevs_at_indirect_writes(struct bpf_verifier_env *env, struct env *cur_env, int idx)
+static int reset_scevs_at_indirect_writes(struct bpf_verifier_env *env, struct env *cur_env, int idx)
 {
 	struct bpf_insn *insn = &env->prog->insnsi[idx];
 	struct scev *scev = env->scev;
@@ -1244,19 +1421,24 @@ static void reset_scevs_at_indirect_writes(struct bpf_verifier_env *env, struct 
 	const unsigned long *mask;
 	u32 spi, reg;
 	bool opaque;
+	int err;
 
 	/* Direct fp stores are fine. */
 	if ((class == BPF_ST || class == BPF_STX) && insn->dst_reg == BPF_REG_FP)
-		return;
+		return 0;
 
 	mask = bpf_may_write_mask(env, idx);
 	opaque = bpf_helper_call(insn) && is_probe_read_helper(insn->imm);
 	for_each_set_bit(spi, mask, MAX_BPF_STACK_SLOTS) {
 		reg = MAX_BPF_REG + spi;
-		if (cur_env->reg2expr[reg] == UNKNOWN_EXPR_ID)
-			continue;
-		replace_reg(scev, cur_env, reg, opaque ? OPAQUE_EXPR_ID : UNKNOWN_EXPR_ID);
+		/* '?' stays '?' */
+		err = forget_reg(scev, cur_env, reg,
+				 opaque && !is_op(scev, cur_env->reg2expr[reg], UNKNOWN) ?
+				 OPAQUE_EXPR_ID : UNKNOWN_EXPR_ID, idx);
+		if (err)
+			return err;
 	}
+	return 0;
 }
 
 /*
@@ -1486,7 +1668,9 @@ static int compute_scev_for_loop(struct bpf_verifier_env *env, int cur_header)
 			/* And what its jumps depend on. */
 			for_each_set_bit(r, nested_loop->tested_regs, BPF_SCEV_REGS_NUM)
 				or_expr_regs(env, cur_env->reg2expr[r], cur_loop->tested_regs);
-			forget_non_invariants(env, cur_env, idx);
+			err = forget_non_invariants(env, cur_env, idx);
+			if (err)
+				goto out;
 			if (log_level2)
 				log_env_changes(env, LOG_AT_TRANSFER, old_env, cur_env, idx);
 			/*
@@ -1512,7 +1696,9 @@ static int compute_scev_for_loop(struct bpf_verifier_env *env, int cur_header)
 				err = transfer(env, cur_env, idx);
 				if (err)
 					goto out;
-				reset_scevs_at_indirect_writes(env, cur_env, idx);
+				err = reset_scevs_at_indirect_writes(env, cur_env, idx);
+				if (err)
+					goto out;
 				if (log_level2)
 					log_env_changes(env, LOG_AT_TRANSFER, old_env, cur_env, idx);
 				succ = bpf_insn_successors(env, idx);
@@ -1778,7 +1964,7 @@ static int compute_header_scevs(struct bpf_verifier_env *env, struct env *header
 		}
 		/* rA = (any 1 2 3 4 ...) -> (any rA 1 2 3 4 ...) */
 		if (is_any_imm_reg_opaque(scev, ra_expr)) {
-			id = mk_any(scev, expr1(scev, REG, ra), ra_expr);
+			id = mk_any(scev, expr1(scev, REG, ra), ra_expr, no_def);
 			if (id < 0)
 				return id;
 			header_env->reg2scev[ra] = id;
@@ -2022,7 +2208,8 @@ int bpf_init_scev(struct bpf_verifier_env *env)
 	scev->exprs[UNKNOWN_EXPR_ID] = (struct expr){ .op = UNKNOWN };
 	scev->exprs[OPAQUE_EXPR_ID] = (struct expr){ .op = OPAQUE };
 	for (r = 0; r < REGS_NUM; r++)
-		scev->exprs[REG_EXPR_ID(r)] = (struct expr){ .op = REG, .params = { r, 0 } };
+		scev->exprs[REG_EXPR_ID(r)] = (struct expr){ .op = REG, .is_vn = true,
+							     .params = { r, 0 } };
 	scev->exprs_cnt = REG_EXPR_ID(REGS_NUM);
 	scev->envs = kvcalloc(env->prog->len, sizeof(*scev->envs), GFP_KERNEL_ACCOUNT);
 	scev->discovered = kvcalloc(env->prog->len, sizeof(*scev->discovered), GFP_KERNEL_ACCOUNT);
