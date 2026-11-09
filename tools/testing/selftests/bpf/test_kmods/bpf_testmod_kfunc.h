@@ -214,6 +214,9 @@ __u64 bpf_kfunc_arena_args5_test(__u64 *a__arena, __u64 *b__arena,
 __u64 bpf_kfunc_arena_stack_arg_test(__u64 a, __u64 b, __u64 c, __u64 d, __u64 e,
 				     __u64 *f__arena) __ksym;
 __u64 bpf_kfunc_arena_mixed_test(__u64 *a__arena, __u64 *b__arena__nullable) __ksym;
+void bpf_test_arena_fault_stash(__u64 *ptr__arena) __ksym;
+__u64 bpf_test_arena_fault_load_stashed(void) __ksym;
+void bpf_test_arena_fault_clear_stashed(void) __ksym;
 int *bpf_kfunc_call_test_get_rdwr_mem(struct prog_test_ref_kfunc *p, const int rdwr_buf_size) __ksym;
 int *bpf_kfunc_call_test_get_rdonly_mem(struct prog_test_ref_kfunc *p, const int rdonly_buf_size) __ksym;
 int *bpf_kfunc_call_test_acq_rdonly_mem(struct prog_test_ref_kfunc *p, const int rdonly_buf_size) __ksym;

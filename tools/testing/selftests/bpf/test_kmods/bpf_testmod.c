@@ -344,6 +344,25 @@ __bpf_kfunc u64 bpf_kfunc_arena_mixed_test(u64 *a__arena, u64 *b__arena__nullabl
 	return *a__arena + (b__arena__nullable ? *b__arena__nullable : 0);
 }
 
+static u64 *arena_fault_stashed_ptr;
+
+__bpf_kfunc void bpf_test_arena_fault_stash(u64 *ptr__arena)
+{
+	WRITE_ONCE(arena_fault_stashed_ptr, ptr__arena);
+}
+
+__bpf_kfunc u64 bpf_test_arena_fault_load_stashed(void)
+{
+	u64 *ptr = READ_ONCE(arena_fault_stashed_ptr);
+
+	return ptr ? READ_ONCE(*ptr) : U64_MAX;
+}
+
+__bpf_kfunc void bpf_test_arena_fault_clear_stashed(void)
+{
+	WRITE_ONCE(arena_fault_stashed_ptr, NULL);
+}
+
 __bpf_kfunc void bpf_kfunc_dynptr_test(struct bpf_dynptr *ptr,
 				       struct bpf_dynptr *ptr__nullable)
 {
@@ -1048,6 +1067,9 @@ BTF_ID_FLAGS(func, bpf_kfunc_arena_cap_nullable_test)
 BTF_ID_FLAGS(func, bpf_kfunc_arena_args5_test)
 BTF_ID_FLAGS(func, bpf_kfunc_arena_stack_arg_test)
 BTF_ID_FLAGS(func, bpf_kfunc_arena_mixed_test)
+BTF_ID_FLAGS(func, bpf_test_arena_fault_stash)
+BTF_ID_FLAGS(func, bpf_test_arena_fault_load_stashed)
+BTF_ID_FLAGS(func, bpf_test_arena_fault_clear_stashed)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_mem_len_pass1)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_const_mem)
 BTF_ID_FLAGS(func, bpf_kfunc_call_test_const_struct)
