@@ -1452,6 +1452,14 @@ static struct c2c_dimension dim_offset_node = {
 	.width		= 4,
 };
 
+static struct c2c_dimension dim_offset_mem_region = {
+	.header		= HEADER_LOW("Region"),
+	.name		= "offset_mem_region",
+	.cmp		= empty_cmp,
+	.entry		= dcacheline_node_mem_region,
+	.width		= 6,
+};
+
 static struct c2c_dimension dim_iaddr = {
 	.header		= HEADER_LOW("Code address"),
 	.name		= "iaddr",
@@ -1861,6 +1869,7 @@ static struct c2c_dimension *dimensions[] = {
 	&dim_dcacheline_node,
 	&dim_dcacheline_count,
 	&dim_offset,
+	&dim_offset_mem_region,
 	&dim_offset_node,
 	&dim_iaddr,
 	&dim_tot_hitm,
@@ -3013,13 +3022,24 @@ static int ui_quirks(void)
 		nodestr = chk_double_cl ? "Double-CL" : "CL";
 	}
 
+	/*
+	 * With the extra "Region" column, the zero line of the
+	 * dcacheline/offset header must span one more column.  Set
+	 * this after the TUI header assignment above, which would
+	 * otherwise overwrite the span with the default value.
+	 */
+	if (c2c.show_mem_region) {
+		dim_dcacheline.header.line[0].span = 3;
+		dim_offset.header.line[0].span = 3;
+	}
+
 	dim_percent_costly_snoop.header = percent_costly_snoop_header[c2c.display];
 
 	/* Fix the zero line for dcacheline column. */
 	buf = fill_line(chk_double_cl ? "Double-Cacheline" : "Cacheline",
 				dim_dcacheline.width +
 				(c2c.show_mem_region ?
-					dim_dcacheline_mem_region.width : 0) +
+				 dim_dcacheline_mem_region.width : 0) +
 				dim_dcacheline_node.width +
 				dim_dcacheline_count.width +
 				(c2c.show_mem_region ? 6 : 4));
@@ -3030,8 +3050,11 @@ static int ui_quirks(void)
 
 	/* Fix the zero line for offset column. */
 	buf = fill_line(nodestr, dim_offset.width +
+				 (c2c.show_mem_region ?
+				  dim_offset_mem_region.width : 0) +
 			         dim_offset_node.width +
-				 dim_dcacheline_count.width + 4);
+				 dim_dcacheline_count.width +
+				 (c2c.show_mem_region ? 6 : 4));
 	if (!buf)
 		return -ENOMEM;
 
@@ -3158,7 +3181,7 @@ static int build_cl_output(char *cl_sort, bool no_source)
 	}
 
 	if (asprintf(&c2c.cl_output,
-		"%s%s%s%s%s%s%s%s%s%s%s%s",
+		"%s%s%s%s%s%s%s%s%s%s%s%s%s",
 		c2c.use_stdio ? "cl_num_empty," : "",
 		c2c.display == DISPLAY_SNP_PEER ? "percent_rmt_peer,"
 						  "percent_lcl_peer," :
@@ -3166,7 +3189,9 @@ static int build_cl_output(char *cl_sort, bool no_source)
 						  "percent_lcl_hitm,",
 		"percent_stores_l1hit,"
 		"percent_stores_l1miss,"
-		"percent_stores_na,"
+		"percent_stores_na,",
+		c2c.show_mem_region ?
+		"offset,offset_mem_region,offset_node,dcacheline_count," :
 		"offset,offset_node,dcacheline_count,",
 		add_pid   ? "pid," : "",
 		add_tid   ? "tid," : "",
@@ -3356,6 +3381,8 @@ static int perf_c2c__report(int argc, const char **argv)
 		goto out;
 	}
 	env = perf_session__env(session);
+	c2c.show_mem_region = perf_header__has_feat(&session->header,
+						HEADER_MEMORY_RANGES);
 	/*
 	 * Use the 'tot' as default display type if user doesn't specify it;
 	 * since Arm64 platform doesn't support HITMs flag, use 'peer' as the
@@ -3453,11 +3480,6 @@ static int perf_c2c__report(int argc, const char **argv)
 		pr_err("failed to process sample\n");
 		goto out_mem2node;
 	}
-
-	c2c.show_mem_region = perf_header__has_feat(&session->header,
-						HEADER_MEMORY_RANGES);
-	if (c2c.show_mem_region)
-		dim_dcacheline.header.line[0].span = 3;
 
 	if (c2c.display != DISPLAY_SNP_PEER) {
 		if (asprintf(&output_str,
