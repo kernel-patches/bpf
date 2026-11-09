@@ -233,7 +233,26 @@ static __always_inline int arena_spin_trylock(arena_spinlock_t __arena *lock)
 	if (unlikely(val))
 		return 0;
 
-	return likely(atomic_try_cmpxchg_acquire(&lock->val, &val, _Q_LOCKED_VAL));
+	bpf_preempt_disable();
+	val = atomic_try_cmpxchg_acquire(&lock->val, &val, _Q_LOCKED_VAL);
+	if (unlikely(!val))
+		bpf_preempt_enable();
+
+	return val;
+}
+
+/*
+ * Trylock variant without preemption disable/reenable.
+ * Used within the lock slowpath.
+ */
+static __always_inline int arena_spin_trylock_raw(arena_spinlock_t __arena *lock)
+{
+	int val = atomic_read(&lock->val);
+
+	if (unlikely(val))
+		return 0;
+
+	return atomic_try_cmpxchg_acquire(&lock->val, &val, _Q_LOCKED_VAL);
 }
 
 __noinline __weak
@@ -346,7 +365,7 @@ queue:
 	 * attempt the trylock once more in the hope someone let go while we
 	 * weren't watching.
 	 */
-	if (arena_spin_trylock(lock))
+	if (arena_spin_trylock_raw(lock))
 		goto release;
 
 	/*
@@ -526,6 +545,17 @@ static __always_inline void arena_spin_unlock(arena_spinlock_t __arena *lock)
 			bpf_local_irq_restore(&(flags)); \
 		(__ret);                                 \
 	})
+
+#define arena_spin_trylock_irqsave(lock, flags)			\
+	({							\
+		int __ret;					\
+		bpf_local_irq_save(&(flags));			\
+		__ret = arena_spin_trylock((lock)) ? 0 : -EBUSY;\
+		if (__ret)					\
+			bpf_local_irq_restore(&(flags)); 	\
+		(__ret);                                 	\
+	})
+
 
 #define arena_spin_unlock_irqrestore(lock, flags) \
 	({                                        \
