@@ -44,6 +44,10 @@ _prologue() {
 	cd "$(dirname "${BASH_SOURCE[0]}")"
 }
 
+_is_enabled() {
+	grep -q "^$1=y" include/config/auto.conf
+}
+
 build() {
 	_prologue
 
@@ -85,7 +89,7 @@ _package-headers() {
 
 	_prologue
 
-	if grep -q CONFIG_MODULES=y include/config/auto.conf; then
+	if _is_enabled CONFIG_MODULES; then
 		echo "Installing build files..."
 		"${srctree}/scripts/package/install-extmod-build" "${builddir}"
 	fi
