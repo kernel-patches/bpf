@@ -2346,12 +2346,14 @@ __naked __noinline __used static int returns_zero(void)
  * A loop that the compiler unrolls in part has an exit for every 'break' and 'return' in every
  * copy of its body. How many there are says nothing about the number of iterations.
  * Scalar evolution takes a nested loop for one insn, and its exits are the successors of this insn.
- * The list of exits is not complete: the loop around has no formulas.
+ * The exit list is truncated: the enclosing loop has no SCEVs, the subprog is not analyzed.
  */
 SEC("xdp")
 __success __log_level(2)
 __msg("loop at 1, too many exits, too many exits of a nested loop")
 __msg("loop at 2, nested in 1, too many exits")
+__msg("Computing SCEV for subprog at 0:")
+__msg_next("Computing SCEV for subprog at {{[0-9]+}}:")
 __msg("loop header at 1, unsupported loop: too many exits of a nested loop")
 __msg("loop header at 2, header_count is [0..4] ")
 __naked void loop_around_301_exits(void)

@@ -286,7 +286,8 @@ static int imm_expr(struct scev *scev, s64 value)
 
 /*
  * The insn at @idx defines @reg. Without its backedges and with nested loops collapsed the body is
- * acyclic: an insn executes at most once per iteration, so a def is one value per iteration.
+ * acyclic: an insn executes at most once per iteration, so a def is one value per iteration. A
+ * subprog is the outermost loop, which runs once.
  */
 static struct expr_def insn_def(int idx, u32 reg)
 {
@@ -764,6 +765,25 @@ static struct env *get_loop_env(struct scev *scev, int loop_header, int insn_idx
 	tmp->cnt = cnt + 1;
 	scev->envs[insn_idx] = tmp;
 	return e;
+}
+
+/* The env has no users any more */
+static void free_loop_env(struct scev *scev, int loop_header, int insn_idx)
+{
+	struct insn_envs *envs = scev->envs[insn_idx];
+	u32 i;
+
+	for (i = 0; i < envs->cnt; i++) {
+		if (envs->entries[i].loop_header != loop_header)
+			continue;
+		kfree(envs->entries[i].env);
+		envs->entries[i] = envs->entries[--envs->cnt];
+		break;
+	}
+	if (envs->cnt)
+		return;
+	kfree(envs);
+	scev->envs[insn_idx] = NULL;
 }
 
 static int replace_reg(struct scev *scev, struct env *e, u32 reg, int id)
@@ -1315,7 +1335,7 @@ static int worklist_push(struct bpf_verifier_env *env, int loop_header, int idx)
 {
 	struct scev *scev = env->scev;
 	struct scev_worklist *worklist = &scev->worklist;
-	u32 tag = (u32)loop_header + 1;
+	u32 tag = loop_header + 2; /* -1 is a subprog */
 
 	if (scev->discovered[idx] == tag)
 		return 0;
@@ -1599,11 +1619,52 @@ static bool can_compute_loop_scev(const struct bpf_loop *loop)
 	return !loop->irreducible && !loop->nested_exits_overflow;
 }
 
-static int compute_scev_for_loop(struct bpf_verifier_env *env, int cur_header)
+/* A loop is a single instruction for the subprog too: no exit list may be truncated. */
+static bool can_compute_subprog_scev(struct bpf_verifier_env *env, struct bpf_subprog_info *sub)
+{
+	struct bpf_loop *loop;
+	int i;
+
+	for (i = sub->start; i < (sub + 1)->start; i++) {
+		loop = env->insn_aux_data[i].loop;
+		if (loop && (loop->exits_overflow || loop->nested_exits_overflow))
+			return false;
+	}
+	return true;
+}
+
+/*
+ * The edges that the verifier adds, see bpf_head_guard_target(): bpf_insn_successors() doesn't have
+ * them. They leave all loops. The env at their source is not known: @cur_env is all '?'. So their
+ * target is a join point with a phi for every live register.
+ */
+static int join_added_edges(struct bpf_verifier_env *env, struct bpf_subprog_info *sub,
+			    struct env *old_env, struct env *cur_env)
+{
+	int i, t, err;
+
+	for (i = sub->start; i < (sub + 1)->start; i++) {
+		t = bpf_head_guard_target(env, i);
+		if (t < 0)
+			continue;
+		err = join_successor(env, -1, t, old_env, cur_env);
+		if (err)
+			return err;
+	}
+	return sub->bail_insn < 0 ? 0 : join_successor(env, -1, sub->bail_insn, old_env, cur_env);
+}
+
+/*
+ * @cur_header and @first are a loop header. Or -1 and the first insn of a subprog: the subprog is
+ * the outermost loop, which runs once. (REG r) is the entry value of r, the loops in it are single
+ * instructions.
+ */
+static int compute_scev_for_loop(struct bpf_verifier_env *env, int cur_header, int first)
 {
 	struct scev_worklist *worklist = &env->scev->worklist;
 	struct bpf_insn_aux_data *aux = env->insn_aux_data;
-	struct bpf_loop *cur_loop = aux[cur_header].loop;
+	struct bpf_loop *cur_loop = cur_header < 0 ? NULL : aux[cur_header].loop;
+	struct bpf_subprog_info *sub = bpf_find_containing_subprog(env, first);
 	struct env *header_env;
 	struct scev *scev = env->scev;
 	struct bpf_loop *nested_loop;
@@ -1611,17 +1672,21 @@ static int compute_scev_for_loop(struct bpf_verifier_env *env, int cur_header)
 	struct env *old_env = NULL;
 	struct bpf_iarray *succ;
 	bool log_level2 = env->log.level & BPF_LOG_LEVEL2;
-	int s, i, err, idx, succ_idx;
+	int s, i, err, idx, succ_idx, start;
 	u32 r;
 
 	if (log_level2)
-		bpf_log(&env->log, "Computing SCEV for loop at %d:\n", cur_header);
+		bpf_log(&env->log, "Computing SCEV for %s at %d:\n",
+			cur_loop ? "loop" : "subprog", first);
+
+	if (!cur_loop && !can_compute_subprog_scev(env, sub))
+		return 0;
 
 	/*
 	 * For irreducible loops, and for loops nesting a loop with a truncated
 	 * exit list, just assume that everything is clobbered for now.
 	 */
-	if (!can_compute_loop_scev(cur_loop)) {
+	if (cur_loop && !can_compute_loop_scev(cur_loop)) {
 		header_env = get_loop_env(scev, cur_header, cur_header);
 		if (!header_env)
 			return -ENOMEM;
@@ -1640,17 +1705,30 @@ static int compute_scev_for_loop(struct bpf_verifier_env *env, int cur_header)
 		if (!old_env)
 			goto nomem;
 	}
-	header_env = get_loop_env(scev, cur_header, cur_header);
+	header_env = get_loop_env(scev, cur_header, first);
 	if (!header_env)
 		goto nomem;
 	setup_initial_loop_env(header_env);
-	err = worklist_push(env, cur_header, cur_header);
+	err = worklist_push(env, cur_header, first);
 	if (err)
 		goto out;
+	if (!cur_loop) {
+		/* no backedge overwrites it */
+		header_env->empty = false;
+		err = join_added_edges(env, sub, old_env, cur_env);
+		if (err)
+			goto out;
+	}
 
 	while (worklist->nr) {
 		idx = *min_heap_peek_inline(worklist);
 		min_heap_pop_inline(worklist, &worklist_cb, env->cfg.postorder_nums);
+		start = idx;
+		if (signal_pending(current)) {
+			err = -EAGAIN;
+			goto out;
+		}
+		cond_resched();
 
 		/* join_successor() maps nested-loop entries to their representative header. */
 		nested_loop = idx != cur_header ? aux[idx].loop : NULL;
@@ -1662,12 +1740,16 @@ static int compute_scev_for_loop(struct bpf_verifier_env *env, int cur_header)
 			 */
 			if (log_level2)
 				memcpy(old_env, cur_env, sizeof(*old_env));
-			/* Pull the nested loop's stack-store base dependencies up. */
-			for_each_set_bit(r, nested_loop->store_base_regs, BPF_SCEV_REGS_NUM)
-				or_expr_regs(env, cur_env->reg2expr[r], cur_loop->store_base_regs);
-			/* And what its jumps depend on. */
-			for_each_set_bit(r, nested_loop->tested_regs, BPF_SCEV_REGS_NUM)
-				or_expr_regs(env, cur_env->reg2expr[r], cur_loop->tested_regs);
+			if (cur_loop) {
+				/* Pull the nested loop's stack-store base dependencies up. */
+				for_each_set_bit(r, nested_loop->store_base_regs, BPF_SCEV_REGS_NUM)
+					or_expr_regs(env, cur_env->reg2expr[r],
+						     cur_loop->store_base_regs);
+				/* And what its jumps depend on. */
+				for_each_set_bit(r, nested_loop->tested_regs, BPF_SCEV_REGS_NUM)
+					or_expr_regs(env, cur_env->reg2expr[r],
+						     cur_loop->tested_regs);
+			}
 			err = forget_non_invariants(env, cur_env, idx);
 			if (err)
 				goto out;
@@ -1691,8 +1773,12 @@ static int compute_scev_for_loop(struct bpf_verifier_env *env, int cur_header)
 			for (;;) {
 				if (log_level2)
 					memcpy(old_env, cur_env, sizeof(*old_env));
-				collect_store_base_regs(env, cur_env, idx, cur_loop->store_base_regs);
-				collect_tested_regs(env, cur_env, idx, cur_loop->tested_regs);
+				if (cur_loop) {
+					collect_store_base_regs(env, cur_env, idx,
+								cur_loop->store_base_regs);
+					collect_tested_regs(env, cur_env, idx,
+							    cur_loop->tested_regs);
+				}
 				err = transfer(env, cur_env, idx);
 				if (err)
 					goto out;
@@ -1717,6 +1803,9 @@ static int compute_scev_for_loop(struct bpf_verifier_env *env, int cur_header)
 					goto out;
 			}
 		}
+		/* Reverse post-order: all predecessors came first, the env has no users any more */
+		if (!aux[start].need_scev)
+			free_loop_env(scev, cur_header, start);
 	}
 
 	err = 0;
@@ -2124,7 +2213,12 @@ int bpf_compute_scev(struct bpf_verifier_env *env)
 		idx = postorder[i];
 		if (!aux[idx].loop)
 			continue;
-		err = compute_scev_for_loop(env, idx);
+		err = compute_scev_for_loop(env, idx, idx);
+		if (err)
+			return err;
+	}
+	for (i = 0; i < env->subprog_cnt; i++) {
+		err = compute_scev_for_loop(env, -1, env->subprog_info[i].start);
 		if (err)
 			return err;
 	}
