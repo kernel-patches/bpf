@@ -2489,14 +2489,6 @@ struct dc_plane_state *dc_get_surface_for_mpcc(struct dc *dc,
 
 
 uint32_t dc_get_opp_for_plane(struct dc *dc, struct dc_plane_state *plane);
-bool dc_set_fva_vrr_adjust(struct dc *dc,
-	struct dc_stream_state *stream,
-	struct fva_adj *fva_adj,
-	struct dc_crtc_timing_adjust *vrr_adj);
-
-int dc_get_hw_max_fva_factor(struct dc *dc,
-		struct dc_stream_state *stream,
-		unsigned int max_pixel_clock);
 
 void dc_set_vstartup_start(struct dc *dc,
 		struct dc_stream_state *stream);

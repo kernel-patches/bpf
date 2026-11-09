@@ -1207,12 +1207,6 @@ struct mcif_buf_params {
 	uint8_t				tmz_id;
 };
 
-struct fva_adj {
-	unsigned int pixel_clock_100hz;
-	unsigned int max_pixel_clock_100hz;
-	unsigned int fva_factor;
-};
-
 enum symclk_state {
 	SYMCLK_OFF_TX_OFF,
 	SYMCLK_ON_TX_ON,
