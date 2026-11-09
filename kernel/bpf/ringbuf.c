@@ -761,6 +761,9 @@ static int __bpf_user_ringbuf_peek(struct bpf_ringbuf *rb, void **sample, u32 *s
 	if (cons_pos >= prod_pos)
 		return -ENODATA;
 
+	if (prod_pos - cons_pos > ringbuf_total_data_sz(rb))
+		return -EINVAL;
+
 	hdr = (u32 *)((uintptr_t)rb->data + (uintptr_t)(cons_pos & rb->mask));
 	/* Synchronizes with smp_store_release() in user-space producer. */
 	hdr_len = smp_load_acquire(hdr);
