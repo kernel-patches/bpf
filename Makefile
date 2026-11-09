@@ -556,6 +556,7 @@ CLIPPY_DRIVER	= clippy-driver
 BINDGEN		= bindgen
 PAHOLE		= pahole
 RESOLVE_BTFIDS	= $(objtree)/tools/bpf/resolve_btfids/resolve_btfids
+BPFTOOL		= $(objtree)/tools/bpf/bpftool/bpftool
 LEX		= flex
 YACC		= bison
 AWK		= awk
@@ -652,7 +653,7 @@ export CLIPPY_CONF_DIR := $(srctree)
 export ARCH SRCARCH CONFIG_SHELL BASH HOSTCC KBUILD_HOSTCFLAGS CROSS_COMPILE LD CC HOSTPKG_CONFIG
 export RUSTC RUSTDOC RUSTFMT RUSTC_OR_CLIPPY_QUIET RUSTC_OR_CLIPPY BINDGEN LLVM_LINK
 export HOSTRUSTC KBUILD_HOSTRUSTFLAGS
-export CPP AR NM STRIP OBJCOPY OBJDUMP READELF PAHOLE RESOLVE_BTFIDS LEX YACC AWK INSTALLKERNEL
+export CPP AR NM STRIP OBJCOPY OBJDUMP READELF PAHOLE RESOLVE_BTFIDS BPFTOOL LEX YACC AWK INSTALLKERNEL
 export PERL PYTHON3 CHECK CHECKFLAGS MAKE UTS_MACHINE HOSTCXX
 export KGZIP KPGZIP KBZIP2 KLZOP LZMA LZ4 XZ ZSTD TAR
 export KBUILD_HOSTCXXFLAGS KBUILD_HOSTLDFLAGS KBUILD_HOSTLDLIBS KBUILD_PROCMACROLDFLAGS LDFLAGS_MODULE
@@ -1635,6 +1636,15 @@ ifneq ($(wildcard $(bootconfig_O)),)
 	$(Q)$(MAKE) -sC $(srctree)/tools/bootconfig O=$(bootconfig_O) clean
 endif
 
+PHONY += bpftool_clean
+
+bpftool_O = $(abspath $(objtree))/tools/bpf/bpftool
+
+bpftool_clean:
+ifneq ($(wildcard $(bpftool_O)),)
+	$(Q)$(MAKE) -sC $(abs_srctree)/tools/bpf/bpftool O=$(objtool_O) srctree=$(abs_srctree) clean
+endif
+
 tools/: FORCE
 	$(Q)mkdir -p $(objtree)/tools
 	$(Q)$(MAKE) O=$(abspath $(objtree)) subdir=tools -C $(srctree)/tools/
@@ -1784,7 +1794,7 @@ CLEAN_FILES += vmlinux.symvers modules-only.symvers \
 	       vmlinux.BTF.inline \
 	       vmlinux.thinlto-index builtin.order \
 	       compile_commands.json rust/test \
-	       rust-project.json .vmlinux.objs .vmlinux.export.c \
+	       rust-project.json .vmlinux.objs .vmlinux.export.c vmlinux.h \
 	       .builtin-dtbs-list .builtin-dtbs.S sbom-*.spdx.json
 
 # Directories & files removed with 'make mrproper'
@@ -1811,7 +1821,7 @@ vmlinuxclean:
 	$(Q)$(CONFIG_SHELL) $(srctree)/scripts/link-vmlinux.sh clean
 	$(Q)$(if $(ARCH_POSTLINK), $(MAKE) -f $(ARCH_POSTLINK) clean)
 
-clean: archclean vmlinuxclean resolve_btfids_clean objtool_clean bootconfig_clean
+clean: archclean vmlinuxclean resolve_btfids_clean objtool_clean bootconfig_clean bpftool_clean
 
 # mrproper - Delete all generated files, including .config
 #

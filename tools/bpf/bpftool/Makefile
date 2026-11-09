@@ -169,6 +169,7 @@ endif
 include $(wildcard $(OUTPUT)*.d)
 
 all: $(OUTPUT)bpftool
+	@:
 
 SRCS := $(wildcard *.c)
 
