@@ -516,18 +516,18 @@ static void raid6_avx5124_xor_syndrome(int disks, int start, int stop,
 				     :
 				     : );
 		}
-		asm volatile("vmovntdq %%zmm2,%0\n\t"
-			     "vmovntdq %%zmm3,%1\n\t"
-			     "vmovntdq %%zmm10,%2\n\t"
-			     "vmovntdq %%zmm11,%3\n\t"
+		asm volatile("vmovdqa64 %%zmm2,%0\n\t"
+			     "vmovdqa64 %%zmm3,%1\n\t"
+			     "vmovdqa64 %%zmm10,%2\n\t"
+			     "vmovdqa64 %%zmm11,%3\n\t"
 			     "vpxorq %4,%%zmm4,%%zmm4\n\t"
 			     "vpxorq %5,%%zmm6,%%zmm6\n\t"
 			     "vpxorq %6,%%zmm12,%%zmm12\n\t"
 			     "vpxorq %7,%%zmm14,%%zmm14\n\t"
-			     "vmovntdq %%zmm4,%4\n\t"
-			     "vmovntdq %%zmm6,%5\n\t"
-			     "vmovntdq %%zmm12,%6\n\t"
-			     "vmovntdq %%zmm14,%7"
+			     "vmovdqa64 %%zmm4,%4\n\t"
+			     "vmovdqa64 %%zmm6,%5\n\t"
+			     "vmovdqa64 %%zmm12,%6\n\t"
+			     "vmovdqa64 %%zmm14,%7"
 			     :
 			     : "m" (p[d]),  "m" (p[d+64]), "m" (p[d+128]),
 			       "m" (p[d+192]), "m" (q[d]),  "m" (q[d+64]),

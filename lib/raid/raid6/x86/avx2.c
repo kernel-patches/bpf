@@ -435,18 +435,18 @@ static void raid6_avx24_xor_syndrome(int disks, int start, int stop,
 			asm volatile("vpxor %ymm13,%ymm12,%ymm12");
 			asm volatile("vpxor %ymm15,%ymm14,%ymm14");
 		}
-		asm volatile("vmovntdq %%ymm2,%0" : "=m" (p[d]));
-		asm volatile("vmovntdq %%ymm3,%0" : "=m" (p[d+32]));
-		asm volatile("vmovntdq %%ymm10,%0" : "=m" (p[d+64]));
-		asm volatile("vmovntdq %%ymm11,%0" : "=m" (p[d+96]));
+		asm volatile("vmovdqa %%ymm2,%0" : "=m" (p[d]));
+		asm volatile("vmovdqa %%ymm3,%0" : "=m" (p[d+32]));
+		asm volatile("vmovdqa %%ymm10,%0" : "=m" (p[d+64]));
+		asm volatile("vmovdqa %%ymm11,%0" : "=m" (p[d+96]));
 		asm volatile("vpxor %0,%%ymm4,%%ymm4" : : "m" (q[d]));
 		asm volatile("vpxor %0,%%ymm6,%%ymm6" : : "m" (q[d+32]));
 		asm volatile("vpxor %0,%%ymm12,%%ymm12" : : "m" (q[d+64]));
 		asm volatile("vpxor %0,%%ymm14,%%ymm14" : : "m" (q[d+96]));
-		asm volatile("vmovntdq %%ymm4,%0" : "=m" (q[d]));
-		asm volatile("vmovntdq %%ymm6,%0" : "=m" (q[d+32]));
-		asm volatile("vmovntdq %%ymm12,%0" : "=m" (q[d+64]));
-		asm volatile("vmovntdq %%ymm14,%0" : "=m" (q[d+96]));
+		asm volatile("vmovdqa %%ymm4,%0" : "=m" (q[d]));
+		asm volatile("vmovdqa %%ymm6,%0" : "=m" (q[d+32]));
+		asm volatile("vmovdqa %%ymm12,%0" : "=m" (q[d+64]));
+		asm volatile("vmovdqa %%ymm14,%0" : "=m" (q[d+96]));
 	}
 	asm volatile("sfence" : : : "memory");
 	asm volatile("vzeroupper");
