@@ -280,6 +280,22 @@ static void test_user_ringbuf_post_larger_than_ringbuf_sz(void)
 	user_ringbuf_success__destroy(skel);
 }
 
+static void test_user_ringbuf_post_backlog_larger_than_ringbuf_sz(void)
+{
+	struct user_ringbuf_success *skel;
+	struct user_ring_buffer *ringbuf;
+	int err;
+	__u32 size = sizeof(struct sample);
+
+	err = load_skel_create_user_ringbuf(&skel, &ringbuf);
+	if (!ASSERT_OK(err, "oversized_backlog_skel"))
+		return;
+
+	manually_write_test_invalid_sample(skel, size, c_ringbuf_size * 2, -EINVAL);
+	user_ring_buffer__free(ringbuf);
+	user_ringbuf_success__destroy(skel);
+}
+
 static void test_user_ringbuf_basic(void)
 {
 	struct user_ringbuf_success *skel;
@@ -673,6 +689,7 @@ static struct {
 	SUCCESS_TEST(test_user_ringbuf_post_misaligned),
 	SUCCESS_TEST(test_user_ringbuf_post_producer_wrong_offset),
 	SUCCESS_TEST(test_user_ringbuf_post_larger_than_ringbuf_sz),
+	SUCCESS_TEST(test_user_ringbuf_post_backlog_larger_than_ringbuf_sz),
 	SUCCESS_TEST(test_user_ringbuf_basic),
 	SUCCESS_TEST(test_user_ringbuf_sample_full_ring_buffer),
 	SUCCESS_TEST(test_user_ringbuf_post_alignment_autoadjust),
