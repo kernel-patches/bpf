@@ -493,13 +493,9 @@ static inline void gen11_master_intr_enable(void __iomem * const regs)
 	raw_reg_write(regs, GEN11_GFX_MSTR_IRQ, GEN11_MASTER_IRQ);
 }
 
-static u32 gen11_gu_misc_irq_ack(void __iomem * const regs,
-				 u32 master_ctl)
+static u32 gen11_gu_misc_irq_ack(void __iomem * const regs)
 {
 	u32 iir;
-
-	if (!(master_ctl & GEN11_GU_MISC_IRQ))
-		return 0;
 
 	iir = raw_reg_read(regs, GEN11_GU_MISC_IIR);
 	if (likely(iir))
@@ -514,8 +510,8 @@ static irqreturn_t gen11_irq_handler(int irq, void *arg)
 	struct intel_display *display = i915->display;
 	void __iomem * const regs = intel_uncore_regs(&i915->uncore);
 	struct intel_gt *gt = to_gt(i915);
+	u32 gu_misc_iir = 0;
 	u32 master_ctl;
-	u32 gu_misc_iir;
 
 	if (!intel_irqs_enabled(i915))
 		return IRQ_NONE;
@@ -534,7 +530,8 @@ static irqreturn_t gen11_irq_handler(int irq, void *arg)
 	if (master_ctl & GEN11_DISPLAY_IRQ)
 		intel_display_irq_handler(display, NULL);
 
-	gu_misc_iir = gen11_gu_misc_irq_ack(regs, master_ctl);
+	if (master_ctl & GEN11_GU_MISC_IRQ)
+		gu_misc_iir = gen11_gu_misc_irq_ack(regs);
 
 	gen11_master_intr_enable(regs);
 
@@ -575,7 +572,7 @@ static irqreturn_t dg1_irq_handler(int irq, void *arg)
 	struct intel_gt *gt = to_gt(i915);
 	void __iomem * const regs = intel_uncore_regs(gt->uncore);
 	u32 master_tile_ctl, master_ctl;
-	u32 gu_misc_iir;
+	u32 gu_misc_iir = 0;
 
 	if (!intel_irqs_enabled(i915))
 		return IRQ_NONE;
@@ -603,7 +600,8 @@ static irqreturn_t dg1_irq_handler(int irq, void *arg)
 	if (master_ctl & GEN11_DISPLAY_IRQ)
 		intel_display_irq_handler(display, NULL);
 
-	gu_misc_iir = gen11_gu_misc_irq_ack(regs, master_ctl);
+	if (master_ctl & GEN11_GU_MISC_IRQ)
+		gu_misc_iir = gen11_gu_misc_irq_ack(regs);
 
 	dg1_master_intr_enable(regs);
 
