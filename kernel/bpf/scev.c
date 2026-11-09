@@ -109,6 +109,7 @@ struct scev {
 	int exprs_cap;
 	int envs_cnt;
 	int stack_sz;
+	int simplify_depth;
 	struct expr_stack_elt expr_stack[EXPR_STACK_DEPTH];
 	u32 ids_buf[EXPR_STACK_DEPTH];
 };
@@ -178,13 +179,30 @@ static int add_expr(struct scev *scev, struct expr e)
 	return id;
 }
 
+static int simplify(struct scev *scev, u32 id);
+
+/*
+ * An expression is simplified at construction. Its params are simplified already, so simplify()
+ * rewrites the root only, whatever the depth of the expression.
+ * The rules construct expressions too, and one rule can enable the next: the depth of (zext32
+ * (spill32 (+ (spill32 (+ ..) 1)) 1)) is up to the prog. Beyond depth EXPR_STACK_DEPTH an
+ * expression is correct, but not simplified.
+ */
 static int expr2(struct scev *scev, u32 op, int a, int b)
 {
+	int id;
+
 	if (a < 0)
 		return a;
 	if (b < 0)
 		return b;
-	return add_expr(scev, (struct expr){ .op = op, .params = {a, b} });
+	id = add_expr(scev, (struct expr){ .op = op, .params = {a, b} });
+	if (id < 0 || scev->simplify_depth == EXPR_STACK_DEPTH)
+		return id;
+	scev->simplify_depth++;
+	id = simplify(scev, id);
+	scev->simplify_depth--;
+	return id;
 }
 
 static int expr1(struct scev *scev, u32 op, int a)
@@ -251,14 +269,47 @@ static bool is_zext32(struct scev *scev, int id, u32 *left)
 	return is_unop(scev, ZEXT32, id, left);
 }
 
-/* The low half of the slot is the low half of @left. The other half is not known. */
-static bool is_spill32(struct scev *scev, int id, u32 *left)
+/* (zextN x), (sextN x) and (spillN x) depend on the low N bits of x only */
+static u32 op_low_bits(u32 op)
 {
+	switch (op) {
+	case ZEXT8:
+	case SEXT8:
+	case SPILL8:
+		return 8;
+	case ZEXT16:
+	case SEXT16:
+	case SPILL16:
+		return 16;
+	case ZEXT32:
+	case SEXT32:
+	case SPILL32:
+		return 32;
+	}
+	return 0;
+}
+
+/* The low @bits bits of the slot are those of @left. The other bits are not known. */
+static bool is_spill(struct scev *scev, int id, u32 *bits, u32 *left)
+{
+	u32 op = scev->exprs[id].op;
+
 #ifdef __BIG_ENDIAN
 	/* '*(u32 *)(r10 - 8) = rX' writes the high half, see mk_fill() */
 	return false;
 #endif
-	return is_unop(scev, SPILL32, id, left);
+	if (op != SPILL8 && op != SPILL16 && op != SPILL32)
+		return false;
+	*bits = op_low_bits(op);
+	*left = scev->exprs[id].params[0];
+	return true;
+}
+
+static bool is_spill32(struct scev *scev, int id, u32 *left)
+{
+	u32 bits;
+
+	return is_spill(scev, id, &bits, left) && bits == 32;
 }
 
 static bool is_any(struct scev *scev, int id, u32 *left, u32 *right)
@@ -1579,35 +1630,20 @@ static int transform_expr_once(struct scev *scev, u32 lvl, u32 root, void *priv,
 	return id < 0 ? id : fn(scev, id, priv);
 }
 
-static int transform_expr(struct scev *scev, u32 root, void *priv,
-			  int (*fn)(struct scev *scev, u32 id, void *priv))
-{
-	int i = 0, id_old, id_new = root;
-
-	do {
-		/*
-		 * The depth limit is somewhat arbitrary and is essentially a failsafe.
-		 * oscillation should not really happen. Still, it seems harsh to error out.
-		 */
-		if (i++ == 4 * EXPR_STACK_DEPTH)
-			return UNKNOWN_EXPR_ID;
-		id_old = id_new;
-		id_new = transform_expr_once(scev, 0, id_old, priv, fn);
-		if (id_new < 0)
-			return id_new;
-	} while (id_old != id_new);
-	return id_new;
-}
-
-static int simplify(struct scev *scev, u32 id, void *priv)
+static int simplify(struct scev *scev, u32 id)
 {
 	int a, b, l, r, t, base, slope;
+	u32 bits, op = scev->exprs[id].op;
 	s64 imm1, imm2;
 
 	/* (- x imm) -> (+ x -imm) */
 	if (is_binop(scev, BPF_SUB, id, &l, &r) &&
 	    is_imm(scev, r, &imm1) && imm1 != S64_MIN)
 		return expr2(scev, BPF_ADD, l, imm_expr(scev, -imm1));
+
+	/* (+ x 0) -> x */
+	if (is_add(scev, id, &l, &r) && is_imm(scev, r, &imm1) && !imm1)
+		return l;
 
 	/* (+ (+ x imm) imm) -> (+ x imm) */
 	if (is_add(scev, id, &l, &r) &&
@@ -1658,12 +1694,14 @@ static int simplify(struct scev *scev, u32 id, void *priv)
 		return expr1(scev, SPILL32, expr2(scev, BPF_ADD, a, b));
 
 	/*
-	 * 'rX = *(u32 *)(r10 - 8)' loads what was stored:
+	 * 'rX = *(u32 *)(r10 - 8)' fills what was spilled, a narrower fill the low bits of it:
 	 * (zext32 (spill32 $a)) -> (zext32 $a)
+	 * (sext8 (spill16 $a)) -> (sext8 $a)
 	 * (zext32 (+ (spill32 $a) $b)) -> (zext32 (+ $a $b))
 	 */
-	if (is_zext32(scev, id, &t) && is_spill32(scev, t, &a))
-		return expr1(scev, ZEXT32, a);
+	if (op_low_bits(op) && is_spill(scev, scev->exprs[id].params[0], &bits, &a) &&
+	    op_low_bits(op) <= bits)
+		return expr1(scev, op, a);
 	if (is_zext32(scev, id, &t) && is_add(scev, t, &l, &b) && is_spill32(scev, l, &a))
 		return expr1(scev, ZEXT32, expr2(scev, BPF_ADD, a, b));
 
@@ -1692,10 +1730,7 @@ static int compute_header_scevs(struct bpf_verifier_env *env, struct env *header
 	 *      ... at exit r1 is in {7,42} ...
 	 */
 	for (ra = 0; ra < REGS_NUM; ra++) {
-		ra_expr = transform_expr(scev, header_env->reg2expr[ra], NULL, simplify);
-		if (ra_expr < 0)
-			return ra_expr;
-		header_env->reg2expr[ra] = ra_expr;
+		ra_expr = header_env->reg2expr[ra];
 		/* rA = (+ rA IMM) -> (linear rA IMM) */
 		if (is_add(scev, ra_expr, &l, &r) &&
 		    is_reg(scev, l, &rb) &&
@@ -1843,17 +1878,8 @@ static int compute_insn_scevs(struct bpf_verifier_env *env, struct env *eheader,
 	int id, reg;
 
 	for (reg = 0; reg < REGS_NUM; reg++) {
-		/*
-		 * Simplify first. 'store, load, test' of a 32-bit counter on the stack with the
-		 * equation of the header in it is deeper than EXPR_STACK_DEPTH.
-		 */
-		id = transform_expr(scev, einsn->reg2expr[reg], NULL, simplify);
-		if (id < 0)
-			return id;
-		id = transform_expr_once(scev, 0, id, eheader->reg2scev, instantiate_header_scevs);
-		if (id < 0)
-			return id;
-		id = transform_expr(scev, id, NULL, simplify);
+		id = transform_expr_once(scev, 0, einsn->reg2expr[reg], eheader->reg2scev,
+					 instantiate_header_scevs);
 		if (id < 0)
 			return id;
 		einsn->reg2scev[reg] = id;
