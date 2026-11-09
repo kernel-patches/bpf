@@ -989,8 +989,10 @@ next:;
 	return id;
 }
 
-static int join(struct scev *scev, struct env *acc, struct env *cur)
+/* @acc is the env before the insn at @idx */
+static int join(struct bpf_verifier_env *env, struct env *acc, struct env *cur, int idx)
 {
+	struct scev *scev = env->scev;
 	int i, id;
 
 	if (acc->empty) {
@@ -1001,7 +1003,9 @@ static int join(struct scev *scev, struct env *acc, struct env *cur)
 
 	for (i = 0; i < REGS_NUM; i++) {
 		if (!same_exprs(scev, acc->reg2expr[i], cur->reg2expr[i])) {
-			id = mk_any(scev, acc->reg2expr[i], cur->reg2expr[i]);
+			/* no phi for a dead register: pruned SSA */
+			id = reg_alive_at(env, i, idx) ?
+			     mk_any(scev, acc->reg2expr[i], cur->reg2expr[i]) : UNKNOWN_EXPR_ID;
 			if (id < 0)
 				return id;
 			acc->reg2expr[i] = id;
@@ -1339,7 +1343,7 @@ static int join_successor(struct bpf_verifier_env *env, int cur_header, int succ
 		return -ENOMEM;
 	if (log_level2)
 		memcpy(old_env, succ_env, sizeof(*old_env));
-	err = join(scev, succ_env, cur_env);
+	err = join(env, succ_env, cur_env, succ_idx);
 	if (err)
 		return err;
 	err = worklist_push(env, cur_header, succ_idx);
