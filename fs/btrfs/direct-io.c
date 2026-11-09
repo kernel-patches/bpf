@@ -1055,20 +1055,36 @@ buffered:
 	/*
 	 * Ensure all data is persisted. We want the next direct IO read to be
 	 * able to read what was just written.
+	 * On success btrfs_buffered_write() incremented iocb->ki_pos already.
 	 */
 	endbyte = pos + written_buffered - 1;
 	ret = btrfs_fdatawrite_range(BTRFS_I(inode), pos, endbyte);
-	if (ret)
+	if (ret) {
+		iocb->ki_pos = pos;
 		goto out;
+	}
 	ret = filemap_fdatawait_range(inode->i_mapping, pos, endbyte);
-	if (ret)
+	if (ret) {
+		iocb->ki_pos = pos;
 		goto out;
+	}
 	written += written_buffered;
-	iocb->ki_pos = pos + written_buffered;
 	invalidate_mapping_pages(file->f_mapping, pos >> PAGE_SHIFT,
 				 endbyte >> PAGE_SHIFT);
 out:
-	return ret < 0 ? ret : written;
+	if (ret == -EIOCBQUEUED)
+		return ret;
+	/*
+	 * Always report partial writes if we wrote something, otherwise it
+	 * could lead to silent corruption for some applications: for example
+	 * if an application does writes to a file opened with append only mode,
+	 * in case we succeed doing a part of the write and then fallback to
+	 * buffered IO and that fails (or return -EAGAIN because we are in a
+	 * NOWAIT context), we mislead the application into trying to write the
+	 * whole buffer again, resulting in duplicating part of the data and
+	 * therefore a corruption at the application level.
+	 */
+	return written > 0 ? written : ret;
 }
 
 static int check_direct_read(struct btrfs_fs_info *fs_info,
