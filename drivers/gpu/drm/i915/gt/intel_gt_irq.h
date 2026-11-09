@@ -12,6 +12,9 @@
 
 struct intel_gt;
 
+#define GEN11_GT_IRQS (GEN11_GT_DW_IRQ(0) | \
+		       GEN11_GT_DW_IRQ(1))
+
 #define GEN8_GT_IRQS (GEN8_GT_RCS_IRQ | \
 		      GEN8_GT_BCS_IRQ | \
 		      GEN8_GT_VCS0_IRQ | \

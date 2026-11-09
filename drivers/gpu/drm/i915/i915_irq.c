@@ -527,7 +527,8 @@ static irqreturn_t gen11_irq_handler(int irq, void *arg)
 	}
 
 	/* Find, queue (onto bottom-halves), then clear each source */
-	gen11_gt_irq_handler(gt, master_ctl);
+	if (master_ctl & GEN11_GT_IRQS)
+		gen11_gt_irq_handler(gt, master_ctl);
 
 	/* IRQs are synced during runtime_suspend, we don't require a wakeref */
 	if (master_ctl & GEN11_DISPLAY_IRQ)
@@ -596,7 +597,8 @@ static irqreturn_t dg1_irq_handler(int irq, void *arg)
 		return IRQ_NONE;
 	}
 
-	gen11_gt_irq_handler(gt, master_ctl);
+	if (master_ctl & GEN11_GT_IRQS)
+		gen11_gt_irq_handler(gt, master_ctl);
 
 	if (master_ctl & GEN11_DISPLAY_IRQ)
 		intel_display_irq_handler(display, NULL);
