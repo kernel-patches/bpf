@@ -495,6 +495,9 @@ static const char *const cs43130_supply_names[CS43130_NUM_SUPPLIES] = {
 
 struct cs43130_dai {
 	unsigned int			sclk;
+	unsigned int			slots;
+	unsigned int			slot_width;
+	u8				slot_loc[2];
 	unsigned int			dai_format;
 	unsigned int			dai_mode;
 	unsigned int			dai_invert;
