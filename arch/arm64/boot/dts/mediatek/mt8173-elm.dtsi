@@ -948,8 +948,8 @@
 
 			mt6397_vpca15_reg: buck_vpca15 {
 				regulator-name = "vpca15";
-				regulator-min-microvolt = < 700000>;
-				regulator-max-microvolt = <1350000>;
+				regulator-min-microvolt = < 725000>;
+				regulator-max-microvolt = <1125000>;
 				regulator-ramp-delay = <12500>;
 				regulator-always-on;
 				regulator-allowed-modes = <0 1>;
@@ -957,8 +957,8 @@
 
 			mt6397_vpca7_reg: buck_vpca7 {
 				regulator-name = "vpca7";
-				regulator-min-microvolt = < 700000>;
-				regulator-max-microvolt = <1350000>;
+				regulator-min-microvolt = <1200000>;
+				regulator-max-microvolt = <1200000>;
 				regulator-ramp-delay = <12500>;
 				regulator-enable-ramp-delay = <115>;
 				regulator-always-on;
@@ -966,16 +966,16 @@
 
 			mt6397_vsramca15_reg: buck_vsramca15 {
 				regulator-name = "vsramca15";
-				regulator-min-microvolt = < 700000>;
-				regulator-max-microvolt = <1350000>;
+				regulator-min-microvolt = < 931250>;
+				regulator-max-microvolt = <1150000>;
 				regulator-ramp-delay = <12500>;
 				regulator-always-on;
 			};
 
 			mt6397_vsramca7_reg: buck_vsramca7 {
 				regulator-name = "vsramca7";
-				regulator-min-microvolt = < 700000>;
-				regulator-max-microvolt = <1350000>;
+				regulator-min-microvolt = < 931250>;
+				regulator-max-microvolt = <1150000>;
 				regulator-ramp-delay = <12500>;
 				regulator-always-on;
 			};
@@ -983,7 +983,7 @@
 			mt6397_vcore_reg: buck_vcore {
 				regulator-name = "vcore";
 				regulator-min-microvolt = < 700000>;
-				regulator-max-microvolt = <1350000>;
+				regulator-max-microvolt = <1125000>;
 				regulator-ramp-delay = <12500>;
 				regulator-always-on;
 			};
@@ -999,7 +999,7 @@
 			mt6397_vdrm_reg: buck_vdrm {
 				regulator-name = "vdrm";
 				regulator-min-microvolt = <1200000>;
-				regulator-max-microvolt = <1400000>;
+				regulator-max-microvolt = <1300000>;
 				regulator-ramp-delay = <12500>;
 				regulator-always-on;
 			};
@@ -1088,8 +1088,8 @@
 
 			mt6397_vgp5_reg: ldo_vgp5 {
 				regulator-name = "vgp5";
-				regulator-min-microvolt = <1200000>;
-				regulator-max-microvolt = <3000000>;
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
 				regulator-enable-ramp-delay = <218>;
 			};
 
