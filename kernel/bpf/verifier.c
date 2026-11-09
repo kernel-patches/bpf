@@ -3578,30 +3578,6 @@ static void mark_non_stack_access(struct bpf_verifier_env *env, int idx)
 	env->insn_aux_data[idx].non_stack_access = true;
 }
 
-#define LINKED_REGS_MAX	5
-
-struct linked_reg {
-	u8 frameno;
-	union {
-		u16 spi;
-		u16 regno;
-	};
-	bool is_reg;
-};
-
-struct linked_regs {
-	int cnt;
-	struct linked_reg entries[LINKED_REGS_MAX];
-};
-
-static struct linked_reg *linked_regs_push(struct linked_regs *s)
-{
-	if (s->cnt < LINKED_REGS_MAX)
-		return &s->entries[s->cnt++];
-
-	return NULL;
-}
-
 const char *bpf_disasm_kfunc_name(void *data, const struct bpf_insn *insn)
 {
 	const struct btf_type *func;
@@ -19629,119 +19605,6 @@ static bool try_match_pkt_pointers(const struct bpf_insn *insn,
 	return true;
 }
 
-static void __collect_linked_regs(struct linked_regs *reg_set, struct bpf_reg_state *reg,
-				  u32 id, u32 frameno, u32 spi_or_reg, bool is_reg)
-{
-	struct linked_reg *e;
-
-	if (reg->type != SCALAR_VALUE || (reg->id & ~BPF_ADD_CONST) != id)
-		return;
-
-	e = linked_regs_push(reg_set);
-	if (e) {
-		e->frameno = frameno;
-		e->is_reg = is_reg;
-		e->regno = spi_or_reg;
-	} else {
-		clear_scalar_id(reg);
-	}
-}
-
-/* For all R being scalar registers or spilled scalar registers
- * in verifier state, save R in linked_regs if R->id == id.
- * If there are too many Rs sharing same id, reset id for leftover Rs.
- */
-static void collect_linked_regs(struct bpf_verifier_env *env,
-				struct bpf_verifier_state *vstate,
-				u32 id,
-				struct linked_regs *linked_regs)
-{
-	struct bpf_insn_aux_data *aux = env->insn_aux_data;
-	struct bpf_func_state *func;
-	struct bpf_reg_state *reg;
-	u16 live_regs;
-	int i, j;
-
-	id = id & ~BPF_ADD_CONST;
-	for (i = vstate->curframe; i >= 0; i--) {
-		live_regs = aux[bpf_frame_insn_idx(vstate, i)].live_regs_before;
-		func = vstate->frame[i];
-		for (j = 0; j < BPF_REG_FP; j++) {
-			if (!(live_regs & BIT(j)))
-				continue;
-			reg = &func->regs[j];
-			__collect_linked_regs(linked_regs, reg, id, i, j, true);
-		}
-		for (j = 0; j < bpf_stack_nr_slots(func); j++) {
-			struct bpf_stack_state *ss = bpf_stack_slot(func, j);
-
-			if (!bpf_is_spilled_reg(ss))
-				continue;
-			reg = &ss->spilled_ptr;
-			__collect_linked_regs(linked_regs, reg, id, i, j, false);
-		}
-	}
-}
-
-/* For all R in linked_regs, copy known_reg range into R
- * if R->id == known_reg->id.
- */
-static void sync_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier_state *vstate,
-			     struct bpf_reg_state *known_reg, struct linked_regs *linked_regs)
-{
-	struct bpf_reg_state fake_reg;
-	struct bpf_reg_state *reg;
-	struct linked_reg *e;
-	int i;
-
-	for (i = 0; i < linked_regs->cnt; ++i) {
-		e = &linked_regs->entries[i];
-		reg = e->is_reg ? &vstate->frame[e->frameno]->regs[e->regno]
-				: &bpf_stack_slot(vstate->frame[e->frameno], e->spi)->spilled_ptr;
-		if (reg->type != SCALAR_VALUE || reg == known_reg)
-			continue;
-		if ((reg->id & ~BPF_ADD_CONST) != (known_reg->id & ~BPF_ADD_CONST))
-			continue;
-		/*
-		 * Skip mixed 32/64-bit links: the delta relationship doesn't
-		 * hold across different ALU widths.
-		 */
-		if (((reg->id ^ known_reg->id) & BPF_ADD_CONST) == BPF_ADD_CONST)
-			continue;
-		if ((!(reg->id & BPF_ADD_CONST) && !(known_reg->id & BPF_ADD_CONST)) ||
-		    reg->delta == known_reg->delta) {
-			*reg = *known_reg;
-		} else {
-			s32 saved_off = reg->delta;
-			u32 saved_id = reg->id;
-
-			fake_reg.type = SCALAR_VALUE;
-			__mark_reg_known(&fake_reg, (s64)reg->delta - (s64)known_reg->delta);
-
-			/* reg = known_reg; reg += delta */
-			*reg = *known_reg;
-			/*
-			 * Must preserve off and id, otherwise another sync_linked_regs()
-			 * will be incorrect.
-			 */
-			reg->delta = saved_off;
-			reg->id = saved_id;
-
-			scalar_step_add(reg, reg, &fake_reg);
-			scalar32_min_max_add(reg, &fake_reg);
-			scalar_min_max_add(reg, &fake_reg);
-			reg->var_off = tnum_add(reg->var_off, fake_reg.var_off);
-			if ((reg->id | known_reg->id) & BPF_ADD_CONST32)
-				zext_32_to_64(reg);
-			reg_bounds_sync(reg);
-		}
-		if (e->is_reg)
-			mark_reg_scratched(env, e->regno);
-		else
-			mark_stack_slot_scratched(env, e->spi);
-	}
-}
-
 /* a == b (mod 2^N) implies a == b if both fit in uN or both fit in sN. N is @bits. */
 static bool regs_fit_in_bits(const struct bpf_reg_state *a, const struct bpf_reg_state *b,
 			     u32 bits)
@@ -19886,7 +19749,6 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 	struct bpf_reg_state *regs = this_branch->frame[this_branch->curframe]->regs;
 	struct bpf_reg_state *dst_reg, *other_branch_regs, *src_reg = NULL;
 	struct bpf_reg_state *eq_branch_regs;
-	struct linked_regs linked_regs = {};
 	u8 opcode = BPF_OP(insn->code);
 	bool is_jmp32;
 	int pred = -1;
@@ -19955,16 +19817,6 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 		__mark_reg_known(src_reg, insn->imm);
 	}
 
-	/*
-	 * Collect the linked registers before env->{true,false}_reg{1,2} setup,
-	 * otherwise ids dropped by collect_linked_regs() would be resurrected
-	 * when env->{true,false}_reg{1,2} are copied back.
-	 */
-	if (BPF_SRC(insn->code) == BPF_X && src_reg->type == SCALAR_VALUE && src_reg->id)
-		collect_linked_regs(env, this_branch, src_reg->id, &linked_regs);
-	if (dst_reg->type == SCALAR_VALUE && dst_reg->id)
-		collect_linked_regs(env, this_branch, dst_reg->id, &linked_regs);
-
 	is_jmp32 = BPF_CLASS(insn->code) == BPF_JMP32;
 	env->false_reg1 = *dst_reg;
 	env->false_reg2 = *src_reg;
@@ -20018,19 +19870,6 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 	if (BPF_SRC(insn->code) == BPF_X)
 		other_branch_regs[insn->src_reg] = env->true_reg2;
 
-	if (BPF_SRC(insn->code) == BPF_X &&
-	    src_reg->type == SCALAR_VALUE && src_reg->id &&
-	    !WARN_ON_ONCE(src_reg->id != other_branch_regs[insn->src_reg].id)) {
-		sync_linked_regs(env, this_branch, src_reg, &linked_regs);
-		sync_linked_regs(env, other_branch, &other_branch_regs[insn->src_reg],
-				 &linked_regs);
-	}
-	if (dst_reg->type == SCALAR_VALUE && dst_reg->id &&
-	    !WARN_ON_ONCE(dst_reg->id != other_branch_regs[insn->dst_reg].id)) {
-		sync_linked_regs(env, this_branch, dst_reg, &linked_regs);
-		sync_linked_regs(env, other_branch, &other_branch_regs[insn->dst_reg],
-				 &linked_regs);
-	}
 	if (env->bpf_capable) {
 		if (BPF_SRC(insn->code) == BPF_X) {
 			refine_linked_regs(env, this_branch, *insn_idx, insn->src_reg);
