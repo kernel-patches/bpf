@@ -2233,11 +2233,19 @@ static inline bool is_valid_hist_entry(struct hist_entry *he)
 	return has_record;
 }
 
+static inline bool c2c_he__is_main_hist(struct c2c_hist_entry *c2c_he)
+{
+	struct hists *hists = c2c_he->he.hists;
+
+	return hists &&
+	       container_of(hists, struct c2c_hists, hists) == &c2c.hists;
+}
+
 static void set_node_width(struct c2c_hist_entry *c2c_he, int len)
 {
 	struct c2c_dimension *dim;
 
-	dim = &c2c.hists == c2c_he->hists ?
+	dim = c2c_he__is_main_hist(c2c_he) ?
 	      &dim_dcacheline_node : &dim_offset_node;
 
 	if (len > dim->width)
