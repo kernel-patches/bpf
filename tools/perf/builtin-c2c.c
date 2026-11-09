@@ -1395,11 +1395,11 @@ static struct c2c_dimension dim_dcacheline_node = {
 };
 
 static struct c2c_dimension dim_dcacheline_mem_region = {
-	.header		= HEADER_LOW("Region"),
+	.header		= HEADER_LOW("Range"),
 	.name		= "dcacheline_mem_region",
 	.cmp		= empty_cmp,
 	.entry		= dcacheline_node_mem_region,
-	.width		= 6,
+	.width		= 5,
 };
 
 static struct c2c_dimension dim_dcacheline_count = {
@@ -1429,11 +1429,11 @@ static struct c2c_dimension dim_offset_node = {
 };
 
 static struct c2c_dimension dim_offset_mem_region = {
-	.header		= HEADER_LOW("Region"),
+	.header		= HEADER_LOW("Range"),
 	.name		= "offset_mem_region",
 	.cmp		= empty_cmp,
 	.entry		= dcacheline_node_mem_region,
-	.width		= 6,
+	.width		= 5,
 };
 
 static struct c2c_dimension dim_iaddr = {
