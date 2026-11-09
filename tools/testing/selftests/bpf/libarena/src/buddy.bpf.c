@@ -128,15 +128,92 @@ static __always_inline int buddy_cache_push(struct buddy_cache __arena *cache,
 	return 0;
 }
 
+static int buddy_transfer_take_batch(struct buddy __arena *buddy, int order,
+				     struct buddy_cache_order __arena *slots)
+{
+	struct buddy_transfer_order __arena *transfer = &buddy->transfer[order];
+	unsigned long flags;
+	u32 elems, start;
+	unsigned int i;
+	int ret = 0;
+
+	ret = buddy_lock(transfer, flags);
+	if (ret)
+		return -EAGAIN;
+
+	elems = READ_ONCE(transfer->elems);
+	if (elems < BUDDY_CACHE_BATCH_SIZE) {
+		ret = -ENOENT;
+		goto out_unlock;
+	}
+
+	start = elems - BUDDY_CACHE_BATCH_SIZE;
+	for (i = zero; i < BUDDY_CACHE_BATCH_SIZE && can_loop; i++)
+		WRITE_ONCE(slots->objects[i],
+			   READ_ONCE(transfer->objects[start + i]));
+
+	WRITE_ONCE(transfer->elems, start);
+	WRITE_ONCE(slots->elems, BUDDY_CACHE_BATCH_SIZE);
+
+out_unlock:
+	arena_spin_unlock_irqrestore(&transfer->lock, flags);
+	return ret;
+}
+
+static int buddy_transfer_put_batch(struct buddy __arena *buddy, int order,
+				    struct buddy_cache_order __arena *slots)
+{
+	struct buddy_transfer_order __arena *transfer = &buddy->transfer[order];
+	unsigned long flags;
+	u32 elems, local_elems, start;
+	unsigned int i;
+	int ret = 0;
+
+	ret = buddy_lock(transfer, flags);
+
+	if (ret)
+		return -EAGAIN;
+
+	elems = READ_ONCE(transfer->elems);
+	if (elems > BUDDY_TRANSFER_CAPACITY - BUDDY_CACHE_BATCH_SIZE) {
+		ret = -ENOMEM;
+		goto out_unlock;
+	}
+
+	local_elems = READ_ONCE(slots->elems);
+	if (local_elems < BUDDY_CACHE_BATCH_SIZE) {
+		ret = -EINVAL;
+		goto out_unlock;
+	}
+
+	start = local_elems - BUDDY_CACHE_BATCH_SIZE;
+	for (i = zero; i < BUDDY_CACHE_BATCH_SIZE && can_loop; i++)
+		WRITE_ONCE(transfer->objects[elems + i],
+			   READ_ONCE(slots->objects[start + i]));
+
+	WRITE_ONCE(slots->elems, start);
+	WRITE_ONCE(transfer->elems, elems + BUDDY_CACHE_BATCH_SIZE);
+
+out_unlock:
+	arena_spin_unlock_irqrestore(&transfer->lock, flags);
+	return ret;
+}
+
 /*
- * Refill an empty cache with one trip to the buddy allocator. Kept out of line
- * so that cache hits do not pay for the refill path.
+ * Refill an empty cache from the shared transfer array, or with one trip to the
+ * buddy allocator. Kept out of line so that cache hits do not pay for the refill
+ * path.
  */
 static __noinline void __arena *
 buddy_cache_refill(struct buddy __arena *buddy, struct buddy_cache __arena *cache,
 		   size_t size, int order)
 {
 	struct buddy_cache_order __arena *slots = &cache->orders[order];
+
+	/* Peek without the lock, buddy_transfer_take_batch() rechecks under it. */
+	if (READ_ONCE(buddy->transfer[order].elems) >= BUDDY_CACHE_BATCH_SIZE &&
+	    !buddy_transfer_take_batch(buddy, order, slots))
+		return buddy_cache_pop(cache, order);
 
 	if (buddy_alloc_bulk_nogrow(buddy, size, BUDDY_CACHE_BATCH_ORDER,
 				    (void __arena * __arena *)slots->objects))
@@ -158,9 +235,8 @@ void __arena *buddy_cache_alloc(struct buddy __arena *buddy, size_t size, size_t
 	if (!cache)
 		return NULL;
 
-	/* NMIs cannot take the buddy lock, so they only use what is already cached. */
 	address = buddy_cache_pop(cache, order);
-	if (!address && !bpf_in_nmi())
+	if (!address)
 		address = buddy_cache_refill(buddy, cache, size, order);
 
 	buddy_cache_exit(cache);
@@ -194,9 +270,10 @@ static int buddy_cache_get_order(void __arena *addr)
 }
 
 /*
- * Make room in a full cache by freeing its top batch to the buddy allocator,
- * then cache the freed object. Kept out of line so that frees that fit in the
- * cache do not pay for it.
+ * Make room in a full cache by moving its top batch to the shared transfer
+ * array, or to the buddy allocator when the array is full or busy, then cache
+ * the freed object. Kept out of line so that frees that fit in the cache do not
+ * pay for it.
  */
 static __noinline int
 buddy_cache_spill(struct buddy __arena *buddy, struct buddy_cache __arena *cache,
@@ -204,15 +281,25 @@ buddy_cache_spill(struct buddy __arena *buddy, struct buddy_cache __arena *cache
 {
 	struct buddy_cache_order __arena *slots = &cache->orders[order];
 	u32 elems;
-	int ret;
+	int ret = -ENOMEM;
 
-	elems = READ_ONCE(slots->elems) - BUDDY_CACHE_BATCH_SIZE;
-	ret = buddy_free_bulk(buddy, (void __arena * __arena *)&slots->objects[elems],
-			      BUDDY_CACHE_BATCH_SIZE);
-	if (ret)
-		return ret;
+	/*
+	 * Peek without the lock, buddy_transfer_put_batch() rechecks under it.
+	 * NMIs just try the transfer lock and return immediately on failure.
+	 */
+	if (READ_ONCE(buddy->transfer[order].elems) <=
+	    BUDDY_TRANSFER_CAPACITY - BUDDY_CACHE_BATCH_SIZE)
+		ret = buddy_transfer_put_batch(buddy, order, slots);
 
-	WRITE_ONCE(slots->elems, elems);
+	if (ret) {
+		elems = READ_ONCE(slots->elems) - BUDDY_CACHE_BATCH_SIZE;
+		ret = buddy_free_bulk(buddy, (void __arena * __arena *)&slots->objects[elems],
+				      BUDDY_CACHE_BATCH_SIZE);
+		if (ret)
+			return ret;
+
+		WRITE_ONCE(slots->elems, elems);
+	}
 
 	return buddy_cache_push(cache, order, addr);
 }
@@ -769,6 +856,9 @@ static int buddy_cache_init(struct buddy __arena *buddy)
 	if (CONFIG_NR_CPUS > BUDDY_CACHE_MAX_CPUS)
 		return -E2BIG;
 
+	for (order = zero; order < BUDDY_CACHE_NUM_ORDERS && can_loop; order++)
+		WRITE_ONCE(buddy->transfer[order].elems, 0);
+
 	for (cpu = zero; cpu < CONFIG_NR_CPUS && can_loop; cpu++) {
 		ret = buddy_alloc_bulk(buddy, sizeof(*cache), 0,
 				       (void __arena * __arena *)&buddy->percpu[cpu]);
@@ -786,10 +876,12 @@ static int buddy_cache_init(struct buddy __arena *buddy)
 
 static void buddy_cache_destroy(struct buddy __arena *buddy)
 {
-	unsigned int cpu;
+	unsigned int cpu, order;
 
 	for (cpu = zero; cpu < min(CONFIG_NR_CPUS, BUDDY_CACHE_MAX_CPUS) && can_loop; cpu++)
 		WRITE_ONCE(buddy->percpu[cpu], NULL);
+	for (order = zero; order < BUDDY_CACHE_NUM_ORDERS && can_loop; order++)
+		WRITE_ONCE(buddy->transfer[order].elems, 0);
 }
 
 __weak int buddy_init(struct buddy __arena *buddy)
