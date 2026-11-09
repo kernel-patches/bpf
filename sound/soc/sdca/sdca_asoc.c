@@ -1434,6 +1434,48 @@ int sdca_asoc_populate_component(struct device *dev,
 }
 EXPORT_SYMBOL_NS(sdca_asoc_populate_component, "SND_SOC_SDCA");
 
+struct sdca_asoc_constraints {
+	struct snd_pcm_hw_constraint_list channels;
+};
+
+/**
+ * sdca_asoc_alloc_constraints - allocate a constraint structure on the DAI
+ * @dai: Pointer to the ASoC DAI.
+ *
+ * Typically called from DAI probe().
+ *
+ * Return: Returns zero on success, and a negative error code on failure.
+ */
+int sdca_asoc_alloc_constraints(struct snd_soc_dai *dai)
+{
+	struct sdca_asoc_constraints *constraints;
+
+	constraints = kzalloc_obj(*constraints);
+	if (!constraints)
+		return -ENOMEM;
+
+	snd_soc_dai_set_priv(dai, constraints);
+
+	return 0;
+}
+EXPORT_SYMBOL_NS(sdca_asoc_alloc_constraints, "SND_SOC_SDCA");
+
+/**
+ * sdca_asoc_free_constraints - free constraint allocations
+ * @dai: Pointer to the ASoC DAI.
+ *
+ * Typically called from DAI remove().
+ *
+ * Return: Returns zero on success, and a negative error code on failure.
+ */
+int sdca_asoc_free_constraints(struct snd_soc_dai *dai)
+{
+	kfree(snd_soc_dai_to_priv(dai));
+
+	return 0;
+}
+EXPORT_SYMBOL_NS(sdca_asoc_free_constraints, "SND_SOC_SDCA");
+
 /**
  * sdca_asoc_set_constraints - constrain channels available on a DAI
  * @dev: Pointer to the device, used for error messages.
@@ -1455,8 +1497,8 @@ int sdca_asoc_set_constraints(struct device *dev, struct regmap *regmap,
 		 1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15, 16,
 		17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
 	};
+	struct sdca_asoc_constraints *constraints = snd_soc_dai_to_priv(dai);
 	struct sdca_entity *entity = &function->entities[dai->id];
-	struct snd_pcm_hw_constraint_list *constraint;
 	struct sdca_control_range *range;
 	struct sdca_control *control;
 	unsigned int channel_mask = 0;
@@ -1490,44 +1532,21 @@ int sdca_asoc_set_constraints(struct device *dev, struct regmap *regmap,
 	dev_dbg(dev, "%s: set channel constraint mask: %#x\n",
 		entity->label, channel_mask);
 
-	constraint = kzalloc_obj(*constraint);
-	if (!constraint)
-		return -ENOMEM;
-
-	constraint->count = ARRAY_SIZE(channel_list);
-	constraint->list = channel_list;
-	constraint->mask = channel_mask;
+	constraints->channels.count = ARRAY_SIZE(channel_list);
+	constraints->channels.list = channel_list;
+	constraints->channels.mask = channel_mask;
 
 	ret = snd_pcm_hw_constraint_list(substream->runtime, 0,
 					 SNDRV_PCM_HW_PARAM_CHANNELS,
-					 constraint);
+					 &constraints->channels);
 	if (ret) {
 		dev_err(dev, "%s: failed to add constraint: %d\n", entity->label, ret);
-		kfree(constraint);
 		return ret;
 	}
-
-	snd_soc_dai_set_priv(dai, constraint);
 
 	return 0;
 }
 EXPORT_SYMBOL_NS(sdca_asoc_set_constraints, "SND_SOC_SDCA");
-
-/**
- * sdca_asoc_free_constraints - free constraint allocations
- * @substream: Pointer to the PCM substream.
- * @dai: Pointer to the ASoC DAI.
- *
- * Typically called from shutdown().
- */
-void sdca_asoc_free_constraints(struct snd_pcm_substream *substream,
-				struct snd_soc_dai *dai)
-{
-	struct snd_pcm_hw_constraint_list *constraint = snd_soc_dai_to_priv(dai);
-
-	kfree(constraint);
-}
-EXPORT_SYMBOL_NS(sdca_asoc_free_constraints, "SND_SOC_SDCA");
 
 /**
  * sdca_asoc_get_port - return SoundWire port for a DAI
