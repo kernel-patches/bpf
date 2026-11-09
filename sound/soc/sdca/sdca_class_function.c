@@ -121,8 +121,9 @@ static int class_function_startup(struct snd_pcm_substream *substream,
 				  struct snd_soc_dai *dai)
 {
 	struct class_function_drv *drv = snd_soc_component_get_drvdata(dai->component);
+	struct sdw_slave *sdw = dev_to_sdw_dev(drv->dev->parent);
 
-	return sdca_asoc_set_constraints(drv->dev, drv->regmap, drv->function,
+	return sdca_asoc_set_constraints(drv->dev, sdw, drv->regmap, drv->function,
 					 substream, dai);
 }
 
