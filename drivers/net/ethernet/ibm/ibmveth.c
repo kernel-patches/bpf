@@ -30,6 +30,7 @@
 #include <linux/ip.h>
 #include <linux/ipv6.h>
 #include <linux/slab.h>
+#include <linux/spinlock.h>
 #include <asm/hvcall.h>
 #include <linux/atomic.h>
 #include <asm/vio.h>
@@ -101,57 +102,58 @@ static struct ibmveth_stat ibmveth_stats[] = {
 };
 
 /* simple methods of getting data from the current rxq entry */
-static inline u32 ibmveth_rxq_flags(struct ibmveth_adapter *adapter)
+static u32 ibmveth_rxq_flags(struct ibmveth_adapter *adapter,
+			     int queue_index)
 {
-	struct ibmveth_rx_q *rxq = &adapter->rx_queue[0];
+	struct ibmveth_rx_q *rxq = &adapter->rx_queue[queue_index];
 
 	return be32_to_cpu(rxq->queue_addr[rxq->index].flags_off);
 }
 
-static inline int ibmveth_rxq_toggle(struct ibmveth_adapter *adapter)
+static int ibmveth_rxq_toggle(struct ibmveth_adapter *adapter,
+			      int queue_index)
 {
-	return (ibmveth_rxq_flags(adapter) & IBMVETH_RXQ_TOGGLE) >>
-			IBMVETH_RXQ_TOGGLE_SHIFT;
+	return (ibmveth_rxq_flags(adapter, queue_index) & IBMVETH_RXQ_TOGGLE) >>
+		IBMVETH_RXQ_TOGGLE_SHIFT;
 }
 
-static inline int ibmveth_rxq_pending_buffer(struct ibmveth_adapter *adapter)
+static int ibmveth_rxq_pending_buffer(struct ibmveth_adapter *adapter,
+				      int queue_index)
 {
-	return ibmveth_rxq_toggle(adapter) == adapter->rx_queue[0].toggle;
+	return ibmveth_rxq_toggle(adapter, queue_index) ==
+		adapter->rx_queue[queue_index].toggle;
 }
 
-static inline int ibmveth_rxq_buffer_valid(struct ibmveth_adapter *adapter)
+static int ibmveth_rxq_buffer_valid(struct ibmveth_adapter *adapter,
+				    int queue_index)
 {
-	return ibmveth_rxq_flags(adapter) & IBMVETH_RXQ_VALID;
+	return ibmveth_rxq_flags(adapter, queue_index) & IBMVETH_RXQ_VALID;
 }
 
-static inline int ibmveth_rxq_frame_offset(struct ibmveth_adapter *adapter)
+static int ibmveth_rxq_frame_offset(struct ibmveth_adapter *adapter,
+				    int queue_index)
 {
-	return ibmveth_rxq_flags(adapter) & IBMVETH_RXQ_OFF_MASK;
+	return ibmveth_rxq_flags(adapter, queue_index) & IBMVETH_RXQ_OFF_MASK;
 }
 
-static inline int ibmveth_rxq_large_packet(struct ibmveth_adapter *adapter)
+static int ibmveth_rxq_large_packet(struct ibmveth_adapter *adapter,
+				    int queue_index)
 {
-	return ibmveth_rxq_flags(adapter) & IBMVETH_RXQ_LRG_PKT;
+	return ibmveth_rxq_flags(adapter, queue_index) & IBMVETH_RXQ_LRG_PKT;
 }
 
-static inline int ibmveth_rxq_frame_length(struct ibmveth_adapter *adapter)
+static int ibmveth_rxq_frame_length(struct ibmveth_adapter *adapter,
+				    int queue_index)
 {
-	struct ibmveth_rx_q *rxq = &adapter->rx_queue[0];
+	struct ibmveth_rx_q *rxq = &adapter->rx_queue[queue_index];
 
 	return be32_to_cpu(rxq->queue_addr[rxq->index].length);
 }
 
-static u64 ibmveth_rxq_correlator(struct ibmveth_adapter *adapter)
+static int ibmveth_rxq_csum_good(struct ibmveth_adapter *adapter,
+				 int queue_index)
 {
-	struct ibmveth_rx_q *rxq = &adapter->rx_queue[0];
-	unsigned int idx = rxq->index;
-
-	return READ_ONCE(rxq->queue_addr[idx].correlator);
-}
-
-static inline int ibmveth_rxq_csum_good(struct ibmveth_adapter *adapter)
-{
-	return ibmveth_rxq_flags(adapter) & IBMVETH_RXQ_CSUM_GOOD;
+	return ibmveth_rxq_flags(adapter, queue_index) & IBMVETH_RXQ_CSUM_GOOD;
 }
 
 static unsigned int ibmveth_real_max_tx_queues(void)
@@ -726,11 +728,103 @@ static inline void ibmveth_flush_buffer(void *addr, unsigned long length)
 		asm("dcbf %0,%1,1" :: "b" (addr), "r" (offset));
 }
 
-/* replenish the buffers for a pool.  note that we don't need to
- * skb_reserve these since they are used for incoming...
+/**
+ * ibmveth_add_logical_lan_buffers - Add receive buffers to hypervisor
+ * @adapter: ibmveth adapter structure
+ * @descs: array of buffer descriptors to add
+ * @filled: number of valid descriptors in the array
+ * @buff_size: size of each buffer (multi-queue mode only)
+ * @queue_index: RX queue index
+ *
+ * Return: hypervisor return code
  */
-static void ibmveth_replenish_buffer_pool(struct ibmveth_adapter *adapter,
-					  struct ibmveth_buff_pool *pool)
+static long ibmveth_add_logical_lan_buffers(struct ibmveth_adapter *adapter,
+					    union ibmveth_buf_desc *descs,
+					    int filled,
+					    unsigned long buff_size,
+					    int queue_index)
+{
+	struct vio_dev *vdev = adapter->vdev;
+	unsigned long rc;
+
+	/*
+	 * The MQ hcall takes six ioba words (12 packed addresses). The
+	 * legacy hcall takes eight descriptors. The argument lists below
+	 * are written out by hand; keep the defines matched to those lists.
+	 */
+	static_assert(IBMVETH_MAX_RX_PER_HCALL == 12);
+	static_assert(IBMVETH_MAX_RX_REGULAR == 8);
+
+	if (adapter->multi_queue) {
+		unsigned long buffersznum = (buff_size << 32) | filled;
+		unsigned long ioba[IBMVETH_MAX_RX_PER_HCALL / 2] = {0};
+		unsigned long handle = adapter->queue_handle[queue_index];
+		int i;
+
+		/* Pack descriptor addresses into ioba pairs.
+		 * Each ioba holds two 32-bit addresses packed into 64 bits:
+		 * - Even descriptors (0,2,4...) go in high 32 bits
+		 * - Odd descriptors (1,3,5...) go in low 32 bits
+		 */
+		for (i = 0; i < filled && i < IBMVETH_MAX_RX_PER_HCALL; i++) {
+			int pair_idx = i / 2;
+			int is_high = (i % 2 == 0);
+
+			if (is_high)
+				ioba[pair_idx] = (unsigned long)
+					descs[i].fields.address << 32;
+			else
+				ioba[pair_idx] |= descs[i].fields.address;
+		}
+
+		rc = h_add_logical_lan_buffers_queue(vdev->unit_address,
+						     handle,
+						     buffersznum,
+						     ioba[0], ioba[1], ioba[2],
+						     ioba[3], ioba[4], ioba[5]);
+	} else if (filled == 1) {
+		rc = h_add_logical_lan_buffer(vdev->unit_address,
+					      descs[0].desc);
+	} else {
+		/* Legacy 8-desc hcall; probe/mq_fallback keep batch <=
+		 * IBMVETH_MAX_RX_REGULAR.
+		 */
+		rc = h_add_logical_lan_buffers(vdev->unit_address,
+					       descs[0].desc, descs[1].desc,
+					       descs[2].desc, descs[3].desc,
+					       descs[4].desc, descs[5].desc,
+					       descs[6].desc, descs[7].desc);
+	}
+
+	return rc;
+}
+
+/* Outcomes for ibmveth_replenish_buffer_pool(); logged after unlock. */
+enum {
+	IBMVETH_REPLENISH_OK = 0,
+	IBMVETH_REPLENISH_RESET_MAP,
+	IBMVETH_REPLENISH_RESET_MQ,
+	IBMVETH_REPLENISH_HCALL_FAIL,
+	IBMVETH_REPLENISH_BATCH_FALLBACK,
+};
+
+struct ibmveth_replenish_fail {
+	unsigned long lpar_rc;
+	u32 filled;
+	u32 batch;
+};
+
+/* Replenish the buffers for a pool. The skbs are not skb_reserve()d:
+ * PHYP reports the offset of each received frame.
+ * Caller must hold the per-queue replenish_lock.
+ * Do not log here: failures are returned for replenish_task to log
+ * after it drops the lock, so console output does not extend that
+ * section. A failed GFP_ATOMIC skb allocation can still warn.
+ */
+static int ibmveth_replenish_buffer_pool(struct ibmveth_adapter *adapter,
+					 struct ibmveth_buff_pool *pool,
+					 int queue_index,
+					 struct ibmveth_replenish_fail *fail)
 {
 	union ibmveth_buf_desc descs[IBMVETH_MAX_RX_PER_HCALL] = {0};
 	u32 remaining = pool->size - atomic_read(&pool->available);
@@ -742,6 +836,7 @@ static void ibmveth_replenish_buffer_pool(struct ibmveth_adapter *adapter,
 	dma_addr_t dma_addr;
 	struct device *dev;
 	u32 index;
+	int outcome = IBMVETH_REPLENISH_OK;
 
 	vdev = adapter->vdev;
 	dev = &vdev->dev;
@@ -756,12 +851,9 @@ static void ibmveth_replenish_buffer_pool(struct ibmveth_adapter *adapter,
 		/* Fill a batch of descriptors */
 		for (filled = 0; filled < min(remaining, batch); filled++) {
 			index = pool->free_map[free_index];
-			if (WARN_ON(index == IBM_VETH_INVALID_MAP)) {
+			if (index == IBM_VETH_INVALID_MAP) {
 				adapter->replenish_add_buff_failure++;
-				netdev_info(adapter->netdev,
-					    "Invalid map index %u, reset\n",
-					    index);
-				schedule_work(&adapter->work);
+				outcome = IBMVETH_REPLENISH_RESET_MAP;
 				break;
 			}
 
@@ -776,9 +868,16 @@ static void ibmveth_replenish_buffer_pool(struct ibmveth_adapter *adapter,
 					break;
 				}
 
-				dma_addr = dma_map_single(dev, skb->data,
-							  pool->buff_size,
-							  DMA_FROM_DEVICE);
+				/* NO_WARN: a map failure under TCE pressure
+				 * is expected; it is counted below and the
+				 * next poll's replenish retries.
+				 */
+				dma_addr =
+					dma_map_single_attrs(dev,
+							     skb->data,
+							     pool->buff_size,
+							     DMA_FROM_DEVICE,
+							     DMA_ATTR_NO_WARN);
 				if (dma_mapping_error(dev, dma_addr)) {
 					dev_kfree_skb_any(skb);
 					adapter->replenish_add_buff_failure++;
@@ -813,28 +912,21 @@ static void ibmveth_replenish_buffer_pool(struct ibmveth_adapter *adapter,
 				free_index = 0;
 		}
 
+		if (outcome != IBMVETH_REPLENISH_OK)
+			break;
+
 		if (!filled)
 			break;
 
-		/* single buffer case*/
-		if (filled == 1)
-			lpar_rc = h_add_logical_lan_buffer(vdev->unit_address,
-							   descs[0].desc);
-		else
-			/* Multi-buffer hcall */
-			lpar_rc = h_add_logical_lan_buffers(vdev->unit_address,
-							    descs[0].desc,
-							    descs[1].desc,
-							    descs[2].desc,
-							    descs[3].desc,
-							    descs[4].desc,
-							    descs[5].desc,
-							    descs[6].desc,
-							    descs[7].desc);
+		lpar_rc = ibmveth_add_logical_lan_buffers(adapter, descs,
+							  filled,
+							  pool->buff_size,
+							  queue_index);
+
 		if (lpar_rc != H_SUCCESS) {
-			dev_warn_ratelimited(dev,
-					     "RX h_add_logical_lan failed: filled=%u, rc=%lu, batch=%u\n",
-					     filled, lpar_rc, batch);
+			fail->lpar_rc = lpar_rc;
+			fail->filled = filled;
+			fail->batch = batch;
 			goto hcall_failure;
 		}
 
@@ -874,30 +966,35 @@ hcall_failure:
 		}
 		adapter->replenish_add_buff_failure += filled;
 
-		/*
-		 * If multi rx buffers hcall is no longer supported by FW
-		 * e.g. in the case of Live Partition Migration
-		 */
-		if (batch > 1 && lpar_rc == H_FUNCTION) {
-			/*
-			 * Instead of retry submit single buffer individually
-			 * here just set the max rx buffer per hcall to 1
-			 * buffers will be respleshed next time
-			 * when ibmveth_replenish_buffer_pool() is called again
-			 * with single-buffer case
-			 */
-			netdev_info(adapter->netdev,
-				    "RX Multi buffers not supported by FW, rc=%lu\n",
-				    lpar_rc);
-			adapter->rx_buffers_per_hcall = 1;
-			netdev_info(adapter->netdev,
-				    "Next rx replesh will fall back to single-buffer hcall\n");
+		if (lpar_rc == H_FUNCTION) {
+			if (adapter->multi_queue) {
+				/*
+				 * LPM / firmware may drop MQ buffer hcalls.
+				 * Schedule reset so we do not sit forever in
+				 * no-buffer with the link still up.
+				 */
+				outcome = IBMVETH_REPLENISH_RESET_MQ;
+			} else if (batch > 1) {
+				/*
+				 * Live Partition Migration may drop multi-
+				 * buffer support. Fall back to single-buffer
+				 * on the next replenish; do not continue with
+				 * a stale local batch size (infinite loop).
+				 */
+				adapter->rx_buffers_per_hcall = 1;
+				outcome = IBMVETH_REPLENISH_BATCH_FALLBACK;
+			} else {
+				outcome = IBMVETH_REPLENISH_HCALL_FAIL;
+			}
+		} else {
+			outcome = IBMVETH_REPLENISH_HCALL_FAIL;
 		}
 		break;
 	}
 
 	mb();
 	atomic_add(buffers_added, &(pool->available));
+	return outcome;
 }
 
 /*
@@ -917,21 +1014,91 @@ static void ibmveth_update_rx_no_buffer(struct ibmveth_adapter *adapter)
 }
 
 /* replenish routine */
-static void ibmveth_replenish_task(struct ibmveth_adapter *adapter)
+static void ibmveth_replenish_task(struct ibmveth_adapter *adapter,
+				   int queue_index)
 {
-	int i;
+	struct ibmveth_rx_q *rxq = &adapter->rx_queue[queue_index];
+	struct ibmveth_replenish_fail fail = {};
+	struct ibmveth_replenish_fail fail_fallback = {};
+	struct ibmveth_replenish_fail fail_hcall = {};
+	int i, rc;
+	int need_reset = 0;
+	int batch_fallback = 0;
+	int hcall_fail = 0;
+
+	if (queue_index >= adapter->num_rx_queues) {
+		netdev_dbg(adapter->netdev,
+			   "Skipping replenish for freed queue %d (num_queues=%u)\n",
+			   queue_index, adapter->num_rx_queues);
+		return;
+	}
+
+	spin_lock_bh(&rxq->replenish_lock);
 
 	adapter->replenish_task_cycles++;
 
 	for (i = (IBMVETH_NUM_BUFF_POOLS - 1); i >= 0; i--) {
-		struct ibmveth_buff_pool *pool = &adapter->rx_buff_pool[0][i];
+		struct ibmveth_buff_pool *pool =
+			&adapter->rx_buff_pool[queue_index][i];
 
-		if (pool->active &&
-		    (atomic_read(&pool->available) < pool->threshold))
-			ibmveth_replenish_buffer_pool(adapter, pool);
+		if (pool->active && pool->free_map &&
+		    (atomic_read(&pool->available) < pool->threshold)) {
+			rc = ibmveth_replenish_buffer_pool(adapter, pool,
+							   queue_index, &fail);
+			switch (rc) {
+			case IBMVETH_REPLENISH_RESET_MAP:
+			case IBMVETH_REPLENISH_RESET_MQ:
+				need_reset = rc;
+				goto out_unlock;
+			case IBMVETH_REPLENISH_BATCH_FALLBACK:
+				if (!batch_fallback)
+					fail_fallback = fail;
+				batch_fallback = 1;
+				break;
+			case IBMVETH_REPLENISH_HCALL_FAIL:
+				if (!hcall_fail)
+					fail_hcall = fail;
+				hcall_fail = 1;
+				break;
+			default:
+				break;
+			}
+		}
 	}
 
+out_unlock:
 	ibmveth_update_rx_no_buffer(adapter);
+
+	spin_unlock_bh(&rxq->replenish_lock);
+
+	/* Log and schedule reset only after dropping replenish_lock. */
+	if (need_reset == IBMVETH_REPLENISH_RESET_MAP) {
+		netdev_info(adapter->netdev,
+			    "Invalid RX free_map entry on queue %d, reset\n",
+			    queue_index);
+		schedule_work(&adapter->work);
+	} else if (need_reset == IBMVETH_REPLENISH_RESET_MQ) {
+		dev_err_ratelimited(&adapter->netdev->dev,
+				    "MQ buffer add H_FUNCTION (q=%d, batch=%u), reset\n",
+				    queue_index, fail.batch);
+		schedule_work(&adapter->work);
+	}
+
+	if (batch_fallback)
+		dev_warn_ratelimited(&adapter->netdev->dev,
+				     "Legacy batch add H_FUNCTION (batch=%u), fallback\n",
+				     fail_fallback.batch);
+
+	if (hcall_fail)
+		dev_warn_ratelimited(&adapter->netdev->dev,
+				     "RX %s failed: filled=%u, rc=%lu, batch=%u\n",
+				     adapter->multi_queue ?
+				     "h_add_logical_lan_buffers_queue" :
+				     (fail_hcall.filled == 1 ?
+				      "h_add_logical_lan_buffer" :
+				      "h_add_logical_lan_buffers"),
+				     fail_hcall.filled, fail_hcall.lpar_rc,
+				     fail_hcall.batch);
 }
 
 /* empty and free ana buffer pool - also used to do cleanup in error paths */
@@ -966,27 +1133,25 @@ static void ibmveth_free_buffer_pool(struct ibmveth_adapter *adapter,
 		kfree(pool->skbuff);
 		pool->skbuff = NULL;
 	}
+
+	/*
+	 * Keep probe/sysfs geometry (active, size, buff_size, threshold).
+	 * Only tear down runtime allocations; open reuses active pools.
+	 */
+	atomic_set(&pool->available, 0);
 }
 
-/* The correlator comes back from PHYP; a bad one schedules a reset. */
-static bool ibmveth_rxq_correlator_valid(struct ibmveth_adapter *adapter,
-					 u64 correlator)
+/* A bad correlator loses the pool slot behind it; schedule a reset.
+ * Logs, so call it only after dropping replenish_lock.
+ */
+static void ibmveth_rxq_bad_correlator(struct ibmveth_adapter *adapter,
+				       u64 correlator)
 {
-	unsigned int index = correlator & 0xffffffffUL;
-	unsigned int pool = correlator >> 32;
-
-	/* An inactive pool keeps its size but has no skbuff array. */
-	if (pool < IBMVETH_NUM_BUFF_POOLS &&
-	    index < adapter->rx_buff_pool[0][pool].size &&
-	    adapter->rx_buff_pool[0][pool].skbuff)
-		return true;
-
 	if (net_ratelimit())
 		netdev_err(adapter->netdev,
 			   "invalid RX correlator %llx, resetting\n",
 			   correlator);
 	schedule_work(&adapter->work);
-	return false;
 }
 
 static void ibmveth_rxq_no_skb(struct ibmveth_adapter *adapter,
@@ -1133,33 +1298,77 @@ ibmveth_free_buffer_pools(struct ibmveth_adapter *adapter)
 		   adapter->num_rx_queues);
 }
 
+/* The correlator comes back from PHYP, so check it rather than trust it.
+ * Does not log: remove_buffer_from_pool() calls it under replenish_lock.
+ */
+static bool ibmveth_rxq_correlator_valid(struct ibmveth_adapter *adapter,
+					 int queue_index, u64 correlator)
+{
+	unsigned int pool = correlator >> 32;
+	unsigned int index = correlator & 0xffffffffUL;
+	struct ibmveth_buff_pool *bpool;
+
+	if (pool >= IBMVETH_NUM_BUFF_POOLS)
+		return false;
+
+	bpool = &adapter->rx_buff_pool[queue_index][pool];
+
+	/* Require a live pool with allocated arrays before indexing.
+	 * Inactive pools still have size from init; free clears skbuff.
+	 */
+	if (!bpool->active || !bpool->skbuff || !bpool->free_map)
+		return false;
+
+	return index < bpool->size;
+}
+
+static void ibmveth_rxq_advance(struct ibmveth_rx_q *rxq)
+{
+	if (++rxq->index == rxq->num_slots) {
+		rxq->index = 0;
+		rxq->toggle = !rxq->toggle;
+	}
+}
+
 /**
  * ibmveth_remove_buffer_from_pool - remove a buffer from a pool
  * @adapter: adapter instance
  * @correlator: identifies pool and index
+ * @queue_index: RX queue index (0..num_rx_queues-1)
  * @reuse: whether to reuse buffer
+ *
+ * Context: may run concurrently with a process-context replenish_task
+ * on the same queue; takes per-queue replenish_lock to serialize
+ * free_map / producer_index / available against the producer.
  *
  * Return:
  * * %0       - success
- * * %-EINVAL - correlator maps to pool or index out of range, or to an
- *              inactive pool
+ * * %-EINVAL - pool or index out of range, or the pool is
+ *              inactive / not live (skbuff or free_map NULL)
  * * %-EFAULT - pool and index map to null skb
  */
 static int ibmveth_remove_buffer_from_pool(struct ibmveth_adapter *adapter,
-					   u64 correlator, bool reuse)
+					   u64 correlator, int queue_index,
+					   bool reuse)
 {
+	struct ibmveth_rx_q *rxq = &adapter->rx_queue[queue_index];
 	unsigned int pool  = correlator >> 32;
 	unsigned int index = correlator & 0xffffffffUL;
 	unsigned int free_index;
 	struct sk_buff *skb;
+	int rc = 0;
 
-	if (!ibmveth_rxq_correlator_valid(adapter, correlator))
-		return -EINVAL;
+	spin_lock_bh(&rxq->replenish_lock);
 
-	skb = adapter->rx_buff_pool[0][pool].skbuff[index];
+	if (!ibmveth_rxq_correlator_valid(adapter, queue_index, correlator)) {
+		rc = -EINVAL;
+		goto out_unlock;
+	}
+
+	skb = adapter->rx_buff_pool[queue_index][pool].skbuff[index];
 	if (!skb) {
-		ibmveth_rxq_no_skb(adapter, correlator);
-		return -EFAULT;
+		rc = -EFAULT;
+		goto out_unlock;
 	}
 
 	/* if we are going to reuse the buffer then keep the pointers around
@@ -1170,78 +1379,95 @@ static int ibmveth_remove_buffer_from_pool(struct ibmveth_adapter *adapter,
 		/* remove the skb pointer to mark free. actual freeing is done
 		 * by upper level networking after gro_receive
 		 */
-		adapter->rx_buff_pool[0][pool].skbuff[index] = NULL;
+		struct ibmveth_buff_pool *bpool =
+			&adapter->rx_buff_pool[queue_index][pool];
+
+		bpool->skbuff[index] = NULL;
 
 		dma_unmap_single(&adapter->vdev->dev,
-				 adapter->rx_buff_pool[0][pool].dma_addr[index],
-				 adapter->rx_buff_pool[0][pool].buff_size,
+				 bpool->dma_addr[index],
+				 bpool->buff_size,
 				 DMA_FROM_DEVICE);
 	}
 
-	free_index = adapter->rx_buff_pool[0][pool].producer_index;
-	adapter->rx_buff_pool[0][pool].producer_index++;
-	if (adapter->rx_buff_pool[0][pool].producer_index >=
-	    adapter->rx_buff_pool[0][pool].size)
-		adapter->rx_buff_pool[0][pool].producer_index = 0;
-	adapter->rx_buff_pool[0][pool].free_map[free_index] = index;
+	free_index = adapter->rx_buff_pool[queue_index][pool].producer_index;
+	adapter->rx_buff_pool[queue_index][pool].producer_index++;
+	if (adapter->rx_buff_pool[queue_index][pool].producer_index >=
+	    adapter->rx_buff_pool[queue_index][pool].size)
+		adapter->rx_buff_pool[queue_index][pool].producer_index = 0;
+	adapter->rx_buff_pool[queue_index][pool].free_map[free_index] = index;
 
 	mb();
 
-	atomic_dec(&adapter->rx_buff_pool[0][pool].available);
+	atomic_dec(&adapter->rx_buff_pool[queue_index][pool].available);
 
-	return 0;
+out_unlock:
+	spin_unlock_bh(&rxq->replenish_lock);
+	return rc;
+}
+
+static u64 ibmveth_rxq_read_correlator(struct ibmveth_adapter *adapter,
+				       int queue_index)
+{
+	struct ibmveth_rx_q *rxq = &adapter->rx_queue[queue_index];
+
+	return READ_ONCE(rxq->queue_addr[rxq->index].correlator);
 }
 
 /* get the buffer for @correlator, read once from the current rx queue entry */
-static struct sk_buff *ibmveth_rxq_get_buffer(struct ibmveth_adapter *adapter,
-					      u64 correlator)
+static struct sk_buff *
+ibmveth_rxq_get_buffer(struct ibmveth_adapter *adapter,
+		       int queue_index, u64 correlator)
 {
 	unsigned int pool = correlator >> 32;
 	unsigned int index = correlator & 0xffffffffUL;
 	struct sk_buff *skb;
 
-	if (!ibmveth_rxq_correlator_valid(adapter, correlator))
+	if (!ibmveth_rxq_correlator_valid(adapter, queue_index, correlator)) {
+		ibmveth_rxq_bad_correlator(adapter, correlator);
 		return NULL;
+	}
 
-	skb = adapter->rx_buff_pool[0][pool].skbuff[index];
+	skb = adapter->rx_buff_pool[queue_index][pool].skbuff[index];
 	if (!skb)
 		ibmveth_rxq_no_skb(adapter, correlator);
 	return skb;
 }
 
-static void ibmveth_rxq_advance(struct ibmveth_adapter *adapter)
-{
-	struct ibmveth_rx_q *rxq = &adapter->rx_queue[0];
-
-	if (++rxq->index == rxq->num_slots) {
-		rxq->index = 0;
-		rxq->toggle = !rxq->toggle;
-	}
-}
-
 /**
  * ibmveth_rxq_harvest_buffer - Harvest buffer from pool
  *
- * @adapter:    pointer to adapter
+ * @adapter: pointer to adapter
+ * @queue_index: RX queue index to harvest from
  * @correlator: correlator of the current rx queue entry, as read by poll
- * @reuse:      whether to reuse buffer
+ * @reuse:   whether to reuse buffer
  *
  * Context: called from ibmveth_poll
  *
  * The ring advances even on error, so poll does not return to a bad
- * slot before the scheduled reset can run.
+ * slot before the scheduled reset can run. The error is still returned:
+ * callers must not treat it as a successful take from the pool (especially
+ * reuse=false, which would hand the SKB to the stack while it remains
+ * pool-owned).
  *
  * Return:
- * * %0    - success
- * * other - non-zero return from ibmveth_remove_buffer_from_pool
+ * * %0    - buffer removed from pool (or marked for reuse) and ring advanced
+ * * other - non-zero return from ibmveth_remove_buffer_from_pool; ring has
+ *           still been advanced for -EINVAL/-EFAULT
  */
 static int ibmveth_rxq_harvest_buffer(struct ibmveth_adapter *adapter,
-				      u64 correlator, bool reuse)
+				      int queue_index, u64 correlator,
+				      bool reuse)
 {
 	int rc;
 
-	rc = ibmveth_remove_buffer_from_pool(adapter, correlator, reuse);
-	ibmveth_rxq_advance(adapter);
+	rc = ibmveth_remove_buffer_from_pool(adapter, correlator, queue_index,
+					     reuse);
+	ibmveth_rxq_advance(&adapter->rx_queue[queue_index]);
+	if (unlikely(rc == -EFAULT))
+		ibmveth_rxq_no_skb(adapter, correlator);
+	else if (unlikely(rc))
+		ibmveth_rxq_bad_correlator(adapter, correlator);
 
 	return rc;
 }
@@ -2288,25 +2514,28 @@ bad_hdr:
 
 static int ibmveth_poll(struct napi_struct *napi, int budget)
 {
-	struct ibmveth_adapter *adapter =
-			container_of(napi, struct ibmveth_adapter, napi[0]);
-	struct net_device *netdev = adapter->netdev;
+	struct net_device *netdev = napi->dev;
+	struct ibmveth_adapter *adapter = netdev_priv(netdev);
 	int frames_processed = 0;
+	int queue_index;
 	u64 correlator;
 	u16 mss = 0;
 	int rc;
 
+	queue_index = napi - adapter->napi;
+
 	while (frames_processed < budget) {
-		if (!ibmveth_rxq_pending_buffer(adapter))
+		if (!ibmveth_rxq_pending_buffer(adapter, queue_index))
 			break;
 
 		smp_rmb();
-		correlator = ibmveth_rxq_correlator(adapter);
-		if (!ibmveth_rxq_buffer_valid(adapter)) {
+		correlator = ibmveth_rxq_read_correlator(adapter, queue_index);
+		if (!ibmveth_rxq_buffer_valid(adapter, queue_index)) {
 			wmb(); /* suggested by larson1 */
 			adapter->rx_invalid_buffer++;
 			netdev_dbg(netdev, "recycling invalid buffer\n");
-			rc = ibmveth_rxq_harvest_buffer(adapter, correlator, true);
+			rc = ibmveth_rxq_harvest_buffer(adapter, queue_index,
+							correlator, true);
 			if (unlikely(rc)) {
 				netdev->stats.rx_dropped++;
 				frames_processed++;
@@ -2314,24 +2543,33 @@ static int ibmveth_poll(struct napi_struct *napi, int budget)
 			}
 		} else {
 			struct sk_buff *skb, *new_skb;
-			int length = ibmveth_rxq_frame_length(adapter);
-			int offset = ibmveth_rxq_frame_offset(adapter);
-			int csum_good = ibmveth_rxq_csum_good(adapter);
-			int lrg_pkt = ibmveth_rxq_large_packet(adapter);
+			int length = ibmveth_rxq_frame_length(adapter,
+							      queue_index);
+			int offset = ibmveth_rxq_frame_offset(adapter,
+							      queue_index);
+			int csum_good = ibmveth_rxq_csum_good(adapter,
+							      queue_index);
+			int lrg_pkt = ibmveth_rxq_large_packet(adapter,
+							       queue_index);
 			unsigned int pool, room, off, len;
+			struct ibmveth_buff_pool *bpool;
+			struct ibmveth_rx_q *rxq;
 			__sum16 iph_check = 0;
 
-			skb = ibmveth_rxq_get_buffer(adapter, correlator);
+			skb = ibmveth_rxq_get_buffer(adapter, queue_index,
+						     correlator);
 			if (unlikely(!skb)) {
-				ibmveth_rxq_advance(adapter);
+				rxq = &adapter->rx_queue[queue_index];
+				ibmveth_rxq_advance(rxq);
 				netdev->stats.rx_dropped++;
 				frames_processed++;
 				continue;
 			}
 
 			pool = correlator >> 32;
+			bpool = &adapter->rx_buff_pool[queue_index][pool];
 			room = min_t(unsigned int, skb_tailroom(skb),
-				     adapter->rx_buff_pool[0][pool].buff_size);
+				     bpool->buff_size);
 			off = offset;
 			len = length;
 			if (unlikely(len < ETH_HLEN || off >= room ||
@@ -2340,8 +2578,8 @@ static int ibmveth_poll(struct napi_struct *napi, int budget)
 					netdev_err(netdev,
 						   "bad RX frame offset %u length %u (buffer %u), dropping\n",
 						   off, len, room);
-				ibmveth_rxq_harvest_buffer(adapter, correlator,
-							   true);
+				ibmveth_rxq_harvest_buffer(adapter, queue_index,
+							   correlator, true);
 				netdev->stats.rx_dropped++;
 				frames_processed++;
 				continue;
@@ -2368,8 +2606,9 @@ static int ibmveth_poll(struct napi_struct *napi, int budget)
 							length);
 				if (rx_flush)
 					ibmveth_flush_buffer(skb->data,
-						length + offset);
+							     length + offset);
 				rc = ibmveth_rxq_harvest_buffer(adapter,
+								queue_index,
 								correlator,
 								true);
 				if (unlikely(rc)) {
@@ -2381,6 +2620,7 @@ static int ibmveth_poll(struct napi_struct *napi, int budget)
 				skb = new_skb;
 			} else {
 				rc = ibmveth_rxq_harvest_buffer(adapter,
+								queue_index,
 								correlator,
 								false);
 				if (unlikely(rc)) {
@@ -2428,7 +2668,7 @@ static int ibmveth_poll(struct napi_struct *napi, int budget)
 	 * with a NAPI poll that was already running when it was set up
 	 */
 	if (budget)
-		ibmveth_replenish_task(adapter);
+		ibmveth_replenish_task(adapter, queue_index);
 
 	if (frames_processed == budget)
 		goto out;
@@ -2439,8 +2679,11 @@ static int ibmveth_poll(struct napi_struct *napi, int budget)
 	/* We think we are done - reenable interrupts,
 	 * then check once more to make sure we are done.
 	 */
-	rc = ibmveth_enable_irq(adapter, 0);
+	rc = ibmveth_enable_irq(adapter, queue_index);
 	if (rc) {
+		netdev_err(netdev,
+			   "Failed to enable IRQ for queue %d (rc=%d), scheduling reset\n",
+			   queue_index, rc);
 		schedule_work(&adapter->work);
 		goto out;
 	}
@@ -2448,8 +2691,9 @@ static int ibmveth_poll(struct napi_struct *napi, int budget)
 	/* Mask before queueing, as schedule_rx_queue() does: a threaded
 	 * NAPI can start polling, and unmask, as soon as it is queued.
 	 */
-	if (ibmveth_rxq_pending_buffer(adapter) && napi_schedule_prep(napi)) {
-		ibmveth_disable_irq(adapter, 0);
+	if (ibmveth_rxq_pending_buffer(adapter, queue_index) &&
+	    napi_schedule_prep(napi)) {
+		ibmveth_disable_irq(adapter, queue_index);
 		__napi_schedule(napi);
 	}
 
@@ -2758,6 +3002,15 @@ static int ibmveth_probe(struct vio_dev *dev, const struct vio_device_id *id)
 	adapter->vdev = dev;
 	adapter->netdev = netdev;
 	INIT_WORK(&adapter->work, ibmveth_reset);
+
+	/*
+	 * Initialise the replenish locks once. open() is re-entered on
+	 * MTU and offload changes, so a lock set up there could be
+	 * reinitialised while still held.
+	 */
+	for (i = 0; i < IBMVETH_MAX_RX_QUEUES; i++)
+		spin_lock_init(&adapter->rx_queue[i].replenish_lock);
+
 	adapter->mcastFilterSize = be32_to_cpu(*mcastFilterSize_p);
 	ibmveth_init_link_settings(netdev);
 
@@ -2799,7 +3052,7 @@ static int ibmveth_probe(struct vio_dev *dev, const struct vio_device_id *id)
 
 	if (ret == H_SUCCESS &&
 	    (ret_attr & IBMVETH_ILLAN_RX_MULTI_BUFF_SUPPORT)) {
-		adapter->rx_buffers_per_hcall = IBMVETH_MAX_RX_PER_HCALL;
+		adapter->rx_buffers_per_hcall = IBMVETH_MAX_RX_REGULAR;
 		netdev_dbg(netdev,
 			   "RX Multi-buffer hcall supported by FW, batch set to %u\n",
 			    adapter->rx_buffers_per_hcall);
@@ -3122,7 +3375,7 @@ static void ibmveth_reset_kunit(struct work_struct *w)
  * @test: pointer to kunit structure
  *
  * Tests the error returns from ibmveth_remove_buffer_from_pool.
- * Each error also logs a ratelimited netdev_err.
+ * Bad correlators return -EINVAL/-EFAULT (no WARN_ON).
  *
  * Return: void
  */
@@ -3137,6 +3390,8 @@ static void ibmveth_remove_buffer_from_pool_test(struct kunit *test)
 
 	INIT_WORK(&adapter->work, ibmveth_reset_kunit);
 
+	spin_lock_init(&adapter->rx_queue[0].replenish_lock);
+
 	/* Set sane values for buffer pools */
 	for (int i = 0; i < IBMVETH_NUM_BUFF_POOLS; i++)
 		ibmveth_init_buffer_pool(&adapter->rx_buff_pool[0][i], i,
@@ -3146,26 +3401,41 @@ static void ibmveth_remove_buffer_from_pool_test(struct kunit *test)
 	pool = &adapter->rx_buff_pool[0][0];
 	pool->skbuff = kunit_kcalloc(test, pool->size, sizeof(void *), GFP_KERNEL);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, pool->skbuff);
+	pool->free_map = kunit_kcalloc(test, pool->size, sizeof(u16),
+				       GFP_KERNEL);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, pool->free_map);
 
 	correlator = ((u64)IBMVETH_NUM_BUFF_POOLS << 32) | 0;
-	KUNIT_EXPECT_EQ(test, -EINVAL, ibmveth_remove_buffer_from_pool(adapter, correlator, false));
-	KUNIT_EXPECT_EQ(test, -EINVAL, ibmveth_remove_buffer_from_pool(adapter, correlator, true));
+	KUNIT_EXPECT_EQ(test, -EINVAL,
+			ibmveth_remove_buffer_from_pool(adapter,
+							correlator, 0, false));
+	KUNIT_EXPECT_EQ(test, -EINVAL,
+			ibmveth_remove_buffer_from_pool(adapter,
+							correlator, 0, true));
 
 	correlator = ((u64)0 << 32) | adapter->rx_buff_pool[0][0].size;
-	KUNIT_EXPECT_EQ(test, -EINVAL, ibmveth_remove_buffer_from_pool(adapter, correlator, false));
-	KUNIT_EXPECT_EQ(test, -EINVAL, ibmveth_remove_buffer_from_pool(adapter, correlator, true));
+	KUNIT_EXPECT_EQ(test, -EINVAL,
+			ibmveth_remove_buffer_from_pool(adapter,
+							correlator, 0, false));
+	KUNIT_EXPECT_EQ(test, -EINVAL,
+			ibmveth_remove_buffer_from_pool(adapter,
+							correlator, 0, true));
 
 	/* Pool 2 is in range but has no skbuff array, like an inactive pool. */
 	correlator = ((u64)2 << 32) | 0;
-	ret = ibmveth_remove_buffer_from_pool(adapter, correlator, false);
+	ret = ibmveth_remove_buffer_from_pool(adapter, correlator, 0, false);
 	KUNIT_EXPECT_EQ(test, -EINVAL, ret);
-	ret = ibmveth_remove_buffer_from_pool(adapter, correlator, true);
+	ret = ibmveth_remove_buffer_from_pool(adapter, correlator, 0, true);
 	KUNIT_EXPECT_EQ(test, -EINVAL, ret);
 
 	correlator = (u64)0 | 0;
 	pool->skbuff[0] = NULL;
-	KUNIT_EXPECT_EQ(test, -EFAULT, ibmveth_remove_buffer_from_pool(adapter, correlator, false));
-	KUNIT_EXPECT_EQ(test, -EFAULT, ibmveth_remove_buffer_from_pool(adapter, correlator, true));
+	KUNIT_EXPECT_EQ(test, -EFAULT,
+			ibmveth_remove_buffer_from_pool(adapter,
+							correlator, 0, false));
+	KUNIT_EXPECT_EQ(test, -EFAULT,
+			ibmveth_remove_buffer_from_pool(adapter,
+							correlator, 0, true));
 
 	flush_work(&adapter->work);
 }
@@ -3207,30 +3477,33 @@ static void ibmveth_rxq_get_buffer_test(struct kunit *test)
 	pool = &adapter->rx_buff_pool[0][0];
 	pool->skbuff = kunit_kcalloc(test, pool->size, sizeof(void *), GFP_KERNEL);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, pool->skbuff);
+	pool->free_map = kunit_kcalloc(test, pool->size, sizeof(u16),
+				       GFP_KERNEL);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, pool->free_map);
 
 	adapter->rx_queue[0].queue_addr[0].correlator =
 		(u64)IBMVETH_NUM_BUFF_POOLS << 32 | 0;
-	cor = ibmveth_rxq_correlator(adapter);
+	cor = ibmveth_rxq_read_correlator(adapter, 0);
 	KUNIT_EXPECT_PTR_EQ(test, NULL,
-			    ibmveth_rxq_get_buffer(adapter, cor));
+			    ibmveth_rxq_get_buffer(adapter, 0, cor));
 
 	adapter->rx_queue[0].queue_addr[0].correlator =
 		(u64)0 << 32 | adapter->rx_buff_pool[0][0].size;
-	cor = ibmveth_rxq_correlator(adapter);
+	cor = ibmveth_rxq_read_correlator(adapter, 0);
 	KUNIT_EXPECT_PTR_EQ(test, NULL,
-			    ibmveth_rxq_get_buffer(adapter, cor));
+			    ibmveth_rxq_get_buffer(adapter, 0, cor));
 
 	/* Pool 2 is in range but has no skbuff array, like an inactive pool. */
 	adapter->rx_queue[0].queue_addr[0].correlator = (u64)2 << 32 | 0;
-	cor = ibmveth_rxq_correlator(adapter);
+	cor = ibmveth_rxq_read_correlator(adapter, 0);
 	KUNIT_EXPECT_PTR_EQ(test, NULL,
-			    ibmveth_rxq_get_buffer(adapter, cor));
+			    ibmveth_rxq_get_buffer(adapter, 0, cor));
 
 	pool->skbuff[0] = skb;
 	adapter->rx_queue[0].queue_addr[0].correlator = (u64)0 << 32 | 0;
-	cor = ibmveth_rxq_correlator(adapter);
+	cor = ibmveth_rxq_read_correlator(adapter, 0);
 	KUNIT_EXPECT_PTR_EQ(test, skb,
-			    ibmveth_rxq_get_buffer(adapter, cor));
+			    ibmveth_rxq_get_buffer(adapter, 0, cor));
 
 	flush_work(&adapter->work);
 }
@@ -3257,6 +3530,8 @@ static void ibmveth_rxq_harvest_buffer_test(struct kunit *test)
 
 	INIT_WORK(&adapter->work, ibmveth_reset_kunit);
 
+	spin_lock_init(&adapter->rx_queue[0].replenish_lock);
+
 	adapter->rx_queue[0].num_slots = 2;
 	adapter->rx_queue[0].index = 0;
 	adapter->rx_queue[0].toggle = 1;
@@ -3275,20 +3550,23 @@ static void ibmveth_rxq_harvest_buffer_test(struct kunit *test)
 	pool->skbuff = kunit_kcalloc(test, pool->size, sizeof(void *),
 				     GFP_KERNEL);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, pool->skbuff);
+	pool->free_map = kunit_kcalloc(test, pool->size, sizeof(u16),
+				       GFP_KERNEL);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, pool->free_map);
 
 	/* Slot 0: pool out of range. Slot 1: valid, but no skb. */
 	adapter->rx_queue[0].queue_addr[0].correlator =
 		(u64)IBMVETH_NUM_BUFF_POOLS << 32 | 0;
 	adapter->rx_queue[0].queue_addr[1].correlator = (u64)0 << 32 | 0;
 
-	cor = ibmveth_rxq_correlator(adapter);
-	ret = ibmveth_rxq_harvest_buffer(adapter, cor, true);
+	cor = ibmveth_rxq_read_correlator(adapter, 0);
+	ret = ibmveth_rxq_harvest_buffer(adapter, 0, cor, true);
 	KUNIT_EXPECT_EQ(test, -EINVAL, ret);
 	KUNIT_EXPECT_EQ(test, 1ULL, adapter->rx_queue[0].index);
 	KUNIT_EXPECT_EQ(test, 1ULL, adapter->rx_queue[0].toggle);
 
-	cor = ibmveth_rxq_correlator(adapter);
-	ret = ibmveth_rxq_harvest_buffer(adapter, cor, true);
+	cor = ibmveth_rxq_read_correlator(adapter, 0);
+	ret = ibmveth_rxq_harvest_buffer(adapter, 0, cor, true);
 	KUNIT_EXPECT_EQ(test, -EFAULT, ret);
 	KUNIT_EXPECT_EQ(test, 0ULL, adapter->rx_queue[0].index);
 	KUNIT_EXPECT_EQ(test, 0ULL, adapter->rx_queue[0].toggle);
