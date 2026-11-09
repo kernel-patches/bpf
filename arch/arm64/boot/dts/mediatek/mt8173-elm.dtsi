@@ -314,7 +314,7 @@
 
 		regulators {
 			da9212_vcpu_reg: BUCKA {
-				regulator-name = "VBUCKA";
+				regulator-name = "vdvfs1";
 				regulator-min-microvolt = < 700000>;
 				regulator-max-microvolt = <1310000>;
 				regulator-min-microamp = <2000000>;
@@ -326,7 +326,7 @@
 			};
 
 			da9212_vgpu_reg: BUCKB {
-				regulator-name = "VBUCKB";
+				regulator-name = "vgpu";
 				regulator-min-microvolt = < 700000>;
 				regulator-max-microvolt = <1310000>;
 				regulator-min-microamp = <2000000>;
