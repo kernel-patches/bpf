@@ -645,14 +645,15 @@ config GPIO_RDA
 
 config GPIO_REALTEK_OTTO
 	tristate "Realtek Otto GPIO support"
-	depends on MACH_REALTEK_RTL || COMPILE_TEST
+	depends on MACH_REALTEK_RTL || ARCH_REALTEK || COMPILE_TEST
 	default MACH_REALTEK_RTL
 	select GPIO_GENERIC
 	select GPIOLIB_IRQCHIP
 	help
 	  The GPIO controller on the Otto MIPS platform supports up to two
 	  banks of 32 GPIOs, with edge triggered interrupts. The 32 GPIOs
-	  are grouped in four 8-bit wide ports.
+	  are grouped in four 8-bit wide ports. The Arm-based RTL9311B has
+	  the same controller.
 
 	  When built as a module, the module will be called realtek_otto_gpio.
 
