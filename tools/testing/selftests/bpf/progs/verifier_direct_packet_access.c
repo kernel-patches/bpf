@@ -569,7 +569,7 @@ l0_%=:	r0 = 0;						\
 
 SEC("tc")
 __description("direct packet access: test23 (x += pkt_ptr, 4)")
-__failure __msg("invalid access to packet, off=31 size=8, R5(id=3,off=31,r=0)")
+__failure __msg("invalid access to packet, off=31 size=8, R5(id=1,off=31,r=0)")
 __flag(BPF_F_ANY_ALIGNMENT)
 __naked void test23_x_pkt_ptr_4(void)
 {

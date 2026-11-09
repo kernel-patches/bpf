@@ -3634,27 +3634,6 @@ static bool __is_pointer_value(bool allow_ptr_leaks,
 	return is_pointer_regtype(reg->type);
 }
 
-static void assign_scalar_id_before_mov(struct bpf_verifier_env *env,
-					struct bpf_reg_state *src_reg)
-{
-	if (src_reg->type != SCALAR_VALUE)
-		return;
-	/*
-	 * The verifier is processing rX = rY insn and
-	 * rY->id has special linked register already.
-	 * Cleared it, since multiple rX += const are not supported.
-	 */
-	if (src_reg->id & BPF_ADD_CONST)
-		clear_scalar_id(src_reg);
-	/*
-	 * Ensure that src_reg has a valid ID that will be copied to
-	 * dst_reg and then will be used by sync_linked_regs() to
-	 * propagate min/max range.
-	 */
-	if (!src_reg->id && !tnum_is_const(src_reg->var_off))
-		src_reg->id = ++env->id_gen;
-}
-
 static void save_register_state(struct bpf_verifier_env *env,
 				struct bpf_func_state *state,
 				int spi, struct bpf_reg_state *reg,
@@ -3679,11 +3658,6 @@ static void save_register_state(struct bpf_verifier_env *env,
 static bool is_bpf_st_mem(struct bpf_insn *insn)
 {
 	return BPF_CLASS(insn->code) == BPF_ST && BPF_MODE(insn->code) == BPF_MEM;
-}
-
-static int get_reg_width(struct bpf_reg_state *reg)
-{
-	return fls64(reg_umax(reg));
 }
 
 /* See comment for mark_fastcall_pattern_for_call() */
@@ -3786,16 +3760,7 @@ static int check_stack_write_fixed_off(struct bpf_verifier_env *env,
 
 	mark_stack_slot_scratched(env, spi);
 	if (reg && !(off % BPF_REG_SIZE) && reg->type == SCALAR_VALUE && env->bpf_capable) {
-		bool reg_value_fits;
-
-		reg_value_fits = get_reg_width(reg) <= BITS_PER_BYTE * size;
-		/* Make sure that reg had an ID to build a relation on spill. */
-		if (reg_value_fits)
-			assign_scalar_id_before_mov(env, reg);
 		save_register_state(env, state, spi, reg, size);
-		/* Break the relation on a narrowing spill. */
-		if (!reg_value_fits)
-			clear_scalar_id(&ss->spilled_ptr);
 	} else if (!reg && !(off % BPF_REG_SIZE) && is_bpf_st_mem(insn) &&
 		   env->bpf_capable) {
 		struct bpf_reg_state *tmp_reg = &env->fake_reg[0];
@@ -4098,19 +4063,8 @@ static int check_stack_read_fixed_off(struct bpf_verifier_env *env,
 				if (dst_regno < 0)
 					return 0;
 
-				if (env->bpf_capable && size == 4 && spill_size == 4 &&
-				    get_reg_width(reg) <= 32)
-					/* Ensure stack slot has an ID to build a relation
-					 * with the destination register on fill.
-					 */
-					assign_scalar_id_before_mov(env, reg);
+				/* coerce_reg_to_size will adjust the boundaries. */
 				state->regs[dst_regno] = *reg;
-
-				/* Break the relation on a narrowing fill.
-				 * coerce_reg_to_size will adjust the boundaries.
-				 */
-				if (get_reg_width(reg) > size * BITS_PER_BYTE)
-					clear_scalar_id(&state->regs[dst_regno]);
 			} else {
 				int spill_cnt = 0, zero_cnt = 0;
 
@@ -4155,11 +4109,6 @@ static int check_stack_read_fixed_off(struct bpf_verifier_env *env,
 			}
 		} else if (dst_regno >= 0) {
 			/* restore register state from stack */
-			if (env->bpf_capable)
-				/* Ensure stack slot has an ID to build a relation
-				 * with the destination register on fill.
-				 */
-				assign_scalar_id_before_mov(env, reg);
 			state->regs[dst_regno] = *reg;
 		} else if (__is_pointer_value(env->allow_ptr_leaks, reg)) {
 			/* If dst_regno==-1, the caller is asking us whether
@@ -7718,18 +7667,7 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, struct b
 			/* b/h/w load zero-extends, mark upper bits as known 0 */
 			coerce_reg_to_size(&regs[value_regno], size);
 		} else {
-			/*
-			 * Sign-extension can change the register value relative
-			 * to a scalar it is linked with by id (e.g. a zero-
-			 * extending fill of the same spilled stack slot), thus
-			 * drop the shared id in that case.
-			 */
-			bool no_sext = reg_umax(&regs[value_regno]) <
-					(1ULL << (size * BITS_PER_BYTE - 1));
-
 			coerce_reg_to_size_sx(&regs[value_regno], size);
-			if (!no_sext)
-				clear_scalar_id(&regs[value_regno]);
 		}
 	}
 
@@ -11772,16 +11710,11 @@ static int call_func_on_its_own(struct bpf_verifier_env *env, int subprog, int i
 	callee->entry_rcu_locks = entry.active_rcu_locks;
 	callee->entry_preempt_locks = entry.active_preempt_locks;
 	for (i = BPF_REG_1; i <= BPF_REG_5; i++) {
-		/* what a scalar is linked to stays with the caller, so does the delta to it */
-		if (callee->regs[i].type == SCALAR_VALUE)
-			clear_scalar_id(&callee->regs[i]);
 		callee->regs[i].id = inherited_id(state, callee->regs[i].id);
 		callee->regs[i].parent_id = inherited_id(state, callee->regs[i].parent_id);
 		callee->regs[i].map_uid = inherited_id(state, callee->regs[i].map_uid);
 	}
 	for (i = 0; i < callee->out_stack_arg_cnt; i++) {
-		if (callee->stack_arg_regs[i].type == SCALAR_VALUE)
-			clear_scalar_id(&callee->stack_arg_regs[i]);
 		callee->stack_arg_regs[i].id = inherited_id(state, callee->stack_arg_regs[i].id);
 		callee->stack_arg_regs[i].parent_id =
 			inherited_id(state, callee->stack_arg_regs[i].parent_id);
@@ -11827,19 +11760,18 @@ static int exit_func_on_its_own(struct bpf_verifier_env *env)
 
 static u32 fresh_id(struct bpf_verifier_env *env, struct bpf_idmap *idmap, u32 id)
 {
-	u32 flags = id & BPF_ADD_CONST, i;
+	u32 i;
 
-	id &= ~BPF_ADD_CONST;
 	if (!id)
 		return 0;
 	for (i = 0; i < idmap->cnt; i++)
 		if (idmap->map[i].old == id)
-			return idmap->map[i].cur | flags;
+			return idmap->map[i].cur;
 	if (idmap->cnt == BPF_ID_MAP_SIZE)
 		return 0;
 	idmap->map[idmap->cnt].old = id;
 	idmap->map[idmap->cnt].cur = ++env->id_gen;
-	return idmap->map[idmap->cnt++].cur | flags;
+	return idmap->map[idmap->cnt++].cur;
 }
 
 /*
@@ -17909,13 +17841,6 @@ static void scalar_byte_swap(struct bpf_reg_state *dst_reg, struct bpf_insn *ins
 	/* Apply bswap if alu64 or switch between big-endian and little-endian machines */
 	bool need_bswap = alu64 || (to_le == is_big_endian);
 
-	/*
-	 * If the register is mutated, manually reset its scalar ID to break
-	 * any existing ties and avoid incorrect bounds propagation.
-	 */
-	if (need_bswap || insn->imm == 16 || insn->imm == 32)
-		clear_scalar_id(dst_reg);
-
 	if (need_bswap) {
 		if (insn->imm == 16)
 			dst_reg->var_off = tnum_bswap16(dst_reg->var_off);
@@ -18016,7 +17941,6 @@ static int maybe_fork_scalars(struct bpf_verifier_env *env, struct bpf_insn *ins
 	 * like any other. At this insn the branch is a part of the state that is looked at:
 	 * it must not be compared with it.
 	 */
-	clear_scalar_id(reg);
 	return adjust_scalar_min_max_vals(env, insn, reg, *src_reg);
 }
 
@@ -18226,10 +18150,8 @@ static int adjust_reg_min_max_vals(struct bpf_verifier_env *env,
 	struct bpf_func_state *state = vstate->frame[vstate->curframe];
 	struct bpf_reg_state *regs = state->regs, *dst_reg, *src_reg;
 	struct bpf_reg_state *ptr_reg = NULL, off_reg = {0};
-	bool alu32 = (BPF_CLASS(insn->code) != BPF_ALU64);
 	struct bpf_insn_aux_data *aux = cur_aux(env);
 	u8 opcode = BPF_OP(insn->code);
-	int err;
 
 	dst_reg = &regs[insn->dst_reg];
 	if (BPF_SRC(insn->code) == BPF_X)
@@ -18336,69 +18258,7 @@ static int adjust_reg_min_max_vals(struct bpf_verifier_env *env,
 		verbose(env, "verifier internal error: no src_reg\n");
 		return -EFAULT;
 	}
-	/*
-	 * For alu32 linked register tracking, we need to check dst_reg's
-	 * umax_value before the ALU operation. After adjust_scalar_min_max_vals(),
-	 * alu32 ops will have zero-extended the result, making umax_value <= U32_MAX.
-	 */
-	u64 dst_umax = reg_umax(dst_reg);
-
-	err = adjust_scalar_min_max_vals(env, insn, dst_reg, *src_reg);
-	if (err)
-		return err;
-	/*
-	 * Compilers can generate the code
-	 * r1 = r2
-	 * r1 += 0x1
-	 * if r2 < 1000 goto ...
-	 * use r1 in memory access
-	 * So remember constant delta between r2 and r1 and update r1 after
-	 * 'if' condition.
-	 */
-	if (env->bpf_capable &&
-	    (BPF_OP(insn->code) == BPF_ADD || BPF_OP(insn->code) == BPF_SUB) &&
-	    dst_reg->id && is_reg_const(src_reg, alu32) &&
-	    !(BPF_SRC(insn->code) == BPF_X && insn->src_reg == insn->dst_reg)) {
-		u64 val = reg_const_value(src_reg, alu32);
-		s32 off;
-
-		if (!alu32 && ((s64)val < S32_MIN || (s64)val > S32_MAX))
-			goto clear_id;
-
-		if (alu32 && (dst_umax > U32_MAX))
-			goto clear_id;
-
-		off = (s32)val;
-
-		if (BPF_OP(insn->code) == BPF_SUB) {
-			/* Negating S32_MIN would overflow */
-			if (off == S32_MIN)
-				goto clear_id;
-			off = -off;
-		}
-
-		if (dst_reg->id & BPF_ADD_CONST) {
-			/*
-			 * If the register already went through rX += val
-			 * we cannot accumulate another val into rx->off.
-			 */
-clear_id:
-			clear_scalar_id(dst_reg);
-		} else {
-			if (alu32)
-				dst_reg->id |= BPF_ADD_CONST32;
-			else
-				dst_reg->id |= BPF_ADD_CONST64;
-			dst_reg->delta = off;
-		}
-	} else {
-		/*
-		 * Make sure ID is cleared otherwise dst_reg min/max could be
-		 * incorrectly propagated into other registers by sync_linked_regs()
-		 */
-		clear_scalar_id(dst_reg);
-	}
-	return 0;
+	return adjust_scalar_min_max_vals(env, insn, dst_reg, *src_reg);
 }
 
 /*
@@ -18612,7 +18472,6 @@ void bpf_reg_union_range(struct bpf_reg_state *acc, const struct bpf_reg_state *
 /*
  * Extends acc's scalar range to include src's scalar range.
  * Caller must ensure that other kinds of metadata is compatible.
- * Caller must clear acc's scalar ID.
  */
 int bpf_reg_union(struct bpf_verifier_env *env, struct bpf_reg_state *acc,
 		  const struct bpf_reg_state *src)
@@ -18753,7 +18612,6 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 					/* case: R1 = R2
 					 * copy register state to dest reg
 					 */
-					assign_scalar_id_before_mov(env, src_reg);
 					*dst_reg = *src_reg;
 				} else {
 					/* case: R1 = (s8, s16 s32)R2 */
@@ -18763,14 +18621,7 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 							insn->src_reg);
 						return -EACCES;
 					} else if (src_reg->type == SCALAR_VALUE) {
-						bool no_sext;
-
-						no_sext = reg_umax(src_reg) < (1ULL << (insn->off - 1));
-						if (no_sext)
-							assign_scalar_id_before_mov(env, src_reg);
 						*dst_reg = *src_reg;
-						if (!no_sext)
-							clear_scalar_id(dst_reg);
 						coerce_reg_to_size_sx(dst_reg, insn->off >> 3);
 					} else {
 						mark_reg_unknown(env, regs, insn->dst_reg);
@@ -18784,29 +18635,10 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 						insn->src_reg);
 					return -EACCES;
 				} else if (src_reg->type == SCALAR_VALUE) {
-					if (insn->off == 0) {
-						bool is_src_reg_u32 = get_reg_width(src_reg) <= 32;
-
-						if (is_src_reg_u32)
-							assign_scalar_id_before_mov(env, src_reg);
-						*dst_reg = *src_reg;
-						/* Make sure ID is cleared if src_reg is not in u32
-						 * range otherwise dst_reg min/max could be incorrectly
-						 * propagated into src_reg by sync_linked_regs()
-						 */
-						if (!is_src_reg_u32)
-							clear_scalar_id(dst_reg);
-					} else {
-						/* case: W1 = (s8, s16)W2 */
-						bool no_sext = reg_umax(src_reg) < (1ULL << (insn->off - 1));
-
-						if (no_sext)
-							assign_scalar_id_before_mov(env, src_reg);
-						*dst_reg = *src_reg;
-						if (!no_sext)
-							clear_scalar_id(dst_reg);
+					*dst_reg = *src_reg;
+					/* case: W1 = (s8, s16)W2 */
+					if (insn->off)
 						coerce_subreg_to_size_sx(dst_reg, insn->off >> 3);
-					}
 				} else {
 					mark_reg_unknown(env, regs,
 							 insn->dst_reg);
@@ -20728,69 +20560,6 @@ static void adjust_btf_func(struct bpf_verifier_env *env)
 	/* func_info is not available for hidden subprogs */
 	for (i = 0; i < env->subprog_cnt - env->hidden_subprog_cnt; i++)
 		aux->func_info[i].insn_off = env->subprog_info[i].start;
-}
-
-/* Find id in idset and increment its count, or add new entry */
-static void idset_cnt_inc(struct bpf_idset *idset, u32 id)
-{
-	u32 i;
-
-	for (i = 0; i < idset->num_ids; i++) {
-		if (idset->entries[i].id == id) {
-			idset->entries[i].cnt++;
-			return;
-		}
-	}
-	/* New id */
-	if (idset->num_ids < BPF_ID_MAP_SIZE) {
-		idset->entries[idset->num_ids].id = id;
-		idset->entries[idset->num_ids].cnt = 1;
-		idset->num_ids++;
-	}
-}
-
-/* Find id in idset and return its count, or 0 if not found */
-static u32 idset_cnt_get(struct bpf_idset *idset, u32 id)
-{
-	u32 i;
-
-	for (i = 0; i < idset->num_ids; i++) {
-		if (idset->entries[i].id == id)
-			return idset->entries[i].cnt;
-	}
-	return 0;
-}
-
-/*
- * Clear singular scalar ids in a state.
- * A register with a non-zero id is called singular if no other register shares
- * the same base id. Such registers can be treated as independent (id=0).
- */
-void bpf_clear_singular_ids(struct bpf_verifier_env *env,
-			    struct bpf_verifier_state *st)
-{
-	struct bpf_idset *idset = &env->idset_scratch;
-	struct bpf_func_state *func;
-	struct bpf_reg_state *reg;
-
-	idset->num_ids = 0;
-
-	bpf_for_each_reg_in_vstate(st, func, reg, ({
-		if (reg->type != SCALAR_VALUE)
-			continue;
-		if (!reg->id)
-			continue;
-		idset_cnt_inc(idset, reg->id & ~BPF_ADD_CONST);
-	}));
-
-	bpf_for_each_reg_in_vstate(st, func, reg, ({
-		if (reg->type != SCALAR_VALUE)
-			continue;
-		if (!reg->id)
-			continue;
-		if (idset_cnt_get(idset, reg->id & ~BPF_ADD_CONST) == 1)
-			clear_scalar_id(reg);
-	}));
 }
 
 /* Return true if it's OK to have the same insn return a different type. */

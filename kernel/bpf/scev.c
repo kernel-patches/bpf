@@ -3940,7 +3940,7 @@ static bool is_unbound_scev_reg(struct bpf_verifier_env *env, const struct bpf_f
 {
 	const struct bpf_reg_state *reg = scev_reg_for_read(env, st, r);
 
-	return reg && reg->type == SCALAR_VALUE && !reg->id && reg->step <= 1 &&
+	return reg && reg->type == SCALAR_VALUE && reg->step <= 1 &&
 	       tnum_is_unknown(reg->var_off) &&
 	       reg->r64.size == U64_MAX && reg->r32.size == U32_MAX;
 }
@@ -4026,9 +4026,6 @@ bool bpf_is_widenable_reg_type(const struct bpf_reg_state *reg)
 static void scratch_widened_reg_id(struct bpf_verifier_env *env, struct bpf_reg_state *reg)
 {
 	switch (base_type(reg->type)) {
-	case SCALAR_VALUE:
-		clear_scalar_id(reg);
-		break;
 	case PTR_TO_PACKET:
 	case PTR_TO_PACKET_META:
 		reg->id = ++env->id_gen;
@@ -4746,7 +4743,7 @@ int bpf_widen_scev_regs(struct bpf_verifier_env *env, struct bpf_verifier_state 
 		if (back && (!val || !entry_val || !bpf_reg_union_compatible(val, entry_val)))
 			continue;
 		if (test_bit(r, iters->mask_regs)) {
-			/* The range stays. It's no longer equal to the registers with its id. */
+			/* the range stays */
 			err = scev_reg_for_write(env, cur_func, r, &reg);
 			if (!err && back)
 				err = bpf_reg_union(env, reg, entry_val);
@@ -4758,7 +4755,6 @@ int bpf_widen_scev_regs(struct bpf_verifier_env *env, struct bpf_verifier_state 
 				bpf_log(log, " stays in 0..%llu, it loses bits only\n",
 					reg_umax(reg));
 			}
-			scratch_widened_reg_id(env, reg);
 			mark_scev_reg_scratched(env, r);
 			continue;
 		}

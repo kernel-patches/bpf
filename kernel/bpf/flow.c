@@ -2924,8 +2924,6 @@ static struct flow_state *flow_arrive(struct bpf_verifier_env *env, struct bpf_v
 		flow_free_state(env, s);
 		return ERR_PTR(err);
 	}
-	/* when the registers that it was shared with are dead, or are those of the caller */
-	bpf_clear_singular_ids(env, &s->st);
 	return s;
 }
 
