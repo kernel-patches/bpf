@@ -1476,6 +1476,37 @@ int sdca_asoc_free_constraints(struct snd_soc_dai *dai)
 }
 EXPORT_SYMBOL_NS(sdca_asoc_free_constraints, "SND_SOC_SDCA");
 
+static int get_cluster_mask(struct device *dev, struct sdca_function_data *function,
+			    struct sdca_entity *entity, unsigned int *ch_mask)
+{
+	struct sdca_control_range *range;
+	struct sdca_control *control;
+	int i;
+
+	control = sdca_selector_find_control(dev, entity, SDCA_CTL_IT_CLUSTERINDEX);
+	if (!control)
+		return -EINVAL;
+
+	range = sdca_control_find_range(dev, entity, control, SDCA_CLUSTER_NCOLS, 0);
+	if (!range)
+		return -EINVAL;
+
+	*ch_mask = 0;
+
+	for (i = 0; i < range->rows; i++) {
+		int clusterid = sdca_range(range, SDCA_CLUSTER_CLUSTERID, i);
+		struct sdca_cluster *cluster;
+
+		cluster = sdca_id_find_cluster(dev, function, clusterid);
+		if (!cluster)
+			return -ENODEV;
+
+		*ch_mask |= BIT(cluster->num_channels - 1);
+	}
+
+	return 0;
+}
+
 /**
  * sdca_asoc_set_constraints - constrain channels available on a DAI
  * @dev: Pointer to the device, used for error messages.
@@ -1499,42 +1530,25 @@ int sdca_asoc_set_constraints(struct device *dev, struct regmap *regmap,
 	};
 	struct sdca_asoc_constraints *constraints = snd_soc_dai_to_priv(dai);
 	struct sdca_entity *entity = &function->entities[dai->id];
-	struct sdca_control_range *range;
-	struct sdca_control *control;
-	unsigned int channel_mask = 0;
-	int i, ret;
+	unsigned int cluster_ch_mask;
+	int ret;
 
 	static_assert(ARRAY_SIZE(channel_list) == SDCA_MAX_CHANNEL_COUNT);
-	static_assert(sizeof(channel_mask) * BITS_PER_BYTE >= SDCA_MAX_CHANNEL_COUNT);
+	static_assert(sizeof(cluster_ch_mask) * BITS_PER_BYTE >= SDCA_MAX_CHANNEL_COUNT);
 
 	if (entity->type != SDCA_ENTITY_TYPE_IT)
 		return 0;
 
-	control = sdca_selector_find_control(dev, entity, SDCA_CTL_IT_CLUSTERINDEX);
-	if (!control)
-		return -EINVAL;
-
-	range = sdca_control_find_range(dev, entity, control, SDCA_CLUSTER_NCOLS, 0);
-	if (!range)
-		return -EINVAL;
-
-	for (i = 0; i < range->rows; i++) {
-		int clusterid = sdca_range(range, SDCA_CLUSTER_CLUSTERID, i);
-		struct sdca_cluster *cluster;
-
-		cluster = sdca_id_find_cluster(dev, function, clusterid);
-		if (!cluster)
-			return -ENODEV;
-
-		channel_mask |= (1 << (cluster->num_channels - 1));
-	}
+	ret = get_cluster_mask(dev, function, entity, &cluster_ch_mask);
+	if (ret)
+		return ret;
 
 	dev_dbg(dev, "%s: set channel constraint mask: %#x\n",
-		entity->label, channel_mask);
+		entity->label, cluster_ch_mask);
 
 	constraints->channels.count = ARRAY_SIZE(channel_list);
 	constraints->channels.list = channel_list;
-	constraints->channels.mask = channel_mask;
+	constraints->channels.mask = cluster_ch_mask;
 
 	ret = snd_pcm_hw_constraint_list(substream->runtime, 0,
 					 SNDRV_PCM_HW_PARAM_CHANNELS,
