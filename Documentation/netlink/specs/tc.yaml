@@ -895,6 +895,30 @@ definitions:
         type: u32
         doc: Memory limit in bytes
   -
+    name: tc-fq-pie-cl-stats
+    type: struct
+    members:
+      -
+        name: prob
+        type: u64
+        doc: Current drop probability of the flow
+      -
+        name: delay
+        type: u32
+        doc: Current queue delay of the flow in microseconds
+      -
+        name: deficit
+        type: s32
+        doc: Number of remaining byte credits
+      -
+        name: avg-dq-rate
+        type: u32
+        doc: Current average dq_rate in bytes/second
+      -
+        name: dq-rate-estimating
+        type: u32
+        doc: Is avg-dq-rate being calculated?
+  -
     name: tc-fq-pie-xstats
     type: struct
     members:
@@ -934,6 +958,15 @@ definitions:
         name: memory-usage
         type: u32
         doc: Total memory across all queues
+      -
+        name: type
+        type: u32
+        doc: TCA_FQ_PIE_XSTATS_QDISC (0) or TCA_FQ_PIE_XSTATS_CLASS (1)
+      -
+        name: class-stats
+        type: binary
+        struct: tc-fq-pie-cl-stats
+        doc: Class statistics of a particular flow (invoked via tc class show)
   -
     name: tc-fq-qd-stats
     type: struct
