@@ -881,7 +881,6 @@ err_pm_runtime_free:
 	pm_runtime_put_noidle(qspi->dev);
 	pm_runtime_disable(qspi->dev);
 	pm_runtime_set_suspended(qspi->dev);
-	pm_runtime_dont_use_autosuspend(qspi->dev);
 err_dma_free:
 	stm32_qspi_dma_free(qspi);
 err_clk_disable:
@@ -903,7 +902,6 @@ static void stm32_qspi_remove(struct platform_device *pdev)
 	pm_runtime_put_noidle(qspi->dev);
 	pm_runtime_disable(qspi->dev);
 	pm_runtime_set_suspended(qspi->dev);
-	pm_runtime_dont_use_autosuspend(qspi->dev);
 	clk_disable_unprepare(qspi->clk);
 }
 
