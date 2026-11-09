@@ -308,8 +308,7 @@ static int nfc_llcp_getsockopt(struct socket *sock, int level, int optname,
 	struct sock *sk = sock->sk;
 	struct nfc_llcp_sock *llcp_sock = nfc_llcp_sock(sk);
 	int len, err = 0;
-	u16 miux, remote_miu;
-	u8 rw;
+	u32 miux, remote_miu, rw;
 
 	pr_debug("%p optname %d\n", sk, optname);
 
