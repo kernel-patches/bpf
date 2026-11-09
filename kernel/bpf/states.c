@@ -169,6 +169,16 @@ static void __clean_func_state(struct bpf_verifier_env *env,
 				continue;
 
 			/*
+			 * When the half-slot closer to FP is dead, what remains of a
+			 * 64-bit spill looks like a 32-bit spill: the low 32 bits of
+			 * the value. On big endian the other half-slot holds the upper
+			 * 32 bits.
+			 */
+			if (hi_live && bpf_spill_size(bpf_stack_slot(st, i)) == BPF_REG_SIZE &&
+			    !bpf_stack_narrow_access_ok(0, BPF_REG_SIZE / 2, BPF_REG_SIZE))
+				continue;
+
+			/*
 			 * Only scalar spills can be degraded to raw stack bytes
 			 * when their high half is dead. Pointer spills need the
 			 * saved spilled_ptr metadata so partial fills keep
@@ -444,6 +454,15 @@ static bool stacksafe(struct bpf_verifier_env *env, struct bpf_func_state *old,
 
 		/* old stack has more populated slots than current stack */
 		if (!cur_slot)
+			return false;
+
+		/*
+		 * The old spill is the first bytes of a wider spill. On big endian
+		 * these are not the low bytes of the value.
+		 */
+		if (old_type == STACK_SPILL && bpf_is_spilled_reg(cur_slot) &&
+		    !bpf_stack_narrow_access_ok(0, bpf_spill_size(old_slot),
+						bpf_spill_size(cur_slot)))
 			return false;
 
 		/*
