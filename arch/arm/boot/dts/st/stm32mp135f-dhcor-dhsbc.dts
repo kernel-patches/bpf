@@ -349,7 +349,7 @@
 		pinctrl-names = "default", "sleep";
 		status = "okay";
 	};
-	timer@12 {
+	timer@c {
 		status = "okay";
 	};
 };

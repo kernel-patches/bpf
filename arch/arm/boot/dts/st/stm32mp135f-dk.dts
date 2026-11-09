@@ -563,7 +563,7 @@
 		pinctrl-names = "default", "sleep";
 		status = "okay";
 	};
-	timer@13 {
+	timer@d {
 		status = "okay";
 	};
 };
