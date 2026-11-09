@@ -171,7 +171,7 @@
 };
 
 &mfg_async {
-	domain-supply = <&da9211_vgpu_reg>;
+	domain-supply = <&da9212_vgpu_reg>;
 };
 
 &cec {
@@ -187,12 +187,12 @@
 };
 
 &cpu2 {
-	proc-supply = <&da9211_vcpu_reg>;
+	proc-supply = <&da9212_vcpu_reg>;
 	sram-supply = <&mt6397_vsramca7_reg>;
 };
 
 &cpu3 {
-	proc-supply = <&da9211_vcpu_reg>;
+	proc-supply = <&da9212_vcpu_reg>;
 	sram-supply = <&mt6397_vsramca7_reg>;
 };
 
@@ -307,13 +307,13 @@
 	clock-frequency = <1500000>;
 	status = "okay";
 
-	da9211: da9211@68 {
-		compatible = "dlg,da9211";
+	regulator@68 {
+		compatible = "dlg,da9212";
 		reg = <0x68>;
 		interrupts-extended = <&pio 15 IRQ_TYPE_LEVEL_LOW>;
 
 		regulators {
-			da9211_vcpu_reg: BUCKA {
+			da9212_vcpu_reg: BUCKA {
 				regulator-name = "VBUCKA";
 				regulator-min-microvolt = < 700000>;
 				regulator-max-microvolt = <1310000>;
@@ -325,7 +325,7 @@
 							   DA9211_BUCK_MODE_AUTO>;
 			};
 
-			da9211_vgpu_reg: BUCKB {
+			da9212_vgpu_reg: BUCKB {
 				regulator-name = "VBUCKB";
 				regulator-min-microvolt = < 700000>;
 				regulator-max-microvolt = <1310000>;
@@ -658,7 +658,7 @@
 	};
 
 	i2c1_pins_a: i2c1-pins {
-		pins-da9211 {
+		pins-da9212 {
 			pinmux = <MT8173_PIN_15_EINT15__FUNC_GPIO15>;
 			bias-pull-up;
 		};
