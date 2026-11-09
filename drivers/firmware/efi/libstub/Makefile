@@ -6,7 +6,7 @@
 # enabled, even if doing so doesn't break the build.
 #
 
-cflags-y			:= $(KBUILD_CFLAGS)
+cflags-y			:= $(filter-out $(LLVM_PLUGINS_CFLAGS),$(KBUILD_CFLAGS))
 
 # x86 links the stub into the decompressor rather than the kernel proper, so
 # drop the kernel's code model, calling convention, and stack alignment, and
