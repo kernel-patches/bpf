@@ -595,21 +595,21 @@ dtb-$(CONFIG_SOC_IMX6UL) += \
 	imx6ulz-14x14-evk.dtb \
 	imx6ulz-bsh-smm-m2.dtb
 
-imx7d-colibri-emmc-aster-panel-cap-touch-7inch-parallel-dtbs := \
+imx7d-colibri-emmc-aster-tdx-panel-cap-touch-7inch-parallel-dtbs := \
 	imx7d-colibri-emmc-aster.dtb \
-	imx7d-colibri-emmc-panel-cap-touch-7inch-parallel.dtbo
+	imx7d-colibri-emmc-tdx-panel-cap-touch-7inch-parallel.dtbo
 
-imx7d-colibri-emmc-iris-v2-panel-cap-touch-7inch-parallel-dtbs := \
+imx7d-colibri-emmc-iris-v2-tdx-panel-cap-touch-7inch-parallel-dtbs := \
 	imx7d-colibri-emmc-iris-v2.dtb \
-	imx7d-colibri-emmc-panel-cap-touch-7inch-parallel.dtbo
+	imx7d-colibri-emmc-tdx-panel-cap-touch-7inch-parallel.dtbo
 
-imx7d-colibri-emmc-eval-v3-panel-cap-touch-7inch-parallel-touch-adapter-dtbs := \
+imx7d-colibri-emmc-eval-v3-tdx-panel-cap-touch-7inch-parallel-touch-adapter-dtbs := \
 	imx7d-colibri-emmc-eval-v3.dtb \
-	imx7d-colibri-emmc-panel-cap-touch-7inch-parallel-touch-adapter.dtbo
+	imx7d-colibri-emmc-tdx-panel-cap-touch-7inch-parallel-touch-adapter.dtbo
 
-imx7d-colibri-emmc-eval-v3-panel-res-touch-7inch-parallel-dtbs := \
+imx7d-colibri-emmc-eval-v3-tdx-panel-res-touch-7inch-parallel-dtbs := \
 	imx7d-colibri-emmc-eval-v3.dtb \
-	imx7d-colibri-emmc-panel-res-touch-7inch-parallel.dtbo
+	imx7d-colibri-emmc-tdx-panel-res-touch-7inch-parallel.dtbo
 
 imx7d-colibri-emmc-aster-vga-dtbs := \
 	imx7d-colibri-emmc-aster.dtb \
@@ -631,20 +631,20 @@ dtb-$(CONFIG_SOC_IMX7D) += \
 	imx7d-cl-som-imx7.dtb \
 	imx7d-colibri-aster.dtb \
 	imx7d-colibri-emmc-aster.dtb \
-	imx7d-colibri-emmc-aster-panel-cap-touch-7inch-parallel.dtb \
+	imx7d-colibri-emmc-aster-tdx-panel-cap-touch-7inch-parallel.dtb \
 	imx7d-colibri-emmc-aster-vga.dtb \
 	imx7d-colibri-emmc-iris.dtb \
 	imx7d-colibri-emmc-iris-vga.dtb \
 	imx7d-colibri-emmc-iris-v2.dtb \
-	imx7d-colibri-emmc-iris-v2-panel-cap-touch-7inch-parallel.dtb \
+	imx7d-colibri-emmc-iris-v2-tdx-panel-cap-touch-7inch-parallel.dtb \
 	imx7d-colibri-emmc-iris-v2-vga.dtb \
 	imx7d-colibri-emmc-eval-v3.dtb \
-	imx7d-colibri-emmc-eval-v3-panel-cap-touch-7inch-parallel-touch-adapter.dtb \
-	imx7d-colibri-emmc-eval-v3-panel-res-touch-7inch-parallel.dtb \
+	imx7d-colibri-emmc-eval-v3-tdx-panel-cap-touch-7inch-parallel-touch-adapter.dtb \
+	imx7d-colibri-emmc-eval-v3-tdx-panel-res-touch-7inch-parallel.dtb \
 	imx7d-colibri-emmc-eval-v3-vga.dtb \
-	imx7d-colibri-emmc-panel-cap-touch-7inch-parallel.dtbo \
-	imx7d-colibri-emmc-panel-cap-touch-7inch-parallel-touch-adapter.dtbo \
-	imx7d-colibri-emmc-panel-res-touch-7inch-parallel.dtbo \
+	imx7d-colibri-emmc-tdx-panel-cap-touch-7inch-parallel.dtbo \
+	imx7d-colibri-emmc-tdx-panel-cap-touch-7inch-parallel-touch-adapter.dtbo \
+	imx7d-colibri-emmc-tdx-panel-res-touch-7inch-parallel.dtbo \
 	imx7d-colibri-emmc-vga.dtbo \
 	imx7d-colibri-eval-v3.dtb \
 	imx7d-colibri-iris.dtb \
