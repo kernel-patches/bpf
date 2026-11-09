@@ -4327,6 +4327,31 @@ static void invalidate_stack_slices(struct bpf_verifier_env *env, u32 frameno,
 	}));
 }
 
+/*
+ * Scalar evolution takes the may-defs of stack slots from bpf_may_write_mask(): a slot that is not
+ * in the mask holds the same value before and after the insn. The iteration count of a loop depends
+ * on that, and nothing detects a wrong one later. Here an insn, a helper or a kfunc writes to
+ * [min_off, max_off) of frame @frameno. For a frame of a caller the insn is the callsite. Without
+ * @fixed_off the range can be wider than the mask: two offsets become a range at a join point. Then
+ * the write is somewhere in the range.
+ */
+static int check_may_write_mask(struct bpf_verifier_env *env, u32 frameno, int min_off, int max_off,
+				bool fixed_off)
+{
+	struct bpf_verifier_state *st = env->cur_state;
+	int idx = frameno == st->curframe ? env->insn_idx : st->frame[frameno + 1]->callsite;
+	int spi, first = bpf_get_spi(max_off - 1), last = bpf_get_spi(min_off);
+	const unsigned long *mask = bpf_may_write_mask(env, idx);
+
+	spi = fixed_off ? find_next_zero_bit(mask, last + 1, first) : last + 1;
+	if (!fixed_off && find_next_bit(mask, last + 1, first) > last)
+		spi = first;
+	if (verifier_bug_if(spi <= last, env, "insn %d writes to fp%d outside of may_write_mask",
+			    idx, -(spi + 1) * BPF_REG_SIZE))
+		return -EFAULT;
+	return 0;
+}
+
 /* check_stack_write dispatches to check_stack_write_fixed_off or
  * check_stack_write_var_off.
  *
@@ -4345,6 +4370,10 @@ static int check_stack_write(struct bpf_verifier_env *env,
 	int max_off = reg_smax(reg) + off + size;
 	int err;
 
+	err = check_may_write_mask(env, state->frameno, min_off, max_off,
+				   tnum_is_const(reg->var_off));
+	if (err)
+		return err;
 	if (tnum_is_const(reg->var_off)) {
 		off += reg->var_off.value;
 		err = check_stack_write_fixed_off(env, state, off, size,
@@ -8030,6 +8059,13 @@ static int check_stack_range_initialized(
 
 		min_off = reg_smin(reg) + off;
 		max_off = reg_smax(reg) + off;
+	}
+
+	if (clobber && access_size) {
+		err = check_may_write_mask(env, state->frameno, min_off, max_off + access_size,
+					   tnum_is_const(reg->var_off));
+		if (err)
+			return err;
 	}
 
 	/* Unprivileged outputs retain each byte's initialization state. */

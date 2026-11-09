@@ -125,6 +125,41 @@ __naked void stack_skb_load_bytes_init(void)
 	: __clobber_all);
 }
 
+/* The pointer is fp-128 or fp-96. At the loop header the two offsets are joined to a range. */
+SEC("tc")
+__description("raw_stack: store to one of two buffers")
+__success __retval(0)
+__naked void store_to_one_of_two_buffers(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	r8 = r0;					\
+	r1 = 0;						\
+	*(u64*)(r10 - 144) = r1;			\
+	*(u64*)(r10 - 120) = r1;			\
+	*(u64*)(r10 - 88) = r1;				\
+	r3 = r10;					\
+	r3 += -128;					\
+	*(u64*)(r10 - 136) = r3;			\
+l0_%=:	r8 *= 8;					\
+	if w8 s> 100 goto l1_%=;			\
+	r3 = r10;					\
+	r3 += -96;					\
+	*(u64*)(r10 - 136) = r3;			\
+	r4 = *(u64*)(r10 - 144);			\
+	r4 += 1;					\
+	*(u64*)(r10 - 144) = r4;			\
+	if r4 < 3 goto l0_%=;				\
+l1_%=:	r3 = *(u64*)(r10 - 136);			\
+	r1 = 7;						\
+	*(u64*)(r3 + 8) = r1;				\
+	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
 SEC("tc")
 __description("raw_stack: skb_load_bytes, spilled regs around bounds")
 __success __retval(0)
