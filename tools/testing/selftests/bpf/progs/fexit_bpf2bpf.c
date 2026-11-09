@@ -173,6 +173,7 @@ int new_test_pkt_write_access_subprog(struct __sk_buff *skb, __u32 off)
 	if (off > sizeof(struct ethhdr) + sizeof(struct ipv6hdr))
 		return -1;
 
+	off &= ~1;
 	tcp = data + off;
 	if (tcp + 1 > data_end)
 		return -1;
