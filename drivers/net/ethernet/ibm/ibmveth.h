@@ -374,6 +374,7 @@ struct ibmveth_adapter {
 	char queue_irq_name[IBMVETH_MAX_RX_QUEUES][32];
 	bool multi_queue;
 	unsigned int num_rx_queues;
+	/* Set from replenish without RTNL: READ_ONCE()/WRITE_ONCE(). */
 	bool mq_fallback;
 	/* Lifetime: true while RX IRQ handlers / NAPI are installed. */
 	bool rx_irq_setup;
