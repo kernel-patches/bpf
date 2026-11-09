@@ -15,3 +15,19 @@ menuconfig LLVM_PLUGINS
 	  Building them requires LLVM development headers and llvm-config
 	  of the same major version as clang. Each plugin has its own option
 	  below and is built only if that option is enabled.
+
+if LLVM_PLUGINS
+
+config CLANG_PLUGIN_BPF_SCAN_IR
+	bool "Scan optimized LLVM IR for BPF"
+	depends on X86_64 || ARM64
+	depends on DEBUG_INFO_BTF
+	depends on !LTO_CLANG
+	depends on CLANG_VERSION >= 190000
+	help
+	  Find the functions which return errors on paths without side
+	  effects and describe them in .BTF_fmodret_candidates for
+	  resolve_btfids. The section is discarded from the final kernel
+	  and modules.
+
+endif

@@ -5064,6 +5064,13 @@ S:	Supported
 F:	arch/x86/net/
 X:	arch/x86/net/bpf_jit_comp32.c
 
+BPF [COMPILER PLUGINS]
+M:	Anton Protopopov <a.s.protopopov@gmail.com>
+L:	bpf@vger.kernel.org
+S:	Maintained
+F:	scripts/bpf/
+F:	scripts/llvm-plugins/bpf_*
+
 BPF [CORE]
 M:	Alexei Starovoitov <ast@kernel.org>
 M:	Daniel Borkmann <daniel@iogearbox.net>

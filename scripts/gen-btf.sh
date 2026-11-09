@@ -120,7 +120,9 @@ gen_btf_o()
 
 embed_btf_data()
 {
-	${OBJCOPY} --add-section .BTF=${ELF_FILE}.BTF ${ELF_FILE}
+	# resolve_btfids has consumed the compiler plugin records of the module
+	${OBJCOPY} --add-section .BTF=${ELF_FILE}.BTF \
+		--remove-section=.BTF_fmodret_candidates ${ELF_FILE}
 
 	# a module might not have a .BTF_ids or .BTF.base section
 	btf_base="${ELF_FILE}.BTF.base"
