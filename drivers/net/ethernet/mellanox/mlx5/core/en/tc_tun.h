@@ -13,6 +13,9 @@
 
 #ifdef CONFIG_MLX5_ESWITCH
 
+/* VXLAN and GENEVE match registers hold a 24 bit VNI */
+#define MLX5E_TC_TUN_N_VNI BIT(24)
+
 enum {
 	MLX5E_TC_TUNNEL_TYPE_UNKNOWN,
 	MLX5E_TC_TUNNEL_TYPE_VXLAN,
