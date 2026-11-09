@@ -56,7 +56,6 @@ TEST_GEN_PROGS_EXTENDED = \
 	test_cpp \
 	veristat \
 	xdp_features \
-	xdp_hw_metadata \
 	xdp_synproxy
 
 TEST_GEN_FILES += $(TEST_KMODS) liburandom_read.so urandom_read sign-file uprobe_multi
@@ -565,13 +564,6 @@ verifier/tests.h: verifier/*.c
 		  echo '#endif' \
 		) > verifier/tests.h
 $(OUTPUT)/test_verifier: test_verifier.c verifier/tests.h $(BPFOBJ) | $(OUTPUT)
-	$(call msg,BINARY,,$@)
-	$(Q)$(CC) $(CFLAGS) $(filter %.a %.o %.c,$^) $(LDLIBS) -o $@
-
-$(OUTPUT)/xdp_hw_metadata: xdp_hw_metadata.c ../net/lib/xsk/xsk.c network_helpers.c \
-			   $(TOOLSDIR)/lib/find_bit.c xdp_metadata.h \
-			   ../net/lib/xsk/xsk.h network_helpers.h test_progs.h bpf_util.h \
-			   $(OUTPUT)/xdp_hw_metadata.skel.h $(BPFOBJ) | $(OUTPUT)
 	$(call msg,BINARY,,$@)
 	$(Q)$(CC) $(CFLAGS) $(filter %.a %.o %.c,$^) $(LDLIBS) -o $@
 
