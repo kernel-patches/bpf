@@ -4837,7 +4837,17 @@ static void rt5665_i2c_shutdown(struct i2c_client *client)
 {
 	struct rt5665_priv *rt5665 = i2c_get_clientdata(client);
 
+	if (client->irq)
+		disable_irq(client->irq);
+	cancel_delayed_work_sync(&rt5665->jack_detect_work);
+	cancel_delayed_work_sync(&rt5665->jd_check_work);
+
 	regmap_write(rt5665->regmap, RT5665_RESET, 0);
+}
+
+static void rt5665_i2c_remove(struct i2c_client *client)
+{
+	rt5665_i2c_shutdown(client);
 }
 
 #ifdef CONFIG_OF
@@ -4865,6 +4875,7 @@ static struct i2c_driver rt5665_i2c_driver = {
 		.acpi_match_table = ACPI_PTR(rt5665_acpi_match),
 	},
 	.probe = rt5665_i2c_probe,
+	.remove = rt5665_i2c_remove,
 	.shutdown = rt5665_i2c_shutdown,
 	.id_table = rt5665_i2c_id,
 };
