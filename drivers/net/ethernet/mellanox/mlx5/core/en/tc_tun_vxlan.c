@@ -5,6 +5,7 @@
 #include <net/vxlan.h>
 #include "lib/vxlan.h"
 #include "en/tc_tun.h"
+#include "fs_core.h"
 
 static bool mlx5e_tc_tun_can_offload_vxlan(struct mlx5e_priv *priv)
 {
@@ -261,6 +262,41 @@ static int mlx5e_tc_tun_get_remote_ifindex(struct net_device *mirred_dev)
 	return ifindex;
 }
 
+static int
+mlx5e_tc_tun_parse_outer_key_vxlan(struct mlx5e_priv *priv,
+				   struct mlx5_flow_spec *spec,
+				   struct netlink_ext_ack *extack,
+				   u32 key, u32 mask,
+				   enum fs_flow_table_type fs_type)
+{
+	void *misc_c, *misc_v;
+
+	if (key >= MLX5E_TC_TUN_N_VNI) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "Tunnel key does not fit the 24 bit VNI");
+		return -EOPNOTSUPP;
+	}
+
+	if (!MLX5_CAP_FLOWTABLE_TYPE(priv->mdev,
+				     ft_field_support.outer_vxlan_vni,
+				     fs_type)) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "Matching on VXLAN VNI is not supported");
+		return -EOPNOTSUPP;
+	}
+
+	misc_c = MLX5_ADDR_OF(fte_match_param, spec->match_criteria,
+			      misc_parameters);
+	misc_v = MLX5_ADDR_OF(fte_match_param, spec->match_value,
+			      misc_parameters);
+
+	MLX5_SET(fte_match_set_misc, misc_c, vxlan_vni, mask);
+	MLX5_SET(fte_match_set_misc, misc_v, vxlan_vni, key);
+	spec->match_criteria_enable |= MLX5_MATCH_MISC_PARAMETERS;
+
+	return 0;
+}
+
 struct mlx5e_tc_tunnel vxlan_tunnel = {
 	.tunnel_type          = MLX5E_TC_TUNNEL_TYPE_VXLAN,
 	.match_level          = MLX5_MATCH_L4,
@@ -270,6 +306,7 @@ struct mlx5e_tc_tunnel vxlan_tunnel = {
 	.generate_ip_tun_hdr  = mlx5e_gen_ip_tunnel_header_vxlan,
 	.parse_udp_ports      = mlx5e_tc_tun_parse_udp_ports_vxlan,
 	.parse_tunnel         = mlx5e_tc_tun_parse_vxlan,
+	.parse_outer_key      = mlx5e_tc_tun_parse_outer_key_vxlan,
 	.encap_info_equal     = mlx5e_tc_tun_encap_info_equal_vxlan,
 	.get_remote_ifindex   = mlx5e_tc_tun_get_remote_ifindex,
 };

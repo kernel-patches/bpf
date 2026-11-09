@@ -7,6 +7,7 @@
 #include <net/gre.h>
 #include <net/geneve.h>
 #include <net/bareudp.h>
+#include <net/gtp.h>
 #include "en/tc_tun.h"
 #include "en/tc_priv.h"
 #include "en_tc.h"
@@ -995,4 +996,91 @@ int mlx5e_tc_tun_parse_udp_ports(struct mlx5e_priv *priv,
 		 ntohs(enc_ports.key->src));
 
 	return 0;
+}
+
+/* Without a tunnel device the outer headers name the tunnel */
+static struct mlx5e_tc_tunnel *
+mlx5e_tc_tun_outer_lookup(struct flow_rule *rule)
+{
+	struct flow_match_basic basic;
+	struct flow_match_ports ports;
+
+	if (!flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_BASIC))
+		return NULL;
+
+	flow_rule_match_basic(rule, &basic);
+	if (basic.key->ip_proto == IPPROTO_GRE)
+		return &gre_tunnel;
+
+	if (basic.key->ip_proto != IPPROTO_UDP ||
+	    !flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_PORTS))
+		return NULL;
+
+	flow_rule_match_ports(rule, &ports);
+	/* Only an exact port names a tunnel */
+	if (ports.mask->dst != htons(U16_MAX))
+		return NULL;
+
+	switch (ntohs(ports.key->dst)) {
+	case GTP1U_PORT:
+		return &gtp_tunnel;
+	case IANA_VXLAN_UDP_PORT:
+		return &vxlan_tunnel;
+	case GENEVE_UDP_PORT:
+		return &geneve_tunnel;
+	default:
+		return NULL;
+	}
+}
+
+static bool
+mlx5e_tc_tun_has_decap(struct flow_rule *rule)
+{
+	const struct flow_action_entry *act;
+	int i;
+
+	flow_action_for_each(i, act, &rule->action) {
+		if (act->id == FLOW_ACTION_TUNNEL_DECAP)
+			return true;
+	}
+
+	return false;
+}
+
+/* Without a tunnel device only the hardware can read the tunnel key */
+int
+mlx5e_tc_tun_parse_outer_key(struct mlx5e_priv *priv,
+			     struct mlx5_flow_spec *spec,
+			     struct flow_cls_offload *f,
+			     enum fs_flow_table_type fs_type)
+{
+	struct flow_rule *rule = flow_cls_offload_flow_rule(f);
+	struct netlink_ext_ack *extack = f->common.extack;
+	struct flow_match_enc_keyid enc_keyid;
+	struct mlx5e_tc_tunnel *tunnel;
+
+	if (!f->common.skip_sw) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "enc_key_id without a tunnel device requires skip_sw");
+		return -EOPNOTSUPP;
+	}
+
+	if (mlx5e_tc_tun_has_decap(rule)) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "enc_key_id without a tunnel device cannot decap");
+		return -EOPNOTSUPP;
+	}
+
+	tunnel = mlx5e_tc_tun_outer_lookup(rule);
+	if (!tunnel) {
+		NL_SET_ERR_MSG_MOD(extack,
+				   "enc_key_id needs ip_proto 0x2f or the exact dst_port of a supported tunnel");
+		return -EOPNOTSUPP;
+	}
+
+	flow_rule_match_enc_keyid(rule, &enc_keyid);
+	return tunnel->parse_outer_key(priv, spec, extack,
+				       be32_to_cpu(enc_keyid.key->keyid),
+				       be32_to_cpu(enc_keyid.mask->keyid),
+				       fs_type);
 }

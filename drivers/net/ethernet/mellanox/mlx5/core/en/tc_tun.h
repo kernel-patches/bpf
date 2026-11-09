@@ -52,6 +52,11 @@ struct mlx5e_tc_tunnel {
 			    struct flow_cls_offload *f,
 			    void *headers_c,
 			    void *headers_v);
+	int (*parse_outer_key)(struct mlx5e_priv *priv,
+			       struct mlx5_flow_spec *spec,
+			       struct netlink_ext_ack *extack,
+			       u32 key, u32 mask,
+			       enum fs_flow_table_type fs_type);
 	bool (*encap_info_equal)(struct mlx5e_encap_key *a,
 				 struct mlx5e_encap_key *b);
 	int (*get_remote_ifindex)(struct net_device *mirred_dev);
@@ -61,6 +66,7 @@ extern struct mlx5e_tc_tunnel vxlan_tunnel;
 extern struct mlx5e_tc_tunnel geneve_tunnel;
 extern struct mlx5e_tc_tunnel gre_tunnel;
 extern struct mlx5e_tc_tunnel mplsoudp_tunnel;
+extern struct mlx5e_tc_tunnel gtp_tunnel;
 
 struct mlx5e_tc_tunnel *mlx5e_get_tc_tun(struct net_device *tunnel_dev);
 
@@ -114,6 +120,11 @@ int mlx5e_tc_tun_parse_udp_ports(struct mlx5e_priv *priv,
 				 struct flow_cls_offload *f,
 				 void *headers_c,
 				 void *headers_v);
+
+int mlx5e_tc_tun_parse_outer_key(struct mlx5e_priv *priv,
+				 struct mlx5_flow_spec *spec,
+				 struct flow_cls_offload *f,
+				 enum fs_flow_table_type fs_type);
 
 bool mlx5e_tc_tun_encap_info_equal_generic(struct mlx5e_encap_key *a,
 					   struct mlx5e_encap_key *b);

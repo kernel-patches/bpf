@@ -46,7 +46,8 @@ mlx5_core-$(CONFIG_MLX5_CLS_ACT)     += en_tc.o en/rep/tc.o en/rep/neigh.o \
 					lib/fs_chains.o en/tc_tun.o \
 					esw/indir_table.o en/tc_tun_encap.o \
 					en/tc_tun_vxlan.o en/tc_tun_gre.o en/tc_tun_geneve.o \
-					en/tc_tun_mplsoudp.o diag/en_tc_tracepoint.o \
+					en/tc_tun_mplsoudp.o en/tc_tun_gtp.o \
+					diag/en_tc_tracepoint.o \
 					en/tc/post_act.o en/tc/int_port.o en/tc/meter.o \
 					en/tc/post_meter.o en/tc/act_stats.o
 
