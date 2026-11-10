@@ -4,6 +4,7 @@
 #include <linux/bpf.h>
 #include <linux/btf.h>
 #include <linux/btf_ids.h>
+#include <linux/cgroup.h>
 #include <linux/cpumask.h>
 #include <linux/kthread.h>
 #include <linux/rcupdate_trace.h>
@@ -397,6 +398,58 @@ __bpf_kfunc int bpf_kthread_bind(struct task_struct *task, u32 cpu, u64 flags)
 	return ret;
 }
 
+#ifdef CONFIG_CGROUPS
+/**
+ * bpf_kthread_attach_cgroup - Move a BPF kthread into a cgroup
+ * @task: a thread created by bpf_kthread_create()
+ * @cgrp: the cgroup to move it into
+ * @flags: must be 0
+ *
+ * Moves the thread into @cgrp, started or not, so that its CPU time and the
+ * pressure it causes are accounted to @cgrp and its affinity follows @cgrp's
+ * cpuset. Until then it runs in the root cgroup, as a kernel thread does.
+ * Kernel memory the thread allocates is still not charged to @cgrp, since
+ * the allocations of a kernel thread are charged to no memory cgroup. The
+ * thread is a member of @cgrp like any process: @cgrp cannot be removed until
+ * the thread leaves or exits, and @cgrp has to be able to host processes, so
+ * on cgroup v2 it may not have controllers enabled in its children. Like any
+ * kernel thread it is not frozen with @cgrp, which then never reports frozen.
+ * A cpuset applies its CPUs to the thread as it joins, so bind the
+ * thread with bpf_kthread_bind() afterwards, not before. A running thread
+ * joins a cpuset at its next park, and the move waits for that with
+ * migration enabled, holding cgroup_mutex meanwhile, so the caller may return
+ * on another CPU and a thread may move itself. A thread whose callback has
+ * returned but that has not been stopped is left where it is and the call
+ * reports success, as cgroup.procs does for an exiting task.
+ *
+ * Return: 0 on success, -EINVAL if @flags is not 0, -ESRCH if @task is not a
+ * BPF kthread or has been stopped, -ENODEV if @cgrp is being removed, -EBUSY
+ * or -EOPNOTSUPP if @cgrp cannot host processes, or an error of the move.
+ */
+__bpf_kfunc int bpf_kthread_attach_cgroup(struct task_struct *task, struct cgroup *cgrp,
+					  u64 flags)
+{
+	unsigned long irqflags;
+	bool found;
+	int ret;
+
+	if (flags)
+		return -EINVAL;
+
+	raw_spin_lock_irqsave(&bpf_kthreads_lock, irqflags);
+	found = !!bpf_kthread_find(task);
+	raw_spin_unlock_irqrestore(&bpf_kthreads_lock, irqflags);
+	if (!found)
+		return -ESRCH;
+
+	/* A running thread joins at its next park: see the comment at the top. */
+	migrate_enable();
+	ret = cgroup_attach_kthread(cgrp, task);
+	migrate_disable();
+	return ret;
+}
+#endif
+
 /**
  * bpf_kthread_stop - Stop a BPF kthread and wait for it to exit
  * @task: a thread created by bpf_kthread_create()
@@ -500,6 +553,9 @@ BTF_KFUNCS_START(bpf_kthread_kfunc_ids)
 BTF_ID_FLAGS(func, bpf_kthread_create, KF_ACQUIRE | KF_RET_NULL | KF_SLEEPABLE | KF_IMPLICIT_ARGS)
 BTF_ID_FLAGS(func, bpf_kthread_start, KF_RCU)
 BTF_ID_FLAGS(func, bpf_kthread_bind, KF_SLEEPABLE)
+#ifdef CONFIG_CGROUPS
+BTF_ID_FLAGS(func, bpf_kthread_attach_cgroup, KF_SLEEPABLE)
+#endif
 BTF_ID_FLAGS(func, bpf_kthread_stop, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_kthread_should_stop)
 BTF_KFUNCS_END(bpf_kthread_kfunc_ids)

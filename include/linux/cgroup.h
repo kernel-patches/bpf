@@ -158,6 +158,7 @@ struct cgroup *cgroup_v1v2_get_from_fd(int fd);
 bool cgroup1_ssid_disabled(int ssid);
 
 int cgroup_attach_task_all(struct task_struct *from, struct task_struct *);
+int cgroup_attach_kthread(struct cgroup *dst_cgrp, struct task_struct *task);
 int cgroup_transfer_tasks(struct cgroup *to, struct cgroup *from);
 
 int cgroup_add_dfl_cftypes(struct cgroup_subsys *ss, struct cftype *cfts);
@@ -804,6 +805,8 @@ static inline void cgroup_lock(void) {}
 static inline void cgroup_unlock(void) {}
 static inline int cgroup_attach_task_all(struct task_struct *from,
 					 struct task_struct *t) { return 0; }
+static inline int cgroup_attach_kthread(struct cgroup *dst_cgrp,
+					struct task_struct *task) { return -ENODEV; }
 static inline int cgroupstats_build(struct cgroupstats *stats,
 				    struct dentry *dentry) { return -EINVAL; }
 

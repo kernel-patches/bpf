@@ -3124,6 +3124,51 @@ int cgroup_attach_task(struct cgroup *dst_cgrp, struct task_struct *leader,
 	return ret;
 }
 
+/**
+ * cgroup_attach_kthread - move a kernel thread into a cgroup
+ * @dst_cgrp: the cgroup to move it into
+ * @task: the kernel thread
+ *
+ * For kernel threads the kernel creates on behalf of a user and accounts to a
+ * cgroup of the user's choosing rather than, as cgroup_attach_task_all() does,
+ * to the creator's own. @dst_cgrp is checked as a destination of cgroup.procs
+ * is, except for the permission check, which the caller owes: it must not be
+ * dying and, on the default hierarchy, must be able to host processes, and
+ * @task must be one the cgroup core may migrate.
+ *
+ * Return: 0 on success, -ENODEV if @dst_cgrp is being removed, -EBUSY or
+ * -EOPNOTSUPP if it cannot host processes, -EINVAL if @task may not be
+ * migrated, or the error of the migration.
+ */
+int cgroup_attach_kthread(struct cgroup *dst_cgrp, struct task_struct *task)
+{
+	enum cgroup_attach_lock_mode lock_mode;
+	int ret;
+
+	cgroup_lock();
+	if (cgroup_is_dead(dst_cgrp)) {
+		ret = -ENODEV;
+		goto out_unlock;
+	}
+	/* As cgroup_procs_write_start() refuses them: cpusets cannot move these. */
+	if (task->no_cgroup_migration || (task->flags & PF_NO_SETAFFINITY)) {
+		ret = -EINVAL;
+		goto out_unlock;
+	}
+	ret = cgroup_migrate_vet_dst(dst_cgrp);
+	if (ret)
+		goto out_unlock;
+	/* The moved process's own rwsem under favordynmods, as cgroup.procs takes. */
+	lock_mode = cgroup_enable_per_threadgroup_rwsem ? CGRP_ATTACH_LOCK_PER_THREADGROUP :
+							   CGRP_ATTACH_LOCK_GLOBAL;
+	cgroup_attach_lock(lock_mode, task);
+	ret = cgroup_attach_task(dst_cgrp, task, true);
+	cgroup_attach_unlock(lock_mode, task);
+out_unlock:
+	cgroup_unlock();
+	return ret;
+}
+
 struct task_struct *cgroup_procs_write_start(char *buf, bool threadgroup,
 					     enum cgroup_attach_lock_mode *lock_mode)
 {
