@@ -246,6 +246,8 @@ struct ath12k_hw_params {
 	 * Example: QCN6432 (PCIe device attached to Q6, registered as AHB).
 	 */
 	bool hybrid_bus_type;
+
+	bool support_hw_link_id;
 };
 
 struct ath12k_hw_ops {

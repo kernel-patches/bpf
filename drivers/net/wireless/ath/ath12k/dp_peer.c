@@ -557,25 +557,29 @@ int ath12k_dp_link_peer_assign(struct ath12k_dp *dp, struct ath12k_dp_hw *dp_hw,
 
 	spin_unlock_bh(&dp_hw->peer_lock);
 
-	/*
-	 * In case of Split PHY and roaming scenario, pdev idx
-	 * might differ but both the pdev will share same rhash
-	 * table. In that case update the rhash table if link_peer is
-	 * already present
-	 */
-	temp_peer = ath12k_dp_link_peer_find_by_addr(dp, addr);
-	if (temp_peer && temp_peer->hw_link_id != hw_link_id)
-		ath12k_dp_link_peer_rhash_delete(dp, temp_peer);
-
-	ret = ath12k_dp_link_peer_rhash_add(dp, peer);
-	if (ret) {
+	if (dp->hw_params->support_hw_link_id) {
 		/*
-		 * If new entry addition failed, add back old entry
-		 * If old entry addition also fails, then nothing
-		 * can be done, simply proceed
+		 * In case of Split PHY and roaming scenario, pdev idx
+		 * might differ but both the pdev will share same rhash
+		 * table. In that case update the rhash table if link_peer is
+		 * already present
 		 */
-		if (temp_peer)
-			ath12k_dp_link_peer_rhash_add(dp, temp_peer);
+		temp_peer = ath12k_dp_link_peer_find_by_addr(dp, addr);
+		if (temp_peer && temp_peer->hw_link_id != hw_link_id)
+			ath12k_dp_link_peer_rhash_delete(dp, temp_peer);
+
+		ret = ath12k_dp_link_peer_rhash_add(dp, peer);
+		if (ret) {
+			/*
+			 * If new entry addition failed, add back old entry
+			 * If old entry addition also fails, then nothing
+			 * can be done, simply proceed
+			 */
+			if (temp_peer)
+				ath12k_dp_link_peer_rhash_add(dp, temp_peer);
+		}
+	} else {
+		ret = ath12k_dp_link_peer_rhash_add(dp, peer);
 	}
 
 	spin_unlock_bh(&dp->dp_lock);
@@ -621,10 +625,14 @@ void ath12k_dp_link_peer_unassign(struct ath12k_dp *dp, struct ath12k_dp_hw *dp_
 
 	spin_unlock_bh(&dp_hw->peer_lock);
 
-	/* To handle roaming and split phy scenario */
-	temp_peer = ath12k_dp_link_peer_find_by_addr(dp, addr);
-	if (temp_peer && temp_peer->hw_link_id == hw_link_id)
+	if (dp->hw_params->support_hw_link_id) {
+		/* To handle roaming and split phy scenario */
+		temp_peer = ath12k_dp_link_peer_find_by_addr(dp, addr);
+		if (temp_peer && temp_peer->hw_link_id == hw_link_id)
+			ath12k_dp_link_peer_rhash_delete(dp, peer);
+	} else {
 		ath12k_dp_link_peer_rhash_delete(dp, peer);
+	}
 
 	spin_unlock_bh(&dp->dp_lock);
 

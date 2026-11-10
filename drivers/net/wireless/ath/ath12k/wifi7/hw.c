@@ -499,6 +499,8 @@ static const struct ath12k_hw_params ath12k_wifi7_hw_params[] = {
 		.host_alloc_ml_id = true,
 		.advertise_iface_mac_pool = false,
 		.hybrid_bus_type = false,
+
+		.support_hw_link_id = true,
 	},
 	{
 		.name = "wcn7850 hw2.0",
@@ -596,6 +598,8 @@ static const struct ath12k_hw_params ath12k_wifi7_hw_params[] = {
 		.host_alloc_ml_id = false,
 		.advertise_iface_mac_pool = true,
 		.hybrid_bus_type = false,
+
+		.support_hw_link_id = false,
 	},
 	{
 		.name = "qcn9274 hw2.0",
@@ -689,6 +693,8 @@ static const struct ath12k_hw_params ath12k_wifi7_hw_params[] = {
 		.host_alloc_ml_id = true,
 		.advertise_iface_mac_pool = false,
 		.hybrid_bus_type = false,
+
+		.support_hw_link_id = true,
 	},
 	{
 		.name = "ipq5332 hw1.0",
@@ -776,6 +782,8 @@ static const struct ath12k_hw_params ath12k_wifi7_hw_params[] = {
 		.host_alloc_ml_id = true,
 		.advertise_iface_mac_pool = false,
 		.hybrid_bus_type = false,
+
+		.support_hw_link_id = true,
 	},
 	{
 		.name = "qcc2072 hw1.0",
@@ -874,6 +882,8 @@ static const struct ath12k_hw_params ath12k_wifi7_hw_params[] = {
 		.host_alloc_ml_id = false,
 		.advertise_iface_mac_pool = true,
 		.hybrid_bus_type = false,
+
+		.support_hw_link_id = false,
 	},
 	{
 		.name = "ipq5424 hw1.0",
@@ -964,6 +974,8 @@ static const struct ath12k_hw_params ath12k_wifi7_hw_params[] = {
 		.host_alloc_ml_id = true,
 		.advertise_iface_mac_pool = false,
 		.hybrid_bus_type = false,
+
+		.support_hw_link_id = true,
 	},
 	{
 		.name = "qcn6432 hw1.0",
@@ -1051,6 +1063,8 @@ static const struct ath12k_hw_params ath12k_wifi7_hw_params[] = {
 		.host_alloc_ml_id = true,
 		.advertise_iface_mac_pool = false,
 		.hybrid_bus_type = true,
+
+		.support_hw_link_id = true,
 	},
 };
 
