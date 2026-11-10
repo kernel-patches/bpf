@@ -119,16 +119,13 @@ static int ppm_get_cpu_entries(struct cxgbi_ppm *ppm, unsigned int count,
 			       unsigned long caller_data)
 {
 	struct cxgbi_ppm_pool *pool;
-	unsigned int cpu;
 	int i;
 
 	if (!ppm->pool)
 		return -EINVAL;
 
-	cpu = get_cpu();
-	pool = per_cpu_ptr(ppm->pool, cpu);
+	pool = raw_cpu_ptr(ppm->pool);
 	spin_lock_bh(&pool->lock);
-	put_cpu();
 
 	i = ppm_find_unused_entries(pool->bmap, ppm->pool_index_max,
 				    pool->next, count, 0);
@@ -144,11 +141,12 @@ static int ppm_get_cpu_entries(struct cxgbi_ppm *ppm, unsigned int count,
 
 	spin_unlock_bh(&pool->lock);
 
-	pr_debug("%s: cpu %u, idx %d + %d (%d), next %u.\n",
-		 __func__, cpu, i, count, i + cpu * ppm->pool_index_max,
-		pool->next);
+	pr_debug("%s: cpu %u, pool cpu %u, idx %d + %d (%d), next %u.\n",
+		 __func__, raw_smp_processor_id(),
+		 pool->base / ppm->pool_index_max, i, count, i + pool->base,
+		 pool->next);
 
-	i += cpu * ppm->pool_index_max;
+	i += pool->base;
 	ppm_mark_entries(ppm, i, count, caller_data);
 
 	return i;
@@ -375,6 +373,7 @@ ppm_alloc_cpu_pool(unsigned int *total, unsigned int *pcpu_ppmax)
 
 		memset(ppool, 0, alloc_sz);
 		spin_lock_init(&ppool->lock);
+		ppool->base = count;
 		count += ppmax;
 	}
 
