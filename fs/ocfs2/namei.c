@@ -203,6 +203,13 @@ static struct inode *ocfs2_get_init_inode(struct inode *dir, umode_t mode)
 		set_nlink(inode, 2);
 	mode = mode_strip_sgid(&nop_mnt_idmap, dir, mode);
 	inode_init_owner(&nop_mnt_idmap, inode, dir, mode);
+	/*
+	 * This inode never goes through unlock_new_inode() (there is no
+	 * I_NEW state on this path), so the directory vs file lockdep
+	 * class split for i_rwsem has to be done here, before the inode
+	 * becomes visible to anybody else.
+	 */
+	lockdep_annotate_inode_mutex_key(inode);
 	status = dquot_initialize(inode);
 	if (status) {
 		iput(inode);
