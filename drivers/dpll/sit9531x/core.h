@@ -165,6 +165,10 @@ struct sit9531x_out {
  *   stays in forced holdover
  * @table_back: table reported and to be rewritten while @table_pending
  * @tap_pending: debug taps not restored after a phase-offset read
+ * @tap_write_code: tap selection to restore while @tap_pending
+ * @tap_read_code: readback selection to restore while @tap_pending
+ * @key_pending: debug key not locked again after a phase-offset read or tap
+ *   retry
  * @prio_srcs: cached priority table, a source code per slot
  * @prio_last: first slot of each source plus one, 0 if absent
  * @prio_mask: bit per canonical source in the priority table read back
@@ -194,6 +198,9 @@ struct sit9531x_chan {
 	bool		table_pending;
 	u8		table_back[SIT9531X_PRIO_MAX_SLOTS];
 	bool		tap_pending;
+	u8		tap_write_code;
+	u8		tap_read_code;
+	bool		key_pending;
 	u8		prio_srcs[SIT9531X_PRIO_MAX_SLOTS];
 	u8		prio_last[SIT9531X_PRIO_NUM_SRC];
 	u16		prio_mask;
@@ -310,6 +317,12 @@ int sit9531x_output_phase_read(struct sit9531x_dev *sitdev, u8 out_idx,
 			       s64 *phase_ps, bool *beyond);
 int sit9531x_output_phase_adjust_set(struct sit9531x_dev *sitdev,
 				     u8 out_idx, s32 phase_ps);
+
+int sit9531x_chan_routed_ref_read(struct sit9531x_dev *sitdev, u8 pll_idx,
+				  u8 *ref);
+int sit9531x_input_mon_fetch(struct sit9531x_dev *sitdev);
+int sit9531x_phase_offset_read(struct sit9531x_dev *sitdev, u8 pll_idx,
+			       s64 *phase_offset);
 
 static inline u8 sit9531x_pll_page(u8 pll_idx)
 {

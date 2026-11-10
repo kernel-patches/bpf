@@ -262,6 +262,28 @@ static int sit9531x_update_pll_close(struct sit9531x_dev *sitdev, u8 pll_idx,
 	return rc;
 }
 
+/*
+ * Restore the debug taps a phase-offset read changed. The PLL page's debug
+ * window must already be open.
+ */
+static int sit9531x_tap_restore(struct sit9531x_dev *sitdev, u8 pll_idx)
+{
+	struct sit9531x_chan *chan = &sitdev->chan[pll_idx];
+	int rc;
+
+	rc = sit9531x_write_pll_close(sitdev, pll_idx,
+				      SIT9531X_PLL_REG_DBG_READ_CODE,
+				      chan->tap_read_code);
+	if (!rc)
+		rc = sit9531x_write_pll_close(sitdev, pll_idx,
+					      SIT9531X_PLL_REG_DBG_WRITE_CODE,
+					      chan->tap_write_code);
+	if (!rc)
+		chan->tap_pending = false;
+
+	return rc;
+}
+
 static void sit9531x_input_get_regs(const struct sit9531x_dev *sitdev,
 				    u8 index,
 				    unsigned int *force_reg,
@@ -785,12 +807,16 @@ static int sit9531x_prio_prg_commit(struct sit9531x_dev *sitdev)
 	return 0;
 }
 
-/*
- * Four registers carry a nibble per lane: loss of signal and the fine and
- * coarse frequency-drift flags. Caller must hold sitdev->multiop_lock, or run
- * before registration.
+/**
+ * sit9531x_input_mon_fetch - read the clock monitor status of every lane
+ * @sitdev: device pointer
+ *
+ * One nibble per lane: loss of signal, fine and coarse frequency drift.
+ * Caller must hold sitdev->multiop_lock, or run before registration.
+ *
+ * Return: 0 on success, <0 on error
  */
-static int sit9531x_input_mon_fetch(struct sit9531x_dev *sitdev)
+int sit9531x_input_mon_fetch(struct sit9531x_dev *sitdev)
 {
 	static const unsigned int regs[] = {
 		SIT9531X_CLKMON_P_STATUS_01, SIT9531X_CLKMON_P_STATUS_23,
@@ -2559,6 +2585,171 @@ static int sit9531x_clear_notifications(struct sit9531x_dev *sitdev)
 	return 0;
 }
 
+/**
+ * sit9531x_phase_offset_read - read phase difference via TDC
+ * @sitdev: device pointer
+ * @pll_idx: PLL index (0-3)
+ * @phase_offset: phase difference in 1/DPLL_PHASE_OFFSET_DIVIDER ps
+ *
+ * The TDC code is a 35-bit magnitude with a separate sign bit;
+ * phase_diff = tdc_code / fvco. Caller must hold sitdev->multiop_lock.
+ *
+ * Return: 0 on success, -ENODATA if Fvco is unknown, <0 on other errors
+ */
+int sit9531x_phase_offset_read(struct sit9531x_dev *sitdev, u8 pll_idx,
+			       s64 *phase_offset)
+{
+	u8 v, old_write_code, old_read_code;
+	struct sit9531x_chan *chan;
+	bool have_old = false;
+	int rc, ret, i;
+	s64 tdc_signed;
+	u64 fvco, mag;
+	u64 tdc_raw;
+	bool sign;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (pll_idx >= SIT9531X_NUM_PLLS)
+		return -EINVAL;
+	chan = &sitdev->chan[pll_idx];
+
+	/*
+	 * Read Fvco first; without it there is no reason to open the debug
+	 * window.
+	 */
+	rc = sit9531x_get_fvco(sitdev, pll_idx, &fvco);
+	if (rc) {
+		if (rc == -ENODATA)
+			dev_dbg(sitdev->dev,
+				"PLL%c: Fvco unknown, skip TDC\n",
+				'A' + pll_idx);
+		return rc;
+	}
+
+	rc = sit9531x_write_pll_u8(sitdev, pll_idx,
+				   SIT9531X_PLL_REG_DEBUG,
+				   SIT9531X_PLL_DEBUG_UNLOCK);
+	if (rc)
+		goto relock;
+
+	/* Restore pending taps before saving the selection */
+	if (chan->tap_pending) {
+		rc = sit9531x_tap_restore(sitdev, pll_idx);
+		if (rc)
+			goto relock;
+	}
+
+	/* Save the tap selection; the debug key does not cover the mux. */
+	rc = sit9531x_read_pll_u8(sitdev, pll_idx,
+				  SIT9531X_PLL_REG_DBG_WRITE_CODE,
+				  &old_write_code);
+	if (!rc)
+		rc = sit9531x_read_pll_u8(sitdev, pll_idx,
+					  SIT9531X_PLL_REG_DBG_READ_CODE,
+					  &old_read_code);
+	if (rc)
+		goto relock;
+
+	have_old = true;
+
+	/*
+	 * Enable the debug clock for taps below 200 kHz, then select the TDC
+	 * tap. The modifier register also holds fields of other taps.
+	 */
+	rc = sit9531x_update_pll_u8(sitdev, pll_idx,
+				    SIT9531X_PLL_REG_DBG_WRITE_CODE,
+				    SIT9531X_DBG_LOW_FREQ_CLK_BIT,
+				    SIT9531X_DBG_LOW_FREQ_CLK_BIT);
+	if (rc)
+		goto relock;
+	rc = sit9531x_write_pll_u8(sitdev, pll_idx,
+				   SIT9531X_PLL_REG_DBG_READ_CODE,
+				   SIT9531X_DBG_READ_CODE_TDC);
+	if (rc)
+		goto relock;
+
+	/*
+	 * A status data read latches a sample and returns the previous one;
+	 * read three times as the documented procedure does.
+	 */
+	for (i = 0; i < SIT9531X_DBG_STATUS_READS; i++) {
+		rc = sit9531x_read_pll_u8(sitdev, pll_idx,
+					  SIT9531X_PLL_REG_DBG_STATUS_DATA,
+					  &v);
+		if (rc)
+			goto relock;
+	}
+
+	tdc_raw = 0;
+
+	rc = sit9531x_read_pll_u8(sitdev, pll_idx,
+				  SIT9531X_PLL_REG_DBG_DATA_4, &v);
+	if (rc)
+		goto relock;
+	sign = !!(v & BIT(SIT9531X_TDC_SIGN_BIT));
+	tdc_raw = (u64)(v & SIT9531X_TDC_MAG_HI_MASK) << 32;
+
+	rc = sit9531x_read_pll_u8(sitdev, pll_idx,
+				  SIT9531X_PLL_REG_DBG_DATA_3, &v);
+	if (rc)
+		goto relock;
+	tdc_raw |= (u64)v << 24;
+
+	rc = sit9531x_read_pll_u8(sitdev, pll_idx,
+				  SIT9531X_PLL_REG_DBG_DATA_2, &v);
+	if (rc)
+		goto relock;
+	tdc_raw |= (u64)v << 16;
+
+	rc = sit9531x_read_pll_u8(sitdev, pll_idx,
+				  SIT9531X_PLL_REG_DBG_DATA_1, &v);
+	if (rc)
+		goto relock;
+	tdc_raw |= (u64)v << 8;
+
+	rc = sit9531x_read_pll_u8(sitdev, pll_idx,
+				  SIT9531X_PLL_REG_DBG_DATA_0, &v);
+	if (rc)
+		goto relock;
+	tdc_raw |= v;
+
+	/* Per the register map the sign bit set means a positive offset. */
+	tdc_signed = sign ? (s64)tdc_raw : -(s64)tdc_raw;
+
+	/*
+	 * phase_diff (ps) = tdc_code * 1e12 / fvco. Scale by the subsystem's
+	 * divider before dividing to keep the fractional digits; one code is
+	 * 203.45 ps at 4.9152 GHz.
+	 */
+	mag = mul_u64_u64_div_u64(tdc_signed < 0 ? -tdc_signed : tdc_signed,
+				  1000000000000ULL * DPLL_PHASE_OFFSET_DIVIDER,
+				  fvco);
+	*phase_offset = tdc_signed < 0 ? -(s64)mag : (s64)mag;
+
+	rc = 0;
+
+relock:
+	if (have_old) {
+		chan->tap_read_code = old_read_code;
+		chan->tap_write_code = old_write_code;
+		ret = sit9531x_tap_restore(sitdev, pll_idx);
+		if (ret)
+			chan->tap_pending = true;
+		if (ret && !rc)
+			rc = ret;
+	}
+
+	ret = sit9531x_write_pll_close(sitdev, pll_idx,
+				       SIT9531X_PLL_REG_DEBUG,
+				       SIT9531X_PLL_DEBUG_LOCK);
+	chan->key_pending = !!ret;
+	if (ret && !rc)
+		rc = ret;
+
+	return rc;
+}
+
 /* Read the lane's receiver state from the Page 0x02 force and state bits */
 static int sit9531x_ref_state_fetch(struct sit9531x_dev *sitdev, u8 index)
 {
@@ -2689,13 +2880,20 @@ static int sit9531x_chan_select_fetch(struct sit9531x_dev *sitdev, u8 pll_idx)
 	return 0;
 }
 
-/*
- * Read the reference the device feeds a PLL from the debug status bus; the
- * active selection does not change on a fallback. The caller rules out free-run
- * first and must hold sitdev->multiop_lock.
+/**
+ * sit9531x_chan_routed_ref_read - read the reference the device feeds a PLL
+ * @sitdev: device pointer
+ * @pll_idx: PLL index (0-3)
+ * @ref: logical input index, SIT9531X_INTSYNC_PIN_ID, or SIT9531X_REF_INVALID
+ *
+ * The device falls back between listed sources without changing the active
+ * selection, so read the source from the debug status bus. The caller rules
+ * out free-run first and must hold multiop_lock.
+ *
+ * Return: 0 on success, <0 on error
  */
-static int sit9531x_chan_routed_ref_read(struct sit9531x_dev *sitdev,
-					 u8 pll_idx, u8 *ref)
+int sit9531x_chan_routed_ref_read(struct sit9531x_dev *sitdev, u8 pll_idx,
+				  u8 *ref)
 {
 	int rc, lock_rc;
 	u8 v, i;
@@ -3190,9 +3388,31 @@ static void sit9531x_table_back_retry(struct sit9531x_dev *sitdev, u8 pll_idx)
 }
 
 /*
+ * Restore the debug taps and close the debug window after a failed phase-offset
+ * read. Caller must hold sitdev->multiop_lock.
+ */
+static void sit9531x_tap_back_retry(struct sit9531x_dev *sitdev, u8 pll_idx)
+{
+	struct sit9531x_chan *chan = &sitdev->chan[pll_idx];
+
+	if (!chan->tap_pending && !chan->key_pending)
+		return;
+
+	if (chan->tap_pending &&
+	    !sit9531x_write_pll_u8(sitdev, pll_idx, SIT9531X_PLL_REG_DEBUG,
+				   SIT9531X_PLL_DEBUG_UNLOCK))
+		sit9531x_tap_restore(sitdev, pll_idx);
+
+	chan->key_pending = !!sit9531x_write_pll_close(sitdev, pll_idx,
+						     SIT9531X_PLL_REG_DEBUG,
+						     SIT9531X_PLL_DEBUG_LOCK);
+}
+
+/*
  * Rewrite the priority table when a listed source returns to a PLL without a
- * reference; the latch restarts acquisition. Caller must hold
- * sitdev->multiop_lock.
+ * reference; the write latches the active selection again. Each latch restarts
+ * acquisition, so the table is written once per change of the best live source.
+ * Caller must hold sitdev->multiop_lock.
  */
 static void sit9531x_reselect(struct sit9531x_dev *sitdev, u8 pll_idx)
 {
@@ -3273,6 +3493,7 @@ sit9531x_dev_chan_states_update(struct sit9531x_dev *sitdev)
 	for (i = 0; i < SIT9531X_NUM_PLLS; i++) {
 		sit9531x_table_back_retry(sitdev, i);
 		sit9531x_ho_release_retry(sitdev, i);
+		sit9531x_tap_back_retry(sitdev, i);
 		/*
 		 * A flush pulse sent into open loops may be lost when they
 		 * re-lock.
@@ -3525,54 +3746,29 @@ static void sit9531x_pin_nodes_check(struct sit9531x_dev *sitdev)
 	fwnode_handle_put(pins);
 }
 
-static int sit9531x_dev_start(struct sit9531x_dev *sitdev)
+/* Retry the pending debug tap restore and debug window close */
+static void sit9531x_tap_pending_retry(struct sit9531x_dev *sitdev)
 {
-	struct sit9531x_dpll *sitdpll;
-	int rc;
-
-	rc = sit9531x_dev_state_fetch(sitdev);
-	if (rc)
-		return rc;
-
-	mutex_lock(&sitdev->multiop_lock);
-	sit9531x_eeprom_state_report(sitdev);
-	sit9531x_pll_states_report(sitdev);
-	mutex_unlock(&sitdev->multiop_lock);
-
-	sit9531x_pin_nodes_check(sitdev);
-
-	list_for_each_entry(sitdpll, &sitdev->dplls, list) {
-		rc = sit9531x_dpll_register(sitdpll);
-		if (rc) {
-			dev_err_probe(sitdev->dev, rc,
-				      "Failed to register DPLL%u\n",
-				      sitdpll->id);
-			goto err_unregister;
-		}
-	}
-
-	kthread_queue_delayed_work(sitdev->kworker, &sitdev->work, 0);
-
-	return 0;
-
-err_unregister:
-	list_for_each_entry_continue_reverse(sitdpll, &sitdev->dplls, list)
-		sit9531x_dpll_unregister(sitdpll);
-
-	return rc;
-}
-
-static void sit9531x_dev_stop(struct sit9531x_dev *sitdev)
-{
-	struct sit9531x_dpll *sitdpll;
 	u8 i;
 
-	kthread_cancel_delayed_work_sync(&sitdev->work);
-
-	list_for_each_entry(sitdpll, &sitdev->dplls, list) {
-		if (sitdpll->dpll_dev)
-			sit9531x_dpll_unregister(sitdpll);
+	mutex_lock(&sitdev->multiop_lock);
+	for (i = 0; i < SIT9531X_NUM_PLLS; i++) {
+		sit9531x_tap_back_retry(sitdev, i);
+		if (sitdev->chan[i].tap_pending || sitdev->chan[i].key_pending)
+			dev_warn(sitdev->dev,
+				 "PLL%c left with its debug taps moved or window open\n",
+				 'A' + i);
 	}
+	mutex_unlock(&sitdev->multiop_lock);
+}
+
+/*
+ * Retry every pending write once more and report what is still pending. Call
+ * with the DPLLs unregistered.
+ */
+static void sit9531x_dev_pending_retry(struct sit9531x_dev *sitdev)
+{
+	u8 i;
 
 	/*
 	 * Write back tables first: forced holdover stays set while a table
@@ -3637,6 +3833,61 @@ static void sit9531x_dev_stop(struct sit9531x_dev *sitdev)
 				 'A' + i);
 	}
 	mutex_unlock(&sitdev->multiop_lock);
+
+	sit9531x_tap_pending_retry(sitdev);
+}
+
+static int sit9531x_dev_start(struct sit9531x_dev *sitdev)
+{
+	struct sit9531x_dpll *sitdpll;
+	int rc;
+
+	rc = sit9531x_dev_state_fetch(sitdev);
+	if (rc)
+		return rc;
+
+	mutex_lock(&sitdev->multiop_lock);
+	sit9531x_eeprom_state_report(sitdev);
+	sit9531x_pll_states_report(sitdev);
+	mutex_unlock(&sitdev->multiop_lock);
+
+	sit9531x_pin_nodes_check(sitdev);
+
+	list_for_each_entry(sitdpll, &sitdev->dplls, list) {
+		rc = sit9531x_dpll_register(sitdpll);
+		if (rc) {
+			dev_err_probe(sitdev->dev, rc,
+				      "Failed to register DPLL%u\n",
+				      sitdpll->id);
+			goto err_unregister;
+		}
+	}
+
+	kthread_queue_delayed_work(sitdev->kworker, &sitdev->work, 0);
+
+	return 0;
+
+err_unregister:
+	list_for_each_entry_continue_reverse(sitdpll, &sitdev->dplls, list)
+		sit9531x_dpll_unregister(sitdpll);
+
+	sit9531x_dev_pending_retry(sitdev);
+
+	return rc;
+}
+
+static void sit9531x_dev_stop(struct sit9531x_dev *sitdev)
+{
+	struct sit9531x_dpll *sitdpll;
+
+	kthread_cancel_delayed_work_sync(&sitdev->work);
+
+	list_for_each_entry(sitdpll, &sitdev->dplls, list) {
+		if (sitdpll->dpll_dev)
+			sit9531x_dpll_unregister(sitdpll);
+	}
+
+	sit9531x_dev_pending_retry(sitdev);
 }
 
 static struct sit9531x_dpll_pin *

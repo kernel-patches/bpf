@@ -488,6 +488,122 @@ sit9531x_dpll_input_pin_prio_set(const struct dpll_pin *pin, void *pin_priv,
 	return 0;
 }
 
+/*
+ * Report the loop's residual phase error, sampled with the loop closed. The TDC
+ * compares against a signal the PLL drives, so a PLL driving no output returns
+ * -ENODATA.
+ */
+static int
+sit9531x_dpll_input_pin_phase_offset_get(const struct dpll_pin *pin,
+					 void *pin_priv,
+					 const struct dpll_device *dpll,
+					 void *dpll_priv, s64 *phase_offset,
+					 struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll_pin *dpin = pin_priv;
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+	bool drives = false;
+	u8 routed, i;
+	s64 offset;
+	int rc;
+
+	mutex_lock(&sitdev->multiop_lock);
+
+	/*
+	 * Check the cache first: the core calls this for every pin of every
+	 * DPLL in a dump.
+	 */
+	if (!sit9531x_dpll_selection_active(sitdev, sitdpll, dpin->id)) {
+		mutex_unlock(&sitdev->multiop_lock);
+		return -ENODATA;
+	}
+
+	/*
+	 * The device can change the routed reference, so read it before and
+	 * after the sample. A PLL with no routed, enabled output has no
+	 * measurement.
+	 */
+	for (i = 0; i < sitdev->info->num_outputs; i++) {
+		if (!sitdev->out[i].routed ||
+		    sitdev->out[i].pll_idx != sitdpll->id)
+			continue;
+		if (sitdev->out[i].state_stale) {
+			rc = sit9531x_output_state_refresh(sitdev, i);
+			if (rc) {
+				mutex_unlock(&sitdev->multiop_lock);
+				NL_SET_ERR_MSG(extack,
+					       "Output mute state could not be read back");
+				return rc;
+			}
+		}
+		if (sitdev->out[i].enabled)
+			drives = true;
+	}
+
+	if (!drives) {
+		mutex_unlock(&sitdev->multiop_lock);
+		return -ENODATA;
+	}
+
+	/*
+	 * Read the monitors live: on loss of signal the device falls back
+	 * without a request.
+	 */
+	rc = sit9531x_input_mon_fetch(sitdev);
+	if (rc) {
+		mutex_unlock(&sitdev->multiop_lock);
+		NL_SET_ERR_MSG(extack,
+			       "Failed to read the input clock monitors");
+		return rc;
+	}
+
+	if (!sit9531x_dpll_selection_active(sitdev, sitdpll, dpin->id)) {
+		mutex_unlock(&sitdev->multiop_lock);
+		return -ENODATA;
+	}
+
+	rc = sit9531x_chan_routed_ref_read(sitdev, sitdpll->id, &routed);
+	if (!rc && routed == dpin->id) {
+		rc = sit9531x_phase_offset_read(sitdev, sitdpll->id, &offset);
+		if (!rc)
+			rc = sit9531x_chan_routed_ref_read(sitdev, sitdpll->id,
+							   &routed);
+		if (!rc && routed != dpin->id)
+			rc = -ENODATA;
+	} else if (!rc) {
+		rc = -ENODATA;
+	}
+
+	/*
+	 * A reference lost during the sample can leave the routed reference
+	 * unchanged while the PLL is in holdover; read the monitors again.
+	 */
+	if (!rc) {
+		rc = sit9531x_input_mon_fetch(sitdev);
+		if (rc) {
+			mutex_unlock(&sitdev->multiop_lock);
+			NL_SET_ERR_MSG(extack,
+				       "Failed to read the input clock monitors");
+			return rc;
+		}
+		if (dpin->id < sitdev->info->num_inputs &&
+		    sit9531x_ref_state_get(sitdev, dpin->id)->los)
+			rc = -ENODATA;
+	}
+	mutex_unlock(&sitdev->multiop_lock);
+
+	if (rc == -ENODATA)
+		return rc;
+	if (rc) {
+		NL_SET_ERR_MSG(extack, "TDC phase readback failed");
+		return rc;
+	}
+
+	*phase_offset = offset;
+	return 0;
+}
+
 static const struct dpll_pin_ops sit9531x_dpll_input_pin_ops = {
 	.direction_get		= sit9531x_dpll_input_pin_direction_get,
 	.frequency_get		= sit9531x_dpll_input_pin_frequency_get,
@@ -496,6 +612,7 @@ static const struct dpll_pin_ops sit9531x_dpll_input_pin_ops = {
 	.operstate_on_dpll_get	= sit9531x_dpll_input_pin_operstate_on_dpll_get,
 	.prio_get		= sit9531x_dpll_input_pin_prio_get,
 	.prio_set		= sit9531x_dpll_input_pin_prio_set,
+	.phase_offset_get	= sit9531x_dpll_input_pin_phase_offset_get,
 };
 
 /*
@@ -509,6 +626,7 @@ static const struct dpll_pin_ops sit9531x_dpll_input_pin_norate_ops = {
 	.operstate_on_dpll_get	= sit9531x_dpll_input_pin_operstate_on_dpll_get,
 	.prio_get		= sit9531x_dpll_input_pin_prio_get,
 	.prio_set		= sit9531x_dpll_input_pin_prio_set,
+	.phase_offset_get	= sit9531x_dpll_input_pin_phase_offset_get,
 };
 
 /*
@@ -520,12 +638,14 @@ static const struct dpll_pin_ops sit9531x_dpll_input_pin_manual_ops = {
 	.frequency_get		= sit9531x_dpll_input_pin_frequency_get,
 	.state_on_dpll_get	= sit9531x_dpll_input_pin_state_on_dpll_get,
 	.operstate_on_dpll_get	= sit9531x_dpll_input_pin_operstate_on_dpll_get,
+	.phase_offset_get	= sit9531x_dpll_input_pin_phase_offset_get,
 };
 
 static const struct dpll_pin_ops sit9531x_dpll_input_pin_norate_manual_ops = {
 	.direction_get		= sit9531x_dpll_input_pin_direction_get,
 	.state_on_dpll_get	= sit9531x_dpll_input_pin_state_on_dpll_get,
 	.operstate_on_dpll_get	= sit9531x_dpll_input_pin_operstate_on_dpll_get,
+	.phase_offset_get	= sit9531x_dpll_input_pin_phase_offset_get,
 };
 
 /*
