@@ -26,6 +26,7 @@ enum bpf_diag_mod_reason {
 	BPF_DIAG_MOD_SLICE_BUF,
 	BPF_DIAG_MOD_NON_OWN_REF,
 	BPF_DIAG_MOD_CALLER_SAVED,
+	BPF_DIAG_MOD_TASK_PARK,
 };
 
 enum bpf_diag_context_kind {

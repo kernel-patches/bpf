@@ -2231,6 +2231,9 @@ static void diag_print_mod(struct bpf_verifier_env *env, const struct bpf_diag_h
 	case BPF_DIAG_MOD_NON_OWN_REF:
 		reason = "leaving the protected region invalidated this borrowed pointer";
 		break;
+	case BPF_DIAG_MOD_TASK_PARK:
+		reason = "the sleep in bpf_task_park() invalidated this pointer";
+		break;
 	case BPF_DIAG_MOD_CALLER_SAVED:
 		reason = target->kind == BPF_DIAG_MOD_TARGET_STACK_ARG ?
 			 "call invalidated this outgoing stack argument" :

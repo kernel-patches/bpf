@@ -11217,6 +11217,98 @@ static void invalidate_non_owning_refs(struct bpf_verifier_env *env)
 	}));
 }
 
+/*
+ * bpf_task_park() sleeps without the Tasks Trace RCU read section and the
+ * disabled migration that a sleepable program otherwise runs under. A dynptr
+ * or an iterator on the stack cannot simply be invalidated across such a
+ * sleep: the program must still release or destroy it, and an object that
+ * stays usable may point at memory the sleep lets go. Refuse the park while
+ * any is live, except a bpf_iter_num, whose state lives entirely on the stack
+ * and whose next and destroy touch nothing else.
+ */
+static int check_park_stack_objects(struct bpf_verifier_env *env, int insn_idx)
+{
+	struct bpf_verifier_state *vstate = env->cur_state;
+	int i, spi;
+
+	for (i = 0; i <= vstate->curframe; i++) {
+		struct bpf_func_state *frame = vstate->frame[i];
+
+		for (spi = 0; spi < bpf_stack_nr_slots(frame); spi++) {
+			struct bpf_stack_state *slot = bpf_stack_slot(frame, spi);
+			struct bpf_reg_state *st = &slot->spilled_ptr;
+
+			switch (slot->slot_type[BPF_REG_SIZE - 1]) {
+			case STACK_DYNPTR:
+				/* Report the slot the program named, not the second half. */
+				if (!st->dynptr.first_slot)
+					continue;
+				verbose(env, "bpf_task_park() with a live dynptr at frame %d fp%d\n",
+					i, -(spi + 1) * BPF_REG_SIZE);
+				break;
+			case STACK_ITER:
+				if (!st->id)
+					continue;
+				if (st->iter.btf == btf_vmlinux &&
+				    !strcmp(iter_type_str(st->iter.btf, st->iter.btf_id), "num"))
+					continue;
+				verbose(env, "bpf_task_park() with a live %s iterator at frame %d fp%d\n",
+					iter_type_str(st->iter.btf, st->iter.btf_id), i,
+					-(spi + 1) * BPF_REG_SIZE);
+				break;
+			default:
+				continue;
+			}
+			bpf_diag_res(env, insn_idx, "live stack object across bpf_task_park()",
+				     "A dynptr or iterator on the stack may refer to memory that the sleep in bpf_task_park() lets go, and the verifier cannot invalidate it without losing the path that releases its reference.",
+				     "Release or destroy the dynptr or iterator before calling bpf_task_park(), or move the park out of the loop that uses it.");
+			return -EINVAL;
+		}
+	}
+	return 0;
+}
+
+/*
+ * Invalidate what the sleep in bpf_task_park() may free. Keep only pointers
+ * whose lifetime does not rest on the dropped protection: the stack and
+ * instruction metadata; the context and the maps the program references
+ * directly, which the invocation holds; the values of its array maps, which
+ * the map allocates and frees with itself, and which hold the program's
+ * global variables; arena memory, which the arena map holds and whose
+ * accesses tolerate faults; and pointers backed by an explicit
+ * verifier-tracked reference, found through their own id or the id of their
+ * parent. An inner map found through a map-in-map lookup is not kept, nor
+ * are its values: the outer map's element alone holds it, and its deletion
+ * frees it after a grace period the sleeping program no longer delays.
+ * Everything else, values of maps that free elements on delete or on their
+ * owner's teardown, RCU and trusted pointers without a reference, per-CPU
+ * and local storage pointers, is gone after the call.
+ */
+static void invalidate_regs_across_park(struct bpf_verifier_env *env)
+{
+	struct bpf_stack_state *stack;
+	struct bpf_func_state *state;
+	struct bpf_reg_state *reg;
+
+	bpf_for_each_reg_in_vstate_mask(env->cur_state, state, reg, stack, 1 << STACK_SPILL, ({
+		enum bpf_reg_type type = base_type(reg->type);
+
+		if (!is_pointer_regtype(reg->type))
+			continue;
+		if ((reg->id && find_reference_state(env->cur_state, reg->id)) ||
+		    (reg->parent_id && find_reference_state(env->cur_state, reg->parent_id)))
+			continue;
+		if ((type == CONST_PTR_TO_MAP || type == PTR_TO_MAP_VALUE) && !reg->map_uid &&
+		    (type == CONST_PTR_TO_MAP || reg->map_ptr->map_type == BPF_MAP_TYPE_ARRAY))
+			continue;
+		if (type == PTR_TO_STACK || type == PTR_TO_FUNC || type == PTR_TO_INSN ||
+		    type == PTR_TO_CTX || type == PTR_TO_ARENA)
+			continue;
+		bpf_diag_record_scrub(env, reg, BPF_DIAG_MOD_TASK_PARK);
+		mark_reg_invalid(env, reg);
+	}));
+}
+
 static void invalidate_rcu_protected_refs(struct bpf_verifier_env *env)
 {
 	struct bpf_stack_state *stack;
@@ -14162,6 +14254,7 @@ enum special_kfunc_type {
 	KF_bpf_arena_alloc_pages,
 	KF_bpf_arena_free_pages,
 	KF_bpf_session_is_return,
+	KF_bpf_task_park,
 };
 
 BTF_ID_LIST(special_kfunc_list)
@@ -14263,6 +14356,7 @@ BTF_ID(func, bpf_session_is_return)
 #else
 BTF_ID_UNUSED
 #endif
+BTF_ID(func, bpf_task_park)
 
 static bool is_bpf_cast_to_kern_ctx_kfunc(const struct bpf_call_arg_meta *meta)
 {
@@ -14284,6 +14378,11 @@ static bool is_bpf_dynptr_clone_kfunc(const struct bpf_call_arg_meta *meta)
 static bool is_bpf_iter_css_task_new_kfunc(const struct bpf_call_arg_meta *meta)
 {
 	return is_kfunc_call(meta, special_kfunc_list[KF_bpf_iter_css_task_new]);
+}
+
+static bool is_bpf_task_park_kfunc(u32 btf_id)
+{
+	return btf_id == special_kfunc_list[KF_bpf_task_park];
 }
 
 static bool is_bpf_obj_new_kfunc(u32 func_id)
@@ -16268,6 +16367,13 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			if (err < 0)
 				return err;
 		}
+	}
+
+	if (is_bpf_task_park_kfunc(meta.func_id)) {
+		err = check_park_stack_objects(env, insn_idx);
+		if (err)
+			return err;
+		invalidate_regs_across_park(env);
 	}
 
 	bpf_diag_record_caller_saved(env, regs);
