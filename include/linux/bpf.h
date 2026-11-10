@@ -2046,6 +2046,8 @@ struct bpf_prog_aux {
 	struct bpf_stream *stream[2];
 	spinlock_t st_ops_assoc_lock; /* protects st_ops_assoc */
 	struct bpf_map __rcu *st_ops_assoc;
+	struct list_head kthreads; /* BPF kthreads of the prog, see kernel/bpf/kthread.c */
+	atomic_t kthread_seq; /* index of the prog's next BPF kthread, in its name */
 };
 
 #define BPF_NR_CONTEXTS        4       /* normal, softirq, hardirq, NMI */
@@ -2970,6 +2972,7 @@ struct bpf_prog * __must_check bpf_prog_inc_not_zero(struct bpf_prog *prog);
 void bpf_prog_put(struct bpf_prog *prog);
 
 void bpf_prog_free_id(struct bpf_prog *prog);
+void bpf_prog_free_kthreads(struct bpf_prog_aux *aux);
 void bpf_map_free_id(struct bpf_map *map);
 
 struct btf_field *btf_record_find(const struct btf_record *rec,

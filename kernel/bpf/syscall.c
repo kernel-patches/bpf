@@ -2512,6 +2512,12 @@ static void bpf_prog_put_deferred(struct work_struct *work)
 
 	aux = container_of(work, struct bpf_prog_aux, work);
 	prog = aux->prog;
+	/*
+	 * The threads of the prog still run its code, each inside a Tasks
+	 * Trace RCU read section that the grace period below would wait for.
+	 * Stop them first; this waits for each of them to exit.
+	 */
+	bpf_prog_free_kthreads(aux);
 	perf_event_bpf_event(prog, PERF_BPF_EVENT_PROG_UNLOAD, 0);
 	bpf_audit_prog(prog, BPF_AUDIT_UNLOAD);
 	bpf_prog_free_id(prog);
@@ -2523,7 +2529,8 @@ static void __bpf_prog_put(struct bpf_prog *prog)
 	struct bpf_prog_aux *aux = prog->aux;
 
 	if (atomic64_dec_and_test(&aux->refcnt)) {
-		if (in_hardirq() || irqs_disabled()) {
+		/* Stopping the prog's threads blocks, which the direct path may not. */
+		if (in_hardirq() || irqs_disabled() || !list_empty(&aux->kthreads)) {
 			INIT_WORK(&aux->work, bpf_prog_put_deferred);
 			schedule_work(&aux->work);
 		} else {
