@@ -170,6 +170,13 @@ static inline u8 ath12k_dp_rx_get_msdu_src_link(struct ath12k_hal *hal,
 	return hal->ops->rx_desc_get_msdu_src_link_id(desc);
 }
 
+static inline u8
+ath12k_dp_rx_reo_get_drv_link_id(struct ath12k_dp *dp,
+				 struct hal_reo_dest_ring *reo_desc)
+{
+	return dp->hal->ops->rx_reo_desc_get_drv_link_id(dp, reo_desc);
+}
+
 static inline void ath12k_dp_clean_up_skb_list(struct sk_buff_head *skb_list)
 {
 	struct sk_buff *skb;

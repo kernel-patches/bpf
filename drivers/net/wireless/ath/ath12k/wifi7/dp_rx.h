@@ -12,6 +12,8 @@
 
 struct ath12k_hal_reo_cmd;
 
+u8 ath12k_wifi7_dp_rx_get_logical_link_id(struct ath12k_dp *dp,
+					  __le32 peer_metadata);
 int ath12k_wifi7_dp_rx_process_wbm_err(struct ath12k_dp *dp,
 				       struct napi_struct *napi, int budget);
 int ath12k_wifi7_dp_rx_process_err(struct ath12k_dp *dp, struct napi_struct *napi,
