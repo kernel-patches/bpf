@@ -11218,6 +11218,31 @@ static void invalidate_non_owning_refs(struct bpf_verifier_env *env)
 }
 
 /*
+ * bpf_task_park() is confined to the main body of the program and the
+ * functions it calls directly. A callback runs from kernel code that holds
+ * state of its own around the call, an iteration position, a work item or
+ * timer that owns the program only through Tasks Trace RCU, an exiting task,
+ * none of it audited against a sleep that drops the program's protection.
+ * Refuse the park in any callback frame, synchronous, asynchronous or
+ * exception. Asynchronous callbacks are verified as a state of their own
+ * with the callback as frame 0, so the walk over the frames sees them too.
+ */
+static bool in_callback_frames(struct bpf_verifier_env *env)
+{
+	struct bpf_verifier_state *vstate = env->cur_state;
+	int i;
+
+	for (i = 0; i <= vstate->curframe; i++) {
+		struct bpf_func_state *frame = vstate->frame[i];
+
+		if (frame->in_callback_fn || frame->in_async_callback_fn ||
+		    frame->in_exception_callback_fn)
+			return true;
+	}
+	return false;
+}
+
+/*
  * bpf_task_park() sleeps without the Tasks Trace RCU read section and the
  * disabled migration that a sleepable program otherwise runs under. A dynptr
  * or an iterator on the stack cannot simply be invalidated across such a
@@ -16370,6 +16395,12 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	}
 
 	if (is_bpf_task_park_kfunc(meta.func_id)) {
+		if (in_callback_frames(env)) {
+			verbose(env, "bpf_task_park() is not allowed in a callback\n");
+			bpf_diag_policy(env, insn_idx, "kfunc bpf_task_park", "the call is in a callback",
+					"Call bpf_task_park() from the main program or from a function it calls directly, not from a callback.");
+			return -EINVAL;
+		}
 		err = check_park_stack_objects(env, insn_idx);
 		if (err)
 			return err;
