@@ -4083,6 +4083,8 @@ static inline unsigned int xfrm_sa_len(struct xfrm_state *x)
 		l += nla_total_size(sizeof(*x->encap));
 	if (x->tfcpad)
 		l += nla_total_size(sizeof(x->tfcpad));
+	if (x->mark.v | x->mark.m)
+		l += nla_total_size(sizeof(struct xfrm_mark));
 	if (x->replay_esn)
 		l += nla_total_size(xfrm_replay_state_esn_len(x->replay_esn));
 	else
@@ -4138,7 +4140,6 @@ static int xfrm_notify_sa(struct xfrm_state *x, const struct km_event *c)
 	if (c->event == XFRM_MSG_DELSA) {
 		len += nla_total_size(headlen);
 		headlen = sizeof(*id);
-		len += nla_total_size(sizeof(struct xfrm_mark));
 	}
 	len += NLMSG_ALIGN(headlen);
 
