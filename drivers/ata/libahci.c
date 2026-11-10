@@ -1033,11 +1033,16 @@ static void ahci_sw_activity(struct ata_link *link)
 {
 	struct ata_port *ap = link->ap;
 	struct ahci_port_priv *pp = ap->private_data;
-	struct ahci_em_priv *emp = &pp->em_priv[link->pmp];
+	struct ahci_em_priv *emp;
 
 	if (!(link->flags & ATA_LFLAG_SW_ACTIVITY))
 		return;
 
+	/* The PMP control port (SATA_PMP_CTRL_PORT) has no EM slot */
+	if (link->pmp >= EM_MAX_SLOTS)
+		return;
+
+	emp = &pp->em_priv[link->pmp];
 	emp->activity++;
 	if (!timer_pending(&emp->timer))
 		mod_timer(&emp->timer, jiffies + msecs_to_jiffies(10));
