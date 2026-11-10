@@ -962,6 +962,19 @@ static void mlx5e_rq_free_shampo(struct mlx5e_rq *rq)
 	kvfree(shampo);
 }
 
+static struct device *mlx5e_get_dma_dev(struct mlx5_core_dev *mdev,
+					bool data_direct)
+{
+	struct mlx5_data_direct_dev *dd_dev;
+
+	if (!data_direct)
+		return mlx5_core_dma_dev(mdev);
+
+	dd_dev = mlx5_data_direct_get_dev(mdev->data_direct);
+
+	return dd_dev ? dd_dev->device : NULL;
+}
+
 static int mlx5e_alloc_rq(struct mlx5e_params *params,
 			  struct mlx5e_rq_param *rq_param,
 			  struct mlx5e_rq_opt_param *rqo,
@@ -1105,7 +1118,11 @@ static int mlx5e_alloc_rq(struct mlx5e_params *params,
 		pp_params.flags     = PP_FLAG_DMA_MAP | PP_FLAG_DMA_SYNC_DEV;
 		pp_params.pool_size = pool_size;
 		pp_params.nid       = node;
-		pp_params.dev       = rq->pdev;
+		pp_params.dev       = mlx5e_get_dma_dev(mdev, data_direct);
+		if (!pp_params.dev) {
+			err = -ENODEV;
+			goto err_free_by_rq_type;
+		}
 		pp_params.napi      = rq->cq.napi;
 		pp_params.netdev    = rq->netdev;
 		pp_params.dma_dir   = rq->buff.map_dir;
@@ -5900,27 +5917,45 @@ static int mlx5e_queue_start(struct net_device *dev,
 	return 0;
 }
 
-static struct device *mlx5e_queue_get_dma_dev(struct net_device *dev,
+static bool mlx5e_has_leased_rxqs(struct net_device *netdev)
+{
+	for (u32 i = 0; i < netdev->real_num_rx_queues; i++)
+		if (READ_ONCE(__netif_get_rx_queue(netdev, i)->lease))
+			return true;
+
+	return false;
+}
+
+static struct device *mlx5e_queue_get_dma_dev(struct net_device *netdev,
 					      int queue_index)
 {
-	struct mlx5e_priv *priv = netdev_priv(dev);
+	struct mlx5e_priv *priv = netdev_priv(netdev);
 	struct mlx5e_channels *channels;
-	struct device *pdev = NULL;
+	struct device *dma_dev = NULL;
 	struct mlx5e_channel *ch;
+	bool dd;
 
 	channels = &priv->channels;
 
 	mutex_lock(&priv->state_lock);
 
-	if (queue_index >= channels->num)
+	/* Allow only opened channels. */
+	if (queue_index < 0 || queue_index >= channels->num)
 		goto out;
 
+	dd = MLX5E_GET_PFLAG(&channels->params, MLX5E_PFLAG_DATA_DIRECT);
+	if (dd && mlx5e_has_leased_rxqs(netdev)) {
+		mlx5_core_err_rl(priv->mdev,
+				 "Can't get queue DMA device: leased RX queues are not supported in data-direct mode\n");
+		goto out;
+	}
+
 	ch = channels->c[queue_index];
-	pdev = ch->pdev;
+	dma_dev = mlx5e_get_dma_dev(ch->mdev, dd);
 out:
 	mutex_unlock(&priv->state_lock);
 
-	return pdev;
+	return dma_dev;
 }
 
 static const struct netdev_queue_mgmt_ops mlx5e_queue_mgmt_ops = {
