@@ -566,7 +566,7 @@ impl<'a, E: FalconEngine + 'static> Falcon<'a, E> {
         // need to perform.
         let num_transfers = load_offsets.len.div_ceil(DMA_LEN);
 
-        let dma_base = match src {
+        let (dma_base, fbif_target) = match src {
             FalconDmaSource::Sysmem(dma_obj) => {
                 // Upper limit of transfer is `(num_transfers * DMA_LEN) + load_offsets.src_start`.
                 let end_offset = num_transfers
@@ -575,9 +575,12 @@ impl<'a, E: FalconEngine + 'static> Falcon<'a, E> {
                     .map(usize::from_safe_cast)
                     .ok_or(EOVERFLOW)?;
 
-                io_project!(dma_obj, [try: 0..end_offset]).dma_address()
+                (
+                    io_project!(dma_obj, [try: 0..end_offset]).dma_address(),
+                    FalconFbifTarget::CoherentSysmem,
+                )
             }
-            FalconDmaSource::Framebuffer { base } => base,
+            FalconDmaSource::Framebuffer { base } => (base, FalconFbifTarget::LocalFb),
         };
 
         if dma_base % DmaAddress::from(DMA_LEN) > 0 {
@@ -604,6 +607,12 @@ impl<'a, E: FalconEngine + 'static> Falcon<'a, E> {
         let cmd = regs::NV_PFALCON_FALCON_DMATRFCMD::zeroed()
             .with_size(DmaTrfCmdSize::Size256B)
             .with_falcon_mem(target_mem);
+
+        self.pfalcon
+            .update(regs::NV_PFALCON_FBIF_TRANSCFG::at(0), |v| {
+                v.with_target(fbif_target)
+                    .with_mem_type(FalconFbifMemType::Physical)
+            });
 
         for pos in (0..num_transfers).map(|i| i * DMA_LEN) {
             // Perform a transfer of size `DMA_LEN`.
@@ -655,11 +664,6 @@ impl<'a, E: FalconEngine + 'static> Falcon<'a, E> {
         };
 
         self.dma_reset();
-        self.pfalcon
-            .update(regs::NV_PFALCON_FBIF_TRANSCFG::at(0), |v| {
-                v.with_target(FalconFbifTarget::CoherentSysmem)
-                    .with_mem_type(FalconFbifMemType::Physical)
-            });
 
         self.dma_wr(
             FalconDmaSource::Sysmem(&dma_obj),
