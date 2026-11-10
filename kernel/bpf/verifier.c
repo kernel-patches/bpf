@@ -9441,6 +9441,17 @@ static int check_reg_type(struct bpf_verifier_env *env, struct bpf_reg_state *re
 		type &= ~MEM_PERCPU;
 	}
 
+	/* Also accept a trusted pointer to the kernel context type in place of PTR_TO_CTX. */
+	if (is_kfunc(meta) && base_type(arg_type) == ARG_PTR_TO_CTX &&
+	    base_type(type) == PTR_TO_BTF_ID && reg->btf == btf_vmlinux &&
+	    !reg->var_off.value && is_trusted_reg(env, reg)) {
+		int kern_ctx_btf_id = get_kern_ctx_btf_id(&env->log,
+							  resolve_prog_type(env->prog));
+
+		if (kern_ctx_btf_id > 0 && reg->btf_id == kern_ctx_btf_id)
+			type = PTR_TO_CTX;
+	}
+
 	for (i = 0; i < ARRAY_SIZE(compatible->types); i++) {
 		expected = compatible->types[i];
 		if (expected == NOT_INIT)
