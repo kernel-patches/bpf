@@ -25,10 +25,13 @@ struct sk_buff;
  * @MP_CAP_READABLE: The CPU can access provider memory. It may back header
  *	page pools, and XDP programs may run on it.
  * @MP_CAP_FRAG: Page pool fragments may split provider buffers.
+ * @MP_CAP_RETAIN: The stack may keep page pool references to provider
+ *	buffers after the RX poll, for example in an skb or an xdp_frame.
  */
 enum mp_caps {
 	MP_CAP_READABLE		= BIT(0),
 	MP_CAP_FRAG		= BIT(1),
+	MP_CAP_RETAIN		= BIT(2),
 };
 
 struct memory_provider_ops {

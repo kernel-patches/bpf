@@ -13,6 +13,10 @@ struct netlink_ext_ack;
 struct netdev_queue_config;
 struct cpumask;
 struct pp_memory_provider_params;
+struct xdp_buff;
+struct xdp_frame;
+
+struct xdp_frame *xdp_copy_buff_to_frame(const struct xdp_buff *xdp);
 
 /* Random bits of netdevice that don't need to be exposed */
 #define FLOW_LIMIT_HISTORY	(1 << 7)  /* must be ^2 and !overflow buckets */

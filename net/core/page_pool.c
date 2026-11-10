@@ -34,6 +34,10 @@
 
 DEFINE_STATIC_KEY_FALSE(page_pool_mem_providers);
 
+/* Enabled while a pool of a provider without MP_CAP_RETAIN exists. */
+DEFINE_STATIC_KEY_FALSE(page_pool_restricted);
+EXPORT_SYMBOL(page_pool_restricted);
+
 #define DEFER_TIME (msecs_to_jiffies(1000))
 #define DEFER_WARN_INTERVAL (60 * HZ)
 
@@ -188,6 +192,28 @@ static void page_pool_struct_check(void)
 				    PAGE_POOL_FRAG_GROUP_ALIGN);
 }
 
+/**
+ * netmem_can_retain() - may the stack keep @netmem after the RX poll
+ * @netmem: netmem to check
+ *
+ * Context: the caller holds @netmem through its page pool. A plain page
+ * reference does not keep the page in its pool.
+ * Return: false if @netmem belongs to a memory provider without
+ * MP_CAP_RETAIN.
+ */
+bool netmem_can_retain(netmem_ref netmem)
+{
+	const struct memory_provider_ops *ops;
+
+	netmem = netmem_compound_head(netmem);
+	if (!netmem_is_pp(netmem))
+		return true;
+
+	ops = netmem_get_pp(netmem)->mp_ops;
+	return !ops || ops->caps & MP_CAP_RETAIN;
+}
+EXPORT_SYMBOL(netmem_can_retain);
+
 static int page_pool_select_mp(struct page_pool *pool,
 			       const struct pp_memory_provider_params *mpp)
 {
@@ -324,6 +350,8 @@ static int page_pool_init(struct page_pool *pool,
 		}
 
 		static_branch_inc(&page_pool_mem_providers);
+		if (!(pool->mp_ops->caps & MP_CAP_RETAIN))
+			static_branch_inc(&page_pool_restricted);
 	} else if (pool->p.order > MAX_PAGE_ORDER) {
 		err = -EINVAL;
 		goto free_ptr_ring;
@@ -352,6 +380,8 @@ static void page_pool_uninit(struct page_pool *pool)
 #endif
 
 	if (pool->mp_ops) {
+		if (!(pool->mp_ops->caps & MP_CAP_RETAIN))
+			static_branch_dec(&page_pool_restricted);
 		pool->mp_ops->destroy(pool);
 		static_branch_dec(&page_pool_mem_providers);
 	}

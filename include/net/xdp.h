@@ -81,6 +81,16 @@ enum xdp_buff_flags {
 	 * XDP program is not attached.
 	 */
 	XDP_FLAGS_FRAGS_UNREADABLE	= BIT(2),
+	/* Internal: the head netmem and the shared info are in &xdp_buff.ext.
+	 * Not copied to xdp_frames or skbs.
+	 */
+	XDP_FLAGS_EXT			= BIT(3),
+};
+
+/* For a head buffer that cannot hold kernel data, see xdp_init_buff_netmem() */
+struct xdp_buff_ext {
+	netmem_ref netmem;
+	struct skb_shared_info sinfo;
 };
 
 struct xdp_buff {
@@ -89,7 +99,12 @@ struct xdp_buff {
 	void *data_meta;
 	void *data_hard_start;
 	struct xdp_rxq_info *rxq;
-	struct xdp_txq_info *txq;
+	union {
+		/* DEVMAP egress programs only */
+		struct xdp_txq_info *txq;
+		/* RX buffers with XDP_FLAGS_EXT */
+		struct xdp_buff_ext *ext;
+	};
 
 	union {
 		struct {
@@ -138,7 +153,7 @@ static __always_inline void xdp_buff_set_frag_unreadable(struct xdp_buff *xdp)
 
 static __always_inline u32 xdp_buff_get_skb_flags(const struct xdp_buff *xdp)
 {
-	return xdp->flags;
+	return xdp->flags & ~XDP_FLAGS_EXT;
 }
 
 static __always_inline void xdp_buff_clear_frag_pfmemalloc(struct xdp_buff *xdp)
@@ -176,6 +191,50 @@ xdp_prepare_buff(struct xdp_buff *xdp, unsigned char *hard_start,
 	xdp->data_meta = meta_valid ? data : data + 1;
 }
 
+/* See MP_CAP_RETAIN */
+static __always_inline bool xdp_netmem_restricted(netmem_ref netmem)
+{
+	return IS_ENABLED(CONFIG_PAGE_POOL) &&
+	       static_branch_unlikely(&page_pool_restricted) &&
+	       !netmem_can_retain(netmem);
+}
+
+/**
+ * xdp_init_buff_netmem - initialize an &xdp_buff for a netmem head buffer
+ * @xdp: &xdp_buff to initialize
+ * @frame_sz: frame size
+ * @rxq: RX queue info
+ * @netmem: head buffer
+ * @ext: kernel memory used if @netmem cannot hold the shared info, or the
+ *	stack must not keep it. It must live as long as @xdp.
+ *
+ * A driver that may receive into memory provider buffers uses this instead
+ * of xdp_init_buff().
+ */
+static __always_inline void
+xdp_init_buff_netmem(struct xdp_buff *xdp, u32 frame_sz,
+		     struct xdp_rxq_info *rxq, netmem_ref netmem,
+		     struct xdp_buff_ext *ext)
+{
+	xdp_init_buff(xdp, frame_sz, rxq);
+	if (likely(!netmem_is_net_iov(netmem) &&
+		   !xdp_netmem_restricted(netmem)))
+		return;
+
+	ext->netmem = netmem;
+	xdp->ext = ext;
+	xdp->flags |= XDP_FLAGS_EXT;
+}
+
+static __always_inline netmem_ref
+xdp_buff_head_netmem(const struct xdp_buff *xdp)
+{
+	if (unlikely(xdp->flags & XDP_FLAGS_EXT))
+		return xdp->ext->netmem;
+
+	return virt_to_netmem(xdp->data);
+}
+
 /* Reserve memory area at end-of data area.
  *
  * This macro reserves tailroom in the XDP buffer by limiting the
@@ -189,7 +248,26 @@ xdp_prepare_buff(struct xdp_buff *xdp, unsigned char *hard_start,
 static inline struct skb_shared_info *
 xdp_get_shared_info_from_buff(const struct xdp_buff *xdp)
 {
+	if (unlikely(xdp->flags & XDP_FLAGS_EXT))
+		return &xdp->ext->sinfo;
+
 	return (struct skb_shared_info *)xdp_data_hard_end(xdp);
+}
+
+bool __xdp_buff_needs_copy(const struct xdp_buff *xdp);
+
+/* Must the stack copy a buffer of @xdp before it keeps it? XSK buffers are
+ * copied by their own conversion.
+ */
+static __always_inline bool xdp_buff_needs_copy(const struct xdp_buff *xdp)
+{
+	if (unlikely(xdp->flags & XDP_FLAGS_EXT))
+		return true;
+	if (!IS_ENABLED(CONFIG_PAGE_POOL) ||
+	    !static_branch_unlikely(&page_pool_restricted))
+		return false;
+
+	return __xdp_buff_needs_copy(xdp);
 }
 
 static __always_inline unsigned int
@@ -379,7 +457,7 @@ xdp_update_skb_frags_info(struct sk_buff *skb, u8 nr_frags,
 void xdp_warn(const char *msg, const char *func, const int line);
 #define XDP_WARN(msg) xdp_warn(msg, __func__, __LINE__)
 
-struct sk_buff *xdp_build_skb_from_buff(const struct xdp_buff *xdp);
+struct sk_buff *xdp_build_skb_from_buff(struct xdp_buff *xdp);
 struct sk_buff *xdp_build_skb_from_zc(struct xdp_buff *xdp);
 struct xdp_frame *xdp_convert_zc_to_xdp_frame(struct xdp_buff *xdp);
 struct sk_buff *__xdp_build_skb_from_frame(struct xdp_frame *xdpf,
@@ -420,12 +498,15 @@ int xdp_update_frame_from_buff(const struct xdp_buff *xdp,
 		return -ENOSPC;
 	}
 
+	/* The stack may keep the frame, see xdp_buff_needs_copy(). */
+	DEBUG_NET_WARN_ON_ONCE(xdp_buff_needs_copy(xdp));
+
 	xdp_frame->data = xdp->data;
 	xdp_frame->len  = xdp->data_end - xdp->data;
 	xdp_frame->headroom = headroom - sizeof(*xdp_frame);
 	xdp_frame->metasize = metasize;
 	xdp_frame->frame_sz = xdp->frame_sz;
-	xdp_frame->flags = xdp->flags;
+	xdp_frame->flags = xdp_buff_get_skb_flags(xdp);
 
 	return 0;
 }
@@ -436,7 +517,8 @@ struct xdp_frame *xdp_convert_buff_to_frame(struct xdp_buff *xdp)
 {
 	struct xdp_frame *xdp_frame;
 
-	if (xdp->rxq->mem.type == MEM_TYPE_XSK_BUFF_POOL)
+	if (xdp->rxq->mem.type == MEM_TYPE_XSK_BUFF_POOL ||
+	    xdp_buff_needs_copy(xdp))
 		return xdp_convert_zc_to_xdp_frame(xdp);
 
 	/* Store info in top of packet */

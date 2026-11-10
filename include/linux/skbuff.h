@@ -2691,6 +2691,7 @@ static inline void skb_add_rx_frag_netmem(struct sk_buff *skb, int i,
 					  int size, unsigned int truesize)
 {
 	DEBUG_NET_WARN_ON_ONCE(size > truesize);
+	DEBUG_NET_WARN_ON_ONCE(!netmem_can_retain(netmem));
 
 	skb_fill_netmem_desc(skb, i, netmem, off, size);
 	skb->len += size;
