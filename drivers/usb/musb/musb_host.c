@@ -65,7 +65,7 @@
  * (Yes, bulk _could_ use more of the endpoints than that, and would even
  * benefit from it.)
  *
- * INTERUPPT and ISOCHRONOUS transfers are scheduled to the other endpoints.
+ * INTERRUPT and ISOCHRONOUS transfers are scheduled to the other endpoints.
  * So far that scheduling is both dumb and optimistic:  the endpoint will be
  * "claimed" until its software queue is no longer refilled.  No multiplexing
  * of transfers between endpoints, or anything clever.

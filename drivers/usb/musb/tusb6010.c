@@ -941,7 +941,7 @@ static void tusb_musb_enable(struct musb *musb)
 	musb_writel(tbase, TUSB_DMA_INT_MASK, 0x7fffffff);
 	musb_writel(tbase, TUSB_GPIO_INT_MASK, 0x1ff);
 
-	/* Clear all subsystem interrups */
+	/* Clear all subsystem interrupts */
 	musb_writel(tbase, TUSB_USBIP_INT_CLEAR, 0x7fffffff);
 	musb_writel(tbase, TUSB_DMA_INT_CLEAR, 0x7fffffff);
 	musb_writel(tbase, TUSB_GPIO_INT_CLEAR, 0x1ff);
