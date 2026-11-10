@@ -135,8 +135,9 @@ pub(crate) enum FalconMem {
     /// Non-Secure Instruction Memory.
     #[expect(unused)]
     ImemNonSecure,
-    /// Data Memory.
-    Dmem,
+    /// Data Memory. If `tag` is set, a transfer into DMEM also tags each block with its source
+    /// offset, which is then the DMEM virtual address of the image.
+    Dmem { tag: bool },
 }
 
 bounded_enum! {
@@ -559,13 +560,15 @@ impl<'a, E: FalconEngine + 'static> Falcon<'a, E> {
         // need to perform.
         let num_transfers = load_offsets.len.div_ceil(DMA_LEN);
 
-        // For IMEM, we want to use the start offset as a virtual address tag for each page, since
-        // code addresses in the firmware (and the boot vector) are virtual.
+        // For IMEM and tagged DMEM, we want to use the start offset as a virtual address tag for
+        // each page, since addresses in the firmware (and the boot vector) are virtual.
         //
-        // For DMEM, the start offset is folded into the DMA base.
+        // For untagged DMEM, the start offset is folded into the DMA base.
         let (fb_offset, base_offset) = match target_mem {
-            FalconMem::ImemSecure | FalconMem::ImemNonSecure => (load_offsets.src_start, 0),
-            FalconMem::Dmem => (0, usize::from_safe_cast(load_offsets.src_start)),
+            FalconMem::ImemSecure | FalconMem::ImemNonSecure | FalconMem::Dmem { tag: true } => {
+                (load_offsets.src_start, 0)
+            }
+            FalconMem::Dmem { tag: false } => (0, usize::from_safe_cast(load_offsets.src_start)),
         };
 
         let dma_base = {
@@ -659,7 +662,11 @@ impl<'a, E: FalconEngine + 'static> Falcon<'a, E> {
             });
 
         self.dma_wr(&dma_obj, FalconMem::ImemSecure, fw.imem_sec_load_params())?;
-        self.dma_wr(&dma_obj, FalconMem::Dmem, fw.dmem_load_params())?;
+        self.dma_wr(
+            &dma_obj,
+            FalconMem::Dmem { tag: false },
+            fw.dmem_load_params(),
+        )?;
 
         self.hal.program_brom(self, &fw.brom_params());
 
