@@ -2186,6 +2186,10 @@ static void taprio_reset(struct Qdisc *sch)
 
 	hrtimer_cancel(&q->advance_timer);
 
+	/* Destroy resets each detached subtree under its own root lock. */
+	if (!refcount_read(&sch->refcnt))
+		return;
+
 	if (q->qdiscs) {
 		for (i = 0; i < dev->num_tx_queues; i++)
 			if (q->qdiscs[i])
@@ -2207,6 +2211,18 @@ static void taprio_destroy(struct Qdisc *sch)
 	 */
 	hrtimer_cancel(&q->advance_timer);
 	qdisc_synchronize(sch);
+
+	if (q->qdiscs) {
+		for (i = 0; i < dev->num_tx_queues; i++) {
+			struct Qdisc *child = q->qdiscs[i];
+
+			if (!child)
+				continue;
+			sch_tree_lock(child);
+			qdisc_reset(child);
+			sch_tree_unlock(child);
+		}
+	}
 
 	taprio_disable_offload(dev, q, NULL);
 
