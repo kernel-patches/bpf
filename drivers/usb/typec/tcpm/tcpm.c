@@ -2520,7 +2520,7 @@ static int tcpm_pd_svdm(struct tcpm_port *port, struct typec_altmode *adev,
 			/*
 			 * PD2.0 Spec 6.10.3: respond with NAK as DFP (data host)
 			 * PD3.1 Spec 6.4.4.2.5.1: respond with NAK if "invalid field" or
-			 * "wrong configuation" or "Unrecognized"
+			 * "wrong configuration" or "Unrecognized"
 			 */
 			if ((port->data_role == TYPEC_DEVICE || svdm_version >= SVDM_VER_2_0) &&
 			    port->nr_snk_vdo) {
@@ -4461,7 +4461,7 @@ static int tcpm_pd_select_pdo(struct tcpm_port *port, int *sink_pdo,
 
 	/*
 	 * Select the source PDO providing the most power which has a
-	 * matchig sink cap.
+	 * matching sink cap.
 	 */
 	for (i = 0; i < port->nr_source_caps; i++) {
 		u32 pdo = port->source_caps[i];
@@ -5960,7 +5960,7 @@ static void run_state_machine(struct tcpm_port *port)
 			}
 			/*
 			 * Although tAvsSrcTransSmall is expected to be used
-			 * for voltage transistions smaller than 1V, using
+			 * for voltage transitions smaller than 1V, using
 			 * tAvsSrcTransLarge to be resilient against chargers
 			 * which strictly cannot honor tAvsSrcTransSmall to
 			 * improve interoperability.

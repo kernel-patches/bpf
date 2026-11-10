@@ -165,7 +165,7 @@ static int ucsi_displayport_status_update(struct ucsi_dp *dp)
 	dp->data.status = DP_STATUS_ENABLED;
 
 	/*
-	 * If pin assignement D is supported, claiming always
+	 * If pin assignment D is supported, claiming always
 	 * that Multi-function is preferred.
 	 */
 	if (DP_CAP_CAPABILITY(cap) & DP_CAP_UFP_D) {

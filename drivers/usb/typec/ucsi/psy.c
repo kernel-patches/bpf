@@ -255,7 +255,7 @@ static int ucsi_psy_get_charge_type(struct ucsi_connector *con, union power_supp
 		return 0;
 	}
 
-	/* The Battery Charging Cabability Status field is only valid in sink role. */
+	/* The Battery Charging Capability Status field is only valid in sink role. */
 	if (UCSI_CONSTAT(con, PWR_DIR) != TYPEC_SINK) {
 		val->intval = POWER_SUPPLY_CHARGE_TYPE_UNKNOWN;
 		return 0;
