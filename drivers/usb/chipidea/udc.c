@@ -208,7 +208,7 @@ static int hw_ep_prime(struct ci_hdrc *ci, int num, int dir, int is_ctrl)
 	if (is_ctrl && dir == RX && hw_read(ci, OP_ENDPTSETUPSTAT, BIT(num)))
 		return -EAGAIN;
 
-	/* status shoult be tested according with manual but it doesn't work */
+	/* status should be tested according with manual but it doesn't work */
 	return 0;
 }
 
@@ -271,7 +271,7 @@ static int hw_test_and_clear_complete(struct ci_hdrc *ci, int n)
  *                                without interruption)
  * @ci: the controller
  *
- * This function returns active interrutps
+ * This function returns active interrupts
  */
 static u32 hw_test_and_clear_intr_active(struct ci_hdrc *ci)
 {
@@ -1242,7 +1242,7 @@ isr_setup_status_complete(struct usb_ep *ep, struct usb_request *req)
 }
 
 /**
- * isr_setup_status_phase: queues the status phase of a setup transation
+ * isr_setup_status_phase: queues the status phase of a setup transaction
  * @ci: ci struct
  *
  * This function returns an error code
