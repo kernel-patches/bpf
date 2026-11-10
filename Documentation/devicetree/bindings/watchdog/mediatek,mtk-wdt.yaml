@@ -24,6 +24,7 @@ properties:
           - mediatek,mt6589-wdt
           - mediatek,mt6735-wdt
           - mediatek,mt6795-wdt
+          - mediatek,mt6797-wdt
           - mediatek,mt6895-wdt
           - mediatek,mt7986-wdt
           - mediatek,mt7988-wdt
@@ -39,7 +40,6 @@ properties:
               - mediatek,mt2701-wdt
               - mediatek,mt6572-wdt
               - mediatek,mt6582-wdt
-              - mediatek,mt6797-wdt
               - mediatek,mt7622-wdt
               - mediatek,mt7623-wdt
               - mediatek,mt7629-wdt
@@ -50,6 +50,10 @@ properties:
               - mediatek,mt8365-wdt
               - mediatek,mt8516-wdt
           - const: mediatek,mt6589-wdt
+      - items:
+          - const: mediatek,mt6797-wdt
+          - const: mediatek,mt6589-wdt
+        deprecated: true
 
   reg:
     maxItems: 1
