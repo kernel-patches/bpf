@@ -73,8 +73,21 @@ static int red_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	enum qdisc_drop_reason reason = QDISC_DROP_CONGESTED;
 	struct red_sched_data *q = qdisc_priv(sch);
 	struct Qdisc *child = q->qdisc;
+	u32 child_backlog;
+	u32 red_backlog;
 	unsigned int len;
 	int ret;
+
+	/* RED reads the child backlog into red_calc_qavg(), so bound both
+	 * counters: a child that evicts on NET_XMIT_CN can otherwise grow
+	 * its own backlog while RED's stays put.
+	 */
+	if (unlikely(qdisc_backlog_overflow(sch, skb) ||
+		     qdisc_backlog_overflow(child, skb))) {
+		qdisc_qstats_overlimit(sch);
+		return qdisc_drop_reason(skb, sch, to_free,
+					 QDISC_DROP_OVERLIMIT);
+	}
 
 	q->vars.qavg = red_calc_qavg(&q->parms,
 				     &q->vars,
@@ -136,14 +149,37 @@ static int red_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	}
 
 	len = qdisc_pkt_len(skb);
+	/* Reserve the length before the child sees the packet: netem
+	 * can re-enqueue a clone here before the backlog is updated.
+	 */
+	red_backlog = READ_ONCE(sch->qstats.backlog);
+	child_backlog = READ_ONCE(child->qstats.backlog);
+	qstats_backlog_add(sch, len);
 	ret = qdisc_enqueue(skb, child, to_free);
 	if (likely(ret == NET_XMIT_SUCCESS)) {
-		qstats_backlog_add(sch, len);
 		qdisc_qlen_inc(sch);
-	} else if (net_xmit_drop_count(ret)) {
-		WRITE_ONCE(q->stats.pdrop,
-			   q->stats.pdrop + 1);
-		qdisc_qstats_drop(sch);
+	} else {
+		u32 propagated, grew;
+
+		/* Re-derive the aggregate from the snapshots: the child may
+		 * have dropped the packet or evicted another one, and may or
+		 * may not have reduced the ancestors' backlog itself
+		 * (pfifo_head_drop, sfq and fq_codel do; hhf and skbprio
+		 * return NET_XMIT_CN without qdisc_tree_reduce_backlog()).
+		 * Keep what the child actually accounted for, and pass the
+		 * difference on to the ancestors above RED.
+		 */
+		propagated = READ_ONCE(sch->qstats.backlog) -
+			     red_backlog - len;
+		grew = READ_ONCE(child->qstats.backlog) - child_backlog;
+		WRITE_ONCE(sch->qstats.backlog, red_backlog + grew);
+		if (propagated != grew)
+			qdisc_tree_reduce_backlog(sch, 0, propagated - grew);
+		if (net_xmit_drop_count(ret)) {
+			WRITE_ONCE(q->stats.pdrop,
+				   q->stats.pdrop + 1);
+			qdisc_qstats_drop(sch);
+		}
 	}
 	return ret;
 
