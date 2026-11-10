@@ -89,6 +89,7 @@ struct mpnic_queue_stats {
 	union {
 		struct {
 			u64_stats_t dropped;
+			u64_stats_t csum_partial;
 			u64_stats_t stop;
 		} twq;
 		struct {
@@ -168,6 +169,9 @@ struct mpnic_napi_vector {
 };
 
 netdev_tx_t mpnic_xmit_frame(struct sk_buff *skb, struct net_device *dev);
+netdev_features_t mpnic_features_check(struct sk_buff *skb,
+				       struct net_device *dev,
+				       netdev_features_t features);
 int mpnic_alloc_napi_vectors(struct mpnic_net *mpn);
 void mpnic_free_napi_vectors(struct mpnic_net *mpn);
 void mpnic_stats_attach_rings(struct mpnic_net *mpn);
