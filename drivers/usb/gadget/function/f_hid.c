@@ -618,7 +618,7 @@ static void get_report_workqueue_handler(struct work_struct *work)
 			 */
 			req->buf = ptr->report_data.data;
 		} else {
-			/* If there are no prevoiusly sent reports send empty report */
+			/* If there are no previously sent reports send empty report */
 			req->buf = hidg->get_report.data;
 			memset(req->buf, 0x0, req->length);
 		}

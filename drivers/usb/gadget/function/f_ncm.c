@@ -612,7 +612,7 @@ static void ncm_notify(struct f_ncm *ncm)
 	 *
 	 * If ncm_notify() is called before the second (CONNECT)
 	 * notification is sent, then it will reset to send the SPEED
-	 * notificaion again (and again, and again), but it's not a problem
+	 * notification again (and again, and again), but it's not a problem
 	 */
 	ncm->notify_state = NCM_NOTIFY_SPEED;
 	ncm_do_notify(ncm);

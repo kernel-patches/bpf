@@ -557,7 +557,7 @@ printer_read(struct file *fd, char __user *buf, size_t len, loff_t *ptr)
 
 		/* If we not returning all the data left in this RX request
 		 * buffer then adjust the amount of data left in the buffer.
-		 * Othewise if we are done with this RX request buffer then
+		 * Otherwise if we are done with this RX request buffer then
 		 * requeue it to get any incoming data from the USB host.
 		 */
 		if (size < current_rx_bytes) {

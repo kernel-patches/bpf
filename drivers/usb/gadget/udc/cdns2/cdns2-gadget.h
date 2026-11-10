@@ -540,8 +540,8 @@ struct cdns2_ring {
  * @trb_burst_size: number of burst used in TRB.
  * @skip: Sometimes the controller cannot process isochronous endpoint ring
  *        quickly enough and it will miss some isoc tds on the ring and
- *        generate ISO transmition error.
- *        Driver sets skip flag when receive a ISO transmition error and
+ *        generate ISO transmission error.
+ *        Driver sets skip flag when receive a ISO transmission error and
  *        process the missed TDs on the endpoint ring.
  * @wa1_set: use WA1.
  * @wa1_trb: TRB assigned to WA1.

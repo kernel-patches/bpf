@@ -1014,7 +1014,7 @@ EXPORT_SYMBOL_GPL(usb_gadget_giveback_request);
 /* ------------------------------------------------------------------------- */
 
 /**
- * gadget_find_ep_by_name - returns ep whose name is the same as sting passed
+ * gadget_find_ep_by_name - returns ep whose name is the same as string passed
  *	in second parameter or NULL if searched endpoint not found
  * @g: controller to check for quirk
  * @name: name of searched endpoint
@@ -1525,7 +1525,7 @@ EXPORT_SYMBOL_GPL(usb_add_gadget_udc_release);
 /**
  * usb_get_gadget_udc_name - get the name of the first UDC controller
  * This functions returns the name of the first UDC controller in the system.
- * Please note that this interface is usefull only for legacy drivers which
+ * Please note that this interface is useful only for legacy drivers which
  * assume that there is only one UDC controller in the system and they need to
  * get its name before initialization. There is no guarantee that the UDC
  * of the returned name will be still available, when gadget driver registers

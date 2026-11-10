@@ -25,7 +25,7 @@
 
 /**
  * struct usb_os_string - represents OS String to be reported by a gadget
- * @bLength: total length of the entire descritor, always 0x12
+ * @bLength: total length of the entire descriptor, always 0x12
  * @bDescriptorType: USB_DT_STRING
  * @qwSignature: the OS String proper
  * @bMS_VendorCode: code used by the host for subsequent requests
@@ -1556,7 +1556,7 @@ static void composite_setup_complete(struct usb_ep *ep, struct usb_request *req)
 				req->status, req->actual, req->length);
 
 	/*
-	 * REVIST The same ep0 requests are shared with function drivers
+	 * REVISIT The same ep0 requests are shared with function drivers
 	 * so they don't have to maintain the same ->complete() stubs.
 	 *
 	 * Because of that, we need to check for the validity of ->context

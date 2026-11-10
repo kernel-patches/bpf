@@ -731,7 +731,7 @@ static int rndis_keepalive_response(struct rndis_params *params,
 
 
 /*
- * Device to Host Comunication
+ * Device to Host Communication
  */
 static int rndis_indicate_status_msg(struct rndis_params *params, u32 status)
 {

@@ -213,7 +213,7 @@ struct qe_frame{
 #define RX_ER_CRC              0x04000000 /* Received packet with CRC error */
 #define RX_ER_OVERUN           0x02000000 /* Over-run occurred on reception */
 #define RX_ER_PID              0x01000000 /* Wrong PID received */
-/* Tranmit side */
+/* Transmit side */
 #define TX_ER_NAK              0x00800000 /* Received NAK handshake */
 #define TX_ER_STALL            0x00400000 /* Received STALL handshake */
 #define TX_ER_TIMEOUT          0x00200000 /* Transmit time out */

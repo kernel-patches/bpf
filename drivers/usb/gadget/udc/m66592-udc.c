@@ -599,7 +599,7 @@ static void init_controller(struct m66592 *m66592)
 		m66592_bclr(m66592, M66592_DPRPU, M66592_SYSCFG);
 		m66592_bset(m66592, M66592_USBE, M66592_SYSCFG);
 
-		/* This is a workaound for SH7722 2nd cut */
+		/* This is a workaround for SH7722 2nd cut */
 		m66592_bset(m66592, 0x8000, M66592_DVSTCTR);
 		m66592_bset(m66592, 0x1000, M66592_TESTMODE);
 		m66592_bclr(m66592, 0x8000, M66592_DVSTCTR);

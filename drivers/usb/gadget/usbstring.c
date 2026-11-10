@@ -25,7 +25,7 @@
  * string descriptor in utf16-le.
  * Returns length of descriptor (always even) or negative errno
  *
- * If your driver needs stings in multiple languages, you'll probably
+ * If your driver needs strings in multiple languages, you'll probably
  * "switch (wIndex) { ... }"  in your ep0 string descriptor logic,
  * using this routine after choosing which set of UTF-8 strings to use.
  * Note that US-ASCII is a strict subset of UTF-8; any string bytes with

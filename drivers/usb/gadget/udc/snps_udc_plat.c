@@ -36,7 +36,7 @@ static void stop_udc(struct udc *udc)
 
 	spin_lock(&udc->lock);
 
-	/* Flush the receieve fifo */
+	/* Flush the receive fifo */
 	reg = readl(&udc->regs->ctl);
 	reg |= AMD_BIT(UDC_DEVCTL_SRX_FLUSH);
 	writel(reg, &udc->regs->ctl);

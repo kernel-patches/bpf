@@ -470,7 +470,7 @@ static int gr_add_dma_desc(struct gr_ep *ep, struct gr_request *req,
  * The first descriptor in the chain is enabled, the rest disabled. The
  * interrupt handler will later enable them one by one when needed so we can
  * find out when the transfer is finished. For OUT endpoints, all descriptors
- * therefore generate interrutps.
+ * therefore generate interrupts.
  */
 static int gr_setup_out_desc_list(struct gr_ep *ep, struct gr_request *req,
 				  gfp_t gfp_flags)

@@ -652,7 +652,7 @@ static int sudmac_alloc_channel(struct r8a66597 *r8a66597,
 		change_bfre_mode(r8a66597, ep->pipenum, 1);
 	}
 
-	/* set r8a66597_ep paramters */
+	/* set r8a66597_ep parameters */
 	ep->use_dma = 1;
 	ep->dma = dma;
 	ep->fifoaddr = D0FIFO;

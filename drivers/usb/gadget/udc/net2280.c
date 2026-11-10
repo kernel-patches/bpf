@@ -1938,7 +1938,7 @@ static void defect7374_disable_data_eps(struct net2280 *dev)
 	/*
 	 * For Defect 7374, disable data EPs (and more):
 	 *  - This phase undoes the earlier phase of the Defect 7374 workaround,
-	 *    returing ep regs back to normal.
+	 *    returning ep regs back to normal.
 	 */
 	struct net2280_ep *ep;
 	int i;

@@ -129,7 +129,7 @@ static void u_audio_set_fback_frequency(enum usb_device_speed speed,
 		 * in samples/microframe.
 		 * Format is encoded in Q12.13 fitted into four bytes so that
 		 * the binary point is located between the second and the third
-		 * byte fromat (that is Q16.16)
+		 * byte format (that is Q16.16)
 		 *
 		 * ff = (freq << 16) / 8000
 		 *
