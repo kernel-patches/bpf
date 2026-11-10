@@ -515,12 +515,21 @@ static void dpti_config(void *info)
 	wrmsrq(MSR_IA32_THERM_INTERRUPT, msr_val);
 }
 
+/**
+ * struct dpti_pkg - Per-package DPTI state
+ * @owner:	CPU currently programmed to receive the package-level
+ *		interrupt, or nr_cpu_ids when the package has no owner.
+ */
+struct dpti_pkg {
+	unsigned int owner;
+};
+
 /*
  * Accessed from CPU hotplug callbacks and from code that runs while CPU
  * hotplug is inactive: the init and cleanup paths as well as syscore callbacks.
  * No extra locking needed.
  */
-static unsigned int *dpti_owner_cpus;
+static struct dpti_pkg *dpti_pkgs;
 
 /*
  * Set by the syscore shutdown callback before it disables the directed
@@ -541,7 +550,7 @@ static bool dpti_supported(void)
 	if (!boot_cpu_has(X86_FEATURE_DPTI))
 		return false;
 
-	if (!dpti_owner_cpus)
+	if (!dpti_pkgs)
 		return false;
 
 	return true;
@@ -562,14 +571,14 @@ static void dpti_clear_all(void)
 		return;
 
 	/*
-	 * No need to reset the owners: callers free dpti_owner_cpus or have shut
+	 * No need to reset the owners: callers free dpti_pkgs[] or have shut
 	 * DPTI down.
 	 */
 	for (i = 0; i < topology_max_packages(); i++) {
-		if (dpti_owner_cpus[i] == nr_cpu_ids)
+		if (dpti_pkgs[i].owner == nr_cpu_ids)
 			continue;
 
-		smp_call_function_single(dpti_owner_cpus[i], dpti_config,
+		smp_call_function_single(dpti_pkgs[i].owner, dpti_config,
 					 &enable, true);
 	}
 }
@@ -590,7 +599,7 @@ static int dpti_online(unsigned int cpu)
 		return 0;
 
 	/* Another CPU in this package already owns the directed interrupt. */
-	if (dpti_owner_cpus[pkg_id] != nr_cpu_ids)
+	if (dpti_pkgs[pkg_id].owner != nr_cpu_ids)
 		return 0;
 
 	thermal_clear_package_intr_status(PACKAGE_LEVEL,
@@ -598,7 +607,7 @@ static int dpti_online(unsigned int cpu)
 
 	dpti_config(&enable);
 	if (!dpti_wait_for_ack()) {
-		dpti_owner_cpus[pkg_id] = cpu;
+		dpti_pkgs[pkg_id].owner = cpu;
 		return 0;
 	}
 
@@ -626,7 +635,7 @@ static void dpti_offline(unsigned int cpu)
 		return;
 
 	/* Not the owner of the directed interrupt. */
-	if (dpti_owner_cpus[pkg_id] != cpu)
+	if (dpti_pkgs[pkg_id].owner != cpu)
 		return;
 
 	/*
@@ -673,7 +682,7 @@ static void dpti_offline(unsigned int cpu)
 	 */
 	dpti_config(&enable);
 
-	dpti_owner_cpus[pkg_id] = (new_cpu < nr_cpu_ids) ? new_cpu : nr_cpu_ids;
+	dpti_pkgs[pkg_id].owner = (new_cpu < nr_cpu_ids) ? new_cpu : nr_cpu_ids;
 }
 
 /*
@@ -720,13 +729,12 @@ static __init void dpti_init(void)
 	if (!boot_cpu_has(X86_FEATURE_DPTI))
 		return;
 
-	dpti_owner_cpus = kmalloc_objs(*dpti_owner_cpus,
-				       topology_max_packages());
-	if (!dpti_owner_cpus)
+	dpti_pkgs = kmalloc_objs(*dpti_pkgs, topology_max_packages());
+	if (!dpti_pkgs)
 		return;
 
 	for (i = 0; i < topology_max_packages(); i++)
-		dpti_owner_cpus[i] = nr_cpu_ids;
+		dpti_pkgs[i].owner = nr_cpu_ids;
 
 	register_syscore(&dpti_syscore);
 }
@@ -738,8 +746,8 @@ static void dpti_cleanup(void)
 
 	unregister_syscore(&dpti_syscore);
 	dpti_clear_all();
-	kfree(dpti_owner_cpus);
-	dpti_owner_cpus = NULL;
+	kfree(dpti_pkgs);
+	dpti_pkgs = NULL;
 }
 
 /* Add/Remove thermal_throttle interface for CPU device: */
