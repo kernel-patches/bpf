@@ -302,6 +302,24 @@ sit9531x_dpll_input_pin_direction_get(const struct dpll_pin *pin,
 	return 0;
 }
 
+/* Report the first supported-frequencies-hz entry */
+static int
+sit9531x_dpll_input_pin_frequency_get(const struct dpll_pin *pin,
+				      void *pin_priv,
+				      const struct dpll_device *dpll,
+				      void *dpll_priv, u64 *frequency,
+				      struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll_pin *dpin = pin_priv;
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	const struct sit9531x_ref *ref;
+
+	ref = sit9531x_ref_state_get(sitdpll->dev, dpin->id);
+	*frequency = ref->freq;
+
+	return 0;
+}
+
 static int
 sit9531x_dpll_input_pin_state_on_dpll_get(const struct dpll_pin *pin,
 					  void *pin_priv,
@@ -471,6 +489,20 @@ sit9531x_dpll_input_pin_prio_set(const struct dpll_pin *pin, void *pin_priv,
 
 static const struct dpll_pin_ops sit9531x_dpll_input_pin_ops = {
 	.direction_get		= sit9531x_dpll_input_pin_direction_get,
+	.frequency_get		= sit9531x_dpll_input_pin_frequency_get,
+	.state_on_dpll_get	= sit9531x_dpll_input_pin_state_on_dpll_get,
+	.state_on_dpll_set	= sit9531x_dpll_input_pin_state_on_dpll_set,
+	.operstate_on_dpll_get	= sit9531x_dpll_input_pin_operstate_on_dpll_get,
+	.prio_get		= sit9531x_dpll_input_pin_prio_get,
+	.prio_set		= sit9531x_dpll_input_pin_prio_set,
+};
+
+/*
+ * For an input with no supported-frequencies-hz: the core fails a whole pin
+ * dump if any callback returns an error.
+ */
+static const struct dpll_pin_ops sit9531x_dpll_input_pin_norate_ops = {
+	.direction_get		= sit9531x_dpll_input_pin_direction_get,
 	.state_on_dpll_get	= sit9531x_dpll_input_pin_state_on_dpll_get,
 	.state_on_dpll_set	= sit9531x_dpll_input_pin_state_on_dpll_set,
 	.operstate_on_dpll_get	= sit9531x_dpll_input_pin_operstate_on_dpll_get,
@@ -483,6 +515,13 @@ static const struct dpll_pin_ops sit9531x_dpll_input_pin_ops = {
  * reference, so the pin has no state setter and no priority.
  */
 static const struct dpll_pin_ops sit9531x_dpll_input_pin_manual_ops = {
+	.direction_get		= sit9531x_dpll_input_pin_direction_get,
+	.frequency_get		= sit9531x_dpll_input_pin_frequency_get,
+	.state_on_dpll_get	= sit9531x_dpll_input_pin_state_on_dpll_get,
+	.operstate_on_dpll_get	= sit9531x_dpll_input_pin_operstate_on_dpll_get,
+};
+
+static const struct dpll_pin_ops sit9531x_dpll_input_pin_norate_manual_ops = {
 	.direction_get		= sit9531x_dpll_input_pin_direction_get,
 	.state_on_dpll_get	= sit9531x_dpll_input_pin_state_on_dpll_get,
 	.operstate_on_dpll_get	= sit9531x_dpll_input_pin_operstate_on_dpll_get,
@@ -518,6 +557,7 @@ sit9531x_dpll_xo_pin_state_on_dpll_get(const struct dpll_pin *pin,
 
 static const struct dpll_pin_ops sit9531x_dpll_xo_pin_ops = {
 	.direction_get		= sit9531x_dpll_input_pin_direction_get,
+	.frequency_get		= sit9531x_dpll_input_pin_frequency_get,
 	.state_on_dpll_get	= sit9531x_dpll_xo_pin_state_on_dpll_get,
 };
 
@@ -533,23 +573,97 @@ sit9531x_dpll_output_pin_direction_get(const struct dpll_pin *pin,
 	return 0;
 }
 
+/*
+ * Report Fvco / DIVO, or the cached rate when the divider chain does not
+ * resolve.
+ */
+static int
+sit9531x_dpll_output_pin_frequency_get(const struct dpll_pin *pin,
+				       void *pin_priv,
+				       const struct dpll_device *dpll,
+				       void *dpll_priv, u64 *frequency,
+				       struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll_pin *dpin = pin_priv;
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+	int rc;
+
+	mutex_lock(&sitdev->multiop_lock);
+	rc = sit9531x_output_freq_get(sitdev, dpin->id, frequency);
+	if (rc == -ENODATA)
+		*frequency = sit9531x_out_state_get(sitdev, dpin->id)->freq;
+	mutex_unlock(&sitdev->multiop_lock);
+
+	return rc == -ENODATA ? 0 : rc;
+}
+
+static int
+sit9531x_dpll_output_pin_frequency_set(const struct dpll_pin *pin,
+				       void *pin_priv,
+				       const struct dpll_device *dpll,
+				       void *dpll_priv, u64 frequency,
+				       struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll_pin *dpin = pin_priv;
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+	bool moved = false;
+	u64 was, hz;
+	u8 actual_pll;
+	int rc;
+
+	actual_pll = sitdev->out[dpin->id].pll_idx;
+
+	mutex_lock(&sitdev->multiop_lock);
+	was = sitdev->out[dpin->id].freq;
+	rc = sit9531x_output_freq_set(sitdev, dpin->id, actual_pll,
+				      frequency);
+	if (rc) {
+		if (!sit9531x_output_freq_get(sitdev, dpin->id, &hz))
+			moved |= hz != was;
+	}
+	mutex_unlock(&sitdev->multiop_lock);
+
+	if (rc) {
+		struct dpll_pin *dpll_pin;
+
+		NL_SET_ERR_MSG(extack, "Output frequency set failed");
+		/* The core notifies only a request that succeeded */
+		dpll_pin = READ_ONCE(dpin->dpll_pin);
+		if (moved && dpll_pin)
+			__dpll_pin_change_ntf(dpll_pin);
+	}
+
+	return rc;
+}
+
 static const struct dpll_pin_ops sit9531x_dpll_output_pin_ops = {
 	.direction_get		= sit9531x_dpll_output_pin_direction_get,
+	.frequency_get		= sit9531x_dpll_output_pin_frequency_get,
+	.frequency_set		= sit9531x_dpll_output_pin_frequency_set,
 };
 
 const struct dpll_pin_ops *
 sit9531x_dpll_pin_ops_get(const struct sit9531x_dpll_pin *pin)
 {
 	const struct sit9531x_dev *sitdev = pin->dpll->dev;
+	bool manual;
 
 	if (!sit9531x_dpll_is_input_pin(pin))
 		return &sit9531x_dpll_output_pin_ops;
 	if (sit9531x_dpll_is_xo_pin(pin))
 		return &sit9531x_dpll_xo_pin_ops;
 	/* Read once at probe, before any pin is registered. */
-	if (sit9531x_chan_state_get(sitdev, pin->dpll->id)->manual_input)
-		return &sit9531x_dpll_input_pin_manual_ops;
-	return &sit9531x_dpll_input_pin_ops;
+	manual = sit9531x_chan_state_get(sitdev, pin->dpll->id)->manual_input;
+	/*
+	 * Set before any pin of the input is published and not written again.
+	 */
+	if (!sit9531x_ref_state_get(sitdev, pin->id)->freq)
+		return manual ? &sit9531x_dpll_input_pin_norate_manual_ops :
+				&sit9531x_dpll_input_pin_norate_ops;
+	return manual ? &sit9531x_dpll_input_pin_manual_ops :
+			&sit9531x_dpll_input_pin_ops;
 }
 
 /* Caller must hold sitdev->multiop_lock. */

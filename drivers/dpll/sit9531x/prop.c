@@ -233,13 +233,31 @@ sit9531x_pin_props_get(struct sit9531x_dev *sitdev,
 		goto err_alloc_ranges;
 	}
 
-	/* The first listed rate seeds the input's rate */
+	/*
+	 * The driver does not read an input's rate; the first listed rate seeds
+	 * it.
+	 */
 	if (num_freqs > 0 && dir == DPLL_PIN_DIRECTION_INPUT && !xo)
 		curr_freq = freqs[0];
 
 skip_fwnode_props:
 	if (sync_in || sync_out)
 		return props;
+
+	/*
+	 * Read the divider into the cached output rate used by phase adjust;
+	 * -ENODATA is an unprogrammed divider or unknown VCO rate.
+	 */
+	if (dir == DPLL_PIN_DIRECTION_OUTPUT &&
+	    index < sitdev->info->num_outputs) {
+		u64 hw_freq;
+
+		mutex_lock(&sitdev->multiop_lock);
+		rc = sit9531x_output_freq_get(sitdev, index, &hw_freq);
+		mutex_unlock(&sitdev->multiop_lock);
+		if (rc && rc != -ENODATA)
+			goto err_alloc_ranges;
+	}
 
 	/*
 	 * An output with no listed rates gets one wide range, as the setter
@@ -251,8 +269,12 @@ skip_fwnode_props:
 		goto err_alloc_ranges;
 	}
 
-	/* Set after the last allocation that can fail */
-	if (curr_freq && dir == DPLL_PIN_DIRECTION_INPUT)
+	/*
+	 * Set after the last allocation that can fail, and only once, as pins
+	 * of other DPLLs on this input may already be published.
+	 */
+	if (curr_freq && dir == DPLL_PIN_DIRECTION_INPUT &&
+	    !sitdev->ref[index].freq)
 		sitdev->ref[index].freq = curr_freq;
 
 	j = 0;

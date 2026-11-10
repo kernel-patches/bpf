@@ -212,20 +212,25 @@ struct sit9531x_chan {
  * @irq: optional INTRB IRQ, 0 if not wired
  * @intsync_src: PLL sourcing INTSYNC, or -1
  * @irq_ack_fails: consecutive failed INTRB acknowledgements
+ * @fvco_band_warned: bit per PLL warned for Fref * DIVN outside its VCO
+ *   band; written under @multiop_lock
  * @loops_open: output loops not yet re-locked
+ * @flush_ctrl_pending: @flush_ctrl still to be written back
+ * @flush_ctrl: trigger register value to restore
+ * @flush_arm_pending: bit per PLL whose flush enable is still to be restored
+ * @flush_armed: of those, the PLLs the profile arms
  */
 struct sit9531x_dev {
 	struct device			*dev;
 	struct i2c_client		*client;
 	struct regmap			*regmap;
 	const struct sit9531x_chip_info	*info;
-	/* Serializes multi-step register sequences */
 	struct mutex			multiop_lock;
-	/* Serializes a page select and the transfer it is for */
 	struct mutex			page_lock;
 	int				page;
 
 	u8			irq_ack_fails;
+	u8			fvco_band_warned;
 	struct sit9531x_ref	ref[SIT9531X_MAX_INPUTS + 1]; /* +1 for xtal */
 	struct sit9531x_out	out[SIT9531X_MAX_OUTPUTS];
 	struct sit9531x_chan	chan[SIT9531X_NUM_PLLS];
@@ -245,6 +250,10 @@ struct sit9531x_dev {
 	s8			intsync_src;
 
 	bool			loops_open;
+	bool			flush_ctrl_pending;
+	u8			flush_ctrl;
+	u8			flush_arm_pending;
+	u8			flush_armed;
 };
 
 int sit9531x_read_u8(struct sit9531x_dev *sitdev, unsigned int reg,
@@ -271,6 +280,11 @@ int sit9531x_input_prio_remove(struct sit9531x_dev *sitdev, u8 pll_idx,
 			       u8 input_idx);
 int sit9531x_input_prio_add(struct sit9531x_dev *sitdev, u8 pll_idx,
 			    u8 input_idx);
+
+int sit9531x_output_freq_set(struct sit9531x_dev *sitdev, u8 out_idx,
+			     u8 pll_idx, u64 frequency);
+int sit9531x_output_freq_get(struct sit9531x_dev *sitdev, u8 out_idx,
+			     u64 *frequency);
 
 static inline u8 sit9531x_pll_page(u8 pll_idx)
 {
