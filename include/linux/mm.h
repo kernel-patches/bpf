@@ -2249,9 +2249,36 @@ vm_fault_t finish_fault(struct vm_fault *vmf);
  *   back into memory.
  */
 
-/* 127: arbitrary random number, small enough to assemble well */
-#define folio_ref_zero_or_close_to_overflow(folio) \
-	((unsigned int) folio_ref_count(folio) + 127u <= 127u)
+/* Leave separate reserves for administrators and concurrent reference gains. */
+#define FOLIO_REF_COUNT_LIMIT		(INT_MAX - (1U << 26))
+#define FOLIO_REF_COUNT_ADMIN_LIMIT	(INT_MAX - (1U << 25))
+
+bool __folio_ref_count_over_limit(unsigned int ref_count);
+
+/**
+ * folio_ref_count_over_limit - Check whether to refuse more folio references.
+ * @folio: The folio.
+ *
+ * Check before adding page table mappings or other significant refcount users
+ * to pagecache folios (!hugetlb), either before acquiring references or
+ * afterwards with rollback if the operation is refused.
+ *
+ * Checking other folios does no harm.
+ *
+ * This check is an approximation; we leave some headroom such that concurrent
+ * increments, batches, temporary references, or other bounded refcount
+ * consumers are not a problem.
+ *
+ * Return: True if the caller should refuse the operation, false otherwise.
+ */
+static inline bool folio_ref_count_over_limit(const struct folio *folio)
+{
+	const unsigned int ref_count = folio_ref_count(folio);
+
+	if (likely(ref_count < FOLIO_REF_COUNT_LIMIT))
+		return false;
+	return __folio_ref_count_over_limit(ref_count);
+}
 
 /**
  * folio_get - Increment the reference count on a folio.
@@ -2263,7 +2290,7 @@ vm_fault_t finish_fault(struct vm_fault *vmf);
  */
 static inline void folio_get(struct folio *folio)
 {
-	VM_BUG_ON_FOLIO(folio_ref_zero_or_close_to_overflow(folio), folio);
+	VM_WARN_ON_FOLIO(folio_ref_count(folio) <= 0, folio);
 	folio_ref_inc(folio);
 }
 
