@@ -85,6 +85,7 @@ imx6qdl-dhcom-picoitx-overlay-626-100-x2-ch101olhlwh-dtbs := \
 	imx6qdl-dhcom-picoitx-overlay-626-100-x2-ch101olhlwh.dtbo
 
 dtb-$(CONFIG_SOC_IMX6Q) += \
+	imx-hdmi.dtbo \
 	imx6dl-alti6p.dtb \
 	imx6dl-apf6dev.dtb \
 	imx6dl-aristainetos_4.dtb \
