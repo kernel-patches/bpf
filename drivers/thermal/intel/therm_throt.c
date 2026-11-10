@@ -578,6 +578,13 @@ static void config_directed_thermal_pkg_intr(void *info)
  */
 static unsigned int *directed_intr_handler_cpus;
 
+/*
+ * Set by the syscore shutdown callback before it disables the directed
+ * interrupt, so that no CPU hotplug operation enables it again on the way to
+ * kexec.
+ */
+static bool directed_pkg_intr_shut_down;
+
 static bool directed_thermal_pkg_intr_supported(void)
 {
 	if (!boot_cpu_has(X86_FEATURE_DPTI))
@@ -603,6 +610,10 @@ static void disable_directed_thermal_pkg_intr_all(void)
 	if (!directed_thermal_pkg_intr_supported())
 		return;
 
+	/*
+	 * No need to reset the handlers: callers free directed_intr_handler_cpus
+	 * or have shut DPTI down.
+	 */
 	for (i = 0; i < topology_max_packages(); i++) {
 		if (directed_intr_handler_cpus[i] == nr_cpu_ids)
 			continue;
@@ -624,6 +635,9 @@ static int enable_directed_thermal_pkg_intr(unsigned int cpu)
 	pkg_id = topology_logical_package_id(cpu);
 	if (pkg_id >= topology_max_packages())
 		return -EINVAL;
+
+	if (directed_pkg_intr_shut_down)
+		return 0;
 
 	/* Another CPU in this package already handles the directed interrupt. */
 	if (directed_intr_handler_cpus[pkg_id] != nr_cpu_ids)
@@ -660,6 +674,9 @@ static void disable_directed_thermal_pkg_intr(unsigned int cpu)
 
 	pkg_id = topology_logical_package_id(cpu);
 	if (pkg_id >= topology_max_packages())
+		return;
+
+	if (directed_pkg_intr_shut_down)
 		return;
 
 	/* Not the CPU handling the directed interrupt. */
@@ -738,6 +755,8 @@ static int directed_pkg_intr_syscore_suspend(void *data)
 
 static void directed_pkg_intr_syscore_shutdown(void *data)
 {
+	directed_pkg_intr_shut_down = true;
+
 	disable_directed_thermal_pkg_intr_all();
 }
 
