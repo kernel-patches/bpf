@@ -166,7 +166,7 @@ static void fsl_otg_drv_vbus(struct otg_fsm *fsm, int on)
 }
 
 /*
- * Pull-up D+, signalling connect by periperal. Also used in
+ * Pull-up D+, signalling connect by peripheral. Also used in
  * data-line pulsing in SRP
  */
 static void fsl_otg_loc_conn(struct otg_fsm *fsm, int on)

@@ -202,7 +202,7 @@ static void __usb_phy_get_charger_type(struct usb_phy *usb_phy)
  * @state: the cable state
  * @data: private data
  *
- * Determin the charger type from extcon subsystem which also means the
+ * Determine the charger type from extcon subsystem which also means the
  * charger state has been chaned, then we should notify this event.
  */
 static int usb_phy_get_charger_type(struct notifier_block *nb,
