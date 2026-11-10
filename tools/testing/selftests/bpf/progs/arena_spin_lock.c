@@ -10,7 +10,7 @@
 struct {
 	__uint(type, BPF_MAP_TYPE_ARENA);
 	__uint(map_flags, BPF_F_MMAPABLE);
-	__uint(max_entries, 100); /* number of pages */
+	__uint(max_entries, 256); /* number of pages, including qnodes */
 #ifdef __TARGET_ARCH_arm64
 	__ulong(map_extra, 0x1ull << 32); /* start of mmap() region */
 #else
