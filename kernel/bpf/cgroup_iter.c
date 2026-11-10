@@ -365,6 +365,16 @@ __bpf_kfunc struct cgroup_subsys_state *bpf_iter_css_next(struct bpf_iter_css *i
 		kit->pos = kit->pos ? kit->pos->parent : kit->start;
 	}
 
+	/*
+	 * A NULL position means either "not started yet" or "drained" for
+	 * css_next_*(), and all of them restart from @start when passed a
+	 * NULL position.  The verifier relies on an iterator which returned
+	 * NULL to keep returning NULL (see process_iter_next_call()), so
+	 * clear @start on exhaustion to make the next call return NULL.
+	 */
+	if (!kit->pos)
+		kit->start = NULL;
+
 	return kit->pos;
 }
 
