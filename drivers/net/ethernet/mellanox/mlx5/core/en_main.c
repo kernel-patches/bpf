@@ -5917,7 +5917,7 @@ static int mlx5e_queue_start(struct net_device *dev,
 	return 0;
 }
 
-static bool mlx5e_has_leased_rxqs(struct net_device *netdev)
+bool mlx5e_has_leased_rxqs(struct net_device *netdev)
 {
 	for (u32 i = 0; i < netdev->real_num_rx_queues; i++)
 		if (READ_ONCE(__netif_get_rx_queue(netdev, i)->lease))

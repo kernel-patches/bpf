@@ -32,6 +32,7 @@
 
 #include <linux/dim.h>
 #include <linux/ethtool_netlink.h>
+#include <linux/mlx5/data_direct.h>
 #include <net/netdev_queues.h>
 
 #include "en.h"
@@ -40,7 +41,9 @@
 #include "en/port.h"
 #include "en/params.h"
 #include "en/ptp.h"
+#include "en_rep.h"
 #include "lib/clock.h"
+#include "lib/mlx5.h"
 #include "en/fs_ethtool.h"
 
 #define LANES_UNKNOWN		 0
@@ -2407,7 +2410,65 @@ static int set_pflag_tx_port_ts(struct net_device *netdev, bool enable)
 
 static int set_pflag_data_direct(struct net_device *netdev, bool enable)
 {
-	return -EOPNOTSUPP;
+	struct mlx5e_priv *priv = netdev_priv(netdev);
+	struct mlx5_core_dev *mdev = priv->mdev;
+	struct mlx5e_params new_params;
+	unsigned int i;
+
+	if (enable) {
+		if (!mlx5_data_direct_supported(mdev) ||
+		    !MLX5_CAP_GEN(mdev, crossing_vhca_mkey)) {
+			netdev_err(netdev, "data_direct is not supported by the device\n");
+			return -EOPNOTSUPP;
+		}
+
+		if (!MLX5_CAP_GEN(mdev, shampo)) {
+			netdev_err(netdev, "data_direct requires SHAMPO (Header-Data Split) support\n");
+			return -EOPNOTSUPP;
+		}
+
+		if (mlx5_get_sd(mdev)) {
+			netdev_err(netdev, "data_direct is not supported with socket direct\n");
+			return -EOPNOTSUPP;
+		}
+
+		if (mlx5e_is_uplink_rep(priv)) {
+			netdev_err(netdev, "data_direct is not supported for uplink representors\n");
+			return -EOPNOTSUPP;
+		}
+
+		if (!mlx5_data_direct_get_dev(mdev->data_direct)) {
+			netdev_err(netdev, "data_direct device not bound\n");
+			return -ENODEV;
+		}
+
+		if (mlx5e_has_leased_rxqs(netdev)) {
+			netdev_err(netdev, "data_direct is not supported with leased RX queues\n");
+			return -EBUSY;
+		}
+	}
+
+	/* Changing the flag reopens the channels with a different DMA device,
+	 * which would break the memory providers installed on the RX queues
+	 * (devmem or io_uring zcrx) and the dmabufs bound for TX.
+	 */
+	for (i = 0; i < netdev->real_num_rx_queues; i++) {
+		if (netif_rxq_has_unreadable_mp(netdev, i)) {
+			netdev_err(netdev, "Can't change data_direct while rxq %u has a memory provider\n",
+				   i);
+			return -EBUSY;
+		}
+	}
+
+	if (netdev_has_dmabuf_binding(netdev, NULL)) {
+		netdev_err(netdev, "Can't change data_direct while dmabufs are bound\n");
+		return -EBUSY;
+	}
+
+	new_params = priv->channels.params;
+	MLX5E_SET_PFLAG(&new_params, MLX5E_PFLAG_DATA_DIRECT, enable);
+
+	return mlx5e_safe_switch_params(priv, &new_params, NULL, NULL, true);
 }
 
 static const struct pflag_desc mlx5e_priv_flags[MLX5E_NUM_PFLAGS] = {
