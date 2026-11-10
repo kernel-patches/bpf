@@ -477,65 +477,6 @@ static int __init int_pln_enable_setup(char *s)
 __setup("int_pln_enable", int_pln_enable_setup);
 
 #ifdef CONFIG_SYSFS
-/* Add/Remove thermal_throttle interface for CPU device: */
-static int thermal_throttle_add_dev(struct device *dev, unsigned int cpu)
-{
-	int err;
-	struct cpuinfo_x86 *c = &cpu_data(cpu);
-
-	err = sysfs_create_group(&dev->kobj, &thermal_attr_group);
-	if (err)
-		return err;
-
-	if (cpu_has(c, X86_FEATURE_PLN) && int_pln_enable) {
-		err = sysfs_add_file_to_group(&dev->kobj,
-					      &dev_attr_core_power_limit_count.attr,
-					      thermal_attr_group.name);
-		if (err)
-			goto del_group;
-	}
-
-	if (cpu_has(c, X86_FEATURE_PTS)) {
-		err = sysfs_add_file_to_group(&dev->kobj,
-					      &dev_attr_package_throttle_count.attr,
-					      thermal_attr_group.name);
-		if (err)
-			goto del_group;
-
-		err = sysfs_add_file_to_group(&dev->kobj,
-					      &dev_attr_package_throttle_max_time_ms.attr,
-					      thermal_attr_group.name);
-		if (err)
-			goto del_group;
-
-		err = sysfs_add_file_to_group(&dev->kobj,
-					      &dev_attr_package_throttle_total_time_ms.attr,
-					      thermal_attr_group.name);
-		if (err)
-			goto del_group;
-
-		if (cpu_has(c, X86_FEATURE_PLN) && int_pln_enable) {
-			err = sysfs_add_file_to_group(&dev->kobj,
-					&dev_attr_package_power_limit_count.attr,
-					thermal_attr_group.name);
-			if (err)
-				goto del_group;
-		}
-	}
-
-	return 0;
-
-del_group:
-	sysfs_remove_group(&dev->kobj, &thermal_attr_group);
-
-	return err;
-}
-
-static void thermal_throttle_remove_dev(struct device *dev)
-{
-	sysfs_remove_group(&dev->kobj, &thermal_attr_group);
-}
-
 static int check_directed_thermal_pkg_intr_ack(void)
 {
 	unsigned int count = 15000;
@@ -800,6 +741,65 @@ static void cleanup_directed_pkg_thermal_intr(void)
 	disable_directed_thermal_pkg_intr_all();
 	kfree(directed_intr_handler_cpus);
 	directed_intr_handler_cpus = NULL;
+}
+
+/* Add/Remove thermal_throttle interface for CPU device: */
+static int thermal_throttle_add_dev(struct device *dev, unsigned int cpu)
+{
+	int err;
+	struct cpuinfo_x86 *c = &cpu_data(cpu);
+
+	err = sysfs_create_group(&dev->kobj, &thermal_attr_group);
+	if (err)
+		return err;
+
+	if (cpu_has(c, X86_FEATURE_PLN) && int_pln_enable) {
+		err = sysfs_add_file_to_group(&dev->kobj,
+					      &dev_attr_core_power_limit_count.attr,
+					      thermal_attr_group.name);
+		if (err)
+			goto del_group;
+	}
+
+	if (cpu_has(c, X86_FEATURE_PTS)) {
+		err = sysfs_add_file_to_group(&dev->kobj,
+					      &dev_attr_package_throttle_count.attr,
+					      thermal_attr_group.name);
+		if (err)
+			goto del_group;
+
+		err = sysfs_add_file_to_group(&dev->kobj,
+					      &dev_attr_package_throttle_max_time_ms.attr,
+					      thermal_attr_group.name);
+		if (err)
+			goto del_group;
+
+		err = sysfs_add_file_to_group(&dev->kobj,
+					      &dev_attr_package_throttle_total_time_ms.attr,
+					      thermal_attr_group.name);
+		if (err)
+			goto del_group;
+
+		if (cpu_has(c, X86_FEATURE_PLN) && int_pln_enable) {
+			err = sysfs_add_file_to_group(&dev->kobj,
+					&dev_attr_package_power_limit_count.attr,
+					thermal_attr_group.name);
+			if (err)
+				goto del_group;
+		}
+	}
+
+	return 0;
+
+del_group:
+	sysfs_remove_group(&dev->kobj, &thermal_attr_group);
+
+	return err;
+}
+
+static void thermal_throttle_remove_dev(struct device *dev)
+{
+	sysfs_remove_group(&dev->kobj, &thermal_attr_group);
 }
 
 /* Get notified when a cpu comes on/off. Be hotplug friendly. */
