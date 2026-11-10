@@ -1822,6 +1822,7 @@ void configfs_unregister_group(struct config_group *group)
 	up_write(&frag->frag_sem);
 
 	inode_lock_nested(d_inode(parent), I_MUTEX_PARENT);
+	inode_lock_nested(d_inode(dentry), I_MUTEX_CHILD);
 	spin_lock(&configfs_dirent_lock);
 	configfs_detach_prep(sd, NULL);
 	spin_unlock(&configfs_dirent_lock);
@@ -1829,6 +1830,7 @@ void configfs_unregister_group(struct config_group *group)
 	configfs_detach_group(dentry);
 	d_inode(dentry)->i_flags |= S_DEAD;
 	dont_mount(dentry);
+	inode_unlock(d_inode(dentry));
 	d_drop(dentry);
 	fsnotify_rmdir(d_inode(parent), dentry);
 	inode_unlock(d_inode(parent));
