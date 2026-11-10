@@ -245,6 +245,23 @@ static int sit9531x_write_pll_close(struct sit9531x_dev *sitdev, u8 pll_idx,
 						 offset), val);
 }
 
+static int sit9531x_update_pll_close(struct sit9531x_dev *sitdev, u8 pll_idx,
+				     u8 offset, u8 mask, u8 val)
+{
+	u8 attempt;
+	int rc;
+
+	for (attempt = 0; attempt < SIT9531X_CLOSE_TRIES; attempt++) {
+		if (attempt)
+			usleep_range(1000, 2000);
+		rc = sit9531x_update_pll_u8(sitdev, pll_idx, offset, mask, val);
+		if (!rc)
+			break;
+	}
+
+	return rc;
+}
+
 static void sit9531x_input_get_regs(const struct sit9531x_dev *sitdev,
 				    u8 index,
 				    unsigned int *force_reg,
@@ -1534,6 +1551,65 @@ static int sit9531x_pll_small_update(struct sit9531x_dev *sitdev, u8 pll_idx)
 				     SIT9531X_SMALL_UPDATE_CMD);
 }
 
+static int sit9531x_pll_small_update_close(struct sit9531x_dev *sitdev,
+					   u8 pll_idx)
+{
+	return sit9531x_write_pll_close(sitdev, pll_idx,
+					SIT9531X_PLL_REG_SMALL_UPDATE,
+					SIT9531X_SMALL_UPDATE_CMD);
+}
+
+/*
+ * Undo a phase flush: restore the trigger select and the flush enable of @plls
+ * from @armed.
+ */
+static int sit9531x_phase_flush_undo(struct sit9531x_dev *sitdev,
+				     bool ctrl_back, u8 ctrl, u8 plls, u8 armed)
+{
+	const u8 en = SIT9531X_PLL_PHFL_ON_DEMAND_EN;
+	int rc = 0, ret;
+	u8 i;
+
+	if (ctrl_back) {
+		rc = sit9531x_write_close(sitdev, SIT9531X_REG_GPIO_FUNC_CTRL1,
+					  ctrl);
+		sitdev->flush_ctrl_pending = !!rc;
+		sitdev->flush_ctrl = ctrl;
+	}
+
+	for (i = 0; i < SIT9531X_NUM_PLLS; i++) {
+		if (!(plls & BIT(i)))
+			continue;
+		ret = sit9531x_update_pll_close(sitdev, i,
+						SIT9531X_PLL_REG_PHFL_CTRL, en,
+						(armed & BIT(i)) ? en : 0);
+		if (!ret)
+			ret = sit9531x_pll_small_update_close(sitdev, i);
+		if (ret) {
+			sitdev->flush_arm_pending |= BIT(i);
+			sitdev->flush_armed &= ~BIT(i);
+			sitdev->flush_armed |= armed & BIT(i);
+			if (!rc)
+				rc = ret;
+		} else {
+			sitdev->flush_arm_pending &= ~BIT(i);
+		}
+	}
+
+	return rc;
+}
+
+static int sit9531x_phase_flush_undo_retry(struct sit9531x_dev *sitdev)
+{
+	if (!sitdev->flush_ctrl_pending && !sitdev->flush_arm_pending)
+		return 0;
+
+	return sit9531x_phase_flush_undo(sitdev, sitdev->flush_ctrl_pending,
+					 sitdev->flush_ctrl,
+					 sitdev->flush_arm_pending,
+					 sitdev->flush_armed);
+}
+
 /*
  * Realign the PLL's output dividers with the on-demand phase flush (PHFL), or
  * restart the PLL when its profile has PHFL off (PLL page 0x47 bit 7 clear), as
@@ -1542,27 +1618,39 @@ static int sit9531x_pll_small_update(struct sit9531x_dev *sitdev, u8 pll_idx)
  */
 static int sit9531x_output_phase_flush(struct sit9531x_dev *sitdev, u8 pll_idx)
 {
-	u8 ctrl, orig, phfl, armed_mask = 0, parked = 0, i;
+	u8 ctrl, orig = 0, phfl, armed_mask = 0, parked = 0, touched, i;
+	bool ctrl_back = false, armed_here = false, fired = false;
 	int rc, ret;
+
+	/*
+	 * Retry a pending undo first so the reads below see the profile's
+	 * settings.
+	 */
+	rc = sit9531x_phase_flush_undo_retry(sitdev);
+	if (rc)
+		goto out;
 
 	rc = sit9531x_read_pll_u8(sitdev, pll_idx, SIT9531X_PLL_REG_CONFIG47,
 				  &phfl);
 	if (rc)
-		return rc;
-	if (!(phfl & SIT9531X_PLL_CONFIG47_PHFL_EN))
-		return sit9531x_write_pll_u8(sitdev, pll_idx,
-					     SIT9531X_PLL_REG_DIRECTIVES,
-					     SIT9531X_PLL_DIRECTIVE_RESTART);
+		goto out;
+	if (!(phfl & SIT9531X_PLL_CONFIG47_PHFL_EN)) {
+		rc = sit9531x_write_pll_u8(sitdev, pll_idx,
+					   SIT9531X_PLL_REG_DIRECTIVES,
+					   SIT9531X_PLL_DIRECTIVE_RESTART);
+		fired = !rc;
+		goto out;
+	}
 
 	/*
 	 * The phase trigger is chip-global and fires every PLL with on-demand
-	 * flush enabled; record which ones the profile arms.
+	 * flush enabled; disable it on the other PLLs for the pulse.
 	 */
 	for (i = 0; i < SIT9531X_NUM_PLLS; i++) {
 		rc = sit9531x_read_pll_u8(sitdev, i, SIT9531X_PLL_REG_PHFL_CTRL,
 					  &phfl);
 		if (rc)
-			return rc;
+			goto out;
 		if (phfl & SIT9531X_PLL_PHFL_ON_DEMAND_EN)
 			armed_mask |= BIT(i);
 	}
@@ -1575,18 +1663,19 @@ static int sit9531x_output_phase_flush(struct sit9531x_dev *sitdev, u8 pll_idx)
 					    SIT9531X_PLL_REG_PHFL_CTRL,
 					    SIT9531X_PLL_PHFL_ON_DEMAND_EN, 0);
 		if (rc)
-			goto unpark;
+			goto undo;
 		rc = sit9531x_pll_small_update(sitdev, i);
 		if (rc)
-			goto unpark;
+			goto undo;
 	}
 
+	armed_here = true;
 	rc = sit9531x_update_pll_u8(sitdev, pll_idx,
 				    SIT9531X_PLL_REG_PHFL_CTRL,
 				    SIT9531X_PLL_PHFL_ON_DEMAND_EN,
 				    SIT9531X_PLL_PHFL_ON_DEMAND_EN);
 	if (rc)
-		goto disarm;
+		goto undo;
 
 	/*
 	 * Write the update register whole; a read-modify-write skips the write
@@ -1594,21 +1683,19 @@ static int sit9531x_output_phase_flush(struct sit9531x_dev *sitdev, u8 pll_idx)
 	 */
 	rc = sit9531x_pll_small_update(sitdev, pll_idx);
 	if (rc)
-		goto disarm;
+		goto undo;
 
-	/*
-	 * Select the in-register phase trigger; the register also holds the OEb
-	 * bits.
-	 */
+	/* Select the in-register phase trigger, preserving the OEb bits. */
 	rc = sit9531x_read_u8(sitdev, SIT9531X_REG_GPIO_FUNC_CTRL1, &ctrl);
 	if (rc)
-		goto disarm;
+		goto undo;
 
 	orig = ctrl & ~SIT9531X_DIVO_PHASE_TRIG;
 	ctrl = orig | SIT9531X_DIVO_PHASE_SEL_REG;
+	ctrl_back = true;
 	rc = sit9531x_write_u8(sitdev, SIT9531X_REG_GPIO_FUNC_CTRL1, ctrl);
 	if (rc)
-		goto restore;
+		goto undo;
 
 	/*
 	 * No delay between set and clear; one I2C transfer is longer than the
@@ -1616,40 +1703,19 @@ static int sit9531x_output_phase_flush(struct sit9531x_dev *sitdev, u8 pll_idx)
 	 */
 	rc = sit9531x_write_u8(sitdev, SIT9531X_REG_GPIO_FUNC_CTRL1,
 			       ctrl | SIT9531X_DIVO_PHASE_TRIG);
+	fired = !rc;
 
-restore:
-	ret = sit9531x_write_u8(sitdev, SIT9531X_REG_GPIO_FUNC_CTRL1, orig);
+undo:
+	touched = parked;
+	if (armed_here && !(armed_mask & BIT(pll_idx)))
+		touched |= BIT(pll_idx);
+	ret = sit9531x_phase_flush_undo(sitdev, ctrl_back, orig, touched,
+					armed_mask);
 	if (ret && !rc)
 		rc = ret;
 
-disarm:
-	/*
-	 * Restore the profile's flush enable; an armed flush re-flushes every
-	 * output divider of this PLL on the next trigger.
-	 */
-	if (!(armed_mask & BIT(pll_idx))) {
-		ret = sit9531x_update_pll_u8(sitdev, pll_idx,
-					     SIT9531X_PLL_REG_PHFL_CTRL,
-					     SIT9531X_PLL_PHFL_ON_DEMAND_EN, 0);
-		if (!ret)
-			ret = sit9531x_pll_small_update(sitdev, pll_idx);
-		if (ret && !rc)
-			rc = ret;
-	}
-
-unpark:
-	for (i = 0; i < SIT9531X_NUM_PLLS; i++) {
-		if (!(parked & BIT(i)))
-			continue;
-		ret = sit9531x_update_pll_u8(sitdev, i,
-					     SIT9531X_PLL_REG_PHFL_CTRL,
-					     SIT9531X_PLL_PHFL_ON_DEMAND_EN,
-					     SIT9531X_PLL_PHFL_ON_DEMAND_EN);
-		if (!ret)
-			ret = sit9531x_pll_small_update(sitdev, i);
-		if (ret && !rc)
-			rc = ret;
-	}
+out:
+	sitdev->chan[pll_idx].flush_pending = !fired;
 
 	return rc;
 }
@@ -1730,7 +1796,7 @@ static int sit9531x_output_divo_write(struct sit9531x_dev *sitdev, u8 out_idx,
 	int rc, j, rb_rc;
 	u8 written = 0;
 
-	*back = false;
+	*back = true;
 
 	slot = info->clkout_map[out_idx];
 
@@ -1757,6 +1823,7 @@ static int sit9531x_output_divo_write(struct sit9531x_dev *sitdev, u8 out_idx,
 	msb_old = old_bytes[4];
 	divo_bytes[4] |= msb_old & 0xFC;
 
+	*back = false;
 	for (j = 0; j < 5; j++) {
 		rc = sit9531x_write_u8(sitdev,
 				       SIT9531X_REG(page, base_reg - j),
@@ -1815,12 +1882,357 @@ static int sit9531x_output_divo_read(struct sit9531x_dev *sitdev, u8 out_idx,
 	return *divo ? 0 : -ENODATA;
 }
 
+/*
+ * Phase adjust is a 34-bit coarse delay in VCO cycles plus a 3-bit fine delay
+ * in 30 ps steps, in bytes PROG6..PROG2. PRG_RST_DELAY is unsigned, so an
+ * advance is written as T_out - |phase|.
+ */
+
+/* Register of byte @i (PROG6 first) of an output's PRG_RST_DELAY block. */
+static unsigned int sit9531x_output_prg_reg(struct sit9531x_dev *sitdev,
+					    u8 out_idx, u8 i)
+{
+	u8 slot = sitdev->info->clkout_map[out_idx];
+	u8 page = (slot > SIT9531X_PAGE_OUTSYS0_SLOT_MAX) ?
+		  SIT9531X_PAGE_OUTSYS1 : SIT9531X_PAGE_OUTSYS0;
+	u8 base = SIT9531X_OUT_PRG_DELAY_BASE +
+		  SIT9531X_OUT_PRG_SLOT_STRIDE * (slot % 6);
+
+	return SIT9531X_REG(page, base + i);
+}
+
+static int sit9531x_output_phase_bytes_read(struct sit9531x_dev *sitdev,
+					    u8 out_idx, u8 *bytes)
+{
+	unsigned int reg;
+	int rc;
+	u8 i;
+
+	for (i = 0; i < SIT9531X_OUT_PRG_BYTES; i++) {
+		reg = sit9531x_output_prg_reg(sitdev, out_idx, i);
+		rc = sit9531x_read_u8(sitdev, reg, &bytes[i]);
+		if (rc)
+			return rc;
+	}
+
+	return 0;
+}
+
+/*
+ * The register value includes the divider's settling cycles; a value below them
+ * means no delay.
+ */
+static void sit9531x_output_phase_bytes_decode(const u8 *bytes, u64 *coarse,
+					       u8 *fine)
+{
+	u64 prg_coarse;
+
+	*fine = (bytes[0] & SIT9531X_OUT_PRG_FINE_MASK) >>
+		SIT9531X_OUT_PRG_FINE_SHIFT;
+	prg_coarse = (u64)(bytes[0] & SIT9531X_OUT_PRG_COARSE_HI_MASK) << 32;
+	prg_coarse |= (u64)bytes[1] << 24;
+	prg_coarse |= (u64)bytes[2] << 16;
+	prg_coarse |= (u64)bytes[3] << 8;
+	prg_coarse |= bytes[4];
+	*coarse = (prg_coarse > SIT9531X_OUT_PRG_DIVO_CYCLES) ?
+		  prg_coarse - SIT9531X_OUT_PRG_DIVO_CYCLES : 0;
+}
+
+/*
+ * @coarse excludes the divider's two settling cycles; the register value
+ * includes them.
+ */
+static void sit9531x_output_phase_bytes_build(const u8 *old_bytes, u64 coarse,
+					      u8 fine, u8 *new_bytes)
+{
+	u64 prg_coarse = coarse + SIT9531X_OUT_PRG_DIVO_CYCLES;
+
+	/* PROG6 RMW: preserve OPSTG_VCASC_BUMP in [7:5] */
+	new_bytes[0] = old_bytes[0] & SIT9531X_OUT_PRG_OPSTG_MASK;
+	new_bytes[0] |= (fine << SIT9531X_OUT_PRG_FINE_SHIFT) &
+			SIT9531X_OUT_PRG_FINE_MASK;
+	new_bytes[0] |= (u8)((prg_coarse >> 32) &
+			     SIT9531X_OUT_PRG_COARSE_HI_MASK);
+	new_bytes[1] = (u8)((prg_coarse >> 24) & 0xFF);
+	new_bytes[2] = (u8)((prg_coarse >> 16) & 0xFF);
+	new_bytes[3] = (u8)((prg_coarse >> 8) & 0xFF);
+	new_bytes[4] = (u8)(prg_coarse & 0xFF);
+}
+
+/*
+ * Caller must be in the programming state; @back reports whether every byte
+ * holds its old value.
+ */
+static int sit9531x_output_phase_bytes_write(struct sit9531x_dev *sitdev,
+					     u8 out_idx, const u8 *new_bytes,
+					     const u8 *old_bytes, bool *back)
+{
+	int rc, ret, rb_rc = 0;
+	unsigned int reg;
+	u8 i;
+
+	*back = false;
+
+	for (i = 0; i < SIT9531X_OUT_PRG_BYTES; i++) {
+		reg = sit9531x_output_prg_reg(sitdev, out_idx, i);
+		rc = sit9531x_write_u8(sitdev, reg, new_bytes[i]);
+		if (rc)
+			goto rollback;
+	}
+
+	return 0;
+
+rollback:
+	for (i = 0; i < SIT9531X_OUT_PRG_BYTES; i++) {
+		reg = sit9531x_output_prg_reg(sitdev, out_idx, i);
+		ret = sit9531x_write_u8(sitdev, reg, old_bytes[i]);
+		if (ret && !rb_rc)
+			rb_rc = ret;
+	}
+	*back = !rb_rc;
+	if (rb_rc) {
+		dev_err(sitdev->dev,
+			"out%u: phase-adjust rollback failed (%d), the delay registers are part old and part new\n",
+			out_idx, rb_rc);
+		if (!rc)
+			rc = rb_rc;
+	}
+
+	return rc;
+}
+
+/*
+ * Return the error of @cycles VCO cycles plus the nearest fine steps (in @fine)
+ * against @abs_ps.
+ */
+static u64 sit9531x_output_phase_quant_err(u64 abs_ps, u64 fvco, u64 cycles,
+					   u8 *fine)
+{
+	u64 cycles_ps, steps = 0;
+
+	cycles_ps = mul_u64_u64_div_u64(cycles, 1000000000000ULL, fvco);
+	if (abs_ps > cycles_ps)
+		steps = div64_u64(abs_ps - cycles_ps +
+				  SIT9531X_OUT_PRG_FINE_STEP_PS / 2,
+				  SIT9531X_OUT_PRG_FINE_STEP_PS);
+	*fine = min_t(u64, steps, SIT9531X_OUT_PRG_FINE_MAX);
+
+	return abs_diff(abs_ps, cycles_ps +
+			(u64)*fine * SIT9531X_OUT_PRG_FINE_STEP_PS);
+}
+
+/*
+ * Fold @phase_ps into one output period and split it into VCO cycles and fine
+ * steps; @phase_adj gets the realized delay in the request's sign. Pure
+ * arithmetic, so call it before entering the programming state.
+ */
+static int sit9531x_output_phase_encode(u64 fvco, u64 divo, s32 phase_ps,
+					u64 *coarse_out, u8 *fine_out,
+					s32 *phase_adj)
+{
+	u64 abs_ps, cycles, frac_ps, coarse = 0, coarse_ps, t_out_ps;
+	s64 phase_norm_ps = 0;
+	u8 fine = 0;
+
+	t_out_ps = mul_u64_u64_div_u64(divo, 1000000000000ULL, fvco);
+	if (!t_out_ps)
+		return -EINVAL;
+
+	if (!phase_ps) {
+		*coarse_out = 0;
+		*fine_out = 0;
+		*phase_adj = 0;
+		return 0;
+	}
+
+	/*
+	 * The period is DIVO VCO cycles but often fractional in ps (7812.5 ps
+	 * at 128 MHz from 5.12 GHz), so fold whole cycles modulo DIVO and carry
+	 * the sub-cycle part. The DPLL core limits the request to +/-1 ms.
+	 */
+	abs_ps = abs(phase_ps);
+	cycles = mul_u64_u64_div_u64(abs_ps, fvco, 1000000000000ULL);
+	frac_ps = abs_ps - mul_u64_u64_div_u64(cycles, 1000000000000ULL, fvco);
+	div64_u64_rem(cycles, divo, &cycles);
+	abs_ps = mul_u64_u64_div_u64(cycles, 1000000000000ULL, fvco) + frac_ps;
+	/*
+	 * Truncation can leave a request within 1 ps of a whole period, which
+	 * is the same edge as no delay.
+	 */
+	if (abs_ps >= t_out_ps)
+		abs_ps = 0;
+	phase_norm_ps = phase_ps < 0 ? -(s64)abs_ps : (s64)abs_ps;
+	abs_ps = (phase_ps < 0 && abs_ps) ? t_out_ps - abs_ps : abs_ps;
+
+	if (abs_ps) {
+		u64 floor_cycles, err, alt_err, realized;
+		u8 alt_fine;
+
+		/* mul_u64_u64_div_u64(): abs_ps * fvco would overflow. */
+		floor_cycles = mul_u64_u64_div_u64(abs_ps, fvco,
+						   1000000000000ULL);
+
+		/*
+		 * The fine field spans 210 ps, more than one VCO cycle in every
+		 * band, so take the nearest of floor, floor + 1, and floor - 1
+		 * with a larger fine code; the floor on a tie.
+		 */
+		coarse = floor_cycles;
+		err = sit9531x_output_phase_quant_err(abs_ps, fvco, coarse,
+						      &fine);
+		alt_err = sit9531x_output_phase_quant_err(abs_ps, fvco,
+							  floor_cycles + 1,
+							  &alt_fine);
+		if (alt_err < err) {
+			coarse = floor_cycles + 1;
+			fine = alt_fine;
+			err = alt_err;
+		}
+		if (floor_cycles) {
+			u64 fewer = floor_cycles - 1;
+
+			alt_err = sit9531x_output_phase_quant_err(abs_ps, fvco,
+								  fewer,
+								  &alt_fine);
+			if (alt_err < err) {
+				coarse = fewer;
+				fine = alt_fine;
+			}
+		}
+
+		/*
+		 * Program a delay that quantizes to a whole period or more as
+		 * none, and round one past the advertised range toward the
+		 * request's side.
+		 */
+		coarse_ps = mul_u64_u64_div_u64(coarse, 1000000000000ULL, fvco);
+		realized = coarse_ps +
+			   (u64)fine * SIT9531X_OUT_PRG_FINE_STEP_PS;
+		if (realized >= t_out_ps) {
+			coarse = 0;
+			fine = 0;
+		} else if (phase_norm_ps < 0 ?
+			   t_out_ps - realized > SIT9531X_OUT_PHASE_ADJ_MAX_PS :
+			   realized > SIT9531X_OUT_PHASE_ADJ_MAX_PS) {
+			u64 rem;
+
+			coarse = floor_cycles;
+			coarse_ps = mul_u64_u64_div_u64(coarse,
+							1000000000000ULL, fvco);
+			rem = abs_ps - coarse_ps;
+			if (phase_norm_ps < 0)
+				rem += SIT9531X_OUT_PRG_FINE_STEP_PS - 1;
+			fine = div_u64(rem, SIT9531X_OUT_PRG_FINE_STEP_PS);
+		}
+
+		if (coarse + SIT9531X_OUT_PRG_DIVO_CYCLES >=
+		    (1ULL << SIT9531X_OUT_PRG_COARSE_BITS))
+			return -ERANGE;
+	}
+
+	coarse_ps = mul_u64_u64_div_u64(coarse, 1000000000000ULL, fvco);
+	abs_ps = coarse_ps + (u64)fine * SIT9531X_OUT_PRG_FINE_STEP_PS;
+	/* The result is within the range, so it fits the s32 the ABI carries */
+	if (phase_norm_ps < 0)
+		*phase_adj = abs_ps ? -(s32)(t_out_ps - abs_ps) : 0;
+	else
+		*phase_adj = (s32)abs_ps;
+
+	*coarse_out = coarse;
+	*fine_out = fine;
+
+	return 0;
+}
+
+/**
+ * sit9531x_output_phase_read - read an output's programmed delay back
+ * @sitdev: device pointer
+ * @out_idx: logical output index
+ * @phase_ps: result in picoseconds
+ * @beyond: set when @phase_ps is outside the advertised range
+ *
+ * An advance is stored as the period minus the advance and reads back as one
+ * only when it fits the range. Caller must hold sitdev->multiop_lock.
+ *
+ * Return: 0 on success, -ENODATA for an output no PLL drives or whose Fvco
+ * is unknown, <0 on other errors
+ */
+int sit9531x_output_phase_read(struct sit9531x_dev *sitdev, u8 out_idx,
+			       s64 *phase_ps, bool *beyond)
+{
+	const struct sit9531x_chip_info *info = sitdev->info;
+	u8 bytes[SIT9531X_OUT_PRG_BYTES], fine;
+	u64 coarse = 0, fvco, ps, divo;
+	int rc;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (out_idx >= info->num_outputs)
+		return -EINVAL;
+
+	*beyond = false;
+
+	if (!sitdev->out[out_idx].routed)
+		return -ENODATA;
+
+	rc = sit9531x_get_fvco(sitdev, sitdev->out[out_idx].pll_idx, &fvco);
+	if (rc)
+		return rc;
+
+	rc = sit9531x_output_phase_bytes_read(sitdev, out_idx, bytes);
+	if (rc)
+		return rc;
+	sit9531x_output_phase_bytes_decode(bytes, &coarse, &fine);
+
+	/*
+	 * Take the period from the divider; the cached rate is unset at probe
+	 * and whole hertz at best.
+	 */
+	rc = sit9531x_output_divo_read(sitdev, out_idx, &divo);
+	if (rc && rc != -ENODATA)
+		return rc;
+
+	/*
+	 * Fold the cycle count, not the picoseconds; the fine steps can carry
+	 * the sum a fraction of a cycle past the period.
+	 */
+	if (!rc)
+		div64_u64_rem(coarse, divo, &coarse);
+
+	ps = mul_u64_u64_div_u64(coarse, 1000000000000ULL, fvco);
+	ps += (u64)fine * SIT9531X_OUT_PRG_FINE_STEP_PS;
+
+	if (!rc) {
+		u64 t_out_ps = mul_u64_u64_div_u64(divo, 1000000000000ULL,
+						   fvco);
+
+		if (ps >= t_out_ps)
+			ps -= t_out_ps;
+		if (ps > SIT9531X_OUT_PHASE_ADJ_MAX_PS &&
+		    t_out_ps - ps <= SIT9531X_OUT_PHASE_ADJ_MAX_PS) {
+			*phase_ps = -(s64)(t_out_ps - ps);
+			return 0;
+		}
+	}
+	*beyond = ps > SIT9531X_OUT_PHASE_ADJ_MAX_PS;
+	*phase_ps = ps;
+
+	return 0;
+}
+
 int sit9531x_output_freq_set(struct sit9531x_dev *sitdev, u8 out_idx,
 			     u8 pll_idx, u64 frequency)
 {
-	u64 fvco, divo;
+	u8 old_bytes[SIT9531X_OUT_PRG_BYTES], new_bytes[SIT9531X_OUT_PRG_BYTES];
+	u64 fvco, divo, coarse, old_divo = 0;
+	bool retime = false, bytes_in = false, bytes_back = false;
+	bool divo_back = false, divo_in, back, landed, encoded = false;
+	bool beyond;
+	struct sit9531x_out *out = &sitdev->out[out_idx];
+	struct sit9531x_chan *chan = &sitdev->chan[pll_idx];
+	s32 phase_adj = 0, held = 0;
 	int rc, ret;
-	bool back;
+	u8 fine;
 
 	lockdep_assert_held(&sitdev->multiop_lock);
 
@@ -1829,28 +2241,117 @@ int sit9531x_output_freq_set(struct sit9531x_dev *sitdev, u8 out_idx,
 	if (rc)
 		return rc;
 
+	if (out->phase_stale && !out->retime_pending) {
+		s64 phase_ps;
+
+		rc = sit9531x_output_phase_read(sitdev, out_idx, &phase_ps,
+						&beyond);
+		if (rc)
+			return rc;
+		out->phase_adj = phase_ps;
+		out->phase_armed = !beyond && phase_ps;
+		out->phase_stale = false;
+	}
+
+	/*
+	 * The reset delay counts VCO cycles; an advance is stored as T_out -
+	 * |advance| and must be re-encoded for the new period. Write it in the
+	 * divider's programming window; a second flush would restart the PLL's
+	 * dividers.
+	 */
+	rc = sit9531x_output_phase_bytes_read(sitdev, out_idx, old_bytes);
+	if (rc)
+		return rc;
+	sit9531x_output_phase_bytes_decode(old_bytes, &coarse, &fine);
+	beyond = !out->phase_armed && out->phase_adj;
+	if (out->retime_pending || out->phase_armed ||
+	    ((coarse || fine) && !beyond)) {
+		held = out->retime_pending ? out->retime_ps : out->phase_adj;
+
+		rc = sit9531x_output_phase_encode(fvco, divo, held, &coarse,
+						  &fine, &phase_adj);
+		if (rc)
+			return rc;
+		encoded = true;
+		sit9531x_output_phase_bytes_build(old_bytes, coarse, fine,
+						  new_bytes);
+		retime = memcmp(old_bytes, new_bytes, sizeof(new_bytes)) != 0;
+	}
+
+	if (retime) {
+		rc = sit9531x_output_divo_read(sitdev, out_idx, &old_divo);
+		if (rc && rc != -ENODATA)
+			return rc;
+	}
+
 	rc = sit9531x_prg_enter(sitdev);
 	if (rc)
 		return rc;
 
 	rc = sit9531x_output_divo_write(sitdev, out_idx, divo, &back);
-	/* NVM update and loop lock */
+	landed = !back;
+	divo_in = !rc;
+	if (!rc && retime) {
+		rc = sit9531x_output_phase_bytes_write(sitdev, out_idx,
+						       new_bytes, old_bytes,
+						       &bytes_back);
+		if (rc) {
+			divo_back = bytes_back &&
+				!sit9531x_output_divo_write(sitdev, out_idx,
+							    old_divo, &back);
+			landed = !divo_back;
+		} else {
+			bytes_in = true;
+		}
+	}
+	/* Always leave PRG_CMD so the loops re-lock */
 	ret = sit9531x_prg_commit(sitdev);
 	if (ret && !rc)
 		rc = ret;
-	if (rc)
-		return rc;
-
-	/* Flush the output phase so the new DIVO starts aligned */
-	rc = sit9531x_output_phase_flush(sitdev, pll_idx);
 	if (rc) {
-		dev_warn(sitdev->dev,
-			 "out%u: rate changed but the divider phase was not realigned (%d)\n",
-			 out_idx, rc);
-		rc = 0;
+		if (bytes_in || (encoded && !retime && divo_in)) {
+			out->phase_adj = phase_adj;
+			out->phase_armed = phase_adj != 0;
+			out->phase_stale = false;
+			out->retime_pending = false;
+		} else if (retime && landed) {
+			out->retime_ps = held;
+			out->retime_pending = true;
+			out->phase_stale = true;
+		} else if (encoded && landed) {
+			out->phase_stale = true;
+		} else if (beyond) {
+			out->phase_stale = true;
+		}
+		if (landed)
+			chan->flush_pending = true;
+		return rc;
 	}
 
-	sitdev->out[out_idx].freq = div64_u64(fvco, divo);
+	rc = sit9531x_output_phase_flush(sitdev, pll_idx);
+	if (chan->flush_pending)
+		dev_warn(sitdev->dev,
+			 "out%u: rate changed but the divider phase was not realigned (%d), the poll retries it\n",
+			 out_idx, rc);
+	else if (rc)
+		dev_warn(sitdev->dev,
+			 "out%u: rate changed, the flush left something to put back (%d)\n",
+			 out_idx, rc);
+	if (encoded) {
+		out->phase_adj = phase_adj;
+		out->phase_armed = phase_adj != 0;
+		out->phase_stale = false;
+	}
+
+	/*
+	 * A delay beyond the range was not re-timed and now decodes against the
+	 * new divider.
+	 */
+	if (beyond)
+		out->phase_stale = true;
+
+	out->freq = div64_u64(fvco, divo);
+	out->retime_pending = false;
 
 	return 0;
 }
@@ -1893,20 +2394,130 @@ int sit9531x_output_freq_get(struct sit9531x_dev *sitdev, u8 out_idx,
 	return 0;
 }
 
-/*
- * Phase adjust: per-output 34-bit coarse delay in VCO periods plus a 3-bit
- * fine delay in 30 ps steps, in PROG6..PROG2:
- *   base + 0  PROG6  [7:5] OPSTG_VCASC_BUMP (preserved)
- *                    [4:2] PRG_RST_FINE_DELAY
- *                    [1:0] PRG_RST_DELAY[33:32]
- *   base + 1  PROG5  PRG_RST_DELAY[31:24]
- *   base + 2  PROG4  PRG_RST_DELAY[23:16]
- *   base + 3  PROG3  PRG_RST_DELAY[15:8]
- *   base + 4  PROG2  PRG_RST_DELAY[7:0]
- * Outputs 0-5 are on Page 3, 6-11 on Page 4; base = 0x15 + 16 * (out_idx % 6).
- * PRG_RST_DELAY is unsigned; a negative adjustment is wrapped to
- * (T_out - |phase|) modulo one output period.
- */
+int sit9531x_output_phase_adjust_set(struct sit9531x_dev *sitdev,
+				     u8 out_idx, s32 phase_ps)
+{
+	u8 old_bytes[SIT9531X_OUT_PRG_BYTES], new_bytes[SIT9531X_OUT_PRG_BYTES];
+	const struct sit9531x_chip_info *info = sitdev->info;
+	bool bytes_back, bytes_in, same;
+	struct sit9531x_chan *chan;
+	struct sit9531x_out *out;
+	u64 fvco, divo, coarse;
+	u8 pll_idx, fine;
+	s32 phase_adj;
+	int rc, ret;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (out_idx >= info->num_outputs)
+		return -EINVAL;
+
+	/* An unrouted output has only a placeholder in pll_idx. */
+	if (!sitdev->out[out_idx].routed)
+		return -ENODEV;
+
+	out = &sitdev->out[out_idx];
+	pll_idx = out->pll_idx;
+	if (pll_idx >= SIT9531X_NUM_PLLS)
+		return -EINVAL;
+	chan = &sitdev->chan[pll_idx];
+
+	rc = sit9531x_get_fvco(sitdev, pll_idx, &fvco);
+	if (rc)
+		return rc == -ENODATA ? -ENODEV : rc;
+
+	/* Fref * DIVN outside the VCO band is not the rate the PLL runs at. */
+	if (!sit9531x_fvco_in_band(pll_idx, fvco)) {
+		dev_dbg(sitdev->dev,
+			"out%u: PLL%c Fvco %llu Hz is outside its VCO band, delay not settable\n",
+			out_idx, 'A' + pll_idx, fvco);
+		return -EINVAL;
+	}
+
+	/* Take the period from the divider; the cached rate is whole hertz. */
+	rc = sit9531x_output_divo_read(sitdev, out_idx, &divo);
+	if (rc)
+		return rc == -ENODATA ? -ENODEV : rc;
+
+	rc = sit9531x_output_phase_encode(fvco, divo, phase_ps, &coarse, &fine,
+					  &phase_adj);
+	if (rc)
+		return rc;
+
+	rc = sit9531x_output_phase_bytes_read(sitdev, out_idx, old_bytes);
+	if (rc)
+		return rc;
+	sit9531x_output_phase_bytes_build(old_bytes, coarse, fine, new_bytes);
+
+	/*
+	 * Skip the write if the quantized bytes are unchanged; a rewrite
+	 * restarts the divider phase of every output on the PLL.
+	 */
+	same = !memcmp(old_bytes, new_bytes, sizeof(new_bytes)) &&
+	       !out->phase_stale;
+	if (same && !chan->flush_pending) {
+		rc = 0;
+		goto cache;
+	}
+
+	if (!same) {
+		/*
+		 * Output-system registers take effect only inside PRG_CMD,
+		 * committed to the NVM shadow.
+		 */
+		rc = sit9531x_prg_enter(sitdev);
+		if (rc)
+			return rc;
+
+		rc = sit9531x_output_phase_bytes_write(sitdev, out_idx,
+						       new_bytes, old_bytes,
+						       &bytes_back);
+		bytes_in = !rc;
+
+		ret = sit9531x_prg_commit(sitdev);
+		if (ret && !rc)
+			rc = ret;
+		if (rc) {
+			if (bytes_in) {
+				out->phase_adj = phase_adj;
+				out->phase_armed = phase_adj != 0;
+				out->phase_stale = false;
+				out->retime_pending = false;
+				chan->flush_pending = true;
+			} else if (!bytes_back) {
+				out->phase_stale = true;
+				chan->flush_pending = true;
+			}
+			return rc;
+		}
+	}
+
+	/*
+	 * Restart the divider phase so the delay applies against a known edge.
+	 */
+	rc = sit9531x_output_phase_flush(sitdev, pll_idx);
+
+cache:
+	/* Cache what the registers hold */
+	out->phase_adj = phase_adj;
+	out->phase_stale = false;
+	out->retime_pending = false;
+
+	/*
+	 * A delay that quantized to zero needs no re-time: the quantum is the
+	 * VCO cycle, not the output period.
+	 */
+	out->phase_armed = phase_adj != 0;
+
+	if (chan->flush_pending)
+		return rc;
+	if (rc)
+		dev_warn(sitdev->dev,
+			 "out%u: delay applied, the flush left something to put back (%d)\n",
+			 out_idx, rc);
+
+	return 0;
+}
 
 /*
  * Clear the write-1-to-clear notification registers on page 0 and the clock
@@ -2389,12 +3000,32 @@ static int sit9531x_dev_state_fetch(struct sit9531x_dev *sitdev)
 	}
 
 	for (i = 0; i < sitdev->info->num_outputs; i++) {
+		bool beyond;
+		s64 phase_ps;
+
 		mutex_lock(&sitdev->multiop_lock);
 		rc = sit9531x_out_state_fetch(sitdev, i);
 		mutex_unlock(&sitdev->multiop_lock);
 		if (rc) {
 			dev_err(sitdev->dev,
 				"Failed to fetch output %u state: %d\n", i, rc);
+			return rc;
+		}
+
+		/*
+		 * The profile can set a delay; read it so a request of 0 ps can
+		 * clear it.
+		 */
+		mutex_lock(&sitdev->multiop_lock);
+		rc = sit9531x_output_phase_read(sitdev, i, &phase_ps, &beyond);
+		mutex_unlock(&sitdev->multiop_lock);
+		if (!rc) {
+			sitdev->out[i].phase_adj = phase_ps;
+			sitdev->out[i].phase_armed = !beyond && phase_ps;
+		} else if (rc != -ENODATA) {
+			dev_err(sitdev->dev,
+				"Failed to read output %u delay: %d\n",
+				i, rc);
 			return rc;
 		}
 	}
@@ -2521,6 +3152,25 @@ static void sit9531x_ho_release_retry(struct sit9531x_dev *sitdev, u8 pll_idx)
 }
 
 /*
+ * Re-time the output delay after a failed rate change. Caller must hold
+ * sitdev->multiop_lock.
+ */
+static void sit9531x_retime_retry(struct sit9531x_dev *sitdev, u8 out_idx)
+{
+	struct sit9531x_out *out = &sitdev->out[out_idx];
+	s64 was;
+
+	if (!out->retime_pending)
+		return;
+
+	was = out->phase_adj;
+	if (!sit9531x_output_phase_adjust_set(sitdev, out_idx, out->retime_ps))
+		dev_info(sitdev->dev, "out%u: delay re-timed\n", out_idx);
+	if (out->phase_adj != was || out->phase_stale)
+		out->ntf_pending = true;
+}
+
+/*
  * Write back the priority table after a failed write. Caller must hold
  * sitdev->multiop_lock.
  */
@@ -2590,6 +3240,18 @@ static void sit9531x_reselect(struct sit9531x_dev *sitdev, u8 pll_idx)
 		 'A' + pll_idx);
 }
 
+/* Run a pending output-divider flush. Caller must hold sitdev->multiop_lock. */
+static void sit9531x_flush_retry(struct sit9531x_dev *sitdev, u8 pll_idx)
+{
+	if (!sitdev->chan[pll_idx].flush_pending)
+		return;
+
+	sit9531x_output_phase_flush(sitdev, pll_idx);
+	if (!sitdev->chan[pll_idx].flush_pending)
+		dev_info(sitdev->dev, "PLL%c: output dividers realigned\n",
+			 'A' + pll_idx);
+}
+
 /*
  * Retry pending writes, then read each PLL's state; return true if any state
  * read succeeds.
@@ -2603,11 +3265,20 @@ sit9531x_dev_chan_states_update(struct sit9531x_dev *sitdev)
 	/* Retry pending writes first so the reads below see their result */
 	if (sitdev->loops_open)
 		sit9531x_prg_commit(sitdev);
+	sit9531x_phase_flush_undo_retry(sitdev);
+	for (i = 0; i < sitdev->info->num_outputs; i++)
+		sit9531x_retime_retry(sitdev, i);
 
 	sit9531x_input_off_retry(sitdev);
 	for (i = 0; i < SIT9531X_NUM_PLLS; i++) {
 		sit9531x_table_back_retry(sitdev, i);
 		sit9531x_ho_release_retry(sitdev, i);
+		/*
+		 * A flush pulse sent into open loops may be lost when they
+		 * re-lock.
+		 */
+		if (!sitdev->loops_open)
+			sit9531x_flush_retry(sitdev, i);
 		rc = sit9531x_chan_state_fetch(sitdev, i);
 		if (rc) {
 			sitdev->chan[i].stale = true;
@@ -2925,14 +3596,45 @@ static void sit9531x_dev_stop(struct sit9531x_dev *sitdev)
 			dev_warn(sitdev->dev,
 				 "PLL%c left in forced holdover\n", 'A' + i);
 	}
+
+	sit9531x_phase_flush_undo_retry(sitdev);
+	if (sitdev->flush_ctrl_pending)
+		dev_warn(sitdev->dev,
+			 "phase flush trigger source select not put back\n");
+	for (i = 0; i < SIT9531X_NUM_PLLS; i++) {
+		if (!(sitdev->flush_arm_pending & BIT(i)))
+			continue;
+		dev_warn(sitdev->dev, "PLL%c: on-demand phase flush left %s\n",
+			 'A' + i,
+			 (sitdev->flush_armed & BIT(i)) ? "parked" : "armed");
+	}
 	mutex_unlock(&sitdev->multiop_lock);
 
+	/*
+	 * Re-time first, since it re-locks the loops; the flush runs only into
+	 * locked loops.
+	 */
 	mutex_lock(&sitdev->multiop_lock);
+	for (i = 0; i < sitdev->info->num_outputs; i++) {
+		sit9531x_retime_retry(sitdev, i);
+		if (sitdev->out[i].retime_pending)
+			dev_warn(sitdev->dev,
+				 "out%u: delay left not re-timed to its rate\n",
+				 i);
+	}
 	if (sitdev->loops_open) {
 		sit9531x_prg_commit(sitdev);
 		if (sitdev->loops_open)
 			dev_warn(sitdev->dev,
 				 "output loops left unlocked at removal\n");
+	}
+	for (i = 0; i < SIT9531X_NUM_PLLS; i++) {
+		if (!sitdev->loops_open)
+			sit9531x_flush_retry(sitdev, i);
+		if (sitdev->chan[i].flush_pending)
+			dev_warn(sitdev->dev,
+				 "PLL%c: output dividers left unaligned\n",
+				 'A' + i);
 	}
 	mutex_unlock(&sitdev->multiop_lock);
 }

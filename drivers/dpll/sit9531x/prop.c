@@ -170,6 +170,20 @@ sit9531x_pin_props_get(struct sit9531x_dev *sitdev,
 		props->dpll_props.capabilities =
 			DPLL_PIN_CAPABILITIES_STATE_CAN_CHANGE;
 		curr_freq = 0;
+
+		/*
+		 * The part takes a delay anywhere within the output period;
+		 * +/-1 ms is a round figure within the s32 ps attribute.
+		 */
+		props->dpll_props.phase_range.min =
+			-SIT9531X_OUT_PHASE_ADJ_MAX_PS;
+		props->dpll_props.phase_range.max =
+			SIT9531X_OUT_PHASE_ADJ_MAX_PS;
+		/*
+		 * The 30 ps fine step is not advertised; requests are rounded
+		 * to the nearest achievable delay.
+		 */
+		props->dpll_props.phase_gran = 1;
 	}
 
 	sit9531x_prop_pin_package_label_set(sitdev, props, dir, index);

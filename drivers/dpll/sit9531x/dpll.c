@@ -611,6 +611,7 @@ sit9531x_dpll_output_pin_frequency_set(const struct dpll_pin *pin,
 	struct sit9531x_dev *sitdev = sitdpll->dev;
 	bool moved = false;
 	u64 was, hz;
+	s64 phase_was;
 	u8 actual_pll;
 	int rc;
 
@@ -618,10 +619,15 @@ sit9531x_dpll_output_pin_frequency_set(const struct dpll_pin *pin,
 
 	mutex_lock(&sitdev->multiop_lock);
 	was = sitdev->out[dpin->id].freq;
+	phase_was = sitdev->out[dpin->id].phase_adj;
 	rc = sit9531x_output_freq_set(sitdev, dpin->id, actual_pll,
 				      frequency);
 	if (rc) {
-		if (!sit9531x_output_freq_get(sitdev, dpin->id, &hz))
+		moved = sitdev->out[dpin->id].phase_stale ||
+			sitdev->out[dpin->id].phase_adj != phase_was;
+		if (sit9531x_output_freq_get(sitdev, dpin->id, &hz))
+			moved = true;
+		else
 			moved |= hz != was;
 	}
 	mutex_unlock(&sitdev->multiop_lock);
@@ -632,8 +638,11 @@ sit9531x_dpll_output_pin_frequency_set(const struct dpll_pin *pin,
 		NL_SET_ERR_MSG(extack, "Output frequency set failed");
 		/* The core notifies only a request that succeeded */
 		dpll_pin = READ_ONCE(dpin->dpll_pin);
-		if (moved && dpll_pin)
-			__dpll_pin_change_ntf(dpll_pin);
+		if (moved && dpll_pin && __dpll_pin_change_ntf(dpll_pin)) {
+			mutex_lock(&sitdev->multiop_lock);
+			sitdev->out[dpin->id].ntf_pending = true;
+			mutex_unlock(&sitdev->multiop_lock);
+		}
 	}
 
 	return rc;
@@ -741,12 +750,102 @@ sit9531x_dpll_output_pin_state_on_dpll_set(const struct dpll_pin *pin,
 	return rc;
 }
 
+/*
+ * Report the delay as programmed after quantization, including one whose flush
+ * is pending.
+ */
+static int
+sit9531x_dpll_output_pin_phase_adjust_get(const struct dpll_pin *pin,
+					  void *pin_priv,
+					  const struct dpll_device *dpll,
+					  void *dpll_priv, s32 *phase_adjust,
+					  struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll_pin *dpin = pin_priv;
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+	s64 phase_adj;
+	int rc;
+
+	mutex_lock(&sitdev->multiop_lock);
+	if (sitdev->out[dpin->id].phase_stale) {
+		bool beyond;
+		s64 phase_ps;
+
+		rc = sit9531x_output_phase_read(sitdev, dpin->id, &phase_ps,
+						&beyond);
+		if (rc) {
+			mutex_unlock(&sitdev->multiop_lock);
+			NL_SET_ERR_MSG(extack,
+				       "Output delay could not be read back");
+			return rc;
+		}
+		sitdev->out[dpin->id].phase_adj = phase_ps;
+		sitdev->out[dpin->id].phase_armed = !beyond && phase_ps;
+		sitdev->out[dpin->id].phase_stale = false;
+	}
+	phase_adj = sit9531x_out_state_get(sitdev, dpin->id)->phase_adj;
+	mutex_unlock(&sitdev->multiop_lock);
+
+	/*
+	 * A profile delay on a slow output can exceed the s32 attribute; leave
+	 * it out.
+	 */
+	if (phase_adj > S32_MAX)
+		return -ENODATA;
+	*phase_adjust = phase_adj;
+
+	return 0;
+}
+
+/* Program the per-output PRG_RST_DELAY registers */
+static int
+sit9531x_dpll_output_pin_phase_adjust_set(const struct dpll_pin *pin,
+					  void *pin_priv,
+					  const struct dpll_device *dpll,
+					  void *dpll_priv, s32 phase_adjust,
+					  struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll_pin *dpin = pin_priv;
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+	const struct sit9531x_out *out;
+	bool moved;
+	s64 was;
+	int rc;
+
+	out = sit9531x_out_state_get(sitdev, dpin->id);
+
+	mutex_lock(&sitdev->multiop_lock);
+	was = out->phase_adj;
+	rc = sit9531x_output_phase_adjust_set(sitdev, dpin->id, phase_adjust);
+	moved = out->phase_adj != was || out->phase_stale;
+	mutex_unlock(&sitdev->multiop_lock);
+
+	if (rc) {
+		struct dpll_pin *dpll_pin;
+
+		NL_SET_ERR_MSG(extack, "Phase adjust failed");
+		/* The core notifies only a request that succeeded */
+		dpll_pin = READ_ONCE(dpin->dpll_pin);
+		if (moved && dpll_pin && __dpll_pin_change_ntf(dpll_pin)) {
+			mutex_lock(&sitdev->multiop_lock);
+			sitdev->out[dpin->id].ntf_pending = true;
+			mutex_unlock(&sitdev->multiop_lock);
+		}
+	}
+
+	return rc;
+}
+
 static const struct dpll_pin_ops sit9531x_dpll_output_pin_ops = {
 	.direction_get		= sit9531x_dpll_output_pin_direction_get,
 	.frequency_get		= sit9531x_dpll_output_pin_frequency_get,
 	.frequency_set		= sit9531x_dpll_output_pin_frequency_set,
 	.state_on_dpll_get	= sit9531x_dpll_output_pin_state_on_dpll_get,
 	.state_on_dpll_set	= sit9531x_dpll_output_pin_state_on_dpll_set,
+	.phase_adjust_get	= sit9531x_dpll_output_pin_phase_adjust_get,
+	.phase_adjust_set	= sit9531x_dpll_output_pin_phase_adjust_set,
 };
 
 const struct dpll_pin_ops *
@@ -827,6 +926,17 @@ sit9531x_dpll_output_ntf_pending(struct sit9531x_dev *sitdev,
 		return false;
 	if (out->state_stale && sit9531x_output_state_refresh(sitdev, pin->id))
 		return false;
+	if (out->phase_stale) {
+		bool beyond;
+		s64 phase_ps;
+
+		if (sit9531x_output_phase_read(sitdev, pin->id, &phase_ps,
+					       &beyond))
+			return false;
+		out->phase_adj = phase_ps;
+		out->phase_armed = !beyond && phase_ps;
+		out->phase_stale = false;
+	}
 
 	out->ntf_pending = false;
 
