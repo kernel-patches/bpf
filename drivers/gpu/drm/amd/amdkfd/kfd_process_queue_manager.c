@@ -387,30 +387,10 @@ int pqm_create_queue(struct process_queue_manager *pqm,
 		dev->dqm->ops.register_process(dev->dqm, &pdd->qpd);
 
 	/* Allocate proc_ctx_bo only if MES is enabled and this is the first queue */
-	if (!pdd->proc_ctx_cpu_ptr && dev->kfd->shared_resources.enable_mes) {
-		retval = amdgpu_amdkfd_alloc_kernel_mem(dev->adev,
-						     AMDGPU_MES_PROC_CTX_SIZE,
-						     AMDGPU_GEM_DOMAIN_GTT,
-						     &pdd->proc_ctx_bo,
-						     &pdd->proc_ctx_gpu_addr,
-						     &pdd->proc_ctx_cpu_ptr,
-						     false);
-		if (retval) {
-			dev_err(dev->adev->dev, "failed to allocate process context bo\n");
+	if (dev->kfd->shared_resources.enable_mes) {
+		retval = kfd_process_device_alloc_proc_ctx(pdd);
+		if (retval)
 			goto err_allocate_pqn;
-		}
-		memset(pdd->proc_ctx_cpu_ptr, 0, AMDGPU_MES_PROC_CTX_SIZE);
-		/* Bind one MES process context slot to the whole process
-		 * (per device); every queue of this process reuses it.
-		 */
-		if (dev->adev->mes.use_rs64mem) {
-			retval = amdgpu_mes_alloc_proc_ctx_index(&dev->adev->mes,
-						&pdd->proc_ctx_array_index);
-			if (retval) {
-				dev_err(dev->adev->dev, "failed to allocate process context index\n");
-				goto err_allocate_pqn;
-			}
-		}
 	}
 
 	pqn = kzalloc_obj(*pqn);

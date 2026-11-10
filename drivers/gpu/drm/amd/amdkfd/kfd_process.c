@@ -1204,6 +1204,41 @@ static void kfd_process_profiler_release(struct kfd_process *p, struct kfd_proce
 	up_read(&adev->reset_domain->sem);
 }
 
+/* Allocate the MES process context and, in RS64 mode, its slot together. */
+int kfd_process_device_alloc_proc_ctx(struct kfd_process_device *pdd)
+{
+	struct amdgpu_device *adev = pdd->dev->adev;
+	int r;
+
+	if (pdd->proc_ctx_cpu_ptr)
+		return 0;
+
+	r = amdgpu_amdkfd_alloc_kernel_mem(adev, AMDGPU_MES_PROC_CTX_SIZE,
+					   AMDGPU_GEM_DOMAIN_GTT,
+					   &pdd->proc_ctx_bo,
+					   &pdd->proc_ctx_gpu_addr,
+					   &pdd->proc_ctx_cpu_ptr, false);
+	if (r) {
+		dev_err(adev->dev, "failed to allocate process context bo\n");
+		return r;
+	}
+	memset(pdd->proc_ctx_cpu_ptr, 0, AMDGPU_MES_PROC_CTX_SIZE);
+
+	if (!adev->mes.use_rs64mem)
+		return 0;
+
+	r = amdgpu_mes_alloc_proc_ctx_index(&adev->mes,
+					    &pdd->proc_ctx_array_index);
+	if (r) {
+		dev_err(adev->dev, "failed to allocate process context index\n");
+		amdgpu_amdkfd_free_kernel_mem(adev, &pdd->proc_ctx_bo);
+		pdd->proc_ctx_gpu_addr = 0;
+		pdd->proc_ctx_cpu_ptr = NULL;
+	}
+
+	return r;
+}
+
 static void kfd_process_destroy_pdds(struct kfd_process *p)
 {
 	int i;
