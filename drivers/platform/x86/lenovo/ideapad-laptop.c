@@ -26,6 +26,7 @@
 #include <linux/kernel.h>
 #include <linux/leds.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/platform_device.h>
 #include <linux/platform_profile.h>
 #include <linux/power_supply.h>
@@ -204,6 +205,7 @@ struct ideapad_private {
 		int type;
 		struct led_classdev led;
 		unsigned int last_brightness;
+		struct mutex mutex; /* protects brightness tracking */
 	} kbd_bl;
 	struct {
 		bool initialized;
@@ -1663,6 +1665,8 @@ static int ideapad_kbd_bl_brightness_set(struct ideapad_private *priv, unsigned 
 	unsigned long value;
 	int type = priv->kbd_bl.type;
 
+	guard(mutex)(&priv->kbd_bl.mutex);
+
 	if (ideapad_kbd_bl_check_tristate(type)) {
 		if (brightness > priv->kbd_bl.led.max_brightness)
 			return -EINVAL;
@@ -1698,6 +1702,8 @@ static void ideapad_kbd_bl_notify(struct ideapad_private *priv)
 	if (!priv->kbd_bl.initialized)
 		return;
 
+	guard(mutex)(&priv->kbd_bl.mutex);
+
 	brightness = ideapad_kbd_bl_brightness_get(priv);
 	if (brightness < 0)
 		return;
@@ -1719,6 +1725,10 @@ static int ideapad_kbd_bl_init(struct ideapad_private *priv)
 
 	if (WARN_ON(priv->kbd_bl.initialized))
 		return -EEXIST;
+
+	err = devm_mutex_init(&priv->platform_device->dev, &priv->kbd_bl.mutex);
+	if (err)
+		return err;
 
 	if (ideapad_kbd_bl_check_tristate(priv->kbd_bl.type))
 		priv->kbd_bl.led.max_brightness = 2;
