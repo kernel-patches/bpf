@@ -2486,8 +2486,21 @@ static void ahci_handle_s2idle(struct ata_port *ap)
 
 static int ahci_port_suspend(struct ata_port *ap, pm_message_t mesg)
 {
+	struct ahci_port_priv *pp = ap->private_data;
 	const char *emsg = NULL;
-	int rc;
+	int rc, i;
+
+	/*
+	 * Stop the SW activity blink timers, so that they cannot fire while
+	 * the port is suspended. ahci_init_sw_activity() sets them up again
+	 * on resume.
+	 */
+	for (i = 0; i < EM_MAX_SLOTS; i++) {
+		struct ahci_em_priv *emp = &pp->em_priv[i];
+
+		if (emp->timer.function)
+			timer_delete_sync(&emp->timer);
+	}
 
 	rc = ahci_deinit_port(ap, &emsg);
 	if (rc == 0)
