@@ -372,6 +372,7 @@ static int acpi_table_attr_init(struct kobject *tables_obj,
 			 table_attr->instance);
 		strcat(table_attr->filename, instance_str);
 	}
+	acpi_put_table(header);
 
 	table_attr->attr.size = table_header->length;
 	table_attr->attr.read = acpi_table_show;
@@ -593,15 +594,19 @@ static int acpi_tables_sysfs_init(void)
 			continue;
 
 		table_attr = kzalloc_obj(*table_attr);
-		if (!table_attr)
+		if (!table_attr) {
+			acpi_put_table(table_header);
 			break;
+		}
 
 		if (acpi_table_attr_init(tables_kobj, table_attr, table_header)) {
 			kfree(table_attr);
+			acpi_put_table(table_header);
 			break;
 		}
 		list_add_tail(&table_attr->node, &acpi_table_attr_list);
 		acpi_table_data_init(table_header, table_attr);
+		acpi_put_table(table_header);
 	}
 
 	kobject_uevent(tables_kobj, KOBJ_ADD);
