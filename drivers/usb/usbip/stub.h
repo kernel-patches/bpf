@@ -29,7 +29,7 @@ struct stub_device {
 	 * It is allocated as stub_priv_cache and assigned to urb->context.
 	 *
 	 * stub_priv is always linked to any one of 3 lists;
-	 *	priv_init: linked to this until the comletion of a urb.
+	 *	priv_init: linked to this until the completion of a urb.
 	 *	priv_tx  : linked to this after the completion of a urb.
 	 *	priv_free: linked to this after the sending of the result.
 	 *
