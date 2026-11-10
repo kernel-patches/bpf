@@ -778,22 +778,19 @@ static struct attribute *aer_attrs[] = {
 	NULL
 };
 
-static umode_t aer_attrs_are_visible(struct kobject *kobj,
-				     struct attribute *a, int n)
+static bool aer_group_visible(struct kobject *kobj)
 {
-	struct device *dev = kobj_to_dev(kobj);
-	struct pci_dev *pdev = to_pci_dev(dev);
+	struct pci_dev *pdev = to_pci_dev(kobj_to_dev(kobj));
 
-	if (!pdev->aer_info)
-		return 0;
-
-	return a->mode;
+	return !!pdev->aer_info;
 }
+
+DEFINE_SIMPLE_SYSFS_GROUP_VISIBLE(aer);
 
 const struct attribute_group aer_attr_group = {
 	.name = "aer",
 	.attrs = aer_attrs,
-	.is_visible = aer_attrs_are_visible,
+	.is_visible = SYSFS_GROUP_VISIBLE(aer),
 };
 
 static void pci_dev_aer_stats_incr(struct pci_dev *pdev,
