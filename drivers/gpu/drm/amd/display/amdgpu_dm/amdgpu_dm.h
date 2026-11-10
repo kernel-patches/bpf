@@ -1350,9 +1350,12 @@ struct dc_plane_address;
 struct dc_plane_cap;
 struct dc_plane_info;
 struct dsc_mst_fairness_vars;
+struct mod_power_init_params;
 
 void mmhub_read_system_context(struct amdgpu_device *adev,
 			       struct dc_phy_addr_space_config *pa_config);
+void amdgpu_dm_fill_power_nits_range(const struct amdgpu_dm_backlight_caps *caps,
+				     struct mod_power_init_params *init_data);
 int amdgpu_dm_init_power_module(struct amdgpu_display_manager *dm);
 void dm_gpureset_toggle_interrupts(struct amdgpu_device *adev, struct dc_state *state, bool enable);
 enum dc_status amdgpu_dm_commit_zero_streams(struct dc *dc);

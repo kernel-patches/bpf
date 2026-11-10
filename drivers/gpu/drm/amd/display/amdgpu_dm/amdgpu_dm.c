@@ -415,6 +415,22 @@ STATIC_IFN_KUNIT void mmhub_read_system_context(struct amdgpu_device *adev,
 }
 EXPORT_IF_KUNIT(mmhub_read_system_context);
 
+STATIC_IFN_KUNIT void
+amdgpu_dm_fill_power_nits_range(const struct amdgpu_dm_backlight_caps *caps,
+				struct mod_power_init_params *init_data)
+{
+	init_data->use_nits_based_brightness = false;
+	init_data->panel_max_millinits = 0;
+	init_data->panel_min_millinits = 0;
+	if (caps->aux_support &&
+	    caps->aux_max_input_signal > caps->aux_min_input_signal) {
+		init_data->use_nits_based_brightness = true;
+		init_data->panel_max_millinits = caps->aux_max_input_signal * 1000;
+		init_data->panel_min_millinits = caps->aux_min_input_signal * 1000;
+	}
+}
+EXPORT_IF_KUNIT(amdgpu_dm_fill_power_nits_range);
+
 STATIC_IFN_KUNIT int amdgpu_dm_init_power_module(struct amdgpu_display_manager *dm)
 {
 	struct mod_power_init_params init_data[MAX_NUM_EDP];
@@ -439,9 +455,7 @@ STATIC_IFN_KUNIT int amdgpu_dm_init_power_module(struct amdgpu_display_manager *
 		init_data[i].def_varibright_level = 0;
 		init_data[i].abm_config_setting = 0;
 		init_data[i].num_backlight_levels = 101;
-		init_data[i].use_nits_based_brightness = false;
-		init_data[i].panel_max_millinits = 0;
-		init_data[i].panel_min_millinits = 0;
+		amdgpu_dm_fill_power_nits_range(&dm->backlight_caps[i], &init_data[i]);
 		init_data[i].disable_fractional_pwm =
 			!(amdgpu_dc_feature_mask & DC_DISABLE_FRACTIONAL_PWM_MASK);
 		init_data[i].use_custom_backlight_caps = false;
