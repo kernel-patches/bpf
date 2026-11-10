@@ -65,41 +65,6 @@ intel_uncore_mmio_debug_init_early(struct drm_i915_private *i915)
 	i915->uncore.debug = &i915->mmio_debug;
 }
 
-static void mmio_debug_suspend(struct intel_uncore *uncore)
-{
-	if (!uncore->debug)
-		return;
-
-	spin_lock(&uncore->debug->lock);
-
-	/* Save and disable mmio debugging for the user bypass */
-	if (!uncore->debug->suspend_count++) {
-		uncore->debug->saved_mmio_check = uncore->debug->unclaimed_mmio_check;
-		uncore->debug->unclaimed_mmio_check = 0;
-	}
-
-	spin_unlock(&uncore->debug->lock);
-}
-
-static bool check_for_unclaimed_mmio(struct intel_uncore *uncore);
-
-static void mmio_debug_resume(struct intel_uncore *uncore)
-{
-	if (!uncore->debug)
-		return;
-
-	spin_lock(&uncore->debug->lock);
-
-	if (!--uncore->debug->suspend_count)
-		uncore->debug->unclaimed_mmio_check = uncore->debug->saved_mmio_check;
-
-	if (check_for_unclaimed_mmio(uncore))
-		drm_info(&uncore->i915->drm,
-			 "Invalid mmio detected during user access\n");
-
-	spin_unlock(&uncore->debug->lock);
-}
-
 static const char * const forcewake_domain_names[] = {
 	"render",
 	"gt",
@@ -598,9 +563,6 @@ check_for_unclaimed_mmio(struct intel_uncore *uncore)
 
 	lockdep_assert_held(&uncore->debug->lock);
 
-	if (uncore->debug->suspend_count)
-		return false;
-
 	if (intel_uncore_has_fpga_dbg_unclaimed(uncore))
 		ret |= fpga_check_for_unclaimed_mmio(uncore);
 
@@ -733,10 +695,8 @@ void intel_uncore_forcewake_get(struct intel_uncore *uncore,
 void intel_uncore_forcewake_user_get(struct intel_uncore *uncore)
 {
 	spin_lock_irq(&uncore->lock);
-	if (!uncore->user_forcewake_count++) {
+	if (!uncore->user_forcewake_count++)
 		intel_uncore_forcewake_get__locked(uncore, FORCEWAKE_ALL);
-		mmio_debug_suspend(uncore);
-	}
 	spin_unlock_irq(&uncore->lock);
 }
 
@@ -750,10 +710,8 @@ void intel_uncore_forcewake_user_get(struct intel_uncore *uncore)
 void intel_uncore_forcewake_user_put(struct intel_uncore *uncore)
 {
 	spin_lock_irq(&uncore->lock);
-	if (!--uncore->user_forcewake_count) {
-		mmio_debug_resume(uncore);
+	if (!--uncore->user_forcewake_count)
 		intel_uncore_forcewake_put__locked(uncore, FORCEWAKE_ALL);
-	}
 	spin_unlock_irq(&uncore->lock);
 }
 

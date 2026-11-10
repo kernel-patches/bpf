@@ -42,8 +42,6 @@ struct intel_gt;
 struct intel_uncore_mmio_debug {
 	spinlock_t lock; /** lock is also taken in irq contexts. */
 	int unclaimed_mmio_check;
-	int saved_mmio_check;
-	u32 suspend_count;
 };
 
 enum forcewake_domain_id {
