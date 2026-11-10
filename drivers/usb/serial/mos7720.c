@@ -1208,7 +1208,7 @@ static int set_higher_rates(struct moschip_port *mos7720_port,
 	/***********************************************
 	 *              Set for higher rates           *
 	 ***********************************************/
-	/* writing baud rate verbatum into uart clock field clearly not right */
+	/* writing baud rate verbatim into uart clock field clearly not right */
 	if (port_number == 0)
 		sp_reg = MOS7720_SP1_REG;
 	else

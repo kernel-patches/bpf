@@ -462,7 +462,7 @@ static int cypress_generic_port_probe(struct usb_serial_port *port)
 		return -ENOMEM;
 	}
 
-	/* Skip reset for FRWD device. It is a workaound:
+	/* Skip reset for FRWD device. It is a workaround:
 	   device hangs if it receives SET_CONFIGURE in Configured
 	   state. */
 	if (!is_frwd(serial->dev))
