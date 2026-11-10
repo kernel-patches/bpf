@@ -1307,6 +1307,33 @@ __naked void packet_write_prologue(void)
 	: __clobber_all);
 }
 
+extern int bpf_task_park(__u64 timeout_ns, __u64 flags) __ksym;
+
+/* the call is in asm, which gives the kfunc no BTF */
+void __park_btf_root(void)
+{
+	bpf_task_park(0, 0);
+}
+
+/* The stack goes back to the cpu that the run ends on, and a park may change that cpu. */
+SEC("syscall")
+__description("arena stack: a program that parks")
+__failure __msg("bpf_task_park() cannot be called in a program that uses R12")
+__naked void parks(void)
+{
+	asm volatile (
+	".8byte %[adj];"
+	"r1 = 0;"
+	"r2 = 0;"
+	"call %[bpf_task_park];"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm_insn(adj, ADJ(16)),
+	  __imm(bpf_task_park)
+	: __clobber_all);
+}
+
 #endif
 
 char _license[] SEC("license") = "GPL";
