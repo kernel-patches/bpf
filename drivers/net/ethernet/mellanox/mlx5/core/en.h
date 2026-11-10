@@ -696,6 +696,9 @@ struct mlx5e_rq {
 			u8                     umr_wqebbs;
 			u8                     mtts_per_wqe;
 			u8                     umr_mode;
+			u8                     umr_entry_size;
+			u8                     umr_pad_bytes;
+			u16                    umr_pad_offset;
 			struct mlx5e_mpw_linear_info *linear_info;
 			struct mlx5e_shampo_hd *shampo;
 		} mpwqe;
