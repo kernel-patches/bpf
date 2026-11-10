@@ -207,9 +207,9 @@ static void mpnic_get_queue_stats_tx(struct net_device *dev, int idx,
 	struct mpnic_ring *txr = mpn->tx[idx];
 	struct mpnic_queue_stats *stats;
 	u64 bytes, packets, stop, wake;
+	u64 csum_partial, hw_gso_wire;
 	struct mpnic_q_triad *qt;
 	unsigned int start;
-	u64 csum_partial;
 
 	if (!txr)
 		return;
@@ -228,12 +228,14 @@ static void mpnic_get_queue_stats_tx(struct net_device *dev, int idx,
 	do {
 		start = u64_stats_fetch_begin(&stats->syncp);
 		csum_partial = u64_stats_read(&stats->twq.csum_partial);
+		hw_gso_wire = u64_stats_read(&stats->twq.hw_gso_wire);
 		stop = u64_stats_read(&stats->twq.stop);
 	} while (u64_stats_fetch_retry(&stats->syncp, start));
 
 	tx->bytes = bytes;
 	tx->packets = packets;
-	tx->needs_csum = csum_partial;
+	tx->needs_csum = csum_partial + hw_gso_wire;
+	tx->hw_gso_wire_packets = hw_gso_wire;
 	tx->stop = stop;
 	tx->wake = wake;
 }
@@ -249,7 +251,8 @@ static void mpnic_get_base_stats(struct net_device *dev,
 
 	tx->bytes = base->tx.bytes;
 	tx->packets = base->tx.packets;
-	tx->needs_csum = base->tx.csum_partial;
+	tx->needs_csum = base->tx.csum_partial + base->tx.hw_gso_wire;
+	tx->hw_gso_wire_packets = base->tx.hw_gso_wire;
 	tx->stop = base->tx.stop;
 	tx->wake = base->tx.wake;
 
@@ -322,7 +325,10 @@ struct net_device *mpnic_netdev_alloc(struct mpnic_dev *mpd)
 	netdev->features |=
 		NETIF_F_SG |
 		NETIF_F_HW_CSUM |
-		NETIF_F_RXCSUM;
+		NETIF_F_RXCSUM |
+		NETIF_F_TSO |
+		NETIF_F_TSO_ECN |
+		NETIF_F_TSO6;
 
 	netdev->hw_features |= netdev->features;
 	netdev->vlan_features |= netdev->features;

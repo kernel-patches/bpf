@@ -17,6 +17,7 @@ struct mpnic_base_stats {
 		u64 bytes;
 		u64 dropped;
 		u64 csum_partial;
+		u64 hw_gso_wire;
 		u64 stop;
 		u64 wake;
 	} tx;
