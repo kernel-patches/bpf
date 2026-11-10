@@ -156,6 +156,13 @@ struct bpf_iter_dmabuf_kern {
 	struct dma_buf *dmabuf;
 } __aligned(8);
 
+/*
+ * The iterator state is one pointer wide because struct bpf_iter_dmabuf is
+ * part of the generated vmlinux.h ABI.  Use an invalid pointer value as the
+ * "drained" sentinel instead of growing the state.
+ */
+#define DMABUF_ITER_DONE	((struct dma_buf *)1L)
+
 __bpf_kfunc_start_defs();
 
 __bpf_kfunc int bpf_iter_dmabuf_new(struct bpf_iter_dmabuf *it)
@@ -173,10 +180,24 @@ __bpf_kfunc struct dma_buf *bpf_iter_dmabuf_next(struct bpf_iter_dmabuf *it)
 {
 	struct bpf_iter_dmabuf_kern *kit = (void *)it;
 
+	/*
+	 * The verifier assumes that an iterator which returned NULL keeps
+	 * returning NULL (see process_iter_next_call()).  Without this check
+	 * the NULL left by the last dma_buf_iter_next() would be interpreted
+	 * as "not started" and the iteration would restart from the list head.
+	 */
+	if (kit->dmabuf == DMABUF_ITER_DONE)
+		return NULL;
+
 	if (kit->dmabuf)
 		kit->dmabuf = dma_buf_iter_next(kit->dmabuf);
 	else
 		kit->dmabuf = dma_buf_iter_begin();
+
+	if (!kit->dmabuf) {
+		kit->dmabuf = DMABUF_ITER_DONE;
+		return NULL;
+	}
 
 	return kit->dmabuf;
 }
@@ -185,7 +206,7 @@ __bpf_kfunc void bpf_iter_dmabuf_destroy(struct bpf_iter_dmabuf *it)
 {
 	struct bpf_iter_dmabuf_kern *kit = (void *)it;
 
-	if (kit->dmabuf)
+	if (kit->dmabuf && kit->dmabuf != DMABUF_ITER_DONE)
 		dma_buf_put(kit->dmabuf);
 }
 
