@@ -241,7 +241,7 @@ register! {
         /// Auto-increment on write.
         24:24     aincw => bool;
         /// IMEM block and word offset.
-        15:0      offs;
+        23:0      offs;
     }
 
     /// IMEM data register. Reading/writing this register accesses IMEM at the address

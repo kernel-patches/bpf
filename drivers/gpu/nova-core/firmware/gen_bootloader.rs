@@ -7,6 +7,10 @@
 
 use kernel::{
     device,
+    num::{
+        Bounded,
+        TryIntoBounded, //
+    },
     prelude::*,
     ptr::Alignable,
     sizes, //
@@ -30,7 +34,7 @@ pub(crate) struct GenericBootloader {
     /// Bootloader code, zero-padded to a whole number of falcon memory blocks.
     ucode: KVec<u8>,
     /// Byte offset in IMEM at which the code is loaded.
-    imem_dst_start: u16,
+    imem_dst_start: Bounded<u32, 24>,
     /// Tag under which the first code block is loaded.
     start_tag: u16,
 }
@@ -76,7 +80,7 @@ impl GenericBootloader {
 
         Ok(Self {
             ucode,
-            imem_dst_start: u16::try_from(imem_dst_start)?,
+            imem_dst_start: imem_dst_start.try_into_bounded().ok_or(EINVAL)?,
             start_tag: u16::try_from(tlv.get_u32(b"STRT")?)?,
         })
     }

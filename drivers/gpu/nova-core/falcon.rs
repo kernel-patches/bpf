@@ -18,6 +18,10 @@ use kernel::{
         Io,
         Mmio, //
     },
+    num::{
+        Bounded,
+        TryIntoBounded, //
+    },
     prelude::*,
     sizes::SZ_4K,
     time::Delta,
@@ -230,13 +234,13 @@ pub(crate) trait FalconDmaLoadable {
             let end = start + usize::from_safe_cast(params.len);
             let data = self.as_slice().get(start..end).ok_or(EINVAL)?;
 
-            let dst_start = u16::try_from(params.dst_start).map_err(|_| EINVAL)?;
+            let dst_start = params.dst_start.try_into_bounded().ok_or(EINVAL)?;
 
             Ok::<_, Error>(FalconPioImemLoadTarget {
                 data,
                 dst_start,
                 secure,
-                start_tag: dst_start >> 8,
+                start_tag: dst_start.shr::<8, 16>().into(),
             })
         };
 
@@ -272,7 +276,7 @@ pub(crate) trait FalconDmaLoadable {
 #[derive(Clone)]
 pub(crate) struct FalconPioImemLoadTarget<'a> {
     pub(crate) data: &'a [u8],
-    pub(crate) dst_start: u16,
+    pub(crate) dst_start: Bounded<u32, 24>,
     pub(crate) secure: bool,
     pub(crate) start_tag: u16,
 }
