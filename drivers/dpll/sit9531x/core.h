@@ -142,6 +142,8 @@ struct sit9531x_out {
  * @locked: PLL is active and its outer loop reports lock
  * @stale: last state read failed; the fields hold the previous sample and
  *   are not reported
+ * @intsync_dropped: driver turned INTSYNC off after this sample; a lock to
+ *   INTSYNC in it is not trusted
  * @mode: 0 = sync (outer loop enabled), 1 = free-run
  * @routed_ref: input the device routes to the PLL, as a logical index
  *   (INTSYNC: SIT9531X_INTSYNC_PIN_ID); SIT9531X_REF_INVALID if none
@@ -184,6 +186,7 @@ struct sit9531x_chan {
 	bool		active;
 	bool		locked;
 	bool		stale;
+	bool		intsync_dropped;
 	u8		mode;
 	u8		routed_ref;
 	bool		inner_lol;
@@ -233,6 +236,12 @@ struct sit9531x_chan {
  * @reset_gpio: optional reset line, NULL if absent
  * @irq: optional INTRB IRQ, 0 if not wired
  * @intsync_src: PLL sourcing INTSYNC, or -1
+ * @intsync_partial: @intsync_src has a partial source configuration or the
+ *   global enable clear; not driving
+ * @intsync_conflict: more than one PLL page holds the source pattern
+ * @intsync_foreign: global enable set with no page holding the pattern
+ * @intsync_stale: @intsync_src must be read back before use
+ * @intsync_ntf_pending: the poll must send a source pin notification
  * @irq_ack_fails: consecutive failed INTRB acknowledgements
  * @fvco_band_warned: bit per PLL warned for Fref * DIVN outside its VCO
  *   band; written under @multiop_lock
@@ -270,6 +279,11 @@ struct sit9531x_dev {
 	int			irq;
 
 	s8			intsync_src;
+	bool			intsync_partial;
+	bool			intsync_conflict;
+	bool			intsync_foreign;
+	bool			intsync_stale;
+	bool			intsync_ntf_pending;
 
 	bool			loops_open;
 	bool			flush_ctrl_pending;
@@ -317,6 +331,24 @@ int sit9531x_output_phase_read(struct sit9531x_dev *sitdev, u8 out_idx,
 			       s64 *phase_ps, bool *beyond);
 int sit9531x_output_phase_adjust_set(struct sit9531x_dev *sitdev,
 				     u8 out_idx, s32 phase_ps);
+
+/*
+ * Return the PLL driving INTSYNC with a complete source configuration, or -1.
+ * Caller must hold sitdev->multiop_lock.
+ */
+static inline s8 sit9531x_intsync_owner(const struct sit9531x_dev *sitdev)
+{
+	return sitdev->intsync_partial ? -1 : sitdev->intsync_src;
+}
+
+int sit9531x_intsync_enable(struct sit9531x_dev *sitdev, u8 src_pll_idx,
+			    bool *rollback_failed, bool *touched);
+int sit9531x_intsync_disable(struct sit9531x_dev *sitdev, u8 src_pll_idx,
+			     bool *owner_kept, bool *touched);
+int sit9531x_intsync_src_detect(struct sit9531x_dev *sitdev);
+int sit9531x_intsync_readback(struct sit9531x_dev *sitdev);
+int sit9531x_intsync_refresh(struct sit9531x_dev *sitdev);
+bool sit9531x_intsync_driven(const struct sit9531x_dev *sitdev);
 
 int sit9531x_chan_routed_ref_read(struct sit9531x_dev *sitdev, u8 pll_idx,
 				  u8 *ref);

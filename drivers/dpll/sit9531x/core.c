@@ -857,6 +857,8 @@ static bool sit9531x_prio_src_live(const struct sit9531x_dev *sitdev, u8 src)
 {
 	u8 index = sit9531x_hw_src_input(src);
 
+	if (index == SIT9531X_INTSYNC_PIN_ID)
+		return sit9531x_intsync_driven(sitdev);
 	if (index >= sitdev->info->num_inputs)
 		return true;
 
@@ -1091,6 +1093,18 @@ static u8 sit9531x_prio_activesel_pick(struct sit9531x_dev *sitdev,
 	return srcs[0];
 }
 
+static bool sit9531x_prio_table_lists_intsync(const u8 *srcs)
+{
+	u8 slot;
+
+	for (slot = 0; slot < SIT9531X_PRIO_MAX_SLOTS; slot++)
+		if ((srcs[slot] & SIT9531X_PRIO_NIBBLE_MASK) ==
+		    SIT9531X_PRIO_SRC_INTSYNC)
+			return true;
+
+	return false;
+}
+
 static int sit9531x_prio_table_commit(struct sit9531x_dev *sitdev, u8 pll_idx,
 				      const u8 *srcs)
 {
@@ -1106,6 +1120,11 @@ static int sit9531x_prio_table_commit(struct sit9531x_dev *sitdev, u8 pll_idx,
 	for (slot = 0; slot < SIT9531X_PRIO_MAX_SLOTS; slot++)
 		if (sit9531x_prio_src_usable(srcs[slot]))
 			empty = false;
+
+	if (sitdev->intsync_stale &&
+	    (sit9531x_prio_table_lists_intsync(srcs) ||
+	     sit9531x_prio_table_lists_intsync(chan->prio_srcs)))
+		sit9531x_intsync_refresh(sitdev);
 
 	memcpy(back, chan->table_pending ? chan->table_back : chan->prio_srcs,
 	       sizeof(back));
@@ -2585,6 +2604,556 @@ static int sit9531x_clear_notifications(struct sit9531x_dev *sitdev)
 	return 0;
 }
 
+/*
+ * Close the debug window on a PLL's EXT page; the key opens every debug
+ * register on the page while it holds the unlock value.
+ */
+static int sit9531x_intsync_debug_lock(struct sit9531x_dev *sitdev, u8 ext_page)
+{
+	return sit9531x_write_close(sitdev,
+				    SIT9531X_REG(ext_page,
+						 SIT9531X_PLL_REG_DEBUG),
+				    SIT9531X_PLL_DEBUG_LOCK);
+}
+
+/*
+ * Values written to the source PLL's EXT page to enable or disable INTSYNC,
+ * which locks the frequency PLL to the phase PLL.
+ */
+struct sit9531x_intsync_reg {
+	u8 offset;
+	u8 en_val;
+	u8 dis_val;
+};
+
+static const struct sit9531x_intsync_reg intsync_config[] = {
+	{ 0x2D, 0x02, 0x00 },
+	{ 0x50, 0x08, 0x00 },
+	{ 0x51, 0x04, 0x00 },
+	{ 0x54, 0x02, 0x00 },
+	{ 0x55, 0x28, 0x20 },
+	{ 0x5C, 0x0F, 0x00 },
+	{ 0x5D, 0xFF, 0x00 },
+	{ 0x6C, 0xDD, 0x00 },
+};
+
+/*
+ * Find the PLL whose EXT page holds the INTSYNC enable pattern, whole or in
+ * part. Caller must hold sitdev->multiop_lock.
+ */
+int sit9531x_intsync_src_detect(struct sit9531x_dev *sitdev)
+{
+	s8 src = -1, partial = -1;
+	int rc, ret, n_en, n_dis;
+	u8 pll, ext_page;
+	u8 n_pages = 0;
+	unsigned int i;
+	bool enabled;
+	u8 global;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	rc = sit9531x_read_u8(sitdev, SIT9531X_REG_INTSYNC_GLOBAL, &global);
+	if (rc)
+		return rc;
+	enabled = global & BIT(SIT9531X_INTSYNC_EN_BIT);
+
+	/*
+	 * Read the EXT pages even with the global enable clear; a page can hold
+	 * the enable pattern under a clear bit.
+	 */
+	for (pll = 0; pll < SIT9531X_NUM_PLLS; pll++) {
+		ext_page = SIT9531X_PLL_EXT_PAGE(pll);
+
+		/*
+		 * Open the EXT page's debug window to read the INTSYNC
+		 * registers.
+		 */
+		rc = sit9531x_write_u8(sitdev,
+				       SIT9531X_REG(ext_page,
+						    SIT9531X_PLL_REG_DEBUG),
+				       SIT9531X_PLL_DEBUG_UNLOCK);
+		if (rc) {
+			sit9531x_intsync_debug_lock(sitdev, ext_page);
+			return rc;
+		}
+
+		n_en = 0;
+		n_dis = 0;
+		for (i = 0; i < ARRAY_SIZE(intsync_config); i++) {
+			u16 reg;
+			u8 val;
+
+			reg = SIT9531X_REG(ext_page, intsync_config[i].offset);
+
+			rc = sit9531x_read_u8(sitdev, reg, &val);
+			if (rc)
+				break;
+			if (val == intsync_config[i].en_val)
+				n_en++;
+			else if (val == intsync_config[i].dis_val)
+				n_dis++;
+		}
+
+		ret = sit9531x_intsync_debug_lock(sitdev, ext_page);
+		if (!rc)
+			rc = ret;
+		if (rc)
+			return rc;
+
+		/*
+		 * A page with the disable pattern or with other values is not a
+		 * source.
+		 */
+		if (!n_en || n_en + n_dis != ARRAY_SIZE(intsync_config))
+			continue;
+		n_pages++;
+
+		if (n_dis || !enabled) {
+			/*
+			 * A page holding both patterns, or the whole enable
+			 * pattern under a clear global enable, does not drive
+			 * the line.
+			 */
+			if (partial < 0)
+				partial = pll;
+			continue;
+		}
+
+		if (src < 0)
+			src = pll;
+	}
+
+	/*
+	 * Record a PLL with a partial pattern, though it does not drive the
+	 * line, so that no other PLL is enabled alongside it.
+	 */
+	sitdev->intsync_partial = src < 0 && partial >= 0;
+	if (sitdev->intsync_partial) {
+		dev_warn(sitdev->dev,
+			 "PLL%c holds an INTSYNC source configuration that does not drive the line\n",
+			 'A' + partial);
+		src = partial;
+	}
+
+	/*
+	 * With more than one page holding the pattern, refuse every connect; an
+	 * enable on one would also set the global enable over the other.
+	 */
+	sitdev->intsync_conflict = n_pages > 1;
+	if (sitdev->intsync_conflict)
+		dev_warn(sitdev->dev,
+			 "%u PLLs hold the INTSYNC source pattern; recording PLL%c\n",
+			 n_pages, 'A' + src);
+
+	sitdev->intsync_src = src;
+	sitdev->intsync_foreign = enabled && src < 0;
+
+	return 0;
+}
+
+/**
+ * sit9531x_intsync_readback - re-read the sync source record from the part
+ * @sitdev: device pointer
+ *
+ * A page reads the same latched or not, so a recorded partial source is kept
+ * unless the scan resolves it. Caller must hold sitdev->multiop_lock.
+ *
+ * Return: 0 on success, <0 on a read error
+ */
+int sit9531x_intsync_readback(struct sit9531x_dev *sitdev)
+{
+	bool partial = sitdev->intsync_partial;
+	s8 src = sitdev->intsync_src;
+	int rc;
+
+	rc = sit9531x_intsync_src_detect(sitdev);
+	if (rc)
+		return rc;
+
+	if (partial && (sitdev->intsync_src < 0 ||
+			(sitdev->intsync_src == src &&
+			 !sitdev->intsync_partial))) {
+		sitdev->intsync_src = src;
+		sitdev->intsync_partial = true;
+		sitdev->intsync_foreign = false;
+	}
+
+	return 0;
+}
+
+/**
+ * sit9531x_intsync_refresh - re-read a stale sync source record
+ * @sitdev: device pointer
+ *
+ * Caller must hold sitdev->multiop_lock.
+ *
+ * Return: 0 when the record is current, <0 when the scan fails
+ */
+int sit9531x_intsync_refresh(struct sit9531x_dev *sitdev)
+{
+	s8 owner;
+	int rc;
+
+	if (!sitdev->intsync_stale)
+		return 0;
+
+	owner = sit9531x_intsync_owner(sitdev);
+	rc = sit9531x_intsync_readback(sitdev);
+	if (rc)
+		return rc;
+	sitdev->intsync_stale = false;
+	if (owner != sit9531x_intsync_owner(sitdev))
+		sitdev->intsync_ntf_pending = true;
+
+	return 0;
+}
+
+/*
+ * Check if the inter-PLL sync line carries a signal, from the recorded source
+ * or a PLL locked to the line. Caller must hold sitdev->multiop_lock.
+ */
+bool sit9531x_intsync_driven(const struct sit9531x_dev *sitdev)
+{
+	const struct sit9531x_chan *chan;
+	u8 pll;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (sitdev->intsync_src >= 0 && !sitdev->intsync_partial &&
+	    !sitdev->intsync_stale)
+		return true;
+
+	for (pll = 0; pll < SIT9531X_NUM_PLLS; pll++) {
+		chan = sit9531x_chan_state_get(sitdev, pll);
+		if (chan->routed_ref == SIT9531X_INTSYNC_PIN_ID &&
+		    chan->locked && !chan->ho_freeze &&
+		    !chan->stale && !chan->intsync_dropped)
+			return true;
+	}
+
+	return false;
+}
+
+static int __sit9531x_intsync_disable(struct sit9531x_dev *sitdev,
+				      u8 src_pll_idx, bool restore,
+				      bool *owner_kept, bool *touched);
+
+/*
+ * Set the global enable and latch the INTSYNC source pattern into the PLL's EXT
+ * page. Caller must hold sitdev->multiop_lock.
+ */
+int sit9531x_intsync_enable(struct sit9531x_dev *sitdev, u8 src_pll_idx,
+			    bool *rollback_failed, bool *touched)
+{
+	u8 ext_page, val;
+	int rc, lock_rc;
+	unsigned int i;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (rollback_failed)
+		*rollback_failed = false;
+	if (touched)
+		*touched = false;
+	if (src_pll_idx >= SIT9531X_NUM_PLLS)
+		return -EINVAL;
+
+	ext_page = SIT9531X_PLL_EXT_PAGE(src_pll_idx);
+
+	rc = sit9531x_read_u8(sitdev, SIT9531X_REG_INTSYNC_GLOBAL, &val);
+	if (rc)
+		return rc;
+	if (touched)
+		*touched = true;
+	rc = sit9531x_write_u8(sitdev, SIT9531X_REG_INTSYNC_GLOBAL,
+			       val | BIT(SIT9531X_INTSYNC_EN_BIT));
+	if (rc)
+		goto err_disable;
+
+	rc = sit9531x_write_u8(sitdev, SIT9531X_REG_GLOBAL_UPDATE,
+			       SIT9531X_SMALL_UPDATE_CMD);
+	usleep_range(1000, 2000);
+	if (rc)
+		goto relock_err;
+
+	rc = sit9531x_write_u8(sitdev,
+			       SIT9531X_REG(ext_page,
+					    SIT9531X_PLL_REG_DEBUG),
+			       SIT9531X_PLL_DEBUG_UNLOCK);
+	if (rc)
+		goto relock_err;
+
+	for (i = 0; i < ARRAY_SIZE(intsync_config); i++) {
+		rc = sit9531x_write_u8(sitdev,
+				       SIT9531X_REG(ext_page,
+						    intsync_config[i].offset),
+				       intsync_config[i].en_val);
+		if (rc)
+			goto relock_err;
+	}
+
+	rc = sit9531x_pll_small_update(sitdev, src_pll_idx);
+	if (rc)
+		goto relock_err;
+
+	rc = 0;
+	goto relock;
+
+relock_err:
+	sit9531x_intsync_debug_lock(sitdev, ext_page);
+	goto err_disable;
+
+relock:
+	lock_rc = sit9531x_intsync_debug_lock(sitdev, ext_page);
+	if (lock_rc)
+		dev_warn(sitdev->dev,
+			 "PLL%c: INTSYNC enabled but the debug window was left open: %d\n",
+			 'A' + src_pll_idx, lock_rc);
+
+	return rc;
+
+err_disable:
+	{
+		int rollback_rc;
+
+		rollback_rc = __sit9531x_intsync_disable(sitdev, src_pll_idx,
+							 false, NULL, NULL);
+		if (rollback_rc) {
+			dev_warn(sitdev->dev,
+				 "INTSYNC rollback failed after enable error: %d (original %d)\n",
+				 rollback_rc, rc);
+			if (rollback_failed)
+				*rollback_failed = true;
+		}
+	}
+
+	return rc;
+}
+
+/*
+ * Check if every INTSYNC register of an EXT page holds its disable value. The
+ * page's debug window must be open.
+ */
+static int sit9531x_intsync_page_off(struct sit9531x_dev *sitdev,
+				     u8 ext_page, bool *off)
+{
+	unsigned int i;
+	u8 val;
+	int rc;
+
+	*off = false;
+	for (i = 0; i < ARRAY_SIZE(intsync_config); i++) {
+		rc = sit9531x_read_u8(sitdev,
+				      SIT9531X_REG(ext_page,
+						   intsync_config[i].offset),
+				      &val);
+		if (rc)
+			return rc;
+		if (val != intsync_config[i].dis_val)
+			return 0;
+	}
+	*off = true;
+
+	return 0;
+}
+
+static int __sit9531x_intsync_disable(struct sit9531x_dev *sitdev,
+				      u8 src_pll_idx, bool restore,
+				      bool *owner_kept, bool *touched)
+{
+	bool in_window = false, was_enabled;
+	u8 ext_page, val;
+	int rc, lock_rc;
+	unsigned int i;
+
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (owner_kept)
+		*owner_kept = false;
+	if (touched)
+		*touched = false;
+	if (src_pll_idx >= SIT9531X_NUM_PLLS)
+		return -EINVAL;
+
+	ext_page = SIT9531X_PLL_EXT_PAGE(src_pll_idx);
+
+	rc = sit9531x_read_u8(sitdev, SIT9531X_REG_INTSYNC_GLOBAL, &val);
+	if (rc)
+		return rc;
+	was_enabled = val & BIT(SIT9531X_INTSYNC_EN_BIT);
+	if (touched)
+		*touched = true;
+	rc = sit9531x_write_u8(sitdev, SIT9531X_REG_INTSYNC_GLOBAL,
+			       val & ~BIT(SIT9531X_INTSYNC_EN_BIT));
+	if (rc)
+		goto restore_global;
+	/* A sample taken before this write can still show a lock. */
+	for (i = 0; i < SIT9531X_NUM_PLLS; i++)
+		if (sitdev->chan[i].routed_ref == SIT9531X_INTSYNC_PIN_ID)
+			sitdev->chan[i].intsync_dropped = true;
+
+	rc = sit9531x_write_u8(sitdev, SIT9531X_REG_GLOBAL_UPDATE,
+			       SIT9531X_SMALL_UPDATE_CMD);
+	usleep_range(1000, 2000);
+	if (rc)
+		goto restore_global;
+
+	rc = sit9531x_write_u8(sitdev,
+			       SIT9531X_REG(ext_page,
+					    SIT9531X_PLL_REG_DEBUG),
+			       SIT9531X_PLL_DEBUG_UNLOCK);
+	if (rc)
+		goto restore_global;
+	in_window = true;
+
+	for (i = 0; i < ARRAY_SIZE(intsync_config); i++) {
+		rc = sit9531x_write_u8(sitdev,
+				       SIT9531X_REG(ext_page,
+						    intsync_config[i].offset),
+				       intsync_config[i].dis_val);
+		if (rc)
+			goto restore_global;
+	}
+
+	rc = sit9531x_pll_small_update(sitdev, src_pll_idx);
+	if (rc && owner_kept)
+		*owner_kept = true;
+
+	goto relock;
+
+restore_global:
+	/*
+	 * Restore the global enable, or finish the disable if the page holds
+	 * the disable pattern.
+	 */
+	if (restore && in_window) {
+		bool off;
+
+		if (sit9531x_intsync_page_off(sitdev, ext_page, &off)) {
+			if (owner_kept)
+				*owner_kept = true;
+		} else if (off) {
+			rc = sit9531x_pll_small_update(sitdev, src_pll_idx);
+			if (rc && owner_kept)
+				*owner_kept = true;
+			goto relock;
+		}
+	}
+
+	if (restore && was_enabled) {
+		int ret;
+
+		ret = sit9531x_read_u8(sitdev, SIT9531X_REG_INTSYNC_GLOBAL,
+				       &val);
+		if (!ret)
+			ret = sit9531x_write_u8(sitdev,
+						SIT9531X_REG_INTSYNC_GLOBAL,
+						val |
+						BIT(SIT9531X_INTSYNC_EN_BIT));
+		if (!ret) {
+			/* The page-0 small update applies the global enable */
+			ret = sit9531x_write_close(sitdev,
+						   SIT9531X_REG_GLOBAL_UPDATE,
+						   SIT9531X_SMALL_UPDATE_CMD);
+			usleep_range(1000, 2000);
+		}
+		if (ret) {
+			dev_warn(sitdev->dev,
+				 "PLL%c: INTSYNC enable not put back after a failed disable: %d\n",
+				 'A' + src_pll_idx, ret);
+			if (owner_kept)
+				*owner_kept = true;
+		}
+	}
+
+relock:
+	lock_rc = sit9531x_intsync_debug_lock(sitdev, ext_page);
+	if (lock_rc) {
+		if (rc)
+			dev_warn(sitdev->dev,
+				 "PLL%c: debug window left open: %d\n",
+				 'A' + src_pll_idx, lock_rc);
+		else
+			dev_warn(sitdev->dev,
+				 "PLL%c: INTSYNC disabled but the debug window was left open: %d\n",
+				 'A' + src_pll_idx, lock_rc);
+	}
+
+	return rc;
+}
+
+/*
+ * Clear the global enable and latch the INTSYNC disable pattern into the PLL's
+ * EXT page. Caller must hold sitdev->multiop_lock.
+ */
+int sit9531x_intsync_disable(struct sit9531x_dev *sitdev, u8 src_pll_idx,
+			     bool *owner_kept, bool *touched)
+{
+	return __sit9531x_intsync_disable(sitdev, src_pll_idx, true,
+					  owner_kept, touched);
+}
+
+/*
+ * Notify the output pins in @outs and, when @src, the INTSYNC source pin. Call
+ * without multiop_lock: the notification takes the subsystem locks, which are
+ * taken before multiop_lock.
+ */
+static void sit9531x_drive_pins_ntf(struct sit9531x_dev *sitdev, u16 outs,
+				    bool src)
+{
+	struct sit9531x_dpll *sitdpll;
+	struct sit9531x_dpll_pin *pin;
+	struct dpll_pin *dpll_pin;
+	int rc;
+
+	if (!outs && !src)
+		return;
+
+	list_for_each_entry(sitdpll, &sitdev->dplls, list) {
+		list_for_each_entry(pin, &sitdpll->pins, list) {
+			if (pin->dir != DPLL_PIN_DIRECTION_OUTPUT)
+				continue;
+			if (pin->id == SIT9531X_INTSYNC_OUT_PIN_ID ?
+			    !src : !(outs & BIT(pin->id)))
+				continue;
+			dpll_pin = READ_ONCE(pin->dpll_pin);
+			if (!dpll_pin)
+				continue;
+			rc = dpll_pin_change_ntf(dpll_pin);
+			/*
+			 * The source pin is one pin registered on every DPLL.
+			 */
+			if (pin->id == SIT9531X_INTSYNC_OUT_PIN_ID)
+				src = false;
+			if (!rc)
+				continue;
+			mutex_lock(&sitdev->multiop_lock);
+			if (pin->id == SIT9531X_INTSYNC_OUT_PIN_ID)
+				sitdev->intsync_ntf_pending = true;
+			else
+				sitdev->out[pin->id].ntf_pending = true;
+			mutex_unlock(&sitdev->multiop_lock);
+		}
+	}
+}
+
+/*
+ * Re-read a stale sync source record; return true when a source pin
+ * notification is pending. Caller must hold sitdev->multiop_lock.
+ */
+static bool sit9531x_intsync_stale_retry(struct sit9531x_dev *sitdev)
+{
+	if (sit9531x_intsync_refresh(sitdev))
+		return false;
+
+	if (!sitdev->intsync_ntf_pending)
+		return false;
+	sitdev->intsync_ntf_pending = false;
+
+	return true;
+}
+
 /**
  * sit9531x_phase_offset_read - read phase difference via TDC
  * @sitdev: device pointer
@@ -3022,6 +3591,7 @@ static int sit9531x_chan_state_fetch(struct sit9531x_dev *sitdev, u8 pll_idx)
 	chan->ho_freeze = !!(ho_freeze & BIT(pll_idx));
 	chan->ho_valid = !!(pll_status_1 & SIT9531X_PLL_STATUS_1_HO_VALID);
 	chan->stale = false;
+	chan->intsync_dropped = false;
 
 	return 0;
 }
@@ -3194,6 +3764,15 @@ static int sit9531x_dev_state_fetch(struct sit9531x_dev *sitdev)
 	if (rc) {
 		dev_err(sitdev->dev,
 			"Failed to fetch input priority tables: %d\n", rc);
+		return rc;
+	}
+
+	mutex_lock(&sitdev->multiop_lock);
+	rc = sit9531x_intsync_src_detect(sitdev);
+	mutex_unlock(&sitdev->multiop_lock);
+	if (rc) {
+		dev_err(sitdev->dev,
+			"Failed to detect INTSYNC source: %d\n", rc);
 		return rc;
 	}
 
@@ -3522,6 +4101,7 @@ static void sit9531x_dev_periodic_work(struct kthread_work *work)
 	struct sit9531x_dev *sitdev = container_of(work, struct sit9531x_dev,
 						   work.work);
 	struct sit9531x_dpll *sitdpll;
+	bool src_moved;
 	bool answered;
 	int rc;
 
@@ -3531,16 +4111,16 @@ static void sit9531x_dev_periodic_work(struct kthread_work *work)
 	 */
 	mutex_lock(&sitdev->multiop_lock);
 	answered = sit9531x_dev_ref_states_update(sitdev);
+	src_moved = sit9531x_intsync_stale_retry(sitdev);
 	answered |= sit9531x_dev_chan_states_update(sitdev);
 	mutex_unlock(&sitdev->multiop_lock);
 
 	list_for_each_entry(sitdpll, &sitdev->dplls, list)
 		sit9531x_dpll_changes_check(sitdpll);
+	/* The source pin is not a selection pin; the walk above skips it. */
+	sit9531x_drive_pins_ntf(sitdev, 0, src_moved);
 
-	/*
-	 * Clear the W1C notification latches on pages 0 and 6 after acting on
-	 * them; while set they keep INTRB asserted.
-	 */
+	/* The latches are W1C; left set, they keep INTRB asserted. */
 	mutex_lock(&sitdev->multiop_lock);
 	rc = sit9531x_clear_notifications(sitdev);
 	mutex_unlock(&sitdev->multiop_lock);
@@ -4015,13 +4595,13 @@ static bool sit9531x_dpll_pin_is_registrable(struct sit9531x_dpll *sitdpll,
 		if (index == SIT9531X_MAX_INPUTS)
 			return true;
 		if (index == SIT9531X_INTSYNC_PIN_ID)
-			return false;
+			return true;
 
 		return sit9531x_input_pin_is_registrable(sitdev, index);
 	}
 
 	if (index == SIT9531X_INTSYNC_OUT_PIN_ID)
-		return false;
+		return true;
 
 	if (index >= sitdev->info->num_outputs)
 		return false;
@@ -4420,12 +5000,128 @@ static int sit9531x_suspend(struct device *dev)
 static int sit9531x_resume(struct device *dev)
 {
 	struct sit9531x_dev *sitdev = dev_get_drvdata(dev);
+	u16 outs_was = 0, outs_now = 0, outs_unread = 0, outs_moved = 0;
+	bool src_moved;
+	s8 owner;
+	int rc;
+	u8 i;
 
 	/* After power loss the part is on page 0, not the cached page */
 	sit9531x_page_cache_drop(sitdev);
+
+	/*
+	 * A part that lost power returns with its profile's INTSYNC routing and
+	 * output mutes, which the poll does not read; read them back. Arm one
+	 * re-select for a source lost and restored between samples.
+	 */
 	mutex_lock(&sitdev->multiop_lock);
 	sit9531x_reselect_arm(sitdev);
+	/*
+	 * Drop and report writes pending from before suspend: a reloaded
+	 * profile may have replaced their registers.
+	 */
+	for (i = 0; i < SIT9531X_NUM_PLLS; i++) {
+		struct sit9531x_chan *chan = &sitdev->chan[i];
+		bool retime = false;
+		u8 j, ho;
+
+		/*
+		 * A table write-back is pending only under forced holdover;
+		 * once that is cleared, the next poll reads the table from the
+		 * registers.
+		 */
+		if ((chan->table_pending || chan->ho_release_pending) &&
+		    !sit9531x_read_pll_u8(sitdev, i, SIT9531X_PLL_REG_HO_CTRL,
+					  &ho) &&
+		    !(ho & BIT(SIT9531X_PLL_HO_FORCE_BIT))) {
+			dev_warn(sitdev->dev,
+				 "PLL%c: forced holdover cleared over suspend, priority table restore dropped\n",
+				 'A' + i);
+			chan->table_pending = false;
+			chan->ho_release_pending = false;
+		}
+
+		for (j = 0; j < sitdev->info->num_outputs; j++) {
+			if (!sitdev->out[j].retime_pending ||
+			    sitdev->out[j].pll_idx != i)
+				continue;
+			sitdev->out[j].retime_pending = false;
+			retime = true;
+		}
+		if (!retime && !chan->flush_pending &&
+		    !(sitdev->flush_arm_pending & BIT(i)))
+			continue;
+		dev_warn(sitdev->dev,
+			 "PLL%c: pending before suspend, dropped:%s%s%s\n",
+			 'A' + i, retime ? " delay re-time" : "",
+			 chan->flush_pending ? " output realignment" : "",
+			 (sitdev->flush_arm_pending & BIT(i)) ?
+			 " on-demand flush enable" : "");
+		chan->flush_pending = false;
+		sitdev->flush_arm_pending &= ~BIT(i);
+	}
+	if (sitdev->flush_ctrl_pending) {
+		dev_warn(sitdev->dev,
+			 "flush trigger source select pending before suspend, dropped\n");
+		sitdev->flush_ctrl_pending = false;
+	}
+	owner = sit9531x_intsync_owner(sitdev);
+	/*
+	 * The delay registers are reloaded with the profile too; read them back
+	 * as probe does.
+	 */
+	for (i = 0; i < sitdev->info->num_outputs; i++) {
+		struct sit9531x_out *out = &sitdev->out[i];
+		bool beyond;
+		s64 phase_ps;
+
+		if (!out->routed)
+			continue;
+		rc = sit9531x_output_phase_read(sitdev, i, &phase_ps,
+						&beyond);
+		if (rc) {
+			dev_warn(sitdev->dev,
+				 "Output %u delay not read on resume: %d\n",
+				 i, rc);
+			out->phase_stale = true;
+			outs_unread |= BIT(i);
+			continue;
+		}
+		if (out->phase_adj != phase_ps || out->phase_stale)
+			outs_moved |= BIT(i);
+		out->phase_adj = phase_ps;
+		out->phase_armed = !beyond && phase_ps;
+		out->phase_stale = false;
+	}
+	rc = sit9531x_intsync_readback(sitdev);
+	if (rc)
+		dev_warn(sitdev->dev,
+			 "INTSYNC source not re-detected on resume: %d\n", rc);
+	sitdev->intsync_stale = rc != 0;
+	src_moved = rc || owner != sit9531x_intsync_owner(sitdev);
+	for (i = 0; i < sitdev->info->num_outputs; i++) {
+		if (sitdev->out[i].enabled)
+			outs_was |= BIT(i);
+		/* The mute state of a request left unconfirmed is unknown */
+		if (sitdev->out[i].state_stale)
+			outs_unread |= BIT(i);
+		rc = sit9531x_output_state_refresh(sitdev, i);
+		if (rc) {
+			dev_warn(sitdev->dev,
+				 "Output %u mute state not read on resume: %d\n",
+				 i, rc);
+			sitdev->out[i].state_stale = true;
+			outs_unread |= BIT(i);
+		}
+		if (sitdev->out[i].enabled)
+			outs_now |= BIT(i);
+	}
 	mutex_unlock(&sitdev->multiop_lock);
+
+	sit9531x_drive_pins_ntf(sitdev,
+				(outs_was ^ outs_now) | outs_unread |
+				outs_moved, src_moved);
+
 	if (sitdev->irq > 0)
 		enable_irq(sitdev->irq);
 	kthread_queue_delayed_work(sitdev->kworker, &sitdev->work, 0);

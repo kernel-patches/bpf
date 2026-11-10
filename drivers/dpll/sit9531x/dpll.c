@@ -28,6 +28,20 @@ static bool sit9531x_dpll_is_input_pin(const struct sit9531x_dpll_pin *pin)
 }
 
 static bool
+sit9531x_dpll_is_intsync_pin(const struct sit9531x_dpll_pin *pin)
+{
+	return sit9531x_dpll_is_input_pin(pin) &&
+	       pin->id == SIT9531X_INTSYNC_PIN_ID;
+}
+
+static bool
+sit9531x_dpll_is_intsync_src_pin(const struct sit9531x_dpll_pin *pin)
+{
+	return !sit9531x_dpll_is_input_pin(pin) &&
+	       pin->id == SIT9531X_INTSYNC_OUT_PIN_ID;
+}
+
+static bool
 sit9531x_dpll_is_xo_pin(const struct sit9531x_dpll_pin *pin)
 {
 	return sit9531x_dpll_is_input_pin(pin) &&
@@ -177,16 +191,18 @@ const struct dpll_device_ops sit9531x_dpll_device_ops = {
 };
 
 /*
- * Pin-state contract. An input is SELECTABLE while listed in this PLL's
- * priority table and DISCONNECTED otherwise; CONNECTED is refused because the
- * device selects by priority. Operstate is ACTIVE when the device feeds the PLL
- * this input (chan->routed_ref), the PLL is tracking and the lane has signal;
- * NO_SIGNAL on loss of signal; QUAL_FAILED on frequency drift; STANDBY
- * otherwise. The routed reference is used because on loss of signal the device
- * falls back to another listed source and leaves the selection naming the lost
- * one. On manual input select, the routed input is CONNECTED. An output is
- * CONNECTED while driven and DISCONNECTED while muted; SELECTABLE is refused.
- * The XO pin is always CONNECTED.
+ * Pin-state contract. An input or the INTSYNC destination is SELECTABLE while
+ * listed in this PLL's priority table and DISCONNECTED otherwise; CONNECTED is
+ * refused because the device selects by priority. Operstate is ACTIVE when the
+ * device feeds the PLL this source (chan->routed_ref), the PLL is tracking and
+ * the lane has signal; NO_SIGNAL on loss of signal; QUAL_FAILED on frequency
+ * drift; STANDBY otherwise. The routed reference is used because on loss of
+ * signal the device falls back to another listed source and leaves the
+ * selection naming the lost one. On manual input select, the routed input is
+ * CONNECTED. The INTSYNC destination has signal while the driver's record shows
+ * a PLL driving the line. An output or the INTSYNC source is CONNECTED while
+ * driven and DISCONNECTED otherwise; SELECTABLE is refused. The XO pin is
+ * always CONNECTED.
  */
 
 /* Caller must hold sitdev->multiop_lock. */
@@ -215,6 +231,22 @@ sit9531x_dpll_selection_state_get(struct sit9531x_dev *sitdev,
 		*state = DPLL_PIN_STATE_DISCONNECTED;
 }
 
+/*
+ * For INTSYNC, use the driver's record of a PLL driving or locked to the line
+ * in place of the LOS monitor. Caller must hold sitdev->multiop_lock.
+ */
+static bool
+sit9531x_dpll_selection_no_signal(struct sit9531x_dev *sitdev, u8 pin_id)
+{
+	lockdep_assert_held(&sitdev->multiop_lock);
+
+	if (pin_id == SIT9531X_INTSYNC_PIN_ID)
+		return !sit9531x_intsync_driven(sitdev);
+
+	return pin_id < sitdev->info->num_inputs &&
+	       sit9531x_ref_state_get(sitdev, pin_id)->los;
+}
+
 /* Caller must hold sitdev->multiop_lock. */
 static bool
 sit9531x_dpll_selection_active(struct sit9531x_dev *sitdev,
@@ -229,12 +261,7 @@ sit9531x_dpll_selection_active(struct sit9531x_dev *sitdev,
 	if (chan->routed_ref != pin_id || !sit9531x_chan_tracking(chan))
 		return false;
 
-	/*
-	 * Do not report a lane without signal as locked, whatever the lock bit
-	 * says; the PLL is about to switch away from it.
-	 */
-	if (pin_id < sitdev->info->num_inputs &&
-	    sit9531x_ref_state_get(sitdev, pin_id)->los)
+	if (sit9531x_dpll_selection_no_signal(sitdev, pin_id))
 		return false;
 
 	return true;
@@ -256,12 +283,13 @@ sit9531x_dpll_selection_operstate_get(struct sit9531x_dev *sitdev,
 		return;
 	}
 
+	if (sit9531x_dpll_selection_no_signal(sitdev, pin_id)) {
+		*operstate = DPLL_PIN_OPERSTATE_NO_SIGNAL;
+		return;
+	}
+
 	if (pin_id < sitdev->info->num_inputs) {
 		ref = sit9531x_ref_state_get(sitdev, pin_id);
-		if (ref->los) {
-			*operstate = DPLL_PIN_OPERSTATE_NO_SIGNAL;
-			return;
-		}
 		if (ref->qual_fail) {
 			*operstate = DPLL_PIN_OPERSTATE_QUAL_FAILED;
 			return;
@@ -587,8 +615,7 @@ sit9531x_dpll_input_pin_phase_offset_get(const struct dpll_pin *pin,
 				       "Failed to read the input clock monitors");
 			return rc;
 		}
-		if (dpin->id < sitdev->info->num_inputs &&
-		    sit9531x_ref_state_get(sitdev, dpin->id)->los)
+		if (sit9531x_dpll_selection_no_signal(sitdev, dpin->id))
 			rc = -ENODATA;
 	}
 	mutex_unlock(&sitdev->multiop_lock);
@@ -661,6 +688,325 @@ sit9531x_dpll_output_pin_direction_get(const struct dpll_pin *pin,
 				       void *dpll_priv,
 				       enum dpll_pin_direction *direction,
 				       struct netlink_ext_ack *extack);
+
+/* Caller must hold sitdev->multiop_lock. */
+static bool
+sit9531x_dpll_intsync_src_connected(const struct sit9531x_dev *sitdev,
+				    const struct sit9531x_dpll *sitdpll)
+{
+	return sitdev->intsync_src == sitdpll->id && !sitdev->intsync_partial;
+}
+
+/* Caller must hold sitdev->multiop_lock. */
+static int sit9531x_dpll_intsync_refresh(struct sit9531x_dev *sitdev,
+					 struct netlink_ext_ack *extack)
+{
+	int rc;
+
+	rc = sit9531x_intsync_refresh(sitdev);
+	if (rc)
+		NL_SET_ERR_MSG(extack, "INTSYNC source could not be read back");
+
+	return rc;
+}
+
+static int
+sit9531x_dpll_intsync_src_state_on_dpll_get(const struct dpll_pin *pin,
+					    void *pin_priv,
+					    const struct dpll_device *dpll,
+					    void *dpll_priv,
+					    enum dpll_pin_state *state,
+					    struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+	int rc;
+
+	mutex_lock(&sitdev->multiop_lock);
+	rc = sit9531x_dpll_intsync_refresh(sitdev, extack);
+	if (rc) {
+		mutex_unlock(&sitdev->multiop_lock);
+		return rc;
+	}
+	if (sit9531x_dpll_intsync_src_connected(sitdev, sitdpll))
+		*state = DPLL_PIN_STATE_CONNECTED;
+	else
+		*state = DPLL_PIN_STATE_DISCONNECTED;
+	mutex_unlock(&sitdev->multiop_lock);
+
+	return 0;
+}
+
+/*
+ * Driving the line is an explicit routing, not a selection candidate, so
+ * SELECTABLE is refused.
+ */
+static int
+sit9531x_dpll_intsync_src_state_on_dpll_set(const struct dpll_pin *pin,
+					    void *pin_priv,
+					    const struct dpll_device *dpll,
+					    void *dpll_priv,
+					    enum dpll_pin_state state,
+					    struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll_pin *dpin = pin_priv;
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+	bool was_connected, moved, owner_kept = false;
+	int rc = 0, detect_rc = 0;
+	bool changed = false;
+	u8 hw_src;
+
+	mutex_lock(&sitdev->multiop_lock);
+
+	rc = sit9531x_dpll_intsync_refresh(sitdev, extack);
+	if (rc) {
+		mutex_unlock(&sitdev->multiop_lock);
+		return rc;
+	}
+	was_connected = sit9531x_dpll_intsync_src_connected(sitdev, sitdpll);
+
+	switch (state) {
+	case DPLL_PIN_STATE_CONNECTED:
+		if (was_connected)
+			break;
+		if (sitdev->intsync_src >= 0 &&
+		    sitdev->intsync_src != sitdpll->id) {
+			NL_SET_ERR_MSG(extack,
+				       "INTSYNC is already sourced by another PLL");
+			rc = -EBUSY;
+			break;
+		}
+		/*
+		 * The enable drives the line from every page holding the source
+		 * pattern.
+		 */
+		if (sitdev->intsync_conflict) {
+			NL_SET_ERR_MSG(extack,
+				       "More than one PLL holds the INTSYNC source pattern");
+			rc = -EBUSY;
+			break;
+		}
+		/*
+		 * The global enable covers every page, so this PLL would drive
+		 * the line alongside the configuration that set it.
+		 */
+		if (sitdev->intsync_foreign) {
+			NL_SET_ERR_MSG(extack,
+				       "The sync line is enabled by a configuration the driver does not recognise");
+			rc = -EBUSY;
+			break;
+		}
+		hw_src = sit9531x_input_hw_src(SIT9531X_INTSYNC_PIN_ID);
+		if (sit9531x_input_prio_present(sitdev, sitdpll->id, hw_src)) {
+			NL_SET_ERR_MSG(extack,
+				       "PLL selects INTSYNC as a reference; it cannot drive it");
+			rc = -EBUSY;
+			break;
+		}
+		rc = sit9531x_intsync_enable(sitdev, sitdpll->id, &owner_kept,
+					     &changed);
+		break;
+	case DPLL_PIN_STATE_DISCONNECTED:
+		if (sitdev->intsync_src != sitdpll->id)
+			break;
+		rc = sit9531x_intsync_disable(sitdev, sitdpll->id,
+					      &owner_kept, &changed);
+		break;
+	default:
+		rc = -EINVAL;
+		break;
+	}
+
+	if (changed && !rc) {
+		sitdev->intsync_src = state == DPLL_PIN_STATE_CONNECTED ?
+				      sitdpll->id : -1;
+		sitdev->intsync_partial = false;
+	}
+
+	if (changed)
+		detect_rc = sit9531x_intsync_src_detect(sitdev);
+	if (changed && rc) {
+		if (owner_kept ||
+		    (state == DPLL_PIN_STATE_CONNECTED &&
+		     (detect_rc || sitdev->intsync_src == sitdpll->id))) {
+			sitdev->intsync_src = sitdpll->id;
+			sitdev->intsync_partial = true;
+			sitdev->intsync_foreign = false;
+		} else if (detect_rc) {
+			sitdev->intsync_stale = true;
+		}
+	} else if (changed && detect_rc && sitdev->intsync_conflict) {
+		sitdev->intsync_stale = true;
+	}
+	if (detect_rc)
+		dev_warn(sitdev->dev,
+			 "INTSYNC source cache not refreshed: %d\n",
+			 detect_rc);
+
+	/* The core notifies only a request that succeeded */
+	moved = sit9531x_dpll_intsync_src_connected(sitdev, sitdpll) !=
+		was_connected;
+
+	mutex_unlock(&sitdev->multiop_lock);
+
+	if (rc) {
+		struct dpll_pin *dpll_pin;
+
+		if (rc != -EBUSY && rc != -EINVAL && rc != -EOPNOTSUPP)
+			NL_SET_ERR_MSG(extack,
+				       "Failed to set INTSYNC source state");
+		/*
+		 * Runs under the core's lock, as __dpll_pin_change_ntf()
+		 * requires.
+		 */
+		dpll_pin = READ_ONCE(dpin->dpll_pin);
+		if (moved && dpll_pin && __dpll_pin_change_ntf(dpll_pin)) {
+			mutex_lock(&sitdev->multiop_lock);
+			sitdev->intsync_ntf_pending = true;
+			mutex_unlock(&sitdev->multiop_lock);
+		}
+	}
+
+	return rc;
+}
+
+static const struct dpll_pin_ops sit9531x_dpll_intsync_src_pin_ops = {
+	.direction_get		= sit9531x_dpll_output_pin_direction_get,
+	.state_on_dpll_get	= sit9531x_dpll_intsync_src_state_on_dpll_get,
+	.state_on_dpll_set	= sit9531x_dpll_intsync_src_state_on_dpll_set,
+};
+
+static int
+sit9531x_dpll_intsync_dst_state_on_dpll_get(const struct dpll_pin *pin,
+					    void *pin_priv,
+					    const struct dpll_device *dpll,
+					    void *dpll_priv,
+					    enum dpll_pin_state *state,
+					    struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+	int rc;
+
+	mutex_lock(&sitdev->multiop_lock);
+	rc = sit9531x_dpll_intsync_refresh(sitdev, extack);
+	if (rc) {
+		mutex_unlock(&sitdev->multiop_lock);
+		return rc;
+	}
+	if (sitdev->intsync_src == sitdpll->id)
+		*state = DPLL_PIN_STATE_DISCONNECTED;
+	else
+		sit9531x_dpll_selection_state_get(sitdev, sitdpll,
+						  SIT9531X_INTSYNC_PIN_ID,
+						  state);
+	mutex_unlock(&sitdev->multiop_lock);
+
+	return 0;
+}
+
+/* INTSYNC is an internal line; only the per-PLL priority table is touched. */
+static int
+sit9531x_dpll_intsync_dst_state_on_dpll_set(const struct dpll_pin *pin,
+					    void *pin_priv,
+					    const struct dpll_device *dpll,
+					    void *dpll_priv,
+					    enum dpll_pin_state state,
+					    struct netlink_ext_ack *extack)
+{
+	u8 hw_src = sit9531x_input_hw_src(SIT9531X_INTSYNC_PIN_ID);
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+	int rc;
+
+	mutex_lock(&sitdev->multiop_lock);
+
+	rc = sit9531x_dpll_intsync_refresh(sitdev, extack);
+	if (rc) {
+		mutex_unlock(&sitdev->multiop_lock);
+		return rc;
+	}
+	switch (state) {
+	case DPLL_PIN_STATE_DISCONNECTED:
+		rc = sit9531x_input_prio_remove(sitdev, sitdpll->id, hw_src);
+		break;
+	case DPLL_PIN_STATE_CONNECTED:
+		NL_SET_ERR_MSG(extack,
+			       "Device selects its reference by priority; use selectable");
+		rc = -EOPNOTSUPP;
+		break;
+	case DPLL_PIN_STATE_SELECTABLE:
+		if (sitdev->intsync_src == sitdpll->id) {
+			NL_SET_ERR_MSG(extack,
+				       "PLL cannot lock to the INTSYNC it drives");
+			rc = -EINVAL;
+			break;
+		}
+		rc = sit9531x_input_prio_add(sitdev, sitdpll->id, hw_src);
+		break;
+	default:
+		rc = -EINVAL;
+		break;
+	}
+
+	mutex_unlock(&sitdev->multiop_lock);
+
+	if (rc == -ENOSPC)
+		NL_SET_ERR_MSG(extack,
+			       "Priority table is full of unique sources on this PLL");
+	else if (rc && rc != -EINVAL && rc != -EOPNOTSUPP)
+		NL_SET_ERR_MSG(extack, "Failed to set INTSYNC input state");
+
+	return rc;
+}
+
+static int
+sit9531x_dpll_intsync_dst_operstate_on_dpll_get(const struct dpll_pin *pin,
+						void *pin_priv,
+						const struct dpll_device *dpll,
+						void *dpll_priv,
+						enum dpll_pin_operstate *state,
+						struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+	int rc;
+
+	mutex_lock(&sitdev->multiop_lock);
+	rc = sit9531x_dpll_intsync_refresh(sitdev, extack);
+	if (rc) {
+		mutex_unlock(&sitdev->multiop_lock);
+		return rc;
+	}
+	sit9531x_dpll_selection_operstate_get(sitdev, sitdpll,
+					      SIT9531X_INTSYNC_PIN_ID,
+					      state);
+	mutex_unlock(&sitdev->multiop_lock);
+
+	return 0;
+}
+
+/*
+ * The destination pin id SIT9531X_INTSYNC_PIN_ID is one past the end of ref[];
+ * do not add ops that index ref[id].
+ */
+static const struct dpll_pin_ops sit9531x_dpll_intsync_dst_pin_ops = {
+	.direction_get		= sit9531x_dpll_input_pin_direction_get,
+	.state_on_dpll_get	= sit9531x_dpll_intsync_dst_state_on_dpll_get,
+	.state_on_dpll_set	= sit9531x_dpll_intsync_dst_state_on_dpll_set,
+	.operstate_on_dpll_get	=
+		sit9531x_dpll_intsync_dst_operstate_on_dpll_get,
+	.prio_get		= sit9531x_dpll_input_pin_prio_get,
+	.prio_set		= sit9531x_dpll_input_pin_prio_set,
+};
+
+static const struct dpll_pin_ops sit9531x_dpll_intsync_dst_pin_manual_ops = {
+	.direction_get		= sit9531x_dpll_input_pin_direction_get,
+	.state_on_dpll_get	= sit9531x_dpll_intsync_dst_state_on_dpll_get,
+	.operstate_on_dpll_get	=
+		sit9531x_dpll_intsync_dst_operstate_on_dpll_get,
+};
 
 /* The XO feeds every PLL and is always connected. */
 
@@ -974,12 +1320,18 @@ sit9531x_dpll_pin_ops_get(const struct sit9531x_dpll_pin *pin)
 	const struct sit9531x_dev *sitdev = pin->dpll->dev;
 	bool manual;
 
-	if (!sit9531x_dpll_is_input_pin(pin))
+	if (!sit9531x_dpll_is_input_pin(pin)) {
+		if (sit9531x_dpll_is_intsync_src_pin(pin))
+			return &sit9531x_dpll_intsync_src_pin_ops;
 		return &sit9531x_dpll_output_pin_ops;
+	}
 	if (sit9531x_dpll_is_xo_pin(pin))
 		return &sit9531x_dpll_xo_pin_ops;
 	/* Read once at probe, before any pin is registered. */
 	manual = sit9531x_chan_state_get(sitdev, pin->dpll->id)->manual_input;
+	if (sit9531x_dpll_is_intsync_pin(pin))
+		return manual ? &sit9531x_dpll_intsync_dst_pin_manual_ops :
+				&sit9531x_dpll_intsync_dst_pin_ops;
 	/*
 	 * Set before any pin of the input is published and not written again.
 	 */
