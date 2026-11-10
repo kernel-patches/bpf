@@ -2,7 +2,7 @@
 /*
  * Generic USB driver for report based interrupt in/out devices
  * like LD Didactic's USB devices. LD Didactic's USB devices are
- * HID devices which do not use HID report definitons (they use
+ * HID devices which do not use HID report definitions (they use
  * raw interrupt in and our reports only for communication).
  *
  * This driver uses a ring buffer for time critical reading of

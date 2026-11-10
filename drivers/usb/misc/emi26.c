@@ -198,7 +198,7 @@ static int emi26_load_firmware (struct usb_device *dev)
 		goto wraperr;
 	msleep(250);	/* let device settle */
 
-	/* return 1 to fail the driver inialization
+	/* return 1 to fail the driver initialization
 	 * and give real driver change to load */
 	err = 1;
 
