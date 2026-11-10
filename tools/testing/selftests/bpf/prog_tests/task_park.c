@@ -4,6 +4,7 @@
 #include <test_progs.h>
 #include <pthread.h>
 #include <signal.h>
+#include <sys/prctl.h>
 #include <sys/syscall.h>
 #include "task_park.skel.h"
 #include "verifier_task_park.skel.h"
@@ -169,6 +170,67 @@ out:
 	skel->data->park_timeout_ns = timeout;
 }
 
+/*
+ * Wait until the waiter sleeps, attach the tracing program @prog, let @fire
+ * raise its event for this thread, and check that the program's wake, not the
+ * syscall drain, ended the park and returned @expected_ret. The program
+ * attaches only once the waiter sleeps, since the polling sleeps of this
+ * thread are events of its own, and the drain runs only if the event failed.
+ */
+static void test_wake_tracing(struct task_park *skel, struct bpf_program *prog,
+			      int (*fire)(void), int expected_ret)
+{
+	__u64 timeout = skel->data->park_timeout_ns;
+	struct bpf_link *link = NULL;
+	struct waiter w;
+	bool woken;
+	int i;
+
+	skel->data->park_timeout_ns = ~0ULL;
+	skel->bss->waker_tid = syscall(SYS_gettid);
+	skel->data->tracing_wake_ret = -1;
+	if (!ASSERT_OK(start_waiter(&w, skel->progs.park_until_woken), "pthread_create"))
+		goto out;
+	for (i = 0; i < 5000 && !waiter_sleeping(&w); i++)
+		usleep(1000);
+	if (ASSERT_TRUE(waiter_sleeping(&w), "waiter_sleeping")) {
+		link = bpf_program__attach(prog);
+		if (ASSERT_OK_PTR(link, "attach"))
+			ASSERT_OK(fire(), "fire");
+	}
+	for (i = 0; i < 5000 && !waiter_done(&w); i++)
+		usleep(1000);
+	woken = waiter_done(&w);
+	bpf_link__destroy(link);
+	/* Bound any further park before draining, so a lost wake cannot hang the join. */
+	skel->data->park_timeout_ns = timeout;
+	if (!woken)
+		wake_until_done(skel, &w);
+	pthread_join(w.thread, NULL);
+	ASSERT_TRUE(woken, "woken_by_tracing_prog");
+	ASSERT_EQ(skel->data->tracing_wake_ret, expected_ret, "tracing_wake_ret");
+	ASSERT_OK(w.err, "park_until_woken");
+	ASSERT_EQ((__s32)w.retval, 0, "wake_park_ret");
+out:
+	skel->data->park_timeout_ns = timeout;
+}
+
+/* Renaming the thread to its own name still fires task_rename. */
+static int rename_self(void)
+{
+	char comm[16];
+
+	if (prctl(PR_GET_NAME, comm))
+		return -errno;
+	return prctl(PR_SET_NAME, comm) ? -errno : 0;
+}
+
+/* The timer that ends this sleep wakes the thread, which fires sched_waking. */
+static int sleep_self(void)
+{
+	return usleep(1000) ? -errno : 0;
+}
+
 static void sig_noop(int sig)
 {
 }
@@ -237,6 +299,10 @@ void test_task_park(void)
 		test_wake(skel);
 	if (test__start_subtest("wake_asleep"))
 		test_wake_asleep(skel);
+	if (test__start_subtest("wake_tracing"))
+		test_wake_tracing(skel, skel->progs.wake_on_rename, rename_self, 1);
+	if (test__start_subtest("wake_tracing_deferred"))
+		test_wake_tracing(skel, skel->progs.wake_on_waking, sleep_self, 2);
 	if (test__start_subtest("prog_array"))
 		test_prog_array(skel);
 	if (test__start_subtest("signal"))
