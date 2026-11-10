@@ -131,7 +131,12 @@ struct ath12k_dp_peer {
 	int peer_id;
 	struct ieee80211_sta *sta;
 
-	u8 hw_links[ATH12K_GROUP_MAX_RADIO];
+	/*
+	 * Maps a driver link index to the IEEE80211 link id. The index is
+	 * the hw_link_id for QCN9274 and the logical_link_id for
+	 * WCN7850/QCC2072.
+	 */
+	u8 link_id_map[ATH12K_GROUP_MAX_RADIO];
 
 	u16 sec_type_grp;
 	u16 sec_type;

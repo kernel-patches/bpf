@@ -2368,7 +2368,7 @@ ath12k_wifi7_dp_rx_get_link_id_qcn9274(struct ath12k_dp_peer *dp_peer,
 				       struct ath12k_skb_rxcb *rxcb,
 				       struct ieee80211_rx_status *status)
 {
-	return dp_peer->hw_links[rxcb->hw_link_id];
+	return dp_peer->link_id_map[rxcb->hw_link_id];
 }
 
 int

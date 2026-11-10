@@ -418,7 +418,7 @@ ath12k_dp_link_peer_find_by_peerid(struct ath12k_pdev_dp *dp_pdev, u16 peer_id)
 	if (!dp_peer)
 		return NULL;
 
-	link_id = dp_peer->hw_links[dp_pdev->hw_link_id];
+	link_id = dp_peer->link_id_map[dp_pdev->hw_link_id];
 
 	return rcu_dereference(dp_peer->link_peers[link_id]);
 }
@@ -545,7 +545,7 @@ int ath12k_dp_link_peer_assign(struct ath12k_dp *dp, struct ath12k_dp_hw *dp_hw,
 	peer->dp_peer = dp_peer;
 	peer->hw_link_id = hw_link_id;
 
-	dp_peer->hw_links[peer->hw_link_id] = link_id;
+	dp_peer->link_id_map[peer->hw_link_id] = link_id;
 
 	peerid_index = ath12k_dp_peer_get_peerid_index(dp, peer->peer_id);
 
@@ -613,7 +613,7 @@ void ath12k_dp_link_peer_unassign(struct ath12k_dp *dp, struct ath12k_dp_hw *dp_
 	spin_lock_bh(&dp_hw->peer_lock);
 
 	dp_peer = peer->dp_peer;
-	dp_peer->hw_links[peer->hw_link_id] = 0;
+	dp_peer->link_id_map[peer->hw_link_id] = 0;
 
 	peerid_index = ath12k_dp_peer_get_peerid_index(dp, peer->peer_id);
 
