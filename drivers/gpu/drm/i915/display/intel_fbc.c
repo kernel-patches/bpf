@@ -1180,14 +1180,15 @@ static bool lnl_fbc_pixel_format_is_valid(const struct intel_plane_state *plane_
 	}
 }
 
-static bool
-xe3p_lpd_fbc_fp16_format_is_valid(const struct intel_plane_state *plane_state)
+static bool format_is_float(const struct intel_plane_state *plane_state)
 {
 	const struct drm_framebuffer *fb = plane_state->hw.fb;
 
 	switch (fb->format->format) {
 	case DRM_FORMAT_ARGB16161616F:
+	case DRM_FORMAT_XRGB16161616F:
 	case DRM_FORMAT_ABGR16161616F:
+	case DRM_FORMAT_XBGR16161616F:
 		return true;
 	default:
 		return false;
@@ -1196,24 +1197,22 @@ xe3p_lpd_fbc_fp16_format_is_valid(const struct intel_plane_state *plane_state)
 
 static bool xe3p_lpd_fbc_pixel_format_is_valid(const struct intel_plane_state *plane_state)
 {
-	if (lnl_fbc_pixel_format_is_valid(plane_state))
+	const struct drm_framebuffer *fb = plane_state->hw.fb;
+
+	switch (fb->format->format) {
+	case DRM_FORMAT_XRGB8888:
+	case DRM_FORMAT_XBGR8888:
+	case DRM_FORMAT_ARGB8888:
+	case DRM_FORMAT_ABGR8888:
+	case DRM_FORMAT_RGB565:
+	case DRM_FORMAT_ARGB16161616F:
+	case DRM_FORMAT_XRGB16161616F:
+	case DRM_FORMAT_ABGR16161616F:
+	case DRM_FORMAT_XBGR16161616F:
 		return true;
-
-	if (xe3p_lpd_fbc_fp16_format_is_valid(plane_state))
-		return true;
-
-	return false;
-}
-
-bool intel_fbc_need_pixel_normalizer(const struct intel_plane_state *plane_state)
-{
-	struct intel_display *display = to_intel_display(plane_state);
-
-	if (HAS_PIXEL_NORMALIZER(display) &&
-	    xe3p_lpd_fbc_fp16_format_is_valid(plane_state))
-		return true;
-
-	return false;
+	default:
+		return false;
+	}
 }
 
 static bool pixel_format_is_valid(const struct intel_plane_state *plane_state)
@@ -1228,6 +1227,15 @@ static bool pixel_format_is_valid(const struct intel_plane_state *plane_state)
 		return g4x_fbc_pixel_format_is_valid(plane_state);
 	else
 		return i8xx_fbc_pixel_format_is_valid(plane_state);
+}
+
+bool intel_fbc_need_pixel_normalizer(const struct intel_plane_state *plane_state)
+{
+	struct intel_display *display = to_intel_display(plane_state);
+
+	return HAS_PIXEL_NORMALIZER(display) &&
+	       pixel_format_is_valid(plane_state) &&
+	       format_is_float(plane_state);
 }
 
 static bool i8xx_fbc_rotation_is_valid(const struct intel_plane_state *plane_state)
