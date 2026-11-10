@@ -12118,6 +12118,26 @@ static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			return err;
 		}
 
+		/*
+		 * A park inside the callee is checked when the callee is verified,
+		 * but only against the callee's own frame. Apply the rules for the
+		 * frames the callee cannot see here, at the call.
+		 */
+		if (env->subprog_info[subprog].might_park) {
+			if (in_callback_frames(env)) {
+				verbose(env, "global function %s() may call bpf_task_park(), which is not allowed in a callback\n",
+					sub_name);
+				operation = bpf_diag_fmt(env, "global function %s() that may call bpf_task_park()",
+							 sub_name);
+				bpf_diag_policy(env, *insn_idx, operation, "the call is in a callback",
+						"Call the function from the main program or from a function it calls directly, not from a callback.");
+				return -EINVAL;
+			}
+			err = check_park_stack_objects(env, *insn_idx);
+			if (err)
+				return err;
+		}
+
 		if (env->log.level & BPF_LOG_LEVEL)
 			verbose(env, "Func#%d ('%s') is global and assumed valid.\n",
 				subprog, sub_name);
@@ -12130,6 +12150,8 @@ static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		returns_void = subprog_returns_void(env, subprog);
 		if (env->subprog_info[subprog].changes_pkt_data)
 			clear_all_pkt_pointers(env);
+		if (env->subprog_info[subprog].might_park)
+			invalidate_regs_across_park(env);
 		if (returns_void)
 			bpf_diag_record_scrub(env, &caller->regs[BPF_REG_0], BPF_DIAG_MOD_CALLER_SAVED);
 		else
@@ -14525,6 +14547,11 @@ bool bpf_is_kfunc_pkt_changing(struct bpf_call_arg_meta *meta)
 {
 	return is_kfunc_call(meta, special_kfunc_list[KF_bpf_xdp_pull_data]) ||
 	       is_kfunc_dynptr_write(meta);
+}
+
+bool bpf_is_task_park_kfunc(struct bpf_call_arg_meta *meta)
+{
+	return is_kfunc_call(meta, special_kfunc_list[KF_bpf_task_park]);
 }
 
 static u32 kfunc_abi_slots(const struct btf_func_model *fm)
