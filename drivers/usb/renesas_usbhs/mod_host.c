@@ -1319,7 +1319,7 @@ static int usbhsh_irq_attch(struct usbhs_priv *priv,
 	usbhsh_port_stat_set(hpriv, USB_PORT_STAT_C_CONNECTION << 16);
 
 	/*
-	 * attch interrupt might happen infinitely on some device
+	 * attach interrupt might happen infinitely on some device
 	 * (on self power USB hub ?)
 	 * disable it here.
 	 *
@@ -1347,7 +1347,7 @@ static int usbhsh_irq_dtch(struct usbhs_priv *priv,
 	usbhsh_port_stat_set(hpriv, USB_PORT_STAT_C_CONNECTION << 16);
 
 	/*
-	 * enable attch interrupt again
+	 * enable attach interrupt again
 	 *
 	 * usbhsh_is_running() becomes invalid
 	 * according to this process.
@@ -1468,7 +1468,7 @@ static int usbhsh_start(struct usbhs_priv *priv)
 	usbhsh_pipe_init_for_host(priv);
 
 	/*
-	 * system config enble
+	 * system config enable
 	 * - HI speed
 	 * - host
 	 * - usb module
