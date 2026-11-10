@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 #include <net/netdev_queues.h>
+#include <net/page_pool/memory_provider.h>
 
 #include "common.h"
 #include "netlink.h"
@@ -258,15 +259,15 @@ ethnl_set_rings(struct ethnl_req_info *req_info, struct genl_info *info)
 		return -EINVAL;
 	}
 
-	if (dev_get_min_mp_channel_count(dev)) {
+	if (!netif_all_mps_have_cap(dev, MP_CAP_READABLE)) {
 		if (kernel_ringparam.tcp_data_split !=
 		    ETHTOOL_TCP_DATA_SPLIT_ENABLED) {
 			NL_SET_ERR_MSG(info->extack,
-				       "can't disable tcp-data-split while device has memory provider enabled");
+				       "can't disable tcp-data-split while device has unreadable memory provider enabled");
 			return -EINVAL;
 		} else if (kernel_ringparam.hds_thresh) {
 			NL_SET_ERR_MSG(info->extack,
-				       "can't set non-zero hds_thresh while device is memory provider enabled");
+				       "can't set non-zero hds_thresh while device has unreadable memory provider enabled");
 			return -EINVAL;
 		}
 	}

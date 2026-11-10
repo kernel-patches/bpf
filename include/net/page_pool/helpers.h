@@ -62,6 +62,7 @@
 
 #include <linux/dma-mapping.h>
 
+#include <net/page_pool/memory_provider.h>
 #include <net/page_pool/types.h>
 #include <net/net_debug.h>
 #include <net/netmem.h>
@@ -519,7 +520,18 @@ static inline void page_pool_nid_changed(struct page_pool *pool, int new_nid)
  */
 static inline bool page_pool_is_unreadable(struct page_pool *pool)
 {
-	return !!pool->mp_ops;
+	return pool->mp_ops && !(pool->mp_ops->caps & MP_CAP_READABLE);
+}
+
+/**
+ * page_pool_supports_frag() - may page pool buffers be split
+ * @pool: queried page pool
+ *
+ * Return: false if the memory provider of @pool hands out whole buffers only
+ */
+static inline bool page_pool_supports_frag(const struct page_pool *pool)
+{
+	return !pool->mp_ops || pool->mp_ops->caps & MP_CAP_FRAG;
 }
 
 #endif /* _NET_PAGE_POOL_HELPERS_H */

@@ -12,6 +12,7 @@
 #include <net/netdev_lock.h>
 #include <net/netdev_queues.h>
 #include <net/netdev_rx_queue.h>
+#include <net/page_pool/memory_provider.h>
 #include <net/xdp_sock_drv.h>
 #include <net/netkit.h>
 #include <net/dst.h>
@@ -289,7 +290,7 @@ static int netkit_xsk(struct net_device *dev, struct netdev_bpf *xdp)
 		ret = -EOPNOTSUPP;
 		goto out;
 	}
-	if (!create || !dev_get_min_mp_channel_count(phys))
+	if (!create || netif_all_mps_have_cap(phys, MP_CAP_READABLE))
 		ret = phys->netdev_ops->ndo_bpf(phys, &xdp_lower);
 out:
 	netdev_unlock(phys);

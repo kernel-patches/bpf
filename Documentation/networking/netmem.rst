@@ -103,6 +103,11 @@ Driver RX Requirements
      which knows when dma-syncing is (or is not) appropriate.
    - PP_FLAG_ALLOW_UNREADABLE_NETMEM. The driver must specify this flag iff
      tcp-data-split is enabled.
+   - PP_FLAG_MEM_PROVIDER. The page pool takes memory from the memory
+     provider of its RX queue, readable or not. Page pool creation fails if
+     the provider is unreadable and PP_FLAG_ALLOW_UNREADABLE_NETMEM is not
+     set, so do not set it on header page pools of such a queue. Without it,
+     PP_FLAG_ALLOW_UNREADABLE_NETMEM selects unreadable providers only.
 
 5. The driver must not assume the netmem is readable and/or backed by pages.
    The netmem returned by the page_pool may be unreadable, in which case

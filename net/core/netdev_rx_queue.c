@@ -82,9 +82,13 @@ __netif_get_rx_queue_lease(struct net_device **dev, unsigned int *rxq_idx,
 /* See also page_pool_is_unreadable() */
 bool netif_rxq_has_unreadable_mp(struct net_device *dev, unsigned int rxq_idx)
 {
-	if (rxq_idx < dev->real_num_rx_queues)
-		return __netif_get_rx_queue(dev, rxq_idx)->mp_params.mp_ops;
-	return false;
+	const struct memory_provider_ops *ops;
+
+	if (rxq_idx >= dev->real_num_rx_queues)
+		return false;
+
+	ops = __netif_get_rx_queue(dev, rxq_idx)->mp_params.mp_ops;
+	return ops && !(ops->caps & MP_CAP_READABLE);
 }
 EXPORT_SYMBOL(netif_rxq_has_unreadable_mp);
 
@@ -93,6 +97,22 @@ bool netif_rxq_has_mp(struct net_device *dev, unsigned int rxq_idx)
 	if (rxq_idx < dev->real_num_rx_queues)
 		return __netif_get_rx_queue(dev, rxq_idx)->mp_params.mp_priv;
 	return false;
+}
+
+bool netif_all_mps_have_cap(struct net_device *dev, u32 cap)
+{
+	const struct memory_provider_ops *ops;
+	unsigned int i;
+
+	netdev_assert_locked_ops_compat(dev);
+
+	for (i = 0; i < dev->real_num_rx_queues; i++) {
+		ops = dev->_rx[i].mp_params.mp_ops;
+		if (ops && (ops->caps & cap) != cap)
+			return false;
+	}
+
+	return true;
 }
 
 static int netdev_rx_queue_reconfig(struct net_device *dev,
@@ -189,6 +209,7 @@ static int __netif_mp_open_rxq(struct net_device *dev, unsigned int rxq_idx,
 			       struct netlink_ext_ack *extack)
 {
 	const struct netdev_queue_mgmt_ops *qops = dev->queue_mgmt_ops;
+	bool unreadable = !(p->mp_ops->caps & MP_CAP_READABLE);
 	struct netdev_queue_config qcfg[2];
 	struct netdev_rx_queue *rxq;
 	int ret;
@@ -196,16 +217,18 @@ static int __netif_mp_open_rxq(struct net_device *dev, unsigned int rxq_idx,
 	if (!qops)
 		return -EOPNOTSUPP;
 
-	if (dev->cfg->hds_config != ETHTOOL_TCP_DATA_SPLIT_ENABLED) {
+	if (unreadable &&
+	    dev->cfg->hds_config != ETHTOOL_TCP_DATA_SPLIT_ENABLED) {
 		NL_SET_ERR_MSG(extack, "tcp-data-split is disabled");
 		return -EINVAL;
 	}
-	if (dev->cfg->hds_thresh) {
+	if (unreadable && dev->cfg->hds_thresh) {
 		NL_SET_ERR_MSG(extack, "hds-thresh is not zero");
 		return -EINVAL;
 	}
-	if (dev_xdp_prog_count(dev)) {
-		NL_SET_ERR_MSG(extack, "unable to custom memory provider to device with XDP program attached");
+	if (unreadable && dev_xdp_prog_count(dev)) {
+		NL_SET_ERR_MSG(extack,
+			       "unable to use unreadable memory provider with XDP program attached");
 		return -EEXIST;
 	}
 	if (p->rx_page_size && !(qops->supported_params & QCFG_RX_PAGE_SIZE)) {

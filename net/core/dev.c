@@ -10588,8 +10588,9 @@ int netif_xdp_propagate(struct net_device *dev, struct netdev_bpf *bpf)
 		return -EBUSY;
 	}
 
-	if (dev_get_min_mp_channel_count(dev)) {
-		NL_SET_ERR_MSG(bpf->extack, "unable to propagate XDP to device using memory provider");
+	if (!netif_all_mps_have_cap(dev, MP_CAP_READABLE)) {
+		NL_SET_ERR_MSG(bpf->extack,
+			       "unable to propagate XDP to device using unreadable memory provider");
 		return -EBUSY;
 	}
 
@@ -10664,8 +10665,9 @@ static int dev_xdp_install(struct net_device *dev, enum bpf_xdp_mode mode,
 		return -EBUSY;
 	}
 
-	if (dev_get_min_mp_channel_count(dev)) {
-		NL_SET_ERR_MSG(extack, "unable to install XDP to device using memory provider");
+	if (!netif_all_mps_have_cap(dev, MP_CAP_READABLE)) {
+		NL_SET_ERR_MSG(extack,
+			       "unable to install XDP to device using unreadable memory provider");
 		return -EBUSY;
 	}
 

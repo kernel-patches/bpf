@@ -188,6 +188,29 @@ static void page_pool_struct_check(void)
 				    PAGE_POOL_FRAG_GROUP_ALIGN);
 }
 
+static int page_pool_select_mp(struct page_pool *pool,
+			       const struct pp_memory_provider_params *mpp)
+{
+	const struct memory_provider_ops *ops = mpp->mp_ops;
+	unsigned int flags = pool->slow.flags;
+	bool readable;
+
+	if (!ops)
+		return 0;
+
+	readable = ops->caps & MP_CAP_READABLE;
+	if (flags & PP_FLAG_MEM_PROVIDER) {
+		if (!readable && !(flags & PP_FLAG_ALLOW_UNREADABLE_NETMEM))
+			return -EOPNOTSUPP;
+	} else if (readable) {
+		return 0;
+	}
+
+	pool->mp_priv = mpp->mp_priv;
+	pool->mp_ops = ops;
+	return 0;
+}
+
 static int page_pool_init(struct page_pool *pool,
 			  const struct page_pool_params *params,
 			  int cpuid)
@@ -272,12 +295,14 @@ static int page_pool_init(struct page_pool *pool,
 
 	xa_init_flags(&pool->dma_mapped, XA_FLAGS_ALLOC1);
 
-	if (pool->slow.flags & PP_FLAG_ALLOW_UNREADABLE_NETMEM) {
+	if (pool->slow.flags & (PP_FLAG_MEM_PROVIDER |
+				PP_FLAG_ALLOW_UNREADABLE_NETMEM)) {
 		netdev_assert_locked(pool->slow.netdev);
 		rxq = __netif_get_rx_queue(pool->slow.netdev,
 					   pool->slow.queue_idx);
-		pool->mp_priv = rxq->mp_params.mp_priv;
-		pool->mp_ops = rxq->mp_params.mp_ops;
+		err = page_pool_select_mp(pool, &rxq->mp_params);
+		if (err)
+			goto free_ptr_ring;
 	}
 
 	if (pool->mp_ops) {
@@ -1070,6 +1095,9 @@ netmem_ref page_pool_alloc_frag_netmem(struct page_pool *pool,
 	unsigned int max_size = PAGE_SIZE << pool->p.order;
 	netmem_ref netmem = pool->frag_page;
 
+	if (static_branch_unlikely(&page_pool_mem_providers) &&
+	    WARN_ON_ONCE(!page_pool_supports_frag(pool)))
+		return 0;
 	if (WARN_ON(size > max_size))
 		return 0;
 

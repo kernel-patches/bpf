@@ -697,4 +697,5 @@ static const struct memory_provider_ops dmabuf_devmem_ops = {
 	.release_netmem		= mp_dmabuf_devmem_release_page,
 	.nl_fill		= mp_dmabuf_devmem_nl_fill,
 	.uninstall		= mp_dmabuf_devmem_uninstall,
+	.caps			= MP_CAP_FRAG,
 };

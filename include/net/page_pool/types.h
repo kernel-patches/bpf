@@ -31,8 +31,19 @@
  */
 #define PP_FLAG_ALLOW_UNREADABLE_NETMEM BIT(3)
 
+/* Take memory from the memory provider of the RX queue, if one is installed.
+ * Set page_pool_params.slow.netdev and queue_idx, and create the pool under
+ * the instance lock of the netdev.
+ * An unreadable provider also needs PP_FLAG_ALLOW_UNREADABLE_NETMEM, or page
+ * pool creation fails. Without this flag, PP_FLAG_ALLOW_UNREADABLE_NETMEM
+ * selects unreadable providers only.
+ */
+#define PP_FLAG_MEM_PROVIDER	BIT(4)
+
 #define PP_FLAG_ALL		(PP_FLAG_DMA_MAP | PP_FLAG_DMA_SYNC_DEV | \
-				 PP_FLAG_SYSTEM_POOL | PP_FLAG_ALLOW_UNREADABLE_NETMEM)
+				 PP_FLAG_SYSTEM_POOL | \
+				 PP_FLAG_ALLOW_UNREADABLE_NETMEM | \
+				 PP_FLAG_MEM_PROVIDER)
 
 /* Index limit to stay within PP_DMA_INDEX_BITS for DMA indices */
 #define PP_DMA_INDEX_LIMIT XA_LIMIT(1, BIT(PP_DMA_INDEX_BITS) - 1)
@@ -82,7 +93,7 @@ struct pp_alloc_cache {
  * @netdev:	netdev this pool will serve (leave as NULL if none or multiple)
  * @queue_idx:	queue idx this page_pool is being created for.
  * @flags:	PP_FLAG_DMA_MAP, PP_FLAG_DMA_SYNC_DEV, PP_FLAG_SYSTEM_POOL,
- *		PP_FLAG_ALLOW_UNREADABLE_NETMEM.
+ *		PP_FLAG_ALLOW_UNREADABLE_NETMEM, PP_FLAG_MEM_PROVIDER.
  */
 struct page_pool_params {
 	struct_group_tagged(page_pool_params_fast, fast,
