@@ -34,6 +34,14 @@ sit9531x_dpll_is_xo_pin(const struct sit9531x_dpll_pin *pin)
 	       pin->id == SIT9531X_MAX_INPUTS;
 }
 
+/* Check if the pin's state and priority can change without a request */
+static bool
+sit9531x_dpll_is_selection_pin(const struct sit9531x_dpll_pin *pin)
+{
+	return sit9531x_dpll_is_input_pin(pin) &&
+	       !sit9531x_dpll_is_xo_pin(pin);
+}
+
 /*
  * A frozen PLL with an empty table is in forced holdover; report holdover only
  * while its holdover memory is valid.
@@ -396,11 +404,78 @@ sit9531x_dpll_input_pin_state_on_dpll_set(const struct dpll_pin *pin,
 	return rc;
 }
 
+/* Report the configured priority of the source on this PLL, listed or not */
+static int
+sit9531x_dpll_input_pin_prio_get(const struct dpll_pin *pin, void *pin_priv,
+				 const struct dpll_device *dpll,
+				 void *dpll_priv, u32 *prio,
+				 struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll_pin *dpin = pin_priv;
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+	u8 slot;
+	int rc;
+
+	mutex_lock(&sitdev->multiop_lock);
+	rc = sit9531x_input_prio_get(sitdev, sitdpll->id,
+				     sit9531x_input_hw_src(dpin->id), &slot);
+	mutex_unlock(&sitdev->multiop_lock);
+	if (rc)
+		return rc;
+
+	*prio = slot;
+	return 0;
+}
+
+/*
+ * Rewrite the Page 1 priority table for a listed pin; an unlisted pin keeps the
+ * priority until it is connected.
+ */
+static int
+sit9531x_dpll_input_pin_prio_set(const struct dpll_pin *pin, void *pin_priv,
+				 const struct dpll_device *dpll,
+				 void *dpll_priv, u32 prio,
+				 struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll_pin *dpin = pin_priv;
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+	int rc;
+
+	if (dpin->dir != DPLL_PIN_DIRECTION_INPUT) {
+		NL_SET_ERR_MSG(extack, "Priority applies only to input pins");
+		return -EINVAL;
+	}
+
+	if (prio > U8_MAX) {
+		NL_SET_ERR_MSG(extack, "Priority out of range (0-255)");
+		return -EINVAL;
+	}
+
+	mutex_lock(&sitdev->multiop_lock);
+	rc = sit9531x_input_prio_set(sitdev, sitdpll->id,
+				     sit9531x_input_hw_src(dpin->id),
+				     (u8)prio);
+	if (!rc)
+		dpin->prio = prio;
+	mutex_unlock(&sitdev->multiop_lock);
+
+	if (rc) {
+		NL_SET_ERR_MSG(extack, "Failed to set input priority");
+		return rc;
+	}
+
+	return 0;
+}
+
 static const struct dpll_pin_ops sit9531x_dpll_input_pin_ops = {
 	.direction_get		= sit9531x_dpll_input_pin_direction_get,
 	.state_on_dpll_get	= sit9531x_dpll_input_pin_state_on_dpll_get,
 	.state_on_dpll_set	= sit9531x_dpll_input_pin_state_on_dpll_set,
 	.operstate_on_dpll_get	= sit9531x_dpll_input_pin_operstate_on_dpll_get,
+	.prio_get		= sit9531x_dpll_input_pin_prio_get,
+	.prio_set		= sit9531x_dpll_input_pin_prio_set,
 };
 
 /*
@@ -477,6 +552,43 @@ sit9531x_dpll_pin_ops_get(const struct sit9531x_dpll_pin *pin)
 	return &sit9531x_dpll_input_pin_ops;
 }
 
+/* Caller must hold sitdev->multiop_lock. */
+static void sit9531x_dpll_pin_snapshot(struct sit9531x_dpll *sitdpll,
+				       const struct sit9531x_dpll_pin *pin,
+				       enum dpll_pin_state *state,
+				       enum dpll_pin_operstate *operstate,
+				       u8 *prio)
+{
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+	u8 id = pin->id;
+
+	if (id == SIT9531X_INTSYNC_PIN_ID && sitdev->intsync_src == sitdpll->id)
+		*state = DPLL_PIN_STATE_DISCONNECTED;
+	else
+		sit9531x_dpll_selection_state_get(sitdev, sitdpll, id, state);
+	sit9531x_dpll_selection_operstate_get(sitdev, sitdpll, id, operstate);
+	if (sit9531x_input_prio_get(sitdev, sitdpll->id,
+				    sit9531x_input_hw_src(id), prio))
+		*prio = pin->prio;
+}
+
+/*
+ * Take the baseline before the pin is registered, so the first poll notifies a
+ * change a request made. Caller must hold sitdev->multiop_lock.
+ */
+void sit9531x_dpll_pin_baseline(struct sit9531x_dpll_pin *pin)
+{
+	struct sit9531x_dpll *sitdpll = pin->dpll;
+
+	lockdep_assert_held(&sitdpll->dev->multiop_lock);
+
+	if (!sit9531x_dpll_is_selection_pin(pin))
+		return;
+
+	sit9531x_dpll_pin_snapshot(sitdpll, pin, &pin->pin_state,
+				   &pin->operstate, &pin->prio);
+}
+
 /*
  * Send notifications for changed lock status and pin state; called from
  * sit9531x_dev_periodic_work().
@@ -511,32 +623,45 @@ void sit9531x_dpll_changes_check(struct sit9531x_dpll *sitdpll)
 	if (sitdpll->ntf_pending && !dpll_device_change_ntf(sitdpll->dpll_dev))
 		sitdpll->ntf_pending = false;
 
+	mutex_lock(&sitdev->multiop_lock);
 	list_for_each_entry(pin, &sitdpll->pins, list) {
-		const struct dpll_pin_ops *ops;
+		enum dpll_pin_operstate operstate;
 		enum dpll_pin_state state;
 		bool changed;
+		u8 prio;
+
+		if (!sit9531x_dpll_is_selection_pin(pin))
+			continue;
+
+		sit9531x_dpll_pin_snapshot(sitdpll, pin, &state, &operstate,
+					   &prio);
+
+		changed = state != pin->pin_state ||
+			  operstate != pin->operstate || prio != pin->prio;
+		if (changed)
+			dev_dbg(sitdev->dev,
+				"%s: state %u->%u operstate %u->%u prio %u->%u\n",
+				pin->label, pin->pin_state, state,
+				pin->operstate, operstate, pin->prio, prio);
+
+		pin->pin_state = state;
+		pin->operstate = operstate;
+		pin->prio = prio;
 
 		/*
-		 * Only references and the INTSYNC destination change state
-		 * without a request.
+		 * The notification takes DPLL-subsystem locks the callbacks run
+		 * under; send it after dropping multiop_lock.
 		 */
-		if (!sit9531x_dpll_is_input_pin(pin) ||
-		    sit9531x_dpll_is_xo_pin(pin))
-			continue;
+		if (changed)
+			pin->ntf_pending = true;
+	}
+	mutex_unlock(&sitdev->multiop_lock);
 
-		ops = sit9531x_dpll_pin_ops_get(pin);
-		rc = ops->state_on_dpll_get(pin->dpll_pin, pin,
-					    sitdpll->dpll_dev, sitdpll,
-					    &state, NULL);
-		if (rc)
+	list_for_each_entry(pin, &sitdpll->pins, list) {
+		if (!pin->ntf_pending)
 			continue;
-
-		changed = pin->seen && state != pin->pin_state;
-		pin->pin_state = state;
-		pin->seen = true;
-		if (changed) {
-			dev_dbg(sitdev->dev, "%s state changed\n", pin->label);
-			dpll_pin_change_ntf(pin->dpll_pin);
-		}
+		if (dpll_pin_change_ntf(pin->dpll_pin))
+			continue;
+		pin->ntf_pending = false;
 	}
 }

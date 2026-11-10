@@ -146,6 +146,7 @@ sit9531x_pin_props_get(struct sit9531x_dev *sitdev,
 		/* INTSYNC destination: a reference the PLL can lock to. */
 		props->dpll_props.type = DPLL_PIN_TYPE_INT_OSCILLATOR;
 		props->dpll_props.capabilities =
+			DPLL_PIN_CAPABILITIES_PRIORITY_CAN_CHANGE |
 			DPLL_PIN_CAPABILITIES_STATE_CAN_CHANGE;
 		curr_freq = 0;
 	} else if (sync_out) {
@@ -161,6 +162,7 @@ sit9531x_pin_props_get(struct sit9531x_dev *sitdev,
 	} else if (dir == DPLL_PIN_DIRECTION_INPUT) {
 		props->dpll_props.type = DPLL_PIN_TYPE_EXT;
 		props->dpll_props.capabilities =
+			DPLL_PIN_CAPABILITIES_PRIORITY_CAN_CHANGE |
 			DPLL_PIN_CAPABILITIES_STATE_CAN_CHANGE;
 		curr_freq = sitdev->ref[index].freq;
 	} else {
