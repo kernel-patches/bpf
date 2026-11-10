@@ -236,6 +236,9 @@ static void mpnic_tx_fill_hdrs(struct sk_buff *skb, struct mpnic_tx_hdrs *hdrs)
 		hdrs->i3len = skb_transport_offset(skb) - net_off;
 		hdrs->l3_type = ip_hdr(skb)->version == 4 ?
 				MPNIC_TWD_L3_TYPE_IPV4 : MPNIC_TWD_L3_TYPE_IPV6;
+	} else if (skb_shinfo(skb)->gso_type & SKB_GSO_PARTIAL) {
+		hdrs->i3len = skb_checksum_start_offset(skb) - net_off;
+		hdrs->l3_type = MPNIC_TWD_L3_TYPE_OTHER;
 	} else {
 		inner_off = skb_inner_network_offset(skb);
 		hdrs->o3len = inner_off - net_off;
@@ -397,11 +400,27 @@ static bool mpnic_ipxip6_gso_ok(struct sk_buff *skb)
 static netdev_features_t
 mpnic_features_check_encap_gso(struct sk_buff *skb, netdev_features_t features)
 {
+	struct iphdr *iph;
+
 	if (skb_shinfo(skb)->gso_type & SKB_GSO_IPXIP6 &&
 	    mpnic_ipxip6_gso_ok(skb))
 		return features;
 
-	return features & ~NETIF_F_GSO_IPXIP6;
+	features &= ~NETIF_F_GSO_IPXIP6;
+
+	iph = ip_hdr(skb);
+	if (iph->version == 4 && !(iph->frag_off & htons(IP_DF)))
+		return features & ~NETIF_F_GSO_MASK;
+
+	/* HW can segment inner udp4 with fixed IDs, but there is no UDP
+	 * analog for MANGLEID, so defer to SW GSO.
+	 */
+	if (inner_ip_hdr(skb)->version == 4)
+		features &= ~NETIF_F_GSO_UDP_L4;
+	if (!(features & NETIF_F_TSO_MANGLEID))
+		features &= ~NETIF_F_TSO;
+
+	return features;
 }
 
 netdev_features_t mpnic_features_check(struct sk_buff *skb,
