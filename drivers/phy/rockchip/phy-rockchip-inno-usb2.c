@@ -342,8 +342,15 @@ static void rockchip_usb2phy_set_suspend(struct rockchip_usb2phy *rphy,
 	}
 }
 
+static bool rockchip_usb2phy_clk_manages_suspend(struct rockchip_usb2phy *rphy)
+{
+	return rphy->phy_cfg->num_ports == 1 && rphy->ports[0].port_cfg;
+}
+
 static int rockchip_usb2phy_clk480m_prepare(struct clk_hw *hw)
 {
+	struct rockchip_usb2phy *rphy =
+		container_of(hw, struct rockchip_usb2phy, clk480m_hw);
 	const struct usb2phy_reg *clkout_ctl;
 	struct regmap *base;
 
@@ -357,15 +364,23 @@ static int rockchip_usb2phy_clk480m_prepare(struct clk_hw *hw)
 		usleep_range(1200, 1300);
 	}
 
+	if (rockchip_usb2phy_clk_manages_suspend(rphy))
+		rockchip_usb2phy_set_suspend(rphy, &rphy->ports[0], false);
+
 	return 0;
 }
 
 static void rockchip_usb2phy_clk480m_unprepare(struct clk_hw *hw)
 {
+	struct rockchip_usb2phy *rphy =
+		container_of(hw, struct rockchip_usb2phy, clk480m_hw);
 	const struct usb2phy_reg *clkout_ctl;
 	struct regmap *base;
 
 	rockchip_usb2phy_clk480m_clkout_ctl(hw, &base, &clkout_ctl);
+
+	if (rockchip_usb2phy_clk_manages_suspend(rphy))
+		rockchip_usb2phy_set_suspend(rphy, &rphy->ports[0], true);
 
 	/* turn off 480m clk output */
 	property_enable(base, clkout_ctl, false);
@@ -437,10 +452,7 @@ rockchip_usb2phy_clk480m_register(struct rockchip_usb2phy *rphy)
 
 	/* acquire a clk reference for internal power_on()/power_off() use */
 	rphy->clk480m = devm_clk_hw_get_clk(rphy->dev, &rphy->clk480m_hw, NULL);
-	if (IS_ERR(rphy->clk480m))
-		return PTR_ERR(rphy->clk480m);
-
-	return devm_of_clk_add_hw_provider(rphy->dev, of_clk_hw_simple_get, &rphy->clk480m_hw);
+	return PTR_ERR_OR_ZERO(rphy->clk480m);
 }
 
 static int rockchip_usb2phy_extcon_register(struct rockchip_usb2phy *rphy)
@@ -545,7 +557,8 @@ static int rockchip_usb2phy_power_on(struct phy *phy)
 	if (ret)
 		return ret;
 
-	rockchip_usb2phy_set_suspend(rphy, rport, false);
+	if (!rockchip_usb2phy_clk_manages_suspend(rphy))
+		rockchip_usb2phy_set_suspend(rphy, rport, false);
 
 	rport->suspended = false;
 	return 0;
@@ -561,7 +574,8 @@ static int rockchip_usb2phy_power_off(struct phy *phy)
 	if (rport->suspended)
 		return 0;
 
-	rockchip_usb2phy_set_suspend(rphy, rport, true);
+	if (!rockchip_usb2phy_clk_manages_suspend(rphy))
+		rockchip_usb2phy_set_suspend(rphy, rport, true);
 
 	rport->suspended = true;
 	clk_disable_unprepare(rphy->clk480m);
@@ -1395,6 +1409,10 @@ next_child:
 			break;
 		}
 	}
+
+	ret = devm_of_clk_add_hw_provider(rphy->dev, of_clk_hw_simple_get, &rphy->clk480m_hw);
+	if (ret)
+		return dev_err_probe(dev, ret, "failed to add 480m output clock provider\n");
 
 	provider = devm_of_phy_provider_register(dev, of_phy_simple_xlate);
 
