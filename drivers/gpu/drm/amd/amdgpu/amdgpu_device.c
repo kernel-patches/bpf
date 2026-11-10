@@ -3531,8 +3531,8 @@ static void amdgpu_device_detect_sriov_bios(struct amdgpu_device *adev)
  * Check if there is DC (new modesetting infrastructre) support for an asic.
  * returns true if DC has support, false if not.
  */
-bool amdgpu_device_asic_has_dc_support(struct pci_dev *pdev,
-				       enum amd_asic_type asic_type)
+static bool amdgpu_device_asic_has_dc_support(struct pci_dev *pdev,
+					      enum amd_asic_type asic_type)
 {
 	switch (asic_type) {
 #ifdef CONFIG_DRM_AMDGPU_SI
@@ -3546,15 +3546,13 @@ bool amdgpu_device_asic_has_dc_support(struct pci_dev *pdev,
 	case CHIP_PITCAIRN:
 	case CHIP_VERDE:
 	case CHIP_OLAND:
-		return amdgpu_dc != 0 && IS_ENABLED(CONFIG_DRM_AMD_DC_SI);
+		return IS_ENABLED(CONFIG_DRM_AMD_DC_SI);
 	default:
-		return amdgpu_dc != 0;
+		return true;
 #else
 	default:
-		if (amdgpu_dc > 0)
-			dev_info_once(
-				&pdev->dev,
-				"Display Core has been requested via kernel parameter but isn't supported by ASIC, ignoring\n");
+		dev_info_once(&pdev->dev,
+			      "Driver built without display support\n");
 		return false;
 #endif
 	}

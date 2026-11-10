@@ -2728,15 +2728,8 @@ EXPORT_IF_KUNIT(dm_bandwidth_update);
 static const struct amdgpu_display_funcs dm_display_funcs = {
 	.bandwidth_update = dm_bandwidth_update, /* called unconditionally */
 	.vblank_get_counter = dm_vblank_get_counter,/* called unconditionally */
-	.backlight_set_level = NULL, /* never called for DC */
-	.backlight_get_level = NULL, /* never called for DC */
-	.hpd_sense = NULL,/* called unconditionally */
-	.hpd_set_polarity = NULL, /* called unconditionally */
-	.hpd_get_gpio_reg = NULL, /* VBIOS parsing. DAL does it. */
 	.page_flip_get_scanoutpos =
 		dm_crtc_get_scanoutpos,/* called unconditionally */
-	.add_encoder = NULL, /* VBIOS parsing. DAL does it. */
-	.add_connector = NULL, /* VBIOS parsing. DAL does it. */
 };
 
 #if defined(CONFIG_DEBUG_KERNEL_DC)

@@ -129,18 +129,10 @@ struct atom_voltage_table {
 	struct atom_voltage_table_entry entries[MAX_VOLTAGE_ENTRIES];
 };
 
-struct amdgpu_gpio_rec
-amdgpu_atombios_lookup_gpio(struct amdgpu_device *adev,
-			    u8 id);
-
 struct amdgpu_i2c_bus_rec amdgpu_atombios_lookup_i2c_gpio(struct amdgpu_device *adev,
 							  uint8_t id);
 void amdgpu_atombios_i2c_init(struct amdgpu_device *adev);
 void amdgpu_atombios_oem_i2c_init(struct amdgpu_device *adev, u8 i2c_id);
-
-bool amdgpu_atombios_has_dce_engine_info(struct amdgpu_device *adev);
-
-bool amdgpu_atombios_get_connector_info_from_object_table(struct amdgpu_device *adev);
 
 int amdgpu_atombios_get_clock_info(struct amdgpu_device *adev);
 
@@ -192,7 +184,6 @@ int amdgpu_atombios_get_svi2_info(struct amdgpu_device *adev,
 
 bool amdgpu_atombios_has_gpu_virtualization_table(struct amdgpu_device *adev);
 
-void amdgpu_atombios_scratch_regs_lock(struct amdgpu_device *adev, bool lock);
 void amdgpu_atombios_scratch_regs_engine_hung(struct amdgpu_device *adev,
 					      bool hung);
 void amdgpu_atombios_scratch_regs_set_backlight_level(struct amdgpu_device *adev,
