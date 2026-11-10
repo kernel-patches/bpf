@@ -611,6 +611,21 @@ config GENERIC_LIB_CMPDI2
 config GENERIC_LIB_UCMPDI2
 	bool
 
+config GENERIC_LIB_DIVSI3
+	bool
+
+config GENERIC_LIB_MODSI3
+	bool
+
+config GENERIC_LIB_UDIVSI3
+	bool
+
+config GENERIC_LIB_UMODSI3
+	bool
+
+config GENERIC_LIB_MULSI3
+	bool
+
 config GENERIC_LIB_DEVMEM_IS_ALLOWED
 	bool
 
