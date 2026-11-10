@@ -357,6 +357,7 @@ extern int bpf_task_wake(struct task_struct *task, __u64 flags) __weak __ksym;
 extern struct task_struct *bpf_kthread_create(int (callback_fn)(__u64 arg), __u64 arg,
 					      __u64 flags) __weak __ksym;
 extern int bpf_kthread_start(struct task_struct *task, __u64 flags) __weak __ksym;
+extern int bpf_kthread_bind(struct task_struct *task, __u32 cpu, __u64 flags) __weak __ksym;
 extern int bpf_kthread_stop(struct task_struct *task, __u64 flags) __weak __ksym;
 extern bool bpf_kthread_should_stop(void) __weak __ksym;
 

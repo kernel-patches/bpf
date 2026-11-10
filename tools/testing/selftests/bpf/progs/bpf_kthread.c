@@ -28,6 +28,8 @@ struct kthread_args {
 	__u32 idx;		/* the thread's slot, and the argument of its callback */
 	__u32 start;		/* create: start the thread */
 	__u32 body;		/* create: which callback, see enum body */
+	__u32 bind;		/* create: bind the thread to cpu before starting it */
+	__u32 cpu;		/* create and bind: the CPU */
 };
 
 enum body {
@@ -36,11 +38,14 @@ enum body {
 	BODY_SELF_STOPPER,	/* try to stop itself first, then as above */
 	BODY_RING,		/* stop the next thread of a ring, then return idx + 1 */
 	BODY_STOP_CHECKER,	/* park until stopped, then record what later parks return */
+	BODY_SELF_BINDER,	/* bind itself to self_bind_cpu first, then as worker */
 };
 
 __u32 runs[NR_THREADS];		/* callback entries, per slot */
 __u32 tids[NR_THREADS];		/* the thread's PID, per slot */
 char comms[NR_THREADS][16];	/* the comm the thread read for itself, per slot */
+__u32 cpus[NR_THREADS];		/* the CPU the thread last ran on, per slot */
+__u32 loops[NR_THREADS];	/* iterations of the body's loop, per slot */
 __u32 exit_now[NR_THREADS];	/* set by the test: the callback returns idx + 1 */
 int self_stop_ret;		/* bpf_kthread_stop() on the calling thread */
 int spawn_ret;			/* bpf_kthread_start() by the spawner */
@@ -50,6 +55,8 @@ __u32 ring_size;		/* set by the test: threads in the ring */
 __u32 ring_ready;		/* ring threads about to stop their successor */
 int ring_stop_ret[NR_THREADS];	/* what stopping the successor returned, per slot */
 int stop_park_rets[4];		/* what the park returned once a stop was pending */
+__u32 self_bind_cpu;		/* set by the test: where the self binder binds itself */
+int self_bind_ret;		/* what that bind returned */
 
 static __u32 load(__u32 *p)
 {
@@ -74,6 +81,8 @@ static int worker(__u64 arg)
 	__sync_fetch_and_add(&runs[idx], 1);
 
 	bpf_repeat(LOOP_BOUND) {
+		cpus[idx] = bpf_get_smp_processor_id();
+		__sync_fetch_and_add(&loops[idx], 1);
 		if (bpf_kthread_should_stop())
 			return 0;
 		if (load(&exit_now[idx]))
@@ -191,6 +200,13 @@ static int ring_stopper(__u64 arg)
 	return idx + 1;
 }
 
+/* Bind itself to self_bind_cpu, then run as a worker, which records its CPU. */
+static int self_binder(__u64 arg)
+{
+	self_bind_ret = bpf_kthread_bind(bpf_get_current_task_btf(), load(&self_bind_cpu), 0);
+	return worker(arg);
+}
+
 /* Take the thread out of slot @idx; the caller releases it. */
 static struct task_struct *take(__u32 idx)
 {
@@ -216,20 +232,28 @@ int create_thread(struct kthread_args *args)
 		task = bpf_kthread_create(ring_stopper, args->idx, 0);
 	else if (args->body == BODY_STOP_CHECKER)
 		task = bpf_kthread_create(stop_checker, args->idx, 0);
+	else if (args->body == BODY_SELF_BINDER)
+		task = bpf_kthread_create(self_binder, args->idx, 0);
 	else
 		task = bpf_kthread_create(worker, args->idx, 0);
 	if (!task)
 		return -EAGAIN;
+	if (args->bind) {
+		ret = bpf_kthread_bind(task, args->cpu, 0);
+		if (ret)
+			goto stop;
+	}
 	if (args->start) {
 		ret = bpf_kthread_start(task, 0);
-		if (ret) {
-			bpf_kthread_stop(task, 0);
-			bpf_task_release(task);
-			return ret;
-		}
+		if (ret)
+			goto stop;
 	}
 	publish(args->idx, task);
 	return 0;
+stop:
+	bpf_kthread_stop(task, 0);
+	bpf_task_release(task);
+	return ret;
 }
 
 /* Start the thread of slot idx through the RCU-protected pointer in its slot. */
@@ -269,6 +293,21 @@ int wake_thread(struct kthread_args *args)
 	if (task)
 		ret = bpf_task_wake(task, 0);
 	bpf_rcu_read_unlock();
+	return ret;
+}
+
+/* Bind the thread of slot idx to args->cpu, running or not. */
+SEC("syscall")
+int bind_thread(struct kthread_args *args)
+{
+	struct task_struct *task;
+	int ret;
+
+	task = take(args->idx);
+	if (!task)
+		return -ESRCH;
+	ret = bpf_kthread_bind(task, args->cpu, 0);
+	publish(args->idx, task);
 	return ret;
 }
 

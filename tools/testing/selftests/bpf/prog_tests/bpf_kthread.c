@@ -2,6 +2,7 @@
 /* Copyright (c) 2026 Meta Platforms, Inc. and affiliates. */
 
 #include <test_progs.h>
+#include <sched.h>
 #include "bpf_kthread.skel.h"
 #include "verifier_bpf_kthread.skel.h"
 
@@ -10,6 +11,8 @@ struct kthread_args {
 	__u32 idx;
 	__u32 start;
 	__u32 body;
+	__u32 bind;
+	__u32 cpu;
 };
 
 enum body {
@@ -18,6 +21,7 @@ enum body {
 	BODY_SELF_STOPPER,
 	BODY_RING,
 	BODY_STOP_CHECKER,
+	BODY_SELF_BINDER,
 };
 
 static int run_prog(struct bpf_program *prog, struct kthread_args *args, int *retval)
@@ -34,15 +38,33 @@ static int run_prog(struct bpf_program *prog, struct kthread_args *args, int *re
 	return err;
 }
 
-static int create_thread(struct bpf_kthread *skel, __u32 idx, bool start, enum body body)
+static int create_thread_on(struct bpf_kthread *skel, __u32 idx, bool start, enum body body,
+			    int cpu)
 {
-	struct kthread_args args = { .idx = idx, .start = start, .body = body };
+	struct kthread_args args = {
+		.idx = idx, .start = start, .body = body, .bind = cpu >= 0, .cpu = cpu,
+	};
 	int err, retval;
 
 	err = run_prog(skel->progs.create_thread, &args, &retval);
 	if (!ASSERT_OK(err, "create_thread") || !ASSERT_EQ(retval, 0, "create_ret"))
 		return -1;
 	return 0;
+}
+
+static int create_thread(struct bpf_kthread *skel, __u32 idx, bool start, enum body body)
+{
+	return create_thread_on(skel, idx, start, body, -1);
+}
+
+static int bind_thread(struct bpf_kthread *skel, __u32 idx, __u32 cpu)
+{
+	struct kthread_args args = { .idx = idx, .cpu = cpu };
+	int retval;
+
+	if (!ASSERT_OK(run_prog(skel->progs.bind_thread, &args, &retval), "bind_thread"))
+		return -EFAULT;
+	return retval;
 }
 
 /* Returns what the program returned, which for stop_thread is what the stop returned. */
@@ -67,6 +89,19 @@ static bool wait_for(__u32 *p)
 
 	for (i = 0; i < 2000; i++) {
 		if (__atomic_load_n(p, __ATOMIC_ACQUIRE))
+			return true;
+		usleep(1000);
+	}
+	return false;
+}
+
+/* Poll until *p exceeds @seen, for up to two seconds: the thread has looped again. */
+static bool wait_past(__u32 *p, __u32 seen)
+{
+	int i;
+
+	for (i = 0; i < 2000; i++) {
+		if (__atomic_load_n(p, __ATOMIC_ACQUIRE) > seen)
 			return true;
 		usleep(1000);
 	}
@@ -103,6 +138,25 @@ static bool wait_sleeping(__u32 tid)
 		usleep(1000);
 	}
 	return false;
+}
+
+/* The lowest and highest CPUs the test may run on; a bound thread has to run there. */
+static int allowed_cpus(int *lo, int *hi)
+{
+	cpu_set_t set;
+	int cpu;
+
+	if (sched_getaffinity(0, sizeof(set), &set))
+		return -1;
+	*lo = *hi = -1;
+	for (cpu = 0; cpu < CPU_SETSIZE; cpu++) {
+		if (!CPU_ISSET(cpu, &set))
+			continue;
+		if (*lo < 0)
+			*lo = cpu;
+		*hi = cpu;
+	}
+	return *lo < 0 ? -1 : 0;
 }
 
 static bool task_exists(__u32 tid)
@@ -405,6 +459,67 @@ out:
 	bpf_kthread__destroy(skel);
 }
 
+/*
+ * A thread bound before its start runs on that CPU, and the last bind wins. A
+ * thread bound while it runs moves at its next sleep, which for a body that
+ * parks is at once, since the park sleeps with migration enabled; its next
+ * iteration runs on the new CPU.
+ */
+static void test_bind(void)
+{
+	struct bpf_kthread *skel;
+	int lo, hi;
+	__u32 loops;
+
+	if (!ASSERT_OK(allowed_cpus(&lo, &hi), "allowed_cpus"))
+		return;
+	skel = bpf_kthread__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "open_and_load"))
+		return;
+	if (create_thread_on(skel, 0, false, BODY_WORKER, lo))
+		goto out;
+	ASSERT_EQ(bind_thread(skel, 0, -1), -EINVAL, "bind impossible cpu");
+	ASSERT_EQ(bind_thread(skel, 0, hi), 0, "bind ret");
+	ASSERT_EQ(start_thread(skel, 0), 0, "start ret");
+	if (!ASSERT_TRUE(wait_past(&skel->bss->loops[0], 0), "ran"))
+		goto out;
+	ASSERT_EQ(skel->bss->cpus[0], hi, "cpu");
+	ASSERT_EQ(bind_thread(skel, 0, lo), 0, "bind running ret");
+	loops = skel->bss->loops[0];
+	ASSERT_GE(wake_thread(skel, 0), 0, "wake ret");
+	if (ASSERT_TRUE(wait_past(&skel->bss->loops[0], loops), "looped"))
+		ASSERT_EQ(skel->bss->cpus[0], lo, "cpu after bind");
+	ASSERT_EQ(stop_thread(skel, 0), 0, "stop ret");
+out:
+	bpf_kthread__destroy(skel);
+}
+
+/*
+ * A thread binds itself: it is migratable during the call, so the bind takes
+ * effect before it returns, and the thread's first iteration runs on the CPU.
+ */
+static void test_self_bind(void)
+{
+	struct bpf_kthread *skel;
+	int lo, hi;
+
+	if (!ASSERT_OK(allowed_cpus(&lo, &hi), "allowed_cpus"))
+		return;
+	skel = bpf_kthread__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "open_and_load"))
+		return;
+	skel->bss->self_bind_cpu = lo;
+	if (create_thread(skel, 0, true, BODY_SELF_BINDER))
+		goto out;
+	if (!ASSERT_TRUE(wait_past(&skel->bss->loops[0], 0), "ran"))
+		goto out;
+	ASSERT_EQ(skel->bss->self_bind_ret, 0, "self bind ret");
+	ASSERT_EQ(skel->bss->cpus[0], lo, "cpu");
+	ASSERT_EQ(stop_thread(skel, 0), 0, "stop ret");
+out:
+	bpf_kthread__destroy(skel);
+}
+
 void test_bpf_kthread(void)
 {
 	RUN_TESTS(verifier_bpf_kthread);
@@ -431,4 +546,8 @@ void test_bpf_kthread(void)
 		test_stop_ring(2);
 	if (test__start_subtest("stop_ring3"))
 		test_stop_ring(3);
+	if (test__start_subtest("bind"))
+		test_bind();
+	if (test__start_subtest("self_bind"))
+		test_self_bind();
 }
