@@ -116,11 +116,6 @@ static void zstd_reclaim_timer_fn(struct timer_list *timer)
 
 	spin_lock(&zwsm->lock);
 
-	if (list_empty(&zwsm->lru_list)) {
-		spin_unlock(&zwsm->lock);
-		return;
-	}
-
 	list_for_each_prev_safe(pos, next, &zwsm->lru_list) {
 		struct workspace *victim = container_of(pos, struct workspace,
 							lru_list);
