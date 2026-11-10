@@ -157,7 +157,6 @@ void tn40_swnodes_cleanup(struct tn40_priv *priv)
 {
 	/* cleanup of swnodes is only needed for AQR105-based cards */
 	if (priv->pdev->device == PCI_DEVICE_ID_TEHUTI_TN9510) {
-		fwnode_handle_put(dev_fwnode(&priv->mdio->dev));
 		device_remove_software_node(&priv->mdio->dev);
 		software_node_unregister_node_group(priv->nodes.group);
 	}
