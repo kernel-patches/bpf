@@ -4,6 +4,7 @@
 #include <linux/bpf.h>
 #include <linux/btf.h>
 #include <linux/btf_ids.h>
+#include <linux/cpumask.h>
 #include <linux/kthread.h>
 #include <linux/rcupdate_trace.h>
 #include <linux/sched.h>
@@ -351,6 +352,52 @@ __bpf_kfunc int bpf_kthread_start(struct task_struct *task, u64 flags)
 }
 
 /**
+ * bpf_kthread_bind - Restrict a BPF kthread to one CPU
+ * @task: a thread created by bpf_kthread_create()
+ * @cpu: the CPU the thread is to run on
+ * @flags: must be 0
+ *
+ * Sets the thread's affinity to @cpu. A thread that has not been started wakes
+ * on @cpu; one that has moves there at its next park or return, since its
+ * callback runs with migration disabled, and the call waits for that with
+ * migration enabled, so the caller may return on another CPU and a thread may
+ * bind itself. Unlike kthread_bind(), this leaves the affinity changeable from
+ * user space and subject to cpusets, like that of any other task. The binding
+ * is lost when @cpu goes offline or when the cpuset of the thread's cgroup
+ * changes its CPUs: the thread is moved, or placed elsewhere at its next
+ * wakeup, and its affinity reset to the cpuset's CPUs, as a user task's is
+ * after an offline. It is also lost when the housekeeping CPUs change, which
+ * resets the affinity of every kernel thread that is not bound for good. A
+ * program that needs the binding re-applies it.
+ *
+ * Return: 0 on success, -EINVAL if @flags is not 0 or @cpu is not a possible
+ * CPU or is offline, -ESRCH if @task is not a BPF kthread or has been stopped.
+ */
+__bpf_kfunc int bpf_kthread_bind(struct task_struct *task, u32 cpu, u64 flags)
+{
+	unsigned long irqflags;
+	bool found;
+	int ret;
+
+	if (flags)
+		return -EINVAL;
+	if (cpu >= nr_cpu_ids || !cpu_possible(cpu))
+		return -EINVAL;
+
+	raw_spin_lock_irqsave(&bpf_kthreads_lock, irqflags);
+	found = !!bpf_kthread_find(task);
+	raw_spin_unlock_irqrestore(&bpf_kthreads_lock, irqflags);
+	if (!found)
+		return -ESRCH;
+
+	/* A running thread moves at its next park: see the comment at the top. */
+	migrate_enable();
+	ret = set_cpus_allowed_ptr(task, cpumask_of(cpu));
+	migrate_disable();
+	return ret;
+}
+
+/**
  * bpf_kthread_stop - Stop a BPF kthread and wait for it to exit
  * @task: a thread created by bpf_kthread_create()
  * @flags: must be 0
@@ -452,6 +499,7 @@ __bpf_kfunc_end_defs();
 BTF_KFUNCS_START(bpf_kthread_kfunc_ids)
 BTF_ID_FLAGS(func, bpf_kthread_create, KF_ACQUIRE | KF_RET_NULL | KF_SLEEPABLE | KF_IMPLICIT_ARGS)
 BTF_ID_FLAGS(func, bpf_kthread_start, KF_RCU)
+BTF_ID_FLAGS(func, bpf_kthread_bind, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_kthread_stop, KF_SLEEPABLE)
 BTF_ID_FLAGS(func, bpf_kthread_should_stop)
 BTF_KFUNCS_END(bpf_kthread_kfunc_ids)
