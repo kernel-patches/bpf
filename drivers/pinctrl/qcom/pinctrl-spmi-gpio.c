@@ -480,12 +480,14 @@ static int pmic_gpio_config_set(struct pinctrl_dev *pctldev, unsigned int pin,
 				unsigned long *configs, unsigned nconfs)
 {
 	struct pmic_gpio_state *state = pinctrl_dev_get_drvdata(pctldev);
-	struct pmic_gpio_pad *pad;
+	struct pmic_gpio_pad *old, *pad, cpy;
 	unsigned param, arg;
 	unsigned int val;
 	int i, ret;
 
-	pad = pctldev->desc->pins[pin].drv_data;
+	old = pctldev->desc->pins[pin].drv_data;
+	cpy = *old;
+	pad = &cpy;
 
 	pad->is_enabled = true;
 	for (i = 0; i < nconfs; i++) {
@@ -651,8 +653,11 @@ static int pmic_gpio_config_set(struct pinctrl_dev *pctldev, unsigned int pin,
 	val = pad->is_enabled << PMIC_GPIO_REG_MASTER_EN_SHIFT;
 
 	ret = pmic_gpio_write(state, pad, PMIC_GPIO_REG_EN_CTL, val);
+	if (ret < 0)
+		return ret;
 
-	return ret;
+	*old = cpy;
+	return 0;
 }
 
 static void pmic_gpio_config_dbg_show(struct pinctrl_dev *pctldev,
