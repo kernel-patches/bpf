@@ -163,15 +163,37 @@ u16 intel_de_read16(struct intel_display *display, intel_reg_t reg)
 	return intel_uncore_read16(__to_uncore(display), reg);
 }
 
+static __always_inline u32
+__intel_de_read(struct intel_display *display, intel_reg_t reg,
+		const unsigned int mmio_flags)
+{
+	u32 val;
+
+	val = intel_uncore_read(__to_uncore(display), reg);
+
+	return val;
+}
+
+static __always_inline void
+__intel_de_write(struct intel_display *display, intel_reg_t reg, u32 val,
+		 const unsigned int mmio_flags)
+{
+	intel_uncore_write(__to_uncore(display), reg, val);
+}
+
+#define I9XX_MMIO_FLAGS 0
+
 static u32 i9xx_mmio_read(struct intel_display *display, intel_reg_t reg)
 {
-	return intel_uncore_read(__to_uncore(display), reg);
+	return __intel_de_read(display, reg, I9XX_MMIO_FLAGS);
 }
 
 static void i9xx_mmio_write(struct intel_display *display, intel_reg_t reg, u32 val)
 {
-	intel_uncore_write(__to_uncore(display), reg, val);
+	__intel_de_write(display, reg, val, I9XX_MMIO_FLAGS);
 }
+
+#undef I9XX_MMIO_FLAGS
 
 static const struct intel_mmio_funcs i9xx_mmio_funcs = {
 	.read = i9xx_mmio_read,
