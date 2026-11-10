@@ -69,6 +69,7 @@ DECLARE_STATIC_KEY_FALSE(page_pool_restricted);
 enum net_iov_type {
 	NET_IOV_DMABUF,
 	NET_IOV_IOURING,
+	NET_IOV_XSK,
 };
 
 /* A memory descriptor representing abstract networking I/O vectors.
@@ -107,6 +108,10 @@ struct net_iov_area {
 	size_t num_niovs;
 	/* Each net_iov covers 1 << niov_shift bytes. */
 	unsigned int niov_shift;
+	/* CPU address of the first net_iov, or NULL if the CPU cannot read
+	 * the area.
+	 */
+	void *vaddr;
 };
 
 static inline struct net_iov_area *net_iov_owner(const struct net_iov *niov)
@@ -117,6 +122,18 @@ static inline struct net_iov_area *net_iov_owner(const struct net_iov *niov)
 static inline unsigned int net_iov_idx(const struct net_iov *niov)
 {
 	return niov - net_iov_owner(niov)->niovs;
+}
+
+static inline void *net_iov_address(const struct net_iov *niov)
+{
+	const struct net_iov_area *area = net_iov_owner(niov);
+	unsigned long off;
+
+	if (!area->vaddr)
+		return NULL;
+
+	off = (unsigned long)net_iov_idx(niov) << area->niov_shift;
+	return area->vaddr + off;
 }
 
 /* Initialize a niov: stamp the owning area, the memory provider type.
@@ -345,10 +362,16 @@ static inline void *__netmem_address(netmem_ref netmem)
 	return page_address(__netmem_to_page(netmem));
 }
 
+/**
+ * netmem_address - get the CPU address of the memory behind @netmem
+ * @netmem: netmem to get the address of
+ *
+ * Return: the address, or NULL if the CPU cannot read @netmem.
+ */
 static inline void *netmem_address(netmem_ref netmem)
 {
 	if (netmem_is_net_iov(netmem))
-		return NULL;
+		return net_iov_address(netmem_to_net_iov(netmem));
 
 	return __netmem_address(netmem);
 }

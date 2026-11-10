@@ -368,7 +368,7 @@ static inline bool xdp_buff_add_frag(struct xdp_buff *xdp, netmem_ref netmem,
 
 	if (unlikely(netmem_is_pfmemalloc(netmem)))
 		xdp_buff_set_frag_pfmemalloc(xdp);
-	if (unlikely(netmem_is_net_iov(netmem)))
+	if (unlikely(netmem_is_net_iov(netmem) && !netmem_address(netmem)))
 		xdp_buff_set_frag_unreadable(xdp);
 
 	return true;
