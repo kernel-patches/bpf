@@ -75,12 +75,14 @@ static inline void __mmap_lock_trace_released(struct mm_struct *mm, bool write)
 
 static inline void mmap_assert_locked(const struct mm_struct *mm)
 {
-	rwsem_assert_held(&mm->mmap_lock);
+	if (IS_ENABLED(CONFIG_DEBUG_VM) || IS_ENABLED(CONFIG_LOCKDEP))
+		rwsem_assert_held(&mm->mmap_lock);
 }
 
 static inline void mmap_assert_write_locked(const struct mm_struct *mm)
 {
-	rwsem_assert_held_write(&mm->mmap_lock);
+	if (IS_ENABLED(CONFIG_DEBUG_VM) || IS_ENABLED(CONFIG_LOCKDEP))
+		rwsem_assert_held_write(&mm->mmap_lock);
 }
 
 #ifdef CONFIG_LOCKDEP
