@@ -608,7 +608,7 @@ ath12k_wifi7_dp_rx_process_received_packets(struct ath12k_dp *dp,
 	struct ath12k_base *partner_ab;
 	struct hal_rx_desc_data rx_info;
 	struct ath12k_dp *partner_dp;
-	u8 hw_link_id, pdev_idx;
+	u8 hw_link_id, pdev_idx, device_id;
 	int ret;
 
 	if (skb_queue_empty(msdu_list))
@@ -622,8 +622,8 @@ ath12k_wifi7_dp_rx_process_received_packets(struct ath12k_dp *dp,
 	while ((msdu = __skb_dequeue(msdu_list))) {
 		rxcb = ATH12K_SKB_RXCB(msdu);
 		hw_link_id = rxcb->drv_link_id;
-		partner_dp = ath12k_dp_hw_grp_to_dp(dp_hw_grp,
-						    hw_links[hw_link_id].device_id);
+		device_id = ath12k_dp_drv_link_id_to_device_id(ag, hw_link_id);
+		partner_dp = ath12k_dp_hw_grp_to_dp(dp_hw_grp, device_id);
 		pdev_idx = ath12k_hw_mac_id_to_pdev_id(partner_dp->hw_params,
 						       hw_links[hw_link_id].pdev_idx);
 		partner_ab = partner_dp->ab;
@@ -669,7 +669,6 @@ int ath12k_wifi7_dp_rx_process(struct ath12k_dp *dp, int ring_id,
 	struct ath12k_hal *hal = dp->hal;
 	struct ath12k_dp_hw_group *dp_hw_grp = &ag->dp_hw_grp;
 	struct list_head rx_desc_used_list[ATH12K_MAX_DEVICES];
-	struct ath12k_hw_link *hw_links = ag->hw_links;
 	int num_buffs_reaped[ATH12K_MAX_DEVICES] = {};
 	struct ath12k_rx_desc_info *desc_info;
 	struct dp_rxdma_ring *rx_ring = &dp->rx_refill_buf_ring;
@@ -721,7 +720,7 @@ try_again:
 			continue;
 		}
 
-		device_id = hw_links[hw_link_id].device_id;
+		device_id = ath12k_dp_drv_link_id_to_device_id(ag, hw_link_id);
 		partner_dp = ath12k_dp_hw_grp_to_dp(dp_hw_grp, device_id);
 		if (unlikely(!partner_dp)) {
 			if (desc_info->skb) {
@@ -1483,7 +1482,7 @@ int ath12k_wifi7_dp_rx_process_err(struct ath12k_dp *dp, struct napi_struct *nap
 			continue;
 		}
 
-		device_id = hw_links[hw_link_id].device_id;
+		device_id = ath12k_dp_drv_link_id_to_device_id(ag, hw_link_id);
 		partner_dp = ath12k_dp_hw_grp_to_dp(dp_hw_grp, device_id);
 
 		/* Below case is added to handle data packet from un-associated clients.
@@ -2104,7 +2103,7 @@ int ath12k_wifi7_dp_rx_process_wbm_err(struct ath12k_dp *dp,
 		rxcb = ATH12K_SKB_RXCB(msdu);
 		hw_link_id = rxcb->drv_link_id;
 
-		device_id = hw_links[hw_link_id].device_id;
+		device_id = ath12k_dp_drv_link_id_to_device_id(ag, hw_link_id);
 		partner_dp = ath12k_dp_hw_grp_to_dp(dp_hw_grp, device_id);
 		if (unlikely(!partner_dp)) {
 			ath12k_dbg(ab, ATH12K_DBG_DATA,

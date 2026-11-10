@@ -736,6 +736,7 @@ ath12k_dp_rxdma_buf_ring_size(const struct ath12k_dp_profile_params *p)
 	return p->rxdma_buf_ring_size;
 }
 
+u8 ath12k_dp_drv_link_id_to_device_id(struct ath12k_hw_group *ag, u8 drv_link_id);
 void ath12k_dp_vdev_tx_attach(struct ath12k *ar, struct ath12k_link_vif *arvif);
 int ath12k_dp_partner_cc_init(struct ath12k_base *ab);
 int ath12k_dp_pdev_alloc(struct ath12k_base *ab);

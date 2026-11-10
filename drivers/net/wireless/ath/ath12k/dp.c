@@ -939,6 +939,24 @@ static void ath12k_dp_update_vdev_search(struct ath12k_link_vif *arvif)
 	}
 }
 
+u8 ath12k_dp_drv_link_id_to_device_id(struct ath12k_hw_group *ag, u8 drv_link_id)
+{
+	/*
+	 * For a single device group there is only one device, so its
+	 * device id is returned directly without consulting the drv_link_id.
+	 * Otherwise, derive the device id from the drv_link_id.
+	 *
+	 * This is general and works for all chips, but particularly useful for
+	 * WCN7850/QCC2072, which cannot rely on the drv_link_id to look up the
+	 * device id.
+	 */
+	if (ag->num_devices == 1)
+		return ag->ab[0]->device_id;
+
+	return ag->hw_links[drv_link_id].device_id;
+}
+EXPORT_SYMBOL(ath12k_dp_drv_link_id_to_device_id);
+
 void ath12k_dp_vdev_tx_attach(struct ath12k *ar, struct ath12k_link_vif *arvif)
 {
 	struct ath12k_base *ab = ar->ab;
