@@ -450,6 +450,7 @@ struct mes_misc_op_input {
 			uint32_t tcp_watch_cntl[4];
 			uint64_t watch_addresses[4];
 			uint32_t trap_en;
+			uint32_t process_context_array_index;
 		} set_shader_debugger;
 
 		struct {
@@ -653,6 +654,7 @@ int amdgpu_mes_reg_write_reg_wait(struct amdgpu_device *adev,
 int amdgpu_mes_hdp_flush(struct amdgpu_device *adev);
 int amdgpu_mes_set_shader_debugger(struct amdgpu_device *adev,
 				uint64_t process_context_addr,
+				uint32_t process_context_array_index,
 				uint32_t spi_gdbg_per_vmid_cntl,
 				const uint32_t *tcp_watch_cntl,
 				const uint64_t *watch_addresses,
@@ -660,7 +662,8 @@ int amdgpu_mes_set_shader_debugger(struct amdgpu_device *adev,
 				bool trap_en,
 				uint32_t xcc_id);
 int amdgpu_mes_flush_shader_debugger(struct amdgpu_device *adev,
-				uint64_t process_context_addr, uint32_t xcc_id);
+				uint64_t process_context_addr,
+				uint32_t process_context_array_index, uint32_t xcc_id);
 
 uint32_t amdgpu_mes_get_aggregated_doorbell_index(struct amdgpu_device *adev,
 						   enum amdgpu_mes_priority_level prio);

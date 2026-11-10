@@ -373,7 +373,8 @@ int kfd_dbg_set_mes_debug_mode(struct kfd_process_device *pdd, bool sq_trap_en)
 	}
 
 	return amdgpu_mes_set_shader_debugger(pdd->dev->adev,
-					pdd->proc_ctx_gpu_addr, spi_dbg_cntl,
+					pdd->proc_ctx_gpu_addr,
+					pdd->proc_ctx_array_index, spi_dbg_cntl,
 					pdd->watch_points,
 					pdd->watch_addresses,
 					flags, sq_trap_en,

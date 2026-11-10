@@ -763,6 +763,7 @@ int amdgpu_mes_hdp_flush(struct amdgpu_device *adev)
 
 int amdgpu_mes_set_shader_debugger(struct amdgpu_device *adev,
 				uint64_t process_context_addr,
+				uint32_t process_context_array_index,
 				uint32_t spi_gdbg_per_vmid_cntl,
 				const uint32_t *tcp_watch_cntl,
 				const uint64_t *watch_addresses,
@@ -782,6 +783,8 @@ int amdgpu_mes_set_shader_debugger(struct amdgpu_device *adev,
 	op_input.xcc_id = xcc_id;
 	op_input.op = MES_MISC_OP_SET_SHADER_DEBUGGER;
 	op_input.set_shader_debugger.process_context_addr = process_context_addr;
+	op_input.set_shader_debugger.process_context_array_index =
+		process_context_array_index;
 	op_input.set_shader_debugger.flags.u32all = flags;
 
 	/* use amdgpu mes_flush_shader_debugger instead */
@@ -811,6 +814,7 @@ int amdgpu_mes_set_shader_debugger(struct amdgpu_device *adev,
 
 int amdgpu_mes_flush_shader_debugger(struct amdgpu_device *adev,
 				     uint64_t process_context_addr,
+				     uint32_t process_context_array_index,
 				     uint32_t xcc_id)
 {
 	struct mes_misc_op_input op_input = {0};
@@ -825,6 +829,8 @@ int amdgpu_mes_flush_shader_debugger(struct amdgpu_device *adev,
 	op_input.xcc_id = xcc_id;
 	op_input.op = MES_MISC_OP_SET_SHADER_DEBUGGER;
 	op_input.set_shader_debugger.process_context_addr = process_context_addr;
+	op_input.set_shader_debugger.process_context_array_index =
+		process_context_array_index;
 	op_input.set_shader_debugger.flags.process_ctx_flush = true;
 
 	amdgpu_mes_lock(&adev->mes);

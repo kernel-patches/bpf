@@ -1051,6 +1051,8 @@ static int mes_v11_0_misc_op(struct amdgpu_mes *mes,
 				upper_32_bits(input->set_shader_debugger.watch_addresses[i]) & 0xffff;
 		}
 		misc_pkt.set_shader_debugger.trap_en = input->set_shader_debugger.trap_en;
+		misc_pkt.set_shader_debugger.process_context_array_index =
+				input->set_shader_debugger.process_context_array_index;
 		break;
 	case MES_MISC_OP_CHANGE_CONFIG:
 		if ((mes->adev->mes.sched_version & AMDGPU_MES_VERSION_MASK) < 0x63) {

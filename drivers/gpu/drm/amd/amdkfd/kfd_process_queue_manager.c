@@ -96,6 +96,7 @@ void kfd_process_dequeue_from_device(struct kfd_process_device *pdd)
 	    down_read_trylock(&dev->adev->reset_domain->sem)) {
 		amdgpu_mes_flush_shader_debugger(dev->adev,
 						 pdd->proc_ctx_gpu_addr,
+						 pdd->proc_ctx_array_index,
 						 ffs(pdd->dev->xcc_mask) - 1);
 		up_read(&dev->adev->reset_domain->sem);
 	}
