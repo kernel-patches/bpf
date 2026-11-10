@@ -1212,8 +1212,10 @@ static int q6apm_dai_probe(struct platform_device *pdev)
 	rc = of_parse_phandle_with_fixed_args(node, "iommus", 1, 0, &args);
 	if (rc < 0)
 		pdata->sid = -1;
-	else
+	else {
 		pdata->sid = args.args[0] & SID_MASK_DEFAULT;
+		of_node_put(args.np);
+	}
 
 	if (apm && apm->gdev &&
 	    apm->gdev->domain_id == GPR_DOMAIN_ID_MODEM) {

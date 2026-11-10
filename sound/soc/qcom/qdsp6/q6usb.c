@@ -387,8 +387,10 @@ static int q6usb_dai_dev_probe(struct platform_device *pdev)
 	}
 
 	ret = of_parse_phandle_with_fixed_args(node, "iommus", 1, 0, &args);
-	if (!ret)
+	if (!ret) {
 		data->priv.sid = args.args[0] & Q6_USB_SID_MASK;
+		of_node_put(args.np);
+	}
 
 	ret = devm_mutex_init(dev, &data->mutex);
 	if (ret < 0)
