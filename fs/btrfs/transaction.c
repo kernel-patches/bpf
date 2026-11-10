@@ -725,6 +725,8 @@ start_transaction(struct btrfs_root *root, unsigned int num_items,
 			if (ret)
 				goto reserve_fail;
 			ret = btrfs_delayed_refs_rsv_refill(fs_info, flush);
+			if (ret == -EAGAIN)
+				ret = 0;
 		}
 
 		if (ret)
