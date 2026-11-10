@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-2.0-only
+
+llvm-plugin-$(CONFIG_CLANG_PLUGIN_BPF_SCAN_IR) += bpf_scan_ir.so
+
+LLVM_PLUGIN := $(llvm-plugin-y)
+LLVM_PLUGINS_CFLAGS := $(strip $(addprefix -fpass-plugin=$(objtree)/scripts/llvm-plugins/, \
+	$(LLVM_PLUGIN)) -DLLVM_PLUGINS)
+export LLVM_PLUGIN LLVM_PLUGINS_CFLAGS
+
+KBUILD_CFLAGS += $(LLVM_PLUGINS_CFLAGS)

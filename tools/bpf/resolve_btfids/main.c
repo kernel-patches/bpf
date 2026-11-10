@@ -69,6 +69,18 @@
  *   - rewrites the prototype of KF_IMPLICIT_ARGS kfuncs.
  *
  * These kfunc annotations were historically produced by pahole.
+ *
+ * Functions found in BTF_SET8_FMODRET sets are the targets of BPF fmod_ret
+ * programs. For each of them resolve_btfids emits a "bpf_fmodret" decl tag,
+ * and also "bpf_fmodret_sleepable" when KF_SLEEPABLE is set, so the sleepable
+ * tag never comes alone. The kernel builds the set of fmod_ret targets from
+ * these tags when it loads BTF.
+ *
+ * Functions which the analysis of the compiler plugin records, see fmodret.c,
+ * get "bpf_fmodret" too, and "bpf_fmodret_retval:" with the values they
+ * return on paths without side effects, such as "bpf_fmodret_retval:-22,-12".
+ * The verifier lets programs attached to them return only these values or 0.
+ * A function in a BTF_FMODRET set keeps only its own tags.
  */
 
 #define  _GNU_SOURCE
@@ -90,6 +102,7 @@
 #include <bpf/btf.h>
 #include <bpf/libbpf.h>
 #include "btf_colors.h"
+#include "fmodret.h"
 #include <subcmd/parse-options.h>
 
 #define BTF_IDS_SECTION	".BTF_ids"
@@ -148,6 +161,11 @@ struct object {
 	struct btf *orig_btf;
 	bool distill_base;
 	bool extract_inline;
+	/* The ftrace call sites are in __patchable_function_entries */
+	bool patchable_ftrace;
+
+	/* Functions found by the analysis of the compiler plugin, see fmodret.c */
+	struct fmodret_retvals fmodret_retvals;
 
 	struct {
 		int		 fd;
@@ -197,7 +215,11 @@ struct btf_links {
 
 #define DECL_TAG_FASTCALL "bpf_fastcall"
 #define DECL_TAG_KFUNC "bpf_kfunc"
+#define DECL_TAG_FMODRET "bpf_fmodret"
+#define DECL_TAG_FMODRET_SLEEPABLE "bpf_fmodret_sleepable"
+#define DECL_TAG_FMODRET_RETVAL "bpf_fmodret_retval:"
 
+#define KF_SLEEPABLE	(1 << 5)
 #define KF_FASTCALL	(1 << 12)
 #define KF_ARENA_RET	(1 << 13)
 #define KF_ARENA_ARG1	(1 << 14)
@@ -208,6 +230,7 @@ struct btf_links {
 #define PARAM_SUFFIX_ARENA "__arena"
 #define PARAM_SUFFIX_ARENA_NULLABLE "__arena__nullable"
 
+/* A function found in a BTF ID set: a kfunc or an fmod_ret target */
 struct kfunc {
 	struct rb_node rb_node;
 	const char *name;
@@ -221,6 +244,7 @@ struct btf2btf_context {
 	u32 nr_decl_tags;
 	u32 max_decl_tags;
 	struct rb_root kfuncs;
+	struct rb_root fmodrets;
 };
 
 static int verbose;
@@ -1256,16 +1280,16 @@ static int push_decl_tag_id(struct btf2btf_context *ctx, u32 decl_tag_id)
 	return 0;
 }
 
-static int push_kfunc(struct btf2btf_context *ctx, struct kfunc *kfunc)
+static int push_set_func(struct rb_root *root, const char *kind, struct kfunc *kfunc)
 {
-	struct rb_node **p = &ctx->kfuncs.rb_node;
+	struct rb_node **p = &root->rb_node;
 	struct rb_node *parent = NULL;
 	struct kfunc *k;
 
 	/*
-	 * Dedup by BTF ID: collecting the same kfunc twice is a no-op,
-	 * UNLESS the kfunc flags are inconsistent, in which case we
-	 * fail hard because it indicates a bug in a kfunc set declaration.
+	 * Dedup by BTF ID: collecting the same function twice is a no-op,
+	 * UNLESS its flags are inconsistent, in which case we fail hard
+	 * because it indicates a bug in a BTF ID set declaration.
 	 */
 	while (*p) {
 		parent = *p;
@@ -1278,8 +1302,8 @@ static int push_kfunc(struct btf2btf_context *ctx, struct kfunc *kfunc)
 		} else if (k->flags == kfunc->flags) {
 			return 0;
 		} else {
-			pr_err("ERROR: resolve_btfids: kfunc %s has inconsistent flags across BTF ID sets: 0x%x != 0x%x\n",
-			       kfunc->name, k->flags, kfunc->flags);
+			pr_err("ERROR: resolve_btfids: %s %s has inconsistent flags across BTF ID sets: 0x%x != 0x%x\n",
+			       kind, kfunc->name, k->flags, kfunc->flags);
 			return -EINVAL;
 		}
 	}
@@ -1290,7 +1314,7 @@ static int push_kfunc(struct btf2btf_context *ctx, struct kfunc *kfunc)
 
 	*k = *kfunc;
 	rb_link_node(&k->rb_node, parent, p);
-	rb_insert_color(&k->rb_node, &ctx->kfuncs);
+	rb_insert_color(&k->rb_node, root);
 
 	return 0;
 }
@@ -1344,7 +1368,16 @@ static bool is_arena_param(const struct btf *btf, const struct btf_param *param)
 	       param_name_has_suffix(name, PARAM_SUFFIX_ARENA_NULLABLE);
 }
 
-static int collect_kfuncs(struct object *obj, struct btf2btf_context *ctx)
+typedef int (*set_func_fn)(struct btf2btf_context *ctx, const char *name,
+			   u32 btf_id, u32 flags);
+
+/*
+ * Call FN for each function in the BTF ID sets which have SET_FLAG set. Reject
+ * an entry with flags other than ALLOWED_FLAGS, even if its function is missing.
+ */
+static int collect_set_funcs(struct object *obj, struct btf2btf_context *ctx,
+			     u32 set_flag, u32 allowed_flags, const char *kind,
+			     set_func_fn fn)
 {
 	Elf_Data *idlist = obj->efile.idlist;
 	struct btf *btf = ctx->btf;
@@ -1356,24 +1389,39 @@ static int collect_kfuncs(struct object *obj, struct btf2btf_context *ctx)
 	for (next = rb_first(&obj->sets); next; next = rb_next(next)) {
 		struct btf_id_set8 *set8;
 		struct btf_id *set_id;
-		u64 set_addr;
+		u64 set_addr, set_off;
 
 		set_id = rb_entry(next, struct btf_id, rb_node);
 		if (set_id->kind != BTF_ID_KIND_SET8 || set_id->addr_cnt != 1)
 			continue;
 
 		set_addr = set_id->addr[0];
-		set8 = idlist->d_buf + (set_addr - obj->efile.idlist_addr);
-		if (!(set8->flags & BTF_SET8_KFUNCS))
+		set_off = set_addr - obj->efile.idlist_addr;
+		/* A malformed set must not reach out of the section */
+		if (set_addr < obj->efile.idlist_addr || set_off > idlist->d_size ||
+		    idlist->d_size - set_off < sizeof(*set8) || set_id->cnt < 0 ||
+		    (u64)set_id->cnt > (idlist->d_size - set_off - sizeof(*set8)) /
+				       sizeof(set8->pairs[0])) {
+			pr_err("ERROR: resolve_btfids: set %s is out of %s\n",
+			       set_id->name, BTF_IDS_SECTION);
+			return -EINVAL;
+		}
+		set8 = idlist->d_buf + set_off;
+		if (!(set8->flags & set_flag))
 			continue;
 
 		for (u32 i = 0; i < set_id->cnt; i++) {
 			size_t off = (char *)&set8->pairs[i] - (char *)set8;
 			const char *name = find_name_by_addr(obj, set_addr + off);
-			struct kfunc kfunc;
+			u32 flags = set8->pairs[i].flags;
 			s32 func_id;
 			int err;
 
+			if (flags & ~allowed_flags) {
+				pr_err("ERROR: resolve_btfids: %s %s in %s has unsupported flags 0x%x\n",
+				       kind, name ?: "?", set_id->name, flags & ~allowed_flags);
+				return -EINVAL;
+			}
 			if (!name) {
 				pr_err("WARN: resolve_btfids: no BTF ID symbol for %s entry %u\n",
 				       set_id->name, i);
@@ -1383,24 +1431,48 @@ static int collect_kfuncs(struct object *obj, struct btf2btf_context *ctx)
 
 			func_id = btf__find_by_name_kind_own(btf, name, BTF_KIND_FUNC);
 			if (func_id < 0) {
-				pr_err("WARN: resolve_btfids: no BTF func for kfunc %s in %s\n",
-				       name, set_id->name);
+				pr_err("WARN: resolve_btfids: no BTF func for %s %s in %s\n",
+				       kind, name, set_id->name);
 				warnings++;
 				continue;
 			}
 
-			pr_debug("found kfunc %s in %s\n", name, set_id->name);
+			pr_debug("found %s %s in %s\n", kind, name, set_id->name);
 
-			kfunc.name = name;
-			kfunc.btf_id = func_id;
-			kfunc.flags = set8->pairs[i].flags;
-			err = push_kfunc(ctx, &kfunc);
+			err = fn(ctx, name, func_id, flags);
 			if (err)
 				return err;
 		}
 	}
 
 	return 0;
+}
+
+static int push_kfunc(struct btf2btf_context *ctx, const char *name,
+		      u32 btf_id, u32 flags)
+{
+	struct kfunc kfunc = { .name = name, .btf_id = btf_id, .flags = flags };
+
+	return push_set_func(&ctx->kfuncs, "kfunc", &kfunc);
+}
+
+static int push_fmodret(struct btf2btf_context *ctx, const char *name,
+			u32 btf_id, u32 flags)
+{
+	struct kfunc fmodret = { .name = name, .btf_id = btf_id, .flags = flags };
+
+	return push_set_func(&ctx->fmodrets, "fmod_ret target", &fmodret);
+}
+
+static int collect_kfuncs(struct object *obj, struct btf2btf_context *ctx)
+{
+	return collect_set_funcs(obj, ctx, BTF_SET8_KFUNCS, ~0U, "kfunc", push_kfunc);
+}
+
+static int collect_fmodrets(struct object *obj, struct btf2btf_context *ctx)
+{
+	return collect_set_funcs(obj, ctx, BTF_SET8_FMODRET, KF_SLEEPABLE,
+				 "fmod_ret target", push_fmodret);
 }
 
 static int build_btf2btf_context(struct object *obj, struct btf2btf_context *ctx)
@@ -1418,6 +1490,12 @@ static int build_btf2btf_context(struct object *obj, struct btf2btf_context *ctx
 	err = collect_kfuncs(obj, ctx);
 	if (err) {
 		pr_err("ERROR: resolve_btfids: failed to collect kfuncs from BTF\n");
+		return err;
+	}
+
+	err = collect_fmodrets(obj, ctx);
+	if (err) {
+		pr_err("ERROR: resolve_btfids: failed to collect fmod_ret targets from BTF\n");
 		return err;
 	}
 
@@ -1727,6 +1805,40 @@ static int add_decl_tag(struct btf2btf_context *ctx, const char *tag_name,
 	return push_decl_tag_id(ctx, new_id);
 }
 
+static const struct kfunc *find_set_func(const struct rb_root *root, u32 btf_id)
+{
+	const struct rb_node *node = root->rb_node;
+
+	while (node) {
+		const struct kfunc *k = rb_entry(node, struct kfunc, rb_node);
+
+		if (btf_id < k->btf_id)
+			node = node->rb_left;
+		else if (btf_id > k->btf_id)
+			node = node->rb_right;
+		else
+			return k;
+	}
+	return NULL;
+}
+
+static int add_fmodret_retval_tags(struct btf2btf_context *ctx,
+				   const struct fmodret_retval *retval)
+{
+	char *tag;
+	int err;
+
+	err = add_decl_tag(ctx, DECL_TAG_FMODRET, retval->btf_id, -1);
+	if (err)
+		return err;
+
+	if (asprintf(&tag, "%s%s", DECL_TAG_FMODRET_RETVAL, retval->values) < 0)
+		return -ENOMEM;
+	err = add_decl_tag(ctx, tag, retval->btf_id, -1);
+	free(tag);
+	return err;
+}
+
 static int btf2btf(struct object *obj)
 {
 	struct btf2btf_context ctx = {};
@@ -1761,10 +1873,38 @@ static int btf2btf(struct object *obj)
 			goto out;
 	}
 
+	for (next = rb_first(&ctx.fmodrets); next; next = rb_next(next)) {
+		struct kfunc *fmodret = rb_entry(next, struct kfunc, rb_node);
+
+		err = add_decl_tag(&ctx, DECL_TAG_FMODRET, fmodret->btf_id, -1);
+		if (err)
+			goto out;
+
+		if (fmodret->flags & KF_SLEEPABLE) {
+			err = add_decl_tag(&ctx, DECL_TAG_FMODRET_SLEEPABLE,
+					   fmodret->btf_id, -1);
+			if (err)
+				goto out;
+		}
+	}
+
+	for (size_t i = 0; i < obj->fmodret_retvals.cnt; i++) {
+		const struct fmodret_retval *retval = &obj->fmodret_retvals.retvals[i];
+		const struct kfunc *kfunc = find_set_func(&ctx.kfuncs, retval->btf_id);
+
+		/* The trampoline is built for the prototype without the implicit arguments */
+		if (find_set_func(&ctx.fmodrets, retval->btf_id) || (kfunc && (kfunc->flags & KF_IMPLICIT_ARGS)))
+			continue;
+		err = add_fmodret_retval_tags(&ctx, retval);
+		if (err)
+			goto out;
+	}
+
 	err = 0;
 out:
 	free(ctx.decl_tags);
 	free_kfuncs(&ctx.kfuncs);
+	free_kfuncs(&ctx.fmodrets);
 
 	return err;
 }
@@ -2113,6 +2253,8 @@ int main(int argc, const char **argv)
 			    "distill --btf_base and emit .BTF.base section data"),
 		OPT_BOOLEAN(0, "inline", &obj.extract_inline,
 			    "extract location BTF into a .BTF.inline file"),
+		OPT_BOOLEAN(0, "patchable_ftrace", &obj.patchable_ftrace,
+			    "ftrace call sites are in __patchable_function_entries"),
 		OPT_CALLBACK(0, "btf_link", &btf_links, "section:module:btf-file",
 			     "patch a BTF link with --patch_btfids", parse_btf_link),
 		OPT_STRING(0, "patch_btfids", &btfids_path, "file",
@@ -2169,6 +2311,10 @@ int main(int argc, const char **argv)
 			goto out;
 
 	if (load_btf(&obj))
+		goto out;
+
+	if (fmodret_collect(obj.efile.elf, obj.btf, &obj.fmodret_retvals,
+			    obj.patchable_ftrace, verbose))
 		goto out;
 
 	if (btf2btf(&obj))
@@ -2228,6 +2374,7 @@ out:
 	btf_id__free_all(&obj.funcs);
 	btf_id__free_all(&obj.sets);
 	free(obj.addr_syms);
+	fmodret_free(&obj.fmodret_retvals);
 	free(obj.efile.func_symbols);
 	if (obj.efile.elf) {
 		elf_end(obj.efile.elf);
