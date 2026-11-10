@@ -559,9 +559,13 @@ static int dpti_program_on_cpu(unsigned int cpu)
  * struct dpti_pkg - Per-package DPTI state
  * @owner:	CPU currently programmed to receive the package-level
  *		interrupt, or nr_cpu_ids when the package has no owner.
+ * @pin:	CPU the user requested as the owner, or nr_cpu_ids for
+ *		automatic selection. A pinned CPU overrides the automatic
+ *		selection whenever it is online.
  */
 struct dpti_pkg {
 	unsigned int owner;
+	unsigned int pin;
 };
 
 /*
@@ -596,6 +600,7 @@ static bool dpti_supported(void)
 	return true;
 }
 
+/* @pkg_id may be NULL for a caller that only validates @cpu. */
 static int dpti_lookup_pkg_id(unsigned int cpu, u16 *pkg_id)
 {
 	u16 id;
@@ -607,7 +612,8 @@ static int dpti_lookup_pkg_id(unsigned int cpu, u16 *pkg_id)
 	if (id >= topology_max_packages())
 		return -ENODEV;
 
-	*pkg_id = id;
+	if (pkg_id)
+		*pkg_id = id;
 
 	return 0;
 }
@@ -655,44 +661,145 @@ static void dpti_clear_all(void)
 	}
 }
 
+/**
+ * enum dpti_rank - How suitable a CPU is as a DPTI owner
+ * @DPTI_RANK_NONE:		No eligible CPU.
+ * @DPTI_RANK_ONLINE:		An online CPU of the package (automatic choice).
+ * @DPTI_RANK_PINNED:		Explicitly requested by the user; overrides any
+ *				automatic choice.
+ *
+ * Higher is better; the selection picks the highest-ranked online CPU in the
+ * package.
+ */
+enum dpti_rank {
+	DPTI_RANK_NONE,
+	DPTI_RANK_ONLINE,
+	DPTI_RANK_PINNED,
+};
+
+static enum dpti_rank dpti_cpu_rank(unsigned int cpu)
+{
+	/* No concept of isolation yet: every online CPU ranks the same. */
+	return DPTI_RANK_ONLINE;
+}
+
+/*
+ * Select the owner of the package-level thermal interrupt for @pkg_cpu's
+ * package. @skip is excluded from the selection (e.g., if it is going offline).
+ * @rank receives the rank of the selected CPU.
+ *
+ * A user-pinned CPU takes precedence whenever it is online; otherwise the best
+ * ranked CPU in the package is chosen.
+ */
+static unsigned int dpti_select_cpu(unsigned int pkg_cpu, unsigned int skip,
+				    enum dpti_rank *rank)
+{
+	const struct cpumask *pkg_mask = topology_core_cpumask(pkg_cpu);
+	enum dpti_rank best_rank = DPTI_RANK_NONE;
+	unsigned int cpu, pin, best = nr_cpu_ids;
+
+	lockdep_assert_cpus_held();
+
+	/*
+	 * Choose the user-pinned CPU if available: it is online and not going
+	 * offline (as indicated by @skip).
+	 */
+	pin = dpti_pkg_of_cpu_nocheck(pkg_cpu)->pin;
+	if (pin < nr_cpu_ids && pin != skip &&
+	    cpumask_test_cpu(pin, pkg_mask)) {
+		*rank = DPTI_RANK_PINNED;
+		return pin;
+	}
+
+	for_each_cpu(cpu, pkg_mask) {
+		enum dpti_rank cpu_rank;
+
+		if (cpu == skip)
+			continue;
+
+		cpu_rank = dpti_cpu_rank(cpu);
+		if (cpu_rank > best_rank) {
+			best_rank = cpu_rank;
+			best = cpu;
+			/*
+			 * Nothing outranks an online CPU in automatic selection.
+			 */
+			if (best_rank == DPTI_RANK_ONLINE)
+				break;
+		}
+	}
+
+	*rank = best_rank;
+
+	return best;
+}
+
+/*
+ * Reselect the owner for @cpu's package and migrate to it, but only on a
+ * strict rank improvement.
+ */
+static int dpti_update_owner(unsigned int cpu)
+{
+	struct dpti_pkg *pkg = dpti_pkg_of_cpu_nocheck(cpu);
+	enum dpti_rank new_rank, old_rank;
+	unsigned int new_cpu, old_cpu;
+	int ret;
+
+	if (dpti_shut_down)
+		return 0;
+
+	old_cpu = pkg->owner;
+	new_cpu = dpti_select_cpu(cpu, nr_cpu_ids, &new_rank);
+	if (new_cpu == old_cpu)
+		return 0;
+
+	old_rank = DPTI_RANK_NONE;
+	if (old_cpu < nr_cpu_ids)
+		old_rank = dpti_cpu_rank(old_cpu);
+	if (new_rank <= old_rank)
+		return 0;
+
+	ret = dpti_program_on_cpu(new_cpu);
+	if (ret)
+		return ret;
+
+	if (old_cpu < nr_cpu_ids)
+		dpti_clear_on_cpu(old_cpu);
+
+	pkg->owner = new_cpu;
+
+	return 0;
+}
+
 static int dpti_online(unsigned int cpu)
 {
-	u16 pkg_id;
 	int ret;
 
 	if (!dpti_supported())
 		return 0;
 
-	pkg_id = topology_logical_package_id(cpu);
-	if (pkg_id >= topology_max_packages())
-		return -EINVAL;
-
-	if (dpti_shut_down)
-		return 0;
-
-	/* Another CPU in this package already owns the directed interrupt. */
-	if (dpti_pkgs[pkg_id].owner != nr_cpu_ids)
-		return 0;
-
-	ret = dpti_program_on_cpu(cpu);
+	/*
+	 * Validate @cpu's package id on behalf of dpti_update_owner(), which
+	 * indexes dpti_pkgs[] based on @cpu.
+	 */
+	ret = dpti_lookup_pkg_id(cpu, NULL);
 	if (ret)
 		return ret;
 
-	dpti_pkgs[pkg_id].owner = cpu;
-
-	return 0;
+	/*
+	 * A CPU coming online may be a better owner than the one currently
+	 * programmed.
+	 */
+	return dpti_update_owner(cpu);
 }
 
 static void dpti_offline(unsigned int cpu)
 {
+	enum dpti_rank new_rank;
 	unsigned int new_cpu;
 	u16 pkg_id;
 
-	if (!dpti_supported())
-		return;
-
-	pkg_id = topology_logical_package_id(cpu);
-	if (pkg_id >= topology_max_packages())
+	if (dpti_lookup_pkg_id(cpu, &pkg_id))
 		return;
 
 	if (dpti_shut_down)
@@ -706,7 +813,7 @@ static void dpti_offline(unsigned int cpu)
 	 * The package-level interrupt must remain directed after this CPU goes
 	 * offline.
 	 */
-	new_cpu = cpumask_any_but(topology_core_cpumask(cpu), cpu);
+	new_cpu = dpti_select_cpu(cpu, cpu, &new_rank);
 
 	/*
 	 * dpti_program_on_cpu() undoes a setup that the hardware does not
@@ -727,7 +834,7 @@ static void dpti_offline(unsigned int cpu)
 	 */
 	dpti_config_this_cpu(false);
 
-	dpti_pkgs[pkg_id].owner = (new_cpu < nr_cpu_ids) ? new_cpu : nr_cpu_ids;
+	dpti_pkgs[pkg_id].owner = new_cpu;
 }
 
 /*
@@ -785,8 +892,10 @@ static __init void dpti_init(void)
 	if (!dpti_pkgs)
 		return;
 
-	for (i = 0; i < topology_max_packages(); i++)
+	for (i = 0; i < topology_max_packages(); i++) {
 		dpti_pkgs[i].owner = nr_cpu_ids;
+		dpti_pkgs[i].pin = nr_cpu_ids;
+	}
 
 	register_syscore(&dpti_syscore);
 }
