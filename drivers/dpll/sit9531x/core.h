@@ -41,7 +41,7 @@
  */
 #define SIT9531X_POLL_STRETCH_MAX	3
 
-/* selected_ref value when the active source is not a registered input */
+/* routed_ref value when the PLL is fed no registered input */
 #define SIT9531X_REF_INVALID		0xFF
 
 /* SiTime IEEE OUI for EUI-64 generation */
@@ -79,14 +79,20 @@ enum sit9531x_signal_mode {
  * struct sit9531x_ref - input reference state
  * @freq: configured frequency in Hz
  * @enabled: input receiver is on
+ * @off_pending: receiver gate-off to retry while no PLL claims the input
  * @pll_mask: PLLs this input feeds (bit 0 = PLLA)
+ * @los: clock monitor reports loss of signal
+ * @qual_fail: clock monitor reports frequency drift while the input has signal
  * @sig_mode: signal mode of the input pair, read from CLKINx_INPUT_MODE at
  *   probe
  */
 struct sit9531x_ref {
 	u64		freq;
 	bool		enabled;
+	bool		off_pending;
 	u8		pll_mask;
+	bool		los;
+	bool		qual_fail;
 	enum sit9531x_signal_mode	sig_mode;
 };
 
@@ -100,6 +106,8 @@ struct sit9531x_ref {
  * @routed: mapped to @pll_idx by the initial configuration; an unrouted
  *   output has no pin
  * @pll_idx: PLL driving this output (0-3)
+ * @retime_pending: re-timed delay not yet applied; the poll applies @retime_ps
+ * @retime_ps: delay to apply while @retime_pending
  */
 struct sit9531x_out {
 	u64		freq;
@@ -108,6 +116,8 @@ struct sit9531x_out {
 	bool		part_muted;
 	bool		routed;
 	u8		pll_idx;
+	bool		retime_pending;
+	s32		retime_ps;
 };
 
 /*
@@ -118,14 +128,30 @@ struct sit9531x_out {
  * @stale: last state read failed; the fields hold the previous sample and
  *   are not reported
  * @mode: 0 = sync (outer loop enabled), 1 = free-run
- * @selected_ref: logical index of the selected reference (INTSYNC:
- *   SIT9531X_INTSYNC_PIN_ID), or SIT9531X_REF_INVALID for a reserved code
+ * @routed_ref: input the device routes to the PLL, as a logical index
+ *   (INTSYNC: SIT9531X_INTSYNC_PIN_ID); SIT9531X_REF_INVALID if none
  * @inner_lol: inner loop loss of lock
  * @ho_freeze: holdover freeze active
  * @ho_valid: holdover memory holds a valid estimate
  * @manual_input: PLL uses its manual input select (pins or
  *   GPIO_INPUT_FUNC_CTRL5..8), which table writes do not change; reported
  *   as MANUAL
+ * @manual_ref: logical input of a manual PLL, SIT9531X_REF_INVALID if
+ *   unknown; its receiver stays claimed for the PLL
+ * @ho_release_pending: forced holdover not yet released
+ * @live_top: highest-priority listed source with signal at the last poll,
+ *   or SIT9531X_PRIO_SRC_NONE; a change while the PLL tracks no source
+ *   rewrites the table
+ * @reselect_armed: no poll since probe or resume; the first poll rewrites
+ *   the table of a PLL in holdover while a listed source has signal
+ * @flush_pending: output divider realignment flush not yet triggered after
+ *   a rate or delay commit
+ * @table_pending: priority table partly written or not latched; the PLL
+ *   stays in forced holdover
+ * @table_back: table reported and to be rewritten while @table_pending
+ * @tap_pending: debug taps not restored after a phase-offset read
+ * @prio_srcs: cached priority table, a source code per slot
+ * @prio_last: first slot of each source plus one, 0 if absent
  * @prio_mask: bit per canonical source in the priority table read back
  *   from hardware
  * @cfg_prio: configured priority of each canonical source, listed or not;
@@ -140,11 +166,21 @@ struct sit9531x_chan {
 	bool		locked;
 	bool		stale;
 	u8		mode;
-	u8		selected_ref;
+	u8		routed_ref;
 	bool		inner_lol;
 	bool		ho_freeze;
 	bool		ho_valid;
 	bool		manual_input;
+	u8		manual_ref;
+	bool		ho_release_pending;
+	u8		live_top;
+	bool		reselect_armed;
+	bool		flush_pending;
+	bool		table_pending;
+	u8		table_back[SIT9531X_PRIO_MAX_SLOTS];
+	bool		tap_pending;
+	u8		prio_srcs[SIT9531X_PRIO_MAX_SLOTS];
+	u8		prio_last[SIT9531X_PRIO_NUM_SRC];
 	u16		prio_mask;
 	u8		cfg_prio[SIT9531X_PRIO_NUM_SRC];
 	u16		cfg_known;
@@ -176,6 +212,7 @@ struct sit9531x_chan {
  * @irq: optional INTRB IRQ, 0 if not wired
  * @intsync_src: PLL sourcing INTSYNC, or -1
  * @irq_ack_fails: consecutive failed INTRB acknowledgements
+ * @loops_open: output loops not yet re-locked
  */
 struct sit9531x_dev {
 	struct device			*dev;
@@ -206,6 +243,8 @@ struct sit9531x_dev {
 	int			irq;
 
 	s8			intsync_src;
+
+	bool			loops_open;
 };
 
 int sit9531x_read_u8(struct sit9531x_dev *sitdev, unsigned int reg,
@@ -218,6 +257,18 @@ int sit9531x_write_pll_u8(struct sit9531x_dev *sitdev, u8 pll_idx,
 			  u8 offset, u8 val);
 int sit9531x_update_pll_u8(struct sit9531x_dev *sitdev, u8 pll_idx,
 			   u8 offset, u8 mask, u8 val);
+
+int sit9531x_input_disable(struct sit9531x_dev *sitdev, u8 index);
+int sit9531x_input_enable(struct sit9531x_dev *sitdev, u8 index);
+
+bool sit9531x_input_prio_present(struct sit9531x_dev *sitdev,
+				 u8 pll_idx, u8 input_idx);
+int sit9531x_input_prio_set(struct sit9531x_dev *sitdev, u8 pll_idx,
+			    u8 input_idx, u8 prio);
+int sit9531x_input_prio_remove(struct sit9531x_dev *sitdev, u8 pll_idx,
+			       u8 input_idx);
+int sit9531x_input_prio_add(struct sit9531x_dev *sitdev, u8 pll_idx,
+			    u8 input_idx);
 
 static inline u8 sit9531x_pll_page(u8 pll_idx)
 {
@@ -285,6 +336,12 @@ static inline const struct sit9531x_chan *
 sit9531x_chan_state_get(const struct sit9531x_dev *sitdev, u8 pll_idx)
 {
 	return &sitdev->chan[pll_idx];
+}
+
+static inline bool sit9531x_chan_tracking(const struct sit9531x_chan *chan)
+{
+	return chan->locked && !chan->inner_lol && !chan->mode &&
+	       !chan->ho_freeze && !chan->stale;
 }
 
 #endif /* _SIT9531X_CORE_H */

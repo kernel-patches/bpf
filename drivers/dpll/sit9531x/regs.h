@@ -96,6 +96,10 @@
 #define SIT9531X_REG_GLOBAL_UPDATE		SIT9531X_REG(0x00, 0x0F)
 #define SIT9531X_SMALL_UPDATE_CMD		0x02
 
+/* PLL holdover control (PLL page offset) */
+#define SIT9531X_PLL_REG_HO_CTRL		0x6F
+#define SIT9531X_PLL_HO_FORCE_BIT		4
+
 /* One bit per input PAIR (bit 0 = CLKIN0, ..., bit 3 = CLKIN3) */
 #define SIT9531X_REG_IN_DE_FORCE		SIT9531X_REG(0x02, 0xE8)
 #define SIT9531X_REG_IN_DE_STATE		SIT9531X_REG(0x02, 0xE9)
@@ -184,6 +188,29 @@
 #define SIT9531X_PLL_STATUS_OUTER_DIS	BIT(5)
 
 /*
+ * Writing the key unlocks the page's debug registers; writing zero locks them.
+ */
+#define SIT9531X_PLL_REG_DEBUG		0xBD
+#define SIT9531X_PLL_DEBUG_UNLOCK		0xC3
+#define SIT9531X_PLL_DEBUG_LOCK			0x00
+
+/*
+ * The address register selects the block the data register reports. A data read
+ * returns what the previous read latched; the documented procedures read it
+ * three times.
+ */
+#define SIT9531X_PLL_REG_DBG_STATUS_ADDR	0xD1
+#define SIT9531X_PLL_REG_DBG_STATUS_DATA	0xD0
+#define SIT9531X_DBG_STATUS_READS		3
+
+/*
+ * Low nibble: the source the input subsystem routes to the PLL, in the
+ * priority-table encoding.
+ */
+#define SIT9531X_DBG_STATUS_ROUTED_SRC	0xB0
+#define SIT9531X_DBG_ROUTED_SRC_MASK		GENMASK(3, 0)
+
+/*
  * PLL_CONFIG1F_PLL bit 6: manual active select, no priority arbitration. The
  * register is GUI generated; the driver only reads it.
  */
@@ -213,6 +240,17 @@
 #define SIT9531X_PLL_REG_STATUS_1		0x06
 #define SIT9531X_PLL_STATUS_1_HO_VALID	BIT(2)
 
+/*
+ * Clock monitor status, one nibble per input lane; the lower-numbered input of
+ * each register is in the low nibble.
+ */
+#define SIT9531X_CLKMON_P_STATUS_01		SIT9531X_REG(0x06, 0x02)
+#define SIT9531X_CLKMON_P_STATUS_23		SIT9531X_REG(0x06, 0x06)
+#define SIT9531X_CLKMON_N_STATUS_01		SIT9531X_REG(0x06, 0x92)
+#define SIT9531X_CLKMON_N_STATUS_23		SIT9531X_REG(0x06, 0x96)
+#define SIT9531X_CLKMON_FINE_DRIFT		BIT(0)
+#define SIT9531X_CLKMON_COARSE_DRIFT		BIT(1)
+#define SIT9531X_CLKMON_LOSS			BIT(2)
 #define SIT9531X_CLKMON_P_NOTIF_01		SIT9531X_REG(0x06, 0x03)
 #define SIT9531X_CLKMON_P_NOTIF_23		SIT9531X_REG(0x06, 0x07)
 
