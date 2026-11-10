@@ -19,9 +19,22 @@ Q = @
 endif
 
 MODULES = bpf_testmod.ko bpf_test_no_cfi.ko bpf_test_modorder_x.ko \
-	bpf_test_modorder_y.ko bpf_test_rqspinlock.ko
+	bpf_test_modorder_y.ko bpf_test_rqspinlock.ko bpf_test_retval.ko
 
 $(foreach m,$(MODULES),$(eval obj-m += $(m:.ko=.o)))
+
+bpf_test_retval-y := bpf_test_retval_main.o
+# The functions for bpf_scan_ir use clang extensions and need the plugin
+bpf_test_retval-$(CONFIG_CLANG_PLUGIN_BPF_SCAN_IR) += bpf_testmod_retval.o \
+						      bpf_testmod_retval_strong.o
+# Instrumentation and branch profiling make every path of the fixtures dirty
+GCOV_PROFILE_bpf_testmod_retval.o := n
+KCOV_INSTRUMENT_bpf_testmod_retval.o := n
+KMSAN_SANITIZE_bpf_testmod_retval.o := n
+KASAN_SANITIZE_bpf_testmod_retval.o := n
+KCSAN_SANITIZE_bpf_testmod_retval.o := n
+UBSAN_SANITIZE_bpf_testmod_retval.o := n
+CFLAGS_bpf_testmod_retval.o += -DDISABLE_BRANCH_PROFILING
 
 CFLAGS_bpf_testmod.o = -I$(src)
 
