@@ -41,7 +41,7 @@ static const struct ce_variant ce_h3_variant = {
 	.alg_hash = { CE_ALG_MD5, CE_ALG_SHA1, CE_ALG_SHA224, CE_ALG_SHA256,
 		CE_ALG_SHA384, CE_ALG_SHA512
 	},
-	.op_mode = { CE_OP_ECB, CE_OP_CBC
+	.op_mode = { CE_OP_ECB, CE_OP_CBC, CE_ID_NOTSUPP
 	},
 	.ce_clks = {
 		{ "bus", 0, 200000000 },
@@ -57,7 +57,7 @@ static const struct ce_variant ce_h5_variant = {
 	.alg_hash = { CE_ALG_MD5, CE_ALG_SHA1, CE_ALG_SHA224, CE_ALG_SHA256,
 		CE_ID_NOTSUPP, CE_ID_NOTSUPP
 	},
-	.op_mode = { CE_OP_ECB, CE_OP_CBC
+	.op_mode = { CE_OP_ECB, CE_OP_CBC, CE_ID_NOTSUPP
 	},
 	.ce_clks = {
 		{ "bus", 0, 200000000 },
@@ -73,7 +73,7 @@ static const struct ce_variant ce_h6_variant = {
 	.alg_hash = { CE_ALG_MD5, CE_ALG_SHA1, CE_ALG_SHA224, CE_ALG_SHA256,
 		CE_ALG_SHA384, CE_ALG_SHA512
 	},
-	.op_mode = { CE_OP_ECB, CE_OP_CBC
+	.op_mode = { CE_OP_ECB, CE_OP_CBC, CE_ID_NOTSUPP
 	},
 	.cipher_t_dlen_in_bytes = true,
 	.hash_t_dlen_in_bits = true,
@@ -93,7 +93,7 @@ static const struct ce_variant ce_h616_variant = {
 	.alg_hash = { CE_ALG_MD5, CE_ALG_SHA1, CE_ALG_SHA224, CE_ALG_SHA256,
 		CE_ALG_SHA384, CE_ALG_SHA512
 	},
-	.op_mode = { CE_OP_ECB, CE_OP_CBC
+	.op_mode = { CE_OP_ECB, CE_OP_CBC, CE_OP_XTS
 	},
 	.cipher_t_dlen_in_bytes = true,
 	.hash_t_dlen_in_bits = true,
@@ -115,7 +115,7 @@ static const struct ce_variant ce_a64_variant = {
 	.alg_hash = { CE_ALG_MD5, CE_ALG_SHA1, CE_ALG_SHA224, CE_ALG_SHA256,
 		CE_ID_NOTSUPP, CE_ID_NOTSUPP
 	},
-	.op_mode = { CE_OP_ECB, CE_OP_CBC
+	.op_mode = { CE_OP_ECB, CE_OP_CBC, CE_ID_NOTSUPP
 	},
 	.ce_clks = {
 		{ "bus", 0, 200000000 },
@@ -131,7 +131,7 @@ static const struct ce_variant ce_d1_variant = {
 	.alg_hash = { CE_ALG_MD5, CE_ALG_SHA1, CE_ALG_SHA224, CE_ALG_SHA256,
 		CE_ALG_SHA384, CE_ALG_SHA512
 	},
-	.op_mode = { CE_OP_ECB, CE_OP_CBC
+	.op_mode = { CE_OP_ECB, CE_OP_CBC, CE_ID_NOTSUPP
 	},
 	.ce_clks = {
 		{ "bus", 0, 200000000 },
@@ -149,7 +149,7 @@ static const struct ce_variant ce_r40_variant = {
 	.alg_hash = { CE_ALG_MD5, CE_ALG_SHA1, CE_ALG_SHA224, CE_ALG_SHA256,
 		CE_ID_NOTSUPP, CE_ID_NOTSUPP
 	},
-	.op_mode = { CE_OP_ECB, CE_OP_CBC
+	.op_mode = { CE_OP_ECB, CE_OP_CBC, CE_ID_NOTSUPP
 	},
 	.ce_clks = {
 		{ "bus", 0, 200000000 },
@@ -343,6 +343,36 @@ static struct sun8i_ce_alg_template ce_algs[] = {
 		.min_keysize	= AES_MIN_KEY_SIZE,
 		.max_keysize	= AES_MAX_KEY_SIZE,
 		.setkey		= sun8i_ce_aes_setkey,
+		.encrypt	= sun8i_ce_skencrypt,
+		.decrypt	= sun8i_ce_skdecrypt,
+	},
+	.alg.skcipher.op = {
+		.do_one_request = sun8i_ce_cipher_do_one,
+	},
+},
+{
+	.type = CRYPTO_ALG_TYPE_SKCIPHER,
+	.ce_algo_id = CE_ID_CIPHER_AES,
+	.ce_blockmode = CE_ID_OP_XTS,
+	.alg.skcipher.base = {
+		.base = {
+			.cra_name = "xts(aes)",
+			.cra_driver_name = "xts-aes-sun8i-ce",
+			.cra_priority = CE_PRIO_BELOW_CPU,
+			.cra_blocksize = AES_BLOCK_SIZE,
+			.cra_flags = CRYPTO_ALG_TYPE_SKCIPHER |
+				CRYPTO_ALG_ASYNC |
+				CRYPTO_ALG_NEED_FALLBACK,
+			.cra_ctxsize = sizeof(struct sun8i_cipher_tfm_ctx),
+			.cra_module = THIS_MODULE,
+			.cra_alignmask = 0xf,
+			.cra_init = sun8i_ce_cipher_init,
+			.cra_exit = sun8i_ce_cipher_exit,
+		},
+		.min_keysize	= 2 * AES_MIN_KEY_SIZE,
+		.max_keysize	= 2 * AES_MAX_KEY_SIZE,
+		.ivsize		= AES_BLOCK_SIZE,
+		.setkey		= sun8i_ce_xts_setkey,
 		.encrypt	= sun8i_ce_skencrypt,
 		.decrypt	= sun8i_ce_skdecrypt,
 	},

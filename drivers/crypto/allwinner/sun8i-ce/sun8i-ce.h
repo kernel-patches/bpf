@@ -46,6 +46,10 @@
 
 #define CE_OP_ECB	0
 #define CE_OP_CBC	(1 << 8)
+#define CE_OP_XTS	(9 << 8)
+
+#define CE_SYM_XTS_FIRST	BIT(12)
+#define CE_SYM_XTS_LAST		BIT(13)
 
 #define CE_ALG_AES		0
 #define CE_ALG_DES		1
@@ -58,6 +62,7 @@
 #define CE_ALG_SHA512           21
 #define CE_ALG_TRNG		48
 #define CE_ALG_TRNG_V2		0x1c
+#define CE_ALG_RAES		0x30
 
 /* Used in ce_variant */
 #define CE_ID_NOTSUPP		0xFF
@@ -77,7 +82,8 @@
 
 #define CE_ID_OP_ECB	0
 #define CE_ID_OP_CBC	1
-#define CE_ID_OP_MAX	2
+#define CE_ID_OP_XTS	2
+#define CE_ID_OP_MAX	3
 
 /* Used in CE registers */
 #define CE_ERR_ALGO_NOTSUP	BIT(0)
@@ -97,6 +103,14 @@
 #define CE_DIE_ID_MASK	0x07
 
 #define MAX_SG 8
+
+/*
+ * Priority of the modes that the CPU's own AES instructions run faster than
+ * the engine: below every CPU implementation of them (arm64 CE 300, NEON 250
+ * and 200, AES library 110, generic templates 100), so the CPU stays the
+ * default and the engine is used when it is asked for by driver name.
+ */
+#define CE_PRIO_BELOW_CPU	90
 
 #define CE_MAX_CLOCKS 4
 #define CE_DMA_TIMEOUT_MS	3000
@@ -124,7 +138,8 @@ struct ce_clock {
  *              coresponding CE_ALG_XXX value
  * @alg_hash:	list of supported hashes. for each CE_ID_ this will give the
  *              corresponding CE_ALG_XXX value
- * @op_mode:	list of supported block modes
+ * @op_mode:	list of supported block modes, CE_ID_NOTSUPP if not supported.
+ *		XTS runs on the RAES unit (algorithm CE_ALG_RAES)
  * @cipher_t_dlen_in_bytes:	Does the request size for cipher is in
  *				bytes or words
  * @hash_t_dlen_in_bytes:	Does the request size for hash is in
@@ -351,6 +366,8 @@ struct sun8i_ce_alg_template {
 };
 
 int sun8i_ce_aes_setkey(struct crypto_skcipher *tfm, const u8 *key,
+			unsigned int keylen);
+int sun8i_ce_xts_setkey(struct crypto_skcipher *tfm, const u8 *key,
 			unsigned int keylen);
 int sun8i_ce_des3_setkey(struct crypto_skcipher *tfm, const u8 *key,
 			 unsigned int keylen);
