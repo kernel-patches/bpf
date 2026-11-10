@@ -1625,6 +1625,11 @@ static void expire_task_slice(struct task_struct *p)
 		scx_set_task_slice(p, 0);
 }
 
+static bool scx_task_charges_cpu_max(const struct task_struct *p)
+{
+	return scx_task_sched(p)->ops.flags & SCX_OPS_CHARGE_CPU_MAX;
+}
+
 static void update_curr_scx(struct rq *rq)
 {
 	struct task_struct *donor;
@@ -1649,6 +1654,9 @@ static void update_curr_scx(struct rq *rq)
 
 	if (unlikely(donor == scx_rescuee(rq)))
 		scx_rescue_charge(rq, delta_exec);
+
+	if (scx_task_charges_cpu_max(donor))
+		cfs_bandwidth_charge_task(rq, donor, delta_exec);
 
 	dl_server_update(&rq->ext_server, delta_exec);
 }
@@ -2604,6 +2612,13 @@ static bool dequeue_task_scx(struct rq *rq, struct task_struct *p, int core_deq_
 	}
 
 	ops_dequeue(rq, p, deq_flags);
+
+	/* charge what @p ran, then return what @rq holds for its cgroups */
+	if (scx_task_charges_cpu_max(p)) {
+		if (task_current_donor(rq, p))
+			update_curr_scx(rq);
+		cfs_bandwidth_return_task(rq, p);
+	}
 
 	/*
 	 * A current scheduling context which is going off @rq first gets
@@ -11794,6 +11809,24 @@ __bpf_kfunc s32 scx_bpf_task_cpu(const struct task_struct *p)
 }
 
 /**
+ * scx_bpf_task_cpu_max_runtime - Runtime a task has left under cpu.max
+ * @p: task of interest
+ *
+ * Return the runtime in nsecs that @p's cgroup and its ancestors have left
+ * under their cpu.max quotas for @p on its current CPU, the least over those
+ * with a quota: the cgroup's cpu.max.runtime plus what the CPU holds for
+ * the cgroup, less what it owes. U64_MAX if none limits it. Read without
+ * locks.
+ *
+ * With %SCX_OPS_CHARGE_CPU_MAX, the scheduler should run @p only while this
+ * returns more than 0. The runtime grows when a period refills it.
+ */
+__bpf_kfunc u64 scx_bpf_task_cpu_max_runtime(struct task_struct *p)
+{
+	return cfs_bandwidth_task_runtime(p);
+}
+
+/**
  * scx_bpf_task_cid - cid a task is currently associated with
  * @p: task of interest
  *
@@ -12119,6 +12152,7 @@ BTF_ID_FLAGS(func, scx_bpf_get_online_cpumask, KF_ACQUIRE)
 BTF_ID_FLAGS(func, scx_bpf_put_cpumask, KF_RELEASE)
 BTF_ID_FLAGS(func, scx_bpf_task_running, KF_RCU)
 BTF_ID_FLAGS(func, scx_bpf_task_cpu, KF_RCU)
+BTF_ID_FLAGS(func, scx_bpf_task_cpu_max_runtime, KF_RCU)
 BTF_ID_FLAGS(func, scx_bpf_task_cid, KF_RCU)
 BTF_ID_FLAGS(func, scx_bpf_locked_rq, KF_IMPLICIT_ARGS | KF_RET_NULL)
 BTF_ID_FLAGS(func, scx_bpf_cpu_curr, KF_IMPLICIT_ARGS | KF_RET_NULL | KF_RCU_PROTECTED)

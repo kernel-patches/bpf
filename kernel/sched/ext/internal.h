@@ -243,6 +243,27 @@ enum scx_ops_flags {
 	 */
 	SCX_OPS_ENQ_BLOCKED		= 1LLU << 10,
 
+	/*
+	 * If set, what the scheduler's tasks run is charged to the cpu.max
+	 * bandwidth of their cgroups, the runtime the fair class keeps and
+	 * cpu.max.runtime reads, as what fair tasks run is. The tasks of a
+	 * cgroup in both classes then share one quota, also with
+	 * %SCX_OPS_SWITCH_PARTIAL, and nothing is handed over when tasks
+	 * switch class.
+	 *
+	 * The kernel never throttles the scheduler's tasks. The scheduler
+	 * enforces the quota by running a task only while
+	 * scx_bpf_task_cpu_max_runtime() returns more than 0. What a task runs
+	 * beyond that is charged: up to a slice (sched_cfs_bandwidth_slice_us)
+	 * per CPU as a debt the cgroup's fair tasks on that CPU pay back, and up
+	 * to a quota more from the cgroup's next period. The scheduler does not
+	 * need ops.cgroup_set_runtime(), as a write of cpu.max.runtime sets that
+	 * runtime.
+	 *
+	 * Without CONFIG_CFS_BANDWIDTH, this flag has no effect.
+	 */
+	SCX_OPS_CHARGE_CPU_MAX		= 1LLU << 11,
+
 	SCX_OPS_ALL_FLAGS		= SCX_OPS_KEEP_BUILTIN_IDLE |
 					  SCX_OPS_ENQ_LAST |
 					  SCX_OPS_ENQ_EXITING |
@@ -253,7 +274,8 @@ enum scx_ops_flags {
 					  SCX_OPS_ALWAYS_ENQ_IMMED |
 					  SCX_OPS_TID_TO_TASK |
 					  SCX_OPS_LAZY_RESCHED |
-					  SCX_OPS_ENQ_BLOCKED,
+					  SCX_OPS_ENQ_BLOCKED |
+					  SCX_OPS_CHARGE_CPU_MAX,
 
 	/* high 8 bits are internal, don't include in SCX_OPS_ALL_FLAGS */
 	__SCX_OPS_INTERNAL_MASK		= 0xffLLU << 56,

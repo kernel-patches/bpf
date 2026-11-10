@@ -165,6 +165,7 @@ all_test_bpfprogs := $(foreach prog,$(wildcard *.bpf.c),$(INCLUDE_DIR)/$(patsubs
 
 auto-test-targets :=			\
 	cgroup_nr_cpus			\
+	cgroup_runtime			\
 	create_dsq			\
 	dequeue				\
 	dequeue_iter			\

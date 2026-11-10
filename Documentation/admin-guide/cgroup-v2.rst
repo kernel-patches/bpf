@@ -1258,7 +1258,9 @@ will be referred to. All time durations are in microseconds.
 
 	This file affects only processes under the fair-class scheduler and a BPF
 	scheduler with the ``cgroup_set_runtime`` callback depending on what
-	the callback actually does.
+	the callback actually does. A BPF scheduler with the
+	``SCX_OPS_CHARGE_CPU_MAX`` flag draws what its processes run from
+	the same runtime, so the cgroup's processes in both share it.
 
   cpu.pressure
 	A read-write nested-keyed file.

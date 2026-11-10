@@ -6806,6 +6806,11 @@ void __refill_cfs_bandwidth_runtime(struct cfs_bandwidth *cfs_b)
 	}
 
 	cfs_b->runtime = min(cfs_b->runtime, cfs_b->quota + cfs_b->burst);
+
+	/* pay the debt cfs_bandwidth_charge_task() left */
+	runtime = min(cfs_b->runtime, cfs_b->debt);
+	cfs_b->runtime -= runtime;
+	cfs_b->debt -= runtime;
 	cfs_b->runtime_snap = cfs_b->runtime;
 }
 
@@ -8003,6 +8008,123 @@ bool cfs_task_bw_constrained(struct task_struct *p)
 		return true;
 
 	return false;
+}
+
+/*
+ * Charge @delta_exec, which @p ran on @rq outside the fair class, to the
+ * bandwidth of its task group and of each ancestor with a quota, as
+ * account_cfs_rq_runtime() charges a fair task. A cfs_rq that runs out takes
+ * another slice from cfs_b, but @p is never throttled: the BPF scheduler that
+ * runs it stops it, and the group's fair tasks are throttled when they run.
+ *
+ * Debt below -slice that cfs_b cannot cover moves to cfs_b, up to a quota,
+ * and the next refill pays it, so that a scheduler which keeps running @p
+ * cannot put the group's fair tasks on @rq in more debt than a slice.
+ */
+void cfs_bandwidth_charge_task(struct rq *rq, struct task_struct *p,
+			       u64 delta_exec)
+{
+	s64 floor = -(s64)sched_cfs_bandwidth_slice();
+	struct task_group *tg;
+
+	lockdep_assert_rq_held(rq);
+
+	if (!cfs_bandwidth_used())
+		return;
+
+	for (tg = task_group(p); tg; tg = tg->parent) {
+		struct cfs_bandwidth *cfs_b = tg_cfs_bandwidth(tg);
+		struct cfs_rq *cfs_rq = tg_cfs_rq(tg, cpu_of(rq));
+
+		if (!cfs_rq->runtime_enabled)
+			continue;
+
+		cfs_rq->runtime_remaining -= delta_exec;
+
+		/*
+		 * A throttled cfs_rq gets runtime from distribute_cfs_runtime().
+		 * Without runtime, an active period timer refills it, so skip
+		 * the lock. A stopped one is restarted by the assign.
+		 */
+		if (cfs_rq->runtime_remaining <= 0 && !cfs_rq->throttled &&
+		    (READ_ONCE(cfs_b->runtime) || !READ_ONCE(cfs_b->period_active))) {
+			scoped_guard (raw_spinlock, &cfs_b->lock)
+				__assign_cfs_rq_runtime(cfs_b, cfs_rq,
+							sched_cfs_bandwidth_slice());
+		}
+
+		if (cfs_rq->runtime_remaining < floor) {
+			scoped_guard (raw_spinlock, &cfs_b->lock)
+				cfs_b->debt = min_t(u64, cfs_b->debt + floor -
+						    cfs_rq->runtime_remaining, cfs_b->quota);
+			cfs_rq->runtime_remaining = floor;
+		}
+	}
+}
+
+/*
+ * @p leaves @rq: give the runtime @rq holds for its groups back, less
+ * min_cfs_rq_runtime, as a fair dequeue does when a cfs_rq empties. Pay
+ * what @rq owes from cfs_b, as @p may not run on @rq again.
+ */
+void cfs_bandwidth_return_task(struct rq *rq, struct task_struct *p)
+{
+	struct task_group *tg;
+
+	lockdep_assert_rq_held(rq);
+
+	if (!cfs_bandwidth_used())
+		return;
+
+	for (tg = task_group(p); tg; tg = tg->parent) {
+		struct cfs_bandwidth *cfs_b = tg_cfs_bandwidth(tg);
+		struct cfs_rq *cfs_rq = tg_cfs_rq(tg, cpu_of(rq));
+
+		return_cfs_rq_runtime(cfs_rq);
+
+		if (cfs_rq->runtime_enabled && cfs_rq->runtime_remaining < 0 &&
+		    !cfs_rq->throttled && READ_ONCE(cfs_b->runtime)) {
+			scoped_guard (raw_spinlock, &cfs_b->lock)
+				__assign_cfs_rq_runtime(cfs_b, cfs_rq, 0);
+		}
+	}
+}
+
+/*
+ * The runtime @p's groups have left for it on its CPU, without locks: the
+ * least, over the groups with a quota, of what the CPU holds or owes and
+ * cfs_b's runtime. Debt counts up to a quota less 1ns, so that a full period
+ * lets @p run and pay the rest. A group whose period timer is stopped does
+ * not count, as the next charge restarts the timer and refills what it owes.
+ * RUNTIME_INF if no group counts.
+ */
+u64 cfs_bandwidth_task_runtime(struct task_struct *p)
+{
+	u64 runtime = RUNTIME_INF;
+	struct task_group *tg;
+	int cpu = task_cpu(p);
+
+	if (!cfs_bandwidth_used())
+		return runtime;
+
+	guard(rcu)();
+
+	for (tg = task_group(p); tg; tg = tg->parent) {
+		struct cfs_bandwidth *cfs_b = tg_cfs_bandwidth(tg);
+		struct cfs_rq *cfs_rq = tg_cfs_rq(tg, cpu);
+		s64 held;
+
+		if (!READ_ONCE(cfs_rq->runtime_enabled) ||
+		    !READ_ONCE(cfs_b->period_active))
+			continue;
+
+		held = max_t(s64, READ_ONCE(cfs_rq->runtime_remaining),
+			     1 - (s64)READ_ONCE(cfs_b->quota));
+		held += READ_ONCE(cfs_b->runtime);
+		runtime = min_t(u64, runtime, max_t(s64, held, 0));
+	}
+
+	return runtime;
 }
 
 #ifdef CONFIG_NO_HZ_FULL

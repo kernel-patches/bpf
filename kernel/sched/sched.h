@@ -456,6 +456,7 @@ struct cfs_bandwidth {
 	u64			runtime;
 	u64			burst;
 	u64			runtime_snap;
+	u64			debt;
 	s64			hierarchical_quota;
 
 	u8			idle;
@@ -620,6 +621,17 @@ struct cfs_bandwidth { };
 static inline bool cfs_task_bw_constrained(struct task_struct *p) { return false; }
 
 #endif /* !CONFIG_CGROUP_SCHED */
+
+#ifdef CONFIG_CFS_BANDWIDTH
+void cfs_bandwidth_charge_task(struct rq *rq, struct task_struct *p, u64 delta_exec);
+void cfs_bandwidth_return_task(struct rq *rq, struct task_struct *p);
+u64 cfs_bandwidth_task_runtime(struct task_struct *p);
+#else
+static inline void cfs_bandwidth_charge_task(struct rq *rq, struct task_struct *p,
+					     u64 delta_exec) { }
+static inline void cfs_bandwidth_return_task(struct rq *rq, struct task_struct *p) { }
+static inline u64 cfs_bandwidth_task_runtime(struct task_struct *p) { return RUNTIME_INF; }
+#endif
 
 /*
  * A weight of 0 or 1 can cause arithmetics problems.
