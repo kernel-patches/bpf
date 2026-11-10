@@ -8,7 +8,16 @@ $schema: http://devicetree.org/meta-schemas/core.yaml#
 title: TI DP83867 ethernet PHY
 
 allOf:
-  - $ref: ethernet-controller.yaml#
+  - $ref: ethernet-phy.yaml#
+
+# only the PHY ID, not every PHY with the c22 fallback
+select:
+  properties:
+    compatible:
+      contains:
+        const: ethernet-phy-id2000.a231
+  required:
+    - compatible
 
 maintainers:
   - Andrew Davis <afd@ti.com>
@@ -28,6 +37,12 @@ description: |
     https://www.ti.com/lit/gpn/dp83867ir
 
 properties:
+  compatible:
+    minItems: 1
+    items:
+      - const: ethernet-phy-id2000.a231
+      - const: ethernet-phy-ieee802.3-c22
+
   reg:
     maxItems: 1
 
@@ -130,6 +145,7 @@ examples:
       #address-cells = <1>;
       #size-cells = <0>;
       ethphy0: ethernet-phy@0 {
+        compatible = "ethernet-phy-id2000.a231";
         reg = <0>;
         tx-fifo-depth = <DP83867_PHYCR_FIFO_DEPTH_4_B_NIB>;
         rx-fifo-depth = <DP83867_PHYCR_FIFO_DEPTH_4_B_NIB>;
