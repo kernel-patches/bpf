@@ -281,13 +281,31 @@ BTF_KFUNCS_START(bpf_task_park_kfunc_ids)
 BTF_ID_FLAGS(func, bpf_task_park, KF_SLEEPABLE)
 BTF_KFUNCS_END(bpf_task_park_kfunc_ids)
 
+BTF_KFUNCS_START(bpf_task_wake_kfunc_ids)
+BTF_ID_FLAGS(func, bpf_task_wake, KF_RCU)
+BTF_KFUNCS_END(bpf_task_wake_kfunc_ids)
+
 static const struct btf_kfunc_id_set bpf_task_park_kfunc_set = {
 	.owner = THIS_MODULE,
 	.set = &bpf_task_park_kfunc_ids,
 };
 
+static const struct btf_kfunc_id_set bpf_task_wake_kfunc_set = {
+	.owner = THIS_MODULE,
+	.set = &bpf_task_wake_kfunc_ids,
+};
+
+/*
+ * The park stays with syscall programs, whose runner holds the program across
+ * the sleep. The wake touches only the task and defers itself where it cannot
+ * be issued, so every program type has it, to wake a parked task from the
+ * kernel event that makes it worth waking.
+ */
 static int __init bpf_task_park_kfunc_init(void)
 {
-	return register_btf_kfunc_id_set(BPF_PROG_TYPE_SYSCALL, &bpf_task_park_kfunc_set);
+	int ret;
+
+	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_SYSCALL, &bpf_task_park_kfunc_set);
+	return ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_UNSPEC, &bpf_task_wake_kfunc_set);
 }
 late_initcall(bpf_task_park_kfunc_init);
