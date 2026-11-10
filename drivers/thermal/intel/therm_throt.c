@@ -477,7 +477,7 @@ static int __init int_pln_enable_setup(char *s)
 __setup("int_pln_enable", int_pln_enable_setup);
 
 #ifdef CONFIG_SYSFS
-static int check_directed_thermal_pkg_intr_ack(void)
+static int dpti_wait_for_ack(void)
 {
 	unsigned int count = 15000;
 	u64 msr_val;
@@ -500,7 +500,7 @@ static int check_directed_thermal_pkg_intr_ack(void)
 	return 0;
 }
 
-static void config_directed_thermal_pkg_intr(void *info)
+static void dpti_config(void *info)
 {
 	bool enable = *((bool *)info);
 	u64 msr_val;
@@ -520,21 +520,21 @@ static void config_directed_thermal_pkg_intr(void *info)
  * hotplug is inactive: the init and cleanup paths as well as syscore callbacks.
  * No extra locking needed.
  */
-static unsigned int *directed_intr_handler_cpus;
+static unsigned int *dpti_owner_cpus;
 
 /*
  * Set by the syscore shutdown callback before it disables the directed
  * interrupt, so that no CPU hotplug operation enables it again on the way to
  * kexec.
  */
-static bool directed_pkg_intr_shut_down;
+static bool dpti_shut_down;
 
-static bool directed_thermal_pkg_intr_supported(void)
+static bool dpti_supported(void)
 {
 	if (!boot_cpu_has(X86_FEATURE_DPTI))
 		return false;
 
-	if (!directed_intr_handler_cpus)
+	if (!dpti_owner_cpus)
 		return false;
 
 	return true;
@@ -546,53 +546,52 @@ static bool directed_thermal_pkg_intr_supported(void)
  * deadlocks in SMP function calls. The syscore shutdown callback also calls
  * this function, but runs with CPU hotplug disabled (and interrupts enabled).
  */
-static void disable_directed_thermal_pkg_intr_all(void)
+static void dpti_clear_all(void)
 {
 	bool enable = false;
 	int i;
 
-	if (!directed_thermal_pkg_intr_supported())
+	if (!dpti_supported())
 		return;
 
 	/*
-	 * No need to reset the handlers: callers free directed_intr_handler_cpus
-	 * or have shut DPTI down.
+	 * No need to reset the owners: callers free dpti_owner_cpus or have shut
+	 * DPTI down.
 	 */
 	for (i = 0; i < topology_max_packages(); i++) {
-		if (directed_intr_handler_cpus[i] == nr_cpu_ids)
+		if (dpti_owner_cpus[i] == nr_cpu_ids)
 			continue;
 
-		smp_call_function_single(directed_intr_handler_cpus[i],
-					 config_directed_thermal_pkg_intr,
+		smp_call_function_single(dpti_owner_cpus[i], dpti_config,
 					 &enable, true);
 	}
 }
 
-static int enable_directed_thermal_pkg_intr(unsigned int cpu)
+static int dpti_online(unsigned int cpu)
 {
 	bool enable = true;
 	u16 pkg_id;
 
-	if (!directed_thermal_pkg_intr_supported())
+	if (!dpti_supported())
 		return 0;
 
 	pkg_id = topology_logical_package_id(cpu);
 	if (pkg_id >= topology_max_packages())
 		return -EINVAL;
 
-	if (directed_pkg_intr_shut_down)
+	if (dpti_shut_down)
 		return 0;
 
-	/* Another CPU in this package already handles the directed interrupt. */
-	if (directed_intr_handler_cpus[pkg_id] != nr_cpu_ids)
+	/* Another CPU in this package already owns the directed interrupt. */
+	if (dpti_owner_cpus[pkg_id] != nr_cpu_ids)
 		return 0;
 
 	thermal_clear_package_intr_status(PACKAGE_LEVEL,
 					  PACKAGE_THERM_STATUS_DPTI_ACK);
 
-	config_directed_thermal_pkg_intr(&enable);
-	if (!check_directed_thermal_pkg_intr_ack()) {
-		directed_intr_handler_cpus[pkg_id] = cpu;
+	dpti_config(&enable);
+	if (!dpti_wait_for_ack()) {
+		dpti_owner_cpus[pkg_id] = cpu;
 		return 0;
 	}
 
@@ -602,29 +601,29 @@ static int enable_directed_thermal_pkg_intr(unsigned int cpu)
 	 * CPUs may come online and would otherwise keep trying.
 	 */
 	enable = false;
-	config_directed_thermal_pkg_intr(&enable);
+	dpti_config(&enable);
 
 	return -ETIMEDOUT;
 }
 
-static void disable_directed_thermal_pkg_intr(unsigned int cpu)
+static void dpti_offline(unsigned int cpu)
 {
 	unsigned int new_cpu;
 	bool enable;
 	u16 pkg_id;
 
-	if (!directed_thermal_pkg_intr_supported())
+	if (!dpti_supported())
 		return;
 
 	pkg_id = topology_logical_package_id(cpu);
 	if (pkg_id >= topology_max_packages())
 		return;
 
-	if (directed_pkg_intr_shut_down)
+	if (dpti_shut_down)
 		return;
 
-	/* Not the CPU handling the directed interrupt. */
-	if (directed_intr_handler_cpus[pkg_id] != cpu)
+	/* Not the owner of the directed interrupt. */
+	if (dpti_owner_cpus[pkg_id] != cpu)
 		return;
 
 	/*
@@ -646,8 +645,7 @@ static void disable_directed_thermal_pkg_intr(unsigned int cpu)
 		 * but it does not reach this path because all the secondary
 		 * CPUs are offline.
 		 */
-		smp_call_function_single(new_cpu, config_directed_thermal_pkg_intr,
-					 &enable, true);
+		smp_call_function_single(new_cpu, dpti_config, &enable, true);
 	}
 
 	/*
@@ -657,9 +655,8 @@ static void disable_directed_thermal_pkg_intr(unsigned int cpu)
 	 * receive it.
 	 */
 	enable = false;
-	if (new_cpu < nr_cpu_ids && check_directed_thermal_pkg_intr_ack()) {
-		smp_call_function_single(new_cpu, config_directed_thermal_pkg_intr,
-					 &enable, true);
+	if (new_cpu < nr_cpu_ids && dpti_wait_for_ack()) {
+		smp_call_function_single(new_cpu, dpti_config, &enable, true);
 
 		pr_warn_once("Failed to redirect package thermal interrupt from CPU%u to CPU%u; reverting to broadcast\n",
 			     cpu, new_cpu);
@@ -671,76 +668,76 @@ static void disable_directed_thermal_pkg_intr(unsigned int cpu)
 	 * Clear the directed interrupt on @cpu. Hardware acknowledgment can be
 	 * ignored since @cpu is going offline.
 	 */
-	config_directed_thermal_pkg_intr(&enable);
+	dpti_config(&enable);
 
-	directed_intr_handler_cpus[pkg_id] = (new_cpu < nr_cpu_ids) ? new_cpu : nr_cpu_ids;
+	dpti_owner_cpus[pkg_id] = (new_cpu < nr_cpu_ids) ? new_cpu : nr_cpu_ids;
 }
 
 /*
- * CPU0 may be handling the directed interrupt, but the CPU hotplug callbacks
- * are not called for CPU0 during suspend and resume.
+ * CPU0 may own the directed interrupt, but the CPU hotplug callbacks are not
+ * called for CPU0 during suspend and resume.
  */
-static void directed_pkg_intr_syscore_resume(void *data)
+static void dpti_syscore_resume(void *data)
 {
 	/*
 	 * We can't do anything to handle errors. If direction fails for CPU0,
 	 * another CPU will take over or disable direction entirely during CPU
 	 * hotplug.
 	 */
-	enable_directed_thermal_pkg_intr(0);
+	dpti_online(0);
 }
 
-static int directed_pkg_intr_syscore_suspend(void *data)
+static int dpti_syscore_suspend(void *data)
 {
-	disable_directed_thermal_pkg_intr(0);
+	dpti_offline(0);
 
 	return 0;
 }
 
-static void directed_pkg_intr_syscore_shutdown(void *data)
+static void dpti_syscore_shutdown(void *data)
 {
-	directed_pkg_intr_shut_down = true;
+	dpti_shut_down = true;
 
-	disable_directed_thermal_pkg_intr_all();
+	dpti_clear_all();
 }
 
-static const struct syscore_ops directed_pkg_intr_pm_ops = {
-	.resume = directed_pkg_intr_syscore_resume,
-	.suspend = directed_pkg_intr_syscore_suspend,
-	.shutdown = directed_pkg_intr_syscore_shutdown,
+static const struct syscore_ops dpti_syscore_ops = {
+	.resume = dpti_syscore_resume,
+	.suspend = dpti_syscore_suspend,
+	.shutdown = dpti_syscore_shutdown,
 };
 
-static struct syscore directed_pkg_intr_pm = {
-	.ops = &directed_pkg_intr_pm_ops,
+static struct syscore dpti_syscore = {
+	.ops = &dpti_syscore_ops,
 };
 
-static __init void init_directed_pkg_intr(void)
+static __init void dpti_init(void)
 {
 	int i;
 
 	if (!boot_cpu_has(X86_FEATURE_DPTI))
 		return;
 
-	directed_intr_handler_cpus = kmalloc_objs(*directed_intr_handler_cpus,
-						  topology_max_packages());
-	if (!directed_intr_handler_cpus)
+	dpti_owner_cpus = kmalloc_objs(*dpti_owner_cpus,
+				       topology_max_packages());
+	if (!dpti_owner_cpus)
 		return;
 
 	for (i = 0; i < topology_max_packages(); i++)
-		directed_intr_handler_cpus[i] = nr_cpu_ids;
+		dpti_owner_cpus[i] = nr_cpu_ids;
 
-	register_syscore(&directed_pkg_intr_pm);
+	register_syscore(&dpti_syscore);
 }
 
-static void cleanup_directed_pkg_thermal_intr(void)
+static void dpti_cleanup(void)
 {
-	if (!directed_thermal_pkg_intr_supported())
+	if (!dpti_supported())
 		return;
 
-	unregister_syscore(&directed_pkg_intr_pm);
-	disable_directed_thermal_pkg_intr_all();
-	kfree(directed_intr_handler_cpus);
-	directed_intr_handler_cpus = NULL;
+	unregister_syscore(&dpti_syscore);
+	dpti_clear_all();
+	kfree(dpti_owner_cpus);
+	dpti_owner_cpus = NULL;
 }
 
 /* Add/Remove thermal_throttle interface for CPU device: */
@@ -827,9 +824,9 @@ static int thermal_throttle_online(unsigned int cpu)
 	 */
 	intel_hfi_online(cpu);
 
-	if (enable_directed_thermal_pkg_intr(cpu)) {
+	if (dpti_online(cpu)) {
 		pr_info_once("Failed to direct package thermal interrupts. All CPUs will receive it\n");
-		cleanup_directed_pkg_thermal_intr();
+		dpti_cleanup();
 	}
 
 	/* Unmask the thermal vector after the above workqueues are initialized. */
@@ -849,7 +846,7 @@ static int thermal_throttle_offline(unsigned int cpu)
 	l = apic_read(APIC_LVTTHMR);
 	apic_write(APIC_LVTTHMR, l | APIC_LVT_MASKED);
 
-	disable_directed_thermal_pkg_intr(cpu);
+	dpti_offline(cpu);
 
 	intel_hfi_offline(cpu);
 
@@ -870,7 +867,7 @@ static __init int thermal_throttle_init_device(void)
 	if (!atomic_read(&therm_throt_en))
 		return 0;
 
-	init_directed_pkg_intr();
+	dpti_init();
 
 	intel_hfi_init();
 
@@ -880,7 +877,7 @@ static __init int thermal_throttle_init_device(void)
 	if (ret >= 0)
 		return 0;
 
-	cleanup_directed_pkg_thermal_intr();
+	dpti_cleanup();
 
 	return ret;
 }
