@@ -519,6 +519,25 @@ static void dpti_config_ipi(void *info)
 	dpti_config_this_cpu(*((bool *)info));
 }
 
+/* The unused argument matches the smp_call_on_cpu() callback signature. */
+static int dpti_program_this_cpu(void *unused)
+{
+	int ret;
+
+	thermal_clear_package_intr_status(PACKAGE_LEVEL,
+					  PACKAGE_THERM_STATUS_DPTI_ACK);
+
+	dpti_config_this_cpu(true);
+	ret = dpti_wait_for_ack();
+	if (!ret)
+		return 0;
+
+	/* Undo the enable on failure, leaving the package as it was before. */
+	dpti_config_this_cpu(false);
+
+	return ret;
+}
+
 /**
  * struct dpti_pkg - Per-package DPTI state
  * @owner:	CPU currently programmed to receive the package-level
@@ -560,6 +579,38 @@ static bool dpti_supported(void)
 	return true;
 }
 
+static int dpti_lookup_pkg_id(unsigned int cpu, u16 *pkg_id)
+{
+	u16 id;
+
+	if (!dpti_supported())
+		return -ENODEV;
+
+	id = topology_logical_package_id(cpu);
+	if (id >= topology_max_packages())
+		return -ENODEV;
+
+	*pkg_id = id;
+
+	return 0;
+}
+
+/* For callers already past dpti_lookup_pkg_id(). */
+static struct dpti_pkg *dpti_pkg_of_cpu_nocheck(unsigned int cpu)
+{
+	return &dpti_pkgs[topology_logical_package_id(cpu)];
+}
+
+static bool dpti_cpu_is_owner(unsigned int cpu)
+{
+	u16 pkg_id;
+
+	if (dpti_lookup_pkg_id(cpu, &pkg_id))
+		return false;
+
+	return dpti_pkgs[pkg_id].owner == cpu;
+}
+
 /*
  * Must be called with cpu_hotplug_lock held to prevent CPUs from going offline
  * while iterating through packages and interrupts must be enabled to avoid
@@ -590,6 +641,7 @@ static void dpti_clear_all(void)
 static int dpti_online(unsigned int cpu)
 {
 	u16 pkg_id;
+	int ret;
 
 	if (!dpti_supported())
 		return 0;
@@ -605,19 +657,13 @@ static int dpti_online(unsigned int cpu)
 	if (dpti_pkgs[pkg_id].owner != nr_cpu_ids)
 		return 0;
 
-	thermal_clear_package_intr_status(PACKAGE_LEVEL,
-					  PACKAGE_THERM_STATUS_DPTI_ACK);
+	ret = dpti_program_this_cpu(NULL);
+	if (ret)
+		return ret;
 
-	dpti_config_this_cpu(true);
-	if (!dpti_wait_for_ack()) {
-		dpti_pkgs[pkg_id].owner = cpu;
-		return 0;
-	}
+	dpti_pkgs[pkg_id].owner = cpu;
 
-	/* Roll back on failure so the package reverts to broadcasting mode. */
-	dpti_config_this_cpu(false);
-
-	return -ETIMEDOUT;
+	return 0;
 }
 
 static void dpti_offline(unsigned int cpu)
@@ -695,16 +741,23 @@ static void dpti_offline(unsigned int cpu)
  */
 static void dpti_syscore_resume(void *data)
 {
+	if (!dpti_cpu_is_owner(0))
+		return;
+
+	if (!dpti_program_this_cpu(NULL))
+		return;
+
 	/*
-	 * We can't do anything to handle errors. If direction fails for CPU0,
-	 * another CPU will take over during CPU hotplug.
+	 * Let another CPU take over via CPU hotplug. No lock is needed here:
+	 * only CPU0 is online and interrupts are disabled.
 	 */
-	dpti_online(0);
+	dpti_pkg_of_cpu_nocheck(0)->owner = nr_cpu_ids;
 }
 
 static int dpti_syscore_suspend(void *data)
 {
-	dpti_offline(0);
+	if (dpti_cpu_is_owner(0))
+		dpti_config_this_cpu(false);
 
 	return 0;
 }
