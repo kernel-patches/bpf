@@ -11,9 +11,6 @@
 #ifdef CONFIG_DRM_AMDGPU_SI
 #include "dce_v6_0.h"
 #endif
-#ifdef CONFIG_DRM_AMDGPU_CIK
-#include "dce_v8_0.h"
-#endif
 #include "ivsrcid/ivsrcid_vislands30.h"
 #include "amdgpu_vkms.h"
 #include "amdgpu_display.h"
@@ -453,15 +450,6 @@ static int amdgpu_vkms_hw_init(struct amdgpu_ip_block *ip_block)
 	case CHIP_VERDE:
 	case CHIP_OLAND:
 		dce_v6_0_disable_dce(adev);
-		break;
-#endif
-#ifdef CONFIG_DRM_AMDGPU_CIK
-	case CHIP_BONAIRE:
-	case CHIP_HAWAII:
-	case CHIP_KAVERI:
-	case CHIP_KABINI:
-	case CHIP_MULLINS:
-		dce_v8_0_disable_dce(adev);
 		break;
 #endif
 	case CHIP_TOPAZ:
