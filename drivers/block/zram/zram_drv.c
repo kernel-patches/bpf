@@ -1217,6 +1217,9 @@ static void scan_slots_for_writeback(struct zram *zram, u32 mode,
 		if (!slot_allocated(zram, index))
 			goto next;
 
+		if (test_slot_flag(zram, index, ZRAM_PP_SLOT))
+			goto next;
+
 		if (test_slot_flag(zram, index, ZRAM_WB) ||
 		    test_slot_flag(zram, index, ZRAM_SAME))
 			goto next;
