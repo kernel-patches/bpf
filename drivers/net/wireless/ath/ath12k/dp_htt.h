@@ -933,6 +933,7 @@ enum htt_t2h_msg_type {
 	HTT_T2H_MSG_TYPE_MLO_RX_PEER_MAP = 0x29,
 	HTT_T2H_MSG_TYPE_PEER_MAP3	= 0x2b,
 	HTT_T2H_MSG_TYPE_VDEV_TXRX_STATS_PERIODIC_IND = 0x2c,
+	HTT_T2H_MSG_TYPE_PEER_EXTENDED	= 0x39,
 };
 
 #define HTT_TARGET_VERSION_MAJOR 3
@@ -985,12 +986,26 @@ struct htt_t2h_mlo_peer_map_event {
 	__le32 reserved[5];
 } __packed;
 
+#define HTT_T2H_PEER_EXT_INFO_PEER_ID		GENMASK(23, 8)
+#define HTT_T2H_PEER_EXT_INFO_VDEV_ID		GENMASK(31, 24)
+#define HTT_T2H_PEER_EXT_INFO1_MAC_ADDR_H16	GENMASK(15, 0)
+#define HTT_T2H_PEER_EXT_INFO1_LOGICAL_LINK_ID	GENMASK(18, 16)
+#define HTT_T2H_PEER_EXT_INFO1_LOGICAL_LINK_ID_VALID	BIT(19)
+
+struct htt_t2h_peer_extended_event {
+	__le32 info;
+	__le32 mac_addr_l32;
+	__le32 info1;
+	__le32 info2;
+} __packed;
+
 struct htt_resp_msg {
 	union {
 		struct htt_t2h_version_conf_msg version_msg;
 		struct htt_t2h_peer_map_event peer_map_ev;
 		struct htt_t2h_peer_unmap_event peer_unmap_ev;
 		struct htt_t2h_mlo_peer_map_event mlo_peer_map_ev;
+		struct htt_t2h_peer_extended_event peer_extended_ev;
 	};
 } __packed;
 

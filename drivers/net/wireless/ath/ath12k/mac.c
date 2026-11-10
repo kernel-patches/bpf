@@ -3864,6 +3864,7 @@ static int ath12k_mac_peer_assoc(struct ath12k *ar,
 	int ret;
 
 	reinit_completion(&ar->peer_assoc_done);
+	reinit_completion(&ar->peer_ext_event_done);
 	reinit_completion(&ah->peer_ml_id_done);
 
 	ret = ath12k_wmi_send_peer_assoc_cmd(ar, peer_arg);
@@ -3875,6 +3876,17 @@ static int ath12k_mac_peer_assoc(struct ath12k *ar,
 
 	if (!wait_for_completion_timeout(&ar->peer_assoc_done, 1 * HZ)) {
 		ath12k_warn(ar->ab, "failed to get peer assoc conf event for %pM vdev %i\n",
+			    peer_arg->peer_mac, peer_arg->vdev_id);
+		return -ETIMEDOUT;
+	}
+
+	if (!ar->ab->hw_params->support_hw_link_id &&
+	    test_bit(WMI_TLV_SERVICE_PER_LINK_STATS_SUPPORT,
+		     ar->ab->wmi_ab.svc_map) &&
+	    peer_arg->ml.enabled &&
+	    peer_arg->is_assoc &&
+	    !wait_for_completion_timeout(&ar->peer_ext_event_done, 1 * HZ)) {
+		ath12k_warn(ar->ab, "failed to get peer extended event for %pM vdev %u\n",
 			    peer_arg->peer_mac, peer_arg->vdev_id);
 		return -ETIMEDOUT;
 	}
@@ -15201,6 +15213,7 @@ static void ath12k_mac_setup(struct ath12k *ar)
 	init_completion(&ar->vdev_setup_done);
 	init_completion(&ar->vdev_delete_done);
 	init_completion(&ar->peer_assoc_done);
+	init_completion(&ar->peer_ext_event_done);
 	init_completion(&ar->install_key_done);
 	init_completion(&ar->bss_survey_done);
 	init_completion(&ar->scan.started);

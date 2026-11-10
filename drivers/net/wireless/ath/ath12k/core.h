@@ -697,6 +697,7 @@ struct ath12k {
 	u8 radio_idx;
 
 	struct completion peer_assoc_done;
+	struct completion peer_ext_event_done;
 	struct list_head peer_delete_waits;
 
 	int install_key_status;

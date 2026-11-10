@@ -8,6 +8,7 @@
 #include "dp_peer.h"
 #include "debug.h"
 #include "debugfs.h"
+#include "mac.h"
 
 void ath12k_dp_link_peer_free(struct ath12k_dp_link_peer *peer)
 {
@@ -193,6 +194,60 @@ void ath12k_dp_link_peer_map_event(struct ath12k_base *ab, u8 vdev_id, u16 peer_
 
 exit:
 	spin_unlock_bh(&dp->dp_lock);
+}
+
+void ath12k_dp_link_peer_extended_event(struct ath12k_base *ab, u8 vdev_id,
+					u16 peer_id, u8 *mac_addr,
+					u8 logical_link_id, u8 valid)
+{
+	struct ath12k_dp *dp = ath12k_ab_to_dp(ab);
+	struct ath12k_dp_link_peer *peer;
+	struct ath12k_dp_peer *dp_peer;
+	struct ath12k *ar;
+
+	if (!valid || logical_link_id >= ATH12K_GROUP_MAX_RADIO) {
+		ath12k_warn(ab, "invalid logical link id %u valid %u\n",
+			    logical_link_id, valid);
+		goto exit;
+	}
+
+	spin_lock_bh(&dp->dp_lock);
+
+	peer = ath12k_dp_link_peer_find_by_vdev_and_addr(dp, vdev_id, mac_addr);
+	if (!peer) {
+		ath12k_warn(ab, "failed to find link peer with vdev id %u addr %pM\n",
+			    vdev_id, mac_addr);
+		goto unlock;
+	}
+
+	if (peer->peer_id != peer_id) {
+		ath12k_warn(ab, "link peer id mismatch, expected %u got %u\n",
+			    peer->peer_id, peer_id);
+		goto unlock;
+	}
+
+	dp_peer = peer->dp_peer;
+
+	peer->drv_link_id = logical_link_id;
+	dp_peer->link_id_map[peer->drv_link_id] = peer->link_id;
+
+	ath12k_dbg(ab, ATH12K_DBG_DP_HTT,
+		   "htt peer extended vdev %d peer %pM id %d logical_link_id %u link_id %u\n",
+		   vdev_id, mac_addr, peer_id, logical_link_id, peer->link_id);
+
+unlock:
+	spin_unlock_bh(&dp->dp_lock);
+
+exit:
+	rcu_read_lock();
+
+	ar = ath12k_mac_get_ar_by_vdev_id(ab, vdev_id);
+	if (ar)
+		complete(&ar->peer_ext_event_done);
+	else
+		ath12k_warn(ab, "failed to get ar with vdev id %u\n", vdev_id);
+
+	rcu_read_unlock();
 }
 
 static int ath12k_dp_link_peer_rhash_addr_tbl_init(struct ath12k_dp *dp)
@@ -543,9 +598,16 @@ int ath12k_dp_link_peer_assign(struct ath12k_dp *dp, struct ath12k_dp_hw *dp_hw,
 		dp_peer->peer_id = peer->peer_id;
 
 	peer->dp_peer = dp_peer;
-	peer->drv_link_id = hw_link_id;
 
-	dp_peer->link_id_map[peer->drv_link_id] = link_id;
+	/*
+	 * Only devices that use hw_link_id can map it to the IEEE80211
+	 * link id here. Devices that do not support hw_link_id fill
+	 * link_id_map later from the PEER_EXTENDED HTT event.
+	 */
+	if (dp->hw_params->support_hw_link_id) {
+		peer->drv_link_id = hw_link_id;
+		dp_peer->link_id_map[peer->drv_link_id] = link_id;
+	}
 
 	peerid_index = ath12k_dp_peer_get_peerid_index(dp, peer->peer_id);
 
