@@ -809,6 +809,337 @@ cleanup:
 	return ret;
 }
 
+/* Wait until the period timer of @cgroup starts a new period. */
+static int wait_period_start(const char *cgroup)
+{
+	long nr_periods = cg_read_key_long(cgroup, "cpu.stat", "nr_periods");
+	int i;
+
+	for (i = 0; i < 3000; i++) {
+		usleep(1000);
+		if (cg_read_key_long(cgroup, "cpu.stat", "nr_periods") != nr_periods)
+			return 0;
+	}
+	return -1;
+}
+
+static long long monotonic_ns(void)
+{
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+
+/* For (long)arg seconds, run for 1ms and then sleep for 10ms. */
+static int run_and_sleep(const char *cgroup, void *arg)
+{
+	long long end = monotonic_ns() + (long)arg * 1000000000LL;
+	long long start;
+
+	while ((start = monotonic_ns()) < end) {
+		while (monotonic_ns() - start < 1000000)
+			;
+		usleep(10000);
+	}
+	return 0;
+}
+
+static int test_cpucg_max_runtime(const char *root)
+{
+	int ret = KSFT_FAIL;
+	long quota_usec = 1000;		/* 1ms (minimum) */
+	long period_usec = 100000;	/* 100ms */
+	long burst_usec = 5000000;	/* 5s, so cap = 5001ms */
+	long runtime_usec = 2500000;	/* 2500ms, half of the 5s run */
+	long duration_sec = 5;
+	/* The injected runtime plus the quota refilled each period of the run */
+	long expected_usec = runtime_usec +
+			     duration_sec * USEC_PER_SEC / period_usec * quota_usec;
+	long usage_usec;
+	char *cpucg;
+	char buf[64];
+	int pid;
+
+	cpucg = cg_name(root, "cpucg_runtime_test");
+	if (!cpucg)
+		goto cleanup;
+
+	if (cg_create(cpucg))
+		goto cleanup;
+
+	/* Without a quota there is no runtime to set. */
+	if (!cg_write_numeric(cpucg, "cpu.max.runtime", runtime_usec))
+		goto cleanup;
+
+	snprintf(buf, sizeof(buf), "%ld %ld", quota_usec, period_usec);
+	if (cg_write(cpucg, "cpu.max", buf))
+		goto cleanup;
+	if (cg_write_numeric(cpucg, "cpu.max.burst", burst_usec))
+		goto cleanup;
+
+	/* Start burner, let it settle, then inject credits */
+	struct cpu_hog_func_param param = {
+		.nprocs = 1,
+		.ts = { .tv_sec = duration_sec, .tv_nsec = 0 },
+		.clock_type = CPU_HOG_CLOCK_WALL,
+	};
+	pid = cg_run_nowait(cpucg, hog_cpus_timed, (void *)&param);
+	if (pid < 0)
+		goto cleanup;
+
+	usleep(100000);
+	if (cg_write_numeric(cpucg, "cpu.max.runtime", runtime_usec)) {
+		kill(pid, SIGKILL);
+		waitpid(pid, NULL, 0);
+		goto cleanup;
+	}
+
+	waitpid(pid, NULL, 0);
+
+	usage_usec = cg_read_key_long(cpucg, "cpu.stat", "usage_usec");
+	if (usage_usec <= 0)
+		goto cleanup;
+
+	/* At least the injected runtime, at most 5% above the expected usage. */
+	if (usage_usec < runtime_usec ||
+	    usage_usec > expected_usec + expected_usec / 20)
+		goto cleanup;
+
+	ret = KSFT_PASS;
+
+cleanup:
+	cg_destroy(cpucg);
+	free(cpucg);
+	return ret;
+}
+
+/*
+ * A cpu.max.runtime write is not burst usage: writing a runtime below the
+ * current one leaves cpu.stat's nr_bursts and burst_usec where they were.
+ */
+static int test_cpucg_max_runtime_burst_stats(const char *root)
+{
+	int ret = KSFT_FAIL;
+	long nr_bursts, burst_usec;
+	char *cpucg;
+
+	cpucg = cg_name(root, "cpucg_runtime_burst_stats_test");
+	if (!cpucg)
+		goto cleanup;
+
+	if (cg_create(cpucg))
+		goto cleanup;
+
+	/* A long period, so the write lands before the timer's first refill. */
+	if (cg_write(cpucg, "cpu.max", "10000 1000000"))
+		goto cleanup;
+	if (cg_write_numeric(cpucg, "cpu.max.burst", 190000))
+		goto cleanup;
+	if (cg_write_numeric(cpucg, "cpu.max.runtime", 0))
+		goto cleanup;
+
+	/* The idle group refills for a few periods. */
+	sleep(3);
+	nr_bursts = cg_read_key_long(cpucg, "cpu.stat", "nr_bursts");
+	burst_usec = cg_read_key_long(cpucg, "cpu.stat", "burst_usec");
+	if (nr_bursts != 0 || burst_usec != 0)
+		goto cleanup;
+
+	ret = KSFT_PASS;
+
+cleanup:
+	cg_destroy(cpucg);
+	free(cpucg);
+	return ret;
+}
+
+/*
+ * A cpu.max.runtime write hands the runtime to a throttled group at once,
+ * rather than at the next period: with a 1s period, the group runs again
+ * within 100ms of the write, before the next period starts.
+ */
+static int test_cpucg_max_runtime_unthrottle(const char *root)
+{
+	int ret = KSFT_FAIL;
+	long usage_before, usage_after, nr_periods;
+	char *cpucg;
+	int pid;
+
+	cpucg = cg_name(root, "cpucg_runtime_unthrottle_test");
+	if (!cpucg)
+		goto cleanup;
+
+	if (cg_create(cpucg))
+		goto cleanup;
+
+	/* 1ms per 1s period, with room for a runtime of up to 1s. */
+	if (cg_write(cpucg, "cpu.max", "1000 1000000"))
+		goto cleanup;
+	if (cg_write_numeric(cpucg, "cpu.max.burst", 999000))
+		goto cleanup;
+
+	struct cpu_hog_func_param param = {
+		.nprocs = 1,
+		.ts = { .tv_sec = 2, .tv_nsec = 0 },
+		.clock_type = CPU_HOG_CLOCK_WALL,
+	};
+	pid = cg_run_nowait(cpucg, hog_cpus_timed, (void *)&param);
+	if (pid < 0)
+		goto cleanup;
+
+	/*
+	 * The period timer's phase is random: start right after a boundary,
+	 * so that the next one is some 900ms away. The hog uses up its runtime
+	 * and is throttled for the period.
+	 */
+	if (wait_period_start(cpucg))
+		goto cleanup_hog;
+	nr_periods = cg_read_key_long(cpucg, "cpu.stat", "nr_periods");
+	usleep(50000);
+	usage_before = cg_read_key_long(cpucg, "cpu.stat", "usage_usec");
+	if (usage_before < 0 || usage_before > 20000)
+		goto cleanup_hog;
+
+	if (cg_write_numeric(cpucg, "cpu.max.runtime", 500000))
+		goto cleanup_hog;
+
+	/* No period started meanwhile: only the write lets the hog run. */
+	usleep(100000);
+	usage_after = cg_read_key_long(cpucg, "cpu.stat", "usage_usec");
+	if (cg_read_key_long(cpucg, "cpu.stat", "nr_periods") != nr_periods)
+		goto cleanup_hog;
+	if (usage_after - usage_before < 50000)
+		goto cleanup_hog;
+
+	ret = KSFT_PASS;
+
+cleanup_hog:
+	kill(pid, SIGKILL);
+	waitpid(pid, NULL, 0);
+cleanup:
+	cg_destroy(cpucg);
+	free(cpucg);
+	return ret;
+}
+
+/*
+ * What a group ran beyond its quota before a cpu.max.runtime write is still
+ * burst usage: a write of the runtime the group has left does not hide it.
+ */
+static int test_cpucg_max_runtime_burst_kept(const char *root)
+{
+	int ret = KSFT_FAIL;
+	long burst_before, burst_after, runtime_usec;
+	char *cpucg;
+	int pid;
+
+	cpucg = cg_name(root, "cpucg_runtime_burst_kept_test");
+	if (!cpucg)
+		goto cleanup;
+
+	if (cg_create(cpucg))
+		goto cleanup;
+
+	/* 10ms per 1s period, and a runtime of 1s to run on. */
+	if (cg_write(cpucg, "cpu.max", "10000 1000000"))
+		goto cleanup;
+	if (cg_write_numeric(cpucg, "cpu.max.burst", 990000))
+		goto cleanup;
+	if (cg_write_numeric(cpucg, "cpu.max.runtime", 1000000))
+		goto cleanup;
+
+	struct cpu_hog_func_param param = {
+		.nprocs = 1,
+		.ts = { .tv_sec = 10, .tv_nsec = 0 },
+		.clock_type = CPU_HOG_CLOCK_WALL,
+	};
+	pid = cg_run_nowait(cpucg, hog_cpus_timed, (void *)&param);
+	if (pid < 0)
+		goto cleanup;
+
+	/* Run some 300ms, all in one period, and stop. */
+	if (wait_period_start(cpucg)) {
+		kill(pid, SIGKILL);
+		waitpid(pid, NULL, 0);
+		goto cleanup;
+	}
+	burst_before = cg_read_key_long(cpucg, "cpu.stat", "burst_usec");
+	usleep(300000);
+	kill(pid, SIGKILL);
+	waitpid(pid, NULL, 0);
+
+	/* Write back what is left: the next refill counts the 300ms run. */
+	runtime_usec = cg_read_long(cpucg, "cpu.max.runtime");
+	if (cg_write_numeric(cpucg, "cpu.max.runtime", runtime_usec))
+		goto cleanup;
+	sleep(1);
+	burst_after = cg_read_key_long(cpucg, "cpu.stat", "burst_usec");
+	if (burst_before < 0 || burst_after - burst_before < 250000)
+		goto cleanup;
+
+	ret = KSFT_PASS;
+
+cleanup:
+	cg_destroy(cpucg);
+	free(cpucg);
+	return ret;
+}
+
+/*
+ * cpu.max.runtime reads at most quota + burst, so that a value read can be
+ * written back. A cfs_rq that dequeues returns its unused runtime, which can
+ * take the runtime above quota + burst until the next refill caps it: run
+ * tasks that keep doing that, and read and write back the runtime meanwhile.
+ */
+static int test_cpucg_max_runtime_read_capped(const char *root)
+{
+	int ret = KSFT_FAIL;
+	long cap_usec = 100000;		/* quota 100ms, no burst */
+	long long end;
+	long runtime_usec;
+	char *cpucg;
+	int pids[2];
+	int i, n = 0;
+
+	cpucg = cg_name(root, "cpucg_runtime_read_capped_test");
+	if (!cpucg)
+		goto cleanup;
+
+	if (cg_create(cpucg))
+		goto cleanup;
+
+	if (cg_write(cpucg, "cpu.max", "100000 100000"))
+		goto cleanup;
+
+	for (n = 0; n < 2; n++) {
+		pids[n] = cg_run_nowait(cpucg, run_and_sleep, (void *)4L);
+		if (pids[n] < 0)
+			goto cleanup_tasks;
+	}
+
+	end = monotonic_ns() + 3000000000LL;
+	while (monotonic_ns() < end) {
+		runtime_usec = cg_read_long(cpucg, "cpu.max.runtime");
+		if (runtime_usec < 0 || runtime_usec > cap_usec)
+			goto cleanup_tasks;
+		if (cg_write_numeric(cpucg, "cpu.max.runtime", runtime_usec))
+			goto cleanup_tasks;
+	}
+
+	ret = KSFT_PASS;
+
+cleanup_tasks:
+	for (i = 0; i < n; i++) {
+		kill(pids[i], SIGKILL);
+		waitpid(pids[i], NULL, 0);
+	}
+cleanup:
+	cg_destroy(cpucg);
+	free(cpucg);
+	return ret;
+}
+
 #define T(x) { x, #x }
 struct cpucg_test {
 	int (*fn)(const char *root);
@@ -823,6 +1154,11 @@ struct cpucg_test {
 	T(test_cpucg_nested_weight_underprovisioned),
 	T(test_cpucg_max),
 	T(test_cpucg_max_nested),
+	T(test_cpucg_max_runtime),
+	T(test_cpucg_max_runtime_burst_stats),
+	T(test_cpucg_max_runtime_unthrottle),
+	T(test_cpucg_max_runtime_burst_kept),
+	T(test_cpucg_max_runtime_read_capped),
 };
 #undef T
 

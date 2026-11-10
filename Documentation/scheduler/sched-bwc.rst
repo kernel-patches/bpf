@@ -90,8 +90,8 @@ bandwidth restriction in place, such a group is described as an unconstrained
 bandwidth group. This represents the traditional work-conserving behavior for
 CFS.
 
-Writing any (valid) positive value(s) no smaller than cpu.cfs_burst_us will
-enact the specified bandwidth limit. The minimum quota allowed for the quota or
+Writing any (valid) positive value(s) will enact the specified bandwidth
+limit. The minimum quota allowed for the quota or
 period is 1ms. There is also an upper bound on the period length of 1s.
 Additional restrictions exist when bandwidth limits are used in a hierarchical
 fashion, these are explained in more detail below.
@@ -101,9 +101,10 @@ and return the group to an unconstrained state once more.
 
 A value of 0 for cpu.cfs_burst_us indicates that the group can not accumulate
 any unused bandwidth. It makes the traditional bandwidth control behavior for
-CFS unchanged. Writing any (valid) positive value(s) no larger than
-cpu.cfs_quota_us into cpu.cfs_burst_us will enact the cap on unused bandwidth
-accumulation.
+CFS unchanged. Writing any (valid) positive value(s) into cpu.cfs_burst_us
+will enact the cap on unused bandwidth accumulation: the group can accumulate
+up to cpu.cfs_quota_us + cpu.cfs_burst_us. The burst may be larger than the
+quota, as long as their sum is at most 2^44 - 1 microseconds (about 203 days).
 
 Any updates to a group's bandwidth specification will result in it becoming
 unthrottled if it is in a constrained state.
@@ -243,4 +244,4 @@ Examples
 	# echo 50000 > cpu.cfs_period_us /* period = 50ms */
 	# echo 10000 > cpu.cfs_burst_us /* burst = 10ms */
 
-   Larger buffer setting (no larger than quota) allows greater burst capacity.
+   Larger buffer setting allows greater burst capacity.

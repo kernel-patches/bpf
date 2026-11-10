@@ -7350,6 +7350,8 @@ static bool distribute_cfs_runtime(struct cfs_bandwidth *cfs_b)
 	struct cfs_rq *cfs_rq;
 	struct rq *rq;
 
+	lockdep_assert_irqs_disabled();
+
 	guard(rcu)();
 
 	list_for_each_entry_rcu(cfs_rq, &cfs_b->throttled_cfs_rq,
@@ -7738,6 +7740,65 @@ static void init_cfs_rq_runtime(struct cfs_rq *cfs_rq)
 	INIT_LIST_HEAD(&cfs_rq->throttled_list);
 	INIT_LIST_HEAD(&cfs_rq->throttled_csd_list);
 	INIT_LIST_HEAD(&cfs_rq->throttled_limbo_list);
+}
+
+/*
+ * The runtime of @cfs_b, as cpu.max.runtime reads it.
+ *
+ * __return_cfs_rq_runtime() returns slack without capping it, so the runtime
+ * can exceed quota + burst until the next refill caps it. Report it capped,
+ * so that a value read can always be written back.
+ */
+u64 cfs_bandwidth_get_runtime(struct cfs_bandwidth *cfs_b)
+{
+	u64 runtime;
+
+	guard(raw_spinlock_irq)(&cfs_b->lock);
+
+	runtime = cfs_b->runtime;
+	if (cfs_b->quota != RUNTIME_INF)
+		runtime = min(runtime, cfs_b->quota + cfs_b->burst);
+
+	return runtime;
+}
+
+/*
+ * Set the runtime of @cfs_b, as a cpu.max.runtime write does, and hand it to
+ * the throttled cfs_rqs at once rather than at the next period.
+ */
+int cfs_bandwidth_set_runtime(struct cfs_bandwidth *cfs_b, u64 runtime)
+{
+	bool throttled;
+	s64 snap;
+
+	guard(irq)();
+
+	scoped_guard (raw_spinlock, &cfs_b->lock) {
+		if (cfs_b->quota == RUNTIME_INF ||
+		    runtime > cfs_b->quota + cfs_b->burst)
+			return -EINVAL;
+
+		/*
+		 * The next refill counts runtime_snap - runtime as burst usage.
+		 * Move runtime_snap by what the write adds or takes away, so
+		 * that the write itself is not counted as burst usage but what
+		 * the group ran since the last refill still is.
+		 */
+		snap = cfs_b->runtime_snap + runtime - cfs_b->runtime;
+		cfs_b->runtime_snap = max(snap, 0);
+		cfs_b->runtime = runtime;
+
+		throttled = !list_empty(&cfs_b->throttled_cfs_rq) && runtime;
+	}
+
+	/*
+	 * distribute_cfs_runtime() takes the rq locks, so it runs without
+	 * cfs_b->lock and with interrupts disabled, as from the slack timer.
+	 */
+	if (throttled)
+		distribute_cfs_runtime(cfs_b);
+
+	return 0;
 }
 
 void start_cfs_bandwidth(struct cfs_bandwidth *cfs_b)

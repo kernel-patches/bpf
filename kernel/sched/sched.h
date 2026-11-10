@@ -578,6 +578,8 @@ extern void init_cfs_bandwidth(struct cfs_bandwidth *cfs_b, struct cfs_bandwidth
 
 extern void __refill_cfs_bandwidth_runtime(struct cfs_bandwidth *cfs_b);
 extern void start_cfs_bandwidth(struct cfs_bandwidth *cfs_b);
+u64 cfs_bandwidth_get_runtime(struct cfs_bandwidth *cfs_b);
+int cfs_bandwidth_set_runtime(struct cfs_bandwidth *cfs_b, u64 runtime);
 extern void unthrottle_cfs_rq(struct cfs_rq *cfs_rq);
 extern bool cfs_task_bw_constrained(struct task_struct *p);
 
