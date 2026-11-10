@@ -562,24 +562,24 @@ impl<'a, E: FalconEngine + 'static> Falcon<'a, E> {
         // For IMEM, we want to use the start offset as a virtual address tag for each page, since
         // code addresses in the firmware (and the boot vector) are virtual.
         //
-        // For DMEM, the start offset is folded into the DMA address.
-        let (src_start, dma_start) = match target_mem {
+        // For DMEM, the start offset is folded into the DMA base.
+        let (fb_offset, base_offset) = match target_mem {
             FalconMem::ImemSecure | FalconMem::ImemNonSecure => (load_offsets.src_start, 0),
             FalconMem::Dmem => (0, usize::from_safe_cast(load_offsets.src_start)),
         };
 
-        let dma_address = {
+        let dma_base = {
             // Upper limit of transfer is `(num_transfers * DMA_LEN) + load_offsets.src_start`.
-            let dma_end = num_transfers
+            let end_offset = num_transfers
                 .checked_mul(DMA_LEN)
                 .and_then(|size| size.checked_add(load_offsets.src_start))
                 .map(usize::from_safe_cast)
                 .ok_or(EOVERFLOW)?;
 
-            io_project!(dma_obj, [try: dma_start..dma_end]).dma_address()
+            io_project!(dma_obj, [try: base_offset..end_offset]).dma_address()
         };
 
-        if dma_address % DmaAddress::from(DMA_LEN) > 0 {
+        if dma_base % DmaAddress::from(DMA_LEN) > 0 {
             dev_err!(
                 self.dev,
                 "DMA transfer start addresses must be a multiple of {}\n",
@@ -594,10 +594,10 @@ impl<'a, E: FalconEngine + 'static> Falcon<'a, E> {
             .write_reg(regs::NV_PFALCON_FALCON_DMATRFBASE::zeroed().with_base(
                 // CAST: `as u32` is used on purpose since we do want to strip the upper bits,
                 // which will be written to `NV_PFALCON_FALCON_DMATRFBASE1`.
-                (dma_address >> 8) as u32,
+                (dma_base >> 8) as u32,
             ));
         self.pfalcon.write_reg(
-            regs::NV_PFALCON_FALCON_DMATRFBASE1::zeroed().try_with_base(dma_address >> 40)?,
+            regs::NV_PFALCON_FALCON_DMATRFBASE1::zeroed().try_with_base(dma_base >> 40)?,
         );
 
         let cmd = regs::NV_PFALCON_FALCON_DMATRFCMD::zeroed()
@@ -611,7 +611,7 @@ impl<'a, E: FalconEngine + 'static> Falcon<'a, E> {
                     .try_with_offs(load_offsets.dst_start + pos)?,
             );
             self.pfalcon.write_reg(
-                regs::NV_PFALCON_FALCON_DMATRFFBOFFS::zeroed().with_offs(src_start + pos),
+                regs::NV_PFALCON_FALCON_DMATRFFBOFFS::zeroed().with_offs(fb_offset + pos),
             );
 
             self.pfalcon.write_reg(cmd);
