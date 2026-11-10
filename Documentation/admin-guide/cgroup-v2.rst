@@ -1232,9 +1232,9 @@ will be referred to. All time durations are in microseconds.
 	cgroups.  The default is "0".
 
 	The burst. The cgroup can accumulate the runtime it does not
-	use, up to $MAX + cpu.max.burst. The burst may exceed $MAX, as
-	long as $MAX + cpu.max.burst is at most 2^44 - 1 (about 203
-	days).
+	use, up to $MAX + cpu.max.burst, also in the periods in which it
+	does not run. The burst may exceed $MAX, as long as $MAX +
+	cpu.max.burst is at most 2^44 - 1 (about 203 days).
 
 	This file affects only processes under the fair-class scheduler and a BPF
 	scheduler with the ``cgroup_set_bandwidth`` callback depending on what
@@ -1246,10 +1246,11 @@ will be referred to. All time durations are in microseconds.
 
 	The runtime the cgroup has accumulated and not used yet, in
 	microseconds. Each period refills it by $MAX, up to $MAX +
-	cpu.max.burst, and a read returns at most $MAX + cpu.max.burst.
-	A write sets it, up to $MAX + cpu.max.burst, and lets a cgroup
-	that ran out of runtime run again at once. A write fails with
-	EINVAL while $MAX is "max".
+	cpu.max.burst, whether the cgroup runs in it or not. A read
+	returns at most $MAX + cpu.max.burst. A write sets it, up to
+	$MAX + cpu.max.burst, and lets a cgroup that ran out of runtime
+	run again at once. A write fails with EINVAL while $MAX is
+	"max".
 
 	The runtime does not include what the cgroup's CPUs already took
 	from it, at most a slice each (sched_cfs_bandwidth_slice_us).

@@ -9845,6 +9845,12 @@ static int tg_set_cfs_bandwidth(struct task_group *tg,
 		cfs_bandwidth_usage_inc();
 
 	scoped_guard (raw_spinlock_irq, &cfs_b->lock) {
+		/*
+		 * The new bandwidth applies from now on. The group keeps what
+		 * it earned while idle under the old one.
+		 */
+		cfs_bandwidth_refill_idle_periods(cfs_b);
+
 		cfs_b->period = ns_to_ktime(period);
 		cfs_b->quota = quota;
 		cfs_b->burst = burst;

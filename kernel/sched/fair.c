@@ -7743,6 +7743,75 @@ static void init_cfs_rq_runtime(struct cfs_rq *cfs_rq)
 }
 
 /*
+ * Runtime after @periods refills of quota, capped at quota + burst as each
+ * refill in __refill_cfs_bandwidth_runtime() caps it. The runtime can be above
+ * the cap (__return_cfs_rq_runtime() does not cap it), and a refill then cuts
+ * it to the cap.
+ */
+static u64 cfs_bandwidth_refilled(struct cfs_bandwidth *cfs_b, u64 periods)
+{
+	u64 cap = cfs_b->quota + cfs_b->burst;
+	u64 runtime = cfs_b->runtime;
+
+	if (!periods || cfs_b->quota == RUNTIME_INF)
+		return runtime;
+	if (runtime >= cap ||
+	    periods >= div64_u64(cap - runtime, cfs_b->quota) + 1)
+		return cap;
+	return runtime + periods * cfs_b->quota;
+}
+
+/*
+ * The period timer stops after a period in which the group took no runtime
+ * (do_sched_cfs_period_timer()), and start_cfs_bandwidth() restarts it on
+ * the next demand. The periods it slept through refill quota too: unused
+ * quota accumulates up to quota + burst whether or not the group ran. While
+ * the timer is stopped its expiry is the first period boundary it missed,
+ * so the boundaries passed since then are the refills still owed.
+ *
+ * Without burst the cap is quota. The timer stops right after a refill that
+ * nothing drew from, so the runtime is at quota then, and this changes nothing
+ * for groups without a burst.
+ *
+ * This is the overrun that hrtimer_forward_now() returns, without moving the
+ * expiry: one for the expiry itself, plus one for each full period since.
+ */
+static u64 cfs_bandwidth_idle_periods(struct cfs_bandwidth *cfs_b)
+{
+	ktime_t now = ktime_get();
+	s64 delta;
+
+	if (cfs_b->period_active)
+		return 0;
+
+	delta = ktime_to_ns(ktime_sub(now, hrtimer_get_expires(&cfs_b->period_timer)));
+	if (delta < 0)
+		return 0;
+	return div64_u64(delta, ktime_to_ns(cfs_b->period)) + 1;
+}
+
+/*
+ * Refill the periods a stopped timer slept through, at the bandwidth they
+ * were earned under, and move its expiry past them so that they are not
+ * counted again. A change of the bandwidth or a cpu.max.runtime write calls
+ * this first, so that the change applies from then on and the group keeps
+ * what it earned before. A group without a quota earned nothing.
+ */
+void cfs_bandwidth_refill_idle_periods(struct cfs_bandwidth *cfs_b)
+{
+	u64 idle_periods;
+
+	lockdep_assert_held(&cfs_b->lock);
+
+	if (cfs_b->period_active)
+		return;
+
+	idle_periods = hrtimer_forward_now(&cfs_b->period_timer, cfs_b->period);
+	cfs_b->runtime = cfs_bandwidth_refilled(cfs_b, idle_periods);
+	cfs_b->runtime_snap = cfs_b->runtime;
+}
+
+/*
  * The runtime of @cfs_b, as cpu.max.runtime reads it.
  *
  * __return_cfs_rq_runtime() returns slack without capping it, so the runtime
@@ -7755,7 +7824,7 @@ u64 cfs_bandwidth_get_runtime(struct cfs_bandwidth *cfs_b)
 
 	guard(raw_spinlock_irq)(&cfs_b->lock);
 
-	runtime = cfs_b->runtime;
+	runtime = cfs_bandwidth_refilled(cfs_b, cfs_bandwidth_idle_periods(cfs_b));
 	if (cfs_b->quota != RUNTIME_INF)
 		runtime = min(runtime, cfs_b->quota + cfs_b->burst);
 
@@ -7777,6 +7846,12 @@ int cfs_bandwidth_set_runtime(struct cfs_bandwidth *cfs_b, u64 runtime)
 		if (cfs_b->quota == RUNTIME_INF ||
 		    runtime > cfs_b->quota + cfs_b->burst)
 			return -EINVAL;
+
+		/*
+		 * Refill the periods that passed before the write, so that the
+		 * write replaces them and only the periods after it refill.
+		 */
+		cfs_bandwidth_refill_idle_periods(cfs_b);
 
 		/*
 		 * The next refill counts runtime_snap - runtime as burst usage.
@@ -7808,8 +7883,8 @@ void start_cfs_bandwidth(struct cfs_bandwidth *cfs_b)
 	if (cfs_b->period_active)
 		return;
 
+	cfs_bandwidth_refill_idle_periods(cfs_b);
 	cfs_b->period_active = 1;
-	hrtimer_forward_now(&cfs_b->period_timer, cfs_b->period);
 	hrtimer_start_expires(&cfs_b->period_timer, HRTIMER_MODE_ABS_PINNED);
 }
 

@@ -1140,6 +1140,186 @@ cleanup:
 	return ret;
 }
 
+/*
+ * A group with a burst keeps earning quota while it is idle, up to
+ * quota + burst, and cpu.max.runtime reads what it has earned. Without a
+ * burst the runtime stays at quota.
+ */
+static int test_cpucg_max_idle_refill(const char *root)
+{
+	int ret = KSFT_FAIL;
+	long quota_usec = 10000;	/* 10ms */
+	long period_usec = 100000;	/* 100ms */
+	long burst_usec = 990000;	/* cap 1s */
+	long runtime_usec;
+	char *cpucg;
+	char buf[64];
+
+	cpucg = cg_name(root, "cpucg_idle_refill_test");
+	if (!cpucg)
+		goto cleanup;
+
+	if (cg_create(cpucg))
+		goto cleanup;
+
+	snprintf(buf, sizeof(buf), "%ld %ld", quota_usec, period_usec);
+	if (cg_write(cpucg, "cpu.max", buf))
+		goto cleanup;
+
+	/* No burst: the runtime stays at quota while idle. */
+	sleep(1);
+	runtime_usec = cg_read_long(cpucg, "cpu.max.runtime");
+	if (runtime_usec != quota_usec)
+		goto cleanup;
+
+	/* Burst: the write refills once (20ms), then 1s idle earns 10 more. */
+	if (cg_write_numeric(cpucg, "cpu.max.burst", burst_usec))
+		goto cleanup;
+	sleep(1);
+	runtime_usec = cg_read_long(cpucg, "cpu.max.runtime");
+	if (runtime_usec < 110000 || runtime_usec > 130000)
+		goto cleanup;
+
+	/* Capped at quota + burst. */
+	sleep(10);
+	runtime_usec = cg_read_long(cpucg, "cpu.max.runtime");
+	if (runtime_usec != quota_usec + burst_usec)
+		goto cleanup;
+
+	/*
+	 * A write sets the runtime from now on: 500ms later, five refills, or
+	 * six if the sleep overruns into the next period.
+	 */
+	if (cg_write_numeric(cpucg, "cpu.max.runtime", 0))
+		goto cleanup;
+	usleep(500000);
+	runtime_usec = cg_read_long(cpucg, "cpu.max.runtime");
+	if (runtime_usec < 50000 || runtime_usec > 60000)
+		goto cleanup;
+
+	ret = KSFT_PASS;
+
+cleanup:
+	cg_destroy(cpucg);
+	free(cpucg);
+	return ret;
+}
+
+/*
+ * A cpu.max or cpu.max.burst write applies from then on: what a group with
+ * a quota earned while idle is kept, capped at the new quota + burst, and a
+ * group that had no quota has earned nothing while it had none.
+ */
+static int test_cpucg_max_idle_refill_write(const char *root)
+{
+	int ret = KSFT_FAIL;
+	long quota_usec = 10000;	/* 10ms */
+	long period_usec = 100000;	/* 100ms */
+	long runtime_usec;
+	char *cpucg = NULL, *fresh = NULL;
+	char buf[64];
+
+	cpucg = cg_name(root, "cpucg_idle_refill_write_test");
+	fresh = cg_name(root, "cpucg_idle_refill_fresh_test");
+	if (!cpucg || !fresh)
+		goto cleanup;
+
+	if (cg_create(cpucg) || cg_create(fresh))
+		goto cleanup;
+
+	snprintf(buf, sizeof(buf), "%ld %ld", quota_usec, period_usec);
+	if (cg_write(cpucg, "cpu.max", buf))
+		goto cleanup;
+	if (cg_write_numeric(cpucg, "cpu.max.burst", 190000))
+		goto cleanup;
+
+	/* 3s idle fills the group to quota + burst. */
+	sleep(3);
+	runtime_usec = cg_read_long(cpucg, "cpu.max.runtime");
+	if (runtime_usec != 200000)
+		goto cleanup;
+
+	/* Writing the same cpu.max keeps what the group earned. */
+	if (cg_write(cpucg, "cpu.max", buf))
+		goto cleanup;
+	runtime_usec = cg_read_long(cpucg, "cpu.max.runtime");
+	if (runtime_usec != 200000)
+		goto cleanup;
+
+	/* A lower burst keeps it too, capped at the new quota + burst. */
+	sleep(2);
+	if (cg_write_numeric(cpucg, "cpu.max.burst", 90000))
+		goto cleanup;
+	runtime_usec = cg_read_long(cpucg, "cpu.max.runtime");
+	if (runtime_usec != 100000)
+		goto cleanup;
+
+	/* A group given a quota after idling without one starts with a refill. */
+	if (cg_write_numeric(fresh, "cpu.max.burst", 190000))
+		goto cleanup;
+	sleep(2);
+	if (cg_write(fresh, "cpu.max", buf))
+		goto cleanup;
+	runtime_usec = cg_read_long(fresh, "cpu.max.runtime");
+	if (runtime_usec != quota_usec)
+		goto cleanup;
+
+	ret = KSFT_PASS;
+
+cleanup:
+	if (fresh)
+		cg_destroy(fresh);
+	if (cpucg)
+		cg_destroy(cpucg);
+	free(fresh);
+	free(cpucg);
+	return ret;
+}
+
+/*
+ * A cpu.max.runtime write sets the runtime exactly, and only the periods
+ * after it refill.
+ */
+static int test_cpucg_max_idle_refill_runtime_write(const char *root)
+{
+	int ret = KSFT_FAIL;
+	long runtime_usec;
+	char *cpucg;
+
+	cpucg = cg_name(root, "cpucg_idle_refill_runtime_test");
+	if (!cpucg)
+		goto cleanup;
+
+	if (cg_create(cpucg))
+		goto cleanup;
+
+	if (cg_write(cpucg, "cpu.max", "10000 100000"))
+		goto cleanup;
+	if (cg_write_numeric(cpucg, "cpu.max.burst", 190000))
+		goto cleanup;
+
+	sleep(3);
+	if (cg_write_numeric(cpucg, "cpu.max.runtime", 30000))
+		goto cleanup;
+	/* One refill if a period boundary passes before the read. */
+	runtime_usec = cg_read_long(cpucg, "cpu.max.runtime");
+	if (runtime_usec != 30000 && runtime_usec != 40000)
+		goto cleanup;
+
+	/* 250ms after the write: two or three refills, by the boundaries. */
+	usleep(250000);
+	runtime_usec = cg_read_long(cpucg, "cpu.max.runtime");
+	if (runtime_usec < 50000 || runtime_usec > 60000)
+		goto cleanup;
+
+	ret = KSFT_PASS;
+
+cleanup:
+	cg_destroy(cpucg);
+	free(cpucg);
+	return ret;
+}
+
 #define T(x) { x, #x }
 struct cpucg_test {
 	int (*fn)(const char *root);
@@ -1159,6 +1339,9 @@ struct cpucg_test {
 	T(test_cpucg_max_runtime_unthrottle),
 	T(test_cpucg_max_runtime_burst_kept),
 	T(test_cpucg_max_runtime_read_capped),
+	T(test_cpucg_max_idle_refill),
+	T(test_cpucg_max_idle_refill_write),
+	T(test_cpucg_max_idle_refill_runtime_write),
 };
 #undef T
 

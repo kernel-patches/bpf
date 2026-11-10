@@ -103,8 +103,9 @@ A value of 0 for cpu.cfs_burst_us indicates that the group can not accumulate
 any unused bandwidth. It makes the traditional bandwidth control behavior for
 CFS unchanged. Writing any (valid) positive value(s) into cpu.cfs_burst_us
 will enact the cap on unused bandwidth accumulation: the group can accumulate
-up to cpu.cfs_quota_us + cpu.cfs_burst_us. The burst may be larger than the
-quota, as long as their sum is at most 2^44 - 1 microseconds (about 203 days).
+up to cpu.cfs_quota_us + cpu.cfs_burst_us, also over periods in which it does
+not run. The burst may be larger than the quota, as long as their sum is at
+most 2^44 - 1 microseconds (about 203 days).
 
 Any updates to a group's bandwidth specification will result in it becoming
 unthrottled if it is in a constrained state.
