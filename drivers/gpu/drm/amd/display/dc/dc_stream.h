@@ -452,6 +452,7 @@ struct dc_stream_state *dc_get_stream_at_index(struct dc *dc, uint8_t i);
  * Return the current frame counter.
  */
 uint32_t dc_stream_get_vblank_counter(const struct dc_stream_state *stream);
+uint32_t dc_otg_get_vblank_counter(struct dc *dc, int otg_inst);
 
 /*
  * Send dp sdp message.
@@ -465,6 +466,11 @@ bool dc_stream_send_dp_sdp(const struct dc_stream_state *stream,
  * being refactored properly to be dce-specific
  */
 bool dc_stream_get_scanoutpos(const struct dc_stream_state *stream,
+				  uint32_t *v_blank_start,
+				  uint32_t *v_blank_end,
+				  uint32_t *h_position,
+				  uint32_t *v_position);
+bool dc_otg_get_scanoutpos(struct dc *dc, int otg_inst,
 				  uint32_t *v_blank_start,
 				  uint32_t *v_blank_end,
 				  uint32_t *h_position,
