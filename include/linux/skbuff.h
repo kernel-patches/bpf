@@ -3759,33 +3759,30 @@ int skb_cow_data_for_xdp(struct page_pool *pool, struct sk_buff **pskb,
  * skb_frag_address - gets the address of the data contained in a paged fragment
  * @frag: the paged fragment buffer
  *
- * Returns: the address of the data within @frag. The page must already
- * be mapped.
+ * Returns: the address of the data within @frag, or %NULL if the CPU cannot
+ * read it.
  */
 static inline void *skb_frag_address(const skb_frag_t *frag)
 {
-	if (!skb_frag_page(frag))
+	void *ptr = netmem_address(skb_frag_netmem(frag));
+
+	if (!ptr)
 		return NULL;
 
-	return page_address(skb_frag_page(frag)) + skb_frag_off(frag);
+	return ptr + skb_frag_off(frag);
 }
 
 /**
  * skb_frag_address_safe - gets the address of the data contained in a paged fragment
  * @frag: the paged fragment buffer
  *
- * Returns: the address of the data within @frag. Checks that the page
- * is mapped and returns %NULL otherwise.
+ * Returns: the address of the data within @frag. Checks that the memory
+ * is mapped and readable and returns %NULL otherwise.
  */
 static inline void *skb_frag_address_safe(const skb_frag_t *frag)
 {
-	struct page *page = skb_frag_page(frag);
-	void *ptr;
+	void *ptr = netmem_address(skb_frag_netmem(frag));
 
-	if (!page)
-		return NULL;
-
-	ptr = page_address(page);
 	if (unlikely(!ptr))
 		return NULL;
 

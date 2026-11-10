@@ -72,8 +72,8 @@ enum net_iov_type {
 
 /* A memory descriptor representing abstract networking I/O vectors.
  *
- * net_iovs are allocated and used by networking code, and the size of
- * the chunk is PAGE_SIZE.
+ * net_iovs are allocated and used by networking code. Their area sets the
+ * size of a chunk, see net_iov_area.niov_shift.
  *
  * Examples include imported dmabuf memory and imported io_uring memory. See
  * net_iov_type for all the supported types. While current net_iov types are
@@ -104,6 +104,8 @@ struct net_iov_area {
 	/* Array of net_iovs for this area. */
 	struct net_iov *niovs;
 	size_t num_niovs;
+	/* Each net_iov covers 1 << niov_shift bytes. */
+	unsigned int niov_shift;
 };
 
 static inline struct net_iov_area *net_iov_owner(const struct net_iov *niov)

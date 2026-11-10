@@ -542,6 +542,7 @@ static int __zcrx_create_area(struct io_zcrx_ifq *ifq,
 	ifq->niov_shift = buf_size_shift;
 	nr_iovs = area->mem.size >> ifq->niov_shift;
 	area->nia.num_niovs = nr_iovs;
+	area->nia.niov_shift = buf_size_shift;
 
 	ret = -ENOMEM;
 	area->nia.niovs = kvmalloc_objs(area->nia.niovs[0], nr_iovs,
