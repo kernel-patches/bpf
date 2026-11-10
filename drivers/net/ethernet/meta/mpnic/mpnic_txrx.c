@@ -22,6 +22,7 @@ struct mpnic_xmit_cb {
 
 struct mpnic_tx_hdrs {
 	unsigned int i3len;
+	unsigned int o3len;
 	unsigned int l3_type;
 	unsigned int l4_type;
 };
@@ -218,6 +219,9 @@ err_dma:
 
 static void mpnic_tx_fill_hdrs(struct sk_buff *skb, struct mpnic_tx_hdrs *hdrs)
 {
+	unsigned int net_off = skb_network_offset(skb);
+	unsigned int inner_off;
+
 	if (!skb_is_gso(skb)) {
 		hdrs->i3len = skb_checksum_start(skb) - skb_network_header(skb);
 		return;
@@ -228,9 +232,17 @@ static void mpnic_tx_fill_hdrs(struct sk_buff *skb, struct mpnic_tx_hdrs *hdrs)
 	else
 		hdrs->l4_type = MPNIC_TWD_L4_TYPE_UDP;
 
-	hdrs->i3len = skb_transport_offset(skb) - skb_network_offset(skb);
-	hdrs->l3_type = ip_hdr(skb)->version == 4 ?
-			MPNIC_TWD_L3_TYPE_IPV4 : MPNIC_TWD_L3_TYPE_IPV6;
+	if (!skb->encapsulation) {
+		hdrs->i3len = skb_transport_offset(skb) - net_off;
+		hdrs->l3_type = ip_hdr(skb)->version == 4 ?
+				MPNIC_TWD_L3_TYPE_IPV4 : MPNIC_TWD_L3_TYPE_IPV6;
+	} else {
+		inner_off = skb_inner_network_offset(skb);
+		hdrs->o3len = inner_off - net_off;
+		hdrs->i3len = skb_checksum_start_offset(skb) - inner_off;
+		hdrs->l3_type = inner_ip_hdr(skb)->version == 4 ?
+				MPNIC_TWD_L3_TYPE_V6V4 : MPNIC_TWD_L3_TYPE_V6V6;
+	}
 }
 
 static bool
@@ -304,6 +316,7 @@ mpnic_tx_offloads(struct mpnic_ring *ring, struct sk_buff *skb, __le64 *meta)
 	*meta |= cpu_to_le64(FIELD_PREP(MPNIC_TWD_L2_HLEN,
 					skb_mac_header_len(skb) / 2) |
 			     FIELD_PREP(MPNIC_TWD_L3_IHLEN, hdrs.i3len / 2) |
+			     FIELD_PREP(MPNIC_TWD_L3_OHLEN, hdrs.o3len / 2) |
 			     FIELD_PREP(MPNIC_TWD_L3_TYPE, hdrs.l3_type) |
 			     FIELD_PREP(MPNIC_TWD_L4_TYPE, hdrs.l4_type));
 
@@ -362,6 +375,35 @@ netdev_tx_t mpnic_xmit_frame(struct sk_buff *skb, struct net_device *dev)
 	return mpnic_xmit_frame_ring(skb, mpn->tx[skb_get_queue_mapping(skb)]);
 }
 
+static bool mpnic_ipxip6_gso_ok(struct sk_buff *skb)
+{
+	struct ipv6hdr *ip6h;
+	__be16 frag_off;
+	u8 nexthdr;
+	int start;
+
+	ip6h = ipv6_hdr(skb);
+	if (ip6h->version != 6)
+		return false;
+
+	nexthdr = ip6h->nexthdr;
+	start = skb_network_offset(skb) + sizeof(*ip6h);
+	start = ipv6_skip_exthdr(skb, start, &nexthdr, &frag_off);
+
+	return !frag_off && start == skb_inner_network_offset(skb) &&
+	       (nexthdr == IPPROTO_IPV6 || nexthdr == IPPROTO_IPIP);
+}
+
+static netdev_features_t
+mpnic_features_check_encap_gso(struct sk_buff *skb, netdev_features_t features)
+{
+	if (skb_shinfo(skb)->gso_type & SKB_GSO_IPXIP6 &&
+	    mpnic_ipxip6_gso_ok(skb))
+		return features;
+
+	return features & ~NETIF_F_GSO_IPXIP6;
+}
+
 netdev_features_t mpnic_features_check(struct sk_buff *skb,
 				       struct net_device *dev,
 				       netdev_features_t features)
@@ -388,7 +430,10 @@ netdev_features_t mpnic_features_check(struct sk_buff *skb,
 	     !FIELD_FIT(MPNIC_TWD_MSS, skb_shinfo(skb)->gso_size)))
 		return features & ~NETIF_F_GSO_MASK;
 
-	return features;
+	if (!skb->encapsulation || !skb_is_gso(skb))
+		return features;
+
+	return mpnic_features_check_encap_gso(skb, features);
 }
 
 static void mpnic_clean_twq0(struct mpnic_napi_vector *nv, int napi_budget,
