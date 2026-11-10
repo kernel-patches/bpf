@@ -26,6 +26,7 @@
 #include <linux/export.h>
 #include <linux/delay.h>
 #include <linux/types.h>
+#include <linux/mutex.h>
 #include <linux/init.h>
 #include <linux/smp.h>
 #include <linux/sysfs.h>
@@ -569,16 +570,17 @@ struct dpti_pkg {
 };
 
 /*
- * Accessed from CPU hotplug callbacks and from code that runs while CPU
- * hotplug is inactive: the init and cleanup paths as well as syscore callbacks.
- * No extra locking needed.
+ * Serializes updates to dpti_pkgs[] and dpti_shut_down. To avoid deadlock, a
+ * path that needs both this mutex and the CPU hotplug lock always takes the
+ * hotplug lock first.
  */
+static DEFINE_MUTEX(dpti_mutex);
+
 static struct dpti_pkg *dpti_pkgs;
 
 /*
- * Set by the syscore shutdown callback before it disables the directed
- * interrupt, so that no CPU hotplug operation enables it again on the way to
- * kexec.
+ * Set under dpti_mutex by the syscore shutdown callback before it disables
+ * DPTI, so that no owner update enables it again on the way to kexec.
  */
 static bool dpti_shut_down;
 
@@ -624,6 +626,10 @@ static struct dpti_pkg *dpti_pkg_of_cpu_nocheck(unsigned int cpu)
 	return &dpti_pkgs[topology_logical_package_id(cpu)];
 }
 
+/*
+ * Reads dpti_pkgs[] without dpti_mutex: the syscore callers run with
+ * interrupts disabled on the only online CPU.
+ */
 static bool dpti_cpu_is_owner(unsigned int cpu)
 {
 	u16 pkg_id;
@@ -646,6 +652,8 @@ static void dpti_clear_all(void)
 
 	if (!dpti_supported())
 		return;
+
+	guard(mutex)(&dpti_mutex);
 
 	/*
 	 * No need to reset the owners: callers free dpti_pkgs[] or have shut
@@ -699,6 +707,7 @@ static unsigned int dpti_select_cpu(unsigned int pkg_cpu, unsigned int skip,
 	unsigned int cpu, pin, best = nr_cpu_ids;
 
 	lockdep_assert_cpus_held();
+	lockdep_assert_held(&dpti_mutex);
 
 	/*
 	 * Choose the user-pinned CPU if available: it is online and not going
@@ -745,6 +754,8 @@ static int dpti_update_owner(unsigned int cpu)
 	unsigned int new_cpu, old_cpu;
 	int ret;
 
+	lockdep_assert_held(&dpti_mutex);
+
 	if (dpti_shut_down)
 		return 0;
 
@@ -786,6 +797,8 @@ static int dpti_online(unsigned int cpu)
 	if (ret)
 		return ret;
 
+	guard(mutex)(&dpti_mutex);
+
 	/*
 	 * A CPU coming online may be a better owner than the one currently
 	 * programmed.
@@ -801,6 +814,8 @@ static void dpti_offline(unsigned int cpu)
 
 	if (dpti_lookup_pkg_id(cpu, &pkg_id))
 		return;
+
+	guard(mutex)(&dpti_mutex);
 
 	if (dpti_shut_down)
 		return;
@@ -866,7 +881,8 @@ static int dpti_syscore_suspend(void *data)
 
 static void dpti_syscore_shutdown(void *data)
 {
-	dpti_shut_down = true;
+	scoped_guard(mutex, &dpti_mutex)
+		dpti_shut_down = true;
 
 	dpti_clear_all();
 }
