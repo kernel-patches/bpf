@@ -30,6 +30,7 @@
 #include "intel_crtc.h"
 #include "intel_cursor.h"
 #include "intel_dbuf_bw.h"
+#include "intel_de.h"
 #include "intel_display_clock_gating.h"
 #include "intel_display_core.h"
 #include "intel_display_debugfs.h"
@@ -972,4 +973,24 @@ void intel_display_driver_pm_runtime_resume(struct intel_display *display)
 	}
 
 	skl_watermark_ipc_update(display);
+}
+
+void intel_display_driver_mmio_resume_early(struct intel_display *display)
+{
+	if (!HAS_DISPLAY(display))
+		return;
+
+	if (intel_de_unclaimed_mmio_detected(display))
+		drm_dbg_kms(display->drm,
+			    "Unclaimed access during suspend, bios?\n");
+}
+
+void intel_display_driver_mmio_suspend_late(struct intel_display *display)
+{
+	if (!HAS_DISPLAY(display))
+		return;
+
+	if (intel_de_arm_unclaimed_mmio_detection(display))
+		drm_err(display->drm,
+			"Unclaimed access detected prior to suspending\n");
 }

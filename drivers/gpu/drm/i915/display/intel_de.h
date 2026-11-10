@@ -14,6 +14,7 @@
 struct intel_mmio_funcs {
 	u32 (*read)(struct intel_display *display, intel_reg_t reg);
 	void (*write)(struct intel_display *display, intel_reg_t reg, u32 val);
+	bool (*check_for_unclaimed_mmio)(struct intel_display *display);
 };
 
 static inline struct intel_uncore *__to_uncore(struct intel_display *display)
@@ -22,6 +23,8 @@ static inline struct intel_uncore *__to_uncore(struct intel_display *display)
 }
 
 void intel_de_init(struct intel_display *display);
+bool intel_de_unclaimed_mmio_detected(struct intel_display *display);
+bool intel_de_arm_unclaimed_mmio_detection(struct intel_display *display);
 
 u8 intel_de_read8(struct intel_display *display, intel_reg_t reg);
 void intel_de_write8(struct intel_display *display, intel_reg_t reg, u8 val);

@@ -88,10 +88,6 @@ i915_param_named_unsafe(force_probe, charp, 0400,
 i915_param_named(memtest, bool, 0400,
 	"Perform a read/write test of all device memory on module load (default: off)");
 
-i915_param_named(mmio_debug, int, 0400,
-	"Enable the MMIO debug code for the first N failures (default: off). "
-	"This may negatively affect performance.");
-
 i915_param_named_unsafe(enable_guc, int, 0400,
 	"Enable GuC load for GuC submission and/or HuC load. "
 	"Required functionality can be selected using bitmask values. "

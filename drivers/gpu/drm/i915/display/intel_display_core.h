@@ -539,11 +539,17 @@ struct intel_display {
 		 * serializes all display register accesses done
 		 * using intel_de_{read,write}(), but not those
 		 * done using intel_de_{read,write}_fw().
+		 *
+		 * The lock also protects mmio.unclaimed_mmio_check
+		 * and read-modify-write of display->params.mmio_debug.
 		 */
 		spinlock_t lock;
 
 		struct intel_uncore *uncore;
 		const struct intel_mmio_funcs *funcs;
+
+		/* protected by mmio.lock */
+		int unclaimed_mmio_check;
 	} mmio;
 
 	struct {

@@ -238,8 +238,6 @@ static int i915_driver_early_probe(struct drm_i915_private *dev_priv)
 
 	intel_step_init(dev_priv);
 
-	intel_uncore_mmio_debug_init_early(dev_priv);
-
 	spin_lock_init(&dev_priv->gpu_error.lock);
 
 	intel_sbi_init(display);
@@ -1281,6 +1279,8 @@ static int i915_drm_resume_early(struct drm_device *dev)
 		drm_err(&dev_priv->drm,
 			"Resume prepare failed: %d, continuing anyway\n", ret);
 
+	intel_display_driver_mmio_resume_early(display);
+
 	for_each_gt(gt, dev_priv, i)
 		intel_gt_resume_early(gt);
 
@@ -1546,9 +1546,7 @@ static int i915_pm_runtime_suspend(struct device *kdev)
 	enable_rpm_wakeref_asserts(rpm);
 	intel_runtime_pm_driver_release(rpm);
 
-	if (intel_uncore_arm_unclaimed_mmio_detection(&dev_priv->uncore))
-		drm_err(&dev_priv->drm,
-			"Unclaimed access detected prior to suspending\n");
+	intel_display_driver_mmio_suspend_late(display);
 
 	/*
 	 * FIXME: Temporary hammer to avoid freezing the machine on our DGFX
@@ -1587,9 +1585,7 @@ static int i915_pm_runtime_resume(struct device *kdev)
 	if (root_pdev)
 		pci_d3cold_enable(root_pdev);
 
-	if (intel_uncore_unclaimed_mmio(&dev_priv->uncore))
-		drm_dbg(&dev_priv->drm,
-			"Unclaimed access during suspend, bios?\n");
+	intel_display_driver_mmio_resume_early(display);
 
 	intel_display_driver_pm_runtime_resume_early(display);
 

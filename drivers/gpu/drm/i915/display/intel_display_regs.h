@@ -3287,4 +3287,12 @@ enum skl_power_gate {
 #define   FW_BLC_SELF_FIFO_MASK    REG_BIT(16) /* 945 only */
 #define   FW_BLC_SELF_EN           REG_BIT(15) /* 945 only */
 
+#define FPGA_DBG		_MMIO(0x42300)
+#define   FPGA_DBG_RM_NOCLAIM	REG_BIT(31)
+
+#define CLAIM_ER		_MMIO(VLV_DISPLAY_BASE + 0x2028)
+#define   CLAIM_ER_CLR		REG_BIT(31)
+#define   CLAIM_ER_OVERFLOW	REG_BIT(16)
+#define   CLAIM_ER_CTR_MASK	REG_GENMASK(15, 0)
+
 #endif /* __INTEL_DISPLAY_REGS_H__ */
