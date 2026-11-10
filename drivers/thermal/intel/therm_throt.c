@@ -529,6 +529,13 @@ static unsigned int *dpti_owner_cpus;
  */
 static bool dpti_shut_down;
 
+/*
+ * Cleared once the hotplug callbacks are registered: at least one CPU
+ * attempted the setup by then, and the hardware is assumed sane from that
+ * point on.
+ */
+static bool dpti_in_boot __ro_after_init = true;
+
 static bool dpti_supported(void)
 {
 	if (!boot_cpu_has(X86_FEATURE_DPTI))
@@ -595,11 +602,7 @@ static int dpti_online(unsigned int cpu)
 		return 0;
 	}
 
-	/*
-	 * A failure indicates faulty hardware. Roll back completely so that
-	 * no other CPU tries. This is especially important during boot as all
-	 * CPUs may come online and would otherwise keep trying.
-	 */
+	/* Roll back on failure so the package reverts to broadcasting mode. */
 	enable = false;
 	dpti_config(&enable);
 
@@ -681,8 +684,7 @@ static void dpti_syscore_resume(void *data)
 {
 	/*
 	 * We can't do anything to handle errors. If direction fails for CPU0,
-	 * another CPU will take over or disable direction entirely during CPU
-	 * hotplug.
+	 * another CPU will take over during CPU hotplug.
 	 */
 	dpti_online(0);
 }
@@ -825,8 +827,16 @@ static int thermal_throttle_online(unsigned int cpu)
 	intel_hfi_online(cpu);
 
 	if (dpti_online(cpu)) {
-		pr_info_once("Failed to direct package thermal interrupts. All CPUs will receive it\n");
-		dpti_cleanup();
+		pr_warn_once("Failed to direct the thermal interrupt of package %u; reverting to broadcast on %s\n",
+			     topology_logical_package_id(cpu),
+			     dpti_in_boot ? "all packages" : "this package");
+
+		/*
+		 * A failure during boot indicates faulty hardware, so no other
+		 * CPU should try.
+		 */
+		if (dpti_in_boot)
+			dpti_cleanup();
 	}
 
 	/* Unmask the thermal vector after the above workqueues are initialized. */
@@ -871,11 +881,22 @@ static __init int thermal_throttle_init_device(void)
 
 	intel_hfi_init();
 
-	ret = cpuhp_setup_state(CPUHP_AP_ONLINE_DYN, "x86/therm:online",
-				thermal_throttle_online,
-				thermal_throttle_offline);
-	if (ret >= 0)
+	/*
+	 * A CPU coming online before dpti_in_boot is cleared would treat a DPTI
+	 * failure as faulty hardware and tear DPTI down. Hold the CPU hotplug
+	 * lock across the registration and the clear, so that the flag changes
+	 * only while no CPU can come online.
+	 */
+	guard(cpus_read_lock)();
+
+	ret = cpuhp_setup_state_cpuslocked(CPUHP_AP_ONLINE_DYN,
+					   "x86/therm:online",
+					   thermal_throttle_online,
+					   thermal_throttle_offline);
+	if (ret >= 0) {
+		dpti_in_boot = false;
 		return 0;
+	}
 
 	dpti_cleanup();
 
