@@ -1165,8 +1165,11 @@ static int ieee80211_set_monitor_channel(struct wiphy *wiphy,
 	ieee80211_link_release_channel(&sdata->deflink);
 	ret = ieee80211_link_use_channel(&sdata->deflink, &chanreq,
 					 IEEE80211_CHANCTX_SHARED);
-	if (ret)
+	if (ret) {
+		memset(&sdata->vif.bss_conf.chanreq, 0,
+		       sizeof(sdata->vif.bss_conf.chanreq));
 		return ret;
+	}
 done:
 	local->monitor_chanreq = chanreq;
 	return 0;

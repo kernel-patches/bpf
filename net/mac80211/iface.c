@@ -758,6 +758,8 @@ static void ieee80211_do_stop(struct ieee80211_sub_if_data *sdata, bool going_do
 			break;
 
 		ieee80211_link_release_channel(&sdata->deflink);
+		memset(&sdata->vif.bss_conf.chanreq, 0,
+		       sizeof(sdata->vif.bss_conf.chanreq));
 		fallthrough;
 	default:
 		if (!going_down)
