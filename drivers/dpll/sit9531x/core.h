@@ -15,6 +15,8 @@
 
 #include <linux/gpio/consumer.h>
 #include <linux/i2c.h>
+#include <linux/kthread.h>
+#include <linux/list.h>
 #include <linux/mutex.h>
 #include <linux/regmap.h>
 #include <linux/types.h>
@@ -32,6 +34,20 @@
  */
 #define SIT9531X_INTSYNC_PIN_ID		(SIT9531X_MAX_INPUTS + 1)
 #define SIT9531X_INTSYNC_OUT_PIN_ID	SIT9531X_MAX_OUTPUTS
+#define SIT9531X_STATUS_POLL_MS		500
+/*
+ * Consecutive polls with no answer after which the poll period stops doubling:
+ * eight periods, 4 s.
+ */
+#define SIT9531X_POLL_STRETCH_MAX	3
+
+/* selected_ref value when the active source is not a registered input */
+#define SIT9531X_REF_INVALID		0xFF
+
+/* SiTime IEEE OUI for EUI-64 generation */
+#define SIT9531X_OUI			0x0090C2FFFEULL
+
+struct sit9531x_dpll;
 
 /*
  * struct sit9531x_chip_info - chip variant identification
@@ -62,36 +78,104 @@ enum sit9531x_signal_mode {
 /*
  * struct sit9531x_ref - input reference state
  * @freq: configured frequency in Hz
+ * @enabled: input receiver is on
+ * @pll_mask: PLLs this input feeds (bit 0 = PLLA)
  * @sig_mode: signal mode of the input pair, read from CLKINx_INPUT_MODE at
  *   probe
  */
 struct sit9531x_ref {
 	u64		freq;
+	bool		enabled;
+	u8		pll_mask;
 	enum sit9531x_signal_mode	sig_mode;
 };
 
 /*
  * struct sit9531x_out - output state
  * @freq: output frequency in Hz
+ * @enabled: output is driving, not forced into Hi-Z
+ * @cmos: single-ended; the CMOS pad Hi-Z pairs apply, not the differential one
+ * @part_muted: single-ended with one pad forced and the other not; reported
+ *   as driven. The driver's mute forces both pads.
+ * @routed: mapped to @pll_idx by the initial configuration; an unrouted
+ *   output has no pin
+ * @pll_idx: PLL driving this output (0-3)
  */
 struct sit9531x_out {
 	u64		freq;
+	bool		enabled;
+	bool		cmos;
+	bool		part_muted;
+	bool		routed;
+	u8		pll_idx;
+};
+
+/*
+ * struct sit9531x_chan - per-PLL channel state
+ * @active: PLL reached its active state; an unused PLL never does and its
+ *   loss-of-lock bit stays clear
+ * @locked: PLL is active and its outer loop reports lock
+ * @stale: last state read failed; the fields hold the previous sample and
+ *   are not reported
+ * @mode: 0 = sync (outer loop enabled), 1 = free-run
+ * @selected_ref: logical index of the selected reference (INTSYNC:
+ *   SIT9531X_INTSYNC_PIN_ID), or SIT9531X_REF_INVALID for a reserved code
+ * @inner_lol: inner loop loss of lock
+ * @ho_freeze: holdover freeze active
+ * @ho_valid: holdover memory holds a valid estimate
+ * @manual_input: PLL uses its manual input select (pins or
+ *   GPIO_INPUT_FUNC_CTRL5..8), which table writes do not change; reported
+ *   as MANUAL
+ * @prio_mask: bit per canonical source in the priority table read back
+ *   from hardware
+ * @cfg_prio: configured priority of each canonical source, listed or not;
+ *   the table is built from it
+ * @cfg_known: bit per canonical source that has a @cfg_prio
+ * @seen_srcs: table last written or read into @cfg_prio; a read-back that
+ *   differs reloads @cfg_prio from hardware
+ * @seen_valid: @seen_srcs holds a table
+ */
+struct sit9531x_chan {
+	bool		active;
+	bool		locked;
+	bool		stale;
+	u8		mode;
+	u8		selected_ref;
+	bool		inner_lol;
+	bool		ho_freeze;
+	bool		ho_valid;
+	bool		manual_input;
+	u16		prio_mask;
+	u8		cfg_prio[SIT9531X_PRIO_NUM_SRC];
+	u16		cfg_known;
+	u8		seen_srcs[SIT9531X_PRIO_MAX_SLOTS];
+	bool		seen_valid;
 };
 
 /*
  * struct sit9531x_dev - SiT9531x device instance
+ * @info: chip variant info
  * @dev: parent device
  * @client: I2C client backing @regmap
  * @regmap: the 256-byte register window
- * @info: chip variant info
+ * @dplls: registered DPLL devices
  * @multiop_lock: serializes multi-register operations
  * @page_lock: held across a page select and its transfer; nests inside
  *   @multiop_lock
  * @page: current page, -1 when unknown
  * @ref: input reference states
  * @out: output states
+ * @chan: per-PLL channel states
  * @xtal_freq: crystal frequency in Hz
+ * @kworker: poll worker
+ * @work: poll work
+ * @poll_fails: consecutive failed polls, up to SIT9531X_POLL_STRETCH_MAX;
+ *   each doubles the period
+ * @clock_id: EUI-64 clock identifier
  * @reset_gpio: optional reset line, NULL if absent
+ * @irq: optional INTRB IRQ, 0 if not wired
+ * @intsync_src: PLL sourcing INTSYNC, or -1
+ * @irq_ack_fails: consecutive failed INTRB acknowledgements
  */
 struct sit9531x_dev {
 	struct device			*dev;
@@ -104,12 +188,41 @@ struct sit9531x_dev {
 	struct mutex			page_lock;
 	int				page;
 
+	u8			irq_ack_fails;
 	struct sit9531x_ref	ref[SIT9531X_MAX_INPUTS + 1]; /* +1 for xtal */
 	struct sit9531x_out	out[SIT9531X_MAX_OUTPUTS];
+	struct sit9531x_chan	chan[SIT9531X_NUM_PLLS];
 	u32			xtal_freq;
 
+	struct list_head	dplls;
+
+	struct kthread_worker		*kworker;
+	struct kthread_delayed_work	work;
+	u8				poll_fails;
+
+	u64			clock_id;
+
 	struct gpio_desc	*reset_gpio;
+	int			irq;
+
+	s8			intsync_src;
 };
+
+int sit9531x_read_u8(struct sit9531x_dev *sitdev, unsigned int reg,
+		     u8 *val);
+int sit9531x_write_u8(struct sit9531x_dev *sitdev, unsigned int reg,
+		      u8 val);
+int sit9531x_read_pll_u8(struct sit9531x_dev *sitdev, u8 pll_idx,
+			 u8 offset, u8 *val);
+int sit9531x_write_pll_u8(struct sit9531x_dev *sitdev, u8 pll_idx,
+			  u8 offset, u8 val);
+int sit9531x_update_pll_u8(struct sit9531x_dev *sitdev, u8 pll_idx,
+			   u8 offset, u8 mask, u8 val);
+
+static inline u8 sit9531x_pll_page(u8 pll_idx)
+{
+	return SIT9531X_PAGE_PLLA + pll_idx;
+}
 
 /*
  * Input index 2n is the P lane and 2n + 1 the N lane of pair n; index
@@ -126,19 +239,52 @@ static inline bool sit9531x_input_is_n(u8 index)
 	return index & 1;
 }
 
-/* Register page of PLL @pll_idx (0 = PLLA, 3 = PLLD). */
-static inline u8 sit9531x_pll_page(u8 pll_idx)
+static inline u8 sit9531x_input_hw_src(u8 index)
 {
-	return SIT9531X_PAGE_PLLA + pll_idx;
+	if (index == SIT9531X_MAX_INPUTS)
+		return SIT9531X_PRIO_SRC_OCXO;
+	if (index == SIT9531X_INTSYNC_PIN_ID)
+		return SIT9531X_PRIO_SRC_INTSYNC;
+	if (sit9531x_input_is_n(index))
+		return SIT9531X_PRIO_SRC_N_BASE + sit9531x_input_pair(index);
+	return sit9531x_input_pair(index);
 }
 
-int sit9531x_read_u8(struct sit9531x_dev *sitdev, unsigned int reg, u8 *val);
-int sit9531x_write_u8(struct sit9531x_dev *sitdev, unsigned int reg, u8 val);
-int sit9531x_read_pll_u8(struct sit9531x_dev *sitdev, u8 pll_idx, u8 offset,
-			 u8 *val);
-int sit9531x_write_pll_u8(struct sit9531x_dev *sitdev, u8 pll_idx, u8 offset,
-			  u8 val);
-int sit9531x_update_pll_u8(struct sit9531x_dev *sitdev, u8 pll_idx, u8 offset,
-			   u8 mask, u8 val);
+static inline u8 sit9531x_hw_src_input(u8 src)
+{
+	if (src < SIT9531X_NUM_INPUT_PAIRS)
+		return src * 2;
+	if (src == SIT9531X_PRIO_SRC_OCXO)
+		return SIT9531X_MAX_INPUTS;
+	if (src == SIT9531X_PRIO_SRC_INTSYNC)
+		return SIT9531X_INTSYNC_PIN_ID;
+	if (src >= SIT9531X_PRIO_SRC_N_BASE &&
+	    src < SIT9531X_PRIO_SRC_N_BASE + SIT9531X_NUM_INPUT_PAIRS)
+		return (src - SIT9531X_PRIO_SRC_N_BASE) * 2 + 1;
+	return SIT9531X_REF_INVALID;
+}
+
+static inline bool sit9531x_prio_src_usable(u8 src)
+{
+	return sit9531x_hw_src_input(src) != SIT9531X_REF_INVALID;
+}
+
+static inline const struct sit9531x_ref *
+sit9531x_ref_state_get(const struct sit9531x_dev *sitdev, u8 index)
+{
+	return &sitdev->ref[index];
+}
+
+static inline const struct sit9531x_out *
+sit9531x_out_state_get(const struct sit9531x_dev *sitdev, u8 index)
+{
+	return &sitdev->out[index];
+}
+
+static inline const struct sit9531x_chan *
+sit9531x_chan_state_get(const struct sit9531x_dev *sitdev, u8 pll_idx)
+{
+	return &sitdev->chan[pll_idx];
+}
 
 #endif /* _SIT9531X_CORE_H */
