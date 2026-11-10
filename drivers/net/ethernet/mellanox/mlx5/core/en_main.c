@@ -6173,9 +6173,53 @@ static int mlx5e_data_direct_event(struct notifier_block *nb,
 {
 	struct mlx5e_priv *priv = container_of(nb, struct mlx5e_priv,
 					       data_direct_nb);
+	struct mlx5_data_direct_dev *dd_dev = data;
+	struct net_device *netdev = priv->netdev;
+	struct mlx5e_params new_params;
+	bool enabled, reopen;
+	int err;
 
-	if (action == MLX5_DATA_DIRECT_UNBIND)
-		mlx5_core_dbg(priv->mdev, "data direct device unbound\n");
+	if (action != MLX5_DATA_DIRECT_UNBIND)
+		return NOTIFY_DONE;
+
+	rtnl_lock();
+	netdev_lock(netdev);
+
+	mutex_lock(&priv->state_lock);
+	enabled = MLX5E_GET_PFLAG(&priv->channels.params,
+				  MLX5E_PFLAG_DATA_DIRECT);
+	mutex_unlock(&priv->state_lock);
+	if (!enabled)
+		goto out;
+
+	reopen = netif_running(netdev);
+	netif_close(netdev);
+
+	err = netdev_unbind_dma_dev(netdev, dd_dev->device);
+	if (WARN_ON_ONCE(err)) {
+		netdev_err(netdev, "Failed to unbind dma device, won't reopen netdev, err=%d\n",
+			   err);
+		goto out;
+	}
+
+	mutex_lock(&priv->state_lock);
+	new_params = priv->channels.params;
+	MLX5E_SET_PFLAG(&new_params, MLX5E_PFLAG_DATA_DIRECT, false);
+	mlx5e_safe_switch_params(priv, &new_params, NULL, NULL, false);
+	mutex_unlock(&priv->state_lock);
+
+	netdev_info(netdev, "data_direct device unbound, disabled data_direct\n");
+
+	if (reopen) {
+		err = netif_open(netdev, NULL);
+		if (err)
+			netdev_err(netdev, "Failed to reopen after data_direct unbind, err=%d\n",
+				   err);
+	}
+
+out:
+	netdev_unlock(netdev);
+	rtnl_unlock();
 
 	return NOTIFY_OK;
 }
@@ -6408,6 +6452,24 @@ out_ipsec_cleanup:
 	return err;
 }
 
+static void mlx5e_data_direct_unbind_dev(struct mlx5e_priv *priv)
+{
+	struct mlx5_data_direct_dev *dd_dev;
+	bool enabled;
+
+	dd_dev = mlx5_data_direct_get_dev(priv->mdev->data_direct);
+	if (!dd_dev)
+		return;
+
+	mutex_lock(&priv->state_lock);
+	enabled = MLX5E_GET_PFLAG(&priv->channels.params,
+				  MLX5E_PFLAG_DATA_DIRECT);
+	mutex_unlock(&priv->state_lock);
+	if (enabled)
+		WARN_ON_ONCE(netdev_unbind_dma_dev(priv->netdev,
+						   dd_dev->device));
+}
+
 static void mlx5e_nic_disable(struct mlx5e_priv *priv)
 {
 	struct mlx5_core_dev *mdev = priv->mdev;
@@ -6425,6 +6487,7 @@ static void mlx5e_nic_disable(struct mlx5e_priv *priv)
 		mlx5e_close_trap(priv->en_trap);
 		priv->en_trap = NULL;
 	}
+	mlx5e_data_direct_unbind_dev(priv);
 	netdev_unlock(priv->netdev);
 	rtnl_unlock();
 

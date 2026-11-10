@@ -198,9 +198,11 @@ static void mlx5_data_direct_bind(struct mlx5_data_direct_registration *reg,
 static void
 mlx5_data_direct_do_unbind(struct mlx5_data_direct_registration *reg)
 {
+	struct mlx5_data_direct_dev *dev = reg->dd.dev;
+
 	WRITE_ONCE(reg->dd.dev, NULL);
 	blocking_notifier_call_chain(&reg->users, MLX5_DATA_DIRECT_UNBIND,
-				     NULL);
+				     dev);
 }
 
 int mlx5_data_direct_init(struct mlx5_core_dev *mdev)
