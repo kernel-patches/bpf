@@ -160,7 +160,6 @@ int amdgpu_gart_size = -1; /* auto */
 int amdgpu_gtt_size = -1; /* auto */
 int amdgpu_moverate = -1; /* auto */
 int amdgpu_audio = -1;
-int amdgpu_hw_i2c;
 int amdgpu_pcie_gen2 = -1;
 int amdgpu_msi = -1;
 char amdgpu_lockup_timeout[AMDGPU_MAX_TIMEOUT_PARAM_LENGTH];
@@ -320,13 +319,6 @@ module_param_named(moverate, amdgpu_moverate, int, 0600);
  */
 MODULE_PARM_DESC(audio, "HDMI/DP Audio enable for displays (-1 = auto, 0 = disable, 1 = enable)");
 module_param_named(audio, amdgpu_audio, int, 0444);
-
-/**
- * DOC: hw_i2c (int)
- * To enable hw i2c engine. Only affects non-DC display handling. The default is 0 (Disabled).
- */
-MODULE_PARM_DESC(hw_i2c, "hw i2c engine enable (0 = disable)");
-module_param_named(hw_i2c, amdgpu_hw_i2c, int, 0444);
 
 /**
  * DOC: pcie_gen2 (int)

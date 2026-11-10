@@ -32,7 +32,6 @@
 #include "amdgpu_i2c.h"
 #include "amdgpu_atombios.h"
 #include "atom.h"
-#include "atombios_i2c.h"
 
 /* bit banging i2c */
 static int amdgpu_i2c_pre_xfer(struct i2c_adapter *i2c_adap)
@@ -151,11 +150,6 @@ static void amdgpu_i2c_set_data(void *i2c_priv, int data)
 	WREG32(rec->en_data_reg, val);
 }
 
-static const struct i2c_algorithm amdgpu_atombios_i2c_algo = {
-	.master_xfer = amdgpu_atombios_i2c_xfer,
-	.functionality = amdgpu_atombios_i2c_func,
-};
-
 struct amdgpu_i2c_chan *amdgpu_i2c_create(struct drm_device *dev,
 					  const struct amdgpu_i2c_bus_rec *rec,
 					  const char *name)
@@ -164,7 +158,7 @@ struct amdgpu_i2c_chan *amdgpu_i2c_create(struct drm_device *dev,
 	int ret;
 
 	/* don't add the mm_i2c bus unless hw_i2c is enabled */
-	if (rec->mm_i2c && (amdgpu_hw_i2c == 0))
+	if (rec->mm_i2c)
 		return NULL;
 
 	i2c = kzalloc_obj(struct amdgpu_i2c_chan);
@@ -177,34 +171,23 @@ struct amdgpu_i2c_chan *amdgpu_i2c_create(struct drm_device *dev,
 	i2c->dev = dev;
 	i2c_set_adapdata(&i2c->adapter, i2c);
 	mutex_init(&i2c->mutex);
-	if (rec->hw_capable &&
-	    amdgpu_hw_i2c) {
-		/* hw i2c using atom */
-		snprintf(i2c->adapter.name, sizeof(i2c->adapter.name),
-			 "AMDGPU i2c hw bus %s", name);
-		i2c->adapter.algo = &amdgpu_atombios_i2c_algo;
-		ret = devm_i2c_add_adapter(dev->dev, &i2c->adapter);
-		if (ret)
-			goto out_free;
-	} else {
-		/* set the amdgpu bit adapter */
-		snprintf(i2c->adapter.name, sizeof(i2c->adapter.name),
-			 "AMDGPU i2c bit bus %s", name);
-		i2c->adapter.algo_data = &i2c->bit;
-		i2c->bit.pre_xfer = amdgpu_i2c_pre_xfer;
-		i2c->bit.post_xfer = amdgpu_i2c_post_xfer;
-		i2c->bit.setsda = amdgpu_i2c_set_data;
-		i2c->bit.setscl = amdgpu_i2c_set_clock;
-		i2c->bit.getsda = amdgpu_i2c_get_data;
-		i2c->bit.getscl = amdgpu_i2c_get_clock;
-		i2c->bit.udelay = 10;
-		i2c->bit.timeout = usecs_to_jiffies(2200);	/* from VESA */
-		i2c->bit.data = i2c;
-		ret = i2c_bit_add_bus(&i2c->adapter);
-		if (ret) {
-			DRM_ERROR("Failed to register bit i2c %s\n", name);
-			goto out_free;
-		}
+	/* set the amdgpu bit adapter */
+	snprintf(i2c->adapter.name, sizeof(i2c->adapter.name),
+		 "AMDGPU i2c bit bus %s", name);
+	i2c->adapter.algo_data = &i2c->bit;
+	i2c->bit.pre_xfer = amdgpu_i2c_pre_xfer;
+	i2c->bit.post_xfer = amdgpu_i2c_post_xfer;
+	i2c->bit.setsda = amdgpu_i2c_set_data;
+	i2c->bit.setscl = amdgpu_i2c_set_clock;
+	i2c->bit.getsda = amdgpu_i2c_get_data;
+	i2c->bit.getscl = amdgpu_i2c_get_clock;
+	i2c->bit.udelay = 10;
+	i2c->bit.timeout = usecs_to_jiffies(2200);	/* from VESA */
+	i2c->bit.data = i2c;
+	ret = i2c_bit_add_bus(&i2c->adapter);
+	if (ret) {
+		DRM_ERROR("Failed to register bit i2c %s\n", name);
+		goto out_free;
 	}
 
 	return i2c;

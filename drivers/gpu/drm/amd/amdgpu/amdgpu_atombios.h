@@ -134,6 +134,9 @@ struct amdgpu_i2c_bus_rec amdgpu_atombios_lookup_i2c_gpio(struct amdgpu_device *
 void amdgpu_atombios_i2c_init(struct amdgpu_device *adev);
 void amdgpu_atombios_oem_i2c_init(struct amdgpu_device *adev, u8 i2c_id);
 
+void amdgpu_atombios_i2c_channel_trans(struct amdgpu_device* adev,
+		u8 slave_addr, u8 line_number, u8 offset, u8 data);
+
 int amdgpu_atombios_get_clock_info(struct amdgpu_device *adev);
 
 int amdgpu_atombios_get_gfx_info(struct amdgpu_device *adev);

@@ -187,6 +187,24 @@ void amdgpu_atombios_oem_i2c_init(struct amdgpu_device *adev, u8 i2c_id)
 	}
 }
 
+#define TARGET_HW_I2C_CLOCK 50
+
+void amdgpu_atombios_i2c_channel_trans(struct amdgpu_device *adev, u8 slave_addr, u8 line_number, u8 offset, u8 data)
+{
+	PROCESS_I2C_CHANNEL_TRANSACTION_PS_ALLOCATION args;
+	int index = GetIndexIntoMasterTable(COMMAND, ProcessI2cChannelTransaction);
+
+	args.ucRegIndex = offset;
+	args.lpI2CDataOut = data;
+	args.ucFlag = 1;
+	args.ucI2CSpeed = TARGET_HW_I2C_CLOCK;
+	args.ucTransBytes = 1;
+	args.ucSlaveAddr = slave_addr;
+	args.ucLineNumber = line_number;
+
+	amdgpu_atom_execute_table(adev->mode_info.atom_context, index, (uint32_t *)&args, sizeof(args));
+}
+
 union firmware_info {
 	ATOM_FIRMWARE_INFO info;
 	ATOM_FIRMWARE_INFO_V1_2 info_12;
