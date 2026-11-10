@@ -103,6 +103,9 @@ struct mpnic_queue_stats {
 			u64_stats_t dropped;
 			u64_stats_t alloc_failed;
 			u64_stats_t errors;
+			u64_stats_t csum_complete;
+			u64_stats_t csum_unnecessary;
+			u64_stats_t csum_none;
 		} rcq;
 		struct {
 			u64_stats_t alloc_failed;
