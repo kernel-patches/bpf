@@ -328,7 +328,8 @@ struct net_device *mpnic_netdev_alloc(struct mpnic_dev *mpd)
 		NETIF_F_RXCSUM |
 		NETIF_F_TSO |
 		NETIF_F_TSO_ECN |
-		NETIF_F_TSO6;
+		NETIF_F_TSO6 |
+		NETIF_F_GSO_UDP_L4;
 
 	netdev->hw_features |= netdev->features;
 	netdev->vlan_features |= netdev->features;
