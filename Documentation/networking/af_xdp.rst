@@ -428,8 +428,10 @@ area and that your largest packet size can be 2K.
 There is also an option to set the headroom of each single buffer in
 the UMEM. If you set this to N bytes, it means that the packet will
 start N bytes into the buffer leaving the first N bytes for the
-application to use. The final option is the flags field, but it will
-be dealt with in separate sections for each UMEM flag.
+application to use. In a multi-buffer packet, only the first buffer is
+guaranteed this headroom; the others may start at offset 0 of their
+chunk. The final option is the flags field, but it will be dealt with
+in separate sections for each UMEM flag.
 
 SO_BINDTODEVICE setsockopt
 --------------------------

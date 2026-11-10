@@ -387,6 +387,54 @@ err_alloc:
 	return -ENOMEM;
 }
 
+static int xsk_pp_rcv_copy(struct xdp_sock *xs, struct xdp_buff *xdp, u32 len)
+{
+	u32 frame_size = __xsk_pool_get_rx_frame_size(xs->pool);
+	u32 headroom = xsk_pool_get_headroom(xs->pool);
+	void *copy_from = xsk_copy_xdp_start(xdp);
+	u32 from_len, meta_len, rem, num_desc, i;
+	u64 addrs[MAX_SKB_FRAGS + 1];
+	skb_frag_t *frag = NULL;
+	u32 to_len, copied;
+	void *to;
+
+	from_len = xdp->data_end - copy_from;
+	meta_len = xdp->data - copy_from;
+	rem = len + meta_len;
+
+	num_desc = (len - 1) / frame_size + 1;
+	if (num_desc > ARRAY_SIZE(addrs)) {
+		xs->rx_dropped++;
+		return -ENOSPC;
+	}
+	if (xskq_prod_nb_free(xs->rx, num_desc) < num_desc) {
+		xs->rx_queue_full++;
+		return -ENOBUFS;
+	}
+	if (!xsk_pp_claim_copy(xs->pool->pp, addrs, num_desc)) {
+		xs->rx_dropped++;
+		return -ENOMEM;
+	}
+
+	if (xdp_buff_has_frags(xdp))
+		frag = &xdp_get_shared_info_from_buff(xdp)->frags[0];
+
+	for (i = 0; rem && i < num_desc; i++) {
+		to = xp_raw_get_data(xs->pool, addrs[i] + headroom) - meta_len;
+		to_len = frame_size + meta_len;
+		copied = xsk_copy_xdp(to, &copy_from, to_len, &from_len, &frag,
+				      rem);
+		rem -= copied;
+
+		__xskq_prod_reserve_desc(xs->rx, addrs[i] + headroom,
+					 copied - meta_len,
+					 rem ? XDP_PKT_CONTD : 0);
+		meta_len = 0;
+	}
+
+	return 0;
+}
+
 static bool xsk_tx_writeable(struct xdp_sock *xs)
 {
 	if (xskq_cons_present_entries(xs->tx) > xs->tx->nentries / 2)
@@ -454,8 +502,14 @@ static int xsk_rcv_check(struct xdp_sock *xs, struct xdp_buff *xdp, u32 len)
 
 static void xsk_flush(struct xdp_sock *xs)
 {
+	struct xsk_pp *pp = xs->pool->pp;
+
+	if (pp)
+		xsk_pp_flush(pp);
 	xskq_prod_submit(xs->rx);
-	__xskq_cons_release(xs->pool->fq);
+	/* A provider releases FILL entries under its lock. */
+	if (!pp)
+		__xskq_cons_release(xs->pool->fq);
 	sock_def_readable(&xs->sk);
 }
 
@@ -465,6 +519,11 @@ int xsk_generic_rcv(struct xdp_sock *xs, struct xdp_buff *xdp)
 	int err;
 
 	err = xsk_rcv_check(xs, xdp, len);
+	/* Only the NAPI of the queue feeds a memory provider socket. */
+	if (!err && xs->pool->pp) {
+		xs->rx_dropped++;
+		err = -EOPNOTSUPP;
+	}
 	if (!err) {
 		spin_lock_bh(&xs->pool->rx_lock);
 		err = __xsk_rcv(xs, xdp, len);
@@ -489,7 +548,26 @@ static int xsk_rcv(struct xdp_sock *xs, struct xdp_buff *xdp)
 		return xsk_rcv_zc(xs, xdp, len);
 	}
 
-	err = __xsk_rcv(xs, xdp, len);
+	if (!xs->pool->pp) {
+		err = __xsk_rcv(xs, xdp, len);
+	} else {
+		/* A CPUMAP program runs XDP on another CPU, not in NAPI. */
+		if (unlikely(!xdp_rxq_info_is_reg(xdp->rxq))) {
+			xs->rx_dropped++;
+			return -EINVAL;
+		}
+
+		err = xsk_pp_rcv_zc(xs->pool->pp, xs, xdp);
+		if (err != -EXDEV)
+			return err;
+
+		/* Copy only packets of the queue, from its NAPI */
+		if (unlikely(!xsk_pp_queue_buf(xs->pool->pp, xdp))) {
+			xs->rx_dropped++;
+			return -EINVAL;
+		}
+		err = xsk_pp_rcv_copy(xs, xdp, len);
+	}
 	if (!err)
 		xdp_return_buff(xdp);
 	return err;

@@ -19,11 +19,13 @@
 #include "xsk_queue.h"
 
 #define XSK_PP_DMA_ATTR	(DMA_ATTR_WEAK_ORDERING | DMA_ATTR_SKIP_CPU_SYNC)
+#define XSK_PP_BATCH	64
 
 enum xsk_pp_chunk {
 	XSK_PP_USER,	/* owned by userspace */
 	XSK_PP_POOL,	/* owned by a page pool */
 	XSK_PP_REUSE,	/* on the reuse stack */
+	XSK_PP_COPY,	/* copied into, not yet on the RX ring */
 };
 
 struct xsk_pp {
@@ -38,6 +40,9 @@ struct xsk_pp {
 	/* RX queue of the provider, NULL once it is removed */
 	struct netdev_rx_queue __rcu *rxq;
 	bool starved;
+	/* Chunks of unpublished RX descriptors, NAPI only */
+	u32 pending_cnt;
+	netmem_ref pending[XSK_PP_BATCH];
 	u8 *state;
 	u32 reuse_cnt;
 	u32 reuse[];
@@ -292,6 +297,166 @@ static bool xsk_pp_refill_done(struct page_pool *pool, enum pp_refill state)
 	spin_unlock_bh(&pp->lock);
 
 	return !more && wait;
+}
+
+static u32 xsk_pp_chunk_idx(netmem_ref netmem)
+{
+	return net_iov_idx(netmem_to_net_iov(netmem));
+}
+
+/* Called from the queue NAPI, before the RX ring publishes the descriptors */
+void xsk_pp_flush(struct xsk_pp *pp)
+{
+	struct page_pool *pool;
+	u32 i, j, n = 0;
+	u32 idx;
+
+	if (!pp->pending_cnt)
+		return;
+
+	spin_lock_bh(&pp->lock);
+	for (i = 0; i < pp->pending_cnt; i++) {
+		idx = xsk_pp_chunk_idx(pp->pending[i]);
+		if (pp->state[idx] == XSK_PP_COPY) {
+			pp->state[idx] = XSK_PP_USER;
+			continue;
+		}
+
+		DEBUG_NET_WARN_ON_ONCE(pp->state[idx] != XSK_PP_POOL);
+		pp->pending[n++] = pp->pending[i];
+	}
+
+	/* A queue restart may change the page pool within a batch. */
+	for (i = 0; i < n; i = j) {
+		pool = netmem_get_pp(pp->pending[i]);
+		for (j = i + 1; j < n; j++)
+			if (netmem_get_pp(pp->pending[j]) != pool)
+				break;
+
+		net_mp_release_page_pool_bulk(pool, pp->pending + i, j - i);
+		while (i < j) {
+			idx = xsk_pp_chunk_idx(pp->pending[i++]);
+			pp->state[idx] = XSK_PP_USER;
+		}
+	}
+	pp->pending_cnt = 0;
+	spin_unlock_bh(&pp->lock);
+}
+
+bool xsk_pp_queue_buf(struct xsk_pp *pp, struct xdp_buff *xdp)
+{
+	netmem_ref head = xdp_buff_head_netmem(xdp);
+	struct netdev_rx_queue *rxq;
+	struct page_pool *pool;
+	bool ours = false;
+
+	/* An XDP test run for the queue brings buffers of its own */
+	if (!netmem_is_net_iov(head))
+		return false;
+
+	pool = netmem_get_pp(head);
+	rcu_read_lock();
+	rxq = rcu_dereference(pp->rxq);
+	if (pool && rxq)
+		ours = pool->slow.netdev == rxq->dev &&
+		       pool->slow.queue_idx == get_netdev_rx_queue_index(rxq);
+	rcu_read_unlock();
+
+	return ours;
+}
+
+static bool xsk_pp_owns(struct xsk_pp *pp, netmem_ref netmem)
+{
+	struct page_pool *pool;
+
+	if (!netmem_is_net_iov(netmem))
+		return false;
+
+	pool = netmem_get_pp(netmem);
+	return pool && pool->mp_priv == pp;
+}
+
+/* Returns -EXDEV for a packet that must be copied. Called from the NAPI. */
+int xsk_pp_rcv_zc(struct xsk_pp *pp, struct xdp_sock *xs,
+		  struct xdp_buff *xdp)
+{
+	struct skb_shared_info *sinfo = NULL;
+	void *umem = xs->pool->addrs;
+	u32 i, nr_frags = 0, num_desc;
+	netmem_ref head;
+	skb_frag_t *frag;
+
+	head = xdp_buff_head_netmem(xdp);
+	if (!xsk_pp_owns(pp, head))
+		return -EXDEV;
+
+	if (unlikely(xdp_buff_has_frags(xdp))) {
+		if (!xs->sg)
+			return -EXDEV;
+
+		sinfo = xdp_get_shared_info_from_buff(xdp);
+		nr_frags = sinfo->nr_frags;
+		for (i = 0; i < nr_frags; i++)
+			if (!xsk_pp_owns(pp, skb_frag_netmem(&sinfo->frags[i])))
+				return -EXDEV;
+	}
+
+	num_desc = nr_frags + 1;
+	if (xskq_prod_nb_free(xs->rx, num_desc) < num_desc) {
+		xs->rx_queue_full++;
+		return -ENOBUFS;
+	}
+	if (pp->pending_cnt + num_desc > XSK_PP_BATCH)
+		xsk_pp_flush(pp);
+
+	__xskq_prod_reserve_desc(xs->rx, xdp->data - umem,
+				 xdp->data_end - xdp->data,
+				 nr_frags ? XDP_PKT_CONTD : 0);
+	pp->pending[pp->pending_cnt++] = head;
+
+	for (i = 0; i < nr_frags; i++) {
+		frag = &sinfo->frags[i];
+		__xskq_prod_reserve_desc(xs->rx, skb_frag_address(frag) - umem,
+					 skb_frag_size(frag),
+					 i + 1 < nr_frags ? XDP_PKT_CONTD : 0);
+		pp->pending[pp->pending_cnt++] = skb_frag_netmem(frag);
+	}
+
+	return 0;
+}
+
+/* The chunks go to userspace with the next xsk_pp_flush(). Called from the
+ * NAPI. On failure the chunks taken from FILL stay with the provider.
+ */
+bool xsk_pp_claim_copy(struct xsk_pp *pp, u64 *addrs, u32 n)
+{
+	netmem_ref *netmems;
+	u32 i, got, idx;
+
+	BUILD_BUG_ON(MAX_SKB_FRAGS + 1 > XSK_PP_BATCH);
+	if (pp->pending_cnt + n > XSK_PP_BATCH)
+		xsk_pp_flush(pp);
+
+	netmems = pp->pending + pp->pending_cnt;
+	spin_lock_bh(&pp->lock);
+	got = xsk_pp_alloc_reuse(pp, netmems, n);
+	got += xsk_pp_alloc_fill(pp, netmems + got, n - got);
+	for (i = 0; i < got; i++) {
+		idx = xsk_pp_chunk_idx(netmems[i]);
+		if (got < n) {
+			pp->state[idx] = XSK_PP_REUSE;
+			pp->reuse[pp->reuse_cnt++] = idx;
+			continue;
+		}
+
+		pp->state[idx] = XSK_PP_COPY;
+		addrs[i] = (u64)idx << pp->area.niov_shift;
+	}
+	if (got == n)
+		pp->pending_cnt += n;
+	spin_unlock_bh(&pp->lock);
+
+	return got == n;
 }
 
 static int xsk_pp_nl_fill(void *mp_priv, struct sk_buff *rsp,

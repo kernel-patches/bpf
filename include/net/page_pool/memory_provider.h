@@ -49,6 +49,8 @@ struct memory_provider_ops {
 bool net_mp_niov_set_dma_addr(struct net_iov *niov, dma_addr_t addr);
 void net_mp_niov_set_page_pool(struct page_pool *pool, struct net_iov *niov);
 void net_mp_niov_clear_page_pool(struct net_iov *niov);
+void net_mp_release_page_pool_bulk(struct page_pool *pool,
+				   netmem_ref *netmems, u32 count);
 
 int netif_mp_open_rxq(struct net_device *dev, unsigned int rxq_idx,
 		      const struct pp_memory_provider_params *p,

@@ -1401,7 +1401,7 @@ bool net_mp_niov_set_dma_addr(struct net_iov *niov, dma_addr_t addr)
 }
 
 /* Associate a niov with a page pool. Should follow with a matching
- * net_mp_niov_clear_page_pool()
+ * net_mp_niov_clear_page_pool() or net_mp_release_page_pool_bulk()
  */
 void net_mp_niov_set_page_pool(struct page_pool *pool, struct net_iov *niov)
 {
@@ -1421,4 +1421,36 @@ void net_mp_niov_clear_page_pool(struct net_iov *niov)
 	netmem_ref netmem = net_iov_to_netmem(niov);
 
 	page_pool_clear_pp_info(netmem);
+}
+
+/**
+ * net_mp_release_page_pool_bulk() - take net_iovs back from a page pool
+ * @pool: page pool that holds one reference to each net_iov
+ * @netmems: net_iovs of the memory provider of @pool
+ * @count: number of entries in @netmems
+ *
+ * A memory provider takes net_iovs out of a page pool without
+ * ->release_netmem(), for example to give them to userspace. @pool may be
+ * freed on return.
+ */
+void net_mp_release_page_pool_bulk(struct page_pool *pool,
+				   netmem_ref *netmems, u32 count)
+{
+	bool trace = trace_page_pool_state_release_enabled();
+	atomic_t *release_cnt = &pool->pages_state_release_cnt;
+	int released;
+	u32 i;
+
+	for (i = 0; i < count; i++) {
+		DEBUG_NET_WARN_ON_ONCE(netmem_get_pp(netmems[i]) != pool);
+		page_pool_clear_pp_info(netmems[i]);
+		if (!trace)
+			continue;
+
+		released = atomic_inc_return_relaxed(release_cnt);
+		trace_page_pool_state_release(pool, netmems[i], released);
+	}
+
+	if (!trace)
+		atomic_add(count, release_cnt);
 }

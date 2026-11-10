@@ -43,6 +43,11 @@ int xsk_pp_bind(struct xsk_buff_pool *pool, struct net_device *dev,
 		u16 queue_id);
 void xsk_pp_unbind(struct xsk_buff_pool *pool);
 int xsk_pp_wakeup(struct xsk_pp *pp);
+void xsk_pp_flush(struct xsk_pp *pp);
+bool xsk_pp_queue_buf(struct xsk_pp *pp, struct xdp_buff *xdp);
+int xsk_pp_rcv_zc(struct xsk_pp *pp, struct xdp_sock *xs,
+		  struct xdp_buff *xdp);
+bool xsk_pp_claim_copy(struct xsk_pp *pp, u64 *addrs, u32 n);
 int xp_alloc_heads(struct xsk_buff_pool *pool);
 void xsk_clear_pool_at_qid(struct net_device *dev, u16 queue_id);
 int xsk_reg_pool_at_qid(struct net_device *dev, struct xsk_buff_pool *pool,
