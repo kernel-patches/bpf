@@ -8681,15 +8681,20 @@ int btrfs_get_dev_stats(struct btrfs_fs_info *fs_info,
 	mutex_lock(&fs_devices->device_list_mutex);
 	args.devid = stats->devid;
 	dev = btrfs_find_device(fs_info->fs_devices, &args);
-	mutex_unlock(&fs_devices->device_list_mutex);
 
 	if (!dev) {
+		mutex_unlock(&fs_devices->device_list_mutex);
 		btrfs_warn(fs_info, "get dev_stats failed, device not found");
 		return -ENODEV;
-	} else if (!dev->dev_stats_valid) {
+	}
+
+	if (!dev->dev_stats_valid) {
+		mutex_unlock(&fs_devices->device_list_mutex);
 		btrfs_warn(fs_info, "get dev_stats failed, not yet valid");
 		return -ENODEV;
-	} else if (stats->flags & BTRFS_DEV_STATS_RESET) {
+	}
+
+	if (stats->flags & BTRFS_DEV_STATS_RESET) {
 		for (i = 0; i < BTRFS_DEV_STAT_VALUES_MAX; i++) {
 			if (stats->nr_items > i)
 				stats->values[i] =
@@ -8704,6 +8709,9 @@ int btrfs_get_dev_stats(struct btrfs_fs_info *fs_info,
 			if (stats->nr_items > i)
 				stats->values[i] = btrfs_dev_stat_read(dev, i);
 	}
+
+	mutex_unlock(&fs_devices->device_list_mutex);
+
 	if (stats->nr_items > BTRFS_DEV_STAT_VALUES_MAX)
 		stats->nr_items = BTRFS_DEV_STAT_VALUES_MAX;
 	return 0;
