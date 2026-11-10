@@ -48,11 +48,11 @@ struct vdso_arch_data {
  *
  * There is one vdso_timestamp object in vvar for each vDSO-accelerated
  * clock_id. For high-resolution clocks, this encodes the time
- * corresponding to vdso_time_data.cycle_last. For coarse clocks this encodes
+ * corresponding to vdso_clock.cycle_last. For coarse clocks this encodes
  * the actual time.
  *
  * To be noticed that for highres clocks nsec is left-shifted by
- * vdso_time_data[x].shift.
+ * vdso_clock.shift.
  */
 struct vdso_timestamp {
 	u64	sec;
