@@ -2405,6 +2405,11 @@ static int set_pflag_tx_port_ts(struct net_device *netdev, bool enable)
 	return err;
 }
 
+static int set_pflag_data_direct(struct net_device *netdev, bool enable)
+{
+	return -EOPNOTSUPP;
+}
+
 static const struct pflag_desc mlx5e_priv_flags[MLX5E_NUM_PFLAGS] = {
 	{ "rx_cqe_moder",        set_pflag_rx_cqe_based_moder },
 	{ "tx_cqe_moder",        set_pflag_tx_cqe_based_moder },
@@ -2414,6 +2419,7 @@ static const struct pflag_desc mlx5e_priv_flags[MLX5E_NUM_PFLAGS] = {
 	{ "xdp_tx_mpwqe",        set_pflag_xdp_tx_mpwqe },
 	{ "skb_tx_mpwqe",        set_pflag_skb_tx_mpwqe },
 	{ "tx_port_ts",          set_pflag_tx_port_ts },
+	{ "data_direct",         set_pflag_data_direct },
 };
 
 static int mlx5e_handle_pflag(struct net_device *netdev,
