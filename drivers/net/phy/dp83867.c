@@ -119,6 +119,9 @@
 #define DP83867_IO_MUX_CFG_IO_IMPEDANCE_MASK	0x1f
 #define DP83867_IO_MUX_CFG_IO_IMPEDANCE_MAX	0x0
 #define DP83867_IO_MUX_CFG_IO_IMPEDANCE_MIN	0x1f
+/* Output impedance at IO_IMPEDANCE_MIN and IO_IMPEDANCE_MAX (datasheet) */
+#define DP83867_IO_IMPEDANCE_MIN_OHMS		35
+#define DP83867_IO_IMPEDANCE_MAX_OHMS		70
 #define DP83867_IO_MUX_CFG_CLK_O_DISABLE	BIT(6)
 #define DP83867_IO_MUX_CFG_CLK_O_SEL_MASK	(0x1f << 8)
 #define DP83867_IO_MUX_CFG_CLK_O_SEL_SHIFT	8
@@ -542,7 +545,8 @@ static int dp83867_of_init_io_impedance(struct phy_device *phydev)
 	struct device *dev = &phydev->mdio.dev;
 	struct device_node *of_node = dev->of_node;
 	struct nvmem_cell *cell;
-	u8 *buf, val;
+	u8 *buf;
+	u32 val;
 	int ret;
 
 	cell = of_nvmem_cell_get(of_node, "io_impedance_ctrl");
@@ -553,12 +557,29 @@ static int dp83867_of_init_io_impedance(struct phy_device *phydev)
 						"failed to get nvmem cell io_impedance_ctrl\n");
 
 		/* If no nvmem cell, check for the boolean properties. */
-		if (of_property_read_bool(of_node, "ti,max-output-impedance"))
+		if (of_property_read_bool(of_node, "ti,max-output-impedance")) {
 			dp83867->io_impedance = DP83867_IO_MUX_CFG_IO_IMPEDANCE_MAX;
-		else if (of_property_read_bool(of_node, "ti,min-output-impedance"))
+		} else if (of_property_read_bool(of_node, "ti,min-output-impedance")) {
 			dp83867->io_impedance = DP83867_IO_MUX_CFG_IO_IMPEDANCE_MIN;
-		else
+		} else if (of_property_read_u32(of_node, "ti,output-impedance-ohms", &val) == 0) {
+			if (val < DP83867_IO_IMPEDANCE_MIN_OHMS ||
+			    val > DP83867_IO_IMPEDANCE_MAX_OHMS) {
+				phydev_err(phydev, "'ti,output-impedance-ohms' contents out of range\n");
+				return -ERANGE;
+			}
+			/*
+			 * 0x00 = 70 ohms ... 0x1f = 35 ohms. The datasheet
+			 * does not specify the settings in between, map the
+			 * range linearly to the nearest one.
+			 */
+			dp83867->io_impedance =
+				DIV_ROUND_CLOSEST((DP83867_IO_IMPEDANCE_MAX_OHMS - val) *
+						  DP83867_IO_MUX_CFG_IO_IMPEDANCE_MASK,
+						  DP83867_IO_IMPEDANCE_MAX_OHMS -
+						  DP83867_IO_IMPEDANCE_MIN_OHMS);
+		} else {
 			dp83867->io_impedance = -1; /* leave at default */
+		}
 
 		return 0;
 	}
