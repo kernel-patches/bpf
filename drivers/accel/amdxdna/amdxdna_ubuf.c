@@ -6,183 +6,127 @@
 #include <drm/amdxdna_accel.h>
 #include <drm/drm_device.h>
 #include <drm/drm_print.h>
-#include <linux/dma-buf.h>
 #include <linux/overflow.h>
 #include <linux/pagemap.h>
 #include <linux/vmalloc.h>
 
+#include "amdxdna_gem.h"
 #include "amdxdna_pci_drv.h"
 #include "amdxdna_ubuf.h"
 
-struct amdxdna_ubuf_priv {
-	struct page **pages;
-	u64 nr_pages;
-	struct mm_struct *mm;
-};
-
-static struct sg_table *amdxdna_ubuf_map(struct dma_buf_attachment *attach,
-					 enum dma_data_direction direction)
+static int amdxdna_ubuf_hmm_register(struct amdxdna_client *client,
+				     struct amdxdna_gem_obj *abo,
+				     struct amdxdna_drm_va_entry *va_ent)
 {
-	struct amdxdna_ubuf_priv *ubuf = attach->dmabuf->priv;
-	struct sg_table *sg;
+	struct vm_area_struct *vma;
 	int ret;
 
-	sg = kzalloc_obj(*sg);
-	if (!sg)
-		return ERR_PTR(-ENOMEM);
-
-	ret = sg_alloc_table_from_pages(sg, ubuf->pages, ubuf->nr_pages, 0,
-					ubuf->nr_pages << PAGE_SHIFT, GFP_KERNEL);
-	if (ret)
-		goto err_free_sg;
-
-	ret = dma_map_sgtable(attach->dev, sg, direction, 0);
-	if (ret)
-		goto err_free_table;
-
-	return sg;
-
-err_free_table:
-	sg_free_table(sg);
-err_free_sg:
-	kfree(sg);
-	return ERR_PTR(ret);
-}
-
-static void amdxdna_ubuf_unmap(struct dma_buf_attachment *attach,
-			       struct sg_table *sg,
-			       enum dma_data_direction direction)
-{
-	dma_unmap_sgtable(attach->dev, sg, direction, 0);
-	sg_free_table(sg);
-	kfree(sg);
-}
-
-static void amdxdna_ubuf_release(struct dma_buf *dbuf)
-{
-	struct amdxdna_ubuf_priv *ubuf = dbuf->priv;
-
-	unpin_user_pages(ubuf->pages, ubuf->nr_pages);
-	kvfree(ubuf->pages);
-	atomic64_sub(ubuf->nr_pages, &ubuf->mm->pinned_vm);
-	mmdrop(ubuf->mm);
-	kfree(ubuf);
-}
-
-static const struct dma_buf_ops amdxdna_ubuf_dmabuf_ops = {
-	.map_dma_buf = amdxdna_ubuf_map,
-	.unmap_dma_buf = amdxdna_ubuf_unmap,
-	.release = amdxdna_ubuf_release,
-};
-
-struct dma_buf *amdxdna_get_ubuf(struct drm_device *dev,
-				 u32 num_entries, void __user *va_entries)
-{
-	struct amdxdna_dev *xdna = to_xdna_dev(dev);
-	unsigned long lock_limit, new_pinned;
-	struct amdxdna_drm_va_entry *va_ent;
-	struct amdxdna_ubuf_priv *ubuf;
-	u32 npages, start = 0;
-	struct dma_buf *dbuf;
-	int i, ret;
-	DEFINE_DMA_BUF_EXPORT_INFO(exp_info);
-
-	if (!can_do_mlock())
-		return ERR_PTR(-EPERM);
-
-	ubuf = kzalloc_obj(*ubuf);
-	if (!ubuf)
-		return ERR_PTR(-ENOMEM);
-
-	ubuf->mm = current->mm;
-	mmgrab(ubuf->mm);
-
-	va_ent = kvzalloc_objs(*va_ent, num_entries);
-	if (!va_ent) {
-		ret = -ENOMEM;
-		goto free_ubuf;
+	mmap_write_lock(client->mm);
+	vma = find_vma(client->mm, va_ent->vaddr);
+	if (!vma || vma->vm_start > va_ent->vaddr ||
+	    vma->vm_end - va_ent->vaddr < va_ent->len) {
+		ret = -EINVAL;
+		goto unlock;
 	}
 
-	if (copy_from_user(va_ent, va_entries, sizeof(*va_ent) * num_entries)) {
+	ret = amdxdna_hmm_register(abo, vma, va_ent->vaddr - vma->vm_start, va_ent->len);
+	if (!ret && !(vma->vm_flags & (VM_PFNMAP | VM_IO)))
+		amdxdna_mark_map_invalid(abo);
+
+unlock:
+	mmap_write_unlock(client->mm);
+
+	return ret;
+}
+
+static void amdxdna_gem_ubuf_obj_free(struct drm_gem_object *gobj)
+{
+	struct amdxdna_gem_obj *abo = to_xdna_obj(gobj);
+
+	amdxdna_hmm_unreg_umaps(abo, true);
+	cancel_work_sync(&abo->hmm_unreg_work);
+
+	drm_gem_object_release(gobj);
+	amdxdna_gem_destroy_obj(abo);
+}
+
+static struct dma_buf *amdxdna_gem_ubuf_obj_export(struct drm_gem_object *gobj, int flags)
+{
+	return ERR_PTR(-EOPNOTSUPP);
+}
+
+static const struct drm_gem_object_funcs amdxdna_gem_ubuf_obj_funcs = {
+	.free = amdxdna_gem_ubuf_obj_free,
+	.open = amdxdna_gem_obj_open,
+	.close = amdxdna_gem_obj_close,
+	.export = amdxdna_gem_ubuf_obj_export,
+};
+
+struct amdxdna_gem_obj *amdxdna_alloc_ubuf_bo(struct amdxdna_client *client,
+					      u32 num_entries, void __user *va_entries)
+{
+	struct amdxdna_dev *xdna = client->xdna;
+	struct amdxdna_drm_va_entry *va_ent;
+	struct amdxdna_gem_obj *abo;
+	size_t bufsize;
+	long ret;
+
+	if (!amdxdna_pasid_on(client))
+		return ERR_PTR(-EOPNOTSUPP);
+
+	/*
+	 * There is not any valid case to use more than 1 entry.
+	 * Hardcode maximum entries to 1.
+	 */
+	if (num_entries > 1)
+		return ERR_PTR(-EINVAL);
+
+	if (current->mm != client->mm)
+		return ERR_PTR(-EINVAL);
+
+	va_ent = kvzalloc_obj(*va_ent);
+	if (!va_ent)
+		return ERR_PTR(-ENOMEM);
+
+	if (copy_from_user(va_ent, va_entries, sizeof(*va_ent))) {
 		XDNA_DBG(xdna, "Access va entries failed");
 		ret = -EINVAL;
 		goto free_ent;
 	}
 
-	for (i = 0, exp_info.size = 0; i < num_entries; i++) {
-		if (!IS_ALIGNED(va_ent[i].vaddr, PAGE_SIZE) ||
-		    !IS_ALIGNED(va_ent[i].len, PAGE_SIZE) ||
-		    !va_ent[i].len) {
-			XDNA_ERR(xdna, "Invalid address or len %llx, %llx",
-				 va_ent[i].vaddr, va_ent[i].len);
-			ret = -EINVAL;
-			goto free_ent;
-		}
-
-		if (check_add_overflow(exp_info.size, va_ent[i].len, &exp_info.size)) {
-			ret = -EINVAL;
-			goto free_ent;
-		}
+	if (!IS_ALIGNED(va_ent->vaddr, PAGE_SIZE) ||
+	    !IS_ALIGNED(va_ent->len, PAGE_SIZE) ||
+	    !va_ent->len ||
+	    check_add_overflow(va_ent->vaddr, va_ent->len, &bufsize)) {
+		XDNA_DBG(xdna, "Invalid address or len %llx, %llx",
+			 va_ent->vaddr, va_ent->len);
+		ret = -EINVAL;
+		goto free_ent;
 	}
 
-	ubuf->nr_pages = exp_info.size >> PAGE_SHIFT;
-	lock_limit = rlimit(RLIMIT_MEMLOCK) >> PAGE_SHIFT;
-	new_pinned = atomic64_add_return(ubuf->nr_pages, &ubuf->mm->pinned_vm);
-	if (new_pinned > lock_limit && !capable(CAP_IPC_LOCK)) {
-		XDNA_DBG(xdna, "New pin %ld, limit %ld, cap %d",
-			 new_pinned, lock_limit, capable(CAP_IPC_LOCK));
-		ret = -ENOMEM;
-		goto sub_pin_cnt;
+	bufsize = va_ent->len;
+	abo = amdxdna_gem_create_obj(&xdna->ddev, bufsize);
+	if (IS_ERR(abo)) {
+		ret = PTR_ERR(abo);
+		goto free_ent;
 	}
 
-	ubuf->pages = kvmalloc_objs(*ubuf->pages, ubuf->nr_pages);
-	if (!ubuf->pages) {
-		ret = -ENOMEM;
-		goto sub_pin_cnt;
-	}
+	abo->type = AMDXDNA_BO_SHARE;
+	abo->mem.uva = va_ent->vaddr;
+	to_gobj(abo)->funcs = &amdxdna_gem_ubuf_obj_funcs;
+	drm_gem_private_object_init(&xdna->ddev, to_gobj(abo), bufsize);
 
-	for (i = 0; i < num_entries; i++) {
-		npages = va_ent[i].len >> PAGE_SHIFT;
+	ret = amdxdna_ubuf_hmm_register(client, abo, va_ent);
+	if (ret)
+		goto put_obj;
 
-		ret = pin_user_pages_fast(va_ent[i].vaddr, npages,
-					  FOLL_WRITE | FOLL_LONGTERM,
-					  &ubuf->pages[start]);
-		if (ret >= 0) {
-			start += ret;
-			if (ret != npages) {
-				XDNA_ERR(xdna, "Partially pinned pages %d/%u", ret, npages);
-				ret = -ENOMEM;
-				goto destroy_pages;
-			}
-		} else {
-			XDNA_ERR(xdna, "Failed to pin pages ret %d", ret);
-			goto destroy_pages;
-		}
-	}
-
-	exp_info.ops = &amdxdna_ubuf_dmabuf_ops;
-	exp_info.priv = ubuf;
-	exp_info.flags = O_RDWR | O_CLOEXEC;
-
-	dbuf = dma_buf_export(&exp_info);
-	if (IS_ERR(dbuf)) {
-		ret = PTR_ERR(dbuf);
-		goto destroy_pages;
-	}
 	kvfree(va_ent);
 
-	return dbuf;
+	return abo;
 
-destroy_pages:
-	if (start)
-		unpin_user_pages(ubuf->pages, start);
-	kvfree(ubuf->pages);
-sub_pin_cnt:
-	atomic64_sub(ubuf->nr_pages, &ubuf->mm->pinned_vm);
+put_obj:
+	drm_gem_object_put(to_gobj(abo));
 free_ent:
 	kvfree(va_ent);
-free_ubuf:
-	mmdrop(ubuf->mm);
-	kfree(ubuf);
 	return ERR_PTR(ret);
 }
