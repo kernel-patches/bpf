@@ -18,6 +18,7 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/sched/isolation.h>
+#include <linux/sched/signal.h>
 #include <linux/syscore_ops.h>
 #include <linux/interrupt.h>
 #include <linux/notifier.h>
@@ -760,6 +761,13 @@ static void dpti_warn_if_isolated(unsigned int cpu, enum dpti_rank rank)
 			     topology_logical_package_id(cpu), cpu);
 }
 
+static void dpti_warn_if_pinned_isolated(unsigned int cpu)
+{
+	if (dpti_cpu_rank(cpu) == DPTI_RANK_ISOLATED)
+		pr_warn_ratelimited("Package %u thermal interrupt pinned to nohz_full-isolated CPU%u\n",
+				    topology_logical_package_id(cpu), cpu);
+}
+
 /*
  * Reselect the owner for @cpu's package and migrate to it, but only on a
  * strict rank improvement.
@@ -882,6 +890,121 @@ static void dpti_offline(unsigned int cpu)
 }
 
 /*
+ * The DPTI owner is a per-package property, but it is exposed through the
+ * existing per-CPU thermal_throttle sysfs group.
+ *
+ * Reading reports whether @cpu is the owner programmed in hardware, not
+ * whether it is pinned. A released pin therefore still reads 1 until the
+ * placement changes, and while a pinned CPU is offline the remaining CPUs
+ * report the automatically chosen fallback.
+ */
+static ssize_t package_interrupt_owner_show(struct device *dev,
+					    struct device_attribute *attr,
+					    char *buf)
+{
+	unsigned int cpu = dev->id;
+	bool is_owner;
+	u16 pkg_id;
+	int ret;
+
+	ret = dpti_lookup_pkg_id(cpu, &pkg_id);
+	if (ret)
+		return ret;
+
+	scoped_guard(mutex, &dpti_mutex)
+		is_owner = dpti_pkgs[pkg_id].owner == cpu;
+
+	return sysfs_emit(buf, "%u\n", is_owner);
+}
+
+static int dpti_pin_owner(unsigned int cpu)
+{
+	struct dpti_pkg *pkg = dpti_pkg_of_cpu_nocheck(cpu);
+	unsigned int old_pin;
+	int ret;
+
+	guard(mutex)(&dpti_mutex);
+
+	/* The pin outranks every automatic choice, so it always migrates. */
+	old_pin = pkg->pin;
+	pkg->pin = cpu;
+
+	/*
+	 * A failed write must not change policy or get silently retried on the
+	 * next hotplug event.
+	 */
+	ret = dpti_update_owner(cpu);
+	if (ret)
+		pkg->pin = old_pin;
+	else
+		dpti_warn_if_pinned_isolated(cpu);
+
+	return ret;
+}
+
+static void dpti_unpin_owner(unsigned int cpu)
+{
+	struct dpti_pkg *pkg = dpti_pkg_of_cpu_nocheck(cpu);
+
+	guard(mutex)(&dpti_mutex);
+
+	if (pkg->pin != cpu)
+		return;
+
+	pkg->pin = nr_cpu_ids;
+
+	/*
+	 * Without the pin, a housekeeping CPU of the package outranks an
+	 * isolated owner. Migrate rather than wait for a re-evaluation that may
+	 * never come. A hardware acknowledgment failure leaves the interrupt in
+	 * place, which is still a valid outcome of releasing a pin.
+	 */
+	dpti_update_owner(cpu);
+}
+
+static ssize_t package_interrupt_owner_store(struct device *dev,
+					     struct device_attribute *attr,
+					     const char *buf, size_t count)
+{
+	unsigned int cpu = dev->id;
+	bool want_pin;
+	int ret;
+
+	ret = dpti_lookup_pkg_id(cpu, NULL);
+	if (ret)
+		return ret;
+
+	ret = kstrtobool(buf, &want_pin);
+	if (ret)
+		return ret;
+
+	/*
+	 * The selection reads the package's online CPUs; the programming runs
+	 * remotely on the CPU it picks. Both need the CPU hotplug lock, which
+	 * this write cannot block on: offlining @cpu holds it while
+	 * sysfs_remove_group() waits for this write to release its reference on
+	 * the attribute. Restart the syscall instead, which drops that
+	 * reference and lets the offline proceed. Avoid busy looping with a 5ms
+	 * sleep between tries. lock_device_hotplug_sysfs() follows the same
+	 * approach.
+	 */
+	if (!cpus_read_trylock()) {
+		msleep(5);
+		return restart_syscall();
+	}
+
+	if (want_pin)
+		ret = dpti_pin_owner(cpu);
+	else
+		dpti_unpin_owner(cpu);
+
+	cpus_read_unlock();
+
+	return ret ? ret : count;
+}
+static DEVICE_ATTR_RW(package_interrupt_owner);
+
+/*
  * CPU0 may own the directed interrupt, but the CPU hotplug callbacks are not
  * called for CPU0 during suspend and resume.
  */
@@ -947,8 +1070,16 @@ static __init void dpti_init(void)
 
 static void dpti_cleanup(void)
 {
+	unsigned int cpu;
+
 	if (!dpti_supported())
 		return;
+
+	/* The attribute must not outlive the per-package state. */
+	for_each_online_cpu(cpu)
+		sysfs_remove_file_from_group(&get_cpu_device(cpu)->kobj,
+					     &dev_attr_package_interrupt_owner.attr,
+					     thermal_attr_group.name);
 
 	unregister_syscore(&dpti_syscore);
 	dpti_clear_all();
@@ -965,6 +1096,14 @@ static int thermal_throttle_add_dev(struct device *dev, unsigned int cpu)
 	err = sysfs_create_group(&dev->kobj, &thermal_attr_group);
 	if (err)
 		return err;
+
+	if (dpti_supported()) {
+		err = sysfs_add_file_to_group(&dev->kobj,
+					      &dev_attr_package_interrupt_owner.attr,
+					      thermal_attr_group.name);
+		if (err)
+			goto del_group;
+	}
 
 	if (cpu_has(c, X86_FEATURE_PLN) && int_pln_enable) {
 		err = sysfs_add_file_to_group(&dev->kobj,
