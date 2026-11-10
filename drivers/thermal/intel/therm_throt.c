@@ -514,9 +514,14 @@ static void dpti_config_this_cpu(bool enable)
 	wrmsrq(MSR_IA32_THERM_INTERRUPT, msr_val);
 }
 
-static void dpti_config_ipi(void *info)
+static void dpti_clear_ipi(void *unused)
 {
-	dpti_config_this_cpu(*((bool *)info));
+	dpti_config_this_cpu(false);
+}
+
+static void dpti_clear_on_cpu(unsigned int cpu)
+{
+	smp_call_function_single(cpu, dpti_clear_ipi, NULL, true);
 }
 
 /* The unused argument matches the smp_call_on_cpu() callback signature. */
@@ -536,6 +541,18 @@ static int dpti_program_this_cpu(void *unused)
 	dpti_config_this_cpu(false);
 
 	return ret;
+}
+
+/*
+ * MSR_IA32_PACKAGE_THERM_STATUS is package-scoped, so the acknowledgment must
+ * be polled on the same package. Run a worker bound to @cpu: it cannot be
+ * migrated and may wait for the acknowledgment for as long as 15ms.
+ */
+static int dpti_program_on_cpu(unsigned int cpu)
+{
+	lockdep_assert_cpus_held();
+
+	return smp_call_on_cpu(cpu, dpti_program_this_cpu, NULL, false);
 }
 
 /**
@@ -619,7 +636,6 @@ static bool dpti_cpu_is_owner(unsigned int cpu)
  */
 static void dpti_clear_all(void)
 {
-	bool enable = false;
 	int i;
 
 	if (!dpti_supported())
@@ -630,11 +646,12 @@ static void dpti_clear_all(void)
 	 * DPTI down.
 	 */
 	for (i = 0; i < topology_max_packages(); i++) {
-		if (dpti_pkgs[i].owner == nr_cpu_ids)
+		unsigned int owner = dpti_pkgs[i].owner;
+
+		if (owner == nr_cpu_ids)
 			continue;
 
-		smp_call_function_single(dpti_pkgs[i].owner, dpti_config_ipi,
-					 &enable, true);
+		dpti_clear_on_cpu(owner);
 	}
 }
 
@@ -657,7 +674,7 @@ static int dpti_online(unsigned int cpu)
 	if (dpti_pkgs[pkg_id].owner != nr_cpu_ids)
 		return 0;
 
-	ret = dpti_program_this_cpu(NULL);
+	ret = dpti_program_on_cpu(cpu);
 	if (ret)
 		return ret;
 
@@ -669,7 +686,6 @@ static int dpti_online(unsigned int cpu)
 static void dpti_offline(unsigned int cpu)
 {
 	unsigned int new_cpu;
-	bool enable;
 	u16 pkg_id;
 
 	if (!dpti_supported())
@@ -691,35 +707,14 @@ static void dpti_offline(unsigned int cpu)
 	 * offline.
 	 */
 	new_cpu = cpumask_any_but(topology_core_cpumask(cpu), cpu);
-	if (new_cpu < nr_cpu_ids) {
-		enable = true;
-		thermal_clear_package_intr_status(PACKAGE_LEVEL,
-						  PACKAGE_THERM_STATUS_DPTI_ACK);
-
-		/*
-		 * We are here via CPU hotplug. Since we are holding the
-		 * cpu_hotplug_lock, @new_cpu cannot go offline and interrupts
-		 * are enabled, so the SMP function call is safe.
-		 *
-		 * The syscore suspend callback runs with interrupts disabled,
-		 * but it does not reach this path because all the secondary
-		 * CPUs are offline.
-		 */
-		smp_call_function_single(new_cpu, dpti_config_ipi, &enable,
-					 true);
-	}
 
 	/*
-	 * If hardware does not acknowledge the directed interrupt setup on
-	 * @new_cpu, disable the redirection. Since no other CPU is configured
-	 * to receive the package-level interrupt, all CPUs in the package will
-	 * receive it.
+	 * dpti_program_on_cpu() undoes a setup that the hardware does not
+	 * acknowledge on @new_cpu. With @cpu cleared below, no CPU is then
+	 * configured to receive the package-level interrupt: all CPUs in the
+	 * package receive it.
 	 */
-	enable = false;
-	if (new_cpu < nr_cpu_ids && dpti_wait_for_ack()) {
-		smp_call_function_single(new_cpu, dpti_config_ipi, &enable,
-					 true);
-
+	if (new_cpu < nr_cpu_ids && dpti_program_on_cpu(new_cpu)) {
 		pr_warn_once("Failed to redirect package thermal interrupt from CPU%u to CPU%u; reverting to broadcast\n",
 			     cpu, new_cpu);
 
