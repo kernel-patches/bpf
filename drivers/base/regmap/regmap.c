@@ -2596,9 +2596,9 @@ static int _regmap_multi_reg_write(struct regmap *map,
 		 */
 		range = _regmap_range_lookup(map, reg);
 		if (range || regs[i].delay_us) {
-			size_t len = sizeof(struct reg_sequence)*num_regs;
-			struct reg_sequence *base = kmemdup(regs, len,
-							   GFP_KERNEL);
+			struct reg_sequence *base;
+
+			base = kmemdup_array(regs, num_regs, sizeof(*regs), GFP_KERNEL);
 			if (!base)
 				return -ENOMEM;
 			ret = _regmap_range_multi_paged_reg_write(map, base,
