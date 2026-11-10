@@ -346,6 +346,64 @@ Note that a UMEM can be shared between sockets on the same queue id
 and device, as well as between queues on the same device and between
 devices at the same time.
 
+Zero-copy through page pool
+---------------------------
+
+Some drivers, for example fbnic, receive into the UMEM through a page
+pool memory provider instead of their own allocator. The socket API
+does not change: zero-copy mode is selected as before, and XDP_OPTIONS
+reports it.
+
+The requirements are:
+
+* Aligned chunks of a size the driver supports, 4 KiB for fbnic.
+* The queue id has an RX queue, also for a socket that only transmits.
+  Such a socket needs the FILL and COMPLETION rings, like any other.
+* The driver accepts the headroom, MTU and XDP program. fbnic accepts
+  a UMEM headroom of 0, 128 or 256 bytes. An MTU larger than its header
+  buffer needs XDP_USE_SG, and frags support in an XDP program. The
+  first buffer of a larger frame may hold only its headers, and the
+  other buffers start at offset 0 of their chunk. Such a frame can take
+  one chunk more than in copy mode.
+
+If the device cannot do zero-copy for the socket, a bind with
+XDP_ZEROCOPY fails with EOPNOTSUPP, while a bind without it falls back
+to copy mode. MTU and XDP program changes that a bound socket cannot
+handle are refused.
+
+Binding restarts the RX queue. The queue takes chunks from the FILL
+ring and returns them on the RX ring. A FILL entry for a chunk that
+the RX side still owns is dropped; TX chunks stay with userspace until
+their completion, as before. XDP_PASS copies the packet. Redirects to
+anything but a socket copy single-buffer packets and drop others. A
+redirect to a socket of another queue fails, and generic XDP cannot
+redirect to the socket.
+
+When the queue has no chunks left to post, RX waits for the FILL ring.
+With XDP_USE_NEED_WAKEUP, the flag on the FILL ring stays set, and
+userspace must call poll(), or recvfrom() with an RX ring or sendto()
+with a TX ring, after it posts entries. Without the flag, the queue
+polls the FILL ring, which costs CPU time while the ring is empty.
+Post FILL entries before bind() if possible.
+
+A driver supports this mode when it:
+
+* uses netmem for header buffers and XDP_TX, and handles page pools
+  whose buffers cannot be split (see page_pool_supports_frag()),
+* selects the provider with PP_FLAG_MEM_PROVIDER and pp_rx_role for
+  one page pool of each queue, and honours the rx_headroom queue
+  configuration,
+* calls page_pool_refill_done() after each refill,
+* sends socket TX descriptors from the NAPI of the RX queue, with
+  xsk_tx_peek_release_desc_batch() for the pool that xsk_rxq_pool()
+  returns,
+* advertises NETDEV_XDP_ACT_XSK_ZEROCOPY and xdp_zc_max_segs,
+* checks the setup in XDP_VALIDATE_XSK_POOL, and sets xsk_page_pool
+  in its netdev_queue_mgmt_ops.
+
+The core schedules that NAPI for RX and TX wakeups, so no
+ndo_xsk_wakeup is needed.
+
 XDP_USE_NEED_WAKEUP bind flag
 -----------------------------
 
