@@ -5817,6 +5817,19 @@ void scx_group_set_bandwidth(struct task_group *tg,
 
 	percpu_up_read(&scx_cgroup_ops_rwsem);
 }
+
+void scx_group_set_runtime(struct task_group *tg, u64 runtime_us)
+{
+	struct scx_sched *sch;
+
+	percpu_down_read(&scx_cgroup_ops_rwsem);
+	sch = scx_tg_knob_sched(tg);
+
+	if (scx_cgroup_enabled && sch && SCX_HAS_OP(sch, cgroup_set_runtime))
+		SCX_CALL_OP(sch, cgroup_set_runtime, NULL, tg_cgrp(tg), runtime_us);
+
+	percpu_up_read(&scx_cgroup_ops_rwsem);
+}
 #endif	/* CONFIG_EXT_GROUP_SCHED */
 
 #if defined(CONFIG_EXT_GROUP_SCHED) || defined(CONFIG_EXT_SUB_SCHED)
@@ -9230,6 +9243,7 @@ static int bpf_scx_check_member(const struct btf_type *t,
 	case offsetof(struct sched_ext_ops, cgroup_exit):
 	case offsetof(struct sched_ext_ops, cgroup_prep_move):
 	case offsetof(struct sched_ext_ops, cgroup_set_bandwidth):
+	case offsetof(struct sched_ext_ops, cgroup_set_runtime):
 #endif
 	case offsetof(struct sched_ext_ops, cpu_online):
 	case offsetof(struct sched_ext_ops, cpu_offline):
@@ -9392,6 +9406,7 @@ static void sched_ext_ops__cgroup_cancel_move(struct task_struct *p, struct cgro
 static void sched_ext_ops__cgroup_set_weight(struct cgroup *cgrp, u32 weight) {}
 static void sched_ext_ops__cgroup_set_bandwidth(struct cgroup *cgrp, u64 period_us, u64 quota_us, u64 burst_us) {}
 static void sched_ext_ops__cgroup_set_idle(struct cgroup *cgrp, bool idle) {}
+static void sched_ext_ops__cgroup_set_runtime(struct cgroup *cgrp, u64 runtime_us) {}
 #endif	/* CONFIG_EXT_GROUP_SCHED */
 static s32 sched_ext_ops__sub_attach(struct scx_sub_attach_args *args) { return -EINVAL; }
 static void sched_ext_ops__sub_detach(struct scx_sub_detach_args *args) {}
@@ -9434,6 +9449,7 @@ static struct sched_ext_ops __bpf_ops_sched_ext_ops = {
 	.cgroup_set_weight	= sched_ext_ops__cgroup_set_weight,
 	.cgroup_set_bandwidth	= sched_ext_ops__cgroup_set_bandwidth,
 	.cgroup_set_idle	= sched_ext_ops__cgroup_set_idle,
+	.cgroup_set_runtime	= sched_ext_ops__cgroup_set_runtime,
 #endif
 	.sub_attach		= sched_ext_ops__sub_attach,
 	.sub_detach		= sched_ext_ops__sub_detach,
@@ -9502,6 +9518,7 @@ static struct sched_ext_ops_cid __bpf_ops_sched_ext_ops_cid = {
 	.cpuctl_set_weight	= sched_ext_ops__cgroup_set_weight,
 	.cpuctl_set_bandwidth	= sched_ext_ops__cgroup_set_bandwidth,
 	.cpuctl_set_idle	= sched_ext_ops__cgroup_set_idle,
+	.cpuctl_set_runtime	= sched_ext_ops__cgroup_set_runtime,
 #endif
 	.sub_attach		= sched_ext_ops__sub_attach,
 	.sub_detach		= sched_ext_ops__sub_detach,
@@ -12226,6 +12243,7 @@ static const u32 scx_kf_allow_flags[] = {
 	[SCX_OP_IDX(cgroup_set_weight)]	= SCX_KF_ALLOW_UNLOCKED,
 	[SCX_OP_IDX(cgroup_set_bandwidth)] = SCX_KF_ALLOW_UNLOCKED,
 	[SCX_OP_IDX(cgroup_set_idle)]	= SCX_KF_ALLOW_UNLOCKED,
+	[SCX_OP_IDX(cgroup_set_runtime)] = SCX_KF_ALLOW_UNLOCKED,
 #endif	/* CONFIG_EXT_GROUP_SCHED */
 	[SCX_OP_IDX(sub_attach)]	= SCX_KF_ALLOW_UNLOCKED,
 	[SCX_OP_IDX(sub_detach)]	= SCX_KF_ALLOW_UNLOCKED,
@@ -12395,6 +12413,7 @@ static int __init scx_init(void)
 	CID_OFFSET_MATCH(cgroup_set_weight, cpuctl_set_weight);
 	CID_OFFSET_MATCH(cgroup_set_bandwidth, cpuctl_set_bandwidth);
 	CID_OFFSET_MATCH(cgroup_set_idle, cpuctl_set_idle);
+	CID_OFFSET_MATCH(cgroup_set_runtime, cpuctl_set_runtime);
 #endif
 	/* @priv tail must align since both share the same data block */
 	CID_OFFSET_MATCH(priv, priv);

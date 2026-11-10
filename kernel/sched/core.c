@@ -10088,6 +10088,14 @@ static u64 cpu_period_read_u64(struct cgroup_subsys_state *css,
 	return period_us;
 }
 
+/*
+ * Held across a bandwidth or runtime write and the sched_ext callback that
+ * follows it, so that the BPF scheduler gets the writes in the order the fair
+ * class applied them. The callback runs after the fair class's update has
+ * dropped cpus_read_lock() and cfs_constraints_mutex.
+ */
+static DEFINE_MUTEX(tg_bandwidth_mutex);
+
 static int tg_set_bandwidth(struct task_group *tg,
 			    u64 period_us, u64 quota_us, u64 burst_us)
 {
@@ -10128,6 +10136,8 @@ static int tg_set_bandwidth(struct task_group *tg,
 
 	if (quota_us != RUNTIME_INF && burst_us > max_bw_runtime_us - quota_us)
 		return -EINVAL;
+
+	guard(mutex)(&tg_bandwidth_mutex);
 
 #ifdef CONFIG_CFS_BANDWIDTH
 	ret = tg_set_cfs_bandwidth(tg, period_us, quota_us, burst_us);
@@ -10193,12 +10203,23 @@ static int cpu_runtime_write_u64(struct cgroup_subsys_state *css,
 				 struct cftype *cftype, u64 runtime_us)
 {
 	struct task_group *tg = css_tg(css);
+	int ret;
 
 	if (runtime_us > max_bw_runtime_us)
 		return -EINVAL;
 
-	return cfs_bandwidth_set_runtime(&tg->cfs_bandwidth,
-					 runtime_us * NSEC_PER_USEC);
+	/*
+	 * Serialize against tg_set_bandwidth(), so that the BPF scheduler gets
+	 * the runtime checked against the current quota + burst, and this and
+	 * cpu.max writes reach it in the order the fair class took them.
+	 */
+	guard(mutex)(&tg_bandwidth_mutex);
+
+	ret = cfs_bandwidth_set_runtime(&tg->cfs_bandwidth,
+					runtime_us * NSEC_PER_USEC);
+	if (!ret)
+		scx_group_set_runtime(tg, runtime_us);
+	return ret;
 }
 
 static u64 cpu_runtime_read_u64(struct cgroup_subsys_state *css,

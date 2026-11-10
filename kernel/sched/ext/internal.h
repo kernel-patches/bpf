@@ -863,6 +863,26 @@ struct sched_ext_ops {
 	 */
 	void (*cgroup_set_idle)(struct cgroup *cgrp, bool idle);
 
+	/**
+	 * @cgroup_set_runtime: A cgroup's runtime is being set
+	 * @cgrp: cgroup whose runtime is being set
+	 * @runtime_us: runtime in microseconds
+	 *
+	 * Set the runtime @cgrp has accumulated and not used yet to
+	 * @runtime_us. This is from the cpu.max.runtime cgroup interface,
+	 * which exists with CONFIG_CFS_BANDWIDTH only. It is called on every
+	 * write, also of an unchanged value. The runtime goes down as @cgrp
+	 * runs, so a write of the same value is a top-up.
+	 *
+	 * @cgrp has a quota, and @runtime_us is at most the quota + burst the
+	 * scheduler was last given, by @cgroup_init or @cgroup_set_bandwidth:
+	 * cpu.max and cpu.max.runtime writes reach the scheduler in the order
+	 * the fair class applied them.
+	 *
+	 * Delivery follows the same rule as cgroup_set_weight().
+	 */
+	void (*cgroup_set_runtime)(struct cgroup *cgrp, u64 runtime_us);
+
 #endif	/* CONFIG_EXT_GROUP_SCHED */
 
 	/**
@@ -1239,6 +1259,7 @@ struct sched_ext_ops_cid {
 	void (*cpuctl_set_bandwidth)(struct cgroup *cgrp, u64 period_us, u64 quota_us,
 				     u64 burst_us);
 	void (*cpuctl_set_idle)(struct cgroup *cgrp, bool idle);
+	void (*cpuctl_set_runtime)(struct cgroup *cgrp, u64 runtime_us);
 #endif	/* CONFIG_EXT_GROUP_SCHED */
 	s32 (*sub_attach)(struct scx_sub_attach_args *args);
 	void (*sub_detach)(struct scx_sub_detach_args *args);

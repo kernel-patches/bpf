@@ -1256,7 +1256,9 @@ will be referred to. All time durations are in microseconds.
 	from it, at most a slice each (sched_cfs_bandwidth_slice_us).
 	A write leaves that with the CPUs.
 
-	This file affects only processes under the fair-class scheduler.
+	This file affects only processes under the fair-class scheduler and a BPF
+	scheduler with the ``cgroup_set_runtime`` callback depending on what
+	the callback actually does.
 
   cpu.pressure
 	A read-write nested-keyed file.
