@@ -1205,9 +1205,7 @@ static bool xe3p_lpd_fbc_pixel_format_is_valid(const struct intel_plane_state *p
 	case DRM_FORMAT_ARGB8888:
 	case DRM_FORMAT_ABGR8888:
 	case DRM_FORMAT_RGB565:
-	case DRM_FORMAT_ARGB16161616F:
 	case DRM_FORMAT_XRGB16161616F:
-	case DRM_FORMAT_ABGR16161616F:
 	case DRM_FORMAT_XBGR16161616F:
 		return true;
 	default:
