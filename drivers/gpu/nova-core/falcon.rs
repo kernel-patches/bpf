@@ -566,17 +566,6 @@ impl<'a, E: FalconEngine + 'static> Falcon<'a, E> {
         // need to perform.
         let num_transfers = load_offsets.len.div_ceil(DMA_LEN);
 
-        // For IMEM and tagged DMEM, we want to use the start offset as a virtual address tag for
-        // each page, since addresses in the firmware (and the boot vector) are virtual.
-        //
-        // For untagged DMEM, the start offset is folded into the DMA base.
-        let (fb_offset, base_offset) = match target_mem {
-            FalconMem::ImemSecure | FalconMem::ImemNonSecure | FalconMem::Dmem { tag: true } => {
-                (load_offsets.src_start, 0)
-            }
-            FalconMem::Dmem { tag: false } => (0, usize::from_safe_cast(load_offsets.src_start)),
-        };
-
         let dma_base = match src {
             FalconDmaSource::Sysmem(dma_obj) => {
                 // Upper limit of transfer is `(num_transfers * DMA_LEN) + load_offsets.src_start`.
@@ -586,11 +575,9 @@ impl<'a, E: FalconEngine + 'static> Falcon<'a, E> {
                     .map(usize::from_safe_cast)
                     .ok_or(EOVERFLOW)?;
 
-                io_project!(dma_obj, [try: base_offset..end_offset]).dma_address()
+                io_project!(dma_obj, [try: 0..end_offset]).dma_address()
             }
-            FalconDmaSource::Framebuffer { base } => base
-                .checked_add(u64::from_safe_cast(base_offset))
-                .ok_or(EOVERFLOW)?,
+            FalconDmaSource::Framebuffer { base } => base,
         };
 
         if dma_base % DmaAddress::from(DMA_LEN) > 0 {
@@ -624,8 +611,10 @@ impl<'a, E: FalconEngine + 'static> Falcon<'a, E> {
                 regs::NV_PFALCON_FALCON_DMATRFMOFFS::zeroed()
                     .try_with_offs(load_offsets.dst_start + pos)?,
             );
+            // The source offset doubles as the virtual address tag for IMEM and tagged DMEM.
             self.pfalcon.write_reg(
-                regs::NV_PFALCON_FALCON_DMATRFFBOFFS::zeroed().with_offs(fb_offset + pos),
+                regs::NV_PFALCON_FALCON_DMATRFFBOFFS::zeroed()
+                    .with_offs(load_offsets.src_start + pos),
             );
 
             self.pfalcon.write_reg(cmd);
