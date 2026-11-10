@@ -69,14 +69,6 @@ DECLARE_EVENT_CLASS(sst_ipc_mailbox,
 		(unsigned int)__entry->offset, (unsigned int)__entry->val)
 );
 
-DEFINE_EVENT(sst_ipc_mailbox, sst_ipc_inbox_rdata,
-
-	TP_PROTO(unsigned int offset, unsigned int val),
-
-	TP_ARGS(offset, val)
-
-);
-
 DEFINE_EVENT(sst_ipc_mailbox, sst_ipc_inbox_wdata,
 
 	TP_PROTO(unsigned int offset, unsigned int val),
