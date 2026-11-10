@@ -101,6 +101,9 @@ struct sit9531x_ref {
  * @freq: output frequency in Hz
  * @enabled: output is driving, not forced into Hi-Z
  * @cmos: single-ended; the CMOS pad Hi-Z pairs apply, not the differential one
+ * @state_stale: cached mute state must be read back before it is reported
+ * @ntf_pending: pin change not yet notified; the poll notifies once the state
+ *   is read
  * @part_muted: single-ended with one pad forced and the other not; reported
  *   as driven. The driver's mute forces both pads.
  * @routed: mapped to @pll_idx by the initial configuration; an unrouted
@@ -113,6 +116,8 @@ struct sit9531x_out {
 	u64		freq;
 	bool		enabled;
 	bool		cmos;
+	bool		state_stale;
+	bool		ntf_pending;
 	bool		part_muted;
 	bool		routed;
 	u8		pll_idx;
@@ -280,6 +285,11 @@ int sit9531x_input_prio_remove(struct sit9531x_dev *sitdev, u8 pll_idx,
 			       u8 input_idx);
 int sit9531x_input_prio_add(struct sit9531x_dev *sitdev, u8 pll_idx,
 			    u8 input_idx);
+
+int sit9531x_output_disable(struct sit9531x_dev *sitdev, u8 index);
+int sit9531x_output_enable(struct sit9531x_dev *sitdev, u8 index);
+int sit9531x_output_state_refresh(struct sit9531x_dev *sitdev,
+				  u8 out_idx);
 
 int sit9531x_output_freq_set(struct sit9531x_dev *sitdev, u8 out_idx,
 			     u8 pll_idx, u64 frequency);

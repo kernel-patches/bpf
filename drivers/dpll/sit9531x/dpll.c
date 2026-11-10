@@ -184,8 +184,9 @@ const struct dpll_device_ops sit9531x_dpll_device_ops = {
  * NO_SIGNAL on loss of signal; QUAL_FAILED on frequency drift; STANDBY
  * otherwise. The routed reference is used because on loss of signal the device
  * falls back to another listed source and leaves the selection naming the lost
- * one. On manual input select, the routed input is CONNECTED. The XO pin is
- * always CONNECTED.
+ * one. On manual input select, the routed input is CONNECTED. An output is
+ * CONNECTED while driven and DISCONNECTED while muted; SELECTABLE is refused.
+ * The XO pin is always CONNECTED.
  */
 
 /* Caller must hold sitdev->multiop_lock. */
@@ -638,10 +639,114 @@ sit9531x_dpll_output_pin_frequency_set(const struct dpll_pin *pin,
 	return rc;
 }
 
+/*
+ * DISCONNECTED while the output is forced to Hi-Z, by a mute request or by the
+ * loaded profile.
+ */
+static int
+sit9531x_dpll_output_pin_state_on_dpll_get(const struct dpll_pin *pin,
+					   void *pin_priv,
+					   const struct dpll_device *dpll,
+					   void *dpll_priv,
+					   enum dpll_pin_state *state,
+					   struct netlink_ext_ack *extack)
+{
+	struct sit9531x_dpll_pin *dpin = pin_priv;
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+	const struct sit9531x_out *out;
+	int rc = 0;
+
+	mutex_lock(&sitdev->multiop_lock);
+	out = sit9531x_out_state_get(sitdev, dpin->id);
+	if (out->state_stale)
+		rc = sit9531x_output_state_refresh(sitdev, dpin->id);
+	if (!rc)
+		*state = out->enabled ? DPLL_PIN_STATE_CONNECTED
+				      : DPLL_PIN_STATE_DISCONNECTED;
+	mutex_unlock(&sitdev->multiop_lock);
+	if (rc)
+		NL_SET_ERR_MSG(extack,
+			       "Output mute state could not be read back");
+
+	return rc;
+}
+
+/*
+ * Force Hi-Z through the slot's Hi-Z force/state register pairs: differential,
+ * CMOS OutP and CMOS OutN.
+ */
+static int
+sit9531x_dpll_output_pin_state_on_dpll_set(const struct dpll_pin *pin,
+					   void *pin_priv,
+					   const struct dpll_device *dpll,
+					   void *dpll_priv,
+					   enum dpll_pin_state state,
+					   struct netlink_ext_ack *extack)
+{
+	bool enable = state == DPLL_PIN_STATE_CONNECTED;
+	struct sit9531x_dpll_pin *dpin = pin_priv;
+	struct sit9531x_dpll *sitdpll = dpll_priv;
+	struct sit9531x_dev *sitdev = sitdpll->dev;
+	bool was_enabled, changed;
+	int rc;
+
+	/* An output is routed explicitly, not a selection candidate */
+	if (!enable && state != DPLL_PIN_STATE_DISCONNECTED)
+		return -EINVAL;
+
+	mutex_lock(&sitdev->multiop_lock);
+
+	/*
+	 * Skip a request for the current state: the programming sequence
+	 * unlocks the output loops for its 100 ms commit. One CMOS pad forced
+	 * and the other not is neither state.
+	 */
+	if (!sit9531x_output_state_refresh(sitdev, dpin->id) &&
+	    sitdev->out[dpin->id].enabled == enable &&
+	    !sitdev->out[dpin->id].part_muted) {
+		mutex_unlock(&sitdev->multiop_lock);
+		return 0;
+	}
+
+	was_enabled = sitdev->out[dpin->id].enabled;
+
+	if (enable)
+		rc = sit9531x_output_enable(sitdev, dpin->id);
+	else
+		rc = sit9531x_output_disable(sitdev, dpin->id);
+
+	changed = sitdev->out[dpin->id].enabled != was_enabled ||
+		  sitdev->out[dpin->id].state_stale;
+
+	mutex_unlock(&sitdev->multiop_lock);
+
+	if (rc) {
+		struct dpll_pin *dpll_pin;
+
+		NL_SET_ERR_MSG(extack, "Failed to set output pin state");
+		/*
+		 * The core notifies only a request that succeeded. Teardown
+		 * clears dpll_pin without the core's lock, which is held here;
+		 * read it once, as a set handle stays valid until this returns.
+		 */
+		dpll_pin = READ_ONCE(dpin->dpll_pin);
+		if (changed && dpll_pin && __dpll_pin_change_ntf(dpll_pin)) {
+			mutex_lock(&sitdev->multiop_lock);
+			sitdev->out[dpin->id].ntf_pending = true;
+			mutex_unlock(&sitdev->multiop_lock);
+		}
+	}
+
+	return rc;
+}
+
 static const struct dpll_pin_ops sit9531x_dpll_output_pin_ops = {
 	.direction_get		= sit9531x_dpll_output_pin_direction_get,
 	.frequency_get		= sit9531x_dpll_output_pin_frequency_get,
 	.frequency_set		= sit9531x_dpll_output_pin_frequency_set,
+	.state_on_dpll_get	= sit9531x_dpll_output_pin_state_on_dpll_get,
+	.state_on_dpll_set	= sit9531x_dpll_output_pin_state_on_dpll_set,
 };
 
 const struct dpll_pin_ops *
@@ -704,6 +809,31 @@ void sit9531x_dpll_pin_baseline(struct sit9531x_dpll_pin *pin)
 }
 
 /*
+ * Re-read an output with a pending change notification; return true once the
+ * read succeeds. Caller must hold sitdev->multiop_lock.
+ */
+static bool
+sit9531x_dpll_output_ntf_pending(struct sit9531x_dev *sitdev,
+				 const struct sit9531x_dpll_pin *pin)
+{
+	struct sit9531x_out *out;
+
+	if (sit9531x_dpll_is_input_pin(pin) ||
+	    pin->id >= sitdev->info->num_outputs)
+		return false;
+
+	out = &sitdev->out[pin->id];
+	if (!out->ntf_pending)
+		return false;
+	if (out->state_stale && sit9531x_output_state_refresh(sitdev, pin->id))
+		return false;
+
+	out->ntf_pending = false;
+
+	return true;
+}
+
+/*
  * Send notifications for changed lock status and pin state; called from
  * sit9531x_dev_periodic_work().
  */
@@ -744,8 +874,11 @@ void sit9531x_dpll_changes_check(struct sit9531x_dpll *sitdpll)
 		bool changed;
 		u8 prio;
 
-		if (!sit9531x_dpll_is_selection_pin(pin))
+		if (!sit9531x_dpll_is_selection_pin(pin)) {
+			pin->ntf_pending |=
+				sit9531x_dpll_output_ntf_pending(sitdev, pin);
 			continue;
+		}
 
 		sit9531x_dpll_pin_snapshot(sitdpll, pin, &state, &operstate,
 					   &prio);
