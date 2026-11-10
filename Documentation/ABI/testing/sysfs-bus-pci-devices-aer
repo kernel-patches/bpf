@@ -130,9 +130,10 @@ What:		/sys/bus/pci/devices/<dev>/aer/correctable_ratelimit_interval_ms
 Date:		May 2025
 KernelVersion:	6.16.0
 Contact:	linux-pci@vger.kernel.org
-Description:	Writing 0 disables AER correctable error log ratelimiting.
-		Writing a positive value sets the ratelimit interval in ms.
-		Default is DEFAULT_RATELIMIT_INTERVAL (5000 ms).
+Description:	Writing 0, or any negative value, disables AER correctable
+		error log ratelimiting. Writing a positive value sets the
+		ratelimit interval in ms. Default is
+		DEFAULT_RATELIMIT_INTERVAL (5000 ms).
 
 What:		/sys/bus/pci/devices/<dev>/aer/correctable_ratelimit_burst
 Date:		May 2025
@@ -143,14 +144,17 @@ Description:	Ratelimit burst for correctable error logs. Writing a value
 		before ratelimiting. Reading gets the current ratelimit
 		burst. Default is DEFAULT_RATELIMIT_BURST (10).
 
+		Writing 0, or any negative value, suppresses all logs
+		unless the interval attribute is also 0.
+
 What:		/sys/bus/pci/devices/<dev>/aer/nonfatal_ratelimit_interval_ms
 Date:		May 2025
 KernelVersion:	6.16.0
 Contact:	linux-pci@vger.kernel.org
-Description:	Writing 0 disables AER non-fatal uncorrectable error log
-		ratelimiting. Writing a positive value sets the ratelimit
-		interval in ms. Default is DEFAULT_RATELIMIT_INTERVAL
-		(5000 ms).
+Description:	Writing 0, or any negative value, disables AER non-fatal
+		uncorrectable error log ratelimiting. Writing a positive
+		value sets the ratelimit interval in ms. Default is
+		DEFAULT_RATELIMIT_INTERVAL (5000 ms).
 
 What:		/sys/bus/pci/devices/<dev>/aer/nonfatal_ratelimit_burst
 Date:		May 2025
@@ -161,3 +165,6 @@ Description:	Ratelimit burst for non-fatal uncorrectable error logs.
 		allowed per interval before ratelimiting. Reading gets the
 		current ratelimit burst. Default is DEFAULT_RATELIMIT_BURST
 		(10).
+
+		Writing 0, or any negative value, suppresses all logs
+		unless the interval attribute is also 0.
