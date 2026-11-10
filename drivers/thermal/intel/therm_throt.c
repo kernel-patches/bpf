@@ -500,9 +500,8 @@ static int dpti_wait_for_ack(void)
 	return 0;
 }
 
-static void dpti_config(void *info)
+static void dpti_config_this_cpu(bool enable)
 {
-	bool enable = *((bool *)info);
 	u64 msr_val;
 
 	rdmsrq(MSR_IA32_THERM_INTERRUPT, msr_val);
@@ -513,6 +512,11 @@ static void dpti_config(void *info)
 		msr_val &= ~THERM_INT_DPTI_ENABLE;
 
 	wrmsrq(MSR_IA32_THERM_INTERRUPT, msr_val);
+}
+
+static void dpti_config_ipi(void *info)
+{
+	dpti_config_this_cpu(*((bool *)info));
 }
 
 /**
@@ -578,14 +582,13 @@ static void dpti_clear_all(void)
 		if (dpti_pkgs[i].owner == nr_cpu_ids)
 			continue;
 
-		smp_call_function_single(dpti_pkgs[i].owner, dpti_config,
+		smp_call_function_single(dpti_pkgs[i].owner, dpti_config_ipi,
 					 &enable, true);
 	}
 }
 
 static int dpti_online(unsigned int cpu)
 {
-	bool enable = true;
 	u16 pkg_id;
 
 	if (!dpti_supported())
@@ -605,15 +608,14 @@ static int dpti_online(unsigned int cpu)
 	thermal_clear_package_intr_status(PACKAGE_LEVEL,
 					  PACKAGE_THERM_STATUS_DPTI_ACK);
 
-	dpti_config(&enable);
+	dpti_config_this_cpu(true);
 	if (!dpti_wait_for_ack()) {
 		dpti_pkgs[pkg_id].owner = cpu;
 		return 0;
 	}
 
 	/* Roll back on failure so the package reverts to broadcasting mode. */
-	enable = false;
-	dpti_config(&enable);
+	dpti_config_this_cpu(false);
 
 	return -ETIMEDOUT;
 }
@@ -657,7 +659,8 @@ static void dpti_offline(unsigned int cpu)
 		 * but it does not reach this path because all the secondary
 		 * CPUs are offline.
 		 */
-		smp_call_function_single(new_cpu, dpti_config, &enable, true);
+		smp_call_function_single(new_cpu, dpti_config_ipi, &enable,
+					 true);
 	}
 
 	/*
@@ -668,7 +671,8 @@ static void dpti_offline(unsigned int cpu)
 	 */
 	enable = false;
 	if (new_cpu < nr_cpu_ids && dpti_wait_for_ack()) {
-		smp_call_function_single(new_cpu, dpti_config, &enable, true);
+		smp_call_function_single(new_cpu, dpti_config_ipi, &enable,
+					 true);
 
 		pr_warn_once("Failed to redirect package thermal interrupt from CPU%u to CPU%u; reverting to broadcast\n",
 			     cpu, new_cpu);
@@ -680,7 +684,7 @@ static void dpti_offline(unsigned int cpu)
 	 * Clear the directed interrupt on @cpu. Hardware acknowledgment can be
 	 * ignored since @cpu is going offline.
 	 */
-	dpti_config(&enable);
+	dpti_config_this_cpu(false);
 
 	dpti_pkgs[pkg_id].owner = (new_cpu < nr_cpu_ids) ? new_cpu : nr_cpu_ids;
 }
