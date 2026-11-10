@@ -543,9 +543,9 @@ int ath12k_dp_link_peer_assign(struct ath12k_dp *dp, struct ath12k_dp_hw *dp_hw,
 		dp_peer->peer_id = peer->peer_id;
 
 	peer->dp_peer = dp_peer;
-	peer->hw_link_id = hw_link_id;
+	peer->drv_link_id = hw_link_id;
 
-	dp_peer->link_id_map[peer->hw_link_id] = link_id;
+	dp_peer->link_id_map[peer->drv_link_id] = link_id;
 
 	peerid_index = ath12k_dp_peer_get_peerid_index(dp, peer->peer_id);
 
@@ -565,7 +565,7 @@ int ath12k_dp_link_peer_assign(struct ath12k_dp *dp, struct ath12k_dp_hw *dp_hw,
 		 * already present
 		 */
 		temp_peer = ath12k_dp_link_peer_find_by_addr(dp, addr);
-		if (temp_peer && temp_peer->hw_link_id != hw_link_id)
+		if (temp_peer && temp_peer->drv_link_id != hw_link_id)
 			ath12k_dp_link_peer_rhash_delete(dp, temp_peer);
 
 		ret = ath12k_dp_link_peer_rhash_add(dp, peer);
@@ -613,7 +613,7 @@ void ath12k_dp_link_peer_unassign(struct ath12k_dp *dp, struct ath12k_dp_hw *dp_
 	spin_lock_bh(&dp_hw->peer_lock);
 
 	dp_peer = peer->dp_peer;
-	dp_peer->link_id_map[peer->hw_link_id] = 0;
+	dp_peer->link_id_map[peer->drv_link_id] = 0;
 
 	peerid_index = ath12k_dp_peer_get_peerid_index(dp, peer->peer_id);
 
@@ -628,7 +628,7 @@ void ath12k_dp_link_peer_unassign(struct ath12k_dp *dp, struct ath12k_dp_hw *dp_
 	if (dp->hw_params->support_hw_link_id) {
 		/* To handle roaming and split phy scenario */
 		temp_peer = ath12k_dp_link_peer_find_by_addr(dp, addr);
-		if (temp_peer && temp_peer->hw_link_id == hw_link_id)
+		if (temp_peer && temp_peer->drv_link_id == hw_link_id)
 			ath12k_dp_link_peer_rhash_delete(dp, peer);
 	} else {
 		ath12k_dp_link_peer_rhash_delete(dp, peer);
