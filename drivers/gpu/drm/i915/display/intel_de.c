@@ -163,13 +163,35 @@ u16 intel_de_read16(struct intel_display *display, intel_reg_t reg)
 	return intel_uncore_read16(__to_uncore(display), reg);
 }
 
+#define __MMIO_WAKELOCK		BIT(0)
+
+static __always_inline void
+__mmio_wakelock_pre(struct intel_display *display, intel_reg_t reg,
+		    const unsigned int mmio_flags)
+{
+	if (mmio_flags & __MMIO_WAKELOCK)
+		intel_dmc_wl_get(display, reg);
+}
+
+static __always_inline void
+__mmio_wakelock_post(struct intel_display *display, intel_reg_t reg,
+		     const unsigned int mmio_flags)
+{
+	if (mmio_flags & __MMIO_WAKELOCK)
+		intel_dmc_wl_put(display, reg);
+}
+
 static __always_inline u32
 __intel_de_read(struct intel_display *display, intel_reg_t reg,
 		const unsigned int mmio_flags)
 {
 	u32 val;
 
+	__mmio_wakelock_pre(display, reg, mmio_flags);
+
 	val = intel_uncore_read(__to_uncore(display), reg);
+
+	__mmio_wakelock_post(display, reg, mmio_flags);
 
 	return val;
 }
@@ -178,7 +200,11 @@ static __always_inline void
 __intel_de_write(struct intel_display *display, intel_reg_t reg, u32 val,
 		 const unsigned int mmio_flags)
 {
+	__mmio_wakelock_pre(display, reg, mmio_flags);
+
 	intel_uncore_write(__to_uncore(display), reg, val);
+
+	__mmio_wakelock_post(display, reg, mmio_flags);
 }
 
 #define I9XX_MMIO_FLAGS 0
@@ -200,9 +226,31 @@ static const struct intel_mmio_funcs i9xx_mmio_funcs = {
 	.write = i9xx_mmio_write,
 };
 
+#define LNL_MMIO_FLAGS __MMIO_WAKELOCK
+
+static u32 lnl_mmio_read(struct intel_display *display, intel_reg_t reg)
+{
+	return __intel_de_read(display, reg, LNL_MMIO_FLAGS);
+}
+
+static void lnl_mmio_write(struct intel_display *display, intel_reg_t reg, u32 val)
+{
+	__intel_de_write(display, reg, val, LNL_MMIO_FLAGS);
+}
+
+#undef LNL_MMIO_FLAGS
+
+static const struct intel_mmio_funcs lnl_mmio_funcs = {
+	.read = lnl_mmio_read,
+	.write = lnl_mmio_write,
+};
+
 void intel_de_init(struct intel_display *display)
 {
 	display->mmio.uncore = to_intel_uncore(display->drm);
 
-	display->mmio.funcs = &i9xx_mmio_funcs;
+	if (DISPLAY_VER(display) >= 20)
+		display->mmio.funcs = &lnl_mmio_funcs;
+	else
+		display->mmio.funcs = &i9xx_mmio_funcs;
 }

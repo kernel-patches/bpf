@@ -7,7 +7,6 @@
 #define __INTEL_DE_H__
 
 #include "intel_display_core.h"
-#include "intel_dmc_wl.h"
 #include "intel_dsb.h"
 #include "intel_uncore.h"
 #include "intel_uncore_trace.h"
@@ -31,15 +30,7 @@ u16 intel_de_read16(struct intel_display *display, intel_reg_t reg);
 static inline u32
 intel_de_read(struct intel_display *display, intel_reg_t reg)
 {
-	u32 val;
-
-	intel_dmc_wl_get(display, reg);
-
-	val = display->mmio.funcs->read(display, reg);
-
-	intel_dmc_wl_put(display, reg);
-
-	return val;
+	return display->mmio.funcs->read(display, reg);
 }
 
 static inline u64
@@ -63,11 +54,7 @@ intel_de_posting_read(struct intel_display *display, intel_reg_t reg)
 static inline void
 intel_de_write(struct intel_display *display, intel_reg_t reg, u32 val)
 {
-	intel_dmc_wl_get(display, reg);
-
 	display->mmio.funcs->write(display, reg, val);
-
-	intel_dmc_wl_put(display, reg);
 }
 
 static inline u32
