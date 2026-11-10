@@ -681,12 +681,14 @@ struct regmap *__regmap_init(struct device *dev,
 			     const char *lock_name)
 {
 	struct regmap *map;
-	int ret = -EINVAL;
 	enum regmap_endian reg_endian, val_endian;
 	int i, j;
+	int ret;
 
-	if (!config)
+	if (!config) {
+		ret = -EINVAL;
 		goto err;
+	}
 
 	map = kzalloc_obj(*map);
 	if (map == NULL) {
@@ -1641,8 +1643,7 @@ static int _regmap_raw_write_impl(struct regmap *map, unsigned int reg,
 {
 	struct regmap_range_node *range;
 	unsigned long flags;
-	void *work_val = map->work_buf + map->format.reg_bytes +
-		map->format.pad_bytes;
+	void *work_val;
 	void *buf;
 	int ret = -ENOTSUPP;
 	size_t len;
@@ -1725,6 +1726,7 @@ static int _regmap_raw_write_impl(struct regmap *map, unsigned int reg,
 	 * buffer to write.  Since register syncs often generate raw
 	 * writes of single registers optimise that case.
 	 */
+	work_val = map->work_buf + map->format.reg_bytes + map->format.pad_bytes;
 	if (val != work_val && val_len == map->format.val_bytes) {
 		memcpy(work_val, val, map->format.val_bytes);
 		val = work_val;
@@ -2328,8 +2330,8 @@ EXPORT_SYMBOL_GPL(regmap_fields_update_bits_base);
 int regmap_bulk_write(struct regmap *map, unsigned int reg, const void *val,
 		     size_t val_count)
 {
-	int ret = 0, i;
 	size_t val_bytes = map->format.val_bytes;
+	int ret, i;
 
 	if (!IS_ALIGNED(reg, map->reg_stride))
 		return -EINVAL;
@@ -2339,6 +2341,8 @@ int regmap_bulk_write(struct regmap *map, unsigned int reg, const void *val,
 	 * single write operations.
 	 */
 	if (!map->write || !map->format.parse_inplace) {
+		ret = 0; /* Later error paths rely on this */
+
 		guard(regmap)(map);
 
 		for (i = 0; i < val_count; i++) {
@@ -2776,12 +2780,12 @@ static int _regmap_bus_read(void *context, unsigned int reg,
 {
 	int ret;
 	struct regmap *map = context;
-	void *work_val = map->work_buf + map->format.reg_bytes +
-		map->format.pad_bytes;
+	void *work_val;
 
 	if (!map->format.parse_val)
 		return -EINVAL;
 
+	work_val = map->work_buf + map->format.reg_bytes + map->format.pad_bytes;
 	ret = _regmap_raw_read(map, reg, work_val, map->format.val_bytes, false);
 	if (ret == 0)
 		*val = map->format.parse_val(work_val);
