@@ -609,12 +609,12 @@ impl<'a, E: FalconEngine + 'static> Falcon<'a, E> {
             // Perform a transfer of size `DMA_LEN`.
             self.pfalcon.write_reg(
                 regs::NV_PFALCON_FALCON_DMATRFMOFFS::zeroed()
-                    .try_with_offs(load_offsets.dst_start + pos)?,
+                    .try_with_offs(load_offsets.dst_start.checked_add(pos).ok_or(EOVERFLOW)?)?,
             );
             // The source offset doubles as the virtual address tag for IMEM and tagged DMEM.
             self.pfalcon.write_reg(
                 regs::NV_PFALCON_FALCON_DMATRFFBOFFS::zeroed()
-                    .with_offs(load_offsets.src_start + pos),
+                    .with_offs(load_offsets.src_start.checked_add(pos).ok_or(EOVERFLOW)?),
             );
 
             self.pfalcon.write_reg(cmd);
