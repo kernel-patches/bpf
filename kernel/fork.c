@@ -1020,6 +1020,7 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 	RCU_INIT_POINTER(tsk->bpf_storage, NULL);
 	tsk->bpf_ctx = NULL;
 	tsk->bpf_wake_pending = 0;
+	tsk->bpf_wake_node.next = NULL;
 #endif
 	return tsk;
 

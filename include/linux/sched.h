@@ -1632,6 +1632,8 @@ struct task_struct {
 	struct bpf_run_ctx		*bpf_ctx;
 	/* Set by bpf_task_wake(), consumed by bpf_task_park() */
 	int				bpf_wake_pending;
+	/* On a CPU's queue of deferred bpf_task_wake() calls when not NULL */
+	struct wake_q_node		bpf_wake_node;
 #endif
 	/* Used by BPF for per-TASK xdp storage */
 	struct bpf_net_context		*bpf_net_context;

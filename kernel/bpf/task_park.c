@@ -5,10 +5,12 @@
 #include <linux/btf.h>
 #include <linux/btf_ids.h>
 #include <linux/hrtimer.h>
+#include <linux/irq_work.h>
 #include <linux/kthread.h>
 #include <linux/rcupdate_trace.h>
 #include <linux/sched.h>
 #include <linux/sched/signal.h>
+#include <linux/sched/wake_q.h>
 
 /*
  * A BPF program that blocks for an event keeps its own queue of waiters and
@@ -34,6 +36,75 @@
  * that lands between the waiter's observation of the word and its reset is
  * not erased but stays pending for the next park.
  */
+
+/*
+ * A wake asked for with IRQs disabled cannot be issued there: the caller may
+ * have interrupted the scheduler with the task's pi_lock or a runqueue lock
+ * held, or may run in NMI context, where try_to_wake_up() may take neither.
+ * Such wakes are queued on the CPU and issued from irq_work once IRQs are
+ * enabled again.
+ *
+ * The queue goes through a node of its own in the task, under the rule the
+ * scheduler's wake queues follow for theirs: a task is on at most one queue,
+ * whoever claimed the node wakes the task, and a waker that finds it claimed
+ * leaves the wake to the claimant. The pending word is set before the claim
+ * is tried, so a wake left this way still reaches a parked task through the
+ * claimant's wake, and any other task through its next park.
+ *
+ * The task's wake_q node would save the field, but whoever claims that node
+ * may turn away a futex, rwsem or semaphore wakeup that then relies on the
+ * claimant, and so has to wake with TASK_NORMAL. A program could then aim a
+ * wake of an uninterruptible sleep at any task it names, and not every such
+ * sleep has a loop around it: a new kthread sleeps once until its creator
+ * wakes it. With its own node the drain wakes interruptible sleeps only, as
+ * the direct wake does.
+ *
+ * The queue is a stack with a per-CPU head: pushed with cmpxchg() from
+ * whatever context asks, emptied with one xchg() by the irq_work, so a push
+ * that interrupts the drain lands on an empty stack and queues the work
+ * again.
+ */
+static DEFINE_PER_CPU(struct wake_q_node *, bpf_task_wake_queue);
+
+static void bpf_task_wake_deferred(struct irq_work *work)
+{
+	struct wake_q_node *node = xchg(this_cpu_ptr(&bpf_task_wake_queue), NULL);
+
+	while (node) {
+		struct task_struct *task = container_of(node, struct task_struct, bpf_wake_node);
+
+		node = node->next == WAKE_Q_TAIL ? NULL : node->next;
+		/* The task may be queued again from here on. */
+		WRITE_ONCE(task->bpf_wake_node.next, NULL);
+		wake_up_state(task, TASK_INTERRUPTIBLE);
+		put_task_struct(task);
+	}
+}
+
+static DEFINE_PER_CPU(struct irq_work, bpf_task_wake_work) =
+	IRQ_WORK_INIT_HARD(bpf_task_wake_deferred);
+
+static void bpf_task_wake_defer(struct task_struct *task)
+{
+	struct wake_q_node *node = &task->bpf_wake_node, *head;
+
+	/*
+	 * The claim, as in __wake_q_add(): NULL is free, anything else is
+	 * queued. The xchg() that stored the pending word is a full barrier
+	 * between that store and the claim, so a claim lost to another holder
+	 * is still covered: the holder's wake follows its own reset of the
+	 * node, which this claim did not observe, so the task it wakes
+	 * observes the word.
+	 */
+	if (cmpxchg_relaxed(&node->next, NULL, WAKE_Q_TAIL))
+		return;
+	get_task_struct(task);
+	head = this_cpu_read(bpf_task_wake_queue);
+	do {
+		WRITE_ONCE(node->next, head ?: WAKE_Q_TAIL);
+	} while (!try_cmpxchg(this_cpu_ptr(&bpf_task_wake_queue), &head, node));
+	irq_work_queue(this_cpu_ptr(&bpf_task_wake_work));
+}
 
 /*
  * What ends a park besides a wake and the timeout: a stop or park request for
@@ -169,8 +240,15 @@ out:
  * A task that is not parked keeps the pending wake until its next
  * bpf_task_park(), which then returns at once.
  *
- * Return: 1 when @task was asleep and is now runnable, 0 when it was not,
- * -EINVAL when @flags is not 0.
+ * The wake takes the task's pi_lock and a runqueue lock, which the kernel
+ * code a program runs in or interrupts may already hold, and it may not be
+ * issued in NMI context at all. Such code and NMI context both run with IRQs
+ * disabled, so a call with IRQs disabled marks the wake pending and queues it
+ * for irq_work on the calling CPU, which issues it once IRQs are enabled
+ * again. Such a call cannot tell whether the task was asleep and returns 2.
+ *
+ * Return: 1 when @task was asleep and is now runnable, 0 when it was not, 2
+ * when the wake was deferred, -EINVAL when @flags is not 0.
  */
 __bpf_kfunc int bpf_task_wake(struct task_struct *task, u64 flags)
 {
@@ -186,6 +264,10 @@ __bpf_kfunc int bpf_task_wake(struct task_struct *task, u64 flags)
 	 * in bpf_task_park().
 	 */
 	xchg(&task->bpf_wake_pending, 1);
+	if (unlikely(irqs_disabled())) {
+		bpf_task_wake_defer(task);
+		return 2;
+	}
 	return wake_up_state(task, TASK_INTERRUPTIBLE);
 }
 
