@@ -1410,7 +1410,7 @@ static int fsl_sai_check_version(struct device *dev)
 	return 0;
 }
 
-static int fsl_sai_reset_hw(struct device *dev)
+static void fsl_sai_reset_hw(struct device *dev)
 {
 	struct fsl_sai *sai = dev_get_drvdata(dev);
 	unsigned char ofs = sai->soc_data->reg_offset;
@@ -1421,18 +1421,12 @@ static int fsl_sai_reset_hw(struct device *dev)
 	 * Bootloader may leave SAI running causing interrupt storm.
 	 */
 	ret = regmap_write(sai->regmap, FSL_SAI_TCSR(ofs), 0);
-	if (ret) {
+	if (ret)
 		dev_err(dev, "Failed to clear TCSR: %d\n", ret);
-		return ret;
-	}
 
 	ret = regmap_write(sai->regmap, FSL_SAI_RCSR(ofs), 0);
-	if (ret) {
+	if (ret)
 		dev_err(dev, "Failed to clear RCSR: %d\n", ret);
-		return ret;
-	}
-
-	return 0;
 }
 
 /*
