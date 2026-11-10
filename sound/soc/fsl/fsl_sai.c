@@ -1621,8 +1621,10 @@ static int fsl_sai_probe(struct platform_device *pdev)
 
 	/* read dataline mask for rx and tx*/
 	ret = fsl_sai_read_dlcfg(sai);
-	if (ret < 0)
+	if (ret < 0) {
+		dev_err(dev, "failed to read dlcfg %d\n", ret);
 		return ret;
+	}
 
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0)
