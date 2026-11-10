@@ -512,6 +512,49 @@ struct net_devmem_dmabuf_binding *net_devmem_lookup_dmabuf(u32 id)
 	return binding;
 }
 
+/* The attachment is cleared once the binding has been unmapped. */
+static bool
+net_devmem_binding_mapped_to(struct net_devmem_dmabuf_binding *binding,
+			     struct device *dma_dev)
+{
+	lockdep_assert_held(&binding->lock);
+
+	return binding->attachment &&
+	       (!dma_dev || binding->attachment->dev == dma_dev);
+}
+
+bool netdev_has_dmabuf_binding(struct net_device *dev, struct device *dma_dev)
+{
+	struct net_devmem_dmabuf_binding *binding;
+	unsigned long xa_idx;
+	bool found = false;
+
+	netdev_assert_locked(dev);
+
+	/* A binding stays in the xarray until it is freed. binding->dev is
+	 * only cleared under the instance lock of that netdev, and the free
+	 * takes it before erasing the binding, so a binding found under @dev
+	 * stays alive while the xarray lock is dropped.
+	 */
+	xa_lock(&net_devmem_dmabuf_bindings);
+	xa_for_each(&net_devmem_dmabuf_bindings, xa_idx, binding) {
+		if (READ_ONCE(binding->dev) != dev)
+			continue;
+
+		xa_unlock(&net_devmem_dmabuf_bindings);
+		mutex_lock(&binding->lock);
+		found = net_devmem_binding_mapped_to(binding, dma_dev);
+		mutex_unlock(&binding->lock);
+		xa_lock(&net_devmem_dmabuf_bindings);
+		if (found)
+			break;
+	}
+	xa_unlock(&net_devmem_dmabuf_bindings);
+
+	return found;
+}
+EXPORT_SYMBOL_GPL(netdev_has_dmabuf_binding);
+
 void net_devmem_net_iov_inc_ref(struct net_iov *niov)
 {
 	net_devmem_dmabuf_binding_get(net_devmem_iov_binding(niov));
