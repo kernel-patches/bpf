@@ -908,7 +908,8 @@ void bdc_free_ep(struct bdc *bdc)
 		if (!ep)
 			continue;
 
-		if (ep->flags & BDC_EP_ENABLED)
+		if ((ep->flags & BDC_EP_ENABLED) ||
+		    (epnum == 1 && ep->bd_list.num_tabs))
 			ep_bd_list_free(ep, ep->bd_list.num_tabs);
 
 		/* ep0 is not in this gadget list */
