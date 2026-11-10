@@ -374,14 +374,6 @@ static const struct clk_ops rockchip_usb2phy_clkout_ops = {
 	.recalc_rate = rockchip_usb2phy_clk480m_recalc_rate,
 };
 
-static void rockchip_usb2phy_clk480m_unregister(void *data)
-{
-	struct rockchip_usb2phy *rphy = data;
-
-	of_clk_del_provider(rphy->dev->of_node);
-	clk_unregister(rphy->clk480m);
-}
-
 static int
 rockchip_usb2phy_clk480m_register(struct rockchip_usb2phy *rphy)
 {
@@ -389,8 +381,8 @@ rockchip_usb2phy_clk480m_register(struct rockchip_usb2phy *rphy)
 	struct clk_init_data init = {};
 	struct clk *refclk = NULL;
 	const char *clk_name;
+	int ret;
 	int i;
-	int ret = 0;
 
 	init.flags = 0;
 	init.name = "clk_usbphy_480m";
@@ -418,22 +410,16 @@ rockchip_usb2phy_clk480m_register(struct rockchip_usb2phy *rphy)
 	rphy->clk480m_hw.init = &init;
 
 	/* register the clock */
-	rphy->clk480m = clk_register(rphy->dev, &rphy->clk480m_hw);
-	if (IS_ERR(rphy->clk480m)) {
-		ret = PTR_ERR(rphy->clk480m);
-		goto err_ret;
-	}
+	ret = devm_clk_hw_register(rphy->dev, &rphy->clk480m_hw);
+	if (ret)
+		return ret;
 
-	ret = of_clk_add_provider(node, of_clk_src_simple_get, rphy->clk480m);
-	if (ret < 0)
-		goto err_clk_provider;
+	/* acquire a clk reference for internal power_on()/power_off() use */
+	rphy->clk480m = devm_clk_hw_get_clk(rphy->dev, &rphy->clk480m_hw, NULL);
+	if (IS_ERR(rphy->clk480m))
+		return PTR_ERR(rphy->clk480m);
 
-	return devm_add_action_or_reset(rphy->dev, rockchip_usb2phy_clk480m_unregister, rphy);
-
-err_clk_provider:
-	clk_unregister(rphy->clk480m);
-err_ret:
-	return ret;
+	return devm_of_clk_add_hw_provider(rphy->dev, of_clk_hw_simple_get, &rphy->clk480m_hw);
 }
 
 static int rockchip_usb2phy_extcon_register(struct rockchip_usb2phy *rphy)
