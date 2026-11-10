@@ -513,6 +513,8 @@ int ath12k_dp_peer_create(struct ath12k_dp_hw *dp_hw, u8 *addr,
 	dp_peer->sec_type = HAL_ENCRYPT_TYPE_OPEN;
 	dp_peer->sec_type_grp = HAL_ENCRYPT_TYPE_OPEN;
 
+	dp_peer->free_slot_map = U16_MAX;
+
 	spin_lock_bh(&dp_hw->peer_lock);
 
 	list_add(&dp_peer->list, &dp_hw->dp_peers_list);
@@ -561,6 +563,49 @@ void ath12k_dp_peer_delete(struct ath12k_dp_hw *dp_hw, u8 *addr,
 	kfree(dp_peer);
 }
 
+int ath12k_dp_peer_alloc_logical_link_id(struct ath12k_dp *dp,
+					 struct ath12k_dp_link_peer *peer)
+{
+	struct ath12k_dp_peer *dp_peer = peer->dp_peer;
+	u8 slot;
+
+	lockdep_assert_held(&dp->dp_lock);
+
+	if (dp->hw_params->support_hw_link_id)
+		return 0;
+
+	if (test_bit(WMI_TLV_SERVICE_PER_LINK_STATS_SUPPORT,
+		     dp->ab->wmi_ab.svc_map))
+		return 0;
+
+	slot = __ffs(dp_peer->free_slot_map);
+	if (slot >= ARRAY_SIZE(dp_peer->link_id_map))
+		return -ENOSPC;
+
+	dp_peer->free_slot_map &= ~BIT(slot);
+	peer->drv_link_id = slot;
+	dp_peer->link_id_map[slot] = peer->link_id;
+
+	return 0;
+}
+
+static void ath12k_dp_peer_free_logical_link_id(struct ath12k_dp *dp,
+						struct ath12k_dp_link_peer *peer)
+{
+	struct ath12k_dp_peer *dp_peer = peer->dp_peer;
+
+	lockdep_assert_held(&dp->dp_lock);
+
+	if (dp->hw_params->support_hw_link_id)
+		return;
+
+	if (test_bit(WMI_TLV_SERVICE_PER_LINK_STATS_SUPPORT,
+		     dp->ab->wmi_ab.svc_map))
+		return;
+
+	dp_peer->free_slot_map |= BIT(peer->drv_link_id);
+}
+
 int ath12k_dp_link_peer_assign(struct ath12k_dp *dp, struct ath12k_dp_hw *dp_hw,
 			       u8 vdev_id, struct ieee80211_sta *sta, u8 *addr,
 			       u8 link_id, u32 hw_link_id)
@@ -602,7 +647,8 @@ int ath12k_dp_link_peer_assign(struct ath12k_dp *dp, struct ath12k_dp_hw *dp_hw,
 	/*
 	 * Only devices that use hw_link_id can map it to the IEEE80211
 	 * link id here. Devices that do not support hw_link_id fill
-	 * link_id_map later from the PEER_EXTENDED HTT event.
+	 * link_id_map later, either from the PEER_EXTENDED HTT event or
+	 * from the logical link id allocated at peer assoc.
 	 */
 	if (dp->hw_params->support_hw_link_id) {
 		peer->drv_link_id = hw_link_id;
@@ -676,6 +722,8 @@ void ath12k_dp_link_peer_unassign(struct ath12k_dp *dp, struct ath12k_dp_hw *dp_
 
 	dp_peer = peer->dp_peer;
 	dp_peer->link_id_map[peer->drv_link_id] = 0;
+
+	ath12k_dp_peer_free_logical_link_id(dp, peer);
 
 	peerid_index = ath12k_dp_peer_get_peerid_index(dp, peer->peer_id);
 

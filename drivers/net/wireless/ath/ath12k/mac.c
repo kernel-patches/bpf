@@ -3881,14 +3881,52 @@ static int ath12k_mac_peer_assoc(struct ath12k *ar,
 	}
 
 	if (!ar->ab->hw_params->support_hw_link_id &&
-	    test_bit(WMI_TLV_SERVICE_PER_LINK_STATS_SUPPORT,
-		     ar->ab->wmi_ab.svc_map) &&
 	    peer_arg->ml.enabled &&
-	    peer_arg->is_assoc &&
-	    !wait_for_completion_timeout(&ar->peer_ext_event_done, 1 * HZ)) {
-		ath12k_warn(ar->ab, "failed to get peer extended event for %pM vdev %u\n",
-			    peer_arg->peer_mac, peer_arg->vdev_id);
-		return -ETIMEDOUT;
+	    peer_arg->is_assoc) {
+		const u8 *addr = peer_arg->peer_mac;
+		u32 vdev_id = peer_arg->vdev_id;
+
+		if (test_bit(WMI_TLV_SERVICE_PER_LINK_STATS_SUPPORT,
+			     ar->ab->wmi_ab.svc_map)) {
+			/*
+			 * The firmware reports the logical link id of this peer
+			 * in the PEER_EXTENDED event, which fills link_id_map.
+			 * Wait for it before returning.
+			 */
+			if (!wait_for_completion_timeout(&ar->peer_ext_event_done,
+							 1 * HZ)) {
+				ath12k_warn(ar->ab,
+					    "failed to get peer extended event for %pM vdev %u\n",
+					    addr, vdev_id);
+				return -ETIMEDOUT;
+			}
+		} else {
+			/*
+			 * The firmware does not report the logical link id, so
+			 * allocate it on the host by mirroring the firmware
+			 * scheme: assign the lowest free slot.
+			 */
+			struct ath12k_dp *dp = ath12k_ab_to_dp(ar->ab);
+			struct ath12k_dp_link_peer *peer;
+
+			guard(spinlock_bh)(&dp->dp_lock);
+
+			peer = ath12k_dp_link_peer_find_by_vdev_and_addr(dp, vdev_id,
+									 addr);
+			if (!peer) {
+				ath12k_warn(ar->ab, "failed to find dp_link_peer with mac %pM vdev %u\n",
+					    addr, vdev_id);
+				return -ENOENT;
+			}
+
+			ret = ath12k_dp_peer_alloc_logical_link_id(dp, peer);
+			if (ret) {
+				ath12k_warn(ar->ab,
+					    "failed to allocate logical link id for %pM: %d\n",
+					    addr, ret);
+				return ret;
+			}
+		}
 	}
 
 	/*

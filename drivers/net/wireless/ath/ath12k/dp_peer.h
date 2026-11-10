@@ -145,6 +145,14 @@ struct ath12k_dp_peer {
 	 * WCN7850/QCC2072.
 	 */
 	u8 link_id_map[ATH12K_GROUP_MAX_RADIO];
+	/*
+	 * Tracks which link_id_map slots are free for devices that do not
+	 * support hw_link_id and do not report per-link stats. A set bit
+	 * means the slot is free. Mirrors the firmware logical link id
+	 * allocation: the lowest free slot is assigned at peer assoc and
+	 * released when the link peer is removed.
+	 */
+	u16 free_slot_map;
 
 	u16 sec_type_grp;
 	u16 sec_type;
