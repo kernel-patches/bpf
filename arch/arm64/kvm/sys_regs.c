@@ -4098,6 +4098,17 @@ union tlbi_info {
 static void s2_mmu_unmap_range(struct kvm_s2_mmu *mmu,
 			       const union tlbi_info *info)
 {
+	u64 start = info->range.start;
+	u64 end = start + info->range.size;
+
+	/*
+	 * An L1 stage-2 block may be held in the shadow S2 as several smaller
+	 * leaves, and R_TVTYQ requires the TLBI to invalidate all of them, so
+	 * widen each end of the range to the L1 block containing it.
+	 */
+	start = ALIGN_DOWN(start, compute_tlb_inval_range(mmu, start >> 12));
+	end = ALIGN(end, compute_tlb_inval_range(mmu, (end - 1) >> 12));
+
 	/*
 	 * The unmap operation is allowed to drop the MMU lock and block, which
 	 * means that @mmu could be used for a different context than the one
@@ -4121,7 +4132,7 @@ static void s2_mmu_unmap_range(struct kvm_s2_mmu *mmu,
 	 * the L1 needs to put its stage-2 in a consistent state before doing
 	 * the TLBI.
 	 */
-	kvm_stage2_unmap_range(mmu, info->range.start, info->range.size, true);
+	kvm_stage2_unmap_range(mmu, start, end - start, true);
 }
 
 static bool handle_vmalls12e1is(struct kvm_vcpu *vcpu, struct sys_reg_params *p,
