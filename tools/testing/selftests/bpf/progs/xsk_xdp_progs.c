@@ -3,6 +3,7 @@
 
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
+#include <bpf/bpf_endian.h>
 #include <linux/if_ether.h>
 #include <linux/ip.h>
 #include <linux/errno.h>
@@ -18,6 +19,10 @@ struct {
 static unsigned int idx;
 int adjust_value = 0;
 int count = 0;
+int store_ret;
+
+extern int bpf_xdp_skb_ext_store_rx_vlan(struct xdp_md *ctx, __be16 vlan_proto,
+					 __u16 vlan_tci) __ksym;
 
 SEC("xdp.frags") int xsk_def_prog(struct xdp_md *xdp)
 {
@@ -54,6 +59,14 @@ SEC("xdp.frags") int xsk_xdp_populate_metadata(struct xdp_md *xdp)
 
 	meta = data_meta;
 	meta->count = count++;
+
+	return bpf_redirect_map(&xsk, 0, XDP_DROP);
+}
+
+SEC("xdp.frags") int xsk_xdp_skb_ext_store(struct xdp_md *xdp)
+{
+	store_ret = bpf_xdp_skb_ext_store_rx_vlan(xdp,
+						  bpf_htons(ETH_P_8021Q), 0);
 
 	return bpf_redirect_map(&xsk, 0, XDP_DROP);
 }

@@ -2461,6 +2461,31 @@ int testapp_xdp_metadata_mb(struct test_spec *test)
 	return testapp_xdp_metadata_copy(test);
 }
 
+/* User space can write the headroom of AF_XDP zero-copy buffers */
+int testapp_xdp_skb_ext_store(struct test_spec *test)
+{
+	struct xsk_xdp_progs *skel_rx = test->ifobj_rx->xdp_progs;
+	struct xsk_xdp_progs *skel_tx = test->ifobj_tx->xdp_progs;
+	int expected = test->mode == TEST_MODE_ZC ? -EOPNOTSUPP : 0;
+	int ret;
+
+	test_spec_set_xdp_prog(test, skel_rx->progs.xsk_xdp_skb_ext_store,
+			       skel_tx->progs.xsk_xdp_skb_ext_store,
+			       skel_rx->maps.xsk, skel_tx->maps.xsk);
+
+	ret = testapp_validate_traffic(test);
+	if (ret)
+		return ret;
+
+	if (skel_rx->bss->store_ret != expected) {
+		ksft_print_msg("[%s] expected store result [%d], got [%d]\n",
+			       __func__, expected, skel_rx->bss->store_ret);
+		return TEST_FAILURE;
+	}
+
+	return TEST_PASS;
+}
+
 int testapp_hw_sw_min_ring_size(struct test_spec *test)
 {
 	int ret;

@@ -7,6 +7,8 @@ int xdpf_sz;
 int sinfo_sz;
 int data_len;
 int pull_len;
+int ext_sz;
+int hash_ext_sz;
 
 #define XDP_PACKET_HEADROOM 256
 
@@ -14,6 +16,8 @@ SEC("xdp.frags")
 int xdp_find_sizes(struct xdp_md *ctx)
 {
 	xdpf_sz = sizeof(struct xdp_frame);
+	hash_ext_sz = sizeof(struct xdp_skb_ext) +
+		      sizeof(struct xdp_skb_ext_hash);
 	sinfo_sz = __PAGE_SIZE - XDP_PACKET_HEADROOM -
 		   (ctx->data_end - ctx->data);
 
@@ -29,6 +33,9 @@ int xdp_pull_data_prog(struct xdp_md *ctx)
 	int err;
 
 	if (data_len != data_end - data)
+		return XDP_DROP;
+
+	if (ext_sz && bpf_xdp_skb_ext_store_rx_hash(ctx, 0, XDP_RSS_TYPE_NONE))
 		return XDP_DROP;
 
 	err = bpf_xdp_pull_data(ctx, pull_len);

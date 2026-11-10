@@ -81,7 +81,8 @@ static void run_test(struct test_xdp_pull_data *skel, int retval,
 
 	skel->bss->data_len = data_len;
 	if (pull_len & PULL_MAX) {
-		int headroom = XDP_PACKET_HEADROOM - meta_len - skel->bss->xdpf_sz;
+		int headroom = XDP_PACKET_HEADROOM - meta_len -
+			       skel->bss->xdpf_sz - skel->bss->ext_sz;
 		int tailroom = frame_sz - XDP_PACKET_HEADROOM -
 			       data_len - skel->bss->sinfo_sz;
 
@@ -167,6 +168,15 @@ static void test_xdp_pull_data_basic(void)
 		 PULL_MAX | PULL_PLUS_ONE);
 
 	/* multi-buf pkt, no tailroom */
+	run_test(skel, XDP_DROP, pg_sz, buff_len, 0, max_data_len,
+		 PULL_MAX | PULL_PLUS_ONE);
+
+	skel->bss->ext_sz = skel->bss->hash_ext_sz;
+
+	/* multi-buf pkt, hash stored, no tailroom, pull requires memmove */
+	run_test(skel, XDP_PASS, pg_sz, buff_len, 0, max_data_len, PULL_MAX);
+
+	/* multi-buf pkt, hash stored, no tailroom */
 	run_test(skel, XDP_DROP, pg_sz, buff_len, 0, max_data_len,
 		 PULL_MAX | PULL_PLUS_ONE);
 
