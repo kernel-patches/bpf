@@ -791,6 +791,9 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
 
 	case LINUX_REBOOT_CMD_POWER_OFF:
 		kernel_power_off();
+		pr_emerg("Power off failed: System halted instead\n");
+		/* kernel_power_off() already ran the shutdown, only halt. */
+		machine_halt();
 		do_exit(0);
 		break;
 
