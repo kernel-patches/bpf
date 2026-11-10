@@ -24,6 +24,8 @@ tests="
 	nat_connect_v4				ip4-nat-xon: Basic ipv4 tcp connection via NAT
 	nat_related_v4				ip4-nat-related: ICMP related matches work with SNAT
 	netlink_checks				ovsnl: validate netlink attrs and settings
+	dp_features				ovsdp: rejected set keeps bits
+	dp_features_recirc			ovsdp: recirc survives rejection
 	upcall_interfaces			ovs: test the upcall interfaces
 	tunnel_metadata				ovs: test extraction of tunnel metadata
 	drop_reason				drop: test drop reasons are emitted
@@ -1406,6 +1408,130 @@ test_netlink_checks () {
 		info "failed - error not generated"
 		return 1
 	fi
+	return 0
+}
+
+ovs_dp_features_set() {
+	python3 $ovs_base/ovs-dpctl.py set-dp "$@"
+}
+
+ovs_dp_features_check() {
+	python3 $ovs_base/ovs-dpctl.py show "$1" |
+		grep -q "features: 0x$2\$"
+}
+
+# The number of an errno outside the base list differs by architecture.
+# EINVAL is in the base list and is 22 everywhere.
+ovs_errno() {
+	python3 -c "import errno; print(errno.$1)"
+}
+
+# dp_features test
+# - a set with the dispatch bit and pids is accepted and reported back
+# - a set with an empty per-cpu-pids is rejected with EINVAL and leaves
+#   the features as they were
+# - an outdated new request drops the features, and sets work afterwards
+test_dp_features() {
+	local t="test_dp_features"
+	local dp="dpfeat0"
+
+	sbx_add "$t" || return $?
+	ovs_add_dp "$t" "$dp" || return 1
+
+	info "clear the datapath features"
+	ovs_sbx "$t" ovs_dp_features_set "$dp" --features 0 || return 1
+	ovs_sbx "$t" ovs_dp_features_check "$dp" 0 \
+	    || { info "features were not cleared"; return 1; }
+
+	# 8 is OVS_DP_F_DISPATCH_UPCALL_PER_CPU, the bit that makes the
+	# kernel read per-cpu-pids.
+	info "a set with the dispatch bit and pids is accepted"
+	ovs_sbx "$t" ovs_dp_features_set "$dp" --features 8 \
+	    --per-cpu-pids 1,2 || return 1
+	ovs_sbx "$t" ovs_dp_features_check "$dp" 8 \
+	    || { info "the accepted set was not applied"; return 1; }
+
+	ovs_sbx "$t" ovs_dp_features_set "$dp" --features 0 || return 1
+
+	# ovs-dpctl sends the empty list as an attribute with no payload,
+	# which is what the kernel rejects.
+	info "a set with an empty per-cpu-pids is rejected"
+	ovs_sbx "$t" ovs_dp_features_set "$dp" --features 8 \
+	    --per-cpu-pids "" &> /dev/null
+	[ $? -eq 22 ] \
+	    || { info "the empty per-cpu-pids set did not fail with EINVAL"; \
+		 return 1; }
+
+	info "the rejected set keeps the features it had"
+	ovs_sbx "$t" ovs_dp_features_check "$dp" 0 \
+	    || { info "the rejected set was recorded"; return 1; }
+
+	# An outdated client that asks for an existing datapath again makes
+	# the kernel drop its features. The datapath keeps working.
+	info "an outdated new request drops the features"
+	ovs_sbx "$t" ovs_dp_features_set "$dp" --features 8 || return 1
+	ovs_sbx "$t" python3 $ovs_base/ovs-dpctl.py add-dp "$dp" -V 1:0 \
+	    &> /dev/null
+	ovs_sbx "$t" ovs_dp_features_check "$dp" 0 \
+	    || { info "the outdated new request did not drop the features"; \
+		 return 1; }
+	ovs_sbx "$t" ovs_dp_features_set "$dp" --features 8 \
+	    || { info "the datapath stopped accepting sets"; return 1; }
+	ovs_sbx "$t" ovs_dp_features_check "$dp" 8 \
+	    || { info "the reset datapath took no features"; return 1; }
+
+	return 0
+}
+
+# dp_features_recirc test
+# - a datapath that holds the recirc bit keeps it across a rejected set
+# - an outdated new request drops the features
+# - the bit needs CONFIG_NET_TC_SKB_EXT, so the test skips without it
+test_dp_features_recirc() {
+	local t="test_dp_features_recirc"
+	local dp="dpfeat1"
+
+	sbx_add "$t" || return $?
+	ovs_add_dp "$t" "$dp" || return 1
+
+	ovs_sbx "$t" ovs_dp_features_set "$dp" --features 0 || return 1
+
+	# 4 is OVS_DP_F_TC_RECIRC_SHARING. The kernel takes the bit only when
+	# the tc skb extension is compiled in.
+	ovs_sbx "$t" ovs_dp_features_set "$dp" --features 4 &> /dev/null
+	rc=$?
+	if [ $rc -ne 0 ]; then
+		eopnotsupp=$(ovs_errno EOPNOTSUPP)
+		if [ -n "$eopnotsupp" ] && [ $rc -eq "$eopnotsupp" ]; then
+			# Say it on stdout: a skip that only reaches debug.log
+			# leaves CI with a pass and no sign of the missing
+			# coverage.
+			printf "# tc skb extension is not compiled in," \
+			       "skipping recirc\n"
+			ovs_exit_sig
+			return $ksft_skip
+		fi
+		info "the recirc set failed with $rc"
+		return 1
+	fi
+	ovs_sbx "$t" ovs_dp_features_check "$dp" 4 \
+	    || { info "the accepted recirc set was not applied"; return 1; }
+
+	info "the rejected set keeps the recirc bit"
+	ovs_sbx "$t" ovs_dp_features_set "$dp" --features 8 \
+	    --per-cpu-pids "" &> /dev/null
+	[ $? -eq 22 ] \
+	    || { info "the rejected set did not fail with EINVAL"; return 1; }
+	ovs_sbx "$t" ovs_dp_features_check "$dp" 4 \
+	    || { info "the rejected set dropped the recirc bit"; return 1; }
+
+	info "an outdated new request drops the features"
+	ovs_sbx "$t" python3 $ovs_base/ovs-dpctl.py add-dp "$dp" -V 1:4 \
+	    &> /dev/null
+	ovs_sbx "$t" ovs_dp_features_check "$dp" 0 \
+	    || { info "the outdated new request did not drop the features"; \
+		 return 1; }
+
 	return 0
 }
 
