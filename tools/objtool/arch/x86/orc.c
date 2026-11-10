@@ -8,7 +8,7 @@
 
 int init_orc_entry(struct orc_entry *orc, struct cfi_state *cfi, struct instruction *insn)
 {
-	struct cfi_reg *bp = &cfi->regs[CFI_BP];
+	struct cfi_reg *bp;
 
 	memset(orc, 0, sizeof(*orc));
 
@@ -21,6 +21,8 @@ int init_orc_entry(struct orc_entry *orc, struct cfi_state *cfi, struct instruct
 		orc->type = ORC_TYPE_UNDEFINED;
 		return 0;
 	}
+
+	bp = &cfi->regs[CFI_BP];
 
 	switch (cfi->type) {
 	case UNWIND_HINT_TYPE_UNDEFINED:
