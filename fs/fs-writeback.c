@@ -201,15 +201,16 @@ static bool wb_wait_for_completion_cb(struct wb_completion *done,
 {
 	unsigned long timeout = sysctl_hung_task_timeout_secs;
 	unsigned long waited_secs = (jiffies - done->wait_start) / HZ;
+	int left = atomic_read(&done->cnt);
 
 	done->progress_stamp = jiffies;
-	if (timeout && (waited_secs > timeout))
+	if (left && timeout && (waited_secs > timeout))
 		pr_info("INFO: The task %s:%d has been waiting for writeback "
 			"completion for more than %lu seconds (bdi %s, work items left: %d).\n",
 			current->comm, current->pid, waited_secs,
-			bdi_dev_name(bdi), atomic_read(&done->cnt));
+			bdi_dev_name(bdi), left);
 
-	return !atomic_read(&done->cnt);
+	return !left;
 }
 
 /**
@@ -226,9 +227,18 @@ static bool wb_wait_for_completion_cb(struct wb_completion *done,
 void wb_wait_for_completion(struct wb_completion *done,
 			    struct backing_dev_info *bdi)
 {
+	unsigned long timeout, waited;
+
 	done->wait_start = jiffies;
 	atomic_dec(&done->cnt);		/* put down the initial count */
 	wait_event(*done->waitq, wb_wait_for_completion_cb(done, bdi));
+
+	timeout = sysctl_hung_task_timeout_secs;
+	waited = jiffies - done->wait_start;
+	if (timeout && waited > timeout * HZ)
+		pr_info("The task %s:%d waited %lu seconds for writeback completion on bdi %s\n",
+			current->comm, current->pid, waited / HZ,
+			bdi_dev_name(bdi));
 }
 
 #ifdef CONFIG_CGROUP_WRITEBACK
