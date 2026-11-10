@@ -161,8 +161,17 @@ restart:
 	printf("\n");
 
 	/*
-	 * Fully initialized, attach and run.
+	 * Fully initialized, attach and run. An interrupt during the
+	 * initialization loop leaves the tail of cgrp_q_arr without inner
+	 * maps; attaching in that state lets ops.cgroup_init() hand out
+	 * uninitialized slots and abort the scheduler on the first cgroup
+	 * task.
 	 */
+	if (exit_req) {
+		scx_pair__destroy(skel);
+		return 1;
+	}
+
 	link = SCX_OPS_ATTACH(skel, pair_ops, scx_pair);
 
 	while (!exit_req && !UEI_EXITED(skel, uei)) {
