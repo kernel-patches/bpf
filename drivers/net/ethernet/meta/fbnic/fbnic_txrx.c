@@ -22,6 +22,8 @@ enum {
 	FBNIC_XDP_PASS = 0,
 	FBNIC_XDP_CONSUME,
 	FBNIC_XDP_TX,
+	FBNIC_XDP_REDIRECT,
+	FBNIC_XDP_REDIRECT_ERR,
 	FBNIC_XDP_LEN_ERR,
 };
 
@@ -1211,6 +1213,10 @@ xdp_pass:
 		return fbnic_build_skb(nv, pkt);
 	case XDP_TX:
 		return ERR_PTR(fbnic_pkt_tx(nv, pkt));
+	case XDP_REDIRECT:
+		if (xdp_do_redirect(nv->napi.dev, &pkt->buff, xdp_prog))
+			return ERR_PTR(-FBNIC_XDP_REDIRECT_ERR);
+		return ERR_PTR(-FBNIC_XDP_REDIRECT);
 	default:
 		bpf_warn_invalid_xdp_action(nv->napi.dev, xdp_prog, act);
 		fallthrough;
@@ -1280,6 +1286,7 @@ static int fbnic_clean_rcq(struct fbnic_napi_vector *nv,
 	struct fbnic_ring *rcq = &qt->cmpl;
 	struct fbnic_pkt_buff *pkt;
 	__le64 *raw_rcd, done;
+	bool redirect = false;
 	u32 head = rcq->head;
 
 	done = (head & (rcq->size_mask + 1)) ? cpu_to_le64(FBNIC_RCD_DONE) : 0;
@@ -1336,6 +1343,16 @@ static int fbnic_clean_rcq(struct fbnic_napi_vector *nv,
 				pkt_tail = nv->qt[0].sub1.tail;
 			} else if (PTR_ERR(skb) == -FBNIC_XDP_CONSUME) {
 				fbnic_put_pkt_buff(qt, pkt, 1);
+			} else if (skb == ERR_PTR(-FBNIC_XDP_REDIRECT)) {
+				redirect = true;
+			} else if (skb == ERR_PTR(-FBNIC_XDP_REDIRECT_ERR)) {
+				/* A broadcast may queue frames, then fail. XDP
+				 * consumed the packet, so it also counts as
+				 * received.
+				 */
+				redirect = true;
+				dropped++;
+				fbnic_put_pkt_buff(qt, pkt, 1);
 			} else {
 				if (!skb)
 					alloc_failed++;
@@ -1377,6 +1394,8 @@ next_dont_count:
 
 	if (pkt_tail >= 0)
 		fbnic_pkt_commit_tail(nv, pkt_tail);
+	if (redirect)
+		xdp_do_flush();
 
 	/* Unmap and free processed buffers */
 	if (head0 >= 0)
