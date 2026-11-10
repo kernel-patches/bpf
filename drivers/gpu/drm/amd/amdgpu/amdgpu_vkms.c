@@ -8,9 +8,6 @@
 #include <drm/drm_vblank_helper.h>
 
 #include "amdgpu.h"
-#ifdef CONFIG_DRM_AMDGPU_SI
-#include "dce_v6_0.h"
-#endif
 #include "ivsrcid/ivsrcid_vislands30.h"
 #include "amdgpu_vkms.h"
 #include "amdgpu_display.h"
@@ -441,26 +438,6 @@ static int amdgpu_vkms_sw_fini(struct amdgpu_ip_block *ip_block)
 
 static int amdgpu_vkms_hw_init(struct amdgpu_ip_block *ip_block)
 {
-	struct amdgpu_device *adev = ip_block->adev;
-
-	switch (adev->asic_type) {
-#ifdef CONFIG_DRM_AMDGPU_SI
-	case CHIP_TAHITI:
-	case CHIP_PITCAIRN:
-	case CHIP_VERDE:
-	case CHIP_OLAND:
-		dce_v6_0_disable_dce(adev);
-		break;
-#endif
-	case CHIP_TOPAZ:
-#ifdef CONFIG_DRM_AMDGPU_SI
-	case CHIP_HAINAN:
-#endif
-		/* no DCE */
-		break;
-	default:
-		break;
-	}
 	return 0;
 }
 
