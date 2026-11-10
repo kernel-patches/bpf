@@ -666,7 +666,8 @@ static void bcm2835_spi_dma_tx_done(void *data)
  * @is_tx: whether to submit DMA descriptor for TX or RX sglist
  *
  * Prepare and submit a DMA descriptor for the TX or RX sglist of @tfr.
- * Return 0 on success or a negative error number.
+ *
+ * Return: 0 on success or a negative error number.
  */
 static int bcm2835_spi_prepare_sg(struct spi_controller *ctlr,
 				  struct spi_transfer *tfr,
@@ -764,6 +765,10 @@ static int bcm2835_spi_prepare_sg(struct spi_controller *ctlr,
  * has finished, the DMA engine zero-fills the TX FIFO until it is half full.
  * (Tuneable with the DC register.)  So up to 9 gratuitous bus accesses are
  * performed at the end of an RX-only transfer.
+ *
+ * Return: 1 if the transfer was started and is still in progress, in which
+ * case it is finalized from the DMA completion callbacks, or a negative error
+ * number.
  */
 static int bcm2835_spi_transfer_one_dma(struct spi_controller *ctlr,
 					struct spi_transfer *tfr,
