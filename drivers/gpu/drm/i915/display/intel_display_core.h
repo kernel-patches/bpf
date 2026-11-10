@@ -49,6 +49,7 @@ struct intel_fbdev;
 struct intel_fdi_funcs;
 struct intel_hotplug_irq_funcs;
 struct intel_initial_plane_config;
+struct intel_mmio_funcs;
 struct intel_opregion;
 struct intel_overlay;
 struct intel_uncore;
@@ -533,6 +534,7 @@ struct intel_display {
 
 	struct {
 		struct intel_uncore *uncore;
+		const struct intel_mmio_funcs *funcs;
 	} mmio;
 
 	struct {

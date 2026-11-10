@@ -12,6 +12,11 @@
 #include "intel_uncore.h"
 #include "intel_uncore_trace.h"
 
+struct intel_mmio_funcs {
+	u32 (*read)(struct intel_display *display, intel_reg_t reg);
+	void (*write)(struct intel_display *display, intel_reg_t reg, u32 val);
+};
+
 static inline struct intel_uncore *__to_uncore(struct intel_display *display)
 {
 	return display->mmio.uncore;
@@ -30,7 +35,7 @@ intel_de_read(struct intel_display *display, intel_reg_t reg)
 
 	intel_dmc_wl_get(display, reg);
 
-	val = intel_uncore_read(__to_uncore(display), reg);
+	val = display->mmio.funcs->read(display, reg);
 
 	intel_dmc_wl_put(display, reg);
 
@@ -60,7 +65,7 @@ intel_de_write(struct intel_display *display, intel_reg_t reg, u32 val)
 {
 	intel_dmc_wl_get(display, reg);
 
-	intel_uncore_write(__to_uncore(display), reg, val);
+	display->mmio.funcs->write(display, reg, val);
 
 	intel_dmc_wl_put(display, reg);
 }
