@@ -699,9 +699,9 @@ const struct attribute_group aer_stats_attr_group = {
 					 char *buf)			\
 	{								\
 		struct pci_dev *pdev = to_pci_dev(dev);			\
+		unsigned long iv = pdev->aer_info->ratelimit.interval;	\
 									\
-		return sysfs_emit(buf, "%d\n",				\
-				  pdev->aer_info->ratelimit.interval);	\
+		return sysfs_emit(buf, "%u\n", jiffies_to_msecs(iv));	\
 	}								\
 									\
 	static ssize_t							\
