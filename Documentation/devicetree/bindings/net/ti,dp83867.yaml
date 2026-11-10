@@ -53,6 +53,16 @@ properties:
     items:
       - const: io_impedance_ctrl
 
+  ti,output-impedance-ohms:
+    description: |
+      MAC Interface Impedance control to set the programmable output impedance
+      to a value between minimum (35 ohms) and maximum (70 ohms). The PHY
+      has 32 settings in this range; the datasheet does not specify the
+      impedance of each setting, so the value is mapped linearly to the
+      nearest one.
+    minimum: 35
+    maximum: 70
+
   ti,min-output-impedance:
     type: boolean
     description: |
@@ -133,6 +143,12 @@ allOf:
       required: [nvmem-cells, "ti,max-output-impedance"]
   - not:
       required: ["ti,min-output-impedance", "ti,max-output-impedance"]
+  - not:
+      required: [nvmem-cells, "ti,output-impedance-ohms"]
+  - not:
+      required: ["ti,output-impedance-ohms", "ti,min-output-impedance"]
+  - not:
+      required: ["ti,output-impedance-ohms", "ti,max-output-impedance"]
 
 required:
   - reg
