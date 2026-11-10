@@ -19,6 +19,10 @@
 struct net_device;
 struct xsk_queue;
 struct xdp_buff;
+struct memory_provider_ops;
+
+/* The memory provider of AF_XDP page pool zero copy */
+extern const struct memory_provider_ops xsk_pp_ops;
 
 struct xdp_umem {
 	void *addrs;

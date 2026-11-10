@@ -163,6 +163,7 @@
 #include <net/page_pool/types.h>
 #include <net/page_pool/helpers.h>
 #include <net/page_pool/memory_provider.h>
+#include <net/xdp_sock_drv.h>
 #include <net/rps.h>
 #include <linux/phy_link_topology.h>
 
@@ -10577,6 +10578,8 @@ u8 dev_xdp_sb_prog_count(struct net_device *dev)
 
 int netif_xdp_propagate(struct net_device *dev, struct netdev_bpf *bpf)
 {
+	int err;
+
 	if (!dev->netdev_ops->ndo_bpf)
 		return -EOPNOTSUPP;
 
@@ -10592,6 +10595,13 @@ int netif_xdp_propagate(struct net_device *dev, struct netdev_bpf *bpf)
 		NL_SET_ERR_MSG(bpf->extack,
 			       "unable to propagate XDP to device using unreadable memory provider");
 		return -EBUSY;
+	}
+
+	if (bpf->command == XDP_SETUP_PROG && bpf->prog) {
+		err = xsk_validate_dev(dev, dev->mtu, bpf->prog, XDP_MODE_DRV,
+				       bpf->extack);
+		if (err)
+			return err;
 	}
 
 	return dev->netdev_ops->ndo_bpf(dev, bpf);
@@ -10669,6 +10679,12 @@ static int dev_xdp_install(struct net_device *dev, enum bpf_xdp_mode mode,
 		NL_SET_ERR_MSG(extack,
 			       "unable to install XDP to device using unreadable memory provider");
 		return -EBUSY;
+	}
+
+	if (mode != XDP_MODE_HW && prog) {
+		err = xsk_validate_dev(dev, dev->mtu, prog, mode, extack);
+		if (err)
+			return err;
 	}
 
 	memset(&xdp, 0, sizeof(xdp));

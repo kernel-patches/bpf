@@ -6,6 +6,7 @@
 #include <net/netdev_queues.h>
 #include <net/netdev_rx_queue.h>
 #include <net/page_pool/memory_provider.h>
+#include <net/xdp_sock.h>
 
 #include "dev.h"
 #include "page_pool_priv.h"
@@ -141,6 +142,7 @@ static int netdev_rx_queue_reconfig(struct net_device *dev,
 		goto err_free_new_mem;
 	}
 
+	rxq->mp_gen++;
 	err = qops->ndo_queue_mem_alloc(dev, qcfg_new, new_mem, rxq_idx);
 	if (err)
 		goto err_free_old_mem;
@@ -235,6 +237,10 @@ static int __netif_mp_open_rxq(struct net_device *dev, unsigned int rxq_idx,
 		NL_SET_ERR_MSG(extack, "device does not support: rx_page_size");
 		return -EOPNOTSUPP;
 	}
+	if (p->rx_headroom && !(qops->supported_params & QCFG_RX_HEADROOM)) {
+		NL_SET_ERR_MSG(extack, "device does not support: rx_headroom");
+		return -EOPNOTSUPP;
+	}
 
 	rxq = __netif_get_rx_queue(dev, rxq_idx);
 	if (rxq->mp_params.mp_ops) {
@@ -242,7 +248,8 @@ static int __netif_mp_open_rxq(struct net_device *dev, unsigned int rxq_idx,
 		return -EEXIST;
 	}
 #ifdef CONFIG_XDP_SOCKETS
-	if (rxq->pool) {
+	/* An AF_XDP pool owns the queue, unless it installs its provider. */
+	if (rxq->pool && p->mp_ops != &xsk_pp_ops) {
 		NL_SET_ERR_MSG(extack, "designated queue already in use by AF_XDP");
 		return -EBUSY;
 	}

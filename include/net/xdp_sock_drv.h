@@ -22,8 +22,29 @@ struct xsk_cb_desc {
 	u8 bytes;
 };
 
+/**
+ * struct xsk_rx_check - AF_XDP page pool RX setup a driver must accept
+ * @buf_size: size of each RX buffer
+ * @headroom: space before the packet in a head buffer, including
+ *	XDP_PACKET_HEADROOM. The UMEM headroom is the rest.
+ * @mtu: MTU of the device
+ * @sg: the socket takes packets in more than one buffer
+ * @prog: XDP program to check, or NULL for the current one
+ */
+struct xsk_rx_check {
+	u32 buf_size;
+	u32 headroom;
+	unsigned int mtu;
+	bool sg;
+	struct bpf_prog *prog;
+};
+
 #ifdef CONFIG_XDP_SOCKETS
 
+int xsk_validate_dev(struct net_device *dev, unsigned int mtu,
+		     struct bpf_prog *prog, enum bpf_xdp_mode mode,
+		     struct netlink_ext_ack *extack);
+struct xsk_buff_pool *xsk_rxq_pool(struct net_device *dev, u16 queue_id);
 void xsk_tx_completed(struct xsk_buff_pool *pool, u32 nb_entries);
 bool xsk_tx_peek_desc(struct xsk_buff_pool *pool, struct xdp_desc *desc);
 u32 xsk_tx_peek_release_desc_batch(struct xsk_buff_pool *pool, u32 max);
@@ -35,6 +56,11 @@ void xsk_set_tx_need_wakeup(struct xsk_buff_pool *pool);
 void xsk_clear_rx_need_wakeup(struct xsk_buff_pool *pool);
 void xsk_clear_tx_need_wakeup(struct xsk_buff_pool *pool);
 bool xsk_uses_need_wakeup(struct xsk_buff_pool *pool);
+
+static inline bool xsk_pool_uses_sg(struct xsk_buff_pool *pool)
+{
+	return pool->umem->flags & XDP_UMEM_SG_FLAG;
+}
 
 static inline u32 xsk_pool_get_headroom(struct xsk_buff_pool *pool)
 {
@@ -356,6 +382,20 @@ static inline void xsk_buff_raw_dma_sync_for_device(struct xsk_buff_pool *pool,
 
 #else
 
+static inline int xsk_validate_dev(struct net_device *dev, unsigned int mtu,
+				   struct bpf_prog *prog,
+				   enum bpf_xdp_mode mode,
+				   struct netlink_ext_ack *extack)
+{
+	return 0;
+}
+
+static inline struct xsk_buff_pool *xsk_rxq_pool(struct net_device *dev,
+						 u16 queue_id)
+{
+	return NULL;
+}
+
 static inline void xsk_tx_completed(struct xsk_buff_pool *pool, u32 nb_entries)
 {
 }
@@ -398,6 +438,11 @@ static inline void xsk_clear_tx_need_wakeup(struct xsk_buff_pool *pool)
 }
 
 static inline bool xsk_uses_need_wakeup(struct xsk_buff_pool *pool)
+{
+	return false;
+}
+
+static inline bool xsk_pool_uses_sg(struct xsk_buff_pool *pool)
 {
 	return false;
 }

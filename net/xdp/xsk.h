@@ -36,10 +36,13 @@ void xsk_map_try_sock_delete(struct xsk_map *map, struct xdp_sock *xs,
 			     struct xdp_sock __rcu **map_entry);
 struct xsk_pp;
 
-extern const struct memory_provider_ops xsk_pp_ops;
-
 struct xsk_pp *xsk_pp_create(struct xsk_buff_pool *pool);
 void xsk_pp_put(struct xsk_pp *pp);
+bool xsk_pp_supported(struct net_device *dev);
+int xsk_pp_bind(struct xsk_buff_pool *pool, struct net_device *dev,
+		u16 queue_id);
+void xsk_pp_unbind(struct xsk_buff_pool *pool);
+int xp_alloc_heads(struct xsk_buff_pool *pool);
 void xsk_clear_pool_at_qid(struct net_device *dev, u16 queue_id);
 int xsk_reg_pool_at_qid(struct net_device *dev, struct xsk_buff_pool *pool,
 			u16 queue_id);

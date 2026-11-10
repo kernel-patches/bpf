@@ -8,12 +8,17 @@
  *       +-----RX ring-------+
  */
 
+#include <net/netdev_lock.h>
+#include <net/netdev_queues.h>
+#include <net/netdev_rx_queue.h>
 #include <net/page_pool/helpers.h>
 #include <net/page_pool/memory_provider.h>
 #include <net/xdp_sock_drv.h>
 
 #include "xsk.h"
 #include "xsk_queue.h"
+
+#define XSK_PP_DMA_ATTR	(DMA_ATTR_WEAK_ORDERING | DMA_ATTR_SKIP_CPU_SYNC)
 
 enum xsk_pp_chunk {
 	XSK_PP_USER,	/* owned by userspace */
@@ -30,6 +35,8 @@ struct xsk_pp {
 	refcount_t refs;
 	u32 nr_pools;
 	bool dma_need_sync;
+	/* RX queue of the provider, NULL once it is removed */
+	struct netdev_rx_queue *rxq;
 	u8 *state;
 	u32 reuse_cnt;
 	u32 reuse[];
@@ -236,11 +243,225 @@ static int xsk_pp_nl_fill(void *mp_priv, struct sk_buff *rsp,
 	return 0;
 }
 
+/* The queue no longer uses the provider, and its DMA stopped */
+static void xsk_pp_detach(struct xsk_pp *pp)
+{
+	pp->rxq = NULL;
+	spin_lock_bh(&pp->lock);
+	pp->fq = NULL;
+	spin_unlock_bh(&pp->lock);
+	xp_dma_unmap(pp->pool, XSK_PP_DMA_ATTR);
+}
+
+/* The device unregisters, and is closed */
+static void xsk_pp_uninstall(void *mp_priv, struct netdev_rx_queue *rxq)
+{
+	xsk_pp_detach(mp_priv);
+}
+
 const struct memory_provider_ops xsk_pp_ops = {
 	.init		= xsk_pp_init,
 	.destroy	= xsk_pp_destroy,
 	.alloc_netmems	= xsk_pp_alloc_netmems,
 	.release_netmem	= xsk_pp_release_netmem,
 	.nl_fill	= xsk_pp_nl_fill,
+	.uninstall	= xsk_pp_uninstall,
 	.caps		= MP_CAP_READABLE,
 };
+
+static bool xsk_pp_abandon(struct xsk_pp *pp)
+{
+	struct xsk_buff_pool *pool = pp->pool;
+	bool busy;
+	u32 idx;
+
+	spin_lock_bh(&pp->lock);
+	busy = pp->nr_pools;
+	while (!busy && pp->reuse_cnt) {
+		idx = pp->reuse[--pp->reuse_cnt];
+		pp->state[idx] = XSK_PP_USER;
+		xp_free(&pool->heads[idx]);
+	}
+	spin_unlock_bh(&pp->lock);
+
+	return !busy;
+}
+
+static int xsk_pp_validate(struct net_device *dev, struct xsk_buff_pool *pool,
+			   unsigned int mtu, struct bpf_prog *prog,
+			   struct netlink_ext_ack *extack)
+{
+	struct xsk_rx_check check = {
+		.buf_size = pool->chunk_size,
+		.headroom = xsk_pool_get_headroom(pool),
+		.mtu = mtu,
+		.sg = xsk_pool_uses_sg(pool),
+		.prog = prog,
+	};
+	struct netdev_bpf bpf = {
+		.command = XDP_VALIDATE_XSK_POOL,
+		.xsk_check.check = &check,
+		.xsk_check.extack = extack,
+	};
+
+	return dev->netdev_ops->ndo_bpf(dev, &bpf);
+}
+
+/**
+ * xsk_validate_dev - check AF_XDP page pool queues against a new setting
+ * @dev: device of the queues
+ * @mtu: MTU to check
+ * @prog: XDP program to check, or NULL for the current one
+ * @mode: XDP mode of @prog
+ * @extack: netlink extended ack
+ *
+ * Context: holds the instance lock of @dev, or RTNL for a device without it.
+ * Return: 0 if the driver accepts all queues of @dev that have an AF_XDP
+ * memory provider, or its error.
+ */
+int xsk_validate_dev(struct net_device *dev, unsigned int mtu,
+		     struct bpf_prog *prog, enum bpf_xdp_mode mode,
+		     struct netlink_ext_ack *extack)
+{
+	struct netdev_rx_queue *rxq;
+	struct xsk_pp *pp;
+	unsigned int i;
+	int err;
+
+	netdev_assert_locked_ops_compat(dev);
+
+	for (i = 0; i < dev->real_num_rx_queues; i++) {
+		rxq = __netif_get_rx_queue(dev, i);
+		if (rxq->mp_params.mp_ops != &xsk_pp_ops)
+			continue;
+
+		/* Generic XDP runs outside the queue NAPI */
+		if (mode == XDP_MODE_SKB) {
+			NL_SET_ERR_MSG(extack,
+				       "generic XDP cannot feed an AF_XDP page pool socket");
+			return -EBUSY;
+		}
+
+		pp = rxq->mp_params.mp_priv;
+		err = xsk_pp_validate(dev, pp->pool, mtu, prog, extack);
+		if (err)
+			return err;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(xsk_validate_dev);
+
+/**
+ * xsk_rxq_pool - get the AF_XDP pool that provides memory to an RX queue
+ * @dev: device of the queue
+ * @queue_id: RX queue
+ *
+ * The pool stays valid while the queue that the caller allocates runs.
+ *
+ * Context: holds the instance lock of @dev.
+ * Return: the buffer pool, or NULL.
+ */
+struct xsk_buff_pool *xsk_rxq_pool(struct net_device *dev, u16 queue_id)
+{
+	struct netdev_rx_queue *rxq;
+	struct xsk_pp *pp;
+
+	netdev_assert_locked(dev);
+
+	if (queue_id >= dev->real_num_rx_queues)
+		return NULL;
+
+	rxq = __netif_get_rx_queue(dev, queue_id);
+	if (rxq->mp_params.mp_ops != &xsk_pp_ops)
+		return NULL;
+
+	pp = rxq->mp_params.mp_priv;
+	return pp->pool;
+}
+EXPORT_SYMBOL_GPL(xsk_rxq_pool);
+
+bool xsk_pp_supported(struct net_device *dev)
+{
+	const struct netdev_queue_mgmt_ops *qops = dev->queue_mgmt_ops;
+
+	return qops && qops->xsk_page_pool;
+}
+
+/* Called with RTNL and the instance lock of @dev. On error, @pool->pp stays
+ * set if an old page pool still owns chunks; copy mode must not take the pool.
+ */
+int xsk_pp_bind(struct xsk_buff_pool *pool, struct net_device *dev,
+		u16 queue_id)
+{
+	struct pp_memory_provider_params mp = { .mp_ops = &xsk_pp_ops };
+	struct device *dma_dev;
+	struct xsk_pp *pp;
+	int err;
+
+	if (queue_id >= dev->real_num_rx_queues || pool->unaligned)
+		return -EOPNOTSUPP;
+	if ((dev->xdp_features & NETDEV_XDP_ACT_XSK) != NETDEV_XDP_ACT_XSK ||
+	    (xsk_pool_uses_sg(pool) && dev->xdp_zc_max_segs == 1))
+		return -EOPNOTSUPP;
+	if (dev_xdp_prog_id(dev, XDP_MODE_SKB))
+		return -EOPNOTSUPP;
+	if (!netif_all_mps_have_cap(dev, MP_CAP_READABLE))
+		return -EBUSY;
+
+	err = xsk_pp_validate(dev, pool, dev->mtu, NULL, NULL);
+	if (err)
+		return err;
+
+	dma_dev = netdev_queue_get_dma_dev(dev, queue_id, NETDEV_QUEUE_TYPE_RX);
+	if (!dma_dev)
+		return -EOPNOTSUPP;
+
+	err = xp_dma_map(pool, dma_dev, XSK_PP_DMA_ATTR, pool->umem->pgs,
+			 pool->umem->npgs);
+	if (err)
+		return err;
+
+	pp = xsk_pp_create(pool);
+	if (IS_ERR(pp)) {
+		xp_dma_unmap(pool, XSK_PP_DMA_ATTR);
+		return PTR_ERR(pp);
+	}
+
+	mp.mp_priv = pp;
+	mp.rx_page_size = pool->chunk_size;
+	mp.rx_headroom = xsk_pool_get_headroom(pool);
+	err = netif_mp_open_rxq(dev, queue_id, &mp, NULL);
+	if (!err) {
+		pp->rxq = __netif_get_rx_queue(dev, queue_id);
+		pool->pp = pp;
+		pool->xdp_zc_max_segs = dev->xdp_zc_max_segs;
+		return 0;
+	}
+
+	xp_dma_unmap(pool, XSK_PP_DMA_ATTR);
+	/* Copy mode takes the chunks that the provider holds */
+	if (!xp_alloc_heads(pool) && xsk_pp_abandon(pp))
+		xsk_pp_put(pp);
+	else
+		pool->pp = pp;
+
+	return err;
+}
+
+/* Called with RTNL and the instance lock of the device */
+void xsk_pp_unbind(struct xsk_buff_pool *pool)
+{
+	struct xsk_pp *pp = pool->pp;
+	struct pp_memory_provider_params mp = {
+		.mp_ops = &xsk_pp_ops,
+		.mp_priv = pp,
+	};
+
+	/* Unregister removed the provider already */
+	if (!pp->rxq)
+		return;
+
+	netif_mp_close_rxq(pool->netdev, pool->queue_id, &mp);
+	xsk_pp_detach(pp);
+}

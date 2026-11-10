@@ -45,12 +45,15 @@ struct netdev_config {
 /**
  * struct netdev_queue_config - rendered configuration for an RX queue
  * @rx_page_size:	Size of one RX page-pool allocation.
+ * @rx_headroom:	Space before the packet in a head buffer, including
+ *			XDP_PACKET_HEADROOM. Zero selects the driver default.
  * @rx_ring_size:	Configured size of the regular RX ring.
  * @rx_mini_ring_size:	Configured size of the RX mini ring.
  * @rx_jumbo_ring_size:	Configured size of the RX jumbo ring.
  */
 struct netdev_queue_config {
 	u32	rx_page_size;
+	u32	rx_headroom;
 	u32	rx_ring_size;
 	u32	rx_mini_ring_size;
 	u32	rx_jumbo_ring_size;
@@ -156,6 +159,8 @@ void netdev_stat_queue_sum(struct net_device *netdev,
 enum {
 	/* The queue checks and honours the page size qcfg parameter */
 	QCFG_RX_PAGE_SIZE	= 0x1,
+	/* The queue checks and honours the headroom qcfg parameter */
+	QCFG_RX_HEADROOM	= 0x2,
 };
 
 /**
@@ -199,6 +204,12 @@ enum {
  *
  * @supported_params:	Bitmask of supported parameters, see QCFG_*.
  *
+ * @xsk_page_pool:	AF_XDP zero copy installs the UMEM as the page pool
+ *			memory provider of the RX queue. The driver selects it
+ *			with PP_FLAG_MEM_PROVIDER and PP_RX_ROLE_HEAD, honours
+ *			whole buffers and QCFG_RX_HEADROOM, and accepts or
+ *			rejects the setup in XDP_VALIDATE_XSK_POOL.
+ *
  * Note that @ndo_queue_mem_alloc and @ndo_queue_mem_free may be called while
  * the interface is closed. @ndo_queue_start and @ndo_queue_stop will only
  * be called for an interface which is open.
@@ -229,6 +240,7 @@ struct netdev_queue_mgmt_ops {
 				    struct netlink_ext_ack *extack);
 
 	unsigned int supported_params;
+	bool xsk_page_pool;
 };
 
 void netdev_queue_config(struct net_device *dev, int rxq,

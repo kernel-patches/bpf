@@ -40,6 +40,12 @@
  */
 #define PP_FLAG_MEM_PROVIDER	BIT(4)
 
+/* RX buffers a page pool supplies, see page_pool_params.rx_roles */
+enum pp_rx_role {
+	PP_RX_ROLE_HEAD		= BIT(0),	/* packet headers */
+	PP_RX_ROLE_PAYLOAD	= BIT(1),	/* payload after header split */
+};
+
 #define PP_FLAG_ALL		(PP_FLAG_DMA_MAP | PP_FLAG_DMA_SYNC_DEV | \
 				 PP_FLAG_SYSTEM_POOL | \
 				 PP_FLAG_ALLOW_UNREADABLE_NETMEM | \
@@ -94,6 +100,8 @@ struct pp_alloc_cache {
  * @queue_idx:	queue idx this page_pool is being created for.
  * @flags:	PP_FLAG_DMA_MAP, PP_FLAG_DMA_SYNC_DEV, PP_FLAG_SYSTEM_POOL,
  *		PP_FLAG_ALLOW_UNREADABLE_NETMEM, PP_FLAG_MEM_PROVIDER.
+ * @rx_roles:	&enum pp_rx_role mask, for pools that select a memory
+ *		provider. Zero means payload buffers.
  */
 struct page_pool_params {
 	struct_group_tagged(page_pool_params_fast, fast,
@@ -110,6 +118,7 @@ struct page_pool_params {
 		struct net_device *netdev;
 		unsigned int queue_idx;
 		unsigned int	flags;
+		unsigned int	rx_roles;
 /* private: used by test code only */
 		void (*init_callback)(netmem_ref netmem, void *arg);
 		void *init_arg;
@@ -182,6 +191,7 @@ struct pp_memory_provider_params {
 	void *mp_priv;
 	const struct memory_provider_ops *mp_ops;
 	u32 rx_page_size;
+	u32 rx_headroom;
 };
 
 struct page_pool {
@@ -245,6 +255,8 @@ struct page_pool {
 
 	void *mp_priv;
 	const struct memory_provider_ops *mp_ops;
+	/* queue allocation that selected the provider */
+	u32 mp_gen;
 
 	struct xarray dma_mapped;
 

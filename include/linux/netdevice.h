@@ -77,6 +77,7 @@ struct udp_tunnel_info;
 struct udp_tunnel_nic_info;
 struct udp_tunnel_nic;
 struct bpf_prog;
+struct xsk_rx_check;
 struct xdp_buff;
 struct xdp_frame;
 struct xdp_metadata_ops;
@@ -1010,6 +1011,8 @@ enum bpf_netdev_command {
 	BPF_OFFLOAD_MAP_ALLOC,
 	BPF_OFFLOAD_MAP_FREE,
 	XDP_SETUP_XSK_POOL,
+	/* Check an AF_XDP page pool setup, see netdev_queue_mgmt_ops */
+	XDP_VALIDATE_XSK_POOL,
 };
 
 struct bpf_prog_offload_ops;
@@ -1048,6 +1051,11 @@ struct netdev_bpf {
 			struct xsk_buff_pool *pool;
 			u16 queue_id;
 		} xsk;
+		/* XDP_VALIDATE_XSK_POOL */
+		struct {
+			const struct xsk_rx_check *check;
+			struct netlink_ext_ack *extack;
+		} xsk_check;
 	};
 };
 
