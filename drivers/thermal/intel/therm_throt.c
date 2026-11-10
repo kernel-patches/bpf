@@ -14,6 +14,9 @@
  * Credits: Adapted from Zwane Mwaikambo's original code in mce_intel.c.
  *          Inspired by Ross Biro's and Al Borchers' counter code.
  */
+
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include <linux/syscore_ops.h>
 #include <linux/interrupt.h>
 #include <linux/notifier.h>
@@ -717,7 +720,7 @@ static void disable_directed_thermal_pkg_intr(unsigned int cpu)
 		smp_call_function_single(new_cpu, config_directed_thermal_pkg_intr,
 					 &enable, true);
 
-		pr_warn_once("Failed to redirect package thermal interrupt from CPU%u to CPU%u; reverting to broadcast.\n",
+		pr_warn_once("Failed to redirect package thermal interrupt from CPU%u to CPU%u; reverting to broadcast\n",
 			     cpu, new_cpu);
 
 		new_cpu = nr_cpu_ids;
@@ -825,7 +828,7 @@ static int thermal_throttle_online(unsigned int cpu)
 	intel_hfi_online(cpu);
 
 	if (enable_directed_thermal_pkg_intr(cpu)) {
-		pr_info_once("Failed to direct package thermal interrupts. All CPUs will receive it.\n");
+		pr_info_once("Failed to direct package thermal interrupts. All CPUs will receive it\n");
 		cleanup_directed_pkg_thermal_intr();
 	}
 
