@@ -146,7 +146,7 @@ int __vma_start_write(struct vm_area_struct *vma, int state)
 
 	err = __vma_start_exclude_readers(&ves);
 	if (err) {
-		WARN_ON_ONCE(ves.detached);
+		VM_WARN_ON_ONCE(ves.detached);
 		return err;
 	}
 
@@ -161,7 +161,7 @@ int __vma_start_write(struct vm_area_struct *vma, int state)
 	if (ves.exclusive) {
 		__vma_end_exclude_readers(&ves);
 		/* VMA should remain attached. */
-		WARN_ON_ONCE(ves.detached);
+		VM_WARN_ON_ONCE(ves.detached);
 	}
 
 	return 0;
@@ -193,7 +193,7 @@ void __vma_exclude_readers_for_detach(struct vm_area_struct *vma)
 		__vma_end_exclude_readers(&ves);
 	}
 	/* If an error arose but we were detached anyway, we don't care. */
-	WARN_ON_ONCE(!ves.detached);
+	VM_WARN_ON_ONCE(!ves.detached);
 }
 
 /* Do the VMA, mm seqcounts indicate the VMA is write locked? */
