@@ -329,7 +329,7 @@ void dcn6_ms_calculate_writeback_bandwidth(
 		}
 	}
 
-	DML_LOG_DEBUG_2D_ARRAY_DOUBLE(outputs->WriteBandwidth, display_cfg->num_planes, DML2_MAX_WRITEBACK);;
+	DML_LOG_DEBUG_2D_ARRAY_DOUBLE(outputs->WriteBandwidth, display_cfg->num_planes, DML2_MAX_WRITEBACK);
 	DML_LOG_FUNC_EXIT();
 }
 
@@ -4273,7 +4273,7 @@ enum dml2_status dml2_core_dcn6_funcs_validate_solution(struct dml2_core_instanc
 	enum dml2_status status = DML2_STATUS_OK;
 	struct dml2_core_calculate_ms_context *calc_ms_ctx = &core->scratch.mode_support_locals.calc_ms_ctx;
 	struct dml2_calculate_mcache_allocation_in_out *calc_mcache_allocation_params =
-			&core->scratch.mode_support_locals.calc_mcache_allocation_params;;
+			&core->scratch.mode_support_locals.calc_mcache_allocation_params;
 	struct dml2_core_internal_display_mode_lib *mode_lib = &core->clean_me_up.mode_lib;
 	unsigned int i;
 
