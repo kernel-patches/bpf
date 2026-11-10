@@ -364,6 +364,11 @@ static void pre_bootstrap(int argc, char **argv)
 		}
 	}
 
+	if (!batch_size) {
+		fprintf(stderr, "Invalid batch size %s\n", optarg);
+		exit(1);
+	}
+
 	/*
 	 * It's not always safe to allocate in a user space scheduler, as an
 	 * enqueued task could hold a lock that we require in order to be able
