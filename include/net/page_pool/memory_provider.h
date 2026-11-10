@@ -42,6 +42,7 @@ struct memory_provider_ops {
 	int (*nl_fill)(void *mp_priv, struct sk_buff *rsp,
 		       struct netdev_rx_queue *rxq);
 	void (*uninstall)(void *mp_priv, struct netdev_rx_queue *rxq);
+	bool (*refill_done)(struct page_pool *pool, enum pp_refill state);
 	u32 caps;
 };
 
@@ -55,6 +56,7 @@ int netif_mp_open_rxq(struct net_device *dev, unsigned int rxq_idx,
 int netif_mp_close_rxq(struct net_device *dev, unsigned int rxq_idx,
 		       const struct pp_memory_provider_params *old_p);
 bool netif_all_mps_have_cap(struct net_device *dev, u32 cap);
+bool netif_mp_wake(struct netdev_rx_queue *rxq);
 
 /**
   * net_mp_netmem_place_in_cache() - give a netmem to a page pool

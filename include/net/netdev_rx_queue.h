@@ -33,6 +33,12 @@ struct netdev_rx_queue {
 	struct pp_memory_provider_params mp_params;
 	/* stamps the page pools of each queue allocation */
 	u32				mp_gen;
+	/* NAPI of the running queue, for memory provider wakeups. Set while
+	 * mp_armed, and if the provider has a refill_done op. Written under
+	 * the ops lock, read under RCU, see netif_mp_wake().
+	 */
+	struct napi_struct __rcu	*mp_napi;
+	bool				mp_armed;
 
 	/* If a queue is leased, then the lease pointer is always
 	 * valid. From the physical device it points to the virtual

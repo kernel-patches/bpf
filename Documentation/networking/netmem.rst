@@ -136,6 +136,16 @@ Driver RX Requirements
    circulation times, such as when userspace holds a reference in zerocopy
    scenarios.
 
+8. After each RX ring refill, call page_pool_refill_done() once per page
+   pool, with PP_REFILL_FULL only if all rings that use the pool are full.
+   Rings of a queue that take buffers from one such provider share one
+   page pool. Keep buffers in each of them, first in a ring that every
+   packet needs, like a header ring, so that a provider with few buffers
+   does not leave them all in one ring. If the call returns false, poll
+   again soon, for example by returning the full NAPI budget. Register the
+   NAPI of each RX queue with netif_queue_set_napi(); the core schedules
+   it when provider buffers become available.
+
 Driver TX Requirements
 ======================
 

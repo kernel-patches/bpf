@@ -36,7 +36,8 @@ struct xsk_pp {
 	u32 nr_pools;
 	bool dma_need_sync;
 	/* RX queue of the provider, NULL once it is removed */
-	struct netdev_rx_queue *rxq;
+	struct netdev_rx_queue __rcu *rxq;
+	bool starved;
 	u8 *state;
 	u32 reuse_cnt;
 	u32 reuse[];
@@ -219,11 +220,31 @@ static netmem_ref xsk_pp_alloc_netmems(struct page_pool *pool, gfp_t gfp)
 	return netmems[n - 1];
 }
 
+static bool xsk_pp_wake(struct xsk_pp *pp)
+{
+	struct netdev_rx_queue *rxq;
+	bool running = false;
+
+	rcu_read_lock();
+	rxq = rcu_dereference(pp->rxq);
+	if (rxq)
+		running = netif_mp_wake(rxq);
+	rcu_read_unlock();
+
+	return running;
+}
+
+int xsk_pp_wakeup(struct xsk_pp *pp)
+{
+	return xsk_pp_wake(pp) ? 0 : -ENETDOWN;
+}
+
 static bool xsk_pp_release_netmem(struct page_pool *pool, netmem_ref netmem)
 {
 	struct net_iov *niov = netmem_to_net_iov(netmem);
 	struct xsk_pp *pp = pool->mp_priv;
 	u32 idx = net_iov_idx(niov);
+	bool starved;
 
 	spin_lock_bh(&pp->lock);
 	net_mp_niov_clear_page_pool(niov);
@@ -232,9 +253,45 @@ static bool xsk_pp_release_netmem(struct page_pool *pool, netmem_ref netmem)
 		pp->state[idx] = XSK_PP_REUSE;
 		pp->reuse[pp->reuse_cnt++] = idx;
 	}
+	starved = pp->starved;
+	WRITE_ONCE(pp->starved, false);
 	spin_unlock_bh(&pp->lock);
 
+	/* A starved queue may wait for this release */
+	if (starved)
+		xsk_pp_wake(pp);
+
 	return false;
+}
+
+static bool xsk_pp_refill_done(struct page_pool *pool, enum pp_refill state)
+{
+	struct xsk_pp *pp = pool->mp_priv;
+	struct xsk_buff_pool *xp = pp->pool;
+	bool wait = xp->uses_need_wakeup;
+	bool more;
+
+	if (state == PP_REFILL_FULL && !READ_ONCE(pp->starved))
+		return true;
+
+	spin_lock_bh(&pp->lock);
+	if (!pp->fq) {
+		spin_unlock_bh(&pp->lock);
+		return true;
+	}
+
+	if (state == PP_REFILL_FULL) {
+		WRITE_ONCE(pp->starved, false);
+		spin_unlock_bh(&pp->lock);
+		return true;
+	}
+
+	/* With need_wakeup, userspace wakes the queue after it posts FILL */
+	more = pp->reuse_cnt || xskq_cons_nb_entries(pp->fq, 1);
+	WRITE_ONCE(pp->starved, !more);
+	spin_unlock_bh(&pp->lock);
+
+	return !more && wait;
 }
 
 static int xsk_pp_nl_fill(void *mp_priv, struct sk_buff *rsp,
@@ -246,10 +303,12 @@ static int xsk_pp_nl_fill(void *mp_priv, struct sk_buff *rsp,
 /* The queue no longer uses the provider, and its DMA stopped */
 static void xsk_pp_detach(struct xsk_pp *pp)
 {
-	pp->rxq = NULL;
+	RCU_INIT_POINTER(pp->rxq, NULL);
 	spin_lock_bh(&pp->lock);
 	pp->fq = NULL;
 	spin_unlock_bh(&pp->lock);
+	/* Wait for wakeups that found the queue */
+	synchronize_net();
 	xp_dma_unmap(pp->pool, XSK_PP_DMA_ATTR);
 }
 
@@ -266,6 +325,7 @@ const struct memory_provider_ops xsk_pp_ops = {
 	.release_netmem	= xsk_pp_release_netmem,
 	.nl_fill	= xsk_pp_nl_fill,
 	.uninstall	= xsk_pp_uninstall,
+	.refill_done	= xsk_pp_refill_done,
 	.caps		= MP_CAP_READABLE,
 };
 
@@ -428,17 +488,22 @@ int xsk_pp_bind(struct xsk_buff_pool *pool, struct net_device *dev,
 		return PTR_ERR(pp);
 	}
 
+	rcu_assign_pointer(pp->rxq, __netif_get_rx_queue(dev, queue_id));
 	mp.mp_priv = pp;
 	mp.rx_page_size = pool->chunk_size;
 	mp.rx_headroom = xsk_pool_get_headroom(pool);
 	err = netif_mp_open_rxq(dev, queue_id, &mp, NULL);
 	if (!err) {
-		pp->rxq = __netif_get_rx_queue(dev, queue_id);
 		pool->pp = pp;
 		pool->xdp_zc_max_segs = dev->xdp_zc_max_segs;
+		/* See xsk_pp_refill_done() */
+		if (pool->uses_need_wakeup)
+			xsk_set_rx_need_wakeup(pool);
 		return 0;
 	}
 
+	RCU_INIT_POINTER(pp->rxq, NULL);
+	synchronize_net();
 	xp_dma_unmap(pool, XSK_PP_DMA_ATTR);
 	/* Copy mode takes the chunks that the provider holds */
 	if (!xp_alloc_heads(pool) && xsk_pp_abandon(pp))
@@ -459,7 +524,7 @@ void xsk_pp_unbind(struct xsk_buff_pool *pool)
 	};
 
 	/* Unregister removed the provider already */
-	if (!pp->rxq)
+	if (!rcu_access_pointer(pp->rxq))
 		return;
 
 	netif_mp_close_rxq(pool->netdev, pool->queue_id, &mp);

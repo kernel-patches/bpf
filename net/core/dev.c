@@ -1771,6 +1771,7 @@ static int __dev_open(struct net_device *dev, struct netlink_ext_ack *extack)
 		dev_set_rx_mode(dev);
 		dev_activate(dev);
 		add_device_randomness(dev->dev_addr, dev->addr_len);
+		netif_mp_arm_dev(dev);
 	}
 
 	return ret;
@@ -1833,6 +1834,7 @@ static void __dev_close_many(struct list_head *head)
 
 		netdev_assert_locked_ops_compat(dev);
 
+		netif_mp_disarm_dev(dev);
 		if (ops->ndo_stop)
 			ops->ndo_stop(dev);
 
@@ -7601,6 +7603,7 @@ void netif_queue_set_napi(struct net_device *dev, unsigned int queue_index,
 	case NETDEV_QUEUE_TYPE_RX:
 		rxq = __netif_get_rx_queue(dev, queue_index);
 		rxq->napi = napi;
+		netif_mp_update_napi(rxq);
 		return;
 	case NETDEV_QUEUE_TYPE_TX:
 		txq = netdev_get_tx_queue(dev, queue_index);
@@ -8002,6 +8005,7 @@ void __netif_napi_del_locked(struct napi_struct *napi)
 	}
 
 	list_del_rcu(&napi->dev_list);
+	netif_mp_napi_del(napi);
 	napi_free_frags(napi);
 
 	gro_cleanup(&napi->gro);

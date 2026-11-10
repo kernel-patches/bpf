@@ -40,6 +40,12 @@
  */
 #define PP_FLAG_MEM_PROVIDER	BIT(4)
 
+/* Ring state after a refill, see page_pool_refill_done() */
+enum pp_refill {
+	PP_REFILL_PARTIAL,	/* some ring of the pool has room left */
+	PP_REFILL_FULL,		/* all rings of the pool are full */
+};
+
 /* RX buffers a page pool supplies, see page_pool_params.rx_roles */
 enum pp_rx_role {
 	PP_RX_ROLE_HEAD		= BIT(0),	/* packet headers */

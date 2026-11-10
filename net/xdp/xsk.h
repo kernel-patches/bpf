@@ -42,6 +42,7 @@ bool xsk_pp_supported(struct net_device *dev);
 int xsk_pp_bind(struct xsk_buff_pool *pool, struct net_device *dev,
 		u16 queue_id);
 void xsk_pp_unbind(struct xsk_buff_pool *pool);
+int xsk_pp_wakeup(struct xsk_pp *pp);
 int xp_alloc_heads(struct xsk_buff_pool *pool);
 void xsk_clear_pool_at_qid(struct net_device *dev, u16 queue_id);
 int xsk_reg_pool_at_qid(struct net_device *dev, struct xsk_buff_pool *pool,

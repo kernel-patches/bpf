@@ -795,6 +795,10 @@ static int xsk_wakeup(struct xdp_sock *xs, u8 flags)
 {
 	struct net_device *dev = xs->dev;
 
+	/* The core wakes the queue for both RX and TX. */
+	if (xs->pool->pp)
+		return xsk_pp_wakeup(xs->pool->pp);
+
 	return dev->netdev_ops->ndo_xsk_wakeup(dev, xs->queue_id, flags);
 }
 
