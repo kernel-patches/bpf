@@ -5422,7 +5422,7 @@ out:
  */
 static void amdgpu_ualink_remote_error(struct amdgpu_device *adev, u32 status)
 {
-	const char *fw_err_code_msg[] = {
+	static const char * const fw_err_code_msg[] = {
 		"Unknown FW error status",
 		"FIFO overflow",		/* error code 1 */
 		"Invalid RB command",
