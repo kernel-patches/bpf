@@ -122,7 +122,7 @@ static void cvm_oct_free_tx_skbs(struct net_device *dev)
  * @skb:    Packet to send
  * @dev:    Device info structure
  *
- * Returns Always returns NETDEV_TX_OK
+ * Return: Always returns NETDEV_TX_OK
  */
 netdev_tx_t cvm_oct_xmit(struct sk_buff *skb, struct net_device *dev)
 {
@@ -500,7 +500,7 @@ skip_xmit:
  * cvm_oct_xmit_pow - transmit a packet to the POW
  * @skb:    Packet to send
  * @dev:    Device info structure
- * Returns Always returns zero
+ * Return: Always returns zero
  */
 netdev_tx_t cvm_oct_xmit_pow(struct sk_buff *skb, struct net_device *dev)
 {

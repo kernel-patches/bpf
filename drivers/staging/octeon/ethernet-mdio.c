@@ -49,7 +49,7 @@ const struct ethtool_ops cvm_oct_ethtool_ops = {
  * @rq:     the request
  * @cmd:    the command
  *
- * Returns Zero on success
+ * Return: Zero on success
  */
 int cvm_oct_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
 {
@@ -132,7 +132,7 @@ int cvm_oct_common_stop(struct net_device *dev)
  *
  * @dev:    Device to setup
  *
- * Returns Zero on success, negative on failure
+ * Return: Zero on success, negative on failure
  */
 int cvm_oct_phy_setup_device(struct net_device *dev)
 {
