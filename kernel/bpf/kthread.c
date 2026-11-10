@@ -13,8 +13,8 @@
 /*
  * A BPF kthread is a kernel thread whose thread function is one callback of
  * the program that created it, run once. The callback is the body of the
- * thread: it loops, sleeps and returns on its own, and its return ends the
- * thread. The kernel adds nothing in between.
+ * thread: it loops, sleeps in bpf_task_park() and returns on its own, and its
+ * return ends the thread. The kernel adds nothing in between.
  *
  * The thread is known to the program by its task_struct. bpf_kthread_create()
  * returns it as a referenced pointer, and the control kfuncs take it back, so
@@ -99,9 +99,16 @@ static int bpf_kthread_fn(void *data)
 	/*
 	 * The callback runs as the body of a sleepable program does, with
 	 * migration disabled under a Tasks Trace RCU read section, except
-	 * while it waits in one of the kfuncs the comment at the top names,
-	 * which drop migration disable alone. The verifier checks it as a
-	 * sleepable callback.
+	 * while it sleeps in bpf_task_park(), which drops both for the sleep
+	 * and takes them again before it returns, and while it waits in one
+	 * of the kfuncs the comment at the top names, which drop migration
+	 * disable alone. That is
+	 * safe here for the reason it is safe in a syscall program: this
+	 * function keeps nothing across the callback, and the program, with
+	 * its maps and code, is held until the thread has exited, since the
+	 * release of its last reference stops the thread first. The verifier
+	 * checks the callback as a sleepable callback in which the park is
+	 * allowed.
 	 */
 	/*
 	 * A task work queued for this thread with TWA_SIGNAL sets

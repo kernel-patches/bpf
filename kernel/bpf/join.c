@@ -412,6 +412,7 @@ static bool join_func(struct bpf_join_state *js, struct bpf_func_state *fd,
 			return false;
 		if (fa->in_callback_fn != fb->in_callback_fn ||
 		    fa->in_async_callback_fn != fb->in_async_callback_fn ||
+		    fa->in_kthread_fn != fb->in_kthread_fn ||
 		    fa->in_exception_callback_fn != fb->in_exception_callback_fn ||
 		    fa->in_rcu_callback_fn != fb->in_rcu_callback_fn ||
 		    fa->async_entry_cnt != fb->async_entry_cnt ||

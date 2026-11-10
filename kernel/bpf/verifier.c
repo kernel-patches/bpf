@@ -11221,14 +11221,22 @@ static void invalidate_non_owning_refs(struct bpf_verifier_env *env)
 }
 
 /*
- * bpf_task_park() is confined to the main body of the program and the
- * functions it calls directly. A callback runs from kernel code that holds
- * state of its own around the call, an iteration position, a work item or
- * timer that owns the program only through Tasks Trace RCU, an exiting task,
- * none of it audited against a sleep that drops the program's protection.
- * Refuse the park in any callback frame, synchronous, asynchronous or
- * exception. Asynchronous callbacks are verified as a state of their own
- * with the callback as frame 0, so the walk over the frames sees them too.
+ * bpf_task_park() is confined to the main body of the program, the body of a
+ * BPF kthread, and the functions either calls directly. Any other callback
+ * runs from kernel code that holds state of its own around the call, an
+ * iteration position, a work item or timer that owns the program only through
+ * Tasks Trace RCU, an exiting task, none of it audited against a sleep that
+ * drops the program's protection. Refuse the park in any such callback frame,
+ * synchronous, asynchronous or exception. Asynchronous callbacks are verified
+ * as a state of their own with the callback as frame 0, so the walk over the
+ * frames sees them too.
+ *
+ * The body of a BPF kthread is the exception because its caller,
+ * bpf_kthread_fn(), is the whole of the thread: it brackets the callback the
+ * way the runner of a syscall program brackets the program, keeps no state
+ * across it, and the program's release stops the thread and waits for it
+ * before anything the callback uses is freed. Callbacks nested under the
+ * body are refused as anywhere else.
  */
 static bool in_callback_frames(struct bpf_verifier_env *env)
 {
@@ -11238,6 +11246,8 @@ static bool in_callback_frames(struct bpf_verifier_env *env)
 	for (i = 0; i <= vstate->curframe; i++) {
 		struct bpf_func_state *frame = vstate->frame[i];
 
+		if (frame->in_kthread_fn)
+			continue;
 		if (frame->in_callback_fn || frame->in_async_callback_fn ||
 		    frame->in_exception_callback_fn)
 			return true;
@@ -12148,7 +12158,7 @@ static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 				operation = bpf_diag_fmt(env, "global function %s() that may call bpf_task_park()",
 							 sub_name);
 				bpf_diag_policy(env, *insn_idx, operation, "the call is in a callback",
-						"Call the function from the main program or from a function it calls directly, not from a callback.");
+						"Call the function from the main program, from the body of a BPF kthread, or from a function either calls directly, not from any other callback.");
 				return -EINVAL;
 			}
 			err = check_park_stack_objects(env, *insn_idx);
@@ -12650,6 +12660,7 @@ static int set_kthread_callback_state(struct bpf_verifier_env *env,
 	bpf_mark_reg_not_init(env, &callee->regs[BPF_REG_4]);
 	bpf_mark_reg_not_init(env, &callee->regs[BPF_REG_5]);
 	callee->in_async_callback_fn = true;
+	callee->in_kthread_fn = true;
 	/*
 	 * The callback returns an int, which comes back in the low 32 bits of
 	 * R0: compare those, as for a global function.
@@ -16515,7 +16526,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		if (in_callback_frames(env)) {
 			verbose(env, "bpf_task_park() is not allowed in a callback\n");
 			bpf_diag_policy(env, insn_idx, "kfunc bpf_task_park", "the call is in a callback",
-					"Call bpf_task_park() from the main program or from a function it calls directly, not from a callback.");
+					"Call bpf_task_park() from the main program, from the body of a BPF kthread, or from a function either calls directly, not from any other callback.");
 			return -EINVAL;
 		}
 		err = check_park_stack_objects(env, insn_idx);

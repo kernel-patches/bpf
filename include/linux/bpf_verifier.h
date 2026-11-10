@@ -490,6 +490,12 @@ struct bpf_func_state {
 	bool in_callback_fn;
 	bool in_async_callback_fn;
 	bool in_exception_callback_fn;
+	/*
+	 * The body of a BPF kthread: an async callback whose kernel caller,
+	 * bpf_kthread_fn(), keeps nothing across it that the sleep in
+	 * bpf_task_park() could invalidate, so the park is allowed in it.
+	 */
+	bool in_kthread_fn;
 	bool no_stack_arg_load;
 	/*
 	 * The helper invokes this callback under rcu_read_lock(), so the
