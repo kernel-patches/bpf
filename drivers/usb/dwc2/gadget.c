@@ -2835,7 +2835,7 @@ static void dwc2_hsotg_complete_in(struct dwc2_hsotg *hsotg,
  * @dir_in: Endpoint direction 1-in 0-out.
  *
  * Reads for endpoint with given index and direction, by masking
- * epint_reg with coresponding mask.
+ * epint_reg with corresponding mask.
  */
 static u32 dwc2_gadget_read_ep_interrupts(struct dwc2_hsotg *hsotg,
 					  unsigned int idx, int dir_in)
@@ -4073,7 +4073,7 @@ static void dwc2_hsotg_ep_stop_xfr(struct dwc2_hsotg *hsotg,
 
 /**
  * dwc2_hsotg_ep_enable - enable the given endpoint
- * @ep: The USB endpint to configure
+ * @ep: The USB endpoint to configure
  * @desc: The USB endpoint descriptor to configure with.
  *
  * This is called from the USB gadget code's usb_ep_enable().
@@ -4657,7 +4657,7 @@ err:
  * dwc2_hsotg_udc_stop - stop the udc
  * @gadget: The usb gadget state
  *
- * Stop udc hw block and stay tunned for future transmissions
+ * Stop udc hw block and stay tuned for future transmissions
  */
 static int dwc2_hsotg_udc_stop(struct usb_gadget *gadget)
 {

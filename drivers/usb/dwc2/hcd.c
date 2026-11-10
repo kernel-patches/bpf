@@ -34,7 +34,7 @@
  */
 
 /**
- * dwc2_enable_common_interrupts() - Initializes the commmon interrupts,
+ * dwc2_enable_common_interrupts() - Initializes the common interrupts,
  * used in both device and host modes
  *
  * @hsotg: Programming view of the DWC_otg controller
@@ -749,7 +749,7 @@ static void dwc2_hc_init(struct dwc2_hsotg *hsotg, struct dwc2_host_chan *chan)
  *
  * In slave mode, checks for a free request queue entry, then sets the Channel
  * Enable and Channel Disable bits of the Host Channel Characteristics
- * register of the specified channel to intiate the halt. If there is no free
+ * register of the specified channel to initiate the halt. If there is no free
  * request queue entry, sets only the Channel Disable bit of the HCCHARn
  * register to flush requests for this channel. In the latter case, sets a
  * flag to indicate that the host channel needs to be halted when a request
@@ -5880,7 +5880,7 @@ int dwc2_host_exit_partial_power_down(struct dwc2_hsotg *hsotg,
 	udelay(5);
 
 	if (!rem_wakeup) {
-		/* Stop driveing resume signaling on the port. */
+		/* Stop driving resume signaling on the port. */
 		hprt0 = dwc2_read_hprt0(hsotg);
 		hprt0 &= ~HPRT0_RES;
 		dwc2_writel(hsotg, hprt0, HPRT0);
@@ -5980,7 +5980,7 @@ void dwc2_host_exit_clock_gating(struct dwc2_hsotg *hsotg, int rem_wakeup)
 		/* In case of port resume need to wait for 40 ms */
 		msleep(USB_RESUME_TIMEOUT);
 
-		/* Stop driveing resume signaling on the port. */
+		/* Stop driving resume signaling on the port. */
 		hprt0 = dwc2_read_hprt0(hsotg);
 		hprt0 &= ~HPRT0_RES;
 		dwc2_writel(hsotg, hprt0, HPRT0);

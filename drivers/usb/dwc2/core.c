@@ -113,7 +113,7 @@ int dwc2_exit_partial_power_down(struct dwc2_hsotg *hsotg, int rem_wakeup,
 	gr = &hsotg->gr_backup;
 
 	/*
-	 * Restore host or device regisers with the same mode core enterted
+	 * Restore host or device registers with the same mode core enterted
 	 * to partial power down by checking "GOTGCTL_CURMODE_HOST" backup
 	 * value of the "gotgctl" register.
 	 */
@@ -138,7 +138,7 @@ int dwc2_enter_partial_power_down(struct dwc2_hsotg *hsotg)
 }
 
 /**
- * dwc2_restore_essential_regs() - Restore essiential regs of core.
+ * dwc2_restore_essential_regs() - Restore essential regs of core.
  *
  * @hsotg: Programming view of the DWC_otg controller
  * @rmode: Restore mode, enabled in case of remote-wakeup.
