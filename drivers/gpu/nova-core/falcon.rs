@@ -386,6 +386,13 @@ impl<'a, E: FalconEngine + 'static> Falcon<'a, E> {
         })
     }
 
+    /// Returns the size of this falcon's IMEM in bytes.
+    pub(crate) fn imem_size(&self) -> usize {
+        let blocks = usize::from(self.pfalcon.read(regs::NV_PFALCON_FALCON_HWCFG).imem_size());
+
+        blocks * MEM_BLOCK_ALIGNMENT
+    }
+
     /// Resets DMA-related registers.
     pub(crate) fn dma_reset(&self) {
         self.pfalcon.update(regs::NV_PFALCON_FBIF_CTL, |v| {

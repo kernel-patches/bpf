@@ -17,7 +17,6 @@ use kernel::{
     },
     prelude::*,
     ptr::Alignable,
-    sizes,
     transmute::AsBytes, //
 };
 
@@ -133,20 +132,16 @@ unsafe impl AsBytes for BootloaderDmemDescV2 {}
 pub(crate) struct GenericBootloader {
     /// Bootloader code, zero-padded to a whole number of falcon memory blocks.
     ucode: KVec<u8>,
-    /// Byte offset in IMEM at which the code is loaded.
-    imem_dst_start: Bounded<u32, 24>,
     /// Tag under which the first code block is loaded.
     start_tag: u16,
 }
 
 impl GenericBootloader {
-    /// Loads the generic bootloader image for `chipset`, placed right below the first 64 KiB of
-    /// IMEM.
+    /// Loads the generic bootloader image for `chipset`.
     ///
     /// # Errors
     ///
     /// - `EINVAL` if a required TLV field is absent.
-    /// - `EOVERFLOW` if the image does not fit below 64 KiB.
     /// - `ENOMEM` if the padded copy of the code cannot be allocated.
     pub(crate) fn new(dev: &device::Device, chipset: Chipset) -> Result<Self> {
         let fw = request_tlv(dev, chipset, "gen_bootloader")?;
@@ -172,15 +167,8 @@ impl GenericBootloader {
             ucode
         };
 
-        // The bootloader's code must be loaded in the area right below the first 64K of IMEM.
-        const BOOTLOADER_LOAD_CEILING: usize = sizes::SZ_64K;
-        let imem_dst_start = BOOTLOADER_LOAD_CEILING
-            .checked_sub(ucode.len())
-            .ok_or(EOVERFLOW)?;
-
         Ok(Self {
             ucode,
-            imem_dst_start: imem_dst_start.try_into_bounded().ok_or(EINVAL)?,
             start_tag: u16::try_from(tlv.get_u32(b"STRT")?)?,
         })
     }
@@ -191,11 +179,12 @@ impl GenericBootloader {
         u32::from(self.start_tag) << 8
     }
 
-    /// Returns the PIO parameters that place this bootloader in non-secure IMEM.
-    fn imem_load_params(&self) -> FalconPioImemLoadTarget<'_> {
+    /// Returns the PIO parameters that place this bootloader in non-secure IMEM, at byte offset
+    /// `dst_start`.
+    fn imem_load_params(&self, dst_start: Bounded<u32, 24>) -> FalconPioImemLoadTarget<'_> {
         FalconPioImemLoadTarget {
             data: self.ucode.as_ref(),
-            dst_start: self.imem_dst_start,
+            dst_start,
             secure: false,
             start_tag: self.start_tag,
         }
@@ -203,9 +192,10 @@ impl GenericBootloader {
 
     /// Runs the bootloader on `falcon` to load and start the image that `dmem_desc` names.
     ///
-    /// The bootloader and the descriptor are loaded by PIO, the bootloader is started with `mbox0`
-    /// in `MAILBOX0`, and this returns the mailbox values once the falcon has halted, that is,
-    /// once the loaded image has run to completion.
+    /// The bootloader and the descriptor are loaded by PIO, the bootloader in the last blocks of
+    /// `falcon`'s IMEM. The bootloader is started with `mbox0` in `MAILBOX0`, and this returns the
+    /// mailbox values once the falcon has halted, that is, once the loaded image has run to
+    /// completion.
     ///
     /// The caller is expected to reset `falcon` beforehand.
     ///
@@ -213,6 +203,7 @@ impl GenericBootloader {
     ///
     /// - `ETIMEDOUT` if the falcon has not halted within two seconds of starting.
     /// - `EINVAL` if `dmem_desc`'s DMA context isn't valid.
+    /// - `EOVERFLOW` if the bootloader does not fit in `falcon`'s IMEM.
     ///
     /// Errors from the PIO load are propagated as-is.
     pub(crate) fn run(
@@ -222,6 +213,14 @@ impl GenericBootloader {
         target: FalconFbifTarget,
         mbox0: u32,
     ) -> Result<(u32, u32)> {
+        // The top of IMEM, above the blocks that the bootloader loads the image into.
+        let imem_dst_start = falcon
+            .imem_size()
+            .checked_sub(self.ucode.len())
+            .ok_or(EOVERFLOW)?
+            .try_into_bounded()
+            .ok_or(EINVAL)?;
+
         // Configure DMA index for the bootloader to fetch the FWSEC firmware from system memory.
         falcon.pfalcon.update(
             regs::NV_PFALCON_FBIF_TRANSCFG::try_at(usize::from_safe_cast(dmem_desc.ctx_dma))
@@ -234,6 +233,7 @@ impl GenericBootloader {
 
         falcon.pio_load(&GenericBootloaderLoad {
             bootloader: self,
+            imem_dst_start,
             dmem_desc,
         })?;
 
@@ -245,6 +245,8 @@ impl GenericBootloader {
 /// firmware that [`Falcon::pio_load`] accepts.
 struct GenericBootloaderLoad<'a> {
     bootloader: &'a GenericBootloader,
+    /// Byte offset in IMEM at which the bootloader's code is loaded.
+    imem_dst_start: Bounded<u32, 24>,
     dmem_desc: &'a BootloaderDmemDescV2,
 }
 
@@ -272,7 +274,7 @@ impl FalconPioLoadable for GenericBootloaderLoad<'_> {
     }
 
     fn imem_ns_load_params(&self) -> Option<FalconPioImemLoadTarget<'_>> {
-        Some(self.bootloader.imem_load_params())
+        Some(self.bootloader.imem_load_params(self.imem_dst_start))
     }
 
     fn dmem_load_params(&self) -> FalconPioDmemLoadTarget<'_> {
