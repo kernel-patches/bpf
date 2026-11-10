@@ -589,6 +589,8 @@ extern const struct bench bench_bpf_nop;
 extern const struct bench bench_xdp_lb;
 extern const struct bench bench_libarena_malloc;
 extern const struct bench bench_libarena_calloc;
+extern const struct bench bench_libarena_malloc_free;
+extern const struct bench bench_libarena_malloc_xfree;
 
 static const struct bench *benchs[] = {
 	&bench_count_global,
@@ -675,6 +677,8 @@ static const struct bench *benchs[] = {
 	&bench_xdp_lb,
 	&bench_libarena_malloc,
 	&bench_libarena_calloc,
+	&bench_libarena_malloc_free,
+	&bench_libarena_malloc_xfree,
 };
 
 static void find_benchmark(void)
