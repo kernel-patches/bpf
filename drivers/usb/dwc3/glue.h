@@ -30,7 +30,7 @@ struct dwc3_properties {
  * @res: resource for the DWC3 core mmio region
  * @ignore_clocks_and_resets: clocks and resets defined for the device should
  *		be ignored by the DWC3 core, as they are managed by the glue
- * @skip_core_init_mode: Skip the finial initialization of the target mode, as
+ * @skip_core_init_mode: Skip the final initialization of the target mode, as
  *		it must be managed by the glue
  * @properties: dwc3 software manage properties
  */
