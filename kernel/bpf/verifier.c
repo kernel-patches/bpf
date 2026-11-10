@@ -20627,8 +20627,7 @@ static int do_check(struct bpf_verifier_env *env)
 		if (signal_pending(current))
 			return -EAGAIN;
 
-		if (need_resched())
-			cond_resched();
+		cond_resched_tasks_rcu_qs();
 
 		/* reset current history entry on each new instruction */
 		env->cur_hist_ent = NULL;
