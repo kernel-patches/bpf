@@ -62,6 +62,9 @@ mlx5e_mpwrq_umr_mode(struct mlx5_core_dev *mdev,
 	bool unaligned = xsk ? xsk->unaligned : false;
 	bool oversized = false;
 
+	if (rqo && rqo->data_direct)
+		return MLX5E_MPWRQ_UMR_MODE_UNALIGNED;
+
 	if (xsk) {
 		oversized = xsk->chunk_size < (1 << page_shift);
 		WARN_ON_ONCE(xsk->chunk_size > (1 << page_shift));
@@ -1214,8 +1217,14 @@ static u32 mlx5e_max_xsk_wqebbs(struct mlx5_core_dev *mdev,
 
 static u8 mlx5e_build_icosq_log_wq_sz(struct mlx5_core_dev *mdev,
 				      struct mlx5e_params *params,
-				      struct mlx5e_rq_param *rq_param)
+				      struct mlx5e_rq_opt_param *rqo)
 {
+	/* Only the UMR mode matters here. Leave qcfg out: sizing for
+	 * PAGE_SIZE is an upper bound for larger RX page sizes.
+	 */
+	struct mlx5e_rq_opt_param umr_rqo = {
+		.data_direct = rqo && rqo->data_direct,
+	};
 	u32 wqebbs, total_pages, useful_space;
 
 	/* MLX5_WQ_TYPE_CYCLIC */
@@ -1223,7 +1232,7 @@ static u8 mlx5e_build_icosq_log_wq_sz(struct mlx5_core_dev *mdev,
 		return MLX5E_PARAMS_MINIMUM_LOG_SQ_SIZE;
 
 	/* UMR WQEs for the regular RQ. */
-	wqebbs = mlx5e_mpwrq_total_umr_wqebbs(mdev, params, NULL);
+	wqebbs = mlx5e_mpwrq_total_umr_wqebbs(mdev, params, &umr_rqo);
 
 	wqebbs += mlx5e_max_xsk_wqebbs(mdev, params);
 
@@ -1297,18 +1306,21 @@ void mlx5e_build_xdpsq_param(struct mlx5_core_dev *mdev,
 int mlx5e_build_channel_param(struct mlx5_core_dev *mdev,
 			      struct mlx5e_params *params,
 			      struct netdev_queue_config *qcfg,
+			      bool data_direct,
 			      struct mlx5e_channel_param *cparam)
 {
 	u8 icosq_log_wq_sz, async_icosq_log_wq_sz;
 	int err;
 
 	cparam->rq_opt.qcfg = qcfg;
+	cparam->rq_opt.data_direct = data_direct;
 
 	err = mlx5e_build_rq_param(mdev, params, &cparam->rq_opt, &cparam->rq);
 	if (err)
 		return err;
 
-	icosq_log_wq_sz = mlx5e_build_icosq_log_wq_sz(mdev, params, &cparam->rq);
+	icosq_log_wq_sz = mlx5e_build_icosq_log_wq_sz(mdev, params,
+						      &cparam->rq_opt);
 	async_icosq_log_wq_sz = mlx5e_build_async_icosq_log_wq_sz(mdev);
 
 	mlx5e_build_sq_param(mdev, params, &cparam->txq_sq);
