@@ -581,6 +581,12 @@ struct bpf_verifier_state {
 	 */
 	bool changed_pkt_data;
 	/*
+	 * A function that is verified on its own parked the task. Its callers,
+	 * what the sleep takes from them and whether one of them is a callback,
+	 * are not in the state, see bpf_flow_return().
+	 */
+	bool parked;
+	/*
 	 * Not zero in a function that is verified on its own: the call that the
 	 * state at its entry came from, see bpf_flow_call().
 	 */

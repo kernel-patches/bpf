@@ -2317,7 +2317,8 @@ static void flow_shape_ctx(const struct bpf_verifier_state *st, struct flow_shap
 
 	ctx = jhash_3words(st->in_sleepable | st->callers_unknown << 1 |
 			   st->unwound << 2 | st->changed_pkt_data << 3 |
-			   (st->active_irq_id != 0) << 4 | (st->active_lock_id != 0) << 5,
+			   (st->active_irq_id != 0) << 4 | (st->active_lock_id != 0) << 5 |
+			   st->parked << 6,
 			   st->acquired_refs, st->active_locks, 0);
 	ctx = jhash_2words(st->active_preempt_locks, st->active_rcu_locks, ctx);
 	ctx = jhash_2words(lower_32_bits((unsigned long)st->active_lock_ptr),

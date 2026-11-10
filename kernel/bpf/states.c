@@ -676,7 +676,8 @@ bool bpf_state_subsumes(struct bpf_verifier_env *env, struct bpf_verifier_state 
 	if (old->in_sleepable != cur->in_sleepable)
 		return false;
 
-	if (old->unwound != cur->unwound || old->changed_pkt_data != cur->changed_pkt_data)
+	if (old->unwound != cur->unwound || old->changed_pkt_data != cur->changed_pkt_data ||
+	    old->parked != cur->parked)
 		return false;
 
 	if (!refsafe(old, cur, &env->idmap_scratch))

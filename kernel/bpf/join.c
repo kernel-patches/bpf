@@ -492,7 +492,8 @@ static bool join_check_state(const struct bpf_verifier_state *a,
 		return false;
 	if (a->speculative != b->speculative || a->in_sleepable != b->in_sleepable ||
 	    a->callers_unknown != b->callers_unknown ||
-	    a->unwound != b->unwound || a->changed_pkt_data != b->changed_pkt_data)
+	    a->unwound != b->unwound || a->changed_pkt_data != b->changed_pkt_data ||
+	    a->parked != b->parked)
 		return false;
 	if (a->active_locks != b->active_locks ||
 	    a->active_preempt_locks != b->active_preempt_locks ||
