@@ -158,8 +158,12 @@ restart:
 			break;
 		case 'i':
 			v = strtod(optarg, NULL);
+			if (!(v >= 0) || v >= 1e18) {
+				fprintf(stderr, "Invalid interval %f\n", v);
+				exit(1);
+			}
 			intv_ts.tv_sec = v;
-			intv_ts.tv_nsec = (v - (float)intv_ts.tv_sec) * 1000000000;
+			intv_ts.tv_nsec = (v - intv_ts.tv_sec) * 1000000000;
 			break;
 		case 'f':
 			skel->rodata->fifo_sched = true;
