@@ -130,14 +130,12 @@ static inline void mlx5e_xdp_tx_enable(struct mlx5e_priv *priv)
 		set_bit(MLX5E_STATE_XDP_ACTIVE, &priv->state);
 }
 
-static inline void mlx5e_xdp_tx_disable(struct mlx5e_priv *priv)
+static inline void mlx5e_xdp_tx_disable_pre_sync(struct mlx5e_priv *priv)
 {
 	if (priv->channels.params.xdp_prog)
 		clear_bit(MLX5E_STATE_XDP_ACTIVE, &priv->state);
 
 	clear_bit(MLX5E_STATE_XDP_TX_ENABLED, &priv->state);
-	/* Let other device's napi(s) and XSK wakeups see our new state. */
-	synchronize_net();
 }
 
 static inline bool mlx5e_xdp_tx_is_enabled(struct mlx5e_priv *priv)

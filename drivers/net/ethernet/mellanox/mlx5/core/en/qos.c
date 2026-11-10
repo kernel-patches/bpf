@@ -233,15 +233,20 @@ void mlx5e_close_qos_sq(struct mlx5e_priv *priv, u16 qid)
 	kfree(sq);
 }
 
-void mlx5e_qos_close_queues(struct mlx5e_channel *c)
+static struct mlx5e_txqsq __rcu **
+mlx5e_qos_unpublish_queues(struct mlx5e_channel *c)
 {
-	struct mlx5e_txqsq __rcu **qos_sqs;
+	return rcu_replace_pointer(c->qos_sqs, NULL,
+				   lockdep_is_held(&c->priv->state_lock));
+}
+
+static void mlx5e_qos_free_queues(struct mlx5e_channel *c,
+				  struct mlx5e_txqsq __rcu **qos_sqs)
+{
 	int i;
 
-	qos_sqs = rcu_replace_pointer(c->qos_sqs, NULL, lockdep_is_held(&c->priv->state_lock));
 	if (!qos_sqs)
 		return;
-	synchronize_rcu(); /* Sync with NAPI. */
 
 	for (i = 0; i < c->qos_sqs_size; i++) {
 		struct mlx5e_txqsq *sq;
@@ -256,6 +261,27 @@ void mlx5e_qos_close_queues(struct mlx5e_channel *c)
 	}
 
 	kvfree(qos_sqs);
+}
+
+void mlx5e_qos_close_queues_post_sync(struct mlx5e_channel *c)
+{
+	struct mlx5e_txqsq __rcu **qos_sqs;
+
+	qos_sqs = mlx5e_qos_unpublish_queues(c);
+	/* Caller guarantees that NAPI is stopped or was never enabled. */
+	mlx5e_qos_free_queues(c, qos_sqs);
+}
+
+void mlx5e_qos_close_queues(struct mlx5e_channel *c)
+{
+	struct mlx5e_txqsq __rcu **qos_sqs;
+
+	qos_sqs = mlx5e_qos_unpublish_queues(c);
+	if (!qos_sqs)
+		return;
+
+	synchronize_rcu(); /* Sync with NAPI. */
+	mlx5e_qos_free_queues(c, qos_sqs);
 }
 
 void mlx5e_qos_close_all_queues(struct mlx5e_channels *chs)
@@ -326,11 +352,10 @@ void mlx5e_qos_activate_queues(struct mlx5e_priv *priv)
 	mlx5e_htb_enumerate_leaves(priv->htb, mlx5e_activate_qos_sq, priv);
 }
 
-void mlx5e_qos_deactivate_queues(struct mlx5e_channel *c)
+void mlx5e_qos_deactivate_queues_pre_sync(struct mlx5e_channel *c)
 {
 	struct mlx5e_params *params = &c->priv->channels.params;
 	struct mlx5e_txqsq __rcu **qos_sqs;
-	u16 txq_ix;
 	int i;
 
 	qos_sqs = mlx5e_state_dereference(c->priv, c->qos_sqs);
@@ -346,7 +371,30 @@ void mlx5e_qos_deactivate_queues(struct mlx5e_channel *c)
 			continue;
 
 		qos_dbg(c->mdev, "Deactivate QoS SQ qid %u\n", qid);
-		mlx5e_deactivate_txqsq(sq);
+		mlx5e_deactivate_txqsq_pre_sync(sq);
+	}
+}
+
+void mlx5e_qos_deactivate_queues_post_sync(struct mlx5e_channel *c)
+{
+	struct mlx5e_params *params = &c->priv->channels.params;
+	struct mlx5e_txqsq __rcu **qos_sqs;
+	int i;
+
+	qos_sqs = mlx5e_state_dereference(c->priv, c->qos_sqs);
+	if (!qos_sqs)
+		return;
+
+	for (i = 0; i < c->qos_sqs_size; i++) {
+		u16 qid = params->num_channels * i + c->ix;
+		struct mlx5e_txqsq *sq;
+		u16 txq_ix;
+
+		sq = mlx5e_state_dereference(c->priv, qos_sqs[i]);
+		if (!sq)
+			continue;
+
+		mlx5e_deactivate_txqsq_post_sync(sq);
 
 		txq_ix = mlx5e_qid_from_qos(&c->priv->channels, qid);
 
@@ -361,7 +409,12 @@ void mlx5e_qos_deactivate_all_queues(struct mlx5e_channels *chs)
 	int i;
 
 	for (i = 0; i < chs->num; i++)
-		mlx5e_qos_deactivate_queues(chs->c[i]);
+		mlx5e_qos_deactivate_queues_pre_sync(chs->c[i]);
+
+	synchronize_net();
+
+	for (i = 0; i < chs->num; i++)
+		mlx5e_qos_deactivate_queues_post_sync(chs->c[i]);
 }
 
 void mlx5e_reactivate_qos_sq(struct mlx5e_priv *priv, u16 qid, struct netdev_queue *txq)
