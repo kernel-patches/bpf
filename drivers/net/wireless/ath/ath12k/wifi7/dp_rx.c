@@ -2374,33 +2374,3 @@ ath12k_wifi7_dp_rxdesc_mpdu_valid(struct ath12k_base *ab,
 
 	return tlv_tag == HAL_RX_MPDU_START;
 }
-
-int
-ath12k_wifi7_dp_rx_get_link_id_qcn9274(struct ath12k_dp_peer *dp_peer,
-				       struct ath12k_skb_rxcb *rxcb,
-				       struct ieee80211_rx_status *status)
-{
-	return dp_peer->link_id_map[rxcb->drv_link_id];
-}
-
-int
-ath12k_wifi7_dp_rx_get_link_id_wcn7850(struct ath12k_dp_peer *dp_peer,
-				       struct ath12k_skb_rxcb *rxcb,
-				       struct ieee80211_rx_status *status)
-{
-	struct ath12k_dp_link_peer *link_peer;
-	unsigned long links_map;
-	int i;
-
-	RCU_LOCKDEP_WARN(!rcu_read_lock_held(),
-			 "ath12k set rx link id called without rcu lock");
-
-	links_map = READ_ONCE(dp_peer->link_peers_map);
-	for_each_set_bit(i, &links_map, ATH12K_NUM_MAX_LINKS) {
-		link_peer = rcu_dereference(dp_peer->link_peers[i]);
-		if (link_peer && link_peer->peer_id == rxcb->peer_id)
-			return link_peer->link_id;
-	}
-
-	return -1;
-}
