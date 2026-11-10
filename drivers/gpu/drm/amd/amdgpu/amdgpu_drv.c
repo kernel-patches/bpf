@@ -3239,10 +3239,18 @@ error_fini_sync:
 
 static void __exit amdgpu_exit(void)
 {
+	/*
+	 * Undo amdgpu_init() in reverse order, except that KFD goes before
+	 * the PCI driver. A primary KFD context can outlive its /dev/kfd file
+	 * until the mm of its process goes away, and amdgpu_amdkfd_fini()
+	 * releases what is left while the devices still exist. Removing the
+	 * devices first can instead send SIGBUS to those processes and wait
+	 * for their KFD state to be released.
+	 */
 	amdgpu_amdkfd_fini();
 	pci_unregister_driver(&amdgpu_kms_pci_driver);
-	amdgpu_unregister_atpx_handler();
 	amdgpu_acpi_release();
+	amdgpu_unregister_atpx_handler();
 	amdgpu_sync_fini();
 	mmu_notifier_synchronize();
 	amdgpu_xcp_drv_release();
