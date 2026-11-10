@@ -7,10 +7,6 @@
 
 use kernel::{
     device,
-    io::{
-        register::Array,
-        Io, //
-    },
     num::{
         Bounded,
         TryIntoBounded, //
@@ -39,8 +35,7 @@ use crate::{
         Tlv,
     },
     gpu::Chipset,
-    num::FromSafeCast,
-    regs, //
+    num::FromSafeCast, //
 };
 
 /// Structure used by the boot-loader to load the rest of the code.
@@ -221,23 +216,22 @@ impl GenericBootloader {
             .try_into_bounded()
             .ok_or(EINVAL)?;
 
-        // Configure DMA index for the bootloader to fetch the FWSEC firmware from system memory.
-        falcon.pfalcon.update(
-            regs::NV_PFALCON_FBIF_TRANSCFG::try_at(usize::from_safe_cast(dmem_desc.ctx_dma))
-                .ok_or(EINVAL)?,
+        falcon.with_fbif_transcfg(
+            dmem_desc.ctx_dma,
             |v| {
                 v.with_target(target)
                     .with_mem_type(FalconFbifMemType::Physical)
             },
-        );
+            || {
+                falcon.pio_load(&GenericBootloaderLoad {
+                    bootloader: self,
+                    imem_dst_start,
+                    dmem_desc,
+                })?;
 
-        falcon.pio_load(&GenericBootloaderLoad {
-            bootloader: self,
-            imem_dst_start,
-            dmem_desc,
-        })?;
-
-        falcon.boot(Some(mbox0), None)
+                falcon.boot(Some(mbox0), None)
+            },
+        )
     }
 }
 
