@@ -14448,6 +14448,12 @@ static bool is_bpf_task_park_kfunc(u32 btf_id)
 	return btf_id == special_kfunc_list[KF_bpf_task_park];
 }
 
+/* The kfuncs that sleep or wait with migration enabled. */
+static bool is_migrating_kfunc(u32 btf_id)
+{
+	return btf_id == special_kfunc_list[KF_bpf_task_park];
+}
+
 static bool is_bpf_obj_new_kfunc(u32 func_id)
 {
 	return func_id == special_kfunc_list[KF_bpf_obj_new] ||
@@ -16265,6 +16271,24 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	/* Track non-sleepable context for kfuncs, same as for helpers. */
 	if (!in_sleepable_context(env))
 		insn_aux->non_sleepable = true;
+
+	/*
+	 * The kfunc may return on another CPU. What a run takes on the CPU it
+	 * starts on and gives back on the CPU it ends on does not survive that.
+	 * The stack in arena is such a thing, see bpf_arena_stack_put(), and
+	 * the time slice of may_goto, which bpf_do_misc_fixups() refuses. For
+	 * the same reason the program is kept out of prog arrays, where it would
+	 * also run without a reference of its own, and away from runners that
+	 * count a run per CPU.
+	 */
+	if (is_migrating_kfunc(meta.func_id)) {
+		if (env->uses_arena_sp) {
+			verbose(env, "%s() cannot be called in a program that uses R%d\n",
+				func_name, BPF_REG_ARENA_SP);
+			return -EINVAL;
+		}
+		env->prog->aux->may_migrate = true;
+	}
 
 	/* Check the arguments */
 	err = check_func_args(env, &meta, insn_idx);

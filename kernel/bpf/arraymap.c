@@ -1028,7 +1028,12 @@ static void *prog_fd_array_get_ptr(struct bpf_map *map,
 	if (IS_ERR(prog))
 		return prog;
 
-	if (prog->type == BPF_PROG_TYPE_EXT ||
+	/*
+	 * A tail call runs the program on the caller's Tasks Trace RCU read
+	 * section alone, and a program that parks leaves that section for its
+	 * sleep, see bpf_task_park().
+	 */
+	if (prog->type == BPF_PROG_TYPE_EXT || prog->aux->may_migrate ||
 	    !bpf_prog_map_compatible(map, prog)) {
 		bpf_prog_put(prog);
 		return ERR_PTR(-EINVAL);

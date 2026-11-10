@@ -1943,6 +1943,8 @@ struct bpf_prog_aux {
 	bool changes_pkt_data;
 	bool has_prologue;
 	bool might_sleep;
+	/* a run may leave on another CPU than it started on, see bpf_task_park() */
+	bool may_migrate;
 	bool can_unwind;
 	/* frames of recursive subprogs can be on the stack when it is called */
 	bool in_recursion;

@@ -2862,6 +2862,12 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 			u16 live = env->insn_aux_data[i].live_regs_before;
 			int reg, save_off = 0;
 
+			/* The count and the time are kept per cpu, see bpf_timed_may_goto_save(). */
+			if (prog->aux->may_migrate) {
+				verbose(env, "may_goto cannot be used in a program that may migrate, also not in a loop that gets one\n");
+				return -EINVAL;
+			}
+
 			/* a register that is dead here holds the address of the count */
 			for (reg = BPF_REG_0; reg <= BPF_REG_9; reg++)
 				if (!(live & BIT(reg)))

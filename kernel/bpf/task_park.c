@@ -194,14 +194,18 @@ __bpf_kfunc int bpf_task_park(u64 timeout_ns, u64 flags)
 	 * program, and with it its maps and context, for the whole
 	 * invocation, so that the program's own memory needs no grace period,
 	 * and where nothing on the run path keeps per-CPU state across the
-	 * program. The verifier confines the call to such contexts: the main
-	 * body of a syscall program and the functions it calls directly, never
-	 * a callback, and never a region that pins the CPU, a lock, a saved
-	 * IRQ state or an RCU read section. It also invalidates every pointer
-	 * the program holds across the call except its stack, its context,
-	 * maps it references directly and the values of its arrays, arena
-	 * memory and verifier-tracked references. What remains is that the
-	 * program may resume on another CPU, which is part of the contract.
+	 * program. A program that keeps such state itself, a stack in arena or
+	 * the time slice of may_goto, is refused the call, and one that calls
+	 * it is kept out of prog arrays, where the caller of a tail call holds
+	 * it through this very read section. The verifier confines the call to
+	 * such contexts: the main body of a syscall program and the functions it
+	 * calls directly, never a callback, and never a region that pins the
+	 * CPU, a lock, a saved IRQ state or an RCU read section. It also
+	 * invalidates every pointer the program holds across the call except its
+	 * stack, its context, maps it references directly and the values of its
+	 * arrays, arena memory and verifier-tracked references. What remains is
+	 * that the program may resume on another CPU, which is part of the
+	 * contract.
 	 */
 	migrate_enable();
 	rcu_read_unlock_trace();

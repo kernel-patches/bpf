@@ -6661,8 +6661,9 @@ int kern_sys_bpf(int cmd, union bpf_attr *attr, unsigned int size)
 		if (IS_ERR(prog))
 			return PTR_ERR(prog);
 
+		/* The run is counted per CPU, which a program that migrates would unbalance. */
 		if (attr->test.ctx_size_in < prog->aux->max_ctx_offset ||
-		    attr->test.ctx_size_in > U16_MAX) {
+		    attr->test.ctx_size_in > U16_MAX || prog->aux->may_migrate) {
 			bpf_prog_put(prog);
 			return -EINVAL;
 		}
