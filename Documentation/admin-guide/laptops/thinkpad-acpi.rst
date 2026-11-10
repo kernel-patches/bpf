@@ -794,10 +794,11 @@ buses are still active), or mask an important alarm (such as a nearly
 empty battery, or a broken battery), access to most LEDs is
 restricted.
 
-Unrestricted access to all LEDs requires that thinkpad-acpi be
-compiled with the CONFIG_THINKPAD_ACPI_UNSAFE_LEDS option enabled.
-Distributions must never enable this option.  Individual users that
-are aware of the consequences are welcome to enabling it.
+Individual users that are aware of the consequences may enable
+unrestricted access to desired LEDs with either the "unrestricted_leds"
+module parameter or the CONFIG_THINKPAD_ACPI_UNSAFE_LEDS option
+(distributions must never enable it).  Please always be aware of the
+danger of unrestricted LED access.
 
 Audio mute and microphone mute LEDs are supported, but currently not
 visible to userspace. They are used by the snd-hda-intel audio driver.

@@ -5608,15 +5608,20 @@ static const char * const tpacpi_led_names[TPACPI_LED_NUMLEDS] = {
 	"tpacpi::unknown_led3",
 	"tpacpi::thinkvantage",
 };
-#define TPACPI_SAFE_LEDS	0x1481U
+
+#define TPACPI_SAFE_LEDS		0x1481U
+
+#ifdef CONFIG_THINKPAD_ACPI_UNSAFE_LEDS
+#define TPACPI_UNRESTRICTED_LEDS	0xFFFFU
+#else
+#define TPACPI_UNRESTRICTED_LEDS	TPACPI_SAFE_LEDS
+#endif
+
+static unsigned int unrestricted_leds = TPACPI_UNRESTRICTED_LEDS;
 
 static inline bool tpacpi_is_led_restricted(const unsigned int led)
 {
-#ifdef CONFIG_THINKPAD_ACPI_UNSAFE_LEDS
-	return false;
-#else
-	return (1U & (TPACPI_SAFE_LEDS >> led)) == 0;
-#endif
+	return !(unrestricted_leds & BIT(led));
 }
 
 static int led_get_status(const unsigned int led)
@@ -5892,9 +5897,9 @@ static int __init led_init(struct ibm_init_struct *iibm)
 		}
 	}
 
-#ifdef CONFIG_THINKPAD_ACPI_UNSAFE_LEDS
-	pr_notice("warning: userspace override of important firmware LEDs is enabled\n");
-#endif
+	if (unrestricted_leds & ~TPACPI_SAFE_LEDS)
+		pr_notice("warning: userspace override of important firmware LEDs is enabled\n");
+
 	return 0;
 }
 
@@ -12237,6 +12242,10 @@ MODULE_PARM_DESC(uwb_state,
 
 module_param(profile_force, int, 0444);
 MODULE_PARM_DESC(profile_force, "Force profile mode. -1=off, 1=MMC, 2=PSC");
+
+module_param(unrestricted_leds, uint, 0444);
+MODULE_PARM_DESC(unrestricted_leds,
+		 "Bitmask. Set/clear a bit to enable/disable unrestricted access to an LED");
 
 static void thinkpad_acpi_module_exit(void)
 {

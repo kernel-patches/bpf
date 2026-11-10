@@ -162,6 +162,9 @@ config THINKPAD_ACPI_UNSAFE_LEDS
 	  and the driver will allow control of every LED, including
 	  the ones on the dock stations.
 
+	  This is also configurable via the "unrestricted_leds" module
+	  parameter.
+
 	  Never enable this option on a distribution kernel.
 
 	  Say N here, unless you are building a kernel for your own
