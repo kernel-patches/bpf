@@ -9,6 +9,7 @@
 
 #include "intel_de.h"
 #include "intel_display_regs.h"
+#include "intel_display_rpm.h"
 
 static int intel_de_wait_for_register(struct intel_display *display,
 				      intel_reg_t reg, u32 mask, u32 value,
@@ -341,11 +342,13 @@ __intel_de_read(struct intel_display *display, intel_reg_t reg,
 	unsigned long irqflags;
 	u32 val;
 
+	assert_display_rpm_held(display);
+
 	__mmio_wakelock_pre(display, reg, mmio_flags);
 	__mmio_lock_pre(display, &irqflags, mmio_flags);
 	__mmio_unclaimed_pre(display, reg, false, mmio_flags);
 
-	val = intel_uncore_read(__to_uncore(display), reg);
+	val = intel_de_read_fw(display, reg);
 
 	__mmio_unclaimed_post(display, reg, false, mmio_flags);
 	__mmio_lock_post(display, irqflags, mmio_flags);
@@ -360,11 +363,13 @@ __intel_de_write(struct intel_display *display, intel_reg_t reg, u32 val,
 {
 	unsigned long irqflags;
 
+	assert_display_rpm_held(display);
+
 	__mmio_wakelock_pre(display, reg, mmio_flags);
 	__mmio_lock_pre(display, &irqflags, mmio_flags);
 	__mmio_unclaimed_pre(display, reg, true, mmio_flags);
 
-	intel_uncore_write(__to_uncore(display), reg, val);
+	intel_de_write_fw(display, reg, val);
 
 	__mmio_unclaimed_post(display, reg, true, mmio_flags);
 	__mmio_lock_post(display, irqflags, mmio_flags);
