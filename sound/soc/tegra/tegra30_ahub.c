@@ -594,6 +594,7 @@ err_unset_ahub:
 
 static void tegra30_ahub_remove(struct platform_device *pdev)
 {
+	of_platform_depopulate(&pdev->dev);
 	pm_runtime_disable(&pdev->dev);
 
 	ahub = NULL;
