@@ -470,7 +470,7 @@ struct ene_ub6250_info {
 	u32		bl_num;
 	int		SrbStatus;
 
-	/*------Power Managerment ---------------*/
+	/*------Power Management ---------------*/
 	bool		Power_IsResum;
 };
 
