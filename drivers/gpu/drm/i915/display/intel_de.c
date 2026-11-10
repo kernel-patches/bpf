@@ -164,6 +164,7 @@ u16 intel_de_read16(struct intel_display *display, intel_reg_t reg)
 }
 
 #define __MMIO_WAKELOCK		BIT(0)
+#define __MMIO_LOCK		BIT(1)
 
 static __always_inline void
 __mmio_wakelock_pre(struct intel_display *display, intel_reg_t reg,
@@ -181,16 +182,35 @@ __mmio_wakelock_post(struct intel_display *display, intel_reg_t reg,
 		intel_dmc_wl_put(display, reg);
 }
 
+static __always_inline void
+__mmio_lock_pre(struct intel_display *display, unsigned long *irqflags,
+		const unsigned int mmio_flags)
+{
+	if (mmio_flags & __MMIO_LOCK)
+		spin_lock_irqsave(&display->mmio.lock, *irqflags);
+}
+
+static __always_inline void
+__mmio_lock_post(struct intel_display *display, unsigned long irqflags,
+		 const unsigned int mmio_flags)
+{
+	if (mmio_flags & __MMIO_LOCK)
+		spin_unlock_irqrestore(&display->mmio.lock, irqflags);
+}
+
 static __always_inline u32
 __intel_de_read(struct intel_display *display, intel_reg_t reg,
 		const unsigned int mmio_flags)
 {
+	unsigned long irqflags;
 	u32 val;
 
 	__mmio_wakelock_pre(display, reg, mmio_flags);
+	__mmio_lock_pre(display, &irqflags, mmio_flags);
 
 	val = intel_uncore_read(__to_uncore(display), reg);
 
+	__mmio_lock_post(display, irqflags, mmio_flags);
 	__mmio_wakelock_post(display, reg, mmio_flags);
 
 	return val;
@@ -200,10 +220,14 @@ static __always_inline void
 __intel_de_write(struct intel_display *display, intel_reg_t reg, u32 val,
 		 const unsigned int mmio_flags)
 {
+	unsigned long irqflags;
+
 	__mmio_wakelock_pre(display, reg, mmio_flags);
+	__mmio_lock_pre(display, &irqflags, mmio_flags);
 
 	intel_uncore_write(__to_uncore(display), reg, val);
 
+	__mmio_lock_post(display, irqflags, mmio_flags);
 	__mmio_wakelock_post(display, reg, mmio_flags);
 }
 
@@ -226,6 +250,25 @@ static const struct intel_mmio_funcs i9xx_mmio_funcs = {
 	.write = i9xx_mmio_write,
 };
 
+#define SNB_MMIO_FLAGS __MMIO_LOCK
+
+static u32 snb_mmio_read(struct intel_display *display, intel_reg_t reg)
+{
+	return __intel_de_read(display, reg, SNB_MMIO_FLAGS);
+}
+
+static void snb_mmio_write(struct intel_display *display, intel_reg_t reg, u32 val)
+{
+	__intel_de_write(display, reg, val, SNB_MMIO_FLAGS);
+}
+
+#undef SNB_MMIO_FLAGS
+
+static const struct intel_mmio_funcs snb_mmio_funcs = {
+	.read = snb_mmio_read,
+	.write = snb_mmio_write,
+};
+
 #define LNL_MMIO_FLAGS __MMIO_WAKELOCK
 
 static u32 lnl_mmio_read(struct intel_display *display, intel_reg_t reg)
@@ -245,12 +288,35 @@ static const struct intel_mmio_funcs lnl_mmio_funcs = {
 	.write = lnl_mmio_write,
 };
 
+static bool driver_is_i915(void)
+{
+#ifdef I915
+	return true;
+#else
+	return false;
+#endif
+}
+
 void intel_de_init(struct intel_display *display)
 {
 	display->mmio.uncore = to_intel_uncore(display->drm);
 
-	if (DISPLAY_VER(display) >= 20)
-		display->mmio.funcs = &lnl_mmio_funcs;
-	else
-		display->mmio.funcs = &i9xx_mmio_funcs;
+	spin_lock_init(&display->mmio.lock);
+
+	/*
+	 * TODO: enable unclaimed register detection
+	 * (ideally without the lock) for xe and get
+	 * rid of driver_is_i915().
+	 */
+	if (driver_is_i915()) {
+		if (DISPLAY_VER(display) >= 6)
+			display->mmio.funcs = &snb_mmio_funcs;
+		else
+			display->mmio.funcs = &i9xx_mmio_funcs;
+	} else {
+		if (DISPLAY_VER(display) >= 20)
+			display->mmio.funcs = &lnl_mmio_funcs;
+		else
+			display->mmio.funcs = &i9xx_mmio_funcs;
+	}
 }

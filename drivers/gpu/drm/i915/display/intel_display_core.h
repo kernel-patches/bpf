@@ -533,6 +533,15 @@ struct intel_display {
 	} modeset;
 
 	struct {
+		/*
+		 * Simultaneous accesses to the same cacheline of
+		 * registers may hang IVB/HSW systems. This lock
+		 * serializes all display register accesses done
+		 * using intel_de_{read,write}(), but not those
+		 * done using intel_de_{read,write}_fw().
+		 */
+		spinlock_t lock;
+
 		struct intel_uncore *uncore;
 		const struct intel_mmio_funcs *funcs;
 	} mmio;

@@ -281,10 +281,6 @@ static int __intel_get_crtc_scanline(struct intel_crtc *crtc)
 }
 
 /*
- * The uncore version of the spin lock functions is used to decide
- * whether we need to lock the uncore lock or not.  This is only
- * needed in i915, not in Xe.
- *
  * This lock in i915 is needed because some old platforms (at least
  * IVB and possibly HSW as well), which are not supported in Xe, need
  * all register accesses to the same cacheline to be serialized,
@@ -292,17 +288,15 @@ static int __intel_get_crtc_scanline(struct intel_crtc *crtc)
  */
 #ifdef I915
 static void intel_vblank_section_enter(struct intel_display *display)
-	__acquires(uncore->lock)
+	__acquires(display->mmio.lock)
 {
-	struct intel_uncore *uncore = to_intel_uncore(display->drm);
-	spin_lock(&uncore->lock);
+	spin_lock(&display->mmio.lock);
 }
 
 static void intel_vblank_section_exit(struct intel_display *display)
-	__releases(uncore->lock)
+	__releases(display->mmio.lock)
 {
-	struct intel_uncore *uncore = to_intel_uncore(display->drm);
-	spin_unlock(&uncore->lock);
+	spin_unlock(&display->mmio.lock);
 }
 #else
 static void intel_vblank_section_enter(struct intel_display *display)
@@ -550,7 +544,7 @@ void intel_crtc_update_active_timings(const struct intel_crtc_state *crtc_state,
 	 * consistent state during fastset seamless refresh rate changes.
 	 *
 	 * vblank_time_lock takes care of all drm_vblank.c stuff, and
-	 * uncore.lock takes care of __intel_get_crtc_scanline() which
+	 * display->mmio.lock takes care of __intel_get_crtc_scanline() which
 	 * may get called elsewhere as well.
 	 *
 	 * TODO maybe just protect everything (including
