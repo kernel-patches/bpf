@@ -854,7 +854,7 @@ unlock:
 bool folio_can_map_prot_numa(struct folio *folio, struct vm_area_struct *vma,
 		bool is_private_single_threaded)
 {
-	int nid;
+	int nid, mode;
 
 	if (!folio || folio_is_zone_device(folio) || folio_test_ksm(folio))
 		return false;
@@ -883,14 +883,16 @@ bool folio_can_map_prot_numa(struct folio *folio, struct vm_area_struct *vma,
 	if (is_private_single_threaded && (nid == numa_node_id()))
 		return false;
 
+	mode = folio_numab_effective_mode(folio);
+
 	/*
 	 * Skip scanning top tier node if normal numa
 	 * balancing is disabled
 	 */
-	if (!numab_in_normal_mode() && node_is_toptier(nid))
+	if (!(mode & NUMAB_NORMAL) && node_is_toptier(nid))
 		return false;
 
-	if (folio_use_access_time(folio))
+	if ((mode & NUMAB_TIERING) && !node_is_toptier(nid))
 		folio_xchg_access_time(folio, jiffies_to_msecs(jiffies));
 
 	return true;

@@ -1882,7 +1882,7 @@ void account_mm_sched(struct rq *rq, struct task_struct *p, s64 delta_exec)
 		if (READ_ONCE(grp->cpu) != -1)
 			WRITE_ONCE(grp->cpu, -1);
 	} else {
-		numab_enabled = task_numab_enabled();
+		numab_enabled = task_numab_enabled(p);
 		if (exceed_llc_capacity(grp, cpu_of(rq), numab_enabled)) {
 			if (READ_ONCE(grp->cpu) != -1)
 				WRITE_ONCE(grp->cpu, -1);
@@ -2034,7 +2034,7 @@ static void task_cache_work(struct callback_head *work)
 		return;
 	}
 
-	numab_enabled = task_numab_enabled();
+	numab_enabled = task_numab_enabled(p);
 	if (exceed_llc_capacity(grp, curr_cpu, numab_enabled)) {
 		if (READ_ONCE(grp->cpu) != -1)
 			WRITE_ONCE(grp->cpu, -1);
@@ -2884,7 +2884,7 @@ bool should_numa_migrate_memory(struct task_struct *p, struct folio *folio,
 	int last_cpupid, this_cpupid;
 	bool tiering;
 
-	tiering = numab_in_tiering_mode();
+	tiering = folio_numab_in_tiering_mode(folio);
 
 	/*
 	 * Cannot migrate to memoryless nodes.
@@ -4154,12 +4154,14 @@ void task_numa_fault(int last_cpupid, int mem_node, int pages, int flags)
 {
 	struct task_struct *p = current;
 	bool migrated = flags & TNF_MIGRATED;
+	bool numab_enabled, numab_tiering;
 	int cpu_node = task_node(current);
 	int local = !!(flags & TNF_FAULT_LOCAL);
 	struct numa_group *ng;
 	int priv;
 
-	if (!task_numab_enabled())
+	task_numab_get_modes(p, &numab_enabled, &numab_tiering);
+	if (!numab_enabled)
 		return;
 
 	/* for example, ksmd faulting in a user's mm */
@@ -4171,7 +4173,7 @@ void task_numa_fault(int last_cpupid, int mem_node, int pages, int flags)
 	 * node for memory tiering mode.
 	 */
 	if (!node_is_toptier(mem_node) &&
-	    (numab_in_tiering_mode() || !cpupid_valid(last_cpupid)))
+	    (numab_tiering || !cpupid_valid(last_cpupid)))
 		return;
 
 	/* Allocate buffer to track faults on a per-node basis */
@@ -4313,6 +4315,9 @@ static void task_numa_work(struct callback_head *work)
 	 * work.
 	 */
 	if (p->flags & PF_EXITING)
+		return;
+
+	if (!task_numab_enabled(p))
 		return;
 
 	/*
@@ -4619,6 +4624,11 @@ static void task_tick_numa(struct rq *rq, struct task_struct *curr)
 			curr->numa_scan_period = task_scan_start(curr);
 		curr->node_stamp += period;
 
+		if (!task_numab_enabled(curr)) {
+			curr->node_stamp = now;
+			return;
+		}
+
 		if (!time_before(jiffies, curr->mm->numa_next_scan))
 			task_work_add(curr, work, TWA_RESUME);
 	}
@@ -4629,7 +4639,7 @@ static void update_scan_period(struct task_struct *p, int new_cpu)
 	int src_nid = cpu_to_node(task_cpu(p));
 	int dst_nid = cpu_to_node(new_cpu);
 
-	if (!task_numab_enabled())
+	if (!task_numab_enabled(p))
 		return;
 
 	if (!p->mm || !p->numa_faults || (p->flags & PF_EXITING))
@@ -11237,7 +11247,7 @@ int can_migrate_task(struct task_struct *p, struct lb_env *env)
 	if (env->flags & LBF_ACTIVE_LB)
 		return !migrate_llc_task_wrong_dst(p, env);
 
-	numab_enabled = task_numab_enabled();
+	numab_enabled = task_numab_enabled(p);
 	degrades = migrate_degrades_locality(p, env, numab_enabled);
 	if (!degrades) {
 		/*
@@ -15387,7 +15397,7 @@ static void task_tick_fair(struct rq *rq, struct task_struct *curr, int queued)
 	if (queued)
 		return;
 
-	if (task_numab_enabled())
+	if (task_numab_tick_possible())
 		task_tick_numa(rq, curr);
 
 	task_tick_cache(rq, curr);

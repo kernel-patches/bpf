@@ -342,6 +342,12 @@ struct mem_cgroup {
 	 */
 	bool zswap_writeback;
 #endif
+
+#ifdef CONFIG_BPF_NUMAB
+	/* per-cgroup NUMA balancing mode request; -1 follows the global state. */
+	int numab_mode;
+#endif
+
 	/* Not padded: nodeinfo[] is read-mostly too, let it share the line. */
 	__cacheline_group_end(memcg_read_mostly);
 
