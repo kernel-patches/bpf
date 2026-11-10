@@ -215,7 +215,7 @@ int usb_device_supports_lpm(struct usb_device *udev)
 }
 
 /*
- * Set the Maximum Exit Latency (MEL) for the host to wakup up the path from
+ * Set the Maximum Exit Latency (MEL) for the host to wakeup up the path from
  * U1/U2, send a PING to the device and receive a PING_RESPONSE.
  * See USB 3.1 section C.1.5.2
  */
@@ -4284,7 +4284,7 @@ static int usb_set_lpm_timeout(struct usb_device *udev,
 }
 
 /*
- * Don't allow device intiated U1/U2 if device isn't in the configured state,
+ * Don't allow device initiated U1/U2 if device isn't in the configured state,
  * or the system exit latency + one bus interval is greater than the minimum
  * service interval of any active periodic endpoint. See USB 3.2 section 9.4.9
  */
@@ -6395,10 +6395,10 @@ int usb_reset_device(struct usb_device *udev)
 	 * Don't allocate memory with GFP_KERNEL in current
 	 * context to avoid possible deadlock if usb mass
 	 * storage interface or usbnet interface(iSCSI case)
-	 * is included in current configuration. The easist
+	 * is included in current configuration. The easiest
 	 * approach is to do it for every device reset,
 	 * because the device 'memalloc_noio' flag may have
-	 * not been set before reseting the usb device.
+	 * not been set before resetting the usb device.
 	 */
 	noio_flag = memalloc_noio_save();
 
