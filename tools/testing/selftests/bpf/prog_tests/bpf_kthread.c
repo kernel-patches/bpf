@@ -3,6 +3,7 @@
 
 #include <test_progs.h>
 #include <sched.h>
+#include "cgroup_helpers.h"
 #include "bpf_kthread.skel.h"
 #include "verifier_bpf_kthread.skel.h"
 
@@ -13,6 +14,7 @@ struct kthread_args {
 	__u32 body;
 	__u32 bind;
 	__u32 cpu;
+	__u64 cgroup_id;
 };
 
 enum body {
@@ -63,6 +65,16 @@ static int bind_thread(struct bpf_kthread *skel, __u32 idx, __u32 cpu)
 	int retval;
 
 	if (!ASSERT_OK(run_prog(skel->progs.bind_thread, &args, &retval), "bind_thread"))
+		return -EFAULT;
+	return retval;
+}
+
+static int attach_cgroup(struct bpf_kthread *skel, __u32 idx, __u64 cgroup_id)
+{
+	struct kthread_args args = { .idx = idx, .cgroup_id = cgroup_id };
+	int retval;
+
+	if (!ASSERT_OK(run_prog(skel->progs.attach_cgroup, &args, &retval), "attach_cgroup"))
 		return -EFAULT;
 	return retval;
 }
@@ -383,6 +395,7 @@ static void test_misuse(void)
 		ASSERT_EQ(retval, 0, "foreign ret");
 		ASSERT_EQ(skel->bss->foreign_start_ret, -ESRCH, "foreign start ret");
 		ASSERT_EQ(skel->bss->foreign_stop_ret, -ESRCH, "foreign stop ret");
+		ASSERT_EQ(skel->bss->foreign_attach_ret, -ESRCH, "foreign attach ret");
 	}
 	if (ASSERT_OK(run_prog(skel->progs.misuse, NULL, &retval), "misuse"))
 		ASSERT_EQ(retval, 0, "misuse ret");
@@ -520,6 +533,79 @@ out:
 	bpf_kthread__destroy(skel);
 }
 
+/* Whether cgroup.events of the cgroup reports it populated, polling until it says @populated. */
+static bool wait_populated(const char *path, bool populated)
+{
+	const char *want = populated ? "populated 1" : "populated 0";
+	char buf[256];
+	int i;
+
+	for (i = 0; i < 2000; i++) {
+		if (!read_cgroup_file(path, "cgroup.events", buf, sizeof(buf)) && strstr(buf, want))
+			return true;
+		usleep(1000);
+	}
+	return false;
+}
+
+/*
+ * A thread moved into a cgroup, parked or running, runs there from its next
+ * iteration on and populates the cgroup until it exits. The test's work
+ * directory has controllers enabled for its children, so it cannot take the
+ * thread itself.
+ */
+static void test_attach_cgroup(void)
+{
+	struct bpf_kthread *skel = NULL;
+	int fd1 = -1, fd2 = -1;
+	char subtree[256] = {};
+	__u64 cg1, cg2;
+	__u32 loops;
+
+	if (!ASSERT_OK(setup_cgroup_environment(), "setup_cgroup_environment"))
+		return;
+	fd1 = create_and_get_cgroup("/kthread1");
+	fd2 = create_and_get_cgroup("/kthread2");
+	if (!ASSERT_GE(fd1, 0, "create kthread1") || !ASSERT_GE(fd2, 0, "create kthread2"))
+		goto out;
+	cg1 = get_cgroup_id("/kthread1");
+	cg2 = get_cgroup_id("/kthread2");
+	skel = bpf_kthread__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "open_and_load"))
+		goto out;
+	if (create_thread(skel, 0, false, BODY_WORKER))
+		goto out;
+	/* Only a domain controller in the children makes the parent refuse processes. */
+	if (!read_cgroup_file("", "cgroup.subtree_control", subtree, sizeof(subtree)) &&
+	    (strstr(subtree, "memory") || strstr(subtree, "io")))
+		ASSERT_EQ(attach_cgroup(skel, 0, get_cgroup_id("")), -EBUSY,
+			  "attach to inner cgroup");
+	ASSERT_EQ(attach_cgroup(skel, 0, cg1), 0, "attach parked ret");
+	ASSERT_EQ(start_thread(skel, 0), 0, "start ret");
+	if (!ASSERT_TRUE(wait_past(&skel->bss->loops[0], 0), "ran"))
+		goto out;
+	ASSERT_EQ(skel->bss->cgids[0], cg1, "cgroup after start");
+	ASSERT_TRUE(wait_populated("/kthread1", true), "kthread1 populated");
+
+	ASSERT_EQ(attach_cgroup(skel, 0, cg2), 0, "attach running ret");
+	loops = skel->bss->loops[0];
+	ASSERT_GE(wake_thread(skel, 0), 0, "wake ret");
+	if (ASSERT_TRUE(wait_past(&skel->bss->loops[0], loops), "looped"))
+		ASSERT_EQ(skel->bss->cgids[0], cg2, "cgroup after move");
+	ASSERT_TRUE(wait_populated("/kthread1", false), "kthread1 empty");
+	ASSERT_TRUE(wait_populated("/kthread2", true), "kthread2 populated");
+
+	ASSERT_EQ(stop_thread(skel, 0), 0, "stop ret");
+	ASSERT_TRUE(wait_populated("/kthread2", false), "kthread2 empty");
+out:
+	bpf_kthread__destroy(skel);
+	if (fd1 >= 0)
+		close(fd1);
+	if (fd2 >= 0)
+		close(fd2);
+	cleanup_cgroup_environment();
+}
+
 void test_bpf_kthread(void)
 {
 	RUN_TESTS(verifier_bpf_kthread);
@@ -550,4 +636,6 @@ void test_bpf_kthread(void)
 		test_bind();
 	if (test__start_subtest("self_bind"))
 		test_self_bind();
+	if (test__start_subtest("attach_cgroup"))
+		test_attach_cgroup();
 }

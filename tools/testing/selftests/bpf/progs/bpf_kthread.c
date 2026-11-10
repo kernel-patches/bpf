@@ -30,6 +30,7 @@ struct kthread_args {
 	__u32 body;		/* create: which callback, see enum body */
 	__u32 bind;		/* create: bind the thread to cpu before starting it */
 	__u32 cpu;		/* create and bind: the CPU */
+	__u64 cgroup_id;	/* attach_cgroup: the cgroup to move the thread into */
 };
 
 enum body {
@@ -46,11 +47,13 @@ __u32 tids[NR_THREADS];		/* the thread's PID, per slot */
 char comms[NR_THREADS][16];	/* the comm the thread read for itself, per slot */
 __u32 cpus[NR_THREADS];		/* the CPU the thread last ran on, per slot */
 __u32 loops[NR_THREADS];	/* iterations of the body's loop, per slot */
+__u64 cgids[NR_THREADS];	/* the cgroup the thread last ran in, per slot */
 __u32 exit_now[NR_THREADS];	/* set by the test: the callback returns idx + 1 */
 int self_stop_ret;		/* bpf_kthread_stop() on the calling thread */
 int spawn_ret;			/* bpf_kthread_start() by the spawner */
 int foreign_start_ret;		/* bpf_kthread_start() on a task that is no BPF kthread */
 int foreign_stop_ret;		/* bpf_kthread_stop() on the same */
+int foreign_attach_ret;		/* bpf_kthread_attach_cgroup() on the same */
 __u32 ring_size;		/* set by the test: threads in the ring */
 __u32 ring_ready;		/* ring threads about to stop their successor */
 int ring_stop_ret[NR_THREADS];	/* what stopping the successor returned, per slot */
@@ -82,6 +85,7 @@ static int worker(__u64 arg)
 
 	bpf_repeat(LOOP_BOUND) {
 		cpus[idx] = bpf_get_smp_processor_id();
+		cgids[idx] = bpf_get_current_cgroup_id();
 		__sync_fetch_and_add(&loops[idx], 1);
 		if (bpf_kthread_should_stop())
 			return 0;
@@ -311,6 +315,40 @@ int bind_thread(struct kthread_args *args)
 	return ret;
 }
 
+/* Move the thread of slot idx into the cgroup args->cgroup_id, running or not. */
+SEC("syscall")
+int attach_cgroup(struct kthread_args *args)
+{
+	struct task_struct *task;
+	struct cgroup *cgrp;
+	int ret = -ENOENT;
+
+	task = take(args->idx);
+	if (!task)
+		return -ESRCH;
+	cgrp = bpf_cgroup_from_id(args->cgroup_id);
+	if (cgrp) {
+		ret = bpf_kthread_attach_cgroup(task, cgrp, 0);
+		bpf_cgroup_release(cgrp);
+	}
+	publish(args->idx, task);
+	return ret;
+}
+
+/* bpf_kthread_attach_cgroup() on the root cgroup with @flags. */
+static int attach_root_cgroup(struct task_struct *task, __u64 flags)
+{
+	struct cgroup *cgrp;
+	int ret;
+
+	cgrp = bpf_cgroup_from_id(1);
+	if (!cgrp)
+		return -ENOENT;
+	ret = bpf_kthread_attach_cgroup(task, cgrp, flags);
+	bpf_cgroup_release(cgrp);
+	return ret;
+}
+
 /* Stop the thread of slot idx and empty the slot; returns what the stop returned. */
 SEC("syscall")
 int stop_thread(struct kthread_args *args)
@@ -337,6 +375,7 @@ int control_foreign_task(void *ctx)
 		return -ESRCH;
 	foreign_start_ret = bpf_kthread_start(task, 0);
 	foreign_stop_ret = bpf_kthread_stop(task, 0);
+	foreign_attach_ret = attach_root_cgroup(task, 0);
 	bpf_task_release(task);
 	return 0;
 }
@@ -366,8 +405,10 @@ int misuse(void *ctx)
 		ret = 4;
 	else if (bpf_kthread_stop(task, 1) != -EINVAL)
 		ret = 5;
+	else if (attach_root_cgroup(task, 1) != -EINVAL)
+		ret = 6;
 	else
-		ret = bpf_kthread_stop(task, 0) == -EINTR ? 0 : 6;
+		ret = bpf_kthread_stop(task, 0) == -EINTR ? 0 : 7;
 	bpf_task_release(task);
 	return ret;
 }
