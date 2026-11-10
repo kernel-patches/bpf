@@ -1155,6 +1155,10 @@ static int ieee80211_set_monitor_channel(struct wiphy *wiphy,
 		sdata = wiphy_dereference(wiphy, local->monitor_sdata);
 		if (!sdata)
 			goto done;
+	} else if (!dev) {
+		return -EOPNOTSUPP;
+	} else if (!ieee80211_sdata_running(sdata)) {
+		return -ENETDOWN;
 	}
 
 	if (rcu_access_pointer(sdata->deflink.conf->chanctx_conf) &&
