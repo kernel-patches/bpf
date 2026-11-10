@@ -22,10 +22,6 @@
 #define MBOX_DATA28(msg)		((msg) & ~0xf)
 #define MBOX_CHAN_PROPERTY		8
 
-static struct platform_device *rpi_hwmon;
-static struct platform_device *rpi_clk;
-static struct platform_device *rpi_rtc;
-
 struct rpi_firmware {
 	struct mbox_client cl;
 	struct mbox_chan *chan; /* The property channel. */
@@ -33,6 +29,10 @@ struct rpi_firmware {
 	u32 enabled;
 
 	struct kref consumers;
+
+	struct platform_device *hwmon_dev;
+	struct platform_device *clk_dev;
+	struct platform_device *rtc_dev;
 };
 
 static DEFINE_MUTEX(transaction_lock);
@@ -204,6 +204,7 @@ rpi_firmware_print_firmware_revision(struct rpi_firmware *fw)
 static void
 rpi_register_hwmon_driver(struct device *dev, struct rpi_firmware *fw)
 {
+	struct platform_device *pdev;
 	u32 packet;
 	int ret = rpi_firmware_property(fw, RPI_FIRMWARE_GET_THROTTLED,
 					&packet, sizeof(packet));
@@ -211,13 +212,19 @@ rpi_register_hwmon_driver(struct device *dev, struct rpi_firmware *fw)
 	if (ret)
 		return;
 
-	rpi_hwmon = platform_device_register_data(dev, "raspberrypi-hwmon",
-						  -1, NULL, 0);
+	pdev = platform_device_register_data(dev, "raspberrypi-hwmon",
+					     -1, NULL, 0);
+
+	if (IS_ERR(pdev))
+		return;
+
+	fw->hwmon_dev = pdev;
 }
 
-static void rpi_register_clk_driver(struct device *dev)
+static void rpi_register_clk_driver(struct device *dev, struct rpi_firmware *fw)
 {
 	struct device_node *firmware;
+	struct platform_device *pdev;
 
 	/*
 	 * Earlier DTs don't have a node for the firmware clocks but
@@ -231,11 +238,16 @@ static void rpi_register_clk_driver(struct device *dev)
 		return;
 	}
 
-	rpi_clk = platform_device_register_data(dev, "raspberrypi-clk",
-						-1, NULL, 0);
+	pdev = platform_device_register_data(dev, "raspberrypi-clk",
+					     -1, NULL, 0);
+
+	if (IS_ERR(pdev))
+		return;
+
+	fw->clk_dev = pdev;
 }
 
-static void rpi_register_rtc_driver(struct device *dev)
+static void rpi_register_rtc_driver(struct device *dev, struct rpi_firmware *fw)
 {
 	struct platform_device *pdev;
 
@@ -252,7 +264,7 @@ static void rpi_register_rtc_driver(struct device *dev)
 	if (IS_ERR(pdev))
 		return;
 
-	rpi_rtc = pdev;
+	fw->rtc_dev = pdev;
 }
 
 unsigned int rpi_firmware_clk_get_max_rate(struct rpi_firmware *fw, unsigned int id)
@@ -329,8 +341,8 @@ static int rpi_firmware_probe(struct platform_device *pdev)
 
 	rpi_firmware_print_firmware_revision(fw);
 	rpi_register_hwmon_driver(dev, fw);
-	rpi_register_clk_driver(dev);
-	rpi_register_rtc_driver(dev);
+	rpi_register_clk_driver(dev, fw);
+	rpi_register_rtc_driver(dev, fw);
 
 	return 0;
 }
@@ -349,12 +361,12 @@ static void rpi_firmware_remove(struct platform_device *pdev)
 {
 	struct rpi_firmware *fw = platform_get_drvdata(pdev);
 
-	platform_device_unregister(rpi_hwmon);
-	rpi_hwmon = NULL;
-	platform_device_unregister(rpi_clk);
-	rpi_clk = NULL;
-	platform_device_unregister(rpi_rtc);
-	rpi_rtc = NULL;
+	platform_device_unregister(fw->hwmon_dev);
+	fw->hwmon_dev = NULL;
+	platform_device_unregister(fw->clk_dev);
+	fw->clk_dev = NULL;
+	platform_device_unregister(fw->rtc_dev);
+	fw->rtc_dev = NULL;
 
 	rpi_firmware_put(fw);
 }
