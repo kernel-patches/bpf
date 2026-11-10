@@ -276,3 +276,18 @@ __bpf_kfunc int bpf_task_wake(struct task_struct *task, u64 flags)
 }
 
 __bpf_kfunc_end_defs();
+
+BTF_KFUNCS_START(bpf_task_park_kfunc_ids)
+BTF_ID_FLAGS(func, bpf_task_park, KF_SLEEPABLE)
+BTF_KFUNCS_END(bpf_task_park_kfunc_ids)
+
+static const struct btf_kfunc_id_set bpf_task_park_kfunc_set = {
+	.owner = THIS_MODULE,
+	.set = &bpf_task_park_kfunc_ids,
+};
+
+static int __init bpf_task_park_kfunc_init(void)
+{
+	return register_btf_kfunc_id_set(BPF_PROG_TYPE_SYSCALL, &bpf_task_park_kfunc_set);
+}
+late_initcall(bpf_task_park_kfunc_init);
