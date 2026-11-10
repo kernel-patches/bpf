@@ -478,8 +478,16 @@ static int try_dispatch(s32 cpu)
 	/* again, it'd be better to do all these with the lock held, oh well */
 	vptr = bpf_map_lookup_elem(&cgrp_q_idx_hash, &cgid);
 	if (!vptr) {
-		scx_bpf_error("failed to lookup q_idx for cgroup[%llu]", cgid);
-		return -ENOENT;
+		/*
+		 * @cgid can disappear from under us: pair_cgroup_exit()
+		 * drops the hash entry when the cgroup is going away.
+		 * Mark the pair as drained and let the next dispatch
+		 * expire it instead of taking the whole scheduler down.
+		 */
+		bpf_spin_lock(&pairc->lock);
+		pairc->draining = true;
+		bpf_spin_unlock(&pairc->lock);
+		goto out_maybe_kick;
 	}
 	q_idx = *vptr;
 
