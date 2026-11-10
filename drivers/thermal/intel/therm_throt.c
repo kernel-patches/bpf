@@ -17,6 +17,7 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
+#include <linux/sched/isolation.h>
 #include <linux/syscore_ops.h>
 #include <linux/interrupt.h>
 #include <linux/notifier.h>
@@ -672,7 +673,8 @@ static void dpti_clear_all(void)
 /**
  * enum dpti_rank - How suitable a CPU is as a DPTI owner
  * @DPTI_RANK_NONE:		No eligible CPU.
- * @DPTI_RANK_ONLINE:		An online CPU of the package (automatic choice).
+ * @DPTI_RANK_ISOLATED:		nohz_full-isolated (last resort).
+ * @DPTI_RANK_HOUSEKEEPING:	Not isolated (ideal automatic choice).
  * @DPTI_RANK_PINNED:		Explicitly requested by the user; overrides any
  *				automatic choice.
  *
@@ -681,14 +683,21 @@ static void dpti_clear_all(void)
  */
 enum dpti_rank {
 	DPTI_RANK_NONE,
-	DPTI_RANK_ONLINE,
+	DPTI_RANK_ISOLATED,
+	DPTI_RANK_HOUSEKEEPING,
 	DPTI_RANK_PINNED,
 };
 
 static enum dpti_rank dpti_cpu_rank(unsigned int cpu)
 {
-	/* No concept of isolation yet: every online CPU ranks the same. */
-	return DPTI_RANK_ONLINE;
+	/*
+	 * Prefer a HK_TYPE_KERNEL_NOISE CPU to avoid disturbing nohz_full
+	 * isolated CPUs. The mask is boot-static. No locking needed.
+	 */
+	if (housekeeping_cpu(cpu, HK_TYPE_KERNEL_NOISE))
+		return DPTI_RANK_HOUSEKEEPING;
+
+	return DPTI_RANK_ISOLATED;
 }
 
 /*
@@ -731,9 +740,10 @@ static unsigned int dpti_select_cpu(unsigned int pkg_cpu, unsigned int skip,
 			best_rank = cpu_rank;
 			best = cpu;
 			/*
-			 * Nothing outranks an online CPU in automatic selection.
+			 * Nothing outranks a housekeeping CPU in automatic
+			 * selection.
 			 */
-			if (best_rank == DPTI_RANK_ONLINE)
+			if (best_rank == DPTI_RANK_HOUSEKEEPING)
 				break;
 		}
 	}
@@ -741,6 +751,13 @@ static unsigned int dpti_select_cpu(unsigned int pkg_cpu, unsigned int skip,
 	*rank = best_rank;
 
 	return best;
+}
+
+static void dpti_warn_if_isolated(unsigned int cpu, enum dpti_rank rank)
+{
+	if (rank == DPTI_RANK_ISOLATED)
+		pr_warn_once("Package %u thermal interrupt directed to nohz_full-isolated CPU%u; no housekeeping CPU available\n",
+			     topology_logical_package_id(cpu), cpu);
 }
 
 /*
@@ -771,13 +788,18 @@ static int dpti_update_owner(unsigned int cpu)
 		return 0;
 
 	ret = dpti_program_on_cpu(new_cpu);
-	if (ret)
+	if (ret) {
+		if (old_cpu < nr_cpu_ids)
+			pr_warn_once("Failed to redirect package thermal interrupt from CPU%u to CPU%u; keeping CPU%u\n",
+				     old_cpu, new_cpu, old_cpu);
 		return ret;
+	}
 
 	if (old_cpu < nr_cpu_ids)
 		dpti_clear_on_cpu(old_cpu);
 
 	pkg->owner = new_cpu;
+	dpti_warn_if_isolated(new_cpu, new_rank);
 
 	return 0;
 }
@@ -801,9 +823,14 @@ static int dpti_online(unsigned int cpu)
 
 	/*
 	 * A CPU coming online may be a better owner than the one currently
-	 * programmed.
+	 * programmed. If the hardware does not acknowledge it, the current
+	 * owner keeps the interrupt: a valid outcome, already reported.
 	 */
-	return dpti_update_owner(cpu);
+	ret = dpti_update_owner(cpu);
+	if (ret && dpti_pkg_of_cpu_nocheck(cpu)->owner < nr_cpu_ids)
+		return 0;
+
+	return ret;
 }
 
 static void dpti_offline(unsigned int cpu)
@@ -841,6 +868,7 @@ static void dpti_offline(unsigned int cpu)
 			     cpu, new_cpu);
 
 		new_cpu = nr_cpu_ids;
+		new_rank = DPTI_RANK_NONE;
 	}
 
 	/*
@@ -850,6 +878,7 @@ static void dpti_offline(unsigned int cpu)
 	dpti_config_this_cpu(false);
 
 	dpti_pkgs[pkg_id].owner = new_cpu;
+	dpti_warn_if_isolated(new_cpu, new_rank);
 }
 
 /*
