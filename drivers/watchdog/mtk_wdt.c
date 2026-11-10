@@ -12,6 +12,7 @@
 #include <dt-bindings/reset/mt2712-resets.h>
 #include <dt-bindings/reset/mediatek,mt6735-wdt.h>
 #include <dt-bindings/reset/mediatek,mt6795-resets.h>
+#include <dt-bindings/reset/mediatek,mt6797-wdt.h>
 #include <dt-bindings/reset/mediatek,mt8167-wdt.h>
 #include <dt-bindings/reset/mt7986-resets.h>
 #include <dt-bindings/reset/mt8183-resets.h>
@@ -108,6 +109,31 @@ static const struct mtk_wdt_data mt6735_data = {
 
 static const struct mtk_wdt_data mt6795_data = {
 	.toprgu_sw_rst_num = MT6795_TOPRGU_SW_RST_NUM,
+};
+
+static const u8 mt6797_toprgu_sw_rst_tb[] = {
+	[MT6797_TOPRGU_INFRA_RST] =		0,
+	[MT6797_TOPRGU_MM_RST] =		1,
+	[MT6797_TOPRGU_MFG_RST] =		2,
+	[MT6797_TOPRGU_VENC_RST] =		3,
+	[MT6797_TOPRGU_VDEC_RST] =		4,
+	[MT6797_TOPRGU_IMG_RST] =		5,
+	[MT6797_TOPRGU_DDRPHY_RST] =		6,
+	[MT6797_TOPRGU_MD_RST] =		7,
+	[MT6797_TOPRGU_INFRA_AO_RST] =		8,
+	[MT6797_TOPRGU_CONN_RST] =		9,
+	[MT6797_TOPRGU_APMIXED_RST] =		10,
+	[MT6797_TOPRGU_PWRAP_SPICTL_RST] =	11,
+	[MT6797_TOPRGU_CONN_MCU_RST] =		12,
+	[MT6797_TOPRGU_MJC_RST] =		13,
+	[MT6797_TOPRGU_AUDIO_RST] =		15,
+	[MT6797_TOPRGU_C2K_SYS_RST] =		16,
+	[MT6797_TOPRGU_C2K_WDT_RST] =		17,
+};
+
+static const struct mtk_wdt_data mt6797_data = {
+	.toprgu_sw_rst_tb = mt6797_toprgu_sw_rst_tb,
+	.toprgu_sw_rst_num = ARRAY_SIZE(mt6797_toprgu_sw_rst_tb),
 };
 
 static const struct mtk_wdt_data mt7629_data = {
@@ -607,6 +633,7 @@ static const struct of_device_id mtk_wdt_dt_ids[] = {
 	{ .compatible = "mediatek,mt6589-wdt", .data = &mt6589_data },
 	{ .compatible = "mediatek,mt6735-wdt", .data = &mt6735_data },
 	{ .compatible = "mediatek,mt6795-wdt", .data = &mt6795_data },
+	{ .compatible = "mediatek,mt6797-wdt", .data = &mt6797_data },
 	{ .compatible = "mediatek,mt6895-wdt" },
 	{ .compatible = "mediatek,mt7629-wdt", .data = &mt7629_data },
 	{ .compatible = "mediatek,mt7986-wdt", .data = &mt7986_data },
