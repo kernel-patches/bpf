@@ -1422,7 +1422,8 @@ static inline int get_sched_cache_scale(int mul)
 	return (1 + (tol - 1) * mul);
 }
 
-static bool exceed_llc_capacity(struct sched_cache_group *grp, int cpu)
+static bool exceed_llc_capacity(struct sched_cache_group *grp, int cpu,
+				bool numab_enabled)
 {
 #ifdef CONFIG_NUMA_BALANCING
 	unsigned long llc, footprint;
@@ -1435,7 +1436,7 @@ static bool exceed_llc_capacity(struct sched_cache_group *grp, int cpu)
 	if (!sd)
 		return true;
 
-	if (task_numab_enabled()) {
+	if (numab_enabled) {
 		/*
 		 * TBD: RDT exclusive LLC ways reserved should be
 		 * excluded.
@@ -1801,7 +1802,8 @@ static unsigned long fraction_mm_sched(struct rq *rq,
 	return div64_u64(NICE_0_LOAD * pcpu_sched->runtime, rq->cpu_runtime + 1);
 }
 
-static int get_pref_llc(struct task_struct *p, struct sched_cache_group *grp)
+static int get_pref_llc(struct task_struct *p, struct sched_cache_group *grp,
+			bool numab_enabled)
 {
 	int mm_sched_llc = -1, mm_sched_cpu;
 
@@ -1823,7 +1825,7 @@ static int get_pref_llc(struct task_struct *p, struct sched_cache_group *grp)
 		 * than sched_setnuma() at least -- and thus the
 		 * conflict only exists for a short period of time.
 		 */
-		if (task_numab_enabled() &&
+		if (numab_enabled &&
 		    p->numa_preferred_nid >= 0 &&
 		    cpu_to_node(mm_sched_cpu) != p->numa_preferred_nid)
 			mm_sched_llc = -1;
@@ -1842,6 +1844,7 @@ void account_mm_sched(struct rq *rq, struct task_struct *p, s64 delta_exec)
 	struct sched_cache_time *pcpu_sched;
 	int mm_sched_llc = -1;
 	unsigned long epoch;
+	bool numab_enabled;
 
 	if (!sched_cache_enabled())
 		return;
@@ -1875,13 +1878,18 @@ void account_mm_sched(struct rq *rq, struct task_struct *p, s64 delta_exec)
 	 * its preferred state.
 	 */
 	if ((long)(epoch - READ_ONCE(grp->epoch)) > llc_epoch_affinity_timeout ||
-	    invalid_llc_nr(grp, p, cpu_of(rq)) ||
-	    exceed_llc_capacity(grp, cpu_of(rq))) {
+	    invalid_llc_nr(grp, p, cpu_of(rq))) {
 		if (READ_ONCE(grp->cpu) != -1)
 			WRITE_ONCE(grp->cpu, -1);
+	} else {
+		numab_enabled = task_numab_enabled();
+		if (exceed_llc_capacity(grp, cpu_of(rq), numab_enabled)) {
+			if (READ_ONCE(grp->cpu) != -1)
+				WRITE_ONCE(grp->cpu, -1);
+		} else {
+			mm_sched_llc = get_pref_llc(p, grp, numab_enabled);
+		}
 	}
-
-	mm_sched_llc = get_pref_llc(p, grp);
 
 	/* task not on rq accounted later in account_entity_enqueue() */
 	if (task_running_on_cpu(rq->cpu, p) &&
@@ -1919,12 +1927,12 @@ static void task_tick_cache(struct rq *rq, struct task_struct *p)
 }
 
 static void get_scan_cpumasks(cpumask_var_t cpus, struct task_struct *p,
-			      struct sched_cache_group *grp)
+			      struct sched_cache_group *grp, bool numab_enabled)
 {
 #ifdef CONFIG_NUMA_BALANCING
 	int cpu, curr_cpu, nid, pref_nid;
 
-	if (!task_numab_enabled())
+	if (!numab_enabled)
 		goto out;
 
 	cpu = READ_ONCE(grp->cpu);
@@ -1991,6 +1999,7 @@ static void task_cache_work(struct callback_head *work)
 	struct task_struct *p = current, *cur;
 	unsigned long curr_m_a_occ = 0;
 	unsigned long m_a_occ = 0;
+	bool numab_enabled;
 
 	WARN_ON_ONCE(work != &p->cache_work);
 
@@ -2019,11 +2028,16 @@ static void task_cache_work(struct callback_head *work)
 		return;
 
 	curr_cpu = task_cpu(p);
-	if (invalid_llc_nr(grp, p, curr_cpu) ||
-	    exceed_llc_capacity(grp, curr_cpu)) {
+	if (invalid_llc_nr(grp, p, curr_cpu)) {
 		if (READ_ONCE(grp->cpu) != -1)
 			WRITE_ONCE(grp->cpu, -1);
+		return;
+	}
 
+	numab_enabled = task_numab_enabled();
+	if (exceed_llc_capacity(grp, curr_cpu, numab_enabled)) {
+		if (READ_ONCE(grp->cpu) != -1)
+			WRITE_ONCE(grp->cpu, -1);
 		return;
 	}
 
@@ -2033,7 +2047,7 @@ static void task_cache_work(struct callback_head *work)
 	scoped_guard (cpus_read_lock) {
 		guard(rcu)();
 
-		get_scan_cpumasks(cpus, p, grp);
+		get_scan_cpumasks(cpus, p, grp, numab_enabled);
 
 		for_each_cpu(cpu, cpus) {
 			/* XXX sched_cluster_active */
@@ -2138,7 +2152,8 @@ void init_sched_mm(struct task_struct *p) { }
 static void task_tick_cache(struct rq *rq, struct task_struct *p) { }
 
 static inline int get_pref_llc(struct task_struct *p,
-			       struct sched_cache_group *grp)
+			       struct sched_cache_group *grp,
+			       bool numab_enabled)
 {
 	return -1;
 }
@@ -2867,6 +2882,9 @@ bool should_numa_migrate_memory(struct task_struct *p, struct folio *folio,
 	struct numa_group *ng = deref_curr_numa_group(p);
 	int dst_nid = cpu_to_node(dst_cpu);
 	int last_cpupid, this_cpupid;
+	bool tiering;
+
+	tiering = numab_in_tiering_mode();
 
 	/*
 	 * Cannot migrate to memoryless nodes.
@@ -2878,7 +2896,7 @@ bool should_numa_migrate_memory(struct task_struct *p, struct folio *folio,
 	 * The pages in slow memory node should be migrated according
 	 * to hot/cold instead of private/shared.
 	 */
-	if (folio_use_access_time(folio)) {
+	if (tiering && !node_is_toptier(folio_nid(folio))) {
 		struct pglist_data *pgdat;
 		unsigned long rate_limit;
 		unsigned int latency, th, def_th;
@@ -2907,7 +2925,7 @@ bool should_numa_migrate_memory(struct task_struct *p, struct folio *folio,
 	this_cpupid = cpu_pid_to_cpupid(dst_cpu, current->pid);
 	last_cpupid = folio_xchg_last_cpupid(folio, this_cpupid);
 
-	if (!numab_in_tiering_mode() && !node_is_toptier(src_nid) &&
+	if (!tiering && !node_is_toptier(src_nid) &&
 	    !cpupid_valid(last_cpupid))
 		return false;
 
@@ -10696,13 +10714,14 @@ static int task_hot(struct task_struct *p, struct lb_env *env)
  * Returns 0, if task migration is not affected by locality.
  * Returns a negative value, if task migration improves locality i.e migration preferred.
  */
-static long migrate_degrades_locality(struct task_struct *p, struct lb_env *env)
+static long migrate_degrades_locality(struct task_struct *p, struct lb_env *env,
+				      bool numab_enabled)
 {
 	struct numa_group *numa_group = rcu_dereference_all(p->numa_group);
 	unsigned long src_weight, dst_weight;
 	int src_nid, dst_nid, dist;
 
-	if (!task_numab_enabled())
+	if (!numab_enabled)
 		return 0;
 
 	if (!p->numa_faults || !(env->sd->flags & SD_NUMA))
@@ -10744,7 +10763,8 @@ static long migrate_degrades_locality(struct task_struct *p, struct lb_env *env)
 
 #else /* !CONFIG_NUMA_BALANCING: */
 static inline long migrate_degrades_locality(struct task_struct *p,
-					     struct lb_env *env)
+					     struct lb_env *env,
+					     bool numab_enabled)
 {
 	return 0;
 }
@@ -10946,7 +10966,8 @@ static inline bool sched_asym(struct sched_domain *sd, int dst_cpu, int src_cpu)
  * destination LLC in terms of cache aware load balance.
  */
 static enum llc_mig can_migrate_llc_task(struct lb_env *env,
-					 struct task_struct *p)
+					 struct task_struct *p,
+					 bool numab_enabled)
 {
 	struct sched_cache_group *grp;
 	bool to_pref;
@@ -10971,7 +10992,7 @@ static enum llc_mig can_migrate_llc_task(struct lb_env *env,
 
 	/* skip cache aware load balance for too many threads */
 	if (invalid_llc_nr(grp, p, dst_cpu) ||
-	    exceed_llc_capacity(grp, dst_cpu)) {
+	    exceed_llc_capacity(grp, dst_cpu, numab_enabled)) {
 		if (READ_ONCE(grp->cpu) != -1)
 			WRITE_ONCE(grp->cpu, -1);
 		return mig_unrestricted;
@@ -11060,7 +11081,8 @@ migrate_llc_task_wrong_dst(struct task_struct *p, struct lb_env *env)
  * Check if migrating task p from env->src_cpu to
  * env->dst_cpu breaks LLC localiy.
  */
-static bool migrate_degrades_llc(struct task_struct *p, struct lb_env *env)
+static bool migrate_degrades_llc(struct task_struct *p, struct lb_env *env,
+				 bool numab_enabled)
 {
 	if (!sched_cache_enabled())
 		return false;
@@ -11087,7 +11109,7 @@ static bool migrate_degrades_llc(struct task_struct *p, struct lb_env *env)
 	if (migrate_llc_task_wrong_dst(p, env))
 		return true;
 
-	if (can_migrate_llc_task(env, p) != mig_forbid)
+	if (can_migrate_llc_task(env, p, numab_enabled) != mig_forbid)
 		return false;
 
 	return true;
@@ -11113,7 +11135,8 @@ migrate_llc_task_wrong_dst(struct task_struct *p, struct lb_env *env)
 }
 
 static inline bool
-migrate_degrades_llc(struct task_struct *p, struct lb_env *env)
+migrate_degrades_llc(struct task_struct *p, struct lb_env *env,
+		     bool numab_enabled)
 {
 	return false;
 }
@@ -11125,6 +11148,7 @@ static
 int can_migrate_task(struct task_struct *p, struct lb_env *env)
 {
 	long degrades, hot;
+	bool numab_enabled;
 
 	lockdep_assert_rq_held(env->src_rq);
 	if (p->sched_task_hot)
@@ -11213,14 +11237,15 @@ int can_migrate_task(struct task_struct *p, struct lb_env *env)
 	if (env->flags & LBF_ACTIVE_LB)
 		return !migrate_llc_task_wrong_dst(p, env);
 
-	degrades = migrate_degrades_locality(p, env);
+	numab_enabled = task_numab_enabled();
+	degrades = migrate_degrades_locality(p, env, numab_enabled);
 	if (!degrades) {
 		/*
 		 * If the NUMA locality is not broken,
 		 * further check if migration would hurt
 		 * LLC locality.
 		 */
-		if (migrate_degrades_llc(p, env)) {
+		if (migrate_degrades_llc(p, env, numab_enabled)) {
 			/*
 			 * If regular load balancing fails to pull a task
 			 * due to LLC locality, this is expected behavior
