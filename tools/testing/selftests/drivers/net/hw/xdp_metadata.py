@@ -7,13 +7,18 @@ Tests for XDP metadata kfuncs (e.g. bpf_xdp_metadata_rx_hash).
 These tests load device-bound XDP programs from xdp_metadata.bpf.o
 that call metadata kfuncs, send traffic, and verify the extracted
 metadata via BPF maps.
+
+The skb core extension test loads xdp_skb_ext.bpf.o: an XDP program
+stores RX metadata and a tc program checks it on the skb.
 """
+import socket
+
 from lib.py import ksft_run, ksft_eq, ksft_exit, ksft_ge, ksft_ne, ksft_pr
 from lib.py import KsftNamedVariant, ksft_variants
 from lib.py import CmdExitFailure, KsftSkipEx, NetDrvEpEnv
 from lib.py import NetdevFamily
 from lib.py import bkg, cmd, rand_port, wait_port_listen
-from lib.py import ip, bpftool, defer
+from lib.py import ip, bpftool, defer, ethtool, tc, set_ethtool_feat
 from lib.py import bpf_map_set, bpf_map_dump, bpf_prog_map_ids
 
 
@@ -130,6 +135,116 @@ def test_xdp_rss_hash(cfg, proto):
             f"RSS hash type should include L4 for {proto.upper()} traffic")
 
 
+# BPF map keys matching the enums in xdp_skb_ext.bpf.c
+_CFG_PORT = 0
+_CFG_HASH = 1
+_CFG_VLAN_PROTO = 2
+_CFG_VLAN_TCI = 3
+_CFG_IP_SUMMED = 4
+_CFG_CSUM_LEVEL = 5
+
+_RES_PKT_CNT = 0
+_RES_STORE_ERR = 1
+_RES_HASH = 2
+_RES_L4_HASH = 3
+_RES_VLAN_PROTO = 4
+_RES_VLAN_TCI = 5
+_RES_IP_SUMMED = 6
+_RES_CSUM_LEVEL = 7
+
+ETH_P_8021AD = 0x88a8
+VLAN_PRIO_SHIFT = 13
+
+# Magic numbers the NIC does not report
+TEST_RX_HASH = 0x12345678
+TEST_VLAN_PCP = 5
+TEST_VLAN_VID = 0xabc
+TEST_VLAN_TCI = TEST_VLAN_PCP << VLAN_PRIO_SHIFT | TEST_VLAN_VID
+
+XDP_CHECKSUM_NONE = 1 << 0
+XDP_CHECKSUM_UNNECESSARY = 1 << 1
+CHECKSUM_NONE = 0
+CHECKSUM_UNNECESSARY = 1
+
+
+def _load_skb_ext_progs(cfg):
+    """Attach the store program to XDP and the check program to tc ingress.
+
+    Returns:
+        A dict mapping map name to map ID.
+    """
+    abs_path = cfg.test_dir / "xdp_skb_ext.bpf.o"
+    pin_dir = "/sys/fs/bpf/xdp_skb_ext_test"
+
+    cmd(f"rm -rf {pin_dir}", shell=True, fail=False)
+    cmd(f"mkdir -p {pin_dir}", shell=True)
+    defer(cmd, f"rm -rf {pin_dir}", shell=True, fail=False)
+
+    bpftool(f"prog loadall {abs_path} {pin_dir}")
+    ip(f"link set dev {cfg.ifname} xdpdrv pinned {pin_dir}/xdp_store")
+    defer(ip, f"link set dev {cfg.ifname} xdpdrv off")
+
+    qdiscs = tc(f"qdisc show dev {cfg.ifname}", json=True)
+    if not any(q["kind"] == "clsact" for q in qdiscs):
+        tc(f"qdisc add dev {cfg.ifname} clsact")
+        defer(tc, f"qdisc del dev {cfg.ifname} clsact")
+
+    tc(f"filter add dev {cfg.ifname} ingress bpf "
+       f"object-pinned {pin_dir}/tc_check direct-action")
+    prog_id = bpftool(f"prog show pinned {pin_dir}/tc_check", json=True)["id"]
+    for f in tc(f"filter show dev {cfg.ifname} ingress", json=True):
+        if f.get("options", {}).get("prog", {}).get("id") == prog_id:
+            defer(tc, f"filter del dev {cfg.ifname} ingress pref {f['pref']}")
+
+    return bpf_prog_map_ids(prog_id)
+
+
+@ksft_variants([
+    KsftNamedVariant("csum_none", XDP_CHECKSUM_NONE, 0, CHECKSUM_NONE),
+    KsftNamedVariant("csum_unnecessary", XDP_CHECKSUM_UNNECESSARY, 1,
+                     CHECKSUM_UNNECESSARY),
+])
+def test_xdp_skb_ext(cfg, xdp_csum, csum_level, ip_summed):
+    """Test that the skb gets the RX metadata stored on XDP_PASS.
+
+    The XDP program stores a hash, a VLAN tag and a checksum status that
+    differ from what the NIC reports. The tc program reads them from the
+    skb.
+    """
+    dev_info = cfg.netnl.dev_get({"ifindex": cfg.ifindex})
+    if "skb-ext-pass" not in dev_info.get("xdp-features", []):
+        raise KsftSkipEx("device does not support skb-ext-pass")
+
+    maps = _load_skb_ext_progs(cfg)
+
+    # GRO can change ip_summed before tc ingress
+    feat = ethtool(f"-k {cfg.ifname}", json=True)[0]
+    set_ethtool_feat(cfg.ifname, feat, {"generic-receive-offload": False})
+
+    cfg_map = "map_store_cfg"
+    bpf_map_set(cfg_map, _CFG_HASH, TEST_RX_HASH)
+    bpf_map_set(cfg_map, _CFG_VLAN_PROTO, ETH_P_8021AD)
+    bpf_map_set(cfg_map, _CFG_VLAN_TCI, TEST_VLAN_TCI)
+    bpf_map_set(cfg_map, _CFG_IP_SUMMED, xdp_csum)
+    bpf_map_set(cfg_map, _CFG_CSUM_LEVEL, csum_level)
+    # The port goes last: it enables the store for the test packets
+    port = rand_port(socket.SOCK_DGRAM)
+    bpf_map_set(cfg_map, _CFG_PORT, port)
+
+    _send_probe(cfg, port, proto="udp")
+
+    res = bpf_map_dump(maps["map_store_res"])
+    ksft_ge(res.get(_RES_PKT_CNT, 0), 1, "tc saw the test packet")
+    ksft_eq(res.get(_RES_STORE_ERR, 0), 0, "store kfunc errors")
+
+    ksft_eq(res.get(_RES_HASH, 0), TEST_RX_HASH, "skb->hash")
+    ksft_eq(res.get(_RES_L4_HASH, 0), 1, "skb->l4_hash")
+    ksft_eq(res.get(_RES_VLAN_PROTO, 0), ETH_P_8021AD, "skb->vlan_proto")
+    ksft_eq(res.get(_RES_VLAN_TCI, 0), TEST_VLAN_TCI, "skb->vlan_tci")
+    ksft_eq(res.get(_RES_IP_SUMMED, 0), ip_summed, "skb->ip_summed")
+    ksft_eq(res.get(_RES_CSUM_LEVEL, 0), csum_level, "skb->csum_level")
+
+
 def main():
     """Run XDP metadata kfunc tests against a real device."""
     with NetDrvEpEnv(__file__) as cfg:
@@ -137,6 +252,7 @@ def main():
         ksft_run(
             [
                 test_xdp_rss_hash,
+                test_xdp_skb_ext,
             ],
             args=(cfg,))
     ksft_exit()
