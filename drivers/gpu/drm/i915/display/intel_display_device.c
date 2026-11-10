@@ -1966,6 +1966,16 @@ display_fused_off:
 
 void intel_display_device_info_runtime_init(struct intel_display *display)
 {
+	/*
+	 * intel_de_init() must be called even with !HAS_DISPLAY
+	 * because eg. IVB DE_MASTER_IRQ_CONTROL lives in the display.
+	 *
+	 * TODO end of intel_display_device_probe() would be a more
+	 * logical place, but at the moment i915 calls that super
+	 * early when things aren't fully set up yet.
+	 */
+	intel_de_init(display);
+
 	if (HAS_DISPLAY(display))
 		__intel_display_device_info_runtime_init(display);
 

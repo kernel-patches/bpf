@@ -162,3 +162,8 @@ u16 intel_de_read16(struct intel_display *display, intel_reg_t reg)
 
 	return intel_uncore_read16(__to_uncore(display), reg);
 }
+
+void intel_de_init(struct intel_display *display)
+{
+	display->mmio.uncore = to_intel_uncore(display->drm);
+}

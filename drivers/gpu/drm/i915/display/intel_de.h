@@ -14,8 +14,10 @@
 
 static inline struct intel_uncore *__to_uncore(struct intel_display *display)
 {
-	return to_intel_uncore(display->drm);
+	return display->mmio.uncore;
 }
+
+void intel_de_init(struct intel_display *display);
 
 u8 intel_de_read8(struct intel_display *display, intel_reg_t reg);
 void intel_de_write8(struct intel_display *display, intel_reg_t reg, u8 val);

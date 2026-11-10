@@ -51,6 +51,7 @@ struct intel_hotplug_irq_funcs;
 struct intel_initial_plane_config;
 struct intel_opregion;
 struct intel_overlay;
+struct intel_uncore;
 struct task_struct;
 
 /* Amount of SAGV/QGV points, BSpec precisely defines this */
@@ -529,6 +530,10 @@ struct intel_display {
 		/* Top level crtc-ish functions */
 		const struct intel_modeset_funcs *funcs;
 	} modeset;
+
+	struct {
+		struct intel_uncore *uncore;
+	} mmio;
 
 	struct {
 		/* protected by wm.wm_mutex */
