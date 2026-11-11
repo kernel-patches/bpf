@@ -177,6 +177,36 @@ static unsigned int get_symbol_offset(unsigned long pos)
 	return name - kallsyms_names;
 }
 
+/*
+ * Find the value of a symbol given the offset in the compressed stream.
+ */
+static unsigned long get_name_address(unsigned int name_offset)
+{
+	unsigned int low, pos, high;
+
+	low = 0;
+	high = ((kallsyms_num_syms - 1) >> 8) + 1;
+
+	while (high - low > 1) {
+		pos = low + (high - low) / 2;
+		if (name_offset >= kallsyms_markers[pos])
+			low = pos;
+		else
+			high = pos;
+	}
+
+	pos = kallsyms_markers[low];
+	for (low <<= 8; pos < name_offset; low++) {
+		unsigned int len = kallsyms_names[pos];
+		if (len & 0x80)
+			len += (kallsyms_names[pos + 1] << 7) - 0x7f;
+		pos += 1 + len;
+	}
+
+	return kallsyms_sym_address(low);
+}
+
+
 unsigned long kallsyms_sym_address(int idx)
 {
 	/* non-relocatable 32-bit kernels just embed the value directly */
@@ -185,66 +215,87 @@ unsigned long kallsyms_sym_address(int idx)
 	return (unsigned long)offset_to_ptr(kallsyms_offsets + idx);
 }
 
-static unsigned int get_symbol_seq(int index)
+static DEFINE_STATIC_KEY_FALSE(kallsyms_off_size_24);
+
+/*
+ * Get the offset into the compressed list of names for the n'th
+ * symbol in the 'sorted by name' list.
+ * Returns 'offset << 1 | is_duplicate_name'.
+ * To save memory (the array can have 200k+ entries) the values are usually
+ * 24 bit (host ordered) but will be 32 bit if necessary.
+ */
+static inline unsigned int get_symbol_name_offset(unsigned long index)
 {
-	unsigned int i, seq = 0;
+	if (static_branch_likely(&kallsyms_off_size_24) ||
+	    unlikely(kallsyms_offs_of_names.size == 24)) {
+		u8 *off = kallsyms_offs_of_names.offs + index * 3;
+#if !defined(CONFIG_HAVE_EFFICIENT_UNALIGNED_ACCESS)
+		return ((struct {unsigned int v:24 __packed; } __packed *)off)->v;
+#else
+#if defined(__BIG_ENDIAN)
+		return (*(u32 *)(off - 1)) & 0xffffff;
+#else
+		return (*(u32 *)(off - 1)) >> 8;
+#endif
+#endif
+	}
 
-	for (i = 0; i < 3; i++)
-		seq = (seq << 8) | kallsyms_seqs_of_names[3 * index + i];
-
-	return seq;
+	return ((u32 *)&kallsyms_offs_of_names.offs)[index];
 }
 
-static int kallsyms_lookup_names(const char *name,
-				 unsigned int *start,
-				 unsigned int *end)
+static int kallsyms_set_kallsyms_off_size(void)
 {
+	if (kallsyms_offs_of_names.size == 24)
+		static_branch_enable(&kallsyms_off_size_24);
+
+	return 0;
+}
+early_initcall(kallsyms_set_kallsyms_off_size);
+
+static int kallsyms_lookup_names(const char *name, unsigned int *start)
+{
+	unsigned int mid, off;
+	int low, high;
 	int ret;
-	int low, mid, high;
-	unsigned int seq, off;
 
 	low = 0;
 	high = kallsyms_num_syms - 1;
 
-	while (low <= high) {
+	for (;;) {
+		if (low > high)
+			return -1;
 		mid = low + (high - low) / 2;
-		seq = get_symbol_seq(mid);
-		off = get_symbol_offset(seq);
-		ret = kallsyms_strcmp_symbol(off, name);
-		if (ret > 0)
+		off = get_symbol_name_offset(mid);
+		ret = kallsyms_strcmp_symbol(off >> 1, name);
+		if (ret > 0) {
 			low = mid + 1;
-		else if (ret < 0)
-			high = mid - 1;
-		else
-			break;
-	}
-
-	if (low > high)
-		return -ESRCH;
-
-	low = mid;
-	while (low) {
-		seq = get_symbol_seq(low - 1);
-		off = get_symbol_offset(seq);
-		if (kallsyms_strcmp_symbol(off, name) != 0)
-			break;
-		low--;
-	}
-	*start = low;
-
-	if (end) {
-		high = mid;
-		while (high < kallsyms_num_syms - 1) {
-			seq = get_symbol_seq(high + 1);
-			off = get_symbol_offset(seq);
-			if (kallsyms_strcmp_symbol(off, name) != 0)
-				break;
-			high++;
+			continue;
 		}
-		*end = high;
+		if (!ret) {
+			/*
+			 * Found a match, but need the first one.
+			 * Most symbols (and all exported/global ones) only occur
+			 * once, most of the others only occur a small number of
+			 * times so it is worth doing a linear scan that avoids the
+			 * kallsyms_strcmp_symbol() call.
+			 * However some symbols occur a large number of times
+			 * (_sub_D_65535_0 is repeated 24610 times in an x86-64
+			 * allyesconfig, __func__.0 442 in a more normal kernel).
+			 * Avoid a long linear scan by returning to the binary
+			 * search if a short linear search is fruitless.
+			 */
+			unsigned int scan = 16;
+			while ((off & 1) && scan--)
+				off = get_symbol_name_offset(--mid);
+			if (!(off & 1))
+				break;
+		}
+		high = mid - 1;
 	}
 
-	return 0;
+	*start = mid;
+
+	return off;
 }
 
 /* Lookup the address for this symbol. Returns 0 if not found. */
@@ -257,9 +308,9 @@ unsigned long kallsyms_lookup_name(const char *name)
 	if (!*name)
 		return 0;
 
-	ret = kallsyms_lookup_names(name, &i, NULL);
-	if (!ret)
-		return kallsyms_sym_address(get_symbol_seq(i));
+	ret = kallsyms_lookup_names(name, &i);
+	if (ret >= 0)
+		return get_name_address(ret >> 1);
 
 	return module_kallsyms_lookup_name(name);
 }
@@ -289,17 +340,20 @@ int kallsyms_on_each_symbol(int (*fn)(void *, const char *, unsigned long),
 int kallsyms_on_each_match_symbol(int (*fn)(void *, unsigned long),
 				  const char *name, void *data)
 {
-	int ret;
-	unsigned int i, start, end;
+	int name_offset, ret;
+	unsigned int sym_number;
 
-	ret = kallsyms_lookup_names(name, &start, &end);
-	if (ret)
+	name_offset = kallsyms_lookup_names(name, &sym_number);
+	if (name_offset < 0)
 		return 0;
 
-	for (i = start; !ret && i <= end; i++) {
-		ret = fn(data, kallsyms_sym_address(get_symbol_seq(i)));
+	do {
+		ret = fn(data, get_name_address(name_offset >> 1));
+		if (ret)
+			break;
 		cond_resched();
-	}
+		name_offset = get_symbol_name_offset(++sym_number);
+	} while (name_offset & 1);
 
 	return ret;
 }

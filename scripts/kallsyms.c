@@ -403,7 +403,7 @@ static void sort_symbols_by_name(void)
 
 static void write_src(void)
 {
-	unsigned int i, k, len, off, seq;
+	unsigned int i, k, len, off, off_size, table_size;
 	unsigned int best_idx[256];
 	unsigned int *markers, markers_cnt;
 	unsigned long bin_offset = 0;
@@ -453,7 +453,7 @@ static void write_src(void)
 		unsigned char len[2];
 
 		se = table[i];
-		se->seq = i;
+		se->seq = off;
 
 		/* The length must be less than that of the original symbol. */
 		if (!se->len || se->len > KSYM_NAME_LEN)
@@ -485,7 +485,7 @@ static void write_src(void)
 			if ((i & 0xFF) == 0)
 				markers[i >> 8] = off;
 
-			printf("\t.byte\t%u", len[0]);
+			printf("\t/* n:%u */\t.byte\t%u", off, len[0]);
 			if (len_len == 2)
 				printf(",%u", len[1]);
 
@@ -500,6 +500,7 @@ static void write_src(void)
 		memcpy(se->sym, buf, se_len + 1);
 	}
 	write_incbin(&bin_offset, off);
+	table_size = off;
 	printf(".size kallsyms_names, . - kallsyms_names\n");
 	printf("\n");
 
@@ -560,7 +561,7 @@ static void write_src(void)
 			       out_bin_file ? '\n' : '\t');
 		}
 		if (!out_bin_file)
-			printf("/* %c %s */\n", table[i]->sym[0], table[i]->sym + 1);
+			printf("/* n:%u %c %s */\n", table[i]->seq, table[i]->sym[0], table[i]->sym + 1);
 	}
 	printf(".size kallsyms_offsets, . - kallsyms_offsets\n");
 	printf("\n");
@@ -570,23 +571,41 @@ static void write_src(void)
 	sort_symbols_by_name();
 	stamp("sort by name");
 
-	output_label("kallsyms_seqs_of_names");
-	write_incbin_header("seq_of_names", &bin_offset);
+	off_size = table_size < (1u << 23) ? 24 : 32;
+	output_label("kallsyms_offs_of_names");
+	printf("\t.long\t%u\n", off_size);
+	write_incbin_header("offs_of_names", &bin_offset);
 	for (i = 0; i < table_cnt; i++) {
 		se = table[i];
-		seq = se->seq;
+		off = se->seq << 1;
+		if (i && se->len == table[i - 1]->len &&
+		    !memcmp(se->sym + 1, table[i - 1]->sym + 1, se->len - 1))
+			/* Mark that this is a duplicate of the previous symbol */
+			off |= 1;
 		if (out_bin_file) {
-			unsigned int seq_be = htobe32(seq);
-			fwrite((char *)&seq_be + 1, 1, 3, out_bin_file);
+			unsigned int off_te = big_endian ? htobe32(off) >> (32 - off_size): htole32(off);
+			fwrite(&off_te, 1, off_size / 8 , out_bin_file);
 		} else {
-			/* The three spaces before the tab line up the comments */
-			printf("\t.byte\t%u,%u,%u   \t/* %8d %c %s */\n",
-				seq >> 16, (seq >> 8) & 0xff, seq & 0xff,
-				seq, se->sym[0], se->sym + 1);
+			if (off_size == 32) {
+				printf("\t.long\t%#4x", off);
+			} else {
+				if (big_endian)
+					off = __builtin_bswap32(off) >> 8;
+				/* The trailing three spaces line up the comments */
+				printf("\t.byte\t%u,%u,%u   ",
+					off & 0xff, (off >> 8) & 0xff, off >> 16);
+			}
+			printf("\t/* n:%-8d %c %s */\n",
+				se->seq, se->sym[0], se->sym + 1);
 		}
 	}
-	write_incbin(&bin_offset, table_cnt * 3);
-	printf(".size kallsyms_seqs_of_names, . - kallsyms_seqs_of_names\n");
+	write_incbin(&bin_offset, table_cnt * (off_size / 8));
+	/* Add a terminator without the 'duplicate' flag. */
+	if (off_size == 24)
+		printf("\t.byte\t0,0,0\n");
+	else
+		printf("\t.long\t0\n");
+	printf(".size kallsyms_offs_of_names, . - kallsyms_offs_of_names\n");
 
 	stamp("write name index");
 
