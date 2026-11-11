@@ -57,7 +57,8 @@ void perf_evsel__delete(struct perf_evsel *evsel)
 }
 
 #define FD(_evsel, _cpu_map_idx, _thread)				\
-	((int *)xyarray__entry(_evsel->fd, _cpu_map_idx, _thread))
+	(_evsel->fd ? (int *)xyarray__entry(_evsel->fd, _cpu_map_idx, _thread) \
+		     : NULL)
 #define MMAP(_evsel, _cpu_map_idx, _thread)				\
 	(_evsel->mmap ? ((struct perf_mmap *) xyarray__entry(_evsel->mmap, _cpu_map_idx, _thread)) \
 		      : NULL)

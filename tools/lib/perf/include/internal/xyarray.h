@@ -32,12 +32,12 @@ static inline void *xyarray__entry(struct xyarray *xy, size_t x, size_t y)
 
 static inline int xyarray__max_y(struct xyarray *xy)
 {
-	return xy->max_y;
+	return xy ? xy->max_y : 0;
 }
 
 static inline int xyarray__max_x(struct xyarray *xy)
 {
-	return xy->max_x;
+	return xy ? xy->max_x : 0;
 }
 
 #endif /* __LIBPERF_INTERNAL_XYARRAY_H */
