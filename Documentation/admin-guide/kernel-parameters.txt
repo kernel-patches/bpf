@@ -6283,6 +6283,13 @@ Kernel parameters
 	rcutorture.test_boost_interval= [KNL]
 			Interval (s) between each boost test.
 
+	rcutorture.test_boost_reader_ms= [KNL]
+			CPU time (ms) that each boost-test reader must
+			consume within the test_boost_duration interval.
+			The reader runs in an RCU read-side critical section
+			while a real-time CPU hog tries to starve it, so it
+			can finish in time only if it is priority boosted.
+
 	rcutorture.test_no_idle_hz= [KNL]
 			Test RCU's dyntick-idle handling.  See also the
 			rcutorture.shuffle_interval parameter.
