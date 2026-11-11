@@ -696,7 +696,7 @@ static void print_reg_state(struct bpf_verifier_env *env,
 		if (state->frameno != reg->frameno)
 			verbose(env, "[%d]", reg->frameno);
 		if (tnum_is_const(reg->var_off)) {
-			bpf_verbose_snum(env, reg->var_off.value + reg->delta);
+			bpf_verbose_snum(env, reg->var_off.value);
 			return;
 		}
 	}
@@ -704,9 +704,7 @@ static void print_reg_state(struct bpf_verifier_env *env,
 		verbose(env, "%s", btf_type_name(reg->btf, reg->btf_id));
 	verbose(env, "(");
 	if (reg->id)
-		verbose_a("id=%d", reg->id & ~BPF_ADD_CONST);
-	if (reg->id & BPF_ADD_CONST)
-		verbose(env, "%+d", reg->delta);
+		verbose_a("id=%d", reg->id);
 	if (reg->parent_id)
 		verbose_a("parent_id=%d", reg->parent_id);
 	if (type_is_non_owning_ref(reg->type))
@@ -719,10 +717,6 @@ static void print_reg_state(struct bpf_verifier_env *env,
 		verbose_a("ks=%d,vs=%d",
 			  reg->map_ptr->key_size,
 			  reg->map_ptr->value_size);
-	}
-	if (t != SCALAR_VALUE && reg->delta) {
-		verbose_a("off=");
-		bpf_verbose_snum(env, reg->delta);
 	}
 	if (type_is_pkt_pointer(t)) {
 		verbose_a("r=");
