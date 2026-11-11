@@ -1398,8 +1398,10 @@ static struct arg_track arg_track_deref(struct bpf_verifier_env *env, struct bpf
 
 		return fill_from_stack(insn, at_out, reg, parent->at, parent->slots, ptr->frame);
 	}
+	/* A frame holds pointers to its own stack and to the stacks of its callers */
 	if (ptr->frame == ARG_IMPRECISE && !(ptr->mask & BIT(depth)) && ptr->mask)
-		return *ptr;
+		return (struct arg_track){ .mask = GENMASK(fls(ptr->mask) - 1, 0),
+					   .frame = ARG_IMPRECISE };
 	return (struct arg_track){ .frame = ARG_NONE };
 }
 
