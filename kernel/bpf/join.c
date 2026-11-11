@@ -16,7 +16,8 @@
  *
  * Inputs have to be at the same insn and cleaned with
  * bpf_clean_verifier_state(): dead registers and stack slots are the same on
- * both sides then, but for dynptrs, iterators and irq flags: they stay.
+ * both sides then, but for dynptrs, iterators and irq flags: they stay. So
+ * does what a program that may throw keeps for it, see bpf_frame_desc_keeps().
  */
 #include <linux/bpf.h>
 #include <linux/bpf_verifier.h>

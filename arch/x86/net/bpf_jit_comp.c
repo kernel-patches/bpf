@@ -4932,8 +4932,10 @@ out_image:
 	}
 
 	if (!image || !prog->is_func || extra_pass) {
-		if (image)
+		if (image) {
 			bpf_prog_fill_jited_linfo(prog, addrs + 1);
+			bpf_prog_fill_frame_desc_sites(prog, addrs, image);
+		}
 out_addrs:
 		kvfree(addrs);
 		if (!image && priv_stack_ptr) {

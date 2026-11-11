@@ -3727,6 +3727,7 @@ static void check_fastcall_stack_contract(struct bpf_verifier_env *env,
 	 * fastcall_stack_off to a value smaller than any possible offset.
 	 */
 	subprog->fastcall_stack_off = S16_MIN;
+	subprog->fastcall_stack_end = S16_MIN;
 	/* reset fastcall aux flags within subprogram,
 	 * happens at most once per subprogram
 	 */
@@ -11845,6 +11846,18 @@ static int call_func_on_its_own(struct bpf_verifier_env *env, int subprog, int i
 			inherited_id(state, callee->stack_arg_regs[i].parent_id);
 		callee->stack_arg_regs[i].map_uid =
 			inherited_id(state, callee->stack_arg_regs[i].map_uid);
+	}
+
+	/*
+	 * A throw of the function finds the frames of the caller as they are
+	 * now: it has nothing that points to their stack.
+	 */
+	if (env->subprog_info[subprog].might_throw) {
+		err = bpf_frame_desc_record_site(env, state, insn_idx);
+		if (err) {
+			bpf_free_verifier_state(&entry, false);
+			return err;
+		}
 	}
 
 	account_current_path(env);
@@ -20836,6 +20849,7 @@ static void mark_fastcall_pattern_for_call(struct bpf_verifier_env *env,
 	else
 		subprog->keep_fastcall_stack = 1;
 	subprog->fastcall_stack_off = min(subprog->fastcall_stack_off, off);
+	subprog->fastcall_stack_end = max(subprog->fastcall_stack_end, off);
 }
 
 static int mark_fastcall_patterns(struct bpf_verifier_env *env)
@@ -20846,6 +20860,7 @@ static int mark_fastcall_patterns(struct bpf_verifier_env *env)
 	int s, i;
 
 	for (s = 0; s < env->subprog_cnt; ++s, ++subprog) {
+		subprog->fastcall_stack_end = S16_MIN;
 		/* find lowest stack spill offset used in this subprog */
 		lowest_off = 0;
 		for (i = subprog->start; i < (subprog + 1)->start; ++i) {
@@ -21072,7 +21087,8 @@ static int process_bpf_exit_full(struct bpf_verifier_env *env,
 	 * for exceptional exits.
 	 */
 	if (exception_exit)
-		return PROCESS_BPF_EXIT;
+		return bpf_frame_desc_record_site(env, env->cur_state, env->insn_idx) ?:
+		       PROCESS_BPF_EXIT;
 
 	if (env->cur_state->curframe) {
 		/* exit from nested function */
@@ -23742,8 +23758,8 @@ static void print_verification_stats(struct bpf_verifier_env *env)
 		env->max_states_per_insn, env->total_states,
 		env->peak_states);
 	if (env->log.level & BPF_LOG_STATS)
-		verbose(env, "frame descriptors: slots %u insns %u classes %u bytes %u\n",
-			env->frame_desc_slots, env->frame_desc_insns,
+		verbose(env, "frame descriptors: slots %u insns %u sites %u classes %u bytes %u\n",
+			env->frame_desc_slots, env->frame_desc_insns, env->frame_desc_sites,
 			env->frame_desc_pool ? env->frame_desc_pool->resource_cnt : env->resource_cnt,
 			env->frame_desc_bytes);
 }

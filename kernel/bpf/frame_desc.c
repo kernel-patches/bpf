@@ -1,18 +1,30 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Frame descriptors: the hidden stack slots in which the frames of a program
- * that may throw keep the handles of the kernel resources they hold, for
- * bpf_throw() to release, see unwind.c.
+ * Frame descriptors: where the frames of a program that may throw keep the
+ * handles of the kernel resources they hold, for bpf_throw() to release, see
+ * unwind.c.
  *
- * Nothing is inferred about where a program keeps a reference. The handle of
- * a resource is written down when the resource is acquired: the pointer a
- * call returns, the address of the lock, the iterator or the saved IRQ flags
- * a call takes, the record or the reader of a dynptr. Every call that
- * acquires has a slot of its own in the frame that runs it. The handle goes
- * into the slot around the call, and the call that releases the resource
- * clears the slot when it holds the handle the call takes. The sections a
- * frame enters, RCU read and preemption disabled, have no handle and are
- * counted in a slot per kind.
+ * A frame is unwound at a site: the call it has not returned from,
+ * bpf_throw() or the call of a subprog that may throw. The main pass visits a
+ * site with every state a frame can be in there, and records what the frame
+ * keeps in its own stack on each visit: the iterators and saved IRQ flags it
+ * holds, which are on its stack, the slots a reference it holds is spilled
+ * in, and how many RCU read and preemption disabled sections it is in. What
+ * every visit finds in the same place goes into the descriptor of the site,
+ * and costs the program nothing.
+ *
+ * What the visits of some site do not agree on is written down when it is
+ * acquired, in a hidden stack slot. Nothing is inferred about where the
+ * program keeps it. The handle is the pointer a call returns, the address of
+ * the lock, the iterator or the saved IRQ flags a call takes, the record or
+ * the reader of a dynptr. Every call that acquires such a resource has a slot
+ * of its own in the frame that runs it. The handle goes into the slot around
+ * the call, and the call that releases the resource clears the slot when it
+ * holds the handle the call takes. The sections a frame enters have no handle
+ * and are counted in a slot per kind. The slots of a subprog are listed in
+ * its own descriptor.
+ *
+ * What no frame holds at any site needs neither.
  *
  * A slot belongs to one frame and holds one handle, so a program that throws
  * keeps to what that can express:
@@ -24,9 +36,10 @@
  *    returns one, and is in the sections it was called in.
  *  - A frame holds one resource of an acquiring call at a time.
  *
- * The main pass records every call that acquires or releases and which
- * acquisition a release may be of. The slots are reserved and the
- * instructions that keep them emitted after the pass.
+ * The main pass records every call that acquires or releases, which
+ * acquisition a release may be of, and the visits of the sites. What needs a
+ * slot is decided after the pass: the slots are reserved, the instructions
+ * that keep them emitted and the descriptors built then.
  */
 #include <linux/bpf.h>
 #include <linux/bpf_verifier.h>
@@ -243,6 +256,35 @@ static bool reg_ref_off(const struct bpf_reg_state *reg, int id, s16 *off)
 		return false;
 	*off = reg->var_off.value;
 	return true;
+}
+
+/*
+ * Does @reg, a register of frame @f of @st or one spilled in its stack, point
+ * to what the frame holds a reference to? A site names such a place, see
+ * ref_locations().
+ *
+ * The program may have read the pointer for the last time while the frame
+ * holds the resource still, at the latest in front of a bpf_throw(), which
+ * nothing follows. A state forgets what is dead, see
+ * bpf_clean_verifier_state(), and no site could name the place then. So such
+ * a place is kept: it stays in the state, and a state stands for another only
+ * when both have the same in it. What is dead otherwise is forgotten as it
+ * was.
+ */
+bool bpf_frame_desc_keeps(const struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
+			  int f, const struct bpf_reg_state *reg)
+{
+	s16 off;
+	int i;
+
+	if (!env->describe_frames || reg->type == NOT_INIT || reg->type == SCALAR_VALUE || !reg->id)
+		return false;
+	/* a frame above may hold it for now and give it back, see bpf_frame_desc_record_exit() */
+	for (i = 0; i < st->acquired_refs; i++)
+		if (st->refs[i].frameno >= f && st->refs[i].acq && st->refs[i].id &&
+		    reg_ref_off(reg, st->refs[i].id, &off))
+			return true;
+	return false;
 }
 
 /*
@@ -498,9 +540,9 @@ static bool acquires_sometimes(const struct bpf_verifier_env *env, u32 idx,
 /*
  * The kernel holds a reference for the __ref argument @argno of a struct_ops
  * program, refs[@idx], and the program releases it or hands it back: the main
- * program holds it from its first insn, in a slot its entry fills from the
- * context. An argument of a type the unwinder cannot release gets no slot,
- * like any such reference.
+ * program holds it from its first insn. When it needs a slot, the entry of the
+ * program fills the slot from the context. An argument of a type the unwinder
+ * cannot release is not recorded, like any such reference.
  */
 int bpf_frame_desc_record_ctx_arg(struct bpf_verifier_env *env, int idx, int argno)
 {
@@ -692,6 +734,162 @@ int bpf_frame_desc_record_return(struct bpf_verifier_env *env, struct bpf_verifi
 }
 
 /*
+ * How many sections of @kind frame @f of @st is in: those entered since it
+ * was called, less those of its callers it left. A frame is entered with the
+ * sections its callers are in, which entry_*_locks counts, less the ones the
+ * frame or its callees have left since, which *_released_below counts.
+ */
+static int frame_sections(const struct bpf_verifier_state *st, int f, int kind)
+{
+	const struct bpf_func_state *frame = st->frame[f], *callee;
+	u32 entry, now;
+
+	entry = kind ? frame->entry_preempt_locks + frame->preempt_released_below :
+		       frame->entry_rcu_locks + frame->rcu_released_below;
+	if (f == st->curframe) {
+		now = kind ? st->active_preempt_locks : st->active_rcu_locks;
+	} else {
+		callee = st->frame[f + 1];
+		now = kind ? callee->entry_preempt_locks + callee->preempt_released_below :
+			     callee->entry_rcu_locks + callee->rcu_released_below;
+	}
+	return (int)now - (int)entry;
+}
+
+/*
+ * The places in the stack of frame @f of @st that hold the handle of @ref,
+ * which the frame owns, in @loc: the stack object the reference is of, or
+ * the slots a pointer to the object is spilled in. A lock has none. The slots
+ * a spill is removed from again, see bpf_remove_fastcall_spills_fills(), hold
+ * nothing at run time.
+ */
+static void ref_locations(struct bpf_verifier_env *env, const struct bpf_verifier_state *st, int f,
+			  const struct bpf_reference_state *ref, struct bpf_res_loc *loc)
+{
+	const struct bpf_res_acq *acq = &env->res_acqs[ref->acq - 1];
+	const struct bpf_func_state *frame = st->frame[f];
+	s16 adj, lim = env->subprog_info[frame->subprogno].fastcall_stack_end;
+	const struct bpf_stack_state *slot;
+	int k;
+
+	loc->cnt = 0;
+	loc->obj = false;
+	if (ref->type & REF_TYPE_LOCK_MASK)
+		return;
+	for (k = 0; k < bpf_stack_nr_slots(frame) && loc->cnt < BPF_RES_LOC_MAX; k++) {
+		slot = bpf_stack_slot(frame, k);
+		adj = 0;
+		if (spi_off(k) < lim)
+			break;
+		if (stack_slot_is_object(slot, ref->id)) {
+			/* the handle of a dynptr is its first word, as when it was created */
+			if (slot->slot_type[BPF_REG_SIZE - 1] != STACK_DYNPTR) {
+				loc->obj = true;
+				loc->cnt = 0;
+			}
+		} else if (ref->type != REF_TYPE_PTR || (acq->flags & BPF_RES_F_ARG) ||
+			   !bpf_is_spilled_reg(slot) || !reg_ref_off(&slot->spilled_ptr, ref->id, &adj)) {
+			continue;
+		}
+		loc->at[loc->cnt].off = spi_off(k);
+		loc->at[loc->cnt++].adj = adj;
+		if (loc->obj)
+			break;
+	}
+}
+
+/*
+ * A throw may find frame @f of @st at the call @insn. Record what the frame
+ * keeps in its stack there, for the descriptor of the site: the visits of a
+ * site have to agree on it, since the site has one descriptor.
+ */
+static int site_visit(struct bpf_verifier_env *env, const struct bpf_verifier_state *st, int f,
+		      u32 insn)
+{
+	struct bpf_res_loc cur, *loc;
+	struct bpf_res_site *site;
+	u32 i, j, k, n, s;
+
+	for (s = 0; s < env->res_site_cnt; s++)
+		if (env->res_sites[s].insn == insn)
+			break;
+	if (s == env->res_site_cnt) {
+		site = kvrealloc(env->res_sites, array_size(s + 1, sizeof(*site)), GFP_KERNEL_ACCOUNT);
+		if (!site)
+			return -ENOMEM;
+		env->res_sites = site;
+		site[s] = (struct bpf_res_site) { .insn = insn };
+		env->res_site_cnt = s + 1;
+	}
+	site = &env->res_sites[s];
+	for (k = 0; k < ARRAY_SIZE(site->sections); k++) {
+		int cnt = frame_sections(st, f, k);
+
+		if (!site->visits)
+			site->sections[k] = cnt;
+		else if (site->sections[k] != cnt)
+			site->sections_vary[k] = true;
+	}
+	site->visits++;
+	for (i = 0; i < st->acquired_refs; i++) {
+		const struct bpf_reference_state *ref = &st->refs[i];
+
+		if (ref->frameno != f || !ref->acq)
+			continue;
+		env->res_acqs[ref->acq - 1].held = true;
+		ref_locations(env, st, f, ref, &cur);
+		for (j = 0; j < env->res_loc_cnt; j++)
+			if (env->res_locs[j].site == s && env->res_locs[j].acq == ref->acq - 1)
+				break;
+		if (j == env->res_loc_cnt) {
+			loc = kvrealloc(env->res_locs, array_size(j + 1, sizeof(*loc)), GFP_KERNEL_ACCOUNT);
+			if (!loc)
+				return -ENOMEM;
+			env->res_locs = loc;
+			cur.site = s;
+			cur.acq = ref->acq - 1;
+			cur.visits = 1;
+			loc[j] = cur;
+			env->res_loc_cnt = j + 1;
+			continue;
+		}
+		/* the places this visit finds the handle in as well */
+		loc = &env->res_locs[j];
+		loc->visits++;
+		for (k = 0, n = 0; k < loc->cnt; k++) {
+			for (j = 0; j < cur.cnt; j++)
+				if (cur.at[j].off == loc->at[k].off && cur.at[j].adj == loc->at[k].adj)
+					break;
+			if (j < cur.cnt && cur.obj == loc->obj)
+				loc->at[n++] = loc->at[k];
+		}
+		loc->cnt = n;
+	}
+	return 0;
+}
+
+/*
+ * A throw may find the frames of @st where they are: the current one at
+ * @insn_idx, bpf_throw() or the call of a subprog that may throw, and each of
+ * its callers at the call it has not returned from. The frames that called a
+ * function verified on its own were recorded when they called it.
+ */
+int bpf_frame_desc_record_site(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
+			       int insn_idx)
+{
+	int f, err;
+
+	if (!env->describe_frames || st->speculative)
+		return 0;
+	for (f = st->curframe; f >= 0; f--) {
+		err = site_visit(env, st, f, f == st->curframe ? insn_idx : st->frame[f + 1]->callsite);
+		if (err)
+			return err;
+	}
+	return 0;
+}
+
+/*
  * A round of the main pass is dropped, see do_check_all(): what its paths
  * recorded goes with it.
  */
@@ -702,6 +900,8 @@ void bpf_frame_desc_reset(struct bpf_verifier_env *env)
 	env->res_acq_cnt = 0;
 	env->res_rel_cnt = 0;
 	env->section_insn_cnt = 0;
+	env->res_site_cnt = 0;
+	env->res_loc_cnt = 0;
 	for (i = 0; i < env->prog->len; i++) {
 		env->insn_aux_data[i].res_none = false;
 		env->insn_aux_data[i].res_none_r0 = false;
@@ -713,10 +913,14 @@ void bpf_frame_desc_env_free(struct bpf_verifier_env *env)
 	kvfree(env->res_acqs);
 	kvfree(env->res_rels);
 	kvfree(env->section_insns);
+	kvfree(env->res_sites);
+	kvfree(env->res_locs);
 	kvfree(env->resources);
 	env->res_acqs = NULL;
 	env->res_rels = NULL;
 	env->section_insns = NULL;
+	env->res_sites = NULL;
+	env->res_locs = NULL;
 	env->resources = NULL;
 }
 
@@ -750,20 +954,6 @@ static int acq_subprog(struct bpf_verifier_env *env, const struct bpf_res_acq *a
 	if (a->flags & BPF_RES_F_CTX)
 		return 0;
 	return bpf_find_containing_subprog(env, new_of[a->insn]) - env->subprog_info;
-}
-
-static bool subprog_has_section(struct bpf_verifier_env *env, int subprog, const u32 *new_of, u8 kind)
-{
-	u32 i;
-
-	for (i = 0; i < env->section_insn_cnt; i++) {
-		const struct bpf_section_insn *si = &env->section_insns[i];
-
-		if (si->kind == kind &&
-		    bpf_find_containing_subprog(env, new_of[si->insn]) - env->subprog_info == subprog)
-			return true;
-	}
-	return false;
 }
 
 /* An upper bound of the insns put around one call for one acquisition or release. */
@@ -809,22 +999,37 @@ static int emit_acquire_after(struct bpf_insn *buf, const struct bpf_res_acq *a)
 }
 
 /*
- * Reserve the hidden slots, once the pass has seen every frame: one for each
- * acquisition, in the frame of the subprog it is in, and a count of the
- * sections of a kind for a subprog that enters or leaves them. The subprogs
- * are numbered as they are now and looked up again whenever they are needed,
- * since removing a dead one renumbers them.
+ * Decide what needs a hidden slot, once the pass has seen every frame, and
+ * reserve it.
+ *
+ * A frame is unwound at a site, and the site has a descriptor for what every
+ * visit of it found in the same place of the frame's stack. So an
+ * acquisition needs no slot when no site finds a frame holding what it
+ * acquired, and none when every site that does finds the handle in a place
+ * all its visits agree on, on every visit. The others get a slot in the
+ * frame of the subprog they are in. Likewise a subprog counts its sections
+ * of a kind in a slot only when the visits of one of its sites differ in how
+ * many the frame is in.
+ *
+ * The subprogs are numbered as they are now and looked up again whenever
+ * they are needed, since removing a dead one renumbers them.
  */
 int bpf_frame_desc_resolve(struct bpf_verifier_env *env)
 {
 	u32 i, k, orig_len, *new_of;
-	int s, ret = 0;
+	int ret = 0;
 
 	if (!env->res_acq_cnt && !env->section_insn_cnt)
 		return 0;
 	new_of = insns_of_pass(env, &orig_len);
 	if (!new_of)
 		return -ENOMEM;
+	for (i = 0; i < env->res_loc_cnt; i++) {
+		const struct bpf_res_loc *loc = &env->res_locs[i];
+
+		if (!loc->cnt || loc->visits != env->res_sites[loc->site].visits)
+			env->res_acqs[loc->acq].slot = true;
+	}
 	for (i = 0; i < env->res_acq_cnt && !ret; i++) {
 		struct bpf_res_acq *a = &env->res_acqs[i];
 
@@ -833,6 +1038,8 @@ int bpf_frame_desc_resolve(struct bpf_verifier_env *env)
 			ret = -EFAULT;
 			break;
 		}
+		if (!a->slot)
+			continue;
 		/* some visit of the insn has nothing a slot can hold where this one has */
 		if (!(a->flags & BPF_RES_F_CTX) && acquires_sometimes(env, new_of[a->insn], a)) {
 			verbose(env, "frame_desc: insn %d acquires a resource on some paths only, or one of a type that cannot be released\n",
@@ -843,11 +1050,19 @@ int bpf_frame_desc_resolve(struct bpf_verifier_env *env)
 		ret = bpf_reserve_stack_slots(env, acq_subprog(env, a, new_of), 1, &a->off);
 		env->frame_desc_slots++;
 	}
-	for (s = 0; s < env->subprog_cnt && !ret; s++) {
-		for (k = 0; k < ARRAY_SIZE(env->subprog_info[s].section_off) && !ret; k++) {
-			if (!subprog_has_section(env, s, new_of, k))
+	for (i = 0; i < env->res_site_cnt && !ret; i++) {
+		const struct bpf_res_site *site = &env->res_sites[i];
+		struct bpf_subprog_info *sub;
+
+		if (verifier_bug_if(site->insn >= orig_len, env, "site at insn %d", site->insn)) {
+			ret = -EFAULT;
+			break;
+		}
+		sub = bpf_find_containing_subprog(env, new_of[site->insn]);
+		for (k = 0; k < ARRAY_SIZE(sub->section_off) && !ret; k++) {
+			if (!site->sections_vary[k] || sub->section_off[k])
 				continue;
-			ret = bpf_reserve_stack_slots(env, s, 1, &env->subprog_info[s].section_off[k]);
+			ret = bpf_reserve_stack_slots(env, sub - env->subprog_info, 1, &sub->section_off[k]);
 			env->frame_desc_slots++;
 		}
 	}
@@ -961,9 +1176,9 @@ static int emit_items(struct bpf_verifier_env *env, const struct res_item *it, i
 
 /*
  * At the entry of each subprog: its slots and counts start out empty, and
- * the main program takes the references the kernel passed it from the
- * context, which R1 points at. The insns go in front of the first one, which
- * a jump to it skips.
+ * the main program takes the references the kernel passed it that it keeps
+ * in a slot from the context, which R1 points at. The insns go in front of
+ * the first one, which a jump to it skips.
  */
 static int emit_entries(struct bpf_verifier_env *env)
 {
@@ -984,7 +1199,7 @@ static int emit_entries(struct bpf_verifier_env *env)
 		for (i = 0; i < env->res_acq_cnt; i++) {
 			const struct bpf_res_acq *a = &env->res_acqs[i];
 
-			if (acq_subprog(env, a, new_of) != s)
+			if (!a->slot || acq_subprog(env, a, new_of) != s)
 				continue;
 			if (a->flags & BPF_RES_F_CTX) {
 				buf[cnt++] = BPF_LDX_MEM(BPF_DW, BPF_REG_AX, BPF_REG_1, a->obj_off);
@@ -1009,7 +1224,7 @@ out:
 }
 
 /*
- * Keep the slots and the counts up to date, through the patch list. What goes
+ * Keep the slots and the counts there are up to date, through the patch list. What goes
  * in front of a call is patched in with the call, so that the jumps to it
  * land on it; what follows it is inserted in front of the next insn, which a
  * jump to that insn skips, as it skips the call.
@@ -1030,13 +1245,19 @@ int bpf_frame_desc_emit(struct bpf_verifier_env *env)
 		ret = -ENOMEM;
 		goto out;
 	}
-	for (i = 0; i < env->section_insn_cnt; i++)
-		items[n++] = (struct res_item) { new_of[env->section_insns[i].insn], i, ITEM_SECTION };
+	/* what has no slot is kept by nothing */
+	for (i = 0; i < env->section_insn_cnt; i++) {
+		const struct bpf_section_insn *si = &env->section_insns[i];
+
+		if (bpf_find_containing_subprog(env, new_of[si->insn])->section_off[si->kind])
+			items[n++] = (struct res_item) { new_of[si->insn], i, ITEM_SECTION };
+	}
 	for (i = 0; i < env->res_rel_cnt; i++)
-		items[n++] = (struct res_item) { new_of[env->res_rels[i].insn], i, ITEM_RELEASE,
-						 env->res_rels[i].reg };
+		if (env->res_acqs[env->res_rels[i].acq].slot)
+			items[n++] = (struct res_item) { new_of[env->res_rels[i].insn], i, ITEM_RELEASE,
+							 env->res_rels[i].reg };
 	for (i = 0; i < env->res_acq_cnt; i++)
-		if (!(env->res_acqs[i].flags & BPF_RES_F_CTX))
+		if (env->res_acqs[i].slot && !(env->res_acqs[i].flags & BPF_RES_F_CTX))
 			items[n++] = (struct res_item) { new_of[env->res_acqs[i].insn], i, ITEM_ACQUIRE };
 	sort(items, n, sizeof(*items), item_cmp, NULL);
 	for (i = 0; i < n; i = k) {
@@ -1097,20 +1318,150 @@ static bool resource_goes_first(const struct bpf_resource *res)
 	return res->kind == BPF_RESOURCE_ITER || res->kind == BPF_RESOURCE_DYNPTR_FILE;
 }
 
+/* Add @d to the pool of the program, or free it when the pool has it: its index plus one. */
+static int pool_add(struct bpf_verifier_env *env, struct bpf_frame_desc *d)
+{
+	struct bpf_frame_desc_pool *pool = env->frame_desc_pool;
+	u32 i;
+
+	for (i = 0; i < pool->cnt; i++) {
+		if (pool->desc[i]->size != d->size || memcmp(pool->desc[i], d, d->size))
+			continue;
+		kvfree(d);
+		return i + 1;
+	}
+	pool = kvrealloc(pool, struct_size(pool, desc, pool->cnt + 1), GFP_KERNEL_ACCOUNT);
+	if (!pool) {
+		kvfree(d);
+		return -ENOMEM;
+	}
+	env->frame_desc_pool = pool;
+	pool->desc[pool->cnt] = d;
+	env->frame_desc_bytes += d->size;
+	return ++pool->cnt;
+}
+
 /*
- * The frame descriptor of every subprog that has slots: the slot of each of
- * its acquisitions, which holds the handle of what the acquisition acquired
- * or NULL, and the counts of its sections. The unwinder releases what the
- * slots of a frame hold in the order of the entries, within a phase: the
- * iterators and the readers of file dynptrs come before the references,
- * which they may be iterating over or reading. Identical descriptors share a
- * body in the pool of the program, which takes the resource classes over.
+ * The descriptor of a subprog that has slots: the slot of each acquisition in
+ * it that has one, which holds the handle of what the acquisition acquired or
+ * NULL, and the counts of its sections.
+ */
+static int build_slots(struct bpf_verifier_env *env, int s, const u32 *new_of)
+{
+	struct bpf_subprog_info *sub = &env->subprog_info[s];
+	struct bpf_frame_desc *d;
+	u32 i, k, n = 0;
+	int res;
+
+	for (i = 0; i < env->res_acq_cnt; i++)
+		n += env->res_acqs[i].slot && acq_subprog(env, &env->res_acqs[i], new_of) == s;
+	for (k = 0; k < ARRAY_SIZE(sub->section_off); k++)
+		n += !!sub->section_off[k];
+	if (!n)
+		return 0;
+	d = kvzalloc(struct_size(d, ent, n), GFP_KERNEL_ACCOUNT);
+	if (!d)
+		return -ENOMEM;
+	d->size = struct_size(d, ent, n);
+	for (i = 0; i < env->res_acq_cnt; i++) {
+		const struct bpf_res_acq *a = &env->res_acqs[i];
+
+		if (!a->slot || acq_subprog(env, a, new_of) != s)
+			continue;
+		d->ent[d->nent++] = (struct bpf_frame_desc_entry) {
+			.res = a->res, .off = a->off,
+			.flags = resource_goes_first(&env->resources[a->res]) ? BPF_FRAME_ENT_FIRST : 0,
+		};
+	}
+	for (k = 0; k < ARRAY_SIZE(sub->section_off); k++) {
+		if (!sub->section_off[k])
+			continue;
+		res = resource_of_section(env, k);
+		if (res < 0) {
+			kvfree(d);
+			return res;
+		}
+		d->ent[d->nent++] = (struct bpf_frame_desc_entry) {
+			.res = res, .off = sub->section_off[k], .flags = BPF_FRAME_ENT_COUNTER,
+		};
+	}
+	res = pool_add(env, d);
+	if (res < 0)
+		return res;
+	sub->frame_desc = res;
+	return 0;
+}
+
+/*
+ * The descriptor of site @idx: where the frame at the site keeps, in its own
+ * stack, what it holds that has no slot, and how many sections it is in when
+ * its subprog does not count them. A site that has nothing to say has none.
+ */
+static int build_site(struct bpf_verifier_env *env, u32 idx, const u32 *new_of)
+{
+	struct bpf_res_site *site = &env->res_sites[idx];
+	const struct bpf_subprog_info *sub = bpf_find_containing_subprog(env, new_of[site->insn]);
+	struct bpf_frame_desc *d;
+	u32 i, k, n = 0;
+	int res;
+
+	for (i = 0; i < env->res_loc_cnt; i++)
+		n += env->res_locs[i].site == idx && !env->res_acqs[env->res_locs[i].acq].slot;
+	for (k = 0; k < ARRAY_SIZE(sub->section_off); k++)
+		n += !sub->section_off[k] && site->sections[k];
+	if (!n)
+		return 0;
+	d = kvzalloc(struct_size(d, ent, n), GFP_KERNEL_ACCOUNT);
+	if (!d)
+		return -ENOMEM;
+	d->size = struct_size(d, ent, n);
+	for (i = 0; i < env->res_loc_cnt; i++) {
+		const struct bpf_res_loc *loc = &env->res_locs[i];
+		const struct bpf_res_acq *a = &env->res_acqs[loc->acq];
+		u16 flags = loc->obj ? BPF_FRAME_ENT_OBJ : 0;
+
+		if (loc->site != idx || a->slot)
+			continue;
+		if (resource_goes_first(&env->resources[a->res]))
+			flags |= BPF_FRAME_ENT_FIRST;
+		d->ent[d->nent++] = (struct bpf_frame_desc_entry) {
+			.res = a->res, .off = loc->at[0].off, .adj = loc->at[0].adj, .flags = flags,
+		};
+	}
+	for (k = 0; k < ARRAY_SIZE(sub->section_off); k++) {
+		if (sub->section_off[k] || !site->sections[k])
+			continue;
+		res = resource_of_section(env, k);
+		if (res < 0) {
+			kvfree(d);
+			return res;
+		}
+		d->ent[d->nent++] = (struct bpf_frame_desc_entry) {
+			.res = res, .count = site->sections[k], .flags = BPF_FRAME_ENT_COUNT,
+		};
+	}
+	res = pool_add(env, d);
+	if (res < 0)
+		return res;
+	site->desc = res;
+	env->frame_desc_sites++;
+	return 0;
+}
+
+/*
+ * The frame descriptors of the program: one for every subprog that has
+ * slots, and one for every site that says what the frame at it keeps in its
+ * own stack. The unwinder releases what a frame holds in the order of the
+ * entries, within a phase, but for the iterators and the readers of file
+ * dynptrs: they come before the references, which they may be iterating over
+ * or reading. Identical descriptors share a body in the pool of the program,
+ * which takes the resource classes over.
  */
 int bpf_frame_desc_build(struct bpf_verifier_env *env)
 {
-	u32 i, k, n, s, orig_len, *new_of;
 	struct bpf_frame_desc_pool *pool;
-	int res, ret = -ENOMEM;
+	u32 i, orig_len, *new_of;
+	int ret = -ENOMEM;
 
 	if (!env->res_acq_cnt && !env->section_insn_cnt)
 		return 0;
@@ -1121,66 +1472,88 @@ int bpf_frame_desc_build(struct bpf_verifier_env *env)
 		goto out;
 	}
 	env->frame_desc_pool = pool;
-	for (s = 0; s < env->subprog_cnt; s++) {
-		struct bpf_subprog_info *sub = &env->subprog_info[s];
-		struct bpf_frame_desc *d;
-
-		for (i = 0, n = 0; i < env->res_acq_cnt; i++)
-			n += acq_subprog(env, &env->res_acqs[i], new_of) == s;
-		for (k = 0; k < ARRAY_SIZE(sub->section_off); k++)
-			n += !!sub->section_off[k];
-		if (!n)
-			continue;
-		d = kvzalloc(struct_size(d, ent, n), GFP_KERNEL_ACCOUNT);
-		if (!d)
-			goto out;
-		d->size = struct_size(d, ent, n);
-		for (i = 0; i < 2 * env->res_acq_cnt; i++) {
-			const struct bpf_res_acq *a = &env->res_acqs[i % env->res_acq_cnt];
-			bool first = i < env->res_acq_cnt;
-
-			if (acq_subprog(env, a, new_of) != s ||
-			    resource_goes_first(&env->resources[a->res]) != first)
-				continue;
-			d->ent[d->nent++] = (struct bpf_frame_desc_entry) { .res = a->res, .off = a->off };
-		}
-		for (k = 0; k < ARRAY_SIZE(sub->section_off); k++) {
-			if (!sub->section_off[k])
-				continue;
-			res = resource_of_section(env, k);
-			if (res < 0) {
-				kvfree(d);
-				ret = res;
-				goto out;
-			}
-			d->ent[d->nent++] = (struct bpf_frame_desc_entry) {
-				.res = res, .off = sub->section_off[k], .flags = BPF_FRAME_ENT_COUNTER,
-			};
-		}
-		for (i = 0; i < pool->cnt; i++)
-			if (pool->desc[i]->size == d->size && !memcmp(pool->desc[i], d, d->size))
-				break;
-		if (i < pool->cnt) {
-			kvfree(d);
-			sub->frame_desc = i + 1;
-			continue;
-		}
-		pool = kvrealloc(pool, struct_size(pool, desc, pool->cnt + 1), GFP_KERNEL_ACCOUNT);
-		if (!pool) {
-			kvfree(d);
-			goto out;
-		}
-		env->frame_desc_pool = pool;
-		pool->desc[pool->cnt] = d;
-		env->frame_desc_bytes += d->size;
-		sub->frame_desc = ++pool->cnt;
-	}
+	for (i = 0, ret = 0; i < env->subprog_cnt && !ret; i++)
+		ret = build_slots(env, i, new_of);
+	for (i = 0; i < env->res_site_cnt && !ret; i++)
+		ret = build_site(env, i, new_of);
+	if (ret)
+		goto out;
+	pool = env->frame_desc_pool;
 	pool->resources = env->resources;
 	pool->resource_cnt = env->resource_cnt;
 	env->frame_desc_bytes += env->resource_cnt * sizeof(*env->resources);
 	env->resources = NULL;
-	ret = 0;
 out:
 	kvfree(new_of);
 	return ret;
+}
+
+static int site_cmp(const void *a, const void *b)
+{
+	const struct bpf_frame_desc_site *x = a, *y = b;
+
+	return x->off < y->off ? -1 : x->off > y->off;
+}
+
+/*
+ * The sites of @subprog that have a descriptor, for its JITed function, or
+ * NULL when it has none: each by the index of its call in the function, until
+ * the JIT has put the call somewhere, see bpf_prog_fill_frame_desc_sites().
+ * The insns of now are not those the pass named the sites by, and the insns
+ * put around a call name the call as well.
+ */
+struct bpf_frame_desc_sites *bpf_frame_desc_sites(struct bpf_verifier_env *env, int subprog)
+{
+	const struct bpf_subprog_info *sub = &env->subprog_info[subprog];
+	struct bpf_frame_desc_sites *tab;
+	u32 i, idx, n = 0, orig_len, *new_of;
+
+	for (i = 0; i < env->res_site_cnt; i++)
+		n += !!env->res_sites[i].desc;
+	if (!n)
+		return NULL;
+	new_of = insns_of_pass(env, &orig_len);
+	tab = kvzalloc(struct_size(tab, site, n), GFP_KERNEL_ACCOUNT);
+	if (!new_of || !tab) {
+		kvfree(new_of);
+		kvfree(tab);
+		return ERR_PTR(-ENOMEM);
+	}
+	for (i = 0; i < env->res_site_cnt; i++) {
+		const struct bpf_res_site *site = &env->res_sites[i];
+		const struct bpf_insn *insn;
+
+		if (!site->desc)
+			continue;
+		idx = site->insn < orig_len ? new_of[site->insn] : 0;
+		for (;; idx--) {
+			insn = &env->prog->insnsi[idx];
+			if (env->insn_aux_data[idx].orig_idx != site->insn) {
+				idx = env->prog->len;
+				break;
+			}
+			if ((BPF_CLASS(insn->code) == BPF_JMP && BPF_OP(insn->code) == BPF_CALL) || !idx)
+				break;
+		}
+		insn = idx < env->prog->len ? &env->prog->insnsi[idx] : NULL;
+		if (verifier_bug_if(!insn || BPF_CLASS(insn->code) != BPF_JMP ||
+				    BPF_OP(insn->code) != BPF_CALL, env,
+				    "site at insn %d is not a call", site->insn)) {
+			kvfree(new_of);
+			kvfree(tab);
+			return ERR_PTR(-EFAULT);
+		}
+		if (idx < sub->start || idx >= (sub + 1)->start)
+			continue;
+		tab->site[tab->cnt++] = (struct bpf_frame_desc_site) {
+			.off = idx - sub->start, .desc = site->desc - 1,
+		};
+	}
+	kvfree(new_of);
+	if (!tab->cnt) {
+		kvfree(tab);
+		return NULL;
+	}
+	sort(tab->site, tab->cnt, sizeof(tab->site[0]), site_cmp, NULL);
+	return tab;
 }

@@ -1052,7 +1052,10 @@ struct bpf_subprog_info {
 	struct bpf_iarray *jt; /* jump table shared by all gotox of this subprogram */
 	/* the frame descriptor of this subprogram in the pool of the program, plus one; see frame_desc.c */
 	u32 frame_desc;
-	/* hidden slots: the counts of the sections the frame entered, by kind; 0 when it has none */
+	/*
+	 * hidden slots: the counts of the sections the frame entered, by kind; 0
+	 * when it has none: it enters none, or its sites say how many it is in
+	 */
 	s16 section_off[2];
 	u16 stack_depth; /* max. stack depth used by this function */
 	/* bytes below the verified stack depth reserved for hidden slots, see bpf_reserve_stack_slots() */
@@ -1064,6 +1067,11 @@ struct bpf_subprog_info {
 	 * are used for bpf_fastcall spills and fills.
 	 */
 	s16 fastcall_stack_off;
+	/*
+	 * Where the longest pattern ends: its spills are removed as well, so
+	 * the slots below hold nothing at run time, see frame_desc.c.
+	 */
+	s16 fastcall_stack_end;
 	bool has_tail_call: 1;
 	bool might_throw: 1;
 	bool can_unwind: 1; /* has unwind_exit */
@@ -1247,8 +1255,10 @@ void bpf_patch_image_install(struct bpf_prog *prog, const struct bpf_patch_image
 #define BPF_RES_F_CTX		BIT(3)	/* a __ref argument the kernel passes the main program */
 
 /*
- * A call that acquires a resource, see frame_desc.c: the handle of what it
- * acquired is kept in a hidden slot of the frame that runs the call, one slot
+ * A call that acquires a resource, see frame_desc.c. When a frame can be
+ * unwound while it holds what the call acquired, and the sites it can be
+ * unwound at do not all find the handle in the same place of its stack, the
+ * handle is kept in a hidden slot of the frame that runs the call, one slot
  * per acquiring call.
  */
 struct bpf_res_acq {
@@ -1259,6 +1269,41 @@ struct bpf_res_acq {
 	s16 adj;	/* R0 points that many bytes into the object: the node of a list */
 	s16 obj_off;	/* BPF_RES_F_DEREF: the dynptr, relative to R10; BPF_RES_F_CTX: in the context */
 	s16 off;	/* the slot, relative to R10 */
+	bool held;	/* some frame holds what it acquired at a site */
+	bool slot;	/* and some site cannot say where: the handle is kept in a slot */
+};
+
+/* How many places of its stack a site remembers a frame keeping one handle in. */
+#define BPF_RES_LOC_MAX		3
+
+/*
+ * A site: a call a frame can be unwound at, bpf_throw() or the call of a
+ * subprog that may throw, and what every visit of it found of the frame that
+ * runs it. A site has a descriptor of its own for what the visits agree on,
+ * see frame_desc.c.
+ */
+struct bpf_res_site {
+	u32 insn;		/* the call, as the main pass named it */
+	u32 visits;
+	s16 sections[2];	/* the sections the frame is in, RCU and preemption */
+	bool sections_vary[2];	/* the visits differ: the frame counts them in a slot */
+	u32 desc;		/* its descriptor in the pool of the program, plus one */
+};
+
+/*
+ * Where the frame at a site keeps the handle of what an acquisition acquired:
+ * the slots of its stack that every visit holding it found the handle in.
+ */
+struct bpf_res_loc {
+	u32 site;	/* index of the site */
+	u32 visits;	/* how many visits of the site found the frame holding it */
+	u16 acq;	/* index of the acquisition */
+	u8 cnt;		/* the places left */
+	bool obj;	/* they are the resource itself, an object on the stack */
+	struct {
+		s16 off;	/* relative to R10 */
+		s16 adj;	/* the pointer there points that many bytes into the object */
+	} at[BPF_RES_LOC_MAX];
 };
 
 /* A call that releases what an acquisition acquired: the slot of the acquisition is cleared. */
@@ -1319,8 +1364,13 @@ struct bpf_verifier_env {
 	u32 res_rel_cnt;
 	struct bpf_section_insn *section_insns;
 	u32 section_insn_cnt;
+	struct bpf_res_site *res_sites;
+	u32 res_site_cnt;
+	struct bpf_res_loc *res_locs;
+	u32 res_loc_cnt;
 	int release_regno;			/* the argument the current call releases, or -1 */
 	u32 frame_desc_slots;			/* hidden slots that hold handles and counts */
+	u32 frame_desc_sites;			/* sites that have a descriptor */
 	u32 frame_desc_insns;			/* instructions keeping them up to date */
 	u32 frame_desc_bytes;			/* descriptors and resource classes */
 	bool describe_frames;			/* frame descriptors are generated: the program may throw */
@@ -2280,11 +2330,16 @@ int bpf_frame_desc_record_release(struct bpf_verifier_env *env, int idx);
 int bpf_frame_desc_record_ctx_arg(struct bpf_verifier_env *env, int idx, int argno);
 int bpf_frame_desc_record_section(struct bpf_verifier_env *env, u8 kind, s8 delta);
 int bpf_frame_desc_record_exit(struct bpf_verifier_env *env);
+bool bpf_frame_desc_keeps(const struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
+			  int f, const struct bpf_reg_state *reg);
+int bpf_frame_desc_record_site(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
+			       int insn_idx);
 int bpf_frame_desc_record_return(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
 				 int idx, int callsite, const struct bpf_reg_state *r0);
 int bpf_frame_desc_resolve(struct bpf_verifier_env *env);
 int bpf_frame_desc_emit(struct bpf_verifier_env *env);
 int bpf_frame_desc_build(struct bpf_verifier_env *env);
+struct bpf_frame_desc_sites *bpf_frame_desc_sites(struct bpf_verifier_env *env, int subprog);
 void bpf_frame_desc_reset(struct bpf_verifier_env *env);
 void bpf_frame_desc_env_free(struct bpf_verifier_env *env);
 int bpf_remove_fastcall_spills_fills(struct bpf_verifier_env *env);

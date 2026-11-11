@@ -3,13 +3,64 @@
  * Releasing what the frames of a BPF program hold when bpf_throw() discards
  * them. Before the exception callback takes over, the frames from the throw
  * up to the main program are walked once per phase of the release order, and
- * each frame releases what its frame descriptor says it holds of that phase,
+ * each frame releases what its frame descriptors say it holds of that phase,
  * see frame_desc.c.
  */
 #include <linux/bpf.h>
 #include <linux/bpf_verifier.h>
 #include <linux/filter.h>
 #include <linux/irqflags.h>
+
+/*
+ * Convert the instruction indices of the sites of a JITed function to native
+ * offsets. offsets[k] is the first byte of instruction k relative to image
+ * and offsets[prog->len] the end of the function, as for
+ * bpf_prog_update_insn_ptrs().
+ */
+void bpf_prog_fill_frame_desc_sites(struct bpf_prog *prog, const u32 *offsets, void *image)
+{
+	struct bpf_frame_desc_sites *tab = prog->aux->frame_desc_sites;
+	u32 i;
+
+	if (!tab || tab->filled)
+		return;
+	for (i = 0; i < tab->cnt; i++) {
+		struct bpf_frame_desc_site *site = &tab->site[i];
+
+		site->end = image + offsets[site->off + 1] - (void *)prog->bpf_func;
+		site->off = image + offsets[site->off] - (void *)prog->bpf_func;
+	}
+	tab->filled = true;
+}
+
+/*
+ * The descriptor of the site of @fn that @ip is in, or NULL when the site has
+ * none. A frame is at the call it has not returned from: @ip is the return
+ * address less one, since the return address may be the first byte of the
+ * next instruction.
+ */
+static const struct bpf_frame_desc *bpf_unwind_site(const struct bpf_prog_aux *fn,
+						    const struct bpf_prog *prog, u64 ip)
+{
+	const struct bpf_frame_desc_sites *tab = fn->frame_desc_sites;
+	u64 off = ip - (u64)(long)prog->bpf_func;
+	u32 l = 0, r, m;
+
+	if (!tab || !tab->filled)
+		return NULL;
+	/* The sites are disjoint and sorted: find the first one that ends after off. */
+	r = tab->cnt;
+	while (l < r) {
+		m = l + (r - l) / 2;
+		if (tab->site[m].end <= off)
+			l = m + 1;
+		else
+			r = m;
+	}
+	if (l == tab->cnt || tab->site[l].off > off)
+		return NULL;
+	return fn->frame_desc_pool->desc[tab->site[l].desc];
+}
 
 void bpf_frame_desc_pool_free(struct bpf_frame_desc_pool *pool)
 {
@@ -142,50 +193,81 @@ static u64 bpf_unwind_fp(const struct bpf_prog_aux *fn, u64 bp)
 }
 
 /*
- * Release what the slots of the frame of @prog hold of the phase of this
- * walk; @bp is its native frame pointer. The first walk sums the frame's
- * counts of sections for their phase, and releases the locks and IRQ flags
- * in two passes: the flags a frame saved with interrupts enabled, of which
- * it can have one at most, since every later save found them disabled, are
- * restored last, after the locks and the other flags in whatever order the
- * frame took them.
+ * Release what the entries of @d say a frame holds of the phase of this walk,
+ * the entries that go @first or the others; @fp is the R10 of the frame. The
+ * first walk sums the frame's counts of sections for their phase, and
+ * releases the locks and IRQ flags in two passes, see
+ * bpf_unwind_release_frame(): @late selects the flags saved with interrupts
+ * enabled.
  */
-static void bpf_unwind_release_frame(struct bpf_unwind_ctx *ctx, const struct bpf_prog *prog, u64 bp)
+static void bpf_unwind_release_desc(struct bpf_unwind_ctx *ctx, const struct bpf_frame_desc_pool *pool,
+				    const struct bpf_frame_desc *d, u64 fp, bool first, bool late)
+{
+	bool locks = ctx->phase == BPF_UNWIND_PHASE_LOCKS;
+	void *handle;
+	u32 i;
+	int s;
+
+	for (i = 0; d && i < d->nent; i++) {
+		const struct bpf_frame_desc_entry *ent = &d->ent[i];
+		const struct bpf_resource *res = &pool->resources[ent->res];
+		u64 *loc = (u64 *)(long)(fp + ent->off);
+
+		if (ent->flags & (BPF_FRAME_ENT_COUNTER | BPF_FRAME_ENT_COUNT)) {
+			if (!locks || first || late)
+				continue;
+			s = section_index(res->kind);
+			ctx->section[s] = res;
+			ctx->nr_sections[s] += ent->flags & BPF_FRAME_ENT_COUNT ? ent->count : (s64)*loc;
+			continue;
+		}
+		if (release_phase(res) != ctx->phase || !(ent->flags & BPF_FRAME_ENT_FIRST) != !first)
+			continue;
+		if (ent->flags & BPF_FRAME_ENT_OBJ) {
+			handle = loc;
+		} else {
+			if (!*loc)
+				continue;
+			handle = (void *)(long)(*loc - ent->adj);
+		}
+		if (locks && late != (res->kind == BPF_RESOURCE_IRQ_FLAG &&
+				      !arch_irqs_disabled_flags(*(unsigned long *)handle)))
+			continue;
+		bpf_unwind_release(res, handle);
+	}
+}
+
+/*
+ * Release what the frame of @prog holds of the phase of this walk; @bp is its
+ * native frame pointer and @ip the address it returns to. The frame is
+ * described by the hidden slots of its function and by what the site it is at
+ * says of its stack; the entries that go first, an iterator or the reader of
+ * a file, of both come before the references they may be using. The locks and
+ * IRQ flags are released in two passes: the flags a frame saved with
+ * interrupts enabled, of which it can have one at most, since every later
+ * save found them disabled, are restored last, after the locks and the other
+ * flags in whatever order the frame took them.
+ */
+static void bpf_unwind_release_frame(struct bpf_unwind_ctx *ctx, const struct bpf_prog *prog,
+				     u64 ip, u64 bp)
 {
 	const struct bpf_prog_aux *fn = bpf_prog_frame_aux(prog);
 	const struct bpf_frame_desc_pool *pool = fn->frame_desc_pool;
-	int passes = ctx->phase == BPF_UNWIND_PHASE_LOCKS ? 2 : 1, pass, s;
-	const struct bpf_frame_desc *d;
-	bool late;
+	int passes = ctx->phase == BPF_UNWIND_PHASE_LOCKS ? 2 : 1, pass, first;
+	const struct bpf_frame_desc *d, *site;
 	u64 fp;
-	u32 i;
 
-	if (!fn->frame_desc)
+	if (!pool)
 		return;
-	d = pool->desc[fn->frame_desc - 1];
+	d = fn->frame_desc ? pool->desc[fn->frame_desc - 1] : NULL;
+	site = bpf_unwind_site(fn, prog, ip - 1);
+	if (!d && !site)
+		return;
 	fp = bpf_unwind_fp(fn, bp);
 	for (pass = 0; pass < passes; pass++) {
-		for (i = 0; i < d->nent; i++) {
-			const struct bpf_frame_desc_entry *ent = &d->ent[i];
-			const struct bpf_resource *res = &pool->resources[ent->res];
-			u64 *slot = (u64 *)(long)(fp + ent->off);
-			void *handle = (void *)(long)*slot;
-
-			if (ent->flags & BPF_FRAME_ENT_COUNTER) {
-				if (ctx->phase != BPF_UNWIND_PHASE_LOCKS || pass)
-					continue;
-				s = section_index(res->kind);
-				ctx->section[s] = res;
-				ctx->nr_sections[s] += (s64)*slot;
-				continue;
-			}
-			if (!handle || release_phase(res) != ctx->phase)
-				continue;
-			late = res->kind == BPF_RESOURCE_IRQ_FLAG &&
-			       !arch_irqs_disabled_flags(*(unsigned long *)handle);
-			if (passes == 2 && late != (pass == 1))
-				continue;
-			bpf_unwind_release(res, handle);
+		for (first = 1; first >= 0; first--) {
+			bpf_unwind_release_desc(ctx, pool, d, fp, first, pass);
+			bpf_unwind_release_desc(ctx, pool, site, fp, first, pass);
 		}
 	}
 }
@@ -207,7 +289,7 @@ static bool bpf_unwind_walker(void *cookie, u64 ip, u64 sp, u64 bp)
 	if (!prog)
 		return !ctx->cnt;
 	ctx->cnt++;
-	bpf_unwind_release_frame(ctx, prog, bp);
+	bpf_unwind_release_frame(ctx, prog, ip, bp);
 	/* the main program is where the exception callback takes over */
 	return bpf_is_subprog(prog);
 }

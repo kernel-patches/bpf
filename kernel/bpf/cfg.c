@@ -535,22 +535,41 @@ static int visit_func_ptrs_insn(int t, struct bpf_verifier_env *env,
 static void close_callee_effects(struct bpf_verifier_env *env)
 {
 	struct bpf_insn *insn = env->prog->insnsi;
+	bool changed, taken_throws = false, throws;
+	struct bpf_subprog_info *sub;
 	struct bpf_func_ptr *ptrs;
-	bool changed;
 	u32 cnt, j;
 	int t;
 
 	do {
 		changed = false;
+		throws = taken_throws;
 		for (t = 0; t < env->prog->len; t++) {
 			if (bpf_pseudo_call(&insn[t]) || bpf_pseudo_func(&insn[t]))
 				changed |= merge_callee_effects(env, t, t + insn[t].imm + 1);
+			if (bpf_pseudo_func(&insn[t]))
+				taken_throws |= bpf_find_containing_subprog(env, t + insn[t].imm + 1)->might_throw;
 			ptrs = insn_func_ptrs(env, t, &cnt);
-			for (j = 0; j < cnt; j++)
+			for (j = 0; j < cnt; j++) {
 				changed |= merge_callee_effects(env, t, ptrs[j].xlated_off);
+				taken_throws |= bpf_find_containing_subprog(env, ptrs[j].xlated_off)->might_throw;
+			}
+			/*
+			 * It is not known which function a callx calls: the subprog may
+			 * throw when a function whose address is taken may. The marks
+			 * above are for the subprog that takes the address, which need
+			 * not be the one that calls through it, and the frames of the
+			 * callers of the one that does are unwound, see frame_desc.c.
+			 */
+			if (taken_throws && bpf_is_callx(&insn[t])) {
+				sub = bpf_find_containing_subprog(env, t);
+				changed |= !sub->might_throw;
+				sub->might_throw = true;
+			}
 			if (bpf_is_ldimm64(&insn[t]))
 				t++;
 		}
+		changed |= throws != taken_throws;
 	} while (changed);
 }
 

@@ -295,6 +295,7 @@ void __bpf_prog_free(struct bpf_prog *fp)
 		mutex_destroy(&fp->aux->dst_mutex);
 		kfree(fp->aux->poke_tab);
 		free_percpu(fp->aux->timed_may_goto);
+		kvfree(fp->aux->frame_desc_sites);
 		kfree(fp->aux);
 	}
 	free_percpu(fp->stats);

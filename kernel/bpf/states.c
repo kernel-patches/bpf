@@ -129,6 +129,7 @@ static bool check_scalar_ids(u32 old_id, u32 cur_id, struct bpf_idmap *idmap)
 }
 
 static void __clean_func_state(struct bpf_verifier_env *env,
+			       const struct bpf_verifier_state *vst,
 			       struct bpf_func_state *st,
 			       u16 live_regs, int frame)
 {
@@ -166,6 +167,11 @@ static void __clean_func_state(struct bpf_verifier_env *env,
 			 */
 			if (stype == STACK_DYNPTR || stype == STACK_ITER ||
 			    stype == STACK_IRQ_FLAG)
+				continue;
+
+			/* a throw finds what the frame holds through it, see frame_desc.c */
+			if (stype == STACK_SPILL &&
+			    bpf_frame_desc_keeps(env, vst, frame, &bpf_stack_slot(st, i)->spilled_ptr))
 				continue;
 
 			/*
@@ -209,7 +215,7 @@ int bpf_clean_verifier_state(struct bpf_verifier_env *env, struct bpf_verifier_s
 		u32 ip = bpf_frame_insn_idx(st, i);
 		u16 live_regs = env->insn_aux_data[ip].live_regs_before;
 
-		__clean_func_state(env, st->frame[i], live_regs, i);
+		__clean_func_state(env, st, st->frame[i], live_regs, i);
 	}
 	return 0;
 }

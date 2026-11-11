@@ -1864,27 +1864,64 @@ struct bpf_resource {
 };
 
 /*
- * The slot holds a count of sections instead of a handle, signed: the
- * sections the frame entered less those of its callers it left.
+ * What an entry of a frame descriptor names, relative to the frame pointer:
+ *
+ *  - by default a location that holds the handle of a resource of the class,
+ *    or 0 when the frame holds none. The handle is what the release takes: the
+ *    pointer to an object, to a ringbuf record or to a lock, or the address of
+ *    an iterator or of saved IRQ flags on the stack. The location is a hidden
+ *    slot of the frame, or a slot of the program's own stack that holds the
+ *    pointer whenever the frame is at the site of the descriptor; the pointer
+ *    may then point adj bytes into the object;
+ *  - with BPF_FRAME_ENT_OBJ the resource itself, an iterator or saved IRQ
+ *    flags the frame has on its stack whenever it is at the site;
+ *  - with BPF_FRAME_ENT_COUNTER a hidden slot that holds a count of sections,
+ *    signed: the sections the frame entered less those of its callers it left;
+ *  - with BPF_FRAME_ENT_COUNT no location: the count of the sections the frame
+ *    is in whenever it is at the site.
  */
 #define BPF_FRAME_ENT_COUNTER	BIT(0)
+#define BPF_FRAME_ENT_OBJ	BIT(1)
+#define BPF_FRAME_ENT_COUNT	BIT(2)
+/* Released before the other entries of the frame, which it may be using. */
+#define BPF_FRAME_ENT_FIRST	BIT(3)
 
-/*
- * One hidden slot of a frame: it holds the handle of a resource of the class
- * the frame holds, or 0. The handle is what the release takes: the pointer
- * to an object, to a ringbuf record or to a lock, or the address of an
- * iterator or of saved IRQ flags on the stack of some frame.
- */
 struct bpf_frame_desc_entry {
 	u16 res;	/* index into the program's resource classes */
-	s16 off;	/* the slot, relative to the frame pointer */
-	u16 flags;
+	u16 flags;	/* BPF_FRAME_ENT_* */
+	union {
+		s16 off;	/* the location, relative to the frame pointer */
+		s16 count;	/* BPF_FRAME_ENT_COUNT */
+	};
+	s16 adj;
 };
 
+/*
+ * A frame has two descriptors: the one of its function lists its hidden
+ * slots, and the one of the site it is at, the call a throw found it in, what
+ * the verifier found in the same place on every path to the site.
+ */
 struct bpf_frame_desc {
 	u32 size;	/* total size in bytes, including this header */
 	u32 nent;	/* number of entries that follow */
 	struct bpf_frame_desc_entry ent[];
+};
+
+/* A call of a JITed function that a frame may be unwound at. */
+struct bpf_frame_desc_site {
+	u32 off;	/* native offset of the first byte of the call from prog->bpf_func */
+	u32 end;	/* native offset one past its last byte */
+	u32 desc;	/* index into the descriptor pool of the main program */
+};
+
+/*
+ * The sites of one JITed function, sorted by off. Until the JIT fills it, off
+ * holds the index of the instruction in the function and end is unused.
+ */
+struct bpf_frame_desc_sites {
+	u32 cnt;
+	bool filled;
+	struct bpf_frame_desc_site site[];
 };
 
 /* Owned by the main program and shared by its subprograms. */
@@ -2127,6 +2164,8 @@ struct bpf_prog_aux {
 	 */
 	u32 frame_desc;
 	struct bpf_frame_desc_pool *frame_desc_pool;
+	/* The sites of this JITed function that have a descriptor, freed with it. */
+	struct bpf_frame_desc_sites *frame_desc_sites;
 	union {
 		struct work_struct work;
 		struct rcu_head	rcu;
@@ -4589,6 +4628,7 @@ void bpf_insn_array_remap(struct bpf_map *map, const u32 *new_off, const u32 *ne
 
 #ifdef CONFIG_BPF_SYSCALL
 void bpf_prog_update_insn_ptrs(struct bpf_prog *prog, u32 *offsets, void *image);
+void bpf_prog_fill_frame_desc_sites(struct bpf_prog *prog, const u32 *offsets, void *image);
 void bpf_unwind_release(const struct bpf_resource *res, void *handle);
 void bpf_dynptr_file_free(void *reader);
 void bpf_unwind_release_frames(void);
@@ -4596,6 +4636,10 @@ void bpf_frame_desc_pool_free(struct bpf_frame_desc_pool *pool);
 #else
 static inline void
 bpf_prog_update_insn_ptrs(struct bpf_prog *prog, u32 *offsets, void *image)
+{
+}
+static inline void
+bpf_prog_fill_frame_desc_sites(struct bpf_prog *prog, const u32 *offsets, void *image)
 {
 }
 static inline void bpf_frame_desc_pool_free(struct bpf_frame_desc_pool *pool)
