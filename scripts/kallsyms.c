@@ -398,7 +398,7 @@ static void write_src(FILE *out_bin_file, const char *out_bin_name)
 	unsigned int best_idx[256];
 	unsigned int *markers, markers_cnt;
 	long bin_start;
-	char buf[KSYM_NAME_LEN];
+	char buf[1 + KSYM_NAME_LEN];
 
 	printf("\t.section .rodata, \"a\"\n");
 
