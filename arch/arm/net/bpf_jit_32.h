@@ -104,6 +104,7 @@
 #define ARM_INST_MOV_I		0x03a00000
 #define ARM_INST_MOVW		0x03000000
 #define ARM_INST_MOVT		0x03400000
+#define ARM_INST_MVN_I		0x03e00000
 
 #define ARM_INST_MUL		0x00000090
 
@@ -230,6 +231,8 @@
 
 #define ARM_MOVT(rd, imm)	\
 	(ARM_INST_MOVT | ((imm) >> 12) << 16 | (rd) << 12 | ((imm) & 0x0fff))
+
+#define ARM_MVN_I(rd, imm)	_AL3_I(ARM_INST_MVN, rd, 0, imm)
 
 #define ARM_MUL(rd, rm, rn)	(ARM_INST_MUL | (rd) << 16 | (rm) << 8 | (rn))
 
