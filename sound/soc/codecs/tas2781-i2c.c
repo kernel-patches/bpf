@@ -33,6 +33,7 @@
 #include <sound/tlv.h>
 #include <sound/tas2x20-tlv.h>
 #include <sound/tas2563-tlv.h>
+#include <sound/tas2573-reg.h>
 #include <sound/tas2781-tlv.h>
 #include <sound/tas5825-tlv.h>
 #include <linux/unaligned.h>
