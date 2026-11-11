@@ -379,10 +379,10 @@ struct bpf_loop_iters {
 	/*
 	 * The variable that the latches of all back edges test, or -1, and what
 	 * it can be at the loop header: what it is at the entry or what one of
-	 * the latches lets through.
+	 * the latches lets through. A 32-bit latch bounds its low 32 bits only.
 	 */
 	int iv_reg;
-	struct cnum64 iv_range;
+	struct scalar iv_range;
 	/* a jump that counts: it leaves the loop in the last iteration, if not before. Or -1 */
 	int count_insn;
 	/* a pointer to the stack that stores go through moves in the loop */
@@ -445,7 +445,7 @@ struct loop_stack_entry {
 	u32 walk_id;
 	u32 walk_patience;
 	int iv_reg;
-	struct cnum64 iv_range;
+	struct scalar iv_range;
 	int count_insn;
 };
 
@@ -2068,7 +2068,7 @@ void scalar_add(struct scalar *dst, const struct scalar *a, const struct scalar 
 void scalar_zext32(struct scalar *s);
 void scalar_union(struct scalar *acc, const struct scalar *src);
 int bpf_set_reg_range(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
-		      struct cnum64 r64, struct cnum32 r32, u16 base, u16 step);
+		      const struct scalar *range);
 bool bpf_reg_union_compatible(const struct bpf_reg_state *a, const struct bpf_reg_state *b);
 void bpf_reg_widen_range(struct bpf_reg_state *reg, const struct bpf_reg_state *old,
 			 const struct bpf_loop_rungs *rungs, int linear);

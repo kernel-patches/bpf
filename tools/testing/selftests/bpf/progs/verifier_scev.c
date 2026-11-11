@@ -1044,11 +1044,10 @@ POST_COND_TEST32(post32_sgt,       "s>", (__u32)INT32_MIN + 6,  -2u, (__u32)INT3
 POST_COND_TEST32(post32_sge,       "s>=",                 -1u,  -2u,              -7u, "header_count is [0..4] ")
 
 /*
- * When computing 32-bit iteration bounds, scev.c:compute_max_iters() does
- * the computation in the 64-bit domain first. For unsigned JMP32 comparisons,
- * it zero-extends the initial value and bound, but sign-extends the step.
+ * For a JMP32 comparison scev.c:compute_max_iters() takes the low 32 bits of the
+ * initial value, the bound and the step.
  * Hence pick negative 64-bit initial values and bounds, and encode negative
- * steps as positive u32 constants, so both conversions affect the computation.
+ * steps as positive u32 constants, so that the upper 32 bits differ.
  * post32_lt also checks that an exit exactly at U32_MAX is accepted.
  */
 POST_COND_TEST32(post32_lt,        "<",                    -7,    2,               -1, "header_count is [0..3] ")
@@ -1056,12 +1055,12 @@ POST_COND_TEST32(post32_le,        "<=",                   -9,    2,            
 POST_COND_TEST32(post32_gt,        ">",                    -1,  -2u,               -7, "header_count is [0..3] ")
 POST_COND_TEST32(post32_ge,        ">=",                   -1,  -2u,               -7, "header_count is [0..4] ")
 POST_COND_TEST32(post32_ne,        "!=",                   -1,  -2u,               -7, "header_count is [0..3] ")
-/* across 0: in order as signed numbers. From 4 up to 1 goes all the way around. */
+/* across 0: '!=' has no order. From 4 up to 1 goes all the way around. */
 POST_COND_TEST32(post32_ne_to_m1,   "!=",                    3,  -1u,               -1, "header_count is [0..4] ")
 POST_COND_TEST32(post32_ne_to_0,    "!=",                   -4,    1,                0, "header_count is [0..4] ")
 POST_COND_TEST32(post32_ne_to_m1_2, "!=",                    3,  -2u,               -1, "header_count is [0..2] ")
 POST_COND_TEST32(post32_ne_miss,    "!=",                    4,  -2u,               -1, "can't compute iterations count")
-POST_COND_TEST32(post32_ne_around,  "!=",                    4,    1,                1, "can't compute iterations count")
+POST_COND_TEST32(post32_ne_around,  "!=",                    4,    1,                1, "header_count is [0..4294967293] ")
 
 /* An exit exactly at S32_MAX is accepted as well. */
 POST_COND_TEST32(post32_slt_max,   "s<",        INT32_MAX - 6,    2,        INT32_MAX, "header_count is [0..3] ")
@@ -1151,9 +1150,9 @@ RANGE_TEST(range_post_lt,   "",  3, 10,     2,  14, 15,  POST("r6 += r8", "r6 < 
 /* 32 bits. r6 is negative at the entry and zero extended after that. */
 RANGE_TEST(range32_slt,    "s", -5,  5,     2,   7,  9,  POST("w6 += w8", "w6 s< w7"),
 	   COUNTED(7, "-5..0xffffffff"))
-/* Only the jump has 32 bits. The low half says nothing about r6: it's 'first + step * count'. */
+/* Only the jump has 32 bits. It bounds the low half of r6, 'first + step * count' the rest. */
 RANGE_TEST(range32_jump,    "",  3, 10,     2,  13, 15,  POST("r6 += r8", "w6 < w7"),
-	   COUNTED(6, "3..20"))
+	   COUNTED(6, "3..14"))
 
 #define COUNTED_2G(range)									\
 	__msg("loop header at {{[0-9]+}}, header_count is [0..2147483{{[0-9]+}}] ")		\

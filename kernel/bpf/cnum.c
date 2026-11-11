@@ -43,6 +43,32 @@ struct cnum64 cnum64_sext32(struct cnum32 cnum)
 }
 
 /*
+ * The smallest arc with { x << 32 : x in 'cnum' }. The circle of 2^32 numbers is laid on the circle
+ * of 2^64 numbers: sums, the order of signed and of unsigned numbers and the places where they wrap
+ * stay.
+ */
+struct cnum64 cnum64_lshift32(struct cnum32 cnum)
+{
+	if (cnum32_is_empty(cnum))
+		return CNUM64_EMPTY;
+	return (struct cnum64){ .base = (u64)cnum.base << 32, .size = (u64)cnum.size << 32 };
+}
+
+/* { x >> 32 : x in 'cnum' } */
+struct cnum32 cnum32_rshift32(struct cnum64 cnum)
+{
+	u32 base = cnum.base >> 32;
+	u32 size = ((cnum.base + cnum.size) >> 32) - base;
+
+	if (cnum64_is_empty(cnum))
+		return CNUM32_EMPTY;
+	/* less than 1 << 32 numbers are missing, or the arc ends one before its base */
+	if (cnum.size >> 32 == U32_MAX || size == U32_MAX)
+		return CNUM32_UNBOUNDED;
+	return (struct cnum32){ .base = base, .size = size };
+}
+
+/*
  * Suppose 'a' and 'b' are laid out as follows:
  *
  *                                                          64-bit number axis --->
