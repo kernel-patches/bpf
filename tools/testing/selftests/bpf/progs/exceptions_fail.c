@@ -458,4 +458,218 @@ int reject_subprog_throw_irq_lock(void *ctx)
 	return 0;
 }
 
+/*
+ * What a program that throws may not do yet: the frames keep what they hold
+ * in hidden slots of their own, see kernel/bpf/frame_desc.c.
+ */
+
+struct locked_obj {
+	struct bpf_spin_lock lock;
+	int data;
+};
+
+private(L) struct bpf_spin_lock held_lock;
+
+static __noinline void throw_around_unlock_held(int before, int after)
+{
+	if (before)
+		bpf_throw(0);
+	bpf_spin_unlock(&held_lock);
+	if (after)
+		bpf_throw(0);
+}
+
+/*
+ * The callee may throw with the lock of its caller held and after it dropped
+ * it, so the call of the caller says neither. The lock is in a slot of the
+ * caller then, which the callee cannot reach to empty.
+ */
+SEC("?tc")
+__arch_x86_64 __arch_arm64
+__failure __msg("releases what another frame holds in a hidden slot")
+int reject_callee_releases(struct __sk_buff *ctx)
+{
+	bpf_spin_lock(&held_lock);
+	throw_around_unlock_held(ctx->len, ctx->mark);
+	return 0;
+}
+
+struct {
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, 4096);
+} fail_ringbuf SEC(".maps");
+
+/* Discards the record when told. */
+__used static __noinline int discard_if(void *rec, int drop)
+{
+	if (drop)
+		bpf_ringbuf_discard(rec, 0);
+	return 0;
+}
+
+/*
+ * The two paths to the throw keep the record in different registers, so it is
+ * in a slot, which the caller empties for the callee it hands the record to.
+ * The callee returns holding the record when it is not told to discard it.
+ */
+SEC("?tc")
+__arch_x86_64 __arch_arm64
+__failure __msg("releases it on some paths only")
+__naked int reject_callee_releases_sometimes(void)
+{
+	asm volatile (
+	"r7 = *(u32 *)(r1 + %[len]);"
+	"r8 = *(u32 *)(r1 + %[mark]);"
+	"r2 = *(u32 *)(r1 + %[priority]);"
+	"*(u64 *)(r10 - 8) = r2;"
+	"r1 = %[fail_ringbuf] ll;"
+	"r2 = 8;"
+	"r3 = 0;"
+	"call %[bpf_ringbuf_reserve];"
+	"if r0 == 0 goto 4f;"
+	"r6 = r0;"
+	"r9 = 0;"
+	"r0 = 0;"
+	"if r7 == 0 goto 1f;"
+	"r9 = r6;"
+	"r6 = 0;"
+	"1: r1 = *(u64 *)(r10 - 8);"
+	"if r1 == 0 goto 2f;"
+	"r1 = 0;"
+	"call %[bpf_throw];"
+	"2: r1 = r6;"
+	"if r1 != 0 goto 3f;"
+	"r1 = r9;"
+	"3: r2 = r8;"
+	"call discard_if;"
+	"if r8 != 0 goto 4f;"
+	"r1 = r6;"
+	"if r1 != 0 goto +1;"
+	"r1 = r9;"
+	"r2 = 0;"
+	"call %[bpf_ringbuf_discard];"
+	"4: r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(fail_ringbuf),
+	  __imm(bpf_ringbuf_reserve),
+	  __imm(bpf_ringbuf_discard),
+	  __imm(bpf_throw),
+	  [len]"i"(offsetof(struct __sk_buff, len)),
+	  [mark]"i"(offsetof(struct __sk_buff, mark)),
+	  [priority]"i"(offsetof(struct __sk_buff, priority))
+	: __clobber_all);
+}
+
+__used static __noinline void leave_rcu(void)
+{
+	bpf_rcu_read_unlock();
+}
+
+/*
+ * The paths to the throw are in an RCU read section or not, so the frame
+ * counts its sections in a slot. The count does not follow what a callee
+ * does: the callee leaves the section it was called in.
+ */
+SEC("?tc")
+__arch_x86_64 __arch_arm64
+__failure __msg("a subprog returns in other sections than it was called in")
+__naked int reject_callee_leaves_rcu(void)
+{
+	asm volatile (
+	"r6 = *(u32 *)(r1 + %[len]);"
+	"r7 = *(u32 *)(r1 + %[mark]);"
+	"if r6 == 0 goto 1f;"
+	"call %[bpf_rcu_read_lock];"
+	"1: if r7 == 0 goto 2f;"
+	"r1 = 0;"
+	"call %[bpf_throw];"
+	"2: if r6 != 0 goto 3f;"
+	"call %[bpf_rcu_read_lock];"
+	"3: call leave_rcu;"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm(bpf_rcu_read_lock),
+	  __imm(bpf_throw),
+	  [len]"i"(offsetof(struct __sk_buff, len)),
+	  [mark]"i"(offsetof(struct __sk_buff, mark))
+	: __clobber_all);
+}
+
+struct obj_map_value {
+	struct locked_obj __kptr *obj;
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, int);
+	__type(value, struct obj_map_value);
+} obj_map SEC(".maps");
+
+/* The unwinder would unlock a lock in an object that may be freed by then. */
+SEC("?tc")
+__arch_x86_64 __arch_arm64
+__failure __msg("releases an object whose lock is held")
+int reject_release_locked_obj(struct __sk_buff *ctx)
+{
+	struct obj_map_value *v;
+	struct locked_obj *o;
+
+	v = bpf_map_lookup_elem(&obj_map, &(int){0});
+	if (!v)
+		return 0;
+	o = bpf_obj_new(typeof(*o));
+	if (!o)
+		return 0;
+	bpf_spin_lock(&o->lock);
+	o = bpf_kptr_xchg(&v->obj, o);
+	bpf_throw(0);
+	return 0;
+}
+
+/* The unwinder restores what is at the address of the flags. */
+SEC("?tc")
+__arch_x86_64 __arch_arm64
+__failure __msg("cannot write over saved irq flags in a program that throws")
+int reject_write_over_irq_flags(struct __sk_buff *ctx)
+{
+	unsigned long flags;
+
+	bpf_local_irq_save(&flags);
+	*(volatile unsigned long *)&flags = 0;
+	bpf_throw(0);
+	return 0;
+}
+
+/* The unwinder destroys what is at the address of the iterator. */
+SEC("?tc")
+__arch_x86_64 __arch_arm64
+__failure __msg("cannot write over an iterator in a program that throws")
+int reject_write_over_iter(struct __sk_buff *ctx)
+{
+	struct bpf_iter_num it;
+
+	bpf_iter_num_new(&it, 0, 10);
+	*(volatile __u64 *)&it = 0x1234;
+	bpf_throw(0);
+	return 0;
+}
+
+/* Nothing may destroy the iterator once the section it is protected by ended. */
+SEC("?syscall")
+__arch_x86_64 __arch_arm64
+__failure __msg("an RCU protected iterator may not outlive its section in a program that throws")
+int reject_rcu_iter_outlives_section(void *ctx)
+{
+	struct bpf_iter_task it;
+
+	bpf_rcu_read_lock();
+	bpf_iter_task_new(&it, NULL, BPF_TASK_ITER_ALL_PROCS);
+	bpf_rcu_read_unlock();
+	bpf_throw(0);
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";
