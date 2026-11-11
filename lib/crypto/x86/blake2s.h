@@ -49,12 +49,10 @@ static void blake2s_compress(struct blake2s_ctx *ctx,
 #define blake2s_mod_init_arch blake2s_mod_init_arch
 static void blake2s_mod_init_arch(void)
 {
-	if (boot_cpu_has(X86_FEATURE_SSSE3))
+	if (boot_cpu_has(X86_FEATURE_SSSE3)) {
 		static_branch_enable(&blake2s_use_ssse3);
-
-	if (boot_cpu_has(X86_FEATURE_AVX) &&
-	    boot_cpu_has(X86_FEATURE_AVX2) &&
-	    boot_cpu_has(X86_FEATURE_AVX512F) &&
-	    boot_cpu_has(X86_FEATURE_AVX512VL))
-		static_branch_enable(&blake2s_use_avx512);
+		if (boot_cpu_has(X86_FEATURE_AVX2) &&
+		    boot_cpu_has(X86_FEATURE_AVX512VL))
+			static_branch_enable(&blake2s_use_avx512);
+	}
 }
