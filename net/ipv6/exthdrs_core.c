@@ -183,7 +183,8 @@ EXPORT_SYMBOL_GPL(ipv6_find_tlv);
  * isn't NULL.
  *
  * if flags is not NULL and it's a fragment, then the frag flag
- * IP6_FH_F_FRAG will be set. If it's an AH header, the
+ * IP6_FH_F_FRAG will be set. IP6_FH_F_NON_ATOMIC will be set for a
+ * non-atomic Fragment header. If it's an AH header, the
  * IP6_FH_F_AUTH flag is set and target < 0, then this function will
  * stop at the AH header. If IP6_FH_F_SKIP_RH flag was passed, then this
  * function will skip all those routing headers, where segements_left was 0.
@@ -191,23 +192,20 @@ EXPORT_SYMBOL_GPL(ipv6_find_tlv);
 int ipv6_find_hdr(const struct sk_buff *skb, unsigned int *offset,
 		  int target, unsigned short *fragoff, int *flags)
 {
-	unsigned int start = skb_network_offset(skb) + sizeof(struct ipv6hdr);
-	u8 nexthdr = ipv6_hdr(skb)->nexthdr;
+	unsigned int start = *offset ?: skb_network_offset(skb);
+	struct ipv6hdr _ip6, *ip6;
 	int exthdr_cnt = 0;
+	u8 nexthdr;
 	bool found;
 
 	if (fragoff)
 		*fragoff = 0;
 
-	if (*offset) {
-		struct ipv6hdr _ip6, *ip6;
-
-		ip6 = skb_header_pointer(skb, *offset, sizeof(_ip6), &_ip6);
-		if (!ip6 || (ip6->version != 6))
-			return -EBADMSG;
-		start = *offset + sizeof(struct ipv6hdr);
-		nexthdr = ip6->nexthdr;
-	}
+	ip6 = skb_header_pointer(skb, start, sizeof(_ip6), &_ip6);
+	if (!ip6 || (*offset && ip6->version != 6))
+		return -EBADMSG;
+	nexthdr = ip6->nexthdr;
+	start += sizeof(struct ipv6hdr);
 
 	do {
 		struct ipv6_opt_hdr _hdr, *hp;
@@ -253,6 +251,9 @@ int ipv6_find_hdr(const struct sk_buff *skb, unsigned int *offset,
 						&_frag_off);
 			if (!fp)
 				return -EBADMSG;
+
+			if (flags && (*fp & htons(IP6_OFFSET | IP6_MF)))
+				*flags |= IP6_FH_F_NON_ATOMIC;
 
 			_frag_off = ntohs(*fp) & ~0x7;
 			if (_frag_off) {
