@@ -469,21 +469,6 @@ config INPUT_POWERMATE
 	  To compile this driver as a module, choose M here: the
 	  module will be called powermate.
 
-config INPUT_YEALINK
-	tristate "Yealink usb-p1k voip phone"
-	depends on USB_ARCH_HAS_HCD
-	select USB
-	help
-	  Say Y here if you want to enable keyboard and LCD functions of the
-	  Yealink usb-p1k usb phones. The audio part is enabled by the generic
-	  usb sound driver, so you might want to enable that as well.
-
-	  For information about how to use these additional functions, see
-	  <file:Documentation/input/devices/yealink.rst>.
-
-	  To compile this driver as a module, choose M here: the module will be
-	  called yealink.
-
 config INPUT_CM109
 	tristate "C-Media CM109 USB I/O Controller"
 	depends on USB_ARCH_HAS_HCD
