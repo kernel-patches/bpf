@@ -6,11 +6,11 @@
 #include <dt-bindings/pinctrl/hisi.h>
 
 / {
-	soc {
-		range: gpio-range {
-			#pinctrl-single,gpio-range-cells = <3>;
-		};
+	range: gpio-range {
+		#pinctrl-single,gpio-range-cells = <3>;
+	};
 
+	soc {
 		pmx0: pinmux@e896c000 {
 			compatible = "pinctrl-single";
 			reg = <0x0 0xe896c000 0x0 0x72c>;
