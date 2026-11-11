@@ -9,25 +9,26 @@
  */
 
 #ifdef CONFIG_SQUASHFS_XATTR
-extern __le64 *squashfs_read_xattr_id_table(struct super_block *, u64,
+extern int squashfs_read_xattr_id_table(struct super_block *, u64,
 		u64 *, unsigned int *);
 extern int squashfs_xattr_lookup(struct super_block *, unsigned int,
 		unsigned int *, unsigned int *, unsigned long long *);
+extern s64 squashfs_xattr_lookup_start(struct super_block *sb, u32 index);
 #else
-static inline __le64 *squashfs_read_xattr_id_table(struct super_block *sb,
+static inline int squashfs_read_xattr_id_table(struct super_block *sb,
 		u64 start, u64 *xattr_table_start, unsigned int *xattr_ids)
 {
 	struct squashfs_xattr_id_table *id_table;
 
 	id_table = squashfs_read_table(sb, start, sizeof(*id_table));
 	if (IS_ERR(id_table))
-		return (__le64 *) id_table;
+		return PTR_ERR(id_table);
 
 	*xattr_table_start = le64_to_cpu(id_table->xattr_table_start);
 	kfree(id_table);
 
 	ERROR("Xattrs in filesystem, these will be ignored\n");
-	return ERR_PTR(-ENOTSUPP);
+	return -ENOTSUPP;
 }
 
 static inline int squashfs_xattr_lookup(struct super_block *sb,
@@ -36,6 +37,12 @@ static inline int squashfs_xattr_lookup(struct super_block *sb,
 {
 	return 0;
 }
+
+static inline s64 squashfs_xattr_lookup_start(struct super_block *sb, u32 index)
+{
+	return 0;
+}
+
 #define squashfs_listxattr NULL
 #define squashfs_xattr_handlers NULL
 #endif

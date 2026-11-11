@@ -242,9 +242,36 @@ static inline s32 squashfs_xattr_blocks(u32 xattrs)
 		SQUASHFS_METADATA_SIZE;
 }
 
-static inline s32 squashfs_xattr_block_bytes(u32 xattrs)
+static inline s32 squashfs_xattr_blocks_bytes(u32 xattrs)
 {
 	return squashfs_xattr_blocks(xattrs) * sizeof(long long);
+}
+
+static inline s32 squashfs_xattr_blocks_base(u32 xattrs)
+{
+	return (squashfs_xattr_block(xattrs) * sizeof(long long)) & ~(PAGE_SIZE - 1);
+}
+
+static inline s64 squashfs_xattr_blocks_start(u32 xattrs, struct squashfs_sb_info *msblk)
+{
+	s32 base = squashfs_xattr_blocks_base(xattrs);
+	s64 table_start = msblk->xattr_id_table + sizeof(struct squashfs_xattr_id_table);
+	s64 start;
+
+	if (S64_MAX - table_start < base)
+		return -EINVAL;
+
+	start = table_start + base;
+
+	if (start > msblk->bytes_used)
+		return -EINVAL;
+
+	return start;
+}
+
+static inline s16 squashfs_xattr_blocks_offset(u32 xattrs)
+{
+	return (squashfs_xattr_block(xattrs) * sizeof(long long)) & (PAGE_SIZE - 1);
 }
 
 static inline u32 squashfs_xattr_blk(s64 xattr)

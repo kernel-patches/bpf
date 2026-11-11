@@ -434,7 +434,7 @@ int squashfs_read_inode(struct inode *inode, long long ino)
 		return -EINVAL;
 	}
 
-	if (xattr_id != SQUASHFS_INVALID_XATTR && msblk->xattr_id_table) {
+	if (xattr_id != SQUASHFS_INVALID_XATTR && msblk->xattr_id_array) {
 		err = squashfs_xattr_lookup(sb, xattr_id,
 					&squashfs_i(inode)->xattr_count,
 					&squashfs_i(inode)->xattr_size,

@@ -63,7 +63,10 @@ struct squashfs_sb_info {
 		__le64				*fragment_index_array;
 		struct squashfs_cache		*fragment_index_cache;
 	};
-	__le64					*xattr_id_table;
+	union {
+		__le64				*xattr_id_array;
+		struct squashfs_cache		*xattr_id_cache;
+	};
 	struct mutex				meta_index_mutex;
 	struct meta_index			*meta_index;
 	void					*stream;
@@ -79,6 +82,8 @@ struct squashfs_sb_info {
 	u64					xattr_table;
 	u64					lookup_table;
 	u64					lookup_table_start;
+	u64					xattr_id_table;
+	u64					xattr_id_table_start;
 	unsigned int				block_size;
 	unsigned short				block_log;
 	long long				bytes_used;
@@ -91,5 +96,6 @@ struct squashfs_sb_info {
 	int					max_thread_num;
 	bool					lookup_table_is_cache;
 	bool					fragment_index_is_cache;
+	bool					xattr_id_is_cache;
 };
 #endif

@@ -193,6 +193,14 @@ static void squashfs_free_fragment_indexes(struct squashfs_sb_info *msblk)
 		kfree(msblk->fragment_index_array);
 }
 
+static void squashfs_free_xattr_indexes(struct squashfs_sb_info *msblk)
+{
+	if (msblk->xattr_id_is_cache)
+		squashfs_cache_delete(msblk->xattr_id_cache);
+	else
+		kfree(msblk->xattr_id_array);
+}
+
 static int squashfs_fill_super(struct super_block *sb, struct fs_context *fc)
 {
 	struct squashfs_mount_opts *opts = fc->fs_private;
@@ -202,7 +210,7 @@ static int squashfs_fill_super(struct super_block *sb, struct fs_context *fc)
 	long long root_inode;
 	unsigned short flags;
 	unsigned int fragments;
-	u64 xattr_id_table_start, next_table;
+	u64 next_table;
 	s64 err;
 	int devblksize = sb_min_blocksize(sb, SQUASHFS_DEVBLK_SIZE);
 
@@ -376,19 +384,17 @@ static int squashfs_fill_super(struct super_block *sb, struct fs_context *fc)
 
 	/* Handle xattrs */
 	sb->s_xattr = squashfs_xattr_handlers;
-	xattr_id_table_start = le64_to_cpu(sblk->xattr_id_table_start);
-	if (xattr_id_table_start == SQUASHFS_INVALID_BLK) {
+	msblk->xattr_id_table = le64_to_cpu(sblk->xattr_id_table_start);
+	if (msblk->xattr_id_table == SQUASHFS_INVALID_BLK) {
 		next_table = msblk->bytes_used;
 		goto allocate_id_index_table;
 	}
 
 	/* Allocate and read xattr id lookup table */
-	msblk->xattr_id_table = squashfs_read_xattr_id_table(sb,
-		xattr_id_table_start, &msblk->xattr_table, &msblk->xattr_ids);
-	if (IS_ERR(msblk->xattr_id_table)) {
+	err = squashfs_read_xattr_id_table(sb, msblk->xattr_id_table,
+				&msblk->xattr_table, &msblk->xattr_ids);
+	if (err < 0) {
 		errorf(fc, "unable to read xattr id index table");
-		err = PTR_ERR(msblk->xattr_id_table);
-		msblk->xattr_id_table = NULL;
 		if (err != -ENOTSUPP)
 			goto failed_mount;
 	}
@@ -507,7 +513,7 @@ failed_mount:
 	squashfs_free_inode_table(msblk);
 	squashfs_free_fragment_indexes(msblk);
 	kfree(msblk->id_table);
-	kfree(msblk->xattr_id_table);
+	squashfs_free_xattr_indexes(msblk);
 	kfree(sb->s_fs_info);
 	sb->s_fs_info = NULL;
 	kfree(sblk);
@@ -628,7 +634,7 @@ static void squashfs_put_super(struct super_block *sb)
 		squashfs_free_fragment_indexes(sbi);
 		kfree(sbi->meta_index);
 		squashfs_free_inode_table(sbi);
-		kfree(sbi->xattr_id_table);
+		squashfs_free_xattr_indexes(sbi);
 		kfree(sb->s_fs_info);
 		sb->s_fs_info = NULL;
 	}

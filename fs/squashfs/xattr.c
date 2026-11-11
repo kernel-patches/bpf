@@ -30,10 +30,9 @@ ssize_t squashfs_listxattr(struct dentry *d, char *buffer,
 	struct inode *inode = d_inode(d);
 	struct super_block *sb = inode->i_sb;
 	struct squashfs_sb_info *msblk = sb->s_fs_info;
-	u64 start = squashfs_xattr_blk(squashfs_i(inode)->xattr)
-						+ msblk->xattr_table;
-	int offset = squashfs_xattr_offset(squashfs_i(inode)->xattr);
-	unsigned int count = squashfs_i(inode)->xattr_count;
+	u64 start;
+	int offset;
+	unsigned int count;
 	size_t rest = buffer_size;
 	int err;
 
@@ -41,8 +40,12 @@ ssize_t squashfs_listxattr(struct dentry *d, char *buffer,
 	if (squashfs_i(inode)->xattr == SQUASHFS_INVALID_BLK)
 		return 0;
 
+	count = squashfs_i(inode)->xattr_count;
 	if (count == 0 || count > squashfs_i(inode)->xattr_size)
 		return -EIO;
+
+	start = squashfs_xattr_blk(squashfs_i(inode)->xattr) + msblk->xattr_table;
+	offset = squashfs_xattr_offset(squashfs_i(inode)->xattr);
 
 	/* loop reading each xattr name */
 	while (count--) {
@@ -111,10 +114,9 @@ static int squashfs_xattr_get(struct inode *inode, int name_index,
 {
 	struct super_block *sb = inode->i_sb;
 	struct squashfs_sb_info *msblk = sb->s_fs_info;
-	u64 start = squashfs_xattr_blk(squashfs_i(inode)->xattr)
-						+ msblk->xattr_table;
-	int offset = squashfs_xattr_offset(squashfs_i(inode)->xattr);
-	unsigned int count = squashfs_i(inode)->xattr_count;
+	u64 start;
+	int offset;
+	unsigned int count;
 	int name_len = strlen(name);
 	int err, vsize;
 	char *target;
@@ -123,12 +125,16 @@ static int squashfs_xattr_get(struct inode *inode, int name_index,
 	if (squashfs_i(inode)->xattr == SQUASHFS_INVALID_BLK)
 		return -ENODATA;
 
+	count = squashfs_i(inode)->xattr_count;
 	if (count == 0 || count > squashfs_i(inode)->xattr_size)
 		return -EIO;
 
 	target = kmalloc(name_len, GFP_KERNEL);
 	if (target == NULL)
 		return -ENOMEM;
+
+	start = squashfs_xattr_blk(squashfs_i(inode)->xattr) + msblk->xattr_table;
+	offset = squashfs_xattr_offset(squashfs_i(inode)->xattr);
 
 	/* loop reading each xattr name */
 	for (; count; count--) {
