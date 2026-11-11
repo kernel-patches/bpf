@@ -10721,6 +10721,9 @@ static int ufshcd_wl_system_suspend(struct device *dev, enum ufs_pm_op pm_op)
 	if (ret) {
 		dev_err(&sdev->sdev_gendev, "%s failed: %d\n", __func__,  ret);
 		up(&hba->host_sem);
+		/* __ufshcd_wl_suspend() can return a positive status for UFS_SHUTDOWN_PM. */
+		if (ret > 0)
+			ret = -EBUSY;
 	}
 
 out:
@@ -11568,11 +11571,7 @@ EXPORT_SYMBOL_GPL(ufshcd_suspend_prepare);
 #ifdef CONFIG_PM_SLEEP
 static int ufshcd_wl_poweroff(struct device *dev)
 {
-	struct scsi_device *sdev = to_scsi_device(dev);
-	struct ufs_hba *hba = shost_priv(sdev->host);
-
-	__ufshcd_wl_suspend(hba, UFS_SHUTDOWN_PM);
-	return 0;
+	return ufshcd_wl_system_suspend(dev, UFS_SHUTDOWN_PM);
 }
 #endif
 
