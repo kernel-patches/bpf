@@ -16,6 +16,120 @@ description: |
 
 allOf:
   - $ref: dai-common.yaml#
+  - if:
+      required:
+        - cirrus,amplifier-bpe-enable
+    then:
+      required:
+        - cirrus,amplifier-bpe-response-mode
+        - cirrus,amplifier-bpe-thresholds-microvolt
+        - cirrus,amplifier-bpe-attack-rates
+        - cirrus,amplifier-bpe-hold-times-us
+        - cirrus,amplifier-bpe-release-rates
+    else:
+      properties:
+        cirrus,amplifier-bpe-response-mode: false
+        cirrus,amplifier-bpe-thresholds-microvolt: false
+        cirrus,amplifier-bpe-attenuation-levels-db: false
+        cirrus,amplifier-bpe-attenuation-levels-microvolt: false
+        cirrus,amplifier-bpe-attenuation-levels-microwatt: false
+        cirrus,amplifier-bpe-attack-rates: false
+        cirrus,amplifier-bpe-hold-times-us: false
+        cirrus,amplifier-bpe-release-rates: false
+  - if:
+      properties:
+        cirrus,amplifier-bpe-response-mode:
+          const: 0
+      required:
+        - cirrus,amplifier-bpe-response-mode
+    then:
+      required:
+        - cirrus,amplifier-bpe-attenuation-levels-db
+      properties:
+        cirrus,amplifier-bpe-attenuation-levels-microvolt: false
+        cirrus,amplifier-bpe-attenuation-levels-microwatt: false
+  - if:
+      properties:
+        cirrus,amplifier-bpe-response-mode:
+          const: 1
+      required:
+        - cirrus,amplifier-bpe-response-mode
+    then:
+      required:
+        - cirrus,amplifier-bpe-attenuation-levels-microvolt
+      properties:
+        cirrus,amplifier-bpe-attenuation-levels-db: false
+        cirrus,amplifier-bpe-attenuation-levels-microwatt: false
+  - if:
+      properties:
+        cirrus,amplifier-bpe-response-mode:
+          const: 2
+      required:
+        - cirrus,amplifier-bpe-response-mode
+    then:
+      required:
+        - cirrus,amplifier-bpe-attenuation-levels-microwatt
+      properties:
+        cirrus,amplifier-bpe-attenuation-levels-db: false
+        cirrus,amplifier-bpe-attenuation-levels-microvolt: false
+
+  - if:
+      required:
+        - cirrus,boost-bpe-enable
+    then:
+      required:
+        - cirrus,boost-bpe-output-operating-mode
+        - cirrus,boost-bpe-output-attack-rate
+        - cirrus,boost-bpe-output-release-rate
+        - cirrus,boost-bpe-battery-limits-microamp
+        - cirrus,boost-bpe-battery-thresholds-microvolt
+        - cirrus,boost-bpe-battery-attack-rates
+        - cirrus,boost-bpe-battery-hold-times-us
+        - cirrus,boost-bpe-battery-release-rates
+    else:
+      properties:
+        cirrus,boost-bpe-output-operating-mode: false
+        cirrus,boost-bpe-output-attack-rate: false
+        cirrus,boost-bpe-output-release-rate: false
+        cirrus,boost-bpe-battery-limits-microamp: false
+        cirrus,boost-bpe-battery-thresholds-microvolt: false
+        cirrus,boost-bpe-battery-attack-rates: false
+        cirrus,boost-bpe-battery-hold-times-us: false
+        cirrus,boost-bpe-battery-release-rates: false
+        cirrus,boost-bpe-inductor-release-mode: false
+        cirrus,boost-bpe-inductor-threshold-microamp: false
+        cirrus,boost-bpe-inductor-threshold-deltas-microamp: false
+        cirrus,boost-bpe-inductor-threshold-hysteresis-microamp: false
+        cirrus,boost-bpe-inductor-delay-hysteresis-us: false
+        cirrus,boost-bpe-inductor-delays-ms: false
+        cirrus,boost-bpe-inductor-attack-rates: false
+        cirrus,boost-bpe-inductor-release-rates: false
+  - if:
+      properties:
+        cirrus,boost-bpe-output-operating-mode:
+          const: 0
+      required:
+        - cirrus,boost-bpe-output-operating-mode
+    then:
+      required:
+        - cirrus,boost-bpe-inductor-release-mode
+        - cirrus,boost-bpe-inductor-threshold-microamp
+        - cirrus,boost-bpe-inductor-threshold-deltas-microamp
+        - cirrus,boost-bpe-inductor-threshold-hysteresis-microamp
+        - cirrus,boost-bpe-inductor-delay-hysteresis-us
+        - cirrus,boost-bpe-inductor-delays-ms
+        - cirrus,boost-bpe-inductor-attack-rates
+        - cirrus,boost-bpe-inductor-release-rates
+    else:
+      properties:
+        cirrus,boost-bpe-inductor-release-mode: false
+        cirrus,boost-bpe-inductor-threshold-microamp: false
+        cirrus,boost-bpe-inductor-threshold-deltas-microamp: false
+        cirrus,boost-bpe-inductor-threshold-hysteresis-microamp: false
+        cirrus,boost-bpe-inductor-delay-hysteresis-us: false
+        cirrus,boost-bpe-inductor-delays-ms: false
+        cirrus,boost-bpe-inductor-attack-rates: false
+        cirrus,boost-bpe-inductor-release-rates: false
 
 properties:
   compatible:
@@ -109,6 +223,166 @@ properties:
       - 0
       - 1
 
+  cirrus,boost-bpe-enable:
+    type: boolean
+    description:
+      Enable the boost converter brownout protection engine (BBPE).
+      Configuration properties are applied before the engine is enabled.
+
+  cirrus,boost-bpe-inductor-release-mode:
+    description:
+      Selects whether the inductor current response releases instantly or
+      through the release counter. Required in combined mode. Use a
+      CS35L45_BST_BPE_IL_RELEASE_MODE_* constant.
+    $ref: /schemas/types.yaml#/definitions/uint32
+    enum: [0, 1]
+
+  cirrus,boost-bpe-output-operating-mode:
+    description:
+      Selects the operating mode for the BBPE output stage. The BBPE can be
+      configured to apply the minimum of the battery voltage and inductor
+      current response or the battery voltage response only. When operating in
+      battery voltage only mode, the inductor response related properties are
+      invalid.
+
+      Required when Boost BPE is enabled. Use a CS35L45_BST_BPE_OUTPUT_MODE_*
+      constant.
+    $ref: /schemas/types.yaml#/definitions/uint32
+    enum: [0, 1]
+
+  cirrus,boost-bpe-output-attack-rate:
+    description:
+      Boost BPE output attack-rate selector. Use a
+      CS35L45_BST_BPE_ATTACK_RATE_* constant.
+    $ref: /schemas/types.yaml#/definitions/uint32
+    minimum: 0
+    maximum: 7
+
+  cirrus,boost-bpe-output-release-rate:
+    description:
+      Boost BPE output release-rate selector. Use a
+      CS35L45_BST_BPE_RELEASE_RATE_* constant.
+    $ref: /schemas/types.yaml#/definitions/uint32
+    minimum: 0
+    maximum: 16
+
+  cirrus,boost-bpe-battery-limits-microamp:
+    description:
+      Boost converter current limits for battery voltage response levels 1
+      through 4, in ascending level order.
+    minItems: 4
+    maxItems: 4
+    items:
+      minimum: 250000
+      maximum: 4625000
+      multipleOf: 62500
+
+  cirrus,boost-bpe-battery-thresholds-microvolt:
+    description:
+      Battery voltage thresholds for battery voltage response levels 0 through
+      3, in ascending level order.
+    minItems: 4
+    maxItems: 4
+    items:
+      minimum: 2300000
+      maximum: 4500000
+      multipleOf: 10000
+
+  cirrus,boost-bpe-battery-attack-rates:
+    description:
+      Attack-rate selectors for battery voltage response levels 1 through 3, in
+      ascending level order. Use CS35L45_BST_BPE_ATTACK_RATE_* constants.
+    $ref: /schemas/types.yaml#/definitions/uint32-array
+    minItems: 3
+    maxItems: 3
+    items:
+      minimum: 0
+      maximum: 7
+
+  cirrus,boost-bpe-battery-hold-times-us:
+    description:
+      Hold times for battery voltage response levels 0 through 3, in ascending
+      level order. Infinite hold is not supported.
+    minItems: 4
+    maxItems: 4
+    items:
+      enum: [0, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000]
+
+  cirrus,boost-bpe-battery-release-rates:
+    description:
+      Release-rate selectors for voltage response levels 0 through 3, in
+      ascending level order. Use CS35L45_BST_BPE_RELEASE_RATE_* constants.
+    $ref: /schemas/types.yaml#/definitions/uint32-array
+    minItems: 4
+    maxItems: 4
+    items:
+      minimum: 0
+      maximum: 16
+
+  cirrus,boost-bpe-inductor-threshold-microamp:
+    description:
+      Inductor current response level 1 threshold.
+    minimum: 250000
+    maximum: 4000000
+    multipleOf: 62500
+
+  cirrus,boost-bpe-inductor-threshold-deltas-microamp:
+    description:
+      Inductor current response threshold deltas 1 and 2, in that order.
+    minItems: 2
+    maxItems: 2
+    items:
+      minimum: 0
+      maximum: 3750000
+      multipleOf: 62500
+
+  cirrus,boost-bpe-inductor-threshold-hysteresis-microamp:
+    description:
+      Release threshold hysteresis for inductor current response levels 1
+      and 2.
+    minimum: 0
+    maximum: 968750
+    multipleOf: 31250
+
+  cirrus,boost-bpe-inductor-delay-hysteresis-us:
+    description:
+      Release delay hysteresis for inductor current response levels 1 and 2.
+    minimum: 0
+    maximum: 992
+    multipleOf: 32
+
+  cirrus,boost-bpe-inductor-delays-ms:
+    description:
+      Entry delays for inductor current response levels 1 and 2, in ascending
+      level order.
+    minItems: 2
+    maxItems: 2
+    items:
+      minimum: 0
+      maximum: 100
+
+  cirrus,boost-bpe-inductor-attack-rates:
+    description:
+      Attack-rate selectors for inductor current response levels 1 and 2, in
+      ascending level order. Use CS35L45_BST_BPE_ATTACK_RATE_* constants.
+    $ref: /schemas/types.yaml#/definitions/uint32-array
+    minItems: 2
+    maxItems: 2
+    items:
+      minimum: 0
+      maximum: 7
+
+  cirrus,boost-bpe-inductor-release-rates:
+    description:
+      Release-rate selectors for inductor current response levels 1 and 2, in
+      ascending level order. Use CS35L45_BST_BPE_RELEASE_RATE_* constants.
+    $ref: /schemas/types.yaml#/definitions/uint32-array
+    minItems: 2
+    maxItems: 2
+    items:
+      minimum: 0
+      maximum: 16
+
   cirrus,ldpm-group2-vmon-select:
     type: boolean
     description:
@@ -122,6 +396,103 @@ properties:
       When in a valid group 2 level dependent power management (LDPM) state
       the current monitor (IMON) circuit is put into a low power operational
       state.
+
+  cirrus,amplifier-bpe-enable:
+    type: boolean
+    description: Enable the amplifier brownout prevention engine (BPE).
+
+  cirrus,amplifier-bpe-response-mode:
+    description:
+      Amplifier BPE attack and release response mode. This property
+      determines the ABPE attenuation natural units.
+      0 = logarithmic
+      1 = linear voltage
+      2 = linear power
+    $ref: /schemas/types.yaml#/definitions/uint32
+    enum: [0, 1, 2]
+
+  cirrus,amplifier-bpe-thresholds-microvolt:
+    description:
+      Amplifier BPE response battery voltage thresholds for levels L3, L2,
+      L1, L0, in that order. Each level can be set independently.
+    minItems: 4
+    maxItems: 4
+    items:
+      minimum: 2300000
+      maximum: 4500000
+      multipleOf: 10000
+
+  cirrus,amplifier-bpe-attenuation-levels-db:
+    description:
+      Amplifier BPE logarithmic audio output attenuation for levels L3, L2,
+      L1, L0, in whole dB steps. Half dB hardware settings are not
+      supported.
+    minItems: 4
+    maxItems: 4
+    items:
+      minimum: 0
+      maximum: 15
+
+  cirrus,amplifier-bpe-attenuation-levels-microvolt:
+    description: |
+      Amplifier BPE linear voltage audio output attenuation for levels L3,
+      L2, L1, L0.
+    minItems: 4
+    maxItems: 4
+    items:
+      minimum: 187500
+      maximum: 1000000
+      multipleOf: 31250
+
+  cirrus,amplifier-bpe-attenuation-levels-microwatt:
+    description: |
+      Amplifier BPE linear power audio output attenuation for levels L3,
+      L2, L1, L0.
+    $ref: /schemas/types.yaml#/definitions/uint32-array
+    minItems: 4
+    maxItems: 4
+    items:
+      minimum: 31250
+      maximum: 1000000
+      multipleOf: 31250
+
+  cirrus,amplifier-bpe-attack-rates:
+    description: |
+      Amplifier BPE attack rate register codes for levels L3, L2, L1, L0.
+      Code 0 is instantaneous; codes 1 through 8 select progressively
+      slower rates. The physical rate depends on the response mode.
+
+      See section 7.21.9 of the datasheet for a detailed description.
+    $ref: /schemas/types.yaml#/definitions/uint32-array
+    minItems: 4
+    maxItems: 4
+    items:
+      minimum: 0
+      maximum: 8
+
+  cirrus,amplifier-bpe-hold-times-us:
+    description: |
+      Amplifier BPE hold times for levels L3, L2, L1, L0. Infinite hold is
+      unsupported.
+    minItems: 4
+    maxItems: 4
+    items:
+      enum: [0, 250, 500, 1000, 5000, 10000, 25000, 50000,
+             100000, 250000, 500000, 1000000, 2500000, 5000000, 10000000]
+
+  cirrus,amplifier-bpe-release-rates:
+    description: |
+      Amplifier BPE release rate register codes for levels L3, L2, L1, L0.
+      Code 0 is instantaneous; codes 1 through 14 select progressively
+      slower rates. The physical rate depends on the response mode.
+
+      See section 7.21.11 of the datasheet for a detailed description.
+    $ref: /schemas/types.yaml#/definitions/uint32-array
+    minItems: 4
+    maxItems: 4
+    items:
+      minimum: 0
+      maximum: 14
 
 patternProperties:
   "^cirrus,gpio-ctrl[1-3]$":
@@ -251,6 +622,50 @@ examples:
             cirrus,ldpm-group2-delay-ms = <1000>;
             cirrus,ldpm-group2-vmon-select;
             cirrus,ldpm-group2-imon-select;
+            cirrus,amplifier-bpe-enable;
+            cirrus,amplifier-bpe-response-mode = <0>;
+            cirrus,amplifier-bpe-thresholds-microvolt =
+                <3200000 3000000 2800000 2600000>;
+            cirrus,amplifier-bpe-attenuation-levels-db = <3 6 9 12>;
+            cirrus,amplifier-bpe-attack-rates = <6 6 6 6>;
+            cirrus,amplifier-bpe-hold-times-us = <500 500 500 500>;
+            cirrus,amplifier-bpe-release-rates = <5 5 5 5>;
+            cirrus,boost-bpe-enable;
+            cirrus,boost-bpe-inductor-release-mode =
+              <CS35L45_BST_BPE_IL_RELEASE_MODE_COUNTER>;
+            cirrus,boost-bpe-output-operating-mode =
+              <CS35L45_BST_BPE_OUTPUT_MODE_BOTH>;
+            cirrus,boost-bpe-output-attack-rate =
+              <CS35L45_BST_BPE_ATTACK_RATE_31P25MA_PER_US>;
+            cirrus,boost-bpe-output-release-rate =
+              <CS35L45_BST_BPE_RELEASE_RATE_3P90625MA_PER_US>;
+            cirrus,boost-bpe-battery-limits-microamp =
+              <1000000 1500000 2000000 2500000>;
+            cirrus,boost-bpe-battery-thresholds-microvolt =
+              <4000000 3600000 3200000 2800000>;
+            cirrus,boost-bpe-battery-attack-rates =
+              <CS35L45_BST_BPE_ATTACK_RATE_INSTANT
+              CS35L45_BST_BPE_ATTACK_RATE_125MA_PER_US
+              CS35L45_BST_BPE_ATTACK_RATE_31P25MA_PER_US>;
+            cirrus,boost-bpe-battery-hold-times-us = <0 5 10 25>;
+            cirrus,boost-bpe-battery-release-rates =
+              <CS35L45_BST_BPE_RELEASE_RATE_INSTANT
+              CS35L45_BST_BPE_RELEASE_RATE_62P5MA_PER_US
+              CS35L45_BST_BPE_RELEASE_RATE_31P25MA_PER_US
+              CS35L45_BST_BPE_RELEASE_RATE_15P625MA_PER_US>;
+            cirrus,boost-bpe-inductor-threshold-microamp = <3000000>;
+            cirrus,boost-bpe-inductor-threshold-deltas-microamp =
+              <250000 500000>;
+            cirrus,boost-bpe-inductor-threshold-hysteresis-microamp =
+              <125000>;
+            cirrus,boost-bpe-inductor-delay-hysteresis-us = <64>;
+            cirrus,boost-bpe-inductor-delays-ms = <12 4>;
+            cirrus,boost-bpe-inductor-attack-rates =
+              <CS35L45_BST_BPE_ATTACK_RATE_INSTANT
+              CS35L45_BST_BPE_ATTACK_RATE_125MA_PER_US>;
+            cirrus,boost-bpe-inductor-release-rates =
+              <CS35L45_BST_BPE_RELEASE_RATE_INSTANT
+              CS35L45_BST_BPE_RELEASE_RATE_62P5MA_PER_US>;
             cirrus,gpio-ctrl1 {
                 gpio-ctrl = <0x2>;
             };
