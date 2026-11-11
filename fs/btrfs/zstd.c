@@ -80,6 +80,11 @@ struct zstd_workspace_manager {
 	spinlock_t lock;
 	struct list_head lru_list;
 	struct list_head idle_ws[ZSTD_BTRFS_MAX_LEVEL];
+	/*
+	 * The max level workspace preallocated at init time, which is never put
+	 * into the lru list, thus never reclaimed, to guarantee forward progress.
+	 */
+	struct workspace *hidden_ws;
 	unsigned long active_map;
 	wait_queue_head_t wait;
 	struct timer_list timer;
@@ -191,15 +196,20 @@ int zstd_alloc_workspace_manager(struct btrfs_fs_info *fs_info)
 	INIT_LIST_HEAD(&zwsm->lru_list);
 	for (int i = 0; i < ZSTD_BTRFS_MAX_LEVEL; i++)
 		INIT_LIST_HEAD(&zwsm->idle_ws[i]);
-	fs_info->compr_wsm[BTRFS_COMPRESS_ZSTD] = zwsm;
 
+	/*
+	 * Preallocate the hidden max level workspace, it is never reclaimed and
+	 * guarantees forward progress in the worst case.
+	 */
 	ws = zstd_alloc_workspace(fs_info, ZSTD_BTRFS_MAX_LEVEL);
 	if (IS_ERR(ws)) {
-		btrfs_warn(fs_info, "cannot preallocate zstd compression workspace");
-	} else {
-		set_bit(ZSTD_BTRFS_MAX_LEVEL - 1, &zwsm->active_map);
-		list_add(ws, &zwsm->idle_ws[ZSTD_BTRFS_MAX_LEVEL - 1]);
+		kfree(zwsm);
+		return PTR_ERR(ws);
 	}
+	set_bit(ZSTD_BTRFS_MAX_LEVEL - 1, &zwsm->active_map);
+	list_add(ws, &zwsm->idle_ws[ZSTD_BTRFS_MAX_LEVEL - 1]);
+	zwsm->hidden_ws = list_to_workspace(ws);
+	fs_info->compr_wsm[BTRFS_COMPRESS_ZSTD] = zwsm;
 	return 0;
 }
 
@@ -255,7 +265,7 @@ static struct list_head *zstd_find_workspace(struct btrfs_fs_info *fs_info, int 
 			/* keep its place if it's a lower level using this */
 			workspace->req_level = level;
 			if (clip_level(level) == workspace->level)
-				list_del(&workspace->lru_list);
+				list_del_init(&workspace->lru_list);
 			if (list_empty(&zwsm->idle_ws[i]))
 				clear_bit(i, &zwsm->active_map);
 			spin_unlock_bh(&zwsm->lock);
@@ -340,19 +350,17 @@ void zstd_put_workspace(struct btrfs_fs_info *fs_info, struct list_head *ws)
 	ASSERT(zwsm);
 	spin_lock_bh(&zwsm->lock);
 
-	/* A node is only taken off the lru if we are the corresponding level */
-	if (clip_level(workspace->req_level) == workspace->level) {
-		/* Hide a max level workspace from reclaim */
-		if (workspace->level == ZSTD_BTRFS_MAX_LEVEL - 1 &&
-		    list_empty(&zwsm->idle_ws[ZSTD_BTRFS_MAX_LEVEL - 1])) {
-			INIT_LIST_HEAD(&workspace->lru_list);
-		} else {
-			workspace->last_used = jiffies;
-			list_add(&workspace->lru_list, &zwsm->lru_list);
-			if (!timer_pending(&zwsm->timer))
-				mod_timer(&zwsm->timer,
-					  jiffies + ZSTD_BTRFS_RECLAIM_JIFFIES);
-		}
+	/*
+	 * A node is only taken off the lru if we are the corresponding level.
+	 * The hidden workspace is never on the lru.
+	 */
+	if (workspace != zwsm->hidden_ws &&
+	    clip_level(workspace->req_level) == workspace->level) {
+		workspace->last_used = jiffies;
+		list_add(&workspace->lru_list, &zwsm->lru_list);
+		if (!timer_pending(&zwsm->timer))
+			mod_timer(&zwsm->timer,
+				  jiffies + ZSTD_BTRFS_RECLAIM_JIFFIES);
 	}
 
 	set_bit(workspace->level, &zwsm->active_map);
