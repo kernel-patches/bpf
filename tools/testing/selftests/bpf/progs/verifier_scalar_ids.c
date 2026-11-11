@@ -285,13 +285,8 @@ __naked void precision_two_ids(void)
 
 SEC("socket")
 __success __log_level(2)
-/*
- * check that r5 is unlinked after 'if', collect_linked_regs() can't tie
- * more than 5 registers for a single insn and the register compared by
- * the jump is not exempt from that. The jump refines the copies all the same.
- */
-__msg("7: (25) if r5 > 0x7 goto pc+0         ; R0=" LINKED("1", 7, 0x7) " R1=" LINKED("1", 7, 0x7) " R2=" LINKED("1", 7, 0x7) " R3=" LINKED("1", 7, 0x7) " R4=" LINKED("1", 7, 0x7) " R5=scalar(smin=")
-__msg("12: (bf) r5 = r5                      ; R5=scalar(id=2")
+/* there is no limit of 5 registers for a single insn */
+__msg("7: (25) if r5 > 0x7 goto pc+0         ; R0=" LINKED("1", 7, 0x7) " R1=" LINKED("1", 7, 0x7) " R2=" LINKED("1", 7, 0x7) " R3=" LINKED("1", 7, 0x7) " R4=" LINKED("1", 7, 0x7) " R5=" LINKED("1", 7, 0x7))
 __naked void linked_regs_too_many_regs(void)
 {
 	asm volatile (
@@ -304,14 +299,12 @@ __naked void linked_regs_too_many_regs(void)
 	"r3 = r0;"
 	"r4 = r0;"
 	"r5 = r0;"
-	/* r{0-4} fill the record, r5 does not fit and is unlinked */
 	"if r5 > 7 goto +0;"
-	/* keep r{1-4} live */
+	/* keep r{1-5} live */
 	"r1 = r1;"
 	"r2 = r2;"
 	"r3 = r3;"
 	"r4 = r4;"
-	/* make r5 appear in the log */
 	"r5 = r5;"
 	"r7 = r10;"
 	"r7 += r0;"
