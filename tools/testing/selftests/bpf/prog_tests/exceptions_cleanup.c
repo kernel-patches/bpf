@@ -214,6 +214,19 @@ static void run_suite(const char *prefix)
 	/* One call that takes the object on one path and NULL on the other. */
 	RUN_AS(throw_xchg_maybe, "throw_xchg_maybe_kept", THROWN, 1, "0", .param = 0);
 	RUN_AS(throw_xchg_maybe, "throw_xchg_maybe_given", THROWN, 1, "", .param = 1);
+	/* What the frames keep in their own stack at the throw is released from there. */
+	THROW(throw_spilled, 1, "0");
+	RUN_AS(throw_spilled_caller, "throw_spilled_caller_throw", THROWN, 1, "0", .param = 0);
+	RUN_AS(throw_spilled_caller, "throw_spilled_caller_return", 0, 1, "", .param = 1);
+	RUN_AS(throw_spilled_node, "throw_spilled_node_popped", THROWN, 1, "0", .param = 0);
+	RUN_AS(throw_spilled_node, "throw_spilled_node_empty", THROWN, 0, "", .param = 1);
+	RUN_AS(throw_spilled_some_paths, "throw_spilled_some_paths_reg", THROWN, 1, "0", .param = 0);
+	RUN_AS(throw_spilled_some_paths, "throw_spilled_some_paths_stack", THROWN, 1, "0",
+	       .param = 1);
+	/* The sections the frames are in, counted where the paths to a throw differ. */
+	THROW(throw_callee_left_rcu, 1, "0");
+	RUN_AS(throw_rcu_some_paths, "throw_rcu_some_paths_in", THROWN, 0, "s", .param = 1);
+	RUN_AS(throw_rcu_some_paths, "throw_rcu_some_paths_out", THROWN, 0, "", .param = 0);
 	/* A file and the reader of its dynptr, which goes first. */
 	snprintf(name, sizeof(name), "%sthrow_file_dynptr_held", prefix);
 	if (test__start_subtest(name))
@@ -249,7 +262,10 @@ void serial_test_exceptions_cleanup(void)
 	return;
 #endif
 	run_suite("");
-	/* Constant blinding rewrites the program, with the insns that keep the slots in it. */
+	/*
+	 * Constant blinding rewrites the program, with the insns that keep the
+	 * slots in it, and moves the calls the sites are at.
+	 */
 	if (sysctl_set_or_fail(harden, old, "2"))
 		return;
 	run_suite("harden_");

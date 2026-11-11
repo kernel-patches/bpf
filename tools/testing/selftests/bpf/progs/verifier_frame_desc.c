@@ -137,6 +137,246 @@ struct {
 	__uint(max_entries, 4096);
 } ringbuf SEC(".maps");
 
+/*
+ * The socket is released before the throw: no frame is unwound while it
+ * holds the socket, so nothing keeps track of it.
+ */
+SEC("tc")
+__description("frame_desc: a socket released before the throw has no slot")
+__arch_x86_64 __arch_arm64
+__success __log_level(5)
+__msg("frame descriptors: slots 0 insns 0 sites 0 classes 1")
+int sock_released_before_throw(struct __sk_buff *skb)
+{
+	struct bpf_sock_tuple tuple = {};
+	struct bpf_sock *sk;
+
+	sk = bpf_sk_lookup_tcp(skb, &tuple, sizeof(tuple.ipv4), -1, 0);
+	if (!sk)
+		return 0;
+	bpf_sk_release(sk);
+	bpf_throw(0);
+	return 1;
+}
+
+/*
+ * The record is spilled on every path to the throw: the descriptor of the
+ * throw names the slot of the program's stack, and the frame has no hidden
+ * slot.
+ */
+SEC("tc")
+__description("frame_desc: a record spilled at the throw has no slot")
+__arch_x86_64 __arch_arm64
+__success __log_level(5)
+__msg("frame descriptors: slots 0 insns 0 sites 1 classes 1")
+__naked int record_spilled_at_throw(void)
+{
+	asm volatile (
+	"r1 = %[ringbuf] ll;"
+	"r2 = 8;"
+	"r3 = 0;"
+	"call %[bpf_ringbuf_reserve];"
+	"if r0 == 0 goto 1f;"
+	"*(u64 *)(r10 - 8) = r0;"
+	"r1 = 0xeB9F;"
+	"call %[bpf_throw];"
+	"1: r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(ringbuf),
+	  __imm(bpf_ringbuf_reserve),
+	  __imm(bpf_throw)
+	: __clobber_all);
+}
+
+/*
+ * The record is spilled in the caller of the subprog that throws: the
+ * descriptor is that of the call, the site the caller is unwound at.
+ */
+SEC("tc")
+__description("frame_desc: a record spilled in the caller of a throw has no slot")
+__arch_x86_64 __arch_arm64
+__success __log_level(5)
+__msg("frame descriptors: slots 0 insns 0 sites 1 classes 1")
+__naked int record_spilled_in_caller(void)
+{
+	asm volatile (
+	"r1 = %[ringbuf] ll;"
+	"r2 = 8;"
+	"r3 = 0;"
+	"call %[bpf_ringbuf_reserve];"
+	"if r0 == 0 goto 1f;"
+	"*(u64 *)(r10 - 8) = r0;"
+	"call throw_unconditionally;"
+	"1: r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(ringbuf),
+	  __imm(bpf_ringbuf_reserve)
+	: __clobber_all);
+}
+
+/*
+ * The record is spilled on one path to the throw and in R6 on the other, and
+ * in no other register: the visits of the throw do not agree on where it is,
+ * so it is kept in a slot.
+ */
+SEC("tc")
+__description("frame_desc: a record spilled on one path to the throw keeps its slot")
+__arch_x86_64 __arch_arm64
+__success __log_level(5)
+__msg("frame descriptors: slots 1 insns 2 sites 0 classes 1")
+__naked int record_spilled_on_one_path(void)
+{
+	asm volatile (
+	"r7 = *(u32 *)(r1 + %[len]);"
+	"r1 = %[ringbuf] ll;"
+	"r2 = 8;"
+	"r3 = 0;"
+	"call %[bpf_ringbuf_reserve];"
+	"if r0 == 0 goto 2f;"
+	"r6 = r0;"
+	"r0 = 0;"
+	"if r7 == 0 goto 1f;"
+	"*(u64 *)(r10 - 8) = r6;"
+	"r6 = 0;"
+	"1: r1 = 0xeB9F;"
+	"call %[bpf_throw];"
+	"2: r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(ringbuf),
+	  __imm(bpf_ringbuf_reserve),
+	  __imm(bpf_throw),
+	  [len]"i"(offsetof(struct __sk_buff, len))
+	: __clobber_all);
+}
+
+/* May throw, and returns when it does not. */
+__used static __noinline int throw_maybe(void)
+{
+	if (bpf_get_prandom_u32() & 1)
+		bpf_throw(0);
+	return 0;
+}
+
+/*
+ * The record is spilled in a slot nothing reads again, and two paths join
+ * between the spill and the call of a subprog that may throw. The verifier
+ * forgets what dead slots hold where paths join, so the call reads every slot
+ * of the stack: the spill is still known at the call, and its descriptor
+ * names the slot.
+ */
+SEC("tc")
+__description("frame_desc: a spill nothing reads again is found at a call that may throw")
+__arch_x86_64 __arch_arm64
+__success __log_level(5) __flag(BPF_F_TEST_STATE_FREQ)
+__msg("frame descriptors: slots 0 insns 0 sites 1 classes 1")
+__naked int dead_spill_at_call(void)
+{
+	asm volatile (
+	"r8 = *(u32 *)(r1 + %[len]);"
+	"r1 = %[ringbuf] ll;"
+	"r2 = 8;"
+	"r3 = 0;"
+	"call %[bpf_ringbuf_reserve];"
+	"if r0 == 0 goto 2f;"
+	"r6 = r0;"
+	"*(u64 *)(r10 - 8) = r6;"
+	"if r8 == 0 goto 1f;"
+	"r7 = 0;"
+	"1: call throw_maybe;"
+	"r1 = r6;"
+	"r2 = 0;"
+	"call %[bpf_ringbuf_discard];"
+	"2: r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(ringbuf),
+	  __imm(bpf_ringbuf_reserve),
+	  __imm(bpf_ringbuf_discard),
+	  [len]"i"(offsetof(struct __sk_buff, len))
+	: __clobber_all);
+}
+
+/* An iterator is on the stack wherever it is held: the descriptor of the throw names it. */
+SEC("tc")
+__description("frame_desc: an iterator at the throw has no slot")
+__arch_x86_64 __arch_arm64
+__success __log_level(5)
+__msg("frame descriptors: slots 0 insns 0 sites 1 classes 1")
+int iter_at_throw(struct __sk_buff *skb)
+{
+	struct bpf_iter_num it;
+	int *v;
+
+	bpf_iter_num_new(&it, 0, 10);
+	while ((v = bpf_iter_num_next(&it))) {
+		if (*v == 3 && skb->len > 100)
+			bpf_throw(0);
+	}
+	bpf_iter_num_destroy(&it);
+	return 0;
+}
+
+/*
+ * BTF FUNC records are not generated for kfuncs that only inline assembly
+ * refers to, and libbpf needs them to link the programs.
+ */
+void __kfunc_btf_root(void)
+{
+	bpf_rcu_read_lock();
+	bpf_rcu_read_unlock();
+}
+
+/*
+ * Every path to the throw is in one RCU read section: the descriptor of the
+ * throw says so, and the frame does not count its sections.
+ */
+SEC("tc")
+__description("frame_desc: a section at the throw has no count")
+__arch_x86_64 __arch_arm64
+__success __log_level(5)
+__msg("frame descriptors: slots 0 insns 0 sites 1 classes 1")
+__naked int rcu_at_throw(void)
+{
+	asm volatile (
+	"call %[bpf_rcu_read_lock];"
+	"r1 = 0xeB9F;"
+	"call %[bpf_throw];"
+	"exit;"
+	:
+	: __imm(bpf_rcu_read_lock),
+	  __imm(bpf_throw)
+	: __clobber_all);
+}
+
+/*
+ * One path to the throw is in an RCU read section and the other is not: the
+ * frame counts its sections in a slot, which starts at zero and which the
+ * lock adds one to.
+ */
+SEC("tc")
+__description("frame_desc: a section on one path to the throw is counted")
+__arch_x86_64 __arch_arm64
+__success __log_level(5)
+__msg("frame descriptors: slots 1 insns 4 sites 0 classes 1")
+__naked int rcu_on_one_path(void)
+{
+	asm volatile (
+	"r6 = *(u32 *)(r1 + %[len]);"
+	"if r6 == 0 goto 1f;"
+	"call %[bpf_rcu_read_lock];"
+	"1: r1 = 0xeB9F;"
+	"call %[bpf_throw];"
+	"exit;"
+	:
+	: __imm(bpf_rcu_read_lock),
+	  __imm(bpf_throw),
+	  [len]"i"(offsetof(struct __sk_buff, len))
+	: __clobber_all);
+}
+
 /* Discards the record in R1. */
 __naked __noinline __used
 static long discard_record(void)

@@ -1197,4 +1197,206 @@ int throw_xchg_maybe(struct __sk_buff *ctx)
 	return 0;
 }
 
+/* ---- what the frames keep in their own stack at the throw ---- */
+
+/*
+ * The record is spilled when the throw is reached, on every path to it: the
+ * unwinder takes it from the slot of the program's stack that the descriptor
+ * of the throw names, and the frame keeps no slot for it.
+ */
+SEC("tc")
+__naked int throw_spilled(void)
+{
+	asm volatile (
+	"r1 = %[ringbuf] ll;"
+	"r2 = 8;"
+	"r3 = 0;"
+	"call %[bpf_ringbuf_reserve];"
+	"if r0 == 0 goto 1f;"
+	"*(u64 *)(r10 - 8) = r0;"
+	"r1 = %[acquired] ll;"
+	"*(u64 *)(r1 + 0) = r0;"
+	"r2 = 1;"
+	"r1 = %[acquired_cnt] ll;"
+	"*(u32 *)(r1 + 0) = r2;"
+	"r1 = 0xeB9F;"
+	"call %[bpf_throw];"
+	"1: r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(ringbuf),
+	  __imm_addr(acquired),
+	  __imm_addr(acquired_cnt),
+	  __imm(bpf_ringbuf_reserve),
+	  __imm(bpf_throw)
+	: __clobber_all);
+}
+
+/* Throws when the test says so. */
+__used static __noinline int throw_if_param(void)
+{
+	if (!param)
+		bpf_throw(0xeB9F);
+	return 0;
+}
+
+/*
+ * The record is spilled in the caller of the subprog that throws: the
+ * unwinder takes it from the caller's stack, where the descriptor of the
+ * call says it is. When the callee returns the caller discards it.
+ */
+SEC("tc")
+__naked int throw_spilled_caller(void)
+{
+	asm volatile (
+	"r1 = %[ringbuf] ll;"
+	"r2 = 8;"
+	"r3 = 0;"
+	"call %[bpf_ringbuf_reserve];"
+	"if r0 == 0 goto 1f;"
+	"*(u64 *)(r10 - 8) = r0;"
+	"r1 = %[acquired] ll;"
+	"*(u64 *)(r1 + 0) = r0;"
+	"r2 = 1;"
+	"r1 = %[acquired_cnt] ll;"
+	"*(u32 *)(r1 + 0) = r2;"
+	"call throw_if_param;"
+	"r1 = *(u64 *)(r10 - 8);"
+	"r2 = 0;"
+	"call %[bpf_ringbuf_discard];"
+	"1: r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(ringbuf),
+	  __imm_addr(acquired),
+	  __imm_addr(acquired_cnt),
+	  __imm(bpf_ringbuf_reserve),
+	  __imm(bpf_ringbuf_discard)
+	: __clobber_all);
+}
+
+/*
+ * The node that was popped is spilled, a pointer 8 bytes into its object or
+ * NULL when the list was empty: the unwinder releases the object the spilled
+ * pointer is in, and nothing when the slot holds NULL.
+ */
+SEC("tc")
+__naked int throw_spilled_node(void)
+{
+	asm volatile (
+	"r1 = %[param] ll;"
+	"r1 = *(u32 *)(r1 + 0);"
+	"if r1 != 0 goto 1f;"
+	"call push_one;"
+	"1: r1 = %[pop_lock] ll;"
+	"call %[bpf_spin_lock];"
+	"r1 = %[pop_head] ll;"
+	"call %[bpf_list_pop_front];"
+	"*(u64 *)(r10 - 8) = r0;"
+	"r1 = %[pop_lock] ll;"
+	"call %[bpf_spin_unlock];"
+	"r1 = 0xeB9F;"
+	"call %[bpf_throw];"
+	"exit;"
+	:
+	: __imm_addr(param),
+	  __imm_addr(pop_lock),
+	  __imm_addr(pop_head),
+	  __imm(bpf_spin_lock),
+	  __imm(bpf_spin_unlock),
+	  __imm(bpf_list_pop_front),
+	  __imm(bpf_throw)
+	: __clobber_all);
+}
+
+/*
+ * The record is spilled on one path to the throw and in R6 on the other, and
+ * in no other register: the paths do not agree on where it is, so the frame
+ * keeps it in a slot, and it is released once on either path.
+ */
+SEC("tc")
+__naked int throw_spilled_some_paths(void)
+{
+	asm volatile (
+	"r1 = %[ringbuf] ll;"
+	"r2 = 8;"
+	"r3 = 0;"
+	"call %[bpf_ringbuf_reserve];"
+	"if r0 == 0 goto 2f;"
+	"r6 = r0;"
+	"r1 = %[acquired] ll;"
+	"*(u64 *)(r1 + 0) = r0;"
+	"r2 = 1;"
+	"r1 = %[acquired_cnt] ll;"
+	"*(u32 *)(r1 + 0) = r2;"
+	"r0 = 0;"
+	"r1 = %[param] ll;"
+	"r1 = *(u32 *)(r1 + 0);"
+	"if r1 == 0 goto 1f;"
+	"*(u64 *)(r10 - 8) = r6;"
+	"r6 = 0;"
+	"1: r1 = 0xeB9F;"
+	"call %[bpf_throw];"
+	"2: r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(ringbuf),
+	  __imm_addr(acquired),
+	  __imm_addr(acquired_cnt),
+	  __imm_addr(param),
+	  __imm(bpf_ringbuf_reserve),
+	  __imm(bpf_throw)
+	: __clobber_all);
+}
+
+/* Leaves the RCU read section of its caller and throws. */
+static __noinline int rcu_unlock_and_throw(void)
+{
+	bpf_rcu_read_unlock();
+	bpf_throw(0xeB9F);
+	return 0;
+}
+
+/*
+ * The callee leaves the section its caller entered and throws: the caller is
+ * in one section at the call, the callee in one less than it was called in,
+ * and no section is left to leave.
+ */
+SEC("tc")
+int throw_callee_left_rcu(struct __sk_buff *ctx)
+{
+	struct foo *f;
+
+	f = bpf_obj_new(typeof(*f));
+	if (!f)
+		return 1;
+	mark_acquired(f);
+	bpf_rcu_read_lock();
+	rcu_unlock_and_throw();
+	bpf_obj_drop(f);
+	return 0;
+}
+
+/*
+ * The section is entered on one path to the throw only: the frame counts its
+ * sections in a slot, and the unwinder leaves as many as it counted.
+ */
+SEC("tc")
+__naked int throw_rcu_some_paths(void)
+{
+	asm volatile (
+	"r6 = %[param] ll;"
+	"r6 = *(u32 *)(r6 + 0);"
+	"if r6 == 0 goto 1f;"
+	"call %[bpf_rcu_read_lock];"
+	"1: r1 = 0xeB9F;"
+	"call %[bpf_throw];"
+	"exit;"
+	:
+	: __imm_addr(param),
+	  __imm(bpf_rcu_read_lock),
+	  __imm(bpf_throw)
+	: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";
