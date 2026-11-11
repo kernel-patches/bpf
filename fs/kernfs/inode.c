@@ -269,6 +269,9 @@ static int kernfs_inode_test(struct inode *inode, void *data)
  * while the inode is inserted and __kernfs_remove() always finds it to
  * clear its i_nlink.  @inode is consumed.
  *
+ * The caller allocates @inode before taking kernfs_rwsem, because the
+ * allocation can block in reclaim and hold up other users of the lock.
+ *
  * Returns the inode now attached to @kn, which is @inode unless one was
  * already hashed for it (e.g. by a file handle decode), or NULL if @kn
  * is no longer active.
