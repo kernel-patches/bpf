@@ -36,6 +36,7 @@ use core::{
 mod cap;
 mod id;
 mod io;
+mod iov;
 mod irq;
 
 pub use self::cap::{

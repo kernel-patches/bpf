@@ -41,6 +41,17 @@ __rust_helper u32 rust_helper_pci_ext_cap_next(u32 header)
 }
 
 #ifndef CONFIG_PCI_IOV
+__rust_helper int rust_helper_pci_enable_sriov(struct pci_dev *pdev,
+					       int nr_virtfn)
+{
+	return pci_enable_sriov(pdev, nr_virtfn);
+}
+
+__rust_helper void rust_helper_pci_disable_sriov(struct pci_dev *pdev)
+{
+	pci_disable_sriov(pdev);
+}
+
 __rust_helper unsigned int
 rust_helper_pci_sriov_get_totalvfs(struct pci_dev *pdev)
 {
