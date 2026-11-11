@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0+
 /*
- * PTP hardware clock support for the internal PHY of RTL8127A
+ * PTP hardware clock and timestamping support for the internal PHY of
+ * RTL8127A
  */
 
 #include <linux/bitfield.h>
@@ -9,7 +10,9 @@
 #include <linux/math64.h>
 #include <linux/netdevice.h>
 #include <linux/phy.h>
+#include <linux/ptp_classify.h>
 #include <linux/ptp_clock_kernel.h>
+#include <linux/skbuff.h>
 #include <linux/timekeeping.h>
 
 #include "realtek.h"
@@ -28,8 +31,19 @@
 #define RTL8127A_PTP_CLK_CFG		0xe410
 #define  RTL8127A_PTP_CLK_CFG_EXEC	BIT(0)
 #define  RTL8127A_PTP_CLK_CFG_MODE	GENMASK(3, 1)
-/* Time registers */
+#define RTL8127A_PTP_TRX_TS_STA		0xe430
+#define  RTL8127A_PTP_TRX_TS_RD		BIT(0)
+#define  RTL8127A_PTP_TRX_TS_SEL_RX	BIT(1)
+#define  RTL8127A_PTP_TRX_TS_MSGTYPE	GENMASK(3, 2)
+#define  RTL8127A_PTP_TRX_TS_EXEC	BIT(4)
+#define  RTL8127A_PTP_TX_PDLYRSP_RDY	BIT(12)
+#define  RTL8127A_PTP_TX_PDLYREQ_RDY	BIT(13)
+#define  RTL8127A_PTP_TX_DLYREQ_RDY	BIT(14)
+#define  RTL8127A_PTP_TX_SYNC_RDY	BIT(15)
+#define  RTL8127A_PTP_TX_RDY		GENMASK(15, 12)
+/* Time registers, CFG_TIME for the clock, TRX_TS_TIME for packets */
 #define RTL8127A_PTP_CFG_TIME		0xe412
+#define RTL8127A_PTP_TRX_TS_TIME	0xe446
 #define  RTL8127A_PTP_NS_LO		0x0
 #define  RTL8127A_PTP_NS_HI		0x2
 #define  RTL8127A_PTP_S_LO		0x4
@@ -41,6 +55,7 @@
 #define  RTL8127A_PTP_RATE_HI_MASK	GENMASK(21, 16)
 
 #define RTL8127A_PTP_MAX_ADJ		488281
+#define RTL8127A_PTP_TX_TIMEOUT		(15 * HZ)
 
 /* RTL8127A_PTP_CLK_CFG clock adjust modes */
 enum rtl8127a_ptp_clkadj_mode {
@@ -51,11 +66,31 @@ enum rtl8127a_ptp_clkadj_mode {
 	RTL8127A_PTP_RATE_WRITE		= 14,
 };
 
+/* ptp->state bits */
+enum rtl8127a_ptp_state {
+	RTL8127A_PTP_TX_IN_PROGRESS,
+};
+
+struct rtl8127a_ptp_skb_cb {
+	u8 msgtype;
+};
+
+#define RTL8127A_PTP_SKB_CB(skb) \
+	((struct rtl8127a_ptp_skb_cb *)(skb)->cb)
+
 struct rtl8127a_ptp {
 	struct phy_device *phydev;
+	struct mii_timestamper mii_ts;
 	struct ptp_clock_info info;
 	struct ptp_clock *clock;
 	struct mutex lock;	/* serializes PTP register access sequences */
+	enum hwtstamp_tx_types tx_type;
+	enum hwtstamp_rx_filters rx_filter;
+	bool rx_enabled;
+	struct sk_buff_head rx_queue;
+	struct sk_buff *tx_skb;
+	unsigned long tx_start;
+	unsigned long state;
 };
 
 static int rtl8127a_ptp_read(struct rtl8127a_ptp *ptp, u16 reg)
@@ -169,6 +204,64 @@ static int rtl8127a_ptp_write_time(struct rtl8127a_ptp *ptp,
 	}
 
 	return 0;
+}
+
+/* Latch the RX or TX timestamp of the given message type into the
+ * RTL8127A_PTP_TRX_TS_TIME registers.
+ */
+static int rtl8127a_ptp_trx_ts_cmd(struct rtl8127a_ptp *ptp, u16 cmd)
+{
+	int ret;
+
+	ret = rtl8127a_ptp_modify(ptp, RTL8127A_PTP_TRX_TS_STA,
+				  RTL8127A_PTP_TRX_TS_SEL_RX |
+				  RTL8127A_PTP_TRX_TS_MSGTYPE,
+				  RTL8127A_PTP_TRX_TS_RD | cmd);
+	if (ret)
+		return ret;
+
+	ret = rtl8127a_ptp_poll(ptp, RTL8127A_PTP_TRX_TS_STA,
+				RTL8127A_PTP_TRX_TS_RD, false);
+
+	return ret < 0 ? ret : 0;
+}
+
+static int rtl8127a_ptp_egress_time(struct rtl8127a_ptp *ptp,
+				    struct timespec64 *ts)
+{
+	u8 msgtype;
+	int val;
+	int ret;
+
+	val = rtl8127a_ptp_poll(ptp, RTL8127A_PTP_TRX_TS_STA,
+				RTL8127A_PTP_TX_RDY, true);
+	if (val < 0)
+		val = 0;
+
+	switch (val & RTL8127A_PTP_TX_RDY) {
+	case RTL8127A_PTP_TX_PDLYRSP_RDY:
+		msgtype = PTP_MSGTYPE_PDELAY_RESP;
+		break;
+	case RTL8127A_PTP_TX_PDLYREQ_RDY:
+		msgtype = PTP_MSGTYPE_PDELAY_REQ;
+		break;
+	case RTL8127A_PTP_TX_DLYREQ_RDY:
+		msgtype = PTP_MSGTYPE_DELAY_REQ;
+		break;
+	case RTL8127A_PTP_TX_SYNC_RDY:
+	default:
+		msgtype = PTP_MSGTYPE_SYNC;
+		break;
+	}
+
+	ret = rtl8127a_ptp_trx_ts_cmd(ptp,
+				      FIELD_PREP(RTL8127A_PTP_TRX_TS_MSGTYPE,
+						 msgtype) |
+				      RTL8127A_PTP_TRX_TS_EXEC);
+	if (ret)
+		return ret;
+
+	return rtl8127a_ptp_read_time(ptp, RTL8127A_PTP_TRX_TS_TIME, ts);
 }
 
 static int rtl8127a_ptp_hwtstamp_enable(struct rtl8127a_ptp *ptp, bool enable)
@@ -306,6 +399,101 @@ static int rtl8127a_ptp_settime64(struct ptp_clock_info *info,
 	return rtl8127a_ptp_settime(ptp, ts);
 }
 
+static void rtl8127a_ptp_tx_complete(struct rtl8127a_ptp *ptp,
+				     struct skb_shared_hwtstamps *hwts)
+{
+	struct sk_buff *skb = ptp->tx_skb;
+
+	ptp->tx_skb = NULL;
+	clear_bit_unlock(RTL8127A_PTP_TX_IN_PROGRESS, &ptp->state);
+
+	if (hwts)
+		skb_complete_tx_timestamp(skb, hwts);
+	else
+		kfree_skb(skb);
+}
+
+/* Returns true if no TX timestamp is pending anymore */
+static bool rtl8127a_ptp_tx_tstamp(struct rtl8127a_ptp *ptp)
+{
+	struct skb_shared_hwtstamps hwts = {};
+	struct timespec64 ts;
+	int ret;
+
+	/* Pairs with smp_store_release() in rtl8127a_ptp_txtstamp() */
+	if (!smp_load_acquire(&ptp->tx_skb))
+		return true;
+
+	mutex_lock(&ptp->lock);
+
+	if (time_is_before_jiffies(ptp->tx_start + RTL8127A_PTP_TX_TIMEOUT)) {
+		rtl8127a_ptp_write(ptp, RTL8127A_PTP_INSR,
+				   RTL8127A_PTP_INT_TX_TS);
+		mutex_unlock(&ptp->lock);
+
+		rtl8127a_ptp_tx_complete(ptp, NULL);
+		return true;
+	}
+
+	ret = rtl8127a_ptp_read(ptp, RTL8127A_PTP_INSR);
+	if (ret < 0 || !(ret & RTL8127A_PTP_INT_TX_TS)) {
+		mutex_unlock(&ptp->lock);
+		return false;
+	}
+
+	ret = rtl8127a_ptp_write(ptp, RTL8127A_PTP_INSR,
+				 RTL8127A_PTP_INT_TX_TS);
+	if (!ret)
+		ret = rtl8127a_ptp_egress_time(ptp, &ts);
+
+	mutex_unlock(&ptp->lock);
+
+	if (ret) {
+		rtl8127a_ptp_tx_complete(ptp, NULL);
+		return true;
+	}
+
+	hwts.hwtstamp = timespec64_to_ktime(ts);
+	rtl8127a_ptp_tx_complete(ptp, &hwts);
+
+	return true;
+}
+
+static void rtl8127a_ptp_rx_tstamp(struct rtl8127a_ptp *ptp,
+				   struct sk_buff *skb)
+{
+	u8 msgtype = RTL8127A_PTP_SKB_CB(skb)->msgtype;
+	struct timespec64 ts;
+	int ret;
+
+	mutex_lock(&ptp->lock);
+	ret = rtl8127a_ptp_trx_ts_cmd(ptp, RTL8127A_PTP_TRX_TS_SEL_RX |
+					   FIELD_PREP(RTL8127A_PTP_TRX_TS_MSGTYPE,
+						      msgtype) |
+					   RTL8127A_PTP_TRX_TS_EXEC);
+	if (!ret)
+		ret = rtl8127a_ptp_read_time(ptp, RTL8127A_PTP_TRX_TS_TIME,
+					     &ts);
+	mutex_unlock(&ptp->lock);
+
+	if (!ret)
+		skb_hwtstamps(skb)->hwtstamp = timespec64_to_ktime(ts);
+
+	netif_rx(skb);
+}
+
+static long rtl8127a_ptp_do_aux_work(struct ptp_clock_info *info)
+{
+	struct rtl8127a_ptp *ptp = container_of(info, struct rtl8127a_ptp, info);
+	struct sk_buff *skb;
+
+	while ((skb = skb_dequeue(&ptp->rx_queue)))
+		rtl8127a_ptp_rx_tstamp(ptp, skb);
+
+	/* Keep polling until the pending TX timestamp is available */
+	return rtl8127a_ptp_tx_tstamp(ptp) ? -1 : 0;
+}
+
 static const struct ptp_clock_info rtl8127a_ptp_info = {
 	.owner		= THIS_MODULE,
 	.name		= "RTL8127A PHC",
@@ -314,7 +502,145 @@ static const struct ptp_clock_info rtl8127a_ptp_info = {
 	.adjtime	= rtl8127a_ptp_adjtime,
 	.gettimex64	= rtl8127a_ptp_gettimex64,
 	.settime64	= rtl8127a_ptp_settime64,
+	.do_aux_work	= rtl8127a_ptp_do_aux_work,
 };
+
+static void rtl8127a_ptp_txtstamp(struct mii_timestamper *mii_ts,
+				  struct sk_buff *skb, int type)
+{
+	struct rtl8127a_ptp *ptp = container_of(mii_ts, struct rtl8127a_ptp,
+						mii_ts);
+
+	/* Only one TX timestamp can be pending at a time */
+	if (READ_ONCE(ptp->tx_type) != HWTSTAMP_TX_ON ||
+	    test_and_set_bit_lock(RTL8127A_PTP_TX_IN_PROGRESS, &ptp->state)) {
+		kfree_skb(skb);
+		return;
+	}
+
+	skb_shinfo(skb)->tx_flags |= SKBTX_IN_PROGRESS;
+	ptp->tx_start = jiffies;
+	/* Publish tx_start before tx_skb to the aux worker */
+	smp_store_release(&ptp->tx_skb, skb);
+	ptp_schedule_worker(ptp->clock, 0);
+}
+
+static bool rtl8127a_ptp_rxtstamp(struct mii_timestamper *mii_ts,
+				  struct sk_buff *skb, int type)
+{
+	struct rtl8127a_ptp *ptp = container_of(mii_ts, struct rtl8127a_ptp,
+						mii_ts);
+	struct ptp_header *hdr;
+	u8 msgtype;
+
+	if (!READ_ONCE(ptp->rx_enabled))
+		return false;
+
+	hdr = ptp_parse_header(skb, type);
+	if (!hdr)
+		return false;
+
+	/* Only event messages are timestamped by the hardware */
+	msgtype = ptp_get_msgtype(hdr, type);
+	if (msgtype > PTP_MSGTYPE_PDELAY_RESP)
+		return false;
+
+	RTL8127A_PTP_SKB_CB(skb)->msgtype = msgtype;
+	skb_queue_tail(&ptp->rx_queue, skb);
+	ptp_schedule_worker(ptp->clock, 0);
+
+	return true;
+}
+
+static int rtl8127a_ptp_hwtstamp_get(struct mii_timestamper *mii_ts,
+				     struct kernel_hwtstamp_config *config)
+{
+	struct rtl8127a_ptp *ptp = container_of(mii_ts, struct rtl8127a_ptp,
+						mii_ts);
+
+	config->tx_type = ptp->tx_type;
+	config->rx_filter = ptp->rx_filter;
+
+	return 0;
+}
+
+static int rtl8127a_ptp_hwtstamp_set(struct mii_timestamper *mii_ts,
+				     struct kernel_hwtstamp_config *config,
+				     struct netlink_ext_ack *extack)
+{
+	struct rtl8127a_ptp *ptp = container_of(mii_ts, struct rtl8127a_ptp,
+						mii_ts);
+	bool enable = false;
+	bool rx_enabled;
+	int ret = 0;
+
+	if (config->flags)
+		return -EINVAL;
+
+	switch (config->tx_type) {
+	case HWTSTAMP_TX_ON:
+		enable = true;
+		break;
+	case HWTSTAMP_TX_OFF:
+		break;
+	default:
+		return -ERANGE;
+	}
+
+	switch (config->rx_filter) {
+	case HWTSTAMP_FILTER_NONE:
+		rx_enabled = false;
+		break;
+	case HWTSTAMP_FILTER_PTP_V2_EVENT:
+	case HWTSTAMP_FILTER_PTP_V2_L2_EVENT:
+	case HWTSTAMP_FILTER_PTP_V2_L4_EVENT:
+	case HWTSTAMP_FILTER_PTP_V2_SYNC:
+	case HWTSTAMP_FILTER_PTP_V2_L2_SYNC:
+	case HWTSTAMP_FILTER_PTP_V2_L4_SYNC:
+	case HWTSTAMP_FILTER_PTP_V2_DELAY_REQ:
+	case HWTSTAMP_FILTER_PTP_V2_L2_DELAY_REQ:
+	case HWTSTAMP_FILTER_PTP_V2_L4_DELAY_REQ:
+		config->rx_filter = HWTSTAMP_FILTER_PTP_V2_EVENT;
+		rx_enabled = true;
+		enable = true;
+		break;
+	default:
+		return -ERANGE;
+	}
+
+	if (ptp->tx_type != config->tx_type ||
+	    ptp->rx_filter != config->rx_filter) {
+		WRITE_ONCE(ptp->tx_type, config->tx_type);
+		ptp->rx_filter = config->rx_filter;
+		ret = rtl8127a_ptp_hwtstamp_enable(ptp, enable);
+	}
+	WRITE_ONCE(ptp->rx_enabled, rx_enabled);
+
+	return ret;
+}
+
+static int rtl8127a_ptp_ts_info(struct mii_timestamper *mii_ts,
+				struct kernel_ethtool_ts_info *info)
+{
+	struct rtl8127a_ptp *ptp = container_of(mii_ts, struct rtl8127a_ptp,
+						mii_ts);
+
+	info->so_timestamping = SOF_TIMESTAMPING_TX_SOFTWARE |
+				SOF_TIMESTAMPING_TX_HARDWARE |
+				SOF_TIMESTAMPING_RX_HARDWARE |
+				SOF_TIMESTAMPING_RAW_HARDWARE;
+	info->phc_index = ptp_clock_index(ptp->clock);
+	info->tx_types = BIT(HWTSTAMP_TX_OFF) | BIT(HWTSTAMP_TX_ON);
+	info->rx_filters = BIT(HWTSTAMP_FILTER_NONE) |
+			   BIT(HWTSTAMP_FILTER_PTP_V2_EVENT) |
+			   BIT(HWTSTAMP_FILTER_PTP_V2_L4_EVENT) |
+			   BIT(HWTSTAMP_FILTER_PTP_V2_SYNC) |
+			   BIT(HWTSTAMP_FILTER_PTP_V2_L4_SYNC) |
+			   BIT(HWTSTAMP_FILTER_PTP_V2_DELAY_REQ) |
+			   BIT(HWTSTAMP_FILTER_PTP_V2_L4_DELAY_REQ);
+
+	return 0;
+}
 
 int rtl8127a_ptp_config_init(struct phy_device *phydev)
 {
@@ -348,6 +674,9 @@ int rtl8127a_ptp_probe(struct phy_device *phydev)
 
 	ptp->phydev = phydev;
 	ptp->info = rtl8127a_ptp_info;
+	ptp->tx_type = HWTSTAMP_TX_OFF;
+	ptp->rx_filter = HWTSTAMP_FILTER_NONE;
+	skb_queue_head_init(&ptp->rx_queue);
 
 	ret = rtl8127a_ptp_hwtstamp_enable(ptp, false);
 	if (ret)
@@ -357,7 +686,15 @@ int rtl8127a_ptp_probe(struct phy_device *phydev)
 	if (IS_ERR(ptp->clock))
 		return PTR_ERR(ptp->clock);
 
+	ptp->mii_ts.rxtstamp = rtl8127a_ptp_rxtstamp;
+	ptp->mii_ts.txtstamp = rtl8127a_ptp_txtstamp;
+	ptp->mii_ts.hwtstamp_set = rtl8127a_ptp_hwtstamp_set;
+	ptp->mii_ts.hwtstamp_get = rtl8127a_ptp_hwtstamp_get;
+	ptp->mii_ts.ts_info = rtl8127a_ptp_ts_info;
+
 	phydev->priv = ptp;
+	phydev->mii_ts = &ptp->mii_ts;
+	phydev->default_timestamp = true;
 
 	return 0;
 }
@@ -369,6 +706,14 @@ void rtl8127a_ptp_remove(struct phy_device *phydev)
 	if (!ptp)
 		return;
 
+	phydev->mii_ts = NULL;
+	phydev->default_timestamp = false;
+
 	rtl8127a_ptp_hwtstamp_enable(ptp, false);
+	/* Also stops the aux worker */
 	ptp_clock_unregister(ptp->clock);
+
+	if (ptp->tx_skb)
+		rtl8127a_ptp_tx_complete(ptp, NULL);
+	skb_queue_purge(&ptp->rx_queue);
 }
