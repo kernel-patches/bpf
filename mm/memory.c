@@ -5642,6 +5642,22 @@ oom:
 }
 
 /*
+ * A page cache folio that is not uptodate holds data that was never read in
+ * or cleared, and mapping it leaks stale memory to userspace.
+ */
+static bool file_folio_not_uptodate(struct folio *folio)
+{
+	VM_WARN_ON_ONCE_FOLIO(folio_test_anon(folio), folio);
+	if (folio_test_uptodate(folio))
+		return false;
+	/*
+	 * ->fault() can also return driver memory that is not in the page
+	 * cache. It never gets PG_uptodate.
+	 */
+	return folio->mapping;
+}
+
+/*
  * Either the VMA lock or the mmap_lock must have been held on entry
  * (see FAULT_FLAG_VMA_LOCK) and may have been released depending on
  * flags and vma->vm_ops->fault() return value.
@@ -5700,6 +5716,13 @@ static vm_fault_t __do_fault(struct vm_fault *vmf)
 	else
 		VM_BUG_ON_PAGE(!folio_test_locked(folio), vmf->page);
 
+	if (WARN_ON_ONCE(file_folio_not_uptodate(folio))) {
+		folio_unlock(folio);
+		folio_put(folio);
+		vmf->page = NULL;
+		return VM_FAULT_SIGBUS;
+	}
+
 	return ret;
 }
 
@@ -5744,6 +5767,9 @@ vm_fault_t do_set_pmd(struct vm_fault *vmf, struct folio *folio, struct page *pa
 	if (!is_pmd_order(folio_order(folio)))
 		return ret;
 	page = &folio->page;
+
+	if (WARN_ON_ONCE(file_folio_not_uptodate(folio)))
+		return VM_FAULT_SIGBUS;
 
 	/*
 	 * Just backoff if any subpage of a THP is corrupted otherwise
