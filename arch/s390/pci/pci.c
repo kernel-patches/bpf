@@ -164,8 +164,38 @@ int zpci_unregister_ioat(struct zpci_dev *zdev, u8 dmaas)
 	return cc;
 }
 
+int zpci_fmb_request_on(struct zpci_dev *zdev)
+{
+	int rc;
+
+	lockdep_assert_held(&zdev->fmb_lock);
+
+	rc = zpci_fmb_enable(zdev);
+	if (rc)
+		return rc;
+
+	zdev->statistics_on = 1;
+	return 0;
+}
+EXPORT_SYMBOL_GPL(zpci_fmb_request_on);
+
+int zpci_fmb_request_off(struct zpci_dev *zdev)
+{
+	int rc;
+
+	lockdep_assert_held(&zdev->fmb_lock);
+
+	rc = zpci_fmb_disable(zdev);
+	if (rc)
+		return rc;
+
+	zdev->statistics_on = 0;
+	return 0;
+}
+EXPORT_SYMBOL_GPL(zpci_fmb_request_off);
+
 /* Modify PCI: Set PCI function measurement parameters */
-int zpci_fmb_enable_device(struct zpci_dev *zdev)
+int zpci_fmb_enable(struct zpci_dev *zdev)
 {
 	u64 req = ZPCI_CREATE_REQ(zdev->fh, 0, ZPCI_MOD_FC_SET_MEASURE);
 	struct zpci_iommu_ctrs *ctrs;
@@ -207,7 +237,7 @@ int zpci_fmb_enable_device(struct zpci_dev *zdev)
 }
 
 /* Modify PCI: Disable PCI function measurement */
-int zpci_fmb_disable_device(struct zpci_dev *zdev)
+int zpci_fmb_disable(struct zpci_dev *zdev)
 {
 	u64 req = ZPCI_CREATE_REQ(zdev->fh, 0, ZPCI_MOD_FC_SET_MEASURE);
 	struct zpci_fib fib = {0};
@@ -644,7 +674,8 @@ int pcibios_enable_device(struct pci_dev *pdev, int mask)
 
 	zpci_debug_init_device(zdev, dev_name(&pdev->dev));
 	mutex_lock(&zdev->fmb_lock);
-	zpci_fmb_enable_device(zdev);
+	if (zdev->statistics_on)
+		zpci_fmb_enable(zdev);
 	mutex_unlock(&zdev->fmb_lock);
 
 	return pci_enable_resources(pdev, mask);
@@ -655,7 +686,8 @@ void pcibios_disable_device(struct pci_dev *pdev)
 	struct zpci_dev *zdev = to_zpci(pdev);
 
 	mutex_lock(&zdev->fmb_lock);
-	zpci_fmb_disable_device(zdev);
+	if (zdev->statistics_on)
+		zpci_fmb_disable(zdev);
 	mutex_unlock(&zdev->fmb_lock);
 	zpci_debug_exit_device(zdev);
 }
@@ -737,8 +769,14 @@ int zpci_reenable_device(struct zpci_dev *zdev)
 	}
 
 	rc = zpci_iommu_register_ioat(zdev, &status);
-	if (rc)
+	if (rc) {
 		zpci_disable_device(zdev);
+		return rc;
+	}
+
+	guard(mutex)(&zdev->fmb_lock);
+	if (zdev->statistics_on)
+		zpci_fmb_enable(zdev);
 
 	return rc;
 }
@@ -846,6 +884,12 @@ struct zpci_dev *zpci_create_device(u32 fid, u32 fh, enum zpci_state state)
 	if (rc)
 		goto error;
 	zdev->state =  state;
+
+	/*
+	 * Measurement is on by default for new functions, this will be honored
+	 * by pcibios_enable_device().
+	 */
+	zdev->statistics_on = 1;
 
 	mutex_init(&zdev->state_lock);
 	mutex_init(&zdev->fmb_lock);
