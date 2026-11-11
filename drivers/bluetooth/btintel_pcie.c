@@ -657,6 +657,8 @@ static inline void btintel_pcie_dump_debug_registers(struct hci_dev *hdev)
 	hci_recv_diag(hdev, skb);
 }
 
+static inline bool btintel_pcie_in_d3(struct btintel_pcie_data *data);
+
 static int btintel_pcie_send_sync(struct btintel_pcie_data *data,
 				  struct sk_buff *skb, u32 pkt_type, u16 opcode)
 {
@@ -927,6 +929,87 @@ static void btintel_pcie_release_mac_access(struct btintel_pcie_data *data)
 	}
 }
 
+/* btintel_pcie_yoyo_send_hcmds - Send all HCI commands configured for a timepoint */
+static void btintel_pcie_yoyo_send_hcmds(struct btintel_pcie_data *data,
+					 enum btintel_pcie_dbg_timepoint tp)
+{
+	struct btintel_pcie_yoyo_hcmd *hcmd;
+	struct sk_buff *skb;
+	u8 plen;
+	u16 opcode;
+
+	if (!data)
+		return;
+
+	/* Held across __hci_cmd_sync() so cleanup cannot free entries in use */
+	mutex_lock(&data->yoyo.lock);
+	if (!data->yoyo.enabled || !data->hdev) {
+		mutex_unlock(&data->yoyo.lock);
+		return;
+	}
+
+	list_for_each_entry(hcmd, &data->yoyo.hcmd_list, list) {
+		long err;
+
+		if (hcmd->time_point != tp)
+			continue;
+
+		/* Stop if device state changed or driver is shutting down */
+		if (test_bit(BTINTEL_PCIE_CORE_HALTED, &data->flags) ||
+		    test_bit(BTINTEL_PCIE_RECOVERY_IN_PROGRESS, &data->flags) ||
+		    btintel_pcie_in_d3(data) ||
+		    hci_dev_test_flag(data->hdev, HCI_UNREGISTER))
+			break;
+
+		if (hcmd->cmd_len < 3) {
+			bt_dev_warn(data->hdev, "YoYo: hci command too short (%u bytes)",
+				    hcmd->cmd_len);
+			continue;
+		}
+
+		opcode = get_unaligned_le16(hcmd->cmd_data);
+		plen = hcmd->cmd_data[2];
+
+		if (plen != hcmd->cmd_len - 3) {
+			bt_dev_warn(data->hdev,
+				    "YoYo: hci command 0x%04x plen %u does not match tlv payload %u",
+				    opcode, plen, hcmd->cmd_len - 3);
+			continue;
+		}
+
+		bt_dev_dbg(data->hdev, "YoYo: sending hci command, opcode=0x%04x len=%u at tp=%u",
+			   opcode, plen, tp);
+
+		skb = __hci_cmd_sync(data->hdev, opcode, plen,
+				     hcmd->cmd_data + 3,
+				     HCI_CMD_TIMEOUT);
+		/* HCI Err 0x11 corresponds to errno -95 (UNSUPPORTED)
+		 * HCI Err 0x12 corresponds to errno -22 (INVAL)
+		 * HCI Err 0x0C corresponds to errno -16 (EBUSY/CMD DISALLOWED)
+		 */
+		if (IS_ERR(skb)) {
+			err = PTR_ERR(skb);
+
+			/* Command completed with Command Status (0x0F) */
+			if (err == -ENODATA)
+				continue;
+
+			bt_dev_warn(data->hdev, "YoYo: hci command 0x%04x failed: %ld",
+				    opcode, err);
+			/* Stop on timeout or device loss instead of stacking more timeouts */
+			if (err == -ETIMEDOUT || err == -ETIME ||
+			    err == -ENODEV || err == -EHOSTDOWN || err == -EINTR)
+				break;
+		} else {
+			bt_dev_dbg(data->hdev, "YoYo: hci command 0x%04x completed successfully",
+				   opcode);
+			kfree_skb(skb);
+		}
+	}
+
+	mutex_unlock(&data->yoyo.lock);
+}
+
 static void
 btintel_pcie_apply_yoyo_config_sets(struct btintel_pcie_data *data,
 				    u32 time_point)
@@ -1046,10 +1129,15 @@ static void btintel_pcie_yoyo_handle_timepoint(struct btintel_pcie_data *data,
 	if (!data || !data->yoyo.enabled)
 		return;
 
+	BT_DBG("YoYo: Handling timepoint %u", tp);
+
 	if (tp <= BTINTEL_PCIE_TP_INVALID || tp >= BTINTEL_PCIE_TP_MAX_NUM) {
 		BT_WARN("YoYo: invalid timepoint %u", tp);
 		return;
 	}
+
+	/* PRE-DUMP phase: send HCMDs and apply config sets */
+	btintel_pcie_yoyo_send_hcmds(data, tp);
 
 	btintel_pcie_apply_yoyo_config_sets(data, tp);
 }
@@ -4268,6 +4356,10 @@ static int btintel_pcie_setup(struct hci_dev *hdev)
 		set_bit(BTINTEL_PCIE_HW_RFKILL_STATE_CHECK, &data->flags);
 		btintel_pcie_unmask_hw_rfkill(data);
 		btintel_delayed_hw_rfkill(data, true);
+
+		/* Once per setup, before the HCI init reset, as on Windows */
+		btintel_pcie_yoyo_handle_timepoint(data,
+						   BTINTEL_PCIE_TP_AFTER_ALIVE);
 	}
 	return err;
 }

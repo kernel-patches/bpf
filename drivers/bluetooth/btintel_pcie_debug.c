@@ -640,6 +640,68 @@ out:
 	return 0;
 }
 
+static int btintel_pcie_yoyo_parse_hcmd(struct btintel_pcie_yoyo_ctx *ctx,
+					const struct btintel_pcie_tlv_hcmd *tlv,
+					u32 len)
+{
+	u32 fixed_size = sizeof(*tlv) - sizeof(struct btintel_pcie_tlv_hdr);
+	u32 cmd_len, time_point, period_msec, domain, version;
+	struct btintel_pcie_yoyo_hcmd *hcmd;
+
+	if (len < fixed_size) {
+		BT_WARN("YoYo: hci cmd tlv is too short or Invalid");
+		return -EBADMSG;
+	}
+
+	domain = get_unaligned_le32(&tlv->dbg_hdr.domain);
+	version = get_unaligned_le32(&tlv->dbg_hdr.tlv_data_version);
+	if (domain != BTINTEL_PCIE_DOMAIN_BT ||
+	    version != BTINTEL_PCIE_HCMD_TLV_VERSION) {
+		BT_WARN("YoYo: unsupported hcmd domain/version (%u/%u), skipping",
+			domain, version);
+		return 0;
+	}
+
+	time_point = get_unaligned_le32(&tlv->time_point);
+	if (time_point != BTINTEL_PCIE_TP_AFTER_ALIVE) {
+		BT_WARN("YoYo: skipping hcmd for timepoint %u", time_point);
+		return 0;
+	}
+
+	cmd_len = len - fixed_size;
+	if (cmd_len < 3 || (cmd_len - 3) > 255) {
+		BT_WARN("YoYo: invalid HCMD payload length (%u)", cmd_len);
+		return 0;
+	}
+
+	period_msec = get_unaligned_le32(&tlv->period_msec);
+	if (period_msec) {
+		BT_WARN("YoYo: periodic hcmd not supported (period=%u ms), skipping",
+			period_msec);
+		return 0;
+	}
+
+	hcmd = kzalloc_obj(*hcmd, GFP_KERNEL);
+	if (!hcmd)
+		return -ENOMEM;
+
+	hcmd->time_point = time_point;
+	hcmd->period_msec = period_msec;
+	hcmd->cmd_len = cmd_len;
+
+	hcmd->cmd_data = kmemdup(tlv->cmd_data, cmd_len, GFP_KERNEL);
+	if (!hcmd->cmd_data) {
+		kfree(hcmd);
+		return -ENOMEM;
+	}
+
+	BT_DBG("YoYo: hcmd tp=%u period=%u cmd_len=%u",
+	       hcmd->time_point, hcmd->period_msec, hcmd->cmd_len);
+
+	list_add_tail(&hcmd->list, &ctx->hcmd_list);
+	return 0;
+}
+
 /*
  * Parse the optional YoYo firmware TLV stream and validate each record.
  * This is the entry point for the runtime debug configuration payload.
@@ -686,8 +748,10 @@ static int btintel_pcie_yoyo_parse_tlv_buffer(struct btintel_pcie_yoyo_ctx *ctx,
 		case BTINTEL_PCIE_TLV_TYPE_DBG_REGION:
 			ret = btintel_pcie_yoyo_parse_region(ctx, (const void *)tlv, len);
 			break;
-		case BTINTEL_PCIE_TLV_TYPE_DBG_TRIGGER:
 		case BTINTEL_PCIE_TLV_TYPE_DBG_HCMD:
+			ret = btintel_pcie_yoyo_parse_hcmd(ctx, (const void *)tlv, len);
+			break;
+		case BTINTEL_PCIE_TLV_TYPE_DBG_TRIGGER:
 		case BTINTEL_PCIE_TLV_TYPE_DBG_PRESET_OVERRIDE:
 			BT_DBG("YoYo: valid tlv type 0x%x len=%u", type, len);
 			break;
@@ -727,6 +791,7 @@ int btintel_pcie_yoyo_init(struct btintel_pcie_yoyo_ctx *ctx)
 		return -EINVAL;
 
 	memset(ctx, 0, sizeof(*ctx));
+	mutex_init(&ctx->lock);
 	INIT_LIST_HEAD(&ctx->region_list);
 	INIT_LIST_HEAD(&ctx->trigger_list);
 	INIT_LIST_HEAD(&ctx->hcmd_list);
@@ -747,10 +812,12 @@ void btintel_pcie_yoyo_cleanup(struct btintel_pcie_yoyo_ctx *ctx)
 {
 	struct btintel_pcie_yoyo_config_set *config_set, *config_tmp;
 	struct btintel_pcie_yoyo_region *region, *region_tmp;
+	struct btintel_pcie_yoyo_hcmd *hcmd, *hcmd_tmp;
 
 	if (!ctx)
 		return;
 
+	mutex_lock(&ctx->lock);
 	ctx->enabled = false;
 	ctx->dbg_info_present = false;
 	ctx->num_buf_allocs = 0;
@@ -770,6 +837,12 @@ void btintel_pcie_yoyo_cleanup(struct btintel_pcie_yoyo_ctx *ctx)
 		kfree(region);
 	}
 
+	list_for_each_entry_safe(hcmd, hcmd_tmp, &ctx->hcmd_list, list) {
+		list_del(&hcmd->list);
+		kfree(hcmd->cmd_data);
+		kfree(hcmd);
+	}
+	mutex_unlock(&ctx->lock);
 }
 EXPORT_SYMBOL_GPL(btintel_pcie_yoyo_cleanup);
 

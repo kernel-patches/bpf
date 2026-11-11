@@ -10,6 +10,7 @@
 #define __BTINTEL_PCIE_DEBUG_H__
 
 #include <linux/list.h>
+#include <linux/mutex.h>
 #include <linux/types.h>
 #include <linux/device.h>
 #include <linux/firmware.h>
@@ -61,6 +62,7 @@ bool btintel_pcie_fatal_err_testmode_active(struct btintel_pcie_data *data);
 #define BTINTEL_PCIE_BUF_ALLOC_TLV_VERSION	1
 #define BTINTEL_PCIE_CONFIG_SET_TLV_VERSION	1
 #define BTINTEL_PCIE_REGION_TLV_VERSION		3
+#define BTINTEL_PCIE_HCMD_TLV_VERSION		1
 
 /* Debug Info TLV */
 #define BTINTEL_PCIE_CONFIG_NAME_LEN		64
@@ -330,6 +332,28 @@ struct btintel_pcie_tlv_region {
 	__le32 addrs[];
 } __packed;
 
+/*
+ * struct btintel_pcie_tlv_hcmd - YoYo HCI command TLV
+ * @hdr: Common TLV type and payload length
+ * @dbg_hdr: Debug TLV version and domain
+ * @time_point: Timepoint at which to send the command
+ * @period_msec: Periodic interval in milliseconds (0 for one-time execution)
+ * @reserved: Command header (cmd_id, group_id, le16 seq_num); written as zero
+ *	      by the tooling and not used by the driver
+ * @cmd_data: Variable-length raw HCI command packet
+ *
+ * Describes an HCI command to dispatch at a specified timepoint. Multi-byte
+ * fields are stored in little-endian format in the packed firmware TLV.
+ */
+struct btintel_pcie_tlv_hcmd {
+	struct btintel_pcie_tlv_hdr hdr;
+	struct btintel_pcie_dbg_hdr dbg_hdr;
+	__le32 time_point;
+	__le32 period_msec;
+	u8     reserved[4];
+	u8     cmd_data[];
+} __packed;
+
 /* Parsed buffer allocation entry in the YoYo context */
 struct btintel_pcie_buf_alloc {
 	u32	alloc_id;
@@ -364,6 +388,15 @@ struct btintel_pcie_yoyo_region {
 	union btintel_pcie_region_conf_params conf;
 };
 
+/* Parsed HCMD entry */
+struct btintel_pcie_yoyo_hcmd {
+	struct list_head	list;
+	u32			time_point;
+	u32			period_msec;
+	u32			cmd_len;
+	u8			*cmd_data;
+};
+
 /*
  * struct btintel_pcie_yoyo_ctx - Runtime state for YoYo debug configuration
  * @enabled: Whether the loaded YoYo configuration passed validation
@@ -375,6 +408,7 @@ struct btintel_pcie_yoyo_region {
  * @buf_alloc: Parsed buffer allocation entries
  * @num_buf_allocs: Number of parsed buffer allocation entries
  * @hdev: Associated HCI device; NULL until successful HCI registration
+ * @lock: Serializes HCI command dispatch against YoYo cleanup
  *
  * Stores the validation state and parsed TLV data for the optional YoYo
  * firmware configuration.
@@ -389,6 +423,8 @@ struct btintel_pcie_yoyo_ctx {
 	struct btintel_pcie_buf_alloc buf_alloc[BTINTEL_PCIE_MAX_BUF_ALLOC];
 	int			 num_buf_allocs;
 	struct hci_dev		 *hdev;
+	/* Serializes HCI command dispatch against YoYo cleanup */
+	struct mutex		 lock;
 };
 
 int  btintel_pcie_yoyo_init(struct btintel_pcie_yoyo_ctx *ctx);
