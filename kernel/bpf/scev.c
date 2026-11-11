@@ -4453,16 +4453,6 @@ static struct bpf_reg_state *spill32_counter(struct scev *scev, struct bpf_func_
 	return scev_reg_for_spill32(st, r);
 }
 
-static struct cnum64 cnum64_zext32(struct cnum32 r32)
-{
-	return cnum64_from_urange(cnum32_umin(r32), cnum32_umax(r32));
-}
-
-static struct cnum64 cnum64_sext32(struct cnum32 r32)
-{
-	return cnum64_from_srange(cnum32_smin(r32), cnum32_smax(r32));
-}
-
 /* Compute the range an induction variable in `reg` spans over the loop. */
 static void linear_bounds(struct bpf_reg_state *reg, u32 max_header_count,
 			  struct linear_coefs *coefs, struct bounds *out)
