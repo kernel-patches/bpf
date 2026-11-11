@@ -1995,6 +1995,39 @@ __naked void bounds_refinement_multiple_overlaps(void *ctx)
 	: __clobber_all);
 }
 
+/*
+ * r0 is x << 32, the low three bits of x are 5. No such x is in [-2, 1], -3 is in [-3, 1].
+ * umin and umax are unbounded for a range that crosses 0.
+ */
+#define RANGE_CROSSES_0(name, smin)		\
+__naked void name(void *ctx)			\
+{						\
+	asm volatile(				\
+	"call %[bpf_ktime_get_ns];"		\
+	"r0 <<= 35;"				\
+	"r1 = 0x500000000 ll;"			\
+	"r0 += r1;"				\
+	"r1 = " #smin " ll;"			\
+	"if r0 s< r1 goto 1f;"			\
+	"r1 = 0x100000000 ll;"			\
+	"if r0 s> r1 goto 1f;"			\
+	"r10 = 0;"				\
+"1:	exit;"					\
+	:					\
+	: __imm(bpf_ktime_get_ns)		\
+	: __clobber_all);			\
+}
+
+SEC("socket")
+__description("dead branch: tnum and a range that crosses 0 don't overlap")
+__success
+RANGE_CROSSES_0(range_crossing_0_no_tnum_overlap, -0x200000000)
+
+SEC("socket")
+__description("tnum overlaps the negative part of a range that crosses 0")
+__failure __msg("frame pointer is read only")
+RANGE_CROSSES_0(range_crossing_0_tnum_overlap_below_0, -0x300000000)
+
 SEC("socket")
 __success
 __naked void signed_unsigned_intersection32_case1(void *ctx)
