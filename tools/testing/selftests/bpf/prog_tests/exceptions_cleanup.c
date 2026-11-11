@@ -232,6 +232,36 @@ static void run_suite(const char *prefix)
 	THROW(throw_reg_caller_saved, 1, "0");
 	RUN_AS(throw_reg_node, "throw_reg_node_popped", THROWN, 1, "0", .param = 0);
 	RUN_AS(throw_reg_node, "throw_reg_node_empty", THROWN, 0, "", .param = 1);
+	/* A callee releases what its caller holds: a throw finds it held, or released. */
+	RUN_AS(throw_callee_releases, "throw_callee_releases_before", THROWN, 1, "0", .param = 1);
+	RUN_AS(throw_callee_releases, "throw_callee_releases_after", THROWN, 1, "", .param = 2);
+	RUN_AS(throw_callee_releases, "throw_callee_releases_return", 0, 1, "", .param = 0);
+	/* A callee that is handed what it releases holds it from the call on. */
+	RUN_AS(throw_callee_consumes, "throw_callee_consumes_before", THROWN, 1, "0", .param = 1);
+	RUN_AS(throw_callee_consumes, "throw_callee_consumes_after", THROWN, 1, "", .param = 2);
+	RUN_AS(throw_callee_consumes, "throw_callee_consumes_return", 0, 1, "", .param = 0);
+	/* the caller keeps it in a slot, which the call empties */
+	RUN_AS(throw_callee_consumes_from_slot, "throw_callee_consumes_from_slot_caller_r6", THROWN,
+	       1, "0", .param = 3);
+	RUN_AS(throw_callee_consumes_from_slot, "throw_callee_consumes_from_slot_caller_r9", THROWN,
+	       1, "0", .param = 11);
+	RUN_AS(throw_callee_consumes_from_slot, "throw_callee_consumes_from_slot_callee_r6", THROWN,
+	       1, "0", .param = 1);
+	RUN_AS(throw_callee_consumes_from_slot, "throw_callee_consumes_from_slot_callee_r9", THROWN,
+	       1, "0", .param = 9);
+	RUN_AS(throw_callee_consumes_from_slot, "throw_callee_consumes_from_slot_after", THROWN,
+	       1, "", .param = 10);
+	RUN_AS(throw_callee_consumes_from_slot, "throw_callee_consumes_from_slot_return", 0,
+	       1, "", .param = 8);
+	/* the callee has it nowhere at its throw and keeps it in a slot of its own */
+	RUN_AS(throw_callee_consumes_slot, "throw_callee_consumes_slot_throw", THROWN, 1, "0",
+	       .param = 1);
+	RUN_AS(throw_callee_consumes_slot, "throw_callee_consumes_slot_return", 0, 1, "",
+	       .param = 0);
+	/* A lock a callee unlocks leaves the slot of the caller in front of the call. */
+	RUN_AS(throw_callee_unlocks, "throw_callee_unlocks_before", THROWN, 1, "0", .param = 1);
+	RUN_AS(throw_callee_unlocks, "throw_callee_unlocks_after", THROWN, 1, "", .param = 2);
+	RUN_AS(throw_callee_unlocks, "throw_callee_unlocks_return", 0, 1, "", .param = 0);
 	/* A file and the reader of its dynptr, which goes first. */
 	snprintf(name, sizeof(name), "%sthrow_file_dynptr_held", prefix);
 	if (test__start_subtest(name))

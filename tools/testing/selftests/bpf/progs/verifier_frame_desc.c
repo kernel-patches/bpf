@@ -547,6 +547,259 @@ static long discard_record(void)
 }
 
 /*
+ * The callee discards the record its caller passes it and keeps in R6. The
+ * throw in front of the call finds the record in the register and the one
+ * after it finds nothing held: the record has no slot, so the call that hands
+ * it to the callee has none to empty.
+ */
+SEC("tc")
+__description("frame_desc: a callee discards what its caller holds without a slot")
+__arch_x86_64 __arch_arm64
+__success __log_level(5)
+__msg("frame descriptors: slots 0 insns 0 sites 1 classes 1")
+__naked int callee_releases_no_slot(void)
+{
+	asm volatile (
+	"r7 = *(u32 *)(r1 + %[len]);"
+	"r1 = %[ringbuf] ll;"
+	"r2 = 8;"
+	"r3 = 0;"
+	"call %[bpf_ringbuf_reserve];"
+	"if r0 == 0 goto 3f;"
+	"r6 = r0;"
+	"r0 = 0;"
+	"if r7 != 1 goto 1f;"
+	"r1 = 0xeB9F;"
+	"call %[bpf_throw];"
+	"1: r1 = r6;"
+	"call discard_record;"
+	"if r7 != 2 goto 2f;"
+	"r1 = 0xeB9F;"
+	"call %[bpf_throw];"
+	"2: r0 = 0;"
+	"3: exit;"
+	:
+	: __imm_addr(ringbuf),
+	  __imm(bpf_ringbuf_reserve),
+	  __imm(bpf_throw),
+	  [len]"i"(offsetof(struct __sk_buff, len))
+	: __clobber_all);
+}
+
+/* A choice the callees below read without a call, which would clobber their argument. */
+__u32 throw_flag;
+
+/*
+ * Keeps the record its caller hands it in R6 and discards it, and may throw
+ * in front of the discard and after it.
+ */
+__used __naked static __noinline int consume_record(void)
+{
+	asm volatile (
+	"r6 = r1;"
+	"r7 = %[throw_flag] ll;"
+	"r7 = *(u32 *)(r7 + 0);"
+	"if r7 != 1 goto 1f;"
+	"r1 = 0xeB9F;"
+	"call %[bpf_throw];"
+	"1: r1 = r6;"
+	"r2 = 0;"
+	"call %[bpf_ringbuf_discard];"
+	"if r7 != 2 goto 2f;"
+	"r1 = 0xeB9F;"
+	"call %[bpf_throw];"
+	"2: r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(throw_flag),
+	  __imm(bpf_ringbuf_discard),
+	  __imm(bpf_throw)
+	: __clobber_all);
+}
+
+/*
+ * The caller hands the record to a callee that discards it and keeps no copy
+ * of it. The record is the callee's from the call on: the throw in front of
+ * the discard finds it in R6 of the callee, the one after it finds nothing,
+ * and no frame keeps a slot.
+ */
+SEC("tc")
+__description("frame_desc: a callee that is handed a record holds it in a register")
+__arch_x86_64 __arch_arm64
+__success __log_level(5)
+__msg("frame descriptors: slots 0 insns 0 sites 1 classes 1")
+__naked int callee_consumes_record(void)
+{
+	asm volatile (
+	"r1 = %[ringbuf] ll;"
+	"r2 = 8;"
+	"r3 = 0;"
+	"call %[bpf_ringbuf_reserve];"
+	"if r0 == 0 goto 1f;"
+	"r1 = r0;"
+	"r0 = 0;"
+	"call consume_record;"
+	"1: r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(ringbuf),
+	  __imm(bpf_ringbuf_reserve)
+	: __clobber_all);
+}
+
+/* Discards the record its caller hands it, or throws with the cookie in its place in R1. */
+__used __naked static __noinline int consume_or_lose_record(void)
+{
+	asm volatile (
+	"r2 = %[throw_flag] ll;"
+	"r2 = *(u32 *)(r2 + 0);"
+	"if r2 != 1 goto 1f;"
+	"r1 = 0xeB9F;"
+	"call %[bpf_throw];"
+	"1: r2 = 0;"
+	"call %[bpf_ringbuf_discard];"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(throw_flag),
+	  __imm(bpf_ringbuf_discard),
+	  __imm(bpf_throw)
+	: __clobber_all);
+}
+
+/*
+ * The callee has the record it is handed nowhere when it throws, so it keeps
+ * it in a slot of its own: its entry stores the argument there, and the
+ * discard clears the slot.
+ */
+SEC("tc")
+__description("frame_desc: a callee that is handed a record keeps it in a slot of its own")
+__arch_x86_64 __arch_arm64
+__success __log_level(5)
+__msg("frame descriptors: slots 1 insns 4 sites 0 classes 1")
+__naked int callee_consumes_record_slot(void)
+{
+	asm volatile (
+	"r1 = %[ringbuf] ll;"
+	"r2 = 8;"
+	"r3 = 0;"
+	"call %[bpf_ringbuf_reserve];"
+	"if r0 == 0 goto 1f;"
+	"r1 = r0;"
+	"r0 = 0;"
+	"call consume_or_lose_record;"
+	"1: r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(ringbuf),
+	  __imm(bpf_ringbuf_reserve)
+	: __clobber_all);
+}
+
+private(B) struct bpf_spin_lock slock;
+
+/* Unlocks the lock its caller took. */
+__used static __noinline int unlock_slock(void)
+{
+	bpf_spin_unlock(&slock);
+	return 0;
+}
+
+/*
+ * The lock of a global variable is at a fixed address, which the descriptor
+ * of the throw gives: it has no slot, so the callee that unlocks it has none
+ * to empty.
+ */
+SEC("tc")
+__description("frame_desc: a callee unlocks the lock its caller holds at a throw")
+__arch_x86_64 __arch_arm64
+__success __log_level(5)
+__msg("frame descriptors: slots 0 insns 0 sites 1 classes 1")
+__naked int callee_unlocks(void)
+{
+	asm volatile (
+	"r6 = *(u32 *)(r1 + %[len]);"
+	"r1 = %[slock] ll;"
+	"call %[bpf_spin_lock];"
+	"if r6 != 1 goto 1f;"
+	"r1 = 0xeB9F;"
+	"call %[bpf_throw];"
+	"1: call unlock_slock;"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(slock),
+	  __imm(bpf_spin_lock),
+	  __imm(bpf_throw),
+	  [len]"i"(offsetof(struct __sk_buff, len))
+	: __clobber_all);
+}
+
+struct lock_value {
+	int data;
+	struct bpf_spin_lock lock;
+};
+
+/* Two elements, so that a lock of one is found through the pointer to it, not at a fixed address. */
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__type(key, int);
+	__type(value, struct lock_value);
+	__uint(max_entries, 2);
+} lock_values SEC(".maps");
+
+/* Unlocks the lock of the value its caller locked. */
+__used static __noinline int unlock_value(struct lock_value *val)
+{
+	bpf_spin_unlock(&val->lock);
+	return 0;
+}
+
+/*
+ * The frame has the pointer to the value nowhere at the throw, so the lock is
+ * in a slot of the caller: stored in front of the lock, empty at the entry,
+ * and emptied in front of the call of the callee that unlocks, which cannot
+ * reach it.
+ */
+SEC("tc")
+__description("frame_desc: the caller empties the slot of a lock its callee unlocks")
+__arch_x86_64 __arch_arm64
+__success __log_level(5)
+__msg("frame descriptors: slots 1 insns 3 sites 0 classes 1")
+__naked int callee_unlocks_slot(void)
+{
+	asm volatile (
+	"r6 = *(u32 *)(r1 + %[len]);"
+	"r1 = 0;"
+	"*(u32 *)(r10 - 4) = r1;"
+	"r1 = %[lock_values] ll;"
+	"r2 = r10;"
+	"r2 += -4;"
+	"call %[bpf_map_lookup_elem];"
+	"if r0 == 0 goto 2f;"
+	"r7 = r0;"
+	"r1 = r7;"
+	"r1 += %[lock_off];"
+	"call %[bpf_spin_lock];"
+	"if r6 != 1 goto 1f;"
+	"r7 = 0;"
+	"r1 = 0xeB9F;"
+	"call %[bpf_throw];"
+	"1: r1 = r7;"
+	"call unlock_value;"
+	"2: r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(lock_values),
+	  __imm(bpf_map_lookup_elem),
+	  __imm(bpf_spin_lock),
+	  __imm(bpf_throw),
+	  [len]"i"(offsetof(struct __sk_buff, len)),
+	  [lock_off]"i"(offsetof(struct lock_value, lock))
+	: __clobber_all);
+}
+
+/*
  * A loop the verifier walks reserves a record at one insn on each of two
  * iterations, the first kept in R7 and the second spilled: the call has one
  * slot in the frame, which cannot hold both records.

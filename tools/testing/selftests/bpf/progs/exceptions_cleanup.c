@@ -1563,4 +1563,285 @@ __naked int throw_reg_node(void)
 	: __clobber_all);
 }
 
+/* ---- a callee that releases what its caller holds ---- */
+
+/* Discards the record of its caller. */
+__used static __noinline int discard_in_callee(void *rec)
+{
+	bpf_ringbuf_discard(rec, 0);
+	return 0;
+}
+
+/*
+ * The callee discards the record its caller passes it. A throw in front of
+ * the call finds the caller holding the record, in R6, and one after the call
+ * finds it holding nothing: no slot keeps the record, so the call that hands
+ * it to the callee has none to empty.
+ */
+SEC("tc")
+__naked int throw_callee_releases(void)
+{
+	asm volatile (
+	"r1 = %[ringbuf] ll;"
+	"r2 = 8;"
+	"r3 = 0;"
+	"call %[bpf_ringbuf_reserve];"
+	"if r0 == 0 goto 3f;"
+	"r6 = r0;"
+	"r1 = %[acquired] ll;"
+	"*(u64 *)(r1 + 0) = r0;"
+	"r2 = 1;"
+	"r1 = %[acquired_cnt] ll;"
+	"*(u32 *)(r1 + 0) = r2;"
+	"r0 = 0;"
+	"r7 = %[param] ll;"
+	"r7 = *(u32 *)(r7 + 0);"
+	"if r7 != 1 goto 1f;"
+	"r1 = 0xeB9F;"
+	"call %[bpf_throw];"
+	"1: r1 = r6;"
+	"call discard_in_callee;"
+	"if r7 != 2 goto 2f;"
+	"r1 = 0xeB9F;"
+	"call %[bpf_throw];"
+	"2: r0 = 0;"
+	"3: exit;"
+	:
+	: __imm_addr(ringbuf),
+	  __imm_addr(acquired),
+	  __imm_addr(acquired_cnt),
+	  __imm_addr(param),
+	  __imm(bpf_ringbuf_reserve),
+	  __imm(bpf_throw)
+	: __clobber_all);
+}
+
+/*
+ * Keeps the record its caller hands it in R6, discards it, and throws in
+ * front of the discard or after it when the low bits of the test's choice
+ * say so.
+ */
+__used __naked static __noinline int consume_in_callee(void)
+{
+	asm volatile (
+	"r6 = r1;"
+	"r7 = %[param] ll;"
+	"r7 = *(u32 *)(r7 + 0);"
+	"r7 &= 7;"
+	"if r7 != 1 goto 1f;"
+	"r1 = 0xeB9F;"
+	"call %[bpf_throw];"
+	"1: r1 = r6;"
+	"r2 = 0;"
+	"call %[bpf_ringbuf_discard];"
+	"if r7 != 2 goto 2f;"
+	"r1 = 0xeB9F;"
+	"call %[bpf_throw];"
+	"2: r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(param),
+	  __imm(bpf_ringbuf_discard),
+	  __imm(bpf_throw)
+	: __clobber_all);
+}
+
+/*
+ * The caller hands the record to the callee that discards it, and keeps no
+ * copy. The record is the callee's from the call on: a throw of the callee in
+ * front of the discard finds it in R6 of the callee, and one after the
+ * discard finds nothing.
+ */
+SEC("tc")
+__naked int throw_callee_consumes(void)
+{
+	asm volatile (
+	"r1 = %[ringbuf] ll;"
+	"r2 = 8;"
+	"r3 = 0;"
+	"call %[bpf_ringbuf_reserve];"
+	"if r0 == 0 goto 1f;"
+	"r1 = %[acquired] ll;"
+	"*(u64 *)(r1 + 0) = r0;"
+	"r2 = 1;"
+	"r1 = %[acquired_cnt] ll;"
+	"*(u32 *)(r1 + 0) = r2;"
+	"r1 = r0;"
+	"r0 = 0;"
+	"call consume_in_callee;"
+	"1: r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(ringbuf),
+	  __imm_addr(acquired),
+	  __imm_addr(acquired_cnt),
+	  __imm(bpf_ringbuf_reserve)
+	: __clobber_all);
+}
+
+/*
+ * The record is in R6 on one path to the throw of the caller and in R9 on the
+ * other, so the caller keeps it in a slot. The call that hands the record to
+ * the callee empties the slot: a throw of the callee in front of its discard
+ * releases the record once, from the callee, and one after it releases
+ * nothing.
+ */
+SEC("tc")
+__naked int throw_callee_consumes_from_slot(void)
+{
+	asm volatile (
+	"r1 = %[ringbuf] ll;"
+	"r2 = 8;"
+	"r3 = 0;"
+	"call %[bpf_ringbuf_reserve];"
+	"if r0 == 0 goto 4f;"
+	"r6 = r0;"
+	"r1 = %[acquired] ll;"
+	"*(u64 *)(r1 + 0) = r0;"
+	"r2 = 1;"
+	"r1 = %[acquired_cnt] ll;"
+	"*(u32 *)(r1 + 0) = r2;"
+	"r0 = 0;"
+	"r9 = 0;"
+	"r8 = %[param] ll;"
+	"r8 = *(u32 *)(r8 + 0);"
+	"r7 = r8;"
+	"r7 &= 8;"
+	"if r7 == 0 goto 1f;"
+	"r9 = r6;"
+	"r6 = 0;"
+	"1: r8 &= 7;"
+	"if r8 != 3 goto 2f;"
+	"r1 = 0xeB9F;"
+	"call %[bpf_throw];"
+	"2: r1 = r6;"
+	"if r1 != 0 goto 3f;"
+	"r1 = r9;"
+	"3: call consume_in_callee;"
+	"4: r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(ringbuf),
+	  __imm_addr(acquired),
+	  __imm_addr(acquired_cnt),
+	  __imm_addr(param),
+	  __imm(bpf_ringbuf_reserve),
+	  __imm(bpf_throw)
+	: __clobber_all);
+}
+
+/*
+ * Discards the record its caller hands it. When it throws instead the record
+ * is in no register: the cookie has taken its place in R1.
+ */
+__used __naked static __noinline int consume_or_lose(void)
+{
+	asm volatile (
+	"r2 = %[param] ll;"
+	"r2 = *(u32 *)(r2 + 0);"
+	"if r2 != 1 goto 1f;"
+	"r1 = 0xeB9F;"
+	"call %[bpf_throw];"
+	"1: r2 = 0;"
+	"call %[bpf_ringbuf_discard];"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(param),
+	  __imm(bpf_ringbuf_discard),
+	  __imm(bpf_throw)
+	: __clobber_all);
+}
+
+/*
+ * The callee that is handed the record has it nowhere when it throws, so it
+ * keeps it in a slot of its own, which its entry fills from the argument.
+ */
+SEC("tc")
+__naked int throw_callee_consumes_slot(void)
+{
+	asm volatile (
+	"r1 = %[ringbuf] ll;"
+	"r2 = 8;"
+	"r3 = 0;"
+	"call %[bpf_ringbuf_reserve];"
+	"if r0 == 0 goto 1f;"
+	"r1 = %[acquired] ll;"
+	"*(u64 *)(r1 + 0) = r0;"
+	"r2 = 1;"
+	"r1 = %[acquired_cnt] ll;"
+	"*(u32 *)(r1 + 0) = r2;"
+	"r1 = r0;"
+	"r0 = 0;"
+	"call consume_or_lose;"
+	"1: r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(ringbuf),
+	  __imm_addr(acquired),
+	  __imm_addr(acquired_cnt),
+	  __imm(bpf_ringbuf_reserve)
+	: __clobber_all);
+}
+
+/* Unlocks the lock of the element its caller locked. */
+__used static __noinline int unlock_in_callee(struct locked_foo *foo)
+{
+	bpf_spin_unlock(&foo->lock);
+	return 0;
+}
+
+/*
+ * The lock of a map element is held at the first throw, where the frame has
+ * the pointer to the element nowhere: the lock is in a slot of the caller,
+ * which the callee that unlocks it cannot reach. The caller empties the slot
+ * in front of the call, and the throw after the call finds nothing held.
+ */
+SEC("tc")
+__naked int throw_callee_unlocks(void)
+{
+	asm volatile (
+	"r1 = 0;"
+	"*(u32 *)(r10 - 4) = r1;"
+	"r1 = %[lock_map] ll;"
+	"r2 = r10;"
+	"r2 += -4;"
+	"call %[bpf_map_lookup_elem];"
+	"if r0 == 0 goto 2f;"
+	"r6 = r0;"
+	"r2 = r6;"
+	"r2 += %[lock_off];"
+	"r1 = %[acquired] ll;"
+	"*(u64 *)(r1 + 0) = r2;"
+	"r2 = 1;"
+	"r1 = %[acquired_cnt] ll;"
+	"*(u32 *)(r1 + 0) = r2;"
+	"r1 = r6;"
+	"r1 += %[lock_off];"
+	"call %[bpf_spin_lock];"
+	"r7 = %[param] ll;"
+	"r7 = *(u32 *)(r7 + 0);"
+	"if r7 != 1 goto 1f;"
+	"r6 = 0;"
+	"r1 = 0xeB9F;"
+	"call %[bpf_throw];"
+	"1: r1 = r6;"
+	"call unlock_in_callee;"
+	"if r7 != 2 goto 2f;"
+	"r1 = 0xeB9F;"
+	"call %[bpf_throw];"
+	"2: r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(lock_map),
+	  __imm_addr(acquired),
+	  __imm_addr(acquired_cnt),
+	  __imm_addr(param),
+	  __imm(bpf_map_lookup_elem),
+	  __imm(bpf_spin_lock),
+	  __imm(bpf_throw),
+	  [lock_off]"i"(offsetof(struct locked_foo, lock))
+	: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";
