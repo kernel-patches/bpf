@@ -222,6 +222,7 @@ noinstr int cpuidle_enter_state(struct cpuidle_device *dev,
 
 	struct cpuidle_state *target_state = &drv->states[index];
 	bool broadcast = !!(target_state->flags & CPUIDLE_FLAG_TIMER_STOP);
+	bool broadcast_failed = false;
 	ktime_t time_start, time_end;
 
 	instrumentation_begin();
@@ -232,6 +233,7 @@ noinstr int cpuidle_enter_state(struct cpuidle_device *dev,
 	 * CPU as a broadcast timer, this call may fail if it is not available.
 	 */
 	if (broadcast && tick_broadcast_enter()) {
+		broadcast_failed = true;
 		index = find_deepest_state(drv, dev, target_state->exit_latency_ns,
 					   CPUIDLE_FLAG_TIMER_STOP, false);
 
@@ -306,6 +308,13 @@ noinstr int cpuidle_enter_state(struct cpuidle_device *dev,
 		dev->states_usage[entered_state].time_ns += diff;
 		dev->states_usage[entered_state].usage++;
 
+		/*
+		 * The broadcast constraint forced a shallower state, do not
+		 * account for it as a cpu_idle_miss.
+		 */
+		if (broadcast_failed)
+			goto out;
+
 		if (diff < drv->states[entered_state].target_residency_ns) {
 			for (i = entered_state - 1; i >= 0; i--) {
 				if (dev->states_usage[i].disable)
@@ -338,6 +347,7 @@ noinstr int cpuidle_enter_state(struct cpuidle_device *dev,
 		dev->states_usage[index].rejected++;
 	}
 
+out:
 	instrumentation_end();
 
 	return entered_state;
