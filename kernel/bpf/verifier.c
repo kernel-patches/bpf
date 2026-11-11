@@ -19742,6 +19742,36 @@ static struct bpf_reg_state *scev_reg_for_fill(struct bpf_func_state *frame, u32
 }
 
 /*
+ * Scalar evolution promoted memory to the SCEV register *@regno, see struct env there, and names
+ * its address at the jump at @idx. This state knows which memory it is: the frame that is returned,
+ * its stack slot *@regno, *@fill_off counts from the start of the slot. The stack of a caller only:
+ * other memory has no state, and a store through r10 is no def of memory for scalar evolution.
+ * What holds the address is live: it was compared all the way from its def. Every place that
+ * compares, joins or drops states cleans them of what is dead first, see flow_arrive().
+ */
+static struct bpf_func_state *scev_mem_to_slot(struct bpf_verifier_env *env,
+					       struct bpf_verifier_state *vstate, int idx,
+					       u32 *regno, u32 *fill_off)
+{
+	struct bpf_reg_state *ptr;
+	u32 base_regno;
+	s64 addr;
+
+	if (!bpf_scev_mem_addr(env, idx, *regno, &base_regno, &addr))
+		return NULL;
+	ptr = scev_reg_for_fill(vstate->frame[vstate->curframe], base_regno, 0, 64);
+	if (!ptr || ptr->type != PTR_TO_STACK || !tnum_is_const(ptr->var_off) ||
+	    ptr->frameno >= vstate->curframe)
+		return NULL;
+	addr += ptr->var_off.value + *fill_off;
+	if (addr >= 0 || addr < -MAX_BPF_STACK_JIT)
+		return NULL;
+	*regno = MAX_BPF_REG + bpf_get_spi(addr);
+	*fill_off = addr & (BPF_REG_SIZE - 1);
+	return vstate->frame[ptr->frameno];
+}
+
+/*
  *	p = buf + i; if (i > 100) return 0; *p = 0;
  * p is @dst_reg, x is @ptr_reg, i is @off_reg. Scalar evolution says that p == x + i. So the insns
  * 'p = x; p += i' are a no-op at run time, and a state that is sound before them is sound after
@@ -19792,7 +19822,7 @@ static bool recompute_ptr(struct bpf_verifier_env *env, struct bpf_reg_state *ds
 static void refine_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier_state *vstate,
 			       int idx, u32 regno)
 {
-	struct bpf_func_state *frame = vstate->frame[vstate->curframe];
+	struct bpf_func_state *frame = vstate->frame[vstate->curframe], *linked_frame;
 	struct bpf_reg_state *reg, *base_reg, implied, saved;
 	u32 pos, linked_regno, fill_off, bits;
 	int base_regno;
@@ -19804,7 +19834,12 @@ static void refine_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier
 	     bpf_scev_next_linked_reg(env, idx, regno, &pos, &linked_regno, &fill_off, &base_regno,
 				      &delta, &bits);
 	     pos++) {
-		reg = scev_reg_for_fill(frame, linked_regno, fill_off, bits);
+		linked_frame = frame;
+		if (linked_regno >= BPF_SCEV_REGS_NUM)
+			linked_frame = scev_mem_to_slot(env, vstate, idx, &linked_regno, &fill_off);
+		if (!linked_frame)
+			continue;
+		reg = scev_reg_for_fill(linked_frame, linked_regno, fill_off, bits);
 		/*
 		 * The other half-slot of a 64-bit spill is dead: __clean_func_state() left
 		 * a 32-bit spill, the low 32 bits of the value.
@@ -19812,7 +19847,7 @@ static void refine_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier
 		if (!reg && bits == 64 &&
 		    bpf_stack_narrow_access_ok(fill_off, BPF_REG_SIZE / 2, BPF_REG_SIZE)) {
 			bits = 32;
-			reg = scev_reg_for_fill(frame, linked_regno, fill_off, bits);
+			reg = scev_reg_for_fill(linked_frame, linked_regno, fill_off, bits);
 		}
 		if (!reg || (base_regno < 0 && reg->type != SCALAR_VALUE))
 			continue;
@@ -19850,7 +19885,7 @@ static void refine_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier
 scratch:
 		if (linked_regno < MAX_BPF_REG)
 			mark_reg_scratched(env, linked_regno);
-		else
+		else if (linked_frame == frame)
 			mark_stack_slot_scratched(env, linked_regno - MAX_BPF_REG);
 	}
 }

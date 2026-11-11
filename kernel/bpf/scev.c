@@ -12,6 +12,9 @@
 #include <linux/overflow.h>
 
 #define REGS_NUM BPF_SCEV_REGS_NUM
+/* The SCEV registers of an env: r0 - r10, the stack slots and memory locations, see struct env */
+#define MEM_REGS_NUM 16
+#define ENV_REGS_NUM (REGS_NUM + MEM_REGS_NUM)
 #define UNKNOWN_EXPR_ID 0
 #define OPAQUE_EXPR_ID  1
 /* (REG r). UNKNOWN, OPAQUE and (REG r) have fixed ids and are not in the hash table. */
@@ -82,7 +85,7 @@ struct expr_def {
 	u32 idx:21;
 };
 /* def.reg of the phi of two bases, see mk_phi() */
-#define BASE_REG REGS_NUM
+#define BASE_REG ENV_REGS_NUM
 static_assert(BASE_REG < 1 << 9 && BPF_COMPLEXITY_LIMIT_INSNS <= 1 << 21);
 
 static const struct expr_def no_def;
@@ -113,14 +116,31 @@ struct expr {
 
 struct env {
 	bool empty;
-	u32 reg2expr[REGS_NUM];
+	u32 reg2expr[ENV_REGS_NUM];
 	u32 reg2scev[REGS_NUM];
+	/*
+	 * Register promotion of memory that is not behind r10. The SCEV register REGS_NUM + i is
+	 * the memory at the address mem_addr[i], a value number of this env. 0: not in use.
+	 * - A store through a pointer defines it like a spill defines a stack slot.
+	 * - A load defines its register as before, and the memory gets that value number: it holds
+	 *   what a store of the register would leave. No expression of a register depends on
+	 *   memory, which is private only if it is stack. That is not known here.
+	 * - A join point has a phi. An insn that may write is a may-def, see forget_mem_regs().
+	 * - A store through r10 is not: the main pass takes the stack of a caller only.
+	 * A value number of a loop means nothing in the enclosing loop: no memory is tracked at
+	 * a header, a nested loop is a may-def.
+	 */
+	u32 mem_addr[MEM_REGS_NUM];
 };
 
-/* A SCEV register and the id of its expression before a conditional jump */
+/*
+ * A SCEV register and the id of its expression before a conditional jump. 'addr' is mem_addr[] of
+ * a memory location.
+ */
 struct scev_linked_reg {
 	u32 reg;
 	u32 id;
+	u32 addr;
 };
 
 struct insn_envs {
@@ -253,7 +273,7 @@ static bool expr_is_vn(struct scev *scev, struct expr *e)
 	 * comes from a call that may write to the slot.
 	 */
 	if (e->def.set)
-		return reg < MAX_BPF_REG || reg == BASE_REG ||
+		return reg < MAX_BPF_REG || reg >= REGS_NUM ||
 		       !test_bit(reg - MAX_BPF_REG, scev->slice_slots);
 	switch (e->op) {
 	case UNKNOWN:
@@ -539,8 +559,10 @@ static void log_reg(struct bpf_verifier_env *env, u32 reg)
 {
 	if (reg < MAX_BPF_REG)
 		bpf_log(&env->log, "r%d", reg);
-	else
+	else if (reg < REGS_NUM)
 		bpf_log(&env->log, "*fp%d", (MAX_BPF_REG - reg - 1) * 8);
+	else
+		bpf_log(&env->log, "mem%d", reg - REGS_NUM);
 }
 
 static const char *op_str(u32 op)
@@ -695,8 +717,10 @@ static void log_def(struct bpf_verifier_env *env, struct expr_def def)
 		return;
 	if (def.reg < MAX_BPF_REG)
 		bpf_log(&env->log, "%%r%d.%d", def.reg, def.idx);
-	else
+	else if (def.reg < REGS_NUM)
 		bpf_log(&env->log, "%%fp%d.%d", (MAX_BPF_REG - def.reg - 1) * 8, def.idx);
+	else
+		bpf_log(&env->log, "%%mem%d.%d", def.reg - REGS_NUM, def.idx);
 }
 
 static void log_expr(struct bpf_verifier_env *env, u32 id)
@@ -775,6 +799,9 @@ static bool reg_alive_at(struct bpf_verifier_env *env, u32 reg, u32 insn_idx)
 	struct bpf_insn_aux_data *aux = env->insn_aux_data;
 	u16 live_regs = aux[insn_idx].live_regs_before;
 
+	/* memory */
+	if (reg >= REGS_NUM)
+		return true;
 	return reg < MAX_BPF_REG
 	       ? (BIT(reg) & live_regs)
 	       : test_bit(reg - MAX_BPF_REG, aux[insn_idx].live_stack_before);
@@ -1040,6 +1067,129 @@ static int maybe_load_fp(struct scev *scev, struct env *e, struct bpf_insn *insn
 	return replace_reg(scev, e, insn->dst_reg, id);
 }
 
+static bool const_diff(struct bpf_verifier_env *env, int h, u32 id_a, u32 id_b, s64 *delta,
+		       u32 *bits);
+
+/* The memory location of @e at the address @addr, 0: one that is not in use. MEM_REGS_NUM: none. */
+static u32 find_mem_reg(const struct env *e, u32 addr)
+{
+	u32 i;
+
+	for (i = 0; i < MEM_REGS_NUM && e->mem_addr[i] != addr; i++)
+		;
+	return i;
+}
+
+static void forget_mem_reg(struct env *e, u32 i)
+{
+	e->mem_addr[i] = 0;
+	e->reg2expr[REGS_NUM + i] = UNKNOWN_EXPR_ID;
+}
+
+/*
+ * The insn may write @size bytes at the address @addr, 0: anywhere. A may-def of all memory
+ * locations but those that have the same address base and don't overlap. Two bases can be two names
+ * of one memory, 'f(&c, &c)'.
+ */
+static void forget_mem_regs(struct bpf_verifier_env *env, struct env *e, u32 addr, u32 size)
+{
+	u32 i, x, bits;
+	s64 delta;
+
+	for (i = 0; i < MEM_REGS_NUM; i++) {
+		/* the caller defines it */
+		if (e->mem_addr[i] == addr)
+			continue;
+		if (addr && const_diff(env, -1, addr, e->mem_addr[i], &delta, &bits) &&
+		    bits == 64 && (delta >= size ||
+		    delta + expr_spill_size(env->scev, e->reg2expr[REGS_NUM + i], &x) <= 0))
+			continue;
+		forget_mem_reg(e, i);
+	}
+}
+
+/*
+ * A jump tests a register, and a load makes a new value number. So a memory location is dead once
+ * no register that is live after the insn at @idx has the base of its value: no jump is going to
+ * link it.
+ */
+static void forget_dead_mem_regs(struct bpf_verifier_env *env, struct env *e, int idx)
+{
+	struct expr *exprs = env->scev->exprs;
+	u32 i, r, base;
+
+	for (i = 0; i < MEM_REGS_NUM; i++) {
+		base = exprs[e->reg2expr[REGS_NUM + i]].base;
+		for (r = 0; r < REGS_NUM; r++)
+			if (exprs[e->reg2expr[r]].base == base && reg_alive_at(env, r, idx + 1))
+				break;
+		if (r == REGS_NUM)
+			forget_mem_reg(e, i);
+	}
+}
+
+/*
+ * The address of the load or store at @idx through @reg, 0: the memory is not tracked. r10 has the
+ * stack slots, r11 and r12 are no SCEV registers. The main pass takes nothing but stack.
+ */
+static int mk_mem_addr(struct bpf_verifier_env *env, struct env *e, int idx, u32 reg)
+{
+	struct scev *scev = env->scev;
+
+	if (reg >= BPF_REG_FP || !(env->insn_aux_data[idx].stack_ptrs & BIT(reg)) ||
+	    !scev->exprs[e->reg2expr[reg]].is_vn)
+		return 0;
+	return expr2(scev, BPF_ADD, e->reg2expr[reg], imm_expr(scev, env->prog->insnsi[idx].off));
+}
+
+/*
+ * The insn at @idx stored the low bytes of @id at the address @addr, or it loaded them from there.
+ * The location takes a SCEV register that is not in use, or that of a dead one.
+ */
+static int replace_mem_reg(struct bpf_verifier_env *env, struct env *e, int idx, int addr, int id)
+{
+	u32 i;
+
+	if (addr <= 0)
+		return addr;
+	i = find_mem_reg(e, addr);
+	if (i == MEM_REGS_NUM)
+		i = find_mem_reg(e, 0);
+	if (i == MEM_REGS_NUM) {
+		forget_dead_mem_regs(env, e, idx);
+		i = find_mem_reg(e, 0);
+	}
+	if (i == MEM_REGS_NUM)
+		return 0;
+	e->mem_addr[i] = addr;
+	return replace_reg(env->scev, e, REGS_NUM + i,
+			   mk_spill(env->scev, BPF_SIZE(env->prog->insnsi[idx].code), id));
+}
+
+static int load_mem(struct bpf_verifier_env *env, struct env *e, int idx)
+{
+	struct bpf_insn *insn = &env->prog->insnsi[idx];
+	/* the insn defines dst_reg, which can be src_reg */
+	int addr = mk_mem_addr(env, e, idx, insn->src_reg);
+
+	return maybe_load_fp(env->scev, e, insn, idx) ?:
+	       replace_mem_reg(env, e, idx, addr, e->reg2expr[insn->dst_reg]);
+}
+
+static int store_mem(struct bpf_verifier_env *env, struct env *e, int idx, int id)
+{
+	struct bpf_insn *insn = &env->prog->insnsi[idx];
+	int addr;
+
+	if (insn->dst_reg == BPF_REG_FP)
+		return maybe_store_fp(env->scev, e, insn, idx, id);
+	addr = mk_mem_addr(env, e, idx, insn->dst_reg);
+	if (addr < 0)
+		return addr;
+	forget_mem_regs(env, e, addr, bpf_size_to_bytes(BPF_SIZE(insn->code)));
+	return replace_mem_reg(env, e, idx, addr, id);
+}
+
 /*
  * The low 32 bits of a + b depend on the low 32 bits of a and b only: 'w1 += w2' is
  * (zext32 (+ a b)). That doesn't hold for a right shift and for a division. Their operands are zero
@@ -1226,19 +1376,19 @@ static int transfer(struct bpf_verifier_env *env, struct env *e, int idx)
 				imm = env->insn_aux_data[idx + 1].const_reg_vals[dst];
 				return replace_reg(scev, e, dst, imm_expr(scev, imm));
 			}
-			return maybe_load_fp(scev, e, insn, idx);
+			return load_mem(env, e, idx);
 		default:
 			goto mark_dst_unknown;
 		}
 	case BPF_STX:
 		switch (mode) {
 		case BPF_MEM:
-			return maybe_store_fp(scev, e, insn, idx, reg2expr[src]);
+			return store_mem(env, e, idx, reg2expr[src]);
 		case BPF_ATOMIC:
 			if (insn->imm == BPF_LOAD_ACQ)
 				return maybe_load_fp(scev, e, insn, idx);
 			if (insn->imm == BPF_STORE_REL) {
-				return maybe_store_fp(scev, e, insn, idx, reg2expr[src]);
+				return store_mem(env, e, idx, reg2expr[src]);
 			}
 			/*
 			 * verifier does not track other atomic ops precisely,
@@ -1249,6 +1399,8 @@ static int transfer(struct bpf_verifier_env *env, struct env *e, int idx)
 						 bpf_size_to_bytes(BPF_SIZE(insn->code)));
 				if (id < 0)
 					return id;
+			} else {
+				forget_mem_regs(env, e, 0, 0);
 			}
 			if (insn->imm == BPF_CMPXCHG)
 				return forget_reg(scev, e, BPF_REG_0, OPAQUE_EXPR_ID, idx);
@@ -1258,16 +1410,14 @@ static int transfer(struct bpf_verifier_env *env, struct env *e, int idx)
 		}
 		break;
 	case BPF_ST:
-		if (insn->dst_reg == BPF_REG_FP) {
-			id = imm_expr(scev, insn->imm);
-			if (id < 0)
-				return id;
-			return maybe_store_fp(scev, e, insn, idx, id);
-		}
-		break;
+		id = imm_expr(scev, insn->imm);
+		if (id < 0)
+			return id;
+		return store_mem(env, e, idx, id);
 	case BPF_JMP:
 	case BPF_JMP32:
 		if (opcode == BPF_CALL) {
+			forget_mem_regs(env, e, 0, 0);
 			id = forget_call_regs(env, e, idx);
 			if (id < 0)
 				return id;
@@ -1299,6 +1449,7 @@ static int transfer(struct bpf_verifier_env *env, struct env *e, int idx)
 		/* unknown instruction, nuke state */
 		for (i = 0; i < REGS_NUM; i++)
 			reg2expr[i] = UNKNOWN_EXPR_ID;
+		forget_mem_regs(env, e, 0, 0);
 		break;
 	}
 	return 0;
@@ -1456,7 +1607,7 @@ static int mk_phi(struct bpf_verifier_env *env, u32 a, u32 b, int idx, u32 reg)
 static int join(struct bpf_verifier_env *env, struct env *acc, struct env *cur, int idx)
 {
 	struct scev *scev = env->scev;
-	int i, id;
+	int i, j, id;
 
 	if (acc->empty) {
 		memcpy(acc, cur, sizeof(*acc));
@@ -1464,11 +1615,17 @@ static int join(struct bpf_verifier_env *env, struct env *acc, struct env *cur, 
 		return 0;
 	}
 
-	for (i = 0; i < REGS_NUM; i++) {
-		if (!same_exprs(scev, acc->reg2expr[i], cur->reg2expr[i])) {
+	for (i = 0; i < ENV_REGS_NUM; i++) {
+		/* the address names a memory location. It has a phi if all edges track it. */
+		j = i < REGS_NUM ? i : REGS_NUM + find_mem_reg(cur, acc->mem_addr[i - REGS_NUM]);
+		if (j == ENV_REGS_NUM) {
+			forget_mem_reg(acc, i - REGS_NUM);
+			continue;
+		}
+		if (!same_exprs(scev, acc->reg2expr[i], cur->reg2expr[j])) {
 			/* no phi for a dead register: pruned SSA */
 			id = reg_alive_at(env, i, idx) ?
-			     mk_phi(env, acc->reg2expr[i], cur->reg2expr[i], idx, i) :
+			     mk_phi(env, acc->reg2expr[i], cur->reg2expr[j], idx, i) :
 			     UNKNOWN_EXPR_ID;
 			if (id < 0)
 				return id;
@@ -1499,6 +1656,7 @@ static int forget_non_invariants(struct bpf_verifier_env *env, struct env *acc, 
 	int i, idx, h, err;
 
 	acc->empty = false;
+	forget_mem_regs(env, acc, 0, 0);
 	forget_modified_regs(scev, acc, find_header_env(scev, header));
 	for (i = 0; i < loop->exits_cnt; i++) {
 		idx = loop->exits[i].from;
@@ -1616,7 +1774,7 @@ static void log_env_changes(struct bpf_verifier_env *env, enum changes_at at,
 	len = log->end_pos - null_pos;
 	bpf_log(log, "%*s", max(37 - (int)len, 1), " ");
 	bpf_log(log, " ; ");
-	for (r = 0; r < REGS_NUM; r++) {
+	for (r = 0; r < ENV_REGS_NUM; r++) {
 		old_id = old->reg2expr[r];
 		new_id = new->reg2expr[r];
 		if (at == LOG_AT_TRANSFER && !reg_alive_at_succ(env, r, insn_idx))
@@ -1631,6 +1789,10 @@ static void log_env_changes(struct bpf_verifier_env *env, enum changes_at at,
 		if (any_changes)
 			bpf_log(log, ", ");
 		log_reg(env, r);
+		if (r >= REGS_NUM && new->mem_addr[r - REGS_NUM]) {
+			bpf_log(log, "=*");
+			log_expr(env, new->mem_addr[r - REGS_NUM]);
+		}
 		bpf_log(log, " ");
 		log_expr(env, old_id);
 		bpf_log(log, " -> ");
@@ -2036,6 +2198,19 @@ static bool const_diff_reg(struct bpf_verifier_env *env, int h, u32 id_a, u32 re
 	return true;
 }
 
+/* The first of the registers and stack slots @live that holds @id + a constant. REGS_NUM: none. */
+static u32 find_leader(struct bpf_verifier_env *env, struct env *e, int h,
+		       const unsigned long *live, u32 id)
+{
+	u32 r, bits;
+	s64 delta;
+
+	for_each_set_bit(r, live, REGS_NUM)
+		if (const_diff(env, h, e->reg2expr[r], id, &delta, &bits))
+			break;
+	return r;
+}
+
 /*
  *	n = bpf_get_stack(..); m = n; if (n < 0) ..; use(m);
  * The main pass refines the registers that the conditional jump at @idx tests. Find the live SCEV
@@ -2051,8 +2226,8 @@ static int find_linked_regs(struct bpf_verifier_env *env, struct env *e, int h, 
 	struct scev *scev = env->scev;
 	u32 r, q, other, id, fill_off, base, base_dst, base_src, bits, cap, tested = 0;
 	u32 first = scev->linked_cnt;
-	DECLARE_BITMAP(live, REGS_NUM) = {};
-	DECLARE_BITMAP(found, REGS_NUM) = {};
+	DECLARE_BITMAP(live, ENV_REGS_NUM) = {};
+	DECLARE_BITMAP(found, ENV_REGS_NUM) = {};
 	void *tmp;
 	s64 delta;
 
@@ -2063,9 +2238,12 @@ static int find_linked_regs(struct bpf_verifier_env *env, struct env *e, int h, 
 	bitmap_copy(live, aux->live_stack_before, MAX_BPF_STACK_SLOTS);
 	bitmap_shift_left(live, live, MAX_BPF_REG, REGS_NUM);
 	live[0] |= aux->live_regs_before;
+	for (r = REGS_NUM; r < ENV_REGS_NUM; r++)
+		if (e->mem_addr[r - REGS_NUM])
+			__set_bit(r, live);
 	split_const_offset(env, dst, &base_dst, &delta, &bits);
 	split_const_offset(env, src, &base_src, &delta, &bits);
-	for_each_set_bit(r, live, REGS_NUM) {
+	for_each_set_bit(r, live, ENV_REGS_NUM) {
 		id = e->reg2expr[r];
 		/* most are not linked */
 		split_const_offset(env, id, &base, &delta, &bits);
@@ -2089,7 +2267,17 @@ static int find_linked_regs(struct bpf_verifier_env *env, struct env *e, int h, 
 			break;
 		}
 	}
-	for_each_set_bit(r, found, REGS_NUM) {
+	/* the main pass finds memory by a live register that holds its address */
+	for (r = REGS_NUM; r < ENV_REGS_NUM; r++) {
+		if (!test_bit(r, found))
+			continue;
+		q = find_leader(env, e, h, live, e->mem_addr[r - REGS_NUM]);
+		if (q < REGS_NUM)
+			__set_bit(q, found);
+		else
+			__clear_bit(r, found);
+	}
+	for_each_set_bit(r, found, ENV_REGS_NUM) {
 		if (scev->linked_cnt == scev->linked_cap) {
 			cap = max(scev->linked_cap * 2, 16);
 			tmp = kvrealloc(scev->linked, array_size(cap, sizeof(*scev->linked)),
@@ -2101,6 +2289,7 @@ static int find_linked_regs(struct bpf_verifier_env *env, struct env *e, int h, 
 		}
 		tested += r == insn->dst_reg || (src != dst && r == insn->src_reg);
 		scev->linked[scev->linked_cnt].reg = r;
+		scev->linked[scev->linked_cnt].addr = r < REGS_NUM ? 0 : e->mem_addr[r - REGS_NUM];
 		scev->linked[scev->linked_cnt++].id = e->reg2expr[r];
 	}
 	/* nothing but the tested registers */
@@ -2127,6 +2316,7 @@ static int find_linked_regs(struct bpf_verifier_env *env, struct env *e, int h, 
  * no more links are known. Types are not known here: the caller checks them in its state.
  * A linked register can be a pointer: *base_regno + regno + delta. *base_regno is the address base,
  * as in store_base_regs. It is -1 for a link without a base.
+ * BPF_SCEV_REGS_NUM and above is a memory location, see struct env and bpf_scev_mem_addr().
  */
 bool bpf_scev_next_linked_reg(struct bpf_verifier_env *env, int insn_idx, u32 regno, u32 *pos,
 			      u32 *linked_regno, u32 *fill_off, int *base_regno, s64 *delta,
@@ -2163,6 +2353,31 @@ bool bpf_scev_next_linked_reg(struct bpf_verifier_env *env, int insn_idx, u32 re
 			*bits = min(*bits, b);
 			return true;
 		}
+	}
+	return false;
+}
+
+/*
+ * The memory location @regno is a linked register of the conditional jump at @insn_idx. Its address
+ * is *@base_regno + *@off. *@base_regno is a live register or stack slot. Which memory it is
+ * depends on the state.
+ */
+bool bpf_scev_mem_addr(struct bpf_verifier_env *env, int insn_idx, u32 regno, u32 *base_regno,
+		       s64 *off)
+{
+	struct insn_envs *envs = env->scev->envs[insn_idx];
+	struct scev_linked_reg *linked = &env->scev->linked[envs->linked_first];
+	int h = bpf_loop_at_index(env, insn_idx);
+	u32 i, j, bits;
+
+	for (i = 0; linked[i].reg != regno; i++)
+		if (i + 1 == envs->linked_cnt)
+			return false;
+	for (j = 0; linked[j].reg < REGS_NUM; j++) {
+		if (!const_diff(env, h, linked[j].id, linked[i].addr, off, &bits) || bits != 64)
+			continue;
+		*base_regno = linked[j].reg;
+		return true;
 	}
 	return false;
 }
