@@ -2689,6 +2689,18 @@ struct drm_connector {
 	struct llist_node free_node;
 
 	/**
+	 * @wb_initialized:
+	 *
+	 * Set when the connector is embedded in a &struct
+	 * drm_writeback_connector that has been initialized through
+	 * __drm_writeback_connector_init(). A plain &struct drm_connector may
+	 * be created with DRM_MODE_CONNECTOR_WRITEBACK without being a
+	 * writeback connector, so drm_connector_cleanup() keys the writeback
+	 * teardown off this flag rather than the connector type.
+	 */
+	bool wb_initialized;
+
+	/**
 	 * @hdmi: HDMI-related variable and properties.
 	 */
 	struct drm_connector_hdmi hdmi;
