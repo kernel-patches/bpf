@@ -91,6 +91,7 @@ static struct sym_arr token_syms[NR_TOKENS];
 static struct best_table {
 	char           *str;		/* Full expansion, '\0' terminated */
 	unsigned short len;		/* Length of str */
+	unsigned int   refs;		/* Number of times used in a symbol */
 } best_table[256];
 
 static void stamp(const char *where)
@@ -423,7 +424,8 @@ static void write_src(void)
 	for (i = 0; i < 256; i++) {
 		best_idx[i] = off;
 		off += best_table[i].len + 1;
-		printf("\t.asciz\t\"%s\"\n", best_table[i].str);
+		printf("\t.asciz\t\"%s\"\t/* %u: refs %u */\n",
+		       best_table[i].str, i, best_table[i].refs);
 	}
 	printf(".size kallsyms_token_table, . - kallsyms_token_table\n");
 	printf("\n");
@@ -641,12 +643,14 @@ static void check_tables(void)
 		unsigned int refs;
 		unsigned int idx;
 	} tok_info[NR_TOKENS], *ti;
+	unsigned int tok_refs[256];
 	unsigned int sym_idx, token;
 	unsigned char *cp, *end;
 	struct sym_arr *sa;
 	unsigned int i, idx;
 
 	memset(&tok_info, 0, sizeof(tok_info));
+	memset(&tok_refs, 0, sizeof(tok_refs));
 
 	/* Check that token_syms[]->sym_indexes is correctly sorted. */
 	for (token = 0; token < NR_TOKENS; token++) {
@@ -665,8 +669,10 @@ static void check_tables(void)
 	for (sym_idx = 0; sym_idx < table_cnt; sym_idx++) {
 		cp = table[sym_idx]->sym;
 		end = cp + table[sym_idx]->len;
+		tok_refs[*cp]++;
 		/* Scan all pairs */
 		while (++cp < end) {
+			tok_refs[*cp]++;
 			token = token_index(cp[-1], cp[0]);
 			ti = tok_info + token;
 			ti->refs++;
@@ -690,6 +696,12 @@ static void check_tables(void)
 	}
 
 	/* Check the reference counts for all tokens. */
+	for (i = 0; i < 256; i++) {
+		if (tok_refs[i] != best_table[i].refs)
+			errx(EXIT_FAILURE, "token reference error for %u (%s) %u != %u",
+			     i, best_table[i].str, best_table[i].refs, tok_refs[i]);
+	}
+
 	for (idx = 0; idx < NR_TOKENS; idx++) {
 		if (tok_info[idx].refs != token_profit[idx]) {
 			errx(EXIT_FAILURE, "profit error for %x (%s/%s) discrepency %u != %u",
@@ -698,6 +710,7 @@ static void check_tables(void)
 			     tok_info[idx].refs, token_profit[idx]);
 		}
 	}
+
 }
 
 /* count all the possible tokens in a symbol */
@@ -718,6 +731,19 @@ static void token_add_symbol(unsigned int token_idx, unsigned int sym_idx)
 		return;
 
 	sym_arr_add(arr, sym_idx);
+}
+
+static unsigned int sym_arr_free_all(unsigned int ch)
+{
+	unsigned int i;
+
+	/* Just zero the counts, the entries are about to be reused. */
+	for (i = 0; i < 256; i++) {
+		token_syms[token_index(i, ch)].cnt = 0;
+		token_syms[token_index(ch, i)].cnt = 0;
+	}
+
+	return ch;
 }
 
 static void symbol_index_all_tokens(const unsigned char *symbol, int len,
@@ -785,11 +811,11 @@ static unsigned char *find_token(unsigned char *str, unsigned char *end,
 /* replace a given token in all the valid symbols. Use the sampled symbols
  * to update the counts.
  * Marked noinline to help register allocation. */
-static __attribute__((noinline)) void
+static __attribute__((noinline)) unsigned int
 compress_symbols(unsigned int token_idx, int compressed_chr)
 {
 	struct sym_arr *arr = &token_syms[token_idx];
-	unsigned int sym_idx, j, len;
+	unsigned int sym_idx, j, len, subs;
 	unsigned char *sym, *p, *end;
 	struct sym_entry *se;
 
@@ -817,8 +843,11 @@ compress_symbols(unsigned int token_idx, int compressed_chr)
 	}
 
 	/* No symbol contains this token any more. */
+	subs = token_profit[token_idx];
 	token_profit[token_idx] = 0;
 	sym_arr_free(arr);
+
+	return subs;
 }
 
 /* search the token with the maximum profit */
@@ -842,28 +871,40 @@ static int find_best_token(void)
 static void optimize_result(void)
 {
 	struct best_table *bt, *first, *second;
-	unsigned int len;
+	unsigned char to_process[256];
+	unsigned int idx, len, refs;
 	int i, best;
 	char *str;
 
-	/* Use the '\0' symbol last so the output is unchanged */
-	for (i = 255; i >= 0; i--) {
-		bt = best_table + i;
-		/* Ignore tokens used for the original character codes. */
-		if (bt->len)
-			continue;
+	/* Generate a list of the unused tokens. */
+	for (i = 0, idx = 0; i < 256; i++) {
+		if (!best_table[i].len)
+			to_process[idx++] = i;
+	}
 
-		/* Find the token that appears most often. */
+	while (idx) {
+		/* find the token that appears most often */
 		best = find_best_token();
 		if (best < 0)
 			break;
+		i = to_process[--idx];
 
 		/* Replace this token in all the valid symbols. */
-		compress_symbols(best, i);
+		refs = compress_symbols(best, i);
 
-		/* Generate the full name for this token ... */
+		bt = best_table + i;
 		first = best_table + token_first(best);
 		second = best_table + token_second(best);
+
+		/* Update the number of times each token is used. */
+		bt->refs += refs;
+		if (!(first->refs -= refs) && first->len > 1)
+			/* There are no references left, reuse the token. */
+			to_process[idx++] = sym_arr_free_all(token_first(best));
+		if (!(second->refs -= refs) && second->len > 1)
+			to_process[idx++] = sym_arr_free_all(token_second(best));
+
+		/* Generate the full name for this token ... */
 		len = first->len + second->len;
 		str = xmalloc(len + 1);
 		str[len] = 0;
@@ -885,13 +926,14 @@ static void insert_real_symbols_in_table(void)
 	for (i = 0; i < table_cnt; i++) {
 		for (j = 0; j < table[i]->len; j++) {
 			c = table[i]->sym[j];
-			best_table[c].len = 1;
+			best_table[c].refs++;
 		}
 	}
 
 	for (i = 0; i <= 255; i++) {
 		best_table[i].str = xmalloc(2);
-		best_table[i].str[0] = best_table[i].len ? i : 0;
+		best_table[i].len = best_table[i].refs ? 1 : 0;
+		best_table[i].str[0] = best_table[i].refs ? i : 0;
 		best_table[i].str[1] = 0;
 	}
 }
