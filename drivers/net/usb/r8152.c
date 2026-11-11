@@ -831,6 +831,17 @@ enum rtl8152_flags {
 #define DEVICE_ID_THINKPAD_USB_C_DOCK_GEN3		0x3062
 #define DEVICE_ID_THINKPAD_HYBRID_USB_C_DOCK		0xa359
 
+/* While runtime suspended, wake only for link changes, magic packets and
+ * frames addressed to this station. Broadcast and multicast frames then
+ * neither wake the device nor postpone autosuspend, so they are lost while
+ * the device is suspended, including ARP requests and IPv6 neighbour
+ * solicitations for the addresses of this station.
+ */
+static bool runtime_wake_unicast_only;
+module_param(runtime_wake_unicast_only, bool, 0644);
+MODULE_PARM_DESC(runtime_wake_unicast_only,
+		 "Ignore broadcast and multicast frames for runtime PM (default: N)");
+
 struct tally_counter {
 	__le64	tx_packets;
 	__le64	rx_packets;
@@ -2393,7 +2404,8 @@ static void read_bulk_callback(struct urb *urb)
 	if (!netif_carrier_ok(netdev))
 		return;
 
-	usb_mark_last_busy(tp->udev);
+	if (!runtime_wake_unicast_only)
+		usb_mark_last_busy(tp->udev);
 
 	switch (status) {
 	case 0:
@@ -3269,6 +3281,10 @@ static int rx_bottom(struct r8152 *tp, int budget)
 			skb->ip_summed = tp->desc_ops.rx_csum(tp, rx_desc);
 			tp->rx_desc.vlan_tag(rx_desc, skb);
 
+			if (runtime_wake_unicast_only &&
+			    !is_multicast_ether_addr(rx_data))
+				usb_mark_last_busy(tp->udev);
+
 			if (use_frags) {
 				if (rx_frag_head_sz) {
 					memcpy(skb->data, rx_data,
@@ -4052,6 +4068,7 @@ out:
 }
 
 #define WAKE_ANY (WAKE_PHY | WAKE_MAGIC | WAKE_UCAST | WAKE_BCAST | WAKE_MCAST)
+#define WAKE_RUNTIME_UNICAST (WAKE_PHY | WAKE_MAGIC | WAKE_UCAST)
 
 static u32 __rtl_get_wol(struct r8152 *tp)
 {
@@ -4644,7 +4661,8 @@ static bool rtl_can_wakeup(struct r8152 *tp)
 static void rtl_runtime_suspend_enable(struct r8152 *tp, bool enable)
 {
 	if (enable) {
-		__rtl_set_wol(tp, WAKE_ANY);
+		__rtl_set_wol(tp, runtime_wake_unicast_only ?
+			      WAKE_RUNTIME_UNICAST : WAKE_ANY);
 
 		ocp_write_byte(tp, MCU_TYPE_PLA, PLA_CRWECR, CRWECR_CONFIG);
 
