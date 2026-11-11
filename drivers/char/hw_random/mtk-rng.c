@@ -212,13 +212,6 @@ static int mtk_rng_probe(struct platform_device *pdev)
 		priv->rng.read = mtk_rng_read;
 	}
 
-	ret = devm_hwrng_register(&pdev->dev, &priv->rng);
-	if (ret) {
-		dev_err(&pdev->dev, "failed to register rng device: %d\n",
-			ret);
-		return ret;
-	}
-
 	if (!(priv->flags & MTK_RNG_SMC)) {
 		dev_set_drvdata(&pdev->dev, priv);
 		pm_runtime_set_autosuspend_delay(&pdev->dev,
@@ -227,6 +220,13 @@ static int mtk_rng_probe(struct platform_device *pdev)
 		ret = devm_pm_runtime_enable(&pdev->dev);
 		if (ret)
 			return ret;
+	}
+
+	ret = devm_hwrng_register(&pdev->dev, &priv->rng);
+	if (ret) {
+		dev_err(&pdev->dev, "failed to register rng device: %d\n",
+			ret);
+		return ret;
 	}
 
 	dev_info(&pdev->dev, "registered RNG driver\n");
