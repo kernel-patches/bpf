@@ -508,17 +508,17 @@ again:
 	}
 
 	if (options & WEXITED) {
-		if (WIFEXITED(info.si_status))
-			return WEXITSTATUS(info.si_status);
+		if (info.si_code == CLD_EXITED)
+			return info.si_status;
 	}
 
 	if (options & WSTOPPED) {
-		if (WIFSTOPPED(info.si_status))
-			return WSTOPSIG(info.si_status);
+		if (info.si_code == CLD_STOPPED || info.si_code == CLD_TRAPPED)
+			return info.si_status;
 	}
 
 	if (options & WCONTINUED) {
-		if (WIFCONTINUED(info.si_status))
+		if (info.si_code == CLD_CONTINUED)
 			return 0;
 	}
 
