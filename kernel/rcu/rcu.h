@@ -716,5 +716,6 @@ bool rcu_is_task_rcu_boosted(void);
 static inline bool rcu_is_task_rcu_boosted(void) { return false; }
 #endif // #else // #if defined(CONFIG_RCU_TORTURE_TEST) && defined(CONFIG_RCU_BOOST)
 
+extern bool rcu_torture_boost_disable;
 
 #endif /* __LINUX_RCU_H */

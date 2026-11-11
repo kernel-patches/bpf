@@ -5964,6 +5964,15 @@ Kernel parameters
 			periods, but in jiffies.  The default of zero
 			says no holdoff.
 
+	rcutorture.boost_disable= [KNL]
+			Do not create the RCU priority-boost kthreads, so
+			that RCU priority boosting never happens.  This
+			is for testing that rcutorture detects broken
+			boosting, as in the BUSTED-BOOST scenario, and
+			should not be used otherwise.  It has an effect
+			only if rcutorture is built in, because the
+			kthreads are created during boot.
+
 	rcutorture.fqs_duration= [KNL]
 			Set duration of force_quiescent_state bursts
 			in microseconds.

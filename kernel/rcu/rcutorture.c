@@ -158,6 +158,11 @@ static char *torture_type = "rcu";
 module_param(torture_type, charp, 0444);
 MODULE_PARM_DESC(torture_type, "Type of RCU to torture (rcu, srcu, ...)");
 
+// Global because tree_plugin.h reads it during boot.
+bool rcu_torture_boost_disable;
+module_param_named(boost_disable, rcu_torture_boost_disable, bool, 0444);
+MODULE_PARM_DESC(boost_disable, "Do not create RCU boost kthreads, to test boost-failure detection.");
+
 static int nrealnocbers;
 static int nrealreaders;
 static int nrealfakewriters;
