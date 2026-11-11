@@ -572,8 +572,10 @@ static int add_tracepoint_multi_sys(struct parse_events_state *parse_state,
 		ret = tp_pmu__for_each_tp_sys(&args, add_tracepoint_multi_sys_cb);
 	}
 	if (args.found == 0) {
-		tracepoint_error(err, ENOENT, sys_glob, evt_glob, loc->first_column);
-		return -ENOENT;
+		if (!ret)
+			ret = -ENOENT;
+		tracepoint_error(err, ret, sys_glob, evt_glob, loc->first_column);
+		return ret;
 	}
 	return ret;
 }
