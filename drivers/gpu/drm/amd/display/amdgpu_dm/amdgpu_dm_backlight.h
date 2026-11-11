@@ -67,12 +67,12 @@ ssize_t panel_power_savings_store(struct device *device,
 				 const char *buf, size_t count);
 int get_brightness_range(const struct amdgpu_dm_backlight_caps *caps,
 			 unsigned int *min, unsigned int *max);
-void convert_custom_brightness(const struct amdgpu_dm_backlight_caps *caps,
-			       unsigned int max, uint32_t *user_brightness);
-u32 convert_brightness_from_user(const struct amdgpu_dm_backlight_caps *caps,
-				 uint32_t brightness);
 u32 convert_brightness_to_user(const struct amdgpu_dm_backlight_caps *caps,
 			       uint32_t brightness);
+u32 convert_brightness_to_millipercent(const struct amdgpu_dm_backlight_caps *caps,
+				       u32 user_brightness);
+u32 convert_millipercent_to_user(const struct amdgpu_dm_backlight_caps *caps,
+				 u32 millipercent);
 int amdgpu_dm_backlight_get_device_index(struct amdgpu_display_manager *dm,
 					 struct backlight_device *bd);
 void amdgpu_dm_backlight_fill_props(const struct amdgpu_dm_backlight_caps *caps,
