@@ -45,7 +45,8 @@ struct napi_gro_cb {
 	/* Used in ipv6_gro_receive() and foo-over-udp and esp-in-udp */
 	u16	proto;
 
-	u16	pad;
+	/* UDP tunnel GRO callbacks left to complete */
+	u16	udp_tunnel_gro_count;
 
 /* Used in napi_gro_cb::free */
 #define NAPI_GRO_FREE             1

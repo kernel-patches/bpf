@@ -136,6 +136,7 @@ void udp_tunnel_update_gro_rcv(struct sock *sk, bool add)
 		static_branch_enable(&udp_tunnel_static_call);
 	} else if (old_gro_type_nr == 1) {
 		static_branch_disable(&udp_tunnel_static_call);
+		synchronize_net();
 		static_call_update(udp_tunnel_gro_rcv, dummy_gro_rcv);
 	}
 
@@ -144,27 +145,37 @@ out:
 }
 EXPORT_SYMBOL_GPL(udp_tunnel_update_gro_rcv);
 
-static struct sk_buff *udp_tunnel_gro_rcv(struct sock *sk,
+static struct sk_buff *udp_tunnel_gro_rcv(udp_tunnel_gro_receive_t gro_receive,
+					  struct sock *sk,
 					  struct list_head *head,
 					  struct sk_buff *skb)
 {
-	if (static_branch_likely(&udp_tunnel_static_call)) {
-		if (unlikely(gro_recursion_inc_test(skb))) {
-			NAPI_GRO_CB(skb)->flush |= 1;
-			return NULL;
-		}
-		return static_call(udp_tunnel_gro_rcv)(sk, head, skb);
+	if (unlikely(gro_recursion_inc_test(skb))) {
+		NAPI_GRO_CB(skb)->flush |= 1;
+		return NULL;
 	}
-	return call_gro_receive_sk(udp_sk(sk)->gro_receive, sk, head, skb);
+	NAPI_GRO_CB(skb)->udp_tunnel_gro_count++;
+
+	if (static_branch_likely(&udp_tunnel_static_call) &&
+	    likely(gro_receive == static_call_query(udp_tunnel_gro_rcv)))
+		return static_call(udp_tunnel_gro_rcv)(sk, head, skb);
+	return gro_receive(sk, head, skb);
 }
 
 #else
 
-static struct sk_buff *udp_tunnel_gro_rcv(struct sock *sk,
+static struct sk_buff *udp_tunnel_gro_rcv(udp_tunnel_gro_receive_t gro_receive,
+					  struct sock *sk,
 					  struct list_head *head,
 					  struct sk_buff *skb)
 {
-	return call_gro_receive_sk(udp_sk(sk)->gro_receive, sk, head, skb);
+	if (unlikely(gro_recursion_inc_test(skb))) {
+		NAPI_GRO_CB(skb)->flush |= 1;
+		return NULL;
+	}
+	NAPI_GRO_CB(skb)->udp_tunnel_gro_count++;
+
+	return gro_receive(sk, head, skb);
 }
 
 #endif
@@ -782,6 +793,7 @@ static struct sk_buff *udp_gro_receive_segment(struct list_head *head,
 struct sk_buff *udp_gro_receive(struct list_head *head, struct sk_buff *skb,
 				struct udphdr *uh, struct sock *sk)
 {
+	udp_tunnel_gro_receive_t gro_receive = NULL;
 	struct sk_buff *pp = NULL;
 	struct sk_buff *p;
 	struct udphdr *uh2;
@@ -800,7 +812,11 @@ struct sk_buff *udp_gro_receive(struct list_head *head, struct sk_buff *skb,
 	 * cases. Such packets should be caught in udp_unexpected_gso later.
 	 */
 	NAPI_GRO_CB(skb)->is_flist = 0;
-	if (!sk || !udp_sk(sk)->gro_receive) {
+	if (sk) {
+		/* Pairs with smp_store_release() in setup_udp_tunnel_sock(). */
+		gro_receive = smp_load_acquire(&udp_sk(sk)->gro_receive);
+	}
+	if (!gro_receive) {
 		/* If the packet was locally encapsulated in a UDP tunnel that
 		 * wasn't detected above, do not GRO.
 		 */
@@ -847,7 +863,7 @@ struct sk_buff *udp_gro_receive(struct list_head *head, struct sk_buff *skb,
 
 	skb_gro_pull(skb, sizeof(struct udphdr)); /* pull encapsulating udp header */
 	skb_gro_postpull_rcsum(skb, uh, sizeof(struct udphdr));
-	pp = udp_tunnel_gro_rcv(sk, head, skb);
+	pp = udp_tunnel_gro_rcv(gro_receive, sk, head, skb);
 
 out:
 	skb_gro_flush_final(skb, pp, flush);
@@ -926,6 +942,7 @@ int udp_gro_complete(struct sk_buff *skb, int nhoff,
 {
 	struct udphdr *uh = (struct udphdr *)(skb->data + nhoff);
 	unsigned int newlen = skb->len - nhoff;
+	udp_tunnel_gro_complete_t gro_complete = NULL;
 	struct sock *sk;
 	int err;
 
@@ -933,7 +950,12 @@ int udp_gro_complete(struct sk_buff *skb, int nhoff,
 
 	sk = INDIRECT_CALL_INET(lookup, udp6_lib_lookup_skb,
 				udp4_lib_lookup_skb, skb, uh->source, uh->dest);
-	if (sk && udp_sk(sk)->gro_complete) {
+	if (NAPI_GRO_CB(skb)->udp_tunnel_gro_count) {
+		NAPI_GRO_CB(skb)->udp_tunnel_gro_count--;
+		if (sk)
+			gro_complete = READ_ONCE(udp_sk(sk)->gro_complete);
+	}
+	if (gro_complete) {
 		skb_shinfo(skb)->gso_type = uh->check ? SKB_GSO_UDP_TUNNEL_CSUM
 					: SKB_GSO_UDP_TUNNEL;
 
@@ -946,8 +968,7 @@ int udp_gro_complete(struct sk_buff *skb, int nhoff,
 		 * functions to make them set up the inner offsets.
 		 */
 		skb->encapsulation = 1;
-		err = udp_sk(sk)->gro_complete(sk, skb,
-				nhoff + sizeof(struct udphdr));
+		err = gro_complete(sk, skb, nhoff + sizeof(struct udphdr));
 	} else {
 		err = udp_gro_complete_segment(skb);
 	}

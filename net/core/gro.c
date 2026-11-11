@@ -528,6 +528,7 @@ found_ptype:
 	*(u32 *)&NAPI_GRO_CB(skb)->zeroed = 0;
 	NAPI_GRO_CB(skb)->flush = skb_has_frag_list(skb);
 	NAPI_GRO_CB(skb)->count = 1;
+	NAPI_GRO_CB(skb)->udp_tunnel_gro_count = 0;
 	if (unlikely(skb_is_gso(skb))) {
 		NAPI_GRO_CB(skb)->count = skb_shinfo(skb)->gso_segs;
 		/* Only support TCP and non DODGY users, with a sane gso_segs. */
