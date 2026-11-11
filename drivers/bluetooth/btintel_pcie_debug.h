@@ -48,9 +48,9 @@ bool btintel_pcie_fatal_err_testmode_active(struct btintel_pcie_data *data);
 #define BTINTEL_PCIE_YOYO_FW_NAME	"intel/ibt_debug_yoyo.bin"
 
 /* TLV type codes */
-#define BTINTEL_PCIE_TLV_TYPE_DBG_INFO		0x1000005
+#define BTINTEL_PCIE_TLV_TYPE_DBG_INFO			0x1000005
 #define BTINTEL_PCIE_TLV_TYPE_DBG_BUF_ALLOC		0x1000006
-#define BTINTEL_PCIE_TLV_TYPE_DBG_HCMD		0x1000007
+#define BTINTEL_PCIE_TLV_TYPE_DBG_HCMD			0x1000007
 #define BTINTEL_PCIE_TLV_TYPE_DBG_REGION		0x1000008
 #define BTINTEL_PCIE_TLV_TYPE_DBG_TRIGGER		0x1000009
 #define BTINTEL_PCIE_TLV_TYPE_DBG_CONFIG_SET		0x100000A
@@ -59,6 +59,7 @@ bool btintel_pcie_fatal_err_testmode_active(struct btintel_pcie_data *data);
 /* Supported TLV type versions */
 #define BTINTEL_PCIE_DBG_INFO_TLV_VERSION	2
 #define BTINTEL_PCIE_BUF_ALLOC_TLV_VERSION	1
+#define BTINTEL_PCIE_CONFIG_SET_TLV_VERSION	1
 /* Debug Info TLV */
 #define BTINTEL_PCIE_CONFIG_NAME_LEN		64
 #define BTINTEL_PCIE_DOMAIN_BT			0
@@ -77,7 +78,7 @@ enum btintel_pcie_image_tlv_type {
 
 /* Allocation IDs */
 enum btintel_dbg_alloc_id {
-	BTINTEL_PCIE_ALLOC_ID_INVALID	= 0,
+	BTINTEL_PCIE_ALLOC_ID_INVALID		= 0,
 	BTINTEL_PCIE_ALLOC_ID_DBGC1		= 1,
 	BTINTEL_PCIE_ALLOC_ID_DBGC2		= 2,
 	BTINTEL_PCIE_ALLOC_ID_DBGC3		= 3,
@@ -91,6 +92,41 @@ enum btintel_dbg_buf_location {
 	BTINTEL_PCIE_BUF_LOC_DRAM		= 2,
 	BTINTEL_PCIE_BUF_LOC_NPK		= 3,
 	BTINTEL_PCIE_BUF_LOC_MAX,
+};
+
+/* Config set types */
+enum btintel_pcie_dbg_config_set_type {
+	BTINTEL_PCIE_CFGSET_INVALID		= 0,
+	BTINTEL_PCIE_CFGSET_PERIPH_MAC		= 1,
+	BTINTEL_PCIE_CFGSET_PERIPH_PHY		= 2,
+	BTINTEL_PCIE_CFGSET_PERIPH_AUX		= 3,
+	BTINTEL_PCIE_CFGSET_DEVICE_MEM		= 4,
+	BTINTEL_PCIE_CFGSET_CSR			= 5,
+	BTINTEL_PCIE_CFGSET_DBGC_DRAM_ADDR	= 6,
+	BTINTEL_PCIE_CFGSET_PERIPH_SCRATCH	= 7,
+	BTINTEL_PCIE_CFGSET_MAX,
+};
+
+/* Types of Timepoints */
+enum btintel_pcie_dbg_timepoint {
+	BTINTEL_PCIE_TP_INVALID			= 0,
+	BTINTEL_PCIE_TP_EARLY			= 1,
+	BTINTEL_PCIE_TP_AFTER_ALIVE		= 2,
+	BTINTEL_PCIE_TP_POST_INIT		= 3,
+	BTINTEL_PCIE_TP_FW_ASSERT		= 4,
+	BTINTEL_PCIE_TP_FW_HW_ERROR		= 5,
+	BTINTEL_PCIE_TP_FW_TFD_Q_HANG		= 6,
+	BTINTEL_PCIE_TP_FW_DHC_NOTIF		= 7,
+	BTINTEL_PCIE_TP_FW_RSP_OR_NOTIF		= 8,
+	BTINTEL_PCIE_TP_USER_TRIGGER		= 9,
+	BTINTEL_PCIE_TP_PERIODIC		= 10,
+	BTINTEL_PCIE_TP_RESERVED		= 11,
+	BTINTEL_PCIE_TP_HOST_ASSERT		= 12,
+	BTINTEL_PCIE_TP_HOST_ALIVE_TIMEOUT	= 13,
+	BTINTEL_PCIE_TP_HOST_DEVICE_DISABLE	= 15,
+	BTINTEL_PCIE_TP_HOST_D3_START		= 16,
+	BTINTEL_PCIE_TP_HOST_D3_END		= 17,
+	BTINTEL_PCIE_TP_MAX_NUM,
 };
 
 /* TLV header */
@@ -152,6 +188,27 @@ struct btintel_pcie_tlv_buf_alloc {
 	__le32 min_buf_size;
 } __packed;
 
+/*
+ * struct btintel_pcie_tlv_config_set - YoYo configuration-set TLV
+ * @hdr: Common TLV type and payload length
+ * @dbg_hdr: Debug TLV version and domain
+ * @time_point: Timepoint at which to apply this configuration
+ * @config_set_type: Target register or memory space
+ * @addr_offset: Offset added to each address/value pair address
+ * @addr_pair: Variable-length array of address/value pairs
+ *
+ * Describes configuration values to apply at a specified timepoint. Fields
+ * are stored in little-endian format in the packed firmware TLV.
+ */
+struct btintel_pcie_tlv_config_set {
+	struct btintel_pcie_tlv_hdr hdr;
+	struct btintel_pcie_dbg_hdr dbg_hdr;
+	__le32 time_point;
+	__le32 config_set_type;
+	__le32 addr_offset;
+	struct btintel_pcie_addr_value addr_pair[];
+} __packed;
+
 /* Parsed buffer allocation entry in the YoYo context */
 struct btintel_pcie_buf_alloc {
 	u32	alloc_id;
@@ -162,9 +219,20 @@ struct btintel_pcie_buf_alloc {
 	bool	present;
 };
 
+/* Parsed config set entry in yoyo ctx */
+struct btintel_pcie_yoyo_config_set {
+	struct list_head		list;
+	u32				time_point;
+	u32				config_set_type;
+	u32				addr_offset;
+	u32				num_pairs;
+	struct btintel_pcie_addr_value	*pairs;
+};
+
 /*
- * struct btintel_pcie_yoyo_ctx- Runtime state for YoYo debug configuration
+ * struct btintel_pcie_yoyo_ctx - Runtime state for YoYo debug configuration
  * @enabled: Whether the loaded YoYo configuration passed validation
+ * @dbg_info_present: Whether the mandatory DEBUG_INFO TLV was validated
  * @region_list: Parsed debug-region entries
  * @trigger_list: Parsed debug-trigger entries
  * @hcmd_list: Parsed HCI command entries

@@ -314,8 +314,10 @@ static int btintel_pcie_yoyo_parse_dbg_info(struct btintel_pcie_yoyo_ctx *ctx,
 	const u8 *data = (const u8 *)info;
 	u32 domain, image_type, core_type, version;
 
-	if (len != sizeof(*info) - sizeof(struct btintel_pcie_tlv_hdr))
+	if (len != sizeof(*info) - sizeof(struct btintel_pcie_tlv_hdr)) {
+		BT_WARN("YoYo: dbg info tlv is too short or Invalid");
 		return -EBADMSG;
+	}
 
 	image_type = get_unaligned_le32(data +
 				       offsetof(struct btintel_pcie_tlv_dbg_info,
@@ -361,7 +363,7 @@ static int btintel_pcie_yoyo_parse_buf_alloc(struct btintel_pcie_yoyo_ctx *ctx,
 	u32 req_buf_size, version;
 
 	if (len != sizeof(*tlv) - sizeof(struct btintel_pcie_tlv_hdr)) {
-		BT_WARN("YoYo: unexpected buf alloc TLV length %u", len);
+		BT_WARN("YoYo: buf alloc tlv is too short or Invalid");
 		return -EBADMSG;
 	}
 
@@ -423,6 +425,85 @@ static int btintel_pcie_yoyo_parse_buf_alloc(struct btintel_pcie_yoyo_ctx *ctx,
 	return 0;
 }
 
+static int btintel_pcie_yoyo_parse_config_set(struct btintel_pcie_yoyo_ctx *ctx,
+					      const struct btintel_pcie_tlv_config_set *tlv,
+					      u32 len)
+{
+	struct btintel_pcie_yoyo_config_set *cs;
+	u32 fixed_size = sizeof(*tlv) - sizeof(struct btintel_pcie_tlv_hdr);
+	u32 pairs_bytes, num_pairs, domain, version, time_point, config_set_type;
+
+	if (len < fixed_size) {
+		BT_WARN("YoYo: config set tlv too short or Invalid");
+		return -EBADMSG;
+	}
+
+	domain = get_unaligned_le32(&tlv->dbg_hdr.domain);
+	version = get_unaligned_le32(&tlv->dbg_hdr.tlv_data_version);
+	if (domain != BTINTEL_PCIE_DOMAIN_BT ||
+	    version != BTINTEL_PCIE_CONFIG_SET_TLV_VERSION) {
+		BT_WARN("YoYo: unsupported domain/version (%u/%u)",
+			domain, version);
+		return 0;
+	}
+
+	time_point = get_unaligned_le32(&tlv->time_point);
+	if (time_point != BTINTEL_PCIE_TP_EARLY) {
+		BT_WARN("YoYo: config set unsupported time_point %u, skipping",
+			time_point);
+		return 0;
+	}
+
+	config_set_type = get_unaligned_le32(&tlv->config_set_type);
+	if (config_set_type != BTINTEL_PCIE_CFGSET_CSR &&
+	    config_set_type != BTINTEL_PCIE_CFGSET_PERIPH_MAC &&
+	    config_set_type != BTINTEL_PCIE_CFGSET_DEVICE_MEM) {
+		BT_WARN("YoYo: config set unsupported config_set_type %u, skipping",
+			config_set_type);
+		return 0;
+	}
+
+	/* Malformed pair data: skip this TLV, keep parsing the rest. */
+	pairs_bytes = len - fixed_size;
+	if (pairs_bytes % sizeof(struct btintel_pcie_addr_value)) {
+		BT_WARN("YoYo: config set has an incomplete addr/value pair, skipping");
+		return 0;
+	}
+
+	num_pairs = pairs_bytes / sizeof(struct btintel_pcie_addr_value);
+
+	if (!num_pairs) {
+		BT_WARN("YoYo: config set with no addr/value pairs, skipping");
+		return 0;
+	}
+
+	cs = kzalloc(sizeof(*cs), GFP_KERNEL);
+	if (!cs) {
+		BT_WARN("YoYo: failed to allocate config set entry, disabling YoYo");
+		/* -ENOMEM is fatal: load_and_parse() discards the whole configuration */
+		return -ENOMEM;
+	}
+
+	cs->time_point = time_point;
+	cs->config_set_type = config_set_type;
+	cs->addr_offset = get_unaligned_le32(&tlv->addr_offset);
+	cs->num_pairs = num_pairs;
+
+	cs->pairs = kmemdup(tlv->addr_pair, pairs_bytes, GFP_KERNEL);
+	if (!cs->pairs) {
+		kfree(cs);
+		BT_WARN("YoYo: failed to allocate config set pairs, disabling YoYo");
+		return -ENOMEM;
+	}
+
+	BT_DBG("YoYo: config set tp=%u type=%u pairs=%u offset=0x%x",
+	       cs->time_point, cs->config_set_type,
+	       cs->num_pairs, cs->addr_offset);
+
+	list_add_tail(&cs->list, &ctx->config_set_list);
+	return 0;
+}
+
 /*
  * Parse the optional YoYo firmware TLV stream and validate each record.
  * This is the entry point for the runtime debug configuration payload.
@@ -463,10 +544,12 @@ static int btintel_pcie_yoyo_parse_tlv_buffer(struct btintel_pcie_yoyo_ctx *ctx,
 			ret = btintel_pcie_yoyo_parse_buf_alloc(ctx,
 								(const void *)tlv, len);
 			break;
+		case BTINTEL_PCIE_TLV_TYPE_DBG_CONFIG_SET:
+			ret = btintel_pcie_yoyo_parse_config_set(ctx, (const void *)tlv, len);
+			break;
 		case BTINTEL_PCIE_TLV_TYPE_DBG_REGION:
 		case BTINTEL_PCIE_TLV_TYPE_DBG_TRIGGER:
 		case BTINTEL_PCIE_TLV_TYPE_DBG_HCMD:
-		case BTINTEL_PCIE_TLV_TYPE_DBG_CONFIG_SET:
 		case BTINTEL_PCIE_TLV_TYPE_DBG_PRESET_OVERRIDE:
 			BT_DBG("YoYo: valid tlv type 0x%x len=%u", type, len);
 			break;
@@ -489,10 +572,6 @@ static int btintel_pcie_yoyo_parse_tlv_buffer(struct btintel_pcie_yoyo_ctx *ctx,
 	/* If no TLVs were parsed, the YoYo binary is considered invalid */
 	if (remaining || count == 0) {
 		BT_ERR("YoYo: trailing %zu bytes after tlv stream", remaining);
-		return -EBADMSG;
-	}
-	if (!ctx->num_buf_allocs) {
-		BT_ERR("YoYo: mandatory buffer allocation TLV missing");
 		return -EBADMSG;
 	}
 
@@ -528,6 +607,8 @@ EXPORT_SYMBOL_GPL(btintel_pcie_yoyo_init);
  */
 void btintel_pcie_yoyo_cleanup(struct btintel_pcie_yoyo_ctx *ctx)
 {
+	struct btintel_pcie_yoyo_config_set *config_set, *config_tmp;
+
 	if (!ctx)
 		return;
 
@@ -535,6 +616,14 @@ void btintel_pcie_yoyo_cleanup(struct btintel_pcie_yoyo_ctx *ctx)
 	ctx->dbg_info_present = false;
 	ctx->num_buf_allocs = 0;
 	memset(ctx->buf_alloc, 0, sizeof(ctx->buf_alloc));
+
+	ctx->hdev = NULL;
+
+	list_for_each_entry_safe(config_set, config_tmp, &ctx->config_set_list, list) {
+		list_del(&config_set->list);
+		kfree(config_set->pairs);
+		kfree(config_set);
+	}
 }
 EXPORT_SYMBOL_GPL(btintel_pcie_yoyo_cleanup);
 
@@ -552,7 +641,7 @@ int btintel_pcie_yoyo_load_and_parse(struct btintel_pcie_yoyo_ctx *ctx,
 	const struct firmware *fw;
 	int ret;
 
-	if (!ctx)
+	if (!ctx || !dev)
 		return -EINVAL;
 
 	ret = request_firmware_direct(&fw, BTINTEL_PCIE_YOYO_FW_NAME, dev);
@@ -576,17 +665,21 @@ int btintel_pcie_yoyo_load_and_parse(struct btintel_pcie_yoyo_ctx *ctx,
 
 	/* File Corruption / TLV validation failed */
 	if (ret) {
-		BT_ERR("YoYo: tlv parsing failed (%d)", ret);
+		BT_WARN("YoYo: tlv parsing failed (%d)", ret);
+		btintel_pcie_yoyo_cleanup(ctx);
 		return ret;
 	}
-	if (!ctx->dbg_info_present) {
-		BT_ERR("YoYo: Invalid BT debug Info tlv, using legacy DBGC defaults");
+
+	/* DEBUG_INFO and buffer allocation TLVs are mandatory */
+	if (!ctx->dbg_info_present || !ctx->num_buf_allocs) {
+		BT_WARN("YoYo: mandatory tlv is missing, using legacy DBGC defaults");
+		btintel_pcie_yoyo_cleanup(ctx);
 		return -EBADMSG;
 	}
 
 	ctx->enabled = true;
 
-	BT_INFO("YoYo: feature enabled and configured");
+	BT_INFO("YoYo (BDF - %s): feature enabled and configured", dev_name(dev));
 	return 0;
 }
 EXPORT_SYMBOL_GPL(btintel_pcie_yoyo_load_and_parse);
