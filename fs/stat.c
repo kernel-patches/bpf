@@ -103,7 +103,8 @@ void generic_fillattr(const struct mnt_idmap *idmap, u32 request_mask,
 	}
 
 	stat->blksize = i_blocksize(inode);
-	stat->blocks = inode->i_blocks;
+	/* The block count is a snapshot and may race with space accounting. */
+	stat->blocks = data_race(inode->i_blocks);
 
 	if ((request_mask & STATX_CHANGE_COOKIE) && IS_I_VERSION(inode)) {
 		stat->result_mask |= STATX_CHANGE_COOKIE;
