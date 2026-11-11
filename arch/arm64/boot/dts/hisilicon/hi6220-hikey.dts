@@ -505,6 +505,12 @@
 	adv7533: adv7533@39 {
 		compatible = "adi,adv7533";
 		reg = <0x39>;
+		avdd-supply = <&ldo15>;
+		dvdd-supply = <&ldo15>;
+		pvdd-supply = <&ldo15>;
+		a2vdd-supply = <&ldo15>;
+		v3p3-supply = <&reg_vdd_3v3>;
+		v1p2-supply = <&ldo22>;
 		interrupt-parent = <&gpio1>;
 		interrupts = <1 2>;
 		pd-gpios = <&gpio0 4 0>;
