@@ -13,4 +13,15 @@ config REALTEK_PHY_HWMON
 	help
 	  Optional hwmon support for the temperature sensor
 
+config REALTEK_PHY_PTP
+	bool "PTP support for Realtek PHYs"
+	default y
+	depends on PTP_1588_CLOCK
+	depends on !(REALTEK_PHY=y && PTP_1588_CLOCK=m)
+	help
+	  Optional PTP hardware clock support for the internal PHY of
+	  RTL8127A. The clock is provided by the PHY itself and can be
+	  read and adjusted through the PTP clock device, no support from
+	  the MAC driver is needed.
+
 endif # REALTEK_PHY
