@@ -1433,7 +1433,7 @@ int zynqmp_disp_probe(struct zynqmp_dpsub *dpsub)
 		struct zynqmp_disp_layer *layer;
 
 		layer = &disp->layers[ZYNQMP_DPSUB_LAYER_VID];
-		dpsub->dma_align = 1 << layer->dmas[0].chan->device->copy_align;
+		dpsub->dma_align = 1 << dmaengine_get_copy_align(layer->dmas[0].chan);
 	}
 
 	dpsub->disp = disp;
