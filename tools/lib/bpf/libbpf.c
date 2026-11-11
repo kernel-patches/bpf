@@ -9391,8 +9391,8 @@ static int bpf_object__resolve_ksym_func_btf_id(struct bpf_object *obj,
 	if (mod_btf && !mod_btf->fd_array_idx) {
 		/* insn->off is s16 */
 		if (obj->fd_array_used == INT16_MAX) {
-			pr_warn("extern (func ksym) '%s': module BTF fd index %d too big to fit in bpf_insn offset\n",
-				ext->name, mod_btf->fd_array_idx);
+			pr_warn("extern (func ksym) '%s': module BTF fd index %zu too big to fit in bpf_insn offset\n",
+				ext->name, obj->fd_array_used);
 			return -E2BIG;
 		}
 		/* Cannot use index 0 for module BTF fd */
