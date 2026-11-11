@@ -372,7 +372,7 @@ index 84659a757b43..ffbec587a916 100644
  		verbose_a("r=");
  		verbose_unum(env, reg->range);
 diff --git a/kernel/bpf/scev.c b/kernel/bpf/scev.c
-index 4187ce955be9..06caa430dc3c 100644
+index 4187ce955be9..e36181a00858 100644
 --- a/kernel/bpf/scev.c
 +++ b/kernel/bpf/scev.c
 @@ -12,8 +12,13 @@
@@ -3322,7 +3322,7 @@ index 4187ce955be9..06caa430dc3c 100644
  		    !(behind && is_moved_linear(scev, r_scev, &coefs, &moved) &&
  		      coefs.base_reg == r))
  			continue;
-@@ -4037,13 +5207,13 @@ int bpf_clamp_scev_regs(struct bpf_verifier_env *env, struct bpf_func_state *cur
+@@ -4037,13 +5207,17 @@ int bpf_clamp_scev_regs(struct bpf_verifier_env *env, struct bpf_func_state *cur
  		 * bpf_compute_loop_iters() gives no range to a pointer to arena that moves, and
  		 * it does not look at dead registers. Set a range only where it would.
  		 */
@@ -3334,12 +3334,16 @@ index 4187ce955be9..06caa430dc3c 100644
  		linear_bounds(entry_reg, max_header_count, &coefs, &bounds);
 -		if (coefs.base_reg == entry->iv_reg && !moved)
 -			iv_bounds(&bounds, entry->iv_range);
-+		if (!moved && is_iv_at_header(env, insn_idx, entry->iv_reg, coefs.base_reg))
++		/*
++		 * iv_range is the range at the header. After the latch @r can be the zero extension
++		 * of its header value. @reg went through that insn and has what holds of the range.
++		 */
++		if (!behind && is_iv_at_header(env, insn_idx, entry->iv_reg, coefs.base_reg))
 +			iv_bounds(&bounds, &coefs, entry->iv_range);
  		if (moved) {
  			/* a sum that can wrap has another residue, see scalar_step_add() */
  			if (check_add_overflow(cnum64_smin(bounds.r64), moved, &sum) ||
-@@ -4084,8 +5254,5 @@ clamp:
+@@ -4084,8 +5258,5 @@ clamp:
  			return err;
  		mark_scev_reg_scratched(env, r);
  	}
@@ -4720,10 +4724,10 @@ index 32bab3cb3fcb..d6a6420d219d 100644
   * of overwriting. r1 has offsets [-8, -16]. Both slots hold FP-derived
   * pointers. Writing through r1 should join *val with existing values,
 diff --git a/tools/testing/selftests/bpf/progs/verifier_loop_latch.c b/tools/testing/selftests/bpf/progs/verifier_loop_latch.c
-index 35bb3e16db3d..b0fcaba1506f 100644
+index 35bb3e16db3d..17222e1332fd 100644
 --- a/tools/testing/selftests/bpf/progs/verifier_loop_latch.c
 +++ b/tools/testing/selftests/bpf/progs/verifier_loop_latch.c
-@@ -271,6 +271,38 @@ LOOP(copy_bad, "r8 = 0; r9 = r8;", COPY(2047))
+@@ -271,6 +271,51 @@ LOOP(copy_bad, "r8 = 0; r9 = r8;", COPY(2047))
  BAD("a copy of the counter, another number at the entry")
  LOOP(copy_other_const, "r8 = 2047; r9 = 0; r6 += 2047;", COPY(2046))
  
@@ -4759,10 +4763,23 @@ index 35bb3e16db3d..b0fcaba1506f 100644
 +BAD("a copy of the counter, down from a range, one too many")
 +LOOP(copy_down_from_range_bad, FROM_RANGE, DOWN("+ 0"))
 +
++/*
++ * r9 is zero extended. [1, 2048], its range at the header, is the range of the zero extension too.
++ * [-1000, 1001] is not: the first store is 4G behind the value.
++ */
++OK("a copy of the counter, zero extended", "[0..2048]")
++LOOP(copy_zext, FROM_RANGE, "w9 = w9;" DOWN("- 1"))
++
++SEC("socket") __description("latch: a copy of the counter, zero extended, from below 0")
++__failure __msg("R4 unbounded memory access")
++LOOP(copy_zext_bad, "r5 = r6; r8 = r7; r8 &= 255; r8 += -1000; r9 = r8;",
++     "w9 = w9; if r8 s> 1000 goto 9f; r4 = r5; r4 += r9; *(u8 *)(r4 + 1000) = r1;"
++     "r8 += 1; r9 = r8; if r7 != 0 goto 1b;")
++
  OK("a copy of the counter, a range", "[0..2]")
  LOOP(copy_range, "r5 = r6; r8 = r7; r8 &= 1; r8 += 2045; r9 = r8;", COPY(2045) AT_R8)
  
-@@ -297,13 +329,13 @@ LOOP(copy_bounds_both, "r5 = r6; if r7 > 2047 goto 9f; r8 = r7; r9 = r8;",
+@@ -297,13 +342,13 @@ LOOP(copy_bounds_both, "r5 = r6; if r7 > 2047 goto 9f; r8 = r7; r9 = r8;",
  	"r4 = r5; r4 += r9; *(u8 *)(r4 " off ") = r1; 2: r9 = r8; if r7 != 0 goto 1b;"
  
  OK("a copy of the counter, one less behind the jump", "[0..2048]")
