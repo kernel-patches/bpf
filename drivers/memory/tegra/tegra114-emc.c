@@ -1163,7 +1163,7 @@ static int emc_icc_set(struct icc_node *src, struct icc_node *dst)
 	unsigned long long peak_bw = icc_units_to_bps(dst->peak_bw);
 	unsigned long long avg_bw = icc_units_to_bps(dst->avg_bw);
 	unsigned long long rate = max(avg_bw, peak_bw);
-	unsigned int dram_data_bus_width_bytes = 4;
+	unsigned int dram_data_bus_width_bytes = 8;
 	const unsigned int ddr = 2;
 	int err;
 
