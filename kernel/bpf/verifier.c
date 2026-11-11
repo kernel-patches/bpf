@@ -24434,6 +24434,8 @@ BTF_ID(func, do_exit)
 BTF_ID(func, do_group_exit)
 BTF_ID(func, kthread_complete_and_exit)
 BTF_ID(func, make_task_dead)
+BTF_ID(func, bpf_throw)
+BTF_ID(func, bpf_throw_unwind)
 BTF_SET_END(noreturn_deny)
 
 static bool can_be_sleepable(struct bpf_prog *prog)
@@ -24793,6 +24795,11 @@ static int specialize_kfunc(struct bpf_verifier_env *env, struct bpf_kfunc_desc 
 	} else if (func_id == special_kfunc_list[KF_bpf_arena_free_pages]) {
 		if (env->insn_aux_data[insn_idx].non_sleepable)
 			addr = (unsigned long)bpf_arena_free_pages_non_sleepable;
+	} else if (func_id == special_kfunc_list[KF_bpf_throw]) {
+		void *entry = bpf_arch_throw_entry();
+
+		if (entry)
+			addr = (unsigned long)entry;
 	}
 	desc->addr = addr;
 	return 0;
