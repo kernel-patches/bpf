@@ -98,13 +98,7 @@ void spi_nor_spimem_setup_op(const struct spi_nor *nor,
 		op->data.buswidth = spi_nor_get_protocol_data_nbits(proto);
 
 	if (spi_nor_protocol_is_dtr(proto)) {
-		/*
-		 * SPIMEM supports mixed DTR modes, but right now we can only
-		 * have all phases either DTR or STR. IOW, SPIMEM can have
-		 * something like 4S-4D-4D, but SPI NOR can't. So, set all 4
-		 * phases to either DTR or STR.
-		 */
-		op->cmd.dtr = true;
+		/* we only support 1S-nD-nD or 8D-8D-8D */
 		op->addr.dtr = true;
 		op->dummy.dtr = true;
 		op->data.dtr = true;
@@ -112,13 +106,16 @@ void spi_nor_spimem_setup_op(const struct spi_nor *nor,
 		/* 2 bytes per clock cycle in DTR mode. */
 		op->dummy.nbytes *= 2;
 
-		ext = spi_nor_get_cmd_ext(nor, op);
-		op->cmd.opcode = (op->cmd.opcode << 8) | ext;
-		op->cmd.nbytes = 2;
-	}
+		if (proto == SNOR_PROTO_8_8_8_DTR) {
+			op->cmd.dtr = true;
+			ext = spi_nor_get_cmd_ext(nor, op);
+			op->cmd.opcode = (op->cmd.opcode << 8) | ext;
+			op->cmd.nbytes = 2;
 
-	if (proto == SNOR_PROTO_8_8_8_DTR && params->flags & SNOR_F_SWAP16)
-		op->data.swap16 = true;
+			if (params->flags & SNOR_F_SWAP16)
+				op->data.swap16 = true;
+		}
+	}
 }
 
 /**
