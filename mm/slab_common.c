@@ -1000,16 +1000,18 @@ new_kmalloc_cache(int idx, enum kmalloc_cache_type type)
 #endif
 
 	/*
-	 * If memcg_kmem is enabled and this is a KMALLOC_NORMAL cache and not
-	 * aliased with any other type, make sure it's never merged with any other
-	 * cache.
+	 * If memcg_kmem is enabled and this is a KMALLOC_NORMAL or
+	 * KMALLOC_PARTITION_CACHES cache and not aliased with any other type,
+	 * make sure it's never merged with any other cache.
 	 *
 	 * In other cases the kmalloc cache may end up being used for a
 	 * __GFP_ACCOUNT allocation so mark it as such. The exception is a
 	 * KMALLOC_NO_OBJ_EXT cache.
 	 */
 	if (!mem_cgroup_kmem_disabled()) {
-		if (type == KMALLOC_NORMAL && KMALLOC_RECLAIM != KMALLOC_NORMAL)
+		if (type >= KMALLOC_PARTITION_START &&
+		    type <= KMALLOC_PARTITION_END &&
+		    KMALLOC_RECLAIM != KMALLOC_NORMAL)
 			flags |= SLAB_NO_MERGE;
 		else if (!(flags & SLAB_NO_OBJ_EXT))
 			flags |= SLAB_MAY_ACCOUNT;
