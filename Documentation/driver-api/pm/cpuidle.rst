@@ -146,13 +146,12 @@ callbacks:
 
 In addition, ``CPUIdle`` governors are required to take power management
 quality of service (PM QoS) constraints on the processor wakeup latency into
-account when selecting idle states.  In order to obtain the current effective
-PM QoS wakeup latency constraint for a given CPU, a ``CPUIdle`` governor is
-expected to pass the number of the CPU to
-:c:func:`cpuidle_governor_latency_req()`.  Then, the governor's ``->select()``
-callback must not return the index of an indle state whose
-:c:member:`exit_latency` value is greater than the number returned by that
-function.
+account when selecting idle states.  Before invoking the governor's
+``->select()`` callback, the core saves the effective PM QoS wakeup latency
+constraint in ``dev->latency_req``, in nanoseconds.  Governors use this value
+to constrain the :c:member:`exit_latency_ns` of the selected idle state.
+The core also uses the saved value for below miss accounting, so subsequent
+PM QoS updates do not change the constraint used to evaluate that selection.
 
 
 CPU Idle Time Management Drivers

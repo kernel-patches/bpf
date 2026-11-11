@@ -131,12 +131,15 @@ void cpuidle_use_deepest_state(u64 latency_limit_ns)
  * @dev: cpuidle device for the given CPU.
  * @latency_limit_ns: Idle state exit latency limit
  *
+ * Save the limit for miss accounting on the subsequent idle entry.
+ *
  * Return: the index of the deepest available idle state.
  */
 int cpuidle_find_deepest_state(struct cpuidle_driver *drv,
 			       struct cpuidle_device *dev,
 			       u64 latency_limit_ns)
 {
+	dev->latency_req = min_t(u64, latency_limit_ns, S64_MAX);
 	return find_deepest_state(drv, dev, latency_limit_ns, 0, false);
 }
 
@@ -327,7 +330,8 @@ noinstr int cpuidle_enter_state(struct cpuidle_device *dev,
 			}
 		} else if (diff > delay) {
 			for (i = entered_state + 1; i < drv->state_count; i++) {
-				if (dev->states_usage[i].disable)
+				if (dev->states_usage[i].disable ||
+				    drv->states[i].exit_latency_ns > dev->latency_req)
 					continue;
 
 				/*
@@ -369,6 +373,8 @@ out:
 int cpuidle_select(struct cpuidle_driver *drv, struct cpuidle_device *dev,
 		   bool *stop_tick)
 {
+	/* Use the same constraint for state selection and miss accounting. */
+	dev->latency_req = cpuidle_governor_latency_req(dev->cpu);
 	return cpuidle_curr_governor->select(drv, dev, stop_tick);
 }
 

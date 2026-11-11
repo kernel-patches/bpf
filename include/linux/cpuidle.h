@@ -101,6 +101,7 @@ struct cpuidle_device {
 	u64			last_residency_ns;
 	u64			poll_limit_ns;
 	u64			forced_idle_latency_limit_ns;
+	s64			latency_req;
 	struct cpuidle_state_usage	states_usage[CPUIDLE_STATE_MAX];
 	struct cpuidle_state_kobj *kobjs[CPUIDLE_STATE_MAX];
 	struct cpuidle_driver_kobj *kobj_driver;
@@ -306,7 +307,6 @@ struct cpuidle_governor {
 };
 
 extern int cpuidle_register_governor(struct cpuidle_governor *gov);
-extern s64 cpuidle_governor_latency_req(unsigned int cpu);
 
 #define __CPU_PM_CPU_IDLE_ENTER(low_level_idle_enter,			\
 				idx,					\

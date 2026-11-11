@@ -50,7 +50,7 @@ static int haltpoll_select(struct cpuidle_driver *drv,
 			   struct cpuidle_device *dev,
 			   bool *stop_tick)
 {
-	if (cpuidle_governor_latency_req(dev->cpu) == 0) {
+	if (dev->latency_req == 0) {
 		*stop_tick = false;
 		return 0;
 	}
