@@ -196,6 +196,8 @@ void bpf_selem_link_storage_nolock(struct bpf_local_storage *local_storage,
 
 int bpf_selem_unlink(struct bpf_local_storage_elem *selem);
 
+int bpf_local_storage_delete(void *owner, struct bpf_local_storage_map *smap);
+
 int bpf_selem_link_map(struct bpf_local_storage_map *smap,
 		       struct bpf_local_storage *local_storage,
 		       struct bpf_local_storage_elem *selem);
