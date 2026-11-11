@@ -353,4 +353,11 @@ static inline s64 squashfs_add_indexes(u64 block, s64 blks, struct squashfs_sb_i
 
 	return block + blks;
 }
+
+static inline bool squashfs_dir_space(struct inode *inode, loff_t length, int size)
+{
+	loff_t space = i_size_read(inode) - length;
+
+	return space >= size;
+}
 #endif
