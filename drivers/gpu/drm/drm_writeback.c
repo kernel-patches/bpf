@@ -281,18 +281,21 @@ EXPORT_SYMBOL(drm_writeback_connector_init);
 static void drm_writeback_connector_cleanup(struct drm_device *dev,
 					    void *data)
 {
-	unsigned long flags;
-	struct drm_writeback_job *pos, *n;
 	struct drm_writeback_connector *wb_connector = data;
+	struct drm_writeback_job *pos, *n;
+	unsigned long flags;
+	LIST_HEAD(jobs);
 
 	drm_property_blob_put(wb_connector->pixel_formats_blob_ptr);
 
 	spin_lock_irqsave(&wb_connector->job_lock, flags);
-	list_for_each_entry_safe(pos, n, &wb_connector->job_queue, list_entry) {
+	list_splice_init(&wb_connector->job_queue, &jobs);
+	spin_unlock_irqrestore(&wb_connector->job_lock, flags);
+
+	list_for_each_entry_safe(pos, n, &jobs, list_entry) {
 		list_del(&pos->list_entry);
 		drm_writeback_cleanup_job(pos);
 	}
-	spin_unlock_irqrestore(&wb_connector->job_lock, flags);
 }
 
 /**
