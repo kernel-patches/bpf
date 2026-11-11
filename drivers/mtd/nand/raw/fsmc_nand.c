@@ -486,7 +486,7 @@ static int dma_xfer(struct fsmc_nand_data *host, void *buffer, int len,
 		    enum dma_data_direction direction)
 {
 	struct dma_chan *chan;
-	struct dma_device *dma_dev;
+	struct device *dma_dev;
 	struct dma_async_tx_descriptor *tx;
 	dma_addr_t dma_dst, dma_src, dma_addr;
 	dma_cookie_t cookie;
@@ -501,9 +501,9 @@ static int dma_xfer(struct fsmc_nand_data *host, void *buffer, int len,
 	else
 		return -EINVAL;
 
-	dma_dev = chan->device;
-	dma_addr = dma_map_single(dma_dev->dev, buffer, len, direction);
-	if (dma_mapping_error(dma_dev->dev, dma_addr))
+	dma_dev = dmaengine_get_dma_device(chan);
+	dma_addr = dma_map_single(dma_dev, buffer, len, direction);
+	if (dma_mapping_error(dma_dev, dma_addr))
 		return -EINVAL;
 
 	if (direction == DMA_TO_DEVICE) {
@@ -514,8 +514,7 @@ static int dma_xfer(struct fsmc_nand_data *host, void *buffer, int len,
 		dma_dst = dma_addr;
 	}
 
-	tx = dma_dev->device_prep_dma_memcpy(chan, dma_dst, dma_src,
-			len, flags);
+	tx = dmaengine_prep_dma_memcpy(chan, dma_dst, dma_src, len, flags);
 	if (!tx) {
 		dev_err(host->dev, "device_prep_dma_memcpy error\n");
 		ret = -EIO;
@@ -547,7 +546,7 @@ static int dma_xfer(struct fsmc_nand_data *host, void *buffer, int len,
 	ret = 0;
 
 unmap_dma:
-	dma_unmap_single(dma_dev->dev, dma_addr, len, direction);
+	dma_unmap_single(dma_dev, dma_addr, len, direction);
 
 	return ret;
 }
