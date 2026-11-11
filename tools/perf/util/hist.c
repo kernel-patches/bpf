@@ -725,9 +725,12 @@ static struct hist_entry *hists__findnew_entry(struct hists *hists,
 			 * become out-of-date due to an exec() or
 			 * similar, update it.  Otherwise we will
 			 * mis-adjust symbol addresses when computing
-			 * the history counter to increment.
+			 * the history counter to increment.  Skip it when the
+			 * new sample has no map (an unresolved address):
+			 * there is nothing to update to.
 			 */
-			if (hists__has(hists, sym) && he->ms.map != entry->ms.map) {
+			if (hists__has(hists, sym) && entry->ms.map &&
+			    he->ms.map != entry->ms.map) {
 				if (he->ms.sym) {
 					u64 addr = he->ms.sym->start;
 					he->ms.sym = map__find_symbol(entry->ms.map, addr);
