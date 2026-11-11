@@ -94,9 +94,97 @@ struct yt921x_reg_mdio {
 	 * Keep this because we need switchid to form MII regaddrs anyway.
 	 */
 	unsigned char switchid;
+
+	bool synced;
 };
 
 /* TODO: SPI/I2C */
+
+/* An SMI register access is 4 MDIO frames. An interrupted access leaves the
+ * machine in an unknown state, and every following access fails or acts on a
+ * stale address.
+ *
+ * The driver used to assume every access succeeds, and relied on manual
+ * resetting when the state machine wedged. However, without a dedicated reset
+ * line, the reset itself goes through the same SMI interface, causing the
+ * chicken-and-egg problem. Furthermore, our driver verifies chip id before
+ * firing the reset, so that can never be triggered reliably.
+ *
+ * (A/D: address/data, H/L: hi/lo byte, r/w: read/write)
+ *
+ * State Input Next Comment
+ * ----- ----- ---- -------
+ * AH    aw    AL
+ * AH    dr    AH   `0xdead` sentinel
+ * AL    aw    DH
+ * AL    dr    AL   `0xdead` sentinel
+ * DHr   aw    AH   abort, frame discarded
+ * DHr   dr    DLr
+ * DLr   aw    AH   abort, frame discarded
+ * DLr   dr    AH   the access is done
+ * DHw   aw    AH   abort, frame discarded
+ * DHw   dw    DLw
+ * DLw   aw    AL   abort, frame consumed as next access's addr-hi
+ * DLw   dr    ?    `0xdead` sentinel; stay or advance undetermined
+ * DLw   dw    AH   the access commits
+ *
+ * The table lists the whitelisted frames only; any other REGAD/op combination
+ * is not characterized and is never emitted here.
+ *
+ * The resync sequence is dr, dr, aw, aw, dr, dr, plus one more dr as a sanity
+ * check: the machine must be back at AH, which reads the `0xdead` sentinel.
+ */
+static int yt921x_reg_mdio_resync(struct yt921x_reg_mdio *mdio)
+{
+	struct mii_bus *bus = mdio->bus;
+	int addr = mdio->addr;
+	u32 reg_addr;
+	u32 reg_data;
+	int res;
+
+	mutex_lock_nested(&bus->mdio_lock, MDIO_MUTEX_NESTED);
+
+	reg_addr = YT921X_SMI_SWITCHID(mdio->switchid) | YT921X_SMI_ADDR |
+		   YT921X_SMI_READ;
+	reg_data = YT921X_SMI_SWITCHID(mdio->switchid) | YT921X_SMI_DATA |
+		   YT921X_SMI_READ;
+
+	/* dr */
+	res = __mdiobus_read(bus, addr, reg_data);
+	if (res < 0)
+		goto end;
+	/* dr */
+	res = __mdiobus_read(bus, addr, reg_data);
+	if (res < 0)
+		goto end;
+	/* aw */
+	res = __mdiobus_write(bus, addr, reg_addr, 0);
+	if (res)
+		goto end;
+	/* aw */
+	res = __mdiobus_write(bus, addr, reg_addr, 0);
+	if (res)
+		goto end;
+	/* dr */
+	res = __mdiobus_read(bus, addr, reg_data);
+	if (res < 0)
+		goto end;
+	/* dr */
+	res = __mdiobus_read(bus, addr, reg_data);
+	if (res < 0)
+		goto end;
+	/* AH --dr--> AH */
+	res = __mdiobus_read(bus, addr, reg_data);
+	if (res < 0)
+		goto end;
+	res = res != 0xdead ? -EIO : 0;
+
+end:
+	mutex_unlock(&bus->mdio_lock);
+
+	mdio->synced = !res;
+	return res;
+}
 
 static int yt921x_reg_mdio_read(void *context, u32 reg, u32 *valp)
 {
@@ -107,6 +195,12 @@ static int yt921x_reg_mdio_read(void *context, u32 reg, u32 *valp)
 	u32 reg_data;
 	u32 val;
 	int res;
+
+	if (!mdio->synced) {
+		res = yt921x_reg_mdio_resync(mdio);
+		if (res)
+			return res;
+	}
 
 	/* Hold the mdio bus lock to avoid (un)locking for 4 times */
 	mutex_lock_nested(&bus->mdio_lock, MDIO_MUTEX_NESTED);
@@ -136,6 +230,9 @@ static int yt921x_reg_mdio_read(void *context, u32 reg, u32 *valp)
 
 end:
 	mutex_unlock(&bus->mdio_lock);
+
+	if (res)
+		mdio->synced = false;
 	return res;
 }
 
@@ -147,6 +244,12 @@ static int yt921x_reg_mdio_write(void *context, u32 reg, u32 val)
 	u32 reg_addr;
 	u32 reg_data;
 	int res;
+
+	if (!mdio->synced) {
+		res = yt921x_reg_mdio_resync(mdio);
+		if (res)
+			return res;
+	}
 
 	mutex_lock_nested(&bus->mdio_lock, MDIO_MUTEX_NESTED);
 
@@ -172,6 +275,9 @@ static int yt921x_reg_mdio_write(void *context, u32 reg, u32 val)
 
 end:
 	mutex_unlock(&bus->mdio_lock);
+
+	if (res)
+		mdio->synced = false;
 	return res;
 }
 
