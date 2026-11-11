@@ -379,6 +379,23 @@ run_io_and_kill_daemon()
 	fi
 }
 
+# Collect recovery workers in the parent before removing shared backing files.
+_wait_recovery_tests()
+{
+	local pid
+	local ret
+
+	for pid in "$@"; do
+		wait "$pid" && continue
+		ret=$?
+
+		# A failure takes precedence over a skipped worker.
+		if [ "$ERR_CODE" -eq 0 ] || [ "$ERR_CODE" -eq "$UBLK_SKIP_CODE" ]; then
+			ERR_CODE=$ret
+		fi
+	done
+}
+
 run_io_and_recover()
 {
 	local size=$1
@@ -387,8 +404,7 @@ run_io_and_recover()
 	local dev_id
 
 	shift 2
-	dev_id=$(_add_ublk_dev "$@")
-	_check_add_dev "$TID" $?
+	dev_id=$(_add_ublk_dev "$@") || return $?
 
 	fio --name=job1 --filename=/dev/ublkb"${dev_id}" --ioengine=libaio \
 		--rw=randread --iodepth=256 --size="${size}" --numjobs=4 \

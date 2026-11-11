@@ -11,8 +11,8 @@ ublk_run_recover_test()
 	ERR_CODE=$?
 	if [ ${ERR_CODE} -ne 0 ]; then
 		echo "$TID failure: $*"
-		_show_result $TID $ERR_CODE
 	fi
+	return "$ERR_CODE"
 }
 
 if ! _have_program fio; then
@@ -29,20 +29,32 @@ _create_backfile 0 256M
 _create_backfile 1 128M
 _create_backfile 2 128M
 
+pids=()
 ublk_run_recover_test -t null -q 2 -r 1 -z -b &
+pids+=("$!")
 ublk_run_recover_test -t loop -q 2 -r 1 -z -b "${UBLK_BACKFILES[0]}" &
+pids+=("$!")
 ublk_run_recover_test -t stripe -q 2 -r 1 -z -b "${UBLK_BACKFILES[1]}" "${UBLK_BACKFILES[2]}" &
-wait
+pids+=("$!")
+_wait_recovery_tests "${pids[@]}"
 
+pids=()
 ublk_run_recover_test -t null -q 2 -r 1 -z &
+pids+=("$!")
 ublk_run_recover_test -t loop -q 2 -r 1 -z "${UBLK_BACKFILES[0]}" &
+pids+=("$!")
 ublk_run_recover_test -t stripe -q 2 -r 1 -z "${UBLK_BACKFILES[1]}" "${UBLK_BACKFILES[2]}" &
-wait
+pids+=("$!")
+_wait_recovery_tests "${pids[@]}"
 
+pids=()
 ublk_run_recover_test -t null -q 2 -r 1 -z -i 1 &
+pids+=("$!")
 ublk_run_recover_test -t loop -q 2 -r 1 -z -i 1 "${UBLK_BACKFILES[0]}" &
+pids+=("$!")
 ublk_run_recover_test -t stripe -q 2 -r 1 -z -i 1 "${UBLK_BACKFILES[1]}" "${UBLK_BACKFILES[2]}" &
-wait
+pids+=("$!")
+_wait_recovery_tests "${pids[@]}"
 
 _cleanup_test
 _show_result $TID $ERR_CODE
