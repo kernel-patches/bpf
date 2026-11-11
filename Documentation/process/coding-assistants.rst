@@ -39,6 +39,8 @@ The following skills are available:
   checks an existing one.
 * agents/skills/stable-tag/SKILL.md decides whether a fix goes to stable and
   returns its stable tag, or checks an existing one.
+* agents/skills/find-siblings/SKILL.md looks for the same bug elsewhere in the
+  tree.
 
 Licensing and Legal Requirements
 ================================
@@ -83,7 +85,8 @@ these steps:
 5. Build and verify that the fix works either using the reproducer or by
    re-running a complete analysis; drop any fix that doesn't work and try
    another one. The fix must not add build warnings and must pass the
-   checkpatch.pl checks (see submitting-patches.rst).
+   checkpatch.pl checks (see submitting-patches.rst). Then look for the same
+   bug elsewhere with the find-siblings skill.
 6. Commit the working fix with a detailed message describing the problem, the
    solution, a Fixes tag determined with the find-fixes skill, and a stable
    tag if the stable-tag skill calls for one.  Do not add a Signed-off-by tag.
