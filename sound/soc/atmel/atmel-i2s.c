@@ -329,7 +329,7 @@ static int atmel_i2s_hw_params(struct snd_pcm_substream *substream,
 	int ret;
 
 	mr_mask = ATMEL_I2SC_MR_FORMAT_MASK | ATMEL_I2SC_MR_MODE_MASK |
-		ATMEL_I2SC_MR_DATALENGTH_MASK;
+		  ATMEL_I2SC_MR_DATALENGTH_MASK | ATMEL_I2SC_MR_IWS;
 	if (is_playback)
 		mr_mask |= ATMEL_I2SC_MR_TXMONO;
 	else
