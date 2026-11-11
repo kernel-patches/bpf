@@ -13,6 +13,7 @@ mandatory-y += cacheflush.h
 mandatory-y += cfi.h
 mandatory-y += checksum.h
 mandatory-y += compat.h
+mandatory-y += cpu_device_id.h
 mandatory-y += current.h
 mandatory-y += delay.h
 mandatory-y += device.h
