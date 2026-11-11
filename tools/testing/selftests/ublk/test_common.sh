@@ -353,13 +353,12 @@ run_io_and_remove()
 	local dev_id
 	shift 1
 
-	dev_id=$(_add_ublk_dev "$@")
-	_check_add_dev "$TID" $?
+	dev_id=$(_add_ublk_dev "$@") || return $?
 
 	[ "$UBLK_TEST_QUIET" -eq 0 ] && echo "run ublk IO vs. remove device(ublk add $*)"
 	if ! __run_io_and_remove "$dev_id" "${size}" "no"; then
 		echo "/dev/ublkc$dev_id isn't removed"
-		exit 255
+		return 255
 	fi
 }
 
@@ -369,18 +368,17 @@ run_io_and_kill_daemon()
 	local dev_id
 	shift 1
 
-	dev_id=$(_add_ublk_dev "$@")
-	_check_add_dev "$TID" $?
+	dev_id=$(_add_ublk_dev "$@") || return $?
 
 	[ "$UBLK_TEST_QUIET" -eq 0 ] && echo "run ublk IO vs kill ublk server(ublk add $*)"
 	if ! __run_io_and_remove "$dev_id" "${size}" "yes"; then
 		echo "/dev/ublkc$dev_id isn't removed res ${res}"
-		exit 255
+		return 255
 	fi
 }
 
-# Collect recovery workers in the parent before removing shared backing files.
-_wait_recovery_tests()
+# Collect test workers in the parent before removing shared backing files.
+_wait_test_pids()
 {
 	local pid
 	local ret

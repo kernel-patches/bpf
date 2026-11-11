@@ -32,7 +32,7 @@ ublk_run_recover_test -t loop -q 2 -r 1 -b "${UBLK_BACKFILES[0]}" &
 pids+=("$!")
 ublk_run_recover_test -t stripe -q 2 -r 1 -b "${UBLK_BACKFILES[1]}" "${UBLK_BACKFILES[2]}" &
 pids+=("$!")
-_wait_recovery_tests "${pids[@]}"
+_wait_test_pids "${pids[@]}"
 
 pids=()
 ublk_run_recover_test -t null -q 2 -r 1 &
@@ -41,7 +41,7 @@ ublk_run_recover_test -t loop -q 2 -r 1 "${UBLK_BACKFILES[0]}" &
 pids+=("$!")
 ublk_run_recover_test -t stripe -q 2 -r 1 "${UBLK_BACKFILES[1]}" "${UBLK_BACKFILES[2]}" &
 pids+=("$!")
-_wait_recovery_tests "${pids[@]}"
+_wait_test_pids "${pids[@]}"
 
 pids=()
 ublk_run_recover_test -t null -q 2 -r 1 -i 1 &
@@ -50,7 +50,7 @@ ublk_run_recover_test -t loop -q 2 -r 1 -i 1 "${UBLK_BACKFILES[0]}" &
 pids+=("$!")
 ublk_run_recover_test -t stripe -q 2 -r 1 -i 1 "${UBLK_BACKFILES[1]}" "${UBLK_BACKFILES[2]}" &
 pids+=("$!")
-_wait_recovery_tests "${pids[@]}"
+_wait_test_pids "${pids[@]}"
 
 _cleanup_test
 _show_result $TID $ERR_CODE
