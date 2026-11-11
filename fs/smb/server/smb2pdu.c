@@ -8867,6 +8867,7 @@ static int set_file_basic_info(struct ksmbd_file *fp,
 	const struct mnt_idmap *idmap;
 	__le32 attrs_mask = FILE_ATTRIBUTE_DIRECTORY_LE |
 		FILE_ATTRIBUTE_COMPRESSED_LE;
+	s64 crtime, time;
 	int rc = 0;
 
 	if (!(fp->daccess & FILE_WRITE_ATTRIBUTES_LE))
@@ -8882,21 +8883,25 @@ static int set_file_basic_info(struct ksmbd_file *fp,
 	    (file_info->Attributes & FILE_ATTRIBUTE_TEMPORARY_LE))
 		return -EINVAL;
 
-	if (file_info->CreationTime)
-		fp->create_time = le64_to_cpu(file_info->CreationTime);
+	crtime = (s64)le64_to_cpu(file_info->CreationTime);
+	if (crtime > 0)
+		fp->create_time = crtime;
 
-	if (file_info->LastAccessTime) {
+	time = (s64)le64_to_cpu(file_info->LastAccessTime);
+	if (time > 0) {
 		attrs.ia_atime = ksmbd_NTtimeToUnix(file_info->LastAccessTime);
 		attrs.ia_valid |= (ATTR_ATIME | ATTR_ATIME_SET);
 	}
 
-	if (file_info->ChangeTime) {
-		fp->change_time = le64_to_cpu(file_info->ChangeTime);
+	time = (s64)le64_to_cpu(file_info->ChangeTime);
+	if (time > 0) {
+		fp->change_time = time;
 		inode_set_ctime_to_ts(inode,
 				ksmbd_NTtimeToUnix(file_info->ChangeTime));
 	}
 
-	if (file_info->LastWriteTime) {
+	time = (s64)le64_to_cpu(file_info->LastWriteTime);
+	if (time > 0) {
 		attrs.ia_mtime = ksmbd_NTtimeToUnix(file_info->LastWriteTime);
 		attrs.ia_valid |= (ATTR_MTIME | ATTR_MTIME_SET | ATTR_CTIME);
 	}
@@ -8915,7 +8920,7 @@ static int set_file_basic_info(struct ksmbd_file *fp,
 	}
 
 	if (test_share_config_flag(share, KSMBD_SHARE_FLAG_STORE_DOS_ATTRS) &&
-	    (file_info->CreationTime || file_info->Attributes)) {
+	    (crtime > 0 || file_info->Attributes)) {
 		struct xattr_dos_attrib da = {0};
 
 		da.version = 4;
