@@ -3550,7 +3550,30 @@ static bool amdgpu_device_asic_has_dc_support(struct pci_dev *pdev,
 	case CHIP_PITCAIRN:
 	case CHIP_VERDE:
 	case CHIP_OLAND:
+		if (!IS_ENABLED(CONFIG_DRM_AMD_DC_SI))
+			dev_warn_once(&pdev->dev,
+				      "Driver built without SI display support!\n");
 		return IS_ENABLED(CONFIG_DRM_AMD_DC_SI);
+	case CHIP_BONAIRE:
+	case CHIP_KAVERI:
+	case CHIP_KABINI:
+	case CHIP_HAWAII:
+	case CHIP_MULLINS:
+	case CHIP_TONGA:
+	case CHIP_FIJI:
+	case CHIP_CARRIZO:
+	case CHIP_STONEY:
+	case CHIP_POLARIS10:
+	case CHIP_POLARIS11:
+	case CHIP_POLARIS12:
+	case CHIP_VEGAM:
+	case CHIP_VEGA10:
+	case CHIP_VEGA12:
+	case CHIP_VEGA20:
+		if (!IS_ENABLED(CONFIG_DRM_AMD_DC_DCE))
+			dev_warn_once(&pdev->dev,
+				      "Driver built without DCE display support!\n");
+		return IS_ENABLED(CONFIG_DRM_AMD_DC_DCE);
 	default:
 		return true;
 #else
