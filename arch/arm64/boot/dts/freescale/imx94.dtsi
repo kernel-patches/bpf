@@ -720,7 +720,7 @@
 					     "fsl,imx7ulp-lpuart";
 				reg = <0x42a50000 0x1000>;
 				interrupts = <GIC_SPI 80 IRQ_TYPE_LEVEL_HIGH>;
-				clocks = <&scmi_clk IMX94_CLK_LPUART10>;
+				clocks = <&scmi_clk IMX94_CLK_LPUART9>;
 				clock-names = "ipg";
 				dmas = <&edma2 51 0 FSL_EDMA_RX>, <&edma2 50 0 0>;
 				dma-names = "rx", "tx";
