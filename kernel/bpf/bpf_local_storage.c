@@ -356,6 +356,21 @@ out:
 	return err;
 }
 
+int bpf_local_storage_delete(void *owner, struct bpf_local_storage_map *smap)
+{
+	struct bpf_local_storage __rcu **owner_ptr = owner_storage(smap, owner);
+	struct bpf_local_storage *local_storage;
+	struct bpf_local_storage_data *sdata;
+
+	/* An inode can have no LSM blob, so no storage pointer */
+	local_storage = owner_ptr ? rcu_dereference_check(*owner_ptr, bpf_rcu_lock_held()) : NULL;
+	sdata = local_storage ? bpf_local_storage_lookup(local_storage, smap, false) : NULL;
+	if (!sdata)
+		return -ENOENT;
+
+	return bpf_selem_unlink(SELEM(sdata));
+}
+
 /*
  * Unlink an selem from map and local storage with lockless fallback if callers
  * are racing or rqspinlock returns error. It should only be called by

@@ -34,13 +34,7 @@ bpf_sk_storage_lookup(struct sock *sk, struct bpf_map *map, bool cacheit_lockit)
 
 static int bpf_sk_storage_del(struct sock *sk, struct bpf_map *map)
 {
-	struct bpf_local_storage_data *sdata;
-
-	sdata = bpf_sk_storage_lookup(sk, map, false);
-	if (!sdata)
-		return -ENOENT;
-
-	return bpf_selem_unlink(SELEM(sdata));
+	return bpf_local_storage_delete(sk, (struct bpf_local_storage_map *)map);
 }
 
 /* Called by __sk_destruct() & bpf_sk_storage_clone() */
