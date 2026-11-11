@@ -1266,8 +1266,8 @@ static long move_present_ptes(struct mm_struct *mm,
 	unsigned long src_start = src_addr;
 	unsigned long src_end;
 
-	len = pmd_addr_end(dst_addr, dst_addr + len) - dst_addr;
-	src_end = pmd_addr_end(src_addr, src_addr + len);
+	len = pte_table_clamped_end(dst_addr, dst_addr + len) - dst_addr;
+	src_end = pte_table_clamped_end(src_addr, src_addr + len);
 	flush_cache_range(src_vma, src_addr, src_end);
 	double_pt_lock(dst_ptl, src_ptl);
 

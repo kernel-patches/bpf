@@ -4959,13 +4959,8 @@ static void folio_pte_range(const struct folio *folio,
 {
 	/* Stay within the page table and VMA boundaries. */
 	const unsigned long pmd_start = addr & PMD_MASK;
-	const unsigned long pmd_end = pmd_start + PMD_SIZE;
 	const unsigned long lower = max(pmd_start, vma->vm_start);
-	/*
-	 * We cannot use pmd_addr_end(), as it does not clamp reliably. To
-	 * avoid wraparounds, compute using the inclusive end.
-	 */
-	const unsigned long upper = min(pmd_end - 1, vma->vm_end - 1) + 1;
+	const unsigned long upper = pte_table_clamped_end(addr, vma->vm_end);
 	const unsigned long offset = idx << PAGE_SHIFT;
 
 	/*
