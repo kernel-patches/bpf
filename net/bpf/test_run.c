@@ -759,7 +759,7 @@ __bpf_prog_test_run_raw_tp(void *data)
 		rcu_read_lock();
 	}
 
-	if (unlikely(!bpf_prog_get_recursion_context(info->prog))) {
+	if (unlikely(!bpf_prog_enter_recur_ctx(info->prog, &run_ctx.run_ctx))) {
 		bpf_prog_inc_misses_counter(info->prog);
 		goto out;
 	}
@@ -767,7 +767,7 @@ __bpf_prog_test_run_raw_tp(void *data)
 	info->retval = bpf_prog_run(info->prog, info->ctx);
 
 out:
-	bpf_prog_put_recursion_context(info->prog);
+	bpf_prog_exit_recur_ctx(info->prog, &run_ctx.run_ctx);
 
 	if (info->prog->sleepable) {
 		migrate_enable();

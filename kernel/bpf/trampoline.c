@@ -1342,9 +1342,9 @@ static u64 notrace __bpf_prog_enter_recur(struct bpf_prog *prog, struct bpf_tram
 {
 	rcu_read_lock_dont_migrate();
 
-	run_ctx->saved_run_ctx = bpf_set_run_ctx(&run_ctx->run_ctx);
+	bpf_set_run_ctx(&run_ctx->run_ctx);
 
-	if (unlikely(!bpf_prog_get_recursion_context(prog))) {
+	if (unlikely(!bpf_prog_enter_recur_ctx(prog, &run_ctx->run_ctx))) {
 		bpf_prog_inc_misses_counter(prog);
 		if (prog->aux->recursion_detected)
 			prog->aux->recursion_detected(prog);
@@ -1385,10 +1385,10 @@ static void notrace __bpf_prog_exit_recur(struct bpf_prog *prog, u64 start,
 					  struct bpf_tramp_run_ctx *run_ctx)
 	__releases(RCU)
 {
-	bpf_reset_run_ctx(run_ctx->saved_run_ctx);
+	bpf_reset_run_ctx(run_ctx->run_ctx.saved_run_ctx);
 
 	update_prog_stats(prog, start);
-	bpf_prog_put_recursion_context(prog);
+	bpf_prog_exit_recur_ctx(prog, &run_ctx->run_ctx);
 	rcu_read_unlock_migrate();
 }
 
@@ -1401,7 +1401,7 @@ static u64 notrace __bpf_prog_enter_lsm_cgroup(struct bpf_prog *prog,
 	 */
 	rcu_read_lock_dont_migrate();
 
-	run_ctx->saved_run_ctx = bpf_set_run_ctx(&run_ctx->run_ctx);
+	bpf_set_run_ctx(&run_ctx->run_ctx);
 
 	return NO_START_TIME;
 }
@@ -1410,7 +1410,7 @@ static void notrace __bpf_prog_exit_lsm_cgroup(struct bpf_prog *prog, u64 start,
 					       struct bpf_tramp_run_ctx *run_ctx)
 	__releases(RCU)
 {
-	bpf_reset_run_ctx(run_ctx->saved_run_ctx);
+	bpf_reset_run_ctx(run_ctx->run_ctx.saved_run_ctx);
 
 	rcu_read_unlock_migrate();
 }
@@ -1422,9 +1422,9 @@ u64 notrace __bpf_prog_enter_sleepable_recur(struct bpf_prog *prog,
 	migrate_disable();
 	might_fault();
 
-	run_ctx->saved_run_ctx = bpf_set_run_ctx(&run_ctx->run_ctx);
+	bpf_set_run_ctx(&run_ctx->run_ctx);
 
-	if (unlikely(!bpf_prog_get_recursion_context(prog))) {
+	if (unlikely(!bpf_prog_enter_recur_ctx(prog, &run_ctx->run_ctx))) {
 		bpf_prog_inc_misses_counter(prog);
 		if (prog->aux->recursion_detected)
 			prog->aux->recursion_detected(prog);
@@ -1436,10 +1436,10 @@ u64 notrace __bpf_prog_enter_sleepable_recur(struct bpf_prog *prog,
 void notrace __bpf_prog_exit_sleepable_recur(struct bpf_prog *prog, u64 start,
 					     struct bpf_tramp_run_ctx *run_ctx)
 {
-	bpf_reset_run_ctx(run_ctx->saved_run_ctx);
+	bpf_reset_run_ctx(run_ctx->run_ctx.saved_run_ctx);
 
 	update_prog_stats(prog, start);
-	bpf_prog_put_recursion_context(prog);
+	bpf_prog_exit_recur_ctx(prog, &run_ctx->run_ctx);
 	migrate_enable();
 	rcu_read_unlock_trace();
 }
@@ -1451,7 +1451,7 @@ static u64 notrace __bpf_prog_enter_sleepable(struct bpf_prog *prog,
 	migrate_disable();
 	might_fault();
 
-	run_ctx->saved_run_ctx = bpf_set_run_ctx(&run_ctx->run_ctx);
+	bpf_set_run_ctx(&run_ctx->run_ctx);
 
 	return bpf_prog_start_time();
 }
@@ -1459,7 +1459,7 @@ static u64 notrace __bpf_prog_enter_sleepable(struct bpf_prog *prog,
 static void notrace __bpf_prog_exit_sleepable(struct bpf_prog *prog, u64 start,
 					      struct bpf_tramp_run_ctx *run_ctx)
 {
-	bpf_reset_run_ctx(run_ctx->saved_run_ctx);
+	bpf_reset_run_ctx(run_ctx->run_ctx.saved_run_ctx);
 
 	update_prog_stats(prog, start);
 	migrate_enable();
@@ -1472,7 +1472,7 @@ static u64 notrace __bpf_prog_enter(struct bpf_prog *prog,
 {
 	rcu_read_lock_dont_migrate();
 
-	run_ctx->saved_run_ctx = bpf_set_run_ctx(&run_ctx->run_ctx);
+	bpf_set_run_ctx(&run_ctx->run_ctx);
 
 	return bpf_prog_start_time();
 }
@@ -1481,7 +1481,7 @@ static void notrace __bpf_prog_exit(struct bpf_prog *prog, u64 start,
 				    struct bpf_tramp_run_ctx *run_ctx)
 	__releases(RCU)
 {
-	bpf_reset_run_ctx(run_ctx->saved_run_ctx);
+	bpf_reset_run_ctx(run_ctx->run_ctx.saved_run_ctx);
 
 	update_prog_stats(prog, start);
 	rcu_read_unlock_migrate();
