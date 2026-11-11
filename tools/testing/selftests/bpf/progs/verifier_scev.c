@@ -3592,6 +3592,41 @@ LINKED(linked_at_loop_entry_only, __failure,
 	LOOP_HEADER("r3 = r8; r2 = r8; r2 += 1; r2 += 1;", "r2 += 2; r3 += 1;"))
 
 /*
+ * An irreducible loop: 'l' is the header, 'm' is a secondary entry. A link that is made in the loop
+ * holds in the next basic blocks too. Not after 'm' if it is made before 'm': every edge of the
+ * loop to 'm' has it, the edge that enters the loop there does not. That edge can come from
+ * a natural loop 'o' around the irreducible one.
+ * In the last two tests 'o' is the header. The natural loop in it has an env at loop entry. Its
+ * header can be the secondary entry.
+ */
+LINKED(irreducible_loop, VALID,
+	"if r7 > 5 goto m_%=; l_%=: r7 += 1;"
+	"m_%=: r2 = r8; r2 += 1; r2 += 1; if r8 > 61 goto out_%=; r1 = r6; r1 += r2;"
+	"r0 = *(u8 *)(r1 + 0); if r7 < 10 goto l_%=;")
+LINKED(irreducible_loop_fallthrough_pred, UNBOUND,
+	"r2 = r7; if r7 > 5 goto m_%=; l_%=: r7 += 1; r2 = r8;"
+	"m_%=: if r8 > 63 goto out_%=; r1 = r6; r1 += r2;"
+	"r0 = *(u8 *)(r1 + 0); if r7 < 10 goto l_%=;")
+LINKED(irreducible_loop_next_bb, VALID,
+	"if r7 > 5 goto m_%=; l_%=: r7 += 1;"
+	"m_%=: r2 = r8; r2 += 1; r2 += 1; if r7 == 3 goto n_%=; r3 = 0;"
+	"n_%=: if r8 > 61 goto out_%=; r1 = r6; r1 += r2;"
+	"r0 = *(u8 *)(r1 + 0); if r7 < 10 goto l_%=;")
+LINKED(irreducible_loop_secondary_entry, UNBOUND,
+	"r9 = 0; o_%=: r9 += 1; call %[bpf_ktime_get_ns]; r8 = r0; r2 = r7; if r7 > 5 goto m_%=;"
+	"l_%=: r7 += 1; r2 = r8; r2 += 1; r2 += 1; if r7 == 3 goto m_%=; r3 = 0;"
+	"m_%=: if r8 > 61 goto out_%=; r1 = r6; r1 += r2;"
+	"r0 = *(u8 *)(r1 + 0); if r7 < 10 goto l_%=; if r9 < 3 goto o_%=;")
+LINKED(natural_loop_in_irreducible_loop, VALID,
+	"if r7 > 5 goto m_%=; o_%=: r7 += 1; m_%=:"
+	LOOP_HEADER("r3 = r8; r2 = r8; r2 += 1; r2 += 1;", "r2 += 1; r3 += 1;")
+	"if r7 < 10 goto o_%=;")
+LINKED(natural_loop_is_secondary_entry, MAP_OOB,
+	"r3 = r8; r2 = r7; if r7 > 5 goto l_%=; o_%=: r7 += 1;"
+	LOOP_HEADER("r3 = r8; r2 = r8; r2 += 1; r2 += 1;", "r2 += 1; r3 += 1;")
+	"if r7 < 10 goto o_%=;")
+
+/*
  * No exit of the inner loop dominates its backedges: may_goto is added before its header. The prog
  * holds a reference, so may_goto goes to the exit of the outer loop: an edge that the verifier
  * adds. Every iteration of the outer loop restores r3. At the header of the inner one it is r7.
