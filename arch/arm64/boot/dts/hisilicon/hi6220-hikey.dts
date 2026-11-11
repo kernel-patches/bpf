@@ -300,7 +300,7 @@
 		port@1 {
 			reg = <1>;
 
-			dsi_out0: endpoint@0 {
+			dsi_out0: endpoint {
 				remote-endpoint = <&adv7533_in>;
 			};
 		};
