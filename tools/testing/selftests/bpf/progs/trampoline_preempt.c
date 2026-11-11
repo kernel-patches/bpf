@@ -27,6 +27,13 @@ struct {
 	__type(value, __u32);
 } jmp_raw_tp SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_PROG_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} jmp_tp SEC(".maps");
+
 int tid_a;
 int tid_b;
 int sig;
@@ -184,6 +191,12 @@ int BPF_PROG(on_fsession)
 	return handle_comm(false);
 }
 
+SEC("tp/syscalls/sys_enter_prctl")
+int on_tp_syscall(void *ctx)
+{
+	return handle_comm(false);
+}
+
 SEC("raw_tp/task_rename")
 int dispatcher_raw_tp(void *ctx)
 {
@@ -193,6 +206,19 @@ int dispatcher_raw_tp(void *ctx)
 
 SEC("raw_tp/task_rename")
 int handler_raw_tp(void *ctx)
+{
+	return handle_comm(false);
+}
+
+SEC("tp/syscalls/sys_enter_prctl")
+int dispatcher_tp(void *ctx)
+{
+	bpf_tail_call(ctx, &jmp_tp, 0);
+	return 0;
+}
+
+SEC("tp/syscalls/sys_enter_prctl")
+int handler_tp(void *ctx)
 {
 	return handle_comm(false);
 }
@@ -211,6 +237,17 @@ int BPF_PROG(dispatcher_b, struct pt_regs *regs, long id)
 	if (id == __NR_prctl && (__u32)bpf_get_current_pid_tgid() == tid_b)
 		bpf_tail_call(ctx, &jmp_raw_tp, 0);
 	return 0;
+}
+
+SEC("tp/syscalls/sys_enter_prctl")
+int on_tp_dual(void *ctx)
+{
+	__u32 tid = (__u32)bpf_get_current_pid_tgid();
+	__u64 cookie = bpf_get_attach_cookie(ctx);
+
+	if ((tid == tid_a && cookie != 1) || (tid == tid_b && cookie != 2))
+		return 0;
+	return handle_comm(false);
 }
 
 SEC("raw_tp/bpf_trace_printk")

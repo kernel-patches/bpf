@@ -25,8 +25,11 @@ enum subtest_kind {
 	SUBTEST_RAW_TP_S,
 	SUBTEST_TP_BTF,
 	SUBTEST_FSESSION,
+	SUBTEST_TP_SYSCALL,
 	SUBTEST_TAILCALL_RAW_TP,
+	SUBTEST_TAILCALL_TP,
 	SUBTEST_TWO_DISPATCHERS,
+	SUBTEST_TP_DUAL,
 	SUBTEST_NESTED_PROG,
 };
 
@@ -158,7 +161,7 @@ static void run_subtest(enum subtest_kind kind)
 	sigset_t oldset;
 	pthread_t ta, tb;
 	bool ta_started = false, tb_started = false, sigmask_set = false;
-	bool via_map;
+	bool via_map, dual = false;
 	__u32 zero = 0;
 	int tail_fd;
 	char ch;
@@ -193,16 +196,28 @@ static void run_subtest(enum subtest_kind kind)
 	case SUBTEST_FSESSION:
 		prog = c.skel->progs.on_fsession;
 		break;
+	case SUBTEST_TP_SYSCALL:
+		prog = c.skel->progs.on_tp_syscall;
+		break;
 	case SUBTEST_TAILCALL_RAW_TP:
 		prog = c.skel->progs.dispatcher_raw_tp;
 		tail = c.skel->progs.handler_raw_tp;
 		jmp = c.skel->maps.jmp_raw_tp;
+		break;
+	case SUBTEST_TAILCALL_TP:
+		prog = c.skel->progs.dispatcher_tp;
+		tail = c.skel->progs.handler_tp;
+		jmp = c.skel->maps.jmp_tp;
 		break;
 	case SUBTEST_TWO_DISPATCHERS:
 		prog = c.skel->progs.dispatcher_a;
 		extra = c.skel->progs.dispatcher_b;
 		tail = c.skel->progs.handler_raw_tp;
 		jmp = c.skel->maps.jmp_raw_tp;
+		break;
+	case SUBTEST_TP_DUAL:
+		prog = c.skel->progs.on_tp_dual;
+		dual = true;
 		break;
 	case SUBTEST_NESTED_PROG:
 		prog = c.skel->progs.on_raw_tp_nested;
@@ -242,9 +257,23 @@ static void run_subtest(enum subtest_kind kind)
 		if (!ASSERT_OK_PTR(wakeup_link, "attach_wakeup"))
 			goto out;
 	}
-	link = bpf_program__attach(prog);
-	if (!ASSERT_OK_PTR(link, "attach"))
-		goto out;
+	if (dual) {
+		LIBBPF_OPTS(bpf_tracepoint_opts, topts, .bpf_cookie = 1);
+
+		link = bpf_program__attach_tracepoint_opts(prog, "syscalls",
+							   "sys_enter_prctl", &topts);
+		if (!ASSERT_OK_PTR(link, "attach_sys_enter"))
+			goto out;
+		topts.bpf_cookie = 2;
+		link2 = bpf_program__attach_tracepoint_opts(prog, "task",
+							    "task_rename", &topts);
+		if (!ASSERT_OK_PTR(link2, "attach_task_rename"))
+			goto out;
+	} else {
+		link = bpf_program__attach(prog);
+		if (!ASSERT_OK_PTR(link, "attach"))
+			goto out;
+	}
 	if (extra) {
 		link2 = bpf_program__attach(extra);
 		if (!ASSERT_OK_PTR(link2, "attach_extra"))
@@ -412,10 +441,16 @@ void test_trampoline_preempt(void)
 		run_subtest(SUBTEST_TP_BTF);
 	if (test__start_subtest("fsession"))
 		run_subtest(SUBTEST_FSESSION);
+	if (test__start_subtest("tp_syscall"))
+		run_subtest(SUBTEST_TP_SYSCALL);
 	if (test__start_subtest("tailcall_raw_tp"))
 		run_subtest(SUBTEST_TAILCALL_RAW_TP);
+	if (test__start_subtest("tailcall_tp"))
+		run_subtest(SUBTEST_TAILCALL_TP);
 	if (test__start_subtest("two_dispatchers"))
 		run_subtest(SUBTEST_TWO_DISPATCHERS);
+	if (test__start_subtest("tp_dual"))
+		run_subtest(SUBTEST_TP_DUAL);
 	if (test__start_subtest("nested_prog"))
 		run_subtest(SUBTEST_NESTED_PROG);
 	if (test__start_subtest("recursion_raw_tp"))
