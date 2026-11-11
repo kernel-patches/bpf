@@ -2325,6 +2325,36 @@ static bool range_bounds_violation(struct bpf_reg_state *reg)
 	return cnum32_is_empty(reg->r32) || cnum64_is_empty(reg->r64);
 }
 
+/* Do @t and [min, max] overlap: is a member of @t in the range? */
+static bool tnum_overlaps_urange(struct tnum t, u64 min, u64 max)
+{
+	u64 tnum_next = tnum_step(t, min);
+
+	return (min & ~t.mask) == t.value || (tnum_next > min && tnum_next <= max);
+}
+
+/* The same for the cnum [@base, @base + @size]. It wraps around at @ut_max. */
+static bool tnum_overlaps_cnum(struct tnum t, u64 base, u64 size, u64 ut_max)
+{
+	u64 end = (base + size) & ut_max;
+
+	if (base <= end)
+		return tnum_overlaps_urange(t, base, end);
+	return tnum_overlaps_urange(t, base, ut_max) || tnum_overlaps_urange(t, 0, end);
+}
+
+/*
+ * A range and var_off don't overlap. reg_bounds_sync() compares var_off with umin and umax: it
+ * doesn't see that [-2, 1], which crosses 0, has no member with 5 in its low three bits.
+ */
+static bool reg_is_empty(struct bpf_reg_state *reg)
+{
+	return range_bounds_violation(reg) ||
+	       !tnum_overlaps_cnum(reg->var_off, reg->r64.base, reg->r64.size, U64_MAX) ||
+	       !tnum_overlaps_cnum(tnum_subreg(reg->var_off), reg->r32.base, reg->r32.size,
+				   U32_MAX);
+}
+
 static int reg_bounds_sanity_check(struct bpf_verifier_env *env,
 				   struct bpf_reg_state *reg, const char *ctx)
 {
@@ -18911,24 +18941,24 @@ static int simulate_both_branches_taken(struct bpf_verifier_env *env, u8 opcode,
 	regs_refine_cond_op(&env->false_reg1, &env->false_reg2, bpf_rev_opcode(opcode), is_jmp32);
 	reg_bounds_sync(&env->false_reg1);
 	reg_bounds_sync(&env->false_reg2);
-	/*
-	 * If there is a range bounds violation in *any* of the abstract values in either
-	 * reg_states in the FALSE branch (i.e. reg1, reg2), the FALSE branch must be dead. Only
-	 * TRUE branch will be taken.
-	 */
-	if (range_bounds_violation(&env->false_reg1) || range_bounds_violation(&env->false_reg2))
-		return 1;
-
-	/* Jump (TRUE) branch */
+	/* Jump (TRUE) branch. If FALSE is dead refine_live_branch() takes these registers. */
 	regs_refine_cond_op(&env->true_reg1, &env->true_reg2, opcode, is_jmp32);
 	reg_bounds_sync(&env->true_reg1);
 	reg_bounds_sync(&env->true_reg2);
 	/*
 	 * If there is a range bounds violation in *any* of the abstract values in either
+	 * reg_states in the FALSE branch (i.e. reg1, reg2), the FALSE branch must be dead. Only
+	 * TRUE branch will be taken.
+	 */
+	if (reg_is_empty(&env->false_reg1) || reg_is_empty(&env->false_reg2))
+		return 1;
+
+	/*
+	 * If there is a range bounds violation in *any* of the abstract values in either
 	 * reg_states in the TRUE branch (i.e. true_reg1, true_reg2), the TRUE branch must be dead.
 	 * Only FALSE branch will be taken.
 	 */
-	if (range_bounds_violation(&env->true_reg1) || range_bounds_violation(&env->true_reg2))
+	if (reg_is_empty(&env->true_reg1) || reg_is_empty(&env->true_reg2))
 		return 0;
 
 	/* Both branches are possible, we can't determine which one will be taken. */
@@ -19683,6 +19713,38 @@ static void mark_loop_exit_decided(struct bpf_verifier_env *env, struct bpf_veri
 	}
 }
 
+/*
+ * One branch of the jump @insn is dead, the current state takes the other one. @reg1 and @reg2 are
+ * the operands as that branch refines them. They hold every value that takes it, whether the other
+ * branch is dead or not.
+ */
+static int refine_live_branch(struct bpf_verifier_env *env, struct bpf_insn *insn,
+			      struct bpf_reg_state *reg1, struct bpf_reg_state *reg2)
+{
+	struct bpf_reg_state *regs = cur_regs(env);
+	int err;
+
+	/* is_branch_taken() knew the branch before it refined anything */
+	if (!memcmp(reg1, &regs[insn->dst_reg], sizeof(*reg1)) &&
+	    (BPF_SRC(insn->code) == BPF_K || !memcmp(reg2, &regs[insn->src_reg], sizeof(*reg2))))
+		return 0;
+	/*
+	 * The fall-through branch of JSET forgets the ranges. Or this branch is dead too: the path
+	 * is infeasible. The registers are left as they are.
+	 */
+	if (BPF_OP(insn->code) == BPF_JSET || reg_is_empty(reg1) || reg_is_empty(reg2))
+		return 0;
+	err = reg_bounds_sanity_check(env, reg1, "live_reg1");
+	err = err ?: reg_bounds_sanity_check(env, reg2, "live_reg2");
+	if (err)
+		return err;
+
+	regs[insn->dst_reg] = *reg1;
+	if (BPF_SRC(insn->code) == BPF_X)
+		regs[insn->src_reg] = *reg2;
+	return 0;
+}
+
 static int check_cond_jmp_op(struct bpf_verifier_env *env,
 			     struct bpf_insn *insn, int *insn_idx)
 {
@@ -19788,6 +19850,9 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 			if (err < 0)
 				return err;
 		}
+		err = refine_live_branch(env, insn, &env->true_reg1, &env->true_reg2);
+		if (err)
+			return err;
 		if (env->log.level & BPF_LOG_LEVEL)
 			print_insn_state(env, this_branch, this_branch->curframe);
 		*insn_idx += insn->off;
@@ -19803,6 +19868,9 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 			if (err < 0)
 				return err;
 		}
+		err = refine_live_branch(env, insn, &env->false_reg1, &env->false_reg2);
+		if (err)
+			return err;
 		if (env->log.level & BPF_LOG_LEVEL)
 			print_insn_state(env, this_branch, this_branch->curframe);
 		return 0;
