@@ -159,6 +159,20 @@ impl<'a> SriovEnable<'a> {
             num_vfs,
         })
     }
+
+    /// Enables all VFs requested for this callback.
+    ///
+    /// This is equivalent to calling [`Self::enable()`] with [`Self::num_vfs()`].
+    ///
+    /// # Errors
+    ///
+    /// - [`ENODEV`]: the PF driver has not registered a [`VfRegistration`].
+    /// - Any error returned by `pci_enable_sriov()`.
+    #[inline]
+    pub fn enable_all(self) -> Result<SriovEnabled<'a>> {
+        let num_vfs = self.num_vfs;
+        self.enable(num_vfs)
+    }
 }
 
 /// Enabled VFs awaiting successful completion of `sriov_enable()`.
