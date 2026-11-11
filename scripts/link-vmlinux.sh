@@ -37,6 +37,10 @@ is_enabled() {
 	grep -q "^$1=y" include/config/auto.conf
 }
 
+value() {
+	sed -n "/^$1=/{s///;p;q}" include/config/auto.conf
+}
+
 # Nice output in kbuild format
 # Will be suppressed by "make -s"
 info()
@@ -139,6 +143,8 @@ kallsyms()
 	if is_enabled CONFIG_64BIT || is_enabled CONFIG_RELOCATABLE; then
 		kallsymopt="${kallsymopt} --pc-relative"
 	fi
+
+	kallsymopt="${kallsymopt} --marker-shift=$(value CONFIG_KALLSYMS_MARKER_SHIFT)"
 
 	info KSYMS "${2}.S"
 	scripts/kallsyms ${kallsymopt} ${1:+"${1}" "${2}.bin"} > "${2}.S"

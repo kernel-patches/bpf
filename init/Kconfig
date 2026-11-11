@@ -1908,6 +1908,25 @@ config KALLSYMS
 	  symbolic stack backtraces. This increases the size of the kernel
 	  somewhat, as all symbols have to be loaded into the kernel image.
 
+config KALLSYMS_MARKER_SHIFT
+	int "Interval between kallsyms markers (6 => 64, 8 => 256)"
+	depends on KALLSYMS
+	default 6
+	range 0 24
+	help
+	  Set the interval between the kallsyms marker entries as a power of 2.
+
+	  This bounds the linear search when locating the name of a symbol
+	  from its index in the array of values (and v.v.).
+
+	  Smaller values speed up the search but increase the memory footprint.
+	  Values below 5 (one 32 bit marker every 32 symbols) are unlikely to
+	  make a significant difference because other parts of the code
+	  dominate.
+
+	  The default of 6 is a reasonable compromise. It makes looking up a
+	  symbol by name around 35% faster than setting it to 8.
+
 config KALLSYMS_SELFTEST
 	bool "Test the basic functions and performance of kallsyms"
 	depends on KALLSYMS

@@ -147,13 +147,11 @@ static int kallsyms_strcmp_symbol(unsigned int off, const char *name)
 static unsigned int get_symbol_offset(unsigned long pos)
 {
 	const u8 *name;
-	int i, len;
+	int len;
 
-	/*
-	 * Use the closest marker we have. We have markers every 256 positions,
-	 * so that should be close enough.
-	 */
-	name = &kallsyms_names[kallsyms_markers[pos >> 8]];
+	/* Scan from the marker before the requested symbol number */
+	name = &kallsyms_names[kallsyms_markers[pos >> kallsyms_marker_shift]];
+	pos &= (1 << kallsyms_marker_shift) - 1;
 
 	/*
 	 * Sequentially scan all the symbols up to the point we're searching
@@ -161,7 +159,7 @@ static unsigned int get_symbol_offset(unsigned long pos)
 	 * so we just need to add the len to the current pointer for every
 	 * symbol we wish to skip.
 	 */
-	for (i = 0; i < (pos & 0xFF); i++) {
+	while (pos--) {
 		len = *name;
 
 		/*
@@ -185,7 +183,7 @@ static unsigned long get_name_address(unsigned int name_offset)
 	unsigned int low, pos, high;
 
 	low = 0;
-	high = ((kallsyms_num_syms - 1) >> 8) + 1;
+	high = ((kallsyms_num_syms - 1) >> kallsyms_marker_shift) + 1;
 
 	while (high - low > 1) {
 		pos = low + (high - low) / 2;
@@ -196,7 +194,7 @@ static unsigned long get_name_address(unsigned int name_offset)
 	}
 
 	pos = kallsyms_markers[low];
-	for (low <<= 8; pos < name_offset; low++) {
+	for (low <<= kallsyms_marker_shift; pos < name_offset; low++) {
 		unsigned int len = kallsyms_names[pos];
 		if (len & 0x80)
 			len += (kallsyms_names[pos + 1] << 7) - 0x7f;

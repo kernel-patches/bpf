@@ -59,6 +59,8 @@ static unsigned int table_size, table_cnt;
 static int all_symbols;
 static int pc_relative;
 static int verbose;
+/* Default to one kallsyms_markers[] entry for each 256 symbols */
+static unsigned long marker_shift = 8;
 
 static int big_endian;	/* Extracted from the elf file */
 
@@ -441,8 +443,8 @@ static void write_src(void)
 	stamp("write token table");
 
 	/* table of offset markers, that give the offset in the compressed stream
-	 * every 256 symbols */
-	markers_cnt = (table_cnt + 255) / 256;
+	 * every (1 << marker_shift) (typically 64 or 256) symbols */
+	markers_cnt = (table_cnt + 255) >> marker_shift;
 	markers = xmalloc(sizeof(*markers) * markers_cnt);
 
 	output_label("kallsyms_names");
@@ -476,14 +478,14 @@ static void write_src(void)
 		}
 
 		if (out_bin_file) {
-			if ((i & 0xFF) == 0)
-				markers[i >> 8] = big_endian ? htobe32(off) : htole32(off);
+			if ((i & ((1u << marker_shift) - 1)) == 0)
+				markers[i >> marker_shift] = big_endian ? htobe32(off) : htole32(off);
 
 			fwrite(len, 1, len_len, out_bin_file);
 			fwrite(se->sym, 1, se->len, out_bin_file);
 		} else {
-			if ((i & 0xFF) == 0)
-				markers[i >> 8] = off;
+			if ((i & ((1u << marker_shift) - 1)) == 0)
+				markers[i >> marker_shift] = off;
 
 			printf("\t/* n:%u */\t.byte\t%u", off, len[0]);
 			if (len_len == 2)
@@ -502,6 +504,10 @@ static void write_src(void)
 	write_incbin(&bin_offset, off);
 	table_size = off;
 	printf(".size kallsyms_names, . - kallsyms_names\n");
+	printf("\n");
+
+	output_label("kallsyms_marker_shift");
+	printf("\t.long\t%lu\n" , marker_shift);
 	printf("\n");
 
 	output_label("kallsyms_markers");
@@ -926,6 +932,7 @@ static void usage(void)
 		"Usage: kallsyms [options] [vmlinux [out.bin]] > out.S\n"
 		"       kallsyms --sysmap vmlinux > out.map\n"
 		"           --all-symbols     Include all local symbols\n"
+		"           --marker-shift=n  Interval between makers (6 => 64, 8 => 256)\n"
 		"           --pc-relative     Output symbol offsets\n"
 		"           --sysmap=out.map  Text map file\n"
 		"           --verbose         Extra diagnostic output\n"
@@ -946,21 +953,33 @@ int main(int argc, char **argv)
 
 	while (1) {
 		static const struct option long_options[] = {
-			{"all-symbols",     no_argument, &all_symbols,     1},
-			{"pc-relative",     no_argument, &pc_relative,     1},
-			{"sysmap",    optional_argument, NULL,           's'},
-			{"verbose",         no_argument, &verbose,         1},
+			{"all-symbols",        no_argument, &all_symbols,     1},
+			{"marker-shift", required_argument, NULL,           'm'},
+			{"pc-relative",        no_argument, &pc_relative,     1},
+			{"sysmap",       optional_argument, NULL,           's'},
+			{"verbose",            no_argument, &verbose,         1},
 			{},
 		};
 
-		int c = getopt_long(argc, argv, "", long_options, NULL);
-
-		if (c == -1)
+		switch (getopt_long(argc, argv, "", long_options, NULL)) {
+		case -1:
 			break;
-		if (c == 's')
+		case 0:
+			continue;
+		case 'm':
+			if (!optarg[0])
+				continue;
+			marker_shift = strtoul(optarg, NULL, 10);
+			if (marker_shift > 24)
+				usage();
+			continue;
+		case 's':
 			sysmap = optarg ?: "";
-		else if (c != 0)
+			continue;
+		default:
 			usage();
+		}
+		break;
 	}
 
 	stamp(NULL);

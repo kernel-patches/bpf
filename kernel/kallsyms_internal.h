@@ -12,6 +12,7 @@ extern const unsigned int kallsyms_num_syms;
 extern const char kallsyms_token_table[];
 extern const u16 kallsyms_token_index[];
 
+extern const unsigned int kallsyms_marker_shift;
 extern const unsigned int kallsyms_markers[];
 
 /* Although constant, size is volatile for better code generation. */
