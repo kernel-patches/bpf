@@ -400,7 +400,7 @@ void intel_dmc_wl_disable(struct intel_display *display)
 	if (!__intel_dmc_wl_supported(display))
 		return;
 
-	intel_dmc_wl_flush_release_work(display);
+	cancel_delayed_work_sync(&wl->work);
 
 	spin_lock_irqsave(&wl->lock, flags);
 
