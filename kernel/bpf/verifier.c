@@ -11451,9 +11451,10 @@ static int setup_func_entry(struct bpf_verifier_env *env, int subprog, int calls
 	err = set_callee_state_cb(env, caller, callee, callsite);
 	if (err)
 		goto err_out;
-	/* a plain call hands the callee what it releases of the caller's, see frame_desc.c */
+	/* the call of a subprog hands it what it releases of the caller's, see frame_desc.c */
 	err = bpf_frame_desc_record_call(env, set_callee_state_cb == set_callee_state &&
-					 bpf_pseudo_call(&env->prog->insnsi[callsite]) ? state : NULL,
+					 (bpf_pseudo_call(&env->prog->insnsi[callsite]) ||
+					  bpf_is_callx(&env->prog->insnsi[callsite])) ? state : NULL,
 					 callee, callsite);
 	if (err)
 		goto err_out;
@@ -12279,6 +12280,11 @@ static int check_func_callx_one(struct bpf_verifier_env *env, int subprog, int *
 	if (err)
 		return err;
 	env->subprog_info[subprog].via_callx = true;
+
+	/* what the insns in front of the callx do goes for every subprog it calls, see frame_desc.c */
+	err = bpf_frame_desc_record_callx(env, subprog, *insn_idx);
+	if (err)
+		return err;
 
 	return check_static_func_call(env, subprog, insn_idx);
 }

@@ -1367,10 +1367,19 @@ struct bpf_res_rel {
  * acquisition of the caller acquired, without being handed it. The caller
  * clears its slot in front of the call when no throw finds it holding the
  * resource there and no return from the call does, see frame_desc.c.
+ *
+ * A callx calls one of several subprogs, and what is put in front of it runs
+ * whichever it calls: it has a record as well for what a subprog it calls
+ * leaves with the caller, see bpf_frame_desc_record_callx().
  */
 struct bpf_res_call {
 	u32 insn;	/* the call; U32_MAX when the caller is not in the state */
 	u16 acq;	/* index of the acquisition */
+	/*
+	 * The arguments, a bit per register, that a callx passes it in to a
+	 * subprog that does not release through them.
+	 */
+	u8 lent;
 	bool released;
 	bool held_after; /* some return from the call finds the caller holding it */
 	bool clear;	/* decided once the pass is over */
@@ -2405,6 +2414,7 @@ void bpf_frame_desc_record_sections(struct bpf_verifier_env *env, int subprog, b
 				    bool preempt);
 int bpf_frame_desc_record_call(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
 			       struct bpf_func_state *callee, int callsite);
+int bpf_frame_desc_record_callx(struct bpf_verifier_env *env, int subprog, int callsite);
 bool bpf_frame_desc_keeps(const struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
 			  int f, const struct bpf_reg_state *reg);
 u16 bpf_frame_desc_kept_regs(const struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
