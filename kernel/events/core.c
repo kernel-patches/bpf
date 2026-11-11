@@ -13274,7 +13274,6 @@ static int perf_try_init_event(struct pmu *pmu, struct perf_event *event)
 	if (pmu->scope != PERF_PMU_SCOPE_NONE && event->cpu >= 0) {
 		const struct cpumask *cpumask;
 		struct cpumask *pmu_cpumask;
-		int cpu;
 
 		cpumask = perf_scope_cpu_topology_cpumask(pmu->scope, event->cpu);
 		pmu_cpumask = perf_scope_cpumask(pmu->scope);
@@ -13283,8 +13282,7 @@ static int perf_try_init_event(struct pmu *pmu, struct perf_event *event)
 		if (!pmu_cpumask || !cpumask)
 			goto err_destroy;
 
-		cpu = cpumask_any_and(pmu_cpumask, cpumask);
-		if (cpu >= nr_cpu_ids)
+		if (!cpumask_intersects(pmu_cpumask, cpumask))
 			goto err_destroy;
 
 		event->event_caps |= PERF_EV_CAP_READ_SCOPE;
@@ -15442,8 +15440,7 @@ static void perf_event_setup_cpumask(unsigned int cpu)
 		if (WARN_ON_ONCE(!pmu_cpumask || !cpumask))
 			continue;
 
-		if (!cpumask_empty(cpumask) &&
-		    cpumask_any_and(pmu_cpumask, cpumask) >= nr_cpu_ids)
+		if (!cpumask_empty(cpumask) && !cpumask_intersects(pmu_cpumask, cpumask))
 			cpumask_set_cpu(cpu, pmu_cpumask);
 	}
 end:
