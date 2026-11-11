@@ -1451,6 +1451,37 @@ __naked void imprecise_scalar_spill_half_dead(void)
 : __clobber_all);
 }
 
+/*
+ * The first half-slot of a 64-bit spill holds its low 32 bits on little endian only.
+ * The test spills to r10 - 8. The first four bytes of the slot are an offset into one byte.
+ */
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+#define FIRST_HALF_IS_LOW	__success
+#else
+#define FIRST_HALF_IS_LOW	__failure __msg("access may be outside object bounds")
+#endif
+#define FIRST_HALF(name, stores)						\
+SEC("raw_tp") FIRST_HALF_IS_LOW							\
+__naked void name(void)								\
+{										\
+	asm volatile (								\
+	"call %[bpf_ktime_get_ns];"						\
+	stores									\
+	"r7 = *(u32 *)(r10 - 8); r1 = %[single_byte_buf] ll; r1 += r7; r0 = *(u8 *)(r1 + 0);"	\
+	"out_%=: r0 = 0; exit;"							\
+	:									\
+	: __imm(bpf_ktime_get_ns), __imm_addr(single_byte_buf)			\
+	: __clobber_all);							\
+}
+
+/* The low 32 bits of the value are 0. The second half-slot is dead after the jump. */
+FIRST_HALF(first_half_of_spill_second_half_dead,
+	   "r0 <<= 32; *(u64 *)(r10 - 8) = r0; if r0 == 0 goto out_%=;")
+/* One path has a 32-bit spill of r6, whose low 32 bits are 0, the other one a 64-bit spill */
+FIRST_HALF(spill_of_64_bits_vs_spill_of_32_bits,
+	   "r6 = r0; r6 <<= 32; if r0 > 5 goto 1f; *(u32 *)(r10 - 8) = r6; goto 2f;"
+	   "1: r6 = 0x7ffffff000000000 ll; *(u64 *)(r10 - 8) = r6; 2:")
+
 /* check valid spill/fill, ptr to tp buffer */
 SEC("raw_tracepoint.w")
 __success
