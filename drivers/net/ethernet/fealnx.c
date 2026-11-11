@@ -682,11 +682,11 @@ static void fealnx_remove_one(struct pci_dev *pdev)
 	if (dev) {
 		struct netdev_private *np = netdev_priv(dev);
 
+		unregister_netdev(dev);
 		dma_free_coherent(&pdev->dev, TX_TOTAL_SIZE, np->tx_ring,
 				  np->tx_ring_dma);
 		dma_free_coherent(&pdev->dev, RX_TOTAL_SIZE, np->rx_ring,
 				  np->rx_ring_dma);
-		unregister_netdev(dev);
 		pci_iounmap(pdev, np->mem);
 		free_netdev(dev);
 		pci_release_regions(pdev);
