@@ -2989,6 +2989,10 @@ static void pch_udc_remove(struct pci_dev *pdev)
 		dev_err(&pdev->dev,
 			"%s: gadget driver still bound!!!\n", __func__);
 	/* dma pool cleanup */
+	if (dev->ep[UDC_EP0OUT_IDX].td_data)
+		dma_pool_free(dev->data_requests,
+			      dev->ep[UDC_EP0OUT_IDX].td_data,
+			      dev->ep[UDC_EP0OUT_IDX].td_data_phys);
 	dma_pool_destroy(dev->data_requests);
 
 	if (dev->stp_requests) {
@@ -2997,11 +3001,6 @@ static void pch_udc_remove(struct pci_dev *pdev)
 			dma_pool_free(dev->stp_requests,
 				dev->ep[UDC_EP0OUT_IDX].td_stp,
 				dev->ep[UDC_EP0OUT_IDX].td_stp_phys);
-		}
-		if (dev->ep[UDC_EP0OUT_IDX].td_data) {
-			dma_pool_free(dev->stp_requests,
-				dev->ep[UDC_EP0OUT_IDX].td_data,
-				dev->ep[UDC_EP0OUT_IDX].td_data_phys);
 		}
 		dma_pool_destroy(dev->stp_requests);
 	}
