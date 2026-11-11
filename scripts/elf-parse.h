@@ -318,8 +318,9 @@ static inline void w8le(uint64_t val, uint64_t *x)
 void *elf_map(char const *fname, size_t *size, uint32_t types);
 void *elf_map_ro(char const *fname, size_t *size, uint32_t types);
 void elf_unmap(void *addr, size_t size);
-int elf_map_machine(void *addr);
-int elf_map_long_size(void *addr);
+int elf_map_machine(const Elf_Ehdr *ehdr);
+int elf_map_long_size(const Elf_Ehdr *ehdr);
+int elf_map_big_endian(const Elf_Ehdr *ehdr);
 
 /* A mapped file with its section headers, section names and symbol table. */
 struct elf_file {

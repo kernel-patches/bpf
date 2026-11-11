@@ -170,18 +170,19 @@ static int elf_parse(const char *fname, void *addr, uint32_t types)
 	return 0;
 }
 
-int elf_map_machine(void *addr)
+int elf_map_machine(const Elf_Ehdr *ehdr)
 {
-	Elf_Ehdr *ehdr = addr;
-
 	return elf_parser.r2(&ehdr->e32.e_machine);
 }
 
-int elf_map_long_size(void *addr)
+int elf_map_long_size(const Elf_Ehdr *ehdr)
 {
-	Elf_Ehdr *ehdr = addr;
-
 	return ehdr->e32.e_ident[EI_CLASS] == ELFCLASS32 ? 4 : 8;
+}
+
+int elf_map_big_endian(const Elf_Ehdr *ehdr)
+{
+	return ehdr->e32.e_ident[EI_DATA] ==  ELFDATA2MSB;
 }
 
 static void *__elf_map(char const *fname, size_t *size, uint32_t types,
