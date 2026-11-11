@@ -706,7 +706,6 @@ static void tegra114_emc_complete_timing_change(struct tegra_emc *emc,
 						unsigned long rate)
 {
 	struct emc_timing *timing = tegra114_emc_find_timing(emc, rate);
-	struct emc_timing *last = &emc->last_timing;
 
 	if (!timing)
 		return;
@@ -714,10 +713,9 @@ static void tegra114_emc_complete_timing_change(struct tegra_emc *emc,
 	/* Wait until the state machine has settled */
 	emc_seq_wait_clkchange(emc);
 
-	/* Restore AUTO_CAL */
-	if (timing->emc_ctt_term_ctrl != last->emc_ctt_term_ctrl)
-		writel(timing->emc_auto_cal_interval,
-		       emc->regs + EMC_AUTO_CAL_INTERVAL);
+	/* Restore AUTO_CAL, it was disabled for the clock change */
+	writel(timing->emc_auto_cal_interval,
+	       emc->regs + EMC_AUTO_CAL_INTERVAL);
 
 	/* Restore dynamic self-refresh */
 	if (timing->emc_cfg & EMC_CFG_PWR_MASK)
