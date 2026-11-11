@@ -1938,7 +1938,7 @@ static int join_successor(struct bpf_verifier_env *env, int cur_header, int succ
 {
 	bool log_level2 = env->log.level & BPF_LOG_LEVEL2;
 	struct scev *scev = env->scev;
-	int err, nested_header;
+	int err, nested_header, idom;
 	struct env *succ_env;
 
 	/*
@@ -1966,6 +1966,18 @@ static int join_successor(struct bpf_verifier_env *env, int cur_header, int succ
 	succ_env = get_loop_env(scev, cur_header, succ_idx);
 	if (!succ_env)
 		return -ENOMEM;
+	/*
+	 * The header of an irreducible loop does not dominate its body. An insn whose immediate
+	 * dominator is outside of the loop is reached from a secondary entry, without the header.
+	 * The env at the source of an entering edge is not known: all '?', like a new env. So the
+	 * insn is a join point with a phi for every live register, see join_added_edges().
+	 */
+	idom = env->idoms[succ_idx];
+	if (cur_header >= 0 && succ_idx != cur_header &&
+	    env->insn_aux_data[cur_header].loop->irreducible &&
+	    bpf_loop_at_index(env, idom) != cur_header &&
+	    topmost_nested_loop(env, idom, cur_header) < 0)
+		succ_env->empty = false;
 	if (log_level2)
 		memcpy(old_env, succ_env, sizeof(*old_env));
 	err = join(env, succ_env, cur_env, succ_idx);
@@ -1980,7 +1992,7 @@ static int join_successor(struct bpf_verifier_env *env, int cur_header, int succ
 }
 
 /*
- * Unsupported loops get only an unknown header environment.
+ * Recurrences need a natural loop. Unsupported loops get an unknown header environment.
  * A nested loop is processed as a single instruction, its exits are the successors: all of
  * them are needed. No result for the loop itself depends on the list of its own exits:
  * mark_latches() prepares them for the loop around, and compute_max_iters() asks if there is
@@ -2371,6 +2383,10 @@ bool bpf_scev_mem_addr(struct bpf_verifier_env *env, int insn_idx, u32 regno, u3
  * @cur_header and @first are a loop header. Or -1 and the first insn of a subprog: the subprog is
  * the outermost loop, which runs once. (REG r) is the entry value of r, the loops in it are single
  * instructions.
+ * Value numbering works on any CFG: the body of an irreducible loop is walked like any other. Every
+ * retreating edge of the depth-first search goes to a loop header, see compute_loops_in_subprog(),
+ * and bpf_compute_postorder() does the same search. So reverse post-order is a topological order of
+ * this body too.
  */
 static int compute_scev_for_loop(struct bpf_verifier_env *env, int cur_header, int first)
 {
@@ -2395,21 +2411,6 @@ static int compute_scev_for_loop(struct bpf_verifier_env *env, int cur_header, i
 	if (!cur_loop && !can_compute_subprog_scev(env, sub))
 		return 0;
 
-	/*
-	 * For irreducible loops, and for loops nesting a loop with a truncated
-	 * exit list, just assume that everything is clobbered for now.
-	 */
-	if (cur_loop && !can_compute_loop_scev(cur_loop)) {
-		header_env = get_loop_env(scev, cur_header, cur_header);
-		if (!header_env)
-			return -ENOMEM;
-		/* The freshly allocated environment has all expressions unknown. */
-		bitmap_fill(cur_loop->store_base_regs, REGS_NUM);
-		bitmap_fill(cur_loop->tested_regs, REGS_NUM);
-		header_env->empty = false;
-		return 0;
-	}
-
 	cur_env = kzalloc(sizeof(*cur_env), GFP_KERNEL_ACCOUNT);
 	if (!cur_env)
 		goto nomem;
@@ -2422,9 +2423,12 @@ static int compute_scev_for_loop(struct bpf_verifier_env *env, int cur_header, i
 	if (!header_env)
 		goto nomem;
 	setup_initial_loop_env(header_env);
-	err = worklist_push(env, cur_header, first);
-	if (err)
-		goto out;
+	/* The successors of a nested loop with a truncated exit list are not known: no walk */
+	if (!cur_loop || !cur_loop->nested_exits_overflow) {
+		err = worklist_push(env, cur_header, first);
+		if (err)
+			goto out;
+	}
 	if (!cur_loop) {
 		/* no backedge overwrites it */
 		header_env->empty = false;
@@ -2527,6 +2531,12 @@ static int compute_scev_for_loop(struct bpf_verifier_env *env, int cur_header, i
 			free_loop_env(scev, cur_header, start);
 	}
 
+	/* For the enclosing loop and for the main pass it clobbers everything */
+	if (cur_loop && !can_compute_loop_scev(cur_loop)) {
+		memset(header_env, 0, sizeof(*header_env));
+		bitmap_fill(cur_loop->store_base_regs, REGS_NUM);
+		bitmap_fill(cur_loop->tested_regs, REGS_NUM);
+	}
 	err = 0;
 out:
 	kfree(cur_env);
