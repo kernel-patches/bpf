@@ -74,8 +74,7 @@ SYM_FUNC_START(chacha_1to2blocks_avx2)
 	# x2 += x3, x1 = rotl32(x1 ^ x2, 12)
 	vpaddd		%ymm3,%ymm2,%ymm2
 	vpxor		%ymm2,%ymm1,%ymm1
-	vmovdqa		%ymm1,%ymm6
-	vpslld		$12,%ymm6,%ymm6
+	vpslld		$12,%ymm1,%ymm6
 	vpsrld		$20,%ymm1,%ymm1
 	vpor		%ymm6,%ymm1,%ymm1
 
@@ -87,8 +86,7 @@ SYM_FUNC_START(chacha_1to2blocks_avx2)
 	# x2 += x3, x1 = rotl32(x1 ^ x2, 7)
 	vpaddd		%ymm3,%ymm2,%ymm2
 	vpxor		%ymm2,%ymm1,%ymm1
-	vmovdqa		%ymm1,%ymm7
-	vpslld		$7,%ymm7,%ymm7
+	vpslld		$7,%ymm1,%ymm7
 	vpsrld		$25,%ymm1,%ymm1
 	vpor		%ymm7,%ymm1,%ymm1
 
@@ -107,8 +105,7 @@ SYM_FUNC_START(chacha_1to2blocks_avx2)
 	# x2 += x3, x1 = rotl32(x1 ^ x2, 12)
 	vpaddd		%ymm3,%ymm2,%ymm2
 	vpxor		%ymm2,%ymm1,%ymm1
-	vmovdqa		%ymm1,%ymm6
-	vpslld		$12,%ymm6,%ymm6
+	vpslld		$12,%ymm1,%ymm6
 	vpsrld		$20,%ymm1,%ymm1
 	vpor		%ymm6,%ymm1,%ymm1
 
@@ -120,8 +117,7 @@ SYM_FUNC_START(chacha_1to2blocks_avx2)
 	# x2 += x3, x1 = rotl32(x1 ^ x2, 7)
 	vpaddd		%ymm3,%ymm2,%ymm2
 	vpxor		%ymm2,%ymm1,%ymm1
-	vmovdqa		%ymm1,%ymm7
-	vpslld		$7,%ymm7,%ymm7
+	vpslld		$7,%ymm1,%ymm7
 	vpsrld		$25,%ymm1,%ymm1
 	vpor		%ymm7,%ymm1,%ymm1
 
@@ -251,15 +247,13 @@ SYM_FUNC_START(chacha_2to4blocks_avx2)
 	# x2 += x3, x1 = rotl32(x1 ^ x2, 12)
 	vpaddd		%ymm3,%ymm2,%ymm2
 	vpxor		%ymm2,%ymm1,%ymm1
-	vmovdqa		%ymm1,%ymm10
-	vpslld		$12,%ymm10,%ymm10
+	vpslld		$12,%ymm1,%ymm10
 	vpsrld		$20,%ymm1,%ymm1
 	vpor		%ymm10,%ymm1,%ymm1
 
 	vpaddd		%ymm7,%ymm6,%ymm6
 	vpxor		%ymm6,%ymm5,%ymm5
-	vmovdqa		%ymm5,%ymm10
-	vpslld		$12,%ymm10,%ymm10
+	vpslld		$12,%ymm5,%ymm10
 	vpsrld		$20,%ymm5,%ymm5
 	vpor		%ymm10,%ymm5,%ymm5
 
@@ -275,15 +269,13 @@ SYM_FUNC_START(chacha_2to4blocks_avx2)
 	# x2 += x3, x1 = rotl32(x1 ^ x2, 7)
 	vpaddd		%ymm3,%ymm2,%ymm2
 	vpxor		%ymm2,%ymm1,%ymm1
-	vmovdqa		%ymm1,%ymm10
-	vpslld		$7,%ymm10,%ymm10
+	vpslld		$7,%ymm1,%ymm10
 	vpsrld		$25,%ymm1,%ymm1
 	vpor		%ymm10,%ymm1,%ymm1
 
 	vpaddd		%ymm7,%ymm6,%ymm6
 	vpxor		%ymm6,%ymm5,%ymm5
-	vmovdqa		%ymm5,%ymm10
-	vpslld		$7,%ymm10,%ymm10
+	vpslld		$7,%ymm5,%ymm10
 	vpsrld		$25,%ymm5,%ymm5
 	vpor		%ymm10,%ymm5,%ymm5
 
@@ -309,15 +301,13 @@ SYM_FUNC_START(chacha_2to4blocks_avx2)
 	# x2 += x3, x1 = rotl32(x1 ^ x2, 12)
 	vpaddd		%ymm3,%ymm2,%ymm2
 	vpxor		%ymm2,%ymm1,%ymm1
-	vmovdqa		%ymm1,%ymm10
-	vpslld		$12,%ymm10,%ymm10
+	vpslld		$12,%ymm1,%ymm10
 	vpsrld		$20,%ymm1,%ymm1
 	vpor		%ymm10,%ymm1,%ymm1
 
 	vpaddd		%ymm7,%ymm6,%ymm6
 	vpxor		%ymm6,%ymm5,%ymm5
-	vmovdqa		%ymm5,%ymm10
-	vpslld		$12,%ymm10,%ymm10
+	vpslld		$12,%ymm5,%ymm10
 	vpsrld		$20,%ymm5,%ymm5
 	vpor		%ymm10,%ymm5,%ymm5
 
@@ -333,15 +323,13 @@ SYM_FUNC_START(chacha_2to4blocks_avx2)
 	# x2 += x3, x1 = rotl32(x1 ^ x2, 7)
 	vpaddd		%ymm3,%ymm2,%ymm2
 	vpxor		%ymm2,%ymm1,%ymm1
-	vmovdqa		%ymm1,%ymm10
-	vpslld		$7,%ymm10,%ymm10
+	vpslld		$7,%ymm1,%ymm10
 	vpsrld		$25,%ymm1,%ymm1
 	vpor		%ymm10,%ymm1,%ymm1
 
 	vpaddd		%ymm7,%ymm6,%ymm6
 	vpxor		%ymm6,%ymm5,%ymm5
-	vmovdqa		%ymm5,%ymm10
-	vpslld		$7,%ymm10,%ymm10
+	vpslld		$7,%ymm5,%ymm10
 	vpsrld		$25,%ymm5,%ymm5
 	vpor		%ymm10,%ymm5,%ymm5
 
