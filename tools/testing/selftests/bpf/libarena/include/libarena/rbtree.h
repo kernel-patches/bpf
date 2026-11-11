@@ -59,10 +59,27 @@ struct rbtree {
 	struct rbnode __arena *root;
 	enum rbtree_alloc alloc;
 	enum rbtree_insert_mode insert;
+
+	/*
+	 * The leftmost node and the node count. The writer keeps them current,
+	 * and readers may read them without the writer's lock (see
+	 * rb_first_lockless() and friends).
+	 */
+	struct rbnode __arena *first;
+	uint64_t nr;
 };
 
 #ifdef __BPF__
 struct rbtree __arena *rb_create(enum rbtree_alloc alloc, enum rbtree_insert_mode insert);
+
+/*
+ * Initialize and finalize a tree embedded in another arena object.
+ * rb_fini() frees the nodes of an RB_ALLOC tree and fails with -EBUSY on a
+ * non-empty RB_NOALLOC tree. It leaves the tree's memory to its owner.
+ */
+int rb_init(struct rbtree __arena *rbtree, enum rbtree_alloc alloc,
+	    enum rbtree_insert_mode insert);
+int rb_fini(struct rbtree __arena *rbtree);
 
 int rb_destroy(struct rbtree __arena *rbtree);
 int rb_insert(struct rbtree __arena *rbtree, u64 key, u64 value);
@@ -80,5 +97,38 @@ struct rbnode __arena *rb_node_alloc(u64 key, u64 value);
 void rb_node_free(struct rbnode __arena *rbnode);
 
 int rb_integrity_check(struct rbtree __arena *rbtree);
+
+/*
+ * Lockless reads of the head and the node count. They need not be called
+ * under the writer's lock, so they are advisory: the tree may change before
+ * the caller acts on the result. The node rb_first_lockless() returns may
+ * have left the tree, or been freed in an RB_ALLOC tree, by the time the
+ * caller reads it. A caller that dereferences it must keep the node's memory
+ * valid itself, for example by embedding the node in an object that is freed
+ * only after an RCU grace period and reading it inside an RCU read-side
+ * critical section. The count is a separate read and need not agree with the
+ * head.
+ */
+static struct rbnode __arena *rb_first_lockless(struct rbtree __arena *rbtree)
+{
+	return READ_ONCE(rbtree->first);
+}
+
+/* -ENOENT if the tree is empty, 0 with the leftmost key in @key otherwise. */
+static int rb_first_key_lockless(struct rbtree __arena *rbtree, u64 *key)
+{
+	struct rbnode __arena *first = READ_ONCE(rbtree->first);
+
+	if (!first)
+		return -ENOENT;
+
+	*key = READ_ONCE(first->key);
+	return 0;
+}
+
+static u64 rb_nr_nodes_lockless(struct rbtree __arena *rbtree)
+{
+	return READ_ONCE(rbtree->nr);
+}
 
 #endif /* __BPF__ */
