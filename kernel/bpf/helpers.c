@@ -3492,6 +3492,8 @@ notrace void bpf_throw_unwind(struct bpf_throw_regs *regs, u64 cookie)
 	 */
 	if (regs)
 		memcpy(ctx.saved, &regs->r[BPF_REG_6], sizeof(ctx.saved));
+	/* What the frames about to be discarded hold is released first. */
+	bpf_unwind_release_frames();
 	arch_bpf_stack_walk(bpf_stack_walker, &ctx);
 	WARN_ON_ONCE(!ctx.aux);
 	if (ctx.aux)
@@ -5136,6 +5138,18 @@ int bpf_dynptr_from_file_sleepable(struct file *file, u32 flags, struct bpf_dynp
 	return make_file_dynptr(file, flags, true, (struct bpf_dynptr_kern *)ptr__uninit);
 }
 
+/*
+ * Free the reader of a file dynptr, which the dynptr and its clones point
+ * at: what the unwinder does for a dynptr the program did not discard.
+ */
+void bpf_dynptr_file_free(void *reader)
+{
+	struct bpf_dynptr_file_impl *df = reader;
+
+	freader_cleanup(&df->freader);
+	kfree_nolock(df);
+}
+
 __bpf_kfunc int bpf_dynptr_file_discard(struct bpf_dynptr *dynptr)
 {
 	struct bpf_dynptr_kern *ptr = (struct bpf_dynptr_kern *)dynptr;
@@ -5144,8 +5158,7 @@ __bpf_kfunc int bpf_dynptr_file_discard(struct bpf_dynptr *dynptr)
 	if (!df)
 		return 0;
 
-	freader_cleanup(&df->freader);
-	kfree_nolock(df);
+	bpf_dynptr_file_free(df);
 	bpf_dynptr_set_null(ptr);
 	return 0;
 }

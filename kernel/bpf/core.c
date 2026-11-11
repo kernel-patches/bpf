@@ -3459,6 +3459,7 @@ static void bpf_prog_free_images(struct work_struct *work)
 	int i;
 
 	aux = container_of(to_rcu_work(work), struct bpf_prog_aux, rwork);
+	bpf_frame_desc_pool_free(aux->frame_desc_pool);
 	for (i = 0; i < aux->real_func_cnt; i++) {
 		/* We can just unlink the subprog poke descriptor table as
 		 * it was originally linked to the main program and is also

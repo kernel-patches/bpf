@@ -7577,7 +7577,7 @@ BPF_CALL_1(bpf_sk_release, struct sock *, sk)
 	return 0;
 }
 
-static const struct bpf_func_proto bpf_sk_release_proto = {
+const struct bpf_func_proto bpf_sk_release_proto = {
 	.func		= bpf_sk_release,
 	.gpl_only	= false,
 	.ret_type	= RET_INTEGER,

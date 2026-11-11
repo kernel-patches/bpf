@@ -1829,6 +1829,72 @@ struct bpf_jit_poke_descriptor {
 	u32 insn_idx;
 };
 
+/*
+ * Frame descriptors: the hidden stack slots in which the frames of a function
+ * keep the handles of what they hold, and how the unwinder releases them, see
+ * kernel/bpf/frame_desc.c.
+ */
+/* Kinds of resources the unwinder can release. */
+enum bpf_resource_kind {
+	BPF_RESOURCE_OBJ,		/* bpf_obj_new() object: bpf_obj_drop_impl(p, meta) */
+	BPF_RESOURCE_PERCPU_OBJ,	/* bpf_percpu_obj_new() object: bpf_percpu_obj_drop_impl() */
+	BPF_RESOURCE_KPTR,		/* referenced kernel object: the BTF registry's dtor(p) */
+	BPF_RESOURCE_SOCK,		/* socket acquired by a helper: bpf_sk_release() */
+	BPF_RESOURCE_RINGBUF,		/* ringbuf record, also of a dynptr: bpf_ringbuf_discard() */
+	BPF_RESOURCE_DYNPTR_FILE,	/* reader of a file dynptr: bpf_dynptr_file_free() */
+	BPF_RESOURCE_ITER,		/* open-coded iterator on the stack: its destroy kfunc */
+	BPF_RESOURCE_SPIN_LOCK,		/* bpf_spin_lock() held: bpf_spin_unlock() */
+	BPF_RESOURCE_RES_LOCK,		/* bpf_res_spin_lock() held: bpf_res_spin_unlock() */
+	BPF_RESOURCE_IRQ_FLAG,		/* saved IRQ flags on the stack: bpf_local_irq_restore() */
+	BPF_RESOURCE_RCU,		/* bpf_rcu_read_lock() sections: unlock each */
+	BPF_RESOURCE_PREEMPT,		/* bpf_preempt_disable() sections: enable each */
+};
+
+/* A resource class of a program; descriptor entries refer to it by index. */
+struct bpf_resource {
+	u8 kind;	/* enum bpf_resource_kind */
+	bool sleeps;	/* the destructor may sleep */
+	bool rcu;	/* the destructor needs RCU protection */
+	u32 btf_id;
+	struct btf *btf;
+	union {
+		void (*dtor)(void *);
+		struct btf_struct_meta *meta;
+	};
+};
+
+/*
+ * The slot holds a count of sections instead of a handle, signed: the
+ * sections the frame entered less those of its callers it left.
+ */
+#define BPF_FRAME_ENT_COUNTER	BIT(0)
+
+/*
+ * One hidden slot of a frame: it holds the handle of a resource of the class
+ * the frame holds, or 0. The handle is what the release takes: the pointer
+ * to an object, to a ringbuf record or to a lock, or the address of an
+ * iterator or of saved IRQ flags on the stack of some frame.
+ */
+struct bpf_frame_desc_entry {
+	u16 res;	/* index into the program's resource classes */
+	s16 off;	/* the slot, relative to the frame pointer */
+	u16 flags;
+};
+
+struct bpf_frame_desc {
+	u32 size;	/* total size in bytes, including this header */
+	u32 nent;	/* number of entries that follow */
+	struct bpf_frame_desc_entry ent[];
+};
+
+/* Owned by the main program and shared by its subprograms. */
+struct bpf_frame_desc_pool {
+	u32 cnt;
+	u32 resource_cnt;
+	struct bpf_resource *resources;
+	struct bpf_frame_desc *desc[];
+};
+
 /* reg_type info for ctx arguments */
 struct bpf_ctx_arg_aux {
 	u32 offset;
@@ -2053,6 +2119,14 @@ struct bpf_prog_aux {
 	struct module *mod;
 	u32 num_exentries;
 	struct exception_table_entry *extable;
+	/*
+	 * The frame descriptor of this JITed function in the pool of the main
+	 * program, plus one, or 0: the hidden slots its frames keep the handles
+	 * of their resources in, see frame_desc.c. The main and sub progs share
+	 * the pool, which is freed with the main prog only.
+	 */
+	u32 frame_desc;
+	struct bpf_frame_desc_pool *frame_desc_pool;
 	union {
 		struct work_struct work;
 		struct rcu_head	rcu;
@@ -2999,6 +3073,12 @@ void bpf_obj_free_task_work(const struct btf_record *rec, void *obj);
 void bpf_obj_cancel_fields(struct bpf_map *map, void *obj);
 void bpf_obj_free_fields(const struct btf_record *rec, void *obj);
 void __bpf_obj_drop_impl(void *p, const struct btf_record *rec, bool percpu);
+void bpf_obj_drop_impl(void *p__alloc, void *meta__ign);
+void bpf_percpu_obj_drop_impl(void *p__alloc, void *meta__ign);
+void bpf_rcu_read_unlock(void);
+void bpf_preempt_enable(void);
+void bpf_local_irq_restore(unsigned long *flags__irq_flag);
+void bpf_res_spin_unlock(struct bpf_res_spin_lock *lock);
 
 struct bpf_map *bpf_map_get(u32 ufd);
 struct bpf_map *bpf_map_get_with_uref(u32 ufd);
@@ -4218,6 +4298,7 @@ extern const struct bpf_func_proto bpf_ringbuf_output_proto;
 extern const struct bpf_func_proto bpf_ringbuf_reserve_proto;
 extern const struct bpf_func_proto bpf_ringbuf_submit_proto;
 extern const struct bpf_func_proto bpf_ringbuf_discard_proto;
+extern const struct bpf_func_proto bpf_sk_release_proto;
 extern const struct bpf_func_proto bpf_ringbuf_query_proto;
 extern const struct bpf_func_proto bpf_ringbuf_reserve_dynptr_proto;
 extern const struct bpf_func_proto bpf_ringbuf_submit_dynptr_proto;
@@ -4508,9 +4589,19 @@ void bpf_insn_array_remap(struct bpf_map *map, const u32 *new_off, const u32 *ne
 
 #ifdef CONFIG_BPF_SYSCALL
 void bpf_prog_update_insn_ptrs(struct bpf_prog *prog, u32 *offsets, void *image);
+void bpf_unwind_release(const struct bpf_resource *res, void *handle);
+void bpf_dynptr_file_free(void *reader);
+void bpf_unwind_release_frames(void);
+void bpf_frame_desc_pool_free(struct bpf_frame_desc_pool *pool);
 #else
 static inline void
 bpf_prog_update_insn_ptrs(struct bpf_prog *prog, u32 *offsets, void *image)
+{
+}
+static inline void bpf_frame_desc_pool_free(struct bpf_frame_desc_pool *pool)
+{
+}
+static inline void bpf_unwind_release_frames(void)
 {
 }
 #endif
