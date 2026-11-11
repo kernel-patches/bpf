@@ -190,10 +190,9 @@ l0_%=:							\
 	: __clobber_all);
 }
 
-/* Double ADD clears the ID (can't accumulate offsets) */
+/* Double ADD clears the ID. That r1 = r0 + 4 is known all the same: r0 /= 0 is dead code */
 SEC("socket")
-__failure
-__msg("div by zero")
+__success
 __naked void scalars_double_add(void)
 {
 	asm volatile ("					\
