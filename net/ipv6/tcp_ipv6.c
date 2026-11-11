@@ -134,6 +134,7 @@ static int tcp_v6_connect(struct sock *sk, struct sockaddr_unsized *uaddr,
 			  int addr_len)
 {
 	struct sockaddr_in6 *usin = (struct sockaddr_in6 *) uaddr;
+	int old_bound_dev_if = READ_ONCE(sk->sk_bound_dev_if);
 	struct inet_connection_sock *icsk = inet_csk(sk);
 	struct inet_timewait_death_row *tcp_death_row;
 	struct ipv6_pinfo *np = tcp_inet6_sk(sk);
@@ -197,7 +198,7 @@ static int tcp_v6_connect(struct sock *sk, struct sockaddr_unsized *uaddr,
 			if (!sk_dev_equal_l3scope(sk, usin->sin6_scope_id))
 				return -EINVAL;
 
-			sk->sk_bound_dev_if = usin->sin6_scope_id;
+			WRITE_ONCE(sk->sk_bound_dev_if, usin->sin6_scope_id);
 		}
 
 		/* Connect to link-local address requires an interface */
@@ -251,7 +252,7 @@ static int tcp_v6_connect(struct sock *sk, struct sockaddr_unsized *uaddr,
 #if defined(CONFIG_TCP_MD5SIG) || defined(CONFIG_TCP_AO)
 			tp->af_specific = &tcp_sock_ipv6_specific;
 #endif
-			goto failure;
+			goto out;
 		}
 		np->saddr = sk->sk_v6_rcv_saddr;
 
@@ -353,9 +354,14 @@ static int tcp_v6_connect(struct sock *sk, struct sockaddr_unsized *uaddr,
 	return 0;
 
 late_failure:
+	WRITE_ONCE(sk->sk_bound_dev_if, old_bound_dev_if);
 	tcp_set_state(sk, TCP_CLOSE);
 	inet_bhash2_reset_saddr(sk);
+	goto out;
+
 failure:
+	WRITE_ONCE(sk->sk_bound_dev_if, old_bound_dev_if);
+out:
 	inet->inet_dport = 0;
 	sk->sk_route_caps = 0;
 	return err;
