@@ -58,7 +58,9 @@ static int npcm_rng_read(struct hwrng *rng, void *buf, size_t max, bool wait)
 	int retval = 0;
 	int ready;
 
-	pm_runtime_get_sync(priv->dev);
+	retval = pm_runtime_resume_and_get(priv->dev);
+	if (retval < 0)
+		return retval;
 
 	while (max) {
 		if (wait) {
