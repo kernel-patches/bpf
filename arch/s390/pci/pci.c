@@ -62,8 +62,6 @@ EXPORT_SYMBOL_GPL(zpci_iomap_start);
 
 DEFINE_STATIC_KEY_FALSE(have_mio);
 
-static struct kmem_cache *zdev_fmb_cache;
-
 /* AEN structures that must be preserved over KVM module re-insertion */
 union zpci_sic_iib *zpci_aipb;
 EXPORT_SYMBOL_GPL(zpci_aipb);
@@ -205,13 +203,17 @@ int zpci_fmb_enable(struct zpci_dev *zdev)
 
 	lockdep_assert_held(&zdev->fmb_lock);
 
-	if (zdev->fmb || sizeof(*zdev->fmb) < zdev->fmb_length)
+	if (zdev->fmb_enabled || sizeof(*zdev->fmb) < zdev->fmb_length)
 		return -EINVAL;
 
-	zdev->fmb = kmem_cache_zalloc(zdev_fmb_cache, GFP_KERNEL);
-	if (!zdev->fmb)
-		return -ENOMEM;
-	WARN_ON((u64) zdev->fmb & 0xf);
+	if (!zdev->fmb) {
+		zdev->fmb = kzalloc_obj(*zdev->fmb, GFP_KERNEL);
+		if (!zdev->fmb)
+			return -ENOMEM;
+	} else {
+		/* reuse the same FMB buffer for as long as the zdev lives */
+		memset(zdev->fmb, 0, sizeof(*zdev->fmb));
+	}
 
 	/* reset software counters */
 	spin_lock_irqsave(&zdev->dom_lock, flags);
@@ -229,11 +231,12 @@ int zpci_fmb_enable(struct zpci_dev *zdev)
 	fib.fmb_addr = virt_to_phys(zdev->fmb);
 	fib.gd = zdev->gisa;
 	cc = zpci_mod_fc(req, &fib, &status);
-	if (cc) {
-		kmem_cache_free(zdev_fmb_cache, zdev->fmb);
-		zdev->fmb = NULL;
-	}
-	return cc ? -EIO : 0;
+
+	if (cc)
+		return -EIO;
+
+	zdev->fmb_enabled = 1;
+	return 0;
 }
 
 /* Modify PCI: Disable PCI function measurement */
@@ -245,7 +248,7 @@ int zpci_fmb_disable(struct zpci_dev *zdev)
 
 	lockdep_assert_held(&zdev->fmb_lock);
 
-	if (!zdev->fmb)
+	if (!zdev->fmb_enabled)
 		return -EINVAL;
 
 	fib.gd = zdev->gisa;
@@ -255,11 +258,11 @@ int zpci_fmb_disable(struct zpci_dev *zdev)
 	if (cc == 3) /* Function already gone. */
 		cc = 0;
 
-	if (!cc) {
-		kmem_cache_free(zdev_fmb_cache, zdev->fmb);
-		zdev->fmb = NULL;
-	}
-	return cc ? -EIO : 0;
+	if (cc)
+		return -EIO;
+
+	zdev->fmb_enabled = 0;
+	return 0;
 }
 
 static int zpci_cfg_load(struct zpci_dev *zdev, int offset, u32 *val, u8 len)
@@ -547,6 +550,13 @@ void zpci_update_fh(struct zpci_dev *zdev, u32 fh)
 		return;
 
 	zdev->fh = fh;
+
+	if (!zdev_enabled(zdev)) {
+		mutex_lock(&zdev->fmb_lock);
+		zdev->fmb_enabled = 0;
+		mutex_unlock(&zdev->fmb_lock);
+	}
+
 	if (zpci_use_mio(zdev))
 		return;
 	if (zdev->has_resources && zdev_enabled(zdev))
@@ -802,6 +812,7 @@ int zpci_disable_device(struct zpci_dev *zdev)
 	} else {
 		rc = -EIO;
 	}
+
 	return rc;
 }
 EXPORT_SYMBOL_GPL(zpci_disable_device);
@@ -1047,6 +1058,12 @@ void zpci_release_device(struct kref *kref)
 	if (zdev->has_resources)
 		zpci_cleanup_bus_resources(zdev);
 
+	if (zdev->fmb) {
+		zdev->fmb_enabled = 0;
+		kfree(zdev->fmb);
+		zdev->fmb = NULL;
+	}
+
 	zpci_bus_device_unregister(zdev);
 	zpci_destroy_iommu(zdev);
 	zpci_dbg(3, "rem fid:%x\n", zdev->fid);
@@ -1122,11 +1139,6 @@ static int zpci_mem_init(void)
 	BUILD_BUG_ON((CONFIG_ILLEGAL_POINTER_VALUE + 0x10000 > ZPCI_IOMAP_ADDR_BASE) &&
 		     (CONFIG_ILLEGAL_POINTER_VALUE <= ZPCI_IOMAP_ADDR_MAX));
 
-	zdev_fmb_cache = kmem_cache_create("PCI_FMB_cache", sizeof(struct zpci_fmb),
-					   __alignof__(struct zpci_fmb), 0, NULL);
-	if (!zdev_fmb_cache)
-		goto error_fmb;
-
 	zpci_iomap_start = kzalloc_objs(*zpci_iomap_start, ZPCI_IOMAP_ENTRIES);
 	if (!zpci_iomap_start)
 		goto error_iomap;
@@ -1143,8 +1155,6 @@ static int zpci_mem_init(void)
 error_iomap_bitmap:
 	kfree(zpci_iomap_start);
 error_iomap:
-	kmem_cache_destroy(zdev_fmb_cache);
-error_fmb:
 	return -ENOMEM;
 }
 
@@ -1152,7 +1162,6 @@ static void zpci_mem_exit(void)
 {
 	kfree(zpci_iomap_bitmap);
 	kfree(zpci_iomap_start);
-	kmem_cache_destroy(zdev_fmb_cache);
 }
 
 static unsigned int s390_pci_probe __initdata = 1;

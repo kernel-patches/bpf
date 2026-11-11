@@ -209,6 +209,7 @@ struct zpci_dev {
 	u16		fmb_update;	/* update interval */
 	u16		fmb_length;
 	u8		statistics_on	: 1; /* desired FMB enablement */
+	u8		fmb_enabled	: 1; /* actual FMB enablement */
 
 	u8		version;
 	enum pci_bus_speed max_bus_speed;
