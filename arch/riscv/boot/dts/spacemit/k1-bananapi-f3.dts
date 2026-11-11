@@ -383,6 +383,23 @@
 	status = "okay";
 };
 
+&uart2 {
+	assigned-clocks = <&syscon_apbc CLK_UART2>,
+			  <&syscon_mpmu CLK_SLOW_UART2>;
+	assigned-clock-parents = <&syscon_mpmu CLK_SLOW_UART2>;
+	assigned-clock-rates = <0>, <48000000>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart2_0_cfg>, <&uart2_0_cts_rts_cfg>;
+	uart-has-rtscts;
+	status = "okay";
+
+	bluetooth {
+		compatible = "realtek,rtl8852bs-bt", "realtek,rtl8822cs-bt";
+		enable-gpios = <&gpio K1_GPIO(63) GPIO_ACTIVE_HIGH>;
+		device-wake-gpios = <&gpio K1_GPIO(64) GPIO_ACTIVE_HIGH>;
+	};
+};
+
 &usbphy2 {
 	status = "okay";
 };
