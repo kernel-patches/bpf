@@ -124,6 +124,18 @@ bool pagemap_is_populated(int fd, char *start)
 				PAGE_IS_PRESENT | PAGE_IS_SWAPPED);
 }
 
+bool pagemap_is_huge_zero(int fd, char *start)
+{
+	const uint64_t expected = PAGE_IS_PRESENT | PAGE_IS_PFNZERO | PAGE_IS_HUGE;
+	uint64_t categories;
+
+	if (!pagemap_scan_supported(fd, start))
+		return false;
+
+	categories = pagemap_scan_get_categories(fd, start);
+	return (categories & expected) == expected;
+}
+
 unsigned long pagemap_get_pfn(int fd, char *start)
 {
 	uint64_t entry = pagemap_get_entry(fd, start);
@@ -372,6 +384,23 @@ char *__get_smap_entry(void *addr, const char *pattern, char *buf, size_t len)
 err_out:
 	fclose(fp);
 	return entry;
+}
+
+bool smaps_has_anon_huge_pages(void *addr)
+{
+	char buf[MAX_LINE_LENGTH];
+	unsigned long anon_huge_kb;
+	char *entry, *end;
+
+	entry = __get_smap_entry(addr, "AnonHugePages:", buf, sizeof(buf));
+	if (!entry)
+		ksft_exit_fail_msg("could not find AnonHugePages\n");
+
+	anon_huge_kb = strtoul(entry, &end, 10);
+	if (end == entry)
+		ksft_exit_fail_msg("could not parse AnonHugePages\n");
+
+	return anon_huge_kb != 0;
 }
 
 static bool check_large_folios(void *addr, size_t len, int nr_hpages,
