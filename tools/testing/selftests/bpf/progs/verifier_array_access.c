@@ -762,7 +762,7 @@ l0_%=:	*(u32*)(r10 - 8) = r6;				\
 	: __clobber_all);
 }
 
-/* The slot has the id of r6, so the compare sets the range of the slot too */
+/* The slot holds the low 32 bits of r6, so the compare refines the slot too */
 SEC("socket")
 __description("valid map access into an array using a key that is compared after the spill")
 __success __retval(0)
