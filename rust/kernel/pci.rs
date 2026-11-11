@@ -362,6 +362,13 @@ impl<Ctx: device::DeviceContext> Device<Ctx> {
 }
 
 impl Device {
+    /// Returns `true` if this device is a Virtual Function (VF).
+    #[inline]
+    pub fn is_virtfn(&self) -> bool {
+        // SAFETY: `self.as_raw` is a valid pointer to a `struct pci_dev`.
+        unsafe { (*self.as_raw()).is_virtfn() != 0 }
+    }
+
     /// Returns the PCI vendor ID as [`Vendor`].
     ///
     /// # Examples
