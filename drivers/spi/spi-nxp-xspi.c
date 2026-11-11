@@ -824,7 +824,7 @@ static int nxp_xspi_dma_init(struct device *dev, struct nxp_xspi *xspi)
 
 	xspi->dma_rx = rx;
 	init_completion(&xspi->dma_rx_c);
-	xspi->dma_copy_align = 1 << rx->device->copy_align;
+	xspi->dma_copy_align = 1 << dmaengine_get_copy_align(rx);
 
 	return 0;
 }
