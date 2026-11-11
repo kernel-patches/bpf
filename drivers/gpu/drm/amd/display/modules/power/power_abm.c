@@ -374,6 +374,22 @@ static unsigned int backlight_pwm_to_millipercent_legacy(
 	if (core_power == NULL)
 		return 0;
 
+	/* Inverse of the LUT bypass in backlight_millipercent_to_pwm_legacy() */
+	if (core_power->bl_prop[inst].use_linear_backlight_curve) {
+		const struct pwr_backlight_properties *bl_prop = &core_power->bl_prop[inst];
+
+		if (pwm <= bl_prop->min_backlight_pwm)
+			return 0;
+
+		if (pwm >= bl_prop->max_backlight_pwm)
+			return BACKLIGHT_MILLIPERCENT_MAX;
+
+		return (unsigned int)div_u64(
+				(unsigned long long)(pwm - bl_prop->min_backlight_pwm) *
+				BACKLIGHT_MILLIPERCENT_MAX + bl_prop->backlight_range / 2,
+				bl_prop->backlight_range);
+	}
+
 	if (!core_power->bl_prop[inst].backlight_caps_valid)
 		return 0;
 
@@ -521,7 +537,7 @@ static unsigned int backlight_millipercent_to_pwm_legacy(
 		return 0;
 
 	// Bypass the brightness mapping LUT
-	if (core_power->bl_prop->use_linear_backlight_curve) {
+	if (core_power->bl_prop[inst].use_linear_backlight_curve) {
 		pwm = core_power->bl_prop[inst].min_backlight_pwm +
 			(unsigned int) div_u64((unsigned long long) millipercent *
 			core_power->bl_prop[inst].backlight_range,
