@@ -41,6 +41,8 @@ The following skills are available:
   returns its stable tag, or checks an existing one.
 * agents/skills/find-siblings/SKILL.md looks for the same bug elsewhere in the
   tree.
+* agents/skills/commit-message/SKILL.md writes, rewrites or reviews a commit
+  message or cover letter, and writes the text of a pull request.
 
 Licensing and Legal Requirements
 ================================
@@ -87,9 +89,10 @@ these steps:
    another one. The fix must not add build warnings and must pass the
    checkpatch.pl checks (see submitting-patches.rst). Then look for the same
    bug elsewhere with the find-siblings skill.
-6. Commit the working fix with a detailed message describing the problem, the
-   solution, a Fixes tag determined with the find-fixes skill, and a stable
-   tag if the stable-tag skill calls for one.  Do not add a Signed-off-by tag.
+6. Commit the working fix with a message written with the commit-message skill,
+   describing the problem, the solution, a Fixes tag determined with the
+   find-fixes skill, and a stable tag if the stable-tag skill calls for one. Do
+   not add a Signed-off-by tag.
 7. Identify the maintainers and lists using scripts/get_maintainer.pl.
    Documentation/process/security-bugs.rst shows how to do that.
 8. Indicate what could not be done. If the fix could not be built or tested, or
