@@ -1552,10 +1552,24 @@ static int __bpf_async_set_callback(struct bpf_async_kern *async, void *callback
 				    struct bpf_prog *prog)
 {
 	struct bpf_async_cb *cb;
+	struct bpf_map *map;
 
 	cb = READ_ONCE(async->cb);
 	if (!cb)
 		return -EINVAL;
+
+	/*
+	 * The prog can still hold a value of an element that was deleted from the map.
+	 * bpf_async_cancel_and_free() is done with it and nothing stops a new callback
+	 * when the element is freed. cb is published at this point: either the lookup
+	 * doesn't find the element or bpf_async_cancel_and_free() finds cb.
+	 * Nothing runs without callback_fn. An idle cb stays in the element until the
+	 * element is reused or freed.
+	 */
+	smp_mb();
+	map = READ_ONCE(cb->map);
+	if (!map || !bpf_map_value_is_linked(map, cb->value))
+		return -ENOENT;
 
 	return bpf_async_update_prog_callback(cb, prog, callback_fn);
 }
@@ -3530,6 +3544,17 @@ __bpf_kfunc int bpf_wq_start(struct bpf_wq *wq, unsigned int flags)
 	}
 }
 
+/**
+ * bpf_wq_set_callback - Set the callback of a BPF workqueue
+ * @wq: pointer to the bpf_wq field
+ * @callback_fn: callback function
+ * @flags: must be zero
+ * @aux: implicit program metadata
+ *
+ * Return: 0 on success, -EINVAL for invalid flags or an uninitialized @wq,
+ * -ENOENT if the containing map element is no longer in the map or the
+ * workqueue was invalidated by map cleanup, or another negative error.
+ */
 __bpf_kfunc int bpf_wq_set_callback(struct bpf_wq *wq,
 				    int (callback_fn)(void *map, int *key, void *value),
 				    unsigned int flags,
