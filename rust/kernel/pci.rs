@@ -767,6 +767,24 @@ impl Device {
     }
 }
 
+impl Device<device::Bound> {
+    /// Returns the PCI domain number of the bus that this device is on.
+    #[inline]
+    pub fn domain_nr(&self) -> u32 {
+        // SAFETY: `self.as_raw()` points to a valid `struct pci_dev`, which holds a reference
+        // to its bus. The bound context keeps the host controller data used by
+        // `pci_domain_nr()` alive.
+        let domain_nr = unsafe { bindings::pci_domain_nr((*self.as_raw()).bus) };
+
+        debug_assert!(domain_nr >= 0);
+
+        // CAST: `pci_domain_nr()` returns an `int`, but a registered bus never has a negative
+        // domain. A negative value here is a kernel bug rather than a condition for a caller to
+        // handle.
+        domain_nr as u32
+    }
+}
+
 impl<'a> Device<device::Core<'a>> {
     /// Returns the total number of VFs, or [`None`] if SR-IOV is not available.
     #[inline]
