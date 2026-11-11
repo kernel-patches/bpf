@@ -142,6 +142,7 @@
 
 #define EMC_AUTO_CAL_CONFIG			0x2a4
 #define EMC_AUTO_CAL_CONFIG_AUTO_CAL_START	BIT(31)
+#define EMC_AUTO_CAL_CONFIG_SLAVE_MODE		BIT(27)
 #define EMC_AUTO_CAL_INTERVAL			0x2a8
 #define EMC_AUTO_CAL_STATUS			0x2ac
 #define EMC_AUTO_CAL_STATUS_ACTIVE		BIT(31)
@@ -393,6 +394,7 @@ struct tegra_emc {
 	struct device *dev;
 	struct tegra_mc *mc;
 	void __iomem *regs;
+	void __iomem *ch_regs[2];
 	unsigned int irq;
 	struct clk *clk;
 
@@ -608,6 +610,19 @@ static int tegra114_emc_prepare_timing_change(struct tegra_emc *emc,
 	if (timing->emc_auto_cal_config3 != last->emc_auto_cal_config3)
 		emc_ccfifo_writel(emc, timing->emc_auto_cal_config3,
 				  EMC_AUTO_CAL_CONFIG3);
+
+	/*
+	 * Channel 0 runs the pad calibration and channel 1 takes over its
+	 * results, so the two channels need different values. Without the
+	 * channel registers in the DT, keep what the bootloader set up.
+	 */
+	if (emc->ch_regs[0]) {
+		writel(timing->emc_auto_cal_config,
+		       emc->ch_regs[0] + EMC_AUTO_CAL_CONFIG);
+		writel(timing->emc_auto_cal_config |
+		       EMC_AUTO_CAL_CONFIG_SLAVE_MODE,
+		       emc->ch_regs[1] + EMC_AUTO_CAL_CONFIG);
+	}
 
 	/* DDR3: predict MRS long wait count */
 	if (emc->dram_type == DRAM_TYPE_DDR3 &&
@@ -1252,6 +1267,16 @@ static int tegra114_emc_probe(struct platform_device *pdev)
 	emc->regs = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(emc->regs))
 		return PTR_ERR(emc->regs);
+
+	/* Older device trees only describe the broadcast registers */
+	if (platform_get_resource(pdev, IORESOURCE_MEM, 2)) {
+		for (unsigned int i = 0; i < ARRAY_SIZE(emc->ch_regs); i++) {
+			emc->ch_regs[i] =
+				devm_platform_ioremap_resource(pdev, i + 1);
+			if (IS_ERR(emc->ch_regs[i]))
+				return PTR_ERR(emc->ch_regs[i]);
+		}
+	}
 
 	emc->mc = devm_tegra_memory_controller_get(dev);
 	if (IS_ERR(emc->mc))
