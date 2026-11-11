@@ -2280,8 +2280,10 @@ static int add_hidden_subprog(struct bpf_verifier_env *env, struct bpf_insn *pat
 {
 	struct bpf_subprog_info *info = env->subprog_info;
 	int err, cnt = env->subprog_cnt;
+	struct bpf_insn_aux_data *aux;
 	struct bpf_insn *last;
 	struct bpf_prog *prog;
+	bool indirect;
 
 	/* We only reserve one slot for hidden subprogs in subprog_info. */
 	if (env->hidden_subprog_cnt) {
@@ -2299,6 +2301,17 @@ static int add_hidden_subprog(struct bpf_verifier_env *env, struct bpf_insn *pat
 	if (err)
 		return err;
 	prog = env->prog;
+	/*
+	 * The patch starts with the original last insn, but the commit moved that
+	 * insn's aux data to the end of the patch: give it back to the insn. All
+	 * but indirect_target, which the commit left with the insn, since an
+	 * indirect jump to it lands there still, see patch_list_adj_aux().
+	 */
+	aux = &env->insn_aux_data[prog->len - len];
+	indirect = aux->indirect_target;
+	swap(aux[0], aux[len - 1]);
+	aux[0].indirect_target = indirect;
+	aux[len - 1].indirect_target = false;
 	info[cnt + 1].start = info[cnt].start;
 	info[cnt].start = prog->len - len + 1;
 	/* The patch ends with the exit. */
