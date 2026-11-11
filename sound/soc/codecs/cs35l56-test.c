@@ -5,6 +5,7 @@
 // Copyright (C) 2026 Cirrus Logic, Inc. and
 //                    Cirrus Logic International Semiconductor Ltd.
 
+#include <kunit/fwnode.h>
 #include <kunit/resource.h>
 #include <kunit/test.h>
 #include <kunit/static_stub.h>
@@ -20,6 +21,7 @@
 #include <linux/soundwire/sdw.h>
 #include <sound/cs35l56.h>
 #include <sound/cs-amp-lib.h>
+#include <sound/sdca_function.h>
 #include "cs35l56.h"
 
 KUNIT_DEFINE_ACTION_WRAPPER(faux_device_destroy_wrapper, faux_device_destroy,
@@ -50,6 +52,16 @@ struct cs35l56_test_priv {
 struct cs35l56_test_param {
 	u8 type;
 	u8 rev;
+
+	u16 feid;
+	u8 fev;
+	u32 function_type;
+	bool omit_feid;
+	bool omit_fev;
+	bool has_ssid;
+	int speaker_id;
+	const char *system_name;
+	int ret;
 
 	s32 spkid_gpios[4];
 	s32 spkid_pulls[4];
@@ -98,6 +110,24 @@ static void cs35l56_test_system_name_from_ssid_and_spkid(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, cs35l56_get_firmware_uid(cs35l56), 0);
 	KUNIT_EXPECT_EQ(test, cs35l56_set_fw_name(cs35l56->component), 0);
 	KUNIT_EXPECT_STREQ(test, cs35l56->dsp.system_name, "12b4a7c8-spkid1");
+}
+
+static void cs35l56_test_system_name_with_feid_fev(struct kunit *test)
+{
+	const struct cs35l56_test_param *param = test->param_value;
+	struct cs35l56_test_priv *priv = test->priv;
+	struct cs35l56_private *cs35l56 = priv->cs35l56_priv;
+
+	cs35l56->speaker_id = param->speaker_id;
+	if (param->has_ssid)
+		snd_soc_card_set_pci_ssid(cs35l56->component->card, 0x12b4, 0xa7c8);
+
+	KUNIT_EXPECT_EQ(test, cs35l56_get_firmware_uid(cs35l56), 0);
+	KUNIT_EXPECT_EQ(test, cs35l56_set_fw_name(cs35l56->component), param->ret);
+	if (param->system_name)
+		KUNIT_EXPECT_STREQ(test, cs35l56->dsp.system_name, param->system_name);
+	else
+		KUNIT_EXPECT_NULL(test, cs35l56->dsp.system_name);
 }
 
 static void cs35l56_test_system_name_from_property(struct kunit *test)
@@ -442,6 +472,68 @@ static void cs35l56_test_parse_xu_onchip_spkid(struct kunit *test)
 	}
 }
 
+static void cs35l56_test_parse_disco_feid_fev(struct kunit *test)
+{
+	static const char * const control_names[] = {
+		"mipi-sdca-control-0x5-subproperties",
+		"mipi-sdca-control-0x9-subproperties",
+		"mipi-sdca-control-0xA-subproperties",
+	};
+	const struct cs35l56_test_param *param = test->param_value;
+	struct cs35l56_test_priv *priv = test->priv;
+	struct cs35l56_private *cs35l56 = priv->cs35l56_priv;
+	struct {
+		struct software_node nodes[ARRAY_SIZE(control_names)];
+		struct property_entry props[ARRAY_SIZE(control_names)][2];
+	} *disco;
+	int ret;
+
+	disco = kunit_kzalloc(test, sizeof(*disco), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, disco);
+
+	disco->props[0][0] = PROPERTY_ENTRY_U32("mipi-sdca-control-dc-value",
+						param->function_type);
+	disco->props[1][0] = PROPERTY_ENTRY_U16("mipi-sdca-control-dc-value", param->feid);
+	disco->props[2][0] = PROPERTY_ENTRY_U8("mipi-sdca-control-dc-value", param->fev);
+	ret = kunit_software_node_register_node_group(test,
+						      cs35l56_test_dev_and_af01_node_group);
+	KUNIT_ASSERT_EQ(test, ret, 0);
+
+	disco->nodes[0] = SOFTWARE_NODE(control_names[0], disco->props[0],
+					&cs35l56_test_af01_sw_node);
+	KUNIT_ASSERT_NOT_ERR_OR_NULL(test,
+				     kunit_software_node_register(test, &disco->nodes[0]));
+
+	if (!param->omit_feid) {
+		disco->nodes[1] = SOFTWARE_NODE(control_names[1], disco->props[1],
+						&cs35l56_test_af01_sw_node);
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test,
+					     kunit_software_node_register(test, &disco->nodes[1]));
+	}
+
+	if (!param->omit_fev) {
+		disco->nodes[2] = SOFTWARE_NODE(control_names[2], disco->props[2],
+						&cs35l56_test_af01_sw_node);
+		KUNIT_ASSERT_NOT_ERR_OR_NULL(test,
+					     kunit_software_node_register(test, &disco->nodes[2]));
+	}
+
+	KUNIT_ASSERT_EQ(test,
+			kunit_device_add_software_node(test, cs35l56->base.dev,
+						       &cs35l56_test_dev_sw_node),
+			0);
+
+	cs35l56->feid = 0;
+	cs35l56->fev = 0;
+
+	KUNIT_EXPECT_EQ(test, cs35l56_process_xu_properties(cs35l56), 0);
+
+	KUNIT_EXPECT_EQ(test, cs35l56->feid,
+			param->function_type == SDCA_FUNCTION_TYPE_SMART_AMP ? param->feid : 0);
+	KUNIT_EXPECT_EQ(test, cs35l56->fev,
+			param->function_type == SDCA_FUNCTION_TYPE_SMART_AMP ? param->fev : 0);
+}
+
 static int cs35l56_test_dummy_read_onchip_spkid(struct cs35l56_base *cs35l56_base)
 {
 	struct kunit *test = kunit_get_current_test();
@@ -559,6 +651,8 @@ static int cs35l56_test_case_init_common(struct kunit *test)
 	if (param) {
 		cs35l56->base.type = param->type;
 		cs35l56->base.rev = param->rev;
+		cs35l56->feid = param->feid;
+		cs35l56->fev = param->fev;
 	}
 
 	return 0;
@@ -586,6 +680,125 @@ static int cs35l56_test_case_init_soundwire(struct kunit *test)
 
 	return 0;
 }
+
+static void cs35l56_test_system_name_param_desc(const struct cs35l56_test_param *param,
+						char *desc)
+{
+	snprintf(desc, KUNIT_PARAM_DESC_SIZE, "feid: %04x fev: %02x ssid: %d spkid: %d",
+		 param->feid, param->fev, param->has_ssid, param->speaker_id);
+}
+
+static const struct cs35l56_test_param cs35l56_test_system_name_feid_fev_cases[] = {
+	/* FEID == 0 retains legacy naming and ignores FEV */
+	{ .feid = 0, .fev = 0, .speaker_id = -1, },
+	{ .feid = 0, .fev = 0, .speaker_id = 1, },
+	{ .feid = 0, .fev = 0xff, .has_ssid = true, .speaker_id = -1,
+	  .system_name = "12b4a7c8", },
+	{ .feid = 0, .fev = 0xff, .has_ssid = true, .speaker_id = 1,
+	  .system_name = "12b4a7c8-spkid1", },
+	{ .feid = 0, .fev = 0xff, .speaker_id = -1, },
+	{ .feid = 0, .fev = 0xff, .speaker_id = 1, },
+
+	/* Nonzero FEID < 0x8000 includes SSID and FEV */
+	{ .feid = 1, .fev = 0, .has_ssid = true, .speaker_id = -1,
+	  .system_name = "12b4a7c8-f1v0", },
+	{ .feid = 1, .fev = 0, .has_ssid = true, .speaker_id = 1,
+	  .system_name = "12b4a7c8-f1v0-spkid1", },
+	{ .feid = 0x1234, .fev = 0xab, .has_ssid = true, .speaker_id = -1,
+	  .system_name = "12b4a7c8-f1234vab", },
+	{ .feid = 0x1234, .fev = 0xab, .has_ssid = true, .speaker_id = 1,
+	  .system_name = "12b4a7c8-f1234vab-spkid1", },
+	{ .feid = 0x7fff, .fev = 0xff, .has_ssid = true, .speaker_id = -1,
+	  .system_name = "12b4a7c8-f7fffvff", },
+	{ .feid = 0x7fff, .fev = 0xff, .has_ssid = true, .speaker_id = 1,
+	  .system_name = "12b4a7c8-f7fffvff-spkid1", },
+
+	/* Nonzero FEID < 0x8000 missing SSID should not return error (fallback is allowed) */
+	{ .feid = 1, .fev = 0, .speaker_id = -1, .ret = 0, },
+	{ .feid = 1, .fev = 0, .speaker_id = 1, .ret = 0, },
+	{ .feid = 0x1234, .fev = 0xab, .speaker_id = -1, .ret = 0, },
+	{ .feid = 0x1234, .fev = 0xab, .speaker_id = 1, .ret = 0, },
+	{ .feid = 0x7fff, .fev = 0xff, .speaker_id = -1, .ret = 0, },
+	{ .feid = 0x7fff, .fev = 0xff, .speaker_id = 1, .ret = 0, },
+
+	/* FEID >= 0x8000 does not use an SSID */
+	{ .feid = 0x8000, .fev = 0, .speaker_id = -1,
+	  .system_name = "f8000v0", },
+	{ .feid = 0x8000, .fev = 0, .speaker_id = 1,
+	  .system_name = "f8000v0-spkid1", },
+	{ .feid = 0x8000, .fev = 0, .has_ssid = true, .speaker_id = -1,
+	  .system_name = "f8000v0", },
+	{ .feid = 0x8000, .fev = 0, .has_ssid = true, .speaker_id = 1,
+	  .system_name = "f8000v0-spkid1", },
+	{ .feid = 0xabcd, .fev = 0xab, .speaker_id = -1,
+	  .system_name = "fabcdvab", },
+	{ .feid = 0xabcd, .fev = 0xab, .speaker_id = 1,
+	  .system_name = "fabcdvab-spkid1", },
+	{ .feid = 0xabcd, .fev = 0xab, .has_ssid = true, .speaker_id = -1,
+	  .system_name = "fabcdvab", },
+	{ .feid = 0xabcd, .fev = 0xab, .has_ssid = true, .speaker_id = 1,
+	  .system_name = "fabcdvab-spkid1", },
+	{ .feid = 0xffff, .fev = 0xff, .speaker_id = -1,
+	  .system_name = "fffffvff", },
+	{ .feid = 0xffff, .fev = 0xff, .speaker_id = 1,
+	  .system_name = "fffffvff-spkid1", },
+	{ .feid = 0xffff, .fev = 0xff, .has_ssid = true, .speaker_id = -1,
+	  .system_name = "fffffvff", },
+	{ .feid = 0xffff, .fev = 0xff, .has_ssid = true, .speaker_id = 1,
+	  .system_name = "fffffvff-spkid1", },
+};
+KUNIT_ARRAY_PARAM(cs35l56_test_system_name_feid_fev,
+		  cs35l56_test_system_name_feid_fev_cases,
+		  cs35l56_test_system_name_param_desc);
+
+static void cs35l56_test_feid_fev_param_desc(const struct cs35l56_test_param *param,
+					     char *desc)
+{
+	snprintf(desc, KUNIT_PARAM_DESC_SIZE, "feid: %04x fev: %02x",
+		 param->feid, param->fev);
+}
+
+static const struct cs35l56_test_param cs35l56_test_property_feid_fev_cases[] = {
+	{ .feid = 0, .fev = 0, },
+	{ .feid = 0, .fev = 0xff, },
+	{ .feid = 1, .fev = 0, },
+	{ .feid = 0x7fff, .fev = 0xff, },
+	{ .feid = 0x8000, .fev = 0, },
+	{ .feid = 0xffff, .fev = 0xff, },
+};
+KUNIT_ARRAY_PARAM(cs35l56_test_property_feid_fev,
+		  cs35l56_test_property_feid_fev_cases,
+		  cs35l56_test_feid_fev_param_desc);
+
+static void cs35l56_test_disco_feid_fev_param_desc(const struct cs35l56_test_param *param,
+						   char *desc)
+{
+	snprintf(desc, KUNIT_PARAM_DESC_SIZE, "function_type: %#x feid: %#x%s fev: %#x%s",
+		 param->function_type, param->feid, param->omit_feid ? "(omitted)" : "",
+		 param->fev, param->omit_fev ? "(omitted)" : "");
+}
+
+static const struct cs35l56_test_param cs35l56_test_disco_feid_fev_cases[] = {
+	{ .function_type = SDCA_FUNCTION_TYPE_SMART_AMP, .feid = 0, .fev = 0, },
+	{ .function_type = SDCA_FUNCTION_TYPE_SMART_AMP, .feid = 0, .fev = 0xff, },
+	{ .function_type = SDCA_FUNCTION_TYPE_SMART_AMP, .feid = 1, .fev = 0, },
+	{ .function_type = SDCA_FUNCTION_TYPE_SMART_AMP, .feid = 0x1234, .fev = 0xab, },
+	{ .function_type = SDCA_FUNCTION_TYPE_SMART_AMP, .feid = 0x7fff, .fev = 0xff, },
+	{ .function_type = SDCA_FUNCTION_TYPE_SMART_AMP, .feid = 0x8000, .fev = 0, },
+	{ .function_type = SDCA_FUNCTION_TYPE_SMART_AMP, .feid = 0xffff, .fev = 0xff, },
+
+	/* Either or both can be absent*/
+	{ .function_type = SDCA_FUNCTION_TYPE_SMART_AMP, .omit_feid = true, .fev = 0xab, },
+	{ .function_type = SDCA_FUNCTION_TYPE_SMART_AMP, .feid = 0x1234, .omit_fev = true, },
+	{ .function_type = SDCA_FUNCTION_TYPE_SMART_AMP, .omit_feid = true, .omit_fev = true, },
+
+	/* Other types of node are ignored */
+	{ .function_type = SDCA_FUNCTION_TYPE_SMART_MIC, .feid = 0xffff, .fev = 0xff, },
+};
+
+KUNIT_ARRAY_PARAM(cs35l56_test_disco_feid_fev,
+		  cs35l56_test_disco_feid_fev_cases,
+		  cs35l56_test_disco_feid_fev_param_desc);
 
 static void cs35l56_test_gpio_param_desc(const struct cs35l56_test_param *param, char *desc)
 {
@@ -669,8 +882,12 @@ KUNIT_ARRAY_PARAM(cs35l56_test_type_rev_all, cs35l56_test_type_rev_all_param_cas
 static struct kunit_case cs35l56_test_cases_soundwire[] = {
 	KUNIT_CASE(cs35l56_test_system_name_from_ssid),
 	KUNIT_CASE(cs35l56_test_system_name_from_ssid_and_spkid),
-	KUNIT_CASE(cs35l56_test_system_name_from_property),
-	KUNIT_CASE(cs35l56_test_system_name_from_property_and_spkid),
+	KUNIT_CASE_PARAM(cs35l56_test_system_name_with_feid_fev,
+			 cs35l56_test_system_name_feid_fev_gen_params),
+	KUNIT_CASE_PARAM(cs35l56_test_system_name_from_property,
+			 cs35l56_test_property_feid_fev_gen_params),
+	KUNIT_CASE_PARAM(cs35l56_test_system_name_from_property_and_spkid,
+			 cs35l56_test_property_feid_fev_gen_params),
 	KUNIT_CASE(cs35l56_test_l56_b0_suffix_sdw),
 	KUNIT_CASE_PARAM(cs35l56_test_suffix_sdw, cs35l56_test_type_rev_ex_b0_gen_params),
 	KUNIT_CASE_PARAM(cs35l56_test_ssidexv2_suffix_sdw,
@@ -679,6 +896,8 @@ static struct kunit_case cs35l56_test_cases_soundwire[] = {
 
 	KUNIT_CASE_PARAM(cs35l56_test_parse_xu_onchip_spkid,
 			 cs35l56_test_onchip_spkid_gen_params),
+	KUNIT_CASE_PARAM(cs35l56_test_parse_disco_feid_fev,
+			 cs35l56_test_disco_feid_fev_gen_params),
 
 	KUNIT_CASE(cs35l56_test_set_fw_name_reads_onchip_spkid),
 	KUNIT_CASE(cs35l56_test_set_fw_name_preserves_spkid_with_onchip_gpios),
@@ -690,8 +909,10 @@ static struct kunit_case cs35l56_test_cases_soundwire[] = {
 static struct kunit_case cs35l56_test_cases_not_soundwire[] = {
 	KUNIT_CASE(cs35l56_test_system_name_from_ssid),
 	KUNIT_CASE(cs35l56_test_system_name_from_ssid_and_spkid),
-	KUNIT_CASE(cs35l56_test_system_name_from_property),
-	KUNIT_CASE(cs35l56_test_system_name_from_property_and_spkid),
+	KUNIT_CASE_PARAM(cs35l56_test_system_name_from_property,
+			 cs35l56_test_property_feid_fev_gen_params),
+	KUNIT_CASE_PARAM(cs35l56_test_system_name_from_property_and_spkid,
+			 cs35l56_test_property_feid_fev_gen_params),
 	KUNIT_CASE_PARAM(cs35l56_test_suffix_i2cspi, cs35l56_test_type_rev_all_gen_params),
 	KUNIT_CASE_PARAM(cs35l56_test_ssidexv2_suffix_i2cspi,
 			 cs35l56_test_type_rev_all_gen_params),
