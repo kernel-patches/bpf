@@ -61,8 +61,8 @@ enum expr_op {
  * executes at most once per iteration, so a def is one value per iteration. A name is unique within
  * the env of one loop.
  * The operands of a phi are a set, 8 at most; a phi(a, b) among them is expanded. They have no
- * defs, see strip_defs(): (+ r6 %r2.4) and (+ r6 %r2.7) are one operand, (+ r6 _). Every phi is
- * a value number of its own.
+ * defs, see strip_defs(): (+ r6 %r2.4) and (+ r6 %r2.7) are one operand, (+ r6 _). So they don't
+ * tell one phi from another: phis are value numbered by their bases, see mk_phi().
  * In the env of loop H a phi at H merges the backedge values only, the header phi itself is
  * (REG r). In the env of the enclosing loop a phi at H merges the entering edges.
  * Op and params of a def by an insn are what that insn computes, see alu64_with_def():
@@ -76,7 +76,9 @@ struct expr_def {
 	u32 reg:9;
 	u32 idx:21;
 };
-static_assert(REGS_NUM <= 1 << 9 && BPF_COMPLEXITY_LIMIT_INSNS <= 1 << 21);
+/* def.reg of the phi of two bases, see mk_phi() */
+#define BASE_REG REGS_NUM
+static_assert(BASE_REG < 1 << 9 && BPF_COMPLEXITY_LIMIT_INSNS <= 1 << 21);
 
 static const struct expr_def no_def;
 
@@ -186,9 +188,16 @@ static bool same_def(struct expr_def a, struct expr_def b)
 	return a.set == b.set && a.phi == b.phi && a.reg == b.reg && a.idx == b.idx;
 }
 
-static int expr_eq(struct expr *a, struct expr *b)
+/* Is @e the expression @id? The base of a phi is a part of its key. 0: the phi is its own base. */
+static int expr_eq(struct scev *scev, struct expr *e, u32 id)
 {
-	return a->op == b->op && a->imm == b->imm && same_def(a->def, b->def);
+	struct expr *x = &scev->exprs[id];
+
+	if (e->op != x->op || e->imm != x->imm || !same_def(e->def, x->def))
+		return false;
+	if (!e->def.phi)
+		return true;
+	return e->base ? e->base == x->base && e->off == x->off : x->base == id;
 }
 
 static void exprs_ht_add(struct scev *scev, u32 id)
@@ -239,7 +248,8 @@ static bool expr_is_vn(struct scev *scev, struct expr *e)
 	 * comes from a call that may write to the slot.
 	 */
 	if (e->def.set)
-		return reg < MAX_BPF_REG || !test_bit(reg - MAX_BPF_REG, scev->slice_slots);
+		return reg < MAX_BPF_REG || reg == BASE_REG ||
+		       !test_bit(reg - MAX_BPF_REG, scev->slice_slots);
 	switch (e->op) {
 	case UNKNOWN:
 	case OPAQUE:
@@ -263,8 +273,8 @@ static u32 op_low_bits(u32 op);
 
 /*
  * @e gets the id @id. (+ x imm), an extension and a partial spill of x have the base of x, which
- * was constructed earlier. Every other expression is its own base. So split_const_offset() does not
- * traverse the expression.
+ * was constructed earlier. mk_phi() sets the base of a phi that it value numbers. Every other
+ * expression is its own base. So split_const_offset() does not traverse the expression.
  */
 static void set_expr_base(struct scev *scev, struct expr *e, u32 id)
 {
@@ -272,10 +282,13 @@ static void set_expr_base(struct scev *scev, struct expr *e, u32 id)
 	struct expr *x;
 	s64 imm = 0;
 
+	e->arena_add = 0;
+	/* mk_phi() found the base */
+	if (e->def.phi && e->base)
+		return;
 	e->base = id;
 	e->off = 0;
 	e->bits = 64;
-	e->arena_add = 0;
 	/* nothing looks through a phi, see struct expr_def */
 	if (e->def.phi)
 		return;
@@ -301,7 +314,7 @@ static int add_expr(struct scev *scev, struct expr e)
 
 	id = scev->exprs_ht[expr_hash(&e) & (scev->exprs_cap - 1)];
 	for (; id; id = scev->exprs_next[id])
-		if (expr_eq(&e, &scev->exprs[id]))
+		if (expr_eq(scev, &e, id))
 			return id;
 
 	if (scev->exprs_cnt == scev->exprs_cap && grow_exprs(scev, scev->exprs_cap * 2))
@@ -378,6 +391,7 @@ static int expr_with_def(struct scev *scev, int id, struct expr_def def)
 		return id;
 	e = scev->exprs[id];
 	e.def = def;
+	e.base = 0;
 	return add_expr(scev, e);
 }
 
@@ -1366,6 +1380,69 @@ next:;
 	return expr_with_def(scev, id, def);
 }
 
+static void split_const_offset(struct bpf_verifier_env *env, u32 id, u32 *base, s64 *off,
+			       u32 *bits);
+
+/* @id == *@base + *@off in 64 bits: no extension and no partial spill is stripped */
+static void split_const_offset64(struct bpf_verifier_env *env, u32 id, u32 *base, s64 *off)
+{
+	struct scev *scev = env->scev;
+	u32 bits, l, r;
+
+	split_const_offset(env, id, base, off, &bits);
+	if (bits == 64)
+		return;
+	*base = id;
+	*off = 0;
+	if (!scev->exprs[id].def.set && is_add(scev, id, &l, &r) && is_imm(scev, r, off))
+		*base = l;
+}
+
+/*
+ *	if (c) { n = f(); m = n; } else { n = g(); m = n; }	if (n > 100) return 0;	use(m);
+ * The phi of @reg before the insn at @idx. It merges @a, which came over the edges so far, and @b.
+ * Phis are value numbered as GVN does it, by join point and operands, up to a constant offset:
+ * a == base_a + off_a and b == base_b + off_b, so
+ *	phi == phi(base_a, base_b + off_b - off_a) + off_a
+ * The phi of the bases is hashed without @reg. All registers that have a constant difference on
+ * each edge get the same one, and const_diff() finds them as it finds 'x' and 'x + 4'. The next
+ * edge merges the phi of the bases with the next base: the id stands for the list of the operands,
+ * for any number of edges. No edge brings a phi of this join point, so every phi here gets a new
+ * base with every edge.
+ */
+static int mk_phi(struct bpf_verifier_env *env, u32 a, u32 b, int idx, u32 reg)
+{
+	struct scev *scev = env->scev;
+	u32 base_a, base_b;
+	s64 off_a, off_b;
+	struct expr e;
+	int id;
+
+	id = mk_any(scev, a, b, no_def);
+	if (id < 0)
+		return id;
+	e = scev->exprs[id];
+	e.def = phi_def(idx, reg);
+	e.base = 0;
+	split_const_offset64(env, a, &base_a, &off_a);
+	split_const_offset64(env, b, &base_b, &off_b);
+	if (!expr_is_vn(scev, &e) || !scev->exprs[base_a].is_vn || !scev->exprs[base_b].is_vn)
+		return add_expr(scev, e);
+	id = base_b;
+	if (off_a != off_b)
+		id = expr2(scev, BPF_ADD, base_b, imm_expr(scev, (u64)off_b - off_a));
+	if (id < 0)
+		return id;
+	id = add_expr(scev, (struct expr){ .op = ANY, .params = { base_a, id },
+					   .def = phi_def(idx, BASE_REG) });
+	if (id < 0)
+		return id;
+	e.base = id;
+	e.off = off_a;
+	e.bits = 64;
+	return add_expr(scev, e);
+}
+
 /* @acc is the env before the insn at @idx */
 static int join(struct bpf_verifier_env *env, struct env *acc, struct env *cur, int idx)
 {
@@ -1382,8 +1459,8 @@ static int join(struct bpf_verifier_env *env, struct env *acc, struct env *cur, 
 		if (!same_exprs(scev, acc->reg2expr[i], cur->reg2expr[i])) {
 			/* no phi for a dead register: pruned SSA */
 			id = reg_alive_at(env, i, idx) ?
-			     mk_any(scev, acc->reg2expr[i], cur->reg2expr[i],
-				    phi_def(idx, i)) : UNKNOWN_EXPR_ID;
+			     mk_phi(env, acc->reg2expr[i], cur->reg2expr[i], idx, i) :
+			     UNKNOWN_EXPR_ID;
 			if (id < 0)
 				return id;
 			acc->reg2expr[i] = id;
