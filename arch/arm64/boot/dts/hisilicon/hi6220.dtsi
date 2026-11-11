@@ -906,8 +906,8 @@
 			clocks = <&sys_ctrl HI6220_DACODEC_PCLK>,
 				 <&sys_ctrl HI6220_BBPPLL0_DIV>;
 			clock-names = "dacodec", "i2s-base";
-			dmas = <&dma0 15 &dma0 14>;
-			dma-names = "rx", "tx";
+			dmas = <&dma0 14>, <&dma0 15>;
+			dma-names = "tx", "rx";
 			hisilicon,sysctrl-syscon = <&sys_ctrl>;
 			#sound-dai-cells = <1>;
 		};
