@@ -781,6 +781,13 @@ void icmp6_send(struct sk_buff *skb, u8 type, u8 code, __u32 info,
 
 	np = inet6_sk(sk);
 
+	/* Don't send parts of a decrypted skb onto the network, see
+	 * __icmp_send(): no error about a received skb. Before the rate
+	 * limit, so that a suppressed error costs no credit.
+	 */
+	if (unlikely(skb_is_decrypted(skb) && skb->skb_iif))
+		goto out_unlock;
+
 	if (!icmpv6_xrlim_allow(sk, type, &fl6, apply_ratelimit))
 		goto out_unlock;
 
@@ -801,6 +808,15 @@ void icmp6_send(struct sk_buff *skb, u8 type, u8 code, __u32 info,
 	dst = icmpv6_route_lookup(net, skb, sk, &fl6);
 	if (IS_ERR(dst))
 		goto out_unlock;
+
+	/* An error about a locally originated decrypted skb is sent only if
+	 * it is routed to a local address.
+	 */
+	if (unlikely(skb_is_decrypted(skb)) &&
+	    !(dst_rt6_info(dst)->rt6i_flags & RTF_LOCAL)) {
+		dst_release(dst);
+		goto out_unlock;
+	}
 
 	ipc6.hlimit = ip6_sk_dst_hoplimit(np, &fl6, dst);
 
