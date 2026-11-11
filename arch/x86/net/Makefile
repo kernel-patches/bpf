@@ -7,4 +7,5 @@ ifeq ($(CONFIG_X86_32),y)
         obj-$(CONFIG_BPF_JIT) += bpf_jit_comp32.o
 else
         obj-$(CONFIG_BPF_JIT) += bpf_jit_comp.o bpf_timed_may_goto.o
+        obj-$(CONFIG_BPF_SYSCALL) += bpf_throw.o
 endif
