@@ -238,6 +238,14 @@ enum {	/* This is the timeout as defined in DP 1.2a,
 	SW_AUX_TIMEOUT_PERIOD_MULTIPLIER = 6
 };
 
+struct dce_aux_funcs {
+	uint32_t (*configure_timeout)
+		(struct ddc_service *ddc,
+		 uint32_t timeout);
+	void (*destroy)
+		(struct aux_engine **ptr);
+};
+
 struct dce_aux {
 	uint32_t inst;
 	struct ddc *ddc;
@@ -247,7 +255,7 @@ struct dce_aux {
 	uint32_t max_defer_write_retry;
 
 	bool acquire_reset;
-	struct dce_aux_funcs *funcs;
+	struct dce_aux_funcs funcs;
 };
 
 struct dce110_aux_registers_mask {
@@ -317,13 +325,5 @@ int dce_aux_transfer_dmub_raw(struct ddc_service *ddc,
 		enum aux_return_code_type *operation_result);
 bool dce_aux_transfer_with_retries(struct ddc_service *ddc,
 		struct aux_payload *cmd);
-
-struct dce_aux_funcs {
-	uint32_t (*configure_timeout)
-		(struct ddc_service *ddc,
-		 uint32_t timeout);
-	void (*destroy)
-		(struct aux_engine **ptr);
-};
 
 #endif

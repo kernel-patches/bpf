@@ -549,13 +549,13 @@ bool try_to_configure_aux_timeout(struct ddc_service *ddc,
 		return true;
 
 	if (ddc->link->force_to_use_aux) {
-		if (ddc->ctx->dc->res_pool->engines[ddc->link->aux_hw_inst]->funcs->configure_timeout) {
-			ddc->ctx->dc->res_pool->engines[ddc->link->aux_hw_inst]->funcs->configure_timeout(ddc, timeout);
+		if (ddc->ctx->dc->res_pool->engines[ddc->link->aux_hw_inst]->funcs.configure_timeout) {
+			ddc->ctx->dc->res_pool->engines[ddc->link->aux_hw_inst]->funcs.configure_timeout(ddc, timeout);
 			result = true;
 		}
 	} else {
-		if (ddc->ctx->dc->res_pool->engines[ddc_pin->pin_data->en]->funcs->configure_timeout) {
-			ddc->ctx->dc->res_pool->engines[ddc_pin->pin_data->en]->funcs->configure_timeout(ddc, timeout);
+		if (ddc->ctx->dc->res_pool->engines[ddc_pin->pin_data->en]->funcs.configure_timeout) {
+			ddc->ctx->dc->res_pool->engines[ddc_pin->pin_data->en]->funcs.configure_timeout(ddc, timeout);
 			result = true;
 		}
 
