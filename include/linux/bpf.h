@@ -3549,9 +3549,9 @@ bpf_prog_run_array_sleepable(const struct bpf_prog_array *array,
 			continue;
 		}
 
-		if (unlikely(!bpf_prog_get_recursion_context(prog))) {
+		if (unlikely(!bpf_prog_enter_recur_ctx(prog, &run_ctx.run_ctx))) {
 			bpf_prog_inc_misses_counter(prog);
-			bpf_prog_put_recursion_context(prog);
+			bpf_prog_exit_recur_ctx(prog, &run_ctx.run_ctx);
 			item++;
 			continue;
 		}
@@ -3565,7 +3565,7 @@ bpf_prog_run_array_sleepable(const struct bpf_prog_array *array,
 			ret &= run_prog(prog, ctx);
 		}
 
-		bpf_prog_put_recursion_context(prog);
+		bpf_prog_exit_recur_ctx(prog, &run_ctx.run_ctx);
 		item++;
 	}
 	bpf_reset_run_ctx(old_run_ctx);
