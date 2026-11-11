@@ -2507,6 +2507,8 @@ static int rt5668_i2c_probe(struct i2c_client *i2c)
 
 	rt5668_reset(rt5668->regmap);
 
+	mutex_init(&rt5668->calibrate_mutex);
+
 	rt5668_calibrate(rt5668);
 
 	regmap_write(rt5668->regmap, RT5668_DEPOP_1, 0x0000);
@@ -2563,8 +2565,6 @@ static int rt5668_i2c_probe(struct i2c_client *i2c)
 				rt5668_jack_detect_handler);
 	INIT_DELAYED_WORK(&rt5668->jd_check_work,
 				rt5668_jd_check_handler);
-
-	mutex_init(&rt5668->calibrate_mutex);
 
 	if (i2c->irq) {
 		ret = devm_request_threaded_irq(&i2c->dev, i2c->irq, NULL,
