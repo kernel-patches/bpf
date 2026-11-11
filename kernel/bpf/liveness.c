@@ -760,6 +760,19 @@ static void compute_may_write_masks(struct bpf_verifier_env *env)
 	}
 }
 
+/* live_stack_before of the insn at @insn_idx for one half-slot */
+bool bpf_half_slot_live_before(struct bpf_verifier_env *env, u32 insn_idx, u32 half_spi)
+{
+	struct func_instance *instance;
+	int bkt;
+
+	hash_for_each(env->liveness->func_instances, bkt, instance, hl_node)
+		if (insn_idx - instance->subprog_start < instance->insn_cnt &&
+		    is_live_before(instance, insn_idx, instance->depth, half_spi))
+			return true;
+	return false;
+}
+
 const unsigned long *bpf_may_write_mask(struct bpf_verifier_env *env, u32 insn_idx)
 {
 	return env->insn_aux_data[insn_idx].may_write_mask;
