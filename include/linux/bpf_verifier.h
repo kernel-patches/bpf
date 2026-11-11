@@ -2228,6 +2228,8 @@ int bpf_scev_jump_counts(struct bpf_verifier_env *env, int header, int n, bool t
 bool bpf_scev_next_linked_reg(struct bpf_verifier_env *env, int insn_idx, u32 regno, u32 *pos,
 			      u32 *linked_regno, u32 *fill_off, int *base_regno, s64 *delta,
 			      u32 *bits);
+bool bpf_scev_mem_addr(struct bpf_verifier_env *env, int insn_idx, u32 regno, u32 *base_regno,
+		       s64 *off);
 bool bpf_is_widenable_reg_type(const struct bpf_reg_state *reg);
 bool bpf_scev_in_slice_slots(struct bpf_verifier_env *env, int off, u32 size, bool fixed_off);
 
