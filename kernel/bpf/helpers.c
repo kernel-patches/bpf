@@ -5174,11 +5174,21 @@ void bpf_task_work_cancel_and_free(void *val)
 	struct bpf_task_work_ctx *ctx;
 	enum bpf_task_work_state state;
 
-	ctx = xchg(&twk->ctx, NULL);
+	/* Another canceller can release the map-owned context reference. */
+	guard(rcu)();
+	/* Order a preceding unlink before observing an empty slot. */
+	smp_mb();
+	ctx = READ_ONCE(twk->ctx);
 	if (!ctx)
 		return;
 
+	/* Stop callbacks before making the context invisible to deletion. */
 	state = xchg(&ctx->state, BPF_TW_FREED);
+	/* Only the first FREED transition detaches ctx and owns the map's ref. */
+	if (state == BPF_TW_FREED)
+		return;
+	WRITE_ONCE(twk->ctx, NULL);
+
 	if (state == BPF_TW_SCHEDULED) {
 		/* run in irq_work to avoid locks in NMI */
 		init_irq_work(&ctx->irq_work, bpf_task_work_cancel_scheduled);
