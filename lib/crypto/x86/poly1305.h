@@ -143,13 +143,17 @@ static void poly1305_emit(const struct poly1305_state *ctx,
 #define poly1305_mod_init_arch poly1305_mod_init_arch
 static void poly1305_mod_init_arch(void)
 {
-	if (boot_cpu_has(X86_FEATURE_AVX))
+	if (boot_cpu_has(X86_FEATURE_AVX)) {
 		static_branch_enable(&poly1305_use_avx);
-	if (boot_cpu_has(X86_FEATURE_AVX) && boot_cpu_has(X86_FEATURE_AVX2))
-		static_branch_enable(&poly1305_use_avx2);
-	if (boot_cpu_has(X86_FEATURE_AVX) && boot_cpu_has(X86_FEATURE_AVX2) &&
-	    boot_cpu_has(X86_FEATURE_AVX512F) &&
-	    /* Skylake downclocks unacceptably much when using zmm, but later generations are fast. */
-	    boot_cpu_data.x86_vfm != INTEL_SKYLAKE_X)
-		static_branch_enable(&poly1305_use_avx512);
+		if (boot_cpu_has(X86_FEATURE_AVX2)) {
+			static_branch_enable(&poly1305_use_avx2);
+			/*
+			 * Skylake downclocks unacceptably much when using zmm,
+			 * but later generations are fast.
+			 */
+			if (boot_cpu_has(X86_FEATURE_AVX512F) &&
+			    boot_cpu_data.x86_vfm != INTEL_SKYLAKE_X)
+				static_branch_enable(&poly1305_use_avx512);
+		}
+	}
 }
