@@ -110,7 +110,7 @@ DO_XOR_BLOCKS(avx512_inner, xor_avx512_2, xor_avx512_3, xor_avx512_4,
 static void xor_gen_avx512(void *dest, void **srcs, unsigned int src_cnt,
 			   unsigned int bytes)
 {
-	kernel_fpu_begin();
+	kernel_fpu_begin_mask(0);
 	xor_gen_avx512_inner(dest, srcs, src_cnt, bytes);
 	asm volatile("vzeroupper");
 	kernel_fpu_end();
