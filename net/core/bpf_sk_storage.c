@@ -938,6 +938,12 @@ static int bpf_iter_attach_map(struct bpf_prog *prog,
 	if (map->map_type != BPF_MAP_TYPE_SK_STORAGE)
 		goto put_map;
 
+	/* The iterator walks the selems of the map: it cannot see inline values */
+	if (map->map_flags & BPF_F_INLINE_VALUE) {
+		err = -EOPNOTSUPP;
+		goto put_map;
+	}
+
 	aux->map = map;
 	err = bpf_iter_map_check_prog(prog, aux);
 	if (err)
