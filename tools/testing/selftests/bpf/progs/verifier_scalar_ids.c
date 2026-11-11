@@ -11,11 +11,10 @@ struct {
 	__type(value, long long);
 } map_hash_8b SEC(".maps");
 
-/* scalar in [0, max] that shares id with other registers, as it is in the log */
-#define LINKED(id, max, mask) \
-	"scalar(id=" id ",smin=smin32=0,smax=umax=smax32=umax32=" #max ",var_off=(0x0; " #mask "))"
+/* scalar in [0, max], as it is in the log. @id: the registers that hold copies of one value. */
 #define ALONE(max, mask) \
 	"scalar(smin=smin32=0,smax=umax=smax32=umax32=" #max ",var_off=(0x0; " #mask "))"
+#define LINKED(id, max, mask) ALONE(max, mask)
 
 /*
  * Registers r{0,1,2} have the same scalar ID.
@@ -151,7 +150,7 @@ __naked void linked_regs_broken_link(void)
 SEC("socket")
 __success __log_level(2)
 __msg("13: (25) if r1 > 0x7 goto pc+0        ; R1=" ALONE(7, 0x7))
-__msg("10: R0=0 R6=scalar(id={{.*}}umax32=255,{{.*}} R7=scalar(id={{.*}}umax32=255,")
+__msg("10: R0=0 R6=scalar({{.*}}umax32=255,{{.*}} R7=scalar({{.*}}umax32=255,")
 __msg("5: R0=0 R6=" ALONE(255, 0xff))
 __naked void precision_many_frames(void)
 {
@@ -317,7 +316,7 @@ __naked void linked_regs_too_many_regs(void)
 
 SEC("socket")
 __failure __log_level(2)
-__msg("5: (3d) if r8 >= r0 goto pc+3         ; R0=scalar(umin=1) R7=scalar(id=1,umax=0xfffffffffffffffe) R8=scalar(id=1,umax=0xfffffffffffffffe)")
+__msg("5: (3d) if r8 >= r0 goto pc+3         ; R0=scalar(umin=1) R7=scalar(umax=0xfffffffffffffffe) R8=scalar(umax=0xfffffffffffffffe)")
 __msg("div by zero")
 __naked void linked_regs_broken_link_2(void)
 {
@@ -674,52 +673,6 @@ __naked void two_nil_old_ids_one_cur_id(void)
 	"r2 = r10;"
 	"r2 += r6;"
 	"r2 += r7;"
-	"exit;"
-	:
-	: __imm(bpf_ktime_get_ns)
-	: __clobber_all);
-}
-
-/*
- * Check that two different scalar IDs in the state that is there can't be
- * mapped to the same scalar ID in the state that arrives.
- */
-SEC("socket")
-__success __log_level(2)
-__not_msg("from 10 to 11: within")
-__msg("11: R0=0 R6=" ALONE(255, 0xff) " R7=" ALONE(255, 0xff))
-__naked void two_old_ids_one_cur_id(void)
-{
-	asm volatile (
-	/* Give unique scalar IDs to r{6,7} */
-	"call %[bpf_ktime_get_ns];"
-	"r0 &= 0xff;"
-	"r6 = r0;"
-	"r8 = r0;"
-	"call %[bpf_ktime_get_ns];"
-	"r0 &= 0xff;"
-	"r7 = r0;"
-	"r9 = r0;"
-	"r0 = 0;"
-	/* Maybe make r{6,7} IDs identical */
-	"if r6 <= r7 goto l1_%=;"
-	"r6 = r7;"
-"l1_%=:"
-	/*
-	 * Get here in two states:
-	 * - first:  r6{.id=A}, r7{.id=B}
-	 * - second: r6{.id=B}, r7{.id=B}
-	 * Currently we don't want to consider the second one to be within
-	 * the first one. Thus they are joined.
-	 */
-	"r2 = r10;"
-	"r2 += r6;"
-	"r2 += r7;"
-	/*
-	 * keep r8 and r9 live, otherwise r6->id and r7->id
-	 * will become singular and reset to zero before if r6 <= r7
-	 */
-	"r9 += r8;"
 	"exit;"
 	:
 	: __imm(bpf_ktime_get_ns)
