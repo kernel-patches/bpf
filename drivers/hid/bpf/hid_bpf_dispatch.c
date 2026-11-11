@@ -357,6 +357,12 @@ hid_bpf_release_context(struct hid_bpf_ctx *ctx)
 	hid_put_device(hid);
 }
 
+__bpf_kfunc void hid_bpf_release_context_dtor(void *ctx)
+{
+	hid_bpf_release_context(ctx);
+}
+CFI_NOSEAL(hid_bpf_release_context_dtor);
+
 static int
 __hid_bpf_hw_check_params(struct hid_bpf_ctx *ctx, __u8 *buf, size_t *buf__sz,
 			  enum hid_report_type rtype, bool hw_request)
@@ -659,8 +665,21 @@ int hid_bpf_device_init(struct hid_device *hdev)
 }
 EXPORT_SYMBOL_GPL(hid_bpf_device_init);
 
+BTF_ID_LIST(hid_bpf_dtor_ids)
+BTF_ID(struct, hid_bpf_ctx)
+BTF_ID(func, hid_bpf_release_context_dtor)
+BTF_ID(func, hid_bpf_release_context)
+
 static int __init hid_bpf_init(void)
 {
+	const struct btf_id_dtor_kfunc hid_bpf_dtors[] = {
+		{
+			.btf_id         = hid_bpf_dtor_ids[0],
+			.kfunc_btf_id   = hid_bpf_dtor_ids[1],
+			.release_btf_id = hid_bpf_dtor_ids[2],
+			.flags          = BPF_DTOR_CLEANUP,
+		},
+	};
 	int err;
 
 	/* Note: if we exit with an error any time here, we would entirely break HID, which
@@ -680,6 +699,10 @@ static int __init hid_bpf_init(void)
 		pr_warn("error while setting HID BPF syscall kfuncs: %d", err);
 		return 0;
 	}
+
+	err = register_btf_id_dtor_kfuncs(hid_bpf_dtors, ARRAY_SIZE(hid_bpf_dtors), THIS_MODULE);
+	if (err)
+		pr_warn("error while registering HID BPF destructors: %d\n", err);
 
 	return 0;
 }

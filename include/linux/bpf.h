@@ -3301,6 +3301,19 @@ int bpf_iter_map_fill_link_info(const struct bpf_iter_aux_info *aux,
 int bpf_iter_map_check_value_write(const struct bpf_prog *prog,
 				   const struct bpf_map *map);
 
+/*
+ * void (*)(void *) wrappers of the open-coded iterator destroy kfuncs, which the BTF
+ * destructor registry refers to.
+ */
+void bpf_iter_num_destroy_dtor(void *it);
+void bpf_iter_task_destroy_dtor(void *it);
+void bpf_iter_task_vma_destroy_dtor(void *it);
+void bpf_iter_css_destroy_dtor(void *it);
+void bpf_iter_css_task_destroy_dtor(void *it);
+void bpf_iter_bits_destroy_dtor(void *it);
+void bpf_iter_kmem_cache_destroy_dtor(void *it);
+void bpf_iter_dmabuf_destroy_dtor(void *it);
+
 int map_set_for_each_callback_args(struct bpf_verifier_env *env,
 				   struct bpf_func_state *caller,
 				   struct bpf_func_state *callee);
@@ -4105,6 +4118,7 @@ struct bpf_key *bpf_lookup_system_key(u64 id);
 struct bpf_key *bpf_lookup_keyring(void);
 bool bpf_keyring_enforced(void);
 void bpf_key_put(struct bpf_key *bkey);
+void bpf_key_put_dtor(void *bkey);
 int bpf_verify_pkcs7_signature(const struct bpf_dynptr *data_p,
 			       const struct bpf_dynptr *sig_p,
 			       struct bpf_key *trusted_keyring);

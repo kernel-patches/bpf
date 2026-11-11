@@ -15,6 +15,7 @@ struct nf_conn___init {
 
 extern int register_nf_conntrack_bpf(void);
 extern void cleanup_nf_conntrack_bpf(void);
+void bpf_ct_release_dtor(void *nfct);
 
 #else
 

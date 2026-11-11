@@ -11068,6 +11068,12 @@ __bpf_kfunc void bpf_iter_scx_dsq_destroy(struct bpf_iter_scx_dsq *it)
 	kit->dsq = NULL;
 }
 
+__bpf_kfunc void bpf_iter_scx_dsq_destroy_dtor(void *it)
+{
+	bpf_iter_scx_dsq_destroy(it);
+}
+CFI_NOSEAL(bpf_iter_scx_dsq_destroy_dtor);
+
 /**
  * scx_bpf_dsq_peek - Lockless peek at the first element.
  * @dsq_id: DSQ to examine.
@@ -11753,6 +11759,13 @@ __bpf_kfunc void scx_bpf_put_cpumask(const struct cpumask *cpumask)
 	 */
 }
 
+/* Releases what scx_bpf_put_idle_cpumask() does as well: neither holds a reference. */
+__bpf_kfunc void scx_bpf_put_cpumask_dtor(void *cpumask)
+{
+	scx_bpf_put_cpumask(cpumask);
+}
+CFI_NOSEAL(scx_bpf_put_cpumask_dtor);
+
 /**
  * scx_bpf_task_running - Is task the current scheduling context?
  * @p: task of interest
@@ -12328,8 +12341,30 @@ int scx_kfunc_context_filter(const struct bpf_prog *prog, u32 kfunc_id)
 	return -EACCES;
 }
 
+BTF_ID_LIST(scx_dtor_ids)
+BTF_ID(struct, cpumask)
+BTF_ID(func, scx_bpf_put_cpumask_dtor)
+BTF_ID(func, scx_bpf_put_cpumask)
+BTF_ID(struct, bpf_iter_scx_dsq)
+BTF_ID(func, bpf_iter_scx_dsq_destroy_dtor)
+BTF_ID(func, bpf_iter_scx_dsq_destroy)
+
 static int __init scx_init(void)
 {
+	const struct btf_id_dtor_kfunc scx_dtors[] = {
+		{
+			.btf_id         = scx_dtor_ids[0],
+			.kfunc_btf_id   = scx_dtor_ids[1],
+			.release_btf_id = scx_dtor_ids[2],
+			.flags          = BPF_DTOR_CLEANUP,
+		},
+		{
+			.btf_id         = scx_dtor_ids[3],
+			.kfunc_btf_id   = scx_dtor_ids[4],
+			.release_btf_id = scx_dtor_ids[5],
+			.flags          = BPF_DTOR_CLEANUP,
+		},
+	};
 	int ret;
 
 	/*
@@ -12436,6 +12471,12 @@ static int __init scx_init(void)
 	    (ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_SYSCALL,
 					     &scx_kfunc_set_any))) {
 		pr_err("sched_ext: Failed to register kfunc sets (%d)\n", ret);
+		return ret;
+	}
+
+	ret = register_btf_id_dtor_kfuncs(scx_dtors, ARRAY_SIZE(scx_dtors), THIS_MODULE);
+	if (ret) {
+		pr_err("sched_ext: Failed to register destructors (%d)\n", ret);
 		return ret;
 	}
 

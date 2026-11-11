@@ -3725,6 +3725,12 @@ __bpf_kfunc void bpf_iter_bits_destroy(struct bpf_iter_bits *it)
 	bpf_mem_free(&bpf_global_ma, kit->bits);
 }
 
+__bpf_kfunc void bpf_iter_bits_destroy_dtor(void *it)
+{
+	bpf_iter_bits_destroy(it);
+}
+CFI_NOSEAL(bpf_iter_bits_destroy_dtor);
+
 /**
  * bpf_copy_from_user_str() - Copy a string from an unsafe user address
  * @dst:             Destination address, in kernel space.  This buffer must be
@@ -4584,6 +4590,12 @@ __bpf_kfunc void bpf_key_put(struct bpf_key *bkey)
 	kfree(bkey);
 }
 
+__bpf_kfunc void bpf_key_put_dtor(void *bkey)
+{
+	bpf_key_put(bkey);
+}
+CFI_NOSEAL(bpf_key_put_dtor);
+
 /**
  * bpf_verify_pkcs7_signature - verify a PKCS#7 signature
  * @data_p: data to verify
@@ -5314,15 +5326,39 @@ static const struct btf_kfunc_id_set user_mem_kfunc_set = {
 	.filter = user_mem_kfunc_filter,
 };
 
-BTF_ID_LIST(generic_dtor_ids)
-BTF_ID(struct, task_struct)
-BTF_ID(func, bpf_task_release_dtor)
-BTF_ID(func, bpf_task_release)
+/* A type, its void (*)(void *) destructor, and the kfunc a program calls to release it */
+#define BPF_DTOR_ID_LIST(name, type, dtor, release)	\
+BTF_ID_LIST(name)					\
+BTF_ID(struct, type)					\
+BTF_ID(func, dtor)					\
+BTF_ID(func, release)
+
+BPF_DTOR_ID_LIST(task_dtor_ids, task_struct, bpf_task_release_dtor, bpf_task_release)
+BPF_DTOR_ID_LIST(iter_num_dtor_ids, bpf_iter_num, bpf_iter_num_destroy_dtor, bpf_iter_num_destroy)
+BPF_DTOR_ID_LIST(iter_task_dtor_ids, bpf_iter_task, bpf_iter_task_destroy_dtor,
+		 bpf_iter_task_destroy)
+BPF_DTOR_ID_LIST(iter_task_vma_dtor_ids, bpf_iter_task_vma, bpf_iter_task_vma_destroy_dtor,
+		 bpf_iter_task_vma_destroy)
+BPF_DTOR_ID_LIST(iter_bits_dtor_ids, bpf_iter_bits, bpf_iter_bits_destroy_dtor,
+		 bpf_iter_bits_destroy)
+BPF_DTOR_ID_LIST(iter_kmem_cache_dtor_ids, bpf_iter_kmem_cache, bpf_iter_kmem_cache_destroy_dtor,
+		 bpf_iter_kmem_cache_destroy)
 #ifdef CONFIG_CGROUPS
-BTF_ID(struct, cgroup)
-BTF_ID(func, bpf_cgroup_release_dtor)
-BTF_ID(func, bpf_cgroup_release)
+BPF_DTOR_ID_LIST(cgroup_dtor_ids, cgroup, bpf_cgroup_release_dtor, bpf_cgroup_release)
+BPF_DTOR_ID_LIST(iter_css_dtor_ids, bpf_iter_css, bpf_iter_css_destroy_dtor, bpf_iter_css_destroy)
+BPF_DTOR_ID_LIST(iter_css_task_dtor_ids, bpf_iter_css_task, bpf_iter_css_task_destroy_dtor,
+		 bpf_iter_css_task_destroy)
 #endif
+#ifdef CONFIG_KEYS
+BPF_DTOR_ID_LIST(key_dtor_ids, bpf_key, bpf_key_put_dtor, bpf_key_put)
+#endif
+#ifdef CONFIG_DMA_SHARED_BUFFER
+BPF_DTOR_ID_LIST(iter_dmabuf_dtor_ids, bpf_iter_dmabuf, bpf_iter_dmabuf_destroy_dtor,
+		 bpf_iter_dmabuf_destroy)
+#endif
+
+#define BPF_DTOR_ENTRY(ids, dtor_flags)							\
+	{ .btf_id = ids[0], .kfunc_btf_id = ids[1], .release_btf_id = ids[2], .flags = dtor_flags }
 
 BTF_KFUNCS_START(common_btf_ids)
 BTF_ID_FLAGS(func, bpf_cast_to_kern_ctx, KF_FASTCALL)
@@ -5430,19 +5466,22 @@ static int __init kfunc_init(void)
 {
 	int ret;
 	const struct btf_id_dtor_kfunc generic_dtors[] = {
-		{
-			.btf_id         = generic_dtor_ids[0],
-			.kfunc_btf_id   = generic_dtor_ids[1],
-			.release_btf_id = generic_dtor_ids[2],
-			.flags          = BPF_DTOR_KPTR | BPF_DTOR_CLEANUP,
-		},
+		BPF_DTOR_ENTRY(task_dtor_ids, BPF_DTOR_KPTR | BPF_DTOR_CLEANUP),
+		BPF_DTOR_ENTRY(iter_num_dtor_ids, BPF_DTOR_CLEANUP),
+		BPF_DTOR_ENTRY(iter_task_dtor_ids, BPF_DTOR_CLEANUP),
+		BPF_DTOR_ENTRY(iter_task_vma_dtor_ids, BPF_DTOR_CLEANUP),
+		BPF_DTOR_ENTRY(iter_bits_dtor_ids, BPF_DTOR_CLEANUP),
+		BPF_DTOR_ENTRY(iter_kmem_cache_dtor_ids, BPF_DTOR_CLEANUP),
 #ifdef CONFIG_CGROUPS
-		{
-			.btf_id         = generic_dtor_ids[3],
-			.kfunc_btf_id   = generic_dtor_ids[4],
-			.release_btf_id = generic_dtor_ids[5],
-			.flags          = BPF_DTOR_KPTR | BPF_DTOR_CLEANUP,
-		},
+		BPF_DTOR_ENTRY(cgroup_dtor_ids, BPF_DTOR_KPTR | BPF_DTOR_CLEANUP),
+		BPF_DTOR_ENTRY(iter_css_dtor_ids, BPF_DTOR_CLEANUP),
+		BPF_DTOR_ENTRY(iter_css_task_dtor_ids, BPF_DTOR_CLEANUP),
+#endif
+#ifdef CONFIG_KEYS
+		BPF_DTOR_ENTRY(key_dtor_ids, BPF_DTOR_CLEANUP),
+#endif
+#ifdef CONFIG_DMA_SHARED_BUFFER
+		BPF_DTOR_ENTRY(iter_dmabuf_dtor_ids, BPF_DTOR_CLEANUP),
 #endif
 	};
 
@@ -5453,10 +5492,10 @@ static int __init kfunc_init(void)
 	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_STRUCT_OPS, &generic_kfunc_set);
 	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SYSCALL, &generic_kfunc_set);
 	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_CGROUP_SKB, &generic_kfunc_set);
-	ret = ret ?: register_btf_id_dtor_kfuncs(generic_dtors,
-						  ARRAY_SIZE(generic_dtors),
+	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_UNSPEC, &common_kfunc_set);
+	/* The destructors refer to release kfuncs of both sets, so they come last */
+	return ret ?: register_btf_id_dtor_kfuncs(generic_dtors, ARRAY_SIZE(generic_dtors),
 						  THIS_MODULE);
-	return ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_UNSPEC, &common_kfunc_set);
 }
 
 late_initcall(kfunc_init);

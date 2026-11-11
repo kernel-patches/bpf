@@ -457,6 +457,22 @@ __bpf_kfunc void bpf_ct_release(struct nf_conn *nfct)
 	nf_ct_put(nfct);
 }
 
+__bpf_kfunc void bpf_ct_release_dtor(void *nfct)
+{
+	bpf_ct_release(nfct);
+}
+CFI_NOSEAL(bpf_ct_release_dtor);
+
+/*
+ * An entry that was allocated and not inserted has no reference to put: it is
+ * freed, as bpf_ct_insert_entry() does with one it cannot insert.
+ */
+__bpf_kfunc void bpf_ct_free_dtor(void *nfct)
+{
+	nf_conntrack_free(nfct);
+}
+CFI_NOSEAL(bpf_ct_free_dtor);
+
 /* bpf_ct_set_timeout - Set timeout of allocated nf_conn
  *
  * Sets the default timeout of newly allocated nf_conn before insertion.
@@ -537,12 +553,34 @@ static const struct btf_kfunc_id_set nf_conntrack_kfunc_set = {
 	.set   = &nf_ct_kfunc_set,
 };
 
+BTF_ID_LIST(nf_ct_dtor_ids)
+BTF_ID(func, bpf_ct_release_dtor)
+BTF_ID(func, bpf_ct_release)
+BTF_ID(func, bpf_ct_free_dtor)
+BTF_ID(func, bpf_ct_insert_entry)
+
 int register_nf_conntrack_bpf(void)
 {
+	/* The only kfunc that takes an allocated entry off a program is bpf_ct_insert_entry() */
+	const struct btf_id_dtor_kfunc nf_ct_dtors[] = {
+		{
+			.btf_id         = btf_nf_conn_ids[0],
+			.kfunc_btf_id   = nf_ct_dtor_ids[0],
+			.release_btf_id = nf_ct_dtor_ids[1],
+			.flags          = BPF_DTOR_CLEANUP,
+		},
+		{
+			.btf_id         = btf_nf_conn_ids[1],
+			.kfunc_btf_id   = nf_ct_dtor_ids[2],
+			.release_btf_id = nf_ct_dtor_ids[3],
+			.flags          = BPF_DTOR_CLEANUP,
+		},
+	};
 	int ret;
 
 	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_XDP, &nf_conntrack_kfunc_set);
 	ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_CLS, &nf_conntrack_kfunc_set);
+	ret = ret ?: register_btf_id_dtor_kfuncs(nf_ct_dtors, ARRAY_SIZE(nf_ct_dtors), THIS_MODULE);
 	if (!ret) {
 		mutex_lock(&nf_conn_btf_access_lock);
 		nfct_btf_struct_access = _nf_conntrack_btf_struct_access;

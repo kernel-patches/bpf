@@ -82,6 +82,12 @@ __bpf_kfunc void bpf_put_mem_cgroup(struct mem_cgroup *memcg)
 	css_put(&memcg->css);
 }
 
+__bpf_kfunc void bpf_put_mem_cgroup_dtor(void *memcg)
+{
+	bpf_put_mem_cgroup(memcg);
+}
+CFI_NOSEAL(bpf_put_mem_cgroup_dtor);
+
 /**
  * bpf_mem_cgroup_vm_events - Read memory cgroup's vm event counter
  * @memcg: memory cgroup
@@ -235,8 +241,21 @@ static const struct btf_kfunc_id_set bpf_memcontrol_reclaim_kfunc_set = {
 	.set            = &bpf_memcontrol_reclaim_kfuncs,
 };
 
+BTF_ID_LIST(bpf_memcontrol_dtor_ids)
+BTF_ID(struct, mem_cgroup)
+BTF_ID(func, bpf_put_mem_cgroup_dtor)
+BTF_ID(func, bpf_put_mem_cgroup)
+
 static int __init bpf_memcontrol_init(void)
 {
+	const struct btf_id_dtor_kfunc bpf_memcontrol_dtors[] = {
+		{
+			.btf_id         = bpf_memcontrol_dtor_ids[0],
+			.kfunc_btf_id   = bpf_memcontrol_dtor_ids[1],
+			.release_btf_id = bpf_memcontrol_dtor_ids[2],
+			.flags          = BPF_DTOR_CLEANUP,
+		},
+	};
 	int err;
 
 	err = register_btf_kfunc_id_set(BPF_PROG_TYPE_UNSPEC,
@@ -248,8 +267,15 @@ static int __init bpf_memcontrol_init(void)
 
 	err = register_btf_kfunc_id_set(BPF_PROG_TYPE_SYSCALL,
 					&bpf_memcontrol_reclaim_kfunc_set);
-	if (err)
+	if (err) {
 		pr_warn("error registering bpf reclaim kfuncs: %d\n", err);
+		return err;
+	}
+
+	err = register_btf_id_dtor_kfuncs(bpf_memcontrol_dtors, ARRAY_SIZE(bpf_memcontrol_dtors),
+					  THIS_MODULE);
+	if (err)
+		pr_warn("error registering bpf memcontrol destructors: %d\n", err);
 
 	return err;
 }

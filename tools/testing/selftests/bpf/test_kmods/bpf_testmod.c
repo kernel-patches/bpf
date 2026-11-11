@@ -281,6 +281,12 @@ __bpf_kfunc void bpf_iter_testmod_seq_destroy(struct bpf_iter_testmod_seq *it)
 	it->cnt = 0;
 }
 
+__bpf_kfunc void bpf_iter_testmod_seq_destroy_dtor(void *it)
+{
+	bpf_iter_testmod_seq_destroy(it);
+}
+CFI_NOSEAL(bpf_iter_testmod_seq_destroy_dtor);
+
 __bpf_kfunc int bpf_iter_testmod_current_new(struct bpf_iter_testmod_current *it)
 {
 	it->remaining = 2;
@@ -301,6 +307,12 @@ __bpf_kfunc void bpf_iter_testmod_current_destroy(struct bpf_iter_testmod_curren
 {
 	it->remaining = 0;
 }
+
+__bpf_kfunc void bpf_iter_testmod_current_destroy_dtor(void *it)
+{
+	bpf_iter_testmod_current_destroy(it);
+}
+CFI_NOSEAL(bpf_iter_testmod_current_destroy_dtor);
 
 __bpf_kfunc void bpf_kfunc_common_test(void)
 {
@@ -1085,6 +1097,12 @@ BTF_ID_LIST(bpf_testmod_dtor_ids)
 BTF_ID(struct, bpf_testmod_ctx)
 BTF_ID(func, bpf_testmod_ctx_release_dtor)
 BTF_ID(func, bpf_testmod_ctx_release)
+BTF_ID(struct, bpf_iter_testmod_seq)
+BTF_ID(func, bpf_iter_testmod_seq_destroy_dtor)
+BTF_ID(func, bpf_iter_testmod_seq_destroy)
+BTF_ID(struct, bpf_iter_testmod_current)
+BTF_ID(func, bpf_iter_testmod_current_destroy_dtor)
+BTF_ID(func, bpf_iter_testmod_current_destroy)
 
 static const struct btf_kfunc_id_set bpf_testmod_common_kfunc_set = {
 	.owner = THIS_MODULE,
@@ -2626,6 +2644,18 @@ static int bpf_testmod_init(void)
 			.kfunc_btf_id	= bpf_testmod_dtor_ids[1],
 			.release_btf_id	= bpf_testmod_dtor_ids[2],
 			.flags		= BPF_DTOR_KPTR | BPF_DTOR_CLEANUP,
+		},
+		{
+			.btf_id		= bpf_testmod_dtor_ids[3],
+			.kfunc_btf_id	= bpf_testmod_dtor_ids[4],
+			.release_btf_id	= bpf_testmod_dtor_ids[5],
+			.flags		= BPF_DTOR_CLEANUP,
+		},
+		{
+			.btf_id		= bpf_testmod_dtor_ids[6],
+			.kfunc_btf_id	= bpf_testmod_dtor_ids[7],
+			.release_btf_id	= bpf_testmod_dtor_ids[8],
+			.flags		= BPF_DTOR_CLEANUP,
 		},
 	};
 	void **tramp;

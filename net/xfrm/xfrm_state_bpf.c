@@ -115,6 +115,12 @@ __bpf_kfunc void bpf_xdp_xfrm_state_release(struct xfrm_state *x)
 	xfrm_state_put(x);
 }
 
+__bpf_kfunc void bpf_xdp_xfrm_state_release_dtor(void *x)
+{
+	bpf_xdp_xfrm_state_release(x);
+}
+CFI_NOSEAL(bpf_xdp_xfrm_state_release_dtor);
+
 __bpf_kfunc_end_defs();
 
 BTF_KFUNCS_START(xfrm_state_kfunc_set)
@@ -127,8 +133,24 @@ static const struct btf_kfunc_id_set xfrm_state_xdp_kfunc_set = {
 	.set   = &xfrm_state_kfunc_set,
 };
 
+BTF_ID_LIST(xfrm_state_dtor_ids)
+BTF_ID(struct, xfrm_state)
+BTF_ID(func, bpf_xdp_xfrm_state_release_dtor)
+BTF_ID(func, bpf_xdp_xfrm_state_release)
+
 int __init register_xfrm_state_bpf(void)
 {
-	return register_btf_kfunc_id_set(BPF_PROG_TYPE_XDP,
-					 &xfrm_state_xdp_kfunc_set);
+	const struct btf_id_dtor_kfunc xfrm_state_dtors[] = {
+		{
+			.btf_id         = xfrm_state_dtor_ids[0],
+			.kfunc_btf_id   = xfrm_state_dtor_ids[1],
+			.release_btf_id = xfrm_state_dtor_ids[2],
+			.flags          = BPF_DTOR_CLEANUP,
+		},
+	};
+	int ret;
+
+	ret = register_btf_kfunc_id_set(BPF_PROG_TYPE_XDP, &xfrm_state_xdp_kfunc_set);
+	return ret ?: register_btf_id_dtor_kfuncs(xfrm_state_dtors, ARRAY_SIZE(xfrm_state_dtors),
+						  THIS_MODULE);
 }

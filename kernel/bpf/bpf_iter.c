@@ -846,4 +846,10 @@ __bpf_kfunc void bpf_iter_num_destroy(struct bpf_iter_num *it)
 	/* no-op */
 }
 
+__bpf_kfunc void bpf_iter_num_destroy_dtor(void *it)
+{
+	bpf_iter_num_destroy(it);
+}
+CFI_NOSEAL(bpf_iter_num_destroy_dtor);
+
 __bpf_kfunc_end_defs();

@@ -1170,6 +1170,7 @@ static const struct file_operations wakeup_sources_stats_fops = {
 
 #ifdef CONFIG_BPF_SYSCALL
 #include <linux/btf.h>
+#include <linux/btf_ids.h>
 
 __bpf_kfunc_start_defs();
 
@@ -1202,6 +1203,12 @@ __bpf_kfunc void bpf_wakeup_sources_read_unlock(struct bpf_ws_lock *lock)
 	wakeup_sources_read_unlock((int)(long)lock - 1);
 }
 
+__bpf_kfunc void bpf_wakeup_sources_read_unlock_dtor(void *lock)
+{
+	bpf_wakeup_sources_read_unlock(lock);
+}
+CFI_NOSEAL(bpf_wakeup_sources_read_unlock_dtor);
+
 /**
  * bpf_wakeup_sources_get_head - Get the head of the wakeup sources list
  *
@@ -1224,9 +1231,25 @@ static const struct btf_kfunc_id_set wakeup_source_kfunc_set = {
 	.set   = &wakeup_source_kfunc_ids,
 };
 
+BTF_ID_LIST(wakeup_source_dtor_ids)
+BTF_ID(struct, bpf_ws_lock)
+BTF_ID(func, bpf_wakeup_sources_read_unlock_dtor)
+BTF_ID(func, bpf_wakeup_sources_read_unlock)
+
 static void __init wakeup_sources_bpf_init(void)
 {
-	if (register_btf_kfunc_id_set(BPF_PROG_TYPE_SYSCALL, &wakeup_source_kfunc_set))
+	const struct btf_id_dtor_kfunc wakeup_source_dtors[] = {
+		{
+			.btf_id         = wakeup_source_dtor_ids[0],
+			.kfunc_btf_id   = wakeup_source_dtor_ids[1],
+			.release_btf_id = wakeup_source_dtor_ids[2],
+			.flags          = BPF_DTOR_CLEANUP,
+		},
+	};
+
+	if (register_btf_kfunc_id_set(BPF_PROG_TYPE_SYSCALL, &wakeup_source_kfunc_set) ||
+	    register_btf_id_dtor_kfuncs(wakeup_source_dtors, ARRAY_SIZE(wakeup_source_dtors),
+					THIS_MODULE))
 		pm_pr_dbg("Wakeup: failed to register BTF kfuncs\n");
 }
 #else

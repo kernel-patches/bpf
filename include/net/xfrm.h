@@ -2378,6 +2378,7 @@ static inline int register_xfrm_interface_bpf(void)
 
 #if IS_ENABLED(CONFIG_DEBUG_INFO_BTF)
 int register_xfrm_state_bpf(void);
+void bpf_xdp_xfrm_state_release_dtor(void *x);
 #else
 static inline int register_xfrm_state_bpf(void)
 {

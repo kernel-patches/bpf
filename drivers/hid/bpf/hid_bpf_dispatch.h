@@ -16,6 +16,7 @@ void hid_put_device(struct hid_device *hid);
 int hid_bpf_allocate_event_data(struct hid_device *hdev);
 void __hid_bpf_ops_destroy_device(struct hid_device *hdev);
 int hid_bpf_reconnect(struct hid_device *hdev);
+void hid_bpf_release_context_dtor(void *ctx);
 
 struct bpf_prog;
 
