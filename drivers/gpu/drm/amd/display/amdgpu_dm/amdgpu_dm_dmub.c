@@ -215,7 +215,7 @@ dm_get_alt_channel_pstate_switch_aperture(struct amdgpu_device *adev,
 
 		/* DML2 requires the reserved-region base in MC address space. */
 		aperture_mc_bases[i] = apertures[i].reserved_region_start +
-			adev->gmc.fb_start - adev->vm_manager.vram_base_offset;
+			adev->gmc.vram_start - adev->vm_manager.vram_base_offset;
 	}
 
 	for (i = 0; i < ARRAY_SIZE(region_ids); i++) {
