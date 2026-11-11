@@ -233,6 +233,8 @@ static void bpf_unwind_release_desc(struct bpf_unwind_ctx *ctx, const struct bpf
 			continue;
 		if (ent->flags & BPF_FRAME_ENT_OBJ) {
 			handle = loc;
+		} else if (ent->flags & BPF_FRAME_ENT_FIXED) {
+			handle = res->addr;
 		} else {
 			/* no descriptor names a register that was not captured */
 			if ((ent->flags & BPF_FRAME_ENT_REG) && WARN_ON_ONCE(!ctx->entry))

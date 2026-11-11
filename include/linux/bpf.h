@@ -1860,6 +1860,7 @@ struct bpf_resource {
 	union {
 		void (*dtor)(void *);
 		struct btf_struct_meta *meta;
+		void *addr;	/* a lock at a fixed address, in the only element of an array map */
 	};
 };
 
@@ -1880,6 +1881,8 @@ struct bpf_resource {
  *    bpf_arch_throw_entry();
  *  - with BPF_FRAME_ENT_OBJ the resource itself, an iterator or saved IRQ
  *    flags the frame has on its stack whenever it is at the site;
+ *  - with BPF_FRAME_ENT_FIXED no location: a lock at the address its class
+ *    gives, which the frame holds whenever it is at the site;
  *  - with BPF_FRAME_ENT_COUNTER a hidden slot that holds a count of sections,
  *    signed: the sections the frame entered less those of its callers it left;
  *  - with BPF_FRAME_ENT_COUNT no location: the count of the sections the frame
@@ -1891,6 +1894,7 @@ struct bpf_resource {
 /* Released before the other entries of the frame, which it may be using. */
 #define BPF_FRAME_ENT_FIRST	BIT(3)
 #define BPF_FRAME_ENT_REG	BIT(4)
+#define BPF_FRAME_ENT_FIXED	BIT(5)
 
 struct bpf_frame_desc_entry {
 	u16 res;	/* index into the program's resource classes */

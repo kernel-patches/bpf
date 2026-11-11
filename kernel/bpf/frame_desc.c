@@ -376,6 +376,42 @@ static int resource_of_kind(struct bpf_verifier_env *env, u8 kind)
 	return resource_intern(env, &res);
 }
 
+/*
+ * The class of the lock that the current insn takes through @reg, a pointer
+ * to it. A lock in the only element of an array map, which every global
+ * variable is, is at a fixed address: its class says where, and a site needs
+ * no place for it. That is so for a map the program refers to itself only:
+ * what stands for the inner maps of a map has no values. Any other lock is
+ * @off bytes into what the pointer is into, a map value or an object: a site
+ * finds it through a pointer to that which the frame keeps, unless the offset
+ * is too large for a site to tell, see BPF_RES_F_NO_PTR.
+ */
+static int resource_of_lock(struct bpf_verifier_env *env, const struct bpf_reference_state *ref,
+			    const struct bpf_reg_state *reg, s16 *off, u8 *flags)
+{
+	struct bpf_resource res;
+	const struct bpf_map *map;
+	u64 base;
+	u32 i;
+
+	memset(&res, 0, sizeof(res));
+	res.kind = ref->type == REF_TYPE_LOCK ? BPF_RESOURCE_SPIN_LOCK : BPF_RESOURCE_RES_LOCK;
+	if (!reg || !tnum_is_const(reg->var_off) ||
+	    reg->var_off.value != (u64)(s16)reg->var_off.value) {
+		*flags |= BPF_RES_F_NO_PTR;
+		return resource_intern(env, &res);
+	}
+	*off = reg->var_off.value;
+	map = reg->type == PTR_TO_MAP_VALUE ? reg->map_ptr : NULL;
+	for (i = 0; map && i < env->used_map_cnt; i++)
+		if (env->used_maps[i] == map)
+			break;
+	if (map && i < env->used_map_cnt && map->map_type == BPF_MAP_TYPE_ARRAY &&
+	    map->ops->map_direct_value_addr && !map->ops->map_direct_value_addr(map, &base, *off))
+		res.addr = (void *)(long)(base + *off);
+	return resource_intern(env, &res);
+}
+
 /* The offset from R10 of the stack slot @spi of a frame. */
 static s16 spi_off(int spi)
 {
@@ -397,6 +433,8 @@ static int acquired_class(struct bpf_verifier_env *env, struct bpf_verifier_stat
 			  s16 *adj, s16 *obj_off)
 {
 	const struct bpf_func_state *frame = st->frame[st->curframe];
+	/* a handle that is in no register can only be found by the sites */
+	bool in_reg = regno >= BPF_REG_0 && regno <= BPF_REG_5;
 	const struct bpf_stack_state *slot;
 	struct bpf_resource res;
 	struct bpf_reg_state reg;
@@ -414,8 +452,7 @@ static int acquired_class(struct bpf_verifier_env *env, struct bpf_verifier_stat
 	}
 	*flags |= BPF_RES_F_ARG;
 	if (ref->type & REF_TYPE_LOCK_MASK)
-		return resource_of_kind(env, ref->type == REF_TYPE_LOCK ? BPF_RESOURCE_SPIN_LOCK :
-								   BPF_RESOURCE_RES_LOCK);
+		return resource_of_lock(env, ref, in_reg ? &frame->regs[regno] : NULL, adj, flags);
 	if (!stack_object_find(st, ref, &objframe, &spi))
 		return -EOPNOTSUPP;
 	if (objframe != st->curframe)
@@ -794,9 +831,11 @@ static const u8 site_regs[] = {
  * The places of frame @f of @st that hold the handle of @ref, which the frame
  * owns, in @loc: the stack object the reference is of, or the slots of the
  * stack a pointer to the object is spilled in and the registers that hold
- * one, see site_regs; @throws when the frame calls bpf_throw(). A lock has
- * none. The slots a spill is removed from again, see
- * bpf_remove_fastcall_spills_fills(), hold nothing at run time.
+ * one, see site_regs; @throws when the frame calls bpf_throw(). A lock at a
+ * fixed address needs no place. Any other lock is found like an object,
+ * through a pointer to what it is in, which has the id of the lock. The slots
+ * a spill is removed from again, see bpf_remove_fastcall_spills_fills(), hold
+ * nothing at run time.
  */
 static void ref_locations(struct bpf_verifier_env *env, const struct bpf_verifier_state *st, int f,
 			  const struct bpf_reference_state *ref, bool throws,
@@ -805,42 +844,50 @@ static void ref_locations(struct bpf_verifier_env *env, const struct bpf_verifie
 	const struct bpf_res_acq *acq = &env->res_acqs[ref->acq - 1];
 	const struct bpf_func_state *frame = st->frame[f];
 	s16 adj, lim = env->subprog_info[frame->subprogno].fastcall_stack_end;
+	bool lock = ref->type & REF_TYPE_LOCK_MASK, ptr;
 	const struct bpf_stack_state *slot;
 	int k;
 
+	memset(loc->at, 0, sizeof(loc->at));
 	loc->cnt = 0;
 	loc->obj = false;
-	if (ref->type & REF_TYPE_LOCK_MASK)
+	loc->fixed = lock && env->resources[acq->res].addr;
+	if (loc->fixed) {
+		loc->cnt = 1;
 		return;
+	}
+	/* a pointer the frame keeps: to the object, or to what a lock with an id is in */
+	ptr = lock ? ref->id && !(acq->flags & BPF_RES_F_NO_PTR) :
+		     ref->type == REF_TYPE_PTR && !(acq->flags & BPF_RES_F_ARG);
 	for (k = 0; k < bpf_stack_nr_slots(frame) && loc->cnt < BPF_RES_LOC_MAX; k++) {
 		slot = bpf_stack_slot(frame, k);
 		adj = 0;
 		if (spi_off(k) < lim)
 			break;
-		if (stack_slot_is_object(slot, ref->id)) {
+		if (!lock && stack_slot_is_object(slot, ref->id)) {
 			/* the handle of a dynptr is its first word, as when it was created */
 			if (slot->slot_type[BPF_REG_SIZE - 1] != STACK_DYNPTR) {
 				loc->obj = true;
 				loc->cnt = 0;
 			}
-		} else if (ref->type != REF_TYPE_PTR || (acq->flags & BPF_RES_F_ARG) ||
-			   !bpf_is_spilled_reg(slot) || !reg_ref_off(&slot->spilled_ptr, ref->id, &adj)) {
+		} else if (!ptr || !bpf_is_spilled_reg(slot) ||
+			   !reg_ref_off(&slot->spilled_ptr, ref->id, &adj)) {
 			continue;
 		}
 		loc->at[loc->cnt].off = spi_off(k);
-		loc->at[loc->cnt].reg = false;
-		loc->at[loc->cnt++].adj = adj;
+		/* the acquisition of a lock has how far the lock is into what it is in */
+		loc->at[loc->cnt++].adj = lock ? adj - acq->adj : adj;
 		if (loc->obj)
 			return;
 	}
-	if (!env->describe_regs || ref->type != REF_TYPE_PTR || (acq->flags & BPF_RES_F_ARG))
+	if (!env->describe_regs || !ptr)
 		return;
 	for (k = 0; k < (throws ? ARRAY_SIZE(site_regs) : 4) && loc->cnt < BPF_RES_LOC_MAX; k++) {
 		if (!reg_ref_off(&frame->regs[site_regs[k]], ref->id, &adj))
 			continue;
 		loc->at[loc->cnt].off = site_regs[k];
 		loc->at[loc->cnt].reg = true;
-		loc->at[loc->cnt++].adj = adj;
+		loc->at[loc->cnt++].adj = lock ? adj - acq->adj : adj;
 	}
 }
 
@@ -908,7 +955,7 @@ static int site_visit(struct bpf_verifier_env *env, const struct bpf_verifier_st
 				if (cur.at[j].off == loc->at[k].off && cur.at[j].adj == loc->at[k].adj &&
 				    cur.at[j].reg == loc->at[k].reg)
 					break;
-			if (j < cur.cnt && cur.obj == loc->obj)
+			if (j < cur.cnt && cur.obj == loc->obj && cur.fixed == loc->fixed)
 				loc->at[n++] = loc->at[k];
 		}
 		loc->cnt = n;
@@ -1481,7 +1528,7 @@ static int build_site(struct bpf_verifier_env *env, u32 idx, const u32 *new_of)
 	for (i = 0; i < env->res_loc_cnt; i++) {
 		const struct bpf_res_loc *loc = &env->res_locs[i];
 		const struct bpf_res_acq *a = &env->res_acqs[loc->acq];
-		u16 flags = loc->obj ? BPF_FRAME_ENT_OBJ : 0;
+		u16 flags = loc->obj ? BPF_FRAME_ENT_OBJ : loc->fixed ? BPF_FRAME_ENT_FIXED : 0;
 
 		if (loc->site != idx || a->slot)
 			continue;

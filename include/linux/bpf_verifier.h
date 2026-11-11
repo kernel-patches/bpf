@@ -1253,6 +1253,7 @@ void bpf_patch_image_install(struct bpf_prog *prog, const struct bpf_patch_image
 #define BPF_RES_F_MAY_FAIL	BIT(1)	/* acquired only when the call returns 0 */
 #define BPF_RES_F_DEREF		BIT(2)	/* the handle is the first word of a dynptr on the stack */
 #define BPF_RES_F_CTX		BIT(3)	/* a __ref argument the kernel passes the main program */
+#define BPF_RES_F_NO_PTR	BIT(5)	/* a lock that no pointer to what it is in leads to */
 
 /*
  * A call that acquires a resource, see frame_desc.c. When a frame can be
@@ -1301,6 +1302,7 @@ struct bpf_res_loc {
 	u16 acq;	/* index of the acquisition */
 	u8 cnt;		/* the places left */
 	bool obj;	/* they are the resource itself, an object on the stack */
+	bool fixed;	/* it is a lock at the address of its class, and needs no place */
 	struct {
 		s16 off;	/* relative to R10, or the number of the register */
 		s16 adj;	/* the pointer there points that many bytes into the object */
