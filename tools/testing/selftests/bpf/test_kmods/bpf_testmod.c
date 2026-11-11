@@ -2093,6 +2093,14 @@ static int bpf_dummy_reg(void *kdata, struct bpf_link *link)
 		ops->test_2(4, ops->data);
 	if (ops->test_trampoline_stack_args)
 		ops->test_trampoline_stack_args(1, 2, 3, 4, 5, 6, 7, 8, 9999);
+	/*
+	 * The program releases the task, or the unwinder does when it throws:
+	 * with bpf_task_release(), which puts what bpf_task_acquire() gets.
+	 */
+	if (ops->test_refcounted) {
+		refcount_inc(&current->rcu_users);
+		ops->test_refcounted(0, current);
+	}
 
 	return 0;
 }
