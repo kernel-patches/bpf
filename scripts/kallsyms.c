@@ -634,6 +634,72 @@ static unsigned int token_second(unsigned int token)
 
 /* table lookup compression functions */
 
+/* Check that the compression data is consistent. */
+static void check_tables(void)
+{
+	struct {
+		unsigned int refs;
+		unsigned int idx;
+	} tok_info[NR_TOKENS], *ti;
+	unsigned int sym_idx, token;
+	unsigned char *cp, *end;
+	struct sym_arr *sa;
+	unsigned int i, idx;
+
+	memset(&tok_info, 0, sizeof(tok_info));
+
+	/* Check that token_syms[]->sym_indexes is correctly sorted. */
+	for (token = 0; token < NR_TOKENS; token++) {
+		sa = token_syms + token;
+		for (i = 0; i + 1 < sa->cnt; i++) {
+			if (sa->sym_indexes[i] < sa->sym_indexes[i + 1])
+				continue;
+			errx(EXIT_FAILURE, "sym_indexes[%x (%s/%s)] missorted at %u %u >= %u",
+			     token, best_table[token_first(token)].str,
+			     best_table[token_second(token)].str,
+			     i, sa->sym_indexes[i], sa->sym_indexes[i + 1]);
+		}
+	}
+
+	/* Check that every token pair is in token_syms[]->sym_indexes[]. */
+	for (sym_idx = 0; sym_idx < table_cnt; sym_idx++) {
+		cp = table[sym_idx]->sym;
+		end = cp + table[sym_idx]->len;
+		/* Scan all pairs */
+		while (++cp < end) {
+			token = token_index(cp[-1], cp[0]);
+			ti = tok_info + token;
+			ti->refs++;
+
+			/* token_syms[]->sym_indexes holds symbol numbers in order. */
+			sa = token_syms + token;
+			for (idx = ti->idx; idx < sa->cnt; idx++) {
+				if (sym_idx == sa->sym_indexes[idx])
+					break;
+			}
+			if (idx >= sa->cnt) {
+				char buf[1 + KSYM_NAME_LEN];
+				expand_symbol(table[sym_idx]->sym, table[sym_idx]->len, buf);
+				errx(EXIT_FAILURE,
+				     "symbol %u (%s) not in sym_indexes[] for token %x (%s/%s)",
+				     sym_idx, buf, token, best_table[cp[-1]].str,
+				     best_table[cp[0]].str);
+			}
+			ti->idx = idx;
+		}
+	}
+
+	/* Check the reference counts for all tokens. */
+	for (idx = 0; idx < NR_TOKENS; idx++) {
+		if (tok_info[idx].refs != token_profit[idx]) {
+			errx(EXIT_FAILURE, "profit error for %x (%s/%s) discrepency %u != %u",
+			     idx, best_table[token_first(idx)].str,
+			     best_table[token_second(idx)].str,
+			     tok_info[idx].refs, token_profit[idx]);
+		}
+	}
+}
+
 /* count all the possible tokens in a symbol */
 static void learn_symbol(const unsigned char *symbol, int len)
 {
@@ -641,15 +707,6 @@ static void learn_symbol(const unsigned char *symbol, int len)
 
 	for (i = 0; i < len - 1; i++)
 		token_profit[sym_token_index(symbol, i)]++;
-}
-
-/* decrease the count for all the possible tokens in a symbol */
-static void forget_symbol(const unsigned char *symbol, int len)
-{
-	int i;
-
-	for (i = 0; i < len - 1; i++)
-		token_profit[sym_token_index(symbol, i)]--;
 }
 
 static void token_add_symbol(unsigned int token_idx, unsigned int sym_idx)
@@ -675,23 +732,14 @@ static void symbol_index_all_tokens(const unsigned char *symbol, int len,
 	}
 }
 
-/*
- * The symbol just got compressed. The only parts of the symbol that changed
- * meaningfully are those containing the newly assigned compressed char, so
- * index those.
- */
-static void symbol_index_new_tokens(const unsigned char *symbol, int len,
-				    unsigned int sym_idx, int compressed_chr)
+static void adjust_profit(unsigned int sym_idx,
+			  unsigned int old_first, unsigned int new_first,
+			  unsigned int old_second, unsigned int new_second)
 {
-	int i;
+	token_profit[token_index(old_first, old_second)]--;
+	token_profit[token_index(new_first, new_second)]++;
 
-	for (i = 0; i < len - 1; i++) {
-		const unsigned int token_idx = sym_token_index(symbol, i);
-
-		if (symbol[i] == compressed_chr ||
-		    symbol[i + 1] == compressed_chr)
-			token_add_symbol(token_idx, sym_idx);
-	}
+	token_add_symbol(token_index(new_first, new_second), sym_idx);
 }
 
 static void build_initial_token_table(void)
@@ -721,13 +769,12 @@ static void build_initial_token_table(void)
 		symbol_index_all_tokens(table[i]->sym, table[i]->len, i);
 }
 
-static unsigned char *find_token(unsigned char *str, int len,
+static unsigned char *find_token(unsigned char *str, unsigned char *end,
 				 unsigned int want)
 {
 	unsigned int token = token_index(0, *str++);
-	int i;
 
-	for (i = 0; i < len - 1; i++) {
+	while (str < end) {
 		token = token_index(token_second(token), *str++);
 		if (token == want)
 			return str - 2;
@@ -736,53 +783,42 @@ static unsigned char *find_token(unsigned char *str, int len,
 }
 
 /* replace a given token in all the valid symbols. Use the sampled symbols
- * to update the counts */
-static void compress_symbols(unsigned int token_idx, int compressed_chr)
+ * to update the counts.
+ * Marked noinline to help register allocation. */
+static __attribute__((noinline)) void
+compress_symbols(unsigned int token_idx, int compressed_chr)
 {
 	struct sym_arr *arr = &token_syms[token_idx];
-	unsigned int sym_idx, j, len, size;
-	unsigned char *p1, *p2;
+	unsigned int sym_idx, j, len;
+	unsigned char *sym, *p, *end;
+	struct sym_entry *se;
 
 	/* Iterate through all symbols this token is found in and compress. */
 	for (j = 0; j < arr->cnt; j++) {
 		sym_idx = arr->sym_indexes[j];
 
-		len = table[sym_idx]->len;
-		p1 = table[sym_idx]->sym;
+		se = table[sym_idx];
+		sym = se->sym;
+		end = sym + se->len;
 
-		/* find the token on the symbol */
-		p2 = find_token(p1, len, token_idx);
-		if (!p2) continue;
-
-		/* decrease the counts for this symbol's tokens */
-		forget_symbol(table[sym_idx]->sym, len);
-
-		size = len;
-
-		do {
-			*p2 = compressed_chr;
-			p2++;
-			size -= (p2 - p1);
-			memmove(p2, p2 + 1, size);
-			p1 = p2;
-			len--;
-
-			if (size < 2) break;
-
-			/* find the token on the symbol */
-			p2 = find_token(p1, size, token_idx);
-
-		} while (p2);
-
-		table[sym_idx]->len = len;
-
-		/* increase the counts for this symbol's new tokens */
-		learn_symbol(table[sym_idx]->sym, len);
-		symbol_index_new_tokens(table[sym_idx]->sym, len, sym_idx,
-					compressed_chr);
+		for (p = sym; (p = find_token(p, end, token_idx)); p++) {
+			len = end - p - 2;
+			end--;
+			*p = compressed_chr;
+			if (p != sym)
+				adjust_profit(sym_idx, p[-1], p[-1],
+					      token_first(token_idx), compressed_chr);
+			if (!len)
+				break;
+			adjust_profit(sym_idx, token_second(token_idx), compressed_chr, p[2], p[2]);
+			memmove(p + 1, p + 2, len);
+		}
+		se->len = end - sym;
 	}
 
-	sym_arr_free(arr); /* No symbol contains this token any more. */
+	/* No symbol contains this token any more. */
+	token_profit[token_idx] = 0;
+	sym_arr_free(arr);
 }
 
 /* search the token with the maximum profit */
@@ -870,6 +906,11 @@ static void optimize_token_table(void)
 
 	optimize_result();
 	stamp("optimize result");
+
+	if (!out_bin_file) {
+		check_tables();
+		stamp("check tables");
+	}
 }
 
 /* guess for "linker script provide" symbol */
