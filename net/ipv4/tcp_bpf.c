@@ -188,9 +188,17 @@ static int tcp_bpf_push_locked(struct sock *sk, struct sk_msg *msg,
 int tcp_bpf_sendmsg_redir(struct sock *sk, bool ingress,
 			  struct sk_msg *msg, u32 bytes, int flags)
 {
-	struct sk_psock *psock = sk_psock_get(sk);
+	struct sk_psock *psock;
 	int ret;
 
+	/*
+	 * The listener frees a child that nobody has accepted yet without
+	 * waiting for the owner of its socket lock.
+	 */
+	if (!READ_ONCE(sk->sk_socket))
+		return sock_flag(sk, SOCK_DEAD) ? -EPIPE : -EINVAL;
+
+	psock = sk_psock_get(sk);
 	if (unlikely(!psock))
 		return -EPIPE;
 
