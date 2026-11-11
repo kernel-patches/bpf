@@ -6253,6 +6253,20 @@ regulator_register(struct device *dev,
 			goto wash;
 	}
 
+	if (rdev->desc->vsel_reg_oversize) {
+		if (!rdev->regmap || regmap_get_val_bytes(rdev->regmap) != 1) {
+			ret = -EINVAL;
+			goto wash;
+		}
+
+		if (rdev->desc->vsel_range_mask &&
+		    (rdev->desc->vsel_reg == rdev->desc->vsel_range_reg ||
+		     rdev->desc->vsel_reg + 1 == rdev->desc->vsel_range_reg)) {
+			ret = -EINVAL;
+			goto wash;
+		}
+	}
+
 	if (config->ena_gpiod) {
 		ret = regulator_ena_gpio_request(rdev, config);
 		if (ret != 0) {

@@ -519,6 +519,17 @@ config REGULATOR_LM363X
 	  One boost output voltage is configurable and always on.
 	  Other LDOs are used for the display module.
 
+config REGULATOR_LM51772
+	tristate "TI LM51772 voltage regulator"
+	depends on I2C
+	select REGMAP_I2C
+	help
+	  This driver supports the TI LM51772 buck-boost controller, designed
+	  for USB Power Delivery applications. It provides a software
+	  configurable buck-boost output voltage and a fixed auxiliary 5 V LDO
+	  output, both controlled over I2C. The driver supports voltage
+	  setting, current limiting and fault/thermal reporting.
+
 config REGULATOR_LOCHNAGAR
 	tristate "Cirrus Logic Lochnagar regulator driver"
 	depends on MFD_LOCHNAGAR
