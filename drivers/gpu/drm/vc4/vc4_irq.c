@@ -296,7 +296,7 @@ vc4_irq_disable(struct drm_device *dev)
 	cancel_work_sync(&vc4->overflow_mem_work);
 }
 
-int vc4_irq_install(struct drm_device *dev, int irq)
+int vc4_irq_install(struct drm_device *dev)
 {
 	struct vc4_dev *vc4 = to_vc4_dev(dev);
 
@@ -306,13 +306,10 @@ int vc4_irq_install(struct drm_device *dev, int irq)
 	if (!vc4->v3d)
 		return -ENODEV;
 
-	if (irq == IRQ_NOTCONNECTED)
-		return -ENOTCONN;
-
 	init_waitqueue_head(&vc4->job_wait_queue);
 	INIT_WORK(&vc4->overflow_mem_work, vc4_overflow_mem_work);
 
-	return devm_request_irq(dev->dev, irq, vc4_irq, IRQF_NO_AUTOEN,
+	return devm_request_irq(dev->dev, vc4->irq, vc4_irq, IRQF_NO_AUTOEN,
 				dev_name(dev->dev), dev);
 }
 

@@ -445,7 +445,7 @@ static int vc4_v3d_bind(struct device *dev, struct device *master, void *data)
 		return ret;
 	vc4->irq = ret;
 
-	ret = vc4_irq_install(drm, vc4->irq);
+	ret = vc4_irq_install(drm);
 	if (ret) {
 		drm_err(drm, "Failed to install IRQ handler\n");
 		return ret;
