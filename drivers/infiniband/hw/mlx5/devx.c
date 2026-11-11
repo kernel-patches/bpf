@@ -2338,6 +2338,8 @@ static int devx_umem_reg_cmd_alloc(struct mlx5_ib_dev *dev,
 {
 	unsigned long pgsz_bitmap;
 	unsigned int page_size;
+	size_t num_mtt;
+	size_t inlen;
 	__be64 *mtt;
 	void *umem;
 	int ret;
@@ -2365,9 +2367,13 @@ static int devx_umem_reg_cmd_alloc(struct mlx5_ib_dev *dev,
 	if (!page_size)
 		return -EINVAL;
 
-	cmd->inlen = MLX5_ST_SZ_BYTES(create_umem_in) +
-		     (MLX5_ST_SZ_BYTES(mtt) *
-		      ib_umem_num_dma_blocks(obj->umem, page_size));
+	num_mtt = ib_umem_num_dma_blocks(obj->umem, page_size);
+	inlen = size_add(MLX5_ST_SZ_BYTES(create_umem_in),
+			 size_mul(MLX5_ST_SZ_BYTES(mtt), num_mtt));
+	if (inlen > INT_MAX)
+		return -EINVAL;
+
+	cmd->inlen = inlen;
 	cmd->in = uverbs_zalloc(attrs, cmd->inlen);
 	if (IS_ERR(cmd->in))
 		return PTR_ERR(cmd->in);
@@ -2376,8 +2382,7 @@ static int devx_umem_reg_cmd_alloc(struct mlx5_ib_dev *dev,
 	mtt = (__be64 *)MLX5_ADDR_OF(umem, umem, mtt);
 
 	MLX5_SET(create_umem_in, cmd->in, opcode, MLX5_CMD_OP_CREATE_UMEM);
-	MLX5_SET64(umem, umem, num_of_mtt,
-		   ib_umem_num_dma_blocks(obj->umem, page_size));
+	MLX5_SET64(umem, umem, num_of_mtt, num_mtt);
 	MLX5_SET(umem, umem, log_page_size,
 		 order_base_2(page_size) - MLX5_ADAPTER_PAGE_SHIFT);
 	MLX5_SET(umem, umem, page_offset,
