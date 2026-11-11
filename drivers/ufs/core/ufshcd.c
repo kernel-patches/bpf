@@ -10704,7 +10704,7 @@ static int ufshcd_wl_runtime_resume(struct device *dev)
 #endif
 
 #ifdef CONFIG_PM_SLEEP
-static int ufshcd_wl_suspend(struct device *dev)
+static int ufshcd_wl_system_suspend(struct device *dev, enum ufs_pm_op pm_op)
 {
 	struct scsi_device *sdev = to_scsi_device(dev);
 	struct ufs_hba *hba;
@@ -10717,7 +10717,7 @@ static int ufshcd_wl_suspend(struct device *dev)
 	if (pm_runtime_suspended(dev))
 		goto out;
 
-	ret = __ufshcd_wl_suspend(hba, UFS_SYSTEM_PM);
+	ret = __ufshcd_wl_suspend(hba, pm_op);
 	if (ret) {
 		dev_err(&sdev->sdev_gendev, "%s failed: %d\n", __func__,  ret);
 		up(&hba->host_sem);
@@ -10731,6 +10731,11 @@ out:
 		hba->curr_dev_pwr_mode, hba->uic_link_state);
 
 	return ret;
+}
+
+static int ufshcd_wl_suspend(struct device *dev)
+{
+	return ufshcd_wl_system_suspend(dev, UFS_SYSTEM_PM);
 }
 
 static int ufshcd_wl_resume(struct device *dev)
