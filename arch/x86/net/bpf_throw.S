@@ -10,7 +10,8 @@
 /*
  * Native entry of the bpf_throw() kfunc. The verifier retargets the call to
  * bpf_throw() here, so the BPF register file of the throw site is still intact
- * on entry. Capture it on the stack as a struct bpf_throw_regs and hand it to
+ * on entry. Capture it on the stack as a struct bpf_throw_regs, along with
+ * r12, the callee-saved register no BPF register maps to, and hand it to
  * bpf_throw_unwind(), which never returns.
  */
 SYM_FUNC_START(bpf_throw_entry)
@@ -20,7 +21,8 @@ SYM_FUNC_START(bpf_throw_entry)
 	pushq %rbp
 	movq %rsp, %rbp
 
-	/* Save R9..R0 so that [rsp + 8 * i] is r[i]. */
+	/* Save r12, then R9..R0 so that [rsp + 8 * i] is r[i]. */
+	pushq %r12	/* r[10] */
 	pushq %r15	/* R9 */
 	pushq %r14	/* R8 */
 	pushq %r13	/* R7 */

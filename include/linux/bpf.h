@@ -1995,15 +1995,21 @@ struct bpf_prog_aux {
 	int cgroup_atype; /* enum cgroup_bpf_attach_type */
 	struct bpf_map *cgroup_storage[MAX_BPF_CGROUP_STORAGE_TYPE];
 	char name[BPF_OBJ_NAME_LEN];
-	u64 (*bpf_exception_cb)(u64 cookie, u64 sp, u64 bp, u64, u64);
-	u16 stack_arg_sp_adjust;
+	/*
+	 * The exception callback of the main program: @cookie is the value of
+	 * the throw, @sp and @bp the native stack and frame pointers of the main
+	 * program's frame, @saved the callee-saved registers the unwinder
+	 * restored, R6..R9 then the architecture's own, see struct bpf_throw_regs.
+	 */
+	u64 (*bpf_exception_cb)(u64 cookie, u64 sp, u64 bp, u64 saved, u64);
 	u16 freplace_link_cnt; /* counts freplace links extending this prog */
 	/*
 	 * Offsets from the native frame pointer of this JITed program at which
-	 * its prologue saved the caller's R6..R9, or 0 when that register is not
-	 * saved. Filled by the JIT; consumed by the exception unwinder.
+	 * its prologue saved the caller's callee-saved registers, R6..R9 then
+	 * the architecture's own, or 0 when that register is not saved. Filled
+	 * by the JIT; consumed by the exception unwinder.
 	 */
-	s16 callee_reg_off[4];
+	s16 callee_reg_off[BPF_THROW_NR_CALLEE_SAVED];
 #ifdef CONFIG_SECURITY
 	void *security;
 #endif
@@ -4434,6 +4440,31 @@ static inline gfp_t bpf_memcg_flags(gfp_t flags)
 static inline bool bpf_is_subprog(const struct bpf_prog *prog)
 {
 	return prog->aux->func_idx != 0;
+}
+
+/*
+ * The aux of the JITed function a frame of @prog runs: the symbol of a
+ * program JITed as a set of functions covers its first function.
+ */
+static inline const struct bpf_prog_aux *bpf_prog_frame_aux(const struct bpf_prog *prog)
+{
+	return !prog->is_func && prog->aux->func ? prog->aux->func[0]->aux : prog->aux;
+}
+
+/*
+ * The exception unwinder leaves a frame of the JITed function @fn, whose
+ * native frame pointer is @bp, for its caller. @saved holds the callee-saved
+ * registers the frame has, R6..R9 then the architecture's own: the caller has
+ * the same, but for the ones the prologue of the frame saved, which are where
+ * it saved them.
+ */
+static inline void bpf_throw_caller_regs(const struct bpf_prog_aux *fn, u64 bp, u64 *saved)
+{
+	int i;
+
+	for (i = 0; i < BPF_THROW_NR_CALLEE_SAVED; i++)
+		if (fn->callee_reg_off[i])
+			saved[i] = *(u64 *)(long)(bp + fn->callee_reg_off[i]);
 }
 
 const struct bpf_line_info *bpf_find_linfo(const struct bpf_prog *prog, u32 insn_off);

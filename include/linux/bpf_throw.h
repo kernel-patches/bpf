@@ -8,11 +8,23 @@
 
 /*
  * The callee-saved registers of the architecture that no BPF register maps
- * to, which an entry captures after R9. None yet.
+ * to, which the entries capture after R9 and the unwinder restores along
+ * with R6..R9 when it discards frames: r12 on x86-64, which holds the arena
+ * base, and x23..x28 on arm64, of which x23 is the stack pointer of the
+ * stack in arena and x25..x28 are the BPF frame pointer, the tail call count
+ * pointer, the private stack pointer and the arena base, while x24 is left
+ * alone by JITed code but may be in use by the C code of the unwinder when
+ * it enters the exception callback, whose epilogue never runs.
  */
-#define BPF_THROW_NR_EXTRA		0
-/* The callee-saved registers the unwinder tracks: R6..R9. */
-#define BPF_THROW_NR_CALLEE_SAVED	4
+#if defined(CONFIG_X86_64)
+#define BPF_THROW_NR_EXTRA	1
+#elif defined(CONFIG_ARM64)
+#define BPF_THROW_NR_EXTRA	6
+#else
+#define BPF_THROW_NR_EXTRA	0
+#endif
+/* The callee-saved registers the unwinder tracks: R6..R9, then the extra ones. */
+#define BPF_THROW_NR_CALLEE_SAVED	(4 + BPF_THROW_NR_EXTRA)
 /* The size of struct bpf_throw_regs, for the entries: R0..R9 and the extra ones. */
 #define BPF_THROW_REGS_SIZE		(8 * (10 + BPF_THROW_NR_EXTRA))
 
