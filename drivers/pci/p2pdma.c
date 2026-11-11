@@ -520,18 +520,23 @@ static void seq_buf_print_bus_devfn(struct seq_buf *buf, struct pci_dev *pdev)
 	seq_buf_printf(buf, "%s;", pci_name(pdev));
 }
 
+#ifdef CONFIG_X86
 static bool cpu_supports_p2pdma(void)
 {
-#ifdef CONFIG_X86
 	struct cpuinfo_x86 *c = &cpu_data(0);
 
 	/* Any AMD CPU whose family ID is Zen or newer supports p2pdma */
 	if (c->x86_vendor == X86_VENDOR_AMD && c->x86 >= 0x17)
 		return true;
-#endif
 
 	return false;
 }
+#else /* !CONFIG_X86 */
+static bool cpu_supports_p2pdma(void)
+{
+	return false;
+}
+#endif /* CONFIG_X86 */
 
 static const struct pci_p2pdma_whitelist_entry {
 	unsigned short vendor;
