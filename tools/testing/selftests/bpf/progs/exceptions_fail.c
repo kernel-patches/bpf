@@ -561,6 +561,76 @@ __naked int reject_callee_releases_sometimes(void)
 	: __clobber_all);
 }
 
+/* Discards the record in R1. */
+__used __naked static __noinline int discard_rec(void)
+{
+	asm volatile (
+	"r2 = 0;"
+	"call %[bpf_ringbuf_discard];"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm(bpf_ringbuf_discard)
+	: __clobber_all);
+}
+
+/* Leaves the record in R1 with its caller. */
+__used __naked static __noinline int keep_rec(void)
+{
+	asm volatile (
+	"r0 = 0;"
+	"exit;"
+	::: __clobber_all);
+}
+
+/*
+ * The record is in no register at the throw, so it is in a slot. The insns in
+ * front of the callx empty the slot for the subprog that is handed the
+ * record, and would for the one that leaves it with the caller as well, which
+ * discards it after the call.
+ */
+SEC("?tc")
+__arch_x86_64 __arch_arm64
+__failure __msg("to a subprog that releases it and to one that does not")
+__naked int reject_callx_releases_sometimes(void)
+{
+	asm volatile (
+	"r7 = *(u32 *)(r1 + %[len]);"
+	"r1 = %[fail_ringbuf] ll;"
+	"r2 = 8;"
+	"r3 = 0;"
+	"call %[bpf_ringbuf_reserve];"
+	"if r0 == 0 goto 3f;"
+	"r6 = r0;"
+	"r0 = 0;"
+	"if r7 != 3 goto 1f;"
+	"r6 = 0;"
+	"r1 = 0;"
+	"call %[bpf_throw];"
+	"1: r2 = %[discard_rec] ll;"
+	"r8 = 0;"
+	"if r7 != 1 goto 2f;"
+	"r2 = %[keep_rec] ll;"
+	"r8 = 1;"
+	"2: r1 = r6;"
+	"callx r2;"
+	"if r8 == 0 goto 3f;"
+	"r1 = r6;"
+	"r2 = 0;"
+	"call %[bpf_ringbuf_discard];"
+	"3: r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(fail_ringbuf),
+	  __imm_addr(discard_rec),
+	  __imm_addr(keep_rec),
+	  __imm(bpf_ringbuf_reserve),
+	  __imm(bpf_ringbuf_discard),
+	  __imm(bpf_throw),
+	  [len]"i"(offsetof(struct __sk_buff, len))
+	: __clobber_all);
+}
+
 __used static __noinline void leave_rcu(void)
 {
 	bpf_rcu_read_unlock();

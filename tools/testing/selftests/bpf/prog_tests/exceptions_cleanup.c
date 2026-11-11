@@ -253,6 +253,15 @@ static void run_suite(const char *prefix)
 	       1, "", .param = 10);
 	RUN_AS(throw_callee_consumes_from_slot, "throw_callee_consumes_from_slot_return", 0,
 	       1, "", .param = 8);
+	/* a callx hands over like a call, and its caller empties the slot in front of it */
+	RUN_AS(throw_callx_consumes_from_slot, "throw_callx_consumes_from_slot_caller", THROWN,
+	       1, "0", .param = 3);
+	RUN_AS(throw_callx_consumes_from_slot, "throw_callx_consumes_from_slot_callee", THROWN,
+	       1, "0", .param = 1);
+	RUN_AS(throw_callx_consumes_from_slot, "throw_callx_consumes_from_slot_after", THROWN,
+	       1, "", .param = 2);
+	RUN_AS(throw_callx_consumes_from_slot, "throw_callx_consumes_from_slot_return", 0,
+	       1, "", .param = 0);
 	/* the callee has it nowhere at its throw and keeps it in a slot of its own */
 	RUN_AS(throw_callee_consumes_slot, "throw_callee_consumes_slot_throw", THROWN, 1, "0",
 	       .param = 1);

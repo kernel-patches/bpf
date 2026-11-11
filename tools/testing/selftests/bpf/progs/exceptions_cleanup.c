@@ -1731,6 +1731,50 @@ __naked int throw_callee_consumes_from_slot(void)
 }
 
 /*
+ * The same through the address of the callee, with the record in no register
+ * at the throw of the caller: the insns in front of the callx empty the slot
+ * of the caller, so a throw of the callee in front of its discard releases
+ * the record once.
+ */
+SEC("tc")
+__naked int throw_callx_consumes_from_slot(void)
+{
+	asm volatile (
+	"r1 = %[ringbuf] ll;"
+	"r2 = 8;"
+	"r3 = 0;"
+	"call %[bpf_ringbuf_reserve];"
+	"if r0 == 0 goto 2f;"
+	"r6 = r0;"
+	"r1 = %[acquired] ll;"
+	"*(u64 *)(r1 + 0) = r0;"
+	"r2 = 1;"
+	"r1 = %[acquired_cnt] ll;"
+	"*(u32 *)(r1 + 0) = r2;"
+	"r0 = 0;"
+	"r8 = %[param] ll;"
+	"r8 = *(u32 *)(r8 + 0);"
+	"if r8 != 3 goto 1f;"
+	"r6 = 0;"
+	"r1 = 0xeB9F;"
+	"call %[bpf_throw];"
+	"1: r1 = r6;"
+	"r2 = %[consume_in_callee] ll;"
+	"callx r2;"
+	"2: r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(ringbuf),
+	  __imm_addr(acquired),
+	  __imm_addr(acquired_cnt),
+	  __imm_addr(param),
+	  __imm_addr(consume_in_callee),
+	  __imm(bpf_ringbuf_reserve),
+	  __imm(bpf_throw)
+	: __clobber_all);
+}
+
+/*
  * Discards the record its caller hands it. When it throws instead the record
  * is in no register: the cookie has taken its place in R1.
  */

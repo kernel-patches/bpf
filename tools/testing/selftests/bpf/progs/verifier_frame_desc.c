@@ -799,6 +799,89 @@ __naked int callee_unlocks_slot(void)
 	: __clobber_all);
 }
 
+/*
+ * The same through the address of the callee: the callx finds the slot of the
+ * caller emptied as the call does, since the only subprog it calls unlocks.
+ */
+SEC("tc")
+__description("frame_desc: the caller empties the slot of a lock in front of a callx")
+__arch_x86_64 __arch_arm64
+__success __log_level(5)
+__msg("frame descriptors: slots 1 insns 3 sites 0 classes 1")
+__naked int callx_unlocks_slot(void)
+{
+	asm volatile (
+	"r6 = *(u32 *)(r1 + %[len]);"
+	"r1 = 0;"
+	"*(u32 *)(r10 - 4) = r1;"
+	"r1 = %[lock_values] ll;"
+	"r2 = r10;"
+	"r2 += -4;"
+	"call %[bpf_map_lookup_elem];"
+	"if r0 == 0 goto 2f;"
+	"r7 = r0;"
+	"r1 = r7;"
+	"r1 += %[lock_off];"
+	"call %[bpf_spin_lock];"
+	"if r6 != 1 goto 1f;"
+	"r7 = 0;"
+	"r1 = 0xeB9F;"
+	"call %[bpf_throw];"
+	"1: r1 = r7;"
+	"r2 = %[unlock_value] ll;"
+	"callx r2;"
+	"2: r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(lock_values),
+	  __imm_addr(unlock_value),
+	  __imm(bpf_map_lookup_elem),
+	  __imm(bpf_spin_lock),
+	  __imm(bpf_throw),
+	  [len]"i"(offsetof(struct __sk_buff, len)),
+	  [lock_off]"i"(offsetof(struct lock_value, lock))
+	: __clobber_all);
+}
+
+/*
+ * The caller has the record nowhere at its throw, so it keeps it in a slot:
+ * filled after the reserve, empty at the entry, and emptied in front of the
+ * callx that hands the record to the callee, which holds it in R6.
+ */
+SEC("tc")
+__description("frame_desc: a callx hands a record over from the slot of the caller")
+__arch_x86_64 __arch_arm64
+__success __log_level(5)
+__msg("frame descriptors: slots 1 insns 5 sites 1 classes 1")
+__naked int callx_consumes_record(void)
+{
+	asm volatile (
+	"r7 = *(u32 *)(r1 + %[len]);"
+	"r1 = %[ringbuf] ll;"
+	"r2 = 8;"
+	"r3 = 0;"
+	"call %[bpf_ringbuf_reserve];"
+	"if r0 == 0 goto 2f;"
+	"r6 = r0;"
+	"r0 = 0;"
+	"if r7 != 3 goto 1f;"
+	"r6 = 0;"
+	"r1 = 0xeB9F;"
+	"call %[bpf_throw];"
+	"1: r1 = r6;"
+	"r2 = %[consume_record] ll;"
+	"callx r2;"
+	"2: r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(ringbuf),
+	  __imm_addr(consume_record),
+	  __imm(bpf_ringbuf_reserve),
+	  __imm(bpf_throw),
+	  [len]"i"(offsetof(struct __sk_buff, len))
+	: __clobber_all);
+}
+
 static __noinline void take_slock(void)
 {
 	bpf_spin_lock(&slock);
