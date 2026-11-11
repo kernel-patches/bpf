@@ -717,9 +717,11 @@ static bool func_states_equal(struct bpf_verifier_env *env, struct bpf_func_stat
 	    old->entry_rcu_locks != cur->entry_rcu_locks ||
 	    old->entry_preempt_locks != cur->entry_preempt_locks)
 		return false;
-	/* the sections a frame left of those it was entered in matter to a throw, see frame_desc.c */
+	/* the sections a frame left and what it was handed matter to a throw, see frame_desc.c */
 	if (env->describe_frames && (old->rcu_released_below != cur->rcu_released_below ||
-				     old->preempt_released_below != cur->preempt_released_below))
+				     old->preempt_released_below != cur->preempt_released_below ||
+				     memcmp(old->entry_arg_acq, cur->entry_arg_acq,
+					    sizeof(old->entry_arg_acq))))
 		return false;
 
 	for (i = 0; i < MAX_BPF_REG; i++)

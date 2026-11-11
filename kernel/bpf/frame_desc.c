@@ -34,12 +34,15 @@
  * A slot belongs to one frame and holds one handle, so a program that throws
  * keeps to what that can express:
  *
- *  - A callee cannot reach the slot of its caller. What it releases of its
- *    caller's has no slot, or one the caller can empty in front of the
- *    call, see foreign_release().
+ *  - A callee cannot reach the slot of its caller. A reference it releases
+ *    that its caller passes it in a register is handed over to it by the
+ *    call: it is the callee's from its entry, and no longer the caller's.
+ *    What it releases otherwise, the lock of its caller for one, has no
+ *    slot, or one the caller can empty in front of the call, see
+ *    bpf_frame_desc_record_call() and foreign_release().
  *  - A slot goes with its frame. A reference a subprog returns in R0 is
  *    acquired by the call for the caller, like the call of a kfunc that
- *    returns one.
+ *    returns one, and one it was handed and did not release it gives back.
  *    Whatever else a frame comes to hold of what another frame acquired can
  *    have no slot: a lock a subprog returns holding, or a stack object a
  *    callee creates in the stack of its caller. Likewise a subprog whose
@@ -715,8 +718,13 @@ static struct bpf_res_call *call_note(struct bpf_verifier_env *env, u32 insn, u1
 /*
  * The current insn releases @ref, which a frame below the current one owns.
  * Nothing tells a callee where the slot of its caller is, so it cannot clear
- * one. There are two ways out:
+ * one. There are three ways out:
  *
+ *  - The call hands what the callee releases over to it, when it is passed in
+ *    a register: the callee owns it from its entry, as if it had acquired it
+ *    there, see bpf_frame_desc_record_call(). Which arguments a subprog
+ *    releases is found out here, and the round of the main pass is done again
+ *    with that known.
  *  - What the caller holds without a slot needs none cleared: its sites say
  *    where the handle is on the visits that find it held, and say nothing on
  *    those that find it released.
@@ -726,9 +734,7 @@ static struct bpf_res_call *call_note(struct bpf_verifier_env *env, u32 insn, u1
  *
  * The functions between the owner and the current frame are verified in the
  * context of their callers from now on, so that every throw sees the frames
- * below it as they are. The round of the main pass that finds one out is done
- * again, since it recorded the frames of its callers at the call, holding
- * what they held then.
+ * below it as they are.
  */
 static int foreign_release(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
 			   const struct bpf_reference_state *ref, struct bpf_res_acq *acq)
@@ -736,13 +742,28 @@ static int foreign_release(struct bpf_verifier_env *env, const struct bpf_verifi
 	const struct bpf_func_state *below = st->frame[ref->frameno + 1];
 	struct bpf_subprog_info *sub;
 	struct bpf_res_call *c;
-	int f;
+	int f, k;
 
 	for (f = ref->frameno + 1; f <= st->curframe; f++) {
 		sub = &env->subprog_info[st->frame[f]->subprogno];
 		if (sub->releases_inherited)
 			continue;
 		sub->releases_inherited = true;
+		env->frame_desc_redo = true;
+	}
+	/* every frame it was passed down through in a register is handed it by the one below */
+	for (f = ref->frameno + 1; f <= st->curframe; f++) {
+		if (!ref->id || ref->type != REF_TYPE_PTR || (acq->flags & BPF_RES_F_ARG))
+			break;
+		for (k = BPF_REG_1; k <= BPF_REG_5; k++)
+			if (st->frame[f]->entry_arg_id[k - 1] == ref->id)
+				break;
+		if (k > BPF_REG_5)
+			break;
+		sub = &env->subprog_info[st->frame[f]->subprogno];
+		if (sub->consumes & BIT(k))
+			continue;
+		sub->consumes |= BIT(k);
 		env->frame_desc_redo = true;
 	}
 	if (!acq->foreign)
@@ -828,6 +849,10 @@ int bpf_frame_desc_record_section(struct bpf_verifier_env *env, u8 kind, s8 delt
  *
  *  - A reference in R0 the call acquires for the caller, like the call of a
  *    kfunc that returns one, see bpf_frame_desc_record_return().
+ *  - What the call handed the frame to release, and it did not on this path,
+ *    is its caller's again, as what the caller acquired it as. The caller has
+ *    emptied the slot of that, if it has one, see
+ *    bpf_frame_desc_record_call().
  *  - Anything else, a lock the frame took for its caller, stays what it was
  *    acquired as, and can have no slot: the sites of the caller have to say
  *    where it is, or no throw may find it held, see
@@ -843,7 +868,10 @@ int bpf_frame_desc_record_exit(struct bpf_verifier_env *env)
 {
 	struct bpf_verifier_state *st = env->cur_state;
 	const struct bpf_func_state *frame = st->frame[st->curframe];
+	const struct bpf_res_acq *acq;
 	struct bpf_res_call *c;
+	u16 back;
+	s16 adj;
 	int i;
 
 	if (!env->describe_frames || st->speculative)
@@ -855,6 +883,25 @@ int bpf_frame_desc_record_exit(struct bpf_verifier_env *env)
 								       frame->rcu_released_below,
 					       st->active_preempt_locks != frame->entry_preempt_locks +
 									   frame->preempt_released_below);
+	for (i = 0; st->curframe && i < st->acquired_refs; i++) {
+		struct bpf_reference_state *ref = &st->refs[i];
+
+		if (!ref->res || ref->frameno != st->curframe)
+			continue;
+		acq = &env->res_acqs[ref->acq - 1];
+		if (!(acq->flags & BPF_RES_F_ENTRY))
+			continue;
+		/* the call acquires what R0 carries */
+		if (ref->type == REF_TYPE_PTR && ref->id &&
+		    reg_ref_off(&frame->regs[BPF_REG_0], ref->id, &adj))
+			continue;
+		back = frame->entry_arg_acq[acq->reg - 1];
+		if (!back)
+			continue;
+		env->res_acqs[back - 1].handed_back = true;
+		ref->acq = back;
+		ref->frameno = st->curframe - 1;
+	}
 	/* does the caller hold after the call what a callee may release in it? */
 	if (!st->curframe || !env->subprog_info[frame->subprogno].releases_inherited)
 		return 0;
@@ -865,6 +912,71 @@ int bpf_frame_desc_record_exit(struct bpf_verifier_env *env)
 		if (!c)
 			return -ENOMEM;
 		c->held_after = true;
+	}
+	return 0;
+}
+
+/*
+ * Frame @callee of @st is entered with its arguments in place, by the call at
+ * insn @callsite of the frame below it when @st is given; a callback, a
+ * callx and a function verified on its own come with none.
+ *
+ * What a subprog releases of its caller's through an argument, see
+ * bpf_subprog_info::consumes, the call hands over to it: the reference the
+ * caller holds and passes in that register. For the caller the call releases
+ * it, so its handle leaves the slot of the caller in front of the call. For
+ * the callee its entry acquires it, with the handle in the register, and it
+ * holds it like what it acquires itself: its sites say where it keeps it, or
+ * a slot of its own does, filled at its entry.
+ *
+ * That slot is filled on every call, so every call has to pass what its
+ * caller holds, or NULL: bpf_subprog_info::entry_none has the arguments some
+ * call passes something else in.
+ */
+int bpf_frame_desc_record_call(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
+			       struct bpf_func_state *callee, int callsite)
+{
+	struct bpf_subprog_info *sub = &env->subprog_info[callee->subprogno];
+	struct bpf_reference_state *ref;
+	int i, k, acq, err;
+	s16 adj;
+
+	if (!env->describe_frames || (st && st->speculative))
+		return 0;
+	for (k = BPF_REG_1; k <= BPF_REG_5; k++) {
+		struct bpf_reg_state *reg = &callee->regs[k];
+
+		callee->entry_arg_id[k - 1] = 0;
+		callee->entry_arg_acq[k - 1] = 0;
+		if (reg->type == SCALAR_VALUE || reg->type == NOT_INIT) {
+			if ((sub->consumes & BIT(k)) && !bpf_register_is_null(reg))
+				sub->entry_none |= BIT(k);
+			continue;
+		}
+		callee->entry_arg_id[k - 1] = reg->id;
+		if (!(sub->consumes & BIT(k)))
+			continue;
+		for (i = 0, ref = NULL; st && i < st->acquired_refs; i++) {
+			ref = &st->refs[i];
+			if (ref->frameno == callee->frameno - 1 && ref->acq && ref->type == REF_TYPE_PTR &&
+			    !(env->res_acqs[ref->acq - 1].flags & BPF_RES_F_ARG) &&
+			    reg_ref_off(reg, ref->id, &adj))
+				break;
+			ref = NULL;
+		}
+		if (!ref) {
+			sub->entry_none |= BIT(k);
+			continue;
+		}
+		err = rel_add(env, callsite, ref->acq - 1, k, 0, adj, 0);
+		if (err)
+			return err;
+		acq = acq_add(env, sub->start, ref->res - 1, k, BPF_RES_F_ENTRY, adj, 0);
+		if (acq < 0)
+			return acq;
+		callee->entry_arg_acq[k - 1] = ref->acq;
+		ref->frameno = callee->frameno;
+		ref->acq = acq + 1;
 	}
 	return 0;
 }
@@ -1129,9 +1241,11 @@ void bpf_frame_desc_reset(struct bpf_verifier_env *env)
 	env->res_loc_cnt = 0;
 	env->res_call_cnt = 0;
 	env->frame_desc_redo = false;
-	/* that the subprogs release what their callers hold stays */
-	for (i = 0; i < env->subprog_cnt; i++)
+	/* what the subprogs release stays, what the calls of the round passed them goes */
+	for (i = 0; i < env->subprog_cnt; i++) {
+		env->subprog_info[i].entry_none = 0;
 		env->subprog_info[i].section_delta = 0;
+	}
 	for (i = 0; i < env->prog->len; i++) {
 		env->insn_aux_data[i].res_none = false;
 		env->insn_aux_data[i].res_none_r0 = false;
@@ -1232,13 +1346,13 @@ static int emit_acquire_after(struct bpf_insn *buf, const struct bpf_res_acq *a)
 
 /*
  * A frame above the one that holds what acquisition @acq acquired releases it,
- * and the acquisition has a slot. The holder can clear the slot itself, in
- * front of the call the release happens in, when the resource is gone after
- * every such call and no throw finds the holder with it at the call: the slot
- * is empty then for as long as the callee can throw after the release, and it
- * was no use before it. The call is one of a subprog: a helper that calls a
- * callback may not call it at all, and the holder has the resource after it
- * then.
+ * without being handed it, and the acquisition has a slot. The holder can
+ * clear the slot itself, in front of the call the release happens in, when
+ * the resource is gone after every such call and no throw finds the holder
+ * with it at the call: the slot is empty then for as long as the callee can
+ * throw after the release, and it was no use before it. The call is one of a
+ * subprog: a helper that calls a callback may not call it at all, and the
+ * holder has the resource after it then.
  */
 static bool foreign_cleared(struct bpf_verifier_env *env, u16 acq, const u32 *new_of, u32 orig_len)
 {
@@ -1282,7 +1396,7 @@ static int slot_can_be_kept(struct bpf_verifier_env *env, u32 acq)
 	for (i = 0; i < env->res_acq_cnt; i++) {
 		b = &env->res_acqs[i];
 		if (i == acq || b->insn != a->insn || b->reg != a->reg ||
-		    (a->flags ^ b->flags) & BPF_RES_F_CTX)
+		    (a->flags ^ b->flags) & (BPF_RES_F_CTX | BPF_RES_F_ENTRY))
 			continue;
 		verbose(env, "frame_desc: insn %d acquires resources of different types on different paths\n",
 			a->insn);
@@ -1387,8 +1501,24 @@ int bpf_frame_desc_resolve(struct bpf_verifier_env *env)
 			ret = -EINVAL;
 			break;
 		}
+		/* the holder emptied the slot for the callee, which did not release */
+		if (a->handed_back) {
+			verbose(env, "frame_desc: what insn %d acquires is in a hidden slot, and a subprog it is passed to releases it on some paths only, which is not supported in a program that throws\n",
+				a->insn);
+			ret = -EINVAL;
+			break;
+		}
+		/* the slot of what a subprog is handed is filled on every call of it */
+		if ((a->flags & BPF_RES_F_ENTRY) &&
+		    (bpf_find_containing_subprog(env, new_of[a->insn])->entry_none & BIT(a->reg))) {
+			verbose(env, "frame_desc: R%d of the subprog at insn %d is what its caller holds on some calls only, which is not supported in a program that throws\n",
+				a->reg, a->insn);
+			ret = -EINVAL;
+			break;
+		}
 		/* some visit of the insn has nothing a slot can hold where this one has */
-		if (!(a->flags & BPF_RES_F_CTX) && acquires_sometimes(env, new_of[a->insn], a)) {
+		if (!(a->flags & (BPF_RES_F_CTX | BPF_RES_F_ENTRY)) &&
+		    acquires_sometimes(env, new_of[a->insn], a)) {
 			verbose(env, "frame_desc: insn %d acquires a resource on some paths only, or one of a type that cannot be released\n",
 				a->insn);
 			ret = -EINVAL;
@@ -1535,10 +1665,11 @@ static int emit_items(struct bpf_verifier_env *env, const struct res_item *it, i
 }
 
 /*
- * At the entry of each subprog: its slots and counts start out empty, and
- * the main program takes the references the kernel passed it that it keeps
- * in a slot from the context, which R1 points at. The insns go in front of
- * the first one, which a jump to it skips.
+ * At the entry of each subprog: its slots and counts start out empty, but for
+ * what it is handed: the main program takes the references the kernel passed
+ * it that it keeps in a slot from the context, which R1 points at, and a
+ * subprog what its caller hands it from the argument. The insns go in front
+ * of the first one, which a jump to it skips.
  */
 static int emit_entries(struct bpf_verifier_env *env)
 {
@@ -1547,7 +1678,7 @@ static int emit_entries(struct bpf_verifier_env *env)
 	int s, cnt, ret = 0;
 
 	new_of = insns_of_pass(env, &orig_len);
-	buf = kvcalloc(2 * (env->res_acq_cnt + 2), sizeof(*buf), GFP_KERNEL_ACCOUNT);
+	buf = kvcalloc(4 * (env->res_acq_cnt + 2), sizeof(*buf), GFP_KERNEL_ACCOUNT);
 	if (!new_of || !buf) {
 		ret = -ENOMEM;
 		goto out;
@@ -1564,6 +1695,13 @@ static int emit_entries(struct bpf_verifier_env *env)
 			if (a->flags & BPF_RES_F_CTX) {
 				buf[cnt++] = BPF_LDX_MEM(BPF_DW, BPF_REG_AX, BPF_REG_1, a->obj_off);
 				buf[cnt++] = BPF_STX_MEM(BPF_DW, BPF_REG_FP, BPF_REG_AX, a->off);
+			} else if ((a->flags & BPF_RES_F_ENTRY) && a->adj) {
+				buf[cnt++] = BPF_MOV64_REG(BPF_REG_AX, a->reg);
+				buf[cnt++] = BPF_JMP_IMM(BPF_JEQ, BPF_REG_AX, 0, 1);
+				buf[cnt++] = BPF_ALU64_IMM(BPF_SUB, BPF_REG_AX, a->adj);
+				buf[cnt++] = BPF_STX_MEM(BPF_DW, BPF_REG_FP, BPF_REG_AX, a->off);
+			} else if (a->flags & BPF_RES_F_ENTRY) {
+				buf[cnt++] = BPF_STX_MEM(BPF_DW, BPF_REG_FP, a->reg, a->off);
 			} else {
 				buf[cnt++] = BPF_ST_MEM(BPF_DW, BPF_REG_FP, a->off, 0);
 			}
@@ -1619,8 +1757,10 @@ int bpf_frame_desc_emit(struct bpf_verifier_env *env)
 	for (i = 0; i < env->res_call_cnt; i++)
 		if (env->res_calls[i].clear)
 			items[n++] = (struct res_item) { new_of[env->res_calls[i].insn], i, ITEM_CLEAR };
+	/* the entry of a subprog fills the slots of what it is handed, see emit_entries() */
 	for (i = 0; i < env->res_acq_cnt; i++)
-		if (env->res_acqs[i].slot && !(env->res_acqs[i].flags & BPF_RES_F_CTX))
+		if (env->res_acqs[i].slot &&
+		    !(env->res_acqs[i].flags & (BPF_RES_F_CTX | BPF_RES_F_ENTRY)))
 			items[n++] = (struct res_item) { new_of[env->res_acqs[i].insn], i, ITEM_ACQUIRE };
 	sort(items, n, sizeof(*items), item_cmp, NULL);
 	for (i = 0; i < n; i = k) {

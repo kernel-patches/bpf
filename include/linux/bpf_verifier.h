@@ -524,6 +524,13 @@ struct bpf_func_state {
 	 */
 	u32 rcu_released_below;
 	u32 preempt_released_below;
+	/*
+	 * The ids of what the frame was called with in R1 to R5, and the
+	 * acquisition, plus one, each was of in the caller when the call
+	 * handed it to the frame, see bpf_frame_desc_record_call().
+	 */
+	u32 entry_arg_id[5];
+	u16 entry_arg_acq[5];
 
 	/* The following fields should be last. See copy_func_state() */
 	/* The state of the stack. Each element of the array describes BPF_REG_SIZE
@@ -1113,6 +1120,13 @@ struct bpf_subprog_info {
 	/* it releases what its caller holds, so it's verified in the context of such caller */
 	bool releases_inherited: 1;
 	/*
+	 * The arguments, a bit per register, that it releases what its caller
+	 * holds through: the call hands that to it, see frame_desc.c. And those
+	 * of them that some call passes something else in.
+	 */
+	u8 consumes;
+	u8 entry_none;
+	/*
 	 * The kinds of sections, a bit each, that a callee returned to it in
 	 * more or fewer of than it called the callee in: a count it keeps in a
 	 * slot does not follow that, see frame_desc.c.
@@ -1260,6 +1274,7 @@ void bpf_patch_image_install(struct bpf_prog *prog, const struct bpf_patch_image
 #define BPF_RES_F_DEREF		BIT(2)	/* the handle is the first word of a dynptr on the stack */
 #define BPF_RES_F_CTX		BIT(3)	/* a __ref argument the kernel passes the main program */
 #define BPF_RES_F_NO_PTR	BIT(5)	/* a lock that no pointer to what it is in leads to */
+#define BPF_RES_F_ENTRY		BIT(4)	/* what its caller hands a subprog in the register */
 
 /*
  * A call that acquires a resource, see frame_desc.c. When a frame can be
@@ -1269,7 +1284,11 @@ void bpf_patch_image_install(struct bpf_prog *prog, const struct bpf_patch_image
  * per acquiring call.
  */
 struct bpf_res_acq {
-	u32 insn;	/* the insn as the main pass named it; the argument with BPF_RES_F_CTX */
+	/*
+	 * The insn as the main pass named it; the argument with BPF_RES_F_CTX,
+	 * the first insn of the subprog with BPF_RES_F_ENTRY.
+	 */
+	u32 insn;
 	u16 res;	/* the class of what it acquires */
 	u8 reg;		/* R0 for what the call returns, else the argument that is the handle */
 	u8 flags;	/* BPF_RES_F_* */
@@ -1279,6 +1298,7 @@ struct bpf_res_acq {
 	bool held;	/* some frame holds what it acquired at a site */
 	bool slot;	/* and some site cannot say where: the handle is kept in a slot */
 	u32 foreign;	/* an insn of another frame that releases what it acquired, plus one */
+	bool handed_back; /* a callee it was handed to returned holding it */
 	/*
 	 * An insn, plus one, that leaves what it acquired with another frame
 	 * than the one that ran the acquisition: the call a subprog returns
@@ -1344,9 +1364,9 @@ struct bpf_res_rel {
 
 /*
  * A call of a subprog during which a frame above the caller releases what an
- * acquisition of the caller acquired. The caller clears its slot in front of
- * the call when no throw finds it holding the resource there and no return
- * from the call does, see frame_desc.c.
+ * acquisition of the caller acquired, without being handed it. The caller
+ * clears its slot in front of the call when no throw finds it holding the
+ * resource there and no return from the call does, see frame_desc.c.
  */
 struct bpf_res_call {
 	u32 insn;	/* the call; U32_MAX when the caller is not in the state */
@@ -2383,6 +2403,8 @@ int bpf_frame_desc_record_section(struct bpf_verifier_env *env, u8 kind, s8 delt
 int bpf_frame_desc_record_exit(struct bpf_verifier_env *env);
 void bpf_frame_desc_record_sections(struct bpf_verifier_env *env, int subprog, bool rcu,
 				    bool preempt);
+int bpf_frame_desc_record_call(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
+			       struct bpf_func_state *callee, int callsite);
 bool bpf_frame_desc_keeps(const struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
 			  int f, const struct bpf_reg_state *reg);
 u16 bpf_frame_desc_kept_regs(const struct bpf_verifier_env *env, const struct bpf_verifier_state *st,

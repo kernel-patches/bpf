@@ -11451,6 +11451,12 @@ static int setup_func_entry(struct bpf_verifier_env *env, int subprog, int calls
 	err = set_callee_state_cb(env, caller, callee, callsite);
 	if (err)
 		goto err_out;
+	/* a plain call hands the callee what it releases of the caller's, see frame_desc.c */
+	err = bpf_frame_desc_record_call(env, set_callee_state_cb == set_callee_state &&
+					 bpf_pseudo_call(&env->prog->insnsi[callsite]) ? state : NULL,
+					 callee, callsite);
+	if (err)
+		goto err_out;
 
 	/* only increment it after check_reg_arg() finished */
 	state->curframe++;
@@ -11858,6 +11864,12 @@ static int call_func_on_its_own(struct bpf_verifier_env *env, int subprog, int i
 			bpf_free_verifier_state(&entry, false);
 			return err;
 		}
+	}
+	/* what it is called with, should it release some of what it inherits */
+	err = bpf_frame_desc_record_call(env, NULL, callee, insn_idx);
+	if (err) {
+		bpf_free_verifier_state(&entry, false);
+		return err;
 	}
 
 	account_current_path(env);
