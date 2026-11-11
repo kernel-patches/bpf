@@ -198,7 +198,6 @@ static void dump_ail_list(struct gfs2_sbd *sdp)
 
 void gfs2_ail1_flush(struct gfs2_sbd *sdp, struct writeback_control *wbc)
 {
-	struct list_head *head = &sdp->sd_ail1_list;
 	struct gfs2_trans *tr;
 	struct blk_plug plug;
 	int ret;
@@ -215,7 +214,7 @@ restart:
 		dump_ail_list(sdp);
 		goto out;
 	}
-	list_for_each_entry_reverse(tr, head, tr_list) {
+	list_for_each_entry_reverse(tr, &sdp->sd_ail1_list, tr_list) {
 		if (wbc->nr_to_write <= 0)
 			break;
 		ret = gfs2_ail1_start_one(sdp, wbc, tr, &plug);
@@ -403,18 +402,17 @@ static void __ail2_empty(struct gfs2_sbd *sdp, struct gfs2_trans *tr)
 
 static void ail2_empty(struct gfs2_sbd *sdp, unsigned int new_tail)
 {
-	struct list_head *ail2_list = &sdp->sd_ail2_list;
 	unsigned int old_tail = sdp->sd_log_tail;
 	struct gfs2_trans *tr, *safe;
 
 	spin_lock(&sdp->sd_ail_lock);
 	if (old_tail <= new_tail) {
-		list_for_each_entry_safe(tr, safe, ail2_list, tr_list) {
+		list_for_each_entry_safe(tr, safe, &sdp->sd_ail2_list, tr_list) {
 			if (old_tail <= tr->tr_first && tr->tr_first < new_tail)
 				__ail2_empty(sdp, tr);
 		}
 	} else {
-		list_for_each_entry_safe(tr, safe, ail2_list, tr_list) {
+		list_for_each_entry_safe(tr, safe, &sdp->sd_ail2_list, tr_list) {
 			if (old_tail <= tr->tr_first || tr->tr_first < new_tail)
 				__ail2_empty(sdp, tr);
 		}

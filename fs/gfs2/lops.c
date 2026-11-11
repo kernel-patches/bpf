@@ -849,7 +849,6 @@ static void revoke_lo_before_commit(struct gfs2_sbd *sdp, struct gfs2_trans *tr)
 {
 	struct gfs2_meta_header *mh;
 	unsigned int offset;
-	struct list_head *head = &sdp->sd_log_revokes;
 	struct gfs2_bufdata *bd;
 	struct page *page;
 	unsigned int length;
@@ -862,7 +861,7 @@ static void revoke_lo_before_commit(struct gfs2_sbd *sdp, struct gfs2_trans *tr)
 	page = gfs2_get_log_desc(sdp, GFS2_LOG_DESC_REVOKE, length, sdp->sd_log_num_revoke);
 	offset = sizeof(struct gfs2_log_descriptor);
 
-	list_for_each_entry(bd, head, bd_list) {
+	list_for_each_entry(bd, &sdp->sd_log_revokes, bd_list) {
 		sdp->sd_log_num_revoke--;
 
 		if (offset + sizeof(u64) > sdp->sd_sb.sb_bsize) {
