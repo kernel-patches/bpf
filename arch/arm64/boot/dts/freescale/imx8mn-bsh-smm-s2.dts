@@ -22,6 +22,7 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_gpmi_nand>;
 	bootph-pre-ram;
+	fsl,use-minimum-ecc;
 	status = "okay";
 };
 
