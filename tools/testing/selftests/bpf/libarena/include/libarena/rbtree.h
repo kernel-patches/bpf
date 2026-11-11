@@ -71,6 +71,7 @@ int rb_find(struct rbtree __arena *rbtree, u64 key, u64 *value);
 int rb_print(struct rbtree __arena *rbtree);
 int rb_least(struct rbtree __arena *rbtree, u64 *key, u64 *value);
 int rb_pop(struct rbtree __arena *rbtree, u64 *key, u64 *value);
+struct rbnode __arena *rb_next(struct rbnode __arena *node);
 
 int rb_insert_node(struct rbtree __arena *rbtree, struct rbnode __arena *node);
 int rb_remove_node(struct rbtree __arena *rbtree, struct rbnode __arena *node);
