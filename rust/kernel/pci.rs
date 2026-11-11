@@ -94,12 +94,20 @@ unsafe impl<T: Driver> driver::RegistrationOps for Adapter<T> {
         name: &'static CStr,
         module: &'static ThisModule,
     ) -> Result {
+        const_assert!(
+            T::HAS_SRIOV_ENABLE == T::HAS_SRIOV_DISABLE,
+            "PCI drivers must implement both sriov_enable and sriov_disable"
+        );
+
         // SAFETY: It's safe to set the fields of `struct pci_driver` on initialization.
         unsafe {
             (*pdrv.get()).name = name.as_char_ptr();
             (*pdrv.get()).probe = Some(Self::probe_callback);
             (*pdrv.get()).remove = Some(Self::remove_callback);
             (*pdrv.get()).id_table = T::ID_TABLE.as_ptr();
+            if T::HAS_SRIOV_ENABLE {
+                (*pdrv.get()).sriov_configure = Some(Self::sriov_configure_callback);
+            }
         }
 
         // SAFETY: `pdrv` is guaranteed to be a valid `DriverType`.
@@ -355,6 +363,85 @@ pub trait Driver {
     fn unbind<'bound>(dev: &'bound Device<device::Core<'_>>, this: Pin<&Self::Data<'bound>>) {
         let _ = (dev, this);
     }
+
+    /// Enables Single Root I/O Virtualization (SR-IOV) for a PF.
+    ///
+    /// This callback is only invoked when `CONFIG_PCI_IOV` is enabled.
+    ///
+    /// Called when userspace writes a nonzero VF count to `sriov_numvfs`. The token carries the
+    /// requested count and permission to enable VFs on this PF. Return the guard obtained from
+    /// [`SriovEnable::enable()`] after completing setup; dropping it rolls back the enable.
+    ///
+    /// The PF must own a [`VfRegistration`] before enabling VFs. That registration disables
+    /// SR-IOV when the driver data is destroyed, while resources needed by VF drivers remain live.
+    /// Implement this callback and [`Self::sriov_disable()`] together, or implement neither.
+    ///
+    /// See [PCI Express I/O Virtualization].
+    ///
+    /// [PCI Express I/O Virtualization]: https://docs.kernel.org/PCI/pci-iov-howto.html
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use kernel::{
+    /// #     device::Core,
+    /// #     pci,
+    /// #     prelude::*, //
+    /// # };
+    /// # struct Data;
+    /// fn sriov_enable<'a>(
+    ///     _dev: &'a pci::Device<Core<'_>>,
+    ///     _data: Pin<&Data>,
+    ///     token: pci::SriovEnable<'a>,
+    /// ) -> Result<pci::SriovEnabled<'a>> {
+    ///     let num_vfs = token.num_vfs();
+    ///     let enabled = token.enable(num_vfs)?;
+    ///     // Complete any additional setup before returning the guard.
+    ///     Ok(enabled)
+    /// }
+    /// ```
+    #[optional]
+    fn sriov_enable<'a>(
+        _dev: &'a Device<device::Core<'_>>,
+        _data: Pin<&Self::Data<'a>>,
+        _token: SriovEnable<'a>,
+    ) -> Result<SriovEnabled<'a>>;
+
+    /// Disables all VFs of a PF in response to a userspace request.
+    ///
+    /// This callback is only invoked when `CONFIG_PCI_IOV` is enabled.
+    ///
+    /// Called when userspace writes zero to `sriov_numvfs`. Call [`SriovDisable::disable()`]
+    /// while resources used by VF drivers are still available. Returning an error before calling
+    /// it leaves the VFs enabled. Returning success requires that all VFs have been disabled.
+    ///
+    /// This callback is not invoked during PF unbind; [`VfRegistration`] owns that teardown.
+    /// Implement this callback and [`Self::sriov_enable()`] together, or implement neither.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use kernel::{
+    /// #     device::Core,
+    /// #     pci,
+    /// #     prelude::*, //
+    /// # };
+    /// # struct Data;
+    /// fn sriov_disable<'a>(
+    ///     _dev: &'a pci::Device<Core<'_>>,
+    ///     _data: Pin<&Data>,
+    ///     token: pci::SriovDisable<'a>,
+    /// ) -> Result {
+    ///     token.disable();
+    ///     Ok(())
+    /// }
+    /// ```
+    #[optional]
+    fn sriov_disable<'a>(
+        _dev: &'a Device<device::Core<'_>>,
+        _data: Pin<&Self::Data<'a>>,
+        _token: SriovDisable<'a>,
+    ) -> Result;
 }
 
 /// The PCI device representation.
