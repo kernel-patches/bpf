@@ -3484,23 +3484,29 @@ decode_session6(const struct xfrm_flow_keys *flkeys, struct flowi *fl, bool reve
 	if (reverse) {
 		fl6->saddr = flkeys->addrs.ipv6.dst;
 		fl6->daddr = flkeys->addrs.ipv6.src;
-		fl6->fl6_sport = flkeys->ports.dst;
-		fl6->fl6_dport = flkeys->ports.src;
 	} else {
 		fl6->saddr = flkeys->addrs.ipv6.src;
 		fl6->daddr = flkeys->addrs.ipv6.dst;
-		fl6->fl6_sport = flkeys->ports.src;
-		fl6->fl6_dport = flkeys->ports.dst;
 	}
 
-	switch (flkeys->basic.ip_proto) {
-	case IPPROTO_GRE:
-		fl6->fl6_gre_key = flkeys->gre.keyid;
-		break;
-	case IPPROTO_ICMPV6:
-		fl6->fl6_icmp_type = flkeys->icmp.type;
-		fl6->fl6_icmp_code = flkeys->icmp.code;
-		break;
+	if (!(flkeys->control.flags & FLOW_DIS_IS_FRAGMENT)) {
+		if (reverse) {
+			fl6->fl6_sport = flkeys->ports.dst;
+			fl6->fl6_dport = flkeys->ports.src;
+		} else {
+			fl6->fl6_sport = flkeys->ports.src;
+			fl6->fl6_dport = flkeys->ports.dst;
+		}
+
+		switch (flkeys->basic.ip_proto) {
+		case IPPROTO_GRE:
+			fl6->fl6_gre_key = flkeys->gre.keyid;
+			break;
+		case IPPROTO_ICMPV6:
+			fl6->fl6_icmp_type = flkeys->icmp.type;
+			fl6->fl6_icmp_code = flkeys->icmp.code;
+			break;
+		}
 	}
 
 	fl6->flowi6_proto = flkeys->basic.ip_proto;
@@ -3511,10 +3517,13 @@ int __xfrm_decode_session(struct net *net, struct sk_buff *skb, struct flowi *fl
 			  unsigned int family, int reverse)
 {
 	struct xfrm_flow_keys flkeys;
+	unsigned int flags = FLOW_DISSECTOR_F_STOP_AT_ENCAP;
 
 	memset(&flkeys, 0, sizeof(flkeys));
+	if (family == AF_INET6)
+		flags |= FLOW_DISSECTOR_F_PARSE_1ST_FRAG;
 	__skb_flow_dissect(net, skb, &xfrm_session_dissector, &flkeys,
-			   NULL, 0, 0, 0, FLOW_DISSECTOR_F_STOP_AT_ENCAP);
+			   NULL, 0, 0, 0, flags);
 
 	switch (family) {
 	case AF_INET:
