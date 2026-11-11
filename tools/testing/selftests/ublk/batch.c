@@ -241,6 +241,7 @@ static void ublk_init_batch_cmd(struct ublk_thread *t, __u16 q_id,
 
 	sqe->fd	= 0;	/* dev->fds[0] */
 	sqe->opcode	= IORING_OP_URING_CMD;
+	sqe->rw_flags	= 0;
 	sqe->flags	= IOSQE_FIXED_FILE;
 
 	cmd->q_id	= q_id;
