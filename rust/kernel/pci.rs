@@ -149,6 +149,19 @@ impl<T: Driver> Adapter<T> {
         let data = unsafe { pdev.as_ref().drvdata_borrow::<T::Data<'_>>() };
 
         T::unbind(pdev, data);
+
+        // SAFETY: The driver's unbind callback has returned, and no callbacks retain a borrow.
+        let data = unsafe { pdev.as_ref().drvdata_obtain::<T::Data<'_>>() };
+
+        // Drop the private data here, ahead of `driver::Registration::post_unbind_callback()`,
+        // which would otherwise drop it after `pci_device_remove()` returns. `drvdata_obtain()`
+        // has cleared the driver data pointer, so that callback finds nothing left to drop.
+        //
+        // This is a special case for VFIO-PCI: `vfio_pci_core_unregister_device()` must be
+        // called from `pci_device_remove()`. In general, private data must not rely on being
+        // dropped from the bus remove callback; any point after the driver's remove callback and
+        // before `devres_release_all()` in `device_unbind_cleanup()` is sufficient.
+        drop(data);
     }
 }
 
