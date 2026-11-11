@@ -799,6 +799,67 @@ __naked int callee_unlocks_slot(void)
 	: __clobber_all);
 }
 
+static __noinline void take_slock(void)
+{
+	bpf_spin_lock(&slock);
+}
+
+/*
+ * A subprog takes the lock and returns holding it, and the throw of its
+ * caller finds it held: the lock is at a fixed address, so no slot has to
+ * follow it out of the frame that took it.
+ */
+SEC("tc")
+__description("frame_desc: a lock a subprog returns holding, held at the throw")
+__arch_x86_64 __arch_arm64
+__success __log_level(5)
+__msg("frame descriptors: slots 0 insns 0 sites 1")
+int lock_wrapper_at_throw(struct __sk_buff *skb)
+{
+	take_slock();
+	if (skb->len > 100)
+		bpf_throw(0);
+	bpf_spin_unlock(&slock);
+	return 0;
+}
+
+/*
+ * The lock is in a map value the frame keeps a pointer to in R7: the
+ * descriptor of the throw names the register and how far into the value the
+ * lock is.
+ */
+SEC("tc")
+__description("frame_desc: a lock found through a pointer the frame keeps has no slot")
+__arch_x86_64 __arch_arm64
+__success __log_level(5)
+__msg("frame descriptors: slots 0 insns 0 sites 1")
+__naked int lock_in_value_at_throw(void)
+{
+	asm volatile (
+	"r1 = 0;"
+	"*(u32 *)(r10 - 4) = r1;"
+	"r1 = %[lock_values] ll;"
+	"r2 = r10;"
+	"r2 += -4;"
+	"call %[bpf_map_lookup_elem];"
+	"if r0 == 0 goto 1f;"
+	"r7 = r0;"
+	"r1 = r7;"
+	"r1 += %[lock_off];"
+	"call %[bpf_spin_lock];"
+	"r1 = 0xeB9F;"
+	"call %[bpf_throw];"
+	"1: r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(lock_values),
+	  __imm(bpf_map_lookup_elem),
+	  __imm(bpf_spin_lock),
+	  __imm(bpf_throw),
+	  [lock_off]"i"(offsetof(struct lock_value, lock))
+	: __clobber_all);
+}
+
 private(C) struct bpf_spin_lock wlock;
 
 static __noinline void take_wlock(void)

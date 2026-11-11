@@ -1887,4 +1887,67 @@ int throw_rcu_from_callee(struct __sk_buff *ctx)
 	return 0;
 }
 
+/* ---- locks the sites of a frame name ---- */
+
+static __noinline void take_glock(void)
+{
+	bpf_spin_lock(&glock);
+}
+
+/*
+ * A subprog takes the lock for its caller, which throws holding it: the lock
+ * of a global variable is at a fixed address, which the throw unlocks.
+ */
+SEC("tc")
+int throw_lock_from_callee(struct __sk_buff *ctx)
+{
+	mark_acquired(&glock);
+	take_glock();
+	if (ctx->len)
+		bpf_throw(0xeB9F);
+	bpf_spin_unlock(&glock);
+	return 0;
+}
+
+/*
+ * The lock of a map element is taken through the pointer in R7, which the
+ * frame still has at the throw: the lock is found through it.
+ */
+SEC("tc")
+__naked int throw_lock_in_value(void)
+{
+	asm volatile (
+	"r1 = 0;"
+	"*(u32 *)(r10 - 4) = r1;"
+	"r1 = %[lock_map] ll;"
+	"r2 = r10;"
+	"r2 += -4;"
+	"call %[bpf_map_lookup_elem];"
+	"if r0 == 0 goto 1f;"
+	"r7 = r0;"
+	"r2 = r7;"
+	"r2 += %[lock_off];"
+	"r1 = %[acquired] ll;"
+	"*(u64 *)(r1 + 0) = r2;"
+	"r2 = 1;"
+	"r1 = %[acquired_cnt] ll;"
+	"*(u32 *)(r1 + 0) = r2;"
+	"r1 = r7;"
+	"r1 += %[lock_off];"
+	"call %[bpf_spin_lock];"
+	"r1 = 0xeB9F;"
+	"call %[bpf_throw];"
+	"1: r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(lock_map),
+	  __imm_addr(acquired),
+	  __imm_addr(acquired_cnt),
+	  __imm(bpf_map_lookup_elem),
+	  __imm(bpf_spin_lock),
+	  __imm(bpf_throw),
+	  [lock_off]"i"(offsetof(struct locked_foo, lock))
+	: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";

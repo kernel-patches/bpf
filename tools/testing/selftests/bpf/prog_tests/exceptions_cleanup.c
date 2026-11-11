@@ -265,6 +265,9 @@ static void run_suite(const char *prefix)
 	/* What a frame holds that a callee acquired for it. */
 	THROW(throw_iter_from_callee, 1, "0");
 	THROW(throw_rcu_from_callee, 0, "s");
+	/* Locks the sites name: at a fixed address, or through a pointer the frame keeps. */
+	THROW(throw_lock_from_callee, 1, "0");
+	THROW(throw_lock_in_value, 1, "0");
 	/* A file and the reader of its dynptr, which goes first. */
 	snprintf(name, sizeof(name), "%sthrow_file_dynptr_held", prefix);
 	if (test__start_subtest(name))
