@@ -1023,6 +1023,7 @@ struct bpf_subprog_info {
 	u32 exit_idx;
 	struct bpf_iarray *jt; /* jump table shared by all gotox of this subprogram */
 	u16 stack_depth; /* max. stack depth used by this function */
+	/* bytes below the verified stack depth reserved for hidden slots, see bpf_reserve_stack_slots() */
 	u16 stack_extra;
 	u16 arena_stack_depth; /* size of the frame in the stack in arena */
 	u32 insns_total;
@@ -1208,6 +1209,13 @@ void bpf_patch_image_install(struct bpf_prog *prog, const struct bpf_patch_image
 /* single container for all structs
  * one verifier_env per bpf_check() call
  */
+/* Initialization of a hidden stack slot, emitted in the subprogram's prologue. */
+struct bpf_stack_init {
+	u32 subprog;
+	s16 off;
+	s32 imm;
+};
+
 struct bpf_verifier_env {
 	u32 insn_idx;
 	u32 prev_insn_idx;
@@ -1233,6 +1241,8 @@ struct bpf_verifier_env {
 	u32 insn_array_map_cnt;		/* number of used maps of type BPF_MAP_TYPE_INSN_ARRAY */
 	u32 id_gen;			/* used to generate unique reg IDs */
 	u32 hidden_subprog_cnt;		/* number of hidden subprogs */
+	struct bpf_stack_init *stack_inits; /* hidden slot initializations, see bpf_stack_slot_init() */
+	u32 stack_init_cnt;
 	int exception_callback_subprog;
 	bool explore_alu_limits;
 	bool allow_ptr_leaks;
@@ -2174,6 +2184,8 @@ int bpf_check_attach_btf_id_multi(struct btf *btf, struct bpf_prog *prog, u32 bt
 
 /* Functions in fixups.c, called from bpf_check() */
 void bpf_clear_insn_aux_data(struct bpf_verifier_env *env, int start, int len);
+int bpf_reserve_stack_slots(struct bpf_verifier_env *env, int subprog, int nr, s16 *off);
+int bpf_stack_slot_init(struct bpf_verifier_env *env, int subprog, s16 off, s32 imm);
 int bpf_remove_fastcall_spills_fills(struct bpf_verifier_env *env);
 int bpf_optimize_bpf_loop(struct bpf_verifier_env *env);
 void bpf_opt_hard_wire_dead_code_branches(struct bpf_verifier_env *env);

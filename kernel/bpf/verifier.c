@@ -25732,6 +25732,7 @@ err_free_env:
 	for (i = 0; i < env->func_set_cnt; i++)
 		kfree(env->func_sets[i]);
 	kfree(env->func_sets);
+	kvfree(env->stack_inits);
 	bpf_diag_free(env);
 	kvfree(env->idoms);
 	kvfree(env);
