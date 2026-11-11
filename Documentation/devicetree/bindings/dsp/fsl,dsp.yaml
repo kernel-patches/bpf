@@ -185,6 +185,8 @@ allOf:
             enum:
               - fsl,imx8mp-dsp
               - fsl,imx8mp-hifi4
+              - fsl,imx8ulp-dsp
+              - fsl,imx8ulp-hifi4
     then:
       required:
         - resets
