@@ -982,6 +982,18 @@ void __icmp_send(struct sk_buff *skb_in, int type, int code, __be32 info,
 	if (rt->rt_flags & (RTCF_BROADCAST | RTCF_MULTICAST))
 		goto ende;
 
+	/* Don't send parts of a decrypted skb onto the network. A received skb
+	 * was decrypted by the device, and the transport header may have been
+	 * encrypted. The different offloads can't be distinguished in all cases
+	 * so simply don't send the error.
+	 *
+	 * A locally originated skb to be encrypted may be quoted if its source
+	 * address (target of the error) is local.
+	 */
+	if (unlikely(skb_is_decrypted(skb_in)) &&
+	    (skb_in->skb_iif || !(rt->rt_flags & RTCF_LOCAL)))
+		goto ende;
+
 	/* peer icmp_ratelimit */
 	if (!icmpv4_xrlim_allow(net, rt, &fl4, type, code, apply_ratelimit))
 		goto ende;
