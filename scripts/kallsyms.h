@@ -34,6 +34,7 @@ struct sysmap {
 	struct sysmap_symbol *syms;
 	size_t nr_syms;
 	int addr_width;		/* hex digits of an address */
+	int big_endian;
 	struct elf_file elf;	/* the mapping the names point into */
 };
 

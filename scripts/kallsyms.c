@@ -60,6 +60,11 @@ static int all_symbols;
 static int pc_relative;
 static int verbose;
 
+static int big_endian;	/* Extracted from the elf file */
+
+static const char *out_bin_name;
+static FILE *out_bin_file;
+
 /* A dynamic array of symbols, encoded by symbol index. */
 struct sym_arr {
 	unsigned int *sym_indexes;
@@ -278,26 +283,16 @@ static void add_table_entry(struct sym_entry *sym)
 	table[table_cnt++] = sym;
 }
 
-static bool file_is_empty(const char *path)
-{
-	struct stat st;
-
-	if (stat(path, &st))
-		err(EXIT_FAILURE, "stat(%s) failed", path);
-
-	return st.st_size == 0;
-}
-
 /*
- * Read the symbols from vmlinux, writing System.map if asked to. The first
- * link has no symbols yet: an empty file gives an empty table.
+ * Read the symbols from vmlinux, writing System.map if asked to.
+ * The first link has no symbols yet: an absent file gives an empty table.
  */
 static void read_elf(const char *path, FILE *sysmap_out)
 {
 	struct sysmap *map;
 	size_t i;
 
-	if (file_is_empty(path))
+	if (!path || !*path)
 		return;
 
 	map = sysmap_read(path);
@@ -312,6 +307,8 @@ static void read_elf(const char *path, FILE *sysmap_out)
 			add_table_entry(sym);
 	}
 
+	big_endian = map->big_endian;
+
 	sysmap_free(map);
 }
 
@@ -322,22 +319,34 @@ static void output_label(const char *label)
 	printf("%s:\n", label);
 }
 
-static long bin_pos(FILE *file)
+static void write_incbin_header(const char *msg, unsigned long *bin_offset)
 {
-	const long pos = ftell(file);
+	static unsigned char marker[18] = "################" "#";
+	static unsigned char nulls[16];
+	unsigned long off;
 
-	if (pos < 0)
-		err(EXIT_FAILURE, "ftell on bin.out file failed");
-
-	return pos;
-}
-
-static void write_incbin(const char *filename, long start, long end)
-{
-	if (start >= end)
+	if (!out_bin_file)
 		return;
 
-	printf("\t.incbin \"%s\", %ld, %ld\n", filename, start, end - start);
+	off = *bin_offset;
+
+	/* 16 byte align and add header for diagnostic hexdumps */
+	off += fwrite(nulls, 1, -off & 15, out_bin_file);
+	off += fwrite(marker, 1, 16 + 2, out_bin_file);
+	off += fwrite(msg, 1, strlen(msg), out_bin_file);
+	off += fwrite(nulls, 1, -off & 15, out_bin_file);
+	off += fwrite(marker, 1, 16, out_bin_file);
+
+	*bin_offset = off;
+}
+
+static void write_incbin(unsigned long *bin_offset, unsigned long size)
+{
+	if (!out_bin_name || !size)
+		return;
+
+	printf("\t.incbin \"%s\", %ld, %ld\n", out_bin_name, *bin_offset, size);
+	*bin_offset += size;
 }
 
 /* uncompress a compressed symbol. When this function is called, the best table
@@ -392,13 +401,15 @@ static void sort_symbols_by_name(void)
 	qsort(table, table_cnt, sizeof(table[0]), compare_names);
 }
 
-static void write_src(FILE *out_bin_file, const char *out_bin_name)
+static void write_src(void)
 {
-	unsigned int i, off;
+	unsigned int i, k, len, off, seq;
 	unsigned int best_idx[256];
 	unsigned int *markers, markers_cnt;
-	long bin_start;
+	unsigned long bin_offset = 0;
 	char buf[1 + KSYM_NAME_LEN];
+	struct sym_entry *se;
+	const char *sep;
 
 	printf("\t.section .rodata, \"a\"\n");
 
@@ -406,51 +417,105 @@ static void write_src(FILE *out_bin_file, const char *out_bin_name)
 	printf("\t.long\t%u\n", table_cnt);
 	printf("\n");
 
+	output_label("kallsyms_token_table");
+	off = 0;
+	for (i = 0; i < 256; i++) {
+		len = expand_symbol(best_table[i], best_table_len[i], buf);
+		best_idx[i] = off;
+		off += len + 1;
+		printf("\t.asciz\t\"%s\"\n", buf);
+	}
+	printf(".size kallsyms_token_table, . - kallsyms_token_table\n");
+	printf("\n");
+
+	output_label("kallsyms_token_index");
+	sep = "\t.short\t";
+	for (i = 0; i < 256; i++) {
+		printf("%s%d", sep, best_idx[i]);
+		sep = (i + 1) & 15 ? "," : "\n\t.short\t";
+	}
+	printf("\n");
+	printf(".size kallsyms_token_index, . - kallsyms_token_index\n");
+	printf("\n");
+
+	stamp("write token table");
+
 	/* table of offset markers, that give the offset in the compressed stream
 	 * every 256 symbols */
 	markers_cnt = (table_cnt + 255) / 256;
 	markers = xmalloc(sizeof(*markers) * markers_cnt);
 
 	output_label("kallsyms_names");
-	bin_start = bin_pos(out_bin_file);
+	write_incbin_header("names", &bin_offset);
 	off = 0;
 	for (i = 0; i < table_cnt; i++) {
-		if ((i & 0xFF) == 0)
-			markers[i >> 8] = off;
-		table[i]->seq = i;
+		unsigned int se_len, len_len;
+		unsigned char len[2];
+
+		se = table[i];
+		se->seq = i;
 
 		/* The length must be less than that of the original symbol. */
-		if (!table[i]->len || table[i]->len > KSYM_NAME_LEN)
+		if (!se->len || se->len > KSYM_NAME_LEN)
 			errx(EXIT_FAILURE, "symbol %d has corrupt compressed length %d",
-			     i, table[i]->len);
+			     i, se->len);
+
+		/* Generate the original name */
+		se_len = expand_symbol(se->sym, se->len, buf);
 
 		/* Encode length with ULEB128. */
-		if (table[i]->len <= 0x7F) {
+		if (se->len <= 0x7F) {
 			/* Most symbols use a single byte for the length. */
-			fputc(table[i]->len, out_bin_file);
-			off += table[i]->len + 1;
+			len[0] = se->len;
+			len_len = 1;
 		} else {
 			/* "Big" symbols use two bytes. */
-			fputc((table[i]->len & 0x7F) | 0x80, out_bin_file);
-			fputc((table[i]->len >> 7) & 0x7F, out_bin_file);
-			off += table[i]->len + 2;
+			len[0] = 0x80 | se->len;
+			len[1] = se->len >> 7;
+			len_len = 2;
 		}
-		fwrite(table[i]->sym, 1, table[i]->len, out_bin_file);
 
-		/*
-		 * Now that we wrote out the compressed symbol name, restore the
-		 * original name for the comments below.
-		 */
-		expand_symbol(table[i]->sym, table[i]->len, buf);
-		strcpy((char *)table[i]->sym, buf);
+		if (out_bin_file) {
+			if ((i & 0xFF) == 0)
+				markers[i >> 8] = big_endian ? htobe32(off) : htole32(off);
+
+			fwrite(len, 1, len_len, out_bin_file);
+			fwrite(se->sym, 1, se->len, out_bin_file);
+		} else {
+			if ((i & 0xFF) == 0)
+				markers[i >> 8] = off;
+
+			printf("\t.byte\t%u", len[0]);
+			if (len_len == 2)
+				printf(",%u", len[1]);
+
+			for (k = 0; k < se->len; k++)
+				printf(",%u", se->sym[k]);
+			printf("\t/* %c %s */\n", buf[0], buf + 1);
+		}
+		off += len_len + se->len;
+
+		/* Restore the original name. */
+		se->len = se_len;
+		memcpy(se->sym, buf, se_len + 1);
 	}
-	write_incbin(out_bin_name, bin_start, bin_pos(out_bin_file));
+	write_incbin(&bin_offset, off);
 	printf(".size kallsyms_names, . - kallsyms_names\n");
 	printf("\n");
 
 	output_label("kallsyms_markers");
-	for (i = 0; i < markers_cnt; i++)
-		printf("\t.long\t%u\n", markers[i]);
+	if (out_bin_file) {
+		write_incbin_header("markers", &bin_offset);
+		fwrite(markers, sizeof(*markers), markers_cnt, out_bin_file);
+		write_incbin(&bin_offset, sizeof(*markers) * markers_cnt);
+	} else {
+		sep = "\t.long\t";
+		for (i = 0; i < markers_cnt; i++) {
+			printf("%s%u", sep, markers[i]);
+			sep = (i + 1) & 7 ? "," : "\n\t.long\t";
+		}
+		printf("\n");
+	}
 	printf(".size kallsyms_markers, . - kallsyms_markers\n");
 	printf("\n");
 
@@ -458,31 +523,15 @@ static void write_src(FILE *out_bin_file, const char *out_bin_name)
 
 	stamp("write compressed names");
 
-	output_label("kallsyms_token_table");
-	bin_start = bin_pos(out_bin_file);
-	off = 0;
-	for (i = 0; i < 256; i++) {
-		best_idx[i] = off;
-		expand_symbol(best_table[i], best_table_len[i], buf);
-		fwrite(buf, 1, strlen(buf) + 1, out_bin_file);
-		off += strlen(buf) + 1;
-	}
-	write_incbin(out_bin_name, bin_start, bin_pos(out_bin_file));
-	printf(".size kallsyms_token_table, . - kallsyms_token_table\n");
-	printf("\n");
-
-	output_label("kallsyms_token_index");
-	for (i = 0; i < 256; i++)
-		printf("\t.short\t%d\n", best_idx[i]);
-	printf("\n");
-
-	stamp("write token table");
-
 	output_label("kallsyms_offsets");
 
 	for (i = 0; i < table_cnt; i++) {
 		if (pc_relative) {
+			/* All 64 bit builds and (at least) relocatable 32 bit ones */
+			static char line[] = "\t.long\t_text - . +123456789";
+			char *end = line + sizeof(line) - 1;
 			long long offset = table[i]->addr - _text;
+			int off32;
 
 			if (offset < INT_MIN || offset > INT_MAX) {
 				errx(EXIT_FAILURE, "kallsyms failure: "
@@ -490,12 +539,28 @@ static void write_src(FILE *out_bin_file, const char *out_bin_name)
 					table[i]->addr);
 				exit(EXIT_FAILURE);
 			}
-			printf("\t.long\t_text - . + (%d)\t/* %s */\n",
-			       (int)offset, table[i]->sym);
+
+			/* Build the line so the the faster fwrite() can be used */
+			*end-- = out_bin_file ? '\n' : '\t';
+			memset(end - 8, ' ', 8);
+			off32 = offset;
+			if (off32 < 0) {
+				end[-9] = '-';
+				offset = -off32;
+			} else {
+				end[-9] = '+';
+			}
+			do
+				*end-- = '0' + off32 % 10;
+			while (off32 /= 10);
+
+			fwrite(line, 1, sizeof(line), stdout);
 		} else {
-			printf("\t.long\t%#x\t/* %s */\n",
-			       (unsigned int)table[i]->addr, table[i]->sym);
+			printf("\t.long\t%#x%c", (unsigned int)table[i]->addr,
+			       out_bin_file ? '\n' : '\t');
 		}
+		if (!out_bin_file)
+			printf("/* %c %s */\n", table[i]->sym[0], table[i]->sym + 1);
 	}
 	printf(".size kallsyms_offsets, . - kallsyms_offsets\n");
 	printf("\n");
@@ -503,17 +568,29 @@ static void write_src(FILE *out_bin_file, const char *out_bin_name)
 	stamp("write symbol values");
 
 	sort_symbols_by_name();
+	stamp("sort by name");
+
 	output_label("kallsyms_seqs_of_names");
-	bin_start = bin_pos(out_bin_file);
+	write_incbin_header("seq_of_names", &bin_offset);
 	for (i = 0; i < table_cnt; i++) {
-		fputc(table[i]->seq >> 16, out_bin_file);
-		fputc(table[i]->seq >> 8, out_bin_file);
-		fputc(table[i]->seq >> 0, out_bin_file);
+		se = table[i];
+		seq = se->seq;
+		if (out_bin_file) {
+			unsigned int seq_be = htobe32(seq);
+			fwrite((char *)&seq_be + 1, 1, 3, out_bin_file);
+		} else {
+			/* The three spaces before the tab line up the comments */
+			printf("\t.byte\t%u,%u,%u   \t/* %8d %c %s */\n",
+				seq >> 16, (seq >> 8) & 0xff, seq & 0xff,
+				seq, se->sym[0], se->sym + 1);
+		}
 	}
-	write_incbin(out_bin_name, bin_start, bin_pos(out_bin_file));
-	printf("\n");
+	write_incbin(&bin_offset, table_cnt * 3);
+	printf(".size kallsyms_seqs_of_names, . - kallsyms_seqs_of_names\n");
 
 	stamp("write name index");
+
+	write_incbin_header("end", &bin_offset);
 }
 
 static unsigned int token_index(unsigned char first, unsigned char second)
@@ -827,13 +904,13 @@ static void sort_symbols(void)
 static void usage(void)
 {
 	fprintf(stderr,
-		"Usage: kallsyms [options] vmlinux out.bin > out.S\n"
-		"       kallsyms --sysmap=out.map vmlinux\n"
+		"Usage: kallsyms [options] [vmlinux [out.bin]] > out.S\n"
+		"       kallsyms --sysmap vmlinux > out.map\n"
 		"           --all-symbols     Include all local symbols\n"
-		"           --pc-relative     Output symbols offsets\n"
+		"           --pc-relative     Output symbol offsets\n"
 		"           --sysmap=out.map  Text map file\n"
 		"           --verbose         Extra diagnostic output\n"
-		"           vmlinux: File to read, can be empty\n"
+		"           vmlinux: File to read\n"
 		"           out.S: Assembler source output file.\n"
 		"           out.bin: Binary data; included in out.S using .incbin\n"
 		"       In the second form only the symbol table out.map is generated,\n"
@@ -845,14 +922,14 @@ static void usage(void)
 
 int main(int argc, char **argv)
 {
-	const char *in, *sysmap = NULL, *out_bin_name;
-	FILE *sysmap_out = NULL, *out_bin_file;
+	const char *sysmap = NULL;
+	FILE *sysmap_out = NULL;
 
 	while (1) {
 		static const struct option long_options[] = {
 			{"all-symbols",     no_argument, &all_symbols,     1},
 			{"pc-relative",     no_argument, &pc_relative,     1},
-			{"sysmap",    required_argument, NULL,           's'},
+			{"sysmap",    optional_argument, NULL,           's'},
 			{"verbose",         no_argument, &verbose,         1},
 			{},
 		};
@@ -862,43 +939,43 @@ int main(int argc, char **argv)
 		if (c == -1)
 			break;
 		if (c == 's')
-			sysmap = optarg;
+			sysmap = optarg ?: "";
 		else if (c != 0)
 			usage();
 	}
 
 	stamp(NULL);
 
-	if (optind + 2 != argc && !(sysmap && optind + 1 == argc))
+	if (argc - optind > 2)
 		usage();
 
-	in = argv[optind];
 	if (sysmap) {
-		sysmap_out = fopen(sysmap, "w");
-		if (!sysmap_out)
-			err(EXIT_FAILURE, "failed to open sysmap output file %s", sysmap);
+		if (*sysmap) {
+			sysmap_out = fopen(sysmap, "w");
+			if (!sysmap_out)
+				err(EXIT_FAILURE, "failed to open sysmap output file %s", sysmap);
+		} else {
+			/* Compressed output supressed */
+			sysmap_out = stdout;
+		}
 	}
 
-	if (optind + 1 == argc) {
-		read_elf(in, sysmap_out);
-		fflush(sysmap_out);
-		if (ferror(sysmap_out) || fclose(sysmap_out))
-			errx(EXIT_FAILURE, "error writing sysmap file %s", sysmap);
-		return 0;
-	}
-
-	out_bin_name = argv[optind + 1];
-	out_bin_file = fopen(out_bin_name, "w");
-	if (!out_bin_file)
-		err(EXIT_FAILURE, "failed to open nin.out file %s", out_bin_name);
-
-	read_elf(in, sysmap_out);
+	read_elf(argv[optind], sysmap_out);
 	if (sysmap_out) {
 		fflush(sysmap_out);
 		if (ferror(sysmap_out) || fclose(sysmap_out))
 			errx(EXIT_FAILURE, "error writing sysmap file %s", sysmap);
+		if (sysmap_out == stdout)
+			exit(0);
 	}
 	stamp("read elf");
+
+	if (argc - optind >= 2) {
+		out_bin_name = argv[optind + 1];
+		out_bin_file = fopen(out_bin_name, "w");
+		if (!out_bin_file)
+			err(EXIT_FAILURE, "failed to open bin.out file %s", out_bin_name);
+	}
 
 	shrink_table();
 	stamp("shrink table");
@@ -908,12 +985,14 @@ int main(int argc, char **argv)
 
 	optimize_token_table();
 
-	write_src(out_bin_file, out_bin_name);
+	write_src();
 
 	/* Write errors are latched in the stream, so one check at the end covers them all. */
-	fflush(out_bin_file);
-	if (ferror(out_bin_file) || fclose(out_bin_file))
-		errx(EXIT_FAILURE, "error writing out.bin file %s", out_bin_name);
+	if (out_bin_file) {
+		fflush(out_bin_file);
+		if (ferror(out_bin_file) || fclose(out_bin_file))
+			errx(EXIT_FAILURE, "error writing out.bin file %s", out_bin_name);
+	}
 
 	fflush(stdout);
 	if (ferror(stdout))

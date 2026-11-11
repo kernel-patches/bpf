@@ -141,7 +141,7 @@ kallsyms()
 	fi
 
 	info KSYMS "${2}.S"
-	scripts/kallsyms ${kallsymopt} "${1}" "${2}.bin" > "${2}.S"
+	scripts/kallsyms ${kallsymopt} ${1:+"${1}" "${2}.bin"} > "${2}.S"
 
 	info AS "${2}.o"
 	${CC} ${NOSTDINC_FLAGS} ${LINUXINCLUDE} ${KBUILD_CPPFLAGS} \
@@ -162,7 +162,7 @@ sysmap_and_kallsyms()
 mksysmap()
 {
 	info SYSMAP ${2}
-	scripts/kallsyms --sysmap="${2}" "${1}"
+	scripts/kallsyms --sysmap "${1}" >"${2}"
 }
 
 sorttable()
@@ -213,8 +213,7 @@ case "${WARN_ON_UNUSED_TRACEPOINTS}" in
 esac
 
 if is_enabled CONFIG_KALLSYMS; then
-	true > .tmp_vmlinux0.syms
-	kallsyms .tmp_vmlinux0.syms .tmp_vmlinux0.kallsyms
+	kallsyms "" .tmp_vmlinux0.kallsyms
 fi
 
 if is_enabled CONFIG_KALLSYMS || is_enabled CONFIG_DEBUG_INFO_BTF; then

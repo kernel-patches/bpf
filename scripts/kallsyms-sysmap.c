@@ -224,6 +224,7 @@ struct sysmap *sysmap_read(const char *path)
 		exit(EXIT_FAILURE);
 	map->syms = elf_read_symbols(&map->elf, &map->nr_syms);
 	map->addr_width = elf_map_long_size(map->elf.base) * 2;
+	map->big_endian = elf_map_big_endian(map->elf.base);
 
 	return map;
 }
