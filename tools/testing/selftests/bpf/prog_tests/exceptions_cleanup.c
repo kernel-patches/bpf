@@ -227,6 +227,11 @@ static void run_suite(const char *prefix)
 	THROW(throw_callee_left_rcu, 1, "0");
 	RUN_AS(throw_rcu_some_paths, "throw_rcu_some_paths_in", THROWN, 0, "s", .param = 1);
 	RUN_AS(throw_rcu_some_paths, "throw_rcu_some_paths_out", THROWN, 0, "", .param = 0);
+	/* What the frames keep in registers at the throw is released from them. */
+	THROW(throw_regs_callers, 3, "201");
+	THROW(throw_reg_caller_saved, 1, "0");
+	RUN_AS(throw_reg_node, "throw_reg_node_popped", THROWN, 1, "0", .param = 0);
+	RUN_AS(throw_reg_node, "throw_reg_node_empty", THROWN, 0, "", .param = 1);
 	/* A file and the reader of its dynptr, which goes first. */
 	snprintf(name, sizeof(name), "%sthrow_file_dynptr_held", prefix);
 	if (test__start_subtest(name))

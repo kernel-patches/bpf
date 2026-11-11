@@ -1399,4 +1399,168 @@ __naked int throw_rcu_some_paths(void)
 	: __clobber_all);
 }
 
+/* ---- what the frames keep in registers at the throw ---- */
+
+/* Throws, and uses no register but R1. */
+__used __naked static __noinline int throw_leaf(void)
+{
+	asm volatile (
+	"r1 = 0xeB9F;"
+	"call %[bpf_throw];"
+	"exit;"
+	:
+	: __imm(bpf_throw)
+	: __clobber_all);
+}
+
+/*
+ * Holds a record of its own in R7 and overwrites R6, which its prologue has
+ * to save for its caller then, before it calls the subprog that throws.
+ */
+__used __naked static __noinline int throw_mid(void)
+{
+	asm volatile (
+	"r1 = %[ringbuf] ll;"
+	"r2 = 8;"
+	"r3 = 0;"
+	"call %[bpf_ringbuf_reserve];"
+	"if r0 == 0 goto 1f;"
+	"r7 = r0;"
+	"r1 = %[acquired] ll;"
+	"*(u64 *)(r1 + 16) = r0;"
+	"r2 = 3;"
+	"r1 = %[acquired_cnt] ll;"
+	"*(u32 *)(r1 + 0) = r2;"
+	"r6 = 42;"
+	"call throw_leaf;"
+	"r1 = r7;"
+	"r2 = 0;"
+	"call %[bpf_ringbuf_discard];"
+	"1: r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(ringbuf),
+	  __imm_addr(acquired),
+	  __imm_addr(acquired_cnt),
+	  __imm(bpf_ringbuf_reserve),
+	  __imm(bpf_ringbuf_discard)
+	: __clobber_all);
+}
+
+/*
+ * Three records in registers only, two frames up from the throw. The main
+ * program has one in R6, which its callee saves and overwrites, and one in
+ * R8, which no frame touches. The callee has one in R7, which the frame that
+ * throws does not save. The unwinder has the registers of the throw, and
+ * those of each caller from where the frame it called saved them: the frame
+ * that throws holds nothing, its caller's record goes first, then the two of
+ * the main program in the order it acquired them.
+ */
+SEC("tc")
+__naked int throw_regs_callers(void)
+{
+	asm volatile (
+	"r1 = %[ringbuf] ll;"
+	"r2 = 8;"
+	"r3 = 0;"
+	"call %[bpf_ringbuf_reserve];"
+	"if r0 == 0 goto 2f;"
+	"r6 = r0;"
+	"r1 = %[ringbuf] ll;"
+	"r2 = 8;"
+	"r3 = 0;"
+	"call %[bpf_ringbuf_reserve];"
+	"if r0 == 0 goto 1f;"
+	"r8 = r0;"
+	"r1 = %[acquired] ll;"
+	"*(u64 *)(r1 + 0) = r6;"
+	"*(u64 *)(r1 + 8) = r8;"
+	"r2 = 2;"
+	"r1 = %[acquired_cnt] ll;"
+	"*(u32 *)(r1 + 0) = r2;"
+	"call throw_mid;"
+	"r1 = r8;"
+	"r2 = 0;"
+	"call %[bpf_ringbuf_discard];"
+	"1: r1 = r6;"
+	"r2 = 0;"
+	"call %[bpf_ringbuf_discard];"
+	"2: r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(ringbuf),
+	  __imm_addr(acquired),
+	  __imm_addr(acquired_cnt),
+	  __imm(bpf_ringbuf_reserve),
+	  __imm(bpf_ringbuf_discard)
+	: __clobber_all);
+}
+
+/*
+ * The record is in R3 only when the frame throws, a register no call
+ * preserves: the unwinder has every register of the frame that throws.
+ */
+SEC("tc")
+__naked int throw_reg_caller_saved(void)
+{
+	asm volatile (
+	"r1 = %[ringbuf] ll;"
+	"r2 = 8;"
+	"r3 = 0;"
+	"call %[bpf_ringbuf_reserve];"
+	"if r0 == 0 goto 1f;"
+	"r3 = r0;"
+	"r1 = %[acquired] ll;"
+	"*(u64 *)(r1 + 0) = r0;"
+	"r2 = 1;"
+	"r1 = %[acquired_cnt] ll;"
+	"*(u32 *)(r1 + 0) = r2;"
+	"r0 = 0;"
+	"r1 = 0xeB9F;"
+	"call %[bpf_throw];"
+	"1: r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(ringbuf),
+	  __imm_addr(acquired),
+	  __imm_addr(acquired_cnt),
+	  __imm(bpf_ringbuf_reserve),
+	  __imm(bpf_throw)
+	: __clobber_all);
+}
+
+/*
+ * The node that was popped is in R6 at the throw, a pointer 8 bytes into its
+ * object or NULL when the list was empty: the unwinder releases the object
+ * the register points into, and nothing when it holds NULL.
+ */
+SEC("tc")
+__naked int throw_reg_node(void)
+{
+	asm volatile (
+	"r1 = %[param] ll;"
+	"r1 = *(u32 *)(r1 + 0);"
+	"if r1 != 0 goto 1f;"
+	"call push_one;"
+	"1: r1 = %[pop_lock] ll;"
+	"call %[bpf_spin_lock];"
+	"r1 = %[pop_head] ll;"
+	"call %[bpf_list_pop_front];"
+	"r6 = r0;"
+	"r1 = %[pop_lock] ll;"
+	"call %[bpf_spin_unlock];"
+	"r1 = 0xeB9F;"
+	"call %[bpf_throw];"
+	"exit;"
+	:
+	: __imm_addr(param),
+	  __imm_addr(pop_lock),
+	  __imm_addr(pop_head),
+	  __imm(bpf_spin_lock),
+	  __imm(bpf_spin_unlock),
+	  __imm(bpf_list_pop_front),
+	  __imm(bpf_throw)
+	: __clobber_all);
+}
+
 char _license[] SEC("license") = "GPL";

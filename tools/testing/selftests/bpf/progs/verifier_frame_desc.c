@@ -299,6 +299,161 @@ __naked int dead_spill_at_call(void)
 	: __clobber_all);
 }
 
+/*
+ * The record is in R6 when the frame throws: the descriptor of the throw
+ * names the register.
+ */
+SEC("tc")
+__description("frame_desc: a record in R6 at the throw has no slot")
+__arch_x86_64 __arch_arm64
+__success __log_level(5)
+__msg("frame descriptors: slots 0 insns 0 sites 1 classes 1")
+__naked int record_in_r6_at_throw(void)
+{
+	asm volatile (
+	"r1 = %[ringbuf] ll;"
+	"r2 = 8;"
+	"r3 = 0;"
+	"call %[bpf_ringbuf_reserve];"
+	"if r0 == 0 goto 1f;"
+	"r6 = r0;"
+	"r0 = 0;"
+	"r1 = 0xeB9F;"
+	"call %[bpf_throw];"
+	"1: r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(ringbuf),
+	  __imm(bpf_ringbuf_reserve),
+	  __imm(bpf_throw)
+	: __clobber_all);
+}
+
+/*
+ * The record is in R0 only, where the call that reserved it left it: the
+ * unwinder has every register of the frame that throws.
+ */
+SEC("tc")
+__description("frame_desc: a record in R0 at the throw has no slot")
+__arch_x86_64 __arch_arm64
+__success __log_level(5)
+__msg("frame descriptors: slots 0 insns 0 sites 1 classes 1")
+__naked int record_in_r0_at_throw(void)
+{
+	asm volatile (
+	"r1 = %[ringbuf] ll;"
+	"r2 = 8;"
+	"r3 = 0;"
+	"call %[bpf_ringbuf_reserve];"
+	"if r0 == 0 goto 1f;"
+	"r1 = 0xeB9F;"
+	"call %[bpf_throw];"
+	"1: r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(ringbuf),
+	  __imm(bpf_ringbuf_reserve),
+	  __imm(bpf_throw)
+	: __clobber_all);
+}
+
+/*
+ * The record is in R6 in the caller of the subprog that may throw: R6 is
+ * callee-saved, so the unwinder has it for a frame in a call, and the
+ * descriptor of the call names it.
+ */
+SEC("tc")
+__description("frame_desc: a record in R6 in the caller of a throw has no slot")
+__arch_x86_64 __arch_arm64
+__success __log_level(5)
+__msg("frame descriptors: slots 0 insns 0 sites 1 classes 1")
+__naked int record_in_r6_in_caller(void)
+{
+	asm volatile (
+	"r1 = %[ringbuf] ll;"
+	"r2 = 8;"
+	"r3 = 0;"
+	"call %[bpf_ringbuf_reserve];"
+	"if r0 == 0 goto 1f;"
+	"r6 = r0;"
+	"call throw_maybe;"
+	"r1 = r6;"
+	"r2 = 0;"
+	"call %[bpf_ringbuf_discard];"
+	"1: r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(ringbuf),
+	  __imm(bpf_ringbuf_reserve),
+	  __imm(bpf_ringbuf_discard)
+	: __clobber_all);
+}
+
+/*
+ * The record is in R2 only in the caller of the subprog that throws, a
+ * register the call does not preserve: the unwinder has it for the frame that
+ * throws only, so the record is kept in a slot.
+ */
+SEC("tc")
+__description("frame_desc: a record in R2 in the caller of a throw keeps its slot")
+__arch_x86_64 __arch_arm64
+__success __log_level(5)
+__msg("frame descriptors: slots 1 insns 2 sites 0 classes 1")
+__naked int record_in_r2_in_caller(void)
+{
+	asm volatile (
+	"r1 = %[ringbuf] ll;"
+	"r2 = 8;"
+	"r3 = 0;"
+	"call %[bpf_ringbuf_reserve];"
+	"if r0 == 0 goto 1f;"
+	"r2 = r0;"
+	"r0 = 0;"
+	"call throw_unconditionally;"
+	"1: r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(ringbuf),
+	  __imm(bpf_ringbuf_reserve)
+	: __clobber_all);
+}
+
+/*
+ * The record is in R6, which nothing reads again, and two paths join in front
+ * of the throw. The verifier forgets what dead registers hold where paths
+ * join, so the throw reads the registers: the record is still known to be in
+ * R6 at the throw, and its descriptor names the register.
+ */
+SEC("tc")
+__description("frame_desc: a register nothing reads again is found at the throw")
+__arch_x86_64 __arch_arm64
+__success __log_level(5) __flag(BPF_F_TEST_STATE_FREQ)
+__msg("frame descriptors: slots 0 insns 0 sites 1 classes 1")
+__naked int dead_reg_at_throw(void)
+{
+	asm volatile (
+	"r8 = *(u32 *)(r1 + %[len]);"
+	"r1 = %[ringbuf] ll;"
+	"r2 = 8;"
+	"r3 = 0;"
+	"call %[bpf_ringbuf_reserve];"
+	"if r0 == 0 goto 2f;"
+	"r6 = r0;"
+	"r0 = 0;"
+	"if r8 == 0 goto 1f;"
+	"r7 = 0;"
+	"1: r1 = 0xeB9F;"
+	"call %[bpf_throw];"
+	"2: r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(ringbuf),
+	  __imm(bpf_ringbuf_reserve),
+	  __imm(bpf_throw),
+	  [len]"i"(offsetof(struct __sk_buff, len))
+	: __clobber_all);
+}
+
 /* An iterator is on the stack wherever it is held: the descriptor of the throw names it. */
 SEC("tc")
 __description("frame_desc: an iterator at the throw has no slot")
