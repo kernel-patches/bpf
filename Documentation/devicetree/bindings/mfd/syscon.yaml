@@ -68,8 +68,12 @@ properties:
               - fsl,vf610-anatop
               - fsl,vf610-mscm-cpucfg
               - hisilicon,dsa-subctrl
+              - hisilicon,hi6220-medianoc-ade
               - hisilicon,hi6220-sramctrl
               - hisilicon,hip04-ppe
+              - hisilicon,hip06-serdes-ctrl
+              - hisilicon,hip07-dsa-cpld
+              - hisilicon,hip07-serdes-ctrl
               - hisilicon,pcie-sas-subctrl
               - hisilicon,peri-subctrl
               - hpe,gxp-sysreg
