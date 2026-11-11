@@ -24,13 +24,17 @@ void test_may_goto_priv_stack(void)
 		return;
 
 	err = may_goto_priv_stack__attach(skel);
+	if (err == -EOPNOTSUPP) {
+		test__skip();
+		goto out;
+	}
 	if (!ASSERT_OK(err, "attach"))
 		goto out;
 
 	memset(skel->bss->regs_64, 0xff, sizeof(skel->bss->regs_64));
 	memset(skel->bss->regs_128, 0xff, sizeof(skel->bss->regs_128));
 
-	err = bpf_prog_test_run_opts(bpf_program__fd(skel->progs.priv_stack_64), &topts);
+	err = bpf_prog_test_run_opts(bpf_program__fd(skel->progs.trigger), &topts);
 	if (!ASSERT_OK(err, "test_run"))
 		goto out;
 

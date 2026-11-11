@@ -267,6 +267,15 @@ int global_func3_recursion_in_tracing_prog(void *ctx)
 	return depth(again + 7);
 }
 
+SEC("raw_tp")
+__arch_x86_64
+__arch_arm64
+__failure __msg("recursive depth() in a tracing program")
+int global_func3_recursion_in_raw_tp(void *ctx)
+{
+	return depth(again + 7);
+}
+
 __attribute__ ((noinline))
 int redirects(struct __sk_buff *skb, int n)
 {

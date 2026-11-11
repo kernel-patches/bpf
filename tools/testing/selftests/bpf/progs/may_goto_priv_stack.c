@@ -10,11 +10,11 @@ __u64 regs_64[7];
 __u64 regs_128[7];
 
 /*
- * fentry prog with 64 or more bytes of stack uses private stack.
+ * kprobe.multi prog with 64 or more bytes of stack uses private stack.
  * Loop until may_goto expires. r0-r5 should stay zero.
  */
 #define TIMED_MAY_GOTO_PRIV_STACK(size, func)				\
-SEC("fentry/" #func)							\
+SEC("kprobe.multi/" #func)						\
 __naked void priv_stack_##size(void)					\
 {									\
 	asm volatile (							\
@@ -48,5 +48,15 @@ __naked void priv_stack_##size(void)					\
 
 TIMED_MAY_GOTO_PRIV_STACK(64, bpf_fentry_test1)
 TIMED_MAY_GOTO_PRIV_STACK(128, bpf_fentry_test2)
+
+/*
+ * No tests in here, just to trigger 'bpf_fentry_test*'
+ * through tracing test_run
+ */
+SEC("fentry/bpf_modify_return_test")
+int trigger(void *ctx)
+{
+	return 0;
+}
 
 char _license[] SEC("license") = "GPL";

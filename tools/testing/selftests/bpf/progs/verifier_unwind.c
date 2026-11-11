@@ -1165,9 +1165,9 @@ static unsigned long may_unwind_big_stack(void)
  * x86-64 keeps the pointer to the private stack in r9 and saves it around a call.
  * The value that is read back in the pad is there only when r9 is restored.
  */
-SEC("raw_tp")
+SEC("kprobe.multi")
 __description("unwind: private stack, the callee unwinds")
-__success __retval(47)
+__success
 __load_if_JITed()
 __arch_x86_64
 __jited("	movl	$0x1234, %esi") /* past the load, see above */
@@ -1200,12 +1200,37 @@ __naked int private_stack_unwinds(void)
 }
 
 SEC("raw_tp")
-__description("unwind: private stack, the callee returns")
+__description("unwind: big stack, the callee unwinds")
+__success __retval(47)
+__load_if_JITed()
+__arch_x86_64
+__arch_arm64
+__naked int big_stack_unwinds(void)
+{
+	asm volatile (
+		"*(u64 *)(r10 - 200) = 42;"
+		"r1 = %[one] ll;"
+		"r1 = *(u64 *)(r1 + 0);"
+		"call may_unwind_big_stack;"
+		unwind_goto(1)
+		"exit;"
+		"r1 = *(u64 *)(r10 - 200);"
+		"r0 += r1;"
+		"exit;"
+		:
+		: __imm_addr(one),
+		  __imm_unwind_goto(1)
+		: __clobber_all
+	);
+}
+
+SEC("raw_tp")
+__description("unwind: big stack, the callee returns")
 __success __retval(49)
 __load_if_JITed()
 __arch_x86_64
 __arch_arm64
-__naked int private_stack_returns(void)
+__naked int big_stack_returns(void)
 {
 	asm volatile (
 		"*(u64 *)(r10 - 200) = 42;"

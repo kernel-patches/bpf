@@ -127,6 +127,23 @@ __naked void no_private_stack_kprobe(void)
 "	::: __clobber_all);
 }
 
+SEC("fentry/bpf_fentry_test9")
+__description("No private stack, fentry")
+__success
+__arch_x86_64
+__jited("	subq	$0x100, %rsp")
+__arch_arm64
+__jited("	sub	sp, sp, #0x100")
+__naked void no_private_stack_fentry(void)
+{
+	asm volatile ("			\
+	r1 = 42;			\
+	*(u64 *)(r10 - 256) = r1;	\
+	r0 = 0;				\
+	exit;				\
+"	::: __clobber_all);
+}
+
 SEC("uprobe")
 __description("No private stack, uprobe")
 __success
@@ -215,7 +232,7 @@ static unsigned long loop_callback(void)
 	: __clobber_common);
 }
 
-SEC("raw_tp")
+SEC("kprobe.multi")
 __description("Private stack, callback")
 __success
 __arch_x86_64
@@ -273,9 +290,9 @@ __naked void private_stack_callback(void)
 	: __clobber_common);
 }
 
-SEC("fentry/bpf_fentry_test9")
+SEC("perf_event")
 __description("Private stack, exception in main prog")
-__success __retval(0)
+__success
 __arch_x86_64
 __jited("	pushq	%r9")
 __jited("...")
@@ -321,9 +338,9 @@ __used static int subprog_exception(void)
 	return 0;
 }
 
-SEC("fentry/bpf_fentry_test9")
+SEC("perf_event")
 __description("Private stack, exception in subprog")
-__success __retval(0)
+__success
 __arch_x86_64
 __jited("	movq	%rdi, -0x200(%r9)")
 __jited("	pushq	%r9")
@@ -355,19 +372,15 @@ int private_stack_exception_sub_prog(void)
 }
 
 /*
- * Nothing attaches the two fentry progs above, so they are loaded, but never
- * run. BPF_PROG_TEST_RUN does run a raw_tp prog. The default exception callback
- * returns the cookie of bpf_throw().
+ * Nothing attaches the two perf_event progs above, so they are loaded, but
+ * never run. BPF_PROG_TEST_RUN does run a raw_tp prog. The default exception
+ * callback returns the cookie of bpf_throw().
  */
 SEC("raw_tp")
-__description("Private stack, run, exception in main prog")
+__description("No private stack, run, exception in main prog")
 __success __retval(1)
 __arch_x86_64
-__jited("	movq	%rdi, -0x200(%r9)")
-__jited("	movl	$0x1, %edi")
-__jited("	pushq	%r9")
-__jited("...")
-__jited("	callq")
+__jited("	subq	$0x200, %rsp")
 __naked void private_stack_run_exception_main_prog(void)
 {
 	asm volatile ("			\
@@ -396,14 +409,10 @@ __naked static void subprog_throw(void)
 }
 
 SEC("raw_tp")
-__description("Private stack, run, exception in subprog")
+__description("No private stack, run, exception in subprog")
 __success __retval(2)
 __arch_x86_64
-__jited("	movq	%rdi, -0x200(%r9)")
-__jited("	pushq	%r9")
-__jited("...")
-__jited("	callq")
-__jited("	popq	%r9")
+__jited("	subq	$0x200, %rsp")
 __naked void private_stack_run_exception_sub_prog(void)
 {
 	asm volatile ("			\
@@ -432,16 +441,14 @@ __naked static void private_stack_subprog_throw(void)
 
 /* Only the frame of the main prog counts, and it has nothing pushed at the call */
 SEC("raw_tp")
-__description("Private stack, run, exception in subprog, no private stack in main prog")
+__description("No private stack, run, exception in subprog with a large stack")
 __success __retval(3)
 __arch_x86_64
 __jited("	subq	$0x8, %rsp")
 __jited("...")
 __jited("func #1")
 __jited("...")
-__jited("	movq	%rdi, -0x200(%r9)")
-__jited("	movl	$0x3, %edi")
-__jited("	pushq	%r9")
+__jited("	subq	$0x200, %rsp")
 __naked void no_private_stack_run_exception_sub_prog(void)
 {
 	asm volatile ("				\
@@ -478,9 +485,9 @@ __noinline static int timer_cb2(void *map, int *key, struct bpf_timer *timer)
 	return 0;
 }
 
-SEC("fentry/bpf_fentry_test9")
+SEC("kprobe.multi")
 __description("Private stack, async callback, not nested")
-__success __retval(0)
+__success
 __arch_x86_64
 __jited("	movabsq	$0x{{.*}}, %r9")
 __arch_arm64
@@ -503,9 +510,9 @@ int private_stack_async_callback_1(void)
 	return 0;
 }
 
-SEC("fentry/bpf_fentry_test9")
+SEC("kprobe.multi")
 __description("Private stack, async callback, potential nesting")
-__success __retval(0)
+__success
 __load_if_JITed()
 __log_level(4) __msg("stack depth max 272")
 __msg("subprog 0 (private_stack_async_callback_2) main {{.*}} stack 8")
@@ -532,7 +539,7 @@ int private_stack_async_callback_2(void)
 	return 0;
 }
 
-SEC("fentry/bpf_fentry_test9")
+SEC("kprobe.multi")
 __description("private stack, max stack depth is private stack")
 __success
 __log_level(4) __msg("stack depth max 256")
