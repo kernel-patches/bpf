@@ -449,7 +449,7 @@ static int tcp_bpf_send_verdict(struct sock *sk, struct sk_psock *psock,
 {
 	bool cork = false, enospc = sk_msg_full(msg), redir_ingress;
 	struct sock *sk_redir;
-	u32 tosend, origsize, sent, delta = 0;
+	u32 tosend, origsize, sent, apply, delta = 0;
 	u32 eval;
 	int ret;
 
@@ -518,6 +518,7 @@ more_data:
 		redir_ingress = psock->redir_ingress;
 		sk_redir = psock->sk_redir;
 		sock_hold(sk_redir);
+		apply = psock->apply_bytes;
 		sk_msg_apply_bytes(psock, tosend);
 		if (!psock->apply_bytes) {
 			/* Clean up before releasing the sock lock. */
@@ -539,10 +540,6 @@ more_data:
 		ret = tcp_bpf_sendmsg_redir(sk_redir, redir_ingress,
 					    msg, tosend, flags);
 		sent = origsize - msg->sg.size;
-
-		if (eval == __SK_REDIRECT)
-			sock_put(sk_redir);
-		sock_put(sk_redir);
 
 		lock_sock(sk);
 		sk_mem_uncharge(sk, sent);
@@ -566,6 +563,21 @@ more_data:
 			msg = NULL;
 			ret = 0;
 		}
+		/*
+		 * Bytes that were not sent and come back, in msg or in the
+		 * next sendmsg(), are still covered by the verdict.
+		 */
+		if (apply && sent < tosend && !cork) {
+			psock->apply_bytes += tosend - sent;
+			if (eval == __SK_REDIRECT) {
+				psock->eval = eval;
+				psock->sk_redir = sk_redir;
+				eval = __SK_NONE;
+			}
+		}
+		if (eval == __SK_REDIRECT)
+			sock_put(sk_redir);
+		sock_put(sk_redir);
 		break;
 	case __SK_DROP:
 	default:
