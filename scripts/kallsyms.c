@@ -5,15 +5,7 @@
  * This software may be used and distributed according to the terms
  * of the GNU General Public License, incorporated herein by reference.
  *
- * Usage: kallsyms [--all-symbols] [--pc-relative] [--sysmap=out.map] in out.bin > out.S
- *        kallsyms --sysmap=out.map in
- *
- *      in is vmlinux; an empty file stands for the first link, which has no
- *  symbols yet, and gives an empty table. --sysmap also writes the symbols
- *  in System.map format.
- *
- *      The byte tables go to out.bin and are pulled into out.S with .incbin;
- *  wider tables stay assembler source for endianness and relocations.
+ * Generate asm source containing a compressed copy of the kernel symbol table.
  *
  *      Table compression uses all the unused char codes on the symbols and
  *  maps these to the most used substrings (tokens). For instance, it might
@@ -26,11 +18,13 @@
  *
  */
 
+#include <err.h>
 #include <getopt.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <ctype.h>
 #include <limits.h>
 #include <sys/stat.h>
@@ -64,6 +58,7 @@ static struct sym_entry **table;
 static unsigned int table_size, table_cnt;
 static int all_symbols;
 static int pc_relative;
+static int verbose;
 
 /* A dynamic array of symbols, encoded by symbol index. */
 struct sym_arr {
@@ -80,6 +75,23 @@ static struct sym_arr token_syms[NR_TOKENS];
 /* the table that holds the result of the compression */
 static unsigned char best_table[256][2];
 static unsigned char best_table_len[256];
+
+static void stamp(const char *where)
+{
+	static unsigned long long prev;
+	struct timespec now;
+	unsigned long long delta;
+
+	if (!verbose)
+		return;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	delta = now.tv_sec * 10000ull + now.tv_nsec / 100000 - prev;
+	prev += delta;
+	if (where)
+		fprintf(stderr, "kallsyms: stamp %s %llu.%llu ms\n",
+			where, delta / 10, delta % 10);
+}
 
 static unsigned int sym_arr_last(const struct sym_arr *arr)
 {
@@ -108,14 +120,6 @@ static void sym_arr_free(struct sym_arr *arr)
 	arr->sym_indexes = NULL;
 	arr->cnt = 0;
 	arr->cap = 0;
-}
-
-static void usage(void)
-{
-	fprintf(stderr, "Usage: kallsyms [--all-symbols] [--pc-relative] [--sysmap=out.map]\n"
-			"                in out.bin > out.S\n"
-			"       kallsyms --sysmap=out.map vmlinux\n");
-	exit(1);
 }
 
 static char *sym_entry_name(const struct sym_entry *s)
@@ -278,10 +282,8 @@ static bool file_is_empty(const char *path)
 {
 	struct stat st;
 
-	if (stat(path, &st)) {
-		perror(path);
-		exit(EXIT_FAILURE);
-	}
+	if (stat(path, &st))
+		err(EXIT_FAILURE, "stat(%s) failed", path);
 
 	return st.st_size == 0;
 }
@@ -324,10 +326,8 @@ static long bin_pos(FILE *file)
 {
 	const long pos = ftell(file);
 
-	if (pos < 0) {
-		perror("kallsyms: ftell");
-		exit(EXIT_FAILURE);
-	}
+	if (pos < 0)
+		err(EXIT_FAILURE, "ftell on bin.out file failed");
 
 	return pos;
 }
@@ -419,19 +419,10 @@ static void write_src(FILE *out_bin_file, const char *out_bin_name)
 			markers[i >> 8] = off;
 		table[i]->seq = i;
 
-		/* There cannot be any symbol of length zero. */
-		if (table[i]->len == 0) {
-			fprintf(stderr, "kallsyms failure: "
-				"unexpected zero symbol length\n");
-			exit(EXIT_FAILURE);
-		}
-
-		/* Only lengths that fit in up-to-two-byte ULEB128 are supported. */
-		if (table[i]->len > 0x3FFF) {
-			fprintf(stderr, "kallsyms failure: "
-				"unexpected huge symbol length\n");
-			exit(EXIT_FAILURE);
-		}
+		/* The length must be less than that of the original symbol. */
+		if (!table[i]->len || table[i]->len > KSYM_NAME_LEN)
+			errx(EXIT_FAILURE, "symbol %d has corrupt compressed length %d",
+			     i, table[i]->len);
 
 		/* Encode length with ULEB128. */
 		if (table[i]->len <= 0x7F) {
@@ -465,6 +456,8 @@ static void write_src(FILE *out_bin_file, const char *out_bin_name)
 
 	free(markers);
 
+	stamp("write compressed names");
+
 	output_label("kallsyms_token_table");
 	bin_start = bin_pos(out_bin_file);
 	off = 0;
@@ -483,6 +476,8 @@ static void write_src(FILE *out_bin_file, const char *out_bin_name)
 		printf("\t.short\t%d\n", best_idx[i]);
 	printf("\n");
 
+	stamp("write token table");
+
 	output_label("kallsyms_offsets");
 
 	for (i = 0; i < table_cnt; i++) {
@@ -490,7 +485,7 @@ static void write_src(FILE *out_bin_file, const char *out_bin_name)
 			long long offset = table[i]->addr - _text;
 
 			if (offset < INT_MIN || offset > INT_MAX) {
-				fprintf(stderr, "kallsyms failure: "
+				errx(EXIT_FAILURE, "kallsyms failure: "
 					"relative symbol value %#llx out of range\n",
 					table[i]->addr);
 				exit(EXIT_FAILURE);
@@ -505,6 +500,8 @@ static void write_src(FILE *out_bin_file, const char *out_bin_name)
 	printf(".size kallsyms_offsets, . - kallsyms_offsets\n");
 	printf("\n");
 
+	stamp("write symbol values");
+
 	sort_symbols_by_name();
 	output_label("kallsyms_seqs_of_names");
 	bin_start = bin_pos(out_bin_file);
@@ -515,6 +512,8 @@ static void write_src(FILE *out_bin_file, const char *out_bin_name)
 	}
 	write_incbin(out_bin_name, bin_start, bin_pos(out_bin_file));
 	printf("\n");
+
+	stamp("write name index");
 }
 
 static unsigned int token_index(unsigned char first, unsigned char second)
@@ -742,10 +741,13 @@ static void insert_real_symbols_in_table(void)
 static void optimize_token_table(void)
 {
 	build_initial_token_table();
+	stamp("build initial token table");
 
 	insert_real_symbols_in_table();
+	stamp("insert real symbols in table");
 
 	optimize_result();
+	stamp("optimize result");
 }
 
 /* guess for "linker script provide" symbol */
@@ -822,6 +824,25 @@ static void sort_symbols(void)
 	qsort(table, table_cnt, sizeof(table[0]), compare_symbols);
 }
 
+static void usage(void)
+{
+	fprintf(stderr,
+		"Usage: kallsyms [options] vmlinux out.bin > out.S\n"
+		"       kallsyms --sysmap=out.map vmlinux\n"
+		"           --all-symbols     Include all local symbols\n"
+		"           --pc-relative     Output symbols offsets\n"
+		"           --sysmap=out.map  Text map file\n"
+		"           --verbose         Extra diagnostic output\n"
+		"           vmlinux: File to read, can be empty\n"
+		"           out.S: Assembler source output file.\n"
+		"           out.bin: Binary data; included in out.S using .incbin\n"
+		"       In the second form only the symbol table out.map is generated,\n"
+		"       the compressed data is not generated.\n"
+		"       --pc-relative is required for all 64 bit kernels and relocatable\n"
+		"       32 bit ones.\n");
+	exit(EXIT_FAILURE);
+}
+
 int main(int argc, char **argv)
 {
 	const char *in, *sysmap = NULL, *out_bin_name;
@@ -832,6 +853,7 @@ int main(int argc, char **argv)
 			{"all-symbols",     no_argument, &all_symbols,     1},
 			{"pc-relative",     no_argument, &pc_relative,     1},
 			{"sysmap",    required_argument, NULL,           's'},
+			{"verbose",         no_argument, &verbose,         1},
 			{},
 		};
 
@@ -845,49 +867,57 @@ int main(int argc, char **argv)
 			usage();
 	}
 
+	stamp(NULL);
+
 	if (optind + 2 != argc && !(sysmap && optind + 1 == argc))
 		usage();
 
 	in = argv[optind];
 	if (sysmap) {
 		sysmap_out = fopen(sysmap, "w");
-		if (!sysmap_out) {
-			perror(sysmap);
-			exit(EXIT_FAILURE);
-		}
+		if (!sysmap_out)
+			err(EXIT_FAILURE, "failed to open sysmap output file %s", sysmap);
 	}
 
 	if (optind + 1 == argc) {
 		read_elf(in, sysmap_out);
-		if (ferror(sysmap_out) || fclose(sysmap_out)) {
-			perror(sysmap);
-			exit(EXIT_FAILURE);
-		}
+		fflush(sysmap_out);
+		if (ferror(sysmap_out) || fclose(sysmap_out))
+			errx(EXIT_FAILURE, "error writing sysmap file %s", sysmap);
 		return 0;
 	}
 
 	out_bin_name = argv[optind + 1];
 	out_bin_file = fopen(out_bin_name, "w");
-	if (!out_bin_file) {
-		perror(out_bin_name);
-		exit(EXIT_FAILURE);
-	}
+	if (!out_bin_file)
+		err(EXIT_FAILURE, "failed to open nin.out file %s", out_bin_name);
 
 	read_elf(in, sysmap_out);
-	if (sysmap_out && (ferror(sysmap_out) || fclose(sysmap_out))) {
-		perror(sysmap);
-		exit(EXIT_FAILURE);
+	if (sysmap_out) {
+		fflush(sysmap_out);
+		if (ferror(sysmap_out) || fclose(sysmap_out))
+			errx(EXIT_FAILURE, "error writing sysmap file %s", sysmap);
 	}
+	stamp("read elf");
+
 	shrink_table();
+	stamp("shrink table");
+
 	sort_symbols();
+	stamp("sort symbols");
+
 	optimize_token_table();
+
 	write_src(out_bin_file, out_bin_name);
 
 	/* Write errors are latched in the stream, so one check at the end covers them all. */
-	if (ferror(out_bin_file) || fclose(out_bin_file)) {
-		perror(out_bin_name);
-		exit(EXIT_FAILURE);
-	}
+	fflush(out_bin_file);
+	if (ferror(out_bin_file) || fclose(out_bin_file))
+		errx(EXIT_FAILURE, "error writing out.bin file %s", out_bin_name);
+
+	fflush(stdout);
+	if (ferror(stdout))
+		errx(EXIT_FAILURE, "error writing output file");
 
 	return 0;
 }
