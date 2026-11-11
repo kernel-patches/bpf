@@ -996,8 +996,10 @@ static int srp_init_cmd_priv(struct Scsi_Host *shost, struct scsi_cmnd *cmd)
 			goto out;
 	}
 	req->indirect_desc = kmalloc(target->indirect_size, GFP_KERNEL);
-	if (!req->indirect_desc)
+	if (!req->indirect_desc) {
+		kfree(req->fr_list);
 		goto out;
+	}
 
 	dma_addr = ib_dma_map_single(ibdev, req->indirect_desc,
 				     target->indirect_size,
