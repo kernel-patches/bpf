@@ -60,6 +60,8 @@ bool btintel_pcie_fatal_err_testmode_active(struct btintel_pcie_data *data);
 #define BTINTEL_PCIE_DBG_INFO_TLV_VERSION	2
 #define BTINTEL_PCIE_BUF_ALLOC_TLV_VERSION	1
 #define BTINTEL_PCIE_CONFIG_SET_TLV_VERSION	1
+#define BTINTEL_PCIE_REGION_TLV_VERSION		3
+
 /* Debug Info TLV */
 #define BTINTEL_PCIE_CONFIG_NAME_LEN		64
 #define BTINTEL_PCIE_DOMAIN_BT			0
@@ -69,6 +71,9 @@ bool btintel_pcie_fatal_err_testmode_active(struct btintel_pcie_data *data);
 #define BTINTEL_PCIE_MAX_BUF_FRAGS		16
 #define BTINTEL_PCIE_MIN_BUF_SIZE		(32 * 1024)
 #define BTINTEL_PCIE_MAX_BUF_SIZE		(4 * 1024 * 1024)
+/* Region Tlv */
+#define BTINTEL_PCIE_REGION_ID_MAX		63
+#define BTINTEL_PCIE_REGION_NAME_LEN		32
 
 enum btintel_pcie_image_tlv_type {
 	BTINTEL_PCIE_IMAGE_TLV_TYPE_EXTERNAL	= 0x1,
@@ -127,6 +132,42 @@ enum btintel_pcie_dbg_timepoint {
 	BTINTEL_PCIE_TP_HOST_D3_START		= 16,
 	BTINTEL_PCIE_TP_HOST_D3_END		= 17,
 	BTINTEL_PCIE_TP_MAX_NUM,
+};
+
+/* Region types */
+enum btintel_pcie_dbg_region_type {
+	BTINTEL_PCIE_REGION_INVALID		= 0,
+	BTINTEL_PCIE_REGION_TLV		= 1,
+	BTINTEL_PCIE_REGION_INTERNAL_BUF	= 2,
+	BTINTEL_PCIE_REGION_DRAM_BUF		= 3,
+	BTINTEL_PCIE_REGION_DEVICE_TXFIFO	= 4,
+	BTINTEL_PCIE_REGION_DEVICE_RXFIFO	= 5,
+	BTINTEL_PCIE_REGION_LMAC_ERROR_TBL	= 6,
+	BTINTEL_PCIE_REGION_UMAC_ERROR_TBL	= 7,
+	BTINTEL_PCIE_REGION_FW_RSP_OR_NOTIF	= 8,
+	BTINTEL_PCIE_REGION_DEVICE_MEM		= 9,
+	BTINTEL_PCIE_REGION_PERIPH_MAC		= 10,
+	BTINTEL_PCIE_REGION_PERIPH_PHY		= 11,
+	BTINTEL_PCIE_REGION_PERIPH_AUX		= 12,
+	BTINTEL_PCIE_REGION_VM			= 13,
+	BTINTEL_PCIE_REGION_CSR			= 14,
+	BTINTEL_PCIE_REGION_DRAM_IMR		= 15,
+	BTINTEL_PCIE_REGION_PCI_IOSF_CFG	= 16,
+	BTINTEL_PCIE_REGION_SPECIAL_DEV_MEM	= 17,
+	BTINTEL_PCIE_REGION_DBGI_SRAM		= 18,
+	BTINTEL_PCIE_REGION_TYPE_MAX
+};
+
+/*
+ * Region dump policy flags for OS dump-size limits.
+ * @BTINTEL_PCIE_REGION_POLICY_NO_LIMIT: OS has no dump-size limit
+ * @BTINTEL_PCIE_REGION_POLICY_MAX_600KB: Wi-Fi LKD dump request
+ * @BTINTEL_PCIE_REGION_POLICY_MAX_5MB: Microsoft BSOD/LKD dump request
+ */
+enum btintel_pcie_dbg_region_policy {
+	BTINTEL_PCIE_REGION_POLICY_NO_LIMIT	= BIT(0),
+	BTINTEL_PCIE_REGION_POLICY_MAX_600KB	= BIT(1),
+	BTINTEL_PCIE_REGION_POLICY_MAX_5MB	= BIT(2),
 };
 
 /* TLV header */
@@ -209,6 +250,86 @@ struct btintel_pcie_tlv_config_set {
 	struct btintel_pcie_addr_value addr_pair[];
 } __packed;
 
+/* Device address for region conf params */
+struct btintel_pcie_tlv_dev_addr {
+	__le32 size_bytes;
+	__le32 addr_offset;
+} __packed;
+
+/* Special device address */
+struct btintel_pcie_tlv_special_dev_addr {
+	__le16 special_addr_type;
+	__le16 struct_version;
+	__le32 base_addr;
+	__le32 size_bytes;
+	__le32 addr_offset;
+} __packed;
+
+/* FIFOs */
+struct btintel_pcie_tlv_fifos {
+	__le32 fifo_ids[2];
+	__le32 skip_data;
+	__le32 addr_offset;
+} __packed;
+
+/* Error table */
+struct btintel_pcie_tlv_error_table {
+	__le32 struct_version;
+	__le32 base_addr;
+	__le32 size_bytes;
+	__le32 addr_offset;
+} __packed;
+
+/* Internal buffer */
+struct btintel_pcie_tlv_internal_buf {
+	__le32 alloc_id;
+	__le32 base_addr;
+	__le32 size_bytes;
+} __packed;
+
+/* Region conf params union */
+union btintel_pcie_region_conf_params {
+	struct btintel_pcie_tlv_dev_addr	dev_addr;
+	struct btintel_pcie_tlv_special_dev_addr special_dev_addr;
+	struct btintel_pcie_tlv_fifos	fifos;
+	struct btintel_pcie_tlv_error_table	error_table;
+	struct btintel_pcie_tlv_internal_buf internal_buf;
+	__le32				dram_alloc_id;
+	__le32				tlv_output_bitmask;
+} __packed;
+
+/*
+ * struct btintel_pcie_tlv_region - YoYo debug region TLV
+ * @hdr: Common TLV type and payload length
+ * @dbg_hdr: Debug TLV version and domain
+ * @region_id: Identifier used to select this region for a trigger
+ * @region_dump_policy: Policy flags controlling dump size limits
+ * @region_type: Region storage or access type
+ * @region_sub_type: Region-specific subtype
+ * @region_sub_type_ver: Version of the region subtype data
+ * @reserved: Reserved for future use
+ * @region_name: Fixed-size region name
+ * @conf_params: Type-specific fixed configuration parameters
+ * @addrs: Variable-length address list for address-based region types
+ *
+ * Describes a debug region in the packed firmware TLV. Address-based region
+ * types may append a variable-length address array after @conf_params.
+ * Multi-byte fields are stored in little-endian format.
+ */
+struct btintel_pcie_tlv_region {
+	struct btintel_pcie_tlv_hdr hdr;
+	struct btintel_pcie_dbg_hdr dbg_hdr;
+	__le16 region_id;
+	__le16 region_dump_policy;
+	u8     region_type;
+	u8     region_sub_type;
+	u8     region_sub_type_ver;
+	u8     reserved;
+	u8     region_name[BTINTEL_PCIE_REGION_NAME_LEN];
+	union  btintel_pcie_region_conf_params conf_params;
+	__le32 addrs[];
+} __packed;
+
 /* Parsed buffer allocation entry in the YoYo context */
 struct btintel_pcie_buf_alloc {
 	u32	alloc_id;
@@ -227,6 +348,20 @@ struct btintel_pcie_yoyo_config_set {
 	u32				addr_offset;
 	u32				num_pairs;
 	struct btintel_pcie_addr_value	*pairs;
+};
+
+/* Parsed region entry */
+struct btintel_pcie_yoyo_region {
+	struct list_head	list;
+	u16			region_id;
+	u16			dump_policy;
+	u8			type;
+	u8			sub_type;
+	u8			sub_type_ver;
+	char		name[BTINTEL_PCIE_REGION_NAME_LEN];
+	u32			num_addrs;
+	u32			*addrs;
+	union btintel_pcie_region_conf_params conf;
 };
 
 /*
