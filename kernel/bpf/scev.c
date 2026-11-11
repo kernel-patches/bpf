@@ -686,6 +686,38 @@ static int maybe_load_fp(struct scev *scev, struct env *e, struct bpf_insn *insn
 	return replace_reg(scev, e, insn->dst_reg, id);
 }
 
+/*
+ * The low 32 bits of a + b depend on the low 32 bits of a and b only: 'w1 += w2' is
+ * (zext32 (+ a b)). That doesn't hold for a right shift and for a division. Their operands are zero
+ * or sign extended and a shift amount is masked, so that every expression is a 64-bit operation.
+ */
+static void alu32_operands(struct scev *scev, u32 op, int *a, int *b)
+{
+	s64 imm = 0;
+	bool imm_b = *b >= 0 && is_imm(scev, *b, &imm);
+
+	switch (op) {
+	case BPF_RSH:
+	case BPF_ARSH:
+		*a = expr1(scev, op == BPF_RSH ? ZEXT32 : SEXT32, *a);
+		fallthrough;
+	case BPF_LSH:
+		*b = imm_b ? imm_expr(scev, imm & 31) :
+			     expr2(scev, BPF_AND, *b, imm_expr(scev, 31));
+		break;
+	case BPF_DIV:
+	case BPF_MOD:
+		*a = expr1(scev, ZEXT32, *a);
+		*b = imm_b ? imm_expr(scev, (u32)imm) : expr1(scev, ZEXT32, *b);
+		break;
+	case SDIV:
+	case SMOD:
+		*a = expr1(scev, SEXT32, *a);
+		*b = imm_b ? imm_expr(scev, (s32)imm) : expr1(scev, SEXT32, *b);
+		break;
+	}
+}
+
 static int transfer(struct bpf_verifier_env *env, struct env *e, int idx)
 {
 	const bool little_endian = htons(0x3412) == 0x1234;
@@ -700,7 +732,7 @@ static int transfer(struct bpf_verifier_env *env, struct env *e, int idx)
 	u32 src = insn->src_reg;
 	u32 op, sext, l, r;
 	bool need_bswap;
-	int i, id;
+	int i, id, a;
 	s64 imm;
 
 	/* reg2expr[12] is a stack slot, not r12 */
@@ -764,19 +796,17 @@ static int transfer(struct bpf_verifier_env *env, struct env *e, int idx)
 			else
 				goto mark_dst_unknown;
 
-			/*
-			 * 'r1 <<= 32; r1 >>= 32' is (u32)r1 for cpu v1 and v2. Only here both
-			 * shifts are known to be 64-bit ones: the result of a 32-bit shift is
-			 * (zext32 ...), and (>> x 32) is 'w1 >>= w2' with 32 in w2 as well,
-			 * which shifts by 0.
-			 */
+			/* 'r1 <<= 32; r1 >>= 32' is (u32)r1 for cpu v1 and v2 */
 			if (class == BPF_ALU64 && op == BPF_RSH && id >= 0 &&
 			    is_imm(scev, id, &imm) && imm == 32 &&
 			    is_binop(scev, BPF_LSH, reg2expr[dst], &l, &r) &&
 			    is_imm(scev, r, &imm) && imm == 32)
 				return replace_reg(scev, e, dst, expr1(scev, ZEXT32, l));
 
-			id = expr2(scev, op, reg2expr[dst], id);
+			a = reg2expr[dst];
+			if (class == BPF_ALU)
+				alu32_operands(scev, op, &a, &id);
+			id = expr2(scev, op, a, id);
 
 			if (class == BPF_ALU)
 				id = expr1(scev, ZEXT32, id);
