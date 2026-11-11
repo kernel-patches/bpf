@@ -412,7 +412,7 @@
 			status = "disabled";
 		};
 
-		dma0: dma@f7370000 {
+		dma0: dma-controller@f7370000 {
 			compatible = "hisilicon,k3-dma-1.0";
 			reg = <0x0 0xf7370000 0x0 0x1000>;
 			#dma-cells = <1>;
