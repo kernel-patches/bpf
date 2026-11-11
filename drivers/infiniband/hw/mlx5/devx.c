@@ -2320,8 +2320,12 @@ static unsigned int devx_umem_find_best_pgsize(struct ib_umem *umem,
 	 */
 	while ((ib_umem_dma_offset(umem, page_size) != 0 ||
 		(umem->length % page_size) != 0) &&
-		page_size > PAGE_SIZE)
-		page_size /= 2;
+		page_size > PAGE_SIZE) {
+		pgsz_bitmap &= page_size - 1;
+		if (!pgsz_bitmap)
+			return 0;
+		page_size = rounddown_pow_of_two(pgsz_bitmap);
+	}
 
 	return page_size;
 }
