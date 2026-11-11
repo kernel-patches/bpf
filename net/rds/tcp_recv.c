@@ -213,6 +213,20 @@ static int rds_tcp_data_recv(read_descriptor_t *desc, struct sk_buff *skb,
 			}
 		}
 
+		/*
+		 * The payload is queued on tinc until the whole message has
+		 * arrived, so a peer must not announce more than a sender is
+		 * allowed to send. Check on every pass, not only when the
+		 * header completes: the drop is asynchronous and more data
+		 * can arrive before the connection is shut down.
+		 */
+		if (!tc->t_tinc_hdr_rem &&
+		    tc->t_tinc_data_rem > RDS_MAX_MSG_SIZE) {
+			rds_conn_path_drop(cp, false);
+			desc->error = -EPROTO;
+			goto out;
+		}
+
 		if (left && tc->t_tinc_data_rem) {
 			to_copy = min(tc->t_tinc_data_rem, left);
 
