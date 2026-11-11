@@ -799,10 +799,139 @@ __naked int callee_unlocks_slot(void)
 	: __clobber_all);
 }
 
+private(C) struct bpf_spin_lock wlock;
+
+static __noinline void take_wlock(void)
+{
+	bpf_spin_lock(&wlock);
+}
+
+static __noinline void drop_wlock(void)
+{
+	bpf_spin_unlock(&wlock);
+}
+
+/*
+ * One subprog takes the lock and returns holding it, another drops it, and no
+ * throw finds it held: nothing keeps track of it.
+ */
+SEC("tc")
+__description("frame_desc: a lock a subprog returns holding, away from the throw")
+__arch_x86_64 __arch_arm64
+__success __log_level(5)
+__msg("frame descriptors: slots 0 insns 0 sites 0")
+int lock_wrappers(struct __sk_buff *skb)
+{
+	if (skb->len > 1000)
+		bpf_throw(0);
+	take_wlock();
+	drop_wlock();
+	return 0;
+}
+
+static __noinline void enter_rcu(void)
+{
+	bpf_rcu_read_lock();
+}
+
+/*
+ * The subprog returns in the RCU read section it entered, and no throw finds
+ * the program in it: nothing counts it.
+ */
+SEC("tc")
+__description("frame_desc: a section a subprog returns in, away from the throw")
+__arch_x86_64 __arch_arm64
+__success __log_level(5)
+__msg("frame descriptors: slots 0 insns 0 sites 0")
+int rcu_wrapper(struct __sk_buff *skb)
+{
+	if (skb->len > 1000)
+		bpf_throw(0);
+	enter_rcu();
+	bpf_rcu_read_unlock();
+	return 0;
+}
+
+static __noinline void new_iter_for_caller(struct bpf_iter_num *it)
+{
+	bpf_iter_num_new(it, 0, 10);
+}
+
+/*
+ * The callee creates the iterator in the stack of its caller, which holds it
+ * from then on: the descriptor of the caller's throw names it there.
+ */
+SEC("tc")
+__description("frame_desc: an iterator a callee creates in the stack of its caller")
+__arch_x86_64 __arch_arm64
+__success __log_level(5)
+__msg("frame descriptors: slots 0 insns 0 sites 1")
+int iter_from_callee(struct __sk_buff *skb)
+{
+	struct bpf_iter_num it;
+	int *v;
+
+	new_iter_for_caller(&it);
+	while ((v = bpf_iter_num_next(&it))) {
+		if (*v == 3 && skb->len > 100)
+			bpf_throw(0);
+	}
+	bpf_iter_num_destroy(&it);
+	return 0;
+}
+
 /*
  * A loop the verifier walks reserves a record at one insn on each of two
- * iterations, the first kept in R7 and the second spilled: the call has one
- * slot in the frame, which cannot hold both records.
+ * iterations and holds both at once, where no throw finds them: one slot
+ * could not hold both, and none is needed.
+ */
+SEC("tc")
+__description("frame_desc: two records reserved at one insn, away from the throw")
+__arch_x86_64 __arch_arm64
+__success __log_level(5)
+__msg("frame descriptors: slots 0 insns 0 sites 0")
+__naked int two_from_one_insn(void)
+{
+	asm volatile (
+	"r8 = *(u32 *)(r1 + %[len]);"
+	"if r8 < 1000 goto +2;"
+	"r1 = 0;"
+	"call %[bpf_throw];"
+	"r7 = 0;"
+	"r6 = 0;"
+	"1: r1 = %[ringbuf] ll;"
+	"r2 = 8;"
+	"r3 = 0;"
+	"call %[bpf_ringbuf_reserve];"
+	"if r0 == 0 goto 4f;"
+	"if r7 != 0 goto 2f;"
+	"r7 = r0;"
+	"goto 3f;"
+	"2: *(u64 *)(r10 - 8) = r0;"
+	"3: r6 += 1;"
+	"if r6 < 2 goto 1b;"
+	"r1 = *(u64 *)(r10 - 8);"
+	"r2 = 0;"
+	"call %[bpf_ringbuf_discard];"
+	"4: if r7 == 0 goto 5f;"
+	"r1 = r7;"
+	"r2 = 0;"
+	"call %[bpf_ringbuf_discard];"
+	"5: r0 = 0;"
+	"exit;"
+	:
+	: __imm_addr(ringbuf),
+	  __imm(bpf_ringbuf_reserve),
+	  __imm(bpf_ringbuf_discard),
+	  __imm(bpf_throw),
+	  [len]"i"(offsetof(struct __sk_buff, len))
+	: __clobber_all);
+}
+
+/*
+ * A loop the verifier walks reserves a record at one insn on each of two
+ * iterations, the first kept in R7 and the second spilled, and a throw finds
+ * both held: the call would need a slot, which cannot hold both records.
  */
 SEC("tc")
 __description("frame_desc: two records reserved at one insn are held at once")

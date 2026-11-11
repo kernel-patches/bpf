@@ -1844,4 +1844,47 @@ __naked int throw_callee_unlocks(void)
 	: __clobber_all);
 }
 
+/* ---- what a frame holds that another frame acquired ---- */
+
+static __noinline void new_iter_in_caller(struct bpf_iter_num *it)
+{
+	bpf_iter_num_new(it, 0, 10);
+}
+
+/*
+ * The callee creates the iterator in the stack of its caller, which holds it
+ * from then on: the throw of the caller destroys it.
+ */
+SEC("tc")
+int throw_iter_from_callee(struct __sk_buff *ctx)
+{
+	struct bpf_iter_num it;
+	int *v;
+
+	new_iter_in_caller(&it);
+	mark_acquired(&it);
+	while ((v = bpf_iter_num_next(&it))) {
+		if (*v == 3 && ctx->len)
+			bpf_throw(0xeB9F);
+	}
+	bpf_iter_num_destroy(&it);
+	return 0;
+}
+
+static __noinline void enter_rcu_in_callee(void)
+{
+	bpf_rcu_read_lock();
+}
+
+/* The callee returns in the section it entered, which the throw of its caller leaves. */
+SEC("tc")
+int throw_rcu_from_callee(struct __sk_buff *ctx)
+{
+	enter_rcu_in_callee();
+	if (ctx->len)
+		bpf_throw(0xeB9F);
+	bpf_rcu_read_unlock();
+	return 0;
+}
+
 char _license[] SEC("license") = "GPL";

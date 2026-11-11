@@ -262,6 +262,9 @@ static void run_suite(const char *prefix)
 	RUN_AS(throw_callee_unlocks, "throw_callee_unlocks_before", THROWN, 1, "0", .param = 1);
 	RUN_AS(throw_callee_unlocks, "throw_callee_unlocks_after", THROWN, 1, "", .param = 2);
 	RUN_AS(throw_callee_unlocks, "throw_callee_unlocks_return", 0, 1, "", .param = 0);
+	/* What a frame holds that a callee acquired for it. */
+	THROW(throw_iter_from_callee, 1, "0");
+	THROW(throw_rcu_from_callee, 0, "s");
 	/* A file and the reader of its dynptr, which goes first. */
 	snprintf(name, sizeof(name), "%sthrow_file_dynptr_held", prefix);
 	if (test__start_subtest(name))
