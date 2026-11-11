@@ -69,7 +69,8 @@
 	};
 
 	reboot-mode-syscon@5f01000 {
-		compatible = "syscon", "simple-mfd";
+		compatible = "hisilicon,hi6220-reboot-mode",
+			     "syscon", "simple-mfd";
 		reg = <0x0 0x05f01000 0x0 0x00001000>;
 
 		reboot-mode {

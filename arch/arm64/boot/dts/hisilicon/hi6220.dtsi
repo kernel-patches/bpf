@@ -294,7 +294,7 @@
 		};
 
 		medianoc_ade: medianoc_ade@f4520000 {
-			compatible = "syscon";
+			compatible = "hisilicon,hi6220-medianoc-ade", "syscon";
 			reg = <0x0 0xf4520000 0x0 0x4000>;
 		};
 

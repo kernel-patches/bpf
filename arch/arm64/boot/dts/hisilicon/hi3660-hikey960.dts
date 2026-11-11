@@ -56,7 +56,8 @@
 	};
 
 	reboot-mode-syscon@32100000 {
-		compatible = "syscon", "simple-mfd";
+		compatible = "hisilicon,hi3660-reboot-mode",
+			     "syscon", "simple-mfd";
 		reg = <0x0 0x32100000 0x0 0x00001000>;
 
 		reboot-mode {
