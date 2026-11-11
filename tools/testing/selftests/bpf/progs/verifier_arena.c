@@ -663,6 +663,9 @@ ARENA_LINKED(arena_ptr_plus_constant, __failure,
 ARENA_LINKED(arena_ptr_plus_constant_on_two_paths, __failure,
 	"if r8 == 0 goto 1f; r3 += 1; goto 2f; 1: r3 += 1; 2: r8 += 1; r3 = le64 r3; r7 = le64 r7;"
 	"r2 = 0xffffffff ll; if r7 != r2 goto out_%=; r3 >>= 32; r3 -= 1; r1 = r6; r1 += r3;")
+/* 'r1 += r2' was verified without a pointer to arena: it stays ALU64 */
+ARENA_LINKED(index_tested_after_the_add, __success __retval(0),
+	"r2 = r8; r2 &= 255; r1 = r6; r1 += r2; if r2 > 63 goto out_%=; r0 = *(u8 *)(r6 + 0);")
 
 SEC("syscall")
 __description("arena: a number is not an address in arena")

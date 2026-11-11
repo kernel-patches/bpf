@@ -3372,11 +3372,52 @@ __naked void name(void)								\
 #define LINKED(name, expect, body)	LINKED_SEC("socket", name, expect, body)
 
 #define VALID	__success __retval(0)
+#define MAP_OOB	__failure __msg("invalid access to map value")
 #define UNBOUND	__failure __msg("unbounded min value")
 
 /* r3 is the address in r1 as a scalar. It does not bound the offset of r1. */
 LINKED(pointer_is_not_scalar, __failure,
 	"r7 &= 127; r1 = r6; r1 += r7; r3 = r1; r3 = le64 r3; if r3 < 64 goto out_%=; r1 += -64;")
+
+/*
+ *	p = buf + i; if (i > 63) return 0; c = *p;
+ * The jump bounds i. r1 is r6 + r7 and r6 is live: r1 is recomputed.
+ */
+#define USE_R6	"r0 = *(u8 *)(r6 + 0);"
+
+LINKED(index_tested_after_the_add, VALID, "r1 = r6; r1 += r7; if r7 > 63 goto out_%=;" USE_R6)
+LINKED(low_32_bits_of_the_index_tested, __failure __msg("R1 unbounded memory access"),
+	"r2 = 0x1000000ff ll; r2 &= r8; r1 = r6; r1 += r2; w3 = w2; if r3 > 63 goto out_%=;" USE_R6)
+/*
+ * A dynptr at r10 - 16. r7 is r10 - 32, r1 is r7 + r8, the jump makes r8 a constant.
+ * 'r1 += r8' refuses 0x100000010: r1 is left as it is. As an int r10 + 0xfffffff0 is r10 - 16.
+ */
+#define DYNPTR_AT(index)							\
+	"r1 = r9; r2 = 0; r3 = r10; r3 += -16; call %[bpf_dynptr_from_skb];"	\
+	"r8 >>= 1; r7 = r10; r7 += -32; r1 = r7; r1 += r8; r2 = " index " ll;"	\
+	"if r8 != r2 goto out_%=; r2 = 0; r3 = r7; r4 = 0; call %[bpf_dynptr_slice_rdwr]; r1 = r6;"
+
+LINKED_SEC("tc", index_is_constant, VALID, DYNPTR_AT("16"))
+LINKED_SEC("tc", index_is_constant_that_the_add_refuses,
+	__failure __msg("dynptr has to be at a constant offset"), DYNPTR_AT("0x100000010"))
+/* r7 is -2 or 5. Its low 2 bits are not 3: the path is infeasible, and r6 + r7 + 2 is empty. */
+LINKED(index_is_empty, VALID __flag(BPF_F_TEST_REG_INVARIANTS),
+	"r7 &= 1; r7 *= 7; r7 += -2; r1 = r6; r1 += r7; r1 += 2; if r7 & 1 goto l_%=; goto out_%=;"
+	"l_%=: if r7 & 2 goto m_%=; goto out_%=; m_%=: r1 += 1;" USE_R6)
+
+/*
+ *	p = buf; i = 0; do { if (i > 62) break; i = *(u16 *)p; p = buf + i; } while (i);
+ * r1 == r6 + r2 at the header in every iteration: it holds at loop entry, the backedge preserves it
+ */
+#define LOOP(add)								\
+	"l_%=: if r2 > 62 goto out_%=; r2 = *(u16 *)(r1 + 0);" add		\
+	"if r2 != 0 goto l_%=; r1 = r6;"
+
+LINKED(base_plus_index_at_loop_header, VALID, "r1 = r6; r2 = 0;" LOOP("r1 = r6; r1 += r2;"))
+LINKED(base_plus_index_at_loop_entry_only, MAP_OOB,
+	"r1 = r6; r2 = 0;" LOOP("r1 = r6; r1 += r2; r2 >>= 1;"))
+LINKED(base_plus_index_on_backedge_only, MAP_OOB,
+	"r1 = r6; r1 += r7; r2 = r8; r2 &= 255;" LOOP("r1 = r6; r1 += r2;"))
 
 LINKED(sign_extension_that_fits, VALID, "r2 = (s8)r8; if r8 > 63 goto out_%=; r1 = r6; r1 += r2;")
 
