@@ -15194,6 +15194,12 @@ bool bpf_is_throw_kfunc(struct bpf_insn *insn)
 	       insn->imm == special_kfunc_list[KF_bpf_throw];
 }
 
+bool bpf_is_dynptr_slice_rdwr_kfunc(struct bpf_insn *insn)
+{
+	return bpf_pseudo_kfunc_call(insn) && insn->off == 0 &&
+	       insn->imm == special_kfunc_list[KF_bpf_dynptr_slice_rdwr];
+}
+
 static bool is_bpf_wq_set_callback_kfunc(u32 btf_id)
 {
 	return btf_id == special_kfunc_list[KF_bpf_wq_set_callback];
@@ -16018,6 +16024,15 @@ static int check_special_kfunc(struct bpf_verifier_env *env, struct bpf_call_arg
 		regs[BPF_REG_0].buf = meta->slice_buf;
 		if (meta->slice_buf.size)
 			env->seen_stack_slice = true;
+		/* No insn stores through a slice of 0 bytes */
+		if (verifier_bug_if(meta->slice_buf.size && meta->arg_constant.value &&
+				    !type_is_rdonly_mem(regs[BPF_REG_0].type) &&
+				    !bpf_scev_in_slice_slots(env, meta->slice_buf.off,
+							     meta->slice_buf.size,
+							     meta->slice_buf.size ==
+							     meta->arg_constant.value),
+				    env, "slice buffer is not in scev slice_slots"))
+			return -EFAULT;
 	} else {
 		return 0;
 	}
@@ -19694,6 +19709,101 @@ static void sync_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier_s
 	}
 }
 
+/* a == b (mod 2^N) implies a == b if both fit in uN or both fit in sN. N is @bits. */
+static bool regs_fit_in_bits(const struct bpf_reg_state *a, const struct bpf_reg_state *b,
+			     u32 bits)
+{
+	u64 umax = GENMASK_ULL(bits - 1, 0);
+	s64 smax = umax >> 1;
+
+	return (reg_umax(a) <= umax && reg_umax(b) <= umax) ||
+	       (reg_smin(a) >= -smax - 1 && reg_smax(a) <= smax &&
+		reg_smin(b) >= -smax - 1 && reg_smax(b) <= smax);
+}
+
+/*
+ * The state of the SCEV register @r. As in check_stack_read_fixed_off() a fill of @bits bits from
+ * byte @fill_off of the slot reads the low bits of the spill.
+ */
+static struct bpf_reg_state *scev_reg_for_fill(struct bpf_func_state *frame, u32 r, u32 fill_off,
+					       u32 bits)
+{
+	struct bpf_stack_state *ss;
+
+	if (r < MAX_BPF_REG)
+		return &frame->regs[r];
+	if (r - MAX_BPF_REG >= bpf_stack_nr_slots(frame))
+		return NULL;
+	ss = bpf_stack_slot(frame, r - MAX_BPF_REG);
+	if (!bpf_is_spilled_reg(ss) || bpf_spill_size(ss) * BITS_PER_BYTE < bits ||
+	    !bpf_stack_narrow_access_ok(fill_off, bits / BITS_PER_BYTE, bpf_spill_size(ss)))
+		return NULL;
+	return &ss->spilled_ptr;
+}
+
+/*
+ * The jump at @idx refined @regno. A register that scalar evolution links to it holds
+ * @regno + delta on every path to the jump: intersect the two. The intersection is empty: no
+ * execution gets here with this state (the path is infeasible), the register is left as it is.
+ */
+static void refine_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier_state *vstate,
+			       int idx, u32 regno)
+{
+	struct bpf_func_state *frame = vstate->frame[vstate->curframe];
+	struct bpf_reg_state *reg, implied, saved;
+	u32 pos, linked_regno, fill_off, bits;
+	s64 delta;
+
+	if (frame->regs[regno].type != SCALAR_VALUE)
+		return;
+	for (pos = 0;
+	     bpf_scev_next_linked_reg(env, idx, regno, &pos, &linked_regno, &fill_off, &delta,
+				      &bits);
+	     pos++) {
+		reg = scev_reg_for_fill(frame, linked_regno, fill_off, bits);
+		/*
+		 * The other half-slot of a 64-bit spill is dead: __clean_func_state() left
+		 * a 32-bit spill, the low 32 bits of the value.
+		 */
+		if (!reg && bits == 64 &&
+		    bpf_stack_narrow_access_ok(fill_off, BPF_REG_SIZE / 2, BPF_REG_SIZE)) {
+			bits = 32;
+			reg = scev_reg_for_fill(frame, linked_regno, fill_off, bits);
+		}
+		if (!reg || reg->type != SCALAR_VALUE)
+			continue;
+
+		implied = frame->regs[regno];
+		add_scalar_to_reg(&implied, delta);
+		if (regs_fit_in_bits(reg, &implied, bits))
+			bits = 64;
+		if (bits < 32)
+			continue;
+		/* tnum_intersect() of two tnums that don't overlap is not empty */
+		if (!tnum_overlap(bits == 32 ? tnum_subreg(reg->var_off) : reg->var_off,
+				  bits == 32 ? tnum_subreg(implied.var_off) : implied.var_off))
+			continue;
+		saved = *reg;
+		/*
+		 * Equal in 64 bits is equal in the low 32 bits too. 'if w1 s> 200' on a zero
+		 * extended int refines nothing but the 32-bit range.
+		 */
+		regs_refine_cond_op(reg, &implied, BPF_JEQ, true);
+		if (bits == 64)
+			regs_refine_cond_op(reg, &implied, BPF_JEQ, false);
+		reg_bounds_sync(reg);
+		if (reg_is_empty(reg) || const_tnum_range_mismatch(reg) ||
+		    const_tnum_range_mismatch_32(reg)) {
+			*reg = saved;
+			continue;
+		}
+		if (linked_regno < MAX_BPF_REG)
+			mark_reg_scratched(env, linked_regno);
+		else
+			mark_stack_slot_scratched(env, linked_regno - MAX_BPF_REG);
+	}
+}
+
 /* It's known which way the jump at env->insn_idx goes */
 static void mark_loop_exit_decided(struct bpf_verifier_env *env, struct bpf_verifier_state *st)
 {
@@ -19742,6 +19852,11 @@ static int refine_live_branch(struct bpf_verifier_env *env, struct bpf_insn *ins
 	regs[insn->dst_reg] = *reg1;
 	if (BPF_SRC(insn->code) == BPF_X)
 		regs[insn->src_reg] = *reg2;
+	if (!env->bpf_capable)
+		return 0;
+	if (BPF_SRC(insn->code) == BPF_X)
+		refine_linked_regs(env, env->cur_state, env->insn_idx, insn->src_reg);
+	refine_linked_regs(env, env->cur_state, env->insn_idx, insn->dst_reg);
 	return 0;
 }
 
@@ -19903,6 +20018,14 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 		sync_linked_regs(env, this_branch, dst_reg, &linked_regs);
 		sync_linked_regs(env, other_branch, &other_branch_regs[insn->dst_reg],
 				 &linked_regs);
+	}
+	if (env->bpf_capable) {
+		if (BPF_SRC(insn->code) == BPF_X) {
+			refine_linked_regs(env, this_branch, *insn_idx, insn->src_reg);
+			refine_linked_regs(env, other_branch, *insn_idx, insn->src_reg);
+		}
+		refine_linked_regs(env, this_branch, *insn_idx, insn->dst_reg);
+		refine_linked_regs(env, other_branch, *insn_idx, insn->dst_reg);
 	}
 
 	/* if one pointer register is compared to another pointer

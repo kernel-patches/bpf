@@ -288,9 +288,9 @@ __success __log_level(2)
 /*
  * check that r5 is unlinked after 'if', collect_linked_regs() can't tie
  * more than 5 registers for a single insn and the register compared by
- * the jump is not exempt from that.
+ * the jump is not exempt from that. The jump refines the copies all the same.
  */
-__msg("7: (25) if r5 > 0x7 goto pc+0         ; R5=scalar(smin=")
+__msg("7: (25) if r5 > 0x7 goto pc+0         ; R0=" LINKED("1", 7, 0x7) " R1=" LINKED("1", 7, 0x7) " R2=" LINKED("1", 7, 0x7) " R3=" LINKED("1", 7, 0x7) " R4=" LINKED("1", 7, 0x7) " R5=scalar(smin=")
 __msg("12: (bf) r5 = r5                      ; R5=scalar(id=2")
 __naked void linked_regs_too_many_regs(void)
 {
@@ -808,7 +808,7 @@ __naked void linked_regs_and_subreg_def(void)
  * at runtime), which must be rejected.
  */
 SEC("socket")
-__failure __msg("R0 max value is outside of the allowed memory range")
+__failure __msg("invalid access to map value, value_size=8 off=8 size=1")
 __naked void ldsx_fill_scalar_id_not_shared(void)
 {
 	asm volatile ("					\
