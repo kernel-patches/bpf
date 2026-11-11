@@ -2385,6 +2385,7 @@ static __always_inline int task_mm_cid(struct task_struct *t)
 struct sched_cache_time {
 	u64 runtime;
 	unsigned long epoch;
+	unsigned long epoch_last_visit;
 };
 
 struct sched_cache_group {
@@ -2397,6 +2398,7 @@ struct sched_cache_group {
 	int cpu;
 	refcount_t refcnt;
 	struct rcu_head rcu;
+	cpumask_var_t visited_cpus;
 } ____cacheline_aligned_in_smp;
 
 struct sched_cache_group *sched_cache_group_get(struct sched_cache_group *grp);
