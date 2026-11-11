@@ -12217,6 +12217,10 @@ static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 				verbose(env, "failed to push state for global subprog exception path\n");
 				return PTR_ERR(branch);
 			}
+			/* a throw of the subprog finds the frames as they are at the call */
+			err = bpf_frame_desc_record_site(env, env->cur_state, *insn_idx);
+			if (err)
+				return err;
 			return process_bpf_exit_full(env, NULL, true);
 		}
 
@@ -16477,6 +16481,10 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 			if (err < 0)
 				return err;
 		}
+		/* with the registers the frame calls it with, which the call clobbers */
+		err = bpf_frame_desc_record_site(env, env->cur_state, insn_idx);
+		if (err)
+			return err;
 	}
 
 	bpf_diag_record_caller_saved(env, regs);
@@ -21087,8 +21095,7 @@ static int process_bpf_exit_full(struct bpf_verifier_env *env,
 	 * for exceptional exits.
 	 */
 	if (exception_exit)
-		return bpf_frame_desc_record_site(env, env->cur_state, env->insn_idx) ?:
-		       PROCESS_BPF_EXIT;
+		return PROCESS_BPF_EXIT;
 
 	if (env->cur_state->curframe) {
 		/* exit from nested function */
@@ -25710,6 +25717,8 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr,
 	 */
 	for (i = 0; bpf_jit_supports_exception_cleanup() && i < env->subprog_cnt; i++)
 		env->describe_frames |= env->subprog_info[i].might_throw;
+	/* the unwinder has the registers of the frames where bpf_throw() has a native entry */
+	env->describe_regs = env->describe_frames && bpf_arch_throw_entry();
 
 	ret = check_unwind_insns(env);
 	if (ret < 0)

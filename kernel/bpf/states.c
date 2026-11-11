@@ -215,6 +215,8 @@ int bpf_clean_verifier_state(struct bpf_verifier_env *env, struct bpf_verifier_s
 		u32 ip = bpf_frame_insn_idx(st, i);
 		u16 live_regs = env->insn_aux_data[ip].live_regs_before;
 
+		/* a throw finds what the frame holds through them, see frame_desc.c */
+		live_regs |= bpf_frame_desc_kept_regs(env, st, i);
 		__clean_func_state(env, st, st->frame[i], live_regs, i);
 	}
 	return 0;
@@ -691,9 +693,10 @@ static bool loop_stack_safe(struct bpf_verifier_env *env, struct bpf_func_state 
  * the type in the current state is meaningful.
  */
 static bool func_states_equal(struct bpf_verifier_env *env, struct bpf_func_state *old,
-			      struct bpf_func_state *cur, u32 insn_idx)
+			      struct bpf_func_state *cur, u32 insn_idx, u16 kept)
 {
-	u16 live_regs = env->insn_aux_data[insn_idx].live_regs_before;
+	/* and the registers that @old keeps for a throw, see bpf_frame_desc_keeps() */
+	u16 live_regs = env->insn_aux_data[insn_idx].live_regs_before | kept;
 	u16 i;
 
 	if (old->callback_depth > cur->callback_depth)
@@ -781,7 +784,8 @@ bool bpf_state_subsumes(struct bpf_verifier_env *env, struct bpf_verifier_state 
 		insn_idx = bpf_frame_insn_idx(old, i);
 		if (old->frame[i]->callsite != cur->frame[i]->callsite)
 			return false;
-		if (!func_states_equal(env, old->frame[i], cur->frame[i], insn_idx))
+		if (!func_states_equal(env, old->frame[i], cur->frame[i], insn_idx,
+				       bpf_frame_desc_kept_regs(env, old, i)))
 			return false;
 	}
 

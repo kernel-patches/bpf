@@ -179,6 +179,13 @@ struct bpf_unwind_ctx {
 	/* The sections the frames hold, per kind, summed by the first walk. */
 	const struct bpf_resource *section[BPF_UNWIND_NR_SECTIONS];
 	s64 nr_sections[BPF_UNWIND_NR_SECTIONS];
+	/*
+	 * The registers of the frame the walk is at, when the entry of
+	 * bpf_throw() captured those of the throw site: the callee-saved ones,
+	 * and R0 to R5 while the walk is at the frame that threw.
+	 */
+	const struct bpf_throw_regs *entry;
+	struct bpf_throw_regs regs;
 };
 
 /*
@@ -212,6 +219,7 @@ static void bpf_unwind_release_desc(struct bpf_unwind_ctx *ctx, const struct bpf
 		const struct bpf_frame_desc_entry *ent = &d->ent[i];
 		const struct bpf_resource *res = &pool->resources[ent->res];
 		u64 *loc = (u64 *)(long)(fp + ent->off);
+		u64 val;
 
 		if (ent->flags & (BPF_FRAME_ENT_COUNTER | BPF_FRAME_ENT_COUNT)) {
 			if (!locks || first || late)
@@ -226,9 +234,13 @@ static void bpf_unwind_release_desc(struct bpf_unwind_ctx *ctx, const struct bpf
 		if (ent->flags & BPF_FRAME_ENT_OBJ) {
 			handle = loc;
 		} else {
-			if (!*loc)
+			/* no descriptor names a register that was not captured */
+			if ((ent->flags & BPF_FRAME_ENT_REG) && WARN_ON_ONCE(!ctx->entry))
 				continue;
-			handle = (void *)(long)(*loc - ent->adj);
+			val = ent->flags & BPF_FRAME_ENT_REG ? ctx->regs.r[ent->reg] : *loc;
+			if (!val)
+				continue;
+			handle = (void *)(long)(val - ent->adj);
 		}
 		if (locks && late != (res->kind == BPF_RESOURCE_IRQ_FLAG &&
 				      !arch_irqs_disabled_flags(*(unsigned long *)handle)))
@@ -290,6 +302,8 @@ static bool bpf_unwind_walker(void *cookie, u64 ip, u64 sp, u64 bp)
 		return !ctx->cnt;
 	ctx->cnt++;
 	bpf_unwind_release_frame(ctx, prog, ip, bp);
+	/* the walk leaves the frame for its caller, which has R6 to R9 as it left them */
+	bpf_throw_caller_regs(bpf_prog_frame_aux(prog), bp, &ctx->regs.r[BPF_REG_6]);
 	/* the main program is where the exception callback takes over */
 	return bpf_is_subprog(prog);
 }
@@ -302,16 +316,21 @@ static bool bpf_unwind_walker(void *cookie, u64 ip, u64 sp, u64 bp)
  * each frame's entries of the phase in the order of its descriptor; the
  * frames are released as the walk passes them, so their number is not
  * bounded. The sections need no walk of their own: the first one summed
- * their counts, and sections of one kind are all the same.
+ * their counts, and sections of one kind are all the same. @regs are the
+ * registers of the frame that called bpf_throw(), or NULL when the
+ * architecture does not capture them.
  */
-void bpf_unwind_release_frames(void)
+void bpf_unwind_release_frames(const struct bpf_throw_regs *regs)
 {
-	struct bpf_unwind_ctx ctx = {};
+	struct bpf_unwind_ctx ctx = { .entry = regs };
 	int s;
 
 	for (ctx.phase = 0; ctx.phase < BPF_UNWIND_NR_PHASES; ctx.phase++) {
 		if (ctx.phase != BPF_UNWIND_PHASE_SECTIONS) {
 			ctx.cnt = 0;
+			/* every walk starts at the throw site */
+			if (regs)
+				ctx.regs = *regs;
 			arch_bpf_stack_walk(bpf_unwind_walker, &ctx);
 			continue;
 		}

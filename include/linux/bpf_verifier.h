@@ -1273,8 +1273,8 @@ struct bpf_res_acq {
 	bool slot;	/* and some site cannot say where: the handle is kept in a slot */
 };
 
-/* How many places of its stack a site remembers a frame keeping one handle in. */
-#define BPF_RES_LOC_MAX		3
+/* How many places a site remembers a frame keeping one handle in. */
+#define BPF_RES_LOC_MAX		4
 
 /*
  * A site: a call a frame can be unwound at, bpf_throw() or the call of a
@@ -1292,7 +1292,8 @@ struct bpf_res_site {
 
 /*
  * Where the frame at a site keeps the handle of what an acquisition acquired:
- * the slots of its stack that every visit holding it found the handle in.
+ * the slots of its stack and the registers that every visit holding it found
+ * the handle in.
  */
 struct bpf_res_loc {
 	u32 site;	/* index of the site */
@@ -1301,8 +1302,9 @@ struct bpf_res_loc {
 	u8 cnt;		/* the places left */
 	bool obj;	/* they are the resource itself, an object on the stack */
 	struct {
-		s16 off;	/* relative to R10 */
+		s16 off;	/* relative to R10, or the number of the register */
 		s16 adj;	/* the pointer there points that many bytes into the object */
+		bool reg;
 	} at[BPF_RES_LOC_MAX];
 };
 
@@ -1374,6 +1376,8 @@ struct bpf_verifier_env {
 	u32 frame_desc_insns;			/* instructions keeping them up to date */
 	u32 frame_desc_bytes;			/* descriptors and resource classes */
 	bool describe_frames;			/* frame descriptors are generated: the program may throw */
+	bool describe_regs;			/* and may name registers, see bpf_arch_throw_entry() */
+	u16 frame_desc_regs;			/* the registers that some site names */
 	int exception_callback_subprog;
 	bool explore_alu_limits;
 	bool allow_ptr_leaks;
@@ -2332,6 +2336,8 @@ int bpf_frame_desc_record_section(struct bpf_verifier_env *env, u8 kind, s8 delt
 int bpf_frame_desc_record_exit(struct bpf_verifier_env *env);
 bool bpf_frame_desc_keeps(const struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
 			  int f, const struct bpf_reg_state *reg);
+u16 bpf_frame_desc_kept_regs(const struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
+			     int f);
 int bpf_frame_desc_record_site(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
 			       int insn_idx);
 int bpf_frame_desc_record_return(struct bpf_verifier_env *env, struct bpf_verifier_state *st,

@@ -663,6 +663,9 @@ int bpf_states_join(struct bpf_verifier_env *env, struct bpf_verifier_state *dst
 			u16 live_regs = env->insn_aux_data[insn_idx].live_regs_before;
 			u32 cnt;
 
+			/* the registers both keep for a throw are joined, see bpf_frame_desc_keeps() */
+			live_regs |= bpf_frame_desc_kept_regs(env, a, fr) &
+				     bpf_frame_desc_kept_regs(env, b, fr);
 			/* not the states that get to the head through a call of the function */
 			frame = a->frame[fr];
 			cnt = frame->loop_stack_cnt;

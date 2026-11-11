@@ -2985,7 +2985,8 @@ int bpf_do_misc_fixups(struct bpf_verifier_env *env)
 		}
 
 		if (bpf_is_may_goto_insn(insn) && timed_may_goto) {
-			u16 live = env->insn_aux_data[i].live_regs_before;
+			/* a site of a program that throws reads a register the program is done with */
+			u16 live = env->insn_aux_data[i].live_regs_before | env->frame_desc_regs;
 			int reg, save_off = 0;
 
 			/* a register that is dead here holds the address of the count */

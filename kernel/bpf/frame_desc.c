@@ -7,11 +7,16 @@
  * A frame is unwound at a site: the call it has not returned from,
  * bpf_throw() or the call of a subprog that may throw. The main pass visits a
  * site with every state a frame can be in there, and records what the frame
- * keeps in its own stack on each visit: the iterators and saved IRQ flags it
- * holds, which are on its stack, the slots a reference it holds is spilled
- * in, and how many RCU read and preemption disabled sections it is in. What
- * every visit finds in the same place goes into the descriptor of the site,
- * and costs the program nothing.
+ * keeps where on each visit: the iterators and saved IRQ flags it holds,
+ * which are on its stack, the slots a reference it holds is spilled in and
+ * the registers that hold it, and how many RCU read and preemption disabled
+ * sections it is in. What every visit finds in the same place goes into the
+ * descriptor of the site, and costs the program nothing.
+ *
+ * The unwinder has the registers of a frame where bpf_throw() has a native
+ * entry that captures those of the throw site, see bpf_arch_throw_entry(): R6
+ * to R9 of every frame, which are callee-saved and recovered from where the
+ * frames above saved them, and R0 to R5 of the frame that throws.
  *
  * What the visits of some site do not agree on is written down when it is
  * acquired, in a hidden stack slot. Nothing is inferred about where the
@@ -285,6 +290,25 @@ bool bpf_frame_desc_keeps(const struct bpf_verifier_env *env, const struct bpf_v
 		    reg_ref_off(reg, st->refs[i].id, &off))
 			return true;
 	return false;
+}
+
+/* The registers of frame @f of @st that are kept, see bpf_frame_desc_keeps(). */
+u16 bpf_frame_desc_kept_regs(const struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
+			     int f)
+{
+	u16 kept = 0;
+	int i;
+
+	if (!env->describe_regs)
+		return 0;
+	/* the registers a site names: R6 to R9, and all but R1 of the frame that throws */
+	for (i = BPF_REG_0; i < BPF_REG_FP; i++) {
+		if (i == BPF_REG_1 || (i < BPF_REG_6 && f != st->curframe))
+			continue;
+		if (bpf_frame_desc_keeps(env, st, f, &st->frame[f]->regs[i]))
+			kept |= BIT(i);
+	}
+	return kept;
 }
 
 /*
@@ -757,14 +781,26 @@ static int frame_sections(const struct bpf_verifier_state *st, int f, int kind)
 }
 
 /*
- * The places in the stack of frame @f of @st that hold the handle of @ref,
- * which the frame owns, in @loc: the stack object the reference is of, or
- * the slots a pointer to the object is spilled in. A lock has none. The slots
- * a spill is removed from again, see bpf_remove_fastcall_spills_fills(), hold
- * nothing at run time.
+ * The registers the unwinder can read of a frame: R6 to R9 are callee-saved,
+ * so it has them for a frame that is in a call as well. The others it has for
+ * the frame that calls bpf_throw() only; R1 is the cookie there.
+ */
+static const u8 site_regs[] = {
+	BPF_REG_6, BPF_REG_7, BPF_REG_8, BPF_REG_9,
+	BPF_REG_0, BPF_REG_2, BPF_REG_3, BPF_REG_4, BPF_REG_5,
+};
+
+/*
+ * The places of frame @f of @st that hold the handle of @ref, which the frame
+ * owns, in @loc: the stack object the reference is of, or the slots of the
+ * stack a pointer to the object is spilled in and the registers that hold
+ * one, see site_regs; @throws when the frame calls bpf_throw(). A lock has
+ * none. The slots a spill is removed from again, see
+ * bpf_remove_fastcall_spills_fills(), hold nothing at run time.
  */
 static void ref_locations(struct bpf_verifier_env *env, const struct bpf_verifier_state *st, int f,
-			  const struct bpf_reference_state *ref, struct bpf_res_loc *loc)
+			  const struct bpf_reference_state *ref, bool throws,
+			  struct bpf_res_loc *loc)
 {
 	const struct bpf_res_acq *acq = &env->res_acqs[ref->acq - 1];
 	const struct bpf_func_state *frame = st->frame[f];
@@ -792,20 +828,31 @@ static void ref_locations(struct bpf_verifier_env *env, const struct bpf_verifie
 			continue;
 		}
 		loc->at[loc->cnt].off = spi_off(k);
+		loc->at[loc->cnt].reg = false;
 		loc->at[loc->cnt++].adj = adj;
 		if (loc->obj)
-			break;
+			return;
+	}
+	if (!env->describe_regs || ref->type != REF_TYPE_PTR || (acq->flags & BPF_RES_F_ARG))
+		return;
+	for (k = 0; k < (throws ? ARRAY_SIZE(site_regs) : 4) && loc->cnt < BPF_RES_LOC_MAX; k++) {
+		if (!reg_ref_off(&frame->regs[site_regs[k]], ref->id, &adj))
+			continue;
+		loc->at[loc->cnt].off = site_regs[k];
+		loc->at[loc->cnt].reg = true;
+		loc->at[loc->cnt++].adj = adj;
 	}
 }
 
 /*
  * A throw may find frame @f of @st at the call @insn. Record what the frame
- * keeps in its stack there, for the descriptor of the site: the visits of a
- * site have to agree on it, since the site has one descriptor.
+ * keeps where there, for the descriptor of the site: the visits of a site
+ * have to agree on it, since the site has one descriptor.
  */
 static int site_visit(struct bpf_verifier_env *env, const struct bpf_verifier_state *st, int f,
 		      u32 insn)
 {
+	bool throws = f == st->curframe && bpf_is_throw_kfunc(&env->prog->insnsi[insn]);
 	struct bpf_res_loc cur, *loc;
 	struct bpf_res_site *site;
 	u32 i, j, k, n, s;
@@ -837,7 +884,7 @@ static int site_visit(struct bpf_verifier_env *env, const struct bpf_verifier_st
 		if (ref->frameno != f || !ref->acq)
 			continue;
 		env->res_acqs[ref->acq - 1].held = true;
-		ref_locations(env, st, f, ref, &cur);
+		ref_locations(env, st, f, ref, throws, &cur);
 		for (j = 0; j < env->res_loc_cnt; j++)
 			if (env->res_locs[j].site == s && env->res_locs[j].acq == ref->acq - 1)
 				break;
@@ -858,7 +905,8 @@ static int site_visit(struct bpf_verifier_env *env, const struct bpf_verifier_st
 		loc->visits++;
 		for (k = 0, n = 0; k < loc->cnt; k++) {
 			for (j = 0; j < cur.cnt; j++)
-				if (cur.at[j].off == loc->at[k].off && cur.at[j].adj == loc->at[k].adj)
+				if (cur.at[j].off == loc->at[k].off && cur.at[j].adj == loc->at[k].adj &&
+				    cur.at[j].reg == loc->at[k].reg)
 					break;
 			if (j < cur.cnt && cur.obj == loc->obj)
 				loc->at[n++] = loc->at[k];
@@ -872,7 +920,9 @@ static int site_visit(struct bpf_verifier_env *env, const struct bpf_verifier_st
  * A throw may find the frames of @st where they are: the current one at
  * @insn_idx, bpf_throw() or the call of a subprog that may throw, and each of
  * its callers at the call it has not returned from. The frames that called a
- * function verified on its own were recorded when they called it.
+ * function verified on its own were recorded when they called it. The
+ * registers of the frame that calls bpf_throw() have to be those it calls it
+ * with: the state is the one in front of the call.
  */
 int bpf_frame_desc_record_site(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
 			       int insn_idx)
@@ -1029,6 +1079,18 @@ int bpf_frame_desc_resolve(struct bpf_verifier_env *env)
 
 		if (!loc->cnt || loc->visits != env->res_sites[loc->site].visits)
 			env->res_acqs[loc->acq].slot = true;
+	}
+	/*
+	 * A register that a site names holds the handle from where the program
+	 * read it for the last time: the program is done with it, but nothing
+	 * that is inserted later may use it, see bpf_do_misc_fixups().
+	 */
+	for (i = 0; i < env->res_loc_cnt; i++) {
+		const struct bpf_res_loc *loc = &env->res_locs[i];
+
+		for (k = 0; !env->res_acqs[loc->acq].slot && k < loc->cnt; k++)
+			if (loc->at[k].reg)
+				env->frame_desc_regs |= BIT(loc->at[k].off);
 	}
 	for (i = 0; i < env->res_acq_cnt && !ret; i++) {
 		struct bpf_res_acq *a = &env->res_acqs[i];
@@ -1394,8 +1456,9 @@ static int build_slots(struct bpf_verifier_env *env, int s, const u32 *new_of)
 
 /*
  * The descriptor of site @idx: where the frame at the site keeps, in its own
- * stack, what it holds that has no slot, and how many sections it is in when
- * its subprog does not count them. A site that has nothing to say has none.
+ * stack or in a register, what it holds that has no slot, and how many
+ * sections it is in when its subprog does not count them. A site that has
+ * nothing to say has none.
  */
 static int build_site(struct bpf_verifier_env *env, u32 idx, const u32 *new_of)
 {
@@ -1424,6 +1487,8 @@ static int build_site(struct bpf_verifier_env *env, u32 idx, const u32 *new_of)
 			continue;
 		if (resource_goes_first(&env->resources[a->res]))
 			flags |= BPF_FRAME_ENT_FIRST;
+		if (loc->at[0].reg)
+			flags |= BPF_FRAME_ENT_REG;
 		d->ent[d->nent++] = (struct bpf_frame_desc_entry) {
 			.res = a->res, .off = loc->at[0].off, .adj = loc->at[0].adj, .flags = flags,
 		};

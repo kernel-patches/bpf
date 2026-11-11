@@ -3493,7 +3493,7 @@ notrace void bpf_throw_unwind(struct bpf_throw_regs *regs, u64 cookie)
 	if (regs)
 		memcpy(ctx.saved, &regs->r[BPF_REG_6], sizeof(ctx.saved));
 	/* What the frames about to be discarded hold is released first. */
-	bpf_unwind_release_frames();
+	bpf_unwind_release_frames(regs);
 	arch_bpf_stack_walk(bpf_stack_walker, &ctx);
 	WARN_ON_ONCE(!ctx.aux);
 	if (ctx.aux)

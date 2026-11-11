@@ -1873,6 +1873,11 @@ struct bpf_resource {
  *    slot of the frame, or a slot of the program's own stack that holds the
  *    pointer whenever the frame is at the site of the descriptor; the pointer
  *    may then point adj bytes into the object;
+ *  - with BPF_FRAME_ENT_REG a register instead of a location, which holds
+ *    such a pointer whenever the frame is at the site: off is its number. The
+ *    unwinder has R6 to R9 of every frame, and R0 to R5 of the one that
+ *    called bpf_throw(), where the architecture captures them, see
+ *    bpf_arch_throw_entry();
  *  - with BPF_FRAME_ENT_OBJ the resource itself, an iterator or saved IRQ
  *    flags the frame has on its stack whenever it is at the site;
  *  - with BPF_FRAME_ENT_COUNTER a hidden slot that holds a count of sections,
@@ -1885,12 +1890,14 @@ struct bpf_resource {
 #define BPF_FRAME_ENT_COUNT	BIT(2)
 /* Released before the other entries of the frame, which it may be using. */
 #define BPF_FRAME_ENT_FIRST	BIT(3)
+#define BPF_FRAME_ENT_REG	BIT(4)
 
 struct bpf_frame_desc_entry {
 	u16 res;	/* index into the program's resource classes */
 	u16 flags;	/* BPF_FRAME_ENT_* */
 	union {
 		s16 off;	/* the location, relative to the frame pointer */
+		s16 reg;	/* BPF_FRAME_ENT_REG */
 		s16 count;	/* BPF_FRAME_ENT_COUNT */
 	};
 	s16 adj;
@@ -4631,7 +4638,7 @@ void bpf_prog_update_insn_ptrs(struct bpf_prog *prog, u32 *offsets, void *image)
 void bpf_prog_fill_frame_desc_sites(struct bpf_prog *prog, const u32 *offsets, void *image);
 void bpf_unwind_release(const struct bpf_resource *res, void *handle);
 void bpf_dynptr_file_free(void *reader);
-void bpf_unwind_release_frames(void);
+void bpf_unwind_release_frames(const struct bpf_throw_regs *regs);
 void bpf_frame_desc_pool_free(struct bpf_frame_desc_pool *pool);
 #else
 static inline void
@@ -4645,7 +4652,7 @@ bpf_prog_fill_frame_desc_sites(struct bpf_prog *prog, const u32 *offsets, void *
 static inline void bpf_frame_desc_pool_free(struct bpf_frame_desc_pool *pool)
 {
 }
-static inline void bpf_unwind_release_frames(void)
+static inline void bpf_unwind_release_frames(const struct bpf_throw_regs *regs)
 {
 }
 #endif
