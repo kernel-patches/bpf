@@ -6441,14 +6441,28 @@ static void set_sext32_default_val(struct bpf_reg_state *reg, int size)
 static void coerce_subreg_to_size_sx(struct bpf_reg_state *reg, int size)
 {
 	s32 init_s32_max, init_s32_min, s32_max, s32_min, u32_val;
+	s32 field_smin, field_smax;
 	u32 top_smax_value, top_smin_value;
 	u32 num_bits = size * 8;
 
+	if (size == 1) {
+		field_smin = S8_MIN;
+		field_smax = S8_MAX;
+	} else {
+		/* size == 2 */
+		field_smin = S16_MIN;
+		field_smax = S16_MAX;
+	}
+
 	/*
-	 * If value fits the non-negative half of the signed N-bit range,
-	 * sign extension is a noop.
+	 * The range already fits the signed N-bit range, so (sN)v == v for every
+	 * value of the low 32 bits and the sign extension is a no-op.
+	 *
+	 * This has to precede reg_step_reset() below: the base/step line stays.
+	 * It is about all 64 bits: zext_32_to_64() in the caller discards it
+	 * if the upper 32 bits are not zero.
 	 */
-	if (reg_umax(reg) < (1ULL << (num_bits - 1)))
+	if (reg_s32_min(reg) >= field_smin && reg_s32_max(reg) <= field_smax)
 		return;
 
 	/* See comment at reg_step_check_unsigned(). */
