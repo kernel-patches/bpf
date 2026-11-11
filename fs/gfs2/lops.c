@@ -726,15 +726,12 @@ static void buf_lo_before_commit(struct gfs2_sbd *sdp, struct gfs2_trans *tr)
 
 static void buf_lo_after_commit(struct gfs2_sbd *sdp, struct gfs2_trans *tr)
 {
-	struct list_head *head;
-	struct gfs2_bufdata *bd;
+	struct gfs2_bufdata *bd, *tmp;
 
 	if (tr == NULL)
 		return;
 
-	head = &tr->tr_buf;
-	while (!list_empty(head)) {
-		bd = list_first_entry(head, struct gfs2_bufdata, bd_list);
+	list_for_each_entry_safe(bd, tmp, &tr->tr_buf, bd_list) {
 		list_del_init(&bd->bd_list);
 		gfs2_unpin(sdp, bd->bd_bh, tr);
 	}
@@ -889,12 +886,10 @@ static void revoke_lo_before_commit(struct gfs2_sbd *sdp, struct gfs2_trans *tr)
 
 void gfs2_drain_revokes(struct gfs2_sbd *sdp)
 {
-	struct list_head *head = &sdp->sd_log_revokes;
-	struct gfs2_bufdata *bd;
+	struct gfs2_bufdata *bd, *tmp;
 	struct gfs2_glock *gl;
 
-	while (!list_empty(head)) {
-		bd = list_first_entry(head, struct gfs2_bufdata, bd_list);
+	list_for_each_entry_safe(bd, tmp, &sdp->sd_log_revokes, bd_list) {
 		list_del_init(&bd->bd_list);
 		gl = bd->bd_gl;
 		gfs2_glock_remove_revoke(gl);
@@ -1070,15 +1065,12 @@ static void databuf_lo_after_scan(struct gfs2_jdesc *jd, int error, int pass)
 
 static void databuf_lo_after_commit(struct gfs2_sbd *sdp, struct gfs2_trans *tr)
 {
-	struct list_head *head;
-	struct gfs2_bufdata *bd;
+	struct gfs2_bufdata *bd, *tmp;
 
 	if (tr == NULL)
 		return;
 
-	head = &tr->tr_databuf;
-	while (!list_empty(head)) {
-		bd = list_first_entry(head, struct gfs2_bufdata, bd_list);
+	list_for_each_entry_safe(bd, tmp, &tr->tr_databuf, bd_list) {
 		list_del_init(&bd->bd_list);
 		gfs2_unpin(sdp, bd->bd_bh, tr);
 	}

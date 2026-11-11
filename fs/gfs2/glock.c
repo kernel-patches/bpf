@@ -179,12 +179,9 @@ void gfs2_glock_free_later(struct gfs2_glock *gl) {
 
 static void gfs2_free_dead_glocks(struct gfs2_sbd *sdp)
 {
-	struct list_head *list = &sdp->sd_dead_glocks;
+	struct gfs2_glock *gl, *tmp;
 
-	while(!list_empty(list)) {
-		struct gfs2_glock *gl;
-
-		gl = list_first_entry(list, struct gfs2_glock, gl_dead);
+	list_for_each_entry_safe(gl, tmp, &sdp->sd_dead_glocks, gl_dead) {
 		list_del(&gl->gl_dead);
 		__gfs2_glock_free(gl);
 	}

@@ -281,11 +281,9 @@ static void gfs2_log_update_head(struct gfs2_sbd *sdp)
 static void gfs2_ail_empty_tr(struct gfs2_sbd *sdp, struct gfs2_trans *tr,
 			      struct list_head *head)
 {
-	struct gfs2_bufdata *bd;
+	struct gfs2_bufdata *bd, *tmp;
 
-	while (!list_empty(head)) {
-		bd = list_first_entry(head, struct gfs2_bufdata,
-				      bd_ail_st_list);
+	list_for_each_entry_safe(bd, tmp, head, bd_ail_st_list) {
 		gfs2_assert(sdp, bd->bd_tr == tr);
 		gfs2_remove_from_ail(bd);
 	}
@@ -933,7 +931,7 @@ static void log_write_header(struct gfs2_sbd *sdp, u32 flags)
  */
 void gfs2_ail_drain(struct gfs2_sbd *sdp)
 {
-	struct gfs2_trans *tr;
+	struct gfs2_trans *tr, *tmp;
 
 	spin_lock(&sdp->sd_ail_lock);
 	/*
@@ -943,17 +941,13 @@ void gfs2_ail_drain(struct gfs2_sbd *sdp)
 	 * before revokes are sent for that block. Items on the sd_ail2_list
 	 * should have already gotten beyond that point, so no need.
 	 */
-	while (!list_empty(&sdp->sd_ail1_list)) {
-		tr = list_first_entry(&sdp->sd_ail1_list, struct gfs2_trans,
-				      tr_list);
+	list_for_each_entry_safe(tr, tmp, &sdp->sd_ail1_list, tr_list) {
 		gfs2_ail_empty_tr(sdp, tr, &tr->tr_ail1_list);
 		gfs2_ail_empty_tr(sdp, tr, &tr->tr_ail2_list);
 		list_del(&tr->tr_list);
 		gfs2_trans_free(sdp, tr);
 	}
-	while (!list_empty(&sdp->sd_ail2_list)) {
-		tr = list_first_entry(&sdp->sd_ail2_list, struct gfs2_trans,
-				      tr_list);
+	list_for_each_entry_safe(tr, tmp, &sdp->sd_ail2_list, tr_list) {
 		gfs2_ail_empty_tr(sdp, tr, &tr->tr_ail2_list);
 		list_del(&tr->tr_list);
 		gfs2_trans_free(sdp, tr);
@@ -989,10 +983,9 @@ static void empty_ail1_list(struct gfs2_sbd *sdp)
 
 static void gfs2_trans_drain_list(struct gfs2_sbd *sdp, struct list_head *list)
 {
-	struct gfs2_bufdata *bd;
+	struct gfs2_bufdata *bd, *tmp;
 
-	while (!list_empty(list)) {
-		bd = list_first_entry(list, struct gfs2_bufdata, bd_list);
+	list_for_each_entry_safe(bd, tmp, list, bd_list) {
 		struct buffer_head *bh = bd->bd_bh;
 
 		WARN_ON_ONCE(!buffer_pinned(bh));

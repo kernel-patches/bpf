@@ -106,11 +106,9 @@ int gfs2_revoke_check(struct gfs2_jdesc *jd, u64 blkno, unsigned int where)
 
 void gfs2_revoke_clean(struct gfs2_jdesc *jd)
 {
-	struct list_head *head = &jd->jd_revoke_list;
-	struct gfs2_revoke_replay *rr;
+	struct gfs2_revoke_replay *rr, *tmp;
 
-	while (!list_empty(head)) {
-		rr = list_first_entry(head, struct gfs2_revoke_replay, rr_list);
+	list_for_each_entry_safe(rr, tmp, &jd->jd_revoke_list, rr_list) {
 		list_del(&rr->rr_list);
 		kfree(rr);
 	}
