@@ -52,6 +52,11 @@ __rust_helper void rust_helper_pci_disable_sriov(struct pci_dev *pdev)
 	pci_disable_sriov(pdev);
 }
 
+__rust_helper int rust_helper_pci_num_vf(struct pci_dev *pdev)
+{
+	return pci_num_vf(pdev);
+}
+
 __rust_helper unsigned int
 rust_helper_pci_sriov_get_totalvfs(struct pci_dev *pdev)
 {
