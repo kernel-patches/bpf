@@ -157,9 +157,10 @@ static int cpumask_set(const char *arg, const struct kernel_param *kp)
 		goto skip_cpumask_set;
 	}
 
-	ret = alloc_cpumask_var(&new_mask, GFP_KERNEL);
-	if (!ret)
+	if (!alloc_cpumask_var(&new_mask, GFP_KERNEL)) {
+		ret = -ENOMEM;
 		goto skip_cpumask_set;
+	}
 
 	ret = bitmap_parse(arg, strlen(arg), cpumask_bits(new_mask),
 			   nr_cpumask_bits);
