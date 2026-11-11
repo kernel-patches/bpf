@@ -553,7 +553,7 @@ out:
  * insn was moved down by delta insns inside its own patch. Operands relative
  * to the pc that point in front of the old position did not move with it.
  */
-static int bpf_adj_moved_insn(struct bpf_insn *insn, u32 delta)
+int bpf_adj_moved_insn(struct bpf_insn *insn, u32 delta)
 {
 	u8 class = BPF_CLASS(insn->code), op = BPF_OP(insn->code);
 	s64 off = insn->imm, off_min = S32_MIN;

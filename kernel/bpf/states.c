@@ -562,8 +562,8 @@ static bool stack_arg_safe(struct bpf_verifier_env *env, struct bpf_func_state *
 	return true;
 }
 
-static bool refsafe(struct bpf_verifier_state *old, struct bpf_verifier_state *cur,
-		    struct bpf_idmap *idmap)
+static bool refsafe(struct bpf_verifier_env *env, struct bpf_verifier_state *old,
+		    struct bpf_verifier_state *cur, struct bpf_idmap *idmap)
 {
 	int i;
 
@@ -589,6 +589,19 @@ static bool refsafe(struct bpf_verifier_state *old, struct bpf_verifier_state *c
 	for (i = 0; i < old->acquired_refs; i++) {
 		if (!check_ids(old->refs[i].id, cur->refs[i].id, idmap) ||
 		    old->refs[i].type != cur->refs[i].type)
+			return false;
+		/*
+		 * The frames of a program that may throw keep the handle of a
+		 * reference in the slot of the call that acquired it, in the frame
+		 * that holds it, see frame_desc.c: a state doesn't stand for one
+		 * that holds the reference as another class, in another frame, or
+		 * from another call. What the callers of a function verified on its
+		 * own hold has no slot in its frames.
+		 */
+		if (env->describe_frames &&
+		    (old->refs[i].frameno != cur->refs[i].frameno ||
+		     old->refs[i].res != cur->refs[i].res ||
+		     (old->refs[i].frameno >= 0 && old->refs[i].acq != cur->refs[i].acq)))
 			return false;
 		switch (old->refs[i].type) {
 		case REF_TYPE_PTR:
@@ -695,6 +708,10 @@ static bool func_states_equal(struct bpf_verifier_env *env, struct bpf_func_stat
 	    old->entry_rcu_locks != cur->entry_rcu_locks ||
 	    old->entry_preempt_locks != cur->entry_preempt_locks)
 		return false;
+	/* a frame that left a section of its callers hands its count over, see frame_desc.c */
+	if (env->describe_frames && (old->rcu_released_below != cur->rcu_released_below ||
+				     old->preempt_released_below != cur->preempt_released_below))
+		return false;
 
 	for (i = 0; i < MAX_BPF_REG; i++)
 		if (((1 << i) & live_regs) &&
@@ -748,7 +765,7 @@ bool bpf_state_subsumes(struct bpf_verifier_env *env, struct bpf_verifier_state 
 	if (old->unwound != cur->unwound || old->changed_pkt_data != cur->changed_pkt_data)
 		return false;
 
-	if (!refsafe(old, cur, &env->idmap_scratch))
+	if (!refsafe(env, old, cur, &env->idmap_scratch))
 		return false;
 
 	/* for states to be equal callsites have to be the same

@@ -462,6 +462,10 @@ static bool join_func(struct bpf_join_state *js, struct bpf_func_state *fd,
 		    fa->entry_rcu_locks != fb->entry_rcu_locks ||
 		    fa->entry_preempt_locks != fb->entry_preempt_locks)
 			return false;
+		/* a frame that left a section of its callers hands its count over, see frame_desc.c */
+		if (env->describe_frames && (fa->rcu_released_below != fb->rcu_released_below ||
+					     fa->preempt_released_below != fb->preempt_released_below))
+			return false;
 		if (!join_loop_stack(fa, fb))
 			return false;
 	}
@@ -523,7 +527,7 @@ static bool join_func(struct bpf_join_state *js, struct bpf_func_state *fd,
 }
 
 /* Things that can't be different in two states that are joined */
-static bool join_check_state(const struct bpf_verifier_state *a,
+static bool join_check_state(struct bpf_verifier_env *env, const struct bpf_verifier_state *a,
 			     const struct bpf_verifier_state *b)
 {
 	int i;
@@ -545,6 +549,16 @@ static bool join_check_state(const struct bpf_verifier_state *a,
 		return false;
 	for (i = 0; i < a->acquired_refs; i++) {
 		if (a->refs[i].type != b->refs[i].type)
+			return false;
+		/*
+		 * The frames of a program that may throw keep the handle of a
+		 * reference in the slot of the call that acquired it, in the frame
+		 * that holds it, see frame_desc.c, and the result keeps those of
+		 * 'a'.
+		 */
+		if (env->describe_frames &&
+		    (a->refs[i].frameno != b->refs[i].frameno || a->refs[i].res != b->refs[i].res ||
+		     (a->refs[i].frameno >= 0 && a->refs[i].acq != b->refs[i].acq)))
 			return false;
 		switch (a->refs[i].type) {
 		case REF_TYPE_PTR:
@@ -632,7 +646,7 @@ int bpf_states_join(struct bpf_verifier_env *env, struct bpf_verifier_state *dst
 	js->npairs = 0;
 	js->pairs_overflow = false;
 
-	if (!join_check_state(a, b))
+	if (!join_check_state(env, a, b))
 		return 1;
 	err = bpf_copy_verifier_state(dst, a);
 	if (err)

@@ -133,6 +133,7 @@ __noinline static int subprog_lock(struct __sk_buff *ctx)
 }
 
 SEC("?tc")
+__arch_s390x
 __failure __msg("function calls are not allowed while holding a lock")
 int reject_with_lock(void *ctx)
 {
@@ -142,6 +143,7 @@ int reject_with_lock(void *ctx)
 }
 
 SEC("?tc")
+__arch_s390x
 __failure __msg("function calls are not allowed while holding a lock")
 int reject_subprog_with_lock(void *ctx)
 {
@@ -149,6 +151,7 @@ int reject_subprog_with_lock(void *ctx)
 }
 
 SEC("?tc")
+__arch_s390x
 __failure __msg("bpf_throw cannot be used inside bpf_rcu_read_lock-ed region")
 int reject_with_rcu_read_lock(void *ctx)
 {
@@ -165,6 +168,7 @@ __noinline static int throwing_subprog(struct __sk_buff *ctx)
 }
 
 SEC("?tc")
+__arch_s390x
 __failure __msg("bpf_throw cannot be used inside bpf_rcu_read_lock-ed region")
 int reject_subprog_with_rcu_read_lock(void *ctx)
 {
@@ -181,7 +185,8 @@ static bool rbless(struct bpf_rb_node *n1, const struct bpf_rb_node *n2)
 }
 
 SEC("?tc")
-__failure __msg("function calls are not allowed while holding a lock")
+__arch_x86_64 __arch_arm64
+__failure __msg("cannot be called from callback subprog")
 int reject_with_rbtree_add_throw(void *ctx)
 {
 	struct foo *f;
@@ -196,6 +201,7 @@ int reject_with_rbtree_add_throw(void *ctx)
 }
 
 SEC("?tc")
+__arch_s390x
 __failure __msg("Unreleased reference")
 int reject_with_reference(void *ctx)
 {
@@ -216,6 +222,7 @@ __noinline int global_subprog_may_throw(struct __sk_buff *ctx)
 }
 
 SEC("?tc")
+__arch_s390x
 __failure __msg("Unreleased reference")
 int reject_global_subprog_throw_with_reference(struct __sk_buff *ctx)
 {
@@ -248,7 +255,8 @@ __noinline static int subprog_cb_ref(u32 i, void *ctx)
 }
 
 SEC("?tc")
-__failure __msg("Unreleased reference")
+__arch_x86_64 __arch_arm64
+__failure __msg("cannot be called from callback subprog")
 int reject_with_cb_reference(void *ctx)
 {
 	struct foo *f;
@@ -270,6 +278,7 @@ int reject_with_cb(void *ctx)
 }
 
 SEC("?tc")
+__arch_s390x
 __failure __msg("Unreleased reference")
 int reject_with_subprog_reference(void *ctx)
 {
@@ -417,6 +426,7 @@ __noinline static int rcu_lock_then_throw(void)
 }
 
 SEC("?tc")
+__arch_s390x
 __failure __msg("bpf_throw cannot be used inside bpf_rcu_read_lock-ed region")
 int reject_subprog_rcu_lock_throw(void *ctx)
 {
@@ -425,6 +435,7 @@ int reject_subprog_rcu_lock_throw(void *ctx)
 }
 
 SEC("?tc")
+__arch_s390x
 __failure __msg("bpf_throw cannot be used inside bpf_preempt_disable-ed region")
 int reject_subprog_throw_preempt_lock(void *ctx)
 {
@@ -435,6 +446,7 @@ int reject_subprog_throw_preempt_lock(void *ctx)
 }
 
 SEC("?tc")
+__arch_s390x
 __failure __msg("bpf_throw cannot be used inside bpf_local_irq_save-ed region")
 int reject_subprog_throw_irq_lock(void *ctx)
 {
