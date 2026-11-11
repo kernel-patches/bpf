@@ -39,7 +39,11 @@
  *  - A frame that returns holds nothing but a reference it returns in R0,
  *    which the call acquires for the caller like the call of a kfunc that
  *    returns one, and is in the sections it was called in.
- *  - A frame holds one resource of an acquiring call at a time.
+ *  - A slot holds one handle, so a frame that holds two resources of one
+ *    acquiring call at once can have no slot for them.
+ *
+ * What can have no slot loads when its sites describe it or no throw finds
+ * it held, and is refused otherwise.
  *
  * The main pass records every call that acquires or releases, which
  * acquisition a release may be of, and the visits of the sites. What needs a
@@ -443,6 +447,8 @@ static int acquired_class(struct bpf_verifier_env *env, struct bpf_verifier_stat
 	*adj = 0;
 	*obj_off = 0;
 	if (after) {
+		if (!in_reg)
+			return -EOPNOTSUPP;
 		reg = frame->regs[regno];
 		if (!reg_ref_off(&reg, ref->id, adj))
 			*adj = 0;
@@ -473,8 +479,11 @@ static int acquired_class(struct bpf_verifier_env *env, struct bpf_verifier_stat
 }
 
 /*
- * The acquisition of insn @insn through R@reg: the same on every visit, since
- * the insns that keep its slot are emitted once. Returns its index.
+ * The acquisition of insn @insn through R@reg, of a resource of class @res.
+ * An insn that acquires in different ways on different paths has an
+ * acquisition for each: the insns that keep a slot are emitted once per insn,
+ * so none of them may need a slot then, see bpf_frame_desc_resolve(). Returns
+ * its index.
  */
 static int acq_add(struct bpf_verifier_env *env, u32 insn, u16 res, u8 reg, u8 flags, s16 adj,
 		   s16 obj_off)
@@ -484,14 +493,9 @@ static int acq_add(struct bpf_verifier_env *env, u32 insn, u16 res, u8 reg, u8 f
 
 	for (i = 0; i < cnt; i++) {
 		a = &env->res_acqs[i];
-		if (a->insn != insn || a->reg != reg || (a->flags ^ flags) & BPF_RES_F_CTX)
-			continue;
-		if (a->res != res || a->flags != flags || a->adj != adj || a->obj_off != obj_off) {
-			verbose(env, "frame_desc: insn %d acquires resources of different types on different paths\n",
-				insn);
-			return -EINVAL;
-		}
-		return i;
+		if (a->insn == insn && a->reg == reg && a->res == res && a->flags == flags &&
+		    a->adj == adj && a->obj_off == obj_off)
+			return i;
 	}
 	if (cnt >= U16_MAX - 1)
 		return -E2BIG;
@@ -507,7 +511,9 @@ static int acq_add(struct bpf_verifier_env *env, u32 insn, u16 res, u8 reg, u8 f
 
 /*
  * refs[@idx] is what acquisition @acq acquired, held by the frame that owns
- * it: its handle is in the slot of the acquisition, and the slot holds one.
+ * it. The slot of an acquisition holds one handle: a frame that holds two of
+ * what it acquired at once is fine as long as the acquisition gets no slot,
+ * see bpf_frame_desc_resolve().
  */
 static int ref_set_acq(struct bpf_verifier_env *env, struct bpf_verifier_state *st, int idx,
 		       int acq)
@@ -518,9 +524,8 @@ static int ref_set_acq(struct bpf_verifier_env *env, struct bpf_verifier_state *
 	for (i = 0; i < st->acquired_refs; i++) {
 		if (i == idx || st->refs[i].acq != acq + 1 || st->refs[i].frameno != ref->frameno)
 			continue;
-		verbose(env, "frame_desc: a frame holds two resources of insn %d at once, which is not supported in a program that throws\n",
-			env->res_acqs[acq].insn);
-		return -EINVAL;
+		env->res_acqs[acq].multi = true;
+		break;
 	}
 	ref->res = env->res_acqs[acq].res + 1;
 	ref->acq = acq + 1;
@@ -561,11 +566,9 @@ int bpf_frame_desc_record_acquire(struct bpf_verifier_env *env, int idx, int reg
 	}
 	if (res < 0)
 		return res;
-	if (regno < BPF_REG_0 || regno > BPF_REG_5) {
-		verbose(env, "frame_desc: insn %d takes the handle of a resource in no register\n",
-			env->insn_idx);
-		return -EINVAL;
-	}
+	/* no insns can put it into a slot then: R10 stands for no register */
+	if (regno < BPF_REG_0 || regno > BPF_REG_5)
+		regno = BPF_REG_FP;
 	acq = acq_add(env, env->insn_idx, res, regno, flags, adj, obj_off);
 	return acq < 0 ? acq : ref_set_acq(env, st, idx, acq);
 }
@@ -631,6 +634,48 @@ int bpf_frame_desc_record_ctx_arg(struct bpf_verifier_env *env, int idx, int arg
 }
 
 /*
+ * The call @insn releases through R@reg what acquisition @acq acquired: its
+ * handle leaves the slot of the acquisition in front of the call, when it has
+ * one. @bad says why no insns can do that here. The insns compare the
+ * argument the same way whatever it releases, so releases of one argument
+ * that differ in how they take the handle are bad as well. That matters for
+ * an acquisition that has a slot only, see bpf_frame_desc_resolve().
+ */
+static int rel_add(struct bpf_verifier_env *env, u32 insn, u16 acq, u8 reg, u8 flags, s16 adj,
+		   u8 bad)
+{
+	u32 i, cnt = env->res_rel_cnt;
+	struct bpf_res_rel *r, *same = NULL;
+
+	for (i = 0; i < cnt; i++) {
+		r = &env->res_rels[i];
+		if (r->insn != insn || r->reg != reg)
+			continue;
+		if (r->flags != flags || r->adj != adj) {
+			if (!r->bad)
+				r->bad = BPF_RES_REL_DIFFER;
+			if (!bad)
+				bad = BPF_RES_REL_DIFFER;
+		} else if (r->acq == acq) {
+			same = r;
+		}
+	}
+	if (same) {
+		if (!same->bad)
+			same->bad = bad;
+		return 0;
+	}
+	r = kvrealloc(env->res_rels, array_size(cnt + 1, sizeof(*r)), GFP_KERNEL_ACCOUNT);
+	if (!r)
+		return -ENOMEM;
+	r[cnt] = (struct bpf_res_rel) { .insn = insn, .acq = acq, .reg = reg, .flags = flags,
+					.adj = adj, .bad = bad };
+	env->res_rels = r;
+	env->res_rel_cnt = cnt + 1;
+	return 0;
+}
+
+/*
  * Record that the current insn releases the resource refs[@idx], before it
  * is released: its handle, in the argument the call releases, see
  * bpf_verifier_env::release_regno, leaves the slot of its acquisition in
@@ -642,11 +687,10 @@ int bpf_frame_desc_record_release(struct bpf_verifier_env *env, int idx)
 	struct bpf_verifier_state *st = env->cur_state;
 	const struct bpf_reference_state *ref = &st->refs[idx];
 	const struct bpf_func_state *frame = st->frame[st->curframe];
-	u32 i, cnt = env->res_rel_cnt, insn = env->insn_idx;
+	u32 i, insn = env->insn_idx;
 	int regno = env->release_regno;
 	const struct bpf_res_acq *acq;
-	struct bpf_res_rel *r;
-	u8 flags = 0;
+	u8 flags = 0, bad = 0;
 	s16 adj = 0;
 
 	if (!env->describe_frames || st->speculative)
@@ -667,40 +711,17 @@ int bpf_frame_desc_record_release(struct bpf_verifier_env *env, int idx)
 		return -EINVAL;
 	}
 	acq = &env->res_acqs[ref->acq - 1];
+	/* what insns could not compare with a slot matters when there is a slot only */
 	if (regno < BPF_REG_1 || regno > BPF_REG_5) {
-		verbose(env, "frame_desc: insn %d releases a resource whose handle is in no argument register\n",
-			insn);
-		return -EINVAL;
-	}
-	if (acq->flags & BPF_RES_F_DEREF) {
+		regno = BPF_REG_FP;
+		bad = BPF_RES_REL_NO_REG;
+	} else if (acq->flags & BPF_RES_F_DEREF) {
 		flags = BPF_RES_F_DEREF;
 	} else if (!(acq->flags & BPF_RES_F_ARG) &&
 		   !reg_ref_off(&frame->regs[regno], ref->id, &adj)) {
-		verbose(env, "frame_desc: insn %d releases a resource R%d does not point to\n", insn,
-			regno);
-		return -EINVAL;
+		bad = BPF_RES_REL_NOT_PTR;
 	}
-	for (i = 0; i < cnt; i++) {
-		r = &env->res_rels[i];
-		if (r->insn != insn || r->reg != regno)
-			continue;
-		/* the argument is taken the same way whatever it releases */
-		if (r->flags != flags || r->adj != adj) {
-			verbose(env, "frame_desc: insn %d takes the handle of what it releases differently on different paths\n",
-				insn);
-			return -EINVAL;
-		}
-		if (r->acq == ref->acq - 1)
-			return 0;
-	}
-	r = kvrealloc(env->res_rels, array_size(cnt + 1, sizeof(*r)), GFP_KERNEL_ACCOUNT);
-	if (!r)
-		return -ENOMEM;
-	r[cnt] = (struct bpf_res_rel) { .insn = insn, .acq = ref->acq - 1, .reg = regno,
-					.flags = flags, .adj = adj };
-	env->res_rels = r;
-	env->res_rel_cnt = cnt + 1;
-	return 0;
+	return rel_add(env, insn, ref->acq - 1, regno, flags, adj, bad);
 }
 
 /* The current insn enters (@delta 1) or leaves (-1) a section of @kind: counted by its frame. */
@@ -1096,6 +1117,50 @@ static int emit_acquire_after(struct bpf_insn *buf, const struct bpf_res_acq *a)
 }
 
 /*
+ * Acquisition @acq needs a slot. Can the insns that keep it be emitted? They
+ * are emitted once per insn, so the insn has to acquire in one way, with the
+ * handle in a register, and every call that releases what it acquired has to
+ * take the handle in one way that insns can compare with the slot.
+ */
+static int slot_can_be_kept(struct bpf_verifier_env *env, u32 acq)
+{
+	const struct bpf_res_acq *a = &env->res_acqs[acq], *b;
+	const struct bpf_res_rel *r;
+	u32 i;
+
+	for (i = 0; i < env->res_acq_cnt; i++) {
+		b = &env->res_acqs[i];
+		if (i == acq || b->insn != a->insn || b->reg != a->reg ||
+		    (a->flags ^ b->flags) & BPF_RES_F_CTX)
+			continue;
+		verbose(env, "frame_desc: insn %d acquires resources of different types on different paths\n",
+			a->insn);
+		return -EINVAL;
+	}
+	if (a->reg == BPF_REG_FP) {
+		verbose(env, "frame_desc: insn %d takes the handle of a resource in no register\n",
+			a->insn);
+		return -EINVAL;
+	}
+	for (i = 0; i < env->res_rel_cnt; i++) {
+		r = &env->res_rels[i];
+		if (r->acq != acq || !r->bad)
+			continue;
+		if (r->bad == BPF_RES_REL_NO_REG)
+			verbose(env, "frame_desc: insn %d releases a resource whose handle is in no argument register\n",
+				r->insn);
+		else if (r->bad == BPF_RES_REL_NOT_PTR)
+			verbose(env, "frame_desc: insn %d releases a resource R%d does not point to\n",
+				r->insn, r->reg);
+		else
+			verbose(env, "frame_desc: insn %d takes the handle of what it releases differently on different paths\n",
+				r->insn);
+		return -EINVAL;
+	}
+	return 0;
+}
+
+/*
  * Decide what needs a hidden slot, once the pass has seen every frame, and
  * reserve it.
  *
@@ -1149,6 +1214,15 @@ int bpf_frame_desc_resolve(struct bpf_verifier_env *env)
 		}
 		if (!a->slot)
 			continue;
+		ret = slot_can_be_kept(env, i);
+		if (ret)
+			break;
+		if (a->multi) {
+			verbose(env, "frame_desc: a frame holds two resources of insn %d at once, which is not supported in a program that throws\n",
+				a->insn);
+			ret = -EINVAL;
+			break;
+		}
 		/* some visit of the insn has nothing a slot can hold where this one has */
 		if (!(a->flags & BPF_RES_F_CTX) && acquires_sometimes(env, new_of[a->insn], a)) {
 			verbose(env, "frame_desc: insn %d acquires a resource on some paths only, or one of a type that cannot be released\n",
@@ -1348,8 +1422,8 @@ int bpf_frame_desc_emit(struct bpf_verifier_env *env)
 	if (!env->res_acq_cnt && !env->section_insn_cnt)
 		return 0;
 	new_of = insns_of_pass(env, &orig_len);
-	items = kvcalloc(env->res_acq_cnt + env->res_rel_cnt + env->section_insn_cnt, sizeof(*items),
-			 GFP_KERNEL_ACCOUNT);
+	items = kvcalloc(env->res_acq_cnt + env->res_rel_cnt + env->section_insn_cnt,
+			 sizeof(*items), GFP_KERNEL_ACCOUNT);
 	if (!new_of || !items) {
 		ret = -ENOMEM;
 		goto out;

@@ -1272,6 +1272,7 @@ struct bpf_res_acq {
 	s16 off;	/* the slot, relative to R10 */
 	bool held;	/* some frame holds what it acquired at a site */
 	bool slot;	/* and some site cannot say where: the handle is kept in a slot */
+	bool multi;	/* a frame held two of what it acquired at once: one slot cannot */
 };
 
 /* How many places a site remembers a frame keeping one handle in. */
@@ -1317,7 +1318,15 @@ struct bpf_res_rel {
 	u8 reg;		/* the argument the call releases */
 	u8 flags;	/* BPF_RES_F_DEREF */
 	s16 adj;	/* the argument points that many bytes into the object */
+	u8 bad;		/* BPF_RES_REL_*: why no insns can clear a slot here */
 };
+
+/* The handle is in no argument register. */
+#define BPF_RES_REL_NO_REG	1
+/* The register does not point to what is released. */
+#define BPF_RES_REL_NOT_PTR	2
+/* The call takes the handle in different ways on different paths. */
+#define BPF_RES_REL_DIFFER	3
 
 /* A call that enters or leaves a section, for the count of its frame, see frame_desc.c. */
 struct bpf_section_insn {
