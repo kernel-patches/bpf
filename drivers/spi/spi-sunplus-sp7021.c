@@ -507,17 +507,27 @@ static int sp7021_spi_controller_suspend(struct device *dev)
 {
 	struct spi_controller *ctlr = dev_get_drvdata(dev);
 	struct sp7021_spi_ctlr *pspim = spi_controller_get_devdata(ctlr);
+	int ret;
 
-	return reset_control_assert(pspim->rstc);
+	ret = reset_control_assert(pspim->rstc);
+	clk_disable_unprepare(pspim->spi_clk);
+
+	return ret;
 }
 
 static int sp7021_spi_controller_resume(struct device *dev)
 {
 	struct spi_controller *ctlr = dev_get_drvdata(dev);
 	struct sp7021_spi_ctlr *pspim = spi_controller_get_devdata(ctlr);
+	int ret;
+
+	ret = clk_prepare_enable(pspim->spi_clk);
+	if (ret)
+		return ret;
 
 	reset_control_deassert(pspim->rstc);
-	return clk_prepare_enable(pspim->spi_clk);
+
+	return 0;
 }
 
 static int sp7021_spi_runtime_suspend(struct device *dev)
