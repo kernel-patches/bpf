@@ -366,6 +366,7 @@ static const struct btf_kfunc_id_set ksock_kfunc_set = {
 BTF_ID_LIST(bpf_ksock_dtor_ids)
 BTF_ID(struct, bpf_ksock)
 BTF_ID(func, bpf_ksock_release_dtor)
+BTF_ID(func, bpf_ksock_release)
 
 static int __init bpf_ksock_kfunc_init(void)
 {
@@ -374,6 +375,8 @@ static int __init bpf_ksock_kfunc_init(void)
 		{
 			.btf_id = bpf_ksock_dtor_ids[0],
 			.kfunc_btf_id = bpf_ksock_dtor_ids[1],
+			.release_btf_id = bpf_ksock_dtor_ids[2],
+			.flags = BPF_DTOR_KPTR | BPF_DTOR_CLEANUP,
 		},
 	};
 

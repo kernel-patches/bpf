@@ -336,14 +336,17 @@ static const struct btf_kfunc_id_set crypt_kfunc_set = {
 BTF_ID_LIST(bpf_crypto_dtor_ids)
 BTF_ID(struct, bpf_crypto_ctx)
 BTF_ID(func, bpf_crypto_ctx_release_dtor)
+BTF_ID(func, bpf_crypto_ctx_release)
 
 static int __init crypto_kfunc_init(void)
 {
 	int ret;
 	const struct btf_id_dtor_kfunc bpf_crypto_dtors[] = {
 		{
-			.btf_id	      = bpf_crypto_dtor_ids[0],
-			.kfunc_btf_id = bpf_crypto_dtor_ids[1]
+			.btf_id	        = bpf_crypto_dtor_ids[0],
+			.kfunc_btf_id   = bpf_crypto_dtor_ids[1],
+			.release_btf_id = bpf_crypto_dtor_ids[2],
+			.flags          = BPF_DTOR_KPTR | BPF_DTOR_CLEANUP,
 		},
 	};
 

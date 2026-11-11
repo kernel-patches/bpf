@@ -453,15 +453,19 @@ static struct bpf_struct_ops bpf_Qdisc_ops = {
 	.owner = THIS_MODULE,
 };
 
-BTF_ID_LIST_SINGLE(bpf_sk_buff_dtor_ids, func, bpf_kfree_skb_dtor)
+BTF_ID_LIST(bpf_sk_buff_dtor_ids)
+BTF_ID(func, bpf_kfree_skb_dtor)
+BTF_ID(func, bpf_kfree_skb)
 
 static int __init bpf_qdisc_kfunc_init(void)
 {
 	int ret;
 	const struct btf_id_dtor_kfunc skb_kfunc_dtors[] = {
 		{
-			.btf_id       = bpf_sk_buff_ids[0],
-			.kfunc_btf_id = bpf_sk_buff_dtor_ids[0]
+			.btf_id         = bpf_sk_buff_ids[0],
+			.kfunc_btf_id   = bpf_sk_buff_dtor_ids[0],
+			.release_btf_id = bpf_sk_buff_dtor_ids[1],
+			.flags          = BPF_DTOR_KPTR | BPF_DTOR_CLEANUP,
 		},
 	};
 

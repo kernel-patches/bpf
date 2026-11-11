@@ -4073,7 +4073,7 @@ static int btf_parse_kptr(const struct btf *btf, struct btf_field *field,
 		 * can be used as a referenced pointer and be stored in a map at
 		 * the same time.
 		 */
-		dtor_btf_id = btf_find_dtor_kfunc(kptr_btf, id);
+		dtor_btf_id = btf_find_dtor_kfunc(kptr_btf, id, BPF_DTOR_KPTR);
 		if (dtor_btf_id < 0) {
 			ret = dtor_btf_id;
 			goto end_btf;
@@ -10190,21 +10190,84 @@ int register_btf_fmodret_id_set(const struct btf_kfunc_id_set *kset)
 }
 EXPORT_SYMBOL_GPL(register_btf_fmodret_id_set);
 
-s32 btf_find_dtor_kfunc(struct btf *btf, u32 btf_id)
+static const struct btf_id_dtor_kfunc *btf_dtor_tab_find(const struct btf *btf, u32 btf_id)
 {
 	struct btf_id_dtor_kfunc_tab *tab = btf->dtor_kfunc_tab;
-	struct btf_id_dtor_kfunc *dtor;
 
 	if (!tab)
-		return -ENOENT;
-	/* Even though the size of tab->dtors[0] is > sizeof(u32), we only need
+		return NULL;
+	/*
+	 * Even though the size of tab->dtors[0] is > sizeof(u32), we only need
 	 * to compare the first u32 with btf_id, so we can reuse btf_id_cmp_func.
 	 */
 	BUILD_BUG_ON(offsetof(struct btf_id_dtor_kfunc, btf_id) != 0);
-	dtor = bsearch(&btf_id, tab->dtors, tab->cnt, sizeof(tab->dtors[0]), btf_id_cmp_func);
-	if (!dtor)
+	return bsearch(&btf_id, tab->dtors, tab->cnt, sizeof(tab->dtors[0]), btf_id_cmp_func);
+}
+
+/*
+ * Find the destructor entry of type @btf_id of *@btfp, and set *@btfp to the
+ * BTF the entry and its kfunc ids belong to. A module's BTF is split on top of
+ * vmlinux's, so a type below its first id is vmlinux's, with its destructor
+ * registered there; and a struct a module defines under the name of a vmlinux
+ * struct is the same type to the verifier, which passes it to vmlinux kfuncs
+ * by name, so it is destroyed as that type.
+ */
+const struct btf_id_dtor_kfunc *btf_find_dtor(struct btf **btfp, u32 btf_id)
+{
+	const struct btf_id_dtor_kfunc *dtor;
+	struct btf *btf = *btfp, *vmlinux;
+	const struct btf_type *t;
+	s32 id;
+
+	while (btf_id < btf->start_id)
+		btf = btf->base_btf;
+	dtor = btf_dtor_tab_find(btf, btf_id);
+	if (dtor || !btf_is_module(btf)) {
+		*btfp = btf;
+		return dtor;
+	}
+	t = btf_type_by_id(btf, btf_id);
+	if (!t || !btf_type_is_struct(t))
+		return NULL;
+	vmlinux = bpf_get_btf_vmlinux();
+	if (IS_ERR_OR_NULL(vmlinux))
+		return NULL;
+	id = btf_find_by_name_kind(vmlinux, btf_name_by_offset(btf, t->name_off), BTF_KIND_STRUCT);
+	if (id < 0)
+		return NULL;
+	dtor = btf_dtor_tab_find(vmlinux, id);
+	if (dtor)
+		*btfp = vmlinux;
+	return dtor;
+}
+
+/* Return the destructor of btf_id if its entry has all of the BPF_DTOR_* bits in flags */
+s32 btf_find_dtor_kfunc(struct btf *btf, u32 btf_id, u32 flags)
+{
+	const struct btf_id_dtor_kfunc *dtor = btf_find_dtor(&btf, btf_id);
+
+	if (!dtor || (dtor->flags & flags) != flags)
 		return -ENOENT;
 	return dtor->kfunc_btf_id;
+}
+
+/*
+ * The release kfunc of a BPF_DTOR_CLEANUP entry is what a program calls to release a
+ * reference of the type itself, so it must be a KF_RELEASE kfunc, or the KF_ITER_DESTROY
+ * kfunc of an iterator type. The kfunc id sets of the BTF are consulted, so they must be
+ * registered before the destructors.
+ */
+static int btf_check_release_kfunc(struct btf *btf, u32 release_btf_id)
+{
+	const struct btf_type *t;
+
+	t = btf_type_by_id(btf, release_btf_id);
+	if (!t || !btf_type_is_func(t))
+		return -EINVAL;
+	if (btf_kfunc_check_flag(btf, release_btf_id, KF_RELEASE) == 1 ||
+	    btf_kfunc_check_flag(btf, release_btf_id, KF_ITER_DESTROY) == 1)
+		return 0;
+	return -EINVAL;
 }
 
 static int btf_check_dtor_kfuncs(struct btf *btf, const struct btf_id_dtor_kfunc *dtors, u32 cnt)
@@ -10216,6 +10279,22 @@ static int btf_check_dtor_kfuncs(struct btf *btf, const struct btf_id_dtor_kfunc
 
 	for (i = 0; i < cnt; i++) {
 		dtor_btf_id = btf_relocate_id(btf, dtors[i].kfunc_btf_id);
+
+		if (!dtors[i].flags) {
+			pr_err("no flags for the destructor of btf_id %u\n", dtors[i].btf_id);
+			return -EINVAL;
+		}
+		if ((dtors[i].flags & BPF_DTOR_CLEANUP) && !dtors[i].release_btf_id) {
+			pr_err("no release kfunc for the cleanup destructor of btf_id %u\n",
+			       dtors[i].btf_id);
+			return -EINVAL;
+		}
+		if (dtors[i].release_btf_id &&
+		    btf_check_release_kfunc(btf, btf_relocate_id(btf, dtors[i].release_btf_id))) {
+			pr_err("btf_id %u is not a release kfunc for the destructor of btf_id %u\n",
+			       dtors[i].release_btf_id, dtors[i].btf_id);
+			return -EINVAL;
+		}
 
 		dtor_func = btf_type_by_id(btf, dtor_btf_id);
 		if (!dtor_func || !btf_type_is_func(dtor_func))
@@ -10311,8 +10390,12 @@ int register_btf_id_dtor_kfuncs(const struct btf_id_dtor_kfunc *dtors, u32 add_c
 
 	/* remap BTF ids based on BTF relocation (if any) */
 	for (i = tab_cnt; i < tab_cnt + add_cnt; i++) {
-		tab->dtors[i].btf_id = btf_relocate_id(btf, tab->dtors[i].btf_id);
-		tab->dtors[i].kfunc_btf_id = btf_relocate_id(btf, tab->dtors[i].kfunc_btf_id);
+		struct btf_id_dtor_kfunc *dtor = &tab->dtors[i];
+
+		dtor->btf_id = btf_relocate_id(btf, dtor->btf_id);
+		dtor->kfunc_btf_id = btf_relocate_id(btf, dtor->kfunc_btf_id);
+		if (dtor->release_btf_id)
+			dtor->release_btf_id = btf_relocate_id(btf, dtor->release_btf_id);
 	}
 
 	tab->cnt += add_cnt;

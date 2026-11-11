@@ -141,9 +141,19 @@ struct btf_kfunc_id_set {
 	btf_kfunc_filter_t filter;
 };
 
+/*
+ * Flags for struct btf_id_dtor_kfunc::flags: BPF_DTOR_KPTR destroys the kptr fields of a map
+ * element when it is freed, BPF_DTOR_CLEANUP may release a reference held by a program that
+ * is being unwound.
+ */
+#define BPF_DTOR_KPTR		(1U << 0)
+#define BPF_DTOR_CLEANUP	(1U << 1)
+
 struct btf_id_dtor_kfunc {
-	u32 btf_id;
-	u32 kfunc_btf_id;
+	u32 btf_id;		/* type the destructor applies to */
+	u32 kfunc_btf_id;	/* BTF id of the void (*)(void *) destructor */
+	u32 release_btf_id;	/* KF_RELEASE kfunc of the type, required for BPF_DTOR_CLEANUP */
+	u32 flags;
 };
 
 struct btf_struct_meta {
@@ -627,7 +637,8 @@ u32 *btf_kfunc_is_modify_return(const struct btf *btf, u32 kfunc_btf_id,
 int register_btf_kfunc_id_set(enum bpf_prog_type prog_type,
 			      const struct btf_kfunc_id_set *s);
 int register_btf_fmodret_id_set(const struct btf_kfunc_id_set *kset);
-s32 btf_find_dtor_kfunc(struct btf *btf, u32 btf_id);
+const struct btf_id_dtor_kfunc *btf_find_dtor(struct btf **btfp, u32 btf_id);
+s32 btf_find_dtor_kfunc(struct btf *btf, u32 btf_id, u32 flags);
 int register_btf_id_dtor_kfuncs(const struct btf_id_dtor_kfunc *dtors, u32 add_cnt,
 				struct module *owner);
 struct btf_struct_meta *btf_find_struct_meta(const struct btf *btf, u32 btf_id);
@@ -718,7 +729,11 @@ static inline int register_btf_kfunc_id_set(enum bpf_prog_type prog_type,
 {
 	return 0;
 }
-static inline s32 btf_find_dtor_kfunc(struct btf *btf, u32 btf_id)
+static inline const struct btf_id_dtor_kfunc *btf_find_dtor(struct btf **btfp, u32 btf_id)
+{
+	return NULL;
+}
+static inline s32 btf_find_dtor_kfunc(struct btf *btf, u32 btf_id, u32 flags)
 {
 	return -ENOENT;
 }
