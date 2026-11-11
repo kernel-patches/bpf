@@ -2603,10 +2603,9 @@ static bool flow_join_makes_up(const struct bpf_flow *flow, struct bpf_verifier_
 			       struct bpf_verifier_state *b)
 {
 	struct bpf_func_state *fa = a->frame[a->curframe], *fb = b->frame[b->curframe];
-	const struct bpf_reg_state *ra, *rb;
+	const struct bpf_reg_state *ra, *rb, *one_a = NULL, *one_b = NULL;
 	const struct flow_need *tested = flow->need[FLOW_NEED_JUMP], *need;
-	u32 fr, i, id = 0;
-	bool one = false;
+	u32 fr, i, len = offsetof(struct bpf_reg_state, id);
 
 	if (!tested)
 		return false;
@@ -2623,11 +2622,11 @@ static bool flow_join_makes_up(const struct bpf_flow *flow, struct bpf_verifier_
 				continue;
 			if (flow_gap(ra, rb))
 				return true;
-			/* copies of a number are one number */
-			if (one && (!id || id != (ra->id & ~BPF_ADD_CONST)))
+			/* copies of a scalar count once: same range and tnum in each state */
+			if (one_a && (memcmp(ra, one_a, len) || memcmp(rb, one_b, len)))
 				return true;
-			one = true;
-			id = ra->id & ~BPF_ADD_CONST;
+			one_a = ra;
+			one_b = rb;
 		}
 	}
 	if (!flow_needed_consts_differ(flow, FLOW_NEED_FLAG, a, b))
