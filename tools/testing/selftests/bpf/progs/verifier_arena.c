@@ -597,6 +597,76 @@ __naked void mixed_arena_scalar_alu64_arena_first(void)
 	: __clobber_all);
 }
 
+/* The offset of a pointer to arena is not tracked */
+#define ARENA_TEST(name, op, expect)						\
+SEC("syscall")									\
+__log_level(2)									\
+expect										\
+__naked void name(void)								\
+{										\
+	asm volatile (								\
+	"r1 = %[arena] ll;"							\
+	"r6 = 0;"								\
+	"r6 = addr_space_cast(r6, 0, 1);"					\
+	"r7 = 0;"								\
+"1:	*(u64 *)(r6 + 0) = r7;"							\
+	op									\
+	"r7 += 1;"								\
+	"if r7 < 100 goto 1b;"							\
+	"r0 = 0;"								\
+	"exit;"									\
+	:: __imm_addr(arena) : __clobber_all);					\
+}
+
+#define NOT_UNROLLED100	__msg("loop header at 5, widening r7 to 0..99 step 1")
+/* A loop that moves the pointer is not unrolled */
+ARENA_TEST(arena_pointer_moves, "r6 += 8;", __success NOT_UNROLLED100)
+/* The loop makes a number of it: the state that returns to the loop header tells */
+ARENA_TEST(arena_pointer_becomes_a_number, "if r7 != 5 goto +1; r6 = 4096;",
+	   __failure NOT_UNROLLED100 __msg("R6 invalid mem access 'scalar'"))
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, char[64]);
+} map64 SEC(".maps");
+
+/*
+ * r6: 64 bytes. r8: an unbounded scalar. r3, r7: an arena pointer and a copy of it.
+ * The test leaves an address in r1.
+ */
+#define ARENA_LINKED(name, expect, body)					\
+SEC("syscall") expect __load_if_JITed()						\
+__naked void name(void)								\
+{										\
+	asm volatile (								\
+	"r1 = %[arena] ll; r1 = 0; *(u32 *)(r10 - 4) = r1; r2 = r10; r2 += -4;"	\
+	"r1 = %[map64] ll; call %[bpf_map_lookup_elem]; if r0 == 0 goto out_%=; r6 = r0;"	\
+	"call %[bpf_ktime_get_ns]; r8 = r0; r3 = addr_space_cast(r8, 0, 1); r7 = r3;"	\
+	body									\
+	"r0 = *(u8 *)(r1 + 0);"							\
+	"out_%=: r0 = 0; exit;"							\
+	:									\
+	: __imm(bpf_map_lookup_elem), __imm(bpf_ktime_get_ns),			\
+	  __imm_addr(map64), __imm_addr(arena)					\
+	: __clobber_all);							\
+}
+
+ARENA_LINKED(scalar_plus_two_constants, __success __retval(0),
+	"r2 = r8; r2 += 1; r2 += 1; if r8 > 61 goto out_%=; r1 = r6; r1 += r2;")
+/* 'r3 += 1' is converted to 'w3 += 1': r3 is 0 and not 1 << 32 */
+ARENA_LINKED(arena_ptr_plus_constant, __failure,
+	"r3 += 1; r3 = le64 r3; r7 = le64 r7; r2 = 0xffffffff ll; if r7 != r2 goto out_%=;"
+	"r3 >>= 32; r3 -= 1; r1 = r6; r1 += r3;")
+/* At the join point r3 is phi((+ x 1)). The insn there, an add to a scalar, does not define it. */
+ARENA_LINKED(arena_ptr_plus_constant_on_two_paths, __failure,
+	"if r8 == 0 goto 1f; r3 += 1; goto 2f; 1: r3 += 1; 2: r8 += 1; r3 = le64 r3; r7 = le64 r7;"
+	"r2 = 0xffffffff ll; if r7 != r2 goto out_%=; r3 >>= 32; r3 -= 1; r1 = r6; r1 += r3;")
+/* 'r1 += r2' was verified without a pointer to arena: it stays ALU64 */
+ARENA_LINKED(index_tested_after_the_add, __success __retval(0),
+	"r2 = r8; r2 &= 255; r1 = r6; r1 += r2; if r2 > 63 goto out_%=; r0 = *(u8 *)(r6 + 0);")
+
 SEC("syscall")
 __description("arena: a number is not an address in arena")
 __failure __msg("R6 invalid mem access 'scalar'")

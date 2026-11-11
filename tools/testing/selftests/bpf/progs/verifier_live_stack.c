@@ -3143,6 +3143,66 @@ static __used __naked void imprecise_fill_cross_frame(void)
 	: __clobber_all);
 }
 
+/*
+ * fill_older_frame_3() loads through a pointer to the stack of frame 1 or of frame 2. Both slots
+ * hold a pointer to fp-8 of frame 0: the store is a may_def of that slot at the call in frame 0.
+ */
+SEC("socket")
+__log_level(2)
+__success
+__msg("3: (85) call pc+2{{ +}}; may_def: fp0-8..-{{[0-9]+}}")
+__naked void imprecise_parent_fill_loses_older_frame(void)
+{
+	asm volatile (
+	"*(u64 *)(r10 - 8) = 0;"
+	"r1 = r10;"
+	"r1 += -8;"
+	"call fill_older_frame_1;"
+	"r0 = *(u64 *)(r10 - 8);"
+	"exit;"
+	::: __clobber_all);
+}
+
+static __used __naked void fill_older_frame_1(void)
+{
+	asm volatile (
+	"*(u64 *)(r10 - 8) = r1;"
+	"r1 = r10;"
+	"r1 += -8;"
+	"call fill_older_frame_2;"
+	"exit;"
+	::: __clobber_all);
+}
+
+static __used __naked void fill_older_frame_2(void)
+{
+	asm volatile (
+	"r2 = *(u64 *)(r1 + 0);"
+	"*(u64 *)(r10 - 8) = r2;"
+	"r2 = r10;"
+	"r2 += -8;"
+	"call fill_older_frame_3;"
+	"exit;"
+	::: __clobber_all);
+}
+
+static __used __naked void fill_older_frame_3(void)
+{
+	asm volatile (
+	"r6 = r1;"
+	"r7 = r2;"
+	"call %[bpf_get_prandom_u32];"
+	"if r0 == 0 goto +1;"
+	"r6 = r7;"
+	/* ARG_IMPRECISE{mask=BIT(1)|BIT(2)} */
+	"r1 = *(u64 *)(r6 + 0);"
+	"*(u64 *)(r1 + 0) = 7;"
+	"r0 = 0;"
+	"exit;"
+	:: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
 /* Test that spill_to_stack with multi-offset dst (sz=8) joins instead
  * of overwriting. r1 has offsets [-8, -16]. Both slots hold FP-derived
  * pointers. Writing through r1 should join *val with existing values,

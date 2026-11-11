@@ -75,18 +75,16 @@ static void jid_mark_bad(struct bpf_join_state *js, u32 a, u32 b)
 			js->pairs[i].bad = true;
 }
 
-static void jid_note(struct bpf_join_state *js, u32 ida, u32 idb, bool consistent)
+static void jid_note(struct bpf_join_state *js, u32 a, u32 b)
 {
-	u32 a = ida & ~BPF_ADD_CONST, b = idb & ~BPF_ADD_CONST;
+	bool consistent, other = false;
 	struct join_idpair *p;
-	bool other = false;
 	u32 i;
 
 	if (!a || !b)
 		return;
 	/* a name of what the caller has, see BPF_INHERITED_ID */
-	if (a != b && (a | b) >= BPF_INHERITED_ID)
-		consistent = false;
+	consistent = a == b || (a | b) < BPF_INHERITED_ID;
 	for (i = 0; i < js->npairs; i++) {
 		p = &js->pairs[i];
 		if (p->a == a && p->b == b) {
@@ -111,14 +109,11 @@ static void jid_note(struct bpf_join_state *js, u32 ida, u32 idb, bool consisten
 	p->bad = !consistent;
 }
 
-static bool jid_good(struct bpf_join_state *js, u32 ida, u32 idb)
+static bool jid_good(struct bpf_join_state *js, u32 a, u32 b)
 {
-	u32 a = ida & ~BPF_ADD_CONST, b = idb & ~BPF_ADD_CONST;
 	u32 i;
 
 	if (!a || !b || js->pairs_overflow)
-		return false;
-	if ((ida ^ idb) & BPF_ADD_CONST)
 		return false;
 	for (i = 0; i < js->npairs; i++)
 		if (js->pairs[i].a == a && js->pairs[i].b == b)
@@ -199,15 +194,6 @@ static bool reg_value_equal(const struct bpf_reg_state *ra, const struct bpf_reg
 	return !memcmp(ra, rb, offsetof(struct bpf_reg_state, id));
 }
 
-static bool scalar_link_consistent(const struct bpf_reg_state *ra, const struct bpf_reg_state *rb)
-{
-	if ((ra->id ^ rb->id) & BPF_ADD_CONST)
-		return false;
-	if ((ra->id & BPF_ADD_CONST) && ra->delta != rb->delta)
-		return false;
-	return true;
-}
-
 /*
  * Join two registers, regsafe() documents what each type needs.
  * Pass 1 records id pairs, pass 2 computes @dst, which is a copy of @ra on entry.
@@ -229,16 +215,8 @@ static bool join_reg(struct bpf_join_state *js, struct bpf_reg_state *dst,
 	case SCALAR_VALUE:
 		if (js->env->explore_alu_limits && !reg_value_equal(ra, rb))
 			return false;
-		if (pass == 1) {
-			jid_note(js, ra->id, rb->id, scalar_link_consistent(ra, rb));
-			return true;
-		}
-		join_range(js, dst, ra, rb);
-		/* a link that exists on one side only is dropped */
-		if (ra->id && !jid_good(js, ra->id, rb->id)) {
-			dst->id = 0;
-			dst->delta = 0;
-		}
+		if (pass == 2)
+			join_range(js, dst, ra, rb);
 		return true;
 	case PTR_TO_MAP_KEY:
 	case PTR_TO_MAP_VALUE:
@@ -269,7 +247,7 @@ static bool join_reg(struct bpf_join_state *js, struct bpf_reg_state *dst,
 		if (ra->r64.base != rb->r64.base)
 			return false;
 		if (pass == 1) {
-			jid_note(js, ra->id, rb->id, true);
+			jid_note(js, ra->id, rb->id);
 			return true;
 		}
 		if (!jid_strict_ok(js, ra->id, rb->id))
@@ -291,9 +269,9 @@ static bool join_reg(struct bpf_join_state *js, struct bpf_reg_state *dst,
 	}
 
 	if (pass == 1) {
-		jid_note(js, ra->id, rb->id, true);
-		jid_note(js, ra->parent_id, rb->parent_id, true);
-		jid_note(js, ra->map_uid, rb->map_uid, true);
+		jid_note(js, ra->id, rb->id);
+		jid_note(js, ra->parent_id, rb->parent_id);
+		jid_note(js, ra->map_uid, rb->map_uid);
 		return true;
 	}
 	if (!jid_strict_ok(js, ra->id, rb->id) ||
@@ -350,8 +328,8 @@ static bool join_special_slot(struct bpf_join_state *js, const struct bpf_stack_
 		break;
 	}
 	if (pass == 1) {
-		jid_note(js, ra->id, rb->id, true);
-		jid_note(js, ra->parent_id, rb->parent_id, true);
+		jid_note(js, ra->id, rb->id);
+		jid_note(js, ra->parent_id, rb->parent_id);
 		return true;
 	}
 	return jid_strict_ok(js, ra->id, rb->id) &&
@@ -563,12 +541,12 @@ static void join_refs_note(struct bpf_join_state *js, const struct bpf_verifier_
 {
 	int i;
 
-	jid_note(js, a->active_irq_id, b->active_irq_id, true);
-	jid_note(js, a->active_lock_id, b->active_lock_id, true);
+	jid_note(js, a->active_irq_id, b->active_irq_id);
+	jid_note(js, a->active_lock_id, b->active_lock_id);
 	for (i = 0; i < a->acquired_refs; i++) {
-		jid_note(js, a->refs[i].id, b->refs[i].id, true);
+		jid_note(js, a->refs[i].id, b->refs[i].id);
 		if (a->refs[i].type == REF_TYPE_PTR)
-			jid_note(js, a->refs[i].parent_id, b->refs[i].parent_id, true);
+			jid_note(js, a->refs[i].parent_id, b->refs[i].parent_id);
 	}
 }
 

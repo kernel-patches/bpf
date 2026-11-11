@@ -11,11 +11,10 @@ struct {
 	__type(value, long long);
 } map_hash_8b SEC(".maps");
 
-/* scalar in [0, max] that shares id with other registers, as it is in the log */
-#define LINKED(id, max, mask) \
-	"scalar(id=" id ",smin=smin32=0,smax=umax=smax32=umax32=" #max ",var_off=(0x0; " #mask "))"
+/* scalar in [0, max], as it is in the log. @id: the registers that hold copies of one value. */
 #define ALONE(max, mask) \
 	"scalar(smin=smin32=0,smax=umax=smax32=umax32=" #max ",var_off=(0x0; " #mask "))"
+#define LINKED(id, max, mask) ALONE(max, mask)
 
 /*
  * Registers r{0,1,2} have the same scalar ID.
@@ -151,7 +150,7 @@ __naked void linked_regs_broken_link(void)
 SEC("socket")
 __success __log_level(2)
 __msg("13: (25) if r1 > 0x7 goto pc+0        ; R1=" ALONE(7, 0x7))
-__msg("10: R0=0 R6=scalar(id={{.*}}umax32=255,{{.*}} R7=scalar(id={{.*}}umax32=255,")
+__msg("10: R0=0 R6=scalar({{.*}}umax32=255,{{.*}} R7=scalar({{.*}}umax32=255,")
 __msg("5: R0=0 R6=" ALONE(255, 0xff))
 __naked void precision_many_frames(void)
 {
@@ -285,13 +284,8 @@ __naked void precision_two_ids(void)
 
 SEC("socket")
 __success __log_level(2)
-/*
- * check that r5 is unlinked after 'if', collect_linked_regs() can't tie
- * more than 5 registers for a single insn and the register compared by
- * the jump is not exempt from that.
- */
-__msg("7: (25) if r5 > 0x7 goto pc+0         ; R5=scalar(smin=")
-__msg("12: (bf) r5 = r5                      ; R5=scalar(id=2")
+/* there is no limit of 5 registers for a single insn */
+__msg("7: (25) if r5 > 0x7 goto pc+0         ; R0=" LINKED("1", 7, 0x7) " R1=" LINKED("1", 7, 0x7) " R2=" LINKED("1", 7, 0x7) " R3=" LINKED("1", 7, 0x7) " R4=" LINKED("1", 7, 0x7) " R5=" LINKED("1", 7, 0x7))
 __naked void linked_regs_too_many_regs(void)
 {
 	asm volatile (
@@ -304,14 +298,12 @@ __naked void linked_regs_too_many_regs(void)
 	"r3 = r0;"
 	"r4 = r0;"
 	"r5 = r0;"
-	/* r{0-4} fill the record, r5 does not fit and is unlinked */
 	"if r5 > 7 goto +0;"
-	/* keep r{1-4} live */
+	/* keep r{1-5} live */
 	"r1 = r1;"
 	"r2 = r2;"
 	"r3 = r3;"
 	"r4 = r4;"
-	/* make r5 appear in the log */
 	"r5 = r5;"
 	"r7 = r10;"
 	"r7 += r0;"
@@ -324,7 +316,7 @@ __naked void linked_regs_too_many_regs(void)
 
 SEC("socket")
 __failure __log_level(2)
-__msg("5: (3d) if r8 >= r0 goto pc+3         ; R0=scalar(umin=1) R7=scalar(id=1,umax=0xfffffffffffffffe) R8=scalar(id=1,umax=0xfffffffffffffffe)")
+__msg("5: (3d) if r8 >= r0 goto pc+3         ; R0=scalar(umin=1) R7=scalar(umax=0xfffffffffffffffe) R8=scalar(umax=0xfffffffffffffffe)")
 __msg("div by zero")
 __naked void linked_regs_broken_link_2(void)
 {
@@ -687,52 +679,6 @@ __naked void two_nil_old_ids_one_cur_id(void)
 	: __clobber_all);
 }
 
-/*
- * Check that two different scalar IDs in the state that is there can't be
- * mapped to the same scalar ID in the state that arrives.
- */
-SEC("socket")
-__success __log_level(2)
-__not_msg("from 10 to 11: within")
-__msg("11: R0=0 R6=" ALONE(255, 0xff) " R7=" ALONE(255, 0xff))
-__naked void two_old_ids_one_cur_id(void)
-{
-	asm volatile (
-	/* Give unique scalar IDs to r{6,7} */
-	"call %[bpf_ktime_get_ns];"
-	"r0 &= 0xff;"
-	"r6 = r0;"
-	"r8 = r0;"
-	"call %[bpf_ktime_get_ns];"
-	"r0 &= 0xff;"
-	"r7 = r0;"
-	"r9 = r0;"
-	"r0 = 0;"
-	/* Maybe make r{6,7} IDs identical */
-	"if r6 <= r7 goto l1_%=;"
-	"r6 = r7;"
-"l1_%=:"
-	/*
-	 * Get here in two states:
-	 * - first:  r6{.id=A}, r7{.id=B}
-	 * - second: r6{.id=B}, r7{.id=B}
-	 * Currently we don't want to consider the second one to be within
-	 * the first one. Thus they are joined.
-	 */
-	"r2 = r10;"
-	"r2 += r6;"
-	"r2 += r7;"
-	/*
-	 * keep r8 and r9 live, otherwise r6->id and r7->id
-	 * will become singular and reset to zero before if r6 <= r7
-	 */
-	"r9 += r8;"
-	"exit;"
-	:
-	: __imm(bpf_ktime_get_ns)
-	: __clobber_all);
-}
-
 SEC("socket")
 /* Note the flag, see verifier.c:opt_subreg_zext_lo32_rnd_hi32() */
 __flag(BPF_F_TEST_RND_HI32)
@@ -808,7 +754,7 @@ __naked void linked_regs_and_subreg_def(void)
  * at runtime), which must be rejected.
  */
 SEC("socket")
-__failure __msg("R0 max value is outside of the allowed memory range")
+__failure __msg("invalid access to map value, value_size=8 off=8 size=1")
 __naked void ldsx_fill_scalar_id_not_shared(void)
 {
 	asm volatile ("					\

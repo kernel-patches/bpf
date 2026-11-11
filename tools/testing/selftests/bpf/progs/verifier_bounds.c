@@ -1476,7 +1476,7 @@ __naked void sub64_full_overflow(void)
 SEC("socket")
 __description("64-bit subtraction, partial overflow, result in unbounded reg")
 __success __log_level(2)
-__msg("3: (1f) r3 -= r2 {{.*}} R3=scalar(id=1-1)")
+__msg("3: (1f) r3 -= r2 {{.*}} R3=scalar()")
 __retval(0)
 __naked void sub64_partial_overflow(void)
 {
@@ -1572,7 +1572,7 @@ l0_%=:	r0 = 0;				\
 SEC("socket")
 __description("bounds deduction cross sign boundary, negative overlap")
 __success __log_level(2)
-__msg("7: (1f) r0 -= r6 {{.*}} R0=scalar(smin=smin32=-655,smax=smax32=-146,umin=0xfffffffffffffd71,umax=0xffffffffffffff6e,umin32=0xfffffd71,umax32=0xffffff6e,var_off=(0xfffffffffffffc00; 0x3ff))")
+__msg("7: (1f) r0 -= r6 {{.*}} R0=scalar(smin=smin32=-527,smax=smax32=-146,umin=0xfffffffffffffdf1,umax=0xffffffffffffff6e,umin32=0xfffffdf1,umax32=0xffffff6e,var_off=(0xfffffffffffffc00; 0x3ff))")
 __retval(0)
 __naked void bounds_deduct_negative_overlap(void)
 {
@@ -1992,6 +1992,64 @@ __naked void bounds_refinement_multiple_overlaps(void *ctx)
 	exit;				\
 "	:
 	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * r0 is x << 32, the low three bits of x are 5. No such x is in [-2, 1], -3 is in [-3, 1].
+ * umin and umax are unbounded for a range that crosses 0.
+ */
+#define RANGE_CROSSES_0(name, smin)		\
+__naked void name(void *ctx)			\
+{						\
+	asm volatile(				\
+	"call %[bpf_ktime_get_ns];"		\
+	"r0 <<= 35;"				\
+	"r1 = 0x500000000 ll;"			\
+	"r0 += r1;"				\
+	"r1 = " #smin " ll;"			\
+	"if r0 s< r1 goto 1f;"			\
+	"r1 = 0x100000000 ll;"			\
+	"if r0 s> r1 goto 1f;"			\
+	"r10 = 0;"				\
+"1:	exit;"					\
+	:					\
+	: __imm(bpf_ktime_get_ns)		\
+	: __clobber_all);			\
+}
+
+SEC("socket")
+__description("dead branch: tnum and a range that crosses 0 don't overlap")
+__success
+RANGE_CROSSES_0(range_crossing_0_no_tnum_overlap, -0x200000000)
+
+SEC("socket")
+__description("tnum overlaps the negative part of a range that crosses 0")
+__failure __msg("frame pointer is read only")
+RANGE_CROSSES_0(range_crossing_0_tnum_overlap_below_0, -0x300000000)
+
+/*
+ * The low three bits of r0 are 5. No such value is in [-2, 1]: the fall-through branch of the
+ * second jump is dead. The jump branch refines r0 to [5, S64_MAX - 2].
+ */
+SEC("socket")
+__description("dead branch: the live branch is refined")
+__success
+__naked void dead_branch_live_branch_is_refined(void *ctx)
+{
+	asm volatile(
+	"call %[bpf_ktime_get_ns];"
+	"r0 <<= 3;"
+	"r0 += 5;"
+	"if r0 s< -2 goto 1f;"
+	"if r0 s> 1 goto +1;"
+	"exit;"
+	"r0 s>>= 63;"
+	"if r0 == 0 goto 1f;"
+	"r10 = 0;"
+"1:	exit;"
+	:
+	: __imm(bpf_ktime_get_ns)
 	: __clobber_all);
 }
 

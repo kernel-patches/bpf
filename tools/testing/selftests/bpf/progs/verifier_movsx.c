@@ -202,6 +202,192 @@ l0_%=:							\
 	: __clobber_all);
 }
 
+/*
+ * A 32-bit range that already fits the signed N-bit range is unchanged by the sign
+ * extension. Both of these straddle zero. The guard that follows can only be
+ * resolved statically if the range survives, and it protects a div by zero.
+ */
+SEC("socket")
+__description("MOV32SX, S8, negative range is preserved")
+__success __success_unpriv __retval(0)
+__naked void mov32sx_s8_negative_range(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	w0 &= 0x3f;					\
+	w0 -= 0x3f;					\
+	/* w0 is [-63, 0], already a valid s8 */	\
+	w0 = (s8)w0;					\
+	if w0 s< -0x3f goto l0_%=;			\
+	w0 = 0;						\
+	exit;						\
+l0_%=:							\
+	/* dead unless the range was widened */		\
+	w0 /= 0;					\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
+__description("MOV32SX, S16, negative range is preserved")
+__success __success_unpriv __retval(0)
+__naked void mov32sx_s16_negative_range(void)
+{
+	asm volatile ("					\
+	call %[bpf_get_prandom_u32];			\
+	w0 &= 0xfff;					\
+	w0 -= 0xfff;					\
+	/* w0 is [-4095, 0], already a valid s16 */	\
+	w0 = (s16)w0;					\
+	if w0 s< -0xfff goto l0_%=;			\
+	w0 = 0;						\
+	exit;						\
+l0_%=:							\
+	/* dead unless the range was widened */		\
+	w0 /= 0;					\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * A 32-bit sign extension keeps the low 32 bits, so refining the source
+ * reaches the destination. The source is a call return, which is the shape
+ * bpf-gcc builds for "int err = helper(); if (err) ..".
+ */
+SEC("socket")
+__success __retval(0)
+__naked void sext_mov_unlinked_src(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r7 = (s32)r0;		/* r0 as the call defines it */	\
+	if w0 != -1 goto l0_%=;	/* refines r0, propagates to r7 */ \
+	if r7 == -1 goto l0_%=;	/* sign-extended, not 0xffffffff */ \
+	r0 /= 0;						\
+l0_%=:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * The propagation must not run backwards over the upper 32 bits: a sign extension
+ * knows nothing about the upper bits of its source. r8's low 32 bits do become
+ * 2, r8 == 2 does not follow.
+ */
+SEC("socket")
+__failure __msg("div by zero")
+__naked void sext_no_sync_from_subreg_base(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	r7 = (s32)r6;						\
+	r8 = r6;						\
+	r8 += 3;						\
+	if r7 != -1 goto 1f;	/* pins the low 32 bits of r8 only */ \
+	if r8 == 2 goto 1f;	/* taken only if r8 wrongly refined */	\
+	r0 /= 0;						\
+1:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * r2 is (u32)(r6 + 1) and r7 is (s32)(r6 + 1), so w2 == 1 means r7 == 1.
+ * bpf-gcc builds "i += 1" for an int induction variable into exactly this shape.
+ */
+SEC("socket")
+__success __retval(0)
+__naked void sext_sync_from_zext_sibling(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	r6 <<= 32;						\
+	call %[bpf_get_prandom_u32];				\
+	r6 |= r0;		/* r6 = full 64-bit unknown */	\
+	r2 = r6;						\
+	w2 += 1;		/* r2 = (u32)(r6 + 1) */	\
+	r7 = (s32)r2;		/* r7 = (s32)(r6 + 1) */	\
+	if w2 != 1 goto 1f;	/* propagates to r7 */		\
+	if r7 == 1 goto 1f;					\
+	r0 /= 0;						\
+1:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * "w6 = w6" leaves r6 in [0, U32_MAX]. A signed compare on its sign extension
+ * must not hand r6 the sign-extended value: that drops every r6 >= 2^31 from
+ * the range and makes the guarded div provably dead.
+ */
+SEC("socket")
+__failure __msg("div by zero")
+__naked void sext_narrow_base_keeps_high_values(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	w6 = w6;		/* r6 in [0, U32_MAX] */	\
+	r7 = (s32)r6;						\
+	r8 = 1;							\
+	r8 <<= 31;		/* 0x80000000 */		\
+	if r7 s> 100 goto 1f;	/* r6 is [0,100] or >= 2^31 */	\
+	if r6 < r8 goto 1f;	/* reachable: r6 may be >= 2^31 */ \
+	r0 /= 0;						\
+1:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * A base/step line does not survive the sign extension: it subtracts 2^32,
+ * and 2^32 is not a multiple of 3. r6 = 0x80000007 is a multiple of 3, so
+ * r7 = -2147483641 is reachable.
+ */
+SEC("socket")
+__failure __msg("div by zero")
+__naked void sext_drops_stale_step(void)
+{
+	asm volatile ("						\
+	call %[bpf_get_prandom_u32];				\
+	r6 = r0;						\
+	w6 = w6;						\
+	r6 *= 3;		/* base 0, step 3 */		\
+	r7 = (s32)r6;						\
+	r8 = 1;							\
+	r8 <<= 31;						\
+	r9 = r8;						\
+	r9 += 7;						\
+	if r6 < r8 goto 1f;					\
+	if r6 > r9 goto 1f;	/* r6 in [0x80000000, 0x80000007] */ \
+	if r7 != -2147483641 goto 1f; /* reachable: r6 == 0x80000007 */ \
+	r0 /= 0;						\
+1:								\
+	r0 = 0;							\
+	exit;							\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
 SEC("socket")
 __description("MOV64SX, S16, R10 Sign Extension")
 __failure __msg("R1 type=scalar expected=fp, pkt, pkt_meta, map_key, map_value, mem, ringbuf_mem, buf, trusted_ptr_")

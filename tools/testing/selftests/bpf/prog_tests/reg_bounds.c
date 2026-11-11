@@ -1290,7 +1290,8 @@ static int parse_range_cmp_log(const char *log_buf, struct case_spec spec,
 		 *   18: (bf) r0 = r6       ; R0=... R6=...
 		 * Different verifier passes may print
 		 *   18: (bf) r0 = r6
-		 * as well, but never followed by ';'.
+		 * as well, but never followed by ';'. Except for scalar evolution:
+		 *   t   18: (bf) r0 = r6   ; r0 ... -> ...
 		 * The branches are in the log in the order the verifier looked at them.
 		 */
 		q = log_buf;
@@ -1299,7 +1300,7 @@ static int parse_range_cmp_log(const char *log_buf, struct case_spec spec,
 
 			while (*s == ' ' || *s == '\t')
 				s++;
-			if (*s == ';')
+			if (*s == ';' && (q == log_buf || q[-1] == '\n'))
 				break;
 			q = s;
 		}

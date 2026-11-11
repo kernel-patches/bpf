@@ -2325,6 +2325,36 @@ static bool range_bounds_violation(struct bpf_reg_state *reg)
 	return cnum32_is_empty(reg->r32) || cnum64_is_empty(reg->r64);
 }
 
+/* Do @t and [min, max] overlap: is a member of @t in the range? */
+static bool tnum_overlaps_urange(struct tnum t, u64 min, u64 max)
+{
+	u64 tnum_next = tnum_step(t, min);
+
+	return (min & ~t.mask) == t.value || (tnum_next > min && tnum_next <= max);
+}
+
+/* The same for the cnum [@base, @base + @size]. It wraps around at @ut_max. */
+static bool tnum_overlaps_cnum(struct tnum t, u64 base, u64 size, u64 ut_max)
+{
+	u64 end = (base + size) & ut_max;
+
+	if (base <= end)
+		return tnum_overlaps_urange(t, base, end);
+	return tnum_overlaps_urange(t, base, ut_max) || tnum_overlaps_urange(t, 0, end);
+}
+
+/*
+ * A range and var_off don't overlap. reg_bounds_sync() compares var_off with umin and umax: it
+ * doesn't see that [-2, 1], which crosses 0, has no member with 5 in its low three bits.
+ */
+static bool reg_is_empty(struct bpf_reg_state *reg)
+{
+	return range_bounds_violation(reg) ||
+	       !tnum_overlaps_cnum(reg->var_off, reg->r64.base, reg->r64.size, U64_MAX) ||
+	       !tnum_overlaps_cnum(tnum_subreg(reg->var_off), reg->r32.base, reg->r32.size,
+				   U32_MAX);
+}
+
 static int reg_bounds_sanity_check(struct bpf_verifier_env *env,
 				   struct bpf_reg_state *reg, const char *ctx)
 {
@@ -3548,30 +3578,6 @@ static void mark_non_stack_access(struct bpf_verifier_env *env, int idx)
 	env->insn_aux_data[idx].non_stack_access = true;
 }
 
-#define LINKED_REGS_MAX	5
-
-struct linked_reg {
-	u8 frameno;
-	union {
-		u16 spi;
-		u16 regno;
-	};
-	bool is_reg;
-};
-
-struct linked_regs {
-	int cnt;
-	struct linked_reg entries[LINKED_REGS_MAX];
-};
-
-static struct linked_reg *linked_regs_push(struct linked_regs *s)
-{
-	if (s->cnt < LINKED_REGS_MAX)
-		return &s->entries[s->cnt++];
-
-	return NULL;
-}
-
 const char *bpf_disasm_kfunc_name(void *data, const struct bpf_insn *insn)
 {
 	const struct btf_type *func;
@@ -3628,27 +3634,6 @@ static bool __is_pointer_value(bool allow_ptr_leaks,
 	return is_pointer_regtype(reg->type);
 }
 
-static void assign_scalar_id_before_mov(struct bpf_verifier_env *env,
-					struct bpf_reg_state *src_reg)
-{
-	if (src_reg->type != SCALAR_VALUE)
-		return;
-	/*
-	 * The verifier is processing rX = rY insn and
-	 * rY->id has special linked register already.
-	 * Cleared it, since multiple rX += const are not supported.
-	 */
-	if (src_reg->id & BPF_ADD_CONST)
-		clear_scalar_id(src_reg);
-	/*
-	 * Ensure that src_reg has a valid ID that will be copied to
-	 * dst_reg and then will be used by sync_linked_regs() to
-	 * propagate min/max range.
-	 */
-	if (!src_reg->id && !tnum_is_const(src_reg->var_off))
-		src_reg->id = ++env->id_gen;
-}
-
 static void save_register_state(struct bpf_verifier_env *env,
 				struct bpf_func_state *state,
 				int spi, struct bpf_reg_state *reg,
@@ -3673,11 +3658,6 @@ static void save_register_state(struct bpf_verifier_env *env,
 static bool is_bpf_st_mem(struct bpf_insn *insn)
 {
 	return BPF_CLASS(insn->code) == BPF_ST && BPF_MODE(insn->code) == BPF_MEM;
-}
-
-static int get_reg_width(struct bpf_reg_state *reg)
-{
-	return fls64(reg_umax(reg));
 }
 
 /* See comment for mark_fastcall_pattern_for_call() */
@@ -3780,16 +3760,7 @@ static int check_stack_write_fixed_off(struct bpf_verifier_env *env,
 
 	mark_stack_slot_scratched(env, spi);
 	if (reg && !(off % BPF_REG_SIZE) && reg->type == SCALAR_VALUE && env->bpf_capable) {
-		bool reg_value_fits;
-
-		reg_value_fits = get_reg_width(reg) <= BITS_PER_BYTE * size;
-		/* Make sure that reg had an ID to build a relation on spill. */
-		if (reg_value_fits)
-			assign_scalar_id_before_mov(env, reg);
 		save_register_state(env, state, spi, reg, size);
-		/* Break the relation on a narrowing spill. */
-		if (!reg_value_fits)
-			clear_scalar_id(&ss->spilled_ptr);
 	} else if (!reg && !(off % BPF_REG_SIZE) && is_bpf_st_mem(insn) &&
 		   env->bpf_capable) {
 		struct bpf_reg_state *tmp_reg = &env->fake_reg[0];
@@ -4092,19 +4063,8 @@ static int check_stack_read_fixed_off(struct bpf_verifier_env *env,
 				if (dst_regno < 0)
 					return 0;
 
-				if (env->bpf_capable && size == 4 && spill_size == 4 &&
-				    get_reg_width(reg) <= 32)
-					/* Ensure stack slot has an ID to build a relation
-					 * with the destination register on fill.
-					 */
-					assign_scalar_id_before_mov(env, reg);
+				/* coerce_reg_to_size will adjust the boundaries. */
 				state->regs[dst_regno] = *reg;
-
-				/* Break the relation on a narrowing fill.
-				 * coerce_reg_to_size will adjust the boundaries.
-				 */
-				if (get_reg_width(reg) > size * BITS_PER_BYTE)
-					clear_scalar_id(&state->regs[dst_regno]);
 			} else {
 				int spill_cnt = 0, zero_cnt = 0;
 
@@ -4149,11 +4109,6 @@ static int check_stack_read_fixed_off(struct bpf_verifier_env *env,
 			}
 		} else if (dst_regno >= 0) {
 			/* restore register state from stack */
-			if (env->bpf_capable)
-				/* Ensure stack slot has an ID to build a relation
-				 * with the destination register on fill.
-				 */
-				assign_scalar_id_before_mov(env, reg);
 			state->regs[dst_regno] = *reg;
 		} else if (__is_pointer_value(env->allow_ptr_leaks, reg)) {
 			/* If dst_regno==-1, the caller is asking us whether
@@ -6441,14 +6396,28 @@ static void set_sext32_default_val(struct bpf_reg_state *reg, int size)
 static void coerce_subreg_to_size_sx(struct bpf_reg_state *reg, int size)
 {
 	s32 init_s32_max, init_s32_min, s32_max, s32_min, u32_val;
+	s32 field_smin, field_smax;
 	u32 top_smax_value, top_smin_value;
 	u32 num_bits = size * 8;
 
+	if (size == 1) {
+		field_smin = S8_MIN;
+		field_smax = S8_MAX;
+	} else {
+		/* size == 2 */
+		field_smin = S16_MIN;
+		field_smax = S16_MAX;
+	}
+
 	/*
-	 * If value fits the non-negative half of the signed N-bit range,
-	 * sign extension is a noop.
+	 * The range already fits the signed N-bit range, so (sN)v == v for every
+	 * value of the low 32 bits and the sign extension is a no-op.
+	 *
+	 * This has to precede reg_step_reset() below: the base/step line stays.
+	 * It is about all 64 bits: zext_32_to_64() in the caller discards it
+	 * if the upper 32 bits are not zero.
 	 */
-	if (reg_umax(reg) < (1ULL << (num_bits - 1)))
+	if (reg_s32_min(reg) >= field_smin && reg_s32_max(reg) <= field_smax)
 		return;
 
 	/* See comment at reg_step_check_unsigned(). */
@@ -7669,18 +7638,7 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, struct b
 			/* b/h/w load zero-extends, mark upper bits as known 0 */
 			coerce_reg_to_size(&regs[value_regno], size);
 		} else {
-			/*
-			 * Sign-extension can change the register value relative
-			 * to a scalar it is linked with by id (e.g. a zero-
-			 * extending fill of the same spilled stack slot), thus
-			 * drop the shared id in that case.
-			 */
-			bool no_sext = reg_umax(&regs[value_regno]) <
-					(1ULL << (size * BITS_PER_BYTE - 1));
-
 			coerce_reg_to_size_sx(&regs[value_regno], size);
-			if (!no_sext)
-				clear_scalar_id(&regs[value_regno]);
 		}
 	}
 
@@ -11716,16 +11674,11 @@ static int call_func_on_its_own(struct bpf_verifier_env *env, int subprog, int i
 	callee->entry_rcu_locks = entry.active_rcu_locks;
 	callee->entry_preempt_locks = entry.active_preempt_locks;
 	for (i = BPF_REG_1; i <= BPF_REG_5; i++) {
-		/* what a scalar is linked to stays with the caller, so does the delta to it */
-		if (callee->regs[i].type == SCALAR_VALUE)
-			clear_scalar_id(&callee->regs[i]);
 		callee->regs[i].id = inherited_id(state, callee->regs[i].id);
 		callee->regs[i].parent_id = inherited_id(state, callee->regs[i].parent_id);
 		callee->regs[i].map_uid = inherited_id(state, callee->regs[i].map_uid);
 	}
 	for (i = 0; i < callee->out_stack_arg_cnt; i++) {
-		if (callee->stack_arg_regs[i].type == SCALAR_VALUE)
-			clear_scalar_id(&callee->stack_arg_regs[i]);
 		callee->stack_arg_regs[i].id = inherited_id(state, callee->stack_arg_regs[i].id);
 		callee->stack_arg_regs[i].parent_id =
 			inherited_id(state, callee->stack_arg_regs[i].parent_id);
@@ -11771,19 +11724,18 @@ static int exit_func_on_its_own(struct bpf_verifier_env *env)
 
 static u32 fresh_id(struct bpf_verifier_env *env, struct bpf_idmap *idmap, u32 id)
 {
-	u32 flags = id & BPF_ADD_CONST, i;
+	u32 i;
 
-	id &= ~BPF_ADD_CONST;
 	if (!id)
 		return 0;
 	for (i = 0; i < idmap->cnt; i++)
 		if (idmap->map[i].old == id)
-			return idmap->map[i].cur | flags;
+			return idmap->map[i].cur;
 	if (idmap->cnt == BPF_ID_MAP_SIZE)
 		return 0;
 	idmap->map[idmap->cnt].old = id;
 	idmap->map[idmap->cnt].cur = ++env->id_gen;
-	return idmap->map[idmap->cnt++].cur | flags;
+	return idmap->map[idmap->cnt++].cur;
 }
 
 /*
@@ -15150,6 +15102,12 @@ bool bpf_is_throw_kfunc(struct bpf_insn *insn)
 	       insn->imm == special_kfunc_list[KF_bpf_throw];
 }
 
+bool bpf_is_dynptr_slice_rdwr_kfunc(struct bpf_insn *insn)
+{
+	return bpf_pseudo_kfunc_call(insn) && insn->off == 0 &&
+	       insn->imm == special_kfunc_list[KF_bpf_dynptr_slice_rdwr];
+}
+
 static bool is_bpf_wq_set_callback_kfunc(u32 btf_id)
 {
 	return btf_id == special_kfunc_list[KF_bpf_wq_set_callback];
@@ -15974,6 +15932,15 @@ static int check_special_kfunc(struct bpf_verifier_env *env, struct bpf_call_arg
 		regs[BPF_REG_0].buf = meta->slice_buf;
 		if (meta->slice_buf.size)
 			env->seen_stack_slice = true;
+		/* No insn stores through a slice of 0 bytes */
+		if (verifier_bug_if(meta->slice_buf.size && meta->arg_constant.value &&
+				    !type_is_rdonly_mem(regs[BPF_REG_0].type) &&
+				    !bpf_scev_in_slice_slots(env, meta->slice_buf.off,
+							     meta->slice_buf.size,
+							     meta->slice_buf.size ==
+							     meta->arg_constant.value),
+				    env, "slice buffer is not in scev slice_slots"))
+			return -EFAULT;
 	} else {
 		return 0;
 	}
@@ -17841,13 +17808,6 @@ static void scalar_byte_swap(struct bpf_reg_state *dst_reg, struct bpf_insn *ins
 	/* Apply bswap if alu64 or switch between big-endian and little-endian machines */
 	bool need_bswap = alu64 || (to_le == is_big_endian);
 
-	/*
-	 * If the register is mutated, manually reset its scalar ID to break
-	 * any existing ties and avoid incorrect bounds propagation.
-	 */
-	if (need_bswap || insn->imm == 16 || insn->imm == 32)
-		clear_scalar_id(dst_reg);
-
 	if (need_bswap) {
 		if (insn->imm == 16)
 			dst_reg->var_off = tnum_bswap16(dst_reg->var_off);
@@ -17948,7 +17908,6 @@ static int maybe_fork_scalars(struct bpf_verifier_env *env, struct bpf_insn *ins
 	 * like any other. At this insn the branch is a part of the state that is looked at:
 	 * it must not be compared with it.
 	 */
-	clear_scalar_id(reg);
 	return adjust_scalar_min_max_vals(env, insn, reg, *src_reg);
 }
 
@@ -18158,10 +18117,8 @@ static int adjust_reg_min_max_vals(struct bpf_verifier_env *env,
 	struct bpf_func_state *state = vstate->frame[vstate->curframe];
 	struct bpf_reg_state *regs = state->regs, *dst_reg, *src_reg;
 	struct bpf_reg_state *ptr_reg = NULL, off_reg = {0};
-	bool alu32 = (BPF_CLASS(insn->code) != BPF_ALU64);
 	struct bpf_insn_aux_data *aux = cur_aux(env);
 	u8 opcode = BPF_OP(insn->code);
-	int err;
 
 	dst_reg = &regs[insn->dst_reg];
 	if (BPF_SRC(insn->code) == BPF_X)
@@ -18268,69 +18225,7 @@ static int adjust_reg_min_max_vals(struct bpf_verifier_env *env,
 		verbose(env, "verifier internal error: no src_reg\n");
 		return -EFAULT;
 	}
-	/*
-	 * For alu32 linked register tracking, we need to check dst_reg's
-	 * umax_value before the ALU operation. After adjust_scalar_min_max_vals(),
-	 * alu32 ops will have zero-extended the result, making umax_value <= U32_MAX.
-	 */
-	u64 dst_umax = reg_umax(dst_reg);
-
-	err = adjust_scalar_min_max_vals(env, insn, dst_reg, *src_reg);
-	if (err)
-		return err;
-	/*
-	 * Compilers can generate the code
-	 * r1 = r2
-	 * r1 += 0x1
-	 * if r2 < 1000 goto ...
-	 * use r1 in memory access
-	 * So remember constant delta between r2 and r1 and update r1 after
-	 * 'if' condition.
-	 */
-	if (env->bpf_capable &&
-	    (BPF_OP(insn->code) == BPF_ADD || BPF_OP(insn->code) == BPF_SUB) &&
-	    dst_reg->id && is_reg_const(src_reg, alu32) &&
-	    !(BPF_SRC(insn->code) == BPF_X && insn->src_reg == insn->dst_reg)) {
-		u64 val = reg_const_value(src_reg, alu32);
-		s32 off;
-
-		if (!alu32 && ((s64)val < S32_MIN || (s64)val > S32_MAX))
-			goto clear_id;
-
-		if (alu32 && (dst_umax > U32_MAX))
-			goto clear_id;
-
-		off = (s32)val;
-
-		if (BPF_OP(insn->code) == BPF_SUB) {
-			/* Negating S32_MIN would overflow */
-			if (off == S32_MIN)
-				goto clear_id;
-			off = -off;
-		}
-
-		if (dst_reg->id & BPF_ADD_CONST) {
-			/*
-			 * If the register already went through rX += val
-			 * we cannot accumulate another val into rx->off.
-			 */
-clear_id:
-			clear_scalar_id(dst_reg);
-		} else {
-			if (alu32)
-				dst_reg->id |= BPF_ADD_CONST32;
-			else
-				dst_reg->id |= BPF_ADD_CONST64;
-			dst_reg->delta = off;
-		}
-	} else {
-		/*
-		 * Make sure ID is cleared otherwise dst_reg min/max could be
-		 * incorrectly propagated into other registers by sync_linked_regs()
-		 */
-		clear_scalar_id(dst_reg);
-	}
-	return 0;
+	return adjust_scalar_min_max_vals(env, insn, dst_reg, *src_reg);
 }
 
 /*
@@ -18544,7 +18439,6 @@ void bpf_reg_union_range(struct bpf_reg_state *acc, const struct bpf_reg_state *
 /*
  * Extends acc's scalar range to include src's scalar range.
  * Caller must ensure that other kinds of metadata is compatible.
- * Caller must clear acc's scalar ID.
  */
 int bpf_reg_union(struct bpf_verifier_env *env, struct bpf_reg_state *acc,
 		  const struct bpf_reg_state *src)
@@ -18685,7 +18579,6 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 					/* case: R1 = R2
 					 * copy register state to dest reg
 					 */
-					assign_scalar_id_before_mov(env, src_reg);
 					*dst_reg = *src_reg;
 				} else {
 					/* case: R1 = (s8, s16 s32)R2 */
@@ -18695,14 +18588,7 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 							insn->src_reg);
 						return -EACCES;
 					} else if (src_reg->type == SCALAR_VALUE) {
-						bool no_sext;
-
-						no_sext = reg_umax(src_reg) < (1ULL << (insn->off - 1));
-						if (no_sext)
-							assign_scalar_id_before_mov(env, src_reg);
 						*dst_reg = *src_reg;
-						if (!no_sext)
-							clear_scalar_id(dst_reg);
 						coerce_reg_to_size_sx(dst_reg, insn->off >> 3);
 					} else {
 						mark_reg_unknown(env, regs, insn->dst_reg);
@@ -18716,29 +18602,10 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 						insn->src_reg);
 					return -EACCES;
 				} else if (src_reg->type == SCALAR_VALUE) {
-					if (insn->off == 0) {
-						bool is_src_reg_u32 = get_reg_width(src_reg) <= 32;
-
-						if (is_src_reg_u32)
-							assign_scalar_id_before_mov(env, src_reg);
-						*dst_reg = *src_reg;
-						/* Make sure ID is cleared if src_reg is not in u32
-						 * range otherwise dst_reg min/max could be incorrectly
-						 * propagated into src_reg by sync_linked_regs()
-						 */
-						if (!is_src_reg_u32)
-							clear_scalar_id(dst_reg);
-					} else {
-						/* case: W1 = (s8, s16)W2 */
-						bool no_sext = reg_umax(src_reg) < (1ULL << (insn->off - 1));
-
-						if (no_sext)
-							assign_scalar_id_before_mov(env, src_reg);
-						*dst_reg = *src_reg;
-						if (!no_sext)
-							clear_scalar_id(dst_reg);
+					*dst_reg = *src_reg;
+					/* case: W1 = (s8, s16)W2 */
+					if (insn->off)
 						coerce_subreg_to_size_sx(dst_reg, insn->off >> 3);
-					}
 				} else {
 					mark_reg_unknown(env, regs,
 							 insn->dst_reg);
@@ -18897,24 +18764,24 @@ static int simulate_both_branches_taken(struct bpf_verifier_env *env, u8 opcode,
 	regs_refine_cond_op(&env->false_reg1, &env->false_reg2, bpf_rev_opcode(opcode), is_jmp32);
 	reg_bounds_sync(&env->false_reg1);
 	reg_bounds_sync(&env->false_reg2);
-	/*
-	 * If there is a range bounds violation in *any* of the abstract values in either
-	 * reg_states in the FALSE branch (i.e. reg1, reg2), the FALSE branch must be dead. Only
-	 * TRUE branch will be taken.
-	 */
-	if (range_bounds_violation(&env->false_reg1) || range_bounds_violation(&env->false_reg2))
-		return 1;
-
-	/* Jump (TRUE) branch */
+	/* Jump (TRUE) branch. If FALSE is dead refine_live_branch() takes these registers. */
 	regs_refine_cond_op(&env->true_reg1, &env->true_reg2, opcode, is_jmp32);
 	reg_bounds_sync(&env->true_reg1);
 	reg_bounds_sync(&env->true_reg2);
 	/*
 	 * If there is a range bounds violation in *any* of the abstract values in either
+	 * reg_states in the FALSE branch (i.e. reg1, reg2), the FALSE branch must be dead. Only
+	 * TRUE branch will be taken.
+	 */
+	if (reg_is_empty(&env->false_reg1) || reg_is_empty(&env->false_reg2))
+		return 1;
+
+	/*
+	 * If there is a range bounds violation in *any* of the abstract values in either
 	 * reg_states in the TRUE branch (i.e. true_reg1, true_reg2), the TRUE branch must be dead.
 	 * Only FALSE branch will be taken.
 	 */
-	if (range_bounds_violation(&env->true_reg1) || range_bounds_violation(&env->true_reg2))
+	if (reg_is_empty(&env->true_reg1) || reg_is_empty(&env->true_reg2))
 		return 0;
 
 	/* Both branches are possible, we can't determine which one will be taken. */
@@ -19537,116 +19404,184 @@ static bool try_match_pkt_pointers(const struct bpf_insn *insn,
 	return true;
 }
 
-static void __collect_linked_regs(struct linked_regs *reg_set, struct bpf_reg_state *reg,
-				  u32 id, u32 frameno, u32 spi_or_reg, bool is_reg)
+/* a == b (mod 2^N) implies a == b if both fit in uN or both fit in sN. N is @bits. */
+static bool regs_fit_in_bits(const struct bpf_reg_state *a, const struct bpf_reg_state *b,
+			     u32 bits)
 {
-	struct linked_reg *e;
+	u64 umax = GENMASK_ULL(bits - 1, 0);
+	s64 smax = umax >> 1;
 
-	if (reg->type != SCALAR_VALUE || (reg->id & ~BPF_ADD_CONST) != id)
+	return (reg_umax(a) <= umax && reg_umax(b) <= umax) ||
+	       (reg_smin(a) >= -smax - 1 && reg_smax(a) <= smax &&
+		reg_smin(b) >= -smax - 1 && reg_smax(b) <= smax);
+}
+
+/*
+ * The state of the SCEV register @r. As in check_stack_read_fixed_off() a fill of @bits bits from
+ * byte @fill_off of the slot reads the low bits of the spill.
+ */
+static struct bpf_reg_state *scev_reg_for_fill(struct bpf_func_state *frame, u32 r, u32 fill_off,
+					       u32 bits)
+{
+	struct bpf_stack_state *ss;
+
+	if (r < MAX_BPF_REG)
+		return &frame->regs[r];
+	if (r - MAX_BPF_REG >= bpf_stack_nr_slots(frame))
+		return NULL;
+	ss = bpf_stack_slot(frame, r - MAX_BPF_REG);
+	if (!bpf_is_spilled_reg(ss) || bpf_spill_size(ss) * BITS_PER_BYTE < bits ||
+	    !bpf_stack_narrow_access_ok(fill_off, bits / BITS_PER_BYTE, bpf_spill_size(ss)))
+		return NULL;
+	return &ss->spilled_ptr;
+}
+
+/*
+ * Scalar evolution promoted memory to the SCEV register *@regno, see struct env there, and names
+ * its address at the jump at @idx. This state knows which memory it is: the frame that is returned,
+ * its stack slot *@regno, *@fill_off counts from the start of the slot. The stack of a caller only:
+ * other memory has no state, and a store through r10 is no def of memory for scalar evolution.
+ * What holds the address is live: it was compared all the way from its def. Every place that
+ * compares, joins or drops states cleans them of what is dead first, see flow_arrive().
+ */
+static struct bpf_func_state *scev_mem_to_slot(struct bpf_verifier_env *env,
+					       struct bpf_verifier_state *vstate, int idx,
+					       u32 *regno, u32 *fill_off)
+{
+	struct bpf_reg_state *ptr;
+	u32 base_regno;
+	s64 addr;
+
+	if (!bpf_scev_mem_addr(env, idx, *regno, &base_regno, &addr))
+		return NULL;
+	ptr = scev_reg_for_fill(vstate->frame[vstate->curframe], base_regno, 0, 64);
+	if (!ptr || ptr->type != PTR_TO_STACK || !tnum_is_const(ptr->var_off) ||
+	    ptr->frameno >= vstate->curframe)
+		return NULL;
+	addr += ptr->var_off.value + *fill_off;
+	if (addr >= 0 || addr < -MAX_BPF_STACK_JIT)
+		return NULL;
+	*regno = MAX_BPF_REG + bpf_get_spi(addr);
+	*fill_off = addr & (BPF_REG_SIZE - 1);
+	return vstate->frame[ptr->frameno];
+}
+
+/*
+ *	p = buf + i; if (i > 100) return 0; *p = 0;
+ * p is @dst_reg, x is @ptr_reg, i is @off_reg. Scalar evolution says that p == x + i. So the insns
+ * 'p = x; p += i' are a no-op at run time, and a state that is sound before them is sound after
+ * them: apply their transfer function. Type, object and offset of p are taken from x as it is now;
+ * how p was computed does not matter.
+ * The old p is replaced, not intersected: a state does not distinguish two values of one hash map,
+ * and the intersection of an offset into the one with an offset into the other holds for neither.
+ * It is replaced only if the new range is a subset of the old one. An empty range is a subset too:
+ * the path is infeasible, p is left as it is.
+ */
+static bool recompute_ptr(struct bpf_verifier_env *env, struct bpf_reg_state *dst_reg,
+			  const struct bpf_reg_state *ptr_reg, const struct bpf_reg_state *off_reg)
+{
+	struct bpf_reg_state sum = *ptr_reg;
+
+	/* the cpu can speculate past the jump with an out-of-bounds index */
+	if (!env->bypass_spec_v1)
+		return false;
+	/* 'p += i' assigns a new id to a packet pointer */
+	if (ptr_reg->type == SCALAR_VALUE || type_is_pkt_pointer(ptr_reg->type) ||
+	    !bpf_is_widenable_reg_type(ptr_reg))
+		return false;
+	__mark_reg32_unbounded(&sum);
+	scalar_step_add(&sum, ptr_reg, off_reg);
+	sum.r64 = cnum64_add(ptr_reg->r64, off_reg->r64);
+	sum.var_off = tnum_add(ptr_reg->var_off, off_reg->var_off);
+	reg_bounds_sync(&sum);
+	if (reg_is_empty(&sum) || const_tnum_range_mismatch(&sum) ||
+	    const_tnum_range_mismatch_32(&sum))
+		return false;
+	/*
+	 * 'p += i' refuses a constant offset outside of this range, and a constant offset is put in
+	 * an int, see stack_slot_obj_get_spi().
+	 */
+	if (reg_smin(&sum) <= -BPF_MAX_VAR_OFF || reg_smax(&sum) >= BPF_MAX_VAR_OFF)
+		return false;
+	if (!bpf_reg_union_compatible(dst_reg, &sum) || !cnum64_is_subset(dst_reg->r64, sum.r64))
+		return false;
+	*dst_reg = sum;
+	return true;
+}
+
+/*
+ * The jump at @idx refined @regno. A register that scalar evolution links to it holds
+ * @regno + delta on every path to the jump: intersect the two. The intersection is empty: no
+ * execution gets here with this state (the path is infeasible), the register is left as it is.
+ */
+static void refine_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier_state *vstate,
+			       int idx, u32 regno)
+{
+	struct bpf_func_state *frame = vstate->frame[vstate->curframe], *linked_frame;
+	struct bpf_reg_state *reg, *base_reg, implied, saved;
+	u32 pos, linked_regno, fill_off, bits;
+	int base_regno;
+	s64 delta;
+
+	if (frame->regs[regno].type != SCALAR_VALUE)
 		return;
-
-	e = linked_regs_push(reg_set);
-	if (e) {
-		e->frameno = frameno;
-		e->is_reg = is_reg;
-		e->regno = spi_or_reg;
-	} else {
-		clear_scalar_id(reg);
-	}
-}
-
-/* For all R being scalar registers or spilled scalar registers
- * in verifier state, save R in linked_regs if R->id == id.
- * If there are too many Rs sharing same id, reset id for leftover Rs.
- */
-static void collect_linked_regs(struct bpf_verifier_env *env,
-				struct bpf_verifier_state *vstate,
-				u32 id,
-				struct linked_regs *linked_regs)
-{
-	struct bpf_insn_aux_data *aux = env->insn_aux_data;
-	struct bpf_func_state *func;
-	struct bpf_reg_state *reg;
-	u16 live_regs;
-	int i, j;
-
-	id = id & ~BPF_ADD_CONST;
-	for (i = vstate->curframe; i >= 0; i--) {
-		live_regs = aux[bpf_frame_insn_idx(vstate, i)].live_regs_before;
-		func = vstate->frame[i];
-		for (j = 0; j < BPF_REG_FP; j++) {
-			if (!(live_regs & BIT(j)))
-				continue;
-			reg = &func->regs[j];
-			__collect_linked_regs(linked_regs, reg, id, i, j, true);
-		}
-		for (j = 0; j < bpf_stack_nr_slots(func); j++) {
-			struct bpf_stack_state *ss = bpf_stack_slot(func, j);
-
-			if (!bpf_is_spilled_reg(ss))
-				continue;
-			reg = &ss->spilled_ptr;
-			__collect_linked_regs(linked_regs, reg, id, i, j, false);
-		}
-	}
-}
-
-/* For all R in linked_regs, copy known_reg range into R
- * if R->id == known_reg->id.
- */
-static void sync_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier_state *vstate,
-			     struct bpf_reg_state *known_reg, struct linked_regs *linked_regs)
-{
-	struct bpf_reg_state fake_reg;
-	struct bpf_reg_state *reg;
-	struct linked_reg *e;
-	int i;
-
-	for (i = 0; i < linked_regs->cnt; ++i) {
-		e = &linked_regs->entries[i];
-		reg = e->is_reg ? &vstate->frame[e->frameno]->regs[e->regno]
-				: &bpf_stack_slot(vstate->frame[e->frameno], e->spi)->spilled_ptr;
-		if (reg->type != SCALAR_VALUE || reg == known_reg)
+	for (pos = 0;
+	     bpf_scev_next_linked_reg(env, idx, regno, &pos, &linked_regno, &fill_off, &base_regno,
+				      &delta, &bits);
+	     pos++) {
+		linked_frame = frame;
+		if (linked_regno >= BPF_SCEV_REGS_NUM)
+			linked_frame = scev_mem_to_slot(env, vstate, idx, &linked_regno, &fill_off);
+		if (!linked_frame)
 			continue;
-		if ((reg->id & ~BPF_ADD_CONST) != (known_reg->id & ~BPF_ADD_CONST))
-			continue;
+		reg = scev_reg_for_fill(linked_frame, linked_regno, fill_off, bits);
 		/*
-		 * Skip mixed 32/64-bit links: the delta relationship doesn't
-		 * hold across different ALU widths.
+		 * The other half-slot of a 64-bit spill is dead: __clean_func_state() left
+		 * a 32-bit spill, the low 32 bits of the value.
 		 */
-		if (((reg->id ^ known_reg->id) & BPF_ADD_CONST) == BPF_ADD_CONST)
-			continue;
-		if ((!(reg->id & BPF_ADD_CONST) && !(known_reg->id & BPF_ADD_CONST)) ||
-		    reg->delta == known_reg->delta) {
-			*reg = *known_reg;
-		} else {
-			s32 saved_off = reg->delta;
-			u32 saved_id = reg->id;
-
-			fake_reg.type = SCALAR_VALUE;
-			__mark_reg_known(&fake_reg, (s64)reg->delta - (s64)known_reg->delta);
-
-			/* reg = known_reg; reg += delta */
-			*reg = *known_reg;
-			/*
-			 * Must preserve off and id, otherwise another sync_linked_regs()
-			 * will be incorrect.
-			 */
-			reg->delta = saved_off;
-			reg->id = saved_id;
-
-			scalar_step_add(reg, reg, &fake_reg);
-			scalar32_min_max_add(reg, &fake_reg);
-			scalar_min_max_add(reg, &fake_reg);
-			reg->var_off = tnum_add(reg->var_off, fake_reg.var_off);
-			if ((reg->id | known_reg->id) & BPF_ADD_CONST32)
-				zext_32_to_64(reg);
-			reg_bounds_sync(reg);
+		if (!reg && bits == 64 &&
+		    bpf_stack_narrow_access_ok(fill_off, BPF_REG_SIZE / 2, BPF_REG_SIZE)) {
+			bits = 32;
+			reg = scev_reg_for_fill(linked_frame, linked_regno, fill_off, bits);
 		}
-		if (e->is_reg)
-			mark_reg_scratched(env, e->regno);
-		else
-			mark_stack_slot_scratched(env, e->spi);
+		if (!reg || (base_regno < 0 && reg->type != SCALAR_VALUE))
+			continue;
+
+		implied = frame->regs[regno];
+		add_scalar_to_reg(&implied, delta);
+		if (base_regno >= 0) {
+			base_reg = scev_reg_for_fill(frame, base_regno, 0, 64);
+			if (base_reg && bits == 64 && recompute_ptr(env, reg, base_reg, &implied))
+				goto scratch;
+			continue;
+		}
+		if (regs_fit_in_bits(reg, &implied, bits))
+			bits = 64;
+		if (bits < 32)
+			continue;
+		/* tnum_intersect() of two tnums that don't overlap is not empty */
+		if (!tnum_overlap(bits == 32 ? tnum_subreg(reg->var_off) : reg->var_off,
+				  bits == 32 ? tnum_subreg(implied.var_off) : implied.var_off))
+			continue;
+		saved = *reg;
+		/*
+		 * Equal in 64 bits is equal in the low 32 bits too. 'if w1 s> 200' on a zero
+		 * extended int refines nothing but the 32-bit range.
+		 */
+		regs_refine_cond_op(reg, &implied, BPF_JEQ, true);
+		if (bits == 64)
+			regs_refine_cond_op(reg, &implied, BPF_JEQ, false);
+		reg_bounds_sync(reg);
+		if (reg_is_empty(reg) || const_tnum_range_mismatch(reg) ||
+		    const_tnum_range_mismatch_32(reg)) {
+			*reg = saved;
+			continue;
+		}
+scratch:
+		if (linked_regno < MAX_BPF_REG)
+			mark_reg_scratched(env, linked_regno);
+		else if (linked_frame == frame)
+			mark_stack_slot_scratched(env, linked_regno - MAX_BPF_REG);
 	}
 }
 
@@ -19669,6 +19604,43 @@ static void mark_loop_exit_decided(struct bpf_verifier_env *env, struct bpf_veri
 	}
 }
 
+/*
+ * One branch of the jump @insn is dead, the current state takes the other one. @reg1 and @reg2 are
+ * the operands as that branch refines them. They hold every value that takes it, whether the other
+ * branch is dead or not.
+ */
+static int refine_live_branch(struct bpf_verifier_env *env, struct bpf_insn *insn,
+			      struct bpf_reg_state *reg1, struct bpf_reg_state *reg2)
+{
+	struct bpf_reg_state *regs = cur_regs(env);
+	int err;
+
+	/* is_branch_taken() knew the branch before it refined anything */
+	if (!memcmp(reg1, &regs[insn->dst_reg], sizeof(*reg1)) &&
+	    (BPF_SRC(insn->code) == BPF_K || !memcmp(reg2, &regs[insn->src_reg], sizeof(*reg2))))
+		return 0;
+	/*
+	 * The fall-through branch of JSET forgets the ranges. Or this branch is dead too: the path
+	 * is infeasible. The registers are left as they are.
+	 */
+	if (BPF_OP(insn->code) == BPF_JSET || reg_is_empty(reg1) || reg_is_empty(reg2))
+		return 0;
+	err = reg_bounds_sanity_check(env, reg1, "live_reg1");
+	err = err ?: reg_bounds_sanity_check(env, reg2, "live_reg2");
+	if (err)
+		return err;
+
+	regs[insn->dst_reg] = *reg1;
+	if (BPF_SRC(insn->code) == BPF_X)
+		regs[insn->src_reg] = *reg2;
+	if (!env->bpf_capable)
+		return 0;
+	if (BPF_SRC(insn->code) == BPF_X)
+		refine_linked_regs(env, env->cur_state, env->insn_idx, insn->src_reg);
+	refine_linked_regs(env, env->cur_state, env->insn_idx, insn->dst_reg);
+	return 0;
+}
+
 static int check_cond_jmp_op(struct bpf_verifier_env *env,
 			     struct bpf_insn *insn, int *insn_idx)
 {
@@ -19677,7 +19649,6 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 	struct bpf_reg_state *regs = this_branch->frame[this_branch->curframe]->regs;
 	struct bpf_reg_state *dst_reg, *other_branch_regs, *src_reg = NULL;
 	struct bpf_reg_state *eq_branch_regs;
-	struct linked_regs linked_regs = {};
 	u8 opcode = BPF_OP(insn->code);
 	bool is_jmp32;
 	int pred = -1;
@@ -19746,16 +19717,6 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 		__mark_reg_known(src_reg, insn->imm);
 	}
 
-	/*
-	 * Collect the linked registers before env->{true,false}_reg{1,2} setup,
-	 * otherwise ids dropped by collect_linked_regs() would be resurrected
-	 * when env->{true,false}_reg{1,2} are copied back.
-	 */
-	if (BPF_SRC(insn->code) == BPF_X && src_reg->type == SCALAR_VALUE && src_reg->id)
-		collect_linked_regs(env, this_branch, src_reg->id, &linked_regs);
-	if (dst_reg->type == SCALAR_VALUE && dst_reg->id)
-		collect_linked_regs(env, this_branch, dst_reg->id, &linked_regs);
-
 	is_jmp32 = BPF_CLASS(insn->code) == BPF_JMP32;
 	env->false_reg1 = *dst_reg;
 	env->false_reg2 = *src_reg;
@@ -19774,6 +19735,9 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 			if (err < 0)
 				return err;
 		}
+		err = refine_live_branch(env, insn, &env->true_reg1, &env->true_reg2);
+		if (err)
+			return err;
 		if (env->log.level & BPF_LOG_LEVEL)
 			print_insn_state(env, this_branch, this_branch->curframe);
 		*insn_idx += insn->off;
@@ -19789,6 +19753,9 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 			if (err < 0)
 				return err;
 		}
+		err = refine_live_branch(env, insn, &env->false_reg1, &env->false_reg2);
+		if (err)
+			return err;
 		if (env->log.level & BPF_LOG_LEVEL)
 			print_insn_state(env, this_branch, this_branch->curframe);
 		return 0;
@@ -19809,18 +19776,13 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 	if (BPF_SRC(insn->code) == BPF_X)
 		other_branch_regs[insn->src_reg] = env->true_reg2;
 
-	if (BPF_SRC(insn->code) == BPF_X &&
-	    src_reg->type == SCALAR_VALUE && src_reg->id &&
-	    !WARN_ON_ONCE(src_reg->id != other_branch_regs[insn->src_reg].id)) {
-		sync_linked_regs(env, this_branch, src_reg, &linked_regs);
-		sync_linked_regs(env, other_branch, &other_branch_regs[insn->src_reg],
-				 &linked_regs);
-	}
-	if (dst_reg->type == SCALAR_VALUE && dst_reg->id &&
-	    !WARN_ON_ONCE(dst_reg->id != other_branch_regs[insn->dst_reg].id)) {
-		sync_linked_regs(env, this_branch, dst_reg, &linked_regs);
-		sync_linked_regs(env, other_branch, &other_branch_regs[insn->dst_reg],
-				 &linked_regs);
+	if (env->bpf_capable) {
+		if (BPF_SRC(insn->code) == BPF_X) {
+			refine_linked_regs(env, this_branch, *insn_idx, insn->src_reg);
+			refine_linked_regs(env, other_branch, *insn_idx, insn->src_reg);
+		}
+		refine_linked_regs(env, this_branch, *insn_idx, insn->dst_reg);
+		refine_linked_regs(env, other_branch, *insn_idx, insn->dst_reg);
 	}
 
 	/* if one pointer register is compared to another pointer
@@ -20672,69 +20634,6 @@ static void adjust_btf_func(struct bpf_verifier_env *env)
 	/* func_info is not available for hidden subprogs */
 	for (i = 0; i < env->subprog_cnt - env->hidden_subprog_cnt; i++)
 		aux->func_info[i].insn_off = env->subprog_info[i].start;
-}
-
-/* Find id in idset and increment its count, or add new entry */
-static void idset_cnt_inc(struct bpf_idset *idset, u32 id)
-{
-	u32 i;
-
-	for (i = 0; i < idset->num_ids; i++) {
-		if (idset->entries[i].id == id) {
-			idset->entries[i].cnt++;
-			return;
-		}
-	}
-	/* New id */
-	if (idset->num_ids < BPF_ID_MAP_SIZE) {
-		idset->entries[idset->num_ids].id = id;
-		idset->entries[idset->num_ids].cnt = 1;
-		idset->num_ids++;
-	}
-}
-
-/* Find id in idset and return its count, or 0 if not found */
-static u32 idset_cnt_get(struct bpf_idset *idset, u32 id)
-{
-	u32 i;
-
-	for (i = 0; i < idset->num_ids; i++) {
-		if (idset->entries[i].id == id)
-			return idset->entries[i].cnt;
-	}
-	return 0;
-}
-
-/*
- * Clear singular scalar ids in a state.
- * A register with a non-zero id is called singular if no other register shares
- * the same base id. Such registers can be treated as independent (id=0).
- */
-void bpf_clear_singular_ids(struct bpf_verifier_env *env,
-			    struct bpf_verifier_state *st)
-{
-	struct bpf_idset *idset = &env->idset_scratch;
-	struct bpf_func_state *func;
-	struct bpf_reg_state *reg;
-
-	idset->num_ids = 0;
-
-	bpf_for_each_reg_in_vstate(st, func, reg, ({
-		if (reg->type != SCALAR_VALUE)
-			continue;
-		if (!reg->id)
-			continue;
-		idset_cnt_inc(idset, reg->id & ~BPF_ADD_CONST);
-	}));
-
-	bpf_for_each_reg_in_vstate(st, func, reg, ({
-		if (reg->type != SCALAR_VALUE)
-			continue;
-		if (!reg->id)
-			continue;
-		if (idset_cnt_get(idset, reg->id & ~BPF_ADD_CONST) == 1)
-			clear_scalar_id(reg);
-	}));
 }
 
 /* Return true if it's OK to have the same insn return a different type. */
