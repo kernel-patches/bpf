@@ -717,7 +717,7 @@ static bool func_states_equal(struct bpf_verifier_env *env, struct bpf_func_stat
 	    old->entry_rcu_locks != cur->entry_rcu_locks ||
 	    old->entry_preempt_locks != cur->entry_preempt_locks)
 		return false;
-	/* a frame that left a section of its callers hands its count over, see frame_desc.c */
+	/* the sections a frame left of those it was entered in matter to a throw, see frame_desc.c */
 	if (env->describe_frames && (old->rcu_released_below != cur->rcu_released_below ||
 				     old->preempt_released_below != cur->preempt_released_below))
 		return false;

@@ -36,9 +36,14 @@
  *
  *  - A frame releases what it acquired itself. A callee cannot reach the
  *    slot of its caller, so it may not release what its caller holds.
- *  - A frame that returns holds nothing but a reference it returns in R0,
- *    which the call acquires for the caller like the call of a kfunc that
- *    returns one, and is in the sections it was called in.
+ *  - A slot goes with its frame. A reference a subprog returns in R0 is
+ *    acquired by the call for the caller, like the call of a kfunc that
+ *    returns one.
+ *    Whatever else a frame comes to hold of what another frame acquired can
+ *    have no slot: a lock a subprog returns holding, or a stack object a
+ *    callee creates in the stack of its caller. Likewise a subprog whose
+ *    callee returns in other sections than it was called in cannot count
+ *    its sections in a slot.
  *  - A slot holds one handle, so a frame that holds two resources of one
  *    acquiring call at once can have no slot for them.
  *
@@ -429,12 +434,13 @@ static s16 spi_off(int spi)
  * front of it, the pointer the call takes to a lock or to a stack object. The
  * handle of a dynptr is the record or the reader, the first word of the
  * dynptr at @obj_off, so that a clone releases it as well as the dynptr it was
- * created in. -EOPNOTSUPP for a resource the unwinder cannot release, -EXDEV
- * for a stack object in the stack of another frame.
+ * created in. @owner is the frame that has a stack object in its stack, which
+ * may be a caller of the current one. -EOPNOTSUPP for a resource the unwinder
+ * cannot release.
  */
 static int acquired_class(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
 			  const struct bpf_reference_state *ref, int regno, bool after, u8 *flags,
-			  s16 *adj, s16 *obj_off)
+			  s16 *adj, s16 *obj_off, int *owner)
 {
 	const struct bpf_func_state *frame = st->frame[st->curframe];
 	/* a handle that is in no register can only be found by the sites */
@@ -446,6 +452,7 @@ static int acquired_class(struct bpf_verifier_env *env, struct bpf_verifier_stat
 
 	*adj = 0;
 	*obj_off = 0;
+	*owner = st->curframe;
 	if (after) {
 		if (!in_reg)
 			return -EOPNOTSUPP;
@@ -461,13 +468,13 @@ static int acquired_class(struct bpf_verifier_env *env, struct bpf_verifier_stat
 		return resource_of_lock(env, ref, in_reg ? &frame->regs[regno] : NULL, adj, flags);
 	if (!stack_object_find(st, ref, &objframe, &spi))
 		return -EOPNOTSUPP;
-	if (objframe != st->curframe)
-		return -EXDEV;
+	*owner = objframe;
 	slot = bpf_stack_slot(st->frame[objframe], spi);
 	switch (slot->slot_type[BPF_REG_SIZE - 1]) {
 	case STACK_DYNPTR:
 		*flags |= BPF_RES_F_DEREF;
-		*obj_off = spi_off(spi);
+		/* a slot is filled from the stack of the frame that runs the insn only */
+		*obj_off = objframe == st->curframe ? spi_off(spi) : 0;
 		return resource_of_kind(env, slot->spilled_ptr.dynptr.type == BPF_DYNPTR_TYPE_FILE ?
 					     BPF_RESOURCE_DYNPTR_FILE : BPF_RESOURCE_RINGBUF);
 	case STACK_IRQ_FLAG:
@@ -547,22 +554,17 @@ int bpf_frame_desc_record_acquire(struct bpf_verifier_env *env, int idx, int reg
 	struct bpf_reference_state *ref = &st->refs[idx];
 	u8 flags = may_fail ? BPF_RES_F_MAY_FAIL : 0;
 	s16 adj, obj_off;
-	int res, acq;
+	int res, acq, owner;
 
 	ref->res = 0;
 	ref->acq = 0;
 	if (!env->describe_frames || st->speculative)
 		return 0;
-	res = acquired_class(env, st, ref, regno, after, &flags, &adj, &obj_off);
+	res = acquired_class(env, st, ref, regno, after, &flags, &adj, &obj_off, &owner);
 	if (res == -EOPNOTSUPP) {
 		/* the insns of another visit must not take this for a resource of theirs */
 		env->insn_aux_data[env->insn_idx].res_none = true;
 		return 0;
-	}
-	if (res == -EXDEV) {
-		verbose(env, "frame_desc: insn %d creates an object in the stack of another frame, which is not supported in a program that throws\n",
-			env->insn_idx);
-		return -EINVAL;
 	}
 	if (res < 0)
 		return res;
@@ -570,7 +572,19 @@ int bpf_frame_desc_record_acquire(struct bpf_verifier_env *env, int idx, int reg
 	if (regno < BPF_REG_0 || regno > BPF_REG_5)
 		regno = BPF_REG_FP;
 	acq = acq_add(env, env->insn_idx, res, regno, flags, adj, obj_off);
-	return acq < 0 ? acq : ref_set_acq(env, st, idx, acq);
+	if (acq < 0)
+		return acq;
+	/*
+	 * A stack object is held by the frame that has it in its stack, which
+	 * its sites find it in: the slot of a callee that created it there
+	 * would be gone with the callee.
+	 */
+	if (owner != st->curframe) {
+		ref->frameno = owner;
+		if (!env->res_acqs[acq].elsewhere)
+			env->res_acqs[acq].elsewhere = env->insn_idx + 1;
+	}
+	return ref_set_acq(env, st, idx, acq);
 }
 
 /*
@@ -748,71 +762,89 @@ int bpf_frame_desc_record_section(struct bpf_verifier_env *env, u8 kind, s8 delt
 /*
  * The current frame returns to its caller. Its slots and its counts of
  * sections go with the frame, and nothing moves them to the frame it returns
- * to, so it returns holding nothing but a reference in R0, which the call
- * acquires for the caller, see bpf_frame_desc_record_return(), and in as many
- * sections as it was called in. The entry counts of the sections are lowered
- * as the frame leaves its callers' sections, see release_context_state(),
- * which counts those apart.
+ * to. What it returns holding is its caller's from then on:
+ *
+ *  - A reference in R0 the call acquires for the caller, like the call of a
+ *    kfunc that returns one, see bpf_frame_desc_record_return().
+ *  - Anything else, a lock the frame took for its caller, stays what it was
+ *    acquired as, and can have no slot: the sites of the caller have to say
+ *    where it is, or no throw may find it held, see
+ *    bpf_frame_desc_record_return().
+ *
+ * A frame that returns in more or fewer sections than it was called in leaves
+ * the difference to its caller, whose sites say how many it is in then: a
+ * count the caller keeps in a slot would not know. The entry counts of the
+ * sections are lowered as the frame leaves its callers' sections, see
+ * release_context_state(), which counts those apart.
  */
 int bpf_frame_desc_record_exit(struct bpf_verifier_env *env)
 {
 	struct bpf_verifier_state *st = env->cur_state;
 	const struct bpf_func_state *frame = st->frame[st->curframe];
-	int i, held = 0;
-	s16 adj;
 
 	if (!env->describe_frames || st->speculative)
 		return 0;
-	if (st->active_rcu_locks != frame->entry_rcu_locks || frame->rcu_released_below ||
-	    st->active_preempt_locks != frame->entry_preempt_locks || frame->preempt_released_below) {
-		verbose(env, "frame_desc: a subprog returns in other sections than it was called in at insn %d, which is not supported in a program that throws\n",
-			env->insn_idx);
-		return -EINVAL;
-	}
-	for (i = 0; i < st->acquired_refs; i++) {
-		const struct bpf_reference_state *ref = &st->refs[i];
-
-		if (!ref->res || ref->frameno != st->curframe)
-			continue;
-		if (ref->type == REF_TYPE_PTR && !(env->res_acqs[ref->acq - 1].flags & BPF_RES_F_ARG) &&
-		    reg_ref_off(&frame->regs[BPF_REG_0], ref->id, &adj) && !held++)
-			continue;
-		verbose(env, "frame_desc: a subprog returns holding what R0 does not carry at insn %d, which is not supported in a program that throws\n",
-			env->insn_idx);
-		return -EINVAL;
-	}
+	/* a function verified on its own has its caller told in bpf_flow_return() */
+	if (st->curframe)
+		bpf_frame_desc_record_sections(env, st->frame[st->curframe - 1]->subprogno,
+					       st->active_rcu_locks != frame->entry_rcu_locks +
+								       frame->rcu_released_below,
+					       st->active_preempt_locks != frame->entry_preempt_locks +
+									   frame->preempt_released_below);
 	return 0;
 }
 
 /*
  * A subprog called at insn @callsite returned to the current frame of @st
- * with @r0. The reference refs[@idx] it returned holding is the caller's
- * from here on, acquired by the call like the reference a kfunc returns; with
- * @idx < 0 it returned holding nothing, and what it left in R0 must not be
- * taken for a reference by the insns another visit has follow the call.
+ * with @r0, holding the reference refs[@idx], which is the caller's from here
+ * on, or nothing with @idx < 0.
+ *
+ * A reference that R0 carries is acquired by the call, like the reference a
+ * kfunc returns. Anything else stays what it was acquired as, in the subprog:
+ * the slot of that acquisition is gone with the frame of the subprog, so it
+ * can have none, see bpf_frame_desc_resolve(). And what the subprog left in
+ * R0 then must not be taken for a reference by the insns another visit has
+ * follow the call.
  */
 int bpf_frame_desc_record_return(struct bpf_verifier_env *env, struct bpf_verifier_state *st,
 				 int idx, int callsite, const struct bpf_reg_state *r0)
 {
 	struct bpf_reference_state *ref;
+	struct bpf_res_acq *held;
 	s16 adj = 0;
 	int acq;
 
 	if (!env->describe_frames || st->speculative)
 		return 0;
 	ref = idx < 0 ? NULL : &st->refs[idx];
-	if (!ref || !ref->res) {
-		if (r0->type != SCALAR_VALUE || !tnum_equals_const(r0->var_off, 0))
-			env->insn_aux_data[callsite].res_none = true;
-		return 0;
+	if (ref && !ref->res)
+		ref = NULL;
+	if (ref && ref->type == REF_TYPE_PTR && ref->id &&
+	    !(env->res_acqs[ref->acq - 1].flags & BPF_RES_F_ARG) &&
+	    reg_ref_off(r0, ref->id, &adj)) {
+		acq = acq_add(env, callsite, ref->res - 1, BPF_REG_0, 0, adj, 0);
+		return acq < 0 ? acq : ref_set_acq(env, st, idx, acq);
 	}
-	if (!reg_ref_off(r0, ref->id, &adj)) {
-		verbose(env, "frame_desc: the subprog called at insn %d returns holding what R0 does not carry, which is not supported in a program that throws\n",
-			callsite);
-		return -EINVAL;
+	if (r0->type != SCALAR_VALUE || !tnum_equals_const(r0->var_off, 0))
+		env->insn_aux_data[callsite].res_none = true;
+	if (ref) {
+		held = &env->res_acqs[ref->acq - 1];
+		if (!held->elsewhere)
+			held->elsewhere = callsite + 1;
 	}
-	acq = acq_add(env, callsite, ref->res - 1, BPF_REG_0, 0, adj, 0);
-	return acq < 0 ? acq : ref_set_acq(env, st, idx, acq);
+	return 0;
+}
+
+/*
+ * A callee returned to @subprog in more or fewer RCU read or preemption
+ * disabled sections than it was called in, see bpf_frame_desc_record_exit().
+ */
+void bpf_frame_desc_record_sections(struct bpf_verifier_env *env, int subprog, bool rcu,
+				    bool preempt)
+{
+	if (!env->describe_frames)
+		return;
+	env->subprog_info[subprog].section_delta |= (rcu ? BIT(0) : 0) | (preempt ? BIT(1) : 0);
 }
 
 /*
@@ -1020,6 +1052,8 @@ void bpf_frame_desc_reset(struct bpf_verifier_env *env)
 	env->section_insn_cnt = 0;
 	env->res_site_cnt = 0;
 	env->res_loc_cnt = 0;
+	for (i = 0; i < env->subprog_cnt; i++)
+		env->subprog_info[i].section_delta = 0;
 	for (i = 0; i < env->prog->len; i++) {
 		env->insn_aux_data[i].res_none = false;
 		env->insn_aux_data[i].res_none_r0 = false;
@@ -1217,6 +1251,13 @@ int bpf_frame_desc_resolve(struct bpf_verifier_env *env)
 		ret = slot_can_be_kept(env, i);
 		if (ret)
 			break;
+		/* the slot is in the frame that runs the insn, not in the one that holds this */
+		if (a->elsewhere) {
+			verbose(env, "frame_desc: what insn %d acquires is held by another frame from insn %d on, where a throw finds it in no place its paths agree on, which is not supported in a program that throws\n",
+				a->insn, a->elsewhere - 1);
+			ret = -EINVAL;
+			break;
+		}
 		if (a->multi) {
 			verbose(env, "frame_desc: a frame holds two resources of insn %d at once, which is not supported in a program that throws\n",
 				a->insn);
@@ -1245,6 +1286,13 @@ int bpf_frame_desc_resolve(struct bpf_verifier_env *env)
 		for (k = 0; k < ARRAY_SIZE(sub->section_off) && !ret; k++) {
 			if (!site->sections_vary[k] || sub->section_off[k])
 				continue;
+			/* the count would miss what a callee returned in and did not leave */
+			if (sub->section_delta & BIT(k)) {
+				verbose(env, "frame_desc: a subprog returns in other sections than it was called in, to one that counts its sections in a hidden slot for insn %d, which is not supported in a program that throws\n",
+					site->insn);
+				ret = -EINVAL;
+				break;
+			}
 			ret = bpf_reserve_stack_slots(env, sub - env->subprog_info, 1, &sub->section_off[k]);
 			env->frame_desc_slots++;
 		}

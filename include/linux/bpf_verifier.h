@@ -1112,6 +1112,12 @@ struct bpf_subprog_info {
 	bool stack_args_from_code: 1;
 	/* it releases what its caller holds, so it's verified in the context of such caller */
 	bool releases_inherited: 1;
+	/*
+	 * The kinds of sections, a bit each, that a callee returned to it in
+	 * more or fewer of than it called the callee in: a count it keeps in a
+	 * slot does not follow that, see frame_desc.c.
+	 */
+	u8 section_delta;
 	/* it loads the end of the packet from the context */
 	bool loads_pkt_end: 1;
 	/* a call of it was verified on its own: its insns are not in insns_total of the caller */
@@ -1272,6 +1278,13 @@ struct bpf_res_acq {
 	s16 off;	/* the slot, relative to R10 */
 	bool held;	/* some frame holds what it acquired at a site */
 	bool slot;	/* and some site cannot say where: the handle is kept in a slot */
+	/*
+	 * An insn, plus one, that leaves what it acquired with another frame
+	 * than the one that ran the acquisition: the call a subprog returns
+	 * holding it from, or the acquisition itself when it creates a stack
+	 * object in the stack of a caller. A slot cannot follow it there.
+	 */
+	u32 elsewhere;
 	bool multi;	/* a frame held two of what it acquired at once: one slot cannot */
 };
 
@@ -2345,6 +2358,8 @@ int bpf_frame_desc_record_release(struct bpf_verifier_env *env, int idx);
 int bpf_frame_desc_record_ctx_arg(struct bpf_verifier_env *env, int idx, int argno);
 int bpf_frame_desc_record_section(struct bpf_verifier_env *env, u8 kind, s8 delta);
 int bpf_frame_desc_record_exit(struct bpf_verifier_env *env);
+void bpf_frame_desc_record_sections(struct bpf_verifier_env *env, int subprog, bool rcu,
+				    bool preempt);
 bool bpf_frame_desc_keeps(const struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
 			  int f, const struct bpf_reg_state *reg);
 u16 bpf_frame_desc_kept_regs(const struct bpf_verifier_env *env, const struct bpf_verifier_state *st,

@@ -12028,6 +12028,10 @@ int bpf_flow_return(struct bpf_verifier_env *env, struct bpf_verifier_state *cal
 	}
 	caller->active_irq_id = fresh_id(env, idmap, caller->active_irq_id);
 	caller->active_lock_id = fresh_id(env, idmap, caller->active_lock_id);
+	/* the sections the function entered and did not leave are the caller's, see frame_desc.c */
+	bpf_frame_desc_record_sections(env, frame->subprogno,
+				       caller->active_rcu_locks != caller_rcu,
+				       caller->active_preempt_locks != caller_preempt);
 	/* fresh_id() had no room for an id, or there are no ids left */
 	if (idmap->cnt == BPF_ID_MAP_SIZE || env->id_gen >= BPF_MAX_ID) {
 		verbose(env, "too many ids at the call at insn %d\n", call_idx);

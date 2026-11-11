@@ -463,7 +463,7 @@ static bool join_func(struct bpf_join_state *js, struct bpf_func_state *fd,
 		    fa->entry_rcu_locks != fb->entry_rcu_locks ||
 		    fa->entry_preempt_locks != fb->entry_preempt_locks)
 			return false;
-		/* a frame that left a section of its callers hands its count over, see frame_desc.c */
+		/* the sections a frame left of those it was entered in matter to a throw, see frame_desc.c */
 		if (env->describe_frames && (fa->rcu_released_below != fb->rcu_released_below ||
 					     fa->preempt_released_below != fb->preempt_released_below))
 			return false;
