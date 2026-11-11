@@ -33,6 +33,11 @@ or send mail. A skill returns its result with the evidence for it, or says what
 is missing. Do not fill a missing result with a guess or a placeholder, and do
 not finalize the work until it is resolved.
 
+The following skills are available:
+
+* agents/skills/find-fixes/SKILL.md determines the Fixes tag of a bug fix, or
+  checks an existing one.
+
 Licensing and Legal Requirements
 ================================
 
@@ -78,7 +83,8 @@ these steps:
    another one. The fix must not add build warnings and must pass the
    checkpatch.pl checks (see submitting-patches.rst).
 6. Commit the working fix with a detailed message describing the problem, the
-   solution and a Fixes tag. Do not add a Signed-off-by tag.
+   solution and a Fixes tag determined with the find-fixes skill.  Do not
+   add a Signed-off-by tag.
 7. Identify the maintainers and lists using scripts/get_maintainer.pl.
    Documentation/process/security-bugs.rst shows how to do that.
 8. Indicate what could not be done. If the fix could not be built or tested, or
