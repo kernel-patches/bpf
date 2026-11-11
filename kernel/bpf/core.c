@@ -3896,6 +3896,16 @@ bool __weak bpf_jit_supports_exceptions(void)
 	return false;
 }
 
+/*
+ * Does the JIT record where each frame keeps its BPF stack, see
+ * bpf_prog_aux::frame_fp_off, so that the unwinder can release what a frame
+ * holds when bpf_throw() discards it?
+ */
+bool __weak bpf_jit_supports_exception_cleanup(void)
+{
+	return false;
+}
+
 bool __weak bpf_jit_supports_private_stack(void)
 {
 	return false;

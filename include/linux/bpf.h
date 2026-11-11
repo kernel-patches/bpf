@@ -2010,6 +2010,10 @@ struct bpf_prog_aux {
 	 * by the JIT; consumed by the exception unwinder.
 	 */
 	s16 callee_reg_off[BPF_THROW_NR_CALLEE_SAVED];
+	/* BPF frame pointer relative to the native frame pointer the stack walker reports */
+	s16 frame_fp_off;
+	/* With a private stack, the frame's R10 is this far into this CPU's priv_stack_ptr. */
+	u32 priv_frame_off;
 #ifdef CONFIG_SECURITY
 	void *security;
 #endif
