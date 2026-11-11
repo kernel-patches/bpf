@@ -114,10 +114,11 @@ static struct pmcraid_chip_details pmcraid_chip_cfg[] = {
  * PCI device ids supported by pmcraid driver
  */
 static const struct pci_device_id pmcraid_pci_table[] = {
-	{ PCI_DEVICE(PCI_VENDOR_ID_PMC, PCI_DEVICE_ID_PMC_MAXRAID),
-	  0, 0, (kernel_ulong_t)&pmcraid_chip_cfg[0]
+	{
+		PCI_VDEVICE(PMC, PCI_DEVICE_ID_PMC_MAXRAID),
+		.driver_data = (kernel_ulong_t)&pmcraid_chip_cfg[0],
 	},
-	{}
+	{ }
 };
 
 MODULE_DEVICE_TABLE(pci, pmcraid_pci_table);

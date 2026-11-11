@@ -514,8 +514,7 @@ static void pci_esp_remove_one(struct pci_dev *pdev)
 }
 
 static const struct pci_device_id am53c974_pci_tbl[] = {
-	{ PCI_VENDOR_ID_AMD, PCI_DEVICE_ID_AMD_SCSI,
-		PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0 },
+	{ PCI_VDEVICE(AMD, PCI_DEVICE_ID_AMD_SCSI) },
 	{ }
 };
 MODULE_DEVICE_TABLE(pci, am53c974_pci_tbl);

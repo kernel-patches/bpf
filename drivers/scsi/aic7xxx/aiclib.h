@@ -142,10 +142,10 @@ scsi_4btoul(uint8_t *bytes)
 
 #define GETID(v, s) (unsigned)(((v) >> (s)) & 0xFFFF ?: PCI_ANY_ID)
 
-#define ID_C(x, c)						\
-{								\
-	GETID(x,32), GETID(x,48), GETID(x,0), GETID(x,16),	\
-	(c) << 8, 0xFFFF00, 0					\
+#define ID_C(x, c)								\
+{										\
+	PCI_DEVICE_SUB(GETID(x, 32), GETID(x, 48), GETID(x, 0), GETID(x, 16)),	\
+	.class = (c) << 8, .class_mask = 0xFFFF00,				\
 }
 
 #define ID2C(x)                          \

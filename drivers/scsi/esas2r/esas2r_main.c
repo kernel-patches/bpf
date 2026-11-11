@@ -303,29 +303,14 @@ MODULE_PARM_DESC(interrupt_mode,
 		 "Defines the interrupt mode to use.  0 for legacy"
 		 ", 1 for MSI.  Default is MSI (1).");
 
-static const struct pci_device_id
-	esas2r_pci_table[] = {
-	{ ATTO_VENDOR_ID, 0x0049,	  ATTO_VENDOR_ID, 0x0049,
-	  0,
-	  0, 0 },
-	{ ATTO_VENDOR_ID, 0x0049,	  ATTO_VENDOR_ID, 0x004A,
-	  0,
-	  0, 0 },
-	{ ATTO_VENDOR_ID, 0x0049,	  ATTO_VENDOR_ID, 0x004B,
-	  0,
-	  0, 0 },
-	{ ATTO_VENDOR_ID, 0x0049,	  ATTO_VENDOR_ID, 0x004C,
-	  0,
-	  0, 0 },
-	{ ATTO_VENDOR_ID, 0x0049,	  ATTO_VENDOR_ID, 0x004D,
-	  0,
-	  0, 0 },
-	{ ATTO_VENDOR_ID, 0x0049,	  ATTO_VENDOR_ID, 0x004E,
-	  0,
-	  0, 0 },
-	{ 0,		  0,		  0,		  0,
-	  0,
-	  0, 0 }
+static const struct pci_device_id esas2r_pci_table[] = {
+	{ PCI_DEVICE_SUB(ATTO_VENDOR_ID, 0x0049, ATTO_VENDOR_ID, 0x0049) },
+	{ PCI_DEVICE_SUB(ATTO_VENDOR_ID, 0x0049, ATTO_VENDOR_ID, 0x004A) },
+	{ PCI_DEVICE_SUB(ATTO_VENDOR_ID, 0x0049, ATTO_VENDOR_ID, 0x004B) },
+	{ PCI_DEVICE_SUB(ATTO_VENDOR_ID, 0x0049, ATTO_VENDOR_ID, 0x004C) },
+	{ PCI_DEVICE_SUB(ATTO_VENDOR_ID, 0x0049, ATTO_VENDOR_ID, 0x004D) },
+	{ PCI_DEVICE_SUB(ATTO_VENDOR_ID, 0x0049, ATTO_VENDOR_ID, 0x004E) },
+	{ }
 };
 
 MODULE_DEVICE_TABLE(pci, esas2r_pci_table);

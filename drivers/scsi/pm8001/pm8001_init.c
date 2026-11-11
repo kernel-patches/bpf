@@ -1437,79 +1437,176 @@ err_out_disable:
  * unique value for each of the controller
  */
 static const struct pci_device_id pm8001_pci_table[] = {
-	{ PCI_VDEVICE(PMC_Sierra, 0x8001), chip_8001 },
-	{ PCI_VDEVICE(PMC_Sierra, 0x8006), chip_8006 },
-	{ PCI_VDEVICE(ADAPTEC2, 0x8006), chip_8006 },
-	{ PCI_VDEVICE(ATTO, 0x0042), chip_8001 },
-	/* Support for SPC/SPCv/SPCve controllers */
-	{ PCI_VDEVICE(ADAPTEC2, 0x8001), chip_8001 },
-	{ PCI_VDEVICE(PMC_Sierra, 0x8008), chip_8008 },
-	{ PCI_VDEVICE(ADAPTEC2, 0x8008), chip_8008 },
-	{ PCI_VDEVICE(PMC_Sierra, 0x8018), chip_8018 },
-	{ PCI_VDEVICE(ADAPTEC2, 0x8018), chip_8018 },
-	{ PCI_VDEVICE(PMC_Sierra, 0x8009), chip_8009 },
-	{ PCI_VDEVICE(ADAPTEC2, 0x8009), chip_8009 },
-	{ PCI_VDEVICE(PMC_Sierra, 0x8019), chip_8019 },
-	{ PCI_VDEVICE(ADAPTEC2, 0x8019), chip_8019 },
-	{ PCI_VDEVICE(PMC_Sierra, 0x8074), chip_8074 },
-	{ PCI_VDEVICE(ADAPTEC2, 0x8074), chip_8074 },
-	{ PCI_VDEVICE(PMC_Sierra, 0x8076), chip_8076 },
-	{ PCI_VDEVICE(ADAPTEC2, 0x8076), chip_8076 },
-	{ PCI_VDEVICE(PMC_Sierra, 0x8077), chip_8077 },
-	{ PCI_VDEVICE(ADAPTEC2, 0x8077), chip_8077 },
-	{ PCI_VENDOR_ID_ADAPTEC2, 0x8081,
-		PCI_VENDOR_ID_ADAPTEC2, 0x0400, 0, 0, chip_8001 },
-	{ PCI_VENDOR_ID_ADAPTEC2, 0x8081,
-		PCI_VENDOR_ID_ADAPTEC2, 0x0800, 0, 0, chip_8001 },
-	{ PCI_VENDOR_ID_ADAPTEC2, 0x8088,
-		PCI_VENDOR_ID_ADAPTEC2, 0x0008, 0, 0, chip_8008 },
-	{ PCI_VENDOR_ID_ADAPTEC2, 0x8088,
-		PCI_VENDOR_ID_ADAPTEC2, 0x0800, 0, 0, chip_8008 },
-	{ PCI_VENDOR_ID_ADAPTEC2, 0x8089,
-		PCI_VENDOR_ID_ADAPTEC2, 0x0008, 0, 0, chip_8009 },
-	{ PCI_VENDOR_ID_ADAPTEC2, 0x8089,
-		PCI_VENDOR_ID_ADAPTEC2, 0x0800, 0, 0, chip_8009 },
-	{ PCI_VENDOR_ID_ADAPTEC2, 0x8088,
-		PCI_VENDOR_ID_ADAPTEC2, 0x0016, 0, 0, chip_8018 },
-	{ PCI_VENDOR_ID_ADAPTEC2, 0x8088,
-		PCI_VENDOR_ID_ADAPTEC2, 0x1600, 0, 0, chip_8018 },
-	{ PCI_VENDOR_ID_ADAPTEC2, 0x8089,
-		PCI_VENDOR_ID_ADAPTEC2, 0x0016, 0, 0, chip_8019 },
-	{ PCI_VENDOR_ID_ADAPTEC2, 0x8089,
-		PCI_VENDOR_ID_ADAPTEC2, 0x1600, 0, 0, chip_8019 },
-	{ PCI_VENDOR_ID_ADAPTEC2, 0x8074,
-		PCI_VENDOR_ID_ADAPTEC2, 0x0800, 0, 0, chip_8074 },
-	{ PCI_VENDOR_ID_ADAPTEC2, 0x8076,
-		PCI_VENDOR_ID_ADAPTEC2, 0x1600, 0, 0, chip_8076 },
-	{ PCI_VENDOR_ID_ADAPTEC2, 0x8077,
-		PCI_VENDOR_ID_ADAPTEC2, 0x1600, 0, 0, chip_8077 },
-	{ PCI_VENDOR_ID_ADAPTEC2, 0x8074,
-		PCI_VENDOR_ID_ADAPTEC2, 0x0008, 0, 0, chip_8074 },
-	{ PCI_VENDOR_ID_ADAPTEC2, 0x8076,
-		PCI_VENDOR_ID_ADAPTEC2, 0x0016, 0, 0, chip_8076 },
-	{ PCI_VENDOR_ID_ADAPTEC2, 0x8077,
-		PCI_VENDOR_ID_ADAPTEC2, 0x0016, 0, 0, chip_8077 },
-	{ PCI_VENDOR_ID_ADAPTEC2, 0x8076,
-		PCI_VENDOR_ID_ADAPTEC2, 0x0808, 0, 0, chip_8076 },
-	{ PCI_VENDOR_ID_ADAPTEC2, 0x8077,
-		PCI_VENDOR_ID_ADAPTEC2, 0x0808, 0, 0, chip_8077 },
-	{ PCI_VENDOR_ID_ADAPTEC2, 0x8074,
-		PCI_VENDOR_ID_ADAPTEC2, 0x0404, 0, 0, chip_8074 },
-	{ PCI_VENDOR_ID_ATTO, 0x8070,
-		PCI_VENDOR_ID_ATTO, 0x0070, 0, 0, chip_8070 },
-	{ PCI_VENDOR_ID_ATTO, 0x8070,
-		PCI_VENDOR_ID_ATTO, 0x0071, 0, 0, chip_8070 },
-	{ PCI_VENDOR_ID_ATTO, 0x8072,
-		PCI_VENDOR_ID_ATTO, 0x0072, 0, 0, chip_8072 },
-	{ PCI_VENDOR_ID_ATTO, 0x8072,
-		PCI_VENDOR_ID_ATTO, 0x0073, 0, 0, chip_8072 },
-	{ PCI_VENDOR_ID_ATTO, 0x8070,
-		PCI_VENDOR_ID_ATTO, 0x0080, 0, 0, chip_8070 },
-	{ PCI_VENDOR_ID_ATTO, 0x8072,
-		PCI_VENDOR_ID_ATTO, 0x0081, 0, 0, chip_8072 },
-	{ PCI_VENDOR_ID_ATTO, 0x8072,
-		PCI_VENDOR_ID_ATTO, 0x0082, 0, 0, chip_8072 },
-	{} /* terminate list */
+	{
+		PCI_VDEVICE(PMC_Sierra, 0x8001),
+		.driver_data = chip_8001,
+	}, {
+		PCI_VDEVICE(PMC_Sierra, 0x8006),
+		.driver_data = chip_8006,
+	}, {
+		PCI_VDEVICE(ADAPTEC2, 0x8006),
+		.driver_data = chip_8006,
+	}, {
+		PCI_VDEVICE(ATTO, 0x0042),
+		.driver_data = chip_8001
+	}, {
+		/* Support for SPC/SPCv/SPCve controllers */
+		PCI_VDEVICE(ADAPTEC2, 0x8001),
+		.driver_data = chip_8001,
+	}, {
+		PCI_VDEVICE(PMC_Sierra, 0x8008),
+		.driver_data = chip_8008,
+	}, {
+		PCI_VDEVICE(ADAPTEC2, 0x8008),
+		.driver_data = chip_8008,
+	}, {
+		PCI_VDEVICE(PMC_Sierra, 0x8018),
+		.driver_data = chip_8018,
+	}, {
+		PCI_VDEVICE(ADAPTEC2, 0x8018),
+		.driver_data = chip_8018,
+	}, {
+		PCI_VDEVICE(PMC_Sierra, 0x8009),
+		.driver_data = chip_8009,
+	}, {
+		PCI_VDEVICE(ADAPTEC2, 0x8009),
+		.driver_data = chip_8009,
+	}, {
+		PCI_VDEVICE(PMC_Sierra, 0x8019),
+		.driver_data = chip_8019,
+	}, {
+		PCI_VDEVICE(ADAPTEC2, 0x8019),
+		.driver_data = chip_8019,
+	}, {
+		PCI_VDEVICE(PMC_Sierra, 0x8074),
+		.driver_data = chip_8074,
+	}, {
+		PCI_VDEVICE(ADAPTEC2, 0x8074),
+		.driver_data = chip_8074,
+	}, {
+		PCI_VDEVICE(PMC_Sierra, 0x8076),
+		.driver_data = chip_8076,
+	}, {
+		PCI_VDEVICE(ADAPTEC2, 0x8076),
+		.driver_data = chip_8076,
+	}, {
+		PCI_VDEVICE(PMC_Sierra, 0x8077),
+		.driver_data = chip_8077,
+	}, {
+		PCI_VDEVICE(ADAPTEC2, 0x8077),
+		.driver_data = chip_8077,
+	}, {
+		PCI_VDEVICE_SUB(ADAPTEC2, 0x8081,
+				PCI_VENDOR_ID_ADAPTEC2, 0x0400),
+		.driver_data = chip_8001,
+	}, {
+		PCI_VDEVICE_SUB(ADAPTEC2, 0x8081,
+				PCI_VENDOR_ID_ADAPTEC2, 0x0800),
+		.driver_data = chip_8001,
+	}, {
+		PCI_VDEVICE_SUB(ADAPTEC2, 0x8088,
+				PCI_VENDOR_ID_ADAPTEC2, 0x0008),
+		.driver_data = chip_8008,
+	}, {
+		PCI_VDEVICE_SUB(ADAPTEC2, 0x8088,
+				PCI_VENDOR_ID_ADAPTEC2, 0x0800),
+		.driver_data = chip_8008,
+	}, {
+		PCI_VDEVICE_SUB(ADAPTEC2, 0x8089,
+				PCI_VENDOR_ID_ADAPTEC2, 0x0008),
+		.driver_data = chip_8009,
+	}, {
+		PCI_VDEVICE_SUB(ADAPTEC2, 0x8089,
+				PCI_VENDOR_ID_ADAPTEC2, 0x0800),
+		.driver_data = chip_8009,
+	}, {
+		PCI_VDEVICE_SUB(ADAPTEC2, 0x8088,
+				PCI_VENDOR_ID_ADAPTEC2, 0x0016),
+		.driver_data = chip_8018,
+	}, {
+		PCI_VDEVICE_SUB(ADAPTEC2, 0x8088,
+				PCI_VENDOR_ID_ADAPTEC2, 0x1600),
+		.driver_data = chip_8018,
+	}, {
+		PCI_VDEVICE_SUB(ADAPTEC2, 0x8089,
+				PCI_VENDOR_ID_ADAPTEC2, 0x0016),
+		.driver_data = chip_8019,
+	}, {
+		PCI_VDEVICE_SUB(ADAPTEC2, 0x8089,
+				PCI_VENDOR_ID_ADAPTEC2, 0x1600),
+		.driver_data = chip_8019,
+	}, {
+		PCI_VDEVICE_SUB(ADAPTEC2, 0x8074,
+				PCI_VENDOR_ID_ADAPTEC2, 0x0800),
+		.driver_data = chip_8074,
+	}, {
+		PCI_VDEVICE_SUB(ADAPTEC2, 0x8076,
+				PCI_VENDOR_ID_ADAPTEC2, 0x1600),
+		.driver_data = chip_8076,
+	}, {
+		PCI_VDEVICE_SUB(ADAPTEC2, 0x8077,
+				PCI_VENDOR_ID_ADAPTEC2, 0x1600),
+		.driver_data = chip_8077,
+	}, {
+		PCI_VDEVICE_SUB(ADAPTEC2, 0x8074,
+				PCI_VENDOR_ID_ADAPTEC2, 0x0008),
+		.driver_data = chip_8074,
+	}, {
+		PCI_VDEVICE_SUB(ADAPTEC2, 0x8076,
+				PCI_VENDOR_ID_ADAPTEC2, 0x0016),
+		.driver_data = chip_8076,
+	}, {
+		PCI_VDEVICE_SUB(ADAPTEC2, 0x8077,
+				PCI_VENDOR_ID_ADAPTEC2, 0x0016),
+		.driver_data = chip_8077,
+	}, {
+		PCI_VDEVICE_SUB(ADAPTEC2, 0x8076,
+				PCI_VENDOR_ID_ADAPTEC2, 0x0808),
+		.driver_data = chip_8076,
+	}, {
+		PCI_VDEVICE_SUB(ADAPTEC2, 0x8077,
+				PCI_VENDOR_ID_ADAPTEC2, 0x0808),
+		.driver_data = chip_8077,
+	}, {
+		PCI_VDEVICE_SUB(ADAPTEC2, 0x8074,
+				PCI_VENDOR_ID_ADAPTEC2, 0x0404),
+		.driver_data = chip_8074,
+	}, {
+		PCI_VDEVICE_SUB(ATTO, 0x8070,
+				PCI_VENDOR_ID_ATTO, 0x0070),
+		.driver_data = chip_8070,
+	}, {
+
+		PCI_VDEVICE_SUB(ATTO, 0x8070,
+				PCI_VENDOR_ID_ATTO, 0x0071),
+		.driver_data = chip_8070,
+	}, {
+
+		PCI_VDEVICE_SUB(ATTO, 0x8072,
+				PCI_VENDOR_ID_ATTO, 0x0072),
+		.driver_data = chip_8072,
+	}, {
+
+		PCI_VDEVICE_SUB(ATTO, 0x8072,
+				PCI_VENDOR_ID_ATTO, 0x0073),
+		.driver_data = chip_8072,
+	}, {
+
+		PCI_VDEVICE_SUB(ATTO, 0x8070,
+				PCI_VENDOR_ID_ATTO, 0x0080),
+		.driver_data = chip_8070,
+	}, {
+
+		PCI_VDEVICE_SUB(ATTO, 0x8072,
+				PCI_VENDOR_ID_ATTO, 0x0081),
+		.driver_data = chip_8072,
+	}, {
+
+		PCI_VDEVICE_SUB(ATTO, 0x8072,
+				PCI_VENDOR_ID_ATTO, 0x0082),
+		.driver_data = chip_8072,
+	},
+	{ } /* terminate list */
 };
 
 static SIMPLE_DEV_PM_OPS(pm8001_pci_pm_ops,

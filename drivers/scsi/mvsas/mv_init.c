@@ -610,61 +610,37 @@ static void mvs_pci_remove(struct pci_dev *pdev)
 }
 
 static const struct pci_device_id mvs_pci_table[] = {
-	{ PCI_VDEVICE(MARVELL, 0x6320), chip_6320 },
-	{ PCI_VDEVICE(MARVELL, 0x6340), chip_6440 },
-	{
-		.vendor 	= PCI_VENDOR_ID_MARVELL,
-		.device 	= 0x6440,
-		.subvendor	= PCI_ANY_ID,
-		.subdevice	= 0x6480,
-		.class		= 0,
-		.class_mask	= 0,
-		.driver_data	= chip_6485,
-	},
-	{ PCI_VDEVICE(MARVELL, 0x6440), chip_6440 },
-	{ PCI_VDEVICE(MARVELL, 0x6485), chip_6485 },
-	{ PCI_VDEVICE(MARVELL, 0x9480), chip_9480 },
-	{ PCI_VDEVICE(MARVELL, 0x9180), chip_9180 },
-	{ PCI_VDEVICE(ARECA, PCI_DEVICE_ID_ARECA_1300), chip_1300 },
-	{ PCI_VDEVICE(ARECA, PCI_DEVICE_ID_ARECA_1320), chip_1320 },
-	{ PCI_VDEVICE(ADAPTEC2, 0x0450), chip_6440 },
-	{ PCI_VDEVICE(TTI, 0x2640), chip_6440 },
-	{ PCI_VDEVICE(TTI, 0x2710), chip_9480 },
-	{ PCI_VDEVICE(TTI, 0x2720), chip_9480 },
-	{ PCI_VDEVICE(TTI, 0x2721), chip_9480 },
-	{ PCI_VDEVICE(TTI, 0x2722), chip_9480 },
-	{ PCI_VDEVICE(TTI, 0x2740), chip_9480 },
-	{ PCI_VDEVICE(TTI, 0x2744), chip_9480 },
-	{ PCI_VDEVICE(TTI, 0x2760), chip_9480 },
-	{
-		.vendor		= PCI_VENDOR_ID_MARVELL_EXT,
-		.device		= 0x9480,
-		.subvendor	= PCI_ANY_ID,
-		.subdevice	= 0x9480,
-		.class		= 0,
-		.class_mask	= 0,
-		.driver_data	= chip_9480,
-	},
-	{
-		.vendor		= PCI_VENDOR_ID_MARVELL_EXT,
-		.device		= 0x9445,
-		.subvendor	= PCI_ANY_ID,
-		.subdevice	= 0x9480,
-		.class		= 0,
-		.class_mask	= 0,
-		.driver_data	= chip_9445,
-	},
-	{ PCI_VDEVICE(MARVELL_EXT, 0x9485), chip_9485 }, /* Marvell 9480/9485 (any vendor/model) */
-	{ PCI_VDEVICE(OCZ, 0x1021), chip_9485}, /* OCZ RevoDrive3 */
-	{ PCI_VDEVICE(OCZ, 0x1022), chip_9485}, /* OCZ RevoDrive3/zDriveR4 (exact model unknown) */
-	{ PCI_VDEVICE(OCZ, 0x1040), chip_9485}, /* OCZ RevoDrive3/zDriveR4 (exact model unknown) */
-	{ PCI_VDEVICE(OCZ, 0x1041), chip_9485}, /* OCZ RevoDrive3/zDriveR4 (exact model unknown) */
-	{ PCI_VDEVICE(OCZ, 0x1042), chip_9485}, /* OCZ RevoDrive3/zDriveR4 (exact model unknown) */
-	{ PCI_VDEVICE(OCZ, 0x1043), chip_9485}, /* OCZ RevoDrive3/zDriveR4 (exact model unknown) */
-	{ PCI_VDEVICE(OCZ, 0x1044), chip_9485}, /* OCZ RevoDrive3/zDriveR4 (exact model unknown) */
-	{ PCI_VDEVICE(OCZ, 0x1080), chip_9485}, /* OCZ RevoDrive3/zDriveR4 (exact model unknown) */
-	{ PCI_VDEVICE(OCZ, 0x1083), chip_9485}, /* OCZ RevoDrive3/zDriveR4 (exact model unknown) */
-	{ PCI_VDEVICE(OCZ, 0x1084), chip_9485}, /* OCZ RevoDrive3/zDriveR4 (exact model unknown) */
+	{ PCI_VDEVICE(MARVELL, 0x6320), .driver_data = chip_6320 },
+	{ PCI_VDEVICE(MARVELL, 0x6340), .driver_data = chip_6440 },
+	{ PCI_VDEVICE_SUB(MARVELL, 0x6440, PCI_ANY_ID, 0x6480), .driver_data = chip_6485 },
+	{ PCI_VDEVICE(MARVELL, 0x6440), .driver_data = chip_6440 },
+	{ PCI_VDEVICE(MARVELL, 0x6485), .driver_data = chip_6485 },
+	{ PCI_VDEVICE(MARVELL, 0x9480), .driver_data = chip_9480 },
+	{ PCI_VDEVICE(MARVELL, 0x9180), .driver_data = chip_9180 },
+	{ PCI_VDEVICE(ARECA, PCI_DEVICE_ID_ARECA_1300), .driver_data = chip_1300 },
+	{ PCI_VDEVICE(ARECA, PCI_DEVICE_ID_ARECA_1320), .driver_data = chip_1320 },
+	{ PCI_VDEVICE(ADAPTEC2, 0x0450), .driver_data = chip_6440 },
+	{ PCI_VDEVICE(TTI, 0x2640), .driver_data = chip_6440 },
+	{ PCI_VDEVICE(TTI, 0x2710), .driver_data = chip_9480 },
+	{ PCI_VDEVICE(TTI, 0x2720), .driver_data = chip_9480 },
+	{ PCI_VDEVICE(TTI, 0x2721), .driver_data = chip_9480 },
+	{ PCI_VDEVICE(TTI, 0x2722), .driver_data = chip_9480 },
+	{ PCI_VDEVICE(TTI, 0x2740), .driver_data = chip_9480 },
+	{ PCI_VDEVICE(TTI, 0x2744), .driver_data = chip_9480 },
+	{ PCI_VDEVICE(TTI, 0x2760), .driver_data = chip_9480 },
+	{ PCI_VDEVICE_SUB(MARVELL_EXT, 0x9480, PCI_ANY_ID, 0x9480), .driver_data = chip_9480 },
+	{ PCI_VDEVICE_SUB(MARVELL_EXT, 0x9445, PCI_ANY_ID, 0x9480), .driver_data = chip_9445 },
+	{ PCI_VDEVICE(MARVELL_EXT, 0x9485), .driver_data = chip_9485 }, /* Marvell 9480/9485 (any vendor/model) */
+	{ PCI_VDEVICE(OCZ, 0x1021), .driver_data = chip_9485 }, /* OCZ RevoDrive3 */
+	{ PCI_VDEVICE(OCZ, 0x1022), .driver_data = chip_9485 }, /* OCZ RevoDrive3/zDriveR4 (exact model unknown) */
+	{ PCI_VDEVICE(OCZ, 0x1040), .driver_data = chip_9485 }, /* OCZ RevoDrive3/zDriveR4 (exact model unknown) */
+	{ PCI_VDEVICE(OCZ, 0x1041), .driver_data = chip_9485 }, /* OCZ RevoDrive3/zDriveR4 (exact model unknown) */
+	{ PCI_VDEVICE(OCZ, 0x1042), .driver_data = chip_9485 }, /* OCZ RevoDrive3/zDriveR4 (exact model unknown) */
+	{ PCI_VDEVICE(OCZ, 0x1043), .driver_data = chip_9485 }, /* OCZ RevoDrive3/zDriveR4 (exact model unknown) */
+	{ PCI_VDEVICE(OCZ, 0x1044), .driver_data = chip_9485 }, /* OCZ RevoDrive3/zDriveR4 (exact model unknown) */
+	{ PCI_VDEVICE(OCZ, 0x1080), .driver_data = chip_9485 }, /* OCZ RevoDrive3/zDriveR4 (exact model unknown) */
+	{ PCI_VDEVICE(OCZ, 0x1083), .driver_data = chip_9485 }, /* OCZ RevoDrive3/zDriveR4 (exact model unknown) */
+	{ PCI_VDEVICE(OCZ, 0x1084), .driver_data = chip_9485 }, /* OCZ RevoDrive3/zDriveR4 (exact model unknown) */
 
 	{ }	/* terminate list */
 };

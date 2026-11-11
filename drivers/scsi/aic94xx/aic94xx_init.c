@@ -967,16 +967,16 @@ static struct sas_domain_function_template aic94xx_transport_functions = {
 };
 
 static const struct pci_device_id aic94xx_pci_table[] = {
-	{PCI_DEVICE(PCI_VENDOR_ID_ADAPTEC2, 0x410),0, 0, 1},
-	{PCI_DEVICE(PCI_VENDOR_ID_ADAPTEC2, 0x412),0, 0, 1},
-	{PCI_DEVICE(PCI_VENDOR_ID_ADAPTEC2, 0x416),0, 0, 1},
-	{PCI_DEVICE(PCI_VENDOR_ID_ADAPTEC2, 0x41E),0, 0, 1},
-	{PCI_DEVICE(PCI_VENDOR_ID_ADAPTEC2, 0x41F),0, 0, 1},
-	{PCI_DEVICE(PCI_VENDOR_ID_ADAPTEC2, 0x430),0, 0, 2},
-	{PCI_DEVICE(PCI_VENDOR_ID_ADAPTEC2, 0x432),0, 0, 2},
-	{PCI_DEVICE(PCI_VENDOR_ID_ADAPTEC2, 0x43E),0, 0, 2},
-	{PCI_DEVICE(PCI_VENDOR_ID_ADAPTEC2, 0x43F),0, 0, 2},
-	{}
+	{ PCI_VDEVICE(ADAPTEC2, 0x0410), .driver_data = 1 },
+	{ PCI_VDEVICE(ADAPTEC2, 0x0412), .driver_data = 1 },
+	{ PCI_VDEVICE(ADAPTEC2, 0x0416), .driver_data = 1 },
+	{ PCI_VDEVICE(ADAPTEC2, 0x041E), .driver_data = 1 },
+	{ PCI_VDEVICE(ADAPTEC2, 0x041F), .driver_data = 1 },
+	{ PCI_VDEVICE(ADAPTEC2, 0x0430), .driver_data = 2 },
+	{ PCI_VDEVICE(ADAPTEC2, 0x0432), .driver_data = 2 },
+	{ PCI_VDEVICE(ADAPTEC2, 0x043E), .driver_data = 2 },
+	{ PCI_VDEVICE(ADAPTEC2, 0x043F), .driver_data = 2 },
+	{ }
 };
 
 MODULE_DEVICE_TABLE(pci, aic94xx_pci_table);

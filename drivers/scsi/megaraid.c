@@ -4554,13 +4554,10 @@ megaraid_shutdown(struct pci_dev *pdev)
 }
 
 static const struct pci_device_id megaraid_pci_tbl[] = {
-	{PCI_VENDOR_ID_AMI, PCI_DEVICE_ID_AMI_MEGARAID,
-		PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
-	{PCI_VENDOR_ID_AMI, PCI_DEVICE_ID_AMI_MEGARAID2,
-		PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
-	{PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_AMI_MEGARAID3,
-		PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
-	{0,}
+	{ PCI_VDEVICE(AMI, PCI_DEVICE_ID_AMI_MEGARAID) },
+	{ PCI_VDEVICE(AMI, PCI_DEVICE_ID_AMI_MEGARAID2) },
+	{ PCI_VDEVICE(INTEL, PCI_DEVICE_ID_AMI_MEGARAID3) },
+	{ }
 };
 MODULE_DEVICE_TABLE(pci, megaraid_pci_tbl);
 
