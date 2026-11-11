@@ -4267,8 +4267,38 @@ static void tg3_power_down_prepare(struct tg3 *tp)
 	return;
 }
 
+static void tg3_ncsi_pll_tlp_clk(struct tg3 *tp, bool enable)
+{
+	u32 val;
+
+	if (tg3_asic_rev(tp) != ASIC_REV_5720)
+		return;
+
+	/* The register is shared by both functions of the device. */
+	if (tg3_ape_lock(tp, TG3_APE_LOCK_GPIO))
+		return;
+
+	val = tr32(TG3_CPMU_PLL_CTRL_STAT);
+	if (enable)
+		val |= CPMU_PLL_TLP_CLCK_SRC_NCSI_PLL;
+	else
+		val &= ~CPMU_PLL_TLP_CLCK_SRC_NCSI_PLL;
+	tw32(TG3_CPMU_PLL_CTRL_STAT, val);
+
+	tg3_ape_unlock(tp, TG3_APE_LOCK_GPIO);
+}
+
+static void tg3_wol_select_pll_clk(struct tg3 *tp)
+{
+	if (device_may_wakeup(&tp->pdev->dev) &&
+	    tg3_flag(tp, WOL_ENABLE) &&
+	    tp->link_config.active_speed == SPEED_1000)
+		tg3_ncsi_pll_tlp_clk(tp, true);
+}
+
 static void tg3_power_down(struct tg3 *tp)
 {
+	tg3_wol_select_pll_clk(tp);
 	pci_wake_from_d3(tp->pdev, tg3_flag(tp, WOL_ENABLE));
 	pci_set_power_state(tp->pdev, PCI_D3hot);
 }
@@ -17886,6 +17916,8 @@ static int tg3_init_one(struct pci_dev *pdev,
 		goto err_out_apeunmap;
 	}
 
+	tg3_ncsi_pll_tlp_clk(tp, false);
+
 	/* The EPB bridge inside 5714, 5715, and 5780 and any
 	 * device behind the EPB cannot support DMA addresses > 40-bit.
 	 * On 64-bit systems with IOMMU, use 40-bit dma_mask.
@@ -18222,6 +18254,7 @@ static int tg3_suspend(struct device *device)
 	tg3_full_unlock(tp);
 
 	tg3_power_down_prepare(tp);
+	tg3_wol_select_pll_clk(tp);
 
 unlock:
 	rtnl_unlock();
@@ -18240,6 +18273,8 @@ static int tg3_resume(struct device *device)
 		goto unlock;
 
 	netif_device_attach(dev);
+
+	tg3_ncsi_pll_tlp_clk(tp, false);
 
 	netdev_lock(dev);
 	tg3_full_lock(tp, 0);
