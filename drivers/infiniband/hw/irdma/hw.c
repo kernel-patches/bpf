@@ -2496,28 +2496,32 @@ struct irdma_apbvt_entry *irdma_add_apbvt(struct irdma_device *iwdev, u16 port)
 	struct irdma_apbvt_entry *entry;
 	unsigned long flags;
 
+	mutex_lock(&cm_core->apbvt_add_mutex);
 	spin_lock_irqsave(&cm_core->apbvt_lock, flags);
 	entry = irdma_lookup_apbvt_entry(cm_core, port);
-	if (entry) {
-		spin_unlock_irqrestore(&cm_core->apbvt_lock, flags);
-		return entry;
-	}
+	spin_unlock_irqrestore(&cm_core->apbvt_lock, flags);
+	if (entry)
+		goto out;
 
-	entry = kzalloc_obj(*entry, GFP_ATOMIC);
-	if (!entry) {
-		spin_unlock_irqrestore(&cm_core->apbvt_lock, flags);
-		return NULL;
-	}
+	entry = kzalloc_obj(*entry);
+	if (!entry)
+		goto out;
 
 	entry->port = port;
 	entry->use_cnt = 1;
-	hash_add(cm_core->apbvt_hash_tbl, &entry->hlist, entry->port);
-	spin_unlock_irqrestore(&cm_core->apbvt_lock, flags);
 
 	if (irdma_cqp_manage_apbvt_cmd(iwdev, port, true)) {
 		kfree(entry);
-		return NULL;
+		entry = NULL;
+		goto out;
 	}
+
+	spin_lock_irqsave(&cm_core->apbvt_lock, flags);
+	hash_add(cm_core->apbvt_hash_tbl, &entry->hlist, entry->port);
+	spin_unlock_irqrestore(&cm_core->apbvt_lock, flags);
+
+out:
+	mutex_unlock(&cm_core->apbvt_add_mutex);
 
 	return entry;
 }

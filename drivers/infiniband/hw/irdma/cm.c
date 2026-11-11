@@ -3281,6 +3281,7 @@ int irdma_setup_cm_core(struct irdma_device *iwdev, u8 rdma_ver)
 	spin_lock_init(&cm_core->ht_lock);
 	spin_lock_init(&cm_core->listen_list_lock);
 	spin_lock_init(&cm_core->apbvt_lock);
+	mutex_init(&cm_core->apbvt_add_mutex);
 	switch (rdma_ver) {
 	case IRDMA_GEN_1:
 		cm_core->form_cm_frame = irdma_form_uda_cm_frame;
