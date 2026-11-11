@@ -1196,7 +1196,6 @@
 			interrupt-parent = <&mbigen_uart>;
 			interrupts = <807 4>;
 			current-speed = <115200>;
-			reg-io-width = <4>;
 			status = "disabled";
 		};
 
