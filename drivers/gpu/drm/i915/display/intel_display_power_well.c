@@ -864,8 +864,18 @@ void gen9_set_dc_state(struct intel_display *display, u32 state)
 
 	val = intel_de_read(display, DC_STATE_EN);
 	mask = gen9_dc_mask(display);
-	drm_dbg_kms(display->drm, "Setting DC state from %02x to %02x\n",
-		    val & mask, state);
+
+	/*
+	 * DC3co is entered and exited once per frame while PSR2 or panel
+	 * replay is active, so logging both transitions floods the log. The
+	 * exit additionally happens from intel_display_power_get(DC_OFF) in
+	 * the atomic commit path, before the flip has been armed, where the
+	 * printk is a measurable part of the time budget. Skip both.
+	 */
+	if ((val & mask) != DC_STATE_EN_UPTO_DC3CO &&
+	    state != DC_STATE_EN_UPTO_DC3CO)
+		drm_dbg_kms(display->drm, "Setting DC state from %02x to %02x\n",
+			    val & mask, state);
 
 	/* Check if DMC is ignoring our DC state requests */
 	if ((val & mask) != power_domains->dc_state)

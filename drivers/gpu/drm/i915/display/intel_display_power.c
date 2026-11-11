@@ -4,6 +4,7 @@
  */
 
 #include <linux/iopoll.h>
+#include <linux/string_choices.h>
 #include <linux/string_helpers.h>
 
 #include <drm/drm_print.h>
@@ -419,6 +420,11 @@ void intel_display_power_dc3co_update(struct intel_display *display, u32 trigger
 		return;
 
 	mutex_lock(&dc3co->lock);
+
+	if (dc3co->trigger != trigger)
+		drm_dbg_kms(display->drm, "DC3co allowed:%s trigger %#x -> %#x\n",
+			    str_yes_no(trigger), dc3co->trigger, trigger);
+
 	dc3co->trigger = trigger;
 	dc3co->allowed = !!trigger;
 	mutex_unlock(&dc3co->lock);
