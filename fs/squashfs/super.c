@@ -177,6 +177,13 @@ static const struct squashfs_decompressor *supported_squashfs_filesystem(
 	return decompressor;
 }
 
+static void squashfs_free_inode_table(struct squashfs_sb_info *msblk)
+{
+	if (msblk->lookup_table_is_cache)
+		squashfs_cache_delete(msblk->inode_lookup_cache);
+	else
+		kfree(msblk->inode_lookup_array);
+}
 
 static int squashfs_fill_super(struct super_block *sb, struct fs_context *fc)
 {
@@ -187,8 +194,9 @@ static int squashfs_fill_super(struct super_block *sb, struct fs_context *fc)
 	long long root_inode;
 	unsigned short flags;
 	unsigned int fragments;
-	u64 lookup_table_start, xattr_id_table_start, next_table;
-	int err, devblksize = sb_min_blocksize(sb, SQUASHFS_DEVBLK_SIZE);
+	u64 xattr_id_table_start, next_table;
+	s64 err;
+	int devblksize = sb_min_blocksize(sb, SQUASHFS_DEVBLK_SIZE);
 
 	TRACE("Entered squashfs_fill_superblock\n");
 
@@ -391,20 +399,24 @@ allocate_id_index_table:
 	next_table = le64_to_cpu(msblk->id_table[0]);
 
 	/* Handle inode lookup table */
-	lookup_table_start = le64_to_cpu(sblk->lookup_table_start);
-	if (lookup_table_start == SQUASHFS_INVALID_BLK)
+	msblk->lookup_table = le64_to_cpu(sblk->lookup_table_start);
+	if (msblk->lookup_table == SQUASHFS_INVALID_BLK)
 		goto handle_fragments;
 
 	/* Allocate and read inode lookup table */
-	msblk->inode_lookup_table = squashfs_read_inode_lookup_table(sb,
-		lookup_table_start, next_table, msblk->inodes);
-	if (IS_ERR(msblk->inode_lookup_table)) {
+	err = squashfs_read_inode_lookup_table(sb, msblk->lookup_table,
+			next_table, msblk->inodes);
+	if (err < 0) {
 		errorf(fc, "unable to read inode lookup table");
-		err = PTR_ERR(msblk->inode_lookup_table);
-		msblk->inode_lookup_table = NULL;
 		goto failed_mount;
 	}
-	next_table = le64_to_cpu(msblk->inode_lookup_table[0]);
+
+	err = squashfs_inode_lookup_start(sb, 1);
+	if (err < 0) {
+		errorf(fc, "unable to read inode lookup table");
+		goto failed_mount;
+	}
+	next_table = msblk->lookup_table_start = err;
 
 	sb->s_export_op = &squashfs_export_ops;
 
@@ -480,7 +492,7 @@ failed_mount:
 	if (msblk->cache_mapping)
 		iput(msblk->cache_mapping->host);
 	msblk->thread_ops->destroy(msblk);
-	kfree(msblk->inode_lookup_table);
+	squashfs_free_inode_table(msblk);
 	kfree(msblk->fragment_index);
 	kfree(msblk->id_table);
 	kfree(msblk->xattr_id_table);
@@ -603,7 +615,7 @@ static void squashfs_put_super(struct super_block *sb)
 		kfree(sbi->id_table);
 		kfree(sbi->fragment_index);
 		kfree(sbi->meta_index);
-		kfree(sbi->inode_lookup_table);
+		squashfs_free_inode_table(sbi);
 		kfree(sbi->xattr_id_table);
 		kfree(sb->s_fs_info);
 		sb->s_fs_info = NULL;

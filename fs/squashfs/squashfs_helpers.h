@@ -136,9 +136,35 @@ static inline s32 squashfs_lookup_blocks(u32 inodes)
 		SQUASHFS_METADATA_SIZE;
 }
 
-static inline s32 squashfs_lookup_block_bytes(u32 inodes)
+static inline s32 squashfs_lookup_blocks_bytes(u32 inodes)
 {
 	return squashfs_lookup_blocks(inodes) * sizeof(long long);
+}
+
+static inline s32 squashfs_lookup_blocks_base(u32 inodes)
+{
+	return (squashfs_lookup_block(inodes) * sizeof(long long)) & ~(PAGE_SIZE - 1);
+}
+
+static inline s64 squashfs_lookup_blocks_start(u32 inodes, struct squashfs_sb_info *msblk)
+{
+	s32 base = squashfs_lookup_blocks_base(inodes);
+	s64 start;
+
+	if (S64_MAX - msblk->lookup_table < base)
+		return -EINVAL;
+
+	start = msblk->lookup_table + base;
+
+	if (start > msblk->bytes_used)
+		return -EINVAL;
+
+	return start;
+}
+
+static inline s16 squashfs_lookup_blocks_offset(u32 inodes)
+{
+	return (squashfs_lookup_block(inodes) * sizeof(long long)) & (PAGE_SIZE - 1);
 }
 
 /* uid lookup table defines */
