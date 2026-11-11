@@ -248,6 +248,43 @@ __weak int test_rbtree_duplicate(void)
 	return rb_destroy(rbtree);
 }
 
+#define FIFO_NR_NODES	64
+#define FIFO_NR_KEYS	4
+
+SEC("syscall")
+__weak int test_rbtree_duplicate_fifo(void)
+{
+	const u64 per_key = FIFO_NR_NODES / FIFO_NR_KEYS;
+	struct rbtree __arena *rbtree;
+	u64 key, value;
+	int ret, i;
+
+	rbtree = rb_create(RB_ALLOC, RB_DUPLICATE);
+	if (!rbtree)
+		return 1;
+
+	for (i = 0; i < FIFO_NR_NODES && can_loop; i++) {
+		ret = rb_insert(rbtree, i % FIFO_NR_KEYS, i);
+		if (ret)
+			return 2;
+	}
+
+	for (i = 0; i < FIFO_NR_NODES && can_loop; i++) {
+		ret = rb_pop(rbtree, &key, &value);
+		if (ret)
+			return 3;
+
+		/* All of key 0 in insertion order, then all of key 1, ... */
+		if (key != i / per_key)
+			return 4;
+
+		if (value != key + FIFO_NR_KEYS * (i % per_key))
+			return 5;
+	}
+
+	return rb_destroy(rbtree);
+}
+
 static inline int
 clean_up_noalloc_tree(struct rbtree __arena *rbtree)
 {
