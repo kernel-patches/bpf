@@ -95,7 +95,9 @@ static int mtk_rng_read(struct hwrng *rng, void *buf, size_t max, bool wait)
 	struct mtk_rng *priv = to_mtk_rng(rng);
 	int retval = 0;
 
-	pm_runtime_get_sync(priv->dev);
+	retval = pm_runtime_resume_and_get(priv->dev);
+	if (retval < 0)
+		return retval;
 
 	while (max >= sizeof(u32)) {
 		if (!mtk_rng_wait_ready(rng, wait))
