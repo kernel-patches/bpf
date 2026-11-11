@@ -1545,6 +1545,7 @@ static struct bpf_reference_state *acquire_reference_state(struct bpf_verifier_e
 	if (err)
 		return NULL;
 	state->refs[new_ofs].insn_idx = insn_idx;
+	state->refs[new_ofs].frameno = state->curframe;
 
 	return &state->refs[new_ofs];
 }
@@ -1625,7 +1626,11 @@ static void release_reference_state(struct bpf_verifier_state *state, int idx)
 	return;
 }
 
-/* bpf_rcu_read_unlock() or bpf_preempt_enable() is done, see release_reference_state() */
+/*
+ * bpf_rcu_read_unlock() or bpf_preempt_enable() is done, see release_reference_state().
+ * A frame that was entered with more sections than are held now has left one of its
+ * callers', and counts that for its exit to tell.
+ */
 static void release_context_state(struct bpf_verifier_state *state)
 {
 	struct bpf_func_state *frame;
@@ -1633,6 +1638,11 @@ static void release_context_state(struct bpf_verifier_state *state)
 
 	for (fr = 0; fr <= state->curframe; fr++) {
 		frame = state->frame[fr];
+		if (frame->entry_rcu_locks > state->active_rcu_locks)
+			frame->rcu_released_below += frame->entry_rcu_locks - state->active_rcu_locks;
+		if (frame->entry_preempt_locks > state->active_preempt_locks)
+			frame->preempt_released_below += frame->entry_preempt_locks -
+							 state->active_preempt_locks;
 		frame->entry_rcu_locks = min(frame->entry_rcu_locks, state->active_rcu_locks);
 		frame->entry_preempt_locks = min(frame->entry_preempt_locks,
 						 state->active_preempt_locks);
@@ -11709,6 +11719,8 @@ static int call_func_on_its_own(struct bpf_verifier_env *env, int subprog, int i
 		entry.refs[i].id = inherited_id(state, entry.refs[i].id);
 		if (entry.refs[i].type == REF_TYPE_PTR)
 			entry.refs[i].parent_id = inherited_id(state, entry.refs[i].parent_id);
+		/* the frames that own what is inherited are not in the state */
+		entry.refs[i].frameno = -1;
 	}
 	entry.active_irq_id = inherited_id(state, entry.active_irq_id);
 	entry.active_lock_id = inherited_id(state, entry.active_lock_id);
@@ -11878,11 +11890,12 @@ int bpf_flow_return(struct bpf_verifier_env *env, struct bpf_verifier_state *cal
 		reg->parent_id = fresh_id(env, idmap, reg->parent_id);
 		reg->map_uid = fresh_id(env, idmap, reg->map_uid);
 	}
-	/* those that were held are the first */
+	/* those that were held are the first; what the function took is the caller's now */
 	for (i = nheld; i < caller->acquired_refs; i++) {
 		caller->refs[i].id = fresh_id(env, idmap, caller->refs[i].id);
 		if (caller->refs[i].type == REF_TYPE_PTR)
 			caller->refs[i].parent_id = fresh_id(env, idmap, caller->refs[i].parent_id);
+		caller->refs[i].frameno = caller->curframe;
 	}
 	caller->active_irq_id = fresh_id(env, idmap, caller->active_irq_id);
 	caller->active_lock_id = fresh_id(env, idmap, caller->active_lock_id);
@@ -12687,6 +12700,11 @@ static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 	if (err)
 		return err;
 	invalidate_stack_slices(env, callee->frameno, INT_MIN, 0);
+
+	/* What the frame holds when it returns is the caller's to release. */
+	for (i = 0; i < state->acquired_refs; i++)
+		if (state->refs[i].frameno == callee->frameno)
+			state->refs[i].frameno = caller->frameno;
 
 	/* for callbacks like bpf_loop or bpf_for_each_map_elem go back to callsite,
 	 * there function call logic would reschedule callback visit.
