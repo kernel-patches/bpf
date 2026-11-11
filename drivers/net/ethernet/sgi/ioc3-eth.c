@@ -847,6 +847,7 @@ static int ioc3eth_probe(struct platform_device *pdev)
 {
 	u32 sw_physid1, sw_physid2, vendor, model, rev;
 	struct ioc3_private *ip;
+	bool random_mac = false;
 	struct net_device *dev;
 	struct resource *regs;
 	u8 mac_addr[6];
@@ -857,9 +858,16 @@ static int ioc3eth_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "Invalid resource\n");
 		return -EINVAL;
 	}
-	/* get mac addr from one wire prom */
-	if (ioc3eth_get_mac_addr(regs, mac_addr))
-		return -EPROBE_DEFER; /* not available yet */
+	/* get mac addr from one wire prom, or from the platform */
+	if (ioc3eth_get_mac_addr(regs, mac_addr) &&
+	    eth_platform_get_mac_address(&pdev->dev, mac_addr)) {
+		err = driver_deferred_probe_check_state(&pdev->dev);
+		if (err == -EPROBE_DEFER)
+			return err; /* not available yet */
+
+		dev_warn(&pdev->dev, "no MAC address, using a random one\n");
+		random_mac = true;
+	}
 
 	dev = alloc_etherdev(sizeof(struct ioc3_private));
 	if (!dev)
@@ -938,7 +946,10 @@ static int ioc3eth_probe(struct platform_device *pdev)
 
 	ioc3_mii_start(ip);
 	ioc3_ssram_disc(ip);
-	eth_hw_addr_set(dev, mac_addr);
+	if (random_mac)
+		eth_hw_addr_random(dev);
+	else
+		eth_hw_addr_set(dev, mac_addr);
 
 	/* The IOC3-specific entries in the device structure. */
 	dev->watchdog_timeo	= 5 * HZ;
