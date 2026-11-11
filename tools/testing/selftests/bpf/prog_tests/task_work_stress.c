@@ -121,8 +121,26 @@ cleanup:
 	task_work_stress__destroy(skel);
 }
 
+static void task_work_deleted(void)
+{
+	LIBBPF_OPTS(bpf_test_run_opts, opts);
+	struct task_work_stress *skel;
+	int err;
+
+	skel = task_work_stress__open_and_load();
+	if (!ASSERT_OK_PTR(skel, "open_and_load"))
+		return;
+	err = bpf_prog_test_run_opts(bpf_program__fd(skel->progs.schedule_deleted_task_work),
+				     &opts);
+	if (ASSERT_OK(err, "schedule_deleted_task_work"))
+		ASSERT_EQ((int)opts.retval, -ENOENT, "deleted schedule rejected");
+	task_work_stress__destroy(skel);
+}
+
 void test_task_work_stress(void)
 {
+	if (test__start_subtest("deleted"))
+		task_work_deleted();
 	if (test__start_subtest("no_delete"))
 		task_work_run(false);
 	if (test__start_subtest("with_delete"))
