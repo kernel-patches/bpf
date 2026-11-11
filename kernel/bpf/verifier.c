@@ -2002,9 +2002,8 @@ static void ___mark_reg_known(struct bpf_reg_state *reg, u64 imm)
  */
 static void __mark_reg_known(struct bpf_reg_state *reg, u64 imm)
 {
-	/* Clear off and union(map_ptr, range) */
-	memset(((u8 *)reg) + sizeof(reg->type), 0,
-	       offsetof(struct bpf_reg_state, var_off) - sizeof(reg->type));
+	/* Clear union(map_ptr, range) */
+	memset(&reg->raw, 0, sizeof(reg->raw));
 	reg->id = 0;
 	reg->parent_id = 0;
 	reg->map_uid = 0;
@@ -18312,7 +18311,7 @@ bool bpf_reg_union_compatible(const struct bpf_reg_state *a, const struct bpf_re
 		return false;
 	if (a->type == SCALAR_VALUE)
 		return true;
-	return !memcmp(a, b, offsetof(struct bpf_reg_state, var_off)) &&
+	return reg_fixed_part_equal(a, b) &&
 	       a->id == b->id && a->parent_id == b->parent_id && a->map_uid == b->map_uid;
 }
 
@@ -19616,8 +19615,8 @@ static int refine_live_branch(struct bpf_verifier_env *env, struct bpf_insn *ins
 	int err;
 
 	/* is_branch_taken() knew the branch before it refined anything */
-	if (!memcmp(reg1, &regs[insn->dst_reg], sizeof(*reg1)) &&
-	    (BPF_SRC(insn->code) == BPF_K || !memcmp(reg2, &regs[insn->src_reg], sizeof(*reg2))))
+	if (reg_value_equal(reg1, &regs[insn->dst_reg]) &&
+	    (BPF_SRC(insn->code) == BPF_K || reg_value_equal(reg2, &regs[insn->src_reg])))
 		return 0;
 	/*
 	 * The fall-through branch of JSET forgets the ranges. Or this branch is dead too: the path
