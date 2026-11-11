@@ -34,8 +34,9 @@
  * A slot belongs to one frame and holds one handle, so a program that throws
  * keeps to what that can express:
  *
- *  - A frame releases what it acquired itself. A callee cannot reach the
- *    slot of its caller, so it may not release what its caller holds.
+ *  - A callee cannot reach the slot of its caller. What it releases of its
+ *    caller's has no slot, or one the caller can empty in front of the
+ *    call, see foreign_release().
  *  - A slot goes with its frame. A reference a subprog returns in R0 is
  *    acquired by the call for the caller, like the call of a kfunc that
  *    returns one.
@@ -690,11 +691,75 @@ static int rel_add(struct bpf_verifier_env *env, u32 insn, u16 acq, u8 reg, u8 f
 }
 
 /*
+ * What the call @insn of a subprog means for what acquisition @acq acquired
+ * is noted in the record of the two, see struct bpf_res_call. NULL when there
+ * is no memory for one.
+ */
+static struct bpf_res_call *call_note(struct bpf_verifier_env *env, u32 insn, u16 acq)
+{
+	u32 i, cnt = env->res_call_cnt;
+	struct bpf_res_call *c;
+
+	for (i = 0; i < cnt; i++)
+		if (env->res_calls[i].insn == insn && env->res_calls[i].acq == acq)
+			return &env->res_calls[i];
+	c = kvrealloc(env->res_calls, array_size(cnt + 1, sizeof(*c)), GFP_KERNEL_ACCOUNT);
+	if (!c)
+		return NULL;
+	c[cnt] = (struct bpf_res_call) { .insn = insn, .acq = acq };
+	env->res_calls = c;
+	env->res_call_cnt = cnt + 1;
+	return &c[cnt];
+}
+
+/*
+ * The current insn releases @ref, which a frame below the current one owns.
+ * Nothing tells a callee where the slot of its caller is, so it cannot clear
+ * one. There are two ways out:
+ *
+ *  - What the caller holds without a slot needs none cleared: its sites say
+ *    where the handle is on the visits that find it held, and say nothing on
+ *    those that find it released.
+ *  - The caller clears its slot in front of the call when the callee releases
+ *    the resource on every path and no throw finds the caller holding it at
+ *    the call, see bpf_frame_desc_resolve().
+ *
+ * The functions between the owner and the current frame are verified in the
+ * context of their callers from now on, so that every throw sees the frames
+ * below it as they are. The round of the main pass that finds one out is done
+ * again, since it recorded the frames of its callers at the call, holding
+ * what they held then.
+ */
+static int foreign_release(struct bpf_verifier_env *env, const struct bpf_verifier_state *st,
+			   const struct bpf_reference_state *ref, struct bpf_res_acq *acq)
+{
+	const struct bpf_func_state *below = st->frame[ref->frameno + 1];
+	struct bpf_subprog_info *sub;
+	struct bpf_res_call *c;
+	int f;
+
+	for (f = ref->frameno + 1; f <= st->curframe; f++) {
+		sub = &env->subprog_info[st->frame[f]->subprogno];
+		if (sub->releases_inherited)
+			continue;
+		sub->releases_inherited = true;
+		env->frame_desc_redo = true;
+	}
+	if (!acq->foreign)
+		acq->foreign = env->insn_idx + 1;
+	c = call_note(env, ref->frameno < 0 ? U32_MAX : below->callsite, ref->acq - 1);
+	if (!c)
+		return -ENOMEM;
+	c->released = true;
+	return 0;
+}
+
+/*
  * Record that the current insn releases the resource refs[@idx], before it
  * is released: its handle, in the argument the call releases, see
  * bpf_verifier_env::release_regno, leaves the slot of its acquisition in
- * front of the call. A frame releases what it acquired itself: nothing tells
- * a callee where the slot of its caller is.
+ * front of the call. That is so for what the frame holds itself: nothing
+ * tells a callee where the slot of its caller is, see foreign_release().
  */
 int bpf_frame_desc_record_release(struct bpf_verifier_env *env, int idx)
 {
@@ -703,7 +768,7 @@ int bpf_frame_desc_record_release(struct bpf_verifier_env *env, int idx)
 	const struct bpf_func_state *frame = st->frame[st->curframe];
 	u32 i, insn = env->insn_idx;
 	int regno = env->release_regno;
-	const struct bpf_res_acq *acq;
+	struct bpf_res_acq *acq;
 	u8 flags = 0, bad = 0;
 	s16 adj = 0;
 
@@ -719,12 +784,9 @@ int bpf_frame_desc_record_release(struct bpf_verifier_env *env, int idx)
 	}
 	if (!ref->res)
 		return 0;
-	if (ref->frameno != st->curframe) {
-		verbose(env, "frame_desc: insn %d releases what another frame holds, which is not supported in a program that throws\n",
-			insn);
-		return -EINVAL;
-	}
 	acq = &env->res_acqs[ref->acq - 1];
+	if (ref->frameno != st->curframe)
+		return foreign_release(env, st, ref, acq);
 	/* what insns could not compare with a slot matters when there is a slot only */
 	if (regno < BPF_REG_1 || regno > BPF_REG_5) {
 		regno = BPF_REG_FP;
@@ -781,6 +843,8 @@ int bpf_frame_desc_record_exit(struct bpf_verifier_env *env)
 {
 	struct bpf_verifier_state *st = env->cur_state;
 	const struct bpf_func_state *frame = st->frame[st->curframe];
+	struct bpf_res_call *c;
+	int i;
 
 	if (!env->describe_frames || st->speculative)
 		return 0;
@@ -791,6 +855,17 @@ int bpf_frame_desc_record_exit(struct bpf_verifier_env *env)
 								       frame->rcu_released_below,
 					       st->active_preempt_locks != frame->entry_preempt_locks +
 									   frame->preempt_released_below);
+	/* does the caller hold after the call what a callee may release in it? */
+	if (!st->curframe || !env->subprog_info[frame->subprogno].releases_inherited)
+		return 0;
+	for (i = 0; i < st->acquired_refs; i++) {
+		if (st->refs[i].frameno != st->curframe - 1 || !st->refs[i].acq)
+			continue;
+		c = call_note(env, frame->callsite, st->refs[i].acq - 1);
+		if (!c)
+			return -ENOMEM;
+		c->held_after = true;
+	}
 	return 0;
 }
 
@@ -1052,6 +1127,9 @@ void bpf_frame_desc_reset(struct bpf_verifier_env *env)
 	env->section_insn_cnt = 0;
 	env->res_site_cnt = 0;
 	env->res_loc_cnt = 0;
+	env->res_call_cnt = 0;
+	env->frame_desc_redo = false;
+	/* that the subprogs release what their callers hold stays */
 	for (i = 0; i < env->subprog_cnt; i++)
 		env->subprog_info[i].section_delta = 0;
 	for (i = 0; i < env->prog->len; i++) {
@@ -1067,12 +1145,14 @@ void bpf_frame_desc_env_free(struct bpf_verifier_env *env)
 	kvfree(env->section_insns);
 	kvfree(env->res_sites);
 	kvfree(env->res_locs);
+	kvfree(env->res_calls);
 	kvfree(env->resources);
 	env->res_acqs = NULL;
 	env->res_rels = NULL;
 	env->section_insns = NULL;
 	env->res_sites = NULL;
 	env->res_locs = NULL;
+	env->res_calls = NULL;
 	env->resources = NULL;
 }
 
@@ -1148,6 +1228,43 @@ static int emit_acquire_after(struct bpf_insn *buf, const struct bpf_res_acq *a)
 		buf[cnt++] = BPF_STX_MEM(BPF_DW, BPF_REG_FP, BPF_REG_0, a->off);
 	}
 	return cnt;
+}
+
+/*
+ * A frame above the one that holds what acquisition @acq acquired releases it,
+ * and the acquisition has a slot. The holder can clear the slot itself, in
+ * front of the call the release happens in, when the resource is gone after
+ * every such call and no throw finds the holder with it at the call: the slot
+ * is empty then for as long as the callee can throw after the release, and it
+ * was no use before it. The call is one of a subprog: a helper that calls a
+ * callback may not call it at all, and the holder has the resource after it
+ * then.
+ */
+static bool foreign_cleared(struct bpf_verifier_env *env, u16 acq, const u32 *new_of, u32 orig_len)
+{
+	bool any = false;
+	u32 i, j;
+
+	for (i = 0; i < env->res_call_cnt; i++) {
+		const struct bpf_res_call *c = &env->res_calls[i];
+
+		if (c->acq != acq || !c->released)
+			continue;
+		if (c->held_after || c->insn >= orig_len)
+			return false;
+		/* a helper may never call the callback that releases */
+		if (!bpf_pseudo_call(&env->prog->insnsi[new_of[c->insn]]))
+			return false;
+		for (j = 0; j < env->res_loc_cnt; j++)
+			if (env->res_locs[j].acq == acq &&
+			    env->res_sites[env->res_locs[j].site].insn == c->insn)
+				return false;
+		any = true;
+	}
+	for (i = 0; any && i < env->res_call_cnt; i++)
+		if (env->res_calls[i].acq == acq && env->res_calls[i].released)
+			env->res_calls[i].clear = true;
+	return any;
 }
 
 /*
@@ -1264,6 +1381,12 @@ int bpf_frame_desc_resolve(struct bpf_verifier_env *env)
 			ret = -EINVAL;
 			break;
 		}
+		if (a->foreign && !foreign_cleared(env, i, new_of, orig_len)) {
+			verbose(env, "frame_desc: insn %d releases what another frame holds in a hidden slot, which is not supported in a program that throws\n",
+				a->foreign - 1);
+			ret = -EINVAL;
+			break;
+		}
 		/* some visit of the insn has nothing a slot can hold where this one has */
 		if (!(a->flags & BPF_RES_F_CTX) && acquires_sometimes(env, new_of[a->insn], a)) {
 			verbose(env, "frame_desc: insn %d acquires a resource on some paths only, or one of a type that cannot be released\n",
@@ -1305,12 +1428,13 @@ int bpf_frame_desc_resolve(struct bpf_verifier_env *env)
 enum {
 	ITEM_SECTION,
 	ITEM_RELEASE,
+	ITEM_CLEAR,
 	ITEM_ACQUIRE,
 };
 
 struct res_item {
 	u32 idx;	/* insn of the current image */
-	u32 rec;	/* which section insn, release or acquisition */
+	u32 rec;	/* which section insn, release, call or acquisition */
 	u8 kind;
 	u8 reg;		/* ITEM_RELEASE: the argument the call releases */
 };
@@ -1391,6 +1515,11 @@ static int emit_items(struct bpf_verifier_env *env, const struct res_item *it, i
 			cnt += emit_release(env, buf + cnt, &it[i], k - i);
 			i = k - 1;
 			break;
+		case ITEM_CLEAR:
+			/* a callee releases what the slot holds, on every path, see foreign_cleared() */
+			off = env->res_acqs[env->res_calls[it[i].rec].acq].off;
+			buf[cnt++] = BPF_ST_MEM(BPF_DW, BPF_REG_FP, off, 0);
+			break;
 		case ITEM_ACQUIRE:
 			cnt += emit_acquire_before(buf + cnt, &env->res_acqs[it[i].rec]);
 			break;
@@ -1470,8 +1599,8 @@ int bpf_frame_desc_emit(struct bpf_verifier_env *env)
 	if (!env->res_acq_cnt && !env->section_insn_cnt)
 		return 0;
 	new_of = insns_of_pass(env, &orig_len);
-	items = kvcalloc(env->res_acq_cnt + env->res_rel_cnt + env->section_insn_cnt,
-			 sizeof(*items), GFP_KERNEL_ACCOUNT);
+	items = kvcalloc(env->res_acq_cnt + env->res_rel_cnt + env->res_call_cnt +
+			 env->section_insn_cnt, sizeof(*items), GFP_KERNEL_ACCOUNT);
 	if (!new_of || !items) {
 		ret = -ENOMEM;
 		goto out;
@@ -1487,6 +1616,9 @@ int bpf_frame_desc_emit(struct bpf_verifier_env *env)
 		if (env->res_acqs[env->res_rels[i].acq].slot)
 			items[n++] = (struct res_item) { new_of[env->res_rels[i].insn], i, ITEM_RELEASE,
 							 env->res_rels[i].reg };
+	for (i = 0; i < env->res_call_cnt; i++)
+		if (env->res_calls[i].clear)
+			items[n++] = (struct res_item) { new_of[env->res_calls[i].insn], i, ITEM_CLEAR };
 	for (i = 0; i < env->res_acq_cnt; i++)
 		if (env->res_acqs[i].slot && !(env->res_acqs[i].flags & BPF_RES_F_CTX))
 			items[n++] = (struct res_item) { new_of[env->res_acqs[i].insn], i, ITEM_ACQUIRE };

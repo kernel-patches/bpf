@@ -11998,6 +11998,9 @@ int bpf_flow_return(struct bpf_verifier_env *env, struct bpf_verifier_state *cal
 		if (env->log.level & BPF_LOG_LEVEL2)
 			verbose(env, "func#%d releases what its caller holds at insn %d\n",
 				callee->subprogno, call_idx);
+		/* what the round recorded of the function so far does not hold, see frame_desc.c */
+		if (env->describe_frames && !env->subprog_info[callee->subprogno].releases_inherited)
+			env->frame_desc_redo = true;
 		env->subprog_info[callee->subprogno].releases_inherited = true;
 		return 1;
 	}
@@ -22273,7 +22276,8 @@ process_bpf_exit:
 /* All is done again, whatever came out, see do_check_all() */
 static bool round_is_dropped(struct bpf_verifier_env *env)
 {
-	return (env->restart && bpf_flow_loops_lost_bound(env)) || env->guards_late;
+	return (env->restart && bpf_flow_loops_lost_bound(env)) || env->guards_late ||
+	       env->frame_desc_redo;
 }
 
 static int do_check(struct bpf_verifier_env *env)

@@ -1278,6 +1278,7 @@ struct bpf_res_acq {
 	s16 off;	/* the slot, relative to R10 */
 	bool held;	/* some frame holds what it acquired at a site */
 	bool slot;	/* and some site cannot say where: the handle is kept in a slot */
+	u32 foreign;	/* an insn of another frame that releases what it acquired, plus one */
 	/*
 	 * An insn, plus one, that leaves what it acquired with another frame
 	 * than the one that ran the acquisition: the call a subprog returns
@@ -1341,6 +1342,20 @@ struct bpf_res_rel {
 /* The call takes the handle in different ways on different paths. */
 #define BPF_RES_REL_DIFFER	3
 
+/*
+ * A call of a subprog during which a frame above the caller releases what an
+ * acquisition of the caller acquired. The caller clears its slot in front of
+ * the call when no throw finds it holding the resource there and no return
+ * from the call does, see frame_desc.c.
+ */
+struct bpf_res_call {
+	u32 insn;	/* the call; U32_MAX when the caller is not in the state */
+	u16 acq;	/* index of the acquisition */
+	bool released;
+	bool held_after; /* some return from the call finds the caller holding it */
+	bool clear;	/* decided once the pass is over */
+};
+
 /* A call that enters or leaves a section, for the count of its frame, see frame_desc.c. */
 struct bpf_section_insn {
 	u32 insn;
@@ -1390,6 +1405,8 @@ struct bpf_verifier_env {
 	u32 res_rel_cnt;
 	struct bpf_section_insn *section_insns;
 	u32 section_insn_cnt;
+	struct bpf_res_call *res_calls;
+	u32 res_call_cnt;
 	struct bpf_res_site *res_sites;
 	u32 res_site_cnt;
 	struct bpf_res_loc *res_locs;
@@ -1402,6 +1419,12 @@ struct bpf_verifier_env {
 	bool describe_frames;			/* frame descriptors are generated: the program may throw */
 	bool describe_regs;			/* and may name registers, see bpf_arch_throw_entry() */
 	u16 frame_desc_regs;			/* the registers that some site names */
+	/*
+	 * The round of the main pass found out that a subprog releases what
+	 * its callers hold: they are recorded differently then, so the round
+	 * is done again, see do_check_all().
+	 */
+	bool frame_desc_redo;
 	int exception_callback_subprog;
 	bool explore_alu_limits;
 	bool allow_ptr_leaks;
