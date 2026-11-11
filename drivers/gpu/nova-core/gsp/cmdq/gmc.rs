@@ -302,10 +302,11 @@ impl Cmdq<'_> {
         Error: From<C::InitError>,
         Error: From<<C::Reply as MessageFromGsp>::InitError>,
     {
-        let mut inner = self.inner.lock();
-        let seq = inner.send_gmc_command(command)?;
+        self.with_inner_locked(|inner| {
+            let seq = inner.send_gmc_command(command)?;
 
-        inner.await_gmc_reply::<C>(seq, on_event)
+            inner.await_gmc_reply::<C>(seq, on_event)
+        })
     }
 
     /// Sends `command` to the GSP without waiting for a reply.
@@ -323,7 +324,7 @@ impl Cmdq<'_> {
         C: CommandToGsp<Reply = NoReply>,
         Error: From<C::InitError>,
     {
-        self.inner.lock().send_gmc_command(command).map(|_| ())
+        self.with_inner_locked(|inner| inner.send_gmc_command(command).map(|_| ()))
     }
 }
 

@@ -273,10 +273,11 @@ impl Cmdq<'_> {
         Error: From<M::InitError>,
         Error: From<<M::Reply as MessageFromGsp>::InitError>,
     {
-        let mut inner = self.inner.lock();
-        inner.send_rpc_command(command)?;
+        self.with_inner_locked(|inner| {
+            inner.send_rpc_command(command)?;
 
-        inner.await_rpc_msg()
+            inner.await_rpc_msg()
+        })
     }
 
     /// Sends `command` to the GSP without waiting for a reply.
@@ -293,7 +294,7 @@ impl Cmdq<'_> {
         M: CommandToGsp<Reply = NoReply>,
         Error: From<M::InitError>,
     {
-        self.inner.lock().send_rpc_command(command)
+        self.with_inner_locked(|inner| inner.send_rpc_command(command))
     }
 
     /// Waits for an unsolicited GSP event of type `M`. Events that arrive before it are logged and
@@ -314,7 +315,7 @@ impl Cmdq<'_> {
         // This allows all error types, including `Infallible`, to be used for `M::InitError`.
         Error: From<M::InitError>,
     {
-        self.inner.lock().await_rpc_msg()
+        self.with_inner_locked(|inner| inner.await_rpc_msg())
     }
 }
 
