@@ -28,10 +28,11 @@ skill with a ``SKILL.md`` entry point in the `Agent Skills format
 documents that apply to its task and adds only what assistants tend to get
 wrong.
 
-Skills inspect and report. They do not change files, create commits or tags,
-or send mail. A skill returns its result with the evidence for it, or says what
-is missing. Do not fill a missing result with a guess or a placeholder, and do
-not finalize the work until it is resolved.
+Unless a skill's task is to write or modify code or tests, skills only inspect
+and report: they do not change files, create commits or tags, or send mail. A
+skill returns its result with the evidence for it, or says what is missing. Do
+not fill a missing result with a guess or a placeholder, and do not finalize
+the work until it is resolved.
 
 The following skills are available:
 
@@ -43,6 +44,8 @@ The following skills are available:
   tree.
 * agents/skills/commit-message/SKILL.md writes, rewrites or reviews a commit
   message or cover letter, and writes the text of a pull request.
+* agents/skills/writing-kunit-tests/SKILL.md designs, writes, verifies, or
+  reviews KUnit unit tests.
 
 Licensing and Legal Requirements
 ================================
