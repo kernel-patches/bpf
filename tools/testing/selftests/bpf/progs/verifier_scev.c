@@ -3338,6 +3338,173 @@ NOT_LINEAR_TEST(lsh_grows, "r7 &= 15;", "r7 <<= 1;", UNROLLED("(<< r7 1)"))
 NOT_LINEAR_TEST(same_constant, "r7 = 17;", "r7 &= 31;", NOT_CHANGED)
 NOT_LINEAR_TEST(same_wide_constant, "r7 = 0xffffffff00000011 ll;", "r7 &= -239;", NOT_CHANGED)
 
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, char[64]);
+} map64 SEC(".maps");
+
+/*
+ * A conditional jump refines the registers and stack slots that are linked to what it tests.
+ * r6: 64 bytes. r7: a scalar below 256. r8: an unbounded scalar. r9: the context.
+ * The test leaves an address in r1.
+ */
+#define LINKED_SEC(sec, name, expect, body)					\
+SEC(sec) expect									\
+__naked void name(void)								\
+{										\
+	asm volatile (								\
+	"r9 = r1; r1 = 0; *(u32 *)(r10 - 4) = r1; r2 = r10; r2 += -4; r1 = %[map64] ll;"	\
+	"call %[bpf_map_lookup_elem]; if r0 == 0 goto out_%=; r6 = r0;"		\
+	"call %[bpf_get_prandom_u32]; r7 = r0; r7 &= 255;"			\
+	"call %[bpf_ktime_get_ns]; r8 = r0;"					\
+	body									\
+	"r0 = *(u8 *)(r1 + 0);"							\
+	"out_%=: r0 = 0; exit;"							\
+	:									\
+	: __imm(bpf_map_lookup_elem), __imm(bpf_get_prandom_u32), __imm(bpf_ktime_get_ns),	\
+	  __imm(bpf_dynptr_from_skb), __imm(bpf_dynptr_slice_rdwr),		\
+	  __imm(bpf_ringbuf_reserve), __imm(bpf_ringbuf_discard),		\
+	  __imm_addr(map64), __imm_addr(ringbuf)				\
+	: __clobber_all);							\
+}
+#define LINKED(name, expect, body)	LINKED_SEC("socket", name, expect, body)
+
+#define VALID	__success __retval(0)
+#define UNBOUND	__failure __msg("unbounded min value")
+
+/* r3 is the address in r1 as a scalar. It does not bound the offset of r1. */
+LINKED(pointer_is_not_scalar, __failure,
+	"r7 &= 127; r1 = r6; r1 += r7; r3 = r1; r3 = le64 r3; if r3 < 64 goto out_%=; r1 += -64;")
+
+LINKED(sign_extension_that_fits, VALID, "r2 = (s8)r8; if r8 > 63 goto out_%=; r1 = r6; r1 += r2;")
+
+/* 'int n' in three registers. 'if w3 s> 63' refines only 32-bit ranges: those of the copies too. */
+LINKED(copies_get_the_32_bit_range, VALID,
+	"w2 = w8; r3 = r2; r4 = r2; if w3 s> 63 goto out_%=; if w4 s< 0 goto out_%=;"
+	"r1 = r6; r1 += r2;")
+
+/* The low 3 bits of r8 are 5: [-2, 1] is empty, the last jump is not taken. It refines r2 too. */
+LINKED(copy_refined_by_jump_with_dead_branch, VALID,
+	"r8 <<= 3; r8 += 5; r2 = r8; if r8 s> 63 goto out_%=; if r8 s< -2 goto out_%=;"
+	"if r8 s<= 1 goto out_%=; r1 = r6; r1 += r2;")
+
+/* A copy on each of two paths: r2 and r3 are phis with the same operands, up to a constant */
+#define TWO_PATHS(a, b)								\
+	"if r7 > 9 goto l_%=; r2 = r8; " a " goto m_%=; l_%=: r2 = r8; r2 >>= 1; " b	\
+	"m_%=: if r2 > 62 goto out_%=; r1 = r6; r1 += r3;"
+
+LINKED(congruent_phis, VALID, TWO_PATHS("r3 = r2; r3 += 1;", "r3 = r2; r3 += 1;"))
+LINKED(phis_with_other_delta_on_one_path, UNBOUND,
+       TWO_PATHS("r3 = r2; r3 += 1;", "r3 = r2; r3 += 2;"))
+/* One of three edges brings unrelated values */
+LINKED(phis_not_linked_on_one_of_three_edges, UNBOUND,
+	"r3 = r8; r3 >>= 2; r2 = 0; if r7 == 20 goto m_%=;"
+	TWO_PATHS("r3 = r2; r3 += 1;", "r3 = r2; r3 += 1;"))
+/* (zext32 x) on both paths: linked in 64 bits */
+LINKED(congruent_phis_of_zext32, VALID,
+	"if r7 > 9 goto l_%=; w2 = w8; r3 = r2; goto m_%=; l_%=: r2 = r8; r2 >>= 1; w2 = w2;"
+	"r3 = r2; m_%=: r3 += 1; if r2 > 62 goto out_%=; r1 = r6; r1 += r3;")
+
+/* The low 3 bits of r3 are 5. It is r8 + 5 once r8 fits in s8: no overlap with [-2, 1]. */
+LINKED(empty_intersection, VALID __flag(BPF_F_TEST_REG_INVARIANTS),
+	"r3 = (s8)r8; if r3 & 7 goto out_%=; r3 += 5; if r3 s> 100 goto out_%=;"
+	"if r3 s< -100 goto out_%=; if r8 s< -7 goto out_%=; if r8 s> -4 goto out_%=;"
+	"r3 += 3; r1 = r6;")
+
+/* r2 is even. It is r8 once r8 fits in s8. r8 is odd after the last jump: var_off don't overlap. */
+LINKED(var_off_dont_overlap, VALID,
+	"r2 = (s8)r8; if r2 & 1 goto out_%=; if r2 s> 100 goto out_%=; if r2 s< -100 goto out_%=;"
+	"if r8 > 5 goto out_%=; if r8 & 1 goto l_%=; goto out_%=;"
+	"l_%=: r2 &= 1; r2 <<= 6; r1 = r6; r1 += r2;")
+
+/* The low bytes of the spill to r10 - 16 come first or last */
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+#define FIRST_BYTES_ARE_LOW	VALID
+#else
+#define FIRST_BYTES_ARE_LOW	__failure __msg("R1 unbounded memory access")
+#endif
+
+/* r2 is the low 32 bits of the slot. The 32-bit spill is in its first half-slot. */
+LINKED(spill_32_bits_fill_64_take_low_half, FIRST_BYTES_ARE_LOW,
+	"*(u64 *)(r10 - 16) = r7; *(u32 *)(r10 - 16) = r8; r2 = *(u64 *)(r10 - 16); w2 = w2;"
+	"w3 = w8; if r2 > 63 goto out_%=; r1 = r6; r1 += r3;")
+/* The slot is a phi: two paths spill distinct values to its first half-slot */
+LINKED(spill_32_bits_on_two_paths_fill_64_take_low_half, FIRST_BYTES_ARE_LOW,
+	"*(u64 *)(r10 - 16) = r7; *(u32 *)(r10 - 16) = r8; if r7 > 9 goto l_%=;"
+	"r3 = r8; r3 >>= 1; *(u32 *)(r10 - 16) = r3;"
+	"l_%=: r2 = *(u64 *)(r10 - 16); w2 = w2; if r2 > 63 goto out_%=;"
+	"r3 = *(u32 *)(r10 - 16); r1 = r6; r1 += r3;")
+/* The half-slot at r10 - 12 is dead: at the second jump the state has a 32-bit spill */
+LINKED(spill_64_bits_fill_32, FIRST_BYTES_ARE_LOW,
+	"*(u64 *)(r10 - 16) = r8; if r8 s> 63 goto out_%=; if r8 s< 0 goto out_%=;"
+	"r2 = *(u32 *)(r10 - 16); r1 = r6; r1 += r2;")
+
+/* r0 is r10 - 24 when the first 8 bytes of the packet are not in one piece */
+LINKED_SEC("tc", slot_written_through_a_slice, UNBOUND,
+	"r1 = r9; r2 = 0; r3 = r10; r3 += -16; call %[bpf_dynptr_from_skb];"
+	"r1 = r10; r1 += -16; r2 = 0; r3 = r10; r3 += -24; r4 = 8;"
+	"call %[bpf_dynptr_slice_rdwr]; if r0 == 0 goto out_%=;"
+	"r3 = *(u64 *)(r10 - 24); *(u64 *)(r0 + 0) = r8; r2 = *(u64 *)(r10 - 24);"
+	"if r3 > 63 goto out_%=; r1 = r6; r1 += r2;")
+/* One fill reads one value: r2 is a copy of r3, whatever is stored through the slice */
+LINKED_SEC("tc", copy_of_a_fill_from_a_slice_buffer, VALID,
+	"r1 = r9; r2 = 0; r3 = r10; r3 += -16; call %[bpf_dynptr_from_skb];"
+	"r1 = r10; r1 += -16; r2 = 0; r3 = r10; r3 += -24; r4 = 8;"
+	"call %[bpf_dynptr_slice_rdwr]; if r0 == 0 goto out_%=;"
+	"r3 = *(u64 *)(r10 - 24); r2 = r3; *(u64 *)(r0 + 0) = r8;"
+	"if r3 > 63 goto out_%=; r1 = r6; r1 += r2;")
+
+/* The buffer is r10 - 32 or r10 - 48, a range in the state. The call does not write to r10 - 40. */
+LINKED_SEC("tc", slice_buffer_at_two_offsets, VALID,
+	"r1 = r9; r2 = 0; r3 = r10; r3 += -16; call %[bpf_dynptr_from_skb];"
+	"*(u64 *)(r10 - 32) = r7; *(u64 *)(r10 - 40) = r7; *(u64 *)(r10 - 48) = r7;"
+	"r8 = r10; r8 += -48; r9 = r10; r9 += -32; r7 = 0;"
+	"l_%=: call %[bpf_get_prandom_u32]; if r0 == 0 goto s_%=; r9 = r8;"
+	"s_%=: r7 += 1; if r7 < 64 goto l_%=;"
+	"r1 = r10; r1 += -16; r2 = 0; r3 = r9; r4 = 8; call %[bpf_dynptr_slice_rdwr];"
+	"r1 = *(u64 *)(r10 - 40); r1 = r6;")
+/* No insn stores through a slice of 0 bytes, and the call does not write to the buffer */
+LINKED_SEC("tc", slice_of_0_bytes_at_variable_offset, VALID,
+	"r1 = r9; r2 = 0; r3 = r10; r3 += -16; call %[bpf_dynptr_from_skb];"
+	"*(u64 *)(r10 - 24) = r7; *(u64 *)(r10 - 32) = r7; r7 &= 8;"
+	"r1 = r10; r1 += -16; r2 = 0; r3 = r10; r3 += -32; r3 += r7; r4 = 0;"
+	"call %[bpf_dynptr_slice_rdwr]; r1 = r6;")
+
+/* BTF of the kfuncs that only asm calls */
+void __kfunc_btf_root(void)
+{
+	bpf_dynptr_from_skb(0, 0, 0);
+	bpf_dynptr_slice_rdwr(0, 0, 0, 0);
+}
+
+/* Linked at the header in every iteration: r2 is r3 + 2 at loop entry, both have the step 1 */
+#define LOOP_HEADER(enter, step)						\
+	enter "l_%=: if r3 > 61 goto out_%=; r1 = r6; r1 += r2; r0 = *(u8 *)(r1 + 0);" step	\
+	"if r0 != 0 goto l_%=;"
+
+LINKED(linked_at_loop_header, VALID,
+	LOOP_HEADER("r3 = r8; r2 = r8; r2 += 1; r2 += 1;", "r2 += 1; r3 += 1;"))
+LINKED(linked_at_loop_entry_only, __failure,
+	LOOP_HEADER("r3 = r8; r2 = r8; r2 += 1; r2 += 1;", "r2 += 2; r3 += 1;"))
+
+/*
+ * No exit of the inner loop dominates its backedges: may_goto is added before its header. The prog
+ * holds a reference, so may_goto goes to the exit of the outer loop: an edge that the verifier
+ * adds. Every iteration of the outer loop restores r3. At the header of the inner one it is r7.
+ */
+LINKED(added_edge, UNBOUND,
+	"r1 = %[ringbuf] ll; r2 = 8; r3 = 0; call %[bpf_ringbuf_reserve]; if r0 == 0 goto out_%=;"
+	"*(u64 *)(r10 - 16) = r0; r3 = r8;"
+	"o_%=: r2 = r3; r3 = r7;"
+	"i_%=: r1 = *(u8 *)(r6 + 0); if r1 == 1 goto a_%=; if r1 == 2 goto b_%=; goto i_%=;"
+	"a_%=: goto i_%=;"
+	"b_%=: r3 = r2; r1 = *(u8 *)(r6 + 1); if r1 == 3 goto o_%=;"
+	"r4 = r6; if r8 > 63 goto r_%=; r4 += r3;"
+	"r_%=: *(u64 *)(r10 - 24) = r4; r1 = *(u64 *)(r10 - 16); r2 = 0;"
+	"call %[bpf_ringbuf_discard]; r1 = *(u64 *)(r10 - 24);")
+
 /*
  * r7 = ctx->data;
  * r8 = r7
