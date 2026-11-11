@@ -609,12 +609,6 @@ static int tegra114_emc_prepare_timing_change(struct tegra_emc *emc,
 		emc_ccfifo_writel(emc, timing->emc_auto_cal_config3,
 				  EMC_AUTO_CAL_CONFIG3);
 
-	if (timing->emc_auto_cal_config != last->emc_auto_cal_config) {
-		val = timing->emc_auto_cal_config;
-		val &= EMC_AUTO_CAL_CONFIG_AUTO_CAL_START;
-		emc_ccfifo_writel(emc, val, EMC_AUTO_CAL_CONFIG);
-	}
-
 	/* DDR3: predict MRS long wait count */
 	if (emc->dram_type == DRAM_TYPE_DDR3 &&
 	    dll_change == DLL_CHANGE_ON) {
