@@ -7823,6 +7823,18 @@ void rt_mutex_setprio(struct task_struct *p, struct task_struct *pi_task)
 	if (prev_class != next_class)
 		queue_flag |= DEQUEUE_CLASS;
 
+	/*
+	 * PI boost can route @p out of sched_ext: policy stays SCHED_EXT but
+	 * __setscheduler_class() follows the effective rt prio, and rt/fair
+	 * may have retained @p on the rq as a blocked donor. Block it before
+	 * sched_change_begin() records the queued state, the same way the
+	 * other entry points into sched_ext do.
+	 */
+#ifdef CONFIG_SCHED_CLASS_EXT
+	if ((queue_flag & DEQUEUE_CLASS) && next_class == &ext_sched_class)
+		scx_prepare_task_sched_change(p);
+#endif
+
 	scoped_guard (sched_change, p, queue_flag) {
 		/*
 		 * Boosting condition are:
