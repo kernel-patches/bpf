@@ -2584,7 +2584,7 @@ static void rtw89_core_cancel_6ghz_probe_tx(struct rtw89_dev *rtwdev,
 	if (rx_status->band != NL80211_BAND_6GHZ)
 		return;
 
-	if (unlikely(!(rtwdev->chip->support_bands & BIT(NL80211_BAND_6GHZ)))) {
+	if (unlikely(!test_bit(NL80211_BAND_6GHZ, rtwdev->supported_bands))) {
 		rtw89_debug(rtwdev, RTW89_DBG_UNEXP, "invalid rx on unsupported 6 GHz\n");
 		return;
 	}
@@ -6427,13 +6427,9 @@ static int rtw89_core_set_supported_band(struct rtw89_dev *rtwdev)
 {
 	struct ieee80211_hw *hw = rtwdev->hw;
 	struct ieee80211_supported_band *sband;
-	u8 support_bands = rtwdev->chip->support_bands;
 	int ret;
 
-	if (test_bit(RTW89_QUIRK_DISABLE_2GHZ, rtwdev->quirks))
-		support_bands &= ~BIT(NL80211_BAND_2GHZ);
-
-	if (support_bands & BIT(NL80211_BAND_2GHZ)) {
+	if (test_bit(NL80211_BAND_2GHZ, rtwdev->supported_bands)) {
 		sband = rtw89_core_sband_dup(rtwdev, &rtw89_sband_2ghz);
 		if (!sband)
 			return -ENOMEM;
@@ -6444,7 +6440,7 @@ static int rtw89_core_set_supported_band(struct rtw89_dev *rtwdev)
 		hw->wiphy->bands[NL80211_BAND_2GHZ] = sband;
 	}
 
-	if (support_bands & BIT(NL80211_BAND_5GHZ)) {
+	if (test_bit(NL80211_BAND_5GHZ, rtwdev->supported_bands)) {
 		sband = rtw89_core_sband_dup(rtwdev, &rtw89_sband_5ghz);
 		if (!sband)
 			return -ENOMEM;
@@ -6456,7 +6452,7 @@ static int rtw89_core_set_supported_band(struct rtw89_dev *rtwdev)
 		hw->wiphy->bands[NL80211_BAND_5GHZ] = sband;
 	}
 
-	if (support_bands & BIT(NL80211_BAND_6GHZ)) {
+	if (test_bit(NL80211_BAND_6GHZ, rtwdev->supported_bands)) {
 		sband = rtw89_core_sband_dup(rtwdev, &rtw89_sband_6ghz);
 		if (!sband)
 			return -ENOMEM;
@@ -6970,6 +6966,22 @@ void rtw89_sta_unset_link(struct rtw89_sta *rtwsta, unsigned int link_id)
 	list_del(&link->dlink_schd);
 }
 
+static void rtw89_core_init_supported_bands(struct rtw89_dev *rtwdev)
+{
+	const struct rtw89_chip_info *chip = rtwdev->chip;
+	enum nl80211_band band;
+
+	for (band = 0; band < NUM_NL80211_BANDS; band++) {
+		if (!(chip->support_bands & BIT(band)))
+			continue;
+
+		set_bit(band, rtwdev->supported_bands);
+	}
+
+	if (test_bit(RTW89_QUIRK_DISABLE_2GHZ, rtwdev->quirks))
+		clear_bit(NL80211_BAND_2GHZ, rtwdev->supported_bands);
+}
+
 int rtw89_core_init(struct rtw89_dev *rtwdev)
 {
 	const struct rtw89_mac_gen_def *mac = rtwdev->chip->mac_def;
@@ -6978,18 +6990,14 @@ int rtw89_core_init(struct rtw89_dev *rtwdev)
 
 	rtwdev->io = rtw89_fw_cmd_ofld_alloc_and_get_io_ops(rtwdev);
 
-	bitmap_or(rtwdev->quirks, rtwdev->quirks, &rtwdev->chip->default_quirks,
-		  NUM_OF_RTW89_QUIRKS);
+	rtw89_core_init_supported_bands(rtwdev);
 
 	INIT_LIST_HEAD(&rtwdev->ba_list);
 	INIT_LIST_HEAD(&rtwdev->forbid_ba_list);
 	INIT_LIST_HEAD(&rtwdev->rtwvifs_list);
 	INIT_LIST_HEAD(&rtwdev->early_h2c_list);
-	for (band = NL80211_BAND_2GHZ; band < NUM_NL80211_BANDS; band++) {
-		if (!(rtwdev->chip->support_bands & BIT(band)))
-			continue;
+	for_each_set_bit(band, rtwdev->supported_bands, NUM_NL80211_BANDS)
 		INIT_LIST_HEAD(&rtwdev->scan_info.pkt_list[band]);
-	}
 	INIT_LIST_HEAD(&rtwdev->scan_info.chan_list);
 	INIT_LIST_HEAD(&rtwdev->tx_waits);
 	INIT_LIST_HEAD(&rtwdev->fw.dup_data_list);
@@ -7722,6 +7730,7 @@ struct rtw89_dev *rtw89_alloc_ieee80211_hw(struct device *device,
 	rtwdev->fw.fw_format = fw_format;
 	rtwdev->support_mlo = support_mlo;
 
+	bitmap_copy(rtwdev->quirks, &chip->default_quirks, NUM_OF_RTW89_QUIRKS);
 	bitmap_or(rtwdev->quirks, rtwdev->quirks, dev_id_quirks,
 		  NUM_OF_RTW89_QUIRKS);
 

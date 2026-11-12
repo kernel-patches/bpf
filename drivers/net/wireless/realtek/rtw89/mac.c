@@ -5319,8 +5319,7 @@ rtw89_mac_c2h_scanofld_rsp(struct rtw89_dev *rtwdev, struct sk_buff *skb,
 	actual_period = le32_get_bits(c2h->w2, RTW89_C2H_SCANOFLD_W2_PERIOD);
 	mac_idx = le32_get_bits(c2h->w5, RTW89_C2H_SCANOFLD_W5_MAC_IDX);
 
-
-	if (!(rtwdev->chip->support_bands & BIT(NL80211_BAND_6GHZ)))
+	if (!test_bit(NL80211_BAND_6GHZ, rtwdev->supported_bands))
 		band = chan > 14 ? RTW89_BAND_5G : RTW89_BAND_2G;
 
 	if (rtwdev->chip->chip_gen == RTW89_CHIP_BE) {

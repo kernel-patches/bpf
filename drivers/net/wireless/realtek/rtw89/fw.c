@@ -1328,7 +1328,6 @@ int rtw89_build_txpwr_trk_tbl_from_elm(struct rtw89_dev *rtwdev,
 				       const union rtw89_fw_element_arg arg)
 {
 	struct rtw89_fw_elm_info *elm_info = &rtwdev->fw.elm_info;
-	const struct rtw89_chip_info *chip = rtwdev->chip;
 	const struct rtw89_fw_element_hdr *elm_dup;
 	struct rtw89_hal *hal = &rtwdev->hal;
 	u16 aid = le16_to_cpu(elm->aid);
@@ -1341,11 +1340,11 @@ int rtw89_build_txpwr_trk_tbl_from_elm(struct rtw89_dev *rtwdev,
 	if (aid && aid != hal->aid)
 		return 1;
 
-	if (chip->support_bands & BIT(NL80211_BAND_6GHZ))
+	if (test_bit(NL80211_BAND_6GHZ, rtwdev->supported_bands))
 		needed_bitmap |= RTW89_DEFAULT_NEEDED_FW_TXPWR_TRK_6GHZ;
-	if (chip->support_bands & BIT(NL80211_BAND_5GHZ))
+	if (test_bit(NL80211_BAND_5GHZ, rtwdev->supported_bands))
 		needed_bitmap |= RTW89_DEFAULT_NEEDED_FW_TXPWR_TRK_5GHZ;
-	if (chip->support_bands & BIT(NL80211_BAND_2GHZ))
+	if (test_bit(NL80211_BAND_2GHZ, rtwdev->supported_bands))
 		needed_bitmap |= RTW89_DEFAULT_NEEDED_FW_TXPWR_TRK_2GHZ;
 
 	bitmap = le32_to_cpu(elm->u.txpwr_trk.bitmap);
@@ -9920,10 +9919,7 @@ static void rtw89_hw_scan_release_pkt_list(struct rtw89_dev *rtwdev)
 	struct rtw89_pktofld_info *info, *tmp;
 	u8 idx, wildcard_pkt_id;
 
-	for (idx = NL80211_BAND_2GHZ; idx < NUM_NL80211_BANDS; idx++) {
-		if (!(rtwdev->chip->support_bands & BIT(idx)))
-			continue;
-
+	for_each_set_bit(idx, rtwdev->supported_bands, NUM_NL80211_BANDS) {
 		wildcard_pkt_id = scan_info->wildcard_pkt_id[idx];
 		if (wildcard_pkt_id != RTW89_SCANOFLD_PKT_NONE)
 			rtw89_fw_h2c_del_pkt_offload(rtwdev, wildcard_pkt_id);
@@ -9987,10 +9983,7 @@ static int rtw89_append_probe_req_ie(struct rtw89_dev *rtwdev,
 	int ret = 0;
 	u8 band;
 
-	for (band = NL80211_BAND_2GHZ; band < NUM_NL80211_BANDS; band++) {
-		if (!(rtwdev->chip->support_bands & BIT(band)))
-			continue;
-
+	for_each_set_bit(band, rtwdev->supported_bands, NUM_NL80211_BANDS) {
 		new = skb_copy(skb, GFP_KERNEL);
 		if (!new) {
 			ret = -ENOMEM;
@@ -10039,10 +10032,7 @@ int rtw89_hw_scan_append_wildcard_probe_req(struct rtw89_dev *rtwdev,
 	int ret;
 	u8 id;
 
-	for (band = NL80211_BAND_2GHZ; band < NUM_NL80211_BANDS; band++) {
-		if (!(rtwdev->chip->support_bands & BIT(band)))
-			continue;
-
+	for_each_set_bit(band, rtwdev->supported_bands, NUM_NL80211_BANDS) {
 		if (wowlan) {
 			nd_config = rtw_wow->nd_config;
 
@@ -13090,17 +13080,15 @@ void rtw89_fw_load_tx_shape_lmt_ru(struct rtw89_tx_shape_lmt_ru_data *data)
 static bool rtw89_fw_has_da_txpwr_table(struct rtw89_dev *rtwdev,
 					const struct rtw89_rfe_parms *parms)
 {
-	const struct rtw89_chip_info *chip = rtwdev->chip;
-
-	if (chip->support_bands & BIT(NL80211_BAND_2GHZ) &&
+	if (test_bit(NL80211_BAND_2GHZ, rtwdev->supported_bands) &&
 	    !(parms->rule_da_2ghz.lmt && parms->rule_da_2ghz.lmt_ru))
 		return false;
 
-	if (chip->support_bands & BIT(NL80211_BAND_5GHZ) &&
+	if (test_bit(NL80211_BAND_5GHZ, rtwdev->supported_bands) &&
 	    !(parms->rule_da_5ghz.lmt && parms->rule_da_5ghz.lmt_ru))
 		return false;
 
-	if (chip->support_bands & BIT(NL80211_BAND_6GHZ) &&
+	if (test_bit(NL80211_BAND_6GHZ, rtwdev->supported_bands) &&
 	    !(parms->rule_da_6ghz.lmt && parms->rule_da_6ghz.lmt_ru))
 		return false;
 

@@ -7753,6 +7753,7 @@ struct rtw89_dev {
 
 	struct rtw89_ser ser;
 
+	DECLARE_BITMAP(supported_bands, NUM_NL80211_BANDS);
 	DECLARE_BITMAP(hw_port, RTW89_PORT_NUM);
 	DECLARE_BITMAP(mac_id_map, RTW89_MAX_MAC_ID_NUM);
 	DECLARE_BITMAP(flags, NUM_OF_RTW89_FLAGS);

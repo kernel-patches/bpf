@@ -587,8 +587,7 @@ bottom:
 
 static void rtw89_regd_setup_6ghz(struct rtw89_dev *rtwdev, struct wiphy *wiphy)
 {
-	const struct rtw89_chip_info *chip = rtwdev->chip;
-	bool chip_support_6ghz = chip->support_bands & BIT(NL80211_BAND_6GHZ);
+	bool chip_support_6ghz = test_bit(NL80211_BAND_6GHZ, rtwdev->supported_bands);
 	bool skip_acpi_dsm = rtwdev->hci.type == RTW89_HCI_TYPE_USB;
 	bool regd_allow_6ghz = chip_support_6ghz;
 	struct ieee80211_supported_band *sband;
