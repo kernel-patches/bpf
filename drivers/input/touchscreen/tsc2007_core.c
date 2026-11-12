@@ -82,7 +82,7 @@ u32 tsc2007_calculate_resistance(struct tsc2007 *tsc, struct ts_event *tc)
 
 	if (rt > U32_MAX)
 		return U32_MAX;
-	return (u32) rt;
+	return (u32)rt;
 }
 
 bool tsc2007_is_pen_down(struct tsc2007 *ts)
@@ -115,7 +115,6 @@ static irqreturn_t tsc2007_soft_irq(int irq, void *handle)
 	u32 rt;
 
 	while (!ts->stopped && tsc2007_is_pen_down(ts)) {
-
 		/* pen is down, continue with the measurement */
 
 		/* Serialize access between the ISR and IIO reads. */

@@ -78,6 +78,7 @@ struct tsc2007 {
 	wait_queue_head_t	wait;
 	bool			stopped;
 
+	/* Serializes I2C transfers between the ISR and IIO reads */
 	struct mutex		mlock;
 };
 
