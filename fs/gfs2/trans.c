@@ -330,22 +330,23 @@ void gfs2_trans_add_revoke(struct gfs2_sbd *sdp, struct gfs2_bufdata *bd)
 void gfs2_trans_remove_revoke(struct gfs2_sbd *sdp, u64 blkno, unsigned int len)
 {
 	struct gfs2_bufdata *bd, *tmp;
-	unsigned int n = len;
+	unsigned int revokes = 0;
 
 	spin_lock(&sdp->sd_log_lock);
 	list_for_each_entry_safe(bd, tmp, &sdp->sd_log_revokes, bd_list) {
 		if ((bd->bd_blkno >= blkno) && (bd->bd_blkno < (blkno + len))) {
 			list_del_init(&bd->bd_list);
-			gfs2_assert_withdraw(sdp, sdp->sd_log_num_revoke);
-			sdp->sd_log_num_revoke--;
 			if (bd->bd_gl)
 				gfs2_glock_remove_revoke(bd->bd_gl);
 			kmem_cache_free(gfs2_bufdata_cachep, bd);
-			gfs2_log_release_revokes(sdp, 1);
-			if (--n == 0)
+			revokes++;
+			if (revokes == len)
 				break;
 		}
 	}
+	gfs2_assert_withdraw(sdp, sdp->sd_log_num_revoke >= revokes);
+	sdp->sd_log_num_revoke -= revokes;
+	gfs2_log_release_revokes(sdp, revokes);
 	spin_unlock(&sdp->sd_log_lock);
 }
 
