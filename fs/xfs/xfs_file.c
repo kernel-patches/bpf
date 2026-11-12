@@ -943,12 +943,21 @@ xfs_file_dio_write(
 	if ((iocb->ki_pos | count) & target->bt_logical_sectormask)
 		return -EINVAL;
 
+	/*
+	 * An atomic write is at least one block long, and generic_write_checks()
+	 * refuses it unless its final position is a multiple of its length.  So
+	 * there is no unaligned case to handle for it.
+	 */
+	if (iocb->ki_flags & IOCB_ATOMIC) {
+		if (xfs_is_zoned_inode(ip))
+			return xfs_file_dio_write_zoned(ip, iocb, from);
+		return xfs_file_dio_write_atomic(ip, iocb, from);
+	}
+
 	if ((iocb->ki_pos | count) & ip->i_mount->m_blockmask)
 		return xfs_file_dio_write_unaligned(ip, iocb, from);
 	if (xfs_is_zoned_inode(ip))
 		return xfs_file_dio_write_zoned(ip, iocb, from);
-	if (iocb->ki_flags & IOCB_ATOMIC)
-		return xfs_file_dio_write_atomic(ip, iocb, from);
 	return xfs_file_dio_write_aligned(ip, iocb, from,
 			xfs_direct_write_iomap_next, &xfs_dio_write_ops, NULL);
 }
@@ -1145,10 +1154,6 @@ xfs_file_write_iter(
 
 		if (ocount > xfs_get_atomic_write_max(ip))
 			return -EINVAL;
-
-		ret = generic_atomic_write_valid(iocb, from);
-		if (ret)
-			return ret;
 	}
 
 	if (IS_DAX(inode))
