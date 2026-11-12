@@ -2528,7 +2528,8 @@ clean_up:
 	/* Release the transport structures. */
 	list_for_each_safe(pos, temp, &asoc->peer.transport_addr_list) {
 		transport = list_entry(pos, struct sctp_transport, transports);
-		if (transport->state != SCTP_ACTIVE)
+		if (transport->state != SCTP_ACTIVE &&
+		    !list_is_singular(&asoc->peer.transport_addr_list))
 			sctp_assoc_rm_peer(asoc, transport);
 	}
 
