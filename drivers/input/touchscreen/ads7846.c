@@ -127,6 +127,7 @@ struct ads7846 {
 
 	struct touchscreen_properties core_prop;
 
+	/* Serializes start/stop operations and state changes */
 	struct mutex		lock;
 	bool			stopped;	/* P: lock */
 	bool			disabled;	/* P: lock */
@@ -145,7 +146,8 @@ enum ads7846_filter {
 
 /*--------------------------------------------------------------------------*/
 
-/* The ADS7846 has touchscreen and other sensors.
+/*
+ * The ADS7846 has touchscreen and other sensors.
  * Earlier ads784x chips are somewhat compatible.
  */
 #define	ADS_START		(1 << 7)
@@ -166,7 +168,7 @@ enum ads7846_filter {
 #define	ADS_PD10_REF_ON		(2 << 0)	/* vREF on + penirq */
 #define	ADS_PD10_ALL_ON		(3 << 0)	/* ADC + vREF on */
 
-#define	MAX_12BIT	((1<<12)-1)
+#define	MAX_12BIT	((1 << 12) - 1)
 
 /* leave ADC powered up (disables penirq) between differential samples */
 #define	READ_12BIT_DFR(x, adc, vref) (ADS_START | ADS_A2A1A0_d_ ## x \
@@ -273,8 +275,7 @@ static void ads7846_disable(struct ads7846 *ts)
 	guard(mutex)(&ts->lock);
 
 	if (!ts->disabled) {
-
-		if  (!ts->suspended)
+		if (!ts->suspended)
 			__ads7846_disable(ts);
 
 		ts->disabled = true;
@@ -286,7 +287,6 @@ static void ads7846_enable(struct ads7846 *ts)
 	guard(mutex)(&ts->lock);
 
 	if (ts->disabled) {
-
 		ts->disabled = false;
 
 		if (!ts->suspended)
@@ -327,7 +327,7 @@ struct ads7845_ser_req {
 	u8 sample[3] ____cacheline_aligned;
 };
 
-static int ads7846_read12_ser(struct device *dev, unsigned command)
+static int ads7846_read12_ser(struct device *dev, unsigned int command)
 {
 	struct spi_device *spi = to_spi_device(dev);
 	struct ads7846 *ts = dev_get_drvdata(dev);
@@ -362,7 +362,7 @@ static int ads7846_read12_ser(struct device *dev, unsigned command)
 	command |= ADS_PD10_ADC_ON;
 
 	/* take sample */
-	req->command = (u8) command;
+	req->command = (u8)command;
 	req->xfer[2].tx_buf = &req->command;
 	req->xfer[2].len = 1;
 	spi_message_add_tail(&req->xfer[2], &req->msg);
@@ -408,7 +408,7 @@ static int ads7846_read12_ser(struct device *dev, unsigned command)
 	return status;
 }
 
-static int ads7845_read12_ser(struct device *dev, unsigned command)
+static int ads7845_read12_ser(struct device *dev, unsigned int command)
 {
 	struct spi_device *spi = to_spi_device(dev);
 	struct ads7846 *ts = dev_get_drvdata(dev);
@@ -420,7 +420,7 @@ static int ads7845_read12_ser(struct device *dev, unsigned command)
 
 	spi_message_init(&req->msg);
 
-	req->command[0] = (u8) command;
+	req->command[0] = (u8)command;
 	req->xfer[0].tx_buf = req->command;
 	req->xfer[0].rx_buf = req->sample;
 	req->xfer[0].len = 3;
@@ -454,30 +454,30 @@ name ## _show(struct device *dev, struct device_attribute *attr, char *buf) \
 		return v; \
 	return sprintf(buf, "%u\n", adjust(ts, v)); \
 } \
-static DEVICE_ATTR(name, S_IRUGO, name ## _show, NULL);
+static DEVICE_ATTR(name, 0444, name ## _show, NULL)
 
-
-/* Sysfs conventions report temperatures in millidegrees Celsius.
+/*
+ * Sysfs conventions report temperatures in millidegrees Celsius.
  * ADS7846 could use the low-accuracy two-sample scheme, but can't do the high
  * accuracy scheme without calibration data.  For now we won't try either;
  * userspace sees raw sensor values, and must scale/calibrate appropriately.
  */
-static inline unsigned null_adjust(struct ads7846 *ts, ssize_t v)
+static inline unsigned int null_adjust(struct ads7846 *ts, ssize_t v)
 {
 	return v;
 }
 
-SHOW(temp0, temp0, null_adjust)		/* temp1_input */
-SHOW(temp1, temp1, null_adjust)		/* temp2_input */
+SHOW(temp0, temp0, null_adjust);		/* temp1_input */
+SHOW(temp1, temp1, null_adjust);		/* temp2_input */
 
-
-/* sysfs conventions report voltages in millivolts.  We can convert voltages
- * if we know vREF.  userspace may need to scale vAUX to match the board's
+/*
+ * Sysfs conventions report voltages in millivolts.  We can convert voltages
+ * if we know vREF.  Userspace may need to scale vAUX to match the board's
  * external resistors; we assume that vBATT only uses the internal ones.
  */
-static inline unsigned vaux_adjust(struct ads7846 *ts, ssize_t v)
+static inline unsigned int vaux_adjust(struct ads7846 *ts, ssize_t v)
 {
-	unsigned retval = v;
+	unsigned int retval = v;
 
 	/* external resistors may scale vAUX into 0..vREF */
 	retval *= ts->vref_mv;
@@ -486,9 +486,9 @@ static inline unsigned vaux_adjust(struct ads7846 *ts, ssize_t v)
 	return retval;
 }
 
-static inline unsigned vbatt_adjust(struct ads7846 *ts, ssize_t v)
+static inline unsigned int vbatt_adjust(struct ads7846 *ts, ssize_t v)
 {
-	unsigned retval = vaux_adjust(ts, v);
+	unsigned int retval = vaux_adjust(ts, v);
 
 	/* ads7846 has a resistor ladder to scale this signal down */
 	if (ts->model == 7846)
@@ -497,8 +497,8 @@ static inline unsigned vbatt_adjust(struct ads7846 *ts, ssize_t v)
 	return retval;
 }
 
-SHOW(in0_input, vaux, vaux_adjust)
-SHOW(in1_input, vbatt, vbatt_adjust)
+SHOW(in0_input, vaux, vaux_adjust);
+SHOW(in1_input, vbatt, vbatt_adjust);
 
 static umode_t ads7846_is_visible(struct kobject *kobj, struct attribute *attr,
 				  int index)
@@ -544,9 +544,8 @@ static int ads784x_hwmon_register(struct spi_device *spi, struct ads7846 *ts)
 	case 7845:
 	case 7843:
 		if (!ts->vref_mv) {
-			dev_warn(&spi->dev,
-				"external vREF for ADS%d not specified\n",
-				ts->model);
+			dev_warn(&spi->dev, "external vREF for ADS%d not specified\n",
+				 ts->model);
 			return 0;
 		}
 		break;
@@ -555,7 +554,6 @@ static int ads784x_hwmon_register(struct spi_device *spi, struct ads7846 *ts)
 	hwmon = devm_hwmon_device_register_with_groups(&spi->dev,
 						       spi->modalias, ts,
 						       ads7846_attr_groups);
-
 	return PTR_ERR_OR_ZERO(hwmon);
 }
 
@@ -575,10 +573,10 @@ static ssize_t ads7846_pen_down_show(struct device *dev,
 	return sprintf(buf, "%u\n", ts->pendown);
 }
 
-static DEVICE_ATTR(pen_down, S_IRUGO, ads7846_pen_down_show, NULL);
+static DEVICE_ATTR(pen_down, 0444, ads7846_pen_down_show, NULL);
 
 static ssize_t ads7846_disable_show(struct device *dev,
-				     struct device_attribute *attr, char *buf)
+				    struct device_attribute *attr, char *buf)
 {
 	struct ads7846 *ts = dev_get_drvdata(dev);
 
@@ -669,8 +667,7 @@ static int ads7846_get_value(struct ads7846_buf *buf)
 	return (value >> 3) & 0xfff;
 }
 
-static void ads7846_set_cmd_val(struct ads7846 *ts, enum ads7846_cmds cmd_idx,
-				u16 val)
+static void ads7846_set_cmd_val(struct ads7846 *ts, enum ads7846_cmds cmd_idx, u16 val)
 {
 	struct ads7846_packet *packet = ts->packet;
 
@@ -869,7 +866,7 @@ static void ads7846_read_state(struct ads7846 *ts)
 static void ads7846_report_state(struct ads7846 *ts)
 {
 	struct ads7846_packet *packet = ts->packet;
-	unsigned int Rt;
+	unsigned int rt;
 	u16 x, y, z1, z2;
 
 	x = packet->x;
@@ -887,18 +884,18 @@ static void ads7846_report_state(struct ads7846 *ts)
 		x = 0;
 
 	if (ts->model == 7843 || ts->model == 7845) {
-		Rt = ts->pressure_max / 2;
+		rt = ts->pressure_max / 2;
 	} else if (likely(x && z1)) {
 		/* compute touch pressure resistance using equation #2 */
-		Rt = z2;
-		Rt -= z1;
-		Rt *= ts->x_plate_ohms;
-		Rt = DIV_ROUND_CLOSEST(Rt, 16);
-		Rt *= x;
-		Rt /= z1;
-		Rt = DIV_ROUND_CLOSEST(Rt, 256);
+		rt = z2;
+		rt -= z1;
+		rt *= ts->x_plate_ohms;
+		rt = DIV_ROUND_CLOSEST(rt, 16);
+		rt *= x;
+		rt /= z1;
+		rt = DIV_ROUND_CLOSEST(rt, 256);
 	} else {
-		Rt = 0;
+		rt = 0;
 	}
 
 	/*
@@ -906,9 +903,9 @@ static void ads7846_report_state(struct ads7846 *ts)
 	 * the maximum. Don't report it to user space, repeat at least
 	 * once more the measurement
 	 */
-	if (packet->ignore || Rt > ts->pressure_max) {
+	if (packet->ignore || rt > ts->pressure_max) {
 		dev_vdbg(&ts->spi->dev, "ignored %d pressure %d\n",
-			 packet->ignore, Rt);
+			 packet->ignore, rt);
 		return;
 	}
 
@@ -919,7 +916,7 @@ static void ads7846_report_state(struct ads7846 *ts)
 	if (ts->penirq_recheck_delay_usecs) {
 		udelay(ts->penirq_recheck_delay_usecs);
 		if (!get_pendown_state(ts))
-			Rt = 0;
+			rt = 0;
 	}
 
 	/*
@@ -931,7 +928,7 @@ static void ads7846_report_state(struct ads7846 *ts)
 	 * The only safe way to check for the pen up condition is in the
 	 * timer by reading the pen signal state (it's a GPIO _and_ IRQ).
 	 */
-	if (Rt) {
+	if (rt) {
 		struct input_dev *input = ts->input;
 
 		if (!ts->pendown) {
@@ -941,10 +938,10 @@ static void ads7846_report_state(struct ads7846 *ts)
 		}
 
 		touchscreen_report_pos(input, &ts->core_prop, x, y, false);
-		input_report_abs(input, ABS_PRESSURE, ts->pressure_max - Rt);
+		input_report_abs(input, ABS_PRESSURE, ts->pressure_max - rt);
 
 		input_sync(input);
-		dev_vdbg(&ts->spi->dev, "%4d/%4d/%4d\n", x, y, Rt);
+		dev_vdbg(&ts->spi->dev, "%4d/%4d/%4d\n", x, y, rt);
 	}
 }
 
@@ -955,7 +952,6 @@ static irqreturn_t ads7846_hard_irq(int irq, void *handle)
 	return get_pendown_state(ts) ? IRQ_WAKE_THREAD : IRQ_HANDLED;
 }
 
-
 static irqreturn_t ads7846_irq(int irq, void *handle)
 {
 	struct ads7846 *ts = handle;
@@ -964,7 +960,6 @@ static irqreturn_t ads7846_irq(int irq, void *handle)
 	msleep(TS_POLL_DELAY);
 
 	while (!ts->stopped && get_pendown_state(ts)) {
-
 		/* pen is down, continue with the measurement */
 		ts->read_state(ts);
 
@@ -988,7 +983,6 @@ static int ads7846_suspend(struct device *dev)
 	guard(mutex)(&ts->lock);
 
 	if (!ts->suspended) {
-
 		if (!ts->disabled)
 			__ads7846_disable(ts);
 
@@ -1008,7 +1002,6 @@ static int ads7846_resume(struct device *dev)
 	guard(mutex)(&ts->lock);
 
 	if (ts->suspended) {
-
 		ts->suspended = false;
 
 		if (device_may_wakeup(&ts->spi->dev))
@@ -1163,8 +1156,10 @@ static int ads7846_setup_spi_msg(struct ads7846 *ts)
 	packet->count_skip = DIV_ROUND_UP(count, 24);
 
 	if (ts->debounce_max && ts->debounce_rep)
-		/* ads7846_debounce_filter() is making ts->debounce_rep + 2
-		 * reads. So we need to get all samples for normal case. */
+		/*
+		 * ads7846_debounce_filter() is making ts->debounce_rep + 2
+		 * reads. So we need to get all samples for normal case.
+		 */
 		packet->count = ts->debounce_rep + 2;
 	else
 		packet->count = 1;
@@ -1237,11 +1232,11 @@ static int ads7846_setup_spi_msg(struct ads7846 *ts)
 }
 
 static const struct of_device_id ads7846_dt_ids[] = {
-	{ .compatible = "ti,tsc2046",	.data = (void *) 7846 },
-	{ .compatible = "ti,ads7843",	.data = (void *) 7843 },
-	{ .compatible = "ti,ads7845",	.data = (void *) 7845 },
-	{ .compatible = "ti,ads7846",	.data = (void *) 7846 },
-	{ .compatible = "ti,ads7873",	.data = (void *) 7873 },
+	{ .compatible = "ti,tsc2046",	.data = (void *)7846 },
+	{ .compatible = "ti,ads7843",	.data = (void *)7843 },
+	{ .compatible = "ti,ads7845",	.data = (void *)7845 },
+	{ .compatible = "ti,ads7846",	.data = (void *)7846 },
+	{ .compatible = "ti,ads7873",	.data = (void *)7873 },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, ads7846_dt_ids);
@@ -1282,7 +1277,7 @@ static int ads7846_probe(struct spi_device *spi)
 	/* don't exceed max specified sample rate */
 	if (spi->max_speed_hz > (125000 * SAMPLE_BITS)) {
 		dev_err(dev, "f(sample) %d KHz?\n",
-			(spi->max_speed_hz/SAMPLE_BITS)/1000);
+			(spi->max_speed_hz / SAMPLE_BITS) / 1000);
 		return -EINVAL;
 	}
 
@@ -1440,7 +1435,7 @@ static int ads7846_probe(struct spi_device *spi)
 					irq_flags, dev->driver->name, ts);
 	if (err && err != -EPROBE_DEFER) {
 		dev_info(dev,
-			"trying pin change workaround on irq %d\n", spi->irq);
+			 "trying pin change workaround on irq %d\n", spi->irq);
 		irq_flags |= IRQF_TRIGGER_RISING;
 		err = devm_request_threaded_irq(dev, spi->irq,
 						ads7846_hard_irq, ads7846_irq,
@@ -1466,7 +1461,7 @@ static int ads7846_probe(struct spi_device *spi)
 	if (ts->model == 7845)
 		ads7845_read12_ser(dev, PWRDOWN);
 	else
-		(void) ads7846_read12_ser(dev, READ_12BIT_SER(vaux));
+		(void)ads7846_read12_ser(dev, READ_12BIT_SER(vaux));
 
 	err = input_register_device(input_dev);
 	if (err)
