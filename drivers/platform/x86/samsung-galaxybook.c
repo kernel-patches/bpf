@@ -1381,6 +1381,7 @@ static int galaxybook_probe(struct platform_device *pdev)
 
 	galaxybook->platform = pdev;
 	galaxybook->acpi = adev;
+	platform_set_drvdata(pdev, galaxybook);
 
 	/*
 	 * Features must be enabled and initialized in the following order to
@@ -1432,6 +1433,49 @@ static int galaxybook_probe(struct platform_device *pdev)
 	return 0;
 }
 
+/*
+ * The firmware forgets that the ACPI device and its features were enabled
+ * when the system is restored from hibernation, after which every CSFI call
+ * fails with 0xff. Repeat the enable sequence from probe, in the same order.
+ */
+static int galaxybook_resume(struct device *dev)
+{
+	struct samsung_galaxybook *galaxybook = dev_get_drvdata(dev);
+	acpi_status status;
+	int err;
+
+	status = acpi_execute_simple_method(galaxybook->acpi->handle, GB_ACPI_METHOD_ENABLE,
+					    GB_ACPI_METHOD_ENABLE_ON);
+	if (ACPI_FAILURE(status)) {
+		dev_warn(dev, "failed to re-enable ACPI device on resume\n");
+		return 0;
+	}
+
+	err = galaxybook_enable_acpi_notify(galaxybook);
+	if (err)
+		dev_dbg(dev, "failed to re-enable ACPI notifications, error %d\n", err);
+
+	err = galaxybook_enable_acpi_feature(galaxybook, GB_SASB_POWER_MANAGEMENT);
+	if (err)
+		dev_dbg(dev, "failed to re-enable power management features, error %d\n", err);
+
+	if (galaxybook->has_kbd_backlight) {
+		err = galaxybook_enable_acpi_feature(galaxybook, GB_SASB_KBD_BACKLIGHT);
+		if (err)
+			dev_dbg(dev, "failed to re-enable kbd_backlight, error %d\n", err);
+	}
+
+	if (galaxybook->has_block_recording) {
+		err = galaxybook_enable_acpi_feature(galaxybook, GB_SASB_BLOCK_RECORDING);
+		if (err)
+			dev_dbg(dev, "failed to re-enable block_recording, error %d\n", err);
+	}
+
+	return 0;
+}
+
+static DEFINE_SIMPLE_DEV_PM_OPS(galaxybook_pm_ops, NULL, galaxybook_resume);
+
 static const struct acpi_device_id galaxybook_device_ids[] = {
 	{ "SAM0426" },
 	{ "SAM0427" },
@@ -1447,6 +1491,7 @@ static struct platform_driver galaxybook_platform_driver = {
 	.driver = {
 		.name = DRIVER_NAME,
 		.acpi_match_table = galaxybook_device_ids,
+		.pm = pm_sleep_ptr(&galaxybook_pm_ops),
 	},
 	.probe = galaxybook_probe,
 };
