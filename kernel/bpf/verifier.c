@@ -19395,6 +19395,46 @@ static bool scalars_fit_in_bits(const struct scalar *a, const struct scalar *b, 
 }
 
 /*
+ * The values of @dst and @src are equal in their low @bits bits: @dst becomes the intersection.
+ * False: @dst is left as it is. Fewer than 32 bits say nothing about a range. Or the intersection
+ * is empty: no execution gets here with these values, the path is infeasible.
+ */
+bool scalar_intersect(struct scalar *dst, const struct scalar *src, u32 bits)
+{
+	struct tnum a = dst->var_off, b = src->var_off;
+	struct scalar s = *dst;
+
+	if (scalars_fit_in_bits(dst, src, bits))
+		bits = 64;
+	if (bits < 32)
+		return false;
+	if (bits < 64) {
+		a = tnum_subreg(a);
+		b = tnum_subreg(b);
+	}
+	/* tnum_intersect() of two tnums that don't overlap is not empty */
+	if (!tnum_overlap(a, b))
+		return false;
+	/*
+	 * Equal in 64 bits is equal in the low 32 bits too. 'if w1 s> 200' on a zero extended int
+	 * refines nothing but the 32-bit range.
+	 */
+	s.r32 = cnum32_intersect(dst->r32, src->r32);
+	if (bits == 64) {
+		s.r64 = cnum64_intersect(dst->r64, src->r64);
+		s.var_off = tnum_intersect(a, b);
+	} else {
+		s.var_off = tnum_with_subreg(dst->var_off, tnum_intersect(a, b));
+	}
+	scalar_bounds_sync(&s);
+	if (scalar_is_empty(&s) || const_tnum_range_mismatch(&s) ||
+	    const_tnum_range_mismatch_32(&s))
+		return false;
+	*dst = s;
+	return true;
+}
+
+/*
  * The state of the SCEV register @r. As in check_stack_read_fixed_off() a fill of @bits bits from
  * byte @fill_off of the slot reads the low bits of the spill.
  */
@@ -19494,7 +19534,7 @@ static void refine_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier
 			       int idx, u32 regno)
 {
 	struct bpf_func_state *frame = vstate->frame[vstate->curframe], *linked_frame;
-	struct bpf_reg_state *reg, *base_reg, implied, saved;
+	struct bpf_reg_state *reg, *base_reg, implied;
 	u32 pos, linked_regno, fill_off, bits;
 	int base_regno;
 	s64 delta;
@@ -19527,33 +19567,11 @@ static void refine_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier
 		add_scalar_to_reg(&implied, delta);
 		if (base_regno >= 0) {
 			base_reg = scev_reg_for_fill(frame, base_regno, 0, 64);
-			if (base_reg && bits == 64 && recompute_ptr(env, reg, base_reg, &implied))
-				goto scratch;
+			if (!base_reg || bits < 64 || !recompute_ptr(env, reg, base_reg, &implied))
+				continue;
+		} else if (!scalar_intersect(scalar_of(reg), scalar_of(&implied), bits)) {
 			continue;
 		}
-		if (scalars_fit_in_bits(scalar_of(reg), scalar_of(&implied), bits))
-			bits = 64;
-		if (bits < 32)
-			continue;
-		/* tnum_intersect() of two tnums that don't overlap is not empty */
-		if (!tnum_overlap(bits == 32 ? tnum_subreg(reg->var_off) : reg->var_off,
-				  bits == 32 ? tnum_subreg(implied.var_off) : implied.var_off))
-			continue;
-		saved = *reg;
-		/*
-		 * Equal in 64 bits is equal in the low 32 bits too. 'if w1 s> 200' on a zero
-		 * extended int refines nothing but the 32-bit range.
-		 */
-		scalars_refine_cond_op(scalar_of(reg), scalar_of(&implied), BPF_JEQ, true);
-		if (bits == 64)
-			scalars_refine_cond_op(scalar_of(reg), scalar_of(&implied), BPF_JEQ, false);
-		reg_bounds_sync(reg);
-		if (reg_is_empty(reg) || const_tnum_range_mismatch(scalar_of(reg)) ||
-		    const_tnum_range_mismatch_32(scalar_of(reg))) {
-			*reg = saved;
-			continue;
-		}
-scratch:
 		if (linked_regno < MAX_BPF_REG)
 			mark_reg_scratched(env, linked_regno);
 		else if (linked_frame == frame)
