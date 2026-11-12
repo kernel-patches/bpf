@@ -5,6 +5,10 @@
  * machine code. This file decides which functions it looks at, and which of the
  * errors count.
  *
+ * A program skips the function. That is not a failure of the function if it
+ * works on an object of its caller before it returns the error: it unlocks,
+ * frees or initializes it. Such an error does not count, see set_protos().
+ *
  * Whether ftrace can attach a program to the function is not looked at: as for
  * fentry, that is found out when it is tried.
  */
@@ -76,6 +80,36 @@ static bool format_tag(char *tag, const int64_t *values, size_t nr, __u32 size)
 	return n && errors[0] < -1;
 }
 
+/*
+ * Tell SCAN what BTF says about the functions of IMG. A function which returns
+ * nothing cannot fail: what it does to an object is done when its caller returns
+ * an error. Unlock, put, free and init functions are of this kind. A function
+ * which returns a value may have failed, and that may be the reason for the error.
+ */
+static void set_protos(struct scan *scan, const struct image *img, const struct btf *btf)
+{
+	__u32 id, nr_types = btf__type_cnt(btf);
+
+	for (id = 1; id < nr_types; id++) {
+		const struct btf_type *t = btf__type_by_id(btf, id);
+		const struct image_func *func = NULL;
+		unsigned int pointers = 0, i;
+
+		if (btf_is_func(t))
+			func = image_func(img, btf__name_by_offset(btf, t->name_off));
+		if (!func)
+			continue;
+		t = btf__type_by_id(btf, t->type);
+		for (i = 0; i < btf_vlen(t) && i < 32; i++) {
+			int type = btf__resolve_type(btf, btf_params(t)[i].type);
+
+			if (type > 0 && btf_is_ptr(btf__type_by_id(btf, type)))
+				pointers |= 1U << i;
+		}
+		scan_set_proto(scan, func, pointers, !t->type);
+	}
+}
+
 int fmodret_tag(Elf *elf, struct btf *btf, int verbose)
 {
 	size_t nr_funcs = 0, nr_scanned = 0, nr_undecodable = 0, nr_tags = 0;
@@ -93,6 +127,7 @@ int fmodret_tag(Elf *elf, struct btf *btf, int verbose)
 	scan = scan_open(&img);
 	if (!scan)
 		goto out;
+	set_protos(scan, &img, btf);
 
 	for (id = base ? btf__type_cnt(base) : 1, err = 0; id < nr_types && err >= 0; id++) {
 		const struct btf_type *t = btf__type_by_id(btf, id);

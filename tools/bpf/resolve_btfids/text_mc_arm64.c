@@ -105,6 +105,8 @@ static const struct mc_test arm64_tests[] = {
 const struct mc_arch mc_arch = {
 	.arch = {
 		.retval = 0,
+		.args = { 0, 1, 2, 3, 4, 5, 6, 7 },
+		.nr_args = 8,
 		/* AAPCS64: x0 to x17 and x30. x18 is fixed in the kernel */
 		.caller_saved = 0x4003ffff,
 	},

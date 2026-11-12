@@ -55,13 +55,18 @@ struct text_insn {
 	/* For the user of the decoder */
 	u64 addr;
 	u32 target;	/* the index of the instruction at imm */
+	/* Of a TEXT_CALL: the registers with pointers to objects which the callee changes */
+	u32 pointers;
 };
 
 struct text_arch {
 	u8 retval;		/* the register with the return value */
+	u8 args[8], nr_args;	/* the registers with the arguments */
 	u32 caller_saved;	/* the registers which a call may write */
 	/* A branch to this symbol is a return */
 	const char *return_thunk;
+	/* A call of this symbol, at the entry of a function, writes no register */
+	const char *entry_hook;
 	/*
 	 * Describe the instruction at ADDR, whose bytes are at CODE. At most LEN
 	 * bytes can be read. Return a negative value if it is not an instruction.
