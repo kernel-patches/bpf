@@ -18,6 +18,7 @@
 		ethernet1 = &fec;
 		rtc0 = &rtc_i2c;
 		rtc1 = &snvs_rtc;
+		spi0 = &ecspi1;
 	};
 
 	backlight: backlight {
