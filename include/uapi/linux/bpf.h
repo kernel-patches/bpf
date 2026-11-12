@@ -1513,6 +1513,13 @@ enum {
 
 /* Enable BPF ringbuf overwrite mode */
 	BPF_F_RB_OVERWRITE	= (1U << 19),
+
+/*
+ * Local storage maps: keep the value in the storage object of the owner.
+ * Readers take no lock, so they can see torn values. 64-bit only. The rules
+ * and errors are in Documentation/bpf/map_sk_storage.rst.
+ */
+	BPF_F_INLINE_VALUE	= (1U << 20),
 };
 
 /* Flags for BPF_PROG_QUERY. */
