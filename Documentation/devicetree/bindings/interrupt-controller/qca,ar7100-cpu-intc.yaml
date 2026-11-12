@@ -29,7 +29,10 @@ properties:
     const: 1
 
   qca,ddr-wb-channel-interrupts:
-    description: List of interrupts needing a write buffer flush
+    description:
+      List of interrupts needing a write buffer flush. An interrupt shared by
+      several devices that use different write buffers is listed once for
+      each of them, and all of their write buffers are flushed.
     $ref: /schemas/types.yaml#/definitions/uint32-array
 
   qca,ddr-wb-channels:
