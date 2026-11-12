@@ -1615,8 +1615,27 @@ static u32 mana_gd_write_client_oob(const struct gdma_wqe_request *wqe_req,
 	header->num_sge = wqe_req->num_sge;
 	header->inline_oob_size_div4 = client_oob_size / sizeof(u32);
 
+	if (client_oob_size == INLINE_OOB_EXTRA_LARGE_SIZE) {
+		/* Extra large oob is encoded as 7 */
+		header->inline_oob_size_div4 = 7;
+		/* Extra large oob has 8 byte padding  */
+		client_oob_size += 8;
+	}
+
+	if (wqe_req->wqe_size_in_bu) {
+		header->num_sge = (wqe_req->wqe_size_in_bu * GDMA_WQE_BU_SIZE
+			- sizeof(struct gdma_wqe) - client_oob_size) / sizeof(struct gdma_sge);
+		header->num_pad_sge = header->num_sge - wqe_req->num_sge;
+	}
+
+	header->check_rsn = !!(wqe_req->flags & GDMA_WR_CHECK_RSN);
+	header->check_sn = !!(wqe_req->flags & GDMA_WR_CHECK_SN);
+	header->fence = !!(wqe_req->flags & GDMA_WR_FENCE);
+	header->fence_extended = !!(wqe_req->flags & GDMA_WR_FENCE_EXTENDED);
+	header->generation1 = !!(wqe_req->flags & GDMA_WR_GENERATION_1);
+
 	if (oob_in_sgl) {
-		WARN_ON_ONCE(wqe_req->num_sge < 2);
+		WARN_ON_ONCE(wqe_req->num_sge < 1);
 
 		header->client_oob_in_sgl = 1;
 
@@ -1630,8 +1649,10 @@ static u32 mana_gd_write_client_oob(const struct gdma_wqe_request *wqe_req,
 	/* The size of gdma_wqe + client_oob_size must be less than or equal
 	 * to one Basic Unit (i.e. 32 bytes), so the pointer can't go beyond
 	 * the queue memory buffer boundary.
+	 * The exception is when the WQE size is fixed and a power of 2, as
+	 * such a wqe cannot go beyond the queue memory buffer boundary.
 	 */
-	ptr = wqe_ptr + sizeof(header);
+	ptr = wqe_ptr + sizeof(struct gdma_wqe);
 
 	if (wqe_req->inline_oob_data && wqe_req->inline_oob_size > 0) {
 		memcpy(ptr, wqe_req->inline_oob_data, wqe_req->inline_oob_size);
@@ -1640,8 +1661,8 @@ static u32 mana_gd_write_client_oob(const struct gdma_wqe_request *wqe_req,
 			memset(ptr + wqe_req->inline_oob_size, 0,
 			       client_oob_size - wqe_req->inline_oob_size);
 	}
-
-	return sizeof(header) + client_oob_size;
+	/* The hw requires that (gdma_wqe + client_oob_size) is sge size aligned */
+	return ALIGN(sizeof(struct gdma_wqe) + client_oob_size, sizeof(struct gdma_sge));
 }
 
 static void mana_gd_write_sgl(struct gdma_queue *wq, u32 sgl_offset,
@@ -1700,7 +1721,8 @@ int mana_gd_post_work_request(struct gdma_queue *wq,
 		return -EINVAL;
 
 	if (wq->type == GDMA_RQ) {
-		if (client_oob_size != 0)
+		if (client_oob_size != 0 &&
+		    client_oob_size != INLINE_OOB_SMALL_SIZE)
 			return -EINVAL;
 
 		client_oob_size = INLINE_OOB_SMALL_SIZE;
@@ -1708,15 +1730,32 @@ int mana_gd_post_work_request(struct gdma_queue *wq,
 		max_wqe_size = GDMA_MAX_RQE_SIZE;
 	} else {
 		if (client_oob_size != INLINE_OOB_SMALL_SIZE &&
-		    client_oob_size != INLINE_OOB_LARGE_SIZE)
+		    client_oob_size != INLINE_OOB_LARGE_SIZE &&
+		    client_oob_size != INLINE_OOB_EXTRA_LARGE_SIZE)
 			return -EINVAL;
 
 		max_wqe_size = GDMA_MAX_SQE_SIZE;
 	}
 
 	sgl_data_size = sizeof(struct gdma_sge) * wqe_req->num_sge;
-	wqe_size = ALIGN(sizeof(struct gdma_wqe) + client_oob_size +
-			 sgl_data_size, GDMA_WQE_BU_SIZE);
+	if (wqe_req->wqe_size_in_bu) {
+		wqe_size = wqe_req->wqe_size_in_bu * GDMA_WQE_BU_SIZE;
+		oob_len = ALIGN(sizeof(struct gdma_wqe) + client_oob_size,
+				sizeof(struct gdma_sge));
+		if (wqe_size < oob_len ||
+		    wqe_req->num_sge > (wqe_size - oob_len) / sizeof(struct gdma_sge))
+			return -EINVAL;
+	} else {
+		wqe_size = ALIGN(sizeof(struct gdma_wqe) + client_oob_size +
+				 sgl_data_size, GDMA_WQE_BU_SIZE);
+	}
+	/* Ensure the WQE size is a power of 2 when a fixed wqe size or extra large OOB are used.
+	 * Otherwise, the WQE may cross the queue memory buffer boundary, which is not allowed.
+	 */
+	if (wqe_req->wqe_size_in_bu || client_oob_size == INLINE_OOB_EXTRA_LARGE_SIZE) {
+		if (!is_power_of_2(wqe_size))
+			return -EINVAL;
+	}
 	if (wqe_size > max_wqe_size)
 		return -EINVAL;
 
