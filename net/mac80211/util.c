@@ -1772,7 +1772,7 @@ static int
 ieee80211_reconfig_nan_offload_de(struct ieee80211_sub_if_data *sdata)
 {
 	struct cfg80211_nan_func *func, **funcs;
-	int res, id, i = 0;
+	int res = 0, id, i = 0;
 
 	funcs = kzalloc_objs(*funcs, sdata->local->hw.max_nan_de_entries + 1);
 	if (!funcs)
