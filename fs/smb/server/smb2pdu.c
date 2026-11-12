@@ -1014,39 +1014,15 @@ int smb2_allocate_rsp_buf(struct ksmbd_work *work)
 	return 0;
 }
 
-static bool smb2_session_expired_cmd_allowed(struct ksmbd_work *work,
-					      unsigned int cmd)
+/*
+ * MS-SMB2 3.3.5.2.9 lets LOGOFF, CLOSE and LOCK proceed on an expired
+ * session. CANCEL is allowed too. For LOCK, smb2_lock() allows only
+ * unlocks, after the request has been validated.
+ */
+static bool smb2_session_expired_cmd_allowed(unsigned int cmd)
 {
-	struct smb2_lock_req *req;
-	unsigned int len, lock_count, i;
-
-	if (cmd == SMB2_CANCEL_HE || cmd == SMB2_CLOSE_HE ||
-	    cmd == SMB2_LOGOFF_HE)
-		return true;
-	if (cmd != SMB2_LOCK_HE)
-		return false;
-
-	req = ksmbd_req_buf_next(work);
-	if (req->hdr.NextCommand)
-		len = le32_to_cpu(req->hdr.NextCommand);
-	else {
-		len = get_rfc1002_len(work->request_buf);
-		if (len < work->next_smb2_rcv_hdr_off)
-			return false;
-		len -= work->next_smb2_rcv_hdr_off;
-	}
-
-	lock_count = le16_to_cpu(req->LockCount);
-	if (!lock_count || len < offsetof(struct smb2_lock_req, locks) ||
-	    lock_count > (len - offsetof(struct smb2_lock_req, locks)) /
-			 sizeof(struct smb2_lock_element))
-		return false;
-
-	for (i = 0; i < lock_count; i++) {
-		if (le32_to_cpu(req->locks[i].Flags) != SMB2_LOCKFLAG_UNLOCK)
-			return false;
-	}
-	return true;
+	return cmd == SMB2_CANCEL_HE || cmd == SMB2_CLOSE_HE ||
+	       cmd == SMB2_LOGOFF_HE || cmd == SMB2_LOCK_HE;
 }
 
 static bool smb2_session_kerberos_expired(struct ksmbd_session *sess)
@@ -1124,7 +1100,7 @@ int smb2_check_user_session(struct ksmbd_work *work)
 			pr_err("compound request on a non-valid session (state %d)\n",
 					work->sess->state);
 			if (smb2_session_kerberos_expired(work->sess) &&
-			    smb2_session_expired_cmd_allowed(work, cmd))
+			    smb2_session_expired_cmd_allowed(cmd))
 				return 1;
 			return smb2_session_kerberos_expired(work->sess) ?
 				-EKEYEXPIRED : -EINVAL;
@@ -1136,7 +1112,7 @@ int smb2_check_user_session(struct ksmbd_work *work)
 	work->sess = ksmbd_session_lookup_all_states(conn, sess_id);
 	if (work->sess) {
 		if (smb2_session_kerberos_expired(work->sess)) {
-			return smb2_session_expired_cmd_allowed(work, cmd) ?
+			return smb2_session_expired_cmd_allowed(cmd) ?
 				1 : -EKEYEXPIRED;
 		}
 		if (work->sess->state != SMB2_SESSION_VALID) {
@@ -10885,6 +10861,19 @@ int smb2_lock(struct ksmbd_work *work)
 
 	if (smb2_compound_has_failed(work, &rsp->hdr))
 		return -EACCES;
+
+	/* An expired session may release byte-range locks, not take them. */
+	if (work->sess && smb2_session_kerberos_expired(work->sess)) {
+		lock_count = le16_to_cpu(req->LockCount);
+		for (i = 0; i < lock_count; i++) {
+			if (le32_to_cpu(req->locks[i].Flags) !=
+			    SMB2_LOCKFLAG_UNLOCK) {
+				rsp->hdr.Status = STATUS_NETWORK_SESSION_EXPIRED;
+				err = -EKEYEXPIRED;
+				goto out2;
+			}
+		}
+	}
 
 	if (work->next_smb2_rcv_hdr_off &&
 	    !has_file_id(req->VolatileFileId)) {
