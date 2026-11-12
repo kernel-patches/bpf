@@ -1196,6 +1196,7 @@ static int au1000_probe(struct platform_device *pdev)
 		dev_info(&pdev->dev, "no platform_data passed,"
 					" PHY search on MAC0\n");
 		aup->phy1_search_mac0 = 1;
+		eth_hw_addr_random(dev);
 	} else {
 		if (is_valid_ether_addr(pd->mac)) {
 			eth_hw_addr_set(dev, pd->mac);
