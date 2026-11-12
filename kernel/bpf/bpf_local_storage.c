@@ -199,7 +199,7 @@ static void bpf_selem_unlink_storage_nolock_misc(struct bpf_local_storage_elem *
 	if (pin_owner && !refcount_inc_not_zero(&local_storage->owner_refcnt))
 		return;
 
-	uncharge += free_local_storage ? sizeof(*local_storage) : 0;
+	uncharge += free_local_storage ? local_storage->obj_size : 0;
 	mem_uncharge(smap, local_storage->owner, uncharge);
 	local_storage->mem_charge -= uncharge;
 
@@ -517,15 +517,16 @@ int bpf_local_storage_alloc(void *owner,
 	struct bpf_local_storage *prev_storage, *storage;
 	struct bpf_local_storage **owner_storage_ptr;
 	struct bpf_local_storage_map_bucket *b;
+	u32 size = sizeof(*storage);
 	unsigned long flags;
 	int err;
 
-	err = mem_charge(smap, owner, sizeof(*storage));
+	err = mem_charge(smap, owner, size);
 	if (err)
 		return err;
 
-	storage = bpf_map_kmalloc_nolock(&smap->map, sizeof(*storage),
-					 __GFP_ZERO, NUMA_NO_NODE);
+	storage = bpf_map_kmalloc_nolock(&smap->map, size, __GFP_ZERO,
+					 NUMA_NO_NODE);
 	if (!storage) {
 		err = -ENOMEM;
 		goto uncharge;
@@ -534,7 +535,8 @@ int bpf_local_storage_alloc(void *owner,
 	INIT_HLIST_HEAD(&storage->list);
 	raw_res_spin_lock_init(&storage->lock);
 	storage->owner = owner;
-	storage->mem_charge = sizeof(*storage);
+	storage->obj_size = size;
+	storage->mem_charge = size;
 	refcount_set(&storage->owner_refcnt, 1);
 
 	bpf_selem_link_storage_nolock(storage, first_selem);
@@ -576,7 +578,7 @@ int bpf_local_storage_alloc(void *owner,
 uncharge:
 	/* storage was never published: no reader can see it */
 	kfree_nolock(storage);
-	mem_uncharge(smap, owner, sizeof(*storage));
+	mem_uncharge(smap, owner, size);
 	return err;
 }
 
