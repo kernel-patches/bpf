@@ -4823,6 +4823,14 @@ free_mc_irq:
 	return err;
 }
 
+static void dpaa2_eth_free_irqs(struct fsl_mc_device *ls_dev)
+{
+	struct fsl_mc_device_irq *irq = ls_dev->irqs[0];
+
+	devm_free_irq(&ls_dev->dev, irq->virq, &ls_dev->dev);
+	fsl_mc_free_irqs(ls_dev);
+}
+
 static void dpaa2_eth_add_ch_napi(struct dpaa2_eth_priv *priv)
 {
 	int i;
@@ -5043,7 +5051,7 @@ err_dl_register:
 	if (priv->do_link_poll)
 		kthread_stop(priv->poll_thread);
 	else
-		fsl_mc_free_irqs(dpni_dev);
+		dpaa2_eth_free_irqs(dpni_dev);
 err_poll_thread:
 	dpaa2_eth_disconnect_mac(priv);
 err_connect_mac:
@@ -5103,7 +5111,7 @@ static void dpaa2_eth_remove(struct fsl_mc_device *ls_dev)
 	if (priv->do_link_poll)
 		kthread_stop(priv->poll_thread);
 	else
-		fsl_mc_free_irqs(ls_dev);
+		dpaa2_eth_free_irqs(ls_dev);
 
 	dpaa2_eth_disconnect_mac(priv);
 	dpaa2_eth_free_rings(priv);
