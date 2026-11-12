@@ -2883,6 +2883,10 @@ BPF_CALL_4(bpf_msg_push_data, struct sk_msg *, msg, u32, start,
 	if (start > offset + l)
 		return -EINVAL;
 
+	/* A push at the end of the msg works on the last element */
+	if (i == msg->sg.end && start != offset)
+		sk_msg_iter_var_prev(i);
+
 	space = MAX_MSG_FRAGS - sk_msg_elem_used(msg);
 
 	/* If no space available will fallback to copy, we need at
@@ -2908,8 +2912,6 @@ BPF_CALL_4(bpf_msg_push_data, struct sk_msg *, msg, u32, start,
 
 		raw = page_address(page);
 
-		if (i == msg->sg.end)
-			sk_msg_iter_var_prev(i);
 		psge = sk_msg_elem(msg, i);
 		front = start - offset;
 		back = psge->length - front;
@@ -2931,8 +2933,6 @@ BPF_CALL_4(bpf_msg_push_data, struct sk_msg *, msg, u32, start,
 	}
 
 	if (start - offset) {
-		if (i == msg->sg.end)
-			sk_msg_iter_var_prev(i);
 		psge = sk_msg_elem(msg, i);
 		rsge = sk_msg_elem_cpy(msg, i);
 		rsge_copy = sk_msg_elem_is_copy(msg, i);
