@@ -528,7 +528,7 @@ static void acpi_data_add_buffer_props(acpi_handle handle,
 		obj->buffer.length = buf_obj->buffer.length;
 		obj->buffer.pointer = buf_obj->buffer.pointer;
 
-		props->bufs[i] = buf.pointer;
+		props->bufs[*count] = buf.pointer;
 		package++;
 		(*count)++;
 	}
