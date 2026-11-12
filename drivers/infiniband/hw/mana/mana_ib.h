@@ -325,6 +325,7 @@ enum mana_ib_adapter_features {
 	MANA_IB_FEATURE_DEV_COUNTERS_SUPPORT = BIT(5),
 	MANA_IB_FEATURE_MULTI_PORTS_SUPPORT = BIT(6),
 	MANA_IB_FEATURE_MSN_IN_WQE_SUPPORT = BIT(7),
+	MANA_IB_FEATURE_FMR_IN_OOB_SUPPORT = BIT(8),
 	MANA_IB_FEATURE_EXTENDED_WQE_FORMAT = BIT(9),
 	MANA_IB_FEATURE_RC_QP_SQ_POW2_SUPPORT = BIT(14),
 	MANA_IB_FEATURE_MULTI_PORT_GSI_SUPPORT = BIT(15),
@@ -612,7 +613,7 @@ struct rdma_send_oob {
 			u32 reserved2;
 		} ud_send;
 		union {
-			u32 immediate;
+			__le32 immediate;
 			u32 invalidate_key;
 		} rc_send;
 		struct {
@@ -626,7 +627,7 @@ struct rdma_send_oob {
 		} mm;
 	};
 	union {
-		u32 immediate_ext;
+		__le32 immediate_ext;
 		struct {
 			u16 rsn;
 			u16 reserved;
