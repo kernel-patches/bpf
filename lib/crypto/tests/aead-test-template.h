@@ -257,6 +257,11 @@ aead_alloc_basic_validation_test_ctx(struct kunit *test)
 		alloc_buf(test, sizeof(*ctx));
 
 	memset(ctx, 0, sizeof(*ctx));
+	/*
+	 * Use a nonzero plaintext, so that the check that decryption clears
+	 * dst on authentication failure can actually fail.
+	 */
+	rand_bytes(ctx->pt, sizeof(ctx->pt));
 	ctx->raw_key_buf_end =
 		aead_alloc_random_data_guarded(test, AEAD_MAX_KEY_LEN) +
 		AEAD_MAX_KEY_LEN;
