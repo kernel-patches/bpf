@@ -30,6 +30,8 @@
 		serial2 = &lpuart5;
 		serial3 = &lpuart3;
 		serial4 = &lpuart2;
+		spi0 = &lpspi4;
+		spi1 = &lpspi1;
 		usb0 = &usb2;
 		usb1 = &usb3;
 	};
