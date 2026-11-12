@@ -10,7 +10,6 @@
 #include <linux/input.h>
 #include <linux/module.h>
 #include <linux/of.h>
-#include <linux/platform_data/regulator-haptic.h>
 #include <linux/platform_device.h>
 #include <linux/regulator/consumer.h>
 #include <linux/slab.h>
@@ -112,8 +111,8 @@ static void regulator_haptic_close(struct input_dev *input)
 	regulator_haptic_set_voltage(haptic, 0);
 }
 
-static int __maybe_unused
-regulator_haptic_parse_dt(struct device *dev, struct regulator_haptic *haptic)
+static int regulator_haptic_parse_dt(struct device *dev,
+				     struct regulator_haptic *haptic)
 {
 	struct device_node *node;
 	int error;
@@ -141,7 +140,6 @@ regulator_haptic_parse_dt(struct device *dev, struct regulator_haptic *haptic)
 
 static int regulator_haptic_probe(struct platform_device *pdev)
 {
-	const struct regulator_haptic_data *pdata = dev_get_platdata(&pdev->dev);
 	struct regulator_haptic *haptic;
 	struct input_dev *input_dev;
 	int error;
@@ -155,17 +153,9 @@ static int regulator_haptic_probe(struct platform_device *pdev)
 	mutex_init(&haptic->mutex);
 	INIT_WORK(&haptic->work, regulator_haptic_work);
 
-	if (pdata) {
-		haptic->max_volt = pdata->max_volt;
-		haptic->min_volt = pdata->min_volt;
-	} else if (IS_ENABLED(CONFIG_OF)) {
-		error = regulator_haptic_parse_dt(&pdev->dev, haptic);
-		if (error)
-			return error;
-	} else {
-		dev_err(&pdev->dev, "Missing platform data\n");
-		return -EINVAL;
-	}
+	error = regulator_haptic_parse_dt(&pdev->dev, haptic);
+	if (error)
+		return error;
 
 	haptic->regulator = devm_regulator_get_exclusive(&pdev->dev, "haptic");
 	if (IS_ERR(haptic->regulator)) {
