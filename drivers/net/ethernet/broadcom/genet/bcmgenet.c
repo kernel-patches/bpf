@@ -2373,16 +2373,15 @@ drop:
 	goto out;
 }
 
-static int bcmgenet_rx_refill(struct bcmgenet_rx_ring *ring,
-			      struct enet_cb *cb)
+static int bcmgenet_rx_alloc_cb(struct bcmgenet_priv *priv,
+				struct page_pool *pool, unsigned int buf_len,
+				struct enet_cb *cb)
 {
-	struct bcmgenet_priv *priv = ring->priv;
-	unsigned int size = SKB_HEAD_ALIGN(priv->rx_buf_len);
+	unsigned int size = SKB_HEAD_ALIGN(buf_len);
 	unsigned int offset;
-	dma_addr_t mapping;
 	struct page *page;
 
-	page = page_pool_dev_alloc(ring->page_pool, &offset, &size);
+	page = page_pool_dev_alloc(pool, &offset, &size);
 	if (!page) {
 		priv->mib.alloc_rx_buff_failed++;
 		netif_err(priv, rx_err, priv->dev,
@@ -2390,15 +2389,37 @@ static int bcmgenet_rx_refill(struct bcmgenet_rx_ring *ring,
 		return -ENOMEM;
 	}
 
-	/* page_pool handles DMA mapping via PP_FLAG_DMA_MAP */
-	mapping = page_pool_get_dma_addr(page) + offset;
-	dma_sync_single_for_device(&priv->pdev->dev, mapping, priv->rx_buf_len,
-				   DMA_FROM_DEVICE);
-
 	cb->rx_page = page;
 	cb->rx_offset = offset;
 	cb->rx_size = size;
+
+	return 0;
+}
+
+/* Hand the buffer of a control block to the hardware */
+static void bcmgenet_rx_arm_cb(struct bcmgenet_priv *priv, struct enet_cb *cb)
+{
+	dma_addr_t mapping;
+
+	/* page_pool handles DMA mapping via PP_FLAG_DMA_MAP */
+	mapping = page_pool_get_dma_addr(cb->rx_page) + cb->rx_offset;
+	dma_sync_single_for_device(&priv->pdev->dev, mapping, priv->rx_buf_len,
+				   DMA_FROM_DEVICE);
+
 	dmadesc_set_addr(priv, cb->bd_addr, mapping);
+}
+
+static int bcmgenet_rx_refill(struct bcmgenet_rx_ring *ring,
+			      struct enet_cb *cb)
+{
+	struct bcmgenet_priv *priv = ring->priv;
+	int ret;
+
+	ret = bcmgenet_rx_alloc_cb(priv, ring->page_pool, priv->rx_buf_len, cb);
+	if (ret)
+		return ret;
+
+	bcmgenet_rx_arm_cb(priv, cb);
 
 	return 0;
 }
@@ -2646,22 +2667,15 @@ static void bcmgenet_dim_work(struct work_struct *work)
 }
 
 /* Assign page_pool pages to RX DMA descriptors. */
-static int bcmgenet_alloc_rx_buffers(struct bcmgenet_priv *priv,
-				     struct bcmgenet_rx_ring *ring)
+static void bcmgenet_arm_rx_buffers(struct bcmgenet_priv *priv,
+				    struct bcmgenet_rx_ring *ring)
 {
-	struct enet_cb *cb;
 	int i;
 
 	netif_dbg(priv, hw, priv->dev, "%s\n", __func__);
 
-	/* loop here for each buffer needing assign */
-	for (i = 0; i < ring->size; i++) {
-		cb = ring->cbs + i;
-		if (bcmgenet_rx_refill(ring, cb))
-			return -ENOMEM;
-	}
-
-	return 0;
+	for (i = 0; i < ring->size; i++)
+		bcmgenet_rx_arm_cb(priv, ring->cbs + i);
 }
 
 static void bcmgenet_free_rx_buffers(struct bcmgenet_priv *priv)
@@ -2950,41 +2964,33 @@ static void bcmgenet_init_tx_ring(struct bcmgenet_priv *priv,
 	netif_napi_add_tx(priv->dev, &ring->napi, bcmgenet_tx_poll);
 }
 
-static int bcmgenet_rx_ring_create_pool(struct bcmgenet_priv *priv,
-					struct bcmgenet_rx_ring *ring)
+static struct page_pool *bcmgenet_create_rx_pool(struct bcmgenet_priv *priv,
+						 unsigned int size)
 {
 	/* Buffers may share a page, depending on PAGE_SIZE and the MTU.
-	 * bcmgenet_rx_refill() syncs each one for the device,
+	 * bcmgenet_rx_arm_cb() syncs each one for the device,
 	 * PP_FLAG_DMA_SYNC_DEV would sync the whole page.
 	 */
 	struct page_pool_params pp_params = {
 		.order = 0,
 		.flags = PP_FLAG_DMA_MAP,
-		.pool_size = ring->size,
+		.pool_size = size,
 		.nid = NUMA_NO_NODE,
 		.dev = &priv->pdev->dev,
 		.dma_dir = DMA_FROM_DEVICE,
 	};
-	int err;
 
-	ring->page_pool = page_pool_create(&pp_params);
-	if (IS_ERR(ring->page_pool)) {
-		err = PTR_ERR(ring->page_pool);
-		ring->page_pool = NULL;
-		return err;
-	}
-
-	return 0;
+	return page_pool_create(&pp_params);
 }
 
 /* Initialize a RDMA ring */
-static int bcmgenet_init_rx_ring(struct bcmgenet_priv *priv,
-				 unsigned int index, unsigned int size,
-				 unsigned int start_ptr, unsigned int end_ptr)
+static void bcmgenet_init_rx_ring(struct bcmgenet_priv *priv,
+				  unsigned int index, unsigned int size,
+				  unsigned int start_ptr, unsigned int end_ptr,
+				  struct page_pool *pool)
 {
 	struct bcmgenet_rx_ring *ring = &priv->rx_rings[index];
 	u32 words_per_bd = WORDS_PER_BD(priv);
-	int ret, i;
 
 	ring->priv = priv;
 	ring->index = index;
@@ -2994,19 +3000,9 @@ static int bcmgenet_init_rx_ring(struct bcmgenet_priv *priv,
 	ring->read_ptr = start_ptr;
 	ring->cb_ptr = start_ptr;
 	ring->end_ptr = end_ptr - 1;
+	ring->page_pool = pool;
 
-	ret = bcmgenet_rx_ring_create_pool(priv, ring);
-	if (ret)
-		return ret;
-
-	ret = bcmgenet_alloc_rx_buffers(priv, ring);
-	if (ret) {
-		for (i = 0; i < ring->size; i++)
-			bcmgenet_free_rx_cb(ring->cbs + i, ring->page_pool);
-		page_pool_destroy(ring->page_pool);
-		ring->page_pool = NULL;
-		return ret;
-	}
+	bcmgenet_arm_rx_buffers(priv, ring);
 
 	bcmgenet_init_dim(ring, bcmgenet_dim_work);
 	bcmgenet_init_rx_coalesce(ring);
@@ -3033,8 +3029,6 @@ static int bcmgenet_init_rx_ring(struct bcmgenet_priv *priv,
 				  RDMA_WRITE_PTR);
 	bcmgenet_rdma_ring_writel(priv, index, end_ptr * words_per_bd - 1,
 				  DMA_END_ADDR);
-
-	return ret;
 }
 
 static void bcmgenet_enable_tx_napi(struct bcmgenet_priv *priv)
@@ -3222,18 +3216,17 @@ static void bcmgenet_destroy_rx_page_pools(struct bcmgenet_priv *priv)
  *
  * Queue 0 is also the default Rx queue with GENET_Q0_RX_BD_CNT descriptors.
  */
-static int bcmgenet_init_rx_queues(struct net_device *dev)
+static void bcmgenet_init_rx_queues(struct net_device *dev,
+				    struct bcmgenet_dma_set *set)
 {
 	struct bcmgenet_priv *priv = netdev_priv(dev);
 	unsigned int start = 0, end = GENET_Q0_RX_BD_CNT;
 	u32 i, ring_mask;
-	int ret;
 
 	/* Initialize Rx priority queues */
 	for (i = 0; i <= priv->hw_params->rx_queues; i++) {
-		ret = bcmgenet_init_rx_ring(priv, i, end - start, start, end);
-		if (ret)
-			return ret;
+		bcmgenet_init_rx_ring(priv, i, end - start, start, end,
+				      set->page_pool[i]);
 
 		start = end;
 		end += priv->hw_params->rx_bds_per_q;
@@ -3246,8 +3239,6 @@ static int bcmgenet_init_rx_queues(struct net_device *dev)
 	/* Enable Rx rings */
 	ring_mask <<= DMA_RING_BUF_EN_SHIFT;
 	bcmgenet_rdma_writel(priv, ring_mask, DMA_CTRL);
-
-	return 0;
 }
 
 static int bcmgenet_dma_teardown(struct bcmgenet_priv *priv)
@@ -3293,11 +3284,86 @@ static void bcmgenet_fini_dma(struct bcmgenet_priv *priv)
 	priv->tx_cbs = NULL;
 }
 
-/* init_edma: Initialize DMA control register */
-static int bcmgenet_init_dma(struct bcmgenet_priv *priv, bool flush_rx)
+/* Hand back a set that was never installed */
+static void bcmgenet_free_dma_set(struct bcmgenet_priv *priv,
+				  struct bcmgenet_dma_set *set)
 {
-	struct enet_cb *cb;
-	unsigned int i;
+	unsigned int start = 0, end = GENET_Q0_RX_BD_CNT;
+	unsigned int i, q;
+
+	for (q = 0; q <= priv->hw_params->rx_queues; q++) {
+		if (set->page_pool[q]) {
+			for (i = start; i < end; i++)
+				bcmgenet_free_rx_cb(set->rx_cbs + i,
+						    set->page_pool[q]);
+			page_pool_destroy(set->page_pool[q]);
+		}
+
+		start = end;
+		end += priv->hw_params->rx_bds_per_q;
+	}
+
+	kfree(set->rx_cbs);
+	kfree(set->tx_cbs);
+	memset(set, 0, sizeof(*set));
+}
+
+/* Build everything a datapath of this buffer length needs. The running one
+ * keeps its own until the caller installs this set, so a failure here costs
+ * nothing.
+ */
+static int bcmgenet_alloc_dma(struct bcmgenet_priv *priv, unsigned int buf_len,
+			      struct bcmgenet_dma_set *set)
+{
+	unsigned int start = 0, end = GENET_Q0_RX_BD_CNT;
+	unsigned int i, q;
+
+	memset(set, 0, sizeof(*set));
+
+	set->rx_cbs = kzalloc_objs(struct enet_cb, TOTAL_DESC);
+	set->tx_cbs = kzalloc_objs(struct enet_cb, TOTAL_DESC);
+	if (!set->rx_cbs || !set->tx_cbs)
+		goto err;
+
+	for (i = 0; i < TOTAL_DESC; i++) {
+		set->rx_cbs[i].bd_addr = priv->base +
+					 priv->hw_params->rdma_offset +
+					 i * DMA_DESC_SIZE;
+		set->tx_cbs[i].bd_addr = priv->base +
+					 priv->hw_params->tdma_offset +
+					 i * DMA_DESC_SIZE;
+	}
+
+	for (q = 0; q <= priv->hw_params->rx_queues; q++) {
+		set->page_pool[q] = bcmgenet_create_rx_pool(priv, end - start);
+		if (IS_ERR(set->page_pool[q])) {
+			set->page_pool[q] = NULL;
+			goto err;
+		}
+
+		for (i = start; i < end; i++)
+			if (bcmgenet_rx_alloc_cb(priv, set->page_pool[q],
+						 buf_len, set->rx_cbs + i))
+				goto err;
+
+		start = end;
+		end += priv->hw_params->rx_bds_per_q;
+	}
+
+	return 0;
+
+err:
+	bcmgenet_free_dma_set(priv, set);
+
+	return -ENOMEM;
+}
+
+/* Install a set built by bcmgenet_alloc_dma() and start the engines. The set
+ * is consumed either way, a failure frees it and leaves no datapath behind.
+ */
+static int bcmgenet_init_dma(struct bcmgenet_priv *priv, bool flush_rx,
+			     struct bcmgenet_dma_set *set)
+{
 	int ret;
 	u32 reg;
 
@@ -3307,14 +3373,14 @@ static int bcmgenet_init_dma(struct bcmgenet_priv *priv, bool flush_rx)
 	ret = bcmgenet_tdma_disable(priv);
 	if (ret) {
 		netdev_err(priv->dev, "failed to halt Tx DMA\n");
-		return ret;
+		goto err;
 	}
 
 	/* Disable RX DMA */
 	ret = bcmgenet_rdma_disable(priv);
 	if (ret) {
 		netdev_err(priv->dev, "failed to halt Rx DMA\n");
-		return ret;
+		goto err;
 	}
 
 	/* Flush TX queues */
@@ -3330,49 +3396,21 @@ static int bcmgenet_init_dma(struct bcmgenet_priv *priv, bool flush_rx)
 		udelay(10);
 	}
 
-	/* Initialize common Rx ring structures */
+	/* The set belongs to the datapath from here on */
 	priv->rx_bds = priv->base + priv->hw_params->rdma_offset;
 	priv->num_rx_bds = TOTAL_DESC;
-	priv->rx_cbs = kzalloc_objs(struct enet_cb, priv->num_rx_bds);
-	if (!priv->rx_cbs)
-		return -ENOMEM;
+	priv->rx_cbs = set->rx_cbs;
 
-	for (i = 0; i < priv->num_rx_bds; i++) {
-		cb = priv->rx_cbs + i;
-		cb->bd_addr = priv->rx_bds + i * DMA_DESC_SIZE;
-	}
-
-	/* Initialize common TX ring structures */
 	priv->tx_bds = priv->base + priv->hw_params->tdma_offset;
 	priv->num_tx_bds = TOTAL_DESC;
-	priv->tx_cbs = kzalloc_objs(struct enet_cb, priv->num_tx_bds);
-	if (!priv->tx_cbs) {
-		kfree(priv->rx_cbs);
-		priv->rx_cbs = NULL;
-		return -ENOMEM;
-	}
-
-	for (i = 0; i < priv->num_tx_bds; i++) {
-		cb = priv->tx_cbs + i;
-		cb->bd_addr = priv->tx_bds + i * DMA_DESC_SIZE;
-	}
+	priv->tx_cbs = set->tx_cbs;
 
 	/* Init rDma */
 	bcmgenet_rdma_writel(priv, priv->dma_max_burst_length,
 			     DMA_SCB_BURST_SIZE);
 
 	/* Initialize Rx queues */
-	ret = bcmgenet_init_rx_queues(priv->dev);
-	if (ret) {
-		netdev_err(priv->dev, "failed to initialize Rx queues\n");
-		bcmgenet_free_rx_buffers(priv);
-		bcmgenet_destroy_rx_page_pools(priv);
-		kfree(priv->rx_cbs);
-		priv->rx_cbs = NULL;
-		kfree(priv->tx_cbs);
-		priv->tx_cbs = NULL;
-		return ret;
-	}
+	bcmgenet_init_rx_queues(priv->dev, set);
 
 	/* Init tDma */
 	bcmgenet_tdma_writel(priv, priv->dma_max_burst_length,
@@ -3391,6 +3429,11 @@ static int bcmgenet_init_dma(struct bcmgenet_priv *priv, bool flush_rx)
 	bcmgenet_tdma_writel(priv, reg, DMA_CTRL);
 
 	return 0;
+
+err:
+	bcmgenet_free_dma_set(priv, set);
+
+	return ret;
 }
 
 /* Interrupt bottom half */
@@ -3563,6 +3606,7 @@ static void bcmgenet_netif_start(struct net_device *dev, bool start_phy)
 static int bcmgenet_open(struct net_device *dev)
 {
 	struct bcmgenet_priv *priv = netdev_priv(dev);
+	struct bcmgenet_dma_set set;
 	int ret;
 
 	netif_dbg(priv, ifup, dev, "bcmgenet_open\n");
@@ -3592,7 +3636,11 @@ static int bcmgenet_open(struct net_device *dev)
 	bcmgenet_hfb_restore(priv);
 
 	/* Reinitialize TDMA and RDMA and SW housekeeping */
-	ret = bcmgenet_init_dma(priv, true);
+	ret = bcmgenet_alloc_dma(priv, priv->rx_buf_len, &set);
+	if (ret)
+		goto err_clk_disable;
+
+	ret = bcmgenet_init_dma(priv, true, &set);
 	if (ret) {
 		netdev_err(dev, "failed to initialize DMA\n");
 		goto err_clk_disable;
@@ -4446,6 +4494,7 @@ static int bcmgenet_resume(struct device *d)
 	struct net_device *dev = dev_get_drvdata(d);
 	struct bcmgenet_priv *priv = netdev_priv(dev);
 	struct bcmgenet_rxnfc_rule *rule;
+	struct bcmgenet_dma_set set;
 	int ret;
 	u32 reg;
 
@@ -4511,7 +4560,9 @@ static int bcmgenet_resume(struct device *d)
 	bcmgenet_hfb_restore(priv);
 
 	/* Reinitialize TDMA and RDMA and SW housekeeping */
-	ret = bcmgenet_init_dma(priv, false);
+	ret = bcmgenet_alloc_dma(priv, priv->rx_buf_len, &set);
+	if (!ret)
+		ret = bcmgenet_init_dma(priv, false, &set);
 	if (ret) {
 		/* Leave the block clocked, close and suspend tear it down */
 		netdev_err(dev, "failed to initialize DMA\n");

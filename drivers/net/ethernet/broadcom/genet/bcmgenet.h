@@ -541,6 +541,15 @@ struct bcmgenet_hw_params {
 	u32		words_per_bd;
 };
 
+/* Everything an open datapath needs that can fail to be allocated. Built
+ * before the running one is given up, so a failure changes nothing.
+ */
+struct bcmgenet_dma_set {
+	struct enet_cb *rx_cbs;
+	struct enet_cb *tx_cbs;
+	struct page_pool *page_pool[GENET_MAX_MQ_CNT + 1];
+};
+
 struct bcmgenet_skb_cb {
 	struct enet_cb *first_cb;	/* First control block of SKB */
 	struct enet_cb *last_cb;	/* Last control block of SKB */
