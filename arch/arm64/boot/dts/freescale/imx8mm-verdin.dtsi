@@ -16,6 +16,8 @@
 	aliases {
 		rtc0 = &rtc_i2c;
 		rtc1 = &snvs_rtc;
+		spi0 = &ecspi2;
+		/delete-property/ spi1;
 	};
 
 	/* Fixed clock dedicated to SPI CAN controller */
