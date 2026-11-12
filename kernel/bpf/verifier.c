@@ -17894,33 +17894,27 @@ static int maybe_fork_scalars(struct bpf_verifier_env *env, struct bpf_insn *ins
 	return adjust_scalar_min_max_vals(env, insn, reg, *src);
 }
 
-/* WARNING: This function does calculations on 64-bit values, but the actual
+/*
+ * dst = dst <op> src: the transfer function of the ALU insn @insn, all but BPF_MOV.
+ * @src can't be @dst. BPF_NEG and BPF_END ignore its value: any valid scalar will do.
+ *
+ * WARNING: This function does calculations on 64-bit values, but the actual
  * execution may occur on 32-bit values. Therefore, things like bitshifts
  * need extra checks in the 32-bit case.
  */
-static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
-				      struct bpf_insn *insn,
-				      struct bpf_reg_state *dst_reg,
-				      struct scalar src_val)
+void scalar_alu(struct scalar *dst, const struct scalar *src, const struct bpf_insn *insn)
 {
-	struct scalar *dst = scalar_of(dst_reg), *src = &src_val, tmp;
 	u8 opcode = BPF_OP(insn->code);
 	s16 off = insn->off;
 	bool alu32 = (BPF_CLASS(insn->code) != BPF_ALU64);
-	int ret;
+	struct scalar tmp;
 
 	if (!is_safe_to_compute_dst_reg_range(insn, src)) {
-		bpf_mark_reg_unknown(dst_reg);
-		return 0;
+		scalar_set_unknown(dst);
+		return;
 	}
 
-	if (sanitize_needed(opcode)) {
-		ret = sanitize_val_alu(env, insn);
-		if (ret < 0)
-			return sanitize_err(env, insn, ret);
-	}
-
-	/* The count of a shift is a range: a bit of dst_reg can end up in more than one place */
+	/* The count of a shift is a range: a bit of dst can end up in more than one place */
 	if ((opcode == BPF_LSH || opcode == BPF_RSH || opcode == BPF_ARSH) &&
 	    cnum64_umin(src->r64) != cnum64_umax(src->r64))
 		dst->var_off = tnum_unknown;
@@ -17966,7 +17960,7 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 		if (bpf_insn_is_hmul(insn) &&
 		    (!scalar_is_const(dst, false) ||
 		     !scalar_is_const(src, false))) {
-			bpf_mark_reg_unknown(dst_reg);
+			scalar_set_unknown(dst);
 			break;
 		}
 		if (!alu32 && insn->off == BPF_UHMUL) {
@@ -18019,22 +18013,12 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 		scalar_step_reset(dst);
 		break;
 	case BPF_AND:
-		if (tnum_is_const(src->var_off)) {
-			ret = maybe_fork_scalars(env, insn, dst_reg, src);
-			if (ret)
-				return ret;
-		}
 		dst->var_off = tnum_and(dst->var_off, src->var_off);
 		scalar32_min_max_and(dst, src);
 		scalar_min_max_and(dst, src);
 		scalar_step_reset(dst);
 		break;
 	case BPF_OR:
-		if (tnum_is_const(src->var_off)) {
-			ret = maybe_fork_scalars(env, insn, dst_reg, src);
-			if (ret)
-				return ret;
-		}
 		dst->var_off = tnum_or(dst->var_off, src->var_off);
 		scalar32_min_max_or(dst, src);
 		scalar_min_max_or(dst, src);
@@ -18087,6 +18071,27 @@ static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env,
 	if (alu32 && opcode != BPF_END)
 		scalar_zext32(dst);
 	scalar_bounds_sync(dst);
+}
+
+static int adjust_scalar_min_max_vals(struct bpf_verifier_env *env, struct bpf_insn *insn,
+				      struct bpf_reg_state *dst_reg, struct scalar src_val)
+{
+	u8 opcode = BPF_OP(insn->code);
+	int ret;
+
+	if (sanitize_needed(opcode)) {
+		ret = sanitize_val_alu(env, insn);
+		if (ret < 0)
+			return sanitize_err(env, insn, ret);
+	}
+
+	if ((opcode == BPF_AND || opcode == BPF_OR) && tnum_is_const(src_val.var_off)) {
+		ret = maybe_fork_scalars(env, insn, dst_reg, &src_val);
+		if (ret)
+			return ret;
+	}
+
+	scalar_alu(scalar_of(dst_reg), &src_val, insn);
 	return 0;
 }
 
