@@ -541,8 +541,8 @@ static int atmel_tcb_pwm_resume(struct device *dev)
 
 	if (chan->enabled)
 		regmap_write(tcbpwmc->regmap,
-			     ATMEL_TC_CLKEN | ATMEL_TC_SWTRG,
-			     ATMEL_TC_REG(channel, CCR));
+			     ATMEL_TC_REG(channel, CCR),
+			     ATMEL_TC_CLKEN | ATMEL_TC_SWTRG);
 
 	return 0;
 }
