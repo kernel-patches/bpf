@@ -173,9 +173,6 @@ bpf_local_storage_unpin_owner(struct bpf_local_storage *local_storage)
  */
 #define BPF_LOCAL_STORAGE_INLINE_MAPS	16
 
-/* A later patch adds this flag to the UAPI and allows it */
-#define BPF_F_INLINE_VALUE		BIT(20)
-
 struct bpf_local_storage_cache {
 	spinlock_t idx_lock;
 	u64 idx_usage_counts[BPF_LOCAL_STORAGE_CACHE_SIZE];

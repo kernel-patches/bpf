@@ -15,7 +15,8 @@
 #include <linux/rcupdate_trace.h>
 #include <linux/rcupdate_wait.h>
 
-#define BPF_LOCAL_STORAGE_CREATE_FLAG_MASK (BPF_F_NO_PREALLOC | BPF_F_CLONE)
+#define BPF_LOCAL_STORAGE_CREATE_FLAG_MASK \
+	(BPF_F_NO_PREALLOC | BPF_F_CLONE | BPF_F_INLINE_VALUE)
 
 static struct bpf_local_storage_map_bucket *
 select_bucket(struct bpf_local_storage_map *smap,
@@ -1026,13 +1027,25 @@ int bpf_local_storage_map_alloc_check(union bpf_attr *attr)
 {
 	if (attr->map_flags & ~BPF_LOCAL_STORAGE_CREATE_FLAG_MASK ||
 	    !(attr->map_flags & BPF_F_NO_PREALLOC) ||
+	    ((attr->map_flags & BPF_F_CLONE) &&
+	     (attr->map_flags & BPF_F_INLINE_VALUE)) ||
 	    attr->max_entries ||
 	    attr->key_size != sizeof(int) || !attr->value_size ||
 	    /* Enforce BTF for userspace sk dumping */
 	    !attr->btf_key_type_id || !attr->btf_value_type_id)
 		return -EINVAL;
 
+	/* The slot tag needs an 8 byte acquire and release */
+	if (!IS_ENABLED(CONFIG_64BIT) && (attr->map_flags & BPF_F_INLINE_VALUE))
+		return -EOPNOTSUPP;
+
 	if (attr->value_size > BPF_LOCAL_STORAGE_MAX_VALUE_SIZE)
+		return -E2BIG;
+
+	/* Never fits, also in an empty area: -ENOSPC is only for no room now */
+	if ((attr->map_flags & BPF_F_INLINE_VALUE) &&
+	    bpf_local_storage_slot_size(attr->value_size) >
+	    BPF_LOCAL_STORAGE_INLINE_MAX - BPF_LOCAL_STORAGE_INLINE_START)
 		return -E2BIG;
 
 	return 0;
@@ -1044,6 +1057,10 @@ int bpf_local_storage_map_check_btf(struct bpf_map *map,
 				    const struct btf_type *value_type)
 {
 	if (!btf_type_is_i32(key_type))
+		return -EINVAL;
+
+	/* An inline value is copied in place and is not freed with a delete */
+	if ((map->map_flags & BPF_F_INLINE_VALUE) && !IS_ERR_OR_NULL(map->record))
 		return -EINVAL;
 
 	return 0;
