@@ -84,8 +84,6 @@ struct ads7846_packet {
 	struct ads7846_buf *rx;
 	struct ads7846_buf *tx;
 
-	struct ads7846_buf pwrdown_cmd;
-
 	bool ignore;
 	u16 x, y, z1, z2;
 };
@@ -145,13 +143,6 @@ enum ads7846_filter {
 	ADS7846_FILTER_IGNORE,
 };
 
-/* leave chip selected when we're done, for quicker re-select? */
-#if	0
-#define	CS_CHANGE(xfer)	((xfer).cs_change = 1)
-#else
-#define	CS_CHANGE(xfer)	((xfer).cs_change = 0)
-#endif
-
 /*--------------------------------------------------------------------------*/
 
 /* The ADS7846 has touchscreen and other sensors.
@@ -195,7 +186,6 @@ enum ads7846_filter {
 	| ADS_12_BIT | ADS_SER)
 
 #define	REF_ON	(READ_12BIT_DFR(x, 1, 1))
-#define	REF_OFF	(READ_12BIT_DFR(y, 0, 0))
 
 /* Order commands in the most optimal way to reduce Vref switching and
  * settling time:
@@ -400,7 +390,6 @@ static int ads7846_read12_ser(struct device *dev, unsigned command)
 
 	req->xfer[7].rx_buf = &req->scratch;
 	req->xfer[7].len = 2;
-	CS_CHANGE(req->xfer[7]);
 	spi_message_add_tail(&req->xfer[7], &req->msg);
 
 	scoped_guard(mutex, &ts->lock) {
