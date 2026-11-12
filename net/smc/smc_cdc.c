@@ -43,7 +43,7 @@ static void smc_cdc_tx_handler(struct smc_wr_tx_pend_priv *pnd_snd,
 		/* sndbuf_space is decreased in smc_sendmsg */
 		smp_mb__before_atomic();
 		atomic_add(diff, &cdcpend->conn->sndbuf_space);
-		/* guarantee 0 <= sndbuf_space <= sndbuf_desc->len */
+		/* can be out of range, see smc_tx_sendmsg() */
 		smp_mb__after_atomic();
 		smc_curs_copy(&conn->tx_curs_fin, &cdcpend->cursor, conn);
 		smc_curs_copy(&conn->local_tx_ctrl_fin, &cdcpend->p_cursor,
