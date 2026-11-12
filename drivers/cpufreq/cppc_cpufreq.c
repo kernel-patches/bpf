@@ -238,6 +238,58 @@ static void cppc_cpufreq_apply_saved_regs(struct cpufreq_policy *policy,
 					     saved_type);
 }
 
+/* Autonomous Selection boot parameter modes */
+enum {
+	AUTO_SEL_MODE_DISABLED,
+	AUTO_SEL_MODE_PERFORMANCE,
+	AUTO_SEL_MODE_BALANCE_PERFORMANCE,
+	AUTO_SEL_MODE_BALANCE_POWER,
+	AUTO_SEL_MODE_POWER,
+	AUTO_SEL_MODE_DEFAULT_EPP,
+};
+
+static const char * const auto_sel_mode_names[] = {
+	[AUTO_SEL_MODE_DISABLED]		= "disabled",
+	[AUTO_SEL_MODE_PERFORMANCE]		= "performance",
+	[AUTO_SEL_MODE_BALANCE_PERFORMANCE]	= "balance_performance",
+	[AUTO_SEL_MODE_BALANCE_POWER]		= "balance_power",
+	[AUTO_SEL_MODE_POWER]			= "power",
+	[AUTO_SEL_MODE_DEFAULT_EPP]		= "default_epp",
+};
+
+static int auto_sel_mode;
+
+static int auto_sel_mode_set(const char *val, const struct kernel_param *kp)
+{
+	int *mode = kp->arg;
+	int ret;
+
+	ret = sysfs_match_string(auto_sel_mode_names, val);
+	if (ret < 0) {
+		pr_warn("Invalid auto_sel_mode \"%s\", ignoring it\n", val);
+		return 0;
+	}
+
+	*mode = ret;
+	return 0;
+}
+
+static int auto_sel_mode_get(char *buffer, const struct kernel_param *kp)
+{
+	int *mode = kp->arg;
+
+	return sysfs_emit(buffer, "%s\n", auto_sel_mode_names[*mode]);
+}
+
+static const struct kernel_param_ops auto_sel_mode_ops = {
+	.set = auto_sel_mode_set,
+	.get = auto_sel_mode_get,
+};
+
+module_param_cb(auto_sel_mode, &auto_sel_mode_ops, &auto_sel_mode, 0444);
+MODULE_PARM_DESC(auto_sel_mode,
+		 "Autonomous selection mode: performance, balance_performance, balance_power, power, default_epp, disabled");
+
 #ifdef CONFIG_ACPI_CPPC_CPUFREQ_FIE
 static enum {
 	FIE_UNSET = -1,
@@ -938,6 +990,72 @@ static u32 cppc_cpufreq_effective_nominal(struct cpufreq_policy *policy)
 	return (u32)ospm_nominal;
 }
 
+/*
+ * Apply the auto_sel_mode boot parameter in init(). Enable autonomous
+ * selection unless it is already enabled. Then set EPP for the selected mode.
+ *
+ * Enable auto_sel before writing EPP, as the platform may ignore EPP while
+ * autonomous selection is disabled. Save each value written, so that online()
+ * and resume() write it again.
+ */
+static void cppc_cpufreq_setup_auto_sel_mode(struct cpufreq_policy *policy)
+{
+	struct cppc_policy_state *st = cppc_cpufreq_policy_state(policy);
+	struct cppc_cpudata *cpu_data = policy->driver_data;
+	unsigned int cpu = policy->cpu;
+	u64 auto_sel, epp;
+	int ret;
+
+	if (auto_sel_mode == AUTO_SEL_MODE_DISABLED)
+		return;
+
+	/* U64_MAX means the platform does not implement the register. */
+	auto_sel = st->regs[CPPC_SAVED_AUTO_SEL][CPPC_SAVED_FIRMWARE];
+	if (auto_sel == U64_MAX) {
+		pr_info_once("Autonomous selection is not supported, ignoring auto_sel_mode\n");
+		return;
+	}
+
+	if (!auto_sel) {
+		ret = cppc_set_auto_sel(cpu, true);
+		if (ret) {
+			pr_warn("Failed to enable auto_sel for CPU%u (%d)\n",
+				cpu, ret);
+			return;
+		}
+		cppc_cpufreq_save_requested(policy, CPPC_SAVED_AUTO_SEL, true);
+	}
+	cpu_data->perf_ctrls.auto_sel = true;
+
+	switch (auto_sel_mode) {
+	case AUTO_SEL_MODE_PERFORMANCE:
+		epp = CPPC_EPP_PERFORMANCE_PREF;
+		break;
+	case AUTO_SEL_MODE_BALANCE_PERFORMANCE:
+		epp = CPPC_EPP_BALANCE_PERFORMANCE_PREF;
+		break;
+	case AUTO_SEL_MODE_BALANCE_POWER:
+		epp = CPPC_EPP_BALANCE_POWER_PREF;
+		break;
+	case AUTO_SEL_MODE_POWER:
+		epp = CPPC_EPP_ENERGY_EFFICIENCY_PREF;
+		break;
+	default:
+		/* default_epp keeps the EPP value set by firmware. */
+		return;
+	}
+
+	/* EPP is optional. */
+	ret = cppc_set_epp(cpu, epp);
+	if (ret) {
+		if (ret != -EOPNOTSUPP)
+			pr_warn("Failed to set EPP for CPU%u (%d)\n", cpu, ret);
+		return;
+	}
+	cpu_data->perf_ctrls.energy_perf = epp;
+	cppc_cpufreq_save_requested(policy, CPPC_SAVED_EPP, epp);
+}
+
 static int cppc_cpufreq_cpu_init(struct cpufreq_policy *policy)
 {
 	unsigned int cpu = policy->cpu;
@@ -1039,6 +1157,8 @@ static int cppc_cpufreq_cpu_init(struct cpufreq_policy *policy)
 	}
 	cpu_data->perf_limits_valid = true;
 	policy->cur = cppc_perf_to_khz(caps, desired_perf);
+
+	cppc_cpufreq_setup_auto_sel_mode(policy);
 
 	cppc_cpufreq_cpu_fie_init(policy);
 	return 0;
