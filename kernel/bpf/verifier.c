@@ -19927,7 +19927,6 @@ static int check_ld_imm(struct bpf_verifier_env *env, struct bpf_insn *insn)
 	    insn->src_reg == BPF_PSEUDO_MAP_IDX_VALUE) {
 		if (map->map_type == BPF_MAP_TYPE_ARENA) {
 			bpf_mark_reg_unknown(dst_reg);
-			dst_reg->map_ptr = map;
 			bpf_diag_mod_end(env);
 			return 0;
 		}
