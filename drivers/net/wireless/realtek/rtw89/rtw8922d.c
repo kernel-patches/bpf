@@ -3808,7 +3808,7 @@ const struct rtw89_chip_info rtw8922d_chip_info = {
 				  BIT(NL80211_CHAN_WIDTH_80) |
 				  BIT(NL80211_CHAN_WIDTH_160),
 	.support_unii4		= true,
-	.support_ant_gain	= false,
+	.support_ant_gain	= true,
 	.support_tas		= false,
 	.support_sar_by_ant	= true,
 	.support_noise		= false,
