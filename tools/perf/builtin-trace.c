@@ -4705,9 +4705,13 @@ static int trace__expand_filter(struct trace *trace, struct evsel *evsel)
 	}
 
 	if (new_filter != evsel->filter) {
+		int err;
+
 		pr_debug("New filter for %s: %s\n", evsel->name, new_filter);
-		evsel__set_filter(evsel, new_filter);
+		err = evsel__set_filter(evsel, new_filter);
 		free(new_filter);
+		if (err)
+			return err;
 	}
 
 	return 0;
