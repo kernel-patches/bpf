@@ -403,6 +403,28 @@ static int bpf_cgroup_array_length(struct bpf_prog_array *array,
 	return cnt;
 }
 
+/* Return the entry at logical position @index in an effective program
+ * array.  Dummy entries left behind by a failed rebuild are skipped because
+ * they do not correspond to an entry in the program list.
+ */
+static struct bpf_prog_array_item *
+bpf_cgroup_array_item_at(struct bpf_prog_array *array, int index,
+			 enum cgroup_bpf_attach_type atype)
+{
+	void *dummy = bpf_cgroup_array_dummy(atype);
+	struct bpf_prog_array_item *item;
+
+	for (item = array->items; item->prog; item++) {
+		if (item->prog == dummy)
+			continue;
+		if (!index)
+			return item;
+		index--;
+	}
+
+	return NULL;
+}
+
 static int bpf_cgroup_array_copy_to_user(struct bpf_prog_array *array,
 					 __u32 __user *prog_ids, int cnt,
 					 enum cgroup_bpf_attach_type atype)
@@ -432,16 +454,12 @@ static int bpf_cgroup_array_delete_safe_at(struct bpf_prog_array *array,
 {
 	struct bpf_prog_array_item *item;
 
-	for (item = array->items; item->prog; item++) {
-		if (item->prog == bpf_cgroup_array_dummy(atype))
-			continue;
-		if (!index) {
-			WRITE_ONCE(item->prog, bpf_cgroup_array_dummy(atype));
-			return 0;
-		}
-		index--;
-	}
-	return -ENOENT;
+	item = bpf_cgroup_array_item_at(array, index, atype);
+	if (!item)
+		return -ENOENT;
+
+	WRITE_ONCE(item->prog, bpf_cgroup_array_dummy(atype));
+	return 0;
 }
 
 /**
@@ -1175,7 +1193,9 @@ static void replace_effective_prog(struct cgroup *cgrp,
 		progs = rcu_dereference_protected(
 				desc->bpf.effective[atype],
 				lockdep_is_held(&cgroup_mutex));
-		item = &progs->items[pos];
+		item = bpf_cgroup_array_item_at(progs, pos, atype);
+		if (WARN_ON_ONCE(!item))
+			continue;
 		prog_list_replace_item(pl, item);
 	}
 }
