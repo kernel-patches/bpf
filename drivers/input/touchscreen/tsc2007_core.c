@@ -172,8 +172,7 @@ static void tsc2007_stop(struct tsc2007 *ts)
 	ts->stopped = true;
 	wake_up(&ts->wait);
 
-	if (ts->irq)
-		disable_irq(ts->irq);
+	disable_irq(ts->irq);
 }
 
 static int tsc2007_open(struct input_dev *input_dev)
@@ -182,9 +181,7 @@ static int tsc2007_open(struct input_dev *input_dev)
 	int err;
 
 	ts->stopped = false;
-
-	if (ts->irq)
-		enable_irq(ts->irq);
+	enable_irq(ts->irq);
 
 	/* Prepare for touch readings - power down ADC and enable PENIRQ */
 	err = tsc2007_xfer(ts, PWRDOWN);
@@ -243,37 +240,19 @@ static int tsc2007_probe_properties(struct device *dev, struct tsc2007 *ts)
 	return 0;
 }
 
-static int tsc2007_probe(struct i2c_client *client)
+static int tsc2007_input_configure(struct tsc2007 *ts)
 {
-	struct tsc2007 *ts;
+	struct device *dev = &ts->client->dev;
 	struct input_dev *input_dev;
 	int err;
 
-	if (!i2c_check_functionality(client->adapter,
-				     I2C_FUNC_SMBUS_READ_WORD_DATA))
-		return -EIO;
-
-	ts = devm_kzalloc_obj(&client->dev, struct tsc2007);
-	if (!ts)
-		return -ENOMEM;
-
-	err = tsc2007_probe_properties(&client->dev, ts);
-	if (err)
-		return err;
-
-	input_dev = devm_input_allocate_device(&client->dev);
+	input_dev = devm_input_allocate_device(dev);
 	if (!input_dev)
 		return -ENOMEM;
 
-	ts->client = client;
-	ts->irq = client->irq;
 	ts->input = input_dev;
 
-	init_waitqueue_head(&ts->wait);
-	mutex_init(&ts->mlock);
-
-	snprintf(ts->phys, sizeof(ts->phys),
-		 "%s/input0", dev_name(&client->dev));
+	snprintf(ts->phys, sizeof(ts->phys), "%s/input0", dev_name(dev));
 
 	input_dev->name = "TSC2007 Touchscreen";
 	input_dev->phys = ts->phys;
@@ -291,19 +270,48 @@ static int tsc2007_probe(struct i2c_client *client)
 	input_set_abs_params(input_dev, ABS_PRESSURE, 0, MAX_12BIT,
 			     ts->fuzzz, 0);
 
-	if (ts->irq) {
-		err = devm_request_threaded_irq(&client->dev, ts->irq,
-						NULL, tsc2007_soft_irq,
-						IRQF_ONESHOT,
-						client->dev.driver->name, ts);
-		if (err) {
-			dev_err(&client->dev, "Failed to request irq %d: %d\n",
-				ts->irq, err);
-			return err;
-		}
-
-		tsc2007_stop(ts);
+	err = devm_request_threaded_irq(dev, ts->irq,
+					NULL, tsc2007_soft_irq,
+					IRQF_ONESHOT,
+					dev->driver->name, ts);
+	if (err) {
+		dev_err(dev, "Failed to request irq %d: %d\n", ts->irq, err);
+		return err;
 	}
+
+	tsc2007_stop(ts);
+
+	err = input_register_device(input_dev);
+	if (err) {
+		dev_err(dev, "Failed to register input device: %d\n", err);
+		return err;
+	}
+
+	return 0;
+}
+
+static int tsc2007_probe(struct i2c_client *client)
+{
+	struct tsc2007 *ts;
+	int err;
+
+	if (!i2c_check_functionality(client->adapter,
+				     I2C_FUNC_SMBUS_READ_WORD_DATA))
+		return -EIO;
+
+	ts = devm_kzalloc_obj(&client->dev, struct tsc2007);
+	if (!ts)
+		return -ENOMEM;
+
+	ts->client = client;
+	ts->irq = client->irq;
+
+	init_waitqueue_head(&ts->wait);
+	mutex_init(&ts->mlock);
+
+	err = tsc2007_probe_properties(&client->dev, ts);
+	if (err)
+		return err;
 
 	/* power down the chip (TSC2007_SETUP does not ACK on I2C) */
 	err = tsc2007_xfer(ts, PWRDOWN);
@@ -313,14 +321,13 @@ static int tsc2007_probe(struct i2c_client *client)
 		return err;	/* chip does not respond */
 	}
 
-	err = input_register_device(input_dev);
-	if (err) {
-		dev_err(&client->dev,
-			"Failed to register input device: %d\n", err);
-		return err;
+	if (ts->irq) {
+		err = tsc2007_input_configure(ts);
+		if (err)
+			return err;
 	}
 
-	err =  tsc2007_iio_configure(ts);
+	err = tsc2007_iio_configure(ts);
 	if (err) {
 		dev_err(&client->dev,
 			"Failed to register with IIO: %d\n", err);
