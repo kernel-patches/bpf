@@ -112,7 +112,18 @@ struct bpf_local_storage {
 	u32 obj_size;		/* Size of this object. It does not change. */
 	u64 mem_charge;		/* Copy of mem charged to owner. Protected by "lock" */
 	refcount_t owner_refcnt;/* Used to pin owner when map_free is uncharging */
+	bool dying;		/* destroy() has run. Only with an inline area */
 };
+
+/*
+ * A program can hold a pointer into the inline area without an selem. So an
+ * object with an inline area lives until its owner goes away.
+ */
+static inline bool
+bpf_local_storage_has_inline(const struct bpf_local_storage *local_storage)
+{
+	return local_storage->obj_size > sizeof(*local_storage);
+}
 
 /*
  * Drop a reference got by refcount_inc_not_zero(&local_storage->owner_refcnt).
