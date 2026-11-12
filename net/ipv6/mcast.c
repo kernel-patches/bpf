@@ -362,6 +362,7 @@ int ip6_mc_source(int add, int omode, struct sock *sk,
 	struct net *net = sock_net(sk);
 	struct ipv6_mc_socklist *pmc;
 	struct inet6_dev *idev;
+	int ifindex;
 	int leavegroup = 0;
 	int i, j;
 	int err;
@@ -375,6 +376,7 @@ int ip6_mc_source(int add, int omode, struct sock *sk,
 	idev = ip6_mc_find_idev(net, group, pgsr->gsr_interface);
 	if (!idev)
 		return -ENODEV;
+	ifindex = idev->dev->ifindex;
 
 	mutex_lock(&idev->mc_lock);
 
@@ -386,7 +388,7 @@ int ip6_mc_source(int add, int omode, struct sock *sk,
 	err = -EADDRNOTAVAIL;
 
 	for_each_pmc_socklock(inet6, sk, pmc) {
-		if (pgsr->gsr_interface && pmc->ifindex != pgsr->gsr_interface)
+		if (pmc->ifindex != ifindex)
 			continue;
 		if (ipv6_addr_equal(&pmc->addr, group))
 			break;
@@ -498,7 +500,7 @@ done:
 	mutex_unlock(&idev->mc_lock);
 	in6_dev_put(idev);
 	if (leavegroup)
-		err = ipv6_sock_mc_drop(sk, pgsr->gsr_interface, group);
+		err = ipv6_sock_mc_drop(sk, ifindex, group);
 	return err;
 }
 
