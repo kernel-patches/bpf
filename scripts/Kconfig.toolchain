@@ -141,9 +141,6 @@ config CC_HAS_ASSUME
 	# https://gcc.gnu.org/bugzilla/show_bug.cgi?id=106654
 	default y if CC_IS_GCC && GCC_VERSION >= 130100
 
-config CC_HAS_NO_PROFILE_FN_ATTR
-	def_bool $(success,echo '__attribute__((no_profile_instrument_function)) int x();' | $(CC) -x c - -c -o /dev/null -Werror)
-
 # Beware of two problems when using cc-option in Kconfig compared to Kbuild
 #
 # 1. cc-option in Kbuild tests the provided flags with all previously added
