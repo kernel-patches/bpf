@@ -201,17 +201,16 @@ int bpf_sk_storage_clone(const struct sock *sk, struct sock *newsk)
 			}
 			bpf_selem_link_storage_nolock(new_sk_storage, copy_selem);
 		} else {
-			ret = bpf_local_storage_alloc(newsk, smap, copy_selem);
-			if (ret) {
+			new_sk_storage = bpf_local_storage_alloc(newsk, smap,
+								 copy_selem, NULL);
+			if (IS_ERR(new_sk_storage)) {
+				ret = PTR_ERR(new_sk_storage);
 				bpf_selem_free(copy_selem, true);
 				atomic_sub(smap->elem_size,
 					   &newsk->sk_omem_alloc);
 				bpf_map_put(map);
 				goto out;
 			}
-
-			new_sk_storage =
-				rcu_dereference(copy_selem->local_storage);
 		}
 		bpf_map_put(map);
 	}
