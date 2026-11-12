@@ -1297,6 +1297,8 @@ void btrfs_free_fs_info(struct btrfs_fs_info *fs_info)
  * @objectid:	root id
  * @anon_dev:	preallocated anonymous block device number for new roots,
  *		pass NULL for a new allocation.
+ *		If the ID is consumed, *@anon_dev is set to 0.
+ *		Otherwise the caller needs to release the ID.
  * @check_ref:	whether to check root item references, If true, return -ENOENT
  *		for orphan roots
  */
@@ -1390,6 +1392,9 @@ again:
 		}
 		goto fail;
 	}
+	/* The new root owns the preallocated anon_dev now. */
+	if (anon_dev)
+		*anon_dev = 0;
 	return root;
 fail:
 	/*
@@ -1424,6 +1429,8 @@ struct btrfs_root *btrfs_get_fs_root(struct btrfs_fs_info *fs_info,
  * @objectid:	tree objectid
  * @anon_dev:	if NULL, allocate a new anonymous block device or use the
  *		parameter value if not NULL
+ *		Check the comment of btrfs_get_root_ref() on the lifespan
+ *		of @anon_dev if not NULL.
  */
 struct btrfs_root *btrfs_get_new_fs_root(struct btrfs_fs_info *fs_info,
 					 u64 objectid, dev_t *anon_dev)

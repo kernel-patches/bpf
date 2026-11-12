@@ -712,10 +712,8 @@ static noinline int create_subvol(const struct mnt_idmap *idmap,
 		btrfs_abort_transaction(trans, ret);
 		goto out;
 	}
-	/* anon_dev is owned by new_root now. */
-	anon_dev = 0;
 	BTRFS_I(new_inode_args.inode)->root = new_root;
-	/* ... and new_root is owned by new_inode_args.inode now. */
+	/* new_root is owned by new_inode_args.inode now. */
 
 	ret = btrfs_record_root_in_trans(trans, new_root);
 	if (unlikely(ret)) {
@@ -868,11 +866,7 @@ static int create_snapshot(struct btrfs_root *root, struct inode *dir,
 
 	d_instantiate(dentry, inode);
 	ret = 0;
-	pending_snapshot->anon_dev = 0;
 fail:
-	/* Prevent double freeing of anon_dev */
-	if (ret && pending_snapshot->snap)
-		pending_snapshot->snap->anon_dev = 0;
 	btrfs_put_root(pending_snapshot->snap);
 	btrfs_block_rsv_release(fs_info, block_rsv, (u64)-1, NULL);
 	if (qgroup_reserved)
