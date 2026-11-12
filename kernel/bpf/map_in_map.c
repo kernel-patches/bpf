@@ -22,6 +22,8 @@ struct bpf_map *bpf_map_meta_alloc(int inner_map_ufd)
 		return ERR_PTR(-EINVAL);
 	if (inner_map->excl_prog_sha)
 		return ERR_PTR(-ENOTSUPP);
+	if (bpf_map_is_offloaded(inner_map))
+		return ERR_PTR(-EOPNOTSUPP);
 	if (!inner_map->ops->map_meta_equal)
 		return ERR_PTR(-ENOTSUPP);
 
@@ -110,7 +112,8 @@ void *bpf_map_fd_get_ptr(struct bpf_map *map,
 		return ERR_PTR(-ENOTSUPP);
 
 	inner_map_meta = map->inner_map_meta;
-	if (inner_map_meta->ops->map_meta_equal(inner_map_meta, inner_map)) {
+	if (inner_map_meta->ops == inner_map->ops &&
+	    inner_map_meta->ops->map_meta_equal(inner_map_meta, inner_map)) {
 		bpf_map_inc(inner_map);
 		/* Its users are those of the outer maps from now on */
 		WRITE_ONCE(inner_map->was_inner_map, true);
