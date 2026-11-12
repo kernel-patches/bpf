@@ -3640,7 +3640,7 @@ APPEND(append, "")
 LINKED(callback_tests_slot_of_caller, VALID, CALL_APPEND(append))
 /* The slot is written between the load and the jump: len is 0 1 3 7 15 31 63, the slot 126 */
 APPEND(append_stale, "r2 = r1; r2 <<= 1; *(u64 *)(r6 + 8) = r2;")
-LINKED(callback_tests_stale_copy_of_slot, UNBOUND, CALL_APPEND(append_stale))
+LINKED(callback_tests_stale_copy_of_slot, MAP_OOB, CALL_APPEND(append_stale))
 
 /*
  *	p = buf; i = 0; do { if (i > 62) break; i = *(u16 *)p; p = buf + i; } while (i);
