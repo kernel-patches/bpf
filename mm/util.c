@@ -791,6 +791,24 @@ int folio_mc_copy(struct folio *dst, struct folio *src)
 }
 EXPORT_SYMBOL(folio_mc_copy);
 
+bool __folio_ref_count_over_limit(unsigned int ref_count)
+{
+	if (ref_count >= FOLIO_REF_COUNT_ADMIN_LIMIT)
+		return true;
+	/* Background threads must not consume admin reserves. */
+	if (current->flags & PF_KTHREAD)
+		return true;
+	/* Neither must interrupt contexts on behalf of the interrupted task. */
+	if (!in_task())
+		return true;
+	/* Capability checks are not safe with IRQs disabled. */
+	if (irqs_disabled())
+		return true;
+	/* Use the task's credentials, which filesystem overrides cannot change. */
+	return !has_capability_noaudit(current, CAP_SYS_RESOURCE);
+}
+EXPORT_SYMBOL_GPL(__folio_ref_count_over_limit);
+
 int sysctl_overcommit_memory __read_mostly = OVERCOMMIT_GUESS;
 static int sysctl_overcommit_ratio __read_mostly = 50;
 static unsigned long sysctl_overcommit_kbytes __read_mostly;
