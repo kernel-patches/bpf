@@ -401,10 +401,30 @@ static void rtw89_traffic_stats_accu(struct rtw89_dev *rtwdev,
 	}
 }
 
-void rtw89_get_default_chandef(struct cfg80211_chan_def *chandef)
+static struct ieee80211_channel *rtw89_core_get_default_channel(struct rtw89_dev *rtwdev)
 {
-	cfg80211_chandef_create(chandef, &rtw89_channels_2ghz[0],
-				NL80211_CHAN_NO_HT);
+	if (test_bit(NL80211_BAND_2GHZ, rtwdev->supported_bands))
+		return &rtw89_channels_2ghz[0];
+	if (test_bit(NL80211_BAND_5GHZ, rtwdev->supported_bands))
+		return &rtw89_channels_5ghz[0];
+	if (test_bit(NL80211_BAND_6GHZ, rtwdev->supported_bands))
+		return &rtw89_channels_6ghz[0];
+
+	return NULL;
+}
+
+int rtw89_get_default_chandef(struct rtw89_dev *rtwdev, struct cfg80211_chan_def *chandef)
+{
+	struct ieee80211_channel *dflt;
+
+	dflt = rtw89_core_get_default_channel(rtwdev);
+	if (unlikely(!dflt)) {
+		rtw89_err(rtwdev, "no valid default channel\n");
+		return -EINVAL;
+	}
+
+	cfg80211_chandef_create(chandef, dflt, NL80211_CHAN_NO_HT);
+	return 0;
 }
 
 void rtw89_get_channel_params(const struct cfg80211_chan_def *chandef,
@@ -6987,6 +7007,7 @@ int rtw89_core_init(struct rtw89_dev *rtwdev)
 	const struct rtw89_mac_gen_def *mac = rtwdev->chip->mac_def;
 	struct rtw89_btc *btc = &rtwdev->btc;
 	u8 band;
+	int ret;
 
 	rtwdev->io = rtw89_fw_cmd_ofld_alloc_and_get_io_ops(rtwdev);
 
@@ -7062,8 +7083,11 @@ int rtw89_core_init(struct rtw89_dev *rtwdev)
 
 	schedule_work(&rtwdev->load_firmware_work);
 
+	ret = rtw89_entity_init(rtwdev);
+	if (ret)
+		return ret;
+
 	rtw89_ser_init(rtwdev);
-	rtw89_entity_init(rtwdev);
 	rtw89_sar_init(rtwdev);
 	rtw89_phy_ant_gain_init(rtwdev);
 
