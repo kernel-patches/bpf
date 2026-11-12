@@ -478,6 +478,11 @@ static u32 op_low_bits(u32 op)
 	return 0;
 }
 
+static bool is_zext(u32 op)
+{
+	return op == ZEXT8 || op == ZEXT16 || op == ZEXT32;
+}
+
 /* The low @bits bits of the slot are those of @left. The other bits are not known. */
 static bool is_spill(struct scev *scev, int id, u32 *bits, u32 *left)
 {
@@ -2714,6 +2719,11 @@ static int simplify(struct scev *scev, u32 id)
 	    is_imm(scev, b, &imm1) && imm1 == 32 && !scev->exprs[l].def.set)
 		return expr1(scev, ZEXT32, a);
 
+	/* 'r1 &= 0xff' is (u8)r1, 'r1 &= 0xffff' is (u16)r1: (& x 0xff) -> (zext8 x) */
+	if (is_binop(scev, BPF_AND, id, &l, &r) &&
+	    is_imm(scev, r, &imm1) && (imm1 == 0xff || imm1 == 0xffff))
+		return expr1(scev, imm1 == 0xff ? ZEXT8 : ZEXT16, l);
+
 	/* (+ (linear base slope) imm) -> (linear (+ base imm) slope) */
 	if (is_add(scev, id, &l, &r) &&
 	    is_linear(scev, l, &base, &slope) &&
@@ -2741,6 +2751,10 @@ static int simplify(struct scev *scev, u32 id)
 	if (!bits)
 		return id;
 	t = scev->exprs[id].params[0];
+	/* 'w1 &= 0xff': (zext32 (zext8 $a)) -> (zext8 $a) */
+	if (is_zext(op) && is_zext(scev->exprs[t].op) && !scev->exprs[t].def.set &&
+	    op_low_bits(scev->exprs[t].op) <= bits)
+		return t;
 	if (is_low_bits(scev, t, bits, &a))
 		return expr1(scev, op, a);
 	if (is_add(scev, t, &l, &r) && !scev->exprs[t].def.phi &&
