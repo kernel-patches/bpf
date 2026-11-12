@@ -5277,7 +5277,8 @@ resolve_path:
 		if (IS_ERR(az_req)) {
 			rc = PTR_ERR(az_req);
 			goto err_out1;
-		} else if (az_req) {
+		} else if (az_req &&
+			   test_tree_conn_flag(tcon, KSMBD_TREE_CONN_FLAG_WRITABLE)) {
 			int err;
 
 			if (le16_to_cpu(az_req->ccontext.DataOffset) +
