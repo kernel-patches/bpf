@@ -2355,6 +2355,12 @@ static bool reg_is_empty(struct bpf_reg_state *reg)
 				   U32_MAX);
 }
 
+/*
+ * var_off, r64, r32 and the line base + step * k are a product that reg_bounds_sync() doesn't
+ * reduce to the end. The verifier can take an infeasible path with a register that has no value
+ * while each part looks sane, and a later insn finds it out. That is not a verifier bug: no WARN,
+ * a line in the log, the ranges are forgotten. A malformed base or step is a bug.
+ */
 static int reg_bounds_sanity_check(struct bpf_verifier_env *env,
 				   struct bpf_reg_state *reg, const char *ctx)
 {
@@ -2375,20 +2381,20 @@ static int reg_bounds_sanity_check(struct bpf_verifier_env *env,
 		goto out;
 	}
 
-	if (reg->step == 0 || reg->base >= reg->step) {
+	if (verifier_bug_if(reg->step == 0 || reg->base >= reg->step, env, "%s", ctx)) {
 		msg = "invalid base/step";
 		goto out;
 	}
 
 	return 0;
 out:
-	verifier_bug(env, "REG INVARIANTS VIOLATION (%s): %s r64={.base=%#llx, .size=%#llx} "
-		     "r32={.base=%#x, .size=%#x} var_off=(%#llx, %#llx) step=%u+%u",
-		     ctx, msg,
-		     reg->r64.base, reg->r64.size,
-		     reg->r32.base, reg->r32.size,
-		     reg->var_off.value, reg->var_off.mask,
-		     reg->base, reg->step);
+	verbose(env, "REG INVARIANTS VIOLATION (%s): %s r64={.base=%#llx, .size=%#llx} "
+		"r32={.base=%#x, .size=%#x} var_off=(%#llx, %#llx) step=%u+%u\n",
+		ctx, msg,
+		reg->r64.base, reg->r64.size,
+		reg->r32.base, reg->r32.size,
+		reg->var_off.value, reg->var_off.mask,
+		reg->base, reg->step);
 	if (env->test_reg_invariants)
 		return -EFAULT;
 	__mark_reg_unbounded(reg);
