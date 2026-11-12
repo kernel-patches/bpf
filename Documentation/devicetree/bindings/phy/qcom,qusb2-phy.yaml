@@ -174,11 +174,35 @@ required:
   - "#phy-cells"
   - clocks
   - clock-names
-  - vdda-pll-supply
-  - vdda-phy-dpdm-supply
   - resets
 
 allOf:
+  - if:
+      not:
+        properties:
+          compatible:
+            contains:
+              enum:
+                - qcom,ipq6018-qusb2-phy
+                - qcom,ipq8074-qusb2-phy
+    then:
+      required:
+        - vdda-pll-supply
+        - vdda-phy-dpdm-supply
+
+  - if:
+      not:
+        properties:
+          compatible:
+            contains:
+              enum:
+                - qcom,ipq6018-qusb2-phy
+                - qcom,ipq8074-qusb2-phy
+                - qcom,msm8996-qusb2-phy
+    then:
+      required:
+        - vdd-supply
+
   - if:
       not:
         properties:
@@ -208,8 +232,6 @@ allOf:
       properties:
         power-domains: false
         required-opps: false
-      required:
-        - vdd-supply
 
 additionalProperties: false
 
