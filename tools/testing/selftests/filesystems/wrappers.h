@@ -5,6 +5,7 @@
 
 #define _GNU_SOURCE
 
+#include <fcntl.h>
 #include <linux/types.h>
 #include <linux/mount.h>
 #include <sys/syscall.h>
