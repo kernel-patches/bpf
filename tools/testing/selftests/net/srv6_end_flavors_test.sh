@@ -759,6 +759,8 @@ setup_rt_endpoint()
 		add "${sid}" table "${LOCALSID_TABLE_ID}" \
 		encap seg6local action ${behavior_cfg} \
 		dev "${DUMMY_DEVNAME}"
+	defer ip -netns "${nsname}" -6 route \
+		del "${sid}" table "${LOCALSID_TABLE_ID}"
 }
 
 # Add an SRv6 Endpoint behavior to each router of a Policy element <nodeid:op>.
@@ -801,8 +803,14 @@ setup_rt_host_proxy()
 	ip -netns "$(get_rtname "${rt}")" -6 neigh add \
 		proxy "${IPv6_HS_NETWORK}::${hs}" \
 		dev "${RT2HS_DEVNAME}"
+	defer ip -netns "$(get_rtname "${rt}")" -6 neigh del \
+		proxy "${IPv6_HS_NETWORK}::${hs}" \
+		dev "${RT2HS_DEVNAME}"
 
 	ip -netns "$(get_rtname "${rt}")" -6 neigh add \
+		proxy "${IPv6_HS_NETWORK}::${hs}:${func}" \
+		dev "${RT2HS_DEVNAME}"
+	defer ip -netns "$(get_rtname "${rt}")" -6 neigh del \
 		proxy "${IPv6_HS_NETWORK}::${hs}:${func}" \
 		dev "${RT2HS_DEVNAME}"
 }
@@ -882,6 +890,8 @@ __setup_rt_policy()
 		add "${IPv6_HS_NETWORK}::${dst}" \
 		encap seg6 mode inline segs "${policy}" \
 		dev "${DUMMY_DEVNAME}"
+	defer ip -netns "${in_nsname}" -6 route \
+		del "${IPv6_HS_NETWORK}::${dst}"
 }
 
 # see __setup_rt_policy
@@ -1460,11 +1470,13 @@ set +e
 router_tests
 host2gateway_tests
 
+defer_scope_push
 set -e
 setup_end_flv_psp
 set +e
 host_srv6_end_flv_psp_tests
 host_srv6_end_flv_next_csid_psp_tests
 host_srv6_end_flv_consumed_srh_tests
+defer_scope_pop
 
 print_log_test_results
