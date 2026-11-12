@@ -1015,8 +1015,8 @@ static void rtw8922d_vco_trim(struct rtw89_dev *rtwdev)
 
 #define THM_TRIM_POSITIVE_MASK BIT(6)
 #define THM_TRIM_MAGNITUDE_MASK GENMASK(5, 0)
-#define THM_TRIM_MAX (15)
-#define THM_TRIM_MIN (-15)
+#define THM_TRIM_MAX (16)
+#define THM_TRIM_MIN (-16)
 
 static void rtw8922d_phycap_parsing_thermal_trim(struct rtw89_dev *rtwdev,
 						 u8 *phycap_map)
