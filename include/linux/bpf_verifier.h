@@ -2050,6 +2050,7 @@ struct arg_access_info {
 	u8 may_read:1;		/* Incoming contents or initialization may be needed. */
 	u8 may_write:1;
 	u8 must_write:1;	/* Prior verifier state is destroyed throughout size. */
+	u8 bytes_only:1;	/* The read cannot fill a register with a spilled pointer. */
 };
 
 struct arg_access_info
@@ -2084,6 +2085,7 @@ int bpf_live_stack_query_init(struct bpf_verifier_env *env, struct bpf_verifier_
 const unsigned long *bpf_may_write_mask(struct bpf_verifier_env *env, u32 insn_idx);
 bool bpf_needs_fixed_stack_off(struct bpf_verifier_env *env, int insn_idx);
 bool bpf_stack_slot_alive(struct bpf_verifier_env *env, u32 frameno, u32 spi);
+bool bpf_stack_slot_filled(struct bpf_verifier_env *env, u32 frameno, u32 spi);
 bool bpf_half_slot_live_before(struct bpf_verifier_env *env, u32 insn_idx, u32 half_spi);
 int bpf_compute_live_registers(struct bpf_verifier_env *env);
 

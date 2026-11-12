@@ -108,6 +108,19 @@ static void __clean_func_state(struct bpf_verifier_env *env,
 	for (i = 0; i < bpf_stack_nr_slots(st); i++) {
 		bool lo_live = bpf_stack_slot_alive(env, frame, i * 2);
 		bool hi_live = bpf_stack_slot_alive(env, frame, i * 2 + 1);
+		struct bpf_stack_state *slot = bpf_stack_slot(st, i);
+
+		/*
+		 * Nothing ahead gets the pointer back into a register. What reads the slot sees
+		 * unknown bytes, whatever the pointer is.
+		 */
+		if (env->allow_ptr_leaks && bpf_is_spilled_reg(slot) &&
+		    slot->spilled_ptr.type != SCALAR_VALUE &&
+		    !bpf_stack_slot_filled(env, frame, i * 2) &&
+		    !bpf_stack_slot_filled(env, frame, i * 2 + 1)) {
+			bpf_mark_reg_not_init(env, &slot->spilled_ptr);
+			memset(slot->slot_type, STACK_MISC, sizeof(slot->slot_type));
+		}
 
 		if (!hi_live || !lo_live) {
 			int start = !lo_live ? 0 : BPF_REG_SIZE / 2;
@@ -140,6 +153,7 @@ static void __clean_func_state(struct bpf_verifier_env *env,
 			 * when their high half is dead. Pointer spills need the
 			 * saved spilled_ptr metadata so partial fills keep
 			 * rejecting as non-scalar register fills.
+			 * The code above replaces only pointers that no insn ahead can fill.
 			 */
 			if (!hi_live) {
 				struct bpf_reg_state *spill = &bpf_stack_slot(st, i)->spilled_ptr;
