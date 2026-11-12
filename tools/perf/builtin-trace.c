@@ -4679,7 +4679,8 @@ static int trace__expand_filter(struct trace *trace, struct evsel *evsel)
 
 					if (asprintf(&n, "%.*s%s%s", expansion_offset, new_filter, expansion, right_end) < 0) {
 						pr_debug(" out of memory!\n");
-						free(new_filter);
+						if (new_filter != evsel->filter)
+							free(new_filter);
 						return -1;
 					}
 					if (new_filter != evsel->filter)
