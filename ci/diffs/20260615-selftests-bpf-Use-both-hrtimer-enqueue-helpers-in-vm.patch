@@ -1,0 +1,114 @@
+From 25bb05dd06ccffd209c26465f84851f1fd344c8c Mon Sep 17 00:00:00 2001
+From: Ihor Solodrai <ihor.solodrai@linux.dev>
+Date: Fri, 8 May 2026 17:57:30 -0700
+Subject: [PATCH] selftests/bpf: Use both hrtimer enqueue helpers in vmlinux test
+
+CI backport of bpf-next commit 25bb05dd06cc to fix test_vmlinux on the bpf
+tree. Drop once it propagates from bpf-next.
+
+Signed-off-by: Ihor Solodrai <ihor.solodrai@linux.dev>
+---
+ .../selftests/bpf/prog_tests/vmlinux.c        | 45 ++++++++++++++++++-
+ .../selftests/bpf/progs/test_vmlinux.c        |  4 +-
+ 2 files changed, 45 insertions(+), 4 deletions(-)
+
+diff --git a/tools/testing/selftests/bpf/prog_tests/vmlinux.c b/tools/testing/selftests/bpf/prog_tests/vmlinux.c
+index 6fb2217d940b..b5fdd593910d 100644
+--- a/tools/testing/selftests/bpf/prog_tests/vmlinux.c
++++ b/tools/testing/selftests/bpf/prog_tests/vmlinux.c
+@@ -14,21 +14,61 @@ static void nsleep()
+ 	(void)syscall(__NR_nanosleep, &ts, NULL);
+ }
+
++static const char *hrtimer_func = "hrtimer_start_range_ns";
++
++static int setup_hrtimer_progs(struct test_vmlinux *skel)
++{
++	int err;
++
++	if (libbpf_find_vmlinux_btf_id("hrtimer_start_range_ns_user", BPF_TRACE_FENTRY) > 0)
++		hrtimer_func = "hrtimer_start_range_ns_user";
++
++	err = bpf_program__set_attach_target(skel->progs.handle__fentry, 0, hrtimer_func);
++	if (err)
++		return err;
++
++	/*
++	 * Bare SEC("kprobe") has no target function, so attach it manually
++	 * later after selecting the hrtimer function to probe.
++	 */
++	bpf_program__set_autoattach(skel->progs.handle__kprobe, false);
++
++	return 0;
++}
++
+ void test_vmlinux(void)
+ {
+ 	int err;
+ 	struct test_vmlinux* skel;
+ 	struct test_vmlinux__bss *bss;
++	struct bpf_link *kprobe_link = NULL;
+
+-	skel = test_vmlinux__open_and_load();
+-	if (!ASSERT_OK_PTR(skel, "test_vmlinux__open_and_load"))
++	skel = test_vmlinux__open();
++	if (!ASSERT_OK_PTR(skel, "test_vmlinux__open"))
+ 		return;
++
++	err = setup_hrtimer_progs(skel);
++	if (!ASSERT_OK(err, "setup_hrtimer_progs"))
++		goto cleanup;
++
++	err = test_vmlinux__load(skel);
++	if (!ASSERT_OK(err, "test_vmlinux__load"))
++		goto cleanup;
++
+ 	bss = skel->bss;
+
+ 	err = test_vmlinux__attach(skel);
+ 	if (!ASSERT_OK(err, "test_vmlinux__attach"))
+ 		goto cleanup;
+
++	/* manually attach kprobe with the selected function */
++	if (hrtimer_func) {
++		kprobe_link = bpf_program__attach_kprobe(skel->progs.handle__kprobe,
++							 false /* retprobe */, hrtimer_func);
++		if (!ASSERT_OK_PTR(kprobe_link, "bpf_program__attach_kprobe"))
++			goto cleanup;
++	}
++
+ 	/* trigger everything */
+ 	nsleep();
+
+@@ -39,5 +79,6 @@ void test_vmlinux(void)
+ 	ASSERT_TRUE(bss->fentry_called, "fentry");
+
+ cleanup:
++	bpf_link__destroy(kprobe_link);
+ 	test_vmlinux__destroy(skel);
+ }
+diff --git a/tools/testing/selftests/bpf/progs/test_vmlinux.c b/tools/testing/selftests/bpf/progs/test_vmlinux.c
+index 78b23934d9f8..eea556940df6 100644
+--- a/tools/testing/selftests/bpf/progs/test_vmlinux.c
++++ b/tools/testing/selftests/bpf/progs/test_vmlinux.c
+@@ -69,7 +69,7 @@ int BPF_PROG(handle__tp_btf, struct pt_regs *regs, long id)
+ 	return 0;
+ }
+
+-SEC("kprobe/hrtimer_start_range_ns")
++SEC("kprobe")
+ int BPF_KPROBE(handle__kprobe, struct hrtimer *timer, ktime_t tim, u64 delta_ns,
+ 	       const enum hrtimer_mode mode)
+ {
+@@ -78,7 +78,7 @@ int BPF_KPROBE(handle__kprobe, struct hrtimer *timer, ktime_t tim, u64 delta_ns,
+ 	return 0;
+ }
+
+-SEC("fentry/hrtimer_start_range_ns")
++SEC("fentry")
+ int BPF_PROG(handle__fentry, struct hrtimer *timer, ktime_t tim, u64 delta_ns,
+ 	     const enum hrtimer_mode mode)
+ {
+--
+2.54.0
+
