@@ -775,12 +775,16 @@ void gfs2_add_revoke(struct gfs2_sbd *sdp, struct gfs2_bufdata *bd)
 	list_add(&bd->bd_list, &sdp->sd_log_revokes);
 }
 
-void gfs2_glock_remove_revoke(struct gfs2_glock *gl)
+void gfs2_glock_remove_revoke(struct gfs2_bufdata *bd)
 {
+	struct gfs2_glock *gl = bd->bd_gl;
+
+	list_del_init(&bd->bd_list);
 	if (atomic_dec_and_test(&gl->gl_revokes)) {
 		clear_bit(GLF_LFLUSH, &gl->gl_flags);
 		gfs2_glock_put_async(gl);
 	}
+	kmem_cache_free(gfs2_bufdata_cachep, bd);
 }
 
 /**

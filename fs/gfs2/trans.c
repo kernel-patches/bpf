@@ -335,10 +335,7 @@ void gfs2_trans_remove_revoke(struct gfs2_sbd *sdp, u64 blkno, unsigned int len)
 	spin_lock(&sdp->sd_log_lock);
 	list_for_each_entry_safe(bd, tmp, &sdp->sd_log_revokes, bd_list) {
 		if ((bd->bd_blkno >= blkno) && (bd->bd_blkno < (blkno + len))) {
-			list_del_init(&bd->bd_list);
-			if (bd->bd_gl)
-				gfs2_glock_remove_revoke(bd->bd_gl);
-			kmem_cache_free(gfs2_bufdata_cachep, bd);
+			gfs2_glock_remove_revoke(bd);
 			revokes++;
 			if (revokes == len)
 				break;

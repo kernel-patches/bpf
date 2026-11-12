@@ -886,14 +886,9 @@ static void revoke_lo_before_commit(struct gfs2_sbd *sdp, struct gfs2_trans *tr)
 void gfs2_drain_revokes(struct gfs2_sbd *sdp)
 {
 	struct gfs2_bufdata *bd, *tmp;
-	struct gfs2_glock *gl;
 
-	list_for_each_entry_safe(bd, tmp, &sdp->sd_log_revokes, bd_list) {
-		list_del_init(&bd->bd_list);
-		gl = bd->bd_gl;
-		gfs2_glock_remove_revoke(gl);
-		kmem_cache_free(gfs2_bufdata_cachep, bd);
-	}
+	list_for_each_entry_safe(bd, tmp, &sdp->sd_log_revokes, bd_list)
+		gfs2_glock_remove_revoke(bd);
 }
 
 static void revoke_lo_after_commit(struct gfs2_sbd *sdp, struct gfs2_trans *tr)
