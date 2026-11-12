@@ -5,7 +5,10 @@
 
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/panic.h>
+#include <linux/preempt.h>
 #include <linux/watchdog.h>
+#include <asm/irq_regs.h>
 
 #include "watchdog_pretimeout.h"
 
@@ -17,7 +20,10 @@
  */
 static void pretimeout_panic(struct watchdog_device *wdd)
 {
-	panic("watchdog pretimeout event\n");
+	if (in_nmi())
+		nmi_panic(get_irq_regs(), "watchdog pretimeout event\n");
+	else
+		panic("watchdog pretimeout event\n");
 }
 
 static struct watchdog_governor watchdog_gov_panic = {
