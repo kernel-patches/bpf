@@ -4345,8 +4345,10 @@ static int move_existing_remap(struct btrfs_fs_info *fs_info,
 	}
 
 	ret = copy_remapped_data(fs_info, new_addr, dest_addr, dest_length);
-	if (unlikely(ret))
+	if (unlikely(ret)) {
+		btrfs_release_path(path);
 		goto end;
+	}
 
 	/* Change data of old remap entry. */
 	leaf = path->nodes[0];
