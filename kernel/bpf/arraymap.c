@@ -924,8 +924,10 @@ static void fd_array_map_free(struct bpf_map *map)
 	int i;
 
 	/* make sure it's empty */
-	for (i = 0; i < array->map.max_entries; i++)
+	for (i = 0; i < array->map.max_entries; i++) {
 		BUG_ON(array->ptrs[i] != NULL);
+		cond_resched();
+	}
 
 	bpf_map_area_free(array);
 }
