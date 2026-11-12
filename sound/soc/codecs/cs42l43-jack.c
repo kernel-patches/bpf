@@ -324,6 +324,11 @@ irqreturn_t cs42l43_bias_detect_clamp(int irq, void *data)
 #define CS42L43_JACK_BUTTONS (SND_JACK_BTN_0 | SND_JACK_BTN_1 | SND_JACK_BTN_2 | \
 			      SND_JACK_BTN_3 | SND_JACK_BTN_4 | SND_JACK_BTN_5)
 
+#define CS42L43_TYPE_CTIA 0x0
+#define CS42L43_TYPE_OMTP 0x1
+#define CS42L43_TYPE_3POLE 0x2
+#define CS42L43_TYPE_OPEN 0x3
+
 static inline bool cs42l43_jack_present(struct cs42l43_codec *priv)
 {
 	struct cs42l43 *cs42l43 = priv->core;
@@ -502,9 +507,11 @@ static const struct reg_sequence cs42l43_4pole_patch[] = {
 	{ 0x4000,	0x00000000 },
 };
 
-static void cs42l43_start_load_detect(struct cs42l43_codec *priv, bool mic)
+static void cs42l43_start_load_detect(struct cs42l43_codec *priv, int type)
 {
 	struct cs42l43 *cs42l43 = priv->core;
+	const struct reg_sequence *patch;
+	int size;
 
 	dev_dbg(priv->dev, "Start load detect\n");
 
@@ -526,14 +533,36 @@ static void cs42l43_start_load_detect(struct cs42l43_codec *priv, bool mic)
 			dev_err(priv->dev, "Load detect HP power down timed out\n");
 	}
 
-	if (mic)
-		regmap_multi_reg_write_bypassed(cs42l43->regmap,
-						cs42l43_4pole_patch,
-						ARRAY_SIZE(cs42l43_4pole_patch));
-	else
-		regmap_multi_reg_write_bypassed(cs42l43->regmap,
-						cs42l43_3pole_patch,
-						ARRAY_SIZE(cs42l43_3pole_patch));
+	switch (cs42l43->variant_id) {
+	case CS42L43_DEVID_VAL:
+		switch (type) {
+		case CS42L43_TYPE_3POLE:
+		case CS42L43_TYPE_OPEN:
+			patch = cs42l43_3pole_patch;
+			size = ARRAY_SIZE(cs42l43_3pole_patch);
+			break;
+		default:
+			patch = cs42l43_4pole_patch;
+			size = ARRAY_SIZE(cs42l43_4pole_patch);
+			break;
+		}
+		break;
+	default:
+		patch = cs42l43_4pole_patch;
+		size = ARRAY_SIZE(cs42l43_4pole_patch);
+
+		switch (type) {
+		case CS42L43_TYPE_OMTP:
+			regmap_write(cs42l43->regmap, CS42L43B_LOAD_DET_SEL, 0x89);
+			break;
+		default:
+			regmap_write(cs42l43->regmap, CS42L43B_LOAD_DET_SEL, 0x98);
+			break;
+		}
+		break;
+	}
+
+	regmap_multi_reg_write_bypassed(cs42l43->regmap, patch, size);
 
 	regmap_update_bits(cs42l43->regmap, CS42L43_BLOCK_EN3,
 			   CS42L43_ADC1_EN_MASK | CS42L43_ADC2_EN_MASK, 0);
@@ -586,6 +615,14 @@ static void cs42l43_stop_load_detect(struct cs42l43_codec *priv)
 			   CS42L43_ADC1_EN_MASK | CS42L43_ADC2_EN_MASK,
 			   priv->adc_ena);
 
+	switch (cs42l43->variant_id) {
+	case CS42L43_DEVID_VAL:
+		break;
+	default:
+		regmap_write(cs42l43->regmap, CS42L43B_LOAD_DET_SEL, 0x0);
+		break;
+	}
+
 	if (priv->hp_ena && !priv->hp_ilimited) {
 		unsigned long time_left;
 
@@ -605,7 +642,7 @@ static void cs42l43_stop_load_detect(struct cs42l43_codec *priv)
 	snd_soc_dapm_mutex_unlock(snd_soc_component_to_dapm(priv->component));
 }
 
-static int cs42l43_run_load_detect(struct cs42l43_codec *priv, bool mic)
+static int cs42l43_run_load_detect(struct cs42l43_codec *priv, int type)
 {
 	struct cs42l43 *cs42l43 = priv->core;
 	unsigned int val = 0;
@@ -613,7 +650,7 @@ static int cs42l43_run_load_detect(struct cs42l43_codec *priv, bool mic)
 
 	reinit_completion(&priv->load_detect);
 
-	cs42l43_start_load_detect(priv, mic);
+	cs42l43_start_load_detect(priv, type);
 	time_left = wait_for_completion_timeout(&priv->load_detect,
 						msecs_to_jiffies(CS42L43_LOAD_TIMEOUT_MS));
 	cs42l43_stop_load_detect(priv);
@@ -629,22 +666,24 @@ static int cs42l43_run_load_detect(struct cs42l43_codec *priv, bool mic)
 	if (!cs42l43_jack_present(priv))
 		return -ENODEV;
 
-	if (mic) {
+	switch (type) {
+	case CS42L43_TYPE_3POLE:
+	case CS42L43_TYPE_OPEN:
+		switch (val & CS42L43_AMP3_RES_DET_MASK) {
+		case 0x0: // < 22 Ohm impedance
+		case 0x1: // < 150 Ohm impedance
+		case 0x2: // < 1000 Ohm impedance
+			return CS42L43_JACK_HEADPHONE;
+		case 0x3: // > 1000 Ohm impedance
+			return CS42L43_JACK_LINEOUT;
+		default:
+			return -EINVAL;
+		}
+	default:
 		cs42l43_start_hs_bias(priv, false);
 		cs42l43_start_button_detect(priv);
 
 		return CS42L43_JACK_HEADSET;
-	}
-
-	switch (val & CS42L43_AMP3_RES_DET_MASK) {
-	case 0x0: // < 22 Ohm impedance
-	case 0x1: // < 150 Ohm impedance
-	case 0x2: // < 1000 Ohm impedance
-		return CS42L43_JACK_HEADPHONE;
-	case 0x3: // > 1000 Ohm impedance
-		return CS42L43_JACK_LINEOUT;
-	default:
-		return -EINVAL;
 	}
 }
 
@@ -686,18 +725,12 @@ static int cs42l43_run_type_detect(struct cs42l43_codec *priv)
 	if (!cs42l43_jack_present(priv))
 		return -ENODEV;
 
-	switch (type & CS42L43_HSDET_TYPE_STS_MASK) {
-	case 0x0: // CTIA
-	case 0x1: // OMTP
-	case 0x4:
-		return cs42l43_run_load_detect(priv, true);
-	case 0x2: // 3-pole
-		return cs42l43_run_load_detect(priv, false);
-	case 0x3: // Open-circuit
+	type &= CS42L43_HSDET_TYPE_STS_MASK;
+
+	if (type == CS42L43_TYPE_OPEN)
 		return CS42L43_JACK_EXTENSION;
-	default:
-		return -EINVAL;
-	}
+	else
+		return cs42l43_run_load_detect(priv, type);
 }
 
 void cs42l43_clear_jack(struct cs42l43_codec *priv)
