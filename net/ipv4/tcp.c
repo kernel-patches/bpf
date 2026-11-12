@@ -4496,6 +4496,25 @@ struct sk_buff *tcp_get_timestamping_opt_stats(const struct sock *sk,
 	return stats;
 }
 
+/* Bridge the sockptr_t pair of do_tcp_getsockopt() to a TCP-AO getter. */
+static int tcp_ao_get_sockptr(struct sock *sk,
+			      int (*get)(struct sock *sk, sockopt_t *sopt),
+			      sockptr_t optval, sockptr_t optlen)
+{
+	struct kvec kvec;
+	sockopt_t sopt;
+	int err;
+
+	err = sockptr_to_sockopt(&sopt, optval, optlen, &kvec);
+	if (err)
+		return err;
+
+	err = get(sk, &sopt);
+	if (!err && copy_to_sockptr(optlen, &sopt.optlen, sizeof(int)))
+		err = -EFAULT;
+	return err;
+}
+
 int do_tcp_getsockopt(struct sock *sk, int level,
 		      int optname, sockptr_t optval, sockptr_t optlen)
 {
@@ -4834,16 +4853,19 @@ zerocopy_rcv_out:
 	case TCP_AO_REPAIR:
 		if (!tcp_can_repair_sock(sk))
 			return -EPERM;
-		return tcp_ao_get_repair(sk, optval, optlen);
+		return tcp_ao_get_sockptr(sk, tcp_ao_get_repair,
+					  optval, optlen);
 	case TCP_AO_GET_KEYS:
 	case TCP_AO_INFO: {
 		int err;
 
 		sockopt_lock_sock(sk);
 		if (optname == TCP_AO_GET_KEYS)
-			err = tcp_ao_get_mkts(sk, optval, optlen);
+			err = tcp_ao_get_sockptr(sk, tcp_ao_get_mkts,
+						 optval, optlen);
 		else
-			err = tcp_ao_get_sock_info(sk, optval, optlen);
+			err = tcp_ao_get_sockptr(sk, tcp_ao_get_sock_info,
+						 optval, optlen);
 		sockopt_release_sock(sk);
 
 		return err;
