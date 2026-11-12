@@ -193,4 +193,14 @@ int hci_past_sync(struct hci_conn *conn, struct hci_conn *le);
 int hci_le_read_remote_features(struct hci_conn *conn);
 
 int hci_acl_change_pkt_type(struct hci_conn *conn, u16 pkt_type);
-int hci_le_set_phy(struct hci_conn *conn, u8 tx_phys, u8 rx_phys);
+int hci_le_set_phy(struct hci_conn *conn, u8 tx_phys, u8 rx_phys, u16 phy_opts);
+int hci_le_set_cig_params_sync(struct hci_dev *hdev, u8 cig_id);
+int hci_le_create_big_sync(struct hci_conn *conn, struct bt_iso_qos_ext *qos,
+			   u8 num_bis);
+
+int hci_le_set_hdt_params_sync(struct hci_dev *hdev);
+
+int hci_le_enable_encrypt(struct hci_conn *conn, __le16 ediv, __le64 rand,
+			  __u8 ltk[16], __u8 key_size);
+int hci_le_eks_oppt_encrypt(struct hci_conn *conn);
+int hci_le_set_eks_oppt_sync(struct hci_dev *hdev);

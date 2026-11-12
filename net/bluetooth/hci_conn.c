@@ -604,24 +604,6 @@ void hci_le_conn_update(struct hci_conn *conn, u16 min, u16 max, u16 latency,
 	}
 }
 
-void hci_le_start_enc(struct hci_conn *conn, __le16 ediv, __le64 rand,
-		      __u8 ltk[16], __u8 key_size)
-{
-	struct hci_dev *hdev = conn->hdev;
-	struct hci_cp_le_start_enc cp;
-
-	BT_DBG("hcon %p", conn);
-
-	memset(&cp, 0, sizeof(cp));
-
-	cp.handle = cpu_to_le16(conn->handle);
-	cp.rand = rand;
-	cp.ediv = ediv;
-	memcpy(cp.ltk, ltk, key_size);
-
-	hci_send_cmd(hdev, HCI_OP_LE_START_ENC, sizeof(cp), &cp);
-}
-
 /* Device _must_ be locked */
 void hci_sco_setup(struct hci_conn *conn, __u8 status)
 {
@@ -1126,6 +1108,12 @@ static struct hci_conn *__hci_conn_add(struct hci_dev *hdev, int type,
 			conn->cleanup = cis_cleanup;
 
 		conn->mtu = hdev->iso_mtu;
+
+		/* Set for connections the controller sets up, such as an
+		 * incoming CIS, sockets replace it with their own QoS.
+		 */
+		conn->iso_qos.version = BT_ISO_QOS_VERSION_1;
+		conn->iso_qos.type = BT_ISO_QOS_UCAST;
 		break;
 	case PA_LINK:
 	case BIS_LINK:
@@ -1133,6 +1121,8 @@ static struct hci_conn *__hci_conn_add(struct hci_dev *hdev, int type,
 		hci_copy_identity_address(hdev, &conn->src, &conn->src_type);
 		conn->cleanup = bis_cleanup;
 		conn->mtu = hdev->iso_mtu;
+		conn->iso_qos.version = BT_ISO_QOS_VERSION_1;
+		conn->iso_qos.type = BT_ISO_QOS_BCAST;
 		break;
 	case SCO_LINK:
 		if (lmp_esco_capable(hdev))
@@ -1645,7 +1635,7 @@ static int hci_explicit_conn_params_set(struct hci_dev *hdev,
 	return 0;
 }
 
-static int qos_set_big(struct hci_dev *hdev, struct bt_iso_qos *qos)
+static int qos_set_big(struct hci_dev *hdev, struct bt_iso_qos_ext *qos)
 {
 	struct hci_conn *conn;
 	u8  big;
@@ -1669,7 +1659,7 @@ static int qos_set_big(struct hci_dev *hdev, struct bt_iso_qos *qos)
 	return 0;
 }
 
-static int qos_set_bis(struct hci_dev *hdev, struct bt_iso_qos *qos)
+static int qos_set_bis(struct hci_dev *hdev, struct bt_iso_qos_ext *qos)
 {
 	struct hci_conn *conn;
 	u8  bis;
@@ -1711,7 +1701,7 @@ static int qos_set_bis(struct hci_dev *hdev, struct bt_iso_qos *qos)
 
 /* This function requires the caller holds hdev->lock */
 static struct hci_conn *hci_add_bis(struct hci_dev *hdev, bdaddr_t *dst,
-				    __u8 sid, struct bt_iso_qos *qos,
+				    __u8 sid, struct bt_iso_qos_ext *qos,
 				    __u8 base_len, __u8 *base, u16 timeout)
 {
 	struct hci_conn *conn;
@@ -1946,13 +1936,10 @@ struct hci_conn *hci_connect_sco(struct hci_dev *hdev, int type, bdaddr_t *dst,
 	return sco;
 }
 
-static int hci_le_create_big(struct hci_conn *conn, struct bt_iso_qos *qos)
+static int hci_le_create_big(struct hci_conn *conn, struct bt_iso_qos_ext *qos)
 {
 	struct hci_dev *hdev = conn->hdev;
-	struct hci_cp_le_create_big cp;
 	struct iso_list_data data;
-
-	memset(&cp, 0, sizeof(cp));
 
 	data.big = qos->bcast.big;
 	data.bis = qos->bcast.bis;
@@ -1962,87 +1949,17 @@ static int hci_le_create_big(struct hci_conn *conn, struct bt_iso_qos *qos)
 	hci_conn_hash_list_state(hdev, bis_list, BIS_LINK,
 				 BT_BOUND, &data);
 
-	cp.handle = qos->bcast.big;
-	cp.adv_handle = qos->bcast.bis;
-	cp.num_bis  = data.count;
-	hci_cpu_to_le24(qos->bcast.out.interval, cp.bis.sdu_interval);
-	cp.bis.sdu = cpu_to_le16(qos->bcast.out.sdu);
-	cp.bis.latency =  cpu_to_le16(qos->bcast.out.latency);
-	cp.bis.rtn  = qos->bcast.out.rtn;
-	cp.bis.phy  = qos->bcast.out.phys;
-	cp.bis.packing = qos->bcast.packing;
-	cp.bis.framing = qos->bcast.framing;
-	cp.bis.encryption = qos->bcast.encryption;
-	memcpy(cp.bis.bcode, qos->bcast.bcode, sizeof(cp.bis.bcode));
-
-	return hci_send_cmd(hdev, HCI_OP_LE_CREATE_BIG, sizeof(cp), &cp);
+	return hci_le_create_big_sync(conn, qos, data.count);
 }
 
 static int set_cig_params_sync(struct hci_dev *hdev, void *data)
 {
-	DEFINE_FLEX(struct hci_cp_le_set_cig_params, pdu, cis, num_cis, 0x1f);
 	u8 cig_id = PTR_UINT(data);
-	struct hci_conn *conn;
-	struct bt_iso_qos *qos;
-	u8 aux_num_cis = 0;
-	u8 cis_id;
 
-	hci_dev_lock(hdev);
-
-	conn = hci_conn_hash_lookup_cig(hdev, cig_id);
-	if (!conn) {
-		hci_dev_unlock(hdev);
-		return 0;
-	}
-
-	qos = &conn->iso_qos;
-	pdu->cig_id = cig_id;
-	hci_cpu_to_le24(qos->ucast.out.interval, pdu->c_interval);
-	hci_cpu_to_le24(qos->ucast.in.interval, pdu->p_interval);
-	pdu->sca = qos->ucast.sca;
-	pdu->packing = qos->ucast.packing;
-	pdu->framing = qos->ucast.framing;
-	pdu->c_latency = cpu_to_le16(qos->ucast.out.latency);
-	pdu->p_latency = cpu_to_le16(qos->ucast.in.latency);
-
-	/* Reprogram all CIS(s) with the same CIG, valid range are:
-	 * num_cis: 0x00 to 0x1F
-	 * cis_id: 0x00 to 0xEF
-	 */
-	for (cis_id = 0x00; cis_id < 0xf0 &&
-	     aux_num_cis < pdu->num_cis; cis_id++) {
-		struct hci_cis_params *cis;
-
-		conn = hci_conn_hash_lookup_cis(hdev, NULL, 0, cig_id, cis_id);
-		if (!conn)
-			continue;
-
-		qos = &conn->iso_qos;
-
-		cis = &pdu->cis[aux_num_cis++];
-		cis->cis_id = cis_id;
-		cis->c_sdu  = cpu_to_le16(conn->iso_qos.ucast.out.sdu);
-		cis->p_sdu  = cpu_to_le16(conn->iso_qos.ucast.in.sdu);
-		cis->c_phys = qos->ucast.out.phys ? qos->ucast.out.phys :
-			      qos->ucast.in.phys;
-		cis->p_phys = qos->ucast.in.phys ? qos->ucast.in.phys :
-			      qos->ucast.out.phys;
-		cis->c_rtn  = qos->ucast.out.rtn;
-		cis->p_rtn  = qos->ucast.in.rtn;
-	}
-	pdu->num_cis = aux_num_cis;
-
-	hci_dev_unlock(hdev);
-
-	if (!pdu->num_cis)
-		return 0;
-
-	return __hci_cmd_sync_status(hdev, HCI_OP_LE_SET_CIG_PARAMS,
-				     struct_size(pdu, cis, pdu->num_cis),
-				     pdu, HCI_CMD_TIMEOUT);
+	return hci_le_set_cig_params_sync(hdev, cig_id);
 }
 
-static bool hci_le_set_cig_params(struct hci_conn *conn, struct bt_iso_qos *qos)
+static bool hci_le_set_cig_params(struct hci_conn *conn, struct bt_iso_qos_ext *qos)
 {
 	struct hci_dev *hdev = conn->hdev;
 	struct iso_list_data data;
@@ -2070,6 +1987,20 @@ static bool hci_le_set_cig_params(struct hci_conn *conn, struct bt_iso_qos *qos)
 
 		/* Update CIG */
 		qos->ucast.cig = data.cig;
+	}
+
+	/* LE Set CIG Parameters v2 only fits so many CIS in a CIG */
+	if (le_set_cig_params_v2_capable(hdev)) {
+		data.cig = qos->ucast.cig;
+		data.count = 0;
+		hci_conn_hash_list_state(hdev, find_cis, CIS_LINK, BT_BOUND,
+					 &data);
+		hci_conn_hash_list_state(hdev, find_cis, CIS_LINK, BT_CONNECT,
+					 &data);
+		hci_conn_hash_list_state(hdev, find_cis, CIS_LINK,
+					 BT_CONNECTED, &data);
+		if (data.count >= HCI_LE_CIG_PARAMS_V2_MAX_CIS)
+			return false;
 	}
 
 	if (qos->ucast.cis != BT_ISO_QOS_CIS_UNSET) {
@@ -2104,7 +2035,7 @@ done:
 }
 
 struct hci_conn *hci_bind_cis(struct hci_dev *hdev, bdaddr_t *dst,
-			      __u8 dst_type, struct bt_iso_qos *qos,
+			      __u8 dst_type, struct bt_iso_qos_ext *qos,
 			      u16 timeout)
 {
 	struct hci_conn *cis;
@@ -2247,15 +2178,17 @@ int hci_le_create_cis_pending(struct hci_dev *hdev)
 }
 
 static void hci_iso_qos_setup(struct hci_dev *hdev, struct hci_conn *conn,
-			      struct bt_iso_io_qos *qos, __u8 phys)
+			      struct bt_iso_io_qos_ext *qos, __u8 phys)
 {
 	/* Only set MTU if PHY is enabled */
 	if (!qos->sdu && qos->phys)
 		qos->sdu = conn->mtu;
 
-	/* Use the same PHY as ACL if set to any */
+	/* Use the same PHY as ACL if set to any, which doesn't include HDT,
+	 * so the QoS stays the same as when it was bound.
+	 */
 	if (qos->phys == BT_ISO_PHY_ANY)
-		qos->phys = phys;
+		qos->phys = (phys & BT_ISO_PHY_ANY) ? : BT_ISO_PHY_ANY;
 
 	/* Use LE ACL connection interval if not set */
 	if (!qos->interval)
@@ -2270,7 +2203,7 @@ static void hci_iso_qos_setup(struct hci_dev *hdev, struct hci_conn *conn,
 static int create_big_sync(struct hci_dev *hdev, void *data)
 {
 	struct hci_conn *conn = data;
-	struct bt_iso_qos *qos = &conn->iso_qos;
+	struct bt_iso_qos_ext *qos = &conn->iso_qos;
 	u16 interval, sync_interval = 0;
 	u32 flags = 0;
 	int err;
@@ -2299,7 +2232,7 @@ static int create_big_sync(struct hci_dev *hdev, void *data)
 
 struct hci_conn *hci_pa_create_sync(struct hci_dev *hdev, bdaddr_t *dst,
 				    __u8 dst_type, __u8 sid,
-				    struct bt_iso_qos *qos)
+				    struct bt_iso_qos_ext *qos)
 {
 	struct hci_conn *conn;
 
@@ -2322,7 +2255,7 @@ struct hci_conn *hci_pa_create_sync(struct hci_dev *hdev, bdaddr_t *dst,
 }
 
 int hci_conn_big_create_sync(struct hci_dev *hdev, struct hci_conn *hcon,
-			     struct bt_iso_qos *qos, __u16 sync_handle,
+			     struct bt_iso_qos_ext *qos, __u16 sync_handle,
 			     __u8 num_bis, __u8 bis[])
 {
 	int err;
@@ -2373,7 +2306,7 @@ done:
 }
 
 struct hci_conn *hci_bind_bis(struct hci_dev *hdev, bdaddr_t *dst, __u8 sid,
-			      struct bt_iso_qos *qos,
+			      struct bt_iso_qos_ext *qos,
 			      __u8 base_len, __u8 *base, u16 timeout)
 {
 	struct hci_conn *conn;
@@ -2461,7 +2394,7 @@ static void bis_mark_per_adv(struct hci_conn *conn, void *data)
 
 struct hci_conn *hci_connect_bis(struct hci_dev *hdev, bdaddr_t *dst,
 				 __u8 dst_type, __u8 sid,
-				 struct bt_iso_qos *qos,
+				 struct bt_iso_qos_ext *qos,
 				 __u8 base_len, __u8 *base, u16 timeout)
 {
 	struct hci_conn *conn;
@@ -2512,7 +2445,7 @@ struct hci_conn *hci_connect_bis(struct hci_dev *hdev, bdaddr_t *dst,
 }
 
 struct hci_conn *hci_connect_cis(struct hci_dev *hdev, bdaddr_t *dst,
-				 __u8 dst_type, struct bt_iso_qos *qos,
+				 __u8 dst_type, struct bt_iso_qos_ext *qos,
 				 u16 timeout)
 {
 	struct hci_conn *le;
@@ -3130,6 +3063,78 @@ u32 hci_conn_get_phy(struct hci_conn *conn)
 		if (conn->le_rx_def_phys & HCI_LE_SET_PHY_CODED)
 			phys |= BT_PHY_LE_CODED_RX;
 
+		if (conn->le_tx_def_phys & HCI_LE_SET_PHY_HDT) {
+			/* If le_phy_opts is set, it means user has
+			 * specified specific PHYs to use rather than the
+			 * default ones. PHY_Options is common to both
+			 * directions, so only the rates this direction
+			 * supports are reported.
+			 */
+			if (conn->le_phy_opts) {
+				if (conn->le_phy_opts & BIT(2))
+					phys |= BT_PHY_HDT_2M_TX;
+
+				if (conn->le_phy_opts & BIT(3))
+					phys |= BT_PHY_HDT_3M_TX;
+
+				if (conn->le_phy_opts & BIT(4))
+					phys |= BT_PHY_HDT_4M_TX;
+
+				if (conn->le_phy_opts & BIT(5) &&
+				    hdt_6_tx_capable(conn->hdev))
+					phys |= BT_PHY_HDT_6M_TX;
+
+				if (conn->le_phy_opts & BIT(6) &&
+				    hdt_7_5_tx_capable(conn->hdev))
+					phys |= BT_PHY_HDT_7_5M_TX;
+			} else {
+				phys |= BT_PHY_HDT_2M_TX;
+				phys |= BT_PHY_HDT_3M_TX;
+				phys |= BT_PHY_HDT_4M_TX;
+
+				if (hdt_6_tx_capable(conn->hdev))
+					phys |= BT_PHY_HDT_6M_TX;
+
+				if (hdt_7_5_tx_capable(conn->hdev))
+					phys |= BT_PHY_HDT_7_5M_TX;
+			}
+		}
+
+		if (conn->le_rx_def_phys & HCI_LE_SET_PHY_HDT) {
+			/* If le_phy_opts is set, it means user has
+			 * specified specific PHYs to use rather than the
+			 * default ones.
+			 */
+			if (conn->le_phy_opts) {
+				if (conn->le_phy_opts & BIT(2))
+					phys |= BT_PHY_HDT_2M_RX;
+
+				if (conn->le_phy_opts & BIT(3))
+					phys |= BT_PHY_HDT_3M_RX;
+
+				if (conn->le_phy_opts & BIT(4))
+					phys |= BT_PHY_HDT_4M_RX;
+
+				if (conn->le_phy_opts & BIT(5) &&
+				    hdt_6_rx_capable(conn->hdev))
+					phys |= BT_PHY_HDT_6M_RX;
+
+				if (conn->le_phy_opts & BIT(6) &&
+				    hdt_7_5_rx_capable(conn->hdev))
+					phys |= BT_PHY_HDT_7_5M_RX;
+			} else {
+				phys |= BT_PHY_HDT_2M_RX;
+				phys |= BT_PHY_HDT_3M_RX;
+				phys |= BT_PHY_HDT_4M_RX;
+
+				if (hdt_6_rx_capable(conn->hdev))
+					phys |= BT_PHY_HDT_6M_RX;
+
+				if (hdt_7_5_rx_capable(conn->hdev))
+					phys |= BT_PHY_HDT_7_5M_RX;
+			}
+		}
+
 		break;
 	}
 
@@ -3183,7 +3188,7 @@ static u16 bt_phy_pkt_type(struct hci_conn *conn, u32 phys)
 	return pkt_type;
 }
 
-static int bt_phy_le_phy(u32 phys, u8 *tx_phys, u8 *rx_phys)
+static int bt_phy_le_phy(u32 phys, u8 *tx_phys, u8 *rx_phys, u16 *phy_opts)
 {
 	if (!tx_phys || !rx_phys)
 		return -EINVAL;
@@ -3209,12 +3214,47 @@ static int bt_phy_le_phy(u32 phys, u8 *tx_phys, u8 *rx_phys)
 	if (phys & BT_PHY_LE_CODED_RX)
 		*rx_phys |= HCI_LE_SET_PHY_CODED;
 
+	if (phys & BT_PHY_HDT_2M_TX || phys & BT_PHY_HDT_3M_TX ||
+	    phys & BT_PHY_HDT_4M_TX || phys & BT_PHY_HDT_6M_TX ||
+	    phys & BT_PHY_HDT_7_5M_TX) {
+		*tx_phys |= HCI_LE_SET_PHY_HDT;
+
+		if (phys & BT_PHY_HDT_2M_TX)
+			*phy_opts |= BIT(2);
+		if (phys & BT_PHY_HDT_3M_TX)
+			*phy_opts |= BIT(3);
+		if (phys & BT_PHY_HDT_4M_TX)
+			*phy_opts |= BIT(4);
+		if (phys & BT_PHY_HDT_6M_TX)
+			*phy_opts |= BIT(5);
+		if (phys & BT_PHY_HDT_7_5M_TX)
+			*phy_opts |= BIT(6);
+	}
+
+	if (phys & BT_PHY_HDT_2M_RX || phys & BT_PHY_HDT_3M_RX ||
+	    phys & BT_PHY_HDT_4M_RX || phys & BT_PHY_HDT_6M_RX ||
+	    phys & BT_PHY_HDT_7_5M_RX) {
+		*rx_phys |= HCI_LE_SET_PHY_HDT;
+
+		if (phys & BT_PHY_HDT_2M_RX)
+			*phy_opts |= BIT(2);
+		if (phys & BT_PHY_HDT_3M_RX)
+			*phy_opts |= BIT(3);
+		if (phys & BT_PHY_HDT_4M_RX)
+			*phy_opts |= BIT(4);
+		if (phys & BT_PHY_HDT_6M_RX)
+			*phy_opts |= BIT(5);
+		if (phys & BT_PHY_HDT_7_5M_RX)
+			*phy_opts |= BIT(6);
+	}
+
 	return 0;
 }
 
 int hci_conn_set_phy(struct hci_conn *conn, u32 phys)
 {
 	u8 tx_phys, rx_phys;
+	u16 phy_opts = 0;
 
 	switch (conn->type) {
 	case SCO_LINK:
@@ -3229,13 +3269,30 @@ int hci_conn_set_phy(struct hci_conn *conn, u32 phys)
 					       bt_phy_pkt_type(conn, phys));
 	case LE_LINK:
 		/* Only allow setting LE PHYs if link type is LE */
-		if (phys & ~BT_PHY_LE_MASK)
+		if (phys & ~(BT_PHY_LE_MASK | BT_PHY_HDT_MASK))
 			return -EINVAL;
 
-		if (bt_phy_le_phy(phys, &tx_phys, &rx_phys))
+		/* HDT PHYs can only be selected if the controller supports
+		 * them.
+		 */
+		if (phys & BT_PHY_HDT_MASK && !hdt_capable(conn->hdev))
 			return -EINVAL;
 
-		return hci_le_set_phy(conn, tx_phys, rx_phys);
+		/* HDT6 and HDT7.5 are optional in each direction, see
+		 * hci_hdt_tx_rates().
+		 */
+		if ((phys & BT_PHY_HDT_6M_TX && !hdt_6_tx_capable(conn->hdev)) ||
+		    (phys & BT_PHY_HDT_6M_RX && !hdt_6_rx_capable(conn->hdev)) ||
+		    (phys & BT_PHY_HDT_7_5M_TX &&
+		     !hdt_7_5_tx_capable(conn->hdev)) ||
+		    (phys & BT_PHY_HDT_7_5M_RX &&
+		     !hdt_7_5_rx_capable(conn->hdev)))
+			return -EINVAL;
+
+		if (bt_phy_le_phy(phys, &tx_phys, &rx_phys, &phy_opts))
+			return -EINVAL;
+
+		return hci_le_set_phy(conn, tx_phys, rx_phys, phy_opts);
 	default:
 		return -EINVAL;
 	}

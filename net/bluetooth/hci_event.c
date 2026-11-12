@@ -704,25 +704,14 @@ static u8 hci_cc_read_local_version(struct hci_dev *hdev, void *data,
 	return rp->status;
 }
 
-static u8 hci_cc_read_enc_key_size(struct hci_dev *hdev, void *data,
-				   struct sk_buff *skb)
+/* Complete the encryption change of an ACL link once its encryption key size
+ * is known, either read with HCI_Read_Encryption_Key_Size or reported by
+ * HCI_Encryption_Change [v3].
+ */
+static u8 hci_conn_enc_key_size_set(struct hci_dev *hdev, struct hci_conn *conn,
+				    u8 status, u8 key_size)
 {
-	struct hci_rp_read_enc_key_size *rp = data;
-	struct hci_conn *conn;
-	u16 handle;
-	u8 status = rp->status;
-
-	bt_dev_dbg(hdev, "status 0x%2.2x", status);
-
-	handle = le16_to_cpu(rp->handle);
-
-	hci_dev_lock(hdev);
-
-	conn = hci_conn_hash_lookup_handle(hdev, handle);
-	if (!conn) {
-		status = 0xFF;
-		goto done;
-	}
+	u16 handle = conn->handle;
 
 	clear_bit(HCI_CONN_ENC_KEY_SIZE_PEND, conn->flags);
 
@@ -745,7 +734,7 @@ static u8 hci_cc_read_enc_key_size(struct hci_dev *hdev, void *data,
 	} else {
 		u8 *key_enc_size = hci_conn_key_enc_size(conn);
 
-		conn->enc_key_size = rp->key_size;
+		conn->enc_key_size = key_size;
 		status = 0;
 
 		/* Attempt to check if the key size is too small or if it has
@@ -799,6 +788,31 @@ static u8 hci_cc_read_enc_key_size(struct hci_dev *hdev, void *data,
 	 * reporting is deferred to mgmt_device_connected().
 	 */
 	mgmt_security_level_changed(conn);
+
+	return status;
+}
+
+static u8 hci_cc_read_enc_key_size(struct hci_dev *hdev, void *data,
+				   struct sk_buff *skb)
+{
+	struct hci_rp_read_enc_key_size *rp = data;
+	struct hci_conn *conn;
+	u16 handle;
+	u8 status = rp->status;
+
+	bt_dev_dbg(hdev, "status 0x%2.2x", status);
+
+	handle = le16_to_cpu(rp->handle);
+
+	hci_dev_lock(hdev);
+
+	conn = hci_conn_hash_lookup_handle(hdev, handle);
+	if (!conn) {
+		status = 0xFF;
+		goto done;
+	}
+
+	status = hci_conn_enc_key_size_set(hdev, conn, status, rp->key_size);
 
 done:
 	hci_dev_unlock(hdev);
@@ -2995,6 +3009,7 @@ static void hci_cs_le_set_phy(struct hci_dev *hdev, u8 status)
 	if (conn) {
 		conn->le_tx_def_phys = cp->tx_phys;
 		conn->le_rx_def_phys = cp->rx_phys;
+		conn->le_phy_opts = __le16_to_cpu(cp->phy_opts);
 	}
 
 	hci_dev_unlock(hdev);
@@ -3059,6 +3074,49 @@ static void hci_cs_le_start_enc(struct hci_dev *hdev, u8 status)
 	conn = hci_conn_hash_lookup_handle(hdev, __le16_to_cpu(cp->handle));
 	if (!conn)
 		goto unlock;
+
+	clear_bit(HCI_CONN_ENCRYPT_PEND, conn->flags);
+
+	if (conn->state != BT_CONNECTED)
+		goto unlock;
+
+	hci_disconnect(conn, HCI_ERROR_AUTH_FAILURE);
+	hci_conn_drop(conn);
+
+unlock:
+	hci_dev_unlock(hdev);
+}
+
+static void hci_cs_le_enable_encrypt_v2(struct hci_dev *hdev, u8 status)
+{
+	struct hci_cp_le_enable_encrypt_v2 *cp;
+	struct hci_conn *conn;
+
+	bt_dev_dbg(hdev, "status 0x%2.2x", status);
+
+	if (!status)
+		return;
+
+	hci_dev_lock(hdev);
+
+	cp = hci_sent_cmd_data(hdev, HCI_OP_LE_ENABLE_ENCRYPT_V2);
+	if (!cp)
+		goto unlock;
+
+	conn = hci_conn_hash_lookup_handle(hdev, __le16_to_cpu(cp->handle));
+	if (!conn)
+		goto unlock;
+
+	/* An opportunistic encryption that cannot be started just leaves
+	 * the link unencrypted, as it was.
+	 */
+	if (cp->encryption == 0x01) {
+		if (!test_bit(HCI_CONN_ENCRYPT, conn->flags))
+			clear_bit(HCI_CONN_OPP_ENCRYPT, conn->flags);
+		goto unlock;
+	}
+
+	clear_bit(HCI_CONN_ENCRYPT_PEND, conn->flags);
 
 	if (conn->state != BT_CONNECTED)
 		goto unlock;
@@ -3724,22 +3782,17 @@ unlock:
 	hci_dev_unlock(hdev);
 }
 
-static void hci_encrypt_change_evt(struct hci_dev *hdev, void *data,
-				   struct sk_buff *skb)
+/* key_size is the encryption key size of an ACL link reported by the event,
+ * or 0 if it doesn't report it, in which case it is read. mic_len is the MIC
+ * length reported by the event, 0x00 (32 bits) if it doesn't report it.
+ */
+static void hci_change_encrypt(struct hci_conn *conn, u8 status, u8 encrypt,
+			       u8 key_size, u8 mic_len)
 {
-	struct hci_ev_encrypt_change *ev = data;
-	struct hci_conn *conn;
+	struct hci_dev *hdev = conn->hdev;
 
-	bt_dev_dbg(hdev, "status 0x%2.2x", ev->status);
-
-	hci_dev_lock(hdev);
-
-	conn = hci_conn_hash_lookup_handle(hdev, __le16_to_cpu(ev->handle));
-	if (!conn)
-		goto unlock;
-
-	if (!ev->status) {
-		if (ev->encrypt) {
+	if (!status) {
+		if (encrypt) {
 			/* Encryption implies authentication */
 			set_bit(HCI_CONN_AUTH, conn->flags);
 			set_bit(HCI_CONN_ENCRYPT, conn->flags);
@@ -3749,16 +3802,19 @@ static void hci_encrypt_change_evt(struct hci_dev *hdev, void *data,
 			if (conn->key_type == HCI_LK_AUTH_COMBINATION_P256)
 				set_bit(HCI_CONN_FIPS, conn->flags);
 
-			if ((conn->type == ACL_LINK && ev->encrypt == 0x02) ||
+			if ((conn->type == ACL_LINK && encrypt == 0x02) ||
 			    conn->type == LE_LINK)
 				set_bit(HCI_CONN_AES_CCM, conn->flags);
 
+			/* A 32-bit MIC is reported as 0x00 */
+			conn->mic_len = mic_len;
+
 			/* For ACL links the encryption key size is still
-			 * validated below via hci_read_enc_key_size(). Its
-			 * completion handler, hci_cc_read_enc_key_size(),
-			 * reports the final security level so userspace does
-			 * not see a transient "encrypted" state that a
-			 * key-size downgrade would immediately invalidate.
+			 * validated below by hci_conn_enc_key_size_set(),
+			 * once known. It reports the final security level so
+			 * userspace does not see a transient "encrypted"
+			 * state that a key-size downgrade would immediately
+			 * invalidate.
 			 */
 			if (conn->type != ACL_LINK)
 				mgmt_security_level_changed(conn);
@@ -3780,7 +3836,7 @@ static void hci_encrypt_change_evt(struct hci_dev *hdev, void *data,
 	/* We should disregard the current RPA and generate a new one
 	 * whenever the encryption procedure fails.
 	 */
-	if (ev->status && conn->type == LE_LINK) {
+	if (status && conn->type == LE_LINK) {
 		hci_dev_set_flag(hdev, HCI_RPA_EXPIRED);
 		hci_adv_instances_set_rpa_expired(hdev, true);
 	}
@@ -3789,23 +3845,30 @@ static void hci_encrypt_change_evt(struct hci_dev *hdev, void *data,
 
 	/* Check link security requirements are met */
 	if (!hci_conn_check_link_mode(conn))
-		ev->status = HCI_ERROR_AUTH_FAILURE;
+		status = HCI_ERROR_AUTH_FAILURE;
 
-	if (ev->status && conn->state == BT_CONNECTED) {
-		if (ev->status == HCI_ERROR_PIN_OR_KEY_MISSING)
+	if (status && conn->state == BT_CONNECTED) {
+		if (status == HCI_ERROR_PIN_OR_KEY_MISSING)
 			set_bit(HCI_CONN_AUTH_FAILURE, conn->flags);
 
 		/* Notify upper layers so they can cleanup before
 		 * disconnecting.
 		 */
-		hci_encrypt_cfm(conn, ev->status);
+		hci_encrypt_cfm(conn, status);
 		hci_disconnect(conn, HCI_ERROR_AUTH_FAILURE);
 		hci_conn_drop(conn);
-		goto unlock;
+		return;
 	}
 
-	/* Try reading the encryption key size for encrypted ACL links */
-	if (!ev->status && ev->encrypt && conn->type == ACL_LINK) {
+	/* Validate the encryption key size of encrypted ACL links, reading
+	 * it unless the event reported it.
+	 */
+	if (!status && encrypt && conn->type == ACL_LINK) {
+		if (key_size) {
+			hci_conn_enc_key_size_set(hdev, conn, 0x00, key_size);
+			return;
+		}
+
 		if (hci_read_enc_key_size(hdev, conn)) {
 			/* Could not even issue the key-size read: report the
 			 * security level now since hci_cc_read_enc_key_size()
@@ -3815,7 +3878,7 @@ static void hci_encrypt_change_evt(struct hci_dev *hdev, void *data,
 			goto notify;
 		}
 
-		goto unlock;
+		return;
 	}
 
 	/* We skip the WRITE_AUTH_PAYLOAD_TIMEOUT for ATS2851 based controllers
@@ -3845,7 +3908,134 @@ static void hci_encrypt_change_evt(struct hci_dev *hdev, void *data,
 	}
 
 notify:
-	hci_encrypt_cfm(conn, ev->status);
+	hci_encrypt_cfm(conn, status);
+}
+
+static void hci_encrypt_change_evt(struct hci_dev *hdev, void *data,
+				   struct sk_buff *skb)
+{
+	struct hci_ev_encrypt_change *ev = data;
+	struct hci_conn *conn;
+
+	bt_dev_dbg(hdev, "status 0x%2.2x", ev->status);
+
+	hci_dev_lock(hdev);
+
+	conn = hci_conn_hash_lookup_handle(hdev, __le16_to_cpu(ev->handle));
+	if (!conn)
+		goto unlock;
+
+	/* This version doesn't report the key size, so it is read, nor the
+	 * MIC length.
+	 */
+	hci_change_encrypt(conn, ev->status, ev->encrypt, 0x00, 0x00);
+
+unlock:
+	hci_dev_unlock(hdev);
+}
+
+static void hci_encrypt_change_v3_evt(struct hci_dev *hdev, void *data,
+				      struct sk_buff *skb)
+{
+	struct hci_evt_encrypt_change_v3 *ev = data;
+	struct hci_conn *conn;
+	u8 key_size;
+
+	bt_dev_dbg(hdev, "status 0x%2.2x", ev->status);
+
+	hci_dev_lock(hdev);
+
+	conn = hci_conn_hash_lookup_handle(hdev, __le16_to_cpu(ev->handle));
+	if (!conn)
+		goto unlock;
+
+	/* BLUETOOTH CORE SPECIFICATION Version 7.0 | Vol 4, Part E,
+	 * Section 7.8.24:
+	 *
+	 * When the Encryption_Type parameter is set to 0x01 (use
+	 * opportunistic encryption with Encryption Key Schedule), the
+	 * command shall be only used for unencrypted connections
+	 *
+	 * So on a link with a key from pairing it would be a downgrade.
+	 */
+	if (ev->eks_mode == 0x02 && test_bit(HCI_CONN_ENCRYPT, conn->flags) &&
+	    !test_bit(HCI_CONN_OPP_ENCRYPT, conn->flags)) {
+		bt_dev_err(hdev, "opportunistic encryption of hcon %p", conn);
+		hci_disconnect(conn, HCI_ERROR_AUTH_FAILURE);
+		goto unlock;
+	}
+
+	if (ev->status || !ev->mode) {
+		if (test_and_clear_bit(HCI_CONN_OPP_ENCRYPT, conn->flags)) {
+			/* BLUETOOTH CORE SPECIFICATION Version 7.0 |
+			 * Vol 4, Part E, Section 7.7.8:
+			 *
+			 * When encryption is enabled for LE, the
+			 * Key_Schedule_Enabled parameter indicates whether
+			 * Encryption Key Schedule based encryption is used.
+			 *
+			 * So a failure doesn't report it, and one while
+			 * opportunistic encryption is being started is its
+			 * own: the link is just left unencrypted, as it was.
+			 */
+			if (!test_bit(HCI_CONN_ENCRYPT, conn->flags))
+				goto unlock;
+
+			/* Otherwise the opportunistic encryption is lost */
+			clear_bit(HCI_CONN_ENCRYPT, conn->flags);
+			clear_bit(HCI_CONN_AES_CCM, conn->flags);
+		}
+
+		/* Nothing to validate, so no key size */
+		hci_change_encrypt(conn, ev->status, ev->mode, 0x00,
+				   ev->mic_len);
+		goto unlock;
+	}
+
+	/* Opportunistic encryption (eks_mode 0x02), started by this side or
+	 * by the remote, encrypts the link without a key from pairing: it is
+	 * marked with HCI_CONN_OPP_ENCRYPT and has no key size.
+	 *
+	 * BLUETOOTH CORE SPECIFICATION Version 7.0 | Vol 3, Part C,
+	 * Section 10.3.3:
+	 *
+	 * If opportunistic encryption is used to encrypt the link and
+	 * encryption is required, then the service request shall be
+	 * rejected with the error code "Insufficient Encryption".
+	 *
+	 * So it doesn't change the security level, which stays as if the
+	 * link were unencrypted.
+	 */
+	if (ev->eks_mode == 0x02) {
+		set_bit(HCI_CONN_OPP_ENCRYPT, conn->flags);
+		set_bit(HCI_CONN_ENCRYPT, conn->flags);
+		set_bit(HCI_CONN_AES_CCM, conn->flags);
+		conn->mic_len = ev->mic_len;
+		goto unlock;
+	}
+
+	/* Encryption with a key from pairing replaces the opportunistic one */
+	clear_bit(HCI_CONN_OPP_ENCRYPT, conn->flags);
+
+	/* BLUETOOTH CORE SPECIFICATION Version 7.0 | Vol 4, Part E,
+	 * Section 7.7.8:
+	 *
+	 * Encryption_Key_Size: Encryption key size in octets.
+	 * This parameter shall be ignored for LE connections and shall be
+	 * ignored when Link Level Encryption is OFF.
+	 * Range: 0x07 to 0x10
+	 *
+	 * So only a BR/EDR link with encryption on has it, which saves
+	 * reading it. It is still validated against the minimum and the
+	 * size stored with the link key, and a value out of range is read
+	 * instead.
+	 */
+	key_size = 0x00;
+	if (conn->type == ACL_LINK && !ev->status && ev->mode &&
+	    ev->key_size >= 0x07 && ev->key_size <= 0x10)
+		key_size = ev->key_size;
+
+	hci_change_encrypt(conn, ev->status, ev->mode, key_size, ev->mic_len);
 
 unlock:
 	hci_dev_unlock(hdev);
@@ -3942,6 +4132,35 @@ static inline void handle_cmd_cnt_and_timer(struct hci_dev *hdev, u8 ncmd)
 	rcu_read_unlock();
 }
 
+static u8 hci_cc_le_read_def_data_len_v2(struct hci_dev *hdev, void *data,
+					 struct sk_buff *skb)
+{
+	struct hci_rp_le_read_def_data_len_v2 *rp = data;
+	struct hci_cp_le_read_def_data_len_v2 *cp;
+
+	bt_dev_dbg(hdev, "status 0x%2.2x", rp->status);
+
+	if (rp->status)
+		return rp->status;
+
+	cp = hci_sent_cmd_data(hdev, HCI_OP_LE_READ_DEF_DATA_LEN_V2);
+	if (!cp)
+		return rp->status;
+
+	switch (cp->phys) {
+	case 0x00: /* All GFSK PHYs */
+		hdev->le_def_tx_len = le16_to_cpu(rp->tx_len);
+		hdev->le_def_tx_time = le16_to_cpu(rp->tx_time);
+		break;
+	case 0x01: /* HDT PHY */
+		hdev->hdt_def_tx_len = le16_to_cpu(rp->tx_len);
+		hdev->hdt_def_tx_time = le16_to_cpu(rp->tx_time);
+		break;
+	}
+
+	return rp->status;
+}
+
 static u8 hci_cc_le_read_buffer_size_v2(struct hci_dev *hdev, void *data,
 					struct sk_buff *skb)
 {
@@ -3965,6 +4184,78 @@ static u8 hci_cc_le_read_buffer_size_v2(struct hci_dev *hdev, void *data,
 
 	if (hdev->le_mtu && hdev->le_mtu < HCI_MIN_LE_MTU)
 		return HCI_ERROR_INVALID_PARAMETERS;
+
+	return rp->status;
+}
+
+static u8 hci_cc_le_read_max_data_len_v2(struct hci_dev *hdev, void *data,
+					 struct sk_buff *skb)
+{
+	struct hci_rp_le_read_max_data_len_v2 *rp = data;
+	struct hci_cp_le_read_max_data_len_v2 *cp;
+
+	bt_dev_dbg(hdev, "status 0x%2.2x", rp->status);
+
+	if (rp->status)
+		return rp->status;
+
+	cp = hci_sent_cmd_data(hdev, HCI_OP_LE_READ_MAX_DATA_LEN_V2);
+	if (!cp)
+		return rp->status;
+
+	switch (cp->phy) {
+	case 0x00:
+	case 0x01:
+	case 0x02:
+	case 0x03:
+		hdev->le_max_tx_len = le16_to_cpu(rp->tx_len);
+		hdev->le_max_tx_time = le16_to_cpu(rp->tx_time);
+		hdev->le_max_rx_len = le16_to_cpu(rp->rx_len);
+		hdev->le_max_rx_time = le16_to_cpu(rp->rx_time);
+		break;
+	case 0x05:
+		hdev->hdt_max_tx_len = le16_to_cpu(rp->tx_len);
+		hdev->hdt_max_tx_time = le16_to_cpu(rp->tx_time);
+		hdev->hdt_max_rx_len = le16_to_cpu(rp->rx_len);
+		hdev->hdt_max_rx_time = le16_to_cpu(rp->rx_time);
+		hdev->hdt_max_tx_win = rp->tx_win;
+		hdev->hdt_max_rx_win = rp->rx_win;
+		hdev->hdt_max_rx_packet = le16_to_cpu(rp->rx_packet);
+		break;
+	}
+
+	return rp->status;
+}
+
+static u8 hci_cc_le_write_def_data_len_v2(struct hci_dev *hdev, void *data,
+					  struct sk_buff *skb)
+{
+	struct hci_cp_le_write_def_data_len_v2 *sent;
+	struct hci_ev_status *rp = data;
+
+	bt_dev_dbg(hdev, "status 0x%2.2x", rp->status);
+
+	if (rp->status)
+		return rp->status;
+
+	sent = hci_sent_cmd_data(hdev, HCI_OP_LE_WRITE_DEF_DATA_LEN_V2);
+	if (!sent)
+		return rp->status;
+
+	hci_dev_lock(hdev);
+
+	switch (sent->phys) {
+	case 0x00:
+		hdev->le_def_tx_len = le16_to_cpu(sent->tx_len);
+		hdev->le_def_tx_time = le16_to_cpu(sent->tx_time);
+		break;
+	case 0x01:
+		hdev->hdt_def_tx_len = le16_to_cpu(sent->tx_len);
+		hdev->hdt_def_tx_time = le16_to_cpu(sent->tx_time);
+		break;
+	}
+
+	hci_dev_unlock(hdev);
 
 	return rp->status;
 }
@@ -4119,6 +4410,81 @@ static u8 hci_cc_le_read_all_local_features(struct hci_dev *hdev, void *data,
 	memcpy(hdev->le_features, rp->features, 248);
 
 	return rp->status;
+}
+
+static u8 hci_cc_le_set_cig_params_v2(struct hci_dev *hdev, void *data,
+				      struct sk_buff *skb)
+{
+	struct hci_rp_le_set_cig_params_v2 *rp = data;
+	struct hci_cp_le_set_cig_params_v2 *cp;
+	struct hci_conn *conn;
+	u8 status = rp->status;
+	bool pending = false;
+	size_t len;
+	int i;
+
+	bt_dev_dbg(hdev, "status 0x%2.2x", rp->status);
+
+	cp = hci_sent_cmd_data_len(hdev, HCI_OP_LE_SET_CIG_PARAMS_V2, &len);
+	if (!rp->status &&
+	    (!cp || len < sizeof(*cp) ||
+	     len < struct_size(cp, cis, cp->num_cis) ||
+	     rp->num_handles != cp->num_cis ||
+	     rp->cig_id != cp->cig_id ||
+	     skb->len < array_size(rp->num_handles, sizeof(*rp->handle)))) {
+		bt_dev_err(hdev,
+			   "unexpected Set CIG Parameters v2 response data");
+		status = HCI_ERROR_UNSPECIFIED;
+	}
+
+	hci_dev_lock(hdev);
+
+	/* BLUETOOTH CORE SPECIFICATION Version 5.4 | Vol 4, Part E page 2554
+	 *
+	 * If the Status return parameter is non-zero, then the state of the CIG
+	 * and its CIS configurations shall not be changed by the command. If
+	 * the CIG did not already exist, it shall not be created.
+	 */
+	if (status) {
+		/* Keep current configuration, fail only the unbound CIS of the
+		 * CIG the command was sent for.
+		 */
+		hci_unbound_cis_failed(hdev, cp && len >= sizeof(*cp) ?
+				       cp->cig_id : rp->cig_id, status);
+		goto unlock;
+	}
+
+	/* BLUETOOTH CORE SPECIFICATION Version 5.3 | Vol 4, Part E page 2553
+	 *
+	 * If the Status return parameter is zero, then the Controller shall
+	 * set the Connection_Handle arrayed return parameter to the connection
+	 * handle(s) corresponding to the CIS configurations specified in
+	 * the CIS_IDs command parameter, in the same order.
+	 */
+	for (i = 0; i < rp->num_handles; ++i) {
+		conn = hci_conn_hash_lookup_cis(hdev, NULL, 0, rp->cig_id,
+						cp->cis[i].cis_id);
+		if (!conn || !bacmp(&conn->dst, BDADDR_ANY))
+			continue;
+
+		if (conn->state != BT_BOUND && conn->state != BT_CONNECT)
+			continue;
+
+		if (hci_conn_set_handle(conn, __le16_to_cpu(rp->handle[i])))
+			continue;
+
+		if (conn->state == BT_CONNECT)
+			pending = true;
+	}
+
+unlock:
+	if (pending)
+		hci_le_create_cis_pending(hdev);
+
+	hci_dev_unlock(hdev);
+
+	/* A response that doesn't match the command fails it */
+	return status;
 }
 
 static void hci_cs_le_create_big(struct hci_dev *hdev, u8 status)
@@ -4409,8 +4775,14 @@ static const struct hci_cc {
 	HCI_CC(HCI_OP_LE_READ_TRANSMIT_POWER, hci_cc_le_read_transmit_power,
 	       sizeof(struct hci_rp_le_read_transmit_power)),
 	HCI_CC_STATUS(HCI_OP_LE_SET_PRIVACY_MODE, hci_cc_le_set_privacy_mode),
+	HCI_CC(HCI_OP_LE_READ_DEF_DATA_LEN_V2, hci_cc_le_read_def_data_len_v2,
+	       sizeof(struct hci_rp_le_read_def_data_len_v2)),
 	HCI_CC(HCI_OP_LE_READ_BUFFER_SIZE_V2, hci_cc_le_read_buffer_size_v2,
 	       sizeof(struct hci_rp_le_read_buffer_size_v2)),
+	HCI_CC(HCI_OP_LE_READ_MAX_DATA_LEN_V2, hci_cc_le_read_max_data_len_v2,
+	       sizeof(struct hci_rp_le_read_max_data_len_v2)),
+	HCI_CC_STATUS(HCI_OP_LE_WRITE_DEF_DATA_LEN_V2,
+		      hci_cc_le_write_def_data_len_v2),
 	HCI_CC_VL(HCI_OP_LE_SET_CIG_PARAMS, hci_cc_le_set_cig_params,
 		  sizeof(struct hci_rp_le_set_cig_params), HCI_MAX_CC_PLEN),
 	HCI_CC(HCI_OP_LE_SETUP_ISO_PATH, hci_cc_le_setup_iso_path,
@@ -4418,6 +4790,9 @@ static const struct hci_cc {
 	HCI_CC(HCI_OP_LE_READ_ALL_LOCAL_FEATURES,
 	       hci_cc_le_read_all_local_features,
 	       sizeof(struct hci_rp_le_read_all_local_features)),
+	HCI_CC_VL(HCI_OP_LE_SET_CIG_PARAMS_V2, hci_cc_le_set_cig_params_v2,
+		  sizeof(struct hci_rp_le_set_cig_params_v2),
+		  HCI_MAX_CC_PLEN),
 };
 
 static u8 hci_cc_func(struct hci_dev *hdev, const struct hci_cc *cc,
@@ -4574,6 +4949,7 @@ static const struct hci_cs {
 	HCI_CS(HCI_OP_LE_CREATE_CONN, hci_cs_le_create_conn),
 	HCI_CS(HCI_OP_LE_READ_REMOTE_FEATURES, hci_cs_le_read_remote_features),
 	HCI_CS(HCI_OP_LE_START_ENC, hci_cs_le_start_enc),
+	HCI_CS(HCI_OP_LE_ENABLE_ENCRYPT_V2, hci_cs_le_enable_encrypt_v2),
 	HCI_CS(HCI_OP_LE_SET_PHY, hci_cs_le_set_phy),
 	HCI_CS(HCI_OP_LE_EXT_CREATE_CONN, hci_cs_le_ext_create_conn),
 	HCI_CS(HCI_OP_LE_CREATE_CIS, hci_cs_le_create_cis),
@@ -5369,6 +5745,46 @@ static void hci_extended_inquiry_result_evt(struct hci_dev *hdev, void *edata,
 	hci_dev_unlock(hdev);
 }
 
+static void hci_conn_refresh_key(struct hci_conn *conn, u8 status)
+{
+	/* For BR/EDR the necessary steps are taken through the
+	 * auth_complete event.
+	 */
+	if (conn->type != LE_LINK)
+		return;
+
+	if (!status) {
+		bool sec_level_changed =
+				conn->sec_level != conn->pending_sec_level;
+
+		conn->sec_level = conn->pending_sec_level;
+		if (sec_level_changed)
+			mgmt_security_level_changed(conn);
+	}
+
+	clear_bit(HCI_CONN_ENCRYPT_PEND, conn->flags);
+
+	if (status && conn->state == BT_CONNECTED) {
+		hci_disconnect(conn, HCI_ERROR_AUTH_FAILURE);
+		hci_conn_drop(conn);
+		return;
+	}
+
+	if (conn->state == BT_CONFIG) {
+		if (!status)
+			conn->state = BT_CONNECTED;
+
+		hci_connect_cfm(conn, status);
+		hci_conn_drop(conn);
+	} else {
+		hci_auth_cfm(conn, status);
+
+		hci_conn_hold(conn);
+		conn->disc_timeout = HCI_DISCONN_TIMEOUT;
+		hci_conn_drop(conn);
+	}
+}
+
 static void hci_key_refresh_complete_evt(struct hci_dev *hdev, void *data,
 					 struct sk_buff *skb)
 {
@@ -5384,42 +5800,77 @@ static void hci_key_refresh_complete_evt(struct hci_dev *hdev, void *data,
 	if (!conn)
 		goto unlock;
 
-	/* For BR/EDR the necessary steps are taken through the
-	 * auth_complete event.
+	hci_conn_refresh_key(conn, ev->status);
+
+unlock:
+	hci_dev_unlock(hdev);
+}
+
+static void hci_key_refresh_complete_v2_evt(struct hci_dev *hdev, void *data,
+					    struct sk_buff *skb)
+{
+	struct hci_evt_key_refresh_complete_v2 *ev = data;
+	struct hci_conn *conn;
+
+	bt_dev_dbg(hdev, "status 0x%2.2x handle 0x%4.4x", ev->status,
+		   __le16_to_cpu(ev->handle));
+
+	hci_dev_lock(hdev);
+
+	conn = hci_conn_hash_lookup_handle(hdev, __le16_to_cpu(ev->handle));
+	if (!conn)
+		goto unlock;
+
+	/* BLUETOOTH CORE SPECIFICATION Version 7.0 | Vol 4, Part E,
+	 * Section 7.8.24:
+	 *
+	 * When the Encryption_Type parameter is set to 0x01 (use
+	 * opportunistic encryption with Encryption Key Schedule), the
+	 * command shall be only used for unencrypted connections
+	 * ...
+	 * The MIC length to be used for LE HDT PHY may be overridden by a
+	 * later HCI_Refresh_Encryption_Key command on the same connection.
+	 *
+	 * So a refresh reporting it, such as one changing the MIC length,
+	 * keeps the link opportunistically encrypted, and on a link with a
+	 * key from pairing it would be a downgrade.
 	 */
-	if (conn->type != LE_LINK)
-		goto unlock;
-
-	if (!ev->status) {
-		bool sec_level_changed =
-				conn->sec_level != conn->pending_sec_level;
-
-		conn->sec_level = conn->pending_sec_level;
-		if (sec_level_changed)
-			mgmt_security_level_changed(conn);
-	}
-
-	clear_bit(HCI_CONN_ENCRYPT_PEND, conn->flags);
-
-	if (ev->status && conn->state == BT_CONNECTED) {
+	if (ev->eks_mode == 0x02 &&
+	    !test_bit(HCI_CONN_OPP_ENCRYPT, conn->flags)) {
+		bt_dev_err(hdev, "opportunistic key refresh of hcon %p", conn);
 		hci_disconnect(conn, HCI_ERROR_AUTH_FAILURE);
-		hci_conn_drop(conn);
 		goto unlock;
 	}
 
-	if (conn->state == BT_CONFIG) {
-		if (!ev->status)
-			conn->state = BT_CONNECTED;
-
-		hci_connect_cfm(conn, ev->status);
-		hci_conn_drop(conn);
-	} else {
-		hci_auth_cfm(conn, ev->status);
-
-		hci_conn_hold(conn);
-		conn->disc_timeout = HCI_DISCONN_TIMEOUT;
-		hci_conn_drop(conn);
+	/* A failure is handled below like any other */
+	if (ev->eks_mode == 0x02 && !ev->status) {
+		conn->mic_len = ev->mic_len;
+		goto unlock;
 	}
+
+	/* The key from pairing replacing the opportunistic one encrypts the
+	 * link as Encryption Change does for an unencrypted link.
+	 */
+	if (test_and_clear_bit(HCI_CONN_OPP_ENCRYPT, conn->flags)) {
+		/* On failure the link is disconnected, so don't report it
+		 * as still encrypted with the opportunistic key meanwhile.
+		 */
+		if (ev->status) {
+			clear_bit(HCI_CONN_ENCRYPT, conn->flags);
+			clear_bit(HCI_CONN_AES_CCM, conn->flags);
+		}
+
+		/* LE, so no key size */
+		hci_change_encrypt(conn, ev->status, ev->status ? 0x00 : 0x01,
+				   0x00, ev->mic_len);
+		goto unlock;
+	}
+
+	/* The key refresh may change the MIC length */
+	if (!ev->status)
+		conn->mic_len = ev->mic_len;
+
+	hci_conn_refresh_key(conn, ev->status);
 
 unlock:
 	hci_dev_unlock(hdev);
@@ -5902,6 +6353,26 @@ static void le_conn_update_addr(struct hci_conn *conn, bdaddr_t *bdaddr,
 	}
 }
 
+/* Keep the connection rate parameters, which the Connection Subrate event
+ * reports, in sync with the connection parameters and send the event. LE
+ * Connection Complete and LE Connection Update Complete don't report
+ * subrating, so keep the subrate factor and continuation number of the last
+ * connection rate change, if any.
+ */
+static void le_conn_update_rate(struct hci_dev *hdev, struct hci_conn *conn)
+{
+	/* The connection interval is in units of 1.25 ms and the connection
+	 * rate interval in units of 0.125 ms.
+	 */
+	conn->le_rate_interval = conn->le_conn_interval * 10;
+	conn->le_rate_latency = conn->le_conn_latency;
+	conn->le_rate_supv_timeout = conn->le_supv_timeout;
+	if (!conn->le_subrate)
+		conn->le_subrate = 1;
+
+	mgmt_conn_subrate_notify(hdev, conn, 0x00);
+}
+
 static void le_conn_complete_evt(struct hci_dev *hdev, u8 status,
 				 bdaddr_t *bdaddr, u8 bdaddr_type,
 				 bdaddr_t *local_rpa, u8 role, u16 handle,
@@ -6048,6 +6519,7 @@ static void le_conn_complete_evt(struct hci_dev *hdev, u8 status,
 	conn->le_conn_interval = interval;
 	conn->le_conn_latency = latency;
 	conn->le_supv_timeout = supervision_timeout;
+	le_conn_update_rate(hdev, conn);
 
 	hci_debugfs_create_conn(conn);
 	hci_conn_add_sysfs(conn);
@@ -6332,6 +6804,7 @@ static void hci_le_conn_update_complete_evt(struct hci_dev *hdev, void *data,
 		conn->le_conn_interval = le16_to_cpu(ev->interval);
 		conn->le_conn_latency = le16_to_cpu(ev->latency);
 		conn->le_supv_timeout = le16_to_cpu(ev->supervision_timeout);
+		le_conn_update_rate(hdev, conn);
 	}
 
 	hci_dev_unlock(hdev);
@@ -6679,6 +7152,17 @@ static void hci_le_adv_report_evt(struct hci_dev *hdev, void *data,
 
 		hci_store_wake_reason(hdev, &info->bdaddr, info->bdaddr_type);
 
+		/* Broadcom ROM firmware (BCM4364B3 on Apple T2 Macs, no
+		 * patchram) sets vendor bits in the legacy Event_Type.
+		 */
+		if (hdev->manufacturer == 15 && info->type > LE_ADV_SCAN_RSP) {
+			/* 0x0f masks out upper vendor bits (0x10, 0x20, 0x80),
+			 * extracting the standard legacy advertising type
+			 * (0x00-0x04) stored in the low nibble (bits 0-3).
+			 */
+			info->type &= 0x0f;
+		}
+
 		if (info->length <= max_adv_len(hdev)) {
 			rssi = info->data[info->length];
 			process_adv_report(hdev, info->type, &info->bdaddr,
@@ -6932,6 +7416,12 @@ static void hci_le_remote_feat_complete_evt(struct hci_dev *hdev, void *data,
 				conn->le_tx_def_phys &= ~HCI_LE_SET_PHY_CODED;
 				conn->le_rx_def_phys &= ~HCI_LE_SET_PHY_CODED;
 			}
+
+			/* HDT is a feature of page 1, which this event doesn't
+			 * report, so it can't be assumed.
+			 */
+			conn->le_tx_def_phys &= ~HCI_LE_SET_PHY_HDT;
+			conn->le_rx_def_phys &= ~HCI_LE_SET_PHY_HDT;
 		}
 
 		if (conn->state == BT_CONFIG) {
@@ -7172,6 +7662,8 @@ static u8 le_phy_qos(u8 phy)
 		return HCI_LE_SET_PHY_2M;
 	case 0x03:
 		return HCI_LE_SET_PHY_CODED;
+	case 0x05:
+		return HCI_LE_SET_PHY_HDT;
 	}
 
 	return 0;
@@ -7182,7 +7674,7 @@ static void hci_le_cis_established_evt(struct hci_dev *hdev, void *data,
 {
 	struct hci_evt_le_cis_established *ev = data;
 	struct hci_conn *conn;
-	struct bt_iso_qos *qos;
+	struct bt_iso_qos_ext *qos;
 	bool pending = false;
 	u16 handle = __le16_to_cpu(ev->handle);
 	u32 c_sdu_interval, p_sdu_interval;
@@ -7207,6 +7699,10 @@ static void hci_le_cis_established_evt(struct hci_dev *hdev, void *data,
 	}
 
 	qos = &conn->iso_qos;
+
+	/* This version of the event doesn't report the HDT rates */
+	qos->ucast.in.rates = 0x0000;
+	qos->ucast.out.rates = 0x0000;
 
 	pending = test_and_clear_bit(HCI_CONN_CREATE_CIS, conn->flags);
 
@@ -7355,56 +7851,51 @@ static int hci_iso_term_big_sync(struct hci_dev *hdev, void *data)
 					 HCI_ERROR_LOCAL_HOST_TERM);
 }
 
-static void hci_le_create_big_complete_evt(struct hci_dev *hdev, void *data,
-					   struct sk_buff *skb)
+static void hci_le_create_big_complete(struct hci_dev *hdev, u8 status,
+				       u8 handle, u8 num_bis,
+				       const __le16 *bis_handle, u16 rates)
 {
-	struct hci_evt_le_create_big_complete *ev = data;
 	struct hci_conn *conn;
 	__u8 i = 0;
-
-	BT_DBG("%s status 0x%2.2x", hdev->name, ev->status);
-
-	if (!hci_le_ev_skb_pull(hdev, skb, HCI_EVT_LE_CREATE_BIG_COMPLETE,
-				flex_array_size(ev, bis_handle, ev->num_bis)))
-		return;
 
 	hci_dev_lock(hdev);
 
 	/* Connect all BISes that are bound to the BIG */
-	while ((conn = hci_conn_hash_lookup_big_state(hdev, ev->handle,
+	while ((conn = hci_conn_hash_lookup_big_state(hdev, handle,
 						      BT_BOUND,
 						      HCI_ROLE_MASTER))) {
-		if (ev->status) {
-			hci_connect_cfm(conn, ev->status);
+		if (status) {
+			hci_connect_cfm(conn, status);
 			hci_conn_del(conn);
 			continue;
 		}
 
-		if (ev->num_bis <= i) {
+		if (num_bis <= i) {
 			bt_dev_err(hdev,
 				   "Not enough BIS handles for BIG 0x%2.2x",
-				   ev->handle);
-			ev->status = HCI_ERROR_UNSPECIFIED;
-			hci_connect_cfm(conn, ev->status);
+				   handle);
+			status = HCI_ERROR_UNSPECIFIED;
+			hci_connect_cfm(conn, status);
 			hci_conn_del(conn);
 			continue;
 		}
 
 		if (hci_conn_set_handle(conn,
-					__le16_to_cpu(ev->bis_handle[i++]))) {
+					__le16_to_cpu(bis_handle[i++]))) {
 			bt_dev_err(hdev,
 				   "Failed to set BIS handle for BIG 0x%2.2x",
-				   ev->handle);
+				   handle);
 			/* Force error so BIG gets terminated as not all BIS
 			 * could be connected.
 			 */
-			ev->status = HCI_ERROR_UNSPECIFIED;
-			hci_connect_cfm(conn, ev->status);
+			status = HCI_ERROR_UNSPECIFIED;
+			hci_connect_cfm(conn, status);
 			hci_conn_del(conn);
 			continue;
 		}
 
 		conn->state = BT_CONNECTED;
+		conn->iso_qos.bcast.out.rates = rates;
 		set_bit(HCI_CONN_BIG_CREATED, conn->flags);
 		hci_debugfs_create_conn(conn);
 		hci_conn_add_sysfs(conn);
@@ -7414,16 +7905,31 @@ static void hci_le_create_big_complete_evt(struct hci_dev *hdev, void *data,
 	/* If there is an unexpected error or if no BISes have been connected
 	 * for the BIG, terminate it.
 	 */
-	if (ev->status == HCI_ERROR_UNSPECIFIED || (!ev->status && !i))
+	if (status == HCI_ERROR_UNSPECIFIED || (!status && !i))
 		/* If no BISes have been connected for the BIG,
 		 * terminate. This is in case all bound connections
 		 * have been closed before the BIG creation
 		 * has completed.
 		 */
 		hci_cmd_sync_queue(hdev, hci_iso_term_big_sync,
-				   UINT_PTR(ev->handle), NULL);
+				   UINT_PTR(handle), NULL);
 
 	hci_dev_unlock(hdev);
+}
+
+static void hci_le_create_big_complete_evt(struct hci_dev *hdev, void *data,
+					   struct sk_buff *skb)
+{
+	struct hci_evt_le_create_big_complete *ev = data;
+
+	BT_DBG("%s status 0x%2.2x", hdev->name, ev->status);
+
+	if (!hci_le_ev_skb_pull(hdev, skb, HCI_EVT_LE_CREATE_BIG_COMPLETE,
+				flex_array_size(ev, bis_handle, ev->num_bis)))
+		return;
+
+	hci_le_create_big_complete(hdev, ev->status, ev->handle, ev->num_bis,
+				   ev->bis_handle, 0x0000);
 }
 
 static void hci_le_big_sync_established_evt(struct hci_dev *hdev, void *data,
@@ -7610,6 +8116,13 @@ static void hci_le_read_all_remote_features_evt(struct hci_dev *hdev,
 			conn->le_tx_def_phys &= ~HCI_LE_SET_PHY_CODED;
 			conn->le_rx_def_phys &= ~HCI_LE_SET_PHY_CODED;
 		}
+
+		if (!hdt_capable(conn)) {
+			conn->le_tx_def_phys &= ~HCI_LE_SET_PHY_HDT;
+			conn->le_rx_def_phys &= ~HCI_LE_SET_PHY_HDT;
+		}
+
+		hci_le_eks_oppt_encrypt(conn);
 	}
 
 	if (conn->state == BT_CONFIG) {
@@ -7667,6 +8180,114 @@ static void hci_le_conn_rate_change_evt(struct hci_dev *hdev, void *data,
 	}
 
 	hci_dev_unlock(hdev);
+}
+
+static void hci_le_cis_established_evt_v3(struct hci_dev *hdev, void *data,
+					  struct sk_buff *skb)
+{
+	struct hci_evt_le_cis_established_v3 *ev = data;
+	struct hci_conn *conn;
+	struct bt_iso_qos_ext *qos;
+	bool pending = false;
+	u16 handle = __le16_to_cpu(ev->handle);
+	u32 c_sdu_interval, p_sdu_interval;
+
+	bt_dev_dbg(hdev, "status 0x%2.2x", ev->status);
+
+	hci_dev_lock(hdev);
+
+	conn = hci_conn_hash_lookup_handle(hdev, handle);
+	if (!conn) {
+		bt_dev_err(hdev,
+			   "Unable to find connection with handle 0x%4.4x",
+			   handle);
+		goto unlock;
+	}
+
+	if (conn->type != CIS_LINK) {
+		bt_dev_err(hdev,
+			   "Invalid connection link type handle 0x%4.4x",
+			   handle);
+		goto unlock;
+	}
+
+	qos = &conn->iso_qos;
+
+	pending = test_and_clear_bit(HCI_CONN_CREATE_CIS, conn->flags);
+
+	c_sdu_interval = get_unaligned_le24(ev->c_sdu_interval);
+	p_sdu_interval = get_unaligned_le24(ev->p_sdu_interval);
+
+	switch (conn->role) {
+	case HCI_ROLE_SLAVE:
+		qos->ucast.in.interval = c_sdu_interval;
+		qos->ucast.out.interval = p_sdu_interval;
+		/* Convert Transport Latency (us) to Latency (msec) */
+		qos->ucast.in.latency =
+			DIV_ROUND_CLOSEST(get_unaligned_le24(ev->c_latency),
+					  1000);
+		qos->ucast.out.latency =
+			DIV_ROUND_CLOSEST(get_unaligned_le24(ev->p_latency),
+					  1000);
+		qos->ucast.in.sdu = ev->c_bn ? le16_to_cpu(ev->c_sdu) : 0;
+		qos->ucast.out.sdu = ev->p_bn ? le16_to_cpu(ev->p_sdu) : 0;
+		qos->ucast.in.phys = le_phy_qos(ev->c_phy);
+		qos->ucast.out.phys = le_phy_qos(ev->p_phy);
+		qos->ucast.in.rates = le16_to_cpu(ev->c_rates);
+		qos->ucast.out.rates = le16_to_cpu(ev->p_rates);
+		break;
+	case HCI_ROLE_MASTER:
+		qos->ucast.in.interval = p_sdu_interval;
+		qos->ucast.out.interval = c_sdu_interval;
+		/* Convert Transport Latency (us) to Latency (msec) */
+		qos->ucast.out.latency =
+			DIV_ROUND_CLOSEST(get_unaligned_le24(ev->c_latency),
+					  1000);
+		qos->ucast.in.latency =
+			DIV_ROUND_CLOSEST(get_unaligned_le24(ev->p_latency),
+					  1000);
+		qos->ucast.out.sdu = ev->c_bn ? le16_to_cpu(ev->c_sdu) : 0;
+		qos->ucast.in.sdu = ev->p_bn ? le16_to_cpu(ev->p_sdu) : 0;
+		qos->ucast.out.phys = le_phy_qos(ev->c_phy);
+		qos->ucast.in.phys = le_phy_qos(ev->p_phy);
+		qos->ucast.out.rates = le16_to_cpu(ev->c_rates);
+		qos->ucast.in.rates = le16_to_cpu(ev->p_rates);
+		break;
+	}
+
+	if (!ev->status) {
+		conn->state = BT_CONNECTED;
+		hci_debugfs_create_conn(conn);
+		hci_conn_add_sysfs(conn);
+		hci_iso_setup_path(conn);
+		goto unlock;
+	}
+
+	conn->state = BT_CLOSED;
+	hci_connect_cfm(conn, ev->status);
+	hci_conn_del(conn);
+
+unlock:
+	if (pending)
+		hci_le_create_cis_pending(hdev);
+
+	hci_dev_unlock(hdev);
+}
+
+static void hci_le_create_big_complete_v2_evt(struct hci_dev *hdev, void *data,
+					      struct sk_buff *skb)
+{
+	struct hci_evt_le_create_big_complete_v2 *ev = data;
+
+	BT_DBG("%s status 0x%2.2x", hdev->name, ev->status);
+
+	if (!hci_le_ev_skb_pull(hdev, skb, HCI_EVT_LE_CREATE_BIG_COMPLETE_V2,
+				flex_array_size(ev, bis_handle, ev->num_bis)))
+		return;
+
+	hci_le_create_big_complete(hdev, ev->status, ev->handle, ev->num_bis,
+				   ev->bis_handle,
+				   le16_to_cpu(ev->rates));
 }
 
 #define HCI_LE_EV_VL(_op, _func, _min_len, _max_len) \
@@ -7786,6 +8407,14 @@ static const struct hci_le_ev {
 	/* [0x37 = HCI_EVT_LE_CONN_RATE_CHANGE] */
 	HCI_LE_EV(HCI_EVT_LE_CONN_RATE_CHANGE, hci_le_conn_rate_change_evt,
 		  sizeof(struct hci_evt_le_conn_rate_change)),
+	/* [0x3a = HCI_EVT_LE_CIS_ESTABLISHED_V3] */
+	HCI_LE_EV(HCI_EVT_LE_CIS_ESTABLISHED_V3, hci_le_cis_established_evt_v3,
+		  sizeof(struct hci_evt_le_cis_established_v3)),
+	/* [0x3b = HCI_EVT_LE_CREATE_BIG_COMPLETE_V2] */
+	HCI_LE_EV_VL(HCI_EVT_LE_CREATE_BIG_COMPLETE_V2,
+		     hci_le_create_big_complete_v2_evt,
+		     sizeof(struct hci_evt_le_create_big_complete_v2),
+		     HCI_MAX_LE_SUBEVT_PLEN),
 };
 
 static void hci_le_meta_evt(struct hci_dev *hdev, void *data,
@@ -8066,6 +8695,12 @@ static const struct hci_ev {
 	/* [0x3e = HCI_EV_LE_META] */
 	HCI_EV_REQ_VL(HCI_EV_LE_META, hci_le_meta_evt,
 		      sizeof(struct hci_ev_le_meta), HCI_MAX_EVENT_PLEN),
+	/* [0x5a = HCI_EVT_ENCRYPT_CHANGE_V3] */
+	HCI_EV(HCI_EVT_ENCRYPT_CHANGE_V3, hci_encrypt_change_v3_evt,
+	       sizeof(struct hci_evt_encrypt_change_v3)),
+	/* [0x5b = HCI_EVT_KEY_REFRESH_COMPLETE_V2] */
+	HCI_EV(HCI_EVT_KEY_REFRESH_COMPLETE_V2, hci_key_refresh_complete_v2_evt,
+	       sizeof(struct hci_evt_key_refresh_complete_v2)),
 	/* [0xff = HCI_EV_VENDOR] */
 	HCI_EV_VL(HCI_EV_VENDOR, hci_vendor_evt, 0, HCI_MAX_EVENT_PLEN),
 };
