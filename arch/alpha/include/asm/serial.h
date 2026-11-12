@@ -1,7 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-/*
- * include/asm-alpha/serial.h
- */
+#ifndef _ASM_ALPHA_SERIAL_H
+#define _ASM_ALPHA_SERIAL_H
 
 #include <asm-generic/serial.h>
 
@@ -20,3 +19,5 @@
 	{ 0, BASE_BAUD, 0x2F8, 3, STD_COM_FLAGS },	/* ttyS1 */	\
 	{ 0, BASE_BAUD, 0x3E8, 4, STD_COM_FLAGS },	/* ttyS2 */	\
 	{ 0, BASE_BAUD, 0x2E8, 3, STD_COM4_FLAGS },	/* ttyS3 */
+
+#endif /* _ASM_ALPHA_SERIAL_H */
