@@ -185,7 +185,7 @@ int snd_sof_bytes_ext_volatile_get(struct snd_kcontrol *kcontrol, unsigned int _
 	struct snd_soc_component *scomp = scontrol->scomp;
 	struct snd_sof_dev *sdev = snd_soc_component_get_drvdata(scomp);
 	const struct sof_ipc_tplg_ops *tplg_ops = sof_ipc_get_ops(sdev, tplg);
-	int ret, err;
+	int ret;
 
 	/* ignore the ext_volatile_get call if the callbacks are not provided */
 	if (!tplg_ops || !tplg_ops->control ||
@@ -205,9 +205,7 @@ int snd_sof_bytes_ext_volatile_get(struct snd_kcontrol *kcontrol, unsigned int _
 								binary_data,
 								size);
 
-	err = pm_runtime_put_autosuspend(scomp->dev);
-	if (err < 0)
-		dev_err_ratelimited(scomp->dev, "%s: failed to idle %d\n", __func__, err);
+	pm_runtime_put_autosuspend(scomp->dev);
 
 	return ret;
 }
