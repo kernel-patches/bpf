@@ -18,6 +18,8 @@
 
 #include <crypto/aead.h>
 
+#include <trace/events/skb.h>
+
 #include "xfrm_inout.h"
 #include "trace_iptfs.h"
 
@@ -281,6 +283,7 @@ static struct sk_buff *iptfs_alloc_skb(struct sk_buff *tpl, u32 len, bool l3resv
 		/* xfrm_input resume needs dev and xfrm ext from tunnel pkt */
 		skb->dev = tpl->dev;
 		__skb_ext_copy(skb, tpl);
+		trace_skb_copy(skb, tpl);
 	}
 
 	/* dropped by xfrm_input, used by xfrm_output */

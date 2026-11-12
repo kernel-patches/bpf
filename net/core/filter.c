@@ -12568,10 +12568,13 @@ __bpf_kfunc int bpf_dynptr_from_skb(struct __sk_buff *s, u64 flags,
  * @skb_: socket buffer to tag
  * @flags__k: future use, must be zero
  *
- * Tag the skb as traced so that the gated skb_free tracepoint fires for it
- * when the skb is freed or stolen. Programs can use this to reap per-packet
- * metadata kept in a BPF map keyed by the skb address. skb_free carries the
- * drop reason, mirroring kfree_skb.
+ * Tag the skb as traced so that the gated tracepoints fire for it: skb_free
+ * when the skb is freed or stolen, and skb_copy when a copy or clone of the skb
+ * is created. Programs can use this to drive the life-cycle of per-packet
+ * metadata kept in a BPF map keyed by the skb address - reaping the entry on
+ * skb_free and propagating it on skb_copy. skb_free carries the drop reason,
+ * mirroring kfree_skb. The tracepoint program decides whether the copy is also
+ * traced; the tag is not inherited.
  *
  * Return:
  * * %0         - skb tagged or already tagged

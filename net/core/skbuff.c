@@ -1601,6 +1601,7 @@ static void __copy_skb_header(struct sk_buff *new, const struct sk_buff *old)
 
 	/* The headers memcpy carried the flag over; the copy is not traced. */
 	new->traced = 0;
+	trace_skb_copy(new, old);
 }
 
 /*
@@ -1613,7 +1614,6 @@ static struct sk_buff *__skb_clone(struct sk_buff *n, struct sk_buff *skb)
 
 	n->next = n->prev = NULL;
 	n->sk = NULL;
-	__copy_skb_header(n, skb);
 
 	C(len);
 	C(data_len);
@@ -1635,6 +1635,7 @@ static struct sk_buff *__skb_clone(struct sk_buff *n, struct sk_buff *skb)
 	refcount_set(&n->users, 1);
 
 	atomic_inc(&(skb_shinfo(skb)->dataref));
+	__copy_skb_header(n, skb);
 	skb->cloned = 1;
 
 	return n;

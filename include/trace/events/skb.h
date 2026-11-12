@@ -133,6 +133,27 @@ TRACE_EVENT_CONDITION(skb_free,
 #undef FN
 #undef FNe
 
+TRACE_EVENT_CONDITION(skb_copy,
+
+	TP_PROTO(struct sk_buff *dst, const struct sk_buff *src),
+
+	TP_ARGS(dst, src),
+
+	TP_CONDITION(src->traced && !dst->traced),
+
+	TP_STRUCT__entry(
+		__field(	void *,		dst)
+		__field(	const void *,	src)
+	),
+
+	TP_fast_assign(
+		__entry->dst = dst;
+		__entry->src = src;
+	),
+
+	TP_printk("dst=%p src=%p", __entry->dst, __entry->src)
+);
+
 #define trace_consume_skb(skb, location)			 \
 	do {							 \
 		struct sk_buff *__skb = (skb);			 \

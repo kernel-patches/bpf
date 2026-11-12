@@ -86,6 +86,8 @@
 #include <linux/tcp.h>
 #include <net/psp.h>
 
+#include <trace/events/skb.h>
+
 static int
 ip_fragment(struct net *net, struct sock *sk, struct sk_buff *skb,
 	    unsigned int mtu,
@@ -566,6 +568,7 @@ static void ip_copy_metadata(struct sk_buff *to, struct sk_buff *from)
 #endif
 	nf_copy(to, from);
 	skb_ext_copy(to, from);
+	trace_skb_copy(to, from);
 #if IS_ENABLED(CONFIG_IP_VS)
 	to->ipvs_property = from->ipvs_property;
 #endif
