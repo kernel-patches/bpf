@@ -581,9 +581,7 @@ static struct db_dest *au1000_GetFreeDB(struct au1000_private *aup)
 
 static void au1000_ReleaseDB(struct au1000_private *aup, struct db_dest *pDB)
 {
-	struct db_dest *pDBfree = aup->pDBfree;
-	if (pDBfree)
-		pDBfree->pnext = pDB;
+	pDB->pnext = aup->pDBfree;
 	aup->pDBfree = pDB;
 }
 
