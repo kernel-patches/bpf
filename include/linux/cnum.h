@@ -33,6 +33,7 @@ struct cnum32 {
 #define CNUM32_UNBOUNDED ((struct cnum32){ .base = 0, .size = U32_MAX })
 #define CNUM32_EMPTY ((struct cnum32){ .base = U32_MAX, .size = U32_MAX })
 
+struct cnum32 cnum32_const(u32 v);
 struct cnum32 cnum32_from_urange(u32 min, u32 max);
 struct cnum32 cnum32_from_srange(s32 min, s32 max);
 u32 cnum32_umin(struct cnum32 cnum);
@@ -49,6 +50,7 @@ bool cnum32_is_const(struct cnum32 cnum);
 bool cnum32_is_empty(struct cnum32 cnum);
 struct cnum32 cnum32_add(struct cnum32 a, struct cnum32 b);
 struct cnum32 cnum32_negate(struct cnum32 a);
+struct cnum32 cnum32_sub(struct cnum32 a, struct cnum32 b);
 bool cnum32_is_subset(struct cnum32 outer, struct cnum32 inner);
 
 /* Same as cnum32 but for 64-bit ranges */
@@ -60,6 +62,7 @@ struct cnum64 {
 #define CNUM64_UNBOUNDED ((struct cnum64){ .base = 0, .size = U64_MAX })
 #define CNUM64_EMPTY ((struct cnum64){ .base = U64_MAX, .size = U64_MAX })
 
+struct cnum64 cnum64_const(u64 v);
 struct cnum64 cnum64_from_urange(u64 min, u64 max);
 struct cnum64 cnum64_from_srange(s64 min, s64 max);
 u64 cnum64_umin(struct cnum64 cnum);
@@ -76,9 +79,14 @@ bool cnum64_is_const(struct cnum64 cnum);
 bool cnum64_is_empty(struct cnum64 cnum);
 struct cnum64 cnum64_add(struct cnum64 a, struct cnum64 b);
 struct cnum64 cnum64_negate(struct cnum64 a);
+struct cnum64 cnum64_sub(struct cnum64 a, struct cnum64 b);
 bool cnum64_is_subset(struct cnum64 outer, struct cnum64 inner);
 
 struct cnum32 cnum32_from_cnum64(struct cnum64 cnum);
+struct cnum64 cnum64_zext32(struct cnum32 cnum);
+struct cnum64 cnum64_sext32(struct cnum32 cnum);
+struct cnum64 cnum64_lshift32(struct cnum32 cnum);
+struct cnum32 cnum32_rshift32(struct cnum64 cnum);
 struct cnum64 cnum64_cnum32_intersect(struct cnum64 a, struct cnum32 b);
 struct cnum64 cnum64_intersect_linear(struct cnum64 in, u16 base, u16 step);
 

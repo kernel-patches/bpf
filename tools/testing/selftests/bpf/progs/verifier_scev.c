@@ -8,6 +8,7 @@
 #include "../../../include/linux/filter.h"
 #include "bpf_misc.h"
 #include "bpf_kfuncs.h"
+#include "bpf_compiler.h"
 
 #define COND_TEST(name, _initial, _step, _bound, msg, body)                     \
 SEC("xdp")                                                                      \
@@ -134,7 +135,7 @@ exit_%=:						\
 SEC("xdp")
 __success
 __log_level(2)
-__msg("8: (7b) *(u64 *)(r1 +0) = r0     ; *fp-8 (+ *fp-8 1) -> ?")
+__msg("8: (7b) *(u64 *)(r1 +0) = r0     ; *fp-8 (+ *fp-8 1) -> %fp-8.8?")
 __naked void indirect_write_invalidates_scev(void)
 {
 	asm volatile ("					\
@@ -164,7 +165,7 @@ __noinline int global_noop_counter(__u64 *p)
 SEC("xdp")
 __success
 __log_level(2)
-__msg("8: (85) call pc+{{[0-9]+}} {{.*}}; *fp-8 (+ *fp-8 1) -> ?")
+__msg("8: (85) call pc+{{[0-9]+}} {{.*}}; *fp-8 (+ *fp-8 1) -> %fp-8.8?")
 __naked void global_call_invalidates_scev(void)
 {
 	asm volatile (
@@ -238,10 +239,10 @@ __naked void meet_agrees(void)
 }
 
 SEC("xdp")
-__failure
+__success __retval(0)
 __log_level(2)
 __msg_next("scev at header 1:")
-__msg_next("  r6=(any r6 (+ r6 1)) / ?")
+__msg_next("  r6=%r6.1=phi(r6, (+ r6 1)) / ?")
 __naked void meet_disagrees(void)
 {
 	asm volatile ("					\
@@ -257,6 +258,37 @@ __naked void meet_disagrees(void)
 	exit;						\
 "	:
 	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/* 'if (c) sum += a; else sum += b;': two loads, one way to compute the sum */
+SEC("socket")
+__success
+__log_level(2)
+__msg("scev at header 3:")
+__msg_next("  r6=%r6.9=phi((+ r6 _)) / ?")
+__naked void phi_operands_have_no_defs(void)
+{
+	asm volatile ("					\
+	r9 = r1;					\
+	r6 = 0;						\
+	r7 = 0;						\
+1:							\
+	if r7 & 1 goto 2f;				\
+	r2 = *(u32 *)(r9 + %[len]);			\
+	r6 += r2;					\
+	goto 3f;					\
+2:							\
+	r2 = *(u32 *)(r9 + %[mark]);			\
+	r6 += r2;					\
+3:							\
+	r7 += 1;					\
+	if r7 < 10 goto 1b;				\
+	r0 = r6;					\
+	exit;						\
+"	:
+	: __imm_const(len, offsetof(struct __sk_buff, len)),
+	  __imm_const(mark, offsetof(struct __sk_buff, mark))
 	: __clobber_all);
 }
 
@@ -298,8 +330,8 @@ __naked void expr_chain(void)
 1:							\
 	if r6 == 2 goto 2f;				\
 	r6 += 1;					\
-	r6 <<= 32;					\
-	r6 >>= 32;					\
+	r6 <<= 16;					\
+	r6 >>= 16;					\
 	w6 += 1;					\
 	r6 = -r6;					\
 	w6 = -w6;					\
@@ -323,30 +355,31 @@ __msg("r1 += 2 {{.*}}; r1 r6 -> (+ r6 2)")
 __msg("r1 += r7 {{.*}}; r1 r6 -> (+ r6 r7)")
 __msg("w1 += 2 {{.*}}; r1 r6 -> (zext32 (+ r6 2))")
 __msg("w1 += w7 {{.*}}; r1 r6 -> (zext32 (+ r6 r7))")
-__msg("r1 -= 2 {{.*}}; r1 r6 -> (- r6 2)")
+__msg("r1 -= 2 {{.*}}; r1 r6 -> (+ r6 -2)")
 __msg("r1 -= r7 {{.*}}; r1 r6 -> (- r6 r7)")
-__msg("w1 -= 2 {{.*}}; r1 r6 -> (zext32 (- r6 2))")
+__msg("w1 -= 2 {{.*}}; r1 r6 -> (zext32 (+ r6 -2))")
 __msg("w1 -= w7 {{.*}}; r1 r6 -> (zext32 (- r6 r7))")
+__msg("r1 -= 2 {{.*}}; r1 (+ r6 2) -> r6")
 __msg("r1 *= 2 {{.*}}; r1 r6 -> (* r6 2)")
 __msg("r1 *= r7 {{.*}}; r1 r6 -> (* r6 r7)")
 __msg("w1 *= 2 {{.*}}; r1 r6 -> (zext32 (* r6 2))")
 __msg("w1 *= w7 {{.*}}; r1 r6 -> (zext32 (* r6 r7))")
 __msg("r1 /= 2 {{.*}}; r1 r6 -> (/ r6 2)")
 __msg("r1 /= r7 {{.*}}; r1 r6 -> (/ r6 r7)")
-__msg("w1 /= 2 {{.*}}; r1 r6 -> (zext32 (/ r6 2))")
-__msg("w1 /= w7 {{.*}}; r1 r6 -> (zext32 (/ r6 r7))")
+__msg("w1 /= 2 {{.*}}; r1 r6 -> (zext32 (/ (zext32 r6) 2))")
+__msg("w1 /= w7 {{.*}}; r1 r6 -> (zext32 (/ (zext32 r6) (zext32 r7)))")
 __msg("r1 s/= 2 {{.*}}; r1 r6 -> (s/ r6 2)")
 __msg("r1 s/= r7 {{.*}}; r1 r6 -> (s/ r6 r7)")
-__msg("w1 s/= 2 {{.*}}; r1 r6 -> (zext32 (s/ r6 2))")
-__msg("w1 s/= w7 {{.*}}; r1 r6 -> (zext32 (s/ r6 r7))")
+__msg("w1 s/= 2 {{.*}}; r1 r6 -> (zext32 (s/ (sext32 r6) 2))")
+__msg("w1 s/= w7 {{.*}}; r1 r6 -> (zext32 (s/ (sext32 r6) (sext32 r7)))")
 __msg("r1 %= 2 {{.*}}; r1 r6 -> (% r6 2)")
 __msg("r1 %= r7 {{.*}}; r1 r6 -> (% r6 r7)")
-__msg("w1 %= 2 {{.*}}; r1 r6 -> (zext32 (% r6 2))")
-__msg("w1 %= w7 {{.*}}; r1 r6 -> (zext32 (% r6 r7))")
+__msg("w1 %= 2 {{.*}}; r1 r6 -> (zext32 (% (zext32 r6) 2))")
+__msg("w1 %= w7 {{.*}}; r1 r6 -> (zext32 (% (zext32 r6) (zext32 r7)))")
 __msg("r1 s%= 2 {{.*}}; r1 r6 -> (s% r6 2)")
 __msg("r1 s%= r7 {{.*}}; r1 r6 -> (s% r6 r7)")
-__msg("w1 s%= 2 {{.*}}; r1 r6 -> (zext32 (s% r6 2))")
-__msg("w1 s%= w7 {{.*}}; r1 r6 -> (zext32 (s% r6 r7))")
+__msg("w1 s%= 2 {{.*}}; r1 r6 -> (zext32 (s% (sext32 r6) 2))")
+__msg("w1 s%= w7 {{.*}}; r1 r6 -> (zext32 (s% (sext32 r6) (sext32 r7)))")
 __msg("r1 |= 2 {{.*}}; r1 r6 -> (| r6 2)")
 __msg("r1 |= r7 {{.*}}; r1 r6 -> (| r6 r7)")
 __msg("w1 |= 2 {{.*}}; r1 r6 -> (zext32 (| r6 2))")
@@ -362,19 +395,19 @@ __msg("w1 ^= w7 {{.*}}; r1 r6 -> (zext32 (^ r6 r7))")
 __msg("r1 <<= 2 {{.*}}; r1 r6 -> (<< r6 2)")
 __msg("r1 <<= r7 {{.*}}; r1 r6 -> (<< r6 r7)")
 __msg("w1 <<= 2 {{.*}}; r1 r6 -> (zext32 (<< r6 2))")
-__msg("w1 <<= w7 {{.*}}; r1 r6 -> (zext32 (<< r6 r7))")
+__msg("w1 <<= w7 {{.*}}; r1 r6 -> (zext32 (<< r6 (& r7 31)))")
 __msg("r1 >>= 2 {{.*}}; r1 r6 -> (>> r6 2)")
 __msg("r1 >>= r7 {{.*}}; r1 r6 -> (>> r6 r7)")
-__msg("w1 >>= 2 {{.*}}; r1 r6 -> (zext32 (>> r6 2))")
-__msg("w1 >>= w7 {{.*}}; r1 r6 -> (zext32 (>> r6 r7))")
+__msg("w1 >>= 2 {{.*}}; r1 r6 -> (zext32 (>> (zext32 r6) 2))")
+__msg("w1 >>= w7 {{.*}}; r1 r6 -> (zext32 (>> (zext32 r6) (& r7 31)))")
 __msg("r1 s>>= 2 {{.*}}; r1 r6 -> (s>> r6 2)")
 __msg("r1 s>>= r7 {{.*}}; r1 r6 -> (s>> r6 r7)")
-__msg("w1 s>>= 2 {{.*}}; r1 r6 -> (zext32 (s>> r6 2))")
-__msg("w1 s>>= w7 {{.*}}; r1 r6 -> (zext32 (s>> r6 r7))")
+__msg("w1 s>>= 2 {{.*}}; r1 r6 -> (zext32 (s>> (sext32 r6) 2))")
+__msg("w1 s>>= w7 {{.*}}; r1 r6 -> (zext32 (s>> (sext32 r6) (& r7 31)))")
 __msg("r1 = -r1 {{.*}}; r1 r6 -> (- r6)")
 __msg("w1 = -w1 {{.*}}; r1 r6 -> (zext32 (- r6))")
 __msg("r1 = 42 {{.*}}; r1 r6 -> 42")
-__msg("w1 = 42 {{.*}}; r1 r6 -> (zext32 42)")
+__msg("w1 = 42 {{.*}}; r1 r6 -> 42")
 __msg("r1 = r7 {{.*}}; r1 r6 -> r7")
 __msg("w1 = w7 {{.*}}; r1 r6 -> (zext32 r7)")
 __msg("r1 = (s8)r6 {{.*}}; r1 r6 -> (sext8 r6)")
@@ -416,6 +449,7 @@ __naked void alu_ops_exprs(void)
 	ALU_OP("r1 -= r7")
 	ALU_OP("w1 -= 2")
 	ALU_OP("w1 -= w7")
+	ALU_OP("r1 += 2; r1 -= 2")
 	ALU_OP("r1 *= 2")
 	ALU_OP("r1 *= r7")
 	ALU_OP("w1 *= 2")
@@ -510,7 +544,7 @@ __msg("*(u16 *)(r10 -8) = r1 {{.*}}; *fp-8 -8 -> (spill16 1)")
 __msg("*(u8 *)(r10 -8) = r1 {{.*}}; *fp-8 -8 -> (spill8 1)")
 __msg("r1 = *(u64 *)(r10 -8) {{.*}}; r1 1 -> -8")
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-__msg("r1 = *(u32 *)(r10 -8) {{.*}}; r1 1 -> (zext32 -8)")
+__msg("r1 = *(u32 *)(r10 -8) {{.*}}; r1 1 -> 4294967288")
 __msg("r1 = *(u16 *)(r10 -8) {{.*}}; r1 1 -> (zext16 -8)")
 __msg("r1 = *(u8 *)(r10 -8) {{.*}}; r1 1 -> (zext8 -8)")
 __msg("r1 = *(s32 *)(r10 -8) {{.*}}; r1 1 -> (sext32 -8)")
@@ -518,30 +552,35 @@ __msg("r1 = *(s16 *)(r10 -8) {{.*}}; r1 1 -> (sext16 -8)")
 __msg("r1 = *(s8 *)(r10 -8) {{.*}}; r1 1 -> (sext8 -8)")
 __msg("r1 = load_acquire((u8 *)(r10 -8)) {{.*}}; r1 1 -> (zext8 -8)")
 __msg("r1 = load_acquire((u16 *)(r10 -8)) {{.*}}; r1 1 -> (zext16 -8)")
-__msg("r1 = load_acquire((u32 *)(r10 -8)) {{.*}}; r1 1 -> (zext32 -8)")
+__msg("r1 = load_acquire((u32 *)(r10 -8)) {{.*}}; r1 1 -> 4294967288")
 #else
-__msg("r1 = *(u32 *)(r10 -8) {{.*}}; r1 1 -> _")
-__msg("r1 = *(u16 *)(r10 -8) {{.*}}; r1 1 -> _")
-__msg("r1 = *(u8 *)(r10 -8) {{.*}}; r1 1 -> _")
-__msg("r1 = *(s32 *)(r10 -8) {{.*}}; r1 1 -> _")
-__msg("r1 = *(s16 *)(r10 -8) {{.*}}; r1 1 -> _")
-__msg("r1 = *(s8 *)(r10 -8) {{.*}}; r1 1 -> _")
-__msg("r1 = load_acquire((u8 *)(r10 -8)) {{.*}}; r1 1 -> _")
-__msg("r1 = load_acquire((u16 *)(r10 -8)) {{.*}}; r1 1 -> _")
-__msg("r1 = load_acquire((u32 *)(r10 -8)) {{.*}}; r1 1 -> _")
+__msg("r1 = *(u32 *)(r10 -8) {{.*}}; r1 1 -> (>> -8 32)")
+__msg("r1 = *(u16 *)(r10 -8) {{.*}}; r1 1 -> (>> -8 48)")
+__msg("r1 = *(u8 *)(r10 -8) {{.*}}; r1 1 -> (>> -8 56)")
+__msg("r1 = *(s32 *)(r10 -8) {{.*}}; r1 1 -> (s>> -8 32)")
+__msg("r1 = *(s16 *)(r10 -8) {{.*}}; r1 1 -> (s>> -8 48)")
+__msg("r1 = *(s8 *)(r10 -8) {{.*}}; r1 1 -> (s>> -8 56)")
+__msg("r1 = load_acquire((u8 *)(r10 -8)) {{.*}}; r1 1 -> (>> -8 56)")
+__msg("r1 = load_acquire((u16 *)(r10 -8)) {{.*}}; r1 1 -> (>> -8 48)")
+__msg("r1 = load_acquire((u32 *)(r10 -8)) {{.*}}; r1 1 -> (>> -8 32)")
 #endif
 __msg("r2 = load_acquire((u64 *)(r10 -8)) {{.*}}; r2 2 -> -8")
 __msg("store_release((u8 *)(r10 -8), r1) {{.*}}; *fp-8 -8 -> (spill8 1)")
 __msg("store_release((u16 *)(r10 -8), r1) {{.*}}; *fp-8 -8 -> (spill16 1)")
 __msg("store_release((u32 *)(r10 -8), r1) {{.*}}; *fp-8 -8 -> (spill32 1)")
 __msg("store_release((u64 *)(r10 -8), r1) {{.*}}; *fp-8 -8 -> 1")
-__msg("lock *(u64 *)(r10 -8) += r1 {{.*}}; *fp-8 -8 -> _")
-__msg("r1 = atomic64_fetch_add((u64 *)(r10 -8), r1) {{.*}}; r1 1 -> _, *fp-8 -8 -> _")
-__msg("r1 = atomic_fetch_add((u32 *)(r10 -8), r1) {{.*}}; r1 1 -> _, *fp-8 -8 -> _")
-__msg("r1 = atomic64_xchg((u64 *)(r10 -8), r1) {{.*}}; r1 1 -> _, *fp-8 -8 -> _")
-__msg("r0 = atomic64_cmpxchg((u64 *)(r10 -8), r0, r2) {{.*}}; r0 0 -> _, *fp-8 -8 -> _")
+__msg("lock *(u64 *)(r10 -8) += r1 {{.*}}; *fp-8 -8 -> %fp-8.{{[0-9]+}}")
+__msg("r1 = atomic64_fetch_add((u64 *)(r10 -8), r1) {{.*}}; r1 1 -> %r1.{{[0-9]+}}, *fp-8 -8 -> %fp-8.{{[0-9]+}}")
+__msg("r1 = atomic_fetch_add((u32 *)(r10 -8), r1) {{.*}}; r1 1 -> %r1.{{[0-9]+}}, *fp-8 -8 -> %fp-8.{{[0-9]+}}")
+__msg("r1 = atomic64_xchg((u64 *)(r10 -8), r1) {{.*}}; r1 1 -> %r1.{{[0-9]+}}, *fp-8 -8 -> %fp-8.{{[0-9]+}}")
+__msg("r0 = atomic64_cmpxchg((u64 *)(r10 -8), r0, r2) {{.*}}; r0 0 -> %r0.{{[0-9]+}}, *fp-8 -8 -> %fp-8.{{[0-9]+}}")
 __msg("*(u64 *)(r10 -8) = 42 {{.*}}; *fp-8 -8 -> 42")
-__msg("*(u8 *)(r10 -7) = r0 {{.*}}; *fp-8 -8 -> _")
+__msg("*(u8 *)(r10 -7) = r0 {{.*}}; *fp-8 -8 -> %fp-8.{{[0-9]+}}")
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+/* a fill that is not wider than the spill reads what was spilled */
+__msg("r1 = *(s8 *)(r10 -8) {{.*}}; r1 r7 -> (sext8 r7)")
+__msg("r1 = *(u16 *)(r10 -8) {{.*}}; r1 r7 -> (zext16 (spill8 r7))")
+#endif
 __naked void store_load_exprs(void)
 {
 	asm volatile (
@@ -578,6 +617,9 @@ __naked void store_load_exprs(void)
 	ST_OP("*(u64 *)(r10 - 8) = 42")
 	ST_OP("*(u8 *)(r10 - 7) = r0")
 
+	ST_OP("r1 = r7; *(u16 *)(r10 - 8) = r1; r1 = *(s8 *)(r10 - 8)")
+	ST_OP("r1 = r7; *(u8 *)(r10 - 8) = r1; r1 = *(u16 *)(r10 - 8)")
+
 	"r7 += 1;"
 	"if r7 < 2 goto 1b;"
 	"r0 = 0;"
@@ -606,10 +648,10 @@ __success
 __log_level(2)
 __msg_next("scev at header 1:")
 __msg_next("  r6=(+ r6 1) / (linear r6 1)")
-__msg_next("  r7=?")
+__msg_next("  r7=%r7.4?")
 __msg_next(" scev at latch 1:")
 __msg_next("  r6=(+ r6 1) / (linear r6 1)")
-__msg_next("  r7=?")
+__msg_next("  r7=%r7.4?")
 __msg_next("scev at header 4:")
 __msg_next("  r7=(+ r7 1) / (linear r7 1)")
 __msg_next(" scev at latch 4:")
@@ -646,7 +688,7 @@ __msg_next("  backedge from 6, latch at 4")
 __msg_next("  exit from 4 to 1")
 __msg("scev at header 1:")
 __msg_next("  r6=(+ r6 1) / (linear r6 1)")
-__msg_next("  r7=?")
+__msg_next("  r7=%r7.4?")
 __msg_next("scev at header 4:")
 __msg_next("  r7=(+ r7 1) / (linear r7 1)")
 __msg_next(" scev at latch 4:")
@@ -691,7 +733,7 @@ __msg_next("  backedge from 5, latch at 5")
 __msg_next("  exit from 4 to 2")
 __msg_next("  exit from 5 to 6")
 __msg("scev at header 2:")
-__msg_next("  r6=?")
+__msg_next("  r6=%r6.3?")
 __msg_next("  r7=(+ r7 1) / (linear r7 1)")
 __msg_next("scev at header 3:")
 __msg_next("  r6=(+ r6 1) / (linear r6 1)")
@@ -726,10 +768,10 @@ __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
 __msg("loop at 3{{$}}")
 __msg("scev at header 3:")
-__msg_next("  r6=(any r6 (+ r6 1)) / ?")
-__msg_next("  r7=(any (+ r7 1) 0) / ?")
+__msg_next("  r6=%r6.3=phi(r6, (+ r6 1)) / ?")
+__msg_next("  r7=%r7.3=phi((+ r7 1), 0) / ?")
 __msg_next("  r8=(+ r8 1) / (linear r8 1)")
-__msg("loop header at 3, unsupported loop: multiple backedges")
+__msg("loop header at 3, can't compute iterations count")
 __naked void nested_loops_shared_header(void)
 {
 	asm volatile ("					\
@@ -858,18 +900,18 @@ PRE__COND_TEST (pre_gt_sign,       "<=",  ITER_S64_MIN + 1,           -1, ITER_S
  *        r6 += 2;                   // unreachable
  *    }
  */
-PRE__COND_TEST (pre_lt_false,      ">=",                 7,            2,                7, "can't compute iterations count")
-PRE__COND_TEST (pre_le_false,      ">",                  8,            2,                7, "can't compute iterations count")
-PRE__COND_TEST (pre_gt_false,      "<=",                 3,           -2,                3, "can't compute iterations count")
-PRE__COND_TEST (pre_ge_false,      "<",                  2,           -2,                3, "can't compute iterations count")
-PRE__COND_TEST (pre_slt_false,     "s>=",                1,            2,                1, "can't compute iterations count")
-PRE__COND_TEST (pre_sle_false,     "s>",                 2,            2,                1, "can't compute iterations count")
-PRE__COND_TEST (pre_sgt_false,     "s<=",               -1,           -2,               -1, "can't compute iterations count")
-PRE__COND_TEST (pre_sge_false,     "s<",                -2,           -2,               -1, "can't compute iterations count")
-PRE__COND_TEST (pre_ne_false,      "==",                 7,            2,                7, "can't compute iterations count")
+PRE__COND_TEST (pre_lt_false,      ">=",                 7,            2,                7, "header_count is 1 ")
+PRE__COND_TEST (pre_le_false,      ">",                  8,            2,                7, "header_count is 1 ")
+PRE__COND_TEST (pre_gt_false,      "<=",                 3,           -2,                3, "header_count is 1 ")
+PRE__COND_TEST (pre_ge_false,      "<",                  2,           -2,                3, "header_count is 1 ")
+PRE__COND_TEST (pre_slt_false,     "s>=",                1,            2,                1, "header_count is 1 ")
+PRE__COND_TEST (pre_sle_false,     "s>",                 2,            2,                1, "header_count is 1 ")
+PRE__COND_TEST (pre_sgt_false,     "s<=",               -1,           -2,               -1, "header_count is 1 ")
+PRE__COND_TEST (pre_sge_false,     "s<",                -2,           -2,               -1, "header_count is 1 ")
+PRE__COND_TEST (pre_ne_false,      "==",                 7,            2,                7, "header_count is 1 ")
 
 /*
- * The counter moves away from the exit; bound fallback verification.
+ * An unsigned counter goes down and leaves the range below 0.
  *
  * Example: pre_lt_dir
  *
@@ -877,9 +919,23 @@ PRE__COND_TEST (pre_ne_false,      "==",                 7,            2,       
  *    while (++r9 <= 8 && r6 < 7) {  // r6 ∈ [5,3,1,U64_MAX]
  *        r6 -= 2;                   // r6 ∈ [3,1,U64_MAX]
  *    }
+ *
+ * From above S64_MAX it's a long way down.
  */
-PRE__COND_TEST2(pre_lt_dir,        ">=",                 5,           -2,                7, "can't compute iterations count")
-PRE__COND_TEST2(pre_le_dir,        ">",                  5,           -2,                7, "can't compute iterations count")
+PRE__COND_TEST2(pre_lt_dir,        ">=",                 5,           -2,                7, "header_count is [0..4] ")
+PRE__COND_TEST2(pre_le_dir,        ">",                  5,           -2,                7, "header_count is [0..4] ")
+PRE__COND_TEST2(pre_lt_dir_high,   ">=",  ITER_S64_MIN + 5,           -2, ITER_S64_MIN + 7, "can't compute iterations count")
+
+/*
+ * The counter moves away from the exit; bound fallback verification.
+ *
+ * Example: pre_gt_dir
+ *
+ *    u64 r6 = 5, r9 = 0;
+ *    while (++r9 < 8 && r6 > 3) {   // r6 ∈ [5,7,...,19]
+ *        r6 += 2;                   // r6 ∈ [7,9,...,19]
+ *    }
+ */
 PRE__COND_TEST2(pre_gt_dir,        "<=",                 5,            2,                3, "can't compute iterations count")
 PRE__COND_TEST2(pre_ge_dir,        "<",                  5,            2,                3, "can't compute iterations count")
 PRE__COND_TEST2(pre_slt_dir,       "s>=",               -1,           -2,                1, "can't compute iterations count")
@@ -988,11 +1044,10 @@ POST_COND_TEST32(post32_sgt,       "s>", (__u32)INT32_MIN + 6,  -2u, (__u32)INT3
 POST_COND_TEST32(post32_sge,       "s>=",                 -1u,  -2u,              -7u, "header_count is [0..4] ")
 
 /*
- * When computing 32-bit iteration bounds, scev.c:compute_max_iters() does
- * the computation in the 64-bit domain first. For unsigned JMP32 comparisons,
- * it zero-extends the initial value and bound, but sign-extends the step.
+ * For a JMP32 comparison scev.c:compute_max_iters() takes the low 32 bits of the
+ * initial value, the bound and the step.
  * Hence pick negative 64-bit initial values and bounds, and encode negative
- * steps as positive u32 constants, so both conversions affect the computation.
+ * steps as positive u32 constants, so that the upper 32 bits differ.
  * post32_lt also checks that an exit exactly at U32_MAX is accepted.
  */
 POST_COND_TEST32(post32_lt,        "<",                    -7,    2,               -1, "header_count is [0..3] ")
@@ -1000,6 +1055,21 @@ POST_COND_TEST32(post32_le,        "<=",                   -9,    2,            
 POST_COND_TEST32(post32_gt,        ">",                    -1,  -2u,               -7, "header_count is [0..3] ")
 POST_COND_TEST32(post32_ge,        ">=",                   -1,  -2u,               -7, "header_count is [0..4] ")
 POST_COND_TEST32(post32_ne,        "!=",                   -1,  -2u,               -7, "header_count is [0..3] ")
+/* across 0: '!=' has no order. From 4 up to 1 goes all the way around. */
+POST_COND_TEST32(post32_ne_to_m1,   "!=",                    3,  -1u,               -1, "header_count is [0..4] ")
+POST_COND_TEST32(post32_ne_to_0,    "!=",                   -4,    1,                0, "header_count is [0..4] ")
+POST_COND_TEST32(post32_ne_to_m1_2, "!=",                    3,  -2u,               -1, "header_count is [0..2] ")
+POST_COND_TEST32(post32_ne_miss,    "!=",                    4,  -2u,               -1, "can't compute iterations count")
+POST_COND_TEST32(post32_ne_around,  "!=",                    4,    1,                1, "header_count is [0..4294967293] ")
+/* The variable moves away from the bound and wraps: -6, -4, -2, 0. From -7 it steps over 0. */
+POST_COND_TEST32(post32_ge_away,    ">=",                   -8,    2,                5, "header_count is [0..4] ")
+POST_COND_TEST32(post32_ge_away_miss, ">=",                 -7,    2,                1, "can't compute iterations count")
+/* Only the jump has 32 bits. The upper half of r6 does not count. */
+COND_TEST(post32_jump_wide, 1ULL << 32, 1, 5, "header_count is [0..5] ",
+	  "1: r8 = %[step] ll;" LIMIT_ITERATIONS "r6 += r8; if w6 < w7 goto 1b;")
+/* Only the addition has 32 bits. No zero-extended number is above -42. */
+COND_TEST(post32_zext_gt_wide, 14, -7, -42, "header_count is [0..1] ",
+	  "1: r8 = %[step] ll;" LIMIT_ITERATIONS "w6 += w8; if r6 > r7 goto 1b;")
 
 /* An exit exactly at S32_MAX is accepted as well. */
 POST_COND_TEST32(post32_slt_max,   "s<",        INT32_MAX - 6,    2,        INT32_MAX, "header_count is [0..3] ")
@@ -1012,13 +1082,382 @@ POST_COND_TEST32(post32_slt_wrap,  "s<",        INT32_MAX - 3,    2,        INT3
 POST_COND_TEST32(post32_sgt_wrap,  "s>", (__u32)INT32_MIN + 3,  -2u, (__u32)INT32_MIN, "can't compute iterations count")
 POST_COND_TEST32(post32_lt_wrap,   "<",                    -4,    2,               -1, "can't compute iterations count")
 
+/*
+ * The first value of the counter or the bound of the loop is a range: the verifier sees only the
+ * jumps that put r6 into [first_min, first_max] and r7 into [bound_min, bound_max]. An atomic add
+ * hides what they are at run time: the two values that are the furthest apart.
+ * r9 counts how many times the header is executed, and ends the loops that have no count.
+ */
+#define RANGE_TEST(name, sign, first_min, first_max, _step, bound_min, bound_max, loop, expect)	\
+SEC("socket")											\
+__success __log_level(2)									\
+expect												\
+__naked void name(void)										\
+{												\
+	asm volatile (										\
+		"r1 = %[first] ll;"								\
+		"*(u64 *)(r10 - 8) = 0;"							\
+		"lock *(u64 *)(r10 - 8) += r1;"							\
+		"r6 = *(u64 *)(r10 - 8);"							\
+		"r1 = %[bound] ll;"								\
+		"*(u64 *)(r10 - 8) = 0;"							\
+		"lock *(u64 *)(r10 - 8) += r1;"							\
+		"r7 = *(u64 *)(r10 - 8);"							\
+		"r9 = 0;"									\
+		"r1 = %[fmin] ll; if r6 " sign "< r1 goto 2f;"					\
+		"r1 = %[fmax] ll; if r6 " sign "> r1 goto 2f;"					\
+		"r1 = %[bmin] ll; if r7 " sign "< r1 goto 2f;"					\
+		"r1 = %[bmax] ll; if r7 " sign "> r1 goto 2f;"					\
+		loop										\
+		"2: r0 = r9;"									\
+		"exit;"										\
+		:										\
+		: __imm_const(first, (__s64)(_step) > 0 ? first_min : first_max),		\
+		  __imm_const(bound, (__s64)(_step) > 0 ? bound_max : bound_min),		\
+		  __imm_const(fmin, first_min), __imm_const(fmax, first_max),			\
+		  __imm_const(bmin, bound_min), __imm_const(bmax, bound_max),			\
+		  __imm_const(step, _step)							\
+		: __clobber_all);								\
+}
+
+#define LOOP_HEAD	"1: r8 = %[step] ll;" LIMIT_ITERATIONS
+#define PRE(exit_op)	LOOP_HEAD "if r6 " exit_op " r7 goto 2f; r6 += r8; goto 1b;"
+#define POST(add, jump)	LOOP_HEAD add "; if " jump " goto 1b;"
+
+/* 'count' is what the verifier has and what r9 is at run time. 'range' is r6 at the header. */
+#define COUNTED(count, range)									\
+	__retval(count)										\
+	__msg("loop header at {{[0-9]+}}, header_count is [0.." #count "] ")			\
+	__msg("loop header at {{[0-9]+}}, widening r6 to " range " ")				\
+	__msg("loop header at {{[0-9]+}}, clamping r6 to " range " ")
+#define NO_COUNT										\
+	__msg("loop header at {{[0-9]+}}, can't compute iterations count")			\
+	__not_msg("header_count is")
+
+#define M64 ITER_U64_MAX
+#define M32 ITER_U32_MAX
+/*
+ * Example: range_lt
+ *
+ *    u64 r6 = 1..4, r7 = 8..12;
+ *    while (r6 < r7)                // r6 ∈ [1,3,...,11,13]
+ *        r6 += 2;
+ */
+/*         name           sign  first     step   bound   loop         expected */
+RANGE_TEST(range_lt,        "",  1,  4,     2,   8, 12,  PRE(">="),   COUNTED(7, "1..13"))
+RANGE_TEST(range_le,        "",  0,  2,     2,   6,  9,  PRE(">"),    COUNTED(6, "0..11"))
+RANGE_TEST(range_gt,        "", 10, 14,    -2,   3,  5,  PRE("<="),   COUNTED(7, "2..14"))
+RANGE_TEST(range_ge,        "", 10, 14,    -2,   4,  5,  PRE("<"),    COUNTED(7, "2..14"))
+RANGE_TEST(range_slt,      "s", -5,  5,     2,   5,  7,  PRE("s>="),  COUNTED(7, "-5..8"))
+RANGE_TEST(range_ne_up,     "",  0,  3,     1,   3,  6,  PRE("=="),   COUNTED(7, "0..6"))
+RANGE_TEST(range_ne_down,   "",  8, 10,    -1,   4,  8,  PRE("=="),   COUNTED(7, "4..10"))
+/* the order of unsigned numbers says nothing about -1..3, the order of signed numbers does */
+RANGE_TEST(range_ne_signed, "s", -3, -1,    1,  -1,  3,  PRE("=="),   COUNTED(7, "-3..3"))
+/* The jump tests r6 after the addition. At the header r6 is a step behind. */
+RANGE_TEST(range_post_lt,   "",  3, 10,     2,  14, 15,  POST("r6 += r8", "r6 < r7"),
+	   COUNTED(6, "3..14"))
+/* 32 bits. r6 is negative at the entry and zero extended after that. */
+RANGE_TEST(range32_slt,    "s", -5,  5,     2,   7,  9,  POST("w6 += w8", "w6 s< w7"),
+	   COUNTED(7, "-5..0xffffffff"))
+/* Only the jump has 32 bits. It bounds the low half of r6, 'first + step * count' the rest. */
+RANGE_TEST(range32_jump,    "",  3, 10,     2,  13, 15,  POST("r6 += r8", "w6 < w7"),
+	   COUNTED(6, "3..14"))
+/* 'first + step' is -1..0 + 1: a range that crosses 0 is a range */
+RANGE_TEST(range_post_lt_crosses_0, "s", -1, 0, 1,   5,  5,  POST("r6 += r8", "r6 < r7"),
+	   COUNTED(6, "-1..4"))
+/* First values for which the latch is false at once are seen at the header too */
+RANGE_TEST(range_first_after_bound, "", 0, 100, 1,   5,  5,  PRE(">="),   COUNTED(6, "0..100"))
+
+#define COUNTED_2G(range)									\
+	__msg("loop header at {{[0-9]+}}, header_count is [0..2147483{{[0-9]+}}] ")		\
+	__msg("loop header at {{[0-9]+}}, widening r6 to " range " ")
+/* Too long to unroll: only the count ends the loop for the verifier */
+RANGE_TEST(range_long,      "",  0,  0,     1,   0, 0x7fffffff,
+	   "1: r8 = %[step] ll; if r6 >= r7 goto 2f; r6 += r8; goto 1b;", COUNTED_2G("0..0x7fffffff"))
+/* 'first + step' wraps around for a part of the range: the loop starts anywhere */
+RANGE_TEST(range_first_wraps_s64, "s", ITER_S64_MAX - 5, ITER_S64_MAX - 1, 2,
+	   ITER_S64_MAX - 1, ITER_S64_MAX - 1, POST("r6 += r8", "r6 s< r7"), NO_COUNT)
+RANGE_TEST(range_first_wraps_u32, "", 0, 3, -2, 5, 5, POST("w6 += w8", "w6 > w7"),
+	   COUNTED_2G("0..0xffffffff"))
+RANGE_TEST(range_first_wraps_s32, "", INT32_MAX - 5, INT32_MAX - 1, 2, INT32_MAX - 1, INT32_MAX - 1,
+	   POST("w6 += w8", "w6 s< w7"), COUNTED_2G("0..0xffffffff"))
+
+/*
+ * The value that ends the loop can wrap around.
+ *
+ * Example: range_lt_wrap
+ *
+ *    u64 M = U64_MAX, r6 = M-9..M-5, r7 = M-3..M;
+ *    while (r6 < r7)                // M-1 < M, and the next value is 1
+ *        r6 += 2;
+ */
+RANGE_TEST(range_lt_wrap,   "", M64 - 9, M64 - 5,  2, M64 - 3, M64,      PRE(">="), NO_COUNT)
+RANGE_TEST(range_le_wrap,   "", M64 - 9, M64 - 5,  2, M64 - 3, M64 - 1,  PRE(">"),  NO_COUNT)
+RANGE_TEST(range_gt_wrap,   "",       5,       9, -2,       0,       3,  PRE("<="), NO_COUNT)
+RANGE_TEST(range_ge_wrap,   "",       5,       9, -2,       1,       3,  PRE("<"),  NO_COUNT)
+/*
+ * It is less than a step after the bound. How far depends on the first value:
+ * M-26, M-25, M-24 end at M-2, M-1, M. M-23 wraps.
+ */
+RANGE_TEST(range_lt_near_max,      "", M64 - 26, M64 - 24, 8, M64 - 2, M64 - 2, PRE(">="),
+	   COUNTED(4, "-27..-1"))
+RANGE_TEST(range_lt_near_max_wrap, "", M64 - 26, M64 - 23, 8, M64 - 2, M64 - 2, PRE(">="), NO_COUNT)
+/* a 32-bit addition wraps around at 2^32, also under a 64-bit jump */
+RANGE_TEST(range32_add_wrap, "", M32 - 9, M32 - 5, 2, M32 - 3, M32,
+	   POST("w6 += w8", "r6 < r7"), NO_COUNT)
+RANGE_TEST(range32_ne_far,  "", M32 - 5, M32 - 3,  1, M32 - 1, M32 + 3,
+	   POST("w6 += w8", "r6 != r7"), NO_COUNT)
+/* the first jump tests what enters the loop, and that is not zero extended */
+RANGE_TEST(range32_first_is_wide, "", 0, M32 + 9,  2,      15,      20,
+	   LOOP_HEAD "if r6 >= r7 goto 2f; w6 += w8; goto 1b;", NO_COUNT)
+/* An unsigned counter goes down and leaves the range below 0. */
+RANGE_TEST(range_lt_dir,    "",  3, 10,    -2,  15, 20,  PRE(">="),   COUNTED(7, "-2..10"))
+RANGE_TEST(range_le_dir,    "",  3, 10,    -2,  15, 20,  PRE(">"),    COUNTED(7, "-2..10"))
+/* 'for (i = n; i < 6; i--)': whatever n is */
+RANGE_TEST(range_lt_dir_any_first, "", 0, M64, -1, 6, 6, PRE(">="),
+	   __retval(1) __msg("header_count is [0..7] "))
+/* Up from 100 while it is '>= 100..103', until it wraps to 84: the smallest bound has the count */
+RANGE_TEST(range32_ge_away, "", 100, 100, 0x0fffffff, 100, 103,
+	   LOOP_HEAD "if w6 < w7 goto 2f; w6 += w8; goto 1b;", __msg("header_count is [0..17] "))
+/* '>= 0' is always true, and so is '<= -1': -4..3 crosses 0 */
+RANGE_TEST(range32_ge_min,  "",  5,  5,     1,   0,  3,  POST("w6 += w8", "w6 >= w7"), NO_COUNT)
+RANGE_TEST(range32_le_max, "s",  0,  0,     2,  -4,  3,  POST("w6 += w8", "w6 <= w7"), NO_COUNT)
+/*
+ * A 64-bit jump tests a zero-extended variable: 's>' a negative bound and 's<' a bound above
+ * U32_MAX are always true. Else it is an unsigned 32-bit jump: 0x7ffffff1 .. 0x80000010.
+ */
+RANGE_TEST(range32_zext_sgt_neg, "s", 100, 100, -1, -3, 4, POST("w6 += w8", "r6 s> r7"), NO_COUNT)
+RANGE_TEST(range32_zext_slt_wide, "", M32 - 15, M32 - 15, 1, M32 - 5, M32 + 2,
+	   POST("w6 += w8", "r6 s< r7"), NO_COUNT)
+RANGE_TEST(range32_zext_slt_bit31, "", M32 / 2 - 15, M32 / 2 - 15, 1, M32 / 2 + 17, M32 / 2 + 17,
+	   POST("w6 += w8", "r6 s< r7"), __msg("header_count is [0..32] "))
+/* The counter moves away from the exit. */
+RANGE_TEST(range_gt_dir,    "", 10, 20,     2,   3,  5,  PRE("<="),   NO_COUNT)
+RANGE_TEST(range_ge_dir,    "", 10, 20,     2,   3,  5,  PRE("<"),    NO_COUNT)
+/* '!=' can step over the bound, or start behind it. */
+RANGE_TEST(range_ne_step2,  "",  0,  3,     2,   3,  8,  PRE("=="),   NO_COUNT)
+RANGE_TEST(range_ne_step2_bounds, "", 0, 0, 2,   9, 10,  PRE("=="),   NO_COUNT)
+RANGE_TEST(range_ne_behind, "",  0,  4,     1,   3,  8,  PRE("=="),   NO_COUNT)
+/*
+ * It does not step over the bound if the step divides the distance: initial value and bound are
+ * congruent modulo the step. 'n * 24' is a multiple of 24. 8 divides the largest 'n * 12', 48,
+ * and is less than 12, but steps over 12.
+ */
+RANGE_TEST(range_ne_mul24,  "",  0,  0,    24,   0,  5,  "r7 *= 24;" PRE("=="),
+	   COUNTED(6, "0..120"))
+RANGE_TEST(range_ne_mul12,  "",  0,  0,     8,   0,  4,  "r7 *= 12;" PRE("=="),   NO_COUNT)
+RANGE_TEST(range_ne_first_mul12, "", 0, 4,  8,  96, 96,  "r6 *= 12;" PRE("=="),   NO_COUNT)
+/* The sum of a multiple of 3 and 0..1 is no multiple of 3 */
+RANGE_TEST(range_ne_mul3_plus_range, "", 0, 3, 3, 0,  1,  "r6 *= 3; r6 += r7; r7 = 12;" PRE("=="),
+	   NO_COUNT)
+/* S64_MAX - 9 + 3k and S64_MIN + 3k are 1 modulo 3. On the circle S64_MAX + 3 is S64_MIN + 2. */
+RANGE_TEST(range_ne_mul3_crosses_s64, "", 0, 3, 3, 0, 1,
+	   "r6 *= 3; if r7 == 0 goto 3f; r1 = 0x7ffffffffffffff6 ll; r6 += r1; goto 4f;"
+	   "3: r1 = 0x8000000000000000 ll; r6 += r1; 4: r7 = 0x800000000000000b ll;" PRE("=="),
+	   NO_COUNT)
+/* 'while (i-- > 0) sum += a[i];' of u16 a[]: the compiler counts 2 * i down to 0 */
+RANGE_TEST(range_ne_shl1_down, "", 1, 5,   -2,   0,  0,  "r6 <<= 1;" POST("r6 += r8", "r6 != r7"),
+	   COUNTED(5, "2..10"))
+/* 20 modulo 24 plus multiples of 8: the induction variable is 4 modulo gcd(24, 8) */
+RANGE_TEST(range_ne_first_mul24, "", 1, 2,  8,  84, 84,  "r6 *= 24; r6 += 20;" PRE("=="),
+	   __retval(6) __msg("header_count is [0..6] ") __msg("widening r6 to 44..84 step 8")
+	   __msg("step=4+8"))
+/* 9, 17, 25 go to 41: each overshoots 40 by 1, not by up to 7. At the header it is 8 less. */
+RANGE_TEST(range_lt_overshoot, "", 0, 2,    8,  40, 40,
+	   "r6 *= 8; r6 += 1;" POST("r6 += r8", "r6 < r7"), COUNTED(5, "1..33"))
+/* -5, -2, 1, 4 cross 0, where the order of '<' begins: 0 is none of them. 1 goes to 22. */
+RANGE_TEST(range_lt_overshoot_crosses_0, "", 0, 3, 3, 20, 20, "r6 *= 3; r6 += -5;" PRE(">="),
+	   __retval(1) __msg("header_count is [0..8] ") __msg("widening r6 to -5..22 "))
+/* Known low bits are a congruence too: 1..40 with three zero bits is 8..40 */
+RANGE_TEST(range_ne_align8, "",  0,  0,     8,   1, 43,
+	   "r7 &= -8; if r7 == 0 goto 2f;" PRE("=="), COUNTED(6, "0..40"))
+/*
+ * The low 32 bits of a multiple of 24 are one as long as it fits in 32 bits.
+ * 24 * 0xaaaaaac is 0x100000020.
+ */
+RANGE_TEST(range32_ne_mul24, "", 0,  0,    24,   1,  5,
+	   "r7 *= 24;" POST("w6 += w8", "w6 != w7"), COUNTED(5, "0..96"))
+RANGE_TEST(range32_ne_mul24_wide, "", 0, 0, 24,  1, 1ULL << 30,
+	   "r7 *= 24; if w7 > 96 goto 2f; if w7 < 24 goto 2f;" POST("w6 += w8", "w6 != w7"),
+	   NO_COUNT)
+
+/*
+ *    char buf[8];
+ *    for (int i = first; ...; i++)
+ *        sum += buf[i - first];
+ *
+ * GCC adds in 32 bits and keeps the sign extension of the result: a sign-extended 32-bit induction
+ * variable. r6 or fp-16 is i, r7 is first, r9 counts the iterations. r8 is 0, which the verifier
+ * doesn't know. In place of an out-of-bounds access to buf r5 is read, which is not initialized.
+ */
+#define SEXT32_TEST(name, _first, loop, expect)							\
+SEC("socket")											\
+__log_level(2)											\
+expect												\
+__naked void name(void)										\
+{												\
+	asm volatile (										\
+		"r6 = %[first] ll; r7 = r6; r8 = 0; r9 = 0;"					\
+		"*(u64 *)(r10 - 8) = r8; lock *(u64 *)(r10 - 8) += r8; r8 = *(u64 *)(r10 - 8);"	\
+		"*(u64 *)(r10 - 16) = r6;"							\
+		loop										\
+		"2: r0 = r9; exit;"								\
+		:										\
+		: __imm_const(first, _first)							\
+		: __clobber_all);								\
+}
+#define BUF(i)		"r9 += 1; r2 = " i "; r2 -= r7; if r2 <= 7 goto +1; r0 = *(u64 *)(r5 + 0);"
+#define OOB		__failure __msg("R5 !read_ok")
+#define ALL_OF_S32	"0xffffffff80000000..0x7fffffff "
+#define SEXT32_INC	"w1 = w6; w1 += 1; r6 = (s32)r1;"
+#define SEXT32_LOOP(bound)	"1:" BUF("r6") SEXT32_INC "if w1 != " #bound " goto 1b;"
+
+SEXT32_TEST(sext32_iv, -4, SEXT32_LOOP(4), __success __retval(8)
+	    __msg("  r6=(sext32 (+ r6 1)) / (sext32 (linear r6 1))")
+	    __msg("header_count is 8 ") __msg("widening r6 to -4..3 "))
+SEXT32_TEST(sext32_iv_oob, -4, SEXT32_LOOP(5), OOB)
+/* i wraps from INT32_MAX to INT32_MIN. The latch tests 0x7ffffffd .. 0x80000004. */
+SEXT32_TEST(sext32_iv_wraps, INT32_MAX - 3, SEXT32_LOOP(0x80000004),
+	    __msg("header_count is 8 ") __msg("widening r6 to " ALL_OF_S32) OOB)
+/* 'i < n' implies the unsigned range 1 .. 0x80000000. Its last value is negative in r6. */
+SEXT32_TEST(sext32_iv_unsigned_bound, 0,
+	    "r8 &= 1; r6 += r8; r4 = 0x80000001 ll;"
+	    "1:" SEXT32_INC "if w1 < w4 goto 1b; if r6 s>= 0 goto 2f; r0 = *(u64 *)(r5 + 0);",
+	    __msg("widening r6 to " ALL_OF_S32) OOB)
+
+/*
+ *    for (long i = first; (u32)i < 128; i -= 1000)
+ *
+ * r6 is a 64-bit induction variable, the latch tests a zero-extended copy of it. It has the SCEV
+ * of a 32-bit induction variable, and it bounds the low 32 bits of r6 only.
+ */
+#define IV64_TEST(name, first, loop, expect)	SEXT32_TEST(name, first, loop, expect)
+#define HI32_IS_0	"r4 = r6; r4 >>= 32; if r4 == 0 goto +1; r0 = *(u64 *)(r5 + 0);"
+#define ZEXT32_COPY	"w3 = w6;"
+/* r6 is 0..3, then -1000..-997 */
+IV64_TEST(zext32_copy_below_0, 0,
+	  "r8 &= 3; r6 += r8; 1: if r6 <= 3 goto +1; r0 = *(u64 *)(r5 + 0);"
+	  ZEXT32_COPY "if r3 >= 128 goto 2f; r6 += -1000; goto 1b;",
+	  __msg("header_count is [0..2] ") __msg("widening r6 to -1000..3 ") OOB)
+/* A 32-bit induction variable is 0xfffffc18..0xfffffc1b then */
+IV64_TEST(zext32_iv_below_0, 0,
+	  "r8 &= 3; r6 += r8; 1:" HI32_IS_0
+	  ZEXT32_COPY "if r3 >= 128 goto 2f; w6 += -1000; goto 1b;",
+	  __success __retval(0) __msg("header_count is [0..2] "))
+/* r6 gets to 0x100000009 */
+IV64_TEST(zext32_copy_above_u32_max, 0xfffffff0ULL,
+	  "r8 &= 15; r6 += r8; 1:" HI32_IS_0 "r6 += 1;" ZEXT32_COPY "if r3 < 10 goto 1b;",
+	  __msg("header_count is [0..11] ") __msg("widening r6 to 0xfffffff0..0x100000009 ") OOB)
+IV64_TEST(zext32_copy_above_u32_max_const, 0xfffffffeULL,
+	  "1:" HI32_IS_0 "r6 += 1;" ZEXT32_COPY "if r3 != 3 goto 1b;",
+	  __msg("header_count is 5 ") __msg("widening r6 to 0xfffffffe..0x100000002 ") OOB)
+/* The latch sees the low 32 bits of the step */
+IV64_TEST(zext32_copy_wide_step, 0,
+	  "r8 &= 1; r6 += r8; 1: if r6 <= 10 goto +1; r0 = *(u64 *)(r5 + 0);"
+	  "r1 = 0x100000001 ll; r6 += r1;" ZEXT32_COPY "if r3 < 10 goto 1b;",
+	  __msg("header_count is [0..10] ") OOB)
+
+/*
+ * Two back edges:
+ *
+ *    do {
+ *        add;
+ *        if (!other) {
+ *            if (jump1) continue;
+ *            break;
+ *        }
+ *    } while (jump0);
+ *
+ * The verifier doesn't know which one is taken. 'r7 == 0' is false at run time: r7 is 0..1 and 1.
+ */
+#define BACKEDGES(add, other, jump1, jump0)							\
+	"1:" LIMIT_ITERATIONS add ";"								\
+	"if " other " goto 3f; if " jump1 " goto 1b; goto 2f; 3: if " jump0 " goto 1b;"
+/* The loop can go on through the other back edge and get to a latch that was false */
+#define AGAIN(iteration)									\
+	__msg("loop header at {{[0-9]+}}, a latch may be true again in iteration " #iteration)	\
+	__not_msg("header_count is")
+
+/* The largest count. '!=' is false in one iteration: it has to be the last one. */
+RANGE_TEST(backedges_ne_is_last, "", 0, 0, 1, 0, 1,
+	   BACKEDGES("r6 += 1", "r7 == 0", "r6 != 6", "r6 < 3"), COUNTED(6, "0..5"))
+/* Only the latch with the smallest count of a back edge is looked at: 'r6 != 3', not 'r6 < 100' */
+#define AND_R8(add, count, jump0)								\
+	"r8 = 0;" BACKEDGES(add "; r8 += 1", "r7 == 0", "r8 < " #count, jump0)
+RANGE_TEST(backedges_ne_is_not_last, "", 0, 0, 1, 0, 1,
+	   AND_R8("r6 += 1", 5, "r6 >= 100 goto 2f; if r6 != 3"), AGAIN(4))
+/*
+ * w6 is 31, 23, 15, 7 in iterations 0..3, and M32 in iteration 4. 'w6 > 15' is false in iterations
+ * 2 and 3.
+ */
+RANGE_TEST(backedges_end_then_wrap, "", 39, 39, 1, 0, 1,
+	   AND_R8("w5 = -8; w6 += w5", 4, "w6 > 15"), __retval(4) __msg("header_count is [0..4] "))
+RANGE_TEST(backedges_wrap_then_end, "", 39, 39, 1, 0, 1,
+	   AND_R8("w5 = -8; w6 += w5", 5, "w6 > 15"), AGAIN(4))
+/* The same upwards. The largest first value wraps around first. */
+RANGE_TEST(backedges_wrap_up_then_end, "", M32 - 55, M32 - 39, 1, 0, 1,
+	   AND_R8("w6 += 8", 5, "w6 < -16"), AGAIN(4))
+/*
+ * w6 moves away from the bound: 'w6 < 0x38000000' is false in iterations 3..14, and true again in
+ * iteration 15, in which '!=' is false.
+ */
+RANGE_TEST(backedges_away_then_again, "", 0x30000000, 0x30000000, 1, 0, 1,
+	   BACKEDGES("w5 = -0x10000000; w6 += w5", "r7 == 0",
+		     "w6 < 0x38000000", "w6 != 0x30000000"), AGAIN(15))
+/* One latch bounds the low half of r6, the other r6: together they bound neither */
+RANGE_TEST(backedges_low32_and_64, "", 0, 3, 1, 0, 1,
+	   BACKEDGES("r6 += 1", "r7 == 0", "w6 < 5", "r6 < 7"),
+	   __retval(5) __msg("header_count is [0..7] ") __msg("widening r6 to 0..9 "))
+/* It's base + offset that wraps around when the variable is a pointer */
+RANGE_TEST(backedges_pointer_wraps, "", 0, 0, 1, 0, 1, "r4 = r10; r4 += -8; r5 = r10; r5 += -512;"
+	   AND_R8("r5 += 8", 100000000, "r5 < r4"), AGAIN(99999999))
+
+/* The same test in front of each back edge: the first iteration in which it's false is the last */
+#define TWO_TESTS(jump1, jump0)									\
+	"r5 = 0; r8 = 0;" BACKEDGES("r5 += 1; r8 += 1", "r9 & 1", jump1, jump0)
+RANGE_TEST(backedges_same_test,   "", 1, 6, 1, 1, 6, TWO_TESTS("r8 != r7", "r8 != r7"),
+	   __retval(6) __msg("header_count is [0..6] "))
+RANGE_TEST(backedges_other_bound, "", 1, 6, 1, 1, 6, TWO_TESTS("r8 != r7", "r8 != r6"), AGAIN(5))
+RANGE_TEST(backedges_other_first, "", 1, 6, 1, 1, 6, TWO_TESTS("r8 != r7", "r5 != r7"), AGAIN(5))
+RANGE_TEST(backedges_other_op,    "", 1, 6, 1, 1, 6, TWO_TESTS("r8 != r7", "r8 < r7"),  AGAIN(5))
+RANGE_TEST(backedges_other_width, "", 1, 6, 1, 1, 6, TWO_TESTS("r8 != r7", "w8 != w7"), AGAIN(5))
+
+/* A back edge has no count */
+RANGE_TEST(backedges_no_count, "", 0, 0, 1, 0, 1,
+	   BACKEDGES("r6 += 1", "r7 == 0", "r6 < 3", "r7 == 0"), NO_COUNT)
+/* More than 16 back edges */
+#define X4(s)	s s s s
+RANGE_TEST(backedges_17, "", 0, 0, 1, 0, 1,
+	   "1:" LIMIT_ITERATIONS "if r6 >= 3 goto 2f; r6 += 1;" X4(X4("if r7 == 9 goto 1b;"))
+	   "goto 1b;",
+	   __msg("unsupported loop: too many backedges") __not_msg("header_count is"))
+
+/*
+ * The first value is 0..3: 'first + step * count' is 0..8. At the header r6 is its first value or
+ * what one of the three latches lets through.
+ */
+RANGE_TEST(backedges_first_is_a_range, "", 0, 3, 1, 0, 2,
+	   "1:" LIMIT_ITERATIONS "r6 += 1; if r7 == 0 goto 3f; if r7 == 2 goto 4f;"
+	   "if r6 < 3 goto 1b; goto 2f; 4: if r6 < 6 goto 1b; goto 2f; 3: if r6 < 4 goto 1b;",
+	   COUNTED(6, "0..5"))
+/* The latches test different variables: they tell nothing about r6 */
+RANGE_TEST(backedges_two_variables, "", 0, 3, 1, 0, 1,
+	   BACKEDGES("r6 += 1; r7 += 1", "r9 & 1", "r6 < 3", "r7 < 6"),
+	   __msg("header_count is [0..6] ") __msg("widening r6 to 0..8 "))
+/* A bound of 3 and a bound of 5 are joined in front of the loop */
+#define PRECISE_BOUND(reg)									\
+	"r4 = 2; r5 = 2; " reg " = 5; if r7 == 0 goto +1; " reg " = 3; r0 = 0;"		\
+	BACKEDGES("r6 += 1", "r9 & 1", "r6 < r4", "r6 < r5")
+#define EXPLORED_ONCE	__msg("header_count is [0..5] ") __not_msg("header_count is [0..3] ")
+RANGE_TEST(backedges_bound1_is_precise, "", 0, 0, 1, 0, 1, PRECISE_BOUND("r4"), EXPLORED_ONCE)
+RANGE_TEST(backedges_bound0_is_precise, "", 0, 0, 1, 0, 1, PRECISE_BOUND("r5"), EXPLORED_ONCE)
+
 SEC("xdp")
 __success
 __log_level(2)
-__flag(BPF_F_TEST_STATE_FREQ)
 __msg("loop header at 1, header_count is 10 ")
 __msg("loop header at 1, widening r0 to 0..9 step 1")
-__msg("processed 5 insns")
+__msg("processed 4 insns")
 __naked void post_cond_jlt(void)
 {
 	asm volatile ("					\
@@ -1030,8 +1469,8 @@ __naked void post_cond_jlt(void)
 }
 
 /*
- * Explore with r7=10 first, r7=4096 next.
- * Should trigger invalid stack read if r7 is marked precise.
+ * r7 is 10 on one path to the loop and 4096 on the other.
+ * Should trigger invalid stack read if the larger one counts.
  *
  *   r0 = 0;
  *   r6 = 0;
@@ -1046,11 +1485,7 @@ __naked void post_cond_jlt(void)
 SEC("xdp")
 __failure
 __log_level(2)
-__flag(BPF_F_TEST_STATE_FREQ)
-__msg("loop header at 6, header_count is 10 ")
-__msg("mark_precise: frame0: parent state regs=r6,r7 stack=:")
-__msg("loop header at 6, widening r0 to 0..9 step 1")
-__msg("loop header at 6, header_count is 4096 ")
+__msg("loop header at 6, header_count is [0..4096] ")
 __msg("loop header at 6, widening r0 to 0..4095 step 1")
 __msg("invalid variable-offset read from stack R2")
 __naked void mark_bound_precise(void)
@@ -1076,8 +1511,8 @@ __naked void mark_bound_precise(void)
 }
 
 /*
- * Explore with r6=4086 first, r6=0 next.
- * Should trigger invalid stack read if r6 is marked precise.
+ * r6 is 4086 on one path to the loop and 0 on the other.
+ * Should trigger invalid stack read if the smaller one counts.
  *
  *   r0 = 0;
  *   r6 = bpf_get_prandom_u32() == 42 ? 4086 : 0;
@@ -1091,11 +1526,7 @@ __naked void mark_bound_precise(void)
 SEC("xdp")
 __failure
 __log_level(2)
-__flag(BPF_F_TEST_STATE_FREQ)
-__msg("loop header at 5, header_count is 10 ")
-__msg("mark_precise: frame0: parent state regs=r6 stack=:")
-__msg("loop header at 5, widening r0 to 0..9 step 1")
-__msg("loop header at 5, header_count is 4096 ")
+__msg("loop header at 5, header_count is [0..4096] ")
 __msg("loop header at 5, widening r0 to 0..4095 step 1")
 __msg("invalid variable-offset read from stack R2")
 __naked void mark_base_precise(void)
@@ -1188,7 +1619,8 @@ __success
 __log_level(2)
 __msg("scev at header 2:")
 __msg_next("  *fp-8=(+ *fp-8 1) / (linear *fp-8 1)")
-__msg("loop header at 2, can't compute iterations count")
+/* whatever is in the other bytes of the slot */
+__msg("loop header at 2, header_count is [0..266] ")
 __not_msg("widening")
 __naked void no_widen_small_spill_counter(void)
 {
@@ -1306,9 +1738,9 @@ __success __retval(7)
 __log_level(2)
 __msg("scev at header 1:")
 __msg_next("r6=(+ r6 1) / (linear r6 1)")
-__msg_next("*fp-8=(any *fp-8 7) / (any *fp-8 7)")
+__msg_next("*fp-8=%fp-8.3=phi(*fp-8, 7) / (any *fp-8 7)")
 __msg("loop header at 1, widening r6 to 0..2 step 1")
-__msg("2: (7a) *(u64 *)(r10 -8) = 7          ; R10=fp0 fp-8=7 loop_stack=1")
+__msg("3: (79) r0 = *(u64 *)(r10 -8)         ; R0=scalar() R10=fp0 loop_stack=1")
 __naked void widen_any_unallocated_slot(void)
 {
 	asm volatile ("					\
@@ -1347,7 +1779,7 @@ __success __retval(7)
 __log_level(2)
 __msg("scev at header 2:")
 __msg_next("r6=(+ r6 1) / (linear r6 1)")
-__msg_next("*fp-8=(any *fp-8 7) / (any *fp-8 7)")
+__msg_next("*fp-8=%fp-8.5=phi(*fp-8, 7) / (any *fp-8 7)")
 __msg("loop header at 2, widening r6 to 0..2 step 1")
 __msg("3: (79) r1 = *(u64 *)(r10 -8)         ; R1=scalar() R10=fp0 fp-8=m???????")
 __naked void widen_any_misc_slot(void)
@@ -1411,13 +1843,46 @@ __naked void widened_reg_is_not_linked(void)
 	: __clobber_all);
 }
 
+extern int bpf_stream_print_stack(int stream_id) __weak __ksym;
+
+/*
+ * The verifier fills in r2, the implicit argument of the kfunc. The call clobbers r2 and nothing
+ * sets it: if r2 is live at the head of the loop it has no formula.
+ */
+SEC("syscall")
+__success __retval(0)
+__log_level(2)
+__msg("loop header at 1, header_count is 4 ")
+__not_msg("can't widen")
+__naked void kfunc_implicit_arg_in_a_loop(void)
+{
+	asm volatile (
+	"r6 = 0;"
+"1:"
+	"r1 = 2;"
+	"call %[bpf_stream_print_stack];"
+	"r6 += 1;"
+	"if r6 < 4 goto 1b;"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm(bpf_stream_print_stack)
+	: __clobber_all);
+}
+
+/* to retain debug info for BTF generation */
+void kfunc_root(void)
+{
+	bpf_stream_print_stack(0);
+}
+
 /* The unknown SCEV of an unbound STACK_MISC slot must not prevent widening. */
 SEC("tracepoint")
 __success
 __log_level(2)
 __msg("scev at header 4:")
 __msg_next("  r6=(+ r6 1) / (linear r6 1)")
-__msg_next("  *fp-8=?")
+__msg_next("  *fp-8=%fp-8.7?")
 __msg("loop header at 4, widening r6 to 0..9 step 1")
 __naked void widen_subprog_probe_read(void)
 {
@@ -1436,6 +1901,33 @@ __naked void widen_subprog_probe_read(void)
 	"r0 = 0;"
 	"exit;"
 	::: __clobber_all);
+}
+
+/*
+ * The address of a stack slot is passed as a number. The helper may read what is there. It doesn't
+ * write, so the counter in the slot next to it is intact.
+ */
+SEC("tracepoint")
+__success __log_level(2)
+__msg("loop header at 2, header_count is 10")
+__naked void stack_address_as_a_number(void)
+{
+	asm volatile ("					\
+	*(u64 *)(r10 - 8) = 0;				\
+	*(u64 *)(r10 - 16) = 0;				\
+1:	r1 = r10;					\
+	r1 += -24;					\
+	r2 = 8;						\
+	r3 = r10;					\
+	r3 += -16;					\
+	call %[bpf_probe_read_kernel];			\
+	r1 = *(u64 *)(r10 - 8);				\
+	r1 += 1;					\
+	*(u64 *)(r10 - 8) = r1;				\
+	if r1 < 10 goto 1b;				\
+	r0 = 0;						\
+	exit;						\
+"	:: __imm(bpf_probe_read_kernel) : __clobber_all);
 }
 
 /* An induction variable whose range overflows s64 is widened to the full range. */
@@ -1495,14 +1987,41 @@ __naked void eval_expr_unallocated_stack_bound(void)
 "	::: __clobber_all);
 }
 
+const volatile __u32 rodata_bound = 10;
+volatile __u32 data_bound = 10;
+
+/*
+ * for (i = 0; i < bound; i++): the bound is loaded in each iteration. It gives the count when the
+ * map is read-only. If not, the second jump does.
+ */
+#define BOUND_IN_MAP_TEST(name, bound, count)					\
+SEC("socket")									\
+__success __retval(10) __log_level(2)						\
+__msg("loop header at 3, header_count is [0.." #count "]")			\
+__naked void name(void)								\
+{										\
+	asm volatile (								\
+	"r6 = 0;"								\
+	"r7 = %[" #bound "] ll;"						\
+"1:	r6 += 1;"								\
+	"r1 = *(u32 *)(r7 + 0);"						\
+	"if r6 >= r1 goto 2f;"							\
+	"if r6 < 16 goto 1b;"							\
+"2:	r0 = r6;"								\
+	"exit;"									\
+	:: __imm_addr(bound) : __clobber_all);					\
+}
+
+BOUND_IN_MAP_TEST(bound_in_rodata, rodata_bound, 10)
+BOUND_IN_MAP_TEST(bound_in_data, data_bound, 16)
+
 SEC("xdp")
 __success
 __log_level(2)
-__flag(BPF_F_TEST_STATE_FREQ)
 __msg("loop header at 3, header_count is 8")
 __msg("loop header at 3, widening r0 to 2..9 step 1")
 __msg("3: R0=scalar(smin=umin=smin32=umin32=2,smax=umax=smax32=umax32=9,{{.*}})")
-__msg("processed 6 insns")
+__msg("processed 5 insns")
 __naked void post_cond_jlt_with_base(void)
 {
 	asm volatile ("					\
@@ -1533,14 +2052,66 @@ __naked void latch_base_differs_from_step(void)
 "	::: __clobber_all);
 }
 
+/* Additions and subtractions of constants are one step. Two 64-bit shifts by 32 are (u32)r6. */
+#define ONE_STEP_TEST(name, first, body, jump, expr, ret)			\
+SEC("socket")									\
+__success __retval(ret) __log_level(2)						\
+__msg("  r6=" expr)								\
+__msg("loop header at 1, header_count is 8 ")					\
+__naked void name(void)								\
+{										\
+	asm volatile (								\
+	"r6 = " #first ";"							\
+"1:"	body									\
+	"if r6 " jump " goto 1b;"						\
+	"r0 = r6;"								\
+	"exit;"									\
+	::: __clobber_all);							\
+}
+
+ONE_STEP_TEST(add_add, 0, "r6 += 1; r6 += 1;", "< 16", "(+ r6 2) / (linear r6 2)", 16)
+ONE_STEP_TEST(sub, 16, "r6 -= 2;", "> 0", "(+ r6 -2) / (linear r6 -2)", 0)
+ONE_STEP_TEST(two_shifts_by_32, 0, "r6 += 2; r6 <<= 32; r6 >>= 32;", "< 16",
+	      "(zext32 (+ r6 2)) / (zext32 (linear r6 2))", 16)
+
+/*
+ * @shifts are not (u32)r7: a 32-bit shift by a register that has 32 in it shifts by 32 & 31 = 0.
+ * If they are taken for (u32)r7 then r7 is in [first, first + 7] and the read of r9 is dead code.
+ */
+#define NO_ZEXT32_TEST(name, first, shifts)					\
+SEC("socket")									\
+__failure __msg("R9 !read_ok")							\
+__naked void name(void)								\
+{										\
+	asm volatile (								\
+	"r7 = " #first ";"							\
+	"r8 = 0;"								\
+"1:	r1 = r7;"								\
+	"r1 -= " #first ";"							\
+	"if r1 < 8 goto 2f;"							\
+	"r0 = *(u64 *)(r9 + 0);"						\
+"2:	r7 += 1;"								\
+	shifts									\
+	"r8 += 1;"								\
+	"if r8 < 8 goto 1b;"							\
+	"r0 = 0;"								\
+	"exit;"									\
+	::: __clobber_all);							\
+}
+
+NO_ZEXT32_TEST(rsh32_by_reg_32, 100, "r7 <<= 32; r2 = 32; w7 >>= w2;")
+NO_ZEXT32_TEST(lsh32_by_reg_32, 100, "r2 = 32; w7 <<= w2; r7 >>= 32;")
+NO_ZEXT32_TEST(lsh_by_16, 100, "r7 <<= 16; r7 >>= 32;")
+NO_ZEXT32_TEST(rsh_by_33, 100, "r7 <<= 32; r7 >>= 33;")
+NO_ZEXT32_TEST(arsh_by_32, 0x7ffffffe, "r7 <<= 32; r7 s>>= 32;")
+
 SEC("xdp")
 __success
 __log_level(2)
-__flag(BPF_F_TEST_STATE_FREQ)
 __msg("loop header at 1, header_count is 11")
 __msg("loop header at 1, widening r0 to 0..10 step 1")
 __msg("1: R0=scalar(smin=smin32=0,smax=umax=smax32=umax32=10,{{.*}})")
-__msg("processed 5 insns")
+__msg("processed 4 insns")
 __naked void post_cond_jle(void)
 {
 	asm volatile ("					\
@@ -1554,11 +2125,10 @@ __naked void post_cond_jle(void)
 SEC("xdp")
 __success
 __log_level(2)
-__flag(BPF_F_TEST_STATE_FREQ)
 __msg("loop header at 1, header_count is 10")
 __msg("loop header at 1, widening r0 to 0..9 step 1")
 __msg("1: R0=scalar(smin=smin32=0,smax=umax=smax32=umax32=9,{{.*}})")
-__msg("processed 6 insns")
+__msg("processed 5 insns")
 __naked void post_cond_jge(void)
 {
 	asm volatile ("					\
@@ -1573,11 +2143,10 @@ __naked void post_cond_jge(void)
 SEC("xdp")
 __success
 __log_level(2)
-__flag(BPF_F_TEST_STATE_FREQ)
 __msg("loop header at 1, header_count is 11")
 __msg("loop header at 1, widening r0 to 0..10 step 1")
 __msg("1: R0=scalar(smin=smin32=0,smax=umax=smax32=umax32=10,{{.*}})")
-__msg("processed 6 insns")
+__msg("processed 5 insns")
 __naked void pre_cond_jge(void)
 {
 	asm volatile ("					\
@@ -1592,7 +2161,6 @@ __naked void pre_cond_jge(void)
 SEC("xdp")
 __success
 __log_level(2)
-__flag(BPF_F_TEST_STATE_FREQ)
 __msg_next("scev at header 1:")
 __msg_next("  r0=(+ r0 1) / (linear r0 1)")
 __msg_next(" scev at latch 2:")
@@ -1601,10 +2169,9 @@ __msg("loop header at 1, widening r0")
 __msg("1: R0=scalar(smin=smin32=0,smax=umax=smax32=umax32=2,{{.*}})")
 __msg("1: (07) r0 += 1                       ; R0=scalar(smin=umin=smin32=umin32=1,smax=umax=smax32=umax32=3,{{.*}})")
 __msg("2: (55) if r0 != 0x3 goto pc-2")
-__msg("3: (95) exit")
 __msg("loop header at 1, clamping r0")
-__msg("from 2 to 1: safe")
-__msg("processed 5 insns")
+__msg("3: (95) exit")
+__msg("processed 4 insns")
 __naked void post_cond_jne(void)
 {
 	asm volatile ("					\
@@ -1618,16 +2185,15 @@ __naked void post_cond_jne(void)
 SEC("xdp")
 __success
 __log_level(2)
-__flag(BPF_F_TEST_STATE_FREQ)
 __msg_next("scev at header 1:")
 __msg_next("  r0=(+ r0 -1) / (linear r0 -1)")
 __msg_next(" scev at latch 2:")
 __msg_next("  r0=(+ r0 -1) / (linear (+ r0 -1) -1)")
 __msg("loop header at 1, header_count is 3 ")
 __msg("loop header at 1, widening r0 to 1..3 step 1")
-__msg("1: R0=scalar(smin=umin=smin32=umin32=1,smax=umax=smax32=umax32=3,var_off=(0x0; 0x3)) loop_stack=1")
+__msg("1: R0=scalar(smin=umin=smin32=umin32=1,smax=umax=smax32=umax32=3,var_off=(0x0; 0x3)) R10=fp0 loop_stack=1")
 __msg("loop header at 1, clamping r0 to 1..3 step 1")
-__msg("processed 5 insns")
+__msg("processed 4 insns")
 __naked void post_cond_jne_neg_step(void)
 {
 	asm volatile ("					\
@@ -1651,7 +2217,7 @@ __msg("loop header at 2, widening r1 to 0..4 step 1")
 __msg("loop header at 2, widening r3 to 0..4 step 1")
 __msg("3: (55) if r3 != 0x5 goto pc+1 {{.*}}; R3=5")
 __msg("loop header at 2, clamping r3 to 0..4 step 1")
-__msg("from 6 to 2: safe")
+__msg("from 6 to 2: within")
 __naked void clamp_dependent_overshoot(void)
 {
 	asm volatile ("					\
@@ -1677,7 +2243,7 @@ __msg("loop header at 2, widening r1 to 0..4 step 1")
 __msg("loop header at 2, widening r3 to 0..4 step 1")
 __msg("3: (56) if w3 != 0x5 goto pc+1 {{.*}}; R3=5")
 __msg("loop header at 2, clamping r3 to 0..4 step 1")
-__msg("from 6 to 2: safe")
+__msg("from 6 to 2: within")
 __naked void clamp_dependent_overshoot32(void)
 {
 	asm volatile ("					\
@@ -1696,7 +2262,6 @@ __naked void clamp_dependent_overshoot32(void)
 SEC("xdp")
 __success
 __log_level(2)
-__flag(BPF_F_TEST_STATE_FREQ)
 __msg_next("scev at header 1:")
 __msg_next("  r0=(+ r0 1) / (linear r0 1)")
 __msg_next(" scev at latch 1:")
@@ -1707,11 +2272,10 @@ __msg("1: (15) if r0 == 0x3 goto pc+2        ; R0=scalar(smin=smin32=0,smax=umax
 __msg("2: (07) r0 += 1                       ; R0=scalar(smin=umin=smin32=umin32=1,smax=umax=smax32=umax32=3,{{.*}})")
 __msg("3: (05) goto pc-3")
 __msg("loop header at 1, clamping r0")
-__msg("1: safe")
 __msg("from 1 to 4: R0=3")
 __msg("4: R0=3")
 __msg("4: (95) exit")
-__msg("processed 6 insns")
+__msg("processed 5 insns")
 __naked void pre_cond_je1(void)
 {
 	asm volatile ("					\
@@ -1726,7 +2290,6 @@ __naked void pre_cond_je1(void)
 SEC("xdp")
 __success
 __log_level(2)
-__flag(BPF_F_TEST_STATE_FREQ)
 __msg_next("scev at header 1:")
 __msg_next("  r0=(zext32 (+ r0 1)) / (zext32 (linear r0 1))")
 __msg_next(" scev at latch 2:")
@@ -1735,10 +2298,9 @@ __msg("loop header at 1, widening r0")
 __msg("1: R0=scalar(smin=smin32=0,smax=umax=smax32=umax32=2,{{.*}})")
 __msg("1: (04) w0 += 1                       ; R0=scalar(smin=umin=smin32=umin32=1,smax=umax=smax32=umax32=3,{{.*}})")
 __msg("2: (56) if w0 != 0x3 goto pc-2")
-__msg("3: (95) exit")
 __msg("loop header at 1, clamping r0")
-__msg("from 2 to 1: safe")
-__msg("processed 5 insns")
+__msg("3: (95) exit")
+__msg("processed 4 insns")
 __naked void post_cond_jne32(void)
 {
 	asm volatile ("					\
@@ -1971,10 +2533,49 @@ __naked void one_backedge_two_exits(void)
 	: __clobber_all);
 }
 
+__naked __noinline __used static int returns_zero(void)
+{
+	asm volatile ("					\
+	r0 = 0;						\
+	exit;						\
+"	::: __clobber_all);
+}
+
+/*
+ * A loop that the compiler unrolls in part has an exit for every 'break' and 'return' in every
+ * copy of its body. How many there are says nothing about the number of iterations.
+ * Scalar evolution takes a nested loop for one insn, and its exits are the successors of this insn.
+ * The exit list is truncated: the enclosing loop has no SCEVs, the subprog is not analyzed.
+ */
+SEC("xdp")
+__success __log_level(2)
+__msg("loop at 1, too many exits, too many exits of a nested loop")
+__msg("loop at 2, nested in 1, too many exits")
+__msg("Computing SCEV for subprog at 0:")
+__msg_next("Computing SCEV for subprog at {{[0-9]+}}:")
+__msg("loop header at 1, unsupported loop: too many exits of a nested loop")
+__msg("loop header at 2, header_count is [0..4] ")
+__naked void loop_around_301_exits(void)
+{
+	asm volatile ("					\
+	r7 = 0;						\
+3:	r6 = 0;						\
+1:	call returns_zero;				\
+	.rept 300;					\
+	if r0 == 7 goto 2f;				\
+	.endr;						\
+	r6 += 1;					\
+	if r6 != 4 goto 1b;				\
+	r7 += 1;					\
+	if r7 != 4 goto 3b;				\
+2:	r0 = 0;						\
+	exit;						\
+"	::: __clobber_all);
+}
+
 SEC("xdp")
 __success
 __log_level(2)
-__flag(BPF_F_TEST_STATE_FREQ)
 __msg_next("scev at header 11:")
 __msg_next("  r0=(+ r0 1) / (linear r0 1)")
 __msg_next("  r1=(+ r1 2) / (linear r1 2)")
@@ -1984,18 +2585,15 @@ __msg_next("  r1=(+ r1 2) / (linear (+ r1 2) 2)")
 __msg("loop header at 11, widening r0")
 __msg("loop header at 11, widening r1")
 __msg("11: R0=scalar(smin=smin32=0,smax=umax=smax32=umax32=7,var_off=(0x0; 0x7)) R1=scalar(smin=smin32=0,smax=umax=smax32=umax32=14,var_off=(0x0; 0xe),step=0+2)")
-/* loop exit */
 __msg("16: (a5) if r0 < 0x8 goto pc-6")
-__msg("exiting loop 11")
-__msg("17: (95) exit")
 /* second iteration */
 __msg("loop header at 11, clamping r0")
 __msg("loop header at 11, clamping r1")
 /* iteration convergence */
-__msg("from 16 to 11: safe")
 __not_msg("{{^}}11:")
-/* map lookup error path */
-__msg("from 7 to 17: safe")
+/* loop exit */
+__msg("exiting loop 11")
+__msg("17: (95) exit")
 __naked void correlated_regs(void)
 {
 	asm volatile ("					\
@@ -2029,15 +2627,14 @@ __naked void correlated_regs(void)
  *     k += 1
  *     k <<= 1   // make SCEV construction not possible
  *     k >>= 1
- * map[k] = 1    // make k precise
+ * map[k] = 1    // k has to be known
  */
 SEC("xdp")
 __success
 __log_level(2)
-__flag(BPF_F_TEST_STATE_FREQ)
 __msg("19: (72) *(u8 *)(r4 +0) = 1           ; R4=map_value(id={{.*}},map=map,ks=4,vs=1024,imm=16)")
 __not_msg("19: ")
-__msg("processed 106 insns")
+__msg("processed 105 insns")
 __naked void nested_loops_precise_var1(void)
 {
 	asm volatile ("					\
@@ -2076,8 +2673,7 @@ __log_level(2)
 __msg("loop header at 2, header_count is 100 ")
 __msg("loop header at 4, header_count is [0..100] ")
 __msg("loop header at 6, header_count is [0..100] ")
-__msg("processed 20 insns")
-__flag(BPF_F_TEST_STATE_FREQ)
+__msg("processed 14 insns")
 __naked void nested_loop_with_two_exits(void)
 {
 	asm volatile ("					\
@@ -2138,14 +2734,14 @@ __msg("loop at 5")
 __msg("loop at 6, nested in 5")
 __msg("loop at 11, irreducible")
 __msg("loop at 12, nested in 11")
-/* entry via if r0 == 5 goto d_%= false branch */
-__msg("loop header at 12, header_count is 3 ")
-__msg("loop header at 12, widening r9 to 0..2 step 1")
-__msg("12: R8=1 R9=scalar(smin=smin32=0,smax=umax=smax32=umax32=2,var_off=(0x0; 0x3)) loop_stack=11,12")
 /* entry via if r0 == 5 goto d_%= true branch */
 __msg("loop header at 12, header_count is 3 ")
 __msg("loop header at 12, widening r9 to 0..2 step 1")
-__msg("from 8 to 12: R8=0 R9=scalar(smin=smin32=0,smax=umax=smax32=umax32=2,var_off=(0x0; 0x3)) R10=fp0 loop_stack=11,12")
+/* entry via if r0 == 5 goto d_%= false branch */
+__msg("loop header at 12, header_count is 3 ")
+__msg("loop header at 12, widening r9 to 0..2 step 1")
+__msg("12: R8=0 R9=scalar(smin=smin32=0,smax=umax=smax32=umax32=2,var_off=(0x0; 0x3)) R10=fp0 iter(11)=0 loop_stack=11,12")
+__msg("12: R8=1 R9=scalar(smin=smin32=0,smax=umax=smax32=umax32=2,var_off=(0x0; 0x3)) R10=fp0 iter(11)=0 loop_stack=11,12")
 __naked void enter_nested_loop_from_side(void)
 {
 	asm volatile ("					\
@@ -2209,7 +2805,7 @@ __msg("loop at 1{{$}}")
 __msg("loop at 5, nested in 1, irreducible")
 __msg("loop at 11, nested in 5")
 __msg("scev at header 1:")
-__msg_next("  r6=?")
+__msg_next("  r6=%r6.5?")
 __msg("scev at header 11:")
 __msg_next("  r9=(+ r9 1) / (linear r9 1)")
 __msg("loop header at 11, widening r9 to 0..2 step 1")
@@ -2385,7 +2981,8 @@ __naked void sibling_inner_loops(void)
 SEC("socket")
 __success
 __log_level(2)
-__msg("loop header at 0, can't compute iterations count")
+/* whatever is in the slot */
+__msg("loop header at 0, header_count is [0..11] ")
 __naked void uninit_slot_counter(void)
 {
 	asm volatile ("					\
@@ -2455,7 +3052,7 @@ __success
 __log_level(2)
 __msg("scev at header 2:")
 __msg_next("  r6=(+ r6 1) / (linear r6 1)")
-__msg_next("  r7=(any r7 100) / (any r7 100)")
+__msg_next("  r7=%r7.6=phi(r7, 100) / (any r7 100)")
 __msg_next(" scev at latch 3:")
 __msg_next("  r6=(+ r6 1) / (linear (+ r6 1) 1)")
 __msg_next("  r7=r7 / (any r7 100)")
@@ -2613,7 +3210,7 @@ __naked __noinline __used static int scrub_slot_callee(void)
 }
 
 /*
- * The callee turns the caller's fp-8 into misc, so the states at the call site
+ * The callee turns the caller's fp-4 from zero into misc, so the states at the call site
  * differ between the first and the second iteration, while the states inside
  * the callee are identical. Verification fails with an infinite loop error if
  * states.c:current_loop() does not search upper frames for active loops.
@@ -2624,25 +3221,25 @@ __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
 __msg("loop header at 3, widening r6 to 0..9 step 1")
 __msg("loop header at 3, clamping r6 to 0..9 step 1")
-__msg("12: safe")
+__msg("from 12 to 6: within")
 __naked void clamp_callee_state_pruning(void)
 {
 	asm volatile ("					\
-	w1 = 1;						\
-	*(u32 *)(r10 - 8) = r1;				\
+	r1 = 0;						\
+	*(u32 *)(r10 - 4) = r1;				\
 	r6 = 0;						\
 1:	r1 = r10;					\
 	r1 += -8;					\
 	call scrub_slot_callee;				\
 	r6 += 1;					\
 	if r6 < 10 goto 1b;				\
-	r0 = *(u32 *)(r10 - 8);				\
+	r0 = *(u32 *)(r10 - 4);				\
 	exit;						\
 "	::: __clobber_all);
 }
 
 /*
- * The inner loop turns fp-8 from a spill into misc. On the next outer
+ * The inner loop turns the byte at fp-4 from zero into misc. On the next outer
  * iteration, the states inside the inner loop match its first invocation.
  */
 SEC("socket")
@@ -2655,16 +3252,16 @@ __msg("loop header at 3, clamping r6 to 0..9 step 1")
 __naked void clamp_nested_loop_state_pruning(void)
 {
 	asm volatile ("					\
-	w1 = 1;						\
-	*(u32 *)(r10 - 8) = r1;				\
+	r1 = 0;						\
+	*(u16 *)(r10 - 4) = r1;				\
 	r6 = 0;						\
 1:	r7 = 0;						\
-2:	*(u32 *)(r10 - 4) = 1;				\
+2:	*(u8 *)(r10 - 4) = 1;				\
 	r7 += 1;					\
 	if r7 < 3 goto 2b;				\
 	r6 += 1;					\
 	if r6 < 10 goto 1b;				\
-	r0 = *(u32 *)(r10 - 8);				\
+	r0 = *(u16 *)(r10 - 4);				\
 	exit;						\
 "	::: __clobber_all);
 }
@@ -2698,6 +3295,138 @@ __naked void clamp_nested_unrolled_loop_state_pruning(void)
 	exit;						\
 "	::: __clobber_all);
 }
+
+/*
+ * A number in a part of the stack slot fp-8. There is no formula for it, but the state has its
+ * value. If the loop makes the next value from it, each iteration has a new one: the loop is
+ * verified one iteration at a time. If not, the body is verified at most two times.
+ */
+#define PARTIAL_SPILL_TEST(name, sz, count, msg, first, body)			\
+SEC("socket")									\
+__success __log_level(2)							\
+__msg("loop header at {{[0-9]+}}, header_count is " #count)			\
+__msg("loop header at {{[0-9]+}}, " msg)					\
+__naked void name(void)								\
+{										\
+	asm volatile (								\
+	"call %[bpf_get_prandom_u32];"						\
+	"w0 = w0;"								\
+	"r1 = 0;"								\
+	"r6 = 0;"								\
+	first									\
+"1:"	body									\
+	"r6 += 1;"								\
+	"if r6 < " #count " goto 1b;"						\
+	"r0 = *(" #sz " *)(r10 - 8);"						\
+	"exit;"									\
+	:: __imm(bpf_get_prandom_u32) : __clobber_all);				\
+}
+
+#define SPILL32_0	"*(u32 *)(r10 - 8) = r1;"
+#define SPILL32_INC	"r1 = *(u32 *)(r10 - 8); w1 += 1; *(u32 *)(r10 - 8) = r1;"
+#define NOT_UNROLLED	"widening r6 to 0..0xf423f step 1"
+
+/* 'if (...) cnt++' */
+PARTIAL_SPILL_TEST(partial_spill32_inc, u32, 10, "can't widen *fp-8, expr is %fp-8.{{[0-9]+}}=phi(*fp-8, (spill32 ",
+	SPILL32_0, "if r6 & 1 goto 2f;" SPILL32_INC "2:")
+PARTIAL_SPILL_TEST(partial_spill16_inc, u16, 10, "can't widen *fp-8, expr is (spill16 ",
+	"*(u16 *)(r10 - 8) = r1;", "r1 = *(u16 *)(r10 - 8); w1 += 1; *(u16 *)(r10 - 8) = r1;")
+/* A loop in the loop does it */
+PARTIAL_SPILL_TEST(partial_spill32_inc_in_nested_loop, u32, 10, "can't widen *fp-8, expr is %fp-8.{{[0-9]+}}?",
+	SPILL32_0, "r7 = 0; 2:" SPILL32_INC "r7 += 1; if r7 < 3 goto 2b;")
+/* Two slots feed each other */
+PARTIAL_SPILL_TEST(partial_spill32_two_slots, u32, 10, "can't widen *fp-8, expr is (spill32 ",
+	SPILL32_0 "*(u32 *)(r10 - 16) = r1;",
+	"r2 = *(u32 *)(r10 - 16);" SPILL32_INC "*(u32 *)(r10 - 16) = r1; *(u32 *)(r10 - 8) = r2;")
+/* 'if (...) found = 1' */
+PARTIAL_SPILL_TEST(partial_spill32_flag, u32, 1000000, NOT_UNROLLED,
+	SPILL32_0, "if r6 != 77 goto 2f; r1 = 1; *(u32 *)(r10 - 8) = r1; 2:")
+/* 'prev = last; last = i' */
+PARTIAL_SPILL_TEST(partial_spill32_copy_of_counter, u32, 1000000, NOT_UNROLLED,
+	SPILL32_0, "r7 = *(u32 *)(r10 - 8); *(u32 *)(r10 - 8) = r6;")
+/* A copy of a partial spill that the loop does not change */
+PARTIAL_SPILL_TEST(partial_spill32_copy_of_invariant, u32, 1000000, NOT_UNROLLED,
+	SPILL32_0 "r1 = 5; *(u32 *)(r10 - 16) = r1;",
+	"r7 = *(u32 *)(r10 - 8); r1 = *(u32 *)(r10 - 16); *(u32 *)(r10 - 8) = r1;")
+/* The loop writes the partial spill before it reads it. Only the other half of the slot is live. */
+PARTIAL_SPILL_TEST(partial_spill32_dead_at_the_head, u32, 1000000, NOT_UNROLLED,
+	SPILL32_0, "call %[bpf_get_prandom_u32]; *(u32 *)(r10 - 8) = r0; r1 = *(u32 *)(r10 - 4);")
+/* Nothing is known about the 32 bits in the partial spill: they are their own widening */
+PARTIAL_SPILL_TEST(partial_spill32_unknown, u32, 1000000, NOT_UNROLLED,
+	"*(u32 *)(r10 - 8) = r0;", SPILL32_INC)
+
+/*
+ * 'u32 i' in fp-8 is a counter: SPILL32_INC is 'i++'. It has a formula. The rows are those of
+ * RANGE_TEST: r6 is the first value, r7 is the bound, r9 is the number of iterations.
+ */
+#define SPILL32_LOOP(body)	"*(u32 *)(r10 - 8) = r6; 1:" LIMIT_ITERATIONS body
+#define SPILL32_LOAD		"r1 = *(u32 *)(r10 - 8);"
+#define SPILL32_COUNTED(count, range)								\
+	__retval(count)										\
+	__msg("loop header at {{[0-9]+}}, header_count is [0.." #count "] ")			\
+	__msg("loop header at {{[0-9]+}}, widening *fp-8 to " range " ")			\
+	__msg("loop header at {{[0-9]+}}, clamping *fp-8 to " range " ")
+
+/* On big-endian '*(u32 *)(r10 - 8)' is the high half of the slot: there is no formula for it. */
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+/* Only the low half of the register that is stored at first gets to the slot */
+RANGE_TEST(spill32_inc, "", 7ULL << 32, 7ULL << 32, 1, 5, 5,
+	   SPILL32_LOOP(SPILL32_INC "if r1 != r7 goto 1b;"),
+	   __msg("  *fp-8=(spill32 (+ *fp-8 1)) / (spill32 (linear (zext32 *fp-8) 1))")
+	   SPILL32_COUNTED(5, "0..4"))
+/* The jump tests a second load of the counter */
+RANGE_TEST(spill32_second_load, "", 0, 0, 1, 5, 5,
+	   SPILL32_LOOP(SPILL32_INC SPILL32_LOAD "if w1 != w7 goto 1b;"),
+	   SPILL32_COUNTED(5, "0..4"))
+/* What a compiler makes without 32-bit insns */
+RANGE_TEST(spill32_add64, "", 0, 0, 1, 5, 5,
+	   SPILL32_LOOP(SPILL32_LOAD "r1 += 1; *(u32 *)(r10 - 8) = r1; r1 <<= 32; r1 >>= 32;"
+			"if r1 != r7 goto 1b;"), SPILL32_COUNTED(5, "0..4"))
+/* 'first + step * count' is 0..8. The latch lets 5 through. */
+RANGE_TEST(spill32_first_is_a_range, "", 0, 3, 1, 6, 6,
+	   SPILL32_LOOP(SPILL32_INC "if w1 < w7 goto 1b;"), SPILL32_COUNTED(6, "0..5"))
+RANGE_TEST(spill32_first_is_a_range_pre, "", 0, 3, 1, 6, 6,
+	   SPILL32_LOOP(SPILL32_LOAD "if r1 >= r7 goto 2f;" SPILL32_INC "goto 1b;"),
+	   SPILL32_COUNTED(7, "0..6"))
+/* 2 and 0 in the slot are joined in front of the loop */
+RANGE_TEST(spill32_first_is_precise, "", 0, 0, 1, 0, 1,
+	   "if r7 == 0 goto +1; r6 = 2;" SPILL32_LOOP(SPILL32_INC "if w1 != 5 goto 1b;"),
+	   __msg("header_count is [0..5] ") __not_msg("header_count is [0..3] "))
+/* The slot holds 64 bits when the loop starts. Nothing reads the high half: it's dead. */
+RANGE_TEST(spill32_first_is_64bit, "", 0, 0, 1, 5, 5,
+	   "*(u64 *)(r10 - 8) = r6; 1:" LIMIT_ITERATIONS SPILL32_INC "if w1 != w7 goto 1b;",
+	   SPILL32_COUNTED(5, "0..4"))
+/* A 64-bit spill of i. Its upper 32 bits are dead: the low 32 bits are the induction variable. */
+#define SEXT32_SPILL_LOOP(bound)								\
+	"1:" BUF("*(u32 *)(r10 - 16)") "w1 = *(u32 *)(r10 - 16); w1 += 1; r3 = (s32)r1;"	\
+	"*(u64 *)(r10 - 16) = r3; if w1 != " #bound " goto 1b;"
+SEXT32_TEST(sext32_iv_hi32_dead, 0, SEXT32_SPILL_LOOP(8), __success __retval(8)
+	    __msg("  *fp-16=(sext32 (+ *fp-16 1)) / (spill32 (linear (zext32 *fp-16) 1))")
+	    __msg("header_count is 8 ") __msg("widening *fp-16 to 0..7 "))
+SEXT32_TEST(sext32_iv_hi32_dead_oob, 0, SEXT32_SPILL_LOOP(9), OOB)
+/* The counter makes the address of a spill. Such a loop is not summarized, as with a register. */
+PARTIAL_SPILL_TEST(spill32_is_a_stack_offset, u32, 4,
+	"can't widen *fp-8, expr is (spill32 (+ *fp-8 8)), requires exact stack-offset tracking",
+	SPILL32_0, SPILL32_LOAD "r2 = r10; r2 += -48; r2 += r1; *(u64 *)(r2 + 0) = r6;"
+	"w1 += 8; *(u32 *)(r10 - 8) = r1;")
+/* But there is no exact address to lose when nothing is known about the number */
+PARTIAL_SPILL_TEST(spill32_unknown_is_a_stack_offset, u32, 1000000,
+	"widening *fp-8 to 0..0xffffffff step 1",
+	"*(u32 *)(r10 - 8) = r0;", SPILL32_LOAD "r2 = r1; r2 &= 24; r3 = r10; r3 += -48; r3 += r2;"
+	"*(u64 *)(r3 + 0) = r6; w1 += 8; *(u32 *)(r10 - 8) = r1;")
+#endif
+
+/* A step above S16_MAX has no range, as with a register */
+PARTIAL_SPILL_TEST(spill32_large_step, u32, 4, "can't widen *fp-8, expr is (spill32 ",
+	SPILL32_0, SPILL32_LOAD "w1 += 0x8000; *(u32 *)(r10 - 8) = r1;")
+/* No formula: the load extends the sign, */
+RANGE_TEST(spill32_sext_load, "", 0, 0, 1, 5, 5,
+	   SPILL32_LOOP(SPILL32_INC "r1 = *(s32 *)(r10 - 8); if r1 != r7 goto 1b;"), NO_COUNT)
+/* the sum is made from a different slot. */
+RANGE_TEST(spill32_other_slot, "", 0, 0, 1, 5, 5,
+	   "*(u32 *)(r10 - 16) = r6;"
+	   SPILL32_LOOP(SPILL32_LOAD "if w1 == w7 goto 2f; r1 = *(u32 *)(r10 - 16); w1 += 1;"
+			"*(u32 *)(r10 - 8) = r1; goto 1b;"), NO_COUNT)
 
 /*
  * r7 starts as 1 + 6*k and invariant r8 as 1 + 9*k (0 <= k <= 3).
@@ -2735,6 +3464,359 @@ __naked void conditional_scalar_assignment_gcd(void)
 	: __imm(bpf_get_prandom_u32)
 	: __clobber_all);
 }
+
+/*
+ * Registers that have no linear formula, and the state that enters the loop stands for all
+ * iterations all the same. r7 is what @init makes of an unknown number, r8 is unknown.
+ */
+#define NOT_LINEAR_TEST(name, init, op, expect)					\
+SEC("socket")									\
+__success __log_level(2)							\
+expect										\
+__naked void name(void)								\
+{										\
+	asm volatile (								\
+	"call %[bpf_get_prandom_u32];"						\
+	"r8 = r0;"								\
+	"call %[bpf_get_prandom_u32];"						\
+	"r7 = r0;"								\
+	init									\
+	"r6 = 0;"								\
+"1:"	op									\
+	"r6 += 1;"								\
+	"if r6 < 8 goto 1b;"							\
+	"r0 = r7;"								\
+	"r0 &= 1;"								\
+	"exit;"									\
+	:: __imm(bpf_get_prandom_u32) : __clobber_all);				\
+}
+
+/* [0, max] that loses bits is in [0, max], and a bit that is 0 stays 0 */
+#define LOSES_BITS(max)	__msg("r7 stays in 0.." #max ", it loses bits only")
+#define UNROLLED(expr)	__msg("can't widen r7, expr is " expr) __not_msg("it loses bits only")
+
+NOT_LINEAR_TEST(and_clears_a_bit, "r7 &= 255;", "r1 = 1; r1 <<= r6; r1 ^= -1; r7 &= r1;",
+		LOSES_BITS(255))
+NOT_LINEAR_TEST(and_on_the_right, "r7 &= 255;", "r1 = r8; r1 &= r7; r7 = r1;", LOSES_BITS(255))
+NOT_LINEAR_TEST(and_0_or_64, "r7 &= 64;", "r7 &= r8;", LOSES_BITS(64))
+NOT_LINEAR_TEST(zext32_or_nothing, "r7 >>= 8;", "if r8 == 0 goto +1; w7 = w7;",
+		LOSES_BITS(72057594037927935))
+/* 64..127 can become 0 */
+NOT_LINEAR_TEST(and_64_to_127, "r7 &= 63; r7 |= 64;", "r7 &= 127;", UNROLLED("(& r7 127)"))
+/* '>>' does not make a number greater, but iterations one by one tell more: 0 after 8 shifts */
+NOT_LINEAR_TEST(rsh_on_one_path, "r7 &= 255;", "if r8 == 0 goto +1; r7 >>= 1;",
+		UNROLLED("%r7.8=phi(r7, (>> r7 1))"))
+NOT_LINEAR_TEST(rsh_then_and, "r7 &= 255;", "r7 >>= 1; r7 &= r8;", UNROLLED("(& (>> r7 1) r8)"))
+NOT_LINEAR_TEST(lsh_grows, "r7 &= 15;", "r7 <<= 1;", UNROLLED("(<< r7 1)"))
+
+/* bpf_compute_const_regs() knows that r7 is the same constant in each iteration */
+#define NOT_CHANGED	__msg("widening r6 to 0..7")
+NOT_LINEAR_TEST(same_constant, "r7 = 17;", "r7 &= 31;", NOT_CHANGED)
+NOT_LINEAR_TEST(same_wide_constant, "r7 = 0xffffffff00000011 ll;", "r7 &= -239;", NOT_CHANGED)
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, char[64]);
+} map64 SEC(".maps");
+
+/*
+ * A conditional jump refines the registers and stack slots that are linked to what it tests.
+ * r6: 64 bytes. r7: a scalar below 256. r8: an unbounded scalar. r9: the context.
+ * The test leaves an address in r1.
+ */
+#define LINKED_SEC(sec, name, expect, body)					\
+SEC(sec) expect									\
+__naked void name(void)								\
+{										\
+	asm volatile (								\
+	"r9 = r1; r1 = 0; *(u32 *)(r10 - 4) = r1; r2 = r10; r2 += -4; r1 = %[map64] ll;"	\
+	"call %[bpf_map_lookup_elem]; if r0 == 0 goto out_%=; r6 = r0;"		\
+	"call %[bpf_get_prandom_u32]; r7 = r0; r7 &= 255;"			\
+	"call %[bpf_ktime_get_ns]; r8 = r0;"					\
+	body									\
+	"r0 = *(u8 *)(r1 + 0);"							\
+	"out_%=: r0 = 0; exit;"							\
+	:									\
+	: __imm(bpf_map_lookup_elem), __imm(bpf_get_prandom_u32), __imm(bpf_ktime_get_ns),	\
+	  __imm(bpf_dynptr_from_skb), __imm(bpf_dynptr_slice_rdwr),		\
+	  __imm(bpf_ringbuf_reserve), __imm(bpf_ringbuf_discard), __imm(bpf_loop),	\
+	  __imm_addr(map64), __imm_addr(ringbuf)				\
+	: __clobber_all);							\
+}
+#define LINKED(name, expect, body)	LINKED_SEC("socket", name, expect, body)
+
+#define VALID	__success __retval(0)
+#define MAP_OOB	__failure __msg("invalid access to map value")
+#define UNBOUND	__failure __msg("unbounded min value")
+
+/* r3 is the address in r1 as a scalar. It does not bound the offset of r1. */
+LINKED(pointer_is_not_scalar, __failure,
+	"r7 &= 127; r1 = r6; r1 += r7; r3 = r1; r3 = le64 r3; if r3 < 64 goto out_%=; r1 += -64;")
+
+/*
+ *	p = buf + i; if (i > 63) return 0; c = *p;
+ * The jump bounds i. r1 is r6 + r7 and r6 is live: r1 is recomputed.
+ */
+#define USE_R6	"r0 = *(u8 *)(r6 + 0);"
+
+LINKED(index_tested_after_the_add, VALID, "r1 = r6; r1 += r7; if r7 > 63 goto out_%=;" USE_R6)
+LINKED(low_32_bits_of_the_index_tested, __failure __msg("R1 unbounded memory access"),
+	"r2 = 0x1000000ff ll; r2 &= r8; r1 = r6; r1 += r2; w3 = w2; if r3 > 63 goto out_%=;" USE_R6)
+/*
+ * A dynptr at r10 - 16. r7 is r10 - 32, r1 is r7 + r8, the jump makes r8 a constant.
+ * 'r1 += r8' refuses 0x100000010: r1 is left as it is. As an int r10 + 0xfffffff0 is r10 - 16.
+ */
+#define DYNPTR_AT(index)							\
+	"r1 = r9; r2 = 0; r3 = r10; r3 += -16; call %[bpf_dynptr_from_skb];"	\
+	"r8 >>= 1; r7 = r10; r7 += -32; r1 = r7; r1 += r8; r2 = " index " ll;"	\
+	"if r8 != r2 goto out_%=; r2 = 0; r3 = r7; r4 = 0; call %[bpf_dynptr_slice_rdwr]; r1 = r6;"
+
+LINKED_SEC("tc", index_is_constant, VALID, DYNPTR_AT("16"))
+LINKED_SEC("tc", index_is_constant_that_the_add_refuses,
+	__failure __msg("dynptr has to be at a constant offset"), DYNPTR_AT("0x100000010"))
+/* r7 is -2 or 5. Its low 2 bits are not 3: the path is infeasible, and r6 + r7 + 2 is empty. */
+LINKED(index_is_empty, VALID __flag(BPF_F_TEST_REG_INVARIANTS),
+	"r7 &= 1; r7 *= 7; r7 += -2; r1 = r6; r1 += r7; r1 += 2; if r7 & 1 goto l_%=; goto out_%=;"
+	"l_%=: if r7 & 2 goto m_%=; goto out_%=; m_%=: r1 += 1;" USE_R6)
+
+/*
+ *	static void clamp(struct buf *b) { if (b->len > 63) b->len = 0; }
+ *	clamp(&b); c = b.data[b.len];
+ * The callee tests memory of its caller: the slot is refined. Not if it may have been written since
+ * the load. r1 and r4 point to b.len, r2 is not bounded.
+ */
+#define CLAMP(name, before_the_jump)						\
+static __naked __noinline __used void name(void)				\
+{										\
+	asm volatile (								\
+	"r3 = *(u64 *)(r1 + 0);" before_the_jump				\
+	"if r3 <= 63 goto +2; r3 = 0; *(u64 *)(r1 + 0) = r3; r0 = 0; exit;"	\
+	::: __clobber_all);							\
+}
+#define CALL(callee)								\
+	"*(u64 *)(r10 - 16) = r8; r1 = r10; r1 += -16; r4 = r1; r2 = r8; r2 >>= 1;"	\
+	"call " #callee "; r2 = *(u64 *)(r10 - 16); r1 = r6; r1 += r2;"
+
+CLAMP(clamp, "")
+LINKED(callee_tests_memory_of_caller, VALID, CALL(clamp))
+CLAMP(store_and_clamp, "*(u64 *)(r1 + 0) = r2;")
+LINKED(callee_writes_memory_of_caller, __failure, CALL(store_and_clamp))
+/* a store defines the memory */
+CLAMP(store_and_test, "r3 = r2; *(u64 *)(r1 + 0) = r3;")
+LINKED(callee_tests_what_it_stored, VALID, CALL(store_and_test))
+/* the same address base, no overlap */
+CLAMP(store_next_and_clamp, "*(u64 *)(r1 + 8) = r2;")
+LINKED(callee_writes_next_field, VALID, CALL(store_next_and_clamp))
+/* another address base can be another name of the memory */
+CLAMP(store_alias_and_clamp, "*(u64 *)(r4 + 0) = r2;")
+LINKED(callee_writes_through_alias, __failure, CALL(store_alias_and_clamp))
+
+/*
+ *	struct { char *buf; u64 len; } c = { buf, 0 };		bpf_loop(100, append, &c, 0);
+ *	append: if (c->len > 63) return 1; bpf_get_prandom_u32(); c->buf[c->len]; c->len++;
+ * The compiler loads c->len again after a call. c is on the stack of the caller, where len grows
+ * until it is widened. The jump refines that slot: it still holds what the tested register was
+ * loaded from.
+ */
+#define APPEND(name, before_the_jump)						\
+static __naked __used void name(void)						\
+{										\
+	asm volatile (								\
+	"r6 = r2; r1 = *(u64 *)(r6 + 8);" before_the_jump			\
+	"if r1 > 63 goto l_%=;"							\
+	"call %[bpf_get_prandom_u32];"						\
+	"r2 = *(u64 *)(r6 + 8); r1 = *(u64 *)(r6 + 0); r1 += r2; r0 = *(u8 *)(r1 + 0);"	\
+	"r2 += 1; *(u64 *)(r6 + 8) = r2; r0 = 0; exit;"				\
+	"l_%=: r0 = 1; exit;"							\
+	:: __imm(bpf_get_prandom_u32) : __clobber_all);				\
+}
+#define CALL_APPEND(name)							\
+	"*(u64 *)(r10 - 16) = r6; r1 = 0; *(u64 *)(r10 - 8) = r1;"		\
+	"r1 = 100; r2 = " #name " ll; r3 = r10; r3 += -16; r4 = 0; call %[bpf_loop]; r1 = r6;"
+
+APPEND(append, "")
+LINKED(callback_tests_slot_of_caller, VALID, CALL_APPEND(append))
+/* The slot is written between the load and the jump: len is 0 1 3 7 15 31 63, the slot 126 */
+APPEND(append_stale, "r2 = r1; r2 <<= 1; *(u64 *)(r6 + 8) = r2;")
+LINKED(callback_tests_stale_copy_of_slot, UNBOUND, CALL_APPEND(append_stale))
+
+/*
+ *	p = buf; i = 0; do { if (i > 62) break; i = *(u16 *)p; p = buf + i; } while (i);
+ * r1 == r6 + r2 at the header in every iteration: it holds at loop entry, the backedge preserves it
+ */
+#define LOOP(add)								\
+	"l_%=: if r2 > 62 goto out_%=; r2 = *(u16 *)(r1 + 0);" add		\
+	"if r2 != 0 goto l_%=; r1 = r6;"
+
+LINKED(base_plus_index_at_loop_header, VALID, "r1 = r6; r2 = 0;" LOOP("r1 = r6; r1 += r2;"))
+LINKED(base_plus_index_at_loop_entry_only, MAP_OOB,
+	"r1 = r6; r2 = 0;" LOOP("r1 = r6; r1 += r2; r2 >>= 1;"))
+LINKED(base_plus_index_on_backedge_only, MAP_OOB,
+	"r1 = r6; r1 += r7; r2 = r8; r2 &= 255;" LOOP("r1 = r6; r1 += r2;"))
+
+LINKED(sign_extension_that_fits, VALID, "r2 = (s8)r8; if r8 > 63 goto out_%=; r1 = r6; r1 += r2;")
+
+/* 'int n' in three registers. 'if w3 s> 63' refines only 32-bit ranges: those of the copies too. */
+LINKED(copies_get_the_32_bit_range, VALID,
+	"w2 = w8; r3 = r2; r4 = r2; if w3 s> 63 goto out_%=; if w4 s< 0 goto out_%=;"
+	"r1 = r6; r1 += r2;")
+
+/* The low 3 bits of r8 are 5: [-2, 1] is empty, the last jump is not taken. It refines r2 too. */
+LINKED(copy_refined_by_jump_with_dead_branch, VALID,
+	"r8 <<= 3; r8 += 5; r2 = r8; if r8 s> 63 goto out_%=; if r8 s< -2 goto out_%=;"
+	"if r8 s<= 1 goto out_%=; r1 = r6; r1 += r2;")
+
+/* A copy on each of two paths: r2 and r3 are phis with the same operands, up to a constant */
+#define TWO_PATHS(a, b)								\
+	"if r7 > 9 goto l_%=; r2 = r8; " a " goto m_%=; l_%=: r2 = r8; r2 >>= 1; " b	\
+	"m_%=: if r2 > 62 goto out_%=; r1 = r6; r1 += r3;"
+
+LINKED(congruent_phis, VALID, TWO_PATHS("r3 = r2; r3 += 1;", "r3 = r2; r3 += 1;"))
+LINKED(phis_with_other_delta_on_one_path, UNBOUND,
+       TWO_PATHS("r3 = r2; r3 += 1;", "r3 = r2; r3 += 2;"))
+/* One of three edges brings unrelated values */
+LINKED(phis_not_linked_on_one_of_three_edges, UNBOUND,
+	"r3 = r8; r3 >>= 2; r2 = 0; if r7 == 20 goto m_%=;"
+	TWO_PATHS("r3 = r2; r3 += 1;", "r3 = r2; r3 += 1;"))
+/* (zext32 x) on both paths: linked in 64 bits */
+LINKED(congruent_phis_of_zext32, VALID,
+	"if r7 > 9 goto l_%=; w2 = w8; r3 = r2; goto m_%=; l_%=: r2 = r8; r2 >>= 1; w2 = w2;"
+	"r3 = r2; m_%=: r3 += 1; if r2 > 62 goto out_%=; r1 = r6; r1 += r3;")
+
+/* The low 3 bits of r3 are 5. It is r8 + 5 once r8 fits in s8: no overlap with [-2, 1]. */
+LINKED(empty_intersection, VALID __flag(BPF_F_TEST_REG_INVARIANTS),
+	"r3 = (s8)r8; if r3 & 7 goto out_%=; r3 += 5; if r3 s> 100 goto out_%=;"
+	"if r3 s< -100 goto out_%=; if r8 s< -7 goto out_%=; if r8 s> -4 goto out_%=;"
+	"r3 += 3; r1 = r6;")
+
+/* r2 is even. It is r8 once r8 fits in s8. r8 is odd after the last jump: var_off don't overlap. */
+LINKED(var_off_dont_overlap, VALID,
+	"r2 = (s8)r8; if r2 & 1 goto out_%=; if r2 s> 100 goto out_%=; if r2 s< -100 goto out_%=;"
+	"if r8 > 5 goto out_%=; if r8 & 1 goto l_%=; goto out_%=;"
+	"l_%=: r2 &= 1; r2 <<= 6; r1 = r6; r1 += r2;")
+
+/* The low bytes of the spill to r10 - 16 come first or last */
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+#define FIRST_BYTES_ARE_LOW	VALID
+#else
+#define FIRST_BYTES_ARE_LOW	__failure __msg("R1 unbounded memory access")
+#endif
+
+/* r2 is the low 32 bits of the slot. The 32-bit spill is in its first half-slot. */
+LINKED(spill_32_bits_fill_64_take_low_half, FIRST_BYTES_ARE_LOW,
+	"*(u64 *)(r10 - 16) = r7; *(u32 *)(r10 - 16) = r8; r2 = *(u64 *)(r10 - 16); w2 = w2;"
+	"w3 = w8; if r2 > 63 goto out_%=; r1 = r6; r1 += r3;")
+/* The slot is a phi: two paths spill distinct values to its first half-slot */
+LINKED(spill_32_bits_on_two_paths_fill_64_take_low_half, FIRST_BYTES_ARE_LOW,
+	"*(u64 *)(r10 - 16) = r7; *(u32 *)(r10 - 16) = r8; if r7 > 9 goto l_%=;"
+	"r3 = r8; r3 >>= 1; *(u32 *)(r10 - 16) = r3;"
+	"l_%=: r2 = *(u64 *)(r10 - 16); w2 = w2; if r2 > 63 goto out_%=;"
+	"r3 = *(u32 *)(r10 - 16); r1 = r6; r1 += r3;")
+/* The half-slot at r10 - 12 is dead: at the second jump the state has a 32-bit spill */
+LINKED(spill_64_bits_fill_32, FIRST_BYTES_ARE_LOW,
+	"*(u64 *)(r10 - 16) = r8; if r8 s> 63 goto out_%=; if r8 s< 0 goto out_%=;"
+	"r2 = *(u32 *)(r10 - 16); r1 = r6; r1 += r2;")
+
+/* r0 is r10 - 24 when the first 8 bytes of the packet are not in one piece */
+LINKED_SEC("tc", slot_written_through_a_slice, UNBOUND,
+	"r1 = r9; r2 = 0; r3 = r10; r3 += -16; call %[bpf_dynptr_from_skb];"
+	"r1 = r10; r1 += -16; r2 = 0; r3 = r10; r3 += -24; r4 = 8;"
+	"call %[bpf_dynptr_slice_rdwr]; if r0 == 0 goto out_%=;"
+	"r3 = *(u64 *)(r10 - 24); *(u64 *)(r0 + 0) = r8; r2 = *(u64 *)(r10 - 24);"
+	"if r3 > 63 goto out_%=; r1 = r6; r1 += r2;")
+/* One fill reads one value: r2 is a copy of r3, whatever is stored through the slice */
+LINKED_SEC("tc", copy_of_a_fill_from_a_slice_buffer, VALID,
+	"r1 = r9; r2 = 0; r3 = r10; r3 += -16; call %[bpf_dynptr_from_skb];"
+	"r1 = r10; r1 += -16; r2 = 0; r3 = r10; r3 += -24; r4 = 8;"
+	"call %[bpf_dynptr_slice_rdwr]; if r0 == 0 goto out_%=;"
+	"r3 = *(u64 *)(r10 - 24); r2 = r3; *(u64 *)(r0 + 0) = r8;"
+	"if r3 > 63 goto out_%=; r1 = r6; r1 += r2;")
+
+/* The buffer is r10 - 32 or r10 - 48, a range in the state. The call does not write to r10 - 40. */
+LINKED_SEC("tc", slice_buffer_at_two_offsets, VALID,
+	"r1 = r9; r2 = 0; r3 = r10; r3 += -16; call %[bpf_dynptr_from_skb];"
+	"*(u64 *)(r10 - 32) = r7; *(u64 *)(r10 - 40) = r7; *(u64 *)(r10 - 48) = r7;"
+	"r8 = r10; r8 += -48; r9 = r10; r9 += -32; r7 = 0;"
+	"l_%=: call %[bpf_get_prandom_u32]; if r0 == 0 goto s_%=; r9 = r8;"
+	"s_%=: r7 += 1; if r7 < 64 goto l_%=;"
+	"r1 = r10; r1 += -16; r2 = 0; r3 = r9; r4 = 8; call %[bpf_dynptr_slice_rdwr];"
+	"r1 = *(u64 *)(r10 - 40); r1 = r6;")
+/* No insn stores through a slice of 0 bytes, and the call does not write to the buffer */
+LINKED_SEC("tc", slice_of_0_bytes_at_variable_offset, VALID,
+	"r1 = r9; r2 = 0; r3 = r10; r3 += -16; call %[bpf_dynptr_from_skb];"
+	"*(u64 *)(r10 - 24) = r7; *(u64 *)(r10 - 32) = r7; r7 &= 8;"
+	"r1 = r10; r1 += -16; r2 = 0; r3 = r10; r3 += -32; r3 += r7; r4 = 0;"
+	"call %[bpf_dynptr_slice_rdwr]; r1 = r6;")
+
+/* BTF of the kfuncs that only asm calls */
+void __kfunc_btf_root(void)
+{
+	bpf_dynptr_from_skb(0, 0, 0);
+	bpf_dynptr_slice_rdwr(0, 0, 0, 0);
+}
+
+/* Linked at the header in every iteration: r2 is r3 + 2 at loop entry, both have the step 1 */
+#define LOOP_HEADER(enter, step)						\
+	enter "l_%=: if r3 > 61 goto out_%=; r1 = r6; r1 += r2; r0 = *(u8 *)(r1 + 0);" step	\
+	"if r0 != 0 goto l_%=;"
+
+LINKED(linked_at_loop_header, VALID,
+	LOOP_HEADER("r3 = r8; r2 = r8; r2 += 1; r2 += 1;", "r2 += 1; r3 += 1;"))
+LINKED(linked_at_loop_entry_only, __failure,
+	LOOP_HEADER("r3 = r8; r2 = r8; r2 += 1; r2 += 1;", "r2 += 2; r3 += 1;"))
+
+/*
+ * An irreducible loop: 'l' is the header, 'm' is a secondary entry. A link that is made in the loop
+ * holds in the next basic blocks too. Not after 'm' if it is made before 'm': every edge of the
+ * loop to 'm' has it, the edge that enters the loop there does not. That edge can come from
+ * a natural loop 'o' around the irreducible one.
+ * In the last two tests 'o' is the header. The natural loop in it has an env at loop entry. Its
+ * header can be the secondary entry.
+ */
+LINKED(irreducible_loop, VALID,
+	"if r7 > 5 goto m_%=; l_%=: r7 += 1;"
+	"m_%=: r2 = r8; r2 += 1; r2 += 1; if r8 > 61 goto out_%=; r1 = r6; r1 += r2;"
+	"r0 = *(u8 *)(r1 + 0); if r7 < 10 goto l_%=;")
+LINKED(irreducible_loop_fallthrough_pred, UNBOUND,
+	"r2 = r7; if r7 > 5 goto m_%=; l_%=: r7 += 1; r2 = r8;"
+	"m_%=: if r8 > 63 goto out_%=; r1 = r6; r1 += r2;"
+	"r0 = *(u8 *)(r1 + 0); if r7 < 10 goto l_%=;")
+LINKED(irreducible_loop_next_bb, VALID,
+	"if r7 > 5 goto m_%=; l_%=: r7 += 1;"
+	"m_%=: r2 = r8; r2 += 1; r2 += 1; if r7 == 3 goto n_%=; r3 = 0;"
+	"n_%=: if r8 > 61 goto out_%=; r1 = r6; r1 += r2;"
+	"r0 = *(u8 *)(r1 + 0); if r7 < 10 goto l_%=;")
+LINKED(irreducible_loop_secondary_entry, UNBOUND,
+	"r9 = 0; o_%=: r9 += 1; call %[bpf_ktime_get_ns]; r8 = r0; r2 = r7; if r7 > 5 goto m_%=;"
+	"l_%=: r7 += 1; r2 = r8; r2 += 1; r2 += 1; if r7 == 3 goto m_%=; r3 = 0;"
+	"m_%=: if r8 > 61 goto out_%=; r1 = r6; r1 += r2;"
+	"r0 = *(u8 *)(r1 + 0); if r7 < 10 goto l_%=; if r9 < 3 goto o_%=;")
+LINKED(natural_loop_in_irreducible_loop, VALID,
+	"if r7 > 5 goto m_%=; o_%=: r7 += 1; m_%=:"
+	LOOP_HEADER("r3 = r8; r2 = r8; r2 += 1; r2 += 1;", "r2 += 1; r3 += 1;")
+	"if r7 < 10 goto o_%=;")
+LINKED(natural_loop_is_secondary_entry, MAP_OOB,
+	"r3 = r8; r2 = r7; if r7 > 5 goto l_%=; o_%=: r7 += 1;"
+	LOOP_HEADER("r3 = r8; r2 = r8; r2 += 1; r2 += 1;", "r2 += 1; r3 += 1;")
+	"if r7 < 10 goto o_%=;")
+
+/*
+ * No exit of the inner loop dominates its backedges: may_goto is added before its header. The prog
+ * holds a reference, so may_goto goes to the exit of the outer loop: an edge that the verifier
+ * adds. Every iteration of the outer loop restores r3. At the header of the inner one it is r7.
+ */
+LINKED(added_edge, UNBOUND,
+	"r1 = %[ringbuf] ll; r2 = 8; r3 = 0; call %[bpf_ringbuf_reserve]; if r0 == 0 goto out_%=;"
+	"*(u64 *)(r10 - 16) = r0; r3 = r8;"
+	"o_%=: r2 = r3; r3 = r7;"
+	"i_%=: r1 = *(u8 *)(r6 + 0); if r1 == 1 goto a_%=; if r1 == 2 goto b_%=; goto i_%=;"
+	"a_%=: goto i_%=;"
+	"b_%=: r3 = r2; r1 = *(u8 *)(r6 + 1); if r1 == 3 goto o_%=;"
+	"r4 = r6; if r8 > 63 goto r_%=; r4 += r3;"
+	"r_%=: *(u64 *)(r10 - 24) = r4; r1 = *(u64 *)(r10 - 16); r2 = 0;"
+	"call %[bpf_ringbuf_discard]; r1 = *(u64 *)(r10 - 24);")
 
 /*
  * r7 = ctx->data;
@@ -2853,9 +3935,9 @@ __failure
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
 __msg("scev at header 9:")
-__msg_next("  r6=(+ ? 1) / ?")
+__msg_next("  r6=(+ %r6.13? 1) / ?")
 __msg_next(" scev at latch 20:")
-__msg_next("  r6=(+ ? 1) / (+ ? 1)")
+__msg_next("  r6=(+ %r6.13? 1) / (+ %r6.13? 1)")
 __msg_next("scev at header 13:")
 __msg_next("  r9=(+ r9 1) / (linear r9 1)")
 __msg_next(" scev at latch 16:")
@@ -2929,7 +4011,7 @@ SEC("xdp")
 __success __retval(3)
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-__msg("r6 = *(u64 *)(r10 -8) {{.*}}; r6 ? -> r6")
+__msg("r6 = *(u64 *)(r10 -8) {{.*}}; r6 %r6.4? -> r6")
 __msg("scev at header 1:")
 __msg_next("  r6=(+ r6 1) / (linear r6 1)")
 __msg_next(" scev at latch 16:")
@@ -3050,7 +4132,7 @@ __success
 __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
 __msg("scev at header 4:")
-__msg_next("r7=(any r7 8) / (any r7 8)")
+__msg_next("r7=%r7.11=phi(r7, 8) / (any r7 8)")
 __msg("loop header at 4, can't widen r7, expr is {{.*}}, requires exact stack-offset tracking")
 __naked void no_widen_stack_fill_any(void)
 {
@@ -3158,6 +4240,44 @@ __naked void ptr_stack_other_frame(void)
 "	::: __clobber_all);
 }
 
+/*
+ * r6 is fp-63 + r0. The jump compares addresses. fp-1 is below fp+0: they have the order of signed
+ * offsets, as long as base + offset does not wrap around. Nothing limits the offset of a pointer
+ * that is compared only: fp-63 + 0..2^62 can be a small address.
+ */
+#define PTR_RANGE_TEST(name, offset, first, step, op, bound, expect)		\
+SEC("socket")									\
+__success __log_level(2)							\
+expect										\
+__naked void name(void)								\
+{										\
+	asm volatile (								\
+	"call %[bpf_get_prandom_u32];"						\
+	offset									\
+	"r6 = r10;"								\
+	"r6 += -63;"								\
+	"r6 += r0;"								\
+	"r7 = r10;"								\
+	"r9 = 0;"								\
+"1:"	LIMIT_ITERATIONS							\
+	first " += " #step ";"							\
+	"if " first " " op " " bound " goto 1b;"				\
+"2:	r0 = 0;"								\
+	"exit;"									\
+	:: __imm(bpf_get_prandom_u32) : __clobber_all);				\
+}
+
+PTR_RANGE_TEST(ptr_first_is_below_or_at_fp, "r0 &= 63;", "r6", 1, "<=", "r7",
+	       __msg("loop header at {{[0-9]+}}, header_count is [0..64] "))
+PTR_RANGE_TEST(ptr_first_offset_is_wide, "r0 >>= 2;", "r6", 1, "<", "r7", NO_COUNT)
+PTR_RANGE_TEST(ptr_bound_offset_is_wide, "r0 >>= 2;", "r7", -1, ">", "r6", NO_COUNT)
+/* Constants: the offset goes from -55 to 1, across 0 */
+PTR_RANGE_TEST(ptr_const_crosses_fp, "r0 = 0;", "r6", 8, "<", "r7",
+	       __msg("loop header at {{[0-9]+}}, header_count is [0..8] "))
+/* 'for (p = buf; p != end; p += 21)': fp-63 and fp-42 get to fp */
+PTR_RANGE_TEST(ptr_ne_mul21, "r0 &= 1; r0 *= 21;", "r6", 21, "!=", "r7",
+	       __msg("loop header at {{[0-9]+}}, header_count is [0..3] "))
+
 SEC("xdp")
 __success
 __log_level(2)
@@ -3187,10 +4307,9 @@ __naked void ptr_map_value_jmp32(void)
 }
 
 SEC("xdp")
-__failure
+__success
 __log_level(2)
 __msg("loop header at 11, can't compute iterations count")
-__msg("R6 32-bit pointer arithmetic prohibited")
 __naked void ptr_map_value_alu32_latch(void)
 {
 	asm volatile ("					\
@@ -3644,12 +4763,23 @@ exit_%=:						\
  *        } while (r8 < 3);
  *    }
  *    return 0;
+ *
+ * The outer loop gets may_goto in front of the jump that leaves it, the inner loop doesn't.
+ * At run time it's may_goto that ends the prog.
  */
 SEC("xdp")
-__failure
-__log_level(2)
-__flag(BPF_F_TEST_STATE_FREQ)
-__msg("The sequence of 8193 jumps is too complex.")
+__success __retval(0)
+__xlated("call unknown")
+__xlated("...")
+__xlated("if r0 == 0x2a goto pc+4")
+__xlated("r8 = 0")
+__xlated("r8 += 1")
+__xlated("if r8 < 0x3 goto pc-2")
+__xlated("goto pc-{{[0-9]+}}")
+__xlated("r0 = 0")
+__xlated("exit")
+__xlated("r0 = 0")
+__xlated("exit")
 __naked void nested_terminating_prune(void)
 {
 	asm volatile ("					\
@@ -3771,6 +4901,136 @@ __naked void post_cond_jlt32_copy(void)
 "	:
 	: __imm(bpf_get_prandom_u32)
 	: __clobber_all);
+}
+
+/*
+ * The loop loads r6 again in every iteration, and is too long for a walk. r6 is 0 at the entry and
+ * a byte in all iterations but the first one: the first iteration is verified on its own, the state
+ * that comes back to the head stands for the rest.
+ */
+SEC("socket")
+__success __retval(0)
+__log_level(2)
+__msg("header_count is 100000 ")
+__msg("can't widen r6, expr is %r6.13")
+__not_msg("widening r8")
+__msg("clamping r8 to 0..0x1869f step 1")
+__naked void index_loaded_in_previous_iteration(void)
+{
+	asm volatile ("					\
+	*(u64 *)(r10 - 8) = 0;				\
+	r2 = r10;					\
+	r2 += -8;					\
+	r1 = %[map] ll;					\
+	call %[bpf_map_lookup_elem];			\
+	if r0 == 0 goto 2f;				\
+	r7 = r0;					\
+	r6 = 0;						\
+	r8 = 0;						\
+1:	r1 = r7;					\
+	r1 += r6;					\
+	r0 = *(u8 *)(r1 + 0);				\
+	r6 = *(u8 *)(r7 + 0);				\
+	r8 += 1;					\
+	if r8 < 100000 goto 1b;				\
+2:	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_map_lookup_elem), __imm_addr(map)
+	: __clobber_all);
+}
+
+/*
+ * What the first iteration makes of r6 is a guess about the rest. A byte in the first
+ * iteration, 16 bits in the others: the state that comes back to the head next is not within it.
+ */
+SEC("socket")
+__failure __msg("R1 unbounded memory access")
+__naked void first_iteration_loads_less(void)
+{
+	asm volatile ("					\
+	*(u64 *)(r10 - 8) = 0;				\
+	r2 = r10;					\
+	r2 += -8;					\
+	r1 = %[map] ll;					\
+	call %[bpf_map_lookup_elem];			\
+	if r0 == 0 goto 4f;				\
+	r7 = r0;					\
+	r6 = 0;						\
+	r8 = 0;						\
+1:	r1 = r7;					\
+	r1 += r6;					\
+	r0 = *(u8 *)(r1 + 0);				\
+	if r8 != 0 goto 2f;				\
+	r6 = *(u8 *)(r7 + 0);				\
+	goto 3f;					\
+2:	r6 = *(u16 *)(r7 + 0);				\
+3:	r8 += 1;					\
+	if r8 < 100000 goto 1b;				\
+4:	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_map_lookup_elem), __imm_addr(map)
+	: __clobber_all);
+}
+
+/*
+ * Every iteration takes a reference, only the last one is released. The state that comes back
+ * to the head of the loop has a reference that nothing holds.
+ */
+SEC("socket")
+__failure __msg("Unreleased reference")
+__naked void loop_takes_reference_every_time(void)
+{
+	asm volatile (
+	"r6 = 0;"
+"1:"
+	"r1 = %[ringbuf] ll;"
+	"r2 = 8;"
+	"r3 = 0;"
+	"call %[bpf_ringbuf_reserve];"
+	"if r0 == 0 goto 2f;"
+	"r8 = r0;"
+	"r6 += 1;"
+	"if r6 < 10 goto 1b;"
+	"r1 = r8;"
+	"r2 = 0;"
+	"call %[bpf_ringbuf_discard];"
+"2:"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm(bpf_ringbuf_reserve), __imm(bpf_ringbuf_discard), __imm_addr(ringbuf)
+	: __clobber_all);
+}
+
+/*
+ * The first iteration that has something to say takes a reference, the rest use it. The state
+ * that comes back to the head has a reference more than the state that entered, once.
+ */
+__u64 nr_vals, vals[64];
+
+SEC("socket")
+__success __retval(0)
+int loop_takes_reference_once(void *ctx)
+{
+	__u64 *sum = NULL;
+	int i;
+
+	bpf_for(i, 0, nr_vals) {
+		if (i >= 64 || !vals[i])
+			continue;
+		if (!sum) {
+			sum = bpf_ringbuf_reserve(&ringbuf, sizeof(*sum), 0);
+			if (!sum)
+				break;
+			*sum = 0;
+		}
+		*sum += vals[i];
+	}
+	if (sum)
+		bpf_ringbuf_submit(sum, 0);
+	return 0;
 }
 
 /*
@@ -4024,7 +5284,7 @@ __naked void widen_pkt_pointer_negative_offset(void)
 
 /* The access is in the second iteration only: the verifier gets to it after the clamp */
 SEC("tc")
-__failure __msg("invalid access to packet, off=56 size=2, R6(id=3,off=56,r=56)")
+__failure __msg("invalid access to packet, off=56 size=2, R6(id={{[0-9]+}},off=56,r=56)")
 __naked void clamp_pkt_pointer_step_lowers_umax(void)
 {
 	asm volatile (
