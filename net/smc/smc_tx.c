@@ -379,7 +379,6 @@ static int smcr_tx_rdma_writes(struct smc_connection *conn, size_t len,
 		sg_dma_address(conn->sndbuf_desc->sgt[link->link_idx].sgl);
 	u64 virt_addr = (uintptr_t)conn->sndbuf_desc->cpu_addr;
 	int src_len_sum = src_len, dst_len_sum = dst_len;
-	int sent_count = src_off;
 	int srcchunk, dstchunk;
 	int num_sges;
 	int rc;
@@ -425,8 +424,7 @@ static int smcr_tx_rdma_writes(struct smc_connection *conn, size_t len,
 		dst_off = 0; /* modulo offset in RMBE ring buffer */
 		dst_len = len - dst_len; /* remainder */
 		dst_len_sum += dst_len;
-		src_len = min_t(int, dst_len, conn->sndbuf_desc->len -
-				sent_count);
+		src_len = min_t(int, dst_len, conn->sndbuf_desc->len - src_off);
 		src_len_sum = src_len;
 	}
 	return 0;
