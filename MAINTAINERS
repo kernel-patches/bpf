@@ -23557,6 +23557,7 @@ REALTEK RESET DRIVERS
 M:	Cheng-Yu Lee <cylee12@realtek.com>
 M:	Yu-Chun Lin <eleanor.lin@realtek.com>
 S:	Supported
+F:	drivers/reset/realtek/*
 F:	include/dt-bindings/reset/realtek,rtd1625.h
 
 REALTEK RTL83xx SMI DSA ROUTER CHIPS
