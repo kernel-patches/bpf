@@ -176,12 +176,9 @@ config CC_OPT_DIAGNOSTICS_SHOW_INLINING_CHAIN
 config CC_OPT_STRICT_FLEX_ARRAYS
 	def_string "$(cc-option-str,-fstrict-flex-arrays=3)"
 
-# gcc-10 renamed --param=allow-store-data-races=0 to -fno-allow-store-data-races
-config CC_OPT_ALLOW_STORE_DATA_RACES_PARAM
-	def_string "$(cc-option-str,--param=allow-store-data-races=0)"
-
 config CC_OPT_NO_ALLOW_STORE_DATA_RACES
-	def_string "$(cc-option-str,-fno-allow-store-data-races)"
+	# gcc-10 renamed --param=allow-store-data-races=0 to -fno-allow-store-data-races
+	def_string "$(cc-option-str,-fno-allow-store-data-races,--param=allow-store-data-races=0)" if CC_IS_GCC
 
 config CC_HAS_MNOP_MCOUNT
 	def_bool $(cc-option,-mnop-mcount)
