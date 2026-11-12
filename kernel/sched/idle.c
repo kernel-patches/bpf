@@ -573,6 +573,13 @@ static void update_curr_idle(struct rq *rq)
 
 	se->exec_start = now;
 
+	/*
+	 * Forced idle was not time available to any class on this rq, so
+	 * don't let the deferred servers consume their runtime on it.
+	 */
+	if (forced_idle_rq(rq))
+		return;
+
 	dl_server_update_idle(&rq->fair_server, delta_exec);
 #ifdef CONFIG_SCHED_CLASS_EXT
 	dl_server_update_idle(&rq->ext_server, delta_exec);
