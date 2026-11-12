@@ -66,6 +66,7 @@ enum i2c_scl_freq {
  * @rx_msg: Current RX message
  * @rx_pos: Position within current RX message
  * @endianness: big/little-endian byte order
+ * @force_32bit_access: Bridge requires aligned 32-bit register accesses
  * @clk: Pointer to AXI4-lite input clock
  * @irq: Interrupt number
  * @state: See STATE_
@@ -95,6 +96,7 @@ struct xiic_i2c {
 	struct i2c_msg *rx_msg;
 	int rx_pos;
 	enum xiic_endian endianness;
+	bool force_32bit_access;
 	struct clk *clk;
 	int irq;
 	enum xilinx_i2c_state state;
@@ -282,36 +284,12 @@ static int xiic_i2c_runtime_resume(struct device *dev)
  * Only the least significant byte [doublet] of the register are ever
  * accessed. This requires an offset of 3 [2] from the base address for
  * big-endian systems.
+ * Some bridges only support aligned 32-bit accesses. For these, access the
+ * entire register in its detected byte order, without a read-modify-write:
+ * reading or writing a FIFO register must perform exactly one transaction.
  */
 
-static inline void xiic_setreg8(struct xiic_i2c *i2c, int reg, u8 value)
-{
-	if (i2c->endianness == LITTLE)
-		iowrite8(value, i2c->base + reg);
-	else
-		iowrite8(value, i2c->base + reg + 3);
-}
-
-static inline u8 xiic_getreg8(struct xiic_i2c *i2c, int reg)
-{
-	u8 ret;
-
-	if (i2c->endianness == LITTLE)
-		ret = ioread8(i2c->base + reg);
-	else
-		ret = ioread8(i2c->base + reg + 3);
-	return ret;
-}
-
-static inline void xiic_setreg16(struct xiic_i2c *i2c, int reg, u16 value)
-{
-	if (i2c->endianness == LITTLE)
-		iowrite16(value, i2c->base + reg);
-	else
-		iowrite16be(value, i2c->base + reg + 2);
-}
-
-static inline void xiic_setreg32(struct xiic_i2c *i2c, int reg, int value)
+static void xiic_setreg32(struct xiic_i2c *i2c, int reg, int value)
 {
 	if (i2c->endianness == LITTLE)
 		iowrite32(value, i2c->base + reg);
@@ -319,7 +297,7 @@ static inline void xiic_setreg32(struct xiic_i2c *i2c, int reg, int value)
 		iowrite32be(value, i2c->base + reg);
 }
 
-static inline int xiic_getreg32(struct xiic_i2c *i2c, int reg)
+static int xiic_getreg32(struct xiic_i2c *i2c, int reg)
 {
 	u32 ret;
 
@@ -328,6 +306,46 @@ static inline int xiic_getreg32(struct xiic_i2c *i2c, int reg)
 	else
 		ret = ioread32be(i2c->base + reg);
 	return ret;
+}
+
+static void xiic_setreg8(struct xiic_i2c *i2c, int reg, u8 value)
+{
+	if (i2c->force_32bit_access) {
+		xiic_setreg32(i2c, reg, value);
+		return;
+	}
+
+	if (i2c->endianness == LITTLE)
+		iowrite8(value, i2c->base + reg);
+	else
+		iowrite8(value, i2c->base + reg + 3);
+}
+
+static u8 xiic_getreg8(struct xiic_i2c *i2c, int reg)
+{
+	u8 ret;
+
+	if (i2c->force_32bit_access)
+		return xiic_getreg32(i2c, reg);
+
+	if (i2c->endianness == LITTLE)
+		ret = ioread8(i2c->base + reg);
+	else
+		ret = ioread8(i2c->base + reg + 3);
+	return ret;
+}
+
+static void xiic_setreg16(struct xiic_i2c *i2c, int reg, u16 value)
+{
+	if (i2c->force_32bit_access) {
+		xiic_setreg32(i2c, reg, value);
+		return;
+	}
+
+	if (i2c->endianness == LITTLE)
+		iowrite16(value, i2c->base + reg);
+	else
+		iowrite16be(value, i2c->base + reg + 2);
 }
 
 static inline void xiic_irq_dis(struct xiic_i2c *i2c, u32 mask)
@@ -1480,6 +1498,8 @@ static int xiic_i2c_probe(struct platform_device *pdev)
 		return irq;
 
 	pdata = dev_get_platdata(dev);
+	if (pdata)
+		i2c->force_32bit_access = pdata->force_32bit_access;
 
 	/* hook up driver to tree */
 	platform_set_drvdata(pdev, i2c);
