@@ -152,15 +152,9 @@ static int dthe_probe(struct platform_device *pdev)
 	if (IS_ERR(dev_data->regs))
 		return PTR_ERR(dev_data->regs);
 
-	platform_set_drvdata(pdev, dev_data);
-
-	spin_lock(&dthe_dev_list.lock);
-	list_add(&dev_data->list, &dthe_dev_list.dev_list);
-	spin_unlock(&dthe_dev_list.lock);
-
 	ret = dthe_dma_init(dev_data);
 	if (ret)
-		goto probe_dma_err;
+		return ret;
 
 	dev_data->engine = crypto_engine_alloc_init(dev, 1);
 	if (!dev_data->engine) {
@@ -174,24 +168,29 @@ static int dthe_probe(struct platform_device *pdev)
 		goto probe_engine_start_err;
 	}
 
+	spin_lock_bh(&dthe_dev_list.lock);
+	platform_set_drvdata(pdev, dev_data);
+	list_add(&dev_data->list, &dthe_dev_list.dev_list);
+	spin_unlock_bh(&dthe_dev_list.lock);
+
 	ret = dthe_register_algs();
 	if (ret) {
 		dev_err(dev, "Failed to register algs\n");
-		goto probe_engine_start_err;
+		goto probe_register_algs_err;
 	}
 
 	return 0;
 
+probe_register_algs_err:
+	spin_lock_bh(&dthe_dev_list.lock);
+	list_del(&dev_data->list);
+	spin_unlock_bh(&dthe_dev_list.lock);
 probe_engine_start_err:
 	crypto_engine_exit(dev_data->engine);
 probe_engine_err:
 	dma_release_channel(dev_data->dma_aes_rx);
 	dma_release_channel(dev_data->dma_aes_tx);
 	dma_release_channel(dev_data->dma_sha_tx);
-probe_dma_err:
-	spin_lock(&dthe_dev_list.lock);
-	list_del(&dev_data->list);
-	spin_unlock(&dthe_dev_list.lock);
 
 	return ret;
 }
@@ -200,9 +199,9 @@ static void dthe_remove(struct platform_device *pdev)
 {
 	struct dthe_data *dev_data = platform_get_drvdata(pdev);
 
-	spin_lock(&dthe_dev_list.lock);
+	spin_lock_bh(&dthe_dev_list.lock);
 	list_del(&dev_data->list);
-	spin_unlock(&dthe_dev_list.lock);
+	spin_unlock_bh(&dthe_dev_list.lock);
 
 	dthe_unregister_algs();
 
