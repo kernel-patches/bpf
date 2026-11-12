@@ -21,7 +21,6 @@
 #include <linux/platform_data/pca953x.h>
 #include <linux/property.h>
 #include <linux/spi/spi.h>
-#include <linux/spi/ads7846.h>
 #include <linux/spi/corgi_lcd.h>
 #include <linux/mtd/sharpsl.h>
 #include <linux/mtd/physmap.h>
