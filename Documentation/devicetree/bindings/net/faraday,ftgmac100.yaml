@@ -11,14 +11,11 @@ maintainers:
 
 properties:
   compatible:
-    oneOf:
-      - const: faraday,ftgmac100
-      - items:
-          - enum:
-              - aspeed,ast2400-mac
-              - aspeed,ast2500-mac
-              - aspeed,ast2600-mac
-          - const: faraday,ftgmac100
+    enum:
+      - faraday,ftgmac100
+      - aspeed,ast2400-mac
+      - aspeed,ast2500-mac
+      - aspeed,ast2600-mac
 
   reg:
     maxItems: 1
@@ -88,22 +85,76 @@ allOf:
     else:
       properties:
         resets: false
+  - if:
+      properties:
+        compatible:
+          contains:
+            const: aspeed,ast2400-mac
+    then:
+      properties:
+        clocks:
+          maxItems: 1
+        clock-names:
+          maxItems: 1
+      required:
+        - clocks
+  - if:
+      properties:
+        compatible:
+          contains:
+            enum:
+              - aspeed,ast2500-mac
+              - aspeed,ast2600-mac
+    then:
+      properties:
+        clocks:
+          minItems: 1
+          maxItems: 2
+        clock-names:
+          minItems: 1
+          maxItems: 2
+      required:
+        - clocks
+  - if:
+      not:
+        properties:
+          compatible:
+            contains:
+              enum:
+                - aspeed,ast2400-mac
+                - aspeed,ast2500-mac
+                - aspeed,ast2600-mac
+    then:
+      properties:
+        clocks: false
+        clock-names: false
+  - if:
+      properties:
+        clocks:
+          minItems: 2
+    then:
+      required:
+        - clock-names
 
 unevaluatedProperties: false
 
 examples:
   - |
+    #include <dt-bindings/clock/aspeed-clock.h>
+
     ethernet@1e660000 {
-        compatible = "aspeed,ast2500-mac", "faraday,ftgmac100";
+        compatible = "aspeed,ast2500-mac";
         reg = <0x1e660000 0x180>;
         interrupts = <2>;
+        clocks = <&syscon ASPEED_CLK_GATE_MAC1CLK>;
         use-ncsi;
     };
 
     ethernet@1e680000 {
-        compatible = "aspeed,ast2500-mac", "faraday,ftgmac100";
+        compatible = "aspeed,ast2500-mac";
         reg = <0x1e680000 0x180>;
         interrupts = <2>;
+        clocks = <&syscon ASPEED_CLK_GATE_MAC2CLK>;
 
         phy-handle = <&phy>;
         phy-mode = "rgmii";
