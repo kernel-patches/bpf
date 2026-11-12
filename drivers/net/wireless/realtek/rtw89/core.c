@@ -3835,6 +3835,7 @@ static void rtw89_core_update_rx_freq_from_ie(struct rtw89_dev *rtwdev,
 {
 	struct ieee80211_mgmt *mgmt = (struct ieee80211_mgmt *)skb->data;
 	size_t hdr_len, ielen;
+	enum rtw89_band tmp;
 	u8 *variable;
 	int chan;
 
@@ -3868,7 +3869,8 @@ static void rtw89_core_update_rx_freq_from_ie(struct rtw89_dev *rtwdev,
 	if (chan == -1)
 		return;
 
-	rx_status->band = chan > 14 ? RTW89_BAND_5G : RTW89_BAND_2G;
+	tmp = chan > 14 ? RTW89_BAND_5G : RTW89_BAND_2G;
+	rx_status->band = rtw89_hw_to_nl80211_band(tmp);
 	rx_status->freq = ieee80211_channel_to_frequency(chan, rx_status->band);
 }
 
