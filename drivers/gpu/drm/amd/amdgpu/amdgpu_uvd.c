@@ -1154,16 +1154,27 @@ static int amdgpu_uvd_send_msg(struct amdgpu_ring *ring, struct amdgpu_bo *bo,
 		if (r)
 			goto err_free;
 	} else {
+		r = amdgpu_bo_reserve(bo, true);
+		if (r)
+			goto err_free;
+
 		r = drm_sched_job_add_resv_dependencies(&job->base,
 							bo->tbo.base.resv,
 							DMA_RESV_USAGE_KERNEL);
 		if (r)
-			goto err_free;
+			goto err_unreserve;
+
+		r = dma_resv_reserve_fences(bo->tbo.base.resv, 1);
 
 		f = amdgpu_job_submit(job);
 
-		amdgpu_bo_reserve(bo, true);
-		amdgpu_bo_fence(bo, f, false);
+		if (r) {
+			dma_fence_wait(f, false);
+			r = 0;
+		} else {
+			dma_resv_add_fence(bo->tbo.base.resv, f,
+					   DMA_RESV_USAGE_BOOKKEEP);
+		}
 		amdgpu_bo_unreserve(bo);
 	}
 
@@ -1172,6 +1183,9 @@ static int amdgpu_uvd_send_msg(struct amdgpu_ring *ring, struct amdgpu_bo *bo,
 	dma_fence_put(f);
 
 	return 0;
+
+err_unreserve:
+	amdgpu_bo_unreserve(bo);
 
 err_free:
 	amdgpu_job_free(job);
