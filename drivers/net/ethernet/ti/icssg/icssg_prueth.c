@@ -1837,6 +1837,14 @@ static int prueth_emac_restart(struct prueth *prueth)
 	struct prueth_emac *emac1 = prueth->emac[PRUETH_MAC1];
 	int ret;
 
+	/* Halt phylib to stop emac_adjust_link() from issuing R30 commands
+	 * to the PRU while the firmware is stopped.
+	 */
+	if (emac0->ndev->phydev)
+		phy_stop(emac0->ndev->phydev);
+	if (emac1->ndev->phydev)
+		phy_stop(emac1->ndev->phydev);
+
 	/* Detach the net_device for both PRUeth ports*/
 	if (netif_running(emac0->ndev))
 		netif_device_detach(emac0->ndev);
@@ -1847,20 +1855,20 @@ static int prueth_emac_restart(struct prueth *prueth)
 	ret = icssg_set_port_state(emac0, ICSSG_EMAC_PORT_DISABLE);
 	ret |= icssg_set_port_state(emac1, ICSSG_EMAC_PORT_DISABLE);
 	if (ret)
-		return ret;
+		goto restart_phy;
 
 	/* Stop both pru cores for both PRUeth ports*/
 	ret = prueth_emac_common_stop(prueth);
 	if (ret) {
 		dev_err(prueth->dev, "Failed to stop the firmwares");
-		return ret;
+		goto restart_phy;
 	}
 
 	/* Start both pru cores for both PRUeth ports */
 	ret = prueth_emac_common_start(prueth);
 	if (ret) {
 		dev_err(prueth->dev, "Failed to start the firmwares");
-		return ret;
+		goto restart_phy;
 	}
 
 	/* Enable forwarding for both PRUeth ports */
@@ -1870,6 +1878,13 @@ static int prueth_emac_restart(struct prueth *prueth)
 	/* Attache net_device for both PRUeth ports */
 	netif_device_attach(emac0->ndev);
 	netif_device_attach(emac1->ndev);
+
+restart_phy:
+	/* Resume phylib now that the firmware is running again. */
+	if (emac0->ndev->phydev)
+		phy_start(emac0->ndev->phydev);
+	if (emac1->ndev->phydev)
+		phy_start(emac1->ndev->phydev);
 
 	return ret;
 }
