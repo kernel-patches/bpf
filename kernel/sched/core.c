@@ -6453,10 +6453,15 @@ restart:
 				p = sched_core_find(rq_i, cookie);
 			if (!p)
 				p = idle_sched_class.pick_task(rq_i, rf);
+
+			/*
+			 * Neither a core tree pick nor idle comes through a
+			 * DL server; drop the one the replaced pick left.
+			 */
+			rq_i->core_dl_server = rq_i->dl_server = NULL;
 		}
 
 		rq_i->core_pick = p;
-		rq_i->core_dl_server = NULL;
 
 		if (p == rq_i->idle) {
 			if (rq_i->nr_running) {
