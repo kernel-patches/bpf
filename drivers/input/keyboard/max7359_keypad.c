@@ -157,8 +157,6 @@ static void max7359_initialize(struct i2c_client *client)
 
 static int max7359_probe(struct i2c_client *client)
 {
-	const struct matrix_keymap_data *keymap_data =
-			dev_get_platdata(&client->dev);
 	struct max7359_keypad *keypad;
 	struct input_dev *input_dev;
 	int ret;
@@ -206,7 +204,7 @@ static int max7359_probe(struct i2c_client *client)
 	input_set_capability(input_dev, EV_MSC, MSC_SCAN);
 	input_set_drvdata(input_dev, keypad);
 
-	error = matrix_keypad_build_keymap(keymap_data, NULL,
+	error = matrix_keypad_build_keymap(NULL, NULL,
 					   MAX7359_MAX_KEY_ROWS,
 					   MAX7359_MAX_KEY_COLS,
 					   keypad->keycodes,
