@@ -1243,7 +1243,14 @@ int configfs_depend_item_unlocked(struct configfs_subsystem *caller_subsys,
 	if (configfs_is_root(target))
 		return -EINVAL;
 
-	parent = target->ci_group;
+	/*
+	 * The target may not be linked into the tree yet (mkdir in progress)
+	 * or may already have been unlinked (rmdir in progress).
+	 */
+	parent = READ_ONCE(target->ci_group);
+	if (!parent)
+		return -ENOENT;
+
 	/*
 	 * This may happen when someone is trying to depend root
 	 * directory of some subsystem
@@ -1815,6 +1822,7 @@ void configfs_unregister_group(struct config_group *group)
 	up_write(&frag->frag_sem);
 
 	inode_lock_nested(d_inode(parent), I_MUTEX_PARENT);
+	inode_lock_nested(d_inode(dentry), I_MUTEX_CHILD);
 	spin_lock(&configfs_dirent_lock);
 	configfs_detach_prep(sd, NULL);
 	spin_unlock(&configfs_dirent_lock);
@@ -1822,6 +1830,7 @@ void configfs_unregister_group(struct config_group *group)
 	configfs_detach_group(dentry);
 	d_inode(dentry)->i_flags |= S_DEAD;
 	dont_mount(dentry);
+	inode_unlock(d_inode(dentry));
 	d_drop(dentry);
 	fsnotify_rmdir(d_inode(parent), dentry);
 	inode_unlock(d_inode(parent));
