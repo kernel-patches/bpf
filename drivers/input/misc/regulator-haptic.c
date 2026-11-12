@@ -23,7 +23,7 @@ struct regulator_haptic {
 	struct regulator *regulator;
 
 	struct work_struct work;
-	struct mutex mutex;
+	struct mutex mutex; /* serializes voltage updates and suspend/resume */
 
 	bool active;
 	bool suspended;
@@ -38,7 +38,6 @@ static int regulator_haptic_toggle(struct regulator_haptic *haptic, bool on)
 	int error;
 
 	if (haptic->active != on) {
-
 		error = on ? regulator_enable(haptic->regulator) :
 			     regulator_disable(haptic->regulator);
 		if (error) {
@@ -55,7 +54,7 @@ static int regulator_haptic_toggle(struct regulator_haptic *haptic, bool on)
 }
 
 static int regulator_haptic_set_voltage(struct regulator_haptic *haptic,
-					 unsigned int magnitude)
+					unsigned int magnitude)
 {
 	u64 volt_mag_multi;
 	unsigned int intensity;
@@ -118,7 +117,7 @@ static int regulator_haptic_parse_dt(struct device *dev,
 	int error;
 
 	node = dev->of_node;
-	if(!node) {
+	if (!node) {
 		dev_err(dev, "Missing device tree data\n");
 		return -EINVAL;
 	}
@@ -165,7 +164,7 @@ static int regulator_haptic_probe(struct platform_device *pdev)
 
 	input_dev = devm_input_allocate_device(&pdev->dev);
 	if (!input_dev)
-		return	-ENOMEM;
+		return -ENOMEM;
 
 	haptic->input_dev = input_dev;
 	haptic->input_dev->name = "regulator-haptic";
