@@ -1183,10 +1183,8 @@ static int rockchip_usb2phy_port_irq_init(struct rockchip_usb2phy *rphy,
 						rockchip_usb2phy_linestate_irq,
 						IRQF_ONESHOT,
 						"rockchip_usb2phy", rport);
-		if (ret) {
-			dev_err(rphy->dev, "failed to request linestate irq handle\n");
+		if (ret)
 			return ret;
-		}
 		break;
 	case USB2PHY_PORT_OTG:
 		/*
@@ -1202,11 +1200,8 @@ static int rockchip_usb2phy_port_irq_init(struct rockchip_usb2phy *rphy,
 							IRQF_ONESHOT,
 							"rockchip_usb2phy_otg",
 							rport);
-			if (ret) {
-				dev_err(rphy->dev,
-					"failed to request otg-mux irq handle\n");
+			if (ret)
 				return ret;
-			}
 		} else {
 			rport->bvalid_irq = of_irq_get_byname(child_np, "otg-bvalid");
 			if (rport->bvalid_irq < 0) {
@@ -1221,11 +1216,8 @@ static int rockchip_usb2phy_port_irq_init(struct rockchip_usb2phy *rphy,
 							IRQF_ONESHOT,
 							"rockchip_usb2phy_bvalid",
 							rport);
-			if (ret) {
-				dev_err(rphy->dev,
-					"failed to request otg-bvalid irq handle\n");
+			if (ret)
 				return ret;
-			}
 
 			rport->id_irq = of_irq_get_byname(child_np, "otg-id");
 			if (rport->id_irq < 0) {
@@ -1240,11 +1232,8 @@ static int rockchip_usb2phy_port_irq_init(struct rockchip_usb2phy *rphy,
 							IRQF_ONESHOT,
 							"rockchip_usb2phy_id",
 							rport);
-			if (ret) {
-				dev_err(rphy->dev,
-					"failed to request otg-id irq handle\n");
+			if (ret)
 				return ret;
-			}
 		}
 		break;
 	default:
@@ -1491,10 +1480,8 @@ next_child:
 						IRQF_ONESHOT,
 						"rockchip_usb2phy",
 						rphy);
-		if (ret) {
-			dev_err_probe(rphy->dev, ret, "failed to request usb2phy irq handle\n");
+		if (ret)
 			return ret;
-		}
 	}
 
 	return PTR_ERR_OR_ZERO(provider);

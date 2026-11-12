@@ -505,19 +505,11 @@ extern const struct tegra_xusb_padctl_soc tegra124_xusb_padctl_soc;
 #if defined(CONFIG_ARCH_TEGRA_210_SOC)
 extern const struct tegra_xusb_padctl_soc tegra210_xusb_padctl_soc;
 #endif
-#if defined(CONFIG_ARCH_TEGRA_186_SOC)
+#if defined(CONFIG_PHY_TEGRA186_XUSB)
 extern const struct tegra_xusb_padctl_soc tegra186_xusb_padctl_soc;
-#endif
-#if defined(CONFIG_ARCH_TEGRA_194_SOC)
 extern const struct tegra_xusb_padctl_soc tegra194_xusb_padctl_soc;
-#endif
-#if defined(CONFIG_ARCH_TEGRA_234_SOC)
 extern const struct tegra_xusb_padctl_soc tegra234_xusb_padctl_soc;
-#endif
-#if defined(CONFIG_ARCH_TEGRA_238_SOC)
 extern const struct tegra_xusb_padctl_soc tegra238_xusb_padctl_soc;
-#endif
-#if defined(CONFIG_ARCH_TEGRA_264_SOC)
 extern const struct tegra_xusb_padctl_soc tegra264_xusb_padctl_soc;
 #endif
 
