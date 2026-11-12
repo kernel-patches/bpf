@@ -40,4 +40,15 @@ struct nbl_adapter *nbl_core_init(struct pci_dev *pdev,
 				  struct nbl_init_param *param);
 void nbl_core_remove(struct nbl_adapter *adapter);
 
+/*
+ * Single-shot start/stop pair, called once each from PCI probe/remove.
+ * Not repeatable, but not because the MSI-X core would refuse a second
+ * start: nbl_dev_stop() releases the vectors with pci_free_irq_vectors().
+ * What the pair brackets is the device's active lifetime, and
+ * nbl_core_stop() is only ever followed by nbl_core_remove(), which
+ * destroys the mailbox channel and the resource state that start needs.
+ */
+int nbl_core_start(struct nbl_adapter *adapter);
+void nbl_core_stop(struct nbl_adapter *adapter);
+
 #endif

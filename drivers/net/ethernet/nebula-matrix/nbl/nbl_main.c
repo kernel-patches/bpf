@@ -16,6 +16,16 @@
 #include "nbl_include/nbl_def_common.h"
 #include "nbl_core.h"
 
+int nbl_core_start(struct nbl_adapter *adapter)
+{
+	return nbl_dev_start(adapter);
+}
+
+void nbl_core_stop(struct nbl_adapter *adapter)
+{
+	nbl_dev_stop(adapter);
+}
+
 struct nbl_adapter *nbl_core_init(struct pci_dev *pdev,
 				  struct nbl_init_param *param)
 {
@@ -242,6 +252,27 @@ static int nbl_probe(struct pci_dev *pdev,
 	int err;
 
 	nbl_get_func_param(pdev, id->driver_data, &param);
+	/*
+	 * Reject a function with neither capability before touching any
+	 * hardware.  nbl_disp_refresh_ctrl_ops() leaves every dispatch op NULL
+	 * for such a function, while nbl_dev_start() reaches cfg_msix_map,
+	 * get_vsi_id, get_eth_id and (on unwind) destroy_msix_map through
+	 * those pointers.  The state is reachable through driver_override:
+	 * binding this driver to a function that is absent from nbl_id_table
+	 * makes pci_match_device() pass the dummy ID whose driver_data 0
+	 * leaves has_ctrl and has_net both clear.  That means a VF, or a
+	 * foreign device at a function other than 0: a PF of this device
+	 * always matches nbl_id_table, and new_id rejects a driver_data the
+	 * table does not contain.  A foreign non-VF device at function 0 is
+	 * unaffected: nbl_get_func_param() gives it has_ctrl, so it is not
+	 * rejected here and still runs nbl_core_init() and nbl_core_start()
+	 * with the local control dispatch ops.
+	 */
+	if (!param.caps.has_ctrl && !param.caps.has_net) {
+		dev_err(dev, "Function has neither ctrl nor net capability\n");
+		return -EOPNOTSUPP;
+	}
+
 	err = pcim_enable_device(pdev);
 	if (err) {
 		dev_err(&pdev->dev, "Failed to enable PCI dev, err=%d\n", err);
@@ -279,8 +310,16 @@ static int nbl_probe(struct pci_dev *pdev,
 
 	pci_set_master(pdev);
 	pci_set_drvdata(pdev, adapter);
-
-	return 0;
+	err = nbl_core_start(adapter);
+	if (err) {
+		/*
+		 * Same order as nbl_remove(): stop bus mastering before the
+		 * teardown that frees the MSI-X map tables.
+		 */
+		pci_clear_master(pdev);
+		nbl_core_remove(adapter);
+	}
+	return err;
 }
 
 static void nbl_remove(struct pci_dev *pdev)
@@ -291,6 +330,7 @@ static void nbl_remove(struct pci_dev *pdev)
 		return;
 	pci_set_drvdata(pdev, NULL);
 
+	nbl_core_stop(adapter);
 	/*
 	 * Stop bus mastering before the teardown in nbl_core_remove()
 	 * releases the map tables.
@@ -303,6 +343,11 @@ static void nbl_remove(struct pci_dev *pdev)
 	 * nbl_intr_quiesce_wait()).  Clearing Bus Master Enable first
 	 * keeps the device from starting a new fetch at all, so that
 	 * residual window only covers requests already in flight.
+	 *
+	 * nbl_core_stop() above has already torn down this function's own
+	 * map, so what is left to protect here is the control PF's table of
+	 * per-function entries, freed from nbl_intr_mgt_stop() inside
+	 * nbl_core_remove().
 	 */
 	pci_clear_master(pdev);
 
