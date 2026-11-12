@@ -238,6 +238,10 @@ char *snd_soc_acpi_sof_get_tplg_filename(struct device *dev, const char *prefix,
 	case SND_SOC_ACPI_TPLG_DEVICE_SSP_AMP:
 	case SND_SOC_ACPI_TPLG_DEVICE_SSP_BT:
 	case SND_SOC_ACPI_TPLG_DEVICE_SSP_HDMI_IN:
+	case SND_SOC_ACPI_TPLG_DEVICE_ACP_SDW_JACK:
+	case SND_SOC_ACPI_TPLG_DEVICE_ACP_SDW_AMP:
+	case SND_SOC_ACPI_TPLG_DEVICE_ACP_SDW_MIC:
+	case SND_SOC_ACPI_TPLG_DEVICE_ACP_DMIC:
 		filename = devm_kasprintf(dev, GFP_KERNEL, "%s/sof-%s-%s-id%d.tplg",
 					  prefix, platform, tplg_dev_name, dai_link_id);
 		break;
