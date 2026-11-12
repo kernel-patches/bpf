@@ -5037,7 +5037,7 @@ int bpf_widen_scev_regs(struct bpf_verifier_env *env, struct bpf_verifier_state 
 		if (test_bit(r, iters->forget_regs)) {
 			reg = scev_reg_for_linear(cur_func, r);
 			if (reg && reg->type == PTR_TO_ARENA) {
-				bpf_reg_forget_range(reg);
+				scalar_set_unknown(scalar_of(reg));
 				mark_scev_reg_scratched(env, r);
 			}
 			continue;
