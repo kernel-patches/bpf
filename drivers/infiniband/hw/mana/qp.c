@@ -5,6 +5,8 @@
 
 #include "mana_ib.h"
 
+static void mana_ib_qp_error_work(struct work_struct *work);
+
 static int mana_ib_cfg_vport_steering(struct mana_ib_dev *dev,
 				      struct net_device *ndev,
 				      mana_handle_t default_rxobj,
@@ -519,6 +521,7 @@ static void mana_table_drain_qp_ref(struct mana_ib_qp *qp)
 {
 	mana_put_qp_ref(qp);
 	wait_for_completion(&qp->free);
+	flush_work(&qp->error_work);
 }
 
 static int mana_table_store_qp_qid(struct mana_ib_dev *mdev, struct mana_ib_qp *qp,
@@ -764,7 +767,7 @@ static void mana_add_qp_to_error_cqs(struct mana_ib_qp *qp)
 	spin_unlock_irqrestore(&recv_cq->cq_lock, flags);
 }
 
-static void mana_remove_qp_from_cqs(struct mana_ib_qp *qp, bool reset)
+static void mana_remove_qp_from_cqs(struct mana_ib_qp *qp)
 {
 	struct mana_ib_cq *send_cq = container_of(qp->ibqp.send_cq, struct mana_ib_cq, ibcq);
 	struct mana_ib_cq *recv_cq = container_of(qp->ibqp.recv_cq, struct mana_ib_cq, ibcq);
@@ -772,17 +775,18 @@ static void mana_remove_qp_from_cqs(struct mana_ib_qp *qp, bool reset)
 
 	spin_lock_irqsave(&send_cq->cq_lock, flags);
 	list_del_init(&qp->send_err_node);
+	mana_ib_cq_clean(send_cq, qp);
 	/* Keep shadow reset serialized with hardware polling and SW flushing. */
-	if (reset) {
-		reset_shadow_queue(&qp->shadow_sq);
-		reset_shadow_queue(&qp->shadow_mmq);
-	}
-	spin_unlock_irqrestore(&send_cq->cq_lock, flags);
+	reset_shadow_queue(&qp->shadow_sq);
+	reset_shadow_queue(&qp->shadow_mmq);
 
-	spin_lock_irqsave(&recv_cq->cq_lock, flags);
+	if (recv_cq != send_cq) {
+		spin_unlock_irqrestore(&send_cq->cq_lock, flags);
+		spin_lock_irqsave(&recv_cq->cq_lock, flags);
+		mana_ib_cq_clean(recv_cq, qp);
+	}
 	list_del_init(&qp->recv_err_node);
-	if (reset)
-		reset_shadow_queue(&qp->shadow_rq);
+	reset_shadow_queue(&qp->shadow_rq);
 	spin_unlock_irqrestore(&recv_cq->cq_lock, flags);
 }
 
@@ -950,9 +954,12 @@ int mana_ib_create_qp(struct ib_qp *ibqp, struct ib_qp_init_attr *attr,
 	struct mana_ib_qp *qp = container_of(ibqp, struct mana_ib_qp, ibqp);
 
 	qp->sq_sig_all = attr->sq_sig_type == IB_SIGNAL_ALL_WR;
+	qp->is_stopped = true;
 	spin_lock_init(&qp->rq_lock);
 	spin_lock_init(&qp->sq_lock);
 	mutex_init(&qp->modify_lock);
+	INIT_WORK(&qp->error_work, mana_ib_qp_error_work);
+	atomic_set(&qp->error_pending, 0);
 	INIT_LIST_HEAD(&qp->send_err_node);
 	INIT_LIST_HEAD(&qp->recv_err_node);
 
@@ -1071,16 +1078,21 @@ static bool mana_ib_modify_qp_state(struct ib_qp *ibqp, struct ib_qp_attr *attr,
 		qp->mtu = attr->path_mtu;
 
 	if (attr_mask & IB_QP_STATE) {
+		qp->is_stopped = attr->qp_state == IB_QPS_RESET ||
+				 attr->qp_state == IB_QPS_INIT;
+
 		switch (attr->qp_state) {
 		case IB_QPS_RESET:
-			mana_remove_qp_from_cqs(qp, true);
+			mana_remove_qp_from_cqs(qp);
+			/* Both CQs are clean; no old CQE can queue another error. */
+			atomic_set(&qp->error_pending, 0);
+			break;
+		case IB_QPS_ERR:
+			mana_add_qp_to_error_cqs(qp);
+			notify = true;
 			break;
 		default:
 			break;
-		}
-		if (attr->qp_state == IB_QPS_ERR) {
-			mana_add_qp_to_error_cqs(qp);
-			notify = true;
 		}
 	}
 
@@ -1113,14 +1125,27 @@ static void mana_ib_notify_error_cqs(struct mana_ib_qp *qp)
 		recv_cq->comp_handler(recv_cq, recv_cq->cq_context);
 }
 
-int mana_ib_modify_qp(struct ib_qp *ibqp, struct ib_qp_attr *attr,
-		      int attr_mask, struct ib_udata *udata)
+enum mana_ib_qp_modify_reason {
+	MANA_IB_QP_MODIFY_VERBS,
+	MANA_IB_QP_MODIFY_ERROR_CQE,
+	MANA_IB_QP_MODIFY_SHUTDOWN,
+};
+
+static int mana_ib_modify_qp_common(struct ib_qp *ibqp, struct ib_qp_attr *attr,
+				    int attr_mask, struct ib_udata *udata,
+				    enum mana_ib_qp_modify_reason reason)
 {
 	struct mana_ib_qp *qp = container_of(ibqp, struct mana_ib_qp, ibqp);
 	bool notify = false;
-	int ret;
+	int ret = 0;
 
 	mutex_lock(&qp->modify_lock);
+
+	if (reason == MANA_IB_QP_MODIFY_ERROR_CQE && !atomic_xchg(&qp->error_pending, 0))
+		goto out_unlock;
+
+	if (reason == MANA_IB_QP_MODIFY_SHUTDOWN && qp->is_stopped)
+		goto modify_state;
 
 	switch (ibqp->qp_type) {
 	case IB_QPT_RC:
@@ -1128,7 +1153,7 @@ int mana_ib_modify_qp(struct ib_qp *ibqp, struct ib_qp_attr *attr,
 	case IB_QPT_UD:
 	case IB_QPT_GSI:
 		ret = mana_ib_gd_modify_qp(ibqp, attr, attr_mask, udata);
-		if (ret)
+		if (ret && reason == MANA_IB_QP_MODIFY_VERBS)
 			goto out_unlock;
 		break;
 	default:
@@ -1136,6 +1161,7 @@ int mana_ib_modify_qp(struct ib_qp *ibqp, struct ib_qp_attr *attr,
 		goto out_unlock;
 	}
 
+modify_state:
 	notify = mana_ib_modify_qp_state(ibqp, attr, attr_mask, udata);
 
 out_unlock:
@@ -1145,6 +1171,45 @@ out_unlock:
 		mana_ib_notify_error_cqs(qp);
 
 	return ret;
+}
+
+int mana_ib_modify_qp(struct ib_qp *ibqp, struct ib_qp_attr *attr,
+		      int attr_mask, struct ib_udata *udata)
+{
+	return mana_ib_modify_qp_common(ibqp, attr, attr_mask, udata, MANA_IB_QP_MODIFY_VERBS);
+}
+
+static void mana_ib_qp_error_work(struct work_struct *work)
+{
+	struct mana_ib_qp *qp = container_of(work, struct mana_ib_qp, error_work);
+	struct ib_qp_attr attr = { .qp_state = IB_QPS_ERR };
+	int ret;
+
+	ret = mana_ib_modify_qp_common(&qp->ibqp, &attr, IB_QP_STATE, NULL,
+				       MANA_IB_QP_MODIFY_ERROR_CQE);
+	if (ret)
+		ibdev_err(qp->ibqp.device, "Failed to move QP %u to ERR: %d\n",
+			  qp->ibqp.qp_num, ret);
+
+	mana_put_qp_ref(qp);
+}
+
+static void mana_ib_shutdown_qp(struct mana_ib_qp *qp)
+{
+	struct ib_qp_attr attr = { .qp_state = IB_QPS_RESET };
+	int err;
+
+	if (qp->ibqp.uobject)
+		return;
+
+	/* mana_ib_modify_qp_common() calls mana_remove_qp_from_cqs() for kernel QPs
+	 * even if hardware RESET is skipped or fails.
+	 */
+	err = mana_ib_modify_qp_common(&qp->ibqp, &attr, IB_QP_STATE, NULL,
+				       MANA_IB_QP_MODIFY_SHUTDOWN);
+	if (err)
+		ibdev_warn(qp->ibqp.device, "Failed to reset QP %u during destroy: %d\n",
+			   qp->ibqp.qp_num, err);
 }
 
 static int mana_ib_destroy_qp_rss(struct mana_ib_qp *qp,
@@ -1239,7 +1304,7 @@ static int mana_ib_destroy_rc_qp(struct mana_ib_qp *qp, struct ib_udata *udata)
 		return err;
 
 	mana_table_remove_qp(mdev, qp);
-	mana_remove_qp_from_cqs(qp, false);
+	mana_ib_shutdown_qp(qp);
 
 	destroy_shadow_queue(&qp->shadow_rq);
 	destroy_shadow_queue(&qp->shadow_sq);
@@ -1265,7 +1330,7 @@ static int mana_ib_destroy_uc_qp(struct mana_ib_qp *qp, struct ib_udata *udata)
 		return err;
 
 	mana_table_remove_qp(mdev, qp);
-	mana_remove_qp_from_cqs(qp, false);
+	mana_ib_shutdown_qp(qp);
 	/* Ignore return code as there is not much we can do about it.
 	 * The error message is printed inside.
 	 */
@@ -1287,7 +1352,7 @@ static int mana_ib_destroy_ud_qp(struct mana_ib_qp *qp, struct ib_udata *udata)
 		return err;
 
 	mana_table_remove_qp(mdev, qp);
-	mana_remove_qp_from_cqs(qp, false);
+	mana_ib_shutdown_qp(qp);
 
 	destroy_shadow_queue(&qp->shadow_rq);
 	destroy_shadow_queue(&qp->shadow_sq);
