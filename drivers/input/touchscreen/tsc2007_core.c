@@ -171,7 +171,6 @@ static irqreturn_t tsc2007_soft_irq(int irq, void *handle)
 static void tsc2007_stop(struct tsc2007 *ts)
 {
 	ts->stopped = true;
-	mb();
 	wake_up(&ts->wait);
 
 	if (ts->irq)
@@ -184,7 +183,6 @@ static int tsc2007_open(struct input_dev *input_dev)
 	int err;
 
 	ts->stopped = false;
-	mb();
 
 	if (ts->irq)
 		enable_irq(ts->irq);
