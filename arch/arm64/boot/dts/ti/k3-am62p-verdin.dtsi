@@ -35,6 +35,7 @@
 		serial2 = &main_uart0;
 		serial3 = &mcu_uart0;
 		serial4 = &main_uart6;
+		spi0 = &main_spi1;
 		usb0 = &usb0;
 		usb1 = &usb1;
 	};
