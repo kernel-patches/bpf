@@ -772,6 +772,7 @@ static int pxa_ssp_probe(struct snd_soc_dai *dai)
 		priv->extclk = devm_clk_get_optional(dev, "extclk");
 		if (IS_ERR(priv->extclk)) {
 			ret = PTR_ERR(priv->extclk);
+			pxa_ssp_free(priv->ssp);
 			goto err_priv;
 		}
 	} else {
