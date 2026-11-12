@@ -72,6 +72,25 @@ static inline u8 convert_wr_to_hw_opcode(enum ib_wr_opcode opcode)
 	}
 }
 
+static void mana_ib_notify_flush(struct ib_cq *ibcq, struct list_head *err_node)
+{
+	struct mana_ib_cq *cq = container_of(ibcq, struct mana_ib_cq, ibcq);
+	unsigned long flags;
+	bool flush;
+
+	if (ibcq->poll_ctx == IB_POLL_DIRECT)
+		return;
+	if (!ibcq->comp_handler)
+		return;
+
+	spin_lock_irqsave(&cq->cq_lock, flags);
+	flush = !list_empty(err_node);
+	spin_unlock_irqrestore(&cq->cq_lock, flags);
+
+	if (flush)
+		ibcq->comp_handler(ibcq, ibcq->cq_context);
+}
+
 static int mana_ib_post_rq(struct mana_ib_qp *qp, const struct ib_recv_wr *wr)
 {
 	struct ib_sge mana_ib_dummy_sge = {.addr = 1, .length = 0, .lkey = 0};
@@ -129,8 +148,10 @@ static int mana_ib_post_recv_ud(struct mana_ib_qp *qp, const struct ib_recv_wr *
 		ring_rq = true;
 	}
 
-	if (ring_rq)
+	if (ring_rq) {
 		mana_gd_wq_ring_doorbell(mdev_to_gc(mdev), rq);
+		mana_ib_notify_flush(qp->ibqp.recv_cq, &qp->recv_err_node);
+	}
 
 	return err;
 }
@@ -141,6 +162,7 @@ static int mana_ib_post_recv_rc(struct mana_ib_qp *qp, const struct ib_recv_wr *
 	struct mana_ib_dev *mdev = container_of(qp->ibqp.device, struct mana_ib_dev, ib_dev);
 	struct mana_ib_queue *ib_rq = mana_qp_get_rq(qp);
 	unsigned long flags;
+	bool posted = false;
 	u8 wqe_cnt = 0;
 	int err = 0;
 
@@ -152,6 +174,7 @@ static int mana_ib_post_recv_rc(struct mana_ib_qp *qp, const struct ib_recv_wr *
 			*bad_wr = wr;
 			break;
 		}
+		posted = true;
 		wqe_cnt++;
 		if (wqe_cnt == 0xFF) {
 			mana_gd_wq_ring_doorbell_ext(mdev_to_gc(mdev), ib_rq->kmem,
@@ -167,6 +190,9 @@ static int mana_ib_post_recv_rc(struct mana_ib_qp *qp, const struct ib_recv_wr *
 					     wqe_cnt, 0);
 
 	spin_unlock_irqrestore(&qp->rq_lock, flags);
+	if (posted)
+		mana_ib_notify_flush(qp->ibqp.recv_cq, &qp->recv_err_node);
+
 	return err;
 }
 
@@ -259,11 +285,8 @@ static int mana_ib_post_send_ud(struct mana_ib_qp *qp, const struct ib_send_wr *
 				const struct ib_send_wr **bad_wr)
 {
 	struct mana_ib_dev *mdev = container_of(qp->ibqp.device, struct mana_ib_dev, ib_dev);
-	struct mana_ib_cq *cq = container_of(qp->ibqp.send_cq, struct mana_ib_cq, ibcq);
 	struct gdma_queue *queue = qp->ud_qp.queues[MANA_UD_SEND_QUEUE].kmem;
-	unsigned long flags;
 	bool ring_sq = false;
-	bool flush_send;
 	int err = 0;
 
 	for (; wr; wr = wr->next) {
@@ -277,13 +300,7 @@ static int mana_ib_post_send_ud(struct mana_ib_qp *qp, const struct ib_send_wr *
 
 	if (ring_sq) {
 		mana_gd_wq_ring_doorbell(mdev_to_gc(mdev), queue);
-
-		spin_lock_irqsave(&cq->cq_lock, flags);
-		flush_send = !list_empty(&qp->send_err_node);
-		spin_unlock_irqrestore(&cq->cq_lock, flags);
-
-		if (flush_send && cq->ibcq.comp_handler)
-			cq->ibcq.comp_handler(&cq->ibcq, cq->ibcq.cq_context);
+		mana_ib_notify_flush(qp->ibqp.send_cq, &qp->send_err_node);
 	}
 
 	return err;
@@ -567,6 +584,9 @@ static int mana_ib_post_send_rc(struct mana_ib_qp *qp, const struct ib_send_wr *
 					 qp->rc_qp.queues[MANA_RC_SEND_QUEUE_REQUESTER].kmem);
 
 	spin_unlock_irqrestore(&qp->sq_lock, flags);
+	if (ring_sq || ring_mmq)
+		mana_ib_notify_flush(qp->ibqp.send_cq, &qp->send_err_node);
+
 	return err;
 }
 

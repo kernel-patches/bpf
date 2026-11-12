@@ -278,6 +278,25 @@ static inline void mana_ib_cq_doorbell(struct mana_ib_cq *cq, uint8_t arm)
 	mana_gd_wq_ring_doorbell_ext(mdev_to_gc(mdev), gdma_cq, idx, arm, 0);
 }
 
+static bool mana_ib_cq_has_flush_work(struct mana_ib_cq *cq)
+{
+	struct mana_ib_qp *qp;
+
+	list_for_each_entry(qp, &cq->send_err_qp_list, send_err_node) {
+		if (!shadow_queue_empty(&qp->shadow_sq))
+			return true;
+		if (!shadow_queue_empty(&qp->shadow_mmq))
+			return true;
+	}
+
+	list_for_each_entry(qp, &cq->recv_err_qp_list, recv_err_node) {
+		if (!shadow_queue_empty(&qp->shadow_rq))
+			return true;
+	}
+
+	return false;
+}
+
 int mana_ib_arm_cq(struct ib_cq *ibcq, enum ib_cq_notify_flags flags)
 {
 	struct mana_ib_cq *cq = container_of(ibcq, struct mana_ib_cq, ibcq);
@@ -290,8 +309,12 @@ int mana_ib_arm_cq(struct ib_cq *ibcq, enum ib_cq_notify_flags flags)
 
 	spin_lock_irqsave(&cq->cq_lock, irq_flags);
 	mana_ib_cq_doorbell(cq, SET_ARM_BIT);
-	if (flags & IB_CQ_REPORT_MISSED_EVENTS)
+	if (flags & IB_CQ_REPORT_MISSED_EVENTS) {
 		missed = cq->has_pending_cqe;
+		/* Software flushes cannot retrigger the hardware CQ notification. */
+		if (!missed)
+			missed = mana_ib_cq_has_flush_work(cq);
+	}
 	spin_unlock_irqrestore(&cq->cq_lock, irq_flags);
 
 	return missed;
@@ -592,7 +615,7 @@ static void mana_drain_gsi_sq(struct mana_ib_qp *qp)
 		list_add_tail(&qp->send_err_node, &cq->send_err_qp_list);
 	spin_unlock_irqrestore(&cq->cq_lock, flags);
 
-	if (cq->ibcq.comp_handler)
+	if (cq->ibcq.poll_ctx != IB_POLL_DIRECT && cq->ibcq.comp_handler)
 		cq->ibcq.comp_handler(&cq->ibcq, cq->ibcq.cq_context);
 }
 
