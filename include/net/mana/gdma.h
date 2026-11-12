@@ -955,6 +955,8 @@ enum gdma_mr_access_flags {
 	GDMA_ACCESS_FLAG_REMOTE_WRITE = BIT_ULL(3),
 	GDMA_ACCESS_FLAG_REMOTE_ATOMIC = BIT_ULL(4),
 	GDMA_ACCESS_FLAG_BIND_MW = BIT_ULL(5),
+	GDMA_ACCESS_FLAG_INVALIDATE = BIT_ULL(6),
+	GDMA_ACCESS_FLAG_FMR = BIT_ULL(7),
 };
 
 /* GDMA_CREATE_DMA_REGION */
@@ -1007,6 +1009,7 @@ struct gdma_destroy_dma_region_req {
 
 enum gdma_pd_flags {
 	GDMA_PD_FLAG_ALLOW_GPA_MR = BIT(0),
+	GDMA_PD_FLAG_ALLOW_FMR_MR = BIT(1),
 	GDMA_PD_FLAG_SHORT_PDN = BIT(2),
 };
 
@@ -1043,6 +1046,11 @@ enum gdma_mr_type {
 	 * address that is set up in the MST
 	 */
 	GDMA_MR_TYPE_GVA = 2,
+	/* Fast Memory - MRs are initially put in the free state,
+	 * and the specified number of PTEs are reserved for future fast
+	 * memory registrations
+	 */
+	GDMA_MR_TYPE_FMR = 3,
 	/* Guest zero-based address MRs */
 	GDMA_MR_TYPE_ZBVA = 4,
 	/* Device address MRs */
@@ -1072,6 +1080,9 @@ struct gdma_create_mr_params {
 			u64 length;
 			enum gdma_mr_access_flags access_flags;
 		} da;
+		struct {
+			u32 rsvd_pte_count;
+		} fmr;
 	};
 };
 
@@ -1096,6 +1107,10 @@ struct gdma_create_mr_request {
 			u64 offset;
 			enum gdma_mr_access_flags access_flags;
 		} __packed da;
+		struct {
+			u32 page_size;
+			u32 rsvd_pte_count;
+		} __packed fmr;
 	} __packed;
 	u32 reserved_2;
 	union {

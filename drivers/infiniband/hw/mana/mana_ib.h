@@ -39,6 +39,8 @@
  */
 #define MANA_IB_MAX_MR		0xFFFFFFu
 
+#define MANA_MAX_FMR_PAGES	504
+
 /*
  * The CA timeout is approx. 260ms (4us * 2^(DELAY))
  */
@@ -50,6 +52,8 @@
 #define MANA_AV_BUFFER_SIZE	64
 
 #define MANA_GSI_QPN		(1)
+
+#define MANA_PTE_VALID_MASK	0x1ULL
 
 struct mana_ib_adapter_caps {
 	u32 max_sq_id;
@@ -150,10 +154,46 @@ struct mana_ib_mw {
 	mana_handle_t mw_handle;
 };
 
+#define MANA_FMR_MST_ALIGNMENT 64
+
+struct mana_fmr_mst_entry {
+	u32 reserved1;
+	u32 reserved2		: 8;
+	u32 page_size		: 5;
+	u32 reserved3		: 3;
+	u32 access_right	: 8;
+	u32 addr_type		: 2;
+	u32 reserved4		: 6;
+	u32 reserved5[2];
+	u64 start_va;
+	u64 length;
+	u32 reserved6[8];
+}; /* HW DATA */
+
+static inline u32 mana_ib_fmr_header_offset(u32 num_ptes)
+{
+	/* The header follows the PTEs with the required MST alignment. */
+	return ALIGN(sizeof(u64) * num_ptes, MANA_FMR_MST_ALIGNMENT);
+}
+
+static inline u32 mana_ib_fmr_buf_sz(u32 num_ptes)
+{
+	return mana_ib_fmr_header_offset(num_ptes) + sizeof(struct mana_fmr_mst_entry);
+}
+
+struct mana_ib_fmr {
+	u64 *ptes;
+	dma_addr_t dma_handle;
+	size_t size;
+	u32 max_ptes;
+	u32 pte_count;
+};
+
 struct mana_ib_mr {
 	struct ib_mr ibmr;
 	struct ib_umem *umem;
 	mana_handle_t mr_handle;
+	struct mana_ib_fmr fmr;
 };
 
 struct mana_ib_dm {
@@ -840,7 +880,15 @@ int mana_ib_create_rwq_ind_table(struct ib_rwq_ind_table *ib_rwq_ind_table,
 
 int mana_ib_destroy_rwq_ind_table(struct ib_rwq_ind_table *ib_rwq_ind_tbl);
 
+enum gdma_mr_access_flags
+mana_ib_verbs_to_gdma_access_flags(int access_flags);
+
 struct ib_mr *mana_ib_get_dma_mr(struct ib_pd *ibpd, int access_flags);
+
+struct ib_mr *mana_ib_alloc_mr(struct ib_pd *ibpd, enum ib_mr_type mr_type,
+			       u32 max_num_sg);
+int mana_ib_map_mr_sg(struct ib_mr *ibmr, struct scatterlist *sg, int sg_nents,
+		      unsigned int *sg_offset);
 
 struct ib_mr *mana_ib_reg_user_mr(struct ib_pd *pd, u64 start, u64 length,
 				  u64 iova, int access_flags,
