@@ -114,7 +114,12 @@ static void bpf_local_storage_free(struct bpf_local_storage *local_storage,
 	if (!local_storage)
 		return;
 
-	if (reuse_now) {
+	/*
+	 * A sleepable program can still use an inline value: wait for it. A
+	 * tasks trace grace period also covers plain RCU readers: RCU Tasks
+	 * Trace is SRCU-fast, and its grace period calls synchronize_rcu().
+	 */
+	if (reuse_now && !bpf_local_storage_has_inline(local_storage)) {
 		kfree_rcu(local_storage, rcu);
 		return;
 	}
@@ -184,6 +189,31 @@ static void bpf_selem_free_list(struct hlist_head *list, bool reuse_now)
 		bpf_selem_free(selem, reuse_now);
 }
 
+/*
+ * Free local_storage when selem, its last selem, goes away. An object with an
+ * inline area can hold values with no selem, so free it only after destroy()
+ * marked it.
+ */
+static bool bpf_local_storage_free_last(struct bpf_local_storage *local_storage,
+					struct bpf_local_storage_elem *selem)
+{
+	if (!hlist_is_singular_node(&selem->snode, &local_storage->list))
+		return false;
+	return !bpf_local_storage_has_inline(local_storage) ||
+	       READ_ONCE(local_storage->dying);
+}
+
+/*
+ * local_storage goes away: the owner needs a new one for a new value. An
+ * object with an inline area can be empty, so destroy() marks it instead.
+ */
+static bool bpf_local_storage_gone(const struct bpf_local_storage *local_storage)
+{
+	if (bpf_local_storage_has_inline(local_storage))
+		return READ_ONCE(local_storage->dying);
+	return hlist_empty(&local_storage->list);
+}
+
 static void bpf_selem_unlink_storage_nolock_misc(struct bpf_local_storage_elem *selem,
 						 struct bpf_local_storage_map *smap,
 						 struct bpf_local_storage *local_storage,
@@ -227,8 +257,7 @@ static bool bpf_selem_unlink_storage_nolock(struct bpf_local_storage *local_stor
 
 	smap = rcu_dereference_check(SDATA(selem)->smap, bpf_rcu_lock_held());
 
-	free_local_storage = hlist_is_singular_node(&selem->snode,
-						    &local_storage->list);
+	free_local_storage = bpf_local_storage_free_last(local_storage, selem);
 
 	bpf_selem_unlink_storage_nolock_misc(selem, smap, local_storage,
 					     free_local_storage, false);
@@ -440,8 +469,8 @@ static void bpf_selem_unlink_nofail(struct bpf_local_storage_elem *selem,
 		err = raw_res_spin_lock_irqsave(&local_storage->lock, flags);
 		if (!err) {
 			if (likely(selem_linked_to_storage(selem))) {
-				free_storage = hlist_is_singular_node(&selem->snode,
-								      &local_storage->list);
+				free_storage = bpf_local_storage_free_last(local_storage,
+									   selem);
 				 /*
 				  * Okay to skip clearing owner_storage and storage->owner in
 				  * destroy() since the owner is going away. No user or bpf
@@ -634,7 +663,7 @@ bpf_local_storage_update(void *owner, struct bpf_local_storage_map *smap,
 
 	local_storage = rcu_dereference_check(*owner_storage(smap, owner),
 					      bpf_rcu_lock_held());
-	if (!local_storage || hlist_empty(&local_storage->list)) {
+	if (!local_storage || bpf_local_storage_gone(local_storage)) {
 		/* Very first elem for the owner */
 		err = check_flags(NULL, map_flags);
 		if (err)
@@ -683,7 +712,7 @@ bpf_local_storage_update(void *owner, struct bpf_local_storage_map *smap,
 		goto free_selem;
 
 	/* Recheck local_storage->list under local_storage->lock */
-	if (unlikely(hlist_empty(&local_storage->list))) {
+	if (unlikely(bpf_local_storage_gone(local_storage))) {
 		/* A parallel del is happening and local_storage is going
 		 * away.  It has just been checked before, so very
 		 * unlikely.  Return instead of retry to keep things
@@ -902,12 +931,55 @@ int bpf_local_storage_map_check_btf(struct bpf_map *map,
 }
 
 /*
+ * A storage is freed when its last selem goes away. An object with an inline
+ * area can hold values with an empty list, so mark it as dying under the
+ * lock: from now on updaters return -EAGAIN, and the last selem frees the
+ * object. Free an empty object now.
+ *
+ * If destroy() could not take the lock to unlink an selem, the selem stays
+ * linked. A racing map free that read its storage pointer before destroy()
+ * cleared it unlinks it and frees the object. Else the object leaks, as the
+ * selem does: map free skips the storage, and bpf_selem_unlink_nofail()
+ * warns.
+ *
+ * Only a timeout can fail the lock here: destroy() holds no other lock.
+ * Then try again after a grace period. Nothing frees the object while dying
+ * is false, so its rcu head is free. destroy() never runs in NMI.
+ */
+static void bpf_local_storage_mark_dying_rcu(struct rcu_head *rcu);
+
+static void bpf_local_storage_mark_dying(struct bpf_local_storage *local_storage)
+{
+	unsigned long flags;
+	bool empty;
+
+	if (raw_res_spin_lock_irqsave(&local_storage->lock, flags)) {
+		call_rcu_tasks_trace(&local_storage->rcu,
+				     bpf_local_storage_mark_dying_rcu);
+		return;
+	}
+	WRITE_ONCE(local_storage->dying, true);
+	empty = hlist_empty(&local_storage->list);
+	raw_res_spin_unlock_irqrestore(&local_storage->lock, flags);
+
+	if (empty)
+		bpf_local_storage_free(local_storage, false);
+}
+
+static void bpf_local_storage_mark_dying_rcu(struct rcu_head *rcu)
+{
+	bpf_local_storage_mark_dying(container_of(rcu, struct bpf_local_storage,
+						  rcu));
+}
+
+/*
  * Destroy local storage when the owner is going away. Caller must uncharge memory
  * if memory charging is used.
  */
 u32 bpf_local_storage_destroy(struct bpf_local_storage *local_storage)
 {
 	struct bpf_local_storage_elem *selem;
+	u32 mem;
 
 	/* Neither the bpf_prog nor the bpf_map's syscall
 	 * could be modifying the local_storage->list now.
@@ -931,7 +1003,15 @@ u32 bpf_local_storage_destroy(struct bpf_local_storage *local_storage)
 		smp_mb();
 	}
 
-	return local_storage->mem_charge;
+	/*
+	 * The loop must not free an object with an inline area: only the mark
+	 * lets the last selem free it, so mark it after the loop. The mark can
+	 * free the object, so read mem_charge first.
+	 */
+	mem = local_storage->mem_charge;
+	if (bpf_local_storage_has_inline(local_storage))
+		bpf_local_storage_mark_dying(local_storage);
+	return mem;
 }
 
 u64 bpf_local_storage_map_mem_usage(const struct bpf_map *map)
