@@ -164,7 +164,8 @@ config CC_OPT_ZERO_INIT_PADDING_BITS
 	def_string "$(cc-option-str,-fzero-init-padding-bits=all)"
 
 config CC_OPT_NO_ADDRSIG
-	def_string "$(cc-option-str,-fno-addrsig)"
+	# supported in clang, not needed for gcc
+	def_string "-fno-addrsig" if CC_IS_CLANG
 
 config CC_OPT_DIAGNOSTICS_SHOW_CONTEXT
 	def_string "$(cc-option-str,-fdiagnostics-show-context=2)"
