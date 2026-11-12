@@ -142,7 +142,7 @@ do_csum_with_alignment(const unsigned char *buff, int len)
 	end = (const unsigned long *)(buff + len);
 	csum = do_csum_common(ptr, end, data);
 
-#ifdef CC_HAS_ASM_GOTO_TIED_OUTPUT
+#ifdef CONFIG_CC_HAS_ASM_GOTO_TIED_OUTPUT
 	if (IS_ENABLED(CONFIG_RISCV_ISA_ZBB) &&
 	    IS_ENABLED(CONFIG_TOOLCHAIN_HAS_ZBB) &&
 	    riscv_has_extension_likely(RISCV_ISA_EXT_ZBB)) {
@@ -186,7 +186,7 @@ end:
 		return csum >> 16;
 	}
 
-#endif /* CC_HAS_ASM_GOTO_TIED_OUTPUT */
+#endif /* CONFIG_CC_HAS_ASM_GOTO_TIED_OUTPUT */
 #ifndef CONFIG_32BIT
 	csum += ror64(csum, 32);
 	csum >>= 32;
