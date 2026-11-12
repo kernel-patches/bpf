@@ -12,6 +12,7 @@ struct nbl_dispatch_mgt;
 struct nbl_adapter;
 enum {
 	NBL_DISP_CTRL_LVL_MGT,
+	NBL_DISP_CTRL_LVL_NET,
 	NBL_DISP_CTRL_LVL_MAX,
 };
 
@@ -32,16 +33,54 @@ enum {
  *               mailbox DMA before calling it.
  *               Returns void.  Control-PF exclusive, same NULL rule as
  *               @init_module.
+ * @cfg_msix_map: configure function msix mapping table.  On a non-control
+ *               PF this is an RPC, and the caller must have cleared
+ *               NBL_CHAN_IRQ_RDY and switched the channel to its polling
+ *               send path first: the responder rewrites this function's
+ *               mailbox MSI-X routing, so the ACK cannot depend on the
+ *               interrupt being reprogrammed.
+ * @destroy_msix_map: tear down msix mapping resource.  Same caller
+ *               precondition as @cfg_msix_map.
+ * @set_mailbox_irq: bind mailbox interrupt to specified msix vector.
+ *               Same caller precondition as @cfg_msix_map.
+ * @get_vsi_id: resolve VSI ID by type
+ * @get_eth_id: resolve eth port info from VSI ID
  *
  * These callbacks are not dispatch-layer setup/teardown: the dispatch
- * structures are devm-allocated in nbl_disp_init(), and nbl_disp_remove()
- * only documents why no explicit teardown is needed. They forward
+ * structures are devm-allocated in nbl_disp_init(), so nbl_disp_remove()
+ * has nothing to undo. The five responders registered by
+ * nbl_disp_setup_msg() live in the channel layer's handler xarray and go
+ * away with it, so they need no explicit unregistration either. Nothing
+ * can enter them until a mailbox queue is running, and a queue must be
+ * torn down before nbl_res_remove_leonis() runs: nbl_chan_teardown_queue()
+ * stops the RX path and nbl_chan_remove_common() frees the handler nodes,
+ * so once the resource layer starts disappearing there is no responder
+ * left that could still be running, or be entered. They forward
  * chip/firmware control down to the layers below instead: a control-PF
- * function calls the resource ops directly.
+ * function calls the resource ops directly, a non-control function
+ * sends a mailbox request over the channel layer.
+ *
+ * Warning: init_module/deinit_module are control-PF exclusive. The five
+ * resource ops (cfg_msix_map, destroy_msix_map, set_mailbox_irq,
+ * get_vsi_id, get_eth_id) are PF-only and resolve to either a local
+ * resource call (control PF) or a mailbox RPC (non-control PF with
+ * has_net). A function with neither has_ctrl nor has_net leaves these
+ * pointers NULL; callers must not invoke them on such functions. VFs are
+ * rejected by the responders with -EPERM.
  */
 struct nbl_dispatch_ops {
 	int (*init_module)(struct nbl_dispatch_mgt *disp_mgt);
 	void (*deinit_module)(struct nbl_dispatch_mgt *disp_mgt);
+	int (*cfg_msix_map)(struct nbl_dispatch_mgt *disp_mgt,
+			    u16 num_net_msix, u16 num_others_msix,
+			    bool net_msix_mask_en);
+	int (*destroy_msix_map)(struct nbl_dispatch_mgt *disp_mgt);
+	int (*set_mailbox_irq)(struct nbl_dispatch_mgt *disp_mgt,
+			       u16 vector_id, bool en_msix);
+	int (*get_vsi_id)(struct nbl_dispatch_mgt *disp_mgt, u16 type,
+			  u16 *vsi_id);
+	int (*get_eth_id)(struct nbl_dispatch_mgt *disp_mgt, u16 vsi_id,
+			  u8 *eth_num, u8 *eth_id, u8 *logic_eth_id);
 };
 
 struct nbl_dispatch_ops_tbl {
