@@ -1619,6 +1619,11 @@ static int ima_parse_rule(char *rule, struct ima_rule_entry *entry)
 		case Opt_fsname:
 			ima_log_string(ab, "fsname", args[0].from);
 
+			if (entry->fsname) {
+				result = -EINVAL;
+				break;
+			}
+
 			entry->fsname = kstrdup(args[0].from, GFP_KERNEL);
 			if (!entry->fsname) {
 				result = -ENOMEM;
