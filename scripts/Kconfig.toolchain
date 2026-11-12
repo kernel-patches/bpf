@@ -1,4 +1,9 @@
 # SPDX-License-Identifier: GPL-2.0-only
+# When adding a new dynamic check (such as {cc,ld}-option{,-str} or testing a
+# small program), please add a comment documenting the first version of the
+# tool that supported the feature being tested, ideally with a link to the tool
+# change as well. For cc-option{,-str}, note the "beware" comment below.
+
 config CC_VERSION_TEXT
 	string
 	default "$(CC_VERSION_TEXT)"
@@ -118,12 +123,16 @@ config GCC_ASM_GOTO_OUTPUT_BROKEN
 config CC_HAS_ASM_GOTO_OUTPUT
 	def_bool y
 	depends on !GCC_ASM_GOTO_OUTPUT_BROKEN
+	# gcc-11: https://gcc.gnu.org/git/?p=gcc.git;a=commit;h=e3b3b59683c1e7d31a9d313dd97394abebf644be
+	# clang-11: https://github.com/llvm/llvm-project/commit/50cac248773c3a023e8f6ceb9938bdd5e9f15da2
 	depends on $(success,echo 'int foo(int x) { asm goto ("": "=r"(x) ::: bar); return x; bar: return 0; }' | $(CC) -x c - -c -o /dev/null)
 
 config TOOLS_SUPPORT_RELR
 	def_bool $(success,env "CC=$(CC)" "LD=$(LD)" "NM=$(NM)" "OBJCOPY=$(OBJCOPY)" $(srctree)/scripts/tools-support-relr.sh)
 
 config CC_HAS_ASM_INLINE
+	# gcc-9: https://gcc.gnu.org/git/?p=gcc.git;a=commit;h=5b76e75f760f3e4787851366359d5d50f989877c
+	# clang-11: https://github.com/llvm/llvm-project/commit/246398ece7115b57a02dbe7876d86ae8e72406ef
 	def_bool $(success,echo 'void foo(void) { asm inline (""); }' | $(CC) -x c - -c -o /dev/null)
 
 config CC_HAS_ASSUME
@@ -156,6 +165,8 @@ config CC_HAS_ASSUME
 #    pitfall.
 
 config CC_OPT_ZERO_INIT_PADDING_BITS
+	# gcc-15: https://gcc.gnu.org/git/?p=gcc.git;a=commit;h=0547dbb725b6d8e878a79e28a2e171eafcfbc1aa
+	# clang-20 does this by default without a flag: https://github.com/llvm/llvm-project/commit/7a086e1b2dc05f54afae3591614feede727601fa
 	def_string "$(cc-option-str,-fzero-init-padding-bits=all)"
 
 config CC_OPT_NO_ADDRSIG
@@ -163,64 +174,109 @@ config CC_OPT_NO_ADDRSIG
 	def_string "-fno-addrsig" if CC_IS_CLANG
 
 config CC_OPT_DIAGNOSTICS_SHOW_CONTEXT
+	# gcc-16: https://gcc.gnu.org/git/?p=gcc.git;a=commit;h=6faa3cfe60ff9769d1bebfffdd2c7325217d7389
+	# clang: not supported
 	def_string "$(cc-option-str,-fdiagnostics-show-context=2)"
 
 config CC_OPT_DIAGNOSTICS_SHOW_INLINING_CHAIN
+	# clang-23: https://github.com/llvm/llvm-project/commit/f9ad232421e37e4168f6937abdd0a1665a590f12
+	# gcc: not needed, it does this by default
 	def_string "$(cc-option-str,-fdiagnostics-show-inlining-chain)"
 
 config CC_OPT_STRICT_FLEX_ARRAYS
+	# gcc-13: https://gcc.gnu.org/git/?p=gcc.git;a=commit;h=1879e48f3d8595bc9e7f583bbd12df3c6f5c42dc
+	# clang-16: https://github.com/llvm/llvm-project/commit/7f93ae808634e33e4dc9bce753c909aa5f9a6eb4
 	def_string "$(cc-option-str,-fstrict-flex-arrays=3)"
 
 config CC_OPT_NO_ALLOW_STORE_DATA_RACES
-	# gcc-10 renamed --param=allow-store-data-races=0 to -fno-allow-store-data-races
+	# gcc-10 renamed --param=allow-store-data-races=0 to -fno-allow-store-data-races:
+	#   https://gcc.gnu.org/git/?p=gcc.git;a=commit;h=e622a32db78300821fc1327637ec6413febc2c66
+	# clang: not needed
 	def_string "$(cc-option-str,-fno-allow-store-data-races,--param=allow-store-data-races=0)" if CC_IS_GCC
 
 config CC_HAS_MNOP_MCOUNT
+	# s390 support
+	#   gcc-9: https://gcc.gnu.org/git/?p=gcc.git;a=commit;h=79c2f6d7de59d5580d224b491d5600d20e3101fe
+	#   clang-10: https://github.com/llvm/llvm-project/commit/93767143147b7d765c6ce8123a4226d449228649
+	# x86 support
+	#   gcc-5: https://gcc.gnu.org/git/?p=gcc.git;a=commit;h=ecc81e33123d7ac9c11742161e128858d844b99d
+	#   clang-24: https://github.com/llvm/llvm-project/commit/f514b16972f785fdd3fad1d19195aad5c9324fb5
 	def_bool $(cc-option,-mnop-mcount)
 
 config LD_OPT_FORCE_GROUP_ALLOCATION
+	# GNU ld 2.29: https://sourceware.org/git/gitweb.cgi?h=7bdf4127c38081c7764c0bf1db55d0b2e56391dc&p=binutils-gdb.git
+	# ld.lld 19: https://github.com/llvm/llvm-project/commit/4d9020ca0b125a936d5e26b48f07fcfa4bd78004
 	def_string "$(ld-option-str,--force-group-allocation)"
 
 config LD_OPT_NO_WARN_RWX_SEGMENTS
+	# GNU ld 2.39: https://sourceware.org/git/gitweb.cgi?h=ba951afb99912da01a6e8434126b8fac7aa75107&p=binutils-gdb.git
+	# ld.lld: not supported
 	def_string "$(ld-option-str,--no-warn-rwx-segments)"
 
 config CC_OPT_WNO_ADDRESS_OF_PACKED_MEMBER
+	# gcc-9: https://gcc.gnu.org/git/?p=gcc.git;a=commit;h=da77eace90fd99b38cd89ce281033d86ebfda434
+	# clang-4: https://github.com/llvm/llvm-project/commit/585ea9ddce50f3c3d3fd6dae0f9f148c074bcc2b
 	def_string "$(cc-option-str,-Wno-address-of-packed-member)"
 
 config CC_OPT_WNO_FORMAT_OVERFLOW_NON_KPRINTF
+	# clang-18: https://github.com/llvm/llvm-project/commit/56c3b8e997d065b568964f71715ecbbd28c2e4a4
+	# gcc: not needed, it has this behavior by default
 	def_string "$(cc-option-str,-Wno-format-overflow-non-kprintf)"
 
 config CC_OPT_WNO_FORMAT_TRUNCATION_NON_KPRINTF
+	# clang-18: https://github.com/llvm/llvm-project/commit/56c3b8e997d065b568964f71715ecbbd28c2e4a4
+	# gcc: not needed, it has this behavior by default
 	def_string "$(cc-option-str,-Wno-format-truncation-non-kprintf)"
 
 config CC_OPT_WNO_DEFAULT_CONST_INIT_UNSAFE
+	# clang-21: https://github.com/llvm/llvm-project/commit/00f9ef282c7482754a0fea497417604d1deca9fa
+	# gcc: not supported
 	def_string "$(cc-option-str,-Wno-default-const-init-unsafe)"
 
 config CC_OPT_WNO_DANGLING_POINTER
+	# gcc-12: https://gcc.gnu.org/git/?p=gcc.git;a=commit;h=9d6a0f388eb048f8d87f47af78f07b5ce513bfe6
+	# clang: not supported
 	def_string "$(cc-option-str,-Wno-dangling-pointer)"
 
 config CC_OPT_WVLA_LARGER_THAN
+	# gcc-7 for -Wvla-larger-than=: https://gcc.gnu.org/git/?p=gcc.git;a=commit;h=adc577c558a4b2e3b604511927cce17039d57c11
+	# gcc-9 for -Wvla-larger-than=0: https://gcc.gnu.org/git/?p=gcc.git;a=commit;h=00abf86c47606f8220d6508654ef52ef11d76e3d
+	# clang: not supported
 	def_string "$(cc-option-str,-Wvla-larger-than=1)"
 
 config CC_HAS_WSTRINGOP_OVERFLOW
+	# gcc-7: https://gcc.gnu.org/git/?p=gcc.git;a=commit;h=ee92e7bafb52d267f52e4c48edada5f279bcf591
+	# clang: not supported
 	def_bool $(cc-option,-Wstringop-overflow)
 
 config CC_OPT_WNO_UNTERMINATED_STRING_INITIALIZATION
+	# gcc-15: https://gcc.gnu.org/git/?p=gcc.git;a=commit;h=44c9403ed1833ae71a59e84f9e37af3182be0df5
+	# clang-21: https://github.com/llvm/llvm-project/commit/e8ae77947154e10dbc05cbb95ec9e10d3b0be13e
 	def_string "$(cc-option-str,-Wno-unterminated-string-initialization)"
 
 config CC_OPT_WERROR_DESIGNATED_INIT
+	# gcc-5: https://gcc.gnu.org/git/?p=gcc.git;a=commit;h=976d5a222fc23279e239ad926472c7810869e494
+	# clang: not supported
 	def_string "$(cc-option-str,-Werror=designated-init)"
 
 config CC_OPT_WENUM_CONVERSION
+	# gcc-10: https://gcc.gnu.org/git/?p=gcc.git;a=commit;h=68e2c1996ec6bde27363ce0db15233ac8cae1c4d
+	# clang-3.2: https://github.com/llvm/llvm-project/commit/68e2c7bee3ab337cc3134ff99fdd1ce2ddb33c2f
 	def_string "$(cc-option-str,-Wenum-conversion)"
 
 config CC_OPT_WNO_PACKED_NOT_ALIGNED
+	# gcc-8: https://gcc.gnu.org/git/?p=gcc.git;a=commit;h=00aa1fa221744dc57f6c6cea8baa669b732d1101
+	# clang: not supported
 	def_string "$(cc-option-str,-Wno-packed-not-aligned)"
 
 config CC_OPT_WNO_FORMAT_OVERFLOW
+	# gcc-7: https://gcc.gnu.org/git/?p=gcc.git;a=commit;h=bce6f76013fd5f2e88a235231231c7879597220c
+	# clang-18: https://github.com/llvm/llvm-project/commit/56c3b8e997d065b568964f71715ecbbd28c2e4a4
 	def_string "$(cc-option-str,-Wno-format-overflow)"
 
 config CC_OPT_WNO_STRINGOP_TRUNCATION
+	# gcc-8: https://gcc.gnu.org/git/?p=gcc.git;a=commit;h=025d57f037ad13eb479818b677ef4be4d97b639c
+	# clang: not supported
 	def_string "$(cc-option-str,-Wno-stringop-truncation)"
 
 config CC_HAS_COUNTED_BY
@@ -247,14 +303,20 @@ config CC_HAS_BROKEN_COUNTED_BY_REF
 	default y if CC_IS_CLANG && CLANG_VERSION < 220100
 
 config CC_HAS_ALLOC_TOKEN
+	# clang-22: https://github.com/llvm/llvm-project/commit/774ffe5cce7392e6b4e29c83e725337727c2c994
+	# gcc: not supported
 	def_bool $(cc-option,-falloc-token-max=123)
 
 config CC_HAS_MULTIDIMENSIONAL_NONSTRING
+	# gcc-15: https://gcc.gnu.org/git/?p=gcc.git;a=commit;h=ab714e60870d1bb98039652b760918b5e680ac10
+	# clang-21: https://github.com/llvm/llvm-project/commit/3d4f979e271d2a1fe0906f4d1b16db108838f98f
 	def_bool $(success,echo 'char tag[][4] __attribute__((__nonstring__)) = { };' | $(CC) $(CLANG_FLAGS) -x c - -c -o /dev/null -Werror)
 
 config CC_OPT_INLINE_MEMSET
 	string
+	# gcc-14: https://gcc.gnu.org/git/?p=gcc.git;a=commit;h=1ff6d9f7428b0668cd8ab0b3e3ab94f1d733124d
 	default "-finline-stringops=memset" if $(cc-option,-finline-stringops=memset)
+	# clang-22: https://github.com/llvm/llvm-project/commit/b28eeb28bea39148738dc375e8a97072a1907e64
 	default "-mllvm -max-store-memset=4294967294" if $(cc-option,-mllvm -max-store-memset=4294967294)
 
 config LD_CAN_USE_KEEP_IN_OVERLAY
