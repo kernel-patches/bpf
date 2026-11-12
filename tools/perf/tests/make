@@ -127,19 +127,31 @@ make_minimal        += NO_LIBBPF=1
 make_minimal        += NO_SDT=1 NO_JVMTI=1 NO_LIBZSTD=1
 make_minimal        += NO_CAPSTONE=1
 
+override FEATURE_OUTPUT := $(shell mktemp -d)
+ifeq ($(FEATURE_OUTPUT),)
+$(error Failed to create temporary directory for feature checks)
+endif
+saved_OUTPUT_origin := $(origin OUTPUT)
+saved_OUTPUT := $(OUTPUT)
+override OUTPUT := $(FEATURE_OUTPUT)/
+FEATURE_DISPLAY_DEFERRED := 1
+FEATURE_TESTS :=
+include $(srctree)/tools/build/Makefile.feature
+
 # binutils 2_42 and newer have bfd_thread_init()
-new_libbfd := $(shell echo '#include <bfd.h>' | $(CC) -E -x c - | grep bfd_thread_init)
+$(call feature_check,libbfd-threadsafe)
 
 # Whether libLLVM can be built, which needs the llvm-devel/llvm-dev headers and
-# libraries of version 13 or newer, not just llvm-config. This mirrors the
-# llvm-perf feature test in tools/build/feature/test-llvm-perf.cpp so that
-# libLLVM is only asserted below when the default compiler can really build it.
+# libraries of version 13 or newer, not just llvm-config.
 ifneq ($(call has,$(LLVM_CONFIG)),)
-have_libllvm := $(shell printf '#include <llvm/Support/ManagedStatic.h>\n#include <llvm/Support/raw_ostream.h>\n#if LLVM_VERSION_MAJOR < 13\n#error "llvm-devel/llvm-dev version 13 or greater is required"\n#endif\nint main(){llvm::errs()<<"";llvm::llvm_shutdown();return 0;}\n' | \
-	$(CXX) -x c++ -std=gnu++17 -I$(shell $(LLVM_CONFIG) --includedir 2>/dev/null) - -o /dev/null \
-		-L$(shell $(LLVM_CONFIG) --libdir 2>/dev/null) \
-		$(shell $(LLVM_CONFIG) --libs Core BPF 2>/dev/null) \
-		$(shell $(LLVM_CONFIG) --system-libs 2>/dev/null) >/dev/null 2>&1 && echo y)
+  $(call feature_check,llvm-perf)
+endif
+
+$(shell rm -rf -- "$(FEATURE_OUTPUT)")
+ifeq ($(saved_OUTPUT_origin),undefined)
+override undefine OUTPUT
+else
+override OUTPUT := $(saved_OUTPUT)
 endif
 
 # $(run) contains all available tests
@@ -155,7 +167,7 @@ MAKE_F := $(MAKE) -f $(MK)
 endif
 run += make_python_perf_so
 run += make_debug
-ifneq ($(new_libbfd),)
+ifeq ($(feature-libbfd-threadsafe),1)
 run += make_nondistro
 # Demangling with libbfd is only built when the C++ ABI's __cxa_demangle
 # isn't available, so it needs a build of its own to be compiled at all.
@@ -165,7 +177,7 @@ endif
 # a C compiler and a C++ compiler that don't match.
 ifneq ($(call has,clang),)
 run += make_clang
-ifneq ($(new_libbfd),)
+ifeq ($(feature-libbfd-threadsafe),1)
 run += make_clang_nondistro
 endif
 endif
@@ -306,7 +318,7 @@ test_make_libbpf_dynamic_O := ldd $$TMP_O/perf | grep -q libbpf
 # doesn't fail the build, it just quietly turns off everything that needs a
 # C++ compiler. Check a feature that does, otherwise these tests would pass
 # while producing a perf with less in it than the default build has.
-ifneq ($(have_libllvm),)
+ifeq ($(feature-llvm-perf),1)
 test_make_clang               := test -x $(PERF_O)/perf && $(PERF_O)/perf check -q feature libLLVM
 test_make_clang_O             := test -x $$TMP_O/perf && $$TMP_O/perf check -q feature libLLVM
 test_make_clang_nondistro     := $(test_make_clang)
