@@ -699,7 +699,7 @@ bool is_chained_smb2_message(struct ksmbd_work *work)
 		    get_rfc1002_len(work->request_buf)) {
 			pr_err("next command(%u) offset exceeds smb msg size\n",
 			       next_cmd);
-			return false;
+			goto last_rsp;
 		}
 
 		/*
@@ -716,16 +716,21 @@ bool is_chained_smb2_message(struct ksmbd_work *work)
 		if ((u64)ALIGN(get_rfc1002_len(work->response_buf), 8) +
 		    next_rsp_sz > work->response_sz) {
 			pr_err("next response offset exceeds response buffer size\n");
-			return false;
+			goto last_rsp;
 		}
 
 		ksmbd_debug(SMB, "got SMB2 chained command\n");
 		init_chained_smb2_rsp(work);
 		return true;
-	} else if (work->next_smb2_rcv_hdr_off) {
+	}
+
+last_rsp:
+	if (work->next_smb2_rcv_hdr_off) {
 		/*
-		 * This is last request in chained command,
-		 * align response to 8 byte
+		 * This is the last response of a compound, also when the
+		 * compound ends early because the next command does not fit.
+		 * Align it to 8 bytes and make it the current response, which
+		 * is the one the caller signs.
 		 */
 		len = ALIGN(get_rfc1002_len(work->response_buf), 8);
 		len = len - get_rfc1002_len(work->response_buf);
