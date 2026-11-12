@@ -759,6 +759,110 @@ static void bpf_local_storage_cache_idx_free(struct bpf_local_storage_cache *cac
 	spin_unlock(&cache->idx_lock);
 }
 
+static struct bpf_local_storage_map *
+inline_map(struct bpf_local_storage_cache *cache, u32 i)
+{
+	return rcu_dereference_protected(cache->inline_maps[i],
+					 lockdep_is_held(&cache->idx_lock));
+}
+
+/* A live slot that overlaps [off, end), or NULL */
+static struct bpf_local_storage_map *
+inline_overlap(struct bpf_local_storage_cache *cache, u32 off, u32 end)
+{
+	struct bpf_local_storage_map *m;
+	u32 i;
+
+	for (i = 0; i < BPF_LOCAL_STORAGE_INLINE_MAPS; i++) {
+		m = inline_map(cache, i);
+		if (m && off < m->inline_end && m->inline_off < end)
+			return m;
+	}
+	return NULL;
+}
+
+/*
+ * First fit. Slots are not sorted: scan again after each overlap. An overlap
+ * ends after off, so off grows and the loop ends. 0: no room.
+ */
+static u32 bpf_local_storage_inline_fit(struct bpf_local_storage_cache *cache,
+					u32 size)
+{
+	u32 off = BPF_LOCAL_STORAGE_INLINE_START;
+	struct bpf_local_storage_map *m;
+
+	while (off + size <= BPF_LOCAL_STORAGE_INLINE_MAX) {
+		m = inline_overlap(cache, off, off + size);
+		if (!m)
+			return off;
+		off = m->inline_end;
+	}
+	return 0;
+}
+
+/* A slot is an 8 byte tag, then the value, 8 byte aligned */
+static u32 bpf_local_storage_slot_size(u32 value_size)
+{
+	return 8 + round_up(value_size, 8);
+}
+
+/*
+ * Claim a table entry and the first free range for the slot of smap. Old
+ * objects keep the tag and value bytes of a freed map. A new claim number
+ * gives a tag that does not match old tags until the counter wraps, and
+ * rarely matches old value bytes. A program can write a match on purpose,
+ * but that needs CAP_BPF or a BPF token. This is memory safe: no pointer is
+ * read from a slot.
+ */
+static int bpf_local_storage_inline_get(struct bpf_local_storage_map *smap)
+{
+	struct bpf_local_storage_cache *cache = smap->cache;
+	u32 size = bpf_local_storage_slot_size(smap->map.value_size);
+	u32 i, off;
+
+	guard(spinlock)(&cache->idx_lock);
+	for (i = 0; i < BPF_LOCAL_STORAGE_INLINE_MAPS; i++)
+		if (!inline_map(cache, i))
+			break;
+	if (i == BPF_LOCAL_STORAGE_INLINE_MAPS)
+		return -ENOSPC;
+
+	off = bpf_local_storage_inline_fit(cache, size);
+	if (!off)
+		return -ENOSPC;
+
+	/* Never 0, so that no claim number reads as unset */
+	cache->inline_claims = cache->inline_claims + 1 ?: 1;
+	smap->inline_claim = cache->inline_claims;
+	smap->inline_off = off;
+	smap->inline_end = off + size;
+	WRITE_ONCE(cache->inline_end, max(cache->inline_end, smap->inline_end));
+	rcu_assign_pointer(cache->inline_maps[i], smap);
+	return 0;
+}
+
+/* Clear the entry before map free waits for RCU readers of inline_maps[] */
+static void bpf_local_storage_inline_free(struct bpf_local_storage_map *smap)
+{
+	struct bpf_local_storage_cache *cache = smap->cache;
+	struct bpf_local_storage_map *m;
+	bool found = false;
+	u32 i, end = 0;
+
+	guard(spinlock)(&cache->idx_lock);
+	for (i = 0; i < BPF_LOCAL_STORAGE_INLINE_MAPS; i++) {
+		m = inline_map(cache, i);
+		if (m == smap) {
+			RCU_INIT_POINTER(cache->inline_maps[i], NULL);
+			found = true;
+		} else if (m) {
+			end = max(end, m->inline_end);
+		}
+	}
+	WRITE_ONCE(cache->inline_end, end);
+	WARN_ON_ONCE(!found);
+}
+
 int bpf_local_storage_map_alloc_check(union bpf_attr *attr)
 {
 	if (attr->map_flags & ~BPF_LOCAL_STORAGE_CREATE_FLAG_MASK ||
@@ -863,6 +967,19 @@ bpf_local_storage_map_alloc(union bpf_attr *attr,
 	smap->elem_size = offsetof(struct bpf_local_storage_elem,
 				   sdata.data[attr->value_size]);
 
+	smap->cache = cache;
+	/*
+	 * Only map create calls map_alloc(). The kernel's copy of an inner map
+	 * template holds no slot, but the map given as inner_map_fd holds one
+	 * until it is freed. map_free() gives the slot back, also when a later
+	 * step of map create fails.
+	 */
+	if (attr->map_flags & BPF_F_INLINE_VALUE) {
+		err = bpf_local_storage_inline_get(smap);
+		if (err)
+			goto free_smap;
+	}
+
 	smap->cache_idx = bpf_local_storage_cache_idx_get(cache);
 	return &smap->map;
 
@@ -882,6 +999,8 @@ void bpf_local_storage_map_free(struct bpf_map *map,
 
 	smap = (struct bpf_local_storage_map *)map;
 	bpf_local_storage_cache_idx_free(cache, smap->cache_idx);
+	if (smap->inline_off)
+		bpf_local_storage_inline_free(smap);
 
 	/* Note that this map might be concurrently cloned from
 	 * bpf_sk_storage_clone. Wait for any existing bpf_sk_storage_clone
