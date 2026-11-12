@@ -30611,6 +30611,15 @@ S:	Maintained
 F:	Documentation/devicetree/bindings/iio/adc/xlnx,zynqmp-ams.yaml
 F:	drivers/iio/adc/xilinx-ams.c
 
+XILINX AXI DMA DRIVER
+M:	Suraj Gupta <suraj.gupta2@amd.com>
+M:	Srinivas Neeli <srinivas.neeli@amd.com>
+L:	dmaengine@vger.kernel.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/dma/xilinx/xlnx,axi-dma.yaml
+F:	drivers/dma/xilinx/xilinx_dma.c
+F:	include/linux/dma/xilinx_dma.h
+
 XILINX AXI ETHERNET DRIVER
 M:	Radhey Shyam Pandey <radhey.shyam.pandey@amd.com>
 S:	Maintained
