@@ -2020,7 +2020,7 @@ void bpf_mark_reg_known_scalar(struct bpf_reg_state *reg, u64 imm)
 static void __mark_reg32_known(struct bpf_reg_state *reg, u64 imm)
 {
 	reg->var_off = tnum_const_subreg(reg->var_off, imm);
-	reg->r32 = cnum32_from_urange((u32)imm, (u32)imm);
+	reg->r32 = cnum32_const(imm);
 }
 
 /* Mark the 'variable offset' part of a register as zero.  This should be
@@ -6351,8 +6351,8 @@ static void coerce_reg_to_size_sx(struct bpf_reg_state *reg, int size)
 			reg->var_off = tnum_const((s32)u64_cval);
 
 		u64_cval = reg->var_off.value;
-		reg->r64 = cnum64_from_urange(u64_cval, u64_cval);
-		reg->r32 = cnum32_from_urange((u32)u64_cval, (u32)u64_cval);
+		reg->r64 = cnum64_const(u64_cval);
+		reg->r32 = cnum32_const(u64_cval);
 		return;
 	}
 
@@ -17083,7 +17083,7 @@ static int adjust_ptr_min_max_vals(struct bpf_verifier_env *env, struct bpf_insn
 				"Use addition from R10 to form stack addresses within the tracked stack frame.");
 			return -EACCES;
 		}
-		dst_reg->r64 = cnum64_add(ptr_reg->r64, cnum64_negate(off_reg->r64));
+		dst_reg->r64 = cnum64_sub(ptr_reg->r64, off_reg->r64);
 		dst_reg->var_off = tnum_sub(ptr_reg->var_off, off_reg->var_off);
 		dst_reg->raw = ptr_reg->raw;
 		if (reg_is_pkt_pointer(ptr_reg)) {
@@ -17190,13 +17190,13 @@ static void scalar_min_max_add(struct bpf_reg_state *dst_reg,
 static void scalar32_min_max_sub(struct bpf_reg_state *dst_reg,
 				 struct bpf_reg_state *src_reg)
 {
-	dst_reg->r32 = cnum32_add(dst_reg->r32, cnum32_negate(src_reg->r32));
+	dst_reg->r32 = cnum32_sub(dst_reg->r32, src_reg->r32);
 }
 
 static void scalar_min_max_sub(struct bpf_reg_state *dst_reg,
 			       struct bpf_reg_state *src_reg)
 {
-	dst_reg->r64 = cnum64_add(dst_reg->r64, cnum64_negate(src_reg->r64));
+	dst_reg->r64 = cnum64_sub(dst_reg->r64, src_reg->r64);
 }
 
 static void scalar32_min_max_mul(struct bpf_reg_state *dst_reg,
