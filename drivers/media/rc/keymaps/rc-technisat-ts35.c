@@ -50,7 +50,7 @@ static struct rc_map_table technisat_ts35[] = {
 static struct rc_map_list technisat_ts35_map = {
 	.map = {
 		.scan     = technisat_ts35,
-		.size     = ARRAY_SIZE(technisat_ts35),
+		.entries  = ARRAY_SIZE(technisat_ts35),
 		.rc_proto = RC_PROTO_UNKNOWN,
 		.name     = RC_MAP_TECHNISAT_TS35,
 	}

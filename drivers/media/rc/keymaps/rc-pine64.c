@@ -42,7 +42,7 @@ static struct rc_map_table pine64[] = {
 static struct rc_map_list pine64_map = {
 	.map = {
 		.scan     = pine64,
-		.size     = ARRAY_SIZE(pine64),
+		.entries  = ARRAY_SIZE(pine64),
 		.rc_proto = RC_PROTO_NECX,
 		.name     = RC_MAP_PINE64,
 	}

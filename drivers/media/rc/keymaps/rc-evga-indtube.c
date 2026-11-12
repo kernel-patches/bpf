@@ -34,7 +34,7 @@ static struct rc_map_table evga_indtube[] = {
 static struct rc_map_list evga_indtube_map = {
 	.map = {
 		.scan     = evga_indtube,
-		.size     = ARRAY_SIZE(evga_indtube),
+		.entries  = ARRAY_SIZE(evga_indtube),
 		.rc_proto = RC_PROTO_UNKNOWN,	/* Legacy IR type */
 		.name     = RC_MAP_EVGA_INDTUBE,
 	}

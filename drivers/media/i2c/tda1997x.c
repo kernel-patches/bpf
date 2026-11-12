@@ -2776,7 +2776,7 @@ static int tda1997x_probe(struct i2c_client *client)
 					     &tda1997x_audio_dai, 1);
 		if (ret) {
 			dev_err(&client->dev, "register audio codec failed\n");
-			goto err_free_media;
+			goto err_unreg_subdev;
 		}
 		v4l_info(state->client, "registered audio codec\n");
 	}
@@ -2788,11 +2788,13 @@ static int tda1997x_probe(struct i2c_client *client)
 					KBUILD_MODNAME, state);
 	if (ret) {
 		v4l_err(client, "irq%d reg failed: %d\n", client->irq, ret);
-		goto err_free_media;
+		goto err_unreg_subdev;
 	}
 
 	return 0;
 
+err_unreg_subdev:
+	v4l2_async_unregister_subdev(sd);
 err_free_media:
 	media_entity_cleanup(&sd->entity);
 err_free_handler:

@@ -1274,33 +1274,37 @@ static int av7110_register(struct av7110 *av7110)
 	dvbdemux->dmx.capabilities = (DMX_TS_FILTERING | DMX_SECTION_FILTERING |
 				      DMX_MEMORY_BASED_FILTERING);
 
-	dvb_dmx_init(&av7110->demux);
+	ret = dvb_dmx_init(&av7110->demux);
+	if (ret < 0)
+		goto err_registered;
 	av7110->demux.dmx.get_stc = dvb_get_stc;
 
 	av7110->dmxdev.filternum = (av7110->full_ts) ? 256 : 32;
 	av7110->dmxdev.demux = &dvbdemux->dmx;
 	av7110->dmxdev.capabilities = 0;
 
-	dvb_dmxdev_init(&av7110->dmxdev, &av7110->dvb_adapter);
+	ret = dvb_dmxdev_init(&av7110->dmxdev, &av7110->dvb_adapter);
+	if (ret < 0)
+		goto err_dmx_release;
 
 	av7110->hw_frontend.source = DMX_FRONTEND_0;
 
 	ret = dvbdemux->dmx.add_frontend(&dvbdemux->dmx, &av7110->hw_frontend);
 
 	if (ret < 0)
-		return ret;
+		goto err_dmxdev_release;
 
 	av7110->mem_frontend.source = DMX_MEMORY_FE;
 
 	ret = dvbdemux->dmx.add_frontend(&dvbdemux->dmx, &av7110->mem_frontend);
 
 	if (ret < 0)
-		return ret;
+		goto err_dmxdev_release;
 
 	ret = dvbdemux->dmx.connect_frontend(&dvbdemux->dmx,
 					     &av7110->hw_frontend);
 	if (ret < 0)
-		return ret;
+		goto err_dmxdev_release;
 
 	av7110_av_register(av7110);
 	av7110_ca_register(av7110);
@@ -1310,7 +1314,9 @@ static int av7110_register(struct av7110 *av7110)
 			    &dvbdev_osd, av7110, DVB_DEVICE_OSD, 0);
 #endif
 
-	dvb_net_init(&av7110->dvb_adapter, &av7110->dvb_net, &dvbdemux->dmx);
+	ret = dvb_net_init(&av7110->dvb_adapter, &av7110->dvb_net, &dvbdemux->dmx);
+	if (ret < 0)
+		goto err_unregister_devices;
 
 	if (budgetpatch) {
 		/* initialize software demux1 without its own frontend
@@ -1327,18 +1333,43 @@ static int av7110_register(struct av7110 *av7110)
 		dvbdemux1->dmx.capabilities = (DMX_TS_FILTERING | DMX_SECTION_FILTERING |
 					       DMX_MEMORY_BASED_FILTERING);
 
-		dvb_dmx_init(&av7110->demux1);
+		ret = dvb_dmx_init(&av7110->demux1);
+		if (ret < 0)
+			goto err_net_release;
 
 		av7110->dmxdev1.filternum = 256;
 		av7110->dmxdev1.demux = &dvbdemux1->dmx;
 		av7110->dmxdev1.capabilities = 0;
 
-		dvb_dmxdev_init(&av7110->dmxdev1, &av7110->dvb_adapter);
+		ret = dvb_dmxdev_init(&av7110->dmxdev1, &av7110->dvb_adapter);
+		if (ret < 0)
+			goto err_dmx1_release;
 
-		dvb_net_init(&av7110->dvb_adapter, &av7110->dvb_net1, &dvbdemux1->dmx);
+		ret = dvb_net_init(&av7110->dvb_adapter, &av7110->dvb_net1,
+				   &dvbdemux1->dmx);
+		if (ret < 0)
+			goto err_dmxdev1_release;
 		pr_info("additional demux1 for budget-patch registered\n");
 	}
 	return 0;
+
+err_dmxdev1_release:
+	dvb_dmxdev_release(&av7110->dmxdev1);
+err_dmx1_release:
+	dvb_dmx_release(&av7110->demux1);
+err_net_release:
+	dvb_net_release(&av7110->dvb_net);
+err_unregister_devices:
+	dvb_unregister_device(av7110->osd_dev);
+	av7110_ca_unregister(av7110);
+	av7110_av_unregister(av7110);
+err_dmxdev_release:
+	dvb_dmxdev_release(&av7110->dmxdev);
+err_dmx_release:
+	dvb_dmx_release(&av7110->demux);
+err_registered:
+	av7110->registered = 0;
+	return ret;
 }
 
 static void dvb_unregister(struct av7110 *av7110)

@@ -59,7 +59,7 @@ static struct rc_map_table rc_map_dvico_mce_table[] = {
 static struct rc_map_list dvico_mce_map = {
 	.map = {
 		.scan     = rc_map_dvico_mce_table,
-		.size     = ARRAY_SIZE(rc_map_dvico_mce_table),
+		.entries  = ARRAY_SIZE(rc_map_dvico_mce_table),
 		.rc_proto = RC_PROTO_NEC,
 		.name     = RC_MAP_DVICO_MCE,
 	}

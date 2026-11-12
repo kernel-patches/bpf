@@ -65,7 +65,7 @@ static struct rc_map_table terratec_cinergy_xs[] = {
 static struct rc_map_list terratec_cinergy_xs_map = {
 	.map = {
 		.scan     = terratec_cinergy_xs,
-		.size     = ARRAY_SIZE(terratec_cinergy_xs),
+		.entries  = ARRAY_SIZE(terratec_cinergy_xs),
 		.rc_proto = RC_PROTO_UNKNOWN,	/* Legacy IR type */
 		.name     = RC_MAP_TERRATEC_CINERGY_XS,
 	}

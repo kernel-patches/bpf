@@ -65,7 +65,7 @@ static struct rc_map_table mecool_kiii_pro[] = {
 static struct rc_map_list mecool_kiii_pro_map = {
 	.map = {
 		.scan     = mecool_kiii_pro,
-		.size     = ARRAY_SIZE(mecool_kiii_pro),
+		.entries  = ARRAY_SIZE(mecool_kiii_pro),
 		.rc_proto = RC_PROTO_NEC,
 		.name     = RC_MAP_MECOOL_KIII_PRO,
 	}

@@ -101,7 +101,8 @@ int ir_raw_event_store_edge(struct rc_dev *dev, bool pulse)
 	struct ir_raw_event	ev = {};
 
 	now = ktime_get();
-	ev.duration = ktime_to_us(ktime_sub(now, dev->raw->last_event));
+	ev.duration = min_t(u64, U32_MAX,
+			    ktime_to_us(ktime_sub(now, dev->raw->last_event)));
 	ev.pulse = !pulse;
 
 	return ir_raw_event_store_with_timeout(dev, &ev);

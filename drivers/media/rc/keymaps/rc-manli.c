@@ -107,7 +107,7 @@ static struct rc_map_table manli[] = {
 static struct rc_map_list manli_map = {
 	.map = {
 		.scan     = manli,
-		.size     = ARRAY_SIZE(manli),
+		.entries  = ARRAY_SIZE(manli),
 		.rc_proto = RC_PROTO_UNKNOWN,	/* Legacy IR type */
 		.name     = RC_MAP_MANLI,
 	}

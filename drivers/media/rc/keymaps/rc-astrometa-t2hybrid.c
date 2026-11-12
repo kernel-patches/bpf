@@ -41,7 +41,7 @@ static struct rc_map_table t2hybrid[] = {
 static struct rc_map_list t2hybrid_map = {
 	.map = {
 		.scan     = t2hybrid,
-		.size     = ARRAY_SIZE(t2hybrid),
+		.entries  = ARRAY_SIZE(t2hybrid),
 		.rc_proto = RC_PROTO_NEC,
 		.name     = RC_MAP_ASTROMETA_T2HYBRID,
 	}

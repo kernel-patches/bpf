@@ -2398,6 +2398,7 @@ struct pvr2_hdw *pvr2_hdw_create(struct usb_interface *intf,
 	hdw->master_state = PVR2_STATE_DEAD;
 
 	init_waitqueue_head(&hdw->state_wait_data);
+	INIT_WORK(&hdw->workpoll, pvr2_hdw_worker_poll);
 
 	hdw->tuner_signal_stale = !0;
 	cx2341x_fill_defaults(&hdw->enc_ctl_state);
@@ -2566,8 +2567,6 @@ struct pvr2_hdw *pvr2_hdw_create(struct usb_interface *intf,
 		}
 	} while (0);
 	mutex_unlock(&pvr2_unit_mtx);
-
-	INIT_WORK(&hdw->workpoll, pvr2_hdw_worker_poll);
 
 	if (hdw->unit_number == -1)
 		goto fail;

@@ -86,7 +86,7 @@ static struct rc_map_table medion_x10_digitainer[] = {
 static struct rc_map_list medion_x10_digitainer_map = {
 	.map = {
 		.scan     = medion_x10_digitainer,
-		.size     = ARRAY_SIZE(medion_x10_digitainer),
+		.entries  = ARRAY_SIZE(medion_x10_digitainer),
 		.rc_proto = RC_PROTO_OTHER,
 		.name     = RC_MAP_MEDION_X10_DIGITAINER,
 	}
