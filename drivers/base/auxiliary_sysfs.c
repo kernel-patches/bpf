@@ -22,21 +22,32 @@ static const struct attribute_group auxiliary_irqs_group = {
 	.attrs = auxiliary_irq_attrs,
 };
 
+static void auxiliary_irq_dir_release(void *data)
+{
+	struct auxiliary_device *auxdev = data;
+
+	xa_destroy(&auxdev->sysfs.irqs);
+	auxdev->sysfs.irq_dir_exists = false;
+	sysfs_remove_group(&auxdev->dev.kobj, &auxiliary_irqs_group);
+}
+
 static int auxiliary_irq_dir_prepare(struct auxiliary_device *auxdev)
 {
-	int ret = 0;
+	int ret;
 
 	guard(mutex)(&auxdev->sysfs.lock);
 	if (auxdev->sysfs.irq_dir_exists)
 		return 0;
 
-	ret = devm_device_add_group(&auxdev->dev, &auxiliary_irqs_group);
+	ret = sysfs_create_group(&auxdev->dev.kobj, &auxiliary_irqs_group);
 	if (ret)
 		return ret;
 
 	auxdev->sysfs.irq_dir_exists = true;
 	xa_init(&auxdev->sysfs.irqs);
-	return 0;
+
+	return devm_add_action_or_reset(&auxdev->dev,
+					auxiliary_irq_dir_release, auxdev);
 }
 
 /**
