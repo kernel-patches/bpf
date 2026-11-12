@@ -844,11 +844,12 @@ static int gspca_init_transfer(struct gspca_dev *gspca_dev)
 			goto out;
 		}
 		v4l2_ctrl_handler_setup(gspca_dev->vdev.ctrl_handler);
-		gspca_dev->streaming = true;
 
 		/* some bulk transfers are started by the subdriver */
-		if (gspca_dev->cam.bulk && gspca_dev->cam.bulk_nurbs == 0)
+		if (gspca_dev->cam.bulk && gspca_dev->cam.bulk_nurbs == 0) {
+			gspca_dev->streaming = true;
 			break;
+		}
 
 		/* submit the URBs */
 		for (n = 0; n < MAX_NURBS; n++) {
@@ -859,8 +860,10 @@ static int gspca_init_transfer(struct gspca_dev *gspca_dev)
 			if (ret < 0)
 				break;
 		}
-		if (ret >= 0)
+		if (ret >= 0) {
+			gspca_dev->streaming = true;
 			break;			/* transfer is started */
+		}
 
 		/* something when wrong
 		 * stop the webcam and free the transfer resources */
