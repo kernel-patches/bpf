@@ -1484,13 +1484,28 @@ static const struct uprobe_xol_ops push_xol_ops = {
 	.emulate  = push_emulate_op,
 };
 
+/*
+ * ENDBR64/ENDBR32 (f3 0f 1e fa/fb).  Userspace IBT is not supported, so
+ * in a user task they are NOPs, and they start most functions in
+ * binaries built with -fcf-protection.  Revisit if userspace IBT is
+ * ever enabled.
+ */
+static bool insn_is_endbr(struct insn *insn)
+{
+	return insn->length == 4 &&
+	       insn->prefixes.nbytes == 1 && insn->prefixes.bytes[0] == 0xf3 &&
+	       insn->opcode.nbytes == 2 && insn->opcode.bytes[0] == 0x0f &&
+	       insn->opcode.bytes[1] == 0x1e &&
+	       (insn->modrm.bytes[0] & ~1) == 0xfa;
+}
+
 /* Returns -ENOSYS if branch_xol_ops doesn't handle this insn */
 static int branch_setup_xol_ops(struct arch_uprobe *auprobe, struct insn *insn)
 {
 	u8 opc1 = OPCODE1(insn);
 	insn_byte_t p;
 
-	if (insn_is_nop(insn))
+	if (insn_is_nop(insn) || insn_is_endbr(insn))
 		goto setup;
 
 	switch (opc1) {
