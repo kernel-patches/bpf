@@ -488,8 +488,9 @@ cleanup()
 
 	# check whether the setup phase was completed successfully or not. In
 	# case of an error during the setup phase of the testing environment,
-	# the selftest is considered as "skipped".
-	if [ "${SETUP_ERR}" -ne 0 ]; then
+	# the selftest is considered as "skipped", unless a test has already
+	# recorded a failure.
+	if [ "${SETUP_ERR}" -ne 0 ] && [ "$ret" -ne "$ksft_fail" ]; then
 		echo "SKIP: Setting up the testing environment failed"
 		exit "${ksft_skip}"
 	fi
@@ -785,6 +786,27 @@ setup_rt_endpoints()
 	done
 }
 
+# setup proxy on route entries for hosts
+# args:
+#  $1 - ingress router that enforces the SRv6 Policy
+#  $2 - destination host whose addresses are proxied
+#  $3 - suffix of the address on the loopback of the destination host
+#       (i.e. cafe::<host>:<suffix>)
+setup_rt_host_proxy()
+{
+	local rt=$1
+	local hs=$2
+	local func=$3
+
+	ip -netns "$(get_rtname "${rt}")" -6 neigh add \
+		proxy "${IPv6_HS_NETWORK}::${hs}" \
+		dev "${RT2HS_DEVNAME}"
+
+	ip -netns "$(get_rtname "${rt}")" -6 neigh add \
+		proxy "${IPv6_HS_NETWORK}::${hs}:${func}" \
+		dev "${RT2HS_DEVNAME}"
+}
+
 # This helper function builds and installs the SID List (i.e. SRv6 Policy)
 # to be applied on incoming packets at the ingress node. Moreover, it
 # configures the SRv6 nodes specified in the SID List to process the traffic
@@ -860,10 +882,6 @@ __setup_rt_policy()
 		add "${IPv6_HS_NETWORK}::${dst}" \
 		encap seg6 mode inline segs "${policy}" \
 		dev "${DUMMY_DEVNAME}"
-
-	ip -netns "${in_nsname}" -6 neigh \
-		add proxy "${IPv6_HS_NETWORK}::${dst}" \
-		dev "${RT2HS_DEVNAME}"
 }
 
 # see __setup_rt_policy
@@ -962,16 +980,28 @@ setup()
 	setup_hs 1 1
 	setup_hs 2 2
 
-	# set up the loopback addresses of the hosts used by the Policies (i.c)
-	# and (i.d).
-	setup_hs_lo_addr 1 1 "${END_CSID_PSP_FUNC}"
-	setup_hs_lo_addr 2 2 "${END_CSID_PSP_FUNC}"
-
 	# set up default SRv6 Endpoints (i.e. SRv6 End behavior)
 	setup_rt_local_sids 1 "2 3 4"
 	setup_rt_local_sids 2 "1 3 4"
 	setup_rt_local_sids 3 "1 2 4"
 	setup_rt_local_sids 4 "1 2 3"
+
+	# testing environment was set up successfully
+	SETUP_ERR=0
+}
+
+setup_end_flv_psp()
+{
+	SETUP_ERR=1
+
+	# set up the loopback addresses of the hosts used by the Policies (i.c)
+	# and (i.d).
+	setup_hs_lo_addr 1 1 "${END_CSID_PSP_FUNC}"
+	setup_hs_lo_addr 2 2 "${END_CSID_PSP_FUNC}"
+
+	# setup proxy on route entries for hosts
+	setup_rt_host_proxy 1 2 "${END_CSID_PSP_FUNC}"
+	setup_rt_host_proxy 2 1 "${END_CSID_PSP_FUNC}"
 
 	# set up SRv6 policies
 	# create a connection between hosts hs-1 and hs-2.
@@ -1429,6 +1459,10 @@ set +e
 
 router_tests
 host2gateway_tests
+
+set -e
+setup_end_flv_psp
+set +e
 host_srv6_end_flv_psp_tests
 host_srv6_end_flv_next_csid_psp_tests
 host_srv6_end_flv_consumed_srh_tests
