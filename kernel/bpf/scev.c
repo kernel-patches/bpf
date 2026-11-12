@@ -3,6 +3,7 @@
 
 #include "linux/cnum.h"
 #include <linux/bpf_verifier.h>
+#include <linux/gcd.h>
 #include <linux/jhash.h>
 #include <linux/log2.h>
 #include <linux/math64.h>
@@ -3562,6 +3563,59 @@ static struct cnum64 scalar_arc(const struct scalar *v, bool low32)
 	return low32 ? cnum64_lshift32(v->r32) : v->r64;
 }
 
+/* Euclid. gcd64(a, 0) is a. gcd() is for unsigned long. */
+static u64 gcd64(u64 a, u64 b)
+{
+	u64 rem;
+
+	while (b) {
+		div64_u64_rem(a, b, &rem);
+		a = b;
+		b = rem;
+	}
+	return a;
+}
+
+/*
+ * The values of @v are among the members of an arithmetic progression on the circle:
+ *
+ *	arc->base, arc->base + stride, arc->base + 2 * stride, .. , arc->base + arc->size
+ *
+ * @arc is scalar_arc() without the values at its ends that @v cannot have.
+ * Return the stride, 0 if there is one value.
+ *
+ * base and step are a congruence of the s64: the distance between two values is a multiple of
+ * step if r64 does not cross S64_MAX / S64_MIN. The low 32 bits have the same distances if r32
+ * is r64 moved by a multiple of 1 << 32.
+ * The known low bits of var_off are a congruence modulo a power of two. That divides 1 << 64 and
+ * 1 << 32, so it holds wherever the arc is. reg_bounds_sync() does not round a range to them:
+ * 1..0xff8 with three zero bits is 8..0xff8 here.
+ */
+static u64 scalar_stride(const struct scalar *v, bool low32, struct cnum64 *arc)
+{
+	struct tnum t = low32 ? tnum_lshift(v->var_off, 32) : v->var_off;
+	s64 smin = cnum64_smin(v->r64), smax = cnum64_smax(v->r64);
+	u64 low, d;
+
+	*arc = scalar_arc(v, low32);
+	if (cnum64_is_empty(*arc) || cnum64_is_const(*arc))
+		return 0;
+	if (v->step > 1 && smin == (s64)v->r64.base &&
+	    imod(smin, v->step) == v->base && imod(smax, v->step) == v->base &&
+	    (!low32 || (v->r32.base == (u32)v->r64.base && v->r32.size == v->r64.size)))
+		return (u64)v->step << (low32 ? 32 : 0);
+
+	low = t.mask ? BIT_ULL(__ffs64(t.mask)) - 1 : U64_MAX;
+	d = (t.value - arc->base) & low;
+	/* range and var_off don't overlap: the path is infeasible */
+	if (d > arc->size)
+		return low32 ? BIT_ULL(32) : 1;
+	arc->base += d;
+	arc->size -= d;
+	arc->size -= arc->size & low;
+	return arc->size ? low + 1 : 0;
+}
+
 static bool is_signed_op(u8 op)
 {
 	switch (op) {
@@ -3638,17 +3692,21 @@ static void rotated_urange(struct cnum64 a, u64 origin, u64 ut_max, u64 *min, u6
  * Both bounds of 10..12 have a count and 11 has none. overshoot is -diff modulo step: when the
  * initial value grows by 1, so does overshoot, modulo step. For the initial values
  * imin .. imin + size it is at most 'overshoot of imin' + size while that is below step: exact
- * for a constant. Else it is step - 1, which is what LLVM's canIVOverflowOnLT() assumes.
+ * for a constant. Else it is known modulo g = gcd(step, @stride), where the initial values are
+ * imin, imin + @stride, imin + 2 * @stride ..: at most step - g + 'overshoot of imin' % g.
+ * 10, 12, 14 has a count: the step divides the distance. With a stride of 1 it is step - 1, which
+ * is what LLVM's canIVOverflowOnLT() assumes.
  * '!=' has to hit each bound: what holds for initial values holds for its bounds too.
  *
  * 32-bit numbers are compared on the same circle, in the upper half of a u64: cnum64_lshift32().
  * @unit is the 1 of the text above, 1 or 1 << 32, and ut_max is the largest number, -unit.
  */
 static bool compute_backedge_taken_count(u8 op, bool sign, u64 unit, struct cnum64 initial,
-					 u64 step, struct cnum64 bound, struct exit_limit *el)
+					 u64 step, struct cnum64 bound, u64 stride,
+					 struct exit_limit *el)
 {
 	u64 min_value = sign ? (u64)S64_MIN : 0, ut_max = -unit, origin = min_value;
-	u64 imin, imax, emin, emax, bmin, bmax, diff, rem, overshoot, size;
+	u64 imin, imax, emin, emax, bmin, bmax, diff, rem, overshoot, size, g;
 	bool down = (s64)step < 0;
 	struct cnum64 end;
 
@@ -3717,7 +3775,14 @@ static bool compute_backedge_taken_count(u8 op, bool sign, u64 unit, struct cnum
 	size = imax - imin;
 	if (op == BPF_JNE && check_add_overflow(size, emax - emin, &size))
 		size = ut_max;
-	overshoot = size < step - overshoot ? overshoot + size : step - unit;
+	if (size < step - overshoot) {
+		overshoot += size;
+	} else {
+		/* Initial values that cross origin are 0 .. ut_max here: imin is none of them. */
+		g = imin == initial.base - origin ? gcd64(step, stride) : unit;
+		div64_u64_rem(overshoot, g, &rem);
+		overshoot = step - g + rem;
+	}
 	if (overshoot > ut_max - emax)
 		return false;
 
@@ -3838,7 +3903,7 @@ static bool compute_max_iters(struct bpf_verifier_env *env,
 	struct scev_value initial_val, step_val, bound_val, reg_val;
 	bool sign = is_signed_op(latch->op), konst;
 	struct cnum64 initial, bound, off;
-	u64 step, unit = 1;
+	u64 step, unit = 1, stride;
 	struct exit_limit el;
 	bool low32;
 	u32 l, r;
@@ -3884,8 +3949,11 @@ static bool compute_max_iters(struct bpf_verifier_env *env,
 		sign = false;
 	}
 	low32 = initial_val.ptr_reg < 0 && (latch->jmp32 || latch->zext32);
-	initial = scalar_arc(scalar_of(&initial_val), low32);
+	stride = scalar_stride(scalar_of(&initial_val), low32, &initial);
 	bound = scalar_arc(scalar_of(&bound_val), low32);
+	/* '!=' has to hit each bound. For the rest the largest or the smallest bound counts. */
+	if (latch->op == BPF_JNE)
+		stride = gcd64(stride, scalar_stride(scalar_of(&bound_val), low32, &bound));
 	step = step_val.r64.base;
 	if (initial_val.ptr_reg >= 0) {
 		/*
@@ -3906,7 +3974,8 @@ static bool compute_max_iters(struct bpf_verifier_env *env,
 	/* no bound is left for which the latch can be true */
 	if (cnum64_is_empty(bound))
 		el = (struct exit_limit){};
-	else if (!compute_backedge_taken_count(latch->op, sign, unit, initial, step, bound, &el))
+	else if (!compute_backedge_taken_count(latch->op, sign, unit, initial, step, bound, stride,
+					       &el))
 		return false;
 	/*
 	 * max_header_count is u32 and U32_MAX means "infinite",
@@ -4185,7 +4254,8 @@ static void linear_bounds(const struct scalar *reg, u32 max_header_count,
 	struct cnum64 r64;
 	struct cnum32 r32;
 	s64 total_change;
-	bool overflow;
+	bool overflow, konst;
+	u16 step;
 
 	if (coefs->spill32) {
 		/* what 'rX = *(u32 *)(r10 - 8)' loads */
@@ -4225,16 +4295,18 @@ static void linear_bounds(const struct scalar *reg, u32 max_header_count,
 		r32 = cnum32_union(reg->r32, r32);
 	}
 	/*
-	 * If the entry value is a single point the value set is 'v + slope * k',
-	 * so the step is |slope|. Otherwise, only the power-of-two alignment
-	 * shared by the entry value and the slope.
+	 * The value set is 'v + slope * k'. It has the power-of-two alignment shared by the entry
+	 * value and the slope. The entry value is congruent to base modulo step, so the sum is,
+	 * modulo gcd(step, |slope|), unless it wraps. A single point is its own base, its step
+	 * is 0: every number divides 0. One step is kept: the gcd if it implies the alignment.
 	 */
-	if (cnum64_is_const(reg->r64) && !overflow) {
-		out->step = slope_abs;
-		out->base = imod(cnum64_smin(reg->r64), out->step);
-	} else {
-		out->step = 1u << min_t(u32, tnum_alignment(reg->var_off), __ffs(slope_abs));
-		out->base = 0;
+	out->step = 1u << min_t(u32, tnum_alignment(reg->var_off), __ffs(slope_abs));
+	out->base = 0;
+	konst = cnum64_is_const(reg->r64);
+	step = gcd(konst ? 0 : reg->step, slope_abs);
+	if (!overflow && step > out->step && !(step % out->step)) {
+		out->step = step;
+		out->base = konst ? imod(cnum64_smin(reg->r64), step) : reg->base % step;
 	}
 	out->var_off = tnum_unknown;
 	out->r64 = r64;
