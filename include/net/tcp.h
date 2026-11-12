@@ -498,8 +498,7 @@ void tcp_init_sock(struct sock *sk);
 void tcp_init_transfer(struct sock *sk, int bpf_op, struct sk_buff *skb);
 __poll_t tcp_poll(struct file *file, struct socket *sock,
 		      struct poll_table_struct *wait);
-int do_tcp_getsockopt(struct sock *sk, int level,
-		      int optname, sockptr_t optval, sockptr_t optlen);
+int do_tcp_getsockopt(struct sock *sk, int level, int optname, sockopt_t *sopt);
 int tcp_getsockopt(struct sock *sk, int level, int optname,
 		   char __user *optval, int __user *optlen);
 bool tcp_bpf_bypass_getsockopt(int level, int optname);

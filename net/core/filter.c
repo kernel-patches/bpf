@@ -5703,6 +5703,28 @@ static int bpf_sol_tcp_setsockopt(struct sock *sk, int optname,
 	return 0;
 }
 
+static int sol_tcp_getsockopt(struct sock *sk, int optname, char *optval,
+			      int *optlen)
+{
+	struct kvec kvec;
+	sockopt_t opt;
+	int err;
+
+	err = sockptr_to_sockopt(&opt, KERNEL_SOCKPTR(optval),
+				 KERNEL_SOCKPTR(optlen), &kvec);
+	if (err)
+		return err;
+
+	/* BPF may call this in softirq: with page faults disabled, the
+	 * usercopy check skips find_vmap_area() and its lock.
+	 */
+	pagefault_disable();
+	err = do_tcp_getsockopt(sk, SOL_TCP, optname, &opt);
+	pagefault_enable();
+	*optlen = opt.optlen;
+	return err;
+}
+
 static int sol_tcp_sockopt_congestion(struct sock *sk, char *optval,
 				      int *optlen, bool getopt)
 {
@@ -5717,9 +5739,7 @@ static int sol_tcp_sockopt_congestion(struct sock *sk, char *optval,
 			return -EINVAL;
 		/* BPF expects NULL-terminated tcp-cc string */
 		optval[--(*optlen)] = '\0';
-		return do_tcp_getsockopt(sk, SOL_TCP, TCP_CONGESTION,
-					 KERNEL_SOCKPTR(optval),
-					 KERNEL_SOCKPTR(optlen));
+		return sol_tcp_getsockopt(sk, TCP_CONGESTION, optval, optlen);
 	}
 
 	/* "cdg" is the only cc that alloc a ptr
@@ -5805,9 +5825,7 @@ static int sol_tcp_sockopt(struct sock *sk, int optname,
 			return 0;
 		}
 
-		return do_tcp_getsockopt(sk, SOL_TCP, optname,
-					 KERNEL_SOCKPTR(optval),
-					 KERNEL_SOCKPTR(optlen));
+		return sol_tcp_getsockopt(sk, optname, optval, optlen);
 	}
 
 	return do_tcp_setsockopt(sk, SOL_TCP, optname,
