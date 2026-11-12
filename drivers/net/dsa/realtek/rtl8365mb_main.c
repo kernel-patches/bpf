@@ -108,6 +108,8 @@
 #include "realtek-smi.h"
 #include "realtek-mdio.h"
 #include "rtl83xx.h"
+#include "rtl83xx-qos.h"
+#include "rtl8365mb_qos.h"
 #include "rtl8365mb_l2.h"
 #include "rtl8365mb_vlan.h"
 
@@ -122,6 +124,8 @@
  */
 #define RTL8365MB_LEARN_LIMIT_MAX	2112
 #define RTL8365MB_MAX_NUM_EXTINTS	3
+
+static_assert(RTL8365MB_MAX_NUM_PORTS <= RTL8365MB_QOS_MAX_PORTS);
 
 /* Chip identification registers */
 #define RTL8365MB_CHIP_ID_REG		0x1300
@@ -3202,6 +3206,22 @@ static int rtl8365mb_setup(struct dsa_switch *ds)
 		}
 	}
 
+	/* The QoS baseline below assigns queues from this count */
+	ds->num_tx_queues = mb->chip_info->num_tx_queues;
+
+	/* Set up the QoS baseline before the per-port defaults */
+	ret = rtl83xx_qos_init(ds);
+	if (ret)
+		goto out_teardown_irq;
+
+	ret = rtl8365mb_qos_pridec_init(priv);
+	if (ret)
+		goto out_teardown_irq;
+
+	ret = rtl8365mb_qos_qmap_init(priv);
+	if (ret)
+		goto out_teardown_irq;
+
 	/* Start with all ports blocked, including unused ports */
 	dsa_switch_for_each_port(dp, ds) {
 		struct rtl8365mb_port *p = &mb->ports[dp->index];
@@ -3229,6 +3249,10 @@ static int rtl8365mb_setup(struct dsa_switch *ds)
 
 		/* Enable all types of flooding */
 		ret = rtl83xx_setup_port_flood_control(priv, dp->index);
+		if (ret)
+			goto out_teardown_irq;
+
+		ret = rtl83xx_qos_init_port(ds, dp->index);
 		if (ret)
 			goto out_teardown_irq;
 
@@ -3312,8 +3336,6 @@ static int rtl8365mb_setup(struct dsa_switch *ds)
 		dev_err(priv->dev, "could not set up MDIO bus\n");
 		goto out_teardown_irq;
 	}
-
-	ds->num_tx_queues = mb->chip_info->num_tx_queues;
 
 	/* Start statistics counter polling */
 	ret = rtl8365mb_stats_setup(priv);
@@ -3476,6 +3498,8 @@ static const struct dsa_switch_ops rtl8365mb_switch_ops = {
 	.port_bridge_leave = rtl83xx_port_bridge_leave,
 	.port_pre_bridge_flags = rtl8365mb_port_pre_bridge_flags,
 	.port_bridge_flags = rtl83xx_port_bridge_flags,
+	.port_get_default_prio = rtl83xx_port_get_default_prio,
+	.port_set_default_prio = rtl83xx_port_set_default_prio,
 	.port_stp_state_set = rtl8365mb_port_stp_state_set,
 	.port_fast_age = rtl83xx_port_fast_age,
 	.port_fdb_add = rtl83xx_port_fdb_add,
@@ -3518,6 +3542,10 @@ static const struct realtek_ops rtl8365mb_ops = {
 	.phy_write = rtl8365mb_phy_write,
 	.phy_read_c45 = rtl8365mb_phy_read_c45,
 	.phy_write_c45 = rtl8365mb_phy_write_c45,
+	.qos_get_port_prio = rtl8365mb_qos_get_port_prio,
+	.qos_set_port_prio = rtl8365mb_qos_set_port_prio,
+	.qos_set_pcp_prio = rtl8365mb_qos_set_pcp_prio,
+	.qos_set_dscp_prio = rtl8365mb_qos_set_dscp_prio,
 };
 
 static const char *const rtl8365mb_supplies[] = {
