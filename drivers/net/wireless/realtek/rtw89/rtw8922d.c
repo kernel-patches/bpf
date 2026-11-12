@@ -1720,6 +1720,7 @@ static void rtw8922d_calc_rx_gain_normal_cck(struct rtw89_dev *rtwdev,
 	rx_gain_offset = -rtw8922d_get_rx_gain_by_chan(rtwdev, chan, path, true);
 	calc->cck_mean_gain_bias = (rx_gain_offset & 0x3) << 1;
 	calc->cck_rpl_ofst = (rx_gain_offset >> 2) + gain->cck_rpl_base[phy_idx];
+	calc->cck_efuse_bias = rx_gain_offset;
 }
 
 static void rtw8922d_set_rx_gain_normal_cck(struct rtw89_dev *rtwdev,
@@ -1731,12 +1732,8 @@ static void rtw8922d_set_rx_gain_normal_cck(struct rtw89_dev *rtwdev,
 
 	rtw8922d_calc_rx_gain_normal_cck(rtwdev, chan, path, phy_idx, &calc);
 
-	rtw89_phy_write32_idx(rtwdev, R_GAIN_BIAS_BE4, B_GAIN_BIAS_BW20_BE4,
-			      calc.cck_mean_gain_bias, phy_idx);
-	rtw89_phy_write32_idx(rtwdev, R_GAIN_BIAS_BE4, B_GAIN_BIAS_BW40_BE4,
-			      calc.cck_mean_gain_bias, phy_idx);
-	rtw89_phy_write32_idx(rtwdev, R_CCK_RPL_OFST_BE4, B_CCK_RPL_OFST_BE4,
-			      calc.cck_rpl_ofst, phy_idx);
+	rtw89_phy_write32_idx(rtwdev, R_GAIN_BIAS_BE4, B_EFUSE_BIAS_BE4,
+			      calc.cck_efuse_bias, phy_idx);
 }
 
 static void rtw8922d_calc_rx_gain_normal_ofdm(struct rtw89_dev *rtwdev,

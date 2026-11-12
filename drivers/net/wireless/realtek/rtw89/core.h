@@ -7437,6 +7437,7 @@ struct rtw89_phy_calc_efuse_gain {
 	s8 cck_mean_gain_bias;
 	s8 cck_rpl_ofst;
 	s8 rssi_ofst;
+	s8 cck_efuse_bias;
 };
 
 #define RTW89_MAX_PATTERN_NUM             18
