@@ -79,7 +79,28 @@ HOSTCFLAGS_resolve_btfids += -g \
 
 LIBS = $(LIBELF_LIBS) $(ZLIB_LIBS)
 
+# text_mc.cpp reads machine code with LLVM's MC layer. Only --fmodret_scan needs
+# it: don't touch LLVM unless kbuild is going to run the tool with that flag.
+ifneq ($(filter --fmodret_scan,$(RESOLVE_BTFIDS_FLAGS)),)
+LLVM_MC := y
+HOSTCXX ?= g++
+LLVM_MC_SH := LLVM_CONFIG="$(LLVM_CONFIG)" HOSTCXX="$(HOSTCXX)" \
+	      $(srctree)/tools/bpf/resolve_btfids/llvm-mc.sh $(SRCARCH)
+# Kconfig knows from llvm-mc.sh that LLVM is installed. Whether text_mc.cpp can
+# be built with it shows here.
+LLVM_MC_HELP := CONFIG_BPF_FMODRET_SCAN=y needs a C++17 compiler (HOSTCXX=$(HOSTCXX)) and the \
+		headers and libraries of LLVM 17 or later (LLVM_CONFIG=$(LLVM_CONFIG), packages \
+		llvm-dev, llvm-devel). See above what is wrong, or switch the option off
+or_llvm_mc_help := || { echo '$(LLVM_MC_HELP)' >&2; false; }
+HOSTCFLAGS_resolve_btfids += -DHAVE_LLVM_MC
+CXX := $(HOSTCXX)
+CXXFLAGS := $(filter-out -Werror,$(HOSTCFLAGS_resolve_btfids)) -O2 \
+	    $(or $(shell $(LLVM_MC_SH) cxxflags),$(error $(LLVM_MC_HELP)))
+LIBS += $(or $(shell $(LLVM_MC_SH) libs),$(error $(LLVM_MC_HELP)))
+endif
+
 export srctree OUTPUT HOSTCFLAGS_resolve_btfids Q HOSTCC HOSTLD HOSTAR
+export CXX CXXFLAGS SRCARCH LLVM_MC or_llvm_mc_help
 include $(srctree)/tools/build/Makefile.include
 
 $(BINARY_IN): fixdep FORCE prepare | $(OUTPUT)
@@ -87,7 +108,7 @@ $(BINARY_IN): fixdep FORCE prepare | $(OUTPUT)
 
 $(BINARY): $(BPFOBJ) $(SUBCMDOBJ) $(BINARY_IN)
 	$(call msg,LINK,$@)
-	$(Q)$(HOSTCC) $(BINARY_IN) $(KBUILD_HOSTLDFLAGS) $(EXTRA_LDFLAGS) -o $@ $(BPFOBJ) $(SUBCMDOBJ) $(LIBS)
+	$(Q)$(HOSTCC) $(BINARY_IN) $(KBUILD_HOSTLDFLAGS) $(EXTRA_LDFLAGS) -o $@ $(BPFOBJ) $(SUBCMDOBJ) $(LIBS) $(or_llvm_mc_help)
 
 clean_objects := $(wildcard $(OUTPUT)/*.o                \
                             $(OUTPUT)/.*.o.cmd           \
