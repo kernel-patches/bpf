@@ -112,6 +112,7 @@
 #define SECS_FIRST_SCAN		60	/* delay before the first scan */
 #define SECS_SCAN_WAIT		600	/* subsequent auto scanning delay */
 #define MAX_SCAN_SIZE		4096	/* maximum size of a scanned block */
+#define SCAN_LOCK_BATCH		64	/* words between lock waiter checks */
 
 #define BYTES_PER_POINTER	sizeof(void *)
 
@@ -1540,6 +1541,18 @@ static int scan_should_stop(void)
 }
 
 /*
+ * Release kmemleak_lock and take it again if anybody is waiting for it, so
+ * that allocations and frees do not have to wait for a whole block.
+ */
+static void scan_breathe(unsigned long *flags)
+{
+	if (raw_spin_is_contended(&kmemleak_lock)) {
+		raw_spin_unlock_irqrestore(&kmemleak_lock, *flags);
+		raw_spin_lock_irqsave(&kmemleak_lock, *flags);
+	}
+}
+
+/*
  * Scan a memory block (exclusive range) for valid pointers and add those
  * found to the gray list. Return non-zero if the scan was interrupted.
  */
@@ -1560,6 +1573,14 @@ static int scan_block(void *_start, void *_end,
 			stop = 1;
 			break;
 		}
+
+		/*
+		 * Only the background scan thread breathes, scans requested
+		 * through debugfs keep the lock and finish sooner.
+		 */
+		if (current == scan_thread && ptr != start &&
+		    !((ptr - start) % SCAN_LOCK_BATCH))
+			scan_breathe(&flags);
 
 		kasan_disable_current();
 		pointer = *(unsigned long *)kasan_reset_tag((void *)ptr);
