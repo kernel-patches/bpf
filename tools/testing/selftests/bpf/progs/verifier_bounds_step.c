@@ -473,7 +473,7 @@ __naked void step_prune_hit_const_on_line(void)
 	r7 = r0;					\
 	r1 = r6;					\
 	r1 &= 0xff;					\
-	if r6 > 0 goto l_cur_%=;			\
+	if r6 > 0xff goto l_cur_%=;			\
 	r1 *= 3;			/* step 3 */	\
 	goto l_join_%=;					\
 l_cur_%=:						\
@@ -523,7 +523,7 @@ __naked void step_prune_miss_const_off_line(void)
 	r7 = r0;					\
 	r1 = r6;					\
 	r1 &= 0xff;					\
-	if r6 > 0 goto l_cur_%=;			\
+	if r6 > 0xff goto l_cur_%=;			\
 	r1 *= 3;			/* step 3 */	\
 	goto l_join_%=;					\
 l_cur_%=:						\

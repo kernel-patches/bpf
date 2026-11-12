@@ -659,6 +659,14 @@ ARENA_LINKED(scalar_plus_two_constants, __success __retval(0),
 ARENA_LINKED(arena_ptr_plus_constant, __failure,
 	"r3 += 1; r3 = le64 r3; r7 = le64 r7; r2 = 0xffffffff ll; if r7 != r2 goto out_%=;"
 	"r3 >>= 32; r3 -= 1; r1 = r6; r1 += r3;")
+/* the add is an operand: (>> (+ x 1) 32) */
+ARENA_LINKED(arena_ptr_plus_constant_shifted, __failure,
+	"r3 += 1; r3 = le64 r3; r3 >>= 32; r7 = le64 r7; r2 = 0xffffffff ll;"
+	"if r7 != r2 goto out_%=; r3 -= 1; r1 = r6; r1 += r3;")
+/* 'r3 *= 2' is converted to 'w3 *= 2': r3 is 0 and not 1 << 32 */
+ARENA_LINKED(arena_ptr_times_constant, __failure,
+	"r3 *= 2; r3 = le64 r3; r7 = le64 r7; r2 = 0x80000000 ll; if r7 != r2 goto out_%=;"
+	"r3 >>= 32; r3 -= 1; r1 = r6; r1 += r3;")
 /* At the join point r3 is phi((+ x 1)). The insn there, an add to a scalar, does not define it. */
 ARENA_LINKED(arena_ptr_plus_constant_on_two_paths, __failure,
 	"if r8 == 0 goto 1f; r3 += 1; goto 2f; 1: r3 += 1; 2: r8 += 1; r3 = le64 r3; r7 = le64 r7;"

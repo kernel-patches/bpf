@@ -59,7 +59,7 @@ struct bpf_stack_range {
 
 /*
  * What is known about a 64-bit value: the reduced product of known bits, a range, a range of the
- * low 32 bits and a congruence. The value is in each of the four. reg_bounds_sync() is the
+ * low 32 bits and a congruence. The value is in each of the four. scalar_bounds_sync() is the
  * reduction: what one of them knows refines the others.
  */
 struct scalar {
@@ -2050,6 +2050,7 @@ struct arg_access_info {
 	u8 may_read:1;		/* Incoming contents or initialization may be needed. */
 	u8 may_write:1;
 	u8 must_write:1;	/* Prior verifier state is destroyed throughout size. */
+	u8 bytes_only:1;	/* The read cannot fill a register with a spilled pointer. */
 };
 
 struct arg_access_info
@@ -2068,13 +2069,16 @@ void bpf_trim_pkt_range(struct bpf_reg_state *reg, s64 smax);
 void scalar_set_unknown(struct scalar *s);
 void scalar_set_const(struct scalar *s, u64 imm);
 void scalar_add(struct scalar *dst, const struct scalar *a, const struct scalar *b);
+void scalar_alu(struct scalar *dst, const struct scalar *src, const struct bpf_insn *insn);
 void scalar_zext32(struct scalar *s);
+void scalar_ext(struct scalar *s, u32 bits, bool sign);
+bool scalar_intersect(struct scalar *dst, const struct scalar *src, u32 bits);
 void scalar_union(struct scalar *acc, const struct scalar *src);
 int bpf_set_reg_range(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
 		      const struct scalar *range);
 bool bpf_reg_union_compatible(const struct bpf_reg_state *a, const struct bpf_reg_state *b);
-void bpf_reg_widen_range(struct bpf_reg_state *reg, const struct bpf_reg_state *old,
-			 const struct bpf_loop_rungs *rungs, int linear);
+void scalar_widen(struct scalar *s, const struct scalar *old,
+		  const struct bpf_loop_rungs *rungs, int linear);
 int bpf_reg_union(struct bpf_verifier_env *env, struct bpf_reg_state *acc,
 		  const struct bpf_reg_state *src);
 
@@ -2084,6 +2088,7 @@ int bpf_live_stack_query_init(struct bpf_verifier_env *env, struct bpf_verifier_
 const unsigned long *bpf_may_write_mask(struct bpf_verifier_env *env, u32 insn_idx);
 bool bpf_needs_fixed_stack_off(struct bpf_verifier_env *env, int insn_idx);
 bool bpf_stack_slot_alive(struct bpf_verifier_env *env, u32 frameno, u32 spi);
+bool bpf_stack_slot_filled(struct bpf_verifier_env *env, u32 frameno, u32 spi);
 bool bpf_half_slot_live_before(struct bpf_verifier_env *env, u32 insn_idx, u32 half_spi);
 int bpf_compute_live_registers(struct bpf_verifier_env *env);
 
@@ -2231,9 +2236,16 @@ int bpf_init_scev(struct bpf_verifier_env *env);
 void bpf_free_scev(struct bpf_verifier_env *env);
 int bpf_compute_scev(struct bpf_verifier_env *env);
 int bpf_scev_jump_counts(struct bpf_verifier_env *env, int header, int n, bool taken_leaves);
-bool bpf_scev_next_linked_reg(struct bpf_verifier_env *env, int insn_idx, u32 regno, u32 *pos,
-			      u32 *linked_regno, u32 *fill_off, int *base_regno, s64 *delta,
-			      u32 *bits);
+/* What is known about a scalar or about the offset of a pointer. */
+struct scev_value {
+	struct scalar;
+	int ptr_reg;	/* SCEV register identifying the pointer origin, or -1. */
+	u8 bits;	/* The value is known modulo 2^bits. 0: nothing is known. */
+	bool refined;	/* It depends on a register that the jump refined. */
+};
+bool bpf_scev_next_linked_reg(struct bpf_verifier_env *env, struct bpf_func_state *st, int insn_idx,
+			      int next_idx, u16 refined_regs, u32 *pos, u32 *linked_regno,
+			      u32 *fill_off, struct scev_value *val);
 bool bpf_scev_mem_addr(struct bpf_verifier_env *env, int insn_idx, u32 regno, u32 *base_regno,
 		       s64 *off);
 bool bpf_is_widenable_reg_type(const struct bpf_reg_state *reg);

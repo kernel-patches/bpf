@@ -1397,6 +1397,149 @@ __naked void dead_spill_at_merge_enables_pruning(void)
 }
 
 /*
+ * Two paths meet at insn 10. fp-8 holds a pointer to fp-16 on one of them and a pointer to fp-24
+ * on the other one: no join. r6 is in [0, 15].
+ */
+#define SPILL_ONE_OF_TWO_PTRS			\
+	"call %[bpf_get_prandom_u32];"		\
+	"r6 = r0;"				\
+	"r6 &= 15;"				\
+	"*(u64 *)(r10 - 16) = r6;"		\
+	"r7 = r10;"				\
+	"r7 += -16;"				\
+	"*(u64 *)(r10 - 8) = r7;"		\
+	"if r0 & 16 goto +2;"			\
+	"r7 += -8;"				\
+	"*(u64 *)(r10 - 8) = r7;"
+
+/* Liveness doesn't know the offset of the load. A byte doesn't tell the pointers apart. */
+SEC("socket")
+__success
+__log_level(2)
+__msg("from 9 to 10: within")
+__naked void byte_load_in_subprog_keeps_no_spilled_ptr(void)
+{
+	asm volatile (
+	SPILL_ONE_OF_TWO_PTRS
+	"r1 = r10;"
+	"r1 += -16;"
+	"r2 = r6;"
+	"call load_byte;"
+	"exit;"
+	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+static __used __naked void load_byte(void)
+{
+	asm volatile (
+	"r1 += r2;"
+	"r0 = *(u8 *)(r1 + 0);"
+	"exit;"
+	::: __clobber_all);
+}
+
+/* The bytes of a pointer that was replaced are not known: r0 is in [0, 255]. */
+SEC("socket")
+__failure
+__msg("invalid variable-offset read from stack R1")
+__naked void byte_of_replaced_ptr_is_unknown(void)
+{
+	asm volatile (
+	SPILL_ONE_OF_TWO_PTRS
+	"r6 &= 7;"
+	"r1 = r10;"
+	"r1 += -8;"
+	"r1 += r6;"
+	"r0 = *(u8 *)(r1 + 0);"
+	"r1 = r10;"
+	"r1 += -1;"
+	"r1 += r0;"
+	"r0 = *(u8 *)(r1 + 0);"
+	"exit;"
+	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/* A helper reads memory. Without CAP_PERFMON it must not find a pointer there. */
+SEC("socket")
+__success
+__log_level(2)
+__msg("from 9 to 10: within")
+__failure_unpriv
+__msg_unpriv("invalid read from stack R3 off -8+0 size 8")
+__naked void helper_keeps_no_spilled_ptr(void)
+{
+	asm volatile (
+	SPILL_ONE_OF_TWO_PTRS
+	"r1 = %[map] ll;"
+	"r2 = r10;"
+	"r2 += -16;"
+	"r3 = r10;"
+	"r3 += -8;"
+	"r4 = 0;"
+	"call %[bpf_map_update_elem];"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm(bpf_get_prandom_u32),
+	  __imm(bpf_map_update_elem),
+	  __imm_addr(map)
+	: __clobber_all);
+}
+
+#ifdef CAN_USE_CALLX
+static __used __naked void load_ptr(void)
+{
+	asm volatile (
+	"r1 = *(u64 *)(r1 + 0);"
+	"r0 = *(u64 *)(r1 + 0);"
+	"exit;"
+	::: __clobber_all);
+}
+
+/* Liveness doesn't know the callee, which fills the pointer. */
+SEC("socket")
+__success
+__load_if_JITed()
+__naked void callx_keeps_spilled_ptr(void)
+{
+	asm volatile (
+	SPILL_ONE_OF_TWO_PTRS
+	"r1 = r10;"
+	"r1 += -8;"
+	"r2 = %[load_ptr] ll;"
+	"callx r2;"
+	"exit;"
+	:
+	: __imm(bpf_get_prandom_u32),
+	  __imm_addr(load_ptr)
+	: __clobber_all);
+}
+#endif /* CAN_USE_CALLX */
+
+/* Only the main pass knows the offset of the load. The pointer was replaced at insn 10. */
+SEC("socket")
+__success
+__failure_unpriv __msg_unpriv("invalid size of register fill")
+__naked void short_load_at_lost_offset_keeps_no_spilled_ptr(void)
+{
+	asm volatile (
+	SPILL_ONE_OF_TWO_PTRS
+	"r2 = 8;"
+	"r1 = r10;"
+	"r1 += -16;"
+	"r1 += r2;"
+	"r0 = *(u32 *)(r1 + 0);"
+	"exit;"
+	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
  * FP-offset tracking loses precision on second ADD, killing all liveness.
  *
  * fp_off_insn_xfer() handles "FP itself + negative imm" precisely

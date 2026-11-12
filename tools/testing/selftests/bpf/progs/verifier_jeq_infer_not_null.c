@@ -274,6 +274,39 @@ __naked void jne_reg_reg_null_check(void)
 }
 
 /*
+ * The offset of a pointer is the constant 0. That is not the value of the register: a jump that
+ * compares two pointers goes both ways.
+ */
+SEC("tc")
+__failure __msg("R1 invalid mem access 'scalar'")
+__naked void jne_of_two_map_values_goes_both_ways(void)
+{
+	asm volatile ("					\
+	r1 = 0;						\
+	*(u32 *)(r10 - 4) = r1;				\
+	r2 = r10;					\
+	r2 += -4;					\
+	r1 = %[map_hash] ll;				\
+	call %[bpf_map_lookup_elem];			\
+	if r0 == 0 goto l0_%=;				\
+	r6 = r0;					\
+	r2 = r10;					\
+	r2 += -4;					\
+	r1 = %[map_hash] ll;				\
+	call %[bpf_map_lookup_elem];			\
+	if r0 == 0 goto l0_%=;				\
+	if r6 != r0 goto l0_%=;				\
+	r1 = 0;						\
+	r0 = *(u64 *)(r1 + 0);				\
+l0_%=:	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_map_lookup_elem),
+	  __imm_addr(map_hash)
+	: __clobber_all);
+}
+
+/*
  * A comparison between PTR_TO_MEM | MEM_RDONLY | PTR_UNTRUSTED and
  * PTR_TO_MAP_VALUE_OR_NULL should not infer that map pointer is not null.
  * A bug in check_cond_jmp_op() made such inference possible.
