@@ -87,6 +87,10 @@ static const struct mc_test arm64_tests[] = {
 	T("20 c0 5f b8", TEXT_OTHER, .defs = BIT(0)),			/* ldur w0, [x1, #-4] */
 	T("20 c0 9f b8", TEXT_OTHER, .defs = BIT(0)),			/* ldursw x0, [x1, #-4] */
 	T("08 09 40 b8", TEXT_OTHER, .defs = BIT(8)),			/* ldtr w8, [x8] */
+	/* What is read */
+	T("20 00 01 91", TEXT_OTHER, .defs = BIT(0), .uses = BIT(1)),	/* add x0, x1, #0x40 */
+	T("20 20 40 f9", TEXT_OTHER, .defs = BIT(0), .uses = BIT(1), .load = true),	/* ldr x0, [x1, #0x40] */
+	T("20 00 00 b9", TEXT_OTHER, .uses = BIT(0) | BIT(1)),		/* str w0, [x1] */
 	/* The control flow */
 	T("10 00 00 14", TEXT_BRANCH, .imm = MC_TEST_ADDR + 0x40),	/* b */
 	T("00 01 1f d6", TEXT_BRANCH),					/* br x8 */
