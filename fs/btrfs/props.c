@@ -273,6 +273,21 @@ static void inode_prop_iterator(void *ctx,
 	struct btrfs_root *root = BTRFS_I(inode)->root;
 	int ret;
 
+	/*
+	 * The value comes from disk and is not trustworthy, nor NUL terminated.
+	 * An empty value is valid and just resets the property to defaults.
+	 */
+	if (len > 0) {
+		ret = handler->validate(BTRFS_I(inode), value, len);
+		if (unlikely(ret)) {
+			btrfs_warn(root->fs_info,
+				   "invalid prop %s for ino %llu (root %llu): %d",
+				   handler->xattr_name, btrfs_ino(BTRFS_I(inode)),
+				   btrfs_root_id(root), ret);
+			return;
+		}
+	}
+
 	ret = handler->apply(BTRFS_I(inode), value, len);
 	if (unlikely(ret))
 		btrfs_warn(root->fs_info,
