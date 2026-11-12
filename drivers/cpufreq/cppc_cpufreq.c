@@ -1008,29 +1008,20 @@ static int cppc_cpufreq_cpu_init(struct cpufreq_policy *policy)
 		policy->boost_supported = true;
 
 	/*
-	 * The request starts from the live limits, which may be unusable.
-	 * Firmware may leave them zeroed. An interrupted earlier update may
-	 * have left MIN above MAX. cppc_set_perf() would reject either, so
-	 * request the full range instead.
+	 * Program the initial policy bounds before starting the governor. Its
+	 * first target request may be skipped if it already matches policy->cur.
+	 * cppc_set_perf() orders the writes against the live firmware limits.
+	 *
+	 * New policies start with boost disabled, so this matches the initial
+	 * cpuinfo.max_freq. The core applies global boost after governor startup
+	 * and handles any resulting limit change through QoS.
 	 */
-	if (!cpu_data->perf_ctrls.max_perf ||
-	    cpu_data->perf_ctrls.min_perf > cpu_data->perf_ctrls.max_perf) {
-		cpu_data->perf_ctrls.min_perf = caps->lowest_perf;
-		cpu_data->perf_ctrls.min_perf_valid = true;
-		cpu_data->perf_ctrls.max_perf = caps->highest_perf;
-	}
+	cpu_data->perf_ctrls.min_perf = caps->lowest_nonlinear_perf;
+	cpu_data->perf_ctrls.min_perf_valid = true;
+	cpu_data->perf_ctrls.max_perf = policy->boost_enabled ?
+					caps->highest_perf : caps->nominal_perf;
 
-	/*
-	 * Keep the initial request within controls left by an earlier driver
-	 * instance or firmware. The governor will update the full tuple later.
-	 */
-	desired_perf = caps->highest_perf;
-	if (cpu_data->perf_ctrls.max_perf)
-		desired_perf = min(desired_perf, cpu_data->perf_ctrls.max_perf);
-	if (cpu_data->perf_ctrls.min_perf_valid)
-		desired_perf = max(desired_perf, cpu_data->perf_ctrls.min_perf);
-
-	policy->cur = cppc_perf_to_khz(caps, desired_perf);
+	desired_perf = cpu_data->perf_ctrls.max_perf;
 	cpu_data->perf_ctrls.desired_perf = desired_perf;
 
 	cppc_cpufreq_policy_state(policy)->suspend_regs_handled = false;
@@ -1047,6 +1038,7 @@ static int cppc_cpufreq_cpu_init(struct cpufreq_policy *policy)
 		goto out;
 	}
 	cpu_data->perf_limits_valid = true;
+	policy->cur = cppc_perf_to_khz(caps, desired_perf);
 
 	cppc_cpufreq_cpu_fie_init(policy);
 	return 0;
