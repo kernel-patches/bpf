@@ -46,7 +46,7 @@ configs_scftorture=
 kcsan_kmake_args=
 
 # Default compression, duration, and apportionment.
-compress_concurrency="`identify_qemu_vcpus`"
+compress_concurrency="${TORTURE_ALLOTED_CPUS}"
 duration_base=10
 duration_rcutorture_frac=7
 duration_locktorture_frac=1
