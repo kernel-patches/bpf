@@ -70,8 +70,16 @@ struct bpf_local_storage_data {
 	 *
 	 * Put it in the same cacheline as the data to minimize
 	 * the number of cachelines accessed during the cache hit case.
+	 *
+	 * An inline slot has the same layout, with a tag in place of smap:
+	 * the tag of the map whose value is in the slot. Any other tag (0
+	 * after a delete) means no value. A slot is not in an selem: never
+	 * apply SELEM() to it.
 	 */
-	struct bpf_local_storage_map __rcu *smap;
+	union {
+		struct bpf_local_storage_map __rcu *smap;
+		u64 inline_tag;
+	};
 	u8 data[] __aligned(8);
 };
 
@@ -195,6 +203,45 @@ bpf_local_storage_map_alloc(union bpf_attr *attr,
 void __bpf_local_storage_insert_cache(struct bpf_local_storage *local_storage,
 				      struct bpf_local_storage_map *smap,
 				      struct bpf_local_storage_elem *selem);
+
+/*
+ * smap has an inline slot. The tag needs an 8 byte acquire and release, so
+ * slots are 64-bit only: on 32-bit, false lets the compiler drop the slot
+ * code. There is no hint on the inline_off test, so that inline maps do not
+ * pay for normal maps.
+ */
+static __always_inline bool
+bpf_local_storage_map_inline(const struct bpf_local_storage_map *smap)
+{
+	return IS_ENABLED(CONFIG_64BIT) && smap->inline_off;
+}
+
+/* The inline slot of smap, or NULL if local_storage does not hold it */
+static __always_inline struct bpf_local_storage_data *
+bpf_local_storage_inline(struct bpf_local_storage *local_storage,
+			 struct bpf_local_storage_map *smap)
+{
+	if (!bpf_local_storage_map_inline(smap) ||
+	    smap->inline_end > local_storage->obj_size)
+		return NULL;
+	return (void *)local_storage + smap->inline_off;
+}
+
+static inline u64 bpf_local_storage_inline_tag(const struct bpf_local_storage_map *smap)
+{
+	return (u64)~smap->inline_claim << 32 | smap->inline_claim;
+}
+
+/* The slot holds a value of smap */
+static __always_inline bool
+bpf_local_storage_inline_valid(struct bpf_local_storage_data *sdata,
+			       const struct bpf_local_storage_map *smap)
+{
+	/* Pairs with the tag release in an update: see the value */
+	return smp_load_acquire(&sdata->inline_tag) ==
+	       bpf_local_storage_inline_tag(smap);
+}
+
 /* If cacheit_lockit is false, this lookup function is lockless */
 static inline struct bpf_local_storage_data *
 bpf_local_storage_lookup(struct bpf_local_storage *local_storage,
@@ -203,6 +250,15 @@ bpf_local_storage_lookup(struct bpf_local_storage *local_storage,
 {
 	struct bpf_local_storage_data *sdata;
 	struct bpf_local_storage_elem *selem;
+
+	/*
+	 * An object that holds the slot of smap never has an selem of smap:
+	 * the object size does not change, and a create puts the value in
+	 * the slot.
+	 */
+	sdata = bpf_local_storage_inline(local_storage, smap);
+	if (sdata)
+		return bpf_local_storage_inline_valid(sdata, smap) ? sdata : NULL;
 
 	/* Fast path (cache hit) */
 	sdata = rcu_dereference_check(local_storage->cache[smap->cache_idx],
@@ -251,10 +307,11 @@ bpf_selem_alloc(struct bpf_local_storage_map *smap, void *owner, void *value,
 void bpf_selem_free(struct bpf_local_storage_elem *selem,
 		    bool reuse_now);
 
-int
+struct bpf_local_storage *
 bpf_local_storage_alloc(void *owner,
 			struct bpf_local_storage_map *smap,
-			struct bpf_local_storage_elem *first_selem);
+			struct bpf_local_storage_elem *first_selem,
+			void *value);
 
 struct bpf_local_storage_data *
 bpf_local_storage_update(void *owner, struct bpf_local_storage_map *smap,
