@@ -2173,12 +2173,16 @@ static bool flow_needed_consts_differ(const struct bpf_flow *flow, enum flow_nee
 	return false;
 }
 
+/* flow_shape_ptr() hashes a struct scalar up to its padding: there is no hole in front of it */
+static_assert(offsetofend(struct scalar, step) == sizeof(struct tnum) + sizeof(struct cnum64) +
+						  sizeof(struct cnum32) + 2 * sizeof(u16));
+
 /* regsafe() and join_reg() say what each type needs */
 static void flow_shape_ptr(struct flow_shape *sh, u32 place, const struct bpf_reg_state *reg)
 {
 	u32 ids = (reg->id != 0) | (reg->parent_id != 0) << 1 | (reg->map_uid != 0) << 2;
-	u32 len = offsetof(struct bpf_reg_state, var_off);
-	bool has_off = false, var_off = false;
+	bool fixed_part = true, exact = false, has_off = false, var_off = false;
+	u32 *ptrs = &sh->word[FLOW_PTRS];
 	u64 off = reg->var_off.value;
 
 	switch (base_type(reg->type)) {
@@ -2187,12 +2191,12 @@ static void flow_shape_ptr(struct flow_shape *sh, u32 place, const struct bpf_re
 		return;
 	case PTR_TO_ARENA:
 		/* the offset is not tracked */
-		len = sizeof(reg->type);
+		fixed_part = false;
 		ids = 0;
 		break;
 	case PTR_TO_PACKET_META:
 	case PTR_TO_PACKET:
-		len = sizeof(reg->type);
+		fixed_part = false;
 		ids &= 1;
 		/* behind the end of the packet, or at the end: the same in both states */
 		if (reg->range < 0)
@@ -2224,11 +2228,15 @@ static void flow_shape_ptr(struct flow_shape *sh, u32 place, const struct bpf_re
 		var_off = !tnum_is_const(reg->var_off);
 		break;
 	default:
-		len = offsetof(struct bpf_reg_state, id);
+		exact = true;
 	}
 	sh->word[FLOW_LAYOUT] = jhash_1word(place << 1 | var_off, sh->word[FLOW_LAYOUT]);
-	sh->word[FLOW_PTRS] = jhash2((const u32 *)reg, len / sizeof(u32),
-				     sh->word[FLOW_PTRS] + ids);
+	*ptrs = jhash_1word(reg->type, *ptrs + ids);
+	if (fixed_part)
+		*ptrs = jhash2((const u32 *)&reg->raw, sizeof(reg->raw) / sizeof(u32), *ptrs);
+	if (exact)
+		*ptrs = jhash2((const u32 *)scalar_of(reg),
+			       offsetofend(struct scalar, step) / sizeof(u32), *ptrs);
 	if (has_off && !var_off)
 		sh->word[FLOW_OFFS] = jhash_2words(lower_32_bits(off), upper_32_bits(off),
 						   sh->word[FLOW_OFFS]);
@@ -2605,7 +2613,7 @@ static bool flow_join_makes_up(const struct bpf_flow *flow, struct bpf_verifier_
 	struct bpf_func_state *fa = a->frame[a->curframe], *fb = b->frame[b->curframe];
 	const struct bpf_reg_state *ra, *rb, *one_a = NULL, *one_b = NULL;
 	const struct flow_need *tested = flow->need[FLOW_NEED_JUMP], *need;
-	u32 fr, i, len = offsetof(struct bpf_reg_state, id);
+	u32 fr, i;
 
 	if (!tested)
 		return false;
@@ -2623,7 +2631,7 @@ static bool flow_join_makes_up(const struct bpf_flow *flow, struct bpf_verifier_
 			if (flow_gap(ra, rb))
 				return true;
 			/* copies of a scalar count once: same range and tnum in each state */
-			if (one_a && (memcmp(ra, one_a, len) || memcmp(rb, one_b, len)))
+			if (one_a && (!reg_value_equal(ra, one_a) || !reg_value_equal(rb, one_b)))
 				return true;
 			one_a = ra;
 			one_b = rb;

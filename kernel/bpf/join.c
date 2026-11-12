@@ -129,14 +129,6 @@ static bool jid_strict_ok(struct bpf_join_state *js, u32 ida, u32 idb)
 	return jid_good(js, ida, idb);
 }
 
-static bool range_equal(const struct bpf_reg_state *ra, const struct bpf_reg_state *rb)
-{
-	return ra->r64.base == rb->r64.base && ra->r64.size == rb->r64.size &&
-	       ra->r32.base == rb->r32.base && ra->r32.size == rb->r32.size &&
-	       ra->var_off.value == rb->var_off.value && ra->var_off.mask == rb->var_off.mask &&
-	       ra->base == rb->base && ra->step == rb->step;
-}
-
 static const struct bpf_loop_rungs *join_rungs(const struct bpf_join_state *js)
 {
 	u32 i;
@@ -166,10 +158,10 @@ static int join_place_is_linear(const struct bpf_join_state *js)
 static bool join_range(struct bpf_join_state *js, struct bpf_reg_state *dst,
 		       const struct bpf_reg_state *ra, const struct bpf_reg_state *rb)
 {
-	if (range_equal(ra, rb))
+	if (scalar_equal(scalar_of(ra), scalar_of(rb)))
 		return true;
-	bpf_reg_union_range(dst, rb);
-	if (!js->widen || range_equal(dst, ra))
+	scalar_union(scalar_of(dst), scalar_of(rb));
+	if (!js->widen || scalar_equal(scalar_of(dst), scalar_of(ra)))
 		return true;
 	/*
 	 * The bound of a number that grows around a cycle is put where it may come to rest. If
@@ -182,16 +174,6 @@ static bool join_range(struct bpf_join_state *js, struct bpf_reg_state *dst,
 		return false;
 	bpf_reg_widen_range(dst, ra, join_rungs(js), join_place_is_linear(js));
 	return true;
-}
-
-static bool reg_fixed_part_equal(const struct bpf_reg_state *ra, const struct bpf_reg_state *rb)
-{
-	return !memcmp(ra, rb, offsetof(struct bpf_reg_state, var_off));
-}
-
-static bool reg_value_equal(const struct bpf_reg_state *ra, const struct bpf_reg_state *rb)
-{
-	return !memcmp(ra, rb, offsetof(struct bpf_reg_state, id));
 }
 
 /*

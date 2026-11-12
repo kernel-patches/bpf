@@ -20,6 +20,11 @@
 #define EMPTY    __PASTE(__PASTE(CNUM, T), _EMPTY)
 #define FN(name) __PASTE(__PASTE(cnum, T), __PASTE(_, name))
 
+struct cnum_t FN(const)(ut v)
+{
+	return (struct cnum_t){ .base = v, .size = 0 };
+}
+
 struct cnum_t FN(from_urange)(ut min, ut max)
 {
 	return (struct cnum_t){ .base = min, .size = (ut)max - min };
@@ -257,6 +262,12 @@ struct cnum_t FN(negate)(struct cnum_t a)
 	if (FN(is_empty)(a))
 		return EMPTY;
 	return FN(normalize)((struct cnum_t){ -((ut)a.base + a.size), a.size });
+}
+
+/* { x - y : x in 'a', y in 'b' } */
+struct cnum_t FN(sub)(struct cnum_t a, struct cnum_t b)
+{
+	return FN(add)(a, FN(negate)(b));
 }
 
 bool FN(is_empty)(struct cnum_t cnum)
