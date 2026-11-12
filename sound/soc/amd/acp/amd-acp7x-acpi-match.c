@@ -8,6 +8,7 @@
 
 #include <sound/soc-acpi.h>
 #include "../mach-config.h"
+#include "amd-sof-function-topology-lib.h"
 
 static const struct snd_soc_acpi_endpoint single_endpoint = {
 	.num = 0,
@@ -513,6 +514,7 @@ struct snd_soc_acpi_mach snd_soc_acpi_amd_acp7b_sof_sdw_machines[] = {
 		.drv_name = "amd_sof_sdw",
 		.sof_tplg_filename = "sof-acp7b-rt721-l0-rt1320-l3.tplg",
 		.fw_filename = "sof-acp7b.ri",
+		.get_function_tplg_files = amd_sof_sdw_get_tplg_files,
 	},
 	{},
 };
@@ -525,6 +527,7 @@ struct snd_soc_acpi_mach snd_soc_acpi_amd_acp7f_sof_sdw_machines[] = {
 		.drv_name = "amd_sof_sdw",
 		.sof_tplg_filename = "sof-acp7f-rt721-l0-rt1320-l3.tplg",
 		.fw_filename = "sof-acp7f.ri",
+		.get_function_tplg_files = amd_sof_sdw_get_tplg_files,
 	},
 	{
 		.link_mask = BIT(0) | BIT(1),
@@ -532,6 +535,7 @@ struct snd_soc_acpi_mach snd_soc_acpi_amd_acp7f_sof_sdw_machines[] = {
 		.drv_name = "amd_sof_sdw",
 		.sof_tplg_filename = "sof-acp7f-rt721-l0-rt1320-l1.tplg",
 		.fw_filename = "sof-acp7f.ri",
+		.get_function_tplg_files = amd_sof_sdw_get_tplg_files,
 	},
 	{
 		.link_mask = BIT(0),
@@ -539,6 +543,7 @@ struct snd_soc_acpi_mach snd_soc_acpi_amd_acp7f_sof_sdw_machines[] = {
 		.drv_name = "amd_sof_sdw",
 		.sof_tplg_filename = "sof-acp7f-rt721-l0.tplg",
 		.fw_filename = "sof-acp7f.ri",
+		.get_function_tplg_files = amd_sof_sdw_get_tplg_files,
 	},
 	{
 		.link_mask = BIT(0),
@@ -546,6 +551,7 @@ struct snd_soc_acpi_mach snd_soc_acpi_amd_acp7f_sof_sdw_machines[] = {
 		.drv_name = "amd_sof_sdw",
 		.sof_tplg_filename = "sof-acp7f-rt722-l0.tplg",
 		.fw_filename = "sof-acp7f.ri",
+		.get_function_tplg_files = amd_sof_sdw_get_tplg_files,
 	},
 	{
 		.link_mask = BIT(0) | BIT(1),
@@ -553,6 +559,7 @@ struct snd_soc_acpi_mach snd_soc_acpi_amd_acp7f_sof_sdw_machines[] = {
 		.drv_name = "amd_sof_sdw",
 		.sof_tplg_filename = "sof-acp7f-cs42l43-l0u0-cs35l56x4-l1u3210.tplg",
 		.fw_filename = "sof-acp7f.ri",
+		.get_function_tplg_files = amd_sof_sdw_get_tplg_files,
 	},
 	{
 		.link_mask = BIT(0) | BIT(1),
@@ -560,6 +567,7 @@ struct snd_soc_acpi_mach snd_soc_acpi_amd_acp7f_sof_sdw_machines[] = {
 		.drv_name = "amd_sof_sdw",
 		.sof_tplg_filename = "sof-acp7f-cs42l45-l1u0-cs35l63x4-l0u0246.tplg",
 		.fw_filename = "sof-acp7f.ri",
+		.get_function_tplg_files = amd_sof_sdw_get_tplg_files,
 	},
 	{
 		.link_mask = BIT(0) | BIT(1),
@@ -567,6 +575,7 @@ struct snd_soc_acpi_mach snd_soc_acpi_amd_acp7f_sof_sdw_machines[] = {
 		.drv_name = "amd_sof_sdw",
 		.sof_tplg_filename = "sof-acp7f-cs42l45-l0u0-cs35l63x2-l1u01.tplg",
 		.fw_filename = "sof-acp7f.ri",
+		.get_function_tplg_files = amd_sof_sdw_get_tplg_files,
 	},
 	{
 		.link_mask = BIT(0) | BIT(1),
@@ -574,6 +583,7 @@ struct snd_soc_acpi_mach snd_soc_acpi_amd_acp7f_sof_sdw_machines[] = {
 		.drv_name = "amd_sof_sdw",
 		.sof_tplg_filename = "sof-acp7f-cs42l45-l0u0-cs35l63x2-l1u13.tplg",
 		.fw_filename = "sof-acp7f.ri",
+		.get_function_tplg_files = amd_sof_sdw_get_tplg_files,
 	},
 	{
 		.link_mask = BIT(0) | BIT(1),
@@ -581,6 +591,7 @@ struct snd_soc_acpi_mach snd_soc_acpi_amd_acp7f_sof_sdw_machines[] = {
 		.drv_name = "amd_sof_sdw",
 		.sof_tplg_filename = "sof-acp7f-cs42l45-l1u0-cs35l63x2-l0u01.tplg",
 		.fw_filename = "sof-acp7f.ri",
+		.get_function_tplg_files = amd_sof_sdw_get_tplg_files,
 	},
 	{
 		.link_mask = BIT(1),
@@ -588,6 +599,7 @@ struct snd_soc_acpi_mach snd_soc_acpi_amd_acp7f_sof_sdw_machines[] = {
 		.drv_name = "amd_sof_sdw",
 		.sof_tplg_filename = "sof-acp7f-cs42l43-l1u0-cs35l56x4-l1u0123.tplg",
 		.fw_filename = "sof-acp7f.ri",
+		.get_function_tplg_files = amd_sof_sdw_get_tplg_files,
 	},
 	{
 		.link_mask = BIT(1),
@@ -595,6 +607,7 @@ struct snd_soc_acpi_mach snd_soc_acpi_amd_acp7f_sof_sdw_machines[] = {
 		.drv_name = "amd_sof_sdw",
 		.sof_tplg_filename = "sof-acp7f-cs35l56x4-l1u3210.tplg",
 		.fw_filename = "sof-acp7f.ri",
+		.get_function_tplg_files = amd_sof_sdw_get_tplg_files,
 	},
 	{
 		.link_mask = BIT(0),
@@ -602,6 +615,7 @@ struct snd_soc_acpi_mach snd_soc_acpi_amd_acp7f_sof_sdw_machines[] = {
 		.drv_name = "amd_sof_sdw",
 		.sof_tplg_filename = "sof-acp7f-cs42l43-l0u1.tplg",
 		.fw_filename = "sof-acp7f.ri",
+		.get_function_tplg_files = amd_sof_sdw_get_tplg_files,
 	},
 	{
 		.link_mask = BIT(0),
@@ -609,6 +623,7 @@ struct snd_soc_acpi_mach snd_soc_acpi_amd_acp7f_sof_sdw_machines[] = {
 		.drv_name = "amd_sof_sdw",
 		.sof_tplg_filename = "sof-acp7f-cs42l43b-l0u1.tplg",
 		.fw_filename = "sof-acp7f.ri",
+		.get_function_tplg_files = amd_sof_sdw_get_tplg_files,
 	},
 	{
 		.link_mask = BIT(0),
@@ -616,6 +631,7 @@ struct snd_soc_acpi_mach snd_soc_acpi_amd_acp7f_sof_sdw_machines[] = {
 		.drv_name = "amd_sof_sdw",
 		.sof_tplg_filename = "sof-acp7f-cs42l45-l0u0.tplg",
 		.fw_filename = "sof-acp7f.ri",
+		.get_function_tplg_files = amd_sof_sdw_get_tplg_files,
 	},
 	{
 		.link_mask = BIT(1),
@@ -623,6 +639,7 @@ struct snd_soc_acpi_mach snd_soc_acpi_amd_acp7f_sof_sdw_machines[] = {
 		.drv_name = "amd_sof_sdw",
 		.sof_tplg_filename = "sof-acp7f-cs42l45-l1u0.tplg",
 		.fw_filename = "sof-acp7f.ri",
+		.get_function_tplg_files = amd_sof_sdw_get_tplg_files,
 	},
 	{},
 };
