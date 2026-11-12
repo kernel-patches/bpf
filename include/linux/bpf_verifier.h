@@ -2241,10 +2241,11 @@ struct scev_value {
 	struct scalar;
 	int ptr_reg;	/* SCEV register identifying the pointer origin, or -1. */
 	u8 bits;	/* The value is known modulo 2^bits. 0: nothing is known. */
+	bool refined;	/* It depends on a register that the jump refined. */
 };
-bool bpf_scev_next_linked_reg(struct bpf_verifier_env *env, int insn_idx, u32 regno, u32 *pos,
-			      u32 *linked_regno, u32 *fill_off, int *base_regno, s64 *delta,
-			      u32 *bits);
+bool bpf_scev_next_linked_reg(struct bpf_verifier_env *env, struct bpf_func_state *st, int insn_idx,
+			      int next_idx, u16 refined_regs, u32 *pos, u32 *linked_regno,
+			      u32 *fill_off, struct scev_value *val);
 bool bpf_scev_mem_addr(struct bpf_verifier_env *env, int insn_idx, u32 regno, u32 *base_regno,
 		       s64 *off);
 bool bpf_is_widenable_reg_type(const struct bpf_reg_state *reg);

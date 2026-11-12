@@ -19495,17 +19495,17 @@ static struct bpf_func_state *scev_mem_to_slot(struct bpf_verifier_env *env,
 
 /*
  *	p = buf + i; if (i > 100) return 0; *p = 0;
- * p is @dst_reg, x is @ptr_reg, i is @off_reg. Scalar evolution says that p == x + i. So the insns
+ * p is @dst_reg, x is @ptr_reg. Scalar evolution says that p == x + i. So the insns
  * 'p = x; p += i' are a no-op at run time, and a state that is sound before them is sound after
- * them: apply their transfer function. Type, object and offset of p are taken from x as it is now;
- * how p was computed does not matter.
+ * them: apply their transfer function. Type and object of p are taken from x as it is now, @off is
+ * the offset of x + i; how p was computed does not matter.
  * The old p is replaced, not intersected: a state does not distinguish two values of one hash map,
  * and the intersection of an offset into the one with an offset into the other holds for neither.
  * It is replaced only if the new range is a subset of the old one. An empty range is a subset too:
  * the path is infeasible, p is left as it is.
  */
 static bool recompute_ptr(struct bpf_verifier_env *env, struct bpf_reg_state *dst_reg,
-			  const struct bpf_reg_state *ptr_reg, const struct bpf_reg_state *off_reg)
+			  const struct bpf_reg_state *ptr_reg, const struct scalar *off)
 {
 	struct bpf_reg_state sum = *ptr_reg;
 
@@ -19516,8 +19516,8 @@ static bool recompute_ptr(struct bpf_verifier_env *env, struct bpf_reg_state *ds
 	if (ptr_reg->type == SCALAR_VALUE || type_is_pkt_pointer(ptr_reg->type) ||
 	    !bpf_is_widenable_reg_type(ptr_reg))
 		return false;
+	*scalar_of(&sum) = *off;
 	__mark_scalar32_unbounded(scalar_of(&sum));
-	scalar_add(scalar_of(&sum), scalar_of(&sum), scalar_of(off_reg));
 	reg_bounds_sync(&sum);
 	if (reg_is_empty(&sum) || const_tnum_range_mismatch(scalar_of(&sum)) ||
 	    const_tnum_range_mismatch_32(scalar_of(&sum)))
@@ -19535,25 +19535,31 @@ static bool recompute_ptr(struct bpf_verifier_env *env, struct bpf_reg_state *ds
 }
 
 /*
- * The jump at @idx refined @regno. A register that scalar evolution links to it holds
- * @regno + delta on every path to the jump: intersect the two. The intersection is empty: no
- * execution gets here with this state (the path is infeasible), the register is left as it is.
+ * The jump at @idx refined the scalars that it tests. Scalar evolution evaluates the expression of
+ * a register that is linked to them in this state. The register holds that value on every path to
+ * the jump: intersect the two.
  */
 static void refine_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier_state *vstate,
-			       int idx, u32 regno)
+			       int idx, int next_idx)
 {
 	struct bpf_func_state *frame = vstate->frame[vstate->curframe], *linked_frame;
-	struct bpf_reg_state *reg, *base_reg, implied;
+	struct bpf_insn *insn = &env->prog->insnsi[idx];
+	struct bpf_reg_state *reg, *base_reg;
 	u32 pos, linked_regno, fill_off, bits;
-	int base_regno;
-	s64 delta;
+	struct scev_value val;
+	u16 refined_regs = 0;
 
-	if (frame->regs[regno].type != SCALAR_VALUE)
+	if (frame->regs[insn->dst_reg].type == SCALAR_VALUE)
+		refined_regs |= BIT(insn->dst_reg);
+	if (BPF_SRC(insn->code) == BPF_X && frame->regs[insn->src_reg].type == SCALAR_VALUE)
+		refined_regs |= BIT(insn->src_reg);
+	if (!refined_regs)
 		return;
 	for (pos = 0;
-	     bpf_scev_next_linked_reg(env, idx, regno, &pos, &linked_regno, &fill_off, &base_regno,
-				      &delta, &bits);
+	     bpf_scev_next_linked_reg(env, frame, idx, next_idx, refined_regs, &pos, &linked_regno,
+				      &fill_off, &val);
 	     pos++) {
+		bits = val.bits;
 		linked_frame = frame;
 		if (linked_regno >= BPF_SCEV_REGS_NUM)
 			linked_frame = scev_mem_to_slot(env, vstate, idx, &linked_regno, &fill_off);
@@ -19569,16 +19575,15 @@ static void refine_linked_regs(struct bpf_verifier_env *env, struct bpf_verifier
 			bits = 32;
 			reg = scev_reg_for_fill(linked_frame, linked_regno, fill_off, bits);
 		}
-		if (!reg || (base_regno < 0 && reg->type != SCALAR_VALUE))
+		if (!reg || (val.ptr_reg < 0 && reg->type != SCALAR_VALUE))
 			continue;
 
-		implied = frame->regs[regno];
-		add_scalar_to_reg(&implied, delta);
-		if (base_regno >= 0) {
-			base_reg = scev_reg_for_fill(frame, base_regno, 0, 64);
-			if (!base_reg || bits < 64 || !recompute_ptr(env, reg, base_reg, &implied))
+		if (val.ptr_reg >= 0) {
+			base_reg = scev_reg_for_fill(frame, val.ptr_reg, 0, 64);
+			if (!base_reg || bits < 64 ||
+			    !recompute_ptr(env, reg, base_reg, scalar_of(&val)))
 				continue;
-		} else if (!scalar_intersect(scalar_of(reg), scalar_of(&implied), bits)) {
+		} else if (!scalar_intersect(scalar_of(reg), scalar_of(&val), bits)) {
 			continue;
 		}
 		if (linked_regno < MAX_BPF_REG)
@@ -19612,7 +19617,7 @@ static void mark_loop_exit_decided(struct bpf_verifier_env *env, struct bpf_veri
  * the operands as that branch refines them. They hold every value that takes it, whether the other
  * branch is dead or not.
  */
-static int refine_live_branch(struct bpf_verifier_env *env, struct bpf_insn *insn,
+static int refine_live_branch(struct bpf_verifier_env *env, struct bpf_insn *insn, int next_idx,
 			      struct bpf_reg_state *reg1, struct bpf_reg_state *reg2)
 {
 	struct bpf_reg_state *regs = cur_regs(env);
@@ -19638,9 +19643,7 @@ static int refine_live_branch(struct bpf_verifier_env *env, struct bpf_insn *ins
 		regs[insn->src_reg] = *reg2;
 	if (!env->bpf_capable)
 		return 0;
-	if (BPF_SRC(insn->code) == BPF_X)
-		refine_linked_regs(env, env->cur_state, env->insn_idx, insn->src_reg);
-	refine_linked_regs(env, env->cur_state, env->insn_idx, insn->dst_reg);
+	refine_linked_regs(env, env->cur_state, env->insn_idx, next_idx);
 	return 0;
 }
 
@@ -19738,7 +19741,8 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 			if (err < 0)
 				return err;
 		}
-		err = refine_live_branch(env, insn, &env->true_reg1, &env->true_reg2);
+		err = refine_live_branch(env, insn, *insn_idx + insn->off + 1, &env->true_reg1,
+					 &env->true_reg2);
 		if (err)
 			return err;
 		if (env->log.level & BPF_LOG_LEVEL)
@@ -19756,7 +19760,8 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 			if (err < 0)
 				return err;
 		}
-		err = refine_live_branch(env, insn, &env->false_reg1, &env->false_reg2);
+		err = refine_live_branch(env, insn, *insn_idx + 1, &env->false_reg1,
+					 &env->false_reg2);
 		if (err)
 			return err;
 		if (env->log.level & BPF_LOG_LEVEL)
@@ -19780,12 +19785,8 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 		other_branch_regs[insn->src_reg] = env->true_reg2;
 
 	if (env->bpf_capable) {
-		if (BPF_SRC(insn->code) == BPF_X) {
-			refine_linked_regs(env, this_branch, *insn_idx, insn->src_reg);
-			refine_linked_regs(env, other_branch, *insn_idx, insn->src_reg);
-		}
-		refine_linked_regs(env, this_branch, *insn_idx, insn->dst_reg);
-		refine_linked_regs(env, other_branch, *insn_idx, insn->dst_reg);
+		refine_linked_regs(env, this_branch, *insn_idx, *insn_idx + 1);
+		refine_linked_regs(env, other_branch, *insn_idx, *insn_idx + insn->off + 1);
 	}
 
 	/* if one pointer register is compared to another pointer
