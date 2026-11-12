@@ -135,13 +135,13 @@ static int sst_power_control(struct device *dev, bool state)
 			if (ret) {
 				dev_err(dev, "FW download fail %d\n", ret);
 				sst_set_fw_state_locked(ctx, SST_RESET);
-				ret = sst_pm_runtime_put(ctx);
+				sst_pm_runtime_put(ctx);
 			}
 		}
 	} else {
 		usage_count = GET_USAGE_COUNT(dev);
 		dev_dbg(ctx->dev, "Disable: pm usage count: %d\n", usage_count);
-		return sst_pm_runtime_put(ctx);
+		sst_pm_runtime_put(ctx);
 	}
 	return ret;
 }
