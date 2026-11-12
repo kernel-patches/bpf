@@ -90,8 +90,6 @@ struct expr {
 	u16 op;
 	/* A value number: all SCEV registers of an env that have this id hold the same value */
 	bool is_vn;
-	/* expr == base + off (mod 2^bits), see split_const_offset() */
-	u8 bits;
 	/*
 	 * UNKNOWN, OPAQUE and ANY don't describe a value. With a def the id stands for one value,
 	 * see struct expr_def. Without a def every use of the id can be another value.
@@ -101,6 +99,7 @@ struct expr {
 		u32 params[2];
 		s64 imm;
 	};
+	/* expr == base + off, see set_expr_base() */
 	u32 base;
 	/*
 	 * id of the first add on the way to 'base' whose insn may still become ALU32, see
@@ -291,18 +290,14 @@ static bool expr_is_vn(struct scev *scev, struct expr *e)
 	return true;
 }
 
-static u32 op_low_bits(u32 op);
-
 /*
- * @e gets the id @id. (+ x imm), an extension and a partial spill of x have the base of x, which
- * was constructed earlier. mk_phi() sets the base of a phi that it value numbers. Every other
- * expression is its own base. So split_const_offset() does not traverse the expression.
+ * @e gets the id @id. (+ x imm) has the base of x, which was constructed earlier. mk_phi() sets the
+ * base of a phi that it value numbers. Every other expression is its own base, an extension and a
+ * partial spill too, see next_base(). So split_const_offset() does not traverse the expression.
  */
 static void set_expr_base(struct scev *scev, struct expr *e, u32 id)
 {
-	u32 low = op_low_bits(e->op);
 	struct expr *x;
-	s64 imm = 0;
 
 	e->arena_add = 0;
 	/* mk_phi() found the base */
@@ -310,18 +305,12 @@ static void set_expr_base(struct scev *scev, struct expr *e, u32 id)
 		return;
 	e->base = id;
 	e->off = 0;
-	e->bits = 64;
 	/* nothing looks through a phi, see struct expr_def */
-	if (e->def.phi)
-		return;
-	if (e->op == BPF_ADD && scev->exprs[e->params[1]].op == IMM)
-		imm = scev->exprs[e->params[1]].imm;
-	else if (!low || e->def.set)
+	if (e->def.phi || e->op != BPF_ADD || scev->exprs[e->params[1]].op != IMM)
 		return;
 	x = &scev->exprs[e->params[0]];
 	e->base = x->base;
-	e->off = (u64)x->off + imm;
-	e->bits = low ? min(x->bits, low) : x->bits;
+	e->off = (u64)x->off + scev->exprs[e->params[1]].imm;
 	e->arena_add = e->def.set ? id : x->arena_add;
 }
 
@@ -527,6 +516,38 @@ static bool is_low_bits(struct scev *scev, int id, u32 bits, u32 *left)
 		return false;
 	*left = scev->exprs[id].params[0];
 	return true;
+}
+
+/*
+ * A value is *@base + *@off (mod 2^*@bits). An extension and a partial spill are values of their
+ * own, and they have the low N bits of their operand: go on to the base of the operand, modulo 2^N.
+ * Only to fewer bits: three steps at most. N is 32 or less: it does not matter if an add on the way
+ * becomes ALU32, see split_const_offset().
+ */
+static bool next_base(struct scev *scev, u32 *base, s64 *off, u32 *bits)
+{
+	struct expr *x, *e = &scev->exprs[*base];
+	u32 low = op_low_bits(e->op);
+
+	/* nothing looks through a phi, see struct expr_def */
+	if (!low || low >= *bits || e->def.set)
+		return false;
+	x = &scev->exprs[e->params[0]];
+	*base = x->base;
+	*off = (u64)*off + x->off;
+	*bits = low;
+	return true;
+}
+
+/* Two expressions that have a constant difference in some bits have the same one, or two REGs */
+static u32 innermost_base(struct scev *scev, u32 id)
+{
+	u32 base = scev->exprs[id].base, bits = 64;
+	s64 off = 0;
+
+	while (next_base(scev, &base, &off, &bits))
+		;
+	return base;
 }
 
 static bool is_any(struct scev *scev, int id, u32 *left, u32 *right)
@@ -1131,13 +1152,14 @@ static void forget_mem_regs(struct bpf_verifier_env *env, struct env *e, u32 add
  */
 static void forget_dead_mem_regs(struct bpf_verifier_env *env, struct env *e, int idx)
 {
-	struct expr *exprs = env->scev->exprs;
+	struct scev *scev = env->scev;
 	u32 i, r, base;
 
 	for (i = 0; i < MEM_REGS_NUM; i++) {
-		base = exprs[e->reg2expr[REGS_NUM + i]].base;
+		base = innermost_base(scev, e->reg2expr[REGS_NUM + i]);
 		for (r = 0; r < REGS_NUM; r++)
-			if (exprs[e->reg2expr[r]].base == base && reg_alive_at(env, r, idx + 1))
+			if (reg_alive_at(env, r, idx + 1) &&
+			    innermost_base(scev, e->reg2expr[r]) == base)
 				break;
 		if (r == REGS_NUM)
 			forget_mem_reg(e, i);
@@ -1556,17 +1578,15 @@ next:;
 	return expr_with_def(scev, id, def);
 }
 
-static void split_const_offset(struct bpf_verifier_env *env, u32 id, u32 *base, s64 *off,
-			       u32 *bits);
+static u32 split_const_offset(struct bpf_verifier_env *env, u32 id, u32 *base, s64 *off);
 
-/* @id == *@base + *@off in 64 bits: no extension and no partial spill is stripped */
+/* @id == *@base + *@off in 64 bits: no add that may become ALU32 is stripped */
 static void split_const_offset64(struct bpf_verifier_env *env, u32 id, u32 *base, s64 *off)
 {
 	struct scev *scev = env->scev;
-	u32 bits, l, r;
+	u32 l, r;
 
-	split_const_offset(env, id, base, off, &bits);
-	if (bits == 64)
+	if (split_const_offset(env, id, base, off) == 64)
 		return;
 	*base = id;
 	*off = 0;
@@ -1615,7 +1635,6 @@ static int mk_phi(struct bpf_verifier_env *env, u32 a, u32 b, int idx, u32 reg)
 		return id;
 	e.base = id;
 	e.off = off_a;
-	e.bits = 64;
 	return add_expr(scev, e);
 }
 
@@ -2070,29 +2089,26 @@ static int join_added_edges(struct bpf_verifier_env *env, struct bpf_subprog_inf
 }
 
 /*
- * @id == *@base + *@off (mod 2^*@bits): constant offsets, extensions and partial spills are
- * stripped, see set_expr_base(). An add with a def holds modulo 2^32 whether its insn is converted
- * to ALU32 or not, see alu64_with_def(). It holds modulo 2^64 once the main pass has set
- * prevent_zext: it verified the insn without a pointer to the arena and rejects a state that brings
- * one. The def dominates every use, and prevent_zext is only ever set: such an add is not checked
- * again.
+ * @id == *@base + *@off: constant offsets are stripped, see set_expr_base(). Returns the number of
+ * bits in which that holds. An add with a def holds modulo 2^32 whether its insn is converted to
+ * ALU32 or not, see alu64_with_def(). It holds modulo 2^64 once the main pass has set prevent_zext:
+ * it verified the insn without a pointer to the arena and rejects a state that brings one. The def
+ * dominates every use, and prevent_zext is only ever set: such an add is not checked again.
  */
-static void split_const_offset(struct bpf_verifier_env *env, u32 id, u32 *base, s64 *off, u32 *bits)
+static u32 split_const_offset(struct bpf_verifier_env *env, u32 id, u32 *base, s64 *off)
 {
 	struct scev *scev = env->scev;
 	struct expr *add, *e = &scev->exprs[id];
 
 	*base = e->base;
 	*off = e->off;
-	*bits = e->bits;
 	while (e->arena_add) {
 		add = &scev->exprs[e->arena_add];
-		if (!env->insn_aux_data[add->def.idx].prevent_zext) {
-			*bits = min(*bits, 32);
-			break;
-		}
+		if (!env->insn_aux_data[add->def.idx].prevent_zext)
+			return 32;
 		e->arena_add = scev->exprs[add->params[0]].arena_add;
 	}
+	return 64;
 }
 
 static bool const_diff_at_header(struct bpf_verifier_env *env, int h, u32 ra, u32 rb, s64 *delta);
@@ -2100,30 +2116,39 @@ static bool const_diff_at_header(struct bpf_verifier_env *env, int h, u32 ra, u3
 /*
  * @id_a and @id_b are expressions of one env of the loop at @h, or of a subprog: @h is -1. Do they
  * have a constant difference, @id_b == @id_a + *@delta (mod 2^*@bits)?
+ *	n = (u16)x; m = n + 600; if ((u32)(n - 1) < 256) use(m);
+ * m and the tested value are x + a constant modulo 2^16, and n + a constant modulo 2^32: take the
+ * outermost base that both have.
  */
 static bool const_diff(struct bpf_verifier_env *env, int h, u32 id_a, u32 id_b, s64 *delta,
 		       u32 *bits)
 {
 	struct scev *scev = env->scev;
-	u32 base_a, base_b, bits_a, ra, rb;
-	s64 off_a, c;
+	u32 base_a, base_b, bits_a = 64, bits_b, ra, rb;
+	s64 off_a, off_b, c;
 
-	split_const_offset(env, id_a, &base_a, &off_a, &bits_a);
-	split_const_offset(env, id_b, &base_b, delta, bits);
-	*delta = (u64)*delta - off_a;
-	*bits = min(*bits, bits_a);
+	*delta = 0;
+	*bits = 64;
 	/* copies are equal in all bits */
-	if (id_a == id_b && scev->exprs[id_a].is_vn) {
-		*bits = 64;
+	if (id_a == id_b && scev->exprs[id_a].is_vn)
 		return true;
-	}
-	if (base_a == base_b)
-		return scev->exprs[base_a].is_vn;
-	if (h < 0 || !is_reg(scev, base_a, &ra) || !is_reg(scev, base_b, &rb) ||
-	    !const_diff_at_header(env, h, ra, rb, &c))
-		return false;
-	*delta = (u64)*delta + c;
-	return true;
+	*bits = split_const_offset(env, id_a, &base_a, &off_a);
+	do {
+		*bits = min(*bits, split_const_offset(env, id_b, &base_b, &off_b));
+		bits_b = 64;
+		do {
+			c = 0;
+			/* header phis: rb == ra + c */
+			if (base_a == base_b ? !scev->exprs[base_a].is_vn :
+			    h < 0 || !is_reg(scev, base_a, &ra) || !is_reg(scev, base_b, &rb) ||
+			    !const_diff_at_header(env, h, ra, rb, &c))
+				continue;
+			*delta = (u64)off_b - off_a + c;
+			*bits = min3(*bits, bits_a, bits_b);
+			return true;
+		} while (next_base(scev, &base_b, &off_b, &bits_b));
+	} while (next_base(scev, &base_a, &off_a, &bits_a));
+	return false;
 }
 
 /*
@@ -2138,7 +2163,7 @@ static bool const_diff_at_header(struct bpf_verifier_env *env, int h, u32 ra, u3
 	int outer_header = env->insn_aux_data[h].loop_header;
 	struct env *entry_env = find_loop_env(env->scev, outer_header, h);
 	struct env *header_env = find_header_env(env->scev, h);
-	u32 base_a, base_b, bits_a, bits;
+	u32 base_a, base_b, bits;
 	s64 off_a, c;
 
 	if (!entry_env || !can_compute_loop_scev(env->insn_aux_data[h].loop) ||
@@ -2147,10 +2172,9 @@ static bool const_diff_at_header(struct bpf_verifier_env *env, int h, u32 ra, u3
 		return false;
 	if (const_diff(env, -1, header_env->reg2expr[ra], header_env->reg2expr[rb], &c, &bits))
 		return bits == 64 && c == *delta;
-	split_const_offset(env, header_env->reg2expr[ra], &base_a, &off_a, &bits_a);
-	split_const_offset(env, header_env->reg2expr[rb], &base_b, &c, &bits);
-	return base_a == REG_EXPR_ID(ra) && base_b == REG_EXPR_ID(rb) && off_a == c &&
-	       bits_a == 64 && bits == 64;
+	return split_const_offset(env, header_env->reg2expr[ra], &base_a, &off_a) == 64 &&
+	       split_const_offset(env, header_env->reg2expr[rb], &base_b, &c) == 64 &&
+	       base_a == REG_EXPR_ID(ra) && base_b == REG_EXPR_ID(rb) && off_a == c;
 }
 
 /*
@@ -2168,7 +2192,7 @@ static bool match_linked_add(struct bpf_verifier_env *env, int h, u32 tested, u3
 	struct expr_def def;
 	s64 c;
 
-	split_const_offset(env, id, &id, delta, bits);
+	*bits = split_const_offset(env, id, &id, delta);
 	if (h >= 0 && is_reg(scev, id, &reg)) {
 		id = find_header_env(scev, h)->reg2scev[reg];
 		op = ADD_SCEV;
@@ -2209,7 +2233,9 @@ static bool const_diff_reg(struct bpf_verifier_env *env, int h, u32 id_a, u32 re
 	}
 	if (!is_big_endian_slot(reg) || !scev->exprs[id_b].is_vn)
 		return false;
-	split_const_offset(env, id_a, &x, delta, bits);
+	*bits = split_const_offset(env, id_a, &x, delta);
+	while (next_base(scev, &x, delta, bits))
+		;
 	e = &scev->exprs[x];
 	if ((e->op != BPF_RSH && e->op != BPF_ARSH) || e->def.set || e->params[0] != id_b ||
 	    !is_imm(scev, e->params[1], &k) || (k != 32 && k != 48 && k != 56))
@@ -2263,12 +2289,12 @@ static int find_linked_regs(struct bpf_verifier_env *env, struct env *e, int h, 
 	for (r = REGS_NUM; r < ENV_REGS_NUM; r++)
 		if (e->mem_addr[r - REGS_NUM])
 			__set_bit(r, live);
-	split_const_offset(env, dst, &base_dst, &delta, &bits);
-	split_const_offset(env, src, &base_src, &delta, &bits);
+	base_dst = innermost_base(scev, dst);
+	base_src = innermost_base(scev, src);
 	for_each_set_bit(r, live, ENV_REGS_NUM) {
 		id = e->reg2expr[r];
 		/* most are not linked */
-		split_const_offset(env, id, &base, &delta, &bits);
+		base = innermost_base(scev, id);
 		if (base != base_dst && base != base_src && !is_op(scev, base, BPF_ADD) &&
 		    (h < 0 || !is_op(scev, base, REG)) && !is_big_endian_slot(r))
 			continue;
