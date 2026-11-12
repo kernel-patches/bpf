@@ -160,7 +160,7 @@ static bool join_range(struct bpf_join_state *js, struct bpf_reg_state *dst,
 {
 	if (scalar_equal(scalar_of(ra), scalar_of(rb)))
 		return true;
-	bpf_reg_union_range(dst, rb);
+	scalar_union(scalar_of(dst), scalar_of(rb));
 	if (!js->widen || scalar_equal(scalar_of(dst), scalar_of(ra)))
 		return true;
 	/*
