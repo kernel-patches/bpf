@@ -5,6 +5,12 @@
 
 #include "mana_ib.h"
 
+#define PSN_SIGN_BIT 0x800000
+#define PSN_GE(PSN1, PSN2) ((((PSN1) - (PSN2)) & PSN_SIGN_BIT) == 0)
+#define PSN_GT(PSN1, PSN2) PSN_GE(PSN1, (PSN2) + 1)
+#define PSN_LE(PSN1, PSN2) PSN_GE(PSN2, PSN1)
+#define PSN_LT(PSN1, PSN2) PSN_GT(PSN2, PSN1)
+
 static enum ib_wc_status vendor_error_to_wc_error(uint32_t vendor_error)
 {
 	switch (vendor_error) {
@@ -277,15 +283,18 @@ int mana_ib_arm_cq(struct ib_cq *ibcq, enum ib_cq_notify_flags flags)
 	struct mana_ib_cq *cq = container_of(ibcq, struct mana_ib_cq, ibcq);
 	struct gdma_queue *gdma_cq = cq->queue.kmem;
 	unsigned long irq_flags;
+	bool missed = false;
 
 	if (!gdma_cq)
 		return -EINVAL;
 
 	spin_lock_irqsave(&cq->cq_lock, irq_flags);
 	mana_ib_cq_doorbell(cq, SET_ARM_BIT);
+	if (flags & IB_CQ_REPORT_MISSED_EVENTS)
+		missed = cq->has_pending_cqe;
 	spin_unlock_irqrestore(&cq->cq_lock, irq_flags);
 
-	return 0;
+	return missed;
 }
 
 struct mana_cq_poll {
@@ -311,10 +320,10 @@ static struct ib_wc *mana_fill_wc(struct mana_ib_qp *qp,
 	return wc;
 }
 
-static void mana_complete_send(struct mana_ib_qp *qp,
+static void mana_complete_send(struct mana_ib_qp *qp, bool mmq,
 			       struct mana_cq_poll *poll, u32 vendor_error)
 {
-	struct shadow_queue *shadow = &qp->shadow_sq;
+	struct shadow_queue *shadow = mmq ? &qp->shadow_mmq : &qp->shadow_sq;
 	struct shadow_wqe_header *wqe = shadow_queue_get_next_to_consume(shadow);
 	struct gdma_queue *queue;
 
@@ -324,8 +333,19 @@ static void mana_complete_send(struct mana_ib_qp *qp,
 	if (vendor_error || !(wqe->flags & MANA_WQ_NO_SIGNAL_WC))
 		mana_fill_wc(qp, poll, wqe, wqe->send_opcode, vendor_error);
 
-	queue = mana_qp_get_sq(qp)->kmem;
-	queue->tail += wqe->wqe_size_in_bu;
+	if (mmq) {
+		queue = qp->rc_qp.queues[MANA_RC_SEND_QUEUE_MMQ].kmem;
+		queue->tail += wqe->wqe_size_in_bu;
+	} else {
+		queue = mana_qp_get_sq(qp)->kmem;
+		if (wqe->send_opcode == IB_WC_RDMA_READ) {
+			qp->rc_qp.queues[MANA_RC_RECV_QUEUE_REQUESTER].kmem->tail +=
+				wqe->wqe_size_in_bu;
+			queue->tail += qp->rc_qp.wqe_size_in_bu;
+		} else {
+			queue->tail += wqe->wqe_size_in_bu;
+		}
+	}
 	shadow_queue_advance_consumer(shadow);
 }
 
@@ -354,7 +374,7 @@ static void handle_ud_sq_cqe(struct mana_ib_qp *qp, struct mana_rdma_cqe *rdma_c
 		return;
 
 	for (; to_complete; to_complete--)
-		mana_complete_send(qp, poll, VENDOR_ERR_OK);
+		mana_complete_send(qp, false, poll, VENDOR_ERR_OK);
 }
 
 static void handle_rq_cqe(struct mana_ib_qp *qp, struct gdma_comp *cqe,
@@ -382,6 +402,21 @@ static void handle_rq_cqe(struct mana_ib_qp *qp, struct gdma_comp *cqe,
 		wc->src_qp = rdma_cqe->ud_recv.src_qpn;
 		wc->wc_flags |= IB_WC_GRH;
 		break;
+	case CQE_TYPE_RC_WRITE_IMM:
+		wc->opcode = IB_WC_RECV_RDMA_WITH_IMM;
+		fallthrough;
+	case CQE_TYPE_RC_SEND_IMM:
+		wc->wc_flags |= IB_WC_WITH_IMM;
+		wc->ex.imm_data = cpu_to_be32(rdma_cqe->rc_recv.imm_data);
+		fallthrough;
+	case CQE_TYPE_RC_SEND:
+		wc->byte_len = rdma_cqe->rc_recv.msg_len;
+		break;
+	case CQE_TYPE_RC_SEND_INV:
+		wc->wc_flags |= IB_WC_WITH_INVALIDATE;
+		wc->byte_len = rdma_cqe->rc_recv.msg_len;
+		wc->ex.invalidate_rkey = rdma_cqe->rc_recv.imm_data;
+		break;
 	default:
 		break;
 	}
@@ -390,17 +425,108 @@ static void handle_rq_cqe(struct mana_ib_qp *qp, struct gdma_comp *cqe,
 	shadow_queue_advance_consumer(&qp->shadow_rq);
 }
 
+/*
+ * A fenced WQE can acknowledge the other send queue. Retire those dependencies
+ * first, without losing the fence when the caller's WC array fills up.
+ */
+static bool mana_advance_send(struct mana_ib_qp *qp, bool mmq, u32 seq,
+			      struct mana_cq_poll *poll)
+{
+	struct shadow_queue *shadow = mmq ? &qp->shadow_mmq : &qp->shadow_sq;
+	struct shadow_queue *other = mmq ? &qp->shadow_sq : &qp->shadow_mmq;
+	struct shadow_wqe_header *shadow_wqe;
+
+	while ((shadow_wqe = shadow_queue_get_next_to_consume(shadow))) {
+		if (PSN_LT(seq, mmq ? shadow_wqe->fsn : shadow_wqe->wqe_offset_or_psn))
+			break;
+		if (shadow_wqe->flags & MANA_WQ_FENCE_WC) {
+			u32 dependency = mmq ? shadow_wqe->wqe_offset_or_psn : shadow_wqe->fsn;
+			struct shadow_wqe_header *other_wqe;
+
+			while ((other_wqe = shadow_queue_get_next_to_consume(other))) {
+				if (PSN_LT(dependency, mmq ? other_wqe->wqe_offset_or_psn :
+							     other_wqe->fsn))
+					break;
+				if (poll->produced == poll->budget &&
+				    !(other_wqe->flags & MANA_WQ_NO_SIGNAL_WC))
+					return false;
+				mana_complete_send(qp, !mmq, poll, VENDOR_ERR_OK);
+			}
+		}
+
+		if (poll->produced == poll->budget &&
+		    !(shadow_wqe->flags & MANA_WQ_NO_SIGNAL_WC))
+			return false;
+
+		mana_complete_send(qp, mmq, poll, VENDOR_ERR_OK);
+	}
+
+	return true;
+}
+
+static bool handle_mmq_cqe(struct mana_ib_qp *qp, u32 fsn,
+			   struct mana_cq_poll *poll)
+{
+	return mana_advance_send(qp, true, fsn, poll);
+}
+
+static bool handle_psn_cqe(struct mana_ib_qp *qp, u32 psn,
+			   struct mana_cq_poll *poll)
+{
+	struct mana_ib_dev *mdev = container_of(qp->ibqp.device, struct mana_ib_dev, ib_dev);
+	struct shadow_wqe_header *shadow_wqe;
+	struct gdma_queue *recv_q;
+	bool consumed;
+	u32 arm_psn;
+
+	if (qp->ibqp.qp_type != IB_QPT_RC)
+		return true;
+
+	recv_q = qp->rc_qp.queues[MANA_RC_RECV_QUEUE_REQUESTER].kmem;
+
+	consumed = mana_advance_send(qp, false, psn, poll);
+	if (consumed) {
+		shadow_wqe = shadow_queue_get_next_to_signal(&qp->shadow_sq);
+		arm_psn = shadow_wqe ? shadow_wqe->wqe_offset_or_psn : psn + 1;
+		arm_psn &= MANA_WQE_OFFSET_MASK;
+		mana_gd_wq_ring_doorbell_ext(mdev_to_gc(mdev), recv_q, arm_psn,
+					     SET_ARM_BIT, MANA_PSN_CLIENT_OFFSET);
+	}
+
+	return consumed;
+}
+
+static bool next_shadow_wqe_is_sq(struct shadow_wqe_header *shadow_wqe_sq,
+				  struct shadow_wqe_header *shadow_wqe_mq)
+{
+	if (!shadow_wqe_mq)
+		return true;
+
+	if (!shadow_wqe_sq)
+		return false;
+
+	return (PSN_LE(shadow_wqe_sq->wqe_offset_or_psn, shadow_wqe_mq->wqe_offset_or_psn) &&
+		PSN_LE(shadow_wqe_sq->fsn, shadow_wqe_mq->fsn));
+}
+
 static bool mana_handle_cqe(struct mana_ib_cq *cq, struct mana_ib_dev *mdev,
 			    struct mana_cq_poll *poll)
 {
 	struct gdma_comp *cqe = &cq->pending_cqe;
 	struct mana_rdma_cqe *rdma_cqe = (struct mana_rdma_cqe *)cqe->cqe_data;
 	struct mana_ib_qp *qp = mana_get_qp_ref(mdev, cqe->wq_num, cqe->is_sq);
+	bool consumed = true;
 
 	if (!qp)
 		return true;
 
 	switch (rdma_cqe->cqe_type) {
+	case CQE_TYPE_ARMED_CMPL:
+		consumed = handle_psn_cqe(qp, rdma_cqe->rc_armed_completion.psn, poll);
+		break;
+	case CQE_TYPE_LWR:
+		consumed = handle_mmq_cqe(qp, rdma_cqe->rc_mm.fsn, poll);
+		break;
 	case CQE_TYPE_UD_SEND:
 		if (cqe->is_sq) {
 			handle_ud_sq_cqe(qp, rdma_cqe, poll);
@@ -408,6 +534,10 @@ static bool mana_handle_cqe(struct mana_ib_cq *cq, struct mana_ib_dev *mdev,
 		}
 		fallthrough;
 	case CQE_TYPE_UD_SEND_IMM:
+	case CQE_TYPE_RC_SEND:
+	case CQE_TYPE_RC_SEND_IMM:
+	case CQE_TYPE_RC_SEND_INV:
+	case CQE_TYPE_RC_WRITE_IMM:
 		handle_rq_cqe(qp, cqe, poll);
 		break;
 	default:
@@ -416,21 +546,27 @@ static bool mana_handle_cqe(struct mana_ib_cq *cq, struct mana_ib_dev *mdev,
 		break;
 	}
 	mana_put_qp_ref(qp);
-	return true;
+	return consumed;
 }
 
 static void mana_flush_completions(struct mana_ib_cq *cq, struct mana_cq_poll *poll)
 {
-	struct shadow_wqe_header *wqe;
+	struct shadow_wqe_header *sq_wqe, *mmq_wqe, *wqe;
 	struct mana_ib_qp *qp;
+	bool next_is_sq;
 
 	if (poll->produced >= poll->budget)
 		return;
 
 	list_for_each_entry(qp, &cq->send_err_qp_list, send_err_node) {
-		while (poll->produced < poll->budget &&
-		       shadow_queue_get_next_to_consume(&qp->shadow_sq))
-			mana_complete_send(qp, poll, VENDOR_ERR_SW_FLUSHED);
+		while (poll->produced < poll->budget) {
+			sq_wqe = shadow_queue_get_next_to_consume(&qp->shadow_sq);
+			mmq_wqe = shadow_queue_get_next_to_consume(&qp->shadow_mmq);
+			if (!sq_wqe && !mmq_wqe)
+				break;
+			next_is_sq = next_shadow_wqe_is_sq(sq_wqe, mmq_wqe);
+			mana_complete_send(qp, !next_is_sq, poll, VENDOR_ERR_SW_FLUSHED);
+		}
 		if (poll->produced == poll->budget)
 			return;
 	}

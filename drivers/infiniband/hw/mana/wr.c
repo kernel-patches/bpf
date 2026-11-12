@@ -405,6 +405,9 @@ static int mana_ib_post_sq(struct mana_ib_qp *qp, const struct ib_send_wr *wr)
 	if (err)
 		return err;
 
+	if (wr->opcode != IB_WR_RDMA_READ)
+		shadow_wqe->wqe_size_in_bu = wqe_info.wqe_size_in_bu;
+
 	shadow_wqe->wr_id = wr->wr_id;
 	shadow_wqe->send_opcode = convert_wr_to_wc(wr->opcode);
 	if (!signaled)

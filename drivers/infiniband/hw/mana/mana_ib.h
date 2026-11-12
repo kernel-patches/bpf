@@ -689,6 +689,12 @@ enum mana_ib_error_code {
 enum mana_ib_cqe_type {
 	CQE_TYPE_UD_SEND = 1,
 	CQE_TYPE_UD_SEND_IMM = 2,
+	CQE_TYPE_RC_SEND = 3,
+	CQE_TYPE_RC_SEND_IMM = 4,
+	CQE_TYPE_RC_SEND_INV = 5,
+	CQE_TYPE_RC_WRITE_IMM = 6,
+	CQE_TYPE_ARMED_CMPL = 7,
+	CQE_TYPE_LWR = 8,
 }; /* HW DATA */
 
 struct mana_rdma_cqe {
@@ -712,6 +718,31 @@ struct mana_rdma_cqe {
 			u32 imm_data;
 			u32 rx_wqe_offset;
 		} ud_recv;
+		struct {
+			u32 cqe_type		: 8;
+			u32 reserved1		: 24;
+			u32 msg_len;
+			u32 psn			: 24;
+			u32 reserved2		: 8;
+			u32 imm_data;
+			u32 rx_wqe_offset;
+		} rc_recv;
+		struct {
+			u32 cqe_type		: 8;
+			u32 reserved1		: 24;
+			u32 msn			: 24;
+			u32 syndrome		: 8;
+			u32 psn			: 24;
+			u32 reserved2		: 8;
+		} rc_armed_completion;
+		struct {
+			u32 cqe_type		: 8;
+			u32 reserved1		: 24;
+			u32 psn			: 24;
+			u32 reserved2		: 8;
+			u32 fsn			: 24;
+			u32 reserved3		: 8;
+		} rc_mm;
 	};
 }; /* HW DATA */
 
