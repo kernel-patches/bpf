@@ -229,8 +229,10 @@ static int UVERBS_HANDLER(MLX5_IB_METHOD_DM_MAP_OP_ADDR)(
 		goto err_unlock;
 
 	op_entry = kzalloc_obj(*op_entry);
-	if (!op_entry)
+	if (!op_entry) {
+		err = -ENOMEM;
 		goto err_unlock;
+	}
 
 	err = mlx5_cmd_alloc_memic_op(&dev->dm, dm->base.dev_addr, op,
 				      &op_entry->op_addr);
