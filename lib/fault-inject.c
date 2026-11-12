@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include <linux/kernel.h>
 #include <linux/init.h>
-#include <linux/once_lite.h>
 #include <linux/prandom.h>
 #include <linux/debugfs.h>
 #include <linux/sched.h>
@@ -13,12 +12,25 @@
 #include <linux/interrupt.h>
 #include <linux/stacktrace.h>
 #include <linux/fault-inject.h>
+#include <linux/spinlock.h>
 
 /*
  * The should_fail() functions use prandom instead of the normal Linux RNG
  * since they don't need cryptographically secure random numbers.
  */
 static DEFINE_PER_CPU(struct rnd_state, fault_rnd_state);
+static DEFINE_SPINLOCK(fault_rnd_lock);
+static bool fault_rnd_initialized;
+
+static void fault_random_init(void)
+{
+	spin_lock(&fault_rnd_lock);
+	if (!fault_rnd_initialized) {
+		prandom_seed_full_state(&fault_rnd_state);
+		fault_rnd_initialized = true;
+	}
+	spin_unlock(&fault_rnd_lock);
+}
 
 static u32 fault_prandom_u32_below_100(void)
 {
@@ -51,12 +63,7 @@ int setup_fault_attr(struct fault_attr *attr, char *str)
 		return 0;
 	}
 
-	/*
-	 * __setup handlers run before slab and workqueues are initialized,
-	 * but prandom_init_once() calls kmalloc() and schedule_work(). So use
-	 * DO_ONCE_LITE() instead.
-	 */
-	DO_ONCE_LITE(prandom_seed_full_state, &fault_rnd_state);
+	fault_random_init();
 
 	attr->probability = probability;
 	attr->interval = interval;
@@ -246,7 +253,7 @@ struct dentry *fault_create_debugfs_attr(const char *name,
 	if (IS_ERR(dir))
 		return dir;
 
-	prandom_init_once(&fault_rnd_state);
+	fault_random_init();
 
 	debugfs_create_ul("probability", mode, dir, &attr->probability);
 	debugfs_create_ul("interval", mode, dir, &attr->interval);
@@ -462,7 +469,7 @@ static const struct config_item_type fault_config_type = {
 
 void fault_config_init(struct fault_config *config, const char *name)
 {
-	prandom_init_once(&fault_rnd_state);
+	fault_random_init();
 
 	config_group_init_type_name(&config->group, name, &fault_config_type);
 }
