@@ -31,6 +31,9 @@ The local storage can be removed with ``bpf_cgrp_storage_delete``::
 
 The map is available to all program types.
 
+A map created with ``BPF_F_INLINE_VALUE`` keeps its value in the storage object
+of the cgroup. Documentation/bpf/map_sk_storage.rst gives the rules.
+
 Examples
 ========
 
