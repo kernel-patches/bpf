@@ -450,10 +450,10 @@
         "BriefDescription": "OFB full cycles"
     },
     {
-        "PublicDescription": "Load satisified from store forwarded data",
+        "PublicDescription": "Load satisfied from store forwarded data",
         "EventCode": "0xD605",
         "EventName": "LD_FROM_ST_FWD",
-        "BriefDescription": "Load satisified from store forwarded data"
+        "BriefDescription": "Load satisfied from store forwarded data"
     },
     {
         "PublicDescription": "L1 prefetcher, load prefetch requests generated",

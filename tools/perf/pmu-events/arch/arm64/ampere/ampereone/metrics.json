@@ -260,7 +260,7 @@
     {
         "MetricName": "branch_mispredict",
         "MetricExpr": "(BR_MIS_PRED_RETIRED / GPC_FLUSH) * slots_lost_misspeculation_fraction",
-        "BriefDescription": "Fraction of slots lost due to branch misprediciton",
+        "BriefDescription": "Fraction of slots lost due to branch misprediction",
         "MetricGroup": "TopdownL2",
         "ScaleUnit": "1percent of slots"
     },
