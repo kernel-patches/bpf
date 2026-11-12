@@ -2135,7 +2135,7 @@ static void uffd_move_pmd_test(uffd_global_test_opts_t *gopts, uffd_test_args_t 
 static void uffd_move_pmd_huge_zeropage_test(uffd_global_test_opts_t *gopts,
 					     uffd_test_args_t *targs)
 {
-	unsigned long pmd_size = read_pmd_pagesize();
+	unsigned long pmd_size = pmd_psize();
 	unsigned long nr_pages_per_pmd;
 	unsigned long bytes = gopts->nr_pages * gopts->page_size;
 	char *orig_area_src = gopts->area_src, *orig_area_dst = gopts->area_dst;
