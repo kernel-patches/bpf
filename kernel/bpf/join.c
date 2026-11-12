@@ -172,7 +172,7 @@ static bool join_range(struct bpf_join_state *js, struct bpf_reg_state *dst,
 	 */
 	if (dst->type != SCALAR_VALUE)
 		return false;
-	bpf_reg_widen_range(dst, ra, join_rungs(js), join_place_is_linear(js));
+	scalar_widen(scalar_of(dst), scalar_of(ra), join_rungs(js), join_place_is_linear(js));
 	return true;
 }
 

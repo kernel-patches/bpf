@@ -1197,7 +1197,7 @@ bool bpf_flow_is_needed(struct bpf_verifier_env *env, int idx, u32 r)
 
 /*
  * A number that grows from one iteration of a loop to the next is not followed step by step. The
- * bound that moved is put where it may come to rest, see bpf_reg_widen_range(). The jumps of
+ * bound that moved is put where it may come to rest, see scalar_widen(). The jumps of
  * the loop tell where that is:
  *	do { a[i] = 0; i += 3; } while (i < 30);		29 at most comes back to the head
  *	while (i < 30) { a[i] = 0; i += 3; }			32
