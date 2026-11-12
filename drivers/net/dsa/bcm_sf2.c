@@ -996,9 +996,11 @@ static int bcm_sf2_sw_resume(struct dsa_switch *ds)
 	if (priv->hw_params.num_gphy == 1)
 		bcm_sf2_gphy_enable_set(ds, true);
 
-	ds->ops->setup(ds);
+	ret = ds->ops->setup(ds);
+	if (ret && !priv->wol_ports_mask)
+		clk_disable_unprepare(priv->clk);
 
-	return 0;
+	return ret;
 }
 
 static void bcm_sf2_sw_get_wol(struct dsa_switch *ds, int port,
