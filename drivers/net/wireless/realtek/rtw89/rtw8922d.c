@@ -1969,6 +1969,23 @@ static void rtw8922d_ctrl_bw(struct rtw89_dev *rtwdev, u8 pri_sb, u8 bw,
 	}
 }
 
+static void rtw8922d_cfr_clip_th(struct rtw89_dev *rtwdev,
+				 const struct rtw89_chan *chan,
+				 enum rtw89_phy_idx phy_idx)
+{
+	static const u32 clip_th0[RTW89_BAND_NUM] = {0x8, 0x8, 0x8};
+	static const u32 clip_th1[RTW89_BAND_NUM] = {0x18, 0x14, 0x14};
+	static const u32 clip_th2[RTW89_BAND_NUM] = {0x8, 0x8, 0x8};
+	u8 band = chan->band_type;
+
+	rtw89_phy_write32_idx(rtwdev, R_TX_CFR_MANUAL_EN_BE4, B_TX_CFR_CLIP_TH0_BE4,
+			      clip_th0[band], phy_idx);
+	rtw89_phy_write32_idx(rtwdev, R_TX_CFR_MANUAL_EN_BE4, B_TX_CFR_CLIP_TH1_BE4,
+			      clip_th1[band], phy_idx);
+	rtw89_phy_write32_idx(rtwdev, R_TX_CFR_MANUAL_EN_BE4, B_TX_CFR_CLIP_TH2_BE4,
+			      clip_th2[band], phy_idx);
+}
+
 static const u16 spur_nbi_a[] = {6400};
 static const u16 spur_csi[] = {6400};
 
@@ -2551,6 +2568,7 @@ static void rtw8922d_set_channel_bb(struct rtw89_dev *rtwdev,
 
 	rtw8922d_ctrl_ch(rtwdev, chan, phy_idx);
 	rtw8922d_ctrl_bw(rtwdev, pri_sb, chan->band_width, phy_idx);
+	rtw8922d_cfr_clip_th(rtwdev, chan, phy_idx);
 	rtw89_phy_bb_wrap_set_rfsi_bandedge_ch(rtwdev, chan, phy_idx);
 
 	if (cck_en)
