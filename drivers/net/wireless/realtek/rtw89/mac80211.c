@@ -548,7 +548,7 @@ static int __rtw89_ops_sta_add(struct rtw89_dev *rtwdev,
 	if (vif->type == NL80211_IFTYPE_AP || sta->tdls)
 		rtw89_queue_chanctx_change(rtwdev, RTW89_CHANCTX_REMOTE_STA_CHANGE);
 
-	rtw89_fw_h2c_init_trx_protect(rtwdev);
+	rtw89_core_config_active_bands(rtwdev);
 
 	return 0;
 
@@ -1716,7 +1716,7 @@ static void rtw89_vif_update_fw_links(struct rtw89_dev *rtwdev,
 		if (unlikely(!rtwvif_link))
 			continue;
 
-		rtw89_fw_h2c_mlo_link_cfg(rtwdev, rtwvif_link, en);
+		rtw89_mac_mlo_link_cfg(rtwdev, rtwvif_link, en);
 	}
 }
 

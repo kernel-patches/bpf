@@ -4991,6 +4991,7 @@ struct rtw89_chip_ops {
 	void (*fem_setup)(struct rtw89_dev *rtwdev);
 	int (*data_setup)(struct rtw89_dev *rtwdev);
 	void (*rfe_gpio)(struct rtw89_dev *rtwdev);
+	void (*cfg_hw_mlo)(struct rtw89_dev *rtwdev);
 	void (*rfk_hw_init)(struct rtw89_dev *rtwdev);
 	void (*rfk_init)(struct rtw89_dev *rtwdev);
 	void (*rfk_init_late)(struct rtw89_dev *rtwdev);
@@ -8871,6 +8872,14 @@ static inline void rtw89_chip_rfe_gpio(struct rtw89_dev *rtwdev)
 		chip->ops->rfe_gpio(rtwdev);
 }
 
+static inline void rtw89_chip_cfg_hw_mlo(struct rtw89_dev *rtwdev)
+{
+	const struct rtw89_chip_info *chip = rtwdev->chip;
+
+	if (chip->ops->cfg_hw_mlo)
+		chip->ops->cfg_hw_mlo(rtwdev);
+}
+
 static inline void rtw89_chip_rfk_hw_init(struct rtw89_dev *rtwdev)
 {
 	const struct rtw89_chip_info *chip = rtwdev->chip;
@@ -9443,6 +9452,7 @@ static inline u32 rtw89_bytes_to_mbps(u64 bytes, enum rtw89_tfc_interval interva
 
 int rtw89_core_tx_write(struct rtw89_dev *rtwdev, struct ieee80211_vif *vif,
 			struct ieee80211_sta *sta, struct sk_buff *skb, int *qsel);
+void rtw89_core_init_drv_txen(struct rtw89_dev *rtwdev);
 int rtw89_h2c_tx(struct rtw89_dev *rtwdev,
 		 struct sk_buff *skb, bool fwdl);
 void rtw89_core_tx_kick_off(struct rtw89_dev *rtwdev, u8 qsel);
@@ -9532,6 +9542,7 @@ void rtw89_sta_unset_link(struct rtw89_sta *rtwsta, unsigned int link_id);
 void rtw89_core_set_chip_txpwr(struct rtw89_dev *rtwdev);
 void rtw89_chip_rfk_channel(struct rtw89_dev *rtwdev,
 			    struct rtw89_vif_link *rtwvif_link);
+void rtw89_chip_hw_mlo_config(struct rtw89_dev *rtwdev);
 const struct rtw89_6ghz_span *
 rtw89_get_6ghz_span(struct rtw89_dev *rtwdev, u32 center_freq);
 int rtw89_get_default_chandef(struct rtw89_dev *rtwdev, struct cfg80211_chan_def *chandef);
@@ -9599,6 +9610,7 @@ void rtw89_core_ntfy_btc_event(struct rtw89_dev *rtwdev,
 			       enum rtw89_phy_idx phy_idx);
 int rtw89_core_mlsr_switch(struct rtw89_dev *rtwdev, struct rtw89_vif *rtwvif,
 			   unsigned int link_id);
+void rtw89_core_config_active_bands(struct rtw89_dev *rtwdev);
 void rtw89_core_dm_disable_cfg(struct rtw89_dev *rtwdev, u32 new);
 void rtw89_core_dm_disable_set(struct rtw89_dev *rtwdev, enum rtw89_dm_type type);
 void rtw89_core_dm_disable_clr(struct rtw89_dev *rtwdev, enum rtw89_dm_type type);

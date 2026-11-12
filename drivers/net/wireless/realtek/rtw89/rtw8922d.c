@@ -2702,6 +2702,12 @@ static void __rtw8922d_rfk_init_late(struct rtw89_dev *rtwdev,
 		rtw89_phy_rfk_dack_and_wait(rtwdev, phy_idx, chan, 58);
 }
 
+static void rtw8922d_cfg_hw_mlo(struct rtw89_dev *rtwdev)
+{
+	rtw8922d_ctrl_mlo(rtwdev, rtwdev->mlo_dbcc_mode, true);
+	rtw8922d_rfk_mlo_ctrl(rtwdev);
+}
+
 static void rtw8922d_rfk_init_late(struct rtw89_dev *rtwdev)
 {
 	const struct rtw89_chan *chan = rtw89_chan_get(rtwdev, RTW89_CHANCTX_0);
@@ -3683,6 +3689,7 @@ static const struct rtw89_chip_ops rtw8922d_chip_ops = {
 	.fem_setup		= NULL,
 	.data_setup		= rtw8922d_data_setup,
 	.rfe_gpio		= NULL,
+	.cfg_hw_mlo		= rtw8922d_cfg_hw_mlo,
 	.rfk_hw_init		= rtw8922d_rfk_hw_init,
 	.rfk_init		= rtw8922d_rfk_init,
 	.rfk_init_late		= rtw8922d_rfk_init_late,

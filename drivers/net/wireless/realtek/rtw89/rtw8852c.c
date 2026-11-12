@@ -3091,6 +3091,7 @@ static const struct rtw89_chip_ops rtw8852c_chip_ops = {
 	.fem_setup		= NULL,
 	.data_setup		= NULL,
 	.rfe_gpio		= NULL,
+	.cfg_hw_mlo		= NULL,
 	.rfk_hw_init		= NULL,
 	.rfk_init		= rtw8852c_rfk_init,
 	.rfk_init_late		= NULL,

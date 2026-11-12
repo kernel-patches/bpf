@@ -7568,6 +7568,8 @@ const struct rtw89_mac_gen_def rtw89_mac_gen_ax = {
 	.dle_func_en = dle_func_en_ax,
 	.dle_clk_en = dle_clk_en_ax,
 	.bf_assoc = rtw89_mac_bf_assoc_ax,
+	.mlo_link_cfg = NULL,
+	.init_drv_txen = NULL,
 
 	.typ_fltr_opt = rtw89_mac_typ_fltr_opt_ax,
 	.cfg_ppdu_status = rtw89_mac_cfg_ppdu_status_ax,

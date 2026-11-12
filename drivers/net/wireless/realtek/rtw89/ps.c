@@ -223,7 +223,7 @@ void rtw89_leave_lps(struct rtw89_dev *rtwdev)
 		rtw89_vif_for_each_link(rtwvif, rtwvif_link, link_id)
 			rtw89_leave_lps_vif(rtwdev, rtwvif_link);
 
-	rtw89_fw_h2c_init_trx_protect(rtwdev);
+	rtw89_core_config_active_bands(rtwdev);
 }
 
 void rtw89_enter_ips(struct rtw89_dev *rtwdev)

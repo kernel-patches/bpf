@@ -5488,6 +5488,12 @@ static void rtw89_core_mlo_track(struct rtw89_dev *rtwdev)
 	}
 }
 
+void rtw89_core_config_active_bands(struct rtw89_dev *rtwdev)
+{
+	rtw89_fw_h2c_init_trx_protect(rtwdev);
+	rtw89_mac_init_drv_txen(rtwdev);
+}
+
 static void rtw89_track_ps_work(struct wiphy *wiphy, struct wiphy_work *work)
 {
 	struct rtw89_dev *rtwdev = container_of(work, struct rtw89_dev,
