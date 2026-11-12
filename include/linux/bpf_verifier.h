@@ -2071,6 +2071,7 @@ void scalar_set_const(struct scalar *s, u64 imm);
 void scalar_add(struct scalar *dst, const struct scalar *a, const struct scalar *b);
 void scalar_alu(struct scalar *dst, const struct scalar *src, const struct bpf_insn *insn);
 void scalar_zext32(struct scalar *s);
+void scalar_ext(struct scalar *s, u32 bits, bool sign);
 bool scalar_intersect(struct scalar *dst, const struct scalar *src, u32 bits);
 void scalar_union(struct scalar *acc, const struct scalar *src);
 int bpf_set_reg_range(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
@@ -2235,6 +2236,12 @@ int bpf_init_scev(struct bpf_verifier_env *env);
 void bpf_free_scev(struct bpf_verifier_env *env);
 int bpf_compute_scev(struct bpf_verifier_env *env);
 int bpf_scev_jump_counts(struct bpf_verifier_env *env, int header, int n, bool taken_leaves);
+/* What is known about a scalar or about the offset of a pointer. */
+struct scev_value {
+	struct scalar;
+	int ptr_reg;	/* SCEV register identifying the pointer origin, or -1. */
+	u8 bits;	/* The value is known modulo 2^bits. 0: nothing is known. */
+};
 bool bpf_scev_next_linked_reg(struct bpf_verifier_env *env, int insn_idx, u32 regno, u32 *pos,
 			      u32 *linked_regno, u32 *fill_off, int *base_regno, s64 *delta,
 			      u32 *bits);

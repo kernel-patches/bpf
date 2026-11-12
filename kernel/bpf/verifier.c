@@ -6417,6 +6417,15 @@ out:
 	set_sext64_default_val(s, size);
 }
 
+/* @s = (uN)@s or (sN)@s. N is @bits: 8, 16 or 32. */
+void scalar_ext(struct scalar *s, u32 bits, bool sign)
+{
+	if (sign)
+		coerce_scalar_to_size_sx(s, bits / BITS_PER_BYTE);
+	else
+		coerce_scalar_to_size(s, bits / BITS_PER_BYTE);
+}
+
 static void set_sext32_default_val(struct scalar *s, int size)
 {
 	if (size == 1)
