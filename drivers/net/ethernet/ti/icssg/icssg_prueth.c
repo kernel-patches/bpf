@@ -213,6 +213,8 @@ static void icssg_enable_fw_offload(struct prueth *prueth)
 
 	for (mac = PRUETH_MAC0; mac < PRUETH_NUM_MACS; mac++) {
 		emac = prueth->emac[mac];
+		if (!emac)
+			continue;
 		if (prueth->is_hsr_offload_mode) {
 			if (emac->ndev->features & NETIF_F_HW_HSR_TAG_RM)
 				icssg_set_port_state(emac, ICSSG_EMAC_HSR_RX_OFFLOAD_ENABLE);
@@ -240,6 +242,17 @@ static void icssg_enable_fw_offload(struct prueth *prueth)
 				if (prueth->is_switch_mode)
 					icssg_set_port_state(emac, ICSSG_EMAC_PORT_VLAN_AWARE_ENABLE);
 			}
+		}
+
+		/* Re-apply flooding state cleared by firmware restart.
+		 * In switch mode, flooding is managed by the bridge via
+		 * switchdev callbacks, not tracked by these flags.
+		 */
+		if (!prueth->is_switch_mode && netif_running(emac->ndev)) {
+			if (emac->uc_flooding_enabled)
+				icssg_set_port_state(emac, ICSSG_EMAC_PORT_UC_FLOODING_ENABLE);
+			if (emac->mc_flooding_enabled)
+				icssg_set_port_state(emac, ICSSG_EMAC_PORT_MC_FLOODING_ENABLE);
 		}
 	}
 }
@@ -1286,15 +1299,22 @@ static void emac_ndo_set_rx_mode_work(struct work_struct *work)
 	icssg_set_port_state(emac, ICSSG_EMAC_PORT_MC_FLOODING_DISABLE);
 
 	if (promisc) {
+		emac->uc_flooding_enabled = true;
+		emac->mc_flooding_enabled = true;
 		icssg_set_port_state(emac, ICSSG_EMAC_PORT_UC_FLOODING_ENABLE);
 		icssg_set_port_state(emac, ICSSG_EMAC_PORT_MC_FLOODING_ENABLE);
 		return;
 	}
 
 	if (allmulti) {
+		emac->mc_flooding_enabled = true;
+		emac->uc_flooding_enabled = false;
 		icssg_set_port_state(emac, ICSSG_EMAC_PORT_MC_FLOODING_ENABLE);
 		return;
 	}
+
+	emac->uc_flooding_enabled = false;
+	emac->mc_flooding_enabled = false;
 
 	if (emac->prueth->is_hsr_offload_mode) {
 		/* Track basic add/delete via callbacks */
@@ -1934,7 +1954,8 @@ static int prueth_netdevice_port_link(struct net_device *ndev,
 		    prueth->br_members & BIT(PRUETH_PORT_MII1)) {
 			prueth->is_switch_mode = true;
 			prueth->default_vlan = PRUETH_DFLT_VLAN_SW;
-			emac->port_vlan = prueth->default_vlan;
+			prueth->emac[PRUETH_MAC0]->port_vlan = prueth->default_vlan;
+			prueth->emac[PRUETH_MAC1]->port_vlan = prueth->default_vlan;
 			icssg_change_mode(prueth);
 		}
 	}
@@ -1960,6 +1981,7 @@ static void prueth_netdevice_port_unlink(struct net_device *ndev)
 			dev_err(prueth->dev, "Failed to restart the firmwares, aborting the process");
 			return;
 		}
+		icssg_enable_fw_offload(prueth);
 	}
 
 	prueth_offload_fwd_mark_update(prueth);
@@ -2024,6 +2046,7 @@ static void prueth_hsr_port_unlink(struct net_device *ndev)
 			dev_err(prueth->dev, "Failed to restart the firmwares, aborting the process");
 			return;
 		}
+		icssg_enable_fw_offload(prueth);
 		netdev_dbg(ndev, "Disabling HSR Offload mode\n");
 	}
 }
