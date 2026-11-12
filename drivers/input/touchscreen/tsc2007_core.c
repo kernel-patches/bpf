@@ -270,16 +270,16 @@ static int tsc2007_input_configure(struct tsc2007 *ts)
 	input_set_abs_params(input_dev, ABS_PRESSURE, 0, MAX_12BIT,
 			     ts->fuzzz, 0);
 
+	ts->stopped = true;
+
 	err = devm_request_threaded_irq(dev, ts->irq,
 					NULL, tsc2007_soft_irq,
-					IRQF_ONESHOT,
+					IRQF_ONESHOT | IRQF_NO_AUTOEN,
 					dev->driver->name, ts);
 	if (err) {
 		dev_err(dev, "Failed to request irq %d: %d\n", ts->irq, err);
 		return err;
 	}
-
-	tsc2007_stop(ts);
 
 	err = input_register_device(input_dev);
 	if (err) {
