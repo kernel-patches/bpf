@@ -23,6 +23,25 @@ struct cnum32 cnum32_from_cnum64(struct cnum64 cnum)
 		return (struct cnum32){ .base = (u32)cnum.base, .size = cnum.size };
 }
 
+/* The zero extension of each value of 'cnum'. An arc that crosses U32_MAX/0 gives [0, U32_MAX]. */
+struct cnum64 cnum64_zext32(struct cnum32 cnum)
+{
+	if (cnum32_is_empty(cnum))
+		return CNUM64_EMPTY;
+	return cnum64_from_urange(cnum32_umin(cnum), cnum32_umax(cnum));
+}
+
+/*
+ * The sign extension of each value of 'cnum'.
+ * An arc that crosses S32_MAX/S32_MIN gives [S32_MIN, S32_MAX].
+ */
+struct cnum64 cnum64_sext32(struct cnum32 cnum)
+{
+	if (cnum32_is_empty(cnum))
+		return CNUM64_EMPTY;
+	return cnum64_from_srange(cnum32_smin(cnum), cnum32_smax(cnum));
+}
+
 /*
  * Suppose 'a' and 'b' are laid out as follows:
  *
