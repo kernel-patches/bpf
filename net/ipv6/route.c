@@ -5868,7 +5868,8 @@ static int rt6_fill_node(struct net *net, struct sk_buff *skb,
 #endif
 	if (iif) {
 #ifdef CONFIG_IPV6_MROUTE
-		if (ipv6_addr_is_multicast(&rt6_dst->addr)) {
+		if (ipv6_addr_is_multicast(&rt6_dst->addr) &&
+		    atomic_read(&net->ipv6.devconf_all->mc_forwarding)) {
 			int err = ip6mr_get_route(net, skb, rtm, portid);
 
 			if (err == 0)
