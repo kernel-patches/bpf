@@ -55,6 +55,9 @@
 #ifndef TCP_ULP
 #define TCP_ULP 31
 #endif
+#ifndef TCP_CA_NAME_MAX
+#define TCP_CA_NAME_MAX 16
+#endif
 /* linux/mroute.h does not coexist with netinet/in.h here. */
 #ifndef MRT_VERSION
 #define MRT_VERSION 206
@@ -1003,6 +1006,248 @@ TEST_F(tls, bad_optname)
 
 	ASSERT_EQ(-1, getsockopt(self->fd, SOL_TLS, 0x7fff, &val, &optlen));
 	ASSERT_EQ(ENOPROTOOPT, errno);
+}
+
+/* ---------- tcp ---------- */
+
+FIXTURE(tcp)
+{
+	int fd;		/* connected client */
+	int sfd;	/* accepted server side, its SYN was saved */
+};
+
+FIXTURE_SETUP(tcp)
+{
+	struct sockaddr_in a = {
+		.sin_family = AF_INET,
+		.sin_addr.s_addr = htonl(INADDR_LOOPBACK),
+	};
+	socklen_t alen = sizeof(a);
+	int one = 1;
+	int lfd;
+
+	self->fd = -1;
+	self->sfd = -1;
+
+	lfd = socket(AF_INET, SOCK_STREAM, 0);
+	if (lfd < 0)
+		SKIP(return, "TCP socket: %s", strerror(errno));
+	setsockopt(lfd, IPPROTO_TCP, TCP_SAVE_SYN, &one, sizeof(one));
+	if (bind(lfd, (struct sockaddr *)&a, sizeof(a)) || listen(lfd, 1) ||
+	    getsockname(lfd, (struct sockaddr *)&a, &alen)) {
+		close(lfd);
+		SKIP(return, "listener setup: %s", strerror(errno));
+	}
+	self->fd = socket(AF_INET, SOCK_STREAM, 0);
+	if (self->fd < 0) {
+		close(lfd);
+		SKIP(return, "TCP socket: %s", strerror(errno));
+	}
+	if (connect(self->fd, (struct sockaddr *)&a, sizeof(a))) {
+		close(lfd);
+		SKIP(return, "connect: %s", strerror(errno));
+	}
+	self->sfd = accept(lfd, NULL, NULL);
+	close(lfd);
+	if (self->sfd < 0)
+		SKIP(return, "accept: %s", strerror(errno));
+}
+
+FIXTURE_TEARDOWN(tcp)
+{
+	if (self->fd >= 0)
+		close(self->fd);
+	if (self->sfd >= 0)
+		close(self->sfd);
+}
+
+TEST_F(tcp, maxseg_exact)
+{
+	socklen_t optlen = sizeof(int);
+	int val = -1;
+
+	ASSERT_EQ(0, getsockopt(self->fd, IPPROTO_TCP, TCP_MAXSEG, &val,
+				&optlen));
+	ASSERT_EQ(sizeof(int), optlen);
+	ASSERT_GT(val, 0);
+}
+
+/* Unlike IPv4, TCP clamps the reply rather than shrinking it to a byte. */
+TEST_F(tcp, nodelay_undersize_clamped)
+{
+	socklen_t optlen = 1;
+	int val = 0;
+
+	ASSERT_EQ(0, getsockopt(self->fd, IPPROTO_TCP, TCP_NODELAY, &val,
+				&optlen));
+	ASSERT_EQ(1, optlen);
+}
+
+TEST_F(tcp, info_exact)
+{
+	struct tcp_info info;
+	socklen_t optlen = sizeof(info);
+
+	ASSERT_EQ(0, getsockopt(self->fd, IPPROTO_TCP, TCP_INFO, &info,
+				&optlen));
+	ASSERT_EQ(sizeof(info), optlen);
+	ASSERT_EQ(TCP_ESTABLISHED, info.tcpi_state);
+}
+
+TEST_F(tcp, info_short_clamped)
+{
+	struct tcp_info info;
+	socklen_t optlen = 8;
+
+	ASSERT_EQ(0, getsockopt(self->fd, IPPROTO_TCP, TCP_INFO, &info,
+				&optlen));
+	ASSERT_EQ(8, optlen);
+	ASSERT_EQ(TCP_ESTABLISHED, info.tcpi_state);
+}
+
+TEST_F(tcp, congestion_exact)
+{
+	socklen_t optlen = TCP_CA_NAME_MAX;
+	char name[TCP_CA_NAME_MAX] = {};
+
+	ASSERT_EQ(0, getsockopt(self->fd, IPPROTO_TCP, TCP_CONGESTION, name,
+				&optlen));
+	ASSERT_EQ(TCP_CA_NAME_MAX, optlen);
+	ASSERT_NE(0, name[0]);
+}
+
+TEST_F(tcp, congestion_short_clamped)
+{
+	socklen_t optlen = 4;
+	char name[4] = {};
+
+	ASSERT_EQ(0, getsockopt(self->fd, IPPROTO_TCP, TCP_CONGESTION, name,
+				&optlen));
+	ASSERT_EQ(4, optlen);
+	ASSERT_NE(0, name[0]);
+}
+
+/* No ULP attached: length reported as zero, nothing written. */
+TEST_F(tcp, ulp_none)
+{
+	socklen_t optlen = 16;
+	char buf[16];
+
+	memset(buf, 0x5a, sizeof(buf));
+	ASSERT_EQ(0, getsockopt(self->fd, IPPROTO_TCP, TCP_ULP, buf, &optlen));
+	ASSERT_EQ(0, optlen);
+	ASSERT_EQ(0x5a, (unsigned char)buf[0]);
+}
+
+TEST_F(tcp, repair_window_wrong_len)
+{
+	socklen_t optlen = 4;
+	char buf[4];
+
+	ASSERT_EQ(-1, getsockopt(self->fd, IPPROTO_TCP, TCP_REPAIR_WINDOW, buf,
+				 &optlen));
+	ASSERT_EQ(EINVAL, errno);
+}
+
+TEST_F(tcp, zerocopy_receive_short)
+{
+	socklen_t optlen = 4;
+	char buf[4] = {};
+
+	ASSERT_EQ(-1, getsockopt(self->fd, IPPROTO_TCP, TCP_ZEROCOPY_RECEIVE,
+				 buf, &optlen));
+	ASSERT_EQ(EINVAL, errno);
+}
+
+/* Nothing queued: the call maps nothing and succeeds. */
+TEST_F(tcp, zerocopy_receive_old_struct)
+{
+	struct tcp_zerocopy_receive zc = {};
+	socklen_t optlen = sizeof(zc);
+
+	ASSERT_EQ(0, getsockopt(self->fd, IPPROTO_TCP, TCP_ZEROCOPY_RECEIVE,
+				&zc, &optlen));
+	ASSERT_EQ(sizeof(zc), optlen);
+	ASSERT_EQ(0, zc.length);
+}
+
+/* A larger struct is cut down to the kernel's, if its tail is zero. */
+TEST_F(tcp, zerocopy_receive_oversize_clamped)
+{
+	char buf[256] = {};
+	socklen_t optlen = sizeof(buf);
+
+	ASSERT_EQ(0, getsockopt(self->fd, IPPROTO_TCP, TCP_ZEROCOPY_RECEIVE,
+				buf, &optlen));
+	ASSERT_GE(optlen, sizeof(struct tcp_zerocopy_receive));
+	ASSERT_LT(optlen, sizeof(buf));
+}
+
+TEST_F(tcp, zerocopy_receive_oversize_dirty)
+{
+	char buf[256] = {};
+	socklen_t optlen = sizeof(buf);
+
+	buf[sizeof(buf) - 1] = 1;
+	ASSERT_EQ(-1, getsockopt(self->fd, IPPROTO_TCP, TCP_ZEROCOPY_RECEIVE,
+				 buf, &optlen));
+	ASSERT_EQ(EINVAL, errno);
+	ASSERT_EQ(sizeof(buf), optlen);
+}
+
+/* The client never saved a SYN, so there is nothing to report. */
+TEST_F(tcp, saved_syn_none)
+{
+	socklen_t optlen = 128;
+	char buf[128];
+
+	memset(buf, 0x5a, sizeof(buf));
+	ASSERT_EQ(0, getsockopt(self->fd, IPPROTO_TCP, TCP_SAVED_SYN, buf,
+				&optlen));
+	ASSERT_EQ(0, optlen);
+	ASSERT_EQ(0x5a, (unsigned char)buf[0]);
+}
+
+/* A short buffer gets the required length back along with EINVAL, and the
+ * SYN is still there for the retry.
+ */
+TEST_F(tcp, saved_syn_short_reports_len)
+{
+	socklen_t optlen = 1;
+	char buf[256];
+	socklen_t need;
+
+	ASSERT_EQ(-1, getsockopt(self->sfd, IPPROTO_TCP, TCP_SAVED_SYN, buf,
+				 &optlen));
+	ASSERT_EQ(EINVAL, errno);
+	ASSERT_GT(optlen, 1);
+	ASSERT_LE(optlen, sizeof(buf));
+	need = optlen;
+
+	ASSERT_EQ(0, getsockopt(self->sfd, IPPROTO_TCP, TCP_SAVED_SYN, buf,
+				&optlen));
+	ASSERT_EQ(need, optlen);
+}
+
+TEST_F(tcp, negative_optlen)
+{
+	socklen_t optlen = (socklen_t)-1;
+	int val;
+
+	ASSERT_EQ(-1, getsockopt(self->fd, IPPROTO_TCP, TCP_MAXSEG, &val,
+				 &optlen));
+	ASSERT_EQ(EINVAL, errno);
+}
+
+TEST_F(tcp, bad_optname)
+{
+	socklen_t optlen = sizeof(int);
+	int val;
+
+	ASSERT_EQ(-1, getsockopt(self->fd, IPPROTO_TCP, 0x7fff, &val,
+				 &optlen));
+	ASSERT_EQ(ENOPROTOOPT, errno);
+	ASSERT_EQ(sizeof(int), optlen);
 }
 
 TEST_HARNESS_MAIN
