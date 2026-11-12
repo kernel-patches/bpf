@@ -24,7 +24,6 @@
 #include <linux/gpio/machine.h>
 #include <linux/platform_data/gpio_backlight.h>
 #include <linux/platform_data/tmio.h>
-#include <linux/platform_data/tsc2007.h>
 #include <linux/platform_device.h>
 #include <linux/property.h>
 #include <linux/regulator/fixed.h>
