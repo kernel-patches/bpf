@@ -59,6 +59,11 @@
 #define ENET_THLD_DEFAULT	0x80
 #define ENET_THLD_MAX		0xf0
 
+/* A frame ending this far past the transmit threshold stops the transmitter
+ * once a shorter frame follows. Widest window measured is 46 bytes.
+ */
+#define ENET_TX_THLD_WINDOW	64
+
 /* Page pool RX buffer layout:
  * RSB(64) + pad(2) | frame data | skb_shared_info
  * The HW writes the 64B RSB before every descriptor of a frame. Only the
@@ -1910,15 +1915,19 @@ static struct sk_buff *bcmgenet_free_tx_cb(struct device *dev,
 
 	if (skb) {
 		cb->skb = NULL;
-		if (cb == GENET_CB(skb)->first_cb)
-			dma_unmap_single(dev, dma_unmap_addr(cb, dma_addr),
-					 dma_unmap_len(cb, dma_len),
-					 DMA_TO_DEVICE);
-		else
-			dma_unmap_page(dev, dma_unmap_addr(cb, dma_addr),
-				       dma_unmap_len(cb, dma_len),
-				       DMA_TO_DEVICE);
-		dma_unmap_addr_set(cb, dma_addr, 0);
+		/* A cut descriptor left its mapping to the one after it */
+		if (cb != GENET_CB(skb)->split_cb) {
+			if (cb == GENET_CB(skb)->first_cb)
+				dma_unmap_single(dev,
+						 dma_unmap_addr(cb, dma_addr),
+						 dma_unmap_len(cb, dma_len),
+						 DMA_TO_DEVICE);
+			else
+				dma_unmap_page(dev, dma_unmap_addr(cb, dma_addr),
+					       dma_unmap_len(cb, dma_len),
+					       DMA_TO_DEVICE);
+			dma_unmap_addr_set(cb, dma_addr, 0);
+		}
 
 		if (cb == GENET_CB(skb)->last_cb)
 			return skb;
@@ -2154,7 +2163,10 @@ static netdev_tx_t bcmgenet_xmit(struct sk_buff *skb, struct net_device *dev)
 {
 	struct bcmgenet_priv *priv = netdev_priv(dev);
 	struct device *kdev = &priv->pdev->dev;
+	unsigned int split_i = 0, split_at = 0;
 	struct bcmgenet_tx_ring *ring = NULL;
+	dma_addr_t split_mapping = 0;
+	unsigned int split_size = 0;
 	struct enet_cb *tx_cb_ptr;
 	struct netdev_queue *txq;
 	int nr_frags, index;
@@ -2162,6 +2174,7 @@ static netdev_tx_t bcmgenet_xmit(struct sk_buff *skb, struct net_device *dev)
 	unsigned int size;
 	skb_frag_t *frag;
 	u32 len_stat;
+	bool split;
 	int ret;
 	int i;
 
@@ -2171,8 +2184,14 @@ static netdev_tx_t bcmgenet_xmit(struct sk_buff *skb, struct net_device *dev)
 
 	nr_frags = skb_shinfo(skb)->nr_frags;
 
+	/* Cut a frame ending in that window in two at the threshold, its end
+	 * then lands in a separate transfer.
+	 */
+	split = unlikely(skb->len > priv->tx_thld_len &&
+			 skb->len < priv->tx_thld_len + ENET_TX_THLD_WINDOW);
+
 	/* The check below would always refuse this frame */
-	if (unlikely(nr_frags + 1 >= ring->size)) {
+	if (unlikely(nr_frags + 1 + split >= ring->size)) {
 		skb = skb_share_check(skb, GFP_ATOMIC);
 		if (skb && skb_linearize(skb)) {
 			dev_kfree_skb_any(skb);
@@ -2187,7 +2206,7 @@ static netdev_tx_t bcmgenet_xmit(struct sk_buff *skb, struct net_device *dev)
 	}
 
 	spin_lock(&ring->lock);
-	if (ring->free_bds <= (nr_frags + 1)) {
+	if (ring->free_bds <= (nr_frags + 1 + split)) {
 		if (!netif_tx_queue_stopped(txq))
 			netif_tx_stop_queue(txq);
 		ret = NETDEV_TX_BUSY;
@@ -2203,6 +2222,19 @@ static netdev_tx_t bcmgenet_xmit(struct sk_buff *skb, struct net_device *dev)
 		goto drop;
 	}
 
+	/* The MAC inserts a checksum only into a frame it holds in full and
+	 * silently drops a longer one, so fall back to software.
+	 */
+	if (unlikely(skb->len > priv->tx_thld_len) &&
+	    skb->ip_summed == CHECKSUM_PARTIAL) {
+		if (skb_checksum_help(skb)) {
+			BCMGENET_STATS64_INC((&ring->stats64), dropped);
+			dev_kfree_skb_any(skb);
+			goto drop;
+		}
+		nr_frags = skb_shinfo(skb)->nr_frags;
+	}
+
 	/* Retain how many bytes will be sent on the wire, without TSB inserted
 	 * by transmit checksum offload
 	 */
@@ -2213,33 +2245,73 @@ static netdev_tx_t bcmgenet_xmit(struct sk_buff *skb, struct net_device *dev)
 	if (!skb)
 		goto drop;
 
-	for (i = 0; i <= nr_frags; i++) {
+	/* A threshold that already ends a buffer needs no cut */
+	if (split) {
+		unsigned int buf = skb_headlen(skb);
+		unsigned int covered = buf - sizeof(struct status_64);
+
+		while (covered < priv->tx_thld_len) {
+			frag = &skb_shinfo(skb)->frags[split_i++];
+			buf = skb_frag_size(frag);
+			covered += buf;
+		}
+
+		split_at = buf - (covered - priv->tx_thld_len);
+		split = split_at && split_at < buf;
+	}
+
+	for (i = 0; i <= nr_frags + split; i++) {
+		unsigned int f = i - (split && i > split_i);
+		bool cont = split && i == split_i + 1;
+
 		tx_cb_ptr = bcmgenet_get_txcb(priv, ring);
 
 		BUG_ON(!tx_cb_ptr);
 
-		if (!i) {
-			/* Transmit single SKB or head of fragment list */
-			GENET_CB(skb)->first_cb = tx_cb_ptr;
-			size = skb_headlen(skb);
-			mapping = dma_map_single(kdev, skb->data, size,
-						 DMA_TO_DEVICE);
+		if (cont) {
+			/* Rest of the buffer cut above. It unmaps for both,
+			 * the hardware is done with it only now.
+			 */
+			mapping = split_mapping + split_at;
+			size = split_size - split_at;
+			dma_unmap_addr_set(tx_cb_ptr, dma_addr, split_mapping);
+			dma_unmap_len_set(tx_cb_ptr, dma_len, split_size);
 		} else {
-			/* xmit fragment */
-			frag = &skb_shinfo(skb)->frags[i - 1];
-			size = skb_frag_size(frag);
-			mapping = skb_frag_dma_map(kdev, frag, 0, size,
-						   DMA_TO_DEVICE);
-		}
+			if (!f) {
+				/* Transmit single SKB or head of frag list */
+				GENET_CB(skb)->first_cb = tx_cb_ptr;
+				GENET_CB(skb)->split_cb = NULL;
+				size = skb_headlen(skb);
+				mapping = dma_map_single(kdev, skb->data,
+							 size, DMA_TO_DEVICE);
+			} else {
+				/* xmit fragment */
+				frag = &skb_shinfo(skb)->frags[f - 1];
+				size = skb_frag_size(frag);
+				mapping = skb_frag_dma_map(kdev, frag, 0, size,
+							   DMA_TO_DEVICE);
+			}
 
-		ret = dma_mapping_error(kdev, mapping);
-		if (ret) {
-			priv->mib.tx_dma_failed++;
-			netif_err(priv, tx_err, dev, "Tx DMA map failed\n");
-			goto out_unmap_frags;
+			ret = dma_mapping_error(kdev, mapping);
+			if (ret) {
+				priv->mib.tx_dma_failed++;
+				netif_err(priv, tx_err, dev,
+					  "Tx DMA map failed\n");
+				goto out_unmap_frags;
+			}
+			dma_unmap_addr_set(tx_cb_ptr, dma_addr, mapping);
+			dma_unmap_len_set(tx_cb_ptr, dma_len, size);
+
+			/* The cut hands buffer and mapping to the next one */
+			if (split && i == split_i) {
+				GENET_CB(skb)->split_cb = tx_cb_ptr;
+				split_mapping = mapping;
+				split_size = size;
+				size = split_at;
+				dma_unmap_addr_set(tx_cb_ptr, dma_addr, 0);
+				dma_unmap_len_set(tx_cb_ptr, dma_len, 0);
+			}
 		}
-		dma_unmap_addr_set(tx_cb_ptr, dma_addr, mapping);
-		dma_unmap_len_set(tx_cb_ptr, dma_len, size);
 
 		tx_cb_ptr->skb = skb;
 
@@ -2256,7 +2328,7 @@ static netdev_tx_t bcmgenet_xmit(struct sk_buff *skb, struct net_device *dev)
 			if (skb->ip_summed == CHECKSUM_PARTIAL)
 				len_stat |= DMA_TX_DO_CSUM;
 		}
-		if (i == nr_frags)
+		if (i == nr_frags + split)
 			len_stat |= DMA_EOP;
 
 		dmadesc_set(priv, tx_cb_ptr->bd_addr, mapping, len_stat);
@@ -2268,8 +2340,8 @@ static netdev_tx_t bcmgenet_xmit(struct sk_buff *skb, struct net_device *dev)
 	skb_tx_timestamp(skb);
 
 	/* Decrement total BD count and advance our write pointer */
-	ring->free_bds -= nr_frags + 1;
-	ring->prod_index += nr_frags + 1;
+	ring->free_bds -= nr_frags + 1 + split;
+	ring->prod_index += nr_frags + 1 + split;
 	ring->prod_index &= DMA_P_INDEX_MASK;
 
 	netdev_tx_sent_queue(txq, GENET_CB(skb)->bytes_sent);
@@ -2689,6 +2761,17 @@ static unsigned int bcmgenet_pkt_rdy_thld(unsigned int mtu)
 		       ENET_THLD_MAX_LEN / ENET_THLD_UNIT);
 }
 
+/* The transmit threshold in register units. Keep the reset value while the
+ * MTU has no use for more, the hardware never reaches it below ETH_DATA_LEN.
+ */
+static unsigned int bcmgenet_tx_pkt_rdy_thld(unsigned int mtu)
+{
+	if (mtu <= ETH_DATA_LEN)
+		return ENET_THLD_DEFAULT;
+
+	return ENET_THLD_MAX;
+}
+
 /* A buffer has to hold everything the threshold lets the hardware deliver */
 static unsigned int bcmgenet_rx_buf_len(unsigned int mtu)
 {
@@ -2699,8 +2782,10 @@ static unsigned int bcmgenet_rx_buf_len(unsigned int mtu)
 /* Program the MTU dependent registers. Call with the MAC disabled. */
 static void bcmgenet_set_mtu_regs(struct bcmgenet_priv *priv, unsigned int mtu)
 {
+	u32 tx_thld = bcmgenet_tx_pkt_rdy_thld(mtu);
 	u32 thld = bcmgenet_pkt_rdy_thld(mtu);
 
+	priv->tx_thld_len = tx_thld * ENET_THLD_UNIT;
 	bcmgenet_umac_writel(priv, ENET_MAC_FRAME_LEN(mtu), UMAC_MAX_FRAME_LEN);
 
 	/* GENET v1 maps other registers at these offsets */
@@ -2708,6 +2793,8 @@ static void bcmgenet_set_mtu_regs(struct bcmgenet_priv *priv, unsigned int mtu)
 		return;
 
 	bcmgenet_rbuf_writel(priv, thld, RBUF_PKT_RDY_THLD);
+	bcmgenet_writel(tx_thld, priv->base + priv->hw_params->tbuf_offset +
+			TBUF_PKT_RDY_THLD);
 }
 
 static void init_umac(struct bcmgenet_priv *priv)
@@ -2822,8 +2909,10 @@ static void bcmgenet_init_tx_ring(struct bcmgenet_priv *priv,
 	ring->index = index;
 	ring->cbs = priv->tx_cbs + start_ptr;
 	ring->size = size;
-	/* An empty ring must be able to wake the queue */
-	ring->stop_thld = min_t(unsigned int, MAX_SKB_FRAGS + 1, size - 1);
+	/* An empty ring must be able to wake the queue, a split frame takes
+	 * one descriptor more.
+	 */
+	ring->stop_thld = min_t(unsigned int, MAX_SKB_FRAGS + 2, size - 1);
 	ring->clean_ptr = start_ptr;
 	ring->c_index = 0;
 	ring->free_bds = size;
@@ -4209,6 +4298,7 @@ static int bcmgenet_probe(struct platform_device *pdev)
 	init_waitqueue_head(&priv->wq);
 	bcmgenet_hfb_init(priv);
 	priv->rx_buf_len = bcmgenet_rx_buf_len(dev->mtu);
+	priv->tx_thld_len = bcmgenet_tx_pkt_rdy_thld(dev->mtu) * ENET_THLD_UNIT;
 	INIT_WORK(&priv->bcmgenet_irq_work, bcmgenet_irq_task);
 
 	priv->clk_wol = devm_clk_get_optional(&priv->pdev->dev, "enet-wol");
