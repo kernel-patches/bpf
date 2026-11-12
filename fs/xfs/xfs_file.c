@@ -716,6 +716,17 @@ xfs_file_dio_write_aligned(
 		goto out_unlock;
 
 	/*
+	 * O_APPEND moves the position and the file size limits shorten the
+	 * write, so only now is the range final.  If it is not block aligned,
+	 * this is the wrong path for it.  Return -EAGAIN to
+	 * xfs_file_dio_write(), which picks the path.
+	 */
+	if ((iocb->ki_pos | iov_iter_count(from)) & ip->i_mount->m_blockmask) {
+		ret = -EAGAIN;
+		goto out_unlock;
+	}
+
+	/*
 	 * We don't need to hold the IOLOCK exclusively across the IO, so demote
 	 * the iolock back to shared if we had to take the exclusive lock in
 	 * xfs_file_write_checks() for other reasons.
@@ -938,6 +949,7 @@ xfs_file_dio_write(
 	struct xfs_inode	*ip = XFS_I(file_inode(iocb->ki_filp));
 	struct xfs_buftarg      *target = xfs_inode_buftarg(ip);
 	size_t			count = iov_iter_count(from);
+	ssize_t			ret;
 
 	/* direct I/O must be aligned to device logical sector size */
 	if ((iocb->ki_pos | count) & target->bt_logical_sectormask)
@@ -954,12 +966,32 @@ xfs_file_dio_write(
 		return xfs_file_dio_write_atomic(ip, iocb, from);
 	}
 
-	if ((iocb->ki_pos | count) & ip->i_mount->m_blockmask)
-		return xfs_file_dio_write_unaligned(ip, iocb, from);
-	if (xfs_is_zoned_inode(ip))
-		return xfs_file_dio_write_zoned(ip, iocb, from);
-	return xfs_file_dio_write_aligned(ip, iocb, from,
-			xfs_direct_write_iomap_next, &xfs_dio_write_ops, NULL);
+	/*
+	 * O_APPEND and the file size limits can still change the range, in
+	 * xfs_file_write_checks().  So a range that is block aligned here may
+	 * not stay so, and the write then comes back with -EAGAIN.  If we are
+	 * doing nonblocking user I/O, propagate the error.
+	 */
+	if (!((iocb->ki_pos | count) & ip->i_mount->m_blockmask)) {
+		if (xfs_is_zoned_inode(ip))
+			ret = xfs_file_dio_write_zoned(ip, iocb, from);
+		else
+			ret = xfs_file_dio_write_aligned(ip, iocb, from,
+					&xfs_direct_write_iomap_next,
+					&xfs_dio_write_ops, NULL);
+		if (ret != -EAGAIN || (iocb->ki_flags & IOCB_NOWAIT))
+			return ret;
+	}
+
+	/*
+	 * Zoned inodes always write out of place, which does not work for a
+	 * part of a block.  Fall back to buffered I/O.
+	 */
+	if (xfs_is_zoned_inode(ip)) {
+		trace_xfs_reflink_bounce_dio_write(iocb, from);
+		return -ENOTBLK;
+	}
+	return xfs_file_dio_write_unaligned(ip, iocb, from);
 }
 
 static noinline ssize_t
