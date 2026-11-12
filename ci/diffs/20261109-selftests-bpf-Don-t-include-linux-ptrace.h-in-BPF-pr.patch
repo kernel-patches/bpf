@@ -1,0 +1,144 @@
+From a0a0c785cbcaa72bb03c205eb61e5b0960b80ac2 Mon Sep 17 00:00:00 2001
+From: Alexei Starovoitov <ast@kernel.org>
+Date: Sun, 8 Nov 2026 16:37:10 +0000
+Subject: [PATCH] selftests/bpf: Don't include <linux/ptrace.h> in BPF progs
+
+BPF CI cannot build the selftests on aarch64 since its image has new
+kernel headers:
+
+  CLNG-BPF [test_progs] freplace_attach_probe.bpf.o
+  In file included from progs/freplace_attach_probe.c:4:
+  In file included from /usr/include/linux/ptrace.h:188:
+  /usr/include/aarch64-linux-gnu/asm/ptrace.h:96:2: error: unknown type name '__u128'
+     96 |         __u128          vregs[32];
+
+Commit d4bf9e08d412 ("arm64: uapi: Use __u128 instead of __uint128_t in
+UAPI headers") made asm/ptrace.h use the type of uapi/linux/types.h.
+BPF progs are built with -Itools/include/uapi, so their <linux/types.h>
+is the copy in tools, which doesn't have it.
+
+Eight files in progs/ include <linux/ptrace.h>, and 20 progs are built
+from them: pyperf*, strobemeta*, plain_c_strobemeta_bpf_loop,
+freplace_attach_probe, test_core_extern, test_perf_branches,
+test_perf_buffer, test_rdonly_maps. None of them looks into struct
+pt_regs or uses a PT_REGS_*() macro. At most it is the type that the
+argument of the prog points to, and bpf_helper_defs.h declares it.
+
+Drop the include. freplace_attach_probe.c replaces a function that takes
+a struct pt_regs *, and the kernel wants a pointer to a struct there, not
+to a forward declaration. It takes the type from vmlinux.h.
+
+Signed-off-by: Alexei Starovoitov <ast@kernel.org>
+Link: https://patch.msgid.link/20261108163710.1881321-1-alexei.starovoitov@gmail.com
+---
+ tools/testing/selftests/bpf/progs/freplace_attach_probe.c      | 3 +--
+ .../testing/selftests/bpf/progs/plain_c_strobemeta_bpf_loop.c  | 1 -
+ tools/testing/selftests/bpf/progs/pyperf.h                     | 1 -
+ tools/testing/selftests/bpf/progs/strobemeta.h                 | 1 -
+ tools/testing/selftests/bpf/progs/test_core_extern.c           | 1 -
+ tools/testing/selftests/bpf/progs/test_perf_branches.c         | 1 -
+ tools/testing/selftests/bpf/progs/test_perf_buffer.c           | 1 -
+ tools/testing/selftests/bpf/progs/test_rdonly_maps.c           | 1 -
+ 8 files changed, 1 insertion(+), 9 deletions(-)
+
+diff --git a/tools/testing/selftests/bpf/progs/freplace_attach_probe.c b/tools/testing/selftests/bpf/progs/freplace_attach_probe.c
+index 370a0e1922e0..c0eb2980851c 100644
+--- a/tools/testing/selftests/bpf/progs/freplace_attach_probe.c
++++ b/tools/testing/selftests/bpf/progs/freplace_attach_probe.c
+@@ -1,8 +1,7 @@
+ // SPDX-License-Identifier: GPL-2.0
+ // Copyright (c) 2020 Facebook
+ 
+-#include <linux/ptrace.h>
+-#include <linux/bpf.h>
++#include "vmlinux.h"
+ #include <bpf/bpf_helpers.h>
+ #include <bpf/bpf_tracing.h>
+ 
+diff --git a/tools/testing/selftests/bpf/progs/plain_c_strobemeta_bpf_loop.c b/tools/testing/selftests/bpf/progs/plain_c_strobemeta_bpf_loop.c
+index b4f53c42e098..d2411a41f3cf 100644
+--- a/tools/testing/selftests/bpf/progs/plain_c_strobemeta_bpf_loop.c
++++ b/tools/testing/selftests/bpf/progs/plain_c_strobemeta_bpf_loop.c
+@@ -12,7 +12,6 @@
+ #include <stddef.h>
+ #include <stdbool.h>
+ #include <linux/bpf.h>
+-#include <linux/ptrace.h>
+ #include <linux/sched.h>
+ #include <linux/types.h>
+ #include <bpf/bpf_helpers.h>
+diff --git a/tools/testing/selftests/bpf/progs/pyperf.h b/tools/testing/selftests/bpf/progs/pyperf.h
+index 5f093bcf6b58..bfc13cbe70f4 100644
+--- a/tools/testing/selftests/bpf/progs/pyperf.h
++++ b/tools/testing/selftests/bpf/progs/pyperf.h
+@@ -1,7 +1,6 @@
+ // SPDX-License-Identifier: GPL-2.0
+ // Copyright (c) 2019 Facebook
+ #include <linux/sched.h>
+-#include <linux/ptrace.h>
+ #include <stdint.h>
+ #include <stddef.h>
+ #include <stdbool.h>
+diff --git a/tools/testing/selftests/bpf/progs/strobemeta.h b/tools/testing/selftests/bpf/progs/strobemeta.h
+index 626a0abacc69..70f2dd03eb60 100644
+--- a/tools/testing/selftests/bpf/progs/strobemeta.h
++++ b/tools/testing/selftests/bpf/progs/strobemeta.h
+@@ -5,7 +5,6 @@
+ #include <stddef.h>
+ #include <stdbool.h>
+ #include <linux/bpf.h>
+-#include <linux/ptrace.h>
+ #include <linux/sched.h>
+ #include <linux/types.h>
+ #include <bpf/bpf_helpers.h>
+diff --git a/tools/testing/selftests/bpf/progs/test_core_extern.c b/tools/testing/selftests/bpf/progs/test_core_extern.c
+index a3c7c1042f35..a9d07a66122e 100644
+--- a/tools/testing/selftests/bpf/progs/test_core_extern.c
++++ b/tools/testing/selftests/bpf/progs/test_core_extern.c
+@@ -3,7 +3,6 @@
+ 
+ #include <stdint.h>
+ #include <stdbool.h>
+-#include <linux/ptrace.h>
+ #include <linux/bpf.h>
+ #include <bpf/bpf_helpers.h>
+ 
+diff --git a/tools/testing/selftests/bpf/progs/test_perf_branches.c b/tools/testing/selftests/bpf/progs/test_perf_branches.c
+index 05ac9410cd68..731cd75fd452 100644
+--- a/tools/testing/selftests/bpf/progs/test_perf_branches.c
++++ b/tools/testing/selftests/bpf/progs/test_perf_branches.c
+@@ -2,7 +2,6 @@
+ // Copyright (c) 2019 Facebook
+ 
+ #include <stddef.h>
+-#include <linux/ptrace.h>
+ #include <linux/bpf.h>
+ #include <bpf/bpf_helpers.h>
+ #include <bpf/bpf_tracing.h>
+diff --git a/tools/testing/selftests/bpf/progs/test_perf_buffer.c b/tools/testing/selftests/bpf/progs/test_perf_buffer.c
+index 17d5b67744d5..ba6869a4b008 100644
+--- a/tools/testing/selftests/bpf/progs/test_perf_buffer.c
++++ b/tools/testing/selftests/bpf/progs/test_perf_buffer.c
+@@ -1,7 +1,6 @@
+ // SPDX-License-Identifier: GPL-2.0
+ // Copyright (c) 2019 Facebook
+ 
+-#include <linux/ptrace.h>
+ #include <linux/bpf.h>
+ #include <bpf/bpf_helpers.h>
+ #include <bpf/bpf_tracing.h>
+diff --git a/tools/testing/selftests/bpf/progs/test_rdonly_maps.c b/tools/testing/selftests/bpf/progs/test_rdonly_maps.c
+index 7035fb4d4165..fe4b08b6d1d3 100644
+--- a/tools/testing/selftests/bpf/progs/test_rdonly_maps.c
++++ b/tools/testing/selftests/bpf/progs/test_rdonly_maps.c
+@@ -1,7 +1,6 @@
+ // SPDX-License-Identifier: GPL-2.0
+ // Copyright (c) 2019 Facebook
+ 
+-#include <linux/ptrace.h>
+ #include <linux/bpf.h>
+ #include <bpf/bpf_helpers.h>
+ #include "bpf_misc.h"
+-- 
+2.53.0-Meta
+
