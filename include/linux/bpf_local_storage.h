@@ -51,9 +51,17 @@ struct bpf_local_storage_map {
 	 * multiple buckets to improve contention.
 	 */
 	struct bpf_local_storage_map_bucket *buckets;
+	struct bpf_local_storage_cache *cache;
 	u32 bucket_log;
 	u16 elem_size;
 	u16 cache_idx;
+	/*
+	 * Byte offset of the inline slot of a BPF_F_INLINE_VALUE map from the
+	 * start of the storage object, and the end of the slot. 0: no slot.
+	 */
+	u16 inline_off;
+	u16 inline_end;
+	u32 inline_claim;	/* Claim number of the slot, the source of its tag */
 };
 
 struct bpf_local_storage_data {
@@ -133,9 +141,32 @@ bpf_local_storage_unpin_owner(struct bpf_local_storage *local_storage)
 
 #define BPF_LOCAL_STORAGE_CACHE_SIZE	16
 
+/*
+ * The inline area of a storage object goes from the end of the struct to
+ * at most 1 KB. A slot is an 8 byte tag, then the value.
+ */
+#define BPF_LOCAL_STORAGE_INLINE_MAX	1024
+#define BPF_LOCAL_STORAGE_INLINE_START	ALIGN(sizeof(struct bpf_local_storage), 8)
+/*
+ * Inline maps per owner type. The same as the cache size on purpose: more
+ * maps than that share cache[] entries, so they gain less from a slot.
+ */
+#define BPF_LOCAL_STORAGE_INLINE_MAPS	16
+
+/* A later patch adds this flag to the UAPI and allows it */
+#define BPF_F_INLINE_VALUE		BIT(20)
+
 struct bpf_local_storage_cache {
 	spinlock_t idx_lock;
 	u64 idx_usage_counts[BPF_LOCAL_STORAGE_CACHE_SIZE];
+	/*
+	 * The live inline maps, NULL if free. Few entries keep the scans in
+	 * map create and sk diag cheap. Written under idx_lock.
+	 */
+	struct bpf_local_storage_map __rcu *inline_maps[BPF_LOCAL_STORAGE_INLINE_MAPS];
+	/* Largest slot end in inline_maps[], so new objects read no map */
+	u32 inline_end;
+	u32 inline_claims;	/* Number of claims, the source of slot tags */
 };
 
 #define DEFINE_BPF_STORAGE_CACHE(name)				\
