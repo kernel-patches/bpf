@@ -518,6 +518,7 @@ static void ocrdma_destroy_eqs(struct ocrdma_dev *dev)
 
 	for (i = 0; i < dev->eq_cnt; i++)
 		ocrdma_destroy_eq(dev, &dev->eq_tbl[i]);
+	kfree(dev->eq_tbl);
 }
 
 static int ocrdma_mbx_mq_cq_create(struct ocrdma_dev *dev,
