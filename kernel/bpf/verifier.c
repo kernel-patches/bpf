@@ -18291,15 +18291,11 @@ void bpf_trim_pkt_range(struct bpf_reg_state *reg, s64 smax)
 }
 
 int bpf_set_reg_range(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
-		      struct cnum64 r64, struct cnum32 r32, u16 base, u16 step)
+		      const struct scalar *range)
 {
-	reg->r64 = r64;
-	reg->r32 = r32;
-	reg->step = step;
-	reg->base = base;
-	reg->var_off = tnum_unknown;
+	*scalar_of(reg) = *range;
 	reg_bounds_sync(reg); /* this should infer the tnum alignment */
-	bpf_trim_pkt_range(reg, cnum64_smax(r64));
+	bpf_trim_pkt_range(reg, cnum64_smax(range->r64));
 	return reg_bounds_sanity_check(env, reg, "bpf_set_reg_range");
 }
 

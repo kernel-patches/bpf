@@ -119,8 +119,8 @@ LOOP(behind_moved_bad, "w8 = 0; r9 = r6; r9 += 2044;", MOVED(4) "goto 1b;")
 
 /*
  * A number goes up by 3 and has moved in front of the jump. At the store it is @first or
- * @first + 3. Moved over S64_MAX it has another residue: 2^64 is not a multiple of 3. It keeps
- * the range of all three iterations then.
+ * @first + 3. Moved over S64_MAX it has another residue: 2^64 is not a multiple of 3. The range
+ * wraps with it, the step is dropped.
  */
 #define NUM(by, back, first, off)						\
 	"r3 = " #by " ll; r9 += r3; if w8 == 2 goto 9f; r2 = r9; r3 = " #first " ll; r2 -= r3;" \
@@ -129,7 +129,7 @@ LOOP(behind_moved_bad, "w8 = 0; r9 = r6; r9 += 2044;", MOVED(4) "goto 1b;")
 #define FAR(off)	NUM(0x7fffffffffffffff, 0x8000000000000004, 0x7ffffffffffffffa, off)
 
 OK("behind the jump that counts, a number has moved over S64_MAX", "3")
-LOOP(moved_over, "w8 = 0; r5 = r6; r9 = 0x7fffffffffffffcd ll;", OVER(2041))
+LOOP(moved_over, "w8 = 0; r5 = r6; r9 = 0x7fffffffffffffcd ll;", OVER(2044))
 
 BAD("behind the jump that counts, a number has moved over S64_MAX, too far")
 LOOP(moved_over_bad, "w8 = 0; r5 = r6; r9 = 0x7fffffffffffffcd ll;", OVER(2045))
