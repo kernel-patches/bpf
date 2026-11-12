@@ -3493,12 +3493,6 @@ int bpf_scev_jump_counts(struct bpf_verifier_env *env, int header, int n, bool t
 	return match_linear_latch(env, header, n, taken_leaves, &latch);
 }
 
-/* What is known about a scalar or about the offset of a pointer. */
-struct scev_value {
-	struct scalar;
-	int ptr_reg;	/* SCEV register identifying the pointer origin, or -1. */
-};
-
 static void log_scev_value(struct bpf_verifier_env *env, struct bpf_func_state *st,
 			   const struct scev_value *v)
 {
@@ -3548,53 +3542,135 @@ incompatible:
 	return false;
 }
 
-static bool scev_value_add(struct bpf_verifier_env *env, struct bpf_func_state *st,
-			   const struct scev_value *a, const struct scev_value *b,
-			   struct scev_value *result)
+/* @v = the SCEV register @r in the state @st */
+static void eval_reg(struct bpf_verifier_env *env, struct bpf_func_state *st, u32 r,
+		     struct scev_value *v)
 {
-	if (a->ptr_reg >= 0 && b->ptr_reg >= 0) {
-		if (env->log.level & BPF_LOG_LEVEL2)
-			log_incompatible_scev_values(env, "can't add two pointers", st, a, b);
-		return false;
+	const struct bpf_reg_state *reg;
+
+	v->ptr_reg = -1;
+	v->bits = 64;
+	/* a 32-bit spill, or the upper half of the slot is dead: the low 32 bits of the value */
+	reg = scev_reg_for_spill32(st, r);
+	if (reg)
+		v->bits = 32;
+	else
+		reg = scev_reg_for_read(env, st, r);
+	if (!reg || reg->type == NOT_INIT) {
+		v->bits = 0;
+		return;
 	}
-	result->ptr_reg = a->ptr_reg >= 0 ? a->ptr_reg : b->ptr_reg;
-	scalar_add(scalar_of(result), scalar_of(a), scalar_of(b));
-	return true;
+	*scalar_of(v) = *scalar_of(reg);
+	if (reg->type != SCALAR_VALUE)
+		v->ptr_reg = r;
 }
 
-static bool eval_expr(struct bpf_verifier_env *env, struct scev *scev,
-		      struct bpf_func_state *st, u32 id, struct scev_value *result)
+static void scev_value_set_const(struct scev_value *v, s64 imm)
 {
-	struct scev_value lval, rval;
-	const struct bpf_reg_state *reg;
-	u32 l, r, regno;
+	scalar_set_const(scalar_of(v), imm);
+	v->ptr_reg = -1;
+	v->bits = 64;
+}
+
+/*
+ * @v = @v @op @r, by the transfer functions of the main pass. @r is not read if @op has one
+ * operand. An op that is not evaluated: nothing is known.
+ * A value is known modulo 2^bits: the run-time value and a member of the abstract value have the
+ * same low bits. + - * & | ^ and << by an exact amount respect that. An extension of N bits wants N
+ * bits and makes 64. The other ops want 64.
+ * Expressions have no types, the state has them. A pointer can be an operand of an add, with a
+ * scalar, in 64 bits.
+ */
+static void scev_value_alu(u32 op, struct scev_value *v, const struct scev_value *r)
+{
+	struct bpf_insn insn = { .code = BPF_ALU64 | BPF_X | op };
+	u32 low = op_low_bits(op);
+
+	if (low) {
+		if (v->ptr_reg >= 0)
+			goto unknown;
+		/* a partial spill: the other bits of the slot are not known */
+		if (op == SPILL8 || op == SPILL16 || op == SPILL32) {
+			v->bits = min(v->bits, low);
+			return;
+		}
+		if (v->bits < low)
+			goto unknown;
+		scalar_ext(scalar_of(v), low, !is_zext(op));
+		v->bits = 64;
+		return;
+	}
+	if (op_params_num(op) != 2)
+		goto unknown;
+	v->bits = min(v->bits, r->bits);
+	switch (op) {
+	case BPF_ADD:
+		if (v->ptr_reg < 0 && r->ptr_reg < 0)
+			break;
+		if ((v->ptr_reg >= 0 && r->ptr_reg >= 0) || v->bits < 64)
+			goto unknown;
+		v->ptr_reg = max(v->ptr_reg, r->ptr_reg);
+		scalar_add(scalar_of(v), scalar_of(v), scalar_of(r));
+		return;
+	case BPF_SUB:
+	case BPF_MUL:
+	case BPF_AND:
+	case BPF_OR:
+	case BPF_XOR:
+		break;
+	case BPF_LSH:
+		if (r->bits < 64)
+			goto unknown;
+		break;
+	case SDIV:
+	case SMOD:
+		insn.code = BPF_ALU64 | BPF_X | (op == SDIV ? BPF_DIV : BPF_MOD);
+		insn.off = 1;
+		fallthrough;
+	case BPF_DIV:
+	case BPF_MOD:
+	case BPF_RSH:
+	case BPF_ARSH:
+		if (v->bits < 64)
+			goto unknown;
+		break;
+	default:
+		goto unknown;
+	}
+	if (v->ptr_reg >= 0 || r->ptr_reg >= 0)
+		goto unknown;
+	if (v->bits)
+		scalar_alu(scalar_of(v), scalar_of(r), &insn);
+	return;
+unknown:
+	v->bits = 0;
+}
+
+/*
+ * The value of @id in the state @st at a loop header: every SCEV register is its header phi there,
+ * (REG r) is r. All 64 bits are wanted.
+ */
+static bool eval_expr(struct bpf_verifier_env *env, struct scev *scev,
+		      struct bpf_func_state *st, u32 id, u32 lvl, struct scev_value *result)
+{
+	struct expr *e = &scev->exprs[id];
+	struct scev_value rval;
+	u32 regno;
 	s64 imm;
 
+	result->ptr_reg = -1;
+	result->bits = 0;
 	if (is_reg(scev, id, &regno)) {
-		reg = scev_reg_for_read(env, st, regno);
-		if (!reg || reg->type == NOT_INIT)
-			return false;
-		*scalar_of(result) = *scalar_of(reg);
-		result->ptr_reg = reg->type == SCALAR_VALUE ? -1 : (int)regno;
-		return true;
-	} else if (is_zext32(scev, id, &l) && is_reg(scev, l, &regno)) {
-		reg = scev_reg_for_spill32(st, regno);
-		if (!reg)
-			return false;
-		*scalar_of(result) = *scalar_of(reg);
-		scalar_zext32(scalar_of(result));
-		result->ptr_reg = -1;
-		return true;
+		eval_reg(env, st, regno, result);
 	} else if (is_imm(scev, id, &imm)) {
-		scalar_set_const(scalar_of(result), imm);
-		result->ptr_reg = -1;
-		return true;
-	} else if (is_add(scev, id, &l, &r) &&
-		   eval_expr(env, scev, st, l, &lval) &&
-		   eval_expr(env, scev, st, r, &rval)) {
-		return scev_value_add(env, st, &lval, &rval, result);
+		scev_value_set_const(result, imm);
+	} else if (op_params_num(e->op) && !e->def.set && lvl < EXPR_STACK_DEPTH) {
+		eval_expr(env, scev, st, e->params[0], lvl + 1, result);
+		if (op_params_num(e->op) == 2)
+			eval_expr(env, scev, st, e->params[1], lvl + 1, &rval);
+		scev_value_alu(e->op, result, &rval);
 	}
-	return false;
+	return result->bits == 64;
 }
 
 /* The range of @v. With @low32 that of its low 32 bits, in the upper half of a u64. */
@@ -3893,7 +3969,7 @@ static void latch_iv_range(struct bpf_verifier_env *env, struct bpf_func_state *
 	l = latch->base_expr;
 	if (!is_reg_or_low32(scev, l, &regno)) {
 		if (!is_add(scev, latch->base_expr, &l, &r) || !is_reg_or_low32(scev, l, &regno) ||
-		    !eval_expr(env, scev, st, r, &off) || !cnum64_is_const(off.r64) ||
+		    !eval_expr(env, scev, st, r, 0, &off) || !cnum64_is_const(off.r64) ||
 		    off.ptr_reg >= 0)
 			return;
 		c = off.r64.base;
@@ -3950,9 +4026,9 @@ static bool compute_max_iters(struct bpf_verifier_env *env,
 
 	iters->iv_reg = -1;
 
-	if (!eval_expr(env, scev, st, latch->base_expr, &initial_val) ||
-	    !eval_expr(env, scev, st, latch->step_expr, &step_val) ||
-	    !eval_expr(env, scev, st, latch->bound_expr, &bound_val))
+	if (!eval_expr(env, scev, st, latch->base_expr, 0, &initial_val) ||
+	    !eval_expr(env, scev, st, latch->step_expr, 0, &step_val) ||
+	    !eval_expr(env, scev, st, latch->bound_expr, 0, &bound_val))
 		return false;
 
 	if (step_val.ptr_reg >= 0) {
@@ -3982,7 +4058,8 @@ static bool compute_max_iters(struct bpf_verifier_env *env,
 		if (!is_reg_or_low32(scev, l, &r) && !is_add(scev, latch->base_expr, &l, &r))
 			return false;
 		if (cnum64_umax(initial_val.r64) > U32_MAX &&
-		    (!eval_expr(env, scev, st, l, &reg_val) || cnum64_umax(reg_val.r64) > U32_MAX))
+		    (!eval_expr(env, scev, st, l, 0, &reg_val) ||
+		     cnum64_umax(reg_val.r64) > U32_MAX))
 			return false;
 		if (!bound_of_zext32(latch->op, &bound_val))
 			return false;
