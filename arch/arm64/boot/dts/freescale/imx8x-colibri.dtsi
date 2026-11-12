@@ -6,6 +6,11 @@
 #include "dt-bindings/pwm/pwm.h"
 
 / {
+	aliases {
+		spi0 = &lpspi2;
+		/delete-property/ spi2;
+	};
+
 	backlight: backlight {
 		compatible = "pwm-backlight";
 		pinctrl-names = "default";
