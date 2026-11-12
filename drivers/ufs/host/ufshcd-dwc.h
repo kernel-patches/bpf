@@ -12,7 +12,15 @@
 
 #include <ufs/ufshcd.h>
 
+/* ufshcd vendor specific register */
+#define REG_BUSTHRTL		0xc0
+#define LP_AH8_POWER_GATING_EN	 BIT(17)
+#define LP_POWER_GATING_EN	 BIT(16)
+#define CLK_GATING_EN		 BIT(12)
+
 /* RMMI Attributes */
+#define RXSQCONTROL		0x8009
+#define RXRHOLDCTRLOPT		0x8013
 #define CBREFCLKCTRL2		0x8132
 #define CBCRCTRL		0x811F
 #define CBC10DIRECTCONF2	0x810E
@@ -24,6 +32,8 @@
 #define CBCREGRDLSB		0x811A
 #define CBCREGRDMSB		0x811B
 #define CBCREGRDWRSEL		0x811C
+#define EXT_COARSE_TUNE_RATEA	0x814D
+#define EXT_COARSE_TUNE_RATEB	0x814E
 
 #define CBREFREFCLK_GATE_OVR_EN		BIT(7)
 
@@ -32,12 +42,15 @@
 #define MRX_FSM_STATE		0xC1
 
 /* M-PHY registers */
+#define MPLL_SKIPCAL_COARSE_TUNE	0x28
 #define RX_OVRD_IN_1(n)		(0x3006 + ((n) * 0x100))
 #define RX_PCS_OUT(n)		(0x300F + ((n) * 0x100))
 #define FAST_FLAGS(n)		(0x401C + ((n) * 0x100))
+#define RX_ADAPT_DFE(n)		(0x401E + ((n) * 0x100))
 #define RX_AFE_ATT_IDAC(n)	(0x4000 + ((n) * 0x100))
 #define RX_AFE_CTLE_IDAC(n)	(0x4001 + ((n) * 0x100))
 #define FW_CALIB_CCFG(n)	(0x404D + ((n) * 0x100))
+#define RAWAONLANEN_DIG_MPLLA_COARSE_TUNE	0x7014
 
 /* Tx/Rx FSM state */
 enum rx_fsm_state {
@@ -62,6 +75,11 @@ struct ufshcd_dme_attr_val {
 	u32 attr_sel;
 	u32 mib_val;
 	u8 peer;
+};
+
+struct ufs_dwc_phy_pair_data {
+	u32 addr;
+	u32 value;
 };
 
 int ufshcd_dwc_link_startup_notify(struct ufs_hba *hba,
