@@ -5531,6 +5531,20 @@ bpf_object__populate_internal_map(struct bpf_object *obj, struct bpf_map *map)
 
 static void bpf_map__destroy(struct bpf_map *map);
 
+/* The kernel refuses these map types without BTF */
+static bool map_type_needs_btf(enum bpf_map_type type)
+{
+	switch (type) {
+	case BPF_MAP_TYPE_SK_STORAGE:
+	case BPF_MAP_TYPE_INODE_STORAGE:
+	case BPF_MAP_TYPE_TASK_STORAGE:
+	case BPF_MAP_TYPE_CGRP_STORAGE:
+		return true;
+	default:
+		return false;
+	}
+}
+
 static int bpf_object__create_map(struct bpf_object *obj, struct bpf_map *map, bool is_inner)
 {
 	LIBBPF_OPTS(bpf_map_create_opts, create_attr);
@@ -5631,7 +5645,8 @@ static int bpf_object__create_map(struct bpf_object *obj, struct bpf_map *map, b
 					def->key_size, def->value_size,
 					def->max_entries, &create_attr);
 	}
-	if (map_fd < 0 && (create_attr.btf_key_type_id || create_attr.btf_value_type_id)) {
+	if (map_fd < 0 && (create_attr.btf_key_type_id || create_attr.btf_value_type_id) &&
+	    !map_type_needs_btf(def->type)) {
 		err = -errno;
 		pr_warn("Error in bpf_create_map_xattr(%s): %s. Retrying without BTF.\n",
 			map->name, errstr(err));
