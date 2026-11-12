@@ -12,6 +12,14 @@ KDIR ?= $(if $(KMOD_O_VALID),$(SRCTREE_KDIR), \
 	    $(if $(wildcard $(SRCTREE_KDIR)/Module.symvers),$(SRCTREE_KDIR), \
 		/lib/modules/$(shell uname -r)/build))
 
+# kbuild runs resolve_btfids with the flags which the config of the kernel asks
+# for, and --fmodret_scan needs a resolve_btfids which is linked with LLVM. The
+# one of the kernel build is. The one of the selftests, which bpf/Makefile passes
+# down, is not: use it only if the kernel build has none.
+ifneq ($(wildcard $(or $(KMOD_O_VALID),$(KDIR))/tools/bpf/resolve_btfids/resolve_btfids),)
+MAKEOVERRIDES := $(filter-out RESOLVE_BTFIDS=%,$(MAKEOVERRIDES))
+endif
+
 ifeq ($(V),1)
 Q =
 else
