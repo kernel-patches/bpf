@@ -3974,6 +3974,13 @@ vm_fault_t filemap_map_pages(struct vm_fault *vmf,
 		unsigned long end;
 		vm_fault_t map_ret;
 
+		/* A lower index could move vmf->pte out of its page table. */
+		if (unlikely(xas.xa_index < last_pgoff)) {
+			folio_unlock(folio);
+			folio_put(folio);
+			break;
+		}
+
 		if (unlikely(folio_ref_count_over_limit(folio))) {
 			folio_ref_dec(folio);
 			goto next;
@@ -4398,6 +4405,16 @@ retry:
 
 		if (fatal_signal_pending(current)) {
 			status = -EINTR;
+			break;
+		}
+
+		/*
+		 * Some filesystems can extend i_size even when nothing was copied.
+		 * Prefault writes beyond EOF to catch unreadable source buffers.
+		 */
+		if (unlikely(pos > i_size_read(mapping->host)) &&
+		    fault_in_iov_iter_readable(i, bytes) == bytes) {
+			status = -EFAULT;
 			break;
 		}
 
