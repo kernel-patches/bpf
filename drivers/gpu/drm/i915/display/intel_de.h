@@ -7,15 +7,24 @@
 #define __INTEL_DE_H__
 
 #include "intel_display_core.h"
-#include "intel_dmc_wl.h"
 #include "intel_dsb.h"
 #include "intel_uncore.h"
 #include "intel_uncore_trace.h"
 
+struct intel_mmio_funcs {
+	u32 (*read)(struct intel_display *display, intel_reg_t reg);
+	void (*write)(struct intel_display *display, intel_reg_t reg, u32 val);
+	bool (*check_for_unclaimed_mmio)(struct intel_display *display);
+};
+
 static inline struct intel_uncore *__to_uncore(struct intel_display *display)
 {
-	return to_intel_uncore(display->drm);
+	return display->mmio.uncore;
 }
+
+void intel_de_init(struct intel_display *display);
+bool intel_de_unclaimed_mmio_detected(struct intel_display *display);
+bool intel_de_arm_unclaimed_mmio_detection(struct intel_display *display);
 
 u8 intel_de_read8(struct intel_display *display, intel_reg_t reg);
 void intel_de_write8(struct intel_display *display, intel_reg_t reg, u8 val);
@@ -24,33 +33,7 @@ u16 intel_de_read16(struct intel_display *display, intel_reg_t reg);
 static inline u32
 intel_de_read(struct intel_display *display, intel_reg_t reg)
 {
-	u32 val;
-
-	intel_dmc_wl_get(display, reg);
-
-	val = intel_uncore_read(__to_uncore(display), reg);
-
-	intel_dmc_wl_put(display, reg);
-
-	return val;
-}
-
-static inline u64
-intel_de_read64_2x32_volatile(struct intel_display *display,
-			      intel_reg_t lower_reg, intel_reg_t upper_reg)
-{
-	u64 val;
-
-	intel_dmc_wl_get(display, lower_reg);
-	intel_dmc_wl_get(display, upper_reg);
-
-	val = intel_uncore_read64_2x32(__to_uncore(display), lower_reg,
-				       upper_reg);
-
-	intel_dmc_wl_put(display, upper_reg);
-	intel_dmc_wl_put(display, lower_reg);
-
-	return val;
+	return display->mmio.funcs->read(display, reg);
 }
 
 static inline u64
@@ -68,35 +51,25 @@ intel_de_read64_2x32(struct intel_display *display, intel_reg_t reg)
 static inline void
 intel_de_posting_read(struct intel_display *display, intel_reg_t reg)
 {
-	intel_dmc_wl_get(display, reg);
-
-	intel_uncore_posting_read(__to_uncore(display), reg);
-
-	intel_dmc_wl_put(display, reg);
+	intel_de_read(display, reg);
 }
 
 static inline void
 intel_de_write(struct intel_display *display, intel_reg_t reg, u32 val)
 {
-	intel_dmc_wl_get(display, reg);
-
-	intel_uncore_write(__to_uncore(display), reg, val);
-
-	intel_dmc_wl_put(display, reg);
+	display->mmio.funcs->write(display, reg, val);
 }
 
 static inline u32
 intel_de_rmw(struct intel_display *display, intel_reg_t reg, u32 clear, u32 set)
 {
-	u32 val;
+	u32 old, val;
 
-	intel_dmc_wl_get(display, reg);
+	old = intel_de_read(display, reg);
+	val = (old & ~clear) | set;
+	intel_de_write(display, reg, val);
 
-	val = intel_uncore_rmw(__to_uncore(display), reg, clear, set);
-
-	intel_dmc_wl_put(display, reg);
-
-	return val;
+	return old;
 }
 
 int intel_de_wait_us(struct intel_display *display, intel_reg_t reg,
@@ -158,16 +131,27 @@ intel_de_rmw_fw(struct intel_display *display, intel_reg_t reg, u32 clear, u32 s
 	return old;
 }
 
-static inline u32
-intel_de_read_notrace(struct intel_display *display, intel_reg_t reg)
+static inline u64
+intel_de_read64_2x32_volatile_fw(struct intel_display *display,
+				 intel_reg_t lower_reg, intel_reg_t upper_reg)
 {
-	return intel_uncore_read_notrace(__to_uncore(display), reg);
+	u32 old_upper, upper, lower;
+	int loop = 0;
+
+	upper = intel_de_read_fw(display, upper_reg);
+	do {
+		old_upper = upper;
+		lower = intel_de_read_fw(display, lower_reg);
+		upper = intel_de_read_fw(display, upper_reg);
+	} while (upper != old_upper && loop++ < 2);
+
+	return (u64)upper << 32 | lower;
 }
 
 static inline void
-intel_de_write_notrace(struct intel_display *display, intel_reg_t reg, u32 val)
+intel_de_posting_read_fw(struct intel_display *display, intel_reg_t reg)
 {
-	intel_uncore_write_notrace(__to_uncore(display), reg, val);
+	intel_de_read_fw(display, reg);
 }
 
 static __always_inline void

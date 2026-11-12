@@ -238,8 +238,6 @@ static int i915_driver_early_probe(struct drm_i915_private *dev_priv)
 
 	intel_step_init(dev_priv);
 
-	intel_uncore_mmio_debug_init_early(dev_priv);
-
 	spin_lock_init(&dev_priv->gpu_error.lock);
 
 	intel_sbi_init(display);
@@ -1025,8 +1023,6 @@ void i915_driver_shutdown(struct drm_i915_private *i915)
 
 	intel_irq_suspend(i915);
 
-	intel_dmc_suspend(display);
-
 	i915_gem_suspend(i915);
 
 	/*
@@ -1096,8 +1092,6 @@ static int i915_drm_suspend(struct drm_device *dev)
 	intel_opregion_suspend(display, opregion_target_state);
 
 	dev_priv->suspend_count++;
-
-	intel_dmc_suspend(display);
 
 	enable_rpm_wakeref_asserts(&dev_priv->runtime_pm);
 
@@ -1285,10 +1279,14 @@ static int i915_drm_resume_early(struct drm_device *dev)
 		drm_err(&dev_priv->drm,
 			"Resume prepare failed: %d, continuing anyway\n", ret);
 
+	intel_display_driver_mmio_resume_early(display);
+
 	for_each_gt(gt, dev_priv, i)
 		intel_gt_resume_early(gt);
 
 	intel_display_driver_pm_resume_early(display);
+
+	intel_clock_gating_resume(&dev_priv->drm);
 
 	enable_rpm_wakeref_asserts(&dev_priv->runtime_pm);
 
@@ -1533,6 +1531,8 @@ static int i915_pm_runtime_suspend(struct device *kdev)
 
 		intel_irq_resume(dev_priv);
 
+		intel_clock_gating_resume(&dev_priv->drm);
+
 		for_each_gt(gt, dev_priv, i)
 			intel_gt_runtime_resume(gt);
 
@@ -1546,9 +1546,7 @@ static int i915_pm_runtime_suspend(struct device *kdev)
 	enable_rpm_wakeref_asserts(rpm);
 	intel_runtime_pm_driver_release(rpm);
 
-	if (intel_uncore_arm_unclaimed_mmio_detection(&dev_priv->uncore))
-		drm_err(&dev_priv->drm,
-			"Unclaimed access detected prior to suspending\n");
+	intel_display_driver_mmio_suspend_late(display);
 
 	/*
 	 * FIXME: Temporary hammer to avoid freezing the machine on our DGFX
@@ -1587,9 +1585,7 @@ static int i915_pm_runtime_resume(struct device *kdev)
 	if (root_pdev)
 		pci_d3cold_enable(root_pdev);
 
-	if (intel_uncore_unclaimed_mmio(&dev_priv->uncore))
-		drm_dbg(&dev_priv->drm,
-			"Unclaimed access during suspend, bios?\n");
+	intel_display_driver_mmio_resume_early(display);
 
 	intel_display_driver_pm_runtime_resume_early(display);
 
@@ -1599,6 +1595,8 @@ static int i915_pm_runtime_resume(struct device *kdev)
 		intel_uncore_runtime_resume(gt->uncore);
 
 	intel_irq_resume(dev_priv);
+
+	intel_clock_gating_resume(&dev_priv->drm);
 
 	/*
 	 * No point of rolling back things in case of an error, as the best

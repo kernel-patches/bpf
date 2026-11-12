@@ -39,13 +39,6 @@ struct intel_runtime_pm;
 struct intel_uncore;
 struct intel_gt;
 
-struct intel_uncore_mmio_debug {
-	spinlock_t lock; /** lock is also taken in irq contexts. */
-	int unclaimed_mmio_check;
-	int saved_mmio_check;
-	u32 suspend_count;
-};
-
 enum forcewake_domain_id {
 	FW_DOMAIN_ID_RENDER = 0,
 	FW_DOMAIN_ID_GT,        /* also includes blitter engine */
@@ -144,8 +137,6 @@ struct intel_uncore {
 
 	unsigned int flags;
 #define UNCORE_HAS_FORCEWAKE		BIT(0)
-#define UNCORE_HAS_FPGA_DBG_UNCLAIMED	BIT(1)
-#define UNCORE_HAS_DBG_UNCLAIMED	BIT(2)
 #define UNCORE_HAS_FIFO			BIT(3)
 #define UNCORE_NEEDS_FLR_ON_FINI	BIT(4)
 
@@ -182,8 +173,6 @@ struct intel_uncore {
 	} *fw_domain[FW_DOMAIN_ID_COUNT];
 
 	unsigned int user_forcewake_count;
-
-	struct intel_uncore_mmio_debug *debug;
 };
 
 /* Iterate over initialised fw domains */
@@ -198,18 +187,6 @@ static inline bool
 intel_uncore_has_forcewake(const struct intel_uncore *uncore)
 {
 	return uncore->flags & UNCORE_HAS_FORCEWAKE;
-}
-
-static inline bool
-intel_uncore_has_fpga_dbg_unclaimed(const struct intel_uncore *uncore)
-{
-	return uncore->flags & UNCORE_HAS_FPGA_DBG_UNCLAIMED;
-}
-
-static inline bool
-intel_uncore_has_dbg_unclaimed(const struct intel_uncore *uncore)
-{
-	return uncore->flags & UNCORE_HAS_DBG_UNCLAIMED;
 }
 
 static inline bool
@@ -230,15 +207,12 @@ intel_uncore_set_flr_on_fini(struct intel_uncore *uncore)
 	return uncore->flags |= UNCORE_NEEDS_FLR_ON_FINI;
 }
 
-void intel_uncore_mmio_debug_init_early(struct drm_i915_private *i915);
 void intel_uncore_init_early(struct intel_uncore *uncore,
 			     struct intel_gt *gt);
 int intel_uncore_setup_mmio(struct intel_uncore *uncore, phys_addr_t phys_addr);
 int intel_uncore_init_mmio(struct intel_uncore *uncore);
 void intel_uncore_prune_engine_fw_domains(struct intel_uncore *uncore,
 					  struct intel_gt *gt);
-bool intel_uncore_unclaimed_mmio(struct intel_uncore *uncore);
-bool intel_uncore_arm_unclaimed_mmio_detection(struct intel_uncore *uncore);
 void intel_uncore_cleanup_mmio(struct intel_uncore *uncore);
 void intel_uncore_fini_mmio(struct drm_device *dev, void *data);
 void intel_uncore_suspend(struct intel_uncore *uncore);
