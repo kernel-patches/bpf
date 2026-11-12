@@ -703,16 +703,22 @@ static int __init kho_parse_bootmem_size(char *p)
 	if (p[len - 1] == '%') {
 		/* unsigned int max is 4,294,967,295, 10 chars */
 		char s_scale[11] = {};
+		unsigned int scale;
 		int ret = 0;
 
 		if (len > ARRAY_SIZE(s_scale))
 			return -EINVAL;
 
 		memcpy(s_scale, p, len - 1);
-		ret = kstrtouint(s_scale, 10, &bootmem_scale);
-		if (!ret)
-			pr_notice("bootmem scale is %d%%\n", bootmem_scale);
-		return ret;
+		ret = kstrtouint(s_scale, 10, &scale);
+		if (ret)
+			return ret;
+		if (!scale)
+			return -EINVAL;
+
+		bootmem_scale = scale;
+		pr_notice("bootmem scale is %d%%\n", bootmem_scale);
+		return 0;
 	}
 
 	/* parse ll[KMG],mm[KMG],nn[KMG] */
