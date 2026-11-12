@@ -2929,7 +2929,7 @@ static bool is_txschq_hierarchy_valid(struct rvu *rvu, u16 pcifunc, int blkaddr,
 	if (!is_valid_txschq(rvu, blkaddr, lvl, pcifunc, schq))
 		return false;
 
-	parent = (regval >> 16) & 0x1FF;
+	parent = (regval >> 16) & (is_cn20k(rvu->pdev) ? 0x7FF : 0x1FF);
 	/* Validate MDQ's TL4 parent */
 	if (regbase == NIX_AF_MDQX_PARENT(0) &&
 	    !is_valid_txschq(rvu, blkaddr, NIX_TXSCH_LVL_TL4, pcifunc, parent))
@@ -3023,9 +3023,9 @@ static void nix_tl1_default_cfg(struct rvu *rvu, struct nix_hw *nix_hw,
 }
 
 /* Register offset - [15:0]
- * Scheduler Queue number - [25:16]
+ * Scheduler Queue number - [26:16]
  */
-#define NIX_TX_SCHQ_MASK	GENMASK_ULL(25, 0)
+#define NIX_TX_SCHQ_MASK	GENMASK_ULL(26, 0)
 
 static int nix_txschq_cfg_read(struct rvu *rvu, struct nix_hw *nix_hw,
 			       int blkaddr, struct nix_txschq_config *req,
