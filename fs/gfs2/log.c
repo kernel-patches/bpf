@@ -65,23 +65,37 @@ unsigned int gfs2_struct2blk(struct gfs2_sbd *sdp, unsigned int nstruct)
 }
 
 /**
- * gfs2_remove_from_ail - Remove an entry from the ail lists, updating counters
+ * __gfs2_remove_from_ail - Remove an entry from the ail lists
  * @bd: The gfs2_bufdata to remove
  *
  * The ail lock _must_ be held when calling this function
  *
  */
 
-static void gfs2_remove_from_ail(struct gfs2_bufdata *bd)
+static void __gfs2_remove_from_ail(struct gfs2_bufdata *bd)
 {
 	struct gfs2_glock *gl = bd->bd_gl;
 
 	bd->bd_tr = NULL;
 	list_del_init(&bd->bd_ail_st_list);
 	list_del_init(&bd->bd_ail_gl_list);
-	if (atomic_dec_and_test(&gl->gl_ail_count))
-		gfs2_glock_put_async(gl);
+	atomic_dec(&gl->gl_ail_count);
 	brelse(bd->bd_bh);
+}
+
+static void gfs2_remove_from_ail(struct gfs2_bufdata *bd)
+{
+	__gfs2_remove_from_ail(bd);
+	if (list_empty(&bd->bd_list)) {
+		struct gfs2_glock *gl = bd->bd_gl;
+
+		/*
+		 * bd is not part of a uncommitted transaction, and it is still
+		 * attached to its bh.
+		 */
+		if (atomic_dec_and_test(&gl->gl_bufdata_count))
+			gfs2_glock_put_async(gl);
+	}
 }
 
 /**
@@ -765,11 +779,10 @@ void gfs2_add_revoke(struct gfs2_sbd *sdp, struct gfs2_bufdata *bd)
 	struct gfs2_glock *gl = bd->bd_gl;
 
 	sdp->sd_log_num_revoke++;
-	if (atomic_inc_return(&gl->gl_revokes) == 1)
-		gfs2_glock_hold(gl);
+	atomic_inc(&gl->gl_revokes);
 	bh->b_private = NULL;
 	bd->bd_blkno = bh->b_blocknr;
-	gfs2_remove_from_ail(bd); /* drops ref on bh */
+	__gfs2_remove_from_ail(bd); /* drops ref on bh */
 	bd->bd_bh = NULL;
 	set_bit(GLF_LFLUSH, &gl->gl_flags);
 	list_add(&bd->bd_list, &sdp->sd_log_revokes);
@@ -780,10 +793,10 @@ void gfs2_glock_remove_revoke(struct gfs2_bufdata *bd)
 	struct gfs2_glock *gl = bd->bd_gl;
 
 	list_del_init(&bd->bd_list);
-	if (atomic_dec_and_test(&gl->gl_revokes)) {
+	if (atomic_dec_and_test(&gl->gl_revokes))
 		clear_bit(GLF_LFLUSH, &gl->gl_flags);
+	if (atomic_dec_and_test(&gl->gl_bufdata_count))
 		gfs2_glock_put_async(gl);
-	}
 	kmem_cache_free(gfs2_bufdata_cachep, bd);
 }
 
@@ -1044,6 +1057,10 @@ void gfs2_remove_from_journal(struct buffer_head *bh, int meta)
 			else
 				 gfs2_remove_from_ail(bd);
 		} else if (was_pinned) {
+			struct gfs2_glock *gl = bd->bd_gl;
+
+			if (atomic_dec_and_test(&gl->gl_bufdata_count))
+				gfs2_glock_put_async(gl);
 			bh->b_private = NULL;
 			kmem_cache_free(gfs2_bufdata_cachep, bd);
 		} else if (!list_empty(&bd->bd_ail_st_list) &&

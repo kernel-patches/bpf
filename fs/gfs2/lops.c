@@ -57,6 +57,13 @@ void gfs2_pin(struct gfs2_sbd *sdp, struct buffer_head *bh)
 	spin_lock(&sdp->sd_ail_lock);
 	if (bd->bd_tr)
 		list_move(&bd->bd_ail_st_list, &bd->bd_tr->tr_ail2_list);
+	else {
+		struct gfs2_glock *gl = bd->bd_gl;
+
+		/* bd is attached to bh, so it cannot be a revoke. */
+		if (atomic_inc_return(&gl->gl_bufdata_count) == 1)
+			gfs2_glock_hold(gl);
+	}
 	spin_unlock(&sdp->sd_ail_lock);
 	get_bh(bh);
 	atomic_inc(&sdp->sd_log_pinned);
@@ -121,8 +128,7 @@ static void gfs2_unpin(struct gfs2_sbd *sdp, struct buffer_head *bh,
 	} else {
 		struct gfs2_glock *gl = bd->bd_gl;
 		list_add(&bd->bd_ail_gl_list, &gl->gl_ail_list);
-		if (atomic_inc_return(&gl->gl_ail_count) == 1)
-			gfs2_glock_hold(gl);
+		atomic_inc(&gl->gl_ail_count);
 	}
 	bd->bd_tr = tr;
 	list_add(&bd->bd_ail_st_list, &tr->tr_ail1_list);
