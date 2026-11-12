@@ -3582,6 +3582,106 @@ LINKED(index_is_empty, VALID __flag(BPF_F_TEST_REG_INVARIANTS),
 	"l_%=: if r7 & 2 goto m_%=; goto out_%=; m_%=: r1 += 1;" USE_R6)
 
 /*
+ *	n = hdr.len; m = n + 1; if ((u32)(n - 1) > 61) return 0; c = buf[m];
+ * n is a u16. r3 and r4 are r2 + a constant modulo 2^32, and the slot + a constant modulo 2^16.
+ * r3 does not fit in a u16.
+ */
+#define U16_FILL(m)								\
+	"*(u64 *)(r10 - 8) = r8; r2 = *(u16 *)(r10 - 8); r3 = " m "; r3 += 1; w4 = w2;"	\
+	"w4 += -1; if r4 > 61 goto out_%=; r1 = r6; r1 += r3;"
+
+LINKED(outermost_common_base, VALID, U16_FILL("r2"))
+LINKED(innermost_common_base, UNBOUND, U16_FILL("r8"))
+/*
+ *	u8 n; .. if (n > 3) return 0; c = buf[n * 16];
+ * n is in a 64-bit register, the compiler tests a masked copy. r2 is (u8)r8. If r8 fits in a u8 too
+ * the jump bounds it.
+ */
+#define MASKED_COPY(shift)							\
+	"r8 >>= " shift "; r2 = r8; r2 &= 255; if r2 > 3 goto out_%=; r8 <<= 4; r1 = r6; r1 += r8;"
+
+LINKED(masked_copy_tested, VALID, MASKED_COPY("56"))
+LINKED(masked_copy_tested_256_is_0, MAP_OOB, MASKED_COPY("55"))
+/*
+ *	p = &hdr[n]; if (n >= 4) return 0; c = p->type;
+ * sizeof(hdr[0]) is 20, n is a u8 in a slot, hdr is live in a slot. The jump bounds r2. The
+ * expression of r1, *fp-16 + (u8)*fp-24 * 20, is evaluated in the state after the jump.
+ */
+#define HDR(cnt)								\
+	"*(u64 *)(r10 - 16) = r6; *(u64 *)(r10 - 24) = r8; r2 = *(u64 *)(r10 - 24); r2 &= 255;"	\
+	"r3 = r2; r3 *= 20; r1 = *(u64 *)(r10 - 16); r1 += r3; r3 = " cnt ";"	\
+	"if r3 > r2 goto l_%=; goto out_%=; l_%=: r0 = *(u64 *)(r10 - 16);"
+
+LINKED(scaled_index_tested_after_the_add, VALID, HDR("4"))
+LINKED(scaled_index_tested_after_the_add_oob, MAP_OOB, HDR("5"))
+/* both branches evaluate in their own state: r7 is 8 or more in the one, less in the other */
+LINKED(scaled_index_in_the_other_branch, MAP_OOB,
+	"r2 = r7; r2 *= 8; r1 = r6; r1 += r2; if r7 > 7 goto l_%=; goto out_%=; l_%=:" USE_R6)
+LINKED(scaled_index_is_32bit, VALID,
+	"w2 = w7; w2 *= 16; r1 = r6; r1 += r2; if r7 > 3 goto out_%=;" USE_R6)
+/* w2 wraps: r8 is 0x10000003 */
+LINKED(scaled_index_is_32bit_and_wraps, __failure,
+	"r8 >>= 32; w2 = w8; w2 *= 16; r3 = r8; r3 *= 16; if r2 > 48 goto out_%=;"
+	"r1 = r6; r1 += r3;")
+LINKED(scalar_is_evaluated, VALID,
+	"r3 = r7; r3 *= 8; r2 = 63; r2 -= r3; if r7 > 7 goto out_%=; r1 = r6; r1 += r2;")
+LINKED(scalar_is_evaluated_oob, __failure,
+	"r3 = r7; r3 *= 8; r2 = 63; r2 -= r3; if r7 > 8 goto out_%=; r1 = r6; r1 += r2;")
+/* the operand r8 + 1 is dead, its leader is r8 */
+LINKED(leader_plus_constant, VALID,
+	"r4 = r8; r4 += 1; r2 = r4; r2 *= 8; r4 = 0; if r8 > 6 goto out_%=; r1 = r6; r1 += r2;")
+LINKED(leader_plus_constant_oob, MAP_OOB,
+	"r4 = r8; r4 += 1; r2 = r4; r2 *= 8; r4 = 0; if r8 > 7 goto out_%=; r1 = r6; r1 += r2;")
+LINKED(shifted_index, VALID,
+	"r2 = r8; r2 >>= 2; r1 = r6; r1 += r2; if r8 > 255 goto out_%=;" USE_R6)
+/* r8 is dead at the jump. Its leader r3 holds 32 or 8 bits of it: r8 is 1 << 32, 1 << 8 */
+LINKED(remainder_of_low_32_bits, MAP_OOB,
+	"w3 = w8; r2 = r8; r2 %%= 100; r8 = 0; if r3 > 63 goto out_%=; r1 = r6; r1 += r2;")
+/* r8 >> 32 has a leader and no value */
+LINKED(operand_has_a_leader_but_no_value, __failure __msg("R1 unbounded memory access"),
+	"w3 = w8; r2 = r8; r2 >>= 32; r2 += r7; r8 = 0; if r7 != 0 goto out_%=;"
+	"r1 = r6; r1 += r2; r0 = r3;")
+/* the bound is filled from 8 bytes: a 32-bit spill below 4 bytes that nobody knows */
+LINKED(bound_of_loop_above_a_32bit_spill, UNBOUND,
+	"*(u64 *)(r10 - 16) = r8; r3 = 5; *(u32 *)(r10 - 16) = r3; r1 = 0;"
+	"l_%=: r2 = *(u64 *)(r10 - 16); r1 += 1; if r1 < r2 goto l_%=; r1 *= 12; r1 += r6;")
+LINKED(zero_extension_of_low_8_bits, MAP_OOB,
+	"r3 = r8; r3 &= 0xff; r2 = r8; r2 &= 0xffff; r2 *= 8; r8 = 0; if r3 > 7 goto out_%=;"
+	"r1 = r6; r1 += r2;")
+/* Two slots have the expression (spill32 r8). Their upper halves differ: r3 is 1 << 32 */
+LINKED(two_partial_spills_of_one_value, __failure,
+	"r4 = 0; *(u64 *)(r10 - 16) = r4; *(u32 *)(r10 - 16) = r8; r4 = 0x100000000 ll;"
+	"*(u64 *)(r10 - 24) = r4; *(u32 *)(r10 - 24) = r8; r2 = *(u64 *)(r10 - 16);"
+	"r3 = *(u64 *)(r10 - 24); if r2 > 63 goto out_%=; r1 = r6; r1 += r3;")
+/* r3 is r6 + 0, 8 .. 56. r3 + r8 is not a multiple of 8: 8 bytes at 63 */
+LINKED(step_of_the_address_base, MAP_OOB,
+	"r2 = r7; r2 &= 7; r2 <<= 3; r3 = r6; r3 += r2; r8 >>= 32; r1 = r3; r1 += r8;"
+	"if r8 > 7 goto out_%=; r0 = *(u64 *)(r1 + 0); r0 = *(u8 *)(r3 + 0);")
+/* The divisor is a range that has 0: the quotient is not known, whatever the jump tells */
+LINKED(dividend_tested, VALID,
+	"r3 = r7; r2 = r8; r2 s/= r3; if r8 > 7 goto out_%=; r2 &= 63; r1 = r6; r1 += r2; r0 = r3;")
+/* r7 is another value at the jump than in r9 */
+LINKED(operand_is_overwritten, MAP_OOB,
+	"r9 = r7; r9 *= 8; call %[bpf_get_prandom_u32]; r7 = r0; r7 &= 255;"
+	"if r7 > 7 goto out_%=; r1 = r6; r1 += r9;")
+/* a pointer is evaluated below an add only */
+LINKED(pointer_minus_index, __failure,
+	"r1 = r6; r1 += 63; r1 -= r7; if r7 > 63 goto out_%=;" USE_R6)
+/* r3 is an address as a scalar. r6 + r7 * 2 has the offset [0, 14]: that is not the range of r3 */
+LINKED(offset_of_pointer_is_not_scalar, UNBOUND,
+	"r2 = r7; r2 *= 2; r5 = r6; r5 += r2; r3 = r5; r3 = le64 r3; if r7 > 7 goto out_%=;"
+	"r1 = r6; r1 += r3;")
+LINKED(product_of_pointer, UNBOUND,
+	"r5 = r6; r5 += r7; r3 = r5; r3 = le64 r3; r3 *= 2; if r7 > 7 goto out_%=;"
+	"r1 = r6; r1 += r3;")
+/* As index_is_constant_that_the_add_refuses: r7 + r8 * 16 is r10 - 32 + 0x100000010 */
+LINKED_SEC("tc", scaled_index_that_the_add_refuses,
+	__failure __msg("dynptr has to be at a constant offset"),
+	"r1 = r9; r2 = 0; r3 = r10; r3 += -16; call %[bpf_dynptr_from_skb];"
+	"r8 >>= 8; r7 = r10; r7 += -32; r3 = r8; r3 *= 16; r1 = r7; r1 += r3; r2 = 0x10000001 ll;"
+	"if r8 != r2 goto out_%=; r2 = 0; r3 = r7; r4 = 0; call %[bpf_dynptr_slice_rdwr]; r1 = r6;")
+
+/*
  *	static void clamp(struct buf *b) { if (b->len > 63) b->len = 0; }
  *	clamp(&b); c = b.data[b.len];
  * The callee tests memory of its caller: the slot is refined. Not if it may have been written since
@@ -3612,6 +3712,14 @@ LINKED(callee_writes_next_field, VALID, CALL(store_next_and_clamp))
 /* another address base can be another name of the memory */
 CLAMP(store_alias_and_clamp, "*(u64 *)(r4 + 0) = r2;")
 LINKED(callee_writes_through_alias, __failure, CALL(store_alias_and_clamp))
+static __naked __noinline __used void clamp_through_r0(void)
+{
+	asm volatile (
+	"r0 = r1; r1 = 0; r3 = *(u64 *)(r0 + 0);"
+	"if r3 <= 63 goto +2; r3 = 0; *(u64 *)(r0 + 0) = r3; r0 = 0; exit;"
+	::: __clobber_all);
+}
+LINKED(callee_has_the_address_in_r0, VALID, CALL(clamp_through_r0))
 
 /*
  *	struct { char *buf; u64 len; } c = { buf, 0 };		bpf_loop(100, append, &c, 0);
