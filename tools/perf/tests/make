@@ -54,6 +54,7 @@ srctree := $(patsubst %/,%,$(dir $(srctree)))
 endif
 
 include $(srctree)/tools/scripts/Makefile.arch
+include $(srctree)/tools/scripts/utilities.mak
 
 # FIXME looks like x86 is the only arch running tests ;-)
 # we need some IS_(32/64) flag to make this generic
@@ -65,6 +66,7 @@ endif
 
 has = $(shell which $1 2>/dev/null)
 python_perf_so := $(shell $(MAKE) python_perf_target|grep "Target is:"|awk '{print $$3}')
+BPF_GCC ?= bpf-gcc
 
 # standard single make variable specified
 make_clean_all      := clean all
@@ -78,6 +80,8 @@ make_extra_tests    := EXTRA_TESTS=1
 make_no_jevents     := NO_JEVENTS=1
 make_jevents_all    := JEVENTS_ARCH=all
 make_no_bpf_skel    := BUILD_BPF_SKEL=0
+make_bpf_skel_clang := CLANG=$(CLANG) BPF_GCC=
+make_bpf_skel_bpf_gcc := BPF_GCC=$(BPF_GCC) CLANG=
 make_gen_vmlinux_h  := GEN_VMLINUX_H=1
 make_no_python_module := NO_PYTHON_MODULE=1
 make_no_scripts     := NO_PYTHON_MODULE=1
@@ -135,7 +139,8 @@ saved_OUTPUT_origin := $(origin OUTPUT)
 saved_OUTPUT := $(OUTPUT)
 override OUTPUT := $(FEATURE_OUTPUT)/
 FEATURE_DISPLAY_DEFERRED := 1
-FEATURE_TESTS :=
+FEATURE_TESTS := libelf zlib bpf libopenssl
+FEATURE_CHECK_CFLAGS-bpf = -I. -I$(srctree)/tools/include -I$(srctree)/tools/arch/$(SRCARCH)/include/uapi -I$(srctree)/tools/include/uapi
 include $(srctree)/tools/build/Makefile.feature
 
 # binutils 2_42 and newer have bfd_thread_init()
@@ -145,6 +150,26 @@ $(call feature_check,libbfd-threadsafe)
 # libraries of version 13 or newer, not just llvm-config.
 ifneq ($(call has,$(LLVM_CONFIG)),)
   $(call feature_check,llvm-perf)
+endif
+
+ifeq ($(feature-libelf)$(feature-zlib)$(feature-bpf)$(feature-libopenssl),1111)
+  ifneq ($(call get-executable,$(CLANG)),)
+    CLANG_VERSION := $(shell $(CLANG) --version | head -1 | sed 's/.*clang version \([[:digit:]]\+.[[:digit:]]\+.[[:digit:]]\+\).*/\1/g')
+    ifneq ($(call version-lt3,$(CLANG_VERSION),12.0.1),1)
+      $(call feature_check,clang-bpf-co-re)
+      ifeq ($(feature-clang-bpf-co-re),1)
+        have_clang_bpf := 1
+      endif
+    endif
+  endif
+  ifneq ($(call get-executable,$(BPF_GCC)),)
+    BPF_GCC_VERSION := $(shell $(BPF_GCC) -dumpfullversion 2>/dev/null)
+    ifneq ($(BPF_GCC_VERSION),)
+      ifneq ($(call version-lt3,$(BPF_GCC_VERSION),14.0.0),1)
+        have_bpf_gcc := 1
+      endif
+    endif
+  endif
 endif
 
 $(shell rm -rf -- "$(FEATURE_OUTPUT)")
@@ -185,6 +210,12 @@ run += make_extra_tests
 run += make_no_jevents
 run += make_jevents_all
 run += make_no_bpf_skel
+ifeq ($(have_clang_bpf),1)
+run += make_bpf_skel_clang
+endif
+ifeq ($(have_bpf_gcc),1)
+run += make_bpf_skel_bpf_gcc
+endif
 run += make_gen_vmlinux_h
 run += make_no_python_module
 run += make_no_scripts
@@ -325,6 +356,13 @@ test_make_clang_nondistro     := $(test_make_clang)
 test_make_clang_nondistro_O   := $(test_make_clang_O)
 endif
 
+test_make_no_bpf_skel         := test -x $(PERF_O)/perf && ($(PERF_O)/perf check -q feature bpf_skeletons; test $$? -eq 1)
+test_make_no_bpf_skel_O       := test -x $$TMP_O/perf && ($$TMP_O/perf check -q feature bpf_skeletons; test $$? -eq 1)
+test_make_bpf_skel_clang      := test -x $(PERF_O)/perf && $(PERF_O)/perf check -q feature bpf_skeletons
+test_make_bpf_skel_clang_O    := test -x $$TMP_O/perf && $$TMP_O/perf check -q feature bpf_skeletons
+test_make_bpf_skel_bpf_gcc    := test -x $(PERF_O)/perf && $(PERF_O)/perf check -q feature bpf_skeletons
+test_make_bpf_skel_bpf_gcc_O  := test -x $$TMP_O/perf && $$TMP_O/perf check -q feature bpf_skeletons
+
 test_make_python_perf_so_O    := test -f $$TMP_O/python/perf.so
 test_make_perf_o_O            := test -f $$TMP_O/perf.o
 test_make_util_map_o_O        := test -f $$TMP_O/util/map.o
@@ -457,7 +495,7 @@ $(FEATURES_DUMP_FILE_STATIC):
 # The clang tests exist to run feature detection with a compiler other than
 # the default one, so they have to do their own and are left out of both the
 # dependency and the 'FEATURES_DUMP=' append below.
-no_features_dump := make_clang make_clang_nondistro
+no_features_dump := make_clang make_clang_nondistro make_bpf_skel_clang make_bpf_skel_bpf_gcc
 no_features_dump += $(addsuffix _O,$(no_features_dump))
 
 # Add feature dump dependency for run/run_O targets
