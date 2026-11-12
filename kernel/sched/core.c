@@ -196,12 +196,13 @@ __read_mostly int scheduler_running;
 DEFINE_STATIC_KEY_FALSE(__sched_core_enabled);
 
 /* kernel prio, less is more */
-static inline int __task_prio(const struct task_struct *p)
+static inline int __task_prio(const struct task_struct *p,
+			      const struct sched_dl_entity *dl_server)
 {
 	if (p->sched_class == &stop_sched_class) /* trumps deadline */
 		return -2;
 
-	if (p->dl_server)
+	if (dl_server)
 		return -1; /* deadline */
 
 	if (rt_or_dl_prio(p->prio))
@@ -223,12 +224,19 @@ static inline int __task_prio(const struct task_struct *p)
  * ge(a,b) := !l(a,b)
  */
 
-/* real prio, less is less */
-static inline bool prio_less(const struct task_struct *a,
-			     const struct task_struct *b, bool in_fi)
+/*
+ * real prio, less is less
+ *
+ * @a_dl_server and @b_dl_server are the DL servers @a and @b run on
+ * behalf of, if any.
+ */
+static inline bool __prio_less(const struct task_struct *a,
+			       const struct sched_dl_entity *a_dl_server,
+			       const struct task_struct *b,
+			       const struct sched_dl_entity *b_dl_server,
+			       bool in_fi)
 {
-
-	int pa = __task_prio(a), pb = __task_prio(b);
+	int pa = __task_prio(a, a_dl_server), pb = __task_prio(b, b_dl_server);
 
 	if (-pa < -pb)
 		return true;
@@ -239,18 +247,13 @@ static inline bool prio_less(const struct task_struct *a,
 	if (pa == -1) { /* dl_prio() doesn't work because of stop_class above */
 		const struct sched_dl_entity *a_dl, *b_dl;
 
-		a_dl = &a->dl;
 		/*
-		 * Since,'a' and 'b' can be CFS tasks served by DL server,
+		 * Since 'a' and 'b' can be tasks served by a DL server,
 		 * __task_prio() can return -1 (for DL) even for those. In that
 		 * case, get to the dl_server's DL entity.
 		 */
-		if (a->dl_server)
-			a_dl = a->dl_server;
-
-		b_dl = &b->dl;
-		if (b->dl_server)
-			b_dl = b->dl_server;
+		a_dl = a_dl_server ?: &a->dl;
+		b_dl = b_dl_server ?: &b->dl;
 
 		return !dl_time_before(a_dl->deadline, b_dl->deadline);
 	}
@@ -264,6 +267,12 @@ static inline bool prio_less(const struct task_struct *a,
 #endif
 
 	return false;
+}
+
+static inline bool prio_less(const struct task_struct *a,
+			     const struct task_struct *b, bool in_fi)
+{
+	return __prio_less(a, a->dl_server, b, b->dl_server, in_fi);
 }
 
 static inline bool __sched_core_less(const struct task_struct *a,
@@ -6316,6 +6325,7 @@ pick_next_task(struct rq *rq, struct rq_flags *rf)
 	__must_hold(__rq_lockp(rq))
 {
 	struct task_struct *next, *p, *max;
+	struct sched_dl_entity *max_dl_server;
 	bool fi_before = false;
 	bool core_clock_updated = (rq == rq->core);
 	unsigned long cookie;
@@ -6429,6 +6439,7 @@ restart:
 	 * Tie-break prio towards the current CPU
 	 */
 	max = NULL;
+	max_dl_server = NULL;
 	for_each_core_cpu_wrap(i, rq) {
 		rq_i = cpu_rq(i);
 
@@ -6452,8 +6463,16 @@ restart:
 		rq_i->core_pick = p;
 		rq_i->core_dl_server = rq_i->dl_server;
 
-		if (!max || prio_less(max, p, fi_before))
+		/*
+		 * p->dl_server is only set once @p runs; rank a pick that
+		 * came through a DL server by that server.
+		 */
+		if (!max || __prio_less(max, max_dl_server,
+					p, rq_i->dl_server,
+					fi_before)) {
 			max = p;
+			max_dl_server = rq_i->dl_server;
+		}
 	}
 
 	cookie = rq->core->core_cookie = max->core_cookie;
