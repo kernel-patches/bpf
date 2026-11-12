@@ -4664,6 +4664,14 @@ static void wm8994_component_remove(struct snd_soc_component *component)
 	release_firmware(wm8994->mbc_vss);
 	release_firmware(wm8994->enh_eq);
 	kfree(wm8994->retune_mobile_texts);
+	kfree(wm8994->mbc_texts);
+	kfree(wm8994->vss_texts);
+	kfree(wm8994->vss_hpf_texts);
+	kfree(wm8994->enh_eq_texts);
+	wm8994->mbc_texts = NULL;
+	wm8994->vss_texts = NULL;
+	wm8994->vss_hpf_texts = NULL;
+	wm8994->enh_eq_texts = NULL;
 }
 
 static int wm8994_set_jack(struct snd_soc_component *component,
