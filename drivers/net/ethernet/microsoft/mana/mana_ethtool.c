@@ -22,6 +22,8 @@ static const struct mana_stats_desc mana_eth_stats[] = {
 				       tx_linear_pkt_cnt)},
 	{"rx_cqe_unknown_type", offsetof(struct mana_ethtool_stats,
 					rx_cqe_unknown_type)},
+	{"tx_cqe_poll_recovery", offsetof(struct mana_ethtool_stats,
+					tx_cqe_poll_recovery)},
 };
 
 static const struct mana_stats_desc mana_hc_stats[] = {

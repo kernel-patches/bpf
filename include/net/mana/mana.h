@@ -94,6 +94,8 @@ enum mana_priv_flag_bits {
 
 #define MANA_RX_FRAG_ALIGNMENT 64
 
+#define MANA_TX_TIMEOUT_RESET_THRESHOLD (2 * 60 * HZ)
+
 struct mana_stats_rx {
 	u64 packets;
 	u64 bytes;
@@ -449,6 +451,7 @@ struct mana_tx_qp {
 struct mana_ethtool_stats {
 	u64 stop_queue;
 	u64 wake_queue;
+	u64 tx_cqe_poll_recovery;
 	u64 tx_cqe_err;
 	u64 tx_cqe_unknown_type;
 	u64 tx_linear_pkt_cnt;
@@ -568,6 +571,7 @@ struct mana_port_context {
 	struct net_device *ndev;
 	struct work_struct queue_reset_work;
 
+	unsigned long last_tx_timeout;
 	/* Debug knob to log TX timeout but skip recovery reset */
 	bool tx_timeout_skip_reset;
 
