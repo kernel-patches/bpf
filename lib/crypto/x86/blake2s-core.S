@@ -36,20 +36,6 @@
 .byte  6, 14, 11,  0, 15,  9,  3,  8, 10, 12, 13,  1,  5,  2,  7,  4
 .byte 10,  8,  7,  1,  2,  4,  6,  5, 13, 15,  9,  3,  0, 11, 14, 12
 
-.section .rodata.cst64.sigma2, "aM", @progbits, 160
-.align 64
-.Lsigma2:
-.byte  0,  2,  4,  6,  1,  3,  5,  7, 14,  8, 10, 12, 15,  9, 11, 13
-.byte  8,  2, 13, 15, 10,  9, 12,  3,  6,  4,  0, 14,  5, 11,  1,  7
-.byte 11, 13,  8,  6,  5, 10, 14,  3,  2,  4, 12, 15,  1,  0,  7,  9
-.byte 11, 10,  7,  0,  8, 15,  1, 13,  3,  6,  2, 12,  4, 14,  9,  5
-.byte  4, 10,  9, 14, 15,  0, 11,  8,  1,  7,  3, 13,  2,  5,  6, 12
-.byte  2, 11,  4, 15, 14,  3, 10,  8, 13,  6,  5,  7,  0, 12,  1,  9
-.byte  4,  8, 15,  9, 14, 11, 13,  5,  3,  2,  1, 12,  6, 10,  7,  0
-.byte  6, 13,  0, 14, 12,  2,  1, 11, 15,  4,  5,  8,  7,  9,  3, 10
-.byte 15,  5,  4, 13, 10,  7,  3, 11, 12,  2,  0,  6,  9,  8,  1, 14
-.byte  8,  7, 14, 11, 13, 15,  0, 12, 10,  4,  5,  6,  3,  2,  1,  9
-
 #define CTX		%rdi
 #define DATA		%rsi
 #define NBLOCKS		%rdx
@@ -226,7 +212,7 @@ SYM_FUNC_START(blake2s_compress_avx512)
 	vmovdqu		(DATA),%ymm6		// Load first 8 data words
 	vmovdqu		32(DATA),%ymm7		// Load second 8 data words
 	addq		$64,DATA
-	leaq		.Lsigma2(%rip),%rax
+	leaq		.Lsigma(%rip),%rax
 	movb		$10,%cl			// Set num rounds remaining
 
 .Lavx512_roundloop:
@@ -236,8 +222,6 @@ SYM_FUNC_START(blake2s_compress_avx512)
 	addq		$16,%rax
 	vpermi2d	%ymm7,%ymm6,%ymm8
 	vpermi2d	%ymm7,%ymm6,%ymm9
-	vmovdqa		%ymm8,%ymm6
-	vmovdqa		%ymm9,%ymm7
 	vpaddd		%xmm8,%xmm0,%xmm0
 	vpaddd		%xmm1,%xmm0,%xmm0
 	vpxor		%xmm0,%xmm3,%xmm3
