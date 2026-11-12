@@ -31,6 +31,8 @@
 #include <linux/pinctrl/pinmux.h>
 #include <linux/string_choices.h>
 #include <linux/suspend.h>
+#include <linux/cpumask.h>
+#include <linux/processor.h>
 
 #include "core.h"
 #include "pinctrl-utils.h"
@@ -1270,6 +1272,41 @@ static void __iomem *amd_get_named_res(struct device *dev, struct platform_devic
 	return base;
 }
 
+#ifdef CONFIG_X86
+/*
+ * On hybrid systems prefer to service the GPIO interrupt on low power cores,
+ * then on efficiency (dense) cores to save power.  Userspace can still
+ * override the placement.  Do nothing if neither core type exists.
+ */
+static void amd_gpio_set_irq_affinity(struct amd_gpio *gpio_dev)
+{
+	static const enum x86_topology_cpu_type types[] = {
+		TOPO_CPU_TYPE_LOW_POWER,
+		TOPO_CPU_TYPE_EFFICIENCY,
+	};
+	cpumask_var_t mask;
+	int cpu, i;
+
+	if (!zalloc_cpumask_var(&mask, GFP_KERNEL))
+		return;
+
+	for (i = 0; i < ARRAY_SIZE(types); i++) {
+		for_each_online_cpu(cpu) {
+			if (cpu_data(cpu).topo.cpu_type == types[i])
+				cpumask_set_cpu(cpu, mask);
+		}
+		if (!cpumask_empty(mask)) {
+			irq_set_affinity(gpio_dev->irq, mask);
+			break;
+		}
+	}
+
+	free_cpumask_var(mask);
+}
+#else
+static void amd_gpio_set_irq_affinity(struct amd_gpio *gpio_dev) {}
+#endif
+
 static int amd_gpio_probe(struct platform_device *pdev)
 {
 	int ret = 0;
@@ -1375,6 +1412,8 @@ static int amd_gpio_probe(struct platform_device *pdev)
 			       IRQF_SHARED | IRQF_COND_ONESHOT, KBUILD_MODNAME, gpio_dev);
 	if (ret)
 		goto out2;
+
+	amd_gpio_set_irq_affinity(gpio_dev);
 
 	platform_set_drvdata(pdev, gpio_dev);
 	acpi_register_wakeup_handler(gpio_dev->irq, amd_gpio_check_wake, gpio_dev);
