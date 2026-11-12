@@ -1614,12 +1614,18 @@ int ecc_make_pub_key(unsigned int curve_id, unsigned int ndigits,
 {
 	int ret = 0;
 	struct ecc_point *pk;
+	u64 rand_z[ECC_MAX_DIGITS];
+	unsigned int nbytes;
 	const struct ecc_curve *curve = ecc_get_curve(curve_id);
 
-	if (!private_key) {
+	if (!private_key || ndigits > ARRAY_SIZE(rand_z)) {
 		ret = -EINVAL;
 		goto out;
 	}
+
+	nbytes = ndigits << ECC_DIGITS_TO_BYTES_SHIFT;
+
+	get_random_bytes(rand_z, nbytes);
 
 	pk = ecc_alloc_point(ndigits);
 	if (!pk) {
@@ -1627,7 +1633,7 @@ int ecc_make_pub_key(unsigned int curve_id, unsigned int ndigits,
 		goto out;
 	}
 
-	ecc_point_mult(pk, &curve->g, private_key, NULL, curve, ndigits);
+	ecc_point_mult(pk, &curve->g, private_key, rand_z, curve, ndigits);
 
 	/* SP800-56A rev 3 5.6.2.1.3 key check */
 	if (ecc_is_pubkey_valid_full(curve, pk)) {
@@ -1641,6 +1647,7 @@ int ecc_make_pub_key(unsigned int curve_id, unsigned int ndigits,
 err_free_point:
 	ecc_free_point(pk);
 out:
+	memzero_explicit(rand_z, sizeof(rand_z));
 	return ret;
 }
 EXPORT_SYMBOL(ecc_make_pub_key);

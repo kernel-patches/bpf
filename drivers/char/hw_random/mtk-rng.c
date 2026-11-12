@@ -25,7 +25,7 @@
 #define RNG_AUTOSUSPEND_TIMEOUT		100
 
 #define USEC_POLL			2
-#define TIMEOUT_POLL			60
+#define TIMEOUT_POLL			1000
 
 #define RNG_CTRL			0x00
 #define RNG_EN				BIT(0)

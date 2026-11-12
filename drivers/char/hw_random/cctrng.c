@@ -1,21 +1,23 @@
 // SPDX-License-Identifier: GPL-2.0
 /* Copyright (C) 2019-2020 ARM Limited or its affiliates. */
 
-#include <linux/kernel.h>
-#include <linux/module.h>
+#include <linux/bitfield.h>
+#include <linux/circ_buf.h>
 #include <linux/clk.h>
+#include <linux/completion.h>
+#include <linux/err.h>
+#include <linux/fips.h>
+#include <linux/kernel.h>
 #include <linux/hw_random.h>
+#include <linux/interrupt.h>
 #include <linux/io.h>
+#include <linux/irqreturn.h>
+#include <linux/module.h>
+#include <linux/mutex.h>
+#include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
-#include <linux/interrupt.h>
-#include <linux/irqreturn.h>
 #include <linux/workqueue.h>
-#include <linux/circ_buf.h>
-#include <linux/completion.h>
-#include <linux/of.h>
-#include <linux/bitfield.h>
-#include <linux/fips.h>
 
 #include "cctrng.h"
 
@@ -68,8 +70,8 @@ struct cctrng_drvdata {
 	/* pending_hw - 1 when HW is pending, 0 when it is idle */
 	atomic_t pending_hw;
 
-	/* protects against multiple concurrent consumers of data_buf */
-	spinlock_t read_lock;
+	/* protects data_buf */
+	struct mutex lock;
 };
 
 
@@ -91,11 +93,7 @@ static int cc_trng_pm_get(struct device *dev)
 
 static void cc_trng_pm_put_suspend(struct device *dev)
 {
-	int rc;
-
-	rc = pm_runtime_put_autosuspend(dev);
-	if (rc)
-		dev_err(dev, "pm_runtime_put_autosuspend returned %x\n", rc);
+	pm_runtime_put_autosuspend(dev);
 }
 
 static int cc_trng_pm_init(struct cctrng_drvdata *drvdata)
@@ -213,11 +211,8 @@ static int cctrng_read(struct hwrng *rng, void *data, size_t max, bool wait)
 	size_t size;
 	size_t left;
 
-	if (!spin_trylock(&drvdata->read_lock)) {
-		/* concurrent consumers from data_buf cannot be served */
-		dev_dbg_ratelimited(dev, "unable to hold lock\n");
-		return 0;
-	}
+	if (mutex_lock_interruptible(&drvdata->lock))
+		return -ERESTARTSYS;
 
 	/* copy till end of data buffer (without wrap back) */
 	cnt_w = CIRC_CNT_TO_END(drvdata->circ.head,
@@ -232,12 +227,12 @@ static int cctrng_read(struct hwrng *rng, void *data, size_t max, bool wait)
 		cnt_w = CIRC_CNT(drvdata->circ.head,
 				 drvdata->circ.tail, CCTRNG_DATA_BUF_WORDS);
 		size = min((cnt_w<<2), left);
-		memcpy(data, &(buf[drvdata->circ.tail]), size);
+		memcpy(data + copied, &buf[drvdata->circ.tail], size);
 		copied += size;
 		circ_idx_inc(&drvdata->circ.tail, size);
 	}
 
-	spin_unlock(&drvdata->read_lock);
+	mutex_unlock(&drvdata->lock);
 
 	if (circ_buf_space(drvdata) >= CC_TRNG_EHR_IN_WORDS) {
 		if (atomic_cmpxchg(&drvdata->pending_hw, 0, 1) == 0) {
@@ -347,6 +342,7 @@ static void cc_trng_compwork_handler(struct work_struct *w)
 	}
 
 	/* read EHR data from registers */
+	mutex_lock(&drvdata->lock);
 	for (i = 0; i < CC_TRNG_EHR_IN_WORDS; i++) {
 		/* calc word ptr in data_buf */
 		u32 *buf = (u32 *)drvdata->circ.buf;
@@ -358,6 +354,7 @@ static void cc_trng_compwork_handler(struct work_struct *w)
 		 * returned, restart the entropy collection.
 		 */
 		if (buf[drvdata->circ.head] == 0) {
+			mutex_unlock(&drvdata->lock);
 			dev_dbg(dev, "Got 0 value in EHR. active_rosc %u\n",
 				drvdata->active_rosc);
 			goto next_rosc;
@@ -365,6 +362,7 @@ static void cc_trng_compwork_handler(struct work_struct *w)
 
 		circ_idx_inc(&drvdata->circ.head, 1<<2);
 	}
+	mutex_unlock(&drvdata->lock);
 
 	atomic_set(&drvdata->pending_hw, 0);
 
@@ -499,7 +497,7 @@ static int cctrng_probe(struct platform_device *pdev)
 
 	INIT_WORK(&drvdata->compwork, cc_trng_compwork_handler);
 	INIT_WORK(&drvdata->startwork, cc_trng_startwork_handler);
-	spin_lock_init(&drvdata->read_lock);
+	mutex_init(&drvdata->lock);
 
 	/* register the driver isr function */
 	rc = devm_request_irq(dev, irq, cc_isr, IRQF_SHARED, "cctrng", drvdata);
@@ -533,9 +531,8 @@ static int cctrng_probe(struct platform_device *pdev)
 	/* registration of the hwrng device */
 	rc = devm_hwrng_register(dev, &drvdata->rng);
 	if (rc) {
-		dev_err(dev, "Could not register hwrng device.\n");
-		cc_trng_pm_fini(drvdata);
-		return rc;
+		pm_runtime_put_noidle(dev);
+		return dev_err_probe(dev, rc, "Could not register hwrng device\n");
 	}
 
 	/* trigger HW to start generate data */

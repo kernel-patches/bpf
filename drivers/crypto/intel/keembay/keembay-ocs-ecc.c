@@ -208,10 +208,13 @@ static struct ocs_ecc_dev *kmb_ocs_ecc_find_dev(struct ocs_ecc_ctx *tctx)
 	spin_lock(&ocs_ecc.lock);
 
 	/* Only a single OCS device available. */
-	tctx->ecc_dev = list_first_entry(&ocs_ecc.dev_list, struct ocs_ecc_dev,
-					 list);
+	tctx->ecc_dev = list_first_entry_or_null(&ocs_ecc.dev_list,
+						 struct ocs_ecc_dev, list);
 
 	spin_unlock(&ocs_ecc.lock);
+
+	if (!tctx->ecc_dev)
+		return ERR_PTR(-ENODEV);
 
 	return tctx->ecc_dev;
 }
