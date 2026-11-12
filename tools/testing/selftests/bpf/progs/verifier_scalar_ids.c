@@ -745,7 +745,7 @@ __naked void linked_regs_and_subreg_def(void)
 /*
  * A scalar is spilled to the stack and then filled twice: once via a
  * sign-extending load (BPF_MEMSX) into r4 and once via a zero-extending
- * load (BPF_MEM) into r5. coerce_reg_to_size_sx() gives r4 a different
+ * load (BPF_MEM) into r5. coerce_scalar_to_size_sx() gives r4 a different
  * value than the spilled/zero-extended siblings, so r4 must not keep the
  * shared scalar id. Otherwise the later 'if r5 == 0x80000000' refines r4
  * through sync_linked_regs() to a known 0x80000000, while at runtime r4

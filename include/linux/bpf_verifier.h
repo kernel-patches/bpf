@@ -59,7 +59,7 @@ struct bpf_stack_range {
 
 /*
  * What is known about a 64-bit value: the reduced product of known bits, a range, a range of the
- * low 32 bits and a congruence. The value is in each of the four. reg_bounds_sync() is the
+ * low 32 bits and a congruence. The value is in each of the four. scalar_bounds_sync() is the
  * reduction: what one of them knows refines the others.
  */
 struct scalar {
@@ -2074,8 +2074,8 @@ void scalar_union(struct scalar *acc, const struct scalar *src);
 int bpf_set_reg_range(struct bpf_verifier_env *env, struct bpf_reg_state *reg,
 		      const struct scalar *range);
 bool bpf_reg_union_compatible(const struct bpf_reg_state *a, const struct bpf_reg_state *b);
-void bpf_reg_widen_range(struct bpf_reg_state *reg, const struct bpf_reg_state *old,
-			 const struct bpf_loop_rungs *rungs, int linear);
+void scalar_widen(struct scalar *s, const struct scalar *old,
+		  const struct bpf_loop_rungs *rungs, int linear);
 int bpf_reg_union(struct bpf_verifier_env *env, struct bpf_reg_state *acc,
 		  const struct bpf_reg_state *src);
 
