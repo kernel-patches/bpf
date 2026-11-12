@@ -1092,10 +1092,10 @@ static s32 tas_init(struct tas2783_prv *tas_dev)
 	s32 ret;
 
 	dev_set_drvdata(tas_dev->dev, tas_dev);
-	ret = devm_snd_soc_register_component(tas_dev->dev,
-					      &soc_codec_driver_tasdevice,
-					      tas_dai_driver,
-					      ARRAY_SIZE(tas_dai_driver));
+	ret = snd_soc_register_component(tas_dev->dev,
+					 &soc_codec_driver_tasdevice,
+					 tas_dai_driver,
+					 ARRAY_SIZE(tas_dai_driver));
 	if (ret) {
 		dev_err(tas_dev->dev, "%s: codec register error:%d.\n",
 			__func__, ret);
@@ -1447,8 +1447,8 @@ static void tas_sdw_remove(struct sdw_slave *peripheral)
 {
 	struct tas2783_prv *tas_dev = dev_get_drvdata(&peripheral->dev);
 
-	pm_runtime_disable(tas_dev->dev);
 	tas_remove(tas_dev);
+	pm_runtime_disable(tas_dev->dev);
 	mutex_destroy(&tas_dev->calib_lock);
 	mutex_destroy(&tas_dev->pde_lock);
 	dev_set_drvdata(&peripheral->dev, NULL);
