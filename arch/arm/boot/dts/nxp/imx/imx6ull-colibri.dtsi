@@ -6,10 +6,11 @@
 #include "imx6ull.dtsi"
 
 / {
-	/* Ethernet aliases to ensure correct MAC addresses */
 	aliases {
+		/* Ethernet aliases to ensure correct MAC addresses */
 		ethernet0 = &fec2;
 		ethernet1 = &fec1;
+		spi0 = &ecspi1;
 	};
 
 	backlight: backlight {
