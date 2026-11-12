@@ -148,6 +148,9 @@ static int espintcp_recvmsg(struct sock *sk, struct msghdr *msg, size_t len,
 	int copied;
 	int off = 0;
 
+	if (unlikely(flags & MSG_ERRQUEUE))
+		return inet_recv_error(sk, msg, len);
+
 	skb = __skb_recv_datagram(sk, &ctx->ike_queue, flags, &off, &err);
 	if (!skb) {
 		if (err == -EAGAIN && sk->sk_shutdown & RCV_SHUTDOWN)
