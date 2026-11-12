@@ -753,7 +753,8 @@ int mana_ib_gd_query_adapter_caps(struct mana_ib_dev *dev)
 				resp.max_requester_sq_size / GDMA_MAX_SQE_SIZE,
 				resp.max_requester_rq_size / GDMA_MAX_RQE_SIZE);
 	caps->max_inline_data_size = resp.max_inline_data_size;
-	caps->max_send_sge_count = resp.max_send_sge_count;
+	/* Account for the SGE reserved for extra-large OOB. */
+	caps->max_send_sge_count = resp.max_send_sge_count - 1;
 	caps->max_recv_sge_count = resp.max_recv_sge_count;
 	caps->feature_flags = resp.feature_flags;
 
