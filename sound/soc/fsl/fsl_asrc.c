@@ -1267,6 +1267,11 @@ static void fsl_asrc_runtime_suspend_action(void *data)
 		fsl_asrc_runtime_suspend(dev);
 }
 
+static void fsl_asrc_m2m_exit_action(void *data)
+{
+	fsl_asrc_m2m_exit(data);
+}
+
 static int fsl_asrc_probe(struct platform_device *pdev)
 {
 	struct device_node *np = pdev->dev.of_node;
@@ -1479,14 +1484,7 @@ static int fsl_asrc_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	return 0;
-}
-
-static void fsl_asrc_remove(struct platform_device *pdev)
-{
-	struct fsl_asrc *asrc = dev_get_drvdata(&pdev->dev);
-
-	fsl_asrc_m2m_exit(asrc);
+	return devm_add_action_or_reset(&pdev->dev, fsl_asrc_m2m_exit_action, asrc);
 }
 
 static int fsl_asrc_runtime_resume(struct device *dev)
@@ -1648,7 +1646,6 @@ MODULE_DEVICE_TABLE(of, fsl_asrc_ids);
 
 static struct platform_driver fsl_asrc_driver = {
 	.probe = fsl_asrc_probe,
-	.remove = fsl_asrc_remove,
 	.driver = {
 		.name = "fsl-asrc",
 		.of_match_table = fsl_asrc_ids,
