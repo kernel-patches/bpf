@@ -27953,6 +27953,14 @@ L:	linux-omap@vger.kernel.org
 S:	Maintained
 F:	drivers/thermal/ti-soc-thermal/
 
+TI BQ25630 BATTERY CHARGER DRIVER
+M:	Waqar Hameed <waqar.hameed@axis.com>
+L:	linux-pm@vger.kernel.org
+L:	kernel@axis.com
+S:	Supported
+F:	Documentation/devicetree/bindings/power/supply/ti,bq25630.yaml
+F:	drivers/power/supply/bq25630_charger.c
+
 TI BQ27XXX POWER SUPPLY DRIVER
 F:	drivers/power/supply/bq27xxx_battery.c
 F:	drivers/power/supply/bq27xxx_battery_i2c.c
