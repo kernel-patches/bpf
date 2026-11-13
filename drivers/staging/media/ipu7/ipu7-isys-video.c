@@ -831,6 +831,7 @@ int ipu7_isys_video_set_streaming(struct ipu7_isys_video *av, int state,
 
 out_media_entity_stop_streaming_firmware:
 	stop_streaming_firmware(av);
+	close_streaming_firmware(av);
 
 	return ret;
 }
