@@ -294,6 +294,10 @@ static inline int ntfs_ffs(int x)
 	return r;
 }
 
+/* From fs/ntfs/aops.c */
+struct folio *ntfs_read_metadata_folio(struct address_space *mapping,
+				       pgoff_t index);
+
 /* From fs/ntfs/bdev-io.c */
 int ntfs_bdev_read(struct block_device *bdev, char *data, loff_t start, size_t size);
 int ntfs_bdev_write(struct super_block *sb, void *buf, loff_t start, size_t size);
