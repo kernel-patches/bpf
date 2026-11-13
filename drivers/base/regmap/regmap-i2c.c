@@ -353,7 +353,7 @@ static const struct regmap_bus *regmap_get_i2c_bus(struct i2c_client *i2c,
 	const struct i2c_adapter_quirks *quirks;
 	const struct regmap_bus *bus = NULL;
 	struct regmap_bus *ret_bus;
-	u16 max_read = 0, max_write = 0;
+	u16 max_read, max_write;
 
 	if (i2c_check_functionality(i2c->adapter, I2C_FUNC_I2C))
 		bus = &regmap_i2c;
@@ -391,18 +391,22 @@ static const struct regmap_bus *regmap_get_i2c_bus(struct i2c_client *i2c,
 	if (!bus)
 		return ERR_PTR(-ENOTSUPP);
 
+	max_read = bus->max_raw_read;
+	max_write = bus->max_raw_write;
+
 	quirks = i2c->adapter->quirks;
 	if (quirks) {
 		if (quirks->max_read_len &&
-		    (bus->max_raw_read == 0 || bus->max_raw_read > quirks->max_read_len))
+		    (max_read == 0 || max_read > quirks->max_read_len))
 			max_read = quirks->max_read_len;
 
 		if (quirks->max_write_len &&
-		    (bus->max_raw_write == 0 || bus->max_raw_write > quirks->max_write_len))
+		    (max_write == 0 || max_write > quirks->max_write_len))
 			max_write = quirks->max_write_len -
 				(config->reg_bits + config->pad_bits) / BITS_PER_BYTE;
 
-		if (max_read || max_write) {
+		if (max_read != bus->max_raw_read ||
+		    max_write != bus->max_raw_write) {
 			ret_bus = kmemdup(bus, sizeof(*bus), GFP_KERNEL);
 			if (!ret_bus)
 				return ERR_PTR(-ENOMEM);
