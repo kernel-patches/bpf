@@ -2440,6 +2440,8 @@ int btrfs_rm_device(struct btrfs_fs_info *fs_info,
 	if (unlikely(ret)) {
 		btrfs_abort_transaction(trans, ret);
 		btrfs_end_transaction(trans);
+		if (device->bdev)
+			bdev_allow_freeze(device->bdev);
 		return ret;
 	}
 	clear_bit(BTRFS_DEV_STATE_IN_FS_METADATA, &device->dev_state);
