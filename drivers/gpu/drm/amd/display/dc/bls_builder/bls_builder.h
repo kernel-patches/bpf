@@ -6,6 +6,7 @@
 #pragma once
 
 #include "dc.h"
+#include "dc_state_priv.h"
 #include "dmub_cmd.h"
 #include "dmub/dmub_srv.h"
 #include "hwss/hw_sequencer.h"
@@ -99,6 +100,8 @@ struct bls_builder_check_capability_params {
 	const struct dc_state *current_state;
 	const struct dc_state *new_state;
 	const struct dc_stream_state *stream;
+	/* The current -> new delta from dc_state_compute_update_flags. */
+	const struct dc_state_update_flags *update_flags;
 };
 
 struct bls_builder_declarative_params {
@@ -106,6 +109,8 @@ struct bls_builder_declarative_params {
 	const struct dc_state *current_state;
 	const struct dc_state *new_state;
 	const struct dc_stream_state *stream;
+	/* Pipe facts of both states, from dc_state_compute_update_flags. */
+	const struct dc_state_update_flags *update_flags;
 	struct bls_builder_output_targets *out_targets;
 	struct block_sequence head_sequence[DC2_BLS_MAX_STEPS];
 	unsigned int head_num_steps;

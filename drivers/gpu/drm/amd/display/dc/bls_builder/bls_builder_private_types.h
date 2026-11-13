@@ -7,11 +7,30 @@
 
 #include "hw_sequencer.h"
 #include "dccg.h"
+#include "dc_state_priv.h"
 
 /*
  * Step tables for the declarative builders. A change here changes what
  * a builder can express; a change to a builder's .c alone does not.
  */
+
+/*
+ * Conditions on pipe i that compare its facts in the current and the
+ * new state.
+ */
+struct dcn401_pipe_deltas {
+	/*
+	 * Both pipes are enabled and show a plane of the same stream on the
+	 * same HUBP, DPP and OPP.
+	 */
+	bool hubp_dpp_already_enabled;
+	/* The DET size is the same. */
+	bool det_unchanged;
+	/* The current pipe has no plane. */
+	bool current_has_no_plane;
+	/* The stream of the new pipe has the same OPP heads in both states. */
+	bool odm_kept;
+};
 
 /*
  * One dcn401 commit step is one BLS entry. The union holds the
@@ -109,29 +128,20 @@ struct dcn401_commit_step_meta {
 	struct {
 		/* The new state has a stream. */
 		bool new_state_has_stream;
+		/* The stream of the step is unchanged between the states. */
+		bool stream_unchanged;
 		/* dc->optimized_required is clear. */
 		bool optimized_not_required;
 		/* The plane has no address update, or skips the manual trigger. */
 		bool no_manual_trigger;
 		/* The OPP MPC tree has no plane yet. */
 		bool opp_tree_empty;
+		struct dcn401_pipe_deltas pipe_deltas;
 		/*
-		 * The pipe already showed the plane on this HUBP. The step is
-		 * part of enabling that block the first time, not of
-		 * reconfiguring it.
+		 * Skip only when each delta named in pipe_deltas is true. Clear,
+		 * skip when any of them is true.
 		 */
-		bool hubp_dpp_already_enabled;
-		/* As hubp_dpp_already_enabled, and the DET size is the same. */
-		bool det_unchanged;
-		/*
-		 * The current pipe had no plane, or keeps its plane, HUBP, DPP
-		 * and OPP in the new state.
-		 */
-		bool no_plane_removed;
-		/* As hubp_dpp_already_enabled, and each ODM slice keeps its OPP. */
-		bool odm_kept;
-		/* Each ODM slice of the stream keeps its OPP. */
-		bool same_opp_heads;
+		bool pipe_deltas_all;
 		/*
 		 * Neither the plane scaling, the plane position nor the
 		 * stream scaling changed. A full update sets every plane bit,

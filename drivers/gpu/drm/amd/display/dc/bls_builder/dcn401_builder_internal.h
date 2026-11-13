@@ -44,6 +44,15 @@ void dcn401_commit_check_failed(const struct dc *dc, const char *msg);
 		} \
 	} while (0)
 
+/* As CHECK_UPDATE, for a helper that reads the update flags. */
+#define CHECK_UPDATE_FLAGS(name, msg) \
+	do { \
+		if (!check_##name(update_flags, current_state, new_state, i)) { \
+			dcn401_commit_check_failed(dc, msg); \
+			return BLS_BUILD_ERROR_UNSUPPORTED_STATE_UPDATE; \
+		} \
+	} while (0)
+
 /* Each check_<name> stream helper takes the state and a stream index. */
 #define CHECK_STREAM_CONDITION(name, msg) \
 	do { \
@@ -87,8 +96,6 @@ bool dcn401_stream_unchanged(const struct dc_state *current_state,
  * The pipe shows a plane on the same HUBP, DPP and OPP. The plane may be a
  * new dc_plane_state; the update reprograms its contents.
  */
-bool dcn401_pipe_kept(const struct pipe_ctx *current_pipe,
-		const struct pipe_ctx *new_pipe);
 /*
  * What the seamless update needs of stream i of new_state, apart from the
  * other streams.
@@ -115,6 +122,9 @@ struct dcn401_commit_step_args {
 	struct dc_state *new_state;
 	const struct dc_stream_state *stream;
 	struct pipe_ctx *pipe;
+	const struct dc_state_update_flags *update_flags;
+	/* stream is in both states on the same pipes, planes and blocks. */
+	bool stream_unchanged;
 };
 
 /*

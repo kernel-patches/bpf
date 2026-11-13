@@ -19,6 +19,9 @@ struct dc_trait_match {
 #define DC_TRAIT_MATCH(set, clear) \
 	((struct dc_trait_match){ .mask = (set) | (clear), .value = (set) })
 
+/* Every element matches: no trait constrains it. */
+#define DC_TRAIT_MATCH_ANY DC_TRAIT_MATCH(0, 0)
+
 /* Plane and pipe accessors: no stream filter. */
 #define DC_FACTS_ALL_STREAMS 0xFFu
 

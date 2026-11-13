@@ -45,7 +45,7 @@ static bool check_current_planes(const struct dc *dc,
 	return planes && planes ==
 			facts.global.blend_tree[i].dpp_pipe_count &&
 			dc_state_facts_all_pipe(&facts, (uint8_t)i,
-			DC_TRAIT_MATCH(0, 0),
+			DC_TRAIT_MATCH_ANY,
 			DC_TRAIT_MATCH(DC_PIPE_TRAIT_PLANE, 0));
 }
 
@@ -57,7 +57,7 @@ static bool check_plane_blocks(const struct dc *dc,
 	(void)dc;
 	dc_state_facts_derive(state, &facts);
 	return dc_state_facts_all_pipe(&facts, (uint8_t)i,
-			DC_TRAIT_MATCH(0, 0),
+			DC_TRAIT_MATCH_ANY,
 			DC_TRAIT_MATCH(DC_PIPE_TRAIT_PLANE_RESOURCES, 0));
 }
 
@@ -168,11 +168,12 @@ static bool check_link_not_active(const struct dc *dc,
 
 static enum bls_builder_result dcn401_check_non_seamless_commit_support(
 		const struct dc *dc, const struct dc_state *current_state,
-		const struct dc_state *new_state)
+		const struct dc_state *new_state,
+		const struct dc_state_update_flags *update_flags)
 {
 	enum bls_builder_result result;
 
-	if (!dc || !current_state || !new_state)
+	if (!dc || !current_state || !new_state || !update_flags)
 		return BLS_BUILD_ERROR_UNSUPPORTED_STATE_UPDATE;
 
 	result = dcn401_check_dc_support(dc);
@@ -457,7 +458,8 @@ static enum bls_builder_result dcn401_build_non_seamless_commit(
 	if (!params)
 		return BLS_BUILD_ERROR_UNSUPPORTED_STATE_UPDATE;
 	result = dcn401_check_non_seamless_commit_support(params->dc,
-			params->current_state, params->new_state);
+			params->current_state, params->new_state,
+			params->update_flags);
 	if (result != BLS_BUILD_SUCCESS)
 		return result;
 
@@ -465,13 +467,16 @@ static enum bls_builder_result dcn401_build_non_seamless_commit(
 	DCN401_ADD_SUB_SEQUENCES(&head, &state_args, bls_head);
 	for (i = 0; i < state_args.new_state->stream_count; i++) {
 		state_args.stream = state_args.new_state->streams[i];
-		if (dcn401_stream_kept(params->dc, params->current_state,
-				params->new_state, state_args.stream) &&
-				!dcn401_stream_unchanged(params->current_state,
+		if (!dcn401_stream_kept(params->dc, params->current_state,
 				params->new_state, state_args.stream))
-			dcn401_add_stream_update(&head, &state_args);
+			continue;
+		state_args.stream_unchanged = dcn401_stream_unchanged(
+				params->current_state, params->new_state,
+				state_args.stream);
+		dcn401_add_stream_update(&head, &state_args);
 	}
 	state_args.stream = NULL;
+	state_args.stream_unchanged = false;
 	DCN401_ADD_SUB_SEQUENCES(&head, &state_args, bls_postamble);
 
 	return BLS_BUILD_SUCCESS;
@@ -481,7 +486,8 @@ static bool dcn401_non_seamless_commit_check_capability(
 		const struct bls_builder_check_capability_params *params)
 {
 	return params && dcn401_check_non_seamless_commit_support(params->dc,
-			params->current_state, params->new_state) ==
+			params->current_state, params->new_state,
+			params->update_flags) ==
 			BLS_BUILD_SUCCESS;
 }
 

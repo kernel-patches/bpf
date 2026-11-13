@@ -169,6 +169,7 @@ static enum dc_status core2_build_and_run(struct dc *dc,
 	const struct workaround_manager *wam = dc2_workaround_manager_get();
 	struct bls_builder_declarative_params *params;
 	enum dc_status status = DC_ERROR_UNEXPECTED;
+	struct dc_state_update_flags update_flags;
 
 	/* 256 block-sequence entries; keep them off the kernel stack. */
 	params = kvzalloc(sizeof(*params), GFP_KERNEL);
@@ -178,6 +179,10 @@ static enum dc_status core2_build_and_run(struct dc *dc,
 	params->current_state = dc->current_state;
 	params->new_state = new_state;
 	params->stream = stream;
+	if (dc_state_compute_update_flags(dc->current_state, new_state,
+			&update_flags) != DC_OK)
+		goto out;
+	params->update_flags = &update_flags;
 
 	/*
 	 * A tail runs on the vsync after the head, so Core would have to wait
@@ -203,14 +208,18 @@ static bool core2_builder_supports(struct dc *dc, enum bls_builder_name name,
 		struct dc_state *new_state, const struct dc_stream_state *stream)
 {
 	const struct bls_builder *builder = TO_DC2(dc)->builders[name];
+	struct dc_state_update_flags update_flags;
 	struct bls_builder_check_capability_params check = {
 		.dc = dc,
 		.current_state = dc->current_state,
 		.new_state = new_state,
 		.stream = stream,
+		.update_flags = &update_flags,
 	};
 
-	return builder && builder->check_capability &&
+	return dc_state_compute_update_flags(dc->current_state, new_state,
+			&update_flags) == DC_OK &&
+			builder && builder->check_capability &&
 			builder->kind == BLS_BUILDER_DECLARATIVE &&
 			builder->build.declarative &&
 			dc2_workaround_manager_get() &&
@@ -282,14 +291,16 @@ enum dc_status core2_commit_state_hw(struct dc *dc, struct dc_state *context)
 				context, current_state->streams[i]))
 			core2_commit_disable_done(dc, otg_master);
 	}
-	for (i = 0; i < context->stream_count; i++)
+	for (i = 0; i < context->stream_count; i++) {
+		struct pipe_ctx *otg_master = resource_get_otg_master_for_stream(
+				&context->res_ctx, context->streams[i]);
+
 		if (dcn401_stream_kept(dc, current_state, context,
 				context->streams[i]))
 			core2_update_done(dc, context, context->streams[i]);
-		else
-			core2_commit_enable_done(
-					resource_get_otg_master_for_stream(
-					&context->res_ctx, context->streams[i]));
+		else if (otg_master)
+			core2_commit_enable_done(otg_master);
+	}
 	return DC_OK;
 }
 
