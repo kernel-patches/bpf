@@ -351,41 +351,41 @@ static const struct x86_cpu_id lpss_cpu_ids[] = {
 
 static const struct acpi_device_id acpi_lpss_device_ids[] = {
 	/* Generic LPSS devices */
-	{ "INTL9C60", LPSS_ADDR(lpss_dma_desc) },
+	{ .id = "INTL9C60", .driver_data = LPSS_ADDR(lpss_dma_desc) },
 
 	/* Lynxpoint LPSS devices */
-	{ "INT33C0", LPSS_ADDR(lpt_spi_dev_desc) },
-	{ "INT33C1", LPSS_ADDR(lpt_spi_dev_desc) },
-	{ "INT33C2", LPSS_ADDR(lpt_i2c_dev_desc) },
-	{ "INT33C3", LPSS_ADDR(lpt_i2c_dev_desc) },
-	{ "INT33C4", LPSS_ADDR(lpt_uart_dev_desc) },
-	{ "INT33C5", LPSS_ADDR(lpt_uart_dev_desc) },
-	{ "INT33C6", LPSS_ADDR(lpt_sdio_dev_desc) },
+	{ .id = "INT33C0", .driver_data = LPSS_ADDR(lpt_spi_dev_desc) },
+	{ .id = "INT33C1", .driver_data = LPSS_ADDR(lpt_spi_dev_desc) },
+	{ .id = "INT33C2", .driver_data = LPSS_ADDR(lpt_i2c_dev_desc) },
+	{ .id = "INT33C3", .driver_data = LPSS_ADDR(lpt_i2c_dev_desc) },
+	{ .id = "INT33C4", .driver_data = LPSS_ADDR(lpt_uart_dev_desc) },
+	{ .id = "INT33C5", .driver_data = LPSS_ADDR(lpt_uart_dev_desc) },
+	{ .id = "INT33C6", .driver_data = LPSS_ADDR(lpt_sdio_dev_desc) },
 
 	/* BayTrail LPSS devices */
-	{ "80860F09", LPSS_ADDR(byt_pwm_dev_desc) },
-	{ "80860F0A", LPSS_ADDR(byt_uart_dev_desc) },
-	{ "80860F0E", LPSS_ADDR(byt_spi_dev_desc) },
-	{ "80860F14", LPSS_ADDR(byt_sdio_dev_desc) },
-	{ "80860F41", LPSS_ADDR(byt_i2c_dev_desc) },
+	{ .id = "80860F09", .driver_data = LPSS_ADDR(byt_pwm_dev_desc) },
+	{ .id = "80860F0A", .driver_data = LPSS_ADDR(byt_uart_dev_desc) },
+	{ .id = "80860F0E", .driver_data = LPSS_ADDR(byt_spi_dev_desc) },
+	{ .id = "80860F14", .driver_data = LPSS_ADDR(byt_sdio_dev_desc) },
+	{ .id = "80860F41", .driver_data = LPSS_ADDR(byt_i2c_dev_desc) },
 
 	/* Braswell LPSS devices */
-	{ "80862286", LPSS_ADDR(lpss_dma_desc) },
-	{ "80862288", LPSS_ADDR(bsw_pwm_dev_desc) },
-	{ "80862289", LPSS_ADDR(bsw_pwm2_dev_desc) },
-	{ "8086228A", LPSS_ADDR(bsw_uart_dev_desc) },
-	{ "8086228E", LPSS_ADDR(bsw_spi_dev_desc) },
-	{ "808622C0", LPSS_ADDR(lpss_dma_desc) },
-	{ "808622C1", LPSS_ADDR(bsw_i2c_dev_desc) },
+	{ .id = "80862286", .driver_data = LPSS_ADDR(lpss_dma_desc) },
+	{ .id = "80862288", .driver_data = LPSS_ADDR(bsw_pwm_dev_desc) },
+	{ .id = "80862289", .driver_data = LPSS_ADDR(bsw_pwm2_dev_desc) },
+	{ .id = "8086228A", .driver_data = LPSS_ADDR(bsw_uart_dev_desc) },
+	{ .id = "8086228E", .driver_data = LPSS_ADDR(bsw_spi_dev_desc) },
+	{ .id = "808622C0", .driver_data = LPSS_ADDR(lpss_dma_desc) },
+	{ .id = "808622C1", .driver_data = LPSS_ADDR(bsw_i2c_dev_desc) },
 
 	/* Broadwell LPSS devices */
-	{ "INT3430", LPSS_ADDR(lpt_spi_dev_desc) },
-	{ "INT3431", LPSS_ADDR(lpt_spi_dev_desc) },
-	{ "INT3432", LPSS_ADDR(lpt_i2c_dev_desc) },
-	{ "INT3433", LPSS_ADDR(lpt_i2c_dev_desc) },
-	{ "INT3434", LPSS_ADDR(lpt_uart_dev_desc) },
-	{ "INT3435", LPSS_ADDR(lpt_uart_dev_desc) },
-	{ "INT3436", LPSS_ADDR(lpt_sdio_dev_desc) },
+	{ .id = "INT3430", .driver_data = LPSS_ADDR(lpt_spi_dev_desc) },
+	{ .id = "INT3431", .driver_data = LPSS_ADDR(lpt_spi_dev_desc) },
+	{ .id = "INT3432", .driver_data = LPSS_ADDR(lpt_i2c_dev_desc) },
+	{ .id = "INT3433", .driver_data = LPSS_ADDR(lpt_i2c_dev_desc) },
+	{ .id = "INT3434", .driver_data = LPSS_ADDR(lpt_uart_dev_desc) },
+	{ .id = "INT3435", .driver_data = LPSS_ADDR(lpt_uart_dev_desc) },
+	{ .id = "INT3436", .driver_data = LPSS_ADDR(lpt_sdio_dev_desc) },
 
 	{ }
 };

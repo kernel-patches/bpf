@@ -828,9 +828,9 @@ int acpi_mrrm_max_mem_region(void);
 #endif
 
 #define ACPI_CMOS_RTC_IDS	\
-	{ "PNP0B00", },		\
-	{ "PNP0B01", },		\
-	{ "PNP0B02", },		\
+	{ .id = "PNP0B00" },	\
+	{ .id = "PNP0B01" },	\
+	{ .id = "PNP0B02" },	\
 	{ }
 
 extern bool cmos_rtc_platform_device_present;

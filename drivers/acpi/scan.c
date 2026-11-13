@@ -1753,33 +1753,33 @@ static bool acpi_device_enumeration_by_parent(struct acpi_device *device)
 	 * by the drivers/platform/x86/serial-multi-instantiate.c driver, which
 	 * knows which client device id to use for each resource.
 	 */
-		{"AWDZ8399", },
-		{"BSG1160", },
-		{"BSG2150", },
-		{"CSC3551", },
-		{"CSC3554", },
-		{"CSC3556", },
-		{"CSC3557", },
-		{"INT33FE", },
-		{"INT3515", },
-		{"TXNW2781", },
+		{ .id = "AWDZ8399" },
+		{ .id = "BSG1160" },
+		{ .id = "BSG2150" },
+		{ .id = "CSC3551" },
+		{ .id = "CSC3554" },
+		{ .id = "CSC3556" },
+		{ .id = "CSC3557" },
+		{ .id = "INT33FE" },
+		{ .id = "INT3515" },
+		{ .id = "TXNW2781" },
 		/* Non-conforming _HID for Cirrus Logic already released */
-		{"CLSA0100", },
-		{"CLSA0101", },
-		{"CLSA0102", },
+		{ .id = "CLSA0100" },
+		{ .id = "CLSA0101" },
+		{ .id = "CLSA0102" },
 	/*
 	 * Some ACPI devs contain SerialBus resources even though they are not
 	 * attached to a serial bus at all.
 	 */
-		{"MSHW0028", },
+		{ .id = "MSHW0028" },
 	/*
 	 * HIDs of device with an UartSerialBusV2 resource for which userspace
 	 * expects a regular tty cdev to be created (instead of the in kernel
 	 * serdev) and which have a kernel driver which expects a platform_dev
 	 * such as the rfkill-gpio driver.
 	 */
-		{"BCM4752", },
-		{"LNV4752", },
+		{ .id = "BCM4752" },
+		{ .id = "LNV4752" },
 		{ }
 	};
 
@@ -2287,7 +2287,7 @@ static void acpi_default_enumeration(struct acpi_device *device)
 }
 
 static const struct acpi_device_id generic_device_ids[] = {
-	{ACPI_DT_NAMESPACE_HID, },
+	{ .id = ACPI_DT_NAMESPACE_HID },
 	{ }
 };
 
