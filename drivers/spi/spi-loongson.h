@@ -35,6 +35,7 @@
 
 /* SPER bits */
 #define LOONGSON_SPI_SPER_SPRE		GENMASK(1, 0)
+#define LOONGSON_SPI_SPER_ICNT		GENMASK(7, 6)
 
 /* SFC_PARAM bits */
 #define LOONGSON_SPI_PARA_MEM_EN	BIT(0)
@@ -53,6 +54,16 @@
 #define LOONGSON_SPI_SFCS_OUT(cs)	BIT((cs) + LOONGSON_SPI_SFCS_OUT_SHIFT)
 
 #define LOONGSON_SPI_NUM_CS		4
+
+/*
+ * This controller has no DMA and moves one byte per IRQ/polling
+ * iteration, so actual throughput is far below speed_hz while the
+ * SPI core scales its timeout from the theoretical speed_hz.
+ * Split messages into fixed-size chunks so each transfer completes
+ * well inside the core's per-transfer timeout. This is a software
+ * policy, not a hardware limit.
+ */
+#define LOONGSON_SPI_MAX_XFER_SIZE	SZ_4K
 
 /* Hardware limits and divider masks */
 #define LOONGSON_SPI_DIV_MIN		2
@@ -92,8 +103,18 @@ struct loongson_spi {
 	unsigned int		mode;
 	u64			clk_rate;
 	struct loongson_spi_suspend_store lss;
+
+	spinlock_t		lock;	/* protects tx_ptr, rx_ptr and transfer state */
+	bool			use_irq;
+	const unsigned char	*tx_ptr;
+	unsigned char		*rx_ptr;
+	unsigned int		count;
+	unsigned int		sent;
+	unsigned int		total;
+	unsigned int		icnt;
+	unsigned int		fifo_depth;
 };
 
-int loongson_spi_init_controller(struct device *dev, void __iomem *reg);
+int loongson_spi_init_controller(struct device *dev, void __iomem *regs, int irq);
 extern const struct dev_pm_ops loongson_spi_dev_pm_ops;
 #endif /* __LINUX_SPI_LOONGSON_H */
