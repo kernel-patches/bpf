@@ -7,6 +7,8 @@
  *	branch, call			MCInstrAnalysis, which asks MCInstrDesc
  *	target				MCInstrAnalysis::evaluateBranch()
  *	registers written		MCInstrDesc: defs, implicit defs
+ *	registers read			MCInstrDesc: the other operands, implicit uses
+ *	load				MCInstrDesc::mayLoad()
  *	eax and rax, w0 and x0		MCRegAliasIterator
  *
  * Whatever MC does not describe completely writes TEXT_ALL_REGS.
@@ -59,6 +61,7 @@ struct Reg {
 /* What is known about an opcode before its operands are */
 struct Opcode {
 	u32 implicit_defs = 0;
+	u32 implicit_uses = 0;
 	unsigned int implicit_def = 0, implicit_use = 0;	/* the first ones, LLVM registers */
 	bool unmodeled = false, is_return = false;
 	std::vector<const mc_pattern *> patterns;
@@ -181,6 +184,8 @@ bool read_opcodes()
 		for (MCPhysReg r : desc.implicit_uses())
 			if (!o.implicit_use && d.regs[r].mask)
 				o.implicit_use = r;
+		for (MCPhysReg r : desc.implicit_uses())
+			o.implicit_uses |= d.regs[r].mask;
 		/* defs_of() does not look for the last two */
 		o.unmodeled = desc.hasUnmodeledSideEffects() || desc.hasOptionalDef() ||
 			      desc.variadicOpsAreDefs();
@@ -326,6 +331,19 @@ u32 defs_of(const MCInst &inst, const Opcode &o)
 	return defs;
 }
 
+/* Return the registers which INST reads */
+u32 uses_of(const MCInst &inst, const Opcode &o)
+{
+	u32 uses = o.implicit_uses;
+
+	if (o.unmodeled)
+		return TEXT_ALL_REGS;
+	for (unsigned int i = d.MII->get(inst.getOpcode()).getNumDefs(); i < inst.getNumOperands(); i++)
+		if (inst.getOperand(i).isReg())
+			uses |= d.regs[inst.getOperand(i).getReg()].mask;
+	return uses;
+}
+
 int decode(const void *code, unsigned int len, u64 addr, text_insn *ti)
 {
 	MCInst &inst = d.inst;
@@ -342,6 +360,8 @@ int decode(const void *code, unsigned int len, u64 addr, text_insn *ti)
 	const Opcode &o = d.opcodes[inst.getOpcode()];
 
 	ti->defs = defs_of(inst, o);
+	ti->uses = uses_of(inst, o);
+	ti->load = d.MII->get(inst.getOpcode()).mayLoad();
 	for (const mc_pattern *pattern : o.patterns) {
 		if (match(inst, o, *pattern, ti)) {
 			ti->defs &= ~(1U << ti->dst);
@@ -359,6 +379,7 @@ void print(raw_ostream &os, const text_insn &ti)
 	   << " op " << (int)ti.op
 	   << " defs " << format_hex(ti.defs, 1) << " imm " << format_hex(ti.imm, 1)
 	   << " imm2 " << format_hex(ti.imm2, 1);
+	os << " uses " << format_hex(ti.uses, 1) << " load " << ti.load;
 }
 
 bool run_tests()
@@ -378,6 +399,7 @@ bool run_tests()
 		    ti.kind == want.kind && ti.is32 == want.is32 && ti.dst == want.dst &&
 		    ti.src == want.src && ti.src2 == want.src2 &&
 		    ti.op == want.op &&
+		    (!want.uses || (ti.uses == want.uses && ti.load == want.load)) &&
 		    ti.defs == want.defs && ti.imm == want.imm && ti.imm2 == want.imm2)
 			continue;
 		print(error() << test->code << " is " << d.MII->getName(d.inst.getOpcode()) << ", length "
