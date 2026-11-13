@@ -356,8 +356,8 @@ AVS_DEFINE_PTR_PARSER(binding, struct avs_tplg_binding, bindings);
 AVS_DEFINE_PTR_PARSER(init_config, struct avs_tplg_init_config, init_configs);
 AVS_DEFINE_PTR_PARSER(nhlt_config, struct avs_tplg_nhlt_config, nhlt_configs);
 
-static int
-parse_audio_format_bitfield(struct snd_soc_component *comp, void *elem, void *object, u32 offset)
+static int avs_parse_audio_format_bitfield(struct snd_soc_component *comp,
+					   void *elem, void *object, u32 offset)
 {
 	struct snd_soc_tplg_vendor_value_elem *velem = elem;
 	struct avs_audio_format *audio_format = object;
@@ -399,8 +399,8 @@ static int avs_ssp_sprint(char *buf, size_t size, const char *fmt, int port, int
 	return snprintf(buf, size, "%s", fmt);
 }
 
-static int parse_link_formatted_string(struct snd_soc_component *comp, void *elem,
-				       void *object, u32 offset)
+static int avs_parse_link_formatted_string(struct snd_soc_component *comp,
+					   void *elem, void *object, u32 offset)
 {
 	struct snd_soc_tplg_vendor_string_elem *tuple = elem;
 	struct snd_soc_acpi_mach *mach = dev_get_platdata(comp->card->dev);
@@ -578,19 +578,19 @@ static const struct avs_tplg_token_parser audio_format_parsers[] = {
 		.token = AVS_TKN_AFMT_NUM_CHANNELS_U32,
 		.type = SND_SOC_TPLG_TUPLE_TYPE_WORD,
 		.offset = AVS_TKN_AFMT_NUM_CHANNELS_U32,
-		.parse = parse_audio_format_bitfield,
+		.parse = avs_parse_audio_format_bitfield,
 	},
 	{
 		.token = AVS_TKN_AFMT_VALID_BIT_DEPTH_U32,
 		.type = SND_SOC_TPLG_TUPLE_TYPE_WORD,
 		.offset = AVS_TKN_AFMT_VALID_BIT_DEPTH_U32,
-		.parse = parse_audio_format_bitfield,
+		.parse = avs_parse_audio_format_bitfield,
 	},
 	{
 		.token = AVS_TKN_AFMT_SAMPLE_TYPE_U32,
 		.type = SND_SOC_TPLG_TUPLE_TYPE_WORD,
 		.offset = AVS_TKN_AFMT_SAMPLE_TYPE_U32,
-		.parse = parse_audio_format_bitfield,
+		.parse = avs_parse_audio_format_bitfield,
 	},
 };
 
@@ -1096,7 +1096,7 @@ static const struct avs_tplg_token_parser binding_parsers[] = {
 		.token = AVS_TKN_BINDING_TARGET_TPLG_NAME_STRING,
 		.type = SND_SOC_TPLG_TUPLE_TYPE_STRING,
 		.offset = offsetof(struct avs_tplg_binding, target_tplg_name),
-		.parse = parse_link_formatted_string,
+		.parse = avs_parse_link_formatted_string,
 	},
 	{
 		.token = AVS_TKN_BINDING_TARGET_PATH_TMPL_ID_U32,
@@ -1822,7 +1822,7 @@ static int avs_route_load(struct snd_soc_component *comp, int index,
 	int ssp_port, tdm_slot;
 	char *buf;
 
-	/* See parse_link_formatted_string() for dynamic naming when(s). */
+	/* See avs_parse_link_formatted_string() for dynamic naming when(s). */
 	if (!avs_mach_singular_ssp(mach))
 		return 0;
 	ssp_port = avs_mach_ssp_port(mach);
@@ -1880,7 +1880,7 @@ static int avs_widget_load(struct snd_soc_component *comp, int index,
 		goto static_name;
 	ssp_port = avs_mach_ssp_port(mach);
 
-	/* See parse_link_formatted_string() for dynamic naming when(s). */
+	/* See avs_parse_link_formatted_string() for dynamic naming when(s). */
 	if (avs_mach_singular_tdm(mach, ssp_port)) {
 		/* size is based on possible %d -> SSP:TDM, where SSP and TDM < 16 + '\0' */
 		size_t size = strlen(dw->name) + 3;
@@ -1966,7 +1966,7 @@ static const struct avs_tplg_token_parser manifest_parsers[] = {
 		.token = AVS_TKN_MANIFEST_NAME_STRING,
 		.type = SND_SOC_TPLG_TUPLE_TYPE_STRING,
 		.offset = offsetof(struct avs_tplg, name),
-		.parse = parse_link_formatted_string,
+		.parse = avs_parse_link_formatted_string,
 	},
 	{
 		.token = AVS_TKN_MANIFEST_VERSION_U32,
