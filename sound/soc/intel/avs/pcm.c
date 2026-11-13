@@ -13,7 +13,6 @@
 #include <sound/hdaudio_ext.h>
 #include <sound/pcm_params.h>
 #include <sound/soc-acpi.h>
-#include <sound/soc-acpi-intel-match.h>
 #include <sound/soc-component.h>
 #include "avs.h"
 #include "path.h"
