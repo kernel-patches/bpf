@@ -166,9 +166,9 @@ static void avs_dai_shutdown(struct snd_pcm_substream *substream, struct snd_soc
 }
 
 static int avs_dai_hw_params(struct snd_pcm_substream *substream,
-			     struct snd_pcm_hw_params *fe_hw_params,
-			     struct snd_pcm_hw_params *be_hw_params, struct snd_soc_dai *dai,
-			     int dma_id)
+			     struct snd_pcm_hw_params *fe_params,
+			     struct snd_pcm_hw_params *be_params,
+			     struct snd_soc_dai *dai, int dma_id)
 {
 	struct avs_dma_data *data;
 	struct avs_path *path;
@@ -179,16 +179,16 @@ static int avs_dai_hw_params(struct snd_pcm_substream *substream,
 	dev_dbg(dai->dev, "%s FE hw_params str %p rtd %p",
 		__func__, substream, substream->runtime);
 	dev_dbg(dai->dev, "rate %d chn %d vbd %d bd %d\n",
-		params_rate(fe_hw_params), params_channels(fe_hw_params),
-		params_width(fe_hw_params), params_physical_width(fe_hw_params));
+		params_rate(fe_params), params_channels(fe_params),
+		params_width(fe_params), params_physical_width(fe_params));
 
 	dev_dbg(dai->dev, "%s BE hw_params str %p rtd %p",
 		__func__, substream, substream->runtime);
 	dev_dbg(dai->dev, "rate %d chn %d vbd %d bd %d\n",
-		params_rate(be_hw_params), params_channels(be_hw_params),
-		params_width(be_hw_params), params_physical_width(be_hw_params));
+		params_rate(be_params), params_channels(be_params),
+		params_width(be_params), params_physical_width(be_params));
 
-	path = avs_path_create(data->adev, dma_id, data->template, fe_hw_params, be_hw_params);
+	path = avs_path_create(data->adev, dma_id, data->template, fe_params, be_params);
 	if (IS_ERR(path)) {
 		ret = PTR_ERR(path);
 		dev_err(dai->dev, "create path failed: %d\n", ret);
@@ -200,10 +200,10 @@ static int avs_dai_hw_params(struct snd_pcm_substream *substream,
 }
 
 static int avs_dai_be_hw_params(struct snd_pcm_substream *substream,
-				struct snd_pcm_hw_params *be_hw_params, struct snd_soc_dai *dai,
-				int dma_id)
+				struct snd_pcm_hw_params *be_params,
+				struct snd_soc_dai *dai, int dma_id)
 {
-	struct snd_pcm_hw_params *fe_hw_params = NULL;
+	struct snd_pcm_hw_params *fe_params = NULL;
 	struct snd_soc_pcm_runtime *fe, *be;
 	struct snd_soc_dpcm *dpcm;
 
@@ -211,10 +211,10 @@ static int avs_dai_be_hw_params(struct snd_pcm_substream *substream,
 	/* dpcm_fe_dai_open() guarantees the list is not empty at this point. */
 	for_each_dpcm_fe(be, substream->stream, dpcm) {
 		fe = dpcm->fe;
-		fe_hw_params = &fe->dpcm[substream->stream].hw_params;
+		fe_params = &fe->dpcm[substream->stream].hw_params;
 	}
 
-	return avs_dai_hw_params(substream, fe_hw_params, be_hw_params, dai, dma_id);
+	return avs_dai_hw_params(substream, fe_params, be_params, dai, dma_id);
 }
 
 static int avs_dai_prepare(struct snd_pcm_substream *substream, struct snd_soc_dai *dai)
@@ -234,7 +234,7 @@ static int avs_dai_prepare(struct snd_pcm_substream *substream, struct snd_soc_d
 }
 
 static int avs_dai_nonhda_be_hw_params(struct snd_pcm_substream *substream,
-				       struct snd_pcm_hw_params *hw_params, struct snd_soc_dai *dai)
+				       struct snd_pcm_hw_params *be_params, struct snd_soc_dai *dai)
 {
 	struct avs_dma_data *data;
 
@@ -243,7 +243,7 @@ static int avs_dai_nonhda_be_hw_params(struct snd_pcm_substream *substream,
 		return 0;
 
 	/* Actual port-id comes from topology. */
-	return avs_dai_be_hw_params(substream, hw_params, dai, 0);
+	return avs_dai_be_hw_params(substream, be_params, dai, 0);
 }
 
 static int avs_dai_nonhda_be_hw_free(struct snd_pcm_substream *substream, struct snd_soc_dai *dai)
@@ -401,7 +401,7 @@ static void avs_dai_althda_be_shutdown(struct snd_pcm_substream *substream, stru
 }
 
 static int avs_dai_hda_be_hw_params(struct snd_pcm_substream *substream,
-				    struct snd_pcm_hw_params *hw_params, struct snd_soc_dai *dai)
+				    struct snd_pcm_hw_params *be_params, struct snd_soc_dai *dai)
 {
 	struct avs_dma_data *data;
 
@@ -409,7 +409,7 @@ static int avs_dai_hda_be_hw_params(struct snd_pcm_substream *substream,
 	if (data->path)
 		return 0;
 
-	return avs_dai_be_hw_params(substream, hw_params, dai,
+	return avs_dai_be_hw_params(substream, be_params, dai,
 				    hdac_stream(data->link_stream)->stream_tag - 1);
 }
 
@@ -643,9 +643,9 @@ static void avs_dai_fe_shutdown(struct snd_pcm_substream *substream, struct snd_
 }
 
 static int avs_dai_fe_hw_params(struct snd_pcm_substream *substream,
-				struct snd_pcm_hw_params *hw_params, struct snd_soc_dai *dai)
+				struct snd_pcm_hw_params *fe_params, struct snd_soc_dai *dai)
 {
-	struct snd_pcm_hw_params *be_hw_params = NULL;
+	struct snd_pcm_hw_params *be_params = NULL;
 	struct snd_soc_pcm_runtime *fe, *be;
 	struct snd_soc_dpcm *dpcm;
 	struct avs_dma_data *data;
@@ -666,10 +666,10 @@ static int avs_dai_fe_hw_params(struct snd_pcm_substream *substream,
 	/* dpcm_fe_dai_open() guarantees the list is not empty at this point. */
 	for_each_dpcm_be(fe, substream->stream, dpcm) {
 		be = dpcm->be;
-		be_hw_params = &be->dpcm[substream->stream].hw_params;
+		be_params = &be->dpcm[substream->stream].hw_params;
 	}
 
-	ret = avs_dai_hw_params(substream, hw_params, be_hw_params, dai,
+	ret = avs_dai_hw_params(substream, fe_params, be_params, dai,
 				hdac_stream(host_stream)->stream_tag - 1);
 	if (ret)
 		goto create_err;
