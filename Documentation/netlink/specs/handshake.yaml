@@ -85,6 +85,9 @@ attribute-sets:
       -
         name: keyring
         type: s32
+      -
+        name: max-session-tags
+        type: u32
   -
     name: done
     attributes:
@@ -136,6 +139,7 @@ operations:
             - certificate
             - peername
             - keyring
+            - max-session-tags
     -
       name: done
       doc: Handler reports handshake completion

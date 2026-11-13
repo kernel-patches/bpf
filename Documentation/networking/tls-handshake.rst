@@ -272,3 +272,11 @@ If the handshake failed or no tags were assigned, the stringset is
 empty. The handshake layer always delivers a finalized stringset to
 the callback, so consumers may call stringset_is_member() and
 stringset_intersection() unconditionally without a separate guard.
+
+The stringset delivered to the consumer may contain fewer tags than
+the handshake agent assigned. The kernel caps the per-DONE tag
+count at HANDSHAKE_MAX_SESSIONTAGS, and individual tags within
+the cap may be dropped under memory pressure. The kernel reports
+the cap in every ACCEPT reply as
+HANDSHAKE_A_ACCEPT_MAX_SESSION_TAGS, so the agent can size its
+DONE-side tag list to it.
