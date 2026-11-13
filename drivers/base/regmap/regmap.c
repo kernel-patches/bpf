@@ -682,6 +682,7 @@ struct regmap *__regmap_init(struct device *dev,
 {
 	struct regmap *map;
 	enum regmap_endian reg_endian, val_endian;
+	bool fast_io;
 	int i, j;
 	int ret;
 
@@ -701,6 +702,8 @@ struct regmap *__regmap_init(struct device *dev,
 		goto err_map;
 
 	ret = -EINVAL; /* Later error paths rely on this */
+
+	fast_io = (bus && bus->fast_io) || config->fast_io;
 
 	if (config->disable_locking) {
 		map->lock = map->unlock = regmap_lock_unlock_none;
@@ -735,8 +738,7 @@ struct regmap *__regmap_init(struct device *dev,
 
 		map->lock_arg = map;
 	} else {
-		if ((bus && bus->fast_io) ||
-		    config->fast_io) {
+		if (fast_io) {
 			if (config->use_raw_spinlock) {
 				raw_spin_lock_init(&map->raw_spinlock);
 				map->lock = regmap_lock_raw_spinlock;
@@ -766,10 +768,7 @@ struct regmap *__regmap_init(struct device *dev,
 	 * When we write in fast-paths with regmap_bulk_write() don't allocate
 	 * scratch buffers with sleeping allocations.
 	 */
-	if ((bus && bus->fast_io) || config->fast_io)
-		map->alloc_flags = GFP_ATOMIC;
-	else
-		map->alloc_flags = GFP_KERNEL;
+	map->alloc_flags = fast_io ? GFP_ATOMIC : GFP_KERNEL;
 
 	map->reg_base = config->reg_base;
 	map->reg_shift = config->pad_bits % 8;
