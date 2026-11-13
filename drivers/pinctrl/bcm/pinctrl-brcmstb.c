@@ -66,7 +66,16 @@ static unsigned int brcmstb_pinctrl_fsel_get(struct brcmstb_pinctrl *pc,
 
 	val = readl(pc->base + BIT_TO_REG(bit));
 	fsel = (val >> BIT_TO_SHIFT(bit)) & pc->pin_funcs[pin].func_mask;
-	func = pc->pin_funcs[pin].funcs[fsel];
+
+	if (!fsel)
+		return pc->func_gpio;
+
+	if (fsel > pc->pin_funcs[pin].n_funcs) {
+		dev_warn(pc->dev, "invalid fsel %d for pin %u\n", fsel, pin);
+		return pc->func_gpio;
+	}
+
+	func = pc->pin_funcs[pin].funcs[fsel - 1];
 
 	if (func >= pc->func_count)
 		func = fsel;
