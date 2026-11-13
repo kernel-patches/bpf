@@ -285,7 +285,7 @@ revelada involucrada. La lista de embajadores actuales:
   Red Hat	Josh Poimboeuf <jpoimboe@redhat.com>
   SUSE		Jiri Kosina <jkosina@suse.cz>
 
-  Google	Kees Cook <keescook@chromium.org>
+  Google	Kees Cook <keescook@google.com>
 
   LLVM		Nick Desaulniers <ndesaulniers@google.com>
   ============= ========================================================

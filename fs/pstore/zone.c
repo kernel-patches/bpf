@@ -1471,5 +1471,5 @@ EXPORT_SYMBOL_GPL(unregister_pstore_zone);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("WeiXiong Liao <liaoweixiong@allwinnertech.com>");
-MODULE_AUTHOR("Kees Cook <keescook@chromium.org>");
+MODULE_AUTHOR("Kees Cook <kees@kernel.org>");
 MODULE_DESCRIPTION("Storage Manager for pstore/blk");
