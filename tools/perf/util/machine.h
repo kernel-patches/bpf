@@ -193,11 +193,12 @@ struct mem_info *sample__resolve_mem(struct perf_sample *sample,
 				     struct addr_location *al);
 
 struct callchain_cursor;
+struct dso_symbol;
 
 int __thread__resolve_callchain(struct thread *thread,
 				struct callchain_cursor *cursor,
 				struct perf_sample *sample,
-				struct symbol **parent,
+				struct dso_symbol *parent,
 				struct addr_location *root_al,
 				int max_stack,
 				bool symbols);
@@ -205,7 +206,7 @@ int __thread__resolve_callchain(struct thread *thread,
 static inline int thread__resolve_callchain(struct thread *thread,
 					    struct callchain_cursor *cursor,
 					    struct perf_sample *sample,
-					    struct symbol **parent,
+					    struct dso_symbol *parent,
 					    struct addr_location *root_al,
 					    int max_stack)
 {

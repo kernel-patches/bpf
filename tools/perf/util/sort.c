@@ -1010,8 +1010,8 @@ static struct sort_entry sort_srcfile = {
 static int64_t
 sort__parent_cmp(struct hist_entry *left, struct hist_entry *right)
 {
-	struct symbol *sym_l = left->parent;
-	struct symbol *sym_r = right->parent;
+	struct symbol *sym_l = left->parent.sym;
+	struct symbol *sym_r = right->parent.sym;
 
 	if (!sym_l || !sym_r)
 		return cmp_null(sym_l, sym_r);
@@ -1023,7 +1023,7 @@ static int hist_entry__parent_snprintf(struct hist_entry *he, char *bf,
 				       size_t size, unsigned int width)
 {
 	return repsep_snprintf(bf, size, "%-*.*s", width, width,
-			      he->parent ? he->parent->name : "[other]");
+			      he->parent.sym ? he->parent.sym->name : "[other]");
 }
 
 struct sort_entry sort_parent = {

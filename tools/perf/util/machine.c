@@ -2236,7 +2236,7 @@ static int append_inlines(struct callchain_cursor *cursor, struct map_symbol *ms
 
 static int add_callchain_ip(struct thread *thread,
 			    struct callchain_cursor *cursor,
-			    struct symbol **parent,
+			    struct dso_symbol *parent,
 			    struct addr_location *root_al,
 			    u8 *cpumode,
 			    u64 ip,
@@ -2279,6 +2279,8 @@ static int add_callchain_ip(struct thread *thread,
 				 * Discard all.
 				 */
 				callchain_cursor_reset(cursor);
+				if (parent)
+					dso_symbol__exit(parent);
 				err = 1;
 				goto out;
 			}
@@ -2291,10 +2293,12 @@ static int add_callchain_ip(struct thread *thread,
 	}
 
 	if (al.sym != NULL) {
-		if (perf_hpp_list.parent && !*parent &&
-		    symbol__match_regex(al.sym, &parent_regex))
-			*parent = al.sym;
-		else if (have_ignore_callees && root_al &&
+		if (perf_hpp_list.parent && parent && !parent->sym &&
+		    symbol__match_regex(al.sym, &parent_regex)) {
+			struct dso_symbol ds = dso_symbol__from_al(&al);
+
+			dso_symbol__copy(parent, &ds);
+		} else if (have_ignore_callees && root_al &&
 		  symbol__match_regex(al.sym, &ignore_callees_regex)) {
 			/* Treat this symbol as the root,
 			   forgetting its callees. */
@@ -2418,7 +2422,7 @@ static int remove_loops(struct branch_entry *l, int nr,
 static int lbr_callchain_add_kernel_ip(struct thread *thread,
 				       struct callchain_cursor *cursor,
 				       struct perf_sample *sample,
-				       struct symbol **parent,
+				       struct dso_symbol *parent,
 				       struct addr_location *root_al,
 				       u64 branch_from,
 				       bool callee, int end,
@@ -2484,7 +2488,7 @@ static void save_lbr_cursor_node(struct thread *thread,
 static int lbr_callchain_add_lbr_ip(struct thread *thread,
 				    struct callchain_cursor *cursor,
 				    struct perf_sample *sample,
-				    struct symbol **parent,
+				    struct dso_symbol *parent,
 				    struct addr_location *root_al,
 				    u64 *branch_from,
 				    bool callee,
@@ -2752,7 +2756,7 @@ err:
 static int resolve_lbr_callchain_sample(struct thread *thread,
 					struct callchain_cursor *cursor,
 					struct perf_sample *sample,
-					struct symbol **parent,
+					struct dso_symbol *parent,
 					struct addr_location *root_al,
 					int max_stack,
 					unsigned int max_lbr,
@@ -2839,7 +2843,7 @@ error:
 
 static int find_prev_cpumode(struct ip_callchain *chain, struct thread *thread,
 			     struct callchain_cursor *cursor,
-			     struct symbol **parent,
+			     struct dso_symbol *parent,
 			     struct addr_location *root_al,
 			     u8 *cpumode, int ent, bool symbols)
 {
@@ -2870,7 +2874,7 @@ static u64 get_leaf_frame_caller(struct perf_sample *sample,
 static int thread__resolve_callchain_sample(struct thread *thread,
 					    struct callchain_cursor *cursor,
 					    struct perf_sample *sample,
-					    struct symbol **parent,
+					    struct dso_symbol *parent,
 					    struct addr_location *root_al,
 					    int max_stack,
 					    bool symbols)
@@ -3102,12 +3106,15 @@ static int thread__resolve_callchain_unwind(struct thread *thread,
 int __thread__resolve_callchain(struct thread *thread,
 				struct callchain_cursor *cursor,
 				struct perf_sample *sample,
-				struct symbol **parent,
+				struct dso_symbol *parent,
 				struct addr_location *root_al,
 				int max_stack,
 				bool symbols)
 {
 	int ret = 0;
+
+	if (parent)
+		dso_symbol__exit(parent);
 
 	if (cursor == NULL)
 		return -ENOMEM;
@@ -3120,7 +3127,7 @@ int __thread__resolve_callchain(struct thread *thread,
 						       parent, root_al,
 						       max_stack, symbols);
 		if (ret)
-			return ret;
+			goto out;
 		ret = thread__resolve_callchain_unwind(thread, cursor,
 						       sample,
 						       max_stack, symbols);
@@ -3129,13 +3136,16 @@ int __thread__resolve_callchain(struct thread *thread,
 						       sample,
 						       max_stack, symbols);
 		if (ret)
-			return ret;
+			goto out;
 		ret = thread__resolve_callchain_sample(thread, cursor,
 						       sample,
 						       parent, root_al,
 						       max_stack, symbols);
 	}
 
+out:
+	if (ret && parent)
+		dso_symbol__exit(parent);
 	return ret;
 }
 

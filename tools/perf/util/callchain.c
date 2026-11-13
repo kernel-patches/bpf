@@ -1170,7 +1170,8 @@ int callchain_cursor_append(struct callchain_cursor *cursor,
 }
 
 int sample__resolve_callchain(struct perf_sample *sample,
-			      struct callchain_cursor *cursor, struct symbol **parent,
+			      struct callchain_cursor *cursor,
+			      struct dso_symbol *parent,
 			      struct addr_location *al,
 			      int max_stack)
 {

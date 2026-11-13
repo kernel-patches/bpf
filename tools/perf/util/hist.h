@@ -159,7 +159,7 @@ struct hist_entry_iter {
 
 	struct perf_sample *sample;
 	struct hist_entry *he;
-	struct symbol *parent;
+	struct dso_symbol parent;
 
 	struct mem_info *mi;
 	struct branch_info *bi;
@@ -292,7 +292,7 @@ struct hist_entry {
 	};
 	char			*srcline;
 	char			*srcfile;
-	struct symbol		*parent;
+	struct dso_symbol	parent;
 	struct branch_info	*branch_info;
 	long			time;
 	struct hists		*hists;
@@ -350,7 +350,7 @@ static inline void hist_entry__add_pair(struct hist_entry *pair,
 
 struct hist_entry *hists__add_entry(struct hists *hists,
 				    struct addr_location *al,
-				    struct symbol *parent,
+				    const struct dso_symbol *parent,
 				    struct branch_info *bi,
 				    struct mem_info *mi,
 				    struct kvm_info *ki,
@@ -360,7 +360,7 @@ struct hist_entry *hists__add_entry(struct hists *hists,
 struct hist_entry *hists__add_entry_ops(struct hists *hists,
 					struct hist_entry_ops *ops,
 					struct addr_location *al,
-					struct symbol *sym_parent,
+					const struct dso_symbol *sym_parent,
 					struct branch_info *bi,
 					struct mem_info *mi,
 					struct kvm_info *ki,
