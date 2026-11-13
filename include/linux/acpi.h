@@ -831,7 +831,7 @@ int acpi_mrrm_max_mem_region(void);
 	{ "PNP0B00", },		\
 	{ "PNP0B01", },		\
 	{ "PNP0B02", },		\
-	{ "", }
+	{ }
 
 extern bool cmos_rtc_platform_device_present;
 

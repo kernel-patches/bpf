@@ -595,7 +595,7 @@ static int acpi_pfru_probe(struct platform_device *pdev)
 
 static const struct acpi_device_id acpi_pfru_ids[] = {
 	{"INTC1080"},
-	{}
+	{ }
 };
 MODULE_DEVICE_TABLE(acpi, acpi_pfru_ids);
 

@@ -68,7 +68,7 @@ static const struct acpi_device_id battery_device_ids[] = {
 	/* Microsoft Surface Go 3 */
 	{"MSHW0146", 0},
 
-	{"", 0},
+	{ }
 };
 
 MODULE_DEVICE_TABLE(acpi, battery_device_ids);

@@ -65,7 +65,7 @@ static const struct acpi_device_id button_device_ids[] = {
 	{ACPI_BUTTON_HID_SLEEPF, ACPI_BUTTON_TYPE_SLEEP},
 	{ACPI_BUTTON_HID_POWER, ACPI_BUTTON_TYPE_POWER},
 	{ACPI_BUTTON_HID_POWERF, ACPI_BUTTON_TYPE_POWER},
-	{"", 0},
+	{ }
 };
 MODULE_DEVICE_TABLE(acpi, button_device_ids);
 

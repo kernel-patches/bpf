@@ -62,7 +62,7 @@ MODULE_PARM_DESC(check_lps0_constraints, "Check LPS0 device constraints");
 
 static const struct acpi_device_id lps0_device_ids[] = {
 	{"PNP0D80", },
-	{"", },
+	{ }
 };
 
 /* Microsoft platform agnostic UUID */
@@ -463,7 +463,7 @@ static const struct acpi_device_id amd_hid_ids[] = {
 	{"AMD0005",	(kernel_ulong_t)&amd_picasso,	},
 	{"AMDI0005",	(kernel_ulong_t)&amd_picasso,	},
 	{"AMDI0006",	(kernel_ulong_t)&amd_cezanne,	},
-	{}
+	{ }
 };
 
 static int lps0_device_attach(struct acpi_device *adev,

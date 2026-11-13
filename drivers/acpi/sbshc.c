@@ -35,7 +35,7 @@ static void acpi_smbus_hc_remove(struct platform_device *pdev);
 static const struct acpi_device_id sbs_device_ids[] = {
 	{"ACPI0001", 0},
 	{"ACPI0005", 0},
-	{"", 0},
+	{ }
 };
 
 MODULE_DEVICE_TABLE(acpi, sbs_device_ids);

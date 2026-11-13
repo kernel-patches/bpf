@@ -301,7 +301,7 @@ static const struct acpi_device_id acpi_pnp_device_ids[] = {
 	/* snd-opl3sa2-pnpbios */
 	{"YMH0021"},
 	{"NMX2210"},		/* Gateway Solo 2500 */
-	{""},
+	{ }
 };
 
 static bool matching_id(const char *idstr, const char *list_id)

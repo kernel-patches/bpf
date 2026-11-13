@@ -1009,7 +1009,7 @@ static bool acpi_wakeup_gpe_init(struct acpi_device *device)
 	static const struct acpi_device_id button_device_ids[] = {
 		{"PNP0C0D", 0},	/* Lid */
 		{"PNP0C0E", 0},	/* Sleep button */
-		{"", 0},
+		{ }
 	};
 	struct acpi_device_wakeup *wakeup = &device->wakeup;
 	const struct acpi_device_id *match;
@@ -1733,7 +1733,7 @@ static bool acpi_is_indirect_io_slave(struct acpi_device *device)
 	struct acpi_device *parent = acpi_dev_parent(device);
 	static const struct acpi_device_id indirect_io_hosts[] = {
 		{"HISI0191", 0},
-		{}
+		{ }
 	};
 
 	return parent && !acpi_match_device_ids(parent, indirect_io_hosts);
@@ -1780,7 +1780,7 @@ static bool acpi_device_enumeration_by_parent(struct acpi_device *device)
 	 */
 		{"BCM4752", },
 		{"LNV4752", },
-		{}
+		{ }
 	};
 
 	if (acpi_is_indirect_io_slave(device))
@@ -2288,7 +2288,7 @@ static void acpi_default_enumeration(struct acpi_device *device)
 
 static const struct acpi_device_id generic_device_ids[] = {
 	{ACPI_DT_NAMESPACE_HID, },
-	{"", },
+	{ }
 };
 
 static int acpi_generic_device_attach(struct acpi_device *adev,

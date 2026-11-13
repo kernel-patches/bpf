@@ -22,7 +22,7 @@
 
 static const struct acpi_device_id memory_device_ids[] = {
 	{ACPI_MEMORY_DEVICE_HID, 0},
-	{"", 0},
+	{ }
 };
 
 #ifdef CONFIG_ACPI_HOTPLUG_MEMORY

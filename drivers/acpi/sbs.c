@@ -46,7 +46,7 @@ MODULE_PARM_DESC(cache_time, "cache time in milliseconds");
 
 static const struct acpi_device_id sbs_device_ids[] = {
 	{"ACPI0002", 0},
-	{"", 0},
+	{ }
 };
 MODULE_DEVICE_TABLE(acpi, sbs_device_ids);
 

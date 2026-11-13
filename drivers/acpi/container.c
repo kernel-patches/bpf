@@ -18,7 +18,7 @@ static const struct acpi_device_id container_device_ids[] = {
 	{"ACPI0004", 0},
 	{"PNP0A05", 0},
 	{"PNP0A06", 0},
-	{"", 0},
+	{ }
 };
 
 #ifdef CONFIG_ACPI_CONTAINER

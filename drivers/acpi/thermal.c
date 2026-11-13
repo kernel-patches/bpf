@@ -926,7 +926,7 @@ static const struct dev_pm_ops acpi_thermal_pm_ops = {
 
 static const struct acpi_device_id  thermal_device_ids[] = {
 	{ACPI_THERMAL_HID, 0},
-	{"", 0},
+	{ }
 };
 MODULE_DEVICE_TABLE(acpi, thermal_device_ids);
 
