@@ -854,6 +854,7 @@ struct bpf_iter_task_vma_kern_data {
 	struct mm_struct *mm;
 	struct vm_area_struct snapshot;
 	u64 next_addr;
+	bool done;
 };
 
 struct bpf_iter_task_vma {
@@ -931,6 +932,7 @@ __bpf_kfunc int bpf_iter_task_vma_new(struct bpf_iter_task_vma *it,
 
 	kit->data->snapshot.vm_file = NULL;
 	kit->data->next_addr = addr;
+	kit->data->done = false;
 	return 0;
 
 err_cleanup_iter:
@@ -1007,13 +1009,19 @@ __bpf_kfunc struct vm_area_struct *bpf_iter_task_vma_next(struct bpf_iter_task_v
 	if (!kit->data) /* bpf_iter_task_vma_new failed */
 		return NULL;
 
+	/* Once NULL is returned, next() has to keep returning NULL. */
+	if (kit->data->done)
+		return NULL;
+
 	snap = &kit->data->snapshot;
 
 	bpf_iter_task_vma_snapshot_reset(snap);
 
 	vma = bpf_iter_task_vma_find_next(kit->data);
-	if (!vma)
+	if (!vma) {
+		kit->data->done = true;
 		return NULL;
+	}
 
 	memcpy(snap, vma, sizeof(*snap));
 
