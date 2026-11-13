@@ -372,12 +372,26 @@ static void gso_test_case_to_desc(struct gso_test_case *t, char *desc)
 
 KUNIT_ARRAY_PARAM(gso_test, cases, gso_test_case_to_desc);
 
+/* Each byte depends on its place in the payload, so that data from the wrong
+ * offset of the right piece doesn't compare equal.  251 is prime, so the
+ * pattern doesn't repeat in step with GSO_TEST_SIZE.
+ */
+static void gso_test_fill(void *data, unsigned int len, unsigned int *pos)
+{
+	u8 *p = data;
+
+	while (len--)
+		*p++ = (*pos)++ % 251;
+}
+
 static void gso_test_func(struct kunit *test)
 {
 	const int shinfo_size = SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
 	struct sk_buff *skb, *segs, *cur, *next, *last;
+	unsigned int payload_len, fill = 0, off = 0;
 	const struct gso_test_case *tcase;
 	netdev_features_t features;
+	u8 *payload, *seg_payload;
 	struct page *page;
 	int i;
 
@@ -394,6 +408,7 @@ static void gso_test_func(struct kunit *test)
 	__skb_put(skb, sizeof(hdr) + tcase->linear_len);
 
 	__init_skb(skb);
+	gso_test_fill(skb->data, tcase->linear_len, &fill);
 	skb_shinfo(skb)->gso_type = tcase->gso_type;
 
 	if (tcase->nr_frags) {
@@ -409,6 +424,7 @@ static void gso_test_func(struct kunit *test)
 		}
 
 		KUNIT_ASSERT_LE(test, pg_off, PAGE_SIZE);
+		gso_test_fill(page_address(page), pg_off, &fill);
 
 		skb->data_len = pg_off;
 		skb->len += skb->data_len;
@@ -432,13 +448,16 @@ static void gso_test_func(struct kunit *test)
 						     frag_size + shinfo_size);
 			}
 			KUNIT_ASSERT_NOT_NULL(test, frag_skb);
-			__skb_put(frag_skb, frag_size);
+			gso_test_fill(__skb_put(frag_skb, frag_size), frag_size,
+				      &fill);
 
 			frag_len = tcase->frag_skb_frags ? tcase->frag_skb_frags[i] : 0;
 			if (frag_len) {
+				KUNIT_ASSERT_LE(test, frag_len, PAGE_SIZE);
 				page = alloc_page(GFP_KERNEL);
 				KUNIT_ASSERT_NOT_NULL(test, page);
 				skb_fill_page_desc(frag_skb, 0, page, 0, frag_len);
+				gso_test_fill(page_address(page), frag_len, &fill);
 
 				frag_skb->data_len = frag_len;
 				frag_skb->len += frag_len;
@@ -502,6 +521,18 @@ static void gso_test_func(struct kunit *test)
 		goto free_gso_skb;
 	}
 
+	/* the segments have to hold the bytes of the fill, in its order */
+	payload_len = skb->len;
+	KUNIT_EXPECT_EQ(test, fill, payload_len);
+	payload = kunit_kmalloc(test, payload_len, GFP_KERNEL);
+	seg_payload = kunit_kmalloc(test, payload_len, GFP_KERNEL);
+	if (!payload || !seg_payload) {
+		KUNIT_FAIL(test, "no memory for the payload");
+		goto free_gso_skb;
+	}
+	fill = 0;
+	gso_test_fill(payload, payload_len, &fill);
+
 	segs = skb_segment(skb, features);
 	if (IS_ERR(segs)) {
 		KUNIT_FAIL(test, "segs error %pe", segs);
@@ -518,14 +549,26 @@ static void gso_test_func(struct kunit *test)
 		if (i >= tcase->nr_segs)
 			goto consume;
 
-		KUNIT_ASSERT_EQ(test, cur->len, sizeof(hdr) + tcase->segs[i]);
+		KUNIT_EXPECT_EQ(test, cur->len, sizeof(hdr) + tcase->segs[i]);
 
 		/* segs have skb->data pointing to the mac header */
-		KUNIT_ASSERT_PTR_EQ(test, skb_mac_header(cur), cur->data);
-		KUNIT_ASSERT_PTR_EQ(test, skb_network_header(cur), cur->data + sizeof(hdr));
+		KUNIT_EXPECT_PTR_EQ(test, skb_mac_header(cur), cur->data);
+		KUNIT_EXPECT_PTR_EQ(test, skb_network_header(cur), cur->data + sizeof(hdr));
 
 		/* header was copied to all segs */
-		KUNIT_ASSERT_EQ(test, memcmp(skb_mac_header(cur), hdr, sizeof(hdr)), 0);
+		KUNIT_EXPECT_EQ(test, memcmp(skb_mac_header(cur), hdr, sizeof(hdr)), 0);
+
+		if (off + tcase->segs[i] > payload_len ||
+		    skb_copy_bits(cur, sizeof(hdr), seg_payload,
+				  tcase->segs[i])) {
+			KUNIT_FAIL(test, "can't copy segment %d", i);
+			kfree_skb_list(cur);
+			goto free_gso_skb;
+		}
+		KUNIT_EXPECT_MEMEQ(test, seg_payload, payload + off,
+				   tcase->segs[i]);
+		off += tcase->segs[i];
+
 		if (tcase->gso_segs) {
 			unsigned int gso_segs = tcase->gso_segs[i];
 
@@ -542,13 +585,14 @@ static void gso_test_func(struct kunit *test)
 
 		/* last seg can be found through segs->prev pointer */
 		if (!next)
-			KUNIT_ASSERT_PTR_EQ(test, cur, last);
+			KUNIT_EXPECT_PTR_EQ(test, cur, last);
 
 consume:
 		consume_skb(cur);
 	}
 
-	KUNIT_ASSERT_EQ(test, i, tcase->nr_segs);
+	KUNIT_EXPECT_EQ(test, off, payload_len);
+	KUNIT_EXPECT_EQ(test, i, tcase->nr_segs);
 
 free_gso_skb:
 	consume_skb(skb);
