@@ -350,6 +350,15 @@ int phy_mii_ioctl(struct phy_device *phydev, struct ifreq *ifr, int cmd)
 			prtad = mii_data->phy_id;
 			devad = mii_data->reg_num;
 		}
+
+		if (mdio_phy_id_is_c45(mii_data->phy_id))
+			ret = mdiobus_c45_write(phydev->mdio.bus, prtad, devad,
+						mii_data->reg_num, val);
+		else
+			ret = mdiobus_write(phydev->mdio.bus, prtad, devad, val);
+		if (ret < 0)
+			return ret;
+
 		if (prtad == phydev->mdio.addr) {
 			switch (devad) {
 			case MII_BMCR:
@@ -387,12 +396,6 @@ int phy_mii_ioctl(struct phy_device *phydev, struct ifreq *ifr, int cmd)
 				break;
 			}
 		}
-
-		if (mdio_phy_id_is_c45(mii_data->phy_id))
-			mdiobus_c45_write(phydev->mdio.bus, prtad, devad,
-					  mii_data->reg_num, val);
-		else
-			mdiobus_write(phydev->mdio.bus, prtad, devad, val);
 
 		if (prtad == phydev->mdio.addr &&
 		    devad == MII_BMCR &&
