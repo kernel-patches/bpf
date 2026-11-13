@@ -105,6 +105,10 @@ static const struct dmi_system_id processor_power_dmi_table[] = {
 	  DMI_MATCH(DMI_SYS_VENDOR, "ASUSTeK Computer Inc."),
 	  DMI_MATCH(DMI_PRODUCT_NAME,"L8400B series Notebook PC")},
 	 (void *)1},
+	{ set_max_cstate, "HA0QING A520", {
+	  DMI_MATCH(DMI_BOARD_VENDOR, "HA0QING"),
+	  DMI_MATCH(DMI_BOARD_NAME, "A520") },
+	 (void *)1},
 	{},
 };
 
