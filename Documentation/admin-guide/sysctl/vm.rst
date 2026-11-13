@@ -41,6 +41,7 @@ Currently, these files are in /proc/sys/vm:
 - legacy_va_layout
 - lowmem_reserve_ratio
 - max_map_count
+- max_shared_policy_count
 - mem_profiling         (only if CONFIG_MEM_ALLOC_PROFILING=y)
 - memory_failure_early_kill
 - memory_failure_recovery
@@ -471,6 +472,23 @@ programs, particularly malloc debuggers, may consume lots of them,
 e.g., up to one or two maps per allocation.
 
 The default value is 65530.
+
+
+max_shared_policy_count
+=======================
+
+The maximum number of shared NUMA policy ranges stored on a single inode.
+This applies to tmpfs files, shared anonymous mappings, shmem-backed memfds
+and System V shared memory segments, and guest_memfds. The policies are
+shared by all mappings of the same inode and remain after all mappings are
+removed.
+
+An update that would increase the number of ranges beyond this limit fails
+with -ENOMEM; this includes splitting of existing ranges. Lowering the
+limit will not remove existing policies. Updates that preserve or reduce
+the count remain allowed even if it exceeds the limit.
+
+The default value is 1024. The minimum value is 1.
 
 
 mem_profiling
