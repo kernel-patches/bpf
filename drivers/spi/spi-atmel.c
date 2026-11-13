@@ -234,6 +234,8 @@
  */
 #define DMA_MIN_BYTES	16
 
+#define POLL_LIMIT_US	30
+
 #define AUTOSUSPEND_TIMEOUT	2000
 
 struct atmel_spi_caps {
@@ -274,6 +276,7 @@ struct atmel_spi {
 
 	bool			use_dma;
 	bool			use_pdc;
+	bool			poll;
 
 	bool			keep_cs;
 
@@ -706,7 +709,8 @@ static void atmel_spi_next_xfer_single(struct spi_controller *host,
 		xfer->bits_per_word);
 
 	/* Enable relevant interrupts */
-	spi_writel(as, IER, SPI_BIT(RDRF) | SPI_BIT(OVRES));
+	if (!as->poll)
+		spi_writel(as, IER, SPI_BIT(RDRF) | SPI_BIT(OVRES));
 }
 
 /*
@@ -776,7 +780,8 @@ static void atmel_spi_next_xfer_fifo(struct spi_controller *host,
 	 * Enable RX FIFO Threshold Flag interrupt to be notified about
 	 * transfer completion.
 	 */
-	spi_writel(as, IER, SPI_BIT(RXFTHF) | SPI_BIT(OVRES));
+	if (!as->poll)
+		spi_writel(as, IER, SPI_BIT(RXFTHF) | SPI_BIT(OVRES));
 }
 
 /*
@@ -1154,6 +1159,13 @@ atmel_spi_pio_interrupt(int irq, void *dev_id)
 	struct spi_transfer	*xfer;
 	int			ret = IRQ_NONE;
 
+	atmel_spi_lock(as);
+
+	if (as->poll) {
+		atmel_spi_unlock(as);
+		return IRQ_NONE;
+	}
+
 	imr = spi_readl(as, IMR);
 	status = spi_readl(as, SR);
 	pending = status & imr;
@@ -1181,8 +1193,6 @@ atmel_spi_pio_interrupt(int irq, void *dev_id)
 		complete(&as->xfer_completion);
 
 	} else if (pending & (SPI_BIT(RDRF) | SPI_BIT(RXFTHF))) {
-		atmel_spi_lock(as);
-
 		if (as->current_remaining_bytes) {
 			ret = IRQ_HANDLED;
 			xfer = as->current_transfer;
@@ -1192,13 +1202,13 @@ atmel_spi_pio_interrupt(int irq, void *dev_id)
 
 			complete(&as->xfer_completion);
 		}
-
-		atmel_spi_unlock(as);
 	} else {
 		WARN_ONCE(pending, "IRQ not handled, pending = %x\n", pending);
 		ret = IRQ_HANDLED;
 		spi_writel(as, IDR, pending);
 	}
+
+	atmel_spi_unlock(as);
 
 	return ret;
 }
@@ -1378,6 +1388,56 @@ static void atmel_spi_set_cs(struct spi_device *spi, bool enable)
 
 }
 
+static bool atmel_spi_use_poll(struct atmel_spi *as,
+			       struct spi_transfer *xfer)
+{
+	u32 hz = xfer->effective_speed_hz ?: xfer->speed_hz;
+	int word_delay_ns;
+	u32 words;
+	u64 us;
+
+	if (as->use_pdc || atmel_spi_use_dma(as, xfer) || !hz)
+		return false;
+
+	us = div_u64((u64)xfer->len * BITS_PER_BYTE * USEC_PER_SEC, hz);
+
+	word_delay_ns = spi_delay_to_ns(&xfer->word_delay, xfer);
+	if (word_delay_ns > 0) {
+		words = xfer->len / DIV_ROUND_UP(xfer->bits_per_word,
+						 BITS_PER_BYTE);
+		us += div_u64((u64)words * word_delay_ns, NSEC_PER_USEC);
+	}
+
+	return us < POLL_LIMIT_US;
+}
+
+static int atmel_spi_poll_xfer(struct atmel_spi *as,
+			       struct spi_transfer *xfer)
+{
+	u32 done = as->fifo_size ? SPI_BIT(RXFTHF) : SPI_BIT(RDRF);
+	u32 status;
+	int ret;
+
+	ret = readl_poll_timeout(as->regs + SPI_SR, status,
+				 status & (done | SPI_BIT(OVRES)),
+				 0, POLL_LIMIT_US * 10);
+	if (ret) {
+		dev_err(&as->pdev->dev, "spi transfer timeout\n");
+		return -EIO;
+	}
+
+	if (status & SPI_BIT(OVRES)) {
+		dev_warn(&as->pdev->dev, "overrun\n");
+		return -EIO;
+	}
+
+	atmel_spi_lock(as);
+	atmel_spi_pump_pio_data(as, xfer);
+	atmel_spi_unlock(as);
+
+	return 0;
+}
+
 static int atmel_spi_one_transfer(struct spi_controller *host,
 					struct spi_device *spi,
 					struct spi_transfer *xfer)
@@ -1412,9 +1472,15 @@ static int atmel_spi_one_transfer(struct spi_controller *host,
 
 	atmel_spi_set_xfer_speed(as, spi, xfer);
 
+	atmel_spi_lock(as);
 	as->done_status = 0;
 	as->current_transfer = xfer;
 	as->current_remaining_bytes = xfer->len;
+	as->poll = atmel_spi_use_poll(as, xfer);
+	if (as->poll)
+		spi_writel(as, IDR, (as->fifo_size ? SPI_BIT(RXFTHF) :
+				     SPI_BIT(RDRF)) | SPI_BIT(OVRES));
+	atmel_spi_unlock(as);
 	while (as->current_remaining_bytes) {
 		reinit_completion(&as->xfer_completion);
 
@@ -1440,6 +1506,13 @@ static int atmel_spi_one_transfer(struct spi_controller *host,
 			atmel_spi_lock(as);
 			atmel_spi_next_xfer_pio(host, xfer);
 			atmel_spi_unlock(as);
+
+			if (as->poll) {
+				as->done_status = atmel_spi_poll_xfer(as, xfer);
+				if (as->done_status)
+					break;
+				continue;
+			}
 		}
 
 		dma_timeout = msecs_to_jiffies(spi_controller_xfer_timeout(host, xfer));
