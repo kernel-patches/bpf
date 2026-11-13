@@ -42,6 +42,7 @@ struct modversion_info {
 
 struct module;
 struct exception_table_entry;
+struct kallsyms_name_query;
 
 struct module_kobject {
 	struct kobject kobj;
@@ -978,6 +979,10 @@ int lookup_module_symbol_attrs(unsigned long addr,
  */
 int module_get_kallsym(unsigned int symnum, unsigned long *value, char *type,
 		       char *name, char *module_name, int *exported);
+int module_kallsyms_find_name(unsigned int *symnum,
+			      const struct kallsyms_name_query *q,
+			      unsigned long *value, char *name,
+			      char *module_name);
 
 /* Look for this name: can be of form module:name. */
 unsigned long module_kallsyms_lookup_name(const char *name);
@@ -1014,6 +1019,14 @@ static inline int module_get_kallsym(unsigned int symnum, unsigned long *value,
 				     char *module_name, int *exported)
 {
 	return -ERANGE;
+}
+
+static inline int module_kallsyms_find_name(unsigned int *symnum,
+					    const struct kallsyms_name_query *q,
+					    unsigned long *value, char *name,
+					    char *module_name)
+{
+	return -ENOENT;
 }
 
 static inline unsigned long module_kallsyms_lookup_name(const char *name)
