@@ -19,6 +19,10 @@ definitions:
     header: linux/err.h
     scope: kernel
   -
+    name: session-tag-max-len
+    type: const
+    value: 255
+  -
     type: enum
     name: handler-class
     value-start: 0
@@ -96,6 +100,16 @@ attribute-sets:
         name: remote-auth
         type: s32
         multi-attr: true
+      -
+        name: tag
+        type: string
+        doc: >-
+          A tag the handshake agent assigns to this handshake. The
+          payload may omit the trailing NUL. An embedded NUL is
+          rejected.
+        checks:
+          max-len: session-tag-max-len
+        multi-attr: true
 
 operations:
   list:
@@ -133,6 +147,7 @@ operations:
             - status
             - sockfd
             - remote-auth
+            - tag
 
 mcast-groups:
   list:
