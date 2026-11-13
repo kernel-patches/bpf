@@ -1265,15 +1265,20 @@ static int snp_get_platform_data(struct sev_device *sev, int *error)
 	struct page *page;
 	int rc;
 
-	/*
-	 * This function is expected to be called before SNP is
-	 * initialized.
-	 */
-	if (sev->snp_initialized)
-		return -EINVAL;
+	lockdep_assert_held(&sev_cmd_mutex);
 
-	buf.address = __psp_pa(&sev->snp_plat_status);
-	rc = sev_do_cmd(SEV_CMD_SNP_PLATFORM_STATUS, &buf, error);
+	page = __snp_alloc_firmware_pages(GFP_KERNEL, 0, true);
+	if (!page)
+		return -ENOMEM;
+
+	buf.address = __psp_pa(page_address(page));
+	rc = __sev_do_cmd_locked(SEV_CMD_SNP_PLATFORM_STATUS, &buf, error);
+	if (!rc)
+		memcpy(&sev->snp_plat_status, page_address(page),
+		       sizeof(sev->snp_plat_status));
+
+	__snp_free_firmware_pages(page, 0, true);
+
 	if (rc) {
 		dev_err(sev->dev, "SNP PLATFORM_STATUS command failed, ret = %d, error = %#x\n",
 			rc, *error);
@@ -1297,7 +1302,7 @@ static int snp_get_platform_data(struct sev_device *sev, int *error)
 	 * command to ensure structure is 8-byte aligned, and does not
 	 * cross a page boundary.
 	 */
-	page = alloc_page(GFP_KERNEL);
+	page = __snp_alloc_firmware_pages(GFP_KERNEL, 0, true);
 	if (!page)
 		return -ENOMEM;
 
@@ -1306,14 +1311,14 @@ static int snp_get_platform_data(struct sev_device *sev, int *error)
 	snp_feat_info.ecx_in = 0;
 	snp_feat_info.feature_info_paddr = __psp_pa(feat_info);
 
-	rc = sev_do_cmd(SEV_CMD_SNP_FEATURE_INFO, &snp_feat_info, error);
+	rc = __sev_do_cmd_locked(SEV_CMD_SNP_FEATURE_INFO, &snp_feat_info, error);
 	if (!rc)
 		sev->snp_feat_info_0 = *feat_info;
 	else
 		dev_err(sev->dev, "SNP FEATURE_INFO command failed, ret = %d, error = %#x\n",
 			rc, *error);
 
-	__free_page(page);
+	__snp_free_firmware_pages(page, 0, true);
 
 	return rc;
 }
@@ -2097,11 +2102,13 @@ void *psp_copy_user_blob(u64 uaddr, u32 len)
 }
 EXPORT_SYMBOL_GPL(psp_copy_user_blob);
 
-static int sev_get_api_version(void)
+static int __sev_get_api_version_locked(void)
 {
 	struct sev_device *sev = psp_master->sev_data;
 	struct sev_user_data_status status;
 	int error = 0, ret;
+
+	lockdep_assert_held(&sev_cmd_mutex);
 
 	/*
 	 * Cache SNP platform status and SNP feature information
@@ -2113,7 +2120,7 @@ static int sev_get_api_version(void)
 			return 1;
 	}
 
-	ret = sev_platform_status(&status, &error);
+	ret = __sev_do_cmd_locked(SEV_CMD_PLATFORM_STATUS, &status, &error);
 	if (ret) {
 		dev_err(sev->dev,
 			"SEV: failed to get status. Error: %#x\n", error);
@@ -2128,6 +2135,13 @@ static int sev_get_api_version(void)
 	sev->build = status.build;
 
 	return 0;
+}
+
+static int sev_get_api_version(void)
+{
+	guard(mutex)(&sev_cmd_mutex);
+
+	return __sev_get_api_version_locked();
 }
 
 static int sev_get_firmware(struct device *dev,
