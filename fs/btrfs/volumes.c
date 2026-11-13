@@ -1378,7 +1378,7 @@ struct btrfs_super_block *btrfs_read_disk_super(struct block_device *bdev,
 		return ERR_PTR(ret);
 	}
 
-	if (bytenr + BTRFS_SUPER_INFO_SIZE >= bdev_nr_bytes(bdev))
+	if (bytenr + BTRFS_SUPER_INFO_SIZE > bdev_nr_bytes(bdev))
 		return ERR_PTR(-EINVAL);
 
 	if (drop_cache) {
