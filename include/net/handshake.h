@@ -10,7 +10,35 @@
 #ifndef _NET_HANDSHAKE_H
 #define _NET_HANDSHAKE_H
 
+#include <linux/errno.h>
 #include <linux/stringset.h>
+
+/*
+ * Bounds the cost of stringset_intersection() in consumer
+ * authorization checks.
+ */
+#define HANDSHAKE_MAX_SESSIONTAGS	64
+
+/**
+ * handshake_session_tag_len - Content length of a session tag payload
+ * @data: start of an NLA_STRING tag payload
+ * @len: payload length in bytes, including any trailing NUL
+ *
+ * A tag payload may arrive with or without a single trailing NUL, and
+ * the terminator is not part of the content. NLA_STRING cannot express
+ * "no NUL except as terminator," so callers validate the payload here.
+ *
+ * Return: content length in bytes, or -EINVAL if the payload is empty
+ * or carries an embedded NUL.
+ */
+static inline int handshake_session_tag_len(const char *data, size_t len)
+{
+	if (len > 0 && data[len - 1] == '\0')
+		len--;
+	if (len == 0 || memchr(data, '\0', len))
+		return -EINVAL;
+	return len;
+}
 
 enum {
 	TLS_NO_KEYRING = 0,
@@ -24,7 +52,8 @@ enum {
  * @data: opaque context pointer set via tls_handshake_args.ta_data
  * @status: zero on success, otherwise a negative errno
  * @peerid: serial number of peer identity key, or TLS_NO_PEERID
- * @tags: session tags assigned by the handshake agent
+ * @tags: session tags assigned by the handshake agent; never NULL,
+ *        always finalized, and empty when no tags were assigned
  *
  * The @tags pointer is valid only for the duration of this callback.
  * A consumer requiring persistent access must copy the set with

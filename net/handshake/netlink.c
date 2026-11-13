@@ -16,6 +16,7 @@
 
 #include <net/sock.h>
 #include <net/genetlink.h>
+#include <net/handshake.h>
 #include <net/netns/generic.h>
 
 #include <kunit/visibility.h>
@@ -130,11 +131,93 @@ out_status:
 	return err;
 }
 
+static bool handshake_sessiontag_is_dup(const struct stringset *tags,
+					const struct nlattr *nla)
+{
+	unsigned int i;
+	char *tag;
+
+	stringset_for_each(tags, i, tag) {
+		if (!nla_strcmp(nla, tag))
+			return true;
+	}
+	return false;
+}
+
+/**
+ * handshake_get_sessiontags - Collect session tags from a DONE downcall
+ * @tags: initialized stringset to fill, left unfinalized on return
+ * @info: netlink message context for the downcall
+ *
+ * The caller retains ownership of @tags. Tags dropped under memory
+ * pressure, or truncated at HANDSHAKE_MAX_SESSIONTAGS, are not an
+ * error.
+ *
+ * Context: May sleep. Must be called before the completion gate is
+ *          taken.
+ *
+ * Return: 0 on success, or a negative errno if a tag payload was
+ * malformed, in which case no tags are collected.
+ */
+VISIBLE_IF_KUNIT int handshake_get_sessiontags(struct stringset *tags,
+					       struct genl_info *info)
+{
+	unsigned int count = 0;
+	struct nlattr *nla;
+	int rem;
+
+	nlmsg_for_each_attr_type(nla, HANDSHAKE_A_DONE_TAG, info->nlhdr,
+				 GENL_HDRLEN, rem) {
+		if (handshake_session_tag_len(nla_data(nla), nla_len(nla)) < 0) {
+			NL_SET_BAD_ATTR(info->extack, nla);
+			return -EINVAL;
+		}
+		count++;
+	}
+	if (count == 0)
+		return 0;
+	if (count > HANDSHAKE_MAX_SESSIONTAGS)
+		count = HANDSHAKE_MAX_SESSIONTAGS;
+	if (!stringset_alloc(tags, count, GFP_KERNEL)) {
+		pr_warn_once("handshake: dropping session tags under memory pressure\n");
+		return 0;
+	}
+
+	nlmsg_for_each_attr_type(nla, HANDSHAKE_A_DONE_TAG, info->nlhdr,
+				 GENL_HDRLEN, rem) {
+		char *tag;
+
+		/* A repeated tag does not count against the cap. */
+		if (handshake_sessiontag_is_dup(tags, nla))
+			continue;
+
+		/*
+		 * At most HANDSHAKE_MAX_SESSIONTAGS tags are kept. A
+		 * dropped tag can only narrow the consumer's
+		 * authorization, never widen it.
+		 */
+		if (stringset_count(tags) >= HANDSHAKE_MAX_SESSIONTAGS) {
+			pr_warn_once("handshake: more than %u session tags\n",
+				     HANDSHAKE_MAX_SESSIONTAGS);
+			break;
+		}
+
+		tag = nla_strdup(nla, GFP_KERNEL);
+		if (!tag)
+			continue;
+		if (!stringset_add(tags, tag))
+			kfree(tag);
+	}
+	return 0;
+}
+EXPORT_SYMBOL_IF_KUNIT(handshake_get_sessiontags);
+
 int handshake_nl_done_doit(struct sk_buff *skb, struct genl_info *info)
 {
 	struct net *net = sock_net(skb->sk);
 	struct handshake_req *req;
 	struct socket *sock;
+	DEFINE_STRINGSET(tags);
 	int fd, status, err;
 
 	if (GENL_REQ_ATTR_CHECK(info, HANDSHAKE_A_DONE_SOCKFD))
@@ -158,10 +241,33 @@ int handshake_nl_done_doit(struct sk_buff *skb, struct genl_info *info)
 	status = -EIO;
 	if (info->attrs[HANDSHAKE_A_DONE_STATUS])
 		status = -(int)nla_get_u32(info->attrs[HANDSHAKE_A_DONE_STATUS]);
+	err = 0;
+	if (!status) {
+		int ret = handshake_get_sessiontags(&tags, info);
 
-	handshake_complete(req, status, info);
+		/*
+		 * A malformed tag casts doubt on the rest of the
+		 * agent's tag set, so the consumer sees a failed
+		 * handshake.
+		 */
+		if (ret < 0) {
+			err = ret;
+			trace_handshake_cmd_done_err(net, req, sock->sk, err);
+			status = -EIO;
+		}
+	}
+
+	if (!handshake_try_complete(req)) {
+		trace_handshake_cmd_done_err(net, req, sock->sk, -EBUSY);
+		stringset_destroy(&tags);
+		sockfd_put(sock);
+		return -EBUSY;
+	}
+
+	/* handshake_finish_complete() takes ownership, so no destroy here. */
+	handshake_finish_complete(req, status, info, &tags);
 	sockfd_put(sock);
-	return 0;
+	return err;
 }
 
 static unsigned int handshake_net_id;

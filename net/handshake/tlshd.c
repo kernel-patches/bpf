@@ -106,7 +106,7 @@ static void tls_handshake_done(struct handshake_req *req,
 		set_bit(HANDSHAKE_F_REQ_SESSION, &req->hr_flags);
 
 	treq->th_consumer_done(treq->th_consumer_data, status,
-			       treq->th_peerid[0], NULL);
+			       treq->th_peerid[0], &req->hr_tags);
 }
 
 #if IS_ENABLED(CONFIG_KEYS)

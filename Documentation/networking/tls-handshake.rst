@@ -201,6 +201,10 @@ The @peerid parameter contains the serial number of a key containing the
 remote peer's identity or the value TLS_NO_PEERID if the session is not
 authenticated.
 
+The @tags parameter points to a stringset containing session metadata
+assigned by the handshake agent. See the "Session Tags" section
+below for details on lifetime and safe access patterns.
+
 A best practice is to close and destroy the socket immediately if the
 handshake failed.
 
@@ -221,3 +225,50 @@ received message data is TLS record data or session metadata.
 See tls.rst for details on how a kTLS consumer recognizes incoming
 (decrypted) application data, alerts, and handshake packets once the
 socket has been promoted to use the TLS ULP.
+
+
+Session Tags
+============
+
+When a TLS handshake completes successfully, the handshake agent may
+assign metadata tags to the session. These tags enable kernel consumers
+to make authorization decisions based on certificate characteristics
+without parsing x.509 certificates directly.
+
+The handshake agent evaluates the peer's certificate against
+administrator-defined policies and assigns tags indicating which
+policies the certificate satisfies. For example, an administrator
+might configure the agent to assign an "internal-servers" tag when a
+certificate's Issuer DN matches a particular corporate CA.
+
+Tags are delivered to the consumer via the @tags parameter of the
+completion callback. The stringset is valid only for the duration of the
+callback. Consumers needing persistent access must copy the stringset
+using stringset_copy() before returning.
+
+To check whether a session has a particular tag:
+
+.. code-block:: c
+
+  if (stringset_is_member(tags, "internal-servers")) {
+          /* Certificate matched the internal-servers policy */
+  }
+
+To check whether a session has any tag from a small fixed set:
+
+.. code-block:: c
+
+  if (stringset_is_member(tags, "admin") ||
+      stringset_is_member(tags, "operator")) {
+          /* Certificate matched admin or operator policy */
+  }
+
+When the required set is dynamic (e.g., parsed from an export option),
+construct a stringset and use stringset_intersection() to test for any
+overlap. See Documentation/core-api/stringset.rst for the
+initialization, add, and finalize sequence.
+
+If the handshake failed or no tags were assigned, the stringset is
+empty. The handshake layer always delivers a finalized stringset to
+the callback, so consumers may call stringset_is_member() and
+stringset_intersection() unconditionally without a separate guard.

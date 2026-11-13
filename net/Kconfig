@@ -93,6 +93,7 @@ source "net/xdp/Kconfig"
 config NET_HANDSHAKE
 	bool
 	depends on SUNRPC || NVME_TARGET_TCP || NVME_TCP
+	select STRINGSET
 	default y
 
 config NET_HANDSHAKE_KUNIT_TEST

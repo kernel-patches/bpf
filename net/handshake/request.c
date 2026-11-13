@@ -80,6 +80,7 @@ static void handshake_req_destroy(struct handshake_req *req)
 		req->hr_proto->hp_destroy(req);
 	rhashtable_remove_fast(&handshake_rhashtbl, &req->hr_rhash,
 			       handshake_rhash_params);
+	stringset_destroy(&req->hr_tags);
 	kfree(req);
 }
 
@@ -125,6 +126,7 @@ struct handshake_req *handshake_req_alloc(const struct handshake_proto *proto,
 		return NULL;
 
 	INIT_LIST_HEAD(&req->hr_list);
+	stringset_init(&req->hr_tags);
 	req->hr_proto = proto;
 	return req;
 }
@@ -321,20 +323,61 @@ out_err:
 }
 EXPORT_SYMBOL(handshake_req_submit);
 
-void handshake_complete(struct handshake_req *req, int status,
-			struct genl_info *info)
+/**
+ * handshake_try_complete - Take the unique-completer gate
+ * @req: handshake request to complete
+ *
+ * Exactly one caller wins the gate and drives completion to the
+ * consumer. handshake_req_cancel() returns %false once the gate is
+ * taken, so a winner that sleeps first lets a concurrent cancel free
+ * callback data while the consumer callback is still pending.
+ *
+ * Context: The winner must reach handshake_finish_complete() without
+ *          sleeping.
+ * Return: %true if the caller won the gate, %false otherwise.
+ */
+bool handshake_try_complete(struct handshake_req *req)
+{
+	return !test_and_set_bit(HANDSHAKE_F_REQ_COMPLETED, &req->hr_flags);
+}
+
+/**
+ * handshake_finish_complete - Deliver completion to the consumer
+ * @req: handshake request to complete
+ * @status: 0, or the negative errno to report to the consumer
+ * @info: netlink message context, or NULL if not from a downcall
+ * @tags: session tags to publish, or NULL; ownership passes to @req
+ *
+ * Context: The caller has won the gate via handshake_try_complete()
+ *          and has not slept since.
+ */
+void handshake_finish_complete(struct handshake_req *req, int status,
+			       struct genl_info *info, struct stringset *tags)
 {
 	struct sock *sk = req->hr_sk;
 	struct net *net = sock_net(sk);
+	struct file *file = req->hr_file;
 
-	if (!test_and_set_bit(HANDSHAKE_F_REQ_COMPLETED, &req->hr_flags)) {
-		struct file *file = req->hr_file;
+	if (tags)
+		req->hr_tags = *tags;
 
-		trace_handshake_complete(net, req, sk, status);
-		req->hr_proto->hp_done(req, status, info);
+	trace_handshake_complete(net, req, sk, status);
+	/*
+	 * Consumers may query hr_tags on any completion path, and
+	 * stringset_is_member() WARNs on an unfinalized set.
+	 */
+	stringset_finalize(&req->hr_tags);
+	req->hr_proto->hp_done(req, status, info);
+	stringset_destroy(&req->hr_tags);
 
-		fput(file);
-	}
+	fput(file);
+}
+
+void handshake_complete(struct handshake_req *req, int status,
+			struct genl_info *info)
+{
+	if (handshake_try_complete(req))
+		handshake_finish_complete(req, status, info, NULL);
 }
 EXPORT_SYMBOL_IF_KUNIT(handshake_complete);
 
