@@ -432,11 +432,13 @@ static inline void emit_ia32_to_be_r64(const u8 dst[], s32 val,
  * ALU operation (32 bit)
  * dst = dst (div|mod) src
  */
-static inline void emit_ia32_div_mod_r(const u8 op, const u8 dst, const u8 src,
-				       bool dstk, bool sstk, u8 **pprog)
+static inline void emit_ia32_div_mod_r(const struct bpf_insn *insn, const u8 dst,
+				       const u8 src, bool dstk, bool sstk, u8 **pprog)
 {
 	u8 *prog = *pprog;
 	int cnt = 0;
+	const u8 op = BPF_OP(insn->code);
+	const bool is_signed = (insn->off == 1);
 
 	if (sstk)
 		/* mov ecx,dword ptr [ebp+off] */
@@ -454,10 +456,17 @@ static inline void emit_ia32_div_mod_r(const u8 op, const u8 dst, const u8 src,
 		/* mov eax,dst */
 		EMIT2(0x8B, add_2reg(0xC0, dst, IA32_EAX));
 
-	/* xor edx,edx */
-	EMIT2(0x31, add_2reg(0xC0, IA32_EDX, IA32_EDX));
-	/* div ecx */
-	EMIT2(0xF7, add_1reg(0xF0, IA32_ECX));
+	if (is_signed) {
+		/* cdq */
+		EMIT1(0x99);
+		/* idiv ecx */
+		EMIT2(0xF7, add_1reg(0xF8, IA32_ECX));
+	} else {
+		/* xor edx,edx */
+		EMIT2(0x31, add_2reg(0xC0, IA32_EDX, IA32_EDX));
+		/* div ecx */
+		EMIT2(0xF7, add_1reg(0xF0, IA32_ECX));
+	}
 
 	if (op == BPF_MOD) {
 		if (dstk)
@@ -1795,14 +1804,14 @@ static int do_jit(struct bpf_prog *bpf_prog, int *addrs, u8 *image,
 		case BPF_ALU | BPF_MOD | BPF_X:
 			switch (BPF_SRC(code)) {
 			case BPF_X:
-				emit_ia32_div_mod_r(BPF_OP(code), dst_lo,
+				emit_ia32_div_mod_r(insn, dst_lo,
 						    src_lo, dstk, sstk, &prog);
 				break;
 			case BPF_K:
 				/* mov ecx,imm32*/
 				EMIT2_off32(0xC7, add_1reg(0xC0, IA32_ECX),
 					    imm32);
-				emit_ia32_div_mod_r(BPF_OP(code), dst_lo,
+				emit_ia32_div_mod_r(insn, dst_lo,
 						    IA32_ECX, dstk, false,
 						    &prog);
 				break;
