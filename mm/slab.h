@@ -23,6 +23,7 @@
 #define SLAB_ALLOC_NEW_SLAB	0x02 /* a flag for alloc_slab_obj_exts() */
 #define SLAB_ALLOC_NO_RECURSE	0x04 /* prevent kmalloc() recursion */
 #define SLAB_ALLOC_NO_OBJ_EXT	0x08 /* prevent obj_exts array allocation */
+#define SLAB_ALLOC_NO_LEAKTRACE	0x10 /* skip kmemleak tracking */
 
 #define SLAB_FREE_DEFAULT	0x00 /* no flags */
 #define SLAB_FREE_NOLOCK	0x01 /* spinning not allowed */
