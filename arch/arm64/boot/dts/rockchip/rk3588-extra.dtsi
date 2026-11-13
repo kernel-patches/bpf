@@ -538,6 +538,7 @@
 		interrupts = <GIC_SPI 227 IRQ_TYPE_LEVEL_HIGH 0>,
 			     <GIC_SPI 226 IRQ_TYPE_LEVEL_HIGH 0>;
 		interrupt-names = "macirq", "eth_wake_irq";
+		iommus = <&mmu600_php 1>;
 		clocks = <&cru CLK_GMAC_125M>, <&cru CLK_GMAC_50M>,
 			 <&cru PCLK_GMAC0>, <&cru ACLK_GMAC0>,
 			 <&cru CLK_GMAC0_PTP_REF>;
@@ -585,6 +586,7 @@
 		compatible = "rockchip,rk3588-dwc-ahci", "snps,dwc-ahci";
 		reg = <0 0xfe220000 0 0x1000>;
 		interrupts = <GIC_SPI 274 IRQ_TYPE_LEVEL_HIGH 0>;
+		iommus = <&mmu600_php 4>;
 		clocks = <&cru ACLK_SATA1>, <&cru CLK_PMALIVE1>,
 			 <&cru CLK_RXOOB1>, <&cru CLK_PIPEPHY1_REF>,
 			 <&cru CLK_PIPEPHY1_PIPE_ASIC_G>;
