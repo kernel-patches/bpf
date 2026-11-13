@@ -68,14 +68,18 @@ static int __net_init nf_lwtunnel_net_init(struct net *net)
 {
 	const struct ctl_table *table;
 	struct ctl_table_header *hdr;
+	struct ctl_table *dup;
 
 	table = nf_lwtunnel_sysctl_table;
 	if (!net_eq(net, &init_net)) {
-		table = kmemdup(nf_lwtunnel_sysctl_table,
-				sizeof(nf_lwtunnel_sysctl_table),
-				GFP_KERNEL_ACCOUNT);
-		if (!table)
+		dup = kmemdup(nf_lwtunnel_sysctl_table,
+			      sizeof(nf_lwtunnel_sysctl_table),
+			      GFP_KERNEL_ACCOUNT);
+		if (!dup)
 			goto err_alloc;
+
+		dup->mode = 0444;
+		table = dup;
 	}
 
 	hdr = register_net_sysctl_sz(net, "net/netfilter", table,
