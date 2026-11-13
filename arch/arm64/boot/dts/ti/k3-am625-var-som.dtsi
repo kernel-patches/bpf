@@ -421,7 +421,7 @@
 	disable-wp;
 	mmc-pwrseq = <&mmc_pwrseq>;
 	non-removable;
-	status="okay";
+	status = "okay";
 };
 
 /* On-module Wi-Fi */
