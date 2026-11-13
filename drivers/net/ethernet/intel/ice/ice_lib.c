@@ -2179,24 +2179,16 @@ void ice_vsi_cfg_sw_lldp(struct ice_vsi *vsi, bool tx, bool create)
 		status = eth_fltr(vsi, ETH_P_LLDP, ICE_FLTR_TX,
 				  ICE_DROP_PACKET);
 	} else {
-		if (!test_bit(ICE_FLAG_LLDP_AQ_FLTR, pf->flags)) {
+		status = ice_lldp_fltr_add_remove(&pf->hw, vsi, create);
+		if (status == -EOPNOTSUPP) {
+			/* If fltr_ctrl not supported, use legacy
+			 * add/remove command
+			 */
 			status = eth_fltr(vsi, ETH_P_LLDP, ICE_FLTR_RX,
 					  ICE_FWD_TO_VSI);
-			if (!status || !create)
-				goto report;
-
-			dev_info(dev,
-				 "Failed to add generic LLDP Rx filter on VSI %i error: %d, falling back to specialized AQ control\n",
-				 vsi->vsi_num, status);
 		}
-
-		status = ice_lldp_fltr_add_remove(&pf->hw, vsi, create);
-		if (!status)
-			set_bit(ICE_FLAG_LLDP_AQ_FLTR, pf->flags);
-
 	}
 
-report:
 	if (status)
 		dev_warn(dev, "Failed to %s %s LLDP rule on VSI %i error: %d\n",
 			 create ? "add" : "remove", tx ? "Tx" : "Rx",
