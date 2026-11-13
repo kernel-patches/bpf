@@ -460,7 +460,14 @@ static int ak4375_runtime_resume(struct device *dev)
 	regcache_cache_only(ak4375->regmap, false);
 	regcache_mark_dirty(ak4375->regmap);
 
-	return regcache_sync(ak4375->regmap);
+	ret = regcache_sync(ak4375->regmap);
+	if (ret) {
+		regcache_cache_only(ak4375->regmap, true);
+		ak4375_power_off(ak4375);
+		return ret;
+	}
+
+	return 0;
 }
 
 static const struct snd_soc_component_driver soc_codec_dev_ak4375 = {
