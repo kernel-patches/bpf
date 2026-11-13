@@ -99,7 +99,6 @@ static int loongson_spi_setup(struct spi_device *spi)
 		return -EINVAL;
 
 	loongson_spi->hz = 0;
-	loongson_spi_set_cs(spi, true);
 
 	return 0;
 }
