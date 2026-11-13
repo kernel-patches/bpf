@@ -5259,8 +5259,9 @@ normal:
 
 		hsize = skb_headlen(head_skb) - offset;
 
+		/* pskb_trim() would drop a nested frag_list from the clone */
 		if (hsize <= 0 && i >= nfrags && list_skb &&
-		    skb_headlen(list_skb) &&
+		    skb_headlen(list_skb) && !skb_has_frag_list(list_skb) &&
 		    (skb_headlen(list_skb) == len || sg)) {
 			if (unlikely(skb_headlen(list_skb) > len)) {
 				DEBUG_NET_WARN_ON_ONCE(1);
