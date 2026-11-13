@@ -699,10 +699,10 @@ static int nf_flow_tunnel_ip6_push(struct net *net, struct sk_buff *skb,
 	if (err)
 		return err;
 
-	skb_scrub_packet(skb, true);
 	mtu = dst_mtu(dst) - sizeof(*ip6h);
 	mtu = max(mtu, IPV6_MIN_MTU);
 	skb_dst_update_pmtu_no_confirm(skb, mtu);
+	skb_scrub_packet(skb, true);
 
 	skb_push(skb, sizeof(*ip6h));
 	skb_reset_network_header(skb);
