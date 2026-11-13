@@ -574,7 +574,6 @@
 		clocks = <&cru ACLK_MMU_PHP>;
 		resets = <&cru SRST_A_MMU_PHP>;
 		#iommu-cells = <1>;
-		status = "disabled";
 	};
 
 	pmu1grf: syscon@fd58a000 {
