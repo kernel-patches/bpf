@@ -12245,6 +12245,16 @@ int map_set_for_each_callback_args(struct bpf_verifier_env *env,
 	return 0;
 }
 
+/* The arg points into the stack frame of the helper that calls the callback */
+static void mark_frame_scoped_arg(struct bpf_verifier_env *env,
+				  struct bpf_func_state *callee, u32 regno)
+{
+	if (!callee->frame_id)
+		callee->frame_id = ++env->id_gen;
+	callee->regs[regno].id = callee->frame_id;
+	callee->regs[regno].parent_id = callee->frame_id;
+}
+
 static int set_callee_state(struct bpf_verifier_env *env,
 			    struct bpf_func_state *caller,
 			    struct bpf_func_state *callee, int insn_idx)
@@ -12368,6 +12378,7 @@ static int set_user_ringbuf_callback_state(struct bpf_verifier_env *env,
 	 * callback_fn(const struct bpf_dynptr_t* dynptr, void *callback_ctx);
 	 */
 	mark_dynptr_cb_reg(env, &callee->regs[BPF_REG_1], BPF_DYNPTR_TYPE_LOCAL);
+	mark_frame_scoped_arg(env, callee, BPF_REG_1);
 	callee->regs[BPF_REG_2] = caller->regs[BPF_REG_3];
 
 	callee->in_callback_fn = true;
@@ -12606,6 +12617,11 @@ static int prepare_func_exit(struct bpf_verifier_env *env, int *insn_idx)
 	if (err)
 		return err;
 	invalidate_stack_slices(env, callee->frameno, INT_MIN, 0);
+	if (callee->frame_id) {
+		err = invalidate_reference(env, callee->frame_id);
+		if (err)
+			return err;
+	}
 
 	/* for callbacks like bpf_loop or bpf_for_each_map_elem go back to callsite,
 	 * there function call logic would reschedule callback visit.
