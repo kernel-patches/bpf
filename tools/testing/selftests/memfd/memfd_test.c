@@ -126,6 +126,8 @@ static void sysctl_assert_write(const char *val)
 		printf("write sysctl %s failed: %m\n", val);
 		abort();
 	}
+
+	close(fd);
 }
 
 static void sysctl_fail_write(const char *val)
@@ -142,6 +144,8 @@ static void sysctl_fail_write(const char *val)
 				val);
 		abort();
 	}
+
+	close(fd);
 }
 
 static void sysctl_assert_equal(const char *val)
@@ -158,6 +162,8 @@ static void sysctl_assert_equal(const char *val)
 		printf("read sysctl failed: %m\n");
 		abort();
 	}
+
+	close(fd);
 
 	/* Strip trailing whitespace. */
 	p = buf;
