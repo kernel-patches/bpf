@@ -416,10 +416,10 @@ static void svc_tcp_kill_temp_xprt(struct svc_xprt *xprt)
  * @peerid: serial number of key containing the remote peer's identity
  * @tags: session tags assigned by the handshake agent
  *
- * If a security policy is specified as an export option, we don't
- * have a specific export here to check. So we set a "TLS session
- * is present" flag on the xprt and let an upper layer enforce local
- * security policy.
+ * No export is available here to check against a security policy
+ * specified as an export option. The callback copies the session
+ * tags, sets a "TLS session is present" flag on the xprt, and
+ * leaves enforcement of local security policy to an upper layer.
  */
 static void svc_tcp_handshake_done(void *data, int status, key_serial_t peerid,
 				   const struct stringset *tags)
@@ -428,9 +428,35 @@ static void svc_tcp_handshake_done(void *data, int status, key_serial_t peerid,
 	struct svc_sock *svsk = container_of(xprt, struct svc_sock, sk_xprt);
 
 	if (!status) {
-		if (peerid != TLS_NO_PEERID)
-			set_bit(XPT_PEER_AUTH, &xprt->xpt_flags);
-		set_bit(XPT_TLS_SESSION, &xprt->xpt_flags);
+		/*
+		 * The tag copy can sleep. The xprt is pinned, and
+		 * svc_tcp_handshake() waits for sk_handshake_done
+		 * when it cannot cancel the handshake.
+		 *
+		 * XPT_TLS_SESSION left clear on copy failure makes
+		 * svc_tcp_handshake() close the connection; a
+		 * reconnect retries both the handshake and the copy.
+		 */
+		if (stringset_copy(&xprt->xpt_handshake_tags, tags, GFP_KERNEL)) {
+			/*
+			 * XPT_PEER_AUTH is set first so no reader
+			 * observes XPT_TLS_SESSION without it:
+			 * check_xprtsec_policy() would read that
+			 * combination as anonymous TLS. The reverse
+			 * is harmless; it reads as plaintext.
+			 */
+			if (peerid != TLS_NO_PEERID)
+				set_bit(XPT_PEER_AUTH, &xprt->xpt_flags);
+			/*
+			 * Order the tag stores and XPT_PEER_AUTH
+			 * before XPT_TLS_SESSION. Pairs with the
+			 * reader's test_bit_acquire(XPT_TLS_SESSION).
+			 */
+			smp_wmb();
+			set_bit(XPT_TLS_SESSION, &xprt->xpt_flags);
+		} else {
+			pr_warn_ratelimited("svc: failed to copy TLS session tags\n");
+		}
 	}
 	clear_bit(XPT_HANDSHAKE, &xprt->xpt_flags);
 	complete_all(&svsk->sk_handshake_done);
@@ -441,6 +467,8 @@ static void svc_tcp_handshake_done(void *data, int status, key_serial_t peerid,
  * svc_tcp_handshake - Perform a transport-layer security handshake
  * @xprt: connected transport endpoint
  *
+ * The handshake request is declined if the transport already
+ * carries a TLS session.
  */
 static void svc_tcp_handshake(struct svc_xprt *xprt)
 {
@@ -453,9 +481,21 @@ static void svc_tcp_handshake(struct svc_xprt *xprt)
 	};
 	int ret;
 
+	/*
+	 * svcauth_tls_accept()'s XPT_TLS_SESSION test can race a
+	 * handshake that completes just after it; recheck under
+	 * XPT_BUSY before destroying the saved tags.
+	 */
+	if (test_bit(XPT_TLS_SESSION, &xprt->xpt_flags)) {
+		clear_bit(XPT_HANDSHAKE, &xprt->xpt_flags);
+		set_bit(XPT_DATA, &xprt->xpt_flags);
+		svc_xprt_enqueue(xprt);
+		return;
+	}
+
 	trace_svc_tls_upcall(xprt);
 
-	clear_bit(XPT_TLS_SESSION, &xprt->xpt_flags);
+	stringset_destroy(&xprt->xpt_handshake_tags);
 	init_completion(&svsk->sk_handshake_done);
 
 	/* Pin the transport across the asynchronous handshake callback. */
@@ -477,7 +517,8 @@ static void svc_tcp_handshake(struct svc_xprt *xprt)
 			goto out_close;
 		}
 		/* Cancellation lost to handshake_complete(): the
-		 * callback is in flight and should finish quickly.
+		 * callback is in flight. Its tag copy can sleep in
+		 * the allocator before the completion fires.
 		 */
 		wait_for_completion(&svsk->sk_handshake_done);
 	}

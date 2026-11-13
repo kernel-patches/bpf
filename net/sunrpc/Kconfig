@@ -2,6 +2,7 @@
 config SUNRPC
 	tristate
 	depends on MULTIUSER
+	select STRINGSET
 
 config SUNRPC_GSS
 	tristate
