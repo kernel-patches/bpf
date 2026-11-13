@@ -29,6 +29,7 @@
 #include <linux/psp.h>
 #include <linux/amd-iommu.h>
 #include <linux/crash_dump.h>
+#include <linux/sizes.h>
 
 #include <asm/smp.h>
 #include <asm/cacheflush.h>
@@ -250,6 +251,7 @@ static int sev_cmd_buffer_len(int cmd)
 	case SEV_CMD_SNP_PLATFORM_STATUS:	return sizeof(struct sev_data_snp_addr);
 	case SEV_CMD_SNP_GUEST_REQUEST:		return sizeof(struct sev_data_snp_guest_request);
 	case SEV_CMD_SNP_CONFIG:		return sizeof(struct sev_user_data_snp_config);
+	case SEV_CMD_SNP_DOWNLOAD_FIRMWARE_EX:	return sizeof(struct sev_data_download_firmware_ex);
 	case SEV_CMD_SNP_COMMIT:		return sizeof(struct sev_data_snp_commit);
 	case SEV_CMD_SNP_FEATURE_INFO:		return sizeof(struct sev_data_snp_feature_info);
 	case SEV_CMD_SNP_VLEK_LOAD:		return sizeof(struct sev_user_data_snp_vlek_load);
@@ -2235,17 +2237,302 @@ fw_err:
 	return ret;
 }
 
+/* Largest image the firmware accepts, anything above is rejected */
+#define SEV_FW_IMAGE_MAX_SIZE	SZ_512K
+
 static enum fw_upload_err sev_fw_upload_prepare(struct fw_upload *fw_upload,
 						const u8 *data, u32 size)
 {
+	struct sev_device *sev = fw_upload->dd_handle;
+
+	if (size > SEV_FW_IMAGE_MAX_SIZE) {
+		dev_err_ratelimited(sev->dev,
+				    "DLFW_EX: image of %u bytes exceeds the %u byte maximum\n",
+				    size, SEV_FW_IMAGE_MAX_SIZE);
+		return FW_UPLOAD_ERR_INVALID_SIZE;
+	}
+
 	return FW_UPLOAD_ERR_NONE;
+}
+
+static int sev_download_firmware_ex(const u8 *data, u32 size, int *psp_ret)
+{
+	struct sev_data_download_firmware_ex sev_data = {0};
+	int ret, order;
+	struct page *p;
+	void *fw_blob;
+
+	order = get_order(size);
+	p = alloc_pages(GFP_KERNEL | __GFP_ZERO, order);
+	if (!p)
+		return -ENOMEM;
+
+	fw_blob = page_address(p);
+	memcpy(fw_blob, data, size);
+
+	sev_data.len = sizeof(sev_data);
+	sev_data.fw_paddr = __psp_pa(fw_blob);
+	sev_data.fw_len = size;
+	/*
+	 * Don't commit the new firmware, an explicit SNP_COMMIT is required
+	 * after update.
+	 */
+	sev_data.commit = 0;
+
+	ret = __sev_do_cmd_locked(SEV_CMD_SNP_DOWNLOAD_FIRMWARE_EX, &sev_data, psp_ret);
+
+	__free_pages(p, order);
+
+	return ret;
+}
+
+static enum fw_upload_err sev_fw_upload_handle_err(struct sev_device *sev,
+						   int cmd_ret, int psp_ret)
+{
+	enum fw_upload_err fwl_ret = FW_UPLOAD_ERR_FW_INVALID;
+	const char *msg;
+
+	if (!cmd_ret)
+		return FW_UPLOAD_ERR_NONE;
+
+	if (psp_dead) {
+		/*
+		 * The SEV command timed out and marked the ASP dead, there is
+		 * no status to decode.
+		 */
+		dev_err_ratelimited(sev->dev,
+				    "DLFW_EX: PSP not responding (failed %d, error %#x)\n",
+				    cmd_ret, psp_ret);
+		sev->fwl_rollback_required = false;
+
+		return FW_UPLOAD_ERR_TIMEOUT;
+	}
+
+	switch (psp_ret) {
+	case SEV_RET_INVALID_PARAM:
+		msg = "Provided image is not well formed";
+		break;
+	case SEV_RET_INVALID_LEN:
+		fwl_ret = FW_UPLOAD_ERR_INVALID_SIZE;
+		msg = "Provided image has an unusable length";
+		break;
+	case SEV_RET_SHUTDOWN_REQUIRED:
+		msg = "Provided image cannot be live-updated, shutdown required";
+		break;
+	case SEV_RET_BAD_VERSION:
+		msg = "Provided image < committed version";
+		break;
+	case SEV_RET_INVALID_PLATFORM_STATE:
+		msg = "Platform not in UNINIT state";
+		break;
+	case SEV_RET_INVALID_ADDRESS:
+		msg = "Unaligned address provided";
+		break;
+	case SEV_RET_UNSUPPORTED:
+		msg = "Feature not supported";
+		break;
+	case SEV_RET_INVALID_CONFIG:
+		msg = "Image rejected, unsupported configuration";
+		break;
+	case SEV_RET_BAD_SVN:
+		msg = "Image rejected, SVN < committed SVN";
+		break;
+	case SEV_RET_BAD_SIGNATURE:
+		msg = "Bad firmware signature";
+		break;
+	case SEV_RET_UPDATE_FAILED:
+		/* The previous firmware is still running, a retry is safe. */
+		fwl_ret = FW_UPLOAD_ERR_BUSY;
+		msg = "Upgrade failed, automatically reverted";
+		break;
+	case SEV_RET_RESTORE_REQUIRED:
+		/*
+		 * Firmware requested a roll-back. Declare the PSP dead so
+		 * nothing else tries to use it, and let the next upload through
+		 * so the admin can restore the previous image.
+		 */
+		sev->fwl_rollback_required = true;
+		psp_dead = true;
+		fwl_ret = FW_UPLOAD_ERR_RW_ERROR;
+		msg = "Live upgrade failed, please roll back";
+		break;
+	case SEV_RET_HWSEV_RET_UNSAFE:
+		/*
+		 * Following a return of HARDWARE_UNSAFE, operation of the SEV
+		 * firmware is indeterminate and the recommendation is to reboot
+		 * the platform. Declare the PSP dead so the driver stops
+		 * issuing commands to it while the reboot is pending.
+		 */
+		sev->fwl_rollback_required = false;
+		psp_dead = true;
+		fwl_ret = FW_UPLOAD_ERR_HW_ERROR;
+		msg = "SEV firmware no longer safe. Reboot recommended";
+		break;
+	case SEV_RET_NO_FW_CALL:
+		/* The command never reached the firmware. */
+		fwl_ret = FW_UPLOAD_ERR_BUSY;
+		msg = "Driver error";
+		break;
+	default:
+		fwl_ret = FW_UPLOAD_ERR_HW_ERROR;
+		msg = "Unknown SEV firmware error";
+		break;
+	}
+
+	dev_err_ratelimited(sev->dev, "DLFW_EX: %s (failed %d, error %#x)\n",
+			    msg, cmd_ret, psp_ret);
+
+	return fwl_ret;
+}
+
+static int sev_fw_upload_shutdown_platform(struct sev_device *sev)
+{
+	int rc, error = SEV_RET_NO_FW_CALL, sev_plat_state;
+
+	lockdep_assert_held(&sev_cmd_mutex);
+
+	rc = sev_get_platform_state(&sev_plat_state, &error);
+	if (rc) {
+		dev_err_ratelimited(sev->dev, "SEV get platform state failed %d, error %#x\n",
+				    rc, error);
+		return rc;
+	}
+
+	switch (sev_plat_state) {
+	case SEV_STATE_UNINIT:
+		break;
+	case SEV_STATE_WORKING:
+		/* Legacy guests are running, the update cannot proceed. */
+		return -EBUSY;
+	case SEV_STATE_INIT:
+		rc = __sev_platform_shutdown_locked(&error);
+		if (rc) {
+			dev_err_ratelimited(sev->dev, "SEV platform shutdown failed %d, error %#x\n",
+					    rc, error);
+			return rc;
+		}
+
+		sev->fwl_reinit_required = true;
+		break;
+	default:
+		dev_err_ratelimited(sev->dev, "Unknown SEV firmware state %d\n", sev_plat_state);
+		return -EINVAL;
+	}
+
+	/*
+	 * After DLFW_EX, INIT under the new image can fail with
+	 * SEV_RET_INVALID_PAGE_STATE if it is handed the TMR or INIT_EX NV
+	 * buffer that the previous image left in the firmware state.
+	 *
+	 * Reclaim and free them rather than keeping them for reuse. The
+	 * re-init allocates new buffers and moves them into the firmware
+	 * state itself, and a skipped or failed re-init leaves no stale
+	 * buffers behind for a later INIT or teardown to trip over. If the
+	 * new 2M TMR allocation fails, INIT is issued without SEV-ES and
+	 * only a warning is logged.
+	 */
+	__sev_release_firmware_buffers(false);
+
+	return 0;
+}
+
+static void sev_fw_upload_reinit_platform(struct sev_device *sev)
+{
+	int rc, error = SEV_RET_NO_FW_CALL;
+
+	lockdep_assert_held(&sev_cmd_mutex);
+
+	if (!sev->fwl_reinit_required)
+		return;
+
+	rc = __sev_platform_init_locked(&error);
+	if (rc) {
+		dev_err_ratelimited(sev->dev, "SEV platform re-init failed %d, error %#x\n",
+				    rc, error);
+		return;
+	}
+
+	sev->fwl_reinit_required = false;
 }
 
 static enum fw_upload_err sev_fw_upload_write(struct fw_upload *fw_upload,
 					      const u8 *data, u32 offset,
 					      u32 size, u32 *written)
 {
-	return FW_UPLOAD_ERR_BUSY;
+	struct sev_device *sev = fw_upload->dd_handle;
+	int cmd_ret, psp_ret = SEV_RET_NO_FW_CALL;
+	u8 old_major, old_minor, old_build;
+	enum fw_upload_err fwl_ret;
+
+	guard(mutex)(&sev_cmd_mutex);
+
+	old_major = sev->api_major;
+	old_minor = sev->api_minor;
+	old_build = sev->build;
+
+	/*
+	 * SEV firmware will only successfully execute the DLFW_EX command if a
+	 * firmware rollback is required. Other commands may be processed, but
+	 * may not execute properly. Use the psp_dead boolean to restrict
+	 * execution to this path.
+	 */
+	if (psp_dead && !sev->fwl_rollback_required) {
+		dev_err_ratelimited(sev->dev, "DLFW_EX: PSP is not responding\n");
+		return FW_UPLOAD_ERR_HW_ERROR;
+	}
+
+	/*
+	 * If the last firmware update returned RESTORE_REQUIRED, retry DLFW_EX.
+	 * Being in this state means that the legacy firmware has previously
+	 * been shut down, so no need to do it again.
+	 */
+	if (sev->fwl_rollback_required) {
+		psp_dead = false;
+	} else {
+		cmd_ret = sev_fw_upload_shutdown_platform(sev);
+		if (cmd_ret)
+			return psp_dead ? FW_UPLOAD_ERR_HW_ERROR : FW_UPLOAD_ERR_BUSY;
+	}
+
+	cmd_ret = sev_download_firmware_ex(data, size, &psp_ret);
+	fwl_ret = sev_fw_upload_handle_err(sev, cmd_ret, psp_ret);
+	if (fwl_ret == FW_UPLOAD_ERR_NONE) {
+		*written = size;
+		sev->fwl_rollback_required = false;
+	}
+
+	/*
+	 * Firmware either just requested a rollback or a rollback attempt
+	 * failed. Keep the PSP dead for all other commands, only another
+	 * DLFW_EX attempt is allowed through.
+	 */
+	if (sev->fwl_rollback_required)
+		psp_dead = true;
+
+	if (fwl_ret == FW_UPLOAD_ERR_NONE) {
+		if (__sev_get_api_version_locked()) {
+			dev_warn_ratelimited(sev->dev,
+					     "Platform data refresh after DLFW_EX failed\n");
+			if (psp_dead)
+				fwl_ret = FW_UPLOAD_ERR_HW_ERROR;
+		} else if (sev->api_major != old_major ||
+			   sev->api_minor != old_minor ||
+			   sev->build != old_build) {
+			dev_info_ratelimited(sev->dev,
+					     "SEV firmware updated from %d.%d.%d to %d.%d.%d\n",
+					     old_major, old_minor, old_build,
+					     sev->api_major, sev->api_minor, sev->build);
+		} else {
+			dev_info_ratelimited(sev->dev,
+					     "SEV firmware version unchanged: %d.%d.%d\n",
+					     sev->api_major, sev->api_minor, sev->build);
+		}
+	}
+
+	if (!sev->fwl_rollback_required && !psp_dead)
+		sev_fw_upload_reinit_platform(sev);
+
+	return fwl_ret;
 }
 
 static enum fw_upload_err sev_fw_upload_poll_complete(struct fw_upload *fw_upload)
