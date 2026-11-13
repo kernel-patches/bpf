@@ -170,6 +170,7 @@ static const struct mtk_reg_map mt7988_reg_map = {
 		.pcrx_ptr	= 0x6908,
 		.glo_cfg	= 0x6a04,
 		.rst_idx	= 0x6a08,
+		.rx_cfg		= 0x6a10,
 		.delay_irq	= 0x6a0c,
 		.irq_status	= 0x6a20,
 		.irq_mask	= 0x6a28,
@@ -554,6 +555,62 @@ static int mtk_mac_prepare(struct phylink_config *config, unsigned int mode,
 	return 0;
 }
 
+/* The MACs are fed from the shared RX rings, so the maximum frame they may
+ * accept is a property of the ring buffer length.  GMAC1 on netsys v3+ is
+ * the built-in switch port: it has no XMAC_RX_CFG2 limit register, so it
+ * keeps the MCR programming the other SoCs use, extended with the MCR
+ * jumbo field so its limit can grow with the rings like the XGMII MACs'.
+ */
+static void mtk_set_mcr_max_rx(struct mtk_mac *mac, u32 val)
+{
+	struct mtk_eth *eth = mac->hw;
+	u32 mcr_cur, mcr_new;
+
+	if (MTK_HAS_CAPS(eth->soc->caps, MTK_SOC_MT7628))
+		return;
+
+	if (!mtk_interface_mode_is_xgmii(eth, mac->interface) ||
+	    mac->id == MTK_GMAC1_ID) {
+		mcr_cur = mtk_r32(mac->hw, MTK_MAC_MCR(mac->id));
+		mcr_new = mcr_cur & ~MAC_MCR_MAX_RX_MASK;
+
+		if (val <= 1518)
+			mcr_new |= MAC_MCR_MAX_RX(MAC_MCR_MAX_RX_1518);
+		else if (val <= 1536)
+			mcr_new |= MAC_MCR_MAX_RX(MAC_MCR_MAX_RX_1536);
+		else if (val <= 1552)
+			mcr_new |= MAC_MCR_MAX_RX(MAC_MCR_MAX_RX_1552);
+		else
+			mcr_new |= MAC_MCR_MAX_RX(MAC_MCR_MAX_RX_2048);
+
+		/* The bucket encodes at most 2048; the SoCs with the 9K
+		 * capability need the jumbo field, in 1024-byte units, for
+		 * anything larger.  Clearing it together with the bucket
+		 * keeps a later MTU shrink from leaving a stale larger
+		 * limit behind.
+		 */
+		if (MTK_HAS_CAPS(eth->soc->caps, MTK_NETSYS_RX_9K)) {
+			u32 jumbo = DIV_ROUND_UP(val, MTK_MAX_RX_LENGTH_UNIT);
+
+			mcr_new &= ~MAC_MCR_MAX_RX_JUMBO_MASK;
+
+			if (val > 1552)
+				mcr_new |= MAC_MCR_MAX_RX_JUMBO(jumbo);
+		}
+
+		if (mcr_new != mcr_cur)
+			mtk_w32(mac->hw, mcr_new, MTK_MAC_MCR(mac->id));
+	} else {
+		mcr_cur = mtk_r32(mac->hw, MTK_XMAC_RX_CFG2(mac->id));
+		mcr_new = mcr_cur & ~MTK_XMAC_MAX_RX_MASK;
+		mcr_new |= FIELD_PREP(MTK_XMAC_MAX_RX_MASK,
+				      min_t(u32, val, MTK_MAX_RX_LENGTH_9K));
+
+		if (mcr_new != mcr_cur)
+			mtk_w32(mac->hw, mcr_new, MTK_XMAC_RX_CFG2(mac->id));
+	}
+}
+
 static void mtk_mac_config(struct phylink_config *config, unsigned int mode,
 			   const struct phylink_link_state *state)
 {
@@ -677,6 +734,18 @@ static void mtk_mac_config(struct phylink_config *config, unsigned int mode,
 		if (mac->id == MTK_GMAC1_ID)
 			mtk_setup_bridge_switch(eth);
 	}
+
+	/* On the SoCs with the 9K capability the rings grow with the MTU, so
+	 * rewrite the MAC limit on every successful mac_config, not only
+	 * when the interface mode changes: a reopen after an MTU change
+	 * must narrow the MACs that still carry the previous, larger
+	 * limit.  This must run after the XGMII setup above: its
+	 * MAC_MCR_FORCE_LINK_DOWN write is a full-register write that
+	 * would otherwise reset GMAC1's max-rx field (its limit lives in
+	 * the MCR register, not in XMAC_RX_CFG2) back to the 1518 bucket.
+	 */
+	if (MTK_HAS_CAPS(eth->soc->caps, MTK_NETSYS_RX_9K))
+		mtk_set_mcr_max_rx(mac, eth->rx_buf_len);
 
 	return;
 
@@ -1239,27 +1308,38 @@ static void mtk_get_stats64(struct net_device *dev,
 
 	storage->tx_errors = dev->stats.tx_errors;
 	storage->rx_dropped = dev->stats.rx_dropped;
+	storage->rx_length_errors += dev->stats.rx_length_errors;
 	storage->tx_dropped = dev->stats.tx_dropped;
 }
 
-static inline int mtk_max_frag_size(int mtu)
+static inline int mtk_max_frag_size(u32 rx_buf_len, int mtu)
 {
-	/* make sure buf_size will be at least MTK_MAX_RX_LENGTH */
-	if (mtu + MTK_RX_ETH_HLEN < MTK_MAX_RX_LENGTH_2K)
-		mtu = MTK_MAX_RX_LENGTH_2K - MTK_RX_ETH_HLEN;
+	/* make sure buf_size will be at least the rx buffer length */
+	if (mtu + MTK_RX_ETH_HLEN < rx_buf_len)
+		mtu = rx_buf_len - MTK_RX_ETH_HLEN;
 
 	return SKB_DATA_ALIGN(MTK_RX_HLEN + mtu) +
 		SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
 }
 
-static inline int mtk_max_buf_size(int frag_size)
+static inline int mtk_max_buf_size(u32 rx_buf_len, int frag_size)
 {
 	int buf_size = frag_size - NET_SKB_PAD - NET_IP_ALIGN -
 		       SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
 
-	WARN_ON(buf_size < MTK_MAX_RX_LENGTH_2K);
+	WARN_ON(buf_size < rx_buf_len);
 
 	return buf_size;
+}
+
+/* The descriptor length a normal RX ring gets for a given shared buffer
+ * length.  The page_pool gate in mtk_rx_alloc() uses the same value, so the
+ * XDP admission checks test exactly what the pool can back.
+ */
+static inline u32 mtk_rx_ring_buf_size(u32 rx_buf_len)
+{
+	return mtk_max_buf_size(rx_buf_len,
+				mtk_max_frag_size(rx_buf_len, ETH_DATA_LEN));
 }
 
 static bool mtk_rx_get_desc(struct mtk_eth *eth, struct mtk_rx_dma_v2 *rxd,
@@ -1280,9 +1360,17 @@ static bool mtk_rx_get_desc(struct mtk_eth *eth, struct mtk_rx_dma_v2 *rxd,
 	return true;
 }
 
-static void *mtk_max_lro_buf_alloc(gfp_t gfp_mask)
+/* mtk_max_buf_alloc() rounds the buffer up to a whole page order, so
+ * report the size it actually allocated, not the smaller frag_size, in
+ * skb->truesize.
+ */
+static unsigned int mtk_buf_alloc_size(unsigned int size)
 {
-	unsigned int size = mtk_max_frag_size(MTK_MAX_LRO_RX_LENGTH);
+	return PAGE_SIZE << get_order(size);
+}
+
+static void *mtk_max_buf_alloc(unsigned int size, gfp_t gfp_mask)
+{
 	unsigned long data;
 
 	data = __get_free_pages(gfp_mask | __GFP_COMP | __GFP_NOWARN,
@@ -2268,6 +2356,15 @@ static int mtk_poll_rx(struct napi_struct *napi, int budget,
 
 		pktlen = RX_DMA_GET_PLEN0(trxd.rxd2);
 
+		/* The engine can report a length larger than the posted
+		 * buffer; never pass the unwritten remainder of the buffer
+		 * up the stack.
+		 */
+		if (unlikely(pktlen > ring->buf_size)) {
+			netdev->stats.rx_length_errors++;
+			goto release_desc;
+		}
+
 		/* alloc new buffer */
 		if (ring->page_pool) {
 			struct page *page = virt_to_head_page(data);
@@ -2313,10 +2410,15 @@ static int mtk_poll_rx(struct napi_struct *napi, int budget,
 				skb_metadata_set(skb, metasize);
 			skb_mark_for_recycle(skb);
 		} else {
+			unsigned int alloc_size = ring->frag_size > PAGE_SIZE ?
+				mtk_buf_alloc_size(ring->frag_size) :
+				ring->frag_size;
+
 			if (ring->frag_size <= PAGE_SIZE)
 				new_data = napi_alloc_frag(ring->frag_size);
 			else
-				new_data = mtk_max_lro_buf_alloc(GFP_ATOMIC);
+				new_data = mtk_max_buf_alloc(ring->frag_size,
+							     GFP_ATOMIC);
 
 			if (unlikely(!new_data)) {
 				netdev->stats.rx_dropped++;
@@ -2339,7 +2441,7 @@ static int mtk_poll_rx(struct napi_struct *napi, int budget,
 			dma_unmap_single(eth->dma_dev, ((u64)trxd.rxd1 | addr64),
 					 ring->buf_size, DMA_FROM_DEVICE);
 
-			skb = build_skb(data, ring->frag_size);
+			skb = build_skb(data, alloc_size);
 			if (unlikely(!skb)) {
 				netdev->stats.rx_dropped++;
 				skb_free_frag(data);
@@ -2800,6 +2902,7 @@ static int mtk_rx_alloc(struct mtk_eth *eth, int ring_no, int rx_flag)
 	const struct mtk_soc_data *soc = eth->soc;
 	struct mtk_rx_ring *ring;
 	int rx_data_len, rx_dma_size;
+	u32 buf_len;
 	int i;
 
 	if (rx_flag == MTK_RX_FLAGS_QDMA) {
@@ -2818,8 +2921,19 @@ static int mtk_rx_alloc(struct mtk_eth *eth, int ring_no, int rx_flag)
 		rx_dma_size = soc->rx.dma_size;
 	}
 
-	ring->frag_size = mtk_max_frag_size(rx_data_len);
-	ring->buf_size = mtk_max_buf_size(ring->frag_size);
+	/* The QDMA RX ring is only ever scratch memory for the engine: the
+	 * CPU neither polls nor refills it, so it keeps its 2K buffers
+	 * even when the polled rings grow.
+	 */
+	if (rx_flag == MTK_RX_FLAGS_QDMA)
+		buf_len = MTK_MAX_RX_LENGTH_2K;
+	else if (rx_flag == MTK_RX_FLAGS_HWLRO)
+		buf_len = max_t(u32, eth->rx_buf_len, MTK_MAX_LRO_RX_LENGTH);
+	else
+		buf_len = eth->rx_buf_len;
+
+	ring->frag_size = mtk_max_frag_size(buf_len, rx_data_len);
+	ring->buf_size  = mtk_max_buf_size(buf_len, ring->frag_size);
 	ring->data = kzalloc_objs(*ring->data, rx_dma_size);
 	if (!ring->data)
 		return -ENOMEM;
@@ -2863,7 +2977,8 @@ static int mtk_rx_alloc(struct mtk_eth *eth, int ring_no, int rx_flag)
 			if (ring->frag_size <= PAGE_SIZE)
 				data = netdev_alloc_frag(ring->frag_size);
 			else
-				data = mtk_max_lro_buf_alloc(GFP_KERNEL);
+				data = mtk_max_buf_alloc(ring->frag_size,
+							 GFP_KERNEL);
 
 			if (!data)
 				return -ENOMEM;
@@ -3259,6 +3374,67 @@ static int mtk_dma_busy_wait(struct mtk_eth *eth)
 	return ret;
 }
 
+static int mtk_max_gmac_mtu(struct mtk_eth *eth)
+{
+	int i, max_mtu = ETH_DATA_LEN;
+
+	for (i = 0; i < ARRAY_SIZE(eth->netdev); i++)
+		if (eth->netdev[i] && eth->netdev[i]->mtu > max_mtu)
+			max_mtu = eth->netdev[i]->mtu;
+
+	return max_mtu;
+}
+
+static u32 mtk_rx_buf_len_from_mtu(struct mtk_eth *eth, int max_mtu)
+{
+	int length;
+
+	/* Only the SoCs with the 9K capability grow the shared rings with
+	 * the MTU.  Everywhere else the buffers stay at 2K, so the largest
+	 * MTU those SoCs advertise keeps working at runtime and the -EBUSY
+	 * rule below never applies to them.
+	 */
+	if (!MTK_HAS_CAPS(eth->soc->caps, MTK_NETSYS_RX_9K))
+		return MTK_MAX_RX_LENGTH_2K;
+
+	length = max_mtu + MTK_RX_ETH_HLEN + VLAN_HLEN;
+	if (length <= MTK_MAX_RX_LENGTH_2K)
+		return MTK_MAX_RX_LENGTH_2K;
+
+	return DIV_ROUND_UP(length, 1024) * 1024;
+}
+
+/* The rx rings are shared by every MAC, so their buffers are sized for
+ * the largest MTU configured on any of them.
+ */
+static u32 mtk_rx_buf_len(struct mtk_eth *eth)
+{
+	return mtk_rx_buf_len_from_mtu(eth, mtk_max_gmac_mtu(eth));
+}
+
+/* Program the PDMA RX max-frame (SDL) field from the shared RX buffer
+ * length.  The field only exists on netsys v3+ and is programmed the way
+ * the MediaTek downstream driver does: frame length offset by
+ * MTK_PDMA_LRO_SDL in GENMASK(30, 16).  The encoding is the vendor's and
+ * not publicly documented; without the write the DMA engine keeps its
+ * small reset default (~1518 bytes) and drops larger frames on the wire,
+ * so a datasheet confirmation of the layout would be welcome.
+ */
+static void mtk_pdma_set_sdl(struct mtk_eth *eth)
+{
+	const struct mtk_reg_map *reg_map = eth->soc->reg_map;
+	u32 val;
+
+	if (!mtk_is_netsys_v3_or_greater(eth))
+		return;
+
+	val = mtk_r32(eth, reg_map->pdma.rx_cfg);
+	val &= ~MTK_RX_CFG_SDL_MASK;
+	val |= FIELD_PREP(MTK_RX_CFG_SDL_MASK,
+			  MTK_PDMA_LRO_SDL + eth->rx_buf_len);
+	mtk_w32(eth, val, reg_map->pdma.rx_cfg);
+}
+
 static int mtk_dma_init(struct mtk_eth *eth)
 {
 	int err;
@@ -3266,6 +3442,14 @@ static int mtk_dma_init(struct mtk_eth *eth)
 
 	if (mtk_dma_busy_wait(eth))
 		return -EBUSY;
+
+	/* Derived here, at ring allocation, so eth->rx_buf_len always
+	 * describes the buffers the rings actually hold; mtk_change_mtu()
+	 * updates it while DMA is down so it describes the rings-to-be,
+	 * and mtk_mac_config() then never lets a MAC accept a frame the
+	 * rings cannot take.
+	 */
+	eth->rx_buf_len = mtk_rx_buf_len(eth);
 
 	if (MTK_HAS_CAPS(eth->soc->caps, MTK_QDMA)) {
 		/* QDMA needs scratch memory for internal reordering of the
@@ -3309,6 +3493,8 @@ static int mtk_dma_init(struct mtk_eth *eth)
 			FC_THRES_MIN, eth->soc->reg_map->qdma.fc_th);
 		mtk_w32(eth, 0x0, eth->soc->reg_map->qdma.hred);
 	}
+
+	mtk_pdma_set_sdl(eth);
 
 	return 0;
 }
@@ -3600,17 +3786,6 @@ found:
 	return NOTIFY_DONE;
 }
 
-static int mtk_max_gmac_mtu(struct mtk_eth *eth)
-{
-	int i, max_mtu = ETH_DATA_LEN;
-
-	for (i = 0; i < ARRAY_SIZE(eth->netdev); i++)
-		if (eth->netdev[i] && eth->netdev[i]->mtu > max_mtu)
-			max_mtu = eth->netdev[i]->mtu;
-
-	return max_mtu;
-}
-
 static int mtk_open(struct net_device *dev)
 {
 	struct mtk_mac *mac = netdev_priv(dev);
@@ -3780,6 +3955,7 @@ static int mtk_xdp_setup(struct net_device *dev, struct bpf_prog *prog,
 	struct mtk_mac *mac = netdev_priv(dev);
 	struct mtk_eth *eth = mac->hw;
 	struct bpf_prog *old_prog;
+	u32 rx_buf_len;
 	bool need_update;
 
 	if (eth->hwlro) {
@@ -3787,12 +3963,28 @@ static int mtk_xdp_setup(struct net_device *dev, struct bpf_prog *prog,
 		return -EOPNOTSUPP;
 	}
 
-	if (dev->mtu > MTK_PP_MAX_BUF_SIZE) {
+	need_update = !!eth->prog != !!prog;
+
+	/* XDP only runs on rings that have a page_pool, and the pool is
+	 * only created when the shared RX buffer length fits
+	 * MTK_PP_MAX_BUF_SIZE.  eth->rx_buf_len describes the live rings;
+	 * when the rings are not live, or this attach tears them down,
+	 * the next open re-derives it from the current MTUs, so check
+	 * that value instead.  A detach never needs a pool, so it is not
+	 * checked at all.
+	 */
+	rx_buf_len = eth->rx_buf_len;
+	if (prog &&
+	    (!refcount_read(&eth->dma_refcnt) ||
+	     (netif_running(dev) && need_update &&
+	      refcount_read(&eth->dma_refcnt) == 1)))
+		rx_buf_len = mtk_rx_buf_len(eth);
+
+	if (prog && mtk_rx_ring_buf_size(rx_buf_len) > MTK_PP_MAX_BUF_SIZE) {
 		NL_SET_ERR_MSG_MOD(extack, "MTU too large for XDP");
 		return -EOPNOTSUPP;
 	}
 
-	need_update = !!eth->prog != !!prog;
 	if (netif_running(dev) && need_update)
 		mtk_stop(dev);
 
@@ -3925,30 +4117,6 @@ static void mtk_dim_tx(struct work_struct *work)
 	spin_unlock_bh(&eth->dim_lock);
 
 	dim->state = DIM_START_MEASURE;
-}
-
-static void mtk_set_mcr_max_rx(struct mtk_mac *mac, u32 val)
-{
-	struct mtk_eth *eth = mac->hw;
-	u32 mcr_cur, mcr_new;
-
-	if (MTK_HAS_CAPS(eth->soc->caps, MTK_SOC_MT7628))
-		return;
-
-	mcr_cur = mtk_r32(mac->hw, MTK_MAC_MCR(mac->id));
-	mcr_new = mcr_cur & ~MAC_MCR_MAX_RX_MASK;
-
-	if (val <= 1518)
-		mcr_new |= MAC_MCR_MAX_RX(MAC_MCR_MAX_RX_1518);
-	else if (val <= 1536)
-		mcr_new |= MAC_MCR_MAX_RX(MAC_MCR_MAX_RX_1536);
-	else if (val <= 1552)
-		mcr_new |= MAC_MCR_MAX_RX(MAC_MCR_MAX_RX_1552);
-	else
-		mcr_new |= MAC_MCR_MAX_RX(MAC_MCR_MAX_RX_2048);
-
-	if (mcr_new != mcr_cur)
-		mtk_w32(mac->hw, mcr_new, MTK_MAC_MCR(mac->id));
 }
 
 static void mtk_hw_reset(struct mtk_eth *eth)
@@ -4218,8 +4386,11 @@ static int mtk_hw_init(struct mtk_eth *eth, bool reset)
 			continue;
 
 		mtk_w32(eth, MAC_MCR_FORCE_LINK_DOWN, MTK_MAC_MCR(i));
-		mtk_set_mcr_max_rx(netdev_priv(dev),
-				   dev->mtu + MTK_RX_ETH_HLEN);
+		if (MTK_HAS_CAPS(eth->soc->caps, MTK_NETSYS_RX_9K))
+			mtk_set_mcr_max_rx(netdev_priv(dev), eth->rx_buf_len);
+		else
+			mtk_set_mcr_max_rx(netdev_priv(dev),
+					   dev->mtu + MTK_RX_ETH_HLEN);
 	}
 
 	/* Indicates CDM to parse the MTK special tag from CPU
@@ -4360,20 +4531,58 @@ static int mtk_change_mtu(struct net_device *dev, int new_mtu)
 	int length = new_mtu + MTK_RX_ETH_HLEN;
 	struct mtk_mac *mac = netdev_priv(dev);
 	struct mtk_eth *eth = mac->hw;
+	u32 rx_buf_len;
+	bool running;
 	int max_mtu, i;
 
+	/* The RX rings are shared by every MAC, so the buffer length
+	 * follows the largest MTU of all of them, the new one included.
+	 */
+	max_mtu = new_mtu;
+	for (i = 0; i < MTK_MAX_DEVS; i++) {
+		if (eth->netdev[i] && eth->netdev[i] != dev &&
+		    eth->netdev[i]->mtu > max_mtu)
+			max_mtu = eth->netdev[i]->mtu;
+	}
+	rx_buf_len = mtk_rx_buf_len_from_mtu(eth, max_mtu);
+
 	if (rcu_access_pointer(eth->prog) &&
-	    length > MTK_PP_MAX_BUF_SIZE) {
+	    mtk_rx_ring_buf_size(rx_buf_len) > MTK_PP_MAX_BUF_SIZE) {
 		netdev_err(dev, "Invalid MTU for XDP mode\n");
 		return -EINVAL;
 	}
 
-	mtk_set_mcr_max_rx(mac, length);
+	/* The rings cannot be resized in place while DMA is running: a
+	 * larger buffer can only come from the reallocation at the next
+	 * open, so reject it.  A smaller one is fine, the buffers the
+	 * rings already hold are big enough for it.
+	 */
+	running = refcount_read(&eth->dma_refcnt);
+	if (running && rx_buf_len > eth->rx_buf_len)
+		return -EBUSY;
+
+	/* On the SoCs whose rings grow with the MTU, keep the MAC limit in
+	 * step with the shared buffers; the other SoCs keep the per-device
+	 * limit they always had.
+	 */
+	if (MTK_HAS_CAPS(eth->soc->caps, MTK_NETSYS_RX_9K))
+		mtk_set_mcr_max_rx(mac, rx_buf_len);
+	else
+		mtk_set_mcr_max_rx(mac, length);
+
 	WRITE_ONCE(dev->mtu, new_mtu);
 
 	max_mtu = mtk_max_gmac_mtu(eth);
 	for (i = 0; i < ARRAY_SIZE(eth->ppe); i++)
 		mtk_ppe_update_mtu(eth->ppe[i], max_mtu);
+
+	/* While DMA is up the rings keep the buffers they were built
+	 * with; update eth->rx_buf_len only when DMA is down so it keeps
+	 * describing the buffers the rings hold, or will hold at the next
+	 * open.
+	 */
+	if (!running)
+		eth->rx_buf_len = rx_buf_len;
 
 	return 0;
 }
@@ -5018,8 +5227,17 @@ static int mtk_add_mac(struct mtk_eth *eth, struct device_node *np)
 	eth->netdev[id]->irq = eth->irq[MTK_FE_IRQ_SHARED];
 	eth->netdev[id]->dev.of_node = np;
 
+	/* DSA sets the conduit MTU (user MTU + tag) before the netdev is
+	 * opened, so max_mtu must already be final here.  Deriving it only
+	 * in mtk_open() leaves the conduit at its 1504 default and blocks
+	 * 9K frames on the DSA user ports.
+	 */
 	if (MTK_HAS_CAPS(eth->soc->caps, MTK_SOC_MT7628))
 		eth->netdev[id]->max_mtu = MTK_MAX_RX_LENGTH - MTK_RX_ETH_HLEN;
+	else if (MTK_HAS_CAPS(eth->soc->caps, MTK_NETSYS_RX_9K) &&
+		 mtk_interface_mode_is_xgmii(eth, phy_mode))
+		eth->netdev[id]->max_mtu =
+			MTK_MAX_RX_LENGTH_9K - MTK_RX_ETH_HLEN - VLAN_HLEN;
 	else
 		eth->netdev[id]->max_mtu = MTK_MAX_RX_LENGTH_2K - MTK_RX_ETH_HLEN;
 
@@ -5159,6 +5377,8 @@ static int mtk_probe(struct platform_device *pdev)
 	spin_lock_init(&eth->tx_irq_lock);
 	spin_lock_init(&eth->rx_irq_lock);
 	spin_lock_init(&eth->dim_lock);
+
+	eth->rx_buf_len = MTK_MAX_RX_LENGTH_2K;
 
 	eth->rx_dim.mode = DIM_CQ_PERIOD_MODE_START_FROM_EQE;
 	INIT_WORK(&eth->rx_dim.work, mtk_dim_rx);
