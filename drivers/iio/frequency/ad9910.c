@@ -2300,7 +2300,7 @@ static int ad9910_probe(struct spi_device *spi)
 
 	snprintf(st->ram_fwu_name, sizeof(st->ram_fwu_name), "%s:ram",
 		 dev_name(&indio_dev->dev));
-	st->ram_fwu = firmware_upload_register(THIS_MODULE, dev, st->ram_fwu_name,
+	st->ram_fwu = firmware_upload_register(dev, st->ram_fwu_name,
 					       &ad9910_ram_fwu_ops, st);
 	if (IS_ERR(st->ram_fwu))
 		return dev_err_probe(dev, PTR_ERR(st->ram_fwu),
