@@ -27071,6 +27071,13 @@ S:	Maintained
 F:	Documentation/networking/device_drivers/ethernet/stmicro/
 F:	drivers/net/ethernet/stmicro/stmmac/
 
+STRINGSET DATA STRUCTURE
+M:	Chuck Lever <cel@kernel.org>
+S:	Maintained
+F:	Documentation/core-api/stringset.rst
+F:	include/linux/stringset.h
+F:	lib/stringset.c
+
 SUN HAPPY MEAL ETHERNET DRIVER
 M:	Sean Anderson <seanga2@gmail.com>
 S:	Maintained

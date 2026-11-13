@@ -45,6 +45,7 @@ Library functionality that is used throughout the kernel.
    idr
    circular-buffers
    rbtree
+   stringset
    generic-radix-tree
    packing
    this_cpu_ops
