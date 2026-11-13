@@ -3487,6 +3487,7 @@ static unsigned int ata_scsi_pass_thru(struct ata_queued_cmd *qc)
 	struct ata_device *dev = qc->dev;
 	const u8 *cdb = scmd->cmnd;
 	u16 fp;
+	u8 feature_offset, nsect_offset, command_offset;
 	u16 cdb_offset = 0;
 
 	/* 7Fh variable length cmd means a ata pass-thru(32) */
@@ -3547,6 +3548,9 @@ static unsigned int ata_scsi_pass_thru(struct ata_queued_cmd *qc)
 		tf->lbah = cdb[12];
 		tf->device = cdb[13];
 		tf->command = cdb[14];
+		feature_offset = 4;
+		nsect_offset = 6;
+		command_offset = 14;
 		break;
 	case ATA_12:
 		/*
@@ -3561,6 +3565,9 @@ static unsigned int ata_scsi_pass_thru(struct ata_queued_cmd *qc)
 		tf->lbah = cdb[7];
 		tf->device = cdb[8];
 		tf->command = cdb[9];
+		feature_offset = 3;
+		nsect_offset = 4;
+		command_offset = 9;
 		break;
 	default:
 		/*
@@ -3586,6 +3593,9 @@ static unsigned int ata_scsi_pass_thru(struct ata_queued_cmd *qc)
 		tf->device = cdb[24];
 		tf->command = cdb[25];
 		tf->auxiliary = get_unaligned_be32(&cdb[28]);
+		feature_offset = 21;
+		nsect_offset = 23;
+		command_offset = 25;
 		break;
 	}
 
@@ -3603,8 +3613,12 @@ static unsigned int ata_scsi_pass_thru(struct ata_queued_cmd *qc)
 	case ATA_CMD_READ_LONG_ONCE:
 	case ATA_CMD_WRITE_LONG:
 	case ATA_CMD_WRITE_LONG_ONCE:
-		if (tf->protocol != ATA_PROT_PIO || tf->nsect != 1) {
-			fp = 1;
+		if (tf->protocol != ATA_PROT_PIO) {
+			fp = 1 + cdb_offset;
+			goto invalid_fld;
+		}
+		if (tf->nsect != 1) {
+			fp = nsect_offset;
 			goto invalid_fld;
 		}
 		qc->sect_size = scsi_bufflen(scmd);
@@ -3670,13 +3684,13 @@ static unsigned int ata_scsi_pass_thru(struct ata_queued_cmd *qc)
 
 	/* We may not issue DMA commands if no DMA mode is set */
 	if (tf->protocol == ATA_PROT_DMA && !ata_dma_enabled(dev)) {
-		fp = 1;
+		fp = 1 + cdb_offset;
 		goto invalid_fld;
 	}
 
 	/* We may not issue NCQ commands to devices not supporting NCQ */
 	if (ata_is_ncq(tf->protocol) && !ata_ncq_enabled(dev)) {
-		fp = 1;
+		fp = 1 + cdb_offset;
 		goto invalid_fld;
 	}
 
@@ -3719,7 +3733,7 @@ static unsigned int ata_scsi_pass_thru(struct ata_queued_cmd *qc)
 	 */
 	if (tf->command == ATA_CMD_SET_FEATURES &&
 	    tf->feature == SETFEATURES_XFER) {
-		fp = (cdb[0] == ATA_16) ? 4 : 3;
+		fp = feature_offset;
 		goto invalid_fld;
 	}
 
@@ -3739,7 +3753,7 @@ static unsigned int ata_scsi_pass_thru(struct ata_queued_cmd *qc)
 	 * can turn off TC features of their system.
 	 */
 	if (tf->command >= 0x5C && tf->command <= 0x5F && !libata_allow_tpm) {
-		fp = (cdb[0] == ATA_16) ? 14 : 9;
+		fp = command_offset;
 		goto invalid_fld;
 	}
 
