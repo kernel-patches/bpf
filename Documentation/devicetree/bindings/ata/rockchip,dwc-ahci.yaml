@@ -34,6 +34,9 @@ properties:
           - rockchip,rk3588-dwc-ahci
       - const: snps,dwc-ahci
 
+  iommus:
+    maxItems: 1
+
   ports-implemented:
     const: 1
 
