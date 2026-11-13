@@ -150,6 +150,8 @@ static struct neighbour *ipv4_dst_neigh_lookup(const struct dst_entry *dst,
 					       struct sk_buff *skb,
 					       const void *daddr);
 static void ipv4_confirm_neigh(const struct dst_entry *dst, const void *daddr);
+static struct fib_nh_exception *find_exception(struct fib_nh_common *nhc,
+					       __be32 daddr);
 
 static struct dst_ops ipv4_dst_ops = {
 	.family =		AF_INET,
@@ -1076,6 +1078,26 @@ out:	kfree_skb_reason(skb, reason);
 	return 0;
 }
 
+#ifdef CONFIG_IP_ROUTE_MULTIPATH
+/* The mtu a path currently uses for daddr, as ipv4_mtu() would report it. */
+static u32 fib_nhc_mtu(struct fib_nh_common *nhc, const struct fib_info *fi,
+		       __be32 daddr)
+{
+	struct fib_nh_exception *fnhe = find_exception(nhc, daddr);
+	u32 mtu = 0;
+
+	if (fnhe && fnhe->fnhe_genid == fnhe_genid(dev_net(nhc->nhc_dev)))
+		mtu = fnhe->fnhe_pmtu;
+	if (!mtu)
+		mtu = fi->fib_mtu;
+	if (!mtu)
+		mtu = READ_ONCE(nhc->nhc_dev->mtu);
+	mtu = min(mtu, IP_MAX_MTU);
+
+	return mtu - lwtunnel_headroom(nhc->nhc_lwtstate, mtu);
+}
+#endif
+
 static void __ip_rt_update_pmtu(struct rtable *rt, struct flowi4 *fl4, u32 mtu)
 {
 	struct dst_entry *dst = &rt->dst;
@@ -1115,6 +1137,14 @@ static void __ip_rt_update_pmtu(struct rtable *rt, struct flowi4 *fl4, u32 mtu)
 				nhc = fib_info_nhc(res.fi, nhsel);
 				if (!nhc)
 					break;
+				/* old_mtu above is the mtu of the path dst
+				 * is on, don't raise what another path
+				 * uses. A locked mtu clears DF and goes
+				 * to every path.
+				 */
+				if (!lock &&
+				    mtu > fib_nhc_mtu(nhc, res.fi, fl4->daddr))
+					continue;
 				update_or_create_fnhe(nhc, fl4->daddr, 0, mtu, lock,
 						      jiffies + net->ipv4.ip_rt_mtu_expires);
 			}
