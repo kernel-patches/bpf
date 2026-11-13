@@ -334,6 +334,9 @@ enum mmci_busy_state {
  * @supports_sdio_irq: allow SD I/O card to interrupt the host
  * @stm32_idmabsize_mask: stm32 sdmmc idma buffer size.
  * @dma_flow_controller: use peripheral as flow controller for DMA.
+ * @reset_on_resume: on system resume, if the card is powered off, reset the
+ *		     IP and restore MMCICLOCK, MMCIDATACTRL and MMCIPOWER, as
+ *		     the IP may have been used by a bootloader or the bootrom.
  */
 struct variant_data {
 	unsigned int		clkreg;
@@ -382,6 +385,7 @@ struct variant_data {
 	u32			stm32_idmabsize_mask;
 	u32			stm32_idmabsize_align;
 	bool			dma_flow_controller;
+	bool			reset_on_resume;
 	void (*init)(struct mmci_host *host);
 };
 
