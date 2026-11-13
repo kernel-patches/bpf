@@ -227,7 +227,7 @@ SYM_FUNC_START(chacha_1to4blocks_ssse3)
 	# %rcx: input/output data length in bytes: 1 to 4 blocks inclusive
 	# %r8d: nrounds
 
-	# This function encrypts four consecutive ChaCha blocks by loading the
+	# This function encrypts four consecutive ChaCha blocks by loading
 	# the state matrix in SSE registers four times. As we need some scratch
 	# registers, we save the first four registers on the stack. The
 	# algorithm performs each operation on the corresponding word of each
@@ -242,7 +242,7 @@ SYM_FUNC_START(chacha_1to4blocks_ssse3)
 	and		$~63,%rsp
 	mov		%rcx,%rax
 
-	# x0..15[0-3] = s0..3[0..3]
+	# x0..15[0-3] = s[0..15]
 	movq		0x00(%rdi),%xmm1
 	pshufd		$0x00,%xmm1,%xmm0
 	pshufd		$0x55,%xmm1,%xmm1
@@ -500,8 +500,8 @@ SYM_FUNC_START(chacha_1to4blocks_ssse3)
 	sub		$2,%r8d
 	jnz		.Ldoubleround4
 
-	# x0[0-3] += s0[0]
-	# x1[0-3] += s0[1]
+	# x0[0-3] += s[0]
+	# x1[0-3] += s[1]
 	movq		0x00(%rdi),%xmm3
 	pshufd		$0x00,%xmm3,%xmm2
 	pshufd		$0x55,%xmm3,%xmm3
@@ -509,8 +509,8 @@ SYM_FUNC_START(chacha_1to4blocks_ssse3)
 	movdqa		%xmm2,0x00(%rsp)
 	paddd		0x10(%rsp),%xmm3
 	movdqa		%xmm3,0x10(%rsp)
-	# x2[0-3] += s0[2]
-	# x3[0-3] += s0[3]
+	# x2[0-3] += s[2]
+	# x3[0-3] += s[3]
 	movq		0x08(%rdi),%xmm3
 	pshufd		$0x00,%xmm3,%xmm2
 	pshufd		$0x55,%xmm3,%xmm3
@@ -519,45 +519,45 @@ SYM_FUNC_START(chacha_1to4blocks_ssse3)
 	paddd		0x30(%rsp),%xmm3
 	movdqa		%xmm3,0x30(%rsp)
 
-	# x4[0-3] += s1[0]
-	# x5[0-3] += s1[1]
+	# x4[0-3] += s[4]
+	# x5[0-3] += s[5]
 	movq		0x10(%rdi),%xmm3
 	pshufd		$0x00,%xmm3,%xmm2
 	pshufd		$0x55,%xmm3,%xmm3
 	paddd		%xmm2,%xmm4
 	paddd		%xmm3,%xmm5
-	# x6[0-3] += s1[2]
-	# x7[0-3] += s1[3]
+	# x6[0-3] += s[6]
+	# x7[0-3] += s[7]
 	movq		0x18(%rdi),%xmm3
 	pshufd		$0x00,%xmm3,%xmm2
 	pshufd		$0x55,%xmm3,%xmm3
 	paddd		%xmm2,%xmm6
 	paddd		%xmm3,%xmm7
 
-	# x8[0-3] += s2[0]
-	# x9[0-3] += s2[1]
+	# x8[0-3] += s[8]
+	# x9[0-3] += s[9]
 	movq		0x20(%rdi),%xmm3
 	pshufd		$0x00,%xmm3,%xmm2
 	pshufd		$0x55,%xmm3,%xmm3
 	paddd		%xmm2,%xmm8
 	paddd		%xmm3,%xmm9
-	# x10[0-3] += s2[2]
-	# x11[0-3] += s2[3]
+	# x10[0-3] += s[10]
+	# x11[0-3] += s[11]
 	movq		0x28(%rdi),%xmm3
 	pshufd		$0x00,%xmm3,%xmm2
 	pshufd		$0x55,%xmm3,%xmm3
 	paddd		%xmm2,%xmm10
 	paddd		%xmm3,%xmm11
 
-	# x12[0-3] += s3[0]
-	# x13[0-3] += s3[1]
+	# x12[0-3] += s[12]
+	# x13[0-3] += s[13]
 	movq		0x30(%rdi),%xmm3
 	pshufd		$0x00,%xmm3,%xmm2
 	pshufd		$0x55,%xmm3,%xmm3
 	paddd		%xmm2,%xmm12
 	paddd		%xmm3,%xmm13
-	# x14[0-3] += s3[2]
-	# x15[0-3] += s3[3]
+	# x14[0-3] += s[14]
+	# x15[0-3] += s[15]
 	movq		0x38(%rdi),%xmm3
 	pshufd		$0x00,%xmm3,%xmm2
 	pshufd		$0x55,%xmm3,%xmm3

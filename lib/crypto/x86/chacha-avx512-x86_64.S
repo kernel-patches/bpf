@@ -55,7 +55,7 @@ SYM_FUNC_START(chacha_0to2blocks_avx512vl)
 	# on four words in each matrix in parallel, but requires shuffling to
 	# rearrange the words after each round.
 
-	# x0..3[0-2] = s0..3
+	# x0..3[0-1] = s0..3
 	vbroadcasti128	0x00(%rdi),%ymm0
 	vbroadcasti128	0x10(%rdi),%ymm1
 	vbroadcasti128	0x20(%rdi),%ymm2
@@ -195,7 +195,7 @@ SYM_FUNC_START(chacha_2to4blocks_avx512vl)
 	# required word shuffling has a rather high latency, we can do the
 	# arithmetic on two matrix-pairs without much slowdown.
 
-	# x0..3[0-4] = s0..3
+	# x0..3[0-3] = s0..3
 	vbroadcasti128	0x00(%rdi),%ymm0
 	vbroadcasti128	0x10(%rdi),%ymm1
 	vbroadcasti128	0x20(%rdi),%ymm2
@@ -400,14 +400,14 @@ SYM_FUNC_END(chacha_2to4blocks_avx512vl)
 	# %r8d: nrounds
 
 	# This encrypts VL/4 consecutive ChaCha blocks by loading the state
-	# matrix in as many vector registers. Compared to AVX2, this mostly
+	# matrix in vector registers VL/4 times. Compared to AVX2, this mostly
 	# benefits from the new rotate instructions and the additional
 	# registers.
 	#
 	# VL=32 encrypts eight blocks in 256-bit ymm registers.
 	# VL=64 encrypts sixteen blocks in 512-bit zmm registers.
 
-	# x0..15[0-VL/4] = s[0..15]
+	# x0..15[0-(VL/4 - 1)] = s[0..15]
 	vpbroadcastd	0x00(%rdi),V0
 	vpbroadcastd	0x04(%rdi),V1
 	vpbroadcastd	0x08(%rdi),V2
@@ -585,7 +585,7 @@ SYM_FUNC_END(chacha_2to4blocks_avx512vl)
 	sub		$2,%r8d
 	jnz		.Ldoubleround\@
 
-	# x0..15 += s[0..15]
+	# x0..15[0-(VL/4 - 1)] += s[0..15]
 	vpaddd		V16,V0,V0
 	vpaddd		V17,V1,V1
 	vpaddd		V18,V2,V2
