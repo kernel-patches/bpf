@@ -21024,6 +21024,7 @@ M:	Selvamani Rajagopal <selvamani.rajagopal@onsemi.com>
 L:	netdev@vger.kernel.org
 S:	Supported
 F:	Documentation/devicetree/bindings/net/onnn,s2500.yaml
+F:	drivers/net/ethernet/onsemi/
 
 OP-TEE DRIVER
 M:	Jens Wiklander <jenswi@kernel.org>

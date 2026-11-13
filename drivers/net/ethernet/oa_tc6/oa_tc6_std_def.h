@@ -134,6 +134,7 @@ struct oa_tc6 {
 	struct list_head tx_ts_skb_q;
 	struct ptp_clock *ptp_clock;
 	bool ftsc_capable; /* Timestamp capability */
+	bool ctc_capable;  /* cut-through capability */
 	bool hw_tstamp_enabled;
 	u64 tx_hwtstamp_pkts;
 	u64 tx_hwtstamp_lost;
