@@ -5,33 +5,58 @@
 #ifndef __LINUX_SPI_LOONGSON_H
 #define __LINUX_SPI_LOONGSON_H
 
-#include <linux/bits.h>
-#include <linux/pm.h>
-#include <linux/types.h>
+/* SPI controller register offsets */
+#define LOONGSON_SPI_SPCR_REG		0x00
+#define LOONGSON_SPI_SPSR_REG		0x01
+#define LOONGSON_SPI_FIFO_REG		0x02
+#define LOONGSON_SPI_SPER_REG		0x03
+#define LOONGSON_SPI_PARA_REG		0x04
+#define LOONGSON_SPI_SFCS_REG		0x05
+#define LOONGSON_SPI_TIMI_REG		0x06
 
-#define	LOONGSON_SPI_SPCR_REG	0x00
-#define	LOONGSON_SPI_SPSR_REG	0x01
-#define	LOONGSON_SPI_FIFO_REG	0x02
-#define	LOONGSON_SPI_SPER_REG	0x03
-#define	LOONGSON_SPI_PARA_REG	0x04
-#define	LOONGSON_SPI_SFCS_REG	0x05
-#define	LOONGSON_SPI_TIMI_REG	0x06
+/* SPCR bits */
+#define LOONGSON_SPI_SPCR_SPR		GENMASK(1, 0)
+#define LOONGSON_SPI_SPCR_CPHA		BIT(2)
+#define LOONGSON_SPI_SPCR_CPOL		BIT(3)
+#define LOONGSON_SPI_SPCR_SPE		BIT(6)
+#define LOONGSON_SPI_SPCR_SPIE		BIT(7)
 
-/* Bits definition for Loongson SPI register */
-#define	LOONGSON_SPI_PARA_MEM_EN	BIT(0)
-#define	LOONGSON_SPI_SPCR_CPHA	BIT(2)
-#define	LOONGSON_SPI_SPCR_CPOL	BIT(3)
-#define	LOONGSON_SPI_SPCR_SPE	BIT(6)
-#define	LOONGSON_SPI_SPSR_RFEMPTY	BIT(0)
-#define	LOONGSON_SPI_SPSR_WCOL	BIT(6)
-#define	LOONGSON_SPI_SPSR_SPIF	BIT(7)
+/* SPSR bits */
+#define LOONGSON_SPI_SPSR_RFEMPTY	BIT(0)
+#define LOONGSON_SPI_SPSR_RFFULL	BIT(1)
+#define LOONGSON_SPI_SPSR_WFEMPTY	BIT(2)
+#define LOONGSON_SPI_SPSR_WFFULL	BIT(3)
+#define LOONGSON_SPI_SPSR_WCOL		BIT(6)
+#define LOONGSON_SPI_SPSR_SPIF		BIT(7)
+
+/* SPSR event bits: transfer complete (SPIF) or write collision (WCOL) */
+#define LOONGSON_SPI_SPSR_EVENTS	(LOONGSON_SPI_SPSR_SPIF | \
+					 LOONGSON_SPI_SPSR_WCOL)
+
+/* SPER bits */
+#define LOONGSON_SPI_SPER_SPRE		GENMASK(1, 0)
+
+/* SFC_PARAM bits */
+#define LOONGSON_SPI_PARA_MEM_EN	BIT(0)
+
+/*
+ * SFC_SOFTCS layout:
+ *   bit  cs      : per-CS software-control enable
+ *   bit  cs + 4  : per-CS output level
+ *
+ * The chip select index is a runtime value, so FIELD_PREP() (which
+ * requires a compile-time constant mask) cannot be used here. These
+ * helpers keep the shift hidden behind a field-like accessor.
+ */
+#define LOONGSON_SPI_SFCS_OUT_SHIFT	4
+#define LOONGSON_SPI_SFCS_SW_EN(cs)	BIT(cs)
+#define LOONGSON_SPI_SFCS_OUT(cs)	BIT((cs) + LOONGSON_SPI_SFCS_OUT_SHIFT)
+
+#define LOONGSON_SPI_NUM_CS		4
 
 /* Hardware limits and divider masks */
 #define LOONGSON_SPI_DIV_MIN		2
 #define LOONGSON_SPI_DIV_MAX		4096
-
-struct device;
-struct spi_controller;
 
 /**
  * struct loongson_spi_div_table - SPI clock divider encoding

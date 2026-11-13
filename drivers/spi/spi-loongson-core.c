@@ -2,6 +2,8 @@
 // Loongson SPI Support
 // Copyright (C) 2023 Loongson Technology Corporation Limited
 
+#include <linux/bitfield.h>
+#include <linux/bits.h>
 #include <linux/clk.h>
 #include <linux/delay.h>
 #include <linux/err.h>
@@ -31,32 +33,54 @@ static const struct loongson_spi_div_table div_table[] = {
 	{4096, 3, 2 },
 };
 
-static inline void loongson_spi_write_reg(struct loongson_spi *spi, unsigned char reg,
-					  unsigned char data)
+static void loongson_spi_write_reg(struct loongson_spi *spi, unsigned int reg,
+				   unsigned char data)
 {
 	writeb(data, spi->base + reg);
 }
 
-static inline char loongson_spi_read_reg(struct loongson_spi *spi, unsigned char reg)
+static unsigned char loongson_spi_read_reg(struct loongson_spi *spi, unsigned int reg)
 {
 	return readb(spi->base + reg);
 }
 
+static void loongson_spi_set_bits(struct loongson_spi *spi, unsigned int reg,
+				  unsigned char bits)
+{
+	writeb(readb(spi->base + reg) | bits, spi->base + reg);
+}
+
+static void loongson_spi_clear_bits(struct loongson_spi *spi, unsigned int reg,
+				    unsigned char bits)
+{
+	writeb(readb(spi->base + reg) & ~bits, spi->base + reg);
+}
+
+static void loongson_spi_update_bits(struct loongson_spi *spi, unsigned int reg,
+				     unsigned char mask, unsigned char val)
+{
+	unsigned char tmp = readb(spi->base + reg);
+
+	tmp &= ~mask;
+	tmp |= val & mask;
+	writeb(tmp, spi->base + reg);
+}
+
 static void loongson_spi_set_cs(struct spi_device *spi, bool en)
 {
-	int cs;
-	unsigned char mask = (BIT(4) | BIT(0)) << spi_get_chipselect(spi, 0);
-	unsigned char val = en ? mask :  (BIT(0) << spi_get_chipselect(spi, 0));
 	struct loongson_spi *loongson_spi = spi_controller_get_devdata(spi->controller);
+	unsigned int cs = spi_get_chipselect(spi, 0);
+	unsigned char mask, val;
 
-	cs = loongson_spi_read_reg(loongson_spi, LOONGSON_SPI_SFCS_REG) & ~mask;
-	loongson_spi_write_reg(loongson_spi, LOONGSON_SPI_SFCS_REG, val | cs);
+	mask = LOONGSON_SPI_SFCS_SW_EN(cs) | LOONGSON_SPI_SFCS_OUT(cs);
+	val = LOONGSON_SPI_SFCS_SW_EN(cs) | field_prep(LOONGSON_SPI_SFCS_OUT(cs), en);
+
+	loongson_spi_update_bits(loongson_spi, LOONGSON_SPI_SFCS_REG, mask, val);
 }
 
 static int loongson_spi_set_clk(struct loongson_spi *loongson_spi, unsigned int hz)
 {
 	unsigned long div;
-	unsigned char val;
 	unsigned int i;
 
 	if (!hz || !loongson_spi->clk_rate)
@@ -74,15 +98,11 @@ static int loongson_spi_set_clk(struct loongson_spi *loongson_spi, unsigned int 
 	if (i == ARRAY_SIZE(div_table))
 		return -EINVAL;
 
-	val = loongson_spi_read_reg(loongson_spi, LOONGSON_SPI_SPCR_REG);
-	val &= ~GENMASK(1, 0);
-	loongson_spi_write_reg(loongson_spi, LOONGSON_SPI_SPCR_REG,
-			       val | div_table[i].spr);
+	loongson_spi_update_bits(loongson_spi, LOONGSON_SPI_SPCR_REG,
+				 LOONGSON_SPI_SPCR_SPR, div_table[i].spr);
 
-	val = loongson_spi_read_reg(loongson_spi, LOONGSON_SPI_SPER_REG);
-	val &= ~GENMASK(1, 0);
-	loongson_spi_write_reg(loongson_spi, LOONGSON_SPI_SPER_REG,
-			       val | div_table[i].spre);
+	loongson_spi_update_bits(loongson_spi, LOONGSON_SPI_SPER_REG,
+				 LOONGSON_SPI_SPER_SPRE, div_table[i].spre);
 
 	loongson_spi->hz = hz;
 
@@ -92,21 +112,23 @@ static int loongson_spi_set_clk(struct loongson_spi *loongson_spi, unsigned int 
 static void loongson_spi_set_mode(struct loongson_spi *loongson_spi,
 				  struct spi_device *spi)
 {
-	unsigned char val;
+	unsigned char val = 0;
 
-	val = loongson_spi_read_reg(loongson_spi, LOONGSON_SPI_SPCR_REG);
-	val &= ~(LOONGSON_SPI_SPCR_CPOL | LOONGSON_SPI_SPCR_CPHA);
 	if (spi->mode & SPI_CPOL)
 		val |= LOONGSON_SPI_SPCR_CPOL;
+
 	if (spi->mode & SPI_CPHA)
 		val |= LOONGSON_SPI_SPCR_CPHA;
 
-	loongson_spi_write_reg(loongson_spi, LOONGSON_SPI_SPCR_REG, val);
+	loongson_spi_update_bits(loongson_spi, LOONGSON_SPI_SPCR_REG,
+				 LOONGSON_SPI_SPCR_CPOL | LOONGSON_SPI_SPCR_CPHA,
+				 val);
+
 	loongson_spi->mode = spi->mode;
 }
 
 static int loongson_spi_update_state(struct loongson_spi *loongson_spi,
-				struct spi_device *spi, struct spi_transfer *t)
+				     struct spi_device *spi, struct spi_transfer *t)
 {
 	int ret;
 
@@ -124,13 +146,12 @@ static int loongson_spi_update_state(struct loongson_spi *loongson_spi,
 
 static int loongson_spi_setup(struct spi_device *spi)
 {
-	struct loongson_spi *loongson_spi;
+	struct loongson_spi *loongson_spi = spi_controller_get_devdata(spi->controller);
 
-	loongson_spi = spi_controller_get_devdata(spi->controller);
-	if (spi->bits_per_word % 8)
+	if (spi->bits_per_word % BITS_PER_BYTE)
 		return -EINVAL;
 
-	if (spi_get_chipselect(spi, 0) >= spi->controller->num_chipselect)
+	if (spi_get_chipselect(spi, 0) >= LOONGSON_SPI_NUM_CS)
 		return -EINVAL;
 
 	loongson_spi->hz = 0;
@@ -138,41 +159,41 @@ static int loongson_spi_setup(struct spi_device *spi)
 	return 0;
 }
 
-static int loongson_spi_write_read_8bit(struct spi_device *spi, const u8 **tx_buf,
-					u8 **rx_buf, unsigned int num)
+static int loongson_spi_write_read_8bit(struct spi_device *spi,
+					const u8 **tx_buf, u8 **rx_buf)
 {
 	struct loongson_spi *loongson_spi = spi_controller_get_devdata(spi->controller);
-	unsigned char status;
+	unsigned char status, val = 0;
 	int ret;
 
 	if (tx_buf && *tx_buf)
-		loongson_spi_write_reg(loongson_spi, LOONGSON_SPI_FIFO_REG, *((*tx_buf)++));
-	else
-		loongson_spi_write_reg(loongson_spi, LOONGSON_SPI_FIFO_REG, 0);
+		val = *((*tx_buf)++);
+
+	loongson_spi_write_reg(loongson_spi, LOONGSON_SPI_FIFO_REG, val);
 
 	ret = readb_poll_timeout(loongson_spi->base + LOONGSON_SPI_SPSR_REG,
-				 status,
-				 !(status & LOONGSON_SPI_SPSR_RFEMPTY),
+				 status, !(status & LOONGSON_SPI_SPSR_RFEMPTY),
 				 1, USEC_PER_MSEC);
+	if (ret)
+		return ret;
+
+	val = loongson_spi_read_reg(loongson_spi, LOONGSON_SPI_FIFO_REG);
 
 	if (rx_buf && *rx_buf)
-		*(*rx_buf)++ = loongson_spi_read_reg(loongson_spi, LOONGSON_SPI_FIFO_REG);
-	else
-		loongson_spi_read_reg(loongson_spi, LOONGSON_SPI_FIFO_REG);
+		*(*rx_buf)++ = val;
 
 	return ret;
 }
 
 static int loongson_spi_write_read(struct spi_device *spi, struct spi_transfer *xfer)
 {
-	int ret;
-	unsigned int count;
+	unsigned int count = xfer->len;
 	const u8 *tx = xfer->tx_buf;
 	u8 *rx = xfer->rx_buf;
+	int ret;
 
-	count = xfer->len;
 	do {
-		ret = loongson_spi_write_read_8bit(spi, &tx, &rx, count);
+		ret = loongson_spi_write_read_8bit(spi, &tx, &rx);
 		if (ret)
 			break;
 	} while (--count);
@@ -183,11 +204,9 @@ static int loongson_spi_write_read(struct spi_device *spi, struct spi_transfer *
 static int loongson_spi_prepare_message(struct spi_controller *ctlr, struct spi_message *m)
 {
 	struct loongson_spi *loongson_spi = spi_controller_get_devdata(ctlr);
-	unsigned char para;
 
-	para = loongson_spi_read_reg(loongson_spi, LOONGSON_SPI_PARA_REG);
-	loongson_spi_write_reg(loongson_spi, LOONGSON_SPI_PARA_REG,
-			       para & ~LOONGSON_SPI_PARA_MEM_EN);
+	loongson_spi_clear_bits(loongson_spi,
+				LOONGSON_SPI_PARA_REG, LOONGSON_SPI_PARA_MEM_EN);
 
 	return 0;
 }
@@ -211,30 +230,27 @@ static int loongson_spi_transfer_one(struct spi_controller *ctrl, struct spi_dev
 static int loongson_spi_unprepare_message(struct spi_controller *ctrl, struct spi_message *m)
 {
 	struct loongson_spi *loongson_spi = spi_controller_get_devdata(ctrl);
-	unsigned char para;
 
 	/* Restore the hardware SPI Flash read path */
-	para = loongson_spi_read_reg(loongson_spi, LOONGSON_SPI_PARA_REG);
-	loongson_spi_write_reg(loongson_spi, LOONGSON_SPI_PARA_REG,
-			       para | LOONGSON_SPI_PARA_MEM_EN);
+	loongson_spi_set_bits(loongson_spi,
+			      LOONGSON_SPI_PARA_REG, LOONGSON_SPI_PARA_MEM_EN);
 
 	return 0;
 }
 
 static void loongson_spi_reginit(struct loongson_spi *loongson_spi_dev)
 {
-	unsigned char val;
+	/* Disable SPI */
+	loongson_spi_clear_bits(loongson_spi_dev,
+				LOONGSON_SPI_SPCR_REG, LOONGSON_SPI_SPCR_SPE);
 
-	val = loongson_spi_read_reg(loongson_spi_dev, LOONGSON_SPI_SPCR_REG);
-	val &= ~LOONGSON_SPI_SPCR_SPE;
-	loongson_spi_write_reg(loongson_spi_dev, LOONGSON_SPI_SPCR_REG, val);
+	/* Clear status flags (write 1 to clear) */
+	loongson_spi_write_reg(loongson_spi_dev,
+			       LOONGSON_SPI_SPSR_REG, LOONGSON_SPI_SPSR_EVENTS);
 
-	loongson_spi_write_reg(loongson_spi_dev, LOONGSON_SPI_SPSR_REG,
-			       (LOONGSON_SPI_SPSR_SPIF | LOONGSON_SPI_SPSR_WCOL));
-
-	val = loongson_spi_read_reg(loongson_spi_dev, LOONGSON_SPI_SPCR_REG);
-	val |= LOONGSON_SPI_SPCR_SPE;
-	loongson_spi_write_reg(loongson_spi_dev, LOONGSON_SPI_SPCR_REG, val);
+	/* Enable SPI */
+	loongson_spi_set_bits(loongson_spi_dev,
+			      LOONGSON_SPI_SPCR_REG, LOONGSON_SPI_SPCR_SPE);
 }
 
 static int loongson_spi_get_clk_rate(struct device *dev)
@@ -280,7 +296,7 @@ int loongson_spi_init_controller(struct device *dev, void __iomem *regs)
 	controller->transfer_one = loongson_spi_transfer_one;
 	controller->unprepare_message = loongson_spi_unprepare_message;
 	controller->set_cs = loongson_spi_set_cs;
-	controller->num_chipselect = 4;
+	controller->num_chipselect = LOONGSON_SPI_NUM_CS;
 	dev_set_drvdata(dev, controller);
 
 	spi = spi_controller_get_devdata(controller);
