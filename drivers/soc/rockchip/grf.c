@@ -168,6 +168,40 @@ static const struct rockchip_grf_info rk3588_sysgrf __initconst = {
 	.num_values = ARRAY_SIZE(rk3588_defaults),
 };
 
+/* PHP SMMU StreamIDs: bits 15:0, no write-enable mask */
+#define RK3588_PHP_GRF_GMAC0_SID_AW	0x0074
+#define RK3588_PHP_GRF_GMAC1_SID_AW	0x007c
+#define RK3588_PHP_GRF_SATA0_SID_AW	0x0084
+#define RK3588_PHP_GRF_SATA1_SID_AW	0x008c
+#define RK3588_PHP_GRF_SATA2_SID_AW	0x0094
+#define RK3588_PHP_GRF_GMAC0_SID_AR	0x009c
+#define RK3588_PHP_GRF_GMAC1_SID_AR	0x00a4
+#define RK3588_PHP_GRF_SATA0_SID_AR	0x00ac
+#define RK3588_PHP_GRF_SATA1_SID_AR	0x00b4
+#define RK3588_PHP_GRF_SATA2_SID_AR	0x00bc
+#define RK3588_PHP_GRF_USB3OTG2_SID_AR	0x00c4
+#define RK3588_PHP_GRF_USB3OTG2_SID_AW	0x00cc
+
+static const struct rockchip_grf_value rk3588_defaults_php_grf[] __initconst = {
+	{ "gmac0 write streamid", RK3588_PHP_GRF_GMAC0_SID_AW, 1 },
+	{ "gmac0 read streamid", RK3588_PHP_GRF_GMAC0_SID_AR, 1 },
+	{ "gmac1 write streamid", RK3588_PHP_GRF_GMAC1_SID_AW, 2 },
+	{ "gmac1 read streamid", RK3588_PHP_GRF_GMAC1_SID_AR, 2 },
+	{ "sata0 write streamid", RK3588_PHP_GRF_SATA0_SID_AW, 3 },
+	{ "sata0 read streamid", RK3588_PHP_GRF_SATA0_SID_AR, 3 },
+	{ "sata1 write streamid", RK3588_PHP_GRF_SATA1_SID_AW, 4 },
+	{ "sata1 read streamid", RK3588_PHP_GRF_SATA1_SID_AR, 4 },
+	{ "sata2 write streamid", RK3588_PHP_GRF_SATA2_SID_AW, 5 },
+	{ "sata2 read streamid", RK3588_PHP_GRF_SATA2_SID_AR, 5 },
+	{ "usb3otg2 write streamid", RK3588_PHP_GRF_USB3OTG2_SID_AW, 6 },
+	{ "usb3otg2 read streamid", RK3588_PHP_GRF_USB3OTG2_SID_AR, 6 },
+};
+
+static const struct rockchip_grf_info rk3588_phpgrf __initconst = {
+	.values = rk3588_defaults_php_grf,
+	.num_values = ARRAY_SIZE(rk3588_defaults_php_grf),
+};
+
 static const struct of_device_id rockchip_grf_dt_match[] __initconst = {
 	{
 		.compatible = "rockchip,rk3036-grf",
@@ -202,6 +236,9 @@ static const struct of_device_id rockchip_grf_dt_match[] __initconst = {
 	}, {
 		.compatible = "rockchip,rk3576-ioc-grf",
 		.data = (void *)&rk3576_iocgrf,
+	}, {
+		.compatible = "rockchip,rk3588-php-grf",
+		.data = (void *)&rk3588_phpgrf,
 	}, {
 		.compatible = "rockchip,rk3588-sys-grf",
 		.data = (void *)&rk3588_sysgrf,
