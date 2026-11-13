@@ -5259,10 +5259,17 @@ normal:
 
 		hsize = skb_headlen(head_skb) - offset;
 
-		/* pskb_trim() would drop a nested frag_list from the clone */
+		/* pskb_trim() would drop a nested frag_list from the clone.
+		 * Without SG the copy below doesn't move the walk along, so a
+		 * copy that reads past pos leaves pos behind offset for good,
+		 * and list_skb is then stale.  GSO_BY_FRAGS takes its lengths
+		 * from list_skb too, so that test alone wouldn't help it, and
+		 * it is left as it is.
+		 */
 		if (hsize <= 0 && i >= nfrags && list_skb &&
 		    skb_headlen(list_skb) && !skb_has_frag_list(list_skb) &&
-		    (skb_headlen(list_skb) == len || sg)) {
+		    (skb_headlen(list_skb) == len || sg) &&
+		    (pos == offset || gso_by_frags)) {
 			if (unlikely(skb_headlen(list_skb) > len)) {
 				DEBUG_NET_WARN_ON_ONCE(1);
 				err = -EINVAL;
