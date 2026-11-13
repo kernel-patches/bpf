@@ -29,19 +29,23 @@
 struct device;
 struct spi_controller;
 
-struct loongson_spi {
-	struct	spi_controller	*controller;
-	void __iomem		*base;
-	int			cs_active;
-	unsigned int		hz;
+struct loongson_spi_suspend_store {
 	unsigned char		spcr;
 	unsigned char		sper;
 	unsigned char		spsr;
 	unsigned char		para;
 	unsigned char		sfcs;
 	unsigned char		timi;
+};
+
+struct loongson_spi {
+	struct spi_controller	*controller;
+	void __iomem		*base;
+	int			cs_active;
+	unsigned int		hz;
 	unsigned int		mode;
 	u64			clk_rate;
+	struct loongson_spi_suspend_store lss;
 };
 
 int loongson_spi_init_controller(struct device *dev, void __iomem *reg);
