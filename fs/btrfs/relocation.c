@@ -4661,6 +4661,8 @@ static int create_remap_tree_entries(struct btrfs_trans_handle *trans,
 	btrfs_release_path(path);
 
 	mutex_unlock(&bg->free_space_lock);
+	if (ret < 0)
+		goto out;
 
 	max_entries = extent_count + 2;
 	entries = kmalloc_objs(*entries, max_entries, GFP_NOFS);
