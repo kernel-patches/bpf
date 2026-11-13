@@ -5,6 +5,7 @@
  */
 
 #include <linux/ethtool.h>
+#include <net/selftests.h>
 #include <linux/phy.h>
 
 #include "s2500_hw_def.h"
@@ -205,6 +206,10 @@ static int s2500_get_sset_count(struct net_device *ndev, int sset)
 	switch (sset) {
 	case ETH_SS_STATS:
 		return S2500_MAC_STATS_LEN;
+	case ETH_SS_TEST:
+		if (!IS_ENABLED(CONFIG_NET_SELFTESTS))
+			return -EOPNOTSUPP;
+		return net_selftest_get_count();
 	default:
 		return -EOPNOTSUPP;
 	}
@@ -217,6 +222,9 @@ static void s2500_get_strings(struct net_device *ndev, u32 stringset,
 	case ETH_SS_STATS:
 		memcpy(buf, s2500_mac_stat_strings,
 		       S2500_MAC_STATS_LEN * ETH_GSTRING_LEN);
+		break;
+	case ETH_SS_TEST:
+		net_selftest_get_strings(buf);
 		break;
 	}
 }
@@ -376,4 +384,5 @@ const struct ethtool_ops s2500_ethtool_ops = {
 	.get_ts_info = s2500_get_ts_info,
 	.get_regs_len = s2500_get_regs_len,
 	.get_regs = s2500_get_regs,
+	.self_test = net_selftest,
 };
