@@ -23,8 +23,34 @@ struct text_facts {
 	u32 sext;	/* the low 32 bits are returned, sign extended */
 };
 
+/*
+ * What has the function done to the objects of its caller when it returns a
+ * value? An effect is a call which hands a pointer that is based on a pointer
+ * argument to a callee which changes the object, see text_insn.pointers. The
+ * sets above stop at an effect: they are about the paths without one. A forward
+ * may data flow analysis finds the effects, and the paths from the entry.
+ */
+enum text_path {
+	TEXT_NO_PATH,		/* None shows in the code, see text_flow.insns */
+	TEXT_EFFECT_PATH,	/* Each path has an effect */
+	TEXT_CLEAN_PATH,
+};
+
+/* The facts before an instruction. The join is the union, and the better path */
+struct text_reach {
+	/*
+	 * The registers which may hold a pointer that is based on a pointer argument:
+	 * it is computed from the argument without a load, so it points into the
+	 * same object. Memory is not tracked: a pointer which is spilled is lost.
+	 */
+	u32 based;
+	u32 path;	/* from the entry to here */
+};
+
 struct text_flow {
 	const struct text_arch *arch;
+	u64 entry;	/* The address of the first instruction which runs ... */
+	u32 args;	/* ... and the registers which hold pointer arguments there */
 	/*
 	 * All instructions of the function in the order of their addresses,
 	 * whether they can be reached or not: the way to a block may be a jump
@@ -34,6 +60,7 @@ struct text_flow {
 	u32 nr_insns;
 	/* The result: the facts before each instruction */
 	struct text_facts *facts;
+	struct text_reach *reach;
 };
 
 /*

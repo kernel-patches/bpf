@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* Which values does a function return? See text_flow.h */
 
+#include <string.h>
+
 #include <linux/bits.h>
 #include <linux/compiler.h>
 
@@ -130,6 +132,9 @@ static struct text_facts transfer(const struct text_flow *flow, u32 i)
 		break;
 	}
 	join(&out, flow, next_insn(flow, i));
+	/* An effect: the paths without one end here */
+	if (insn->pointers)
+		out = (struct text_facts){};
 
 	in = out;
 	kill(&in, insn->defs);
@@ -155,6 +160,65 @@ static struct text_facts transfer(const struct text_flow *flow, u32 i)
 	return in;
 }
 
+/* Return the registers which hold a based pointer behind INSN, if BASED do before it */
+static u32 transfer_based(const struct text_flow *flow, const struct text_insn *insn, u32 based)
+{
+	u32 defs = insn->defs;
+
+	/* endbr64, the ud2 or brk of WARN(): LLVM does not say what it writes. It may be nothing */
+	if (defs == TEXT_ALL_REGS)
+		return based;
+	if (insn->kind == TEXT_CALL)
+		return based & ~(defs | flow->arch->caller_saved);
+	if (insn->kind != TEXT_OTHER && insn->kind < TEXT_BRANCH)
+		defs |= BIT(insn->dst);
+	if (insn->kind == TEXT_MOV_IMM || insn->load || !(insn->uses & based))
+		return based & ~defs;
+	/* push %rdi reads a based pointer and writes the stack pointer */
+	return (based | defs) & ~flow->arch->stack_pointer;
+}
+
+/* Join OUT into the facts before instruction I. Return true if they change */
+static bool join_reach(struct text_flow *flow, u32 i, const struct text_reach *out)
+{
+	struct text_reach *in, old;
+
+	if (i == TEXT_NO_INSN)
+		return false;
+	in = &flow->reach[i];
+	old = *in;
+	in->based |= out->based;
+	if (in->path < out->path)
+		in->path = out->path;
+	return memcmp(in, &old, sizeof(old));
+}
+
+/* Sweep from the first instruction to the last one until nothing changes */
+static void solve_forward(struct text_flow *flow)
+{
+	const struct text_reach entry = { flow->args, TEXT_CLEAN_PATH };
+	bool changed;
+	u32 i;
+
+	memset(flow->reach, 0, flow->nr_insns * sizeof(*flow->reach));
+	join_reach(flow, insn_at(flow, flow->entry), &entry);
+	do {
+		changed = false;
+		for (i = 0; i < flow->nr_insns; i++) {
+			const struct text_insn *insn = &flow->insns[i];
+			struct text_reach out = flow->reach[i];
+
+			out.based = transfer_based(flow, insn, out.based);
+			if (insn->pointers)
+				out.path = TEXT_EFFECT_PATH;
+			if (insn->kind == TEXT_BRANCH || insn->kind == TEXT_COND_BRANCH)
+				changed |= join_reach(flow, insn->target, &out);
+			if (insn->kind != TEXT_BRANCH && insn->kind != TEXT_RETURN)
+				changed |= join_reach(flow, next_insn(flow, i), &out);
+		}
+	} while (changed);
+}
+
 /*
  * Sweep from the last instruction to the first one until nothing changes. The
  * sets only grow, and one more sweep is needed only for what goes around a loop.
@@ -172,6 +236,11 @@ void text_flow_solve(struct text_flow *flow)
 		if ((insn->kind == TEXT_BRANCH || insn->kind == TEXT_COND_BRANCH) && insn->imm)
 			insn->target = insn_at(flow, insn->imm);
 	}
+	/* Where do the pointers go? A call which gets none is not an effect. Then the paths */
+	solve_forward(flow);
+	for (i = 0; i < flow->nr_insns; i++)
+		flow->insns[i].pointers &= flow->reach[i].based;
+	solve_forward(flow);
 	do {
 		changed = false;
 		for (i = flow->nr_insns; i--; ) {
