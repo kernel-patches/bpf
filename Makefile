@@ -1408,7 +1408,7 @@ archprepare: outputmakefile archheaders archscripts scripts include/config/kerne
 	include/generated/rustc_cfg remove-stale-files
 
 prepare0: archprepare
-	$(Q)$(MAKE) $(build)=. prepare
+	$(Q)$(MAKE) $(build)=. prepare $(if $(single-build),,prepare_checks)
 	$(Q)$(MAKE) $(build)=scripts/mod
 
 # All the preparing..

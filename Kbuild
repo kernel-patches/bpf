@@ -86,8 +86,11 @@ $(atomic-checks): $(obj)/.checked-%: include/linux/atomic/%  FORCE
 
 # A phony target that depends on all the preparation targets
 
-PHONY += prepare
-prepare: $(rq-offsets-file) missing-syscalls $(atomic-checks)
+PHONY += prepare prepare_checks
+prepare: $(rq-offsets-file)
+	@:
+
+prepare_checks: missing-syscalls $(atomic-checks)
 	@:
 
 # Ordinary directory descending
