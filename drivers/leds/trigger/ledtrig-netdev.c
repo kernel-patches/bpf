@@ -509,6 +509,10 @@ static ssize_t interval_store(struct device *dev,
 	if (ret)
 		return ret;
 
+	/* impose some basic bounds on the timer interval */
+	if (value < 5 || value > 10000)
+		return -EINVAL;
+
 	mutex_lock(&trigger_data->lock);
 
 	if (trigger_data->hw_control) {
@@ -516,13 +520,10 @@ static ssize_t interval_store(struct device *dev,
 		return -EINVAL;
 	}
 
-	/* impose some basic bounds on the timer interval */
-	if (value >= 5 && value <= 10000) {
-		cancel_delayed_work_sync(&trigger_data->work);
+	cancel_delayed_work_sync(&trigger_data->work);
 
-		atomic_set(&trigger_data->interval, msecs_to_jiffies(value));
-		set_baseline_state(trigger_data);	/* resets timer */
-	}
+	atomic_set(&trigger_data->interval, msecs_to_jiffies(value));
+	set_baseline_state(trigger_data);	/* resets timer */
 
 	mutex_unlock(&trigger_data->lock);
 
