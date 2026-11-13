@@ -1,0 +1,5 @@
+# The basic test hotplugs every non-boot CPU five times and then walks
+# all frequencies and governors of every policy, so its runtime grows
+# with the number of CPUs. No fixed timeout fits every machine, and the
+# test always terminates on its own, so disable the runner timeout.
+timeout=0
