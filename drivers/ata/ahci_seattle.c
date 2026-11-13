@@ -92,6 +92,8 @@ static ssize_t seattle_transmit_led_message(struct ata_port *ap, u32 state,
 		return -EINVAL;
 	emp = &pp->em_priv[pmp];
 
+	spin_lock_irqsave(ap->lock, flags);
+
 	val = ioread32(plat_data->sgpio_ctrl);
 	if (state & ACTIVITY_MASK)
 		val |= 1 << ACTIVITY_BIT_POS((ap->port_no));
@@ -109,8 +111,6 @@ static ssize_t seattle_transmit_led_message(struct ata_port *ap, u32 state,
 		val &= ~(1 << FAULT_BIT_POS((ap->port_no)));
 
 	iowrite32(val, plat_data->sgpio_ctrl);
-
-	spin_lock_irqsave(ap->lock, flags);
 
 	/* save off new led state for port/slot */
 	emp->led_state = state;
