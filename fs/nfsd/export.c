@@ -832,11 +832,66 @@ static struct svc_export *svc_export_update(struct svc_export *new,
 static struct svc_export *svc_export_lookup(struct svc_export *);
 static int check_export(const struct path *path, int *flags,
 			unsigned char *uuid);
+static int check_allow_tags(const struct svc_export *exp);
+
+/**
+ * nfsd_nl_parse_allow_tags - parse allow-tags from netlink
+ * @exp: svc_export to fill in
+ * @attr: nested svc-export attribute holding the allow-tags entries
+ * @extack: extended ACK that reports the rejected attribute, or NULL
+ *
+ * On success @exp->ex_allow_tags is populated and finalized; on
+ * failure it can hold a partial set. The caller releases it with
+ * stringset_destroy() either way.
+ *
+ * Return: 0 on success or a negative errno.
+ */
+static int nfsd_nl_parse_allow_tags(struct svc_export *exp,
+				    struct nlattr *attr,
+				    struct netlink_ext_ack *extack)
+{
+	struct nlattr *tag_attr;
+	unsigned int count = 0;
+	int rem;
+
+	nla_for_each_nested_type(tag_attr, NFSD_A_SVC_EXPORT_ALLOW_TAGS,
+				 attr, rem) {
+		if (handshake_session_tag_len(nla_data(tag_attr),
+					      nla_len(tag_attr)) < 0) {
+			NL_SET_BAD_ATTR(extack, tag_attr);
+			return -EINVAL;
+		}
+		count++;
+	}
+	if (count > NFSD_MAX_ALLOW_TAGS) {
+		NL_SET_ERR_MSG(extack, "too many allow-tags");
+		return -EINVAL;
+	}
+	if (!stringset_alloc(&exp->ex_allow_tags, count, GFP_KERNEL))
+		return -ENOMEM;
+
+	nla_for_each_nested_type(tag_attr, NFSD_A_SVC_EXPORT_ALLOW_TAGS,
+				 attr, rem) {
+		char *tag;
+
+		tag = nla_strdup(tag_attr, GFP_KERNEL);
+		if (!tag)
+			return -ENOMEM;
+		if (!stringset_add(&exp->ex_allow_tags, tag)) {
+			kfree(tag);
+			return -ENOMEM;
+		}
+	}
+	stringset_finalize(&exp->ex_allow_tags);
+
+	return 0;
+}
 
 /**
  * nfsd_nl_parse_one_export - parse one svc_export entry from a netlink message
  * @cd: cache_detail for the svc_export cache
  * @attr: nested attribute containing svc-export fields
+ * @extack: extended ACK for error reporting, or NULL
  *
  * Parses one svc-export entry from a netlink message and updates the
  * cache. Mirrors the logic in svc_export_parse().
@@ -844,16 +899,17 @@ static int check_export(const struct path *path, int *flags,
  * Returns 0 on success or a negative errno.
  */
 static int nfsd_nl_parse_one_export(struct cache_detail *cd,
-				    struct nlattr *attr)
+				    struct nlattr *attr,
+				    struct netlink_ext_ack *extack)
 {
-	struct nlattr *tb[NFSD_A_SVC_EXPORT_FSID + 1];
+	struct nlattr *tb[NFSD_A_SVC_EXPORT_ALLOW_TAGS + 1];
 	struct auth_domain *dom = NULL;
 	struct svc_export exp = {}, *expp;
 	struct nlattr *secinfo_attr;
 	struct timespec64 boot;
 	int err, rem;
 
-	err = nla_parse_nested(tb, NFSD_A_SVC_EXPORT_FSID, attr,
+	err = nla_parse_nested(tb, NFSD_A_SVC_EXPORT_ALLOW_TAGS, attr,
 			       nfsd_svc_export_nl_policy, NULL);
 	if (err)
 		return err;
@@ -994,6 +1050,20 @@ static int nfsd_nl_parse_one_export(struct cache_detail *cd,
 			}
 		}
 
+		/* allow-tags (multi-attr string) */
+		if (tb[NFSD_A_SVC_EXPORT_ALLOW_TAGS]) {
+			err = nfsd_nl_parse_allow_tags(&exp, attr, extack);
+			if (err)
+				goto out_uuid;
+		}
+
+		err = check_allow_tags(&exp);
+		if (err) {
+			NL_SET_ERR_MSG(extack,
+				       "allow-tags needs xprtsec=mtls only");
+			goto out_uuid;
+		}
+
 		err = check_export(&exp.ex_path, &exp.ex_flags,
 				   exp.ex_uuid);
 		if (err)
@@ -1028,6 +1098,7 @@ static int nfsd_nl_parse_one_export(struct cache_detail *cd,
 	}
 
 out_uuid:
+	stringset_destroy(&exp.ex_allow_tags);
 	kfree(exp.ex_uuid);
 out_fslocs:
 	nfsd4_fslocs_free(&exp.ex_fslocs);
@@ -1068,7 +1139,8 @@ int nfsd_nl_svc_export_set_reqs_doit(struct sk_buff *skb,
 
 	nlmsg_for_each_attr_type(attr, NFSD_A_SVC_EXPORT_REQS_REQUESTS,
 				 info->nlhdr, GENL_HDRLEN, rem) {
-		ret = nfsd_nl_parse_one_export(cd, (struct nlattr *)attr);
+		ret = nfsd_nl_parse_one_export(cd, (struct nlattr *)attr,
+					       info->extack);
 		if (ret)
 			break;
 	}

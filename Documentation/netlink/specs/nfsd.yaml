@@ -8,6 +8,10 @@ doc: NFSD configuration over generic netlink.
 
 definitions:
   -
+    name: handshake-session-tag-max-len
+    type: const
+    header: linux/handshake.h
+  -
     type: flags
     name: cache-type
     entries: [svc_export, expkey]
@@ -297,6 +301,12 @@ attribute-sets:
       -
         name: fsid
         type: s32
+      -
+        name: allow-tags
+        type: string
+        checks:
+          max-len: handshake-session-tag-max-len
+        multi-attr: true
   -
     name: svc-export-reqs
     attributes:
