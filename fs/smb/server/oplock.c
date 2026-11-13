@@ -1760,13 +1760,16 @@ void smb_send_parent_lease_break_noti(struct ksmbd_file *fp,
 				      struct lease_ctx_info *lctx)
 {
 	struct oplock_info *opinfo;
+	struct dentry *parent;
 	struct ksmbd_inode *p_ci = NULL;
 	LIST_HEAD(brk_list);
 
 	if (lctx && lctx->version != 2)
 		return;
 
-	p_ci = ksmbd_inode_lookup_lock(fp->filp->f_path.dentry->d_parent);
+	parent = dget_parent(fp->filp->f_path.dentry);
+	p_ci = ksmbd_inode_lookup_lock(parent);
+	dput(parent);
 	if (!p_ci)
 		return;
 
@@ -1797,6 +1800,7 @@ void smb_send_parent_lease_break_noti(struct ksmbd_file *fp,
 void smb_lazy_parent_lease_break_close(struct ksmbd_file *fp)
 {
 	struct oplock_info *opinfo;
+	struct dentry *parent;
 	struct ksmbd_inode *p_ci = NULL;
 	LIST_HEAD(brk_list);
 
@@ -1809,7 +1813,9 @@ void smb_lazy_parent_lease_break_close(struct ksmbd_file *fp)
 	}
 	rcu_read_unlock();
 
-	p_ci = ksmbd_inode_lookup_lock(fp->filp->f_path.dentry->d_parent);
+	parent = dget_parent(fp->filp->f_path.dentry);
+	p_ci = ksmbd_inode_lookup_lock(parent);
+	dput(parent);
 	if (!p_ci)
 		return;
 
