@@ -341,16 +341,8 @@ touch $T/successes
 # Note that quoting is problematic.  So on the command line, pass multiple
 # values with multiple kvm.sh argument instances.
 function torture_one {
-	local cur_bootargs=
-	local boottag=
-
 	echo " --- $curflavor:" Start `date` | tee -a $T/log
-	if test -n "$torture_bootargs"
-	then
-		boottag="--bootargs"
-		cur_bootargs="$torture_bootargs"
-	fi
-	"$@" $boottag "$cur_bootargs" --datestamp "$ds/results-$curflavor" > $T/$curflavor.out 2>&1
+	"$@" ${torture_bootargs:+--bootargs "$torture_bootargs"} --datestamp "$ds/results-$curflavor" > $T/$curflavor.out 2>&1
 	retcode=$?
 	resdir="`grep '^Results directory: ' $T/$curflavor.out | tail -1 | sed -e 's/^Results directory: //'`"
 	if test -z "$resdir"
