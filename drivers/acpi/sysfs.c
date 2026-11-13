@@ -11,6 +11,7 @@
 #include <linux/kernel.h>
 #include <linux/kstrtox.h>
 #include <linux/moduleparam.h>
+#include <linux/mutex.h>
 #include <linux/string.h>
 
 #include "internal.h"
@@ -298,6 +299,7 @@ module_param_call(acpica_version, NULL, param_get_acpica_version, NULL, 0444);
  */
 
 static LIST_HEAD(acpi_table_attr_list);
+static DEFINE_MUTEX(acpi_table_attr_lock);
 static struct kobject *tables_kobj;
 static struct kobject *tables_data_kobj;
 static struct kobject *dynamic_tables_kobj;
@@ -348,6 +350,9 @@ static int acpi_table_attr_init(struct kobject *tables_obj,
 	struct acpi_table_header *header = NULL;
 	struct acpi_table_attr *attr = NULL;
 	char instance_str[ACPI_INST_SIZE];
+	int ret;
+
+	guard(mutex)(&acpi_table_attr_lock);
 
 	sysfs_attr_init(&table_attr->attr.attr);
 	ACPI_COPY_NAMESEG(table_attr->name, table_header->signature);
@@ -379,7 +384,12 @@ static int acpi_table_attr_init(struct kobject *tables_obj,
 	table_attr->attr.attr.name = table_attr->filename;
 	table_attr->attr.attr.mode = 0400;
 
-	return sysfs_create_bin_file(tables_obj, &table_attr->attr);
+	ret = sysfs_create_bin_file(tables_obj, &table_attr->attr);
+	if (ret)
+		return ret;
+
+	list_add_tail(&table_attr->node, &acpi_table_attr_list);
+	return 0;
 }
 
 acpi_status acpi_sysfs_table_handler(u32 event, void *table, void *context)
@@ -397,7 +407,6 @@ acpi_status acpi_sysfs_table_handler(u32 event, void *table, void *context)
 			kfree(table_attr);
 			return AE_ERROR;
 		}
-		list_add_tail(&table_attr->node, &acpi_table_attr_list);
 		break;
 	case ACPI_TABLE_EVENT_LOAD:
 	case ACPI_TABLE_EVENT_UNLOAD:
@@ -604,7 +613,6 @@ static int acpi_tables_sysfs_init(void)
 			acpi_put_table(table_header);
 			break;
 		}
-		list_add_tail(&table_attr->node, &acpi_table_attr_list);
 		acpi_table_data_init(table_header, table_attr);
 		acpi_put_table(table_header);
 	}
