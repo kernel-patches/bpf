@@ -69,6 +69,10 @@
  *   - rewrites the prototype of KF_IMPLICIT_ARGS kfuncs.
  *
  * These kfunc annotations were historically produced by pahole.
+ *
+ * With --fmodret_scan it also reads the machine code, and emits a
+ * "bpf_fmodret_retval:<errors>" decl tag for each function which returns errors,
+ * see fmodret.c.
  */
 
 #define  _GNU_SOURCE
@@ -90,6 +94,7 @@
 #include <bpf/btf.h>
 #include <bpf/libbpf.h>
 #include "btf_colors.h"
+#include "fmodret.h"
 #include <subcmd/parse-options.h>
 
 #define BTF_IDS_SECTION	".BTF_ids"
@@ -2098,6 +2103,7 @@ int main(int argc, const char **argv)
 	struct btf_links btf_links = {};
 	bool fatal_warnings = false;
 	bool resolve_btfids = true;
+	bool fmodret_scan = false;
 	char out_path[PATH_MAX];
 
 	struct option btfid_options[] = {
@@ -2113,6 +2119,8 @@ int main(int argc, const char **argv)
 			    "distill --btf_base and emit .BTF.base section data"),
 		OPT_BOOLEAN(0, "inline", &obj.extract_inline,
 			    "extract location BTF into a .BTF.inline file"),
+		OPT_BOOLEAN(0, "fmodret_scan", &fmodret_scan,
+			    "tag the functions which return errors as fmod_ret targets"),
 		OPT_CALLBACK(0, "btf_link", &btf_links, "section:module:btf-file",
 			     "patch a BTF link with --patch_btfids", parse_btf_link),
 		OPT_STRING(0, "patch_btfids", &btfids_path, "file",
@@ -2172,6 +2180,9 @@ int main(int argc, const char **argv)
 		goto out;
 
 	if (btf2btf(&obj))
+		goto out;
+
+	if (fmodret_scan && fmodret_tag(obj.efile.elf, obj.btf, verbose))
 		goto out;
 
 	if (finalize_btf(&obj))
