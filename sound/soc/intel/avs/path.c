@@ -321,7 +321,9 @@ avs_nhlt_config_or_default(struct avs_dev *adev, struct avs_tplg_module *t)
 				       fmt->num_channels, fmt->sampling_freq, fmt->valid_bit_depth,
 				       fmt->bit_depth);
 	if (!fmtcfg) {
-		dev_warn(adev->dev, "Endpoint format configuration not found.\n");
+		dev_dbg(adev->dev, "%s endpoint format configuration %d/%d/%d/%d not found\n",
+			snd_pcm_direction_name(dir), fmt->num_channels,
+			fmt->valid_bit_depth, fmt->bit_depth, fmt->sampling_freq);
 		return ERR_PTR(-ENOENT);
 	}
 

@@ -268,8 +268,11 @@ static int avs_parse_word_tokens(struct snd_soc_component *comp, void *object,
 				continue;
 
 			ret = parsers[j].parse(comp, tuple, object, parsers[j].offset);
-			if (ret)
+			if (ret) {
+				dev_err(comp->dev, "parsing token %d failed: %d\n",
+					parsers[j].token, ret);
 				return ret;
+			}
 		}
 	}
 
