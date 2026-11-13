@@ -227,15 +227,10 @@ static int avs_dai_prepare(struct snd_pcm_substream *substream, struct snd_soc_d
 		return 0;
 
 	ret = avs_path_reset(data->path);
-	if (ret < 0) {
-		dev_err(dai->dev, "reset path failed: %d\n", ret);
-		return ret;
-	}
-
-	ret = avs_path_pause(data->path);
 	if (ret < 0)
-		dev_err(dai->dev, "pause path failed: %d\n", ret);
-	return ret;
+		return ret;
+
+	return avs_path_pause(data->path);
 }
 
 static int avs_dai_nonhda_be_hw_params(struct snd_pcm_substream *substream,
@@ -283,14 +278,10 @@ static int avs_dai_nonhda_be_trigger(struct snd_pcm_substream *substream, int cm
 	case SNDRV_PCM_TRIGGER_START:
 	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
 		ret = avs_path_pause(data->path);
-		if (ret < 0) {
-			dev_err(dai->dev, "pause BE path failed: %d\n", ret);
+		if (ret < 0)
 			break;
-		}
 
 		ret = avs_path_run(data->path, AVS_TPLG_TRIGGER_AUTO);
-		if (ret < 0)
-			dev_err(dai->dev, "run BE path failed: %d\n", ret);
 		break;
 
 	case SNDRV_PCM_TRIGGER_SUSPEND:
@@ -300,12 +291,8 @@ static int avs_dai_nonhda_be_trigger(struct snd_pcm_substream *substream, int cm
 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
 	case SNDRV_PCM_TRIGGER_STOP:
 		ret = avs_path_pause(data->path);
-		if (ret < 0)
-			dev_err(dai->dev, "pause BE path failed: %d\n", ret);
 
 		ret2 = avs_path_reset(data->path);
-		if (ret2)
-			dev_err(dai->dev, "reset BE path failed: %d\n", ret2);
 		if (ret2 && !ret)
 			ret = ret2;
 		break;
@@ -510,14 +497,10 @@ static int avs_dai_hda_be_trigger(struct snd_pcm_substream *substream, int cmd,
 		snd_hdac_ext_stream_start(data->link_stream);
 
 		ret = avs_path_pause(data->path);
-		if (ret < 0) {
-			dev_err(dai->dev, "pause BE path failed: %d\n", ret);
+		if (ret < 0)
 			break;
-		}
 
 		ret = avs_path_run(data->path, AVS_TPLG_TRIGGER_AUTO);
-		if (ret < 0)
-			dev_err(dai->dev, "run BE path failed: %d\n", ret);
 		break;
 
 	case SNDRV_PCM_TRIGGER_SUSPEND:
@@ -527,14 +510,10 @@ static int avs_dai_hda_be_trigger(struct snd_pcm_substream *substream, int cmd,
 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
 	case SNDRV_PCM_TRIGGER_STOP:
 		ret = avs_path_pause(data->path);
-		if (ret < 0)
-			dev_err(dai->dev, "pause BE path failed: %d\n", ret);
 
 		snd_hdac_ext_stream_clear(data->link_stream);
 
 		ret2 = avs_path_reset(data->path);
-		if (ret2)
-			dev_err(dai->dev, "reset BE path failed: %d\n", ret2);
 		if (ret2 && !ret)
 			ret = ret2;
 		break;
@@ -696,10 +675,8 @@ static int avs_dai_fe_hw_params(struct snd_pcm_substream *substream,
 		goto create_err;
 
 	ret = avs_path_bind(data->path);
-	if (ret < 0) {
-		dev_err(dai->dev, "bind FE <-> BE failed: %d\n", ret);
+	if (ret < 0)
 		goto bind_err;
-	}
 
 	return 0;
 
@@ -727,11 +704,9 @@ static int __avs_dai_fe_hw_free(struct snd_pcm_substream *substream, struct snd_
 	host_stream = data->host_stream;
 
 	ret = avs_path_unbind(data->path);
-	if (ret < 0)
-		dev_err(dai->dev, "unbind FE <-> BE failed: %d\n", ret);
-
 	avs_path_free(data->path);
 	data->path = NULL;
+
 	snd_hdac_stream_cleanup(hdac_stream(host_stream));
 	hdac_stream(host_stream)->prepared = false;
 
@@ -894,15 +869,10 @@ static int avs_dai_fe_trigger(struct snd_pcm_substream *substream, int cmd, stru
 			snd_hdac_stream_wait_drsm(hdac_stream(host_stream));
 
 		ret = avs_path_pause(data->path);
-		if (ret < 0) {
-			dev_err(dai->dev, "pause FE path failed: %d\n", ret);
+		if (ret < 0)
 			break;
-		}
 
 		ret = avs_path_run(data->path, AVS_TPLG_TRIGGER_AUTO);
-		if (ret < 0)
-			dev_err(dai->dev, "run FE path failed: %d\n", ret);
-
 		break;
 
 	case SNDRV_PCM_TRIGGER_SUSPEND:
@@ -912,16 +882,12 @@ static int avs_dai_fe_trigger(struct snd_pcm_substream *substream, int cmd, stru
 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
 	case SNDRV_PCM_TRIGGER_STOP:
 		ret = avs_path_pause(data->path);
-		if (ret < 0)
-			dev_err(dai->dev, "pause FE path failed: %d\n", ret);
 
 		spin_lock_irqsave(&bus->reg_lock, flags);
 		avs_hda_stream_stop(bus, host_stream);
 		spin_unlock_irqrestore(&bus->reg_lock, flags);
 
 		ret2 = avs_path_reset(data->path);
-		if (ret2)
-			dev_err(dai->dev, "reset FE path failed: %d\n", ret2);
 		if (ret2 && !ret)
 			ret = ret2;
 		break;
