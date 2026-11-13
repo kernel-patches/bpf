@@ -1099,10 +1099,10 @@
 	interrupts-extended = <&intc GIC_SPI 586 IRQ_TYPE_LEVEL_HIGH 0>,
 			      <&tlmm 51 IRQ_TYPE_EDGE_FALLING>;
 
-	pinctrl-1 =  <&qup_uart11_sleep_cts>,
-		     <&qup_uart11_sleep_rts>,
-		     <&qup_uart11_sleep_tx>,
-		     <&qup_uart11_sleep_rx>;
+	pinctrl-1 = <&qup_uart11_sleep_cts>,
+		    <&qup_uart11_sleep_rts>,
+		    <&qup_uart11_sleep_tx>,
+		    <&qup_uart11_sleep_rx>;
 	pinctrl-names = "default",
 			"sleep";
 

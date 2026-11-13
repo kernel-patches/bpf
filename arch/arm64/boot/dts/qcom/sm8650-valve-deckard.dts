@@ -958,15 +958,15 @@
 	status = "okay";
 
 	eeprom@50 {
-		compatible  = "atmel,24c32";
+		compatible = "atmel,24c32";
 		reg = <0x50>;
 
 		label = "strap_eeprom";
-		vcc-supply  = <&vreg_l15b_1p8>;
+		vcc-supply = <&vreg_l15b_1p8>;
 	};
 
 	eeprom@51 {
-		compatible  = "atmel,24c04";
+		compatible = "atmel,24c04";
 		reg = <0x51>;
 
 		label = "strap_v2_eeprom";
@@ -993,10 +993,10 @@
 	status = "okay";
 
 	eeprom@50 {
-		compatible  = "atmel,24c64";
+		compatible = "atmel,24c64";
 		reg = <0x50>;
 		label = "core_v2_eeprom";
-		vcc-supply  = <&vreg_l15b_1p8>;
+		vcc-supply = <&vreg_l15b_1p8>;
 		pagesize = <32>;
 		size = <8192>;
 		address-width = <16>;
