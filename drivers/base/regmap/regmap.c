@@ -846,6 +846,197 @@ static int regmap_init_ranges(struct regmap *map, const struct regmap_config *co
 	return 0;
 }
 
+/* Pick format_reg()/format_write() for the register width and endianness. */
+static int regmap_set_reg_format(struct regmap *map, const struct regmap_config *config,
+				 enum regmap_endian reg_endian)
+{
+	switch (config->reg_bits + map->reg_shift) {
+	case 2:
+		if (config->val_bits != 6)
+			return -EINVAL;
+		map->format.format_write = regmap_format_2_6_write;
+		return 0;
+
+	case 4:
+		if (config->val_bits != 12)
+			return -EINVAL;
+		map->format.format_write = regmap_format_4_12_write;
+		return 0;
+
+	case 7:
+		switch (config->val_bits) {
+		case 9:
+			map->format.format_write = regmap_format_7_9_write;
+			return 0;
+		case 17:
+			map->format.format_write = regmap_format_7_17_write;
+			return 0;
+		}
+		return -EINVAL;
+
+	case 10:
+		if (config->val_bits != 14)
+			return -EINVAL;
+		map->format.format_write = regmap_format_10_14_write;
+		return 0;
+
+	case 12:
+		if (config->val_bits != 20)
+			return -EINVAL;
+		map->format.format_write = regmap_format_12_20_write;
+		return 0;
+
+	case 8:
+		map->format.format_reg = regmap_format_8;
+		return 0;
+
+	case 16:
+		switch (reg_endian) {
+		case REGMAP_ENDIAN_BIG:
+			map->format.format_reg = regmap_format_16_be;
+			return 0;
+		case REGMAP_ENDIAN_LITTLE:
+			map->format.format_reg = regmap_format_16_le;
+			return 0;
+		case REGMAP_ENDIAN_NATIVE:
+			map->format.format_reg = regmap_format_16_native;
+			return 0;
+		default:
+			return -EINVAL;
+		}
+
+	case 24:
+		if (reg_endian != REGMAP_ENDIAN_BIG)
+			return -EINVAL;
+		map->format.format_reg = regmap_format_24_be;
+		return 0;
+
+	case 32:
+		switch (reg_endian) {
+		case REGMAP_ENDIAN_BIG:
+			map->format.format_reg = regmap_format_32_be;
+			return 0;
+		case REGMAP_ENDIAN_LITTLE:
+			map->format.format_reg = regmap_format_32_le;
+			return 0;
+		case REGMAP_ENDIAN_NATIVE:
+			map->format.format_reg = regmap_format_32_native;
+			return 0;
+		default:
+			return -EINVAL;
+		}
+	}
+
+	return -EINVAL;
+}
+
+/* Pick format_val()/parse_val() for the value width and endianness. */
+static int regmap_set_val_format(struct regmap *map, const struct regmap_config *config,
+				 enum regmap_endian val_endian)
+{
+	if (val_endian == REGMAP_ENDIAN_NATIVE)
+		map->format.parse_inplace = regmap_parse_inplace_noop;
+
+	switch (config->val_bits) {
+	case 8:
+		map->format.format_val = regmap_format_8;
+		map->format.parse_val = regmap_parse_8;
+		map->format.parse_inplace = regmap_parse_inplace_noop;
+		return 0;
+	case 16:
+		switch (val_endian) {
+		case REGMAP_ENDIAN_BIG:
+			map->format.format_val = regmap_format_16_be;
+			map->format.parse_val = regmap_parse_16_be;
+			map->format.parse_inplace = regmap_parse_16_be_inplace;
+			return 0;
+		case REGMAP_ENDIAN_LITTLE:
+			map->format.format_val = regmap_format_16_le;
+			map->format.parse_val = regmap_parse_16_le;
+			map->format.parse_inplace = regmap_parse_16_le_inplace;
+			return 0;
+		case REGMAP_ENDIAN_NATIVE:
+			map->format.format_val = regmap_format_16_native;
+			map->format.parse_val = regmap_parse_16_native;
+			return 0;
+		default:
+			return -EINVAL;
+		}
+	case 24:
+		if (val_endian != REGMAP_ENDIAN_BIG)
+			return -EINVAL;
+		map->format.format_val = regmap_format_24_be;
+		map->format.parse_val = regmap_parse_24_be;
+		return 0;
+	case 32:
+		switch (val_endian) {
+		case REGMAP_ENDIAN_BIG:
+			map->format.format_val = regmap_format_32_be;
+			map->format.parse_val = regmap_parse_32_be;
+			map->format.parse_inplace = regmap_parse_32_be_inplace;
+			return 0;
+		case REGMAP_ENDIAN_LITTLE:
+			map->format.format_val = regmap_format_32_le;
+			map->format.parse_val = regmap_parse_32_le;
+			map->format.parse_inplace = regmap_parse_32_le_inplace;
+			return 0;
+		case REGMAP_ENDIAN_NATIVE:
+			map->format.format_val = regmap_format_32_native;
+			map->format.parse_val = regmap_parse_32_native;
+			return 0;
+		default:
+			return -EINVAL;
+		}
+	}
+
+	return 0;
+}
+
+/*
+ * Set up the format/parse functions, cross-validate endianness,
+ * allocate the work buffer and select the bus write path.
+ */
+static int regmap_init_format(struct regmap *map,
+			      const struct regmap_config *config,
+			      enum regmap_endian reg_endian,
+			      enum regmap_endian val_endian)
+{
+	int ret;
+
+	ret = regmap_set_reg_format(map, config, reg_endian);
+	if (ret)
+		return ret;
+
+	ret = regmap_set_val_format(map, config, val_endian);
+	if (ret)
+		return ret;
+
+	if (map->format.format_write) {
+		if (reg_endian != REGMAP_ENDIAN_BIG ||
+		    val_endian != REGMAP_ENDIAN_BIG)
+			return -EINVAL;
+		map->use_single_write = true;
+	}
+
+	if (!map->format.format_write &&
+	    !(map->format.format_reg && map->format.format_val))
+		return -EINVAL;
+
+	map->work_buf = kzalloc(map->format.buf_size, GFP_KERNEL);
+	if (map->work_buf == NULL)
+		return -ENOMEM;
+
+	if (map->format.format_write) {
+		map->defer_caching = false;
+		map->reg_write = _regmap_bus_formatted_write;
+	} else if (map->format.format_val) {
+		map->defer_caching = true;
+		map->reg_write = _regmap_bus_raw_write;
+	}
+
+	return 0;
+}
+
 struct regmap *__regmap_init(struct device *dev,
 			     const struct regmap_bus *bus,
 			     void *bus_context,
@@ -854,7 +1045,6 @@ struct regmap *__regmap_init(struct device *dev,
 			     const char *lock_name)
 {
 	struct regmap *map;
-	enum regmap_endian reg_endian, val_endian;
 	bool fast_io;
 	int ret;
 
@@ -878,8 +1068,6 @@ struct regmap *__regmap_init(struct device *dev,
 	ret = regmap_set_lock(map, config, fast_io, lock_key, lock_name);
 	if (ret)
 		goto err_name;
-
-	ret = -EINVAL; /* Later error paths rely on this */
 
 	/*
 	 * When we write in fast-paths with regmap_bulk_write() don't allocate
@@ -956,22 +1144,23 @@ struct regmap *__regmap_init(struct device *dev,
 		map->read = config->read;
 		map->write = config->write;
 
-		reg_endian = REGMAP_ENDIAN_NATIVE;
-		val_endian = REGMAP_ENDIAN_NATIVE;
+		ret = regmap_init_format(map, config,
+					 REGMAP_ENDIAN_NATIVE,
+					 REGMAP_ENDIAN_NATIVE);
+		if (ret)
+			goto err_hwlock;
 	} else if (!bus) {
 		map->reg_read  = config->reg_read;
 		map->reg_write = config->reg_write;
 		map->reg_update_bits = config->reg_update_bits;
 
 		map->defer_caching = false;
-		goto skip_format_initialization;
 	} else if (!bus->read || !bus->write) {
 		map->reg_read = _regmap_bus_reg_read;
 		map->reg_write = _regmap_bus_reg_write;
 		map->reg_update_bits = bus->reg_update_bits;
 
 		map->defer_caching = false;
-		goto skip_format_initialization;
 	} else {
 		map->reg_read  = _regmap_bus_read;
 		map->reg_update_bits = bus->reg_update_bits;
@@ -979,201 +1168,13 @@ struct regmap *__regmap_init(struct device *dev,
 		map->read = bus->read;
 		map->write = bus->write;
 
-		reg_endian = regmap_get_reg_endian(bus, config);
-		val_endian = regmap_get_val_endian(dev, bus, config);
+		ret = regmap_init_format(map, config,
+					 regmap_get_reg_endian(bus, config),
+					 regmap_get_val_endian(dev, bus, config));
+		if (ret)
+			goto err_hwlock;
 	}
 
-	switch (config->reg_bits + map->reg_shift) {
-	case 2:
-		switch (config->val_bits) {
-		case 6:
-			map->format.format_write = regmap_format_2_6_write;
-			break;
-		default:
-			goto err_hwlock;
-		}
-		break;
-
-	case 4:
-		switch (config->val_bits) {
-		case 12:
-			map->format.format_write = regmap_format_4_12_write;
-			break;
-		default:
-			goto err_hwlock;
-		}
-		break;
-
-	case 7:
-		switch (config->val_bits) {
-		case 9:
-			map->format.format_write = regmap_format_7_9_write;
-			break;
-		case 17:
-			map->format.format_write = regmap_format_7_17_write;
-			break;
-		default:
-			goto err_hwlock;
-		}
-		break;
-
-	case 10:
-		switch (config->val_bits) {
-		case 14:
-			map->format.format_write = regmap_format_10_14_write;
-			break;
-		default:
-			goto err_hwlock;
-		}
-		break;
-
-	case 12:
-		switch (config->val_bits) {
-		case 20:
-			map->format.format_write = regmap_format_12_20_write;
-			break;
-		default:
-			goto err_hwlock;
-		}
-		break;
-
-	case 8:
-		map->format.format_reg = regmap_format_8;
-		break;
-
-	case 16:
-		switch (reg_endian) {
-		case REGMAP_ENDIAN_BIG:
-			map->format.format_reg = regmap_format_16_be;
-			break;
-		case REGMAP_ENDIAN_LITTLE:
-			map->format.format_reg = regmap_format_16_le;
-			break;
-		case REGMAP_ENDIAN_NATIVE:
-			map->format.format_reg = regmap_format_16_native;
-			break;
-		default:
-			goto err_hwlock;
-		}
-		break;
-
-	case 24:
-		switch (reg_endian) {
-		case REGMAP_ENDIAN_BIG:
-			map->format.format_reg = regmap_format_24_be;
-			break;
-		default:
-			goto err_hwlock;
-		}
-		break;
-
-	case 32:
-		switch (reg_endian) {
-		case REGMAP_ENDIAN_BIG:
-			map->format.format_reg = regmap_format_32_be;
-			break;
-		case REGMAP_ENDIAN_LITTLE:
-			map->format.format_reg = regmap_format_32_le;
-			break;
-		case REGMAP_ENDIAN_NATIVE:
-			map->format.format_reg = regmap_format_32_native;
-			break;
-		default:
-			goto err_hwlock;
-		}
-		break;
-
-	default:
-		goto err_hwlock;
-	}
-
-	if (val_endian == REGMAP_ENDIAN_NATIVE)
-		map->format.parse_inplace = regmap_parse_inplace_noop;
-
-	switch (config->val_bits) {
-	case 8:
-		map->format.format_val = regmap_format_8;
-		map->format.parse_val = regmap_parse_8;
-		map->format.parse_inplace = regmap_parse_inplace_noop;
-		break;
-	case 16:
-		switch (val_endian) {
-		case REGMAP_ENDIAN_BIG:
-			map->format.format_val = regmap_format_16_be;
-			map->format.parse_val = regmap_parse_16_be;
-			map->format.parse_inplace = regmap_parse_16_be_inplace;
-			break;
-		case REGMAP_ENDIAN_LITTLE:
-			map->format.format_val = regmap_format_16_le;
-			map->format.parse_val = regmap_parse_16_le;
-			map->format.parse_inplace = regmap_parse_16_le_inplace;
-			break;
-		case REGMAP_ENDIAN_NATIVE:
-			map->format.format_val = regmap_format_16_native;
-			map->format.parse_val = regmap_parse_16_native;
-			break;
-		default:
-			goto err_hwlock;
-		}
-		break;
-	case 24:
-		switch (val_endian) {
-		case REGMAP_ENDIAN_BIG:
-			map->format.format_val = regmap_format_24_be;
-			map->format.parse_val = regmap_parse_24_be;
-			break;
-		default:
-			goto err_hwlock;
-		}
-		break;
-	case 32:
-		switch (val_endian) {
-		case REGMAP_ENDIAN_BIG:
-			map->format.format_val = regmap_format_32_be;
-			map->format.parse_val = regmap_parse_32_be;
-			map->format.parse_inplace = regmap_parse_32_be_inplace;
-			break;
-		case REGMAP_ENDIAN_LITTLE:
-			map->format.format_val = regmap_format_32_le;
-			map->format.parse_val = regmap_parse_32_le;
-			map->format.parse_inplace = regmap_parse_32_le_inplace;
-			break;
-		case REGMAP_ENDIAN_NATIVE:
-			map->format.format_val = regmap_format_32_native;
-			map->format.parse_val = regmap_parse_32_native;
-			break;
-		default:
-			goto err_hwlock;
-		}
-		break;
-	}
-
-	if (map->format.format_write) {
-		if ((reg_endian != REGMAP_ENDIAN_BIG) ||
-		    (val_endian != REGMAP_ENDIAN_BIG))
-			goto err_hwlock;
-		map->use_single_write = true;
-	}
-
-	if (!map->format.format_write &&
-	    !(map->format.format_reg && map->format.format_val))
-		goto err_hwlock;
-
-	map->work_buf = kzalloc(map->format.buf_size, GFP_KERNEL);
-	if (map->work_buf == NULL) {
-		ret = -ENOMEM;
-		goto err_hwlock;
-	}
-
-	if (map->format.format_write) {
-		map->defer_caching = false;
-		map->reg_write = _regmap_bus_formatted_write;
-	} else if (map->format.format_val) {
-		map->defer_caching = true;
-		map->reg_write = _regmap_bus_raw_write;
-	}
-
-skip_format_initialization:
 
 	ret = regmap_init_ranges(map, config);
 	if (ret)
