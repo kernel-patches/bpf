@@ -33,3 +33,16 @@ examples:
             compatible = "example,test-multi-close";
             reg = <0x100 0x10>;
         }; };
+
+  - |
+    bus@20000 {
+        compatible = "simple-bus";
+        reg = <0x20000 0x1000>;
+        #address-cells = <1>;
+        #size-cells = <1>;
+
+        device@100 {
+            compatible = "example,test-multi-close";
+            reg = <0x100 0x10>,
+                  <0x200 0x10>; };
+    };

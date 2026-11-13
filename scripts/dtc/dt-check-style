@@ -675,20 +675,23 @@ def check_node_close_alone(ctx):
     that is all closures (e.g. "}; };") is still NODE_CLOSE for depth
     tracking but is flagged here via dl.closures. Any other line that
     still contains '};' (in code, not in strings or comments) is
-    mixing a node close with something else."""
+    mixing a node close with something else. Continuation lines of
+    multi-line properties are not part of ctx.lines, so check them
+    as well."""
     for dl in ctx.lines:
         if dl.linetype == LineType.NODE_CLOSE:
             if dl.closures > 1:
                 yield (dl.lineno,
                        'closing brace must be on its own line')
             continue
-        if dl.linetype in (LineType.BLANK, LineType.COMMENT,
-                           LineType.COMMENT_START, LineType.COMMENT_BODY,
-                           LineType.COMMENT_END, LineType.PREPROCESSOR):
-            continue
-        if '};' in dl.code:
-            yield (dl.lineno,
-                   'closing brace must be on its own line')
+        for d in [dl] + dl.continuations:
+            if d.linetype in (LineType.BLANK, LineType.COMMENT,
+                              LineType.COMMENT_START, LineType.COMMENT_BODY,
+                              LineType.COMMENT_END, LineType.PREPROCESSOR):
+                continue
+            if '};' in d.code:
+                yield (d.lineno,
+                       'closing brace must be on its own line')
 
 
 def check_node_name(ctx):
