@@ -28,6 +28,7 @@
 #include <linux/in.h>
 #include <linux/inet.h>
 #include <linux/netdevice.h>
+#include <linux/nospec.h>
 #include <linux/if_packet.h>
 #include <linux/if_arp.h>
 #include <linux/gfp.h>
@@ -240,6 +241,32 @@ static int bpf_skb_load_helper_convert_offset(const struct sk_buff *skb, int off
 	return INT_MIN;
 }
 
+static __always_inline const void *
+bpf_skb_load_nospec(const struct sk_buff *skb, const void *data,
+		    int headlen, int offset, int len)
+{
+	/* An unset mac_header is maximal and cannot lower the bound. */
+	int header = min(skb->network_header, skb->mac_header);
+	int lower = min(0, header - (int)skb_headroom(skb));
+	unsigned long index, size, mask;
+
+	/* Normalize [lower, headlen) to a zero-based range. */
+	index = (unsigned long)(long)offset - (unsigned long)(long)lower;
+	size = (unsigned long)(long)headlen - (unsigned long)(long)lower;
+
+	OPTIMIZER_HIDE_VAR(index);
+	OPTIMIZER_HIDE_VAR(size);
+
+	/* Check the start and the number of bytes remaining. */
+	mask = array_index_mask_nospec(index, size);
+	/* Each caller passes a constant width, so inlining eliminates this branch. */
+	if (len > 1)
+		mask &= array_index_mask_nospec(len - 1, size - index);
+
+	/* Out-of-bounds transient offsets select NULL as the load address. */
+	return (const void *)(((unsigned long)data + (long)offset) & mask);
+}
+
 BPF_CALL_4(bpf_skb_load_helper_8, const struct sk_buff *, skb, const void *,
 	   data, int, headlen, int, offset)
 {
@@ -251,7 +278,8 @@ BPF_CALL_4(bpf_skb_load_helper_8, const struct sk_buff *, skb, const void *,
 		return -EFAULT;
 
 	if (headlen - offset >= len)
-		return *(u8 *)(data + offset);
+		return *(const u8 *)bpf_skb_load_nospec(skb, data, headlen,
+							  offset, len);
 	if (!skb_copy_bits(skb, offset, &tmp, sizeof(tmp)))
 		return tmp;
 	else
@@ -276,7 +304,8 @@ BPF_CALL_4(bpf_skb_load_helper_16, const struct sk_buff *, skb, const void *,
 		return -EFAULT;
 
 	if (headlen - offset >= len)
-		return get_unaligned_be16(data + offset);
+		return get_unaligned_be16(bpf_skb_load_nospec(skb, data,
+							 headlen, offset, len));
 	if (!skb_copy_bits(skb, offset, &tmp, sizeof(tmp)))
 		return be16_to_cpu(tmp);
 	else
@@ -301,7 +330,8 @@ BPF_CALL_4(bpf_skb_load_helper_32, const struct sk_buff *, skb, const void *,
 		return -EFAULT;
 
 	if (headlen - offset >= len)
-		return get_unaligned_be32(data + offset);
+		return get_unaligned_be32(bpf_skb_load_nospec(skb, data,
+							 headlen, offset, len));
 	if (!skb_copy_bits(skb, offset, &tmp, sizeof(tmp)))
 		return be32_to_cpu(tmp);
 	else
