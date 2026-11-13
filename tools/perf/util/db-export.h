@@ -21,6 +21,8 @@ struct call_return_processor;
 struct call_path_root;
 struct call_path;
 struct call_return;
+struct hashmap;
+struct symbol;
 
 struct export_sample {
 	union perf_event	*event;
@@ -63,6 +65,18 @@ struct db_export {
 				     u64 th_in_id, u64 comm_in_id, int flags);
 	struct call_return_processor *crp;
 	struct call_path_root *cpr;
+	/**
+	 * @sym_db_ids: Hashmap mapping heap-allocated struct dso_symbol * keys
+	 * to their exported 64-bit database IDs, pinning each symbol's DSO.
+	 */
+	struct hashmap *sym_db_ids;
+	/**
+	 * @dsos: Exported DSOs retained so dso__db_id(dso) remains valid until
+	 * db_export__exit().
+	 */
+	struct dso **dsos;
+	size_t dsos_cnt;
+	size_t dsos_alloc;
 	u64 evsel_last_db_id;
 	u64 machine_last_db_id;
 	u64 thread_last_db_id;
@@ -90,6 +104,8 @@ int db_export__comm_thread(struct db_export *dbe, struct comm *comm,
 			   struct thread *thread);
 int db_export__dso(struct db_export *dbe, struct dso *dso,
 		   struct machine *machine);
+u64 db_export__symbol_db_id(struct db_export *dbe, struct dso *dso,
+			    struct symbol *sym);
 int db_export__symbol(struct db_export *dbe, struct symbol *sym,
 		      struct dso *dso);
 int db_export__branch_type(struct db_export *dbe, u32 branch_type,
