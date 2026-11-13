@@ -1369,7 +1369,7 @@ static inline int cs_etm__t32_instr_size(struct cs_etm_queue *etmq,
 					 struct cs_etm_traceid_queue *tidq,
 					 struct cs_etm_packet *packet, u64 addr)
 {
-	u8 instrBytes[2];
+	u8 instrBytes[2] = { 0 };
 
 	cs_etm__frontend_mem_access(etmq, tidq, packet, addr,
 				    ARRAY_SIZE(instrBytes), instrBytes);
