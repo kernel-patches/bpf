@@ -17,7 +17,6 @@
 #include <linux/sysctl.h>
 #include <linux/rwsem.h>
 #include <linux/atomic.h>
-#include <linux/assoc_array.h>
 #include <linux/refcount.h>
 #include <linux/time64.h>
 
@@ -107,34 +106,21 @@ struct key_owner;
 struct key_tag;
 struct keyring_list;
 struct keyring_name;
+struct keyring_index;
 
 struct key_tag {
 	struct rcu_head		rcu;
-	atomic64_t		index_id;	/* Opaque keyring index ID */
 	refcount_t		usage;
 	bool			removed;	/* T when subject removed */
 };
 
 struct keyring_index_key {
 	/* [!] If this structure is altered, the union in struct key must change too! */
-	unsigned long		hash;			/* Hash value */
-	union {
-		struct {
-#ifdef __LITTLE_ENDIAN /* Put desc_len at the LSB of x */
-			u16	desc_len;
-			char	desc[sizeof(long) - 2];	/* First few chars of description */
-#else
-			char	desc[sizeof(long) - 2];	/* First few chars of description */
-			u16	desc_len;
-#endif
-		};
-		unsigned long x;
-	};
+	u32			hash;			/* Hash value */
+	unsigned int		desc_len;
 	struct key_type		*type;
 	struct key_tag		*domain_tag;	/* Domain of operation */
 	const char		*description;
-	u64			type_id;	/* Cached index IDs */
-	u64			domain_id;
 };
 
 union key_payload {
@@ -252,13 +238,11 @@ struct key {
 	union {
 		struct keyring_index_key index_key;
 		struct {
-			unsigned long	hash;
-			unsigned long	len_desc;
+			u32		hash;
+			unsigned int	desc_len;
 			struct key_type	*type;		/* type of key */
 			struct key_tag	*domain_tag;	/* Domain of operation */
 			char		*description;
-			u64		type_id;
-			u64		domain_id;
 		};
 	};
 
@@ -271,7 +255,7 @@ struct key {
 		struct {
 			/* Keyring bits */
 			struct list_head name_link;
-			struct assoc_array keys;
+			struct keyring_index __rcu *index;
 		};
 	};
 
