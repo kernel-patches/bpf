@@ -811,6 +811,12 @@
 	status = "okay";
 };
 
+&iris {
+	firmware-name = "qcom/milos/fairphone/fp6/vpu20_2v.mbn";
+
+	status = "okay";
+};
+
 &pm8550vs_c {
 	status = "okay";
 };
