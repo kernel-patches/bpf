@@ -187,7 +187,7 @@ static const struct dmi_system_id ac_dmi_table[]  __initconst = {
 			DMI_MATCH(DMI_PRODUCT_NAME, "32597CG"),
 		},
 	},
-	{},
+	{ }
 };
 
 static int acpi_ac_probe(struct platform_device *pdev)

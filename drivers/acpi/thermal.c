@@ -1014,7 +1014,7 @@ static const struct dmi_system_id thermal_dmi_table[] __initconst = {
 		DMI_MATCH(DMI_BOARD_NAME, "7ZX"),
 		},
 	},
-	{}
+	{ }
 };
 
 static int __init acpi_thermal_init(void)

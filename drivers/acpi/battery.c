@@ -1387,7 +1387,7 @@ static const struct dmi_system_id bat_dmi_table[] __initconst = {
 			DMI_MATCH(DMI_PRODUCT_NAME, "Surface Go 3"),
 		},
 	},
-	{},
+	{ }
 };
 
 static void acpi_battery_wakeup_cleanup(void *data)

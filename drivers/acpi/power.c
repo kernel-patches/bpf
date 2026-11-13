@@ -1093,7 +1093,7 @@ static const struct dmi_system_id dmi_hp_elitebook_gp12pxp_quirk[] = {
 			DMI_MATCH(DMI_PRODUCT_NAME, "HP EliteBook 855 G7 Notebook PC"),
 		},
 	},
-	{}
+	{ }
 };
 
 static const struct dmi_system_id dmi_leave_unused_power_resources_on[] = {

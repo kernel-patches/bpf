@@ -2017,7 +2017,7 @@ static const struct dmi_system_id ec_dmi_table[] __initconst = {
 			DMI_MATCH(DMI_SYS_VENDOR, "SAMSUNG ELECTRONICS CO., LTD."),
 		},
 	},
-	{}
+	{ }
 };
 
 void __init acpi_ec_ecdt_probe(void)

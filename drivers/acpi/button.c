@@ -167,7 +167,7 @@ static const struct dmi_system_id dmi_lid_quirks[] = {
 		},
 		.driver_data = (void *)(long)ACPI_BUTTON_LID_INIT_OPEN,
 	},
-	{}
+	{ }
 };
 
 static int acpi_button_probe(struct platform_device *pdev);

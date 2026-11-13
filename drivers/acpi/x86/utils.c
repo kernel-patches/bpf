@@ -49,7 +49,7 @@ struct override_status_id {
 #define ENTRY(status, hid, uid, path, cpu_vfm, dmi...) {		\
 	{ { .id = hid }, { } },						\
 	{ X86_MATCH_VFM(cpu_vfm, NULL), {} },				\
-	{ { .matches = dmi }, {} },					\
+	{ { .matches = dmi }, { } },					\
 	uid,								\
 	path,								\
 	status,								\
@@ -458,7 +458,7 @@ static const struct dmi_system_id acpi_quirk_skip_dmi_ids[] = {
 					ACPI_QUIRK_SKIP_ACPI_AC_AND_BATTERY),
 	},
 #endif
-	{}
+	{ }
 };
 
 #if IS_ENABLED(CONFIG_X86_ANDROID_TABLETS)
