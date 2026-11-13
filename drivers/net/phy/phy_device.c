@@ -1232,7 +1232,7 @@ EXPORT_SYMBOL(phy_disconnect);
  *   standard phy_init_hw() which will zero all the other bits in the BMCR
  *   and reapply all driver-specific and board-specific fixups.
  */
-static int phy_poll_reset(struct phy_device *phydev)
+int phy_poll_reset(struct phy_device *phydev)
 {
 	/* Poll until the reset bit clears (50ms per retry == 0.6 sec) */
 	int ret, val;

@@ -297,6 +297,30 @@ void phy_ethtool_ksettings_get(struct phy_device *phydev,
 }
 EXPORT_SYMBOL(phy_ethtool_ksettings_get);
 
+static int phy_mii_ioctl_reset(struct phy_device *phydev, u16 val)
+{
+	int ret;
+
+	/* Keep the worker out until the driver has restored its state. */
+	disable_delayed_work_sync(&phydev->state_queue);
+
+	ret = phy_write(phydev, MII_BMCR, val);
+	if (ret < 0)
+		goto out;
+
+	ret = phy_poll_reset(phydev);
+	if (ret)
+		goto out;
+
+	phydev->autoneg = AUTONEG_ENABLE;
+	ret = phy_init_hw(phydev);
+out:
+	if (enable_delayed_work(&phydev->state_queue))
+		phy_trigger_machine(phydev);
+
+	return ret;
+}
+
 /**
  * phy_mii_ioctl - generic PHY MII ioctl interface
  * @phydev: the phy_device struct
@@ -349,6 +373,9 @@ int phy_mii_ioctl(struct phy_device *phydev, struct ifreq *ifr, int cmd)
 		} else {
 			prtad = mii_data->phy_id;
 			devad = mii_data->reg_num;
+			if (prtad == phydev->mdio.addr &&
+			    devad == MII_BMCR && val & BMCR_RESET)
+				return phy_mii_ioctl_reset(phydev, val);
 		}
 
 		if (mdio_phy_id_is_c45(mii_data->phy_id))
