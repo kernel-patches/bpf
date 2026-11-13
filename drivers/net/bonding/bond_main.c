@@ -2370,6 +2370,8 @@ err_sysfs_del:
 	bond_sysfs_slave_del(new_slave);
 
 err_upper_unlink:
+	if (BOND_MODE(bond) == BOND_MODE_8023AD)
+		bond_3ad_unbind_slave(new_slave);
 	bond_upper_dev_unlink(bond, new_slave);
 
 err_unregister:
