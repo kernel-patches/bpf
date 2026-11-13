@@ -48,6 +48,13 @@ enum gso_test_nr {
 	GSO_TEST_SHORT_FRAG_LIST,
 	GSO_TEST_SHORT_GSO_BY_FRAGS,
 	GSO_TEST_FRAG_LIST_NESTED_NO_SG,
+	GSO_TEST_FRAG_LIST_NESTED_NEXT_NO_SG,
+	GSO_TEST_FRAG_LIST_NESTED_TAIL_NO_SG,
+	GSO_TEST_FRAG_LIST_NESTED_COPY_NO_SG,
+	GSO_TEST_FRAG_LIST_STALE_TAIL_NO_SG,
+	GSO_TEST_FRAG_LIST_STALE_HEAD_NO_SG,
+	GSO_TEST_FRAG_LIST_STALE_FRAGS_NO_SG,
+	GSO_TEST_GSO_BY_FRAGS_PULLED_NO_SG,
 	GSO_TEST_SHORT_LINEAR_NO_SG,
 	GSO_TEST_SHORT_LINEAR_STRADDLE_NO_SG,
 	GSO_TEST_SHORT_FRAG_LIST_NO_SG,
@@ -73,6 +80,12 @@ struct gso_test_case {
 	unsigned int missing_len;
 	/* segment without NETIF_F_SG */
 	bool no_sg;
+	/* the second frag_list member hangs off the first one's frag_list
+	 * instead of off the head's
+	 */
+	bool nested;
+	/* gso_size is GSO_BY_FRAGS */
+	bool by_frags;
 
 	/* output as expected */
 	unsigned int nr_segs;
@@ -192,6 +205,7 @@ static struct gso_test_case cases[] = {
 		 */
 		.id = GSO_TEST_GSO_BY_FRAGS,
 		.name = "gso_by_frags",
+		.by_frags = true,
 		.nr_frag_skbs = 4,
 		.frag_skbs = (const unsigned int[]) { 100, 200, 300, 400 },
 		.nr_segs = 4,
@@ -271,11 +285,9 @@ static struct gso_test_case cases[] = {
 		.err = -EINVAL,
 	},
 	{
-		/* the second frag_list member hangs off the first one's
-		 * frag_list instead of off the head's
-		 */
 		.id = GSO_TEST_FRAG_LIST_NESTED,
 		.name = "frag_list_nested",
+		.nested = true,
 		.linear_len = GSO_TEST_SIZE,
 		.nr_frag_skbs = 2,
 		.frag_skbs = (const unsigned int[]) { GSO_TEST_SIZE, GSO_TEST_SIZE },
@@ -309,6 +321,7 @@ static struct gso_test_case cases[] = {
 	{
 		.id = GSO_TEST_SHORT_GSO_BY_FRAGS,
 		.name = "short_gso_by_frags",
+		.by_frags = true,
 		.nr_frag_skbs = 2,
 		.frag_skbs = (const unsigned int[]) { 100, 200 },
 		.missing_len = 50,
@@ -320,12 +333,116 @@ static struct gso_test_case cases[] = {
 		 */
 		.id = GSO_TEST_FRAG_LIST_NESTED_NO_SG,
 		.name = "frag_list_nested_no_sg",
+		.nested = true,
 		.linear_len = GSO_TEST_SIZE,
 		.nr_frag_skbs = 2,
 		.frag_skbs = (const unsigned int[]) { GSO_TEST_SIZE, GSO_TEST_SIZE },
 		.no_sg = true,
 		.nr_segs = 3,
 		.segs = (const unsigned int[]) { GSO_TEST_SIZE, GSO_TEST_SIZE, GSO_TEST_SIZE },
+	},
+	{
+		/* a clone of the first member would lose the nested data, and
+		 * the third member would go out in its place
+		 */
+		.id = GSO_TEST_FRAG_LIST_NESTED_NEXT_NO_SG,
+		.name = "frag_list_nested_next_no_sg",
+		.nested = true,
+		.linear_len = GSO_TEST_SIZE,
+		.nr_frag_skbs = 3,
+		.frag_skbs = (const unsigned int[]) { GSO_TEST_SIZE, GSO_TEST_SIZE,
+						      GSO_TEST_SIZE },
+		.no_sg = true,
+		.nr_segs = 4,
+		.segs = (const unsigned int[]) { GSO_TEST_SIZE, GSO_TEST_SIZE,
+						 GSO_TEST_SIZE, GSO_TEST_SIZE },
+	},
+	{
+		/* the same, but the last member is never cloned, so the walk
+		 * doesn't run out of members either
+		 */
+		.id = GSO_TEST_FRAG_LIST_NESTED_TAIL_NO_SG,
+		.name = "frag_list_nested_tail_no_sg",
+		.nested = true,
+		.linear_len = GSO_TEST_SIZE,
+		.nr_frag_skbs = 4,
+		.frag_skbs = (const unsigned int[]) { GSO_TEST_SIZE, GSO_TEST_SIZE,
+						      GSO_TEST_SIZE, 200 },
+		.frag_skb_frags = (const unsigned int[]) { 0, 0, 0, 100 },
+		.no_sg = true,
+		.nr_segs = 5,
+		.segs = (const unsigned int[]) { GSO_TEST_SIZE, GSO_TEST_SIZE,
+						 GSO_TEST_SIZE, GSO_TEST_SIZE, 300 },
+	},
+	{
+		/* the nested member is shorter than a segment, so it was never
+		 * cloned
+		 */
+		.id = GSO_TEST_FRAG_LIST_NESTED_COPY_NO_SG,
+		.name = "frag_list_nested_copy_no_sg",
+		.nested = true,
+		.linear_len = GSO_TEST_SIZE,
+		.nr_frag_skbs = 3,
+		.frag_skbs = (const unsigned int[]) { 500, 500, GSO_TEST_SIZE },
+		.no_sg = true,
+		.nr_segs = 3,
+		.segs = (const unsigned int[]) { GSO_TEST_SIZE, GSO_TEST_SIZE, GSO_TEST_SIZE },
+	},
+	{
+		/* the copy doesn't move the walk past the 3 byte member, which
+		 * then is as long as the last segment
+		 */
+		.id = GSO_TEST_FRAG_LIST_STALE_TAIL_NO_SG,
+		.name = "frag_list_stale_tail_no_sg",
+		.linear_len = GSO_TEST_SIZE,
+		.nr_frag_skbs = 3,
+		.frag_skbs = (const unsigned int[]) { GSO_TEST_SIZE, 3, GSO_TEST_SIZE },
+		.no_sg = true,
+		.nr_segs = 4,
+		.segs = (const unsigned int[]) { GSO_TEST_SIZE, GSO_TEST_SIZE, GSO_TEST_SIZE, 3 },
+	},
+	{
+		/* half of the first member is copied along with the end of the
+		 * head, and the member is as long as the next segment
+		 */
+		.id = GSO_TEST_FRAG_LIST_STALE_HEAD_NO_SG,
+		.name = "frag_list_stale_head_no_sg",
+		.linear_len = 2 * GSO_TEST_SIZE + 500,
+		.nr_frag_skbs = 2,
+		.frag_skbs = (const unsigned int[]) { GSO_TEST_SIZE, 500 },
+		.no_sg = true,
+		.nr_segs = 4,
+		.segs = (const unsigned int[]) { GSO_TEST_SIZE, GSO_TEST_SIZE,
+						 GSO_TEST_SIZE, GSO_TEST_SIZE },
+	},
+	{
+		/* the same with a frag on the member, which used to get its
+		 * first bytes sent twice instead of an error
+		 */
+		.id = GSO_TEST_FRAG_LIST_STALE_FRAGS_NO_SG,
+		.name = "frag_list_stale_frags_no_sg",
+		.linear_len = 500,
+		.nr_frag_skbs = 1,
+		.frag_skbs = (const unsigned int[]) { GSO_TEST_SIZE },
+		.frag_skb_frags = (const unsigned int[]) { 700 },
+		.no_sg = true,
+		.nr_segs = 3,
+		.segs = (const unsigned int[]) { GSO_TEST_SIZE, GSO_TEST_SIZE, 200 },
+	},
+	{
+		/* 16 bytes of the first member were pulled into the head.  The
+		 * lengths come from a stale member too, and the first one
+		 * divides the total, so this must not start to succeed with
+		 * three segments of 1000 bytes.
+		 */
+		.id = GSO_TEST_GSO_BY_FRAGS_PULLED_NO_SG,
+		.name = "gso_by_frags_pulled_no_sg",
+		.by_frags = true,
+		.linear_len = 16,
+		.nr_frag_skbs = 3,
+		.frag_skbs = (const unsigned int[]) { 1000, 1016, 968 },
+		.no_sg = true,
+		.err = -EINVAL,
 	},
 	{
 		/* without SG it is skb_copy_bits() that runs out of data */
@@ -357,6 +474,7 @@ static struct gso_test_case cases[] = {
 	{
 		.id = GSO_TEST_SHORT_GSO_BY_FRAGS_NO_SG,
 		.name = "short_gso_by_frags_no_sg",
+		.by_frags = true,
 		.nr_frag_skbs = 2,
 		.frag_skbs = (const unsigned int[]) { 100, 200 },
 		.missing_len = 50,
@@ -478,19 +596,18 @@ static void gso_test_func(struct kunit *test)
 		skb->data_len += total_size;
 		skb->truesize += total_true_size;
 
-		if (tcase->id == GSO_TEST_GSO_BY_FRAGS ||
-		    tcase->id == GSO_TEST_SHORT_GSO_BY_FRAGS ||
-		    tcase->id == GSO_TEST_SHORT_GSO_BY_FRAGS_NO_SG)
+		if (tcase->by_frags)
 			skb_shinfo(skb)->gso_size = GSO_BY_FRAGS;
 
-		if (tcase->id == GSO_TEST_FRAG_LIST_NESTED ||
-		    tcase->id == GSO_TEST_FRAG_LIST_NESTED_NO_SG) {
+		if (tcase->nested) {
 			struct sk_buff *first = skb_shinfo(skb)->frag_list;
+			struct sk_buff *second = first->next;
 
-			skb_shinfo(first)->frag_list = first->next;
-			first->next = NULL;
-			first->len += tcase->frag_skbs[1];
-			first->data_len += tcase->frag_skbs[1];
+			first->next = second->next;
+			second->next = NULL;
+			skb_shinfo(first)->frag_list = second;
+			first->len += second->len;
+			first->data_len += second->len;
 		}
 	}
 
