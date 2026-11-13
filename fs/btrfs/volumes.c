@@ -8152,16 +8152,21 @@ int btrfs_read_sys_array(struct btrfs_fs_info *fs_info)
 bool btrfs_check_rw_degradable(struct btrfs_fs_info *fs_info,
 					struct btrfs_device *failing_dev)
 {
+	struct rb_node *node;
 	struct btrfs_chunk_map *map;
-	u64 next_start;
 	bool ret = true;
 
-	map = btrfs_find_chunk_map(fs_info, 0, U64_MAX);
+	read_lock(&fs_info->mapping_tree_lock);
+	node = rb_first_cached(&fs_info->mapping_tree);
 	/* No chunk at all? Return false anyway */
-	if (!map)
+	if (!node) {
+		read_unlock(&fs_info->mapping_tree_lock);
 		return false;
+	}
+	map = rb_entry(node, struct btrfs_chunk_map, rb_node);
 
 	while (map) {
+		const u64 next_start = map->start + map->chunk_len;
 		int missing = 0;
 		int max_tolerated;
 		int i;
@@ -8184,14 +8189,31 @@ bool btrfs_check_rw_degradable(struct btrfs_fs_info *fs_info,
 				btrfs_warn(fs_info,
 	"chunk %llu missing %d devices, max tolerance is %d for writable mount",
 				   map->start, missing, max_tolerated);
-			btrfs_free_chunk_map(map);
-			return false;
+			ret = false;
+			break;
 		}
-		next_start = map->start + map->chunk_len;
-		btrfs_free_chunk_map(map);
 
-		map = btrfs_find_chunk_map(fs_info, next_start, U64_MAX - next_start);
+		if (cond_resched_rwlock_read(&fs_info->mapping_tree_lock)) {
+			map = btrfs_find_chunk_map_nolock(fs_info, next_start,
+							  U64_MAX - next_start);
+			/*
+			 * We got the chunk map while holding the lock so it's
+			 * in the tree and we don't need to keep a ref on it.
+			 * When we don't resched we keep getting chunk maps
+			 * without taking refs on them, since we are holding
+			 * the tree lock.
+			 */
+			btrfs_free_chunk_map(map);
+		} else {
+			node = rb_next(&map->rb_node);
+			if (node)
+				map = rb_entry(node, struct btrfs_chunk_map, rb_node);
+			else
+				map = NULL;
+		}
 	}
+
+	read_unlock(&fs_info->mapping_tree_lock);
 
 	return ret;
 }
