@@ -3,6 +3,7 @@
 
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
+#include <bpf/bpf_core_read.h>
 #include "../../../include/linux/filter.h"
 #include "bpf_misc.h"
 
@@ -221,6 +222,28 @@ __naked void store_release_to_sock_pointer(void)
 	  __imm_insn(store_release_insn,
 		     BPF_ATOMIC_OP(BPF_B, BPF_STORE_REL, BPF_REG_2, BPF_REG_0, 0))
 	: __clobber_all);
+}
+
+struct task_struct {} __attribute__((preserve_access_index));
+
+SEC("socket")
+__description("store-release to untrusted_ptr_ pointer")
+__failure __msg("only read is supported")
+int store_release_to_untrusted_btf_id(void *ctx)
+{
+	struct task_struct *p;
+
+	p = bpf_core_cast(0, struct task_struct);
+	asm volatile (
+	"r1 = %[p];"
+	"r2 = 0;"
+	".8byte %[store_release_insn];" // store_release((u64 *)(r1 + 0), r2);
+	:
+	: [p] "r" (p),
+	  __imm_insn(store_release_insn,
+		     BPF_ATOMIC_OP(BPF_DW, BPF_STORE_REL, BPF_REG_1, BPF_REG_2, 0))
+	: "r1", "r2");
+	return 0;
 }
 
 SEC("socket")
