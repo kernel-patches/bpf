@@ -11,6 +11,8 @@
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
+#include <linux/slab.h>
+#include <linux/syscore_ops.h>
 
 
 struct rockchip_grf_value {
@@ -22,6 +24,14 @@ struct rockchip_grf_value {
 struct rockchip_grf_info {
 	const struct rockchip_grf_value *values;
 	int num_values;
+	/* Rewrite the values on resume; such tables must not be __initconst */
+	bool restore_on_resume;
+};
+
+struct rockchip_grf_restore {
+	struct syscore syscore;
+	struct regmap *grf;
+	const struct rockchip_grf_info *info;
 };
 
 #define RK3036_GRF_SOC_CON0		0x140
@@ -182,7 +192,7 @@ static const struct rockchip_grf_info rk3588_sysgrf __initconst = {
 #define RK3588_PHP_GRF_USB3OTG2_SID_AR	0x00c4
 #define RK3588_PHP_GRF_USB3OTG2_SID_AW	0x00cc
 
-static const struct rockchip_grf_value rk3588_defaults_php_grf[] __initconst = {
+static const struct rockchip_grf_value rk3588_defaults_php_grf[] = {
 	{ "gmac0 write streamid", RK3588_PHP_GRF_GMAC0_SID_AW, 1 },
 	{ "gmac0 read streamid", RK3588_PHP_GRF_GMAC0_SID_AR, 1 },
 	{ "gmac1 write streamid", RK3588_PHP_GRF_GMAC1_SID_AW, 2 },
@@ -197,9 +207,10 @@ static const struct rockchip_grf_value rk3588_defaults_php_grf[] __initconst = {
 	{ "usb3otg2 read streamid", RK3588_PHP_GRF_USB3OTG2_SID_AR, 6 },
 };
 
-static const struct rockchip_grf_info rk3588_phpgrf __initconst = {
+static const struct rockchip_grf_info rk3588_phpgrf = {
 	.values = rk3588_defaults_php_grf,
 	.num_values = ARRAY_SIZE(rk3588_defaults_php_grf),
+	.restore_on_resume = true,
 };
 
 static const struct of_device_id rockchip_grf_dt_match[] __initconst = {
@@ -246,6 +257,59 @@ static const struct of_device_id rockchip_grf_dt_match[] __initconst = {
 	{ /* sentinel */ },
 };
 
+/* Syscore op: runs before the SMMU and its masters resume */
+static void rockchip_grf_resume(void *data)
+{
+	struct rockchip_grf_restore *restore = data;
+	const struct rockchip_grf_info *info = restore->info;
+	unsigned int cur;
+	int i, lost = 0;
+
+	for (i = 0; i < info->num_values; i++) {
+		const struct rockchip_grf_value *val = &info->values[i];
+
+		if (!regmap_read(restore->grf, val->reg, &cur) && cur == val->val)
+			continue;
+
+		lost++;
+		if (regmap_write(restore->grf, val->reg, val->val))
+			pr_err("%s: restoring %s in %#6x failed\n", __func__,
+			       val->desc, val->reg);
+	}
+
+	if (lost)
+		pr_info("%s: restored %d of %d values lost in suspend\n",
+			__func__, lost, info->num_values);
+}
+
+static const struct syscore_ops rockchip_grf_syscore_ops = {
+	.resume = rockchip_grf_resume,
+};
+
+static void __init rockchip_grf_register_restore(struct device_node *np,
+						 struct regmap *grf,
+						 const struct rockchip_grf_info *info)
+{
+	struct rockchip_grf_restore *restore;
+
+	if (!IS_ENABLED(CONFIG_PM_SLEEP) || !info->restore_on_resume)
+		return;
+
+	/* Without its bus clock the GRF is not accessible in syscore resume */
+	if (!of_property_present(np, "clocks"))
+		return;
+
+	restore = kzalloc_obj(*restore);
+	if (!restore)
+		return;
+
+	restore->grf = grf;
+	restore->info = info;
+	restore->syscore.ops = &rockchip_grf_syscore_ops;
+	restore->syscore.data = restore;
+	register_syscore(&restore->syscore);
+}
+
 static int __init rockchip_grf_init(void)
 {
 	const struct rockchip_grf_info *grf_info;
@@ -282,6 +346,8 @@ static int __init rockchip_grf_init(void)
 				pr_err("%s: write to %#6x failed with %d\n",
 					__func__, val->reg, ret);
 		}
+
+		rockchip_grf_register_restore(np, grf, grf_info);
 	}
 
 	return 0;
