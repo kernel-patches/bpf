@@ -249,7 +249,8 @@ INDIRECT_CALLABLE_SCOPE struct sk_buff *ipv6_gro_receive(struct list_head *head,
 		skb_gro_pull(skb, sizeof(*iph));
 	}
 
-	skb_set_transport_header(skb, skb_gro_offset(skb));
+	if (!skb_set_transport_header_careful(skb, skb_gro_offset(skb)))
+		goto out;
 
 	NAPI_GRO_CB(skb)->proto = proto;
 

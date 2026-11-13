@@ -1530,7 +1530,10 @@ struct sk_buff *inet_gro_receive(struct list_head *head, struct sk_buff *skb)
 	 * as we already checked checksum over ipv4 header was 0
 	 */
 	skb_gro_pull(skb, sizeof(*iph));
-	skb_set_transport_header(skb, skb_gro_offset(skb));
+	if (!skb_set_transport_header_careful(skb, skb_gro_offset(skb))) {
+		flush = 1;
+		goto out;
+	}
 
 	pp = indirect_call_gro_receive(tcp4_gro_receive, udp4_gro_receive,
 				       ops->callbacks.gro_receive, head, skb);
