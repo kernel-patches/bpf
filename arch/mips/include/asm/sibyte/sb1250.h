@@ -32,8 +32,25 @@ extern unsigned int soc_type;
 extern unsigned int periph_rev;
 extern unsigned int zbbus_mhz;
 
+void sb1_cache_error(void);
+
+#ifdef CONFIG_SIBYTE_BUS_WATCHER
+void check_bus_watcher(void);
+#endif
+
+int sb1250_m3_workaround_needed(void);
+void sb1250_setup(void);
+void sb1250_clockevent_init(void);
+void sb1250_clocksource_init(void);
+void sb1250_mailbox_interrupt(void);
+
 extern void sb1250_mask_irq(int cpu, int irq);
 extern void sb1250_unmask_irq(int cpu, int irq);
+
+void bcm1480_setup(void);
+void sb1480_clockevent_init(void);
+void sb1480_clocksource_init(void);
+void bcm1480_mailbox_interrupt(void);
 
 extern void bcm1480_time_init(void);
 extern void bcm1480_mask_irq(int cpu, int irq);

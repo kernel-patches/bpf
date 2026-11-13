@@ -158,8 +158,6 @@ static void check_bus_watcher(void)
 		printk("Bus watcher indicates no error\n");
 	}
 }
-#else
-extern void check_bus_watcher(void);
 #endif
 
 asmlinkage void sb1_cache_error(void)

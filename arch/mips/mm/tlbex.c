@@ -37,6 +37,9 @@
 #include <asm/regdef.h>
 #include <asm/uasm.h>
 #include <asm/setup.h>
+#ifdef CONFIG_SB1_PASS_2_WORKAROUNDS
+#include <asm/sibyte/sb1250.h>
+#endif
 #include <asm/tlbex.h>
 
 static int mips_xpa_disabled;
@@ -84,13 +87,13 @@ static inline int r4k_250MHZhwbug(void)
 	return 0;
 }
 
-extern int sb1250_m3_workaround_needed(void);
-
 static inline int __maybe_unused bcm1250_m3_war(void)
 {
-	if (IS_ENABLED(CONFIG_SB1_PASS_2_WORKAROUNDS))
-		return sb1250_m3_workaround_needed();
+#ifdef CONFIG_SB1_PASS_2_WORKAROUNDS
+	return sb1250_m3_workaround_needed();
+#else
 	return 0;
+#endif
 }
 
 static inline int __maybe_unused r10000_llsc_war(void)
