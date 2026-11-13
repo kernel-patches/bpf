@@ -1871,7 +1871,8 @@ static int nvmet_tcp_tls_key_lookup(struct nvmet_tcp_queue *queue,
 }
 
 static void nvmet_tcp_tls_handshake_done(void *data, int status,
-					 key_serial_t peerid)
+					 key_serial_t peerid,
+					 const struct stringset *tags)
 {
 	struct nvmet_tcp_queue *queue = data;
 
