@@ -263,7 +263,27 @@ static int oa_tc6_update_standard_capability(struct oa_tc6 *tc6)
 		return ret;
 	if (regval & OA_TC6_STDCAP_FTSC_CAPABILITY) /* Timestamp */
 		tc6->ftsc_capable = true;
+	if (regval & OA_TC6_STDCAP_CTC_CAPABILITY) /* Cut-through */
+		tc6->ctc_capable = true;
 	return 0;
+}
+
+static int oa_tc6_rx_cut_through_enable(struct oa_tc6 *tc6)
+{
+	int ret = 0;
+	u32 regval;
+
+	if (!tc6->ctc_capable)
+		return ret;
+
+	ret = oa_tc6_read_register(tc6, OA_TC6_REG_CONFIG0, &regval);
+	if (ret)
+		return ret;
+
+	/* Set Receive Cut-Through Enable */
+	regval |= OA_TC6_CONFIG0_RXCTE;
+
+	return oa_tc6_write_register(tc6, OA_TC6_REG_CONFIG0, regval);
 }
 
 static __be32 oa_tc6_prepare_ctrl_header(u32 addr, u8 length,
@@ -1597,6 +1617,36 @@ int oa_tc6_zero_align_receive_frame_enable(struct oa_tc6 *tc6)
 EXPORT_SYMBOL_GPL(oa_tc6_zero_align_receive_frame_enable);
 
 /**
+ * oa_tc6_tx_credit_threshold_set - function to set the minimum number of free
+ * transmit credits needed before the MAC-PHY asserts the interrupt.
+ * @tc6: oa_tc6 struct.
+ * @thresh: transmit credit threshold field value, e.g.
+ *	OA_TC6_CONFIG0_TXCTHRESH_8.
+ *
+ * Return: 0 on success, -EINVAL if @thresh does not fit the TXCTHRESH
+ * field, otherwise a negative error code from the register access.
+ */
+int oa_tc6_tx_credit_threshold_set(struct oa_tc6 *tc6, u8 thresh)
+{
+	u32 regval;
+	int ret;
+
+	if (thresh > OA_TC6_CONFIG0_TXCTHRESH_16)
+		return -EINVAL;
+
+	ret = oa_tc6_read_register(tc6, OA_TC6_REG_CONFIG0, &regval);
+	if (ret)
+		return ret;
+
+	/* Set Transmit Credit Threshold */
+	regval &= ~OA_TC6_CONFIG0_TXCTHRESH_MASK;
+	regval |= FIELD_PREP(OA_TC6_CONFIG0_TXCTHRESH_MASK, thresh);
+
+	return oa_tc6_write_register(tc6, OA_TC6_REG_CONFIG0, regval);
+}
+EXPORT_SYMBOL_GPL(oa_tc6_tx_credit_threshold_set);
+
+/**
  * oa_tc6_start_xmit - function for sending the tx skb which consists ethernet
  * frame.
  * @tc6: oa_tc6 struct.
@@ -1746,6 +1796,18 @@ struct oa_tc6 *oa_tc6_init(struct spi_device *spi, struct net_device *netdev,
 	if (ret) {
 		dev_err(&tc6->spi->dev, "Failed to read capability\n");
 		return ERR_PTR(ret);
+	}
+
+	/* Cut-through bits must be configured before SYNC bit is set
+	 * in CONFIG0 register.
+	 */
+	if (tc6->quirk_flags & OA_TC6_CONFIG_RX_CUT_THROUGH) {
+		ret = oa_tc6_rx_cut_through_enable(tc6);
+		if (ret) {
+			dev_err(&tc6->spi->dev,
+				"Failed to enable RX cut-through: %d\n", ret);
+			return ERR_PTR(ret);
+		}
 	}
 
 	ret = oa_tc6_unmask_macphy_error_interrupts(tc6);
