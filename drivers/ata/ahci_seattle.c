@@ -48,7 +48,7 @@ struct seattle_plat_data {
 };
 
 static struct ata_port_operations ahci_port_ops = {
-	.inherits		= &ahci_ops,
+	.inherits		= &ahci_platform_ops,
 };
 
 static const struct ata_port_info ahci_port_info = {
@@ -59,7 +59,7 @@ static const struct ata_port_info ahci_port_info = {
 };
 
 static struct ata_port_operations ahci_seattle_ops = {
-	.inherits		= &ahci_ops,
+	.inherits		= &ahci_platform_ops,
 	.transmit_led_message   = seattle_transmit_led_message,
 };
 
