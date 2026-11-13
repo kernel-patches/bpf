@@ -104,13 +104,7 @@ static long bpf_fd_inode_storage_update_elem(struct bpf_map *map, void *key,
 
 static int inode_storage_delete(struct inode *inode, struct bpf_map *map)
 {
-	struct bpf_local_storage_data *sdata;
-
-	sdata = inode_storage_lookup(inode, map, false);
-	if (!sdata)
-		return -ENOENT;
-
-	return bpf_selem_unlink(SELEM(sdata));
+	return bpf_local_storage_delete(inode, (struct bpf_local_storage_map *)map);
 }
 
 static long bpf_fd_inode_storage_delete_elem(struct bpf_map *map, void *key)

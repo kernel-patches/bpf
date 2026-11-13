@@ -34,13 +34,7 @@ bpf_sk_storage_lookup(struct sock *sk, struct bpf_map *map, bool cacheit_lockit)
 
 static int bpf_sk_storage_del(struct sock *sk, struct bpf_map *map)
 {
-	struct bpf_local_storage_data *sdata;
-
-	sdata = bpf_sk_storage_lookup(sk, map, false);
-	if (!sdata)
-		return -ENOENT;
-
-	return bpf_selem_unlink(SELEM(sdata));
+	return bpf_local_storage_delete(sk, (struct bpf_local_storage_map *)map);
 }
 
 /* Called by __sk_destruct() & bpf_sk_storage_clone() */
@@ -207,17 +201,16 @@ int bpf_sk_storage_clone(const struct sock *sk, struct sock *newsk)
 			}
 			bpf_selem_link_storage_nolock(new_sk_storage, copy_selem);
 		} else {
-			ret = bpf_local_storage_alloc(newsk, smap, copy_selem);
-			if (ret) {
+			new_sk_storage = bpf_local_storage_alloc(newsk, smap,
+								 copy_selem, NULL);
+			if (IS_ERR(new_sk_storage)) {
+				ret = PTR_ERR(new_sk_storage);
 				bpf_selem_free(copy_selem, true);
 				atomic_sub(smap->elem_size,
 					   &newsk->sk_omem_alloc);
 				bpf_map_put(map);
 				goto out;
 			}
-
-			new_sk_storage =
-				rcu_dereference(copy_selem->local_storage);
 		}
 		bpf_map_put(map);
 	}
@@ -536,7 +529,17 @@ err_free:
 }
 EXPORT_SYMBOL_GPL(bpf_sk_storage_diag_alloc);
 
-static int diag_get(struct bpf_local_storage_map *smap,
+/*
+ * Map free can set the map id to 0 at any time, so read it once. User space
+ * cannot name a map with id 0: skip it.
+ */
+static u32 diag_map_id(struct bpf_local_storage_map *smap)
+{
+	return smap ? READ_ONCE(smap->map.id) : 0;
+}
+
+/* id is the map id that the caller read once */
+static int diag_get(struct bpf_local_storage_map *smap, u32 id,
 		    struct bpf_local_storage_data *sdata, struct sk_buff *skb)
 {
 	struct nlattr *nla_stg, *nla_value;
@@ -548,7 +551,7 @@ static int diag_get(struct bpf_local_storage_map *smap,
 	if (!nla_stg)
 		return -EMSGSIZE;
 
-	if (nla_put_u32(skb, SK_DIAG_BPF_STORAGE_MAP_ID, smap->map.id))
+	if (nla_put_u32(skb, SK_DIAG_BPF_STORAGE_MAP_ID, id))
 		goto errout;
 
 	nla_value = nla_reserve_64bit(skb, SK_DIAG_BPF_STORAGE_MAP_VALUE,
@@ -579,16 +582,19 @@ static int bpf_sk_storage_diag_put_all(struct sock *sk, struct sk_buff *skb,
 	/* stg_array_type (e.g. INET_DIAG_BPF_SK_STORAGES) */
 	unsigned int diag_size = nla_total_size(0);
 	struct bpf_local_storage *sk_storage;
+	struct bpf_local_storage_data *sdata;
 	struct bpf_local_storage_elem *selem;
 	struct bpf_local_storage_map *smap;
 	struct nlattr *nla_stgs;
 	unsigned int saved_len;
+	u32 i, id, nr;
 	int err = 0;
 
 	rcu_read_lock();
 
 	sk_storage = rcu_dereference(sk->sk_bpf_storage);
-	if (!sk_storage || hlist_empty(&sk_storage->list)) {
+	/* The list can be empty when the values are inline */
+	if (!sk_storage) {
 		rcu_read_unlock();
 		return 0;
 	}
@@ -601,12 +607,31 @@ static int bpf_sk_storage_diag_put_all(struct sock *sk, struct sk_buff *skb,
 	saved_len = skb->len;
 	hlist_for_each_entry_rcu(selem, &sk_storage->list, snode) {
 		smap = rcu_dereference(SDATA(selem)->smap);
-		if (!smap)
+		id = diag_map_id(smap);
+		if (!id)
 			continue;
 		diag_size += nla_value_size(smap->map.value_size);
 
-		if (nla_stgs && diag_get(smap, SDATA(selem), skb))
+		if (nla_stgs && diag_get(smap, id, SDATA(selem), skb))
 			/* Continue to learn diag_size */
+			err = -EMSGSIZE;
+	}
+
+	/*
+	 * Inline values have no selem: find them through the inline maps. A
+	 * plain object holds no slot.
+	 */
+	nr = bpf_local_storage_has_inline(sk_storage) ?
+	     BPF_LOCAL_STORAGE_INLINE_MAPS : 0;
+	for (i = 0; i < nr; i++) {
+		smap = rcu_dereference(sk_cache.inline_maps[i]);
+		id = diag_map_id(smap);
+		sdata = id ? bpf_local_storage_inline(sk_storage, smap) : NULL;
+		if (!sdata || !bpf_local_storage_inline_valid(sdata, smap))
+			continue;
+		diag_size += nla_value_size(smap->map.value_size);
+
+		if (nla_stgs && diag_get(smap, id, sdata, skb))
 			err = -EMSGSIZE;
 	}
 
@@ -651,7 +676,8 @@ int bpf_sk_storage_diag_put(struct bpf_sk_storage_diag *diag,
 
 	rcu_read_lock();
 	sk_storage = rcu_dereference(sk->sk_bpf_storage);
-	if (!sk_storage || hlist_empty(&sk_storage->list)) {
+	/* The list can be empty when the values are inline */
+	if (!sk_storage) {
 		rcu_read_unlock();
 		return 0;
 	}
@@ -672,7 +698,8 @@ int bpf_sk_storage_diag_put(struct bpf_sk_storage_diag *diag,
 
 		diag_size += nla_value_size(diag->maps[i]->value_size);
 
-		if (nla_stgs && diag_get((struct bpf_local_storage_map *)diag->maps[i], sdata, skb))
+		if (nla_stgs && diag_get((struct bpf_local_storage_map *)diag->maps[i],
+					 diag->maps[i]->id, sdata, skb))
 			/* Continue to learn diag_size */
 			err = -EMSGSIZE;
 	}
@@ -944,6 +971,12 @@ static int bpf_iter_attach_map(struct bpf_prog *prog,
 
 	if (map->map_type != BPF_MAP_TYPE_SK_STORAGE)
 		goto put_map;
+
+	/* The iterator walks the selems of the map: it cannot see inline values */
+	if (map->map_flags & BPF_F_INLINE_VALUE) {
+		err = -EOPNOTSUPP;
+		goto put_map;
+	}
 
 	aux->map = map;
 	err = bpf_iter_map_check_prog(prog, aux);
