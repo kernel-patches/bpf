@@ -525,6 +525,17 @@ static int check_flags(const struct bpf_local_storage_data *old_sdata,
 	return 0;
 }
 
+/*
+ * Once an inline map exists, a new object gets an inline area up to the end
+ * of the last slot, also for other maps. Its size does not change.
+ */
+static u32 bpf_local_storage_obj_size(struct bpf_local_storage_map *smap)
+{
+	u32 end = max(READ_ONCE(smap->cache->inline_end), smap->inline_end);
+
+	return end ? kmalloc_size_roundup(end) : sizeof(struct bpf_local_storage);
+}
+
 int bpf_local_storage_alloc(void *owner,
 			    struct bpf_local_storage_map *smap,
 			    struct bpf_local_storage_elem *first_selem)
@@ -532,7 +543,7 @@ int bpf_local_storage_alloc(void *owner,
 	struct bpf_local_storage *prev_storage, *storage;
 	struct bpf_local_storage **owner_storage_ptr;
 	struct bpf_local_storage_map_bucket *b;
-	u32 size = sizeof(*storage);
+	u32 size = bpf_local_storage_obj_size(smap);
 	unsigned long flags;
 	int err;
 
