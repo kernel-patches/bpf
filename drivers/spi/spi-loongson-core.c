@@ -199,11 +199,38 @@ static void loongson_spi_reginit(struct loongson_spi *loongson_spi_dev)
 	loongson_spi_write_reg(loongson_spi_dev, LOONGSON_SPI_SPCR_REG, val);
 }
 
+static int loongson_spi_get_clk_rate(struct device *dev)
+{
+	struct spi_controller *controller = dev_get_drvdata(dev);
+	struct loongson_spi *loongson_spi = spi_controller_get_devdata(controller);
+	unsigned int freq, ret;
+
+	loongson_spi->clk = devm_clk_get_optional_enabled(dev, NULL);
+	if (IS_ERR(loongson_spi->clk))
+		return dev_err_probe(dev, PTR_ERR(loongson_spi->clk),
+				     "Failed to get spi clock");
+
+	if (loongson_spi->clk) {
+		loongson_spi->clk_rate = clk_get_rate(loongson_spi->clk);
+		if (!loongson_spi->clk_rate)
+			return dev_err_probe(dev, -EINVAL, "Failed to get frequency");
+		return 0;
+	}
+
+	ret = device_property_read_u32(dev, "clock-frequency", &freq);
+	if (ret || !freq)
+		return dev_err_probe(dev, -EINVAL, "Failed to parse clock-frequency");
+
+	loongson_spi->clk_rate = freq;
+
+	return 0;
+}
+
 int loongson_spi_init_controller(struct device *dev, void __iomem *regs)
 {
 	struct spi_controller *controller;
 	struct loongson_spi *spi;
-	struct clk *clk;
+	int ret;
 
 	controller = devm_spi_alloc_host(dev, sizeof(struct loongson_spi));
 	if (controller == NULL)
@@ -222,11 +249,10 @@ int loongson_spi_init_controller(struct device *dev, void __iomem *regs)
 	spi->base = regs;
 	spi->controller = controller;
 
-	clk = devm_clk_get_optional(dev, NULL);
-	if (IS_ERR(clk))
-		return dev_err_probe(dev, PTR_ERR(clk), "unable to get clock\n");
+	ret = loongson_spi_get_clk_rate(dev);
+	if (ret)
+		return ret;
 
-	spi->clk_rate = clk_get_rate(clk);
 	loongson_spi_reginit(spi);
 
 	spi->mode = 0;
@@ -252,6 +278,8 @@ static int loongson_spi_suspend(struct device *dev)
 	loongson_spi->lss.sfcs = loongson_spi_read_reg(loongson_spi, LOONGSON_SPI_SFCS_REG);
 	loongson_spi->lss.timi = loongson_spi_read_reg(loongson_spi, LOONGSON_SPI_TIMI_REG);
 
+	clk_disable_unprepare(loongson_spi->clk);
+
 	return 0;
 }
 
@@ -259,6 +287,11 @@ static int loongson_spi_resume(struct device *dev)
 {
 	struct spi_controller *controller = dev_get_drvdata(dev);
 	struct loongson_spi *loongson_spi = spi_controller_get_devdata(controller);
+	int ret;
+
+	ret = clk_prepare_enable(loongson_spi->clk);
+	if (ret)
+		return ret;
 
 	loongson_spi_write_reg(loongson_spi, LOONGSON_SPI_SPCR_REG, loongson_spi->lss.spcr);
 	loongson_spi_write_reg(loongson_spi, LOONGSON_SPI_SPER_REG, loongson_spi->lss.sper);

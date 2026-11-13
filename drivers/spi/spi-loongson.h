@@ -41,6 +41,7 @@ struct loongson_spi_suspend_store {
 struct loongson_spi {
 	struct spi_controller	*controller;
 	void __iomem		*base;
+	struct clk		*clk;
 	int			cs_active;
 	unsigned int		hz;
 	unsigned int		mode;
