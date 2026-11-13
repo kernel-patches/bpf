@@ -3159,8 +3159,15 @@ void btrfs_check_active_zone_reservation(struct btrfs_fs_info *fs_info)
 		      (BTRFS_BLOCK_GROUP_METADATA | BTRFS_BLOCK_GROUP_SYSTEM)))
 			continue;
 
-		for (int i = 0; i < map->num_stripes; i++)
-			map->stripes[i].dev->zone_info->reserved_active_zones--;
+		for (int i = 0; i < map->num_stripes; i++) {
+			struct btrfs_zoned_device_info *zinfo = map->stripes[i].dev->zone_info;
+			u64 physical = map->stripes[i].physical;
+
+			if (!test_bit(physical >> zinfo->zone_size_shift, zinfo->active_zones))
+				continue;
+
+			zinfo->reserved_active_zones--;
+		}
 	}
 	spin_unlock(&fs_info->zone_active_bgs_lock);
 }
