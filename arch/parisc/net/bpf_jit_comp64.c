@@ -619,6 +619,17 @@ int bpf_jit_emit_insn(const struct bpf_insn *insn, struct hppa_jit_context *ctx,
 			emit_zext_32(rd, ctx);
 			break;
 		}
+		if (off == 8 || off == 16 || (is64 && off == 32)) {
+			/* Sign-extending mov: dst = (s8,s16,s32)src */
+			if (is64)
+				emit_hppa64_extrd(rs, 63, off, rd, true, ctx);
+			else
+				emit_hppa64_extrw(rs, 31, off, rd, true, ctx);
+
+			if (!is64 && !aux->verifier_zext)
+				emit_hppa64_zext32(rd, rd, ctx);
+			break;
+		}
 		if (!is64 && !aux->verifier_zext)
 			emit_hppa64_zext32(rs, rd, ctx);
 		else
