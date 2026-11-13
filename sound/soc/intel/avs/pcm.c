@@ -271,7 +271,7 @@ static int avs_dai_nonhda_be_trigger(struct snd_pcm_substream *substream, int cm
 {
 	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
 	struct avs_dma_data *data;
-	int ret = 0;
+	int ret2, ret = 0;
 
 	data = snd_soc_dai_get_dma_data(dai, substream);
 
@@ -303,9 +303,11 @@ static int avs_dai_nonhda_be_trigger(struct snd_pcm_substream *substream, int cm
 		if (ret < 0)
 			dev_err(dai->dev, "pause BE path failed: %d\n", ret);
 
-		ret = avs_path_reset(data->path);
-		if (ret < 0)
-			dev_err(dai->dev, "reset BE path failed: %d\n", ret);
+		ret2 = avs_path_reset(data->path);
+		if (ret2)
+			dev_err(dai->dev, "reset BE path failed: %d\n", ret2);
+		if (ret2 && !ret)
+			ret = ret2;
 		break;
 
 	default:
@@ -492,7 +494,7 @@ static int avs_dai_hda_be_trigger(struct snd_pcm_substream *substream, int cmd,
 {
 	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
 	struct avs_dma_data *data;
-	int ret = 0;
+	int ret2, ret = 0;
 
 	dev_dbg(dai->dev, "entry %s cmd=%d\n", __func__, cmd);
 
@@ -530,9 +532,11 @@ static int avs_dai_hda_be_trigger(struct snd_pcm_substream *substream, int cmd,
 
 		snd_hdac_ext_stream_clear(data->link_stream);
 
-		ret = avs_path_reset(data->path);
-		if (ret < 0)
-			dev_err(dai->dev, "reset BE path failed: %d\n", ret);
+		ret2 = avs_path_reset(data->path);
+		if (ret2)
+			dev_err(dai->dev, "reset BE path failed: %d\n", ret2);
+		if (ret2 && !ret)
+			ret = ret2;
 		break;
 
 	default:
@@ -868,7 +872,7 @@ static int avs_dai_fe_trigger(struct snd_pcm_substream *substream, int cmd, stru
 	struct hdac_ext_stream *host_stream;
 	struct hdac_bus *bus;
 	unsigned long flags;
-	int ret = 0;
+	int ret2, ret = 0;
 
 	data = snd_soc_dai_get_dma_data(dai, substream);
 	host_stream = data->host_stream;
@@ -915,9 +919,11 @@ static int avs_dai_fe_trigger(struct snd_pcm_substream *substream, int cmd, stru
 		avs_hda_stream_stop(bus, host_stream);
 		spin_unlock_irqrestore(&bus->reg_lock, flags);
 
-		ret = avs_path_reset(data->path);
-		if (ret < 0)
-			dev_err(dai->dev, "reset FE path failed: %d\n", ret);
+		ret2 = avs_path_reset(data->path);
+		if (ret2)
+			dev_err(dai->dev, "reset FE path failed: %d\n", ret2);
+		if (ret2 && !ret)
+			ret = ret2;
 		break;
 
 	default:
