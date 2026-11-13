@@ -1150,6 +1150,7 @@ static int oa_tc6_prcs_rx_chunk_payload(struct oa_tc6 *tc6, u8 *data,
 				       footer);
 	bool start_valid = FIELD_GET(OA_TC6_DATA_FOOTER_START_VALID, footer);
 	bool end_valid = FIELD_GET(OA_TC6_DATA_FOOTER_END_VALID, footer);
+	bool frame_drop = FIELD_GET(OA_TC6_DATA_FOOTER_FRAME_DROP, footer);
 	u16 size;
 
 	/* Restart the new rx frame after receiving rx buffer overflow error */
@@ -1158,6 +1159,25 @@ static int oa_tc6_prcs_rx_chunk_payload(struct oa_tc6 *tc6, u8 *data,
 
 	if (tc6->wait_until_start_valid)
 		return 0;
+
+	/* Drop the frame, if footer sets FD bit. Checking FD bit
+	 * becomes important, when cut-through operation is enabled.
+	 */
+	if (end_valid && frame_drop) {
+		oa_tc6_cleanup_ongoing_rx_skb(tc6);
+
+		/* Full frame in this chunk. Nothing to free. Move on to
+		 * next chunk.
+		 */
+		if (start_valid && start_byte_offset < end_byte_offset) {
+			tc6->netdev->stats.rx_dropped++;
+			return 0;
+		}
+
+		/* The chunk carries only the end of the dropped frame. */
+		if (!start_valid)
+			return 0;
+	}
 
 	/* Process the chunk with complete rx frame */
 	if (start_valid && end_valid && start_byte_offset < end_byte_offset) {
