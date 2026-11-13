@@ -2055,6 +2055,17 @@ ip6gre_changelink_common(struct net_device *dev, struct nlattr *tb[],
 	if (dev == ign->fb_tunnel_dev)
 		return ERR_PTR(-EINVAL);
 
+	ip6gre_netlink_parms(data, p_p);
+
+	if (!nt->parms.collect_md) {
+		t = ip6gre_tunnel_find(net, p_p, dev->type);
+		if (t && t->dev != dev)
+			return ERR_PTR(-EEXIST);
+	}
+
+	if (ip6gre_tunnel_unregistering(nt))
+		return ERR_PTR(-ENODEV);
+
 	if (ip6gre_netlink_encap_parms(data, &ipencap)) {
 		int err = ip6_tnl_encap_setup(nt, &ipencap);
 
@@ -2062,21 +2073,7 @@ ip6gre_changelink_common(struct net_device *dev, struct nlattr *tb[],
 			return ERR_PTR(err);
 	}
 
-	ip6gre_netlink_parms(data, p_p);
-
-	t = ip6gre_tunnel_locate(net, p_p, 0);
-
-	if (t) {
-		if (t->dev != dev)
-			return ERR_PTR(-EEXIST);
-	} else {
-		t = nt;
-	}
-
-	if (ip6gre_tunnel_unregistering(t))
-		return ERR_PTR(-ENODEV);
-
-	return t;
+	return nt;
 }
 
 static int ip6gre_changelink(struct net_device *dev, struct nlattr *tb[],
