@@ -1008,10 +1008,18 @@ static int dps310_fill_channels(struct dps310_data *data,
 	unsigned int i;
 	int rc;
 
-	/* Compensation needs a temperature, so it is sampled either way */
-	rc = dps310_read_temp_raw_locked(data);
-	if (rc)
-		return rc;
+	if (test_bit(DPS310_SCAN_PRESSURE, scan_mask)) {
+		rc = dps310_read_pres_raw_locked(data);
+		if (rc)
+			return rc;
+
+		/* Waiting here would hold scans to the temperature rate */
+		dps310_refresh_temp_locked(data);
+	} else {
+		rc = dps310_read_temp_raw_locked(data);
+		if (rc)
+			return rc;
+	}
 
 	i = 0;
 	if (test_bit(DPS310_SCAN_TEMP, scan_mask)) {
@@ -1022,10 +1030,6 @@ static int dps310_fill_channels(struct dps310_data *data,
 	}
 
 	if (test_bit(DPS310_SCAN_PRESSURE, scan_mask)) {
-		rc = dps310_read_pres_raw_locked(data);
-		if (rc)
-			return rc;
-
 		/* Pascals, see the channel definition */
 		rc = dps310_calculate_pressure(data, &channels[i++]);
 		if (rc)
@@ -1054,8 +1058,15 @@ static unsigned int dps310_fifo_interval(struct dps310_data *data,
 {
 	unsigned int drain_interval_ms, fill_ms, want_ms;
 	int scan_rate;
+	int rc;
 
 	fill_ms = MSEC_PER_SEC * DPS310_FIFO_DEPTH / (prs_rate + tmp_rate);
+
+	/* Pressure compensation needs a temperature from the start */
+	scoped_guard(mutex, &data->lock)
+		rc = dps310_read_temp_raw_locked(data);
+	if (rc)
+		return rc;
 
 	/*
 	 * There is no hardware watermark, so take it as the number of scans
