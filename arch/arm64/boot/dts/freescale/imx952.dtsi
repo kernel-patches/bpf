@@ -904,7 +904,7 @@
 				dma-names = "rxa", "rxb", "rxc",
 					    "txa", "txb", "txc";
 				#sound-dai-cells = <0>;
-				fsl,asrc-rate  = <8000>;
+				fsl,asrc-rate = <8000>;
 				fsl,asrc-width = <16>;
 				status = "disabled";
 			};
@@ -945,7 +945,7 @@
 				dma-names = "rxa", "rxb", "rxc",
 					    "txa", "txb", "txc";
 				#sound-dai-cells = <0>;
-				fsl,asrc-rate  = <8000>;
+				fsl,asrc-rate = <8000>;
 				fsl,asrc-width = <16>;
 				status = "disabled";
 			};
