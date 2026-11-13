@@ -142,6 +142,7 @@ EXPORT_IF_KUNIT(amdgpu_dm_set_replay_caps);
 bool amdgpu_dm_link_setup_replay(struct dc_stream_state *stream,
 		struct mod_vrr_params *vrr_params)
 {
+	struct amdgpu_dm_connector *aconnector;
 	struct dc_link *link;
 	unsigned int static_coasting_vtotal;
 
@@ -149,7 +150,8 @@ bool amdgpu_dm_link_setup_replay(struct dc_stream_state *stream,
 		return false;
 
 	link = stream->link;
-	if (!link->replay_settings.config.replay_supported)
+	aconnector = (struct amdgpu_dm_connector *)stream->dm_stream_context;
+	if (!link->replay_settings.config.replay_cap_support || !aconnector)
 		return false;
 
 	if (link->replay_settings.replay_feature_enabled)
@@ -157,6 +159,25 @@ bool amdgpu_dm_link_setup_replay(struct dc_stream_state *stream,
 
 	calculate_replay_link_off_frame_count(link, stream->timing.v_total,
 			stream->timing.h_total);
+
+	/* FreeSync Replay must stay off for timings with link off frame count < 2 */
+	if (link->replay_settings.config.replay_version == DC_FREESYNC_REPLAY &&
+	    link->replay_settings.link_off_frame_count < PR_LINK_OFF_FRAME_COUNT_GOOD) {
+		link->replay_settings.config.replay_supported = false;
+		return false;
+	}
+
+	/*
+	 * replay_supported may have been cleared by the link off check of a
+	 * previous timing, by disallow_edp_enter_replay or by a freesync caps
+	 * update. Re-evaluate it so only the first case is restored here.
+	 */
+	if (!link->replay_settings.config.replay_supported)
+		link->replay_settings.config.replay_supported =
+			!aconnector->disallow_edp_enter_replay &&
+			amdgpu_dm_link_supports_replay(link, aconnector);
+	if (!link->replay_settings.config.replay_supported)
+		return false;
 
 	static_coasting_vtotal = mod_freesync_calc_v_total_from_refresh(stream,
 			vrr_params->min_refresh_in_uhz);
