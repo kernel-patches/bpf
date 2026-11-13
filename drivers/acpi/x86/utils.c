@@ -463,13 +463,13 @@ static const struct dmi_system_id acpi_quirk_skip_dmi_ids[] = {
 
 #if IS_ENABLED(CONFIG_X86_ANDROID_TABLETS)
 static const struct acpi_device_id i2c_acpi_known_good_ids[] = {
-	{ "10EC5640", 0 }, /* RealTek ALC5640 audio codec */
-	{ "10EC5651", 0 }, /* RealTek ALC5651 audio codec */
-	{ "INT33F4", 0 },  /* X-Powers AXP288 PMIC */
-	{ "INT33F5", 0 },  /* TI Dollar Cove PMIC */
-	{ "INT33FD", 0 },  /* Intel Crystal Cove PMIC */
-	{ "INT34D3", 0 },  /* Intel Whiskey Cove PMIC */
-	{ "NPCE69A", 0 },  /* Asus Transformer keyboard dock */
+	{ .id = "10EC5640" }, /* RealTek ALC5640 audio codec */
+	{ .id = "10EC5651" }, /* RealTek ALC5651 audio codec */
+	{ .id = "INT33F4" },  /* X-Powers AXP288 PMIC */
+	{ .id = "INT33F5" },  /* TI Dollar Cove PMIC */
+	{ .id = "INT33FD" },  /* Intel Crystal Cove PMIC */
+	{ .id = "INT34D3" },  /* Intel Whiskey Cove PMIC */
+	{ .id = "NPCE69A" },  /* Asus Transformer keyboard dock */
 	{ }
 };
 

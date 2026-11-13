@@ -63,10 +63,10 @@ module_param(cache_time, uint, 0644);
 MODULE_PARM_DESC(cache_time, "cache time in milliseconds");
 
 static const struct acpi_device_id battery_device_ids[] = {
-	{"PNP0C0A", 0},
+	{ .id = "PNP0C0A" },
 
 	/* Microsoft Surface Go 3 */
-	{"MSHW0146", 0},
+	{ .id = "MSHW0146" },
 
 	{ }
 };

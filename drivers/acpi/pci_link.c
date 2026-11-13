@@ -36,7 +36,7 @@ static int acpi_pci_link_add(struct acpi_device *device,
 static void acpi_pci_link_remove(struct acpi_device *device);
 
 static const struct acpi_device_id link_device_ids[] = {
-	{"PNP0C0F", 0},
+	{ .id = "PNP0C0F" },
 	{ }
 };
 

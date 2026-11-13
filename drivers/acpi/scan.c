@@ -1007,8 +1007,8 @@ static int acpi_bus_extract_wakeup_device_power_package(struct acpi_device *dev)
 static bool acpi_wakeup_gpe_init(struct acpi_device *device)
 {
 	static const struct acpi_device_id button_device_ids[] = {
-		{"PNP0C0D", 0},	/* Lid */
-		{"PNP0C0E", 0},	/* Sleep button */
+		{ .id = "PNP0C0D" },	/* Lid */
+		{ .id = "PNP0C0E" },	/* Sleep button */
 		{ }
 	};
 	struct acpi_device_wakeup *wakeup = &device->wakeup;
@@ -1732,7 +1732,7 @@ static bool acpi_is_indirect_io_slave(struct acpi_device *device)
 {
 	struct acpi_device *parent = acpi_dev_parent(device);
 	static const struct acpi_device_id indirect_io_hosts[] = {
-		{"HISI0191", 0},
+		{ .id = "HISI0191" },
 		{ }
 	};
 

@@ -33,8 +33,8 @@ static int acpi_smbus_hc_probe(struct platform_device *pdev);
 static void acpi_smbus_hc_remove(struct platform_device *pdev);
 
 static const struct acpi_device_id sbs_device_ids[] = {
-	{"ACPI0001", 0},
-	{"ACPI0005", 0},
+	{ .id = "ACPI0001" },
+	{ .id = "ACPI0005" },
 	{ }
 };
 
