@@ -568,8 +568,9 @@ static struct thread *__machine__findnew_thread(struct machine *machine,
 			thread__put(th);
 			return NULL;
 		}
-	} else
+	} else if (th) {
 		machine__update_thread_pid(machine, th, pid);
+	}
 
 	return th;
 }
