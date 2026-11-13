@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
+#include <errno.h>
+#include <stdlib.h>
+#include <linux/kernel.h>
 #include "threads.h"
 #include "machine.h"
 #include "thread.h"
@@ -171,20 +174,38 @@ int threads__for_each_thread(struct threads *threads,
 {
 	for (int i = 0; i < THREADS__TABLE_SIZE; i++) {
 		struct threads_table_entry *table = &threads->table[i];
+		struct thread *stack_threads[32];
+		struct thread **shard_threads = stack_threads;
 		struct hashmap_entry *cur;
-		size_t bkt;
+		size_t bkt, cnt, idx = 0;
+		int rc = 0;
 
 		down_read(&table->lock);
-		hashmap__for_each_entry(&table->shard, cur, bkt) {
-			int rc = fn((struct thread *)cur->pvalue, data);
-
-			if (rc != 0) {
+		cnt = hashmap__size(&table->shard);
+		if (cnt == 0) {
+			up_read(&table->lock);
+			continue;
+		}
+		if (cnt > ARRAY_SIZE(stack_threads)) {
+			shard_threads = malloc(cnt * sizeof(*shard_threads));
+			if (!shard_threads) {
 				up_read(&table->lock);
-				return rc;
+				return -ENOMEM;
 			}
 		}
+		hashmap__for_each_entry(&table->shard, cur, bkt)
+			shard_threads[idx++] = thread__get((struct thread *)cur->pvalue);
 		up_read(&table->lock);
+
+		for (size_t j = 0; j < idx; j++) {
+			if (rc == 0)
+				rc = fn(shard_threads[j], data);
+			thread__put(shard_threads[j]);
+		}
+		if (shard_threads != stack_threads)
+			free(shard_threads);
+		if (rc != 0)
+			return rc;
 	}
 	return 0;
-
 }
