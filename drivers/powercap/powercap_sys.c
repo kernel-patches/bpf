@@ -388,11 +388,15 @@ static void powercap_release(struct device *dev)
 
 	if (dev->parent) {
 		struct powercap_zone *power_zone = to_powercap_zone(dev);
+		struct powercap_control_type *control_type =
+						power_zone->control_type_inst;
 
 		/* Store flag as the release() may free memory */
 		allocated = power_zone->allocated;
 		/* Remove id from parent idr struct */
+		mutex_lock(&control_type->lock);
 		idr_remove(power_zone->parent_idr, power_zone->id);
+		mutex_unlock(&control_type->lock);
 		/* Destroy idrs allocated for this zone */
 		idr_destroy(&power_zone->idr);
 		kfree(power_zone->name);
@@ -561,8 +565,8 @@ struct powercap_zone *powercap_register_zone(
 		 * ->release(), which may free the zone.
 		 */
 		power_zone->ops = NULL;
-		put_device(&power_zone->dev);
 		mutex_unlock(&control_type->lock);
+		put_device(&power_zone->dev);
 
 		return ERR_PTR(result);
 	}
