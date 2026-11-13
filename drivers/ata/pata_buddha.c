@@ -238,10 +238,8 @@ static int pata_buddha_probe(struct zorro_dev *z,
 			      ctl ? board + buddha_bases[i] + ctl : 0);
 	}
 
-	ata_host_activate(host, IRQ_AMIGA_PORTS, ata_sff_interrupt,
-			  IRQF_SHARED, &pata_buddha_sht);
-
-	return 0;
+	return ata_host_activate(host, IRQ_AMIGA_PORTS, ata_sff_interrupt,
+				 IRQF_SHARED, &pata_buddha_sht);
 }
 
 static void pata_buddha_remove(struct zorro_dev *z)
