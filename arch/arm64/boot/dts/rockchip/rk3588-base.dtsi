@@ -619,6 +619,7 @@
 	php_grf: syscon@fd5b0000 {
 		compatible = "rockchip,rk3588-php-grf", "syscon";
 		reg = <0x0 0xfd5b0000 0x0 0x1000>;
+		clocks = <&cru PCLK_PHP_ROOT>;
 	};
 
 	csidphy0_grf: syscon@fd5b4000 {
