@@ -247,7 +247,7 @@ static struct platform_driver bdw_rt286_driver = {
 	.probe = bdw_rt286_probe,
 	.driver = {
 		.name = "bdw_rt286",
-		.pm = &snd_soc_pm_ops
+		.pm = &snd_soc_pm_ops,
 	},
 };
 
