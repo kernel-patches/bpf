@@ -219,8 +219,7 @@
 	},
 	.prog_type = BPF_PROG_TYPE_SCHED_CLS,
 	.fixup_map_kptr = { 1 },
-	.result = REJECT,
-	.errstr = "access beyond struct prog_test_ref_kfunc at off 32 size 8",
+	.result = ACCEPT,
 },
 {
 	"map_kptr: unref: inherit PTR_UNTRUSTED on struct walk",

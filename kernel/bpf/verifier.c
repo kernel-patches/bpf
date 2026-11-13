@@ -6844,6 +6844,24 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 		return -EINVAL;
 	}
 
+	/*
+	 * The type of an untrusted pointer is a hint. A load through the
+	 * pointer is a BPF_PROBE_MEM load, whatever the address. Where the
+	 * type describes the bytes, the result has the type of the member.
+	 * Elsewhere the result is a number, as it is for
+	 * PTR_TO_MEM | MEM_RDONLY | PTR_UNTRUSTED.
+	 */
+	if (atype == BPF_READ && value_regno >= 0 && (reg->type & PTR_UNTRUSTED) &&
+	    !(reg->type & (MEM_USER | MEM_PERCPU))) {
+		ret = SCALAR_VALUE;
+		if (!check_add_overflow(reg_smin(reg), off, &min_off) && min_off >= 0)
+			ret = btf_struct_access(NULL, reg, off, size, atype, &btf_id, &flag,
+						&field_name);
+		if (ret < 0)
+			ret = SCALAR_VALUE;
+		goto loaded;
+	}
+
 	if (check_add_overflow(reg_smin(reg), off, &min_off)) {
 		verbose(env,
 			"%s is ptr_%s access, offset computation overflows: register's minimal offset is %lld, instruction offset is %d\n",
@@ -6926,6 +6944,7 @@ static int check_ptr_to_btf_access(struct bpf_verifier_env *env,
 	if (ret < 0)
 		return ret;
 
+loaded:
 	if (ret == PTR_TO_ARENA)
 		return check_arena_member_load(env, regs, value_regno, flag, tname, field_name);
 

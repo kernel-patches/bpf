@@ -26,7 +26,7 @@ struct {
 
 SEC("syscall")
 __description("btf walk into flexible array of zero-sized elements")
-__failure __msg("access beyond struct test_flex_batch at off 4 size 1")
+__success
 int stash_and_peek(void *ctx)
 {
 	struct test_flex_batch *b, *old;
