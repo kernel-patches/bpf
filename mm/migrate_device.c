@@ -760,6 +760,8 @@ int migrate_vma_setup(struct migrate_vma *args)
 	/* The migrate_vma page walk has no hugetlb support. */
 	if (!vma_is_mm_backed(vma) || vma_is_hugetlb(vma) || vma_is_dax(vma))
 		return -EINVAL;
+	if (vma_test_single_mask(vma, VMA_SHADOW_STACK))
+		return -EINVAL;
 	if (nr_pages <= 0)
 		return -EINVAL;
 	if (args->start < vma->vm_start || args->start >= vma->vm_end)
