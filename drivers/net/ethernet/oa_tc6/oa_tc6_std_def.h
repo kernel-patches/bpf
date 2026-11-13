@@ -1,9 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * Register and driver related definitions to support
- * OPEN Alliance 10BASE‑T1x MAC‑PHY Serial Interface framework.
- *
- * Author: Selva Rajagopal <selvamani.rajagopal@onsemi.com>
+ * OPEN Alliance 10BASE-T1x MAC-PHY Serial Interface framework.
  */
 
 #ifndef OA_TC6_STD_DEF_H
@@ -12,12 +10,16 @@
 #include <linux/bits.h>
 #include <linux/ptp_clock_kernel.h>
 #include <linux/net_tstamp.h>
+#include <linux/ethtool.h>
 #include <linux/netdevice.h>
 #include <linux/spi/spi.h>
 #include <linux/skbuff.h>
 #include <linux/sched.h>
 #include <linux/wait.h>
 #include <linux/oa_tc6.h>
+
+/* Tx timestamp capture register A (high) */
+#define OA_TC6_REG_TTSCA_HIGH			(0x10)
 
 /* Control command header */
 #define OA_TC6_CTRL_HEADER_DATA_NOT_CTRL	BIT(31)
@@ -34,6 +36,7 @@
 #define OA_TC6_DATA_HEADER_START_WORD_OFFSET	GENMASK(19, 16)
 #define OA_TC6_DATA_HEADER_END_VALID		BIT(14)
 #define OA_TC6_DATA_HEADER_END_BYTE_OFFSET	GENMASK(13, 8)
+#define OA_TC6_DATA_HEADER_TSC_OFFSET		GENMASK(7, 6)
 #define OA_TC6_DATA_HEADER_PARITY		BIT(0)
 
 /* Data footer */
@@ -44,7 +47,10 @@
 #define OA_TC6_DATA_FOOTER_DATA_VALID		BIT(21)
 #define OA_TC6_DATA_FOOTER_START_VALID		BIT(20)
 #define OA_TC6_DATA_FOOTER_START_WORD_OFFSET	GENMASK(19, 16)
+#define OA_TC6_DATA_FOOTER_FRAME_DROP		BIT(15)
 #define OA_TC6_DATA_FOOTER_END_VALID		BIT(14)
+#define OA_TC6_DATA_FOOTER_RTSA_VALID		BIT(7)
+#define OA_TC6_DATA_FOOTER_RTSP_VALID		BIT(6)
 #define OA_TC6_DATA_FOOTER_END_BYTE_OFFSET	GENMASK(13, 8)
 #define OA_TC6_DATA_FOOTER_TX_CREDITS		GENMASK(5, 1)
 
@@ -71,6 +77,34 @@
 
 #define OA_TC6_REG_MMS_MASK		GENMASK(19, 16)
 
+#define OA_TC6_TSTAMP_SZ			8
+
+#define OA_TC6_TTSCA_REG_ID			1
+#define OA_TC6_TTSCB_REG_ID			2
+#define OA_TC6_TTSCC_REG_ID			3
+
+/* OA TC6 register addresses count 32-bit registers, not bytes. The difference
+ * of two addresses is therefore the index into a u32 array that was read
+ * starting at the first address, so the OFFSET macros below are array
+ * indices.
+ */
+#define OA_TC6_TTSC_REG_OFFSET		(OA_TC6_REG_TTSCA_HIGH - \
+					 OA_TC6_REG_STATUS0)
+#define OA_TC6_TTSC_REG_COUNT		(2 * OA_TC6_TTSCC_REG_ID)
+#define OA_TC6_STATUS0_TTSC_REG_COUNT	(OA_TC6_TTSC_REG_OFFSET + \
+					 OA_TC6_TTSC_REG_COUNT)
+
+/* Useful for reading all the registers between CONFIG0 and INT_MASK0
+ * in a single SPI transaction
+ */
+#define CFG0_TO_IMASK0_REG_COUNT	(OA_TC6_REG_INT_MASK0 - \
+					 OA_TC6_REG_CONFIG0 + 1)
+#define CFG0_VAL_OFFSET			(0)
+#define STATUS0_VAL_OFFSET		(OA_TC6_REG_STATUS0 - \
+					 OA_TC6_REG_CONFIG0)
+#define IRQM_VAL_OFFSET			(OA_TC6_REG_INT_MASK0 - \
+					 OA_TC6_REG_CONFIG0)
+
 /* Internal structure for MAC-PHY drivers */
 struct oa_tc6 {
 	struct net_device *netdev;
@@ -96,6 +130,16 @@ struct oa_tc6 {
 	bool prot_ctrl;
 	enum oa_tc6_quirk_flag quirk_flags;
 	struct gpio_desc *reset_gpio;
+	struct hwtstamp_config ts_config;
+	struct list_head tx_ts_skb_q;
+	struct ptp_clock *ptp_clock;
+	bool ftsc_capable; /* Timestamp capability */
+	bool hw_tstamp_enabled;
+	u64 tx_hwtstamp_pkts;
+	u64 tx_hwtstamp_lost;
+	u64 tx_hwtstamp_err;
+	u8 ts_ttsc_pending;
+	u8 ttsc_current_id;
 };
 
 enum oa_tc6_header_type {
@@ -122,4 +166,7 @@ enum oa_tc6_data_end_valid_info {
 	OA_TC6_DATA_END_INVALID,
 	OA_TC6_DATA_END_VALID,
 };
+
+void oa_tc6_cleanup_tx_tstamp_skbs(struct oa_tc6 *tc6);
+
 #endif /* OA_TC6_STD_DEF_H */

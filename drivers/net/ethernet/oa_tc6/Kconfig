@@ -6,6 +6,7 @@
 config OA_TC6
 	tristate "OPEN Alliance TC6 10BASE-T1x MAC-PHY support" if COMPILE_TEST
 	depends on SPI
+	depends on PTP_1588_CLOCK_OPTIONAL
 	select PHYLIB
 	help
 	  This library implements OPEN Alliance TC6 10BASE-T1x MAC-PHY
