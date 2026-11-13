@@ -3773,8 +3773,14 @@ s64 ntfs_inode_attr_pread(struct inode *vi, s64 pos, s64 count, u8 *buf)
 
 	index = pos >> PAGE_SHIFT;
 	do {
-		/* Update @index and get the next folio. */
-		folio = read_mapping_folio(mapping, index, NULL);
+		/*
+		 * Update @index and get the next folio.  The contents of a named
+		 * stream are user data, so a fatal signal may still stop that read.
+		 */
+		if (ntfs_inode_is_named_stream(ni))
+			folio = read_mapping_folio(mapping, index, NULL);
+		else
+			folio = ntfs_read_metadata_folio(mapping, index);
 		if (IS_ERR(folio)) {
 			err = PTR_ERR(folio);
 			break;
@@ -3926,9 +3932,18 @@ static s64 __ntfs_inode_non_resident_attr_pwrite(struct inode *vi,
 				break;
 			}
 		} else {
-			folio = read_mapping_folio(mapping, index, NULL);
+			/*
+			 * Named stream contents are user data; keep that read
+			 * killable, as in ntfs_inode_attr_pread().
+			 */
+			if (ntfs_inode_is_named_stream(ni))
+				folio = read_mapping_folio(mapping, index, NULL);
+			else
+				folio = ntfs_read_metadata_folio(mapping, index);
 			if (IS_ERR(folio)) {
 				ret = PTR_ERR(folio);
+				if (ret == -EINTR)
+					break;
 				ntfs_error(vi->i_sb, "Failed to read a page %lu for attr %#x: %ld",
 						index, ni->type, PTR_ERR(folio));
 				break;

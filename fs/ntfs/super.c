@@ -1187,8 +1187,8 @@ static bool check_mft_mirror(struct ntfs_volume *vol)
 				folio_put(mft_folio);
 			}
 			/* Get the $MFT page. */
-			mft_folio = read_mapping_folio(vol->mft_ino->i_mapping,
-					index, NULL);
+			mft_folio = ntfs_read_metadata_folio(vol->mft_ino->i_mapping,
+							     index);
 			if (IS_ERR(mft_folio)) {
 				ntfs_error(sb, "Failed to read $MFT.");
 				return false;
@@ -1196,8 +1196,8 @@ static bool check_mft_mirror(struct ntfs_volume *vol)
 			kmft_base = kmap_local_folio(mft_folio, 0);
 			kmft = kmft_base;
 			/* Get the $MFTMirr page. */
-			mirr_folio = read_mapping_folio(vol->mftmirr_ino->i_mapping,
-					index, NULL);
+			mirr_folio = ntfs_read_metadata_folio(vol->mftmirr_ino->i_mapping,
+							      index);
 			if (IS_ERR(mirr_folio)) {
 				ntfs_error(sb, "Failed to read $MFTMirr.");
 				goto mft_unmap_out;
@@ -1404,7 +1404,7 @@ static int check_windows_hibernation_status(struct ntfs_volume *vol)
 		goto iput_out;
 	}
 
-	folio = read_mapping_folio(vi->i_mapping, 0, NULL);
+	folio = ntfs_read_metadata_folio(vi->i_mapping, 0);
 	if (IS_ERR(folio)) {
 		ntfs_error(vol->sb, "Failed to read from hiberfil.sys.");
 		ret = PTR_ERR(folio);
@@ -1469,7 +1469,7 @@ static bool load_and_init_attrdef(struct ntfs_volume *vol)
 	while (index < max_index) {
 		/* Read the attrdef table and copy it into the linear buffer. */
 read_partial_attrdef_page:
-		folio = read_mapping_folio(ino->i_mapping, index, NULL);
+		folio = ntfs_read_metadata_folio(ino->i_mapping, index);
 		if (IS_ERR(folio))
 			goto free_iput_failed;
 		addr = kmap_local_folio(folio, 0);
@@ -1535,7 +1535,7 @@ static bool load_and_init_upcase(struct ntfs_volume *vol)
 	while (index < max_index) {
 		/* Read the upcase table and copy it into the linear buffer. */
 read_partial_upcase_page:
-		folio = read_mapping_folio(ino->i_mapping, index, NULL);
+		folio = ntfs_read_metadata_folio(ino->i_mapping, index);
 		if (IS_ERR(folio))
 			goto iput_upcase_failed;
 		addr = kmap_local_folio(folio, 0);
