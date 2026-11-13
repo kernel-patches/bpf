@@ -158,6 +158,18 @@ void bpf_selem_free(struct bpf_local_storage_elem *selem,
 	call_rcu_tasks_trace(&selem->rcu, bpf_selem_free_trace_rcu);
 }
 
+/*
+ * selem was never published: no reader can see it, and this works in NMI.
+ * Only the syscall update puts special fields (uptrs) in a new selem, and it
+ * never runs in NMI, so freeing them here is safe too.
+ */
+static void bpf_selem_free_unpublished(struct bpf_local_storage_elem *selem,
+				       struct bpf_local_storage_map *smap)
+{
+	bpf_obj_free_fields(smap->map.record, SDATA(selem)->data);
+	kfree_nolock(selem);
+}
+
 static void bpf_selem_free_list(struct hlist_head *list, bool reuse_now)
 {
 	struct bpf_local_storage_elem *selem;
@@ -562,7 +574,8 @@ int bpf_local_storage_alloc(void *owner,
 	return 0;
 
 uncharge:
-	bpf_local_storage_free(storage, true);
+	/* storage was never published: no reader can see it */
+	kfree_nolock(storage);
 	mem_uncharge(smap, owner, sizeof(*storage));
 	return err;
 }
@@ -605,7 +618,7 @@ bpf_local_storage_update(void *owner, struct bpf_local_storage_map *smap,
 
 		err = bpf_local_storage_alloc(owner, smap, selem);
 		if (err) {
-			bpf_selem_free(selem, true);
+			bpf_selem_free_unpublished(selem, smap);
 			mem_uncharge(smap, owner, smap->elem_size);
 			return ERR_PTR(err);
 		}
@@ -692,7 +705,7 @@ free_selem:
 	bpf_selem_free_list(&old_selem_free_list, false);
 	if (alloc_selem) {
 		mem_uncharge(smap, owner, smap->elem_size);
-		bpf_selem_free(alloc_selem, true);
+		bpf_selem_free_unpublished(alloc_selem, smap);
 	}
 	return err ? ERR_PTR(err) : SDATA(selem);
 }
