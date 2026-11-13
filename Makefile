@@ -1400,7 +1400,7 @@ scripts: scripts_basic scripts_dtc
 # archprepare is used in arch Makefiles and when processed asm symlink,
 # version.h and scripts_basic is processed / created.
 
-PHONY += prepare archprepare
+PHONY += prepare archprepare modpost_prepare
 
 archprepare: outputmakefile archheaders archscripts scripts include/config/kernel.release \
 	asm-generic $(version_h) include/generated/utsrelease.h \
@@ -1409,6 +1409,8 @@ archprepare: outputmakefile archheaders archscripts scripts include/config/kerne
 
 prepare0: archprepare
 	$(Q)$(MAKE) $(build)=. prepare $(if $(single-build),,prepare_checks)
+
+modpost_prepare: prepare
 	$(Q)$(MAKE) $(build)=scripts/mod
 
 # All the preparing..
@@ -1756,7 +1758,7 @@ endif
 modules: modules_prepare
 
 # Target to prepare building external modules
-modules_prepare: prepare
+modules_prepare: modpost_prepare
 	$(Q)$(MAKE) $(build)=scripts scripts/module.lds
 
 endif # CONFIG_MODULES
@@ -2180,7 +2182,8 @@ KBUILD_MODULES :=
 endif # CONFIG_MODULES
 
 PHONY += modpost
-modpost: $(if $(single-build),, $(if $(KBUILD_BUILTIN), vmlinux.o)) \
+modpost: $(if $(KBUILD_EXTMOD),,modpost_prepare) \
+	 $(if $(single-build),, $(if $(KBUILD_BUILTIN), vmlinux.o)) \
 	 $(if $(KBUILD_MODULES), modules_check)
 	$(Q)$(MAKE) -f $(srctree)/scripts/Makefile.modpost
 
