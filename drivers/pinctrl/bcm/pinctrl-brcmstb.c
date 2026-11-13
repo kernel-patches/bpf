@@ -180,26 +180,13 @@ static void brcmstb_pctl_pin_dbg_show(struct pinctrl_dev *pctldev,
 	seq_printf(s, "function %s", fname);
 }
 
-static void brcmstb_pctl_dt_free_map(struct pinctrl_dev *pctldev,
-				     struct pinctrl_map *maps,
-				     unsigned int num_maps)
-{
-	int i;
-
-	for (i = 0; i < num_maps; i++)
-		if (maps[i].type == PIN_MAP_TYPE_CONFIGS_PIN)
-			kfree(maps[i].data.configs.configs);
-
-	kfree(maps);
-}
-
 static const struct pinctrl_ops brcmstb_pctl_ops = {
 	.get_groups_count = brcmstb_pctl_get_groups_count,
 	.get_group_name = brcmstb_pctl_get_group_name,
 	.get_group_pins = brcmstb_pctl_get_group_pins,
 	.pin_dbg_show = brcmstb_pctl_pin_dbg_show,
 	.dt_node_to_map = pinconf_generic_dt_node_to_map_all,
-	.dt_free_map = brcmstb_pctl_dt_free_map,
+	.dt_free_map = pinconf_generic_dt_free_map,
 };
 
 static int brcmstb_pmx_free(struct pinctrl_dev *pctldev, unsigned int offset)
