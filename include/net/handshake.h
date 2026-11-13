@@ -12,10 +12,15 @@
 
 #include <linux/errno.h>
 #include <linux/stringset.h>
+#include <uapi/linux/handshake.h>
 
 /*
  * Bounds the cost of stringset_intersection() in consumer
  * authorization checks.
+ *
+ * The per-tag byte limit, HANDSHAKE_SESSION_TAG_MAX_LEN, is
+ * enforced by the netlink policy generated from
+ * Documentation/netlink/specs/handshake.yaml.
  */
 #define HANDSHAKE_MAX_SESSIONTAGS	64
 
