@@ -72,7 +72,7 @@ static void loongson_spi_set_mode(struct loongson_spi *loongson_spi,
 		val |= LOONGSON_SPI_SPCR_CPHA;
 
 	loongson_spi_write_reg(loongson_spi, LOONGSON_SPI_SPCR_REG, val);
-	loongson_spi->mode |= spi->mode;
+	loongson_spi->mode = spi->mode;
 }
 
 static int loongson_spi_update_state(struct loongson_spi *loongson_spi,
