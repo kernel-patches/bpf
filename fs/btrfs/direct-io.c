@@ -12,11 +12,13 @@
 #include "volumes.h"
 #include "bio.h"
 #include "ordered-data.h"
+#include "qgroup.h"
 
 struct btrfs_dio_data {
 	loff_t old_isize;
 	struct extent_changeset *data_reserved;
 	struct btrfs_ordered_extent *ordered;
+	u64 data_space_consumed;
 	bool data_space_reserved;
 	bool nocow_done;
 	bool updated_isize;
@@ -195,6 +197,7 @@ again:
 	}
 	if (ret)
 		return ERR_PTR(ret);
+	dio_data->data_space_consumed = ins.offset;
 
 	file_extent.disk_bytenr = ins.objectid;
 	file_extent.disk_num_bytes = ins.offset;
@@ -610,9 +613,13 @@ unlock_err:
 			       EXTENT_LOCKED | EXTENT_DIO_LOCKED, &cached_state);
 err:
 	if (dio_data->data_space_reserved) {
-		btrfs_free_reserved_data_space(BTRFS_I(inode),
-					       dio_data->data_reserved,
-					       start, data_alloc_len);
+		const u64 consumed = dio_data->data_space_consumed;
+
+		if (consumed < data_alloc_len)
+			btrfs_free_reserved_data_space_noquota(BTRFS_I(inode),
+						data_alloc_len - consumed);
+		btrfs_qgroup_free_data(BTRFS_I(inode), dio_data->data_reserved,
+				       start, data_alloc_len, NULL);
 		extent_changeset_free(dio_data->data_reserved);
 	}
 
