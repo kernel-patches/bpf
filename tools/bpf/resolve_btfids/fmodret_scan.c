@@ -137,6 +137,7 @@ int scan_func(struct scan *s, const struct image_func *f, const int64_t **values
 
 	if (err)
 		return err;
+	text_flow_fold(&s->flow);
 	text_flow_solve(&s->flow);
 
 	s->nr_values = 0;

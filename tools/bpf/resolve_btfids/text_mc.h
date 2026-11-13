@@ -63,6 +63,7 @@ struct mc_pattern {
 	u8 dst, src, src2;	/* the numbers of the operands. DST is 0 unless it is given */
 	u8 imm;			/* the operand with the immediate */
 	u8 shift;		/* the operand which says how far the immediate is shifted left */
+	u8 op;			/* of TEXT_ALU_IMM */
 	bool invert;		/* the immediate */
 	bool or_zero;		/* TEXT_MOV_IMM: the immediate or 0 */
 	bool fixed;		/* the immediate is VALUE, not an operand */

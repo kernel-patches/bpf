@@ -18,6 +18,7 @@
 enum text_insn_kind {
 	TEXT_OTHER,
 	TEXT_MOV_IMM,		/* dst = imm or imm2 */
+	TEXT_ALU_IMM,		/* dst = src op imm */
 	TEXT_MOV,		/* dst = src */
 	TEXT_SEXT32,		/* dst = (s32)src */
 	TEXT_SELECT,		/* dst = src or src2 */
@@ -26,6 +27,12 @@ enum text_insn_kind {
 	TEXT_COND_BRANCH,	/* to imm or to the next instruction */
 	TEXT_CALL,		/* of imm, 0 if it is computed */
 	TEXT_RETURN,
+};
+
+enum text_alu_op {
+	TEXT_AND,
+	TEXT_XOR,
+	TEXT_SUB,
 };
 
 /* The arch numbers its registers */
@@ -37,6 +44,7 @@ struct text_insn {
 	u8 kind;
 	u8 len;
 	u8 dst, src, src2;
+	u8 op;		/* of TEXT_ALU_IMM */
 	bool is32;	/* It works on the low 32 bits and zero extends the result */
 	/* The registers which it writes, but for dst */
 	u32 defs;

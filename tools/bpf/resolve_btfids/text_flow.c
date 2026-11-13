@@ -16,6 +16,54 @@ static u32 next_insn(const struct text_flow *flow, u32 i)
 	       i + 1 : TEXT_NO_INSN;
 }
 
+static u64 alu(const struct text_insn *insn, u64 v)
+{
+	switch (insn->op) {
+	case TEXT_AND:
+		v &= insn->imm;
+		break;
+	case TEXT_XOR:
+		v ^= insn->imm;
+		break;
+	case TEXT_SUB:
+		v -= insn->imm;
+		break;
+	}
+	return insn->is32 ? (u32)v : v;
+}
+
+void text_flow_fold(struct text_flow *flow)
+{
+	/* The instruction which has left a constant in each register */
+	u32 def[TEXT_MAX_REGS], i, r;
+
+	for (i = 0; i < flow->nr_insns; i++) {
+		struct text_insn *insn = &flow->insns[i];
+		u32 defs = insn->defs;
+
+		/* The function or a cold subfunction begins */
+		if (!i || next_insn(flow, i - 1) == TEXT_NO_INSN)
+			for (r = 0; r < TEXT_MAX_REGS; r++)
+				def[r] = TEXT_NO_INSN;
+		if (insn->kind == TEXT_ALU_IMM && def[insn->src] != TEXT_NO_INSN) {
+			insn->kind = TEXT_MOV_IMM;
+			insn->imm2 = alu(insn, flow->insns[def[insn->src]].imm2);
+			insn->imm = alu(insn, flow->insns[def[insn->src]].imm);
+		}
+		if (insn->kind == TEXT_BRANCH || insn->kind == TEXT_RETURN)
+			defs = TEXT_ALL_REGS;
+		else if (insn->kind == TEXT_CALL)
+			defs |= flow->arch->caller_saved;
+		else if (insn->kind != TEXT_OTHER && insn->kind != TEXT_COND_BRANCH)
+			defs |= BIT(insn->dst);
+		for (r = 0; defs && r < TEXT_MAX_REGS; r++)
+			if (defs & BIT(r))
+				def[r] = TEXT_NO_INSN;
+		if (insn->kind == TEXT_MOV_IMM)
+			def[insn->dst] = i;
+	}
+}
+
 static u32 insn_at(const struct text_flow *flow, u64 addr)
 {
 	u32 lo = 0, hi = flow->nr_insns;
@@ -90,6 +138,7 @@ static struct text_facts transfer(const struct text_flow *flow, u32 i)
 		kill(&in, flow->arch->caller_saved);
 		break;
 	case TEXT_MOV_IMM:
+	case TEXT_ALU_IMM:
 		kill(&in, BIT(insn->dst));
 		break;
 	case TEXT_MOV:
