@@ -365,6 +365,10 @@ __bpf_kfunc struct cgroup_subsys_state *bpf_iter_css_next(struct bpf_iter_css *i
 		kit->pos = kit->pos ? kit->pos->parent : kit->start;
 	}
 
+	/* Once NULL is returned, next() has to keep returning NULL. */
+	if (!kit->pos)
+		kit->start = NULL;
+
 	return kit->pos;
 }
 
