@@ -351,7 +351,10 @@ static void kunit_init_params(struct kunit *test)
 	test->params_array.elem_size = 0;
 }
 
-void kunit_init_test(struct kunit *test, const char *name, struct string_stream *log)
+void kunit_init_test(struct kunit *test,
+		     const char *name,
+		     struct string_stream *log,
+		     struct kunit_attributes *attributes)
 {
 	spin_lock_init(&test->lock);
 	INIT_LIST_HEAD(&test->resources);
@@ -359,6 +362,7 @@ void kunit_init_test(struct kunit *test, const char *name, struct string_stream 
 	test->log = log;
 	if (test->log)
 		string_stream_clear(log);
+	test->attr = attributes;
 	test->status = KUNIT_SUCCESS;
 	test->status_comment[0] = '\0';
 	kunit_init_params(test);
@@ -724,7 +728,7 @@ kunit_run_param_test(struct kunit_suite *suite, struct kunit_case *test_case,
 			.param_index = ++test->param_index,
 			.parent = test,
 		};
-		kunit_init_test(&param_test, test_case->name, NULL);
+		kunit_init_test(&param_test, test_case->name, NULL, &test_case->attr);
 		param_test.log = test_case->log;
 		kunit_run_case_catch_errors(suite, test_case, &param_test);
 
@@ -764,7 +768,7 @@ kunit_run_one_test(struct kunit_suite *suite, struct kunit_case *test_case,
 	struct kunit test = { .param_value = NULL, .param_index = 0 };
 	struct kunit_result_stats param_stats = { 0 };
 
-	kunit_init_test(&test, test_case->name, test_case->log);
+	kunit_init_test(&test, test_case->name, test_case->log, &test_case->attr);
 	if (test_case->status == KUNIT_SKIPPED) {
 		/* Test marked as skip */
 		test.status = KUNIT_SKIPPED;

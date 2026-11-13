@@ -209,6 +209,7 @@ pub const fn kunit_case(
         name: kernel::str::as_char_ptr_in_const_context(name),
         attr: kernel::bindings::kunit_attributes {
             speed: kernel::bindings::kunit_speed_KUNIT_SPEED_NORMAL,
+            rust_should_panic: false,
         },
         generate_params: None,
         status: kernel::bindings::kunit_status_KUNIT_SUCCESS,
@@ -284,6 +285,7 @@ macro_rules! kunit_unsafe_test_suite {
                     exit: None,
                     attr: ::kernel::bindings::kunit_attributes {
                         speed: ::kernel::bindings::kunit_speed_KUNIT_SPEED_NORMAL,
+                        rust_should_panic: false,
                     },
                     status_comment: [0; 256usize],
                     debugfs: ::core::ptr::null_mut(),
@@ -335,7 +337,19 @@ pub fn in_kunit_test() -> bool {
 #[cfg(CONFIG_RUST_KUNIT_SELFTEST)]
 #[kunit_tests(rust_kernel_kunit)]
 mod tests {
+    #![expect(clippy::assertions_on_constants, reason = "Testing failure behavior")]
+
     use super::*;
+
+    struct TestStruct;
+
+    impl TestStruct {
+        // This assert does not get replaced with kunit_assert, since this is not a #[test]
+        // function.
+        pub(crate) fn escaped_assert() {
+            assert!(false);
+        }
+    }
 
     #[test]
     fn rust_test_kunit_example_test() {
@@ -345,6 +359,24 @@ mod tests {
     #[test]
     fn rust_test_kunit_in_kunit_test() {
         assert!(in_kunit_test());
+    }
+
+    #[test]
+    #[should_panic]
+    fn rust_test_kunit_panic_in_kunit_test() {
+        panic!("This test should panic and pass");
+    }
+
+    #[test]
+    #[should_panic]
+    fn rust_test_assert_false_success_with_should_panic() {
+        assert!(false)
+    }
+
+    #[test]
+    #[should_panic]
+    fn rust_test_should_panic_with_escaped_assert() {
+        TestStruct::escaped_assert();
     }
 
     #[test]

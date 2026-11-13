@@ -169,8 +169,14 @@ And if we run it, the kernel log would look like::
 	    ok 1 test_f
 	ok 1 rust_kernel_mymod
 
+To test code paths that are expected to produce a Rust panic, the
+``#[should_panic]`` attribute can be used. When this attribute is used, tests
+that produce a panic (either with ``panic!`` or an ``assert!``) will pass.
+
 Like documentation tests, the ``assert!`` and ``assert_eq!`` macros are mapped
-back to KUnit and do not panic. Similarly, the
+back to KUnit and do not panic. The exception is tests marked with
+``#[should_panic]``, which use the standard Rust ``assert!``/``assert_eq!``
+macros so that failed assertions are handled by the panic logic. Similarly, the
 `? <https://doc.rust-lang.org/reference/expressions/operator-expr.html#the-question-mark-operator>`_
 operator is supported, i.e. the test functions may return either nothing (i.e.
 the unit type ``()``) or ``Result`` (i.e. any ``Result<T, E>``). For instance:
