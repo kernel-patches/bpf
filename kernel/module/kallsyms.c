@@ -406,6 +406,63 @@ int module_get_kallsym(unsigned int symnum, unsigned long *value, char *type,
 	return -ERANGE;
 }
 
+/**
+ * module_kallsyms_find_name - Find a module symbol by name or prefix
+ * @symnum: in: index to start at; out: index of the match. The index
+ *          counts the symbols of the searched modules in list order.
+ * @q: name query; if @q->modname is set, only that module is searched
+ * @value: set to the symbol address
+ * @name: set to the symbol name (KSYM_NAME_LEN bytes)
+ * @module_name: set to the module name (MODULE_NAME_LEN bytes)
+ *
+ * Undefined (SHN_UNDEF) symbols are skipped.
+ *
+ * Return: 0 on a match, or -ENOENT.
+ */
+int module_kallsyms_find_name(unsigned int *symnum,
+			      const struct kallsyms_name_query *q,
+			      unsigned long *value, char *name,
+			      char *module_name)
+{
+	unsigned int start = *symnum;
+	unsigned int sym_base = 0;
+	struct module *mod;
+
+	guard(rcu)();
+	list_for_each_entry_rcu(mod, &modules, list) {
+		struct mod_kallsyms *kallsyms;
+		unsigned int i = 0;
+
+		if (mod->state == MODULE_STATE_UNFORMED)
+			continue;
+		if (q->modname && strcmp(q->modname, mod->name))
+			continue;
+
+		kallsyms = rcu_dereference(mod->kallsyms);
+		if (start > sym_base)
+			i = start - sym_base;
+		for (; i < kallsyms->num_symtab; i++) {
+			const Elf_Sym *sym = &kallsyms->symtab[i];
+			const char *symname = kallsyms_symbol_name(kallsyms, i);
+
+			if (sym->st_shndx == SHN_UNDEF)
+				continue;
+			if (strncmp(symname, q->name, q->cmp_len))
+				continue;
+
+			*value = kallsyms_symbol_value(sym);
+			strscpy(name, symname, KSYM_NAME_LEN);
+			strscpy(module_name, mod->name, MODULE_NAME_LEN);
+			*symnum = sym_base + i;
+			return 0;
+		}
+		if (q->modname)
+			break;
+		sym_base += kallsyms->num_symtab;
+	}
+	return -ENOENT;
+}
+
 /* Given a module and name of symbol, find and return the symbol's value */
 static unsigned long __find_kallsyms_symbol_value(struct module *mod, const char *name)
 {
