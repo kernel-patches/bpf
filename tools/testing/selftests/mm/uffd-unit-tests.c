@@ -2484,6 +2484,20 @@ static void uffd_mmap_changing_test(uffd_global_test_opts_t *gopts, uffd_test_ar
 	uffd_test_pass();
 }
 
+static int set_pmd_pagesize_nr_pages(uffd_global_test_opts_t *gopts, const char **errmsg)
+{
+	uint64_t pmd_pagesize = read_pmd_pagesize();
+	if (!pmd_pagesize) {
+		if(errmsg)
+			*errmsg = "failed to retrieve pmd page size";
+		return -1;
+	}
+
+	gopts->nr_pages = (2 * pmd_pagesize) / gopts->page_size;
+
+	return 0;
+}
+
 static int prevent_hugepages(uffd_global_test_opts_t *gopts, const char **errmsg)
 {
 	/* This should be done before source area is populated */
@@ -2517,6 +2531,7 @@ struct uffd_test_case_ops uffd_move_test_case_ops = {
 };
 
 struct uffd_test_case_ops uffd_move_test_pmd_case_ops = {
+	.pre_alloc = set_pmd_pagesize_nr_pages,
 	.post_alloc = request_hugepages,
 };
 
