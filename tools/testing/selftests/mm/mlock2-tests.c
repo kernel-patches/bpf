@@ -66,7 +66,7 @@ static bool is_vmflag_set(unsigned long addr, const char *vmflag)
 	smaps = seek_to_smaps_entry(addr);
 	if (!smaps) {
 		ksft_print_msg("Unable to parse /proc/self/smaps\n");
-		goto out;
+		return false;
 	}
 
 	while (getline(&line, &size, smaps) > 0) {
@@ -103,7 +103,7 @@ static unsigned long get_value_for_name(unsigned long addr, const char *name)
 	smaps = seek_to_smaps_entry(addr);
 	if (!smaps) {
 		ksft_print_msg("Unable to parse /proc/self/smaps\n");
-		goto out;
+		return value;
 	}
 
 	while (getline(&line, &size, smaps) > 0) {
@@ -123,9 +123,8 @@ static unsigned long get_value_for_name(unsigned long addr, const char *name)
 	}
 
 out:
-	if (smaps)
-		fclose(smaps);
 	free(line);
+	fclose(smaps);
 	return value;
 }
 
