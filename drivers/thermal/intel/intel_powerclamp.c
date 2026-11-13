@@ -80,25 +80,22 @@ static unsigned int window_size;
 
 static int duration_set(const char *arg, const struct kernel_param *kp)
 {
-	int ret = 0;
+	int ret;
 	unsigned long new_duration;
 
 	ret = kstrtoul(arg, 10, &new_duration);
 	if (ret)
-		goto exit;
+		return ret;
 	if (new_duration > 25 || new_duration < 6) {
 		pr_err("Out of recommended range %lu, between 6-25ms\n",
 			new_duration);
-		ret = -EINVAL;
-		goto exit;
+		return -EINVAL;
 	}
 
-	mutex_lock(&powerclamp_lock);
+	guard(mutex)(&powerclamp_lock);
 	duration = new_duration * 1000;
-	mutex_unlock(&powerclamp_lock);
-exit:
 
-	return ret;
+	return 0;
 }
 
 static int duration_get(char *buf, const struct kernel_param *kp)
@@ -146,31 +143,25 @@ static bool check_invalid(const struct cpumask *mask, u8 idle)
 
 static int cpumask_set(const char *arg, const struct kernel_param *kp)
 {
-	cpumask_var_t new_mask;
+	cpumask_var_t new_mask __free(free_cpumask_var) = CPUMASK_VAR_NULL;
 	int ret;
 
-	mutex_lock(&powerclamp_lock);
+	guard(mutex)(&powerclamp_lock);
 
 	/* Can't set mask when cooling device is in use */
-	if (powerclamp_data.clamping) {
-		ret = -EAGAIN;
-		goto skip_cpumask_set;
-	}
+	if (powerclamp_data.clamping)
+		return -EAGAIN;
 
-	if (!alloc_cpumask_var(&new_mask, GFP_KERNEL)) {
-		ret = -ENOMEM;
-		goto skip_cpumask_set;
-	}
+	if (!alloc_cpumask_var(&new_mask, GFP_KERNEL))
+		return -ENOMEM;
 
 	ret = bitmap_parse(arg, strlen(arg), cpumask_bits(new_mask),
 			   nr_cpumask_bits);
 	if (ret)
-		goto free_cpumask_set;
+		return ret;
 
-	if (cpumask_empty(new_mask) || check_invalid(new_mask, max_idle)) {
-		ret = -EINVAL;
-		goto free_cpumask_set;
-	}
+	if (cpumask_empty(new_mask) || check_invalid(new_mask, max_idle))
+		return -EINVAL;
 
 	/*
 	 * When module parameters are passed from kernel command line
@@ -179,14 +170,7 @@ static int cpumask_set(const char *arg, const struct kernel_param *kp)
 	 * cpumask can be allocated and copied before here. Also
 	 * in this case this cpumask is used as the default mask.
 	 */
-	ret = allocate_copy_idle_injection_mask(new_mask);
-
-free_cpumask_set:
-	free_cpumask_var(new_mask);
-skip_cpumask_set:
-	mutex_unlock(&powerclamp_lock);
-
-	return ret;
+	return allocate_copy_idle_injection_mask(new_mask);
 }
 
 static int cpumask_get(char *buf, const struct kernel_param *kp)
@@ -264,25 +248,22 @@ static struct powerclamp_calibration_data cal_data[MAX_TARGET_RATIO];
 
 static int window_size_set(const char *arg, const struct kernel_param *kp)
 {
-	int ret = 0;
+	int ret;
 	unsigned long new_window_size;
 
 	ret = kstrtoul(arg, 10, &new_window_size);
 	if (ret)
-		goto exit_win;
+		return ret;
 	if (new_window_size > 10 || new_window_size < 2) {
 		pr_err("Out of recommended window size %lu, between 2-10\n",
 			new_window_size);
-		ret = -EINVAL;
-		goto exit_win;
+		return -EINVAL;
 	}
 
 	window_size = new_window_size;
 	smp_mb();
 
-exit_win:
-
-	return ret;
+	return 0;
 }
 
 static const struct kernel_param_ops window_size_ops = {
@@ -507,10 +488,9 @@ static void poll_pkg_cstate(struct work_struct *dummy)
 	msr_last = msr_now;
 	tsc_last = tsc_now;
 
-	mutex_lock(&powerclamp_lock);
+	guard(mutex)(&powerclamp_lock);
 	if (powerclamp_data.clamping)
 		schedule_delayed_work(&poll_pkg_cstate_work, HZ);
-	mutex_unlock(&powerclamp_lock);
 }
 
 static struct idle_inject_device *ii_dev;
@@ -634,9 +614,8 @@ static int powerclamp_get_max_state(struct thermal_cooling_device *cdev,
 static int powerclamp_get_cur_state(struct thermal_cooling_device *cdev,
 				 unsigned long *state)
 {
-	mutex_lock(&powerclamp_lock);
+	guard(mutex)(&powerclamp_lock);
 	*state = powerclamp_data.target_ratio;
-	mutex_unlock(&powerclamp_lock);
 
 	return 0;
 }
@@ -644,15 +623,15 @@ static int powerclamp_get_cur_state(struct thermal_cooling_device *cdev,
 static int powerclamp_set_cur_state(struct thermal_cooling_device *cdev,
 				 unsigned long new_target_ratio)
 {
-	int ret = 0;
+	int ret;
 
-	mutex_lock(&powerclamp_lock);
+	guard(mutex)(&powerclamp_lock);
 
 	new_target_ratio = clamp(new_target_ratio, 0UL,
 				(unsigned long) (max_idle - 1));
 
 	if (powerclamp_data.target_ratio == new_target_ratio)
-		goto exit_set;
+		return 0;
 
 	if (!powerclamp_data.target_ratio && new_target_ratio > 0) {
 		pr_info("Start idle injection to reduce power\n");
@@ -660,23 +639,21 @@ static int powerclamp_set_cur_state(struct thermal_cooling_device *cdev,
 		ret = start_power_clamp();
 		if (ret)
 			powerclamp_data.target_ratio = 0;
-		goto exit_set;
-	} else	if (powerclamp_data.target_ratio > 0 && new_target_ratio == 0) {
+		return ret;
+	}
+
+	if (powerclamp_data.target_ratio > 0 && new_target_ratio == 0) {
 		pr_info("Stop forced idle injection\n");
 		end_power_clamp();
 		powerclamp_data.target_ratio = 0;
-	} else	/* adjust currently running */ {
-		unsigned int runtime;
-
-		powerclamp_data.target_ratio = new_target_ratio;
-		runtime = get_run_time();
-		idle_inject_set_duration(ii_dev, runtime, duration);
+		return 0;
 	}
 
-exit_set:
-	mutex_unlock(&powerclamp_lock);
+	/* adjust currently running */
+	powerclamp_data.target_ratio = new_target_ratio;
+	idle_inject_set_duration(ii_dev, get_run_time(), duration);
 
-	return ret;
+	return 0;
 }
 
 /* bind to generic thermal layer as cooling device*/
