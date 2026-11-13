@@ -673,6 +673,81 @@ enum regmap_endian regmap_get_val_endian(struct device *dev,
 }
 EXPORT_SYMBOL_GPL(regmap_get_val_endian);
 
+/*
+ * Select the locking scheme for the map. The fast_io argument tells whether
+ * the map has to be usable from atomic context.
+ */
+static int regmap_set_lock(struct regmap *map, const struct regmap_config *config,
+			   bool fast_io, struct lock_class_key *lock_key,
+			   const char *lock_name)
+{
+	if (config->disable_locking) {
+		map->lock = map->unlock = regmap_lock_unlock_none;
+		map->can_sleep = config->can_sleep;
+		regmap_debugfs_disable(map);
+		return 0;
+	}
+
+	if (config->lock && config->unlock) {
+		map->lock = config->lock;
+		map->unlock = config->unlock;
+		map->lock_arg = config->lock_arg;
+		map->can_sleep = config->can_sleep;
+		return 0;
+	}
+
+	if (config->use_hwlock) {
+		map->hwlock = hwspin_lock_request_specific(config->hwlock_id);
+		if (!map->hwlock)
+			return -ENXIO;
+
+		switch (config->hwlock_mode) {
+		case HWLOCK_IRQSTATE:
+			map->lock = regmap_lock_hwlock_irqsave;
+			map->unlock = regmap_unlock_hwlock_irqrestore;
+			break;
+		case HWLOCK_IRQ:
+			map->lock = regmap_lock_hwlock_irq;
+			map->unlock = regmap_unlock_hwlock_irq;
+			break;
+		default:
+			map->lock = regmap_lock_hwlock;
+			map->unlock = regmap_unlock_hwlock;
+			break;
+		}
+
+		map->lock_arg = map;
+		return 0;
+	}
+
+	if (fast_io) {
+		if (config->use_raw_spinlock) {
+			raw_spin_lock_init(&map->raw_spinlock);
+			map->lock = regmap_lock_raw_spinlock;
+			map->unlock = regmap_unlock_raw_spinlock;
+			lockdep_set_class_and_name(&map->raw_spinlock,
+						   lock_key, lock_name);
+		} else {
+			spin_lock_init(&map->spinlock);
+			map->lock = regmap_lock_spinlock;
+			map->unlock = regmap_unlock_spinlock;
+			lockdep_set_class_and_name(&map->spinlock,
+						   lock_key, lock_name);
+		}
+	} else {
+		mutex_init(&map->mutex);
+		map->lock = regmap_lock_mutex;
+		map->unlock = regmap_unlock_mutex;
+		map->can_sleep = true;
+		lockdep_set_class_and_name(&map->mutex, lock_key, lock_name);
+	}
+
+	map->lock_arg = map;
+	map->lock_key = lock_key;
+
+	return 0;
+}
+
 struct regmap *__regmap_init(struct device *dev,
 			     const struct regmap_bus *bus,
 			     void *bus_context,
@@ -701,68 +776,13 @@ struct regmap *__regmap_init(struct device *dev,
 	if (ret)
 		goto err_map;
 
-	ret = -EINVAL; /* Later error paths rely on this */
-
 	fast_io = (bus && bus->fast_io) || config->fast_io;
 
-	if (config->disable_locking) {
-		map->lock = map->unlock = regmap_lock_unlock_none;
-		map->can_sleep = config->can_sleep;
-		regmap_debugfs_disable(map);
-	} else if (config->lock && config->unlock) {
-		map->lock = config->lock;
-		map->unlock = config->unlock;
-		map->lock_arg = config->lock_arg;
-		map->can_sleep = config->can_sleep;
-	} else if (config->use_hwlock) {
-		map->hwlock = hwspin_lock_request_specific(config->hwlock_id);
-		if (!map->hwlock) {
-			ret = -ENXIO;
-			goto err_name;
-		}
+	ret = regmap_set_lock(map, config, fast_io, lock_key, lock_name);
+	if (ret)
+		goto err_name;
 
-		switch (config->hwlock_mode) {
-		case HWLOCK_IRQSTATE:
-			map->lock = regmap_lock_hwlock_irqsave;
-			map->unlock = regmap_unlock_hwlock_irqrestore;
-			break;
-		case HWLOCK_IRQ:
-			map->lock = regmap_lock_hwlock_irq;
-			map->unlock = regmap_unlock_hwlock_irq;
-			break;
-		default:
-			map->lock = regmap_lock_hwlock;
-			map->unlock = regmap_unlock_hwlock;
-			break;
-		}
-
-		map->lock_arg = map;
-	} else {
-		if (fast_io) {
-			if (config->use_raw_spinlock) {
-				raw_spin_lock_init(&map->raw_spinlock);
-				map->lock = regmap_lock_raw_spinlock;
-				map->unlock = regmap_unlock_raw_spinlock;
-				lockdep_set_class_and_name(&map->raw_spinlock,
-							   lock_key, lock_name);
-			} else {
-				spin_lock_init(&map->spinlock);
-				map->lock = regmap_lock_spinlock;
-				map->unlock = regmap_unlock_spinlock;
-				lockdep_set_class_and_name(&map->spinlock,
-							   lock_key, lock_name);
-			}
-		} else {
-			mutex_init(&map->mutex);
-			map->lock = regmap_lock_mutex;
-			map->unlock = regmap_unlock_mutex;
-			map->can_sleep = true;
-			lockdep_set_class_and_name(&map->mutex,
-						   lock_key, lock_name);
-		}
-		map->lock_arg = map;
-		map->lock_key = lock_key;
-	}
+	ret = -EINVAL; /* Later error paths rely on this */
 
 	/*
 	 * When we write in fast-paths with regmap_bulk_write() don't allocate
