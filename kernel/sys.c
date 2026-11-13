@@ -220,8 +220,7 @@ static bool set_one_prio_perm(struct task_struct *p)
 {
 	const struct cred *cred = current_cred(), *pcred = __task_cred(p);
 
-	if (uid_eq(pcred->uid,  cred->euid) ||
-	    uid_eq(pcred->euid, cred->euid))
+	if (cred_ids_allow_sched(cred, pcred))
 		return true;
 	if (ns_capable(pcred->user_ns, CAP_SYS_NICE))
 		return true;
@@ -1717,12 +1716,7 @@ static int check_prlimit_permission(struct task_struct *task,
 		return 0;
 
 	tcred = __task_cred(task);
-	id_match = (uid_eq(cred->uid, tcred->euid) &&
-		    uid_eq(cred->uid, tcred->suid) &&
-		    uid_eq(cred->uid, tcred->uid)  &&
-		    gid_eq(cred->gid, tcred->egid) &&
-		    gid_eq(cred->gid, tcred->sgid) &&
-		    gid_eq(cred->gid, tcred->gid));
+	id_match = cred_ids_allow_control(cred, CRED_IDS_REAL, tcred);
 	if (!id_match && !ns_capable(tcred->user_ns, CAP_SYS_RESOURCE))
 		return -EPERM;
 
@@ -3035,24 +3029,22 @@ COMPAT_SYSCALL_DEFINE1(sysinfo, struct compat_sysinfo __user *, info)
 	do_sysinfo(&s);
 
 	/* Check to see if any memory value is too large for 32-bit and scale
-	 *  down if needed
+	 * down if needed.  Keep going until the values fit, not just until the
+	 * unit reaches a page.  The values halve each turn, so this ends.
 	 */
 	if (upper_32_bits(s.totalram) || upper_32_bits(s.totalswap)) {
-		int bitcount = 0;
-
-		while (s.mem_unit < PAGE_SIZE) {
+		while (s.mem_unit < PAGE_SIZE || upper_32_bits(s.totalram) ||
+		       upper_32_bits(s.totalswap)) {
 			s.mem_unit <<= 1;
-			bitcount++;
+			s.totalram >>= 1;
+			s.freeram >>= 1;
+			s.sharedram >>= 1;
+			s.bufferram >>= 1;
+			s.totalswap >>= 1;
+			s.freeswap >>= 1;
+			s.totalhigh >>= 1;
+			s.freehigh >>= 1;
 		}
-
-		s.totalram >>= bitcount;
-		s.freeram >>= bitcount;
-		s.sharedram >>= bitcount;
-		s.bufferram >>= bitcount;
-		s.totalswap >>= bitcount;
-		s.freeswap >>= bitcount;
-		s.totalhigh >>= bitcount;
-		s.freehigh >>= bitcount;
 	}
 
 	memset(&s_32, 0, sizeof(s_32));

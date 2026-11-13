@@ -10,6 +10,7 @@
 #include <linux/slab.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
+#include <linux/regulator/consumer.h>
 #include <linux/hrtimer.h>
 #include <linux/completion.h>
 #include <media/rc-core.h>
@@ -19,6 +20,7 @@
 
 struct pwm_ir {
 	struct pwm_device *pwm;
+	struct regulator *reg;
 	struct hrtimer timer;
 	struct completion tx_done;
 	struct pwm_state *state;
@@ -63,9 +65,15 @@ static int pwm_ir_tx_sleep(struct rc_dev *dev, unsigned int *txbuf,
 	struct pwm_ir *pwm_ir = dev->priv;
 	struct pwm_device *pwm = pwm_ir->pwm;
 	struct pwm_state state;
-	int i;
+	int i, ret;
 	ktime_t edge;
 	long delta;
+
+	if (pwm_ir->reg) {
+		ret = regulator_enable(pwm_ir->reg);
+		if (ret)
+			return ret;
+	}
 
 	pwm_init_state(pwm, &state);
 
@@ -87,6 +95,12 @@ static int pwm_ir_tx_sleep(struct rc_dev *dev, unsigned int *txbuf,
 	state.enabled = false;
 	pwm_apply_might_sleep(pwm, &state);
 
+	if (pwm_ir->reg) {
+		ret = regulator_disable(pwm_ir->reg);
+		if (ret)
+			return ret;
+	}
+
 	return count;
 }
 
@@ -96,6 +110,7 @@ static int pwm_ir_tx_atomic(struct rc_dev *dev, unsigned int *txbuf,
 	struct pwm_ir *pwm_ir = dev->priv;
 	struct pwm_device *pwm = pwm_ir->pwm;
 	struct pwm_state state;
+	int ret;
 
 	pwm_init_state(pwm, &state);
 
@@ -107,9 +122,21 @@ static int pwm_ir_tx_atomic(struct rc_dev *dev, unsigned int *txbuf,
 	pwm_ir->txbuf_index = 0;
 	pwm_ir->state = &state;
 
+	if (pwm_ir->reg) {
+		ret = regulator_enable(pwm_ir->reg);
+		if (ret)
+			return ret;
+	}
+
 	hrtimer_start(&pwm_ir->timer, 0, HRTIMER_MODE_REL);
 
 	wait_for_completion(&pwm_ir->tx_done);
+
+	if (pwm_ir->reg) {
+		ret = regulator_disable(pwm_ir->reg);
+		if (ret)
+			return ret;
+	}
 
 	return count;
 }
@@ -138,7 +165,7 @@ static enum hrtimer_restart pwm_ir_timer(struct hrtimer *timer)
 		hrtimer_add_expires_ns(timer, ns);
 
 		pwm_ir->txbuf_index++;
-	} while (hrtimer_expires_remaining(timer) > 0);
+	} while (hrtimer_get_expires(timer) < hrtimer_cb_get_time(timer));
 
 	return HRTIMER_RESTART;
 }
@@ -149,13 +176,21 @@ static int pwm_ir_probe(struct platform_device *pdev)
 	struct rc_dev *rcdev;
 	int rc;
 
-	pwm_ir = devm_kmalloc(&pdev->dev, sizeof(*pwm_ir), GFP_KERNEL);
+	pwm_ir = devm_kmalloc_obj(&pdev->dev, *pwm_ir);
 	if (!pwm_ir)
 		return -ENOMEM;
 
 	pwm_ir->pwm = devm_pwm_get(&pdev->dev, NULL);
 	if (IS_ERR(pwm_ir->pwm))
 		return PTR_ERR(pwm_ir->pwm);
+
+	pwm_ir->reg = devm_regulator_get_optional(&pdev->dev, "power");
+	if (IS_ERR(pwm_ir->reg)) {
+		if (PTR_ERR(pwm_ir->reg) != -ENODEV)
+			return PTR_ERR(pwm_ir->reg);
+
+		pwm_ir->reg = NULL;
+	}
 
 	pwm_ir->carrier = 38000;
 	pwm_ir->duty_cycle = 50;

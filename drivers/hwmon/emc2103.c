@@ -59,7 +59,7 @@ struct emc2103_data {
 	bool			valid;		/* registers are valid */
 	bool			fan_rpm_control;
 	int			temp_count;	/* num of temp sensors */
-	unsigned long		last_updated;	/* in jiffies */
+	u64			last_updated;	/* in jiffies */
 	struct temperature	temp[4];	/* internal + 3 external */
 	s8			temp_min[4];	/* no fractional part */
 	s8			temp_max[4];    /* no fractional part */
@@ -139,7 +139,7 @@ static struct emc2103_data *emc2103_update_device(struct device *dev)
 
 	mutex_lock(&data->update_lock);
 
-	if (time_after(jiffies, data->last_updated + HZ + HZ / 2)
+	if (time_after64(get_jiffies_64(), data->last_updated + HZ + HZ / 2)
 	    || !data->valid) {
 		int i;
 
@@ -162,7 +162,7 @@ static struct emc2103_data *emc2103_update_device(struct device *dev)
 			REG_FAN_TARGET_HI, REG_FAN_TARGET_LO);
 		read_fan_config_from_i2c(client);
 
-		data->last_updated = jiffies;
+		data->last_updated = get_jiffies_64();
 		data->valid = true;
 	}
 
@@ -564,8 +564,7 @@ emc2103_probe(struct i2c_client *client)
 	if (!i2c_check_functionality(client->adapter, I2C_FUNC_SMBUS_BYTE_DATA))
 		return -EIO;
 
-	data = devm_kzalloc(&client->dev, sizeof(struct emc2103_data),
-			    GFP_KERNEL);
+	data = devm_kzalloc_obj(&client->dev, struct emc2103_data);
 	if (!data)
 		return -ENOMEM;
 

@@ -41,8 +41,8 @@ Description:	(RW) Reports the current configuration of the QAT device.
 
 		Service combinations are permitted for all services except dcc.
 		On QAT GEN4 devices (qat_4xxx driver) a maximum of two services can be
-		combined and on QAT GEN6 devices (qat_6xxx driver ) a maximum of three
-		services can be combined.
+		combined. On QAT GEN5 devices (qat_420xx driver) and GEN6 devices
+		(qat_6xxx driver) a maximum of three services can be combined.
 		The order of services is not significant. For instance, sym;asym is
 		functionally equivalent to asym;sym.
 

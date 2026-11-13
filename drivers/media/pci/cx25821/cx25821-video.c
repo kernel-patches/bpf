@@ -656,10 +656,9 @@ void cx25821_video_unregister(struct cx25821_dev *dev, int chan_num)
 {
 	cx_clear(PCI_INT_MSK, 1);
 
-	if (video_is_registered(&dev->channels[chan_num].vdev)) {
+	if (video_is_registered(&dev->channels[chan_num].vdev))
 		video_unregister_device(&dev->channels[chan_num].vdev);
-		v4l2_ctrl_handler_free(&dev->channels[chan_num].hdl);
-	}
+	v4l2_ctrl_handler_free(&dev->channels[chan_num].hdl);
 }
 
 int cx25821_video_register(struct cx25821_dev *dev)

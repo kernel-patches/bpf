@@ -774,17 +774,18 @@ static u64 pf_profile_fair_ggtt(struct xe_gt *gt, unsigned int num_vfs)
 }
 
 /**
- * xe_gt_sriov_pf_config_set_fair_ggtt - Provision many VFs with fair GGTT.
+ * xe_gt_sriov_pf_config_set_fair_ggtt_locked - Provision many VFs with fair GGTT.
  * @gt: the &xe_gt (can't be media)
  * @vfid: starting VF identifier (can't be 0)
  * @num_vfs: number of VFs to provision
  *
+ * The caller must hold the master PF mutex.
  * This function can only be called on PF.
  *
  * Return: 0 on success or a negative error code on failure.
  */
-int xe_gt_sriov_pf_config_set_fair_ggtt(struct xe_gt *gt, unsigned int vfid,
-					unsigned int num_vfs)
+int xe_gt_sriov_pf_config_set_fair_ggtt_locked(struct xe_gt *gt, unsigned int vfid,
+					       unsigned int num_vfs)
 {
 	u64 profile = pf_profile_fair_ggtt(gt, num_vfs);
 	u64 fair;
@@ -793,7 +794,7 @@ int xe_gt_sriov_pf_config_set_fair_ggtt(struct xe_gt *gt, unsigned int vfid,
 	xe_gt_assert(gt, num_vfs);
 	xe_gt_assert(gt, xe_gt_is_main_type(gt));
 
-	guard(mutex)(xe_gt_sriov_pf_master_mutex(gt));
+	lockdep_assert_held(xe_gt_sriov_pf_master_mutex(gt));
 
 	fair = pf_estimate_fair_ggtt(gt, num_vfs);
 	if (!fair)
@@ -889,7 +890,7 @@ static int pf_set_spare_ctxs(struct xe_gt *gt, u32 spare)
 	xe_gt_assert(gt, IS_SRIOV_PF(gt_to_xe(gt)));
 	lockdep_assert_held(xe_gt_sriov_pf_master_mutex(gt));
 
-	if (spare > GUC_ID_MAX)
+	if (spare > xe_guc_id_mgr_max_shareable(&gt->uc.guc.submission_state.idm))
 		return -EINVAL;
 
 	if (spare && spare < pf_get_min_spare_ctxs(gt))
@@ -906,7 +907,7 @@ static int pf_reserve_ctxs(struct xe_gt *gt, u32 num)
 	struct xe_guc_id_mgr *idm = &gt->uc.guc.submission_state.idm;
 	unsigned int spare = pf_get_spare_ctxs(gt);
 
-	return xe_guc_id_mgr_reserve(idm, num, spare);
+	return xe_guc_id_mgr_reserve_shareable(idm, num, spare);
 }
 
 static void pf_release_ctxs(struct xe_gt *gt, u32 start, u32 num)
@@ -933,7 +934,7 @@ static int pf_provision_vf_ctxs(struct xe_gt *gt, unsigned int vfid, u32 num_ctx
 
 	xe_gt_assert(gt, vfid);
 
-	if (num_ctxs > GUC_ID_MAX)
+	if (num_ctxs > xe_guc_id_mgr_max_shareable(&gt->uc.guc.submission_state.idm))
 		return -EINVAL;
 
 	if (config->num_ctxs) {
@@ -1170,23 +1171,30 @@ int xe_gt_sriov_pf_config_bulk_set_ctxs(struct xe_gt *gt, unsigned int vfid,
 
 static u32 pf_profile_fair_ctxs(struct xe_gt *gt, unsigned int num_vfs)
 {
+	u32 max_shareable = xe_guc_id_mgr_max_shareable(&gt->uc.guc.submission_state.idm);
 	bool admin_only_pf = xe_sriov_pf_admin_only(gt_to_xe(gt));
 
 	if (admin_only_pf && num_vfs == 1)
-		return ALIGN_DOWN(GUC_ID_MAX, SZ_1K);
+		return ALIGN_DOWN(max_shareable, SZ_1K);
 
-	return rounddown_pow_of_two(GUC_ID_MAX / num_vfs);
+	return rounddown_pow_of_two(max_shareable / num_vfs);
 }
 
 static u32 pf_estimate_fair_ctxs(struct xe_gt *gt, unsigned int num_vfs)
 {
 	struct xe_guc_id_mgr *idm = &gt->uc.guc.submission_state.idm;
+	u32 max_shareable = xe_guc_id_mgr_max_shareable(idm);
 	u32 spare = pf_get_spare_ctxs(gt);
-	u32 fair = (idm->total - spare) / num_vfs;
+	u32 fair;
 	int ret;
 
+	if (max_shareable <= spare)
+		return 0;
+
+	fair = (max_shareable - spare) / num_vfs;
+
 	for (; fair; --fair) {
-		ret = xe_guc_id_mgr_reserve(idm, fair * num_vfs, spare);
+		ret = xe_guc_id_mgr_reserve_shareable(idm, fair * num_vfs, spare);
 		if (ret < 0)
 			continue;
 		xe_guc_id_mgr_release(idm, ret, fair * num_vfs);
@@ -1198,17 +1206,18 @@ static u32 pf_estimate_fair_ctxs(struct xe_gt *gt, unsigned int num_vfs)
 }
 
 /**
- * xe_gt_sriov_pf_config_set_fair_ctxs - Provision many VFs with fair GuC context IDs.
+ * xe_gt_sriov_pf_config_set_fair_ctxs_locked - Provision many VFs with fair GuC context IDs.
  * @gt: the &xe_gt
  * @vfid: starting VF identifier (can't be 0)
  * @num_vfs: number of VFs to provision (can't be 0)
  *
+ * The caller must hold the master PF mutex.
  * This function can only be called on PF.
  *
  * Return: 0 on success or a negative error code on failure.
  */
-int xe_gt_sriov_pf_config_set_fair_ctxs(struct xe_gt *gt, unsigned int vfid,
-					unsigned int num_vfs)
+int xe_gt_sriov_pf_config_set_fair_ctxs_locked(struct xe_gt *gt, unsigned int vfid,
+					       unsigned int num_vfs)
 {
 	u32 profile = pf_profile_fair_ctxs(gt, num_vfs);
 	u32 fair;
@@ -1216,7 +1225,7 @@ int xe_gt_sriov_pf_config_set_fair_ctxs(struct xe_gt *gt, unsigned int vfid,
 	xe_gt_assert(gt, vfid);
 	xe_gt_assert(gt, num_vfs);
 
-	guard(mutex)(xe_gt_sriov_pf_master_mutex(gt));
+	lockdep_assert_held(xe_gt_sriov_pf_master_mutex(gt));
 
 	fair = pf_estimate_fair_ctxs(gt, num_vfs);
 	if (!fair)
@@ -1480,17 +1489,18 @@ static u32 pf_estimate_fair_dbs(struct xe_gt *gt, unsigned int num_vfs)
 }
 
 /**
- * xe_gt_sriov_pf_config_set_fair_dbs - Provision many VFs with fair GuC doorbell  IDs.
+ * xe_gt_sriov_pf_config_set_fair_dbs_locked - Provision many VFs with fair GuC doorbell  IDs.
  * @gt: the &xe_gt
  * @vfid: starting VF identifier (can't be 0)
  * @num_vfs: number of VFs to provision (can't be 0)
  *
+ * The caller must hold the master PF mutex.
  * This function can only be called on PF.
  *
  * Return: 0 on success or a negative error code on failure.
  */
-int xe_gt_sriov_pf_config_set_fair_dbs(struct xe_gt *gt, unsigned int vfid,
-				       unsigned int num_vfs)
+int xe_gt_sriov_pf_config_set_fair_dbs_locked(struct xe_gt *gt, unsigned int vfid,
+					      unsigned int num_vfs)
 {
 	u32 profile = pf_profile_fair_dbs(gt, num_vfs);
 	u32 fair;
@@ -1498,7 +1508,7 @@ int xe_gt_sriov_pf_config_set_fair_dbs(struct xe_gt *gt, unsigned int vfid,
 	xe_gt_assert(gt, vfid);
 	xe_gt_assert(gt, num_vfs);
 
-	guard(mutex)(xe_gt_sriov_pf_master_mutex(gt));
+	lockdep_assert_held(xe_gt_sriov_pf_master_mutex(gt));
 
 	fair = pf_estimate_fair_dbs(gt, num_vfs);
 	if (!fair)
@@ -2055,17 +2065,18 @@ static bool pf_needs_provision_lmem(struct xe_gt *gt, unsigned int first_vf,
 }
 
 /**
- * xe_gt_sriov_pf_config_set_fair_lmem - Provision many VFs with fair LMEM.
+ * xe_gt_sriov_pf_config_set_fair_lmem_locked - Provision many VFs with fair LMEM.
  * @gt: the &xe_gt (can't be media)
  * @vfid: starting VF identifier (can't be 0)
  * @num_vfs: number of VFs to provision (can't be 0)
  *
+ * The caller must hold the master PF mutex.
  * This function can only be called on PF.
  *
  * Return: 0 on success or a negative error code on failure.
  */
-int xe_gt_sriov_pf_config_set_fair_lmem(struct xe_gt *gt, unsigned int vfid,
-					unsigned int num_vfs)
+int xe_gt_sriov_pf_config_set_fair_lmem_locked(struct xe_gt *gt, unsigned int vfid,
+					       unsigned int num_vfs)
 {
 	u64 profile;
 	u64 fair;
@@ -2077,7 +2088,7 @@ int xe_gt_sriov_pf_config_set_fair_lmem(struct xe_gt *gt, unsigned int vfid,
 	if (!xe_device_has_lmtt(gt_to_xe(gt)))
 		return 0;
 
-	guard(mutex)(xe_gt_sriov_pf_master_mutex(gt));
+	lockdep_assert_held(xe_gt_sriov_pf_master_mutex(gt));
 
 	if (!pf_needs_provision_lmem(gt, vfid, num_vfs))
 		return 0;
@@ -2096,17 +2107,18 @@ int xe_gt_sriov_pf_config_set_fair_lmem(struct xe_gt *gt, unsigned int vfid,
 }
 
 /**
- * xe_gt_sriov_pf_config_set_fair - Provision many VFs with fair resources.
+ * xe_gt_sriov_pf_config_set_fair_locked() - Provision many VFs with fair resources.
  * @gt: the &xe_gt
  * @vfid: starting VF identifier (can't be 0)
  * @num_vfs: number of VFs to provision (can't be 0)
  *
+ * The caller must hold the master PF mutex.
  * This function can only be called on PF.
  *
  * Return: 0 on success or a negative error code on failure.
  */
-int xe_gt_sriov_pf_config_set_fair(struct xe_gt *gt, unsigned int vfid,
-				   unsigned int num_vfs)
+int xe_gt_sriov_pf_config_set_fair_locked(struct xe_gt *gt, unsigned int vfid,
+					  unsigned int num_vfs)
 {
 	int result = 0;
 	int err;
@@ -2114,15 +2126,17 @@ int xe_gt_sriov_pf_config_set_fair(struct xe_gt *gt, unsigned int vfid,
 	xe_gt_assert(gt, vfid);
 	xe_gt_assert(gt, num_vfs);
 
+	lockdep_assert_held(xe_gt_sriov_pf_master_mutex(gt));
+
 	if (xe_gt_is_main_type(gt)) {
-		err = xe_gt_sriov_pf_config_set_fair_ggtt(gt, vfid, num_vfs);
+		err = xe_gt_sriov_pf_config_set_fair_ggtt_locked(gt, vfid, num_vfs);
 		result = result ?: err;
-		err = xe_gt_sriov_pf_config_set_fair_lmem(gt, vfid, num_vfs);
+		err = xe_gt_sriov_pf_config_set_fair_lmem_locked(gt, vfid, num_vfs);
 		result = result ?: err;
 	}
-	err = xe_gt_sriov_pf_config_set_fair_ctxs(gt, vfid, num_vfs);
+	err = xe_gt_sriov_pf_config_set_fair_ctxs_locked(gt, vfid, num_vfs);
 	result = result ?: err;
-	err = xe_gt_sriov_pf_config_set_fair_dbs(gt, vfid, num_vfs);
+	err = xe_gt_sriov_pf_config_set_fair_dbs_locked(gt, vfid, num_vfs);
 	result = result ?: err;
 
 	return result;
@@ -2821,22 +2835,6 @@ int xe_gt_sriov_pf_config_set_fair_sched_locked(struct xe_gt *gt, unsigned int n
 	}
 
 	return result;
-}
-
-/**
- * xe_gt_sriov_pf_config_set_fair_sched() - Provision PF and VFs with fair scheduling.
- * @gt: the &xe_gt
- * @num_vfs: number of VFs to provision (can't be 0)
- *
- * This function can only be called on PF.
- *
- * Return: 0 on success or a negative error code on failure.
- */
-int xe_gt_sriov_pf_config_set_fair_sched(struct xe_gt *gt, unsigned int num_vfs)
-{
-	guard(mutex)(xe_gt_sriov_pf_master_mutex(gt));
-
-	return xe_gt_sriov_pf_config_set_fair_sched_locked(gt, num_vfs);
 }
 
 static int pf_provision_threshold(struct xe_gt *gt, unsigned int vfid,

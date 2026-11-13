@@ -398,7 +398,7 @@ static int tb_xdp_properties_request(struct tb_ctl *ctl, u64 route,
 				goto err;
 			}
 
-			data = kcalloc(data_len, sizeof(u32), GFP_KERNEL);
+			data = kzalloc_objs(u32, data_len);
 			if (!data) {
 				ret = -ENOMEM;
 				goto err;
@@ -509,8 +509,8 @@ tb_xdp_properties_changed_response(struct tb_ctl *ctl, u64 route, u8 sequence)
 
 	memset(&res, 0, sizeof(res));
 	tb_xdp_fill_header(&res.hdr, route, sequence,
-			   PROPERTIES_CHANGED_RESPONSE, sizeof(res));
-	return __tb_xdomain_response(ctl, &res, sizeof(res),
+			   PROPERTIES_CHANGED_RESPONSE, sizeof(res.hdr));
+	return __tb_xdomain_response(ctl, &res.hdr, sizeof(res.hdr),
 				     TB_CFG_PKG_XDOMAIN_RESP);
 }
 
@@ -710,7 +710,7 @@ static void update_property_block(struct tb_xdomain *xd)
 		}
 
 		block_len = ret;
-		block = kcalloc(block_len, sizeof(*block), GFP_KERNEL);
+		block = kzalloc_objs(*block, block_len);
 		if (!block) {
 			tb_property_free_dir(dir);
 			goto out_unlock;

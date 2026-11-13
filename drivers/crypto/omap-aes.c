@@ -1060,7 +1060,7 @@ static int omap_aes_probe(struct platform_device *pdev)
 	if (IS_ERR(io_base))
 		return PTR_ERR(io_base);
 
-	dd = devm_kzalloc(dev, sizeof(struct omap_aes_dev), GFP_KERNEL);
+	dd = devm_kzalloc_obj(dev, struct omap_aes_dev);
 	if (dd == NULL) {
 		dev_err(dev, "unable to alloc data struct.\n");
 		goto err_data;
@@ -1199,9 +1199,11 @@ static void omap_aes_remove(struct platform_device *pdev)
 
 	omap_aes_unregister_algs(dd->pdata);
 
-	crypto_engine_unregister_aeads(dd->pdata->aead_algs_info->algs_list,
-				       dd->pdata->aead_algs_info->registered);
-	dd->pdata->aead_algs_info->registered = 0;
+	if (dd->pdata->aead_algs_info) {
+		crypto_engine_unregister_aeads(dd->pdata->aead_algs_info->algs_list,
+					       dd->pdata->aead_algs_info->registered);
+		dd->pdata->aead_algs_info->registered = 0;
+	}
 
 	crypto_engine_exit(dd->engine);
 

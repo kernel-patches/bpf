@@ -323,13 +323,6 @@ int ntfs_file_fsync(struct file *filp, loff_t start, loff_t end,
 		ret = __ntfs_write_inode(vi, 1);
 	write_inode_now(vi, !datasync);
 
-	/*
-	 * file_write_and_wait_range() already flushed this stream mapping.
-	 * A stream fsync does not need to flush sibling attribute mappings.
-	 */
-	if (stream)
-		goto sync_volume;
-
 	ctx = ntfs_attr_get_search_ctx(ni, NULL);
 	if (!ctx)
 		return -ENOMEM;
@@ -339,6 +332,9 @@ int ntfs_file_fsync(struct file *filp, loff_t start, loff_t end,
 		if (ctx->attr->type == AT_FILE_NAME) {
 			struct file_name_attr *fn = (struct file_name_attr *)((u8 *)ctx->attr +
 					le16_to_cpu(ctx->attr->data.resident.value_offset));
+
+			if (MREF_LE(fn->parent_directory) == ni->mft_no)
+				continue;
 
 			parent_vi = ntfs_iget(vi->i_sb, MREF_LE(fn->parent_directory));
 			if (IS_ERR(parent_vi))
@@ -409,7 +405,6 @@ int ntfs_file_fsync(struct file *filp, loff_t start, loff_t end,
 	if (err && !ret)
 		ret = err;
 
-sync_volume:
 	write_inode_now(vol->mftbmp_ino, 1);
 	down_write(&vol->lcnbmp_lock);
 	write_inode_now(vol->lcnbmp_ino, 1);
@@ -686,12 +681,12 @@ loff_t ntfs_file_llseek(struct file *file, loff_t offset, int whence)
 	switch (whence) {
 	case SEEK_HOLE:
 		inode_lock_shared(inode);
-		offset = iomap_seek_hole(inode, offset, &ntfs_seek_iomap_ops);
+		offset = iomap_seek_hole(inode, offset, ntfs_seek_iomap_next);
 		inode_unlock_shared(inode);
 		break;
 	case SEEK_DATA:
 		inode_lock_shared(inode);
-		offset = iomap_seek_data(inode, offset, &ntfs_seek_iomap_ops);
+		offset = iomap_seek_data(inode, offset, ntfs_seek_iomap_next);
 		inode_unlock_shared(inode);
 		break;
 	default:
@@ -728,7 +723,7 @@ ssize_t ntfs_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 		}
 
 		file_accessed(iocb->ki_filp);
-		ret = iomap_dio_rw(iocb, to, &ntfs_read_iomap_ops, NULL, 0,
+		ret = iomap_dio_rw(iocb, to, ntfs_read_iomap_next, NULL, 0,
 				NULL, 0);
 	} else {
 		ret = generic_file_read_iter(iocb, to);
@@ -770,7 +765,7 @@ static ssize_t ntfs_dio_write_iter(struct kiocb *iocb, struct iov_iter *from)
 {
 	ssize_t ret;
 
-	ret = iomap_dio_rw(iocb, from, &ntfs_dio_iomap_ops,
+	ret = iomap_dio_rw(iocb, from, ntfs_dio_iomap_next,
 			&ntfs_write_dio_ops, 0, NULL, 0);
 	if (ret == -ENOTBLK)
 		ret = 0;
@@ -798,7 +793,7 @@ static ssize_t ntfs_dio_write_iter(struct kiocb *iocb, struct iov_iter *from)
 		inode_dio_wait(file_inode(iocb->ki_filp));
 
 		written = iomap_file_buffered_write(iocb, from,
-				&ntfs_write_iomap_ops, &ntfs_iomap_folio_ops,
+				ntfs_write_iomap_next, &ntfs_iomap_folio_ops,
 				NULL);
 		if (written < 0) {
 			ret = written;
@@ -930,7 +925,7 @@ ssize_t ntfs_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	if (NInoNonResident(ni) && iocb->ki_flags & IOCB_DIRECT)
 		ret = ntfs_dio_write_iter(iocb, from);
 	else
-		ret = iomap_file_buffered_write(iocb, from, &ntfs_write_iomap_ops,
+		ret = iomap_file_buffered_write(iocb, from, ntfs_write_iomap_next,
 				&ntfs_iomap_folio_ops, NULL);
 out:
 	if (ret < 0 && ret != -EIOCBQUEUED) {
@@ -1017,7 +1012,7 @@ static vm_fault_t ntfs_filemap_page_mkwrite(struct vm_fault *vmf)
 	 * exclusively while invalidating pagecache and changing extents.
 	 */
 	filemap_invalidate_lock_shared(mapping);
-	ret = iomap_page_mkwrite(vmf, &ntfs_page_mkwrite_iomap_ops, NULL);
+	ret = iomap_page_mkwrite(vmf, ntfs_page_mkwrite_iomap_next, NULL);
 	filemap_invalidate_unlock_shared(mapping);
 	sb_end_pagefault(inode->i_sb);
 	return ret;
@@ -1072,7 +1067,7 @@ int ntfs_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 	if (NInoWofCompressed(NTFS_I(inode)))
 		return -EOPNOTSUPP;
 
-	return iomap_fiemap(inode, fieinfo, start, len, &ntfs_read_iomap_ops);
+	return iomap_fiemap(inode, fieinfo, start, len, ntfs_read_iomap_next);
 }
 
 static const char *ntfs_get_link(struct dentry *dentry, struct inode *inode,
@@ -1322,7 +1317,7 @@ static int ntfs_punch_hole(struct ntfs_inode *ni, int mode, loff_t offset,
 				   ntfs_cluster_to_bytes(vol, start_vcn + 1),
 				   end_offset);
 			err = iomap_zero_range(vi, offset, to - offset,
-					       NULL, &ntfs_seek_iomap_ops,
+					       NULL, ntfs_seek_iomap_next,
 					       &ntfs_iomap_folio_ops, NULL);
 			if (err < 0)
 				goto out;
@@ -1338,7 +1333,7 @@ static int ntfs_punch_hole(struct ntfs_inode *ni, int mode, loff_t offset,
 		from = ntfs_cluster_to_bytes(vol, end_vcn - 1);
 		if (from < ni->initialized_size) {
 			err = iomap_zero_range(vi, from, end_offset - from,
-					       NULL, &ntfs_seek_iomap_ops,
+					       NULL, ntfs_seek_iomap_next,
 					       &ntfs_iomap_folio_ops, NULL);
 			if (err < 0)
 				goto out;

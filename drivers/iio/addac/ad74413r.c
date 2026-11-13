@@ -312,7 +312,7 @@ static int ad74413r_gpio_set_multiple(struct gpio_chip *chip,
 			return ret;
 
 		real_mask |= BIT(real_offset);
-		if (*bits & offset)
+		if (test_bit(offset, bits))
 			real_bits |= BIT(real_offset);
 	}
 
@@ -798,8 +798,9 @@ static irqreturn_t ad74413r_trigger_handler(int irq, void *p)
 	for (i = 0; i < st->adc_active_channels; i++)
 		ad74413r_crc_check(st, &rx_buf[i * AD74413R_FRAME_SIZE]);
 
-	iio_push_to_buffers_with_timestamp(indio_dev, &st->adc_samples_buf,
-					   iio_get_time_ns(indio_dev));
+	iio_push_to_buffers_with_ts(indio_dev, &st->adc_samples_buf,
+				    sizeof(st->adc_samples_buf),
+				    iio_get_time_ns(indio_dev));
 
 out:
 	iio_trigger_notify_done(indio_dev->trig);
@@ -1269,8 +1270,8 @@ static int ad74413r_setup_channels(struct iio_dev *indio_dev)
 	unsigned int i, num_chans, chan_i;
 	int ret;
 
-	channels = devm_kcalloc(st->dev, sizeof(*channels),
-				indio_dev->num_channels, GFP_KERNEL);
+	channels = devm_kzalloc_objs(st->dev, *channels,
+				     indio_dev->num_channels);
 	if (!channels)
 		return -ENOMEM;
 

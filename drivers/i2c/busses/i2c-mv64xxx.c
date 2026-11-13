@@ -963,9 +963,18 @@ static int
 mv64xxx_i2c_runtime_resume(struct device *dev)
 {
 	struct mv64xxx_i2c_data *drv_data = dev_get_drvdata(dev);
+	int ret;
 
-	clk_prepare_enable(drv_data->clk);
-	clk_prepare_enable(drv_data->reg_clk);
+	ret = clk_prepare_enable(drv_data->clk);
+	if (ret)
+		return ret;
+
+	ret = clk_prepare_enable(drv_data->reg_clk);
+	if (ret) {
+		clk_disable_unprepare(drv_data->clk);
+		return ret;
+	}
+
 	reset_control_reset(drv_data->rstc);
 
 	mv64xxx_i2c_hw_init(drv_data);
@@ -983,8 +992,7 @@ mv64xxx_i2c_probe(struct platform_device *pd)
 	if ((!pdata && !pd->dev.of_node))
 		return -ENODEV;
 
-	drv_data = devm_kzalloc(&pd->dev, sizeof(struct mv64xxx_i2c_data),
-				GFP_KERNEL);
+	drv_data = devm_kzalloc_obj(&pd->dev, struct mv64xxx_i2c_data);
 	if (!drv_data)
 		return -ENOMEM;
 

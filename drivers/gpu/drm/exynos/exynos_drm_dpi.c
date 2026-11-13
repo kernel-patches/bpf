@@ -56,7 +56,7 @@ static const struct drm_connector_funcs exynos_dpi_connector_funcs = {
 	.detect = exynos_dpi_detect,
 	.fill_modes = drm_helper_probe_single_connector_modes,
 	.destroy = exynos_dpi_connector_destroy,
-	.reset = drm_atomic_helper_connector_reset,
+	.atomic_create_state = drm_atomic_helper_connector_create_state,
 	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
 	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
 };
@@ -173,7 +173,7 @@ static int exynos_dpi_parse_dt(struct exynos_dpi *ctx)
 
 		of_node_put(np);
 
-		vm = devm_kzalloc(dev, sizeof(*ctx->vm), GFP_KERNEL);
+		vm = devm_kzalloc_obj(dev, *ctx->vm);
 		if (!vm)
 			return -ENOMEM;
 
@@ -227,7 +227,7 @@ struct drm_encoder *exynos_dpi_probe(struct device *dev)
 	struct exynos_dpi *ctx;
 	int ret;
 
-	ctx = devm_kzalloc(dev, sizeof(*ctx), GFP_KERNEL);
+	ctx = devm_kzalloc_obj(dev, *ctx);
 	if (!ctx)
 		return ERR_PTR(-ENOMEM);
 

@@ -61,7 +61,7 @@ static struct rc_map_table beelink_gs1_table[] = {
 static struct rc_map_list beelink_gs1_map = {
 	.map = {
 		.scan     = beelink_gs1_table,
-		.size     = ARRAY_SIZE(beelink_gs1_table),
+		.entries  = ARRAY_SIZE(beelink_gs1_table),
 		.rc_proto = RC_PROTO_NEC,
 		.name     = RC_MAP_BEELINK_GS1,
 	}

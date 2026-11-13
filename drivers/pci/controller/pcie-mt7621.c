@@ -205,7 +205,7 @@ static int mt7621_pcie_parse_port(struct mt7621_pcie *pcie,
 	char name[11];
 	int err;
 
-	port = devm_kzalloc(dev, sizeof(*port), GFP_KERNEL);
+	port = devm_kzalloc_obj(dev, *port);
 	if (!port)
 		return -ENOMEM;
 
@@ -361,6 +361,7 @@ static int mt7621_pcie_init_ports(struct mt7621_pcie *pcie)
 		err = mt7621_pcie_init_port(port);
 		if (err) {
 			dev_err(dev, "initializing port %d failed\n", slot);
+			reset_control_put(port->pcie_rst);
 			list_del(&port->list);
 		}
 	}

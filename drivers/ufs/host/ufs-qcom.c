@@ -10,6 +10,7 @@
 #include <linux/devfreq.h>
 #include <linux/gpio/consumer.h>
 #include <linux/interconnect.h>
+#include <linux/interrupt.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/phy/phy.h>
@@ -1608,7 +1609,7 @@ static int ufs_qcom_init(struct ufs_hba *hba)
 	struct ufs_clk_info *clki;
 	const struct ufs_qcom_drvdata *drvdata = of_device_get_match_data(hba->dev);
 
-	host = devm_kzalloc(dev, sizeof(*host), GFP_KERNEL);
+	host = devm_kzalloc_obj(dev, *host);
 	if (!host)
 		return -ENOMEM;
 
@@ -1713,7 +1714,7 @@ static int ufs_qcom_fw_managed_init(struct ufs_hba *hba)
 	struct ufs_qcom_host *host;
 	int err;
 
-	host = devm_kzalloc(dev, sizeof(*host), GFP_KERNEL);
+	host = devm_kzalloc_obj(dev, *host);
 	if (!host)
 		return -ENOMEM;
 
@@ -2413,7 +2414,9 @@ static void ufs_qcom_write_msi_msg(struct msi_desc *desc, struct msi_msg *msg)
 {
 	struct device *dev = msi_desc_to_dev(desc);
 	struct ufs_hba *hba = dev_get_drvdata(dev);
+	struct ufs_qcom_host *host = ufshcd_get_variant(hba);
 
+	host->esi_msg = *msg;
 	ufshcd_mcq_config_esi(hba, msg);
 }
 
@@ -2441,8 +2444,10 @@ static int ufs_qcom_config_esi(struct ufs_hba *hba)
 	struct ufs_qcom_irq *qi;
 	int nr_irqs, ret;
 
-	if (host->esi_enabled)
-		return 0;
+	if (host->esi_enabled) {
+		ufshcd_mcq_config_esi(hba, &host->esi_msg);
+		goto enable;
+	}
 
 	/*
 	 * 1. We only handle CQs as of now.
@@ -2457,7 +2462,7 @@ static int ufs_qcom_config_esi(struct ufs_hba *hba)
 		return ret; /* Continue without ESI */
 	}
 
-	qi = devm_kcalloc(hba->dev, nr_irqs, sizeof(*qi), GFP_KERNEL);
+	qi = devm_kzalloc_objs(hba->dev, *qi, nr_irqs);
 	if (!qi) {
 		platform_device_msi_free_irqs_all(hba->dev);
 		return -ENOMEM;
@@ -2480,12 +2485,14 @@ static int ufs_qcom_config_esi(struct ufs_hba *hba)
 		}
 	}
 
+	host->esi_enabled = true;
+
+enable:
 	if (host->hw_ver.major >= 6) {
 		ufshcd_rmwl(hba, ESI_VEC_MASK, FIELD_PREP(ESI_VEC_MASK, MAX_ESI_VEC - 1),
 			    REG_UFS_CFG3);
 	}
 	ufshcd_mcq_enable_esi(hba);
-	host->esi_enabled = true;
 	return 0;
 }
 

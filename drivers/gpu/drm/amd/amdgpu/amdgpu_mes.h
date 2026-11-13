@@ -154,7 +154,7 @@ struct amdgpu_mes {
 	void				*event_log_cpu_addr;
 
 	/* MES firmware debug extension ("mes_dbgext") log buffer */
-	uint32_t			dbgext_log_size;	/* per-XCC region size */
+	uint32_t			dbgext_log_size;	/* per-region size */
 	uint64_t			dbgext_log_options;
 	struct amdgpu_bo		*dbgext_log_gpu_obj;
 	uint64_t			dbgext_log_gpu_addr;
@@ -162,10 +162,21 @@ struct amdgpu_mes {
 	bool				dbgext_use_irq;
 
 	/*
-	 * Number of per-XCC log regions packed back-to-back in the buffer above;
-	 * each is dbgext_log_size bytes.  1 on single-XCC ASICs (gfx11/gfx12).
+	 * The buffer above holds dbgext_num_xcc * dbgext_num_pipes back-to-back
+	 * log regions of dbgext_log_size bytes, one per (xcc, MES pipe), at
+	 * index xcc * dbgext_num_pipes + pipe.  dbgext_num_pipes is 2 under
+	 * unified MES (scheduler + KIQ pipe each run firmware), else 1.
 	 */
 	uint32_t			dbgext_num_xcc;
+	uint32_t			dbgext_num_pipes;
+
+	/*
+	 * One bit per (xcc, pipe) region, at xcc * dbgext_num_pipes + pipe.
+	 * Cleared while that XCC's MES is reset so the drain skips a region
+	 * whose zone header is being rebuilt.  dbgext_active stays set for
+	 * the whole device while selected XCCs restart.
+	 */
+	DECLARE_BITMAP(dbgext_armed_regions, AMDGPU_MAX_MES_INST_PIPES);
 
 	/* armed: FW attached + reader/irq running */
 	bool					dbgext_active;
@@ -173,6 +184,10 @@ struct amdgpu_mes {
 	struct work_struct		dbgext_work;
 	struct task_struct		*dbgext_reader;		/* polling fallback */
 	struct mutex			dbgext_lock;		/* serializes runtime start/stop */
+	/* serializes region drain vs reseed */
+	struct mutex			dbgext_drain_lock;
+	/* publishes use_irq to the IH path */
+	spinlock_t			dbgext_notify_lock;
 
 	/* runtime-requested size (KB); 0 = follow module param */
 	uint32_t			dbgext_runtime_kb;
@@ -187,9 +202,9 @@ struct amdgpu_mes {
 
 	int				hung_queue_db_array_size;
 	int				hung_queue_hqd_info_offset;
-	struct amdgpu_bo		*hung_queue_db_array_gpu_obj[AMDGPU_MAX_MES_INST_PIPES];
-	uint64_t			hung_queue_db_array_gpu_addr[AMDGPU_MAX_MES_INST_PIPES];
-	void				*hung_queue_db_array_cpu_addr[AMDGPU_MAX_MES_INST_PIPES];
+	struct amdgpu_bo		*hung_queue_db_array_gpu_obj;
+	uint64_t			hung_queue_db_array_gpu_addr;
+	void				*hung_queue_db_array_cpu_addr;
 
 	/* cooperative dispatch */
 	bool                enable_coop_mode;
@@ -405,6 +420,7 @@ struct mes_misc_op_input {
 		struct {
 			uint32_t                  reg_offset;
 			uint64_t                  buffer_addr;
+			bool                      read64_bits;
 		} read_reg;
 
 		struct {
@@ -432,6 +448,7 @@ struct mes_misc_op_input {
 			} flags;
 			uint32_t spi_gdbg_per_vmid_cntl;
 			uint32_t tcp_watch_cntl[4];
+			uint64_t watch_addresses[4];
 			uint32_t trap_en;
 		} set_shader_debugger;
 
@@ -453,6 +470,7 @@ struct mes_misc_op_input {
 		struct {
 			uint64_t log_buffer_mc_addr;
 			uint64_t log_options;
+			uint32_t pipe;
 		} setup_mes_dbgext;
 	};
 };
@@ -485,6 +503,13 @@ struct amdgpu_mes_funcs {
 	 * the atomic irq .set callback.
 	 */
 	int (*enable_dbgext_irq)(struct amdgpu_mes *mes, bool enable);
+
+	/*
+	 * Per-XCC variant used when one MES instance restarts.
+	 * xcc_id is the logical XCC.
+	 */
+	int (*enable_dbgext_irq_xcc)(struct amdgpu_mes *mes, bool enable,
+				     u32 xcc_id);
 
 	int (*reset_hw_queue)(struct amdgpu_mes *mes,
 			      struct mes_reset_queue_input *input);
@@ -558,6 +583,15 @@ void amdgpu_mes_dbgext_stop(struct amdgpu_device *adev);
 void amdgpu_mes_dbgext_notify(struct amdgpu_device *adev, u32 context_data);
 
 /*
+ * Drop or restore dbgext for one logical XCC without tearing down the
+ * device-wide reader or the other XCCs' regions.  Disarm before that XCC's
+ * MES is reset; rearm after both MES pipes on the XCC can accept API packets
+ * again.
+ */
+void amdgpu_mes_dbgext_disarm_xcc(struct amdgpu_device *adev, u32 xcc_id);
+int amdgpu_mes_dbgext_rearm_xcc(struct amdgpu_device *adev, u32 xcc_id);
+
+/*
  * MES host-interrupt context dword (IH src_data[0]), same overlay as KMD
  * IRQMGR_INTERRUPT_CONTEXTDATA_MES and firmware MES_INT_CONTEXT_DATA:
  *   bits 25:0  payload (doorbell / reserved)
@@ -609,6 +643,8 @@ int amdgpu_mes_detect_and_reset_hung_queues(struct amdgpu_device *adev,
 
 uint32_t amdgpu_mes_rreg(struct amdgpu_device *adev, uint32_t reg,
 			 uint32_t xcc_id);
+int amdgpu_mes_rreg64(struct amdgpu_device *adev, uint32_t reg,
+		      uint32_t xcc_id, uint64_t *val);
 int amdgpu_mes_wreg(struct amdgpu_device *adev,
 		    uint32_t reg, uint32_t val, uint32_t xcc_id);
 int amdgpu_mes_reg_write_reg_wait(struct amdgpu_device *adev,
@@ -619,6 +655,7 @@ int amdgpu_mes_set_shader_debugger(struct amdgpu_device *adev,
 				uint64_t process_context_addr,
 				uint32_t spi_gdbg_per_vmid_cntl,
 				const uint32_t *tcp_watch_cntl,
+				const uint64_t *watch_addresses,
 				uint32_t flags,
 				bool trap_en,
 				uint32_t xcc_id);

@@ -444,6 +444,8 @@ int amdgpu_gmc_ras_sw_init(struct amdgpu_device *adev);
 int amdgpu_gmc_allocate_vm_inv_eng(struct amdgpu_device *adev);
 void amdgpu_gmc_flush_gpu_tlb(struct amdgpu_device *adev, uint32_t vmid,
 			      uint32_t vmhub, uint32_t flush_type);
+void amdgpu_gmc_bind_vmid(struct amdgpu_device *adev, unsigned int vmhub,
+			  unsigned int vmid, uint64_t pd_addr);
 int amdgpu_gmc_flush_gpu_tlb_pasid(struct amdgpu_device *adev, u16 pasid,
 				   u32 flush_type, bool all_hub, u32 inst);
 int amdgpu_gmc_flush_gpu_tlb_pasid_xccs(struct amdgpu_device *adev, u16 pasid,
@@ -484,6 +486,10 @@ enum amdgpu_memory_partition
 amdgpu_gmc_get_memory_partition(struct amdgpu_device *adev, u32 *supp_modes);
 enum amdgpu_memory_partition
 amdgpu_gmc_query_memory_partition(struct amdgpu_device *adev);
+void amdgpu_gmc_set_requested_nps_mode(struct amdgpu_device *adev,
+				       enum amdgpu_memory_partition mode);
+enum amdgpu_memory_partition
+amdgpu_gmc_get_requested_nps_mode(struct amdgpu_device *adev);
 int amdgpu_gmc_init_mem_ranges(struct amdgpu_device *adev);
 void amdgpu_gmc_init_sw_mem_ranges(struct amdgpu_device *adev,
 				   struct amdgpu_mem_partition_info *mem_ranges);

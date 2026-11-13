@@ -43,7 +43,7 @@ static struct rc_map_table hisi_poplar_keymap[] = {
 static struct rc_map_list hisi_poplar_map = {
 	.map = {
 		.scan	  = hisi_poplar_keymap,
-		.size	  = ARRAY_SIZE(hisi_poplar_keymap),
+		.entries  = ARRAY_SIZE(hisi_poplar_keymap),
 		.rc_proto = RC_PROTO_NEC,
 		.name	  = RC_MAP_HISI_POPLAR,
 	}

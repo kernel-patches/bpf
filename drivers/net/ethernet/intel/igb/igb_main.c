@@ -8,7 +8,6 @@
 #include <linux/init.h>
 #include <linux/bitops.h>
 #include <linux/vmalloc.h>
-#include <linux/pagemap.h>
 #include <linux/netdevice.h>
 #include <linux/ipv6.h>
 #include <linux/slab.h>
@@ -4102,8 +4101,7 @@ static int igb_sw_init(struct igb_adapter *adapter)
 	igb_init_queue_configuration(adapter);
 
 	/* Setup and initialize a copy of the hw vlan table array */
-	adapter->shadow_vfta = kcalloc(E1000_VLAN_FILTER_TBL_SIZE, sizeof(u32),
-				       GFP_KERNEL);
+	adapter->shadow_vfta = kzalloc_objs(u32, E1000_VLAN_FILTER_TBL_SIZE);
 	if (!adapter->shadow_vfta)
 		return -ENOMEM;
 

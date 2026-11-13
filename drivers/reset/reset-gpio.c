@@ -57,7 +57,7 @@ static int reset_gpio_probe(struct auxiliary_device *adev,
 	struct device *dev = &adev->dev;
 	struct reset_gpio_priv *priv;
 
-	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
+	priv = devm_kzalloc_obj(dev, *priv);
 	if (!priv)
 		return -ENOMEM;
 
@@ -67,6 +67,7 @@ static int reset_gpio_probe(struct auxiliary_device *adev,
 				     "Could not get reset gpios\n");
 
 	priv->rc.ops = &reset_gpio_ops;
+	priv->rc.can_sleep = true;
 	priv->rc.owner = THIS_MODULE;
 	priv->rc.dev = dev;
 

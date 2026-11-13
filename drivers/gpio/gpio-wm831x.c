@@ -267,8 +267,7 @@ static int wm831x_gpio_probe(struct platform_device *pdev)
 
 	device_set_node(&pdev->dev, dev_fwnode(pdev->dev.parent));
 
-	wm831x_gpio = devm_kzalloc(&pdev->dev, sizeof(*wm831x_gpio),
-				   GFP_KERNEL);
+	wm831x_gpio = devm_kzalloc_obj(&pdev->dev, *wm831x_gpio);
 	if (wm831x_gpio == NULL)
 		return -ENOMEM;
 
@@ -288,18 +287,7 @@ static struct platform_driver wm831x_gpio_driver = {
 	.driver.name	= "wm831x-gpio",
 	.probe		= wm831x_gpio_probe,
 };
-
-static int __init wm831x_gpio_init(void)
-{
-	return platform_driver_register(&wm831x_gpio_driver);
-}
-subsys_initcall(wm831x_gpio_init);
-
-static void __exit wm831x_gpio_exit(void)
-{
-	platform_driver_unregister(&wm831x_gpio_driver);
-}
-module_exit(wm831x_gpio_exit);
+subsys_platform_driver(wm831x_gpio_driver);
 
 MODULE_AUTHOR("Mark Brown <broonie@opensource.wolfsonmicro.com>");
 MODULE_DESCRIPTION("GPIO interface for WM831x PMICs");

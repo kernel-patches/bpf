@@ -10,6 +10,7 @@
 #include <linux/bitfield.h>
 #include <linux/clk.h>
 #include <linux/delay.h>
+#include <linux/interrupt.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
@@ -649,8 +650,7 @@ static void ufs_mtk_init_boost_crypt(struct ufs_hba *hba)
 	struct regulator *reg;
 	u32 volt;
 
-	host->crypt = devm_kzalloc(dev, sizeof(*(host->crypt)),
-				   GFP_KERNEL);
+	host->crypt = devm_kzalloc_obj(dev, *(host->crypt));
 	if (!host->crypt)
 		goto disable_caps;
 
@@ -1234,7 +1234,7 @@ static int ufs_mtk_init(struct ufs_hba *hba)
 	int err = 0;
 	struct arm_smccc_res res;
 
-	host = devm_kzalloc(dev, sizeof(*host), GFP_KERNEL);
+	host = devm_kzalloc_obj(dev, *host);
 	if (!host) {
 		err = -ENOMEM;
 		dev_info(dev, "%s: no memory for mtk ufs host\n", __func__);

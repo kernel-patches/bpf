@@ -16,7 +16,7 @@
 #include <linux/i2c.h>
 #include <linux/hwmon.h>
 #include <linux/hwmon-sysfs.h>
-#include <linux/jiffies.h>
+#include <linux/ktime.h>
 
 /* Here are names of the chip's registers (a.k.a. commands) */
 enum ltc4215_cmd {
@@ -34,7 +34,7 @@ struct ltc4215_data {
 
 	struct mutex update_lock;
 	bool valid;
-	unsigned long last_updated; /* in jiffies */
+	ktime_t last_updated;
 
 	/* Registers */
 	u8 regs[7];
@@ -50,7 +50,8 @@ static struct ltc4215_data *ltc4215_update_device(struct device *dev)
 	mutex_lock(&data->update_lock);
 
 	/* The chip's A/D updates 10 times per second */
-	if (time_after(jiffies, data->last_updated + HZ / 10) || !data->valid) {
+	if (ktime_after(ktime_get(), ktime_add_ms(data->last_updated, 100)) ||
+	    !data->valid) {
 
 		dev_dbg(&client->dev, "Starting ltc4215 update\n");
 
@@ -63,7 +64,7 @@ static struct ltc4215_data *ltc4215_update_device(struct device *dev)
 				data->regs[i] = val;
 		}
 
-		data->last_updated = jiffies;
+		data->last_updated = ktime_get();
 		data->valid = true;
 	}
 
@@ -228,7 +229,7 @@ static int ltc4215_probe(struct i2c_client *client)
 	if (!i2c_check_functionality(adapter, I2C_FUNC_SMBUS_BYTE_DATA))
 		return -ENODEV;
 
-	data = devm_kzalloc(dev, sizeof(*data), GFP_KERNEL);
+	data = devm_kzalloc_obj(dev, *data);
 	if (!data)
 		return -ENOMEM;
 

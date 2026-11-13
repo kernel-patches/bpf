@@ -342,13 +342,18 @@ static void geni_se_io_init(void __iomem *base)
 	writel_relaxed(FORCE_DEFAULT, base + GENI_FORCE_DEFAULT_REG);
 }
 
-static void geni_se_irq_clear(struct geni_se *se)
+static void geni_se_clear_irq_status(struct geni_se *se)
 {
-	writel_relaxed(0, se->base + SE_GSI_EVENT_EN);
 	writel_relaxed(0xffffffff, se->base + SE_GENI_M_IRQ_CLEAR);
 	writel_relaxed(0xffffffff, se->base + SE_GENI_S_IRQ_CLEAR);
 	writel_relaxed(0xffffffff, se->base + SE_DMA_TX_IRQ_CLR);
 	writel_relaxed(0xffffffff, se->base + SE_DMA_RX_IRQ_CLR);
+}
+
+static void geni_se_irq_clear(struct geni_se *se)
+{
+	writel_relaxed(0, se->base + SE_GSI_EVENT_EN);
+	geni_se_clear_irq_status(se);
 	writel_relaxed(0xffffffff, se->base + SE_IRQ_EN);
 }
 
@@ -364,6 +369,8 @@ static void geni_se_irq_clear(struct geni_se *se)
 void geni_se_init(struct geni_se *se, u32 rx_wm, u32 rx_rfr)
 {
 	u32 val;
+
+	se->prev_xfer_mode = GENI_SE_INVALID;
 
 	geni_se_irq_clear(se);
 	geni_se_io_init(se->base);
@@ -457,6 +464,11 @@ void geni_se_select_mode(struct geni_se *se, enum geni_se_xfer_mode mode)
 {
 	WARN_ON(mode != GENI_SE_FIFO && mode != GENI_SE_DMA && mode != GENI_GPI_DMA);
 
+	if (likely(se->prev_xfer_mode == mode)) {
+		geni_se_clear_irq_status(se);
+		return;
+	}
+
 	switch (mode) {
 	case GENI_SE_FIFO:
 		geni_se_select_fifo_mode(se);
@@ -469,8 +481,10 @@ void geni_se_select_mode(struct geni_se *se, enum geni_se_xfer_mode mode)
 		break;
 	case GENI_SE_INVALID:
 	default:
-		break;
+		return;
 	}
+
+	se->prev_xfer_mode = mode;
 }
 EXPORT_SYMBOL_GPL(geni_se_select_mode);
 
@@ -698,9 +712,8 @@ int geni_se_clk_tbl_get(struct geni_se *se, unsigned long **tbl)
 		return se->num_clk_levels;
 	}
 
-	se->clk_perf_tbl = devm_kcalloc(se->dev, MAX_CLK_PERF_LEVEL,
-					sizeof(*se->clk_perf_tbl),
-					GFP_KERNEL);
+	se->clk_perf_tbl = devm_kzalloc_objs(se->dev, *se->clk_perf_tbl,
+					     MAX_CLK_PERF_LEVEL);
 	if (!se->clk_perf_tbl)
 		return -ENOMEM;
 
@@ -1618,7 +1631,7 @@ static int geni_se_probe(struct platform_device *pdev)
 	const struct geni_se_desc *desc;
 	int ret;
 
-	wrapper = devm_kzalloc(dev, sizeof(*wrapper), GFP_KERNEL);
+	wrapper = devm_kzalloc_obj(dev, *wrapper);
 	if (!wrapper)
 		return -ENOMEM;
 

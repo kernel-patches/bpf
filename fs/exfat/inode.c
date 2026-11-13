@@ -249,7 +249,7 @@ static int exfat_read_folio(struct file *file, struct folio *folio)
 		.ops = &exfat_iomap_bio_read_ops,
 	};
 
-	iomap_read_folio(&exfat_iomap_ops, &ctx, NULL);
+	iomap_read_folio(exfat_iomap_next, &ctx, NULL);
 	return 0;
 }
 
@@ -271,7 +271,7 @@ static void exfat_readahead(struct readahead_control *rac)
 	    valid_size < pos + readahead_length(rac))
 		return;
 
-	iomap_readahead(&exfat_iomap_ops, &ctx, NULL);
+	iomap_readahead(exfat_iomap_next, &ctx, NULL);
 }
 
 static int exfat_writepages(struct address_space *mapping,
@@ -283,9 +283,6 @@ static int exfat_writepages(struct address_space *mapping,
 		.ops		= &exfat_writeback_ops,
 	};
 
-	if (unlikely(exfat_forced_shutdown(mapping->host->i_sb)))
-		return -EIO;
-
 	return iomap_writepages(&wpc);
 }
 
@@ -294,7 +291,7 @@ static sector_t exfat_aop_bmap(struct address_space *mapping, sector_t block)
 	sector_t blocknr;
 
 	inode_lock_shared(mapping->host);
-	blocknr = iomap_bmap(mapping, block, &exfat_iomap_ops);
+	blocknr = iomap_bmap(mapping, block, exfat_iomap_next);
 	inode_unlock_shared(mapping->host);
 	return blocknr;
 }

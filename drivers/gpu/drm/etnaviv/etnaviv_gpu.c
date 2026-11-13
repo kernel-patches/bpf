@@ -13,6 +13,7 @@
 #include <linux/pm_runtime.h>
 #include <linux/regulator/consumer.h>
 #include <linux/reset.h>
+#include <linux/seq_file.h>
 #include <linux/thermal.h>
 
 #include <drm/drm_print.h>
@@ -1148,8 +1149,8 @@ pm_put:
 
 /* fence object management */
 struct etnaviv_fence {
-	struct etnaviv_gpu *gpu;
 	struct dma_fence base;
+	struct etnaviv_gpu *gpu;
 };
 
 static inline struct etnaviv_fence *to_etnaviv_fence(struct dma_fence *fence)
@@ -1176,18 +1177,10 @@ static bool etnaviv_fence_signaled(struct dma_fence *fence)
 	return (s32)(f->gpu->completed_fence - f->base.seqno) >= 0;
 }
 
-static void etnaviv_fence_release(struct dma_fence *fence)
-{
-	struct etnaviv_fence *f = to_etnaviv_fence(fence);
-
-	kfree_rcu(f, base.rcu);
-}
-
 static const struct dma_fence_ops etnaviv_fence_ops = {
 	.get_driver_name = etnaviv_fence_get_driver_name,
 	.get_timeline_name = etnaviv_fence_get_timeline_name,
 	.signaled = etnaviv_fence_signaled,
-	.release = etnaviv_fence_release,
 };
 
 static struct dma_fence *etnaviv_gpu_fence_alloc(struct etnaviv_gpu *gpu)
@@ -1907,7 +1900,7 @@ static int etnaviv_gpu_platform_probe(struct platform_device *pdev)
 	struct etnaviv_gpu *gpu;
 	int err;
 
-	gpu = devm_kzalloc(dev, sizeof(*gpu), GFP_KERNEL);
+	gpu = devm_kzalloc_obj(dev, *gpu);
 	if (!gpu)
 		return -ENOMEM;
 

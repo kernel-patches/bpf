@@ -416,10 +416,10 @@ xfs_vn_unlink(
 	/*
 	 * With unlink, the VFS makes the dentry "negative": no inode,
 	 * but still hashed. This is incompatible with case-insensitive
-	 * mode, so invalidate (unhash) the dentry in CI-mode.
+	 * mode, so unhash the dentry in CI-mode.
 	 */
 	if (xfs_has_asciici(XFS_M(dir->i_sb)))
-		d_invalidate(dentry);
+		d_drop(dentry);
 	return 0;
 }
 
@@ -1256,10 +1256,10 @@ xfs_vn_fiemap(
 	if (fieinfo->fi_flags & FIEMAP_FLAG_XATTR) {
 		fieinfo->fi_flags &= ~FIEMAP_FLAG_XATTR;
 		error = iomap_fiemap(inode, fieinfo, start, length,
-				&xfs_xattr_iomap_ops);
+				xfs_xattr_iomap_next);
 	} else {
 		error = iomap_fiemap(inode, fieinfo, start, length,
-				&xfs_read_iomap_ops);
+				xfs_read_iomap_next);
 	}
 	xfs_iunlock(XFS_I(inode), XFS_IOLOCK_SHARED);
 

@@ -53,7 +53,7 @@ static struct rc_map_table npgtech[] = {
 static struct rc_map_list npgtech_map = {
 	.map = {
 		.scan     = npgtech,
-		.size     = ARRAY_SIZE(npgtech),
+		.entries  = ARRAY_SIZE(npgtech),
 		.rc_proto = RC_PROTO_UNKNOWN,	/* Legacy IR type */
 		.name     = RC_MAP_NPGTECH,
 	}

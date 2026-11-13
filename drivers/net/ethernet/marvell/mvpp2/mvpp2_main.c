@@ -687,8 +687,7 @@ static int mvpp2_bm_init(struct device *dev, struct mvpp2 *priv)
 	}
 
 	/* Allocate and initialize BM pools */
-	priv->bm_pools = devm_kcalloc(dev, poolnum,
-				      sizeof(*priv->bm_pools), GFP_KERNEL);
+	priv->bm_pools = devm_kzalloc_objs(dev, *priv->bm_pools, poolnum);
 	if (!priv->bm_pools)
 		return -ENOMEM;
 
@@ -3419,6 +3418,22 @@ static void mvpp2_isr_handle_ptp(struct mvpp2_port *port)
 		mvpp2_isr_handle_ptp_queue(port, 1);
 }
 
+static void mvpp2_tx_hwtstamp_flush(struct mvpp2_port *port)
+{
+	struct mvpp2_hwtstamp_queue *queue;
+	int nq, i;
+
+	for (nq = 0; nq < ARRAY_SIZE(port->tx_hwtstamp_queue); nq++) {
+		queue = &port->tx_hwtstamp_queue[nq];
+		for (i = 0; i < ARRAY_SIZE(queue->skb); i++) {
+			if (!queue->skb[i])
+				continue;
+			dev_kfree_skb_any(queue->skb[i]);
+			queue->skb[i] = NULL;
+		}
+	}
+}
+
 static void mvpp2_isr_handle_link(struct mvpp2_port *port,
 				  struct phylink_pcs *pcs, bool link)
 {
@@ -4914,6 +4929,7 @@ static int mvpp2_stop(struct net_device *dev)
 		free_irq(port->port_irq, port);
 
 	mvpp2_irqs_deinit(port);
+	mvpp2_tx_hwtstamp_flush(port);
 	if (!port->has_tx_irqs) {
 		for (thread = 0; thread < port->priv->nthreads; thread++) {
 			port_pcpu = per_cpu_ptr(port->pcpu, thread);
@@ -6030,8 +6046,7 @@ static int mvpp2_port_init(struct mvpp2_port *port)
 
 	port->tx_time_coal = MVPP2_TXDONE_COAL_USEC;
 
-	port->txqs = devm_kcalloc(dev, port->ntxqs, sizeof(*port->txqs),
-				  GFP_KERNEL);
+	port->txqs = devm_kzalloc_objs(dev, *port->txqs, port->ntxqs);
 	if (!port->txqs)
 		return -ENOMEM;
 
@@ -6042,7 +6057,7 @@ static int mvpp2_port_init(struct mvpp2_port *port)
 		int queue_phy_id = mvpp2_txq_phys(port->id, queue);
 		struct mvpp2_tx_queue *txq;
 
-		txq = devm_kzalloc(dev, sizeof(*txq), GFP_KERNEL);
+		txq = devm_kzalloc_obj(dev, *txq);
 		if (!txq) {
 			err = -ENOMEM;
 			goto err_free_percpu;
@@ -6065,8 +6080,7 @@ static int mvpp2_port_init(struct mvpp2_port *port)
 		port->txqs[queue] = txq;
 	}
 
-	port->rxqs = devm_kcalloc(dev, port->nrxqs, sizeof(*port->rxqs),
-				  GFP_KERNEL);
+	port->rxqs = devm_kzalloc_objs(dev, *port->rxqs, port->nrxqs);
 	if (!port->rxqs) {
 		err = -ENOMEM;
 		goto err_free_percpu;
@@ -6077,7 +6091,7 @@ static int mvpp2_port_init(struct mvpp2_port *port)
 		struct mvpp2_rx_queue *rxq;
 
 		/* Map physical Rx queue to port's logical Rx queue */
-		rxq = devm_kzalloc(dev, sizeof(*rxq), GFP_KERNEL);
+		rxq = devm_kzalloc_obj(dev, *rxq);
 		if (!rxq) {
 			err = -ENOMEM;
 			goto err_free_percpu;
@@ -6984,9 +6998,8 @@ static int mvpp2_port_probe(struct platform_device *pdev,
 		goto err_free_irq;
 	}
 
-	port->ethtool_stats = devm_kcalloc(&pdev->dev,
-					   MVPP2_N_ETHTOOL_STATS(ntxqs, nrxqs),
-					   sizeof(u64), GFP_KERNEL);
+	port->ethtool_stats = devm_kzalloc_objs(&pdev->dev, u64,
+						MVPP2_N_ETHTOOL_STATS(ntxqs, nrxqs));
 	if (!port->ethtool_stats) {
 		err = -ENOMEM;
 		goto err_free_stats;
@@ -7506,9 +7519,8 @@ static int mvpp2_init(struct platform_device *pdev, struct mvpp2 *priv)
 	}
 
 	/* Allocate and initialize aggregated TXQs */
-	priv->aggr_txqs = devm_kcalloc(&pdev->dev, MVPP2_MAX_THREADS,
-				       sizeof(*priv->aggr_txqs),
-				       GFP_KERNEL);
+	priv->aggr_txqs = devm_kzalloc_objs(&pdev->dev, *priv->aggr_txqs,
+					    MVPP2_MAX_THREADS);
 	if (!priv->aggr_txqs)
 		return -ENOMEM;
 
@@ -7584,7 +7596,7 @@ static int mvpp2_probe(struct platform_device *pdev)
 	int i, shared;
 	int err;
 
-	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
+	priv = devm_kzalloc_obj(&pdev->dev, *priv);
 	if (!priv)
 		return -ENOMEM;
 

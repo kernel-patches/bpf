@@ -158,7 +158,7 @@ static int mb86s70_gpio_probe(struct platform_device *pdev)
 	struct clk *clk;
 	int ret;
 
-	gchip = devm_kzalloc(&pdev->dev, sizeof(*gchip), GFP_KERNEL);
+	gchip = devm_kzalloc_obj(&pdev->dev, *gchip);
 	if (gchip == NULL)
 		return -ENOMEM;
 
@@ -213,7 +213,7 @@ MODULE_DEVICE_TABLE(of, mb86s70_gpio_dt_ids);
 
 #ifdef CONFIG_ACPI
 static const struct acpi_device_id mb86s70_gpio_acpi_ids[] = {
-	{ "SCX0007" },
+	{ .id = "SCX0007" },
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(acpi, mb86s70_gpio_acpi_ids);

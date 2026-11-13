@@ -190,10 +190,9 @@ l0_%=:							\
 	: __clobber_all);
 }
 
-/* Double ADD clears the ID (can't accumulate offsets) */
+/* Double ADD clears the ID. That r1 = r0 + 4 is known all the same: r0 /= 0 is dead code */
 SEC("socket")
-__failure
-__msg("div by zero")
+__success
 __naked void scalars_double_add(void)
 {
 	asm volatile ("					\
@@ -668,12 +667,17 @@ __naked void add_const_base_id_pruning(void)
 	call %[bpf_get_prandom_u32];				\
 	r6 = r0;						\
 	r6 &= 1;						\
-	if r6 >= 1 goto l_true_%=;				\
+	if r6 < 1 goto l_false_%=;				\
+	goto l_true_%=;						\
 								\
+l_false_%=:							\
 	/* False branch (explored first, old state) */		\
 	call %[bpf_get_prandom_u32];				\
 	r2 = r0;						\
 	r2 &= 0xff;		/* R2 = scalar(id=A) [0,255] */	\
+	r4 = r0;						\
+	r4 >>= 8;						\
+	r4 &= 0xff;		/* R4 = scalar [0,255], id=0 */	\
 	r3 = r2;		/* R3 linked to R2 (id=A) */	\
 	r3 += 10;		/* R3 id=A|ADD_CONST, delta=10 */\
 	r6 = 0;							\
@@ -685,6 +689,7 @@ l_true_%=:							\
 	r2 = r0;						\
 	r2 &= 0xff;		/* R2 = scalar [0,255], id=0 */	\
 	r4 = r0;						\
+	r4 >>= 8;						\
 	r4 &= 0xff;		/* R4 = scalar [0,255], id=0 */	\
 	r3 = r4;		/* R3 linked to R4 (new id=C) */\
 	r3 += 10;		/* R3 id=C|ADD_CONST, delta=10 */\
@@ -703,6 +708,7 @@ l_merge_%=:							\
 	r9 += r3;		/* fp-16+[0,5] vs fp-16+[0,255] */\
 	*(u8*)(r9 + 0) = r6;	/* within 16B vs past fp */	\
 l_exit_%=:							\
+	r4 = r4;		/* R4 is live at the merge */	\
 	r0 = 0;							\
 	exit;							\
 "	:

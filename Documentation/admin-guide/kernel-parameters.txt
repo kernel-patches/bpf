@@ -44,6 +44,7 @@
 	NET	Appropriate network support is enabled.
 	NFS	Appropriate NFS support is enabled.
 	NUMA	NUMA support is enabled.
+	NVME	NVMe support is enabled
 	OF	Devicetree is enabled.
 	PARISC	The PA-RISC architecture is enabled.
 	PCI	PCI bus support is enabled.
@@ -74,7 +75,6 @@
 	TPM	TPM drivers are enabled.
 	UMS	USB Mass Storage support is enabled.
 	USB	USB support is enabled.
-	NVME	NVMe support is enabled
 	USBHID	USB Human Interface Device support is enabled.
 	V4L	Video For Linux support is enabled.
 	VGA	The VGA console has been enabled.
@@ -563,6 +563,9 @@ Kernel parameters
 
 	arm64.nohaft	[ARM64] Unconditionally disable Hardware managed Access
 			Flag for Table descriptors support
+
+	arm64.nols64	[ARM64] Unconditionally disable 64-byte Load/Store
+			instructions support
 
 	arm64.nomops	[ARM64] Unconditionally disable Memory Copy and Memory
 			Set instructions support
@@ -1205,7 +1208,8 @@ Kernel parameters
 			        get a -EPERM as result when trying to register files
 				or directories within debugfs.
 				This is equivalent of the runtime functionality if
-				debugfs was not enabled in the kernel at all.
+				debugfs was not enabled in the kernel at all,
+				except that the latter returns -ENODEV.
 			Default value is set in build-time with a kernel configuration.
 
 	debugpat	[X86] Enable PAT debugging
@@ -1953,6 +1957,108 @@ Kernel parameters
 			are distributed across NUMA nodes.  Defaults on
 			for 64-bit NUMA, off otherwise.
 			Format: 0 | 1 (for off | on)
+
+	hazptrtorture.defer_modulus= [KNL]
+			Defer release of the hazard pointer on average
+			one out of the specified number of times.  Zero
+			disables.  Negative one defaults to 1,000 times
+			nr_cpu_ids, unless hazptr.kthread_do_pending_ms is
+			equal to zero, in which case it instead defaults
+			to zero (disabled).
+
+	hazptrtorture.irq_acquire= [KNL]
+			Acquire hazard pointers from an irq handler on average
+			one out of the specified number of times.  Zero
+			disables.  Negative one defaults to 1,000 times
+			nr_cpu_ids.
+
+	hazptrtorture.irq_release= [KNL]
+			Release hazard pointers from an irq handler on average
+			one out of the specified number of times.  Zero
+			disables.  Negative one defaults to 1,000 times
+			nr_cpu_ids.
+
+	hazptrtorture.kthread_do_pending_ms= [KNL]
+			Interval between cleanup of pending (deferred)
+			hazard-pointer releases in milliseconds.
+			Zero disables.	Negative one defaults to three
+			milliseconds, unless hazptr.kthread_do_pending_ms
+			is equal to zero, in which case it instead
+			defaults to zero (disabled).
+
+	hazptrtorture.nest_acquire= [KNL]
+			Acquire a second, nested hazard pointer on
+			average one out of the specified number of
+			reader acquisitions.  Zero disables.  Defaults
+			to two.
+
+	hazptrtorture.nreaders= [KNL]
+			Number of hazard-pointer reader kthreads, each
+			of which repeatedly acquires and releases hazard
+			pointers.  If the value is zero, one reader
+			is spawned.  If the value is less than zero,
+			the absolute value is multiplied by the number
+			of online CPUs at initialization time.
+
+	hazptrtorture.nwriters= [KNL]
+			Controls whether or not there is a writer.
+			There is at most one writer, so this value must
+			be zero or one.
+
+	hazptrtorture.onoff_holdoff= [KNL]
+			Set time (s) after boot for CPU-hotplug testing.
+
+	hazptrtorture.onoff_interval= [KNL]
+			Set time (jiffies) between CPU-hotplug operations,
+			or zero to disable CPU-hotplug testing.
+
+	hazptrtorture.preempt_duration= [KNL]
+			Set duration (in milliseconds) of preemptions
+			by a high-priority FIFO real-time task.  Set to
+			zero (the default) to disable.	The CPUs to
+			preempt are selected randomly from the set that
+			are online at a given point in time.  Races with
+			CPUs going offline are ignored, with that attempt
+			at preemption skipped.
+
+	hazptrtorture.preempt_interval= [KNL]
+			Set interval (in milliseconds, defaulting to one
+			second) between preemptions by a high-priority
+			FIFO real-time task.  This delay is mediated
+			by an hrtimer and is further fuzzed to avoid
+			inadvertent synchronizations.
+
+	hazptrtorture.reader_sleep_us= [KNL]
+			Set occassional read-side sleep time in
+			microseconds, defaulting to zero for disabled.
+
+	hazptrtorture.shuffle_interval= [KNL]
+			Set task-shuffle interval (seconds).  Shuffling
+			tasks allows some CPUs to go into dyntick-idle
+			mode during the hazptrtorture test.
+
+	hazptrtorture.shutdown_secs= [KNL]
+			Set time (s) after boot system shutdown.  This
+			is useful for hands-off automated testing.
+
+	hazptrtorture.stat_interval= [KNL]
+			Time (s) between statistics printk()s.
+
+	hazptrtorture.stutter= [KNL]
+			Time (s) to stutter testing, for example,
+			specifying three seconds (the default) causes
+			the test to run for three seconds, wait
+			for five seconds, and so on.  This tests the
+			hazard-pointers primitives' ability to transition
+			abruptly to and from idle.  Setting this to zero
+			disables stuttering.
+
+	hazptrtorture.torture_type= [KNL]
+			Specify the hazard-pointers implementation
+			to test.
+
+	hazptrtorture.verbose= [KNL]
+			Enable additional printk() statements.
 
 	hd=		[EIDE] (E)IDE hard drive subsystem geometry
 			Format: <cyl>,<head>,<sect>
@@ -5129,7 +5235,12 @@ Kernel parameters
 				explicitly which ones they are.
 		assign-busses	[X86] Always assign all PCI bus
 				numbers ourselves, overriding
-				whatever the firmware may have done.
+				whatever the firmware may have done. Ignored
+				if any device was preserved across a Live
+				Update, where the kernel must preserve the
+				PCI topology (including bus numbers) to
+				avoid interrupting ongoing memory transactions
+				of preserved devices.
 		usepirqmask	[X86] Honor the possible IRQ mask stored
 				in the BIOS $PIR table. This is needed on
 				some systems with broken BIOSes, notably
@@ -6368,13 +6479,6 @@ Kernel parameters
 			post-boot attempt at an expedited RCU grace
 			period to instead use normal non-expedited
 			grace-period processing.
-
-	rcupdate.rcu_task_collapse_debug= [KNL]
-			Enable debugging prints that record when RCU Tasks
-			and RCU Tasks Trace expand to per-CPU callback
-			queuing and collapse back to CPU-0 queuing.
-			This is default-disabled due to the fact that
-			some workloads can make it quite noisy.
 
 	rcupdate.rcu_task_collapse_lim= [KNL]
 			Set the maximum number of callbacks present
@@ -7630,6 +7734,12 @@ Kernel parameters
 	tlbi=		[X86-64]
 			Format: {ipi}
 			ipi: switch to IPI-based TLB flushing
+
+	toolong_nmi_panic= [X86]
+			Cause a panic upon return from an NMI handler
+			that took longer than the specified number
+			of milliseconds.  The default value of zero
+			suppresses these panics.
 
 	topology=	[S390,EARLY]
 			Format: {off | on}

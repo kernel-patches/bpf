@@ -404,7 +404,7 @@ static int ljca_gpio_probe(struct auxiliary_device *auxdev,
 	struct gpio_irq_chip *girq;
 	int ret;
 
-	ljca_gpio = devm_kzalloc(&auxdev->dev, sizeof(*ljca_gpio), GFP_KERNEL);
+	ljca_gpio = devm_kzalloc_obj(&auxdev->dev, *ljca_gpio);
 	if (!ljca_gpio)
 		return -ENOMEM;
 
@@ -472,8 +472,8 @@ static void ljca_gpio_remove(struct auxiliary_device *auxdev)
 }
 
 static const struct auxiliary_device_id ljca_gpio_id_table[] = {
-	{ "usb_ljca.ljca-gpio", 0 },
-	{ /* sentinel */ },
+	{ .name = "usb_ljca.ljca-gpio" },
+	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(auxiliary, ljca_gpio_id_table);
 

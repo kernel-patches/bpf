@@ -752,6 +752,7 @@ static int qcom_pas_alloc_memory_region(struct qcom_pas *pas)
 	if (IS_ERR(pas->pas_ctx))
 		return PTR_ERR(pas->pas_ctx);
 
+	pas->pas_ctx->keep_mdt_buf = true;
 	if (!pas->dtb_pas_id)
 		return 0;
 
@@ -769,6 +770,8 @@ static int qcom_pas_alloc_memory_region(struct qcom_pas *pas)
 						       pas->dtb_mem_size);
 	if (IS_ERR(pas->dtb_pas_ctx))
 		return PTR_ERR(pas->dtb_pas_ctx);
+
+	pas->dtb_pas_ctx->keep_mdt_buf = true;
 
 	return 0;
 }
@@ -859,8 +862,7 @@ static int qcom_pas_setup_tmd(struct qcom_pas *pas, const struct qcom_pas_data *
 	if (!desc->tmd_name || desc->num_tmd == 0)
 		return 0;
 
-	tmd_names = devm_kcalloc(pas->dev, desc->num_tmd,
-				 sizeof(*tmd_names), GFP_KERNEL);
+	tmd_names = devm_kzalloc_objs(pas->dev, *tmd_names, desc->num_tmd);
 	if (!tmd_names)
 		return -ENOMEM;
 
@@ -1114,6 +1116,21 @@ static const struct qcom_pas_data sa8775p_adsp_resource = {
 	.proxy_pd_names = (char*[]){
 		"lcx",
 		"lmx",
+		NULL
+	},
+	.load_state = "adsp",
+	.ssr_name = "lpass",
+	.sysmon_name = "adsp",
+	.ssctl_id = 0x14,
+};
+
+static const struct qcom_pas_data sdm670_adsp_resource_init = {
+	.crash_reason_smem = 423,
+	.firmware_name = "adsp.mdt",
+	.pas_id = 1,
+	.auto_boot = true,
+	.proxy_pd_names = (char*[]){
+		"lcx",
 		NULL
 	},
 	.load_state = "adsp",
@@ -2035,6 +2052,7 @@ static const struct of_device_id qcom_pas_of_match[] = {
 	{ .compatible = "qcom,sc8280xp-nsp1-pas", .data = &sc8280xp_nsp1_resource },
 	{ .compatible = "qcom,sdm660-adsp-pas", .data = &adsp_resource_init },
 	{ .compatible = "qcom,sdm660-cdsp-pas", .data = &cdsp_resource_init },
+	{ .compatible = "qcom,sdm670-adsp-pas", .data = &sdm670_adsp_resource_init },
 	{ .compatible = "qcom,sdm845-adsp-pas", .data = &sdm845_adsp_resource_init },
 	{ .compatible = "qcom,sdm845-cdsp-pas", .data = &sdm845_cdsp_resource_init },
 	{ .compatible = "qcom,sdm845-slpi-pas", .data = &sdm845_slpi_resource_init },

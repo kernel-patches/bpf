@@ -876,21 +876,17 @@ int gpu_buddy_init(struct gpu_buddy *mm, u64 size, u64 chunk_size)
 
 	BUG_ON(mm->max_order > GPU_BUDDY_MAX_ORDER);
 
-	mm->free_scoreboard = kcalloc(mm->max_order + 1,
-				      sizeof(*mm->free_scoreboard),
-				      GFP_KERNEL);
+	mm->free_scoreboard = kzalloc_objs(*mm->free_scoreboard,
+					   mm->max_order + 1);
 	if (!mm->free_scoreboard)
 		return -ENOMEM;
 
-	mm->used_scoreboard = kcalloc(mm->max_order + 1,
-				      sizeof(*mm->used_scoreboard),
-				      GFP_KERNEL);
+	mm->used_scoreboard = kzalloc_objs(*mm->used_scoreboard,
+					   mm->max_order + 1);
 	if (!mm->used_scoreboard)
 		goto out_free_free_scoreboard;
 
-	mm->free_tree = kcalloc(mm->max_order + 1,
-				sizeof(struct rb_root),
-				GFP_KERNEL);
+	mm->free_tree = kzalloc_objs(struct rb_root, mm->max_order + 1);
 	if (!mm->free_tree)
 		goto out_free_used_scoreboard;
 
@@ -1240,11 +1236,23 @@ static void __gpu_buddy_undo_splits(struct gpu_buddy *mm,
 	}
 }
 
+static bool block_incompatible(struct gpu_buddy_block *block, unsigned int flags)
+{
+	bool needs_clear = flags & GPU_BUDDY_CLEAR_ALLOCATION;
+
+	if (!gpu_buddy_block_is_free(block))
+		return false;
+
+	return needs_clear ? !block->has_clear :
+			     gpu_buddy_block_is_clear(block);
+}
+
 static struct gpu_buddy_block *
 __alloc_range_bias(struct gpu_buddy *mm,
 		   u64 start, u64 end,
 		   unsigned int order,
-		   unsigned long flags)
+		   unsigned long flags,
+		   bool fallback)
 {
 	u64 req_size = mm->chunk_size << order;
 	struct gpu_buddy_block *block;
@@ -1258,9 +1266,7 @@ __alloc_range_bias(struct gpu_buddy *mm,
 	 * This range-constrained search hands back the highest/right-most
 	 * address that satisfies the request: the roots are seeded high-to-low
 	 * and the right (higher-address) child is descended first, making
-	 * top-down the default placement here. A non-top-down clear request is
-	 * the only exception, where the descent is biased towards clear or
-	 * clear-containing subtrees to satisfy the clear preference.
+	 * top-down the default placement here.
 	 */
 	for (i = mm->n_roots - 1; i >= 0; --i)
 		list_add_tail(&mm->roots[i]->tmp_link, &dfs);
@@ -1296,7 +1302,18 @@ __alloc_range_bias(struct gpu_buddy *mm,
 			if (round_down(adjusted_end + 1, req_size) <=
 			    round_up(adjusted_start, req_size))
 				continue;
+
+			/*
+			 * Strict pass: don't split a partially-overlapping free
+			 * block; rejecting its child would strand the split. Let
+			 * the fallback pass consume it (either class accepted).
+			 */
+			if (!fallback && gpu_buddy_block_is_free(block))
+				continue;
 		}
+
+		if (!fallback && block_incompatible(block, flags))
+			continue;
 
 		if (contains(start, end, block_start, block_end) &&
 		    order == gpu_buddy_block_order(block)) {
@@ -1315,38 +1332,8 @@ __alloc_range_bias(struct gpu_buddy *mm,
 				goto err_undo;
 		}
 
-		/*
-		 * Top-down is a strict address-placement policy, so when it is
-		 * requested we ignore clear steering and simply descend the
-		 * right (higher-address) child first. Only a non-top-down clear
-		 * request biases the descent towards clear/has_clear subtrees.
-		 */
-		if ((flags & GPU_BUDDY_CLEAR_ALLOCATION) &&
-		    !(flags & GPU_BUDDY_TOPDOWN_ALLOCATION)) {
-			struct gpu_buddy_block *prefer;
-
-			if (gpu_buddy_block_is_clear(block->right))
-				prefer = block->right;
-			else if (gpu_buddy_block_is_clear(block->left))
-				prefer = block->left;
-			else if (block->right->has_clear)
-				prefer = block->right;
-			else if (block->left->has_clear)
-				prefer = block->left;
-			else
-				prefer = block->right;
-
-			if (prefer == block->right) {
-				list_add(&block->left->tmp_link, &dfs);
-				list_add(&block->right->tmp_link, &dfs);
-			} else {
-				list_add(&block->right->tmp_link, &dfs);
-				list_add(&block->left->tmp_link, &dfs);
-			}
-		} else {
-			list_add(&block->left->tmp_link, &dfs);
-			list_add(&block->right->tmp_link, &dfs);
-		}
+		list_add(&block->left->tmp_link, &dfs);
+		list_add(&block->right->tmp_link, &dfs);
 	} while (1);
 
 	return ERR_PTR(-ENOSPC);
@@ -1359,6 +1346,26 @@ err_undo:
 	 */
 	__gpu_buddy_undo_splits(mm, block);
 	return ERR_PTR(err);
+}
+
+static struct gpu_buddy_block *
+__gpu_buddy_alloc_range_bias(struct gpu_buddy *mm,
+			     u64 start, u64 end,
+			     unsigned int order,
+			     unsigned long flags)
+{
+	struct gpu_buddy_block *block;
+	bool fallback;
+
+	fallback = !(gpu_buddy_clear_avail(mm) && mm->dirty.total_dirty);
+
+	block = __alloc_range_bias(mm, start, end, order,
+				   flags, fallback);
+	if (IS_ERR(block) && !fallback)
+		return __alloc_range_bias(mm, start, end, order,
+					  flags, true);
+
+	return block;
 }
 
 /* Return the highest-address free block of at least @order. */
@@ -1924,7 +1931,7 @@ __gpu_buddy_alloc_blocks(struct gpu_buddy *mm,
 
 	if (flags & GPU_BUDDY_RANGE_ALLOCATION) {
 		/* Allocate traversing within the range */
-		block = __alloc_range_bias(mm, start, end, order, flags);
+		block = __gpu_buddy_alloc_range_bias(mm, start, end, order, flags);
 		if (!IS_ERR(block) || !steered)
 			return block;
 
@@ -2022,10 +2029,16 @@ int gpu_buddy_alloc_blocks(struct gpu_buddy *mm,
 
 	if (order > mm->max_order || size > mm->size) {
 		if ((flags & GPU_BUDDY_CONTIGUOUS_ALLOCATION) &&
-		    !(flags & GPU_BUDDY_RANGE_ALLOCATION))
-			return __alloc_contig_try_harder(mm, original_size,
-							 original_min_size,
-							 flags, blocks);
+		    !(flags & GPU_BUDDY_RANGE_ALLOCATION)) {
+			err = __alloc_contig_try_harder(mm, original_size,
+							original_min_size,
+							flags, &allocated);
+			if (err)
+				return err;
+
+			list_splice_tail(&allocated, blocks);
+			return 0;
+		}
 
 		return -EINVAL;
 	}
@@ -2064,9 +2077,11 @@ int gpu_buddy_alloc_blocks(struct gpu_buddy *mm,
 								original_size,
 								original_min_size,
 								flags,
-								blocks);
-				if (!err)
+								&allocated);
+				if (!err) {
+					list_splice_tail(&allocated, blocks);
 					return 0;
+				}
 				if (err != -ENOSPC)
 					return err;
 				goto err_free;

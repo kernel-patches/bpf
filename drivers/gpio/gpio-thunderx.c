@@ -439,7 +439,7 @@ static int thunderx_gpio_probe(struct pci_dev *pdev,
 	int ngpio, i;
 	int err = 0;
 
-	txgpio = devm_kzalloc(dev, sizeof(*txgpio), GFP_KERNEL);
+	txgpio = devm_kzalloc_obj(dev, *txgpio);
 	if (!txgpio)
 		return -ENOMEM;
 
@@ -479,18 +479,14 @@ static int thunderx_gpio_probe(struct pci_dev *pdev,
 		txgpio->base_msi = (c >> 8) & 0xff;
 	}
 
-	txgpio->msix_entries = devm_kcalloc(dev,
-					    ngpio, sizeof(struct msix_entry),
-					    GFP_KERNEL);
+	txgpio->msix_entries = devm_kzalloc_objs(dev, struct msix_entry, ngpio);
 	if (!txgpio->msix_entries) {
 		err = -ENOMEM;
 		goto out;
 	}
 
-	txgpio->line_entries = devm_kcalloc(dev,
-					    ngpio,
-					    sizeof(struct thunderx_line),
-					    GFP_KERNEL);
+	txgpio->line_entries = devm_kzalloc_objs(dev, struct thunderx_line,
+						 ngpio);
 	if (!txgpio->line_entries) {
 		err = -ENOMEM;
 		goto out;
@@ -589,9 +585,8 @@ static void thunderx_gpio_remove(struct pci_dev *pdev)
 
 static const struct pci_device_id thunderx_gpio_id_table[] = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_CAVIUM, 0xA00A) },
-	{ 0, }	/* end of table */
+	{ }	/* end of table */
 };
-
 MODULE_DEVICE_TABLE(pci, thunderx_gpio_id_table);
 
 static struct pci_driver thunderx_gpio_driver = {

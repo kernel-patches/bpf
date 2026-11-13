@@ -65,9 +65,9 @@ enum amd_vsdb_panel_type {
  */
 #define AMDGPU_DM_MAX_HDMI_HPD_DEBOUNCE_MS 5000
 /*
-#include "include/amdgpu_dal_power_if.h"
-#include "amdgpu_dm_irq.h"
-*/
+ * #include "include/amdgpu_dal_power_if.h"
+ * #include "amdgpu_dm_irq.h"
+ */
 
 #include "irq_types.h"
 #include "signal_types.h"
@@ -349,7 +349,7 @@ struct hpd_rx_irq_offload_work {
  * @disable_hpd_irq: disables all HPD and HPD RX interrupt handling in the
  *		     driver when true
  * @dmub_aux_transfer_done: struct completion used to indicate when DMUB
- * 			    transfers are done
+ *			    transfers are done
  * @delayed_hpd_wq: work queue used to delay DMUB HPD work
  */
 struct amdgpu_display_manager {
@@ -825,6 +825,12 @@ struct amdgpu_hdmi_vsdb_info {
 	bool replay_mode;
 };
 
+enum amdgpu_dm_vrr_override {
+	AMDGPU_DM_VRR_OVERRIDE_AUTO,
+	AMDGPU_DM_VRR_OVERRIDE_FORCE_HDMI_VRR,
+	AMDGPU_DM_VRR_OVERRIDE_DISABLE_VRR,
+};
+
 struct amdgpu_dm_connector {
 
 	struct drm_connector base;
@@ -833,8 +839,10 @@ struct amdgpu_dm_connector {
 
 	struct cec_notifier *notifier;
 
-	/* we need to mind the EDID between detect
-	   and get modes due to analog/digital/tvencoder */
+	/*
+	 * we need to mind the EDID between detect
+	 * and get modes due to analog/digital/tvencoder
+	 */
 	const struct drm_edid *drm_edid;
 
 	/* shared with amdgpu */
@@ -843,8 +851,10 @@ struct amdgpu_dm_connector {
 	/* number of modes generated from EDID at 'dc_sink' */
 	int num_modes;
 
-	/* The 'old' sink - before an HPD.
-	 * The 'current' sink is in dc_link->sink. */
+	/*
+	 * The 'old' sink - before an HPD.
+	 * The 'current' sink is in dc_link->sink.
+	 */
 	struct dc_sink *dc_sink;
 	struct dc_link *dc_link;
 
@@ -880,7 +890,7 @@ struct amdgpu_dm_connector {
 	 * @max_vfreq: Maximum frequency supported by the display in Hz. This
 	 * value is set to zero when there is no FreeSync support.
 	 */
-	int max_vfreq ;
+	int max_vfreq;
 
 	/* Audio instance - protected by audio_lock. */
 	int audio_inst;
@@ -911,6 +921,7 @@ struct amdgpu_dm_connector {
 	/* Adaptive Sync */
 	bool pack_sdp_v1_3;
 	enum adaptive_sync_type as_type;
+	enum amdgpu_dm_vrr_override vrr_override;
 	struct amdgpu_hdmi_vsdb_info vsdb_info;
 
 	/* HDMI HPD debounce support */
@@ -1174,6 +1185,12 @@ void dm_free_gpu_mem(struct amdgpu_device *adev,
 						  void *addr);
 
 bool amdgpu_dm_is_headless(struct amdgpu_device *adev);
+
+#if defined(CONFIG_DRM_AMD_DC)
+void amdgpu_dm_update_memclk_states(struct amdgpu_device *adev);
+#else
+static inline void amdgpu_dm_update_memclk_states(struct amdgpu_device *adev) {}
+#endif
 
 bool amdgpu_dm_crtc_complete_writeback(struct amdgpu_crtc *acrtc);
 

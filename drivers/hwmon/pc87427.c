@@ -49,7 +49,7 @@ struct pc87427_data {
 	int address[2];
 	const char *name;
 
-	unsigned long last_updated;	/* in jiffies */
+	u64 last_updated;		/* in jiffies */
 	u8 fan_enabled;			/* bit vector */
 	u16 fan[8];			/* register values */
 	u16 fan_min[8];			/* register values */
@@ -352,8 +352,8 @@ static struct pc87427_data *pc87427_update_device(struct device *dev)
 	int i;
 
 	mutex_lock(&data->lock);
-	if (!time_after(jiffies, data->last_updated + HZ)
-	 && data->last_updated)
+	if (!time_after64(get_jiffies_64(), data->last_updated + HZ) &&
+	    data->last_updated)
 		goto done;
 
 	/* Fans */
@@ -377,7 +377,7 @@ static struct pc87427_data *pc87427_update_device(struct device *dev)
 		pc87427_readall_temp(data, i);
 	}
 
-	data->last_updated = jiffies;
+	data->last_updated = get_jiffies_64();
 
 done:
 	mutex_unlock(&data->lock);
@@ -1054,8 +1054,7 @@ static int pc87427_probe(struct platform_device *pdev)
 	struct pc87427_data *data;
 	int i, err, res_count;
 
-	data = devm_kzalloc(&pdev->dev, sizeof(struct pc87427_data),
-			    GFP_KERNEL);
+	data = devm_kzalloc_obj(&pdev->dev, struct pc87427_data);
 	if (!data)
 		return -ENOMEM;
 

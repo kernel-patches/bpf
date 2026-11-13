@@ -571,13 +571,14 @@ static int msm_ioctl_gem_info_set_metadata(struct drm_gem_object *obj,
 		krealloc(msm_obj->metadata, metadata_size, GFP_KERNEL);
 	if (!new_metadata) {
 		ret = -ENOMEM;
-		goto out;
+		goto unlock;
 	}
 
 	msm_obj->metadata = new_metadata;
 	msm_obj->metadata_size = metadata_size;
 	memcpy(msm_obj->metadata, buf, metadata_size);
 
+unlock:
 	msm_gem_unlock(obj);
 
 out:
@@ -1137,7 +1138,7 @@ int msm_drv_probe(struct device *master_dev,
 	struct component_match *match = NULL;
 	int ret;
 
-	priv = devm_kzalloc(master_dev, sizeof(*priv), GFP_KERNEL);
+	priv = devm_kzalloc_obj(master_dev, *priv);
 	if (!priv)
 		return -ENOMEM;
 
@@ -1178,7 +1179,7 @@ int msm_gpu_probe(struct platform_device *pdev,
 	struct msm_drm_private *priv;
 	int ret;
 
-	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
+	priv = devm_kzalloc_obj(&pdev->dev, *priv);
 	if (!priv)
 		return -ENOMEM;
 

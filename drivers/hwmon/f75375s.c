@@ -86,8 +86,8 @@ struct f75375_data {
 	int kind;
 	struct mutex update_lock; /* protect register access */
 	bool valid;
-	unsigned long last_updated;	/* In jiffies */
-	unsigned long last_limits;	/* In jiffies */
+	u64 last_updated;	/* In jiffies */
+	u64 last_limits;	/* In jiffies */
 
 	/* Register values */
 	u8 in[4];
@@ -157,7 +157,7 @@ static struct f75375_data *f75375_update_device(struct device *dev)
 	mutex_lock(&data->update_lock);
 
 	/* Limit registers cache is refreshed after 60 seconds */
-	if (time_after(jiffies, data->last_limits + 60 * HZ)
+	if (time_after64(get_jiffies_64(), data->last_limits + 60 * HZ)
 		|| !data->valid) {
 		for (nr = 0; nr < 2; nr++) {
 			data->temp_high[nr] =
@@ -178,11 +178,11 @@ static struct f75375_data *f75375_update_device(struct device *dev)
 				f75375_read8(client, F75375_REG_VOLT_LOW(nr));
 		}
 		data->fan_timer = f75375_read8(client, F75375_REG_FAN_TIMER);
-		data->last_limits = jiffies;
+		data->last_limits = get_jiffies_64();
 	}
 
 	/* Measurement registers cache is refreshed after 2 second */
-	if (time_after(jiffies, data->last_updated + 2 * HZ)
+	if (time_after64(get_jiffies_64(), data->last_updated + 2 * HZ)
 		|| !data->valid) {
 		for (nr = 0; nr < 2; nr++) {
 			data->pwm[nr] =	f75375_read8(client,
@@ -202,7 +202,7 @@ static struct f75375_data *f75375_update_device(struct device *dev)
 			data->in[nr] =
 				f75375_read8(client, F75375_REG_VOLT(nr));
 
-		data->last_updated = jiffies;
+		data->last_updated = get_jiffies_64();
 		data->valid = true;
 	}
 
@@ -798,8 +798,7 @@ static int f75375_probe(struct i2c_client *client)
 	if (!i2c_check_functionality(client->adapter,
 				I2C_FUNC_SMBUS_BYTE_DATA))
 		return -EIO;
-	data = devm_kzalloc(&client->dev, sizeof(struct f75375_data),
-			    GFP_KERNEL);
+	data = devm_kzalloc_obj(&client->dev, struct f75375_data);
 	if (!data)
 		return -ENOMEM;
 

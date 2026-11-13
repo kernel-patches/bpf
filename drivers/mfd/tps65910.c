@@ -16,6 +16,7 @@
 #include <linux/irq.h>
 #include <linux/irqdomain.h>
 #include <linux/mfd/core.h>
+#include <linux/reboot.h>
 #include <linux/regmap.h>
 #include <linux/mfd/tps65910.h>
 #include <linux/of.h>
@@ -381,8 +382,7 @@ static struct tps65910_board *tps65910_parse_dt(struct i2c_client *client,
 
 	*chip_id  = (unsigned long)device_get_match_data(&client->dev);
 
-	board_info = devm_kzalloc(&client->dev, sizeof(*board_info),
-			GFP_KERNEL);
+	board_info = devm_kzalloc_obj(&client->dev, *board_info);
 	if (!board_info)
 		return NULL;
 
@@ -425,16 +425,26 @@ struct tps65910_board *tps65910_parse_dt(struct i2c_client *client,
 }
 #endif
 
-static struct i2c_client *tps65910_i2c_client;
-static void tps65910_power_off(void)
+static int tps65910_power_off(struct sys_off_data *data)
 {
-	struct tps65910 *tps65910;
-
-	tps65910 = dev_get_drvdata(&tps65910_i2c_client->dev);
+	struct tps65910 *tps65910 = data->cb_data;
 
 	regmap_update_bits(tps65910->regmap, TPS65910_DEVCTRL,
 			   DEVCTRL_DEV_OFF_MASK | DEVCTRL_DEV_ON_MASK,
 			   DEVCTRL_DEV_OFF_MASK);
+
+	return NOTIFY_DONE;
+}
+
+static int tps65910_restart(struct sys_off_data *data)
+{
+	struct tps65910 *tps65910 = data->cb_data;
+
+	regmap_update_bits(tps65910->regmap, TPS65910_DEVCTRL,
+			   DEVCTRL_DEV_OFF_RST_MASK | DEVCTRL_DEV_ON_MASK,
+			   DEVCTRL_DEV_OFF_RST_MASK);
+
+	return NOTIFY_DONE;
 }
 
 static int tps65910_i2c_probe(struct i2c_client *i2c)
@@ -457,11 +467,11 @@ static int tps65910_i2c_probe(struct i2c_client *i2c)
 	if (!pmic_plat_data)
 		return -EINVAL;
 
-	init_data = devm_kzalloc(&i2c->dev, sizeof(*init_data), GFP_KERNEL);
+	init_data = devm_kzalloc_obj(&i2c->dev, *init_data);
 	if (init_data == NULL)
 		return -ENOMEM;
 
-	tps65910 = devm_kzalloc(&i2c->dev, sizeof(*tps65910), GFP_KERNEL);
+	tps65910 = devm_kzalloc_obj(&i2c->dev, *tps65910);
 	if (tps65910 == NULL)
 		return -ENOMEM;
 
@@ -501,7 +511,7 @@ static int tps65910_i2c_probe(struct i2c_client *i2c)
 	tps65910_ck32k_init(tps65910, pmic_plat_data);
 	tps65910_sleepinit(tps65910, pmic_plat_data);
 
-	if (pmic_plat_data->pm_off && !pm_power_off) {
+	if (pmic_plat_data->pm_off) {
 		/*
 		 * The PWR_OFF bit needs to be set separately, before
 		 * transitioning to the OFF state. It enables the "sequential"
@@ -515,8 +525,17 @@ static int tps65910_i2c_probe(struct i2c_client *i2c)
 			return ret;
 		}
 
-		tps65910_i2c_client = i2c;
-		pm_power_off = tps65910_power_off;
+		ret = devm_register_power_off_handler(&i2c->dev,
+						      tps65910_power_off, tps65910);
+		if (ret)
+			return dev_err_probe(&i2c->dev, ret,
+					     "failed to register power-off handler\n");
+
+		ret = devm_register_restart_handler(&i2c->dev,
+						    tps65910_restart, tps65910);
+		if (ret)
+			return dev_err_probe(&i2c->dev, ret,
+					     "failed to register restart handler\n");
 	}
 
 	ret = devm_mfd_add_devices(tps65910->dev, -1,

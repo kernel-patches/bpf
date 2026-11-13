@@ -1418,7 +1418,20 @@ All struct mnt_idmap pointers handed to filesystems are const now.
 ->create(), ->mkdir(), ->mknod(), ->symlink(), ->rename(), ->setattr(),
 ->getattr(), ->permission(), ->tmpfile(), ->get_acl(), ->set_acl() and
 ->fileattr_set() as well as the xattr ->set() handler and the vfs_*()
-helpers take a const struct mnt_idmap *. mnt_idmap() and file_mnt_idmap()
+helpers take a ``const struct mnt_idmap *``. mnt_idmap() and file_mnt_idmap()
 return one. The idmapping is immutable so nothing should have modified it
 anyway. References are taken and dropped via mnt_idmap_get() and
 mnt_idmap_put() as before, both accept a const pointer.
+
+---
+
+**mandatory**
+
+->mkdir() must return with the dentry positive, i.e. instantiate the
+dentry it was given or return the dentry it instantiated instead.
+open(O_CREAT|O_DIRECTORY|O_EXCL) opens whatever ->mkdir() produced; a
+negative dentry there is a bug and fails the open with -EIO after the
+directory has been created.  Filesystems that cannot do this, those
+that implement ->atomic_open() and those whose ->mkdir() drops the
+parent's i_rwsem, must set SB_I_NO_ATOMIC_MKDIR in sb->s_iflags, which
+makes that flag combination fail with -EOPNOTSUPP before any lookup.

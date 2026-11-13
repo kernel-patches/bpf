@@ -111,7 +111,7 @@ static int spics_gpio_probe(struct platform_device *pdev)
 	struct device_node *np = pdev->dev.of_node;
 	struct spear_spics *spics;
 
-	spics = devm_kzalloc(&pdev->dev, sizeof(*spics), GFP_KERNEL);
+	spics = devm_kzalloc_obj(&pdev->dev, *spics);
 	if (!spics)
 		return -ENOMEM;
 
@@ -155,8 +155,9 @@ err_dt_data:
 
 static const struct of_device_id spics_gpio_of_match[] = {
 	{ .compatible = "st,spear-spics-gpio" },
-	{}
+	{ }
 };
+MODULE_DEVICE_TABLE(of, spics_gpio_of_match);
 
 static struct platform_driver spics_gpio_driver = {
 	.probe = spics_gpio_probe,

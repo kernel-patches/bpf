@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 // Copyright (c) 2020, The Linux Foundation. All rights reserved.
 
+#include <linux/interrupt.h>
 #include <linux/module.h>
 #include <linux/of_irq.h>
 #include <linux/of.h>
@@ -799,8 +800,7 @@ static int qcom_labibb_regulator_probe(struct platform_device *pdev)
 		    WARN_ON(type != reg_data->type))
 			return -EINVAL;
 
-		vreg  = devm_kzalloc(&pdev->dev, sizeof(*vreg),
-					   GFP_KERNEL);
+		vreg = devm_kzalloc_obj(&pdev->dev, *vreg);
 		if (!vreg)
 			return -ENOMEM;
 

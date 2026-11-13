@@ -205,6 +205,8 @@ static int qcom_cpufreq_kryo_name_version(struct device *cpu_dev,
 	case QCOM_ID_QCF2200:
 	case QCOM_ID_QCF3200:
 	case QCOM_ID_QCF3210:
+	case QCOM_ID_QCF3211:
+	case QCOM_ID_IPQ5211:
 		drv->versions = (*speedbin == 0xcd) ? BIT(1) : BIT(0);
 		break;
 	case QCOM_ID_IPQ5424:
@@ -507,8 +509,7 @@ static int qcom_cpufreq_probe(struct platform_device *pdev)
 	if (!ret)
 		return -ENOENT;
 
-	drv = devm_kzalloc(&pdev->dev, struct_size(drv, cpus, num_possible_cpus()),
-		           GFP_KERNEL);
+	drv = devm_kzalloc_flex(&pdev->dev, *drv, cpus, num_possible_cpus());
 	if (!drv)
 		return -ENOMEM;
 

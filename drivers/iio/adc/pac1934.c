@@ -1447,7 +1447,7 @@ static int pac1934_prep_custom_attributes(struct pac1934_chip_info *info,
 		if (info->active_channels[i])
 			active_channels_count++;
 
-	pac1934_group = devm_kzalloc(dev, sizeof(*pac1934_group), GFP_KERNEL);
+	pac1934_group = devm_kzalloc_obj(dev, *pac1934_group);
 	if (!pac1934_group)
 		return -ENOMEM;
 
@@ -1615,7 +1615,7 @@ MODULE_DEVICE_TABLE(of, pac1934_of_match);
  * https://ww1.microchip.com/downloads/aemDocuments/documents/OTH/ApplicationNotes/ApplicationNotes/PAC1934-Integration-Notes-for-Microsoft-Windows-10-and-Windows-11-Driver-Support-DS00002534.pdf
  */
 static const struct acpi_device_id pac1934_acpi_match[] = {
-	{ "MCHP1930", .driver_data = (kernel_ulong_t)&pac1934_chip_config[PAC1934] },
+	{ .id = "MCHP1930", .driver_data = (kernel_ulong_t)&pac1934_chip_config[PAC1934] },
 	{ }
 };
 MODULE_DEVICE_TABLE(acpi, pac1934_acpi_match);

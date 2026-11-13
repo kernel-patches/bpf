@@ -1268,6 +1268,33 @@ static void dm_test_get_max_frl_rate_4lanes_12gbps(struct kunit *test)
 }
 
 /**
+ * dm_test_get_max_frl_rate_4lanes_16gbps - Test Get max frl rate 4lanes 16gbps
+ * @test: The KUnit test context
+ */
+static void dm_test_get_max_frl_rate_4lanes_16gbps(struct kunit *test)
+{
+	KUNIT_EXPECT_EQ(test, get_max_frl_rate(4, 16), 7);
+}
+
+/**
+ * dm_test_get_max_frl_rate_4lanes_20gbps - Test Get max frl rate 4lanes 20gbps
+ * @test: The KUnit test context
+ */
+static void dm_test_get_max_frl_rate_4lanes_20gbps(struct kunit *test)
+{
+	KUNIT_EXPECT_EQ(test, get_max_frl_rate(4, 20), 8);
+}
+
+/**
+ * dm_test_get_max_frl_rate_4lanes_24gbps - Test Get max frl rate 4lanes 24gbps
+ * @test: The KUnit test context
+ */
+static void dm_test_get_max_frl_rate_4lanes_24gbps(struct kunit *test)
+{
+	KUNIT_EXPECT_EQ(test, get_max_frl_rate(4, 24), 9);
+}
+
+/**
  * dm_test_get_max_frl_rate_unknown - Test Get max frl rate unknown
  * @test: The KUnit test context
  */
@@ -2092,7 +2119,12 @@ static void dm_test_init_panel_settings_dsc(struct kunit *test)
 	dm_helpers_init_panel_settings(NULL, &panel_config, sink);
 
 	KUNIT_EXPECT_FALSE(test, panel_config.dsc.disable_dsc_edp);
-	KUNIT_EXPECT_EQ(test, panel_config.dsc.force_dsc_edp_policy, 0U);
+	KUNIT_EXPECT_EQ(test, panel_config.dsc.force_dsc_edp_policy, 1U);
+}
+
+static bool dm_test_dp_should_enable_fec(const struct dc_link *link)
+{
+	return true;
 }
 
 /* Tests for dm_helpers_override_panel_settings() */
@@ -2106,14 +2138,20 @@ static void dm_test_override_panel_settings_debug_mask_disables_dsc(struct kunit
 	struct dc_context *ctx;
 	struct dc_link *link;
 	struct dc *dc;
+	struct link_service *link_srv;
 	uint old_debug_mask;
 
 	ctx = kunit_kzalloc(test, sizeof(*ctx), GFP_KERNEL);
 	KUNIT_ASSERT_NOT_NULL(test, ctx);
 	dc = kunit_kzalloc(test, sizeof(*dc), GFP_KERNEL);
 	KUNIT_ASSERT_NOT_NULL(test, dc);
+	link_srv = kunit_kzalloc(test, sizeof(*link_srv), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, link_srv);
 	link = dm_kunit_alloc_link(test);
 	ctx->dc = dc;
+	dc->link_srv = link_srv;
+	link->dc = dc;
+	link_srv->dp_should_enable_fec = dm_test_dp_should_enable_fec;
 	link->connector_signal = SIGNAL_TYPE_DISPLAY_PORT;
 
 	old_debug_mask = dm_helpers_get_dc_debug_mask();
@@ -2134,15 +2172,22 @@ static void dm_test_override_panel_settings_second_edp_disables_psr(struct kunit
 	struct dc_link *first_link;
 	struct dc_link *second_link;
 	struct dc *dc;
+	struct link_service *link_srv;
 
 	ctx = kunit_kzalloc(test, sizeof(*ctx), GFP_KERNEL);
 	KUNIT_ASSERT_NOT_NULL(test, ctx);
 	dc = kunit_kzalloc(test, sizeof(*dc), GFP_KERNEL);
 	KUNIT_ASSERT_NOT_NULL(test, dc);
+	link_srv = kunit_kzalloc(test, sizeof(*link_srv), GFP_KERNEL);
+	KUNIT_ASSERT_NOT_NULL(test, link_srv);
 	first_link = dm_kunit_alloc_link(test);
 	second_link = dm_kunit_alloc_link(test);
 
 	ctx->dc = dc;
+	dc->link_srv = link_srv;
+	link_srv->dp_should_enable_fec = dm_test_dp_should_enable_fec;
+	first_link->dc = dc;
+	second_link->dc = dc;
 	dc->link_count = 2;
 	dc->links[0] = first_link;
 	dc->links[1] = second_link;
@@ -4292,7 +4337,7 @@ static void dm_test_is_dp_sink_present_queries_link_service(struct kunit *test)
  * device pointer, so build a real one here.
  */
 static const struct drm_connector_funcs dm_test_connector_funcs = {
-	.reset = drm_atomic_helper_connector_reset,
+	.atomic_create_state = drm_atomic_helper_connector_create_state,
 	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
 	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
 };
@@ -4875,6 +4920,9 @@ static struct kunit_case amdgpu_dm_helpers_test_cases[] = {
 	KUNIT_CASE(dm_test_get_max_frl_rate_4lanes_8gbps),
 	KUNIT_CASE(dm_test_get_max_frl_rate_4lanes_10gbps),
 	KUNIT_CASE(dm_test_get_max_frl_rate_4lanes_12gbps),
+	KUNIT_CASE(dm_test_get_max_frl_rate_4lanes_16gbps),
+	KUNIT_CASE(dm_test_get_max_frl_rate_4lanes_20gbps),
+	KUNIT_CASE(dm_test_get_max_frl_rate_4lanes_24gbps),
 	KUNIT_CASE(dm_test_get_max_frl_rate_unknown),
 	/* dm_dtn_log_begin / dm_dtn_log_append_v / dm_dtn_log_end */
 	KUNIT_CASE(dm_test_dtn_log_buffer_accumulates),

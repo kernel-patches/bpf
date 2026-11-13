@@ -68,7 +68,7 @@ static struct rc_map_table it913x_v1_rc[] = {
 static struct rc_map_list it913x_v1_map = {
 	.map = {
 		.scan     = it913x_v1_rc,
-		.size     = ARRAY_SIZE(it913x_v1_rc),
+		.entries  = ARRAY_SIZE(it913x_v1_rc),
 		.rc_proto = RC_PROTO_NECX,
 		.name     = RC_MAP_IT913X_V1,
 	}

@@ -6,6 +6,7 @@
  */
 
 #include <linux/i2c.h>
+#include <linux/interrupt.h>
 #include <linux/led-class-multicolor.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
@@ -486,7 +487,7 @@ static int omnia_leds_probe(struct i2c_client *client)
 	if (count > OMNIA_BOARD_LEDS)
 		return dev_err_probe(dev, -EINVAL, "Too many LEDs defined in device tree!\n");
 
-	leds = devm_kzalloc(dev, struct_size(leds, leds, count), GFP_KERNEL);
+	leds = devm_kzalloc_flex(dev, *leds, leds, count);
 	if (!leds)
 		return -ENOMEM;
 

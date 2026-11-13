@@ -163,7 +163,7 @@ static int unix_state_lock_cmp_fn(const struct lockdep_map *_a,
 
 	/* Should never happen.  Just to be symmetric. */
 	if (b->sk.sk_state == TCP_LISTEN) {
-		switch (b->sk.sk_state) {
+		switch (a->sk.sk_state) {
 		case TCP_CLOSE:
 		case TCP_ESTABLISHED:
 			return 1;
@@ -800,7 +800,7 @@ static void copy_peercred(struct sock *sk, struct sock *peersk)
 static bool unix_may_passcred(const struct sock *sk)
 {
 	return sk->sk_scm_credentials || sk->sk_scm_pidfd ||
-		sk->sk_scm_pidfd_thread;
+		sk->sk_scm_pidfd_thread || sk->sk_scm_credentials_thread;
 }
 
 static int unix_listen(struct socket *sock, int backlog)
@@ -2047,8 +2047,8 @@ static int unix_maybe_add_creds(struct sk_buff *skb, const struct sock *sk,
 static bool unix_skb_scm_eq(const struct sock *sk, struct sk_buff *skb,
 			    struct scm_cookie *scm)
 {
-	/* Only a thread pidfd receiver can tell threads of one process apart. */
-	if (sk->sk_scm_pidfd_thread &&
+	/* Only a thread-aware receiver can tell threads of one process apart. */
+	if ((sk->sk_scm_pidfd_thread || sk->sk_scm_credentials_thread) &&
 	    UNIXCB(skb).pid[PIDTYPE_PID] != scm->pid[PIDTYPE_PID])
 		return false;
 

@@ -214,8 +214,9 @@ ieee80211_bss_info_update(struct ieee80211_local *local,
 		if (ieee80211_vif_is_mld(&scan_sdata->vif)) {
 			s8 link_id = rx_status->link_id;
 
-			link_conf =
-				rcu_dereference(scan_sdata->vif.link_conf[link_id]);
+			if (link_id != IEEE80211_LINK_UNSPECIFIED)
+				link_conf =
+					rcu_dereference(scan_sdata->vif.link_conf[link_id]);
 		} else {
 			link_conf = &scan_sdata->vif.bss_conf;
 		}
@@ -508,8 +509,6 @@ static void __ieee80211_scan_completed(struct ieee80211_hw *hw, bool aborted)
 
 	local->scanning = 0;
 	local->scan_chandef.chan = NULL;
-
-	synchronize_rcu();
 
 	if (scan_req != local->int_scan_req) {
 		local->scan_info.aborted = aborted;

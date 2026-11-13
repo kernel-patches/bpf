@@ -1192,6 +1192,10 @@ enum dmub_dc_bls_command_type {
 	 * Placeholder for block-level initialization of the DCHVM
 	 */
 	DMUB_CMD__DC_BLS_DCHVM_INIT = 0,
+	/**
+	 * Runs the fixed DCN hardware init sequence.
+	 */
+	DMUB_CMD__DC_BLS_DCN_INIT = 1,
 };
 
 /**
@@ -2617,7 +2621,10 @@ struct dmub_fams2_alternate_stream_dynamic_state {
 	uint16_t vstartup_line;
 	uint16_t vready_line;
 	uint8_t cursor_size[3]; //  Cursor array per plane for now - if we assume a single cursor, then we don't need an array
-	uint8_t pad; // to maintain alignment for below fields - re-arrange structure once all fields are finalized
+	uint8_t disabled_pipe_mask; // bitmask of pipes with RECOUT_HEIGHT == 0 (disabled)
+	struct plane_pipe_rect pipe_viewports[4];
+	uint8_t tmz_id[3]; // TMZ ID per plane
+	uint8_t pad; // to maintain alignment
 	/* outputs: */
 	uint16_t subvp_start_line_a[3];
 	uint16_t subvp_height_a[3];
@@ -2688,7 +2695,6 @@ struct dmub_fams2_cmd_alternate_stream_static_state {
 			uint8_t vertical_access : 1; // vertical_access = 1 means 90 or 270 rotation
 			uint8_t access_direction : 1; // access_direction = 1 means bigger to smaller coordinations (e.g., scan from 2160 to 0 as opposed to regular 0 to 2160)
 			uint8_t dcc : 1;
-			uint8_t tmz : 1; // TODO: Need to assign outside of DML (DML not aware of TMZ)
 		} bits;
 		uint8_t all;
 	} config[3];
@@ -2798,8 +2804,11 @@ union dmub_fams2_stream_static_sub_state_v2 {
 
 struct dmub_fams2_stream_static_state {
 	enum fams2_stream_type type;
-	uint32_t otg_vline_time_ns;
-	uint32_t otg_vline_time_ticks;
+	union {
+		uint32_t otg_vline_time_ns; // used by DCN4
+		uint32_t otg_vline_time_ps; // used by DCN6+
+	};
+	uint32_t otg_vline_time_ticks; // U22.10 fixed point, see FAMS2_OTG_VLINE_TIME_TICKS_U22_10_FRAC_BITS
 	uint16_t htotal;
 	uint16_t vtotal; // nominal vtotal
 	uint16_t vblank_start;
@@ -2831,8 +2840,11 @@ struct dmub_fams2_stream_static_state {
 
 struct dmub_fams2_cmd_stream_static_base_state {
 	enum fams2_stream_type type;
-	uint32_t otg_vline_time_ns;
-	uint32_t otg_vline_time_ticks;
+	union {
+		uint32_t otg_vline_time_ns; // used by DCN4
+		uint32_t otg_vline_time_ps; // used by DCN6+
+	};
+	uint32_t otg_vline_time_ticks; // U22.10 fixed point, see FAMS2_OTG_VLINE_TIME_TICKS_U22_10_FRAC_BITS
 	uint16_t htotal;
 	uint16_t vtotal; // nominal vtotal
 	uint16_t vblank_start;
@@ -2971,6 +2983,11 @@ enum dmub_cmd_idle_opt_type {
 	 * DCN notify to release HW.
 	 */
 	 DMUB_CMD__IDLE_OPT_RELEASE_HW = 4,
+
+	/**
+	 * DCN allow or disallow Z8.
+	 */
+	DMUB_CMD__IDLE_OPT_SET_Z8_ALLOW = 5,
 };
 
 /**
@@ -3022,6 +3039,25 @@ struct dmub_idle_opt_set_dc_power_state_data {
 struct dmub_rb_cmd_idle_opt_set_dc_power_state {
 	struct dmub_cmd_header header; /**< header */
 	struct dmub_idle_opt_set_dc_power_state_data data;
+};
+
+/**
+ * union dmub_idle_opt_set_z8_allow_data - Data passed to FW in a DMUB_CMD__IDLE_OPT_SET_Z8_ALLOW command.
+ */
+union dmub_idle_opt_set_z8_allow_data {
+	struct {
+		uint32_t allow: 1; /**< 0: disallow Z8, 1: allow Z8 */
+		uint32_t reserved: 31; /**< Reserved for expansion; sender zeroes */
+	} bits; /**< bitfields */
+	uint32_t all; /**< union of all bitfields */
+};
+
+/**
+ * struct dmub_rb_cmd_idle_opt_set_z8_allow - Data passed to FW in a DMUB_CMD__IDLE_OPT_SET_Z8_ALLOW command.
+ */
+struct dmub_rb_cmd_idle_opt_set_z8_allow {
+	struct dmub_cmd_header header; /**< header */
+	union dmub_idle_opt_set_z8_allow_data data; /**< Z8 allow policy */
 };
 
 /**
@@ -4790,6 +4826,14 @@ struct dmub_cmd_replay_copy_settings_data {
 	 * @pad: Align structure to 4 byte boundary.
 	 */
 	uint8_t pad[1];
+	/**
+	 * @frame_update_interval: Frame update interval; 0 disabled.
+	 */
+	uint16_t frame_update_interval;
+	/**
+	 * @pad2: Align structure to 4 byte boundary.
+	 */
+	uint8_t pad2[2];
 };
 
 
@@ -7622,6 +7666,17 @@ struct dmub_rb_cmd_boot_time_crc_init {
 };
 
 /**
+ * Definition of a DMUB_CMD__DC_BLS_DCN_INIT command.
+ *
+ * Runs a fixed DCN hardware init sequence after the pre-OS to post-OS
+ * transition. Carries no payload; anything driver-configurable is
+ * programmed by the driver after this command completes.
+ */
+struct dmub_rb_cmd_dc_bls_dcn_init {
+	struct dmub_cmd_header header; /**< Command header */
+};
+
+/**
  * union dmub_rb_cmd - DMUB inbox command.
  */
 union dmub_rb_cmd {
@@ -7916,6 +7971,10 @@ union dmub_rb_cmd {
 	 * Definition of a DMUB_CMD__IDLE_OPT_SET_DC_POWER_STATE command.
 	 */
 	struct dmub_rb_cmd_idle_opt_set_dc_power_state idle_opt_set_dc_power_state;
+	/**
+	 * Definition of a DMUB_CMD__IDLE_OPT_SET_Z8_ALLOW command.
+	 */
+	struct dmub_rb_cmd_idle_opt_set_z8_allow idle_opt_set_z8_allow;
 	/*
 	 * Definition of a DMUB_CMD__REPLAY_COPY_SETTINGS command.
 	 */
@@ -8020,6 +8079,11 @@ union dmub_rb_cmd {
 	 * Definition of a DMUB_CMD__BOOT_TIME_CRC_INIT command.
 	 */
 	struct dmub_rb_cmd_boot_time_crc_init boot_time_crc_init;
+
+	/**
+	 * Definition of a DMUB_CMD__DC_BLS_DCN_INIT command.
+	 */
+	struct dmub_rb_cmd_dc_bls_dcn_init dc_bls_dcn_init;
 
 	/**
 	 * Definition of a DMUB_CMD__PANEL_POLARITY_ENABLE command.

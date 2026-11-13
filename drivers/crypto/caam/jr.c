@@ -178,6 +178,15 @@ static int caam_jr_shutdown(struct device *dev)
 	return ret;
 }
 
+static void caam_jr_platform_shutdown(struct platform_device *pdev)
+{
+	int ret;
+
+	ret = caam_jr_shutdown(&pdev->dev);
+	if (ret)
+		dev_err(&pdev->dev, "Failed to shut down job ring: %d\n", ret);
+}
+
 static void caam_jr_remove(struct platform_device *pdev)
 {
 	int ret;
@@ -542,8 +551,7 @@ static int caam_jr_init(struct device *dev)
 	if (!jrp->outring)
 		return -ENOMEM;
 
-	jrp->entinfo = devm_kcalloc(dev, JOBR_DEPTH, sizeof(*jrp->entinfo),
-				    GFP_KERNEL);
+	jrp->entinfo = devm_kzalloc_objs(dev, *jrp->entinfo, JOBR_DEPTH);
 	if (!jrp->entinfo)
 		return -ENOMEM;
 
@@ -612,7 +620,7 @@ static int caam_jr_probe(struct platform_device *pdev)
 		return irq;
 
 	jrdev = &pdev->dev;
-	jrpriv = devm_kzalloc(jrdev, sizeof(*jrpriv), GFP_KERNEL);
+	jrpriv = devm_kzalloc_obj(jrdev, *jrpriv);
 	if (!jrpriv)
 		return -ENOMEM;
 
@@ -812,7 +820,7 @@ static struct platform_driver caam_jr_driver = {
 	},
 	.probe       = caam_jr_probe,
 	.remove      = caam_jr_remove,
-	.shutdown    = caam_jr_remove,
+	.shutdown    = caam_jr_platform_shutdown,
 };
 
 static int __init jr_driver_init(void)

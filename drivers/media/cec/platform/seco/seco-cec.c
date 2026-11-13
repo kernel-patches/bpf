@@ -570,7 +570,7 @@ static int secocec_probe(struct platform_device *pdev)
 	if (IS_ERR(hdmi_dev))
 		return PTR_ERR(hdmi_dev);
 
-	secocec = devm_kzalloc(dev, sizeof(*secocec), GFP_KERNEL);
+	secocec = devm_kzalloc_obj(dev, *secocec);
 	if (!secocec)
 		return -ENOMEM;
 
@@ -768,8 +768,8 @@ static SIMPLE_DEV_PM_OPS(secocec_pm_ops, secocec_suspend, secocec_resume);
 
 #ifdef CONFIG_ACPI
 static const struct acpi_device_id secocec_acpi_match[] = {
-	{"CEC00001", 0},
-	{},
+	{ .id = "CEC00001" },
+	{ }
 };
 
 MODULE_DEVICE_TABLE(acpi, secocec_acpi_match);

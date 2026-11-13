@@ -180,6 +180,7 @@ static int cros_ec_rpmsg_callback(struct rpmsg_device *rpdev, void *data,
 		memcpy(ec_dev->din, resp->data, len);
 		complete(&ec_rpmsg->xfer_ack);
 	} else if (resp->type == HOST_EVENT_MARK) {
+		ec_dev->last_event_time = cros_ec_get_time_ns();
 		/*
 		 * If the host event is sent before cros_ec_register is
 		 * finished, queue the host event.
@@ -220,7 +221,7 @@ static int cros_ec_rpmsg_probe(struct rpmsg_device *rpdev)
 	if (!ec_dev)
 		return -ENOMEM;
 
-	ec_rpmsg = devm_kzalloc(dev, sizeof(*ec_rpmsg), GFP_KERNEL);
+	ec_rpmsg = devm_kzalloc_obj(dev, *ec_rpmsg);
 	if (!ec_rpmsg)
 		return -ENOMEM;
 

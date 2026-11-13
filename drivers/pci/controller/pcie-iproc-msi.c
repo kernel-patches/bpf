@@ -344,42 +344,39 @@ static void iproc_msi_handler(struct irq_desc *desc)
 	 * data is guaranteed to be in the event queue memory before the tail
 	 * pointer is updated by the iProc MSI core.
 	 */
-	head = iproc_msi_read_reg(msi, IPROC_MSI_EQ_HEAD,
-				  eq) & IPROC_MSI_EQ_MASK;
-	do {
-		tail = iproc_msi_read_reg(msi, IPROC_MSI_EQ_TAIL,
-					  eq) & IPROC_MSI_EQ_MASK;
+	head = iproc_msi_read_reg(msi, IPROC_MSI_EQ_HEAD, eq) &
+				  IPROC_MSI_EQ_MASK;
+	tail = iproc_msi_read_reg(msi, IPROC_MSI_EQ_TAIL, eq) &
+				  IPROC_MSI_EQ_MASK;
 
-		/*
-		 * Figure out total number of events (MSI data) to be
-		 * processed.
-		 */
-		nr_events = (tail < head) ?
-			(EQ_LEN - (head - tail)) : (tail - head);
-		if (!nr_events)
-			break;
+	/*
+	 * Figure out total number of events (MSI data) to be
+	 * processed.
+	 */
+	nr_events = (tail < head) ? (EQ_LEN - (head - tail)) : (tail - head);
+	if (!nr_events)
+		goto iproc_msi_handler_out;
 
-		/* process all outstanding events */
-		while (nr_events--) {
-			hwirq = decode_msi_hwirq(msi, eq, head);
-			generic_handle_domain_irq(msi->inner_domain, hwirq);
+	/* process all outstanding events */
+	while (nr_events--) {
+		hwirq = decode_msi_hwirq(msi, eq, head);
+		generic_handle_domain_irq(msi->inner_domain, hwirq);
 
-			head++;
-			head %= EQ_LEN;
-		}
+		head++;
+		head %= EQ_LEN;
+	}
 
-		/*
-		 * Now all outstanding events have been processed.  Update the
-		 * head pointer.
-		 */
-		iproc_msi_write_reg(msi, IPROC_MSI_EQ_HEAD, eq, head);
+	/*
+	 * Now all outstanding events have been processed.  Update the
+	 * head pointer.
+	 */
+	iproc_msi_write_reg(msi, IPROC_MSI_EQ_HEAD, eq, head);
 
-		/*
-		 * Now go read the tail pointer again to see if there are new
-		 * outstanding events that came in during the above window.
-		 */
-	} while (true);
-
+	/*
+	 * The tail pointer will be reread on the next interrupt to process
+	 * any new events that arrived while handling this batch.
+	 */
+iproc_msi_handler_out:
 	chained_irq_exit(chip, desc);
 }
 
@@ -527,7 +524,7 @@ int iproc_msi_init(struct iproc_pcie *pcie, struct device_node *node)
 	if (pcie->msi)
 		return -EBUSY;
 
-	msi = devm_kzalloc(pcie->dev, sizeof(*msi), GFP_KERNEL);
+	msi = devm_kzalloc_obj(pcie->dev, *msi);
 	if (!msi)
 		return -ENOMEM;
 
@@ -589,8 +586,7 @@ int iproc_msi_init(struct iproc_pcie *pcie, struct device_node *node)
 	if (!msi->bitmap)
 		return -ENOMEM;
 
-	msi->grps = devm_kcalloc(pcie->dev, msi->nr_irqs, sizeof(*msi->grps),
-				 GFP_KERNEL);
+	msi->grps = devm_kzalloc_objs(pcie->dev, *msi->grps, msi->nr_irqs);
 	if (!msi->grps)
 		return -ENOMEM;
 

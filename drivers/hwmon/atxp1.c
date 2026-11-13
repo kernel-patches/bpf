@@ -37,7 +37,7 @@ MODULE_AUTHOR("Sebastian Witt <se.witt@gmx.net>");
 struct atxp1_data {
 	struct i2c_client *client;
 	struct mutex update_lock;
-	unsigned long last_updated;
+	u64 last_updated;
 	bool valid;
 	struct {
 		u8 vid;		/* VID output register */
@@ -55,7 +55,8 @@ static struct atxp1_data *atxp1_update_device(struct device *dev)
 
 	mutex_lock(&data->update_lock);
 
-	if (time_after(jiffies, data->last_updated + HZ) || !data->valid) {
+	if (time_after64(get_jiffies_64(), data->last_updated + HZ) ||
+	    !data->valid) {
 
 		/* Update local register data */
 		data->reg.vid = i2c_smbus_read_byte_data(client, ATXP1_VID);
@@ -64,6 +65,7 @@ static struct atxp1_data *atxp1_update_device(struct device *dev)
 		data->reg.gpio1 = i2c_smbus_read_byte_data(client, ATXP1_GPIO1);
 		data->reg.gpio2 = i2c_smbus_read_byte_data(client, ATXP1_GPIO2);
 
+		data->last_updated = get_jiffies_64();
 		data->valid = true;
 	}
 
@@ -251,7 +253,7 @@ static int atxp1_probe(struct i2c_client *client)
 	struct atxp1_data *data;
 	struct device *hwmon_dev;
 
-	data = devm_kzalloc(dev, sizeof(struct atxp1_data), GFP_KERNEL);
+	data = devm_kzalloc_obj(dev, struct atxp1_data);
 	if (!data)
 		return -ENOMEM;
 

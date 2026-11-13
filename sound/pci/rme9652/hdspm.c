@@ -5383,9 +5383,11 @@ static irqreturn_t snd_hdspm_interrupt(int irq, void *dev_id)
 				/* we disable interrupts for this input until
 				 * processing is done
 				 */
-				hdspm->control_register &= ~hdspm->midi[i].ie;
-				hdspm_write(hdspm, HDSPM_controlRegister,
-						hdspm->control_register);
+				scoped_guard(spinlock, &hdspm->lock) {
+					hdspm->control_register &= ~hdspm->midi[i].ie;
+					hdspm_write(hdspm, HDSPM_controlRegister,
+						    hdspm->control_register);
+				}
 				hdspm->midi[i].pending = 1;
 				schedule = 1;
 			}
@@ -6528,7 +6530,7 @@ static int snd_hdspm_create(struct snd_card *card,
 
 	dev_dbg(card->dev, "kmalloc Mixer memory of %zd Bytes\n",
 		sizeof(*hdspm->mixer));
-	hdspm->mixer = devm_kzalloc(&pci->dev, sizeof(*hdspm->mixer), GFP_KERNEL);
+	hdspm->mixer = devm_kzalloc_obj(&pci->dev, *hdspm->mixer);
 	if (!hdspm->mixer)
 		return -ENOMEM;
 

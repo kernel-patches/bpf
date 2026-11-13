@@ -24,6 +24,7 @@
 #include <net/addrconf.h>
 #include <net/ip6_route.h>
 #include <net/dst_cache.h>
+#include <net/dst_metadata.h>
 #include <net/ip_tunnels.h>
 #ifdef CONFIG_IPV6_SEG6_HMAC
 #include <net/seg6_hmac.h>
@@ -149,9 +150,7 @@ struct seg6_end_dt_info {
 	int vrf_ifindex;
 	int vrf_table;
 
-	/* tunneled packet family (IPv4 or IPv6).
-	 * Protocol and header length are inferred from family.
-	 */
+	/* tunneled packet family (IPv4 or IPv6) */
 	u16 family;
 };
 
@@ -211,6 +210,21 @@ struct seg6_local_lwt {
 static struct seg6_local_lwt *seg6_local_lwtunnel(struct lwtunnel_state *lwt)
 {
 	return (struct seg6_local_lwt *)lwt->data;
+}
+
+static bool seg6_local_skb_has_lwtstate(struct sk_buff *skb)
+{
+	struct dst_entry *dst;
+
+	if (unlikely(!skb_valid_dst(skb)))
+		return false;
+
+	dst = skb_dst(skb);
+	if (unlikely(!dst->lwtstate ||
+		     dst->lwtstate->type != LWTUNNEL_ENCAP_SEG6_LOCAL))
+		return false;
+
+	return true;
 }
 
 static struct ipv6_sr_hdr *get_and_validate_srh(struct sk_buff *skb)
@@ -551,6 +565,47 @@ static bool seg6_next_csid_enabled(__u32 fops)
 	return fops & SEG6_F_LOCAL_FLV_NEXT_CSID;
 }
 
+static bool seg6_flv8986_enabled(__u32 fops)
+{
+	return fops & SEG6_LOCAL_FLV8986_SUPP_OPS;
+}
+
+/* check whether the NEXT-C-SID processing has to be used for the packet,
+ * instead of the RFC8986 flavors set for the given SRv6 End* behavior
+ * instance.
+ *
+ * This function returns:
+ *  - true, when the packet has to go through the NEXT-C-SID processing;
+ *  - false, when NEXT-C-SID is not configured or the packet has to be
+ *    processed on the basis of the RFC8986 flavors.
+ */
+static bool seg6_use_next_csid(struct sk_buff *skb,
+			       const struct seg6_flavors_info *finfo)
+{
+	const struct in6_addr *addr;
+	__u32 fops = finfo->flv_ops;
+
+	if (!seg6_next_csid_enabled(fops))
+		return false;
+
+	addr = &ipv6_hdr(skb)->daddr;
+
+	/* NEXT-C-SID and the RFC8986 flavors combine according to the
+	 * DA.Argument (see RFC9800, sections 4.1.1 and 4.1.7):
+	 *
+	 *       DA.Argument   RFC8986 flavors   processing
+	 *   (1) != 0          any               NEXT-C-SID only, SL unchanged
+	 *   (2) == 0          none              the behavior, e.g. End
+	 *   (3) == 0          one or more       the behavior with its flavors,
+	 *                                       e.g. End with PSP
+	 *
+	 * In (2), the packet still goes through the NEXT-C-SID processing,
+	 * which runs the behavior (e.g. End) when the DA.Argument is zero.
+	 */
+	return !seg6_flv8986_enabled(fops) ||
+	       !seg6_next_csid_is_arg_zero(addr, finfo);
+}
+
 /* Processing of SRv6 End, End.X, and End.T behaviors can be extended through
  * the flavors framework. These behaviors must report the subset of (flavor)
  * operations they currently implement. In this way, if a user specifies a
@@ -775,11 +830,14 @@ pull:
 		skb_set_transport_header(skb, thoff);
 
 	iph = ipv6_hdr(skb);
-	if (iph->nexthdr == NEXTHDR_ROUTING) {
+	if (srhoff == sizeof(*iph)) {
 		iph->nexthdr = srh_nexthdr;
 	} else {
 		/* we must look for the extension header (EXTH, for short) that
-		 * immediately precedes the SRH we have just removed.
+		 * immediately precedes the SRH we have just removed, i.e. the
+		 * EXTH that ends at srhoff. We find it by its position and not
+		 * by its nexthdr, since another routing header (e.g. an SRH
+		 * with SL = 0) may come before the removed SRH.
 		 * Then, we update the value of the EXTH nexthdr with the one
 		 * contained in the SRH nexthdr.
 		 */
@@ -796,11 +854,6 @@ pull:
 			if (unlikely(!hp))
 				return false;
 
-			if (hp->nexthdr == NEXTHDR_ROUTING) {
-				hp->nexthdr = srh_nexthdr;
-				break;
-			}
-
 			switch (nexthdr) {
 			case NEXTHDR_FRAGMENT:
 				fallthrough;
@@ -809,6 +862,11 @@ pull:
 				return false;
 			default:
 				off += ipv6_optlen(hp);
+				break;
+			}
+
+			if (off == srhoff) {
+				hp->nexthdr = srh_nexthdr;
 				break;
 			}
 
@@ -821,6 +879,24 @@ pull:
 	skb_postpush_rcsum(skb, iph, srhoff);
 
 	return true;
+}
+
+/* look up the SRH to be processed by the RFC8986 flavors. As End does, a
+ * routing header with SL = 0 is skipped (e.g. an SRH already consumed).
+ * This function returns NULL when no valid SRH is found.
+ */
+static struct ipv6_sr_hdr *seg6_flv8986_get_srh(struct sk_buff *skb)
+{
+	struct ipv6_sr_hdr *srh;
+
+	srh = seg6_get_srh(skb, IP6_FH_F_SKIP_RH);
+	if (srh)
+		return srh;
+
+	/* we take the first routing header without skipping it. In this way,
+	 * seg6_get_srh_pktinfo() reports SL = 0 and not a missing SRH.
+	 */
+	return seg6_get_srh(skb, 0);
 }
 
 /* process the packet on the basis of the RFC8986 flavors set for the given
@@ -837,14 +913,17 @@ static int end_flv8986_core(struct sk_buff *skb, struct seg6_local_lwt *slwt)
 	__u32 flvmask;
 	int srhoff;
 
-	srh = seg6_get_srh(skb, 0);
+	srh = seg6_flv8986_get_srh(skb);
 	srhoff = srh ? ((unsigned char *)srh - skb->data) : 0;
 	pinfo = seg6_get_srh_pktinfo(srh);
 #ifdef CONFIG_IPV6_SEG6_HMAC
 	if (srh && !seg6_hmac_validate_skb(skb, srh))
 		goto drop;
 #endif
-	flvmask = finfo->flv_ops;
+	/* NEXT-C-SID, when configured, has already been evaluated by the
+	 * caller. Only the RFC8986 flavors are left here.
+	 */
+	flvmask = finfo->flv_ops & ~SEG6_F_LOCAL_FLV_NEXT_CSID;
 	if (unlikely(flvmask & ~SEG6_LOCAL_FLV8986_SUPP_OPS)) {
 		pr_warn_once("seg6local: invalid RFC8986 flavors\n");
 		goto drop;
@@ -898,8 +977,8 @@ static int input_action_end(struct sk_buff *skb, struct seg6_local_lwt *slwt)
 	if (!fops)
 		return input_action_end_core(skb, slwt);
 
-	/* check for the presence of NEXT-C-SID since it applies first */
-	if (seg6_next_csid_enabled(fops))
+	/* NEXT-C-SID is evaluated first, when configured */
+	if (seg6_use_next_csid(skb, finfo))
 		return end_next_csid_core(skb, slwt);
 
 	/* the specific processing function to be performed on the packet
@@ -1028,6 +1107,17 @@ static int input_action_end_dx6_finish(struct net *net, struct sock *sk,
 	return dst_input(skb);
 }
 
+static int input_action_end_dx6_finish_nf(struct net *net, struct sock *sk,
+					  struct sk_buff *skb)
+{
+	if (unlikely(!seg6_local_skb_has_lwtstate(skb))) {
+		kfree_skb(skb);
+		return -EINVAL;
+	}
+
+	return input_action_end_dx6_finish(net, sk, skb);
+}
+
 /* decapsulate and forward to specified nexthop */
 static int input_action_end_dx6(struct sk_buff *skb,
 				struct seg6_local_lwt *slwt)
@@ -1048,12 +1138,46 @@ static int input_action_end_dx6(struct sk_buff *skb,
 	if (static_branch_unlikely(&nf_hooks_lwtunnel_enabled))
 		return NF_HOOK(NFPROTO_IPV6, NF_INET_PRE_ROUTING,
 			       dev_net(skb->dev), NULL, skb, skb->dev,
-			       NULL, input_action_end_dx6_finish);
+			       NULL, input_action_end_dx6_finish_nf);
 
 	return input_action_end_dx6_finish(dev_net(skb->dev), NULL, skb);
 drop:
 	kfree_skb(skb);
 	return -EINVAL;
+}
+
+/* Validate the length of the IPv4 header at skb->data (which must point to
+ * the network header) and report that length, options included.
+ * Only the version, the header length and the presence of the whole header
+ * are checked.
+ * The length is written only when SKB_NOT_DROPPED_YET is returned.
+ *
+ * skb pointers may change: after this call, the caller must evaluate again
+ * any pointer into the packet data.
+ */
+static enum skb_drop_reason
+seg6_validate_iphdr_len(struct sk_buff *skb, int *hdrlen)
+{
+	enum skb_drop_reason reason;
+	const struct iphdr *iph;
+	int len;
+
+	reason = pskb_may_pull_reason(skb, sizeof(struct iphdr));
+	if (reason)
+		return reason;
+
+	iph = ip_hdr(skb);
+	if (iph->version != 4 || iph->ihl < 5)
+		return SKB_DROP_REASON_IP_INHDR;
+
+	len = ip_hdrlen(skb);
+
+	reason = pskb_may_pull_reason(skb, len);
+	if (reason)
+		return reason;
+
+	*hdrlen = len;
+	return SKB_NOT_DROPPED_YET;
 }
 
 static int input_action_end_dx4_finish(struct net *net, struct sock *sk,
@@ -1082,27 +1206,42 @@ static int input_action_end_dx4_finish(struct net *net, struct sock *sk,
 	return dst_input(skb);
 }
 
+static int input_action_end_dx4_finish_nf(struct net *net, struct sock *sk,
+					  struct sk_buff *skb)
+{
+	if (unlikely(!seg6_local_skb_has_lwtstate(skb))) {
+		kfree_skb(skb);
+		return -EINVAL;
+	}
+
+	return input_action_end_dx4_finish(net, sk, skb);
+}
+
 static int input_action_end_dx4(struct sk_buff *skb,
 				struct seg6_local_lwt *slwt)
 {
+	SKB_DR(reason);
+	int hdrlen;
+
 	if (!decap_and_validate(skb, IPPROTO_IPIP))
 		goto drop;
 
-	if (!pskb_may_pull(skb, sizeof(struct iphdr)))
+	reason = seg6_validate_iphdr_len(skb, &hdrlen);
+	if (reason)
 		goto drop;
 
 	skb->protocol = htons(ETH_P_IP);
-	skb_set_transport_header(skb, sizeof(struct iphdr));
+	skb_set_transport_header(skb, hdrlen);
 	nf_reset_ct(skb);
 
 	if (static_branch_unlikely(&nf_hooks_lwtunnel_enabled))
 		return NF_HOOK(NFPROTO_IPV4, NF_INET_PRE_ROUTING,
 			       dev_net(skb->dev), NULL, skb, skb->dev,
-			       NULL, input_action_end_dx4_finish);
+			       NULL, input_action_end_dx4_finish_nf);
 
 	return input_action_end_dx4_finish(dev_net(skb->dev), NULL, skb);
 drop:
-	kfree_skb(skb);
+	kfree_skb_reason(skb, reason);
 	return -EINVAL;
 }
 
@@ -1237,16 +1376,24 @@ static struct sk_buff *end_dt_vrf_core(struct sk_buff *skb,
 	struct seg6_end_dt_info *info = &slwt->dt_info;
 	struct net_device *vrf;
 	__be16 protocol;
+	SKB_DR(reason);
 	int hdrlen;
 
 	vrf = end_dt_get_vrf_rcu(skb, info);
 	if (unlikely(!vrf))
 		goto drop;
 
+	if (unlikely(info->family != AF_UNSPEC && info->family != family)) {
+		pr_warn_once("seg6local: SRv6 End.DT* family mismatch");
+		goto drop;
+	}
+
 	switch (family) {
 	case AF_INET:
 		protocol = htons(ETH_P_IP);
-		hdrlen = sizeof(struct iphdr);
+		reason = seg6_validate_iphdr_len(skb, &hdrlen);
+		if (unlikely(reason))
+			goto drop;
 		break;
 	case AF_INET6:
 		protocol = htons(ETH_P_IPV6);
@@ -1255,11 +1402,6 @@ static struct sk_buff *end_dt_vrf_core(struct sk_buff *skb,
 	case AF_UNSPEC:
 		fallthrough;
 	default:
-		goto drop;
-	}
-
-	if (unlikely(info->family != AF_UNSPEC && info->family != family)) {
-		pr_warn_once("seg6local: SRv6 End.DT* family mismatch");
 		goto drop;
 	}
 
@@ -1273,7 +1415,7 @@ static struct sk_buff *end_dt_vrf_core(struct sk_buff *skb,
 	return end_dt_vrf_rcv(skb, family, vrf);
 
 drop:
-	kfree_skb(skb);
+	kfree_skb_reason(skb, reason);
 	return ERR_PTR(-EINVAL);
 }
 
@@ -1286,9 +1428,7 @@ static int input_action_end_dt4(struct sk_buff *skb,
 	if (!decap_and_validate(skb, IPPROTO_IPIP))
 		goto drop;
 
-	if (!pskb_may_pull(skb, sizeof(struct iphdr)))
-		goto drop;
-
+	/* end_dt_vrf_core() validates the inner IPv4 header length */
 	skb = end_dt_vrf_core(skb, slwt, AF_INET);
 	if (!skb)
 		/* packet has been processed and consumed by the VRF */
@@ -1741,6 +1881,17 @@ static int seg6_local_input_core(struct net *net, struct sock *sk,
 	return rc;
 }
 
+static int seg6_local_input_core_nf(struct net *net, struct sock *sk,
+				    struct sk_buff *skb)
+{
+	if (unlikely(!seg6_local_skb_has_lwtstate(skb))) {
+		kfree_skb(skb);
+		return -EINVAL;
+	}
+
+	return seg6_local_input_core(net, sk, skb);
+}
+
 static int seg6_local_input(struct sk_buff *skb)
 {
 	if (skb->protocol != htons(ETH_P_IPV6)) {
@@ -1751,7 +1902,7 @@ static int seg6_local_input(struct sk_buff *skb)
 	if (static_branch_unlikely(&nf_hooks_lwtunnel_enabled))
 		return NF_HOOK(NFPROTO_IPV6, NF_INET_LOCAL_IN,
 			       dev_net(skb->dev), NULL, skb, skb->dev, NULL,
-			       seg6_local_input_core);
+			       seg6_local_input_core_nf);
 
 	return seg6_local_input_core(dev_net(skb->dev), NULL, skb);
 }

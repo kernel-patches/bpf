@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 CFLAGS += -Wall -O2 -Wno-unused-function
-CFLAGS += $(TOOLS_INCLUDES)
+CFLAGS += $(KHDR_INCLUDES) $(TOOLS_INCLUDES)
 LDFLAGS += -pthread
 
 TEST_GEN_PROGS :=
@@ -30,5 +30,7 @@ TEST_GEN_PROGS += thread-self
 TEST_GEN_PROGS += proc-multiple-procfs
 TEST_GEN_PROGS += proc-fsconfig-hidepid
 TEST_GEN_PROGS += proc-pidns
+TEST_GEN_PROGS += proc-unmountable
+TEST_GEN_PROGS += proc-pid-setuid-exec
 
 include ../lib.mk

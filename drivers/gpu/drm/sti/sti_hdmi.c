@@ -1146,7 +1146,7 @@ static const struct drm_connector_funcs sti_hdmi_connector_funcs = {
 	.fill_modes = drm_helper_probe_single_connector_modes,
 	.detect = sti_hdmi_connector_detect,
 	.destroy = drm_connector_cleanup,
-	.reset = drm_atomic_helper_connector_reset,
+	.atomic_create_state = drm_atomic_helper_connector_create_state,
 	.atomic_set_property = sti_hdmi_connector_set_property,
 	.atomic_get_property = sti_hdmi_connector_get_property,
 	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
@@ -1293,7 +1293,7 @@ static int sti_hdmi_bind(struct device *dev, struct device *master, void *data)
 	if (!encoder)
 		return -EINVAL;
 
-	connector = devm_kzalloc(dev, sizeof(*connector), GFP_KERNEL);
+	connector = devm_kzalloc_obj(dev, *connector);
 	if (!connector)
 		return -EINVAL;
 

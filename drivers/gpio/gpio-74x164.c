@@ -128,7 +128,7 @@ static int gen_74x164_probe(struct spi_device *spi)
 	if (ret)
 		return dev_err_probe(dev, ret, "Missing 'registers-number' property.\n");
 
-	chip = devm_kzalloc(dev, struct_size(chip, buffer, nregs), GFP_KERNEL);
+	chip = devm_kzalloc_flex(dev, *chip, buffer, nregs);
 	if (!chip)
 		return -ENOMEM;
 
@@ -181,15 +181,17 @@ static int gen_74x164_probe(struct spi_device *spi)
 
 static const struct spi_device_id gen_74x164_spi_ids[] = {
 	{ .name = "74hc595" },
+	{ .name = "74lv164" },
 	{ .name = "74lvc594" },
-	{},
+	{ }
 };
 MODULE_DEVICE_TABLE(spi, gen_74x164_spi_ids);
 
 static const struct of_device_id gen_74x164_dt_ids[] = {
 	{ .compatible = "fairchild,74hc595" },
+	{ .compatible = "nxp,74lv164" },
 	{ .compatible = "nxp,74lvc594" },
-	{},
+	{ }
 };
 MODULE_DEVICE_TABLE(of, gen_74x164_dt_ids);
 

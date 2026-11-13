@@ -10,7 +10,7 @@
 #include <linux/device.h>
 #include <linux/err.h>
 #include <linux/i2c.h>
-#include <linux/irqreturn.h>
+#include <linux/interrupt.h>
 #include <linux/lockdep.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
@@ -209,7 +209,7 @@ static int yoga_c630_ec_probe(struct i2c_client *client)
 	struct yoga_c630_ec *ec;
 	int ret;
 
-	ec = devm_kzalloc(dev, sizeof(*ec), GFP_KERNEL);
+	ec = devm_kzalloc_obj(dev, *ec);
 	if (!ec)
 		return -ENOMEM;
 

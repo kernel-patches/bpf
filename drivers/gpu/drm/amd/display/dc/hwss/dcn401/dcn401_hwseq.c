@@ -169,15 +169,11 @@ void dcn401_init_hw(struct dc *dc)
 	//}
 
 	// Set default OPTC memory power states
-	if (dc->debug.enable_mem_low_power.bits.optc) {
-		// Shutdown when unassigned and light sleep in VBLANK
-		REG_SET_2(ODM_MEM_PWR_CTRL3, 0, ODM_MEM_UNASSIGNED_PWR_MODE, 3, ODM_MEM_VBLANK_PWR_MODE, 1);
-	}
+	if (dc->debug.enable_mem_low_power.bits.optc)
+		dcn401_init_odm_mem_power(hws);
 
-	if (dc->debug.enable_mem_low_power.bits.vga) {
-		// Power down VGA memory
-		REG_UPDATE(MMHUBBUB_MEM_PWR_CNTL, VGA_MEM_PWR_FORCE, 1);
-	}
+	if (dc->debug.enable_mem_low_power.bits.vga)
+		dcn401_power_down_vga_mem(hws);
 
 	if (dc->ctx->dc_bios->fw_info_valid) {
 		res_pool->ref_clocks.xtalin_clock_inKhz =
@@ -367,7 +363,7 @@ void dcn401_init_hw(struct dc *dc)
 		if (dc->res_pool->dccg && dc->res_pool->dccg->funcs && dc->res_pool->dccg->funcs->allow_clock_gating)
 			dc->res_pool->dccg->funcs->allow_clock_gating(dc->res_pool->dccg, true);
 
-		REG_UPDATE(DCFCLK_CNTL, DCFCLK_GATE_DIS, 0);
+		dcn401_dcfclk_gating_control(hws, true);
 	}
 
 	dcn401_setup_hpo_hw_control(hws, true);
@@ -972,6 +968,22 @@ void dcn401_setup_hpo_hw_control(const struct dce_hwseq *hws, bool enable)
 	REG_UPDATE(HPO_TOP_HW_CONTROL, HPO_IO_EN, enable);
 }
 
+void dcn401_init_odm_mem_power(struct dce_hwseq *hws)
+{
+	// Shutdown when unassigned and light sleep in VBLANK
+	REG_SET_2(ODM_MEM_PWR_CTRL3, 0, ODM_MEM_UNASSIGNED_PWR_MODE, 3, ODM_MEM_VBLANK_PWR_MODE, 1);
+}
+
+void dcn401_power_down_vga_mem(struct dce_hwseq *hws)
+{
+	REG_UPDATE(MMHUBBUB_MEM_PWR_CNTL, VGA_MEM_PWR_FORCE, 1);
+}
+
+void dcn401_dcfclk_gating_control(struct dce_hwseq *hws, bool enable)
+{
+	REG_UPDATE(DCFCLK_CNTL, DCFCLK_GATE_DIS, !enable);
+}
+
 void adjust_hotspot_between_slices_for_2x_magnify(uint32_t cursor_width, struct dc_cursor_position *pos_cpy)
 {
 	if (cursor_width <= 128) {
@@ -1452,8 +1464,11 @@ void dcn401_prepare_bandwidth(struct dc *dc,
 	}
 
 	if (dc->debug.fams2_config.bits.enable) {
+		struct dc_dmub_fams2_config_data fams2_data;
+
 		dcn401_dmub_hw_control_lock(dc, context, true);
-		dcn401_fams2_update_config(dc, context, false);
+		if (dcn401_fams2_build_update_config(dc, context, false, &fams2_data))
+			dc_dmub_srv_fams2_update_config(dc->ctx->dmub_srv, &fams2_data);
 		dcn401_dmub_hw_control_lock(dc, context, false);
 	}
 
@@ -1506,9 +1521,9 @@ void dcn401_prepare_bandwidth_sequence(struct dc *dc,
 	}
 
 	if (dc->debug.fams2_config.bits.enable) {
-		dcn401_dmub_hw_control_lock(dc, context, true);
-		dcn401_fams2_update_config(dc, context, false);
-		dcn401_dmub_hw_control_lock(dc, context, false);
+		hwss_add_dmub_hw_control_lock_fast(seq_state, dc, true);
+		hwss_add_dmub_fams2_update_config(seq_state, dc, context, false);
+		hwss_add_dmub_hw_control_lock_fast(seq_state, dc, false);
 	}
 
 	if (p_state_change_support != context->bw_ctx.bw.dcn.clk.p_state_change_support)
@@ -1524,8 +1539,11 @@ void dcn401_optimize_bandwidth(
 
 	/* enable fams2 if needed */
 	if (dc->debug.fams2_config.bits.enable) {
+		struct dc_dmub_fams2_config_data fams2_data;
+
 		dcn401_dmub_hw_control_lock(dc, context, true);
-		dcn401_fams2_update_config(dc, context, true);
+		if (dcn401_fams2_build_update_config(dc, context, true, &fams2_data))
+			dc_dmub_srv_fams2_update_config(dc->ctx->dmub_srv, &fams2_data);
 		dcn401_dmub_hw_control_lock(dc, context, false);
 	}
 
@@ -1582,9 +1600,9 @@ void dcn401_optimize_bandwidth_sequence(struct dc *dc,
 
 	/* enable fams2 if needed */
 	if (dc->debug.fams2_config.bits.enable) {
-		dcn401_dmub_hw_control_lock(dc, context, true);
-		dcn401_fams2_update_config(dc, context, true);
-		dcn401_dmub_hw_control_lock(dc, context, false);
+		hwss_add_dmub_hw_control_lock_fast(seq_state, dc, true);
+		hwss_add_dmub_fams2_update_config(seq_state, dc, context, true);
+		hwss_add_dmub_hw_control_lock_fast(seq_state, dc, false);
 	}
 
 	hwss_add_hubbub_program_watermarks(seq_state, dc, hubbub,
@@ -1641,20 +1659,34 @@ bool dcn401_is_dmub_hw_lock_supported(const struct dc *dc)
 	return dc && dc->ctx && dc->ctx->dmub_srv && dc->ctx->dmub_srv->dmub;
 }
 
-void dcn401_fams2_update_config(struct dc *dc, struct dc_state *context, bool enable)
+/* Returns false when there is nothing to send. */
+bool dcn401_fams2_build_update_config(struct dc *dc, struct dc_state *context, bool enable,
+		struct dc_dmub_fams2_config_data *data)
 {
-	bool fams2_info_required;
-	bool fams2_enabled;
-	bool fams2_legacy_no_fams2;
+	memset(data, 0, sizeof(*data));
 
 	if (!dc->ctx || !dc->ctx->dmub_srv || !dc->debug.fams2_config.bits.enable)
-		return;
+		return false;
 
-	fams2_enabled = context->bw_ctx.bw.dcn.fams2_global_config.features.bits.enable != 0u;
-	fams2_legacy_no_fams2 = context->bw_ctx.bw.dcn.fams2_global_config.features.bits.legacy_method_no_fams2 != 0u;
-	fams2_info_required = fams2_enabled || fams2_legacy_no_fams2;
+	data->fams_version_major = dc->debug.fams_version.major;
+	data->features = dc->debug.fams2_config;
+	data->imm_restore_drr = dc->debug.fams2_imm_restore_drr;
+	data->visual_confirm = dc->debug.visual_confirm == VISUAL_CONFIRM_FAMS2;
 
-	dc_dmub_srv_fams2_update_config(dc, context, enable && fams2_info_required);
+	if (context) {
+		const struct dmub_cmd_fams2_global_config *global =
+			&context->bw_ctx.bw.dcn.fams2_global_config;
+		bool fams2_info_required = global->features.bits.enable != 0u ||
+				global->features.bits.legacy_method_no_fams2 != 0u;
+
+		data->global = *global;
+		data->stream_base = context->bw_ctx.bw.dcn.fams2_stream_base_params;
+		data->stream_sub = context->bw_ctx.bw.dcn.fams2_stream_sub_params;
+		data->stream_sub_v2 = context->bw_ctx.bw.dcn.fams2_stream_sub_params_v2;
+		data->enable = enable && fams2_info_required;
+	}
+
+	return true;
 }
 
 static void update_dsc_for_odm_change(struct dc *dc, struct dc_state *context,
@@ -1903,9 +1935,11 @@ void dcn401_unblank_stream(struct pipe_ctx *pipe_ctx,
 
 void dcn401_hardware_release(struct dc *dc)
 {
+	struct dc_dmub_fams2_config_data fams2_data;
+
 	if (!dc->debug.disable_force_pstate_allow_on_hw_release) {
-		if (dc->ctx->dmub_srv && dc->debug.fams2_config.bits.enable)
-			dc_dmub_srv_fams2_update_config(dc, dc->current_state, false);
+		if (dcn401_fams2_build_update_config(dc, dc->current_state, false, &fams2_data))
+			dc_dmub_srv_fams2_update_config(dc->ctx->dmub_srv, &fams2_data);
 
 		/* If pstate unsupported, or still supported
 		* by firmware, force it supported by dcn
@@ -1926,8 +1960,8 @@ void dcn401_hardware_release(struct dc *dc)
 			dc->clk_mgr->funcs->update_clocks(dc->clk_mgr, dc->current_state, true);
 		}
 
-		if (dc->ctx->dmub_srv && dc->debug.fams2_config.bits.enable)
-			dc_dmub_srv_fams2_update_config(dc, dc->current_state, false);
+		if (dcn401_fams2_build_update_config(dc, dc->current_state, false, &fams2_data))
+			dc_dmub_srv_fams2_update_config(dc->ctx->dmub_srv, &fams2_data);
 	}
 }
 
@@ -2705,6 +2739,17 @@ void dcn401_program_front_end_for_ctx(
 			pipe->plane_res.hubp->funcs->hubp_wait_pipe_read_start(pipe->plane_res.hubp);
 		}
 	}
+
+	/* Debug (DM SystemDisplayEnable, driver disabled): force solid-color DPG
+	 * output last, after all normal pipe/OPP programming, so it isn't overwritten.
+	 */
+	if (dc->debug.force_dpg_on_flip && hws->funcs.blank_pixel_data) {
+		for (i = 0; i < dc->res_pool->pipe_count; i++) {
+			pipe = &context->res_ctx.pipe_ctx[i];
+			if (resource_is_pipe_type(pipe, OTG_MASTER))
+				hws->funcs.blank_pixel_data(dc, pipe, true);
+		}
+	}
 }
 
 void dcn401_post_unlock_program_front_end(
@@ -3130,7 +3175,8 @@ void dcn401_plane_atomic_power_down(struct dc *dc,
 	DC_LOG_DEBUG(
 			"Power gated front end %d\n", hubp->inst);
 
-	if (hws->funcs.dpp_root_clock_control)
+	if (hws->funcs.dpp_root_clock_control &&
+	    hwss_is_dpp_root_clock_control_allowed(hws, false))
 		hws->funcs.dpp_root_clock_control(hws, dpp->inst, false);
 }
 
@@ -3598,10 +3644,10 @@ void dcn401_post_unlock_reset_opp_sequence(
 	}
 }
 
-void dcn401_dc_ip_request_cntl(struct dc *dc, bool enable)
+void dcn401_dc_ip_request_cntl(struct dce_hwseq *hws, bool enable)
 {
-	struct dce_hwseq *hws = dc->hwseq;
-
+	if (!hws || !hws->ctx || !hws->regs || !hws->shifts || !hws->masks)
+		return;
 	if (REG(DC_IP_REQUEST_CNTL))
 		REG_SET(DC_IP_REQUEST_CNTL, 0, IP_REQUEST_EN, enable ? 1 : 0);
 }

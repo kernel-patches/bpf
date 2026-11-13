@@ -27,7 +27,7 @@ static const char *const known_fs[] = {
 	"hfsplus", "hostfs", "hpfs", "hugetlbfs", "ibmasmfs", "iomem",
 	"ipathfs", "iso9660", "jffs2", "jfs", "minix", "mqueue", "msdos",
 	"nfs", "nfs4", "nfsd", "nilfs2", "nsfs", "ntfs", "ntfs3", "ocfs2",
-	"ocfs2_dlmfs", "omfs", "openpromfs", "overlay", "pipefs", "proc",
+	"ocfs2_dlmfs", "openpromfs", "overlay", "pipefs", "proc",
 	"pstore", "pvfs2", "qnx4", "qnx6", "ramfs", "resctrl", "romfs",
 	"rootfs", "rpc_pipefs", "s390_hypfs", "secretmem", "securityfs",
 	"selinuxfs", "smackfs", "smb3", "sockfs", "spufs", "squashfs", "sysfs",
@@ -335,10 +335,10 @@ static void test_statmount_sb_basic(void)
 		return;
 	}
 
-	if (sm.sb_magic != sf.f_type) {
+	if (sm.sb_magic != (unsigned long)sf.f_type) {
 		ksft_test_result_fail("unexpected sb magic: 0x%llx != 0x%lx\n",
 				      (unsigned long long) sm.sb_magic,
-				      sf.f_type);
+				      (unsigned long) sf.f_type);
 		return;
 	}
 

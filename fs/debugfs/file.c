@@ -1144,8 +1144,10 @@ static const struct file_operations fops_blob = {
  * you are responsible here.)  If an error occurs, ERR_PTR(-ERROR) will be
  * returned.
  *
- * If debugfs is not enabled in the kernel, the value ERR_PTR(-ENODEV) will
- * be returned.
+ * If debugfs is not enabled in the kernel build, the value ERR_PTR(-ENODEV)
+ * will be returned. If debugfs is enabled in the kernel build but is disabled
+ * by using "debugfs=off" on the kernel command line, the value ERR_PTR(-EPERM)
+ * will be returned.
  */
 struct dentry *debugfs_create_blob(const char *name, umode_t mode,
 				   struct dentry *parent,
@@ -1362,7 +1364,7 @@ void debugfs_create_devm_seqfile(struct device *dev, const char *name,
 	if (IS_ERR(parent))
 		return;
 
-	entry = devm_kzalloc(dev, sizeof(*entry), GFP_KERNEL);
+	entry = devm_kzalloc_obj(dev, *entry);
 	if (!entry)
 		return;
 

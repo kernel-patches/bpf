@@ -604,7 +604,7 @@ static struct clk *tegra_clk_sor_pad_register(struct tegra_sor *sor,
 	struct clk_init_data init;
 	struct clk *clk;
 
-	pad = devm_kzalloc(sor->dev, sizeof(*pad), GFP_KERNEL);
+	pad = devm_kzalloc_obj(sor->dev, *pad);
 	if (!pad)
 		return ERR_PTR(-ENOMEM);
 
@@ -1720,20 +1720,17 @@ static void tegra_sor_early_unregister(struct drm_connector *connector)
 	sor->debugfs_files = NULL;
 }
 
-static void tegra_sor_connector_reset(struct drm_connector *connector)
+static struct drm_connector_state *tegra_sor_connector_create_state(struct drm_connector *connector)
 {
 	struct tegra_sor_state *state;
 
 	state = kzalloc_obj(*state);
 	if (!state)
-		return;
+		return ERR_PTR(-ENOMEM);
 
-	if (connector->state) {
-		__drm_atomic_helper_connector_destroy_state(connector->state);
-		kfree(connector->state);
-	}
+	__drm_atomic_helper_connector_state_init(&state->base, connector);
 
-	__drm_atomic_helper_connector_reset(connector, &state->base);
+	return &state->base;
 }
 
 static enum drm_connector_status
@@ -1764,10 +1761,10 @@ tegra_sor_connector_duplicate_state(struct drm_connector *connector)
 }
 
 static const struct drm_connector_funcs tegra_sor_connector_funcs = {
-	.reset = tegra_sor_connector_reset,
 	.detect = tegra_sor_connector_detect,
 	.fill_modes = drm_helper_probe_single_connector_modes,
 	.destroy = tegra_output_connector_destroy,
+	.atomic_create_state = tegra_sor_connector_create_state,
 	.atomic_duplicate_state = tegra_sor_connector_duplicate_state,
 	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
 	.late_register = tegra_sor_late_register,
@@ -3747,7 +3744,7 @@ static int tegra_sor_probe(struct platform_device *pdev)
 	struct tegra_sor *sor;
 	int err;
 
-	sor = devm_kzalloc(&pdev->dev, sizeof(*sor), GFP_KERNEL);
+	sor = devm_kzalloc_obj(&pdev->dev, *sor);
 	if (!sor)
 		return -ENOMEM;
 

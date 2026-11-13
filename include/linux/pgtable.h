@@ -12,6 +12,7 @@
 #ifdef CONFIG_MMU
 
 #include <linux/mm_types.h>
+#include <linux/minmax.h>
 #include <linux/bug.h>
 #include <linux/errno.h>
 #include <asm-generic/pgtable_uffd.h>
@@ -1518,6 +1519,29 @@ static inline void arch_swap_restore(swp_entry_t entry, struct folio *folio)
 })
 #endif
 
+/**
+ * pte_table_clamped_end() - Limit a range to a single PTE table.
+ * @addr: Start address.
+ * @end: Exclusive end address.
+ *
+ * Only use pmd_addr_end() when traversing page tables, in a pattern like::
+ *
+ *     next = pmd_addr_end(addr, end);
+ *
+ * Higher levels already bound the range when PMDs are folded. Use this
+ * helper elsewhere to clamp the range regardless of PMD folding.
+ *
+ * Return: The exclusive end of the PTE table containing @addr, capped at @end.
+ */
+static inline unsigned long pte_table_clamped_end(unsigned long addr,
+		unsigned long end)
+{
+	const unsigned long pmd_end = (addr & PMD_MASK) + PMD_SIZE;
+
+	/* Compare inclusive ends to avoid wraparounds. */
+	return min(pmd_end - 1, end - 1) + 1;
+}
+
 /*
  * When walking page tables, we usually want to skip any p?d_none entries;
  * and any p?d_bad entries - reporting the error before resetting to none.
@@ -2203,6 +2227,35 @@ static inline int pmd_free_pte_page(pmd_t *pmd, unsigned long addr)
 	return 0;
 }
 #endif	/* CONFIG_HAVE_ARCH_HUGE_VMAP */
+
+/*
+ * PTE-level block mappings for vmap.
+ *
+ * vmap_pte_set_huge() only has to be implemented by architectures whose
+ * arch_vmap_pte_range_map_size() can return a size other than PAGE_SIZE.
+ */
+#ifndef __HAVE_ARCH_VMAP_PTE_SET_HUGE
+static inline void vmap_pte_set_huge(pte_t *ptep, unsigned long addr,
+				     phys_addr_t phys, pgprot_t prot,
+				     unsigned long size)
+{
+	BUILD_BUG();
+}
+#endif
+
+/*
+ * Likewise, vmap_pte_clear_huge() only has to be implemented by architectures
+ * whose arch_vmap_pte_range_unmap_size() can return a size other than
+ * PAGE_SIZE.
+ */
+#ifndef __HAVE_ARCH_VMAP_PTE_CLEAR_HUGE
+static inline pte_t vmap_pte_clear_huge(pte_t *ptep, unsigned long addr,
+					unsigned long size)
+{
+	BUILD_BUG();
+	return __pte(0);
+}
+#endif
 
 #ifndef __HAVE_ARCH_FLUSH_PMD_TLB_RANGE
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE

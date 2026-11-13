@@ -60,7 +60,7 @@ static int sl28cpld_gpio_irq_init(struct platform_device *pdev,
 	if (irq < 0)
 		return irq;
 
-	irq_chip = devm_kzalloc(dev, sizeof(*irq_chip), GFP_KERNEL);
+	irq_chip = devm_kzalloc_obj(dev, *irq_chip);
 	if (!irq_chip)
 		return -ENOMEM;
 
@@ -141,7 +141,7 @@ static const struct of_device_id sl28cpld_gpio_of_match[] = {
 	{ .compatible = "kontron,sl28cpld-gpio", .data = (void *)SL28CPLD_GPIO },
 	{ .compatible = "kontron,sl28cpld-gpi", .data = (void *)SL28CPLD_GPI },
 	{ .compatible = "kontron,sl28cpld-gpo", .data = (void *)SL28CPLD_GPO },
-	{}
+	{ }
 };
 MODULE_DEVICE_TABLE(of, sl28cpld_gpio_of_match);
 

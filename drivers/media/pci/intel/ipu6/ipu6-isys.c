@@ -821,10 +821,18 @@ static int isys_runtime_pm_suspend(struct device *dev)
 	struct ipu6_device *isp = adev->isp;
 	int ret = 0;
 
-	isys->adev->auxdrv_data->fw_ops->close(isys);
+	/*
+	 * The ISYS may have been runtime resumed as the parent of the PSYS
+	 * before this driver was bound. isys_runtime_pm_resume() hasn't run
+	 * then, and there is no firmware to close.
+	 */
 	if (isys->fwctx) {
-		dev_warn(&isys->adev->auxdev.dev, "failed to close fw isys\n");
-		ret = -EIO;
+		isys->adev->auxdrv_data->fw_ops->close(isys);
+		if (isys->fwctx) {
+			dev_warn(&isys->adev->auxdev.dev,
+				 "failed to close fw isys\n");
+			ret = -EIO;
+		}
 	}
 
 	mutex_lock(&isys->mutex);
@@ -987,7 +995,7 @@ static int isys_probe(struct auxiliary_device *auxdev,
 	if (!isp->bus_ready_to_probe)
 		return -EPROBE_DEFER;
 
-	isys = devm_kzalloc(&auxdev->dev, sizeof(*isys), GFP_KERNEL);
+	isys = devm_kzalloc_obj(&auxdev->dev, *isys);
 	if (!isys)
 		return -ENOMEM;
 
@@ -998,8 +1006,8 @@ static int isys_probe(struct auxiliary_device *auxdev,
 	isys->pdata = adev->pdata;
 	csi2_pdata = &isys->pdata->ipdata->csi2;
 
-	isys->csi2 = devm_kcalloc(&auxdev->dev, csi2_pdata->nports,
-				  sizeof(*isys->csi2), GFP_KERNEL);
+	isys->csi2 = devm_kzalloc_objs(&auxdev->dev, *isys->csi2,
+				       csi2_pdata->nports);
 	if (!isys->csi2)
 		return -ENOMEM;
 

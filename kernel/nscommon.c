@@ -1,11 +1,17 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* Copyright (c) 2025 Christian Brauner <brauner@kernel.org> */
 
+#include <linux/cgroup.h>
+#include <linux/ipc_namespace.h>
+#include <linux/mnt_namespace.h>
 #include <linux/ns_common.h>
 #include <linux/nstree.h>
+#include <linux/pid_namespace.h>
 #include <linux/proc_ns.h>
 #include <linux/security.h>
+#include <linux/time_namespace.h>
 #include <linux/user_namespace.h>
+#include <linux/uts_namespace.h>
 #include <linux/vfsdebug.h>
 
 #ifdef CONFIG_DEBUG_VFS
@@ -54,7 +60,8 @@ static void ns_debug(struct ns_common *ns, const struct proc_ns_operations *ops)
 }
 #endif
 
-int __ns_common_init(struct ns_common *ns, u32 ns_type, const struct proc_ns_operations *ops, int inum)
+int __ns_common_init(struct ns_common *ns, u32 ns_type, const struct proc_ns_operations *ops,
+		     int inum, u64 ns_id)
 {
 	int ret = 0;
 
@@ -64,7 +71,6 @@ int __ns_common_init(struct ns_common *ns, u32 ns_type, const struct proc_ns_ope
 	ns->ns_security = NULL;
 #endif
 	ns->ops = ops;
-	ns->ns_id = 0;
 	ns->ns_type = ns_type;
 	ns_tree_node_init(&ns->ns_tree_node);
 	ns_tree_node_init(&ns->ns_unified_node);
@@ -81,6 +87,9 @@ int __ns_common_init(struct ns_common *ns, u32 ns_type, const struct proc_ns_ope
 		ret = proc_alloc_inum(&ns->inum);
 	if (ret)
 		return ret;
+
+	/* Allocate the id before the LSM hook so it can track the namespace by it. */
+	__ns_tree_gen_id(ns, ns_id);
 
 	ret = security_namespace_init(ns);
 	if (ret) {
@@ -100,6 +109,49 @@ int __ns_common_init(struct ns_common *ns, u32 ns_type, const struct proc_ns_ope
 		atomic_set(&ns->__ns_ref_active, 0);
 	return 0;
 }
+
+/**
+ * ns_common_init_security - allocate LSM state for the initial namespaces
+ *
+ * The initial namespaces are set up statically via NS_COMMON_INIT() at compile
+ * time and therefore never pass through __ns_common_init(), so their LSM blob
+ * is left unallocated. Called from security_init() once all ordered LSMs are
+ * registered so every LSM's namespace_init hook fires on them the same way it
+ * does for init_net (which is initialized at runtime via
+ * ns_common_init(&init_net) from net_ns_init() and is therefore excluded
+ * here).
+ *
+ * Return: the first non-zero return from security_namespace_init(), or 0.
+ */
+#ifdef CONFIG_SECURITY
+int __init ns_common_init_security(void)
+{
+	struct ns_common *set[] = {
+		to_ns_common(&init_user_ns),
+		to_ns_common(&init_uts_ns),
+		to_ns_common(&init_pid_ns),
+		from_mnt_ns(&init_mnt_ns),
+#if defined(CONFIG_POSIX_MQUEUE) || defined(CONFIG_SYSVIPC)
+		to_ns_common(&init_ipc_ns),
+#endif
+#ifdef CONFIG_CGROUPS
+		to_ns_common(&init_cgroup_ns),
+#endif
+#ifdef CONFIG_TIME_NS
+		to_ns_common(&init_time_ns),
+#endif
+	};
+	unsigned int i;
+	int ret;
+
+	for (i = 0; i < ARRAY_SIZE(set); i++) {
+		ret = security_namespace_init(set[i]);
+		if (ret)
+			return ret;
+	}
+	return 0;
+}
+#endif
 
 void __ns_common_free(struct ns_common *ns)
 {

@@ -865,7 +865,7 @@ static int tegra186_gpio_probe(struct platform_device *pdev)
 	if (err < 0)
 		return err;
 
-	gpio = devm_kzalloc(&pdev->dev, struct_size(gpio, irq, err), GFP_KERNEL);
+	gpio = devm_kzalloc_flex(&pdev->dev, *gpio, irq, err);
 	if (!gpio)
 		return -ENOMEM;
 
@@ -929,8 +929,7 @@ static int tegra186_gpio_probe(struct platform_device *pdev)
 	for (i = 0; i < gpio->soc->num_ports; i++)
 		gpio->gpio.ngpio += gpio->soc->ports[i].pins;
 
-	names = devm_kcalloc(gpio->gpio.parent, gpio->gpio.ngpio,
-			     sizeof(*names), GFP_KERNEL);
+	names = devm_kzalloc_objs(gpio->gpio.parent, *names, gpio->gpio.ngpio);
 	if (!names)
 		return -ENOMEM;
 
@@ -988,8 +987,8 @@ static int tegra186_gpio_probe(struct platform_device *pdev)
 	 * currently program.
 	 */
 	if (gpio->num_irqs_per_bank > 1) {
-		irq->parents = devm_kcalloc(&pdev->dev, gpio->num_banks,
-					    sizeof(*irq->parents), GFP_KERNEL);
+		irq->parents = devm_kzalloc_objs(&pdev->dev, *irq->parents,
+						 gpio->num_banks);
 		if (!irq->parents)
 			return -ENOMEM;
 
@@ -1020,8 +1019,7 @@ static int tegra186_gpio_probe(struct platform_device *pdev)
 		}
 	}
 
-	irq->map = devm_kcalloc(&pdev->dev, gpio->gpio.ngpio,
-				sizeof(*irq->map), GFP_KERNEL);
+	irq->map = devm_kzalloc_objs(&pdev->dev, *irq->map, gpio->gpio.ngpio);
 	if (!irq->map)
 		return -ENOMEM;
 
@@ -1559,49 +1557,49 @@ static const struct tegra_gpio_soc tegra410_system_soc = {
 static const struct of_device_id tegra186_gpio_of_match[] = {
 	{
 		.compatible = "nvidia,tegra186-gpio",
-		.data = &tegra186_main_soc
+		.data = &tegra186_main_soc,
 	}, {
 		.compatible = "nvidia,tegra186-gpio-aon",
-		.data = &tegra186_aon_soc
+		.data = &tegra186_aon_soc,
 	}, {
 		.compatible = "nvidia,tegra194-gpio",
-		.data = &tegra194_main_soc
+		.data = &tegra194_main_soc,
 	}, {
 		.compatible = "nvidia,tegra194-gpio-aon",
-		.data = &tegra194_aon_soc
+		.data = &tegra194_aon_soc,
 	}, {
 		.compatible = "nvidia,tegra234-gpio",
-		.data = &tegra234_main_soc
+		.data = &tegra234_main_soc,
 	}, {
 		.compatible = "nvidia,tegra234-gpio-aon",
-		.data = &tegra234_aon_soc
+		.data = &tegra234_aon_soc,
 	}, {
 		.compatible = "nvidia,tegra238-gpio",
-		.data = &tegra238_main_soc
+		.data = &tegra238_main_soc,
 	}, {
 		.compatible = "nvidia,tegra238-gpio-aon",
-		.data = &tegra238_aon_soc
+		.data = &tegra238_aon_soc,
 	}, {
 		.compatible = "nvidia,tegra256-gpio",
-		.data = &tegra256_main_soc
+		.data = &tegra256_main_soc,
 	}, {
 		.compatible = "nvidia,tegra264-gpio",
-		.data = &tegra264_main_soc
+		.data = &tegra264_main_soc,
 	}, {
 		.compatible = "nvidia,tegra264-gpio-aon",
-		.data = &tegra264_aon_soc
+		.data = &tegra264_aon_soc,
 	}, {
 		.compatible = "nvidia,tegra264-gpio-uphy",
-		.data = &tegra264_uphy_soc
+		.data = &tegra264_uphy_soc,
 	}, {
 		.compatible = "nvidia,tegra268-gpio",
-		.data = &tegra268_main_soc
+		.data = &tegra268_main_soc,
 	}, {
 		.compatible = "nvidia,tegra268-gpio-aon",
-		.data = &tegra268_aon_soc
+		.data = &tegra268_aon_soc,
 	}, {
 		.compatible = "nvidia,tegra268-gpio-uphy",
-		.data = &tegra268_uphy_soc
+		.data = &tegra268_uphy_soc,
 	}, {
 		/* sentinel */
 	}
@@ -1617,7 +1615,7 @@ static const struct acpi_device_id  tegra186_gpio_acpi_match[] = {
 	{ .id = "NVDA0608", .driver_data = (kernel_ulong_t)&tegra241_aon_soc },
 	{ .id = "NVDA0708", .driver_data = (kernel_ulong_t)&tegra410_compute_soc },
 	{ .id = "NVDA0808", .driver_data = (kernel_ulong_t)&tegra410_system_soc },
-	{}
+	{ }
 };
 MODULE_DEVICE_TABLE(acpi, tegra186_gpio_acpi_match);
 

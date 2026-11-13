@@ -669,8 +669,8 @@ static const struct dev_pm_ops tegra_gpio_pm_ops = {
 };
 
 static const struct of_device_id tegra_pmc_of_match[] = {
-	{ .compatible = "nvidia,tegra210-pmc", },
-	{ /* sentinel */ },
+	{ .compatible = "nvidia,tegra210-pmc" },
+	{ /* sentinel */ }
 };
 
 static int tegra_gpio_probe(struct platform_device *pdev)
@@ -682,7 +682,7 @@ static int tegra_gpio_probe(struct platform_device *pdev)
 	unsigned int i, j;
 	int ret;
 
-	tgi = devm_kzalloc(&pdev->dev, sizeof(*tgi), GFP_KERNEL);
+	tgi = devm_kzalloc_obj(&pdev->dev, *tgi);
 	if (!tgi)
 		return -ENOMEM;
 
@@ -717,13 +717,12 @@ static int tegra_gpio_probe(struct platform_device *pdev)
 	if (tgi->soc->debounce_supported)
 		tgi->gc.set_config = tegra_gpio_set_config;
 
-	tgi->bank_info = devm_kcalloc(&pdev->dev, tgi->bank_count,
-				      sizeof(*tgi->bank_info), GFP_KERNEL);
+	tgi->bank_info = devm_kzalloc_objs(&pdev->dev, *tgi->bank_info,
+					   tgi->bank_count);
 	if (!tgi->bank_info)
 		return -ENOMEM;
 
-	tgi->irqs = devm_kcalloc(&pdev->dev, tgi->bank_count,
-				 sizeof(*tgi->irqs), GFP_KERNEL);
+	tgi->irqs = devm_kzalloc_objs(&pdev->dev, *tgi->irqs, tgi->bank_count);
 	if (!tgi->irqs)
 		return -ENOMEM;
 
@@ -808,7 +807,7 @@ static const struct of_device_id tegra_gpio_of_match[] = {
 	{ .compatible = "nvidia,tegra210-gpio", .data = &tegra210_gpio_config },
 	{ .compatible = "nvidia,tegra30-gpio", .data = &tegra30_gpio_config },
 	{ .compatible = "nvidia,tegra20-gpio", .data = &tegra20_gpio_config },
-	{ },
+	{ }
 };
 MODULE_DEVICE_TABLE(of, tegra_gpio_of_match);
 

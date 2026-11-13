@@ -75,7 +75,7 @@ static struct rc_map_table winfast[] = {
 static struct rc_map_list winfast_map = {
 	.map = {
 		.scan     = winfast,
-		.size     = ARRAY_SIZE(winfast),
+		.entries  = ARRAY_SIZE(winfast),
 		.rc_proto = RC_PROTO_UNKNOWN,	/* Legacy IR type */
 		.name     = RC_MAP_WINFAST,
 	}

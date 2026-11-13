@@ -45,6 +45,9 @@ static int ivpu_preemption_buffers_create(struct ivpu_device *vdev,
 		return -ENOMEM;
 	}
 
+	if (vdev->fw->secondary_preempt_buf_size == 0)
+		return 0;
+
 	cmdq->secondary_preempt_buf = ivpu_bo_create(vdev, &file_priv->ctx, &vdev->hw->ranges.dma,
 						     vdev->fw->secondary_preempt_buf_size,
 						     DRM_IVPU_BO_WC);
@@ -914,7 +917,7 @@ static int ivpu_submit(struct drm_file *file, struct ivpu_file_priv *file_priv, 
 	u32 *buf_handles;
 	int idx, ret;
 
-	buf_handles = kcalloc(buffer_count, sizeof(u32), GFP_KERNEL);
+	buf_handles = kzalloc_objs(u32, buffer_count);
 	if (!buf_handles)
 		return -ENOMEM;
 

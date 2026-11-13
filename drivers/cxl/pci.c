@@ -102,7 +102,7 @@ static int cxl_request_irq(struct cxl_dev_state *cxlds, int irq,
 	struct device *dev = cxlds->dev;
 	struct cxl_dev_id *dev_id;
 
-	dev_id = devm_kzalloc(dev, sizeof(*dev_id), GFP_KERNEL);
+	dev_id = devm_kzalloc_obj(dev, *dev_id);
 	if (!dev_id)
 		return -ENOMEM;
 	dev_id->cxlds = cxlds;
@@ -1117,8 +1117,12 @@ static void cxl_reset_done(struct pci_dev *pdev)
 	if (!cxlmd->dev.driver)
 		return;
 
-	if (cxlmd->endpoint &&
-	    cxl_endpoint_decoder_reset_detected(cxlmd->endpoint)) {
+	if (!cxlmd->endpoint)
+		return;
+
+	cxl_bi_reset_detected(cxlmd->endpoint);
+
+	if (cxl_endpoint_decoder_reset_detected(cxlmd->endpoint)) {
 		device_for_each_child(&cxlmd->endpoint->dev, NULL,
 				      cxl_endpoint_decoder_clear_reset_flags);
 

@@ -1476,7 +1476,7 @@ __naked void sub64_full_overflow(void)
 SEC("socket")
 __description("64-bit subtraction, partial overflow, result in unbounded reg")
 __success __log_level(2)
-__msg("3: (1f) r3 -= r2 {{.*}} R3=scalar(id=1-1)")
+__msg("3: (1f) r3 -= r2 {{.*}} R3=scalar()")
 __retval(0)
 __naked void sub64_partial_overflow(void)
 {
@@ -1572,7 +1572,7 @@ l0_%=:	r0 = 0;				\
 SEC("socket")
 __description("bounds deduction cross sign boundary, negative overlap")
 __success __log_level(2)
-__msg("7: (1f) r0 -= r6 {{.*}} R0=scalar(smin=smin32=-655,smax=smax32=-146,umin=0xfffffffffffffd71,umax=0xffffffffffffff6e,umin32=0xfffffd71,umax32=0xffffff6e,var_off=(0xfffffffffffffc00; 0x3ff))")
+__msg("7: (1f) r0 -= r6 {{.*}} R0=scalar(smin=smin32=-527,smax=smax32=-146,umin=0xfffffffffffffdf1,umax=0xffffffffffffff6e,umin32=0xfffffdf1,umax32=0xffffff6e,var_off=(0xfffffffffffffc00; 0x3ff))")
 __retval(0)
 __naked void bounds_deduct_negative_overlap(void)
 {
@@ -1648,7 +1648,7 @@ l0_%=:	r0 = 0;				\
  */
 SEC("socket")
 __description("bounds deduction cross sign boundary, two overlaps")
-__failure
+__failure __log_level(2)
 __msg("3: (2d) if r0 > r1 {{.*}} R0=scalar(smin=smin32=-128,smax=smax32=127)")
 /* smin=-128 includes point 0xffffffffffffff80 */
 __msg("frame pointer is read only")
@@ -1797,8 +1797,8 @@ l1_%=:	r0 = 1;				\
 
 SEC("socket")
 __description("jset on same register, scalar value unknown branch 1")
-__msg("3: (b7) r0 = 0 {{.*}} R0=0")
 __msg("5: (b7) r0 = 1 {{.*}} R0=1")
+__msg("3: (b7) r0 = 0 {{.*}} R0=0")
 __success __log_level(2)
 __naked void jset_on_same_register_3(void *ctx)
 {
@@ -1818,8 +1818,8 @@ l1_%=:	r0 = 1;				\
 
 SEC("socket")
 __description("jset on same register, scalar value unknown branch 2")
-__msg("4: (b7) r0 = 0 {{.*}} R0=0")
 __msg("6: (b7) r0 = 1 {{.*}} R0=1")
+__msg("4: (b7) r0 = 0 {{.*}} R0=0")
 __success __log_level(2)
 __naked void jset_on_same_register_4(void *ctx)
 {
@@ -1840,8 +1840,8 @@ l1_%=:	r0 = 1;				\
 
 SEC("socket")
 __description("jset on same register, scalar value unknown branch 3")
-__msg("4: (b7) r0 = 0 {{.*}} R0=0")
 __msg("6: (b7) r0 = 1 {{.*}} R0=1")
+__msg("4: (b7) r0 = 0 {{.*}} R0=0")
 __success __log_level(2)
 __naked void jset_on_same_register_5(void *ctx)
 {
@@ -1992,6 +1992,64 @@ __naked void bounds_refinement_multiple_overlaps(void *ctx)
 	exit;				\
 "	:
 	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+/*
+ * r0 is x << 32, the low three bits of x are 5. No such x is in [-2, 1], -3 is in [-3, 1].
+ * umin and umax are unbounded for a range that crosses 0.
+ */
+#define RANGE_CROSSES_0(name, smin)		\
+__naked void name(void *ctx)			\
+{						\
+	asm volatile(				\
+	"call %[bpf_ktime_get_ns];"		\
+	"r0 <<= 35;"				\
+	"r1 = 0x500000000 ll;"			\
+	"r0 += r1;"				\
+	"r1 = " #smin " ll;"			\
+	"if r0 s< r1 goto 1f;"			\
+	"r1 = 0x100000000 ll;"			\
+	"if r0 s> r1 goto 1f;"			\
+	"r10 = 0;"				\
+"1:	exit;"					\
+	:					\
+	: __imm(bpf_ktime_get_ns)		\
+	: __clobber_all);			\
+}
+
+SEC("socket")
+__description("dead branch: tnum and a range that crosses 0 don't overlap")
+__success
+RANGE_CROSSES_0(range_crossing_0_no_tnum_overlap, -0x200000000)
+
+SEC("socket")
+__description("tnum overlaps the negative part of a range that crosses 0")
+__failure __msg("frame pointer is read only")
+RANGE_CROSSES_0(range_crossing_0_tnum_overlap_below_0, -0x300000000)
+
+/*
+ * The low three bits of r0 are 5. No such value is in [-2, 1]: the fall-through branch of the
+ * second jump is dead. The jump branch refines r0 to [5, S64_MAX - 2].
+ */
+SEC("socket")
+__description("dead branch: the live branch is refined")
+__success
+__naked void dead_branch_live_branch_is_refined(void *ctx)
+{
+	asm volatile(
+	"call %[bpf_ktime_get_ns];"
+	"r0 <<= 3;"
+	"r0 += 5;"
+	"if r0 s< -2 goto 1f;"
+	"if r0 s> 1 goto +1;"
+	"exit;"
+	"r0 s>>= 63;"
+	"if r0 == 0 goto 1f;"
+	"r10 = 0;"
+"1:	exit;"
+	:
+	: __imm(bpf_ktime_get_ns)
 	: __clobber_all);
 }
 
@@ -2160,6 +2218,74 @@ l0_%=:	r0 = 0;						\
 }
 
 /*
+ * -1 and 0 meet at the insn that forks. The state with [-1, 0] is kept there. The
+ * pushed state is within it, so it's not there that it is pushed to.
+ */
+SEC("socket")
+__description("maybe_fork_scalars: AND where paths meet rejects OOB")
+__failure __msg("invalid access to map value")
+__naked void and_scalar_fork_at_join_rejects_oob(void)
+{
+	asm volatile ("					\
+	r1 = 0;						\
+	*(u64*)(r10 - 8) = r1;				\
+	r2 = r10;					\
+	r2 += -8;					\
+	r1 = %[map_hash_8b] ll;				\
+	call %[bpf_map_lookup_elem];			\
+	if r0 == 0 goto l0_%=;				\
+	r9 = r0;					\
+	r1 = *(u64*)(r9 + 0);				\
+	r6 = -1;					\
+	if r1 == 0 goto l1_%=;				\
+	r6 = 0;						\
+l1_%=:	r6 &= 8;					\
+	/* r6 is 8 (current) or 0 (pushed) */		\
+	r6 ^= 8;					\
+	/* pushed path: r6 = 8, OOB for value_size=8 */	\
+	r9 += r6;					\
+	r0 = *(u8*)(r9 + 0);				\
+l0_%=:	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_map_lookup_elem),
+	  __imm_addr(map_hash_8b)
+	: __clobber_all);
+}
+
+SEC("socket")
+__description("maybe_fork_scalars: 32-bit AND of a 32-bit range where paths meet rejects OOB")
+__failure __msg("invalid access to map value")
+__naked void and32_scalar32_fork_at_join_rejects_oob(void)
+{
+	asm volatile ("					\
+	r1 = 0;						\
+	*(u64*)(r10 - 8) = r1;				\
+	r2 = r10;					\
+	r2 += -8;					\
+	r1 = %[map_hash_8b] ll;				\
+	call %[bpf_map_lookup_elem];			\
+	if r0 == 0 goto l0_%=;				\
+	r9 = r0;					\
+	r1 = *(u64*)(r9 + 0);				\
+	w6 = -1;					\
+	if r1 == 0 goto l1_%=;				\
+	r6 = 0;						\
+l1_%=:	w6 &= 8;					\
+	/* r6 is 8 (current) or 0 (pushed) */		\
+	r6 ^= 8;					\
+	/* pushed path: r6 = 8, OOB for value_size=8 */	\
+	r9 += r6;					\
+	r0 = *(u8*)(r9 + 0);				\
+l0_%=:	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_map_lookup_elem),
+	  __imm_addr(map_hash_8b)
+	: __clobber_all);
+}
+
+/*
  * The insn that forks is the head of a loop that scalar evolution counted. The state with
  * [-1, 0] is kept there, and the state with 0 that is split off is within it.
  */
@@ -2199,6 +2325,46 @@ l0_%=:	r0 = 0;						\
 	  __imm_addr(map_hash_8b)
 	: __clobber_all);
 }
+
+#define FORK						\
+	"r6 = *(u64*)(r9 + 0);"				\
+	"r6 s>>= 63;"					\
+	"r6 &= 4;"					\
+	"*(u64*)(r9 + 0) = r6;"
+#define FORK4 FORK FORK FORK FORK
+
+/*
+ * The pushed states of one block that don't differ in what is live are one state: 16 forks
+ * are not 2^16 states.
+ */
+SEC("socket")
+__description("maybe_fork_scalars: 16 forks in a block")
+__success __retval(0)
+__log_level(4)
+__msg("processed {{[0-9][0-9]?[0-9]?}} insns")
+__naked void and_scalar_16_forks_in_a_block(void)
+{
+	asm volatile (
+	"r1 = 0;"
+	"*(u64*)(r10 - 8) = r1;"
+	"r2 = r10;"
+	"r2 += -8;"
+	"r1 = %[map_hash_8b] ll;"
+	"call %[bpf_map_lookup_elem];"
+	"if r0 == 0 goto l0_%=;"
+	"r9 = r0;"
+	FORK4 FORK4 FORK4 FORK4
+"l0_%=:"
+	"r0 = 0;"
+	"exit;"
+	:
+	: __imm(bpf_map_lookup_elem),
+	  __imm_addr(map_hash_8b)
+	: __clobber_all);
+}
+
+#undef FORK4
+#undef FORK
 
 /*
  * Last jump can be detected as always taken because the intersection of R5 and

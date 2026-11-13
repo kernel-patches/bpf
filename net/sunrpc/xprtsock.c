@@ -24,7 +24,6 @@
 #include <linux/slab.h>
 #include <linux/module.h>
 #include <linux/capability.h>
-#include <linux/pagemap.h>
 #include <linux/errno.h>
 #include <linux/socket.h>
 #include <linux/in.h>
@@ -3501,7 +3500,7 @@ static struct rpc_xprt *xs_setup_tcp_tls(struct xprt_create *args)
 	transport = container_of(xprt, struct sock_xprt, xprt);
 
 	xprt->prot = IPPROTO_TCP;
-	xprt->xprt_class = &xs_tcp_transport;
+	xprt->xprt_class = &xs_tcp_tls_transport;
 	xprt->max_payload = RPC_MAX_FRAGMENT_SIZE;
 
 	xprt->bind_timeout = XS_BIND_TO;

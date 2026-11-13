@@ -121,7 +121,7 @@ static int waveshare_gpio_probe(struct i2c_client *i2c)
 	unsigned int data;
 	int ret;
 
-	state = devm_kzalloc(dev, sizeof(*state), GFP_KERNEL);
+	state = devm_kzalloc_obj(dev, *state);
 	if (!state)
 		return -ENOMEM;
 
@@ -190,7 +190,7 @@ static int waveshare_gpio_probe(struct i2c_client *i2c)
 
 static const struct of_device_id waveshare_gpio_dt_ids[] = {
 	{ .compatible = "waveshare,dsi-touch-gpio" },
-	{},
+	{ }
 };
 MODULE_DEVICE_TABLE(of, waveshare_gpio_dt_ids);
 

@@ -89,6 +89,16 @@ config KEYBOARD_APPLESPI
 	  To compile this driver as a module, choose M here: the
 	  module will be called applespi.
 
+config KEYBOARD_ASUS_TRANSFORMER_EC
+	tristate "Asus Transformer's Mobile Dock multimedia keys"
+	depends on MFD_ASUS_TRANSFORMER_EC
+	help
+	  Say Y here if you want to use multimedia keys present on Asus
+	  Transformer's Mobile Dock.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called asus-transformer-ec-keys.
+
 config KEYBOARD_ATARI
 	tristate "Atari keyboard"
 	depends on ATARI
@@ -315,28 +325,6 @@ config KEYBOARD_HP7XX
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called jornada720_kbd.
-
-config KEYBOARD_LM8323
-	tristate "LM8323 keypad chip"
-	depends on I2C
-	depends on LEDS_CLASS
-	help
-	  If you say yes here you get support for the National Semiconductor
-	  LM8323 keypad controller.
-
-	  To compile this driver as a module, choose M here: the
-	  module will be called lm8323.
-
-config KEYBOARD_LM8333
-	tristate "LM8333 keypad chip"
-	depends on I2C
-	select INPUT_MATRIXKMAP
-	help
-	  If you say yes here you get support for the National Semiconductor
-	  LM8333 keypad controller.
-
-	  To compile this driver as a module, choose M here: the
-	  module will be called lm8333.
 
 config KEYBOARD_LOCOMO
 	tristate "LoCoMo Keyboard Support"

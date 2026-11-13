@@ -261,8 +261,8 @@ static int loongson_gpio_init_irqchip(struct platform_device *pdev,
 	gpio_irq_chip_set_chip(&chip->irq, data->girqchip);
 
 	chip->irq.num_parents = data->intr_num;
-	chip->irq.parents = devm_kcalloc(&pdev->dev, data->intr_num,
-					 sizeof(*chip->irq.parents), GFP_KERNEL);
+	chip->irq.parents = devm_kzalloc_objs(&pdev->dev, *chip->irq.parents,
+					      data->intr_num);
 	if (!chip->irq.parents)
 		return -ENOMEM;
 
@@ -336,7 +336,7 @@ static int loongson_gpio_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct reset_control *rst;
 
-	lgpio = devm_kzalloc(dev, sizeof(*lgpio), GFP_KERNEL);
+	lgpio = devm_kzalloc_obj(dev, *lgpio);
 	if (!lgpio)
 		return -ENOMEM;
 
@@ -519,7 +519,7 @@ static const struct of_device_id loongson_gpio_of_match[] = {
 		.compatible = "loongson,ls3a6000-gpio",
 		.data = &loongson_gpio_ls3a6000_data,
 	},
-	{}
+	{ }
 };
 MODULE_DEVICE_TABLE(of, loongson_gpio_of_match);
 
@@ -556,7 +556,7 @@ static const struct acpi_device_id loongson_gpio_acpi_match[] = {
 		.id = "LOON000F",
 		.driver_data = (kernel_ulong_t)&loongson_gpio_ls3a6000_data,
 	},
-	{}
+	{ }
 };
 MODULE_DEVICE_TABLE(acpi, loongson_gpio_acpi_match);
 

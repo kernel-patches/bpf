@@ -2522,12 +2522,7 @@ static int kvm_s390_pv_dmp(struct kvm *kvm, struct kvm_pv_cmd *cmd,
 		if (!kvm->arch.pv.dumping)
 			break;
 
-		/*
-		 * gaddr is an output parameter since we might stop
-		 * early. As dmp will be copied back in our caller, we
-		 * don't need to do it ourselves.
-		 */
-		r = kvm_s390_pv_dump_stor_state(kvm, result_buff, &dmp.gaddr, dmp.buff_len,
+		r = kvm_s390_pv_dump_stor_state(kvm, result_buff, dmp.gaddr, dmp.buff_len,
 						&cmd->rc, &cmd->rrc);
 		break;
 	}
@@ -3920,13 +3915,6 @@ bool kvm_arch_no_poll(struct kvm_vcpu *vcpu)
 		return true;
 	}
 	return false;
-}
-
-int kvm_arch_vcpu_should_kick(struct kvm_vcpu *vcpu)
-{
-	/* kvm common code refers to this, but never calls it */
-	BUG();
-	return 0;
 }
 
 static int kvm_arch_vcpu_ioctl_get_one_reg(struct kvm_vcpu *vcpu,

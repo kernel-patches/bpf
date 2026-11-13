@@ -959,7 +959,7 @@ static int glk_emmc_add_host(struct sdhci_pci_slot *slot)
 	if (ret)
 		return ret;
 
-	cq_host = devm_kzalloc(dev, sizeof(*cq_host), GFP_KERNEL);
+	cq_host = devm_kzalloc_obj(dev, *cq_host);
 	if (!cq_host) {
 		ret = -ENOMEM;
 		goto cleanup;
@@ -1959,6 +1959,7 @@ static const struct pci_device_id pci_ids[] = {
 	SDHCI_PCI_DEVICE(GLI, 9755, gl9755),
 	SDHCI_PCI_DEVICE(GLI, 9763E, gl9763e),
 	SDHCI_PCI_DEVICE(GLI, 9767, gl9767),
+	SDHCI_PCI_DEVICE(GLI, 9768, gl9767),
 	SDHCI_PCI_DEVICE_CLASS(AMD, SYSTEM_SDHCI, PCI_CLASS_MASK, amd),
 	/* Generic SD host controller */
 	{PCI_DEVICE_CLASS(SYSTEM_SDHCI, PCI_CLASS_MASK)},
@@ -2327,7 +2328,7 @@ static int sdhci_pci_probe(struct pci_dev *pdev,
 	if (ret)
 		return ret;
 
-	chip = devm_kzalloc(&pdev->dev, sizeof(*chip), GFP_KERNEL);
+	chip = devm_kzalloc_obj(&pdev->dev, *chip);
 	if (!chip)
 		return -ENOMEM;
 

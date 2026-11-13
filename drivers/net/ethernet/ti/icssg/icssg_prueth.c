@@ -1100,7 +1100,7 @@ static int emac_ndo_open(struct net_device *ndev)
 
 	prueth->emacs_initialized++;
 
-	queue_work(system_long_wq, &emac->stats_work.work);
+	queue_work(system_dfl_long_wq, &emac->stats_work.work);
 
 	return 0;
 
@@ -2195,7 +2195,7 @@ static int prueth_probe(struct platform_device *pdev)
 	BUILD_BUG_ON_MSG((sizeof(struct prueth_swdata) > PRUETH_NAV_SW_DATA_SIZE),
 			 "insufficient SW_DATA size");
 
-	prueth = devm_kzalloc(dev, sizeof(*prueth), GFP_KERNEL);
+	prueth = devm_kzalloc_obj(dev, *prueth);
 	if (!prueth)
 		return -ENOMEM;
 

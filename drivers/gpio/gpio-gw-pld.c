@@ -73,7 +73,7 @@ static int gw_pld_probe(struct i2c_client *client)
 	struct gw_pld *gw;
 	int ret;
 
-	gw = devm_kzalloc(dev, sizeof(*gw), GFP_KERNEL);
+	gw = devm_kzalloc_obj(dev, *gw);
 	if (!gw)
 		return -ENOMEM;
 
@@ -115,8 +115,8 @@ static const struct i2c_device_id gw_pld_id[] = {
 MODULE_DEVICE_TABLE(i2c, gw_pld_id);
 
 static const struct of_device_id gw_pld_dt_ids[] = {
-	{ .compatible = "gateworks,pld-gpio", },
-	{ },
+	{ .compatible = "gateworks,pld-gpio" },
+	{ }
 };
 MODULE_DEVICE_TABLE(of, gw_pld_dt_ids);
 

@@ -406,8 +406,7 @@ dma_xfer(struct arasan_cf_dev *acdev, dma_addr_t src, dma_addr_t dest, u32 len)
 		return -EAGAIN;
 	}
 
-	tx->callback = dma_callback;
-	tx->callback_param = acdev;
+	dmaengine_desc_set_callback(tx, dma_callback, NULL, acdev);
 	cookie = dmaengine_submit(tx);
 
 	ret = dma_submit_error(cookie);
@@ -804,7 +803,7 @@ static int arasan_cf_probe(struct platform_device *pdev)
 	irq_handler_t irq_handler = NULL;
 	int ret;
 
-	acdev = devm_kzalloc(&pdev->dev, sizeof(*acdev), GFP_KERNEL);
+	acdev = devm_kzalloc_obj(&pdev->dev, *acdev);
 	if (!acdev)
 		return -ENOMEM;
 

@@ -320,7 +320,7 @@ static int max20730_init_debugfs(struct i2c_client *client,
 		return ret;
 	data->mfr_voutmin = ret;
 
-	psu = devm_kzalloc(&client->dev, sizeof(*psu), GFP_KERNEL);
+	psu = devm_kzalloc_obj(&client->dev, *psu);
 	if (!psu)
 		return -ENOMEM;
 	psu->client = client;
@@ -672,7 +672,8 @@ static int max20730_probe(struct i2c_client *client)
 				     I2C_FUNC_SMBUS_BLOCK_DATA))
 		return -ENODEV;
 
-	ret = i2c_smbus_read_block_data(client, PMBUS_MFR_ID, buf);
+	ret = i2c_smbus_read_block_data(client, PMBUS_MFR_ID,
+					sizeof(buf) - 1, buf);
 	if (ret < 0) {
 		dev_err(&client->dev, "Failed to read Manufacturer ID\n");
 		return ret;
@@ -693,7 +694,8 @@ static int max20730_probe(struct i2c_client *client)
 	 * a mismatch. If that doesn't work for all chips, we may have
 	 * to remove this check.
 	 */
-	ret = i2c_smbus_read_block_data(client, PMBUS_MFR_MODEL, buf);
+	ret = i2c_smbus_read_block_data(client, PMBUS_MFR_MODEL,
+					sizeof(buf) - 1, buf);
 	if (ret < 0) {
 		dev_err(dev, "Failed to read Manufacturer Model\n");
 		return ret;
@@ -704,7 +706,8 @@ static int max20730_probe(struct i2c_client *client)
 		return -ENODEV;
 	}
 
-	ret = i2c_smbus_read_block_data(client, PMBUS_MFR_REVISION, buf);
+	ret = i2c_smbus_read_block_data(client, PMBUS_MFR_REVISION,
+					sizeof(buf) - 1, buf);
 	if (ret < 0) {
 		dev_err(dev, "Failed to read Manufacturer Revision\n");
 		return ret;
@@ -717,7 +720,7 @@ static int max20730_probe(struct i2c_client *client)
 
 	chip_id = (uintptr_t)i2c_get_match_data(client);
 
-	data = devm_kzalloc(dev, sizeof(*data), GFP_KERNEL);
+	data = devm_kzalloc_obj(dev, *data);
 	if (!data)
 		return -ENOMEM;
 	data->id = chip_id;

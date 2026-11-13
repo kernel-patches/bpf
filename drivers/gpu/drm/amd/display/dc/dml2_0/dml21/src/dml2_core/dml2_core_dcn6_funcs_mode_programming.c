@@ -700,8 +700,8 @@ static void dcn6_populate_fams2_programming(const struct dml2_core_internal_disp
 	base_programming->config.bits.is_drr = stream_descriptor->timing.drr_config.enabled;
 
 	/* from meta */
-	base_programming->otg_vline_time_ns =
-		(unsigned int)(stream_pstate_meta->otg_vline_time_us * 1000.0);
+	base_programming->otg_vline_time_ps =
+		(unsigned int)(stream_pstate_meta->otg_vline_time_us * 1000000.0);
 	base_programming->scheduling_delay_otg_vlines = (uint8_t)stream_pstate_meta->scheduling_delay_otg_vlines;
 	base_programming->contention_delay_otg_vlines = (uint8_t)stream_pstate_meta->contention_delay_otg_vlines;
 	base_programming->vline_int_ack_delay_otg_vlines = (uint8_t)stream_pstate_meta->vertical_interrupt_ack_delay_otg_vlines;
@@ -721,6 +721,7 @@ static void dcn6_populate_fams2_programming(const struct dml2_core_internal_disp
 			break;
 		}
 	}
+	base_programming->config.bits.imm_restore_drr = true; // enable immediate restore unconditionally for DCN6
 
 	switch (pstate_method) {
 	case dml2_pstate_method_vactive:

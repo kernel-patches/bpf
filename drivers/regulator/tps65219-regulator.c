@@ -13,6 +13,7 @@
 #include <linux/module.h>
 #include <linux/device.h>
 #include <linux/init.h>
+#include <linux/interrupt.h>
 #include <linux/err.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
@@ -431,7 +432,7 @@ static int tps65219_register_irqs(struct platform_device *pdev,
 		if (irq < 0)
 			return -EINVAL;
 
-		irq_data = devm_kmalloc(tps->dev, sizeof(*irq_data), GFP_KERNEL);
+		irq_data = devm_kmalloc_obj(tps->dev, *irq_data);
 		if (!irq_data)
 			return -ENOMEM;
 

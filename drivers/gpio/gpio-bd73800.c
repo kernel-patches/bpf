@@ -149,7 +149,7 @@ static int gpo_bd73800_probe(struct platform_device *pdev)
 	/* The device-tree and regmap come from MFD => use parent for that */
 	parent = dev->parent;
 
-	data = devm_kzalloc(dev, sizeof(*data), GFP_KERNEL);
+	data = devm_kzalloc_obj(dev, *data);
 	if (!data)
 		return -ENOMEM;
 
@@ -189,8 +189,8 @@ static int gpo_bd73800_probe(struct platform_device *pdev)
 }
 
 static const struct platform_device_id bd73800_gpio_id[] = {
-	{ "bd73800-gpio" },
-	{ },
+	{ .name = "bd73800-gpio" },
+	{ }
 };
 MODULE_DEVICE_TABLE(platform, bd73800_gpio_id);
 

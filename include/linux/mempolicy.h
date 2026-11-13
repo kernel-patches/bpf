@@ -10,10 +10,10 @@
 #include <linux/mmzone.h>
 #include <linux/slab.h>
 #include <linux/rbtree.h>
+#include <linux/refcount.h>
 #include <linux/spinlock.h>
 #include <linux/node.h>
 #include <linux/nodemask.h>
-#include <linux/pagemap.h>
 #include <uapi/linux/mempolicy.h>
 
 struct mm_struct;
@@ -45,7 +45,7 @@ struct mm_struct;
  * to 1, representing the caller of mpol_dup().
  */
 struct mempolicy {
-	atomic_t refcnt;
+	refcount_t refcnt;
 	unsigned short mode; 	/* See MPOL_* above */
 	unsigned short flags;	/* See set_mempolicy() MPOL_F_* above */
 	nodemask_t nodes;	/* interleave/bind/preferred/etc */
@@ -96,7 +96,7 @@ static inline struct mempolicy *mpol_dup(struct mempolicy *pol)
 static inline void mpol_get(struct mempolicy *pol)
 {
 	if (pol)
-		atomic_inc(&pol->refcnt);
+		refcount_inc(&pol->refcnt);
 }
 
 extern bool __mpol_equal(struct mempolicy *a, struct mempolicy *b);
@@ -172,11 +172,6 @@ extern bool vma_migratable(struct vm_area_struct *vma);
 int mpol_misplaced(struct folio *folio, struct vm_fault *vmf,
 					unsigned long addr);
 extern void mpol_put_task_policy(struct task_struct *);
-
-static inline bool mpol_is_preferred_many(struct mempolicy *pol)
-{
-	return  (pol->mode == MPOL_PREFERRED_MANY);
-}
 
 extern bool apply_policy_zone(struct mempolicy *policy, enum zone_type zone);
 
@@ -296,11 +291,6 @@ static inline int mpol_misplaced(struct folio *folio,
 
 static inline void mpol_put_task_policy(struct task_struct *task)
 {
-}
-
-static inline bool mpol_is_preferred_many(struct mempolicy *pol)
-{
-	return  false;
 }
 
 #endif /* CONFIG_NUMA */

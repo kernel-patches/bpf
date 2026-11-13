@@ -660,23 +660,36 @@ static void sd_pkt_scan(struct gspca_dev *gspca_dev,
 			int len)			/* iso packet length */
 {
 	int seqframe;
+	int datalen;
 
+	if (len < 2)			/* need the 2-byte packet header */
+		return;
 	seqframe = data[0] & 0x3f;
-	len = (int) (((data[0] & 0xc0) << 2) | data[1]);
+	datalen = (int)(((data[0] & 0xc0) << 2) | data[1]);
 	if (seqframe == 0x3f) {
 		gspca_dbg(gspca_dev, D_FRAM,
-			  "header packet found datalength %d !!\n", len);
+			  "header packet found datalength %d !!\n", datalen);
+		if (len < 30)
+			return;
 		gspca_dbg(gspca_dev, D_FRAM, "G %d R %d G %d B %d",
 			  data[2], data[3], data[4], data[5]);
 		data += 30;
-		/* don't change datalength as the chips provided it */
+		len -= 30;
+		/* the chip-provided length must not exceed the packet */
+		if (datalen > len)
+			datalen = len;
 		gspca_frame_add(gspca_dev, LAST_PACKET, NULL, 0);
-		gspca_frame_add(gspca_dev, FIRST_PACKET, data, len);
+		gspca_frame_add(gspca_dev, FIRST_PACKET, data, datalen);
 		return;
 	}
-	if (len) {
+	if (datalen) {
+		if (len < 8)
+			return;
 		data += 8;
-		gspca_frame_add(gspca_dev, INTER_PACKET, data, len);
+		len -= 8;
+		if (datalen > len)
+			datalen = len;
+		gspca_frame_add(gspca_dev, INTER_PACKET, data, datalen);
 	} else {			/* Drop Packet */
 		gspca_dev->last_packet_type = DISCARD_PACKET;
 	}

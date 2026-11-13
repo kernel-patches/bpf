@@ -13,8 +13,6 @@
  *   support for me and provided debug dumps from their devices.
  */
 
-#define pr_fmt(fmt) KBUILD_MODNAME ":%s: " fmt, __func__
-
 #include <linux/errno.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
@@ -462,10 +460,6 @@ MODULE_VERSION(MOD_VERSION);
 MODULE_LICENSE("GPL");
 MODULE_DEVICE_TABLE(usb, imon_usb_id_table);
 
-static bool debug;
-module_param(debug, bool, S_IRUGO | S_IWUSR);
-MODULE_PARM_DESC(debug, "Debug messages: 0=no, 1=yes (default: no)");
-
 /* lcd, vfd, vga or none? should be auto-detected, but can be overridden... */
 static int display_type;
 module_param(display_type, int, S_IRUGO);
@@ -513,7 +507,6 @@ static int display_open(struct inode *inode, struct file *file)
 	subminor = iminor(inode);
 	interface = usb_find_interface(&imon_driver, subminor);
 	if (!interface) {
-		pr_err("could not find interface for minor %d\n", subminor);
 		retval = -ENODEV;
 		goto exit;
 	}
@@ -522,7 +515,8 @@ static int display_open(struct inode *inode, struct file *file)
 	ictx = usb_get_intfdata(interface);
 	if (!ictx || ictx->disconnected || !refcount_inc_not_zero(&ictx->users)) {
 		rcu_read_unlock();
-		pr_err("no context found for minor %d\n", subminor);
+		dev_dbg(&interface->dev, "no context found for minor %d\n",
+			subminor);
 		retval = -ENODEV;
 		goto exit;
 	}
@@ -533,10 +527,10 @@ static int display_open(struct inode *inode, struct file *file)
 	if (ictx->disconnected) {
 		retval = -ENODEV;
 	} else if (!ictx->display_supported) {
-		pr_err("display not supported by device\n");
+		dev_dbg(ictx->dev, "display not supported by device\n");
 		retval = -ENODEV;
 	} else if (ictx->display_isopen) {
-		pr_err("display port is already open\n");
+		dev_dbg(ictx->dev, "display port is already open\n");
 		retval = -EBUSY;
 	} else {
 		ictx->display_isopen = true;
@@ -565,10 +559,10 @@ static int display_close(struct inode *inode, struct file *file)
 	mutex_lock(&ictx->lock);
 
 	if (!ictx->display_supported) {
-		pr_err("display not supported by device\n");
+		dev_err(ictx->dev, "display not supported by device\n");
 		retval = -ENODEV;
 	} else if (!ictx->display_isopen) {
-		pr_err("display is not open\n");
+		dev_err(ictx->dev, "display is not open\n");
 		retval = -EIO;
 	} else {
 		ictx->display_isopen = false;
@@ -643,13 +637,13 @@ static int send_packet(struct imon_context *ictx)
 	if (retval) {
 		ictx->tx.busy = false;
 		smp_rmb(); /* ensure later readers know we're not busy */
-		pr_err_ratelimited("error submitting urb(%d)\n", retval);
+		dev_err_ratelimited(ictx->dev, "error submitting urb(%d)\n", retval);
 	} else {
 		/* Wait for transmission to complete (or abort or timeout) */
 		retval = wait_for_completion_interruptible_timeout(&ictx->tx.finished, 10 * HZ);
 		if (retval <= 0) {
 			usb_kill_urb(ictx->tx_urb);
-			pr_err_ratelimited("task interrupted\n");
+			dev_dbg(ictx->dev, "task interrupted\n");
 			if (retval < 0)
 				ictx->tx.status = retval;
 			else
@@ -659,7 +653,8 @@ static int send_packet(struct imon_context *ictx)
 		ictx->tx.busy = false;
 		retval = ictx->tx.status;
 		if (retval)
-			pr_err_ratelimited("packet tx failed (%d)\n", retval);
+			dev_err_ratelimited(ictx->dev, "packet tx failed (%d)\n",
+					    retval);
 	}
 
 	kfree(control_req);
@@ -689,13 +684,8 @@ static int send_associate_24g(struct imon_context *ictx)
 	const unsigned char packet[8] = { 0x01, 0x00, 0x00, 0x00,
 					  0x00, 0x00, 0x00, 0x20 };
 
-	if (!ictx) {
-		pr_err("no context for device\n");
-		return -ENODEV;
-	}
-
 	if (!ictx->dev_present_intf0) {
-		pr_err("no iMON device present\n");
+		dev_dbg(ictx->dev, "no iMON device present\n");
 		return -ENODEV;
 	}
 
@@ -720,11 +710,6 @@ static int send_set_imon_clock(struct imon_context *ictx,
 	unsigned char clock_enable_pkt[IMON_CLOCK_ENABLE_PACKETS][8];
 	int retval = 0;
 	int i;
-
-	if (!ictx) {
-		pr_err("no context for device\n");
-		return -ENODEV;
-	}
 
 	switch (ictx->display_type) {
 	case IMON_DISPLAY_TYPE_LCD:
@@ -783,7 +768,7 @@ static int send_set_imon_clock(struct imon_context *ictx,
 		memcpy(ictx->usb_tx_buf, clock_enable_pkt[i], 8);
 		retval = send_packet(ictx);
 		if (retval) {
-			pr_err("send_packet failed for packet %d\n", i);
+			dev_err(ictx->dev, "send_packet failed for packet %d\n", i);
 			break;
 		}
 	}
@@ -958,13 +943,13 @@ static ssize_t vfd_write(struct file *file, const char __user *buf,
 	}
 
 	if (!ictx->dev_present_intf0) {
-		pr_err_ratelimited("no iMON device present\n");
+		dev_dbg(ictx->dev, "no iMON device present\n");
 		retval = -ENODEV;
 		goto exit;
 	}
 
 	if (n_bytes <= 0 || n_bytes > 32) {
-		pr_err_ratelimited("invalid payload size\n");
+		dev_dbg(ictx->dev, "invalid payload size\n");
 		retval = -EINVAL;
 		goto exit;
 	}
@@ -990,7 +975,8 @@ static ssize_t vfd_write(struct file *file, const char __user *buf,
 
 		retval = send_packet(ictx);
 		if (retval) {
-			pr_err_ratelimited("send packet #%d failed\n", seq / 2);
+			dev_err_ratelimited(ictx->dev, "send packet #%d failed\n",
+					    seq / 2);
 			goto exit;
 		} else {
 			seq += 2;
@@ -1004,7 +990,8 @@ static ssize_t vfd_write(struct file *file, const char __user *buf,
 	ictx->usb_tx_buf[7] = (unsigned char) seq;
 	retval = send_packet(ictx);
 	if (retval)
-		pr_err_ratelimited("send packet #%d failed\n", seq / 2);
+		dev_err_ratelimited(ictx->dev, "send packet #%d failed\n",
+				    seq / 2);
 
 exit:
 	mutex_unlock(&ictx->lock);
@@ -1039,14 +1026,14 @@ static ssize_t lcd_write(struct file *file, const char __user *buf,
 	}
 
 	if (!ictx->display_supported) {
-		pr_err_ratelimited("no iMON display present\n");
+		dev_dbg(ictx->dev, "no iMON display present\n");
 		retval = -ENODEV;
 		goto exit;
 	}
 
 	if (n_bytes != 8) {
-		pr_err_ratelimited("invalid payload size: %d (expected 8)\n",
-				   (int)n_bytes);
+		dev_dbg(ictx->dev, "invalid payload size: %zu (expected 8)\n",
+			n_bytes);
 		retval = -EINVAL;
 		goto exit;
 	}
@@ -1058,7 +1045,7 @@ static ssize_t lcd_write(struct file *file, const char __user *buf,
 
 	retval = send_packet(ictx);
 	if (retval) {
-		pr_err_ratelimited("send packet failed!\n");
+		dev_err_ratelimited(ictx->dev, "send packet failed!\n");
 		goto exit;
 	} else {
 		dev_dbg(ictx->dev, "%s: write %d bytes to LCD\n",
@@ -1647,10 +1634,7 @@ static void imon_incoming_packet(struct imon_context *ictx,
 		imon_pad_to_keys(ictx, buf);
 	}
 
-	if (debug) {
-		printk(KERN_INFO "intf%d decoded packet: %*ph\n",
-		       intf, len, buf);
-	}
+	dev_dbg(dev, "intf%d decoded packet: %*ph\n", intf, len, buf);
 
 	press_type = imon_parse_press_type(ictx, buf, ktype);
 	if (press_type < 0)
@@ -1841,65 +1825,66 @@ static void imon_get_ffdc_type(struct imon_context *ictx)
 	u8 ffdc_cfg_byte = ictx->usb_rx_buf[6];
 	u8 detected_display_type = IMON_DISPLAY_TYPE_NONE;
 	u64 allowed_protos = RC_PROTO_BIT_IMON;
+	const char *descr;
 
 	switch (ffdc_cfg_byte) {
 	/* iMON Knob, no display, iMON IR + vol knob */
 	case 0x21:
-		dev_info(ictx->dev, "0xffdc iMON Knob, iMON IR");
+		descr = "0xffdc iMON Knob, iMON IR";
 		ictx->display_supported = false;
 		break;
 	/* iMON 2.4G LT (usb stick), no display, iMON RF */
 	case 0x4e:
-		dev_info(ictx->dev, "0xffdc iMON 2.4G LT, iMON RF");
+		descr = "0xffdc iMON 2.4G LT, iMON RF";
 		ictx->display_supported = false;
 		ictx->rf_device = true;
 		break;
 	/* iMON VFD, no IR (does have vol knob tho) */
 	case 0x35:
-		dev_info(ictx->dev, "0xffdc iMON VFD + knob, no IR");
+		descr = "0xffdc iMON VFD + knob, no IR";
 		detected_display_type = IMON_DISPLAY_TYPE_VFD;
 		break;
 	/* iMON VFD, iMON IR */
 	case 0x24:
 	case 0x30:
 	case 0x85:
-		dev_info(ictx->dev, "0xffdc iMON VFD, iMON IR");
+		descr = "0xffdc iMON VFD, iMON IR";
 		detected_display_type = IMON_DISPLAY_TYPE_VFD;
 		break;
 	/* iMON VFD, MCE IR */
 	case 0x46:
 	case 0x9e:
-		dev_info(ictx->dev, "0xffdc iMON VFD, MCE IR");
+		descr = "0xffdc iMON VFD, MCE IR";
 		detected_display_type = IMON_DISPLAY_TYPE_VFD;
 		allowed_protos = RC_PROTO_BIT_RC6_MCE;
 		break;
 	/* iMON VFD, iMON or MCE IR */
 	case 0x7e:
-		dev_info(ictx->dev, "0xffdc iMON VFD, iMON or MCE IR");
+		descr = "0xffdc iMON VFD, iMON or MCE IR";
 		detected_display_type = IMON_DISPLAY_TYPE_VFD;
 		allowed_protos |= RC_PROTO_BIT_RC6_MCE;
 		break;
 	/* iMON LCD, MCE IR */
 	case 0x9f:
-		dev_info(ictx->dev, "0xffdc iMON LCD, MCE IR");
+		descr = "0xffdc iMON LCD, MCE IR";
 		detected_display_type = IMON_DISPLAY_TYPE_LCD;
 		allowed_protos = RC_PROTO_BIT_RC6_MCE;
 		break;
 	/* no display, iMON IR */
 	case 0x26:
-		dev_info(ictx->dev, "0xffdc iMON Inside, iMON IR");
+		descr = "0xffdc iMON Inside, iMON IR";
 		ictx->display_supported = false;
 		break;
 	/* Soundgraph iMON UltraBay */
 	case 0x98:
-		dev_info(ictx->dev, "0xffdc iMON UltraBay, LCD + IR");
+		descr = "0xffdc iMON UltraBay, LCD + IR";
 		detected_display_type = IMON_DISPLAY_TYPE_LCD;
 		allowed_protos = RC_PROTO_BIT_IMON | RC_PROTO_BIT_RC6_MCE;
 		ictx->dev_descr = &ultrabay_table;
 		break;
 
 	default:
-		dev_info(ictx->dev, "Unknown 0xffdc device, defaulting to VFD and iMON IR");
+		descr = "Unknown 0xffdc device, defaulting to VFD and iMON IR";
 		detected_display_type = IMON_DISPLAY_TYPE_VFD;
 		/*
 		 * We don't know which one it is, allow user to set the
@@ -1909,7 +1894,7 @@ static void imon_get_ffdc_type(struct imon_context *ictx)
 		break;
 	}
 
-	printk(KERN_CONT " (id 0x%02x)\n", ffdc_cfg_byte);
+	dev_info(ictx->dev, "%s (id 0x%02x)\n", descr, ffdc_cfg_byte);
 
 	ictx->display_type = detected_display_type;
 	ictx->rc_proto = allowed_protos;
@@ -2207,7 +2192,7 @@ static bool imon_find_endpoints(struct imon_context *ictx,
 
 	/* Input endpoint is mandatory */
 	if (!ir_ep_found)
-		pr_err("no valid input (IR) endpoint found\n");
+		dev_err(ictx->dev, "no valid input (IR) endpoint found\n");
 
 	ictx->tx_control = tx_control;
 
@@ -2276,7 +2261,7 @@ static struct imon_context *imon_init_intf0(struct usb_interface *intf,
 
 	ret = usb_submit_urb(ictx->rx_urb_intf0, GFP_KERNEL);
 	if (ret) {
-		pr_err("usb_submit_urb failed for intf0 (%d)\n", ret);
+		dev_err(dev, "usb_submit_urb failed for intf0 (%d)\n", ret);
 		goto urb_submit_failed;
 	}
 
@@ -2452,8 +2437,8 @@ static int imon_probe(struct usb_interface *interface,
 		sysfs_err = sysfs_create_group(&interface->dev.kobj,
 					       &imon_rf_attr_group);
 		if (sysfs_err)
-			pr_err("Could not create RF sysfs entries(%d)\n",
-			       sysfs_err);
+			dev_err(dev, "Could not create RF sysfs entries(%d)\n",
+				sysfs_err);
 	}
 
 	if (ictx->display_supported)

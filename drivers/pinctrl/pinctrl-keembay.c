@@ -1380,6 +1380,8 @@ static void keembay_gpio_irq_enable(struct irq_data *data)
 	if (src < 0 || slot < 0)
 		return;
 
+	gpiochip_enable_irq(gc, pin);
+
 	if (trig & KEEMBAY_GPIO_SENSE_LOW)
 		keembay_gpio_invert(kpc, pin);
 
@@ -1412,6 +1414,7 @@ static void keembay_gpio_irq_disable(struct irq_data *data)
 		for_each_set_clump8(pos, clump, &reg, BITS_PER_TYPE(typeof(reg))) {
 			if ((clump & ~KEEMBAY_GPIO_IRQ_ENABLE) == pin) {
 				keembay_gpio_clear_irq(data, pos, src, pin);
+				gpiochip_disable_irq(gc, pin);
 				return;
 			}
 		}
@@ -1451,12 +1454,14 @@ static int keembay_gpio_add_pin_ranges(struct gpio_chip *chip)
 	return ret;
 }
 
-static struct irq_chip keembay_gpio_irqchip = {
+static const struct irq_chip keembay_gpio_irqchip = {
 	.name = "keembay-gpio",
 	.irq_enable = keembay_gpio_irq_enable,
 	.irq_disable = keembay_gpio_irq_disable,
 	.irq_set_type = keembay_gpio_irq_set_type,
 	.irq_ack = keembay_gpio_irq_ack,
+	.flags = IRQCHIP_IMMUTABLE,
+	GPIOCHIP_IRQ_RESOURCE_HELPERS,
 };
 
 static int keembay_gpiochip_probe(struct keembay_pinctrl *kpc,
@@ -1468,11 +1473,12 @@ static int keembay_gpiochip_probe(struct keembay_pinctrl *kpc,
 
 	/* Setup GPIO IRQ chip */
 	girq			= &kpc->chip.irq;
-	girq->chip		= &keembay_gpio_irqchip;
+	gpio_irq_chip_set_chip(girq, &keembay_gpio_irqchip);
 	girq->parent_handler	= keembay_gpio_irq_handler;
 	girq->num_parents	= KEEMBAY_GPIO_NUM_IRQ;
-	girq->parents		= devm_kcalloc(kpc->dev, girq->num_parents,
-					       sizeof(*girq->parents), GFP_KERNEL);
+	girq->parents		= devm_kzalloc_objs(kpc->dev,
+							 *girq->parents,
+							 girq->num_parents);
 
 	if (!girq->parents)
 		return -ENOMEM;
@@ -1527,7 +1533,7 @@ static int keembay_build_groups(struct keembay_pinctrl *kpc)
 	unsigned int i;
 
 	kpc->ngroups = kpc->npins;
-	grp = devm_kcalloc(kpc->dev, kpc->ngroups, sizeof(*grp), GFP_KERNEL);
+	grp = devm_kzalloc_objs(kpc->dev, *grp, kpc->ngroups);
 	if (!grp)
 		return -ENOMEM;
 
@@ -1572,8 +1578,8 @@ static int keembay_add_functions(struct keembay_pinctrl *kpc,
 		unsigned int grp_idx = 0;
 		int j;
 
-		group_names = devm_kcalloc(kpc->dev, func->func.ngroups,
-					   sizeof(*group_names), GFP_KERNEL);
+		group_names = devm_kzalloc_objs(kpc->dev, *group_names,
+						func->func.ngroups);
 		if (!group_names)
 			return -ENOMEM;
 
@@ -1608,8 +1614,8 @@ static int keembay_build_functions(struct keembay_pinctrl *kpc)
 	 * being part of 8 (hw maximum) globally unique muxes.
 	 */
 	kpc->nfuncs = 0;
-	keembay_funcs = devm_kcalloc(kpc->dev, kpc->npins * 8,
-				     sizeof(*keembay_funcs), GFP_KERNEL);
+	keembay_funcs = devm_kzalloc_objs(kpc->dev, *keembay_funcs,
+					  kpc->npins * 8);
 	if (!keembay_funcs)
 		return -ENOMEM;
 
@@ -1665,7 +1671,7 @@ static int keembay_pinctrl_probe(struct platform_device *pdev)
 	struct keembay_pinctrl *kpc;
 	int ret;
 
-	kpc = devm_kzalloc(dev, sizeof(*kpc), GFP_KERNEL);
+	kpc = devm_kzalloc_obj(dev, *kpc);
 	if (!kpc)
 		return -ENOMEM;
 

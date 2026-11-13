@@ -2064,7 +2064,7 @@ int perf_event_query_prog_array(struct perf_event *event, void __user *info)
 	ids_len = query.ids_len;
 	if (ids_len > BPF_TRACE_MAX_PROGS)
 		return -E2BIG;
-	ids = kcalloc(ids_len, sizeof(u32), GFP_USER | __GFP_NOWARN);
+	ids = kzalloc_objs(u32, ids_len, GFP_USER | __GFP_NOWARN);
 	if (!ids)
 		return -ENOMEM;
 	/*
@@ -2403,7 +2403,7 @@ static int copy_user_syms(struct user_syms *us, unsigned long __user *usyms, u32
 	if (!access_ok(usyms, cnt * sizeof(*usyms)))
 		return -EFAULT;
 
-	syms = kvmalloc_array(cnt, sizeof(*syms), GFP_KERNEL);
+	syms = kvmalloc_objs(*syms, cnt);
 	if (!syms)
 		return -ENOMEM;
 
@@ -2847,7 +2847,7 @@ int bpf_kprobe_multi_link_attach(const union bpf_attr *attr, struct bpf_prog *pr
 		return -E2BIG;
 
 	size = cnt * sizeof(*addrs);
-	addrs = kvmalloc_array(cnt, sizeof(*addrs), GFP_KERNEL);
+	addrs = kvmalloc_objs(*addrs, cnt);
 	if (!addrs)
 		return -ENOMEM;
 
@@ -3850,7 +3850,7 @@ static int check_dup_ids(u32 *ids, u64 *cookies, u32 cnt)
 	 * and check it for duplicates. The ids and cookies arrays
 	 * are left sorted.
 	 */
-	sort_r_nonatomic(ids, cnt, sizeof(ids[0]), ids_cmp_r, ids_swap_r, data);
+	sort_r(ids, cnt, sizeof(ids[0]), ids_cmp_r, ids_swap_r, data);
 
 	for (int i = 1; i < cnt; i++) {
 		if (ids[i] == ids[i - 1]) {

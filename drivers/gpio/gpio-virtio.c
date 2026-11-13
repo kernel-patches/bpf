@@ -17,6 +17,7 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
+#include <linux/seq_file.h>
 #include <linux/spinlock.h>
 #include <linux/virtio_config.h>
 #include <uapi/linux/virtio_gpio.h>
@@ -243,6 +244,8 @@ static void virtio_gpio_irq_enable(struct irq_data *d)
 	struct virtio_gpio *vgpio = gpiochip_get_data(gc);
 	struct vgpio_irq_line *irq_line = &vgpio->irq_lines[d->hwirq];
 
+	gpiochip_enable_irq(gc, d->hwirq);
+
 	raw_spin_lock(&vgpio->eventq_lock);
 	irq_line->disabled = false;
 	irq_line->masked = false;
@@ -265,6 +268,8 @@ static void virtio_gpio_irq_disable(struct irq_data *d)
 	raw_spin_unlock(&vgpio->eventq_lock);
 
 	irq_line->update_pending = true;
+
+	gpiochip_disable_irq(gc, d->hwirq);
 }
 
 static void virtio_gpio_irq_mask(struct irq_data *d)
@@ -512,7 +517,7 @@ static const char **virtio_gpio_get_names(struct virtio_gpio *vgpio,
 		return NULL;
 	}
 
-	names = devm_kcalloc(dev, ngpio, sizeof(*names), GFP_KERNEL);
+	names = devm_kzalloc_objs(dev, *names, ngpio);
 	if (!names)
 		return NULL;
 
@@ -532,16 +537,35 @@ static const char **virtio_gpio_get_names(struct virtio_gpio *vgpio,
 	return names;
 }
 
+static void virtio_gpio_irq_print_chip(struct irq_data *d, struct seq_file *p)
+{
+	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
+
+	seq_puts(p, dev_name(gc->parent));
+}
+
+static const struct irq_chip virtio_gpio_irqchip = {
+	.irq_enable = virtio_gpio_irq_enable,
+	.irq_disable = virtio_gpio_irq_disable,
+	.irq_mask = virtio_gpio_irq_mask,
+	.irq_unmask = virtio_gpio_irq_unmask,
+	.irq_set_type = virtio_gpio_irq_set_type,
+	.irq_bus_lock = virtio_gpio_irq_bus_lock,
+	.irq_bus_sync_unlock = virtio_gpio_irq_bus_sync_unlock,
+	.irq_print_chip = virtio_gpio_irq_print_chip,
+	.flags = IRQCHIP_IMMUTABLE,
+	GPIOCHIP_IRQ_RESOURCE_HELPERS,
+};
+
 static int virtio_gpio_probe(struct virtio_device *vdev)
 {
 	struct device *dev = &vdev->dev;
 	struct virtio_gpio *vgpio;
-	struct irq_chip *gpio_irq_chip;
 	u32 gpio_names_size;
 	u16 ngpio;
 	int ret, i;
 
-	vgpio = devm_kzalloc(dev, sizeof(*vgpio), GFP_KERNEL);
+	vgpio = devm_kzalloc_obj(dev, *vgpio);
 	if (!vgpio)
 		return -ENOMEM;
 
@@ -556,7 +580,7 @@ static int virtio_gpio_probe(struct virtio_device *vdev)
 		return -EINVAL;
 	}
 
-	vgpio->lines = devm_kcalloc(dev, ngpio, sizeof(*vgpio->lines), GFP_KERNEL);
+	vgpio->lines = devm_kzalloc_objs(dev, *vgpio->lines, ngpio);
 	if (!vgpio->lines)
 		return -ENOMEM;
 
@@ -584,22 +608,10 @@ static int virtio_gpio_probe(struct virtio_device *vdev)
 
 	/* Interrupt support */
 	if (virtio_has_feature(vdev, VIRTIO_GPIO_F_IRQ)) {
-		vgpio->irq_lines = devm_kcalloc(dev, ngpio, sizeof(*vgpio->irq_lines), GFP_KERNEL);
+		vgpio->irq_lines = devm_kzalloc_objs(dev, *vgpio->irq_lines,
+						     ngpio);
 		if (!vgpio->irq_lines)
 			return -ENOMEM;
-
-		gpio_irq_chip = devm_kzalloc(dev, sizeof(*gpio_irq_chip), GFP_KERNEL);
-		if (!gpio_irq_chip)
-			return -ENOMEM;
-
-		gpio_irq_chip->name = dev_name(dev);
-		gpio_irq_chip->irq_enable = virtio_gpio_irq_enable;
-		gpio_irq_chip->irq_disable = virtio_gpio_irq_disable;
-		gpio_irq_chip->irq_mask = virtio_gpio_irq_mask;
-		gpio_irq_chip->irq_unmask = virtio_gpio_irq_unmask;
-		gpio_irq_chip->irq_set_type = virtio_gpio_irq_set_type;
-		gpio_irq_chip->irq_bus_lock = virtio_gpio_irq_bus_lock;
-		gpio_irq_chip->irq_bus_sync_unlock = virtio_gpio_irq_bus_sync_unlock;
 
 		/* The event comes from the outside so no parent handler */
 		vgpio->gc.irq.parent_handler	= NULL;
@@ -607,7 +619,7 @@ static int virtio_gpio_probe(struct virtio_device *vdev)
 		vgpio->gc.irq.parents		= NULL;
 		vgpio->gc.irq.default_type	= IRQ_TYPE_NONE;
 		vgpio->gc.irq.handler		= handle_level_irq;
-		vgpio->gc.irq.chip		= gpio_irq_chip;
+		gpio_irq_chip_set_chip(&vgpio->gc.irq, &virtio_gpio_irqchip);
 
 		for (i = 0; i < ngpio; i++) {
 			vgpio->irq_lines[i].type = VIRTIO_GPIO_IRQ_TYPE_NONE;
@@ -646,8 +658,8 @@ static void virtio_gpio_remove(struct virtio_device *vdev)
 }
 
 static const struct virtio_device_id id_table[] = {
-	{ VIRTIO_ID_GPIO, VIRTIO_DEV_ANY_ID },
-	{},
+	{ .device = VIRTIO_ID_GPIO, .vendor = VIRTIO_DEV_ANY_ID },
+	{ }
 };
 MODULE_DEVICE_TABLE(virtio, id_table);
 

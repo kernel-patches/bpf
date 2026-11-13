@@ -52,7 +52,6 @@ u32 amdgpu_userq_get_supported_ip_mask(struct amdgpu_device *adev)
 static bool amdgpu_userq_is_reset_type_supported(struct amdgpu_device *adev,
 				enum amdgpu_ring_type ring_type, int reset_type)
 {
-
 	if (ring_type < 0 || ring_type >= AMDGPU_RING_TYPE_MAX)
 		return false;
 
@@ -153,7 +152,7 @@ static void amdgpu_userq_hang_detect_work(struct work_struct *work)
 		int r;
 
 		if (queue->queue_type == AMDGPU_HW_IP_COMPUTE)
-			r = amdgpu_gfx_reset_mes_compute(adev, NULL, NULL,
+			r = amdgpu_gfx_reset_mes_compute(adev, NULL, NULL, NULL,
 							 queue, NULL, NULL);
 		else
 			r = userq_funcs->reset(queue);
@@ -304,8 +303,6 @@ static bool amdgpu_userq_buffer_vas_mapped(struct amdgpu_usermode_queue *queue)
 	return true;
 }
 
-
-
 static int amdgpu_userq_preempt_helper(struct amdgpu_usermode_queue *queue)
 {
 	struct amdgpu_userq_mgr *uq_mgr = queue->userq_mgr;
@@ -362,6 +359,8 @@ static int amdgpu_userq_unmap_helper(struct amdgpu_usermode_queue *queue)
 		adev->userq_funcs[queue->queue_type];
 	int r;
 
+	/* The reset changes the queue state and the MES is unusable meanwhile */
+	guard(rwsem_read)(&adev->reset_domain->sem);
 	if ((queue->state == AMDGPU_USERQ_STATE_MAPPED) ||
 	    (queue->state == AMDGPU_USERQ_STATE_PREEMPTED)) {
 		trace_amdgpu_userq_state_start(queue);
@@ -388,6 +387,8 @@ static int amdgpu_userq_map_helper(struct amdgpu_usermode_queue *queue)
 		adev->userq_funcs[queue->queue_type];
 	int r;
 
+	/* The reset changes the queue state and the MES is unusable meanwhile */
+	guard(rwsem_read)(&adev->reset_domain->sem);
 	if (queue->state == AMDGPU_USERQ_STATE_UNMAPPED) {
 		trace_amdgpu_userq_state_start(queue);
 
@@ -457,8 +458,6 @@ retry:
 	}
 	dma_fence_put(ev_fence);
 }
-
-
 
 static int
 amdgpu_userq_get_doorbell_index(struct amdgpu_userq_mgr *uq_mgr,
@@ -769,12 +768,7 @@ amdgpu_userq_create(struct drm_file *filp, union drm_amdgpu_userq *args)
 	if (!adev->userq_halt_for_enforce_isolation ||
 	    ((queue->queue_type != AMDGPU_HW_IP_GFX) &&
 	     (queue->queue_type != AMDGPU_HW_IP_COMPUTE))) {
-		/* Serialize the map against an in-progress GPU reset (MES is
-		 * unresponsive during recovery), matching amdgpu_userq_detach_doorbell().
-		 */
-		down_read(&adev->reset_domain->sem);
 		r = amdgpu_userq_map_helper(queue);
-		up_read(&adev->reset_domain->sem);
 		if (r) {
 			drm_file_err(uq_mgr->file, "Failed to map Queue\n");
 			trace_amdgpu_userq_create_end(queue, r);
@@ -962,7 +956,6 @@ amdgpu_userq_restore_all(struct amdgpu_userq_mgr *uq_mgr)
 	mutex_lock(&uq_mgr->userq_mutex);
 	/* Resume all the queues for this process */
 	xa_for_each(&uq_mgr->userq_xa, queue_id, queue) {
-
 		if (!amdgpu_userq_buffer_vas_mapped(queue)) {
 			drm_file_err(uq_mgr->file,
 				     "trying restore queue without va mapping\n");
@@ -991,7 +984,11 @@ static int amdgpu_userq_validate_vm(void *param, struct amdgpu_bo *bo)
 	return ttm_bo_validate(&bo->tbo, &bo->placement, &ctx);
 }
 
-/* Handle all BOs on the invalidated list, validate them and update the PTs */
+/*
+ * Handle all individual BOs which were moved, lock and validate them and
+ * update the PTs. An evicted individual BO lands on the needs_update list,
+ * the evicted one only holds imported DMA-bufs of compute VMs.
+ */
 static int
 amdgpu_userq_bo_validate(struct amdgpu_device *adev, struct drm_exec *exec,
 			 struct amdgpu_vm *vm)
@@ -1002,8 +999,8 @@ amdgpu_userq_bo_validate(struct amdgpu_device *adev, struct drm_exec *exec,
 	int ret;
 
 	spin_lock(&vm->individual_lock);
-	while (!list_empty(&vm->individual.evicted)) {
-		bo_va = list_first_entry(&vm->individual.evicted,
+	while (!list_empty(&vm->individual.needs_update)) {
+		bo_va = list_first_entry(&vm->individual.needs_update,
 					 struct amdgpu_bo_va,
 					 base.vm_status);
 		bo = bo_va->base.bo;
@@ -1076,6 +1073,13 @@ retry_lock:
 					 NULL);
 		if (unlikely(ret))
 			goto unlock_all;
+
+		/*
+		 * Userqueues never go through amdgpu_vm_flush(), so this is
+		 * the only place that can rebind the SPM VMID's page table
+		 * for a userqueue-held reservation.
+		 */
+		amdgpu_vm_spm_update(adev, vm);
 
 		/* This locks and validates the remaining evicted BOs */
 		ret = amdgpu_userq_bo_validate(adev, &exec, vm);

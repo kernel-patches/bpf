@@ -12,6 +12,7 @@
 #include <linux/device.h>
 #include <linux/err.h>
 #include <linux/i2c.h>
+#include <linux/interrupt.h>
 #include <linux/gpio/consumer.h>
 #include <linux/mfd/adp5585.h>
 #include <linux/mfd/core.h>
@@ -693,7 +694,7 @@ static int adp5585_i2c_probe(struct i2c_client *i2c)
 	unsigned int id;
 	int ret;
 
-	adp5585 = devm_kzalloc(&i2c->dev, sizeof(*adp5585), GFP_KERNEL);
+	adp5585 = devm_kzalloc_obj(&i2c->dev, *adp5585);
 	if (!adp5585)
 		return -ENOMEM;
 

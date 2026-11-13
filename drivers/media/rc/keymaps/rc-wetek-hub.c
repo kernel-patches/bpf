@@ -30,7 +30,7 @@ static struct rc_map_table wetek_hub[] = {
 static struct rc_map_list wetek_hub_map = {
 	.map = {
 		.scan     = wetek_hub,
-		.size     = ARRAY_SIZE(wetek_hub),
+		.entries  = ARRAY_SIZE(wetek_hub),
 		.rc_proto = RC_PROTO_NEC,
 		.name     = RC_MAP_WETEK_HUB,
 	}

@@ -98,15 +98,6 @@ config CRYPTO_HASH2
 	tristate
 	select CRYPTO_ALGAPI2
 
-config CRYPTO_RNG
-	tristate
-	select CRYPTO_RNG2
-	select CRYPTO_ALGAPI
-
-config CRYPTO_RNG2
-	tristate
-	select CRYPTO_ALGAPI2
-
 config CRYPTO_AKCIPHER2
 	tristate
 	select CRYPTO_ALGAPI2
@@ -151,14 +142,12 @@ config CRYPTO_MANAGER2
 	select CRYPTO_SIG2 if CRYPTO_SELFTESTS
 	select CRYPTO_HASH2 if CRYPTO_SELFTESTS
 	select CRYPTO_KPP2 if CRYPTO_SELFTESTS
-	select CRYPTO_RNG2 if CRYPTO_SELFTESTS
 	select CRYPTO_SKCIPHER2 if CRYPTO_SELFTESTS
 
 config CRYPTO_USER
 	tristate "Userspace cryptographic algorithm configuration"
 	depends on NET
 	select CRYPTO_MANAGER
-	select CRYPTO_RNG
 	help
 	  Userspace configuration for cryptographic instantiations such as
 	  cbc(aes).
@@ -612,19 +601,6 @@ config CRYPTO_ADIANTUM
 	  security than XTS, subject to the security bound.
 
 	  If unsure, say N.
-
-config CRYPTO_ARC4
-	tristate "ARC4 (Alleged Rivest Cipher 4)"
-	depends on CRYPTO_USER_API_ENABLE_OBSOLETE
-	select CRYPTO_SKCIPHER
-	select CRYPTO_LIB_ARC4
-	help
-	  ARC4 cipher algorithm
-
-	  ARC4 is a stream cipher using keys ranging from 8 bits to 2048
-	  bits in length.  This algorithm is required for driver-based
-	  WEP, but it should not be for other purposes because of the
-	  weakness of the algorithm.
 
 config CRYPTO_CHACHA20
 	tristate "ChaCha"
@@ -1110,7 +1086,6 @@ config CRYPTO_DRBG
 	tristate "NIST SP800-90A DRBG (Deterministic Random Bit Generator)"
 	select CRYPTO_JITTERENTROPY
 	select CRYPTO_LIB_SHA512
-	select CRYPTO_RNG
 	help
 	  DRBG (Deterministic Random Bit Generator) (NIST SP800-90A)
 
@@ -1118,9 +1093,8 @@ config CRYPTO_DRBG
 	  It's otherwise redundant with the kernel's regular RNG.
 
 config CRYPTO_JITTERENTROPY
-	tristate "CPU Jitter Non-Deterministic RNG (Random Number Generator)"
+	tristate
 	select CRYPTO_LIB_SHA3
-	select CRYPTO_RNG
 	help
 	  CPU Jitter RNG (Random Number Generator) from the Jitterentropy library
 
@@ -1288,7 +1262,7 @@ config CRYPTO_USER_API_SKCIPHER
 config CRYPTO_USER_API_RNG
 	tristate "Random number generation algorithms (deprecated)"
 	depends on NET
-	select CRYPTO_RNG
+	depends on CRYPTO_DRBG
 	select CRYPTO_USER_API
 	help
 	  Enable the AF_ALG userspace interface for random number generation
@@ -1305,7 +1279,7 @@ config CRYPTO_USER_API_RNG
 
 config CRYPTO_USER_API_RNG_CAVP
 	bool "Enable CAVP testing of DRBG"
-	depends on CRYPTO_USER_API_RNG && CRYPTO_DRBG
+	depends on CRYPTO_USER_API_RNG
 	help
 	  Enable extra APIs in the userspace interface for NIST CAVP
 	  (Cryptographic Algorithm Validation Program) testing:

@@ -38,10 +38,14 @@ MODULE_FIRMWARE("amdgpu/gc_12_1_0_uni_mes.bin");
 
 static int mes_v12_1_hw_init(struct amdgpu_ip_block *ip_block);
 static int mes_v12_1_xcc_hw_init(struct amdgpu_ip_block *ip_block, int xcc_id);
+static int mes_v12_1_xcc_hw_fini(struct amdgpu_ip_block *ip_block, int xcc_id);
 static int mes_v12_1_hw_fini(struct amdgpu_ip_block *ip_block);
 static int mes_v12_1_kiq_hw_init(struct amdgpu_device *adev, uint32_t xcc_id);
 static int mes_v12_1_kiq_hw_fini(struct amdgpu_device *adev, uint32_t xcc_id);
 static int mes_v12_1_setup_coop_mode(struct amdgpu_device *adev, int xcc_id);
+static int mes_v12_1_enable_dbgext_irq_xcc(struct amdgpu_mes *mes,
+					   bool enable, u32 xcc_id);
+static int mes_v12_1_enable_dbgext_irq(struct amdgpu_mes *mes, bool enable);
 
 #define MES_EOP_SIZE   2048
 #define MES12_HUNG_DB_OFFSET_ARRAY_SIZE 8 /* [0:3] = db offset [4:7] hqd info */
@@ -572,6 +576,8 @@ static int mes_v12_1_misc_op(struct amdgpu_mes *mes,
 	case MES_MISC_OP_READ_REG:
 		misc_pkt.opcode = MESAPI_MISC__READ_REG;
 		misc_pkt.read_reg.buffer_addr = input->read_reg.buffer_addr;
+		misc_pkt.read_reg.option.bits.read64Bits =
+			input->read_reg.read64_bits;
 		mes_v12_1_get_rrmt(input->read_reg.reg_offset,
 				   GET_INST(GC, input->xcc_id),
 				   &misc_pkt.read_reg.rrmt_opt,
@@ -622,6 +628,12 @@ static int mes_v12_1_misc_op(struct amdgpu_mes *mes,
 		memcpy(misc_pkt.set_shader_debugger.tcp_watch_cntl,
 				input->set_shader_debugger.tcp_watch_cntl,
 				sizeof(misc_pkt.set_shader_debugger.tcp_watch_cntl));
+		for (int i = 0; i < 4; i++) {
+			misc_pkt.set_shader_debugger.tcp_watch_addr_lo[i] =
+				lower_32_bits(input->set_shader_debugger.watch_addresses[i]);
+			misc_pkt.set_shader_debugger.tcp_watch_addr_hi[i] =
+				upper_32_bits(input->set_shader_debugger.watch_addresses[i]) & 0xffff;
+		}
 		misc_pkt.set_shader_debugger.trap_en = input->set_shader_debugger.trap_en;
 		break;
 	case MES_MISC_OP_CHANGE_CONFIG:
@@ -630,6 +642,17 @@ static int mes_v12_1_misc_op(struct amdgpu_mes *mes,
 			MESAPI_MISC__CHANGE_CONFIG_OPTION_LIMIT_SINGLE_PROCESS;
 		misc_pkt.change_config.option.bits.limit_single_process =
 			input->change_config.option.limit_single_process;
+		break;
+	case MES_MISC_OP_SETUP_MES_DBGEXT:
+		/* The log buffer attaches to the pipe that receives this packet. */
+		if (input->setup_mes_dbgext.pipe >= AMDGPU_MAX_MES_PIPES)
+			return -EINVAL;
+		pipe = input->setup_mes_dbgext.pipe;
+		misc_pkt.opcode = MESAPI_MISC__SETUP_MES_DBGEXT;
+		misc_pkt.dbgext_init_data.dbg_ext_mc_addr =
+				input->setup_mes_dbgext.log_buffer_mc_addr;
+		misc_pkt.dbgext_init_data.u64_all =
+				input->setup_mes_dbgext.log_options;
 		break;
 	default:
 		DRM_ERROR("unsupported misc op (%d) \n", input->op);
@@ -893,7 +916,7 @@ static int mes_v12_1_detect_and_reset_hung_queues(struct amdgpu_mes *mes,
 	mes_reset_queue_pkt.queue_type =
 		convert_to_mes_queue_type(input->queue_type);
 	mes_reset_queue_pkt.doorbell_offset_addr =
-		mes->hung_queue_db_array_gpu_addr[0];
+		mes->hung_queue_db_array_gpu_addr;
 
 	if (input->detect_only)
 		mes_reset_queue_pkt.hang_detect_only = 1;
@@ -954,6 +977,70 @@ static int mes_v12_1_inv_tlbs_pasid(struct amdgpu_mes *mes,
 
 }
 
+/*
+ * Enable/disable delivery of the MES firmware host interrupts at the CP.  The
+ * MES firmware debug-message ("mes_dbgext") interrupt is delivered to the IH
+ * as a CP EOP (src_id 181) on the MES scheduler pipe (me 3) and handled in
+ * gfx_v12_1_eop_irq(); it is gated by CPC_INT_CNTL in the me3/MES pipe context,
+ * selected via GRBM_GFX_CNTL.  Must run in process context (takes srbm_mutex).
+ *
+ * Although the firmware C code passes Rs64HostIntrGeneric1IntEnable, the RS64
+ * library routine that actually raises the interrupt (AsmRs64SetHostIntr)
+ * hardcodes the TIME_STAMP assertion bit (CP_INT_STAT_DEBUG bit 26).  So
+ * TIME_STAMP_INT_ENABLE - not GENERIC1_INT_ENABLE - is the CPC_INT_CNTL bit
+ * that lets the CP forward the assertion to the host IH.  CPC_INT_CNTL is
+ * per-(me,pipe); the enable must be set on both me3 pipes (0 and 1)
+ * - setting it only on the scheduler pipe is not sufficient.
+ * xcc_id selects the logical XCC.  That XCC runs its own MES, and both
+ * of its ME3 pipes are updated because either pipe can raise the
+ * debug-message interrupt.
+ */
+static int mes_v12_1_enable_dbgext_irq_xcc(struct amdgpu_mes *mes,
+					   bool enable, u32 xcc_id)
+{
+	struct amdgpu_device *adev = mes->adev;
+	int num_xcc = NUM_XCC(adev->gfx.xcc_mask);
+	u32 cp_int_cntl;
+	int pipe, inst;
+
+	if (xcc_id >= num_xcc)
+		return -EINVAL;
+
+	mutex_lock(&adev->srbm_mutex);
+
+	inst = GET_INST(GC, xcc_id);
+
+	for (pipe = 0; pipe < 2; pipe++) {
+		soc_v1_0_grbm_select(adev, 3, pipe, 0, 0, inst);
+
+		cp_int_cntl = RREG32_SOC15(GC, inst, regCPC_INT_CNTL);
+		cp_int_cntl = REG_SET_FIELD(cp_int_cntl, CPC_INT_CNTL,
+					    TIME_STAMP_INT_ENABLE, enable ? 1 : 0);
+		WREG32_SOC15(GC, inst, regCPC_INT_CNTL, cp_int_cntl);
+	}
+
+	soc_v1_0_grbm_select(adev, 0, 0, 0, 0, inst);
+
+	mutex_unlock(&adev->srbm_mutex);
+
+	return 0;
+}
+
+static int mes_v12_1_enable_dbgext_irq(struct amdgpu_mes *mes, bool enable)
+{
+	u32 num_xcc = NUM_XCC(mes->adev->gfx.xcc_mask);
+	u32 xcc_id;
+	int r;
+
+	for (xcc_id = 0; xcc_id < num_xcc; xcc_id++) {
+		r = mes_v12_1_enable_dbgext_irq_xcc(mes, enable, xcc_id);
+		if (r)
+			return r;
+	}
+
+	return 0;
+}
+
 static const struct amdgpu_mes_funcs mes_v12_1_funcs = {
 	.add_hw_queue = mes_v12_1_add_hw_queue,
 	.remove_hw_queue = mes_v12_1_remove_hw_queue,
@@ -965,6 +1052,8 @@ static const struct amdgpu_mes_funcs mes_v12_1_funcs = {
 	.reset_hw_queue = mes_v12_1_reset_hw_queue,
 	.detect_and_reset_hung_queues = mes_v12_1_detect_and_reset_hung_queues,
 	.invalidate_tlbs_pasid = mes_v12_1_inv_tlbs_pasid,
+	.enable_dbgext_irq = mes_v12_1_enable_dbgext_irq,
+	.enable_dbgext_irq_xcc = mes_v12_1_enable_dbgext_irq_xcc,
 };
 
 static int mes_v12_1_allocate_ucode_buffer(struct amdgpu_device *adev,
@@ -1524,6 +1613,15 @@ static int mes_v12_1_sw_init(struct amdgpu_ip_block *ip_block)
 	adev->mes.kiq_hw_fini = &mes_v12_1_kiq_hw_fini;
 	adev->mes.enable_legacy_queue_map = true;
 
+	/*
+	 * Enable mes_dbgext by default on mes12.1: seed an 8 KB runtime
+	 * request so hw_init() -> amdgpu_mes_dbgext_start() brings the log up at
+	 * boot with no mes_dbgext_buffer_size module param needed.  The
+	 * collection mode still follows mes_dbgext_options (default bit0 = 1,
+	 * interrupt-driven).  Both module params continue to override this.
+	 */
+	adev->mes.dbgext_runtime_kb = 8;
+
 	adev->mes.event_log_size = AMDGPU_MAX_MES_PIPES *
 				   AMDGPU_MES_LOG_BUFFER_SIZE * num_xcc;
 
@@ -1700,16 +1798,33 @@ static int mes_v12_1_kiq_hw_init(struct amdgpu_device *adev, uint32_t xcc_id)
 			goto failure;
 	}
 
+	/*
+	 * Partition resume restarts this XCC here and does not run
+	 * mes_v12_1_hw_init(), where dbgext is first armed.  Rearm only this
+	 * XCC.  Boot and full-device resume no-op: dbgext_stop() has cleared
+	 * dbgext_active, and hw_init() arms every XCC afterwards.
+	 */
+	r = amdgpu_mes_dbgext_rearm_xcc(adev, xcc_id);
+	if (r)
+		goto failure;
+
 	return r;
 
 failure:
-	mes_v12_1_hw_fini(ip_block);
+	mes_v12_1_xcc_hw_fini(ip_block, xcc_id);
 	return r;
 }
 
 static int mes_v12_1_kiq_hw_fini(struct amdgpu_device *adev, uint32_t xcc_id)
 {
 	int inst = MES_PIPE_INST(xcc_id, AMDGPU_MES_SCHED_PIPE);
+
+	/*
+	 * Drain this XCC and stop reading it before its MES is halted.
+	 * A full suspend or unload has already cleared dbgext_active, so
+	 * this returns immediately there.
+	 */
+	amdgpu_mes_dbgext_disarm_xcc(adev, xcc_id);
 
 	if (adev->mes.ring[inst].sched.ready) {
 		amdgpu_mes_unmap_legacy_queue(adev, &adev->mes.ring[inst],
@@ -1803,7 +1918,11 @@ out:
 	return 0;
 
 failure:
-	mes_v12_1_hw_fini(ip_block);
+	/*
+	 * Fini this XCC only.  hw_fini() stops dbgext for every XCC, which
+	 * must not happen when one scheduler pipe fails.
+	 */
+	mes_v12_1_xcc_hw_fini(ip_block, xcc_id);
 	return r;
 }
 
@@ -1818,11 +1937,26 @@ static int mes_v12_1_hw_init(struct amdgpu_ip_block *ip_block)
 			return r;
 	}
 
+	amdgpu_mes_dbgext_start(adev);
+
+	return 0;
+}
+
+static int mes_v12_1_xcc_hw_fini(struct amdgpu_ip_block *ip_block, int xcc_id)
+{
 	return 0;
 }
 
 static int mes_v12_1_hw_fini(struct amdgpu_ip_block *ip_block)
 {
+	struct amdgpu_device *adev = ip_block->adev;
+	int xcc_id, num_xcc = NUM_XCC(adev->gfx.xcc_mask);
+
+	amdgpu_mes_dbgext_stop(adev);
+
+	for (xcc_id = 0; xcc_id < num_xcc; xcc_id++)
+		mes_v12_1_xcc_hw_fini(ip_block, xcc_id);
+
 	return 0;
 }
 

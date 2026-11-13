@@ -1,8 +1,18 @@
 # SPDX-License-Identifier: GPL-2.0-only
-
 #
 # PHY drivers for ASPEED
 #
+
+config PHY_ASPEED_PCIE
+	tristate "ASPEED PCIe PHY driver"
+	select GENERIC_PHY
+	depends on (ARCH_ASPEED || COMPILE_TEST)
+	help
+	  This option enables support for the ASPEED PCIe PHY driver.
+	  The driver provides the necessary interface to control and
+	  configure the PCIe PHY hardware found on ASPEED SoCs.
+	  It is required for proper operation of PCIe devices on
+	  platforms using ASPEED chips.
 
 config PHY_ASPEED_USB3
 	tristate "ASPEED USB3 PHY driver"

@@ -41,7 +41,7 @@ static int panic_on_timeout;
  * <0: the NMI watchdog has not been set up, and cannot be enabled
  *  0: the NMI watchdog is disabled, but can be enabled
  */
-atomic_t nmi_active = ATOMIC_INIT(0);		/* oprofile uses this */
+atomic_t nmi_active = ATOMIC_INIT(0);
 EXPORT_SYMBOL(nmi_active);
 static int nmi_init_done;
 static unsigned int nmi_hz = HZ;
@@ -172,8 +172,7 @@ static int __init check_nmi_watchdog(void)
 	if (!atomic_read(&nmi_active))
 		return 0;
 
-	prev_nmi_count = kmalloc_array(nr_cpu_ids, sizeof(unsigned int),
-				       GFP_KERNEL);
+	prev_nmi_count = kmalloc_objs(unsigned int, nr_cpu_ids);
 	if (!prev_nmi_count) {
 		err = -ENOMEM;
 		goto error;

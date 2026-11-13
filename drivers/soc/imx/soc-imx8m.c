@@ -150,10 +150,12 @@ static int imx8m_soc_prepare(struct platform_device *pdev, const char *ocotp_com
 
 	ret = clk_prepare_enable(drvdata->clk);
 	if (ret)
-		goto err_clk;
+		goto put_clk;
 
 	return 0;
 
+put_clk:
+	clk_put(drvdata->clk);
 err_clk:
 	iounmap(drvdata->ocotp_base);
 	return ret;
@@ -231,11 +233,11 @@ static int imx8m_soc_probe(struct platform_device *pdev)
 	u64 soc_uid[2] = {0, 0};
 	int ret;
 
-	soc_dev_attr = devm_kzalloc(dev, sizeof(*soc_dev_attr), GFP_KERNEL);
+	soc_dev_attr = devm_kzalloc_obj(dev, *soc_dev_attr);
 	if (!soc_dev_attr)
 		return -ENOMEM;
 
-	drvdata = devm_kzalloc(dev, sizeof(*drvdata), GFP_KERNEL);
+	drvdata = devm_kzalloc_obj(dev, *drvdata);
 	if (!drvdata)
 		return -ENOMEM;
 

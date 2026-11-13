@@ -256,8 +256,7 @@ fsl_ldb_atomic_get_input_bus_fmts(struct drm_bridge *bridge,
 
 	*num_input_fmts = 0;
 
-	input_fmts = kcalloc(MAX_INPUT_SEL_FORMATS, sizeof(*input_fmts),
-			     GFP_KERNEL);
+	input_fmts = kzalloc_objs(*input_fmts, MAX_INPUT_SEL_FORMATS);
 	if (!input_fmts)
 		return NULL;
 
@@ -342,7 +341,7 @@ static int fsl_ldb_probe(struct platform_device *pdev)
 	fsl_ldb->bridge.next_bridge = of_drm_find_and_get_bridge(panel_node);
 	of_node_put(panel_node);
 	if (!fsl_ldb->bridge.next_bridge)
-		return -ENODEV;
+		return -EPROBE_DEFER;
 
 	if (fsl_ldb_is_dual(fsl_ldb)) {
 		struct device_node *port1, *port2;

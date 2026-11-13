@@ -54,7 +54,7 @@ static struct rc_map_table tanix_tx3mini[] = {
 static struct rc_map_list tanix_tx3mini_map = {
 	.map = {
 		.scan     = tanix_tx3mini,
-		.size     = ARRAY_SIZE(tanix_tx3mini),
+		.entries  = ARRAY_SIZE(tanix_tx3mini),
 		.rc_proto = RC_PROTO_NEC,
 		.name     = RC_MAP_TANIX_TX3MINI,
 	}

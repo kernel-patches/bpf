@@ -56,50 +56,6 @@ fw_domains_get(struct intel_uncore *uncore, enum forcewake_domains fw_domains)
 	uncore->fw_get_funcs->force_wake_get(uncore, fw_domains);
 }
 
-void
-intel_uncore_mmio_debug_init_early(struct drm_i915_private *i915)
-{
-	spin_lock_init(&i915->mmio_debug.lock);
-	i915->mmio_debug.unclaimed_mmio_check = 1;
-
-	i915->uncore.debug = &i915->mmio_debug;
-}
-
-static void mmio_debug_suspend(struct intel_uncore *uncore)
-{
-	if (!uncore->debug)
-		return;
-
-	spin_lock(&uncore->debug->lock);
-
-	/* Save and disable mmio debugging for the user bypass */
-	if (!uncore->debug->suspend_count++) {
-		uncore->debug->saved_mmio_check = uncore->debug->unclaimed_mmio_check;
-		uncore->debug->unclaimed_mmio_check = 0;
-	}
-
-	spin_unlock(&uncore->debug->lock);
-}
-
-static bool check_for_unclaimed_mmio(struct intel_uncore *uncore);
-
-static void mmio_debug_resume(struct intel_uncore *uncore)
-{
-	if (!uncore->debug)
-		return;
-
-	spin_lock(&uncore->debug->lock);
-
-	if (!--uncore->debug->suspend_count)
-		uncore->debug->unclaimed_mmio_check = uncore->debug->saved_mmio_check;
-
-	if (check_for_unclaimed_mmio(uncore))
-		drm_info(&uncore->i915->drm,
-			 "Invalid mmio detected during user access\n");
-
-	spin_unlock(&uncore->debug->lock);
-}
-
 static const char * const forcewake_domain_names[] = {
 	"render",
 	"gt",
@@ -547,69 +503,6 @@ intel_uncore_forcewake_reset(struct intel_uncore *uncore)
 	return fw; /* track the lost user forcewake domains */
 }
 
-static bool
-fpga_check_for_unclaimed_mmio(struct intel_uncore *uncore)
-{
-	u32 dbg;
-
-	dbg = __raw_uncore_read32(uncore, FPGA_DBG);
-	if (likely(!(dbg & FPGA_DBG_RM_NOCLAIM)))
-		return false;
-
-	/*
-	 * Bugs in PCI programming (or failing hardware) can occasionally cause
-	 * us to lose access to the MMIO BAR.  When this happens, register
-	 * reads will come back with 0xFFFFFFFF for every register and things
-	 * go bad very quickly.  Let's try to detect that special case and at
-	 * least try to print a more informative message about what has
-	 * happened.
-	 *
-	 * During normal operation the FPGA_DBG register has several unused
-	 * bits that will always read back as 0's so we can use them as canaries
-	 * to recognize when MMIO accesses are just busted.
-	 */
-	if (unlikely(dbg == ~0))
-		drm_err(&uncore->i915->drm,
-			"Lost access to MMIO BAR; all registers now read back as 0xFFFFFFFF!\n");
-
-	__raw_uncore_write32(uncore, FPGA_DBG, FPGA_DBG_RM_NOCLAIM);
-
-	return true;
-}
-
-static bool
-vlv_check_for_unclaimed_mmio(struct intel_uncore *uncore)
-{
-	u32 cer;
-
-	cer = __raw_uncore_read32(uncore, CLAIM_ER);
-	if (likely(!(cer & (CLAIM_ER_OVERFLOW | CLAIM_ER_CTR_MASK))))
-		return false;
-
-	__raw_uncore_write32(uncore, CLAIM_ER, CLAIM_ER_CLR);
-
-	return true;
-}
-
-static bool
-check_for_unclaimed_mmio(struct intel_uncore *uncore)
-{
-	bool ret = false;
-
-	lockdep_assert_held(&uncore->debug->lock);
-
-	if (uncore->debug->suspend_count)
-		return false;
-
-	if (intel_uncore_has_fpga_dbg_unclaimed(uncore))
-		ret |= fpga_check_for_unclaimed_mmio(uncore);
-
-	if (intel_uncore_has_dbg_unclaimed(uncore))
-		ret |= vlv_check_for_unclaimed_mmio(uncore);
-
-	return ret;
-}
-
 static void forcewake_early_sanitize(struct intel_uncore *uncore,
 				     unsigned int restore_forcewake)
 {
@@ -654,9 +547,6 @@ void intel_uncore_suspend(struct intel_uncore *uncore)
 void intel_uncore_resume_early(struct intel_uncore *uncore)
 {
 	unsigned int restore_forcewake;
-
-	if (intel_uncore_unclaimed_mmio(uncore))
-		drm_dbg(&uncore->i915->drm, "unclaimed mmio detected on resume, clearing\n");
 
 	if (!intel_uncore_has_forcewake(uncore))
 		return;
@@ -733,10 +623,8 @@ void intel_uncore_forcewake_get(struct intel_uncore *uncore,
 void intel_uncore_forcewake_user_get(struct intel_uncore *uncore)
 {
 	spin_lock_irq(&uncore->lock);
-	if (!uncore->user_forcewake_count++) {
+	if (!uncore->user_forcewake_count++)
 		intel_uncore_forcewake_get__locked(uncore, FORCEWAKE_ALL);
-		mmio_debug_suspend(uncore);
-	}
 	spin_unlock_irq(&uncore->lock);
 }
 
@@ -750,10 +638,8 @@ void intel_uncore_forcewake_user_get(struct intel_uncore *uncore)
 void intel_uncore_forcewake_user_put(struct intel_uncore *uncore)
 {
 	spin_lock_irq(&uncore->lock);
-	if (!--uncore->user_forcewake_count) {
-		mmio_debug_resume(uncore);
+	if (!--uncore->user_forcewake_count)
 		intel_uncore_forcewake_put__locked(uncore, FORCEWAKE_ALL);
-	}
 	spin_unlock_irq(&uncore->lock);
 }
 
@@ -1776,59 +1662,6 @@ ilk_dummy_write(struct intel_uncore *uncore)
 	__raw_uncore_write32(uncore, RING_MI_MODE(RENDER_RING_BASE), 0);
 }
 
-static void
-__unclaimed_reg_debug(struct intel_uncore *uncore,
-		      const i915_reg_t reg,
-		      const bool read)
-{
-	if (drm_WARN(&uncore->i915->drm,
-		     check_for_unclaimed_mmio(uncore),
-		     "Unclaimed %s register 0x%x\n",
-		     read ? "read from" : "write to",
-		     i915_mmio_reg_offset(reg)))
-		/* Only report the first N failures */
-		uncore->i915->params.mmio_debug--;
-}
-
-static void
-__unclaimed_previous_reg_debug(struct intel_uncore *uncore,
-			       const i915_reg_t reg,
-			       const bool read)
-{
-	if (check_for_unclaimed_mmio(uncore))
-		drm_dbg(&uncore->i915->drm,
-			"Unclaimed access detected before %s register 0x%x\n",
-			read ? "read from" : "write to",
-			i915_mmio_reg_offset(reg));
-}
-
-static inline bool __must_check
-unclaimed_reg_debug_header(struct intel_uncore *uncore,
-			   const i915_reg_t reg, const bool read)
-{
-	if (likely(!uncore->i915->params.mmio_debug) || !uncore->debug)
-		return false;
-
-	/* interrupts are disabled and re-enabled around uncore->lock usage */
-	lockdep_assert_held(&uncore->lock);
-
-	spin_lock(&uncore->debug->lock);
-	__unclaimed_previous_reg_debug(uncore, reg, read);
-
-	return true;
-}
-
-static inline void
-unclaimed_reg_debug_footer(struct intel_uncore *uncore,
-			   const i915_reg_t reg, const bool read)
-{
-	/* interrupts are disabled and re-enabled around uncore->lock usage */
-	lockdep_assert_held(&uncore->lock);
-
-	__unclaimed_reg_debug(uncore, reg, read);
-	spin_unlock(&uncore->debug->lock);
-}
-
 #define __vgpu_read(x) \
 static u##x \
 vgpu_read##x(struct intel_uncore *uncore, i915_reg_t reg, bool trace) { \
@@ -1884,15 +1717,11 @@ __gen2_read(64)
 #define GEN6_READ_HEADER(x) \
 	u32 offset = i915_mmio_reg_offset(reg); \
 	unsigned long irqflags; \
-	bool unclaimed_reg_debug; \
 	u##x val = 0; \
 	assert_rpm_wakelock_held(uncore->rpm); \
-	spin_lock_irqsave(&uncore->lock, irqflags); \
-	unclaimed_reg_debug = unclaimed_reg_debug_header(uncore, reg, true)
+	spin_lock_irqsave(&uncore->lock, irqflags)
 
 #define GEN6_READ_FOOTER \
-	if (unclaimed_reg_debug) \
-		unclaimed_reg_debug_footer(uncore, reg, true);	\
 	spin_unlock_irqrestore(&uncore->lock, irqflags); \
 	trace_i915_reg_rw(false, reg, val, sizeof(val), trace); \
 	return val
@@ -1990,15 +1819,11 @@ __gen2_write(32)
 #define GEN6_WRITE_HEADER \
 	u32 offset = i915_mmio_reg_offset(reg); \
 	unsigned long irqflags; \
-	bool unclaimed_reg_debug; \
 	trace_i915_reg_rw(true, reg, val, sizeof(val), trace); \
 	assert_rpm_wakelock_held(uncore->rpm); \
-	spin_lock_irqsave(&uncore->lock, irqflags); \
-	unclaimed_reg_debug = unclaimed_reg_debug_header(uncore, reg, false)
+	spin_lock_irqsave(&uncore->lock, irqflags)
 
 #define GEN6_WRITE_FOOTER \
-	if (unclaimed_reg_debug) \
-		unclaimed_reg_debug_footer(uncore, reg, false); \
 	spin_unlock_irqrestore(&uncore->lock, irqflags)
 
 #define __gen6_write(x) \
@@ -2532,7 +2357,6 @@ static int sanity_check_mmio_access(struct intel_uncore *uncore)
 int intel_uncore_init_mmio(struct intel_uncore *uncore)
 {
 	struct drm_i915_private *i915 = uncore->i915;
-	struct intel_display *display = i915->display;
 	int ret;
 
 	ret = sanity_check_mmio_access(uncore);
@@ -2567,18 +2391,8 @@ int intel_uncore_init_mmio(struct intel_uncore *uncore)
 	GEM_BUG_ON(intel_uncore_has_forcewake(uncore) != !!uncore->funcs.read_fw_domains);
 	GEM_BUG_ON(intel_uncore_has_forcewake(uncore) != !!uncore->funcs.write_fw_domains);
 
-	if (HAS_FPGA_DBG_UNCLAIMED(display))
-		uncore->flags |= UNCORE_HAS_FPGA_DBG_UNCLAIMED;
-
-	if (IS_VALLEYVIEW(i915) || IS_CHERRYVIEW(i915))
-		uncore->flags |= UNCORE_HAS_DBG_UNCLAIMED;
-
 	if (IS_GRAPHICS_VER(i915, 6, 7))
 		uncore->flags |= UNCORE_HAS_FIFO;
-
-	/* clear out unclaimed reg detection bit */
-	if (intel_uncore_unclaimed_mmio(uncore))
-		drm_dbg(&i915->drm, "unclaimed mmio detected on uncore init, clearing\n");
 
 	return 0;
 }
@@ -2838,51 +2652,6 @@ int __intel_wait_for_register(struct intel_uncore *uncore,
 
 	if (out_value)
 		*out_value = reg_value;
-
-	return ret;
-}
-
-bool intel_uncore_unclaimed_mmio(struct intel_uncore *uncore)
-{
-	bool ret;
-
-	if (!uncore->debug)
-		return false;
-
-	spin_lock_irq(&uncore->debug->lock);
-	ret = check_for_unclaimed_mmio(uncore);
-	spin_unlock_irq(&uncore->debug->lock);
-
-	return ret;
-}
-
-bool
-intel_uncore_arm_unclaimed_mmio_detection(struct intel_uncore *uncore)
-{
-	bool ret = false;
-
-	if (drm_WARN_ON(&uncore->i915->drm, !uncore->debug))
-		return false;
-
-	spin_lock_irq(&uncore->debug->lock);
-
-	if (unlikely(uncore->debug->unclaimed_mmio_check <= 0))
-		goto out;
-
-	if (unlikely(check_for_unclaimed_mmio(uncore))) {
-		if (!uncore->i915->params.mmio_debug) {
-			drm_dbg(&uncore->i915->drm,
-				"Unclaimed register detected, "
-				"enabling oneshot unclaimed register reporting. "
-				"Please use i915.mmio_debug=N for more information.\n");
-			uncore->i915->params.mmio_debug++;
-		}
-		uncore->debug->unclaimed_mmio_check--;
-		ret = true;
-	}
-
-out:
-	spin_unlock_irq(&uncore->debug->lock);
 
 	return ret;
 }

@@ -158,8 +158,7 @@ static void uniphier_sd_external_dma_start(struct tmio_mmc_host *host,
 	if (!desc)
 		goto unmap_sg;
 
-	desc->callback_result = uniphier_sd_external_dma_callback;
-	desc->callback_param = host;
+	dmaengine_desc_set_callback(desc, NULL, uniphier_sd_external_dma_callback, host);
 
 	cookie = dmaengine_submit(desc);
 	if (cookie < 0)
@@ -624,7 +623,7 @@ static int uniphier_sd_probe(struct platform_device *pdev)
 	if (irq < 0)
 		return irq;
 
-	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
+	priv = devm_kzalloc_obj(dev, *priv);
 	if (!priv)
 		return -ENOMEM;
 

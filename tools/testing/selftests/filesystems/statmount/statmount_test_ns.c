@@ -240,8 +240,9 @@ static int validate_external_listmount(pid_t pid, uint64_t child_nr_mounts)
 	}
 
 	if (nr_mounts != child_nr_mounts) {
-		ksft_print_msg("listmount results is %zi != %zi\n", nr_mounts,
-			       child_nr_mounts);
+		ksft_print_msg("listmount results is %llu != %llu\n",
+			       (unsigned long long)nr_mounts,
+			       (unsigned long long)child_nr_mounts);
 		return NSID_FAIL;
 	}
 
@@ -275,7 +276,7 @@ static int validate_external_listmount(pid_t pid, uint64_t child_nr_mounts)
 static void test_listmount_ns(void)
 {
 	uint64_t nr_mounts;
-	char pval;
+	char pval = 0;
 	int child_ready_pipe[2];
 	int parent_ready_pipe[2];
 	pid_t pid;

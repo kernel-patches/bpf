@@ -200,7 +200,7 @@ static int davinci_gpio_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 
-	chips = devm_kzalloc(dev, sizeof(*chips), GFP_KERNEL);
+	chips = devm_kzalloc_obj(dev, *chips);
 	if (!chips)
 		return -ENOMEM;
 
@@ -564,10 +564,8 @@ static int davinci_gpio_irq_setup(struct platform_device *pdev)
 		 * gpio irqs. Pass the irq bank's corresponding controller to
 		 * the chained irq handler.
 		 */
-		irqdata = devm_kzalloc(&pdev->dev,
-				       sizeof(struct
-					      davinci_gpio_irq_data),
-					      GFP_KERNEL);
+		irqdata = devm_kzalloc_obj(&pdev->dev,
+					   struct davinci_gpio_irq_data);
 		if (!irqdata) {
 			irq_domain_remove(chips->irq_domain);
 			return -ENOMEM;
@@ -668,10 +666,10 @@ static DEFINE_SIMPLE_DEV_PM_OPS(davinci_gpio_dev_pm_ops, davinci_gpio_suspend,
 			 davinci_gpio_resume);
 
 static const struct of_device_id davinci_gpio_ids[] = {
-	{ .compatible = "ti,keystone-gpio", keystone_gpio_get_irq_chip},
-	{ .compatible = "ti,am654-gpio", keystone_gpio_get_irq_chip},
-	{ .compatible = "ti,dm6441-gpio", davinci_gpio_get_irq_chip},
-	{ /* sentinel */ },
+	{ .compatible = "ti,keystone-gpio", .data = keystone_gpio_get_irq_chip },
+	{ .compatible = "ti,am654-gpio", .data = keystone_gpio_get_irq_chip },
+	{ .compatible = "ti,dm6441-gpio", .data = davinci_gpio_get_irq_chip },
+	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, davinci_gpio_ids);
 

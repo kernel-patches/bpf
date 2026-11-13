@@ -48,7 +48,6 @@ enum sysc_soc {
 	SOC_UNKNOWN,
 	SOC_2420,
 	SOC_2430,
-	SOC_AM33,
 	SOC_3430,
 	SOC_AM35,
 	SOC_3630,
@@ -442,10 +441,8 @@ static int sysc_get_clocks(struct sysc *ddata)
 	const char *name;
 	int nr_fck = 0, nr_ick = 0, i, error = 0;
 
-	ddata->clock_roles = devm_kcalloc(ddata->dev,
-					  SYSC_MAX_CLOCKS,
-					  sizeof(*ddata->clock_roles),
-					  GFP_KERNEL);
+	ddata->clock_roles = devm_kzalloc_objs(ddata->dev, *ddata->clock_roles,
+					       SYSC_MAX_CLOCKS);
 	if (!ddata->clock_roles)
 		return -ENOMEM;
 
@@ -485,9 +482,8 @@ static int sysc_get_clocks(struct sysc *ddata)
 	if (!nr_ick)
 		ddata->nr_clocks++;
 
-	ddata->clocks = devm_kcalloc(ddata->dev,
-				     ddata->nr_clocks, sizeof(*ddata->clocks),
-				     GFP_KERNEL);
+	ddata->clocks = devm_kzalloc_objs(ddata->dev, *ddata->clocks,
+					  ddata->nr_clocks);
 	if (!ddata->clocks)
 		return -ENOMEM;
 
@@ -2845,7 +2841,7 @@ static int sysc_init_pdata(struct sysc *ddata)
 	if (!pdata)
 		return 0;
 
-	mdata = devm_kzalloc(ddata->dev, sizeof(*mdata), GFP_KERNEL);
+	mdata = devm_kzalloc_obj(ddata->dev, *mdata);
 	if (!mdata)
 		return -ENOMEM;
 
@@ -2917,7 +2913,6 @@ static void ti_sysc_idle(struct work_struct *work)
 static const struct soc_device_attribute sysc_soc_match[] = {
 	SOC_FLAG("OMAP242*", SOC_2420),
 	SOC_FLAG("OMAP243*", SOC_2430),
-	SOC_FLAG("AM33*", SOC_AM33),
 	SOC_FLAG("AM35*", SOC_AM35),
 	SOC_FLAG("OMAP3[45]*", SOC_3430),
 	SOC_FLAG("OMAP3[67]*", SOC_3630),
@@ -3124,13 +3119,12 @@ static int sysc_check_active_timer(struct sysc *ddata)
 	 * A to B4 at some point.
 	 */
 	switch (sysc_soc->soc) {
-	case SOC_AM33:
 	case SOC_3430:
 	case SOC_AM35:
 		error = -ENXIO;
 		break;
 	default:
-		error = -EBUSY;
+		error = -ENODEV;
 	}
 
 	if ((ddata->cfg.quirks & SYSC_QUIRK_NO_RESET_ON_INIT) &&
@@ -3151,7 +3145,7 @@ static int sysc_probe(struct platform_device *pdev)
 	struct sysc *ddata;
 	int error;
 
-	ddata = devm_kzalloc(&pdev->dev, sizeof(*ddata), GFP_KERNEL);
+	ddata = devm_kzalloc_obj(&pdev->dev, *ddata);
 	if (!ddata)
 		return -ENOMEM;
 

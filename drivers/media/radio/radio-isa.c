@@ -267,6 +267,7 @@ static int radio_isa_common_probe(struct radio_isa_card *isa,
 
 err_hdl:
 	v4l2_ctrl_handler_free(&isa->hdl);
+	v4l2_device_unregister(v4l2_dev);
 err_dev_reg:
 	release_region(isa->io, region_size);
 	kfree(isa);

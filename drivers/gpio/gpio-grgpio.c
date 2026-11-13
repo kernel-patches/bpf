@@ -336,7 +336,7 @@ static int grgpio_probe(struct platform_device *ofdev)
 	int size;
 	int i;
 
-	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
+	priv = devm_kzalloc_obj(dev, *priv);
 	if (!priv)
 		return -ENOMEM;
 
@@ -442,9 +442,9 @@ static int grgpio_probe(struct platform_device *ofdev)
 }
 
 static const struct of_device_id grgpio_match[] = {
-	{.name = "GAISLER_GPIO"},
-	{.name = "01_01a"},
-	{},
+	{ .name = "GAISLER_GPIO" },
+	{ .name = "01_01a" },
+	{ }
 };
 
 MODULE_DEVICE_TABLE(of, grgpio_match);

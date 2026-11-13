@@ -33,6 +33,7 @@
 #include <linux/rculist_bl.h>
 #include <linux/list_lru.h>
 #include <linux/namei.h>
+#include <linux/quotaops.h>
 #include "internal.h"
 #include "mount.h"
 
@@ -45,7 +46,8 @@
  * dcache_hash_bucket lock protects:
  *   - the dcache hash table
  * s_roots_lock protects:
- *   - the s_roots list (see __d_move()/dentry_unlist()/d_obtain_root())
+ *   - the s_roots list (see __d_move()/dentry_unlist()/d_obtain_root()/
+ *     dput_to_list())
  * dentry->d_sb->s_dentry_lru_lock protects:
  *   - the dcache lru lists and counters
  * d_lock protects:
@@ -897,8 +899,9 @@ static inline bool retain_dentry(struct dentry *dentry, bool locked)
 	smp_rmb();
 	d_flags = READ_ONCE(dentry->d_flags);
 
-	// Unreachable? Nobody would be able to look it up, no point retaining
-	if (unlikely(d_unhashed(dentry)))
+	// Unreachable? Nobody would be able to look it up, no point retaining.
+	// Racy when !locked: a stale answer only costs a recheck under ->d_lock.
+	if (unlikely(data_race(d_unhashed(dentry))))
 		return false;
 
 	// Same if it's disconnected
@@ -1117,7 +1120,18 @@ void dput_to_list(struct dentry *dentry, struct list_head *list)
 {
 	if (likely(fast_dput(dentry)))
 		return;
-	__move_to_shrink_list(dentry, list);
+	/*
+	 * The list owner need not pin the superblock, so make a disconnected
+	 * root a secondary one for shrink_dcache_for_umount() to find.
+	 */
+	if (__move_to_shrink_list(dentry, list) &&
+	    unlikely(IS_ROOT(dentry) && hlist_unhashed(&dentry->d_sib))) {
+		struct super_block *sb = dentry->d_sb;
+
+		spin_lock(&sb->s_roots_lock);
+		hlist_add_head(&dentry->d_sib, &sb->s_roots);
+		spin_unlock(&sb->s_roots_lock);
+	}
 	spin_unlock(&dentry->d_lock);
 }
 
@@ -1605,21 +1619,25 @@ int path_has_submounts(const struct path *parent)
 }
 EXPORT_SYMBOL(path_has_submounts);
 
+/* odd while d_set_mounted() runs, d_invalidate() waits on it */
+static __cacheline_aligned_in_smp DEFINE_SEQLOCK(d_set_mounted_lock);
+
 /*
  * Called by mount code to set a mountpoint and check if the mountpoint is
  * reachable (e.g. NFS can unhash a directory dentry and then the complete
  * subtree can become unreachable).
  *
  * Only one of d_invalidate() and d_set_mounted() must succeed.  For
- * this reason take rename_lock and d_lock on dentry and ancestors.
- * Likewise for dont_mount() which marks a dentry that is being removed
- * under d_lock.
+ * this reason take rename_lock, d_set_mounted_lock and d_lock on dentry
+ * and ancestors.  Likewise for dont_mount() which marks a dentry that
+ * is being removed under d_lock.
  */
 int d_set_mounted(struct dentry *dentry)
 {
 	struct dentry *p;
 	int ret = -ENOENT;
 	read_seqlock_excl(&rename_lock);
+	write_seqlock(&d_set_mounted_lock);
 	for (p = dentry->d_parent; !IS_ROOT(p); p = p->d_parent) {
 		/* Need exclusion wrt. d_invalidate() */
 		spin_lock(&p->d_lock);
@@ -1637,8 +1655,9 @@ int d_set_mounted(struct dentry *dentry)
 			ret = 0;
 		}
 	}
- 	spin_unlock(&dentry->d_lock);
+	spin_unlock(&dentry->d_lock);
 out:
+	write_sequnlock(&d_set_mounted_lock);
 	read_sequnlock_excl(&rename_lock);
 	return ret;
 }
@@ -1827,8 +1846,13 @@ static void do_one_tree(struct dentry *dentry)
 	d_walk(dentry, dentry, umount_check);
 	spin_lock(&dentry->d_lock);
 	__d_drop(dentry);
-	/* A busy root survives the dput() below so don't leave it on ->s_roots. */
-	if (unlikely(!hlist_unhashed(&dentry->d_sib)))
+	/*
+	 * A busy root survives the dput() below so don't leave it on ->s_roots.
+	 * An idle one stays until dentry_unlist() so that umount can wait for
+	 * a racing eviction, see lock_for_kill().
+	 */
+	if (unlikely(dentry->d_lockref.count > 1 &&
+		     !hlist_unhashed(&dentry->d_sib)))
 		unlink_secondary_root(dentry);
 	spin_unlock(&dentry->d_lock);
 	dput(dentry);
@@ -1877,7 +1901,8 @@ void shrink_dcache_for_umount(struct super_block *sb)
 static enum d_walk_ret find_submount(void *_data, struct dentry *dentry)
 {
 	struct dentry **victim = _data;
-	if (d_mountpoint(dentry)) {
+	/* Skip mounted and removed but still mounted dentries. */
+	if (d_mountpoint(dentry) && !cant_mount(dentry)) {
 		*victim = dget_dlock(dentry);
 		return D_WALK_QUIT;
 	}
@@ -1891,6 +1916,7 @@ static enum d_walk_ret find_submount(void *_data, struct dentry *dentry)
 void d_invalidate(struct dentry *dentry)
 {
 	bool had_submounts = false;
+	unsigned seq;
 	spin_lock(&dentry->d_lock);
 	if (d_unhashed(dentry)) {
 		spin_unlock(&dentry->d_lock);
@@ -1902,6 +1928,11 @@ void d_invalidate(struct dentry *dentry)
 	/* Negative dentries can be dropped without further checks */
 	if (!dentry->d_inode)
 		return;
+
+	/* wait for a d_set_mounted() that saw us hashed to set its flag */
+	do {
+		seq = read_seqbegin(&d_set_mounted_lock);
+	} while (read_seqretry(&d_set_mounted_lock, seq));
 
 	shrink_dcache_parent(dentry);
 	for (;;) {
@@ -2753,6 +2784,13 @@ struct dentry *d_hash_and_lookup(struct dentry *dir, struct qstr *name)
 	return d_lookup(dir, name);
 }
 
+static __always_inline bool d_delete_drop(struct dentry *dentry)
+{
+	return dentry_negative_policy ||
+	       (IS_ENABLED(CONFIG_UNICODE) &&
+		IS_CASEFOLDED(d_inode(dentry->d_parent)));
+}
+
 /*
  * When a file is deleted, we have two options:
  * - turn this dentry into a negative dentry
@@ -2784,9 +2822,9 @@ void d_delete(struct dentry * dentry)
 	 * Are we the only user?
 	 */
 	if (dentry->d_lockref.count == 1) {
-		if (dentry_negative_policy)
+		if (d_delete_drop(dentry))
 			__d_drop(dentry);
-		dentry->d_flags &= ~DCACHE_CANT_MOUNT;
+		dentry->d_flags &= ~(DCACHE_CANT_MOUNT | DCACHE_MOUNTED);
 		dentry_unlink_inode(dentry);
 	} else {
 		__d_drop(dentry);
@@ -3690,6 +3728,7 @@ void __init vfs_caches_init(void)
 	inode_init();
 	files_init();
 	files_maxfiles_init();
+	dquot_cache_init();
 	mnt_init();
 	bdev_cache_init();
 	chrdev_init();

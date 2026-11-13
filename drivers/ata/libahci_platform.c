@@ -434,6 +434,10 @@ static int ahci_platform_get_firmware(struct ahci_host_priv *hpriv,
 		if (of_property_read_u32(child, "reg", &port))
 			return -EINVAL;
 
+		/* Already reported by ahci_platform_get_resources() */
+		if (port >= hpriv->nports)
+			continue;
+
 		if (!of_property_read_u32(child, "hba-port-cap", &hpriv->saved_port_cap[port]))
 			hpriv->saved_port_cap[port] &= PORT_CMD_CAP;
 	}
@@ -539,7 +543,7 @@ struct ahci_host_priv *ahci_platform_get_resources(struct platform_device *pdev,
 		 * No clock bulk found: fallback to manually getting
 		 * the optional clock.
 		 */
-		hpriv->clks = devm_kzalloc(dev, sizeof(*hpriv->clks), GFP_KERNEL);
+		hpriv->clks = devm_kzalloc_obj(dev, *hpriv->clks);
 		if (!hpriv->clks) {
 			rc = -ENOMEM;
 			goto err_out;
@@ -557,8 +561,7 @@ struct ahci_host_priv *ahci_platform_get_resources(struct platform_device *pdev,
 	hpriv->ahci_regulator = devm_regulator_get(dev, "ahci");
 	if (IS_ERR(hpriv->ahci_regulator)) {
 		rc = PTR_ERR(hpriv->ahci_regulator);
-		if (rc != 0)
-			goto err_out;
+		goto err_out;
 	}
 
 	hpriv->phy_regulator = devm_regulator_get(dev, "phy");

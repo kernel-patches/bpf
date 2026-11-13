@@ -222,48 +222,6 @@ static void anon_pipe_buf_release(struct pipe_inode_info *pipe,
 	anon_pipe_put_page(pipe, page);
 }
 
-static bool anon_pipe_buf_try_steal(struct pipe_inode_info *pipe,
-		struct pipe_buffer *buf)
-{
-	struct page *page = buf->page;
-
-	if (page_count(page) != 1)
-		return false;
-	memcg_kmem_uncharge_page(page, 0);
-	__SetPageLocked(page);
-	return true;
-}
-
-/**
- * generic_pipe_buf_try_steal - attempt to take ownership of a &pipe_buffer
- * @pipe:	the pipe that the buffer belongs to
- * @buf:	the buffer to attempt to steal
- *
- * Description:
- *	This function attempts to steal the &struct page attached to
- *	@buf. If successful, this function returns 0 and returns with
- *	the page locked. The caller may then reuse the page for whatever
- *	he wishes; the typical use is insertion into a different file
- *	page cache.
- */
-bool generic_pipe_buf_try_steal(struct pipe_inode_info *pipe,
-		struct pipe_buffer *buf)
-{
-	struct page *page = buf->page;
-
-	/*
-	 * A reference of one is golden, that means that the owner of this
-	 * page is the only one holding a reference to it. lock the page
-	 * and return OK.
-	 */
-	if (page_count(page) == 1) {
-		lock_page(page);
-		return true;
-	}
-	return false;
-}
-EXPORT_SYMBOL(generic_pipe_buf_try_steal);
-
 /**
  * generic_pipe_buf_get - get a reference to a &struct pipe_buffer
  * @pipe:	the pipe that the buffer belongs to
@@ -297,7 +255,6 @@ EXPORT_SYMBOL(generic_pipe_buf_release);
 
 static const struct pipe_buf_operations anon_pipe_buf_ops = {
 	.release	= anon_pipe_buf_release,
-	.try_steal	= anon_pipe_buf_try_steal,
 	.get		= generic_pipe_buf_get,
 };
 
@@ -586,6 +543,7 @@ anon_pipe_write(struct kiocb *iocb, struct iov_iter *from)
 		if (!pipe_full(head, pipe->tail, pipe->max_usage)) {
 			struct pipe_buffer *buf;
 			struct page *page;
+			size_t len;
 			int copied;
 
 			page = anon_pipe_get_page(pipe);
@@ -595,8 +553,9 @@ anon_pipe_write(struct kiocb *iocb, struct iov_iter *from)
 				break;
 			}
 
-			copied = copy_page_from_iter(page, 0, PAGE_SIZE, from);
-			if (unlikely(copied < PAGE_SIZE && iov_iter_count(from))) {
+			len = min(PAGE_SIZE, iov_iter_count(from));
+			copied = copy_page_from_iter(page, 0, len, from);
+			if (unlikely(copied < len)) {
 				anon_pipe_put_page(pipe, page);
 				if (!ret)
 					ret = -EFAULT;
@@ -1566,6 +1525,9 @@ static struct file_system_type pipe_fs_type = {
 
 static ulong round_pipe_size_ul(ulong size)
 {
+	if (size > UINT_MAX)
+		return 0;
+
 	return round_pipe_size(size);
 }
 

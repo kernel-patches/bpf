@@ -144,24 +144,12 @@ static struct l2cap_chan *l2cap_get_chan_by_dcid(struct l2cap_conn *conn,
 	return c;
 }
 
-static struct l2cap_chan *__l2cap_get_chan_by_ident(struct l2cap_conn *conn,
-						    u8 ident)
-	__must_hold(&conn->lock)
-{
-	struct l2cap_chan *c;
-
-	list_for_each_entry(c, &conn->chan_l, list) {
-		if (c->ident == ident)
-			return c;
-	}
-	return NULL;
-}
-
 /* Our connection request has been sent and is still outstanding */
 static bool l2cap_chan_connect_pending(struct l2cap_chan *chan)
 {
 	return chan->state == BT_CONNECT &&
-	       test_bit(CONF_CONNECT_PEND, &chan->conf_state);
+	       (test_bit(CONF_CONNECT_PEND, &chan->conf_state) ||
+		test_bit(FLAG_LE_CONN_REQ_SENT, &chan->flags));
 }
 
 /* Other channels may hold the same ident for a response they still have
@@ -174,7 +162,7 @@ static struct l2cap_chan *__l2cap_get_connect_chan_by_ident(struct l2cap_conn *c
 	struct l2cap_chan *c;
 
 	list_for_each_entry(c, &conn->chan_l, list) {
-		if (c->ident == ident && l2cap_chan_connect_pending(c))
+		if (l2cap_chan_connect_pending(c) && c->ident == ident)
 			return c;
 	}
 	return NULL;
@@ -579,6 +567,7 @@ void l2cap_chan_set_defaults(struct l2cap_chan *chan, struct l2cap_chan *pchan)
 		chan->tx_win = pchan->tx_win;
 		chan->tx_win_max = pchan->tx_win_max;
 		chan->sec_level = pchan->sec_level;
+		chan->mic_len = pchan->mic_len;
 		chan->conf_state = pchan->conf_state;
 		chan->flags = pchan->flags;
 		chan->tx_credits = pchan->tx_credits;
@@ -1025,14 +1014,26 @@ static inline u8 l2cap_get_auth_type(struct l2cap_chan *chan)
 	}
 }
 
+/* Raise the MIC length requested for the connection to the one the channel
+ * requires, so the next time encryption is started it asks for it.
+ */
+void l2cap_chan_req_mic_len(struct l2cap_chan *chan, struct hci_conn *hcon)
+{
+	if (chan->mic_len > hcon->req_mic_len)
+		hcon->req_mic_len = chan->mic_len;
+}
+
 /* Service level security */
 int l2cap_chan_check_security(struct l2cap_chan *chan, bool initiator)
 {
 	struct l2cap_conn *conn = chan->conn;
 	__u8 auth_type;
 
-	if (conn->hcon->type == LE_LINK)
+	if (conn->hcon->type == LE_LINK) {
+		l2cap_chan_req_mic_len(chan, conn->hcon);
+
 		return smp_conn_security(conn->hcon, chan->sec_level);
+	}
 
 	auth_type = l2cap_get_auth_type(chan);
 
@@ -1512,6 +1513,8 @@ static void l2cap_le_start(struct l2cap_chan *chan)
 {
 	struct l2cap_conn *conn = chan->conn;
 
+	l2cap_chan_req_mic_len(chan, conn->hcon);
+
 	if (!smp_conn_security(conn->hcon, chan->sec_level))
 		return;
 
@@ -1568,6 +1571,12 @@ static bool l2cap_check_enc_key_size(struct hci_conn *hcon,
 	 * This check might also be called for unencrypted connections
 	 * that have no key size requirements. Ensure that the link is
 	 * actually encrypted before enforcing a key size.
+	 *
+	 * Opportunistic encryption has no key from pairing, so there is no
+	 * key size to enforce. The security level stays as if the link were
+	 * unencrypted, see hci_encrypt_change_v3_evt(), so a channel
+	 * requiring more still needs pairing, which then replaces the
+	 * opportunistic key.
 	 */
 	int min_key_size = hcon->hdev->min_enc_key_size;
 
@@ -1575,8 +1584,21 @@ static bool l2cap_check_enc_key_size(struct hci_conn *hcon,
 	if (chan->sec_level == BT_SECURITY_FIPS)
 		min_key_size = 16;
 
-	return (!test_bit(HCI_CONN_ENCRYPT, &hcon->flags) ||
+	return (!test_bit(HCI_CONN_ENCRYPT, hcon->flags) ||
+		test_bit(HCI_CONN_OPP_ENCRYPT, hcon->flags) ||
 		hcon->enc_key_size >= min_key_size);
+}
+
+static bool l2cap_check_mic_len(struct hci_conn *hcon, struct l2cap_chan *chan)
+{
+	/* If the channel has no MIC length requirement, skip check */
+	if (!chan->mic_len)
+		return true;
+
+	if (!test_bit(HCI_CONN_ENCRYPT, hcon->flags))
+		return true;
+
+	return hci_conn_mic_len(hcon) >= chan->mic_len;
 }
 
 static void l2cap_do_start(struct l2cap_chan *chan)
@@ -1759,10 +1781,40 @@ static void l2cap_le_conn_ready(struct l2cap_conn *conn)
 	}
 }
 
-static void l2cap_conn_ready(struct l2cap_conn *conn)
+static bool l2cap_is_blocked(struct hci_conn *hcon)
+	__must_hold(&hcon->hdev->lock)
 {
+	/* Since we can't actively block incoming LE connections we must
+	 * at least ensure that we ignore incoming data from them.
+	 */
+	return hcon->type == LE_LINK &&
+	       hci_bdaddr_list_lookup(&hcon->hdev->reject_list, &hcon->dst,
+				      bdaddr_dst_type(hcon));
+}
+
+static void l2cap_queue_pending_rx(struct hci_conn *hcon)
+	__must_hold(&hcon->hdev->lock)
+{
+	struct l2cap_conn *conn = hcon->l2cap_data;
+
+	mutex_lock(&conn->lock);
+
+	if (!skb_queue_empty(&conn->pending_rx)) {
+		/* Teardown holds hdev->lock while cancelling the worker.
+		 * Pass the decision under conn->lock to avoid that lock.
+		 */
+		conn->pending_rx_blocked = l2cap_is_blocked(hcon);
+		queue_work(hcon->hdev->workqueue, &conn->pending_rx_work);
+	}
+
+	mutex_unlock(&conn->lock);
+}
+
+static void l2cap_conn_ready(struct hci_conn *hcon)
+	__must_hold(&hcon->hdev->lock)
+{
+	struct l2cap_conn *conn = hcon->l2cap_data;
 	struct l2cap_chan *chan;
-	struct hci_conn *hcon = conn->hcon;
 
 	BT_DBG("conn %p", conn);
 
@@ -1794,7 +1846,7 @@ static void l2cap_conn_ready(struct l2cap_conn *conn)
 	if (hcon->type == LE_LINK)
 		l2cap_le_conn_ready(conn);
 
-	queue_work(hcon->hdev->workqueue, &conn->pending_rx_work);
+	l2cap_queue_pending_rx(hcon);
 }
 
 /* Notify sockets that we cannot guaranty reliability anymore */
@@ -3984,6 +4036,7 @@ void __l2cap_le_connect_rsp_defer(struct l2cap_chan *chan)
 
 	l2cap_send_cmd(conn, chan->ident, L2CAP_LE_CONN_RSP, sizeof(rsp),
 		       &rsp);
+	chan->ident = 0;
 }
 
 static void l2cap_ecred_list_defer(struct l2cap_chan *chan, void *data)
@@ -4480,11 +4533,11 @@ static int l2cap_connect_create_rsp(struct l2cap_conn *conn,
 
 	lockdep_assert_held(&chan->conn->lock);
 
-	/* Only accept a response to a connection request we sent and that
-	 * is still outstanding. A channel waiting in BT_CONNECT for security
-	 * or the feature mask has not sent one yet.
+	/* Only accept a response matching a connection request we sent and
+	 * that is still outstanding. A channel waiting in BT_CONNECT for
+	 * security or the feature mask has not sent one yet.
 	 */
-	if (!l2cap_chan_connect_pending(chan))
+	if (!l2cap_chan_connect_pending(chan) || chan->ident != cmd->ident)
 		goto done;
 
 	switch (result) {
@@ -5073,7 +5126,7 @@ static int l2cap_le_connect_rsp(struct l2cap_conn *conn,
 	BT_DBG("dcid 0x%4.4x mtu %u mps %u credits %u result 0x%2.2x",
 	       dcid, mtu, mps, credits, result);
 
-	chan = __l2cap_get_chan_by_ident(conn, cmd->ident);
+	chan = __l2cap_get_connect_chan_by_ident(conn, cmd->ident);
 	if (!chan)
 		return -EBADSLT;
 
@@ -5119,6 +5172,7 @@ static int l2cap_le_connect_rsp(struct l2cap_conn *conn,
 		/* We'll need to send a new Connect Request */
 		clear_bit(FLAG_LE_CONN_REQ_SENT, &chan->flags);
 
+		l2cap_chan_req_mic_len(chan, hcon);
 		smp_conn_security(hcon, chan->sec_level);
 		break;
 
@@ -5268,6 +5322,11 @@ static int l2cap_le_connect_req(struct l2cap_conn *conn,
 
 	l2cap_chan_lock(pchan);
 
+	/* Record the MIC length the channel requires before checking the
+	 * security, so encryption started for it requests that.
+	 */
+	l2cap_chan_req_mic_len(pchan, conn->hcon);
+
 	if (!smp_sufficient_security(conn->hcon, pchan->sec_level,
 				     SMP_ALLOW_STK)) {
 		result = pchan->sec_level == BT_SECURITY_MEDIUM ?
@@ -5279,6 +5338,20 @@ static int l2cap_le_connect_req(struct l2cap_conn *conn,
 	/* Check if Key Size is sufficient for the security level */
 	if (!l2cap_check_enc_key_size(conn->hcon, pchan)) {
 		result = L2CAP_CR_LE_BAD_KEY_SIZE;
+		chan = NULL;
+		goto response_unlock;
+	}
+
+	/* BLUETOOTH CORE SPECIFICATION Version 7.0 | Vol 3, Part A,
+	 * Section 10.1:
+	 *
+	 * If an L2CAP_LE_CREDIT_BASED_CONNECTION_REQ packet is received
+	 * and the encryption key size is long enough but the MIC length is
+	 * too short, then the connection shall be rejected with a result
+	 * value of "Connection refused - MIC length too short".
+	 */
+	if (!l2cap_check_mic_len(conn->hcon, pchan)) {
+		result = L2CAP_CR_LE_MIC_LEN_TOO_SHORT;
 		chan = NULL;
 		goto response_unlock;
 	}
@@ -5323,10 +5396,10 @@ static int l2cap_le_connect_req(struct l2cap_conn *conn,
 
 	__set_chan_timer(chan, chan->ops->get_sndtimeo(chan));
 
-	chan->ident = cmd->ident;
 	chan->mode = L2CAP_MODE_LE_FLOWCTL;
 
 	if (test_bit(FLAG_DEFER_SETUP, &chan->flags)) {
+		chan->ident = cmd->ident;
 		l2cap_state_change(chan, BT_CONNECT2);
 		/* The following result value is actually not defined
 		 * for LE CoC but we use it to let the function know
@@ -5494,10 +5567,27 @@ static inline int l2cap_ecred_conn_req(struct l2cap_conn *conn,
 
 	l2cap_chan_lock(pchan);
 
+	/* Record the MIC length the channel requires before checking the
+	 * security, so encryption started for it requests that.
+	 */
+	l2cap_chan_req_mic_len(pchan, conn->hcon);
+
 	if (!smp_sufficient_security(conn->hcon, pchan->sec_level,
 				     SMP_ALLOW_STK)) {
 		result = pchan->sec_level == BT_SECURITY_MEDIUM ?
 			L2CAP_CR_LE_ENCRYPTION : L2CAP_CR_LE_AUTHENTICATION;
+		goto unlock;
+	}
+
+	/* BLUETOOTH CORE SPECIFICATION Version 7.0 | Vol 3, Part A,
+	 * Section 10.2:
+	 *
+	 * If the encryption key size is long enough but the MIC length is
+	 * too short, then the connection shall be rejected with a result
+	 * value of "All connections refused - MIC length too short".
+	 */
+	if (!l2cap_check_mic_len(conn->hcon, pchan)) {
+		result = L2CAP_CR_ECRED_MIC_LEN_TOO_SHORT;
 		goto unlock;
 	}
 
@@ -5562,10 +5652,10 @@ static inline int l2cap_ecred_conn_req(struct l2cap_conn *conn,
 
 		__set_chan_timer(chan, chan->ops->get_sndtimeo(chan));
 
-		chan->ident = cmd->ident;
 		chan->mode = L2CAP_MODE_EXT_FLOWCTL;
 
 		if (test_bit(FLAG_DEFER_SETUP, &chan->flags)) {
+			chan->ident = cmd->ident;
 			l2cap_state_change(chan, BT_CONNECT2);
 			defer = true;
 			chan->ops->defer(chan);
@@ -5621,9 +5711,10 @@ static inline int l2cap_ecred_conn_rsp(struct l2cap_conn *conn,
 		struct l2cap_chan *orig;
 		u16 dcid;
 
-		if (chan->ident != cmd->ident ||
+		if (chan->state != BT_CONNECT ||
 		    chan->mode != L2CAP_MODE_EXT_FLOWCTL ||
-		    chan->state == BT_CONNECTED)
+		    !test_bit(FLAG_ECRED_CONN_REQ_SENT, &chan->flags) ||
+		    chan->ident != cmd->ident)
 			continue;
 
 		l2cap_chan_hold(chan);
@@ -5697,6 +5788,7 @@ static inline int l2cap_ecred_conn_rsp(struct l2cap_conn *conn,
 			/* We'll need to send a new Connect Request */
 			clear_bit(FLAG_ECRED_CONN_REQ_SENT, &chan->flags);
 
+			l2cap_chan_req_mic_len(chan, hcon);
 			smp_conn_security(hcon, chan->sec_level);
 			break;
 
@@ -5707,6 +5799,16 @@ static inline int l2cap_ecred_conn_rsp(struct l2cap_conn *conn,
 		default:
 			/* If dcid was not set it means channels was refused */
 			if (!dcid) {
+				l2cap_chan_del(chan, ECONNREFUSED);
+				break;
+			}
+
+			/*
+			 * Validate MPS and MTU per BT Core Spec
+			 * Vol 3 Part A Sec 10.2
+			 */
+			if (mtu < L2CAP_ECRED_MIN_MTU ||
+			    mps < L2CAP_ECRED_MIN_MPS) {
 				l2cap_chan_del(chan, ECONNREFUSED);
 				break;
 			}
@@ -5842,16 +5944,9 @@ static inline int l2cap_ecred_reconf_rsp(struct l2cap_conn *conn,
 
 	BT_DBG("result 0x%4.4x", result);
 
-	if (!result) {
-		list_for_each_entry(chan, &conn->chan_l, list) {
-			if (chan->ident == cmd->ident)
-				chan->ident = 0;
-		}
-		return 0;
-	}
-
 	list_for_each_entry_safe(chan, tmp, &conn->chan_l, list) {
-		if (chan->ident != cmd->ident)
+		/* Reconfiguration updates ident with only chan->lock held. */
+		if (data_race(READ_ONCE(chan->ident)) != cmd->ident)
 			continue;
 
 		if (!l2cap_chan_hold_unless_zero(chan))
@@ -5860,7 +5955,15 @@ static inline int l2cap_ecred_reconf_rsp(struct l2cap_conn *conn,
 
 		lockdep_assert_held(&chan->conn->lock);
 
-		l2cap_chan_del(chan, ECONNRESET);
+		if (chan->ident == cmd->ident &&
+		    test_and_clear_bit(FLAG_ECRED_RECONF_REQ_SENT, &chan->flags)) {
+			if (result) {
+				l2cap_chan_del(chan, ECONNRESET);
+				chan->ops->close(chan);
+			} else {
+				chan->ident = 0;
+			}
+		}
 
 		l2cap_chan_unlock(chan);
 		l2cap_chan_put(chan);
@@ -5875,26 +5978,35 @@ static inline int l2cap_le_command_rej(struct l2cap_conn *conn,
 	__must_hold(&conn->lock)
 {
 	struct l2cap_cmd_rej_unk *rej = (struct l2cap_cmd_rej_unk *) data;
-	struct l2cap_chan *chan;
+	struct l2cap_chan *chan, *tmp;
 
 	if (cmd_len < sizeof(*rej))
 		return -EPROTO;
 
-	chan = __l2cap_get_chan_by_ident(conn, cmd->ident);
-	if (!chan)
-		goto done;
+	list_for_each_entry_safe(chan, tmp, &conn->chan_l, list) {
+		/* Reconfiguration updates ident with only chan->lock held. */
+		if (data_race(READ_ONCE(chan->ident)) != cmd->ident)
+			continue;
 
-	chan = l2cap_chan_hold_unless_zero(chan);
-	if (!chan)
-		goto done;
+		if (!l2cap_chan_hold_unless_zero(chan))
+			continue;
 
-	l2cap_chan_lock(chan);
-	lockdep_assert_held(&chan->conn->lock);
-	l2cap_chan_del(chan, ECONNREFUSED);
-	l2cap_chan_unlock(chan);
-	l2cap_chan_put(chan);
+		l2cap_chan_lock(chan);
+		lockdep_assert_held(&chan->conn->lock);
 
-done:
+		if (chan->ident == cmd->ident &&
+		    ((chan->state == BT_CONNECT &&
+		      (test_bit(FLAG_LE_CONN_REQ_SENT, &chan->flags) ||
+		       test_bit(FLAG_ECRED_CONN_REQ_SENT, &chan->flags))) ||
+		     test_bit(FLAG_ECRED_RECONF_REQ_SENT, &chan->flags))) {
+			l2cap_chan_del(chan, ECONNREFUSED);
+			chan->ops->close(chan);
+		}
+
+		l2cap_chan_unlock(chan);
+		l2cap_chan_put(chan);
+	}
+
 	return 0;
 }
 
@@ -7381,7 +7493,8 @@ free_skb:
 	kfree_skb(skb);
 }
 
-static void l2cap_recv_frame(struct l2cap_conn *conn, struct sk_buff *skb)
+static void l2cap_recv_frame(struct l2cap_conn *conn, struct sk_buff *skb,
+			     bool blocked)
 	__must_hold(&conn->lock)
 {
 	struct l2cap_hdr *lh = (void *) skb->data;
@@ -7389,7 +7502,11 @@ static void l2cap_recv_frame(struct l2cap_conn *conn, struct sk_buff *skb)
 	u16 cid, len;
 	__le16 psm;
 
-	if (hcon->state != BT_CONNECTED) {
+	/* Also hold data back while the encryption key size is read, as
+	 * the security of the link, e.g. for SMP over BR/EDR, depends on it.
+	 */
+	if (hcon->state != BT_CONNECTED ||
+	    test_bit(HCI_CONN_ENC_KEY_SIZE_PEND, hcon->flags)) {
 		BT_DBG("queueing pending rx skb");
 		skb_queue_tail(&conn->pending_rx, skb);
 		return;
@@ -7404,12 +7521,7 @@ static void l2cap_recv_frame(struct l2cap_conn *conn, struct sk_buff *skb)
 		return;
 	}
 
-	/* Since we can't actively block incoming LE connections we must
-	 * at least ensure that we ignore incoming data from them.
-	 */
-	if (hcon->type == LE_LINK &&
-	    hci_bdaddr_list_lookup(&hcon->hdev->reject_list, &hcon->dst,
-				   bdaddr_dst_type(hcon))) {
+	if (blocked) {
 		kfree_skb(skb);
 		return;
 	}
@@ -7452,8 +7564,12 @@ static void process_pending_rx(struct work_struct *work)
 
 	mutex_lock(&conn->lock);
 
-	while ((skb = skb_dequeue(&conn->pending_rx)))
-		l2cap_recv_frame(conn, skb);
+	/* l2cap_recv_frame() would queue it all again while the encryption
+	 * key size is read, l2cap_security_cfm() schedules this once known.
+	 */
+	while (!test_bit(HCI_CONN_ENC_KEY_SIZE_PEND, conn->hcon->flags) &&
+	       (skb = skb_dequeue(&conn->pending_rx)))
+		l2cap_recv_frame(conn, skb, conn->pending_rx_blocked);
 
 	mutex_unlock(&conn->lock);
 }
@@ -7757,6 +7873,7 @@ static void l2cap_ecred_reconfigure(struct l2cap_chan *chan)
 	pdu->scid[0] = cpu_to_le16(chan->scid);
 
 	chan->ident = l2cap_get_ident(conn);
+	set_bit(FLAG_ECRED_RECONF_REQ_SENT, &chan->flags);
 
 	l2cap_send_cmd(conn, chan->ident, L2CAP_ECRED_RECONF_REQ,
 		       struct_size(pdu, scid, 1), pdu);
@@ -7904,7 +8021,7 @@ next:
 
 	mutex_unlock(&conn->lock);
 
-	l2cap_conn_ready(conn);
+	l2cap_conn_ready(hcon);
 }
 
 int l2cap_disconn_ind(struct hci_conn *hcon)
@@ -8041,6 +8158,9 @@ static void l2cap_security_cfm(struct hci_conn *hcon, u8 status, u8 encrypt)
 	}
 
 	mutex_unlock(&conn->lock);
+
+	/* Process data held back while the encryption key size was read */
+	l2cap_queue_pending_rx(hcon);
 }
 
 /* Append fragment into frame respecting the maximum len of rx_skb */
@@ -8129,6 +8249,7 @@ int l2cap_recv_acldata(struct hci_dev *hdev, u16 handle,
 {
 	struct hci_conn *hcon;
 	struct l2cap_conn *conn;
+	bool blocked;
 	int len;
 
 	/* Lock hdev for hci_conn, and race on l2cap_data vs. l2cap_conn_del */
@@ -8151,6 +8272,7 @@ int l2cap_recv_acldata(struct hci_dev *hdev, u16 handle,
 		conn = l2cap_conn_add(hcon);
 
 	conn = l2cap_conn_hold_unless_zero(conn);
+	blocked = l2cap_is_blocked(hcon);
 	hcon = NULL;
 
 	hci_dev_unlock(hdev);
@@ -8187,7 +8309,7 @@ int l2cap_recv_acldata(struct hci_dev *hdev, u16 handle,
 
 		if (len == skb->len) {
 			/* Complete frame received */
-			l2cap_recv_frame(conn, skb);
+			l2cap_recv_frame(conn, skb, blocked);
 			goto unlock;
 		}
 
@@ -8211,7 +8333,7 @@ int l2cap_recv_acldata(struct hci_dev *hdev, u16 handle,
 			 * setting the socket unreliable.
 			 */
 			skb->len = len;
-			l2cap_recv_frame(conn, skb);
+			l2cap_recv_frame(conn, skb, blocked);
 			l2cap_conn_unreliable(conn, ECOMM);
 			goto unlock;
 		}
@@ -8261,7 +8383,7 @@ int l2cap_recv_acldata(struct hci_dev *hdev, u16 handle,
 			 */
 			struct sk_buff *rx_skb = conn->rx_skb;
 			conn->rx_skb = NULL;
-			l2cap_recv_frame(conn, rx_skb);
+			l2cap_recv_frame(conn, rx_skb, blocked);
 		}
 		break;
 	}

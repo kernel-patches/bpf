@@ -145,16 +145,17 @@ static int pim4328_probe(struct i2c_client *client)
 				     | I2C_FUNC_SMBUS_BLOCK_DATA))
 		return -ENODEV;
 
-	data = devm_kzalloc(&client->dev, sizeof(struct pim4328_data),
-			    GFP_KERNEL);
+	data = devm_kzalloc_obj(&client->dev, struct pim4328_data);
 	if (!data)
 		return -ENOMEM;
 
-	status = i2c_smbus_read_block_data(client, PMBUS_MFR_MODEL, device_id);
+	status = i2c_smbus_read_block_data(client, PMBUS_MFR_MODEL,
+					   sizeof(device_id) - 1, device_id);
 	if (status < 0) {
 		dev_err(&client->dev, "Failed to read Manufacturer Model\n");
 		return status;
 	}
+	device_id[status] = '\0';
 	for (mid = pim4328_id; mid->name[0]; mid++) {
 		if (!strncasecmp(mid->name, device_id, strlen(mid->name)))
 			break;
@@ -175,8 +176,7 @@ static int pim4328_probe(struct i2c_client *client)
 	info->read_byte_data = pim4328_read_byte_data;
 	info->read_word_data = pim4328_read_word_data;
 
-	pdata = devm_kzalloc(dev, sizeof(struct pmbus_platform_data),
-			     GFP_KERNEL);
+	pdata = devm_kzalloc_obj(dev, struct pmbus_platform_data);
 	if (!pdata)
 		return -ENOMEM;
 	dev->platform_data = pdata;

@@ -32,7 +32,7 @@
 #include "amdgpu.h"
 #include "amdgpu_trace.h"
 
-#define AMDGPU_USERQ_MAX_HANDLES	(1U << 16)
+#define AMDGPU_USERQ_MAX_HANDLES	BIT(16)
 
 static const struct dma_fence_ops amdgpu_userq_fence_ops;
 
@@ -130,8 +130,10 @@ static void
 amdgpu_userq_fence_put_fence_drv_array(struct amdgpu_userq_fence *userq_fence)
 {
 	unsigned long i;
+
 	for (i = 0; i < userq_fence->fence_drv_array_count; i++)
 		amdgpu_userq_fence_driver_put(userq_fence->fence_drv_array[i]);
+
 	userq_fence->fence_drv_array_count = 0;
 }
 
@@ -384,7 +386,9 @@ static int amdgpu_userq_fence_read_wptr(struct amdgpu_device *adev,
 			goto lock_error;
 
 		mapping = amdgpu_vm_bo_lookup_mapping(queue->vm, addr);
-		if (!mapping || !mapping->bo_va->base.bo) {
+		/* Imported dma-bufs can't be CPU mapped with amdgpu_bo_kmap(). */
+		if (!mapping || !mapping->bo_va->base.bo ||
+		    drm_gem_is_imported(&mapping->bo_va->base.bo->tbo.base)) {
 			ret = -EINVAL;
 			goto lock_error;
 		}
@@ -451,7 +455,6 @@ amdgpu_userq_fence_driver_force_completion(struct amdgpu_usermode_queue *userq)
 		amdgpu_userq_fence_driver_set_error(fence, -ECANCELED);
 		amdgpu_userq_fence_write(fence_drv, wptr);
 		amdgpu_userq_fence_driver_process(fence_drv);
-
 	}
 }
 
@@ -505,8 +508,7 @@ int amdgpu_userq_signal_ioctl(struct drm_device *dev, void *data,
 		syncobj_points = NULL;
 	}
 
-	syncobj = kmalloc_array(num_syncobj_handles, sizeof(*syncobj),
-				GFP_KERNEL);
+	syncobj = kmalloc_objs(*syncobj, num_syncobj_handles);
 	if (!syncobj) {
 		r = -ENOMEM;
 		goto free_syncobj_points;
@@ -765,13 +767,11 @@ amdgpu_userq_wait_return_fence_info(struct drm_device *dev, struct drm_file *fil
 	struct drm_exec exec;
 	int i, cnt, r;
 
-	fence_info = kmalloc_array(wait_info->num_fences, sizeof(*fence_info),
-				   GFP_KERNEL);
+	fence_info = kmalloc_objs(*fence_info, wait_info->num_fences);
 	if (!fence_info)
 		return -ENOMEM;
 
-	fences = kmalloc_array(wait_info->num_fences, sizeof(*fences),
-			       GFP_KERNEL);
+	fences = kmalloc_objs(*fences, wait_info->num_fences);
 	if (!fences) {
 		r = -ENOMEM;
 		goto free_fence_info;
@@ -815,7 +815,6 @@ amdgpu_userq_wait_return_fence_info(struct drm_device *dev, struct drm_file *fil
 		dma_fence_put(fence);
 		if (r)
 			goto free_fences;
-
 	}
 
 	/* Lock all the GEM objects */

@@ -161,7 +161,7 @@ static int bt8xxgpio_probe(struct pci_dev *dev,
 	if (IS_ERR(mmio))
 		return PTR_ERR(mmio);
 
-	bg = devm_kzalloc(&dev->dev, sizeof(struct bt8xxgpio), GFP_KERNEL);
+	bg = devm_kzalloc_obj(&dev->dev, struct bt8xxgpio);
 	if (!bg)
 		return -ENOMEM;
 
@@ -255,7 +255,7 @@ static const struct pci_device_id bt8xxgpio_pci_tbl[] = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_BROOKTREE, PCI_DEVICE_ID_BT849) },
 	{ PCI_DEVICE(PCI_VENDOR_ID_BROOKTREE, PCI_DEVICE_ID_BT878) },
 	{ PCI_DEVICE(PCI_VENDOR_ID_BROOKTREE, PCI_DEVICE_ID_BT879) },
-	{ 0, },
+	{ }
 };
 MODULE_DEVICE_TABLE(pci, bt8xxgpio_pci_tbl);
 

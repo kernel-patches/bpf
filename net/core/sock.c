@@ -1586,6 +1586,13 @@ set_sndbuf:
 			ret = -EOPNOTSUPP;
 		break;
 
+	case SO_PASSCRED_THREAD:
+		if (sk_is_unix(sk))
+			sk->sk_scm_credentials_thread = valbool;
+		else
+			ret = -EOPNOTSUPP;
+		break;
+
 	case SO_PASSRIGHTS:
 		if (sk_is_unix(sk))
 			sk->sk_scm_rights = valbool;
@@ -1950,6 +1957,13 @@ int sk_getsockopt(struct sock *sk, int level, int optname,
 			return -EOPNOTSUPP;
 
 		v.val = sk->sk_scm_pidfd_thread;
+		break;
+
+	case SO_PASSCRED_THREAD:
+		if (!sk_is_unix(sk))
+			return -EOPNOTSUPP;
+
+		v.val = sk->sk_scm_credentials_thread;
 		break;
 
 	case SO_PASSRIGHTS:
@@ -3333,7 +3347,7 @@ void __release_sock(struct sock *sk)
 
 		spin_unlock_bh(&sk->sk_lock.slock);
 
-		while (1) {
+		do {
 			next = skb->next;
 			prefetch(next);
 			DEBUG_NET_WARN_ON_ONCE(skb_dst_is_noref(skb));
@@ -3341,12 +3355,10 @@ void __release_sock(struct sock *sk)
 			sk_backlog_rcv(sk, skb);
 
 			skb = next;
-			if (!skb)
-				break;
 
 			if (!(++nb & 15))
 				cond_resched();
-		}
+		} while (skb);
 
 		spin_lock_bh(&sk->sk_lock.slock);
 	}
@@ -3429,7 +3441,7 @@ int __sk_mem_raise_allocated(struct sock *sk, int size, int amt, int kind)
 			goto suppress_allocation;
 	}
 
-	if (!allocated)
+	if (sk->sk_bypass_prot_mem)
 		return 1;
 
 	/* Under limit. */
@@ -3510,7 +3522,7 @@ suppress_allocation:
 
 	trace_sock_exceed_buf_limit(sk, prot, allocated, kind);
 
-	if (allocated)
+	if (!sk->sk_bypass_prot_mem)
 		sk_memory_allocated_sub(sk, amt);
 
 	if (charged)

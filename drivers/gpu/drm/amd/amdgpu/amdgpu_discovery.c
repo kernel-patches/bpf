@@ -45,6 +45,7 @@
 #include "nbio_v7_4.h"
 #include "nbio_v7_9.h"
 #include "nbio_v7_11.h"
+#include "nbio_v7_11_4.h"
 #include "nbio_v7_11_5.h"
 #include "hdp_v4_0.h"
 #include "vega10_ih.h"
@@ -1468,6 +1469,40 @@ static int amdgpu_discovery_sysfs_recurse(struct amdgpu_device *adev,
 	return 0;
 }
 
+#define list_to_kobj(el) container_of(el, struct kobject, entry)
+
+static void amdgpu_discovery_sysfs_update_harvest(struct amdgpu_device *adev)
+{
+	struct ip_discovery_top *ip_top = adev->discovery.ip_top;
+	struct ip_die_entry *ip_die_entry;
+	struct list_head *el_die, *el_hw_id, *el_hw_inst;
+	struct ip_hw_id *hw_id;
+	struct kset *die_kset;
+	struct ip_hw_instance *ip_inst;
+
+	if (!ip_top)
+		return;
+
+	die_kset = &ip_top->die_kset;
+
+	guard(spinlock)(&die_kset->list_lock);
+	list_for_each(el_die, &die_kset->list) {
+		ip_die_entry = to_ip_die_entry(list_to_kobj(el_die));
+
+		list_for_each(el_hw_id, &ip_die_entry->ip_kset.list) {
+			hw_id = to_ip_hw_id(list_to_kobj(el_hw_id));
+
+			list_for_each(el_hw_inst, &hw_id->hw_id_kset.list) {
+				ip_inst = to_ip_hw_instance(list_to_kobj(el_hw_inst));
+				ip_inst->harvest =
+					amdgpu_discovery_get_harvest_info(
+						adev, ip_inst->hw_id,
+						ip_inst->num_instance);
+			}
+		}
+	}
+}
+
 static int amdgpu_discovery_sysfs_init(struct amdgpu_device *adev)
 {
 	uint8_t *discovery_bin = adev->discovery.bin;
@@ -1478,9 +1513,13 @@ static int amdgpu_discovery_sysfs_init(struct amdgpu_device *adev)
 	if (!discovery_bin)
 		return -EINVAL;
 
-	/* If early init already created sysfs in standalone mode, skip normal init */
-	if (adev->discovery.ip_top && adev->discovery.ip_top->standalone_mode)
+	/* If early init already created sysfs in standalone mode, update harvest info
+	 * now that adev is fully initialized, then skip the rest of normal init.
+	 */
+	if (adev->discovery.ip_top && adev->discovery.ip_top->standalone_mode) {
+		amdgpu_discovery_sysfs_update_harvest(adev);
 		return 0;
+	}
 
 	ip_top = kzalloc_obj(*ip_top);
 	if (!ip_top)
@@ -1534,8 +1573,6 @@ Err:
 }
 
 /* -------------------------------------------------- */
-
-#define list_to_kobj(el) container_of(el, struct kobject, entry)
 
 static void amdgpu_discovery_sysfs_ip_hw_free(struct ip_hw_id *ip_hw_id)
 {
@@ -3830,9 +3867,12 @@ int amdgpu_discovery_set_ip_blocks(struct amdgpu_device *adev)
 		adev->nbio.hdp_flush_reg = &nbio_v7_7_hdp_flush_reg;
 		break;
 	case IP_VERSION(6, 3, 1):
-	case IP_VERSION(7, 11, 4):
 		adev->nbio.funcs = &nbif_v6_3_1_funcs;
 		adev->nbio.hdp_flush_reg = &nbif_v6_3_1_hdp_flush_reg;
+		break;
+	case IP_VERSION(7, 11, 4):
+		adev->nbio.funcs = &nbio_v7_11_4_funcs;
+		adev->nbio.hdp_flush_reg = &nbio_v7_11_4_hdp_flush_reg;
 		break;
 	case IP_VERSION(7, 11, 5):
 		adev->nbio.funcs = &nbio_v7_11_5_funcs;

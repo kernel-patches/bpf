@@ -4,6 +4,7 @@
 #include <linux/bits.h>
 #include <linux/delay.h>
 #include <linux/i2c.h>
+#include <linux/interrupt.h>
 #include <linux/input.h>
 #include <linux/input/mt.h>
 #include <linux/input/touchscreen.h>
@@ -304,7 +305,7 @@ static int imagis_probe(struct i2c_client *i2c)
 	struct imagis_ts *ts;
 	int chip_id, error;
 
-	ts = devm_kzalloc(dev, sizeof(*ts), GFP_KERNEL);
+	ts = devm_kzalloc_obj(dev, *ts);
 	if (!ts)
 		return -ENOMEM;
 

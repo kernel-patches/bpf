@@ -83,8 +83,7 @@ static int tps6586x_gpio_probe(struct platform_device *pdev)
 	device_set_node(&pdev->dev, dev_fwnode(pdev->dev.parent));
 
 	pdata = dev_get_platdata(pdev->dev.parent);
-	tps6586x_gpio = devm_kzalloc(&pdev->dev,
-				sizeof(*tps6586x_gpio), GFP_KERNEL);
+	tps6586x_gpio = devm_kzalloc_obj(&pdev->dev, *tps6586x_gpio);
 	if (!tps6586x_gpio)
 		return -ENOMEM;
 
@@ -116,8 +115,4 @@ static struct platform_driver tps6586x_gpio_driver = {
 	.probe		= tps6586x_gpio_probe,
 };
 
-static int __init tps6586x_gpio_init(void)
-{
-	return platform_driver_register(&tps6586x_gpio_driver);
-}
-subsys_initcall(tps6586x_gpio_init);
+subsys_platform_driver(tps6586x_gpio_driver);

@@ -424,6 +424,19 @@ struct hci_dev {
 	__u16		le_max_tx_time;
 	__u16		le_max_rx_len;
 	__u16		le_max_rx_time;
+	__u16		hdt_def_tx_len;
+	__u16		hdt_def_tx_time;
+	__u16		hdt_max_tx_len;
+	__u16		hdt_max_tx_time;
+	__u16		hdt_max_rx_len;
+	__u16		hdt_max_rx_time;
+	__u8		hdt_max_tx_win;
+	__u8		hdt_max_rx_win;
+	__u16		hdt_max_rx_packet;
+	__u8		hdt_def_mic_len;
+	__u8		hdt_def_format;
+	__u16		hdt_def_rates;
+	bool		eks_oppt;
 	__u8		le_max_key_size;
 	__u8		le_min_key_size;
 	__u16		discov_interleaved_timeout;
@@ -503,6 +516,7 @@ struct hci_dev {
 	struct list_head	cmd_sync_work_list;
 	struct mutex		cmd_sync_work_lock;
 	struct mutex		unregister_lock;
+	struct mutex		rfkill_lock;
 	struct work_struct	cmd_sync_cancel_work;
 	struct work_struct	reenable_adv_work;
 
@@ -586,6 +600,7 @@ struct hci_dev {
 	struct device		dev;
 
 	struct rfkill		*rfkill;
+	struct work_struct	rfkill_block;
 
 	DECLARE_BITMAP(dev_flags, __HCI_NUM_FLAGS);
 	hci_conn_flags_t	conn_flags;
@@ -680,6 +695,46 @@ enum conn_reasons {
 	CONN_REASON_ISO_CONNECT,
 };
 
+enum {
+	HCI_CONN_AUTH_PEND,
+	HCI_CONN_ENCRYPT_PEND,
+	HCI_CONN_RSWITCH_PEND,
+	HCI_CONN_MODE_CHANGE_PEND,
+	HCI_CONN_SCO_SETUP_PEND,
+	HCI_CONN_MGMT_CONNECTED,
+	HCI_CONN_SSP_ENABLED,
+	HCI_CONN_SC_ENABLED,
+	HCI_CONN_AES_CCM,
+	HCI_CONN_POWER_SAVE,
+	HCI_CONN_FLUSH_KEY,
+	HCI_CONN_ENCRYPT,
+	HCI_CONN_OPP_ENCRYPT,
+	HCI_CONN_AUTH,
+	HCI_CONN_SECURE,
+	HCI_CONN_FIPS,
+	HCI_CONN_STK_ENCRYPT,
+	HCI_CONN_AUTH_INITIATOR,
+	HCI_CONN_DROP,
+	HCI_CONN_CANCEL,
+	HCI_CONN_PARAM_REMOVAL_PEND,
+	HCI_CONN_NEW_LINK_KEY,
+	HCI_CONN_SCANNING,
+	HCI_CONN_AUTH_FAILURE,
+	HCI_CONN_PER_ADV,
+	HCI_CONN_BIG_CREATED,
+	HCI_CONN_CREATE,
+	HCI_CONN_CREATE_CIS,
+	HCI_CONN_CREATE_BIG_SYNC,
+	HCI_CONN_BIG_SYNC,
+	HCI_CONN_BIG_SYNC_FAILED,
+	HCI_CONN_CREATE_PA_SYNC,
+	HCI_CONN_PA_SYNC,
+	HCI_CONN_PA_SYNC_FAILED,
+	HCI_CONN_ENC_KEY_SIZE_PEND,
+
+	__HCI_CONN_NUM_FLAGS,
+};
+
 struct hci_conn {
 	struct list_head list;
 
@@ -715,6 +770,8 @@ struct hci_conn {
 	__u8		pending_sec_level;
 	__u8		pin_length;
 	__u8		enc_key_size;
+	__u8		mic_len;
+	__u8		req_mic_len;
 	__u8		io_capability;
 	__u32		passkey_notify;
 	__u8		passkey_entered;
@@ -743,14 +800,15 @@ struct hci_conn {
 	__u8		le_rx_def_phys;
 	__u8		le_tx_phy;
 	__u8		le_rx_phy;
+	__u16		le_phy_opts;
 	__s8		rssi;
 	__s8		tx_power;
 	__s8		max_tx_power;
-	struct bt_iso_qos iso_qos;
+	struct bt_iso_qos_ext iso_qos;
 	__u8		num_bis;
 	__u8		bis[HCI_MAX_ISO_BIS];
 
-	unsigned long	flags;
+	DECLARE_BITMAP(flags, __HCI_CONN_NUM_FLAGS);
 
 	enum conn_reasons conn_reason;
 	__u8		abort_reason;
@@ -980,55 +1038,18 @@ u32 hci_inquiry_cache_update(struct hci_dev *hdev, struct inquiry_data *data,
 			     bool name_known);
 void hci_inquiry_cache_flush(struct hci_dev *hdev);
 
-/* ----- HCI Connections ----- */
-enum {
-	HCI_CONN_AUTH_PEND,
-	HCI_CONN_ENCRYPT_PEND,
-	HCI_CONN_RSWITCH_PEND,
-	HCI_CONN_MODE_CHANGE_PEND,
-	HCI_CONN_SCO_SETUP_PEND,
-	HCI_CONN_MGMT_CONNECTED,
-	HCI_CONN_SSP_ENABLED,
-	HCI_CONN_SC_ENABLED,
-	HCI_CONN_AES_CCM,
-	HCI_CONN_POWER_SAVE,
-	HCI_CONN_FLUSH_KEY,
-	HCI_CONN_ENCRYPT,
-	HCI_CONN_AUTH,
-	HCI_CONN_SECURE,
-	HCI_CONN_FIPS,
-	HCI_CONN_STK_ENCRYPT,
-	HCI_CONN_AUTH_INITIATOR,
-	HCI_CONN_DROP,
-	HCI_CONN_CANCEL,
-	HCI_CONN_PARAM_REMOVAL_PEND,
-	HCI_CONN_NEW_LINK_KEY,
-	HCI_CONN_SCANNING,
-	HCI_CONN_AUTH_FAILURE,
-	HCI_CONN_PER_ADV,
-	HCI_CONN_BIG_CREATED,
-	HCI_CONN_CREATE,
-	HCI_CONN_CREATE_CIS,
-	HCI_CONN_CREATE_BIG_SYNC,
-	HCI_CONN_BIG_SYNC,
-	HCI_CONN_BIG_SYNC_FAILED,
-	HCI_CONN_CREATE_PA_SYNC,
-	HCI_CONN_PA_SYNC,
-	HCI_CONN_PA_SYNC_FAILED,
-};
-
 static inline bool hci_conn_ssp_enabled(struct hci_conn *conn)
 {
 	struct hci_dev *hdev = conn->hdev;
 	return hci_dev_test_flag(hdev, HCI_SSP_ENABLED) &&
-	       test_bit(HCI_CONN_SSP_ENABLED, &conn->flags);
+	       test_bit(HCI_CONN_SSP_ENABLED, conn->flags);
 }
 
 static inline bool hci_conn_sc_enabled(struct hci_conn *conn)
 {
 	struct hci_dev *hdev = conn->hdev;
 	return hci_dev_test_flag(hdev, HCI_SC_ENABLED) &&
-	       test_bit(HCI_CONN_SC_ENABLED, &conn->flags);
+	       test_bit(HCI_CONN_SC_ENABLED, conn->flags);
 }
 
 static inline void hci_conn_hash_add(struct hci_dev *hdev, struct hci_conn *c)
@@ -1219,7 +1240,7 @@ hci_conn_hash_lookup_create_pa_sync(struct hci_dev *hdev)
 		if (c->type != PA_LINK)
 			continue;
 
-		if (!test_bit(HCI_CONN_CREATE_PA_SYNC, &c->flags))
+		if (!test_bit(HCI_CONN_CREATE_PA_SYNC, c->flags))
 			continue;
 
 		rcu_read_unlock();
@@ -1245,7 +1266,7 @@ hci_conn_hash_lookup_per_adv_bis(struct hci_dev *hdev,
 
 	list_for_each_entry_rcu(c, &h->list, list) {
 		if (bacmp(&c->dst, ba) || c->type != BIS_LINK ||
-		    !test_bit(HCI_CONN_PER_ADV, &c->flags))
+		    !test_bit(HCI_CONN_PER_ADV, c->flags))
 			continue;
 
 		if (c->iso_qos.bcast.big == big &&
@@ -1502,7 +1523,7 @@ hci_conn_hash_lookup_pa_sync_big_handle(struct hci_dev *hdev, __u8 big)
 
 	list_for_each_entry_rcu(c, &h->list, list) {
 		if (c->type != BIS_LINK ||
-		    !test_bit(HCI_CONN_PA_SYNC, &c->flags))
+		    !test_bit(HCI_CONN_PA_SYNC, c->flags))
 			continue;
 
 		if (c->iso_qos.bcast.big == big) {
@@ -1580,7 +1601,7 @@ static inline void hci_conn_hash_list_flag(struct hci_dev *hdev,
 	rcu_read_lock();
 
 	list_for_each_entry_rcu(c, &h->list, list) {
-		if (c->type == type && test_bit(flag, &c->flags))
+		if (c->type == type && test_bit(flag, c->flags))
 			func(c, data);
 	}
 
@@ -1598,7 +1619,7 @@ static inline struct hci_conn *hci_lookup_le_connect(struct hci_dev *hdev)
 
 	list_for_each_entry_rcu(c, &h->list, list) {
 		if (c->type == LE_LINK && c->state == BT_CONNECT &&
-		    !test_bit(HCI_CONN_SCANNING, &c->flags)) {
+		    !test_bit(HCI_CONN_SCANNING, c->flags)) {
 			rcu_read_unlock();
 			return c;
 		}
@@ -1619,7 +1640,7 @@ static inline bool hci_is_le_conn_scanning(struct hci_dev *hdev)
 
 	list_for_each_entry_rcu(c, &h->list, list) {
 		if (c->type == LE_LINK && c->state == BT_CONNECT &&
-		    test_bit(HCI_CONN_SCANNING, &c->flags)) {
+		    test_bit(HCI_CONN_SCANNING, c->flags)) {
 			rcu_read_unlock();
 			return true;
 		}
@@ -1664,23 +1685,24 @@ struct hci_conn *hci_connect_sco(struct hci_dev *hdev, int type, bdaddr_t *dst,
 				 __u16 setting, struct bt_codec *codec,
 				 u16 timeout);
 struct hci_conn *hci_bind_cis(struct hci_dev *hdev, bdaddr_t *dst,
-			      __u8 dst_type, struct bt_iso_qos *qos,
+			      __u8 dst_type, struct bt_iso_qos_ext *qos,
 			      u16 timeout);
 struct hci_conn *hci_bind_bis(struct hci_dev *hdev, bdaddr_t *dst, __u8 sid,
-			      struct bt_iso_qos *qos,
+			      struct bt_iso_qos_ext *qos,
 			      __u8 base_len, __u8 *base, u16 timeout);
 int hci_past_bis(struct hci_conn *conn, bdaddr_t *dst, __u8 dst_type);
 struct hci_conn *hci_connect_cis(struct hci_dev *hdev, bdaddr_t *dst,
-				 __u8 dst_type, struct bt_iso_qos *qos,
+				 __u8 dst_type, struct bt_iso_qos_ext *qos,
 				 u16 timeout);
 struct hci_conn *hci_connect_bis(struct hci_dev *hdev, bdaddr_t *dst,
 				 __u8 dst_type, __u8 sid,
-				 struct bt_iso_qos *qos,
+				 struct bt_iso_qos_ext *qos,
 				 __u8 data_len, __u8 *data, u16 timeout);
 struct hci_conn *hci_pa_create_sync(struct hci_dev *hdev, bdaddr_t *dst,
-		       __u8 dst_type, __u8 sid, struct bt_iso_qos *qos);
+				    __u8 dst_type, __u8 sid,
+				    struct bt_iso_qos_ext *qos);
 int hci_conn_big_create_sync(struct hci_dev *hdev, struct hci_conn *hcon,
-			     struct bt_iso_qos *qos, __u16 sync_handle,
+			     struct bt_iso_qos_ext *qos, __u16 sync_handle,
 			     __u8 num_bis, __u8 bis[]);
 int hci_conn_check_link_mode(struct hci_conn *conn);
 int hci_conn_check_secure(struct hci_conn *conn, __u8 sec_level);
@@ -1821,6 +1843,8 @@ struct hci_dev *hci_dev_get(int index);
 struct hci_dev *hci_get_route(bdaddr_t *dst, bdaddr_t *src, u8 src_type);
 
 struct hci_dev *hci_alloc_dev_priv(int sizeof_priv);
+
+void hci_rfkill_set_hw_state(struct hci_dev *hdev, bool blocked);
 
 static inline struct hci_dev *hci_alloc_dev(void)
 {
@@ -1970,6 +1994,7 @@ struct adv_info *hci_add_per_instance(struct hci_dev *hdev, u8 instance, u8 sid,
 int hci_set_adv_instance_data(struct hci_dev *hdev, u8 instance,
 			 u16 adv_data_len, u8 *adv_data,
 			 u16 scan_rsp_len, u8 *scan_rsp_data);
+void hci_free_adv_instance(struct hci_dev *hdev, struct adv_info *adv_instance);
 int hci_remove_adv_instance(struct hci_dev *hdev, u8 instance);
 void hci_adv_instances_set_rpa_expired(struct hci_dev *hdev, bool rpa_expired);
 u32 hci_adv_instance_flags(struct hci_dev *hdev, u8 instance);
@@ -2142,6 +2167,43 @@ void hci_conn_del_sysfs(struct hci_conn *conn);
 	(past_sender_enabled(dev) || past_receiver_enabled(dev))
 #define ll_ext_feature_capable(dev) \
 	((dev)->le_features[7] & HCI_LE_LL_EXT_FEATURE)
+#define le_feature(dev, page, byte) \
+	(page ? ((dev)->le_features[(page - 1) * 24 + 8 + byte]) : \
+	((dev)->le_features[byte]))
+#define hdt_capable(dev) \
+	(le_feature(dev, 1, 1) & HCI_LE_HDT_FEATURE)
+#define le_set_cig_params_v2_capable(dev) \
+	(hdt_capable(dev) && ((dev)->commands[51] & BIT(0)))
+#define hdt_enabled(dev) \
+	(le_enabled(dev) && hdt_capable(dev))
+#define hdt_6_rx_capable(dev) \
+	(le_feature(dev, 1, 1) & HCI_LE_HDT_6_RX_FEATURE)
+#define hdt_6_tx_capable(dev) \
+	(le_feature(dev, 1, 1) & HCI_LE_HDT_6_TX_FEATURE)
+#define hdt_7_5_rx_capable(dev) \
+	(le_feature(dev, 1, 2) & HCI_LE_HDT_7_5_RX_FEATURE)
+#define hdt_7_5_tx_capable(dev) \
+	(le_feature(dev, 1, 2) & HCI_LE_HDT_7_5_TX_FEATURE)
+#define hdt_pf1_capable(dev) \
+	(le_feature(dev, 1, 2) & HCI_LE_HDT_PF_1)
+/* BLUETOOTH CORE SPECIFICATION Version 7.0 | Vol 4, Part E, Section 7.8.24:
+ *
+ * The HDT_MIC_Length parameter indicates the MIC length to be used when the
+ * ACL connection is on LE HDT PHY.
+ *
+ * So the MIC length reported by the controller only applies on the LE HDT
+ * PHY, the MIC is 32 bits (0x00) on the GFSK PHYs.
+ */
+static inline __u8 hci_conn_mic_len(struct hci_conn *conn)
+{
+	return conn->le_rx_phy == 0x05 ? conn->mic_len : 0x00;
+}
+#define eks_capable(dev) \
+	(le_feature(dev, 1, 1) & HCI_LE_EKS_FEATURE)
+
+#define eks_oppt_capable(dev) \
+	(eks_capable(dev) && \
+	 (le_feature(dev, 1, 3) & HCI_LE_OPPORTUNISTIC_ENC))
 
 /* Channel sounding support */
 #define le_cs_capable(dev) \
@@ -2239,10 +2301,10 @@ static inline void hci_auth_cfm(struct hci_conn *conn, __u8 status)
 	struct hci_cb *cb;
 	__u8 encrypt;
 
-	if (test_bit(HCI_CONN_ENCRYPT_PEND, &conn->flags))
+	if (test_bit(HCI_CONN_ENCRYPT_PEND, conn->flags))
 		return;
 
-	encrypt = test_bit(HCI_CONN_ENCRYPT, &conn->flags) ? 0x01 : 0x00;
+	encrypt = test_bit(HCI_CONN_ENCRYPT, conn->flags) ? 0x01 : 0x00;
 
 	mutex_lock(&hci_cb_list_lock);
 	list_for_each_entry(cb, &hci_cb_list, list) {
@@ -2271,9 +2333,9 @@ static inline void hci_encrypt_cfm(struct hci_conn *conn, __u8 status)
 		return;
 	}
 
-	if (!test_bit(HCI_CONN_ENCRYPT, &conn->flags))
+	if (!test_bit(HCI_CONN_ENCRYPT, conn->flags))
 		encrypt = 0x00;
-	else if (test_bit(HCI_CONN_AES_CCM, &conn->flags))
+	else if (test_bit(HCI_CONN_AES_CCM, conn->flags))
 		encrypt = 0x02;
 	else
 		encrypt = 0x01;
@@ -2365,8 +2427,6 @@ static inline struct smp_irk *hci_get_irk(struct hci_dev *hdev,
 static inline int hci_check_conn_params(u16 min, u16 max, u16 latency,
 					u16 to_multiplier)
 {
-	u16 max_latency;
-
 	if (min > max) {
 		BT_WARN("min %d > max %d", min, max);
 		return -EINVAL;
@@ -2392,19 +2452,14 @@ static inline int hci_check_conn_params(u16 min, u16 max, u16 latency,
 		return -EINVAL;
 	}
 
-	if (max >= to_multiplier * 8) {
-		BT_WARN("max %d >= to_multiplier %d * 8", max, to_multiplier);
-		return -EINVAL;
-	}
-
-	max_latency = (to_multiplier * 4 / max) - 1;
 	if (latency > 499) {
 		BT_WARN("latency %d > 499", latency);
 		return -EINVAL;
 	}
 
-	if (latency > max_latency) {
-		BT_WARN("latency %d > max_latency %d", latency, max_latency);
+	if ((latency + 1) * max >= to_multiplier * 4) {
+		BT_WARN("latency %d, max %d and timeout %d are incompatible",
+			latency, max, to_multiplier);
 		return -EINVAL;
 	}
 
@@ -2426,6 +2481,8 @@ void hci_send_sco(struct hci_conn *conn, struct sk_buff *skb);
 void hci_send_iso(struct hci_conn *conn, struct sk_buff *skb);
 
 void *hci_sent_cmd_data(struct hci_dev *hdev, __u16 opcode);
+void *hci_sent_cmd_data_len(struct hci_dev *hdev, __u16 opcode,
+			    size_t *len);
 void *hci_recv_event_data(struct hci_dev *hdev, __u8 event);
 
 u32 hci_conn_get_phy(struct hci_conn *conn);
@@ -2587,8 +2644,6 @@ void mgmt_conn_subrate_notify(struct hci_dev *hdev, struct hci_conn *conn,
 int hci_abort_conn(struct hci_conn *conn, u8 reason);
 void hci_le_conn_update(struct hci_conn *conn, u16 min, u16 max, u16 latency,
 		      u16 to_multiplier);
-void hci_le_start_enc(struct hci_conn *conn, __le16 ediv, __le64 rand,
-		      __u8 ltk[16], __u8 key_size);
 
 void hci_copy_identity_address(struct hci_dev *hdev, bdaddr_t *bdaddr,
 			       u8 *bdaddr_type);

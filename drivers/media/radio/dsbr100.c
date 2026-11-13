@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-/* A driver for the D-Link DSB-R100 USB radio and Gemtek USB Radio 21.
+/*
+ * A driver for the D-Link DSB-R100 USB radio and Gemtek USB Radio 21.
  * The device plugs into both the USB and an analog audio input, so this thing
  * only deals with initialisation and frequency setting, the
  * audio data has to be handled by a sound driver.
@@ -19,7 +20,7 @@
  * Fully tested with the Keene USB FM Transmitter and the v4l2-compliance tool.
  *
  * Copyright (c) 2000 Markus Demleitner <msdemlei@cl.uni-heidelberg.de>
-*/
+ */
 
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -50,8 +51,10 @@ MODULE_VERSION("1.1.0");
 
 #define TB_LEN 16
 
-/* Frequency limits in MHz -- these are European values.  For Japanese
-devices, that would be 76 and 91.  */
+/*
+ * Frequency limits in MHz -- these are European values.  For Japanese
+ * devices, that would be 76 and 91.
+ */
 #define FREQ_MIN  87.5
 #define FREQ_MAX 108.0
 #define FREQ_MUL 16000
@@ -140,8 +143,10 @@ static int dsbr100_stop(struct dsbr100_device *radio)
 
 }
 
-/* return the device status.  This is, in effect, just whether it
-sees a stereo signal or not.  Pity. */
+/*
+ * return the device status.  This is, in effect, just whether it
+ * sees a stereo signal or not.  Pity.
+ */
 static void dsbr100_getstat(struct dsbr100_device *radio)
 {
 	int retval = usb_control_msg(radio->usbdev,

@@ -242,7 +242,7 @@ static int ftgpio_gpio_probe(struct platform_device *pdev)
 	int irq;
 	int ret;
 
-	g = devm_kzalloc(dev, sizeof(*g), GFP_KERNEL);
+	g = devm_kzalloc_obj(dev, *g);
 	if (!g)
 		return -ENOMEM;
 
@@ -291,8 +291,7 @@ static int ftgpio_gpio_probe(struct platform_device *pdev)
 	gpio_irq_chip_set_chip(girq, &ftgpio_irq_chip);
 	girq->parent_handler = ftgpio_gpio_irq_handler;
 	girq->num_parents = 1;
-	girq->parents = devm_kcalloc(dev, 1, sizeof(*girq->parents),
-				     GFP_KERNEL);
+	girq->parents = devm_kzalloc_objs(dev, *girq->parents, 1);
 	if (!girq->parents)
 		return -ENOMEM;
 
@@ -321,8 +320,9 @@ static const struct of_device_id ftgpio_gpio_of_match[] = {
 	{
 		.compatible = "faraday,ftgpio010",
 	},
-	{},
+	{ }
 };
+MODULE_DEVICE_TABLE(of, ftgpio_gpio_of_match);
 
 static struct platform_driver ftgpio_gpio_driver = {
 	.driver = {

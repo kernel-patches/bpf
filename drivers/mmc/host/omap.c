@@ -214,7 +214,7 @@ static void mmc_omap_select_slot(struct mmc_omap_slot *slot, int claimed)
 	host->mmc = slot->mmc;
 	spin_unlock_irqrestore(&host->slot_lock, flags);
 no_claim:
-	timer_delete(&host->clk_timer);
+	timer_delete_sync(&host->clk_timer);
 	if (host->current_slot != slot || !claimed)
 		mmc_omap_fclk_offdelay(host->current_slot);
 
@@ -273,7 +273,7 @@ static void mmc_omap_release_slot(struct mmc_omap_slot *slot, int clk_enabled)
 		/* Keeps clock running for at least 8 cycles on valid freq */
 		mod_timer(&host->clk_timer, jiffies  + HZ/10);
 	else {
-		timer_delete(&host->clk_timer);
+		timer_delete_sync(&host->clk_timer);
 		mmc_omap_fclk_offdelay(slot);
 		mmc_omap_fclk_enable(host, 0);
 	}
@@ -431,7 +431,7 @@ mmc_omap_release_dma(struct mmc_omap_host *host, struct mmc_data *data,
 			/* Claim nothing transferred on error... */
 			data->bytes_xfered = 0;
 		}
-		dev = c->device->dev;
+		dev = dmaengine_get_dma_device(c);
 	}
 	dma_unmap_sg(dev, data->sg, host->sg_len, dma_data_dir);
 }
@@ -1037,7 +1037,7 @@ mmc_omap_prepare_data(struct mmc_omap_host *host, struct mmc_request *req)
 			*bp = burst;
 		}
 
-		host->sg_len = dma_map_sg(c->device->dev, data->sg, sg_len,
+		host->sg_len = dma_map_sg(dmaengine_get_dma_device(c), data->sg, sg_len,
 					  dma_data_dir);
 		if (host->sg_len == 0)
 			goto use_pio;
@@ -1050,8 +1050,7 @@ mmc_omap_prepare_data(struct mmc_omap_host *host, struct mmc_request *req)
 
 		OMAP_MMC_WRITE(host, BUF, buf);
 
-		tx->callback = mmc_omap_dma_callback;
-		tx->callback_param = host;
+		dmaengine_desc_set_callback(tx, mmc_omap_dma_callback, NULL, host);
 		dmaengine_submit(tx);
 		host->brs_received = 0;
 		host->dma_done = 0;
@@ -1383,8 +1382,7 @@ static int mmc_omap_probe(struct platform_device *pdev)
 		return -EPROBE_DEFER;
 	}
 
-	host = devm_kzalloc(&pdev->dev, sizeof(struct mmc_omap_host),
-			    GFP_KERNEL);
+	host = devm_kzalloc_obj(&pdev->dev, struct mmc_omap_host);
 	if (host == NULL)
 		return -ENOMEM;
 

@@ -503,7 +503,7 @@ static int npcm_sgpio_probe(struct platform_device *pdev)
 	int rc;
 	u32 nin_gpios, nout_gpios;
 
-	gpio = devm_kzalloc(&pdev->dev, sizeof(*gpio), GFP_KERNEL);
+	gpio = devm_kzalloc_obj(&pdev->dev, *gpio);
 	if (!gpio)
 		return -ENOMEM;
 
@@ -596,9 +596,9 @@ static const struct npcm_clk_cfg npcm845_sgpio_pdata = {
 };
 
 static const struct of_device_id npcm_sgpio_of_table[] = {
-	{ .compatible = "nuvoton,npcm750-sgpio", .data = &npcm750_sgpio_pdata, },
-	{ .compatible = "nuvoton,npcm845-sgpio", .data = &npcm845_sgpio_pdata, },
-	{}
+	{ .compatible = "nuvoton,npcm750-sgpio", .data = &npcm750_sgpio_pdata },
+	{ .compatible = "nuvoton,npcm845-sgpio", .data = &npcm845_sgpio_pdata },
+	{ }
 };
 MODULE_DEVICE_TABLE(of, npcm_sgpio_of_table);
 

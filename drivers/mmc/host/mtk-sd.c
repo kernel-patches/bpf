@@ -713,6 +713,7 @@ static const struct mtk_mmc_compatible mt8196_compat = {
 };
 
 static const struct of_device_id msdc_of_ids[] = {
+	{ .compatible = "airoha,an7581-mmc", .data = &mt7986_compat},
 	{ .compatible = "mediatek,mt2701-mmc", .data = &mt2701_compat},
 	{ .compatible = "mediatek,mt2712-mmc", .data = &mt2712_compat},
 	{ .compatible = "mediatek,mt6779-mmc", .data = &mt6779_compat},
@@ -3135,9 +3136,7 @@ static int msdc_drv_probe(struct platform_device *pdev)
 	msdc_init_hw(host);
 
 	if (mmc->caps2 & MMC_CAP2_CQE) {
-		host->cq_host = devm_kzalloc(mmc->parent,
-					     sizeof(*host->cq_host),
-					     GFP_KERNEL);
+		host->cq_host = devm_kzalloc_obj(mmc->parent, *host->cq_host);
 		if (!host->cq_host) {
 			ret = -ENOMEM;
 			goto release;
@@ -3156,7 +3155,7 @@ static int msdc_drv_probe(struct platform_device *pdev)
 		msdc_cqe_cit_cal(host, 2350);
 	} else if (mmc->caps2 & MMC_CAP2_NO_SDIO) {
 		/* Use HSQ on eMMC/SD (but not on SDIO) if HW CQE not supported */
-		struct mmc_hsq *hsq = devm_kzalloc(&pdev->dev, sizeof(*hsq), GFP_KERNEL);
+		struct mmc_hsq *hsq = devm_kzalloc_obj(&pdev->dev, *hsq);
 		if (!hsq) {
 			ret = -ENOMEM;
 			goto release;

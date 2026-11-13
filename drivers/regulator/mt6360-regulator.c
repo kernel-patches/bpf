@@ -5,6 +5,7 @@
 // Author: Gene Chen <gene_chen@richtek.com>
 
 #include <linux/init.h>
+#include <linux/interrupt.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/of.h>
@@ -408,7 +409,7 @@ static int mt6360_regulator_probe(struct platform_device *pdev)
 	struct regulator_config config = {};
 	int i, ret;
 
-	mrd = devm_kzalloc(&pdev->dev, sizeof(*mrd), GFP_KERNEL);
+	mrd = devm_kzalloc_obj(&pdev->dev, *mrd);
 	if (!mrd)
 		return -ENOMEM;
 

@@ -473,6 +473,9 @@ enum {
 	HCI_MESH,
 	HCI_MESH_SENDING,
 
+	HCI_HW_RFKILLED,
+	HCI_SW_RFKILLED,
+
 	__HCI_NUM_FLAGS,
 };
 
@@ -655,6 +658,17 @@ enum {
 #define HCI_LE_CS_HOST			0x80
 #define HCI_LE_SCI			0x01	/* byte 9 - Shorter Connection Intervals */
 #define HCI_LE_SCI_HOST			0x02	/* byte 9 - Shorter Connection Intervals (Host) */
+
+/* HDT features - Page 1 */
+#define HCI_LE_EKS_FEATURE		BIT(4)	/* Byte 1 */
+#define HCI_LE_HDT_FEATURE		BIT(5)
+#define HCI_LE_HDT_6_RX_FEATURE		BIT(6)
+#define HCI_LE_HDT_6_TX_FEATURE		BIT(7)
+#define HCI_LE_HDT_7_5_RX_FEATURE	BIT(0)	/* Byte 2 */
+#define HCI_LE_HDT_7_5_TX_FEATURE	BIT(1)
+#define HCI_LE_HDT_PF_1			BIT(2)
+#define HCI_LE_HDT_LQF_FEATURE		BIT(3)
+#define HCI_LE_OPPORTUNISTIC_ENC	BIT(2)	/* Byte 3 */
 
 /* Connection modes */
 #define HCI_CM_ACTIVE	0x0000
@@ -1888,9 +1902,10 @@ struct hci_cp_le_set_default_phy {
 	__u8    rx_phys;
 } __packed;
 
-#define HCI_LE_SET_PHY_1M		0x01
-#define HCI_LE_SET_PHY_2M		0x02
-#define HCI_LE_SET_PHY_CODED		0x04
+#define HCI_LE_SET_PHY_1M		BIT(0)
+#define HCI_LE_SET_PHY_2M		BIT(1)
+#define HCI_LE_SET_PHY_CODED		BIT(2)
+#define HCI_LE_SET_PHY_HDT		BIT(4)
 
 #define HCI_OP_LE_SET_PHY		0x2032
 struct hci_cp_le_set_phy {
@@ -2213,7 +2228,7 @@ struct hci_bis {
 	__le16  sdu;
 	__le16  latency;
 	__u8    rtn;
-	__u8    phy;
+	__u8    phys;
 	__u8    packing;
 	__u8    framing;
 	__u8    encryption;
@@ -2530,6 +2545,130 @@ struct hci_rp_le_read_conn_interval {
 	__u8	min;
 	__u8	num_grps;
 	struct hci_le_conn_interval_group grps[];
+} __packed;
+
+#define HCI_OP_LE_WRITE_DEF_DATA_LEN_V2		0x20b2
+struct hci_cp_le_write_def_data_len_v2 {
+	__le16	tx_len;
+	__le16	tx_time;
+	__u8	phys;
+} __packed;
+
+#define HCI_OP_LE_READ_DEF_DATA_LEN_V2		0x20b1
+struct hci_cp_le_read_def_data_len_v2 {
+	__u8	phys;
+} __packed;
+
+struct hci_rp_le_read_def_data_len_v2 {
+	__u8	status;
+	__le16	tx_len;
+	__le16	tx_time;
+} __packed;
+
+#define HCI_OP_LE_ENABLE_ENCRYPT_V2		0x20af
+struct hci_cp_le_enable_encrypt_v2 {
+	__le16  handle;
+	__le64  rand;
+	__le16  ediv;
+	__u8    ltk[16];
+	__u8    mic_len;
+	__u8    encryption;
+} __packed;
+
+#define HCI_OP_LE_READ_MAX_DATA_LEN_V2		0x20b0
+struct hci_cp_le_read_max_data_len_v2 {
+	__u8    phy;
+} __packed;
+
+struct hci_rp_le_read_max_data_len_v2 {
+	__u8    status;
+	__le16  tx_len;
+	__le16  tx_time;
+	__le16  rx_len;
+	__le16  rx_time;
+	__u8    tx_win;
+	__u8    rx_win;
+	__le16  rx_packet;
+} __packed;
+
+/* HDT_Rates bits of the CIS and BIS parameters */
+#define HCI_HDT_RATE_2M		BIT(0)
+#define HCI_HDT_RATE_3M		BIT(1)
+#define HCI_HDT_RATE_4M		BIT(2)
+#define HCI_HDT_RATE_6M		BIT(3)
+#define HCI_HDT_RATE_7_5M	BIT(4)
+
+#define HCI_OP_LE_SET_CIG_PARAMS_V2		0x20b3
+struct hci_cis_params_v2 {
+	__u8    cis_id;
+	__le16  c_sdu;
+	__le16  p_sdu;
+	__u8    c_phys;
+	__u8    p_phys;
+	__u8    c_rtn;
+	__u8    p_rtn;
+	__u8    c_coded_rates;
+	__u8    p_coded_rates;
+	__le16  c_hdt_rates;
+	__le16  p_hdt_rates;
+	__u8    mic_len;
+	__u8    format;
+} __packed;
+
+struct hci_cp_le_set_cig_params_v2 {
+	__u8    cig_id;
+	__u8    c_interval[3];
+	__u8    p_interval[3];
+	__u8    sca;
+	__u8    packing;
+	__u8    framing;
+	__le16   c_latency;
+	__le16   p_latency;
+	__u8    num_cis;
+	struct hci_cis_params_v2 cis[] __counted_by(num_cis);
+} __packed;
+
+/* The CIS that fit in the 255 octets of command parameters */
+#define HCI_LE_CIG_PARAMS_V2_MAX_CIS \
+	((U8_MAX - sizeof(struct hci_cp_le_set_cig_params_v2)) / \
+	 sizeof(struct hci_cis_params_v2))
+
+struct hci_rp_le_set_cig_params_v2 {
+	__u8    status;
+	__u8    cig_id;
+	__u8    num_handles;
+	__le16  handle[];
+} __packed;
+
+#define HCI_OP_LE_CREATE_BIG_V2			0x20b6
+struct hci_bis_v2 {
+	__u8    sdu_interval[3];
+	__le16  sdu;
+	__le16  latency;
+	__u8    rtn;
+	__u8    phys;
+	__u8    packing;
+	__u8    framing;
+	__u8    encryption;
+	__u8    bcode[16];
+	__u8    coded_rates;
+	__le16  hdt_rates;
+	__u8    mic_len;
+	__u8    format;
+} __packed;
+
+struct hci_cp_le_create_big_v2 {
+	__u8    handle;
+	__u8    adv_handle;
+	__u8    num_bis;
+	struct hci_bis_v2 bis;
+} __packed;
+
+#define HCI_OP_LE_SET_HDT_DEFAULT_PARAMS	0x20bc
+struct hci_cp_le_set_hdt_default_params {
+	__u8    mic_len;
+	__u8    format;
+	__le16  rates;
 } __packed;
 
 /* ---- HCI Events ---- */
@@ -2917,6 +3056,26 @@ struct hci_ev_sync_train_complete {
 } __packed;
 
 #define HCI_EV_PERIPHERAL_PAGE_RESP_TIMEOUT	0x54
+
+#define HCI_EVT_KEY_REFRESH_COMPLETE_V2		0x5b
+struct hci_evt_key_refresh_complete_v2 {
+	__u8    status;
+	__le16  handle;
+	__u8    mic_len;
+	__u8    eks_mode;
+	__u8    eks_debug;
+} __packed;
+
+#define HCI_EVT_ENCRYPT_CHANGE_V3		0x5a
+struct hci_evt_encrypt_change_v3 {
+	__u8    status;
+	__le16  handle;
+	__u8    mode;
+	__u8    key_size;
+	__u8    mic_len;
+	__u8    eks_mode;
+	__u8    eks_debug;
+} __packed;
 
 #define HCI_EV_LE_CONN_COMPLETE		0x01
 struct hci_ev_le_conn_complete {
@@ -3355,6 +3514,58 @@ struct hci_evt_le_conn_rate_change {
 	__le16	latency;
 	__le16	cont_number;
 	__le16	supv_timeout;
+} __packed;
+
+#define HCI_EVT_LE_CIS_ESTABLISHED_V3			0x3a
+struct hci_evt_le_cis_established_v3 {
+	__u8    status;
+	__le16  handle;
+	__u8    cig_sync_delay[3];
+	__u8    cis_sync_delay[3];
+	__u8    c_latency[3];
+	__u8    p_latency[3];
+	__u8    c_phy;
+	__u8    p_phy;
+	__u8    nse;
+	__u8    c_bn;
+	__u8    p_bn;
+	__u8    c_ft;
+	__u8    p_ft;
+	__le16  c_mtu;
+	__le16  p_mtu;
+	__le16  interval;
+	__u8    sub_interval[3];
+	__le16  c_sdu;
+	__le16  p_sdu;
+	__u8    c_sdu_interval[3];
+	__u8    p_sdu_interval[3];
+	__u8    framing;
+	__le16  c_rates;
+	__le16  p_rates;
+	__u8    config_id;
+	__u8    group_id;
+	__u8    encryption;
+	__u8    mic_len;
+} __packed;
+
+#define HCI_EVT_LE_CREATE_BIG_COMPLETE_V2	0x3b
+struct hci_evt_le_create_big_complete_v2 {
+	__u8    status;
+	__u8    handle;
+	__u8    sync_delay[3];
+	__u8    latency[3];
+	__u8    phy;
+	__u8    nse;
+	__u8    bn;
+	__u8    pto;
+	__u8    irc;
+	__le16  max_pdu;
+	__le16  interval;
+	__le16  rates;
+	__u8    encryption;
+	__u8    mic_len;
+	__u8    num_bis;
+	__le16  bis_handle[];
 } __packed;
 
 #define HCI_EV_VENDOR			0xff

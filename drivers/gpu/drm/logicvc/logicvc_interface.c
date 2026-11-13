@@ -87,9 +87,9 @@ static const struct drm_connector_helper_funcs logicvc_connector_helper_funcs = 
 };
 
 static const struct drm_connector_funcs logicvc_connector_funcs = {
-	.reset			= drm_atomic_helper_connector_reset,
 	.fill_modes		= drm_helper_probe_single_connector_modes,
 	.destroy		= drm_connector_cleanup,
+	.atomic_create_state	= drm_atomic_helper_connector_create_state,
 	.atomic_duplicate_state	= drm_atomic_helper_connector_duplicate_state,
 	.atomic_destroy_state	= drm_atomic_helper_connector_destroy_state,
 };
@@ -154,7 +154,7 @@ int logicvc_interface_init(struct logicvc_drm *logicvc)
 	bool native_connector = logicvc_interface_native_connector(logicvc);
 	int ret;
 
-	interface = devm_kzalloc(dev, sizeof(*interface), GFP_KERNEL);
+	interface = devm_kzalloc_obj(dev, *interface);
 	if (!interface) {
 		ret = -ENOMEM;
 		goto error_early;

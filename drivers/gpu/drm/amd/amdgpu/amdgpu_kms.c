@@ -919,8 +919,7 @@ int amdgpu_info_ioctl(struct drm_device *dev, void *data, struct drm_file *filp)
 		if (ret)
 			return ret;
 
-		regs = kmalloc_array(info->read_mmr_reg.count, sizeof(*regs),
-				     GFP_KERNEL);
+		regs = kmalloc_objs(*regs, info->read_mmr_reg.count);
 		if (!regs)
 			return -ENOMEM;
 
@@ -1431,24 +1430,24 @@ int amdgpu_info_ioctl(struct drm_device *dev, void *data, struct drm_file *filp)
 				return ret;
 
 			ret = copy_to_user(out, &meta_info,
-						min((size_t)size, sizeof(meta_info))) ? -EFAULT : 0;
-			return 0;
+						min((size_t)size, sizeof(meta_info)));
+			return ret ? -EFAULT : 0;
 		case AMDGPU_HW_IP_COMPUTE:
 			ret = amdgpu_userq_metadata_info_compute(adev, info, &meta_info.compute);
 			if (ret)
 				return ret;
 
 			ret = copy_to_user(out, &meta_info,
-						min((size_t)size, sizeof(meta_info))) ? -EFAULT : 0;
-			return 0;
+						min((size_t)size, sizeof(meta_info)));
+			return ret ? -EFAULT : 0;
 		case AMDGPU_HW_IP_DMA:
 			ret = amdgpu_userq_metadata_info_sdma(adev, info, &meta_info.sdma);
 			if (ret)
 				return ret;
 
 			ret = copy_to_user(out, &meta_info,
-						min((size_t)size, sizeof(meta_info))) ? -EFAULT : 0;
-			return 0;
+						min((size_t)size, sizeof(meta_info)));
+			return ret ? -EFAULT : 0;
 		default:
 			return -EINVAL;
 		}
@@ -1518,7 +1517,7 @@ int amdgpu_driver_open_kms(struct drm_device *dev, struct drm_file *file_priv)
 	if (r < 0)
 		goto pm_put;
 
-	fpriv = kzalloc(sizeof(*fpriv), GFP_KERNEL);
+	fpriv = kzalloc_obj(*fpriv);
 	if (unlikely(!fpriv)) {
 		r = -ENOMEM;
 		goto out_suspend;
@@ -1533,6 +1532,8 @@ int amdgpu_driver_open_kms(struct drm_device *dev, struct drm_file *file_priv)
 	r = amdgpu_vm_init(adev, &fpriv->vm, fpriv->xcp_id);
 	if (r)
 		goto error_pasid;
+
+	init_completion(&fpriv->irq_drain_done);
 
 	pasid = amdgpu_pasid_alloc(16, fpriv);
 	if (pasid < 0) {
@@ -1669,6 +1670,7 @@ void amdgpu_driver_release_kms(struct drm_device *dev)
 {
 	struct amdgpu_device *adev = drm_to_adev(dev);
 
+	amdgpu_xcp_dev_fini(adev);
 	amdgpu_device_fini_sw(adev);
 	pci_set_drvdata(adev->pdev, NULL);
 }

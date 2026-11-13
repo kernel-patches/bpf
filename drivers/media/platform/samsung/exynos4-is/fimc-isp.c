@@ -761,6 +761,7 @@ int fimc_isp_subdev_create(struct fimc_isp *isp)
 
 	if (handler->error) {
 		media_entity_cleanup(&sd->entity);
+		v4l2_ctrl_handler_free(handler);
 		return handler->error;
 	}
 

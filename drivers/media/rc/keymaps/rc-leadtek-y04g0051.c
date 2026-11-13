@@ -64,7 +64,7 @@ static struct rc_map_table leadtek_y04g0051[] = {
 static struct rc_map_list leadtek_y04g0051_map = {
 	.map = {
 		.scan     = leadtek_y04g0051,
-		.size     = ARRAY_SIZE(leadtek_y04g0051),
+		.entries  = ARRAY_SIZE(leadtek_y04g0051),
 		.rc_proto = RC_PROTO_NEC,
 		.name     = RC_MAP_LEADTEK_Y04G0051,
 	}

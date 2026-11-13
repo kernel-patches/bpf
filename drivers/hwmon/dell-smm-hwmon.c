@@ -1142,7 +1142,7 @@ static int dell_smm_init_cdev(struct device *dev, u8 fan_num)
 	if (!name)
 		return -ENOMEM;
 
-	cdata = devm_kmalloc(dev, sizeof(*cdata), GFP_KERNEL);
+	cdata = devm_kmalloc_obj(dev, *cdata);
 	if (cdata) {
 		cdata->fan_num = fan_num;
 		cdata->data = data;
@@ -1196,9 +1196,9 @@ static int dell_smm_init_hwmon(struct device *dev)
 					 i + 1);
 		}
 
-		data->fan_nominal_speed[i] = devm_kmalloc_array(dev, data->i8k_fan_max + 1,
-								sizeof(*data->fan_nominal_speed[i]),
-								GFP_KERNEL);
+		data->fan_nominal_speed[i] = devm_kmalloc_objs(dev,
+							       *data->fan_nominal_speed[i],
+							       data->i8k_fan_max + 1);
 		if (!data->fan_nominal_speed[i])
 			continue;
 
@@ -1231,7 +1231,7 @@ static int dell_smm_init_data(struct device *dev, const struct dell_smm_ops *ops
 {
 	struct dell_smm_data *data;
 
-	data = devm_kzalloc(dev, sizeof(*data), GFP_KERNEL);
+	data = devm_kzalloc_obj(dev, *data);
 	if (!data)
 		return -ENOMEM;
 
@@ -1616,6 +1616,14 @@ static const struct dmi_system_id i8k_whitelist_fan_control[] __initconst = {
 		.driver_data = (void *)&i8k_fan_control_data[I8K_FAN_34A3_35A3],
 	},
 	{
+		.ident = "Dell Pro Micro Plus QBM1250",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
+			DMI_EXACT_MATCH(DMI_PRODUCT_NAME, "Dell Pro Micro Plus QBM1250"),
+		},
+		.driver_data = (void *)&i8k_fan_control_data[I8K_FAN_30A3_31A3],
+	},
+	{
 		.ident = "Dell XPS 13 7390",
 		.matches = {
 			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
@@ -1726,7 +1734,7 @@ static int dell_smm_wmi_probe(struct wmi_device *wdev, const void *context)
 	struct dell_smm_ops *ops;
 	int ret;
 
-	ops = devm_kzalloc(&wdev->dev, sizeof(*ops), GFP_KERNEL);
+	ops = devm_kzalloc_obj(&wdev->dev, *ops);
 	if (!ops)
 		return -ENOMEM;
 

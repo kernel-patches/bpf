@@ -603,7 +603,7 @@ static const struct regmap_range regmap_ranges_rd_yes[] = {
 
 static const struct regmap_access_table regmap_rd_table = {
 	.yes_ranges = regmap_ranges_rd_yes,
-	.n_yes_ranges = 4,
+	.n_yes_ranges = ARRAY_SIZE(regmap_ranges_rd_yes),
 };
 
 static const struct regmap_range regmap_ranges_wr_yes[] = {
@@ -615,7 +615,7 @@ static const struct regmap_range regmap_ranges_wr_yes[] = {
 
 static const struct regmap_access_table regmap_wr_table = {
 	.yes_ranges = regmap_ranges_wr_yes,
-	.n_yes_ranges = 3,
+	.n_yes_ranges = ARRAY_SIZE(regmap_ranges_wr_yes),
 };
 
 static const struct regmap_range regmap_ranges_vol_yes[] = {
@@ -624,7 +624,7 @@ static const struct regmap_range regmap_ranges_vol_yes[] = {
 
 static const struct regmap_access_table regmap_vol_table = {
 	.yes_ranges = regmap_ranges_vol_yes,
-	.n_yes_ranges = 1,
+	.n_yes_ranges = ARRAY_SIZE(regmap_ranges_vol_yes),
 };
 
 static const struct regmap_config cw2015_regmap_config = {
@@ -642,7 +642,7 @@ static int cw_bat_probe(struct i2c_client *client)
 	struct cw_battery *cw_bat;
 	struct power_supply_config psy_cfg = { 0 };
 
-	cw_bat = devm_kzalloc(&client->dev, sizeof(*cw_bat), GFP_KERNEL);
+	cw_bat = devm_kzalloc_obj(&client->dev, *cw_bat);
 	if (!cw_bat)
 		return -ENOMEM;
 
@@ -685,9 +685,8 @@ static int cw_bat_probe(struct i2c_client *client)
 	ret = power_supply_get_battery_info(cw_bat->rk_bat, &cw_bat->battery);
 	if (ret) {
 		/* Allocate an empty battery */
-		cw_bat->battery = devm_kzalloc(&client->dev,
-					       sizeof(*cw_bat->battery),
-					       GFP_KERNEL);
+		cw_bat->battery = devm_kzalloc_obj(&client->dev,
+						   *cw_bat->battery);
 		if (!cw_bat->battery)
 			return -ENOMEM;
 		dev_warn(cw_bat->dev,

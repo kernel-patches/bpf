@@ -1444,8 +1444,7 @@ int stratix10_svc_remove_async_client(struct stratix10_svc_chan *chan)
 	}
 
 	if (achan == actrl->common_async_chan) {
-		atomic_dec(&actrl->common_achan_refcount);
-		if (atomic_read(&actrl->common_achan_refcount) == 0) {
+		if (atomic_dec_and_test(&actrl->common_achan_refcount)) {
 			ida_destroy(&achan->job_id_pool);
 			ida_free(&actrl->async_id_pool,
 				 achan->async_client_id);
@@ -1516,7 +1515,7 @@ int stratix10_svc_async_send(struct stratix10_svc_chan *chan, void *msg,
 		return -EINVAL;
 	}
 
-	handle = kzalloc(sizeof(*handle), GFP_KERNEL);
+	handle = kzalloc_obj(*handle);
 	if (!handle)
 		return -ENOMEM;
 
@@ -2399,7 +2398,7 @@ static int stratix10_svc_drv_probe(struct platform_device *pdev)
 		if (ret)
 			return ret;
 	} else {
-		sh_memory = devm_kzalloc(dev, sizeof(*sh_memory), GFP_KERNEL);
+		sh_memory = devm_kzalloc_obj(dev, *sh_memory);
 		if (!sh_memory)
 			return -ENOMEM;
 
@@ -2414,8 +2413,7 @@ static int stratix10_svc_drv_probe(struct platform_device *pdev)
 	}
 
 	/* allocate service controller and supporting channel */
-	controller = devm_kzalloc(dev, struct_size(controller, chans, SVC_NUM_CHANNEL),
-				GFP_KERNEL);
+	controller = devm_kzalloc_flex(dev, *controller, chans, SVC_NUM_CHANNEL);
 	if (!controller) {
 		ret = -ENOMEM;
 		goto err_destroy_pool;
@@ -2480,7 +2478,7 @@ static int stratix10_svc_drv_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, controller);
 
 	/* add svc client device(s) */
-	svc = devm_kzalloc(dev, sizeof(*svc), GFP_KERNEL);
+	svc = devm_kzalloc_obj(dev, *svc);
 	if (!svc) {
 		ret = -ENOMEM;
 		goto err_free_fifos;

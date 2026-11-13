@@ -356,7 +356,7 @@ static const struct of_device_id realtek_gpio_of_match[] = {
 		.compatible = "realtek,rtl9607-gpio",
 		.data = (void *)GPIO_PORTS_REVERSED,
 	},
-	{}
+	{ }
 };
 MODULE_DEVICE_TABLE(of, realtek_gpio_of_match);
 
@@ -372,7 +372,7 @@ static int realtek_gpio_probe(struct platform_device *pdev)
 	unsigned int nr_cpus;
 	int cpu, err, irq;
 
-	ctrl = devm_kzalloc(dev, sizeof(*ctrl), GFP_KERNEL);
+	ctrl = devm_kzalloc_obj(dev, *ctrl);
 	if (!ctrl)
 		return -ENOMEM;
 
@@ -443,8 +443,8 @@ static int realtek_gpio_probe(struct platform_device *pdev)
 		girq->handler = handle_bad_irq;
 		girq->parent_handler = realtek_gpio_irq_handler;
 		girq->num_parents = 1;
-		girq->parents = devm_kcalloc(dev, girq->num_parents,
-					sizeof(*girq->parents),	GFP_KERNEL);
+		girq->parents = devm_kzalloc_objs(dev, *girq->parents,
+						  girq->num_parents);
 		if (!girq->parents)
 			return -ENOMEM;
 		girq->parents[0] = irq;

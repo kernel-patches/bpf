@@ -607,12 +607,10 @@ static void smb_status_change_work(struct work_struct *work)
 static int smb_get_iio_chan(struct smb_chip *chip, struct iio_channel *chan,
 			     int *val)
 {
-	int rc;
-	union power_supply_propval status;
+	int rc, status;
 
-	rc = power_supply_get_property(chip->chg_psy, POWER_SUPPLY_PROP_STATUS,
-				       &status);
-	if (rc < 0 || status.intval != POWER_SUPPLY_STATUS_CHARGING) {
+	rc = smb_get_prop_status(chip, &status);
+	if (rc < 0 || status != POWER_SUPPLY_STATUS_CHARGING) {
 		*val = 0;
 		return 0;
 	}
@@ -754,6 +752,15 @@ static irqreturn_t smb_handle_usb_plugin(int irq, void *data)
 }
 
 static irqreturn_t smb_handle_usb_icl_change(int irq, void *data)
+{
+	struct smb_chip *chip = data;
+
+	power_supply_changed(chip->chg_psy);
+
+	return IRQ_HANDLED;
+}
+
+static irqreturn_t smb_handle_chg_state_change(int irq, void *data)
 {
 	struct smb_chip *chip = data;
 
@@ -961,7 +968,7 @@ static int smb_probe(struct platform_device *pdev)
 	int float_voltage_uv;
 	int rc, irq;
 
-	chip = devm_kzalloc(&pdev->dev, sizeof(*chip), GFP_KERNEL);
+	chip = devm_kzalloc_obj(&pdev->dev, *chip);
 	if (!chip)
 		return -ENOMEM;
 
@@ -1008,7 +1015,7 @@ static int smb_probe(struct platform_device *pdev)
 	supply_config.drv_data = chip;
 	supply_config.fwnode = dev_fwnode(&pdev->dev);
 
-	desc = devm_kzalloc(chip->dev, sizeof(*desc), GFP_KERNEL);
+	desc = devm_kzalloc_obj(chip->dev, *desc);
 	if (!desc)
 		return -ENOMEM;
 	memcpy(desc, &smb_psy_desc, sizeof(smb_psy_desc));
@@ -1080,6 +1087,21 @@ skip_float_voltage:
 	rc = smb_init_irq(chip, &irq, "wdog-bark", smb_handle_wdog_bark);
 	if (rc < 0)
 		return rc;
+
+	/* Optional: not every device tree lists it */
+	irq = platform_get_irq_byname_optional(pdev, "chg-state-change");
+	if (irq > 0) {
+		rc = devm_request_threaded_irq(chip->dev, irq, NULL,
+					       smb_handle_chg_state_change,
+					       IRQF_ONESHOT, "chg-state-change",
+					       chip);
+		if (rc < 0)
+			return dev_err_probe(chip->dev, rc,
+					     "Couldn't request irq chg-state-change\n");
+	} else if (irq != -ENXIO) {
+		return dev_err_probe(chip->dev, irq,
+				     "Couldn't get irq chg-state-change\n");
+	}
 
 	devm_device_init_wakeup(chip->dev);
 

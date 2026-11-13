@@ -1340,7 +1340,7 @@ static const struct x86_cpu_id cpu_vuln_blacklist[] __initconst = {
 	VULNBL_AMD(0x17, RETBLEED | SMT_RSB | SRSO | VMSCAPE),
 	VULNBL_HYGON(0x18, RETBLEED | SMT_RSB | SRSO | VMSCAPE),
 	VULNBL_AMD(0x19, SRSO | TSA | VMSCAPE),
-	VULNBL_AMD(0x1a, SRSO | VMSCAPE),
+	VULNBL_AMD(0x1a, SRSO | TSA | VMSCAPE),
 	{}
 };
 
@@ -1391,8 +1391,8 @@ static bool __init vulnerable_to_rfds(u64 x86_arch_cap_msr)
 	 * both Core and Atom CPUs. Mark unaffected when Atom CPUs are not
 	 * present.
 	 */
-	if ((boot_cpu_data.x86_model == 0x97 ||
-	     boot_cpu_data.x86_model == 0xB7) &&
+	if ((boot_cpu_data.x86_vfm == INTEL_ALDERLAKE ||
+	     boot_cpu_data.x86_vfm == INTEL_RAPTORLAKE) &&
 	     boot_cpu_data.topo.intel_type != INTEL_CPU_TYPE_ATOM &&
 	     !boot_cpu_has(X86_FEATURE_HYBRID_CPU))
 		return false;
@@ -1605,7 +1605,8 @@ static void __init cpu_set_bug_bits(struct cpuinfo_x86 *c)
 
 	if (c->x86_vendor == X86_VENDOR_AMD) {
 		if (!cpu_has(c, X86_FEATURE_TSA_SQ_NO) ||
-		    !cpu_has(c, X86_FEATURE_TSA_L1_NO)) {
+		    !cpu_has(c, X86_FEATURE_TSA_L1_NO) ||
+		    !cpu_has(c, X86_FEATURE_TSA_FILL_NO)) {
 			if (cpu_matches(cpu_vuln_blacklist, TSA) ||
 			    /* Enable bug on Zen guests to allow for live migration. */
 			    (cpu_has(c, X86_FEATURE_HYPERVISOR) && cpu_has(c, X86_FEATURE_ZEN)))

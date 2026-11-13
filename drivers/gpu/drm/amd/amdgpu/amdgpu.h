@@ -157,7 +157,6 @@ struct amdgpu_watchdog_timer {
  * Modules parameters.
  */
 extern int amdgpu_modeset;
-extern int amdgpu_iommu_perfopt;
 extern unsigned int amdgpu_vram_limit;
 extern int amdgpu_vis_vram_limit;
 extern int amdgpu_gart_size;
@@ -214,7 +213,6 @@ extern u64 amdgpu_ras_mask;
 extern int amdgpu_bad_page_threshold;
 extern bool amdgpu_ignore_bad_page_threshold;
 extern struct amdgpu_watchdog_timer amdgpu_watchdog_timer;
-extern int amdgpu_async_gfx_ring;
 extern int amdgpu_mcbp;
 extern int amdgpu_discovery;
 extern int amdgpu_mes_log_enable;
@@ -427,6 +425,9 @@ struct amdgpu_fpriv {
 
 	/** GPU partition selection */
 	uint32_t		xcp_id;
+
+	/** Signaled when a KFD interrupt drain fence for this PASID is seen */
+	struct completion	irq_drain_done;
 };
 
 int amdgpu_file_to_fpriv(struct file *filp, struct amdgpu_fpriv **fpriv);
@@ -957,6 +958,7 @@ struct amdgpu_device {
 	bool                            debug_enable_ce_cs;
 	bool                            debug_hibernation_thaw_resume_gpu;
 	bool                            debug_disable_ip_block_soft_reset;
+	bool                            debug_disable_userptr_size_limit;
 
 	/* Protection for the following isolation structure */
 	struct mutex                    enforce_isolation_mutex;

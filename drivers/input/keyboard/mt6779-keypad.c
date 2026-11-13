@@ -73,6 +73,9 @@ static irqreturn_t mt6779_keypad_irq_handler(int irq, void *dev_id)
 		key = bit_nr / 32 * 16 + bit_nr % 32;
 		keypad->calc_row_col(key, &row, &col);
 
+		if (row >= keypad->n_rows || col >= keypad->n_cols)
+			continue;
+
 		scancode = MATRIX_SCAN_CODE(row, col, row_shift);
 		/* 1: not pressed, 0: pressed */
 		pressed = !test_bit(bit_nr, new_state);
@@ -118,7 +121,7 @@ static int mt6779_keypad_pdrv_probe(struct platform_device *pdev)
 	bool wakeup;
 	int error;
 
-	keypad = devm_kzalloc(&pdev->dev, sizeof(*keypad), GFP_KERNEL);
+	keypad = devm_kzalloc_obj(&pdev->dev, *keypad);
 	if (!keypad)
 		return -ENOMEM;
 

@@ -60,31 +60,23 @@ static const struct of_device_id tegra_xusb_padctl_of_match[] = {
 		.data = &tegra210_xusb_padctl_soc,
 	},
 #endif
-#if defined(CONFIG_ARCH_TEGRA_186_SOC)
+#if defined(CONFIG_PHY_TEGRA186_XUSB)
 	{
 		.compatible = "nvidia,tegra186-xusb-padctl",
 		.data = &tegra186_xusb_padctl_soc,
 	},
-#endif
-#if defined(CONFIG_ARCH_TEGRA_194_SOC)
 	{
 		.compatible = "nvidia,tegra194-xusb-padctl",
 		.data = &tegra194_xusb_padctl_soc,
 	},
-#endif
-#if defined(CONFIG_ARCH_TEGRA_234_SOC)
 	{
 		.compatible = "nvidia,tegra234-xusb-padctl",
 		.data = &tegra234_xusb_padctl_soc,
 	},
-#endif
-#if defined(CONFIG_ARCH_TEGRA_238_SOC)
 	{
 		.compatible = "nvidia,tegra238-xusb-padctl",
 		.data = &tegra238_xusb_padctl_soc,
 	},
-#endif
-#if defined(CONFIG_ARCH_TEGRA_264_SOC)
 	{
 		.compatible = "nvidia,tegra264-xusb-padctl",
 		.data = &tegra264_xusb_padctl_soc,
@@ -208,8 +200,7 @@ int tegra_xusb_pad_register(struct tegra_xusb_pad *pad,
 	if (!children)
 		return -ENODEV;
 
-	pad->lanes = devm_kcalloc(&pad->dev, pad->soc->num_lanes, sizeof(lane),
-				  GFP_KERNEL);
+	pad->lanes = devm_kzalloc_objs(&pad->dev, lane, pad->soc->num_lanes);
 	if (!pad->lanes) {
 		of_node_put(children);
 		return -ENOMEM;
@@ -685,9 +676,7 @@ static int tegra_xusb_setup_usb_role_switch(struct tegra_xusb_port *port)
 	 * where an optimal solution is possible with changes to USB role
 	 * switch driver.
 	 */
-	port->dev.driver = devm_kzalloc(&port->dev,
-					sizeof(struct device_driver),
-					GFP_KERNEL);
+	port->dev.driver = devm_kzalloc_obj(&port->dev, struct device_driver);
 	if (!port->dev.driver)
 		return -ENOMEM;
 
@@ -705,8 +694,7 @@ static int tegra_xusb_setup_usb_role_switch(struct tegra_xusb_port *port)
 	INIT_WORK(&port->usb_phy_work, tegra_xusb_usb_phy_work);
 	usb_role_switch_set_drvdata(port->usb_role_sw, port);
 
-	port->usb_phy.otg = devm_kzalloc(&port->dev, sizeof(struct usb_otg),
-					 GFP_KERNEL);
+	port->usb_phy.otg = devm_kzalloc_obj(&port->dev, struct usb_otg);
 	if (!port->usb_phy.otg)
 		return -ENOMEM;
 
@@ -1226,8 +1214,8 @@ static int tegra_xusb_padctl_probe(struct platform_device *pdev)
 		goto remove;
 	}
 
-	padctl->supplies = devm_kcalloc(&pdev->dev, padctl->soc->num_supplies,
-					sizeof(*padctl->supplies), GFP_KERNEL);
+	padctl->supplies = devm_kzalloc_objs(&pdev->dev, *padctl->supplies,
+					     padctl->soc->num_supplies);
 	if (!padctl->supplies) {
 		err = -ENOMEM;
 		goto remove;

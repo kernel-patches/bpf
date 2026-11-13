@@ -105,7 +105,7 @@ struct max6650_data {
 	struct mutex update_lock; /* protect alarm register updates */
 	int nr_fans;
 	bool valid; /* false until following fields are valid */
-	unsigned long last_updated; /* in jiffies */
+	u64 last_updated; /* in jiffies */
 
 	/* register values */
 	u8 speed;
@@ -163,7 +163,8 @@ static struct max6650_data *max6650_update_device(struct device *dev)
 
 	mutex_lock(&data->update_lock);
 
-	if (time_after(jiffies, data->last_updated + HZ) || !data->valid) {
+	if (time_after64(get_jiffies_64(), data->last_updated + HZ) ||
+	    !data->valid) {
 		for (i = 0; i < data->nr_fans; i++) {
 			reg = i2c_smbus_read_byte_data(client, tach_reg[i]);
 			if (reg < 0) {
@@ -184,7 +185,7 @@ static struct max6650_data *max6650_update_device(struct device *dev)
 			goto error;
 		}
 		data->alarm |= reg;
-		data->last_updated = jiffies;
+		data->last_updated = get_jiffies_64();
 		data->valid = true;
 	}
 
@@ -768,7 +769,7 @@ static int max6650_probe(struct i2c_client *client)
 	struct device *hwmon_dev;
 	int err;
 
-	data = devm_kzalloc(dev, sizeof(struct max6650_data), GFP_KERNEL);
+	data = devm_kzalloc_obj(dev, struct max6650_data);
 	if (!data)
 		return -ENOMEM;
 

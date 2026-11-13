@@ -2183,7 +2183,8 @@ static ssize_t smu_v13_0_7_get_gpu_metrics(struct smu_context *smu,
 					       metrics->Vcn1ActivityPercentage);
 
 	gpu_metrics->average_socket_power = metrics->AverageSocketPower;
-	if (smu->smc_fw_version <= 0x00521400)
+	if (smu->smc_fw_version <= 0x00521400 ||
+	    smu->smc_fw_version >= 0x00526200)
 		gpu_metrics->energy_accumulator = metrics->EnergyAccumulator;
 
 	if (metrics->AverageGfxActivity <= SMU_13_0_7_BUSY_THRESHOLD)
@@ -2546,7 +2547,21 @@ static int smu_v13_0_7_init_ppt_limits(struct smu_context *smu)
 static int smu_v13_0_7_get_power_profile_mode(struct smu_context *smu, char *buf)
 {
 	DpmActivityMonitorCoeffIntExternal_t *activity_monitor_external;
-	uint32_t i, j, size = 0;
+	DpmActivityMonitorCoeffInt_t *activity_monitor;
+	static const char * const title[] = {
+		"PROFILE_INDEX(NAME)",
+		"CLOCK_TYPE(NAME)",
+		"ActiveHystLimit",
+		"IdleHystLimit",
+		"FPS",
+		"MinActiveFreqType",
+		"MinActiveFreq",
+		"BoosterFreqType",
+		"BoosterFreq",
+		"PD_Data_limit_c",
+		"PD_Data_error_coeff",
+		"PD_Data_error_rate_coeff"};
+	u32 i, size = 0;
 	int16_t workload_type = 0;
 	int result = 0;
 
@@ -2558,12 +2573,9 @@ static int smu_v13_0_7_get_power_profile_mode(struct smu_context *smu, char *buf
 	if (!activity_monitor_external)
 		return -ENOMEM;
 
-	size += sysfs_emit_at(buf, size, "                              ");
-	for (i = 0; i <= PP_SMC_POWER_PROFILE_WINDOW3D; i++)
-		size += sysfs_emit_at(buf, size, "%d %-14s%s", i, amdgpu_pp_profile_name[i],
-			(i == smu->power_profile_mode) ? "* " : "  ");
-
-	size += sysfs_emit_at(buf, size, "\n");
+	size += sysfs_emit_at(buf, size, "%16s %s %s %s %s %s %s %s %s %s %s %s\n",
+		title[0], title[1], title[2], title[3], title[4], title[5],
+		title[6], title[7], title[8], title[9], title[10], title[11]);
 
 	for (i = 0; i <= PP_SMC_POWER_PROFILE_WINDOW3D; i++) {
 		/* conv PP_SMC_POWER_PROFILE* to WORKLOAD_PPLIB_*_BIT */
@@ -2584,31 +2596,50 @@ static int smu_v13_0_7_get_power_profile_mode(struct smu_context *smu, char *buf
 			dev_err(smu->adev->dev, "[%s] Failed to get activity monitor!", __func__);
 			goto out;
 		}
+
+		activity_monitor =
+			&activity_monitor_external[i].DpmActivityMonitorCoeffInt;
+
+		size += sysfs_emit_at(buf, size, "%2d %14s%s:\n",
+			i, amdgpu_pp_profile_name[i],
+			(i == smu->power_profile_mode) ? "*" : " ");
+
+		size += sysfs_emit_at(buf, size,
+			"%19s %d(%13s) %7d %7d %7d %7d %7d",
+			" ",
+			0,
+			"GFXCLK",
+			activity_monitor->Gfx_ActiveHystLimit,
+			activity_monitor->Gfx_IdleHystLimit,
+			activity_monitor->Gfx_FPS,
+			activity_monitor->Gfx_MinActiveFreqType,
+			activity_monitor->Gfx_MinActiveFreq);
+
+		size += sysfs_emit_at(buf, size, "%7d %7d %7d %7d %7d\n",
+			activity_monitor->Gfx_BoosterFreqType,
+			activity_monitor->Gfx_BoosterFreq,
+			activity_monitor->Gfx_PD_Data_limit_c,
+			activity_monitor->Gfx_PD_Data_error_coeff,
+			activity_monitor->Gfx_PD_Data_error_rate_coeff);
+
+		size += sysfs_emit_at(buf, size,
+			"%19s %d(%13s) %7d %7d %7d %7d %7d",
+			" ",
+			1,
+			"FCLK",
+			activity_monitor->Fclk_ActiveHystLimit,
+			activity_monitor->Fclk_IdleHystLimit,
+			activity_monitor->Fclk_FPS,
+			activity_monitor->Fclk_MinActiveFreqType,
+			activity_monitor->Fclk_MinActiveFreq);
+
+		size += sysfs_emit_at(buf, size, "%7d %7d %7d %7d %7d\n",
+			activity_monitor->Fclk_BoosterFreqType,
+			activity_monitor->Fclk_BoosterFreq,
+			activity_monitor->Fclk_PD_Data_limit_c,
+			activity_monitor->Fclk_PD_Data_error_coeff,
+			activity_monitor->Fclk_PD_Data_error_rate_coeff);
 	}
-
-#define PRINT_DPM_MONITOR(field)									\
-do {													\
-	size += sysfs_emit_at(buf, size, "%-30s", #field);						\
-	for (j = 0; j <= PP_SMC_POWER_PROFILE_WINDOW3D; j++)						\
-		size += sysfs_emit_at(buf, size, "%-18d", activity_monitor_external[j].DpmActivityMonitorCoeffInt.field);		\
-	size += sysfs_emit_at(buf, size, "\n");								\
-} while (0)
-
-	PRINT_DPM_MONITOR(Gfx_ActiveHystLimit);
-	PRINT_DPM_MONITOR(Gfx_IdleHystLimit);
-	PRINT_DPM_MONITOR(Gfx_FPS);
-	PRINT_DPM_MONITOR(Gfx_MinActiveFreqType);
-	PRINT_DPM_MONITOR(Gfx_BoosterFreqType);
-	PRINT_DPM_MONITOR(Gfx_MinActiveFreq);
-	PRINT_DPM_MONITOR(Gfx_BoosterFreq);
-	PRINT_DPM_MONITOR(Fclk_ActiveHystLimit);
-	PRINT_DPM_MONITOR(Fclk_IdleHystLimit);
-	PRINT_DPM_MONITOR(Fclk_FPS);
-	PRINT_DPM_MONITOR(Fclk_MinActiveFreqType);
-	PRINT_DPM_MONITOR(Fclk_BoosterFreqType);
-	PRINT_DPM_MONITOR(Fclk_MinActiveFreq);
-	PRINT_DPM_MONITOR(Fclk_BoosterFreq);
-#undef PRINT_DPM_MONITOR
 
 	result = size;
 out:
@@ -2912,6 +2943,25 @@ static int smu_v13_0_7_mode1_reset(struct smu_context *smu)
    return ret;
 }
 
+static void smu_v13_0_7_get_unique_id(struct smu_context *smu)
+{
+	SmuMetricsExternal_t metrics_external;
+	SmuMetrics_t *metrics = &metrics_external.SmuMetrics;
+	struct amdgpu_device *adev = smu->adev;
+	u32 upper32 = 0, lower32 = 0;
+	int ret;
+
+	ret = smu_cmn_get_metrics_table(smu, &metrics_external, false);
+	if (ret)
+		goto out;
+
+	upper32 = metrics->PublicSerialNumberUpper;
+	lower32 = metrics->PublicSerialNumberLower;
+
+out:
+	adev->unique_id = ((u64)upper32 << 32) | lower32;
+}
+
 static void smu_v13_0_7_init_msg_ctl(struct smu_context *smu)
 {
 	struct amdgpu_device *adev = smu->adev;
@@ -2995,6 +3045,7 @@ static const struct pptable_funcs smu_v13_0_7_ppt_funcs = {
 	.enable_uclk_shadow = smu_v13_0_enable_uclk_shadow,
 	.set_wbrf_exclusion_ranges = smu_v13_0_set_wbrf_exclusion_ranges,
 	.interrupt_work = smu_v13_0_interrupt_work,
+	.get_unique_id = smu_v13_0_7_get_unique_id,
 };
 
 void smu_v13_0_7_set_ppt_funcs(struct smu_context *smu)

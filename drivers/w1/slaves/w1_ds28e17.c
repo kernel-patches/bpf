@@ -101,7 +101,7 @@ static int w1_f19_i2c_busy_wait(struct w1_slave *sl, size_t count)
 		timebases[data->speed] * (data->stretch) * count
 		+ W1_F19_BUSY_GRATUITY);
 
-	/* Now continusly check the busy flag sent by the DS28E17. */
+	/* Now continuously check the busy flag sent by the DS28E17. */
 	checks = W1_F19_BUSY_CHECKS;
 	while ((checks--) > 0) {
 		/* Return success if the busy flag is cleared. */
@@ -691,7 +691,7 @@ static int w1_f19_add_slave(struct w1_slave *sl)
 	struct w1_f19_data *data = NULL;
 
 	/* Allocate memory for slave specific data. */
-	data = devm_kzalloc(&sl->dev, sizeof(*data), GFP_KERNEL);
+	data = devm_kzalloc_obj(&sl->dev, *data);
 	if (!data)
 		return -ENOMEM;
 	sl->family_data = data;

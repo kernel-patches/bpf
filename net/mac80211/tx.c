@@ -1164,6 +1164,7 @@ static bool ieee80211_tx_prep_agg(struct ieee80211_tx_data *tx,
 	struct sk_buff *purge_skb = NULL;
 
 	if (test_bit(HT_AGG_STATE_OPERATIONAL, &tid_tx->state)) {
+		info->flags |= IEEE80211_TX_CTL_AMPDU;
 		reset_agg_timer = true;
 	} else if (test_bit(HT_AGG_STATE_WANT_START, &tid_tx->state)) {
 		/*
@@ -1195,6 +1196,7 @@ static bool ieee80211_tx_prep_agg(struct ieee80211_tx_data *tx,
 		if (!tid_tx) {
 			/* do nothing, let packet pass through */
 		} else if (test_bit(HT_AGG_STATE_OPERATIONAL, &tid_tx->state)) {
+			info->flags |= IEEE80211_TX_CTL_AMPDU;
 			reset_agg_timer = true;
 		} else {
 			queued = true;
@@ -2089,6 +2091,7 @@ static int ieee80211_skb_resize(struct ieee80211_sub_if_data *sdata,
 
 void ieee80211_xmit(struct ieee80211_sub_if_data *sdata,
 		    struct sta_info *sta, struct sk_buff *skb)
+	__must_hold_shared(RCU)
 {
 	struct ieee80211_local *local = sdata->local;
 	struct ieee80211_tx_info *info = IEEE80211_SKB_CB(skb);
@@ -2589,6 +2592,12 @@ netdev_tx_t ieee80211_monitor_start_xmit(struct sk_buff *skb,
 	/* remove the injection radiotap header */
 	skb_pull(skb, len_rthdr);
 
+	/* FCS removal may have shortened the 802.11 header. */
+	hdrlen = max_t(int, hdrlen,
+		       offsetofend(struct ieee80211_hdr, addr1));
+	if (skb_headlen(skb) < hdrlen)
+		goto fail_rcu;
+
 	ieee80211_xmit(sdata, NULL, skb);
 	rcu_read_unlock();
 
@@ -2773,6 +2782,7 @@ static int ieee80211_ap_tx_addr_get(struct ieee80211_sub_if_data *sdata,
 static struct sk_buff *ieee80211_build_hdr(struct ieee80211_sub_if_data *sdata,
 					   struct sk_buff *skb,
 					   struct sta_info *sta)
+	__must_hold_shared(RCU)
 {
 	struct ieee80211_tx_info *info = IEEE80211_SKB_CB(skb);
 	struct ieee80211_local *local = sdata->local;
@@ -4031,7 +4041,7 @@ begin:
 	tx.sdata = vif_to_sdata(info->control.vif);
 
 	if (txq->sta) {
-		tx.sta = container_of(txq->sta, struct sta_info, sta);
+		tx.sta = sta_from_pub(txq->sta);
 
 		if (unlikely(ieee80211_drop_unauth_port(&tx))) {
 			I802_DEBUG_INC(local->tx_handlers_drop_unauth_port);
@@ -4067,8 +4077,7 @@ begin:
 	}
 
 	if (info->control.flags & IEEE80211_TX_CTRL_FAST_XMIT) {
-		struct sta_info *sta = container_of(txq->sta, struct sta_info,
-						    sta);
+		struct sta_info *sta = sta_from_pub(txq->sta);
 		u8 pn_offs = 0;
 
 		if (tx.key &&
@@ -4176,7 +4185,7 @@ ieee80211_txq_set_active(struct txq_info *txqi)
 	if (!txqi->txq.sta)
 		return;
 
-	sta = container_of(txqi->txq.sta, struct sta_info, sta);
+	sta = sta_from_pub(txqi->txq.sta);
 	sta->airtime[txqi->txq.ac].last_active = jiffies;
 }
 
@@ -4188,7 +4197,7 @@ ieee80211_txq_keep_active(struct txq_info *txqi)
 	if (!txqi->txq.sta)
 		return false;
 
-	sta = container_of(txqi->txq.sta, struct sta_info, sta);
+	sta = sta_from_pub(txqi->txq.sta);
 	if (ieee80211_sta_deficit(sta, txqi->txq.ac) >= 0)
 		return false;
 
@@ -4230,8 +4239,7 @@ struct ieee80211_txq *ieee80211_next_txq(struct ieee80211_hw *hw, u8 ac)
 		found_eligible_txq = true;
 
 	if (txqi->txq.sta) {
-		struct sta_info *sta = container_of(txqi->txq.sta,
-						    struct sta_info, sta);
+		struct sta_info *sta = sta_from_pub(txqi->txq.sta);
 
 		if (ieee80211_sta_deficit(sta, txqi->txq.ac) < 0) {
 			sta->airtime[txqi->txq.ac].deficit +=
@@ -4319,7 +4327,7 @@ bool ieee80211_txq_airtime_check(struct ieee80211_hw *hw,
 	if (unlikely(txq->tid == IEEE80211_NUM_TIDS))
 		return true;
 
-	sta = container_of(txq->sta, struct sta_info, sta);
+	sta = sta_from_pub(txq->sta);
 	if (atomic_read(&sta->airtime[txq->ac].aql_tx_pending) <
 	    sta->airtime[txq->ac].aql_limit_low)
 		return true;
@@ -4346,7 +4354,7 @@ u32 ieee80211_txq_aql_pending(struct ieee80211_hw *hw,
 	if (!txq->sta)
 		return atomic_read(&local->aql_mc_pending_airtime);
 
-	sta = container_of(txq->sta, struct sta_info, sta);
+	sta = sta_from_pub(txq->sta);
 
 	return atomic_read(&sta->airtime[txq->ac].aql_tx_pending);
 }
@@ -4400,13 +4408,13 @@ bool ieee80211_txq_may_transmit(struct ieee80211_hw *hw,
 				       &local->active_txqs[ac]);
 			continue;
 		}
-		sta = container_of(iter->txq.sta, struct sta_info, sta);
+		sta = sta_from_pub(iter->txq.sta);
 		if (ieee80211_sta_deficit(sta, ac) < 0)
 			sta->airtime[ac].deficit += sta->airtime_weight;
 		list_move_tail(&iter->schedule_order, &local->active_txqs[ac]);
 	}
 
-	sta = container_of(txqi->txq.sta, struct sta_info, sta);
+	sta = sta_from_pub(txqi->txq.sta);
 	if (sta->airtime[ac].deficit >= 0)
 		goto out;
 
@@ -6446,7 +6454,7 @@ EXPORT_SYMBOL(ieee80211_get_buffered_bc);
 
 int ieee80211_reserve_tid(struct ieee80211_sta *pubsta, u8 tid)
 {
-	struct sta_info *sta = container_of(pubsta, struct sta_info, sta);
+	struct sta_info *sta = sta_from_pub(pubsta);
 	struct ieee80211_sub_if_data *sdata = sta->sdata;
 	struct ieee80211_local *local = sdata->local;
 	int ret;
@@ -6510,7 +6518,7 @@ EXPORT_SYMBOL(ieee80211_reserve_tid);
 
 void ieee80211_unreserve_tid(struct ieee80211_sta *pubsta, u8 tid)
 {
-	struct sta_info *sta = container_of(pubsta, struct sta_info, sta);
+	struct sta_info *sta = sta_from_pub(pubsta);
 	struct ieee80211_sub_if_data *sdata = sta->sdata;
 
 	lockdep_assert_wiphy(sdata->local->hw.wiphy);
@@ -6539,6 +6547,7 @@ void __ieee80211_tx_skb_tid_band(struct ieee80211_sub_if_data *sdata,
 				 struct sk_buff *skb, struct sta_info *sta,
 				 int tid, int link_id,
 				 enum nl80211_band band)
+	__must_hold_shared(RCU)
 {
 	const struct ieee80211_hdr *hdr = (void *)skb->data;
 	int ac = ieee80211_ac_from_tid(tid);
@@ -6563,7 +6572,6 @@ void __ieee80211_tx_skb_tid_band(struct ieee80211_sub_if_data *sdata,
 		link = IEEE80211_LINK_UNSPECIFIED;
 	} else {
 		/* otherwise must be addressed from a link */
-		rcu_read_lock();
 		for (link = 0; link < ARRAY_SIZE(sdata->vif.link_conf); link++) {
 			struct ieee80211_bss_conf *link_conf;
 
@@ -6573,7 +6581,6 @@ void __ieee80211_tx_skb_tid_band(struct ieee80211_sub_if_data *sdata,
 			if (memcmp(link_conf->addr, hdr->addr2, ETH_ALEN) == 0)
 				break;
 		}
-		rcu_read_unlock();
 
 		if (WARN_ON_ONCE(link == ARRAY_SIZE(sdata->vif.link_conf)))
 			link = ffs(sdata->vif.active_links) - 1;

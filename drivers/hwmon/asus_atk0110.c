@@ -164,7 +164,7 @@ struct atk_sensor_data {
 	u64 limit1;
 	u64 limit2;
 	u64 cached_value;
-	unsigned long last_updated; /* in jiffies */
+	u64 last_updated; /* in jiffies */
 	bool is_valid;
 	char const *acpi_name;
 };
@@ -221,7 +221,8 @@ static ssize_t atk_input_show(struct device *dev,
 	u64 value;
 	int err;
 
-	err = atk_read_value(s, &value);
+	scoped_guard(hwmon_lock, dev)
+		err = atk_read_value(s, &value);
 	if (err)
 		return err;
 
@@ -634,7 +635,7 @@ static int atk_read_value(struct atk_sensor_data *sensor, u64 *value)
 	int err;
 
 	if (!sensor->is_valid ||
-	    time_after(jiffies, sensor->last_updated + CACHE_TIME)) {
+	    time_after64(get_jiffies_64(), sensor->last_updated + CACHE_TIME)) {
 		if (sensor->data->old_interface)
 			err = atk_read_value_old(sensor, value);
 		else
@@ -644,7 +645,7 @@ static int atk_read_value(struct atk_sensor_data *sensor, u64 *value)
 			return err;
 
 		sensor->is_valid = true;
-		sensor->last_updated = jiffies;
+		sensor->last_updated = get_jiffies_64();
 		sensor->cached_value = *value;
 	} else {
 		*value = sensor->cached_value;
@@ -886,7 +887,7 @@ static int atk_add_sensor(struct atk_data *data, union acpi_object *obj)
 	limit1 = atk_get_pack_member(data, obj, HWMON_PACK_LIMIT1);
 	limit2 = atk_get_pack_member(data, obj, HWMON_PACK_LIMIT2);
 
-	sensor = devm_kzalloc(dev, sizeof(*sensor), GFP_KERNEL);
+	sensor = devm_kzalloc_obj(dev, *sensor);
 	if (!sensor)
 		return -ENOMEM;
 
@@ -1165,7 +1166,7 @@ static int atk_init_attribute_groups(struct atk_data *data)
 	int len = (data->voltage_count + data->temperature_count
 			+ data->fan_count) * 4 + 1;
 
-	attrs = devm_kcalloc(dev, len, sizeof(struct attribute *), GFP_KERNEL);
+	attrs = devm_kzalloc_objs(dev, struct attribute *, len);
 	if (!attrs)
 		return -ENOMEM;
 
@@ -1284,7 +1285,7 @@ static int atk_probe(struct platform_device *pdev)
 	if (!handle)
 		return -ENODEV;
 
-	data = devm_kzalloc(&pdev->dev, sizeof(*data), GFP_KERNEL);
+	data = devm_kzalloc_obj(&pdev->dev, *data);
 	if (!data)
 		return -ENOMEM;
 

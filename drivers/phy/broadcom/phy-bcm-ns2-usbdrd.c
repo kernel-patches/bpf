@@ -263,6 +263,13 @@ static irqreturn_t gpio_irq_handler(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
+static void ns2_drd_phy_cancel_work(void *data)
+{
+	struct ns2_phy_driver *driver = data;
+
+	cancel_delayed_work_sync(&driver->wq_extcon);
+}
+
 static const struct phy_ops ops = {
 	.init		= ns2_drd_phy_init,
 	.power_on	= ns2_drd_phy_poweron,
@@ -285,13 +292,11 @@ static int ns2_drd_phy_probe(struct platform_device *pdev)
 	int ret;
 	u32 val;
 
-	driver = devm_kzalloc(dev, sizeof(struct ns2_phy_driver),
-			      GFP_KERNEL);
+	driver = devm_kzalloc_obj(dev, struct ns2_phy_driver);
 	if (!driver)
 		return -ENOMEM;
 
-	driver->data = devm_kzalloc(dev, sizeof(struct ns2_phy_data),
-				  GFP_KERNEL);
+	driver->data = devm_kzalloc_obj(dev, struct ns2_phy_data);
 	if (!driver->data)
 		return -ENOMEM;
 
@@ -340,6 +345,10 @@ static int ns2_drd_phy_probe(struct platform_device *pdev)
 		driver->debounce_jiffies = msecs_to_jiffies(GPIO_DELAY);
 
 	INIT_DELAYED_WORK(&driver->wq_extcon, extcon_work);
+
+	ret = devm_add_action_or_reset(dev, ns2_drd_phy_cancel_work, driver);
+	if (ret)
+		return ret;
 
 	driver->id_irq = gpiod_to_irq(driver->id_gpiod);
 	if (driver->id_irq < 0) {
