@@ -8,6 +8,7 @@
 
 #include <linux/regmap.h>
 #include <linux/i2c.h>
+#include <linux/bitops.h>
 #include <linux/module.h>
 
 #include "internal.h"
@@ -353,6 +354,7 @@ static const struct regmap_bus *regmap_get_i2c_bus(struct i2c_client *i2c,
 	const struct i2c_adapter_quirks *quirks;
 	const struct regmap_bus *bus = NULL;
 	struct regmap_bus *ret_bus;
+	size_t val_bytes;
 	u16 max_read, max_write;
 
 	if (i2c_check_functionality(i2c->adapter, I2C_FUNC_I2C))
@@ -393,17 +395,28 @@ static const struct regmap_bus *regmap_get_i2c_bus(struct i2c_client *i2c,
 
 	max_read = bus->max_raw_read;
 	max_write = bus->max_raw_write;
+	val_bytes = BITS_TO_BYTES(config->val_bits);
 
 	quirks = i2c->adapter->quirks;
 	if (quirks) {
 		if (quirks->max_read_len &&
+		    quirks->max_read_len >= val_bytes &&
 		    (max_read == 0 || max_read > quirks->max_read_len))
 			max_read = quirks->max_read_len;
 
-		if (quirks->max_write_len &&
-		    (max_write == 0 || max_write > quirks->max_write_len))
-			max_write = quirks->max_write_len -
-				(config->reg_bits + config->pad_bits) / BITS_PER_BYTE;
+		if (quirks->max_write_len) {
+			size_t reg_reserve_size, max_payload;
+
+			reg_reserve_size = (config->reg_bits + config->pad_bits) /
+					   BITS_PER_BYTE;
+			if (quirks->max_write_len > reg_reserve_size) {
+				max_payload = quirks->max_write_len -
+					      reg_reserve_size;
+				if (max_payload >= val_bytes &&
+				    (max_write == 0 || max_write > max_payload))
+					max_write = max_payload;
+			}
+		}
 
 		if (max_read != bus->max_raw_read ||
 		    max_write != bus->max_raw_write) {
