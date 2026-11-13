@@ -29,6 +29,7 @@ void icssm_prueth_sw_fdb_del(struct prueth_emac *emac,
 int icssm_prueth_sw_learn_fdb(struct prueth_emac *emac, u8 *src_mac);
 int icssm_prueth_sw_purge_fdb(struct prueth_emac *emac);
 void icssm_prueth_sw_hostconfig(struct prueth *prueth);
+void icssm_prueth_sw_config_packet_timestamping(struct prueth *prueth);
 int icssm_prueth_sw_emac_config(struct prueth_emac *emac);
 int icssm_prueth_sw_boot_prus(struct prueth *prueth, struct net_device *ndev);
 int icssm_prueth_sw_shutdown_prus(struct prueth_emac *emac,

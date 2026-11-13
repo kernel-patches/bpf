@@ -886,6 +886,14 @@ void icssm_prueth_sw_hostconfig(struct prueth *prueth)
 		    sizeof(queue_descs[PRUETH_PORT_QUEUE_HOST]));
 }
 
+void icssm_prueth_sw_config_packet_timestamping(struct prueth *prueth)
+{
+	void __iomem *sram = prueth->mem[PRUETH_MEM_SHARED_RAM].va;
+
+	writeb(1, sram + SWITCH_PRIORITY_INTRS_STATUS_OFFSET);
+	writeb(1, sram + SWITCH_TIMESTAMP_PKTS_STATUS_OFFSET);
+}
+
 static int icssm_prueth_sw_port_config(struct prueth *prueth,
 				       enum prueth_port port_id)
 {

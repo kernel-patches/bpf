@@ -301,6 +301,12 @@
 #define P0_Q1_BD_OFFSET		P0_BUFFER_DESC_OFFSET
 #define P0_BUFFER_DESC_OFFSET	SRAM_START_OFFSET
 
+/* Enable/disable interrupts for high/low priority instead of per port.
+ * 0 = disabled (default), 1 = enabled
+ */
+#define SWITCH_PRIORITY_INTRS_STATUS_OFFSET	0x1FAA
+#define SWITCH_TIMESTAMP_PKTS_STATUS_OFFSET	0x1FAB
+
 /* Memory Usage of L3 OCMC RAM */
 
 /* L3 64KB Memory - mainly buffer Pool */
