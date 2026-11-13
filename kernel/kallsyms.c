@@ -31,6 +31,8 @@
 #include <linux/kernel.h>
 #include <linux/bsearch.h>
 #include <linux/btf_ids.h>
+#include <linux/uaccess.h>
+#include <linux/cleanup.h>
 
 #include "kallsyms_internal.h"
 
@@ -922,11 +924,328 @@ const char *kdb_walk_kallsyms(loff_t *pos)
 }
 #endif	/* CONFIG_KGDB_KDB */
 
+struct kallsyms_sym_match {
+	unsigned long addr;
+	unsigned long size;
+	char name[KSYM_NAME_LEN];
+	char modname[MODULE_NAME_LEN];
+};
+
+static long kallsyms_copy_str_from_user(char *dst, size_t size, u64 usrc)
+{
+	long len = strncpy_from_user(dst, u64_to_user_ptr(usrc), size);
+
+	if (len < 0)
+		return len;
+	if (len == 0)
+		return -EINVAL;
+	if (len == size)
+		return -ENOENT;
+	return len;
+}
+
+static int kallsyms_copy_struct_from_user(void *kdst, size_t ksize,
+					  size_t min_size,
+					  const void __user *usrc, u64 usize)
+{
+	if (usize > PAGE_SIZE)
+		return -E2BIG;
+	if (usize < min_size)
+		return -EINVAL;
+	return copy_struct_from_user(kdst, ksize, usrc, usize);
+}
+
+static int kallsyms_copy_query_from_user(void *karg, size_t ksize,
+					 size_t min_size,
+					 const void __user *uarg)
+{
+	u64 usize;
+
+	if (copy_from_user(&usize, uarg, sizeof(usize)))
+		return -EFAULT;
+	return kallsyms_copy_struct_from_user(karg, ksize, min_size, uarg,
+					      usize);
+}
+
+static int kallsyms_copy_sym_from_user(struct kallsyms_query_sym *ksym,
+				       u64 usym, u64 usym_size)
+{
+	size_t min_size = offsetofend(struct kallsyms_query_sym,
+				      sym_module_len);
+	int err = kallsyms_copy_struct_from_user(ksym, sizeof(*ksym), min_size,
+						 u64_to_user_ptr(usym),
+						 usym_size);
+	if (err)
+		return err;
+	if (!!ksym->sym_name != !!ksym->sym_name_len ||
+	    !!ksym->sym_module != !!ksym->sym_module_len)
+		return -EINVAL;
+	return 0;
+}
+
+static int kallsyms_copy_str_to_user(u64 ubuf, u64 *ulen, const char *str)
+{
+	u64 buf_len = *ulen;
+	size_t len;
+
+	if (!ubuf)
+		return 0;
+
+	len = strlen(str) + 1;
+	*ulen = len;
+	if (buf_len < len)
+		return -ENAMETOOLONG;
+	return copy_to_user(u64_to_user_ptr(ubuf), str, len) ? -EFAULT : 0;
+}
+
+/* On -ENAMETOOLONG, *ksym is still copied, to return the required sizes. */
+static int kallsyms_copy_sym_to_user(u64 usym, u64 usym_size,
+				     struct kallsyms_query_sym *ksym,
+				     const struct kallsyms_sym_match *m)
+{
+	size_t copy_sz = min_t(size_t, usym_size, sizeof(*ksym));
+	bool too_long = false;
+	int err;
+
+	ksym->sym_addr = m->addr;
+	ksym->sym_size = m->size;
+	err = kallsyms_copy_str_to_user(ksym->sym_name, &ksym->sym_name_len,
+					m->name);
+	if (err == -EFAULT)
+		return -EFAULT;
+	too_long |= (err == -ENAMETOOLONG);
+
+	err = kallsyms_copy_str_to_user(ksym->sym_module, &ksym->sym_module_len,
+					m->modname);
+	if (err == -EFAULT)
+		return -EFAULT;
+	too_long |= (err == -ENAMETOOLONG);
+
+	if (copy_to_user(u64_to_user_ptr(usym), ksym, copy_sz))
+		return -EFAULT;
+
+	return too_long ? -ENAMETOOLONG : 0;
+}
+
+/* pos = (sec << 32) | idx. Sections start at 1, so pos 0 means start. */
+enum kallsyms_query_sec {
+	KSYM_SEC_VMLINUX = 1,
+	KSYM_SEC_MODULE,
+	KSYM_SEC_FTRACE,
+	KSYM_SEC_BPF,
+	KSYM_SEC_KPROBE,
+	KSYM_SEC_MAX,
+};
+
+static int kallsyms_find_name_vmlinux(unsigned int *idx,
+				      const struct kallsyms_name_query *q,
+				      struct kallsyms_sym_match *m)
+{
+	unsigned int high = kallsyms_num_syms;
+	unsigned int low = *idx;
+	unsigned int seq;
+
+	/* pos + 1 usually points at the next match, so try it first. */
+	if (low > 0 && low < high) {
+		int cmp;
+
+		seq = get_symbol_seq(low);
+		kallsyms_expand_symbol(get_symbol_offset(seq), m->name,
+				       KSYM_NAME_LEN);
+		cmp = strncmp(m->name, q->name, q->cmp_len);
+		if (!cmp)
+			goto found;
+		if (cmp > 0)
+			return -ENOENT;
+		low++;
+	}
+
+	while (low < high) {
+		unsigned int mid = low + (high - low) / 2;
+
+		seq = get_symbol_seq(mid);
+		kallsyms_expand_symbol(get_symbol_offset(seq), m->name,
+				       KSYM_NAME_LEN);
+		if (strncmp(m->name, q->name, q->cmp_len) < 0)
+			low = mid + 1;
+		else
+			high = mid;
+	}
+	if (low >= kallsyms_num_syms)
+		return -ENOENT;
+
+	seq = get_symbol_seq(low);
+	kallsyms_expand_symbol(get_symbol_offset(seq), m->name, KSYM_NAME_LEN);
+	if (strncmp(m->name, q->name, q->cmp_len))
+		return -ENOENT;
+
+found:
+	m->addr = kallsyms_sym_address(seq);
+	m->modname[0] = '\0';
+	*idx = low;
+	return 0;
+}
+
+static int kallsyms_find_name_other(unsigned int sec, unsigned int *idx,
+				    const struct kallsyms_name_query *q,
+				    struct kallsyms_sym_match *m)
+{
+	int exported;
+	char type;
+	int err;
+
+	if (sec == KSYM_SEC_BPF)
+		strscpy(m->modname, "bpf", MODULE_NAME_LEN);
+	else if (sec == KSYM_SEC_KPROBE)
+		strscpy(m->modname, "__builtin__kprobes", MODULE_NAME_LEN);
+
+	do {
+		if (sec == KSYM_SEC_BPF)
+			err = bpf_get_kallsym(*idx, &m->addr, &type, m->name);
+		else if (sec == KSYM_SEC_KPROBE)
+			err = kprobe_get_kallsym(*idx, &m->addr, &type, m->name);
+		else
+			err = ftrace_mod_get_kallsym(*idx, &m->addr, &type,
+						     m->name, m->modname,
+						     &exported);
+		if (!err && !strncmp(m->name, q->name, q->cmp_len))
+			return 0;
+		(*idx)++;
+	} while (!err);
+
+	return -ENOENT;
+}
+
+/* Find the first match at or after *@pos, and set *@pos to its position. */
+static int kallsyms_find_name(const struct kallsyms_name_query *q,
+			      unsigned int first_sec, unsigned int end_sec,
+			      struct kallsyms_sym_match *m, u64 *pos)
+{
+	unsigned int sec = *pos >> 32;
+	unsigned int idx = (u32)*pos;
+	unsigned long size;
+	unsigned long offset;
+	int err;
+
+	if (sec < first_sec) {
+		sec = first_sec;
+		idx = 0;
+	}
+
+	for (; sec < end_sec; sec++, idx = 0) {
+		if (sec == KSYM_SEC_VMLINUX)
+			err = kallsyms_find_name_vmlinux(&idx, q, m);
+		else if (sec == KSYM_SEC_MODULE)
+			err = module_kallsyms_find_name(&idx, q, &m->addr,
+							m->name, m->modname);
+		else
+			err = kallsyms_find_name_other(sec, &idx, q, m);
+		if (!err) {
+			/* A lookup that lands inside another symbol gives no size */
+			m->size = 0;
+			if (kallsyms_lookup_size_offset(m->addr, &size, &offset) &&
+			    !offset)
+				m->size = size;
+			*pos = ((u64)sec << 32) | idx;
+			return 0;
+		}
+	}
+	return -ENOENT;
+}
+
+struct kallsyms_query_bufs {
+	char query_name[KSYM_NAME_LEN];
+	char module_filter[MODULE_NAME_LEN];
+	struct kallsyms_sym_match m;
+};
+
+static int do_kallsyms_query_by_name(struct kallsyms_query_by_name __user *uarg)
+{
+	unsigned int first_sec = KSYM_SEC_VMLINUX;
+	unsigned int end_sec = KSYM_SEC_MAX;
+	struct kallsyms_query_by_name karg;
+	struct kallsyms_name_query q = {};
+	struct kallsyms_query_sym ksym;
+	long len;
+	int err;
+
+	err = kallsyms_copy_query_from_user(&karg, sizeof(karg),
+					    offsetofend(struct kallsyms_query_by_name,
+							sym_struct_size),
+					    uarg);
+	if (err)
+		return err;
+
+	if (karg.query_flags & ~KALLSYMS_QUERY_NAME_PREFIX)
+		return -EINVAL;
+
+	err = kallsyms_copy_sym_from_user(&ksym, karg.sym, karg.sym_struct_size);
+	if (err)
+		return err;
+
+	struct kallsyms_query_bufs *bufs __free(kfree) = kmalloc_obj(*bufs);
+	if (!bufs)
+		return -ENOMEM;
+
+	len = kallsyms_copy_str_from_user(bufs->query_name,
+					  sizeof(bufs->query_name),
+					  karg.query_name);
+	if (len < 0)
+		return len;
+
+	q.name = bufs->query_name;
+	q.cmp_len = len;
+	if (!(karg.query_flags & KALLSYMS_QUERY_NAME_PREFIX))
+		q.cmp_len++;
+
+	if (karg.module_filter) {
+		len = kallsyms_copy_str_from_user(bufs->module_filter,
+						  sizeof(bufs->module_filter),
+						  karg.module_filter);
+		if (len < 0)
+			return len;
+		if (!strcmp(bufs->module_filter, "vmlinux")) {
+			end_sec = KSYM_SEC_VMLINUX + 1;
+		} else {
+			first_sec = KSYM_SEC_MODULE;
+			end_sec = KSYM_SEC_MODULE + 1;
+			q.modname = bufs->module_filter;
+		}
+	}
+
+	err = kallsyms_find_name(&q, first_sec, end_sec, &bufs->m, &karg.pos);
+	if (err)
+		return err;
+
+	if (copy_to_user(&uarg->pos, &karg.pos, sizeof(karg.pos)))
+		return -EFAULT;
+	return kallsyms_copy_sym_to_user(karg.sym, karg.sym_struct_size, &ksym,
+					 &bufs->m);
+}
+
+static long kallsyms_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+	struct seq_file *m = file->private_data;
+	struct kallsym_iter *iter = m->private;
+	void __user *uarg = (void __user *)arg;
+
+	switch (cmd) {
+	case KALLSYMS_QUERY_BY_NAME:
+		return iter->show_value ? do_kallsyms_query_by_name(uarg) : -EPERM;
+	default:
+		return -ENOIOCTLCMD;
+	}
+}
+
 static const struct proc_ops kallsyms_proc_ops = {
 	.proc_open	= kallsyms_open,
 	.proc_read	= seq_read,
 	.proc_lseek	= seq_lseek,
 	.proc_release	= seq_release_private,
+	.proc_ioctl	= kallsyms_ioctl,
+#ifdef CONFIG_COMPAT
+	.proc_compat_ioctl = compat_ptr_ioctl,
+#endif
 };
 
 static int __init kallsyms_init(void)
