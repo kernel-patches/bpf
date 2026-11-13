@@ -3570,10 +3570,13 @@ static int phylink_phy_read(struct phylink *pl, unsigned int phy_id,
 	return mdiobus_read(pl->phydev->mdio.bus, phy_id, reg);
 }
 
-static int phylink_phy_write(struct phylink *pl, unsigned int phy_id,
-			     unsigned int reg, unsigned int val)
+static int phylink_phy_write(struct phylink *pl, struct ifreq *ifr)
 {
+	struct mii_ioctl_data *mii = if_mii(ifr);
 	struct phy_device *phydev = pl->phydev;
+	u16 phy_id = mii->phy_id;
+	u16 reg = mii->reg_num;
+	u16 val = mii->val_in;
 	int prtad, devad;
 
 	if (mdio_phy_id_is_c45(phy_id)) {
@@ -3607,6 +3610,10 @@ static int phylink_phy_write(struct phylink *pl, unsigned int phy_id,
 		return mdiobus_c45_write(pl->phydev->mdio.bus, phy_id, devad,
 					 reg, val);
 	}
+
+	if (phy_id == phydev->mdio.addr && reg == MII_BMCR &&
+	    (val & BMCR_RESET))
+		return phy_mii_ioctl(phydev, ifr, SIOCSMIIREG);
 
 	return mdiobus_write(phydev->mdio.bus, phy_id, reg, val);
 }
@@ -3697,8 +3704,7 @@ int phylink_mii_ioctl(struct phylink *pl, struct ifreq *ifr, int cmd)
 			break;
 
 		case SIOCSMIIREG:
-			ret = phylink_phy_write(pl, mii->phy_id, mii->reg_num,
-						mii->val_in);
+			ret = phylink_phy_write(pl, ifr);
 			break;
 
 		default:
