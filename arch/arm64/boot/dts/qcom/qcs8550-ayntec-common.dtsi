@@ -183,7 +183,7 @@
 			no-map;
 		};
 
-		llcc_lpi_mem: llcc_lpi_region@ff800000 {
+		llcc_lpi_mem: llcc-lpi-region@ff800000 {
 			reg = <0 0xff800000 0 0x600000>;
 			no-map;
 		};
@@ -1239,7 +1239,7 @@
 };
 
 &lpass_tlmm {
-	lpi_i2s3_active: lpi_i2s3-active-state {
+	lpi_i2s3_active: lpi-i2s3-active-state {
 		sck-pins {
 			pins = "gpio12";
 			function = "i2s3_clk";
