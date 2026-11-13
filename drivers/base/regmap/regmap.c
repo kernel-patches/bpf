@@ -748,6 +748,104 @@ static int regmap_set_lock(struct regmap *map, const struct regmap_config *confi
 	return 0;
 }
 
+/* Validate config->ranges and build the range rbtree. */
+static int regmap_init_ranges(struct regmap *map, const struct regmap_config *config)
+{
+	int i, j;
+
+	map->range_tree = RB_ROOT;
+
+	for (i = 0; i < config->num_ranges; i++) {
+		const struct regmap_range_cfg *range_cfg = &config->ranges[i];
+		struct regmap_range_node *new;
+
+		/* Sanity check */
+		if (range_cfg->range_max < range_cfg->range_min) {
+			dev_err(map->dev, "Invalid range %d: %u < %u\n", i,
+				range_cfg->range_max, range_cfg->range_min);
+			return -EINVAL;
+		}
+
+		if (range_cfg->range_max > map->max_register) {
+			dev_err(map->dev, "Invalid range %d: %u > %u\n", i,
+				range_cfg->range_max, map->max_register);
+			return -EINVAL;
+		}
+
+		if (range_cfg->selector_reg > map->max_register) {
+			dev_err(map->dev,
+				"Invalid range %d: selector out of map\n", i);
+			return -EINVAL;
+		}
+
+		if (range_cfg->window_len == 0) {
+			dev_err(map->dev, "Invalid range %d: window_len 0\n",
+				i);
+			return -EINVAL;
+		}
+
+		/*
+		 * Make sure that this register range has no selector
+		 * or data window within its boundary.
+		 */
+		for (j = 0; j < config->num_ranges; j++) {
+			unsigned int sel_reg = config->ranges[j].selector_reg;
+			unsigned int win_min = config->ranges[j].window_start;
+			unsigned int win_max = win_min +
+					       config->ranges[j].window_len - 1;
+
+			/* Allow data window inside its own virtual range */
+			if (j == i)
+				continue;
+
+			if (range_cfg->range_min <= sel_reg &&
+			    sel_reg <= range_cfg->range_max) {
+				dev_err(map->dev,
+					"Range %d: selector for %d in window\n",
+					i, j);
+				return -EINVAL;
+			}
+
+			if (!(win_max < range_cfg->range_min ||
+			      win_min > range_cfg->range_max)) {
+				dev_err(map->dev,
+					"Range %d: window for %d in window\n",
+					i, j);
+				return -EINVAL;
+			}
+		}
+
+		new = kzalloc_obj(*new);
+		if (new == NULL)
+			return -ENOMEM;
+
+		new->map = map;
+		new->name = range_cfg->name;
+		new->range_min = range_cfg->range_min;
+		new->range_max = range_cfg->range_max;
+		new->selector_reg = range_cfg->selector_reg;
+		new->selector_mask = range_cfg->selector_mask;
+		new->selector_shift = range_cfg->selector_shift;
+		new->window_start = range_cfg->window_start;
+		new->window_len = range_cfg->window_len;
+
+		if (!_regmap_range_add(map, new)) {
+			dev_err(map->dev, "Failed to add range %d\n", i);
+			kfree(new);
+			return -EINVAL;
+		}
+
+		if (map->selector_work_buf == NULL) {
+			map->selector_work_buf =
+				kzalloc(map->format.buf_size, GFP_KERNEL);
+			if (map->selector_work_buf == NULL)
+				return -ENOMEM;
+		}
+	}
+
+	return 0;
+}
+
 struct regmap *__regmap_init(struct device *dev,
 			     const struct regmap_bus *bus,
 			     void *bus_context,
@@ -758,7 +856,6 @@ struct regmap *__regmap_init(struct device *dev,
 	struct regmap *map;
 	enum regmap_endian reg_endian, val_endian;
 	bool fast_io;
-	int i, j;
 	int ret;
 
 	if (!config) {
@@ -1078,96 +1175,9 @@ struct regmap *__regmap_init(struct device *dev,
 
 skip_format_initialization:
 
-	map->range_tree = RB_ROOT;
-	for (i = 0; i < config->num_ranges; i++) {
-		const struct regmap_range_cfg *range_cfg = &config->ranges[i];
-		struct regmap_range_node *new;
-
-		/* Sanity check */
-		if (range_cfg->range_max < range_cfg->range_min) {
-			dev_err(map->dev, "Invalid range %d: %u < %u\n", i,
-				range_cfg->range_max, range_cfg->range_min);
-			goto err_range;
-		}
-
-		if (range_cfg->range_max > map->max_register) {
-			dev_err(map->dev, "Invalid range %d: %u > %u\n", i,
-				range_cfg->range_max, map->max_register);
-			goto err_range;
-		}
-
-		if (range_cfg->selector_reg > map->max_register) {
-			dev_err(map->dev,
-				"Invalid range %d: selector out of map\n", i);
-			goto err_range;
-		}
-
-		if (range_cfg->window_len == 0) {
-			dev_err(map->dev, "Invalid range %d: window_len 0\n",
-				i);
-			goto err_range;
-		}
-
-		/* Make sure, that this register range has no selector
-		   or data window within its boundary */
-		for (j = 0; j < config->num_ranges; j++) {
-			unsigned int sel_reg = config->ranges[j].selector_reg;
-			unsigned int win_min = config->ranges[j].window_start;
-			unsigned int win_max = win_min +
-					       config->ranges[j].window_len - 1;
-
-			/* Allow data window inside its own virtual range */
-			if (j == i)
-				continue;
-
-			if (range_cfg->range_min <= sel_reg &&
-			    sel_reg <= range_cfg->range_max) {
-				dev_err(map->dev,
-					"Range %d: selector for %d in window\n",
-					i, j);
-				goto err_range;
-			}
-
-			if (!(win_max < range_cfg->range_min ||
-			      win_min > range_cfg->range_max)) {
-				dev_err(map->dev,
-					"Range %d: window for %d in window\n",
-					i, j);
-				goto err_range;
-			}
-		}
-
-		new = kzalloc_obj(*new);
-		if (new == NULL) {
-			ret = -ENOMEM;
-			goto err_range;
-		}
-
-		new->map = map;
-		new->name = range_cfg->name;
-		new->range_min = range_cfg->range_min;
-		new->range_max = range_cfg->range_max;
-		new->selector_reg = range_cfg->selector_reg;
-		new->selector_mask = range_cfg->selector_mask;
-		new->selector_shift = range_cfg->selector_shift;
-		new->window_start = range_cfg->window_start;
-		new->window_len = range_cfg->window_len;
-
-		if (!_regmap_range_add(map, new)) {
-			dev_err(map->dev, "Failed to add range %d\n", i);
-			kfree(new);
-			goto err_range;
-		}
-
-		if (map->selector_work_buf == NULL) {
-			map->selector_work_buf =
-				kzalloc(map->format.buf_size, GFP_KERNEL);
-			if (map->selector_work_buf == NULL) {
-				ret = -ENOMEM;
-				goto err_range;
-			}
-		}
-	}
+	ret = regmap_init_ranges(map, config);
+	if (ret)
+		goto err_range;
 
 	ret = regcache_init(map, config);
 	if (ret != 0)
