@@ -3137,6 +3137,23 @@ static int shared_policy_replace(struct shared_policy *sp, pgoff_t start,
 
 restart:
 	write_lock(&sp->lock);
+	if (new) {
+		/* Try to merge ranges with same policies. */
+		if (start) {
+			n = sp_lookup(sp, start - 1, start);
+			if (n && mpol_equal(n->policy, new->policy)) {
+				new->start = n->start;
+				start = new->start;
+			}
+		}
+		if (end != ULONG_MAX) {
+			n = sp_lookup(sp, end, end + 1);
+			if (n && mpol_equal(n->policy, new->policy)) {
+				new->end = n->end;
+				end = new->end;
+			}
+		}
+	}
 	n = sp_lookup(sp, start, end);
 	/* Take care of old policies in the same range. */
 	while (n && n->start < end) {
