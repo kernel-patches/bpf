@@ -16,6 +16,21 @@
 
 #include "spi-loongson.h"
 
+static const struct loongson_spi_div_table div_table[] = {
+	{   2, 0, 0 },
+	{   4, 1, 0 },
+	{   8, 0, 1 },
+	{  16, 2, 0 },
+	{  32, 3, 0 },
+	{  64, 1, 1 },
+	{ 128, 2, 1 },
+	{ 256, 3, 1 },
+	{ 512, 0, 2 },
+	{1024, 1, 2 },
+	{2048, 2, 2 },
+	{4096, 3, 2 },
+};
+
 static inline void loongson_spi_write_reg(struct loongson_spi *spi, unsigned char reg,
 					  unsigned char data)
 {
@@ -38,26 +53,40 @@ static void loongson_spi_set_cs(struct spi_device *spi, bool en)
 	loongson_spi_write_reg(loongson_spi, LOONGSON_SPI_SFCS_REG, val | cs);
 }
 
-static void loongson_spi_set_clk(struct loongson_spi *loongson_spi, unsigned int hz)
+static int loongson_spi_set_clk(struct loongson_spi *loongson_spi, unsigned int hz)
 {
-	static const char rdiv[12] = {0, 1, 4, 2, 3, 5, 6, 7, 8, 9, 10, 11};
-	unsigned char val, spr, spre;
-	unsigned int div, div_tmp;
+	unsigned long div;
+	unsigned char val;
+	unsigned int i;
 
-	div = clamp_val(DIV_ROUND_UP_ULL(loongson_spi->clk_rate, hz), 2, 4096);
-	div_tmp = rdiv[fls(div - 1)];
+	if (!hz || !loongson_spi->clk_rate)
+		return -EINVAL;
 
-	spr = (div_tmp & GENMASK(1, 0)) >> 0;
+	div = DIV_ROUND_UP_ULL(loongson_spi->clk_rate, hz);
+	if (div < LOONGSON_SPI_DIV_MIN)
+		div = LOONGSON_SPI_DIV_MIN;
+
+	for (i = 0; i < ARRAY_SIZE(div_table); i++) {
+		if (div_table[i].div >= div)
+			break;
+	}
+
+	if (i == ARRAY_SIZE(div_table))
+		return -EINVAL;
+
 	val = loongson_spi_read_reg(loongson_spi, LOONGSON_SPI_SPCR_REG);
 	val &= ~GENMASK(1, 0);
-	loongson_spi_write_reg(loongson_spi, LOONGSON_SPI_SPCR_REG, val | spr);
+	loongson_spi_write_reg(loongson_spi, LOONGSON_SPI_SPCR_REG,
+			       val | div_table[i].spr);
 
-	spre = (div_tmp & GENMASK(3, 2)) >> 2;
 	val = loongson_spi_read_reg(loongson_spi, LOONGSON_SPI_SPER_REG);
 	val &= ~GENMASK(1, 0);
-	loongson_spi_write_reg(loongson_spi, LOONGSON_SPI_SPER_REG, val | spre);
+	loongson_spi_write_reg(loongson_spi, LOONGSON_SPI_SPER_REG,
+			       val | div_table[i].spre);
 
 	loongson_spi->hz = hz;
+
+	return 0;
 }
 
 static void loongson_spi_set_mode(struct loongson_spi *loongson_spi,
@@ -79,8 +108,13 @@ static void loongson_spi_set_mode(struct loongson_spi *loongson_spi,
 static int loongson_spi_update_state(struct loongson_spi *loongson_spi,
 				struct spi_device *spi, struct spi_transfer *t)
 {
-	if (t && loongson_spi->hz != t->speed_hz)
-		loongson_spi_set_clk(loongson_spi, t->speed_hz);
+	int ret;
+
+	if (t && loongson_spi->hz != t->speed_hz) {
+		ret = loongson_spi_set_clk(loongson_spi, t->speed_hz);
+		if (ret)
+			return ret;
+	}
 
 	if ((spi->mode ^ loongson_spi->mode) & SPI_MODE_X_MASK)
 		loongson_spi_set_mode(loongson_spi, spi);
@@ -162,8 +196,12 @@ static int loongson_spi_transfer_one(struct spi_controller *ctrl, struct spi_dev
 				     struct spi_transfer *xfer)
 {
 	struct loongson_spi *loongson_spi = spi_controller_get_devdata(spi->controller);
+	int ret;
 
-	loongson_spi_update_state(loongson_spi, spi, xfer);
+	ret = loongson_spi_update_state(loongson_spi, spi, xfer);
+	if (ret)
+		return ret;
+
 	if (xfer->len)
 		return loongson_spi_write_read(spi, xfer);
 
@@ -252,6 +290,10 @@ int loongson_spi_init_controller(struct device *dev, void __iomem *regs)
 	ret = loongson_spi_get_clk_rate(dev);
 	if (ret)
 		return ret;
+
+	/* Expose controller capabilities to the SPI core */
+	controller->max_speed_hz = spi->clk_rate / LOONGSON_SPI_DIV_MIN;
+	controller->min_speed_hz = DIV_ROUND_UP_ULL(spi->clk_rate, LOONGSON_SPI_DIV_MAX);
 
 	loongson_spi_reginit(spi);
 

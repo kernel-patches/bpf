@@ -26,8 +26,28 @@
 #define	LOONGSON_SPI_SPSR_WCOL	BIT(6)
 #define	LOONGSON_SPI_SPSR_SPIF	BIT(7)
 
+/* Hardware limits and divider masks */
+#define LOONGSON_SPI_DIV_MIN		2
+#define LOONGSON_SPI_DIV_MAX		4096
+
 struct device;
 struct spi_controller;
+
+/**
+ * struct loongson_spi_div_table - SPI clock divider encoding
+ * @div:  resulting clock divider (SPI input clock / SPI output clock)
+ * @spr:  value for the SPCR.SPR field
+ * @spre: value for the SPER.SPRE field
+ *
+ * One entry per supported divider from 2 to 4096. The (spr, spre) pair
+ * is programmed into the controller to produce @div; entries are sorted
+ * by @div so the first entry >= the requested divider can be selected.
+ */
+struct loongson_spi_div_table {
+	unsigned int	div;
+	unsigned char	spr;
+	unsigned char	spre;
+};
 
 struct loongson_spi_suspend_store {
 	unsigned char		spcr;
