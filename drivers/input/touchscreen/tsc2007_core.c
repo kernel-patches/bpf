@@ -252,7 +252,7 @@ static int tsc2007_input_configure(struct tsc2007 *ts)
 
 	ts->input = input_dev;
 
-	snprintf(ts->phys, sizeof(ts->phys), "%s/input0", dev_name(dev));
+	scnprintf(ts->phys, sizeof(ts->phys), "%s/input0", dev_name(dev));
 
 	input_dev->name = "TSC2007 Touchscreen";
 	input_dev->phys = ts->phys;
