@@ -1542,6 +1542,8 @@ struct bpf_attach_target_info {
 	struct module *tgt_mod;
 	const char *tgt_name;
 	const struct btf_type *tgt_type;
+	/* The errors in the "bpf_fmodret_retval:" tag, if that is what allows fmod_ret */
+	const char *fmodret_retvals;
 };
 
 #define BPF_DISPATCHER_MAX 48 /* Fits in 2048B */
@@ -3432,6 +3434,7 @@ int btf_check_type_match(struct bpf_verifier_log *log, const struct bpf_prog *pr
 			 struct btf *btf, const struct btf_type *t);
 const char *btf_find_decl_tag_value(const struct btf *btf, const struct btf_type *pt,
 				    int comp_idx, const char *tag_key);
+const char *btf_find_func_tag_value(const struct btf *btf, u32 func_id, const char *tag_key);
 int btf_find_next_decl_tag(const struct btf *btf, const struct btf_type *pt,
 			   int comp_idx, const char *tag_key, int last_id);
 

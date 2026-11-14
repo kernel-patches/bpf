@@ -110,6 +110,25 @@ config BPF_CRYPTO
 
 source "kernel/bpf/preload/Kconfig"
 
+config BPF_FMODRET_SCAN
+	bool "Find the functions which fmod_ret programs can attach to"
+	depends on BPF_SYSCALL && DEBUG_INFO_BTF
+	depends on X86_64 || ARM64
+	depends on DYNAMIC_FTRACE_WITH_DIRECT_CALLS
+	depends on $(success,$(srctree)/tools/bpf/resolve_btfids/llvm-mc.sh $(SRCARCH))
+	help
+	  Let resolve_btfids read the machine code of the kernel and of the
+	  modules, and tag the functions which return errors in BTF. An
+	  fmod_ret program can attach to such a function and return one of
+	  its errors instead of running it, for example to keep user space
+	  away from a bug until the kernel is updated.
+
+	  The build host needs a C++17 compiler and the headers and libraries
+	  of LLVM 17 or later with the target of the kernel, whatever compiles
+	  the kernel. tools/bpf/resolve_btfids/llvm-mc.sh tells what is missing.
+	  It only looks whether they are installed. The build stops if
+	  resolve_btfids cannot be built with them.
+
 config BPF_LSM
 	bool "Enable BPF LSM Instrumentation"
 	depends on BPF_EVENTS
