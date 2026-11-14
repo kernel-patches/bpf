@@ -333,6 +333,9 @@ static int invalidate_keyring_keys(struct key *keyring)
 
 	for (key_index = 0; key_index < num_keys; key_index++) {
 		current_key = key_lookup(key_array[key_index]);
+		if (!current_key)
+			continue;
+
 		pr_dbf_msg("Invalidating key %08x", current_key->serial);
 
 		key_invalidate(current_key);
