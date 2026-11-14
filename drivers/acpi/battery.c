@@ -704,11 +704,13 @@ static int acpi_battery_get_state(struct acpi_battery *battery)
 
 	/* For buggy DSDTs that report negative 16-bit values for either
 	 * charging or discharging current and/or report 0 as 65536
-	 * due to bad math.
+	 * due to bad math, or that negate the zero-extended 16-bit value
+	 * (0xfc5a becomes 0xffff03a6), which leaves the magnitude in the
+	 * low 16 bits and makes the rate negative.
 	 */
 	if (battery->power_unit == ACPI_BATTERY_POWER_UNIT_MA &&
 		battery->rate_now != ACPI_BATTERY_VALUE_UNKNOWN &&
-		(s16)(battery->rate_now) < 0) {
+		((s16)(battery->rate_now) < 0 || battery->rate_now < 0)) {
 		battery->rate_now = abs((s16)battery->rate_now);
 		pr_warn_once(FW_BUG "(dis)charge rate invalid.\n");
 	}
