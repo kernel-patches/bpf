@@ -9,6 +9,7 @@
 #define __AF_VSOCK_H__
 
 #include <linux/kernel.h>
+#include <linux/mutex.h>
 #include <linux/workqueue.h>
 #include <net/netns/vsock.h>
 #include <net/sock.h>
@@ -191,6 +192,9 @@ struct vsock_transport {
 
 	/* Zero-copy. */
 	bool (*msgzerocopy_allow)(void);
+
+	/* True if the G2H transport honours VSOCK_CMD_DEV_NETNS_SET. */
+	bool netns_assign_allow;
 };
 
 /**** CORE ****/
@@ -237,8 +241,16 @@ void vsock_remove_sock(struct vsock_sock *vsk);
 void vsock_for_each_connected_socket(const struct vsock_transport *transport,
 				     void (*fn)(struct sock *sk));
 int vsock_assign_transport(struct vsock_sock *vsk, struct vsock_sock *psk);
-bool vsock_find_cid(unsigned int cid);
+bool vsock_find_cid(struct net *net, unsigned int cid);
+void vsock_cid_lock(void);
+void vsock_cid_unlock(void);
+/* Caller must hold vsock_cid_lock(). */
+bool __vsock_find_cid(struct net *net, unsigned int cid);
 void vsock_linger(struct sock *sk);
+struct net *vsock_g2h_net_get(netns_tracker *tracker);
+bool vsock_g2h_net_eq(const struct net *net);
+bool vsock_g2h_net_reachable(struct net *net);
+bool vsock_maybe_set_connected(struct vsock_sock *vsk);
 
 /**** TAP ****/
 

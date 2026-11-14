@@ -529,6 +529,49 @@ their hosts. The behavior of VSOCK sockets in a network namespace is determined
 by the namespace's mode (``global`` or ``local``), which controls how CIDs
 (Context IDs) are allocated and how sockets interact across namespaces.
 
+In a guest, the vsock device owned by the guest-to-host (G2H) transport belongs
+to one network namespace at a time. The ``VSOCK_CMD_DEV_NETNS_SET`` command of
+the ``vsock`` netlink family, described in
+Documentation/netlink/specs/vsock.yaml, moves it to a namespace given by fd or
+PID, or else to the namespace the request was sent from. It requires
+``CAP_NET_ADMIN`` in the initial user namespace.
+The namespace's mode decides who may then use the device:
+
+- ``global`` - every ``global`` mode namespace may use it.
+- ``local`` - only that namespace may use it, which reserves the connection to
+  the host for it alone.
+
+The device starts out in init_net, so until the command is issued nothing has
+moved and no mode has changed.
+
+Support is transport dependent. A G2H transport that does not implement the
+move refuses the command with ``EOPNOTSUPP``. Of the in-tree guest transports,
+only virtio-vsock implements it.
+
+A namespace that cannot reach the device sees the vsock addresses it would see
+if no G2H transport were loaded: the device's CID is not one of its local CIDs,
+and with ``vsock_loopback`` loaded, ``VMADDR_CID_HOST`` (2) is served by
+loopback.
+
+Connections established before the move, from a namespace that can no longer
+reach the device, are closed with ``ECONNRESET``. Nothing is sent to the peer,
+which is what already happens when the device is removed altogether: the peer
+finds out on its next send, which no longer matches a socket and so is answered
+with a reset. A peer that only receives waits for its own timeout. A connection
+still being set up when the device moves is refused with a reset once the peer
+answers it.
+
+An assignment keeps the namespace alive, the same way an open socket does, so
+deleting that namespace does not move the device. Assigning the device to
+another namespace, such as init_net, is the only way to undo an assignment, and
+releases the reference the assignment held on the previous namespace.
+
+The move is refused with ``EADDRINUSE`` if a guest registered in the target
+namespace already answers to the device's CID, since the CID would otherwise
+name two different peers there. If a loaded H2G transport cannot check that,
+the move is refused with ``EOPNOTSUPP``. Of the in-tree host transports, only
+vhost-vsock can.
+
 ns_mode
 -------
 

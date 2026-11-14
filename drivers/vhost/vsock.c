@@ -830,6 +830,7 @@ static int vhost_vsock_dev_release(struct inode *inode, struct file *file)
 static int vhost_vsock_set_cid(struct vhost_vsock *vsock, u64 guest_cid)
 {
 	struct vhost_vsock *other;
+	int ret;
 
 	/* Refuse reserved CIDs */
 	if (guest_cid <= VMADDR_CID_HOST ||
@@ -843,15 +844,20 @@ static int vhost_vsock_set_cid(struct vhost_vsock *vsock, u64 guest_cid)
 	/* Refuse if CID is assigned to the guest->host transport (i.e. nested
 	 * VM), to make the loopback work.
 	 */
-	if (vsock_find_cid(guest_cid))
-		return -EADDRINUSE;
+	vsock_cid_lock();
+
+	if (__vsock_find_cid(vsock->net, guest_cid)) {
+		ret = -EADDRINUSE;
+		goto unlock;
+	}
 
 	/* Refuse if CID is already in use */
 	mutex_lock(&vhost_vsock_mutex);
 	other = vhost_vsock_get(guest_cid, vsock->net);
 	if (other && other != vsock) {
 		mutex_unlock(&vhost_vsock_mutex);
-		return -EADDRINUSE;
+		ret = -EADDRINUSE;
+		goto unlock;
 	}
 
 	if (vsock->guest_cid)
@@ -861,7 +867,12 @@ static int vhost_vsock_set_cid(struct vhost_vsock *vsock, u64 guest_cid)
 	hash_add_rcu(vhost_vsock_hash, &vsock->hash, vsock->guest_cid);
 	mutex_unlock(&vhost_vsock_mutex);
 
-	return 0;
+	ret = 0;
+
+unlock:
+	vsock_cid_unlock();
+
+	return ret;
 }
 
 static int vhost_vsock_set_features(struct vhost_vsock *vsock, u64 features)
