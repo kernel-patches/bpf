@@ -276,10 +276,8 @@ static int tsc2007_input_configure(struct tsc2007 *ts)
 					NULL, tsc2007_soft_irq,
 					IRQF_ONESHOT | IRQF_NO_AUTOEN,
 					dev->driver->name, ts);
-	if (err) {
-		dev_err(dev, "Failed to request irq %d: %d\n", ts->irq, err);
+	if (err)
 		return err;
-	}
 
 	err = input_register_device(input_dev);
 	if (err) {
