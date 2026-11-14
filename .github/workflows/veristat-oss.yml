@@ -1,0 +1,155 @@
+name: veristat_oss
+
+on:
+  workflow_call:
+    inputs:
+      arch:
+        required: true
+        type: string
+        description: The architecture to build against, e.g x86_64, aarch64, s390x...
+      toolchain_full:
+        required: true
+        type: string
+        description: Toolchain identifier, such as llvm-20
+      runs_on:
+        required: true
+        type: string
+        description: The runners to run the test on. This is a json string representing an array of labels.
+      llvm_version:
+        required: true
+        type: string
+
+jobs:
+  veristat:
+    name: veristat-oss
+    runs-on: ${{ fromJSON(inputs.runs_on) }}
+    timeout-minutes: 100
+    permissions:
+        contents: read
+    env:
+      KERNEL: LATEST
+      REPO_ROOT: ${{ github.workspace }}
+      REPO_PATH: ""
+      KBUILD_OUTPUT: kbuild-output/
+      ARCH_AND_TOOL: ${{ inputs.arch }}-${{ inputs.toolchain_full }}
+      LLVM_VERSION: ${{ inputs.llvm_version }}
+      CILIUM_BUILD_OUTPUT: ${{ github.workspace }}/cilium-build-output
+      CILIUM_BPF_RELEASE_REPO: 'puranjaymohan/cilium-bpf-progs'
+      SCX_BUILD_OUTPUT: ${{ github.workspace }}/scx-build-output
+      SCX_REVISION: 81738161a3818362e68b377e78264a918eacf928
+      VERISTAT_RESULTS: ${{ github.workspace }}/veristat-results
+      VERISTAT_BASELINE: ${{ github.workspace }}/veristat-baseline
+
+    steps:
+
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            .github
+            ci
+
+      - name: Download kernel build artifacts
+        uses: actions/download-artifact@v7
+        with:
+          name: vmlinux-${{ env.ARCH_AND_TOOL }}
+          path: .
+
+      - name: Untar kernel build artifacts
+        run: zstd -d -T0  vmlinux-${{ env.ARCH_AND_TOOL }}.tar.zst --stdout | tar -xf -
+
+      - name: Download cilium BPF programs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/download-gh-release.sh ${{ env.CILIUM_BPF_RELEASE_REPO }} ${{ env.CILIUM_BUILD_OUTPUT }}
+
+      - name: Build sched-ext/scx
+        uses: libbpf/ci/build-scx-scheds@v4
+        with:
+          output-dir: ${{ env.SCX_BUILD_OUTPUT }}
+
+      - name: Prepare veristat manifest
+        run: python3 ci/veristat/create_manifest.py --config ci/veristat/oss.json --output manifest.json
+
+      - name: Run veristat
+        uses: libbpf/ci/run-vmtest@v4
+        env:
+          VMTEST_SCRIPT: ${{ github.workspace }}/ci/veristat/run-veristat.sh
+          VERISTAT_BINARY: ${{ github.workspace }}/selftests/bpf/veristat
+          VERISTAT_MANIFEST: ${{ github.workspace }}/manifest.json
+        with:
+          arch: ${{ inputs.arch }}
+          vmlinuz: '${{ github.workspace }}/vmlinuz'
+          kernel-root: '.'
+
+      # Compare and cache the measured corpora even if another one failed.
+      - name: Collect measured corpora
+        id: state
+        if: ${{ !cancelled() }}
+        shell: python3 {0}
+        run: |
+          import json, os
+          from pathlib import Path
+
+          results = Path(os.environ["VERISTAT_RESULTS"])
+          measured = [
+              status.parent.name
+              for status in sorted(results.glob("*/status.json"))
+              if json.loads(status.read_text())["state"] == "measured"
+          ]
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"measured={' '.join(measured)}\n")
+
+      - name: Upload veristat results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: veristat-oss-${{ env.ARCH_AND_TOOL }}
+          if-no-files-found: warn
+          path: ${{ env.VERISTAT_RESULTS }}
+
+      # One cache entry holds the latest baseline of every corpus. A push
+      # overwrites only the corpora it measured, so a corpus that failed
+      # keeps its previous baseline.
+      - name: Restore veristat baseline
+        if: ${{ !cancelled() }}
+        uses: actions/cache/restore@v5
+        with:
+          key: ${{ github.base_ref || github.ref_name }}-${{ env.ARCH_AND_TOOL }}-baseline-veristat-oss-
+          restore-keys: |
+            ${{ github.base_ref || github.ref_name }}-${{ env.ARCH_AND_TOOL }}-baseline-veristat-oss
+          path: ${{ env.VERISTAT_BASELINE }}
+
+      - name: Compare with baseline
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        env:
+          MEASURED: ${{ steps.state.outputs.measured }}
+        run: |
+          status=0
+          for corpus in ${MEASURED}; do
+            echo "# ${corpus} corpus" | tee -a "${GITHUB_STEP_SUMMARY}"
+            BASELINE_PATH="${VERISTAT_BASELINE}/${corpus}.csv" \
+            VERISTAT_OUTPUT="${VERISTAT_RESULTS}/${corpus}/results.csv" \
+              ./ci/veristat/compare-veristat-results.sh || status=1
+            # A comparison table ends in </details> without a newline; a blank
+            # line keeps the next corpus heading out of that HTML block.
+            printf '\n\n' >> "${GITHUB_STEP_SUMMARY}"
+          done
+          exit ${status}
+
+      - name: Stage veristat baseline
+        if: ${{ !cancelled() && github.event_name == 'push' && steps.state.outputs.measured }}
+        env:
+          MEASURED: ${{ steps.state.outputs.measured }}
+        run: |
+          mkdir -p "${VERISTAT_BASELINE}"
+          for corpus in ${MEASURED}; do
+            cp "${VERISTAT_RESULTS}/${corpus}/results.csv" "${VERISTAT_BASELINE}/${corpus}.csv"
+          done
+
+      - name: Save veristat baseline
+        if: ${{ !cancelled() && github.event_name == 'push' && steps.state.outputs.measured }}
+        uses: actions/cache/save@v5
+        with:
+          key: ${{ github.ref_name }}-${{ env.ARCH_AND_TOOL }}-baseline-veristat-oss-${{ github.run_id }}
+          path: ${{ env.VERISTAT_BASELINE }}
