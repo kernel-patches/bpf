@@ -46,6 +46,28 @@ static const char *workload_dir(void)
 	return NULL;
 }
 
+/*
+ * statfs() only sees the top of a stacking filesystem. When /tmp is an
+ * overlayfs whose upper layer lives on tmpfs, as in virtme-ng guests, the
+ * check above passes but the written data still ends up as shmem. Ask the
+ * cgroup how the pages were actually charged.
+ */
+static bool charged_as_shmem(void)
+{
+	static char buf[8192];
+	unsigned long long shmem;
+	char *p;
+
+	if (read_cgroup_file(CG_PATH, "memory.stat", buf, sizeof(buf)))
+		return false;
+
+	p = strstr(buf, "\nshmem ");
+	if (!p || sscanf(p, "\nshmem %llu", &shmem) != 1)
+		return false;
+
+	return shmem >= FILE_SIZE / 2;
+}
+
 void test_memcg_proactive_reclaim(void)
 {
 	struct memcg_proactive_reclaim *skel = NULL;
@@ -98,6 +120,12 @@ void test_memcg_proactive_reclaim(void)
 			goto out;
 	if (!ASSERT_OK(fsync(data_fd), "fsync"))
 		goto out;
+
+	if (charged_as_shmem()) {
+		printf("%s:SKIP: %s is backed by shmem\n", __func__, dir);
+		test__skip();
+		goto out;
+	}
 
 	args.cgroup_id = cgroup_id;
 	args.size = FILE_SIZE;
