@@ -52,7 +52,7 @@ void test_rhash_timer(void)
 	LIBBPF_OPTS(bpf_test_run_opts, opts);
 	struct rhash_timer *skel = NULL;
 	cpu_set_t old_mask;
-	int map_fd = -1, arm_fd, cancel_fd;
+	int map_fd = -1, init_fd, cancel_fd;
 	bool affinity_set = false;
 	__u64 key = 1;
 	int attempt, err;
@@ -69,8 +69,8 @@ void test_rhash_timer(void)
 	map_fd = bpf_map__fd(skel->maps.timer_map);
 	if (!ASSERT_GE(map_fd, 0, "timer_map fd"))
 		goto out;
-	arm_fd = bpf_program__fd(skel->progs.arm_deleted_timer);
-	if (!ASSERT_GE(arm_fd, 0, "arm_deleted_timer fd"))
+	init_fd = bpf_program__fd(skel->progs.init_deleted_timer);
+	if (!ASSERT_GE(init_fd, 0, "init_deleted_timer fd"))
 		goto out;
 	cancel_fd = bpf_program__fd(skel->progs.cancel_recycled_timer);
 	if (!ASSERT_GE(cancel_fd, 0, "cancel_recycled_timer fd"))
@@ -81,28 +81,22 @@ void test_rhash_timer(void)
 		goto out;
 
 	for (attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-		err = run_prog(arm_fd, &opts);
+		err = run_prog(init_fd, &opts);
 		if (err) {
-			ASSERT_OK(err, "arm_deleted_timer");
+			ASSERT_OK(err, "init_deleted_timer");
 			goto out;
 		}
-		if (skel->bss->armed != attempt + 1) {
-			ASSERT_EQ(skel->bss->armed, attempt + 1, "armed");
+		if (skel->bss->initialized != attempt + 1) {
+			ASSERT_EQ(skel->bss->initialized, attempt + 1, "initialized");
 			goto out;
 		}
 		if (skel->bss->timer_init_err) {
 			ASSERT_OK(skel->bss->timer_init_err, "timer_init_err");
 			goto out;
 		}
-		if (skel->bss->timer_set_callback_err) {
-			ASSERT_OK(skel->bss->timer_set_callback_err,
-				  "timer_set_callback_err");
+		if (!ASSERT_EQ(skel->bss->timer_set_callback_err, -ENOENT,
+			       "deleted setter rejected"))
 			goto out;
-		}
-		if (skel->bss->timer_start_err) {
-			ASSERT_OK(skel->bss->timer_start_err, "timer_start_err");
-			goto out;
-		}
 
 		if ((attempt + 1) % RCU_SYNC_INTERVAL == 0) {
 			err = kern_sync_rcu();

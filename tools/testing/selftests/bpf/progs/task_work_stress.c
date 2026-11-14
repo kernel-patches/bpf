@@ -71,3 +71,20 @@ int delete_task_work(void *ctx)
 		__sync_fetch_and_add(&delete_success, 1);
 	return 0;
 }
+
+SEC("syscall")
+int schedule_deleted_task_work(void *ctx)
+{
+	struct elem empty = {}, *value;
+	int key = 0;
+
+	if (bpf_map_update_elem(&hmap, &key, &empty, BPF_NOEXIST))
+		return 1;
+	value = bpf_map_lookup_elem(&hmap, &key);
+	if (!value)
+		return 2;
+	if (bpf_map_delete_elem(&hmap, &key))
+		return 3;
+	return bpf_task_work_schedule_signal(bpf_get_current_task_btf(),
+					     &value->tw, &hmap, process_work);
+}

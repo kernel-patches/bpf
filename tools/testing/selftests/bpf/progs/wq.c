@@ -3,6 +3,7 @@
  */
 
 #include "bpf_experimental.h"
+#include <errno.h>
 #include <bpf/bpf_helpers.h>
 #include "bpf_misc.h"
 #include "../test_kmods/bpf_testmod_kfunc.h"
@@ -136,6 +137,25 @@ static int wq_cb_sleepable(void *map, int *key, void *value)
 	bpf_kfunc_call_test_sleepable();
 	ok_sleepable |= (1 << offset);
 	return 0;
+}
+
+SEC("syscall")
+__retval(-ENOENT)
+long test_deleted_wq(void *ctx)
+{
+	struct hmap_elem empty = {}, *value;
+	int key = 0;
+
+	if (bpf_map_update_elem(&hmap_malloc, &key, &empty, BPF_NOEXIST))
+		return 1;
+	value = bpf_map_lookup_elem(&hmap_malloc, &key);
+	if (!value)
+		return 2;
+	if (bpf_map_delete_elem(&hmap_malloc, &key))
+		return 3;
+	if (bpf_wq_init(&value->work, &hmap_malloc, 0))
+		return 4;
+	return bpf_wq_set_callback(&value->work, wq_callback, 0);
 }
 
 SEC("tc")
