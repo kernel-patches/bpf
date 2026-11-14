@@ -105,19 +105,6 @@
 static struct kmem_cache *skbuff_ext_cache __ro_after_init;
 #endif
 
-#define GRO_MAX_HEAD_PAD (GRO_MAX_HEAD + NET_SKB_PAD + NET_IP_ALIGN)
-#define SKB_SMALL_HEAD_SIZE SKB_HEAD_ALIGN(max(MAX_TCP_HEADER, \
-					       GRO_MAX_HEAD_PAD))
-
-/* SKB_SMALL_HEAD_CACHE_SIZE is the size used for the skbuff_small_head
- * kmem_cache. The non-power-of-2 padding is kept for historical reasons and
- * to avoid potential collisions with generic kmalloc bucket sizes.
- */
-#define SKB_SMALL_HEAD_CACHE_SIZE					\
-	(is_power_of_2(SKB_SMALL_HEAD_SIZE) ?			\
-		(SKB_SMALL_HEAD_SIZE + L1_CACHE_BYTES) :	\
-		SKB_SMALL_HEAD_SIZE)
-
 #define SKB_SMALL_HEAD_HEADROOM						\
 	SKB_WITH_OVERHEAD(SKB_SMALL_HEAD_CACHE_SIZE)
 
