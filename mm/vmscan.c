@@ -4788,6 +4788,9 @@ static int scan_folios(unsigned long nr_to_scan, struct lruvec *lruvec,
 		seq = lrugen->max_seq;
 
 	seq = lruvec_populated_min_seq(lruvec, type, sc->reclaim_idx + 1, seq);
+	if (seq < lrugen->min_seq[type])
+		return 0;
+
 	*scanned_seq = seq;
 	gen = lru_gen_from_seq(seq);
 	max_gen = lru_gen_from_seq(max_seq);
@@ -5272,7 +5275,7 @@ static bool try_to_shrink_lruvec(struct lruvec *lruvec, struct scan_control *sc)
 
 		if (!scanned) {
 			/* Retry once if aging advanced max_seq */
-			if (retried || new_seq == READ_ONCE(lruvec->lrugen.max_seq))
+			if (retried || max_seq == READ_ONCE(lruvec->lrugen.max_seq))
 				break;
 			retried = true;
 		}
