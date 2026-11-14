@@ -167,6 +167,7 @@ class OutputFormat:
 
         if self.out_mode in [self.OUTPUT_INCLUDE, self.OUTPUT_EXPORTED]:
             if name in self.function_table:
+                self.out_warnings(args)
                 return True
 
         if self.out_mode == self.OUTPUT_INTERNAL:

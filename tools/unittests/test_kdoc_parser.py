@@ -353,6 +353,77 @@ class ManFilterTail(unittest.TestCase):
         self.assertEqual(self.run_filter(export=True), "")
 
 
+class OutputFilterWarnings(unittest.TestCase):
+    """
+    The output step shows the warnings of the symbols it outputs, once.
+    """
+
+    source = dedent("""
+        /**
+         * foo - First function
+         */
+        int foo(int a) { return 0; };
+
+        /**
+         * bar - Second function
+         * @b: an argument
+         */
+        int bar(int b) { return 0; };
+    """)
+
+    def setUp(self):
+        self.config = MockKdocConfig()
+        kernel_doc = KernelDoc(self.config, "mock.c", CTransforms())
+
+        with patch('builtins.open', new_callable=mock_open,
+                   read_data=self.source):
+            with patch.object(self.config, 'warning'):
+                _, self.entries = kernel_doc.parse_kdoc()
+
+        self.out_style = ManFormat()
+        self.out_style.set_config(self.config)
+
+    def run_filter(self, **kwargs):
+        args = {"export": False, "internal": False, "symbol": None,
+                "nosymbol": None, "function_table": set(),
+                "enable_lineno": False, "no_doc_sections": False}
+        args.update(kwargs)
+
+        self.out_style.set_filter(**args)
+
+        with patch.object(self.config, 'warning') as warning:
+            self.out_style.output_symbols("mock.c", self.entries)
+
+        return [call.args[0] for call in warning.call_args_list]
+
+    def test_all_symbols(self):
+        """Without a filter, the warning of foo is shown."""
+        warnings = self.run_filter()
+
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("'a' not described in 'foo'", warnings[0])
+
+    def test_selected_symbol(self):
+        """The warning of a symbol selected by name is shown."""
+        warnings = self.run_filter(symbol=["foo"], function_table={"foo"})
+
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("'a' not described in 'foo'", warnings[0])
+
+    def test_exported_symbol(self):
+        """The warning of an exported symbol is shown."""
+        warnings = self.run_filter(export=True, function_table={"foo"})
+
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("'a' not described in 'foo'", warnings[0])
+
+    def test_other_symbol(self):
+        """The warning of a symbol that is not selected is not shown."""
+        warnings = self.run_filter(symbol=["bar"], function_table={"bar"})
+
+        self.assertEqual(warnings, [])
+
+
 class CToRest(unittest.TestCase):
     out_style = RestFormat()
     config = MockKdocConfig()
