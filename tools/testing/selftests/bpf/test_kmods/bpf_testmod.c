@@ -879,6 +879,8 @@ static __always_inline size_t testmod_inline_len(size_t len)
 	return len;
 }
 
+#include "bpf_testmod_retval.c"
+
 noinline ssize_t
 bpf_testmod_test_write(struct file *file, struct kobject *kobj,
 		      const struct bin_attribute *bin_attr,
@@ -892,7 +894,7 @@ bpf_testmod_test_write(struct file *file, struct kobject *kobj,
 
 	trace_bpf_testmod_test_write_bare_tp(current, &ctx);
 
-	return -EIO; /* always fail */
+	return bpf_testmod_retval_called(len) ?: -EIO; /* always fail */
 }
 EXPORT_SYMBOL(bpf_testmod_test_write);
 ALLOW_ERROR_INJECTION(bpf_testmod_test_write, ERRNO);
