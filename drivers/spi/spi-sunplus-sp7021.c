@@ -113,7 +113,6 @@ static int sp7021_spi_target_abort(struct spi_controller *ctlr)
 	struct sp7021_spi_ctlr *pspim = spi_controller_get_devdata(ctlr);
 
 	complete(&pspim->target_isr);
-	complete(&pspim->isr_done);
 	return 0;
 }
 
@@ -130,7 +129,7 @@ static int sp7021_spi_target_tx(struct spi_device *spi, struct spi_transfer *xfe
 	value = readl(pspim->s_base + SP7021_DATA_RDY_REG);
 	value |= SP7021_SLAVE_DATA_RDY;
 	writel(value, pspim->s_base + SP7021_DATA_RDY_REG);
-	if (wait_for_completion_interruptible(&pspim->isr_done)) {
+	if (wait_for_completion_interruptible(&pspim->target_isr)) {
 		dev_err(&spi->dev, "%s() wait_for_completion err\n", __func__);
 		return -EINTR;
 	}
@@ -142,12 +141,12 @@ static int sp7021_spi_target_rx(struct spi_device *spi, struct spi_transfer *xfe
 	struct sp7021_spi_ctlr *pspim = spi_controller_get_devdata(spi->controller);
 	u32 value;
 
-	reinit_completion(&pspim->isr_done);
+	reinit_completion(&pspim->target_isr);
 	value = SP7021_SLAVE_DMA_EN | FIELD_PREP(SP7021_SLAVE_DMA_CMD, 3);
 	writel(value, pspim->s_base + SP7021_SLAVE_DMA_CTRL_REG);
 	writel(xfer->len, pspim->s_base + SP7021_SLAVE_DMA_LENGTH_REG);
 	writel(xfer->rx_dma, pspim->s_base + SP7021_SLAVE_DMA_ADDR_REG);
-	if (wait_for_completion_interruptible(&pspim->isr_done)) {
+	if (wait_for_completion_interruptible(&pspim->target_isr)) {
 		dev_err(&spi->dev, "%s() wait_for_completion err\n", __func__);
 		return -EINTR;
 	}
