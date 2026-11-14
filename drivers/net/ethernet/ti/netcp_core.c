@@ -1327,7 +1327,7 @@ int netcp_txpipe_open(struct netcp_tx_pipe *tx_pipe)
 	struct device *dev = tx_pipe->netcp_device->device;
 	struct knav_dma_cfg config;
 	int ret = 0;
-	u8 name[16];
+	u8 name[40];
 
 	memset(&config, 0, sizeof(config));
 	config.direction = DMA_MEM_TO_DEV;
@@ -1584,7 +1584,7 @@ static int netcp_setup_navigator_resources(struct net_device *ndev)
 	struct knav_queue_notify_config notify_cfg;
 	struct knav_dma_cfg config;
 	u32 last_fdq = 0;
-	u8 name[16];
+	u8 name[40];
 	int ret;
 	int i;
 
