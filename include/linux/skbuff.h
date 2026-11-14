@@ -292,6 +292,13 @@
 			 SKB_DATA_ALIGN(sizeof(struct sk_buff)) +	\
 			 SKB_DATA_ALIGN(sizeof(struct skb_shared_info)))
 
+/* return estimated truesize allocated by alloc_skb(X) via kmalloc_reserve() */
+#define SKB_ALLOCSIZE(X)					\
+	((SKB_HEAD_ALIGN(X) <= SKB_SMALL_HEAD_CACHE_SIZE ?	\
+	  SKB_SMALL_HEAD_CACHE_SIZE :				\
+	  kmalloc_size_roundup(SKB_HEAD_ALIGN(X))) +		\
+	 SKB_DATA_ALIGN(sizeof(struct sk_buff)))
+
 struct net_device;
 struct scatterlist;
 struct pipe_inode_info;
