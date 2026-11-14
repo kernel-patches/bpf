@@ -1727,8 +1727,6 @@ retry:
 	}
 
 	io_req_set_res(req, ret, cflags);
-	if (ret < 0)
-		req_set_fail(req);
 	return IOU_COMPLETE;
 }
 

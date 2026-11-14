@@ -1526,6 +1526,19 @@ static inline int __io_issue_sqe(struct io_kiocb *req,
 	return ret;
 }
 
+static noinline void __io_req_fail_on_error(struct io_kiocb *req)
+{
+	req->cqe.res = io_fixup_restart_res(req->cqe.res);
+	req_set_fail(req);
+}
+
+/* Fail requests completing with an error, and fix up restart codes */
+static inline void io_req_fail_on_error(struct io_kiocb *req)
+{
+	if (unlikely(req->cqe.res < 0))
+		__io_req_fail_on_error(req);
+}
+
 static int io_issue_sqe(struct io_kiocb *req, unsigned int issue_flags)
 {
 	const struct io_issue_def *def = &io_issue_defs[req->opcode];
@@ -1537,11 +1550,7 @@ static int io_issue_sqe(struct io_kiocb *req, unsigned int issue_flags)
 	ret = __io_issue_sqe(req, issue_flags, def);
 
 	if (ret == IOU_COMPLETE) {
-		if (unlikely(req->cqe.res < 0)) {
-			if (req->cqe.res <= -ERESTARTSYS)
-				req->cqe.res = io_fixup_restart_res(req->cqe.res);
-			req_set_fail(req);
-		}
+		io_req_fail_on_error(req);
 		if (issue_flags & IO_URING_F_COMPLETE_DEFER)
 			io_req_complete_defer(req);
 		else
@@ -1575,6 +1584,8 @@ int io_poll_issue(struct io_kiocb *req, io_tw_token_t tw)
 		return -EFAULT;
 
 	ret = __io_issue_sqe(req, issue_flags, &io_issue_defs[req->opcode]);
+	if (ret == IOU_COMPLETE)
+		io_req_fail_on_error(req);
 
 	WARN_ON_ONCE(ret == IOU_ISSUE_SKIP_COMPLETE);
 	return ret;
