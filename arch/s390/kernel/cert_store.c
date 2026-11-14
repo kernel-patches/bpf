@@ -362,17 +362,13 @@ static struct key *find_cs_keyring(void)
 					&key_type_keyring, CERT_STORE_KEYRING_NAME,
 					false);
 	key_put(us_keyring);
-	if (!IS_ERR(cs_keyring_ref)) {
-		cs_keyring = key_ref_to_ptr(cs_keyring_ref);
-		key_ref_put(cs_keyring_ref);
-		goto found;
-	}
+	if (!IS_ERR(cs_keyring_ref))
+		return key_ref_to_ptr(cs_keyring_ref);
+
 	/* Search default locations: thread, process, session keyrings */
 	cs_keyring = request_key(&key_type_keyring, CERT_STORE_KEYRING_NAME, NULL);
 	if (IS_ERR(cs_keyring))
 		return NULL;
-	key_put(cs_keyring);
-found:
 	return cs_keyring;
 }
 
@@ -395,14 +391,16 @@ static void cleanup_cs_keys(void)
 
 	keyring_clear(cs_keyring);
 	key_invalidate(cs_keyring);
-	key_put(cs_keyring);
 
 	us_keyring = get_user_session_keyring();
-	if (IS_ERR(us_keyring))
+	if (IS_ERR(us_keyring)) {
+		key_put(cs_keyring);
 		return;
+	}
 
 	key_unlink(us_keyring, cs_keyring);
 	key_put(us_keyring);
+	key_put(cs_keyring);
 }
 
 static struct key *create_cs_keyring(void)
@@ -729,13 +727,12 @@ static int fill_cs_keyring(void)
 		goto cleanup_keys;
 
 	rc = add_certificates_to_keyring(vcssb, cs_keyring);
+	key_put(cs_keyring);
 	if (rc)
-		goto cleanup_cs_keyring;
+		goto cleanup_keys;
 
 	goto out;
 
-cleanup_cs_keyring:
-	key_put(cs_keyring);
 cleanup_keys:
 	cleanup_cs_keys();
 out:
