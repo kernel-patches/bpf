@@ -291,7 +291,7 @@ static int smsc95xx_mdiobus_reset(struct mii_bus *bus)
 reset_out:
 	mutex_unlock(&dev->phy_mutex);
 
-	return 0;
+	return ret;
 }
 
 static int smsc95xx_mdiobus_read(struct mii_bus *bus, int phy_id, int idx)
