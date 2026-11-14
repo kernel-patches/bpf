@@ -82,7 +82,7 @@ u32 tsc2007_calculate_resistance(struct tsc2007 *tsc, struct ts_event *tc)
 
 	if (rt > U32_MAX)
 		return U32_MAX;
-	return (u32)rt;
+	return rt;
 }
 
 bool tsc2007_is_pen_down(struct tsc2007 *ts)
