@@ -1632,6 +1632,7 @@ void io_wq_submit_work(struct io_wq_work *work)
 	struct io_kiocb *req = container_of(work, struct io_kiocb, work);
 	const struct io_issue_def *def = &io_issue_defs[req->opcode];
 	unsigned int issue_flags = IO_URING_F_UNLOCKED | IO_URING_F_IOWQ;
+	io_req_flags_t multishot_flags = REQ_F_MULTISHOT|REQ_F_APOLL_MULTISHOT;
 	bool needs_poll = false;
 	int ret = 0, err = -ECANCELED;
 
@@ -1662,7 +1663,7 @@ fail:
 	 * Don't allow any multishot execution from io-wq. It's more restrictive
 	 * than necessary and also cleaner.
 	 */
-	if (req->flags & (REQ_F_MULTISHOT|REQ_F_APOLL_MULTISHOT)) {
+	if (req->flags & multishot_flags) {
 		err = -EBADFD;
 		if (!io_file_can_poll(req))
 			goto fail;
@@ -1673,7 +1674,7 @@ fail:
 				goto fail;
 			return;
 		} else {
-			req->flags &= ~(REQ_F_APOLL_MULTISHOT|REQ_F_MULTISHOT);
+			req->flags &= ~multishot_flags;
 		}
 	}
 
