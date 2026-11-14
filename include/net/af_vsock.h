@@ -250,6 +250,7 @@ void vsock_linger(struct sock *sk);
 struct net *vsock_g2h_net_get(netns_tracker *tracker);
 bool vsock_g2h_net_eq(const struct net *net);
 bool vsock_g2h_net_reachable(struct net *net);
+bool vsock_g2h_reachable_sk(struct vsock_sock *vsk);
 bool vsock_maybe_set_connected(struct vsock_sock *vsk);
 
 /**** TAP ****/

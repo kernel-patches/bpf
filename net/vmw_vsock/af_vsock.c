@@ -921,13 +921,17 @@ bool vsock_g2h_net_reachable(struct net *net)
 }
 EXPORT_SYMBOL_GPL(vsock_g2h_net_reachable);
 
-static bool vsock_g2h_reachable_sk(struct vsock_sock *vsk)
+/* True if @vsk can reach the g2h device, or its transport ignores namespace
+ * assignment.
+ */
+bool vsock_g2h_reachable_sk(struct vsock_sock *vsk)
 {
 	if (!vsock_net_assignable(vsk->transport))
 		return true;
 
 	return vsock_g2h_net_reachable(sock_net(sk_vsock(vsk)));
 }
+EXPORT_SYMBOL_GPL(vsock_g2h_reachable_sk);
 
 /* Move @vsk to TCP_ESTABLISHED and into the connected table, unless the device
  * has moved to a namespace @vsk cannot reach. Returns false without doing
