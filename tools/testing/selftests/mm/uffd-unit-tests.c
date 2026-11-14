@@ -2124,8 +2124,28 @@ static void uffd_move_test(uffd_global_test_opts_t *gopts, uffd_test_args_t *tar
 	uffd_move_test_common(gopts, targs, gopts->page_size, uffd_move_handle_fault);
 }
 
+/*
+ * A PMD-sized UFFDIO_MOVE can also move PTEs. Make sure these tests
+ * start with a huge PMD, rather than passing through the PTE path.
+ */
+static bool uffd_move_pmd_ready(uffd_global_test_opts_t *gopts)
+{
+	unsigned long pmd_size = pmd_psize();
+	char *src = ALIGN_UP(gopts->area_src, pmd_size);
+
+	if (madvise(src, pmd_size, MADV_COLLAPSE) ||
+	    !check_huge_anon(src, pmd_size, 1, pmd_size)) {
+		uffd_test_skip("could not obtain a huge PMD for the source");
+		return false;
+	}
+
+	return true;
+}
+
 static void uffd_move_pmd_test(uffd_global_test_opts_t *gopts, uffd_test_args_t *targs)
 {
+	if (!uffd_move_pmd_ready(gopts))
+		return;
 	if (madvise(gopts->area_dst, gopts->nr_pages * gopts->page_size, MADV_HUGEPAGE))
 		err("madvise(MADV_HUGEPAGE) failure");
 	uffd_move_test_common(gopts, targs, pmd_psize(),
@@ -2225,6 +2245,8 @@ static void uffd_move_pmd_huge_zeropage_test(uffd_global_test_opts_t *gopts,
 
 static void uffd_move_pmd_split_test(uffd_global_test_opts_t *gopts, uffd_test_args_t *targs)
 {
+	if (!uffd_move_pmd_ready(gopts))
+		return;
 	if (madvise(gopts->area_dst, gopts->nr_pages * gopts->page_size, MADV_NOHUGEPAGE))
 		err("madvise(MADV_NOHUGEPAGE) failure");
 	uffd_move_test_common(gopts, targs, pmd_psize(),
@@ -2493,7 +2515,8 @@ static int set_pmd_pagesize_nr_pages(uffd_global_test_opts_t *gopts, const char 
 		return -1;
 	}
 
-	gopts->nr_pages = (2 * pmd_pagesize) / gopts->page_size;
+	gopts->nr_pages = MAX(UFFD_TEST_MEM_SIZE, 2 * pmd_pagesize) /
+			  gopts->page_size;
 
 	return 0;
 }
