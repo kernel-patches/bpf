@@ -179,8 +179,6 @@ int io_openat2(struct io_kiocb *req, unsigned int issue_flags)
 						open->file_slot);
 err:
 	req->flags &= ~REQ_F_NEED_CLEANUP;
-	if (ret < 0)
-		req_set_fail(req);
 	io_req_set_res(req, ret, 0);
 	return IOU_COMPLETE;
 }
@@ -266,8 +264,6 @@ int io_close(struct io_kiocb *req, unsigned int issue_flags)
 	/* No ->flush() or already async, safely close from here */
 	ret = filp_close(file, current->files);
 err:
-	if (ret < 0)
-		req_set_fail(req);
 	io_req_set_res(req, ret, 0);
 	return IOU_COMPLETE;
 }
@@ -309,8 +305,6 @@ int io_install_fixed_fd(struct io_kiocb *req, unsigned int issue_flags)
 
 	ifi = io_kiocb_to_cmd(req, struct io_fixed_install);
 	ret = receive_fd(req->file, NULL, ifi->o_flags);
-	if (ret < 0)
-		req_set_fail(req);
 	io_req_set_res(req, ret, 0);
 	return IOU_COMPLETE;
 }

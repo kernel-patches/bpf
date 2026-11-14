@@ -591,8 +591,6 @@ int io_timeout_remove(struct io_kiocb *req, unsigned int issue_flags)
 		raw_spin_unlock_irq(&ctx->timeout_lock);
 	}
 
-	if (ret < 0)
-		req_set_fail(req);
 	io_req_set_res(req, ret, 0);
 	return IOU_COMPLETE;
 }

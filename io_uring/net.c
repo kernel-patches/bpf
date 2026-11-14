@@ -1824,7 +1824,6 @@ int io_socket(struct io_kiocb *req, unsigned int issue_flags)
 			return -EAGAIN;
 		if (ret == -ERESTARTSYS)
 			ret = -EINTR;
-		req_set_fail(req);
 	} else if (!fixed) {
 		fd_install(fd, file);
 		ret = fd;
@@ -1910,8 +1909,6 @@ get_sock_err:
 	if (ret == -ERESTARTSYS)
 		ret = -EINTR;
 out:
-	if (ret < 0)
-		req_set_fail(req);
 	io_req_set_res(req, ret, 0);
 	return IOU_COMPLETE;
 }
@@ -1970,10 +1967,8 @@ int io_bind(struct io_kiocb *req, unsigned int issue_flags)
 		return -ENOTSOCK;
 
 	ret = __sys_bind_socket(sock, addr, bind->addr_len);
-	if (ret < 0)
-		req_set_fail(req);
 	io_req_set_res(req, ret, 0);
-	return 0;
+	return IOU_COMPLETE;
 }
 
 int io_listen_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
@@ -1998,10 +1993,8 @@ int io_listen(struct io_kiocb *req, unsigned int issue_flags)
 		return -ENOTSOCK;
 
 	ret = __sys_listen_socket(sock, listen->backlog);
-	if (ret < 0)
-		req_set_fail(req);
 	io_req_set_res(req, ret, 0);
-	return 0;
+	return IOU_COMPLETE;
 }
 
 void io_netmsg_cache_free(const void *entry)

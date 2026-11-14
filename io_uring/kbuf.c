@@ -623,8 +623,6 @@ int io_manage_buffers_legacy(struct io_kiocb *req, unsigned int issue_flags)
 	ret = __io_manage_buffers_legacy(req, bl);
 	io_ring_submit_unlock(ctx, issue_flags);
 
-	if (ret < 0)
-		req_set_fail(req);
 	io_req_set_res(req, ret, 0);
 	return IOU_COMPLETE;
 }

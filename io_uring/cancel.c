@@ -262,8 +262,6 @@ int io_async_cancel(struct io_kiocb *req, unsigned int issue_flags)
 
 	ret = __io_async_cancel(&cd, tctx, issue_flags);
 done:
-	if (ret < 0)
-		req_set_fail(req);
 	io_req_set_res(req, ret, 0);
 	return IOU_COMPLETE;
 }

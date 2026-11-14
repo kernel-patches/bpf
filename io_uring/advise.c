@@ -101,8 +101,6 @@ int io_fadvise(struct io_kiocb *req, unsigned int issue_flags)
 	WARN_ON_ONCE(issue_flags & IO_URING_F_NONBLOCK && io_fadvise_force_async(fa));
 
 	ret = vfs_fadvise(req->file, fa->offset, fa->len, fa->advice);
-	if (ret < 0)
-		req_set_fail(req);
 	io_req_set_res(req, ret, 0);
 	return IOU_COMPLETE;
 }

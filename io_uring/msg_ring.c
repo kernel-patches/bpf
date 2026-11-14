@@ -323,11 +323,8 @@ int io_msg_ring(struct io_kiocb *req, unsigned int issue_flags)
 	}
 
 done:
-	if (ret < 0) {
-		if (ret == -EAGAIN || ret == IOU_ISSUE_SKIP_COMPLETE)
-			return ret;
-		req_set_fail(req);
-	}
+	if (ret == -EAGAIN || ret == IOU_ISSUE_SKIP_COMPLETE)
+		return ret;
 	io_req_set_res(req, ret, 0);
 	return IOU_COMPLETE;
 }
