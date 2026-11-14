@@ -94,6 +94,8 @@ readonly TEST_NAMES=(
 	ns_guest_assign_g2h_netns_host_connect_ok
 	ns_guest_assign_g2h_netns_pins_ns_ok
 	ns_guest_assign_g2h_netns_old_conn_send_fails
+	ns_guest_assign_g2h_netns_no_cap_net_admin_fails
+	ns_guest_assign_g2h_netns_unpriv_user_ns_fails
 )
 readonly TEST_DESCS=(
 	# vm_server_host_client
@@ -191,6 +193,12 @@ readonly TEST_DESCS=(
 
 	# ns_guest_assign_g2h_netns_old_conn_send_fails
 	"Check connections made before the assign stop sending once they lose the device."
+
+	# ns_guest_assign_g2h_netns_no_cap_net_admin_fails
+	"Check assigning the guest's vsock device to a namespace needs CAP_NET_ADMIN."
+
+	# ns_guest_assign_g2h_netns_unpriv_user_ns_fails
+	"Check an unprivileged user cannot claim the guest's vsock device via a user ns."
 )
 
 readonly USE_SHARED_VM=(
@@ -204,6 +212,8 @@ readonly USE_SHARED_VM=(
 	ns_guest_assign_g2h_netns_host_connect_ok
 	ns_guest_assign_g2h_netns_pins_ns_ok
 	ns_guest_assign_g2h_netns_old_conn_send_fails
+	ns_guest_assign_g2h_netns_no_cap_net_admin_fails
+	ns_guest_assign_g2h_netns_unpriv_user_ns_fails
 )
 readonly NS_MODES=("local" "global")
 
@@ -367,13 +377,22 @@ check_deps() {
 
 check_ns_guest_deps() {
 	local tname=$1
+	local deps="unshare python3"
 	local dep
 
 	if [[ ! "${tname}" =~ ^ns_guest_ ]]; then
 		return 0
 	fi
 
-	for dep in unshare python3; do
+	# test-specific guest dep checks
+	case "${tname}" in
+	ns_guest_assign_g2h_netns_no_cap_net_admin_fails | \
+	ns_guest_assign_g2h_netns_unpriv_user_ns_fails)
+		deps="${deps} setpriv"
+		;;
+	esac
+
+	for dep in ${deps}; do
 		if [[ ! -x $(command -v "${dep}") ]]; then
 			log_host "no ${dep} for test ${tname}"
 			return 1
@@ -1949,6 +1968,44 @@ test_ns_guest_assign_g2h_netns_pins_ns_ok() {
 	fi
 
 	return "${KSFT_PASS}"
+}
+
+check_assign_g2h_eperm() {
+	local wrapper=$1
+	local out
+
+	if out=$(vm_ssh "init_ns" -- "${wrapper}" python3 /root/ynl/cli.py \
+		--no-schema --spec /root/ynl/vsock.yaml \
+		--do dev-netns-set 2>&1); then
+		log_host "assign unexpectedly succeeded under '${wrapper}'"
+		return "${KSFT_FAIL}"
+	fi
+
+	if [[ "${out}" != *"Operation not permitted"* ]]; then
+		log_host "no EPERM under '${wrapper}': [${out}]"
+		return "${KSFT_FAIL}"
+	fi
+
+	return "${KSFT_PASS}"
+}
+
+test_ns_guest_assign_g2h_netns_no_cap_net_admin_fails() {
+	check_assign_g2h_eperm "unshare -n setpriv --bounding-set=-net_admin"
+}
+
+test_ns_guest_assign_g2h_netns_unpriv_user_ns_fails() {
+	local unpriv_uid=65534
+	local unpriv
+
+	unpriv="setpriv --reuid=${unpriv_uid} --regid=${unpriv_uid}"
+	unpriv="${unpriv} --clear-groups"
+
+	if ! vm_ssh "init_ns" -- "${unpriv} unshare -Urn true"; then
+		log_host "unprivileged user namespaces unavailable, skipping"
+		return "${KSFT_SKIP}"
+	fi
+
+	check_assign_g2h_eperm "${unpriv} unshare -Urn"
 }
 
 shared_vm_test() {
