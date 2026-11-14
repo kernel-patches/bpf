@@ -2486,7 +2486,7 @@ static void uffd_mmap_changing_test(uffd_global_test_opts_t *gopts, uffd_test_ar
 
 static int set_pmd_pagesize_nr_pages(uffd_global_test_opts_t *gopts, const char **errmsg)
 {
-	uint64_t pmd_pagesize = read_pmd_pagesize();
+	uint64_t pmd_pagesize = pmd_psize();
 	if (!pmd_pagesize) {
 		if(errmsg)
 			*errmsg = "failed to retrieve pmd page size";
