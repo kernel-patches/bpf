@@ -194,7 +194,7 @@ int io_uring_cmd_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 		return -ENOMEM;
 	ac = req->async_data;
 	if (ac->vec.iovec)
-		req->flags |= REQ_F_NEED_CLEANUP;
+		io_req_set_flags(req, REQ_F_NEED_CLEANUP);
 	ioucmd->sqe = sqe;
 	return 0;
 }
@@ -245,12 +245,12 @@ int io_uring_cmd(struct io_kiocb *req, unsigned int issue_flags)
 	if (io_is_compat(ctx))
 		issue_flags |= IO_URING_F_COMPAT;
 	if (ctx->flags & IORING_SETUP_IOPOLL && file->f_op->uring_cmd_iopoll) {
-		req->flags |= REQ_F_IOPOLL;
+		io_req_set_flags(req, REQ_F_IOPOLL);
 		issue_flags |= IO_URING_F_IOPOLL;
 		req->iopoll_completed = 0;
 		if (ctx->flags & IORING_SETUP_HYBRID_IOPOLL) {
 			/* make sure every req only blocks once */
-			req->flags &= ~REQ_F_IOPOLL_STATE;
+			io_req_clear_flags(req, REQ_F_IOPOLL_STATE);
 			req->iopoll_start = ktime_get_ns();
 		}
 	}
@@ -262,8 +262,6 @@ int io_uring_cmd(struct io_kiocb *req, unsigned int issue_flags)
 	}
 	if (ret == -EIOCBQUEUED)
 		return ret;
-	if (ret < 0)
-		req_set_fail(req);
 	io_req_uring_cleanup(req, issue_flags);
 	io_req_set_res(req, ret, 0);
 	return IOU_COMPLETE;
@@ -321,7 +319,7 @@ int io_cmd_poll_multishot(struct io_uring_cmd *cmd,
 	if (likely(req->flags & REQ_F_APOLL_MULTISHOT))
 		return 0;
 
-	req->flags |= REQ_F_APOLL_MULTISHOT;
+	io_req_set_flags(req, REQ_F_APOLL_MULTISHOT);
 	mask &= ~EPOLLONESHOT;
 
 	ret = io_arm_apoll(req, issue_flags, mask);

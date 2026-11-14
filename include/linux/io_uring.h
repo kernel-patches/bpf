@@ -7,13 +7,38 @@
 #include <linux/xarray.h>
 #include <uapi/linux/io_uring.h>
 
+/*
+ * clang likes to set/clear flag bits using the narrowest possible or/and
+ * instructions (e.g. an 8-bit or if all flag bits are in the same byte).
+ * This causes store-to-load forwarding failures on subsequent wider loads
+ * of req->flags.
+ * Store to req->flags using volatile writes to prevent this "optimization".
+ */
+static inline void io_req_switch_flags(struct io_kiocb *req,
+				       io_req_flags_t clear_flags,
+				       io_req_flags_t set_flags)
+{
+	WRITE_ONCE(req->flags, (req->flags | set_flags) & ~clear_flags);
+}
+
+static inline void io_req_set_flags(struct io_kiocb *req, io_req_flags_t flags)
+{
+	io_req_switch_flags(req, 0, flags);
+}
+
+static inline void io_req_clear_flags(struct io_kiocb *req,
+				      io_req_flags_t flags)
+{
+	io_req_switch_flags(req, flags, 0);
+}
+
 static inline void req_set_fail(struct io_kiocb *req)
 {
-	req->flags |= REQ_F_FAIL;
-	if (req->flags & REQ_F_CQE_SKIP) {
-		req->flags &= ~REQ_F_CQE_SKIP;
-		req->flags |= REQ_F_SKIP_LINK_CQES;
-	}
+	io_req_flags_t flags = REQ_F_FAIL;
+
+	if (req->flags & REQ_F_CQE_SKIP)
+		flags |= REQ_F_SKIP_LINK_CQES;
+	io_req_switch_flags(req, REQ_F_CQE_SKIP, flags);
 }
 
 static inline void io_req_set_res(struct io_kiocb *req, s32 res, u32 cflags)

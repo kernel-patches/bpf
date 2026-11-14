@@ -30,7 +30,7 @@ int io_ftruncate_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 
 	ft->len = READ_ONCE(sqe->off);
 
-	req->flags |= REQ_F_FORCE_ASYNC;
+	io_req_set_flags(req, REQ_F_FORCE_ASYNC);
 	return 0;
 }
 

@@ -328,7 +328,7 @@ static void io_clean_op(struct io_kiocb *req)
 		kfree(req->async_data);
 		req->async_data = NULL;
 	}
-	req->flags &= ~IO_REQ_CLEAN_FLAGS;
+	io_req_clear_flags(req, IO_REQ_CLEAN_FLAGS);
 }
 
 /*
@@ -339,7 +339,7 @@ static void io_clean_op(struct io_kiocb *req)
 inline void io_req_track_inflight(struct io_kiocb *req)
 {
 	if (!(req->flags & REQ_F_INFLIGHT)) {
-		req->flags |= REQ_F_INFLIGHT;
+		io_req_set_flags(req, REQ_F_INFLIGHT);
 		atomic_inc(&req->tctx->inflight_tracked);
 	}
 }
@@ -349,8 +349,7 @@ static struct io_kiocb *__io_prep_linked_timeout(struct io_kiocb *req)
 	if (WARN_ON_ONCE(!req->link))
 		return NULL;
 
-	req->flags &= ~REQ_F_ARM_LTIMEOUT;
-	req->flags |= REQ_F_LINK_TIMEOUT;
+	io_req_switch_flags(req, REQ_F_ARM_LTIMEOUT, REQ_F_LINK_TIMEOUT);
 
 	/* linked timeouts should have two refs once prep'ed */
 	io_req_set_refcount(req);
@@ -363,7 +362,7 @@ static void io_prep_async_work(struct io_kiocb *req)
 	const struct io_issue_def *def = &io_issue_defs[req->opcode];
 
 	if (!(req->flags & REQ_F_CREDS)) {
-		req->flags |= REQ_F_CREDS;
+		io_req_set_flags(req, REQ_F_CREDS);
 		req->creds = get_current_cred();
 	}
 
@@ -373,7 +372,7 @@ static void io_prep_async_work(struct io_kiocb *req)
 		atomic_or(IO_WQ_WORK_CONCURRENT, &req->work.flags);
 
 	if (req->file && !(req->flags & REQ_F_FIXED_FILE))
-		req->flags |= io_file_get_flags(req->file);
+		io_req_set_flags(req, io_file_get_flags(req->file));
 
 	if (req->file && (req->flags & REQ_F_ISREG)) {
 		bool should_hash = def->hash_reg_file;
@@ -1037,7 +1036,7 @@ defer_complete:
 	 * which holds a reference. Hence it can't be the last put. The CQE
 	 * has been posted, last put frees it.
 	 */
-	req->flags |= REQ_F_CQE_SKIP;
+	io_req_set_flags(req, REQ_F_CQE_SKIP);
 	req_ref_put(req);
 }
 
@@ -1090,7 +1089,7 @@ __cold bool __io_alloc_req_refill(struct io_ring_ctx *ctx)
 __cold void io_free_req(struct io_kiocb *req)
 {
 	/* refs were already put, restore them for io_req_task_complete() */
-	req->flags &= ~REQ_F_REFCOUNT;
+	io_req_clear_flags(req, REQ_F_REFCOUNT);
 	req->io_task_work.func = io_req_task_complete;
 	io_req_task_work_add(req);
 }
@@ -1187,14 +1186,14 @@ static void io_free_batch_list(struct io_ring_ctx *ctx,
 		if (unlikely(req->flags & IO_REQ_CLEAN_SLOW_FLAGS)) {
 			if (req->flags & REQ_F_REISSUE) {
 				node = req->comp_list.next;
-				req->flags &= ~REQ_F_REISSUE;
+				io_req_clear_flags(req, REQ_F_REISSUE);
 				io_queue_iowq(req);
 				continue;
 			}
 			if (req->flags & REQ_F_REFCOUNT) {
 				node = req->comp_list.next;
 				/* CQE posted, the last put only frees */
-				req->flags |= REQ_F_CQE_SKIP;
+				io_req_set_flags(req, REQ_F_CQE_SKIP);
 				if (!req_ref_put_and_test(req))
 					continue;
 			}
@@ -1204,7 +1203,7 @@ static void io_free_batch_list(struct io_ring_ctx *ctx,
 				if (apoll->double_poll)
 					kfree(apoll->double_poll);
 				io_cache_free(&ctx->apoll_cache, apoll);
-				req->flags &= ~REQ_F_POLLED;
+				io_req_clear_flags(req, REQ_F_POLLED);
 			}
 			if (req->flags & IO_REQ_LINK_FLAGS)
 				io_queue_next(req);
@@ -1526,6 +1525,19 @@ static inline int __io_issue_sqe(struct io_kiocb *req,
 	return ret;
 }
 
+static noinline void __io_req_fail_on_error(struct io_kiocb *req)
+{
+	req->cqe.res = io_fixup_restart_res(req->cqe.res);
+	req_set_fail(req);
+}
+
+/* Fail requests completing with an error, and fix up restart codes */
+static inline void io_req_fail_on_error(struct io_kiocb *req)
+{
+	if (unlikely(req->cqe.res < 0))
+		__io_req_fail_on_error(req);
+}
+
 static int io_issue_sqe(struct io_kiocb *req, unsigned int issue_flags)
 {
 	const struct io_issue_def *def = &io_issue_defs[req->opcode];
@@ -1537,11 +1549,7 @@ static int io_issue_sqe(struct io_kiocb *req, unsigned int issue_flags)
 	ret = __io_issue_sqe(req, issue_flags, def);
 
 	if (ret == IOU_COMPLETE) {
-		if (unlikely(req->cqe.res < 0)) {
-			if (req->cqe.res <= -ERESTARTSYS)
-				req->cqe.res = io_fixup_restart_res(req->cqe.res);
-			req_set_fail(req);
-		}
+		io_req_fail_on_error(req);
 		if (issue_flags & IO_URING_F_COMPLETE_DEFER)
 			io_req_complete_defer(req);
 		else
@@ -1575,6 +1583,8 @@ int io_poll_issue(struct io_kiocb *req, io_tw_token_t tw)
 		return -EFAULT;
 
 	ret = __io_issue_sqe(req, issue_flags, &io_issue_defs[req->opcode]);
+	if (ret == IOU_COMPLETE)
+		io_req_fail_on_error(req);
 
 	WARN_ON_ONCE(ret == IOU_ISSUE_SKIP_COMPLETE);
 	return ret;
@@ -1621,6 +1631,7 @@ void io_wq_submit_work(struct io_wq_work *work)
 	struct io_kiocb *req = container_of(work, struct io_kiocb, work);
 	const struct io_issue_def *def = &io_issue_defs[req->opcode];
 	unsigned int issue_flags = IO_URING_F_UNLOCKED | IO_URING_F_IOWQ;
+	io_req_flags_t multishot_flags = REQ_F_MULTISHOT|REQ_F_APOLL_MULTISHOT;
 	bool needs_poll = false;
 	int ret = 0, err = -ECANCELED;
 
@@ -1651,7 +1662,7 @@ fail:
 	 * Don't allow any multishot execution from io-wq. It's more restrictive
 	 * than necessary and also cleaner.
 	 */
-	if (req->flags & (REQ_F_MULTISHOT|REQ_F_APOLL_MULTISHOT)) {
+	if (req->flags & multishot_flags) {
 		err = -EBADFD;
 		if (!io_file_can_poll(req))
 			goto fail;
@@ -1662,7 +1673,7 @@ fail:
 				goto fail;
 			return;
 		} else {
-			req->flags &= ~(REQ_F_APOLL_MULTISHOT|REQ_F_MULTISHOT);
+			io_req_clear_flags(req, multishot_flags);
 		}
 	}
 
@@ -1727,7 +1738,7 @@ inline struct file *io_file_get_fixed(struct io_kiocb *req, int fd,
 	if (node) {
 		node->refs++;
 		req->file_node = node;
-		req->flags |= io_slot_flags(node);
+		io_req_set_flags(req, io_slot_flags(node));
 		file = io_slot_file(node);
 	}
 	io_ring_submit_unlock(ctx, issue_flags);
@@ -1752,7 +1763,7 @@ static int io_req_sqe_copy(struct io_kiocb *req, unsigned int issue_flags)
 
 	if (req->flags & REQ_F_SQE_COPIED)
 		return 0;
-	req->flags |= REQ_F_SQE_COPIED;
+	io_req_set_flags(req, REQ_F_SQE_COPIED);
 	if (!def->sqe_copy)
 		return 0;
 	if (WARN_ON_ONCE(!(issue_flags & IO_URING_F_INLINE)))
@@ -1811,8 +1822,7 @@ static void io_queue_sqe_fallback(struct io_kiocb *req)
 		 * We don't submit, fail them all, for that replace hardlinks
 		 * with normal links. Extra REQ_F_LINK is tolerated.
 		 */
-		req->flags &= ~REQ_F_HARDLINK;
-		req->flags |= REQ_F_LINK;
+		io_req_switch_flags(req, REQ_F_HARDLINK, REQ_F_LINK);
 		io_req_defer_failed(req, req->cqe.res);
 	} else {
 		/* can't fail with IO_URING_F_INLINE */
@@ -1862,7 +1872,7 @@ static void io_init_drain(struct io_ring_ctx *ctx)
 		 * REQ_F_IO_DRAIN will be maintained for every request of our
 		 * link.
 		 */
-		head->flags |= REQ_F_IO_DRAIN | REQ_F_FORCE_ASYNC;
+		io_req_set_flags(head, REQ_F_IO_DRAIN | REQ_F_FORCE_ASYNC);
 		ctx->int_flags |= IO_RING_F_DRAIN_NEXT;
 	}
 }
@@ -1950,12 +1960,12 @@ static int io_init_req(struct io_ring_ctx *ctx, struct io_kiocb *req,
 			return io_init_fail_req(req, -EACCES);
 		/* knock it to the slow queue path, will be drained there */
 		if (ctx->int_flags & IO_RING_F_DRAIN_ACTIVE)
-			req->flags |= REQ_F_FORCE_ASYNC;
+			io_req_set_flags(req, REQ_F_FORCE_ASYNC);
 		/* if there is no link, we're at "next" request and need to drain */
 		if (unlikely(ctx->int_flags & IO_RING_F_DRAIN_NEXT) && !ctx->submit_state.link.head) {
 			ctx->int_flags &= ~IO_RING_F_DRAIN_NEXT;
 			ctx->int_flags |= IO_RING_F_DRAIN_ACTIVE;
-			req->flags |= REQ_F_IO_DRAIN | REQ_F_FORCE_ASYNC;
+			io_req_set_flags(req, REQ_F_IO_DRAIN|REQ_F_FORCE_ASYNC);
 		}
 	}
 
@@ -1993,7 +2003,7 @@ static int io_init_req(struct io_ring_ctx *ctx, struct io_kiocb *req,
 			put_cred(req->creds);
 			return io_init_fail_req(req, ret);
 		}
-		req->flags |= REQ_F_CREDS;
+		io_req_set_flags(req, REQ_F_CREDS);
 	}
 
 	return def->prep(req, sqe);

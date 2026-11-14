@@ -243,7 +243,7 @@ int io_futexv_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 	}
 
 	iof->futexv_unqueued = 0;
-	req->flags |= REQ_F_ASYNC_DATA;
+	io_req_set_flags(req, REQ_F_ASYNC_DATA);
 	req->async_data = ifd;
 	return 0;
 }
@@ -272,12 +272,9 @@ int io_futexv_wait(struct io_kiocb *req, unsigned int issue_flags)
 
 	ret = futex_wait_multiple_setup(ifd->futexv, iof->futex_nr, &woken);
 
-	/*
-	 * Error case, ret is < 0. Mark the request as failed.
-	 */
+	/* Error case, the core marks the request as failed */
 	if (unlikely(ret < 0)) {
 		io_ring_submit_unlock(ctx, issue_flags);
-		req_set_fail(req);
 		io_req_set_res(req, ret, 0);
 		io_req_async_data_free(req);
 		return IOU_COMPLETE;
@@ -334,7 +331,7 @@ int io_futex_wait(struct io_kiocb *req, unsigned int issue_flags)
 		goto done_unlock;
 	}
 
-	req->flags |= REQ_F_ASYNC_DATA;
+	io_req_set_flags(req, REQ_F_ASYNC_DATA);
 	req->async_data = ifd;
 	ifd->q = futex_q_init;
 	ifd->q.bitset = iof->futex_mask;
@@ -358,8 +355,6 @@ int io_futex_wait(struct io_kiocb *req, unsigned int issue_flags)
 done_unlock:
 	io_ring_submit_unlock(ctx, issue_flags);
 done:
-	if (ret < 0)
-		req_set_fail(req);
 	io_req_set_res(req, ret, 0);
 	return IOU_COMPLETE;
 }
@@ -375,8 +370,6 @@ int io_futex_wake(struct io_kiocb *req, unsigned int issue_flags)
 	 */
 	ret = futex_wake(iof->uaddr, FLAGS_STRICT | iof->futex_flags, NULL,
 			 iof->futex_val, iof->futex_mask);
-	if (ret < 0)
-		req_set_fail(req);
 	io_req_set_res(req, ret, 0);
 	return IOU_COMPLETE;
 }

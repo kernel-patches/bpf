@@ -33,7 +33,7 @@ void io_xattr_cleanup(struct io_kiocb *req)
 
 static void io_xattr_finish(struct io_kiocb *req, int ret)
 {
-	req->flags &= ~REQ_F_NEED_CLEANUP;
+	io_req_clear_flags(req, REQ_F_NEED_CLEANUP);
 
 	io_xattr_cleanup(req);
 	io_req_set_res(req, ret, 0);
@@ -66,8 +66,7 @@ static int __io_getxattr_prep(struct io_kiocb *req,
 		return ret;
 	}
 
-	req->flags |= REQ_F_NEED_CLEANUP;
-	req->flags |= REQ_F_FORCE_ASYNC;
+	io_req_set_flags(req, REQ_F_NEED_CLEANUP | REQ_F_FORCE_ASYNC);
 	return 0;
 }
 
@@ -143,8 +142,7 @@ static int __io_setxattr_prep(struct io_kiocb *req,
 		return ret;
 	}
 
-	req->flags |= REQ_F_NEED_CLEANUP;
-	req->flags |= REQ_F_FORCE_ASYNC;
+	io_req_set_flags(req, REQ_F_NEED_CLEANUP | REQ_F_FORCE_ASYNC);
 	return 0;
 }
 

@@ -74,8 +74,7 @@ int io_renameat_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 		return err;
 	}
 
-	req->flags |= REQ_F_NEED_CLEANUP;
-	req->flags |= REQ_F_FORCE_ASYNC;
+	io_req_set_flags(req, REQ_F_NEED_CLEANUP | REQ_F_FORCE_ASYNC);
 	return 0;
 }
 
@@ -91,7 +90,7 @@ int io_renameat(struct io_kiocb *req, unsigned int issue_flags)
 	ret = filename_renameat2(ren->old_dfd, old,
 				 ren->new_dfd, new, ren->flags);
 
-	req->flags &= ~REQ_F_NEED_CLEANUP;
+	io_req_clear_flags(req, REQ_F_NEED_CLEANUP);
 	io_req_set_res(req, ret, 0);
 	return IOU_COMPLETE;
 }
@@ -127,8 +126,7 @@ int io_unlinkat_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 	if (unlikely(err))
 		return err;
 
-	req->flags |= REQ_F_NEED_CLEANUP;
-	req->flags |= REQ_F_FORCE_ASYNC;
+	io_req_set_flags(req, REQ_F_NEED_CLEANUP | REQ_F_FORCE_ASYNC);
 	return 0;
 }
 
@@ -145,7 +143,7 @@ int io_unlinkat(struct io_kiocb *req, unsigned int issue_flags)
 	else
 		ret = filename_unlinkat(un->dfd, name);
 
-	req->flags &= ~REQ_F_NEED_CLEANUP;
+	io_req_clear_flags(req, REQ_F_NEED_CLEANUP);
 	io_req_set_res(req, ret, 0);
 	return IOU_COMPLETE;
 }
@@ -176,8 +174,7 @@ int io_mkdirat_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 	if (unlikely(err))
 		return err;
 
-	req->flags |= REQ_F_NEED_CLEANUP;
-	req->flags |= REQ_F_FORCE_ASYNC;
+	io_req_set_flags(req, REQ_F_NEED_CLEANUP | REQ_F_FORCE_ASYNC);
 	return 0;
 }
 
@@ -191,7 +188,7 @@ int io_mkdirat(struct io_kiocb *req, unsigned int issue_flags)
 
 	ret = filename_mkdirat(mkd->dfd, name, mkd->mode);
 
-	req->flags &= ~REQ_F_NEED_CLEANUP;
+	io_req_clear_flags(req, REQ_F_NEED_CLEANUP);
 	io_req_set_res(req, ret, 0);
 	return IOU_COMPLETE;
 }
@@ -228,8 +225,7 @@ int io_symlinkat_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 		return err;
 	}
 
-	req->flags |= REQ_F_NEED_CLEANUP;
-	req->flags |= REQ_F_FORCE_ASYNC;
+	io_req_set_flags(req, REQ_F_NEED_CLEANUP | REQ_F_FORCE_ASYNC);
 	return 0;
 }
 
@@ -244,7 +240,7 @@ int io_symlinkat(struct io_kiocb *req, unsigned int issue_flags)
 
 	ret = filename_symlinkat(old, sl->new_dfd, new);
 
-	req->flags &= ~REQ_F_NEED_CLEANUP;
+	io_req_clear_flags(req, REQ_F_NEED_CLEANUP);
 	io_req_set_res(req, ret, 0);
 	return IOU_COMPLETE;
 }
@@ -276,8 +272,7 @@ int io_linkat_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 		return err;
 	}
 
-	req->flags |= REQ_F_NEED_CLEANUP;
-	req->flags |= REQ_F_FORCE_ASYNC;
+	io_req_set_flags(req, REQ_F_NEED_CLEANUP | REQ_F_FORCE_ASYNC);
 	return 0;
 }
 
@@ -292,7 +287,7 @@ int io_linkat(struct io_kiocb *req, unsigned int issue_flags)
 
 	ret = filename_linkat(lnk->old_dfd, old, lnk->new_dfd, new, lnk->flags);
 
-	req->flags &= ~REQ_F_NEED_CLEANUP;
+	io_req_clear_flags(req, REQ_F_NEED_CLEANUP);
 	io_req_set_res(req, ret, 0);
 	return IOU_COMPLETE;
 }
