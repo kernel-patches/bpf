@@ -51,6 +51,14 @@ static __used noinline int bpf_testmod_retval_denied(int a, int b, int c, int d)
 	return d ? -ERESTARTSYS : -EIOCBQUEUED;
 }
 
+/* As crypto_enqueue_request(): next to -EINPROGRESS, -EBUSY is "queued on the backlog" */
+static __used noinline int bpf_testmod_retval_backlog(int free, int may_backlog)
+{
+	if (free)
+		return -EINPROGRESS;
+	return may_backlog ? -EBUSY : -ENOSPC;
+}
+
 /* A caller which gets -EBUSY relies on the unlock */
 static __used noinline int bpf_testmod_retval_effect(struct mutex *lock, int value)
 {

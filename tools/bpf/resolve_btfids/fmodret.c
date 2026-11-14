@@ -61,9 +61,15 @@ static bool fits_trampoline(const struct btf *btf, const struct btf_type *func)
  * -EAGAIN, -EMSGSIZE and -EINPROGRESS tell the caller to retry, to go on or to
  * wait, not that the function failed. Their numbers are those of the kernel, in
  * asm-generic/errno.h. The errno.h of the build host can have other numbers.
+ *
+ * ASYNC: the function returns -EINPROGRESS too. Then its -EBUSY is no failure
+ * either. In the crypto API it says that the request is queued on the backlog:
+ * crypto_wait_req() waits after both.
  */
-static bool means_failure(int error)
+static bool means_failure(int error, bool async)
 {
+	if (async && error == -16)
+		return false;
 	return error > -512 && error != -11 && error != -90 && error != -115;
 }
 
@@ -82,13 +88,16 @@ static int cmp_error(const void *va, const void *vb)
  */
 static bool format_tag(char *tag, const int64_t *values, size_t nr, __u32 size)
 {
+	bool async = false;
 	size_t i, n = 0;
 	int errors[nr];
 
+	for (i = 0; i < nr; i++)
+		async |= (int)values[i] == -115;
 	for (i = 0; i < nr; i++) {
 		int error = values[i];
 
-		if ((size == 4 || values[i] == error) && means_failure(error))
+		if ((size == 4 || values[i] == error) && means_failure(error, async))
 			errors[n++] = error;
 	}
 	qsort(errors, n, sizeof(*errors), cmp_error);

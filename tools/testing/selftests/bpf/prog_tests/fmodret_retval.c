@@ -17,6 +17,7 @@ static const struct {
 	{ "bpf_testmod_retval_minus_one",	"" },
 	{ "bpf_testmod_retval_eperm",		"-2,-1" },
 	{ "bpf_testmod_retval_denied",		"-13" },
+	{ "bpf_testmod_retval_backlog",		"-28" },
 	{ "bpf_testmod_retval_effect",		"-22" },
 	{ "bpf_testmod_retval_effect_late",	"-22" },
 	{ "bpf_testmod_retval_effect_two_regs",	"-22" },
