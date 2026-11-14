@@ -36,6 +36,12 @@ struct text_flow {
 	struct text_facts *facts;
 };
 
+/*
+ * Fold constants: "dst = imm or imm2" and a later "dst = src op imm" in the same
+ * straight line of code give "dst = imm' or imm2'". Compilers select one of two
+ * constants without a branch in this way.
+ */
+void text_flow_fold(struct text_flow *flow);
 /* Compute the facts */
 void text_flow_solve(struct text_flow *flow);
 /* Return the facts behind instruction I, which is not a branch */

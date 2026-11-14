@@ -160,6 +160,7 @@ int scan_func(struct scan *s, const struct image_func *f, const int64_t **values
 		return err;
 	if (!has_entry_nop(flow, f->addr))
 		return 0;
+	text_flow_fold(&s->flow);
 	text_flow_solve(&s->flow);
 
 	s->nr_values = 0;

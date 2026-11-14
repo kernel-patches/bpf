@@ -26,6 +26,11 @@ static const struct mc_pattern x86_patterns[] = {
 	{ "SBB32rr",		TEXT_MOV_IMM, VALUE(-1), .or_zero = true, .predicates = { SAME_REG(1, 2) } },
 	{ "SBB64rr",		TEXT_MOV_IMM, VALUE(-1), .or_zero = true, .predicates = { SAME_REG(1, 2) } },
 	{ "SAR32ri",		TEXT_MOV_IMM, VALUE(-1), .or_zero = true, .predicates = { IMM(2, 31) } },
+	{ "AND32ri8",		TEXT_ALU_IMM, .src = 1, .imm = 2, .op = TEXT_AND },
+	{ "AND64ri8",		TEXT_ALU_IMM, .src = 1, .imm = 2, .op = TEXT_AND },
+	{ "SUB32ri8",		TEXT_ALU_IMM, .src = 1, .imm = 2, .op = TEXT_SUB },
+	{ "SUB64ri8",		TEXT_ALU_IMM, .src = 1, .imm = 2, .op = TEXT_SUB },
+	{ "NOT32r",		TEXT_ALU_IMM, .src = 1, .op = TEXT_XOR, VALUE(-1) },
 	{ "LOCK_PREFIX",	TEXT_OTHER },
 	{ "NOOPL",		TEXT_OTHER, .nop = true },
 	/* A rep prefix is not a part of the MCInst */
@@ -58,6 +63,11 @@ static const struct mc_test x86_tests[] = {
 	T("48 98",		  TEXT_SEXT32, SRC(RAX)),			/* cltq */
 	T("0f 44 c3",		  TEXT_SELECT, .is32 = true, .src = RBX, .src2 = RAX),	/* cmove %ebx, %eax */
 	T("48 0f 44 c3",	  TEXT_SELECT, .src = RBX, .src2 = RAX),	/* cmove %rbx, %rax */
+	T("83 e3 f2",		  TEXT_ALU_IMM, .is32 = true, .dst = RBX, SRC(RBX), .op = TEXT_AND, IMMS(0xfffffff2, 0xfffffff2)), /* and $-14, %ebx */
+	T("48 83 e3 f2",	  TEXT_ALU_IMM, .dst = RBX, SRC(RBX), .op = TEXT_AND, IMMS(-14, -14)),	/* and $-14, %rbx */
+	T("83 eb 0e",		  TEXT_ALU_IMM, .is32 = true, .dst = RBX, SRC(RBX), .op = TEXT_SUB, IMMS(14, 14)), /* sub $14, %ebx */
+	T("48 83 eb 0e",	  TEXT_ALU_IMM, .dst = RBX, SRC(RBX), .op = TEXT_SUB, IMMS(14, 14)),	/* sub $14, %rbx */
+	T("f7 d0",		  TEXT_ALU_IMM, .is32 = true, .op = TEXT_XOR, IMMS(0xffffffff, 0xffffffff)), /* not %eax */
 	T("f0",			  TEXT_OTHER),					/* lock */
 	T("0f 1f 44 00 00",	  TEXT_OTHER, .nop = true),			/* nopl 0x0(%rax,%rax,1) */
 	T("f3 48 ab",		  TEXT_OTHER, .defs = BIT(RCX) | BIT(RDI)),	/* rep stosq */

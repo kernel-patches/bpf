@@ -284,6 +284,7 @@ bool match(const MCInst &inst, const Opcode &o, const mc_pattern &pattern, text_
 	ti->dst = dst.nr;
 	ti->src = src;
 	ti->src2 = src2;
+	ti->op = pattern.op;
 	ti->imm = imm;
 	ti->imm2 = pattern.or_zero ? 0 : imm;
 	return true;
@@ -360,6 +361,7 @@ void print(raw_ostream &os, const text_insn &ti)
 	os << "nop " << ti.nop << " ";
 	os << "kind " << (int)ti.kind << " is32 " << ti.is32 << " dst " << (int)ti.dst
 	   << " src " << (int)ti.src << " src2 " << (int)ti.src2
+	   << " op " << (int)ti.op
 	   << " defs " << format_hex(ti.defs, 1) << " imm " << format_hex(ti.imm, 1)
 	   << " imm2 " << format_hex(ti.imm2, 1);
 }
@@ -381,6 +383,7 @@ bool run_tests()
 		    ti.nop == want.nop &&
 		    ti.kind == want.kind && ti.is32 == want.is32 && ti.dst == want.dst &&
 		    ti.src == want.src && ti.src2 == want.src2 &&
+		    ti.op == want.op &&
 		    ti.defs == want.defs && ti.imm == want.imm && ti.imm2 == want.imm2)
 			continue;
 		print(error() << test->code << " is " << d.MII->getName(d.inst.getOpcode()) << ", length "
