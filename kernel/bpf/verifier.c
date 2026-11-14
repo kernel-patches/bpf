@@ -24479,6 +24479,9 @@ static int check_attach_btf_id(struct bpf_verifier_env *env)
 	}
 
 	env->fmodret_retvals = tgt_info.fmodret_retvals;
+	/* The interpreter returns only 32 bits */
+	if (env->fmodret_retvals && tgt_info.fmodel.ret_size == 8)
+		prog->jit_required = 1;
 
 	/*
 	 * We don't get trampoline for tracing_multi programs at this point,
