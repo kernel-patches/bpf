@@ -331,17 +331,25 @@ static int invalidate_keyring_keys(struct key *keyring)
 		goto out;
 	}
 
+	rc = 0;
+
 	for (key_index = 0; key_index < num_keys; key_index++) {
 		current_key = key_lookup(key_array[key_index]);
+		if (IS_ERR(current_key))
+			continue;
+
 		pr_dbf_msg("Invalidating key %08x", current_key->serial);
 
 		key_invalidate(current_key);
-		key_put(current_key);
 		rc = key_unlink(keyring, current_key);
+		if (rc == -ENOENT)
+			rc = 0;
 		if (rc) {
 			pr_dbf_msg("Couldn't unlink key %08x: %d", current_key->serial, rc);
+			key_put(current_key);
 			break;
 		}
+		key_put(current_key);
 	}
 out:
 	kfree(key_array);
