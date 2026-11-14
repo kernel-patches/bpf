@@ -32,7 +32,7 @@ int io_sfr_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 	sync->off = READ_ONCE(sqe->off);
 	sync->len = READ_ONCE(sqe->len);
 	sync->flags = READ_ONCE(sqe->sync_range_flags);
-	req->flags |= REQ_F_FORCE_ASYNC;
+	io_req_set_flags(req, REQ_F_FORCE_ASYNC);
 
 	return 0;
 }
@@ -65,7 +65,7 @@ int io_fsync_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 	if (sync->off < 0)
 		return -EINVAL;
 	sync->len = READ_ONCE(sqe->len);
-	req->flags |= REQ_F_FORCE_ASYNC;
+	io_req_set_flags(req, REQ_F_FORCE_ASYNC);
 	return 0;
 }
 
@@ -94,7 +94,7 @@ int io_fallocate_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 	sync->off = READ_ONCE(sqe->off);
 	sync->len = READ_ONCE(sqe->addr);
 	sync->mode = READ_ONCE(sqe->len);
-	req->flags |= REQ_F_FORCE_ASYNC;
+	io_req_set_flags(req, REQ_F_FORCE_ASYNC);
 	return 0;
 }
 

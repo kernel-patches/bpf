@@ -234,9 +234,9 @@ static void io_fail_links(struct io_kiocb *req)
 
 	while (link) {
 		if (ignore_cqes)
-			link->flags |= REQ_F_CQE_SKIP;
+			io_req_set_flags(link, REQ_F_CQE_SKIP);
 		else
-			link->flags &= ~REQ_F_CQE_SKIP;
+			io_req_clear_flags(link, REQ_F_CQE_SKIP);
 		trace_io_uring_fail_link(req, link);
 		link = link->link;
 	}
@@ -262,7 +262,7 @@ void io_disarm_next(struct io_kiocb *req)
 
 	if (req->flags & REQ_F_ARM_LTIMEOUT) {
 		link = req->link;
-		req->flags &= ~REQ_F_ARM_LTIMEOUT;
+		io_req_clear_flags(req, REQ_F_ARM_LTIMEOUT);
 		if (link && link->opcode == IORING_OP_LINK_TIMEOUT) {
 			io_remove_next_linked(req);
 			io_req_queue_tw_complete(link, -ECANCELED);
@@ -658,7 +658,7 @@ static int __io_timeout_prep(struct io_kiocb *req,
 		if (link->last->opcode == IORING_OP_LINK_TIMEOUT)
 			return -EINVAL;
 		timeout->head = link->last;
-		link->last->flags |= REQ_F_ARM_LTIMEOUT;
+		io_req_set_flags(link->last, REQ_F_ARM_LTIMEOUT);
 		hrtimer_setup(&data->timer, io_link_timeout_fn, io_timeout_get_clock(data),
 			      data->mode);
 	} else {

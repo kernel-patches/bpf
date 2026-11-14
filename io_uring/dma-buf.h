@@ -3,7 +3,7 @@
 #define IOU_DMA_BUF_H
 
 #include <linux/dma-buf-io.h>
-#include <linux/io_uring_types.h>
+#include <linux/io_uring.h>
 
 #include "rsrc.h"
 
@@ -59,7 +59,7 @@ static inline int io_import_dmabuf_map(struct io_kiocb *req,
 		return -EOPNOTSUPP;
 	if (req->file != bd->target_file)
 		return -EBADF;
-	req->flags |= REQ_F_DMABUF;
+	io_req_set_flags(req, REQ_F_DMABUF);
 	iov_iter_dmabuf_map(iter, ddir, NULL, offset, len);
 	return 0;
 }

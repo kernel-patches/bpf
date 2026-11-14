@@ -247,7 +247,7 @@ int io_async_cancel(struct io_kiocb *req, unsigned int issue_flags)
 	if (cd.flags & IORING_ASYNC_CANCEL_FD) {
 		if (req->flags & REQ_F_FIXED_FILE ||
 		    cd.flags & IORING_ASYNC_CANCEL_FD_FIXED) {
-			req->flags |= REQ_F_FIXED_FILE;
+			io_req_set_flags(req, REQ_F_FIXED_FILE);
 			req->file = io_file_get_fixed(req, cancel->fd,
 							issue_flags);
 		} else {

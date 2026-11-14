@@ -243,7 +243,7 @@ int io_futexv_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 	}
 
 	iof->futexv_unqueued = 0;
-	req->flags |= REQ_F_ASYNC_DATA;
+	io_req_set_flags(req, REQ_F_ASYNC_DATA);
 	req->async_data = ifd;
 	return 0;
 }
@@ -331,7 +331,7 @@ int io_futex_wait(struct io_kiocb *req, unsigned int issue_flags)
 		goto done_unlock;
 	}
 
-	req->flags |= REQ_F_ASYNC_DATA;
+	io_req_set_flags(req, REQ_F_ASYNC_DATA);
 	req->async_data = ifd;
 	ifd->q = futex_q_init;
 	ifd->q.bitset = iof->futex_mask;

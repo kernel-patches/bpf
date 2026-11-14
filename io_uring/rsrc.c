@@ -1357,7 +1357,7 @@ inline struct io_rsrc_node *io_find_buf_node(struct io_kiocb *req,
 
 	if (req->flags & REQ_F_BUF_NODE)
 		return req->buf_node;
-	req->flags |= REQ_F_BUF_NODE;
+	io_req_set_flags(req, REQ_F_BUF_NODE);
 
 	io_ring_submit_lock(ctx, issue_flags);
 	node = io_rsrc_node_lookup(&ctx->buf_table, req->buf_index);
@@ -1367,7 +1367,7 @@ inline struct io_rsrc_node *io_find_buf_node(struct io_kiocb *req,
 		io_ring_submit_unlock(ctx, issue_flags);
 		return node;
 	}
-	req->flags &= ~REQ_F_BUF_NODE;
+	io_req_clear_flags(req, REQ_F_BUF_NODE);
 	io_ring_submit_unlock(ctx, issue_flags);
 	return NULL;
 }
@@ -1852,7 +1852,7 @@ int __io_import_reg_vec(int ddir, struct iov_iter *iter,
 
 		*vec = tmp_vec;
 		iov = vec->iovec + iovec_off;
-		req->flags |= REQ_F_NEED_CLEANUP;
+		io_req_set_flags(req, REQ_F_NEED_CLEANUP);
 	}
 
 	if (imu->flags & IO_REGBUF_F_KBUF)
@@ -1872,7 +1872,7 @@ int io_prep_reg_iovec(struct io_kiocb *req, struct iou_vec *iv,
 		ret = io_vec_realloc(iv, uvec_segs);
 		if (ret)
 			return ret;
-		req->flags |= REQ_F_NEED_CLEANUP;
+		io_req_set_flags(req, REQ_F_NEED_CLEANUP);
 	}
 
 	/* pad iovec to the right */
@@ -1883,6 +1883,6 @@ int io_prep_reg_iovec(struct io_kiocb *req, struct iou_vec *iv,
 	if (IS_ERR(res))
 		return PTR_ERR(res);
 
-	req->flags |= REQ_F_IMPORT_BUFFER;
+	io_req_set_flags(req, REQ_F_IMPORT_BUFFER);
 	return 0;
 }

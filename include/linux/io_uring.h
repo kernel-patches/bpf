@@ -34,11 +34,11 @@ static inline void io_req_clear_flags(struct io_kiocb *req,
 
 static inline void req_set_fail(struct io_kiocb *req)
 {
-	req->flags |= REQ_F_FAIL;
-	if (req->flags & REQ_F_CQE_SKIP) {
-		req->flags &= ~REQ_F_CQE_SKIP;
-		req->flags |= REQ_F_SKIP_LINK_CQES;
-	}
+	io_req_flags_t flags = REQ_F_FAIL;
+
+	if (req->flags & REQ_F_CQE_SKIP)
+		flags |= REQ_F_SKIP_LINK_CQES;
+	io_req_switch_flags(req, REQ_F_CQE_SKIP, flags);
 }
 
 static inline void io_req_set_res(struct io_kiocb *req, s32 res, u32 cflags)

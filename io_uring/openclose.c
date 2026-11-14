@@ -70,7 +70,7 @@ static int __io_openat_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe
 	ret = delayed_getname(&open->filename, fname);
 	if (unlikely(ret))
 		return ret;
-	req->flags |= REQ_F_NEED_CLEANUP;
+	io_req_set_flags(req, REQ_F_NEED_CLEANUP);
 
 	open->file_slot = READ_ONCE(sqe->file_index);
 	if (open->file_slot && (open->how.flags & O_CLOEXEC))
@@ -78,7 +78,7 @@ static int __io_openat_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe
 
 	open->nofile = rlimit(RLIMIT_NOFILE);
 	if (io_openat_force_async(open))
-		req->flags |= REQ_F_FORCE_ASYNC;
+		io_req_set_flags(req, REQ_F_FORCE_ASYNC);
 	return 0;
 }
 
@@ -178,7 +178,7 @@ int io_openat2(struct io_kiocb *req, unsigned int issue_flags)
 		ret = io_fixed_fd_install(req, issue_flags, file,
 						open->file_slot);
 err:
-	req->flags &= ~REQ_F_NEED_CLEANUP;
+	io_req_clear_flags(req, REQ_F_NEED_CLEANUP);
 	io_req_set_res(req, ret, 0);
 	return IOU_COMPLETE;
 }
