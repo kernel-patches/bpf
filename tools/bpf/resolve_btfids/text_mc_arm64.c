@@ -24,6 +24,7 @@ static const struct mc_pattern arm64_patterns[] = {
 	{ "ANDWrs",	 TEXT_SELECT, .src = 1, .src2 = 1, .predicates = { IMM(3, 2 << 6 | 31) } },
 	/* HINT: nop, bti, yield, wfe ... */
 	{ "HINT", TEXT_OTHER }, { "AUTIASP", TEXT_OTHER }, { "PRFMui", TEXT_OTHER },
+	{ "HINT", TEXT_OTHER, .nop = true, .predicates = { IMM(0, 0) } },	/* nop */
 	{ "DMB", TEXT_OTHER }, { "MRS", TEXT_OTHER }, { "MSR", TEXT_OTHER },
 	{ "STLRB", TEXT_OTHER }, { "STLRW", TEXT_OTHER },
 	WX("LDXR", "", TEXT_OTHER), WX("STXR", "", TEXT_OTHER), WX("STLXR", "", TEXT_OTHER),
@@ -56,6 +57,7 @@ static const struct mc_test arm64_tests[] = {
 	T("00 05 89 1a", TEXT_SELECT, .is32 = true, SRC(8)),		/* csinc w0, w8, w9, eq */
 	T("00 7d 89 0a", TEXT_SELECT, .is32 = true, SRC(8)),		/* and w0, w8, w9, asr #31 */
 	T("00 01 09 0a", TEXT_OTHER, .defs = BIT(0)),			/* and w0, w8, w9 */
+	T("1f 20 03 d5", TEXT_OTHER, .nop = true),			/* nop */
 	T("5f 24 03 d5", TEXT_OTHER),					/* bti c */
 	T("bf 23 03 d5", TEXT_OTHER, .defs = BIT(30)),			/* autiasp */
 	T("20 00 80 f9", TEXT_OTHER),					/* prfm pldl1keep, [x1] */

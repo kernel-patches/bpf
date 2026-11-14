@@ -61,6 +61,7 @@ struct Opcode {
 	u32 implicit_defs = 0;
 	unsigned int implicit_def = 0, implicit_use = 0;	/* the first ones, LLVM registers */
 	bool unmodeled = false, is_return = false;
+	const mc_pattern *nop = nullptr;
 	std::vector<const mc_pattern *> patterns;
 };
 
@@ -198,6 +199,8 @@ bool read_opcodes()
 		} else {
 			it->second->unmodeled = false;
 			it->second->implicit_defs |= pattern->defs;
+			if (pattern->nop)
+				it->second->nop = pattern;
 		}
 	}
 	return ok;
@@ -340,6 +343,7 @@ int decode(const void *code, unsigned int len, u64 addr, text_insn *ti)
 
 	const Opcode &o = d.opcodes[inst.getOpcode()];
 
+	ti->nop = o.nop && holds(inst, o.nop->predicates[0]);
 	ti->defs = defs_of(inst, o);
 	for (const mc_pattern *pattern : o.patterns) {
 		if (match(inst, o, *pattern, ti)) {
@@ -353,6 +357,7 @@ int decode(const void *code, unsigned int len, u64 addr, text_insn *ti)
 
 void print(raw_ostream &os, const text_insn &ti)
 {
+	os << "nop " << ti.nop << " ";
 	os << "kind " << (int)ti.kind << " is32 " << ti.is32 << " dst " << (int)ti.dst
 	   << " src " << (int)ti.src << " src2 " << (int)ti.src2
 	   << " defs " << format_hex(ti.defs, 1) << " imm " << format_hex(ti.imm, 1)
@@ -373,6 +378,7 @@ bool run_tests()
 		while (in >> std::hex >> byte)
 			code.push_back(byte);
 		if (!decode(code.data(), code.size(), MC_TEST_ADDR, &ti) && ti.len == code.size() &&
+		    ti.nop == want.nop &&
 		    ti.kind == want.kind && ti.is32 == want.is32 && ti.dst == want.dst &&
 		    ti.src == want.src && ti.src2 == want.src2 &&
 		    ti.defs == want.defs && ti.imm == want.imm && ti.imm2 == want.imm2)

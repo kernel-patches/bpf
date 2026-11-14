@@ -38,6 +38,7 @@ struct text_insn {
 	u8 len;
 	u8 dst, src, src2;
 	bool is32;	/* It works on the low 32 bits and zero extends the result */
+	bool nop;	/* It does nothing */
 	/* The registers which it writes, but for dst */
 	u32 defs;
 	u64 imm, imm2;
@@ -51,6 +52,11 @@ struct text_arch {
 	u32 caller_saved;	/* the registers which a call may write */
 	/* A branch to this symbol is a return */
 	const char *return_thunk;
+	/*
+	 * The build may leave a call of this symbol where ftrace patches a nop, at
+	 * the entry of a function. It writes no register.
+	 */
+	const char *entry_hook;
 	/*
 	 * Describe the instruction at ADDR, whose bytes are at CODE. At most LEN
 	 * bytes can be read. Return a negative value if it is not an instruction.

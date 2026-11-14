@@ -48,6 +48,7 @@ struct mc_predicate {
  * how LLVM says that MCInstrDesc does not tell all about an opcode: it writes
  * TEXT_ALL_REGS, unless such a pattern says that it writes what MCInstrDesc
  * has, and DEFS.
+ * With NOP the instruction is a nop if the first predicate holds.
  *
  * A pattern of kind TEXT_RETURN names a return to the caller. isReturn() holds
  * for a return from an exception as well, which does not hand the return value
@@ -68,6 +69,7 @@ struct mc_pattern {
 	bool fixed;		/* the immediate is VALUE, not an operand */
 	s64 value;
 	u32 defs;		/* of TEXT_OTHER */
+	bool nop;		/* of TEXT_OTHER */
 	struct mc_predicate predicates[2];
 };
 

@@ -27,6 +27,7 @@ static const struct mc_pattern x86_patterns[] = {
 	{ "SBB64rr",		TEXT_MOV_IMM, VALUE(-1), .or_zero = true, .predicates = { SAME_REG(1, 2) } },
 	{ "SAR32ri",		TEXT_MOV_IMM, VALUE(-1), .or_zero = true, .predicates = { IMM(2, 31) } },
 	{ "LOCK_PREFIX",	TEXT_OTHER },
+	{ "NOOPL",		TEXT_OTHER, .nop = true },
 	/* A rep prefix is not a part of the MCInst */
 	{ "STOSQ",		TEXT_OTHER, .defs = BIT(RCX) },
 	{ "RET64",		TEXT_RETURN },
@@ -58,6 +59,7 @@ static const struct mc_test x86_tests[] = {
 	T("0f 44 c3",		  TEXT_SELECT, .is32 = true, .src = RBX, .src2 = RAX),	/* cmove %ebx, %eax */
 	T("48 0f 44 c3",	  TEXT_SELECT, .src = RBX, .src2 = RAX),	/* cmove %rbx, %rax */
 	T("f0",			  TEXT_OTHER),					/* lock */
+	T("0f 1f 44 00 00",	  TEXT_OTHER, .nop = true),			/* nopl 0x0(%rax,%rax,1) */
 	T("f3 48 ab",		  TEXT_OTHER, .defs = BIT(RCX) | BIT(RDI)),	/* rep stosq */
 	/* hasUnmodeledSideEffects() */
 	T("f3 48 a5",		  TEXT_OTHER, .defs = TEXT_ALL_REGS),		/* rep movsq */
@@ -107,6 +109,7 @@ const struct mc_arch mc_arch = {
 		.caller_saved = BIT(RAX) | BIT(RCX) | BIT(RDX) | BIT(RSI) | BIT(RDI) |
 				BIT(R8) | BIT(R9) | BIT(R10) | BIT(R11),
 		.return_thunk = "__x86_return_thunk",
+		.entry_hook = "__fentry__",
 	},
 	.machine = EM_X86_64,
 	.triple = "x86_64-unknown-linux-gnu",
