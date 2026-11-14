@@ -117,14 +117,15 @@ struct scan_control {
 };
 
 #ifdef CONFIG_LRU_GEN
-/* The number of pages of @type in the generation @seq, summed over all zones */
+/* Number of pages of @type in generation @seq below @max_zone */
 static inline unsigned long lruvec_gen_size(struct lru_gen_folio *lrugen,
-					    int type, unsigned long seq)
+					    int type, unsigned long seq,
+					    int max_zone)
 {
 	int gen = lru_gen_from_seq(seq);
 	unsigned long size = 0;
 
-	for (int zone = 0; zone < MAX_NR_ZONES; zone++)
+	for (int zone = 0; zone < max_zone; zone++)
 		size += max(READ_ONCE(lrugen->nr_pages[gen][type][zone]), 0L);
 
 	return size;
