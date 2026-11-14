@@ -2755,9 +2755,8 @@ again:
 		if (env->log.level & BPF_LOG_LEVEL2)
 			verbose(env, "from %d to %d: within\n", prev, insn_idx);
 		err = flow_cycle_closed(env, &t->st, &s->st) ?:
-		      flow_unite(flow, s->st.flow_entry, t->st.flow_entry);
-		flow_free_state(env, s);
-		return err ?: 1;
+		      flow_unite(flow, s->st.flow_entry, t->st.flow_entry) ?: 1;
+		goto err_free;
 	}
 
 	flow_sweep_trips(env, set, s);

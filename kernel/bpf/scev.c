@@ -5333,7 +5333,7 @@ int bpf_widen_scev_regs(struct bpf_verifier_env *env, struct bpf_verifier_state 
 				continue;
 			/* the other half of the slot stays as it is */
 			reg = spill32;
-			err = reg ? 0 : scev_reg_for_write(env, cur_func, r, &reg);
+			err = spill32 ? 0 : scev_reg_for_write(env, cur_func, r, &reg);
 			if (err)
 				return err;
 			linear_bounds(scalar_of(reg), iters->max_header_count, &coefs, &bounds);
