@@ -12392,6 +12392,10 @@ const struct bpf_func_proto bpf_skc_to_tcp_timewait_sock_proto = {
 
 BPF_CALL_1(bpf_skc_to_tcp_request_sock, struct sock *, sk)
 {
+	/* Ensure BTF for the structs exists even with CONFIG_INET=n. */
+	BTF_TYPE_EMIT(struct inet_request_sock);
+	BTF_TYPE_EMIT(struct tcp_request_sock);
+
 #ifdef CONFIG_INET
 	if (sk && sk->sk_prot == &tcp_prot && sk->sk_state == TCP_NEW_SYN_RECV)
 		return (unsigned long)sk;
@@ -13073,11 +13077,20 @@ BTF_KFUNCS_START(bpf_sk_iter_kfunc_ids)
 BTF_ID_FLAGS(func, bpf_sock_destroy)
 BTF_KFUNCS_END(bpf_sk_iter_kfunc_ids)
 
+BTF_SET_START(bpf_sk_iter_locked_ids)
+#if defined(CONFIG_INET) && defined(CONFIG_PROC_FS)
+BTF_ID(func, bpf_iter_tcp)
+BTF_ID(func, bpf_iter_udp)
+#endif
+BTF_SET_END(bpf_sk_iter_locked_ids)
+
 static int tracing_iter_filter(const struct bpf_prog *prog, u32 kfunc_id)
 {
 	if (btf_id_set8_contains(&bpf_sk_iter_kfunc_ids, kfunc_id) &&
-	    prog->expected_attach_type != BPF_TRACE_ITER)
+	    (prog->expected_attach_type != BPF_TRACE_ITER ||
+	     !btf_id_set_contains(&bpf_sk_iter_locked_ids, prog->aux->attach_btf_id)))
 		return -EACCES;
+
 	return 0;
 }
 
