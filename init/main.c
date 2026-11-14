@@ -1487,7 +1487,7 @@ static void __init do_initcalls(void)
 	size_t len = saved_command_line_len + 1;
 	char *command_line;
 
-	command_line = kzalloc(len, GFP_KERNEL);
+	command_line = kmalloc(len, GFP_KERNEL);
 	if (!command_line)
 		panic("%s: Failed to allocate %zu bytes\n", __func__, len);
 
