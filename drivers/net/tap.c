@@ -608,6 +608,8 @@ static ssize_t tap_get_user(struct tap_queue *q, void *msg_control,
 		struct iov_iter i;
 
 		copylen = clamp(hdr_len ?: GOODCOPY_LEN, ETH_HLEN, good_linear);
+		/* A padded vnet header can leave fewer payload bytes than GOODCOPY_LEN. */
+		copylen = min_t(unsigned long, copylen, len);
 		linear = copylen;
 		i = *from;
 		iov_iter_advance(&i, copylen);
@@ -665,12 +667,10 @@ static ssize_t tap_get_user(struct tap_queue *q, void *msg_control,
 		skb_set_network_header(skb, depth);
 
 	/* copy skb_ubuf_info for callback when skb has no error */
-	if (zerocopy) {
+	if (zerocopy)
 		skb_zcopy_init(skb, msg_control);
-	} else if (msg_control) {
-		struct ubuf_info *uarg = msg_control;
-		uarg->ops->complete(NULL, uarg, false);
-	}
+	else if (msg_control)
+		net_zcopy_complete(NULL, msg_control, false);
 
 	dev_queue_xmit(skb);
 	rcu_read_unlock();

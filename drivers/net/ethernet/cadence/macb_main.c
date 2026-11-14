@@ -1369,7 +1369,8 @@ static void macb_tx_error_task(struct work_struct *work)
 	 * network engine about the macb/gem being halted.
 	 */
 	napi_disable(&queue->napi_tx);
-	spin_lock_irqsave(&bp->lock, flags);
+	spin_lock_irqsave(&queue->tx_ptr_lock, flags);
+	spin_lock(&bp->lock);
 
 	/* Make sure nobody is trying to queue up new packets */
 	netif_tx_stop_all_queues(bp->netdev);
@@ -1412,10 +1413,8 @@ static void macb_tx_error_task(struct work_struct *work)
 					    skb->data);
 				bp->netdev->stats.tx_packets++;
 				queue->stats.tx_packets++;
-				packets++;
 				bp->netdev->stats.tx_bytes += skb->len - tx_skb->fcs_len;
 				queue->stats.tx_bytes += skb->len - tx_skb->fcs_len;
-				bytes += skb->len;
 			}
 		} else {
 			/* "Buffers exhausted mid-frame" errors may only happen
@@ -1426,6 +1425,12 @@ static void macb_tx_error_task(struct work_struct *work)
 				buggy_driver = true;
 
 			desc->ctrl = ctrl | MACB_BIT(TX_USED);
+		}
+
+		/* BQL has to see every frame leaving the ring, sent or not */
+		if (skb) {
+			packets++;
+			bytes += skb->len;
 		}
 
 		macb_tx_unmap(&bp->info, tx_skb, 0);
@@ -1459,7 +1464,8 @@ static void macb_tx_error_task(struct work_struct *work)
 	netif_tx_start_all_queues(bp->netdev);
 	macb_writel(bp, NCR, macb_readl(bp, NCR) | MACB_BIT(TSTART));
 
-	spin_unlock_irqrestore(&bp->lock, flags);
+	spin_unlock(&bp->lock);
+	spin_unlock_irqrestore(&queue->tx_ptr_lock, flags);
 
 	napi_enable(&queue->napi_tx);
 
@@ -6072,7 +6078,7 @@ static const struct macb_config sama5d2_config = {
 
 static const struct macb_config sama5d29_config = {
 	.caps = MACB_CAPS_USRIO_DEFAULT_IS_MII_GMII | MACB_CAPS_GEM_HAS_PTP |
-		MACB_CAPS_USRIO_HAS_MII,
+		MACB_CAPS_USRIO_HAS_MII | MACB_CAPS_QUEUE_DISABLE,
 	.dma_burst_length = 16,
 	.usrio = &at91_default_usrio,
 };
@@ -6128,7 +6134,8 @@ static const struct macb_config mpfs_config = {
 	.caps = MACB_CAPS_GIGABIT_MODE_AVAILABLE |
 		MACB_CAPS_JUMBO |
 		MACB_CAPS_GEM_HAS_PTP |
-		MACB_CAPS_USRIO_HAS_TSUCLK_SOURCE,
+		MACB_CAPS_USRIO_HAS_TSUCLK_SOURCE |
+		MACB_CAPS_QUEUE_DISABLE | MACB_CAPS_QBV,
 	.dma_burst_length = 16,
 	.init = init_reset_optional,
 	.usrio = &mpfs_usrio,
@@ -6136,12 +6143,15 @@ static const struct macb_config mpfs_config = {
 	.jumbo_max_len = 4040,
 };
 
+#define MACB_SAMA7G5_CAPS ( \
+	MACB_CAPS_GIGABIT_MODE_AVAILABLE | MACB_CAPS_CLK_HW_CHG | \
+	MACB_CAPS_USRIO_DEFAULT_IS_MII_GMII | \
+	MACB_CAPS_USRIO_HAS_REFCLK_SOURCE | \
+	MACB_CAPS_MIIONRGMII | MACB_CAPS_GEM_HAS_PTP | \
+	MACB_CAPS_USRIO_HAS_MII | MACB_CAPS_QUEUE_DISABLE)
+
 static const struct macb_config sama7g5_gem_config = {
-	.caps = MACB_CAPS_GIGABIT_MODE_AVAILABLE | MACB_CAPS_CLK_HW_CHG |
-		MACB_CAPS_USRIO_DEFAULT_IS_MII_GMII |
-		MACB_CAPS_USRIO_HAS_REFCLK_SOURCE |
-		MACB_CAPS_MIIONRGMII | MACB_CAPS_GEM_HAS_PTP |
-		MACB_CAPS_USRIO_HAS_MII,
+	.caps = MACB_SAMA7G5_CAPS,
 	.dma_burst_length = 16,
 	.usrio = &sama7g5_gem_usrio,
 };
@@ -6154,6 +6164,18 @@ static const struct macb_config sama7g5_emac_config = {
 		MACB_CAPS_USRIO_HAS_MII,
 	.dma_burst_length = 16,
 	.usrio = &sama7g5_emac_usrio,
+};
+
+static const struct macb_config sam9x7_config = {
+	.caps = MACB_SAMA7G5_CAPS | MACB_CAPS_QBV,
+	.dma_burst_length = 16,
+	.usrio = &sama7g5_gem_usrio,
+};
+
+static const struct macb_config sama7d65_config = {
+	.caps = MACB_SAMA7G5_CAPS | MACB_CAPS_QBV,
+	.dma_burst_length = 16,
+	.usrio = &sama7g5_gem_usrio,
 };
 
 static const struct macb_config versal_config = {
@@ -6171,7 +6193,7 @@ static const struct macb_config versal_config = {
 static const struct macb_config eyeq5_config = {
 	.caps = MACB_CAPS_GIGABIT_MODE_AVAILABLE | MACB_CAPS_JUMBO |
 		MACB_CAPS_GEM_HAS_PTP | MACB_CAPS_QUEUE_DISABLE |
-		MACB_CAPS_NO_LSO | MACB_CAPS_EEE,
+		MACB_CAPS_NO_LSO | MACB_CAPS_EEE | MACB_CAPS_QBV,
 	.dma_burst_length = 16,
 	.init = eyeq5_init,
 	.jumbo_max_len = 10240,
@@ -6217,6 +6239,8 @@ static const struct of_device_id macb_dt_ids[] = {
 	{ .compatible = "microchip,pic64hpsc-gem", .data = &pic64hpsc_config},
 	{ .compatible = "microchip,sama7g5-gem", .data = &sama7g5_gem_config },
 	{ .compatible = "microchip,sama7g5-emac", .data = &sama7g5_emac_config },
+	{ .compatible = "microchip,sam9x7-gem", .data = &sam9x7_config },
+	{ .compatible = "microchip,sama7d65-gem", .data = &sama7d65_config },
 	{ .compatible = "mobileye,eyeq5-gem", .data = &eyeq5_config },
 	{ .compatible = "raspberrypi,rp1-gem", .data = &raspberrypi_rp1_config },
 	{ .compatible = "xlnx,zynqmp-gem", .data = &zynqmp_config},

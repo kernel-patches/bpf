@@ -108,6 +108,8 @@
 #include "realtek-smi.h"
 #include "realtek-mdio.h"
 #include "rtl83xx.h"
+#include "rtl83xx-qos.h"
+#include "rtl8365mb_qos.h"
 #include "rtl8365mb_l2.h"
 #include "rtl8365mb_vlan.h"
 
@@ -115,13 +117,15 @@
 #define RTL8365MB_PHYADDRMAX		7
 #define RTL8365MB_NUM_PHYREGS		32
 #define RTL8365MB_PHYREGMAX		(RTL8365MB_NUM_PHYREGS - 1)
-#define RTL8365MB_MAX_NUM_PORTS		11
+#define RTL8365MB_MAX_NUM_PORTS		8
 /* Valid for the whole family except RTL8370B, which has 4160 entries.
  * RTL8370B is mentioned in vendor code but it might not even belong
  * to the same RTL8367C family.
  */
 #define RTL8365MB_LEARN_LIMIT_MAX	2112
 #define RTL8365MB_MAX_NUM_EXTINTS	3
+
+static_assert(RTL8365MB_MAX_NUM_PORTS <= RTL8365MB_QOS_MAX_PORTS);
 
 /* Chip identification registers */
 #define RTL8365MB_CHIP_ID_REG		0x1300
@@ -707,9 +711,11 @@ struct rtl8365mb_extint {
  * @name: human-readable chip name
  * @chip_id: chip identifier
  * @chip_ver: chip silicon revision
+ * @port_mask: ports the chip has
  * @extints: available external interfaces
  * @jam_table: chip-specific initialization jam table
  * @jam_size: size of the chip's jam table
+ * @num_tx_queues: number of egress queues exposed by the chip
  *
  * These data are specific to a given chip in the family of switches supported
  * by this driver. When adding support for another chip in the family, a new
@@ -719,29 +725,42 @@ struct rtl8365mb_chip_info {
 	const char *name;
 	u32 chip_id;
 	u32 chip_ver;
+	u32 port_mask;
 	const struct rtl8365mb_extint extints[RTL8365MB_MAX_NUM_EXTINTS];
 	const struct rtl8365mb_jam_tbl_entry *jam_table;
 	size_t jam_size;
+	unsigned int num_tx_queues;
 };
 
 /* Chip info for each supported switch in the family */
 #define PHY_INTF(_mode) (RTL8365MB_PHY_INTERFACE_MODE_ ## _mode)
+#define PORT_MASK(_m) \
+	((_m) + \
+	 BUILD_BUG_ON_ZERO((_m) & ~GENMASK(RTL8365MB_MAX_NUM_PORTS - 1, 0)))
+
+/* Copper ports are 0..3 on the RTL8365MB-VC and 0..4 on the others. Extension
+ * interfaces are port 6 on the VC and ports 6 and 7 on the others, as the
+ * extints rows show.
+ */
 static const struct rtl8365mb_chip_info rtl8365mb_chip_infos[] = {
 	{
 		.name = "RTL8365MB-VC",
 		.chip_id = 0x6367,
 		.chip_ver = 0x0040,
+		.port_mask = PORT_MASK(GENMASK(3, 0) | BIT(6)),
 		.extints = {
 			{ 6, 1, PHY_INTF(MII) | PHY_INTF(TMII) |
 				PHY_INTF(RMII) | PHY_INTF(RGMII) },
 		},
 		.jam_table = rtl8365mb_init_jam_8365mb_vc,
 		.jam_size = ARRAY_SIZE(rtl8365mb_init_jam_8365mb_vc),
+		.num_tx_queues = 8,
 	},
 	{
 		.name = "RTL8367S",
 		.chip_id = 0x6367,
 		.chip_ver = 0x00A0,
+		.port_mask = PORT_MASK(GENMASK(4, 0) | BIT(6) | BIT(7)),
 		.extints = {
 			{ 6, 1, PHY_INTF(SGMII) | PHY_INTF(HSGMII) },
 			{ 7, 2, PHY_INTF(MII) | PHY_INTF(TMII) |
@@ -749,11 +768,13 @@ static const struct rtl8365mb_chip_info rtl8365mb_chip_infos[] = {
 		},
 		.jam_table = rtl8365mb_init_jam_8365mb_vc,
 		.jam_size = ARRAY_SIZE(rtl8365mb_init_jam_8365mb_vc),
+		.num_tx_queues = 8,
 	},
 	{
 		.name = "RTL8367SB",
 		.chip_id = 0x6367,
 		.chip_ver = 0x0010,
+		.port_mask = PORT_MASK(GENMASK(4, 0) | BIT(6) | BIT(7)),
 		.extints = {
 			{ 6, 1, PHY_INTF(MII) | PHY_INTF(TMII) |
 				PHY_INTF(RMII) | PHY_INTF(RGMII) |
@@ -763,11 +784,13 @@ static const struct rtl8365mb_chip_info rtl8365mb_chip_infos[] = {
 		},
 		.jam_table = rtl8365mb_init_jam_8365mb_vc,
 		.jam_size = ARRAY_SIZE(rtl8365mb_init_jam_8365mb_vc),
+		.num_tx_queues = 8,
 	},
 	{
 		.name = "RTL8367RB-VB",
 		.chip_id = 0x6367,
 		.chip_ver = 0x0020,
+		.port_mask = PORT_MASK(GENMASK(4, 0) | BIT(6) | BIT(7)),
 		.extints = {
 			{ 6, 1, PHY_INTF(MII) | PHY_INTF(TMII) |
 				PHY_INTF(RMII) | PHY_INTF(RGMII) },
@@ -776,6 +799,7 @@ static const struct rtl8365mb_chip_info rtl8365mb_chip_infos[] = {
 		},
 		.jam_table = rtl8365mb_init_jam_8365mb_vc,
 		.jam_size = ARRAY_SIZE(rtl8365mb_init_jam_8365mb_vc),
+		.num_tx_queues = 8,
 	},
 };
 
@@ -838,6 +862,8 @@ struct rtl8365mb_cpu {
  *         access via rtl8365mb_get_stats64
  * @stats_lock: protect the stats structure during read/update
  * @mib_work: delayed work for polling MIB counters
+ * @bridge_pvid: PVID requested by the bridge, 0 if none. Only programmed
+ *               while the port filters VLANs. Protected by vlan_lock.
  */
 struct rtl8365mb_port {
 	struct realtek_priv *priv;
@@ -845,6 +871,7 @@ struct rtl8365mb_port {
 	struct rtnl_link_stats64 stats;
 	spinlock_t stats_lock;
 	struct delayed_work mib_work;
+	u16 bridge_pvid;
 };
 
 /**
@@ -2004,42 +2031,44 @@ rtl8365mb_port_set_vlan_egress_mode(struct realtek_priv *priv, int port,
 			RTL8365MB_PORT_MISC_CFG_VLAN_EGRESS_MODE_MASK, val);
 }
 
+/* Program the PVID that the port should use for untagged frames: the PVID of
+ * the bridge while the port filters VLANs, and the neutral PVID (VID 0)
+ * otherwise. A VLAN-unaware bridge, like a standalone port, gets its FDB and
+ * MDB entries with VID 0 from DSA. As the switch looks up its forwarding
+ * database by the VLAN that it classifies a frame to, a bridge PVID would make
+ * those entries miss every lookup.
+ */
+static int rtl8365mb_port_commit_pvid(struct dsa_switch *ds, int port,
+				      bool vlan_filtering,
+				      struct netlink_ext_ack *extack)
+{
+	struct realtek_priv *priv = ds->priv;
+	struct rtl8365mb *mb = priv->chip_data;
+	u16 pvid;
+
+	if (vlan_filtering)
+		pvid = mb->ports[port].bridge_pvid;
+	else
+		pvid = 0;
+
+	return rtl8365mb_vlan_pvid_port_commit(ds, port, pvid, vlan_filtering,
+					       extack);
+}
+
 static int rtl8365mb_port_vlan_filtering(struct dsa_switch *ds, int port,
 					 bool vlan_filtering,
 					 struct netlink_ext_ack *extack)
 {
-	enum rtl8365mb_frame_ingress accepted_frame, prev_accepted_frame;
 	enum rtl8365mb_vlan_egress_mode mode;
 	struct realtek_priv *priv = ds->priv;
 	u32 configured_ports = 0;
 	struct dsa_port *dp;
-	u16 pvid_vid;
 	int ret;
 
 	dev_dbg(priv->dev, "port %d: %s VLAN filtering\n", port,
 		vlan_filtering ? "enable" : "disable");
 
-	ret = rtl8365mb_vlan_port_get_framefilter(priv, port,
-						  &prev_accepted_frame);
-	if (ret) {
-		NL_SET_ERR_MSG_MOD(extack,
-				   "Failed to get current framefilter");
-		return ret;
-	}
-
-	/* While filtering, only accepts untagged frames if PVID is enabled */
-	if (vlan_filtering) {
-		ret = rtl8365mb_vlan_port_get_pvid(priv, port, &pvid_vid);
-		if (ret)
-			return ret;
-
-		if (pvid_vid)
-			accepted_frame = RTL8365MB_FRAME_TYPE_ANY_FRAME;
-		else
-			accepted_frame = RTL8365MB_FRAME_TYPE_TAGGED_ONLY;
-	} else {
-		accepted_frame = RTL8365MB_FRAME_TYPE_ANY_FRAME;
-	}
+	mutex_lock(&priv->vlan_lock);
 
 	/* When vlan filter is enable/disabled in a bridge, this function is
 	 * called for all member ports. We need to enable/disable ingress
@@ -2047,7 +2076,7 @@ static int rtl8365mb_port_vlan_filtering(struct dsa_switch *ds, int port,
 	 */
 	ret = rtl8365mb_port_set_ingress_filtering(priv, port, vlan_filtering);
 	if (ret)
-		return ret;
+		goto out_unlock;
 
 	/* However, we also enable/disable egress filtering because the switch
 	 * still consider the egress interface VLAN membership to forward the
@@ -2064,15 +2093,12 @@ static int rtl8365mb_port_vlan_filtering(struct dsa_switch *ds, int port,
 		configured_ports |= BIT(dp->index);
 	}
 
-	if (accepted_frame != prev_accepted_frame) {
-		ret = rtl8365mb_vlan_port_set_framefilter(priv, port,
-							  accepted_frame);
-		if (ret) {
-			NL_SET_ERR_MSG_MOD(extack,
-					   "Failed to set port framefilter");
-			goto undo_transparent;
-		}
-	}
+	/* Also sets which frames the port accepts: while filtering, untagged
+	 * frames are only accepted if the bridge gave the port a PVID.
+	 */
+	ret = rtl8365mb_port_commit_pvid(ds, port, vlan_filtering, extack);
+	if (ret)
+		goto undo_transparent;
 
 	/* When VLAN filtering is disabled, preserve frames exactly as received.
 	 * Otherwise, the VLAN egress pipeline may still alter tag state
@@ -2085,14 +2111,12 @@ static int rtl8365mb_port_vlan_filtering(struct dsa_switch *ds, int port,
 
 	ret = rtl8365mb_port_set_vlan_egress_mode(priv, port, mode);
 	if (ret)
-		goto undo_set_framefilter;
+		goto undo_commit_pvid;
 
-	return ret;
+	goto out_unlock;
 
-undo_set_framefilter:
-	if (prev_accepted_frame != accepted_frame)
-		rtl8365mb_vlan_port_set_framefilter(priv, port,
-						    prev_accepted_frame);
+undo_commit_pvid:
+	(void)rtl8365mb_port_commit_pvid(ds, port, !vlan_filtering, NULL);
 undo_transparent:
 	/* The DSA core guarantees this callback is only invoked on an actual
 	 * state transition, ensuring the previous hardware state was the
@@ -2111,6 +2135,8 @@ undo_transparent:
 
 	rtl8365mb_port_set_ingress_filtering(priv, port, !vlan_filtering);
 
+out_unlock:
+	mutex_unlock(&priv->vlan_lock);
 	return ret;
 }
 
@@ -2120,8 +2146,11 @@ static int rtl8365mb_port_vlan_add(struct dsa_switch *ds, int port,
 {
 	bool untagged = !!(vlan->flags & BRIDGE_VLAN_INFO_UNTAGGED);
 	bool pvid = !!(vlan->flags & BRIDGE_VLAN_INFO_PVID);
-	u16 pvid_vid;
 	struct realtek_priv *priv = ds->priv;
+	struct rtl8365mb *mb = priv->chip_data;
+	u16 prev_bridge_pvid;
+	u16 *bridge_pvid;
+	bool vlan_filtering;
 	int ret;
 
 	dev_dbg(priv->dev, "add VLAN %d on port %d, %s, %s\n",
@@ -2137,41 +2166,33 @@ static int rtl8365mb_port_vlan_add(struct dsa_switch *ds, int port,
 
 	mutex_lock(&priv->vlan_lock);
 
-	ret = rtl8365mb_vlan_port_get_pvid(priv, port, &pvid_vid);
-	if (ret)
-		goto out_unlock;
+	vlan_filtering = dsa_port_is_vlan_filtering(dsa_to_port(ds, port));
+	bridge_pvid = &mb->ports[port].bridge_pvid;
 
-	/* Set PVID if needed */
-	if (pvid) {
-		ret = rtl8365mb_vlan_pvid_port_set(ds, port, vlan->vid,
-						   extack);
-		if (ret)
-			goto out_unlock;
-	} else {
-		/* or try to unset it if not */
-		ret = rtl8365mb_vlan_pvid_port_clear(ds, port, vlan->vid);
-		if (ret)
-			goto out_unlock;
-	}
+	/* Set PVID if needed, or unset it if this VLAN was the PVID */
+	prev_bridge_pvid = *bridge_pvid;
+	if (pvid)
+		*bridge_pvid = vlan->vid;
+	else if (*bridge_pvid == vlan->vid)
+		*bridge_pvid = 0;
+
+	ret = rtl8365mb_port_commit_pvid(ds, port, vlan_filtering, extack);
+	if (ret)
+		goto undo_bridge_pvid;
 
 	/* add port to vlan4k. It knows nothing about PVID */
 	ret = rtl8365mb_vlan_4k_port_add(ds, port, vlan, extack);
 	if (ret)
-		goto undo_set_pvid;
+		goto undo_commit_pvid;
 
-	ret = 0;
 	goto out_unlock;
 
-undo_set_pvid:
-	/* undo the pvid definition */
-	if (pvid != (pvid_vid == vlan->vid)) {
-		if (pvid_vid)
-			(void)rtl8365mb_vlan_pvid_port_set(ds, port, pvid_vid,
-							   NULL);
-		else
-			(void)rtl8365mb_vlan_pvid_port_clear(ds, port,
-							     vlan->vid);
-	}
+undo_commit_pvid:
+	*bridge_pvid = prev_bridge_pvid;
+	(void)rtl8365mb_port_commit_pvid(ds, port, vlan_filtering, NULL);
+	goto out_unlock;
+undo_bridge_pvid:
+	*bridge_pvid = prev_bridge_pvid;
 out_unlock:
 	mutex_unlock(&priv->vlan_lock);
 	return ret;
@@ -2183,6 +2204,10 @@ static int rtl8365mb_port_vlan_del(struct dsa_switch *ds, int port,
 	bool untagged = !!(vlan->flags & BRIDGE_VLAN_INFO_UNTAGGED);
 	bool pvid = !!(vlan->flags & BRIDGE_VLAN_INFO_PVID);
 	struct realtek_priv *priv = ds->priv;
+	struct rtl8365mb *mb = priv->chip_data;
+	u16 prev_bridge_pvid;
+	u16 *bridge_pvid;
+	bool vlan_filtering;
 	int ret;
 
 	dev_dbg(priv->dev, "del VLAN %d on port %d, %s, %s\n",
@@ -2193,10 +2218,20 @@ static int rtl8365mb_port_vlan_del(struct dsa_switch *ds, int port,
 	if (vlan->vid == 0)
 		return -EOPNOTSUPP;
 
+	vlan_filtering = dsa_port_is_vlan_filtering(dsa_to_port(ds, port));
+	bridge_pvid = &mb->ports[port].bridge_pvid;
+
 	mutex_lock(&priv->vlan_lock);
-	ret = rtl8365mb_vlan_pvid_port_clear(ds, port, vlan->vid);
-	if (ret)
+	prev_bridge_pvid = *bridge_pvid;
+	if (*bridge_pvid == vlan->vid)
+		*bridge_pvid = 0;
+
+	ret = rtl8365mb_port_commit_pvid(ds, port, vlan_filtering, NULL);
+	if (ret) {
+		/* keep the state in line with the PVID still in hardware */
+		*bridge_pvid = prev_bridge_pvid;
 		goto out_unlock;
+	}
 
 	ret = rtl8365mb_vlan_4k_port_del(ds, port, vlan);
 	/* There is little incentive to try to undo the removal of PVID (if it
@@ -2230,6 +2265,14 @@ static int rtl8365mb_vlan_setup(struct dsa_switch *ds)
 				dp->index);
 			return ret;
 		}
+	}
+
+	mutex_lock(&priv->vlan_lock);
+	ret = rtl8365mb_vlan_4k_setup_neutral(priv);
+	mutex_unlock(&priv->vlan_lock);
+	if (ret) {
+		dev_err(priv->dev, "Failed to set up VLAN 0\n");
+		return ret;
 	}
 
 	/* VLAN is always enabled. */
@@ -3140,6 +3183,16 @@ static int rtl8365mb_setup(struct dsa_switch *ds)
 		dev_info(priv->dev, "no interrupt support\n");
 
 	dsa_switch_for_each_port(dp, ds) {
+		if (dsa_port_is_unused(dp))
+			continue;
+
+		if (!(mb->chip_info->port_mask & BIT(dp->index))) {
+			dev_err(priv->dev, "port %d does not exist on %s\n",
+				dp->index, mb->chip_info->name);
+			ret = -EINVAL;
+			goto out_teardown_irq;
+		}
+
 		/* Cascading (DSA links) is not supported yet.
 		 * Historically, the driver has always been broken
 		 * without a dedicated CPU port because CPU tagging
@@ -3152,6 +3205,22 @@ static int rtl8365mb_setup(struct dsa_switch *ds)
 			goto out_teardown_irq;
 		}
 	}
+
+	/* The QoS baseline below assigns queues from this count */
+	ds->num_tx_queues = mb->chip_info->num_tx_queues;
+
+	/* Set up the QoS baseline before the per-port defaults */
+	ret = rtl83xx_qos_init(ds);
+	if (ret)
+		goto out_teardown_irq;
+
+	ret = rtl8365mb_qos_pridec_init(priv);
+	if (ret)
+		goto out_teardown_irq;
+
+	ret = rtl8365mb_qos_qmap_init(priv);
+	if (ret)
+		goto out_teardown_irq;
 
 	/* Start with all ports blocked, including unused ports */
 	dsa_switch_for_each_port(dp, ds) {
@@ -3180,6 +3249,10 @@ static int rtl8365mb_setup(struct dsa_switch *ds)
 
 		/* Enable all types of flooding */
 		ret = rtl83xx_setup_port_flood_control(priv, dp->index);
+		if (ret)
+			goto out_teardown_irq;
+
+		ret = rtl83xx_qos_init_port(ds, dp->index);
 		if (ret)
 			goto out_teardown_irq;
 
@@ -3349,7 +3422,7 @@ static int rtl8365mb_detect(struct realtek_priv *priv)
 
 	dev_info(priv->dev, "found an %s switch\n", mb->chip_info->name);
 
-	priv->num_ports = RTL8365MB_MAX_NUM_PORTS;
+	priv->num_ports = fls(mb->chip_info->port_mask);
 	mb->priv = priv;
 	mb->cpu.trap_port = RTL8365MB_MAX_NUM_PORTS;
 	mb->cpu.insert = RTL8365MB_CPU_INSERT_TO_ALL;
@@ -3425,6 +3498,11 @@ static const struct dsa_switch_ops rtl8365mb_switch_ops = {
 	.port_bridge_leave = rtl83xx_port_bridge_leave,
 	.port_pre_bridge_flags = rtl8365mb_port_pre_bridge_flags,
 	.port_bridge_flags = rtl83xx_port_bridge_flags,
+	.port_get_default_prio = rtl83xx_port_get_default_prio,
+	.port_set_default_prio = rtl83xx_port_set_default_prio,
+	.port_get_apptrust = rtl83xx_port_get_apptrust,
+	.port_set_apptrust = rtl83xx_port_set_apptrust,
+	.port_get_dscp_prio = rtl83xx_port_get_dscp_prio,
 	.port_stp_state_set = rtl8365mb_port_stp_state_set,
 	.port_fast_age = rtl83xx_port_fast_age,
 	.port_fdb_add = rtl83xx_port_fdb_add,
@@ -3467,6 +3545,13 @@ static const struct realtek_ops rtl8365mb_ops = {
 	.phy_write = rtl8365mb_phy_write,
 	.phy_read_c45 = rtl8365mb_phy_read_c45,
 	.phy_write_c45 = rtl8365mb_phy_write_c45,
+	.qos_get_port_prio = rtl8365mb_qos_get_port_prio,
+	.qos_set_port_prio = rtl8365mb_qos_set_port_prio,
+	.qos_set_pcp_prio = rtl8365mb_qos_set_pcp_prio,
+	.qos_get_dscp_prio = rtl8365mb_qos_get_dscp_prio,
+	.qos_set_dscp_prio = rtl8365mb_qos_set_dscp_prio,
+	.qos_set_apptrust = rtl8365mb_qos_set_apptrust,
+	.qos_get_apptrust = rtl8365mb_qos_get_apptrust,
 };
 
 static const char *const rtl8365mb_supplies[] = {

@@ -1008,12 +1008,16 @@ static void hwsim_del(struct hwsim_phy *phy)
 		list_del_rcu(&e->list);
 		hwsim_free_edge(e);
 	}
-	pib = rcu_dereference(phy->pib);
 	rcu_read_unlock();
 
+	ieee802154_unregister_hw(phy->hw);
+
+	spin_lock_bh(&phy->pib_lock);
+	pib = rcu_replace_pointer(phy->pib, NULL,
+				  lockdep_is_held(&phy->pib_lock));
+	spin_unlock_bh(&phy->pib_lock);
 	kfree_rcu(pib, rcu);
 
-	ieee802154_unregister_hw(phy->hw);
 	ieee802154_free_hw(phy->hw);
 }
 

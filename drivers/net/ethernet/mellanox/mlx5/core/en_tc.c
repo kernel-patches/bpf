@@ -1267,6 +1267,10 @@ mlx5e_add_offloaded_nic_rule(struct mlx5e_priv *priv,
 		dest[dest_ix].type = MLX5_FLOW_DESTINATION_TYPE_TIR;
 		dest[dest_ix].tir_num = nic_attr->hairpin_tirn;
 		dest_ix++;
+	} else if (nic_attr->rx_tirn) {
+		dest[dest_ix].type = MLX5_FLOW_DESTINATION_TYPE_TIR;
+		dest[dest_ix].tir_num = nic_attr->rx_tirn;
+		dest_ix++;
 	} else if (attr->action & MLX5_FLOW_CONTEXT_ACTION_FWD_DEST) {
 		dest[dest_ix].type = MLX5_FLOW_DESTINATION_TYPE_FLOW_TABLE;
 		if (attr->dest_chain) {
@@ -2257,6 +2261,7 @@ static int mlx5e_get_flow_tunnel_id(struct mlx5e_priv *priv,
 	struct tunnel_match_enc_opts tun_enc_opts;
 	struct mlx5_rep_uplink_priv *uplink_priv;
 	struct mlx5_flow_attr *attr = flow->attr;
+	struct flow_match_enc_keyid enc_keyid;
 	struct mlx5e_rep_priv *uplink_rpriv;
 	struct tunnel_match_key tunnel_key;
 	bool enc_opts_is_dont_care = true;
@@ -2264,6 +2269,16 @@ static int mlx5e_get_flow_tunnel_id(struct mlx5e_priv *priv,
 	struct mlx5_eswitch *esw;
 	u32 value, mask;
 	int err;
+
+	/* The mapping restores the tunnel id of a packet missing in hardware */
+	if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_ENC_KEYID)) {
+		flow_rule_match_enc_keyid(rule, &enc_keyid);
+		if (enc_keyid.mask->keyid != cpu_to_be32(U32_MAX)) {
+			NL_SET_ERR_MSG_MOD(extack,
+					   "Partial match of tunnel key in chains isn't supported");
+			return -EOPNOTSUPP;
+		}
+	}
 
 	esw = priv->mdev->priv.eswitch;
 	uplink_rpriv = mlx5_eswitch_get_uplink_priv(esw, REP_ETH);
@@ -2769,6 +2784,10 @@ static int __parse_cls_flower(struct mlx5e_priv *priv,
 		}
 
 		err = mlx5e_tc_verify_tunnel_ecn(priv, f, &match_inner_ecn);
+		if (err)
+			return err;
+	} else if (flow_rule_match_key(rule, FLOW_DISSECTOR_KEY_ENC_KEYID)) {
+		err = mlx5e_tc_tun_parse_outer_key(priv, spec, f, fs_type);
 		if (err)
 			return err;
 	}

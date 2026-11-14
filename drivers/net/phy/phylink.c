@@ -184,7 +184,7 @@ static int phylink_is_empty_linkmode(const unsigned long *linkmode)
 
 static const char *phylink_an_mode_str(unsigned int mode)
 {
-	static const char *modestr[] = {
+	static const char * const modestr[] = {
 		[MLO_AN_PHY] = "phy",
 		[MLO_AN_FIXED] = "fixed",
 		[MLO_AN_INBAND] = "inband",
@@ -3151,7 +3151,7 @@ int phylink_ethtool_ksettings_get(struct phylink *pl,
 EXPORT_SYMBOL_GPL(phylink_ethtool_ksettings_get);
 
 static bool phylink_validate_pcs_inband_autoneg(struct phylink *pl,
-					        phy_interface_t interface,
+						phy_interface_t interface,
 						unsigned long *adv)
 {
 	unsigned int inband = phylink_inband_caps(pl, interface);
@@ -3570,10 +3570,13 @@ static int phylink_phy_read(struct phylink *pl, unsigned int phy_id,
 	return mdiobus_read(pl->phydev->mdio.bus, phy_id, reg);
 }
 
-static int phylink_phy_write(struct phylink *pl, unsigned int phy_id,
-			     unsigned int reg, unsigned int val)
+static int phylink_phy_write(struct phylink *pl, struct ifreq *ifr)
 {
+	struct mii_ioctl_data *mii = if_mii(ifr);
 	struct phy_device *phydev = pl->phydev;
+	u16 phy_id = mii->phy_id;
+	u16 reg = mii->reg_num;
+	u16 val = mii->val_in;
 	int prtad, devad;
 
 	if (mdio_phy_id_is_c45(phy_id)) {
@@ -3607,6 +3610,10 @@ static int phylink_phy_write(struct phylink *pl, unsigned int phy_id,
 		return mdiobus_c45_write(pl->phydev->mdio.bus, phy_id, devad,
 					 reg, val);
 	}
+
+	if (phy_id == phydev->mdio.addr && reg == MII_BMCR &&
+	    (val & BMCR_RESET))
+		return phy_mii_ioctl(phydev, ifr, SIOCSMIIREG);
 
 	return mdiobus_write(phydev->mdio.bus, phy_id, reg, val);
 }
@@ -3697,8 +3704,7 @@ int phylink_mii_ioctl(struct phylink *pl, struct ifreq *ifr, int cmd)
 			break;
 
 		case SIOCSMIIREG:
-			ret = phylink_phy_write(pl, mii->phy_id, mii->reg_num,
-						mii->val_in);
+			ret = phylink_phy_write(pl, ifr);
 			break;
 
 		default:
@@ -4080,11 +4086,11 @@ static int phylink_sfp_module_start(void *upstream)
 	if (pl->phydev) {
 		phy_start(pl->phydev);
 		return 0;
-	} else {
-		ret = phylink_add_sfp_mod_port(pl);
-		if (ret)
-			return ret;
 	}
+
+	ret = phylink_add_sfp_mod_port(pl);
+	if (ret)
+		return ret;
 
 	/* If the module may have a PHY but we didn't detect one we
 	 * need to configure the MAC here.
@@ -4207,6 +4213,7 @@ void phylink_resolve_c73(struct phylink_link_state *state)
 
 	for (i = 0; i < ARRAY_SIZE(phylink_c73_priority_resolution); i++) {
 		int bit = phylink_c73_priority_resolution[i].bit;
+
 		if (linkmode_test_bit(bit, state->advertising) &&
 		    linkmode_test_bit(bit, state->lp_advertising))
 			break;
@@ -4635,7 +4642,8 @@ void phylink_replay_link_end(struct phylink *pl)
 
 	if (WARN(!test_bit(PHYLINK_DISABLE_REPLAY,
 			   &pl->phylink_disable_state),
-		 "phylink_replay_link_end() called without a prior phylink_replay_link_begin()\n"))
+		 "%s called without a prior phylink_replay_link_begin()\n",
+		 __func__))
 		return;
 
 	pl->force_major_config = true;

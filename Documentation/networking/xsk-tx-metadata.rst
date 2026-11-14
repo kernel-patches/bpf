@@ -59,7 +59,8 @@ The flags field enables the particular offload:
 Besides the flags above, in order to trigger the offloads, the first
 packet's ``struct xdp_desc`` descriptor should set ``XDP_TX_METADATA``
 bit in the ``options`` field. Also note that in a multi-buffer packet
-only the first chunk should carry the metadata.
+only the first chunk should carry the metadata. Only a descriptor with
+``XDP_TX_METADATA`` needs ``tx_metadata_len`` bytes in front of it.
 
 Software TX Checksum
 ====================

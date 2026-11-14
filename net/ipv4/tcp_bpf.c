@@ -499,9 +499,13 @@ more_data:
 				*copied -= free;
 		}
 		if (cork) {
-			sk_msg_free(sk, msg);
-			kfree(msg);
-			msg = NULL;
+			if (ret < 0 ||
+			    !msg->sg.data[msg->sg.start].page_link ||
+			    !msg->sg.data[msg->sg.start].length) {
+				sk_msg_free(sk, msg);
+				kfree(msg);
+				msg = NULL;
+			}
 			ret = 0;
 		}
 		break;

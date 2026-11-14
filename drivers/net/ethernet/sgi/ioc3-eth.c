@@ -152,19 +152,37 @@ static inline int ioc3_alloc_skb(struct ioc3_private *ip, struct sk_buff **skb,
 }
 
 #ifdef CONFIG_PCI_XTALK_BRIDGE
+/* A Bridge 64-bit direct-mapped DMA address carries the target widget in
+ * bits 63:60 and the DMA attributes below it.  An address in the 32-bit
+ * direct window carries neither, so attributes OR-ed onto one form a
+ * 64-bit address aimed at widget 0.
+ */
 static inline unsigned long ioc3_map(dma_addr_t addr, unsigned long attr)
 {
+	if (!(addr & PCI64_ATTR_TARG_MASK))
+		return addr;
+
 	return (addr & ~PCI64_ATTR_BAR) | attr;
 }
 
-#define ERBAR_VAL	(ERBAR_BARRIER_BIT << ERBAR_RXBARR_SHIFT)
+/* The RX barrier's upper address bits follow the same form. */
+static inline u32 ioc3_erbar(dma_addr_t addr)
+{
+	if (!(addr & PCI64_ATTR_TARG_MASK))
+		return 0;
+
+	return ERBAR_BARRIER_BIT << ERBAR_RXBARR_SHIFT;
+}
 #else
 static inline unsigned long ioc3_map(dma_addr_t addr, unsigned long attr)
 {
 	return addr;
 }
 
-#define ERBAR_VAL	0
+static inline u32 ioc3_erbar(dma_addr_t addr)
+{
+	return 0;
+}
 #endif
 
 static int ioc3eth_nvmem_match(struct device *dev, const void *data)
@@ -727,7 +745,7 @@ static void ioc3_init(struct net_device *dev)
 	readl(&regs->emcr);
 
 	/* Misc registers  */
-	writel(ERBAR_VAL, &regs->erbar);
+	writel(ioc3_erbar(ip->rxr_dma), &regs->erbar);
 	readl(&regs->etcdc);			/* Clear on read */
 	writel(15, &regs->ercsr);		/* RX low watermark  */
 	writel(0, &regs->ertr);			/* Interrupt immediately */
@@ -829,6 +847,7 @@ static int ioc3eth_probe(struct platform_device *pdev)
 {
 	u32 sw_physid1, sw_physid2, vendor, model, rev;
 	struct ioc3_private *ip;
+	bool random_mac = false;
 	struct net_device *dev;
 	struct resource *regs;
 	u8 mac_addr[6];
@@ -839,9 +858,16 @@ static int ioc3eth_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "Invalid resource\n");
 		return -EINVAL;
 	}
-	/* get mac addr from one wire prom */
-	if (ioc3eth_get_mac_addr(regs, mac_addr))
-		return -EPROBE_DEFER; /* not available yet */
+	/* get mac addr from one wire prom, or from the platform */
+	if (ioc3eth_get_mac_addr(regs, mac_addr) &&
+	    eth_platform_get_mac_address(&pdev->dev, mac_addr)) {
+		err = driver_deferred_probe_check_state(&pdev->dev);
+		if (err == -EPROBE_DEFER)
+			return err; /* not available yet */
+
+		dev_warn(&pdev->dev, "no MAC address, using a random one\n");
+		random_mac = true;
+	}
 
 	dev = alloc_etherdev(sizeof(struct ioc3_private));
 	if (!dev)
@@ -920,7 +946,10 @@ static int ioc3eth_probe(struct platform_device *pdev)
 
 	ioc3_mii_start(ip);
 	ioc3_ssram_disc(ip);
-	eth_hw_addr_set(dev, mac_addr);
+	if (random_mac)
+		eth_hw_addr_random(dev);
+	else
+		eth_hw_addr_set(dev, mac_addr);
 
 	/* The IOC3-specific entries in the device structure. */
 	dev->watchdog_timeo	= 5 * HZ;

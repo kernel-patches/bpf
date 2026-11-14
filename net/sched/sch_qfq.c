@@ -182,6 +182,7 @@ struct qfq_sched {
 
 	u64			oldV, V;	/* Precise virtual times. */
 	struct qfq_aggregate	*in_serv_agg;   /* Aggregate being served. */
+	struct sk_buff_head	*deferred_enqueues;
 	u32			wsum;		/* weight sum */
 	u32			iwsum;		/* inverse weight sum */
 
@@ -1103,17 +1104,25 @@ static void qfq_schedule_agg(struct qfq_sched *q, struct qfq_aggregate *agg);
 static struct sk_buff *qfq_dequeue(struct Qdisc *sch)
 {
 	struct qfq_sched *q = qdisc_priv(sch);
-	struct qfq_aggregate *in_serv_agg = q->in_serv_agg;
+	struct qfq_aggregate *in_serv_agg;
 	struct qfq_class *cl;
-	struct sk_buff *skb = NULL;
+	struct sk_buff_head deferred_enqueues;
+	struct sk_buff *skb, *next;
 	/* next-packet len, 0 means no more active classes in in-service agg */
-	unsigned int len = 0;
+	unsigned int len;
+
+restart:
+	in_serv_agg = q->in_serv_agg;
+	len = 0;
 
 	if (in_serv_agg == NULL)
 		return NULL;
 
-	if (!list_empty(&in_serv_agg->active))
+	if (!list_empty(&in_serv_agg->active)) {
 		skb = qfq_peek_skb(in_serv_agg, &cl, &len);
+		if (unlikely(in_serv_agg != q->in_serv_agg || cl->agg != in_serv_agg))
+			goto restart;
+	}
 
 	/*
 	 * If there are no active classes in the in-service aggregate,
@@ -1151,17 +1160,23 @@ static struct sk_buff *qfq_dequeue(struct Qdisc *sch)
 		 */
 		in_serv_agg = q->in_serv_agg = qfq_choose_next_agg(q);
 		skb = qfq_peek_skb(in_serv_agg, &cl, &len);
+		if (unlikely(in_serv_agg != q->in_serv_agg || cl->agg != in_serv_agg))
+			goto restart;
 	}
 	if (!skb)
 		return NULL;
 
 	qdisc_qlen_dec(sch);
 
+	qdisc_root_sleeping(sch)->flags |= TCQ_F_DEQUEUE_DROPS;
+	__skb_queue_head_init(&deferred_enqueues);
+	q->deferred_enqueues = &deferred_enqueues;
 	skb = agg_dequeue(in_serv_agg, cl, len);
+	q->deferred_enqueues = NULL;
 
 	if (!skb) {
 		qdisc_qlen_inc(sch);
-		return NULL;
+		goto replay_deferred;
 	}
 
 	qdisc_qstats_backlog_dec(sch, skb);
@@ -1180,6 +1195,11 @@ static struct sk_buff *qfq_dequeue(struct Qdisc *sch)
 	pr_debug("qfq dequeue: len %u F %lld now %lld\n",
 		 len, (unsigned long long) in_serv_agg->F,
 		 (unsigned long long) q->V);
+
+replay_deferred:
+	while ((next = __skb_dequeue(&deferred_enqueues)) != NULL)
+		if (qdisc_enqueue(next, sch, &qdisc_root_sleeping(sch)->to_free))
+			qdisc_tree_reduce_backlog(sch, 1, qdisc_pkt_len(next));
 
 	return skb;
 }
@@ -1236,6 +1256,11 @@ static int qfq_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	struct qfq_aggregate *agg;
 	int err = 0;
 
+	if (unlikely(q->deferred_enqueues)) {
+		__skb_queue_tail(q->deferred_enqueues, skb);
+		return NET_XMIT_SUCCESS;
+	}
+
 	cl = qfq_classify(skb, sch, &err);
 	if (cl == NULL) {
 		if (err & __NET_XMIT_BYPASS)
@@ -1274,9 +1299,10 @@ static int qfq_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	/* if the class is active, then done here */
 	if (cl_is_active(cl)) {
 		if (unlikely(skb == cl->qdisc->ops->peek(cl->qdisc)) &&
-		    list_first_entry(&agg->active, struct qfq_class, alist)
+		    cl_is_active(cl) &&
+		    list_first_entry(&cl->agg->active, struct qfq_class, alist)
 		    == cl && cl->deficit < len)
-			list_move_tail(&cl->alist, &agg->active);
+			list_move_tail(&cl->alist, &cl->agg->active);
 
 		return err;
 	}

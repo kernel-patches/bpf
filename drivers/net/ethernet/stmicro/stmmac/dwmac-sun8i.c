@@ -6,6 +6,7 @@
  */
 
 #include <linux/clk.h>
+#include <linux/if_vlan.h>
 #include <linux/io.h>
 #include <linux/iopoll.h>
 #include <linux/mdio-mux.h>
@@ -198,8 +199,9 @@ static const struct emac_variant emac_variant_h616_emac1 = {
 /* Used in RX_CTL1*/
 #define EMAC_RX_MD              BIT(1)
 #define EMAC_RX_TH_MASK		GENMASK(5, 4)
-#define EMAC_RX_TH_32		0
-#define EMAC_RX_TH_64		(0x1 << 4)
+/* RX_CTL1 RX_TH encoding (H616 UM 6.5.10): 00 = 64, 01 = 32 bytes */
+#define EMAC_RX_TH_32		(0x1 << 4)
+#define EMAC_RX_TH_64		0
 #define EMAC_RX_TH_96		(0x2 << 4)
 #define EMAC_RX_TH_128		(0x3 << 4)
 #define EMAC_RX_DMA_EN  BIT(30)
@@ -218,11 +220,24 @@ static const struct emac_variant emac_variant_h616_emac1 = {
 
 /* Used in RX_CTL0 */
 #define EMAC_RX_RECEIVER_EN             BIT(31)
+#define EMAC_RX_JUMBO_FRM_EN		BIT(29)
 #define EMAC_RX_DO_CRC BIT(27)
 #define EMAC_RX_FLOW_CTL_EN             BIT(16)
 
 /* Used in TX_CTL0 */
 #define EMAC_TX_TRANSMITTER_EN  BIT(31)
+
+/* The buffer size field of the EMAC DMA descriptors is 11 bits wide, and
+ * the RX DMA only fills a multiple of 4 bytes of a buffer: with 2047
+ * programmed, frames longer than 2044 bytes spill into a second
+ * descriptor. The stmmac normal descriptor code used for this EMAC only
+ * handles frames that fit in a single RX descriptor and a single TX
+ * descriptor buffer. Bound the MTU so that a frame, including two VLAN
+ * tags and the FCS, always fits in 2044 bytes.
+ */
+#define EMAC_MAX_FRAME_LEN	2044
+#define EMAC_MAX_MTU		(EMAC_MAX_FRAME_LEN - ETH_HLEN - \
+				 2 * VLAN_HLEN - ETH_FCS_LEN)
 
 /* Used in EMAC_TX_FLOW_CTL */
 #define EMAC_TX_FLOW_CTL_EN             BIT(0)
@@ -644,6 +659,15 @@ static void sun8i_dwmac_core_init(struct mac_device_info *hw,
 
 	v = (8 << EMAC_BURSTLEN_SHIFT); /* burst len */
 	writel(v, ioaddr + EMAC_BASIC_CTL1);
+
+	/* Without JUMBO_FRM_EN the receiver flags every frame longer than
+	 * 1518 bytes (1522 with a VLAN tag) as a length error, so any MTU
+	 * above 1500 is unusable. Frames are still bounded by the RX
+	 * descriptor buffer size, see EMAC_MAX_MTU.
+	 */
+	v = readl(ioaddr + EMAC_RX_CTL0);
+	v |= EMAC_RX_JUMBO_FRM_EN;
+	writel(v, ioaddr + EMAC_RX_CTL0);
 }
 
 static void sun8i_dwmac_set_mac(void __iomem *ioaddr, bool enable)
@@ -801,8 +825,13 @@ static int get_ephy_nodes(struct stmmac_priv *priv)
 		struct clk *ephy_clk;
 
 		ephy_clk = of_clk_get(iphynode, 0);
-		if (IS_ERR(ephy_clk))
+		if (IS_ERR(ephy_clk)) {
+			if (PTR_ERR(ephy_clk) == -EPROBE_DEFER) {
+				of_node_put(mdio_internal);
+				return -EPROBE_DEFER;
+			}
 			continue;
+		}
 		gmac->rst_ephy = of_reset_control_get_exclusive(iphynode, NULL);
 		if (IS_ERR(gmac->rst_ephy)) {
 			ret = PTR_ERR(gmac->rst_ephy);
@@ -1208,6 +1237,7 @@ static int sun8i_dwmac_probe(struct platform_device *pdev)
 	plat_dat->mac_setup = sun8i_dwmac_setup;
 	plat_dat->tx_fifo_size = 4096;
 	plat_dat->rx_fifo_size = 16384;
+	plat_dat->maxmtu = min(plat_dat->maxmtu, EMAC_MAX_MTU);
 
 	ret = sun8i_dwmac_set_syscon(&pdev->dev, plat_dat);
 	if (ret)
@@ -1245,6 +1275,7 @@ static int sun8i_dwmac_probe(struct platform_device *pdev)
 	return 0;
 
 dwmac_mux:
+	sun8i_dwmac_unpower_internal_phy(gmac);
 	reset_control_put(gmac->rst_ephy);
 	clk_put(gmac->ephy_clk);
 dwmac_remove:

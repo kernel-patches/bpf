@@ -26,6 +26,7 @@ static int ipv6_gro_pull_exthdrs(struct sk_buff *skb, int off, int proto)
 {
 	const struct net_offload *ops = NULL;
 	struct ipv6_opt_hdr *opth;
+	int exthdr_cnt = 0;
 
 	for (;;) {
 		int len;
@@ -36,6 +37,13 @@ static int ipv6_gro_pull_exthdrs(struct sk_buff *skb, int off, int proto)
 			break;
 
 		if (!(ops->flags & INET6_PROTO_GSO_EXTHDR))
+			break;
+
+		/* Same limit as ip6_protocol_deliver_rcu().
+		 * @proto is left pointing to an extension header,
+		 * so that the caller does not aggregate this packet.
+		 */
+		if (unlikely(exthdr_cnt++ >= IP6_MAX_EXT_HDRS_CNT))
 			break;
 
 		opth = skb_gro_header(skb, off + sizeof(*opth), off);
@@ -241,7 +249,8 @@ INDIRECT_CALLABLE_SCOPE struct sk_buff *ipv6_gro_receive(struct list_head *head,
 		skb_gro_pull(skb, sizeof(*iph));
 	}
 
-	skb_set_transport_header(skb, skb_gro_offset(skb));
+	if (!skb_set_transport_header_careful(skb, skb_gro_offset(skb)))
+		goto out;
 
 	NAPI_GRO_CB(skb)->proto = proto;
 

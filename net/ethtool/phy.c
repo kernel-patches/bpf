@@ -83,6 +83,9 @@ static int phy_prepare_data(const struct ethnl_req_info *req_info,
 	if (IS_ERR_OR_NULL(phydev))
 		return -EOPNOTSUPP;
 
+	if (WARN_ON_ONCE(!topo))
+		return -EOPNOTSUPP;
+
 	pdn = xa_load(&topo->phys, phydev->phyindex);
 	if (!pdn)
 		return -EOPNOTSUPP;

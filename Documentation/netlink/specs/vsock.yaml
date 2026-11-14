@@ -1,0 +1,89 @@
+# SPDX-License-Identifier: ((GPL-2.0 WITH Linux-syscall-note) OR BSD-3-Clause)
+#
+# Copyright (c) 2026 Meta Platforms, Inc. and affiliates
+#
+---
+name: vsock
+
+doc: |
+  Control interface for the vsock (AF_VSOCK) core.
+
+protocol: genetlink
+
+uapi-header: linux/vsock_netlink.h
+
+attribute-sets:
+  -
+    name: vsock
+    attributes:
+      -
+        name: netns-id
+        type: s32
+        doc: |
+          Network namespace the guest's vsock device is assigned to, as an
+          nsid relative to the caller.
+
+          Absent when the device is in the caller's own namespace, and
+          NETNSA_NSID_NOT_ASSIGNED when the g2h transport supports netns
+          assignment and the caller's namespace cannot reach the device under
+          the mode rules, or when no nsid could be allocated for it.
+      -
+        name: netns-fd
+        type: u32
+        doc: |
+          File descriptor of the network namespace to move the guest's vsock
+          device to.
+      -
+        name: netns-pid
+        type: u32
+        doc: |
+          PID of a process in the network namespace to move the guest's vsock
+          device to.
+
+operations:
+  list:
+    -
+      name: dev-netns-set
+      doc: |
+        Set the network namespace of the guest's vsock device.
+
+        The device is moved to the namespace given by netns-fd or netns-pid,
+        or to the namespace the request was sent from if neither is given.
+        It starts out in init_net, and moving it back there is how an
+        assignment is undone.
+
+        A g2h transport that does not support netns assignment returns
+        EOPNOTSUPP. If the netns assignment would cause a CID collision, it
+        is rejected with EADDRINUSE.
+
+        The namespace's mode decides who may then use the device: a global
+        mode namespace shares it with every other global mode namespace,
+        while a local mode namespace reserves it for itself.
+
+        Movement to an unreachable local namespace results in sockets being
+        closed with ECONNRESET. Peers are not guaranteed to be notified via
+        an RST.
+
+        The assignment holds a reference on the namespace.
+      attribute-set: vsock
+      flags: [admin-perm]
+      do:
+        request:
+          attributes:
+            - netns-fd
+            - netns-pid
+    -
+      name: dev-netns-get
+      doc: |
+        Get the network namespace the guest's vsock device is assigned to.
+
+        The namespace is reported as an nsid relative to the caller, so the
+        attribute is absent when the device is already in the caller's own
+        namespace. If the g2h transport supports netns assignment, a caller
+        whose namespace cannot reach the device is told
+        NETNSA_NSID_NOT_ASSIGNED rather than where the device went.
+      attribute-set: vsock
+      do:
+        reply:
+          attributes:
+            - netns-id

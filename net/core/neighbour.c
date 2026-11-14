@@ -783,7 +783,7 @@ struct pneigh_entry *pneigh_lookup(struct neigh_table *tbl,
 
 int pneigh_create(struct neigh_table *tbl,
 		  const void *pkey, struct net_device *dev,
-		  u32 flags, u8 protocol, bool permanent)
+		  u32 flags, u8 protocol, bool permanent, bool update)
 {
 	struct pneigh_entry *n;
 	unsigned int key_len;
@@ -793,8 +793,11 @@ int pneigh_create(struct neigh_table *tbl,
 	mutex_lock(&tbl->phash_lock);
 
 	n = pneigh_lookup(tbl, pkey, dev);
-	if (n)
+	if (n) {
+		if (!update)
+			goto out;
 		goto update;
+	}
 
 	key_len = tbl->key_len;
 	n = kzalloc(sizeof(*n) + key_len, GFP_KERNEL);
@@ -1339,6 +1342,9 @@ static void neigh_update_process_arp_queue(struct neighbour *neigh)
 			if (n2)
 				n1 = n2;
 		}
+		/* headerless output transmits on skb->dev, not n1->dev */
+		if (!n1->dev->header_ops)
+			skb->dev = n1->dev;
 		READ_ONCE(n1->output)(n1, skb);
 		if (n2)
 			neigh_release(n2);
@@ -2155,7 +2161,7 @@ static int neigh_add(struct sk_buff *skb, struct nlmsghdr *nlh,
 		}
 
 		err = pneigh_create(tbl, dst, dev, ndm_flags, protocol,
-				    !!(ndm->ndm_state & NUD_PERMANENT));
+				    !!(ndm->ndm_state & NUD_PERMANENT), true);
 		goto out;
 	}
 
@@ -3592,6 +3598,9 @@ static void __neigh_notify(struct neighbour *n, int type, int flags,
 	struct sk_buff *skb;
 	int err = -ENOBUFS;
 	struct net *net;
+
+	if (n->dead && type != RTM_DELNEIGH)
+		return;
 
 	rcu_read_lock();
 	net = dev_net_rcu(n->dev);

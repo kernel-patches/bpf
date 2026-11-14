@@ -41,6 +41,24 @@ enum gso_test_nr {
 	GSO_TEST_RESEGMENT_MULTI,
 	GSO_TEST_RESEGMENT_TAIL,
 	GSO_TEST_RESEGMENT_ONE_MSS,
+	GSO_TEST_FRAG_LIST_NON_UNIFORM_SG,
+	GSO_TEST_FRAG_LIST_NESTED,
+	GSO_TEST_SHORT_LINEAR,
+	GSO_TEST_SHORT_LINEAR_STRADDLE,
+	GSO_TEST_SHORT_FRAG_LIST,
+	GSO_TEST_SHORT_GSO_BY_FRAGS,
+	GSO_TEST_FRAG_LIST_NESTED_NO_SG,
+	GSO_TEST_FRAG_LIST_NESTED_NEXT_NO_SG,
+	GSO_TEST_FRAG_LIST_NESTED_TAIL_NO_SG,
+	GSO_TEST_FRAG_LIST_NESTED_COPY_NO_SG,
+	GSO_TEST_FRAG_LIST_STALE_TAIL_NO_SG,
+	GSO_TEST_FRAG_LIST_STALE_HEAD_NO_SG,
+	GSO_TEST_FRAG_LIST_STALE_FRAGS_NO_SG,
+	GSO_TEST_GSO_BY_FRAGS_PULLED_NO_SG,
+	GSO_TEST_SHORT_LINEAR_NO_SG,
+	GSO_TEST_SHORT_LINEAR_STRADDLE_NO_SG,
+	GSO_TEST_SHORT_FRAG_LIST_NO_SG,
+	GSO_TEST_SHORT_GSO_BY_FRAGS_NO_SG,
 };
 
 struct gso_test_case {
@@ -58,11 +76,24 @@ struct gso_test_case {
 	unsigned int gso_type;
 	/* skbs from alloc_skb() instead of build_skb(), head_frag clear */
 	bool no_head_frag;
+	/* bytes that skb->len counts but the skb doesn't hold */
+	unsigned int missing_len;
+	/* segment without NETIF_F_SG */
+	bool no_sg;
+	/* the second frag_list member hangs off the first one's frag_list
+	 * instead of off the head's
+	 */
+	bool nested;
+	/* gso_size is GSO_BY_FRAGS */
+	bool by_frags;
 
 	/* output as expected */
 	unsigned int nr_segs;
 	const unsigned int *segs;
 	const unsigned int *gso_segs;
+
+	/* skb_segment() is expected to fail with this error */
+	int err;
 };
 
 static struct gso_test_case cases[] = {
@@ -174,6 +205,7 @@ static struct gso_test_case cases[] = {
 		 */
 		.id = GSO_TEST_GSO_BY_FRAGS,
 		.name = "gso_by_frags",
+		.by_frags = true,
 		.nr_frag_skbs = 4,
 		.frag_skbs = (const unsigned int[]) { 100, 200, 300, 400 },
 		.nr_segs = 4,
@@ -241,6 +273,214 @@ static struct gso_test_case cases[] = {
 		},
 		.gso_segs = (const unsigned int[]) { 0, 0, 0, 0 },
 	},
+	{
+		/* frag_list members that don't end on gso_size boundaries
+		 * can't be segmented with SG
+		 */
+		.id = GSO_TEST_FRAG_LIST_NON_UNIFORM_SG,
+		.name = "frag_list_non_uniform_sg",
+		.linear_len = GSO_TEST_SIZE,
+		.nr_frag_skbs = 4,
+		.frag_skbs = (const unsigned int[]) { GSO_TEST_SIZE, 1, GSO_TEST_SIZE, 2 },
+		.err = -EINVAL,
+	},
+	{
+		.id = GSO_TEST_FRAG_LIST_NESTED,
+		.name = "frag_list_nested",
+		.nested = true,
+		.linear_len = GSO_TEST_SIZE,
+		.nr_frag_skbs = 2,
+		.frag_skbs = (const unsigned int[]) { GSO_TEST_SIZE, GSO_TEST_SIZE },
+		.err = -EINVAL,
+	},
+	{
+		/* the data runs out on a segment boundary */
+		.id = GSO_TEST_SHORT_LINEAR,
+		.name = "short_linear",
+		.linear_len = GSO_TEST_SIZE,
+		.missing_len = 50,
+		.err = -EINVAL,
+	},
+	{
+		/* the data runs out in the middle of a segment */
+		.id = GSO_TEST_SHORT_LINEAR_STRADDLE,
+		.name = "short_linear_straddle",
+		.linear_len = GSO_TEST_SIZE + 500,
+		.missing_len = 700,
+		.err = -EINVAL,
+	},
+	{
+		.id = GSO_TEST_SHORT_FRAG_LIST,
+		.name = "short_frag_list",
+		.linear_len = GSO_TEST_SIZE,
+		.nr_frag_skbs = 1,
+		.frag_skbs = (const unsigned int[]) { GSO_TEST_SIZE },
+		.missing_len = 50,
+		.err = -EINVAL,
+	},
+	{
+		.id = GSO_TEST_SHORT_GSO_BY_FRAGS,
+		.name = "short_gso_by_frags",
+		.by_frags = true,
+		.nr_frag_skbs = 2,
+		.frag_skbs = (const unsigned int[]) { 100, 200 },
+		.missing_len = 50,
+		.err = -EINVAL,
+	},
+	{
+		/* without SG the nested data is copied by skb_copy_bits(),
+		 * which does look inside a member's own frag_list
+		 */
+		.id = GSO_TEST_FRAG_LIST_NESTED_NO_SG,
+		.name = "frag_list_nested_no_sg",
+		.nested = true,
+		.linear_len = GSO_TEST_SIZE,
+		.nr_frag_skbs = 2,
+		.frag_skbs = (const unsigned int[]) { GSO_TEST_SIZE, GSO_TEST_SIZE },
+		.no_sg = true,
+		.nr_segs = 3,
+		.segs = (const unsigned int[]) { GSO_TEST_SIZE, GSO_TEST_SIZE, GSO_TEST_SIZE },
+	},
+	{
+		/* a clone of the first member would lose the nested data, and
+		 * the third member would go out in its place
+		 */
+		.id = GSO_TEST_FRAG_LIST_NESTED_NEXT_NO_SG,
+		.name = "frag_list_nested_next_no_sg",
+		.nested = true,
+		.linear_len = GSO_TEST_SIZE,
+		.nr_frag_skbs = 3,
+		.frag_skbs = (const unsigned int[]) { GSO_TEST_SIZE, GSO_TEST_SIZE,
+						      GSO_TEST_SIZE },
+		.no_sg = true,
+		.nr_segs = 4,
+		.segs = (const unsigned int[]) { GSO_TEST_SIZE, GSO_TEST_SIZE,
+						 GSO_TEST_SIZE, GSO_TEST_SIZE },
+	},
+	{
+		/* the same, but the last member is never cloned, so the walk
+		 * doesn't run out of members either
+		 */
+		.id = GSO_TEST_FRAG_LIST_NESTED_TAIL_NO_SG,
+		.name = "frag_list_nested_tail_no_sg",
+		.nested = true,
+		.linear_len = GSO_TEST_SIZE,
+		.nr_frag_skbs = 4,
+		.frag_skbs = (const unsigned int[]) { GSO_TEST_SIZE, GSO_TEST_SIZE,
+						      GSO_TEST_SIZE, 200 },
+		.frag_skb_frags = (const unsigned int[]) { 0, 0, 0, 100 },
+		.no_sg = true,
+		.nr_segs = 5,
+		.segs = (const unsigned int[]) { GSO_TEST_SIZE, GSO_TEST_SIZE,
+						 GSO_TEST_SIZE, GSO_TEST_SIZE, 300 },
+	},
+	{
+		/* the nested member is shorter than a segment, so it was never
+		 * cloned
+		 */
+		.id = GSO_TEST_FRAG_LIST_NESTED_COPY_NO_SG,
+		.name = "frag_list_nested_copy_no_sg",
+		.nested = true,
+		.linear_len = GSO_TEST_SIZE,
+		.nr_frag_skbs = 3,
+		.frag_skbs = (const unsigned int[]) { 500, 500, GSO_TEST_SIZE },
+		.no_sg = true,
+		.nr_segs = 3,
+		.segs = (const unsigned int[]) { GSO_TEST_SIZE, GSO_TEST_SIZE, GSO_TEST_SIZE },
+	},
+	{
+		/* the copy doesn't move the walk past the 3 byte member, which
+		 * then is as long as the last segment
+		 */
+		.id = GSO_TEST_FRAG_LIST_STALE_TAIL_NO_SG,
+		.name = "frag_list_stale_tail_no_sg",
+		.linear_len = GSO_TEST_SIZE,
+		.nr_frag_skbs = 3,
+		.frag_skbs = (const unsigned int[]) { GSO_TEST_SIZE, 3, GSO_TEST_SIZE },
+		.no_sg = true,
+		.nr_segs = 4,
+		.segs = (const unsigned int[]) { GSO_TEST_SIZE, GSO_TEST_SIZE, GSO_TEST_SIZE, 3 },
+	},
+	{
+		/* half of the first member is copied along with the end of the
+		 * head, and the member is as long as the next segment
+		 */
+		.id = GSO_TEST_FRAG_LIST_STALE_HEAD_NO_SG,
+		.name = "frag_list_stale_head_no_sg",
+		.linear_len = 2 * GSO_TEST_SIZE + 500,
+		.nr_frag_skbs = 2,
+		.frag_skbs = (const unsigned int[]) { GSO_TEST_SIZE, 500 },
+		.no_sg = true,
+		.nr_segs = 4,
+		.segs = (const unsigned int[]) { GSO_TEST_SIZE, GSO_TEST_SIZE,
+						 GSO_TEST_SIZE, GSO_TEST_SIZE },
+	},
+	{
+		/* the same with a frag on the member, which used to get its
+		 * first bytes sent twice instead of an error
+		 */
+		.id = GSO_TEST_FRAG_LIST_STALE_FRAGS_NO_SG,
+		.name = "frag_list_stale_frags_no_sg",
+		.linear_len = 500,
+		.nr_frag_skbs = 1,
+		.frag_skbs = (const unsigned int[]) { GSO_TEST_SIZE },
+		.frag_skb_frags = (const unsigned int[]) { 700 },
+		.no_sg = true,
+		.nr_segs = 3,
+		.segs = (const unsigned int[]) { GSO_TEST_SIZE, GSO_TEST_SIZE, 200 },
+	},
+	{
+		/* 16 bytes of the first member were pulled into the head.  The
+		 * lengths come from a stale member too, and the first one
+		 * divides the total, so this must not start to succeed with
+		 * three segments of 1000 bytes.
+		 */
+		.id = GSO_TEST_GSO_BY_FRAGS_PULLED_NO_SG,
+		.name = "gso_by_frags_pulled_no_sg",
+		.by_frags = true,
+		.linear_len = 16,
+		.nr_frag_skbs = 3,
+		.frag_skbs = (const unsigned int[]) { 1000, 1016, 968 },
+		.no_sg = true,
+		.err = -EINVAL,
+	},
+	{
+		/* without SG it is skb_copy_bits() that runs out of data */
+		.id = GSO_TEST_SHORT_LINEAR_NO_SG,
+		.name = "short_linear_no_sg",
+		.linear_len = GSO_TEST_SIZE,
+		.missing_len = 50,
+		.no_sg = true,
+		.err = -EFAULT,
+	},
+	{
+		.id = GSO_TEST_SHORT_LINEAR_STRADDLE_NO_SG,
+		.name = "short_linear_straddle_no_sg",
+		.linear_len = GSO_TEST_SIZE + 500,
+		.missing_len = 700,
+		.no_sg = true,
+		.err = -EFAULT,
+	},
+	{
+		.id = GSO_TEST_SHORT_FRAG_LIST_NO_SG,
+		.name = "short_frag_list_no_sg",
+		.linear_len = GSO_TEST_SIZE,
+		.nr_frag_skbs = 1,
+		.frag_skbs = (const unsigned int[]) { GSO_TEST_SIZE },
+		.missing_len = 50,
+		.no_sg = true,
+		.err = -EFAULT,
+	},
+	{
+		.id = GSO_TEST_SHORT_GSO_BY_FRAGS_NO_SG,
+		.name = "short_gso_by_frags_no_sg",
+		.by_frags = true,
+		.nr_frag_skbs = 2,
+		.frag_skbs = (const unsigned int[]) { 100, 200 },
+		.missing_len = 50,
+		.no_sg = true,
+		.err = -EINVAL,
+	},
 };
 
 static void gso_test_case_to_desc(struct gso_test_case *t, char *desc)
@@ -250,12 +490,26 @@ static void gso_test_case_to_desc(struct gso_test_case *t, char *desc)
 
 KUNIT_ARRAY_PARAM(gso_test, cases, gso_test_case_to_desc);
 
+/* Each byte depends on its place in the payload, so that data from the wrong
+ * offset of the right piece doesn't compare equal.  251 is prime, so the
+ * pattern doesn't repeat in step with GSO_TEST_SIZE.
+ */
+static void gso_test_fill(void *data, unsigned int len, unsigned int *pos)
+{
+	u8 *p = data;
+
+	while (len--)
+		*p++ = (*pos)++ % 251;
+}
+
 static void gso_test_func(struct kunit *test)
 {
 	const int shinfo_size = SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
 	struct sk_buff *skb, *segs, *cur, *next, *last;
+	unsigned int payload_len, fill = 0, off = 0;
 	const struct gso_test_case *tcase;
 	netdev_features_t features;
+	u8 *payload, *seg_payload;
 	struct page *page;
 	int i;
 
@@ -272,6 +526,7 @@ static void gso_test_func(struct kunit *test)
 	__skb_put(skb, sizeof(hdr) + tcase->linear_len);
 
 	__init_skb(skb);
+	gso_test_fill(skb->data, tcase->linear_len, &fill);
 	skb_shinfo(skb)->gso_type = tcase->gso_type;
 
 	if (tcase->nr_frags) {
@@ -287,6 +542,7 @@ static void gso_test_func(struct kunit *test)
 		}
 
 		KUNIT_ASSERT_LE(test, pg_off, PAGE_SIZE);
+		gso_test_fill(page_address(page), pg_off, &fill);
 
 		skb->data_len = pg_off;
 		skb->len += skb->data_len;
@@ -310,13 +566,16 @@ static void gso_test_func(struct kunit *test)
 						     frag_size + shinfo_size);
 			}
 			KUNIT_ASSERT_NOT_NULL(test, frag_skb);
-			__skb_put(frag_skb, frag_size);
+			gso_test_fill(__skb_put(frag_skb, frag_size), frag_size,
+				      &fill);
 
 			frag_len = tcase->frag_skb_frags ? tcase->frag_skb_frags[i] : 0;
 			if (frag_len) {
+				KUNIT_ASSERT_LE(test, frag_len, PAGE_SIZE);
 				page = alloc_page(GFP_KERNEL);
 				KUNIT_ASSERT_NOT_NULL(test, page);
 				skb_fill_page_desc(frag_skb, 0, page, 0, frag_len);
+				gso_test_fill(page_address(page), frag_len, &fill);
 
 				frag_skb->data_len = frag_len;
 				frag_skb->len += frag_len;
@@ -337,21 +596,60 @@ static void gso_test_func(struct kunit *test)
 		skb->data_len += total_size;
 		skb->truesize += total_true_size;
 
-		if (tcase->id == GSO_TEST_GSO_BY_FRAGS)
+		if (tcase->by_frags)
 			skb_shinfo(skb)->gso_size = GSO_BY_FRAGS;
+
+		if (tcase->nested) {
+			struct sk_buff *first = skb_shinfo(skb)->frag_list;
+			struct sk_buff *second = first->next;
+
+			first->next = second->next;
+			second->next = NULL;
+			skb_shinfo(first)->frag_list = second;
+			first->len += second->len;
+			first->data_len += second->len;
+		}
 	}
+
+	skb->len += tcase->missing_len;
+	skb->data_len += tcase->missing_len;
 
 	features = NETIF_F_SG | NETIF_F_HW_CSUM;
 	if (tcase->id == GSO_TEST_GSO_PARTIAL)
 		features |= NETIF_F_GSO_PARTIAL;
 
-	/* TODO: this should also work with SG,
-	 * rather than hit BUG_ON(i >= nfrags)
+	/* TODO: this should also work with SG, rather than fail the
+	 * i >= nfrags check in skb_segment()
 	 */
-	if (tcase->id == GSO_TEST_FRAG_LIST_NON_UNIFORM)
+	if (tcase->id == GSO_TEST_FRAG_LIST_NON_UNIFORM || tcase->no_sg)
 		features &= ~NETIF_F_SG;
 
 	SKB_GSO_CB(skb)->max_segs = tcase->max_segs;
+
+	if (tcase->err) {
+		/* the suppression block doesn't run if it can't be set up */
+		segs = NULL;
+		kunit_warning_suppress(test) {
+			segs = skb_segment(skb, features);
+		}
+		KUNIT_EXPECT_EQ(test, PTR_ERR_OR_ZERO(segs), tcase->err);
+		if (!IS_ERR_OR_NULL(segs))
+			kfree_skb_list(segs);
+		goto free_gso_skb;
+	}
+
+	/* the segments have to hold the bytes of the fill, in its order */
+	payload_len = skb->len;
+	KUNIT_EXPECT_EQ(test, fill, payload_len);
+	payload = kunit_kmalloc(test, payload_len, GFP_KERNEL);
+	seg_payload = kunit_kmalloc(test, payload_len, GFP_KERNEL);
+	if (!payload || !seg_payload) {
+		KUNIT_FAIL(test, "no memory for the payload");
+		goto free_gso_skb;
+	}
+	fill = 0;
+	gso_test_fill(payload, payload_len, &fill);
+
 	segs = skb_segment(skb, features);
 	if (IS_ERR(segs)) {
 		KUNIT_FAIL(test, "segs error %pe", segs);
@@ -368,14 +666,26 @@ static void gso_test_func(struct kunit *test)
 		if (i >= tcase->nr_segs)
 			goto consume;
 
-		KUNIT_ASSERT_EQ(test, cur->len, sizeof(hdr) + tcase->segs[i]);
+		KUNIT_EXPECT_EQ(test, cur->len, sizeof(hdr) + tcase->segs[i]);
 
 		/* segs have skb->data pointing to the mac header */
-		KUNIT_ASSERT_PTR_EQ(test, skb_mac_header(cur), cur->data);
-		KUNIT_ASSERT_PTR_EQ(test, skb_network_header(cur), cur->data + sizeof(hdr));
+		KUNIT_EXPECT_PTR_EQ(test, skb_mac_header(cur), cur->data);
+		KUNIT_EXPECT_PTR_EQ(test, skb_network_header(cur), cur->data + sizeof(hdr));
 
 		/* header was copied to all segs */
-		KUNIT_ASSERT_EQ(test, memcmp(skb_mac_header(cur), hdr, sizeof(hdr)), 0);
+		KUNIT_EXPECT_EQ(test, memcmp(skb_mac_header(cur), hdr, sizeof(hdr)), 0);
+
+		if (off + tcase->segs[i] > payload_len ||
+		    skb_copy_bits(cur, sizeof(hdr), seg_payload,
+				  tcase->segs[i])) {
+			KUNIT_FAIL(test, "can't copy segment %d", i);
+			kfree_skb_list(cur);
+			goto free_gso_skb;
+		}
+		KUNIT_EXPECT_MEMEQ(test, seg_payload, payload + off,
+				   tcase->segs[i]);
+		off += tcase->segs[i];
+
 		if (tcase->gso_segs) {
 			unsigned int gso_segs = tcase->gso_segs[i];
 
@@ -392,13 +702,14 @@ static void gso_test_func(struct kunit *test)
 
 		/* last seg can be found through segs->prev pointer */
 		if (!next)
-			KUNIT_ASSERT_PTR_EQ(test, cur, last);
+			KUNIT_EXPECT_PTR_EQ(test, cur, last);
 
 consume:
 		consume_skb(cur);
 	}
 
-	KUNIT_ASSERT_EQ(test, i, tcase->nr_segs);
+	KUNIT_EXPECT_EQ(test, off, payload_len);
+	KUNIT_EXPECT_EQ(test, i, tcase->nr_segs);
 
 free_gso_skb:
 	consume_skb(skb);
@@ -834,13 +1145,14 @@ static void netmem_ref_test_pp_page(struct kunit *test)
 #endif
 
 #if defined(CONFIG_PAGE_POOL) && defined(CONFIG_NET_DEVMEM)
+static struct net_devmem_dmabuf_binding binding;
+
 static void dummy_percpu_ref_release(struct percpu_ref *ref)
 {
 }
 
 static void netmem_ref_test_net_iov(struct kunit *test)
 {
-	struct net_devmem_dmabuf_binding binding = {};
 	struct page_pool_params pp_params = {
 		.order = 0,
 		.pool_size = 4,
@@ -853,6 +1165,7 @@ static void netmem_ref_test_net_iov(struct kunit *test)
 	long base_ref;
 	int err;
 
+	memset(&binding, 0, sizeof(binding));
 	err = percpu_ref_init(&binding.ref, dummy_percpu_ref_release,
 			      PERCPU_REF_INIT_ATOMIC, GFP_KERNEL);
 	KUNIT_ASSERT_EQ(test, err, 0);
@@ -995,7 +1308,6 @@ static void netmem_ref_test_release_data(struct kunit *test)
 		.nid = NUMA_NO_NODE,
 	};
 	struct sk_buff *skb, *clone1, *clone2, *ext;
-	struct net_devmem_dmabuf_binding binding = {};
 	struct net_iov niov = {};
 	struct page_pool *pool;
 	struct page *page;
@@ -1004,6 +1316,7 @@ static void netmem_ref_test_release_data(struct kunit *test)
 	int base_ref;
 	int i;
 
+	memset(&binding, 0, sizeof(binding));
 	pool = page_pool_create(&pp_params);
 	KUNIT_ASSERT_FALSE(test, IS_ERR(pool));
 	page = page_pool_dev_alloc_pages(pool);
@@ -1185,7 +1498,6 @@ static void netmem_ref_test_skb_segment(struct kunit *test)
 		.flags = SKBFL_ZEROCOPY_ENABLE,
 	};
 	struct sk_buff *head, *list, *segs, *seg;
-	struct net_devmem_dmabuf_binding binding = {};
 	struct net_iov niov = {};
 	struct page *pp_page, *reg_page;
 	netmem_ref pp_nm, niov_nm;
@@ -1193,6 +1505,7 @@ static void netmem_ref_test_skb_segment(struct kunit *test)
 	long base_pp_ref, base_iov_ref;
 	int base_pp_page_ref, base_reg_ref;
 
+	memset(&binding, 0, sizeof(binding));
 	pool = page_pool_create(&pp_params);
 	KUNIT_ASSERT_FALSE(test, IS_ERR(pool));
 	pp_page = page_pool_dev_alloc_pages(pool);
@@ -1374,7 +1687,7 @@ static void netmem_ref_test_skb_segment(struct kunit *test)
 	/* 5. Linear head_skb (nr_frags=0) + mixed pp_recycle frag_list where
 	 * member A has linear + frag (pp_recycle=1) and tail member B has
 	 * linear len == skb_headlen(A) (pp_recycle=0): keeps SG clone path
-	 * synchronized without hitting BUG_ON(i >= nfrags).
+	 * synchronized without failing the i >= nfrags check.
 	 */
 	head = alloc_skb(64, GFP_KERNEL);
 	list = alloc_skb(64, GFP_KERNEL);
@@ -1484,7 +1797,6 @@ static void netmem_ref_test_try_coalesce(struct kunit *test)
 		.nid = NUMA_NO_NODE,
 	};
 	struct sk_buff *to, *from, *clone;
-	struct net_devmem_dmabuf_binding binding = {};
 	struct net_iov niov = {};
 	struct page *pp_page, *reg_page;
 	netmem_ref pp_nm, niov_nm;
@@ -1494,6 +1806,7 @@ static void netmem_ref_test_try_coalesce(struct kunit *test)
 	bool fragstolen;
 	int delta;
 
+	memset(&binding, 0, sizeof(binding));
 	pool = page_pool_create(&pp_params);
 	KUNIT_ASSERT_FALSE(test, IS_ERR(pool));
 	pp_page = page_pool_dev_alloc_pages(pool);
@@ -1616,7 +1929,6 @@ static void netmem_ref_test_tcp_devmem_recv(struct kunit *test)
 		.pool_size = 4,
 		.nid = NUMA_NO_NODE,
 	};
-	struct net_devmem_dmabuf_binding binding = {};
 	struct msghdr msg = {};
 	struct dmabuf_token token;
 	struct dmabuf_cmsg *cmsg;
@@ -1630,6 +1942,7 @@ static void netmem_ref_test_tcp_devmem_recv(struct kunit *test)
 	long base_iov_ref;
 	int ret;
 
+	memset(&binding, 0, sizeof(binding));
 	KUNIT_ASSERT_EQ(test,
 			sock_create_kern(&init_net, AF_INET, SOCK_STREAM,
 					 IPPROTO_TCP, &sock),

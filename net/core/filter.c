@@ -2226,6 +2226,16 @@ static int __bpf_redirect_common(struct sk_buff *skb, struct net_device *dev,
 static int __bpf_redirect(struct sk_buff *skb, struct net_device *dev,
 			  u32 flags)
 {
+	/*
+	 * On transmit, decrypted asks the device to encrypt the packet. Sent
+	 * to ingress, the packet would read as decrypted by the device.
+	 */
+	if (unlikely((flags & BPF_F_INGRESS) && !skb_at_tc_ingress(skb) &&
+		     skb_is_decrypted(skb))) {
+		kfree_skb(skb);
+		return -EINVAL;
+	}
+
 	if (dev_is_mac_header_xmit(dev))
 		return __bpf_redirect_common(skb, dev, flags);
 	else
@@ -3760,9 +3770,9 @@ static int bpf_skb_net_grow(struct sk_buff *skb, u32 off, u32 len_diff,
 		shinfo->gso_segs = 0;
 
 		/* Due to header growth, MSS needs to be downgraded.
-		 * There is a BUG_ON() when segmenting the frag_list with
-		 * head_frag true, so linearize the skb after downgrading
-		 * the MSS.
+		 * Segmenting a frag_list with head_frag true at the new MSS
+		 * fails and the packet gets dropped, so linearize the skb
+		 * after downgrading the MSS.
 		 */
 		if (!(flags & BPF_F_ADJ_ROOM_FIXED_GSO)) {
 			skb_decrease_gso_size(shinfo, len_diff);
@@ -4774,12 +4784,28 @@ int xdp_do_redirect(struct net_device *dev, struct xdp_buff *xdp,
 {
 	struct bpf_redirect_info *ri = bpf_net_ctx_get_ri();
 	enum bpf_map_type map_type = ri->map_type;
+	struct xdp_frame *xdpf;
+	int err;
 
 	if (map_type == BPF_MAP_TYPE_XSKMAP)
 		return __xdp_do_redirect_xsk(ri, dev, xdp, xdp_prog);
 
-	return __xdp_do_redirect_frame(ri, dev, xdp_convert_buff_to_frame(xdp),
-				       xdp_prog);
+	if (likely(!xdp_buff_needs_copy(xdp)))
+		return __xdp_do_redirect_frame(ri, dev,
+					       xdp_convert_buff_to_frame(xdp),
+					       xdp_prog);
+
+	/* Release the source only after the target took the copy. */
+	xdpf = xdp_copy_buff_to_frame(xdp);
+	err = __xdp_do_redirect_frame(ri, dev, xdpf, xdp_prog);
+	if (unlikely(err)) {
+		if (xdpf)
+			xdp_return_frame(xdpf);
+		return err;
+	}
+
+	xdp_return_buff(xdp);
+	return 0;
 }
 EXPORT_SYMBOL_GPL(xdp_do_redirect);
 
@@ -4883,7 +4909,7 @@ int xdp_do_generic_redirect(struct net_device *dev, struct sk_buff *skb,
 
 		skb->dev = fwd;
 		_trace_xdp_redirect(dev, xdp_prog, ri->tgt_index);
-		generic_xdp_tx(skb, xdp_prog);
+		generic_xdp_tx(skb, xdp_prog, XDP_REDIRECT);
 		return 0;
 	}
 
@@ -5687,6 +5713,28 @@ static int bpf_sol_tcp_setsockopt(struct sock *sk, int optname,
 	return 0;
 }
 
+static int sol_tcp_getsockopt(struct sock *sk, int optname, char *optval,
+			      int *optlen)
+{
+	struct kvec kvec;
+	sockopt_t opt;
+	int err;
+
+	err = sockptr_to_sockopt(&opt, KERNEL_SOCKPTR(optval),
+				 KERNEL_SOCKPTR(optlen), &kvec);
+	if (err)
+		return err;
+
+	/* BPF may call this in softirq: with page faults disabled, the
+	 * usercopy check skips find_vmap_area() and its lock.
+	 */
+	pagefault_disable();
+	err = do_tcp_getsockopt(sk, SOL_TCP, optname, &opt);
+	pagefault_enable();
+	*optlen = opt.optlen;
+	return err;
+}
+
 static int sol_tcp_sockopt_congestion(struct sock *sk, char *optval,
 				      int *optlen, bool getopt)
 {
@@ -5701,9 +5749,7 @@ static int sol_tcp_sockopt_congestion(struct sock *sk, char *optval,
 			return -EINVAL;
 		/* BPF expects NULL-terminated tcp-cc string */
 		optval[--(*optlen)] = '\0';
-		return do_tcp_getsockopt(sk, SOL_TCP, TCP_CONGESTION,
-					 KERNEL_SOCKPTR(optval),
-					 KERNEL_SOCKPTR(optlen));
+		return sol_tcp_getsockopt(sk, TCP_CONGESTION, optval, optlen);
 	}
 
 	/* "cdg" is the only cc that alloc a ptr
@@ -5789,9 +5835,7 @@ static int sol_tcp_sockopt(struct sock *sk, int optname,
 			return 0;
 		}
 
-		return do_tcp_getsockopt(sk, SOL_TCP, optname,
-					 KERNEL_SOCKPTR(optval),
-					 KERNEL_SOCKPTR(optlen));
+		return sol_tcp_getsockopt(sk, optname, optval, optlen);
 	}
 
 	return do_tcp_setsockopt(sk, SOL_TCP, optname,
@@ -5828,10 +5872,20 @@ static int sol_ip_sockopt(struct sock *sk, int optname,
 		return -EINVAL;
 	}
 
-	if (getopt)
-		return do_ip_getsockopt(sk, SOL_IP, optname,
-					KERNEL_SOCKPTR(optval),
-					KERNEL_SOCKPTR(optlen));
+	if (getopt) {
+		struct kvec kvec;
+		sockopt_t opt;
+		int err;
+
+		err = sockptr_to_sockopt(&opt, KERNEL_SOCKPTR(optval),
+					 KERNEL_SOCKPTR(optlen), &kvec);
+		if (err)
+			return err;
+
+		err = do_ip_getsockopt(sk, SOL_IP, optname, &opt);
+		*optlen = opt.optlen;
+		return err;
+	}
 
 	return do_ip_setsockopt(sk, SOL_IP, optname,
 				KERNEL_SOCKPTR(optval), *optlen);
@@ -5855,10 +5909,20 @@ static int sol_ipv6_sockopt(struct sock *sk, int optname,
 		return -EINVAL;
 	}
 
-	if (getopt)
-		return do_ipv6_getsockopt(sk, SOL_IPV6, optname,
-					  KERNEL_SOCKPTR(optval),
-					  KERNEL_SOCKPTR(optlen));
+	if (getopt) {
+		struct kvec kvec;
+		sockopt_t opt;
+		int err;
+
+		err = sockptr_to_sockopt(&opt, KERNEL_SOCKPTR(optval),
+					 KERNEL_SOCKPTR(optlen), &kvec);
+		if (err)
+			return err;
+
+		err = do_ipv6_getsockopt(sk, SOL_IPV6, optname, &opt);
+		*optlen = opt.optlen;
+		return err;
+	}
 
 	return do_ipv6_setsockopt(sk, SOL_IPV6, optname,
 				  KERNEL_SOCKPTR(optval), *optlen);

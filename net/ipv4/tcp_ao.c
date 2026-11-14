@@ -2054,14 +2054,11 @@ int tcp_v4_parse_ao(struct sock *sk, int cmd, sockptr_t optval, int optlen)
 	return tcp_parse_ao(sk, cmd, AF_INET, optval, optlen);
 }
 
-/* tcp_ao_copy_mkts_to_user(ao_info, optval, optlen)
+/* tcp_ao_copy_mkts_to_user(ao_info, sopt)
  *
  * @ao_info:	struct tcp_ao_info on the socket that
  *		socket getsockopt(TCP_AO_GET_KEYS) is executed on
- * @optval:	pointer to array of tcp_ao_getsockopt structures in user space.
- *		Must be != NULL.
- * @optlen:	pointer to size of tcp_ao_getsockopt structure.
- *		Must be != NULL.
+ * @sopt:	optval and optlen of that getsockopt(), described below.
  *
  * Return value: 0 on success, a negative error number otherwise.
  *
@@ -2091,29 +2088,31 @@ int tcp_v4_parse_ao(struct sock *sk, int cmd, sockptr_t optval, int optlen)
  */
 static int tcp_ao_copy_mkts_to_user(const struct sock *sk,
 				    struct tcp_ao_info *ao_info,
-				    sockptr_t optval, sockptr_t optlen)
+				    sockopt_t *sopt)
 {
 	struct tcp_ao_getsockopt opt_in, opt_out;
 	struct tcp_ao_key *key, *current_key;
 	bool do_address_matching = true;
 	union tcp_ao_addr *addr = NULL;
 	int err, l3index, user_len;
+	unsigned int nr_keys = 0;
 	unsigned int max_keys;	/* maximum number of keys to copy to user */
-	size_t out_offset = 0;
 	size_t bytes_to_write;	/* number of bytes to write to user level */
+	struct iov_iter head;
 	u32 matched_keys;	/* keys from ao_info matched so far */
-	int optlen_out;
+	size_t reply_len;
 	__be16 port = 0;
 
-	if (copy_from_sockptr(&user_len, optlen, sizeof(int)))
-		return -EFAULT;
+	user_len = sopt->optlen;
 
 	if (user_len <= 0)
 		return -EINVAL;
 
 	memset(&opt_in, 0, sizeof(struct tcp_ao_getsockopt));
-	err = copy_struct_from_sockptr(&opt_in, sizeof(opt_in),
-				       optval, user_len);
+	if (WARN_ON_ONCE(!iter_is_ubuf(&sopt->iter_in)))
+		return -EINVAL;
+	err = copy_struct_from_user(&opt_in, sizeof(opt_in), sopt->iter_in.ubuf,
+				    user_len);
 	if (err < 0)
 		return err;
 
@@ -2214,6 +2213,21 @@ static int tcp_ao_copy_mkts_to_user(const struct sock *sk,
 	}
 
 	bytes_to_write = min_t(int, user_len, sizeof(struct tcp_ao_getsockopt));
+
+	/* The reply is up to nkeys entries, user_len apart, with the match
+	 * count in the first entry's nkeys, so it can outgrow optlen. Size it
+	 * by the keys on the socket rather than by the caller's nkeys.
+	 */
+	hlist_for_each_entry_rcu(key, &ao_info->head, node,
+				 lockdep_sock_is_held(sk))
+		nr_keys++;
+	reply_len = max(array_size(min(max_keys, nr_keys), user_len),
+			offsetofend(struct tcp_ao_getsockopt, nkeys));
+	err = sockopt_expand_out(sopt, reply_len);
+	if (err)
+		return err;
+	head = sopt->iter_out;
+
 	matched_keys = 0;
 	/* May change in RX, while we're dumping, pre-fetch it */
 	current_key = READ_ONCE(ao_info->current_key);
@@ -2275,25 +2289,22 @@ match:
 			strscpy(opt_out.alg_name, tcp_ao_algos[key->algo].name);
 
 		/* Copy key to user */
-		if (copy_to_sockptr_offset(optval, out_offset,
-					   &opt_out, bytes_to_write))
+		if (copy_to_iter(&opt_out, bytes_to_write, &sopt->iter_out) !=
+		    bytes_to_write)
 			return -EFAULT;
-		out_offset += user_len;
+		iov_iter_advance(&sopt->iter_out, user_len - bytes_to_write);
 	}
 
-	optlen_out = (int)sizeof(struct tcp_ao_getsockopt);
-	if (copy_to_sockptr(optlen, &optlen_out, sizeof(int)))
-		return -EFAULT;
+	sopt->optlen = sizeof(struct tcp_ao_getsockopt);
 
-	out_offset = offsetof(struct tcp_ao_getsockopt, nkeys);
-	if (copy_to_sockptr_offset(optval, out_offset,
-				   &matched_keys, sizeof(u32)))
+	iov_iter_advance(&head, offsetof(struct tcp_ao_getsockopt, nkeys));
+	if (copy_to_iter(&matched_keys, sizeof(u32), &head) != sizeof(u32))
 		return -EFAULT;
 
 	return 0;
 }
 
-int tcp_ao_get_mkts(struct sock *sk, sockptr_t optval, sockptr_t optlen)
+int tcp_ao_get_mkts(struct sock *sk, sockopt_t *sopt)
 {
 	struct tcp_ao_info *ao_info;
 
@@ -2303,18 +2314,17 @@ int tcp_ao_get_mkts(struct sock *sk, sockptr_t optval, sockptr_t optlen)
 	if (!ao_info)
 		return -ENOENT;
 
-	return tcp_ao_copy_mkts_to_user(sk, ao_info, optval, optlen);
+	return tcp_ao_copy_mkts_to_user(sk, ao_info, sopt);
 }
 
-int tcp_ao_get_sock_info(struct sock *sk, sockptr_t optval, sockptr_t optlen)
+int tcp_ao_get_sock_info(struct sock *sk, sockopt_t *sopt)
 {
 	struct tcp_ao_info_opt out, in = {};
 	struct tcp_ao_key *current_key;
 	struct tcp_ao_info *ao;
 	int err, len;
 
-	if (copy_from_sockptr(&len, optlen, sizeof(int)))
-		return -EFAULT;
+	len = sopt->optlen;
 
 	if (len <= 0)
 		return -EINVAL;
@@ -2323,7 +2333,9 @@ int tcp_ao_get_sock_info(struct sock *sk, sockptr_t optval, sockptr_t optlen)
 	 * that may be needed to extend (struct tcp_ao_info_opt) and
 	 * what getsockopt() provides in future.
 	 */
-	err = copy_struct_from_sockptr(&in, sizeof(in), optval, len);
+	if (WARN_ON_ONCE(!iter_is_ubuf(&sopt->iter_in)))
+		return -EINVAL;
+	err = copy_struct_from_user(&in, sizeof(in), sopt->iter_in.ubuf, len);
 	if (err)
 		return err;
 
@@ -2355,7 +2367,8 @@ int tcp_ao_get_sock_info(struct sock *sk, sockptr_t optval, sockptr_t optlen)
 		out.rnext = ao->rnext_key->rcvid;
 	}
 
-	if (copy_to_sockptr(optval, &out, min_t(int, len, sizeof(out))))
+	len = min_t(int, len, sizeof(out));
+	if (copy_to_iter(&out, len, &sopt->iter_out) != len)
 		return -EFAULT;
 
 	return 0;
@@ -2396,15 +2409,14 @@ int tcp_ao_set_repair(struct sock *sk, sockptr_t optval, unsigned int optlen)
 	return 0;
 }
 
-int tcp_ao_get_repair(struct sock *sk, sockptr_t optval, sockptr_t optlen)
+int tcp_ao_get_repair(struct sock *sk, sockopt_t *sopt)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct tcp_ao_repair opt;
 	struct tcp_ao_info *ao;
 	int len;
 
-	if (copy_from_sockptr(&len, optlen, sizeof(int)))
-		return -EFAULT;
+	len = sopt->optlen;
 
 	if (len <= 0)
 		return -EINVAL;
@@ -2425,7 +2437,8 @@ int tcp_ao_get_repair(struct sock *sk, sockptr_t optval, sockptr_t optlen)
 	opt.rcv_sne	= READ_ONCE(ao->rcv_sne);
 	rcu_read_unlock();
 
-	if (copy_to_sockptr(optval, &opt, min_t(int, len, sizeof(opt))))
+	len = min_t(int, len, sizeof(opt));
+	if (copy_to_iter(&opt, len, &sopt->iter_out) != len)
 		return -EFAULT;
 	return 0;
 }

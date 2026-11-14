@@ -233,6 +233,14 @@ int smc_tx_sendmsg(struct smc_sock *smc, struct msghdr *msg, size_t len)
 		/* initialize variables for 1st iteration of subsequent loop */
 		/* could be just 1 byte, even after smc_tx_wait above */
 		writespace = atomic_read(&conn->sndbuf_space);
+		/* sndbuf_space can be out of range: late completions of an
+		 * old SMC-R link credit it again after a failover, and with
+		 * SMC-D DMB merge it follows the peer's consumer cursor.
+		 * Bound writespace, which sizes the copy; a negative value
+		 * would become huge in the size_t min_t() below.
+		 */
+		if (writespace < 0 || writespace > conn->sndbuf_desc->len)
+			writespace = conn->sndbuf_desc->len;
 		/* not more than what user space asked for */
 		copylen = min_t(size_t, send_remaining, writespace);
 		/* determine start of sndbuf */
@@ -278,7 +286,7 @@ int smc_tx_sendmsg(struct smc_sock *smc, struct msghdr *msg, size_t len)
 		/* increased in send tasklet smc_cdc_tx_handler() */
 		smp_mb__before_atomic();
 		atomic_sub(copylen, &conn->sndbuf_space);
-		/* guarantee 0 <= sndbuf_space <= sndbuf_desc->len */
+		/* can be out of range, see writespace above */
 		smp_mb__after_atomic();
 		/* since we just produced more new data into sndbuf,
 		 * trigger sndbuf consumer: RDMA write into peer RMBE and CDC
@@ -354,7 +362,7 @@ static inline void smc_tx_advance_cursors(struct smc_connection *conn,
 	smp_mb__before_atomic();
 	/* data in flight reduces usable snd_wnd */
 	atomic_sub(len, &conn->peer_rmbe_space);
-	/* guarantee 0 <= peer_rmbe_space <= peer_rmbe_size */
+	/* can be out of range, see smc_tx_rdma_writes() */
 	smp_mb__after_atomic();
 	smc_curs_add(conn->sndbuf_desc->len, sent, len);
 }
@@ -371,7 +379,6 @@ static int smcr_tx_rdma_writes(struct smc_connection *conn, size_t len,
 		sg_dma_address(conn->sndbuf_desc->sgt[link->link_idx].sgl);
 	u64 virt_addr = (uintptr_t)conn->sndbuf_desc->cpu_addr;
 	int src_len_sum = src_len, dst_len_sum = dst_len;
-	int sent_count = src_off;
 	int srcchunk, dstchunk;
 	int num_sges;
 	int rc;
@@ -417,8 +424,7 @@ static int smcr_tx_rdma_writes(struct smc_connection *conn, size_t len,
 		dst_off = 0; /* modulo offset in RMBE ring buffer */
 		dst_len = len - dst_len; /* remainder */
 		dst_len_sum += dst_len;
-		src_len = min_t(int, dst_len, conn->sndbuf_desc->len -
-				sent_count);
+		src_len = min_t(int, dst_len, conn->sndbuf_desc->len - src_off);
 		src_len_sum = src_len;
 	}
 	return 0;
@@ -474,7 +480,7 @@ static int smc_tx_rdma_writes(struct smc_connection *conn,
 			      struct smc_rdma_wr *wr_rdma_buf)
 {
 	size_t len, src_len, dst_off, dst_len; /* current chunk values */
-	union smc_host_cursor sent, prep, prod, cons;
+	union smc_host_cursor sent, prep, prod;
 	struct smc_cdc_producer_flags *pflags;
 	int to_send, rmbespace;
 	int rc;
@@ -497,31 +503,23 @@ static int smc_tx_rdma_writes(struct smc_connection *conn,
 		return 0;
 	}
 	smc_curs_copy(&prod, &conn->local_tx_ctrl.prod, conn);
-	smc_curs_copy(&cons, &conn->local_rx_ctrl.cons, conn);
 
 	/* if usable snd_wnd closes ask peer to advertise once it opens again */
 	pflags = &conn->local_tx_ctrl.prod_flags;
 	pflags->write_blocked = (to_send >= rmbespace);
-	/* cf. usable snd_wnd */
-	len = min(to_send, rmbespace);
+	/* cf. usable snd_wnd. The window follows the peer's consumer cursor,
+	 * which comes off the wire: write at most one RMBE per call.
+	 */
+	len = min3(to_send, rmbespace, conn->peer_rmbe_size);
 
 	/* initialize variables for first iteration of subsequent nested loop */
 	dst_off = prod.count;
-	if (prod.wrap == cons.wrap) {
-		/* the filled destination area is unwrapped,
-		 * hence the available free destination space is wrapped
-		 * and we need 2 destination chunks of sum len; start with 1st
-		 * which is limited by what's available in sndbuf
-		 */
-		dst_len = min_t(size_t,
-				conn->peer_rmbe_size - prod.count, len);
-	} else {
-		/* the filled destination area is wrapped,
-		 * hence the available free destination space is unwrapped
-		 * and we need a single destination chunk of entire len
-		 */
-		dst_len = len;
-	}
+	/* at most 2 destination chunks of sum len; the 1st ends no later than
+	 * the peer's RMBE. The cursor wraps do not decide that: the peer's
+	 * cursor comes off the wire, and after a link failover prod can be
+	 * behind it.
+	 */
+	dst_len = min_t(size_t, conn->peer_rmbe_size - prod.count, len);
 	/* dst_len determines the maximum src_len */
 	if (sent.count + dst_len <= conn->sndbuf_desc->len) {
 		/* unwrapped src case: single chunk of entire dst_len */

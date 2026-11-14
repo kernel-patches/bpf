@@ -560,12 +560,11 @@ mlx5e_add_skb_frag(struct mlx5e_rq *rq, struct sk_buff *skb,
 		   u32 frag_offset, u32 len,
 		   unsigned int truesize)
 {
-	dma_addr_t addr = page_pool_get_dma_addr_netmem(frag_page->netmem);
 	u8 next_frag = skb_shinfo(skb)->nr_frags;
 	netmem_ref netmem = frag_page->netmem;
 
-	dma_sync_single_for_cpu(rq->pdev, addr + frag_offset, len,
-				rq->buff.map_dir);
+	page_pool_dma_sync_netmem_for_cpu(rq->page_pool, netmem, frag_offset,
+					  len);
 
 	if (skb_can_coalesce_netmem(skb, next_frag, netmem, frag_offset)) {
 		skb_coalesce_rx_frag(skb, next_frag - 1, len, truesize);
@@ -670,21 +669,22 @@ static int mlx5e_alloc_rx_mpwqe(struct mlx5e_rq *rq, u16 ix)
 			goto err_unmap;
 
 		addr = page_pool_get_dma_addr_netmem(frag_page->netmem);
-		umr_wqe->inline_mtts[i] = (struct mlx5_mtt) {
-			.ptag = cpu_to_be64(addr | MLX5_EN_WR),
-		};
+		if (test_bit(MLX5E_RQ_STATE_DATA_DIRECT, &rq->state))
+			umr_wqe->inline_ksms[i] = (struct mlx5_ksm) {
+				.key = rq->mpwqe.ksm_child_mkey_be,
+				.va  = cpu_to_be64(addr),
+			};
+		else
+			umr_wqe->inline_mtts[i] = (struct mlx5_mtt) {
+				.ptag = cpu_to_be64(addr | MLX5_EN_WR),
+			};
 	}
 
-	/* Pad if needed, in case the value set to ucseg->xlt_octowords
-	 * in mlx5e_build_umr_wqe() needed alignment.
+	/* Pad when the value set to ucseg->xlt_octowords in
+	 * mlx5e_build_umr_wqe() needed alignment.
 	 */
-	if (rq->mpwqe.pages_per_wqe & (MLX5_UMR_MTT_NUM_ENTRIES_ALIGNMENT - 1)) {
-		int pad = ALIGN(rq->mpwqe.pages_per_wqe, MLX5_UMR_MTT_NUM_ENTRIES_ALIGNMENT) -
-			rq->mpwqe.pages_per_wqe;
-
-		memset(&umr_wqe->inline_mtts[rq->mpwqe.pages_per_wqe], 0,
-		       sizeof(*umr_wqe->inline_mtts) * pad);
-	}
+	memset((u8 *)umr_wqe->inline_mtts + rq->mpwqe.umr_pad_offset, 0,
+	       rq->mpwqe.umr_pad_bytes);
 
 	bitmap_zero(wi->skip_release_bitmap, rq->mpwqe.pages_per_wqe);
 	wi->consumed_strides = 0;
@@ -693,7 +693,8 @@ static int mlx5e_alloc_rx_mpwqe(struct mlx5e_rq *rq, u16 ix)
 		cpu_to_be32((sq->pc << MLX5_WQE_CTRL_WQE_INDEX_SHIFT) |
 			    MLX5_OPCODE_UMR);
 
-	offset = (ix * rq->mpwqe.mtts_per_wqe) * sizeof(struct mlx5_mtt) / MLX5_OCTWORD;
+	offset = ix * rq->mpwqe.mtts_per_wqe *
+		 rq->mpwqe.umr_entry_size / MLX5_OCTWORD;
 	umr_wqe->hdr.uctrl.xlt_offset = cpu_to_be16(offset);
 
 	sq->db.wqe_info[pi] = (struct mlx5e_icosq_wqe_info) {

@@ -87,6 +87,9 @@ properties:
 
   dma-coherent: true
 
+  iommus:
+    maxItems: 1
+
   clock_in_out:
     description:
       For RGMII, it must be "input", means main clock(125MHz)

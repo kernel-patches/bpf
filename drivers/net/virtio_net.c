@@ -315,6 +315,8 @@ struct send_queue {
 
 	struct xsk_buff_pool *xsk_pool;
 
+	/* All-zero header shared by the AF_XDP packets sent on this queue */
+	struct virtio_net_common_hdr *xsk_hdr;
 	dma_addr_t xsk_hdr_dma_addr;
 };
 
@@ -499,8 +501,6 @@ struct virtio_net_common_hdr {
 		struct virtio_net_hdr_v1_hash_tunnel tnl_hdr;
 	};
 };
-
-static struct virtio_net_common_hdr xsk_hdr;
 
 static void virtnet_sq_free_unused_buf(struct virtqueue *vq, void *buf);
 static void virtnet_sq_free_unused_buf_done(struct virtqueue *vq);
@@ -792,19 +792,32 @@ static unsigned int mergeable_ctx_to_truesize(void *mrg_ctx)
 	return (unsigned long)mrg_ctx & ((1 << MRG_CTX_HEADER_SHIFT) - 1);
 }
 
-static int check_mergeable_len(struct net_device *dev, void *mrg_ctx,
-			       unsigned int len)
+/* Length of the mergeable buffer that add_recvbuf_mergeable() posted. */
+static unsigned int mergeable_ctx_to_buflen(void *mrg_ctx)
 {
-	unsigned int headroom, tailroom, room, truesize;
+	unsigned int headroom, tailroom, room;
 
-	truesize = mergeable_ctx_to_truesize(mrg_ctx);
 	headroom = mergeable_ctx_to_headroom(mrg_ctx);
 	tailroom = headroom ? sizeof(struct skb_shared_info) : 0;
 	room = SKB_DATA_ALIGN(headroom + tailroom);
 
-	if (len > truesize - room) {
-		pr_debug("%s: rx error: len %u exceeds truesize %lu\n",
-			 dev->name, len, (unsigned long)(truesize - room));
+	return mergeable_ctx_to_truesize(mrg_ctx) - room;
+}
+
+/* Length of the small buffer that add_recvbuf_small() posts. */
+static unsigned int small_buflen(const struct virtnet_info *vi)
+{
+	return vi->hdr_len + GOOD_PACKET_LEN;
+}
+
+static int check_mergeable_len(struct net_device *dev, void *mrg_ctx,
+			       unsigned int len)
+{
+	unsigned int buflen = mergeable_ctx_to_buflen(mrg_ctx);
+
+	if (len > buflen) {
+		pr_debug("%s: rx error: len %u exceeds buffer length %u\n",
+			 dev->name, len, buflen);
 		DEV_STATS_INC(dev, rx_length_errors);
 		return -1;
 	}
@@ -1797,14 +1810,14 @@ static struct page *xdp_linearize_page(struct net_device *dev,
 		p = virt_to_head_page(buf);
 		off = buf - page_address(p);
 
-		if (rq->use_page_pool_dma)
-			page_pool_dma_sync_for_cpu(rq->page_pool, p,
-						   off, buflen);
-
 		if (check_mergeable_len(dev, ctx, buflen)) {
 			page_pool_put_page(rq->page_pool, p, -1, true);
 			goto err_buf;
 		}
+
+		if (rq->use_page_pool_dma)
+			page_pool_dma_sync_for_cpu(rq->page_pool, p,
+						   off, buflen);
 
 		/* guard against a misconfigured or uncooperative backend that
 		 * is sending packet larger than the MTU.
@@ -2165,14 +2178,14 @@ static int virtnet_build_xdp_buff_mrg(struct net_device *dev,
 		page = virt_to_head_page(buf);
 		offset = buf - page_address(page);
 
-		if (rq->use_page_pool_dma)
-			page_pool_dma_sync_for_cpu(rq->page_pool, page,
-						   offset, len);
-
 		if (check_mergeable_len(dev, ctx, len)) {
 			page_pool_put_page(rq->page_pool, page, -1, true);
 			goto err;
 		}
+
+		if (rq->use_page_pool_dma)
+			page_pool_dma_sync_for_cpu(rq->page_pool, page,
+						   offset, len);
 
 		truesize = mergeable_ctx_to_truesize(ctx);
 		xdp_frags_truesz += truesize;
@@ -2446,14 +2459,14 @@ static struct sk_buff *receive_mergeable(struct net_device *dev,
 		u64_stats_add(&stats->bytes, len);
 		page = virt_to_head_page(buf);
 
+		if (check_mergeable_len(dev, ctx, len))
+			goto err_skb;
+
 		if (rq->use_page_pool_dma) {
 			offset = buf - page_address(page);
 			page_pool_dma_sync_for_cpu(rq->page_pool, page,
 						   offset, len);
 		}
-
-		if (check_mergeable_len(dev, ctx, len))
-			goto err_skb;
 
 		truesize = mergeable_ctx_to_truesize(ctx);
 		curr_skb  = virtnet_skb_append_frag(rq, head_skb, curr_skb, page,
@@ -2574,12 +2587,22 @@ static void receive_buf(struct virtnet_info *vi, struct receive_queue *rq,
 
 	/* Sync the memory before touching anything through buf,
 	 * unless virtio core did it already.
+	 *
+	 * len comes from the device and is checked against the buffer
+	 * only later, so never sync past the buffer posted to the device.
+	 * The sync still covers the header, which receive_buf() and the
+	 * mergeable drop path read. Big buffers never come from the page
+	 * pool, so a buffer here is either mergeable or small.
 	 */
 	if (rq->use_page_pool_dma) {
 		struct page *page = virt_to_head_page(buf);
 		int offset = buf - page_address(page);
+		unsigned int buflen = vi->mergeable_rx_bufs ?
+				      mergeable_ctx_to_buflen(ctx) :
+				      small_buflen(vi);
 
-		page_pool_dma_sync_for_cpu(rq->page_pool, page, offset, len);
+		page_pool_dma_sync_for_cpu(rq->page_pool, page, offset,
+					   min(len, buflen));
 	}
 
 	/* About the flags below:
@@ -2655,7 +2678,7 @@ static int add_recvbuf_small(struct virtnet_info *vi, struct receive_queue *rq,
 	buf += VIRTNET_RX_PAD + xdp_headroom;
 
 	ctx = mergeable_len_to_ctx(alloc_len, xdp_headroom);
-	err = virtnet_rq_submit(rq, buf, vi->hdr_len + GOOD_PACKET_LEN, ctx, gfp);
+	err = virtnet_rq_submit(rq, buf, small_buflen(vi), ctx, gfp);
 
 	if (err < 0)
 		page_pool_put_page(rq->page_pool, virt_to_head_page(buf), -1, false);
@@ -5971,11 +5994,21 @@ static int virtnet_xsk_pool_enable(struct net_device *dev,
 	if (!rq->xsk_buffs)
 		return -ENOMEM;
 
-	hdr_dma = virtqueue_map_single_attrs(sq->vq, &xsk_hdr, vi->hdr_len,
+	/*
+	 * Don't map a static header: the kernel image is not in the linear
+	 * map on all architectures (e.g. arm64), so it can't be DMA mapped.
+	 */
+	sq->xsk_hdr = kzalloc_obj(*sq->xsk_hdr);
+	if (!sq->xsk_hdr) {
+		err = -ENOMEM;
+		goto err_free_buffs;
+	}
+
+	hdr_dma = virtqueue_map_single_attrs(sq->vq, sq->xsk_hdr, vi->hdr_len,
 					     DMA_TO_DEVICE, 0);
 	if (virtqueue_map_mapping_error(sq->vq, hdr_dma)) {
 		err = -ENOMEM;
-		goto err_free_buffs;
+		goto err_free_hdr;
 	}
 
 	err = xsk_pool_dma_map(pool, dma_dev, 0);
@@ -6004,6 +6037,9 @@ err_rq:
 err_xsk_map:
 	virtqueue_unmap_single_attrs(rq->vq, hdr_dma, vi->hdr_len,
 				     DMA_TO_DEVICE, 0);
+err_free_hdr:
+	kfree(sq->xsk_hdr);
+	sq->xsk_hdr = NULL;
 err_free_buffs:
 	kvfree(rq->xsk_buffs);
 	return err;
@@ -6017,7 +6053,8 @@ static int virtnet_xsk_pool_disable(struct net_device *dev, u16 qid)
 	struct send_queue *sq;
 	int err;
 
-	if (qid >= vi->curr_queue_pairs)
+	/* Removing XDP can leave the pool on a queue above curr_queue_pairs */
+	if (qid >= vi->max_queue_pairs)
 		return -EINVAL;
 
 	sq = &vi->sq[qid];
@@ -6032,6 +6069,8 @@ static int virtnet_xsk_pool_disable(struct net_device *dev, u16 qid)
 
 	virtqueue_unmap_single_attrs(sq->vq, sq->xsk_hdr_dma_addr,
 				     vi->hdr_len, DMA_TO_DEVICE, 0);
+	kfree(sq->xsk_hdr);
+	sq->xsk_hdr = NULL;
 	kvfree(rq->xsk_buffs);
 
 	return err;

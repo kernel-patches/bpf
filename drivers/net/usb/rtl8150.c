@@ -343,6 +343,13 @@ static int alloc_all_urbs(rtl8150_t * dev)
 		return 0;
 	}
 
+	/*
+	 * They need to be blocked so that open()
+	 * can unblock them
+	 */
+	usb_block_urb(dev->rx_urb);
+	usb_block_urb(dev->tx_urb);
+	usb_block_urb(dev->intr_urb);
 	return 1;
 }
 
@@ -353,11 +360,18 @@ static void free_all_urbs(rtl8150_t * dev)
 	usb_free_urb(dev->intr_urb);
 }
 
+static void reenable_all_urbs(rtl8150_t *dev)
+{
+	usb_unpoison_urb(dev->rx_urb);
+	usb_unpoison_urb(dev->tx_urb);
+	usb_unpoison_urb(dev->intr_urb);
+}
+
 static void unlink_all_urbs(rtl8150_t * dev)
 {
-	usb_kill_urb(dev->rx_urb);
-	usb_kill_urb(dev->tx_urb);
-	usb_kill_urb(dev->intr_urb);
+	usb_poison_urb(dev->rx_urb);
+	usb_poison_urb(dev->tx_urb);
+	usb_poison_urb(dev->intr_urb);
 }
 
 static inline struct sk_buff *pull_skb(rtl8150_t *dev)
@@ -425,6 +439,11 @@ static void read_bulk_callback(struct urb *urb)
 	netdev->stats.rx_bytes += pkt_len;
 
 	spin_lock_irqsave(&dev->rx_pool_lock, flags);
+	/* prevent an eteral loop */
+	if (test_bit(RTL8150_UNPLUG, &dev->flags)) {
+		spin_unlock_irqrestore(&dev->rx_pool_lock, flags);
+		return;
+	}
 	skb = pull_skb(dev);
 	spin_unlock_irqrestore(&dev->rx_pool_lock, flags);
 	if (!skb)
@@ -518,7 +537,7 @@ resubmit:
 	res = usb_submit_urb (urb, GFP_ATOMIC);
 	if (res == -ENODEV)
 		netif_device_detach(dev->netdev);
-	else if (res)
+	else if (res != -EPERM)
 		dev_err(&dev->udev->dev,
 			"can't resubmit intr, %s-%s/input0, status %d\n",
 			dev->udev->bus->bus_name, dev->udev->devpath, res);
@@ -751,6 +770,7 @@ static int rtl8150_open(struct net_device *netdev)
 	if (!dev->rx_skb)
 		return -ENOMEM;
 
+	reenable_all_urbs(dev);
 	set_registers(dev, IDR, 6, netdev->dev_addr);
 
 	usb_fill_bulk_urb(dev->rx_urb, dev->udev, usb_rcvbulkpipe(dev->udev, 1),
@@ -969,8 +989,9 @@ static void rtl8150_disconnect(struct usb_interface *intf)
 	if (dev) {
 		set_bit(RTL8150_UNPLUG, &dev->flags);
 		tasklet_kill(&dev->tl);
-		unregister_netdev(dev->netdev);
 		unlink_all_urbs(dev);
+		tasklet_kill(&dev->tl);
+		unregister_netdev(dev->netdev);
 		free_all_urbs(dev);
 		free_skb_pool(dev);
 		dev_kfree_skb(dev->rx_skb);

@@ -103,6 +103,11 @@ Driver RX Requirements
      which knows when dma-syncing is (or is not) appropriate.
    - PP_FLAG_ALLOW_UNREADABLE_NETMEM. The driver must specify this flag iff
      tcp-data-split is enabled.
+   - PP_FLAG_MEM_PROVIDER. The page pool takes memory from the memory
+     provider of its RX queue, readable or not. Page pool creation fails if
+     the provider is unreadable and PP_FLAG_ALLOW_UNREADABLE_NETMEM is not
+     set, so do not set it on header page pools of such a queue. Without it,
+     PP_FLAG_ALLOW_UNREADABLE_NETMEM selects unreadable providers only.
 
 5. The driver must not assume the netmem is readable and/or backed by pages.
    The netmem returned by the page_pool may be unreadable, in which case
@@ -130,6 +135,16 @@ Driver RX Requirements
    that purpose, but be mindful that some netmem types might have longer
    circulation times, such as when userspace holds a reference in zerocopy
    scenarios.
+
+8. After each RX ring refill, call page_pool_refill_done() once per page
+   pool, with PP_REFILL_FULL only if all rings that use the pool are full.
+   Rings of a queue that take buffers from one such provider share one
+   page pool. Keep buffers in each of them, first in a ring that every
+   packet needs, like a header ring, so that a provider with few buffers
+   does not leave them all in one ring. If the call returns false, poll
+   again soon, for example by returning the full NAPI budget. Register the
+   NAPI of each RX queue with netif_queue_set_napi(); the core schedules
+   it when provider buffers become available.
 
 Driver TX Requirements
 ======================

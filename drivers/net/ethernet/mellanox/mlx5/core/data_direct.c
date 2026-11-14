@@ -21,6 +21,7 @@ static LIST_HEAD(mlx5_data_direct_reg_list);
 static DEFINE_MUTEX(mlx5_data_direct_mutex);
 
 struct mlx5_data_direct_registration {
+	struct mlx5_core_dev *mdev;
 	char vuid[MLX5_ST_SZ_BYTES(array1024_auto) + 1];
 	struct list_head list;
 	struct blocking_notifier_head users;
@@ -189,14 +190,19 @@ static void mlx5_data_direct_bind(struct mlx5_data_direct_registration *reg,
 				  struct mlx5_data_direct_dev *dev)
 {
 	WRITE_ONCE(reg->dd.dev, dev);
+
+	mlx5_core_info(reg->mdev, "bound data direct device %s\n",
+		       pci_name(dev->pdev));
 }
 
 static void
 mlx5_data_direct_do_unbind(struct mlx5_data_direct_registration *reg)
 {
+	struct mlx5_data_direct_dev *dev = reg->dd.dev;
+
 	WRITE_ONCE(reg->dd.dev, NULL);
 	blocking_notifier_call_chain(&reg->users, MLX5_DATA_DIRECT_UNBIND,
-				     NULL);
+				     dev);
 }
 
 int mlx5_data_direct_init(struct mlx5_core_dev *mdev)
@@ -212,6 +218,7 @@ int mlx5_data_direct_init(struct mlx5_core_dev *mdev)
 	if (!reg)
 		return -ENOMEM;
 
+	reg->mdev = mdev;
 	BLOCKING_INIT_NOTIFIER_HEAD(&reg->users);
 
 	err = mlx5_data_direct_query_vuid(mdev, reg->vuid);

@@ -398,28 +398,37 @@ void page_pool_unlist(struct page_pool *pool)
 	mutex_unlock(&page_pools_lock);
 }
 
+/* Check that the queue allocation that just ran put the provider in every
+ * pool role it needs: headers for a readable provider, payload otherwise.
+ * Pools of earlier allocations do not count.
+ */
 int page_pool_check_memory_provider(struct net_device *dev,
 				    struct netdev_rx_queue *rxq)
 {
-	void *binding = rxq->mp_params.mp_priv;
+	const struct memory_provider_ops *ops = rxq->mp_params.mp_ops;
+	void *mp_priv = rxq->mp_params.mp_priv;
+	unsigned int need, have = 0;
 	struct page_pool *pool;
 	struct hlist_node *n;
 
-	if (!binding)
+	if (!mp_priv)
 		return 0;
+
+	need = PP_RX_ROLE_PAYLOAD;
+	if (ops->caps & MP_CAP_READABLE)
+		need = PP_RX_ROLE_HEAD;
 
 	mutex_lock(&page_pools_lock);
 	hlist_for_each_entry_safe(pool, n, &dev->page_pools, user.list) {
-		if (pool->mp_priv != binding)
+		if (pool->mp_priv != mp_priv || pool->mp_gen != rxq->mp_gen ||
+		    pool->slow.queue_idx != get_netdev_rx_queue_index(rxq))
 			continue;
 
-		if (pool->slow.queue_idx == get_netdev_rx_queue_index(rxq)) {
-			mutex_unlock(&page_pools_lock);
-			return 0;
-		}
+		have |= pool->slow.rx_roles ? : PP_RX_ROLE_PAYLOAD;
 	}
 	mutex_unlock(&page_pools_lock);
-	return -ENODATA;
+
+	return (have & need) == need ? 0 : -ENODATA;
 }
 
 static void page_pool_unreg_netdev_wipe(struct net_device *netdev)

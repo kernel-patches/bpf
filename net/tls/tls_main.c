@@ -935,6 +935,7 @@ struct tls_context *tls_ctx_create(struct sock *sk)
 		return NULL;
 
 	mutex_init(&ctx->tx_lock);
+	set_bit(TLS_RX_DEV_CLOSED, &ctx->flags);
 	ctx->sk_proto = READ_ONCE(sk->sk_prot);
 	ctx->sk = sk;
 	/* Release semantic of rcu_assign_pointer() ensures that
@@ -1066,6 +1067,9 @@ static int tls_init(struct sock *sk)
 	 */
 	if (sk->sk_state != TCP_ESTABLISHED)
 		return -ENOTCONN;
+
+	if (tcp_kcm_attached(sk))
+		return -EBUSY;
 
 	/* allocate tls context */
 	write_lock_bh(&sk->sk_callback_lock);

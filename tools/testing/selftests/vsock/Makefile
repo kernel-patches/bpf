@@ -13,5 +13,10 @@ $(VSOCK_TEST_DIR)/vsock_test: $(VSOCK_TEST_SRCS)
 TEST_PROGS += vmtest.sh
 TEST_GEN_FILES := vsock_test
 
+TEST_FILES := \
+	../../../net/ynl/pyynl/cli.py \
+	../../../net/ynl/pyynl/lib \
+	../../../../Documentation/netlink/specs/vsock.yaml
+
 include ../lib.mk
 
